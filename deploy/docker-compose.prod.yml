@@ -1,20 +1,7 @@
 name: ops
 
+# 生产默认由宿主机 Nginx 反代；不占用 80/443，避免与原有站点冲突。
 services:
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      app:
-        condition: service_healthy
-
   app:
     image: ${OPS_IMAGE:-ops-app:local}
     build:
@@ -31,6 +18,8 @@ services:
       OPS_PUBLIC_IP: ${OPS_PUBLIC_IP}
       OPS_MASTER_KEY: ${OPS_MASTER_KEY}
       OPS_DATABASE_URL: postgres://ops:${POSTGRES_PASSWORD}@postgres:5432/ops?sslmode=disable
+    ports:
+      - "127.0.0.1:8080:8080"
     volumes:
       - app_data:/data
     depends_on:
@@ -61,5 +50,3 @@ services:
 volumes:
   pg_data:
   app_data:
-  caddy_data:
-  caddy_config:

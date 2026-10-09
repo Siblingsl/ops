@@ -1,3 +1,5 @@
+# 已改为宿主机 Nginx 反代（见 nginx-ops.conf）。
+# 若整机只跑 OPS、不用 Nginx，可再启用 compose 中的 Caddy 服务并使用本文件。
 ops.88813888.xyz {
 	encode gzip
 	reverse_proxy app:8080
