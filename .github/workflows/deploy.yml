@@ -13,27 +13,42 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Check deploy secrets
+      - name: Prepare SSH key
         id: prep
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KEY_B64: ${{ secrets.DEPLOY_SSH_KEY_B64 }}
         run: |
-          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_PATH" ]; then
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_PATH" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "Deploy secrets incomplete; skip SSH deploy."
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            # 私钥行数应 > 3（含 BEGIN/END）
-            lines=$(printf '%s' "$DEPLOY_SSH_KEY" | wc -l)
-            echo "ssh_key_lines=$lines"
-            if [ "$lines" -lt 3 ]; then
-              echo "::error::DEPLOY_SSH_KEY 格式不对（换行丢失或内容为空），请重新写入 Secret"
-              exit 1
-            fi
+            echo "Deploy host/user/path secrets incomplete; skip."
+            exit 0
           fi
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          KEY_FILE="$HOME/.ssh/ops_deploy"
+          if [ -n "${DEPLOY_SSH_KEY_B64:-}" ]; then
+            echo "$DEPLOY_SSH_KEY_B64" | base64 -d > "$KEY_FILE"
+          elif [ -n "${DEPLOY_SSH_KEY:-}" ]; then
+            printf '%s\n' "$DEPLOY_SSH_KEY" > "$KEY_FILE"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "No DEPLOY_SSH_KEY_B64 or DEPLOY_SSH_KEY; skip."
+            exit 0
+          fi
+          # 去掉可能的 BOM / 多余 CR
+          sed -i 's/\r$//' "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          if ! ssh-keygen -y -f "$KEY_FILE" >/dev/null 2>&1; then
+            echo "::error::SSH 私钥无法解析。请用 DEPLOY_SSH_KEY_B64（base64）重新写入 Secret"
+            exit 1
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "key_file=$KEY_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Deploy over SSH
         if: steps.prep.outputs.ready == 'true'
@@ -41,7 +56,7 @@ jobs:
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          key_path: ${{ steps.prep.outputs.key_file }}
           port: 22
           command_timeout: 30m
           script: |
