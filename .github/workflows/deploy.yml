@@ -26,16 +26,24 @@ jobs:
             echo "Deploy secrets incomplete; skip SSH deploy."
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
+            # 私钥行数应 > 3（含 BEGIN/END）
+            lines=$(printf '%s' "$DEPLOY_SSH_KEY" | wc -l)
+            echo "ssh_key_lines=$lines"
+            if [ "$lines" -lt 3 ]; then
+              echo "::error::DEPLOY_SSH_KEY 格式不对（换行丢失或内容为空），请重新写入 Secret"
+              exit 1
+            fi
           fi
 
       - name: Deploy over SSH
         if: steps.prep.outputs.ready == 'true'
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script_stop: true
+          port: 22
+          command_timeout: 30m
           script: |
             set -euo pipefail
             cd "${{ secrets.DEPLOY_PATH }}"
