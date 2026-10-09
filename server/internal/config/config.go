@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Config struct {
@@ -39,7 +40,14 @@ func Load() (*Config, error) {
 			c.WechatBase = "https://api.weixin.qq.com"
 		}
 	}
-	c.CookieSecure = !c.Dev
+	// 默认：生产 Secure、开发非 Secure。纯 HTTP 上线可设 OPS_COOKIE_SECURE=0。
+	if v := os.Getenv("OPS_COOKIE_SECURE"); v == "0" || strings.EqualFold(v, "false") {
+		c.CookieSecure = false
+	} else if v == "1" || strings.EqualFold(v, "true") {
+		c.CookieSecure = true
+	} else {
+		c.CookieSecure = !c.Dev
+	}
 
 	if raw := os.Getenv("OPS_MASTER_KEY"); raw != "" {
 		key, err := base64.StdEncoding.DecodeString(raw)
@@ -69,3 +77,4 @@ func env(key, def string) string {
 	}
 	return def
 }
+

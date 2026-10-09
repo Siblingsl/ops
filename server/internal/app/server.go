@@ -184,6 +184,10 @@ func (s *Server) Router() http.Handler {
 func spaHandler(dir string) http.Handler {
 	fs := http.FileServer(http.Dir(dir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
 		p := filepath.Join(dir, filepath.Clean(r.URL.Path))
 		if st, err := os.Stat(p); err != nil || st.IsDir() {
 			if !strings.HasPrefix(r.URL.Path, "/assets/") {

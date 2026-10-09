@@ -17,6 +17,8 @@ services:
       OPS_DATA_DIR: /data
       OPS_PUBLIC_IP: ${OPS_PUBLIC_IP}
       OPS_MASTER_KEY: ${OPS_MASTER_KEY}
+      # 当前为 HTTP 反代；上 HTTPS 后改为 1 或删掉此行
+      OPS_COOKIE_SECURE: ${OPS_COOKIE_SECURE:-0}
       OPS_DATABASE_URL: postgres://ops:${POSTGRES_PASSWORD}@postgres:5432/ops?sslmode=disable
     ports:
       # 宿主机映射端口可改；容器内仍监听 8080
