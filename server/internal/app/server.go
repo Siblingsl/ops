@@ -66,6 +66,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 		r.Get("/auth/status", s.h(s.authStatus))
 		r.Post("/auth/setup", s.h(s.authSetup))
+		r.Post("/auth/register", s.h(s.authRegister))
 		r.Post("/auth/login", s.h(s.authLogin))
 
 		r.Group(func(r chi.Router) {
@@ -77,6 +78,18 @@ func (s *Server) Router() http.Handler {
 			r.Post("/auth/reauth", s.h(s.authReauth))
 			r.Put("/auth/password", s.h(s.authChangePassword))
 			r.Get("/system/info", s.h(s.systemInfo))
+
+			r.Get("/workspaces", s.h(s.listWorkspaces))
+			r.Post("/workspaces", s.h(s.createWorkspace))
+			r.Post("/workspaces/join", s.h(s.joinWorkspace))
+			r.Get("/workspaces/current/members", s.h(s.listMembers))
+			r.Patch("/workspaces/current/members/{userId}", s.h(s.patchMember))
+			r.Post("/workspaces/current/leave", s.h(s.leaveWorkspace))
+			r.Get("/workspaces/current/invites", s.h(s.listInvites))
+			r.Post("/workspaces/current/invites", s.h(s.createInvite))
+			r.Post("/workspaces/current/invites/{id}/revoke", s.h(s.revokeInvite))
+			r.Patch("/workspaces/{id}", s.h(s.patchWorkspace))
+			r.Post("/workspaces/{id}/switch", s.h(s.switchWorkspace))
 
 			r.Get("/accounts", s.h(s.listAccounts))
 			r.Post("/accounts", s.h(s.createAccount))
@@ -202,7 +215,7 @@ func spaHandler(dir string) http.Handler {
 func (s *Server) audit(ctx context.Context, action, targetType, targetID, result string, detail map[string]any) {
 	var actor *uuid.UUID
 	if id := ident(ctx); id != nil {
-		actor = &id.MemberID
+		actor = &id.UserID
 	}
 	if detail == nil {
 		detail = map[string]any{}

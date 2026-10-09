@@ -53,9 +53,11 @@ type route struct {
 func (s *Server) resolveRoute(ctx context.Context, taskType string) (*route, error) {
 	var rt route
 	var enc []byte
+	ws := ident(ctx).WorkspaceID
 	err := s.db.QueryRow(ctx, `SELECT p.name, p.base_url, p.api_key_enc, r.model FROM model_route r
-		JOIN model_provider p ON p.id=r.provider_id WHERE r.task_type = ANY($1) AND p.status='active'
-		ORDER BY (r.task_type='default') LIMIT 1`, []string{taskType, "default"}).Scan(&rt.ProviderName, &rt.BaseURL, &enc, &rt.Model)
+		JOIN model_provider p ON p.id=r.provider_id
+		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND r.task_type = ANY($2) AND p.status='active'
+		ORDER BY (r.task_type='default') LIMIT 1`, ws, []string{taskType, "default"}).Scan(&rt.ProviderName, &rt.BaseURL, &enc, &rt.Model)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apiErr(503, "ai_not_configured", "还没有配置模型，请先到「设置 → 模型配置」添加模型并指定默认模型")
 	}
@@ -77,8 +79,10 @@ type aiLimit struct {
 func (s *Server) loadLimit(ctx context.Context) aiLimit {
 	l := aiLimit{Enabled: false, DailyTokens: 2000000}
 	var raw []byte
-	if err := s.db.QueryRow(ctx, `SELECT value FROM app_setting WHERE key='ai_limit'`).Scan(&raw); err == nil {
-		_ = json.Unmarshal(raw, &l)
+	if id := ident(ctx); id != nil {
+		if err := s.db.QueryRow(ctx, `SELECT value FROM app_setting WHERE workspace_id=$1 AND key='ai_limit'`, id.WorkspaceID).Scan(&raw); err == nil {
+			_ = json.Unmarshal(raw, &l)
+		}
 	}
 	return l
 }

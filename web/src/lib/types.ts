@@ -237,13 +237,41 @@ export interface ModelRoute {
 
 export interface AILimit { enabled: boolean; daily_tokens: number }
 
+export interface WorkspaceRef {
+  id: string
+  name: string
+  role: 'owner' | 'editor'
+}
+
 export interface Me {
   username: string
+  user_id?: string
+  role: 'owner' | 'editor'
   csrf_token: string
   reauth_ok: boolean
   prev_login_at: string | null
   prev_login_ip: string | null
   dev: boolean
+  workspace: WorkspaceRef
+  workspaces: WorkspaceRef[]
+}
+
+export interface WorkspaceInvite {
+  id: string
+  code: string
+  role: 'owner' | 'editor'
+  max_uses: number
+  used_count: number
+  expires_at: string
+  revoked_at: string | null
+  created_at: string
+}
+
+export interface WorkspaceMember {
+  user_id: string
+  username: string
+  role: 'owner' | 'editor'
+  status: 'active' | 'disabled'
 }
 
 export interface SystemInfo {

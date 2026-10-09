@@ -259,3 +259,46 @@ func TestHC10_DailyPushLimitNeedsConfirmation(t *testing.T) {
 		t.Fatalf("over-limit push not recorded: %v %v", over, err)
 	}
 }
+
+// HC-11：跨工作区用 ID 访问账号 → 404（D-036 租户隔离）
+func TestHC11_CrossWorkspaceAccountIs404(t *testing.T) {
+	f := env.accounts(t)
+	other := env.registerClient(t, "tenant-b", testPassword)
+	defer other.restore(env)
+	st, body := other.do("GET", "/api/v1/accounts/"+f.wechat.ID.String(), nil)
+	if st != 404 {
+		t.Fatalf("cross-tenant account: want 404, got %d %s", st, body)
+	}
+}
+
+// HC-12：editor 不能改模型密钥（D-036 权限）
+func TestHC12_EditorCannotCreateModelProvider(t *testing.T) {
+	var inv struct {
+		Code string `json:"code"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/workspaces/current/invites", map[string]any{"role": "editor", "max_uses": 5, "days": 7}, &inv)
+	other := env.registerClient(t, "editor-user", testPassword)
+	defer other.restore(env)
+	st, body := other.do("POST", "/api/v1/workspaces/join", map[string]any{"code": inv.Code, "switch": true})
+	if st != 200 {
+		t.Fatalf("join: %d %s", st, body)
+	}
+	var me struct {
+		CSRF string `json:"csrf_token"`
+		Role string `json:"role"`
+	}
+	other.mustJSON(t, "GET", "/api/v1/auth/me", nil, &me)
+	other.csrf = me.CSRF
+	if me.Role != "editor" {
+		t.Fatalf("role=%s", me.Role)
+	}
+	other.mustJSON(t, "POST", "/api/v1/auth/reauth", map[string]string{"password": testPassword}, nil)
+	other.mustJSON(t, "GET", "/api/v1/auth/me", nil, &me)
+	other.csrf = me.CSRF
+	ae := other.expectErr(t, "POST", "/api/v1/model-providers", map[string]any{
+		"name": "x", "base_url": "http://example.com/v1", "api_key": "k", "models": []string{"m"},
+	}, "forbidden")
+	if ae.Error.Code != "forbidden" {
+		t.Fatalf("code=%s", ae.Error.Code)
+	}
+}

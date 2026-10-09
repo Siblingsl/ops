@@ -260,6 +260,73 @@ func (e *testEnv) reauth(t *testing.T) {
 	e.mustJSON(t, "POST", "/api/v1/auth/reauth", map[string]string{"password": testPassword}, nil)
 }
 
+// guestClient is a second browser session used for multi-tenant tests.
+type guestClient struct {
+	parent *testEnv
+	client *http.Client
+	csrf   string
+	savedC *http.Client
+	savedX string
+}
+
+func (e *testEnv) registerClient(t *testing.T, username, password string) *guestClient {
+	t.Helper()
+	jar, _ := cookiejar.New(nil)
+	g := &guestClient{
+		parent: e,
+		client: &http.Client{Jar: jar, Timeout: time.Minute},
+		savedC: e.client,
+		savedX: e.csrf,
+	}
+	e.client = g.client
+	e.csrf = ""
+	st, body := e.do("POST", "/api/v1/auth/register", map[string]string{"username": username, "password": password})
+	if st != 200 {
+		e.client, e.csrf = g.savedC, g.savedX
+		t.Fatalf("register %s: %d %s", username, st, body)
+	}
+	var me struct {
+		CSRF string `json:"csrf_token"`
+	}
+	e.mustJSON(t, "GET", "/api/v1/auth/me", nil, &me)
+	e.csrf = me.CSRF
+	g.csrf = me.CSRF
+	g.client = e.client
+	return g
+}
+
+func (g *guestClient) restore(e *testEnv) {
+	e.client = g.savedC
+	e.csrf = g.savedX
+}
+
+func (g *guestClient) use() {
+	g.parent.client = g.client
+	g.parent.csrf = g.csrf
+}
+
+func (g *guestClient) do(method, path string, in any) (int, []byte) {
+	g.use()
+	st, b := g.parent.do(method, path, in)
+	g.csrf = g.parent.csrf
+	return st, b
+}
+
+func (g *guestClient) mustJSON(t *testing.T, method, path string, in, out any) {
+	t.Helper()
+	g.use()
+	g.parent.mustJSON(t, method, path, in, out)
+	g.csrf = g.parent.csrf
+}
+
+func (g *guestClient) expectErr(t *testing.T, method, path string, in any, code string) apiError {
+	t.Helper()
+	g.use()
+	ae := g.parent.expectErr(t, method, path, in, code)
+	g.csrf = g.parent.csrf
+	return ae
+}
+
 type fixture struct {
 	wechat Account
 	xhs    Account

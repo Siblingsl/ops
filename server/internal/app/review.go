@@ -460,7 +460,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) error {
 	var tokensToday int
 	_ = s.db.QueryRow(ctx, `SELECT coalesce(sum(prompt_tokens+completion_tokens),0) FROM ai_call WHERE created_at >= $1`, s.today()).Scan(&tokensToday)
 	var aiReady bool
-	_ = s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM model_route r JOIN model_provider p ON p.id=r.provider_id WHERE r.task_type='default' AND p.status='active')`).Scan(&aiReady)
+	_ = s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM model_route r JOIN model_provider p ON p.id=r.provider_id
+		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND r.task_type='default' AND p.status='active')`, ident(ctx).WorkspaceID).Scan(&aiReady)
 	var samples int
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM style_sample WHERE account_id=$1 AND deleted_at IS NULL`, a.ID).Scan(&samples)
 	p, _ := s.loadProfile(ctx, a.ID)

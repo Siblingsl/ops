@@ -121,6 +121,9 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireOwner(r.Context()); err != nil {
+		return err
+	}
 	var in struct {
 		Platform      string `json:"platform"`
 		Name          string `json:"name"`
@@ -173,6 +176,9 @@ func (s *Server) getAccount(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireOwner(r.Context()); err != nil {
+		return err
+	}
 	a, err := s.accountFromPath(r)
 	if err != nil {
 		return err
@@ -221,6 +227,9 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) error {
 
 func (s *Server) setAccountStatus(status string) handlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
+		if err := s.requireOwner(r.Context()); err != nil {
+			return err
+		}
 		a, err := s.accountFromPath(r)
 		if err != nil {
 			return err
@@ -234,6 +243,9 @@ func (s *Server) setAccountStatus(status string) handlerFunc {
 }
 
 func (s *Server) saveWechatCredential(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireOwner(r.Context()); err != nil {
+		return err
+	}
 	if err := s.requireReauth(r.Context()); err != nil {
 		return err
 	}
@@ -287,6 +299,9 @@ func (s *Server) egressHint() string {
 }
 
 func (s *Server) testWechatCredential(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireOwner(r.Context()); err != nil {
+		return err
+	}
 	a, err := s.accountFromPath(r)
 	if err != nil {
 		return err

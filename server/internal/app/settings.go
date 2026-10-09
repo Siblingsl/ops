@@ -46,7 +46,7 @@ func (s *Server) scanProvider(row pgx.Row) (*Provider, error) {
 }
 
 func (s *Server) listProviders(w http.ResponseWriter, r *http.Request) error {
-	rows, err := s.db.Query(r.Context(), `SELECT `+providerCols+` FROM model_provider ORDER BY created_at`)
+	rows, err := s.db.Query(r.Context(), `SELECT `+providerCols+` FROM model_provider WHERE workspace_id=$1 ORDER BY created_at`, ident(r.Context()).WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -95,6 +95,9 @@ func (in *providerInput) validate(create bool) error {
 
 func (s *Server) createProvider(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	if err := s.requireOwner(ctx); err != nil {
+		return err
+	}
 	if err := s.requireReauth(ctx); err != nil {
 		return err
 	}
@@ -109,8 +112,8 @@ func (s *Server) createProvider(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	p, err := s.scanProvider(s.db.QueryRow(ctx, `INSERT INTO model_provider (name, base_url, api_key_enc, key_version, models) VALUES ($1,$2,$3,$4,$5) RETURNING `+providerCols,
-		strings.TrimSpace(*in.Name), *in.BaseURL, enc, s.box.Version, cleanList(in.Models)))
+	p, err := s.scanProvider(s.db.QueryRow(ctx, `INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models) VALUES ($1,$2,$3,$4,$5,$6) RETURNING `+providerCols,
+		ident(ctx).WorkspaceID, strings.TrimSpace(*in.Name), *in.BaseURL, enc, s.box.Version, cleanList(in.Models)))
 	if err != nil {
 		return err
 	}
@@ -124,6 +127,10 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
+	if err := s.requireOwner(ctx); err != nil {
+		return err
+	}
+	ws := ident(ctx).WorkspaceID
 	var in providerInput
 	if err := decode(r, &in); err != nil {
 		return err
@@ -137,13 +144,20 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM model_provider WHERE id=$1 AND workspace_id=$2`, id, ws).Scan(&n); err != nil || n == 0 {
+			if err != nil {
+				return err
+			}
+			return errNotFound
+		}
 		if in.Name != nil {
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET name=$2 WHERE id=$1`, id, strings.TrimSpace(*in.Name)); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET name=$2 WHERE id=$1 AND workspace_id=$3`, id, strings.TrimSpace(*in.Name), ws); err != nil {
 				return err
 			}
 		}
 		if in.BaseURL != nil {
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET base_url=$2 WHERE id=$1`, id, *in.BaseURL); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET base_url=$2 WHERE id=$1 AND workspace_id=$3`, id, *in.BaseURL, ws); err != nil {
 				return err
 			}
 		}
@@ -152,7 +166,7 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET api_key_enc=$2, key_version=$3, last_test_ok=NULL, last_test_result='' WHERE id=$1`, id, enc, s.box.Version); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET api_key_enc=$2, key_version=$3, last_test_ok=NULL, last_test_result='' WHERE id=$1 AND workspace_id=$4`, id, enc, s.box.Version, ws); err != nil {
 				return err
 			}
 		}
@@ -161,22 +175,22 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 			if len(models) == 0 {
 				return validation("至少保留一个模型名")
 			}
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET models=$2 WHERE id=$1`, id, models); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET models=$2 WHERE id=$1 AND workspace_id=$3`, id, models, ws); err != nil {
 				return err
 			}
 		}
 		if in.Status != nil {
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET status=$2 WHERE id=$1`, id, *in.Status); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET status=$2 WHERE id=$1 AND workspace_id=$3`, id, *in.Status, ws); err != nil {
 				return err
 			}
 		}
-		_, err := tx.Exec(ctx, `UPDATE model_provider SET updated_at=now() WHERE id=$1`, id)
+		_, err := tx.Exec(ctx, `UPDATE model_provider SET updated_at=now() WHERE id=$1 AND workspace_id=$2`, id, ws)
 		return err
 	})
 	if err != nil {
 		return err
 	}
-	p, err := s.scanProvider(s.db.QueryRow(ctx, `SELECT `+providerCols+` FROM model_provider WHERE id=$1`, id))
+	p, err := s.scanProvider(s.db.QueryRow(ctx, `SELECT `+providerCols+` FROM model_provider WHERE id=$1 AND workspace_id=$2`, id, ws))
 	if err != nil {
 		return err
 	}
@@ -190,14 +204,18 @@ func (s *Server) deleteProvider(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
+	if err := s.requireOwner(ctx); err != nil {
+		return err
+	}
+	ws := ident(ctx).WorkspaceID
 	var routes int
-	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM model_route WHERE provider_id=$1`, id).Scan(&routes)
+	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM model_route WHERE provider_id=$1 AND workspace_id=$2`, id, ws).Scan(&routes)
 	var in struct{ Confirm bool }
 	_ = decode(r, &in)
 	if routes > 0 && !in.Confirm {
 		return apiErr(409, "confirm_required", fmt.Sprintf("有 %d 个任务正在使用这个供应商，删除后这些任务会改用默认模型（如果默认模型也是它，AI 功能将不可用）。", routes))
 	}
-	tag, err := s.db.Exec(ctx, `DELETE FROM model_provider WHERE id=$1`, id)
+	tag, err := s.db.Exec(ctx, `DELETE FROM model_provider WHERE id=$1 AND workspace_id=$2`, id, ws)
 	if err != nil {
 		return err
 	}
@@ -214,6 +232,10 @@ func (s *Server) testProvider(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
+	if err := s.requireOwner(ctx); err != nil {
+		return err
+	}
+	ws := ident(ctx).WorkspaceID
 	var in struct {
 		Model string `json:"model"`
 	}
@@ -221,7 +243,7 @@ func (s *Server) testProvider(w http.ResponseWriter, r *http.Request) error {
 	var base string
 	var enc []byte
 	var models []string
-	if err := s.db.QueryRow(ctx, `SELECT base_url, api_key_enc, models FROM model_provider WHERE id=$1`, id).Scan(&base, &enc, &models); err != nil {
+	if err := s.db.QueryRow(ctx, `SELECT base_url, api_key_enc, models FROM model_provider WHERE id=$1 AND workspace_id=$2`, id, ws).Scan(&base, &enc, &models); err != nil {
 		return err
 	}
 	key, err := s.box.Decrypt(enc)
@@ -244,7 +266,7 @@ func (s *Server) testProvider(w http.ResponseWriter, r *http.Request) error {
 		result = strings.ReplaceAll(callErr.Error(), key, "****")
 		result = truncate(result, 300)
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE model_provider SET last_test_at=now(), last_test_ok=$2, last_test_result=$3 WHERE id=$1`, id, okFlag, result); err != nil {
+	if _, err := s.db.Exec(ctx, `UPDATE model_provider SET last_test_at=now(), last_test_ok=$2, last_test_result=$3 WHERE id=$1 AND workspace_id=$4`, id, okFlag, result, ws); err != nil {
 		return err
 	}
 	return ok(w, map[string]any{"ok": okFlag, "result": result, "latency_ms": elapsed, "reply": truncate(text, 50)})
@@ -273,7 +295,7 @@ func (s *Server) getRoutes(w http.ResponseWriter, r *http.Request) error {
 		Model      string     `json:"model"`
 	}
 	routes := map[string]Route{}
-	rows, err := s.db.Query(r.Context(), `SELECT task_type, provider_id, model FROM model_route`)
+	rows, err := s.db.Query(r.Context(), `SELECT task_type, provider_id, model FROM model_route WHERE workspace_id=$1`, ident(r.Context()).WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -296,6 +318,9 @@ func (s *Server) getRoutes(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) putRoutes(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireOwner(r.Context()); err != nil {
+		return err
+	}
 	var in []struct {
 		TaskType   string     `json:"task_type"`
 		ProviderID *uuid.UUID `json:"provider_id"`
@@ -309,23 +334,25 @@ func (s *Server) putRoutes(w http.ResponseWriter, r *http.Request) error {
 		valid[t.Type] = true
 	}
 	ctx := r.Context()
+	ws := ident(ctx).WorkspaceID
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		for _, rt := range in {
 			if !valid[rt.TaskType] {
 				return validation("未知的任务类型：" + rt.TaskType)
 			}
 			if rt.ProviderID == nil || strings.TrimSpace(rt.Model) == "" {
-				if _, err := tx.Exec(ctx, `DELETE FROM model_route WHERE task_type=$1`, rt.TaskType); err != nil {
+				if _, err := tx.Exec(ctx, `DELETE FROM model_route WHERE workspace_id=$1 AND task_type=$2`, ws, rt.TaskType); err != nil {
 					return err
 				}
 				continue
 			}
 			var models []string
-			if err := tx.QueryRow(ctx, `SELECT models FROM model_provider WHERE id=$1`, *rt.ProviderID).Scan(&models); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT models FROM model_provider WHERE id=$1 AND workspace_id=$2`, *rt.ProviderID, ws).Scan(&models); err != nil {
 				return validation("供应商不存在")
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO model_route (task_type, provider_id, model) VALUES ($1,$2,$3)
-				ON CONFLICT (task_type) DO UPDATE SET provider_id=excluded.provider_id, model=excluded.model`, rt.TaskType, *rt.ProviderID, strings.TrimSpace(rt.Model)); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO model_route (workspace_id, task_type, provider_id, model) VALUES ($1,$2,$3,$4)
+				ON CONFLICT (workspace_id, task_type) DO UPDATE SET provider_id=excluded.provider_id, model=excluded.model`,
+				ws, rt.TaskType, *rt.ProviderID, strings.TrimSpace(rt.Model)); err != nil {
 				return err
 			}
 		}
@@ -411,6 +438,9 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireOwner(r.Context()); err != nil {
+		return err
+	}
 	var in struct {
 		AILimit *aiLimit `json:"ai_limit"`
 	}
@@ -422,7 +452,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) error {
 			return validation("每日上限至少 1000 token")
 		}
 		b, _ := json.Marshal(in.AILimit)
-		if _, err := s.db.Exec(r.Context(), `INSERT INTO app_setting (key, value) VALUES ('ai_limit',$1) ON CONFLICT (key) DO UPDATE SET value=excluded.value`, b); err != nil {
+		ws := ident(r.Context()).WorkspaceID
+		if _, err := s.db.Exec(r.Context(), `INSERT INTO app_setting (workspace_id, key, value) VALUES ($1,'ai_limit',$2)
+			ON CONFLICT (workspace_id, key) DO UPDATE SET value=excluded.value`, ws, b); err != nil {
 			return err
 		}
 		s.audit(r.Context(), "settings_update", "app_setting", "ai_limit", "ok", map[string]any{"enabled": in.AILimit.Enabled, "daily_tokens": in.AILimit.DailyTokens})
@@ -519,7 +551,7 @@ func (s *Server) auditLogs(w http.ResponseWriter, r *http.Request) error {
 		limit = 50
 	}
 	rows, err := s.db.Query(r.Context(), `SELECT l.id, l.action, l.target_type, l.target_id, l.result, l.detail, l.created_at, m.username
-		FROM audit_log l LEFT JOIN member m ON m.id=l.actor_id WHERE `+where+fmt.Sprintf(` ORDER BY l.created_at DESC LIMIT %d`, limit), args...)
+		FROM audit_log l LEFT JOIN app_user m ON m.id=l.actor_id WHERE `+where+fmt.Sprintf(` ORDER BY l.created_at DESC LIMIT %d`, limit), args...)
 	if err != nil {
 		return err
 	}

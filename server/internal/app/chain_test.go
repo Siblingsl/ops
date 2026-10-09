@@ -333,10 +333,10 @@ func TestAuthLockoutAndReset(t *testing.T) {
 	}
 	env.expectErr(t, "POST", "/api/v1/auth/login", map[string]string{"username": "owner", "password": "wrong-password"}, "login_locked")
 	env.expectErr(t, "POST", "/api/v1/auth/login", map[string]string{"username": "owner", "password": testPassword}, "login_locked")
-	if _, err := ResetPassword(context.Background(), env.srv, "short"); err == nil {
+	if _, err := ResetPassword(context.Background(), env.srv, "owner", "short"); err == nil {
 		t.Fatal("short password accepted")
 	}
-	if _, err := ResetPassword(context.Background(), env.srv, testPassword); err != nil {
+	if _, err := ResetPassword(context.Background(), env.srv, "owner", testPassword); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := env.do("POST", "/api/v1/auth/login", map[string]string{"username": "owner", "password": testPassword})

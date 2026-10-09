@@ -6,7 +6,7 @@ import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, CardHeader, Empty, Field, IconButton, Input, Notice, PageHeader, PageLoading, Select, Switch } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post, put } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
-import { useInvalidate } from '@/lib/session'
+import { useInvalidate, useMe } from '@/lib/session'
 import type { AILimit, ModelRoute, Provider } from '@/lib/types'
 
 function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClose: () => void }) {
@@ -136,6 +136,8 @@ function LimitCard() {
 }
 
 export default function Models() {
+  const { data: me } = useMe()
+  const isOwner = me?.role === 'owner'
   const { data, isLoading, refetch } = useQuery({ queryKey: ['providers'], queryFn: () => get<Provider[]>('/model-providers') })
   const [dialog, setDialog] = useState<{ editing: Provider | null } | null>(null)
   const [testing, setTesting] = useState<string | null>(null)
@@ -171,8 +173,9 @@ export default function Models() {
   }
   return (
     <div className="animate-fade-in space-y-6">
-      <PageHeader title="模型配置" desc="接入你自己的大模型 API。密钥加密保存，只有你能使用。"
-        action={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加供应商</Button>} />
+      <PageHeader title="模型配置" desc="接入工作区自己的大模型 API。密钥加密保存，仅所有者可修改。"
+        action={isOwner ? <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加供应商</Button> : undefined} />
+      {!isOwner && <Notice tone="ink">你是编辑者，可查看模型配置，但不能修改密钥或路由。</Notice>}
       {list.length === 0 ? (
         <Card><Empty icon={<Cpu className="size-5" />} title="还没有配置模型" desc="没有模型时 AI 按钮不可用，写作、检查和推送不受影响。" /></Card>
       ) : (
@@ -188,29 +191,33 @@ export default function Models() {
                   </div>
                   <div className="truncate font-mono text-xs text-mist-500">{p.base_url}</div>
                 </div>
-                <div className="flex opacity-0 transition group-hover:opacity-100">
-                  <IconButton label="编辑" onClick={() => setDialog({ editing: p })}><Pencil className="size-3.5" /></IconButton>
-                  <IconButton label="删除" className="hover:text-danger" onClick={() => remove(p)}><Trash2 className="size-3.5" /></IconButton>
-                </div>
+                {isOwner && (
+                  <div className="flex opacity-0 transition group-hover:opacity-100">
+                    <IconButton label="编辑" onClick={() => setDialog({ editing: p })}><Pencil className="size-3.5" /></IconButton>
+                    <IconButton label="删除" className="hover:text-danger" onClick={() => remove(p)}><Trash2 className="size-3.5" /></IconButton>
+                  </div>
+                )}
               </div>
               <div className="mt-3 flex flex-wrap gap-1.5">{p.models.map((m) => <span key={m} className="rounded bg-mist-100 px-1.5 py-0.5 font-mono text-[11.5px] text-mist-600">{m}</span>)}</div>
               <div className="mt-3 flex items-center gap-2 border-t border-mist-100 pt-3 text-xs">
                 <span className="font-mono text-mist-400">{p.key_mask}</span>
                 {p.last_test_at && (p.last_test_ok ? <span className="flex items-center gap-1 text-ink-600"><CheckCircle2 className="size-3.5" />{fmtTime(p.last_test_at)} 测试通过</span>
                   : <span className="flex items-center gap-1 text-danger" title={p.last_test_result}><XCircle className="size-3.5" />测试失败</span>)}
-                <div className="ml-auto flex items-center gap-2">
-                  <Switch checked={p.status === 'active'} onChange={() => toggle(p)} label="启用" />
-                  <Button size="sm" variant="ghost" icon={<Plug className="size-3.5" />} loading={testing === p.id} onClick={() => test(p)}>测试</Button>
-                </div>
+                {isOwner && (
+                  <div className="ml-auto flex items-center gap-2">
+                    <Switch checked={p.status === 'active'} onChange={() => toggle(p)} label="启用" />
+                    <Button size="sm" variant="ghost" icon={<Plug className="size-3.5" />} loading={testing === p.id} onClick={() => test(p)}>测试</Button>
+                  </div>
+                )}
               </div>
               {p.last_test_ok === false && <p className="mt-2 rounded bg-orange-50 px-2 py-1.5 text-xs text-orange-800">{p.last_test_result}</p>}
             </Card>
           ))}
         </div>
       )}
-      {list.length > 0 && <RoutesCard providers={list} />}
-      <LimitCard />
-      {dialog && <ProviderDialog editing={dialog.editing} onClose={() => setDialog(null)} />}
+      {isOwner && list.length > 0 && <RoutesCard providers={list} />}
+      {isOwner && <LimitCard />}
+      {isOwner && dialog && <ProviderDialog editing={dialog.editing} onClose={() => setDialog(null)} />}
     </div>
   )
 }

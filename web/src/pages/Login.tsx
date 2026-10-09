@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Button, Field, Input, Notice } from '@/components/ui'
 import { ApiError, get, post } from '@/lib/api'
 
@@ -38,6 +38,7 @@ export function AuthFrame({ children, aside }: { children: React.ReactNode; asid
 export default function Login() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [invite, setInvite] = useState('')
   const [error, setError] = useState<ApiError | null>(null)
   const [busy, setBusy] = useState(false)
   const nav = useNavigate()
@@ -53,7 +54,11 @@ export default function Login() {
     setBusy(true)
     setError(null)
     try {
-      await post('/auth/login', { username, password })
+      await post('/auth/login', {
+        username,
+        password,
+        invite_code: invite.trim() || undefined,
+      })
       await qc.invalidateQueries()
       nav(params.get('next') || '/', { replace: true })
     } catch (err) {
@@ -75,12 +80,15 @@ export default function Login() {
           <Field label="密码">
             <Input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className="h-10" />
           </Field>
+          <Field label="邀请码（可选）">
+            <Input value={invite} onChange={(e) => setInvite(e.target.value.toUpperCase())} className="h-10 font-mono tracking-wider" placeholder="登录后加入工作区" />
+          </Field>
           {error && (
             <Notice tone="red">
               {error.message}
               {error.code === 'login_locked' && (
                 <div className="mt-1.5 text-xs">
-                  在服务器上执行 <code className="rounded bg-white/70 px-1 font-mono">docker compose exec app ops reset-password</code> 可以重置密码。
+                  在服务器上执行 <code className="rounded bg-white/70 px-1 font-mono">ops reset-password &lt;用户名&gt;</code> 可以重置密码。
                 </div>
               )}
             </Notice>
@@ -88,7 +96,11 @@ export default function Login() {
           <Button type="submit" variant="primary" size="lg" className="w-full" loading={busy} disabled={!username || !password}>
             登录
           </Button>
-          <p className="text-center text-xs text-mist-400">忘记密码？这是单用户系统，请在服务器上执行重置命令（见部署文档）。</p>
+          <p className="text-center text-sm text-mist-500">
+            没有账号？{' '}
+            <Link to="/register" className="font-medium text-ink-600 hover:underline">注册</Link>
+          </p>
+          <p className="text-center text-xs text-mist-400">忘记密码请在服务器上按用户名执行重置命令。</p>
         </div>
       </form>
     </AuthFrame>

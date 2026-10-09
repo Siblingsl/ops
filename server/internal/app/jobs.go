@@ -85,10 +85,31 @@ func (s *Server) refreshTokens(ctx context.Context) {
 	}
 }
 
-// SeedDevModel registers the local fake model so AI features work out of the box in dev mode.
+// SeedDevModel registers the local fake model for every workspace missing one (dev mode).
 func (s *Server) SeedDevModel(ctx context.Context) error {
+	if !s.cfg.Dev {
+		return nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT id FROM workspace`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ws uuid.UUID
+		if err := rows.Scan(&ws); err != nil {
+			return err
+		}
+		if err := s.seedDevModelFor(ctx, ws); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Server) seedDevModelFor(ctx context.Context, ws uuid.UUID) error {
 	var exists bool
-	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM model_provider)`).Scan(&exists); err != nil || exists {
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM model_provider WHERE workspace_id=$1)`, ws).Scan(&exists); err != nil || exists {
 		return err
 	}
 	enc, err := s.box.Encrypt("local-dev-key")
@@ -96,13 +117,15 @@ func (s *Server) SeedDevModel(ctx context.Context) error {
 		return err
 	}
 	var id uuid.UUID
-	if err := s.db.QueryRow(ctx, `INSERT INTO model_provider (name, base_url, api_key_enc, key_version, models) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-		"本地模拟模型", "http://"+s.cfg.MockListen+"/v1", enc, s.box.Version, []string{"mock-writer", "mock-fast"}).Scan(&id); err != nil {
+	if err := s.db.QueryRow(ctx, `INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+		ws, "本地模拟模型", "http://"+s.cfg.MockListen+"/v1", enc, s.box.Version, []string{"mock-writer", "mock-fast"}).Scan(&id); err != nil {
 		return err
 	}
-	_, err = s.db.Exec(ctx, `INSERT INTO model_route (task_type, provider_id, model) VALUES ('default',$1,'mock-writer'), ('fact_flag',$1,'mock-fast') ON CONFLICT DO NOTHING`, id)
+	_, err = s.db.Exec(ctx, `INSERT INTO model_route (workspace_id, task_type, provider_id, model) VALUES
+		($1,'default',$2,'mock-writer'), ($1,'fact_flag',$2,'mock-fast')
+		ON CONFLICT (workspace_id, task_type) DO NOTHING`, ws, id)
 	if err == nil {
-		slog.Info("已添加本地模拟模型（仅开发模式）")
+		slog.Info("已添加本地模拟模型（仅开发模式）", "workspace_id", ws.String())
 	}
 	return err
 }

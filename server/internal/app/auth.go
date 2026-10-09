@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -36,7 +37,7 @@ func validPassword(p string) error {
 
 func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) error {
 	var n int
-	if err := s.db.QueryRow(r.Context(), `SELECT count(*) FROM member`).Scan(&n); err != nil {
+	if err := s.db.QueryRow(r.Context(), `SELECT count(*) FROM app_user`).Scan(&n); err != nil {
 		return err
 	}
 	return ok(w, map[string]any{"needs_setup": n == 0, "dev": s.cfg.Dev})
@@ -47,60 +48,119 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &in); err != nil {
 		return err
 	}
-	in.Username = strings.TrimSpace(in.Username)
-	if in.Username == "" {
-		return validation("请填写用户名")
-	}
-	if err := validPassword(in.Password); err != nil {
-		return err
-	}
-	hash, err := secure.HashPassword(in.Password)
+	userID, wsID, err := s.createRegisteredUser(r.Context(), strings.TrimSpace(in.Username), in.Password, true)
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.Begin(r.Context())
+	if err := s.startSession(w, r, userID, wsID); err != nil {
+		return err
+	}
+	s.audit(r.Context(), "setup", "user", userID.String(), "ok", map[string]any{"workspace_id": wsID.String()})
+	return ok(w, map[string]any{"ok": true, "workspace_id": wsID})
+}
+
+func (s *Server) authRegister(w http.ResponseWriter, r *http.Request) error {
+	var in struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Invite   string `json:"invite_code"`
+	}
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	userID, wsID, err := s.createRegisteredUser(r.Context(), strings.TrimSpace(in.Username), in.Password, false)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(r.Context())
-	if _, err := tx.Exec(r.Context(), `LOCK TABLE member IN EXCLUSIVE MODE`); err != nil {
-		return err
-	}
-	var n int
-	if err := tx.QueryRow(r.Context(), `SELECT count(*) FROM member`).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return stateInvalid("系统已经设置过登录账号")
-	}
-	var wsID, memberID uuid.UUID
-	if err := tx.QueryRow(r.Context(), `INSERT INTO workspace (name) VALUES ('我的工作区') RETURNING id`).Scan(&wsID); err != nil {
-		return err
-	}
-	if err := tx.QueryRow(r.Context(),
-		`INSERT INTO member (workspace_id, username, password_hash) VALUES ($1,$2,$3) RETURNING id`,
-		wsID, in.Username, hash).Scan(&memberID); err != nil {
-		return err
-	}
-	for _, sw := range baseSensitiveWords {
-		if _, err := tx.Exec(r.Context(),
-			`INSERT INTO sensitive_word (workspace_id, word, category, source) VALUES ($1,$2,$3,'base')`,
-			wsID, sw.word, sw.category); err != nil {
+	switchWS := wsID
+	if code := strings.TrimSpace(in.Invite); code != "" {
+		joined, err := s.consumeInvite(r.Context(), userID, code, true)
+		if err != nil {
 			return err
 		}
+		if joined != uuid.Nil {
+			switchWS = joined
+		}
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := s.startSession(w, r, userID, switchWS); err != nil {
 		return err
 	}
-	if err := s.startSession(w, r, memberID); err != nil {
-		return err
+	s.audit(r.Context(), "register", "user", userID.String(), "ok", map[string]any{"workspace_id": switchWS.String()})
+	return ok(w, map[string]any{"ok": true, "workspace_id": switchWS})
+}
+
+// createRegisteredUser creates app_user + personal workspace + owner membership.
+// setupOnly: reject if any user already exists (compat with POST /auth/setup).
+func (s *Server) createRegisteredUser(ctx context.Context, username, password string, setupOnly bool) (userID, wsID uuid.UUID, err error) {
+	if username == "" {
+		return uuid.Nil, uuid.Nil, validation("请填写用户名")
 	}
-	s.audit(r.Context(), "setup", "member", memberID.String(), "ok", nil)
-	return ok(w, map[string]any{"ok": true})
+	if err := validPassword(password); err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	hash, err := secure.HashPassword(password)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `LOCK TABLE app_user IN EXCLUSIVE MODE`); err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	if setupOnly {
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM app_user`).Scan(&n); err != nil {
+			return uuid.Nil, uuid.Nil, err
+		}
+		if n > 0 {
+			return uuid.Nil, uuid.Nil, stateInvalid("系统已经设置过登录账号，请使用注册或登录")
+		}
+	}
+	err = tx.QueryRow(ctx,
+		`INSERT INTO app_user (username, password_hash) VALUES ($1,$2) RETURNING id`,
+		username, hash).Scan(&userID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return uuid.Nil, uuid.Nil, validation("用户名已被使用")
+		}
+		return uuid.Nil, uuid.Nil, err
+	}
+	wsName := fmt.Sprintf("%s 的工作区", username)
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO workspace (name, created_by_user_id) VALUES ($1,$2) RETURNING id`,
+		wsName, userID).Scan(&wsID); err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO workspace_member (workspace_id, user_id, role, status) VALUES ($1,$2,'owner','active')`,
+		wsID, userID); err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	for _, sw := range baseSensitiveWords {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO sensitive_word (workspace_id, word, category, source) VALUES ($1,$2,$3,'base')`,
+			wsID, sw.word, sw.category); err != nil {
+			return uuid.Nil, uuid.Nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	if s.cfg.Dev {
+		_ = s.seedDevModelFor(ctx, wsID)
+	}
+	return userID, wsID, nil
 }
 
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) error {
-	var in struct{ Username, Password string }
+	var in struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Invite   string `json:"invite_code"`
+	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
@@ -111,10 +171,10 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) error {
 		failed      int
 		lockedUntil *time.Time
 	)
-	err := s.db.QueryRow(ctx, `SELECT id, password_hash, failed_logins, locked_until FROM member WHERE username=$1`,
+	err := s.db.QueryRow(ctx, `SELECT id, password_hash, failed_logins, locked_until FROM app_user WHERE username=$1`,
 		strings.TrimSpace(in.Username)).Scan(&id, &hash, &failed, &lockedUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
-		s.audit(ctx, "login_failed", "member", "", "failed", map[string]any{"ip": clientIP(r), "reason": "unknown_user"})
+		s.audit(ctx, "login_failed", "user", "", "failed", map[string]any{"ip": clientIP(r), "reason": "unknown_user"})
 		return apiErr(401, "unauthenticated", "用户名或密码不正确")
 	}
 	if err != nil {
@@ -132,33 +192,59 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) error {
 			lock = &t
 			failed = 0
 		}
-		if _, err := s.db.Exec(ctx, `UPDATE member SET failed_logins=$2, locked_until=$3 WHERE id=$1`, id, failed, lock); err != nil {
+		if _, err := s.db.Exec(ctx, `UPDATE app_user SET failed_logins=$2, locked_until=$3 WHERE id=$1`, id, failed, lock); err != nil {
 			return err
 		}
-		s.audit(ctx, "login_failed", "member", id.String(), "failed", map[string]any{"ip": clientIP(r)})
+		s.audit(ctx, "login_failed", "user", id.String(), "failed", map[string]any{"ip": clientIP(r)})
 		if lock != nil {
 			return apiErr(429, "login_locked", "登录失败次数过多，已锁定 15 分钟。忘记密码请在服务器上执行重置命令。")
 		}
 		return apiErr(401, "unauthenticated", "用户名或密码不正确")
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE member SET failed_logins=0, locked_until=NULL,
+	if _, err := s.db.Exec(ctx, `UPDATE app_user SET failed_logins=0, locked_until=NULL,
 		prev_login_at=last_login_at, prev_login_ip=last_login_ip, last_login_at=now(), last_login_ip=$2 WHERE id=$1`,
 		id, clientIP(r)); err != nil {
 		return err
 	}
-	if err := s.startSession(w, r, id); err != nil {
+	wsID, err := s.pickWorkspace(ctx, id)
+	if err != nil {
 		return err
 	}
-	s.audit(ctx, "login", "member", id.String(), "ok", map[string]any{"ip": clientIP(r)})
+	if code := strings.TrimSpace(in.Invite); code != "" {
+		joined, err := s.consumeInvite(ctx, id, code, true)
+		if err != nil {
+			return err
+		}
+		if joined != uuid.Nil {
+			wsID = joined
+		}
+	}
+	if err := s.startSession(w, r, id, wsID); err != nil {
+		return err
+	}
+	s.audit(ctx, "login", "user", id.String(), "ok", map[string]any{"ip": clientIP(r)})
 	return ok(w, map[string]any{"ok": true})
 }
 
-func (s *Server) startSession(w http.ResponseWriter, r *http.Request, memberID uuid.UUID) error {
+func (s *Server) pickWorkspace(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
+	var wsID uuid.UUID
+	err := s.db.QueryRow(ctx, `
+		SELECT workspace_id FROM workspace_member
+		WHERE user_id=$1 AND status='active'
+		ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, created_at
+		LIMIT 1`, userID).Scan(&wsID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, stateInvalid("你不属于任何工作区，请注册新建或使用邀请码加入")
+	}
+	return wsID, err
+}
+
+func (s *Server) startSession(w http.ResponseWriter, r *http.Request, userID, workspaceID uuid.UUID) error {
 	token := secure.RandomToken()
 	expires := s.now().Add(sessionTTL)
 	if _, err := s.db.Exec(r.Context(),
-		`INSERT INTO session (member_id, token_hash, expires_at, user_agent, ip, reauth_until) VALUES ($1,$2,$3,$4,$5,$6)`,
-		memberID, secure.SHA256([]byte(token)), expires, r.UserAgent(), clientIP(r), s.now().Add(reauthWindow)); err != nil {
+		`INSERT INTO session (user_id, current_workspace_id, token_hash, expires_at, user_agent, ip, reauth_until) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		userID, workspaceID, secure.SHA256([]byte(token)), expires, r.UserAgent(), clientIP(r), s.now().Add(reauthWindow)); err != nil {
 		return err
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -175,25 +261,72 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			writeError(w, r, errUnauthenticated)
 			return
 		}
-		var (
-			id          identity
-			expires     time.Time
-			reauthUntil *time.Time
-			lastSeen    time.Time
-		)
-		err = s.db.QueryRow(r.Context(), `SELECT s.id, s.expires_at, s.reauth_until, s.last_seen_at, m.id, m.workspace_id, m.username
-			FROM session s JOIN member m ON m.id = s.member_id WHERE s.token_hash=$1`,
-			secure.SHA256([]byte(c.Value))).Scan(&id.SessionID, &expires, &reauthUntil, &lastSeen, &id.MemberID, &id.WorkspaceID, &id.Username)
-		if err != nil || expires.Before(s.now()) {
+		id, err := s.loadIdentity(r.Context(), c.Value)
+		if err != nil {
 			writeError(w, r, errUnauthenticated)
 			return
 		}
-		id.ReauthOK = reauthUntil != nil && reauthUntil.After(s.now())
-		if s.now().Sub(lastSeen) > time.Minute {
+		if s.now().Sub(id.lastSeen) > time.Minute {
 			_, _ = s.db.Exec(r.Context(), `UPDATE session SET last_seen_at=now() WHERE id=$1`, id.SessionID)
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxMember, &id)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxMember, id)))
 	})
+}
+
+func (s *Server) loadIdentity(ctx context.Context, token string) (*identity, error) {
+	var (
+		id          identity
+		expires     time.Time
+		reauthUntil *time.Time
+		lastSeen    time.Time
+	)
+	err := s.db.QueryRow(ctx, `
+		SELECT s.id, s.expires_at, s.reauth_until, s.last_seen_at,
+		       u.id, u.username, s.current_workspace_id, wm.role
+		FROM session s
+		JOIN app_user u ON u.id = s.user_id
+		JOIN workspace_member wm ON wm.user_id = u.id AND wm.workspace_id = s.current_workspace_id AND wm.status = 'active'
+		WHERE s.token_hash=$1`,
+		secure.SHA256([]byte(token))).Scan(
+		&id.SessionID, &expires, &reauthUntil, &lastSeen,
+		&id.UserID, &id.Username, &id.WorkspaceID, &id.Role)
+	if err != nil || expires.Before(s.now()) {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Fallback: membership lost for current workspace — switch to another.
+			var sessionID, userID uuid.UUID
+			var exp time.Time
+			var reauth *time.Time
+			var seen time.Time
+			var username string
+			err2 := s.db.QueryRow(ctx, `
+				SELECT s.id, s.expires_at, s.reauth_until, s.last_seen_at, u.id, u.username
+				FROM session s JOIN app_user u ON u.id = s.user_id
+				WHERE s.token_hash=$1`, secure.SHA256([]byte(token))).
+				Scan(&sessionID, &exp, &reauth, &seen, &userID, &username)
+			if err2 != nil || exp.Before(s.now()) {
+				return nil, errUnauthenticated
+			}
+			wsID, err3 := s.pickWorkspace(ctx, userID)
+			if err3 != nil {
+				return nil, errUnauthenticated
+			}
+			if _, err := s.db.Exec(ctx, `UPDATE session SET current_workspace_id=$2 WHERE id=$1`, sessionID, wsID); err != nil {
+				return nil, err
+			}
+			var role string
+			if err := s.db.QueryRow(ctx, `SELECT role FROM workspace_member WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
+				wsID, userID).Scan(&role); err != nil {
+				return nil, err
+			}
+			id = identity{UserID: userID, SessionID: sessionID, WorkspaceID: wsID, Username: username, Role: role, lastSeen: seen}
+			id.ReauthOK = reauth != nil && reauth.After(s.now())
+			return &id, nil
+		}
+		return nil, errUnauthenticated
+	}
+	id.ReauthOK = reauthUntil != nil && reauthUntil.After(s.now())
+	id.lastSeen = lastSeen
+	return &id, nil
 }
 
 func (s *Server) csrfToken(sessionID uuid.UUID) string {
@@ -219,21 +352,43 @@ func (s *Server) requireReauth(ctx context.Context) error {
 	return nil
 }
 
+func (s *Server) requireOwner(ctx context.Context) error {
+	id := ident(ctx)
+	if id == nil || id.Role != "owner" {
+		return apiErr(403, "forbidden", "需要工作区所有者权限")
+	}
+	return nil
+}
+
 func (s *Server) authMe(w http.ResponseWriter, r *http.Request) error {
 	id := ident(r.Context())
 	var prevAt *time.Time
 	var prevIP *string
-	if err := s.db.QueryRow(r.Context(), `SELECT prev_login_at, prev_login_ip FROM member WHERE id=$1`, id.MemberID).
+	if err := s.db.QueryRow(r.Context(), `SELECT prev_login_at, prev_login_ip FROM app_user WHERE id=$1`, id.UserID).
 		Scan(&prevAt, &prevIP); err != nil {
+		return err
+	}
+	var wsName string
+	_ = s.db.QueryRow(r.Context(), `SELECT name FROM workspace WHERE id=$1`, id.WorkspaceID).Scan(&wsName)
+	workspaces, err := s.listUserWorkspaces(r.Context(), id.UserID)
+	if err != nil {
 		return err
 	}
 	return ok(w, map[string]any{
 		"username":      id.Username,
+		"user_id":       id.UserID,
+		"role":          id.Role,
 		"csrf_token":    s.csrfToken(id.SessionID),
 		"reauth_ok":     id.ReauthOK,
 		"prev_login_at": prevAt,
 		"prev_login_ip": prevIP,
 		"dev":           s.cfg.Dev,
+		"workspace": map[string]any{
+			"id":   id.WorkspaceID,
+			"name": wsName,
+			"role": id.Role,
+		},
+		"workspaces": workspaces,
 	})
 }
 
@@ -245,9 +400,9 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, map[string]any{"ok": true})
 }
 
-func (s *Server) checkPassword(ctx context.Context, memberID uuid.UUID, password string) error {
+func (s *Server) checkPassword(ctx context.Context, userID uuid.UUID, password string) error {
 	var hash string
-	if err := s.db.QueryRow(ctx, `SELECT password_hash FROM member WHERE id=$1`, memberID).Scan(&hash); err != nil {
+	if err := s.db.QueryRow(ctx, `SELECT password_hash FROM app_user WHERE id=$1`, userID).Scan(&hash); err != nil {
 		return err
 	}
 	if !secure.VerifyPassword(password, hash) {
@@ -262,8 +417,8 @@ func (s *Server) authReauth(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	id := ident(r.Context())
-	if err := s.checkPassword(r.Context(), id.MemberID, in.Password); err != nil {
-		s.audit(r.Context(), "reauth", "member", id.MemberID.String(), "failed", nil)
+	if err := s.checkPassword(r.Context(), id.UserID, in.Password); err != nil {
+		s.audit(r.Context(), "reauth", "user", id.UserID.String(), "failed", nil)
 		return err
 	}
 	if _, err := s.db.Exec(r.Context(), `UPDATE session SET reauth_until=$2 WHERE id=$1`, id.SessionID, s.now().Add(reauthWindow)); err != nil {
@@ -281,7 +436,7 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) erro
 		return err
 	}
 	id := ident(r.Context())
-	if err := s.checkPassword(r.Context(), id.MemberID, in.OldPassword); err != nil {
+	if err := s.checkPassword(r.Context(), id.UserID, in.OldPassword); err != nil {
 		return validation("当前密码不正确")
 	}
 	if err := validPassword(in.NewPassword); err != nil {
@@ -291,18 +446,22 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE member SET password_hash=$2, updated_at=now() WHERE id=$1`, id.MemberID, hash); err != nil {
+	if _, err := s.db.Exec(r.Context(), `UPDATE app_user SET password_hash=$2, updated_at=now() WHERE id=$1`, id.UserID, hash); err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(r.Context(), `DELETE FROM session WHERE member_id=$1 AND id<>$2`, id.MemberID, id.SessionID); err != nil {
+	if _, err := s.db.Exec(r.Context(), `DELETE FROM session WHERE user_id=$1 AND id<>$2`, id.UserID, id.SessionID); err != nil {
 		return err
 	}
-	s.audit(r.Context(), "password_change", "member", id.MemberID.String(), "ok", nil)
+	s.audit(r.Context(), "password_change", "user", id.UserID.String(), "ok", nil)
 	return ok(w, map[string]any{"ok": true})
 }
 
-// ResetPassword is used by the `ops reset-password` command (06 文档第 5.9 节).
-func ResetPassword(ctx context.Context, srv *Server, password string) (string, error) {
+// ResetPassword resets a user's password by username (FR-M1-08 / D-036).
+func ResetPassword(ctx context.Context, srv *Server, username, password string) (string, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return "", errors.New("请指定用户名：ops reset-password <username>")
+	}
 	if err := validPassword(password); err != nil {
 		return "", errors.New("密码至少需要 12 位")
 	}
@@ -311,18 +470,17 @@ func ResetPassword(ctx context.Context, srv *Server, password string) (string, e
 		return "", err
 	}
 	var id uuid.UUID
-	var username string
-	err = srv.db.QueryRow(ctx, `UPDATE member SET password_hash=$1, failed_logins=0, locked_until=NULL, updated_at=now()
-		WHERE id=(SELECT id FROM member ORDER BY created_at LIMIT 1) RETURNING id, username`, hash).Scan(&id, &username)
+	err = srv.db.QueryRow(ctx, `UPDATE app_user SET password_hash=$1, failed_logins=0, locked_until=NULL, updated_at=now()
+		WHERE username=$2 RETURNING id`, hash, username).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", errors.New("系统还没有设置登录账号，请在浏览器中完成首次设置")
+		return "", fmt.Errorf("用户 %s 不存在", username)
 	}
 	if err != nil {
 		return "", err
 	}
-	if _, err := srv.db.Exec(ctx, `DELETE FROM session WHERE member_id=$1`, id); err != nil {
+	if _, err := srv.db.Exec(ctx, `DELETE FROM session WHERE user_id=$1`, id); err != nil {
 		return "", err
 	}
-	srv.audit(ctx, "password_reset_cli", "member", id.String(), "ok", nil)
+	srv.audit(ctx, "password_reset_cli", "user", id.String(), "ok", nil)
 	return username, nil
 }

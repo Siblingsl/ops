@@ -37,7 +37,7 @@ func main() {
 	case "version":
 		fmt.Println(app.Version)
 	default:
-		fmt.Fprintf(os.Stderr, "用法：ops [serve|migrate|reset-password|version]\n")
+		fmt.Fprintf(os.Stderr, "用法：ops [serve|migrate|reset-password <username>|version]\n")
 		os.Exit(2)
 	}
 	if err != nil {
@@ -119,6 +119,10 @@ func readPassword(prompt string) (string, error) {
 
 // resetPassword is the only way to recover a forgotten password (FR-M1-08); it never takes the password as an argument.
 func resetPassword() error {
+	if len(os.Args) < 3 || strings.TrimSpace(os.Args[2]) == "" {
+		return errors.New("用法：ops reset-password <username>")
+	}
+	username := strings.TrimSpace(os.Args[2])
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -144,10 +148,10 @@ func resetPassword() error {
 	if p1 != p2 {
 		return errors.New("两次输入不一致")
 	}
-	username, err := app.ResetPassword(ctx, srv, p1)
+	name, err := app.ResetPassword(ctx, srv, username, p1)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("用户 %s 的密码已重置，所有已登录的会话都已退出。\n", username)
+	fmt.Printf("用户 %s 的密码已重置，所有已登录的会话都已退出。\n", name)
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -165,11 +166,13 @@ const (
 )
 
 type identity struct {
-	MemberID    uuid.UUID
+	UserID      uuid.UUID
 	SessionID   uuid.UUID
 	WorkspaceID uuid.UUID
 	Username    string
+	Role        string
 	ReauthOK    bool
+	lastSeen    time.Time
 }
 
 func ident(ctx context.Context) *identity {
