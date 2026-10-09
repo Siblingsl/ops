@@ -19,7 +19,8 @@ services:
       OPS_MASTER_KEY: ${OPS_MASTER_KEY}
       OPS_DATABASE_URL: postgres://ops:${POSTGRES_PASSWORD}@postgres:5432/ops?sslmode=disable
     ports:
-      - "127.0.0.1:8080:8080"
+      # 8080 常被同机其它项目占用（如 /aios/）；OPS 默认用 8088
+      - "127.0.0.1:8088:8080"
     volumes:
       - app_data:/data
     depends_on:
