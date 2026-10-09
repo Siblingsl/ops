@@ -1,13 +1,17 @@
 # 生产镜像：前端静态资源 + Go 单体（无 libvips，图片处理为纯 Go，见 D-034）
+# 国内构建默认走镜像源；海外可通过 build-arg 覆盖。
 
 FROM node:22-bookworm-slim AS web
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN npm config set registry "${NPM_REGISTRY}" && npm ci
 COPY web/ ./
 RUN npm run build
 
 FROM golang:1.26-bookworm AS server
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY server/go.mod server/go.sum ./
 RUN go mod download
@@ -15,7 +19,9 @@ COPY server/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/ops ./cmd/ops
 
 FROM debian:bookworm-slim
-RUN apt-get update \
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+  || sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list \
+  && apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl tzdata \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
