@@ -37,7 +37,7 @@ function AccountDetail({ account, onDeleted, canManage }: { account: Account; on
     if (disabling) {
       if (!(await confirm({
         title: `停用「${account.name}」？`,
-        desc: '停用后不会出现在顶部账号切换中，也不能写入草稿。作品、档案和素材会保留，可随时重新启用。系统不提供彻底删除平台账号，以免误删数据。',
+        desc: '停用后不会出现在侧栏账号列表中，也不能写入草稿。作品、档案和素材会保留，可随时重新启用。系统不提供彻底删除平台账号，以免误删数据。',
         confirmText: '停用',
         danger: true,
       }))) return
@@ -125,6 +125,8 @@ export default function SettingsAccounts() {
   const [filter, setFilter] = useState<Filter>('all')
   const inv = useInvalidate()
   const creating = params.get('new') === '1'
+  const focusSearch = params.get('q') === '1'
+  const createPlatform = params.get('platform') === 'xhs' ? 'xhs' : params.get('platform') === 'wechat_mp' ? 'wechat_mp' : undefined
   const list = data ?? []
 
   const filtered = useMemo(() => {
@@ -136,6 +138,19 @@ export default function SettingsAccounts() {
       return a.name.toLowerCase().includes(needle) || platformLabel[a.platform].includes(needle)
     })
   }, [list, q, filter])
+
+  useEffect(() => {
+    const id = params.get('id')
+    if (id && list.some((a) => a.id === id)) setSelected(id)
+  }, [params, list])
+
+  useEffect(() => {
+    if (focusSearch) {
+      const el = document.querySelector<HTMLInputElement>('[data-account-search]')
+      el?.focus()
+      el?.select()
+    }
+  }, [focusSearch])
 
   useEffect(() => {
     if (!selected && filtered.length) setSelected(filtered[0].id)
@@ -185,7 +200,7 @@ export default function SettingsAccounts() {
             <div className="space-y-3 border-b border-mist-100 p-3">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-mist-400" />
-                <Input className="h-9 pl-8" placeholder="搜索账号名称或平台" value={q} onChange={(e) => setQ(e.target.value)} />
+                <Input data-account-search className="h-9 pl-8" placeholder="搜索账号名称或平台" value={q} onChange={(e) => setQ(e.target.value)} />
               </div>
               <div className="flex flex-wrap gap-1">
                 {filters.map((f) => (
@@ -258,13 +273,17 @@ export default function SettingsAccounts() {
       )}
 
       <Dialog open={creating && !!canManage} onClose={() => setParams({})} title="添加平台账号" width="max-w-lg">
-        <AccountCreateForm onCreated={(a) => {
-          inv(['accounts'])
-          setFilter('all')
-          setSelected(a.id)
-          setParams({})
-          toast.success('账号已添加')
-        }} />
+        <AccountCreateForm
+          key={createPlatform ?? 'any'}
+          defaultPlatform={createPlatform}
+          onCreated={(a) => {
+            inv(['accounts'])
+            setFilter('all')
+            setSelected(a.id)
+            setParams({})
+            toast.success('账号已添加')
+          }}
+        />
       </Dialog>
     </div>
   )

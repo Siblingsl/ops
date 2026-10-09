@@ -1,14 +1,19 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  BarChart3, BookOpen, Check, ChevronsUpDown, Cpu, FileText, Gauge, KeyRound, LayoutDashboard, Lightbulb, LogOut, Plus,
-  ScrollText, Settings2, ShieldAlert, Trash2, UserCircle2, Users,
+  BarChart3, BookOpen, Check, ChevronDown, ChevronRight, ChevronsUpDown, Cpu, Eye, FileText, Gauge, KeyRound,
+  LayoutDashboard, Lightbulb, LogOut, Pencil, Plus, ScrollText, Search, Settings2, ShieldAlert, Trash2,
+  UserCircle2, UserPlus, Users,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { cn, PlatformMark, formatLabel, platformLabel } from '@/components/ui'
-import { get, post } from '@/lib/api'
+import { toast } from 'sonner'
+import { confirm } from '@/components/dialog'
+import { cn, PlatformMark, platformLabel } from '@/components/ui'
+import { errorMessage, get, post } from '@/lib/api'
 import { fmtNum } from '@/lib/format'
-import { useAccounts, useCurrentAccount, useMe } from '@/lib/session'
+import { useAccounts, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
+import type { Account, Platform } from '@/lib/types'
 
 const nav: { end?: boolean; path: string; icon: typeof LayoutDashboard; label: string }[] = [
   { end: true, path: '', icon: LayoutDashboard, label: '工作台' },
@@ -140,71 +145,289 @@ function UserMenu({ username, onLogout }: { username?: string; onLogout: () => v
   )
 }
 
-function AccountSwitcher({ compact }: { compact?: boolean }) {
-  const current = useCurrentAccount()
-  const { data: accounts } = useAccounts()
-  const [open, setOpen] = useState(false)
-  const navigate = useNavigate()
-  const loc = useLocation()
+type MenuItem = {
+  label: string
+  icon?: React.ReactNode
+  danger?: boolean
+  disabled?: boolean
+  separator?: boolean
+  onClick?: () => void
+}
+
+function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    const h = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false)
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [])
-  const switchTo = (id: string) => {
-    setOpen(false)
-    const m = loc.pathname.match(/^\/a\/[^/]+(\/[^/]+)?/)
-    // 在作品页切换账号时回到该账号工作台，避免带着别的账号的作品路径。
-    if (loc.pathname.startsWith('/works/') || loc.pathname.startsWith('/settings/')) navigate(`/a/${id}`)
-    else navigate(`/a/${id}${m?.[1] ?? ''}`)
-  }
-  const active = accounts?.filter((a) => a.status === 'active') ?? []
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className={cn(
-          'flex cursor-pointer items-center gap-2.5 rounded-full border bg-white text-left transition',
-          compact ? 'h-9 max-w-[240px] pl-1.5 pr-2.5' : 'h-10 pl-1.5 pr-3',
-          open ? 'border-ink-300 shadow-card' : 'border-mist-200 hover:border-mist-300',
-        )}
-      >
-        {current ? <PlatformMark platform={current.platform} size="sm" /> : <span className="size-5 rounded bg-mist-100" />}
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-semibold text-mist-900">{current?.name ?? '选择账号'}</span>
-        </span>
-        {!compact && current && (
-          <span className="hidden text-[11px] text-mist-400 lg:inline">{platformLabel[current.platform]}</span>
-        )}
-        <ChevronsUpDown className="size-3.5 shrink-0 text-mist-400" />
-      </button>
-      {open && (
-        <div className="absolute left-0 top-[calc(100%+8px)] z-40 w-[280px] animate-fade-in rounded-xl border border-mist-200 bg-white p-1.5 shadow-pop">
-          <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold tracking-wider text-mist-400">切换平台账号</div>
-          {active.map((a) => (
-            <button key={a.id} type="button" onClick={() => switchTo(a.id)}
-              className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-mist-50">
-              <PlatformMark platform={a.platform} size="sm" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13.5px] font-medium text-mist-800">{a.name}</span>
-                <span className="block text-[11.5px] text-mist-400">{platformLabel[a.platform]} · {formatLabel[a.content_format]}</span>
-              </span>
-              {a.id === current?.id && <Check className="size-3.5 text-ink-600" />}
-            </button>
-          ))}
-          <div className="my-1 border-t border-mist-100" />
-          <button type="button" onClick={() => { setOpen(false); navigate('/settings/accounts') }}
-            className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-[13.5px] text-mist-600 hover:bg-mist-50">
-            <Users className="size-4" /> 管理账号（增删改查）
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('scroll', onClose, true)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('scroll', onClose, true)
+    }
+  }, [onClose])
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const dx = Math.min(0, window.innerWidth - rect.right - 8)
+    const dy = Math.min(0, window.innerHeight - rect.bottom - 8)
+    if (dx || dy) {
+      el.style.left = `${x + dx}px`
+      el.style.top = `${y + dy}px`
+    }
+  }, [x, y])
+  return createPortal(
+    <div
+      ref={ref}
+      role="menu"
+      className="fixed z-50 min-w-[188px] animate-fade-in rounded-xl border border-mist-200 bg-white p-1 shadow-pop"
+      style={{ left: x, top: y }}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {items.map((item, i) =>
+        item.separator ? (
+          <div key={`sep-${i}`} className="my-1 border-t border-mist-100" />
+        ) : (
+          <button
+            key={item.label}
+            type="button"
+            role="menuitem"
+            disabled={item.disabled}
+            onClick={() => { onClose(); item.onClick?.() }}
+            className={cn(
+              'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition',
+              item.danger ? 'text-danger hover:bg-orange-50' : 'text-mist-700 hover:bg-mist-50',
+              item.disabled && 'cursor-not-allowed opacity-40',
+            )}
+          >
+            <span className="flex size-4 shrink-0 items-center justify-center text-mist-400 [&_svg]:size-3.5">
+              {item.icon}
+            </span>
+            {item.label}
           </button>
-          <button type="button" onClick={() => { setOpen(false); navigate('/settings/accounts?new=1') }}
-            className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-[13.5px] text-mist-600 hover:bg-mist-50">
-            <Plus className="size-4" /> 添加平台账号
-          </button>
-        </div>
+        ),
       )}
+    </div>,
+    document.body,
+  )
+}
+
+const PLATFORMS: Platform[] = ['wechat_mp', 'xhs']
+const EXPAND_KEY = 'ops.sidebar.platforms'
+
+function loadExpanded(): Record<Platform, boolean> {
+  try {
+    const raw = localStorage.getItem(EXPAND_KEY)
+    if (raw) return { wechat_mp: true, xhs: true, ...JSON.parse(raw) }
+  } catch { /* ignore */ }
+  return { wechat_mp: true, xhs: true }
+}
+
+function AccountSidebar() {
+  const current = useCurrentAccount()
+  const { data: accounts } = useAccounts()
+  const { data: me } = useMe()
+  const canManage = me?.role === 'owner'
+  const inv = useInvalidate()
+  const navigate = useNavigate()
+  const loc = useLocation()
+  const [expanded, setExpanded] = useState(loadExpanded)
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
+
+  const switchTo = (id: string, sub = '') => {
+    if (loc.pathname.startsWith('/works/') || loc.pathname.startsWith('/settings/')) {
+      navigate(`/a/${id}${sub}`)
+      return
+    }
+    const m = loc.pathname.match(/^\/a\/[^/]+(\/[^/]+)?/)
+    navigate(`/a/${id}${sub || m?.[1] || ''}`)
+  }
+
+  const togglePlatform = (p: Platform) => {
+    setExpanded((prev) => {
+      const next = { ...prev, [p]: !prev[p] }
+      localStorage.setItem(EXPAND_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const disableAccount = async (a: Account) => {
+    if (!(await confirm({
+      title: `停用「${a.name}」？`,
+      desc: '停用后不会出现在侧栏账号列表中，也不能写入草稿。可随时重新启用。',
+      confirmText: '停用',
+      danger: true,
+    }))) return
+    try {
+      await post(`/accounts/${a.id}/disable`)
+      inv(['accounts'])
+      toast.success('已停用')
+      if (current?.id === a.id) navigate('/settings/accounts')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
+
+  const platformMenu = (p: Platform): MenuItem[] => [
+    {
+      label: expanded[p] ? '收起' : '展开',
+      icon: expanded[p] ? <ChevronDown /> : <ChevronRight />,
+      onClick: () => togglePlatform(p),
+    },
+    { separator: true, label: '' },
+    {
+      label: '添加账号',
+      icon: <Plus />,
+      disabled: !canManage,
+      onClick: () => navigate(`/settings/accounts?new=1&platform=${p}`),
+    },
+    {
+      label: '查看全部',
+      icon: <Eye />,
+      onClick: () => navigate('/settings/accounts'),
+    },
+    {
+      label: '搜索账号',
+      icon: <Search />,
+      onClick: () => navigate('/settings/accounts?q=1'),
+    },
+    { separator: true, label: '' },
+    {
+      label: '邀请成员',
+      icon: <UserPlus />,
+      onClick: () => navigate('/settings/members'),
+    },
+  ]
+
+  const accountMenu = (a: Account): MenuItem[] => [
+    {
+      label: '打开 / 选中',
+      icon: <Check />,
+      onClick: () => switchTo(a.id),
+    },
+    {
+      label: '查看资料',
+      icon: <Eye />,
+      onClick: () => navigate(`/settings/accounts?id=${a.id}`),
+    },
+    {
+      label: '编辑账号',
+      icon: <Pencil />,
+      disabled: !canManage,
+      onClick: () => navigate(`/settings/accounts?id=${a.id}`),
+    },
+    {
+      label: '添加同平台账号',
+      icon: <Plus />,
+      disabled: !canManage,
+      onClick: () => navigate(`/settings/accounts?new=1&platform=${a.platform}`),
+    },
+    {
+      label: '停用账号',
+      icon: <Trash2 />,
+      danger: true,
+      disabled: !canManage,
+      onClick: () => void disableAccount(a),
+    },
+    { separator: true, label: '' },
+    {
+      label: '邀请成员',
+      icon: <UserPlus />,
+      onClick: () => navigate('/settings/members'),
+    },
+    {
+      label: '账号档案',
+      icon: <UserCircle2 />,
+      onClick: () => switchTo(a.id, '/profile'),
+    },
+    {
+      label: a.platform === 'wechat_mp' ? '管理凭证' : '管理账号',
+      icon: a.platform === 'wechat_mp' ? <KeyRound /> : <Settings2 />,
+      onClick: () => navigate(`/settings/accounts?id=${a.id}`),
+    },
+  ]
+
+  const openMenu = (e: React.MouseEvent, items: MenuItem[]) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setMenu({ x: e.clientX, y: e.clientY, items })
+  }
+
+  return (
+    <div className="mt-4 space-y-1">
+      <div className="mb-1.5 flex items-center justify-between px-3">
+        <span className="text-[11px] font-semibold tracking-[0.16em] text-mist-400">平台账号</span>
+        {canManage && (
+          <button
+            type="button"
+            title="添加账号"
+            onClick={() => navigate('/settings/accounts?new=1')}
+            className="inline-flex size-5 cursor-pointer items-center justify-center rounded text-mist-400 hover:bg-mist-100 hover:text-mist-700"
+          >
+            <Plus className="size-3.5" />
+          </button>
+        )}
+      </div>
+      {PLATFORMS.map((p) => {
+        const list = (accounts ?? []).filter((a) => a.platform === p && a.status === 'active')
+        const open = expanded[p]
+        return (
+          <div key={p}>
+            <button
+              type="button"
+              onClick={() => togglePlatform(p)}
+              onContextMenu={(e) => openMenu(e, platformMenu(p))}
+              className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] font-medium text-mist-700 hover:bg-mist-100/90"
+            >
+              {open ? <ChevronDown className="size-3.5 shrink-0 text-mist-400" /> : <ChevronRight className="size-3.5 shrink-0 text-mist-400" />}
+              <PlatformMark platform={p} size="sm" />
+              <span className="min-w-0 flex-1 truncate">{platformLabel[p]}</span>
+              <span className="text-[11px] tabular-nums text-mist-400">{list.length}</span>
+            </button>
+            {open && (
+              <div className="ml-2 space-y-0.5 border-l border-mist-200/80 pl-2">
+                {list.length === 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => canManage && navigate(`/settings/accounts?new=1&platform=${p}`)}
+                    onContextMenu={(e) => openMenu(e, platformMenu(p))}
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] text-mist-400 hover:bg-mist-100/80 hover:text-mist-600"
+                  >
+                    {canManage ? '右键或点击添加' : '暂无账号'}
+                  </button>
+                ) : (
+                  list.map((a) => {
+                    const active = a.id === current?.id
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => switchTo(a.id)}
+                        onContextMenu={(e) => openMenu(e, accountMenu(a))}
+                        className={cn(
+                          'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition',
+                          active
+                            ? 'bg-ink-600 font-semibold text-white shadow-[0_8px_18px_-12px_rgb(47_93_98/0.9)]'
+                            : 'text-mist-600 hover:bg-mist-100/90 hover:text-mist-900',
+                        )}
+                      >
+                        <span className={cn('size-1.5 shrink-0 rounded-full', active ? 'bg-gamboge-300' : 'bg-mist-300')} />
+                        <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
     </div>
   )
 }
@@ -319,7 +542,6 @@ function TopBar({ username, onLogout, dense }: { username?: string; onLogout: ()
       dense ? 'h-12' : 'h-14',
     )}>
       <WorkspaceSwitcher />
-      <AccountSwitcher compact={dense} />
       <div className="hidden h-4 w-px bg-mist-200 sm:block" />
       <nav className="hidden min-w-0 flex-1 items-center gap-2 text-[13px] sm:flex" aria-label="当前位置">
         <span className="truncate text-mist-400">{meta.crumb}</span>
@@ -361,7 +583,8 @@ export default function Shell() {
       <aside className="flex w-[248px] shrink-0 flex-col border-r border-mist-200 bg-mist-50">
         <Brand />
         <nav className="scrollbar-thin flex-1 space-y-1 overflow-y-auto px-3 pb-4">
-          <div className="mb-1.5 px-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400">创作</div>
+          <AccountSidebar />
+          <div className="mb-1.5 mt-4 px-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400">创作</div>
           {nav.map((item) => (
             <NavItem
               key={item.path || 'home'}

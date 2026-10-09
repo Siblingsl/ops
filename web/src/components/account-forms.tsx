@@ -18,9 +18,17 @@ const matrix: Record<Platform, { value: ContentFormat; label: string; desc: stri
   ],
 }
 
-export function AccountCreateForm({ onCreated, submitText = '添加账号' }: { onCreated: (a: Account) => void; submitText?: string }) {
-  const [platform, setPlatform] = useState<Platform>('wechat_mp')
-  const [format, setFormat] = useState<ContentFormat>('long_article')
+export function AccountCreateForm({
+  onCreated,
+  submitText = '添加账号',
+  defaultPlatform = 'wechat_mp',
+}: {
+  onCreated: (a: Account) => void
+  submitText?: string
+  defaultPlatform?: Platform
+}) {
+  const [platform, setPlatform] = useState<Platform>(defaultPlatform)
+  const [format, setFormat] = useState<ContentFormat>(matrix[defaultPlatform][0].value)
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const pick = (p: Platform) => {
