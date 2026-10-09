@@ -218,28 +218,43 @@ function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: Me
 }
 
 const PLATFORMS: Platform[] = ['wechat_mp', 'xhs']
-const EXPAND_KEY = 'ops.sidebar.platforms'
+const PLATFORM_EXPAND_KEY = 'ops.sidebar.platforms'
+const WS_EXPAND_KEY = 'ops.sidebar.workspaceOpen'
 
-function loadExpanded(): Record<Platform, boolean> {
+function loadPlatformExpanded(): Record<Platform, boolean> {
   try {
-    const raw = localStorage.getItem(EXPAND_KEY)
+    const raw = localStorage.getItem(PLATFORM_EXPAND_KEY)
     if (raw) return { wechat_mp: true, xhs: true, ...JSON.parse(raw) }
   } catch { /* ignore */ }
   return { wechat_mp: true, xhs: true }
 }
 
-function AccountSidebar() {
+function loadWorkspaceOpen(): boolean {
+  try {
+    const raw = localStorage.getItem(WS_EXPAND_KEY)
+    if (raw != null) return raw === '1'
+  } catch { /* ignore */ }
+  return true
+}
+
+/** 侧栏：工作区为根，其下展开公众号 / 小红书账号树 */
+function WorkspaceAccountTree() {
   const current = useCurrentAccount()
   const { data: accounts } = useAccounts()
   const { data: me } = useMe()
+  const qc = useQueryClient()
   const canManage = me?.role === 'owner'
   const inv = useInvalidate()
   const navigate = useNavigate()
   const loc = useLocation()
-  const [expanded, setExpanded] = useState(loadExpanded)
+  const [wsOpen, setWsOpen] = useState(loadWorkspaceOpen)
+  const [expanded, setExpanded] = useState(loadPlatformExpanded)
+  const [busy, setBusy] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
 
-  const switchTo = (id: string, sub = '') => {
+  if (!me?.workspace) return null
+
+  const switchAccount = (id: string, sub = '') => {
     if (loc.pathname.startsWith('/works/') || loc.pathname.startsWith('/settings/')) {
       navigate(`/a/${id}${sub}`)
       return
@@ -248,10 +263,30 @@ function AccountSidebar() {
     navigate(`/a/${id}${sub || m?.[1] || ''}`)
   }
 
+  const switchWorkspace = async (id: string) => {
+    if (id === me.workspace.id || busy) return
+    setBusy(true)
+    try {
+      await post(`/workspaces/${id}/switch`, {})
+      qc.clear()
+      navigate('/', { replace: true })
+      window.location.reload()
+    } catch {
+      setBusy(false)
+    }
+  }
+
+  const toggleWorkspace = () => {
+    setWsOpen((v) => {
+      localStorage.setItem(WS_EXPAND_KEY, v ? '0' : '1')
+      return !v
+    })
+  }
+
   const togglePlatform = (p: Platform) => {
     setExpanded((prev) => {
       const next = { ...prev, [p]: !prev[p] }
-      localStorage.setItem(EXPAND_KEY, JSON.stringify(next))
+      localStorage.setItem(PLATFORM_EXPAND_KEY, JSON.stringify(next))
       return next
     })
   }
@@ -272,6 +307,49 @@ function AccountSidebar() {
       toast.error(errorMessage(e))
     }
   }
+
+  const openMenu = (e: React.MouseEvent, items: MenuItem[]) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setMenu({ x: e.clientX, y: e.clientY, items })
+  }
+
+  const otherWorkspaces = (me.workspaces ?? []).filter((w) => w.id !== me.workspace.id)
+
+  const workspaceMenu = (): MenuItem[] => [
+    {
+      label: wsOpen ? '收起工作区' : '展开工作区',
+      icon: wsOpen ? <ChevronDown /> : <ChevronRight />,
+      onClick: toggleWorkspace,
+    },
+    { separator: true, label: '' },
+    {
+      label: '成员与邀请',
+      icon: <UserPlus />,
+      onClick: () => navigate('/settings/members'),
+    },
+    {
+      label: '添加账号',
+      icon: <Plus />,
+      disabled: !canManage,
+      onClick: () => navigate('/settings/accounts?new=1'),
+    },
+    {
+      label: '管理平台账号',
+      icon: <Settings2 />,
+      onClick: () => navigate('/settings/accounts'),
+    },
+    ...(otherWorkspaces.length
+      ? [
+          { separator: true, label: '' } as MenuItem,
+          ...otherWorkspaces.map((w) => ({
+            label: `切换到 ${w.name}`,
+            icon: <ChevronsUpDown />,
+            onClick: () => void switchWorkspace(w.id),
+          })),
+        ]
+      : []),
+  ]
 
   const platformMenu = (p: Platform): MenuItem[] => [
     {
@@ -308,7 +386,7 @@ function AccountSidebar() {
     {
       label: '打开 / 选中',
       icon: <Check />,
-      onClick: () => switchTo(a.id),
+      onClick: () => switchAccount(a.id),
     },
     {
       label: '查看资料',
@@ -343,7 +421,7 @@ function AccountSidebar() {
     {
       label: '账号档案',
       icon: <UserCircle2 />,
-      onClick: () => switchTo(a.id, '/profile'),
+      onClick: () => switchAccount(a.id, '/profile'),
     },
     {
       label: a.platform === 'wechat_mp' ? '管理凭证' : '管理账号',
@@ -352,81 +430,106 @@ function AccountSidebar() {
     },
   ]
 
-  const openMenu = (e: React.MouseEvent, items: MenuItem[]) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setMenu({ x: e.clientX, y: e.clientY, items })
-  }
-
   return (
-    <div className="mt-4 space-y-1">
-      <div className="mb-1.5 flex items-center justify-between px-3">
-        <span className="text-[11px] font-semibold tracking-[0.16em] text-mist-400">平台账号</span>
+    <div className="space-y-0.5">
+      <button
+        type="button"
+        onClick={toggleWorkspace}
+        onContextMenu={(e) => openMenu(e, workspaceMenu())}
+        className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13.5px] font-semibold text-mist-800 hover:bg-mist-100/90"
+      >
+        {wsOpen ? <ChevronDown className="size-3.5 shrink-0 text-mist-400" /> : <ChevronRight className="size-3.5 shrink-0 text-mist-400" />}
+        <span className="min-w-0 flex-1 truncate">{me.workspace.name}</span>
         {canManage && (
-          <button
-            type="button"
+          <span
+            role="button"
+            tabIndex={0}
             title="添加账号"
-            onClick={() => navigate('/settings/accounts?new=1')}
-            className="inline-flex size-5 cursor-pointer items-center justify-center rounded text-mist-400 hover:bg-mist-100 hover:text-mist-700"
+            onClick={(e) => { e.stopPropagation(); navigate('/settings/accounts?new=1') }}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); navigate('/settings/accounts?new=1') } }}
+            className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-mist-400 hover:bg-mist-200/80 hover:text-mist-700"
           >
             <Plus className="size-3.5" />
-          </button>
+          </span>
         )}
-      </div>
-      {PLATFORMS.map((p) => {
-        const list = (accounts ?? []).filter((a) => a.platform === p && a.status === 'active')
-        const open = expanded[p]
-        return (
-          <div key={p}>
-            <button
-              type="button"
-              onClick={() => togglePlatform(p)}
-              onContextMenu={(e) => openMenu(e, platformMenu(p))}
-              className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] font-medium text-mist-700 hover:bg-mist-100/90"
-            >
-              {open ? <ChevronDown className="size-3.5 shrink-0 text-mist-400" /> : <ChevronRight className="size-3.5 shrink-0 text-mist-400" />}
-              <PlatformMark platform={p} size="sm" />
-              <span className="min-w-0 flex-1 truncate">{platformLabel[p]}</span>
-              <span className="text-[11px] tabular-nums text-mist-400">{list.length}</span>
-            </button>
-            {open && (
-              <div className="ml-2 space-y-0.5 border-l border-mist-200/80 pl-2">
-                {list.length === 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => canManage && navigate(`/settings/accounts?new=1&platform=${p}`)}
-                    onContextMenu={(e) => openMenu(e, platformMenu(p))}
-                    className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] text-mist-400 hover:bg-mist-100/80 hover:text-mist-600"
-                  >
-                    {canManage ? '右键或点击添加' : '暂无账号'}
-                  </button>
-                ) : (
-                  list.map((a) => {
-                    const active = a.id === current?.id
-                    return (
+      </button>
+
+      {wsOpen && (
+        <div className="ml-2 space-y-0.5 border-l border-mist-200/80 pl-1.5">
+          {PLATFORMS.map((p) => {
+            const list = (accounts ?? []).filter((a) => a.platform === p && a.status === 'active')
+            const open = expanded[p]
+            return (
+              <div key={p}>
+                <button
+                  type="button"
+                  onClick={() => togglePlatform(p)}
+                  onContextMenu={(e) => openMenu(e, platformMenu(p))}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] font-medium text-mist-700 hover:bg-mist-100/90"
+                >
+                  {open ? <ChevronDown className="size-3.5 shrink-0 text-mist-400" /> : <ChevronRight className="size-3.5 shrink-0 text-mist-400" />}
+                  <PlatformMark platform={p} size="sm" />
+                  <span className="min-w-0 flex-1 truncate">{platformLabel[p]}</span>
+                  <span className="text-[11px] tabular-nums text-mist-400">{list.length}</span>
+                </button>
+                {open && (
+                  <div className="ml-2 space-y-0.5 border-l border-mist-200/70 pl-1.5">
+                    {list.length === 0 ? (
                       <button
-                        key={a.id}
                         type="button"
-                        onClick={() => switchTo(a.id)}
-                        onContextMenu={(e) => openMenu(e, accountMenu(a))}
-                        className={cn(
-                          'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition',
-                          active
-                            ? 'bg-ink-600 font-semibold text-white shadow-[0_8px_18px_-12px_rgb(47_93_98/0.9)]'
-                            : 'text-mist-600 hover:bg-mist-100/90 hover:text-mist-900',
-                        )}
+                        onClick={() => canManage && navigate(`/settings/accounts?new=1&platform=${p}`)}
+                        onContextMenu={(e) => openMenu(e, platformMenu(p))}
+                        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-mist-400 hover:bg-mist-100/80 hover:text-mist-600"
                       >
-                        <span className={cn('size-1.5 shrink-0 rounded-full', active ? 'bg-gamboge-300' : 'bg-mist-300')} />
-                        <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                        {canManage ? '右键或点击添加' : '暂无账号'}
                       </button>
-                    )
-                  })
+                    ) : (
+                      list.map((a) => {
+                        const active = a.id === current?.id
+                        return (
+                          <button
+                            key={a.id}
+                            type="button"
+                            onClick={() => switchAccount(a.id)}
+                            onContextMenu={(e) => openMenu(e, accountMenu(a))}
+                            className={cn(
+                              'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition',
+                              active
+                                ? 'bg-ink-600 font-semibold text-white shadow-[0_8px_18px_-12px_rgb(47_93_98/0.9)]'
+                                : 'text-mist-600 hover:bg-mist-100/90 hover:text-mist-900',
+                            )}
+                          >
+                            <span className={cn('size-1.5 shrink-0 rounded-full', active ? 'bg-gamboge-300' : 'bg-mist-300')} />
+                            <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
-        )
-      })}
+            )
+          })}
+
+          {otherWorkspaces.length > 0 && (
+            <div className="mt-1.5 space-y-0.5 border-t border-mist-100 pt-1.5">
+              <div className="px-2 pb-0.5 text-[10.5px] font-semibold tracking-wider text-mist-400">其他工作区</div>
+              {otherWorkspaces.map((w) => (
+                <button
+                  key={w.id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void switchWorkspace(w.id)}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-mist-500 hover:bg-mist-100/90 hover:text-mist-800 disabled:opacity-50"
+                >
+                  <ChevronRight className="size-3.5 shrink-0 text-mist-300" />
+                  <span className="min-w-0 flex-1 truncate">{w.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
     </div>
   )
@@ -455,79 +558,10 @@ function useChromeMeta() {
   }, [loc.pathname, acc])
 }
 
-function WorkspaceSwitcher() {
-  const { data: me } = useMe()
-  const qc = useQueryClient()
-  const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  const navigate = useNavigate()
-  useEffect(() => {
-    const h = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false)
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [])
-  if (!me?.workspace) return null
-  const switchTo = async (id: string) => {
-    if (id === me.workspace.id || busy) return
-    setBusy(true)
-    try {
-      await post(`/workspaces/${id}/switch`, {})
-      qc.clear()
-      setOpen(false)
-      navigate('/', { replace: true })
-      window.location.reload()
-    } catch {
-      setBusy(false)
-    }
-  }
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          'flex h-9 max-w-[200px] cursor-pointer items-center gap-2 rounded-full border bg-white pl-3 pr-2.5 text-left transition',
-          open ? 'border-ink-300 shadow-card' : 'border-mist-200 hover:border-mist-300',
-        )}
-      >
-        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-mist-900">{me.workspace.name}</span>
-        <ChevronsUpDown className="size-3.5 shrink-0 text-mist-400" />
-      </button>
-      {open && (
-        <div className="absolute left-0 top-[calc(100%+8px)] z-40 w-[260px] animate-fade-in rounded-xl border border-mist-200 bg-white p-1.5 shadow-pop">
-          <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold tracking-wider text-mist-400">切换工作区</div>
-          {(me.workspaces ?? []).map((w) => (
-            <button
-              key={w.id}
-              type="button"
-              onClick={() => void switchTo(w.id)}
-              className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-mist-50"
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13.5px] font-medium text-mist-800">{w.name}</span>
-                <span className="block text-[11.5px] text-mist-400">{w.role === 'owner' ? '所有者' : '编辑者'}</span>
-              </span>
-              {w.id === me.workspace.id && <Check className="size-3.5 text-ink-600" />}
-            </button>
-          ))}
-          <div className="my-1 border-t border-mist-100" />
-          <button
-            type="button"
-            onClick={() => { setOpen(false); navigate('/settings/members') }}
-            className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-[13.5px] text-mist-600 hover:bg-mist-50"
-          >
-            <Users className="size-4" /> 成员与邀请
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
 function TopBar({ username, onLogout, dense }: { username?: string; onLogout: () => void; dense?: boolean }) {
   const meta = useChromeMeta()
   const acc = useCurrentAccount()
+  const { data: me } = useMe()
   const navigate = useNavigate()
   const dash = useQuery({
     queryKey: ['dashboard', acc?.id],
@@ -541,9 +575,13 @@ function TopBar({ username, onLogout, dense }: { username?: string; onLogout: ()
       'sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b border-mist-200/80 bg-white/90 px-5 backdrop-blur xl:px-7',
       dense ? 'h-12' : 'h-14',
     )}>
-      <WorkspaceSwitcher />
-      <div className="hidden h-4 w-px bg-mist-200 sm:block" />
       <nav className="hidden min-w-0 flex-1 items-center gap-2 text-[13px] sm:flex" aria-label="当前位置">
+        {me?.workspace && (
+          <>
+            <span className="truncate text-mist-400">{me.workspace.name}</span>
+            <span className="text-mist-300">/</span>
+          </>
+        )}
         <span className="truncate text-mist-400">{meta.crumb}</span>
         <span className="text-mist-300">/</span>
         <span className="truncate font-semibold text-mist-800">{meta.title}</span>
@@ -583,7 +621,7 @@ export default function Shell() {
       <aside className="flex w-[248px] shrink-0 flex-col border-r border-mist-200 bg-mist-50">
         <Brand />
         <nav className="scrollbar-thin flex-1 space-y-1 overflow-y-auto px-3 pb-4">
-          <AccountSidebar />
+          <WorkspaceAccountTree />
           <div className="mb-1.5 mt-4 px-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400">创作</div>
           {nav.map((item) => (
             <NavItem
