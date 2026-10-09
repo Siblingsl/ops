@@ -88,7 +88,20 @@ export default function SettingsAccounts() {
       <PageHeader title="平台账号与凭证" desc="管理公众号和小红书账号。每个账号有独立的档案、素材和作品。"
         action={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setParams({ new: '1' })}>添加账号</Button>} />
       {list.length === 0 ? (
-        <Card><Empty icon={<Users className="size-5" />} title="还没有平台账号" action={<Button variant="primary" onClick={() => setParams({ new: '1' })}>添加账号</Button>} /></Card>
+        <Card className="overflow-hidden">
+          <Empty
+            icon={<Users className="size-5" />}
+            title="还没有平台账号"
+            desc="先添加公众号或小红书账号。凭证、定位档案、风格样本和模型可在添加后随时配置。"
+            action={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setParams({ new: '1' })}>添加账号</Button>}
+          />
+          <ol className="space-y-2 border-t border-mist-100 bg-mist-50/60 px-6 py-4 text-[13px] text-mist-600">
+            <li><span className="font-medium text-mist-800">1. 添加账号</span> — 本页</li>
+            <li><span className="font-medium text-mist-800">2. 公众号凭证</span> — 添加公众号后在本页下方填写（小红书可跳过）</li>
+            <li><span className="font-medium text-mist-800">3. 定位档案 / 风格样本</span> — 左侧「账号档案」</li>
+            <li><span className="font-medium text-mist-800">4. 模型</span> — 头像菜单 → 模型配置</li>
+          </ol>
+        </Card>
       ) : (
         <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
           <Card className="h-fit p-1.5">

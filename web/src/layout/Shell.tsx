@@ -289,7 +289,7 @@ export default function Shell() {
           {nav.map((item) => (
             <NavItem
               key={item.path || 'home'}
-              to={`${base}${item.path}`}
+              to={acc ? `${base}${item.path}` : '/settings/accounts'}
               end={item.end}
               icon={item.icon}
             >

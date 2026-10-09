@@ -31,7 +31,8 @@ function Home() {
   const { data: accounts, isLoading } = useAccounts()
   if (isLoading) return <PageLoading />
   const active = accounts?.filter((a) => a.status === 'active') ?? []
-  if (active.length === 0) return <Navigate to="/setup" replace />
+  // 无平台账号时进入登录后配置，不再走首次引导多步向导
+  if (active.length === 0) return <Navigate to="/settings/accounts?new=1" replace />
   const id = active.find((a) => a.id === rememberedAccount())?.id ?? active[0].id
   return <Navigate to={`/a/${id}`} replace />
 }
