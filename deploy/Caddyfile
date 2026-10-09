@@ -1,0 +1,4 @@
+ops.88813888.xyz {
+	encode gzip
+	reverse_proxy app:8080
+}

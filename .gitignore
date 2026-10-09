@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!deploy/.env.example
 
 # Go
 server/bin/
@@ -12,6 +13,7 @@ server/tmp/
 web/node_modules/
 web/dist/
 web/.vite/
+web/*.tsbuildinfo
 
 # 本地数据
 data/

@@ -157,8 +157,8 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, memberID u
 	token := secure.RandomToken()
 	expires := s.now().Add(sessionTTL)
 	if _, err := s.db.Exec(r.Context(),
-		`INSERT INTO session (member_id, token_hash, expires_at, user_agent, ip) VALUES ($1,$2,$3,$4,$5)`,
-		memberID, secure.SHA256([]byte(token)), expires, r.UserAgent(), clientIP(r)); err != nil {
+		`INSERT INTO session (member_id, token_hash, expires_at, user_agent, ip, reauth_until) VALUES ($1,$2,$3,$4,$5,$6)`,
+		memberID, secure.SHA256([]byte(token)), expires, r.UserAgent(), clientIP(r), s.now().Add(reauthWindow)); err != nil {
 		return err
 	}
 	http.SetCookie(w, &http.Cookie{
