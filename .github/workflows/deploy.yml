@@ -32,9 +32,9 @@ jobs:
           chmod 700 "$HOME/.ssh"
           KEY_FILE="$HOME/.ssh/ops_deploy"
           if [ -n "${DEPLOY_SSH_KEY_B64:-}" ]; then
-            echo "$DEPLOY_SSH_KEY_B64" | base64 -d > "$KEY_FILE"
+            printf '%s' "$DEPLOY_SSH_KEY_B64" | tr -d '\n\r\t ' | base64 -d > "$KEY_FILE"
           elif [ -n "${DEPLOY_SSH_KEY:-}" ]; then
-            printf '%s\n' "$DEPLOY_SSH_KEY" > "$KEY_FILE"
+            printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > "$KEY_FILE"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "No DEPLOY_SSH_KEY_B64 or DEPLOY_SSH_KEY; skip."
