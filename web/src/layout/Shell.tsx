@@ -194,6 +194,10 @@ function AccountSwitcher({ compact }: { compact?: boolean }) {
             </button>
           ))}
           <div className="my-1 border-t border-mist-100" />
+          <button type="button" onClick={() => { setOpen(false); navigate('/settings/accounts') }}
+            className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-[13.5px] text-mist-600 hover:bg-mist-50">
+            <Users className="size-4" /> 管理账号（增删改查）
+          </button>
           <button type="button" onClick={() => { setOpen(false); navigate('/settings/accounts?new=1') }}
             className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-[13.5px] text-mist-600 hover:bg-mist-50">
             <Plus className="size-4" /> 添加平台账号
