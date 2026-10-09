@@ -1,0 +1,24 @@
+# 环境与密钥
+.env
+.env.*
+!.env.example
+
+# Go
+server/bin/
+server/tmp/
+*.exe
+
+# 前端
+web/node_modules/
+web/dist/
+web/.vite/
+
+# 本地数据
+data/
+server/data/
+
+# 编辑器与系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

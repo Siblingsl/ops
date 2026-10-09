@@ -1,0 +1,108 @@
+package app
+
+import (
+	"context"
+	"log/slog"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// RunJobs runs periodic maintenance until ctx is cancelled.
+func (s *Server) RunJobs(ctx context.Context) {
+	t := time.NewTicker(10 * time.Minute)
+	defer t.Stop()
+	s.runJobsOnce(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.runJobsOnce(ctx)
+		}
+	}
+}
+
+func (s *Server) runJobsOnce(ctx context.Context) {
+	if _, err := s.db.Exec(ctx, `DELETE FROM session WHERE expires_at < now()`); err != nil {
+		slog.Error("清理过期会话失败", "err", err)
+	}
+	if n, err := s.PurgeExpiredTrash(ctx); err != nil {
+		slog.Error("清理回收站失败", "err", err)
+	} else if n > 0 {
+		slog.Info("回收站到期清理", "count", n)
+	}
+	s.refreshTokens(ctx)
+}
+
+// PurgeExpiredTrash permanently deletes items that stayed in the trash longer than trashDays.
+func (s *Server) PurgeExpiredTrash(ctx context.Context) (int, error) {
+	cutoff := s.now().AddDate(0, 0, -trashDays)
+	n := 0
+	for typ, def := range trashTables {
+		rows, err := s.db.Query(ctx, `SELECT id FROM `+def.table+` WHERE deleted_at IS NOT NULL AND deleted_at < $1`, cutoff)
+		if err != nil {
+			return n, err
+		}
+		var ids []uuid.UUID
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err == nil {
+				ids = append(ids, id)
+			}
+		}
+		rows.Close()
+		for _, id := range ids {
+			if err := s.purge(ctx, typ, id); err != nil {
+				return n, err
+			}
+			s.audit(ctx, "trash_expire", typ, id.String(), "ok", nil)
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s *Server) refreshTokens(ctx context.Context) {
+	rows, err := s.db.Query(ctx, `SELECT c.account_id FROM wechat_credential c JOIN platform_account a ON a.id=c.account_id
+		LEFT JOIN wechat_token t ON t.account_id=c.account_id
+		WHERE a.status='active' AND c.last_check_ok AND t.expires_at IS NOT NULL AND t.expires_at < now() + interval '15 minutes'`)
+	if err != nil {
+		return
+	}
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	for _, id := range ids {
+		if _, err := s.accessToken(ctx, id, true); err != nil {
+			slog.Warn("预刷新 access_token 失败", "account", id, "err", err)
+		}
+	}
+}
+
+// SeedDevModel registers the local fake model so AI features work out of the box in dev mode.
+func (s *Server) SeedDevModel(ctx context.Context) error {
+	var exists bool
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM model_provider)`).Scan(&exists); err != nil || exists {
+		return err
+	}
+	enc, err := s.box.Encrypt("local-dev-key")
+	if err != nil {
+		return err
+	}
+	var id uuid.UUID
+	if err := s.db.QueryRow(ctx, `INSERT INTO model_provider (name, base_url, api_key_enc, key_version, models) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+		"本地模拟模型", "http://"+s.cfg.MockListen+"/v1", enc, s.box.Version, []string{"mock-writer", "mock-fast"}).Scan(&id); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `INSERT INTO model_route (task_type, provider_id, model) VALUES ('default',$1,'mock-writer'), ('fact_flag',$1,'mock-fast') ON CONFLICT DO NOTHING`, id)
+	if err == nil {
+		slog.Info("已添加本地模拟模型（仅开发模式）")
+	}
+	return err
+}
