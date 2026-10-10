@@ -31,16 +31,20 @@ type Topic struct {
 	ScoreMaterial   int        `json:"score_material"`
 	ScoreNovelty    int        `json:"score_novelty"`
 	Pinned          bool       `json:"pinned"`
+	StrategyPillar  *string    `json:"strategy_pillar"`
+	HotItemID       *uuid.UUID `json:"hot_item_id"`
 }
 
 const topicCols = `t.id, t.account_id, t.title, t.angle, t.source, t.status,
 	(SELECT id FROM work WHERE topic_id=t.id AND deleted_at IS NULL ORDER BY created_at LIMIT 1), t.created_at,
-	t.audience, t.hook, t.needed_materials, t.format, to_char(t.planned_date,'YYYY-MM-DD'), t.series_id, t.score_fit, t.score_reason, t.pinned_at IS NOT NULL`
+	t.audience, t.hook, t.needed_materials, t.format, to_char(t.planned_date,'YYYY-MM-DD'), t.series_id, t.score_fit, t.score_reason, t.pinned_at IS NOT NULL,
+	t.strategy_pillar, t.hot_item_id`
 
 func scanTopic(row interface{ Scan(...any) error }) (Topic, error) {
 	var t Topic
 	err := row.Scan(&t.ID, &t.AccountID, &t.Title, &t.Angle, &t.Source, &t.Status, &t.WorkID, &t.CreatedAt,
-		&t.Audience, &t.Hook, &t.NeededMaterials, &t.Format, &t.PlannedDate, &t.SeriesID, &t.ScoreFit, &t.ScoreReason, &t.Pinned)
+		&t.Audience, &t.Hook, &t.NeededMaterials, &t.Format, &t.PlannedDate, &t.SeriesID, &t.ScoreFit, &t.ScoreReason, &t.Pinned,
+		&t.StrategyPillar, &t.HotItemID)
 	if t.NeededMaterials == nil {
 		t.NeededMaterials = []string{}
 	}
@@ -158,6 +162,7 @@ type topicFields struct {
 	SeriesID        *string  `json:"series_id"`
 	ScoreFit        *int     `json:"score_fit"`
 	Pinned          *bool    `json:"pinned"`
+	StrategyPillar  *string  `json:"strategy_pillar"`
 }
 
 func (f *topicFields) validate() error {
@@ -212,8 +217,10 @@ func (s *Server) applyTopicFields(ctx context.Context, id, accountID uuid.UUID, 
 		format=coalesce($5,format), planned_date=CASE WHEN $6 THEN $7::date ELSE planned_date END,
 		series_id=CASE WHEN $8 THEN $9::uuid ELSE series_id END,
 		score_fit=coalesce($10,score_fit), score_reason=CASE WHEN $10::int IS NULL THEN score_reason ELSE '手动调整' END,
-		pinned_at=CASE WHEN $11::bool IS NULL THEN pinned_at WHEN $11::bool THEN coalesce(pinned_at, now()) END, updated_at=now() WHERE id=$1`,
-		id, trim(f.Audience, 100), trim(f.Hook, 200), needed, f.Format, setPlanned, planned, setSeries, series, f.ScoreFit, f.Pinned)
+		pinned_at=CASE WHEN $11::bool IS NULL THEN pinned_at WHEN $11::bool THEN coalesce(pinned_at, now()) END,
+		strategy_pillar=coalesce(nullif($12,''),strategy_pillar), updated_at=now() WHERE id=$1`,
+		id, trim(f.Audience, 100), trim(f.Hook, 200), needed, f.Format, setPlanned, planned, setSeries, series, f.ScoreFit, f.Pinned,
+		trim(f.StrategyPillar, 40))
 	return err
 }
 
@@ -242,7 +249,7 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	switch in.Source {
-	case "ai", "review", "hot":
+	case "ai", "review", "hot", "plan", "daily":
 	default:
 		in.Source = "manual"
 	}
