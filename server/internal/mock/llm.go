@@ -28,6 +28,16 @@ type chatReq struct {
 
 func (l *LLM) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/search", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Parameters map[string]any `json:"parameters"`
+		}
+		if json.NewDecoder(r.Body).Decode(&in) != nil || in.Parameters["enable_search"] != true {
+			w.WriteHeader(400)
+			return
+		}
+		writeJSON(w, map[string]any{"output": map[string]any{"search_info": map[string]any{"search_results": []map[string]string{{"title": "互联网运营协作公开案例", "url": "https://example.com/search-ops", "site_name": "模拟来源"}, {"title": "不应采用的内网链接", "url": "http://127.0.0.1/admin"}}}}, "usage": map[string]int{"input_tokens": 30, "output_tokens": 20}})
+	})
 	mux.HandleFunc("/v1/images/generations", func(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") == "bad-key" {
 			w.WriteHeader(401)

@@ -156,6 +156,15 @@ func (c *Client) validURL(raw string, source Source) (*url.URL, error) {
 	return u, nil
 }
 
+// ValidateLink checks evidence URLs without requesting them, including reserved IP and credential rejection.
+func (c *Client) ValidateLink(raw string) (*url.URL, error) {
+	u, e := url.Parse(raw)
+	if e != nil {
+		return nil, e
+	}
+	return c.validURL(raw, Source{Kind: Sensitive(u.Hostname())})
+}
+
 func (c *Client) request(ctx context.Context, u *url.URL, source Source, lim Limits, out *Outcome) ([]byte, int, error) {
 	if c.options.Mode == nil || !c.options.Mode() || !lim.Enabled {
 		return nil, 0, ErrDisabled

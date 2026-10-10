@@ -242,7 +242,7 @@ func (s *Server) putHotSources(w http.ResponseWriter, r *http.Request) error {
 	}
 	selected := cleanList(in.Sources)
 	var rssCount int
-	if err = tx.QueryRow(ctx, `SELECT count(*) FROM crawl_source WHERE workspace_id=$1`, ws).Scan(&rssCount); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM crawl_source WHERE workspace_id=$1 AND kind='rss'`, ws).Scan(&rssCount); err != nil {
 		return err
 	}
 	if rssCount > 10 {

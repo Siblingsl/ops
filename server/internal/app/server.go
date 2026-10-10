@@ -402,6 +402,7 @@ func (s *Server) v3Routes(r chi.Router) {
 
 // v4Routes registers the D-047 account operations endpoints (11 文档第 8 节).
 func (s *Server) v4Routes(r chi.Router) {
+	r.Post("/hot-sources/search", s.h(s.v4Object(s.addSearchSource)))
 	r.Get("/accounts/{accountId}/daily/stats", s.h(s.getDailyStats))
 	r.Get("/accounts/{accountId}/hot/trends", s.h(s.getHotTrends))
 	r.Get("/daily-settings", s.h(s.getDailySettings))

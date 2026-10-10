@@ -138,6 +138,9 @@ func (s *Server) collectSource(ctx context.Context, source CrawlSource) ([]crawl
 	lim := c.Limits
 	lim.IntervalMin = max(lim.IntervalMin, source.IntervalMin)
 	lim.MaxItems = min(lim.MaxItems, source.MaxItems)
+	if source.Kind == "search" {
+		return s.collectSearch(ctx, source, lim)
+	}
 	endpoint := source.Config["url"]
 	if s.cfg.Dev {
 		endpoint = "http://" + s.cfg.MockListen + "/mock/hot/" + source.Key
