@@ -207,6 +207,68 @@ func TestV425DailyNextAction(t *testing.T) {
 	}
 }
 
+func TestV433StatsAndWeightFeedback(t *testing.T) {
+	if lowTwoWeeks(0, 0, 10, 0) || lowTwoWeeks(10, 1, 10, 0) || !lowTwoWeeks(10, 0, 10, 0) {
+		t.Fatal("two-week threshold")
+	}
+	a, path := v4Account(t, "推荐效果")
+	opts, _ := positioningOptions(t, path)
+	f := opts[0].StrategyFields
+	f.DailySettings = map[string]any{"generate": "off"}
+	env.mustJSON(t, "POST", path+"/strategy", f, nil)
+	s := env.srv
+	ctx := context.Background()
+	var rec uuid.UUID
+	for _, days := range []int{1, 8} {
+		e := s.db.QueryRow(ctx, `INSERT INTO daily_recommendation(account_id,date,items,trigger) VALUES($1,$2,'[{"title":"历史建议","basis":[{"type":"pillar","name":"实战复盘"}]}]','manual') RETURNING id`, a.ID, s.today().AddDate(0, 0, -days)).Scan(&rec)
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	var stats DailyStats
+	env.mustJSON(t, "GET", path+"/daily/stats", nil, &stats)
+	if stats.Total != 2 || len(stats.Sources) != 1 || !stats.Sources[0].Reduced {
+		t.Fatalf("stats %+v", stats)
+	}
+	var ws uuid.UUID
+	_ = s.db.QueryRow(ctx, `SELECT workspace_id FROM platform_account WHERE id=$1`, a.ID).Scan(&ws)
+	jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: ws, Role: "owner"})
+	st, e := s.activeStrategy(jctx, a.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	candidates, e := s.dailyCandidates(jctx, &a, st)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, x := range candidates {
+		if x.Type == "pillar" && x.Weight > 45 {
+			t.Fatal("low-adoption source not reduced")
+		}
+	}
+	var topic, work uuid.UUID
+	e = s.db.QueryRow(ctx, `INSERT INTO topic(account_id,title,source) VALUES($1,'采用后的选题','daily') RETURNING id`, a.ID).Scan(&topic)
+	if e != nil {
+		t.Fatal(e)
+	}
+	e = s.db.QueryRow(ctx, `INSERT INTO work(account_id,topic_id,title,content_format,status,published_at) VALUES($1,$2,'回填发布','image_note','published',$3) RETURNING id`, a.ID, topic, s.now()).Scan(&work)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = s.db.Exec(ctx, `INSERT INTO daily_recommendation_action(recommendation_id,item_index,action,topic_id,work_id) VALUES($1,0,'started',$2,$3)`, rec, topic, work)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = s.db.Exec(ctx, `INSERT INTO metric_snapshot(work_id,captured_at,reads,likes) VALUES($1,$2,100,10)`, work, s.now())
+	if e != nil {
+		t.Fatal(e)
+	}
+	env.mustJSON(t, "GET", path+"/daily/stats", nil, &stats)
+	if stats.Adopted != 1 || stats.Sources[0].Published != 1 || stats.Sources[0].AvgReads == nil || *stats.Sources[0].AvgReads != 100 {
+		t.Fatalf("adopted metrics %+v", stats)
+	}
+}
+
 func TestV431Health(t *testing.T) {
 	if c, r := opsHealthScores(true, 3, 10, 10, 12, 3); c != 10 || r != 10 {
 		t.Fatalf("full health %d %d", c, r)

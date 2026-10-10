@@ -127,6 +127,17 @@ func (s *Server) dailyCandidates(ctx context.Context, a *Account, strategy *Stra
 		}
 	}
 	rows.Close()
+	stats, e := s.dailySourceStats(ctx, a.ID)
+	if e != nil {
+		return nil, e
+	}
+	for i := range list {
+		for _, x := range stats {
+			if x.Reduced && x.Type == list[i].Type {
+				list[i].Weight /= 2
+			}
+		}
+	}
 	sort.SliceStable(list, func(i, j int) bool { return list[i].Weight > list[j].Weight })
 	if len(list) > 40 {
 		list = list[:40]

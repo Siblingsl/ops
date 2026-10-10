@@ -691,3 +691,5 @@ export interface DailyRecommendation {id:string;date:string;version:number;items
 export interface DailyResult {date:string;recommendation:DailyRecommendation|null;preparing:boolean;job_id?:string;new_hot?:boolean}
 
 export interface HotTrend {id:string;title:string;first_seen_at:string;last_seen_at:string;sources:{name:string;rank:number;url:string}[];points:{at:string;rank:number;source:string}[];writing:{account:string;work_id:string;title:string}[]}
+
+export interface DailyStatsResult {total:number;adopted:number;rate:number;sources:{type:string;total:number;adopted:number;rate:number;reduced:boolean;published:number;avg_reads:number|null;avg_likes:number|null}[];performance:{recommended:boolean;works:number;avg_reads:number|null;avg_likes:number|null}[]}

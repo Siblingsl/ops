@@ -1,3 +1,4 @@
+import { DailyStatsCard } from './ops/DailyStats'
 import { DailyPanel } from './ops/Daily'
 import { References } from './ops/References'
 import { useQuery } from '@tanstack/react-query'
@@ -907,6 +908,7 @@ export default function Ops() {
     <div className="space-y-6">
       <PageHeader title="账号运营" desc={`${account.name} · 定位、内容节奏与每天的创作参考`} />
       <StrategyPanel key={`strategy-${account.id}`} account={account} />
+ <DailyStatsCard key={`stats-${account.id}`} accountId={account.id} warningsOnly/>
       <PlanPanel key={`plan-${account.id}`} account={account} />
       <HotPanel key={`hot-${account.id}`} account={account} />
  <References key={`refs-${account.id}`} accountId={account.id} />

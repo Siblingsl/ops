@@ -1,3 +1,4 @@
+import { DailyStatsCard } from './ops/DailyStats'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart3, Brain, Check, Lightbulb, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -394,7 +395,8 @@ export default function Review() {
         </div>
       </div>
       <div className="mt-6 space-y-6">
-        <AttributionCard accountId={acc.id} />
+        <DailyStatsCard accountId={acc.id} />
+ <AttributionCard accountId={acc.id} />
         <div className="grid gap-6 lg:grid-cols-2">
           <TopWorksCard accountId={acc.id} />
           <div id="digests" className={cn('rounded-xl transition', params.get('tab') === 'digest' && 'ring-2 ring-ink-300')}>
