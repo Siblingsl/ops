@@ -108,6 +108,7 @@ type Work struct {
 type workMeta struct {
 	ID                 uuid.UUID
 	Account            *Account
+	ContentFormat      string
 	Status             string
 	Locked             bool
 	Revision           int
@@ -120,9 +121,9 @@ type workMeta struct {
 func (s *Server) workMeta(ctx context.Context, id uuid.UUID) (*workMeta, error) {
 	var m workMeta
 	var accountID uuid.UUID
-	err := s.db.QueryRow(ctx, `SELECT w.id, w.account_id, w.status, w.locked, w.revision, w.viewpoint, w.outline_confirmed_at, w.source_work_id, w.title
+	err := s.db.QueryRow(ctx, `SELECT w.id, w.account_id, w.content_format, w.status, w.locked, w.revision, w.viewpoint, w.outline_confirmed_at, w.source_work_id, w.title
 		FROM work w JOIN platform_account a ON a.id=w.account_id WHERE w.id=$1 AND a.workspace_id=$2 AND w.deleted_at IS NULL`,
-		id, ident(ctx).WorkspaceID).Scan(&m.ID, &accountID, &m.Status, &m.Locked, &m.Revision, &m.Viewpoint, &m.OutlineConfirmedAt, &m.SourceWorkID, &m.Title)
+		id, ident(ctx).WorkspaceID).Scan(&m.ID, &accountID, &m.ContentFormat, &m.Status, &m.Locked, &m.Revision, &m.Viewpoint, &m.OutlineConfirmedAt, &m.SourceWorkID, &m.Title)
 	if err != nil {
 		return nil, err
 	}

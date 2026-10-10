@@ -104,6 +104,10 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 		}
 		structure = fmt.Sprintf("\n结构模板「%s」：%s。大纲必须按这个结构展开。", tpl.Name, tpl.Structure)
 		refs["outline_template"] = tpl.Name
+	} else if fb := formatBrief(m.ContentFormat); fb != "" {
+		// D-048：新文字类型按作品自身的类型注入结构约定；用户选择了模板时以模板为准。
+		structure = "\n结构要求：" + fb
+		refs["format_brief"] = m.ContentFormat
 	}
 	user := fmt.Sprintf(`## 任务说明
 围绕作者的核心观点，列出 4 到 8 个段落的大纲。每项给出小标题和本段要点；如果某段适合使用某条素材，在 material_ids 中填写该素材的 id（只能使用上面列出的素材 id）。%s
@@ -517,15 +521,19 @@ func (s *Server) draftSection(w http.ResponseWriter, r *http.Request) error {
 	if m.Account.Platform == "xhs" {
 		length = "80 到 200 字，语气口语化，可以适度使用表情符号"
 	}
+	typeRule := ""
+	if fb := formatBrief(m.ContentFormat); fb != "" {
+		typeRule = "\n类型要求：" + fb + "\n按这个类型的结构约定写本段。"
+	}
 	user := fmt.Sprintf(`## 本段
 本段小标题：%s
 本段要点：%s
 
 ## 任务说明
-只写本段正文，不要写本段小标题。长度约 %s。素材中没有的数据写成"【待核实：需要的内容】"。
+只写本段正文，不要写本段小标题。长度约 %s。素材中没有的数据写成"【待核实：需要的内容】"。%s
 
 ## 输出格式
-直接输出 Markdown 正文。`, sec.Heading, sec.KeyPoint, length)
+直接输出 Markdown 正文。`, sec.Heading, sec.KeyPoint, length, typeRule)
 	t := aiTask{Type: "section_draft", Account: m.Account, WorkID: &m.ID, User: user, Materials: mids, Work: work, Neighbors: neighbors,
 		History: sec.Heading + " " + sec.KeyPoint, Instruction: in.Instruction, Tier: s.pickTier(ctx, in.Tier), Refs: map[string]any{"section_id": sec.ID}}
 	label := "起草「" + truncate(nz(sec.Heading, sec.KeyPoint), 16) + "」"

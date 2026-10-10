@@ -9,7 +9,7 @@ import { toast } from 'sonner'
 import { AssetCropDialog, CoverCropDialog, CropPreview, defaultCrops } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
 import { RefsNote, sendFeedback } from '@/components/refs'
-import { Badge, Button, Card, cn, Field, HumanGate, IconButton, Input, Notice, Select, Spinner, Textarea } from '@/components/ui'
+import { Badge, Button, Card, cn, Field, formatBriefHint, HumanGate, IconButton, Input, Notice, Select, Spinner, Textarea } from '@/components/ui'
 import { XhsCardMaker } from '@/components/xhs-cards'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post, put, rawRequest, stream } from '@/lib/api'
@@ -297,6 +297,7 @@ function OutlineCard({ work, setWork, readOnly, onConfirmed }: { work: Work; set
       </div>
       {noViewpoint && !confirmed && <HumanGate code="H-02" className="mb-3">先写下你的核心观点，才能生成大纲。</HumanGate>}
       {template && editing && <p className="mb-2 text-[12px] text-mist-500">结构：{templates.data?.find((t) => t.id === template)?.structure}</p>}
+      {!template && formatBriefHint[work.content_format] && <p className="mb-2 text-[12px] text-mist-500">{formatBriefHint[work.content_format]}</p>}
       <TemplateManager open={managing} onClose={() => setManaging(false)} list={templates.data ?? []} />
       <RefsNote refs={refs} callId={callId} className="mb-3" onRetry={editing && !readOnly ? generate : undefined} />
       {review && (

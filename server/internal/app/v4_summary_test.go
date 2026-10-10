@@ -46,7 +46,10 @@ func TestV435SummaryBoundaries(t *testing.T) {
 	if e != nil || title != "运营复盘参考" || summary != "公开文章摘要" {
 		t.Fatalf("title/meta only %q %q %v", title, summary, e)
 	}
-	now := time.Date(2026, 10, 11, 9, 0, 0, 0, s.loc)
+	// 用“明天 9 点”避开夜间窗口并拿到全新的日预算桶；必须按运行时钟动态推导，
+	// 否则测试跨过午夜后会与上面 collectSummaries 的真实抓取共用同一个日期桶（D-048 期间修正的日期边界缺陷）。
+	tomorrow := s.now().AddDate(0, 0, 1)
+	now := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 9, 0, 0, 0, s.loc)
 	st := crawlStore{s}
 	results := make(chan error, 40)
 	for i := 0; i < 40; i++ {

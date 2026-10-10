@@ -202,6 +202,13 @@ export const platformFormats: Record<Platform, ContentFormat[]> = {
   wechat_mp: ['long_article', 'qa_article', 'briefing', 'card_post', 'script', 'comic'],
   xhs: ['image_note', 'list_note', 'card_post', 'script', 'comic'],
 }
+// 文字类新类型在大纲/起草时的结构约定提示（与后端 formatBriefs 一致）。
+export const formatBriefHint: Record<string, string> = {
+  qa_article: '问答体：按「核心问题 → 追问 → 直接回答 → 论据 → 小结」组织段落，小标题可以是读者会问的问题。',
+  briefing: '资讯简报：一句话导语＋并列条目（小标题＋要点）＋来源与核实提示，篇幅比长图文短。',
+  list_note: '清单/合集：钩子导语＋编号清单项（每项一句结论加一句理由）＋收尾行动建议。',
+  script: '口播脚本：每段一个镜头，小标题用「镜1：场景」；先写口播词，再用【画面】标注画面提示。仅脚本文档，不生成视频。',
+}
 
 export function PlatformMark({ platform, size = 'md' }: { platform: Platform; size?: 'sm' | 'md' | 'lg' }) {
   const s = size === 'sm' ? 'size-5 text-[10px] rounded' : size === 'lg' ? 'size-10 text-sm rounded-xl' : 'size-7 text-[11px] rounded-lg'
