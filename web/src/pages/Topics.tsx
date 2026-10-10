@@ -19,6 +19,8 @@ import { deleteWithUndo } from '@/lib/undo'
 import type { InboxItem, InboxSuggestion, MaterialKind, Series, Topic, Work } from '@/lib/types'
 
 interface Suggestion {
+	hot_item_id?: string | null
+	source_url?: string
   title: string
   angle: string
   reason: string
@@ -51,6 +53,7 @@ function SuggestionCard({ s, added, adding, onAdd, onIgnore }: { s: Suggestion; 
           {s.audience && <div className="mt-0.5 text-[13px] text-mist-600"><span className="text-mist-400">读者 · </span>{s.audience}</div>}
           {s.hook && <div className="mt-0.5 text-[13px] text-mist-600"><span className="text-mist-400">钩子 · </span>{s.hook}</div>}
           <div className="mt-0.5 text-[13px] text-mist-500"><span className="text-mist-400">理由 · </span>{s.reason}</div>
+          {s.source_url && <a className="text-xs text-ink-600" href={s.source_url} target="_blank" rel="noreferrer">核实热点原文</a>}
           {(s.needed_materials?.length || s.format) && (
             <div className="mt-2 flex flex-wrap gap-1">
               {s.format && <Badge tone="ink">{formatLabel[s.format] ?? s.format}</Badge>}
@@ -86,7 +89,7 @@ function useAddSuggestion(accountId: string, source: string, callId: string | nu
     setAdding(i)
     try {
       const r = await post<{ topic: Topic; similar: string[] }>(`/accounts/${accountId}/topics`, {
-        title: s.title, angle: s.angle, source, audience: s.audience, hook: s.hook, needed_materials: s.needed_materials, format: s.format,
+        title: s.title, angle: s.angle, source, audience: s.audience, hook: s.hook, needed_materials: s.needed_materials, format: s.format, hot_item_id: s.hot_item_id,
         ai_call_id: callId, choice_index: i, ...(seriesId ? { series_id: seriesId } : {}),
       })
       setAdded((a) => ({ ...a, [i]: true }))
@@ -163,17 +166,17 @@ function HotSuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose
     }
   }
   return (
-    <Drawer open={open} onClose={onClose} title="热点选题" desc="合规来源：可粘贴公开资讯摘要；不爬取平台热榜。建议不会自动入库。" width="w-[560px]">
+    <Drawer open={open} onClose={onClose} title="热点选题" desc="使用已匹配的受控来源热点，也可粘贴公开资讯摘要；建议逐条入库。" width="w-[560px]">
       <div className="space-y-3">
         <Field label="方向（可选）">
           <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="例如：职场沟通、育儿" onKeyDown={(e) => e.key === 'Enter' && run()} />
         </Field>
-        <Field label="公开资讯摘要（可选）" hint="粘贴你读到的新闻/公告要点；系统不会去爬热榜。">
+        <Field label="公开资讯摘要（可选）" hint="粘贴新闻或公告要点；采集关闭时仍可使用。">
           <Textarea rows={4} value={context} onChange={(e) => setContext(e.target.value)} placeholder="把公开报道或公告的要点贴在这里…" />
         </Field>
         <Button variant="primary" onClick={run} loading={busy} icon={<Sparkles className="size-4" />}>生成热点选题</Button>
       </div>
-      <HumanGate code="H-01" className="mt-4">每条建议都需要你单独点「入库」。禁止平台热榜爬取。</HumanGate>
+      <HumanGate code="H-01" className="mt-4">每条建议都需要你单独点「入库」，引用热点前请核实原文。</HumanGate>
       {!busy && <RefsNote refs={refs} callId={callId} className="mt-3" onRetry={run} />}
       <div className="mt-4 space-y-3">
         {busy && list.length === 0 && Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-mist-100" />)}

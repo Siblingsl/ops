@@ -96,6 +96,45 @@ func TestE2E18AccountHotMatching(t *testing.T) {
 	other.expectErr(t, "GET", path+"/hot", nil, "not_found")
 }
 
+func TestV417HotSuggestUsesRealInputs(t *testing.T) {
+	enableTestCrawl(t)
+	ctx := context.Background()
+	_, _ = env.srv.db.Exec(ctx, `UPDATE crawl_source SET enabled=true,last_attempt_at=NULL,paused_until=NULL WHERE key='baidu'`)
+	env.mustJSON(t, "PUT", "/api/v1/hot-sources", map[string]any{"sources": []string{"baidu"}}, nil)
+	src, err := scanCrawlSource(env.srv.db.QueryRow(ctx, `SELECT `+crawlSourceCols+` FROM crawl_source WHERE key='baidu'`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.srv.collectSource(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	account, path := v4Account(t, "真实热点建议")
+	opts, _ := positioningOptions(t, path)
+	env.mustJSON(t, "POST", path+"/strategy", opts[0], nil)
+	env.mustJSON(t, "POST", path+"/hot/refresh", nil, nil)
+	before := topicCount(t, account.ID.String())
+	var out struct {
+		Suggestions []topicSuggestion `json:"suggestions"`
+	}
+	env.mustJSON(t, "POST", path+"/topics/hot-suggest", map[string]string{"direction": "运营"}, &out)
+	if len(out.Suggestions) < 5 || out.Suggestions[0].HotItemID == nil || out.Suggestions[0].SourceURL == "" {
+		t.Fatalf("missing real basis %+v", out)
+	}
+	if topicCount(t, account.ID.String()) != before {
+		t.Fatal("suggestions auto-adopted")
+	}
+	env.mustJSON(t, "POST", path+"/topics", map[string]any{"title": out.Suggestions[0].Title, "source": "hot", "hot_item_id": out.Suggestions[0].HotItemID}, nil)
+	env.expectErr(t, "POST", path+"/topics", map[string]any{"title": "虚构引用", "source": "hot", "hot_item_id": "00000000-0000-0000-0000-000000000001"}, "not_found")
+	env.srv.cfg.CrawlMode = "off"
+	out.Suggestions = nil
+	env.mustJSON(t, "POST", path+"/topics/hot-suggest", map[string]string{"context": "用户粘贴资讯"}, &out)
+	for _, s := range out.Suggestions {
+		if s.HotItemID != nil || s.SourceURL != "" {
+			t.Fatal("off injected real hotspots")
+		}
+	}
+}
+
 func loginCrawlAdmin(t *testing.T) {
 	t.Helper()
 	oldClient, oldCSRF := env.client, env.csrf

@@ -252,6 +252,20 @@ func respond(prompt string) string {
 		}
 		return js(map[string]any{"topics": items})
 	case "topic_hot_suggest":
+		if marker := strings.Index(prompt, "## 以下真实热点"); marker >= 0 {
+			part := prompt[marker:]
+			if end := strings.Index(part, "最近的选题"); end >= 0 {
+				part = part[:end]
+			}
+			ids := regexp.MustCompile(`"id":"([a-f0-9-]+)"`).FindAllStringSubmatch(part, -1)
+			if len(ids) > 0 {
+				items := []map[string]any{}
+				for i := range 6 {
+					items = append(items, map[string]any{"title": fmt.Sprintf("运营实践热点的新角度 %d", i+1), "angle": "用真实实践回应公开榜单标题", "reason": "依据输入的真实热点，事件细节需核实", "hot_item_id": ids[i%len(ids)][1]})
+				}
+				return js(map[string]any{"topics": items})
+			}
+		}
 		dir := field(prompt, "方向关键词：")
 		if dir == "" {
 			dir = "当下讨论"

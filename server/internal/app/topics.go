@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -236,6 +237,7 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 		Source      string     `json:"source"`
 		AICallID    *uuid.UUID `json:"ai_call_id"`
 		ChoiceIndex *int       `json:"choice_index"`
+		HotItemID   *uuid.UUID `json:"hot_item_id"`
 		topicFields
 	}
 	if err := decode(r, &in); err != nil {
@@ -258,9 +260,21 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
+	if in.HotItemID != nil {
+		if in.Source != "hot" {
+			return validation("热点关联仅用于热点选题")
+		}
+		var risk []string
+		if err := s.db.QueryRow(ctx, `SELECT m.risk FROM account_hot_match m JOIN hot_item h ON h.id=m.hot_item_id JOIN crawl_source src ON src.key=h.source_key WHERE m.account_id=$1 AND m.hot_item_id=$2 AND m.status<>'dismissed' AND m.date=$3 AND h.source_key=ANY($4::text[]) AND (src.workspace_id IS NULL OR src.workspace_id=$5) LIMIT 1`, a.ID, *in.HotItemID, s.today(), s.workspaceHotSources(ctx), ident(ctx).WorkspaceID).Scan(&risk); err != nil {
+			return err
+		}
+		if highRisk(risk) {
+			return stateInvalid("高风险热点不能转为选题")
+		}
+	}
 	var id uuid.UUID
-	if err := s.db.QueryRow(ctx, `INSERT INTO topic (account_id, title, angle, source) VALUES ($1,$2,$3,$4) RETURNING id`,
-		a.ID, in.Title, strings.TrimSpace(in.Angle), in.Source).Scan(&id); err != nil {
+	if err := s.db.QueryRow(ctx, `INSERT INTO topic (account_id, title, angle, source,hot_item_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+		a.ID, in.Title, strings.TrimSpace(in.Angle), in.Source, in.HotItemID).Scan(&id); err != nil {
 		return err
 	}
 	if err := s.applyTopicFields(ctx, id, a.ID, in.topicFields); err != nil {
@@ -279,14 +293,16 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 const topicSuggestFormat = `只输出 JSON：{"topics":[{"title":"选题标题","angle":"一句话切入角度","reason":"推荐理由","audience":"目标读者","hook":"开头抓人的点","needed_materials":["需要的素材"],"format":"long_article|image_note|comic"}]}`
 
 type topicSuggestion struct {
-	Title           string   `json:"title"`
-	Angle           string   `json:"angle"`
-	Reason          string   `json:"reason"`
-	Timeliness      string   `json:"timeliness,omitempty"`
-	Audience        string   `json:"audience"`
-	Hook            string   `json:"hook"`
-	NeededMaterials []string `json:"needed_materials"`
-	Format          string   `json:"format"`
+	HotItemID       *uuid.UUID `json:"hot_item_id,omitempty"`
+	SourceURL       string     `json:"source_url,omitempty"`
+	Title           string     `json:"title"`
+	Angle           string     `json:"angle"`
+	Reason          string     `json:"reason"`
+	Timeliness      string     `json:"timeliness,omitempty"`
+	Audience        string     `json:"audience"`
+	Hook            string     `json:"hook"`
+	NeededMaterials []string   `json:"needed_materials"`
+	Format          string     `json:"format"`
 }
 
 func normalizeSuggestions(list []topicSuggestion, a *Account) {
@@ -365,12 +381,38 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 		Direction string `json:"direction"`
 		Context   string `json:"context"` // 用户粘贴的公开资讯摘要，可选
 	}
-	_ = decodeOptional(r, &in)
+	if err := decodeOptional(r, &in); err != nil {
+		return err
+	}
 	ctxText := strings.TrimSpace(in.Context)
+	ctxText = truncateRunes(ctxText, 4000)
+	known := map[uuid.UUID]HotItem{}
+	strategy, strategyErr := s.activeStrategy(r.Context(), a.ID)
+	if strategyErr != nil {
+		return strategyErr
+	}
+	if s.loadCrawl(r.Context()).Limits.Enabled && strategy != nil && strategy.HotEnabled != nil && *strategy.HotEnabled {
+		matches, e := s.hotMatches(r.Context(), a, s.today().Format("2006-01-02"))
+		if e != nil {
+			return e
+		}
+		input := []HotItem{}
+		for _, m := range matches {
+			if !highRisk(m.Risk) && m.Relevance >= 60 {
+				input = append(input, m.HotItem)
+				known[m.HotItem.ID] = m.HotItem
+			}
+			if len(input) >= 10 {
+				break
+			}
+		}
+		if len(input) > 0 {
+			b, _ := json.Marshal(input)
+			ctxText += "\n## 以下真实热点（已匹配，带 id 和链接）\n" + string(b)
+		}
+	}
 	if ctxText == "" {
 		ctxText = "（用户未粘贴资讯摘要；仅基于账号定位与公开常识给出时效性选题角度，不要编造具体新闻链接或未核实的事件细节。）"
-	} else if len([]rune(ctxText)) > 4000 {
-		ctxText = string([]rune(ctxText)[:4000])
 	}
 	user := fmt.Sprintf(`## 热点选题需求（合规来源）
 方向关键词：%s
@@ -382,20 +424,32 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 
 ## 任务说明
 结合账号定位，提出不少于 6 个「有时效感」的选题建议。合规约束：
-1. 禁止使用或模仿任何平台热榜爬取结果（微信、小红书等）；不得建议去爬取热榜。
+1. 只能使用输入中的真实热点或用户粘贴摘要，不得编造热点。引用真实热点必须给出输入 hot_item_id 和 source_url。
 2. 若用户粘贴了资讯摘要，优先据此提炼角度；未粘贴时用公开常识与季节性话题，并在理由中说明「待用户核实时效」。
 3. 不要编造具体报道链接、媒体名下的假新闻或无法核实的数据。
 4. 每个选题给出标题、切入角度、推荐理由，以及可选的时效提示（如「本周热点」「常青但当下有讨论」）。
 
 ## 输出格式
-只输出 JSON：{"topics":[{"title":"选题标题","angle":"切入角度","reason":"推荐理由","timeliness":"时效提示","audience":"目标读者","hook":"钩子","needed_materials":[],"format":"long_article|image_note|comic"}]}`,
+只输出 JSON：{"topics":[{"title":"选题标题","angle":"切入角度","reason":"推荐理由","timeliness":"时效提示","audience":"目标读者","hook":"钩子","needed_materials":[],"format":"long_article|image_note|comic","hot_item_id":null,"source_url":""}]}`,
 		strings.TrimSpace(in.Direction), ctxText, "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "))
 	var out struct {
 		Topics []topicSuggestion `json:"topics"`
 	}
-	res, err := s.runAIJSON(r.Context(), aiTask{Type: "topic_hot_suggest", Account: a, User: user, SkipStyle: true}, &out, func() error {
+	res, err := s.runAIJSON(r.Context(), aiTask{Type: "topic_hot_suggest", Account: a, User: user, SkipStyle: true, Refs: map[string]any{"hot_items": known}}, &out, func() error {
 		if len(out.Topics) < 5 {
 			return fmt.Errorf("热点选题少于 5 条")
+		}
+		for i := range out.Topics {
+			item := &out.Topics[i]
+			if item.HotItemID != nil {
+				h, ok := known[*item.HotItemID]
+				if !ok {
+					return fmt.Errorf("引用了不存在或高风险的热点 id")
+				}
+				item.SourceURL = h.URL
+			} else {
+				item.SourceURL = ""
+			}
 		}
 		return nil
 	})
