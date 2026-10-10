@@ -130,9 +130,11 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 	add := func(it CheckItem) { items = append(items, it) }
 	title := runeLen(w.Title)
 	comic := w.ContentFormat == "comic"
+	// D-048：图文卡片与漫画一样走图片消息，不需要摘要/封面等图文消息专属检查项。
+	imageMsg := comic || w.ContentFormat == "card_post"
 	if w.Platform == "wechat_mp" {
 		add(formatItem("title", title > 0 && title <= 32, fmt.Sprintf("标题 %d / 32 字", title), "公众号标题不能为空且不超过 32 字", map[string]any{"field": "title"}))
-		if !comic {
+		if !imageMsg {
 			add(formatItem("summary", runeLen(w.Summary) <= 120, fmt.Sprintf("摘要 %d / 120 字", runeLen(w.Summary)), "摘要不超过 120 字；留空时微信会抓取正文前 54 字", map[string]any{"field": "summary"}))
 			add(formatItem("author", runeLen(w.WechatFields.Author) <= 16, fmt.Sprintf("作者 %d / 16 字", runeLen(w.WechatFields.Author)), "", nil))
 			add(formatItem("source_url", len(w.WechatFields.SourceURL) <= 1024, "阅读原文链接长度", "不超过 1KB", nil))

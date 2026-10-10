@@ -50,9 +50,17 @@ func (s *Server) pushPreview(w http.ResponseWriter, r *http.Request) error {
 		mode = "overwrite"
 	}
 	panelCount := 0
-	for _, p := range wk.Panels {
-		if p.AssetID != nil {
-			panelCount++
+	if wk.ContentFormat == "card_post" {
+		for _, c := range wk.Cards {
+			if c.ImageAssetID != nil {
+				panelCount++
+			}
+		}
+	} else {
+		for _, p := range wk.Panels {
+			if p.AssetID != nil {
+				panelCount++
+			}
 		}
 	}
 	return ok(w, map[string]any{
@@ -144,7 +152,7 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 	if m.Account.Credential == nil || m.Account.Credential.State == "not_configured" {
 		return apiErr(409, "wechat_error", "公众号凭证未配置，请到「设置 → 平台账号」填写 AppID 和 AppSecret")
 	}
-	if wk.ContentFormat == "comic" {
+	if wk.ContentFormat == "comic" || wk.ContentFormat == "card_post" {
 		return s.pushNewspic(w, r, m, wk, in)
 	}
 	if wk.CoverAssetID == nil || len(wk.CoverCrops) == 0 {
@@ -369,18 +377,35 @@ func b2i(b bool) int {
 // pushNewspic writes a comic (or image-set) work as a WeChat newspic draft (FR-M10-03, F-012/F-013).
 func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta, wk *Work, in pushInput) error {
 	ctx := r.Context()
-	var panelAssets []*assetRow
-	for _, p := range wk.Panels {
-		if p.AssetID == nil {
-			return validation("每一格都需要回传图片后才能写入图片消息草稿")
+	// 漫画与图文卡片都走图片消息草稿：图片分别来自分格回传图与卡片配图。
+	var imageAssets []*assetRow
+	var content string
+	if wk.ContentFormat == "comic" {
+		for _, p := range wk.Panels {
+			if p.AssetID == nil {
+				return validation("每一格都需要回传图片后才能写入图片消息草稿")
+			}
+			ar, err := s.assetRow(ctx, *p.AssetID)
+			if err != nil {
+				return validation("分格图片已被删除，请重新上传")
+			}
+			imageAssets = append(imageAssets, ar)
 		}
-		ar, err := s.assetRow(ctx, *p.AssetID)
-		if err != nil {
-			return validation("分格图片已被删除，请重新上传")
+		content = comicPlainText(wk.Panels)
+	} else {
+		for _, c := range wk.Cards {
+			if c.ImageAssetID == nil {
+				return validation("每张卡片都需要生成配图后才能写入图片消息草稿")
+			}
+			ar, err := s.assetRow(ctx, *c.ImageAssetID)
+			if err != nil {
+				return validation("卡片配图已被删除，请重新生成")
+			}
+			imageAssets = append(imageAssets, ar)
 		}
-		panelAssets = append(panelAssets, ar)
+		content = cardPlainText(wk.Cards)
 	}
-	if n := len(panelAssets); n < 1 || n > 20 {
+	if n := len(imageAssets); n < 1 || n > 20 {
 		return validation("图片消息需要 1 到 20 张图")
 	}
 	switch {
@@ -391,7 +416,6 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 	case len(in.Fields.SourceURL) > 1024:
 		return validation("阅读原文链接不能超过 1KB")
 	}
-	content := comicPlainText(wk.Panels)
 	if content == "" {
 		content = wk.Title
 	}
@@ -487,9 +511,9 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 		draftID = ""
 	}
 
-	imageList := make([]wechat.ImageListItem, 0, len(panelAssets))
-	for i, ar := range panelAssets {
-		step("upload_images", "running", i+1, len(panelAssets))
+	imageList := make([]wechat.ImageListItem, 0, len(imageAssets))
+	for i, ar := range imageAssets {
+		step("upload_images", "running", i+1, len(imageAssets))
 		mediaID, err := s.cachedMedia(ctx, m.Account.ID, ar, "image", call)
 		if err != nil {
 			fail(pushFail{"upload_images", err})
@@ -497,7 +521,7 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 		}
 		imageList = append(imageList, wechat.ImageListItem{ImageMediaID: mediaID})
 	}
-	step("upload_images", "done", len(panelAssets), len(panelAssets))
+	step("upload_images", "done", len(imageAssets), len(imageAssets))
 
 	article := wechat.Article{
 		ArticleType: "newspic", Title: wk.Title, Author: in.Fields.Author, Content: content,
@@ -640,9 +664,16 @@ func (s *Server) packZip(w http.ResponseWriter, r *http.Request) error {
 	}
 	ctx := r.Context()
 	sql := `SELECT id, work_id, storage_path, mime, sha256 FROM asset WHERE work_id=$1 ORDER BY position, created_at`
-	if m.Account.ContentFormat == "comic" {
+	cardText := false
+	switch m.ContentFormat {
+	case "comic":
 		sql = `SELECT a.id, a.work_id, a.storage_path, a.mime, a.sha256 FROM comic_panel p
 			JOIN asset a ON a.id=p.asset_id WHERE p.work_id=$1 AND p.asset_id IS NOT NULL ORDER BY p.position`
+	case "card_post":
+		// D-048：图文卡片打包 = 卡片配图（按卡片顺序）+ 文案.txt（卡片标题与正文）。
+		sql = `SELECT a.id, a.work_id, a.storage_path, a.mime, a.sha256 FROM work_card c
+			JOIN asset a ON a.id=c.image_asset_id WHERE c.work_id=$1 AND c.image_asset_id IS NOT NULL ORDER BY c.position`
+		cardText = true
 	}
 	rows, err := s.db.Query(ctx, sql, m.ID)
 	if err != nil {
@@ -673,6 +704,39 @@ func (s *Server) packZip(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		_, _ = f.Write(data)
+	}
+	if cardText {
+		var b strings.Builder
+		rows, err := s.db.Query(ctx, `SELECT heading, content_md FROM work_section WHERE work_id=$1 AND deleted_at IS NULL ORDER BY position, created_at`, m.ID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		first := true
+		for rows.Next() {
+			var h, body string
+			if err := rows.Scan(&h, &body); err != nil {
+				return err
+			}
+			if !first {
+				b.WriteString("\n\n")
+			}
+			first = false
+			if t := strings.TrimSpace(h); t != "" {
+				b.WriteString(t + "\n")
+			}
+			b.WriteString(strings.TrimSpace(body))
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		f, err := zw.Create("文案.txt")
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write([]byte(b.String())); err != nil {
+			return err
+		}
 	}
 	return zw.Close()
 }

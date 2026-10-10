@@ -198,6 +198,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/panels/{id}/generate-image", s.h(s.generatePanelImage))
 			r.Put("/panels/{id}/bubbles", s.h(s.putPanelBubbles))
 			r.Post("/works/{id}/generate-image", s.h(s.generateWorkImage))
+			r.Post("/works/{id}/cards/{sectionId}/generate-image", s.h(s.generateCardImage))
 			r.Post("/works/{id}/sections", s.h(s.createSection))
 			r.Put("/works/{id}/sections/order", s.h(s.reorderSections))
 			r.Patch("/sections/{id}", s.h(s.updateSection))

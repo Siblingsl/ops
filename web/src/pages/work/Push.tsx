@@ -51,7 +51,8 @@ const backendTodos = [
 export default function Push() {
   const { work, setWork, refresh } = useWork()
   const canWrite = useCanWrite()
-  const comic = work.content_format === 'comic'
+  // D-048：图文卡片与漫画一样写入图片消息草稿。
+  const comic = work.content_format === 'comic' || work.content_format === 'card_post'
   const pv = useQuery({ queryKey: ['push-preview', work.id, work.status, work.revision], queryFn: () => get<PushPreview>(`/works/${work.id}/wechat/push-preview`) })
   const { html, chars } = useWechatHtml(work)
   const [fields, setFields] = useState<WechatDefaults | null>(null)

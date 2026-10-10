@@ -1084,7 +1084,11 @@ func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
 		}
 		for i, ps := range plan.Sections {
 			ids := []uuid.UUID{}
-			revs := map[string]int{revsAtKey: int(s.now().UnixMilli())}
+			atMs, err := s.dbNowMillis(ctx, tx)
+			if err != nil {
+				return err
+			}
+			revs := map[string]int{revsAtKey: atMs}
 			for _, sid := range ps.SourceSectionIDs {
 				if valid[sid] {
 					ids = append(ids, uuid.MustParse(sid))
@@ -1137,7 +1141,11 @@ func (s *Server) rewriteSection(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var b strings.Builder
-	srcRevs := map[string]int{revsAtKey: int(s.now().UnixMilli())}
+	atMs, err := s.dbNowMillis(ctx, nil)
+	if err != nil {
+		return err
+	}
+	srcRevs := map[string]int{revsAtKey: atMs}
 	for rows.Next() {
 		var id uuid.UUID
 		var h, c string
@@ -1234,6 +1242,20 @@ func (s *Server) workFamily(w http.ResponseWriter, r *http.Request) error {
 const revsAtKey = "@at"
 
 // sourceDiff returns, per derived section, whether its source sections changed since the last rewrite (EX-F-01).
+// dbNowMillis reads the database clock. source_revisions 的基线与 section_revision.created_at
+// 必须同一时钟：应用时钟与数据库时钟（容器）存在毫秒级漂移时，用应用时间做基线会让
+// sectionContentAt 把编辑后的内容当成派生时的旧内容（源稿对照出现误报）。
+func (s *Server) dbNowMillis(ctx context.Context, q pgx.Tx) (int, error) {
+	var ms int64
+	var err error
+	if q != nil {
+		err = q.QueryRow(ctx, `SELECT (extract(epoch from now())*1000)::bigint`).Scan(&ms)
+	} else {
+		err = s.db.QueryRow(ctx, `SELECT (extract(epoch from now())*1000)::bigint`).Scan(&ms)
+	}
+	return int(ms), err
+}
+
 func (s *Server) sourceDiff(w http.ResponseWriter, r *http.Request) error {
 	m, err := s.workMetaFromPath(r)
 	if err != nil {

@@ -275,6 +275,7 @@ export interface Work {
   revision: number
   sections: Section[]
   panels: ComicPanel[]
+  cards?: WorkCard[]
   material_ids: string[]
   assets: Asset[]
   human_edit_ratio?: number | null
@@ -295,6 +296,19 @@ export interface Work {
 }
 
 export interface PostPushTodo { key: string; label: string; done: boolean }
+
+// D-048 图文卡片：卡片 = 段落（标题与正文）+ 逐卡 AI 配图。
+export interface WorkCard {
+  id: string
+  section_id: string
+  position: number
+  heading: string
+  body: string
+  image_asset_id?: string | null
+  image_url?: string
+  created_at: string
+  updated_at: string
+}
 
 export interface WorkListItem {
   id: string

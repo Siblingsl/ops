@@ -300,12 +300,14 @@ export default function WorkLayout() {
   }
   const reached = (s: string) => order.indexOf(work.status) >= order.indexOf(s)
   const comic = work.content_format === 'comic'
+  // D-048：图文卡片与漫画同为图片消息流程，不提供对照改写与排版预览。
+  const imageMsg = comic || work.content_format === 'card_post'
   const steps = [
-    { to: '', label: comic ? '漫画' : '创作', end: true, done: comic ? work.panels.some((p) => p.asset_id) : work.sections.some((s) => s.content_md) },
-    ...(work.source && !comic ? [{ to: 'compare', label: '对照改写', end: false, done: false }] : []),
-    ...(!comic && wx ? [{ to: 'preview', label: '排版预览', end: false, done: false }] : []),
+    { to: '', label: comic ? '漫画' : imageMsg ? '卡片' : '创作', end: true, done: comic ? work.panels.some((p) => p.asset_id) : work.sections.some((s) => s.content_md) },
+    ...(work.source && !imageMsg ? [{ to: 'compare', label: '对照改写', end: false, done: false }] : []),
+    ...(!imageMsg && wx ? [{ to: 'preview', label: '排版预览', end: false, done: false }] : []),
     { to: 'check', label: '发布前检查', end: false, done: reached('ready') },
-    wx ? { to: 'push', label: comic ? '图片草稿' : '写入草稿', end: false, done: reached('pushed') } : { to: 'pack', label: '发布包', end: false, done: reached('packed') },
+    wx ? { to: 'push', label: imageMsg ? '图片草稿' : '写入草稿', end: false, done: reached('pushed') } : { to: 'pack', label: '发布包', end: false, done: reached('packed') },
   ]
   const unlock = async () => {
     try {

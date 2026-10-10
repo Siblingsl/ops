@@ -17,6 +17,7 @@ import { type AIRefs, fmtTime, parseTopics, runeLen } from '@/lib/format'
 import { useCanWrite } from '@/lib/session'
 import type { AIJob, Asset, CropBox, LibraryAsset, LintHit, Material, MaterialKind, OutlineItem, OutlineTemplate, Section, SeriesContext, SeriesNeighbour, Work } from '@/lib/types'
 import { usePrefs, useWorkCmd, waitJob } from '@/lib/v3'
+import CardEditor from './CardEditor'
 import ComicEditor from './ComicEditor'
 import { EditorSidebar } from './editor-sidebar'
 import { emitEditor, type EditorEvent, findPending, scrollToSection, type SidebarTab, TagSuggest, useEditorEvents } from './editor-tools'
@@ -845,6 +846,7 @@ function LibraryDialog({ work, onClose, onPicked }: { work: Work; onClose: () =>
 export default function Editor() {
   const { work } = useWork()
   if (work.content_format === 'comic') return <ComicEditor />
+  if (work.content_format === 'card_post') return <CardEditor />
   return <ArticleEditor />
 }
 

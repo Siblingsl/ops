@@ -84,6 +84,7 @@ type Work struct {
 	Revision            int             `json:"revision"`
 	Sections            []Section       `json:"sections"`
 	Panels              []ComicPanel    `json:"panels"`
+	Cards               []WorkCard      `json:"cards"`
 	MaterialIDs         []uuid.UUID     `json:"material_ids"`
 	Assets              []Asset         `json:"assets"`
 	HumanEditRatio      *float64        `json:"human_edit_ratio"`
@@ -227,6 +228,11 @@ func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 	}
 	if w.Panels == nil {
 		w.Panels = []ComicPanel{}
+	}
+	if w.ContentFormat == "card_post" {
+		if w.Cards, err = s.loadCards(ctx, nil, id); err != nil {
+			return nil, err
+		}
 	}
 	w.HumanEditRatio = humanEditRatio(w.Sections)
 	if w.Assets, err = s.loadAssets(ctx, id); err != nil {
