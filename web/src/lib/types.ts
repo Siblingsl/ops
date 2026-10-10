@@ -117,6 +117,21 @@ export interface StrategyFields {
   daily_settings: Record<string, unknown>
 }
 
+export interface CrawlSettings {
+  mode: string
+  level: 'off' | 'conservative' | 'standard'
+  limits: { interval_min: number; max_items: number; daily_requests: number; fail_limit: number; pause_hours: number }
+  summary_fetch: boolean
+  retention_days: number
+}
+export interface CrawlSource {
+  key: string; kind: string; name: string; enabled: boolean; interval_min: number; max_items: number
+  config: { url?: string }; workspace_id: string | null; fail_count: number
+  paused_until: string | null; last_ok_at: string | null; robots_allow: boolean | null; error: string
+}
+export interface HotSourcesResult { sources: CrawlSource[]; selected: string[]; enabled: boolean }
+export interface CrawlRun { id: string; source_key: string; started_at: string; requests: number; http_status: number; items: number; error: string }
+
 export interface Strategy extends StrategyFields {
   id: string
   version: number

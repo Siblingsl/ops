@@ -52,6 +52,8 @@ const settingsItems: { to: string; icon: ReactNode; label: string; adminOnly?: b
   { to: '/settings/trash', icon: <Trash2 />, label: '回收站' },
   { to: '/settings/security', icon: <KeyRound />, label: '登录与安全' },
   { to: '/settings/admin', icon: <Shield />, label: '系统管理', adminOnly: true },
+  { to: '/settings/crawl', icon: <Activity />, label: '热点采集与日志', adminOnly: true },
+  { to: '/settings/hot-sources', icon: <Activity />, label: '热点来源' },
 ]
 
 function Brand() {

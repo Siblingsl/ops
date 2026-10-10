@@ -32,6 +32,8 @@ const Words = lazy(() => import('./pages/settings/Words'))
 const Prompts = lazy(() => import('./pages/settings/Prompts'))
 const ExportPage = lazy(() => import('./pages/settings/Export'))
 const SettingsAdmin = lazy(() => import('./pages/settings/Admin'))
+const CrawlSettings = lazy(() => import('./pages/settings/Crawl'))
+const HotSources = lazy(() => import('./pages/settings/Crawl').then((m) => ({ default: m.HotSources })))
 const Quality = lazy(() => import('./pages/settings/Quality'))
 const Preferences = lazy(() => import('./pages/settings/Preferences'))
 const WorkLayout = lazy(() => import('./pages/work/WorkLayout'))
@@ -107,6 +109,8 @@ function Authed() {
           <Route path="export" element={<S><ExportPage /></S>} />
           <Route path="security" element={<S><Security /></S>} />
           <Route path="admin" element={<S><SettingsAdmin /></S>} />
+          <Route path="crawl" element={<S><CrawlSettings /></S>} />
+          <Route path="hot-sources" element={<S><HotSources /></S>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

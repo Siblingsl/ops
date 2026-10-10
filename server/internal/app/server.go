@@ -117,6 +117,13 @@ func (s *Server) Router() http.Handler {
 			r.Get("/admin/usage", s.h(s.adminUsage))
 			r.Get("/admin/system-settings", s.h(s.adminGetSystemSettings))
 			r.Put("/admin/system-settings", s.h(s.adminPutSystemSettings))
+			r.Get("/admin/crawl", s.h(s.adminGetCrawl))
+			r.Put("/admin/crawl", s.h(s.adminPutCrawl))
+			r.Put("/admin/crawl/sources/{key}", s.h(s.adminPutCrawlSource))
+			r.Post("/admin/crawl/sources/{key}/test", s.h(s.adminTestCrawlSource))
+			r.Get("/admin/crawl/runs", s.h(s.adminCrawlRuns))
+			r.Get("/hot-sources", s.h(s.getHotSources))
+			r.Put("/hot-sources", s.h(s.putHotSources))
 
 			r.Get("/workspaces", s.h(s.listWorkspaces))
 			r.Post("/workspaces", s.h(s.createWorkspace))

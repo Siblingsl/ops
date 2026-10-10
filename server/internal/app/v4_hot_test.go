@@ -2,7 +2,11 @@ package app
 
 import (
 	"context"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
 	"ops/internal/crawl"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,6 +29,110 @@ func TestV411HotSchemaConstraints(t *testing.T) {
 	var allow bool
 	if err := env.srv.db.QueryRow(ctx, `SELECT robots_allow FROM crawl_source WHERE key='xhs_page'`).Scan(&allow); err != nil || allow {
 		t.Fatalf("sensitive robots: %v %v", allow, err)
+	}
+}
+
+func loginCrawlAdmin(t *testing.T) {
+	t.Helper()
+	oldClient, oldCSRF := env.client, env.csrf
+	jar, _ := cookiejar.New(nil)
+	env.client = &http.Client{Jar: jar, Timeout: time.Minute}
+	env.csrf = ""
+	t.Cleanup(func() { env.client = oldClient; env.csrf = oldCSRF })
+	env.mustJSON(t, "POST", "/api/v1/auth/login", map[string]string{"username": "skyeder", "password": testAdminPassword}, nil)
+	var me struct {
+		CSRF string `json:"csrf_token"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/auth/me", nil, &me)
+	env.csrf = me.CSRF
+}
+func TestV415CrawlSettings(t *testing.T) {
+	enableTestCrawl(t)
+	env.expectErr(t, "GET", "/api/v1/admin/crawl", nil, "forbidden")
+	loginCrawlAdmin(t)
+	c := env.srv.loadCrawl(context.Background())
+	c.Limits.IntervalMin = 5
+	env.expectErr(t, "PUT", "/api/v1/admin/crawl", c, "validation_failed")
+	c.Limits.IntervalMin = 60
+	c.Limits.DailyRequests = 2001
+	env.expectErr(t, "PUT", "/api/v1/admin/crawl", c, "validation_failed")
+	c.Limits.DailyRequests = 300
+	env.srv.cfg.CrawlMode = "off"
+	env.expectErr(t, "PUT", "/api/v1/admin/crawl", c, "state_invalid")
+	env.srv.cfg.CrawlMode = "allow"
+	env.mustJSON(t, "PUT", "/api/v1/admin/crawl", c, nil)
+	env.expectErr(t, "PUT", "/api/v1/admin/crawl/sources/xhs_page", map[string]any{"enabled": true, "interval_min": 60, "max_items": 50}, "state_invalid")
+	env.mustJSON(t, "PUT", "/api/v1/admin/crawl/sources/baidu", map[string]any{"enabled": true, "interval_min": 60, "max_items": 50}, nil)
+	env.mustJSON(t, "POST", "/api/v1/admin/crawl/sources/baidu/test", nil, nil)
+	env.expectErr(t, "POST", "/api/v1/admin/crawl/sources/baidu/test", nil, "state_invalid")
+	env.mustJSON(t, "GET", "/api/v1/admin/crawl/runs", nil, nil)
+}
+func TestV415WorkspaceRSSIsolation(t *testing.T) {
+	enableTestCrawl(t)
+	ctx := context.Background()
+	env.mustJSON(t, "PUT", "/api/v1/hot-sources", map[string]any{"sources": []string{}, "rss": []map[string]string{{"name": "行业RSS", "url": "https://example.com/feed"}}}, nil)
+	var view struct {
+		Sources  []CrawlSource `json:"sources"`
+		Selected []string      `json:"selected"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/hot-sources", nil, &view)
+	if len(view.Selected) != 1 {
+		t.Fatalf("RSS not selected %+v", view)
+	}
+	key := view.Selected[0]
+	t.Cleanup(func() { _, _ = env.srv.db.Exec(ctx, `DELETE FROM crawl_source WHERE key=$1`, key) })
+	other := env.registerClient(t, "v415-rss-other", testPassword)
+	defer other.restore(env)
+	var second struct {
+		Sources []CrawlSource `json:"sources"`
+	}
+	other.mustJSON(t, "GET", "/api/v1/hot-sources", nil, &second)
+	for _, src := range second.Sources {
+		if src.Key == key {
+			t.Fatal("private RSS leaked")
+		}
+	}
+	other.expectErr(t, "PUT", "/api/v1/hot-sources", map[string]any{"sources": []string{key}}, "validation_failed")
+	other.expectErr(t, "PUT", "/api/v1/hot-sources", map[string]any{"sources": []string{}, "rss": []map[string]string{{"key": key, "name": "overwrite", "url": "https://example.com/feed"}}}, "not_found")
+}
+func TestE2E20SourceCircuitBreaker(t *testing.T) {
+	enableTestCrawl(t)
+	ctx := context.Background()
+	calls := 0
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path == "/robots.txt" {
+			_, _ = w.Write([]byte("User-agent: *\nAllow: /"))
+			return
+		}
+		w.WriteHeader(429)
+	}))
+	defer hs.Close()
+	old := env.srv.cfg.MockListen
+	env.srv.cfg.MockListen = strings.TrimPrefix(hs.URL, "http://")
+	t.Cleanup(func() { env.srv.cfg.MockListen = old })
+	_, err := env.srv.db.Exec(ctx, `UPDATE crawl_source SET enabled=true,last_attempt_at=NULL WHERE key='toutiao'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := scanCrawlSource(env.srv.db.QueryRow(ctx, `SELECT `+crawlSourceCols+` FROM crawl_source WHERE key='toutiao'`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.srv.collectSource(ctx, src); err == nil {
+		t.Fatal("429 accepted")
+	}
+	src, err = scanCrawlSource(env.srv.db.QueryRow(ctx, `SELECT `+crawlSourceCols+` FROM crawl_source WHERE key='toutiao'`))
+	if err != nil || src.PausedUntil == nil || src.PausedUntil.Before(env.srv.now().Add(23*time.Hour)) {
+		t.Fatalf("pause %+v %v", src, err)
+	}
+	before := calls
+	if _, err = env.srv.collectSource(ctx, src); err != crawl.ErrLimited || calls != before {
+		t.Fatal("paused source fetched")
+	}
+	var n int
+	if err = env.srv.db.QueryRow(ctx, `SELECT count(*) FROM notification WHERE kind='crawl' AND title LIKE '%toutiao%'`).Scan(&n); err != nil || n == 0 {
+		t.Fatalf("missing admin notice %d %v", n, err)
 	}
 }
 
