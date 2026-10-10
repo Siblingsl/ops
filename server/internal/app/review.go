@@ -517,6 +517,10 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
+	s.opsOpened(ctx, a)
+	if _, _, err = s.prepareOps(ctx, a, "on_open"); err != nil {
+		return err
+	}
 	counts := map[string]int{}
 	rows, err := s.db.Query(ctx, `SELECT status, count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL GROUP BY status`, a.ID)
 	if err != nil {

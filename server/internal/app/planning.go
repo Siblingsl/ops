@@ -311,6 +311,13 @@ func (s *Server) getNextActions(w http.ResponseWriter, r *http.Request) error {
 		AND NOT EXISTS (SELECT 1 FROM work w WHERE w.topic_id=t.id AND w.deleted_at IS NULL) ORDER BY created_at LIMIT 1`, a.ID).Scan(&in.AdoptedNotStarted, &first)
 	in.FirstAdoptedTopic = first
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM account_memory WHERE account_id=$1 AND status='suggested'`, a.ID).Scan(&in.PendingMemories)
+	if daily, e := s.latestDaily(ctx, a, s.today().Format("2006-01-02")); e == nil && daily != nil {
+		for _, x := range daily.Items {
+			if x.Action == "" {
+				in.PendingDaily++
+			}
+		}
+	}
 	return ok(w, nextActions(in, 3))
 }
 

@@ -43,6 +43,7 @@ type naInput struct {
 	Works             []naWork
 	AdoptedNotStarted int
 	FirstAdoptedTopic *uuid.UUID
+	PendingDaily      int
 	PendingMemories   int
 	WriteEndingFirst  bool
 }
@@ -137,6 +138,9 @@ func nextActions(in naInput, limit int) []NextAction {
 			a.Link = acc + "/topics?start=" + in.FirstAdoptedTopic.String()
 		}
 		extra = append(extra, a)
+	}
+	if in.PendingDaily > 0 {
+		extra = append(extra, NextAction{Kind: "daily", Score: naNew + 10, Text: fmt.Sprintf("今天还有 %d 条推荐未处理", in.PendingDaily), Action: "选择今天写什么", Link: acc + "/ops"})
 	}
 	if in.PendingMemories > 0 {
 		extra = append(extra, NextAction{Kind: "memory", Score: naNew - 10, Text: fmt.Sprintf("AI 学到了 %d 条新偏好，等你确认", in.PendingMemories), Action: "去确认", Link: acc + "/profile?tab=memory"})

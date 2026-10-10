@@ -198,3 +198,11 @@ func TestV424BackgroundActivityAndBudget(t *testing.T) {
 		t.Fatal("quota exceeded recommendation written")
 	}
 }
+
+func TestV425DailyNextAction(t *testing.T) {
+	input := naInput{PendingDaily: 3}
+	actions := nextActions(input, 3)
+	if len(actions) != 1 || actions[0].Kind != "daily" {
+		t.Fatalf("next actions %+v", actions)
+	}
+}

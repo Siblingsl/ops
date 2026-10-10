@@ -1,3 +1,5 @@
+import { DailyPanel } from './ops/Daily'
+import HotPanel from './ops/Hot'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, BookOpenCheck, Brain, CalendarDays, CheckCircle2, Circle, ClipboardCheck, Compass, Cpu, FilePen, HeartPulse, KeyRound, Lightbulb, PenLine, Send, Sparkles, TrendingUp, UploadCloud } from 'lucide-react'
 import { useEffect } from 'react'
@@ -241,6 +243,7 @@ export default function Dashboard() {
       )}
       <DemoCard acc={acc} owner={me?.role === 'owner'} />
       <NextActions accountId={acc.id} />
+ <div className="mb-6 grid gap-5 xl:grid-cols-2"><DailyPanel key={`daily-${acc.id}`} accountId={acc.id} compact/><HotPanel key={`hot-${acc.id}`} account={acc} compact/></div>
 
       {pendingSetup.length > 0 && (
         <Card className="mb-6 overflow-hidden">
