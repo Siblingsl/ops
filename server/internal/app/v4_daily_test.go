@@ -19,3 +19,15 @@ func TestV421DailyConstraints(t *testing.T) {
 		t.Fatal("duplicate account/date/version")
 	}
 }
+
+func TestV422StageWeights(t *testing.T) {
+	if dailyWeight("cold_start", "pillar") <= dailyWeight("cold_start", "hot") {
+		t.Fatal("cold-start must establish pillars")
+	}
+	if dailyWeight("growth", "hot") <= dailyWeight("growth", "pillar") {
+		t.Fatal("growth must favor relevant timely topics")
+	}
+	if dailyWeight("cold_start", "slot") != 100 || dailyWeight("stable", "slot") != 100 {
+		t.Fatal("adopted slots must remain priority")
+	}
+}
