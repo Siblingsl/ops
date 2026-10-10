@@ -11,6 +11,7 @@ import (
 )
 
 type Config struct {
+	CrawlMode    string
 	Dev          bool
 	Listen       string
 	DatabaseURL  string
@@ -41,6 +42,10 @@ func Load() (*Config, error) {
 		SystemAdminPassword: os.Getenv("OPS_SYSTEM_ADMIN_PASSWORD"),
 	}
 	c.AIWorkers = 3
+	c.CrawlMode = env("OPS_CRAWL_MODE", "off")
+	if c.CrawlMode != "off" && c.CrawlMode != "allow" {
+		return nil, errors.New("OPS_CRAWL_MODE 只能为 off 或 allow")
+	}
 	if n, err := strconv.Atoi(os.Getenv("OPS_AI_WORKERS")); err == nil && n >= 1 && n <= 32 {
 		c.AIWorkers = n
 	}
