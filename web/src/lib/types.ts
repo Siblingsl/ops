@@ -130,6 +130,18 @@ export interface CrawlSource {
   paused_until: string | null; last_ok_at: string | null; robots_allow: boolean | null; error: string
 }
 export interface HotSourcesResult { sources: CrawlSource[]; selected: string[]; enabled: boolean }
+export interface HotItem {
+  id: string; source_key: string; source_name: string; title: string; url: string; rank: number
+  heat: string; summary: string; cluster_id: string | null; first_seen_at: string; last_seen_at: string
+}
+export interface HotMatch {
+  id: string; date: string; hot_item: HotItem; relevance: number; reason: string; angle: string
+  risk: string[]; status: 'new' | 'converted' | 'dismissed'; topic_id: string | null
+}
+export interface AccountHot {
+  date: string; enabled: boolean; items: HotMatch[]; paused_sources: string[]; updated_at: string | null
+  job_id?: string | null; preparing?: boolean
+}
 export interface CrawlRun { id: string; source_key: string; started_at: string; requests: number; http_status: number; items: number; error: string }
 
 export interface Strategy extends StrategyFields {

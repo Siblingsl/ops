@@ -196,7 +196,7 @@ func (f *StrategyFields) normalize(a *Account) error {
 		bms = append(bms, b)
 	}
 	f.Benchmarks = bms
-	f.Keywords = limitList(f.Keywords, 20, 20)
+	f.Keywords = limitList(f.Keywords, 30, 20)
 	f.Taboo = limitList(f.Taboo, 20, 40)
 	f.BlockedWords = limitList(f.BlockedWords, 50, 20)
 	if f.HotEnabled == nil {

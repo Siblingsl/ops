@@ -529,6 +529,12 @@ func respond(prompt string) string {
 			slots = []map[string]any{}
 		}
 		return js(map[string]any{"slots": slots})
+	case "hot_relevance":
+		items := []map[string]any{}
+		for i, m := range regexp.MustCompile(`"id":"([a-f0-9-]+)"`).FindAllStringSubmatch(prompt, -1) {
+			items = append(items, map[string]any{"hot_item_id": m[1], "relevance": max(60, 95-i*5), "reason": "与账号运营定位相关", "angle": "从真实实践切入，不补充未经证实的细节", "risk": []string{}})
+		}
+		return js(map[string]any{"items": items})
 	case "profile_bootstrap":
 		return js(map[string]any{
 			"positioning_tags": []string{"职场成长", "效率方法"}, "target_audience": "工作 1–5 年的职场人",

@@ -124,6 +124,11 @@ func (s *Server) Router() http.Handler {
 			r.Get("/admin/crawl/runs", s.h(s.adminCrawlRuns))
 			r.Get("/hot-sources", s.h(s.getHotSources))
 			r.Put("/hot-sources", s.h(s.putHotSources))
+			r.Get("/hot-items", s.h(s.listHotItems))
+			r.Get("/accounts/{accountId}/hot", s.h(s.getAccountHot))
+			r.Post("/accounts/{accountId}/hot/refresh", s.h(s.refreshAccountHot))
+			r.Post("/hot-matches/{id}/convert", s.h(s.convertHotMatch))
+			r.Post("/hot-matches/{id}/dismiss", s.h(s.dismissHotMatch))
 
 			r.Get("/workspaces", s.h(s.listWorkspaces))
 			r.Post("/workspaces", s.h(s.createWorkspace))

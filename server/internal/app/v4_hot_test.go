@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -30,6 +31,69 @@ func TestV411HotSchemaConstraints(t *testing.T) {
 	if err := env.srv.db.QueryRow(ctx, `SELECT robots_allow FROM crawl_source WHERE key='xhs_page'`).Scan(&allow); err != nil || allow {
 		t.Fatalf("sensitive robots: %v %v", allow, err)
 	}
+}
+
+func TestE2E18AccountHotMatching(t *testing.T) {
+	enableTestCrawl(t)
+	ctx := context.Background()
+	_, err := env.srv.db.Exec(ctx, `UPDATE crawl_source SET enabled=true,last_attempt_at=NULL,paused_until=NULL WHERE key='baidu'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.mustJSON(t, "PUT", "/api/v1/hot-sources", map[string]any{"sources": []string{"baidu"}}, nil)
+	src, err := scanCrawlSource(env.srv.db.QueryRow(ctx, `SELECT `+crawlSourceCols+` FROM crawl_source WHERE key='baidu'`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.srv.collectSource(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	account, path := v4Account(t, "热点匹配账号")
+	options, _ := positioningOptions(t, path)
+	env.mustJSON(t, "POST", path+"/strategy", options[0], nil)
+	before := topicCount(t, account.ID.String())
+	var result struct {
+		Items   []HotMatch `json:"items"`
+		Enabled bool       `json:"enabled"`
+	}
+	env.mustJSON(t, "POST", path+"/hot/refresh", nil, &result)
+	if !result.Enabled || len(result.Items) != 4 {
+		b, _ := json.Marshal(result)
+		t.Fatalf("matches: %s", b)
+	}
+	if topicCount(t, account.ID.String()) != before {
+		t.Fatal("matching writes topic pool")
+	}
+	var callsBefore, callsAfter int
+	_ = env.srv.db.QueryRow(ctx, `SELECT count(*) FROM ai_call WHERE account_id=$1 AND task_type='hot_relevance'`, account.ID).Scan(&callsBefore)
+	env.mustJSON(t, "GET", path+"/hot", nil, nil)
+	env.mustJSON(t, "GET", path+"/hot", nil, nil)
+	_ = env.srv.db.QueryRow(ctx, `SELECT count(*) FROM ai_call WHERE account_id=$1 AND task_type='hot_relevance'`, account.ID).Scan(&callsAfter)
+	if callsBefore != 1 || callsAfter != callsBefore {
+		t.Fatalf("repeat generation: %d %d", callsBefore, callsAfter)
+	}
+	var safe, risky HotMatch
+	for _, m := range result.Items {
+		if highRisk(m.Risk) {
+			risky = m
+		} else {
+			safe = m
+		}
+	}
+	if risky.ID.String() == "00000000-0000-0000-0000-000000000000" {
+		t.Fatal("disaster not labeled")
+	}
+	env.expectErr(t, "POST", "/api/v1/hot-matches/"+risky.ID.String()+"/convert", map[string]any{}, "state_invalid")
+	env.mustJSON(t, "POST", "/api/v1/hot-matches/"+safe.ID.String()+"/convert", map[string]any{"title": "人工确认热点选题", "angle": "结合我的真实经历"}, nil)
+	env.expectErr(t, "POST", "/api/v1/hot-matches/"+safe.ID.String()+"/convert", map[string]any{}, "state_invalid")
+	if topicCount(t, account.ID.String()) != before+1 {
+		t.Fatal("single conversion did not add exactly one topic")
+	}
+	env.expectErr(t, "POST", path+"/hot/refresh", nil, "state_invalid")
+	other := env.registerClient(t, "v416-hot-other", testPassword)
+	defer other.restore(env)
+	other.expectErr(t, "POST", "/api/v1/hot-matches/"+risky.ID.String()+"/dismiss", nil, "not_found")
+	other.expectErr(t, "GET", path+"/hot", nil, "not_found")
 }
 
 func loginCrawlAdmin(t *testing.T) {

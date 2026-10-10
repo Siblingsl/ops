@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, CalendarDays, Sparkles } from 'lucide-react'
+import { CalendarDays, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -34,6 +34,7 @@ import type {
   StrategyResult,
   StrategyRevision,
 } from '@/lib/types'
+import HotPanel from './ops/Hot'
 
 const stages = { cold_start: '起号', growth: '成长', stable: '稳定' }
 const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
@@ -894,28 +895,13 @@ function PlanPanel({ account }: { account: Account }) {
 
 export default function Ops() {
   const account = useCurrentAccount()
-  const canWrite = useCanWrite()
   if (!account) return <Empty title="请选择账号" />
   return (
     <div className="space-y-6">
       <PageHeader title="账号运营" desc={`${account.name} · 定位、内容节奏与每天的创作参考`} />
       <StrategyPanel key={`strategy-${account.id}`} account={account} />
       <PlanPanel key={`plan-${account.id}`} account={account} />
-      <Card>
-        <CardHeader title="今日热点" />
-        <Empty
-          icon={<Activity className="size-5" />}
-          title="热点采集未开启（第二期上线）"
-          desc="目前可手动粘贴资讯，再逐条选择选题。"
-          action={
-            canWrite ? (
-              <Link to={`/a/${account.id}/topics?hot=1`}>
-                <Button>去选题池粘贴资讯</Button>
-              </Link>
-            ) : undefined
-          }
-        />
-      </Card>
+      <HotPanel key={`hot-${account.id}`} account={account} />
       <Card>
         <CardHeader title="今日推荐" />
         <Empty
