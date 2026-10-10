@@ -680,3 +680,11 @@ export interface ReferenceItem {
  id: string; account_id: string; platform: string; url: string; status: 'queued'|'done'|'failed'|'blocked'; title: string; author: string; published_at: string; metrics: Record<string,number>; error: string; queued_at: string; fetched_at: string|null; position: number; expected_at: string|null
  analysis: { title_pattern:string;hook_type:string;structure:string[];angle:string;tags:string[];takeaways:string[] }|null
 }
+
+export interface DailyItem {
+ title:string;angle:string;audience:string;hook:string;needed_materials:string[];format:string;reason:string;primary:boolean
+ basis:{type:'slot'|'pillar'|'hot'|'material'|'review'|'topic';id?:string;name?:string;url:string}[]
+ action?:'adopted'|'started'|'dismissed';topic_id?:string;work_id?:string
+}
+export interface DailyRecommendation {id:string;date:string;version:number;items:DailyItem[];ai_call_id:string;generated_at:string;trigger:string}
+export interface DailyResult {date:string;recommendation:DailyRecommendation|null;preparing:boolean;job_id?:string;new_hot?:boolean}

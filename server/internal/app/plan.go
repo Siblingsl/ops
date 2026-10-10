@@ -408,7 +408,9 @@ func (s *Server) adoptSlot(w http.ResponseWriter, r *http.Request) error {
 		Title *string `json:"title"`
 		Angle *string `json:"angle"`
 	}
-	_ = decodeOptional(r, &in)
+	if err := decodeOptional(r, &in); err != nil {
+		return err
+	}
 	title, angle := "", ""
 	if sl.Suggestion != nil {
 		title, angle = sl.Suggestion.Title, sl.Suggestion.Angle

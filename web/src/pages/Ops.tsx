@@ -1,6 +1,7 @@
+import { DailyPanel } from './ops/Daily'
 import { References } from './ops/References'
 import { useQuery } from '@tanstack/react-query'
-import { CalendarDays, Sparkles } from 'lucide-react'
+import { Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -904,14 +905,7 @@ export default function Ops() {
       <PlanPanel key={`plan-${account.id}`} account={account} />
       <HotPanel key={`hot-${account.id}`} account={account} />
  <References key={`refs-${account.id}`} accountId={account.id} />
-      <Card>
-        <CardHeader title="今日推荐" />
-        <Empty
-          icon={<CalendarDays className="size-5" />}
-          title="今日推荐将在第三期上线"
-          desc="后续将结合运营方案、大纲、热点与素材给出创作建议。"
-        />
-      </Card>
+      <DailyPanel key={`daily-${account.id}`} accountId={account.id} />
     </div>
   )
 }

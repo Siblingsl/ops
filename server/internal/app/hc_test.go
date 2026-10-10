@@ -895,3 +895,25 @@ func TestHC20_SuggestedMemoryNotInContext(t *testing.T) {
 		}
 	}
 }
+
+func TestHC22V4SingleObjectActions(t *testing.T) {
+	id := "00000000-0000-0000-0000-000000000001"
+	for _, path := range []string{"/api/v1/daily/" + id + "/items/0/adopt", "/api/v1/daily/" + id + "/items/0/start", "/api/v1/hot-matches/" + id + "/convert", "/api/v1/plan-slots/" + id + "/adopt"} {
+		status, b := env.do("POST", path, []map[string]string{{"title": "不能批量"}})
+		if status != 400 {
+			t.Fatalf("array body accepted %s: %d %s", path, status, b)
+		}
+	}
+}
+func TestHC25V4NoWechatWrites(t *testing.T) {
+	before := len(env.mockWX.Calls())
+	TestE2E19DailyRecommend(t)
+	if len(env.mockWX.Calls()) != before {
+		t.Fatal("daily generation/adoption called WeChat")
+	}
+	enableTestCrawl(t)
+	loginCrawlAdmin(t)
+	for _, limits := range []map[string]int{{"interval_min": 5, "max_items": 50, "daily_requests": 300, "fail_limit": 3, "pause_hours": 6}, {"interval_min": 10, "max_items": 101, "daily_requests": 300, "fail_limit": 3, "pause_hours": 6}, {"interval_min": 10, "max_items": 50, "daily_requests": 2001, "fail_limit": 3, "pause_hours": 6}} {
+		env.expectErr(t, "PUT", "/api/v1/admin/crawl", map[string]any{"level": "conservative", "limits": limits, "retention_days": 14}, "validation_failed")
+	}
+}

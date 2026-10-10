@@ -126,9 +126,9 @@ func (s *Server) Router() http.Handler {
 			r.Put("/hot-sources", s.h(s.putHotSources))
 			r.Get("/hot-items", s.h(s.listHotItems))
 			r.Get("/accounts/{accountId}/hot", s.h(s.getAccountHot))
-			r.Post("/accounts/{accountId}/hot/refresh", s.h(s.refreshAccountHot))
-			r.Post("/hot-matches/{id}/convert", s.h(s.convertHotMatch))
-			r.Post("/hot-matches/{id}/dismiss", s.h(s.dismissHotMatch))
+			r.Post("/accounts/{accountId}/hot/refresh", s.h(s.v4Object(s.refreshAccountHot)))
+			r.Post("/hot-matches/{id}/convert", s.h(s.v4Object(s.convertHotMatch)))
+			r.Post("/hot-matches/{id}/dismiss", s.h(s.v4Object(s.dismissHotMatch)))
 
 			r.Get("/workspaces", s.h(s.listWorkspaces))
 			r.Post("/workspaces", s.h(s.createWorkspace))
@@ -402,20 +402,23 @@ func (s *Server) v3Routes(r chi.Router) {
 
 // v4Routes registers the D-047 account operations endpoints (11 文档第 8 节).
 func (s *Server) v4Routes(r chi.Router) {
+	r.Get("/accounts/{accountId}/daily", s.h(s.getDaily))
+	r.Post("/accounts/{accountId}/daily/regenerate", s.h(s.v4Object(s.regenerateDaily)))
+	r.Post("/daily/{id}/items/{idx}/{action}", s.h(s.v4Object(s.dailyAction)))
 	r.Get("/accounts/{accountId}/references", s.h(s.getReferences))
-	r.Post("/accounts/{accountId}/references", s.h(s.addReferences))
-	r.Post("/references/{id}/paste", s.h(s.pasteReference))
+	r.Post("/accounts/{accountId}/references", s.h(s.v4Object(s.addReferences)))
+	r.Post("/references/{id}/paste", s.h(s.v4Object(s.pasteReference)))
 	r.Delete("/references/{id}", s.h(s.deleteReference))
 	r.Get("/accounts/{accountId}/strategy", s.h(s.getStrategy))
-	r.Post("/accounts/{accountId}/strategy/options", s.h(s.strategyOptions))
-	r.Post("/accounts/{accountId}/strategy", s.h(s.activateStrategy))
-	r.Post("/accounts/{accountId}/strategy/versions/{v}/restore", s.h(s.restoreStrategy))
-	r.Post("/accounts/{accountId}/strategy/revise", s.h(s.reviseStrategy))
+	r.Post("/accounts/{accountId}/strategy/options", s.h(s.v4Object(s.strategyOptions)))
+	r.Post("/accounts/{accountId}/strategy", s.h(s.v4Object(s.activateStrategy)))
+	r.Post("/accounts/{accountId}/strategy/versions/{v}/restore", s.h(s.v4Object(s.restoreStrategy)))
+	r.Post("/accounts/{accountId}/strategy/revise", s.h(s.v4Object(s.reviseStrategy)))
 	r.Get("/accounts/{accountId}/plan", s.h(s.getPlan))
-	r.Post("/accounts/{accountId}/plan/suggest", s.h(s.suggestPlan))
-	r.Post("/plan-slots/{id}/adopt", s.h(s.adoptSlot))
-	r.Post("/plan-slots/{id}/regenerate", s.h(s.regenerateSlot))
-	r.Post("/plan-slots/{id}/clear", s.h(s.clearSlot))
+	r.Post("/accounts/{accountId}/plan/suggest", s.h(s.v4Object(s.suggestPlan)))
+	r.Post("/plan-slots/{id}/adopt", s.h(s.v4Object(s.adoptSlot)))
+	r.Post("/plan-slots/{id}/regenerate", s.h(s.v4Object(s.regenerateSlot)))
+	r.Post("/plan-slots/{id}/clear", s.h(s.v4Object(s.clearSlot)))
 }
 
 func spaHandler(dir string) http.Handler {

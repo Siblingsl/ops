@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -543,6 +544,26 @@ func respond(prompt string) string {
 			slots = []map[string]any{}
 		}
 		return js(map[string]any{"slots": slots})
+	case "daily_recommend":
+		count, _ := strconv.Atoi(field(prompt, "推荐数量："))
+		if count < 1 {
+			count = 3
+		}
+		var candidates []map[string]any
+		_ = json.Unmarshal([]byte(field(prompt, "规则候选：")), &candidates)
+		items := []map[string]any{}
+		for i := 0; i < count && len(candidates) > 0; i++ {
+			c := candidates[i%len(candidates)]
+			basis := map[string]any{"type": c["type"]}
+			if c["id"] != nil {
+				basis["id"] = c["id"]
+			}
+			if c["name"] != nil {
+				basis["name"] = c["name"]
+			}
+			items = append(items, map[string]any{"title": fmt.Sprintf("%v：实践问题 %d（%d）", c["title"], i+1, len(prompt)), "angle": "由作者自己的实践展开", "audience": "正在尝试实践的读者", "hook": "一次真实困惑", "needed_materials": []string{"个人经历"}, "format": "image_note", "reason": "优先补齐近期支柱与已确认计划", "basis": []map[string]any{basis}, "primary": i < 2})
+		}
+		return js(map[string]any{"items": items})
 	case "reference_analyze":
 		return js(map[string]any{"title_pattern": "问题场景加行动收益", "hook_type": "情景提问", "structure": []string{"界定问题", "分析障碍", "给出行动", "总结启发"}, "angle": "以读者困难组织论证", "tags": []string{"写作方法"}, "takeaways": []string{"将建议拆成可以验证的小任务"}})
 	case "hot_relevance":
