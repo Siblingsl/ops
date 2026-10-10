@@ -44,7 +44,7 @@ func dailyCounts(strategy *Strategy, today time.Time) (int, int) {
 	}
 	alternate := 2
 	for key, target := range map[string]*int{"primary_count": &primary, "alternate_count": &alternate} {
-		if n, ok := strategy.DailySettings[key].(float64); ok {
+		if n, ok := strategy.DailySettings[key].(float64); ok && n > 0 {
 			*target = max(1, min(5, int(n)))
 		}
 	}
@@ -362,6 +362,9 @@ func (s *Server) dailyAction(w http.ResponseWriter, r *http.Request) error {
 					u, e := uuid.Parse(b.ID)
 					if e != nil {
 						return validation("热点依据无效")
+					}
+					if e = s.usableHot(ctx, a, u, 1); e != nil {
+						return e
 					}
 					var risk []string
 					if e = tx.QueryRow(ctx, `SELECT risk FROM account_hot_match WHERE account_id=$1 AND hot_item_id=$2 AND status='new' ORDER BY date DESC LIMIT 1`, a.ID, u).Scan(&risk); e != nil || highRisk(risk) {

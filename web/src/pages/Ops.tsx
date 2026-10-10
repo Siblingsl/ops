@@ -153,7 +153,7 @@ function StrategyEditor({
     setSaving(true)
     try {
       await post(`/accounts/${account.id}/strategy`, { ...value, sync_profile: sync, ai_call_id: callId, choice_index: choiceIndex })
-      await inv(['strategy', account.id], ['plan', account.id], ['profile', account.id], ['health', account.id], ['dashboard', account.id])
+      await inv(['strategy', account.id], ['plan', account.id], ['references', account.id], ['account-hot', account.id], ['hot-trends', account.id], ['daily', account.id], ['next-actions', account.id], ['profile', account.id], ['health', account.id], ['dashboard', account.id])
       toast.success('已启用新方案，今天起未采用的槽位已更新')
       onSaved()
     } catch (e) {
@@ -172,6 +172,7 @@ function StrategyEditor({
       ))}
       <div className="space-y-3">
         <h4 className="text-sm font-semibold">内容支柱（3–5 个）</h4>
+        {value.pillars.some((p) => p.ratio > 66) && <Notice>某个支柱占比超过三分之二。为避免同支柱连续超过两次，大纲的实际分配可能偏离占比；可以调整占比以改善分布。</Notice>}
         {value.pillars.map((p, i) => (
           <div key={i} className="space-y-2 rounded-lg border border-mist-200 p-3">
             <div className="grid gap-2 sm:grid-cols-2">
@@ -295,7 +296,8 @@ function StrategyEditor({
         </Field>
       ))}
       <div className="space-y-2">
-        <h4 className="text-sm font-semibold">对标（手动填写，仅保存参考链接）</h4>
+        <h4 className="text-sm font-semibold">对标（启用方案后，单篇链接进入参考队列）</h4>
+        <p className="text-xs text-mist-500">小红书和公众号目前受 robots 限制，请在对标参考中手动粘贴正文提炼；每次最多添加 20 个单篇链接。</p>
         {(value.benchmarks ?? []).map((b, i) => (
           <div key={i} className="space-y-2 rounded-lg border border-mist-200 p-3">
             <Field label="名称">
@@ -460,7 +462,7 @@ function StrategyPanel({ account }: { account: Account }) {
     setBusy(true)
     try {
       await post(`/accounts/${account.id}/strategy/versions/${version.version}/restore`)
-      await inv(['strategy', account.id], ['plan', account.id])
+      await inv(['strategy', account.id], ['plan', account.id], ['references', account.id], ['account-hot', account.id], ['hot-trends', account.id], ['daily', account.id], ['next-actions', account.id])
       setSelectedVersion(null)
       toast.success('已恢复为新版本')
     } catch (e) {
@@ -826,6 +828,7 @@ function PlanPanel({ account }: { account: Account }) {
                             <div key={s.id} className="mb-3 space-y-2">
                               <Badge>{s.pillar}</Badge>
                               <p className="text-xs text-mist-500">{formatLabel[s.format]}</p>
+                              {s.hot_alternative && <p className="text-xs text-ink-700">可替换为热点选题：{s.hot_alternative.hot_item.title}（见今日热点；由你逐条决定）</p>}
                               {s.status === 'adopted' ? (
                                 <>
                                   <Badge tone="green">已采用</Badge>

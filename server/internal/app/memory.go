@@ -315,6 +315,7 @@ type materialInput struct {
 	Source     string     `json:"source"`
 	Tags       []string   `json:"tags"`
 	ValidUntil *string    `json:"valid_until"`
+	ReadPage   bool       `json:"read_page"`
 }
 
 func (s *Server) validMaterial(ctx context.Context, in *materialInput) error {
@@ -353,9 +354,26 @@ func (s *Server) createMaterial(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var id uuid.UUID
-	if err := s.db.QueryRow(ctx, `INSERT INTO material (workspace_id, account_id, kind, content, source, tags, valid_until) VALUES ($1,$2,$3,$4,$5,$6,$7::date)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if in.ReadPage {
+		links := referenceLinks(in.Content + "\n" + in.Source)
+		if in.AccountID == nil || len(links) == 0 {
+			return validation("读取页面需要选择账号并填写小红书或公众号单篇链接")
+		}
+		if _, err = s.queueReferences(ctx, tx, *in.AccountID, links); err != nil {
+			return err
+		}
+	}
+	if err := tx.QueryRow(ctx, `INSERT INTO material (workspace_id, account_id, kind, content, source, tags, valid_until) VALUES ($1,$2,$3,$4,$5,$6,$7::date)
 		RETURNING id`, ident(ctx).WorkspaceID, in.AccountID, in.Kind, in.Content,
 		strings.TrimSpace(in.Source), cleanList(in.Tags), in.ValidUntil).Scan(&id); err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
 	m, err := scanMaterial(s.db.QueryRow(ctx, `SELECT `+materialCols+` FROM material m WHERE m.id=$1`, id))

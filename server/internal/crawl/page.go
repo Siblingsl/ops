@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"golang.org/x/net/html"
+	"strconv"
 	"strings"
 )
 
@@ -94,6 +95,11 @@ func ParsePage(b []byte) (Page, error) {
 		if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style" || n.Data == "noscript" || n.Data == "aside" || n.Data == "nav") {
 			return ""
 		}
+		for _, attr := range n.Attr {
+			if (attr.Key == "class" || attr.Key == "id") && strings.Contains(strings.ToLower(attr.Val), "comment") {
+				return ""
+			}
+		}
 		if n.Type == html.TextNode {
 			return n.Data + " "
 		}
@@ -130,6 +136,11 @@ func ParsePage(b []byte) (Page, error) {
 					article = n
 				}
 			}
+			for _, key := range []string{"like", "collect", "comment"} {
+				if count, err := strconv.Atoi(attrs["data-"+key+"-count"]); err == nil && count >= 0 {
+					p.Metrics[key+"_count"] = count
+				}
+			}
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			visit(c)
@@ -138,6 +149,21 @@ func ParsePage(b []byte) (Page, error) {
 	visit(root)
 	if article != nil {
 		p.Body = cut(strings.TrimSpace(text(article)), 20000)
+		var images func(*html.Node)
+		images = func(n *html.Node) {
+			for _, attr := range n.Attr {
+				if (attr.Key == "class" || attr.Key == "id") && strings.Contains(strings.ToLower(attr.Val), "comment") {
+					return
+				}
+			}
+			if n.Type == html.ElementNode && n.Data == "img" {
+				p.Metrics["image_count"]++
+			}
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				images(c)
+			}
+		}
+		images(article)
 	}
 	p.Title = cut(p.Title, 200)
 	p.Summary = cut(p.Summary, 500)

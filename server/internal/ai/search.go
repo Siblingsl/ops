@@ -17,6 +17,12 @@ type SearchResult struct {
 	SiteName string `json:"site_name"`
 }
 
+type SearchHTTPError struct{ Status int }
+
+func (e *SearchHTTPError) Error() string {
+	return fmt.Sprintf("联网搜索服务返回 HTTP %d", e.Status)
+}
+
 // Search uses the verified DashScope native contract. Generated prose is never treated as search evidence.
 func Search(ctx context.Context, hc *http.Client, endpoint, key, model, query string) ([]SearchResult, Usage, error) {
 	body := map[string]any{"model": model, "input": map[string]any{"messages": []Message{{Role: "user", Content: query}}}, "parameters": map[string]any{"enable_search": true, "result_format": "message", "search_options": map[string]bool{"enable_source": true, "forced_search": true}}}
@@ -37,7 +43,7 @@ func Search(ctx context.Context, hc *http.Client, endpoint, key, model, query st
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return nil, Usage{}, fmt.Errorf("联网搜索服务返回 HTTP %d", res.StatusCode)
+		return nil, Usage{}, &SearchHTTPError{Status: res.StatusCode}
 	}
 	if responses {
 		var out struct {

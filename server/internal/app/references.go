@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"net/http"
 	"net/url"
 	"ops/internal/crawl"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -45,7 +47,7 @@ func (s *Server) getReferences(w http.ResponseWriter, r *http.Request) error {
 		return e
 	}
 	ctx := r.Context()
-	rows, e := s.db.Query(ctx, `SELECT id,platform,url,status,title,author,published_at,metrics,analysis,error,queued_at,fetched_at FROM reference_item WHERE account_id=$1 AND workspace_id=$2 AND deleted_at IS NULL ORDER BY queued_at DESC LIMIT 200`, a.ID, ident(ctx).WorkspaceID)
+	rows, e := s.db.Query(ctx, `SELECT id,platform,url,status,title,author,published_at,metrics,analysis,error,queued_at,fetched_at FROM reference_item r WHERE (account_id=$1 OR EXISTS(SELECT 1 FROM account_reference ar WHERE ar.reference_id=r.id AND ar.account_id=$1)) AND workspace_id=$2 AND deleted_at IS NULL ORDER BY queued_at DESC LIMIT 200`, a.ID, ident(ctx).WorkspaceID)
 	if e != nil {
 		return e
 	}
@@ -76,6 +78,7 @@ func (s *Server) getReferences(w http.ResponseWriter, r *http.Request) error {
 						next = *p.Paused
 					}
 					remaining := p.DailyMax - p.Requests
+					next = next.In(s.loc)
 					for i := 0; i < x.Position; i++ {
 						if remaining <= 0 || next.In(s.loc).Hour() >= 23 {
 							next = time.Date(next.Year(), next.Month(), next.Day()+1, 8, 0, 0, 0, s.loc)
@@ -115,11 +118,39 @@ func (s *Server) addReferences(w http.ResponseWriter, r *http.Request) error {
 		return e
 	}
 	defer tx.Rollback(ctx)
+	ids, e := s.queueReferences(ctx, tx, a.ID, in.Links)
+	if e != nil {
+		return e
+	}
+	if e = tx.Commit(ctx); e != nil {
+		return e
+	}
+	return ok(w, map[string]any{"ids": ids})
+}
+
+var referenceURLPattern = regexp.MustCompile(`https://[^\s<>"\x{3002}\x{FF0C}\x{FF1B}]+`)
+
+func referenceLinks(text string) []string {
+	links := []string{}
+	for _, raw := range referenceURLPattern.FindAllString(text, -1) {
+		u, err := url.Parse(raw)
+		if err == nil && crawl.Sensitive(u.Hostname()) != "" {
+			links = append(links, raw)
+		}
+	}
+	return cleanList(links)
+}
+
+// A canonical workspace reference can be linked to multiple accounts without rereading the page.
+func (s *Server) queueReferences(ctx context.Context, tx pgx.Tx, account uuid.UUID, links []string) ([]uuid.UUID, error) {
+	if len(links) > 20 {
+		return nil, validation("每次最多读取 20 个单篇链接")
+	}
 	ids := []uuid.UUID{}
-	for _, raw := range in.Links {
+	for _, raw := range cleanList(links) {
 		u, e := url.Parse(strings.TrimSpace(raw))
 		if e != nil || u.User != nil || u.Scheme != "https" || len(raw) > 2000 {
-			return validation("请输入 HTTPS 单篇公开链接")
+			return nil, validation("请输入 HTTPS 单篇公开链接")
 		}
 		kind := crawl.Sensitive(u.Hostname())
 		platform := "xhs"
@@ -127,7 +158,7 @@ func (s *Server) addReferences(w http.ResponseWriter, r *http.Request) error {
 			platform = "wechat_mp"
 		}
 		if kind == "" || u.Path == "/" || u.Path == "" || strings.Contains(u.Path, "/user/") || strings.Contains(u.Path, "/search") {
-			return validation("仅接受小红书或公众号单篇链接，不读取主页或搜索列表")
+			return nil, validation("仅接受小红书或公众号单篇链接，不读取主页或搜索列表")
 		}
 		u.Fragment = ""
 		status, msg := "queued", ""
@@ -135,16 +166,16 @@ func (s *Server) addReferences(w http.ResponseWriter, r *http.Request) error {
 			status, msg = "blocked", "robots 不允许，请手动粘贴正文"
 		}
 		var id uuid.UUID
-		e = tx.QueryRow(ctx, `INSERT INTO reference_item(workspace_id,account_id,platform,url,status,error,queued_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(workspace_id,url) DO UPDATE SET deleted_at=NULL RETURNING id`, ident(ctx).WorkspaceID, a.ID, platform, u.String(), status, msg, s.now()).Scan(&id)
+		e = tx.QueryRow(ctx, `INSERT INTO reference_item(workspace_id,account_id,platform,url,status,error,queued_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(workspace_id,url) DO UPDATE SET deleted_at=NULL RETURNING id`, ident(ctx).WorkspaceID, account, platform, u.String(), status, msg, s.now()).Scan(&id)
 		if e != nil {
-			return e
+			return nil, e
+		}
+		if _, e = tx.Exec(ctx, `INSERT INTO account_reference(account_id,reference_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, account, id); e != nil {
+			return nil, e
 		}
 		ids = append(ids, id)
 	}
-	if e = tx.Commit(ctx); e != nil {
-		return e
-	}
-	return ok(w, map[string]any{"ids": ids})
+	return ids, nil
 }
 func (s *Server) referenceAccount(ctx context.Context, id uuid.UUID) (*Account, error) {
 	var aid uuid.UUID
@@ -286,7 +317,7 @@ func (s *Server) collectReferences(ctx context.Context) {
 	}
 }
 func (s *Server) referenceMethods(ctx context.Context, account uuid.UUID) (string, []SlotItem) {
-	rows, e := s.db.Query(ctx, `SELECT id,title,analysis FROM reference_item WHERE account_id=$1 AND workspace_id=$2 AND status='done' AND deleted_at IS NULL ORDER BY fetched_at DESC LIMIT 3`, account, ident(ctx).WorkspaceID)
+	rows, e := s.db.Query(ctx, `SELECT id,title,analysis FROM reference_item r WHERE (account_id=$1 OR EXISTS(SELECT 1 FROM account_reference ar WHERE ar.reference_id=r.id AND ar.account_id=$1)) AND workspace_id=$2 AND status='done' AND deleted_at IS NULL ORDER BY fetched_at DESC LIMIT 3`, account, ident(ctx).WorkspaceID)
 	if e != nil {
 		return "", nil
 	}

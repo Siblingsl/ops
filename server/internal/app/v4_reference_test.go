@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/google/uuid"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -68,29 +67,5 @@ func TestE2E21References(t *testing.T) {
 	e = s.db.QueryRow(ctx, `SELECT body_text,analysis FROM reference_item WHERE id=$1`, target.ID).Scan(&stored, &analysis)
 	if e != nil || stored != "" || len(analysis) == 0 {
 		t.Fatalf("retention %q %s %v", stored, analysis, e)
-	}
-}
-
-func TestHC24SensitiveAndReferenceIsolation(t *testing.T) {
-	for _, path := range []string{"../crawl/client.go", "../crawl/sources.go", "../crawl/page.go"} {
-		b, e := os.ReadFile(path)
-		if e != nil {
-			t.Fatal(e)
-		}
-		for _, bad := range []string{"x-s-common", "playwright", "chromedp", "proxy_pool"} {
-			if strings.Contains(strings.ToLower(string(b)), bad) {
-				t.Fatalf("forbidden dependency %s", bad)
-			}
-		}
-	}
-	b, e := os.ReadFile("contextpack.go")
-	if e != nil {
-		t.Fatal(e)
-	}
-	if strings.Contains(string(b), "body_text") {
-		t.Fatal("reference body in context assembler")
-	}
-	if !overlapLong("连续十六个汉字会被识别并拒绝输出原文复述", "连续十六个汉字会被识别并拒绝输出原文复述") || overlapLong("原文", "原文") {
-		t.Fatal("overlap boundary")
 	}
 }

@@ -318,6 +318,13 @@ func (s *Server) saveStrategyVersion(ctx context.Context, a *Account, f Strategy
 	if err != nil {
 		return nil, err
 	}
+	links := []string{}
+	for _, benchmark := range f.Benchmarks {
+		links = append(links, referenceLinks(strings.Join(benchmark.Links, "\n"))...)
+	}
+	if _, err = s.queueReferences(ctx, tx, a.ID, links); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -441,6 +448,7 @@ func citesExperience(diff, experiences string) bool {
 
 func validPositioning(a *Account, experiences string, opts *[]PositioningOption) error {
 	out := []PositioningOption{}
+	seen := map[string]bool{}
 	for _, o := range *opts {
 		rebalancePillars(o.Pillars)
 		o.Stage = "cold_start"
@@ -449,13 +457,22 @@ func validPositioning(a *Account, experiences string, opts *[]PositioningOption)
 		}
 		o.FitReason = truncateRunes(strings.TrimSpace(o.FitReason), 300)
 		o.Risks = limitList(o.Risks, 5, 100)
+		names := []string{}
+		for _, pillar := range o.Pillars {
+			names = append(names, pillar.Name)
+		}
+		key := strings.ToLower(o.Niche + "/" + o.Audience + "/" + strings.Join(names, "/"))
+		if seen[key] || o.FitReason == "" {
+			continue
+		}
+		seen[key] = true
 		out = append(out, o)
 		if len(out) == 3 {
 			break
 		}
 	}
-	if len(out) == 0 {
-		return fmt.Errorf("没有符合要求的方案（支柱 3–5 个、差异化需引用问卷中的真实经历）")
+	if len(out) < 2 {
+		return fmt.Errorf("需要 2–3 个符合要求的方案（支柱 3–5 个、差异化需引用问卷中的真实经历）")
 	}
 	*opts = out
 	return nil
@@ -536,6 +553,17 @@ func (s *Server) strategyOptions(w http.ResponseWriter, r *http.Request) error {
 		platformNames[a.Platform], formatNames[format], nz(strings.TrimSpace(in.Goal), "未填"), samples.String(),
 		strings.Join(formats, " 或 "), format)
 	t := aiTask{Type: "account_positioning", Account: a, User: user, JSON: true, SkipStyle: true, Refs: map[string]any{"samples": n}}
+	if s.loadCrawl(r.Context()).Limits.Enabled {
+		hot, err := s.positioningHot(r.Context(), in.Domain)
+		if err != nil {
+			return err
+		}
+		if len(hot) > 0 {
+			b, _ := json.Marshal(hot)
+			t.User += "\n## 近7天领域热点快照（仅公开标题与链接，不补充事件细节）\n" + string(b)
+			t.Refs["hot_items"] = hot
+		}
+	}
 	exp := in.Experiences
 	return s.streamAIEphemeral(w, r, t,
 		func(text string, _ *aiResult) (any, error) {
@@ -696,6 +724,12 @@ func (s *Server) reviseStrategy(w http.ResponseWriter, r *http.Request) error {
 	if n == 0 {
 		works.WriteString("（近 30 天没有作品）\n")
 	}
+	stats, err := s.dailySourceStats(ctx, a.ID)
+	if err != nil {
+		return err
+	}
+	adoption, _ := json.Marshal(stats)
+	fmt.Fprintf(&works, "\n近30天每日推荐来源与采用统计：%s\n", adoption)
 	current, _ := json.Marshal(map[string]any{"niche": cur.Niche, "audience": cur.Audience, "differentiation": cur.Differentiation,
 		"persona": cur.Persona, "pillars": cur.Pillars, "cadence": cur.Cadence, "stage": cur.Stage, "goals": cur.Goals,
 		"keywords": cur.Keywords, "taboo": cur.Taboo})

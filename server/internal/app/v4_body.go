@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 )
@@ -15,7 +16,7 @@ func (s *Server) v4Object(fn handlerFunc) handlerFunc {
 				return apiErr(400, "invalid_request", "请求过大或格式不正确")
 			}
 			trim := bytes.TrimSpace(b)
-			if len(trim) > 0 && trim[0] != '{' {
+			if len(trim) > 0 && (trim[0] != '{' || !json.Valid(trim)) {
 				return apiErr(400, "invalid_request", "每次操作只接受一个对象")
 			}
 			r.Body = io.NopCloser(bytes.NewReader(b))

@@ -53,7 +53,7 @@ func (s *Server) dailyCandidates(ctx context.Context, a *Account, strategy *Stra
 		var id uuid.UUID
 		var title, detail string
 		if rows.Scan(&id, &title, &detail) == nil {
-			list = append(list, DailyCandidate{DailyBasis: DailyBasis{Type: "slot", ID: id.String(), URL: "/a/" + a.ID.String() + "/calendar"}, Title: title, Detail: detail, Weight: dailyWeight(strategy.Stage, "slot")})
+			list = append(list, DailyCandidate{DailyBasis: DailyBasis{Type: "slot", ID: id.String(), Name: truncateRunes(title, 60), URL: "/a/" + a.ID.String() + "/calendar"}, Title: title, Detail: detail, Weight: dailyWeight(strategy.Stage, "slot")})
 		}
 	}
 	rows.Close()
@@ -80,10 +80,19 @@ func (s *Server) dailyCandidates(ctx context.Context, a *Account, strategy *Stra
 			if blocked {
 				continue
 			}
-			list = append(list, DailyCandidate{DailyBasis: DailyBasis{Type: "hot", ID: m.HotItem.ID.String(), URL: m.HotItem.URL}, Title: m.HotItem.Title, Detail: m.Angle, Weight: dailyWeight(strategy.Stage, "hot") + m.Relevance/10})
+			weight, detail := dailyWeight(strategy.Stage, "hot")+m.Relevance/10, m.Angle
+			var used bool
+			if e := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM topic t JOIN platform_account a ON a.id=t.account_id JOIN hot_item h ON h.id=t.hot_item_id WHERE a.workspace_id=$1 AND a.id<>$2 AND a.status<>'deleted' AND t.deleted_at IS NULL AND t.status<>'dropped' AND (h.id=$3 OR h.cluster_id=$4))`, ws, a.ID, m.HotItem.ID, m.HotItem.ClusterID).Scan(&used); e != nil {
+				return nil, e
+			}
+			if used {
+				weight /= 2
+				detail += "；同工作区其他账号已采用这个话题，请避免重复切入"
+			}
+			list = append(list, DailyCandidate{DailyBasis: DailyBasis{Type: "hot", ID: m.HotItem.ID.String(), Name: truncateRunes(m.HotItem.Title, 60), URL: m.HotItem.URL}, Title: m.HotItem.Title, Detail: detail, Weight: weight})
 		}
 	}
-	rows, e = s.db.Query(ctx, `SELECT m.id,m.content FROM material m WHERE m.workspace_id=$1 AND (m.account_id=$2 OR m.account_id IS NULL) AND m.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM work_material WHERE material_id=m.id) AND NOT EXISTS(SELECT 1 FROM work_section WHERE m.id=ANY(material_ids) AND deleted_at IS NULL) ORDER BY m.created_at DESC LIMIT 30`, ws, a.ID)
+	rows, e = s.db.Query(ctx, `SELECT m.id,m.content FROM material m WHERE m.workspace_id=$1 AND (m.account_id=$2 OR m.account_id IS NULL) AND m.deleted_at IS NULL AND (m.valid_until IS NULL OR m.valid_until >= $3::date) AND NOT EXISTS(SELECT 1 FROM work_material WHERE material_id=m.id) AND NOT EXISTS(SELECT 1 FROM work_section WHERE m.id=ANY(material_ids) AND deleted_at IS NULL) ORDER BY m.created_at DESC LIMIT 30`, ws, a.ID, today)
 	if e != nil {
 		return nil, e
 	}
@@ -93,24 +102,37 @@ func (s *Server) dailyCandidates(ctx context.Context, a *Account, strategy *Stra
 		if rows.Scan(&id, &content) == nil {
 			for _, p := range strategy.Pillars {
 				if jaccard(terms(content), terms(p.Name+" "+p.Desc)) > 0 || strings.Contains(content, p.Name) {
-					list = append(list, DailyCandidate{DailyBasis: DailyBasis{Type: "material", ID: id.String(), URL: "/a/" + a.ID.String() + "/materials"}, Title: truncateRunes(content, 60), Detail: truncateRunes(content, 500), Weight: dailyWeight(strategy.Stage, "material")})
+					list = append(list, DailyCandidate{DailyBasis: DailyBasis{Type: "material", ID: id.String(), Name: truncateRunes(content, 60), URL: "/a/" + a.ID.String() + "/materials?focus=" + id.String()}, Title: truncateRunes(content, 60), Detail: truncateRunes(content, 500), Weight: dailyWeight(strategy.Stage, "material")})
 					break
 				}
 			}
 		}
 	}
 	rows.Close()
-	rows, e = s.db.Query(ctx, `SELECT r.id,r.content FROM review_report r WHERE r.account_id=$1 AND cardinality(r.adopted)>0 AND r.created_at>$2 ORDER BY coalesce((SELECT max(m.reads) FROM metric_snapshot m WHERE m.work_id=ANY(r.work_ids)),0) DESC,r.created_at DESC LIMIT 5`, a.ID, today.AddDate(0, 0, -30))
+	rows, e = s.db.Query(ctx, `SELECT r.id,r.content,r.adopted FROM review_report r WHERE r.account_id=$1 AND cardinality(r.adopted)>0 AND r.created_at>$2 ORDER BY coalesce((SELECT max(m.reads) FROM metric_snapshot m WHERE m.work_id=ANY(r.work_ids)),0) DESC,r.created_at DESC LIMIT 5`, a.ID, today.AddDate(0, 0, -30))
 	if e != nil {
 		return nil, e
 	}
 	for rows.Next() {
 		var id uuid.UUID
 		var b []byte
-		if rows.Scan(&id, &b) == nil {
-			var content map[string]any
-			_ = json.Unmarshal(b, &content)
-			list = append(list, DailyCandidate{DailyBasis: DailyBasis{Type: "review", ID: id.String(), URL: "/a/" + a.ID.String() + "/review"}, Title: "近期复盘已采纳结论", Detail: truncateRunes(string(b), 1200), Weight: dailyWeight(strategy.Stage, "review")})
+		var adopted []int32
+		if rows.Scan(&id, &b, &adopted) == nil {
+			var content ReviewContent
+			if json.Unmarshal(b, &content) != nil {
+				continue
+			}
+			selected := []any{}
+			for _, idx := range adopted {
+				if idx >= 0 && int(idx) < len(content.TopicSuggestions) {
+					selected = append(selected, content.TopicSuggestions[idx])
+				}
+			}
+			if len(selected) == 0 {
+				continue
+			}
+			confirmed, _ := json.Marshal(selected)
+			list = append(list, DailyCandidate{DailyBasis: DailyBasis{Type: "review", ID: id.String(), Name: "已采纳的复盘建议", URL: "/a/" + a.ID.String() + "/review"}, Title: "近期复盘已采纳建议", Detail: truncateRunes(string(confirmed), 1200), Weight: dailyWeight(strategy.Stage, "review")})
 		}
 	}
 	rows.Close()
@@ -123,7 +145,7 @@ func (s *Server) dailyCandidates(ctx context.Context, a *Account, strategy *Stra
 		var title, detail string
 		var score int
 		if rows.Scan(&id, &title, &detail, &score) == nil {
-			list = append(list, DailyCandidate{DailyBasis: DailyBasis{Type: "topic", ID: id.String(), URL: "/a/" + a.ID.String() + "/topics"}, Title: title, Detail: detail, Weight: dailyWeight(strategy.Stage, "topic") + score/10})
+			list = append(list, DailyCandidate{DailyBasis: DailyBasis{Type: "topic", ID: id.String(), Name: truncateRunes(title, 60), URL: "/a/" + a.ID.String() + "/topics?focus=" + id.String()}, Title: title, Detail: detail, Weight: dailyWeight(strategy.Stage, "topic") + score/10})
 		}
 	}
 	rows.Close()

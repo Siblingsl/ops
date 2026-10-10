@@ -27,16 +27,20 @@ func (s *Server) opsHealth(ctx context.Context, account uuid.UUID) ([]HealthItem
 		return nil, e
 	}
 	pillars, perWeek := 0, 0
+	pillarNames := []string{}
 	if st != nil {
 		pillars = len(st.Pillars)
 		perWeek = st.Cadence.PerWeek
+		for _, p := range st.Pillars {
+			pillarNames = append(pillarNames, p.Name)
+		}
 	}
 	var mapped, total, published int
-	e = s.db.QueryRow(ctx, `SELECT count(*) FILTER(WHERE t.strategy_pillar<>''),count(*) FROM work w LEFT JOIN topic t ON t.id=w.topic_id WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.created_at>$2`, account, s.today().AddDate(0, 0, -30)).Scan(&mapped, &total)
+	e = s.db.QueryRow(ctx, `SELECT count(*) FILTER(WHERE t.strategy_pillar=ANY($3::text[])),count(*) FROM work w LEFT JOIN topic t ON t.id=w.topic_id WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.created_at>$2`, account, s.today().AddDate(0, 0, -30), pillarNames).Scan(&mapped, &total)
 	if e != nil {
 		return nil, e
 	}
-	e = s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL AND status='published' AND published_at>$2`, account, s.today().AddDate(0, 0, -28)).Scan(&published)
+	e = s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL AND status IN ('published') AND published_at>$2`, account, s.today().AddDate(0, 0, -28)).Scan(&published)
 	if e != nil {
 		return nil, e
 	}

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/google/uuid"
 	"net/http"
 	"net/url"
@@ -123,6 +124,11 @@ func (s *Server) collectSearch(ctx context.Context, src CrawlSource, lim crawl.L
 	if e != nil {
 		out.Error = e.Error()
 		out.Status = 0
+		var upstream *ai.SearchHTTPError
+		if errors.As(e, &upstream) {
+			out.Status = upstream.Status
+			out.Paused = upstream.Status == 403 || upstream.Status == 429
+		}
 	}
 	items := []crawl.Item{}
 	seen := map[string]bool{}

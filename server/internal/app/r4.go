@@ -405,6 +405,12 @@ var editablePromptTasks = []struct{ Type, Label, Default string }{
 	{"organize_notes", "要点整理", "只整理作者提供的要点。"},
 	{"style_summary", "风格摘要", "提炼风格描述。"},
 	{"review_analysis", "AI 复盘", "总结规律并建议选题。"},
+	{"account_positioning", "账号运营方案", "根据真实经历提出可执行的定位方案，不虚构资源或承诺增长。"},
+	{"strategy_revise", "运营方案调整", "结合运营反馈逐条提出调整理由，由作者决定是否接受。"},
+	{"strategy_outline", "内容大纲建议", "按内容支柱与节奏建议选题，只引用提供的事实和经历。"},
+	{"hot_relevance", "热点相关度", "只评估输入热点，标注风险，不编造事件细节。"},
+	{"daily_recommend", "每日推荐", "按规则候选优先级推荐，每条给出真实依据，不重复近期选题。"},
+	{"reference_analyze", "参考方法提炼", "只总结标题、结构、角度等方法，不复述原文句子。"},
 }
 
 func (s *Server) listPromptTemplates(w http.ResponseWriter, r *http.Request) error {

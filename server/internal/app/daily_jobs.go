@@ -26,8 +26,15 @@ func (s *Server) workspaceDaily(ctx context.Context) DailySettings {
 func (s *Server) effectiveDaily(ctx context.Context, st *Strategy) DailySettings {
 	d := s.workspaceDaily(ctx)
 	if st != nil {
+		primary, alternate := d.PrimaryCount, d.AlternateCount
 		b, _ := json.Marshal(st.DailySettings)
 		_ = json.Unmarshal(b, &d)
+		if d.PrimaryCount == 0 {
+			d.PrimaryCount = primary
+		}
+		if d.AlternateCount == 0 {
+			d.AlternateCount = alternate
+		}
 	}
 	return d
 }

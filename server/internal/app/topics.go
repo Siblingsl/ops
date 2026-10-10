@@ -264,12 +264,8 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 		if in.Source != "hot" {
 			return validation("热点关联仅用于热点选题")
 		}
-		var risk []string
-		if err := s.db.QueryRow(ctx, `SELECT m.risk FROM account_hot_match m JOIN hot_item h ON h.id=m.hot_item_id JOIN crawl_source src ON src.key=h.source_key WHERE m.account_id=$1 AND m.hot_item_id=$2 AND m.status<>'dismissed' AND m.date=$3 AND h.source_key=ANY($4::text[]) AND (src.workspace_id IS NULL OR src.workspace_id=$5) LIMIT 1`, a.ID, *in.HotItemID, s.today(), s.workspaceHotSources(ctx), ident(ctx).WorkspaceID).Scan(&risk); err != nil {
+		if err := s.usableHot(ctx, a, *in.HotItemID, 1); err != nil {
 			return err
-		}
-		if highRisk(risk) {
-			return stateInvalid("高风险热点不能转为选题")
 		}
 	}
 	var id uuid.UUID

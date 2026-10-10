@@ -24,16 +24,17 @@ type SlotSuggestion struct {
 }
 
 type PlanSlot struct {
-	ID          uuid.UUID       `json:"id"`
-	Date        string          `json:"date"`
-	Pillar      string          `json:"pillar"`
-	Format      string          `json:"format"`
-	Status      string          `json:"status"`
-	Suggestion  *SlotSuggestion `json:"suggestion"`
-	TopicID     *uuid.UUID      `json:"topic_id"`
-	TopicTitle  *string         `json:"topic_title"`
-	TopicStatus *string         `json:"topic_status"`
-	WorkID      *uuid.UUID      `json:"work_id"`
+	ID             uuid.UUID       `json:"id"`
+	Date           string          `json:"date"`
+	Pillar         string          `json:"pillar"`
+	Format         string          `json:"format"`
+	Status         string          `json:"status"`
+	Suggestion     *SlotSuggestion `json:"suggestion"`
+	TopicID        *uuid.UUID      `json:"topic_id"`
+	TopicTitle     *string         `json:"topic_title"`
+	TopicStatus    *string         `json:"topic_status"`
+	WorkID         *uuid.UUID      `json:"work_id"`
+	HotAlternative *HotMatch       `json:"hot_alternative,omitempty"`
 }
 
 const slotCols = `s.id, to_char(s.date,'YYYY-MM-DD'), s.pillar, s.format, s.status, s.suggestion, s.topic_id, t.title, t.status,
@@ -177,6 +178,21 @@ func (s *Server) getPlan(w http.ResponseWriter, r *http.Request) error {
 		}
 		slots = append(slots, sl)
 	}
+	rows.Close()
+	matches, err := s.hotMatches(ctx, a, s.today().Format("2006-01-02"))
+	if err != nil {
+		return err
+	}
+	for _, m := range matches {
+		if m.Relevance >= 85 && m.Status == "new" && !highRisk(m.Risk) {
+			for _, sl := range slots {
+				if sl.Date >= s.today().Format("2006-01-02") && sl.Date <= s.today().AddDate(0, 0, 3).Format("2006-01-02") && sl.Status != "adopted" {
+					sl.HotAlternative = &m
+				}
+			}
+			break
+		}
+	}
 	return ok(w, map[string]any{"from": from.Format("2006-01-02"), "to": to.Format("2006-01-02"), "today": s.today().Format("2006-01-02"),
 		"has_strategy": st != nil, "slots": slots})
 }
@@ -224,11 +240,26 @@ type outlineSlot struct {
 // outlineSuggest runs strategy_outline for the given slots and returns one valid suggestion per slot date.
 func (s *Server) outlineSuggest(ctx context.Context, a *Account, st *Strategy, slots []*PlanSlot, avoid []string) (map[string]SlotSuggestion, error) {
 	var lines strings.Builder
-	want := map[string]bool{}
+	want := map[string]string{}
 	for _, sl := range slots {
 		fmt.Fprintf(&lines, "- 槽位 date=%s 支柱=%s\n", sl.Date, sl.Pillar)
-		want[sl.Date] = true
+		want[sl.Date] = sl.Pillar
 	}
+	hot := []HotMatch{}
+	knownHot := map[string]uuid.UUID{}
+	for day := 0; day < 7 && len(hot) < 10; day++ {
+		matches, err := s.hotMatches(ctx, a, s.today().AddDate(0, 0, -day).Format("2006-01-02"))
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range matches {
+			if _, seen := knownHot[m.HotItem.ID.String()]; !seen && m.Status == "new" && !highRisk(m.Risk) && len(hot) < 10 {
+				hot = append(hot, m)
+				knownHot[m.HotItem.ID.String()] = m.HotItem.ID
+			}
+		}
+	}
+	hotJSON, _ := json.Marshal(hot)
 	recent := s.recentTitles(ctx, a.ID)
 	pending := s.pendingTopicTitles(ctx, a.ID)
 	user := fmt.Sprintf(`## 运营方案
@@ -243,11 +274,13 @@ func (s *Server) outlineSuggest(ctx context.Context, a *Account, st *Strategy, s
 
 ## 任务说明
 为每个槽位建议一个选题方向：标题、切入角度、推荐理由。选题必须属于槽位指定的支柱，贴合目标读者，避开禁区。
-不要编造热点、数据或经历；hot_item_id 一律填 null。%s
+不要编造热点、数据或经历；hot_item_id 只能引用以下输入中的 id，没有适合的热点时填 null。
+真实热点：%s
+%s
 
 ## 输出格式
 只输出 JSON：{"slots":[{"date":"YYYY-MM-DD","pillar":"支柱","title":"标题","angle":"切入角度","reason":"理由","hot_item_id":null}]}`,
-		strategyBrief(st), lines.String(), bullets(pending), bullets(recent), avoidLine(avoid))
+		strategyBrief(st), lines.String(), bullets(pending), bullets(recent), hotJSON, avoidLine(avoid))
 	var out struct {
 		Slots []outlineSlot `json:"slots"`
 	}
@@ -255,18 +288,29 @@ func (s *Server) outlineSuggest(ctx context.Context, a *Account, st *Strategy, s
 	known = append(known, avoid...)
 	result := map[string]SlotSuggestion{}
 	res, err := s.runAIJSON(ctx, aiTask{Type: "strategy_outline", Account: a, User: user, SkipStyle: true, Tier: "economy",
-		Refs: map[string]any{"slots": len(slots)}}, &out, func() error {
+		Refs: map[string]any{"slots": len(slots), "hot_items": hot}}, &out, func() error {
 		result = map[string]SlotSuggestion{}
 		for _, x := range out.Slots {
 			title := truncateRunes(strings.TrimSpace(x.Title), 60)
-			if !want[x.Date] || title == "" {
+			if want[x.Date] == "" || title == "" {
 				continue
+			}
+			if x.Pillar != want[x.Date] {
+				return fmt.Errorf("建议必须属于输入槽位的支柱")
+			}
+			var hotID *uuid.UUID
+			if x.HotItemID != nil && *x.HotItemID != "" {
+				id, ok := knownHot[*x.HotItemID]
+				if !ok {
+					return fmt.Errorf("热点依据必须来自输入中的真实热点")
+				}
+				hotID = &id
 			}
 			if _, dup := result[x.Date]; dup || tooSimilar(title, known) {
 				continue
 			}
 			result[x.Date] = SlotSuggestion{Title: title, Angle: truncateRunes(strings.TrimSpace(x.Angle), 120),
-				Reason: truncateRunes(strings.TrimSpace(x.Reason), 200)}
+				Reason: truncateRunes(strings.TrimSpace(x.Reason), 200), HotItemID: hotID}
 		}
 		if len(result) == 0 {
 			return fmt.Errorf("没有可用的槽位建议")
@@ -433,6 +477,11 @@ func (s *Server) adoptSlot(w http.ResponseWriter, r *http.Request) error {
 	var hot *uuid.UUID
 	if sl.Suggestion != nil {
 		hot = sl.Suggestion.HotItemID
+	}
+	if hot != nil {
+		if err := s.usableHot(ctx, a, *hot, 7); err != nil {
+			return err
+		}
 	}
 	var topicID uuid.UUID
 	if err := s.db.QueryRow(ctx, `INSERT INTO topic (account_id, title, angle, source, hot_item_id) VALUES ($1,$2,$3,'plan',$4) RETURNING id`,

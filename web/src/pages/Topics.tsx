@@ -420,14 +420,17 @@ function InboxPanel({ accountId }: { accountId: string }) {
   const inv = useInvalidate()
   const { data, isLoading } = useQuery({ queryKey: ['inbox'], queryFn: () => get<InboxItem[]>('/inbox') })
   const [text, setText] = useState('')
+  const [readPage, setReadPage] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [suggestions, setSuggestions] = useState<Record<string, InboxSuggestion>>({})
   const [converting, setConverting] = useState<InboxItem | null>(null)
   const add = async () => {
     if (!text.trim()) return
     try {
-      await post('/inbox', { account_id: accountId, content: text.trim(), source: 'quick' })
+      await post('/inbox', { account_id: accountId, content: text.trim(), source: 'quick', read_page: readPage && /https:\/\/(?:[^\s/]+\.)?(?:xiaohongshu\.com|xhslink\.com|mp\.weixin\.qq\.com)\//i.test(text) })
       setText('')
+      setReadPage(false)
+      if (readPage) inv(['references'])
       inv(['inbox'])
     } catch (e) {
       toast.error(errorMessage(e))
@@ -462,6 +465,7 @@ function InboxPanel({ accountId }: { accountId: string }) {
               <VoiceButton onText={(t) => setText((v) => v + t)} className="self-center" />
             </div>
           </div>
+          {/https:\/\/(?:[^\s/]+\.)?(?:xiaohongshu\.com|xhslink\.com|mp\.weixin\.qq\.com)\//i.test(text) && <label className="mt-2 flex items-center gap-2 text-sm text-mist-600"><input type="checkbox" checked={readPage} onChange={(e) => setReadPage(e.target.checked)} />读取页面为对标参考（受 robots 和限额约束，可手动粘贴）</label>}
         </Card>
       )}
       <Notice icon={<Inbox className="size-4" />}>收件箱里的灵感需要你一条一条处理：可以先让 AI 建议归类，再决定转为选题、存为素材，或者丢掉。系统每天也会为新灵感预先生成归类建议，但不会替你转换。</Notice>

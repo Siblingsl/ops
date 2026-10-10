@@ -519,6 +519,7 @@ func (s *Server) createInbox(w http.ResponseWriter, r *http.Request) error {
 		AccountID *uuid.UUID `json:"account_id"`
 		Content   string     `json:"content"`
 		Source    string     `json:"source"`
+		ReadPage  bool       `json:"read_page"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -541,9 +542,25 @@ func (s *Server) createInbox(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
-	x, err := scanInbox(s.db.QueryRow(ctx, `INSERT INTO inbox_item (workspace_id, account_id, content, source, created_by) VALUES ($1,$2,$3,$4,$5)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if in.ReadPage {
+		if in.AccountID == nil || len(referenceLinks(in.Content)) == 0 {
+			return validation("读取页面需要选择账号并填写小红书或公众号单篇链接")
+		}
+		if _, err = s.queueReferences(ctx, tx, *in.AccountID, referenceLinks(in.Content)); err != nil {
+			return err
+		}
+	}
+	x, err := scanInbox(tx.QueryRow(ctx, `INSERT INTO inbox_item (workspace_id, account_id, content, source, created_by) VALUES ($1,$2,$3,$4,$5)
 		RETURNING `+inboxCols, ident(ctx).WorkspaceID, in.AccountID, in.Content, in.Source, ident(ctx).UserID))
 	if err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
 	return ok(w, x)

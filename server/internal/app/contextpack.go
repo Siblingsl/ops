@@ -12,11 +12,13 @@ import (
 var slotBudgets = map[string]int{
 	"profile": 800, "memory": 1200, "task_instruction": 1500, "style": 4000,
 	"materials": 4000, "history": 2000, "work": 3000, "user_instruction": 300,
+	"strategy": 1200,
 }
 
 var slotLabels = map[string]string{
 	"rules": "系统规则", "profile": "定位档案", "memory": "AI 记忆", "task_instruction": "工作区提示词",
 	"style": "风格参考", "references": "对标方法", "materials": "素材", "history": "历史作品写法", "work": "作品内容", "user_instruction": "临时指令",
+	"strategy": "运营方案",
 }
 
 type SlotItem struct {
@@ -111,6 +113,16 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 		sys.WriteString("\n\n## 账号定位档案\n" + pt)
 		p.add(Slot{Name: "profile", Chars: runeLen(pt)})
 		p.Legacy["profile"] = true
+		strategy, err := s.activeStrategy(ctx, t.Account.ID)
+		if err != nil {
+			return nil, err
+		}
+		if strategy != nil {
+			brief := strategyBrief(strategy) + "差异化：" + strategy.Differentiation + "\n人设：" + strategy.Persona + "\n屏蔽词：" + strings.Join(strategy.BlockedWords, "、")
+			text := truncateRunes(brief, slotBudgets["strategy"])
+			sys.WriteString("\n\n## 当前运营方案\n" + text)
+			p.add(Slot{Name: "strategy", Chars: runeLen(text), Truncated: runeLen(brief) > runeLen(text), Items: []SlotItem{{ID: strategy.ID.String(), Label: fmt.Sprintf("运营方案第 %d 版", strategy.Version), Chars: runeLen(text), Used: true}}})
+		}
 
 		scope := t.MemoryScope
 		if scope == "" {

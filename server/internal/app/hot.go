@@ -291,7 +291,14 @@ func (s *Server) matchHot(ctx context.Context, a *Account, force bool) error {
 	return nil
 }
 func (s *Server) hotMatches(ctx context.Context, a *Account, date string) ([]HotMatch, error) {
-	rows, err := s.db.Query(ctx, `SELECT m.id,to_char(m.date,'YYYY-MM-DD'),m.relevance,m.reason,m.angle,m.risk,m.status,m.topic_id,`+hotCols+` FROM account_hot_match m JOIN hot_item h ON h.id=m.hot_item_id JOIN crawl_source src ON src.key=h.source_key WHERE m.account_id=$1 AND m.date=$2::date AND m.status<>'dismissed' AND h.source_key=ANY($3::text[]) AND (src.workspace_id IS NULL OR src.workspace_id=$4) ORDER BY m.relevance DESC,h.rank`, a.ID, date, s.workspaceHotSources(ctx), ident(ctx).WorkspaceID)
+	st, err := s.activeStrategy(ctx, a.ID)
+	if err != nil {
+		return nil, err
+	}
+	if st == nil || st.HotEnabled == nil || !*st.HotEnabled || !s.loadCrawl(ctx).Limits.Enabled {
+		return []HotMatch{}, nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT m.id,to_char(m.date,'YYYY-MM-DD'),m.relevance,m.reason,m.angle,m.risk,m.status,m.topic_id,`+hotCols+` FROM account_hot_match m JOIN hot_item h ON h.id=m.hot_item_id JOIN crawl_source src ON src.key=h.source_key WHERE m.account_id=$1 AND m.date=$2::date AND m.status<>'dismissed' AND src.enabled AND h.source_key=ANY($3::text[]) AND (src.workspace_id IS NULL OR src.workspace_id=$4) ORDER BY m.relevance DESC,h.rank`, a.ID, date, s.workspaceHotSources(ctx), ident(ctx).WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -304,13 +311,71 @@ func (s *Server) hotMatches(ctx context.Context, a *Account, date string) ([]Hot
 		if err != nil {
 			return nil, err
 		}
-		list = append(list, m)
+		if !strategyBlocksHot(st, *h) {
+			list = append(list, m)
+		}
 	}
 	rows.Close()
 	for i := range list {
 		list[i].HotItem.Sources = s.clusterSources(ctx, list[i].HotItem.ClusterID)
 	}
 	return list, rows.Err()
+}
+
+func strategyBlocksHot(st *Strategy, h HotItem) bool {
+	for _, word := range append(append([]string{}, st.BlockedWords...), st.Taboo...) {
+		if word = strings.TrimSpace(word); word != "" && strings.Contains(strings.ToLower(h.Title+" "+h.Summary), strings.ToLower(word)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) positioningHot(ctx context.Context, domain string) ([]HotItem, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+hotCols+` FROM hot_item h JOIN crawl_source src ON src.key=h.source_key WHERE src.enabled AND h.source_key=ANY($1) AND (src.workspace_id IS NULL OR src.workspace_id=$2) AND h.last_seen_at>$3 ORDER BY h.rank LIMIT 200`, s.workspaceHotSources(ctx), ident(ctx).WorkspaceID, s.now().AddDate(0, 0, -7))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []HotItem{}
+	for rows.Next() {
+		h, err := scanHot(rows)
+		if err != nil {
+			return nil, err
+		}
+		if !highRisk(riskForTitle(h.Title)) && jaccard(terms(domain), terms(h.Title)) > 0 {
+			items = append(items, h)
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return jaccard(terms(domain), terms(items[i].Title)) > jaccard(terms(domain), terms(items[j].Title))
+	})
+	if len(items) > 20 {
+		items = items[:20]
+	}
+	return items, rows.Err()
+}
+
+func (s *Server) usableHot(ctx context.Context, a *Account, id uuid.UUID, days int) error {
+	var exists bool
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM account_hot_match WHERE account_id=$1 AND hot_item_id=$2)`, a.ID, id).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return errNotFound
+	}
+	for day := 0; day < days; day++ {
+		items, err := s.hotMatches(ctx, a, s.today().AddDate(0, 0, -day).Format("2006-01-02"))
+		if err != nil {
+			return err
+		}
+		for _, m := range items {
+			if m.HotItem.ID == id && m.Status == "new" && !highRisk(m.Risk) {
+				return nil
+			}
+		}
+	}
+	return stateInvalid("热点依据已失效、已处理或风险过高")
 }
 func (s *Server) getAccountHot(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.accountFromPath(r)
@@ -345,20 +410,6 @@ func (s *Server) getAccountHot(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return err
 		}
-		visible := []HotMatch{}
-		for _, item := range items {
-			blocked := false
-			for _, word := range append(append([]string{}, st.BlockedWords...), st.Taboo...) {
-				if word != "" && strings.Contains(item.HotItem.Title+" "+item.HotItem.Summary, word) {
-					blocked = true
-					break
-				}
-			}
-			if !blocked {
-				visible = append(visible, item)
-			}
-		}
-		items = visible
 	}
 	sources, err := s.crawlSources(ctx, nil, true)
 	if err != nil {
@@ -426,6 +477,13 @@ func (s *Server) convertHotMatch(w http.ResponseWriter, r *http.Request) error {
 	}
 	if highRisk(risk) {
 		return stateInvalid("不建议借高风险事件营销，不能转为选题")
+	}
+	a, err := s.account(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if err = s.usableHot(ctx, a, hotID, 1); err != nil {
+		return err
 	}
 	if strings.TrimSpace(in.Title) != "" {
 		title = strings.TrimSpace(in.Title)

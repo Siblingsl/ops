@@ -279,6 +279,11 @@ func (s *Server) hardDeleteAccount(ctx context.Context, accountID uuid.UUID) err
 			sql  string
 			args []any
 		}{
+			{`DELETE FROM daily_recommendation WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM account_ops_activity WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM account_daily_claim WHERE account_id=$1`, []any{a.ID}},
+			{`UPDATE reference_item r SET account_id=(SELECT ar.account_id FROM account_reference ar WHERE ar.reference_id=r.id AND ar.account_id<>$1 LIMIT 1) WHERE r.account_id=$1 AND EXISTS(SELECT 1 FROM account_reference ar WHERE ar.reference_id=r.id AND ar.account_id<>$1)`, []any{a.ID}},
+			{`DELETE FROM reference_item WHERE account_id=$1`, []any{a.ID}},
 			{`DELETE FROM push_record WHERE account_id=$1`, []any{a.ID}},
 			{`UPDATE topic SET review_report_id=NULL WHERE account_id=$1`, []any{a.ID}},
 			{`DELETE FROM review_report WHERE account_id=$1`, []any{a.ID}},

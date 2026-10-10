@@ -1,6 +1,6 @@
 package app
 
-// HC-01 至 HC-20：人工确认点与红线的回归测试（08 文档第 6 节、10 文档第 6 节）。不得删除或跳过。
+// HC-01 至 HC-25：人工确认点与红线的回归测试（08 文档第 6 节、10 文档第 6 节）。不得删除或跳过。
 
 import (
 	"context"
@@ -913,7 +913,59 @@ func TestHC25V4NoWechatWrites(t *testing.T) {
 	}
 	enableTestCrawl(t)
 	loginCrawlAdmin(t)
+
 	for _, limits := range []map[string]int{{"interval_min": 5, "max_items": 50, "daily_requests": 300, "fail_limit": 3, "pause_hours": 6}, {"interval_min": 10, "max_items": 101, "daily_requests": 300, "fail_limit": 3, "pause_hours": 6}, {"interval_min": 10, "max_items": 50, "daily_requests": 2001, "fail_limit": 3, "pause_hours": 6}} {
 		env.expectErr(t, "PUT", "/api/v1/admin/crawl", map[string]any{"level": "conservative", "limits": limits, "retention_days": 14}, "validation_failed")
+	}
+}
+
+func TestHC24SensitiveAndReferenceIsolation(t *testing.T) {
+	paths, err := filepath.Glob("../crawl/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths = append(paths, "../../go.mod")
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		b, e := os.ReadFile(path)
+		if e != nil {
+			t.Fatal(e)
+		}
+		for _, bad := range []string{`"x-s"`, `"x-t"`, "x-s-common", "playwright", "chromedp", "proxy_pool"} {
+			if strings.Contains(strings.ToLower(string(b)), bad) {
+				t.Fatalf("forbidden dependency %s", bad)
+			}
+		}
+	}
+	b, e := os.ReadFile("contextpack.go")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if strings.Contains(string(b), "body_text") {
+		t.Fatal("reference body in context assembler")
+	}
+	if !overlapLong("连续十六个汉字会被识别并拒绝输出原文复述", "连续十六个汉字会被识别并拒绝输出原文复述") || overlapLong("原文", "原文") {
+		t.Fatal("overlap boundary")
+	}
+	enableTestCrawl(t)
+	loginCrawlAdmin(t)
+	for _, domain := range []string{"xiaohongshu.com", "xhslink.com", "xhscdn.com", "mp.weixin.qq.com"} {
+		for _, kind := range []string{"rss", "hotlist", "aggregator", "summary"} {
+			_, out, err := env.srv.crawlClient().Read(context.Background(), crawl.Source{Key: "blocked-adapter", Kind: kind, URL: "https://" + domain + "/single"}, env.srv.loadCrawl(context.Background()).Limits)
+			if err == nil || out.Requests != 0 || !strings.Contains(err.Error(), "独立读取队列") {
+				t.Fatalf("sensitive domain bypassed platform queue: %s/%s %+v %v", domain, kind, out, err)
+			}
+		}
+	}
+	for _, limits := range []CrawlPlatform{
+		{Level: "conservative", IntervalMin: 2, DailyMax: 30, RepeatHours: 72},
+		{Level: "standard", IntervalMin: 3, DailyMax: 101, RepeatHours: 24},
+		{Level: "standard", IntervalMin: 3, DailyMax: 80, RepeatHours: 11},
+	} {
+		for _, platform := range []string{"xhs_page", "wechat_page"} {
+			env.expectErr(t, "PUT", "/api/v1/admin/crawl/platforms/"+platform, limits, "validation_failed")
+		}
 	}
 }

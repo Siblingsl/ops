@@ -327,6 +327,12 @@ var taskTypes = []struct{ Type, Label string }{
 	{"fix_suggest", "检查项改法建议"},
 	{"topic_score", "选题评分"},
 	{"profile_bootstrap", "智能建档"},
+	{"account_positioning", "账号运营方案"},
+	{"strategy_revise", "运营方案调整"},
+	{"strategy_outline", "内容大纲建议"},
+	{"hot_relevance", "热点相关度"},
+	{"daily_recommend", "每日推荐"},
+	{"reference_analyze", "参考方法提炼"},
 	{"material_extract", "素材提炼"},
 	{"material_tag", "素材标签"},
 	{"inbox_triage", "收件箱整理"},
@@ -342,6 +348,9 @@ var taskTypes = []struct{ Type, Label string }{
 }
 
 func taskLabel(taskType string) string {
+	if taskType == "hot_search" {
+		return "原生联网搜索" // 服务商与模型由热点来源配置。
+	}
 	for _, t := range taskTypes {
 		if t.Type == taskType {
 			return t.Label
@@ -501,6 +510,7 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) error {
 		labels[t.Type] = t.Label
 	}
 	labels["connectivity_test"] = "连通测试"
+	labels["hot_search"] = "原生联网搜索"
 	labels["prompt_eval"] = "提示词对比测试（不计入质量统计）"
 	labels["section_edit_variants"] = "段落改写（三个候选）"
 	for rows.Next() {

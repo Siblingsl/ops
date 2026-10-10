@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"net/url"
 	"ops/internal/crawl"
 	"time"
@@ -14,7 +15,7 @@ func (s *Server) claimSummary(ctx context.Context, src crawl.Source, now time.Ti
 	if !c.SummaryFetch || c.Level != "standard" || !c.Limits.Enabled {
 		return crawl.ErrDisabled
 	}
-	tag, e := s.db.Exec(ctx, `INSERT INTO crawl_summary_state(source_key,last_attempt_at) SELECT key,$2 FROM crawl_source WHERE key=$1 AND enabled AND coalesce(paused_until,$2)<=$2 ON CONFLICT(source_key) DO UPDATE SET last_attempt_at=excluded.last_attempt_at WHERE crawl_summary_state.last_attempt_at<=$2::timestamptz-make_interval(mins=>$3)`, src.Key, now, max(10, l.IntervalMin))
+	tag, e := s.db.Exec(ctx, `INSERT INTO crawl_summary_state(source_key,last_attempt_at) SELECT key,$2 FROM crawl_source WHERE key=$1 AND enabled AND coalesce(paused_until,$2)<=$2 ON CONFLICT(source_key) DO UPDATE SET last_attempt_at=excluded.last_attempt_at WHERE crawl_summary_state.last_attempt_at<=$2::timestamptz-make_interval(mins=>GREATEST($3,(SELECT interval_min FROM crawl_source WHERE key=$1)))`, src.Key, now, max(10, l.IntervalMin))
 	if e != nil {
 		return e
 	}
@@ -63,7 +64,7 @@ func (s *Server) collectSummaries(ctx context.Context) {
 		var meta crawl.Page
 		started := s.now()
 		_, out, e := s.crawlClient().ReadValidated(ctx, src, c.Limits, func(b []byte) error { var err error; meta, err = crawl.ParseMetadata(b); return err })
-		if errors.Is(e, crawl.ErrLimited) || errors.Is(e, crawl.ErrDisabled) {
+		if out.Requests == 0 && (errors.Is(e, crawl.ErrLimited) || errors.Is(e, crawl.ErrDisabled)) {
 			continue
 		}
 		msg := ""
@@ -78,5 +79,24 @@ func (s *Server) collectSummaries(ctx context.Context) {
 	}
 }
 func (s *Server) queueHotReference(ctx context.Context, hot uuid.UUID) {
-	_, _ = s.db.Exec(ctx, `INSERT INTO reference_item(workspace_id,account_id,platform,url,status,error,queued_at) SELECT a.workspace_id,a.id,CASE WHEN h.url ILIKE '%mp.weixin.qq.com%' THEN 'wechat_mp' ELSE 'xhs' END,h.url,$2,$3,$4 FROM account_hot_match m JOIN hot_item h ON h.id=m.hot_item_id JOIN platform_account a ON a.id=m.account_id JOIN account_strategy st ON st.account_id=a.id AND st.status='active' WHERE h.id=$1 AND m.relevance>=75 AND cardinality(m.risk)=0 AND st.hot_enabled AND m.date=$5::date ON CONFLICT(workspace_id,url) DO NOTHING`, hot, map[bool]string{true: "queued", false: "blocked"}[s.cfg.Dev], map[bool]string{true: "", false: "robots 不允许，请手动粘贴正文"}[s.cfg.Dev], s.now(), s.today())
+	rows, err := s.db.Query(ctx, `SELECT a.id,a.workspace_id,h.url FROM account_hot_match m JOIN hot_item h ON h.id=m.hot_item_id JOIN platform_account a ON a.id=m.account_id JOIN account_strategy st ON st.account_id=a.id AND st.status='active' JOIN crawl_source src ON src.key=h.source_key JOIN app_setting pref ON pref.workspace_id=a.workspace_id AND pref.key='hot.sources' WHERE h.id=$1 AND m.relevance>=75 AND m.status='new' AND cardinality(m.risk)=0 AND st.hot_enabled AND m.date=$2::date AND a.status<>'deleted' AND src.enabled AND (src.workspace_id IS NULL OR src.workspace_id=a.workspace_id) AND pref.value ? h.source_key AND NOT EXISTS(SELECT 1 FROM unnest(st.blocked_words||st.taboo) w WHERE w<>'' AND (h.title||' '||h.summary) ILIKE '%'||w||'%')`, hot, s.today())
+	if err != nil {
+		return
+	}
+	type target struct {
+		account, workspace uuid.UUID
+		url                string
+	}
+	targets := []target{}
+	for rows.Next() {
+		var x target
+		if rows.Scan(&x.account, &x.workspace, &x.url) == nil {
+			targets = append(targets, x)
+		}
+	}
+	rows.Close()
+	for _, x := range targets {
+		jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: x.workspace, Role: "owner"})
+		_ = s.withTx(jctx, func(tx pgx.Tx) error { _, err := s.queueReferences(jctx, tx, x.account, []string{x.url}); return err })
+	}
 }

@@ -256,7 +256,7 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 	}
 
 	// Reference bodies are used only for private similarity checks, never generation context.
-	rr, re := s.db.Query(ctx, `SELECT id,title,body_text FROM reference_item WHERE account_id=$1 AND workspace_id=$2 AND deleted_at IS NULL AND body_text<>'' AND fetched_at>$3`, w.AccountID, ident(ctx).WorkspaceID, s.now().AddDate(0, 0, -7))
+	rr, re := s.db.Query(ctx, `SELECT id,title,body_text FROM reference_item r WHERE (account_id=$1 OR EXISTS(SELECT 1 FROM account_reference ar WHERE ar.reference_id=r.id AND ar.account_id=$1)) AND workspace_id=$2 AND deleted_at IS NULL AND body_text<>'' AND fetched_at>$3`, w.AccountID, ident(ctx).WorkspaceID, s.now().AddDate(0, 0, -7))
 	if re == nil {
 		for rr.Next() {
 			var rid uuid.UUID

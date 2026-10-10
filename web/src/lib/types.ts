@@ -163,6 +163,7 @@ export type StrategyChange = { [K in keyof StrategyFields]: { field: K; from: St
 export interface StrategyRevision { current: Strategy; changes: StrategyChange[]; ai_call_id: string }
 
 export interface PlanSlot {
+  hot_alternative?: HotMatch
   id: string
   date: string
   pillar: string

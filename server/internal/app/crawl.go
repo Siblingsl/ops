@@ -57,6 +57,9 @@ func (st crawlStore) Reserve(ctx context.Context, source crawl.Source, now time.
 }
 func (st crawlStore) Finish(ctx context.Context, source crawl.Source, now time.Time, l crawl.Limits, out crawl.Outcome) {
 	if out.Error == crawl.ErrLimited.Error() || out.Error == crawl.ErrDisabled.Error() {
+		if out.Requests > 0 && (source.Kind == "xhs_page" || source.Kind == "wechat_page") {
+			st.s.finishPlatform(ctx, source, now, out)
+		}
 		return
 	}
 	if source.Kind == "xhs_page" || source.Kind == "wechat_page" {
@@ -156,7 +159,7 @@ func (s *Server) collectSource(ctx context.Context, source CrawlSource) ([]crawl
 	}
 	started := s.now()
 	items, out, err := (crawl.Adapter{Client: s.crawlClient(), Source: crawl.Source{Key: source.Key, Kind: source.Kind, URL: endpoint}}).Fetch(ctx, lim)
-	if errors.Is(err, crawl.ErrLimited) || errors.Is(err, crawl.ErrDisabled) {
+	if out.Requests == 0 && (errors.Is(err, crawl.ErrLimited) || errors.Is(err, crawl.ErrDisabled)) {
 		return nil, err
 	}
 	msg := ""
