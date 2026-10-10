@@ -171,6 +171,13 @@ func short(s string, n int) string {
 	return string(r[:n])
 }
 
+func nzs(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
 func js(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
@@ -479,6 +486,45 @@ func respond(prompt string) string {
 			scores = []map[string]any{}
 		}
 		return js(map[string]any{"scores": scores})
+	case "account_positioning":
+		domain := nzs(field(prompt, "领域："), "职场成长")
+		exp := short(nzs(field(prompt, "真实经历与资源："), "多年一线工作经历"), 24)
+		pillars := func(names ...string) []map[string]any {
+			var ps []map[string]any
+			ratios := []int{40, 35, 25, 20}
+			for i, n := range names {
+				ps = append(ps, map[string]any{"name": n, "desc": n + "相关的经验与方法", "ratio": ratios[i],
+					"examples": []string{n + "：我踩过的三个坑", n + "的一份清单"}})
+			}
+			return ps
+		}
+		return js(map[string]any{"options": []map[string]any{
+			{"niche": domain + "里的实战经验", "audience": "刚入行 1–3 年、想少走弯路的人",
+				"differentiation": "基于" + exp + "，只讲亲身做过的事", "persona": "坦诚的过来人",
+				"pillars": pillars("实战复盘", "方法清单", "行业观察"), "cadence": map[string]any{"per_week": 3, "days": []int{1, 3, 5}},
+				"keywords": []string{domain, "复盘", "新人"}, "taboo": []string{"情感八卦"}, "fit_reason": "经历具体，适合以复盘建立信任", "risks": []string{"更新压力较大"}},
+			{"niche": domain + "工具与效率", "audience": "追求效率的在职人士",
+				"differentiation": "把" + exp + "中的做法整理成可复用的工具", "persona": "务实的整理者",
+				"pillars": pillars("工具测评", "流程模板", "效率误区"), "cadence": map[string]any{"per_week": 2, "days": []int{2, 5}},
+				"keywords": []string{domain, "效率", "工具"}, "taboo": []string{"夸大收益"}, "fit_reason": "门槛低、易产出", "risks": []string{"同类账号多"}},
+		}})
+	case "strategy_revise":
+		return js(map[string]any{"changes": []map[string]any{
+			{"field": "keywords", "to": []string{"复盘", "新人", "沟通"}, "reason": "近 30 天沟通类作品阅读更高"},
+			{"field": "stage", "to": "growth", "reason": "已稳定更新一个月，可以进入成长期"},
+			{"field": "niche", "to": 123, "reason": "类型不对的建议应被丢弃"},
+		}})
+	case "strategy_outline":
+		var slots []map[string]any
+		for i, m := range regexp.MustCompile(`槽位 date=(\d{4}-\d{2}-\d{2}) 支柱=([^\n]+)`).FindAllStringSubmatch(prompt, -1) {
+			p := strings.TrimSpace(m[2])
+			slots = append(slots, map[string]any{"date": m[1], "pillar": p, "title": fmt.Sprintf("%s：第 %d 个值得写的问题", p, i+1),
+				"angle": "从一次真实经历切入", "reason": "按支柱轮换补齐", "hot_item_id": nil})
+		}
+		if slots == nil {
+			slots = []map[string]any{}
+		}
+		return js(map[string]any{"slots": slots})
 	case "profile_bootstrap":
 		return js(map[string]any{
 			"positioning_tags": []string{"职场成长", "效率方法"}, "target_audience": "工作 1–5 年的职场人",

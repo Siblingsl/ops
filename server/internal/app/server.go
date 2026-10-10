@@ -254,6 +254,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/exports", s.h(s.exportData))
 
 			s.v3Routes(r)
+			s.v4Routes(r)
 		})
 	})
 
@@ -381,6 +382,14 @@ func (s *Server) v3Routes(r chi.Router) {
 	r.Get("/prompt-eval/cases/{id}/runs", s.h(s.listEvalRuns))
 	r.Post("/prompt-eval/runs", s.h(s.createEvalRun))
 	r.Patch("/prompt-eval/runs/{id}", s.h(s.patchEvalRun))
+}
+
+// v4Routes registers the D-047 account operations endpoints (11 文档第 8 节).
+func (s *Server) v4Routes(r chi.Router) {
+	r.Get("/accounts/{accountId}/strategy", s.h(s.getStrategy))
+	r.Post("/accounts/{accountId}/strategy/draft", s.h(s.draftStrategy))
+	r.Post("/accounts/{accountId}/strategy", s.h(s.activateStrategy))
+	r.Post("/accounts/{accountId}/strategy/versions/{v}/restore", s.h(s.restoreStrategy))
 }
 
 func spaHandler(dir string) http.Handler {
