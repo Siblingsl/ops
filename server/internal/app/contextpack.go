@@ -16,7 +16,7 @@ var slotBudgets = map[string]int{
 
 var slotLabels = map[string]string{
 	"rules": "系统规则", "profile": "定位档案", "memory": "AI 记忆", "task_instruction": "工作区提示词",
-	"style": "风格参考", "materials": "素材", "history": "历史作品写法", "work": "作品内容", "user_instruction": "临时指令",
+	"style": "风格参考", "references": "对标方法", "materials": "素材", "history": "历史作品写法", "work": "作品内容", "user_instruction": "临时指令",
 }
 
 type SlotItem struct {
@@ -155,6 +155,13 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 		}
 	}
 
+	if t.Account != nil && (strings.HasPrefix(t.Type, "section_") || t.Type == "outline") {
+		text, items := s.referenceMethods(ctx, t.Account.ID)
+		if text != "" {
+			usr.WriteString("## 参考结构（只借鉴方法，不复用事实或原句）\n" + text)
+			p.add(Slot{Name: "references", Budget: 1200, Chars: runeLen(text), Items: items})
+		}
+	}
 	restStart := 0
 	if instr, ver := s.loadTaskInstruction(ctx, t.Type); instr != "" {
 		used := []rune(instr)

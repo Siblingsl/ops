@@ -402,6 +402,10 @@ func (s *Server) v3Routes(r chi.Router) {
 
 // v4Routes registers the D-047 account operations endpoints (11 文档第 8 节).
 func (s *Server) v4Routes(r chi.Router) {
+	r.Get("/accounts/{accountId}/references", s.h(s.getReferences))
+	r.Post("/accounts/{accountId}/references", s.h(s.addReferences))
+	r.Post("/references/{id}/paste", s.h(s.pasteReference))
+	r.Delete("/references/{id}", s.h(s.deleteReference))
 	r.Get("/accounts/{accountId}/strategy", s.h(s.getStrategy))
 	r.Post("/accounts/{accountId}/strategy/options", s.h(s.strategyOptions))
 	r.Post("/accounts/{accountId}/strategy", s.h(s.activateStrategy))

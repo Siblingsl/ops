@@ -8,9 +8,9 @@ import { del, errorMessage, get, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { useInvalidate } from '@/lib/session'
 
-interface Item { type: 'work' | 'topic' | 'material' | 'style_sample' | 'character_card'; id: string; title: string; account_name: string | null; deleted_at: string; days_left: number }
+interface Item { type: 'work' | 'topic' | 'material' | 'style_sample' | 'character_card' | 'reference'; id: string; title: string; account_name: string | null; deleted_at: string; days_left: number }
 
-const typeLabel: Record<Item['type'], string> = { work: '作品', topic: '选题', material: '素材', style_sample: '风格样本', character_card: '角色卡' }
+const typeLabel: Record<Item['type'], string> = { work: '作品', topic: '选题', material: '素材', style_sample: '风格样本', character_card: '角色卡', reference: '对标参考' }
 
 export default function Trash() {
   const { data, isLoading, refetch } = useQuery({ queryKey: ['trash'], queryFn: () => get<Item[]>('/trash') })
@@ -49,6 +49,7 @@ export default function Trash() {
         { value: 'material', label: '素材', count: count('material') },
         { value: 'style_sample', label: '风格样本', count: count('style_sample') },
         { value: 'character_card', label: '角色卡', count: count('character_card') },
+ { value: 'reference', label: '对标参考', count: count('reference') },
       ]} />
       <Card>
         {list.length === 0 ? <Empty icon={<Trash2 className="size-5" />} title="回收站是空的" /> : (

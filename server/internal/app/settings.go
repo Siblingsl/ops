@@ -770,6 +770,7 @@ var trashTables = map[string]struct{ table, title, account string }{
 	"material":       {"material", "left(t.content, 40)", "t.account_id"},
 	"style_sample":   {"style_sample", "t.title", "t.account_id"},
 	"character_card": {"character_card", "t.name", "t.account_id"},
+	"reference":      {"reference_item", "t.title", "t.account_id"},
 }
 
 func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) error {
@@ -783,7 +784,7 @@ func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) error {
 	}
 	list := []Item{}
 	ws := ident(r.Context()).WorkspaceID
-	types := []string{"work", "topic", "material", "style_sample", "character_card"}
+	types := []string{"work", "topic", "material", "style_sample", "character_card", "reference"}
 	if t := r.URL.Query().Get("type"); t != "" {
 		if _, okT := trashTables[t]; !okT {
 			return validation("未知的类型")

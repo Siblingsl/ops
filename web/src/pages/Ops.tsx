@@ -1,3 +1,4 @@
+import { References } from './ops/References'
 import { useQuery } from '@tanstack/react-query'
 import { CalendarDays, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -902,6 +903,7 @@ export default function Ops() {
       <StrategyPanel key={`strategy-${account.id}`} account={account} />
       <PlanPanel key={`plan-${account.id}`} account={account} />
       <HotPanel key={`hot-${account.id}`} account={account} />
+ <References key={`refs-${account.id}`} accountId={account.id} />
       <Card>
         <CardHeader title="今日推荐" />
         <Empty

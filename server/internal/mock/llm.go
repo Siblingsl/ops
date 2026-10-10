@@ -543,6 +543,8 @@ func respond(prompt string) string {
 			slots = []map[string]any{}
 		}
 		return js(map[string]any{"slots": slots})
+	case "reference_analyze":
+		return js(map[string]any{"title_pattern": "问题场景加行动收益", "hook_type": "情景提问", "structure": []string{"界定问题", "分析障碍", "给出行动", "总结启发"}, "angle": "以读者困难组织论证", "tags": []string{"写作方法"}, "takeaways": []string{"将建议拆成可以验证的小任务"}})
 	case "hot_relevance":
 		items := []map[string]any{}
 		for i, m := range regexp.MustCompile(`"id":"([a-f0-9-]+)"`).FindAllStringSubmatch(prompt, -1) {

@@ -675,3 +675,8 @@ export interface CustomTheme {
 }
 
 export interface LayoutSuggestion { section_id: string; kind: string; text: string; reason: string }
+
+export interface ReferenceItem {
+ id: string; account_id: string; platform: string; url: string; status: 'queued'|'done'|'failed'|'blocked'; title: string; author: string; published_at: string; metrics: Record<string,number>; error: string; queued_at: string; fetched_at: string|null; position: number; expected_at: string|null
+ analysis: { title_pattern:string;hook_type:string;structure:string[];angle:string;tags:string[];takeaways:string[] }|null
+}

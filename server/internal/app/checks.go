@@ -255,6 +255,23 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 		}
 	}
 
+	// Reference bodies are used only for private similarity checks, never generation context.
+	rr, re := s.db.Query(ctx, `SELECT id,title,body_text FROM reference_item WHERE account_id=$1 AND workspace_id=$2 AND deleted_at IS NULL AND body_text<>'' AND fetched_at>$3`, w.AccountID, ident(ctx).WorkspaceID, s.now().AddDate(0, 0, -7))
+	if re == nil {
+		for rr.Next() {
+			var rid uuid.UUID
+			var title, body string
+			if rr.Scan(&rid, &title, &body) == nil {
+				for _, f := range workFields(w) {
+					if overlapLong(body, f.Text) {
+						items = append(items, CheckItem{Category: "similarity", Message: "与对标参考文字重合：《" + title + "》", Detail: "请检查是否复用了原句；只借鉴写作方法。", Location: map[string]any{"field": f.Name, "reference_id": rid}, fingerprint: fingerprint("similarity", rid.String(), f.Text)})
+						break
+					}
+				}
+			}
+		}
+		rr.Close()
+	}
 	// EX-D-04 引用的数据类素材已过有效期
 	srows, err := s.db.Query(ctx, `SELECT DISTINCT m.id, m.content, to_char(m.valid_until,'YYYY-MM-DD') FROM material m
 		WHERE m.valid_until IS NOT NULL AND m.valid_until < $2::date AND m.deleted_at IS NULL
