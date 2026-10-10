@@ -8,7 +8,7 @@ import { RefsNote } from '@/components/refs'
 import { Badge, Button, Card, cn, Empty, Field, HumanGate, IconButton, Input, Notice, PageHeader, PageLoading, Tabs, Textarea } from '@/components/ui'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { type AIRefs, relTime } from '@/lib/format'
-import { useCurrentAccount, useInvalidate } from '@/lib/session'
+import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { Topic, Work } from '@/lib/types'
 
 interface Suggestion { title: string; angle: string; reason: string; timeliness?: string }
@@ -164,6 +164,7 @@ function HotSuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose
 
 function TopicCard({ t, accountId }: { t: Topic; accountId: string }) {
   const inv = useInvalidate()
+  const canWrite = useCanWrite()
   const nav = useNavigate()
   const [menu, setMenu] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -196,25 +197,27 @@ function TopicCard({ t, accountId }: { t: Topic; accountId: string }) {
           <div className="font-display text-[15px] font-semibold leading-snug text-mist-900">{t.title}</div>
           {t.angle && <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-mist-500">{t.angle}</p>}
         </div>
-        <div className="relative">
-          <IconButton label="更多" onClick={() => setMenu(!menu)} className="opacity-0 group-hover:opacity-100"><MoreHorizontal className="size-4" /></IconButton>
-          {menu && (
-            <div className="absolute right-0 top-full z-10 mt-1 w-36 animate-fade-in rounded-lg border border-mist-200 bg-white p-1 shadow-pop" onMouseLeave={() => setMenu(false)}>
-              {t.status !== 'pending' && <button onClick={() => { setMenu(false); setStatus('pending') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><RotateCcw className="size-3.5" />放回待定</button>}
-              {t.status !== 'dropped' && <button onClick={() => { setMenu(false); setStatus('dropped') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><X className="size-3.5" />放弃</button>}
-              <button onClick={remove} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-danger hover:bg-orange-50"><Trash2 className="size-3.5" />删除</button>
-            </div>
-          )}
-        </div>
+        {canWrite && (
+          <div className="relative">
+            <IconButton label="更多" onClick={() => setMenu(!menu)} className="opacity-0 group-hover:opacity-100"><MoreHorizontal className="size-4" /></IconButton>
+            {menu && (
+              <div className="absolute right-0 top-full z-10 mt-1 w-36 animate-fade-in rounded-lg border border-mist-200 bg-white p-1 shadow-pop" onMouseLeave={() => setMenu(false)}>
+                {t.status !== 'pending' && <button onClick={() => { setMenu(false); setStatus('pending') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><RotateCcw className="size-3.5" />放回待定</button>}
+                {t.status !== 'dropped' && <button onClick={() => { setMenu(false); setStatus('dropped') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><X className="size-3.5" />放弃</button>}
+                <button onClick={remove} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-danger hover:bg-orange-50"><Trash2 className="size-3.5" />删除</button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="mt-3 flex items-center gap-2">
         <Badge tone={sourceLabel[t.source].tone}>{sourceLabel[t.source].label}</Badge>
         <span className="text-xs text-mist-400">{relTime(t.created_at)}</span>
         <div className="ml-auto">
-          {t.status === 'pending' && <Button size="sm" variant="ghost" onClick={() => setStatus('adopted')} icon={<Check className="size-3.5" />}>采用</Button>}
+          {canWrite && t.status === 'pending' && <Button size="sm" variant="ghost" onClick={() => setStatus('adopted')} icon={<Check className="size-3.5" />}>采用</Button>}
           {t.status === 'adopted' && (t.work_id
             ? <Link to={`/works/${t.work_id}`}><Button size="sm" variant="ghost">打开作品<ArrowRight className="size-3.5" /></Button></Link>
-            : <Button size="sm" variant="primary" loading={busy} onClick={start}>开始创作</Button>)}
+            : canWrite ? <Button size="sm" variant="primary" loading={busy} onClick={start}>开始创作</Button> : null)}
         </div>
       </div>
     </Card>
@@ -223,6 +226,7 @@ function TopicCard({ t, accountId }: { t: Topic; accountId: string }) {
 
 export default function Topics() {
   const acc = useCurrentAccount()
+  const canWrite = useCanWrite()
   const [params, setParams] = useSearchParams()
   const [tab, setTab] = useState<Topic['status']>('pending')
   const [suggest, setSuggest] = useState(params.get('suggest') === '1')
@@ -255,11 +259,11 @@ export default function Topics() {
   return (
     <div className="animate-fade-in">
       <PageHeader title="选题池" desc="先把想法存下来，采用后再开始创作。"
-        action={<>
+        action={canWrite ? <>
           <Button icon={<Plus className="size-4" />} onClick={() => { setSimilar([]); setAdding(true) }}>手动添加</Button>
           <Button icon={<Sparkles className="size-4" />} onClick={() => setHotSuggest(true)}>热点选题</Button>
           <Button variant="primary" icon={<Sparkles className="size-4" />} onClick={() => setSuggest(true)}>AI 选题建议</Button>
-        </>} />
+        </> : undefined} />
       <Tabs value={tab} onChange={setTab} className="mb-5" items={[
         { value: 'pending', label: '待定', count: list.filter((t) => t.status === 'pending').length },
         { value: 'adopted', label: '已采用', count: list.filter((t) => t.status === 'adopted').length },
@@ -268,7 +272,7 @@ export default function Topics() {
       {shown.length === 0 ? (
         <Card><Empty icon={<Lightbulb className="size-5" />} title={tab === 'pending' ? '还没有待定的选题' : tab === 'adopted' ? '还没有采用的选题' : '没有放弃的选题'}
           desc={tab === 'pending' ? '手动记下一个想法，或者让 AI 根据账号定位给些建议。' : undefined}
-          action={tab === 'pending' && <Button variant="primary" icon={<Sparkles className="size-4" />} onClick={() => setSuggest(true)}>AI 选题建议</Button>} /></Card>
+          action={canWrite && tab === 'pending' ? <Button variant="primary" icon={<Sparkles className="size-4" />} onClick={() => setSuggest(true)}>AI 选题建议</Button> : undefined} /></Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{shown.map((t) => <TopicCard key={t.id} t={t} accountId={acc.id} />)}</div>
       )}

@@ -17,6 +17,12 @@ export function useMe() {
   return q
 }
 
+/** Viewer role is read-only (FR-M1-06 / D-038); writing is blocked server-side too. */
+export function useCanWrite() {
+  const { data: me } = useMe()
+  return me?.role !== 'viewer'
+}
+
 export function useAccounts() {
   return useQuery({ queryKey: ['accounts'], queryFn: () => get<Account[]>('/accounts'), staleTime: 30_000 })
 }

@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { Button, Card, cn, Empty, PageHeader, PageLoading, StatusBadge } from '@/components/ui'
 import { errorMessage, get, post } from '@/lib/api'
 import { fmtNum, relTime } from '@/lib/format'
-import { useCurrentAccount } from '@/lib/session'
+import { useCanWrite, useCurrentAccount } from '@/lib/session'
 import type { Account, AILimit, Work, WorkStatus } from '@/lib/types'
 
 interface Todo { work_id: string; title: string; status: WorkStatus; kind: string; hint: string; at: string }
@@ -68,6 +68,7 @@ function Stat({ label, value, sub, icon, to }: { label: string; value: React.Rea
 
 export default function Dashboard() {
   const acc = useCurrentAccount()
+  const canWrite = useCanWrite()
   const { data, isLoading } = useQuery({ queryKey: ['dashboard', acc?.id], queryFn: () => get<Dash>(`/accounts/${acc!.id}/dashboard`), enabled: !!acc })
   const create = useCreateWork(acc?.id)
   if (!acc || isLoading || !data) return <PageLoading />
@@ -89,10 +90,10 @@ export default function Dashboard() {
         eyebrow={new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}
         title={`${greet}，今天写点什么？`}
         desc={`当前账号：${acc.name}`}
-        action={<>
+        action={canWrite ? <>
           <Link to={`/a/${acc.id}/topics?suggest=1`}><Button icon={<Sparkles className="size-4" />}>AI 选题建议</Button></Link>
           <Button variant="primary" icon={<PenLine className="size-4" />} onClick={() => create()}>新建作品</Button>
-        </>}
+        </> : undefined}
       />
 
       {pendingSetup.length > 0 && (

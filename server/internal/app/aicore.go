@@ -171,6 +171,21 @@ func (s *Server) systemPrompt(ctx context.Context, a *Account, skipStyle bool) (
 	return b.String(), refs, nil
 }
 
+// loadTaskInstruction returns the workspace's editable task instruction (FR-M12-05).
+func (s *Server) loadTaskInstruction(ctx context.Context, taskType string) (content string, version int) {
+	id := ident(ctx)
+	if id == nil || taskType == "" {
+		return "", 0
+	}
+	err := s.db.QueryRow(ctx, `SELECT content, version FROM prompt_template
+		WHERE workspace_id=$1 AND task_type=$2 AND active
+		ORDER BY version DESC LIMIT 1`, id.WorkspaceID, taskType).Scan(&content, &version)
+	if err != nil {
+		return "", 0
+	}
+	return strings.TrimSpace(content), version
+}
+
 // runAI executes one task, records ai_call, and streams deltas when onDelta is set.
 func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*aiResult, error) {
 	if err := s.checkLimit(ctx); err != nil {
@@ -187,7 +202,13 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 	for k, v := range t.Refs {
 		refs[k] = v
 	}
-	user := t.User + "\n\n任务：" + t.Type
+	user := t.User
+	if instr, ver := s.loadTaskInstruction(ctx, t.Type); instr != "" {
+		user = "## 任务指令\n" + instr + "\n\n" + user
+		refs["prompt_template"] = t.Type
+		refs["prompt_template_version"] = ver
+	}
+	user += "\n\n任务：" + t.Type
 	start := time.Now()
 	text, usage, callErr := ai.Stream(ctx, s.aiHTTP, ai.Request{
 		BaseURL: rt.BaseURL, APIKey: rt.APIKey, Model: rt.Model, JSON: t.JSON,

@@ -13,6 +13,7 @@ import { type EditorHandle, PlainEditor, RichEditor } from '@/components/section
 import { Badge, Button, Card, cn, Field, HumanGate, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post, put, rawRequest, stream } from '@/lib/api'
 import { type AIRefs, copyText, fmtTime, parseTopics, runeLen } from '@/lib/format'
+import { useCanWrite } from '@/lib/session'
 import type { Asset, Material, MaterialKind, OutlineItem, Section, Work } from '@/lib/types'
 import ComicEditor from './ComicEditor'
 import { useWork } from './WorkLayout'
@@ -847,7 +848,8 @@ export default function Editor() {
 function ArticleEditor() {
   const { work, setWork, patchWork, refresh } = useWork()
   const nav = useNavigate()
-  const readOnly = work.locked
+  const canWrite = useCanWrite()
+  const readOnly = work.locked || !canWrite
   const [save, setSave] = useState<SaveState>({ pending: 0, offline: false, last: null })
   const onSave = useCallback((d: number, offline = false) => {
     setSave((s) => ({ pending: Math.max(0, s.pending + d), offline, last: d < 0 && !offline ? new Date().toISOString() : s.last }))

@@ -7,7 +7,8 @@ import { toast } from 'sonner'
 import { Badge, Button, Card, cn, HumanGate, Notice, PageLoading, Textarea } from '@/components/ui'
 import { ApiError, errorMessage, get, patch, post } from '@/lib/api'
 import { htmlStats, renderWechat } from '@/lib/render'
-import type { CheckItem, CheckRun, Section, Work } from '@/lib/types'
+import { useCanWrite } from '@/lib/session'
+import type { CheckItem, CheckRun, ComicPanel, Section, Work } from '@/lib/types'
 import { useWork } from './WorkLayout'
 
 const catMeta: Record<CheckItem['category'], { label: string; tone: 'gray' | 'red' | 'blue' | 'gamboge' | 'ink' }> = {
@@ -62,6 +63,65 @@ function highlight(html: string, marks: { text: string; id: string; tone: string
     node.replaceWith(frag)
   }
   return root.innerHTML
+}
+
+function PanelView({ panel, items, active, onPick, onSaved, editable }: {
+  panel: ComicPanel
+  items: CheckItem[]
+  active: string | null
+  onPick: (id: string) => void
+  onSaved: () => void
+  editable: boolean
+}) {
+  const [editing, setEditing] = useState(false)
+  const [narration, setNarration] = useState(panel.narration)
+  const [dialogue, setDialogue] = useState(panel.dialogue)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    setNarration(panel.narration)
+    setDialogue(panel.dialogue)
+  }, [panel.narration, panel.dialogue])
+  const body = [panel.narration, panel.dialogue].filter(Boolean).join('\n')
+  const marks = items.filter((i) => i.matched_text).map((i) => ({ text: i.matched_text, id: i.id, tone: i.category === 'fact' ? 'blue' : i.category === 'format' ? 'red' : 'gamboge' }))
+  const html = useMemo(() => highlight(marked.parse(body || '（无旁白/对白）', { async: false }) as string, marks, active), [body, marks, active])
+  const save = async () => {
+    setSaving(true)
+    try {
+      await patch(`/panels/${panel.id}`, { narration, dialogue })
+      setEditing(false)
+      onSaved()
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div id={`chk-${panel.id}`} className="group scroll-mt-28 rounded-lg px-3 py-2 -mx-3">
+      <div className="mb-2 flex items-center gap-2">
+        <h3 className="font-display text-[17px] font-bold text-mist-900">第 {panel.position} 格</h3>
+        {panel.scene && <span className="truncate text-xs text-mist-400">{panel.scene}</span>}
+        {editable && !editing && (
+          <button onClick={() => setEditing(true)} className="ml-auto flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-xs text-mist-400 opacity-0 transition hover:bg-mist-100 hover:text-ink-600 group-hover:opacity-100">
+            <PenLine className="size-3" />修改这格
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <div className="space-y-2">
+          <Textarea rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} placeholder="旁白" />
+          <Textarea rows={2} value={dialogue} onChange={(e) => setDialogue(e.target.value)} placeholder="对白" />
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => { setNarration(panel.narration); setDialogue(panel.dialogue); setEditing(false) }}>取消</Button>
+            <Button size="sm" variant="primary" loading={saving} onClick={save}>保存并重新检查</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="md text-[15px] leading-[1.9] text-mist-700" dangerouslySetInnerHTML={{ __html: html }}
+          onClick={(e) => { const id = (e.target as HTMLElement).dataset?.item; if (id) onPick(id) }} />
+      )}
+    </div>
+  )
 }
 
 function SectionView({ section, index, items, active, onPick, onSaved, editable }: {
@@ -169,12 +229,14 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId }: {
 
 export default function Check() {
   const { work, setWork, refresh } = useWork()
+  const canWrite = useCanWrite()
   const qc = useQueryClient()
   const nav = useNavigate()
   const [params, setParams] = useSearchParams()
   const [active, setActive] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const editable = canWrite && !work.locked
   const key = ['check', work.id]
   const q = useQuery({
     queryKey: key,
@@ -205,14 +267,14 @@ export default function Check() {
   }
 
   useEffect(() => {
-    if (q.isLoading || started.current || work.locked) return
+    if (q.isLoading || started.current || !canWrite || work.locked) return
     if (params.get('start')) setParams({}, { replace: true })
     if (!run || run.stale) {
       started.current = true
       start()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.isLoading])
+  }, [q.isLoading, canWrite])
 
   const resolve = async (item: CheckItem, v: string | null) => {
     qc.setQueryData<{ run: CheckRun | null }>(key, (old) => old?.run
@@ -261,6 +323,7 @@ export default function Check() {
   const canComplete = !!run && !run.stale && !factPending && run.blocking === 0 && run.confirmed === run.total
   const isDone = !!run?.completed_at && !run.stale && ['ready', 'pushed', 'packed', 'published'].includes(work.status)
   const wx = work.platform === 'wechat_mp'
+  const comic = work.content_format === 'comic'
   const sectionItems = (sid: string) => (run?.items ?? []).filter((i) => i.location.section_id === sid && (i.category !== 'format' || !i.passed))
 
   return (
@@ -275,15 +338,17 @@ export default function Check() {
             <Stat label="已确认" value={`${run.confirmed} / ${run.total}`} ok={run.confirmed === run.total} />
             <Stat label="格式问题" value={String(run.blocking)} ok={run.blocking === 0} />
             <Stat label="事实核查" value={factPending ? '进行中' : run.fact_status === 'done' ? '已完成' : run.fact_status === 'failed' ? '需人工' : '—'} ok={run.fact_status === 'done'} />
-            <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} loading={starting} disabled={work.locked} onClick={start}>重新检查</Button>
+            <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} loading={starting} disabled={!editable} onClick={start}>重新检查</Button>
           </div>
         )}
       </div>
 
-      {run?.stale && !starting && (
+      {!canWrite && <Notice tone="gray" className="mb-4">观察者只读：可查看检查结果，不能重新检查或确认。</Notice>}
+      {run?.stale && !starting && editable && (
         <Notice tone="gamboge" className="mb-4">内容在检查后又修改过。<button className="cursor-pointer font-medium underline" onClick={start}>重新检查</button>，已确认且文字没变的项会保持确认。</Notice>
       )}
-      {!run && !starting && <Card className="p-10 text-center"><Button variant="primary" onClick={start} icon={<ShieldCheck className="size-4" />}>开始检查</Button></Card>}
+      {!run && !starting && editable && <Card className="p-10 text-center"><Button variant="primary" onClick={start} icon={<ShieldCheck className="size-4" />}>开始检查</Button></Card>}
+      {!run && !starting && !canWrite && <Card className="p-10 text-center text-mist-500">还没有检查记录。</Card>}
       {starting && !run && <Card className="flex items-center justify-center gap-2 p-10 text-mist-500"><Loader2 className="size-4 animate-spin" />正在检查…</Card>}
 
       {run && (
@@ -292,10 +357,15 @@ export default function Check() {
             <h2 className="mb-1 font-display text-[22px] font-bold text-mist-900">{work.title || '（未填写标题）'}</h2>
             {work.summary && <p className="mb-4 text-[13px] text-mist-500">摘要：{work.summary}</p>}
             <div className="space-y-4 border-t border-mist-100 pt-4">
-              {work.sections.map((s, i) => (
-                <SectionView key={s.id + s.revision} section={s} index={i} items={sectionItems(s.id)} active={active} onPick={pick}
-                  editable={!work.locked} onSaved={async () => { await refresh(); await start() }} />
-              ))}
+              {comic
+                ? work.panels.map((p) => (
+                  <PanelView key={p.id + p.updated_at} panel={p} items={sectionItems(p.id)} active={active} onPick={pick}
+                    editable={editable} onSaved={async () => { await refresh(); await start() }} />
+                ))
+                : work.sections.map((s, i) => (
+                  <SectionView key={s.id + s.revision} section={s} index={i} items={sectionItems(s.id)} active={active} onPick={pick}
+                    editable={editable} onSaved={async () => { await refresh(); await start() }} />
+                ))}
             </div>
           </Card>
 
@@ -314,7 +384,7 @@ export default function Check() {
                 <div className="space-y-2">
                   {g.items.map((it) => (
                     <div key={it.id} id={`item-${it.id}`}>
-                      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v) => resolve(it, v)} disabled={run.stale || work.locked} workId={work.id} />
+                      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v) => resolve(it, v)} disabled={!editable || run.stale} workId={work.id} />
                     </div>
                   ))}
                 </div>
@@ -332,7 +402,7 @@ export default function Check() {
                 <>
                   {formatFailed.length > 0 && <Notice tone="red">还有 {formatFailed.length} 项格式问题，修改后重新检查。</Notice>}
                   <HumanGate code="H-04">每一条敏感词和事实都需要你单独确认，没有「全部确认」。</HumanGate>
-                  <Button variant="human" size="lg" className="w-full" disabled={!canComplete} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>
+                  <Button variant="human" size="lg" className="w-full" disabled={!canComplete || !editable} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>
                     确认完成检查
                   </Button>
                 </>

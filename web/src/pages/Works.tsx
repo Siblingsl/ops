@@ -8,7 +8,7 @@ import { confirm } from '@/components/dialog'
 import { Button, Card, Empty, IconButton, Input, PageHeader, PageLoading, StatusBadge, Tabs } from '@/components/ui'
 import { del, get } from '@/lib/api'
 import { relTime } from '@/lib/format'
-import { useCurrentAccount, useInvalidate } from '@/lib/session'
+import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { WorkListItem, WorkStatus } from '@/lib/types'
 import { useCreateWork } from './Dashboard'
 
@@ -28,6 +28,7 @@ export function workLink(w: { id: string; status: WorkStatus }) {
 
 export default function Works() {
   const acc = useCurrentAccount()
+  const canWrite = useCanWrite()
   const [filter, setFilter] = useState<Filter>('all')
   const [q, setQ] = useState('')
   const [derive, setDerive] = useState<WorkListItem | null>(null)
@@ -50,7 +51,7 @@ export default function Works() {
   }
   return (
     <div className="animate-fade-in">
-      <PageHeader title="作品" desc={`${acc.name} 的全部作品`} action={<Button variant="primary" icon={<PenLine className="size-4" />} onClick={() => create()}>新建作品</Button>} />
+      <PageHeader title="作品" desc={`${acc.name} 的全部作品`} action={canWrite ? <Button variant="primary" icon={<PenLine className="size-4" />} onClick={() => create()}>新建作品</Button> : undefined} />
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <Tabs value={filter} onChange={setFilter} items={[
           { value: 'all', label: '全部', count: count('all') },
@@ -66,7 +67,7 @@ export default function Works() {
         </div>
       </div>
       {isLoading ? <PageLoading /> : shown.length === 0 ? (
-        <Card><Empty icon={<FileText className="size-5" />} title="这里还没有作品" desc="从选题池开始，或者直接新建一篇。" action={<Button variant="primary" onClick={() => create()}>新建作品</Button>} /></Card>
+        <Card><Empty icon={<FileText className="size-5" />} title="这里还没有作品" desc={canWrite ? '从选题池开始，或者直接新建一篇。' : '当前为观察者，只能浏览已有作品。'} action={canWrite ? <Button variant="primary" onClick={() => create()}>新建作品</Button> : undefined} /></Card>
       ) : (
         <Card className="divide-y divide-mist-100">
           {shown.map((w) => {
@@ -88,16 +89,18 @@ export default function Works() {
                     </div>
                   </div>
                 </Link>
-                <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
-                  <IconButton label="派生到其他平台" onClick={() => setDerive(w)}><GitBranch className="size-4" /></IconButton>
-                  <IconButton label="删除" onClick={() => remove(w)} className="hover:text-danger"><Trash2 className="size-4" /></IconButton>
-                </div>
+                {canWrite && (
+                  <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                    <IconButton label="派生到其他平台" onClick={() => setDerive(w)}><GitBranch className="size-4" /></IconButton>
+                    <IconButton label="删除" onClick={() => remove(w)} className="hover:text-danger"><Trash2 className="size-4" /></IconButton>
+                  </div>
+                )}
               </div>
             )
           })}
         </Card>
       )}
-      {derive && <DeriveDialog open onClose={() => setDerive(null)} workId={derive.id} platform={acc.platform} format={derive.content_format} />}
+      {derive && canWrite && <DeriveDialog open onClose={() => setDerive(null)} workId={derive.id} platform={acc.platform} format={derive.content_format} />}
     </div>
   )
 }

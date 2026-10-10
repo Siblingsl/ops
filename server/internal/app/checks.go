@@ -388,15 +388,26 @@ func (s *Server) runFactCheck(ctx context.Context, wk *Work, a *Account, runID u
 	for _, sec := range wk.Sections {
 		fmt.Fprintf(&b, "【段落 id=%s】%s\n%s\n", sec.ID, sec.Heading, sec.ContentMD)
 	}
+	for _, p := range wk.Panels {
+		body := strings.TrimSpace(p.Narration + "\n" + p.Dialogue)
+		if body == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "【段落 id=%s】第 %d 格\n%s\n", p.ID, p.Position, body)
+	}
+	unit := "段落"
+	if wk.ContentFormat == "comic" {
+		unit = "分格"
+	}
 	user := fmt.Sprintf(`## 待核查的文章
 标题：%s
 
 %s
 ## 任务说明
-找出文中需要人工核实的句子：具体数据、引语、时间、人物或机构，以及"最、第一、绝对"等绝对化断言。quote 必须是原文中逐字摘录的完整句子，不要改写；section_id 填句子所在段落的 id。不要判断真假，只标出需要核实的地方。
+找出文中需要人工核实的句子：具体数据、引语、时间、人物或机构，以及"最、第一、绝对"等绝对化断言。quote 必须是原文中逐字摘录的完整句子，不要改写；section_id 填句子所在%s的 id。不要判断真假，只标出需要核实的地方。
 
 ## 输出格式
-只输出 JSON：{"items":[{"section_id":"段落 id","quote":"原文句子","claim_type":"data|quote|absolute|time|entity","reason":"为什么需要核实"}]}`, wk.Title, b.String())
+只输出 JSON：{"items":[{"section_id":"%s id","quote":"原文句子","claim_type":"data|quote|absolute|time|entity","reason":"为什么需要核实"}]}`, wk.Title, b.String(), unit, unit)
 	var out struct {
 		Items []struct {
 			SectionID string `json:"section_id"`
@@ -418,9 +429,23 @@ func (s *Server) runFactCheck(ctx context.Context, wk *Work, a *Account, runID u
 		items = append(items, CheckItem{Category: "fact", Message: "AI 事实核查失败", Detail: msg + "。请人工通读全文，逐一核实数据、引语和绝对化表达。",
 			Location: map[string]any{}, fingerprint: fingerprint("fact", "manual", runID.String())})
 	}
-	sections := map[string]Section{}
-	for _, sec := range wk.Sections {
-		sections[sec.ID.String()] = sec
+	type textLoc struct {
+		ID    uuid.UUID
+		Label string
+		Field string
+		Text  string
+	}
+	locs := []textLoc{}
+	for i, sec := range wk.Sections {
+		locs = append(locs, textLoc{ID: sec.ID, Label: fmt.Sprintf("段落「%s」", nz(sec.Heading, fmt.Sprint(i+1))), Field: "section", Text: sec.ContentMD})
+	}
+	for _, p := range wk.Panels {
+		body := strings.TrimSpace(p.Narration + "\n" + p.Dialogue)
+		locs = append(locs, textLoc{ID: p.ID, Label: fmt.Sprintf("第 %d 格", p.Position), Field: "panel", Text: body})
+	}
+	byID := map[string]textLoc{}
+	for _, l := range locs {
+		byID[l.ID.String()] = l
 	}
 	strip := func(s string) string {
 		return strings.Map(func(r rune) rune {
@@ -436,14 +461,13 @@ func (s *Server) runFactCheck(ctx context.Context, wk *Work, a *Account, runID u
 			continue
 		}
 		location := map[string]any{"found": false}
-		sec, okSec := sections[it.SectionID]
-		candidates := wk.Sections
-		if okSec {
-			candidates = []Section{sec}
+		candidates := locs
+		if preferred, okLoc := byID[it.SectionID]; okLoc {
+			candidates = []textLoc{preferred}
 		}
-		for i, c := range candidates {
-			if strings.Contains(c.ContentMD, quote) || strings.Contains(strip(c.ContentMD), strip(quote)) {
-				location = map[string]any{"found": true, "field": "section", "section_id": c.ID.String(), "label": fmt.Sprintf("段落「%s」", nz(c.Heading, fmt.Sprint(i+1)))}
+		for _, c := range candidates {
+			if strings.Contains(c.Text, quote) || strings.Contains(strip(c.Text), strip(quote)) {
+				location = map[string]any{"found": true, "field": c.Field, "section_id": c.ID.String(), "label": c.Label}
 				break
 			}
 		}

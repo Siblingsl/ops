@@ -11,6 +11,7 @@ import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, Select, Texta
 import { errorMessage, get, patch, post, put, rawRequest } from '@/lib/api'
 import { type AIRefs, copyText, fmtTime, runeLen } from '@/lib/format'
 import type { Asset, CharacterCard, ComicBubble, ComicPanel, Work } from '@/lib/types'
+import { useCanWrite } from '@/lib/session'
 import { useWork } from './WorkLayout'
 
 const DIALOGUE_MAX = 30
@@ -24,7 +25,8 @@ type DraftPanel = Omit<ComicPanel, 'id' | 'created_at' | 'updated_at' | 'asset_i
 export default function ComicEditor() {
   const { work, setWork, refresh } = useWork()
   const nav = useNavigate()
-  const readOnly = work.locked
+  const canWrite = useCanWrite()
+  const readOnly = work.locked || !canWrite
   const confirmed = !!work.outline_confirmed_at
   const { data: characters = [] } = useQuery({
     queryKey: ['characters', work.account_id],

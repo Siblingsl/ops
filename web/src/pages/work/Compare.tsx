@@ -121,6 +121,15 @@ export default function Compare() {
   const [topics, setTopics] = useState(work.topics.map((t) => '#' + t).join(' '))
   const [title, setTitle] = useState(work.title)
   if (!work.source) return <div className="p-10"><Notice>这篇作品不是派生作品。</Notice></div>
+  if (work.content_format === 'comic') {
+    return (
+      <div className="p-10">
+        <Notice>漫画衍生作品在漫画编辑器中核对旁白与对白，不使用段落对照页。
+          <button type="button" className="ml-2 cursor-pointer font-medium underline" onClick={() => nav(`/works/${work.id}/edit`)}>打开漫画编辑器</button>
+        </Notice>
+      </div>
+    )
+  }
   if (src.isLoading) return <PageLoading />
   const srcWork = src.data
   const srcById = new Map(srcWork?.sections.map((s) => [s.id, s]) ?? [])

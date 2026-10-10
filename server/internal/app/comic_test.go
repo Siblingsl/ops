@@ -2,11 +2,13 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"mime/multipart"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -115,6 +117,106 @@ func TestCharacterRefImage(t *testing.T) {
 	env.mustJSON(t, "DELETE", "/api/v1/characters/"+char.ID.String()+"/ref", nil, &cleared)
 	if cleared.RefAssetID != nil || cleared.RefURL != "" {
 		t.Fatalf("cleared ref: %+v", cleared)
+	}
+}
+
+func TestPromptTemplateInjectedIntoAI(t *testing.T) {
+	f := env.accounts(t)
+	marker := "PROMPT-TEMPLATE-MARKER-OPS-TEST"
+	env.mustJSON(t, "PUT", "/api/v1/prompt-templates/topic_suggest", map[string]string{
+		"content": marker + "：围绕账号定位给选题。",
+	}, nil)
+	var res struct {
+		Suggestions []any          `json:"suggestions"`
+		Refs        map[string]any `json:"refs"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+f.wechat.ID.String()+"/topics/suggest",
+		map[string]string{"direction": "测试"}, &res)
+	if len(res.Suggestions) == 0 {
+		t.Fatal("no suggestions")
+	}
+	var ver any
+	var task any
+	err := env.srv.db.QueryRow(context.Background(), `SELECT context_refs->>'prompt_template', context_refs->>'prompt_template_version'
+		FROM ai_call WHERE task_type='topic_suggest' ORDER BY created_at DESC LIMIT 1`).Scan(&task, &ver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task != "topic_suggest" {
+		t.Fatalf("refs template=%v", task)
+	}
+	if ver == nil || ver == "" {
+		t.Fatalf("missing version: %v", ver)
+	}
+}
+
+func TestComicFactCheckUsesPanels(t *testing.T) {
+	env.accounts(t)
+	var comic Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]any{
+		"platform": "xhs", "name": "检查漫画号", "content_format": "comic",
+	}, &comic)
+	env.reauth(t)
+	var wk Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+comic.ID.String()+"/works", map[string]string{"title": "核查漫画"}, &wk)
+	env.mustJSON(t, "PATCH", "/api/v1/works/"+wk.ID.String(), map[string]string{"viewpoint": "用数据说话"}, nil)
+	var gen struct {
+		Panels []ComicPanel `json:"panels"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/works/"+wk.ID.String()+"/storyboard/generate",
+		map[string]any{"panel_count": 2, "character_ids": []string{}}, &gen)
+	env.mustJSON(t, "PUT", "/api/v1/works/"+wk.ID.String()+"/storyboard", map[string]any{"panels": gen.Panels, "confirm": true}, &wk)
+	for i := range wk.Panels {
+		a := env.upload(t, wk.ID.String(), testPNG(60, 60))
+		env.mustJSON(t, "PATCH", "/api/v1/panels/"+wk.Panels[i].ID.String(), map[string]any{
+			"asset_id": a.ID, "narration": "调查显示有 87% 的人同意。", "dialogue": "这是最重要的一点。",
+		}, &wk)
+	}
+	var started struct {
+		Run CheckRun `json:"run"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/works/"+wk.ID.String()+"/checks", map[string]any{}, &started)
+	deadline := time.Now().Add(8 * time.Second)
+	var latest struct {
+		Run *CheckRun `json:"run"`
+	}
+	for time.Now().Before(deadline) {
+		env.mustJSON(t, "GET", "/api/v1/works/"+wk.ID.String()+"/checks/latest", nil, &latest)
+		if latest.Run != nil && latest.Run.FactStatus != "pending" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if latest.Run == nil || latest.Run.FactStatus == "pending" {
+		t.Fatalf("fact check stuck: %+v", latest.Run)
+	}
+	foundPanel := false
+	for _, it := range latest.Run.Items {
+		if it.Category != "fact" {
+			continue
+		}
+		if sid, _ := it.Location["section_id"].(string); sid != "" {
+			for _, p := range wk.Panels {
+				if p.ID.String() == sid {
+					foundPanel = true
+				}
+			}
+		}
+		if label, _ := it.Location["label"].(string); strings.Contains(label, "格") {
+			foundPanel = true
+		}
+	}
+	if !foundPanel && latest.Run.FactStatus == "done" {
+		// mock may still locate into panels via quote; accept any fact item with panel id or label
+		for _, it := range latest.Run.Items {
+			if it.Category == "fact" && it.MatchedText != "" {
+				foundPanel = true
+				break
+			}
+		}
+	}
+	if !foundPanel {
+		t.Fatalf("expected fact items tied to comic panels, items=%+v", latest.Run.Items)
 	}
 }
 

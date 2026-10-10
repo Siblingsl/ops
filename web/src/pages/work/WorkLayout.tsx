@@ -8,7 +8,7 @@ import { confirm, Drawer } from '@/components/dialog'
 import { Badge, Button, cn, Notice, PageLoading, PlatformMark, StatusBadge } from '@/components/ui'
 import { ApiError, errorMessage, get, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
-import { rememberAccount } from '@/lib/session'
+import { rememberAccount, useCanWrite } from '@/lib/session'
 import type { Work } from '@/lib/types'
 
 export interface WorkCtx {
@@ -91,6 +91,7 @@ function Versions({ work, open, onClose, onRestored }: { work: Work; open: boole
 export default function WorkLayout() {
   const { workId } = useParams()
   const qc = useQueryClient()
+  const canWrite = useCanWrite()
   const q = useQuery({ queryKey: ['work', workId], queryFn: () => get<Work>(`/works/${workId}`) })
   const [versions, setVersions] = useState(false)
   const [derive, setDerive] = useState(false)
@@ -112,7 +113,7 @@ export default function WorkLayout() {
   const comic = work.content_format === 'comic'
   const steps = [
     { to: '', label: comic ? '漫画' : '创作', end: true, done: comic ? work.panels.some((p) => p.asset_id) : work.sections.some((s) => s.content_md) },
-    ...(work.source ? [{ to: 'compare', label: '对照改写', end: false, done: false }] : []),
+    ...(work.source && !comic ? [{ to: 'compare', label: '对照改写', end: false, done: false }] : []),
     ...(!comic && wx ? [{ to: 'preview', label: '排版预览', end: false, done: false }] : []),
     { to: 'check', label: '发布前检查', end: false, done: reached('ready') },
     wx ? { to: 'push', label: comic ? '图片草稿' : '写入草稿', end: false, done: reached('pushed') } : { to: 'pack', label: '发布包', end: false, done: reached('packed') },
@@ -163,17 +164,24 @@ export default function WorkLayout() {
           </nav>
           <div className="ml-auto flex shrink-0 items-center gap-1 lg:ml-0">
             <Button size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}>版本</Button>
-            <Button size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}>派生</Button>
+            {canWrite && <Button size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}>派生</Button>}
           </div>
         </div>
+        {!canWrite && (
+          <div className="border-t border-mist-100 bg-mist-50 px-5 py-2 text-[13px] text-mist-600">观察者只读：可浏览作品，不能编辑、检查确认、派生或推送。</div>
+        )}
         {work.locked && (
           <div className="flex items-center gap-3 border-t border-emerald-100 bg-emerald-50 px-5 py-2 text-[13px] text-emerald-800">
             <Lock className="size-4" />已发布的作品默认只读。修改不会同步到平台。
-            <Button size="sm" variant="secondary" className="ml-auto" onClick={unlock}>解锁编辑</Button>
+            {canWrite && <Button size="sm" variant="secondary" className="ml-auto" onClick={unlock}>解锁编辑</Button>}
           </div>
         )}
         {work.source_updated && (
-          <div className="border-t border-gamboge-100 bg-gamboge-50 px-5 py-2 text-[13px] text-gamboge-700">源稿已更新。衍生作品不会自动重新改写，可以在「对照改写」中对需要的段落重新改写。</div>
+          <div className="border-t border-gamboge-100 bg-gamboge-50 px-5 py-2 text-[13px] text-gamboge-700">
+            {comic
+              ? '源稿已更新。衍生漫画不会自动同步，请在漫画编辑器中核对并改写旁白、对白。'
+              : '源稿已更新。衍生作品不会自动重新改写，可以在「对照改写」中对需要的段落重新改写。'}
+          </div>
         )}
         {work.draft_maybe_published && (
           <div className="flex items-center gap-3 border-t border-gamboge-100 bg-gamboge-50 px-5 py-2 text-[13px] text-gamboge-800">

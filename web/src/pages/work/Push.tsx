@@ -9,6 +9,7 @@ import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, PageLoading, Switch } from '@/components/ui'
 import { ApiError, errorMessage, get, post, stream } from '@/lib/api'
 import { runeLen } from '@/lib/format'
+import { useCanWrite } from '@/lib/session'
 import type { CredState, CropBox, WechatDefaults, Work } from '@/lib/types'
 import { useWechatHtml } from './Preview'
 import { useWork } from './WorkLayout'
@@ -49,6 +50,7 @@ const backendTodos = [
 
 export default function Push() {
   const { work, setWork, refresh } = useWork()
+  const canWrite = useCanWrite()
   const comic = work.content_format === 'comic'
   const pv = useQuery({ queryKey: ['push-preview', work.id, work.status, work.revision], queryFn: () => get<PushPreview>(`/works/${work.id}/wechat/push-preview`) })
   const { html, chars } = useWechatHtml(work)
@@ -253,8 +255,9 @@ export default function Push() {
         {!result && work.status !== 'published' && (
           <Card className="p-5">
             <HumanGate code="H-05">每次只写入这一篇，由你亲自点击。系统不会发表或群发。</HumanGate>
+            {!canWrite && <Notice tone="gray" className="mt-4">观察者只读，不能写入草稿。</Notice>}
             <Button variant="human" size="lg" className="mt-4 w-full" loading={running}
-              disabled={!credOk || runeLen(f.author) > 16 || (!comic && !cover) || (comic && !(p.panel_images && p.panel_images > 0))}
+              disabled={!canWrite || !credOk || runeLen(f.author) > 16 || (!comic && !cover) || (comic && !(p.panel_images && p.panel_images > 0))}
               onClick={() => push()} icon={<Send className="size-4" />}>
               {p.mode === 'overwrite' ? '更新草稿' : comic ? '写入图片消息草稿' : '写入草稿箱'}
             </Button>
