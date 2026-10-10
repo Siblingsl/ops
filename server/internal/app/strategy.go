@@ -541,6 +541,198 @@ func (s *Server) draftStrategy(w http.ResponseWriter, r *http.Request) error {
 		})
 }
 
+// ---------- 方案调整：strategy_revise（逐条接受，接受后由前端调用"启用方案"保存为新版本） ----------
+
+type StrategyChange struct {
+	Field  string          `json:"field"`
+	From   json.RawMessage `json:"from"`
+	To     json.RawMessage `json:"to"`
+	Reason string          `json:"reason"`
+}
+
+var revisableFields = map[string]string{"niche": "赛道", "audience": "目标读者", "differentiation": "差异化", "persona": "人设",
+	"pillars": "内容支柱", "cadence": "发布节奏", "stage": "阶段", "goals": "目标", "keywords": "追踪关键词", "taboo": "禁区"}
+
+// applyStrategyChange writes one suggested value into f (always into fresh values, f may share slices
+// with the current version); the caller re-validates the whole strategy.
+func applyStrategyChange(f *StrategyFields, field string, to json.RawMessage) error {
+	var str string
+	var list []string
+	switch field {
+	case "niche", "audience", "differentiation", "persona", "stage":
+		if err := json.Unmarshal(to, &str); err != nil {
+			return err
+		}
+		*map[string]*string{"niche": &f.Niche, "audience": &f.Audience, "differentiation": &f.Differentiation,
+			"persona": &f.Persona, "stage": &f.Stage}[field] = str
+	case "goals", "keywords", "taboo":
+		if err := json.Unmarshal(to, &list); err != nil {
+			return err
+		}
+		*map[string]*[]string{"goals": &f.Goals, "keywords": &f.Keywords, "taboo": &f.Taboo}[field] = list
+	case "pillars":
+		var ps []Pillar
+		if err := json.Unmarshal(to, &ps); err != nil {
+			return err
+		}
+		rebalancePillars(ps)
+		f.Pillars = ps
+	case "cadence":
+		var c Cadence
+		if err := json.Unmarshal(to, &c); err != nil {
+			return err
+		}
+		f.Cadence = c
+	default:
+		return fmt.Errorf("未知字段 %s", field)
+	}
+	return nil
+}
+
+func strategyFieldJSON(f *StrategyFields, field string) json.RawMessage {
+	var v any
+	switch field {
+	case "niche":
+		v = f.Niche
+	case "audience":
+		v = f.Audience
+	case "differentiation":
+		v = f.Differentiation
+	case "persona":
+		v = f.Persona
+	case "stage":
+		v = f.Stage
+	case "goals":
+		v = f.Goals
+	case "keywords":
+		v = f.Keywords
+	case "taboo":
+		v = f.Taboo
+	case "pillars":
+		v = f.Pillars
+	case "cadence":
+		v = f.Cadence
+	}
+	b, _ := json.Marshal(v)
+	return b
+}
+
+// validChanges keeps changes whose field is a strategy field and whose value yields a valid strategy;
+// "from" is always taken from the current version, never from the model.
+func validChanges(a *Account, cur StrategyFields, in []StrategyChange) []StrategyChange {
+	out := []StrategyChange{}
+	seen := map[string]bool{}
+	for _, c := range in {
+		if _, ok := revisableFields[c.Field]; !ok || seen[c.Field] {
+			continue
+		}
+		f := cur
+		if applyStrategyChange(&f, c.Field, c.To) != nil || f.normalize(a) != nil {
+			continue
+		}
+		to := strategyFieldJSON(&f, c.Field)
+		from := strategyFieldJSON(&cur, c.Field)
+		if string(to) == string(from) {
+			continue
+		}
+		seen[c.Field] = true
+		out = append(out, StrategyChange{Field: c.Field, From: from, To: to, Reason: truncateRunes(strings.TrimSpace(c.Reason), 200)})
+	}
+	return out
+}
+
+func (s *Server) reviseStrategy(w http.ResponseWriter, r *http.Request) error {
+	a, err := s.accountFromPath(r)
+	if err != nil {
+		return err
+	}
+	var in struct {
+		Note string `json:"note"`
+	}
+	_ = decodeOptional(r, &in)
+	ctx := r.Context()
+	cur, err := s.activeStrategy(ctx, a.ID)
+	if err != nil {
+		return err
+	}
+	if cur == nil {
+		return stateInvalid("还没有启用的运营方案，请先完成起号向导")
+	}
+	rows, err := s.db.Query(ctx, `SELECT w.title, coalesce(t.strategy_pillar,''), w.status, m.reads, m.likes, m.favorites, m.comments
+		FROM work w LEFT JOIN topic t ON t.id=w.topic_id
+		LEFT JOIN LATERAL (SELECT reads, likes, favorites, comments FROM metric_snapshot WHERE work_id=w.id ORDER BY captured_at DESC LIMIT 1) m ON true
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.title<>'' AND w.created_at > now() - interval '30 days'
+		ORDER BY w.created_at DESC LIMIT 30`, a.ID)
+	if err != nil {
+		return err
+	}
+	var works strings.Builder
+	n := 0
+	for rows.Next() {
+		var title, pillar, status string
+		var reads, likes, favs, comments *int
+		if rows.Scan(&title, &pillar, &status, &reads, &likes, &favs, &comments) != nil {
+			continue
+		}
+		n++
+		metric := "无数据"
+		if reads != nil || likes != nil {
+			metric = fmt.Sprintf("阅读 %d、点赞 %d、收藏 %d、评论 %d", deref(reads), deref(likes), deref(favs), deref(comments))
+		}
+		fmt.Fprintf(&works, "- %s（支柱：%s；状态：%s；%s）\n", title, nz(pillar, "未标注"), status, metric)
+	}
+	rows.Close()
+	if n == 0 {
+		works.WriteString("（近 30 天没有作品）\n")
+	}
+	current, _ := json.Marshal(map[string]any{"niche": cur.Niche, "audience": cur.Audience, "differentiation": cur.Differentiation,
+		"persona": cur.Persona, "pillars": cur.Pillars, "cadence": cur.Cadence, "stage": cur.Stage, "goals": cur.Goals,
+		"keywords": cur.Keywords, "taboo": cur.Taboo})
+	fields := []string{}
+	for k, v := range revisableFields {
+		fields = append(fields, k+"（"+v+"）")
+	}
+	sort.Strings(fields)
+	user := fmt.Sprintf(`## 当前运营方案（第 %d 版）
+%s
+
+## 近 30 天作品与数据
+%s
+## 运营者补充说明
+%s
+
+## 任务说明
+根据作品表现给出方案的修改建议，每条只改一个字段，并说明理由；没有把握的不要改。
+可修改的字段：%s。pillars 需给出完整的支柱列表（3–5 个，占比合计 100）；cadence 需给出完整的节奏对象；keywords、taboo、goals 给出完整的新列表。
+不得编造作品或数据；数据不足时只建议补充数据，不要硬改。
+
+## 输出格式
+只输出 JSON：{"changes":[{"field":"字段名","from":"原值","to":"新值","reason":"理由"}]}`,
+		cur.Version, current, works.String(), nz(truncateRunes(strings.TrimSpace(in.Note), 500), "无"), strings.Join(fields, "、"))
+	var out struct {
+		Changes []StrategyChange `json:"changes"`
+	}
+	var changes []StrategyChange
+	res, err := s.runAIJSON(ctx, aiTask{Type: "strategy_revise", Account: a, User: user, SkipStyle: true, Refs: map[string]any{"works": n}}, &out, func() error {
+		changes = validChanges(a, cur.StrategyFields, out.Changes)
+		if len(changes) == 0 && len(out.Changes) > 0 {
+			return fmt.Errorf("修改建议都不合法")
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return ok(w, map[string]any{"changes": changes, "current": cur, "ai_call_id": res.CallID})
+}
+
+func deref(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
 func weeklyHours(h int) string {
 	if h <= 0 {
 		return "未填"

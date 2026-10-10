@@ -118,6 +118,51 @@ func TestE2E17PositioningWizard(t *testing.T) {
 	_ = a
 }
 
+// DEV-V404：方案调整只返回逐条建议；字段名或取值不合法的建议被丢弃；接受部分建议后另存为新版本。
+func TestStrategyRevise(t *testing.T) {
+	_, acc := v4Account(t, "调整方案测试")
+	env.expectErr(t, "POST", acc+"/strategy/revise", nil, "state_invalid")
+
+	opts, _ := positioningOptions(t, acc)
+	var res struct {
+		Strategy Strategy `json:"strategy"`
+	}
+	env.mustJSON(t, "POST", acc+"/strategy", opts[0].StrategyFields, &res)
+
+	var rev struct {
+		Changes  []StrategyChange `json:"changes"`
+		Current  Strategy         `json:"current"`
+		AICallID string           `json:"ai_call_id"`
+	}
+	env.mustJSON(t, "POST", acc+"/strategy/revise", map[string]string{"note": "想多写沟通"}, &rev)
+	fields := map[string]StrategyChange{}
+	for _, c := range rev.Changes {
+		fields[c.Field] = c
+	}
+	if len(rev.Changes) != 2 || fields["keywords"].Field == "" || fields["stage"].Field == "" {
+		t.Fatalf("changes: %+v", rev.Changes)
+	}
+	if string(fields["stage"].From) != `"cold_start"` {
+		t.Fatalf("from must come from the current version: %s", fields["stage"].From)
+	}
+	var view strategyView
+	env.mustJSON(t, "GET", acc+"/strategy", nil, &view)
+	if len(view.Versions) != 1 {
+		t.Fatal("revise must not write a version by itself")
+	}
+
+	next := rev.Current.StrategyFields
+	if err := applyStrategyChange(&next, "keywords", fields["keywords"].To); err != nil {
+		t.Fatal(err)
+	}
+	env.mustJSON(t, "POST", acc+"/strategy", map[string]any{
+		"niche": next.Niche, "audience": next.Audience, "differentiation": next.Differentiation, "persona": next.Persona,
+		"pillars": next.Pillars, "cadence": next.Cadence, "stage": next.Stage, "keywords": next.Keywords, "ai_call_id": rev.AICallID}, &res)
+	if res.Strategy.Version != 2 || res.Strategy.Stage != "cold_start" || !contains(res.Strategy.Keywords, "沟通") {
+		t.Fatalf("accepted only keywords: %+v", res.Strategy)
+	}
+}
+
 func contains(list []string, v string) bool {
 	for _, x := range list {
 		if x == v {

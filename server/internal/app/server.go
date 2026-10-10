@@ -390,6 +390,7 @@ func (s *Server) v4Routes(r chi.Router) {
 	r.Post("/accounts/{accountId}/strategy/draft", s.h(s.draftStrategy))
 	r.Post("/accounts/{accountId}/strategy", s.h(s.activateStrategy))
 	r.Post("/accounts/{accountId}/strategy/versions/{v}/restore", s.h(s.restoreStrategy))
+	r.Post("/accounts/{accountId}/strategy/revise", s.h(s.reviseStrategy))
 }
 
 func spaHandler(dir string) http.Handler {
