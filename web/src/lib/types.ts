@@ -131,6 +131,7 @@ export interface CrawlSource {
 }
 export interface HotSourcesResult { sources: CrawlSource[]; selected: string[]; enabled: boolean }
 export interface HotItem {
+ sources?: {name:string;rank:number;url:string}[]
   id: string; source_key: string; source_name: string; title: string; url: string; rank: number
   heat: string; summary: string; cluster_id: string | null; first_seen_at: string; last_seen_at: string
 }
@@ -688,3 +689,5 @@ export interface DailyItem {
 }
 export interface DailyRecommendation {id:string;date:string;version:number;items:DailyItem[];ai_call_id:string;generated_at:string;trigger:string}
 export interface DailyResult {date:string;recommendation:DailyRecommendation|null;preparing:boolean;job_id?:string;new_hot?:boolean}
+
+export interface HotTrend {id:string;title:string;first_seen_at:string;last_seen_at:string;sources:{name:string;rank:number;url:string}[];points:{at:string;rank:number;source:string}[];writing:{account:string;work_id:string;title:string}[]}

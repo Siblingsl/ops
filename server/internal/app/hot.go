@@ -13,18 +13,19 @@ import (
 )
 
 type HotItem struct {
-	ID         uuid.UUID  `json:"id"`
-	SourceKey  string     `json:"source_key"`
-	SourceName string     `json:"source_name"`
-	Title      string     `json:"title"`
-	URL        string     `json:"url"`
-	Rank       int        `json:"rank"`
-	Heat       string     `json:"heat"`
-	Category   string     `json:"category"`
-	Summary    string     `json:"summary"`
-	ClusterID  *uuid.UUID `json:"cluster_id"`
-	FirstSeen  time.Time  `json:"first_seen_at"`
-	LastSeen   time.Time  `json:"last_seen_at"`
+	ID         uuid.UUID       `json:"id"`
+	SourceKey  string          `json:"source_key"`
+	SourceName string          `json:"source_name"`
+	Title      string          `json:"title"`
+	URL        string          `json:"url"`
+	Rank       int             `json:"rank"`
+	Heat       string          `json:"heat"`
+	Category   string          `json:"category"`
+	Summary    string          `json:"summary"`
+	Sources    []HotSourceRank `json:"sources"`
+	ClusterID  *uuid.UUID      `json:"cluster_id"`
+	FirstSeen  time.Time       `json:"first_seen_at"`
+	LastSeen   time.Time       `json:"last_seen_at"`
 }
 type HotMatch struct {
 	ID        uuid.UUID  `json:"id"`
@@ -293,6 +294,10 @@ func (s *Server) hotMatches(ctx context.Context, a *Account, date string) ([]Hot
 			return nil, err
 		}
 		list = append(list, m)
+	}
+	rows.Close()
+	for i := range list {
+		list[i].HotItem.Sources = s.clusterSources(ctx, list[i].HotItem.ClusterID)
 	}
 	return list, rows.Err()
 }

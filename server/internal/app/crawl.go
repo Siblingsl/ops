@@ -192,8 +192,13 @@ func (s *Server) storeHotItem(ctx context.Context, source CrawlSource, item craw
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO hot_item(source_key,title,title_norm,url,rank,heat,category,summary,cluster_id,first_seen_at,last_seen_at,best_rank)
-  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$5) ON CONFLICT(source_key,title_norm,url) DO UPDATE SET rank=excluded.rank,heat=excluded.heat,summary=excluded.summary,last_seen_at=excluded.last_seen_at,best_rank=CASE WHEN hot_item.best_rank=0 THEN excluded.rank ELSE LEAST(hot_item.best_rank,excluded.rank) END`, source.Key, item.Title, norm, item.URL, item.Rank, item.Heat, item.Category, item.Summary, cluster, s.now())
+	var hotID uuid.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO hot_item(source_key,title,title_norm,url,rank,heat,category,summary,cluster_id,first_seen_at,last_seen_at,best_rank)
+  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$5) ON CONFLICT(source_key,title_norm,url) DO UPDATE SET rank=excluded.rank,heat=excluded.heat,summary=excluded.summary,last_seen_at=excluded.last_seen_at,best_rank=CASE WHEN hot_item.best_rank=0 THEN excluded.rank ELSE LEAST(hot_item.best_rank,excluded.rank) END RETURNING id`, source.Key, item.Title, norm, item.URL, item.Rank, item.Heat, item.Category, item.Summary, cluster, s.now()).Scan(&hotID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO hot_rank_history(hot_item_id,observed_at,rank,heat) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, hotID, s.now(), item.Rank, item.Heat)
 	if err != nil {
 		return err
 	}
