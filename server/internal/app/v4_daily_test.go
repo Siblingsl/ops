@@ -206,3 +206,32 @@ func TestV425DailyNextAction(t *testing.T) {
 		t.Fatalf("next actions %+v", actions)
 	}
 }
+
+func TestV431Health(t *testing.T) {
+	if c, r := opsHealthScores(true, 3, 10, 10, 12, 3); c != 10 || r != 10 {
+		t.Fatalf("full health %d %d", c, r)
+	}
+	if c, r := opsHealthScores(false, 0, 0, 0, 30, 3); c != 0 || r != 0 {
+		t.Fatal("missing strategy")
+	}
+	a, path := v4Account(t, "健康度")
+	_ = a
+	var out struct {
+		Score    int          `json:"score"`
+		RawScore int          `json:"raw_score"`
+		RawMax   int          `json:"raw_max"`
+		Items    []HealthItem `json:"items"`
+	}
+	env.mustJSON(t, "GET", path+"/health", nil, &out)
+	sum, max := 0, 0
+	for _, x := range out.Items {
+		sum += x.Score
+		max += x.Max
+		if x.Score < x.Max && x.Link == "" {
+			t.Fatal("missing recovery link")
+		}
+	}
+	if max != 120 || out.RawMax != 120 || out.Score != sum*100/120 {
+		t.Fatalf("health %+v", out)
+	}
+}

@@ -380,11 +380,16 @@ func (s *Server) accountHealth(w http.ResponseWriter, r *http.Request) error {
 	md := min(withData, 3) * 10 / 3
 	items = append(items, HealthItem{Key: "metrics", Label: "近 30 天复盘数据", Score: md, Max: 10, Hint: hintIf(md < 10, "录入最近作品的数据，复盘和标题建议会更准"), Link: acc + "/review"})
 
+	ops, e := s.opsHealth(ctx, a.ID)
+	if e != nil {
+		return e
+	}
+	items = append(items, ops...)
 	total := 0
 	for _, it := range items {
 		total += it.Score
 	}
-	return ok(w, map[string]any{"score": total, "items": items})
+	return ok(w, map[string]any{"score": total * 100 / 120, "raw_score": total, "raw_max": 120, "items": items})
 }
 
 func hintMissing(m []string) string {
