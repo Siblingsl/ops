@@ -1,4 +1,4 @@
-import { Check, Copy, Download, Package, Smartphone } from 'lucide-react'
+import { Check, Copy, Download, Package, Smartphone, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -36,7 +36,20 @@ function CopyBlock({ label, meta, text, multiline }: { label: string; meta?: str
 export default function Pack() {
   const { work, setWork } = useWork()
   const [busy, setBusy] = useState(false)
+  const [pages, setPages] = useState<{ title: string; body: string }[] | null>(null)
+  const [pageBusy, setPageBusy] = useState(false)
   const packed = work.status === 'packed' || work.status === 'published'
+  const suggestPages = async () => {
+    setPageBusy(true)
+    try {
+      const r = await post<{ pages: { title: string; body: string }[] }>(`/works/${work.id}/xhs/pages`)
+      setPages(r.pages)
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setPageBusy(false)
+    }
+  }
   const create = async () => {
     setBusy(true)
     try {
@@ -60,12 +73,31 @@ export default function Pack() {
         <div className="mx-auto mb-5 flex size-14 items-center justify-center rounded-2xl bg-xhs/10 text-xhs"><Package className="size-7" /></div>
         <h1 className="font-display text-[22px] font-bold text-mist-900">生成小红书发布包</h1>
         <p className="mx-auto mt-2 max-w-md text-[13.5px] leading-relaxed text-mist-500">发布包包含标题、正文、话题和按顺序编号的图片。你需要在小红书 App 或创作服务平台里亲自发布，系统不会代发。</p>
-        <Button variant="primary" size="lg" className="mt-6" loading={busy} onClick={create} icon={<Package className="size-4" />}>生成发布包</Button>
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+          <Button variant="primary" size="lg" loading={busy} onClick={create} icon={<Package className="size-4" />}>生成发布包</Button>
+          <Button size="lg" variant="secondary" loading={pageBusy} onClick={suggestPages} icon={<Sparkles className="size-4" />}>分页文案建议</Button>
+        </div>
+        {pages && (
+          <div className="mt-6 space-y-2 text-left">
+            {pages.map((p, i) => (
+              <div key={i} className="rounded-lg border border-mist-200 px-3 py-2.5">
+                <div className="text-[13.5px] font-semibold text-mist-800">{i + 1}. {p.title}</div>
+                <p className="mt-1 text-[13px] text-mist-600">{p.body}</p>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     )
   }
-  const body = work.sections.map((s) => s.content_md.trim()).filter(Boolean).join('\n\n')
+  const comic = work.content_format === 'comic'
+  const body = comic
+    ? work.panels.map((p) => [p.narration, p.dialogue].filter(Boolean).join('\n')).filter(Boolean).join('\n\n')
+    : work.sections.map((s) => s.content_md.trim()).filter(Boolean).join('\n\n')
   const topics = work.topics.map((t) => '#' + t).join(' ')
+  const images = comic
+    ? work.panels.map((p) => work.assets.find((a) => a.id === p.asset_id)).filter(Boolean)
+    : work.assets
   return (
     <div className="mx-auto w-full max-w-[1200px] px-4 py-6 sm:px-6 sm:py-8 2xl:max-w-[1400px]">
       <div className="mb-5 flex flex-wrap items-end gap-3">
@@ -84,11 +116,34 @@ export default function Pack() {
           <CopyBlock label="话题" meta="在小红书里用话题选择器逐个添加，才会变成可点击的话题" text={topics} />
           <Card className="p-4">
             <div className="mb-3 flex items-center gap-2">
+              <span className="text-[13px] font-semibold text-mist-700">分页文案建议</span>
+              <span className="text-xs text-mist-400">封面页 + 要点页，便于做成竖图</span>
+              <Button size="sm" variant="secondary" className="ml-auto" loading={pageBusy} onClick={suggestPages} icon={<Sparkles className="size-3.5" />}>生成</Button>
+            </div>
+            {pages ? (
+              <div className="space-y-2">
+                {pages.map((p, i) => (
+                  <div key={i} className="rounded-lg border border-mist-200 px-3 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[11px] text-mist-400">{String(i + 1).padStart(2, '0')}</span>
+                      <span className="text-[13.5px] font-semibold text-mist-800">{p.title}</span>
+                      <Button size="sm" variant="ghost" className="ml-auto" onClick={async () => { await copyText(`${p.title}\n${p.body}`); toast.success('已复制') }}>复制</Button>
+                    </div>
+                    <p className="mt-1 text-[13px] leading-relaxed text-mist-600">{p.body}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[13px] text-mist-500">把笔记拆成若干图片页文案，方便在外部做图。</p>
+            )}
+          </Card>
+          <Card className="p-4">
+            <div className="mb-3 flex items-center gap-2">
               <span className="text-[13px] font-semibold text-mist-700">图片</span>
-              <span className="text-xs text-mist-400">{work.assets.length} 张，按编号顺序上传</span>
+              <span className="text-xs text-mist-400">{images.length} 张，按编号顺序上传</span>
             </div>
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-              {work.assets.map((a, i) => (
+              {images.map((a, i) => a && (
                 <a key={a.id} href={a.url} target="_blank" rel="noreferrer" className="relative overflow-hidden rounded-lg border border-mist-200">
                   <img src={a.url} alt="" className="aspect-[3/4] w-full object-cover" />
                   <span className="absolute left-1.5 top-1.5 rounded bg-mist-900/60 px-1.5 text-[11px] font-medium text-white">{String(i + 1).padStart(2, '0')}</span>

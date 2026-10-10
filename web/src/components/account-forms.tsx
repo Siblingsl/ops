@@ -10,11 +10,11 @@ import type { Account, ContentFormat, CredState, Platform } from '@/lib/types'
 const matrix: Record<Platform, { value: ContentFormat; label: string; desc: string; p1?: boolean }[]> = {
   wechat_mp: [
     { value: 'long_article', label: '长图文', desc: '图文并茂的文章，写入公众号草稿箱' },
-    { value: 'comic', label: '漫画', desc: '分镜脚本 + 逐格图片（后续版本）', p1: true },
+    { value: 'comic', label: '漫画', desc: '角色卡 + 分镜脚本 + 逐格文案与回传图片' },
   ],
   xhs: [
     { value: 'image_note', label: '图文笔记', desc: '多图 + 短文，生成发布包手动发布' },
-    { value: 'comic', label: '漫画', desc: '分镜脚本 + 逐格图片（后续版本）', p1: true },
+    { value: 'comic', label: '漫画', desc: '角色卡 + 分镜脚本 + 逐格文案与回传图片' },
   ],
 }
 

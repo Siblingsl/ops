@@ -7,7 +7,7 @@ import { BackfillForm } from '@/components/backfill'
 import { CropPreview } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, PageLoading, Switch } from '@/components/ui'
-import { ApiError, errorMessage, get, stream } from '@/lib/api'
+import { ApiError, errorMessage, get, post, stream } from '@/lib/api'
 import { runeLen } from '@/lib/format'
 import type { CredState, CropBox, WechatDefaults, Work } from '@/lib/types'
 import { useWechatHtml } from './Preview'
@@ -28,13 +28,15 @@ interface PushPreview {
   cover_crops: Record<string, CropBox> | null
   title: string
   summary: string
+  content_format?: Work['content_format']
+  panel_images?: number
 }
 
 type StepState = { status: 'idle' | 'running' | 'done' | 'failed'; current?: number; total?: number }
-const stepLabels: { key: string; label: string; overwriteOnly?: boolean }[] = [
+const stepLabels: { key: string; label: string; overwriteOnly?: boolean; newsOnly?: boolean }[] = [
   { key: 'check_backend', label: '检查后台是否修改过', overwriteOnly: true },
-  { key: 'upload_images', label: '上传正文图片' },
-  { key: 'upload_cover', label: '上传封面' },
+  { key: 'upload_images', label: '上传图片素材' },
+  { key: 'upload_cover', label: '上传封面', newsOnly: true },
   { key: 'write_draft', label: '写入草稿箱' },
 ]
 
@@ -47,6 +49,7 @@ const backendTodos = [
 
 export default function Push() {
   const { work, setWork, refresh } = useWork()
+  const comic = work.content_format === 'comic'
   const pv = useQuery({ queryKey: ['push-preview', work.id, work.status, work.revision], queryFn: () => get<PushPreview>(`/works/${work.id}/wechat/push-preview`) })
   const { html, chars } = useWechatHtml(work)
   const [fields, setFields] = useState<WechatDefaults | null>(null)
@@ -123,7 +126,7 @@ export default function Push() {
               <CheckCircle2 className="size-7" />
               <div>
                 <div className="font-display text-[19px] font-bold">已写入公众号草稿箱</div>
-                <div className="text-[13px] text-ink-100">{result.action === 'update' ? '覆盖了原草稿' : '新建了一篇草稿'} · 今日第 {result.today_count} 次</div>
+                <div className="text-[13px] text-ink-100">{result.action === 'update' ? '覆盖了原草稿' : comic ? '新建了图片消息草稿' : '新建了一篇草稿'} · 今日第 {result.today_count} 次</div>
               </div>
               <a href={result.backend_url} target="_blank" rel="noreferrer" className="ml-auto">
                 <Button variant="secondary" icon={<ExternalLink className="size-4" />}>去公众号后台</Button>
@@ -154,7 +157,19 @@ export default function Push() {
               </span>
             </div>
             <div className="flex gap-5">
-              {cover && p.cover_crops ? (
+              {comic ? (
+                <div className="w-56 shrink-0">
+                  <div className="grid grid-cols-3 gap-1 rounded-lg border border-mist-200 p-1.5">
+                    {work.panels.slice(0, 6).map((panel) => {
+                      const a = work.assets.find((x) => x.id === panel.asset_id)
+                      return a ? <img key={panel.id} src={a.url} alt="" className="aspect-square rounded object-cover" /> : (
+                        <div key={panel.id} className="aspect-square rounded bg-mist-100" />
+                      )
+                    })}
+                  </div>
+                  <p className="mt-2 text-xs text-mist-500">首图为封面 · 共 {p.panel_images ?? 0} 张（永久素材）</p>
+                </div>
+              ) : cover && p.cover_crops ? (
                 <div className="w-56 shrink-0 space-y-2">
                   <div className="overflow-hidden rounded-lg border border-mist-200">
                     <CropPreview src={cover.url} box={p.cover_crops['2.35_1']} aspect={2.35} />
@@ -170,8 +185,10 @@ export default function Push() {
               )}
               <dl className="min-w-0 flex-1 space-y-2.5 text-[13.5px]">
                 <Row label="标题"><span className="font-medium text-mist-900">{p.title}</span> <span className="text-xs text-mist-400">{runeLen(p.title)}/32</span></Row>
-                <Row label="摘要">{p.summary || <span className="text-mist-400">（留空，微信自动抓取正文前 54 字）</span>}</Row>
-                <Row label="正文">{work.sections.length} 段 · {p.asset_count} 张图片 · HTML {chars.toLocaleString()} 字符</Row>
+                {!comic && <Row label="摘要">{p.summary || <span className="text-mist-400">（留空，微信自动抓取正文前 54 字）</span>}</Row>}
+                <Row label="正文">{comic
+                  ? <>图片消息 · {p.panel_images ?? 0} 张图 · 纯文本旁白/对白</>
+                  : <>{work.sections.length} 段 · {p.asset_count} 张图片 · HTML {chars.toLocaleString()} 字符</>}</Row>
                 <Row label="凭证">{credOk ? <span className="text-ink-700">AppID {p.credential?.app_id}</span> : <span className="text-danger">凭证不可用，<Link to="/settings/accounts" className="underline">去设置</Link></span>}</Row>
               </dl>
             </div>
@@ -193,7 +210,7 @@ export default function Push() {
           <Card className="p-5">
             <div className="mb-3 text-[13px] font-semibold text-mist-700">写入进度</div>
             <ol className="space-y-2.5">
-              {stepLabels.filter((s) => !s.overwriteOnly || steps[s.key]).map((s) => {
+              {stepLabels.filter((s) => (!s.overwriteOnly || steps[s.key]) && !(comic && s.newsOnly)).map((s) => {
                 const st = steps[s.key]
                 return (
                   <li key={s.key} className="flex items-center gap-2.5 text-[14px]">
@@ -210,7 +227,7 @@ export default function Push() {
                 <div className="font-medium">写入失败：{failure.message}</div>
                 <div className="mt-2 flex gap-2">
                   <Button size="sm" onClick={() => push()}>重试</Button>
-                  <Button size="sm" variant="ghost" icon={<Copy className="size-3.5" />} onClick={copyHTML}>复制 HTML 手动粘贴</Button>
+                  {!comic && <Button size="sm" variant="ghost" icon={<Copy className="size-3.5" />} onClick={copyHTML}>复制 HTML 手动粘贴</Button>}
                 </div>
               </Notice>
             )}
@@ -218,17 +235,31 @@ export default function Push() {
         )}
 
         {(work.status === 'pushed' || work.status === 'published') && <div id="backfill"><BackfillForm work={work} setWork={setWork} /></div>}
+        {work.status === 'pushed' && work.wechat_draft_media_id && (
+          <Card className="flex items-center gap-3 p-4">
+            <div className="min-w-0 flex-1 text-[13px] text-mist-600">同步草稿箱状态：检查这篇草稿是否仍在公众号草稿箱（不会自动改作品状态）。</div>
+            <Button size="sm" variant="secondary" onClick={async () => {
+              try {
+                const r = await post<{ message: string }>(`/works/${work.id}/wechat/sync-draft`)
+                toast.message(r.message)
+                await refresh()
+              } catch (e) { toast.error(errorMessage(e)) }
+            }}>同步状态</Button>
+          </Card>
+        )}
       </div>
 
       <aside className="space-y-4">
         {!result && work.status !== 'published' && (
           <Card className="p-5">
             <HumanGate code="H-05">每次只写入这一篇，由你亲自点击。系统不会发表或群发。</HumanGate>
-            <Button variant="human" size="lg" className="mt-4 w-full" loading={running} disabled={!credOk || !cover || runeLen(f.author) > 16}
+            <Button variant="human" size="lg" className="mt-4 w-full" loading={running}
+              disabled={!credOk || runeLen(f.author) > 16 || (!comic && !cover) || (comic && !(p.panel_images && p.panel_images > 0))}
               onClick={() => push()} icon={<Send className="size-4" />}>
-              {p.mode === 'overwrite' ? '更新草稿' : '写入草稿箱'}
+              {p.mode === 'overwrite' ? '更新草稿' : comic ? '写入图片消息草稿' : '写入草稿箱'}
             </Button>
-            <Button variant="ghost" className="mt-2 w-full" icon={<Copy className="size-4" />} onClick={copyHTML}>复制 HTML（兜底）</Button>
+            {!comic && <Button variant="ghost" className="mt-2 w-full" icon={<Copy className="size-4" />} onClick={copyHTML}>复制 HTML（兜底）</Button>}
+            {comic && <p className="mt-2 text-center text-xs text-mist-400">每张图会上传为永久素材（占用素材额度），正文为纯文本。</p>}
           </Card>
         )}
         {result && work.status !== 'published' && (

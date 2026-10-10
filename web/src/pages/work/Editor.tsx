@@ -6,14 +6,15 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { CoverCropDialog, CropPreview, defaultCrops } from '@/components/cover-crop'
+import { AssetCropDialog, CoverCropDialog, CropPreview, defaultCrops } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
 import { RefsNote } from '@/components/refs'
 import { type EditorHandle, PlainEditor, RichEditor } from '@/components/section-editor'
 import { Badge, Button, Card, cn, Field, HumanGate, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post, put, rawRequest, stream } from '@/lib/api'
-import { type AIRefs, fmtTime, parseTopics, runeLen } from '@/lib/format'
+import { type AIRefs, copyText, fmtTime, parseTopics, runeLen } from '@/lib/format'
 import type { Asset, Material, MaterialKind, OutlineItem, Section, Work } from '@/lib/types'
+import ComicEditor from './ComicEditor'
 import { useWork } from './WorkLayout'
 
 const kindLabel: Record<MaterialKind, string> = { experience: '经历', opinion: '观点', case: '案例', data: '数据' }
@@ -269,6 +270,8 @@ function SectionBlock({ section, index, total, work, patchWork, refresh, readOnl
   const [selection, setSelection] = useState('')
   const [conflict, setConflict] = useState<Section | null>(null)
   const [toMaterial, setToMaterial] = useState<string | null>(null)
+  const [imgSuggest, setImgSuggest] = useState<{ description: string; prompt: string }[] | null>(null)
+  const [imgBusy, setImgBusy] = useState(false)
   const [isEmpty, setIsEmpty] = useState(!section.content_md.trim())
   const abort = useRef<AbortController | null>(null)
   const timer = useRef<number>()
@@ -482,6 +485,14 @@ function SectionBlock({ section, index, total, work, patchWork, refresh, readOnl
               <Button size="sm" variant="ghost" icon={<Repeat2 className="size-3.5" />} disabled={isEmpty} onClick={() => edit('rewrite')}>{selection ? '改写选中' : '改写'}</Button>
               <Button size="sm" variant="ghost" icon={<Wand2 className="size-3.5" />} disabled={isEmpty} onClick={() => edit('expand')}>扩写</Button>
               <Button size="sm" variant="ghost" icon={<Minimize2 className="size-3.5" />} disabled={isEmpty} onClick={() => edit('shorten')}>缩写</Button>
+              <Button size="sm" variant="ghost" icon={<ImagePlus className="size-3.5" />} loading={imgBusy} disabled={isEmpty} onClick={async () => {
+                setImgBusy(true)
+                try {
+                  const r = await post<{ suggestions: { description: string; prompt: string }[] }>(`/sections/${section.id}/image-suggest`)
+                  setImgSuggest(r.suggestions)
+                } catch (e) { toast.error(errorMessage(e)) }
+                finally { setImgBusy(false) }
+              }}>配图建议</Button>
               {!xhs && <Button size="sm" variant="ghost" icon={<ImagePlus className="size-3.5" />} onClick={pickImage}>插入图片</Button>}
             </>
           )}
@@ -506,7 +517,91 @@ function SectionBlock({ section, index, total, work, patchWork, refresh, readOnl
         </div>
       </Dialog>
       {toMaterial !== null && <SaveToMaterial text={toMaterial} work={work} onClose={() => setToMaterial(null)} />}
+      <Dialog open={!!imgSuggest} onClose={() => setImgSuggest(null)} title="配图建议" desc="复制提示词到外部文生图工具或公众号官方 AI 配图。" width="max-w-lg"
+        footer={<Button variant="primary" onClick={() => setImgSuggest(null)}>关闭</Button>}>
+        <div className="space-y-3">
+          {(imgSuggest ?? []).map((s, i) => (
+            <div key={i} className="rounded-lg border border-mist-200 p-3">
+              <div className="text-[13.5px] font-medium text-mist-800">{s.description}</div>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-mist-600">{s.prompt}</p>
+              <Button size="sm" variant="ghost" className="mt-2" onClick={async () => { await copyText(s.prompt); toast.success('提示词已复制') }}>复制提示词</Button>
+            </div>
+          ))}
+        </div>
+      </Dialog>
     </div>
+  )
+}
+
+// ---------- 口述 / 要点扩写 ----------
+
+function OrganizeNotesCard({ work, setWork, readOnly }: { work: Work; setWork: (w: Work) => void; readOnly: boolean }) {
+  const [open, setOpen] = useState(false)
+  const [notes, setNotes] = useState('')
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const abort = useRef<AbortController | null>(null)
+  const run = async () => {
+    if (!notes.trim()) return
+    setBusy(true)
+    setText('')
+    abort.current = new AbortController()
+    try {
+      const done = await stream<{ text: string }>(`/works/${work.id}/organize-notes`, { notes }, {
+        signal: abort.current.signal,
+        onDelta: (d) => setText((t) => t + d),
+      })
+      if (done?.text) setText(done.text)
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const apply = async () => {
+    if (!text.trim()) return
+    if (!(await confirm({ title: '用整理结果覆盖当前正文？', desc: '会按小标题重建大纲与段落，并写入 AI 初稿。现有段落会被替换。', confirmText: '写入正文' }))) return
+    setApplying(true)
+    try {
+      setWork(await post<Work>(`/works/${work.id}/organize-notes/apply`, { markdown: text }))
+      toast.success('已写入正文')
+      setOpen(false)
+      setNotes('')
+      setText('')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setApplying(false)
+    }
+  }
+  if (readOnly) return null
+  return (
+    <>
+      <Card className="flex items-center gap-3 p-4">
+        <div className="min-w-0 flex-1">
+          <div className="text-[14px] font-semibold text-mist-800">口述 / 要点扩写</div>
+          <p className="text-[12.5px] text-mist-500">粘贴要点或语音转写，AI 只整理不扩写事实。</p>
+        </div>
+        <Button size="sm" variant="secondary" icon={<Wand2 className="size-3.5" />} onClick={() => setOpen(true)}>开始整理</Button>
+      </Card>
+      <Dialog open={open} onClose={() => { abort.current?.abort(); setOpen(false) }} title="要点整理成稿" desc="只组织你提供的内容；缺数据处会标【待核实】。" width="max-w-2xl"
+        footer={<>
+          <Button variant="ghost" onClick={() => { abort.current?.abort(); setOpen(false) }}>取消</Button>
+          {!text ? <Button variant="primary" loading={busy} disabled={!notes.trim()} onClick={run}>生成初稿</Button>
+            : <Button variant="primary" loading={applying} onClick={apply}>写入正文</Button>}
+        </>}>
+        <div className="space-y-4">
+          <Field label="要点或口述转写"><Textarea rows={6} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="每行一条要点，或粘贴语音转写全文" disabled={busy || !!text} /></Field>
+          {(busy || text) && (
+            <div className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border border-mist-200 bg-mist-50/60 p-3 text-[13.5px] leading-relaxed text-mist-800">
+              {text || <span className="text-mist-400">整理中…</span>}
+            </div>
+          )}
+          {text && !busy && <Button size="sm" variant="ghost" onClick={() => { setText(''); }}>重新生成</Button>}
+        </div>
+      </Dialog>
+    </>
   )
 }
 
@@ -608,6 +703,7 @@ function TitleCard({ work, setWork, readOnly }: { work: Work; setWork: (w: Work)
 function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; upload: (f: File) => Promise<Asset | null> }) {
   const wx = work.platform === 'wechat_mp'
   const [cropFor, setCropFor] = useState<Asset | null>(null)
+  const [ratioCrop, setRatioCrop] = useState<Asset | null>(null)
   const [uploading, setUploading] = useState(0)
   const input = useRef<HTMLInputElement>(null)
   const cover = work.assets.find((a) => a.id === work.cover_asset_id)
@@ -681,6 +777,7 @@ function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: 
                   </div>
                   <div className="flex">
                     {wx && <button onClick={() => setCover(a)} className="cursor-pointer rounded px-1.5 py-1 text-[11px] text-white hover:bg-white/20">设为封面</button>}
+                    <button onClick={() => setRatioCrop(a)} className="cursor-pointer rounded px-1.5 py-1 text-[11px] text-white hover:bg-white/20" title="3:4 裁剪另存">3:4</button>
                     <button onClick={() => remove(a)} className="cursor-pointer rounded p-1 text-white hover:bg-white/20" title="删除"><Trash2 className="size-3.5" /></button>
                   </div>
                 </div>
@@ -694,6 +791,17 @@ function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: 
         <CoverCropDialog open onClose={() => setCropFor(null)} src={cropFor.url} width={cropFor.width} height={cropFor.height}
           initial={cropFor.id === work.cover_asset_id && work.cover_crops ? work.cover_crops : defaultCrops(cropFor.width, cropFor.height)} onSave={saveCrop} />
       )}
+      {ratioCrop && (
+        <AssetCropDialog open onClose={() => setRatioCrop(null)} src={ratioCrop.url} width={ratioCrop.width} height={ratioCrop.height}
+          onSave={async (box) => {
+            try {
+              const a = await post<Asset>(`/assets/${ratioCrop.id}/crop`, { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, aspect: box.aspect })
+              setWork({ ...work, assets: [...work.assets, a] })
+              setRatioCrop(null)
+              toast.success('已另存 3:4 裁剪图')
+            } catch (e) { toast.error(errorMessage(e)) }
+          }} />
+      )}
     </Card>
   )
 }
@@ -701,6 +809,12 @@ function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: 
 // ---------- 页面 ----------
 
 export default function Editor() {
+  const { work } = useWork()
+  if (work.content_format === 'comic') return <ComicEditor />
+  return <ArticleEditor />
+}
+
+function ArticleEditor() {
   const { work, setWork, patchWork, refresh } = useWork()
   const nav = useNavigate()
   const readOnly = work.locked
@@ -785,6 +899,7 @@ export default function Editor() {
       </aside>
 
       <div className="min-w-0 flex-1 space-y-5">
+        <OrganizeNotesCard work={work} setWork={setWorkStable} readOnly={readOnly} />
         <ViewpointCard work={work} setWork={setWorkStable} readOnly={readOnly} />
         <OutlineCard work={work} setWork={setWorkStable} readOnly={readOnly} />
         <section id="step-sections" className="scroll-mt-24 space-y-4">

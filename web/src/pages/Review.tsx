@@ -1,14 +1,81 @@
 import { useQuery } from '@tanstack/react-query'
-import { BarChart3, Check, Lightbulb, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { BarChart3, Check, Lightbulb, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { confirm, Drawer } from '@/components/dialog'
+import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Badge, Button, Card, CardHeader, cn, Empty, Field, HumanGate, IconButton, Input, PageHeader, PageLoading, Select, StatusBadge, Textarea } from '@/components/ui'
-import { del, errorMessage, get, patch, post } from '@/lib/api'
+import { del, errorMessage, get, patch, post, rawRequest } from '@/lib/api'
 import { describeRefs, fmtNum, fmtTime, toLocalInput } from '@/lib/format'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { BoardRow, Metric, Platform, ReviewReport } from '@/lib/types'
+
+type ImportPreviewRow = { title: string; work_id: string | null; matched: boolean; reads: number; likes: number }
+
+function ImportMetrics({ accountId, works, onDone }: { accountId: string; works: BoardRow[]; onDone: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [rows, setRows] = useState<ImportPreviewRow[]>([])
+  const [busy, setBusy] = useState(false)
+  const input = useRef<HTMLInputElement>(null)
+  const upload = async (file: File) => {
+    setBusy(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await rawRequest('POST', `/accounts/${accountId}/metrics/import`, fd)
+      const data = await res.json() as { preview: ImportPreviewRow[] }
+      setRows((data.preview ?? []).map((r) => ({ ...r, work_id: r.work_id ?? null })))
+      setOpen(true)
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const confirmImport = async () => {
+    const payload = rows.filter((r) => r.work_id).map((r) => ({ title: r.title, work_id: r.work_id!, reads: r.reads, likes: r.likes }))
+    if (!payload.length) {
+      toast.error('请至少为一行指定作品')
+      return
+    }
+    setBusy(true)
+    try {
+      const r = await post<{ imported: number }>(`/accounts/${accountId}/metrics/import`, { rows: payload })
+      toast.success(`已导入 ${r.imported} 行`)
+      setOpen(false)
+      onDone()
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <Button size="sm" variant="secondary" icon={<Upload className="size-3.5" />} loading={busy && !open} onClick={() => input.current?.click()}>导入 CSV</Button>
+      <input ref={input} type="file" accept=".csv,text/csv" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) upload(f) }} />
+      <Dialog open={open} onClose={() => setOpen(false)} title="确认作品匹配" desc="按标题自动匹配；未匹配的行请人工指定作品后再导入。" width="max-w-2xl"
+        footer={<><Button variant="ghost" onClick={() => setOpen(false)}>取消</Button><Button variant="primary" loading={busy} onClick={confirmImport}>确认导入</Button></>}>
+        <div className="scrollbar-thin max-h-[50vh] space-y-2 overflow-y-auto">
+          {rows.map((r, i) => (
+            <div key={i} className="grid gap-2 rounded-lg border border-mist-200 p-3 sm:grid-cols-[1fr_180px_80px_80px]">
+              <div className="min-w-0">
+                <div className="truncate text-[13.5px] font-medium text-mist-800">{r.title}</div>
+                <div className="text-xs text-mist-400">{r.matched ? '已自动匹配' : '未匹配，请选择作品'}</div>
+              </div>
+              <Select value={r.work_id ?? ''} onChange={(e) => setRows((list) => list.map((x, j) => j === i ? { ...x, work_id: e.target.value || null, matched: !!e.target.value } : x))}>
+                <option value="">跳过此行</option>
+                {works.map((w) => <option key={w.id} value={w.id}>{w.title || '未命名'}</option>)}
+              </Select>
+              <div className="text-[12.5px] text-mist-500">阅读 {r.reads}</div>
+              <div className="text-[12.5px] text-mist-500">点赞 {r.likes}</div>
+            </div>
+          ))}
+        </div>
+      </Dialog>
+    </>
+  )
+}
 
 type MetricKey = 'reads' | 'likes' | 'wows' | 'favorites' | 'comments' | 'shares' | 'follows_gained'
 const metricFields: Record<Platform, { key: MetricKey; label: string }[]> = {
@@ -187,7 +254,8 @@ export default function Review() {
     <div className="animate-fade-in">
       <PageHeader title="数据复盘" desc="手动录入平台数据，让 AI 帮你找规律。复盘建议需要你逐条采纳。" />
       <Card className="mb-6 overflow-hidden">
-        <CardHeader title="作品数据看板" desc="只列出已进入草稿箱、已生成发布包或已发布的作品" />
+        <CardHeader title="作品数据看板" desc="只列出已进入草稿箱、已生成发布包或已发布的作品"
+          action={<ImportMetrics accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />} />
         {rows.length === 0 ? (
           <Empty icon={<BarChart3 className="size-5" />} title="还没有可以复盘的作品" desc="作品写入草稿箱或生成发布包后会出现在这里。" />
         ) : (

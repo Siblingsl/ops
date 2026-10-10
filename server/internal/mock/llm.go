@@ -254,6 +254,56 @@ func respond(prompt string) string {
 		})
 	case "style_summary":
 		return "语气：亲切、克制，常用第一人称讲经历。\n句式：短句为主，段落短，常用设问引出观点。\n结构：先结论后展开，结尾给出可执行建议。"
+	case "comic_storyboard":
+		n := 6
+		if v := field(prompt, "格数："); v != "" {
+			fmt.Sscanf(v, "%d", &n)
+		}
+		if n < 2 {
+			n = 2
+		}
+		ids := regexp.MustCompile(`id=([0-9a-f-]{36})`).FindAllStringSubmatch(prompt, -1)
+		var charID string
+		if len(ids) > 0 {
+			charID = ids[0][1]
+		}
+		var panels []map[string]any
+		for i := 0; i < n; i++ {
+			cids := []string{}
+			if charID != "" {
+				cids = []string{charID}
+			}
+			panels = append(panels, map[string]any{
+				"scene":          fmt.Sprintf("场景 %d：围绕「%s」的一幕", i+1, short(viewpoint, 16)),
+				"character_ids":  cids,
+				"action":         fmt.Sprintf("角色做出第 %d 步反应", i+1),
+				"shot":           []string{"远景", "中景", "近景", "特写", "过肩", "俯视"}[i%6],
+				"narration":      fmt.Sprintf("旁白：关于「%s」的第 %d 层说明。", short(viewpoint, 12), i+1),
+				"dialogue":       short(fmt.Sprintf("对白 %d", i+1), 20),
+			})
+		}
+		return js(map[string]any{"panels": panels})
+	case "comic_panel_text":
+		return js(map[string]string{
+			"narration":    "旁白：" + short(viewpoint, 40),
+			"dialogue":     short("这件事得想清楚。", 30),
+			"image_prompt": "暖色漫画风，角色表情生动，画面干净，留出气泡位置。",
+		})
+	case "image_suggest":
+		if strings.Contains(prompt, "图片页") || strings.Contains(prompt, "封面页") {
+			return js(map[string]any{"pages": []map[string]string{
+				{"title": short(viewpoint, 12), "body": "封面：一句话抓住读者"},
+				{"title": "要点一", "body": "把核心观点拆成可执行的一小步"},
+				{"title": "要点二", "body": "用亲身经历说明为什么有效"},
+				{"title": "收尾", "body": "留下一句可收藏的结论"},
+			}})
+		}
+		return js(map[string]any{"suggestions": []map[string]string{
+			{"description": "人物特写，略带思考表情", "prompt": "中景，自然光，真实感插画，人物侧脸思考，背景简洁"},
+			{"description": "场景示意图", "prompt": "扁平插画，桌面与笔记本，暖色调，留白充足"},
+		}})
+	case "organize_notes":
+		return "## 先说结论\n\n" + short(viewpoint, 80) + "\n\n## 具体怎么做\n\n把要点按顺序整理成可执行的步骤，不添加新的事实。"
 	default:
 		return "好的。"
 	}

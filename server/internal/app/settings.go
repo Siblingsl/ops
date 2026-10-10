@@ -285,6 +285,10 @@ var taskTypes = []struct{ Type, Label string }{
 	{"section_rewrite", "分段改写"},
 	{"review_analysis", "AI 复盘"},
 	{"style_summary", "风格摘要"},
+	{"comic_storyboard", "漫画分镜"},
+	{"comic_panel_text", "漫画逐格文案"},
+	{"image_suggest", "配图建议"},
+	{"organize_notes", "要点整理"},
 }
 
 func (s *Server) getRoutes(w http.ResponseWriter, r *http.Request) error {
@@ -580,10 +584,11 @@ func (s *Server) auditLogs(w http.ResponseWriter, r *http.Request) error {
 // ---------- 回收站（P-23） ----------
 
 var trashTables = map[string]struct{ table, title, account string }{
-	"work":         {"work", "nullif(t.title,'')", "t.account_id"},
-	"topic":        {"topic", "t.title", "t.account_id"},
-	"material":     {"material", "left(t.content, 40)", "t.account_id"},
-	"style_sample": {"style_sample", "t.title", "t.account_id"},
+	"work":           {"work", "nullif(t.title,'')", "t.account_id"},
+	"topic":          {"topic", "t.title", "t.account_id"},
+	"material":       {"material", "left(t.content, 40)", "t.account_id"},
+	"style_sample":   {"style_sample", "t.title", "t.account_id"},
+	"character_card": {"character_card", "t.name", "t.account_id"},
 }
 
 func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) error {
@@ -597,7 +602,7 @@ func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) error {
 	}
 	list := []Item{}
 	ws := ident(r.Context()).WorkspaceID
-	types := []string{"work", "topic", "material", "style_sample"}
+	types := []string{"work", "topic", "material", "style_sample", "character_card"}
 	if t := r.URL.Query().Get("type"); t != "" {
 		if _, okT := trashTables[t]; !okT {
 			return validation("未知的类型")

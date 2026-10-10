@@ -95,6 +95,17 @@ func workFields(w *Work) []textField {
 		}
 		f = append(f, textField{Name: "section", SectionID: &w.Sections[i].ID, Label: label, Text: sec.ContentMD})
 	}
+	for i := range w.Panels {
+		p := w.Panels[i]
+		label := fmt.Sprintf("第 %d 格", p.Position)
+		id := p.ID
+		if p.Narration != "" {
+			f = append(f, textField{Name: "narration", SectionID: &id, Label: label + "旁白", Text: p.Narration})
+		}
+		if p.Dialogue != "" {
+			f = append(f, textField{Name: "dialogue", SectionID: &id, Label: label + "对白", Text: p.Dialogue})
+		}
+	}
 	return f
 }
 
@@ -117,20 +128,25 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 	var items []CheckItem
 	add := func(it CheckItem) { items = append(items, it) }
 	title := runeLen(w.Title)
+	comic := w.ContentFormat == "comic"
 	if w.Platform == "wechat_mp" {
 		add(formatItem("title", title > 0 && title <= 32, fmt.Sprintf("标题 %d / 32 字", title), "公众号标题不能为空且不超过 32 字", map[string]any{"field": "title"}))
-		add(formatItem("summary", runeLen(w.Summary) <= 120, fmt.Sprintf("摘要 %d / 120 字", runeLen(w.Summary)), "摘要不超过 120 字；留空时微信会抓取正文前 54 字", map[string]any{"field": "summary"}))
-		add(formatItem("author", runeLen(w.WechatFields.Author) <= 16, fmt.Sprintf("作者 %d / 16 字", runeLen(w.WechatFields.Author)), "", nil))
-		add(formatItem("source_url", len(w.WechatFields.SourceURL) <= 1024, "阅读原文链接长度", "不超过 1KB", nil))
-		add(formatItem("cover", w.CoverAssetID != nil && len(w.CoverCrops) > 0, "封面与裁剪区域", "需要设置封面，并确认 2.35:1 和 1:1 两个裁剪区域", map[string]any{"field": "cover"}))
-		if htmlChars > 0 {
-			add(formatItem("html", htmlChars < 20000 && htmlBytes < 1<<20, fmt.Sprintf("排版后 HTML %d / 20000 字符，%.0f KB / 1024 KB", htmlChars, float64(htmlBytes)/1024),
-				"超出时请删减内容或减少样式", nil))
+		if !comic {
+			add(formatItem("summary", runeLen(w.Summary) <= 120, fmt.Sprintf("摘要 %d / 120 字", runeLen(w.Summary)), "摘要不超过 120 字；留空时微信会抓取正文前 54 字", map[string]any{"field": "summary"}))
+			add(formatItem("author", runeLen(w.WechatFields.Author) <= 16, fmt.Sprintf("作者 %d / 16 字", runeLen(w.WechatFields.Author)), "", nil))
+			add(formatItem("source_url", len(w.WechatFields.SourceURL) <= 1024, "阅读原文链接长度", "不超过 1KB", nil))
+			add(formatItem("cover", w.CoverAssetID != nil && len(w.CoverCrops) > 0, "封面与裁剪区域", "需要设置封面，并确认 2.35:1 和 1:1 两个裁剪区域", map[string]any{"field": "cover"}))
+			if htmlChars > 0 {
+				add(formatItem("html", htmlChars < 20000 && htmlBytes < 1<<20, fmt.Sprintf("排版后 HTML %d / 20000 字符，%.0f KB / 1024 KB", htmlChars, float64(htmlBytes)/1024),
+					"超出时请删减内容或减少样式", nil))
+			}
 		}
 	} else {
 		add(formatItem("title", title > 0, fmt.Sprintf("标题 %d 字", title), "标题不能为空；字数上限待核实（V-012）", map[string]any{"field": "title"}))
-		n := len(w.Assets)
-		add(formatItem("images", n >= 1 && n <= 18, fmt.Sprintf("图片 %d 张（需要 1–18 张）", n), "小红书图文笔记至少 1 张图片", map[string]any{"field": "images"}))
+		if !comic {
+			n := len(w.Assets)
+			add(formatItem("images", n >= 1 && n <= 18, fmt.Sprintf("图片 %d 张（需要 1–18 张）", n), "小红书图文笔记至少 1 张图片", map[string]any{"field": "images"}))
+		}
 	}
 	oversize := 0
 	for _, a := range w.Assets {
@@ -139,13 +155,32 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 		}
 	}
 	add(formatItem("image_size", oversize == 0, fmt.Sprintf("图片 %d 张，均不超过 1MB", len(w.Assets)), "", nil))
-	empty := 0
-	for _, sec := range w.Sections {
-		if strings.TrimSpace(sec.ContentMD) == "" {
-			empty++
+	if comic {
+		missingImg, missingText := 0, 0
+		for _, p := range w.Panels {
+			if p.AssetID == nil {
+				missingImg++
+			}
+			if strings.TrimSpace(p.Narration) == "" && strings.TrimSpace(p.Dialogue) == "" {
+				missingText++
+			}
 		}
+		maxImg := 20
+		if w.Platform == "xhs" {
+			maxImg = 18
+		}
+		n := len(w.Panels) - missingImg
+		add(formatItem("panels", len(w.Panels) >= 2 && missingText == 0, fmt.Sprintf("分镜 %d 格，%d 格无旁白/对白", len(w.Panels), missingText), "请先确认分镜并补齐逐格文案", map[string]any{"field": "panels"}))
+		add(formatItem("panel_images", missingImg == 0 && n >= 1 && n <= maxImg, fmt.Sprintf("回传图片 %d / %d 格（上限 %d）", n, len(w.Panels), maxImg), "每一格都需要回传图片后才能发布", map[string]any{"field": "images"}))
+	} else {
+		empty := 0
+		for _, sec := range w.Sections {
+			if strings.TrimSpace(sec.ContentMD) == "" {
+				empty++
+			}
+		}
+		add(formatItem("sections", len(w.Sections) > 0 && empty == 0, fmt.Sprintf("正文 %d 段，%d 段为空", len(w.Sections), empty), "每一段都需要有内容，空段可以删除", nil))
 	}
-	add(formatItem("sections", len(w.Sections) > 0 && empty == 0, fmt.Sprintf("正文 %d 段，%d 段为空", len(w.Sections), empty), "每一段都需要有内容，空段可以删除", nil))
 	for _, f := range workFields(w) {
 		for _, mm := range pendingMarker.FindAllStringIndex(f.Text, -1) {
 			add(formatItem("pending|"+f.Label+"|"+f.Text[mm[0]:mm[1]], false, "残留待核实标记："+f.Text[mm[0]:mm[1]],
@@ -202,7 +237,58 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 		disclosure = "发布时在「笔记内容声明」中勾选「笔记含 AI 合成内容」"
 	}
 	items = append(items, CheckItem{Category: "ai_disclosure", Message: "AI 声明", Detail: disclosure, Location: map[string]any{}, fingerprint: "ai_disclosure|" + w.Platform})
+
+	// FR-M9-07 广告法极限词（提示项，需确认）
+	adWords := []string{"最", "第一", "唯一", "首个", "顶级", "极致", "绝对", "100%", "永久", "国家级", "世界级"}
+	adHits := 0
+	for _, f := range workFields(w) {
+		for _, wd := range adWords {
+			if adHits >= 20 {
+				break
+			}
+			off := 0
+			for adHits < 20 {
+				i := strings.Index(f.Text[off:], wd)
+				if i < 0 {
+					break
+				}
+				i += off
+				sent := sentenceAround(f.Text, i, len(wd))
+				items = append(items, CheckItem{Category: "ad_law", MatchedText: wd, Location: loc(f),
+					Message: fmt.Sprintf("广告法极限词「%s」", wd), Detail: "建议改为可核实的表述，或删去绝对化用词。原文：" + sent,
+					fingerprint: fingerprint("ad_law", wd, sent)})
+				adHits++
+				off = i + len([]byte(wd))
+			}
+		}
+	}
+
+	// FR-M9-06 同质化提示：与本账号其他作品标题/正文相似度
+	if sim, err := s.similarWorks(ctx, w); err == nil {
+		for _, title := range sim {
+			items = append(items, CheckItem{Category: "similarity", Message: "与历史作品相似：「" + title + "」",
+				Detail: "仅作自查提示，不阻止发布。可改标题/角度或确认已知悉。", Location: map[string]any{"field": "title"},
+				fingerprint: fingerprint("similarity", title, w.Title)})
+		}
+	}
 	return items, nil
+}
+
+func (s *Server) similarWorks(ctx context.Context, w *Work) ([]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT title FROM work WHERE account_id=$1 AND id<>$2 AND deleted_at IS NULL AND title<>''
+		AND similarity(title, $3) > 0.4 ORDER BY similarity(title, $3) DESC LIMIT 3`, w.AccountID, w.ID, w.Title)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err == nil && t != w.Title {
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 func (s *Server) insertItems(ctx context.Context, tx pgx.Tx, workID, runID uuid.UUID, items []CheckItem) error {

@@ -89,7 +89,8 @@ func TestHC03_DraftRequiresConfirmedOutline(t *testing.T) {
 		t.Fatalf("want H-03, got %s", ae.Error.Detail)
 	}
 	for _, r := range routes(t) {
-		if strings.Contains(r, "draft") && !strings.Contains(r, "/sections/{id}/draft") {
+		// 禁止绕过「确认大纲」的起稿入口；草稿箱同步（FR-M10-06）不含正文生成，允许。
+		if strings.Contains(r, "draft") && !strings.Contains(r, "/sections/{id}/draft") && !strings.Contains(r, "sync-draft") {
 			t.Fatalf("unexpected draft route: %s", r)
 		}
 	}

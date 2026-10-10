@@ -33,6 +33,10 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 		slog.Info("回收站到期清理", "count", n)
 	}
 	s.refreshTokens(ctx)
+	// FR-M10-06：约每 2 小时扫一次（本调度为 10 分钟一次，用分钟位粗控）
+	if s.now().Minute() < 10 && s.now().Hour()%2 == 0 {
+		s.syncDraftsJob(ctx)
+	}
 }
 
 // PurgeExpiredTrash permanently deletes items that stayed in the trash longer than trashDays.

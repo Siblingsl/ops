@@ -8,9 +8,9 @@ import { del, errorMessage, get, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { useInvalidate } from '@/lib/session'
 
-interface Item { type: 'work' | 'topic' | 'material' | 'style_sample'; id: string; title: string; account_name: string | null; deleted_at: string; days_left: number }
+interface Item { type: 'work' | 'topic' | 'material' | 'style_sample' | 'character_card'; id: string; title: string; account_name: string | null; deleted_at: string; days_left: number }
 
-const typeLabel: Record<Item['type'], string> = { work: '作品', topic: '选题', material: '素材', style_sample: '风格样本' }
+const typeLabel: Record<Item['type'], string> = { work: '作品', topic: '选题', material: '素材', style_sample: '风格样本', character_card: '角色卡' }
 
 export default function Trash() {
   const { data, isLoading, refetch } = useQuery({ queryKey: ['trash'], queryFn: () => get<Item[]>('/trash') })
@@ -24,7 +24,7 @@ export default function Trash() {
       await post(`/trash/${i.type}/${i.id}/restore`)
       toast.success(`已恢复${typeLabel[i.type]}`)
       refetch()
-      inv(['works'], ['topics'], ['materials'], ['samples'])
+      inv(['works'], ['topics'], ['materials'], ['samples'], ['characters'])
     } catch (e) {
       toast.error(errorMessage(e))
     }
@@ -48,6 +48,7 @@ export default function Trash() {
         { value: 'topic', label: '选题', count: count('topic') },
         { value: 'material', label: '素材', count: count('material') },
         { value: 'style_sample', label: '风格样本', count: count('style_sample') },
+        { value: 'character_card', label: '角色卡', count: count('character_card') },
       ]} />
       <Card>
         {list.length === 0 ? <Empty icon={<Trash2 className="size-5" />} title="回收站是空的" /> : (

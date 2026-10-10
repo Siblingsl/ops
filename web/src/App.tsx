@@ -21,6 +21,8 @@ import Security from './pages/settings/Security'
 import Trash from './pages/settings/Trash'
 import Usage from './pages/settings/Usage'
 import Words from './pages/settings/Words'
+import Prompts from './pages/settings/Prompts'
+import ExportPage from './pages/settings/Export'
 import Check from './pages/work/Check'
 import Compare from './pages/work/Compare'
 import Editor from './pages/work/Editor'
@@ -79,6 +81,8 @@ function Authed() {
           <Route path="usage" element={<Usage />} />
           <Route path="logs" element={<Logs />} />
           <Route path="trash" element={<Trash />} />
+          <Route path="prompts" element={<Prompts />} />
+          <Route path="export" element={<ExportPage />} />
           <Route path="security" element={<Security />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

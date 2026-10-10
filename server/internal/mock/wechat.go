@@ -180,6 +180,38 @@ func (m *Wechat) Handler() http.Handler {
 		}
 		writeJSON(w, map[string]any{"news_item": []any{d.Article}})
 	})
+	mux.HandleFunc("/cgi-bin/draft/batchget", func(w http.ResponseWriter, r *http.Request) {
+		if !m.checkToken(w, r) {
+			return
+		}
+		var in struct {
+			Offset int `json:"offset"`
+			Count  int `json:"count"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if in.Count <= 0 {
+			in.Count = 20
+		}
+		m.mu.Lock()
+		ids := make([]string, 0, len(m.drafts))
+		for id := range m.drafts {
+			ids = append(ids, id)
+		}
+		m.mu.Unlock()
+		total := len(ids)
+		if in.Offset > total {
+			in.Offset = total
+		}
+		end := in.Offset + in.Count
+		if end > total {
+			end = total
+		}
+		items := []any{}
+		for _, id := range ids[in.Offset:end] {
+			items = append(items, map[string]any{"media_id": id})
+		}
+		writeJSON(w, map[string]any{"total_count": total, "item_count": len(items), "item": items})
+	})
 	mux.HandleFunc("/mock/img/", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		data, ok := m.images[strings.TrimPrefix(r.URL.Path, "/mock/img/")]
@@ -225,7 +257,19 @@ func validateArticle(a map[string]any) (int, string) {
 	if strings.Contains(strings.ToLower(content), "<script") {
 		return 45166, "invalid content"
 	}
-	if t, _ := a["article_type"].(string); t != "newspic" {
+	if t, _ := a["article_type"].(string); t == "newspic" {
+		info, _ := a["image_info"].(map[string]any)
+		list, _ := info["image_list"].([]any)
+		if len(list) == 0 || len(list) > 20 {
+			return 40007, "invalid image_list"
+		}
+		for _, it := range list {
+			m, _ := it.(map[string]any)
+			if id, _ := m["image_media_id"].(string); id == "" {
+				return 40007, "invalid image_media_id"
+			}
+		}
+	} else {
 		if thumb, _ := a["thumb_media_id"].(string); thumb == "" {
 			return 40007, "invalid media_id"
 		}

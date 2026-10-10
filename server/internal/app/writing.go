@@ -14,8 +14,8 @@ import (
 func (s *Server) sectionMeta(ctx context.Context, id uuid.UUID) (*Section, *workMeta, error) {
 	var workID uuid.UUID
 	var sec Section
-	err := s.db.QueryRow(ctx, `SELECT work_id, id, position, heading, key_point, content_md, origin, source_section_ids, material_ids, revision, updated_at
-		FROM work_section WHERE id=$1`, id).Scan(&workID, &sec.ID, &sec.Position, &sec.Heading, &sec.KeyPoint, &sec.ContentMD, &sec.Origin,
+	err := s.db.QueryRow(ctx, `SELECT work_id, id, position, heading, key_point, content_md, ai_raw_md, origin, source_section_ids, material_ids, revision, updated_at
+		FROM work_section WHERE id=$1`, id).Scan(&workID, &sec.ID, &sec.Position, &sec.Heading, &sec.KeyPoint, &sec.ContentMD, &sec.AIRawMD, &sec.Origin,
 		&sec.SourceSectionIDs, &sec.MaterialIDs, &sec.Revision, &sec.UpdatedAt)
 	if err != nil {
 		return nil, nil, err

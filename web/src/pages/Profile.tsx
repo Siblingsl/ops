@@ -1,15 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
-import { FileText, Pencil, Plus, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { FileText, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, IconButton, Input, PageHeader, PageLoading, PlatformMark, Switch, Tabs, Textarea } from '@/components/ui'
-import { del, errorMessage, get, patch, post, put } from '@/lib/api'
+import { del, errorMessage, get, patch, post, put, stream } from '@/lib/api'
 import { relTime, runeLen } from '@/lib/format'
 import { themes } from '@/lib/render'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
-import type { Account, Profile, StyleSample } from '@/lib/types'
+import type { Account, CharacterCard, Profile, StyleSample } from '@/lib/types'
 
 const splitList = (s: string) => s.split(/[,，、\s]+/).map((x) => x.trim()).filter(Boolean)
 
@@ -20,6 +20,8 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
   const [banned, setBanned] = useState(profile.banned_words.join(' '))
   const [summary, setSummary] = useState(profile.style_summary)
   const [busy, setBusy] = useState(false)
+  const [genBusy, setGenBusy] = useState(false)
+  const abort = useRef<AbortController | null>(null)
   const save = async () => {
     setBusy(true)
     try {
@@ -33,6 +35,23 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
       setBusy(false)
     }
   }
+  const genSummary = async () => {
+    setGenBusy(true)
+    setSummary('')
+    abort.current = new AbortController()
+    try {
+      const done = await stream<{ text: string }>(`/accounts/${account.id}/style-summary`, {}, {
+        signal: abort.current.signal,
+        onDelta: (d) => setSummary((t) => t + d),
+      })
+      if (done?.text) setSummary(done.text)
+      toast.success('已生成风格摘要，请编辑后保存')
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') toast.error(errorMessage(e))
+    } finally {
+      setGenBusy(false)
+    }
+  }
   return (
     <Card>
       <CardHeader title="定位档案" desc="AI 每次生成都会带上这份档案。" />
@@ -44,11 +63,16 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
         <Field label="目标读者"><Textarea rows={2} value={audience} onChange={(e) => setAudience(e.target.value)} /></Field>
         <Field label="人设与语气"><Textarea rows={2} value={tone} onChange={(e) => setTone(e.target.value)} /></Field>
         <Field label="禁用词" hint="AI 生成时避免使用；发布前检查会单独标出" className="md:col-span-2"><Input value={banned} onChange={(e) => setBanned(e.target.value)} placeholder="空格分隔，例如：颠覆 震惊 必看" /></Field>
-        <Field label="风格描述" hint="用几句话描述你的写作风格。AI 会和风格样本一起参考它（AI 自动提炼是 P1 功能）。" className="md:col-span-2">
-          <Textarea rows={3} value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="例如：短句为主，多用具体场景开头；结论先行；不用感叹号。" />
+        <Field label="风格描述" hint="可从风格样本 AI 提炼，再人工编辑保存；后续生成使用你保存的版本。" className="md:col-span-2">
+          <Textarea rows={4} value={summary} onChange={(e) => setSummary(e.target.value)} disabled={genBusy}
+            placeholder="例如：短句为主，多用具体场景开头；结论先行；不用感叹号。" />
+          <div className="mt-2 flex gap-2">
+            <Button size="sm" variant="secondary" icon={<Sparkles className="size-3.5" />} loading={genBusy} onClick={genSummary}>从样本生成</Button>
+            {genBusy && <Button size="sm" variant="ghost" onClick={() => abort.current?.abort()}>停止</Button>}
+          </div>
         </Field>
       </div>
-      <div className="flex justify-end border-t border-mist-100 px-5 py-3"><Button variant="primary" loading={busy} onClick={save}>保存档案</Button></div>
+      <div className="flex justify-end border-t border-mist-100 px-5 py-3"><Button variant="primary" loading={busy} onClick={save} disabled={genBusy}>保存档案</Button></div>
     </Card>
   )
 }
@@ -123,6 +147,78 @@ function SamplesTab({ account }: { account: Account }) {
   )
 }
 
+function CharacterDialog({ accountId, editing, onClose }: { accountId: string; editing: CharacterCard | null; onClose: () => void }) {
+  const [name, setName] = useState(editing?.name ?? '')
+  const [appearance, setAppearance] = useState(editing?.appearance ?? '')
+  const [personality, setPersonality] = useState(editing?.personality ?? '')
+  const [catchphrase, setCatchphrase] = useState(editing?.catchphrase ?? '')
+  const [busy, setBusy] = useState(false)
+  const inv = useInvalidate()
+  const save = async () => {
+    setBusy(true)
+    try {
+      if (editing) await patch(`/characters/${editing.id}`, { name, appearance, personality, catchphrase })
+      else await post(`/accounts/${accountId}/characters`, { name, appearance, personality, catchphrase })
+      inv(['characters', accountId])
+      onClose()
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog open onClose={onClose} title={editing ? '编辑角色' : '新建角色'} width="max-w-xl"
+      footer={<><Button variant="ghost" onClick={onClose}>取消</Button><Button variant="primary" loading={busy} disabled={!name.trim()} onClick={save}>保存</Button></>}>
+      <div className="space-y-4">
+        <Field label="角色名"><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：小周" /></Field>
+        <Field label="外貌" hint="会自动拼进每格绘图提示词"><Textarea rows={3} value={appearance} onChange={(e) => setAppearance(e.target.value)} placeholder="短发、圆框眼镜、常穿卫衣…" /></Field>
+        <Field label="性格"><Textarea rows={2} value={personality} onChange={(e) => setPersonality(e.target.value)} /></Field>
+        <Field label="口头禅"><Input value={catchphrase} onChange={(e) => setCatchphrase(e.target.value)} /></Field>
+      </div>
+    </Dialog>
+  )
+}
+
+function CharactersTab({ account }: { account: Account }) {
+  const { data, isLoading } = useQuery({ queryKey: ['characters', account.id], queryFn: () => get<CharacterCard[]>(`/accounts/${account.id}/characters`) })
+  const [dialog, setDialog] = useState<{ editing: CharacterCard | null } | null>(null)
+  const inv = useInvalidate()
+  const list = data ?? []
+  const remove = async (c: CharacterCard) => {
+    if (!(await confirm({ title: `删除「${c.name}」？`, desc: '可以在回收站中恢复（30 天）。', confirmText: '删除', danger: true }))) return
+    await del(`/characters/${c.id}`).catch((e) => toast.error(errorMessage(e)))
+    inv(['characters', account.id])
+  }
+  return (
+    <Card>
+      <CardHeader title={<span className="flex items-center gap-2">角色设定卡<Badge>{list.length}</Badge></span>}
+        desc="归属本账号，可被所有漫画作品引用。出图仍在外部工具完成。"
+        action={<Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ editing: null })}>添加角色</Button>} />
+      {isLoading ? <PageLoading /> : list.length === 0 ? (
+        <Empty icon={<FileText className="size-5" />} title="还没有角色" desc="先建立固定角色，分镜和绘图提示词才会稳定。" />
+      ) : (
+        <ul className="divide-y divide-mist-100">
+          {list.map((c) => (
+            <li key={c.id} className="group flex items-start gap-3 px-5 py-3.5">
+              <div className="min-w-0 flex-1">
+                <div className="text-[14px] font-medium text-mist-800">{c.name}</div>
+                <div className="mt-0.5 text-xs text-mist-500 line-clamp-2">{c.appearance || '未填外貌'}{c.personality ? ` · ${c.personality}` : ''}</div>
+                {c.catchphrase && <div className="mt-1 text-xs text-mist-400">口头禅：{c.catchphrase}</div>}
+              </div>
+              <div className="flex opacity-0 transition group-hover:opacity-100">
+                <IconButton label="编辑" onClick={() => setDialog({ editing: c })}><Pencil className="size-3.5" /></IconButton>
+                <IconButton label="删除" className="hover:text-danger" onClick={() => remove(c)}><Trash2 className="size-3.5" /></IconButton>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {dialog && <CharacterDialog accountId={account.id} editing={dialog.editing} onClose={() => setDialog(null)} />}
+    </Card>
+  )
+}
+
 function LayoutTab({ account, profile, onSaved }: { account: Account; profile: Profile; onSaved: (p: Profile) => void }) {
   const [theme, setTheme] = useState(profile.default_theme)
   const [d, setD] = useState(profile.wechat_defaults)
@@ -170,19 +266,26 @@ function LayoutTab({ account, profile, onSaved }: { account: Account; profile: P
 export default function ProfilePage() {
   const acc = useCurrentAccount()
   const [params, setParams] = useSearchParams()
-  const tab = (params.get('tab') as 'positioning' | 'samples' | 'layout') || 'positioning'
+  const tab = (params.get('tab') as 'positioning' | 'samples' | 'characters' | 'layout') || 'positioning'
   const { data, isLoading, refetch } = useQuery({ queryKey: ['profile', acc?.id], queryFn: () => get<Profile>(`/accounts/${acc!.id}/profile`), enabled: !!acc })
   const [profile, setProfile] = useState<Profile | null>(null)
   useEffect(() => setProfile(data ?? null), [data])
   if (!acc || isLoading || !profile) return <PageLoading />
   const wx = acc.platform === 'wechat_mp'
-  const items = [{ value: 'positioning' as const, label: '定位' }, { value: 'samples' as const, label: '风格样本' }, ...(wx ? [{ value: 'layout' as const, label: '排版' }] : [])]
+  const comic = acc.content_format === 'comic'
+  const items = [
+    { value: 'positioning' as const, label: '定位' },
+    { value: 'samples' as const, label: '风格样本' },
+    ...(comic ? [{ value: 'characters' as const, label: '角色卡' }] : []),
+    ...(wx ? [{ value: 'layout' as const, label: '排版' }] : []),
+  ]
   return (
     <div className="animate-fade-in">
       <PageHeader eyebrow={acc.name} title="账号档案" desc="定位、风格和默认设置。每个账号单独维护。" />
       <Tabs value={tab} onChange={(v) => setParams({ tab: v }, { replace: true })} items={items} className="mb-5" />
       {tab === 'positioning' && <PositioningTab key={acc.id} account={acc} profile={profile} onSaved={(p) => { setProfile(p); refetch() }} />}
       {tab === 'samples' && <SamplesTab account={acc} />}
+      {tab === 'characters' && comic && <CharactersTab account={acc} />}
       {tab === 'layout' && wx && <LayoutTab key={acc.id} account={acc} profile={profile} onSaved={(p) => { setProfile(p); refetch() }} />}
     </div>
   )

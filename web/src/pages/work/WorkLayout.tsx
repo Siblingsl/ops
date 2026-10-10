@@ -109,12 +109,13 @@ export default function WorkLayout() {
   const wx = work.platform === 'wechat_mp'
   const order = ['drafting', 'checking', 'ready', 'pushed', 'packed', 'published']
   const reached = (s: string) => order.indexOf(work.status) >= order.indexOf(s)
+  const comic = work.content_format === 'comic'
   const steps = [
-    { to: '', label: '创作', end: true, done: work.sections.some((s) => s.content_md) },
+    { to: '', label: comic ? '漫画' : '创作', end: true, done: comic ? work.panels.some((p) => p.asset_id) : work.sections.some((s) => s.content_md) },
     ...(work.source ? [{ to: 'compare', label: '对照改写', end: false, done: false }] : []),
-    ...(wx ? [{ to: 'preview', label: '排版预览', end: false, done: false }] : []),
+    ...(!comic && wx ? [{ to: 'preview', label: '排版预览', end: false, done: false }] : []),
     { to: 'check', label: '发布前检查', end: false, done: reached('ready') },
-    wx ? { to: 'push', label: '写入草稿', end: false, done: reached('pushed') } : { to: 'pack', label: '发布包', end: false, done: reached('packed') },
+    wx ? { to: 'push', label: comic ? '图片草稿' : '写入草稿', end: false, done: reached('pushed') } : { to: 'pack', label: '发布包', end: false, done: reached('packed') },
   ]
   const unlock = async () => {
     try {
@@ -173,6 +174,24 @@ export default function WorkLayout() {
         )}
         {work.source_updated && (
           <div className="border-t border-gamboge-100 bg-gamboge-50 px-5 py-2 text-[13px] text-gamboge-700">源稿已更新。衍生作品不会自动重新改写，可以在「对照改写」中对需要的段落重新改写。</div>
+        )}
+        {work.draft_maybe_published && (
+          <div className="flex items-center gap-3 border-t border-gamboge-100 bg-gamboge-50 px-5 py-2 text-[13px] text-gamboge-800">
+            草稿可能已从公众号草稿箱消失（或许已发表）。系统不会自动改状态。
+            <Button size="sm" variant="secondary" className="ml-auto" onClick={async () => {
+              try {
+                const r = await post<{ maybe_published: boolean; message: string }>(`/works/${work.id}/wechat/sync-draft`)
+                toast.message(r.message)
+                await q.refetch()
+              } catch (e) { toast.error(errorMessage(e)) }
+            }}>重新同步</Button>
+            <Link to={`/works/${work.id}/push`} className="text-[13px] font-medium underline">去回填</Link>
+          </div>
+        )}
+        {work.human_edit_ratio != null && (
+          <div className="border-t border-mist-100 bg-mist-50/80 px-5 py-1.5 text-[12px] text-mist-500">
+            人工修改比例约 {Math.round(work.human_edit_ratio * 100)}%（相对 AI 初稿，仅自查参考）
+          </div>
         )}
       </header>
       <div className="flex-1">

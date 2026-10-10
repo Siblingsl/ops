@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { AccountCreateForm, credTone, CredentialPanel } from '@/components/account-forms'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, Input, PageHeader, PageLoading, PlatformMark, platformLabel, Select } from '@/components/ui'
-import { ApiError, errorMessage, patch, post } from '@/lib/api'
+import { ApiError, del, errorMessage, patch, post } from '@/lib/api'
 import { useAccounts, useInvalidate, useMe } from '@/lib/session'
 import type { Account, ContentFormat } from '@/lib/types'
 
@@ -13,7 +13,11 @@ const formats: Record<string, ContentFormat[]> = { wechat_mp: ['long_article', '
 
 type Filter = 'all' | 'active' | 'disabled'
 
-function AccountDetail({ account, onDeleted, canManage }: { account: Account; onDeleted: () => void; canManage: boolean }) {
+function AccountDetail({ account, onStatusChange, canManage }: {
+  account: Account
+  onStatusChange: (kind: 'disabled' | 'enabled' | 'deleted') => void
+  canManage: boolean
+}) {
   const inv = useInvalidate()
   const [name, setName] = useState(account.name)
   const [limit, setLimit] = useState(String(account.daily_push_limit))
@@ -37,7 +41,7 @@ function AccountDetail({ account, onDeleted, canManage }: { account: Account; on
     if (disabling) {
       if (!(await confirm({
         title: `停用「${account.name}」？`,
-        desc: '停用后不会出现在侧栏账号列表中，也不能写入草稿。作品、档案和素材会保留，可随时重新启用。系统不提供彻底删除平台账号，以免误删数据。',
+        desc: '停用后不会出现在账号列表中，也不能写入草稿。作品、档案和素材会保留，可随时重新启用。若要永久清除请用「删除」。',
         confirmText: '停用',
         danger: true,
       }))) return
@@ -46,7 +50,24 @@ function AccountDetail({ account, onDeleted, canManage }: { account: Account; on
       await post(`/accounts/${account.id}/${disabling ? 'disable' : 'enable'}`)
       inv(['accounts'])
       toast.success(disabling ? '已停用' : '已重新启用')
-      if (disabling) onDeleted()
+      onStatusChange(disabling ? 'disabled' : 'enabled')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
+
+  const remove = async () => {
+    if (!(await confirm({
+      title: `删除「${account.name}」？`,
+      desc: '将永久删除该平台账号及其作品、选题、档案、凭证等，无法恢复。工作区共享素材会保留并解除与该账号的关联。',
+      confirmText: '确认删除',
+      danger: true,
+    }))) return
+    try {
+      await del(`/accounts/${account.id}?confirm=true`)
+      inv(['accounts'])
+      toast.success('账号已删除')
+      onStatusChange('deleted')
     } catch (e) {
       toast.error(errorMessage(e))
     }
@@ -63,8 +84,9 @@ function AccountDetail({ account, onDeleted, canManage }: { account: Account; on
               {account.status === 'disabled' ? (
                 <Button size="sm" variant="primary" icon={<Power className="size-3.5" />} onClick={toggle}>重新启用</Button>
               ) : (
-                <Button size="sm" variant="ghost" icon={<Trash2 className="size-3.5" />} onClick={toggle}>停用</Button>
+                <Button size="sm" variant="ghost" icon={<Power className="size-3.5" />} onClick={toggle}>停用</Button>
               )}
+              <Button size="sm" variant="danger" icon={<Trash2 className="size-3.5" />} onClick={remove}>删除</Button>
             </div>
           ) : undefined}
         />
@@ -75,7 +97,7 @@ function AccountDetail({ account, onDeleted, canManage }: { account: Account; on
           <Field label="内容形态" hint="已有作品保持原流程">
             <Select value={account.content_format} onChange={(e) => save({ content_format: e.target.value })} disabled={!canManage || account.status === 'disabled'}>
               {formats[account.platform].map((f) => (
-                <option key={f} value={f}>{formatLabel[f]}{f === 'comic' ? '（后续版本）' : ''}</option>
+                <option key={f} value={f}>{formatLabel[f]}</option>
               ))}
             </Select>
           </Field>
@@ -175,7 +197,7 @@ export default function SettingsAccounts() {
     <div className="animate-fade-in">
       <PageHeader
         title="平台账号与凭证"
-        desc="增删改查都在这里：添加、搜索筛选、编辑资料与凭证；不需要的账号请停用（数据保留，可恢复）。"
+        desc="增删改查都在这里：添加、搜索筛选、编辑资料与凭证；暂不用可停用（可恢复），确定不要再点删除（不可恢复）。"
         action={canManage ? <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setParams({ new: '1' })}>添加账号</Button> : undefined}
       />
 
@@ -261,9 +283,16 @@ export default function SettingsAccounts() {
             <AccountDetail
               account={current}
               canManage={!!canManage}
-              onDeleted={() => {
-                setFilter('disabled')
-                setSelected(current.id)
+              onStatusChange={(kind) => {
+                if (kind === 'deleted') {
+                  setSelected(null)
+                  setFilter('all')
+                  return
+                }
+                if (kind === 'disabled') {
+                  setFilter('disabled')
+                  setSelected(current.id)
+                }
               }}
             />
           ) : (

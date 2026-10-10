@@ -337,3 +337,99 @@ func assetIDFromURL(u string) (uuid.UUID, bool) {
 	parsed, err := uuid.Parse(id)
 	return parsed, err == nil
 }
+
+// cropAsset saves a cropped region as a new image (FR-M7-04). Relative coords are 0–1.
+func (s *Server) cropAsset(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	src, err := s.assetRow(ctx, id)
+	if err != nil {
+		return err
+	}
+	m, err := s.workMeta(ctx, src.WorkID)
+	if err != nil {
+		return err
+	}
+	if err := m.editable(); err != nil {
+		return err
+	}
+	var in struct {
+		X1     float64 `json:"x1"`
+		Y1     float64 `json:"y1"`
+		X2     float64 `json:"x2"`
+		Y2     float64 `json:"y2"`
+		Aspect string  `json:"aspect"` // e.g. "3:4"
+	}
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	if in.X2 <= in.X1 || in.Y2 <= in.Y1 || in.X1 < 0 || in.Y1 < 0 || in.X2 > 1 || in.Y2 > 1 {
+		return validation("裁剪区域无效")
+	}
+	raw, err := s.assetBytes(src)
+	if err != nil {
+		return validation("读取原图失败")
+	}
+	img, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return validation("无法解码原图")
+	}
+	b := img.Bounds()
+	x0 := b.Min.X + int(float64(b.Dx())*in.X1)
+	y0 := b.Min.Y + int(float64(b.Dy())*in.Y1)
+	x1 := b.Min.X + int(float64(b.Dx())*in.X2)
+	y1 := b.Min.Y + int(float64(b.Dy())*in.Y2)
+	if x1-x0 < 8 || y1-y0 < 8 {
+		return validation("裁剪区域太小")
+	}
+	cropped := image.NewRGBA(image.Rect(0, 0, x1-x0, y1-y0))
+	draw.Draw(cropped, cropped.Bounds(), img, image.Pt(x0, y0), draw.Src)
+	data, mime, width, height, err := processImage(mustEncodePNG(cropped))
+	if err != nil {
+		return err
+	}
+	newID := uuid.New()
+	ext := ".jpg"
+	if mime == "image/png" {
+		ext = ".png"
+	}
+	rel := filepath.Join("assets", m.ID.String(), newID.String()+ext)
+	abs := filepath.Join(s.cfg.DataDir, rel)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(abs, data, 0o644); err != nil {
+		return err
+	}
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `INSERT INTO asset (id, workspace_id, account_id, work_id, storage_path, mime, width, height, bytes, sha256, position)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT coalesce(max(position),-1)+1 FROM asset WHERE work_id=$4))`,
+			newID, ident(ctx).WorkspaceID, m.Account.ID, m.ID, filepath.ToSlash(rel), mime, width, height, len(data), secure.SHA256Hex(data)); err != nil {
+			return err
+		}
+		return s.touchContent(ctx, tx, m.ID)
+	})
+	if err != nil {
+		_ = os.Remove(abs)
+		return err
+	}
+	list, err := s.loadAssets(ctx, m.ID)
+	if err != nil {
+		return err
+	}
+	for _, a := range list {
+		if a.ID == newID {
+			return ok(w, a)
+		}
+	}
+	return errNotFound
+}
+
+func mustEncodePNG(img image.Image) []byte {
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}

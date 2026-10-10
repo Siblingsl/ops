@@ -25,6 +25,7 @@ type Section struct {
 	Heading          string      `json:"heading"`
 	KeyPoint         string      `json:"key_point"`
 	ContentMD        string      `json:"content_md"`
+	AIRawMD          string      `json:"-"`
 	Origin           string      `json:"origin"`
 	SourceSectionIDs []uuid.UUID `json:"source_section_ids"`
 	MaterialIDs      []uuid.UUID `json:"material_ids"`
@@ -68,8 +69,11 @@ type Work struct {
 	Locked             bool            `json:"locked"`
 	Revision           int             `json:"revision"`
 	Sections           []Section       `json:"sections"`
+	Panels             []ComicPanel    `json:"panels"`
 	MaterialIDs        []uuid.UUID     `json:"material_ids"`
 	Assets             []Asset         `json:"assets"`
+	HumanEditRatio     *float64        `json:"human_edit_ratio"`
+	DraftMaybePublished bool           `json:"draft_maybe_published"`
 	CreatedAt          time.Time       `json:"created_at"`
 	UpdatedAt          time.Time       `json:"updated_at"`
 	sourceRevision     int
@@ -126,7 +130,7 @@ func (s *Server) touchContent(ctx context.Context, tx pgx.Tx, workID uuid.UUID) 
 func (s *Server) loadSections(ctx context.Context, q pgx.Tx, workID uuid.UUID) ([]Section, error) {
 	var rows pgx.Rows
 	var err error
-	sql := `SELECT id, position, heading, key_point, content_md, origin, source_section_ids, material_ids, revision, updated_at
+	sql := `SELECT id, position, heading, key_point, content_md, ai_raw_md, origin, source_section_ids, material_ids, revision, updated_at
 		FROM work_section WHERE work_id=$1 ORDER BY position, created_at`
 	if q != nil {
 		rows, err = q.Query(ctx, sql, workID)
@@ -140,7 +144,7 @@ func (s *Server) loadSections(ctx context.Context, q pgx.Tx, workID uuid.UUID) (
 	list := []Section{}
 	for rows.Next() {
 		var x Section
-		if err := rows.Scan(&x.ID, &x.Position, &x.Heading, &x.KeyPoint, &x.ContentMD, &x.Origin, &x.SourceSectionIDs, &x.MaterialIDs, &x.Revision, &x.UpdatedAt); err != nil {
+		if err := rows.Scan(&x.ID, &x.Position, &x.Heading, &x.KeyPoint, &x.ContentMD, &x.AIRawMD, &x.Origin, &x.SourceSectionIDs, &x.MaterialIDs, &x.Revision, &x.UpdatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, x)
@@ -157,13 +161,13 @@ func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 	err := s.db.QueryRow(ctx, `SELECT w.id, w.account_id, a.platform, a.name, w.topic_id, t.angle, w.source_work_id, w.source_revision,
 		w.content_format, w.status, w.title, w.summary, w.viewpoint, w.outline, w.outline_confirmed_at, w.theme, w.cover_asset_id,
 		w.cover_crops, w.wechat_fields, w.topics, w.wechat_draft_media_id, w.published_url, w.published_at, w.locked, w.revision,
-		w.created_at, w.updated_at
+		coalesce(w.draft_maybe_published,false), w.created_at, w.updated_at
 		FROM work w JOIN platform_account a ON a.id=w.account_id LEFT JOIN topic t ON t.id=w.topic_id
 		WHERE w.id=$1 AND a.workspace_id=$2 AND w.deleted_at IS NULL`, id, ident(ctx).WorkspaceID).Scan(
 		&w.ID, &w.AccountID, &w.Platform, &w.AccountName, &w.TopicID, &topicAngle, &sourceID, &sourceRevision,
 		&w.ContentFormat, &w.Status, &w.Title, &w.Summary, &w.Viewpoint, &outline, &w.OutlineConfirmedAt, &w.Theme, &w.CoverAssetID,
 		&w.CoverCrops, &wf, &w.Topics, &w.WechatDraftMediaID, &w.PublishedURL, &w.PublishedAt, &w.Locked, &w.Revision,
-		&w.CreatedAt, &w.UpdatedAt)
+		&w.DraftMaybePublished, &w.CreatedAt, &w.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +188,13 @@ func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 	if w.Sections, err = s.loadSections(ctx, nil, id); err != nil {
 		return nil, err
 	}
+	if w.Panels, err = s.loadPanels(ctx, id); err != nil {
+		return nil, err
+	}
+	if w.Panels == nil {
+		w.Panels = []ComicPanel{}
+	}
+	w.HumanEditRatio = humanEditRatio(w.Sections)
 	if w.Assets, err = s.loadAssets(ctx, id); err != nil {
 		return nil, err
 	}

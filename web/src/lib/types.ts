@@ -47,6 +47,33 @@ export interface StyleSample {
   created_at: string
 }
 
+export interface CharacterCard {
+  id: string
+  account_id: string
+  name: string
+  appearance: string
+  personality: string
+  catchphrase: string
+  ref_asset_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ComicPanel {
+  id: string
+  position: number
+  scene: string
+  character_ids: string[]
+  action: string
+  shot: string
+  narration: string
+  dialogue: string
+  image_prompt: string
+  asset_id: string | null
+  created_at: string
+  updated_at: string
+}
+
 export type MaterialKind = 'experience' | 'opinion' | 'case' | 'data'
 export interface Material {
   id: string
@@ -137,8 +164,11 @@ export interface Work {
   locked: boolean
   revision: number
   sections: Section[]
+  panels: ComicPanel[]
   material_ids: string[]
   assets: Asset[]
+  human_edit_ratio?: number | null
+  draft_maybe_published?: boolean
   created_at: string
   updated_at: string
 }

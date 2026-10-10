@@ -4,7 +4,7 @@ import { Dialog } from './dialog'
 import { Button, cn } from './ui'
 import type { CropBox } from '@/lib/types'
 
-const ratios = [
+const coverRatios = [
   { key: '2.35_1', label: '消息列表大图', aspect: 2.35 },
   { key: '1_1', label: '转发卡片小图', aspect: 1 },
 ] as const
@@ -45,11 +45,11 @@ export function CoverCropDialog({ open, onClose, src, width, height, initial, on
   initial: Record<string, CropBox> | null
   onSave: (crops: Record<string, CropBox>) => void
 }) {
-  const [active, setActive] = useState<(typeof ratios)[number]['key']>('2.35_1')
+  const [active, setActive] = useState<(typeof coverRatios)[number]['key']>('2.35_1')
   const [boxes, setBoxes] = useState<Record<string, CropBox>>(initial ?? defaultCrops(width, height))
   const [crop, setCrop] = useState({ x: 0, y: 0 })
   const [zoom, setZoom] = useState(1)
-  const r = ratios.find((x) => x.key === active)!
+  const r = coverRatios.find((x) => x.key === active)!
   const initialArea = (() => {
     const b = boxes[active]
     return { x: b.x1 * 100, y: b.y1 * 100, width: (b.x2 - b.x1) * 100, height: (b.y2 - b.y1) * 100 }
@@ -64,7 +64,7 @@ export function CoverCropDialog({ open, onClose, src, width, height, initial, on
       <div className="grid gap-5 md:grid-cols-[1fr_220px]">
         <div>
           <div className="mb-3 inline-flex rounded-lg bg-mist-100 p-1">
-            {ratios.map((x) => (
+            {coverRatios.map((x) => (
               <button key={x.key} onClick={() => { setActive(x.key); setZoom(1); setCrop({ x: 0, y: 0 }) }}
                 className={cn('h-7 cursor-pointer rounded-md px-3 text-[13px] font-medium', active === x.key ? 'bg-white shadow-sm' : 'text-mist-500')}>
                 {x.key.replace('_', ':')} {x.label}
@@ -93,6 +93,48 @@ export function CoverCropDialog({ open, onClose, src, width, height, initial, on
             </div>
           </div>
         </div>
+      </div>
+    </Dialog>
+  )
+}
+
+/** FR-M7-04: crop to platform preset and save as a new asset. */
+export function AssetCropDialog({ open, onClose, src, width, height, onSave }: {
+  open: boolean
+  onClose: () => void
+  src: string
+  width: number
+  height: number
+  onSave: (box: CropBox & { aspect: string }) => void | Promise<void>
+}) {
+  const aspect = 3 / 4
+  const [box, setBox] = useState<CropBox>(() => centered(aspect, width, height))
+  const [crop, setCrop] = useState({ x: 0, y: 0 })
+  const [zoom, setZoom] = useState(1)
+  const [busy, setBusy] = useState(false)
+  const initialArea = { x: box.x1 * 100, y: box.y1 * 100, width: (box.x2 - box.x1) * 100, height: (box.y2 - box.y1) * 100 }
+  const onComplete = (a: Area) => {
+    const clamp = (v: number) => Math.min(1, Math.max(0, v))
+    setBox({ x1: clamp(a.x / 100), y1: clamp(a.y / 100), x2: clamp((a.x + a.width) / 100), y2: clamp((a.y + a.height) / 100) })
+  }
+  const save = async () => {
+    setBusy(true)
+    try {
+      await onSave({ ...box, aspect: '3:4' })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog open={open} onClose={onClose} title="裁剪为小红书竖图" desc="按 3:4 裁剪后另存为新图片，不改动原图。" width="max-w-2xl"
+      footer={<><Button variant="ghost" onClick={onClose}>取消</Button><Button variant="primary" loading={busy} onClick={save}>另存为新图</Button></>}>
+      <div className="relative h-[360px] overflow-hidden rounded-xl bg-mist-900">
+        <Cropper image={src} aspect={aspect} crop={crop} zoom={zoom} onCropChange={setCrop} onZoomChange={setZoom}
+          onCropComplete={(area) => onComplete(area)} initialCroppedAreaPercentages={initialArea} objectFit="contain" />
+      </div>
+      <input type="range" min={1} max={3} step={0.01} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="mt-3 w-full accent-ink-600" aria-label="缩放" />
+      <div className="mt-3 w-28 overflow-hidden rounded-lg border border-mist-200">
+        <CropPreview src={src} box={box} aspect={aspect} />
       </div>
     </Dialog>
   )

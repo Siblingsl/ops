@@ -242,6 +242,65 @@ func (s *Server) setAccountStatus(status string) handlerFunc {
 	}
 }
 
+// deleteAccount permanently removes a platform account and its owned content (D-037).
+func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireOwner(r.Context()); err != nil {
+		return err
+	}
+	a, err := s.accountFromPath(r)
+	if err != nil {
+		return err
+	}
+	if r.URL.Query().Get("confirm") != "true" {
+		return apiErr(409, "confirm_required", "删除后该账号下的作品、选题、档案、凭证等将一并清除且无法恢复，请确认。")
+	}
+	ctx := r.Context()
+	var workIDs []uuid.UUID
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		rows, qerr := tx.Query(ctx, `SELECT id FROM work WHERE account_id=$1`, a.ID)
+		if qerr != nil {
+			return qerr
+		}
+		workIDs, qerr = pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+		if qerr != nil {
+			return qerr
+		}
+		steps := []struct {
+			sql  string
+			args []any
+		}{
+			{`DELETE FROM push_record WHERE account_id=$1`, []any{a.ID}},
+			{`UPDATE topic SET review_report_id=NULL WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM review_report WHERE account_id=$1`, []any{a.ID}},
+			{`UPDATE work SET source_work_id=NULL WHERE account_id=$1`, []any{a.ID}},
+			{`UPDATE work SET topic_id=NULL, cover_asset_id=NULL WHERE account_id=$1`, []any{a.ID}},
+			{`UPDATE character_card SET ref_asset_id=NULL WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM work WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM topic WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM style_sample WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM character_card WHERE account_id=$1`, []any{a.ID}},
+			{`UPDATE material SET account_id=NULL WHERE account_id=$1`, []any{a.ID}},
+			{`UPDATE asset SET account_id=NULL WHERE account_id=$1`, []any{a.ID}},
+			{`UPDATE ai_call SET account_id=NULL WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM platform_account WHERE id=$1`, []any{a.ID}},
+		}
+		for _, step := range steps {
+			if _, err := tx.Exec(ctx, step.sql, step.args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, wid := range workIDs {
+		_ = os.RemoveAll(filepath.Join(s.cfg.DataDir, "assets", wid.String()))
+	}
+	s.audit(ctx, "account_delete", "platform_account", a.ID.String(), "ok", map[string]any{"name": a.Name, "platform": a.Platform})
+	return ok(w, map[string]any{"ok": true})
+}
+
 func (s *Server) saveWechatCredential(w http.ResponseWriter, r *http.Request) error {
 	if err := s.requireOwner(r.Context()); err != nil {
 		return err
