@@ -49,6 +49,13 @@ func TestHC01_SuggestTopicsDoesNotWritePool(t *testing.T) {
 	if after := topicCount(t, id); after != before {
 		t.Fatalf("suggest wrote to topic pool: %d -> %d", before, after)
 	}
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+id+"/topics/hot-suggest", map[string]string{"direction": "职场"}, &res)
+	if len(res.Suggestions) < 5 {
+		t.Fatalf("hot-suggest: want at least 5, got %d", len(res.Suggestions))
+	}
+	if after := topicCount(t, id); after != before {
+		t.Fatalf("hot-suggest wrote to topic pool: %d -> %d", before, after)
+	}
 	// 入库只能逐条：请求体只接受一个选题。
 	env.mustJSON(t, "POST", "/api/v1/accounts/"+id+"/topics", map[string]string{"title": res.Suggestions[0]["title"], "angle": res.Suggestions[0]["angle"], "source": "ai"}, nil)
 	if after := topicCount(t, id); after != before+1 {
@@ -302,4 +309,143 @@ func TestHC12_EditorCannotCreateModelProvider(t *testing.T) {
 	if ae.Error.Code != "forbidden" {
 		t.Fatalf("code=%s", ae.Error.Code)
 	}
+}
+
+// HC-13：viewer 只读，不能创建作品；邀请可发邮件（扩展 FR-M1-06 / FR-M1-11）
+func TestHC13_ViewerCannotCreateWork(t *testing.T) {
+	f := env.accounts(t)
+	var inv struct {
+		ID   string `json:"id"`
+		Code string `json:"code"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/workspaces/current/invites", map[string]any{"role": "viewer", "max_uses": 3, "days": 7}, &inv)
+	var sent struct {
+		Status string `json:"status"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/workspaces/current/invites/"+inv.ID+"/send-email",
+		map[string]any{"email": "viewer@example.com"}, &sent)
+	if sent.Status != "dev_logged" && sent.Status != "sent" {
+		t.Fatalf("email status=%s", sent.Status)
+	}
+
+	other := env.registerClient(t, "viewer-user", testPassword)
+	defer other.restore(env)
+	st, body := other.do("POST", "/api/v1/workspaces/join", map[string]any{"code": inv.Code, "switch": true})
+	if st != 200 {
+		t.Fatalf("join: %d %s", st, body)
+	}
+	var me struct {
+		CSRF string `json:"csrf_token"`
+		Role string `json:"role"`
+	}
+	other.mustJSON(t, "GET", "/api/v1/auth/me", nil, &me)
+	other.csrf = me.CSRF
+	if me.Role != "viewer" {
+		t.Fatalf("role=%s", me.Role)
+	}
+	ae := other.expectErr(t, "POST", "/api/v1/accounts/"+f.wechat.ID.String()+"/works", map[string]any{
+		"title": "不应创建", "content_format": "long_article",
+	}, "forbidden")
+	if ae.Error.Code != "forbidden" {
+		t.Fatalf("code=%s", ae.Error.Code)
+	}
+}
+
+// HC-14：所有者可转让（D-036）；转让后原 owner 变为 editor
+func TestHC14_TransferOwner(t *testing.T) {
+	var self struct {
+		UserID string `json:"user_id"`
+		Role   string `json:"role"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/auth/me", nil, &self)
+	var inv struct {
+		Code string `json:"code"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/workspaces/current/invites", map[string]any{"role": "editor", "max_uses": 2, "days": 7}, &inv)
+	other := env.registerClient(t, "next-owner", testPassword)
+	defer func() {
+		other.use()
+		_, _ = other.do("POST", "/api/v1/workspaces/current/transfer", map[string]any{"user_id": self.UserID})
+		other.restore(env)
+	}()
+	st, body := other.do("POST", "/api/v1/workspaces/join", map[string]any{"code": inv.Code, "switch": true})
+	if st != 200 {
+		t.Fatalf("join: %d %s", st, body)
+	}
+	var ome struct {
+		UserID string `json:"user_id"`
+		Role   string `json:"role"`
+		CSRF   string `json:"csrf_token"`
+	}
+	other.mustJSON(t, "GET", "/api/v1/auth/me", nil, &ome)
+	other.csrf = ome.CSRF
+	if ome.Role != "editor" {
+		t.Fatalf("join role=%s", ome.Role)
+	}
+	other.restore(env)
+	env.mustJSON(t, "POST", "/api/v1/workspaces/current/transfer", map[string]any{"user_id": ome.UserID}, nil)
+	var me struct {
+		Role string `json:"role"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/auth/me", nil, &me)
+	if me.Role != "editor" {
+		t.Fatalf("former owner role=%s", me.Role)
+	}
+	other.mustJSON(t, "GET", "/api/v1/auth/me", nil, &ome)
+	if ome.Role != "owner" {
+		t.Fatalf("new owner role=%s", ome.Role)
+	}
+	other.restore(env)
+	env.expectErr(t, "POST", "/api/v1/workspaces/current/invites", map[string]any{"role": "editor"}, "forbidden")
+}
+
+func TestGenerateWorkImageWatermarked(t *testing.T) {
+	f := env.accounts(t)
+	var wk Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+f.wechat.ID.String()+"/works", map[string]string{"title": "出图"}, &wk)
+	var a Asset
+	env.mustJSON(t, "POST", "/api/v1/works/"+wk.ID.String()+"/generate-image", map[string]string{"prompt": "一只茶杯"}, &a)
+	if !a.AIGenerated {
+		t.Fatal("want ai_generated")
+	}
+	if a.URL == "" {
+		t.Fatal("empty url")
+	}
+}
+
+// FR-M1-10 / D-041：可再创建工作区并切换过去
+func TestCreateWorkspaceAndSwitch(t *testing.T) {
+	var before struct {
+		Workspace  struct{ ID string `json:"id"` } `json:"workspace"`
+		Workspaces []struct {
+			ID string `json:"id"`
+		} `json:"workspaces"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/auth/me", nil, &before)
+	n0 := len(before.Workspaces)
+	var created struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Role     string `json:"role"`
+		Switched bool   `json:"switched"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/workspaces", map[string]any{"name": "第二工作室", "switch": true}, &created)
+	if created.Role != "owner" || !created.Switched || created.ID == before.Workspace.ID {
+		t.Fatalf("create: %+v (was %s)", created, before.Workspace.ID)
+	}
+	var after struct {
+		Workspace  struct{ ID, Name string } `json:"workspace"`
+		Workspaces []struct {
+			ID string `json:"id"`
+		} `json:"workspaces"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/auth/me", nil, &after)
+	if after.Workspace.ID != created.ID || after.Workspace.Name != "第二工作室" {
+		t.Fatalf("current=%+v want %s", after.Workspace, created.ID)
+	}
+	if len(after.Workspaces) != n0+1 {
+		t.Fatalf("workspaces %d → %d", n0, len(after.Workspaces))
+	}
+	// 切回原工作区，避免污染后续测试
+	env.mustJSON(t, "POST", "/api/v1/workspaces/"+before.Workspace.ID+"/switch", nil, nil)
 }

@@ -105,10 +105,50 @@ export default function Pack() {
           <h1 className="font-display text-[22px] font-bold text-mist-900">小红书发布包</h1>
           <p className="text-[13px] text-mist-500">{work.account_name} · 在手机上打开本页也可以直接复制</p>
         </div>
-        <a href={`/api/v1/works/${work.id}/xhs/pack.zip`} download className="sm:ml-auto">
-          <Button variant="primary" icon={<Download className="size-4" />}>下载图片 zip</Button>
-        </a>
+        <div className="flex flex-wrap gap-2 sm:ml-auto">
+          <Button
+            variant="secondary"
+            icon={<Smartphone className="size-4" />}
+            onClick={async () => {
+              const text = [work.title, body, topics].filter(Boolean).join('\n\n')
+              try {
+                if (navigator.share) {
+                  await navigator.share({ title: work.title, text })
+                  toast.success('已唤起系统分享；请选择小红书或保存到备忘录')
+                } else {
+                  await copyText(text)
+                  toast.success('已复制全文，可粘贴到小红书 App（浏览器不支持系统分享）')
+                }
+              } catch (e) {
+                if ((e as Error).name !== 'AbortError') toast.error(errorMessage(e))
+              }
+            }}
+          >
+            系统分享 / 复制
+          </Button>
+          <Button
+            variant="ghost"
+            icon={<Smartphone className="size-4" />}
+            onClick={async () => {
+              const q = new URLSearchParams()
+              if (work.title) q.set('title', work.title)
+              if (body) q.set('body', body)
+              if (topics) q.set('topics', topics)
+              const link = `ops-xhs://import?${q.toString()}`
+              await copyText(link)
+              toast.success('已复制伴侣深链；在已安装 OPS 分享伴侣的手机上打开')
+            }}
+          >
+            复制伴侣深链
+          </Button>
+          <a href={`/api/v1/works/${work.id}/xhs/pack.zip`} download>
+            <Button variant="primary" icon={<Download className="size-4" />}>下载图片 zip</Button>
+          </a>
+        </div>
       </div>
+      <Notice tone="ink" className="mb-5">
+        小红书官方分享 SDK 需独立移动 App 与开放平台资质（FR-M10-08）。当前提供 Web 系统分享、伴侣深链（<code className="rounded bg-mist-100 px-1">ops-xhs://</code>）与发布包；Expo 工程见 <code className="rounded bg-mist-100 px-1">mobile/</code>。
+      </Notice>
       <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
         <div className="space-y-4">
           <CopyBlock label="标题" meta={`${runeLen(work.title)} 字`} text={work.title} />

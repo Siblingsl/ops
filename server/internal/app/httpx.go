@@ -38,6 +38,7 @@ func (e *APIError) With(detail any) *APIError {
 
 var (
 	errUnauthenticated = apiErr(401, "unauthenticated", "请先登录")
+	errUnauthorized    = apiErr(401, "unauthorized", "请先登录")
 	errCSRF            = apiErr(403, "csrf_invalid", "页面已过期，请刷新后重试")
 	errReauth          = apiErr(403, "reauth_required", "这是敏感操作，请先输入登录密码确认")
 	errNotFound        = apiErr(404, "not_found", "内容不存在或已删除")

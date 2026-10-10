@@ -592,7 +592,7 @@ func deriveAllowed(src, dst *Account, srcFormat string) error {
 	case textual[srcFormat] && textual[dst.ContentFormat]:
 		return nil
 	case srcFormat == "comic" && dst.ContentFormat == "comic":
-		return validation("漫画之间的派生将在后续版本提供")
+		return nil
 	default:
 		return validation("长图文、图文笔记与漫画之间不支持派生，请新建作品并引用同一选题")
 	}
@@ -623,6 +623,9 @@ func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
 	}
 	if err := deriveAllowed(m.Account, dst, srcFormat); err != nil {
 		return err
+	}
+	if srcFormat == "comic" {
+		return s.deriveComicWork(w, r, m, dst)
 	}
 	secs, err := s.loadSections(ctx, nil, m.ID)
 	if err != nil {

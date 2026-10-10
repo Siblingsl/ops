@@ -54,6 +54,10 @@ func TestDeriveAllowed(t *testing.T) {
 	if deriveAllowed(wx, xhsComic, "long_article") == nil {
 		t.Fatal("text -> comic allowed")
 	}
+	wxComic := &Account{Platform: "wechat_mp", ContentFormat: "comic"}
+	if deriveAllowed(wxComic, xhsComic, "comic") != nil {
+		t.Fatal("comic -> comic cross-platform should be allowed")
+	}
 }
 
 func TestAssetIDFromURL(t *testing.T) {

@@ -2,7 +2,9 @@
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -275,6 +277,7 @@ func (s *Server) testProvider(w http.ResponseWriter, r *http.Request) error {
 var taskTypes = []struct{ Type, Label string }{
 	{"default", "默认模型"},
 	{"topic_suggest", "选题建议"},
+	{"topic_hot_suggest", "热点选题"},
 	{"outline", "大纲生成"},
 	{"section_draft", "分段起稿"},
 	{"section_edit", "改写 / 扩写 / 缩写"},
@@ -287,7 +290,9 @@ var taskTypes = []struct{ Type, Label string }{
 	{"style_summary", "风格摘要"},
 	{"comic_storyboard", "漫画分镜"},
 	{"comic_panel_text", "漫画逐格文案"},
+	{"comic_rewrite", "漫画派生改写"},
 	{"image_suggest", "配图建议"},
+	{"image_gen", "AI 出图"},
 	{"organize_notes", "要点整理"},
 }
 
@@ -438,7 +443,14 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) error {
 const trashDays = 30
 
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) error {
-	return ok(w, map[string]any{"ai_limit": s.loadLimit(r.Context()), "trash_days": trashDays, "version": Version})
+	smtp, err := s.loadSMTPPublic(r.Context())
+	if err != nil {
+		return err
+	}
+	return ok(w, map[string]any{
+		"ai_limit": s.loadLimit(r.Context()), "trash_days": trashDays, "version": Version,
+		"smtp": smtp,
+	})
 }
 
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) error {
@@ -446,24 +458,92 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		AILimit *aiLimit `json:"ai_limit"`
+		AILimit *aiLimit    `json:"ai_limit"`
+		SMTP    *smtpConfig `json:"smtp"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
+	ws := ident(r.Context()).WorkspaceID
 	if in.AILimit != nil {
 		if in.AILimit.DailyTokens < 1000 {
 			return validation("每日上限至少 1000 token")
 		}
 		b, _ := json.Marshal(in.AILimit)
-		ws := ident(r.Context()).WorkspaceID
 		if _, err := s.db.Exec(r.Context(), `INSERT INTO app_setting (workspace_id, key, value) VALUES ($1,'ai_limit',$2)
 			ON CONFLICT (workspace_id, key) DO UPDATE SET value=excluded.value`, ws, b); err != nil {
 			return err
 		}
 		s.audit(r.Context(), "settings_update", "app_setting", "ai_limit", "ok", map[string]any{"enabled": in.AILimit.Enabled, "daily_tokens": in.AILimit.DailyTokens})
 	}
+	if in.SMTP != nil {
+		cur, _ := s.loadSMTP(r.Context())
+		port := in.SMTP.Port
+		if port <= 0 {
+			port = 587
+		}
+		passEnc := cur.passEnc
+		if p := strings.TrimSpace(in.SMTP.Password); p != "" {
+			enc, err := s.box.Encrypt(p)
+			if err != nil {
+				return err
+			}
+			passEnc = base64.StdEncoding.EncodeToString(enc)
+		}
+		stored := map[string]any{
+			"host": strings.TrimSpace(in.SMTP.Host), "port": port,
+			"username": strings.TrimSpace(in.SMTP.Username), "from": strings.TrimSpace(in.SMTP.From),
+			"password_enc": passEnc,
+		}
+		b, _ := json.Marshal(stored)
+		if _, err := s.db.Exec(r.Context(), `INSERT INTO app_setting (workspace_id, key, value) VALUES ($1,'smtp',$2)
+			ON CONFLICT (workspace_id, key) DO UPDATE SET value=excluded.value`, ws, b); err != nil {
+			return err
+		}
+		s.audit(r.Context(), "settings_update", "app_setting", "smtp", "ok", map[string]any{"host": stored["host"], "from": stored["from"]})
+	}
 	return s.getSettings(w, r)
+}
+
+func (s *Server) loadSMTP(ctx context.Context) (smtpConfig, error) {
+	var raw []byte
+	err := s.db.QueryRow(ctx, `SELECT value FROM app_setting WHERE workspace_id=$1 AND key='smtp'`, ident(ctx).WorkspaceID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return smtpConfig{}, nil
+	}
+	if err != nil {
+		return smtpConfig{}, err
+	}
+	var stored struct {
+		Host        string `json:"host"`
+		Port        int    `json:"port"`
+		Username    string `json:"username"`
+		From        string `json:"from"`
+		PasswordEnc string `json:"password_enc"`
+	}
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return smtpConfig{}, err
+	}
+	cfg := smtpConfig{Host: stored.Host, Port: stored.Port, Username: stored.Username, From: stored.From, passEnc: stored.PasswordEnc}
+	if stored.PasswordEnc != "" {
+		enc, err := base64.StdEncoding.DecodeString(stored.PasswordEnc)
+		if err == nil {
+			if plain, err := s.box.Decrypt(enc); err == nil {
+				cfg.Password = plain
+				cfg.HasPass = true
+			}
+		}
+	}
+	return cfg, nil
+}
+
+func (s *Server) loadSMTPPublic(ctx context.Context) (smtpConfig, error) {
+	cfg, err := s.loadSMTP(ctx)
+	if err != nil {
+		return smtpConfig{}, err
+	}
+	cfg.Password = ""
+	return cfg, nil
 }
 
 // ---------- 敏感词库（P-17） ----------

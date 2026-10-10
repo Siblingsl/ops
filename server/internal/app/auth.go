@@ -360,6 +360,55 @@ func (s *Server) requireOwner(ctx context.Context) error {
 	return nil
 }
 
+// requireEditor blocks viewer (read-only) from mutating content. owner and editor pass.
+func (s *Server) requireEditor(ctx context.Context) error {
+	id := ident(ctx)
+	if id == nil {
+		return errUnauthorized
+	}
+	if id.Role == "viewer" {
+		return apiErr(403, "forbidden", "观察者仅可浏览，不能修改内容")
+	}
+	if id.Role != "owner" && id.Role != "editor" {
+		return apiErr(403, "forbidden", "需要编辑权限")
+	}
+	return nil
+}
+
+// blockViewerWrites rejects mutating HTTP methods for viewers except allowlisted auth/workspace paths.
+func (s *Server) blockViewerWrites(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		id := ident(r.Context())
+		if id == nil || id.Role != "viewer" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if viewerMutateAllowed(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		writeError(w, r, apiErr(403, "forbidden", "观察者仅可浏览，不能修改内容"))
+	})
+}
+
+func viewerMutateAllowed(path string) bool {
+	switch path {
+	case "/api/v1/auth/logout", "/api/v1/auth/reauth", "/api/v1/auth/password",
+		"/api/v1/workspaces", "/api/v1/workspaces/join", "/api/v1/workspaces/current/leave":
+		return true
+	}
+	// POST /api/v1/workspaces/{id}/switch
+	if strings.HasPrefix(path, "/api/v1/workspaces/") && strings.HasSuffix(path, "/switch") {
+		return true
+	}
+	return false
+}
+
 func (s *Server) authMe(w http.ResponseWriter, r *http.Request) error {
 	id := ident(r.Context())
 	var prevAt *time.Time

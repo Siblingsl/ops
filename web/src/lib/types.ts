@@ -55,8 +55,17 @@ export interface CharacterCard {
   personality: string
   catchphrase: string
   ref_asset_id: string | null
+  ref_url?: string
   created_at: string
   updated_at: string
+}
+
+export interface ComicBubble {
+  text: string
+  x: number
+  y: number
+  w: number
+  h: number
 }
 
 export interface ComicPanel {
@@ -70,6 +79,7 @@ export interface ComicPanel {
   dialogue: string
   image_prompt: string
   asset_id: string | null
+  bubbles?: ComicBubble[]
   created_at: string
   updated_at: string
 }
@@ -89,7 +99,7 @@ export interface Topic {
   id: string
   title: string
   angle: string
-  source: 'manual' | 'ai' | 'review'
+  source: 'manual' | 'ai' | 'review' | 'hot'
   status: 'pending' | 'adopted' | 'dropped'
   work_id?: string | null
   created_at: string
@@ -124,6 +134,7 @@ export interface Asset {
   bytes: number
   position: number
   url: string
+  ai_generated?: boolean
 }
 
 export interface WorkRef {
@@ -267,16 +278,18 @@ export interface ModelRoute {
 
 export interface AILimit { enabled: boolean; daily_tokens: number }
 
+export type WorkspaceRole = 'owner' | 'editor' | 'viewer'
+
 export interface WorkspaceRef {
   id: string
   name: string
-  role: 'owner' | 'editor'
+  role: WorkspaceRole
 }
 
 export interface Me {
   username: string
   user_id?: string
-  role: 'owner' | 'editor'
+  role: WorkspaceRole
   csrf_token: string
   reauth_ok: boolean
   prev_login_at: string | null
@@ -289,7 +302,7 @@ export interface Me {
 export interface WorkspaceInvite {
   id: string
   code: string
-  role: 'owner' | 'editor'
+  role: WorkspaceRole
   max_uses: number
   used_count: number
   expires_at: string
@@ -300,8 +313,16 @@ export interface WorkspaceInvite {
 export interface WorkspaceMember {
   user_id: string
   username: string
-  role: 'owner' | 'editor'
+  role: WorkspaceRole
   status: 'active' | 'disabled'
+}
+
+export interface SMTPSettings {
+  host: string
+  port: number
+  username: string
+  from: string
+  has_password: boolean
 }
 
 export interface SystemInfo {

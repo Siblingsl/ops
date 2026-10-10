@@ -5,7 +5,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, IconButton, Input, PageHeader, PageLoading, PlatformMark, Switch, Tabs, Textarea } from '@/components/ui'
-import { del, errorMessage, get, patch, post, put, stream } from '@/lib/api'
+import { del, errorMessage, get, patch, post, put, rawRequest, stream } from '@/lib/api'
 import { relTime, runeLen } from '@/lib/format'
 import { themes } from '@/lib/render'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
@@ -152,19 +152,46 @@ function CharacterDialog({ accountId, editing, onClose }: { accountId: string; e
   const [appearance, setAppearance] = useState(editing?.appearance ?? '')
   const [personality, setPersonality] = useState(editing?.personality ?? '')
   const [catchphrase, setCatchphrase] = useState(editing?.catchphrase ?? '')
+  const [preview, setPreview] = useState(editing?.ref_url || (editing?.ref_asset_id ? `/api/v1/assets/${editing.ref_asset_id}/file` : ''))
+  const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
   const inv = useInvalidate()
+  const uploadRef = async (id: string, file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await rawRequest('POST', `/characters/${id}/ref`, fd)
+    const card = await res.json() as CharacterCard
+    setPreview(card.ref_url || `/api/v1/assets/${card.ref_asset_id}/file`)
+  }
   const save = async () => {
     setBusy(true)
     try {
-      if (editing) await patch(`/characters/${editing.id}`, { name, appearance, personality, catchphrase })
-      else await post(`/accounts/${accountId}/characters`, { name, appearance, personality, catchphrase })
+      const saved = editing
+        ? await patch<CharacterCard>(`/characters/${editing.id}`, { name, appearance, personality, catchphrase })
+        : await post<CharacterCard>(`/accounts/${accountId}/characters`, { name, appearance, personality, catchphrase })
+      if (pendingFile) await uploadRef(saved.id, pendingFile)
       inv(['characters', accountId])
       onClose()
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
       setBusy(false)
+    }
+  }
+  const clearRef = async () => {
+    if (!editing) {
+      setPendingFile(null)
+      setPreview('')
+      return
+    }
+    try {
+      await del(`/characters/${editing.id}/ref`)
+      setPreview('')
+      setPendingFile(null)
+      inv(['characters', accountId])
+      toast.success('已移除参考图')
+    } catch (e) {
+      toast.error(errorMessage(e))
     }
   }
   return (
@@ -175,6 +202,28 @@ function CharacterDialog({ accountId, editing, onClose }: { accountId: string; e
         <Field label="外貌" hint="会自动拼进每格绘图提示词"><Textarea rows={3} value={appearance} onChange={(e) => setAppearance(e.target.value)} placeholder="短发、圆框眼镜、常穿卫衣…" /></Field>
         <Field label="性格"><Textarea rows={2} value={personality} onChange={(e) => setPersonality(e.target.value)} /></Field>
         <Field label="口头禅"><Input value={catchphrase} onChange={(e) => setCatchphrase(e.target.value)} /></Field>
+        <Field label="参考图" hint="用于跨格外貌一致；出图时会写入提示词约束">
+          <div className="flex items-start gap-3">
+            {preview ? (
+              <img src={preview} alt="" className="size-20 rounded-lg border border-mist-200 object-cover" />
+            ) : (
+              <div className="flex size-20 items-center justify-center rounded-lg border border-dashed border-mist-200 text-[11px] text-mist-400">无图</div>
+            )}
+            <div className="flex flex-col gap-2">
+              <label className="inline-flex cursor-pointer items-center gap-1.5 text-[13px] text-ink-600">
+                选择图片
+                <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  e.target.value = ''
+                  if (!f) return
+                  setPendingFile(f)
+                  setPreview(URL.createObjectURL(f))
+                }} />
+              </label>
+              {preview && <button type="button" className="cursor-pointer text-left text-[13px] text-danger" onClick={() => void clearRef()}>移除</button>}
+            </div>
+          </div>
+        </Field>
       </div>
     </Dialog>
   )
@@ -193,7 +242,7 @@ function CharactersTab({ account }: { account: Account }) {
   return (
     <Card>
       <CardHeader title={<span className="flex items-center gap-2">角色设定卡<Badge>{list.length}</Badge></span>}
-        desc="归属本账号，可被所有漫画作品引用。出图仍在外部工具完成。"
+        desc="归属本账号，可被所有漫画作品引用。可上传参考图，出图时用于保持外貌一致。"
         action={<Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ editing: null })}>添加角色</Button>} />
       {isLoading ? <PageLoading /> : list.length === 0 ? (
         <Empty icon={<FileText className="size-5" />} title="还没有角色" desc="先建立固定角色，分镜和绘图提示词才会稳定。" />
@@ -201,6 +250,9 @@ function CharactersTab({ account }: { account: Account }) {
         <ul className="divide-y divide-mist-100">
           {list.map((c) => (
             <li key={c.id} className="group flex items-start gap-3 px-5 py-3.5">
+              {(c.ref_url || c.ref_asset_id) ? (
+                <img src={c.ref_url || `/api/v1/assets/${c.ref_asset_id}/file`} alt="" className="size-11 shrink-0 rounded-lg object-cover" />
+              ) : null}
               <div className="min-w-0 flex-1">
                 <div className="text-[14px] font-medium text-mist-800">{c.name}</div>
                 <div className="mt-0.5 text-xs text-mist-500 line-clamp-2">{c.appearance || '未填外貌'}{c.personality ? ` · ${c.personality}` : ''}</div>

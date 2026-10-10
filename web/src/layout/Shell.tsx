@@ -331,11 +331,33 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
 
   const otherWorkspaces = (me.workspaces ?? []).filter((w) => w.id !== me.workspace.id)
 
+  const createAndSwitchWorkspace = async () => {
+    if (!(await confirm({
+      title: '创建新工作区并切换？',
+      desc: '你会成为所有者；当前工作区仍保留。可在「成员与邀请」里自定义名称。',
+      confirmText: '创建并切换',
+    }))) return
+    setBusy(true)
+    try {
+      await post('/workspaces', { name: '新工作区', switch: true })
+      qc.clear()
+      window.location.assign('/')
+    } catch (e) {
+      toast.error(errorMessage(e))
+      setBusy(false)
+    }
+  }
+
   const workspaceMenu = (): MenuItem[] => [
     {
       label: '成员与邀请',
       icon: <UserPlus />,
       onClick: () => { setOpen(false); navigate('/settings/members') },
+    },
+    {
+      label: '创建工作区',
+      icon: <Plus />,
+      onClick: () => { setOpen(false); void createAndSwitchWorkspace() },
     },
     {
       label: '添加账号',
@@ -676,11 +698,16 @@ export default function Shell() {
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar username={me?.username} onLogout={logout} dense={fullBleed} />
+        {me?.role === 'viewer' && (
+          <div className="border-b border-gamboge-200 bg-gamboge-50 px-5 py-2 text-center text-[12.5px] text-gamboge-800">
+            当前为观察者：可浏览内容，不能创建、编辑或推送。
+          </div>
+        )}
         <main className={cn('scrollbar-thin min-w-0 flex-1 overflow-y-auto', !fullBleed && 'px-8 py-7 sm:px-10 xl:px-12 2xl:px-14')}>
           {fullBleed ? <Outlet /> : <div className="mx-auto w-full max-w-[1400px] 2xl:max-w-[1680px]"><Outlet /></div>}
         </main>
       </div>
-      <QuickCollect />
+      {me?.role !== 'viewer' && <QuickCollect />}
     </div>
   )
 }

@@ -242,3 +242,29 @@ func (c *Client) DraftBatchGet(ctx context.Context, token string, offset, count 
 	}
 	return ids, out.TotalCount, nil
 }
+
+// ArticleSummary is one row from datacube/getarticlesummary (FR-M11-05；通常需企业认证).
+type ArticleSummary struct {
+	RefDate        string `json:"ref_date"`
+	Title          string `json:"title"`
+	UserSource     int    `json:"user_source"`
+	IntPageReadUser int   `json:"int_page_read_user"`
+	IntPageReadCount int  `json:"int_page_read_count"`
+	ShareUser      int    `json:"share_user"`
+	ShareCount     int    `json:"share_count"`
+	AddToFavUser   int    `json:"add_to_fav_user"`
+	AddToFavCount  int    `json:"add_to_fav_count"`
+}
+
+// DatacubeArticleSummary pulls article stats for a date range (max 1 day per WeChat docs for summary).
+func (c *Client) DatacubeArticleSummary(ctx context.Context, token, begin, end string) ([]ArticleSummary, error) {
+	var out struct {
+		List []ArticleSummary `json:"list"`
+	}
+	if err := c.postJSON(ctx, "/datacube/getarticlesummary", token, map[string]string{
+		"begin_date": begin, "end_date": end,
+	}, &out); err != nil {
+		return nil, err
+	}
+	return out.List, nil
+}

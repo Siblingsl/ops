@@ -517,14 +517,26 @@ function SectionBlock({ section, index, total, work, patchWork, refresh, readOnl
         </div>
       </Dialog>
       {toMaterial !== null && <SaveToMaterial text={toMaterial} work={work} onClose={() => setToMaterial(null)} />}
-      <Dialog open={!!imgSuggest} onClose={() => setImgSuggest(null)} title="配图建议" desc="复制提示词到外部文生图工具或公众号官方 AI 配图。" width="max-w-lg"
+      <Dialog open={!!imgSuggest} onClose={() => setImgSuggest(null)} title="配图建议" desc="可复制到外部工具，或直接用本系统文生图（出图带 AI 标识）。" width="max-w-lg"
         footer={<Button variant="primary" onClick={() => setImgSuggest(null)}>关闭</Button>}>
         <div className="space-y-3">
           {(imgSuggest ?? []).map((s, i) => (
             <div key={i} className="rounded-lg border border-mist-200 p-3">
               <div className="text-[13.5px] font-medium text-mist-800">{s.description}</div>
               <p className="mt-1.5 text-[13px] leading-relaxed text-mist-600">{s.prompt}</p>
-              <Button size="sm" variant="ghost" className="mt-2" onClick={async () => { await copyText(s.prompt); toast.success('提示词已复制') }}>复制提示词</Button>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button size="sm" variant="ghost" onClick={async () => { await copyText(s.prompt); toast.success('提示词已复制') }}>复制提示词</Button>
+                <Button size="sm" variant="secondary" loading={imgBusy} onClick={async () => {
+                  setImgBusy(true)
+                  try {
+                    const a = await post<Asset>(`/works/${work.id}/generate-image`, { prompt: s.prompt })
+                    editor.current?.insertImage(a.url)
+                    toast.success('已出图并插入（含 AI 标识）')
+                    await refresh()
+                  } catch (e) { toast.error(errorMessage(e)) }
+                  finally { setImgBusy(false) }
+                }}>用此出图</Button>
+              </div>
             </div>
           ))}
         </div>
@@ -705,6 +717,8 @@ function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: 
   const [cropFor, setCropFor] = useState<Asset | null>(null)
   const [ratioCrop, setRatioCrop] = useState<Asset | null>(null)
   const [uploading, setUploading] = useState(0)
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [aiBusy, setAiBusy] = useState(false)
   const input = useRef<HTMLInputElement>(null)
   const cover = work.assets.find((a) => a.id === work.cover_asset_id)
   const handleFiles = async (files: FileList | null) => {
@@ -742,6 +756,21 @@ function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: 
         <span className="text-xs text-mist-400">{wx ? '正文图片会自动压缩到 1MB 以内' : `${work.assets.length} / 18 张，按顺序发布`}</span>
         {!readOnly && <Button size="sm" className="ml-auto" icon={<ImagePlus className="size-3.5" />} loading={uploading > 0} onClick={() => input.current?.click()}>上传图片</Button>}
       </div>
+      {!readOnly && (
+        <div className="mb-4 flex flex-wrap gap-2">
+          <Input className="h-9 min-w-[220px] flex-1" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} placeholder="AI 出图提示词（生成图带「AI 生成」标识）" />
+          <Button size="sm" variant="secondary" icon={<Sparkles className="size-3.5" />} loading={aiBusy} disabled={!aiPrompt.trim()} onClick={async () => {
+            setAiBusy(true)
+            try {
+              const a = await post<Asset>(`/works/${work.id}/generate-image`, { prompt: aiPrompt.trim() })
+              setWork({ ...work, assets: [...work.assets, a] })
+              setAiPrompt('')
+              toast.success('已出图（含 AI 标识）')
+            } catch (e) { toast.error(errorMessage(e)) }
+            finally { setAiBusy(false) }
+          }}>AI 出图</Button>
+        </div>
+      )}
       {wx && (
         <div className="mb-4 flex items-center gap-4 rounded-xl bg-mist-50 p-3">
           {cover && work.cover_crops ? (
@@ -769,6 +798,7 @@ function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: 
               <img src={a.url} alt="" className={cn('w-full object-cover', wx ? 'aspect-[4/3]' : 'aspect-[3/4]')} />
               <span className="absolute left-1.5 top-1.5 rounded bg-mist-900/60 px-1.5 text-[11px] font-medium text-white">{String(i + 1).padStart(2, '0')}</span>
               {a.id === work.cover_asset_id && <span className="absolute right-1.5 top-1.5 rounded bg-gamboge-400 px-1.5 text-[11px] font-bold text-mist-900">封面</span>}
+              {a.ai_generated && <span className="absolute left-1.5 bottom-8 rounded bg-mist-900/70 px-1.5 text-[10px] text-white">AI</span>}
               {!readOnly && (
                 <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-mist-900/70 to-transparent px-1.5 pb-1.5 pt-6 opacity-0 transition group-hover:opacity-100">
                   <div className="flex">

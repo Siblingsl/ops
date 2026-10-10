@@ -16,14 +16,15 @@ export function DeriveDialog({ open, onClose, workId, platform, format }: { open
   const [busy, setBusy] = useState(false)
   const nav = useNavigate()
   const options = (accounts ?? []).filter((a) => a.status === 'active' && a.platform !== platform)
-  const allowed = (f: ContentFormat) => textual.includes(format) && textual.includes(f)
+  const comic = format === 'comic'
+  const allowed = (f: ContentFormat) => (comic && f === 'comic') || (textual.includes(format) && textual.includes(f))
   const go = async () => {
     setBusy(true)
     try {
       const w = await post<Work>(`/works/${workId}/derive`, { target_account_id: target })
-      toast.success('已创建衍生作品，接下来逐段改写')
+      toast.success(comic ? '已创建衍生漫画，分格与图片已复用，旁白对白已按目标平台改写' : '已创建衍生作品，接下来逐段改写')
       onClose()
-      nav(`/works/${w.id}/compare`)
+      nav(comic ? `/works/${w.id}/edit` : `/works/${w.id}/compare`)
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
@@ -31,7 +32,8 @@ export function DeriveDialog({ open, onClose, workId, platform, format }: { open
     }
   }
   return (
-    <Dialog open={open} onClose={onClose} title="派生到其他平台" desc="系统先规划段落对应关系，然后由你逐段改写，原作品不受影响。"
+    <Dialog open={open} onClose={onClose} title="派生到其他平台"
+      desc={comic ? '复用分格、角色引用和图片，只改写旁白与对白的平台表达；原作品不受影响。' : '系统先规划段落对应关系，然后由你逐段改写，原作品不受影响。'}
       footer={<><Button variant="ghost" onClick={onClose}>取消</Button><Button variant="primary" loading={busy} disabled={!target} onClick={go} icon={<GitBranch className="size-4" />}>开始派生</Button></>}>
       {options.length === 0 ? (
         <Notice tone="gamboge">没有可派生的目标账号。派生只能在不同平台之间进行（同平台派生容易造成同质内容），请先添加另一个平台的账号。</Notice>

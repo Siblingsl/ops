@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"strings"
@@ -51,7 +53,8 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) error {
 
 func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) error {
 	var in struct {
-		Name string `json:"name"`
+		Name   string `json:"name"`
+		Switch bool   `json:"switch"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -84,8 +87,18 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) error {
 	if s.cfg.Dev {
 		_ = s.seedDevModelFor(r.Context(), wsID)
 	}
+	switched := false
+	if in.Switch {
+		if _, err := s.db.Exec(r.Context(), `UPDATE session SET current_workspace_id=$2 WHERE id=$1`, id.SessionID, wsID); err != nil {
+			return err
+		}
+		switched = true
+		s.audit(r.Context(), "workspace_switch", "workspace", wsID.String(), "ok", map[string]any{"via": "create"})
+	}
 	s.audit(r.Context(), "workspace_create", "workspace", wsID.String(), "ok", nil)
-	return ok(w, workspaceDTO{ID: wsID, Name: name, Role: "owner"})
+	return ok(w, map[string]any{
+		"id": wsID, "name": name, "role": "owner", "switched": switched,
+	})
 }
 
 func (s *Server) patchWorkspace(w http.ResponseWriter, r *http.Request) error {
@@ -206,10 +219,10 @@ func (s *Server) patchMember(w http.ResponseWriter, r *http.Request) error {
 	}
 	if in.Role != nil {
 		role := *in.Role
-		if role != "owner" && role != "editor" {
+		if role != "owner" && role != "editor" && role != "viewer" {
 			return validation("角色无效")
 		}
-		if role == "editor" {
+		if role == "editor" || role == "viewer" {
 			if err := s.ensureNotLastOwner(r.Context(), ws, targetID); err != nil {
 				return err
 			}
@@ -246,6 +259,55 @@ func (s *Server) patchMember(w http.ResponseWriter, r *http.Request) error {
 	}
 	s.audit(r.Context(), "member_update", "user", targetID.String(), "ok", nil)
 	return ok(w, map[string]any{"ok": true})
+}
+
+// transferOwnership makes target the owner and demotes the current owner to editor (D-036).
+func (s *Server) transferOwnership(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireOwner(r.Context()); err != nil {
+		return err
+	}
+	var in struct {
+		UserID string `json:"user_id"`
+	}
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	targetID, err := uuid.Parse(strings.TrimSpace(in.UserID))
+	if err != nil {
+		return validation("请选择要转让的成员")
+	}
+	id := ident(r.Context())
+	if targetID == id.UserID {
+		return validation("不能转让给自己")
+	}
+	var role, status string
+	err = s.db.QueryRow(r.Context(), `SELECT role, status FROM workspace_member WHERE workspace_id=$1 AND user_id=$2`,
+		id.WorkspaceID, targetID).Scan(&role, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if status != "active" {
+		return validation("只能转让给使用中的成员")
+	}
+	err = s.withTx(r.Context(), func(tx pgx.Tx) error {
+		if _, err := tx.Exec(r.Context(), `UPDATE workspace_member SET role='owner', updated_at=now() WHERE workspace_id=$1 AND user_id=$2`,
+			id.WorkspaceID, targetID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(r.Context(), `UPDATE workspace_member SET role='editor', updated_at=now() WHERE workspace_id=$1 AND user_id=$2`,
+			id.WorkspaceID, id.UserID); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	s.audit(r.Context(), "owner_transfer", "user", targetID.String(), "ok", map[string]any{"from": id.UserID.String()})
+	return ok(w, map[string]any{"ok": true, "owner_user_id": targetID})
 }
 
 func (s *Server) leaveWorkspace(w http.ResponseWriter, r *http.Request) error {
@@ -344,7 +406,7 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) error {
 	if role == "" {
 		role = "editor"
 	}
-	if role != "editor" && role != "owner" {
+	if role != "editor" && role != "owner" && role != "viewer" {
 		return validation("邀请角色无效")
 	}
 	maxUses := in.MaxUses
@@ -395,6 +457,83 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request) error {
 	}
 	s.audit(r.Context(), "invite_revoke", "workspace_invite", invID.String(), "ok", nil)
 	return ok(w, map[string]any{"ok": true})
+}
+
+func (s *Server) sendInviteEmail(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireOwner(r.Context()); err != nil {
+		return err
+	}
+	invID, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	var in struct {
+		Email string `json:"email"`
+	}
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	to := strings.TrimSpace(strings.ToLower(in.Email))
+	if to == "" || !strings.Contains(to, "@") {
+		return validation("请填写有效邮箱")
+	}
+	id := ident(r.Context())
+	var code, role string
+	var expires time.Time
+	err = s.db.QueryRow(r.Context(), `
+		SELECT code, role, expires_at FROM workspace_invite
+		WHERE id=$1 AND workspace_id=$2 AND revoked_at IS NULL`,
+		invID, id.WorkspaceID).Scan(&code, &role, &expires)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errNotFound
+	}
+	if err != nil {
+		return err
+	}
+	var wsName string
+	_ = s.db.QueryRow(r.Context(), `SELECT name FROM workspace WHERE id=$1`, id.WorkspaceID).Scan(&wsName)
+	roleLabel := map[string]string{"owner": "所有者", "editor": "编辑者", "viewer": "观察者"}[role]
+	if roleLabel == "" {
+		roleLabel = role
+	}
+	subject := fmt.Sprintf("邀请加入工作区「%s」", wsName)
+	body := fmt.Sprintf("你被邀请以「%s」身份加入工作区「%s」。\n\n邀请码：%s\n有效期至：%s\n\n打开系统 → 成员与邀请 → 输入邀请码即可加入。\n",
+		roleLabel, wsName, code, expires.Local().Format("2006-01-02 15:04"))
+
+	cfg, err := s.loadSMTP(r.Context())
+	if err != nil {
+		return err
+	}
+	status := "sent"
+	errMsg := ""
+	if s.cfg.Dev && !cfg.configured() {
+		status = "dev_logged"
+		slog.Info("invite email (dev, SMTP unset)", "to", to, "code", code, "workspace", wsName)
+	} else {
+		if !cfg.configured() {
+			return validation("请先在设置中配置 SMTP（发件邮箱）")
+		}
+		if err := sendSMTP(cfg, to, subject, body); err != nil {
+			status = "failed"
+			errMsg = err.Error()
+			_, _ = s.db.Exec(r.Context(), `
+				INSERT INTO workspace_invite_email (invite_id, workspace_id, to_email, status, error)
+				VALUES ($1,$2,$3,$4,$5)`, invID, id.WorkspaceID, to, status, errMsg)
+			s.audit(r.Context(), "invite_email", "workspace_invite", invID.String(), "failed", map[string]any{"to": to})
+			return apiErr(502, "email_failed", "邮件发送失败："+errMsg)
+		}
+	}
+	if _, err := s.db.Exec(r.Context(), `
+		INSERT INTO workspace_invite_email (invite_id, workspace_id, to_email, status, error)
+		VALUES ($1,$2,$3,$4,$5)`, invID, id.WorkspaceID, to, status, errMsg); err != nil {
+		return err
+	}
+	s.audit(r.Context(), "invite_email", "workspace_invite", invID.String(), "ok", map[string]any{"to": to, "status": status})
+	msg := "邀请邮件已发送"
+	if status == "dev_logged" {
+		msg = "开发模式已记录邀请（未配置 SMTP，未真实发信）"
+	}
+	return ok(w, map[string]any{"ok": true, "status": status, "message": msg})
 }
 
 func (s *Server) joinWorkspace(w http.ResponseWriter, r *http.Request) error {

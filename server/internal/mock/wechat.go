@@ -180,6 +180,20 @@ func (m *Wechat) Handler() http.Handler {
 		}
 		writeJSON(w, map[string]any{"news_item": []any{d.Article}})
 	})
+	mux.HandleFunc("/datacube/getarticlesummary", func(w http.ResponseWriter, r *http.Request) {
+		if !m.checkToken(w, r) {
+			return
+		}
+		writeJSON(w, map[string]any{
+			"list": []any{
+				map[string]any{
+					"ref_date": "2026-10-09", "title": "模拟稿件", "user_source": 0,
+					"int_page_read_user": 120, "int_page_read_count": 180,
+					"share_user": 8, "share_count": 10, "add_to_fav_user": 3, "add_to_fav_count": 3,
+				},
+			},
+		})
+	})
 	mux.HandleFunc("/cgi-bin/draft/batchget", func(w http.ResponseWriter, r *http.Request) {
 		if !m.checkToken(w, r) {
 			return

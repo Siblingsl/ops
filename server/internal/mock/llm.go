@@ -27,6 +27,19 @@ type chatReq struct {
 
 func (l *LLM) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/images/generations", func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") == "bad-key" {
+			w.WriteHeader(401)
+			_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key"}}`))
+			return
+		}
+		// 1x1 PNG
+		const png1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+		writeJSON(w, map[string]any{
+			"created": time.Now().Unix(),
+			"data":    []any{map[string]string{"b64_json": png1}},
+		})
+	})
 	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") == "bad-key" {
 			w.WriteHeader(401)
@@ -166,6 +179,22 @@ func respond(prompt string) string {
 			})
 		}
 		return js(map[string]any{"topics": items})
+	case "topic_hot_suggest":
+		dir := field(prompt, "方向关键词：")
+		if dir == "" {
+			dir = "当下讨论"
+		}
+		var items []map[string]any
+		titles := []string{"这周大家都在问的一件事", "换个角度谈季节性话题", "把公开资讯落到你的读者身上", "常青问题的新切口", "别追热榜，追读者真实困扰", "用亲身经历回应时事讨论"}
+		for i, title := range titles {
+			items = append(items, map[string]any{
+				"title":      fmt.Sprintf("%s · %s", dir, title),
+				"angle":      "结合账号定位，用可核实的个人经验回应时效话题",
+				"reason":     "合规来源：不依赖平台热榜；待用户核实时效",
+				"timeliness": []string{"本周讨论", "季节性", "常青+当下", "待核实", "读者痛点", "时事旁观"}[i],
+			})
+		}
+		return js(map[string]any{"topics": items})
 	case "outline":
 		heads := []string{"先说结论", "为什么会这样", "我的亲身经历", "具体怎么做", "需要注意的地方"}
 		var items []map[string]any
@@ -289,6 +318,20 @@ func respond(prompt string) string {
 			"dialogue":     short("这件事得想清楚。", 30),
 			"image_prompt": "暖色漫画风，角色表情生动，画面干净，留出气泡位置。",
 		})
+	case "comic_rewrite":
+		ids := regexp.MustCompile(`【源分格 id=([0-9a-f-]{36})】`).FindAllStringSubmatch(prompt, -1)
+		var panels []map[string]string
+		for i, m := range ids {
+			panels = append(panels, map[string]string{
+				"source_panel_id": m[1],
+				"narration":       fmt.Sprintf("改写旁白 %d：%s", i+1, short(viewpoint, 24)),
+				"dialogue":        short(fmt.Sprintf("改写对白 %d", i+1), 20),
+			})
+		}
+		if len(panels) == 0 {
+			panels = []map[string]string{{"source_panel_id": "00000000-0000-0000-0000-000000000001", "narration": "旁白", "dialogue": "对白"}}
+		}
+		return js(map[string]any{"title": short(field(prompt, "源标题："), 18) + "｜跨平台", "panels": panels})
 	case "image_suggest":
 		if strings.Contains(prompt, "图片页") || strings.Contains(prompt, "封面页") {
 			return js(map[string]any{"pages": []map[string]string{

@@ -1,8 +1,14 @@
 package app
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"mime/multipart"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestMDToPlain(t *testing.T) {
@@ -69,6 +75,109 @@ func TestComicStoryboardHumanGates(t *testing.T) {
 	env.mustJSON(t, "POST", "/api/v1/panels/"+wk.Panels[0].ID.String()+"/text", nil, &text)
 	if text.Dialogue == "" || !strings.Contains(text.ImagePrompt, "短发") {
 		t.Fatalf("panel text should include appearance in prompt: %+v", text)
+	}
+}
+
+func TestCharacterRefImage(t *testing.T) {
+	_ = env.accounts(t)
+	var comic Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]any{
+		"platform": "xhs", "name": "角色参考号", "content_format": "comic",
+	}, &comic)
+	var char CharacterCard
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+comic.ID.String()+"/characters", map[string]string{
+		"name": "阿宁", "appearance": "齐肩黑发",
+	}, &char)
+	if char.RefURL != "" {
+		t.Fatal("new character should have no ref")
+	}
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("file", "ref.png")
+	_, _ = fw.Write(testPNG(64, 64))
+	_ = mw.Close()
+	resp := env.request("POST", "/api/v1/characters/"+char.ID.String()+"/ref", &buf, mw.FormDataContentType())
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("upload ref: %d %s", resp.StatusCode, b)
+	}
+	if err := json.Unmarshal(b, &char); err != nil || char.RefAssetID == nil || char.RefURL == "" {
+		t.Fatalf("ref card: %+v %v", char, err)
+	}
+	file := env.request("GET", char.RefURL, nil, "")
+	fb, _ := io.ReadAll(file.Body)
+	file.Body.Close()
+	if file.StatusCode != 200 || len(fb) < 32 {
+		t.Fatalf("get ref file: %d len=%d", file.StatusCode, len(fb))
+	}
+	var cleared CharacterCard
+	env.mustJSON(t, "DELETE", "/api/v1/characters/"+char.ID.String()+"/ref", nil, &cleared)
+	if cleared.RefAssetID != nil || cleared.RefURL != "" {
+		t.Fatalf("cleared ref: %+v", cleared)
+	}
+}
+
+func TestDeriveComicCrossPlatform(t *testing.T) {
+	env.accounts(t)
+	var src, dst Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]any{
+		"platform": "wechat_mp", "name": "公众号漫画源", "content_format": "comic",
+	}, &src)
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]any{
+		"platform": "xhs", "name": "小红书漫画目标", "content_format": "comic",
+	}, &dst)
+	env.reauth(t)
+
+	var srcChar, dstChar CharacterCard
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+src.ID.String()+"/characters", map[string]string{
+		"name": "阿木", "appearance": "短发卫衣",
+	}, &srcChar)
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+dst.ID.String()+"/characters", map[string]string{
+		"name": "阿木", "appearance": "短发卫衣",
+	}, &dstChar)
+
+	var wk Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+src.ID.String()+"/works", map[string]string{"title": "源漫画"}, &wk)
+	env.mustJSON(t, "PATCH", "/api/v1/works/"+wk.ID.String(), map[string]string{"viewpoint": "跨平台复用分格"}, nil)
+	var gen struct {
+		Panels []ComicPanel `json:"panels"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/works/"+wk.ID.String()+"/storyboard/generate",
+		map[string]any{"panel_count": 3, "character_ids": []string{srcChar.ID.String()}}, &gen)
+	for i := range gen.Panels {
+		gen.Panels[i].CharacterIDs = []uuid.UUID{srcChar.ID}
+	}
+	env.mustJSON(t, "PUT", "/api/v1/works/"+wk.ID.String()+"/storyboard", map[string]any{"panels": gen.Panels, "confirm": true}, &wk)
+	for i := range wk.Panels {
+		a := env.upload(t, wk.ID.String(), testPNG(80, 80))
+		env.mustJSON(t, "PATCH", "/api/v1/panels/"+wk.Panels[i].ID.String(), map[string]any{
+			"asset_id": a.ID, "narration": "源旁白"+string(rune('甲'+i)), "dialogue": "源对白",
+		}, &wk)
+	}
+	env.mustJSON(t, "GET", "/api/v1/works/"+wk.ID.String(), nil, &wk)
+	if len(wk.Panels) != 3 || wk.Panels[0].AssetID == nil {
+		t.Fatalf("source panels: %+v", wk.Panels)
+	}
+
+	var derived Work
+	env.mustJSON(t, "POST", "/api/v1/works/"+wk.ID.String()+"/derive", map[string]string{"target_account_id": dst.ID.String()}, &derived)
+	if derived.Source == nil || derived.ContentFormat != "comic" || derived.OutlineConfirmedAt == nil {
+		t.Fatalf("derived meta: %+v", derived)
+	}
+	if len(derived.Panels) != 3 {
+		t.Fatalf("derived panels: %d", len(derived.Panels))
+	}
+	for i, p := range derived.Panels {
+		if p.AssetID == nil || (wk.Panels[i].AssetID != nil && *p.AssetID == *wk.Panels[i].AssetID) {
+			t.Fatalf("panel %d asset not cloned: src=%v dst=%v", i, wk.Panels[i].AssetID, p.AssetID)
+		}
+		if len(p.CharacterIDs) != 1 || p.CharacterIDs[0] != dstChar.ID {
+			t.Fatalf("panel %d characters: %v want %s", i, p.CharacterIDs, dstChar.ID)
+		}
+		if p.Narration == "" || p.Scene != wk.Panels[i].Scene {
+			t.Fatalf("panel %d text/scene: narr=%q scene=%q srcScene=%q", i, p.Narration, p.Scene, wk.Panels[i].Scene)
+		}
 	}
 }
 

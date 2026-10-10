@@ -163,7 +163,7 @@ export default function WorkLayout() {
           </nav>
           <div className="ml-auto flex shrink-0 items-center gap-1 lg:ml-0">
             <Button size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}>版本</Button>
-            {work.content_format !== 'comic' && <Button size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}>派生</Button>}
+            <Button size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}>派生</Button>
           </div>
         </div>
         {work.locked && (

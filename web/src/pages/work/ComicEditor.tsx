@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   Check, CheckCircle2, Circle, Copy, ImagePlus, Loader2, Sparkles, Upload, Users,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
@@ -10,7 +10,7 @@ import { RefsNote } from '@/components/refs'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, Select, Textarea } from '@/components/ui'
 import { errorMessage, get, patch, post, put, rawRequest } from '@/lib/api'
 import { type AIRefs, copyText, fmtTime, runeLen } from '@/lib/format'
-import type { Asset, CharacterCard, ComicPanel, Work } from '@/lib/types'
+import type { Asset, CharacterCard, ComicBubble, ComicPanel, Work } from '@/lib/types'
 import { useWork } from './WorkLayout'
 
 const DIALOGUE_MAX = 30
@@ -225,7 +225,11 @@ export default function ComicEditor() {
                   <button key={c.id} type="button" disabled={readOnly} onClick={() => toggleChar(c.id)}
                     className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-left transition',
                       on ? 'border-ink-400 bg-ink-50/50' : 'border-mist-200 hover:border-mist-300')}>
-                    <Users className={cn('mt-0.5 size-4', on ? 'text-ink-600' : 'text-mist-400')} />
+                    {(c.ref_url || c.ref_asset_id) ? (
+                      <img src={c.ref_url || `/api/v1/assets/${c.ref_asset_id}/file`} alt="" className="size-10 shrink-0 rounded-md object-cover" />
+                    ) : (
+                      <Users className={cn('mt-0.5 size-4', on ? 'text-ink-600' : 'text-mist-400')} />
+                    )}
                     <div className="min-w-0">
                       <div className="font-medium text-mist-800">{c.name}</div>
                       <div className="mt-0.5 line-clamp-2 text-xs text-mist-500">{c.appearance || c.personality || '未填写外貌/性格'}</div>
@@ -284,7 +288,7 @@ export default function ComicEditor() {
         <section id="step-panels" className="scroll-mt-24 space-y-4">
           <div className="flex items-center gap-2 pt-2">
             <h2 className="font-display text-[17px] font-bold text-mist-900">逐格文案与回传</h2>
-            <span className="text-xs text-mist-400">对白建议不超过 {DIALOGUE_MAX} 字 · 出图在外部工具完成后再上传</span>
+            <span className="text-xs text-mist-400">对白建议不超过 {DIALOGUE_MAX} 字 · 可 AI 出图或回传外部图</span>
           </div>
           {!confirmed ? (
             <HumanGate code="H-03">确认分镜后，才能生成逐格文案和绘图提示词。</HumanGate>
@@ -315,21 +319,61 @@ export default function ComicEditor() {
                           className={cn(runeLen(panel.dialogue) > DIALOGUE_MAX && 'border-gamboge-300')}
                           onBlur={(e) => { if (e.target.value !== panel.dialogue) void savePanel(panel, { dialogue: e.target.value }) }} />
                       </Field>
-                      <Field label="绘图提示词" hint="已自动拼入角色外貌">
-                        <div className="flex gap-2">
+                      <Field label="绘图提示词" hint="已自动拼入角色外貌；可 AI 出图或外部出图后回传">
+                        <div className="flex flex-col gap-2">
                           <Textarea rows={3} disabled={readOnly} className="flex-1" defaultValue={panel.image_prompt}
                             onBlur={(e) => { if (e.target.value !== panel.image_prompt) void savePanel(panel, { image_prompt: e.target.value }) }} />
-                          <Button size="sm" variant="ghost" disabled={!panel.image_prompt}
-                            onClick={async () => { await copyText(panel.image_prompt); toast.success('提示词已复制') }}
-                            icon={<Copy className="size-3.5" />}>复制</Button>
+                          <div className="flex flex-wrap gap-2">
+                            <Button size="sm" variant="ghost" disabled={!panel.image_prompt}
+                              onClick={async () => { await copyText(panel.image_prompt); toast.success('提示词已复制') }}
+                              icon={<Copy className="size-3.5" />}>复制</Button>
+                            {!readOnly && (
+                              <Button size="sm" variant="secondary" loading={panelBusy === panel.id + ':ai'}
+                                disabled={!panel.image_prompt}
+                                onClick={async () => {
+                                  setPanelBusy(panel.id + ':ai')
+                                  try {
+                                    await post(`/panels/${panel.id}/generate-image`, { prompt: panel.image_prompt })
+                                    toast.success('已生成（含 AI 标识）')
+                                    await refresh()
+                                  } catch (e) {
+                                    toast.error(errorMessage(e))
+                                  } finally {
+                                    setPanelBusy(null)
+                                  }
+                                }}
+                                icon={<Sparkles className="size-3.5" />}>AI 出图</Button>
+                            )}
+                          </div>
                         </div>
                       </Field>
+                      {!readOnly && (panel.narration || panel.dialogue) && (
+                        <Button size="sm" variant="ghost" onClick={async () => {
+                          const bubbles = [] as ComicBubble[]
+                          if (panel.narration.trim()) bubbles.push({ text: panel.narration.trim(), x: 0.05, y: 0.05, w: 0.9, h: 0.18 })
+                          if (panel.dialogue.trim()) bubbles.push({ text: panel.dialogue.trim(), x: 0.1, y: 0.65, w: 0.8, h: 0.28 })
+                          try {
+                            await put(`/panels/${panel.id}/bubbles`, { bubbles })
+                            toast.success('已按旁白/对白排气泡；可在图上拖动调整')
+                            await refresh()
+                          } catch (e) { toast.error(errorMessage(e)) }
+                        }}>按文案排气泡</Button>
+                      )}
                     </div>
                     <div>
-                      <div className="mb-1.5 text-[12.5px] font-medium text-mist-600">回传图片</div>
+                      <div className="mb-1.5 text-[12.5px] font-medium text-mist-600">回传 / AI 图片{!readOnly && (panel.bubbles?.length ?? 0) > 0 ? ' · 拖动气泡可调整' : ''}</div>
                       {asset ? (
                         <div className="overflow-hidden rounded-lg border border-mist-200">
-                          <img src={asset.url} alt="" className="aspect-square w-full object-cover" />
+                          <div className="relative">
+                            <img src={asset.url} alt="" className="aspect-square w-full object-cover" />
+                            <PanelBubbles
+                              panelId={panel.id}
+                              bubbles={panel.bubbles ?? []}
+                              readOnly={readOnly}
+                              onSaved={async () => { await refresh() }}
+                            />
+                          </div>
+                          {asset.ai_generated && <div className="bg-mist-900/80 px-2 py-1 text-center text-[10px] text-white">AI 生成</div>}
                           {!readOnly && (
                             <label className="flex cursor-pointer items-center justify-center gap-1.5 border-t border-mist-100 py-2 text-xs text-mist-600 hover:bg-mist-50">
                               <Upload className="size-3.5" />更换
@@ -384,4 +428,79 @@ function toDraft(p: ComicPanel): DraftPanel {
     image_prompt: p.image_prompt,
     asset_id: p.asset_id,
   }
+}
+
+function clamp01(n: number) {
+  return Math.min(1, Math.max(0, n))
+}
+
+function PanelBubbles({
+  panelId, bubbles, readOnly, onSaved,
+}: {
+  panelId: string
+  bubbles: ComicBubble[]
+  readOnly: boolean
+  onSaved: () => Promise<void> | void
+}) {
+  const boxRef = useRef<HTMLDivElement>(null)
+  const [local, setLocal] = useState(bubbles)
+  const localRef = useRef(bubbles)
+  const drag = useRef<{ i: number; ox: number; oy: number; sx: number; sy: number } | null>(null)
+  useEffect(() => {
+    setLocal(bubbles)
+    localRef.current = bubbles
+  }, [bubbles])
+
+  const persist = async (next: ComicBubble[]) => {
+    try {
+      await put(`/panels/${panelId}/bubbles`, { bubbles: next })
+      await onSaved()
+    } catch (e) {
+      toast.error(errorMessage(e))
+      setLocal(bubbles)
+      localRef.current = bubbles
+    }
+  }
+
+  if (local.length === 0) return null
+  return (
+    <div ref={boxRef} className="absolute inset-0">
+      {local.map((b, bi) => (
+        <div
+          key={bi}
+          className={cn(
+            'absolute overflow-hidden rounded-2xl border border-mist-900/20 bg-white/90 px-1.5 py-1 text-[10px] leading-snug text-mist-800 shadow-sm',
+            readOnly ? 'pointer-events-none' : 'cursor-grab touch-none active:cursor-grabbing',
+          )}
+          style={{ left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${b.w * 100}%`, height: `${b.h * 100}%` }}
+          onPointerDown={readOnly ? undefined : (e) => {
+            e.preventDefault()
+            ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
+            drag.current = { i: bi, ox: b.x, oy: b.y, sx: e.clientX, sy: e.clientY }
+          }}
+          onPointerMove={readOnly ? undefined : (e) => {
+            const d = drag.current
+            const box = boxRef.current
+            if (!d || d.i !== bi || !box) return
+            const rect = box.getBoundingClientRect()
+            if (rect.width < 1 || rect.height < 1) return
+            const nx = clamp01(d.ox + (e.clientX - d.sx) / rect.width)
+            const ny = clamp01(d.oy + (e.clientY - d.sy) / rect.height)
+            const maxX = clamp01(1 - b.w)
+            const maxY = clamp01(1 - b.h)
+            const next = localRef.current.map((x, i) => (i === bi ? { ...x, x: Math.min(maxX, nx), y: Math.min(maxY, ny) } : x))
+            localRef.current = next
+            setLocal(next)
+          }}
+          onPointerUp={readOnly ? undefined : () => {
+            if (!drag.current || drag.current.i !== bi) return
+            drag.current = null
+            void persist(localRef.current)
+          }}
+        >
+          {b.text}
+        </div>
+      ))}
+    </div>
+  )
 }

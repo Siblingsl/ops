@@ -11,12 +11,13 @@ import { type AIRefs, relTime } from '@/lib/format'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { Topic, Work } from '@/lib/types'
 
-interface Suggestion { title: string; angle: string; reason: string }
+interface Suggestion { title: string; angle: string; reason: string; timeliness?: string }
 
 const sourceLabel: Record<Topic['source'], { label: string; tone: 'gray' | 'ink' | 'gamboge' }> = {
   manual: { label: '手动', tone: 'gray' },
   ai: { label: 'AI 建议', tone: 'ink' },
   review: { label: '复盘', tone: 'gamboge' },
+  hot: { label: '热点', tone: 'gamboge' },
 }
 
 function SuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose: () => void; accountId: string }) {
@@ -87,6 +88,80 @@ function SuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose: (
   )
 }
 
+function HotSuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose: () => void; accountId: string }) {
+  const [direction, setDirection] = useState('')
+  const [context, setContext] = useState('')
+  const [list, setList] = useState<Suggestion[]>([])
+  const [refs, setRefs] = useState<AIRefs | null>(null)
+  const [added, setAdded] = useState<Record<number, boolean>>({})
+  const [busy, setBusy] = useState(false)
+  const [adding, setAdding] = useState<number | null>(null)
+  const inv = useInvalidate()
+  const run = async () => {
+    setBusy(true)
+    try {
+      const r = await post<{ suggestions: Suggestion[]; refs: AIRefs }>(`/accounts/${accountId}/topics/hot-suggest`, { direction, context })
+      setList(r.suggestions)
+      setRefs(r.refs)
+      setAdded({})
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const add = async (i: number) => {
+    setAdding(i)
+    try {
+      const r = await post<{ topic: Topic; similar: string[] }>(`/accounts/${accountId}/topics`, { title: list[i].title, angle: list[i].angle, source: 'hot' })
+      setAdded((a) => ({ ...a, [i]: true }))
+      inv(['topics', accountId])
+      if (r.similar.length) toast.warning(`已入库。注意与「${r.similar[0]}」相似`)
+      else toast.success('已加入选题池')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setAdding(null)
+    }
+  }
+  return (
+    <Drawer open={open} onClose={onClose} title="热点选题" desc="合规来源：可粘贴公开资讯摘要；不爬取平台热榜。建议不会自动入库。" width="w-[520px]">
+      <div className="space-y-3">
+        <Field label="方向（可选）">
+          <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="例如：职场沟通、育儿" onKeyDown={(e) => e.key === 'Enter' && run()} />
+        </Field>
+        <Field label="公开资讯摘要（可选）" hint="粘贴你读到的新闻/公告要点；系统不会去爬热榜。">
+          <Textarea rows={4} value={context} onChange={(e) => setContext(e.target.value)} placeholder="把公开报道或公告的要点贴在这里…" />
+        </Field>
+        <Button variant="primary" onClick={run} loading={busy} icon={<Sparkles className="size-4" />}>生成热点选题</Button>
+      </div>
+      <HumanGate code="H-01" className="mt-4">每条建议都需要你单独点「入库」。禁止平台热榜爬取。</HumanGate>
+      {!busy && <RefsNote refs={refs} className="mt-3" />}
+      <div className="mt-4 space-y-3">
+        {busy && list.length === 0 && Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-mist-100" />)}
+        {list.map((s, i) => (
+          <div key={i} className={cn('rounded-xl border p-4 transition', added[i] ? 'border-ink-200 bg-ink-50/40' : 'border-mist-200 bg-white')}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-display text-[15.5px] font-semibold leading-snug text-mist-900">{s.title}</div>
+                {s.timeliness && <div className="mt-1 text-[12px] text-gamboge-700">时效 · {s.timeliness}</div>}
+                <div className="mt-1.5 text-[13px] text-mist-600"><span className="text-mist-400">角度 · </span>{s.angle}</div>
+                <div className="mt-0.5 text-[13px] text-mist-500"><span className="text-mist-400">理由 · </span>{s.reason}</div>
+              </div>
+              {added[i] ? (
+                <Badge tone="ink"><Check className="size-3" />已入库</Badge>
+              ) : (
+                <Button size="sm" variant="outline" loading={adding === i} onClick={() => add(i)} icon={<Plus className="size-3.5" />}>入库</Button>
+              )}
+            </div>
+          </div>
+        ))}
+        {!busy && list.length === 0 && <Empty icon={<Sparkles className="size-5" />} title="生成有时效感的选题" desc="可贴资讯摘要；仍须逐条入库。" />}
+      </div>
+    </Drawer>
+  )
+}
+
 function TopicCard({ t, accountId }: { t: Topic; accountId: string }) {
   const inv = useInvalidate()
   const nav = useNavigate()
@@ -151,6 +226,7 @@ export default function Topics() {
   const [params, setParams] = useSearchParams()
   const [tab, setTab] = useState<Topic['status']>('pending')
   const [suggest, setSuggest] = useState(params.get('suggest') === '1')
+  const [hotSuggest, setHotSuggest] = useState(false)
   const [adding, setAdding] = useState(false)
   const [title, setTitle] = useState('')
   const [angle, setAngle] = useState('')
@@ -181,6 +257,7 @@ export default function Topics() {
       <PageHeader title="选题池" desc="先把想法存下来，采用后再开始创作。"
         action={<>
           <Button icon={<Plus className="size-4" />} onClick={() => { setSimilar([]); setAdding(true) }}>手动添加</Button>
+          <Button icon={<Sparkles className="size-4" />} onClick={() => setHotSuggest(true)}>热点选题</Button>
           <Button variant="primary" icon={<Sparkles className="size-4" />} onClick={() => setSuggest(true)}>AI 选题建议</Button>
         </>} />
       <Tabs value={tab} onChange={setTab} className="mb-5" items={[
@@ -196,6 +273,7 @@ export default function Topics() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{shown.map((t) => <TopicCard key={t.id} t={t} accountId={acc.id} />)}</div>
       )}
       <SuggestDrawer open={suggest} onClose={() => setSuggest(false)} accountId={acc.id} />
+      <HotSuggestDrawer open={hotSuggest} onClose={() => setHotSuggest(false)} accountId={acc.id} />
       <Dialog open={adding} onClose={() => setAdding(false)} title="添加选题"
         footer={<><Button variant="ghost" onClick={() => setAdding(false)}>{similar.length ? '完成' : '取消'}</Button><Button variant="primary" onClick={save} disabled={!title.trim()}>加入选题池</Button></>}>
         <div className="space-y-4">

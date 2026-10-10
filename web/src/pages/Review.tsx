@@ -255,7 +255,21 @@ export default function Review() {
       <PageHeader title="数据复盘" desc="手动录入平台数据，让 AI 帮你找规律。复盘建议需要你逐条采纳。" />
       <Card className="mb-6 overflow-hidden">
         <CardHeader title="作品数据看板" desc="只列出已进入草稿箱、已生成发布包或已发布的作品"
-          action={<ImportMetrics accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />} />
+          action={<>
+            {acc.platform === 'wechat_mp' && (
+              <Button size="sm" variant="secondary" icon={<BarChart3 className="size-3.5" />} onClick={async () => {
+                try {
+                  const r = await post<{ imported: number; unmatched: number; message: string }>(`/accounts/${acc.id}/metrics/sync-wechat`, {})
+                  toast.success(r.message || `已同步 ${r.imported} 条`)
+                  board.refetch()
+                  inv(['board'])
+                } catch (e) {
+                  toast.error(errorMessage(e))
+                }
+              }}>同步微信数据</Button>
+            )}
+            <ImportMetrics accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />
+          </>} />
         {rows.length === 0 ? (
           <Empty icon={<BarChart3 className="size-5" />} title="还没有可以复盘的作品" desc="作品写入草稿箱或生成发布包后会出现在这里。" />
         ) : (

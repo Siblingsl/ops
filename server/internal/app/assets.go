@@ -24,15 +24,16 @@ import (
 )
 
 type Asset struct {
-	ID        uuid.UUID `json:"id"`
-	WorkID    uuid.UUID `json:"work_id"`
-	Mime      string    `json:"mime"`
-	Width     int       `json:"width"`
-	Height    int       `json:"height"`
-	Bytes     int       `json:"bytes"`
-	Position  int       `json:"position"`
-	URL       string    `json:"url"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          uuid.UUID `json:"id"`
+	WorkID      uuid.UUID `json:"work_id"`
+	Mime        string    `json:"mime"`
+	Width       int       `json:"width"`
+	Height      int       `json:"height"`
+	Bytes       int       `json:"bytes"`
+	Position    int       `json:"position"`
+	URL         string    `json:"url"`
+	AIGenerated bool      `json:"ai_generated"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 const (
@@ -42,7 +43,7 @@ const (
 )
 
 func (s *Server) loadAssets(ctx context.Context, workID uuid.UUID) ([]Asset, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, work_id, mime, width, height, bytes, position, created_at FROM asset WHERE work_id=$1 ORDER BY position, created_at`, workID)
+	rows, err := s.db.Query(ctx, `SELECT id, work_id, mime, width, height, bytes, position, coalesce(ai_generated,false), created_at FROM asset WHERE work_id=$1 ORDER BY position, created_at`, workID)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +51,7 @@ func (s *Server) loadAssets(ctx context.Context, workID uuid.UUID) ([]Asset, err
 	list := []Asset{}
 	for rows.Next() {
 		var a Asset
-		if err := rows.Scan(&a.ID, &a.WorkID, &a.Mime, &a.Width, &a.Height, &a.Bytes, &a.Position, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkID, &a.Mime, &a.Width, &a.Height, &a.Bytes, &a.Position, &a.AIGenerated, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		a.URL = "/api/v1/assets/" + a.ID.String() + "/file"
@@ -206,7 +207,7 @@ func (s *Server) uploadAsset(w http.ResponseWriter, r *http.Request) error {
 
 type assetRow struct {
 	ID          uuid.UUID
-	WorkID      uuid.UUID
+	WorkID      uuid.NullUUID
 	StoragePath string
 	Mime        string
 	SHA256      string
@@ -217,6 +218,13 @@ func (s *Server) assetRow(ctx context.Context, id uuid.UUID) (*assetRow, error) 
 	err := s.db.QueryRow(ctx, `SELECT id, work_id, storage_path, mime, sha256 FROM asset WHERE id=$1 AND workspace_id=$2`, id, ident(ctx).WorkspaceID).
 		Scan(&a.ID, &a.WorkID, &a.StoragePath, &a.Mime, &a.SHA256)
 	return &a, err
+}
+
+func (s *Server) requireWorkAsset(a *assetRow) (uuid.UUID, error) {
+	if a == nil || !a.WorkID.Valid {
+		return uuid.Nil, validation("该图片不属于作品")
+	}
+	return a.WorkID.UUID, nil
 }
 
 func (s *Server) assetBytes(a *assetRow) ([]byte, error) {
@@ -252,7 +260,11 @@ func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	m, err := s.workMeta(ctx, a.WorkID)
+	workID, err := s.requireWorkAsset(a)
+	if err != nil {
+		return err
+	}
+	m, err := s.workMeta(ctx, workID)
 	if err != nil {
 		return err
 	}
@@ -266,7 +278,7 @@ func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id FROM asset WHERE work_id=$1 AND id<>$2 ORDER BY position, created_at`, a.WorkID, a.ID)
+		rows, err := tx.Query(ctx, `SELECT id FROM asset WHERE work_id=$1 AND id<>$2 ORDER BY position, created_at`, workID, a.ID)
 		if err != nil {
 			return err
 		}
@@ -284,12 +296,12 @@ func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request) error {
 				return err
 			}
 		}
-		return s.touchContent(ctx, tx, a.WorkID)
+		return s.touchContent(ctx, tx, workID)
 	})
 	if err != nil {
 		return err
 	}
-	list, err := s.loadAssets(ctx, a.WorkID)
+	list, err := s.loadAssets(ctx, workID)
 	if err != nil {
 		return err
 	}
@@ -306,7 +318,11 @@ func (s *Server) deleteAsset(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	m, err := s.workMeta(ctx, a.WorkID)
+	workID, err := s.requireWorkAsset(a)
+	if err != nil {
+		return err
+	}
+	m, err := s.workMeta(ctx, workID)
 	if err != nil {
 		return err
 	}
@@ -314,13 +330,13 @@ func (s *Server) deleteAsset(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE work SET cover_asset_id=NULL, cover_crops=NULL WHERE id=$1 AND cover_asset_id=$2`, a.WorkID, a.ID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE work SET cover_asset_id=NULL, cover_crops=NULL WHERE id=$1 AND cover_asset_id=$2`, workID, a.ID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM asset WHERE id=$1`, a.ID); err != nil {
 			return err
 		}
-		return s.touchContent(ctx, tx, a.WorkID)
+		return s.touchContent(ctx, tx, workID)
 	})
 	if err != nil {
 		return err
@@ -349,7 +365,10 @@ func (s *Server) cropAsset(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	m, err := s.workMeta(ctx, src.WorkID)
+	if _, err := s.requireWorkAsset(src); err != nil {
+		return err
+	}
+	m, err := s.workMeta(ctx, src.WorkID.UUID)
 	if err != nil {
 		return err
 	}

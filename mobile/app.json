@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "OPS 分享伴侣",
+    "slug": "ops-xhs-share",
+    "version": "0.1.0",
+    "scheme": "ops-xhs",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": { "supportsTablet": true, "bundleIdentifier": "xyz.ops.xhs.share" },
+    "android": {
+      "package": "xyz.ops.xhs.share",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "data": [{ "scheme": "ops-xhs" }],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    }
+  }
+}

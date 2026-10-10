@@ -2,13 +2,19 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"ops/internal/secure"
 )
 
 // comicDialogueMax is the bubble-friendly dialogue length hint (05 文档 P-07).
@@ -22,6 +28,7 @@ type CharacterCard struct {
 	Personality string     `json:"personality"`
 	Catchphrase string     `json:"catchphrase"`
 	RefAssetID  *uuid.UUID `json:"ref_asset_id"`
+	RefURL      string     `json:"ref_url"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
@@ -37,6 +44,7 @@ type ComicPanel struct {
 	Dialogue     string      `json:"dialogue"`
 	ImagePrompt  string      `json:"image_prompt"`
 	AssetID      *uuid.UUID  `json:"asset_id"`
+	Bubbles      []Bubble    `json:"bubbles"`
 	CreatedAt    time.Time   `json:"created_at"`
 	UpdatedAt    time.Time   `json:"updated_at"`
 }
@@ -51,7 +59,17 @@ func (s *Server) requireComicAccount(a *Account) error {
 func (s *Server) scanCharacter(row pgx.Row) (CharacterCard, error) {
 	var x CharacterCard
 	err := row.Scan(&x.ID, &x.AccountID, &x.Name, &x.Appearance, &x.Personality, &x.Catchphrase, &x.RefAssetID, &x.CreatedAt, &x.UpdatedAt)
+	if err == nil {
+		x.RefURL = characterRefURL(x.RefAssetID)
+	}
 	return x, err
+}
+
+func characterRefURL(id *uuid.UUID) string {
+	if id == nil {
+		return ""
+	}
+	return "/api/v1/assets/" + id.String() + "/file"
 }
 
 func (s *Server) listCharacters(w http.ResponseWriter, r *http.Request) error {
@@ -185,8 +203,128 @@ func (s *Server) deleteCharacter(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, map[string]any{"ok": true})
 }
 
+func (s *Server) characterForWrite(r *http.Request) (CharacterCard, *Account, error) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return CharacterCard{}, nil, err
+	}
+	accountID, err := s.ownedAccountRow(r.Context(), "character_card", id)
+	if err != nil {
+		return CharacterCard{}, nil, err
+	}
+	a, err := s.account(r.Context(), accountID)
+	if err != nil {
+		return CharacterCard{}, nil, err
+	}
+	if err := s.requireComicAccount(a); err != nil {
+		return CharacterCard{}, nil, err
+	}
+	cur, err := s.scanCharacter(s.db.QueryRow(r.Context(), `SELECT id, account_id, name, appearance, personality, catchphrase, ref_asset_id, created_at, updated_at
+		FROM character_card WHERE id=$1 AND deleted_at IS NULL`, id))
+	return cur, a, err
+}
+
+// uploadCharacterRef stores an account-level reference image (FR-M8-01) used for panel consistency (FR-M8-05).
+func (s *Server) uploadCharacterRef(w http.ResponseWriter, r *http.Request) error {
+	cur, a, err := s.characterForWrite(r)
+	if err != nil {
+		return err
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+1<<20)
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		return validation("请选择角色参考图（单张不超过 20MB）")
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, maxUploadBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(raw) > maxUploadBytes {
+		return validation("图片超过 20MB")
+	}
+	data, mime, width, height, err := processImage(raw)
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	id := uuid.New()
+	ext := ".jpg"
+	if mime == "image/png" {
+		ext = ".png"
+	}
+	rel := filepath.Join("assets", "chars", a.ID.String(), id.String()+ext)
+	abs := filepath.Join(s.cfg.DataDir, rel)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(abs, data, 0o644); err != nil {
+		return err
+	}
+	old := cur.RefAssetID
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `INSERT INTO asset (id, workspace_id, account_id, work_id, storage_path, mime, width, height, bytes, sha256, position)
+			VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,0)`,
+			id, ident(ctx).WorkspaceID, a.ID, filepath.ToSlash(rel), mime, width, height, len(data), secure.SHA256Hex(data)); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE character_card SET ref_asset_id=$2, updated_at=now() WHERE id=$1`, cur.ID, id); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		_ = os.Remove(abs)
+		return err
+	}
+	if old != nil {
+		s.removeOrphanCharacterAsset(ctx, *old)
+	}
+	cur.RefAssetID = &id
+	cur.RefURL = characterRefURL(cur.RefAssetID)
+	s.audit(ctx, "character_ref_upload", "character_card", cur.ID.String(), "ok", map[string]any{"asset_id": id.String()})
+	return ok(w, cur)
+}
+
+func (s *Server) deleteCharacterRef(w http.ResponseWriter, r *http.Request) error {
+	cur, _, err := s.characterForWrite(r)
+	if err != nil {
+		return err
+	}
+	if cur.RefAssetID == nil {
+		return ok(w, cur)
+	}
+	old := *cur.RefAssetID
+	if _, err := s.db.Exec(r.Context(), `UPDATE character_card SET ref_asset_id=NULL, updated_at=now() WHERE id=$1`, cur.ID); err != nil {
+		return err
+	}
+	s.removeOrphanCharacterAsset(r.Context(), old)
+	cur.RefAssetID = nil
+	cur.RefURL = ""
+	s.audit(r.Context(), "character_ref_delete", "character_card", cur.ID.String(), "ok", nil)
+	return ok(w, cur)
+}
+
+func (s *Server) removeOrphanCharacterAsset(ctx context.Context, id uuid.UUID) {
+	var workID uuid.NullUUID
+	var path string
+	if err := s.db.QueryRow(ctx, `SELECT work_id, storage_path FROM asset WHERE id=$1 AND workspace_id=$2`, id, ident(ctx).WorkspaceID).
+		Scan(&workID, &path); err != nil || workID.Valid {
+		return
+	}
+	var n int
+	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM character_card WHERE ref_asset_id=$1`, id).Scan(&n)
+	if n > 0 {
+		return
+	}
+	if _, err := s.db.Exec(ctx, `DELETE FROM asset WHERE id=$1`, id); err != nil {
+		return
+	}
+	_ = os.Remove(filepath.Join(s.cfg.DataDir, filepath.FromSlash(path)))
+}
+
 func (s *Server) loadPanels(ctx context.Context, workID uuid.UUID) ([]ComicPanel, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, position, scene, character_ids, action, shot, narration, dialogue, image_prompt, asset_id, created_at, updated_at
+	rows, err := s.db.Query(ctx, `SELECT id, position, scene, character_ids, action, shot, narration, dialogue, image_prompt, asset_id, coalesce(bubbles,'[]'), created_at, updated_at
 		FROM comic_panel WHERE work_id=$1 ORDER BY position, created_at`, workID)
 	if err != nil {
 		return nil, err
@@ -195,11 +333,16 @@ func (s *Server) loadPanels(ctx context.Context, workID uuid.UUID) ([]ComicPanel
 	list := []ComicPanel{}
 	for rows.Next() {
 		var p ComicPanel
-		if err := rows.Scan(&p.ID, &p.Position, &p.Scene, &p.CharacterIDs, &p.Action, &p.Shot, &p.Narration, &p.Dialogue, &p.ImagePrompt, &p.AssetID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var raw []byte
+		if err := rows.Scan(&p.ID, &p.Position, &p.Scene, &p.CharacterIDs, &p.Action, &p.Shot, &p.Narration, &p.Dialogue, &p.ImagePrompt, &p.AssetID, &raw, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if p.CharacterIDs == nil {
 			p.CharacterIDs = []uuid.UUID{}
+		}
+		_ = json.Unmarshal(raw, &p.Bubbles)
+		if p.Bubbles == nil {
+			p.Bubbles = []Bubble{}
 		}
 		list = append(list, p)
 	}
@@ -475,13 +618,18 @@ func (s *Server) panelFromPath(r *http.Request) (*ComicPanel, *workMeta, error) 
 	}
 	var p ComicPanel
 	var workID uuid.UUID
-	err = s.db.QueryRow(r.Context(), `SELECT work_id, id, position, scene, character_ids, action, shot, narration, dialogue, image_prompt, asset_id, created_at, updated_at
-		FROM comic_panel WHERE id=$1`, id).Scan(&workID, &p.ID, &p.Position, &p.Scene, &p.CharacterIDs, &p.Action, &p.Shot, &p.Narration, &p.Dialogue, &p.ImagePrompt, &p.AssetID, &p.CreatedAt, &p.UpdatedAt)
+	var raw []byte
+	err = s.db.QueryRow(r.Context(), `SELECT work_id, id, position, scene, character_ids, action, shot, narration, dialogue, image_prompt, asset_id, coalesce(bubbles,'[]'), created_at, updated_at
+		FROM comic_panel WHERE id=$1`, id).Scan(&workID, &p.ID, &p.Position, &p.Scene, &p.CharacterIDs, &p.Action, &p.Shot, &p.Narration, &p.Dialogue, &p.ImagePrompt, &p.AssetID, &raw, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, nil, err
 	}
 	if p.CharacterIDs == nil {
 		p.CharacterIDs = []uuid.UUID{}
+	}
+	_ = json.Unmarshal(raw, &p.Bubbles)
+	if p.Bubbles == nil {
+		p.Bubbles = []Bubble{}
 	}
 	m, err := s.workMeta(r.Context(), workID)
 	if err != nil {
@@ -629,4 +777,219 @@ func (s *Server) updatePanel(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return s.writeWork(w, r, m.ID)
+}
+
+// deriveComicWork copies panels/assets and rewrites narration/dialogue for the target platform (04 §3.1 P1).
+func (s *Server) deriveComicWork(w http.ResponseWriter, r *http.Request, m *workMeta, dst *Account) error {
+	ctx := r.Context()
+	panels, err := s.loadPanels(ctx, m.ID)
+	if err != nil {
+		return err
+	}
+	if len(panels) == 0 {
+		return validation("源作品还没有分镜，无法派生")
+	}
+	charMap, err := s.characterNameMap(ctx, m.Account.ID, dst.ID)
+	if err != nil {
+		return err
+	}
+	var viewpoint, title string
+	if err := s.db.QueryRow(ctx, `SELECT viewpoint, title FROM work WHERE id=$1`, m.ID).Scan(&viewpoint, &title); err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, p := range panels {
+		fmt.Fprintf(&b, "【源分格 id=%s】场景：%s\n动作：%s\n旁白：%s\n对白：%s\n",
+			p.ID, p.Scene, p.Action, truncate(p.Narration, 400), truncate(p.Dialogue, 120))
+	}
+	direction := "把公众号漫画旁白和对白改写成小红书语气：更口语、短句，对白适合气泡"
+	if dst.Platform == "wechat_mp" {
+		direction = "把小红书漫画旁白和对白改写成公众号表达：语气完整一些，仍保持分格节奏"
+	}
+	user := fmt.Sprintf(`## 源作品
+源平台：%s
+目标平台：%s
+源标题：%s
+核心观点：%s
+
+%s
+## 任务说明
+%s。复用分格结构，只改写旁白和对白；不要改场景与动作。对白尽量不超过 %d 字。
+
+## 输出格式
+只输出 JSON：{"title":"标题","panels":[{"source_panel_id":"id","narration":"旁白","dialogue":"对白"}]}`,
+		platformNames[m.Account.Platform], platformNames[dst.Platform], title, viewpoint, b.String(), direction, comicDialogueMax)
+	var plan struct {
+		Title  string `json:"title"`
+		Panels []struct {
+			SourcePanelID string `json:"source_panel_id"`
+			Narration     string `json:"narration"`
+			Dialogue      string `json:"dialogue"`
+		} `json:"panels"`
+	}
+	valid := map[string]bool{}
+	for _, p := range panels {
+		valid[p.ID.String()] = true
+	}
+	if _, err := s.runAIJSON(ctx, aiTask{Type: "comic_rewrite", Account: dst, User: user}, &plan, func() error {
+		if len(plan.Panels) == 0 {
+			return fmt.Errorf("没有分格")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	rewritten := map[string]struct{ Narration, Dialogue string }{}
+	for _, p := range plan.Panels {
+		if !valid[p.SourcePanelID] {
+			continue
+		}
+		rewritten[p.SourcePanelID] = struct{ Narration, Dialogue string }{
+			Narration: strings.TrimSpace(p.Narration),
+			Dialogue:  truncateRunes(strings.TrimSpace(p.Dialogue), comicDialogueMax*2),
+		}
+	}
+	newTitle := truncateRunes(strings.TrimSpace(plan.Title), 64)
+	if newTitle == "" {
+		newTitle = truncateRunes(title, 64)
+	}
+	var newID uuid.UUID
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		p, err := s.loadProfile(ctx, dst.ID)
+		if err != nil {
+			return err
+		}
+		wf, _ := json.Marshal(p.WechatDefaults)
+		topics := []string{}
+		if err := tx.QueryRow(ctx, `INSERT INTO work (account_id, topic_id, source_work_id, source_revision, content_format, title, viewpoint,
+			outline_confirmed_at, theme, wechat_fields, topics)
+			SELECT $1, topic_id, id, revision, 'comic', $2, viewpoint, now(), $3, $4, $5 FROM work WHERE id=$6 RETURNING id`,
+			dst.ID, newTitle, p.DefaultTheme, wf, topics, m.ID).Scan(&newID); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO work_material (work_id, material_id) SELECT $1, wm.material_id FROM work_material wm
+			JOIN material mt ON mt.id=wm.material_id WHERE wm.work_id=$2 AND (mt.account_id IS NULL OR mt.account_id=$3)`, newID, m.ID, dst.ID)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	for _, p := range panels {
+		var assetID *uuid.UUID
+		if p.AssetID != nil {
+			cloned, err := s.cloneWorkAsset(ctx, *p.AssetID, newID, dst.ID)
+			if err != nil {
+				return err
+			}
+			assetID = &cloned
+		}
+		ids := []uuid.UUID{}
+		for _, cid := range p.CharacterIDs {
+			if mapped, ok := charMap[cid]; ok {
+				ids = append(ids, mapped)
+			}
+		}
+		narr, dial := p.Narration, p.Dialogue
+		if rw, ok := rewritten[p.ID.String()]; ok {
+			if rw.Narration != "" {
+				narr = rw.Narration
+			}
+			if rw.Dialogue != "" {
+				dial = rw.Dialogue
+			}
+		}
+		bj, _ := json.Marshal(p.Bubbles)
+		if bj == nil {
+			bj = []byte("[]")
+		}
+		if _, err := s.db.Exec(ctx, `INSERT INTO comic_panel (work_id, position, scene, character_ids, action, shot, narration, dialogue, image_prompt, asset_id, bubbles)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			newID, p.Position, p.Scene, ids, p.Action, p.Shot, narr, dial, p.ImagePrompt, assetID, bj); err != nil {
+			return err
+		}
+	}
+	s.audit(ctx, "work_derive", "work", newID.String(), "ok", map[string]any{"source": m.ID.String(), "kind": "comic"})
+	return s.writeWork(w, r, newID)
+}
+
+func (s *Server) characterNameMap(ctx context.Context, srcAccount, dstAccount uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	type row struct {
+		ID   uuid.UUID
+		Name string
+	}
+	load := func(accountID uuid.UUID) ([]row, error) {
+		rows, err := s.db.Query(ctx, `SELECT id, name FROM character_card WHERE account_id=$1 AND deleted_at IS NULL`, accountID)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var list []row
+		for rows.Next() {
+			var x row
+			if err := rows.Scan(&x.ID, &x.Name); err != nil {
+				return nil, err
+			}
+			list = append(list, x)
+		}
+		return list, rows.Err()
+	}
+	src, err := load(srcAccount)
+	if err != nil {
+		return nil, err
+	}
+	dst, err := load(dstAccount)
+	if err != nil {
+		return nil, err
+	}
+	byName := map[string]uuid.UUID{}
+	for _, d := range dst {
+		byName[strings.TrimSpace(d.Name)] = d.ID
+	}
+	out := map[uuid.UUID]uuid.UUID{}
+	for _, c := range src {
+		if id, ok := byName[strings.TrimSpace(c.Name)]; ok {
+			out[c.ID] = id
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) cloneWorkAsset(ctx context.Context, srcID, newWorkID, accountID uuid.UUID) (uuid.UUID, error) {
+	var path, mime string
+	var width, height, bytes int
+	var aiGen bool
+	var sha string
+	err := s.db.QueryRow(ctx, `SELECT storage_path, mime, width, height, bytes, sha256, coalesce(ai_generated,false)
+		FROM asset WHERE id=$1 AND workspace_id=$2`, srcID, ident(ctx).WorkspaceID).
+		Scan(&path, &mime, &width, &height, &bytes, &sha, &aiGen)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(s.cfg.DataDir, filepath.FromSlash(path)))
+	if err != nil {
+		return uuid.Nil, err
+	}
+	id := uuid.New()
+	ext := filepath.Ext(path)
+	if ext == "" {
+		ext = ".jpg"
+		if mime == "image/png" {
+			ext = ".png"
+		}
+	}
+	rel := filepath.Join("assets", newWorkID.String(), id.String()+ext)
+	abs := filepath.Join(s.cfg.DataDir, rel)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return uuid.Nil, err
+	}
+	if err := os.WriteFile(abs, data, 0o644); err != nil {
+		return uuid.Nil, err
+	}
+	if _, err := s.db.Exec(ctx, `INSERT INTO asset (id, workspace_id, account_id, work_id, storage_path, mime, width, height, bytes, sha256, position, ai_generated)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT coalesce(max(position),-1)+1 FROM asset WHERE work_id=$4),$11)`,
+		id, ident(ctx).WorkspaceID, accountID, newWorkID, filepath.ToSlash(rel), mime, width, height, len(data), sha, aiGen); err != nil {
+		_ = os.Remove(abs)
+		return uuid.Nil, err
+	}
+	return id, nil
 }
