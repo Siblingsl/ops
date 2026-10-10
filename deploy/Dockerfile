@@ -7,7 +7,8 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm config set registry "${NPM_REGISTRY}" && npm ci
 COPY web/ ./
-RUN npm run build
+# 生产镜像内只做打包；tsc 已在本地/开发机验证，小机上 tsc -b 可达 20+ 分钟并触发部署超时
+RUN npx vite build
 
 FROM golang:1.26-bookworm AS server
 ARG GOPROXY=https://goproxy.cn,direct

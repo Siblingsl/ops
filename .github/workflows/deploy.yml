@@ -58,7 +58,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key_path: ${{ steps.prep.outputs.key_file }}
           port: 22
-          command_timeout: 30m
+          command_timeout: 60m
           script: |
             set -euo pipefail
             cd "${{ secrets.DEPLOY_PATH }}"
