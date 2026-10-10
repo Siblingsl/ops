@@ -100,12 +100,62 @@ export interface Material {
   created_at: string
 }
 
+export interface StrategyFields {
+  niche: string
+  audience: string
+  differentiation: string
+  persona: string
+  pillars: { name: string; desc: string; ratio: number; examples: string[] }[]
+  cadence: { per_week: number; days: number[]; format: string }
+  stage: 'cold_start' | 'growth' | 'stable'
+  goals: string[]
+  benchmarks: { name: string; note: string; links: string[] }[]
+  keywords: string[]
+  taboo: string[]
+  hot_enabled: boolean
+  blocked_words: string[]
+  daily_settings: Record<string, unknown>
+}
+
+export interface Strategy extends StrategyFields {
+  id: string
+  version: number
+  status: string
+  ai_call_id: string | null
+  created_at: string
+}
+
+export interface PositioningOption extends StrategyFields {
+  fit_reason: string
+  risks: string[]
+}
+
+export interface StrategyResult { active: Strategy | null; versions: Strategy[] }
+export type StrategyChange = { [K in keyof StrategyFields]: { field: K; from: StrategyFields[K]; to: StrategyFields[K]; reason: string } }[keyof StrategyFields]
+export interface StrategyRevision { current: Strategy; changes: StrategyChange[]; ai_call_id: string }
+
+export interface PlanSlot {
+  id: string
+  date: string
+  pillar: string
+  format: string
+  status: 'empty' | 'suggested' | 'adopted'
+  suggestion: { title: string; angle: string; reason: string; hot_item_id: string | null; ai_call_id: string | null } | null
+  topic_id: string | null
+  topic_title: string | null
+  topic_status: string | null
+  work_id: string | null
+}
+export interface AccountPlan { from: string; to: string; today: string; has_strategy: boolean; slots: PlanSlot[] }
+
 export interface Topic {
   id: string
   account_id?: string
   title: string
   angle: string
-  source: 'manual' | 'ai' | 'review' | 'hot' | 'inbox'
+  source: 'manual' | 'ai' | 'review' | 'hot' | 'inbox' | 'plan' | 'daily'
+  strategy_pillar: string | null
+  hot_item_id: string | null
   status: 'pending' | 'adopted' | 'dropped'
   work_id?: string | null
   created_at: string

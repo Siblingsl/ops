@@ -35,6 +35,8 @@ const sourceLabel: Record<Topic['source'], { label: string; tone: 'gray' | 'ink'
   review: { label: '复盘', tone: 'gamboge' },
   hot: { label: '热点', tone: 'gamboge' },
   inbox: { label: '收件箱', tone: 'gray' },
+  plan: { label: '运营大纲', tone: 'ink' },
+  daily: { label: '今日推荐', tone: 'ink' },
 }
 const formatLabel: Record<string, string> = { long_article: '长图文', image_note: '图文笔记', comic: '漫画' }
 
@@ -589,7 +591,7 @@ export default function Topics() {
   const [params, setParams] = useSearchParams()
   const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) || 'pending')
   const [suggest, setSuggest] = useState(params.get('suggest') === '1')
-  const [hotSuggest, setHotSuggest] = useState(false)
+  const [hotSuggest, setHotSuggest] = useState(params.get('hot') === '1')
   const [adding, setAdding] = useState(false)
   const [title, setTitle] = useState('')
   const [angle, setAngle] = useState('')
@@ -607,7 +609,8 @@ export default function Topics() {
   const series = useQuery({ queryKey: ['series', acc?.id], queryFn: () => get<Series[]>(`/accounts/${acc!.id}/series`), enabled: !!acc })
   const inbox = useQuery({ queryKey: ['inbox'], queryFn: () => get<InboxItem[]>('/inbox'), enabled: !!acc })
   useEffect(() => {
-    if (params.get('suggest') || params.get('tab') || params.get('new')) {
+    if (params.get('suggest') || params.get('tab') || params.get('new') || params.get('hot')) {
+      if (params.get('hot') === '1') setHotSuggest(true)
       if (params.get('tab')) setTab(params.get('tab') as Tab)
       if (params.get('new')) {
         setSimilar([])
@@ -615,7 +618,7 @@ export default function Topics() {
         setAdding(true)
       }
       const n = new URLSearchParams(params)
-      for (const k of ['suggest', 'tab', 'new', 'title']) n.delete(k)
+      for (const k of ['suggest', 'tab', 'new', 'title', 'hot']) n.delete(k)
       setParams(n, { replace: true })
     }
   }, [params, setParams])

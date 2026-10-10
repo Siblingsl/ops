@@ -17,6 +17,7 @@ const Works = lazy(() => import('./pages/Works'))
 const Materials = lazy(() => import('./pages/Materials'))
 const Review = lazy(() => import('./pages/Review'))
 const ProfilePage = lazy(() => import('./pages/Profile'))
+const Ops = lazy(() => import('./pages/Ops'))
 const SearchPage = lazy(() => import('./pages/Search'))
 const SharePage = lazy(() => import('./pages/Share'))
 const ImagesPage = lazy(() => import('./pages/Images'))
@@ -78,6 +79,7 @@ function Authed() {
           <Route path="materials" element={<S><Materials /></S>} />
           <Route path="review" element={<S><Review /></S>} />
           <Route path="profile" element={<S><ProfilePage /></S>} />
+          <Route path="ops" element={<S><Ops /></S>} />
         </Route>
         <Route path="search" element={<S><SearchPage /></S>} />
         <Route path="share" element={<S><SharePage /></S>} />

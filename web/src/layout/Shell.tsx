@@ -23,6 +23,7 @@ import { setUXEnabled, usePrefs, useRecentWorks } from '@/lib/v3'
 const nav: { end?: boolean; path: string; icon: typeof LayoutDashboard; label: string; mobile?: string }[] = [
   { end: true, path: '', icon: LayoutDashboard, label: '工作台', mobile: '工作台' },
   { path: '/topics', icon: Lightbulb, label: '选题池', mobile: '选题' },
+  { path: '/ops', icon: Activity, label: '运营' },
   { path: '/calendar', icon: CalendarDays, label: '内容日历', mobile: '日历' },
   { path: '/works', icon: FileText, label: '作品', mobile: '作品' },
   { path: '/materials', icon: BookOpen, label: '素材库', mobile: '素材' },
@@ -644,6 +645,7 @@ function useChromeMeta() {
     if (!acc) return { crumb: '运助', title: '选择账号' }
     const map: { test: RegExp; title: string }[] = [
       { test: /\/topics$/, title: '选题池' },
+      { test: /\/ops$/, title: '账号运营' },
       { test: /\/calendar$/, title: '内容日历' },
       { test: /\/works$/, title: '作品' },
       { test: /\/materials$/, title: '素材库' },
