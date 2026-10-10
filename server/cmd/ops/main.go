@@ -40,8 +40,10 @@ func main() {
 		err = setAdmin(false)
 	case "version":
 		fmt.Println(app.Version)
+	case "check-formats":
+		err = checkFormats()
 	default:
-		fmt.Fprintf(os.Stderr, "用法：ops [serve|migrate|reset-password <username>|grant-admin <username>|revoke-admin <username>|version]\n")
+		fmt.Fprintf(os.Stderr, "用法：ops [serve|migrate|reset-password <username>|grant-admin <username>|revoke-admin <username>|check-formats|version]\n")
 		os.Exit(2)
 	}
 	if err != nil {
@@ -69,6 +71,21 @@ func migrate() error {
 		return err
 	}
 	return srv.EnsurePermanentAdmin(ctx)
+}
+
+// checkFormats prints the read-only D-048 consistency report (08 文档 DEV-048-09) and changes nothing.
+func checkFormats() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	return app.CheckFormats(ctx, pool)
 }
 
 func serve() error {
