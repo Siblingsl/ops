@@ -87,6 +87,9 @@ func runWithEnv(m *testing.M) (int, error) {
 	llm := &mock.LLM{}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", llm.Handler())
+	mux.Handle("/robots.txt", mock.HotHandler())
+	mux.Handle("/mock/hot/", mock.HotHandler())
+	mux.Handle("/mock/page/", mock.HotHandler())
 	mux.Handle("/", wx.Handler())
 	mockSrv := httptest.NewServer(mux)
 	defer mockSrv.Close()

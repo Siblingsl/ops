@@ -120,6 +120,9 @@ func serveMock(addr string) {
 	llm := &mock.LLM{Delay: 25 * time.Millisecond}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", llm.Handler())
+	mux.Handle("/robots.txt", mock.HotHandler())
+	mux.Handle("/mock/hot/", mock.HotHandler())
+	mux.Handle("/mock/page/", mock.HotHandler())
 	mux.Handle("/", wx.Handler())
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		slog.Error("模拟服务器启动失败", "err", err)
