@@ -8,7 +8,7 @@ import { toast } from 'sonner'
 import { Dialog, Drawer, confirm } from '@/components/dialog'
 import { AIFeedback, RefsNote, sendFeedback } from '@/components/refs'
 import { StarButton } from '@/components/star-button'
-import { Badge, Button, Card, cn, Empty, Field, HumanGate, IconButton, Input, Notice, PageHeader, PageLoading, Select, Switch, Tabs, Textarea } from '@/components/ui'
+import { Badge, Button, Card, cn, Empty, Field, formatLabel, HumanGate, IconButton, Input, Notice, PageHeader, PageLoading, Select, Switch, Tabs, Textarea } from '@/components/ui'
 import { openQuickCollect } from '@/components/quick-collect'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
@@ -40,7 +40,6 @@ const sourceLabel: Record<Topic['source'], { label: string; tone: 'gray' | 'ink'
   plan: { label: '运营大纲', tone: 'ink' },
   daily: { label: '今日推荐', tone: 'ink' },
 }
-const formatLabel: Record<string, string> = { long_article: '长图文', image_note: '图文笔记', comic: '漫画' }
 
 function SuggestionCard({ s, added, adding, onAdd, onIgnore }: { s: Suggestion; added: boolean; adding: boolean; onAdd: () => void; onIgnore?: () => void }) {
   return (
@@ -187,7 +186,7 @@ function HotSuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose
   )
 }
 
-function TopicEditDialog({ t, series, onClose }: { t: Topic; series: Series[]; onClose: () => void }) {
+function TopicEditDialog({ t, accountFormat, series, onClose }: { t: Topic; accountFormat: string; series: Series[]; onClose: () => void }) {
   const inv = useInvalidate()
   const [f, setF] = useState({
     title: t.title, angle: t.angle, audience: t.audience ?? '', hook: t.hook ?? '', needed: (t.needed_materials ?? []).join('、'),
@@ -219,7 +218,7 @@ function TopicEditDialog({ t, series, onClose }: { t: Topic; series: Series[]; o
         <Field label="目标读者"><Input value={f.audience} onChange={(e) => setF({ ...f, audience: e.target.value })} placeholder="写给谁看" /></Field>
         <Field label="预计形态">
           <Select value={f.format} onChange={(e) => setF({ ...f, format: e.target.value })}>
-            <option value="">未定</option><option value="long_article">长图文</option><option value="image_note">图文笔记</option><option value="comic">漫画</option>
+            <option value="">未定</option>{accountFormat && <option value={accountFormat}>{formatLabel[accountFormat] ?? accountFormat}</option>}
           </Select>
         </Field>
         <Field label="钩子" className="sm:col-span-2"><Input value={f.hook} onChange={(e) => setF({ ...f, hook: e.target.value })} placeholder="开头用什么抓住读者" /></Field>
@@ -247,7 +246,7 @@ function ScoreBar({ label, value, tip }: { label: string; value: number | null |
   )
 }
 
-function TopicCard({ t, accountId, series, focused, primed }: { t: Topic; accountId: string; series: Series[]; focused: boolean; primed?: boolean }) {
+function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t: Topic; accountId: string; accountFormat: string; series: Series[]; focused: boolean; primed?: boolean }) {
   const inv = useInvalidate()
   const qc = useQueryClient()
   const canWrite = useCanWrite()
@@ -332,6 +331,7 @@ function TopicCard({ t, accountId, series, focused, primed }: { t: Topic; accoun
         {((t.needed_materials?.length ?? 0) > 0 || t.format || t.planned_date || sr) && (
           <div className="mt-2 flex flex-wrap gap-1">
             {t.format && <Badge tone="ink">{formatLabel[t.format] ?? t.format}</Badge>}
+            {t.format && accountFormat && t.format !== accountFormat && <Badge tone="red">形态与账号类型不匹配</Badge>}
             {t.planned_date && <Badge tone="gamboge"><CalendarDays className="size-3" />计划 {t.planned_date.slice(5)}</Badge>}
             {sr && <Badge><Layers className="size-3" />{sr.name}</Badge>}
             {t.needed_materials?.slice(0, 3).map((m) => <Badge key={m}>需要：{m}</Badge>)}
@@ -357,7 +357,7 @@ function TopicCard({ t, accountId, series, focused, primed }: { t: Topic; accoun
         </div>
         {primed && !t.work_id && canWrite && <p className="mt-2 text-[12px] text-ink-700">这是最早采用、还没开始写的选题，点「开始创作」进入编辑器。</p>}
       </Card>
-      {edit && <TopicEditDialog t={{ ...t, account_id: t.account_id ?? accountId }} series={series} onClose={() => setEdit(false)} />}
+      {edit && <TopicEditDialog t={{ ...t, account_id: t.account_id ?? accountId }} accountFormat={accountFormat} series={series} onClose={() => setEdit(false)} />}
     </div>
   )
 }
@@ -693,7 +693,7 @@ export default function Topics() {
       ) : (
         <>
           {tab === 'pending' && byScore && <p className="mb-3 text-[12px] text-mist-400"><BookOpen className="mr-1 inline size-3.5" />综合排序 = 契合度、素材充足度、新颖度的加权；只是参考，不预测阅读量。</p>}
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{shown.map((t) => <TopicCard key={t.id} t={t} accountId={acc.id} series={series.data ?? []} focused={t.id === focus} primed={t.id === startId} />)}</div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{shown.map((t) => <TopicCard key={t.id} t={t} accountId={acc.id} accountFormat={acc.content_format} series={series.data ?? []} focused={t.id === focus} primed={t.id === startId} />)}</div>
         </>
       )}
       <SuggestDrawer open={suggest} onClose={() => setSuggest(false)} accountId={acc.id} />

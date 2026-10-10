@@ -1,5 +1,6 @@
 export type Platform = 'wechat_mp' | 'xhs'
-export type ContentFormat = 'long_article' | 'image_note' | 'comic'
+// D-048 首批账号类型（90 文档第 9 节）：预设类型决定真实工作流，创建后固定。
+export type ContentFormat = 'long_article' | 'image_note' | 'comic' | 'qa_article' | 'briefing' | 'list_note' | 'card_post' | 'script'
 export type WorkStatus = 'drafting' | 'checking' | 'reviewing' | 'ready' | 'pushed' | 'packed' | 'published'
 
 export interface CredState {
@@ -15,6 +16,7 @@ export interface Account {
   platform: Platform
   name: string
   content_format: ContentFormat
+  type_note: string
   status: 'active' | 'disabled'
   daily_push_limit: number
   created_at: string

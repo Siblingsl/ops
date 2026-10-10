@@ -59,7 +59,6 @@ const labels = {
 }
 const cloneFields = (s: StrategyFields): StrategyFields => JSON.parse(JSON.stringify(s))
 const showValue = (value: unknown): string => (typeof value === 'string' ? value : JSON.stringify(value, null, 2))
-const formats = (account: Account) => (account.platform === 'wechat_mp' ? ['long_article', 'comic'] : ['image_note', 'comic'])
 
 function StrategySummary({ strategy }: { strategy: StrategyFields }) {
   return (
@@ -271,14 +270,8 @@ function StrategyEditor({
         </div>
       </fieldset>
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="作品形态">
-          <Select value={value.cadence.format} onChange={(e) => set('cadence', { ...value.cadence, format: e.target.value })}>
-            {formats(account).map((f) => (
-              <option key={f} value={f}>
-                {formatLabel[f]}
-              </option>
-            ))}
-          </Select>
+        <Field label="作品形态" hint="账号类型创建后固定，方案按它展开">
+          <div className="flex h-9 items-center rounded-lg bg-mist-50 px-3 text-sm text-mist-700">{formatLabel[value.cadence.format] ?? value.cadence.format}</div>
         </Field>
         <Field label="阶段">
           <Select value={value.stage} onChange={(e) => set('stage', e.target.value as StrategyFields['stage'])}>
@@ -687,14 +680,8 @@ function StrategyPanel({ account }: { account: Account }) {
                       onChange={(e) => setQuestion((q) => ({ ...q, weekly_hours: Number(e.target.value) }))}
                     />
                   </Field>
-                  <Field label="形态">
-                    <Select value={question.format} onChange={(e) => setQuestion((q) => ({ ...q, format: e.target.value }))}>
-                      {formats(account).map((f) => (
-                        <option key={f} value={f}>
-                          {formatLabel[f]}
-                        </option>
-                      ))}
-                    </Select>
+                  <Field label="形态" hint="按账号类型固定">
+                    <div className="flex h-9 items-center rounded-lg bg-mist-50 px-3 text-sm text-mist-700">{formatLabel[question.format] ?? question.format}</div>
                   </Field>
                 </div>
                 <Field label="旧作品（可选，粘贴正文）">

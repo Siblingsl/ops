@@ -480,7 +480,7 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
         action={<Button size="sm" icon={<Wand2 className="size-3.5" />} onClick={() => setWizard(true)}>从过往作品生成</Button>} />
       {wizard && <BootstrapWizard account={account} onClose={closeWizard} onApply={apply} />}
       <div className="grid gap-5 p-5 md:grid-cols-2">
-        <Field label="内容形态" hint={<>修改内容形态请到 <Link to="/settings/accounts" className="text-ink-600 underline">设置 → 平台账号</Link></>}>
+        <Field label="账号类型" hint="创建时选定后固定；业务定位（标签、读者、人设等）可随时调整">
           <div className="flex h-9 items-center gap-2 rounded-lg bg-mist-50 px-3 text-sm text-mist-700"><PlatformMark platform={account.platform} size="sm" />{formatLabel[account.content_format]}</div>
         </Field>
         <Field label="定位标签" hint="空格或逗号分隔"><Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="职场 效率 新人成长" /></Field>

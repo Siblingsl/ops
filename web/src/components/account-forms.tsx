@@ -1,19 +1,27 @@
 import { CheckCircle2, CircleAlert, Copy, Globe2, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Badge, Button, cn, Field, Input, Notice, PlatformMark } from '@/components/ui'
+import { Badge, Button, cn, Field, Input, Notice, PlatformMark, Textarea } from '@/components/ui'
 import { errorMessage, post, put } from '@/lib/api'
 import { copyText, fmtTime } from '@/lib/format'
 import { useSystemInfo } from '@/lib/session'
 import type { Account, ContentFormat, CredState, Platform } from '@/lib/types'
 
-const matrix: Record<Platform, { value: ContentFormat; label: string; desc: string; p1?: boolean }[]> = {
+// D-048 首批预设类型（与 ui.tsx platformFormats、后端 formatMatrix 一致）。每个类型都有真实工作流。
+const matrix: Record<Platform, { value: ContentFormat; label: string; desc: string }[]> = {
   wechat_mp: [
     { value: 'long_article', label: '长图文', desc: '图文并茂的文章，写入公众号草稿箱' },
+    { value: 'qa_article', label: '问答体长图文', desc: '以问题与回答组织全文的深度文章，写入公众号草稿箱' },
+    { value: 'briefing', label: '资讯简报', desc: '导语加条目的短篇汇总，篇幅更紧凑，写入公众号草稿箱' },
+    { value: 'card_post', label: '图文卡片', desc: '逐卡文案配 AI 生成图片，写入公众号图片消息草稿' },
+    { value: 'script', label: '口播脚本', desc: '镜头化脚本文档（镜号/口播/画面），脚本辅助，不含视频制作' },
     { value: 'comic', label: '漫画', desc: '角色卡 + 分镜脚本 + 逐格文案与回传图片' },
   ],
   xhs: [
     { value: 'image_note', label: '图文笔记', desc: '多图 + 短文，生成发布包手动发布' },
+    { value: 'list_note', label: '清单合集笔记', desc: '以编号清单组织要点与合集，生成发布包手动发布' },
+    { value: 'card_post', label: '图文卡片', desc: '逐卡文案配 AI 生成图片，打包进发布包' },
+    { value: 'script', label: '口播脚本', desc: '镜头化脚本文档（镜号/口播/画面），脚本辅助，不含视频制作' },
     { value: 'comic', label: '漫画', desc: '角色卡 + 分镜脚本 + 逐格文案与回传图片' },
   ],
 }
@@ -30,6 +38,7 @@ export function AccountCreateForm({
   const [platform, setPlatform] = useState<Platform>(defaultPlatform)
   const [format, setFormat] = useState<ContentFormat>(matrix[defaultPlatform][0].value)
   const [name, setName] = useState('')
+  const [typeNote, setTypeNote] = useState('')
   const [busy, setBusy] = useState(false)
   const pick = (p: Platform) => {
     setPlatform(p)
@@ -38,7 +47,7 @@ export function AccountCreateForm({
   const submit = async () => {
     setBusy(true)
     try {
-      const a = await post<Account>('/accounts', { platform, name, content_format: format })
+      const a = await post<Account>('/accounts', { platform, name, content_format: format, type_note: typeNote.trim() })
       onCreated(a)
     } catch (e) {
       toast.error(errorMessage(e))
@@ -68,7 +77,7 @@ export function AccountCreateForm({
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={platform === 'wechat_mp' ? '例如：周末读书会' : '例如：小周的生活笔记'} />
       </Field>
       <div>
-        <div className="mb-2 text-[13px] font-medium text-mist-700">内容形态</div>
+        <div className="mb-2 text-[13px] font-medium text-mist-700">账号类型</div>
         <div className="space-y-2">
           {matrix[platform].map((f) => (
             <label key={f.value} className={cn('flex cursor-pointer items-center gap-3 rounded-lg border px-3.5 py-2.5 transition',
@@ -78,11 +87,15 @@ export function AccountCreateForm({
                 <span className="text-sm font-medium text-mist-800">{f.label}</span>
                 <span className="ml-2 text-xs text-mist-500">{f.desc}</span>
               </span>
-              {f.p1 && <Badge>即将支持</Badge>}
             </label>
           ))}
         </div>
+        <p className="mt-2 text-xs text-mist-400">类型决定这个账号的编辑器、检查和输出方式，创建后不可修改。</p>
       </div>
+      <Field label="类型补充说明（可选）" hint="最多 200 字。只帮助 AI 理解定位，不改变创作流程。">
+        <Textarea rows={2} value={typeNote} maxLength={200} onChange={(e) => setTypeNote(e.target.value)}
+          placeholder={format === 'comic' ? '例如：四格职场日常，主角是入职三年的产品助理' : '例如：面向转型工程师，多写可复现的实操步骤'} />
+      </Field>
       <Button variant="primary" onClick={submit} loading={busy} disabled={!name.trim()} className="w-full">{submitText}</Button>
     </div>
   )

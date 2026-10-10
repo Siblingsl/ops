@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import { Loader2 } from 'lucide-react'
 import React, { forwardRef } from 'react'
-import type { Platform, WorkStatus } from '@/lib/types'
+import type { ContentFormat, Platform, WorkStatus } from '@/lib/types'
 
 export const cn = clsx
 
@@ -192,7 +192,16 @@ export function StatusBadge({ status }: { status: WorkStatus }) {
 }
 
 export const platformLabel: Record<Platform, string> = { wechat_mp: '公众号', xhs: '小红书' }
-export const formatLabel: Record<string, string> = { long_article: '长图文', image_note: '图文笔记', comic: '漫画' }
+export const formatLabel: Record<string, string> = {
+  long_article: '长图文', image_note: '图文笔记', comic: '漫画',
+  qa_article: '问答体长图文', briefing: '资讯简报', list_note: '清单合集笔记',
+  card_post: '图文卡片', script: '口播脚本',
+}
+// 每平台可选的账号类型（D-048）。与后端 formatMatrix 保持一致；创建后不可修改。
+export const platformFormats: Record<Platform, ContentFormat[]> = {
+  wechat_mp: ['long_article', 'qa_article', 'briefing', 'card_post', 'script', 'comic'],
+  xhs: ['image_note', 'list_note', 'card_post', 'script', 'comic'],
+}
 
 export function PlatformMark({ platform, size = 'md' }: { platform: Platform; size?: 'sm' | 'md' | 'lg' }) {
   const s = size === 'sm' ? 'size-5 text-[10px] rounded' : size === 'lg' ? 'size-10 text-sm rounded-xl' : 'size-7 text-[11px] rounded-lg'

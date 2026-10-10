@@ -4,12 +4,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AccountCreateForm, credTone, CredentialPanel } from '@/components/account-forms'
 import { confirm, Dialog } from '@/components/dialog'
-import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, Input, PageHeader, PageLoading, PlatformMark, platformLabel, Select } from '@/components/ui'
-import { ApiError, del, errorMessage, patch, post } from '@/lib/api'
+import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, Input, PageHeader, PageLoading, PlatformMark, platformLabel, Textarea } from '@/components/ui'
+import { del, errorMessage, patch, post } from '@/lib/api'
 import { useAccounts, useInvalidate, useMe } from '@/lib/session'
-import type { Account, ContentFormat } from '@/lib/types'
-
-const formats: Record<string, ContentFormat[]> = { wechat_mp: ['long_article', 'comic'], xhs: ['image_note', 'comic'] }
+import type { Account } from '@/lib/types'
 
 type Filter = 'all' | 'active' | 'disabled'
 
@@ -21,7 +19,8 @@ function AccountDetail({ account, onStatusChange, canManage }: {
   const inv = useInvalidate()
   const [name, setName] = useState(account.name)
   const [limit, setLimit] = useState(String(account.daily_push_limit))
-  useEffect(() => { setName(account.name); setLimit(String(account.daily_push_limit)) }, [account])
+  const [typeNote, setTypeNote] = useState(account.type_note ?? '')
+  useEffect(() => { setName(account.name); setLimit(String(account.daily_push_limit)); setTypeNote(account.type_note ?? '') }, [account])
 
   const save = async (body: Record<string, unknown>) => {
     try {
@@ -29,10 +28,7 @@ function AccountDetail({ account, onStatusChange, canManage }: {
       inv(['accounts'])
       toast.success('已保存')
     } catch (e) {
-      if (e instanceof ApiError && e.code === 'confirm_required') {
-        if (await confirm({ title: '修改内容形态？', desc: e.message, confirmText: '确认修改' })) return save({ ...body, confirm: true })
-        inv(['accounts'])
-      } else toast.error(errorMessage(e))
+      toast.error(errorMessage(e))
     }
   }
 
@@ -94,12 +90,15 @@ function AccountDetail({ account, onStatusChange, canManage }: {
           <Field label="账号名称">
             <Input value={name} disabled={!canManage} onChange={(e) => setName(e.target.value)} onBlur={() => canManage && name.trim() && name !== account.name && save({ name })} />
           </Field>
-          <Field label="内容形态" hint="已有作品保持原流程">
-            <Select value={account.content_format} onChange={(e) => save({ content_format: e.target.value })} disabled={!canManage || account.status === 'disabled'}>
-              {formats[account.platform].map((f) => (
-                <option key={f} value={f}>{formatLabel[f]}</option>
-              ))}
-            </Select>
+          <Field label="账号类型" hint="创建时选定后固定，不可修改；如需其他类型请新建账号">
+            <div className="flex h-9 items-center gap-2 text-[13.5px] text-mist-700">
+              {formatLabel[account.content_format] ?? account.content_format}
+            </div>
+          </Field>
+          <Field label="类型补充说明" hint="只帮助 AI 理解定位，不改变创作流程；最多 200 字">
+            <Textarea rows={2} value={typeNote} maxLength={200} disabled={!canManage || account.status === 'disabled'}
+              onChange={(e) => setTypeNote(e.target.value)}
+              onBlur={() => canManage && typeNote !== (account.type_note ?? '') && save({ type_note: typeNote })} />
           </Field>
           {account.platform === 'wechat_mp' && (
             <Field label="每日写入草稿上限" hint="1–20 次，不能关闭。超过后仍可写入，但每次都需要二次确认。">
