@@ -7,6 +7,62 @@ import (
 	"strings"
 )
 
+// ParseMetadata stops at the head; no article, comment, or personal text is extracted.
+func ParseMetadata(b []byte) (Page, error) {
+	p := Page{}
+	z := html.NewTokenizer(strings.NewReader(string(b)))
+	title := false
+	for {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			break
+		}
+		token := z.Token()
+		switch tt {
+		case html.StartTagToken, html.SelfClosingTagToken:
+			if token.Data == "body" {
+				if p.Title == "" {
+					return p, errors.New("原文没有标题元数据")
+				}
+				return p, nil
+			}
+			if token.Data == "title" {
+				title = true
+			}
+			if token.Data == "meta" {
+				a := map[string]string{}
+				for _, v := range token.Attr {
+					a[v.Key] = v.Val
+				}
+				switch a["name"] + a["property"] {
+				case "description", "og:description":
+					p.Summary = cut(a["content"], 500)
+				case "og:title":
+					p.Title = cut(a["content"], 200)
+				}
+			}
+		case html.EndTagToken:
+			if token.Data == "title" {
+				title = false
+			}
+			if token.Data == "head" {
+				if p.Title == "" {
+					return p, errors.New("原文没有标题元数据")
+				}
+				return p, nil
+			}
+		case html.TextToken:
+			if title {
+				p.Title += cut(token.Data, 200)
+			}
+		}
+	}
+	if p.Title == "" {
+		return p, errors.New("原文没有标题元数据")
+	}
+	return p, nil
+}
+
 func (a Adapter) FetchPage(ctx context.Context, l Limits) (Page, Outcome, error) {
 	var page Page
 	if a.Source.Kind != "xhs_page" && a.Source.Kind != "wechat_page" {

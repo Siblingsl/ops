@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"net/http"
+	"net/url"
 	"ops/internal/ai"
+	"ops/internal/crawl"
 	"sort"
 	"strings"
 	"time"
@@ -277,6 +279,15 @@ func (s *Server) matchHot(ctx context.Context, a *Account, force bool) error {
 		return err
 	}
 	succeeded = true
+	for _, candidate := range out.Items {
+		if candidate.Relevance >= 75 {
+			h := known[candidate.ID]
+			u, e := url.Parse(h.URL)
+			if e == nil && crawl.Sensitive(u.Hostname()) != "" {
+				s.queueHotReference(ctx, h.ID)
+			}
+		}
+	}
 	return nil
 }
 func (s *Server) hotMatches(ctx context.Context, a *Account, date string) ([]HotMatch, error) {

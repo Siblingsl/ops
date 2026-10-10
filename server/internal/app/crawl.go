@@ -36,6 +36,9 @@ func (s *Server) loadCrawl(ctx context.Context) crawlConfig {
 type crawlStore struct{ s *Server }
 
 func (st crawlStore) Claim(ctx context.Context, source crawl.Source, now time.Time, l crawl.Limits) error {
+	if source.Kind == "summary" {
+		return st.s.claimSummary(ctx, source, now, l)
+	}
 	if source.Kind == "xhs_page" || source.Kind == "wechat_page" {
 		return st.s.claimPlatform(ctx, source, now)
 	}
@@ -88,7 +91,10 @@ func (s *Server) crawlClient() *crawl.Client {
 		if s.cfg.Dev {
 			local = s.cfg.MockListen
 		}
-		s.crawler = crawl.New(crawl.Options{Mode: func() bool { return s.loadCrawl(context.Background()).Limits.Enabled }, Now: func() time.Time { return s.now() }, Store: crawlStore{s}, LocalHost: local})
+		s.crawler = crawl.New(crawl.Options{Mode: func() bool { return s.loadCrawl(context.Background()).Limits.Enabled }, Allow: func(src crawl.Source) bool {
+			c := s.loadCrawl(context.Background())
+			return src.Kind != "summary" || c.Level == "standard" && c.SummaryFetch
+		}, Now: func() time.Time { return s.now() }, Store: crawlStore{s}, LocalHost: local})
 	}
 	return s.crawler
 }

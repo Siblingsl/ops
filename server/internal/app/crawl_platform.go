@@ -143,7 +143,11 @@ func (s *Server) reserveCrawl(ctx context.Context, src crawl.Source, now time.Ti
 			return e
 		}
 	}
-	tag, e := tx.Exec(ctx, `INSERT INTO crawl_budget(date,requests) VALUES($1::date,1) ON CONFLICT(date) DO UPDATE SET requests=crawl_budget.requests+1 WHERE crawl_budget.requests<$2`, now.In(s.loc).Format("2006-01-02"), cap)
+	summary := 0
+	if src.Kind == "summary" {
+		summary = 1
+	}
+	tag, e := tx.Exec(ctx, `INSERT INTO crawl_budget(date,requests,summary_requests) VALUES($1::date,1,$3) ON CONFLICT(date) DO UPDATE SET requests=crawl_budget.requests+1,summary_requests=crawl_budget.summary_requests+$3 WHERE crawl_budget.requests<$2 AND ($3=0 OR crawl_budget.summary_requests<20)`, now.In(s.loc).Format("2006-01-02"), cap, summary)
 	if e != nil {
 		return e
 	}

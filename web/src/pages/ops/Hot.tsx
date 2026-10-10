@@ -37,7 +37,8 @@ export default function HotPanel({ account, compact=false }: { account: Account;
       {!query.data.items.length ? <Empty title="暂无相关热点" desc="先启用工作区来源并完成采集，再匹配今日热点。" action={paste} /> : <div className="grid gap-3 lg:grid-cols-2">{query.data.items.slice(0,compact?3:15).map((m) => <div key={m.id} className={`space-y-2 rounded-lg border p-4 ${risky(m) ? 'border-mist-200 bg-mist-50 text-mist-500' : 'border-mist-200'}`}>
         <div className="flex flex-wrap items-center gap-2"><Badge>{m.hot_item.sources?.length?m.hot_item.sources.map(s=>`${s.name}第 ${s.rank}`).join("、"):`${m.hot_item.source_name} · 第 ${m.hot_item.rank} 名`}</Badge><Badge tone="ink">相关度 {m.relevance}</Badge>{m.risk.map((r) => <Badge key={r} tone="gamboge">{riskLabel[r] ?? r}</Badge>)}</div>
         <h4 className="font-semibold">{m.hot_item.title}</h4><p className="text-xs text-mist-500">首次出现 {new Date(m.hot_item.first_seen_at).toLocaleString('zh-CN')} · 最近在榜 {new Date(m.hot_item.last_seen_at).toLocaleString('zh-CN')}</p>
-        <p className="text-sm">为什么有关：{m.reason}</p><p className="text-sm">切入角度：{m.angle}</p>
+        {m.hot_item.summary&&<p className="text-sm text-mist-600">原文摘要：{m.hot_item.summary}</p>}
+ <p className="text-sm">为什么有关：{m.reason}</p><p className="text-sm">切入角度：{m.angle}</p>
         {risky(m) && <Notice tone="gamboge">不建议借此营销，不能转为选题。</Notice>}
         <div className="flex flex-wrap gap-2"><a href={m.hot_item.url} target="_blank" rel="noreferrer" className="text-sm text-ink-600">打开原文</a>{m.status === 'converted' && m.topic_id ? <Link className="text-sm text-ink-600" to={`/a/${account.id}/topics?focus=${m.topic_id}`}>查看选题</Link> : canWrite && <><Button size="sm" variant="human" disabled={busy || risky(m)} onClick={() => { setEditing(m); setTitle(m.hot_item.title); setAngle(m.angle) }}>转为选题</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => run(`/hot-matches/${m.id}/dismiss`)}>不感兴趣</Button></>}</div>
       </div>)}</div>}

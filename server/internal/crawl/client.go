@@ -61,6 +61,7 @@ type Store interface {
 
 type Options struct {
 	Mode      func() bool
+	Allow     func(Source) bool
 	Now       func() time.Time
 	Store     Store
 	LocalHost string
@@ -169,6 +170,9 @@ func (c *Client) request(ctx context.Context, u *url.URL, source Source, lim Lim
 	if c.options.Mode == nil || !c.options.Mode() || !lim.Enabled {
 		return nil, 0, ErrDisabled
 	}
+	if c.options.Allow != nil && !c.options.Allow(source) {
+		return nil, 0, ErrDisabled
+	}
 	if err := c.options.Store.Reserve(ctx, Source{Key: source.Key, Kind: source.Kind, URL: u.String()}, c.options.Now(), lim.DailyRequests); err != nil {
 		return nil, 0, err
 	}
@@ -184,7 +188,25 @@ func (c *Client) request(ctx context.Context, u *url.URL, source Source, lim Lim
 		return nil, 0, err
 	}
 	defer res.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(res.Body, 4<<20+1))
+	var b []byte
+	if source.Kind == "summary" {
+		buf := make([]byte, 1024)
+		for len(b) < 65536 {
+			n, e := res.Body.Read(buf)
+			b = append(b, buf[:n]...)
+			if strings.Contains(strings.ToLower(string(b)), "</head>") {
+				break
+			}
+			if e != nil {
+				if e != io.EOF {
+					err = e
+				}
+				break
+			}
+		}
+	} else {
+		b, err = io.ReadAll(io.LimitReader(res.Body, 4<<20+1))
+	}
 	if len(b) > 4<<20 {
 		return nil, res.StatusCode, errors.New("来源页面过大")
 	}
