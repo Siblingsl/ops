@@ -518,7 +518,11 @@ func respond(prompt string) string {
 		var slots []map[string]any
 		for i, m := range regexp.MustCompile(`槽位 date=(\d{4}-\d{2}-\d{2}) 支柱=([^\n]+)`).FindAllStringSubmatch(prompt, -1) {
 			p := strings.TrimSpace(m[2])
-			slots = append(slots, map[string]any{"date": m[1], "pillar": p, "title": fmt.Sprintf("%s：第 %d 个值得写的问题", p, i+1),
+			title := fmt.Sprintf("%s：第 %d 个值得写的问题", p, i+1)
+			if strings.Contains(prompt, "不要再给出这些标题") {
+				title = "换个视角聊聊" + p
+			}
+			slots = append(slots, map[string]any{"date": m[1], "pillar": p, "title": title,
 				"angle": "从一次真实经历切入", "reason": "按支柱轮换补齐", "hot_item_id": nil})
 		}
 		if slots == nil {

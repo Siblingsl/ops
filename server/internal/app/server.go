@@ -387,10 +387,15 @@ func (s *Server) v3Routes(r chi.Router) {
 // v4Routes registers the D-047 account operations endpoints (11 文档第 8 节).
 func (s *Server) v4Routes(r chi.Router) {
 	r.Get("/accounts/{accountId}/strategy", s.h(s.getStrategy))
-	r.Post("/accounts/{accountId}/strategy/draft", s.h(s.draftStrategy))
+	r.Post("/accounts/{accountId}/strategy/options", s.h(s.strategyOptions))
 	r.Post("/accounts/{accountId}/strategy", s.h(s.activateStrategy))
 	r.Post("/accounts/{accountId}/strategy/versions/{v}/restore", s.h(s.restoreStrategy))
 	r.Post("/accounts/{accountId}/strategy/revise", s.h(s.reviseStrategy))
+	r.Get("/accounts/{accountId}/plan", s.h(s.getPlan))
+	r.Post("/accounts/{accountId}/plan/suggest", s.h(s.suggestPlan))
+	r.Post("/plan-slots/{id}/adopt", s.h(s.adoptSlot))
+	r.Post("/plan-slots/{id}/regenerate", s.h(s.regenerateSlot))
+	r.Post("/plan-slots/{id}/clear", s.h(s.clearSlot))
 }
 
 func spaHandler(dir string) http.Handler {

@@ -314,6 +314,9 @@ func (s *Server) saveStrategyVersion(ctx context.Context, a *Account, f Strategy
 		return nil, err
 	}
 	s.audit(ctx, "strategy.activate", "account", a.ID.String(), "ok", map[string]any{"version": st.Version})
+	if err := s.ensureSlots(ctx, a, st, true); err != nil {
+		return nil, err
+	}
 	return st, nil
 }
 
@@ -450,7 +453,7 @@ func validPositioning(a *Account, experiences string, opts *[]PositioningOption)
 	return nil
 }
 
-func (s *Server) draftStrategy(w http.ResponseWriter, r *http.Request) error {
+func (s *Server) strategyOptions(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.accountFromPath(r)
 	if err != nil {
 		return err

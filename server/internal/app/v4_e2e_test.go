@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 type strategyView struct {
@@ -21,7 +24,7 @@ func v4Account(t *testing.T, name string) (Account, string) {
 
 func positioningOptions(t *testing.T, acc string) ([]PositioningOption, string) {
 	t.Helper()
-	ev := lastEvent(t, env.sse(t, acc+"/strategy/draft", map[string]any{
+	ev := lastEvent(t, env.sse(t, acc+"/strategy/options", map[string]any{
 		"domain": "互联网运营", "experiences": "在电商公司做了五年用户增长，带过三人小团队", "weekly_hours": 6}))
 	if ev.Name != "done" {
 		t.Fatalf("positioning draft: %s %s", ev.Name, ev.Data)
@@ -42,7 +45,7 @@ func positioningOptions(t *testing.T, acc string) ([]PositioningOption, string) 
 func TestE2E17PositioningWizard(t *testing.T) {
 	a, acc := v4Account(t, "起号测试")
 
-	env.expectErr(t, "POST", acc+"/strategy/draft", map[string]any{"domain": "互联网运营"}, "validation_failed")
+	env.expectErr(t, "POST", acc+"/strategy/options", map[string]any{"domain": "互联网运营"}, "validation_failed")
 
 	opts, callID := positioningOptions(t, acc)
 	if len(opts) < 2 || len(opts) > 3 {
@@ -160,6 +163,133 @@ func TestStrategyRevise(t *testing.T) {
 		"pillars": next.Pillars, "cadence": next.Cadence, "stage": next.Stage, "keywords": next.Keywords, "ai_call_id": rev.AICallID}, &res)
 	if res.Strategy.Version != 2 || res.Strategy.Stage != "cold_start" || !contains(res.Strategy.Keywords, "沟通") {
 		t.Fatalf("accepted only keywords: %+v", res.Strategy)
+	}
+}
+
+func TestAssignPillars(t *testing.T) {
+	ps := []Pillar{{Name: "A", Ratio: 60}, {Name: "B", Ratio: 20}, {Name: "C", Ratio: 20}}
+	got := assignPillars(ps, 20)
+	count := map[string]int{}
+	for i, p := range got {
+		count[p]++
+		if i >= 2 && got[i-1] == p && got[i-2] == p {
+			t.Fatalf("pillar %s three times in a row: %v", p, got)
+		}
+	}
+	if count["A"] < 11 || count["A"] > 13 || count["B"] < 3 || count["C"] < 3 {
+		t.Fatalf("distribution off: %v", count)
+	}
+	heavy := assignPillars([]Pillar{{Name: "A", Ratio: 90}, {Name: "B", Ratio: 5}, {Name: "C", Ratio: 5}}, 12)
+	for i := 2; i < len(heavy); i++ {
+		if heavy[i] == heavy[i-1] && heavy[i] == heavy[i-2] {
+			t.Fatalf("heavy pillar three in a row: %v", heavy)
+		}
+	}
+}
+
+// E2E-17（第二部分）：启用方案后按节奏生成 4 周槽位；生成大纲只写建议不建选题；逐槽采用后选题池与日历出现计划。
+func TestE2E17OutlinePlan(t *testing.T) {
+	a, acc := v4Account(t, "大纲测试")
+	var plan struct {
+		HasStrategy bool        `json:"has_strategy"`
+		Today       string      `json:"today"`
+		Slots       []*PlanSlot `json:"slots"`
+	}
+	env.mustJSON(t, "GET", acc+"/plan", nil, &plan)
+	if plan.HasStrategy || len(plan.Slots) != 0 {
+		t.Fatalf("no strategy, no slots: %+v", plan)
+	}
+	env.expectErr(t, "POST", acc+"/plan/suggest", nil, "state_invalid")
+
+	opts, _ := positioningOptions(t, acc)
+	f := opts[0].StrategyFields
+	f.Cadence = Cadence{Days: []int{1, 2, 3, 4, 5, 6, 7}}
+	env.mustJSON(t, "POST", acc+"/strategy", f, nil)
+
+	env.mustJSON(t, "GET", acc+"/plan", nil, &plan)
+	if !plan.HasStrategy || len(plan.Slots) < 21 || len(plan.Slots) > 28 {
+		t.Fatalf("daily cadence should give one slot per remaining day: %d", len(plan.Slots))
+	}
+	for _, sl := range plan.Slots {
+		if sl.Date < plan.Today || sl.Status != "empty" || sl.Pillar == "" || sl.Format != "image_note" {
+			t.Fatalf("slot: %+v", sl)
+		}
+	}
+	var topicsBefore []Topic
+	env.mustJSON(t, "GET", acc+"/topics", nil, &topicsBefore)
+
+	var sug struct {
+		Updated int `json:"updated"`
+	}
+	env.mustJSON(t, "POST", acc+"/plan/suggest", nil, &sug)
+	if sug.Updated != len(plan.Slots) {
+		t.Fatalf("suggest filled %d of %d", sug.Updated, len(plan.Slots))
+	}
+	var topicsAfter []Topic
+	env.mustJSON(t, "GET", acc+"/topics", nil, &topicsAfter)
+	if len(topicsAfter) != len(topicsBefore) {
+		t.Fatal("generating the outline must not create topics (H-01)")
+	}
+
+	env.mustJSON(t, "GET", acc+"/plan", nil, &plan)
+	first, second, third := plan.Slots[0], plan.Slots[1], plan.Slots[2]
+	if first.Status != "suggested" || first.Suggestion == nil || first.Suggestion.Title == "" {
+		t.Fatalf("suggested slot: %+v", first)
+	}
+
+	var adopted struct {
+		Slot    PlanSlot  `json:"slot"`
+		TopicID uuid.UUID `json:"topic_id"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/plan-slots/"+first.ID.String()+"/adopt", nil, &adopted)
+	if adopted.Slot.Status != "adopted" || adopted.Slot.TopicTitle == nil || *adopted.Slot.TopicTitle != first.Suggestion.Title {
+		t.Fatalf("adopt: %+v", adopted.Slot)
+	}
+	env.expectErr(t, "POST", "/api/v1/plan-slots/"+first.ID.String()+"/adopt", nil, "state_invalid")
+	env.mustJSON(t, "GET", acc+"/topics", nil, &topicsAfter)
+	if len(topicsAfter) != len(topicsBefore)+1 {
+		t.Fatal("adopting one slot creates exactly one topic")
+	}
+	tp := topicsAfter[0]
+	if tp.Source != "plan" || tp.PlannedDate == nil || *tp.PlannedDate != first.Date || tp.StrategyPillar == nil || *tp.StrategyPillar != first.Pillar {
+		t.Fatalf("topic from slot: %+v", tp)
+	}
+	var cal struct {
+		Items []CalendarItem `json:"items"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/calendar?account_id="+a.ID.String()+"&from="+first.Date+"&to="+first.Date, nil, &cal)
+	if len(cal.Items) != 1 || cal.Items[0].Kind != "topic" {
+		t.Fatalf("calendar shows the planned topic: %+v", cal.Items)
+	}
+
+	var regen struct {
+		Slot PlanSlot `json:"slot"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/plan-slots/"+second.ID.String()+"/regenerate", nil, &regen)
+	if regen.Slot.Suggestion == nil || regen.Slot.Suggestion.Title == second.Suggestion.Title {
+		t.Fatalf("regenerate should give a different title: %+v", regen.Slot.Suggestion)
+	}
+	env.mustJSON(t, "POST", "/api/v1/plan-slots/"+third.ID.String()+"/clear", nil, &regen)
+	if regen.Slot.Status != "empty" || regen.Slot.Suggestion != nil {
+		t.Fatalf("clear: %+v", regen.Slot)
+	}
+	env.expectErr(t, "POST", "/api/v1/plan-slots/"+first.ID.String()+"/clear", nil, "state_invalid")
+	env.expectErr(t, "POST", "/api/v1/plan-slots/"+third.ID.String()+"/adopt", nil, "validation_failed")
+
+	env.mustJSON(t, "DELETE", "/api/v1/topics/"+adopted.TopicID.String(), nil, nil)
+	env.mustJSON(t, "GET", acc+"/plan", nil, &plan)
+	if plan.Slots[0].Status != "suggested" || plan.Slots[0].TopicID != nil {
+		t.Fatalf("deleting the topic frees the slot: %+v", plan.Slots[0])
+	}
+
+	f.Cadence = Cadence{Days: []int{3}}
+	env.mustJSON(t, "POST", acc+"/strategy", f, nil)
+	env.mustJSON(t, "GET", acc+"/plan", nil, &plan)
+	for _, sl := range plan.Slots {
+		d, _ := time.Parse("2006-01-02", sl.Date)
+		if isoWeekday(d) != 3 {
+			t.Fatalf("new cadence must rebuild unadopted slots: %+v", sl)
+		}
 	}
 }
 
