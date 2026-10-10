@@ -21,6 +21,7 @@ type Account struct {
 	Platform       string     `json:"platform"`
 	Name           string     `json:"name"`
 	ContentFormat  string     `json:"content_format"`
+	TypeNote       string     `json:"type_note"`
 	Status         string     `json:"status"`
 	DailyPushLimit int        `json:"daily_push_limit"`
 	CreatedAt      time.Time  `json:"created_at"`
@@ -36,9 +37,12 @@ type CredState struct {
 	LastResult  string     `json:"last_result,omitempty"`
 }
 
+// formatMatrix 是账号类型（内容形态）的唯一权威清单（D-048 第 9 节，2026-10-10 确认）。
+// 每个类型必须有真实工作流支持：qa_article/briefing/list_note/script 复用文字流＋专属模板，
+// card_post 走逐卡 AI 生图流；类型在创建后固定（updateAccount 拒绝修改）。
 var formatMatrix = map[string][]string{
-	"wechat_mp": {"long_article", "comic"},
-	"xhs":       {"image_note", "comic"},
+	"wechat_mp": {"long_article", "qa_article", "briefing", "card_post", "script", "comic"},
+	"xhs":       {"image_note", "list_note", "card_post", "script", "comic"},
 }
 
 func validFormat(platform, format string) bool {
@@ -50,7 +54,7 @@ func validFormat(platform, format string) bool {
 	return false
 }
 
-const accountCols = `a.id, a.platform, a.name, a.content_format, a.status, a.daily_push_limit, a.created_at, a.is_demo,
+const accountCols = `a.id, a.platform, a.name, a.content_format, a.type_note, a.status, a.daily_push_limit, a.created_at, a.is_demo,
 	c.app_id, c.app_secret_enc, c.last_check_at, c.last_check_ok, c.last_check_result`
 
 func (s *Server) scanAccount(row pgx.Row) (*Account, error) {
@@ -60,7 +64,7 @@ func (s *Server) scanAccount(row pgx.Row) (*Account, error) {
 	var checkAt *time.Time
 	var checkOK *bool
 	var checkResult *string
-	if err := row.Scan(&a.ID, &a.Platform, &a.Name, &a.ContentFormat, &a.Status, &a.DailyPushLimit, &a.CreatedAt, &a.IsDemo,
+	if err := row.Scan(&a.ID, &a.Platform, &a.Name, &a.ContentFormat, &a.TypeNote, &a.Status, &a.DailyPushLimit, &a.CreatedAt, &a.IsDemo,
 		&appID, &secretEnc, &checkAt, &checkOK, &checkResult); err != nil {
 		return nil, err
 	}
@@ -129,6 +133,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) error {
 		Platform      string `json:"platform"`
 		Name          string `json:"name"`
 		ContentFormat string `json:"content_format"`
+		TypeNote      string `json:"type_note"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -141,8 +146,9 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) error {
 		return validation("平台只能是公众号或小红书")
 	}
 	if !validFormat(in.Platform, in.ContentFormat) {
-		return validation("该平台不支持这种内容形态（见平台与内容形态组合）")
+		return validation("该平台不支持这种内容类型（见账号类型说明）")
 	}
+	in.TypeNote = truncateRunes(strings.TrimSpace(in.TypeNote), 200)
 	ctx := r.Context()
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -150,8 +156,8 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) error {
 	}
 	defer tx.Rollback(ctx)
 	var id uuid.UUID
-	if err := tx.QueryRow(ctx, `INSERT INTO platform_account (workspace_id, platform, name, content_format) VALUES ($1,$2,$3,$4) RETURNING id`,
-		ident(ctx).WorkspaceID, in.Platform, in.Name, in.ContentFormat).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO platform_account (workspace_id, platform, name, content_format, type_note) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+		ident(ctx).WorkspaceID, in.Platform, in.Name, in.ContentFormat, in.TypeNote).Scan(&id); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO account_profile (account_id) VALUES ($1)`, id); err != nil {
@@ -187,8 +193,8 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) error {
 	var in struct {
 		Name           *string `json:"name"`
 		ContentFormat  *string `json:"content_format"`
+		TypeNote       *string `json:"type_note"`
 		DailyPushLimit *int    `json:"daily_push_limit"`
-		Confirm        bool    `json:"confirm"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -199,14 +205,12 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) error {
 			return validation("请填写账号名称")
 		}
 	}
+	// D-048 第 5.2 节：账号类型创建后固定，普通更新不接受类型变更，confirm 也不能绕过。
 	if in.ContentFormat != nil && *in.ContentFormat != a.ContentFormat {
-		if !validFormat(a.Platform, *in.ContentFormat) {
-			return validation("该平台不支持这种内容形态")
-		}
-		if !in.Confirm {
-			return apiErr(409, "confirm_required", "修改内容形态会改变新作品的创作流程，已有作品保持原流程。请确认后再修改。")
-		}
-		a.ContentFormat = *in.ContentFormat
+		return validation("账号类型在创建后不可修改。如需其他类型，请另建新账号；本账号的业务资料仍可继续修改。")
+	}
+	if in.TypeNote != nil {
+		a.TypeNote = truncateRunes(strings.TrimSpace(*in.TypeNote), 200)
 	}
 	if in.DailyPushLimit != nil {
 		if *in.DailyPushLimit < 1 || *in.DailyPushLimit > 20 {
@@ -214,8 +218,8 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) error {
 		}
 		a.DailyPushLimit = *in.DailyPushLimit
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE platform_account SET name=$2, content_format=$3, daily_push_limit=$4, updated_at=now() WHERE id=$1`,
-		a.ID, a.Name, a.ContentFormat, a.DailyPushLimit); err != nil {
+	if _, err := s.db.Exec(r.Context(), `UPDATE platform_account SET name=$2, content_format=$3, type_note=$4, daily_push_limit=$5, updated_at=now() WHERE id=$1`,
+		a.ID, a.Name, a.ContentFormat, a.TypeNote, a.DailyPushLimit); err != nil {
 		return err
 	}
 	s.audit(r.Context(), "account_update", "platform_account", a.ID.String(), "ok", nil)

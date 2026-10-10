@@ -319,7 +319,7 @@ func TestCredentialErrors(t *testing.T) {
 	if a.Credential == nil || a.Credential.State != "error" || strings.Contains(string(b), "\"x\"") {
 		t.Fatalf("credential state: %+v", a.Credential)
 	}
-	env.expectErr(t, "PATCH", "/api/v1/accounts/"+a.ID.String(), map[string]string{"content_format": "comic"}, "confirm_required")
+	env.expectErr(t, "PATCH", "/api/v1/accounts/"+a.ID.String(), map[string]any{"content_format": "comic", "confirm": true}, "validation_failed")
 	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/disable", nil, nil)
 	env.expectErr(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/works", map[string]string{"title": "x"}, "state_invalid")
 }

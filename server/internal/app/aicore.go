@@ -26,7 +26,11 @@ const systemRules = `你是一位帮助内容创作者写作的助手。你只�
 5. 按指定的输出格式输出，不加额外说明。`
 
 var platformNames = map[string]string{"wechat_mp": "公众号", "xhs": "小红书"}
-var formatNames = map[string]string{"long_article": "长图文", "image_note": "图文笔记", "comic": "漫画"}
+var formatNames = map[string]string{
+	"long_article": "长图文", "image_note": "图文笔记", "comic": "漫画",
+	"qa_article": "问答体长图文", "briefing": "资讯简报", "list_note": "清单合集笔记",
+	"card_post": "图文卡片", "script": "口播脚本",
+}
 
 type aiTask struct {
 	Type      string
