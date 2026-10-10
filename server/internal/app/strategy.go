@@ -169,8 +169,12 @@ func (f *StrategyFields) normalize(a *Account) error {
 	}
 	f.Cadence.Days = days
 	f.Cadence.PerWeek = len(days)
-	if !validFormat(a.Platform, f.Cadence.Format) {
+	// D-048 第 5.6 节：账号类型创建后固定，方案的作品形态必须与之一致；
+	// 空值按账号类型补齐，不一致的保存/启用/恢复请求明确拒绝（遗留版本需调整后再启用）。
+	if f.Cadence.Format == "" {
 		f.Cadence.Format = a.ContentFormat
+	} else if f.Cadence.Format != a.ContentFormat {
+		return validation(fmt.Sprintf("方案的作品形态（%s）与账号类型（%s）不一致。账号类型创建后固定，方案须沿用账号类型。", formatNames[f.Cadence.Format], formatNames[a.ContentFormat]))
 	}
 	if f.Stage == "" {
 		f.Stage = "cold_start"
@@ -506,9 +510,12 @@ func (s *Server) strategyOptions(w http.ResponseWriter, r *http.Request) error {
 	if in.Experiences == "" {
 		return validation("请写下你有哪些真实经历或资源，AI 会据此找差异化，不会替你编造")
 	}
+	// D-048 第 5.6 节：起号问卷不再另选形态；请求与账号类型不一致时明确拒绝。
 	format := in.Format
-	if !validFormat(a.Platform, format) {
+	if format == "" {
 		format = a.ContentFormat
+	} else if format != a.ContentFormat {
+		return validation(fmt.Sprintf("这个账号的类型是%s，起号问卷不能再选择其他类型", formatNames[a.ContentFormat]))
 	}
 	var samples strings.Builder
 	n, total := 0, 0
@@ -525,16 +532,12 @@ func (s *Server) strategyOptions(w http.ResponseWriter, r *http.Request) error {
 	if n == 0 {
 		samples.WriteString("（未提供）\n")
 	}
-	formats := []string{}
-	for _, f := range formatMatrix[a.Platform] {
-		formats = append(formats, f)
-	}
 	user := fmt.Sprintf(`## 问卷
 领域：%s
 真实经历与资源：%s
 想吸引的读者：%s
 每周可投入：%s
-平台：%s；内容形态：%s
+平台：%s；账号类型：%s（创建后固定，所有方案的 cadence.format 都必须是它）
 目标：%s
 
 ## 过往作品（可为空）
@@ -551,7 +554,7 @@ func (s *Server) strategyOptions(w http.ResponseWriter, r *http.Request) error {
 只输出 JSON：{"options":[{"niche":"赛道","audience":"目标读者","differentiation":"差异化","persona":"人设与语气","pillars":[{"name":"支柱","desc":"说明","ratio":30,"examples":["示例选题"]}],"cadence":{"per_week":3,"days":[1,3,5],"format":"%s"},"keywords":["关键词"],"taboo":["禁区"],"fit_reason":"适合理由","risks":["风险"]}]}`,
 		in.Domain, in.Experiences, nz(strings.TrimSpace(in.Audience), "未填"), weeklyHours(in.WeeklyHours),
 		platformNames[a.Platform], formatNames[format], nz(strings.TrimSpace(in.Goal), "未填"), samples.String(),
-		strings.Join(formats, " 或 "), format)
+		a.ContentFormat, a.ContentFormat)
 	t := aiTask{Type: "account_positioning", Account: a, User: user, JSON: true, SkipStyle: true, Refs: map[string]any{"samples": n}}
 	if s.loadCrawl(r.Context()).Limits.Enabled {
 		hot, err := s.positioningHot(r.Context(), in.Domain)

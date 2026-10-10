@@ -121,10 +121,8 @@ func (s *Server) ensureSlots(ctx context.Context, a *Account, st *Strategy, rese
 			dates = append(dates, d.Format("2006-01-02"))
 		}
 	}
-	format := st.Cadence.Format
-	if !validFormat(a.Platform, format) {
-		format = a.ContentFormat
-	}
+	// D-048：槽位形态一律按账号类型生成；遗留方案版本的 cadence.format 不一致时以账号类型为准。
+	format := a.ContentFormat
 	for i, pillar := range assignPillars(st.Pillars, len(dates)) {
 		if _, err := s.db.Exec(ctx, `INSERT INTO account_plan_slot (account_id, date, seq, pillar, format) VALUES ($1,$2::date,0,$3,$4)
 			ON CONFLICT (account_id, date, seq) DO NOTHING`, a.ID, dates[i], pillar, format); err != nil {
@@ -470,6 +468,10 @@ func (s *Server) adoptSlot(w http.ResponseWriter, r *http.Request) error {
 		return validation("请填写选题标题")
 	}
 	ctx := r.Context()
+	// D-048 第 5.6 节：遗留槽位形态与账号类型不一致时明确提示，不静默转换。
+	if sl.Format != "" && sl.Format != a.ContentFormat {
+		return stateInvalid(fmt.Sprintf("这个槽位的形态（%s）与账号类型（%s）不一致，不能采用。请重新启用运营方案以重建大纲。", formatNames[sl.Format], formatNames[a.ContentFormat]))
+	}
 	similar, err := s.similarTitles(r, a.ID, title)
 	if err != nil {
 		return err
