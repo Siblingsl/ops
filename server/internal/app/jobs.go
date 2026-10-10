@@ -25,6 +25,7 @@ func (s *Server) RunJobs(ctx context.Context) {
 		case <-ct.C:
 			s.collectHot(ctx)
 			s.collectReferences(ctx)
+			s.dailyBackground(ctx)
 		}
 	}
 }
@@ -48,6 +49,7 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	s.reindexEmbeddings(ctx)
 	s.purgeHot(ctx)
 	s.collectReferences(ctx)
+	s.dailyBackground(ctx)
 	// 每日 / 每周任务只在凌晨后跑一次（markOnce 保证幂等）
 	if h := s.now().In(s.loc).Hour(); h >= 3 {
 		s.distillDaily(ctx)

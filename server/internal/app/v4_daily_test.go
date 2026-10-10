@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"testing"
+	"time"
 )
 
 func TestV421DailyConstraints(t *testing.T) {
@@ -19,6 +20,56 @@ func TestV421DailyConstraints(t *testing.T) {
 	}
 	if _, e := env.srv.db.Exec(context.Background(), `INSERT INTO daily_recommendation(account_id,date,items,trigger) VALUES($1,current_date,'[{}]','manual')`, a.ID); e == nil {
 		t.Fatal("duplicate account/date/version")
+	}
+}
+
+func TestV424OnOpenIdempotence(t *testing.T) {
+	a, path := v4Account(t, "打开准备推荐")
+	opts, _ := positioningOptions(t, path)
+	f := opts[0].StrategyFields
+	env.mustJSON(t, "POST", path+"/strategy", f, nil)
+	var first struct {
+		JobID     *uuid.UUID `json:"job_id"`
+		Preparing bool       `json:"preparing"`
+	}
+	env.mustJSON(t, "GET", path+"/daily", nil, &first)
+	if first.JobID == nil {
+		t.Fatal("first open did not create job")
+	}
+	for i := 0; i < 4; i++ {
+		var again struct {
+			JobID *uuid.UUID `json:"job_id"`
+		}
+		env.mustJSON(t, "GET", path+"/daily", nil, &again)
+		if again.JobID == nil || *again.JobID != *first.JobID {
+			t.Fatal("repeated open created another job")
+		}
+	}
+	for i := 0; i < 100; i++ {
+		var status string
+		e := env.srv.db.QueryRow(context.Background(), `SELECT status FROM ai_job WHERE id=$1`, first.JobID).Scan(&status)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if status == "done" {
+			break
+		}
+		if status == "failed" {
+			t.Fatal("preparation failed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	var n int
+	e := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM daily_recommendation WHERE account_id=$1`, a.ID).Scan(&n)
+	if e != nil || n != 1 {
+		t.Fatalf("daily count %d %v", n, e)
+	}
+	var before int
+	_ = env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM ai_call WHERE account_id=$1 AND task_type='daily_recommend'`, a.ID).Scan(&before)
+	env.mustJSON(t, "GET", path+"/hot", nil, nil)
+	_ = env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM ai_call WHERE account_id=$1 AND task_type='daily_recommend'`, a.ID).Scan(&n)
+	if n != before {
+		t.Fatal("hot open repeated recommendation")
 	}
 }
 
@@ -81,5 +132,69 @@ func TestV422StageWeights(t *testing.T) {
 	}
 	if dailyWeight("cold_start", "slot") != 100 || dailyWeight("stable", "slot") != 100 {
 		t.Fatal("adopted slots must remain priority")
+	}
+}
+
+func TestV424BackgroundActivityAndBudget(t *testing.T) {
+	ctx := context.Background()
+	s := env.srv
+	a, path := v4Account(t, "后台推荐")
+	opts, _ := positioningOptions(t, path)
+	f := opts[0].StrategyFields
+	f.DailySettings = map[string]any{"generate": "background", "hour": 0}
+	env.mustJSON(t, "POST", path+"/strategy", f, nil)
+	env.mustJSON(t, "GET", path+"/daily", nil, nil)
+	_, e := s.db.Exec(ctx, `UPDATE account_ops_activity SET last_opened_at=$2 WHERE account_id=$1`, a.ID, s.now().AddDate(0, 0, -8))
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.dailyBackground(ctx)
+	var n int
+	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM ai_job WHERE account_id=$1 AND task_type='ops_daily'`, a.ID).Scan(&n)
+	if n != 0 {
+		t.Fatal("inactive account generated")
+	}
+	_, _ = s.db.Exec(ctx, `UPDATE account_ops_activity SET last_opened_at=$2 WHERE account_id=$1`, a.ID, s.now())
+	s.dailyBackground(ctx)
+	var status string
+	for i := 0; i < 100; i++ {
+		_ = s.db.QueryRow(ctx, `SELECT status FROM ai_job WHERE account_id=$1 AND task_type='ops_daily'`, a.ID).Scan(&status)
+		if status == "done" || status == "failed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if status != "done" {
+		t.Fatalf("background status %s", status)
+	}
+	var ws uuid.UUID
+	_ = s.db.QueryRow(ctx, `SELECT workspace_id FROM platform_account WHERE id=$1`, a.ID).Scan(&ws)
+	var original []byte
+	_ = s.db.QueryRow(ctx, `SELECT value FROM app_setting WHERE workspace_id=$1 AND key='ai_limit'`, ws).Scan(&original)
+	t.Cleanup(func() {
+		if len(original) > 0 {
+			_, _ = s.db.Exec(ctx, `UPDATE app_setting SET value=$2 WHERE workspace_id=$1 AND key='ai_limit'`, ws, original)
+		} else {
+			_, _ = s.db.Exec(ctx, `DELETE FROM app_setting WHERE workspace_id=$1 AND key='ai_limit'`, ws)
+		}
+	})
+	b, bpath := v4Account(t, "用量限制推荐")
+	f.DailySettings = map[string]any{"generate": "on_open"}
+	env.mustJSON(t, "POST", bpath+"/strategy", f, nil)
+	_, _ = s.db.Exec(ctx, `INSERT INTO app_setting(workspace_id,key,value) VALUES($1,'ai_limit','{"enabled":true,"daily_tokens":0}') ON CONFLICT(workspace_id,key) DO UPDATE SET value=excluded.value`, ws)
+	env.mustJSON(t, "GET", bpath+"/daily", nil, nil)
+	for i := 0; i < 100; i++ {
+		_ = s.db.QueryRow(ctx, `SELECT status FROM ai_job WHERE account_id=$1 AND task_type='ops_daily'`, b.ID).Scan(&status)
+		if status == "failed" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if status != "failed" {
+		t.Fatal("budget did not stop preparation")
+	}
+	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM daily_recommendation WHERE account_id=$1`, b.ID).Scan(&n)
+	if n != 0 {
+		t.Fatal("quota exceeded recommendation written")
 	}
 }

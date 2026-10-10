@@ -186,6 +186,13 @@ func (s *Server) generateDaily(ctx context.Context, a *Account, trigger string, 
 		}
 	}
 	p, n := dailyCounts(strategy, s.today())
+	settings := s.effectiveDaily(ctx, strategy)
+	if settings.PrimaryCount > 0 {
+		p = settings.PrimaryCount
+	}
+	if settings.AlternateCount > 0 {
+		n = settings.AlternateCount
+	}
 	items, ai, e := s.dailyAI(ctx, a, strategy, p+n, p, nil)
 	if e != nil {
 		return nil, e
@@ -226,7 +233,16 @@ func (s *Server) getDaily(w http.ResponseWriter, r *http.Request) error {
 	if e != nil {
 		return e
 	}
-	return ok(w, map[string]any{"date": date, "recommendation": d, "preparing": false})
+	var job *uuid.UUID
+	preparing := false
+	if date == s.today().Format("2006-01-02") {
+		s.opsOpened(r.Context(), a)
+		job, preparing, e = s.prepareOps(r.Context(), a, "on_open")
+		if e != nil {
+			return e
+		}
+	}
+	return ok(w, map[string]any{"date": date, "recommendation": d, "preparing": preparing, "job_id": job, "new_hot": s.newDailyHot(r.Context(), a, d)})
 }
 func (s *Server) regenerateDaily(w http.ResponseWriter, r *http.Request) error {
 	a, e := s.accountFromPath(r)

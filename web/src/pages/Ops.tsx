@@ -88,7 +88,7 @@ function StrategySummary({ strategy }: { strategy: StrategyFields }) {
         节奏：每周 {strategy.cadence.per_week} 篇 · {strategy.cadence.days.map((d) => weekdays[d - 1]).join('、')} ·{' '}
         {formatLabel[strategy.cadence.format]}
       </p>
-      <p>账号热点设置：{strategy.hot_enabled ? '启用' : '关闭'}（采集能力第二期上线）</p>
+      <p>账号热点设置：{strategy.hot_enabled ? '启用' : '关闭'}</p>
       {(['goals', 'keywords', 'taboo', 'blocked_words'] as const).map((key) => (
         <p key={key}>
           {labels[key]}：{(strategy[key] ?? []).join('、') || '未填写'}
@@ -355,8 +355,13 @@ function StrategyEditor({
       </div>
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={value.hot_enabled} onChange={(e) => set('hot_enabled', e.target.checked)} />
-        账号启用热点（采集能力第二期上线）
+        账号启用热点
       </label>
+      <div className="grid gap-3 md:grid-cols-2">
+ <Field label="今日推荐生成方式"><Select value={String(value.daily_settings.generate??'inherit')} onChange={e=>{const d={...value.daily_settings};if(e.target.value==='inherit')delete d.generate;else d.generate=e.target.value;set('daily_settings',d)}}><option value="inherit">沿用工作区默认</option><option value="off">关闭，只手动生成</option><option value="on_open">打开时准备</option><option value="background">每天后台准备（近 7 天活跃）</option></Select></Field>
+ <Field label="后台生成小时（北京时间）"><Input type="number" min={0} max={23} value={Number(value.daily_settings.hour??7)} onChange={e=>set('daily_settings',{...value.daily_settings,hour:Number(e.target.value)})}/></Field>
+ {(['primary_count','alternate_count'] as const).map(key=><Field key={key} label={key==='primary_count'?'主推数量（0 按发布日）':'备选数量（0 沿用默认）'}><Input type="number" min={0} max={5} value={Number(value.daily_settings[key]??0)} onChange={e=>set('daily_settings',{...value.daily_settings,[key]:Number(e.target.value)})}/></Field>)}
+ </div>
       <HumanGate code="人工确认">启用后保存为新版本，并重建今天起未采用的槽位。计划日期仅供内容规划。</HumanGate>
       <fieldset className="space-y-2">
         <legend className="mb-2 text-sm font-medium">将同步以下字段（默认不勾选）</legend>

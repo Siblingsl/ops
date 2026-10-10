@@ -314,7 +314,15 @@ func (s *Server) getAccountHot(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	enabled := s.loadCrawl(ctx).Limits.Enabled && st != nil && st.HotEnabled != nil && *st.HotEnabled
-	// V424 routes first-open generation through the persistent task pool.
+	var job *uuid.UUID
+	preparing := false
+	if date == s.today().Format("2006-01-02") {
+		s.opsOpened(ctx, a)
+		job, preparing, err = s.prepareOps(ctx, a, "on_open")
+		if err != nil {
+			return err
+		}
+	}
 	items := []HotMatch{}
 	if enabled {
 		items, err = s.hotMatches(ctx, a, date)
@@ -349,7 +357,7 @@ func (s *Server) getAccountHot(w http.ResponseWriter, r *http.Request) error {
 	}
 	var updated *time.Time
 	_ = s.db.QueryRow(ctx, `SELECT refreshed_at FROM account_hot_refresh WHERE account_id=$1`, a.ID).Scan(&updated)
-	return ok(w, map[string]any{"date": date, "enabled": enabled, "items": items, "paused_sources": paused, "updated_at": updated})
+	return ok(w, map[string]any{"date": date, "enabled": enabled, "items": items, "paused_sources": paused, "updated_at": updated, "preparing": preparing, "job_id": job})
 }
 func hotSourceSelected(list []string, s string) bool {
 	for _, x := range list {

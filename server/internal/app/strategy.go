@@ -206,6 +206,14 @@ func (f *StrategyFields) normalize(a *Account) error {
 	if f.DailySettings == nil {
 		f.DailySettings = map[string]any{}
 	}
+	defaults := DailySettings{Generate: "on_open", Hour: 7}
+	b, _ := json.Marshal(f.DailySettings)
+	if json.Unmarshal(b, &defaults) != nil {
+		return validation("每日推荐参数格式不正确")
+	}
+	if e := validateDaily(defaults); e != nil {
+		return e
+	}
 	return nil
 }
 

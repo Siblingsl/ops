@@ -54,6 +54,7 @@ const settingsItems: { to: string; icon: ReactNode; label: string; adminOnly?: b
   { to: '/settings/admin', icon: <Shield />, label: '系统管理', adminOnly: true },
   { to: '/settings/crawl', icon: <Activity />, label: '热点采集与日志', adminOnly: true },
   { to: '/settings/hot-sources', icon: <Activity />, label: '热点来源' },
+ { to: '/settings/daily', icon: <Activity />, label: '每日推荐设置' },
 ]
 
 function Brand() {
