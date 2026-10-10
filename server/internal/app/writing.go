@@ -971,6 +971,8 @@ func deriveAllowed(src, dst *Account, srcFormat string) error {
 	if src.Platform == dst.Platform {
 		return validation("派生只能在不同平台之间进行（同平台派生容易造成同质内容）")
 	}
+	// D-048 第 5.9 节：首批只保留既有两条转换路径（长图文↔图文笔记、漫画↔漫画），
+	// 新类型（问答体/简报/清单/卡片/脚本）没有已实现的转换，派生入口一律禁用。
 	textual := map[string]bool{"long_article": true, "image_note": true}
 	switch {
 	case textual[srcFormat] && textual[dst.ContentFormat]:
@@ -978,7 +980,7 @@ func deriveAllowed(src, dst *Account, srcFormat string) error {
 	case srcFormat == "comic" && dst.ContentFormat == "comic":
 		return nil
 	default:
-		return validation("长图文、图文笔记与漫画之间不支持派生，请新建作品并引用同一选题")
+		return validation("这两种类型之间不支持派生（当前仅支持 长图文↔图文笔记、漫画↔漫画），请新建作品并引用同一选题")
 	}
 }
 

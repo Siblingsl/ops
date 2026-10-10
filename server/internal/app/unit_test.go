@@ -58,6 +58,16 @@ func TestDeriveAllowed(t *testing.T) {
 	if deriveAllowed(wxComic, xhsComic, "comic") != nil {
 		t.Fatal("comic -> comic cross-platform should be allowed")
 	}
+	// D-048 第 5.9 节：新类型没有已实现的转换路径，源或目标是新类型一律拒绝。
+	for _, f := range []string{"qa_article", "briefing", "list_note", "card_post", "script"} {
+		if deriveAllowed(wx, xhs, f) == nil {
+			t.Fatalf("new source format %s should not be derivable", f)
+		}
+		dst := &Account{Platform: "xhs", ContentFormat: f}
+		if deriveAllowed(wx, dst, "long_article") == nil {
+			t.Fatalf("new target format %s should not be derivable", f)
+		}
+	}
 }
 
 func TestAssetIDFromURL(t *testing.T) {

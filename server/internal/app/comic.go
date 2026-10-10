@@ -49,11 +49,21 @@ type ComicPanel struct {
 	UpdatedAt    time.Time   `json:"updated_at"`
 }
 
-func (s *Server) requireComicAccount(a *Account) error {
-	if a.ContentFormat != "comic" {
-		return validation("只有内容形态为「漫画」的账号可以使用角色设定卡和漫画工作流")
+// requireComicAccount gates character-card management. D-048 第 5.8 节：账号类型创建后固定，
+// 但历史上被确认切换过类型的账号可能还有旧漫画作品——只要账号仍有漫画作品，角色卡仍可管理，
+// 否则旧分镜的逐格文案与生图会失去角色一致性来源。新建漫画工作流仍只对漫画类型开放（作品级闸门）。
+func (s *Server) requireComicAccount(ctx context.Context, a *Account) error {
+	if a.ContentFormat == "comic" {
+		return nil
 	}
-	return nil
+	var n int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND content_format='comic' AND deleted_at IS NULL`, a.ID).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	return validation("只有内容类型为「漫画」的账号可以使用角色设定卡和漫画工作流")
 }
 
 func (s *Server) scanCharacter(row pgx.Row) (CharacterCard, error) {
@@ -77,7 +87,7 @@ func (s *Server) listCharacters(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if err := s.requireComicAccount(a); err != nil {
+	if err := s.requireComicAccount(r.Context(), a); err != nil {
 		return err
 	}
 	rows, err := s.db.Query(r.Context(), `SELECT id, account_id, name, appearance, personality, catchphrase, ref_asset_id, created_at, updated_at
@@ -102,7 +112,7 @@ func (s *Server) createCharacter(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if err := s.requireComicAccount(a); err != nil {
+	if err := s.requireComicAccount(r.Context(), a); err != nil {
 		return err
 	}
 	var in struct {
@@ -142,7 +152,7 @@ func (s *Server) updateCharacter(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if err := s.requireComicAccount(a); err != nil {
+	if err := s.requireComicAccount(r.Context(), a); err != nil {
 		return err
 	}
 	var in struct {
@@ -216,7 +226,7 @@ func (s *Server) characterForWrite(r *http.Request) (CharacterCard, *Account, er
 	if err != nil {
 		return CharacterCard{}, nil, err
 	}
-	if err := s.requireComicAccount(a); err != nil {
+	if err := s.requireComicAccount(r.Context(), a); err != nil {
 		return CharacterCard{}, nil, err
 	}
 	cur, err := s.scanCharacter(s.db.QueryRow(r.Context(), `SELECT id, account_id, name, appearance, personality, catchphrase, ref_asset_id, created_at, updated_at
@@ -439,7 +449,7 @@ func (s *Server) generateStoryboard(w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return err
 	}
-	if m.Account.ContentFormat != "comic" {
+	if m.ContentFormat != "comic" {  // D-048：按作品形态快照闸门，历史作品不受账号当前类型影响
 		return validation("只有漫画作品可以生成分镜")
 	}
 	if strings.TrimSpace(m.Viewpoint) == "" {
@@ -547,7 +557,7 @@ func (s *Server) saveStoryboard(w http.ResponseWriter, r *http.Request) error {
 	if err := m.editable(); err != nil {
 		return err
 	}
-	if m.Account.ContentFormat != "comic" {
+	if m.ContentFormat != "comic" {  // D-048：按作品形态快照闸门，历史作品不受账号当前类型影响
 		return validation("只有漫画作品可以保存分镜")
 	}
 	var in struct {
@@ -646,7 +656,7 @@ func (s *Server) generatePanelText(w http.ResponseWriter, r *http.Request) error
 	if err := m.editable(); err != nil {
 		return err
 	}
-	if m.Account.ContentFormat != "comic" {
+	if m.ContentFormat != "comic" {  // D-048：按作品形态快照闸门，历史作品不受账号当前类型影响
 		return validation("只有漫画作品可以生成逐格文案")
 	}
 	if m.OutlineConfirmedAt == nil {

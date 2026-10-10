@@ -48,7 +48,7 @@ export function DeriveDialog({ open, onClose, workId, platform, format }: { open
                 <PlatformMark platform={a.platform} />
                 <div className="flex-1">
                   <div className="text-sm font-medium text-mist-900">{a.name}</div>
-                  <div className="text-xs text-mist-500">{formatLabel[a.content_format]}{!ok && ' · 内容形态不支持派生'}</div>
+                  <div className="text-xs text-mist-500">{formatLabel[a.content_format]}{!ok && ' · 类型不支持派生（首批仅 长图文↔图文笔记、漫画↔漫画）'}</div>
                 </div>
               </button>
             )
