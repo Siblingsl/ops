@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 import (
 	"context"
@@ -31,14 +31,18 @@ type Provider struct {
 	LastTestAt     *time.Time `json:"last_test_at"`
 	LastTestOK     *bool      `json:"last_test_ok"`
 	LastTestResult string     `json:"last_test_result"`
+	PricePrompt    *float64   `json:"price_per_1k_prompt"`
+	PriceComplete  *float64   `json:"price_per_1k_completion"`
 }
 
-const providerCols = `id, name, base_url, api_key_enc, models, status, last_test_at, last_test_ok, last_test_result`
+const providerCols = `id, name, base_url, api_key_enc, models, status, last_test_at, last_test_ok, last_test_result,
+	price_per_1k_prompt::float8, price_per_1k_completion::float8`
 
 func (s *Server) scanProvider(row pgx.Row) (*Provider, error) {
 	var p Provider
 	var enc []byte
-	if err := row.Scan(&p.ID, &p.Name, &p.BaseURL, &enc, &p.Models, &p.Status, &p.LastTestAt, &p.LastTestOK, &p.LastTestResult); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.BaseURL, &enc, &p.Models, &p.Status, &p.LastTestAt, &p.LastTestOK, &p.LastTestResult,
+		&p.PricePrompt, &p.PriceComplete); err != nil {
 		return nil, err
 	}
 	if key, err := s.box.Decrypt(enc); err == nil {
@@ -70,6 +74,16 @@ type providerInput struct {
 	APIKey  *string  `json:"api_key"`
 	Models  []string `json:"models"`
 	Status  *string  `json:"status"`
+	// Prices are optional; a negative value clears the price.
+	PricePrompt   *float64 `json:"price_per_1k_prompt"`
+	PriceComplete *float64 `json:"price_per_1k_completion"`
+}
+
+func priceArg(p *float64) any {
+	if p == nil || *p < 0 {
+		return nil
+	}
+	return *p
 }
 
 func (in *providerInput) validate(create bool) error {
@@ -114,8 +128,9 @@ func (s *Server) createProvider(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	p, err := s.scanProvider(s.db.QueryRow(ctx, `INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models) VALUES ($1,$2,$3,$4,$5,$6) RETURNING `+providerCols,
-		ident(ctx).WorkspaceID, strings.TrimSpace(*in.Name), *in.BaseURL, enc, s.box.Version, cleanList(in.Models)))
+	p, err := s.scanProvider(s.db.QueryRow(ctx, `INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models,
+		price_per_1k_prompt, price_per_1k_completion) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+providerCols,
+		ident(ctx).WorkspaceID, strings.TrimSpace(*in.Name), *in.BaseURL, enc, s.box.Version, cleanList(in.Models), priceArg(in.PricePrompt), priceArg(in.PriceComplete)))
 	if err != nil {
 		return err
 	}
@@ -183,6 +198,16 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 		}
 		if in.Status != nil {
 			if _, err := tx.Exec(ctx, `UPDATE model_provider SET status=$2 WHERE id=$1 AND workspace_id=$3`, id, *in.Status, ws); err != nil {
+				return err
+			}
+		}
+		if in.PricePrompt != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET price_per_1k_prompt=$2 WHERE id=$1 AND workspace_id=$3`, id, priceArg(in.PricePrompt), ws); err != nil {
+				return err
+			}
+		}
+		if in.PriceComplete != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET price_per_1k_completion=$2 WHERE id=$1 AND workspace_id=$3`, id, priceArg(in.PriceComplete), ws); err != nil {
 				return err
 			}
 		}
@@ -294,24 +319,55 @@ var taskTypes = []struct{ Type, Label string }{
 	{"image_suggest", "配图建议"},
 	{"image_gen", "AI 出图"},
 	{"organize_notes", "要点整理"},
+	{"section_continue", "行内续写"},
+	{"hook_suggest", "开头钩子"},
+	{"outline_review", "大纲体检"},
+	{"copilot_chat", "副驾驶对话"},
+	{"polish_check", "表达体检"},
+	{"fix_suggest", "检查项改法建议"},
+	{"topic_score", "选题评分"},
+	{"profile_bootstrap", "智能建档"},
+	{"material_extract", "素材提炼"},
+	{"material_tag", "素材标签"},
+	{"inbox_triage", "收件箱整理"},
+	{"memory_distill", "记忆提炼"},
+	{"tag_suggest", "话题推荐"},
+	{"review_attribution", "归因解读"},
+	{"work_breakdown", "作品拆解"},
+	{"weekly_digest", "周报"},
+	{"layout_suggest", "排版建议"},
+	{"embedding", "向量检索（embedding）"},
+	{"tier_economy", "经济档（覆盖各任务）"},
+	{"tier_quality", "质量档（覆盖各任务）"},
+}
+
+func taskLabel(taskType string) string {
+	for _, t := range taskTypes {
+		if t.Type == taskType {
+			return t.Label
+		}
+	}
+	return taskType
 }
 
 func (s *Server) getRoutes(w http.ResponseWriter, r *http.Request) error {
 	type Route struct {
-		TaskType   string     `json:"task_type"`
-		Label      string     `json:"label"`
-		ProviderID *uuid.UUID `json:"provider_id"`
-		Model      string     `json:"model"`
+		TaskType           string     `json:"task_type"`
+		Label              string     `json:"label"`
+		ProviderID         *uuid.UUID `json:"provider_id"`
+		Model              string     `json:"model"`
+		FallbackProviderID *uuid.UUID `json:"fallback_provider_id"`
+		FallbackModel      string     `json:"fallback_model"`
 	}
 	routes := map[string]Route{}
-	rows, err := s.db.Query(r.Context(), `SELECT task_type, provider_id, model FROM model_route WHERE workspace_id=$1`, ident(r.Context()).WorkspaceID)
+	rows, err := s.db.Query(r.Context(), `SELECT task_type, provider_id, model, fallback_provider_id, fallback_model FROM model_route WHERE workspace_id=$1`, ident(r.Context()).WorkspaceID)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var rt Route
 		var pid uuid.UUID
-		if err := rows.Scan(&rt.TaskType, &pid, &rt.Model); err == nil {
+		if err := rows.Scan(&rt.TaskType, &pid, &rt.Model, &rt.FallbackProviderID, &rt.FallbackModel); err == nil {
 			rt.ProviderID = &pid
 			routes[rt.TaskType] = rt
 		}
@@ -331,9 +387,11 @@ func (s *Server) putRoutes(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in []struct {
-		TaskType   string     `json:"task_type"`
-		ProviderID *uuid.UUID `json:"provider_id"`
-		Model      string     `json:"model"`
+		TaskType           string     `json:"task_type"`
+		ProviderID         *uuid.UUID `json:"provider_id"`
+		Model              string     `json:"model"`
+		FallbackProviderID *uuid.UUID `json:"fallback_provider_id"`
+		FallbackModel      string     `json:"fallback_model"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -359,9 +417,20 @@ func (s *Server) putRoutes(w http.ResponseWriter, r *http.Request) error {
 			if err := tx.QueryRow(ctx, `SELECT models FROM model_provider WHERE id=$1 AND workspace_id=$2`, *rt.ProviderID, ws).Scan(&models); err != nil {
 				return validation("供应商不存在")
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO model_route (workspace_id, task_type, provider_id, model) VALUES ($1,$2,$3,$4)
-				ON CONFLICT (workspace_id, task_type) DO UPDATE SET provider_id=excluded.provider_id, model=excluded.model`,
-				ws, rt.TaskType, *rt.ProviderID, strings.TrimSpace(rt.Model)); err != nil {
+			fbModel := strings.TrimSpace(rt.FallbackModel)
+			fbProvider := rt.FallbackProviderID
+			if fbProvider == nil || fbModel == "" {
+				fbProvider, fbModel = nil, ""
+			} else {
+				var n int
+				if err := tx.QueryRow(ctx, `SELECT count(*) FROM model_provider WHERE id=$1 AND workspace_id=$2`, *fbProvider, ws).Scan(&n); err != nil || n == 0 {
+					return validation("备用模型的供应商不存在")
+				}
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO model_route (workspace_id, task_type, provider_id, model, fallback_provider_id, fallback_model) VALUES ($1,$2,$3,$4,$5,$6)
+				ON CONFLICT (workspace_id, task_type) DO UPDATE SET provider_id=excluded.provider_id, model=excluded.model,
+				fallback_provider_id=excluded.fallback_provider_id, fallback_model=excluded.fallback_model`,
+				ws, rt.TaskType, *rt.ProviderID, strings.TrimSpace(rt.Model), fbProvider, fbModel); err != nil {
 				return err
 			}
 		}
@@ -376,6 +445,9 @@ func (s *Server) putRoutes(w http.ResponseWriter, r *http.Request) error {
 
 // ---------- AI 用量（P-18） ----------
 
+// adoptedExpr is the "首次采纳" definition: accepted as-is, or kept after a small (< 30%) edit.
+const adoptedExpr = `f.outcome='accepted' OR (f.outcome='edited' AND coalesce(f.edit_ratio, 1) < 0.3)`
+
 func (s *Server) usage(w http.ResponseWriter, r *http.Request) error {
 	q := r.URL.Query()
 	to := s.today().AddDate(0, 0, 1)
@@ -387,8 +459,9 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) error {
 		to = v.AddDate(0, 0, 1)
 	}
 	groups := map[string]string{
-		"day":     `to_char(c.created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')`,
-		"task":    `c.task_type`,
+		"day": `to_char(c.created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')`,
+		"task": `CASE WHEN c.is_eval THEN 'prompt_eval'
+			WHEN c.task_type='section_edit' AND c.context_refs->>'variants'='3' THEN 'section_edit_variants' ELSE c.task_type END`,
 		"model":   `c.provider || ' / ' || c.model`,
 		"account": `coalesce(a.name, '（无账号）')`,
 	}
@@ -397,19 +470,29 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) error {
 	if !okG {
 		g, expr = "day", groups["day"]
 	}
+	ws := ident(r.Context()).WorkspaceID
 	rows, err := s.db.Query(r.Context(), `SELECT `+expr+` AS k, count(*), coalesce(sum(c.prompt_tokens),0), coalesce(sum(c.completion_tokens),0),
-		count(*) FILTER (WHERE c.status<>'ok') FROM ai_call c LEFT JOIN platform_account a ON a.id=c.account_id
-		WHERE c.created_at >= $1 AND c.created_at < $2 GROUP BY k ORDER BY k`, from, to)
+		count(*) FILTER (WHERE c.status<>'ok'),
+		sum(c.prompt_tokens/1000.0*p.price_per_1k_prompt + c.completion_tokens/1000.0*coalesce(p.price_per_1k_completion, p.price_per_1k_prompt))::float8,
+		count(f.id) FILTER (WHERE `+adoptedExpr+`), count(f.id) FILTER (WHERE f.outcome IS NOT NULL)
+		FROM ai_call c LEFT JOIN platform_account a ON a.id=c.account_id
+		LEFT JOIN model_provider p ON p.workspace_id=c.workspace_id AND p.name=c.provider
+		LEFT JOIN ai_feedback f ON f.ai_call_id=c.id
+		WHERE c.workspace_id=$3 AND c.created_at >= $1 AND c.created_at < $2 GROUP BY k ORDER BY k`, from, to, ws)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	type Row struct {
-		Key              string `json:"key"`
-		Calls            int    `json:"calls"`
-		PromptTokens     int    `json:"prompt_tokens"`
-		CompletionTokens int    `json:"completion_tokens"`
-		Failed           int    `json:"failed"`
+		Key              string   `json:"key"`
+		Calls            int      `json:"calls"`
+		PromptTokens     int      `json:"prompt_tokens"`
+		CompletionTokens int      `json:"completion_tokens"`
+		Failed           int      `json:"failed"`
+		Cost             *float64 `json:"cost"`
+		Accepted         int      `json:"accepted"`
+		WithFeedback     int      `json:"with_feedback"`
+		AdoptionRate     *float64 `json:"adoption_rate"`
 	}
 	list := []Row{}
 	total := Row{Key: "合计"}
@@ -418,22 +501,40 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) error {
 		labels[t.Type] = t.Label
 	}
 	labels["connectivity_test"] = "连通测试"
+	labels["prompt_eval"] = "提示词对比测试（不计入质量统计）"
+	labels["section_edit_variants"] = "段落改写（三个候选）"
 	for rows.Next() {
 		var x Row
-		if err := rows.Scan(&x.Key, &x.Calls, &x.PromptTokens, &x.CompletionTokens, &x.Failed); err != nil {
+		if err := rows.Scan(&x.Key, &x.Calls, &x.PromptTokens, &x.CompletionTokens, &x.Failed, &x.Cost, &x.Accepted, &x.WithFeedback); err != nil {
 			return err
 		}
 		if g == "task" && labels[x.Key] != "" {
 			x.Key = labels[x.Key]
 		}
+		if x.WithFeedback > 0 {
+			rate := float64(x.Accepted) / float64(x.WithFeedback)
+			x.AdoptionRate = &rate
+		}
 		total.Calls += x.Calls
 		total.PromptTokens += x.PromptTokens
 		total.CompletionTokens += x.CompletionTokens
 		total.Failed += x.Failed
+		total.Accepted += x.Accepted
+		total.WithFeedback += x.WithFeedback
+		if x.Cost != nil {
+			c := *x.Cost
+			if total.Cost != nil {
+				c += *total.Cost
+			}
+			total.Cost = &c
+		}
 		list = append(list, x)
 	}
-	var today int
-	_ = s.db.QueryRow(r.Context(), `SELECT coalesce(sum(prompt_tokens+completion_tokens),0) FROM ai_call WHERE created_at >= $1`, s.today()).Scan(&today)
+	if total.WithFeedback > 0 {
+		rate := float64(total.Accepted) / float64(total.WithFeedback)
+		total.AdoptionRate = &rate
+	}
+	today := s.tokensToday(r.Context())
 	return ok(w, map[string]any{"group_by": g, "from": from.Format("2006-01-02"), "to": to.AddDate(0, 0, -1).Format("2006-01-02"),
 		"rows": list, "total": total, "today_tokens": today, "limit": s.loadLimit(r.Context())})
 }

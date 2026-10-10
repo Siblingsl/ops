@@ -7,6 +7,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
 import { RefsNote } from '@/components/refs'
+import { aiError } from '@/lib/ai-error'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, Select, Textarea } from '@/components/ui'
 import { errorMessage, get, patch, post, put, rawRequest } from '@/lib/api'
 import { type AIRefs, copyText, fmtTime, runeLen } from '@/lib/format'
@@ -85,7 +86,7 @@ export default function ComicEditor() {
       setDraft(r.panels.map((p, i) => ({ ...p, position: i + 1, image_prompt: p.image_prompt ?? '', asset_id: null })))
       setRefs(r.refs)
     } catch (e) {
-      toast.error(errorMessage(e))
+      aiError(e, '生成分镜', generate)
     } finally {
       setBusy(null)
     }
@@ -123,7 +124,7 @@ export default function ComicEditor() {
       setRefs(r.refs)
       await refresh()
     } catch (e) {
-      toast.error(errorMessage(e))
+      aiError(e, '生成分格文案', () => genPanelText(panel))
     } finally {
       setPanelBusy(null)
     }
@@ -339,7 +340,7 @@ export default function ComicEditor() {
                                     toast.success('已生成（含 AI 标识）')
                                     await refresh()
                                   } catch (e) {
-                                    toast.error(errorMessage(e))
+                                    aiError(e, '分格出图')
                                   } finally {
                                     setPanelBusy(null)
                                   }

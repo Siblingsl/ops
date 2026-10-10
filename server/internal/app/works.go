@@ -20,17 +20,31 @@ type OutlineItem struct {
 }
 
 type Section struct {
-	ID               uuid.UUID   `json:"id"`
-	Position         int         `json:"position"`
-	Heading          string      `json:"heading"`
-	KeyPoint         string      `json:"key_point"`
-	ContentMD        string      `json:"content_md"`
-	AIRawMD          string      `json:"-"`
-	Origin           string      `json:"origin"`
-	SourceSectionIDs []uuid.UUID `json:"source_section_ids"`
-	MaterialIDs      []uuid.UUID `json:"material_ids"`
-	Revision         int         `json:"revision"`
-	UpdatedAt        time.Time   `json:"updated_at"`
+	ID               uuid.UUID       `json:"id"`
+	Position         int             `json:"position"`
+	Heading          string          `json:"heading"`
+	KeyPoint         string          `json:"key_point"`
+	ContentMD        string          `json:"content_md"`
+	AIRawMD          string          `json:"-"`
+	Origin           string          `json:"origin"`
+	SourceSectionIDs []uuid.UUID     `json:"source_section_ids"`
+	MaterialIDs      []uuid.UUID     `json:"material_ids"`
+	Revision         int             `json:"revision"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+	AICallID         *uuid.UUID      `json:"ai_call_id"`
+	SourceRevisions  json.RawMessage `json:"source_revisions"`
+}
+
+const sectionCols = `id, position, heading, key_point, content_md, ai_raw_md, origin, source_section_ids, material_ids, revision, updated_at, ai_call_id, source_revisions`
+
+func scanSection(row interface{ Scan(...any) error }) (Section, error) {
+	var x Section
+	err := row.Scan(&x.ID, &x.Position, &x.Heading, &x.KeyPoint, &x.ContentMD, &x.AIRawMD, &x.Origin, &x.SourceSectionIDs, &x.MaterialIDs,
+		&x.Revision, &x.UpdatedAt, &x.AICallID, &x.SourceRevisions)
+	if len(x.SourceRevisions) == 0 {
+		x.SourceRevisions = json.RawMessage("{}")
+	}
+	return x, err
 }
 
 type WorkRef struct {
@@ -42,41 +56,52 @@ type WorkRef struct {
 }
 
 type Work struct {
-	ID                 uuid.UUID       `json:"id"`
-	AccountID          uuid.UUID       `json:"account_id"`
-	Platform           string          `json:"platform"`
-	AccountName        string          `json:"account_name"`
-	TopicID            *uuid.UUID      `json:"topic_id"`
-	TopicAngle         string          `json:"topic_angle"`
-	Source             *WorkRef        `json:"source"`
-	SourceUpdated      bool            `json:"source_updated"`
-	Derived            []WorkRef       `json:"derived"`
-	ContentFormat      string          `json:"content_format"`
-	Status             string          `json:"status"`
-	Title              string          `json:"title"`
-	Summary            string          `json:"summary"`
-	Viewpoint          string          `json:"viewpoint"`
-	Outline            []OutlineItem   `json:"outline"`
-	OutlineConfirmedAt *time.Time      `json:"outline_confirmed_at"`
-	Theme              string          `json:"theme"`
-	CoverAssetID       *uuid.UUID      `json:"cover_asset_id"`
-	CoverCrops         json.RawMessage `json:"cover_crops"`
-	WechatFields       WechatDefaults  `json:"wechat_fields"`
-	Topics             []string        `json:"topics"`
-	WechatDraftMediaID *string         `json:"wechat_draft_media_id"`
-	PublishedURL       *string         `json:"published_url"`
-	PublishedAt        *time.Time      `json:"published_at"`
-	Locked             bool            `json:"locked"`
-	Revision           int             `json:"revision"`
-	Sections           []Section       `json:"sections"`
-	Panels             []ComicPanel    `json:"panels"`
-	MaterialIDs        []uuid.UUID     `json:"material_ids"`
-	Assets             []Asset         `json:"assets"`
-	HumanEditRatio     *float64        `json:"human_edit_ratio"`
-	DraftMaybePublished bool           `json:"draft_maybe_published"`
-	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt          time.Time       `json:"updated_at"`
-	sourceRevision     int
+	ID                  uuid.UUID       `json:"id"`
+	AccountID           uuid.UUID       `json:"account_id"`
+	Platform            string          `json:"platform"`
+	AccountName         string          `json:"account_name"`
+	TopicID             *uuid.UUID      `json:"topic_id"`
+	TopicAngle          string          `json:"topic_angle"`
+	Source              *WorkRef        `json:"source"`
+	SourceUpdated       bool            `json:"source_updated"`
+	Derived             []WorkRef       `json:"derived"`
+	ContentFormat       string          `json:"content_format"`
+	Status              string          `json:"status"`
+	Title               string          `json:"title"`
+	Summary             string          `json:"summary"`
+	Viewpoint           string          `json:"viewpoint"`
+	Outline             []OutlineItem   `json:"outline"`
+	OutlineConfirmedAt  *time.Time      `json:"outline_confirmed_at"`
+	Theme               string          `json:"theme"`
+	CoverAssetID        *uuid.UUID      `json:"cover_asset_id"`
+	CoverCrops          json.RawMessage `json:"cover_crops"`
+	WechatFields        WechatDefaults  `json:"wechat_fields"`
+	Topics              []string        `json:"topics"`
+	WechatDraftMediaID  *string         `json:"wechat_draft_media_id"`
+	PublishedURL        *string         `json:"published_url"`
+	PublishedAt         *time.Time      `json:"published_at"`
+	Locked              bool            `json:"locked"`
+	Revision            int             `json:"revision"`
+	Sections            []Section       `json:"sections"`
+	Panels              []ComicPanel    `json:"panels"`
+	MaterialIDs         []uuid.UUID     `json:"material_ids"`
+	Assets              []Asset         `json:"assets"`
+	HumanEditRatio      *float64        `json:"human_edit_ratio"`
+	DraftMaybePublished bool            `json:"draft_maybe_published"`
+	TopicAudience       string          `json:"topic_audience"`
+	TopicHook           string          `json:"topic_hook"`
+	PlannedDate         *string         `json:"planned_date"`
+	TargetChars         *int            `json:"target_chars"`
+	PostPushTodos       json.RawMessage `json:"post_push_todos"`
+	TitleFavorites      json.RawMessage `json:"title_favorites"`
+	AssigneeID          *uuid.UUID      `json:"assignee_id"`
+	ReviewerID          *uuid.UUID      `json:"reviewer_id"`
+	ReviewRequired      bool            `json:"review_required"`
+	ReviewedBy          *uuid.UUID      `json:"reviewed_by"`
+	ReviewedAt          *time.Time      `json:"reviewed_at"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+	sourceRevision      int
 }
 
 // workMeta is the minimal row used for permission and state checks.
@@ -123,15 +148,21 @@ func (m *workMeta) editable() error {
 // touchContent bumps the revision and invalidates checks (05 文档第 4 节规则 1).
 func (s *Server) touchContent(ctx context.Context, tx pgx.Tx, workID uuid.UUID) error {
 	_, err := tx.Exec(ctx, `UPDATE work SET revision=revision+1, updated_at=now(),
-		status = CASE WHEN status IN ('ready','pushed','packed') THEN 'drafting' ELSE status END WHERE id=$1`, workID)
+		status = CASE WHEN status IN ('ready','pushed','packed','reviewing') THEN 'drafting' ELSE status END,
+		reviewed_by = NULL, reviewed_at = NULL WHERE id=$1`, workID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE work SET first_draft_at=now() WHERE id=$1 AND first_draft_at IS NULL
+		AND EXISTS (SELECT 1 FROM work_section WHERE work_id=$1 AND deleted_at IS NULL)
+		AND NOT EXISTS (SELECT 1 FROM work_section WHERE work_id=$1 AND deleted_at IS NULL AND btrim(content_md)='')`, workID)
 	return err
 }
 
 func (s *Server) loadSections(ctx context.Context, q pgx.Tx, workID uuid.UUID) ([]Section, error) {
 	var rows pgx.Rows
 	var err error
-	sql := `SELECT id, position, heading, key_point, content_md, ai_raw_md, origin, source_section_ids, material_ids, revision, updated_at
-		FROM work_section WHERE work_id=$1 ORDER BY position, created_at`
+	sql := `SELECT ` + sectionCols + ` FROM work_section WHERE work_id=$1 AND deleted_at IS NULL ORDER BY position, created_at`
 	if q != nil {
 		rows, err = q.Query(ctx, sql, workID)
 	} else {
@@ -143,8 +174,8 @@ func (s *Server) loadSections(ctx context.Context, q pgx.Tx, workID uuid.UUID) (
 	defer rows.Close()
 	list := []Section{}
 	for rows.Next() {
-		var x Section
-		if err := rows.Scan(&x.ID, &x.Position, &x.Heading, &x.KeyPoint, &x.ContentMD, &x.AIRawMD, &x.Origin, &x.SourceSectionIDs, &x.MaterialIDs, &x.Revision, &x.UpdatedAt); err != nil {
+		x, err := scanSection(rows)
+		if err != nil {
 			return nil, err
 		}
 		list = append(list, x)
@@ -161,13 +192,15 @@ func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 	err := s.db.QueryRow(ctx, `SELECT w.id, w.account_id, a.platform, a.name, w.topic_id, t.angle, w.source_work_id, w.source_revision,
 		w.content_format, w.status, w.title, w.summary, w.viewpoint, w.outline, w.outline_confirmed_at, w.theme, w.cover_asset_id,
 		w.cover_crops, w.wechat_fields, w.topics, w.wechat_draft_media_id, w.published_url, w.published_at, w.locked, w.revision,
-		coalesce(w.draft_maybe_published,false), w.created_at, w.updated_at
+		coalesce(w.draft_maybe_published,false), coalesce(t.audience,''), coalesce(t.hook,''), to_char(w.planned_date,'YYYY-MM-DD'), w.target_chars,
+		w.post_push_todos, w.title_favorites, w.assignee_id, w.reviewer_id, w.review_required, w.reviewed_by, w.reviewed_at, w.created_at, w.updated_at
 		FROM work w JOIN platform_account a ON a.id=w.account_id LEFT JOIN topic t ON t.id=w.topic_id
 		WHERE w.id=$1 AND a.workspace_id=$2 AND w.deleted_at IS NULL`, id, ident(ctx).WorkspaceID).Scan(
 		&w.ID, &w.AccountID, &w.Platform, &w.AccountName, &w.TopicID, &topicAngle, &sourceID, &sourceRevision,
 		&w.ContentFormat, &w.Status, &w.Title, &w.Summary, &w.Viewpoint, &outline, &w.OutlineConfirmedAt, &w.Theme, &w.CoverAssetID,
 		&w.CoverCrops, &wf, &w.Topics, &w.WechatDraftMediaID, &w.PublishedURL, &w.PublishedAt, &w.Locked, &w.Revision,
-		&w.DraftMaybePublished, &w.CreatedAt, &w.UpdatedAt)
+		&w.DraftMaybePublished, &w.TopicAudience, &w.TopicHook, &w.PlannedDate, &w.TargetChars,
+		&w.PostPushTodos, &w.TitleFavorites, &w.AssigneeID, &w.ReviewerID, &w.ReviewRequired, &w.ReviewedBy, &w.ReviewedAt, &w.CreatedAt, &w.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -303,6 +336,11 @@ type WorkListItem struct {
 	SectionCount  int        `json:"section_count"`
 	PublishedAt   *time.Time `json:"published_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
+	PlannedDate   *string    `json:"planned_date"`
+	AssigneeID    *uuid.UUID `json:"assignee_id"`
+	TargetChars   *int       `json:"target_chars"`
+	TodosDone     int        `json:"todos_done"`
+	TodosTotal    int        `json:"todos_total"`
 }
 
 func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
@@ -313,14 +351,19 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 	sql := `SELECT w.id, w.title, w.status, w.content_format, w.source_work_id, sw.title,
 		(SELECT count(*) FROM work d WHERE d.source_work_id=w.id AND d.deleted_at IS NULL),
 		w.cover_asset_id, (SELECT id FROM asset WHERE work_id=w.id ORDER BY position LIMIT 1),
-		(SELECT coalesce(sum(char_length(content_md)),0) FROM work_section WHERE work_id=w.id),
-		(SELECT count(*) FROM work_section WHERE work_id=w.id),
-		w.published_at, w.updated_at
+		(SELECT coalesce(sum(char_length(content_md)),0) FROM work_section WHERE work_id=w.id AND deleted_at IS NULL),
+		(SELECT count(*) FROM work_section WHERE work_id=w.id AND deleted_at IS NULL),
+		w.published_at, w.updated_at, to_char(w.planned_date,'YYYY-MM-DD'), w.assignee_id, w.target_chars,
+		(SELECT count(*) FROM jsonb_array_elements(w.post_push_todos) e WHERE coalesce((e->>'done')::boolean,false)), jsonb_array_length(w.post_push_todos)
 		FROM work w LEFT JOIN work sw ON sw.id=w.source_work_id WHERE w.account_id=$1 AND w.deleted_at IS NULL`
 	args := []any{a.ID}
 	if st := r.URL.Query().Get("status"); st != "" {
 		args = append(args, strings.Split(st, ","))
 		sql += fmt.Sprintf(` AND w.status = ANY($%d)`, len(args))
+	}
+	if as := r.URL.Query().Get("assignee"); as == "me" {
+		args = append(args, ident(r.Context()).UserID)
+		sql += fmt.Sprintf(` AND w.assignee_id = $%d`, len(args))
 	}
 	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
 		args = append(args, "%"+q+"%")
@@ -335,7 +378,7 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 	for rows.Next() {
 		var x WorkListItem
 		if err := rows.Scan(&x.ID, &x.Title, &x.Status, &x.ContentFormat, &x.SourceWorkID, &x.SourceTitle, &x.DerivedCount,
-			&x.CoverAssetID, &x.FirstAssetID, &x.CharCount, &x.SectionCount, &x.PublishedAt, &x.UpdatedAt); err != nil {
+			&x.CoverAssetID, &x.FirstAssetID, &x.CharCount, &x.SectionCount, &x.PublishedAt, &x.UpdatedAt, &x.PlannedDate, &x.AssigneeID, &x.TargetChars, &x.TodosDone, &x.TodosTotal); err != nil {
 			return err
 		}
 		list = append(list, x)
@@ -367,21 +410,31 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		Title        *string             `json:"title"`
-		Summary      *string             `json:"summary"`
-		Viewpoint    *string             `json:"viewpoint"`
-		Theme        *string             `json:"theme"`
-		CoverAssetID *uuid.UUID          `json:"cover_asset_id"`
-		ClearCover   bool                `json:"clear_cover"`
-		CoverCrops   map[string]cropBox  `json:"cover_crops"`
-		WechatFields *WechatDefaults     `json:"wechat_fields"`
-		Topics       []string            `json:"topics"`
-		MaterialIDs  []uuid.UUID         `json:"material_ids"`
+		Title        *string            `json:"title"`
+		Summary      *string            `json:"summary"`
+		Viewpoint    *string            `json:"viewpoint"`
+		Theme        *string            `json:"theme"`
+		CoverAssetID *uuid.UUID         `json:"cover_asset_id"`
+		ClearCover   bool               `json:"clear_cover"`
+		CoverCrops   map[string]cropBox `json:"cover_crops"`
+		WechatFields *WechatDefaults    `json:"wechat_fields"`
+		Topics       []string           `json:"topics"`
+		MaterialIDs  []uuid.UUID        `json:"material_ids"`
+
+		PlannedDate    *string         `json:"planned_date"`
+		TargetChars    *int            `json:"target_chars"`
+		ReviewRequired *bool           `json:"review_required"`
+		AssigneeID     *string         `json:"assignee_id"`
+		ReviewerID     *string         `json:"reviewer_id"`
+		PostPushTodos  json.RawMessage `json:"post_push_todos"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
 	ctx := r.Context()
+	if err := s.applyWorkPlanning(ctx, m, workPlanning{in.PlannedDate, in.TargetChars, in.ReviewRequired, in.AssigneeID, in.ReviewerID, in.PostPushTodos}); err != nil {
+		return err
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -682,6 +735,7 @@ func (s *Server) restoreVersion(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	s.audit(ctx, "version_restore", "work", m.ID.String(), "ok", map[string]any{"version": queryIntParam(r, "no")})
 	return s.writeWork(w, r, m.ID)
 }
 

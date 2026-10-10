@@ -171,6 +171,7 @@ export function Badge({ tone = 'gray', className, children }: { tone?: Tone; cla
 export const statusMeta: Record<WorkStatus, { label: string; tone: Tone }> = {
   drafting: { label: '创作中', tone: 'gray' },
   checking: { label: '检查中', tone: 'gamboge' },
+  reviewing: { label: '待审阅', tone: 'gamboge' },
   ready: { label: '可发布', tone: 'ink' },
   pushed: { label: '已进草稿箱', tone: 'blue' },
   packed: { label: '发布包已生成', tone: 'blue' },
@@ -182,7 +183,7 @@ export function StatusBadge({ status }: { status: WorkStatus }) {
   return (
     <Badge tone={m.tone}>
       <span className={cn('size-1.5 rounded-full', {
-        'bg-mist-400': status === 'drafting', 'bg-gamboge-400': status === 'checking', 'bg-ink-500': status === 'ready',
+        'bg-mist-400': status === 'drafting', 'bg-gamboge-400': status === 'checking' || status === 'reviewing', 'bg-ink-500': status === 'ready',
         'bg-sky-500': status === 'pushed' || status === 'packed', 'bg-emerald-500': status === 'published',
       })} />
       {m.label}
@@ -206,10 +207,44 @@ export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={cn('size-5 animate-spin text-mist-400', className)} />
 }
 
-export function PageLoading() {
+export function Skeleton({ className }: { className?: string }) {
+  return <div className={cn('animate-pulse rounded-md bg-mist-100', className)} />
+}
+
+/** PageLoading renders a skeleton of the page instead of a full-page spinner (4.5 骨架屏). */
+export function PageLoading({ variant = 'list' }: { variant?: 'list' | 'editor' }) {
+  if (variant === 'editor') {
+    return (
+      <div className="mx-auto w-full max-w-[860px] space-y-5 px-6 py-8" aria-busy="true" aria-label="加载中">
+        <Skeleton className="h-9 w-2/3" />
+        <Skeleton className="h-24 w-full" />
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="space-y-2.5 rounded-xl border border-mist-100 p-5">
+            <Skeleton className="h-5 w-1/3" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-11/12" />
+            <Skeleton className="h-4 w-4/5" />
+          </div>
+        ))}
+      </div>
+    )
+  }
   return (
-    <div className="flex h-64 items-center justify-center">
-      <Spinner />
+    <div className="space-y-6" aria-busy="true" aria-label="加载中">
+      <div className="space-y-2">
+        <Skeleton className="h-7 w-44" />
+        <Skeleton className="h-4 w-72" />
+      </div>
+      <Skeleton className="h-9 w-80" />
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <div key={i} className="space-y-3 rounded-xl border border-mist-100 bg-white p-4">
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-2/3" />
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

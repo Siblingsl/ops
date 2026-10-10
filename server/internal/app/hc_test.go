@@ -1,6 +1,6 @@
 package app
 
-// HC-01 至 HC-10：人工确认点与红线的回归测试（08 文档第 6 节）。不得删除或跳过。
+// HC-01 至 HC-20：人工确认点与红线的回归测试（08 文档第 6 节、10 文档第 6 节）。不得删除或跳过。
 
 import (
 	"context"
@@ -11,8 +11,10 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 func topicCount(t *testing.T, accountID string) int {
@@ -40,7 +42,7 @@ func TestHC01_SuggestTopicsDoesNotWritePool(t *testing.T) {
 	id := f.wechat.ID.String()
 	before := topicCount(t, id)
 	var res struct {
-		Suggestions []map[string]string `json:"suggestions"`
+		Suggestions []map[string]any `json:"suggestions"`
 	}
 	env.mustJSON(t, "POST", "/api/v1/accounts/"+id+"/topics/suggest", map[string]string{"direction": "时间管理"}, &res)
 	if len(res.Suggestions) < 5 {
@@ -57,7 +59,7 @@ func TestHC01_SuggestTopicsDoesNotWritePool(t *testing.T) {
 		t.Fatalf("hot-suggest wrote to topic pool: %d -> %d", before, after)
 	}
 	// 入库只能逐条：请求体只接受一个选题。
-	env.mustJSON(t, "POST", "/api/v1/accounts/"+id+"/topics", map[string]string{"title": res.Suggestions[0]["title"], "angle": res.Suggestions[0]["angle"], "source": "ai"}, nil)
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+id+"/topics", map[string]any{"title": res.Suggestions[0]["title"], "angle": res.Suggestions[0]["angle"], "source": "ai"}, nil)
 	if after := topicCount(t, id); after != before+1 {
 		t.Fatalf("want exactly one new topic, got %d -> %d", before, after)
 	}
@@ -399,6 +401,132 @@ func TestHC14_TransferOwner(t *testing.T) {
 	env.expectErr(t, "POST", "/api/v1/workspaces/current/invites", map[string]any{"role": "editor"}, "forbidden")
 }
 
+// HC-15：全站超级管理员（D-044 / FR-M1-12）；永久超管为 skyeder
+func TestHC15_SystemAdmin(t *testing.T) {
+	const adminUser = "skyeder"
+	const adminPass = testAdminPassword
+	st, body := env.do("POST", "/api/v1/auth/login", map[string]string{"username": adminUser, "password": adminPass})
+	if st != 200 {
+		t.Fatalf("login permanent admin: %d %s", st, body)
+	}
+	var me struct {
+		UserID        string `json:"user_id"`
+		Username      string `json:"username"`
+		IsSystemAdmin bool   `json:"is_system_admin"`
+		CSRF          string `json:"csrf_token"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/auth/me", nil, &me)
+	env.csrf = me.CSRF
+	if !me.IsSystemAdmin || me.Username != adminUser {
+		t.Fatalf("want permanent admin %s, got user=%s admin=%v", adminUser, me.Username, me.IsSystemAdmin)
+	}
+	defer func() {
+		st, body := env.do("POST", "/api/v1/auth/login", map[string]string{"username": "owner", "password": testPassword})
+		if st != 200 {
+			t.Fatalf("restore owner session: %d %s", st, body)
+		}
+		var ownerMe struct {
+			CSRF string `json:"csrf_token"`
+		}
+		env.mustJSON(t, "GET", "/api/v1/auth/me", nil, &ownerMe)
+		env.csrf = ownerMe.CSRF
+	}()
+
+	tenantName := "tenant-admin-" + t.Name()
+	other := env.registerClient(t, tenantName, testPassword)
+	defer other.restore(env)
+	var ome struct {
+		UserID        string `json:"user_id"`
+		IsSystemAdmin bool   `json:"is_system_admin"`
+		CSRF          string `json:"csrf_token"`
+		Workspace     struct {
+			ID string `json:"id"`
+		} `json:"workspace"`
+	}
+	other.mustJSON(t, "GET", "/api/v1/auth/me", nil, &ome)
+	other.csrf = ome.CSRF
+	if ome.IsSystemAdmin {
+		t.Fatal("second user must not be system admin")
+	}
+	ae := other.expectErr(t, "GET", "/api/v1/admin/users", nil, "forbidden")
+	if ae.Error.Code != "forbidden" {
+		t.Fatalf("code=%s", ae.Error.Code)
+	}
+	other.restore(env)
+
+	var users []struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/admin/users", nil, &users)
+	if len(users) < 2 {
+		t.Fatalf("want >=2 users, got %d", len(users))
+	}
+
+	env.mustJSON(t, "POST", "/api/v1/admin/users/"+ome.UserID+"/revoke-sessions", map[string]any{}, nil)
+	env.mustJSON(t, "PATCH", "/api/v1/admin/users/"+ome.UserID, map[string]any{"disabled": true}, nil)
+	st, body = other.do("POST", "/api/v1/auth/login", map[string]string{"username": tenantName, "password": testPassword})
+	if st == 200 {
+		t.Fatalf("disabled user should not login: %s", body)
+	}
+	other.restore(env)
+	env.mustJSON(t, "PATCH", "/api/v1/admin/users/"+ome.UserID, map[string]any{"disabled": false}, nil)
+
+	var workspaces []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/admin/workspaces", nil, &workspaces)
+	targetWS := ome.Workspace.ID
+	found := false
+	for _, w := range workspaces {
+		if w.ID == targetWS {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("workspace %s not listed", targetWS)
+	}
+	env.mustJSON(t, "POST", "/api/v1/admin/workspaces/"+targetWS+"/enter", map[string]any{}, nil)
+	var overrideMe struct {
+		AdminOverride bool   `json:"admin_override"`
+		Role          string `json:"role"`
+		CSRF          string `json:"csrf_token"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/auth/me", nil, &overrideMe)
+	env.csrf = overrideMe.CSRF
+	if !overrideMe.AdminOverride || overrideMe.Role != "owner" {
+		t.Fatalf("override=%v role=%s", overrideMe.AdminOverride, overrideMe.Role)
+	}
+	// Owner-only action in foreign workspace should succeed under override.
+	env.mustJSON(t, "POST", "/api/v1/workspaces/current/invites", map[string]any{"role": "editor", "max_uses": 1, "days": 1}, nil)
+	env.mustJSON(t, "POST", "/api/v1/admin/workspaces/exit", map[string]any{}, nil)
+
+	env.mustJSON(t, "PUT", "/api/v1/admin/system-settings", map[string]any{"registration_open": false}, nil)
+	st, body = other.do("POST", "/api/v1/auth/register", map[string]string{"username": "blocked-" + t.Name(), "password": testPassword})
+	if st == 200 {
+		t.Fatalf("register should be closed: %s", body)
+	}
+	other.restore(env)
+	env.mustJSON(t, "PUT", "/api/v1/admin/system-settings", map[string]any{"registration_open": true}, nil)
+
+	env.mustJSON(t, "PUT", "/api/v1/admin/system-settings", map[string]any{"maintenance_mode": true}, nil)
+	// Re-login other after enable
+	st, body = other.do("POST", "/api/v1/auth/login", map[string]string{"username": tenantName, "password": testPassword})
+	if st != 200 {
+		t.Fatalf("login during maintenance: %d %s", st, body)
+	}
+	other.mustJSON(t, "GET", "/api/v1/auth/me", nil, &ome)
+	other.csrf = ome.CSRF
+	ae = other.expectErr(t, "GET", "/api/v1/accounts", nil, "maintenance")
+	if ae.Error.Code != "maintenance" {
+		t.Fatalf("code=%s", ae.Error.Code)
+	}
+	other.restore(env)
+	env.mustJSON(t, "PUT", "/api/v1/admin/system-settings", map[string]any{"maintenance_mode": false}, nil)
+}
+
 func TestGenerateWorkImageWatermarked(t *testing.T) {
 	f := env.accounts(t)
 	var wk Work
@@ -416,7 +544,9 @@ func TestGenerateWorkImageWatermarked(t *testing.T) {
 // FR-M1-10 / D-041：可再创建工作区并切换过去
 func TestCreateWorkspaceAndSwitch(t *testing.T) {
 	var before struct {
-		Workspace  struct{ ID string `json:"id"` } `json:"workspace"`
+		Workspace struct {
+			ID string `json:"id"`
+		} `json:"workspace"`
 		Workspaces []struct {
 			ID string `json:"id"`
 		} `json:"workspaces"`
@@ -448,4 +578,244 @@ func TestCreateWorkspaceAndSwitch(t *testing.T) {
 	}
 	// 切回原工作区，避免污染后续测试
 	env.mustJSON(t, "POST", "/api/v1/workspaces/"+before.Workspace.ID+"/switch", nil, nil)
+}
+
+// draftedWork builds a work up to drafted sections (outline confirmed, no checks yet).
+func (e *testEnv) draftedWork(t *testing.T, a Account, viewpoint string) Work {
+	t.Helper()
+	var wk Work
+	e.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/works", map[string]string{"title": "测试作品"}, &wk)
+	id := wk.ID.String()
+	e.mustJSON(t, "PATCH", "/api/v1/works/"+id, map[string]string{"viewpoint": viewpoint}, nil)
+	var outline struct {
+		Items []OutlineItem `json:"items"`
+	}
+	e.mustJSON(t, "POST", "/api/v1/works/"+id+"/outline/generate", nil, &outline)
+	e.mustJSON(t, "PUT", "/api/v1/works/"+id+"/outline", map[string]any{"items": outline.Items[:2], "confirm": true}, &wk)
+	for _, sec := range wk.Sections {
+		if ev := lastEvent(t, e.sse(t, "/api/v1/sections/"+sec.ID.String()+"/draft", nil)); ev.Name != "done" {
+			t.Fatalf("draft: %s %s", ev.Name, ev.Data)
+		}
+	}
+	e.mustJSON(t, "GET", "/api/v1/works/"+id, nil, &wk)
+	return wk
+}
+
+// wechatWriteCalls keeps calls that create or change drafts / publish; the read-only draft-box sync (batchget) is allowed.
+func wechatWriteCalls(calls []string) []string {
+	var out []string
+	for _, c := range calls {
+		for _, w := range []string{"add", "update", "upload", "publish", "submit", "mass", "delete"} {
+			if strings.Contains(c, w) {
+				out = append(out, c)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// HC-16：内容日历只做计划。设置计划发布日并把时钟推进到当天，系统不调用任何微信草稿 / 发布接口，作品状态不变。
+func TestHC16_PlannedDateNeverPublishes(t *testing.T) {
+	f := env.accounts(t)
+	wk := env.readyWork(t, f.wechat, "日历只是计划")
+	day := time.Now().In(env.srv.loc).AddDate(0, 0, 3)
+	env.mustJSON(t, "PATCH", "/api/v1/works/"+wk.ID.String(), map[string]any{"planned_date": day.Format("2006-01-02")}, nil)
+	before := wechatWriteCalls(env.mockWX.Calls())
+	orig := env.srv.now
+	env.srv.now = func() time.Time {
+		return time.Date(day.Year(), day.Month(), day.Day(), 10, 30, 0, 0, env.srv.loc)
+	}
+	env.srv.runJobsOnce(context.Background())
+	env.srv.now = func() time.Time {
+		return time.Date(day.Year(), day.Month(), day.Day(), 12, 5, 0, 0, env.srv.loc)
+	}
+	env.srv.runJobsOnce(context.Background())
+	env.srv.now = orig
+	after := wechatWriteCalls(env.mockWX.Calls())
+	if len(after) != len(before) {
+		t.Fatalf("jobs called WeChat on the planned day: %v", after[len(before):])
+	}
+	var got Work
+	env.mustJSON(t, "GET", "/api/v1/works/"+wk.ID.String(), nil, &got)
+	if got.Status != "ready" {
+		t.Fatalf("planned day changed status: %s", got.Status)
+	}
+	for _, r := range routes(t) {
+		low := strings.ToLower(r)
+		if strings.Contains(low, "calendar") && !strings.HasPrefix(r, "GET") {
+			t.Fatalf("calendar must be read-only: %s", r)
+		}
+	}
+	planned := regexp.MustCompile(`planned_date[^\n]*(draft/add|draft/update|freepublish|wechatPush|pushWork)`)
+	for p, src := range goSources(t) {
+		if loc := planned.FindStringIndex(src); loc != nil {
+			t.Fatalf("%s links planned_date to publishing: %q", p, src[loc[0]:loc[1]])
+		}
+	}
+}
+
+// HC-17：写作副驾驶不输出整篇正文，也不能写入段落。
+func TestHC17_CopilotNeverWritesBody(t *testing.T) {
+	f := env.accounts(t)
+	wk := env.draftedWork(t, f.wechat, "副驾驶只出主意")
+	ev := lastEvent(t, env.sse(t, "/api/v1/works/"+wk.ID.String()+"/copilot", map[string]any{"message": "帮我写完整篇文章", "scope": "work"}))
+	if ev.Name != "done" {
+		t.Fatalf("copilot: %s %s", ev.Name, ev.Data)
+	}
+	if !strings.Contains(string(ev.Data), "请逐段起草") {
+		t.Fatalf("whole-work request must be declined: %s", ev.Data)
+	}
+	var got Work
+	env.mustJSON(t, "GET", "/api/v1/works/"+wk.ID.String(), nil, &got)
+	if len(got.Sections) != len(wk.Sections) || got.Revision != wk.Revision {
+		t.Fatalf("copilot changed the work: rev %d -> %d, sections %d -> %d", wk.Revision, got.Revision, len(wk.Sections), len(got.Sections))
+	}
+	for i, s := range got.Sections {
+		if s.ContentMD != wk.Sections[i].ContentMD || s.Revision != wk.Sections[i].Revision {
+			t.Fatalf("copilot wrote section %s", s.ID)
+		}
+	}
+	for _, r := range routes(t) {
+		if strings.Contains(r, "copilot") && !strings.HasSuffix(r, "/works/{id}/copilot") {
+			t.Fatalf("unexpected copilot route: %s", r)
+		}
+	}
+}
+
+// HC-18：AI 修复建议只能逐条生成，采纳后该检查项仍要人工确认，没有批量修复入口。
+func TestHC18_FixSuggestIsPerItem(t *testing.T) {
+	f := env.accounts(t)
+	wk := env.draftedWork(t, f.wechat, "修复要逐条确认")
+	sec := wk.Sections[0]
+	content := sec.ContentMD + "\n这是全网最好的方法。"
+	env.mustJSON(t, "PATCH", "/api/v1/sections/"+sec.ID.String(), map[string]any{"content_md": content, "base_revision": sec.Revision}, nil)
+	id := wk.ID.String()
+	env.mustJSON(t, "POST", "/api/v1/works/"+id+"/checks", map[string]int{"html_chars": 3000, "html_bytes": 9000}, nil)
+	run := env.latestCheck(t, id)
+	var item *CheckItem
+	for i := range run.Items {
+		if run.Items[i].Category == "ad_law" {
+			item = &run.Items[i]
+			break
+		}
+	}
+	if item == nil {
+		t.Fatal("want an ad_law item")
+	}
+	var fix struct {
+		Variants []variant `json:"variants"`
+		Sentence string    `json:"sentence"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/check-items/"+item.ID.String()+"/fix-suggest", nil, &fix)
+	if len(fix.Variants) == 0 || len(fix.Variants) > 3 {
+		t.Fatalf("want 1-3 variants, got %d", len(fix.Variants))
+	}
+	run = env.latestCheck(t, id)
+	for _, it := range run.Items {
+		if it.ID == item.ID && it.Resolution != nil {
+			t.Fatalf("fix-suggest resolved the item by itself: %s", *it.Resolution)
+		}
+	}
+	env.expectErr(t, "POST", "/api/v1/works/"+id+"/checks/complete", nil, "human_step_required")
+	// 作者采纳候选（改写正文）后，旧检查失效，必须重新检查、逐项确认。
+	var cur Work
+	env.mustJSON(t, "GET", "/api/v1/works/"+id, nil, &cur)
+	fixed := strings.Replace(cur.Sections[0].ContentMD, "这是全网最好的方法。", fix.Variants[0].Text, 1)
+	env.mustJSON(t, "PATCH", "/api/v1/sections/"+sec.ID.String(), map[string]any{"content_md": fixed, "base_revision": cur.Sections[0].Revision}, nil)
+	env.expectErr(t, "POST", "/api/v1/works/"+id+"/checks/complete", nil, "state_invalid")
+	for _, r := range routes(t) {
+		low := strings.ToLower(r)
+		if strings.Contains(low, "fix") && r != "POST /api/v1/check-items/{id}/fix-suggest" {
+			t.Fatalf("unexpected fix route: %s", r)
+		}
+		if strings.Contains(low, "adopt-all") || strings.Contains(low, "fix-all") || strings.Contains(low, "apply-all") {
+			t.Fatalf("batch route exists: %s", r)
+		}
+	}
+}
+
+// HC-19：开启审阅后，未经 H-09 审阅通过不能推送或生成发布包。
+func TestHC19_ReviewGateBeforePushAndPack(t *testing.T) {
+	f := env.accounts(t)
+	for _, a := range []Account{f.wechat, f.xhs} {
+		wk := env.readyWork(t, a, "审阅通过才能发出")
+		id := wk.ID.String()
+		var got Work
+		env.mustJSON(t, "PATCH", "/api/v1/works/"+id, map[string]any{"review_required": true}, &got)
+		env.mustJSON(t, "GET", "/api/v1/works/"+id, nil, &got)
+		if got.Status != "reviewing" {
+			t.Fatalf("want reviewing, got %s", got.Status)
+		}
+		var ae apiError
+		if a.Platform == "wechat_mp" {
+			ae = env.expectErr(t, "POST", "/api/v1/works/"+id+"/wechat/push", map[string]any{"html": testHTML(got), "revision": got.Revision, "fields": got.WechatFields, "confirm_over_limit": true}, "human_step_required")
+		} else {
+			ae = env.expectErr(t, "POST", "/api/v1/works/"+id+"/xhs/pack", nil, "human_step_required")
+		}
+		if !strings.Contains(string(ae.Error.Detail), "H-09") {
+			t.Fatalf("want H-09, got %s", ae.Error.Detail)
+		}
+		env.mustJSON(t, "POST", "/api/v1/works/"+id+"/review/approve", nil, &got)
+		if got.Status != "ready" || got.ReviewedAt == nil {
+			t.Fatalf("approve: status %s reviewed_at %v", got.Status, got.ReviewedAt)
+		}
+		if a.Platform == "xhs" {
+			env.mustJSON(t, "POST", "/api/v1/works/"+id+"/xhs/pack", nil, nil)
+		}
+	}
+}
+
+// HC-20：待确认的记忆不进入上下文，确认只能逐条，没有一键全部确认。
+func TestHC20_SuggestedMemoryNotInContext(t *testing.T) {
+	f := env.accounts(t)
+	ctx := context.Background()
+	var ws uuid.UUID
+	if err := env.srv.db.QueryRow(ctx, `SELECT workspace_id FROM platform_account WHERE id=$1`, f.wechat.ID).Scan(&ws); err != nil {
+		t.Fatal(err)
+	}
+	jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: ws})
+	const text = "HC20 待确认偏好：段落开头不要用设问句"
+	if _, err := env.srv.suggestMemory(jctx, f.wechat.ID, "avoid", "all", text, "instruction", nil); err != nil {
+		t.Fatal(err)
+	}
+	a, err := env.srv.account(jctx, f.wechat.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range []string{"section_draft", "title", "topic_suggest", "copilot_chat"} {
+		pack, err := env.srv.buildContext(jctx, aiTask{Type: typ, Account: a, User: "x"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(pack.System, text) || strings.Contains(pack.User, text) {
+			t.Fatalf("%s: suggested memory leaked into context", typ)
+		}
+	}
+	var list []Memory
+	env.mustJSON(t, "GET", "/api/v1/accounts/"+f.wechat.ID.String()+"/memories", nil, &list)
+	var mem *Memory
+	for i := range list {
+		if list[i].Text == text {
+			mem = &list[i]
+		}
+	}
+	if mem == nil || mem.Status != "suggested" {
+		t.Fatalf("suggested memory not listed: %+v", mem)
+	}
+	env.mustJSON(t, "PATCH", "/api/v1/memories/"+mem.ID.String(), map[string]string{"status": "active"}, nil)
+	pack, err := env.srv.buildContext(jctx, aiTask{Type: "section_draft", Account: a, User: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(pack.System, text) {
+		t.Fatal("confirmed memory should be in context")
+	}
+	env.mustJSON(t, "PATCH", "/api/v1/memories/"+mem.ID.String(), map[string]string{"status": "disabled"}, nil)
+	for _, r := range routes(t) {
+		low := strings.ToLower(r)
+		if strings.Contains(low, "memor") && (strings.Contains(low, "all") || strings.Contains(low, "batch") || strings.Contains(low, "bulk") || strings.Contains(low, "confirm")) {
+			t.Fatalf("batch memory route exists: %s", r)
+		}
+	}
 }

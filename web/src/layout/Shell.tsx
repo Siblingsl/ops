@@ -1,41 +1,56 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  BarChart3, BookOpen, Check, ChevronDown, ChevronRight, ChevronsUpDown, Cpu, Eye, FileText, Gauge, KeyRound,
-  LayoutDashboard, Lightbulb, LogOut, Pencil, Plus, Power, ScrollText, Search, Settings2, ShieldAlert, Trash2,
+  Activity, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronDown, ChevronRight, ChevronsUpDown, Clock, Cpu, Eye, FileText, Gauge, Images, Inbox, KeyRound,
+  LayoutDashboard, Lightbulb, LogOut, Pencil, Plus, Power, ScrollText, Search, Send, Settings2, Shield, ShieldAlert, SlidersHorizontal, Trash2,
   UserCircle2, UserPlus, Users,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { CommandPalette, openPalette } from '@/components/command-palette'
 import { confirm } from '@/components/dialog'
+import { ErrorBoundary } from '@/components/error-boundary'
+import { NotificationBell } from '@/components/notifications'
 import { QuickCollect } from '@/components/quick-collect'
-import { cn, PlatformMark, platformLabel } from '@/components/ui'
+import { cn, Kbd, PlatformMark, platformLabel } from '@/components/ui'
 import { del, errorMessage, get, post } from '@/lib/api'
 import { fmtNum } from '@/lib/format'
 import { useAccounts, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
 import type { Account, Platform } from '@/lib/types'
+import { setUXEnabled, usePrefs, useRecentWorks } from '@/lib/v3'
 
-const nav: { end?: boolean; path: string; icon: typeof LayoutDashboard; label: string }[] = [
-  { end: true, path: '', icon: LayoutDashboard, label: '工作台' },
-  { path: '/topics', icon: Lightbulb, label: '选题池' },
-  { path: '/works', icon: FileText, label: '作品' },
-  { path: '/materials', icon: BookOpen, label: '素材库' },
+const nav: { end?: boolean; path: string; icon: typeof LayoutDashboard; label: string; mobile?: string }[] = [
+  { end: true, path: '', icon: LayoutDashboard, label: '工作台', mobile: '工作台' },
+  { path: '/topics', icon: Lightbulb, label: '选题池', mobile: '选题' },
+  { path: '/calendar', icon: CalendarDays, label: '内容日历', mobile: '日历' },
+  { path: '/works', icon: FileText, label: '作品', mobile: '作品' },
+  { path: '/materials', icon: BookOpen, label: '素材库', mobile: '素材' },
   { path: '/review', icon: BarChart3, label: '复盘' },
   { path: '/profile', icon: UserCircle2, label: '账号档案' },
 ]
 
-const settingsItems = [
+const mobileNav: { path: string; icon: typeof LayoutDashboard; label: string }[] = [
+  { path: '', icon: LayoutDashboard, label: '工作台' },
+  { path: '/topics?tab=inbox', icon: Inbox, label: '收件箱' },
+  { path: '/works', icon: FileText, label: '作品' },
+  { path: '/works?status=ready', icon: Send, label: '发布' },
+]
+
+const settingsItems: { to: string; icon: ReactNode; label: string; adminOnly?: boolean }[] = [
+  { to: '/settings/preferences', icon: <SlidersHorizontal />, label: '偏好设置' },
   { to: '/settings/accounts', icon: <Users />, label: '平台账号与凭证' },
   { to: '/settings/members', icon: <Users />, label: '成员与邀请' },
   { to: '/settings/models', icon: <Cpu />, label: '模型配置' },
-  { to: '/settings/usage', icon: <Gauge />, label: 'AI 用量' },
+  { to: '/settings/usage', icon: <Gauge />, label: 'AI 用量与成本' },
+  { to: '/settings/quality', icon: <Activity />, label: 'AI 质量看板' },
   { to: '/settings/words', icon: <ShieldAlert />, label: '敏感词库' },
   { to: '/settings/prompts', icon: <ScrollText />, label: '提示词模板' },
   { to: '/settings/export', icon: <Gauge />, label: '数据导出' },
   { to: '/settings/logs', icon: <ScrollText />, label: '操作日志' },
   { to: '/settings/trash', icon: <Trash2 />, label: '回收站' },
   { to: '/settings/security', icon: <KeyRound />, label: '登录与安全' },
+  { to: '/settings/admin', icon: <Shield />, label: '系统管理', adminOnly: true },
 ]
 
 function Brand() {
@@ -84,12 +99,31 @@ function NavItem({ to, icon: Icon, children, end }: { to: string; icon: typeof L
   )
 }
 
+function RecentWorks() {
+  const recent = useRecentWorks(5)
+  const loc = useLocation()
+  if (recent.length === 0) return null
+  return (
+    <div className="pt-5">
+      <div className="mb-1.5 flex items-center gap-1.5 px-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400"><Clock className="size-3" />最近打开</div>
+      {recent.map((r) => (
+        <Link key={r.link} to={r.link} title={r.title}
+          className={cn('block truncate rounded-xl px-3 py-1.5 text-[13px] transition', loc.pathname.startsWith(r.link) ? 'bg-mist-100 font-medium text-mist-900' : 'text-mist-600 hover:bg-mist-100/90 hover:text-mist-900')}>
+          {r.title}
+        </Link>
+      ))}
+    </div>
+  )
+}
+
 function UserMenu({ username, onLogout }: { username?: string; onLogout: () => void }) {
   const [open, setOpen] = useState(false)
   const navigate = useNavigate()
   const loc = useLocation()
+  const { data: me } = useMe()
   const ref = useRef<HTMLDivElement>(null)
   const inSettings = loc.pathname.startsWith('/settings/')
+  const items = settingsItems.filter((item) => !item.adminOnly || me?.is_system_admin)
   useEffect(() => {
     const h = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false)
     document.addEventListener('mousedown', h)
@@ -117,7 +151,7 @@ function UserMenu({ username, onLogout }: { username?: string; onLogout: () => v
       {open && (
         <div role="menu" className="absolute right-0 top-[calc(100%+8px)] z-40 w-[260px] animate-fade-in rounded-xl border border-mist-200 bg-white p-1.5 shadow-pop">
           <div className="px-2.5 pb-1.5 pt-1.5 text-[11px] font-semibold tracking-wider text-mist-400">工作区设置</div>
-          {settingsItems.map((item) => (
+          {items.map((item) => (
             <button
               key={item.to}
               type="button"
@@ -605,9 +639,12 @@ function useChromeMeta() {
       return { crumb: '设置', title: hit?.label ?? '设置' }
     }
     if (path.startsWith('/works/')) return { crumb: acc?.name ?? '作品', title: '创作中' }
+    if (path.startsWith('/search')) return { crumb: '工作区', title: '搜索' }
+    if (path.startsWith('/images')) return { crumb: '工作区', title: '图片库' }
     if (!acc) return { crumb: '运助', title: '选择账号' }
     const map: { test: RegExp; title: string }[] = [
       { test: /\/topics$/, title: '选题池' },
+      { test: /\/calendar$/, title: '内容日历' },
       { test: /\/works$/, title: '作品' },
       { test: /\/materials$/, title: '素材库' },
       { test: /\/review$/, title: '数据复盘' },
@@ -631,28 +668,39 @@ function TopBar({ username, onLogout, dense }: { username?: string; onLogout: ()
 
   return (
     <header className={cn(
-      'sticky top-0 z-20 flex shrink-0 items-center gap-3 border-b border-mist-200/80 bg-white/90 px-5 backdrop-blur xl:px-7',
+      'sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b border-mist-200/80 bg-white/90 px-3 backdrop-blur sm:gap-3 sm:px-5 xl:px-7',
       dense ? 'h-12' : 'h-14',
     )}>
       <WorkspaceAccountTree compact={dense} />
-      <div className="hidden h-4 w-px bg-mist-200 sm:block" />
-      <nav className="hidden min-w-0 flex-1 items-center gap-2 text-[13px] sm:flex" aria-label="当前位置">
+      <div className="hidden h-4 w-px bg-mist-200 lg:block" />
+      <nav className="hidden min-w-0 flex-1 items-center gap-2 text-[13px] lg:flex" aria-label="当前位置">
         <span className="truncate text-mist-400">{meta.crumb}</span>
         <span className="text-mist-300">/</span>
         <span className="truncate font-semibold text-mist-800">{meta.title}</span>
       </nav>
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={openPalette}
+          title="搜索与命令（Ctrl+K）"
+          className="flex h-9 cursor-pointer items-center gap-2 rounded-full border border-mist-200 bg-white px-2.5 text-[12.5px] text-mist-500 transition hover:border-mist-300 hover:text-mist-800 sm:px-3"
+        >
+          <Search className="size-3.5" />
+          <span className="hidden md:inline">搜索</span>
+          <span className="hidden md:inline"><Kbd>Ctrl K</Kbd></span>
+        </button>
         {!dense && (
           <button
             type="button"
             onClick={() => navigate('/settings/usage')}
-            className="hidden h-9 cursor-pointer items-center gap-1.5 rounded-full border border-mist-200 bg-white px-3 text-[12.5px] text-mist-600 transition hover:border-mist-300 hover:text-mist-800 md:inline-flex"
+            className="hidden h-9 cursor-pointer items-center gap-1.5 rounded-full border border-mist-200 bg-white px-3 text-[12.5px] text-mist-600 transition hover:border-mist-300 hover:text-mist-800 xl:inline-flex"
             title="查看 AI 用量"
           >
             <Gauge className="size-3.5 text-ink-600" />
             {dash.data ? <>今日 {fmtNum(dash.data.tokens_today)} token</> : 'AI 用量'}
           </button>
         )}
+        <NotificationBell />
         <UserMenu username={username} onLogout={onLogout} />
       </div>
     </header>
@@ -666,6 +714,15 @@ export default function Shell() {
   const loc = useLocation()
   const fullBleed = loc.pathname.startsWith('/works/')
   const base = acc ? `/a/${acc.id}` : '/'
+  const prefs = usePrefs()
+  useEffect(() => setUXEnabled(prefs.ux_events), [prefs.ux_events])
+  const [focusMode, setFocusMode] = useState(false)
+  useEffect(() => {
+    const h = (e: Event) => setFocusMode(!!(e as CustomEvent<boolean>).detail)
+    window.addEventListener('ops:focus', h)
+    return () => window.removeEventListener('ops:focus', h)
+  }, [])
+  const focus = focusMode && fullBleed
   const logout = async () => {
     await post('/auth/logout').catch(() => undefined)
     qc.clear()
@@ -673,7 +730,7 @@ export default function Shell() {
   }
   return (
     <div className="flex h-full">
-      <aside className="flex w-[248px] shrink-0 flex-col border-r border-mist-200 bg-mist-50">
+      <aside className={cn('hidden w-[248px] shrink-0 flex-col border-r border-mist-200 bg-mist-50', !focus && 'md:flex')}>
         <Brand />
         <nav className="scrollbar-thin flex-1 space-y-1 overflow-y-auto px-3 pb-4">
           <div className="mb-1.5 px-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400">创作</div>
@@ -687,6 +744,9 @@ export default function Shell() {
               {item.label}
             </NavItem>
           ))}
+          <div className="mb-1.5 px-3 pt-4 text-[11px] font-semibold tracking-[0.16em] text-mist-400">工作区</div>
+          <NavItem to="/images" icon={Images}>图片库</NavItem>
+          <RecentWorks />
         </nav>
         {me?.dev && (
           <div className="px-4 pb-4">
@@ -697,16 +757,59 @@ export default function Shell() {
         )}
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar username={me?.username} onLogout={logout} dense={fullBleed} />
-        {me?.role === 'viewer' && (
+        {!focus && <TopBar username={me?.username} onLogout={logout} dense={fullBleed} />}
+        {me?.admin_override && (
+          <div className="flex items-center justify-center gap-3 border-b border-danger/30 bg-danger/10 px-5 py-2 text-[12.5px] text-danger">
+            <span>正在以超级管理员访问「{me.workspace?.name}」</span>
+            <button
+              type="button"
+              className="cursor-pointer font-medium underline"
+              onClick={async () => {
+                try {
+                  await post('/admin/workspaces/exit', {})
+                  qc.clear()
+                  window.location.assign('/settings/admin')
+                } catch (e) {
+                  toast.error(errorMessage(e))
+                }
+              }}
+            >
+              退出
+            </button>
+          </div>
+        )}
+        {me?.role === 'viewer' && !me?.admin_override && (
           <div className="border-b border-gamboge-200 bg-gamboge-50 px-5 py-2 text-center text-[12.5px] text-gamboge-800">
             当前为观察者：可浏览内容，不能创建、编辑或推送。
           </div>
         )}
-        <main className={cn('scrollbar-thin min-w-0 flex-1 overflow-y-auto', !fullBleed && 'px-8 py-7 sm:px-10 xl:px-12 2xl:px-14')}>
-          {fullBleed ? <Outlet /> : <div className="mx-auto w-full max-w-[1400px] 2xl:max-w-[1680px]"><Outlet /></div>}
+        <main className={cn('scrollbar-thin min-w-0 flex-1 overflow-y-auto pb-16 md:pb-0', !fullBleed && 'px-4 py-5 sm:px-8 sm:py-7 md:px-10 xl:px-12 2xl:px-14 md:pb-7')}>
+          <ErrorBoundary resetKey={loc.pathname}>
+            {fullBleed ? <Outlet /> : <div className="mx-auto w-full max-w-[1400px] 2xl:max-w-[1680px]"><Outlet /></div>}
+          </ErrorBoundary>
         </main>
       </div>
+      {acc && !focus && (
+        <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-mist-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden" aria-label="底部导航">
+          {mobileNav.map((n) => {
+            const [path, query] = n.path.split('?')
+            const active = loc.pathname === `${base}${path}` && (!query || loc.search.includes(query))
+            return (
+              <Link key={n.path || 'home'} to={`${base}${n.path}`}
+                className={cn('flex flex-col items-center gap-0.5 py-2 text-[10.5px]', active ? 'font-semibold text-ink-700' : 'text-mist-500')}>
+                <n.icon className="size-5" strokeWidth={1.8} />
+                {n.label}
+              </Link>
+            )
+          })}
+          <button type="button" onClick={() => window.dispatchEvent(new Event('ops:notifications'))}
+            className="flex cursor-pointer flex-col items-center gap-0.5 py-2 text-[10.5px] text-mist-500">
+            <Bell className="size-5" strokeWidth={1.8} />
+            通知
+          </button>
+        </nav>
+      )}
+      <CommandPalette />
       {me?.role !== 'viewer' && <QuickCollect />}
     </div>
   )

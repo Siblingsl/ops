@@ -14,6 +14,11 @@ export interface EditorHandle {
   setMarkdown: (md: string) => void
   insertImage: (url: string) => void
   focus: () => void
+  /** Plain text before and after the cursor (selection collapses to its ends). */
+  textAround: () => { before: string; after: string }
+  insertAtCursor: (text: string) => void
+  /** DOM node holding the rendered text; null for the plain textarea editor. */
+  root: () => HTMLElement | null
 }
 
 interface Props {
@@ -89,6 +94,18 @@ export const RichEditor = forwardRef<EditorHandle, Props>(function RichEditor({ 
     },
     insertImage: (url) => editor?.chain().focus().setImage({ src: url }).run(),
     focus: () => editor?.commands.focus(),
+    textAround: () => {
+      if (!editor) return { before: '', after: '' }
+      const { from, to } = editor.state.selection
+      const doc = editor.state.doc
+      return { before: doc.textBetween(0, from, '\n'), after: doc.textBetween(to, doc.content.size, '\n') }
+    },
+    insertAtCursor: (text) => {
+      if (!editor) return
+      editor.chain().focus().insertContent(text).run()
+      onChangeRef.current((editor.storage as any).markdown.getMarkdown())
+    },
+    root: () => (editor && !editor.isDestroyed ? (editor.view.dom as HTMLElement) : null),
   }), [editor])
   if (!editor) return null
   const setLink = () => {
@@ -161,6 +178,22 @@ export const PlainEditor = forwardRef<EditorHandle, Props>(function PlainEditor(
     },
     insertImage: () => undefined,
     focus: () => ta.current?.focus(),
+    textAround: () => {
+      const el = ta.current
+      if (!el) return { before: '', after: '' }
+      return { before: el.value.slice(0, el.selectionStart), after: el.value.slice(el.selectionEnd) }
+    },
+    insertAtCursor: (text) => {
+      const el = ta.current
+      if (!el) return
+      const a = el.selectionStart
+      el.value = el.value.slice(0, a) + text + el.value.slice(el.selectionEnd)
+      el.selectionStart = el.selectionEnd = a + text.length
+      sel.current = [a + text.length, a + text.length]
+      onChange(el.value)
+      grow()
+    },
+    root: () => null,
   }))
   return (
     <textarea

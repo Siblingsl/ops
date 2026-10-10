@@ -293,7 +293,7 @@ func TestModelConfigAndLimit(t *testing.T) {
 	f := env.accounts(t)
 	var wk Work
 	env.mustJSON(t, "POST", "/api/v1/accounts/"+f.wechat.ID.String()+"/works", map[string]string{"title": "路由测试"}, &wk)
-	env.expectErr(t, "POST", "/api/v1/works/"+wk.ID.String()+"/titles", nil, "ai_upstream_error")
+	env.expectErr(t, "POST", "/api/v1/works/"+wk.ID.String()+"/titles", nil, "ai_key_invalid")
 	env.mustJSON(t, "PUT", "/api/v1/model-routes", []map[string]any{{"task_type": "title"}}, nil)
 	env.expectErr(t, "DELETE", "/api/v1/model-providers/"+list[0].ID.String(), nil, "confirm_required")
 	env.mustJSON(t, "DELETE", "/api/v1/model-providers/"+p.ID.String(), nil, nil)

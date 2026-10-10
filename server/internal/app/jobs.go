@@ -12,6 +12,7 @@ import (
 func (s *Server) RunJobs(ctx context.Context) {
 	t := time.NewTicker(10 * time.Minute)
 	defer t.Stop()
+	s.interruptJobs(ctx)
 	s.runJobsOnce(ctx)
 	for {
 		select {
@@ -37,6 +38,17 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	if s.now().Minute() < 10 && s.now().Hour()%2 == 0 {
 		s.syncDraftsJob(ctx)
 	}
+	s.purgeDeletedSections(ctx)
+	s.metricRemindersJob(ctx)
+	s.reindexEmbeddings(ctx)
+	// 每日 / 每周任务只在凌晨后跑一次（markOnce 保证幂等）
+	if h := s.now().In(s.loc).Hour(); h >= 3 {
+		s.distillDaily(ctx)
+		s.inboxTriageDaily(ctx)
+		s.weeklyDigestJob(ctx)
+	}
+	_, _ = s.db.Exec(ctx, `DELETE FROM job_marker WHERE created_at < now() - interval '60 days'`)
+	_, _ = s.db.Exec(ctx, `DELETE FROM ux_event WHERE created_at < now() - interval '180 days'`)
 }
 
 // PurgeExpiredTrash permanently deletes items that stayed in the trash longer than trashDays.
@@ -122,11 +134,13 @@ func (s *Server) seedDevModelFor(ctx context.Context, ws uuid.UUID) error {
 	}
 	var id uuid.UUID
 	if err := s.db.QueryRow(ctx, `INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		ws, "本地模拟模型", "http://"+s.cfg.MockListen+"/v1", enc, s.box.Version, []string{"mock-writer", "mock-fast"}).Scan(&id); err != nil {
+		ws, "本地模拟模型", "http://"+s.cfg.MockListen+"/v1", enc, s.box.Version, []string{"mock-writer", "mock-fast", "mock-embed"}).Scan(&id); err != nil {
 		return err
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO model_route (workspace_id, task_type, provider_id, model) VALUES
-		($1,'default',$2,'mock-writer'), ($1,'fact_flag',$2,'mock-fast')
+		($1,'default',$2,'mock-writer'), ($1,'fact_flag',$2,'mock-fast'), ($1,'section_continue',$2,'mock-fast'),
+		($1,'material_tag',$2,'mock-fast'), ($1,'topic_score',$2,'mock-fast'), ($1,'fix_suggest',$2,'mock-fast'),
+		($1,'inbox_triage',$2,'mock-fast'), ($1,'tag_suggest',$2,'mock-fast'), ($1,'embedding',$2,'mock-embed')
 		ON CONFLICT (workspace_id, task_type) DO NOTHING`, ws, id)
 	if err == nil {
 		slog.Info("已添加本地模拟模型（仅开发模式）", "workspace_id", ws.String())

@@ -1,13 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
-import { Library, Pencil, Plus, Search, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { CalendarClock, Check, Copy, Library, Link2, Pencil, Plus, Scissors, Search, Tag, Trash2, Wand2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { confirm, Dialog } from '@/components/dialog'
-import { Badge, Button, Card, cn, Empty, Field, IconButton, Input, PageHeader, PageLoading, Select, Tabs, Textarea } from '@/components/ui'
-import { del, errorMessage, get, patch, post } from '@/lib/api'
+import { confirm, Dialog, Drawer } from '@/components/dialog'
+import { AIFeedback, sendFeedback } from '@/components/refs'
+import { aiError } from '@/lib/ai-error'
+import { StarButton } from '@/components/star-button'
+import { Badge, Button, Card, cn, Empty, Field, IconButton, Input, Notice, PageHeader, PageLoading, Select, StatusBadge, Tabs, Textarea } from '@/components/ui'
+import { VoiceButton } from '@/components/voice'
+import { errorMessage, get, patch, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
-import { useCurrentAccount, useInvalidate } from '@/lib/session'
-import type { Material, MaterialKind } from '@/lib/types'
+import { deleteWithUndo } from '@/lib/undo'
+import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
+import type { AIJob, Material, MaterialKind, WorkStatus } from '@/lib/types'
 
 export const kindMeta: Record<MaterialKind, { label: string; desc: string; tone: 'ink' | 'blue' | 'gamboge' | 'green' }> = {
   experience: { label: '经历', desc: '亲身经历、故事、见闻', tone: 'ink' },
@@ -16,17 +22,28 @@ export const kindMeta: Record<MaterialKind, { label: string; desc: string; tone:
   data: { label: '数据', desc: '数字、研究结论（请注明来源）', tone: 'green' },
 }
 
+interface Candidate { kind: MaterialKind; content: string; source_hint: string; tags: string[] }
+interface TagSuggestion { kind: MaterialKind; tags: string[]; source: 'rule' | 'ai'; ai_call_id?: string }
+
+const runeCount = (s: string) => [...s].length
+const materialBody = (m: Material, p: Partial<Material> = {}) => {
+  const x = { ...m, ...p }
+  return { account_id: x.account_id, kind: x.kind, content: x.content, source: x.source, tags: x.tags, valid_until: x.valid_until || null }
+}
+
 function MaterialDialog({ open, onClose, accountId, editing }: { open: boolean; onClose: () => void; accountId: string; editing: Material | null }) {
   const [kind, setKind] = useState<MaterialKind>(editing?.kind ?? 'experience')
   const [content, setContent] = useState(editing?.content ?? '')
   const [source, setSource] = useState(editing?.source ?? '')
   const [tags, setTags] = useState(editing?.tags.join(' ') ?? '')
+  const [validUntil, setValidUntil] = useState(editing?.valid_until ?? '')
   const [shared, setShared] = useState(editing ? editing.account_id === null : false)
   const [busy, setBusy] = useState(false)
+  const [suggesting, setSuggesting] = useState(false)
   const inv = useInvalidate()
   const save = async () => {
     setBusy(true)
-    const body = { account_id: shared ? null : accountId, kind, content, source, tags: tags.split(/[\s,，]+/).filter(Boolean) }
+    const body = { account_id: shared ? null : accountId, kind, content, source, tags: tags.split(/[\s,，]+/).filter(Boolean), valid_until: validUntil || null }
     try {
       if (editing) await patch(`/materials/${editing.id}`, body)
       else await post('/materials', body)
@@ -39,11 +56,31 @@ function MaterialDialog({ open, onClose, accountId, editing }: { open: boolean; 
       setBusy(false)
     }
   }
+  const [sug, setSug] = useState<TagSuggestion | null>(null)
+  const tagList = tags.split(/[\s,，]+/).filter(Boolean)
+  useEffect(() => {
+    if (editing || runeCount(content.trim()) < 8) return
+    const timer = window.setTimeout(() => {
+      post<TagSuggestion>('/materials/tag-suggest', { content, ai: false }).then((r) => setSug((cur) => (cur?.source === 'ai' ? cur : r)), () => undefined)
+    }, 600)
+    return () => window.clearTimeout(timer)
+  }, [content, editing])
+  const suggest = async () => {
+    setSuggesting(true)
+    try {
+      setSug(await post<TagSuggestion>('/materials/tag-suggest', { content }))
+    } catch (e) {
+      aiError(e, '建议类型与标签', suggest)
+    } finally {
+      setSuggesting(false)
+    }
+  }
+  const addTag = (t: string) => setTags([...new Set([...tagList, t])].join(' '))
   return (
     <Dialog open={open} onClose={onClose} title={editing ? '编辑素材' : '添加素材'} width="max-w-xl"
       footer={<><Button variant="ghost" onClick={onClose}>取消</Button><Button variant="primary" loading={busy} disabled={!content.trim()} onClick={save}>保存</Button></>}>
       <div className="space-y-4">
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {(Object.keys(kindMeta) as MaterialKind[]).map((k) => (
             <button key={k} type="button" onClick={() => setKind(k)}
               className={cn('cursor-pointer rounded-lg border px-2 py-2 text-left transition', kind === k ? 'border-ink-400 bg-ink-50 ring-3 ring-ink-100' : 'border-mist-200 hover:border-mist-300')}>
@@ -52,83 +89,403 @@ function MaterialDialog({ open, onClose, accountId, editing }: { open: boolean; 
             </button>
           ))}
         </div>
-        <Field label="内容" required><Textarea autoFocus rows={5} value={content} onChange={(e) => setContent(e.target.value)} placeholder="写下具体的事实、经历或观点。AI 起草时只会引用你选中的素材。" /></Field>
+        <Field label={<span className="flex items-center justify-between">内容<VoiceButton onText={(t) => setContent((v) => v + t)} /></span>} required>
+          <Textarea autoFocus rows={5} value={content} onChange={(e) => setContent(e.target.value)} placeholder="写下具体的事实、经历或观点。AI 起草时只会引用你选中的素材。" />
+        </Field>
         <Field label="来源" hint={kind === 'data' ? '数据类素材请写明出处，便于发布前核实' : undefined}><Input value={source} onChange={(e) => setSource(e.target.value)} placeholder="例如：2025 年某某报告第 3 页" /></Field>
-        <Field label="标签"><Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="用空格分隔" /></Field>
+        <Field label={<span className="flex items-center justify-between">标签
+          <button type="button" disabled={!content.trim() || suggesting} onClick={suggest} className="inline-flex cursor-pointer items-center gap-1 text-[12px] font-normal text-ink-700 hover:underline disabled:opacity-40">
+            <Wand2 className="size-3.5" />{suggesting ? '分析中…' : 'AI 建议类型与标签'}
+          </button></span>}>
+          <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="用空格分隔" />
+          {sug && (sug.kind !== kind || sug.tags.some((t) => !tagList.includes(t))) && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px]">
+              <span className="text-mist-400">建议（点击应用）：</span>
+              {sug.kind !== kind && (
+                <button type="button" onClick={() => setKind(sug.kind)} className="cursor-pointer rounded-full border border-ink-200 bg-ink-50 px-2 py-0.5 text-ink-700 hover:border-ink-400">类型：{kindMeta[sug.kind].label}</button>
+              )}
+              {sug.tags.filter((t) => !tagList.includes(t)).map((t) => (
+                <button key={t} type="button" onClick={() => addTag(t)} className="cursor-pointer rounded-full border border-mist-200 px-2 py-0.5 text-mist-600 hover:border-ink-300 hover:text-ink-700">+ {t}</button>
+              ))}
+              {sug.ai_call_id && <AIFeedback callId={sug.ai_call_id} />}
+            </div>
+          )}
+        </Field>
+        <Field label="有效期（可选）" hint="例如政策、价格类数据会过时。过期后写作时会提醒你核实，不会自动删除。">
+          <Input type="date" value={validUntil ?? ''} onChange={(e) => setValidUntil(e.target.value)} className="w-48" />
+        </Field>
         <label className="flex items-center gap-2 text-[13px] text-mist-600"><input type="checkbox" className="accent-ink-600" checked={shared} onChange={(e) => setShared(e.target.checked)} />共享素材（所有账号都能引用）</label>
       </div>
     </Dialog>
   )
 }
 
-export default function Materials() {
-  const acc = useCurrentAccount()
-  const [scope, setScope] = useState<'all' | 'account' | 'shared'>('all')
-  const [kind, setKind] = useState<'' | MaterialKind>('')
-  const [q, setQ] = useState('')
-  const [dialog, setDialog] = useState<{ editing: Material | null } | null>(null)
+function ExtractDrawer({ open, onClose, accountId }: { open: boolean; onClose: () => void; accountId: string }) {
   const inv = useInvalidate()
-  const { data, isLoading } = useQuery({
-    queryKey: ['materials', acc?.id, scope, q],
-    queryFn: () => get<Material[]>(`/materials?account_id=${acc!.id}${scope !== 'all' ? `&scope=${scope}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`),
-    enabled: !!acc,
-  })
-  if (!acc) return <PageLoading />
-  const list = (data ?? []).filter((m) => !kind || m.kind === kind)
-  const remove = async (m: Material) => {
-    if (!(await confirm({ title: '删除这条素材？', desc: '已引用它的作品不受影响。删除后可在回收站恢复（30 天）。', confirmText: '删除', danger: true }))) return
+  const [text, setText] = useState('')
+  const [items, setItems] = useState<Candidate[]>([])
+  const [saved, setSaved] = useState<Record<number, boolean>>({})
+  const [dropped, setDropped] = useState<Record<number, boolean>>({})
+  const [callId, setCallId] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const jobs = useQuery({ queryKey: ['ai-jobs', 'extract'], queryFn: () => get<AIJob[]>('/ai-jobs'), enabled: open })
+  const lastJob = (jobs.data ?? []).find((j) => j.task_type === 'material_extract' && j.status === 'done')
+  const run = async () => {
+    setBusy(true)
     try {
-      await del(`/materials/${m.id}`)
+      const r = await post<{ items?: Candidate[]; ai_call_id?: string; job_id?: string }>('/materials/extract', { account_id: accountId, text })
+      if (r.job_id) {
+        toast.success('文本较长，已转入后台提炼', { description: '完成后会通知你，回到这里即可逐条存入。' })
+      } else {
+        setItems(r.items ?? [])
+        setCallId(r.ai_call_id ?? null)
+        setSaved({})
+        setDropped({})
+      }
+    } catch (e) {
+      aiError(e, '提炼素材', run)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const save = async (i: number) => {
+    const c = items[i]
+    try {
+      await post('/materials', { account_id: accountId, kind: c.kind, content: c.content, source: c.source_hint, tags: c.tags })
+      setSaved((s) => ({ ...s, [i]: true }))
       inv(['materials'])
-      toast.success('已移到回收站')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
+  const edit = (i: number, p: Partial<Candidate>) => setItems((l) => l.map((x, k) => (k === i ? { ...x, ...p } : x)))
+  return (
+    <Drawer open={open} onClose={onClose} title="从长文提炼素材" desc="粘贴你写过的文章、笔记或访谈稿，AI 只摘录原文中有的信息，拆成一条条素材供你逐条存入。" width="w-[600px]">
+      <Textarea rows={6} value={text} onChange={(e) => setText(e.target.value)} placeholder="粘贴原文（最多 2 万字，超过 6000 字会转入后台处理）" />
+      <div className="mt-2 flex items-center gap-2">
+        <Button variant="primary" icon={<Scissors className="size-4" />} loading={busy} disabled={!text.trim()} onClick={run}>开始提炼</Button>
+        <span className="text-[12px] text-mist-400">{text.length} 字</span>
+        {lastJob && items.length === 0 && (
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => {
+            const r = lastJob.result as { items?: Candidate[]; ai_call_id?: string } | null
+            setItems(r?.items ?? [])
+            setCallId(r?.ai_call_id ?? null)
+            setSaved({})
+            setDropped({})
+          }}>载入最近一次后台提炼结果</Button>
+        )}
+      </div>
+      {items.length > 0 && (
+        <>
+          <Notice className="mt-4">每条都需要你单独确认存入，可以先改内容再存。没有「全部存入」。</Notice>
+          {callId && <div className="mt-2"><AIFeedback callId={callId} /></div>}
+          <div className="mt-3 space-y-3">
+            {items.map((c, i) => dropped[i] ? (
+              <div key={i} className="flex items-center gap-2 rounded-xl border border-dashed border-mist-200 px-3 py-2 text-[12.5px] text-mist-400">
+                <span className="min-w-0 flex-1 truncate">已丢弃：{c.content}</span>
+                <button type="button" className="cursor-pointer text-ink-700 hover:underline" onClick={() => setDropped((d) => ({ ...d, [i]: false }))}>撤销</button>
+              </div>
+            ) : (
+              <div key={i} className={cn('rounded-xl border p-3', saved[i] ? 'border-ink-200 bg-ink-50/40' : 'border-mist-200')}>
+                <div className="mb-2 flex items-center gap-2">
+                  <Select value={c.kind} disabled={saved[i]} onChange={(e) => edit(i, { kind: e.target.value as MaterialKind })} className="h-7 w-24 text-[12.5px]">
+                    {(Object.keys(kindMeta) as MaterialKind[]).map((k) => <option key={k} value={k}>{kindMeta[k].label}</option>)}
+                  </Select>
+                  <div className="flex flex-wrap gap-1">{c.tags.map((t) => <Badge key={t}>{t}</Badge>)}</div>
+                  <div className="ml-auto flex items-center gap-1">
+                    {saved[i] ? <Badge tone="ink"><Check className="size-3" />已存入</Badge> : <>
+                      <Button size="sm" variant="ghost" onClick={() => setDropped((d) => ({ ...d, [i]: true }))}>丢弃</Button>
+                      <Button size="sm" variant="outline" icon={<Plus className="size-3.5" />} onClick={() => save(i)}>存入</Button>
+                    </>}
+                  </div>
+                </div>
+                <Textarea rows={3} value={c.content} disabled={saved[i]} onChange={(e) => edit(i, { content: e.target.value })} />
+                {c.source_hint && <p className="mt-1 text-[11.5px] text-mist-400">出处线索：{c.source_hint}</p>}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Drawer>
+  )
+}
+
+function DuplicatesDrawer({ open, onClose, accountId }: { open: boolean; onClose: () => void; accountId: string }) {
+  const inv = useInvalidate()
+  const { data, isLoading, refetch } = useQuery({ queryKey: ['material-dups', accountId], queryFn: () => get<Material[][]>(`/materials/duplicates?account_id=${accountId}`), enabled: open })
+  const [keep, setKeep] = useState<Record<number, string>>({})
+  const merge = async (gi: number, group: Material[]) => {
+    const keepId = keep[gi] ?? group[0].id
+    if (!(await confirm({ title: '合并这一组素材？', desc: '保留选中的一条，其余移到回收站；引用了被合并素材的作品会改为引用保留的那条。', confirmText: '合并' }))) return
+    try {
+      await post('/materials/merge', { keep_id: keepId, drop_ids: group.filter((m) => m.id !== keepId).map((m) => m.id) })
+      toast.success('已合并')
+      inv(['materials'])
+      void refetch()
     } catch (e) {
       toast.error(errorMessage(e))
     }
   }
   return (
+    <Drawer open={open} onClose={onClose} title="相似素材" desc="内容高度相似的素材按组列出。每组单独确认合并。" width="w-[600px]">
+      {isLoading ? <PageLoading /> : (data ?? []).length === 0 ? <Empty icon={<Copy className="size-5" />} title="没有发现相似素材" /> : (
+        <div className="space-y-4">
+          {data!.map((g, gi) => (
+            <div key={gi} className="rounded-xl border border-mist-200 p-3">
+              <div className="space-y-2">
+                {g.map((m) => (
+                  <label key={m.id} className={cn('flex cursor-pointer gap-2 rounded-lg border p-2 text-[13px]', (keep[gi] ?? g[0].id) === m.id ? 'border-ink-300 bg-ink-50/50' : 'border-mist-100')}>
+                    <input type="radio" className="mt-1 accent-ink-600" checked={(keep[gi] ?? g[0].id) === m.id} onChange={() => setKeep((k) => ({ ...k, [gi]: m.id }))} />
+                    <span className="min-w-0 flex-1">
+                      <span className="line-clamp-3 text-mist-700">{m.content}</span>
+                      <span className="mt-0.5 block text-[11.5px] text-mist-400">{kindMeta[m.kind].label} · 被引用 {m.usage_count ?? 0} 次 · {relTime(m.created_at)}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="mt-2 flex justify-end"><Button size="sm" variant="outline" onClick={() => merge(gi, g)}>保留选中的，合并这一组</Button></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Drawer>
+  )
+}
+
+/** TagSuggestDrawer (EX-D-02): suggestions for the selected materials are shown one by one; each is accepted separately. */
+function TagSuggestDrawer({ items, onClose }: { items: Material[]; onClose: () => void }) {
+  const inv = useInvalidate()
+  const [sugs, setSugs] = useState<Record<string, TagSuggestion | 'error' | 'done' | 'skip'>>({})
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      for (const m of items) {
+        if (!alive) return
+        try {
+          const r = await post<TagSuggestion>('/materials/tag-suggest', { content: m.content })
+          if (alive) setSugs((s) => ({ ...s, [m.id]: r }))
+        } catch {
+          if (alive) setSugs((s) => ({ ...s, [m.id]: 'error' }))
+        }
+      }
+    })()
+    return () => { alive = false }
+  }, [items])
+  const accept = async (m: Material, s: TagSuggestion) => {
+    try {
+      await patch(`/materials/${m.id}`, materialBody(m, { kind: s.kind, tags: [...new Set([...m.tags, ...s.tags])] }))
+      setSugs((x) => ({ ...x, [m.id]: 'done' }))
+      if (s.ai_call_id) void sendFeedback(s.ai_call_id, { outcome: 'accepted' })
+      inv(['materials'])
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
+  const skip = (m: Material, s: TagSuggestion) => {
+    setSugs((x) => ({ ...x, [m.id]: 'skip' }))
+    if (s.ai_call_id) void sendFeedback(s.ai_call_id, { outcome: 'rejected' })
+  }
+  return (
+    <Drawer open onClose={onClose} title={`为 ${items.length} 条素材建议标签`} desc="建议逐条显示，每条单独接受或跳过；没有「全部接受」。" width="w-[560px]">
+      <div className="space-y-3">
+        {items.map((m) => {
+          const s = sugs[m.id]
+          return (
+            <div key={m.id} className={cn('rounded-xl border p-3', s === 'done' ? 'border-ink-200 bg-ink-50/40' : 'border-mist-200')}>
+              <p className="line-clamp-3 text-[13px] text-mist-700">{m.content}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px]">
+                {s === undefined && <span className="text-mist-400">分析中…</span>}
+                {s === 'error' && <span className="text-danger">这条没能给出建议，可以稍后再试</span>}
+                {s === 'done' && <Badge tone="ink"><Check className="size-3" />已应用</Badge>}
+                {s === 'skip' && <span className="text-mist-400">已跳过</span>}
+                {typeof s === 'object' && <>
+                  <Badge tone={kindMeta[s.kind].tone}>{kindMeta[s.kind].label}</Badge>
+                  {s.tags.map((t) => <span key={t} className={cn('rounded px-1.5 py-0.5', m.tags.includes(t) ? 'bg-mist-100 text-mist-400' : 'bg-ink-50 text-ink-700')}>{t}</span>)}
+                  <div className="ml-auto flex gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => skip(m, s)}>跳过</Button>
+                    <Button size="sm" variant="outline" icon={<Check className="size-3.5" />} onClick={() => accept(m, s)}>接受</Button>
+                  </div>
+                </>}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Drawer>
+  )
+}
+
+function UsagePopover({ m }: { m: Material }) {
+  const [open, setOpen] = useState(false)
+  const { data } = useQuery({
+    queryKey: ['material-usage', m.id],
+    queryFn: () => get<{ work_id: string; title: string; status: string; at: string }[]>(`/materials/${m.id}/usage`),
+    enabled: open,
+  })
+  if (!m.usage_count) return <span className="text-mist-400">未被引用</span>
+  return (
+    <span className="relative">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="inline-flex cursor-pointer items-center gap-1 text-ink-700 hover:underline">
+        <Link2 className="size-3" />被引用 {m.usage_count} 次
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-20 mt-1 w-64 rounded-lg border border-mist-200 bg-white p-1.5 shadow-pop" onMouseLeave={() => setOpen(false)}>
+          {(data ?? []).map((u) => (
+            <Link key={u.work_id} to={`/works/${u.work_id}`} className="flex items-center gap-2 rounded px-2 py-1.5 text-[12.5px] hover:bg-mist-50">
+              <span className="min-w-0 flex-1 truncate text-mist-700">{u.title || '未命名作品'}</span>
+              <StatusBadge status={u.status as WorkStatus} />
+            </Link>
+          ))}
+        </div>
+      )}
+    </span>
+  )
+}
+
+export default function Materials() {
+  const acc = useCurrentAccount()
+  const canWrite = useCanWrite()
+  const [params, setParams] = useSearchParams()
+  const [scope, setScope] = useState<'all' | 'account' | 'shared'>('all')
+  const [kind, setKind] = useState<'' | MaterialKind>('')
+  const [usage, setUsage] = useState<'' | 'used' | 'unused' | 'expired'>('')
+  const [q, setQ] = useState('')
+  const [dialog, setDialog] = useState<{ editing: Material | null } | null>(null)
+  const [extract, setExtract] = useState(params.get('extract') === '1')
+  const [dups, setDups] = useState(false)
+  const [tag, setTag] = useState<string | null>(null)
+  const [selecting, setSelecting] = useState(false)
+  const [picked, setPicked] = useState<string[]>([])
+  const [tagging, setTagging] = useState<Material[] | null>(null)
+  const focus = params.get('focus')
+  const focusRef = useRef<HTMLDivElement>(null)
+  const inv = useInvalidate()
+  const { data, isLoading } = useQuery({
+    queryKey: ['materials', acc?.id, scope, q, usage],
+    queryFn: () => get<Material[]>(`/materials?account_id=${acc!.id}${scope !== 'all' ? `&scope=${scope}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}${usage ? `&usage=${usage}` : ''}`),
+    enabled: !!acc,
+  })
+  const dupGroups = useQuery({
+    queryKey: ['material-dups', acc?.id],
+    queryFn: () => get<Material[][]>(`/materials/duplicates?account_id=${acc!.id}`),
+    enabled: !!acc,
+    staleTime: 5 * 60_000,
+  })
+  useEffect(() => {
+    if (params.get('extract')) {
+      const n = new URLSearchParams(params)
+      n.delete('extract')
+      setParams(n, { replace: true })
+    }
+  }, [params, setParams])
+  useEffect(() => {
+    if (focus && data) focusRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [focus, data])
+  if (!acc) return <PageLoading />
+  const tagCounts = new Map<string, number>()
+  for (const m of data ?? []) for (const t of m.tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1)
+  const cloud = [...tagCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 24)
+  const maxCount = cloud[0]?.[1] ?? 1
+  const untagged = (data ?? []).filter((m) => m.tags.length === 0).length
+  const list = (data ?? []).filter((m) => (!kind || m.kind === kind) && (tag === null || (tag === '' ? m.tags.length === 0 : m.tags.includes(tag))))
+  const remove = (m: Material) => deleteWithUndo('material', m.id, '这条素材', () => inv(['materials']), '已引用它的作品不受影响。')
+  const togglePick = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : p.length >= 10 ? (toast.info('一次最多选 10 条'), p) : [...p, id]))
+  const dupCount = dupGroups.data?.length ?? 0
+  return (
     <div className="animate-fade-in">
       <PageHeader title="素材库" desc="AI 只把这里的内容当作事实来源。素材越具体，初稿越像你自己写的。"
-        action={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加素材</Button>} />
+        action={canWrite ? <>
+          <Button icon={<Copy className="size-4" />} onClick={() => setDups(true)}>相似素材</Button>
+          <Button icon={<Scissors className="size-4" />} onClick={() => setExtract(true)}>从长文提炼</Button>
+          <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加素材</Button>
+        </> : undefined} />
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <Tabs value={scope} onChange={setScope} items={[{ value: 'all', label: '全部' }, { value: 'account', label: '本账号' }, { value: 'shared', label: '共享' }]} />
         <Select value={kind} onChange={(e) => setKind(e.target.value as MaterialKind | '')} className="w-32">
           <option value="">全部类型</option>
           {(Object.keys(kindMeta) as MaterialKind[]).map((k) => <option key={k} value={k}>{kindMeta[k].label}</option>)}
         </Select>
-        <div className="relative ml-auto w-72">
+        <Select value={usage} onChange={(e) => setUsage(e.target.value as typeof usage)} className="w-36">
+          <option value="">引用情况不限</option>
+          <option value="unused">从未被引用</option>
+          <option value="used">已被引用</option>
+          <option value="expired">已过有效期</option>
+        </Select>
+        {canWrite && (
+          <Button size="sm" variant={selecting ? 'secondary' : 'ghost'} onClick={() => { setSelecting(!selecting); setPicked([]) }}>{selecting ? '退出多选' : '多选'}</Button>
+        )}
+        <div className="relative w-full sm:ml-auto sm:w-72">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist-400" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索内容、来源、标签" className="pl-9" />
         </div>
       </div>
+      {dupCount > 0 && canWrite && (
+        <Notice tone="gamboge" icon={<Copy className="size-4" />} className="mb-4">
+          发现 {dupCount} 组可能重复的素材。
+          <button type="button" className="ml-1 cursor-pointer font-medium underline" onClick={() => setDups(true)}>逐组查看</button>
+        </Notice>
+      )}
+      {(cloud.length > 0 || untagged > 0) && (
+        <div className="mb-4 flex flex-wrap items-center gap-1.5">
+          <Tag className="size-3.5 text-mist-400" />
+          <button type="button" onClick={() => setTag(null)} className={cn('cursor-pointer rounded-full px-2.5 py-0.5 text-[12px]', tag === null ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-600 hover:bg-mist-200')}>全部标签</button>
+          {untagged > 0 && (
+            <button type="button" onClick={() => setTag(tag === '' ? null : '')} className={cn('cursor-pointer rounded-full px-2.5 py-0.5 text-[12px]', tag === '' ? 'bg-ink-600 text-white' : 'border border-dashed border-mist-300 text-mist-500 hover:border-ink-300')}>未打标签 {untagged}</button>
+          )}
+          {cloud.map(([t, n]) => (
+            <button key={t} type="button" onClick={() => setTag(tag === t ? null : t)} style={{ fontSize: `${11.5 + Math.round((n / maxCount) * 3)}px` }}
+              className={cn('cursor-pointer rounded-full px-2.5 py-0.5', tag === t ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-600 hover:bg-mist-200')}>
+              {t}<span className="ml-1 opacity-60">{n}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {selecting && (
+        <div className="sticky top-16 z-10 mb-4 flex items-center gap-3 rounded-xl border border-ink-200 bg-white/95 px-4 py-2 text-[13px] shadow-sm backdrop-blur">
+          <span className="text-mist-600">已选 {picked.length} 条（最多 10 条）</span>
+          <Button size="sm" variant="primary" icon={<Wand2 className="size-3.5" />} disabled={picked.length === 0}
+            onClick={() => setTagging((data ?? []).filter((m) => picked.includes(m.id)))}>为选中的建议标签</Button>
+        </div>
+      )}
       {isLoading ? <PageLoading /> : list.length === 0 ? (
-        <Card><Empty icon={<Library className="size-5" />} title={q || kind ? '没有符合条件的素材' : '素材库还是空的'}
-          desc="把你的经历、观点、案例和数据存进来。写作时在编辑器里选中一段文字也可以直接存入素材库。"
-          action={!q && <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加第一条素材</Button>} /></Card>
+        <Card><Empty icon={<Library className="size-5" />} title={q || kind || usage || tag !== null ? '没有符合条件的素材' : '素材库还是空的'}
+          desc="把你的经历、观点、案例和数据存进来。也可以粘贴过去写的长文，让 AI 拆成一条条素材。"
+          action={!q && canWrite && <div className="flex gap-2"><Button icon={<Scissors className="size-4" />} onClick={() => setExtract(true)}>从长文提炼</Button><Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加第一条素材</Button></div>} /></Card>
       ) : (
         <div className="columns-1 gap-4 md:columns-2 xl:columns-3 2xl:columns-4">
           {list.map((m) => (
-            <Card key={m.id} className="group mb-4 break-inside-avoid p-4">
-              <div className="mb-2 flex items-center gap-2">
-                <Badge tone={kindMeta[m.kind].tone}>{kindMeta[m.kind].label}</Badge>
-                {m.account_id === null && <Badge>共享</Badge>}
-                <span className="text-xs text-mist-400">{relTime(m.created_at)}</span>
-                <div className="ml-auto flex opacity-0 transition group-hover:opacity-100">
-                  <IconButton label="编辑" onClick={() => setDialog({ editing: m })}><Pencil className="size-3.5" /></IconButton>
-                  <IconButton label="删除" className="hover:text-danger" onClick={() => remove(m)}><Trash2 className="size-3.5" /></IconButton>
+            <div key={m.id} ref={m.id === focus ? focusRef : undefined}>
+              <Card className={cn('group mb-4 break-inside-avoid p-4', m.id === focus && 'ring-2 ring-ink-300', m.expired && 'border-orange-200')}>
+                <div className="mb-2 flex items-center gap-2">
+                  {selecting && <input type="checkbox" aria-label="选择这条素材" className="accent-ink-600" checked={picked.includes(m.id)} onChange={() => togglePick(m.id)} />}
+                  <Badge tone={kindMeta[m.kind].tone}>{kindMeta[m.kind].label}</Badge>
+                  {m.account_id === null && <Badge>共享</Badge>}
+                  {m.expired ? <Badge tone="red"><CalendarClock className="size-3" />已过期</Badge> : m.valid_until && <Badge><CalendarClock className="size-3" />有效至 {m.valid_until}</Badge>}
+                  <span className="text-xs text-mist-400">{relTime(m.created_at)}</span>
+                  <StarButton type="material" id={m.id} className="ml-auto" />
+                  {canWrite && (
+                    <div className="flex opacity-60 transition group-hover:opacity-100">
+                      <IconButton label="编辑" onClick={() => setDialog({ editing: m })}><Pencil className="size-3.5" /></IconButton>
+                      <IconButton label="删除" className="hover:text-danger" onClick={() => remove(m)}><Trash2 className="size-3.5" /></IconButton>
+                    </div>
+                  )}
                 </div>
-              </div>
-              <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-mist-700">{m.content}</p>
-              {(m.source || m.tags.length > 0) && (
+                <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-mist-700">{m.content}</p>
                 <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-mist-100 pt-2.5 text-xs text-mist-400">
-                  {m.source && <span className="mr-1">来源：{m.source}</span>}
-                  {m.tags.map((t) => <span key={t} className="rounded bg-mist-100 px-1.5 py-0.5 text-mist-500">{t}</span>)}
+                  <UsagePopover m={m} />
+                  {m.last_used_at && <span>· 最近 {relTime(m.last_used_at)}</span>}
+                  {m.source && <span className="ml-1">来源：{m.source}</span>}
+                  {m.tags.map((t) => <button key={t} type="button" onClick={() => setTag(t)} className="cursor-pointer rounded bg-mist-100 px-1.5 py-0.5 text-mist-500 hover:bg-mist-200">{t}</button>)}
                 </div>
-              )}
-            </Card>
+              </Card>
+            </div>
           ))}
         </div>
       )}
       {dialog && <MaterialDialog open onClose={() => setDialog(null)} accountId={acc.id} editing={dialog.editing} />}
+      <ExtractDrawer open={extract} onClose={() => setExtract(false)} accountId={acc.id} />
+      <DuplicatesDrawer open={dups} onClose={() => { setDups(false); void dupGroups.refetch() }} accountId={acc.id} />
+      {tagging && <TagSuggestDrawer items={tagging} onClose={() => { setTagging(null); setPicked([]) }} />}
     </div>
   )
 }

@@ -1,12 +1,15 @@
-import { ArrowRight, Check, Copy, Smartphone } from 'lucide-react'
+import { ArrowRight, Check, Copy, Smartphone, Wand2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { AIFeedback } from '@/components/refs'
 import { Button, Card, cn, Notice } from '@/components/ui'
-import { errorMessage, patch } from '@/lib/api'
+import { aiError } from '@/lib/ai-error'
+import { errorMessage, get, patch, post } from '@/lib/api'
 import { fmtBytes } from '@/lib/format'
-import { HTML_BYTE_LIMIT, HTML_CHAR_LIMIT, htmlStats, renderWechat, themeById, themes } from '@/lib/render'
+import { CUSTOM_THEME_ID, customTheme, HTML_BYTE_LIMIT, HTML_CHAR_LIMIT, htmlStats, renderWechat, setCustomTheme, themeById, themes } from '@/lib/render'
 import type { Work } from '@/lib/types'
+import { useCustomTheme } from '@/lib/v3'
 import { useWork } from './WorkLayout'
 
 export function PhoneFrame({ title, account, children }: { title: string; account: string; children: React.ReactNode }) {
@@ -32,10 +35,93 @@ export function PhoneFrame({ title, account, children }: { title: string; accoun
 }
 
 export function useWechatHtml(work: Work, themeId?: string) {
+  const ct = useCustomTheme(work.account_id).data
   return useMemo(() => {
+    setCustomTheme(ct ?? null)
     const html = renderWechat(work.sections, themeId ?? work.theme)
     return { html, ...htmlStats(html) }
-  }, [work.sections, work.theme, themeId])
+  }, [work.sections, work.theme, themeId, ct])
+}
+
+interface LayoutSuggestion { section_id: string; kind: 'bold' | 'list' | 'divider'; text: string; reason: string }
+
+const layoutKind = { bold: '加粗', list: '改成列表', divider: '加分割线' }
+
+function applyLayout(content: string, s: LayoutSuggestion): string | null {
+  if (!content.includes(s.text)) return null
+  switch (s.kind) {
+    case 'bold':
+      return content.replace(s.text, `**${s.text}**`)
+    case 'list': {
+      const items = s.text.split(/(?=第[一二三四五六七八九十]|首先|其次|最后|[1-9][.、])/).map((x) => x.trim()).filter(Boolean)
+      return content.replace(s.text, items.map((x) => `- ${x}`).join('\n'))
+    }
+    case 'divider':
+      return content.replace(s.text, `---\n\n${s.text}`)
+  }
+}
+
+/** LayoutSuggest lists rule-based layout ideas (EX-G-02); each one is applied separately. */
+function LayoutSuggest({ work, onApplied }: { work: Work; onApplied: () => Promise<unknown> }) {
+  const [list, setList] = useState<LayoutSuggestion[] | null>(null)
+  const [busy, setBusy] = useState<'rules' | 'ai' | null>(null)
+  const [applying, setApplying] = useState<number | null>(null)
+  const [callId, setCallId] = useState<string | null>(null)
+  const load = async (ai: boolean) => {
+    setBusy(ai ? 'ai' : 'rules')
+    try {
+      const r = await post<{ suggestions: LayoutSuggestion[]; ai_call_id?: string; ai_error?: string }>(`/works/${work.id}/layout-suggest`, { ai })
+      setList(r.suggestions)
+      setCallId(r.ai_call_id ?? null)
+      if (r.ai_error) aiError(new Error(r.ai_error), 'AI 排版建议', () => load(true))
+    } catch (e) {
+      if (ai) aiError(e, 'AI 排版建议', () => load(true))
+      else toast.error(errorMessage(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+  const apply = async (s: LayoutSuggestion, i: number) => {
+    setApplying(i)
+    try {
+      const fresh = await get<Work>(`/works/${work.id}`)
+      const sec = fresh.sections.find((x) => x.id === s.section_id)
+      const next = sec && applyLayout(sec.content_md, s)
+      if (!sec || !next) {
+        toast.info('原文已经改动过，这条建议不再适用')
+      } else {
+        await patch(`/sections/${sec.id}`, { content_md: next, base_revision: sec.revision })
+        await onApplied()
+      }
+      setList((l) => l?.filter((_, j) => j !== i) ?? null)
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setApplying(null)
+    }
+  }
+  return (
+    <Card className="p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-[13px] font-medium text-mist-700">排版建议</span>
+        <Button size="sm" variant="ghost" className="ml-auto" loading={busy === 'rules'} disabled={!!busy} icon={<Wand2 className="size-3.5" />} onClick={() => load(false)}>{list ? '重新看看' : '看看'}</Button>
+        <Button size="sm" variant="ghost" loading={busy === 'ai'} disabled={!!busy} onClick={() => load(true)}>再让 AI 看看</Button>
+      </div>
+      {callId && <AIFeedback callId={callId} className="mb-2" />}
+      {!list ? <p className="text-[12px] text-mist-400">找出适合加粗的观点句、你收藏的金句、可以改成列表的并列要点和过长的段落。AI 只建议排版，不改文字。每条单独应用。</p>
+        : list.length === 0 ? <p className="text-[12px] text-mist-400">没有新的排版建议。</p> : (
+          <ul className="space-y-2">
+            {list.map((s, i) => (
+              <li key={i} className="rounded-lg border border-mist-200 p-2 text-[12px]">
+                <div className="flex items-center gap-1.5"><span className="font-medium text-ink-700">{layoutKind[s.kind]}</span><span className="text-mist-400">{s.reason}</span></div>
+                <p className="mt-1 line-clamp-2 text-mist-600">{s.text}</p>
+                {!work.locked && <Button size="sm" variant="secondary" className="mt-1.5" loading={applying === i} disabled={applying !== null} onClick={() => apply(s, i)}>应用</Button>}
+              </li>
+            ))}
+          </ul>
+        )}
+    </Card>
+  )
 }
 
 async function copyRich(html: string) {
@@ -45,10 +131,12 @@ async function copyRich(html: string) {
 }
 
 export default function Preview() {
-  const { work, setWork } = useWork()
+  const { work, setWork, refresh } = useWork()
   const nav = useNavigate()
   const [params] = useSearchParams()
-  const [themeId, setThemeId] = useState(themeById(work.theme).id)
+  const ct = useCustomTheme(work.account_id).data
+  const [themeId, setThemeId] = useState(work.theme === CUSTOM_THEME_ID ? CUSTOM_THEME_ID : themeById(work.theme).id)
+  const allThemes = ct ? [...themes, { ...customTheme(ct), id: CUSTOM_THEME_ID, name: '我的主题', desc: '账号自定义主题，可在账号档案中调整' }] : themes
   const { html, chars, bytes } = useWechatHtml(work, themeId)
   const over = chars >= HTML_CHAR_LIMIT || bytes >= HTML_BYTE_LIMIT
   const pick = async (id: string) => {
@@ -76,7 +164,7 @@ export default function Preview() {
           <p className="text-[13px] text-mist-500">切换即时生效，推送时使用当前主题。</p>
         </div>
         <div className="space-y-2">
-          {themes.map((t) => (
+          {allThemes.map((t) => (
             <button key={t.id} onClick={() => pick(t.id)} disabled={work.locked}
               className={cn('flex w-full cursor-pointer items-center gap-3 rounded-xl border p-3 text-left transition',
                 themeId === t.id ? 'border-ink-400 bg-ink-50/50 ring-3 ring-ink-100' : 'border-mist-200 bg-white hover:border-mist-300')}>
@@ -90,7 +178,9 @@ export default function Preview() {
               {themeId === t.id && <Check className="size-4 text-ink-600" />}
             </button>
           ))}
+          {!ct && <Link to={`/a/${work.account_id}/profile?tab=layout`} className="block text-[12px] text-ink-700 hover:underline">调一套自己的主题 →</Link>}
         </div>
+        <LayoutSuggest work={work} onApplied={refresh} />
         <Card className="p-4">
           <div className="mb-3 text-[13px] font-medium text-mist-700">正文 HTML 体积</div>
           <Meter label="字符数" value={chars} max={HTML_CHAR_LIMIT} text={`${chars.toLocaleString()} / ${HTML_CHAR_LIMIT.toLocaleString()}`} />

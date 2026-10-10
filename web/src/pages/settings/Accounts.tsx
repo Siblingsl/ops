@@ -1,6 +1,6 @@
 import { Pencil, Plus, Power, Search, Trash2, Users } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AccountCreateForm, credTone, CredentialPanel } from '@/components/account-forms'
 import { confirm, Dialog } from '@/components/dialog'
@@ -139,6 +139,7 @@ function AccountDetail({ account, onStatusChange, canManage }: {
 
 export default function SettingsAccounts() {
   const { data: me } = useMe()
+  const nav = useNavigate()
   const canManage = me?.role === 'owner'
   const { data, isLoading } = useAccounts()
   const [params, setParams] = useSearchParams()
@@ -310,7 +311,8 @@ export default function SettingsAccounts() {
             setFilter('all')
             setSelected(a.id)
             setParams({})
-            toast.success('账号已添加')
+            toast.success(a.platform === 'wechat_mp' ? '账号已添加，先建档；连接公众号可稍后回到这里完成' : '账号已添加，先来建档')
+            nav(`/a/${a.id}/profile?wizard=1`)
           }}
         />
       </Dialog>

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,13 +36,23 @@ type aiTask struct {
 	JSON      bool
 	Refs      map[string]any
 	SkipStyle bool
+
+	ExtraRules  string
+	MemoryScope string
+	Materials   []uuid.UUID
+	History     string
+	Work        string
+	Neighbors   string
+	Instruction string
+	Tier        string
 }
 
 type aiResult struct {
-	Text   string
-	Usage  ai.Usage
-	CallID uuid.UUID
-	Refs   map[string]any
+	Text         string
+	Usage        ai.Usage
+	CallID       uuid.UUID
+	Refs         map[string]any
+	FallbackUsed bool
 }
 
 type route struct {
@@ -48,25 +60,49 @@ type route struct {
 	BaseURL      string
 	APIKey       string
 	Model        string
+	Fallback     *route
 }
 
+var costTiers = map[string]bool{"economy": true, "quality": true}
+
 func (s *Server) resolveRoute(ctx context.Context, taskType string) (*route, error) {
+	return s.resolveRouteTier(ctx, taskType, "")
+}
+
+// resolveRouteTier picks the task route (or default), optionally overridden by a cost tier route, with its fallback model (3.6).
+func (s *Server) resolveRouteTier(ctx context.Context, taskType, tier string) (*route, error) {
+	ws := ident(ctx).WorkspaceID
+	keys := []string{taskType, "default"}
+	if costTiers[tier] {
+		keys = []string{"tier_" + tier, taskType, "default"}
+	}
 	var rt route
 	var enc []byte
-	ws := ident(ctx).WorkspaceID
-	err := s.db.QueryRow(ctx, `SELECT p.name, p.base_url, p.api_key_enc, r.model FROM model_route r
+	var fbProvider *uuid.UUID
+	var fbModel, picked string
+	err := s.db.QueryRow(ctx, `SELECT r.task_type, p.name, p.base_url, p.api_key_enc, r.model, r.fallback_provider_id, r.fallback_model FROM model_route r
 		JOIN model_provider p ON p.id=r.provider_id
 		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND r.task_type = ANY($2) AND p.status='active'
-		ORDER BY (r.task_type='default') LIMIT 1`, ws, []string{taskType, "default"}).Scan(&rt.ProviderName, &rt.BaseURL, &enc, &rt.Model)
+		ORDER BY array_position($2::text[], r.task_type) LIMIT 1`, ws, keys).Scan(&picked, &rt.ProviderName, &rt.BaseURL, &enc, &rt.Model, &fbProvider, &fbModel)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apiErr(503, "ai_not_configured", "还没有配置模型，请先到「设置 → 模型配置」添加模型并指定默认模型")
 	}
 	if err != nil {
 		return nil, err
 	}
-	rt.APIKey, err = s.box.Decrypt(enc)
-	if err != nil {
+	if rt.APIKey, err = s.box.Decrypt(enc); err != nil {
 		return nil, err
+	}
+	if fbProvider != nil && strings.TrimSpace(fbModel) != "" {
+		var fb route
+		var fenc []byte
+		if err := s.db.QueryRow(ctx, `SELECT name, base_url, api_key_enc FROM model_provider WHERE id=$1 AND workspace_id=$2 AND status='active'`,
+			*fbProvider, ws).Scan(&fb.ProviderName, &fb.BaseURL, &fenc); err == nil {
+			if fb.APIKey, err = s.box.Decrypt(fenc); err == nil {
+				fb.Model = strings.TrimSpace(fbModel)
+				rt.Fallback = &fb
+			}
+		}
 	}
 	return &rt, nil
 }
@@ -87,88 +123,26 @@ func (s *Server) loadLimit(ctx context.Context) aiLimit {
 	return l
 }
 
+func (s *Server) tokensToday(ctx context.Context) int {
+	var used int
+	_ = s.db.QueryRow(ctx, `SELECT coalesce(sum(prompt_tokens+completion_tokens),0) FROM ai_call WHERE created_at >= $1 AND workspace_id=$2`,
+		s.today(), ident(ctx).WorkspaceID).Scan(&used)
+	return used
+}
+
 func (s *Server) checkLimit(ctx context.Context) error {
 	l := s.loadLimit(ctx)
 	if !l.Enabled {
 		return nil
 	}
-	var used int
-	if err := s.db.QueryRow(ctx, `SELECT coalesce(sum(prompt_tokens+completion_tokens),0) FROM ai_call WHERE created_at >= $1`, s.today()).Scan(&used); err != nil {
-		return err
-	}
+	used := s.tokensToday(ctx)
 	if used >= l.DailyTokens {
 		return apiErr(429, "ai_quota_exceeded", fmt.Sprintf("今天的 AI 用量已达到你设置的上限（%d token）。编辑、检查和推送不受影响，可在设置中调整上限。", l.DailyTokens))
 	}
+	if used*10 >= l.DailyTokens*8 {
+		s.notifyBudget(ctx, used, l.DailyTokens)
+	}
 	return nil
-}
-
-func (s *Server) styleContext(ctx context.Context, accountID uuid.UUID, summary string) (string, int, error) {
-	if strings.TrimSpace(summary) != "" {
-		return "风格摘要：\n" + summary, 0, nil
-	}
-	rows, err := s.db.Query(ctx, `SELECT title, content_md FROM style_sample WHERE account_id=$1 AND deleted_at IS NULL
-		ORDER BY created_at DESC LIMIT 10`, accountID)
-	if err != nil {
-		return "", 0, err
-	}
-	defer rows.Close()
-	var b strings.Builder
-	n, budget := 0, 4000
-	for rows.Next() {
-		var title, content string
-		if err := rows.Scan(&title, &content); err != nil {
-			return "", 0, err
-		}
-		excerpt := []rune(content)
-		if len(excerpt) > 800 {
-			excerpt = excerpt[:800]
-		}
-		if budget-len(excerpt) < 0 {
-			break
-		}
-		budget -= len(excerpt)
-		n++
-		fmt.Fprintf(&b, "《%s》片段：\n%s\n\n", title, string(excerpt))
-	}
-	if n == 0 {
-		return "", 0, nil
-	}
-	return "风格样本（只模仿语气、句式和结构，不复用其中的事实）：\n" + b.String(), n, nil
-}
-
-func (s *Server) systemPrompt(ctx context.Context, a *Account, skipStyle bool) (string, map[string]any, error) {
-	p, err := s.loadProfile(ctx, a.ID)
-	if err != nil {
-		return "", nil, err
-	}
-	refs := map[string]any{"profile": true}
-	var b strings.Builder
-	b.WriteString(systemRules)
-	fmt.Fprintf(&b, "\n\n## 账号定位档案\n平台：%s；内容形态：%s；账号名：%s\n", platformNames[a.Platform], formatNames[a.ContentFormat], a.Name)
-	if len(p.PositioningTags) > 0 {
-		fmt.Fprintf(&b, "定位标签：%s\n", strings.Join(p.PositioningTags, "、"))
-	}
-	if p.TargetAudience != "" {
-		fmt.Fprintf(&b, "目标读者：%s\n", p.TargetAudience)
-	}
-	if p.PersonaTone != "" {
-		fmt.Fprintf(&b, "人设与语气：%s\n", p.PersonaTone)
-	}
-	if len(p.BannedWords) > 0 {
-		fmt.Fprintf(&b, "禁用词（不得出现）：%s\n", strings.Join(p.BannedWords, "、"))
-	}
-	if !skipStyle {
-		style, n, err := s.styleContext(ctx, a.ID, p.StyleSummary)
-		if err != nil {
-			return "", nil, err
-		}
-		if style != "" {
-			b.WriteString("\n## 风格参考\n" + style)
-		}
-		refs["style_samples"] = n
-		refs["style_summary"] = p.StyleSummary != ""
-	}
-	return b.String(), refs, nil
 }
 
 // loadTaskInstruction returns the workspace's editable task instruction (FR-M12-05).
@@ -186,60 +160,135 @@ func (s *Server) loadTaskInstruction(ctx context.Context, taskType string) (cont
 	return strings.TrimSpace(content), version
 }
 
-// runAI executes one task, records ai_call, and streams deltas when onDelta is set.
+// retryable reports whether a failure should switch to the fallback model (network, 5xx, 429, first-token timeout).
+func retryable(err error) bool {
+	var ue *ai.UpstreamError
+	if errors.As(err, &ue) {
+		return ue.Status >= 500 || ue.Status == 429
+	}
+	return true
+}
+
+func authFailure(err error) bool {
+	var ue *ai.UpstreamError
+	return errors.As(err, &ue) && (ue.Status == 401 || ue.Status == 403)
+}
+
+var errFirstToken = errors.New("模型超过 15 秒没有返回内容")
+
+// callModel streams one attempt, cancelling it if no content arrives within the first-token timeout.
+func (s *Server) callModel(ctx context.Context, rt *route, p *ContextPack, jsonMode bool, onDelta func(string), streamed *bool) (string, ai.Usage, error) {
+	actx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var got atomic.Bool
+	timer := time.AfterFunc(s.firstTokenTimeout, func() {
+		if !got.Load() {
+			cancel()
+		}
+	})
+	defer timer.Stop()
+	text, usage, err := ai.Stream(actx, s.aiHTTP, ai.Request{
+		BaseURL: rt.BaseURL, APIKey: rt.APIKey, Model: rt.Model, JSON: jsonMode,
+		Messages: []ai.Message{{Role: "system", Content: p.System}, {Role: "user", Content: p.User}},
+	}, func(d string) {
+		got.Store(true)
+		*streamed = true
+		if onDelta != nil {
+			onDelta(d)
+		}
+	})
+	if err != nil && ctx.Err() == nil && actx.Err() != nil && !got.Load() {
+		err = errFirstToken
+	}
+	return text, usage, err
+}
+
+// runAI executes one task, records ai_call (one row per attempt), and streams deltas when onDelta is set.
 func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*aiResult, error) {
 	if err := s.checkLimit(ctx); err != nil {
 		return nil, err
 	}
-	rt, err := s.resolveRoute(ctx, t.Type)
+	rt, err := s.resolveRouteTier(ctx, t.Type, t.Tier)
 	if err != nil {
 		return nil, err
 	}
-	sys, refs, err := s.systemPrompt(ctx, t.Account, t.SkipStyle)
+	pack, err := s.buildContext(ctx, t)
 	if err != nil {
 		return nil, err
 	}
+	s.lastPacks.Store(ident(ctx).WorkspaceID.String()+"/"+t.Type, evalSnapshot{System: pack.System, UserRest: pack.UserRest, JSON: t.JSON})
+	refs := pack.refs()
 	for k, v := range t.Refs {
 		refs[k] = v
 	}
-	user := t.User
-	if instr, ver := s.loadTaskInstruction(ctx, t.Type); instr != "" {
-		user = "## 任务指令\n" + instr + "\n\n" + user
-		refs["prompt_template"] = t.Type
-		refs["prompt_template_version"] = ver
-	}
-	user += "\n\n任务：" + t.Type
-	start := time.Now()
-	text, usage, callErr := ai.Stream(ctx, s.aiHTTP, ai.Request{
-		BaseURL: rt.BaseURL, APIKey: rt.APIKey, Model: rt.Model, JSON: t.JSON,
-		Messages: []ai.Message{{Role: "system", Content: sys}, {Role: "user", Content: user}},
-	}, onDelta)
-	status, errText := "ok", ""
-	if callErr != nil {
-		status, errText = "failed", callErr.Error()
-		if ctx.Err() != nil {
-			status = "cancelled"
+	attempts := []*route{rt}
+	if rt.Fallback != nil {
+		attempts = append(attempts, rt.Fallback)
+		if v, _ := ctx.Value(ctxPreferFallback).(bool); v {
+			attempts = attempts[1:]
 		}
 	}
-	refsJSON, _ := json.Marshal(refs)
-	var callID uuid.UUID
+	failDetail := map[string]any{"fallback_available": rt.Fallback != nil}
 	var accountID *uuid.UUID
 	if t.Account != nil {
 		accountID = &t.Account.ID
 	}
-	if err := s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO ai_call (account_id, work_id, task_type, provider, model, context_refs,
-		prompt_tokens, completion_tokens, latency_ms, status, error) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-		accountID, t.WorkID, t.Type, rt.ProviderName, rt.Model, refsJSON, usage.PromptTokens, usage.CompletionTokens,
-		time.Since(start).Milliseconds(), status, truncate(errText, 500)).Scan(&callID); err != nil {
-		return nil, err
+	tplVersion, _ := refs["prompt_template_version"].(int)
+	if tplVersion == 0 {
+		tplVersion = 1
 	}
-	if callErr != nil {
+	streamed := false
+	for i, cur := range attempts {
+		if cur != rt {
+			refs["fallback_used"] = true
+			refs["fallback_model"] = cur.ProviderName + " / " + cur.Model
+			refs["primary_model"] = rt.ProviderName + " / " + rt.Model
+		}
+		start := time.Now()
+		text, usage, callErr := s.callModel(ctx, cur, pack, t.JSON, onDelta, &streamed)
+		status, errText := "ok", ""
+		if callErr != nil {
+			status, errText = "failed", callErr.Error()
+			if ctx.Err() != nil {
+				status = "cancelled"
+			}
+		}
+		refsJSON, _ := json.Marshal(refs)
+		var callID uuid.UUID
+		if err := s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO ai_call (workspace_id, account_id, work_id, task_type, provider, model, template_version, context_refs,
+			prompt_tokens, completion_tokens, latency_ms, status, error) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+			ident(ctx).WorkspaceID, accountID, t.WorkID, t.Type, cur.ProviderName, cur.Model, tplVersion, refsJSON, usage.PromptTokens, usage.CompletionTokens,
+			time.Since(start).Milliseconds(), status, truncate(errText, 500)).Scan(&callID); err != nil {
+			return nil, err
+		}
+		if callErr == nil {
+			refs["latency_ms"] = time.Since(start).Milliseconds()
+			refs["tokens"] = usage.PromptTokens + usage.CompletionTokens
+			s.afterAISuccess(context.WithoutCancel(ctx), t, pack)
+			return &aiResult{Text: text, Usage: usage, CallID: callID, Refs: refs, FallbackUsed: cur != rt}, nil
+		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, apiErr(502, "ai_upstream_error", "模型服务调用失败："+truncate(callErr.Error(), 300)+"。原有内容没有被覆盖，可以重试。")
+		if authFailure(callErr) {
+			return nil, apiErr(502, "ai_key_invalid", "模型密钥失效或没有权限（"+cur.ProviderName+"），请到「设置 → 模型配置」更新密钥。原有内容没有被改动。").With(failDetail)
+		}
+		if i+1 < len(attempts) && retryable(callErr) && !streamed {
+			slog.Warn("主模型不可用，切换备用模型", "task", t.Type, "err", callErr)
+			continue
+		}
+		return nil, apiErr(502, "ai_upstream_error", "模型服务调用失败："+truncate(callErr.Error(), 300)+"。你的内容没有被改动，可以重试或在模型配置中设置备用模型。").With(failDetail)
 	}
-	return &aiResult{Text: text, Usage: usage, CallID: callID, Refs: refs}, nil
+	return nil, apiErr(502, "ai_upstream_error", "模型服务调用失败").With(failDetail)
+}
+
+func (s *Server) afterAISuccess(ctx context.Context, t aiTask, p *ContextPack) {
+	if len(p.MemoryIDs) > 0 {
+		_, _ = s.db.Exec(ctx, `UPDATE account_memory SET use_count=use_count+1, last_used_at=now() WHERE id = ANY($1)`, p.MemoryIDs)
+	}
+	if p.Instruction != "" && t.Account != nil {
+		s.learnFromInstruction(ctx, t.Account, p.Instruction)
+	}
 }
 
 // runAIJSON runs a structured task, validating the JSON and retrying once (06 文档第 5.8 节).
@@ -266,32 +315,158 @@ func (s *Server) runAIJSON(ctx context.Context, t aiTask, out any, validate func
 	return nil, apiErr(502, "ai_output_invalid", "模型返回的内容格式不正确（已重试一次），请再试一次或更换模型。").With(truncate(fmt.Sprint(last), 200))
 }
 
-// streamAI runs a text task over SSE: delta events, then done with refs.
-func (s *Server) streamAI(w http.ResponseWriter, r *http.Request, t aiTask, onDone func(text string, res *aiResult) (any, error)) error {
-	if err := s.checkLimit(r.Context()); err != nil {
+type jobMeta struct {
+	SectionID *uuid.UUID
+	Label     string
+	Link      string
+	// Ephemeral streams tied to the request (e.g. one-sentence ghost text) skip the task center.
+	Ephemeral bool
+}
+
+func (s *Server) streamAIEphemeral(w http.ResponseWriter, r *http.Request, t aiTask, onDone func(text string, res *aiResult) (any, error)) error {
+	ctx := r.Context()
+	if err := s.checkLimit(ctx); err != nil {
 		return err
 	}
-	if _, err := s.resolveRoute(r.Context(), t.Type); err != nil {
+	if _, err := s.resolveRouteTier(ctx, t.Type, t.Tier); err != nil {
 		return err
 	}
 	sse := newSSE(w)
-	res, err := s.runAI(r.Context(), t, func(d string) { sse.send("delta", map[string]string{"text": d}) })
+	sse.send("stage", map[string]string{"stage": "generating"})
+	res, err := s.runAI(ctx, t, func(d string) { sse.send("delta", map[string]string{"text": d}) })
 	if err != nil {
-		if r.Context().Err() == nil {
-			sse.fail(err)
-		}
+		sse.send("error", asAPIError(err))
 		return nil
 	}
 	var extra any
 	if onDone != nil {
-		extra, err = onDone(res.Text, res)
-		if err != nil {
-			sse.fail(err)
+		if extra, err = onDone(res.Text, res); err != nil {
+			sse.send("error", asAPIError(err))
 			return nil
 		}
 	}
-	sse.send("done", map[string]any{"text": res.Text, "ai_call_id": res.CallID, "usage": res.Usage, "refs": res.Refs, "result": extra})
+	sse.send("done", map[string]any{"text": res.Text, "ai_call_id": res.CallID, "usage": res.Usage, "refs": res.Refs, "result": extra,
+		"fallback_used": res.FallbackUsed})
 	return nil
+}
+
+func (s *Server) streamAI(w http.ResponseWriter, r *http.Request, t aiTask, onDone func(text string, res *aiResult) (any, error)) error {
+	return s.streamAIJob(w, r, t, jobMeta{}, onDone)
+}
+
+type sseMsg struct {
+	name string
+	data any
+}
+
+// streamAIJob runs a text task over SSE backed by an ai_job: if the client disconnects the
+// generation continues and its result is still saved (EX-N-01); only an explicit cancel stops it.
+func (s *Server) streamAIJob(w http.ResponseWriter, r *http.Request, t aiTask, meta jobMeta, onDone func(text string, res *aiResult) (any, error)) error {
+	if meta.Ephemeral {
+		return s.streamAIEphemeral(w, r, t, onDone)
+	}
+	ctx := r.Context()
+	if err := s.checkLimit(ctx); err != nil {
+		return err
+	}
+	if _, err := s.resolveRouteTier(ctx, t.Type, t.Tier); err != nil {
+		return err
+	}
+	if meta.SectionID != nil {
+		if id, running := s.runningSectionJob(ctx, *meta.SectionID); running {
+			return stateInvalid("这一段正在生成中，请等待完成或先停止").With(map[string]any{"job_id": id})
+		}
+	}
+	spec := jobSpec{TaskType: t.Type, WorkID: t.WorkID, SectionID: meta.SectionID, Label: nz(meta.Label, taskLabel(t.Type)), Link: meta.Link}
+	if t.Account != nil {
+		spec.AccountID = &t.Account.ID
+	}
+	jobID, err := s.createJob(ctx, spec, "running")
+	if err != nil {
+		return err
+	}
+	sse := newSSE(w)
+	sse.send("job", map[string]any{"id": jobID})
+	sse.send("stage", map[string]string{"stage": "context"})
+	events := make(chan sseMsg, 8192)
+	push := func(m sseMsg) {
+		select {
+		case events <- m:
+		default:
+		}
+	}
+	var gone atomic.Bool
+	jctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	s.registerJobCancel(jobID, cancel)
+	go func() {
+		defer close(events)
+		defer cancel()
+		defer s.unregisterJobCancel(jobID)
+		first := true
+		res, err := s.runAI(jctx, t, func(d string) {
+			if first {
+				first = false
+				push(sseMsg{"stage", map[string]string{"stage": "generating"}})
+			}
+			push(sseMsg{"delta", map[string]string{"text": d}})
+		})
+		if err != nil {
+			status := "failed"
+			if jctx.Err() != nil {
+				status = "cancelled"
+			}
+			s.finishJob(jobID, status, nil, errText(err), nil)
+			push(sseMsg{"error", asAPIError(err)})
+			return
+		}
+		var extra any
+		if onDone != nil {
+			if extra, err = onDone(res.Text, res); err != nil {
+				s.finishJob(jobID, "failed", nil, errText(err), &res.CallID)
+				push(sseMsg{"error", asAPIError(err)})
+				return
+			}
+		}
+		s.finishJob(jobID, "done", map[string]any{"ai_call_id": res.CallID, "chars": runeLen(res.Text), "text": res.Text, "refs": res.Refs,
+			"fallback_used": res.FallbackUsed}, "", &res.CallID)
+		if gone.Load() {
+			s.notifyJobDone(jctx, spec, true, "")
+		}
+		push(sseMsg{"done", map[string]any{"text": res.Text, "ai_call_id": res.CallID, "usage": res.Usage, "refs": res.Refs,
+			"result": extra, "job_id": jobID, "fallback_used": res.FallbackUsed}})
+	}()
+	for {
+		select {
+		case m, ok := <-events:
+			if !ok {
+				return nil
+			}
+			sse.send(m.name, m.data)
+		case <-ctx.Done():
+			gone.Store(true)
+			return nil
+		}
+	}
+}
+
+func asAPIError(err error) *APIError {
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return ae
+	}
+	if errors.Is(err, context.Canceled) {
+		return apiErr(499, "cancelled", "已停止生成，内容没有被改动")
+	}
+	slog.Error("AI 任务失败", "err", err)
+	return apiErr(500, "internal", "服务器内部错误，请稍后重试")
+}
+
+func errText(err error) string {
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return ae.Message
+	}
+	return truncate(err.Error(), 300)
 }
 
 func truncate(s string, n int) string {
@@ -300,37 +475,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
-}
-
-// materialsBlock lists selected materials so the model can cite only them (D-014).
-func (s *Server) materialsBlock(ctx context.Context, ids []uuid.UUID) (string, []string, error) {
-	if len(ids) == 0 {
-		return "", nil, nil
-	}
-	rows, err := s.db.Query(ctx, `SELECT id, kind, content, source FROM material WHERE id = ANY($1) AND workspace_id=$2 AND deleted_at IS NULL`,
-		ids, ident(ctx).WorkspaceID)
-	if err != nil {
-		return "", nil, err
-	}
-	defer rows.Close()
-	var b strings.Builder
-	var names []string
-	kinds := map[string]string{"experience": "经历", "opinion": "观点", "case": "案例", "data": "数据"}
-	for rows.Next() {
-		var id uuid.UUID
-		var kind, content, source string
-		if err := rows.Scan(&id, &kind, &content, &source); err != nil {
-			return "", nil, err
-		}
-		fmt.Fprintf(&b, "- [素材 id=%s][%s] %s", id, kinds[kind], content)
-		if source != "" {
-			fmt.Fprintf(&b, "（来源：%s）", source)
-		}
-		b.WriteString("\n")
-		names = append(names, truncate(content, 16))
-	}
-	if b.Len() == 0 {
-		return "", nil, nil
-	}
-	return "## 作者提供的素材（唯一的事实来源）\n" + b.String(), names, nil
 }

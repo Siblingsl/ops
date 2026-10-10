@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,37 +12,120 @@ import (
 )
 
 type Topic struct {
-	ID        uuid.UUID  `json:"id"`
-	AccountID uuid.UUID  `json:"account_id"`
-	Title     string     `json:"title"`
-	Angle     string     `json:"angle"`
-	Source    string     `json:"source"`
-	Status    string     `json:"status"`
-	WorkID    *uuid.UUID `json:"work_id"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID              uuid.UUID  `json:"id"`
+	AccountID       uuid.UUID  `json:"account_id"`
+	Title           string     `json:"title"`
+	Angle           string     `json:"angle"`
+	Source          string     `json:"source"`
+	Status          string     `json:"status"`
+	WorkID          *uuid.UUID `json:"work_id"`
+	CreatedAt       time.Time  `json:"created_at"`
+	Audience        string     `json:"audience"`
+	Hook            string     `json:"hook"`
+	NeededMaterials []string   `json:"needed_materials"`
+	Format          string     `json:"format"`
+	PlannedDate     *string    `json:"planned_date"`
+	SeriesID        *uuid.UUID `json:"series_id"`
+	ScoreFit        *int       `json:"score_fit"`
+	ScoreReason     string     `json:"score_reason"`
+	ScoreMaterial   int        `json:"score_material"`
+	ScoreNovelty    int        `json:"score_novelty"`
+	Pinned          bool       `json:"pinned"`
 }
+
+const topicCols = `t.id, t.account_id, t.title, t.angle, t.source, t.status,
+	(SELECT id FROM work WHERE topic_id=t.id AND deleted_at IS NULL ORDER BY created_at LIMIT 1), t.created_at,
+	t.audience, t.hook, t.needed_materials, t.format, to_char(t.planned_date,'YYYY-MM-DD'), t.series_id, t.score_fit, t.score_reason, t.pinned_at IS NOT NULL`
+
+func scanTopic(row interface{ Scan(...any) error }) (Topic, error) {
+	var t Topic
+	err := row.Scan(&t.ID, &t.AccountID, &t.Title, &t.Angle, &t.Source, &t.Status, &t.WorkID, &t.CreatedAt,
+		&t.Audience, &t.Hook, &t.NeededMaterials, &t.Format, &t.PlannedDate, &t.SeriesID, &t.ScoreFit, &t.ScoreReason, &t.Pinned)
+	if t.NeededMaterials == nil {
+		t.NeededMaterials = []string{}
+	}
+	return t, err
+}
+
+var topicFormats = map[string]bool{"": true, "long_article": true, "image_note": true, "comic": true}
 
 func (s *Server) listTopics(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.accountFromPath(r)
 	if err != nil {
 		return err
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT t.id, t.account_id, t.title, t.angle, t.source, t.status,
-		(SELECT id FROM work WHERE topic_id=t.id AND deleted_at IS NULL ORDER BY created_at LIMIT 1), t.created_at
-		FROM topic t WHERE t.account_id=$1 AND t.deleted_at IS NULL ORDER BY t.created_at DESC`, a.ID)
+	ctx := r.Context()
+	rows, err := s.db.Query(ctx, `SELECT `+topicCols+` FROM topic t WHERE t.account_id=$1 AND t.deleted_at IS NULL ORDER BY t.pinned_at DESC NULLS LAST, t.created_at DESC`, a.ID)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 	list := []Topic{}
 	for rows.Next() {
-		var t Topic
-		if err := rows.Scan(&t.ID, &t.AccountID, &t.Title, &t.Angle, &t.Source, &t.Status, &t.WorkID, &t.CreatedAt); err != nil {
+		t, err := scanTopic(rows)
+		if err != nil {
+			rows.Close()
 			return err
 		}
 		list = append(list, t)
 	}
+	rows.Close()
+	if r.URL.Query().Get("scores") == "1" || r.URL.Query().Get("sort") == "score" {
+		s.ruleTopicScores(ctx, a, list)
+	}
+	if r.URL.Query().Get("sort") == "score" {
+		sortTopicsByScore(list)
+	}
 	return ok(w, list)
+}
+
+// ruleTopicScores fills 素材充足度 and 新颖度 for pending topics (EX-C-02); 契合度 comes from topic_score.
+func (s *Server) ruleTopicScores(ctx context.Context, a *Account, list []Topic) {
+	var titles []string
+	rows, err := s.db.Query(ctx, `SELECT title FROM work WHERE account_id=$1 AND deleted_at IS NULL AND title<>'' ORDER BY created_at DESC LIMIT 300`, a.ID)
+	if err == nil {
+		for rows.Next() {
+			var t string
+			if rows.Scan(&t) == nil {
+				titles = append(titles, t)
+			}
+		}
+		rows.Close()
+	}
+	for i := range list {
+		if list[i].Status != "pending" {
+			continue
+		}
+		q := strings.Join([]string{list[i].Title, list[i].Angle, strings.Join(list[i].NeededMaterials, " ")}, " ")
+		hits, _, err := s.retrieveMaterials(ctx, a, q, nil, 10)
+		if err == nil {
+			var sum float64
+			for _, h := range hits {
+				sum += h.Score
+			}
+			list[i].ScoreMaterial = min(100, int(sum*40))
+		}
+		maxSim := 0.0
+		qt := terms(list[i].Title)
+		for _, t := range titles {
+			if sim := jaccard(qt, terms(t)); sim > maxSim {
+				maxSim = sim
+			}
+		}
+		list[i].ScoreNovelty = int((1 - maxSim) * 100)
+	}
+}
+
+func jaccard(a, b map[string]bool) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	inter := 0
+	for t := range a {
+		if b[t] {
+			inter++
+		}
+	}
+	return float64(inter) / float64(len(a)+len(b)-inter)
 }
 
 // similarTitles returns earlier topics or works of the account whose titles look alike (FR-M3-04 提示，不阻止).
@@ -64,6 +149,74 @@ func (s *Server) similarTitles(r *http.Request, accountID uuid.UUID, title strin
 	return out, nil
 }
 
+type topicFields struct {
+	Audience        *string  `json:"audience"`
+	Hook            *string  `json:"hook"`
+	NeededMaterials []string `json:"needed_materials"`
+	Format          *string  `json:"format"`
+	PlannedDate     *string  `json:"planned_date"`
+	SeriesID        *string  `json:"series_id"`
+	ScoreFit        *int     `json:"score_fit"`
+	Pinned          *bool    `json:"pinned"`
+}
+
+func (f *topicFields) validate() error {
+	if f.Format != nil && !topicFormats[*f.Format] {
+		return validation("预计形态只能是长图文、图文笔记或漫画")
+	}
+	if f.PlannedDate != nil && *f.PlannedDate != "" {
+		if _, err := time.Parse("2006-01-02", *f.PlannedDate); err != nil {
+			return validation("计划发布日格式不正确")
+		}
+	}
+	if f.ScoreFit != nil && (*f.ScoreFit < 0 || *f.ScoreFit > 100) {
+		return validation("契合度在 0 到 100 之间")
+	}
+	return nil
+}
+
+func (s *Server) applyTopicFields(ctx context.Context, id, accountID uuid.UUID, f topicFields) error {
+	var planned any = nil
+	setPlanned := f.PlannedDate != nil
+	if setPlanned && *f.PlannedDate != "" {
+		planned = *f.PlannedDate
+	}
+	var needed []string
+	if f.NeededMaterials != nil {
+		needed = cleanList(f.NeededMaterials)
+		if needed == nil {
+			needed = []string{}
+		}
+	}
+	var series any = nil
+	setSeries := f.SeriesID != nil
+	if setSeries && *f.SeriesID != "" {
+		sid, err := uuid.Parse(*f.SeriesID)
+		if err != nil {
+			return validation("系列不存在")
+		}
+		var x uuid.UUID
+		if err := s.db.QueryRow(ctx, `SELECT id FROM topic_series WHERE id=$1 AND account_id=$2`, sid, accountID).Scan(&x); err != nil {
+			return validation("系列不存在")
+		}
+		series = sid
+	}
+	trim := func(p *string, n int) *string {
+		if p == nil {
+			return nil
+		}
+		v := truncateRunes(strings.TrimSpace(*p), n)
+		return &v
+	}
+	_, err := s.db.Exec(ctx, `UPDATE topic SET audience=coalesce($2,audience), hook=coalesce($3,hook), needed_materials=coalesce($4,needed_materials),
+		format=coalesce($5,format), planned_date=CASE WHEN $6 THEN $7::date ELSE planned_date END,
+		series_id=CASE WHEN $8 THEN $9::uuid ELSE series_id END,
+		score_fit=coalesce($10,score_fit), score_reason=CASE WHEN $10::int IS NULL THEN score_reason ELSE '手动调整' END,
+		pinned_at=CASE WHEN $11::bool IS NULL THEN pinned_at WHEN $11::bool THEN coalesce(pinned_at, now()) END, updated_at=now() WHERE id=$1`,
+		id, trim(f.Audience, 100), trim(f.Hook, 200), needed, f.Format, setPlanned, planned, setSeries, series, f.ScoreFit, f.Pinned)
+	return err
+}
+
 // createTopic is the only way a topic enters the pool: one item per request (H-01).
 func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.accountFromPath(r)
@@ -71,9 +224,12 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		Title  string `json:"title"`
-		Angle  string `json:"angle"`
-		Source string `json:"source"`
+		Title       string     `json:"title"`
+		Angle       string     `json:"angle"`
+		Source      string     `json:"source"`
+		AICallID    *uuid.UUID `json:"ai_call_id"`
+		ChoiceIndex *int       `json:"choice_index"`
+		topicFields
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -81,6 +237,9 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 	in.Title = strings.TrimSpace(in.Title)
 	if in.Title == "" {
 		return validation("请填写选题标题")
+	}
+	if err := in.topicFields.validate(); err != nil {
+		return err
 	}
 	switch in.Source {
 	case "ai", "review", "hot":
@@ -91,13 +250,64 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	var t Topic
-	if err := s.db.QueryRow(r.Context(), `INSERT INTO topic (account_id, title, angle, source) VALUES ($1,$2,$3,$4)
-		RETURNING id, account_id, title, angle, source, status, created_at`, a.ID, in.Title, strings.TrimSpace(in.Angle), in.Source).
-		Scan(&t.ID, &t.AccountID, &t.Title, &t.Angle, &t.Source, &t.Status, &t.CreatedAt); err != nil {
+	ctx := r.Context()
+	var id uuid.UUID
+	if err := s.db.QueryRow(ctx, `INSERT INTO topic (account_id, title, angle, source) VALUES ($1,$2,$3,$4) RETURNING id`,
+		a.ID, in.Title, strings.TrimSpace(in.Angle), in.Source).Scan(&id); err != nil {
+		return err
+	}
+	if err := s.applyTopicFields(ctx, id, a.ID, in.topicFields); err != nil {
+		return err
+	}
+	if in.AICallID != nil {
+		s.implicitFeedback(ctx, *in.AICallID, "accepted", in.ChoiceIndex, nil)
+	}
+	t, err := scanTopic(s.db.QueryRow(ctx, `SELECT `+topicCols+` FROM topic t WHERE t.id=$1`, id))
+	if err != nil {
 		return err
 	}
 	return ok(w, map[string]any{"topic": t, "similar": similar})
+}
+
+const topicSuggestFormat = `只输出 JSON：{"topics":[{"title":"选题标题","angle":"一句话切入角度","reason":"推荐理由","audience":"目标读者","hook":"开头抓人的点","needed_materials":["需要的素材"],"format":"long_article|image_note|comic"}]}`
+
+type topicSuggestion struct {
+	Title           string   `json:"title"`
+	Angle           string   `json:"angle"`
+	Reason          string   `json:"reason"`
+	Timeliness      string   `json:"timeliness,omitempty"`
+	Audience        string   `json:"audience"`
+	Hook            string   `json:"hook"`
+	NeededMaterials []string `json:"needed_materials"`
+	Format          string   `json:"format"`
+}
+
+func normalizeSuggestions(list []topicSuggestion, a *Account) {
+	for i := range list {
+		if !topicFormats[list[i].Format] || list[i].Format == "" {
+			list[i].Format = a.ContentFormat
+		}
+		if list[i].NeededMaterials == nil {
+			list[i].NeededMaterials = []string{}
+		}
+	}
+}
+
+func (s *Server) recentTitles(ctx context.Context, accountID uuid.UUID) []string {
+	rows, err := s.db.Query(ctx, `SELECT title FROM (SELECT title, created_at FROM topic WHERE account_id=$1 AND deleted_at IS NULL
+		UNION ALL SELECT title, created_at FROM work WHERE account_id=$1 AND deleted_at IS NULL AND title<>'') x ORDER BY created_at DESC LIMIT 20`, accountID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var recent []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err == nil {
+			recent = append(recent, t)
+		}
+	}
+	return recent
 }
 
 // suggestTopics only returns suggestions; nothing is written to the pool (H-01, HC-01).
@@ -109,37 +319,19 @@ func (s *Server) suggestTopics(w http.ResponseWriter, r *http.Request) error {
 	var in struct {
 		Direction string `json:"direction"`
 	}
-	_ = decode(r, &in)
-	rows, err := s.db.Query(r.Context(), `SELECT title FROM (SELECT title, created_at FROM topic WHERE account_id=$1 AND deleted_at IS NULL
-		UNION ALL SELECT title, created_at FROM work WHERE account_id=$1 AND deleted_at IS NULL AND title<>'') x ORDER BY created_at DESC LIMIT 20`, a.ID)
-	if err != nil {
-		return err
-	}
-	var recent []string
-	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err == nil {
-			recent = append(recent, t)
-		}
-	}
-	rows.Close()
+	_ = decodeOptional(r, &in)
 	user := fmt.Sprintf(`## 选题需求
 方向关键词：%s
 最近的选题和作品标题（避免重复）：
 %s
 
 ## 任务说明
-为这个账号提出不少于 6 个选题建议。每个选题给出标题、切入角度和推荐理由。选题要贴合账号定位和目标读者，与最近的选题不重复；不要追逐无法核实的热点。
+为这个账号提出不少于 6 个选题建议。每个选题给出标题、切入角度、推荐理由、目标读者、钩子、需要的素材和预计形态。选题要贴合账号定位和目标读者，与最近的选题不重复；不要追逐无法核实的热点。
 
 ## 输出格式
-只输出 JSON：{"topics":[{"title":"选题标题","angle":"切入角度","reason":"推荐理由"}]}`,
-		strings.TrimSpace(in.Direction), "- "+strings.Join(recent, "\n- "))
+%s`, strings.TrimSpace(in.Direction), "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "), topicSuggestFormat)
 	var out struct {
-		Topics []struct {
-			Title  string `json:"title"`
-			Angle  string `json:"angle"`
-			Reason string `json:"reason"`
-		} `json:"topics"`
+		Topics []topicSuggestion `json:"topics"`
 	}
 	res, err := s.runAIJSON(r.Context(), aiTask{Type: "topic_suggest", Account: a, User: user, SkipStyle: true}, &out, func() error {
 		if len(out.Topics) < 5 {
@@ -150,6 +342,7 @@ func (s *Server) suggestTopics(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	normalizeSuggestions(out.Topics, a)
 	return ok(w, map[string]any{"suggestions": out.Topics, "refs": res.Refs, "ai_call_id": res.CallID})
 }
 
@@ -165,20 +358,7 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 		Direction string `json:"direction"`
 		Context   string `json:"context"` // 用户粘贴的公开资讯摘要，可选
 	}
-	_ = decode(r, &in)
-	rows, err := s.db.Query(r.Context(), `SELECT title FROM (SELECT title, created_at FROM topic WHERE account_id=$1 AND deleted_at IS NULL
-		UNION ALL SELECT title, created_at FROM work WHERE account_id=$1 AND deleted_at IS NULL AND title<>'') x ORDER BY created_at DESC LIMIT 20`, a.ID)
-	if err != nil {
-		return err
-	}
-	var recent []string
-	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err == nil {
-			recent = append(recent, t)
-		}
-	}
-	rows.Close()
+	_ = decodeOptional(r, &in)
 	ctxText := strings.TrimSpace(in.Context)
 	if ctxText == "" {
 		ctxText = "（用户未粘贴资讯摘要；仅基于账号定位与公开常识给出时效性选题角度，不要编造具体新闻链接或未核实的事件细节。）"
@@ -201,15 +381,10 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 4. 每个选题给出标题、切入角度、推荐理由，以及可选的时效提示（如「本周热点」「常青但当下有讨论」）。
 
 ## 输出格式
-只输出 JSON：{"topics":[{"title":"选题标题","angle":"切入角度","reason":"推荐理由","timeliness":"时效提示"}]}`,
-		strings.TrimSpace(in.Direction), ctxText, "- "+strings.Join(recent, "\n- "))
+只输出 JSON：{"topics":[{"title":"选题标题","angle":"切入角度","reason":"推荐理由","timeliness":"时效提示","audience":"目标读者","hook":"钩子","needed_materials":[],"format":"long_article|image_note|comic"}]}`,
+		strings.TrimSpace(in.Direction), ctxText, "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "))
 	var out struct {
-		Topics []struct {
-			Title      string `json:"title"`
-			Angle      string `json:"angle"`
-			Reason     string `json:"reason"`
-			Timeliness string `json:"timeliness"`
-		} `json:"topics"`
+		Topics []topicSuggestion `json:"topics"`
 	}
 	res, err := s.runAIJSON(r.Context(), aiTask{Type: "topic_hot_suggest", Account: a, User: user, SkipStyle: true}, &out, func() error {
 		if len(out.Topics) < 5 {
@@ -220,6 +395,7 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 	if err != nil {
 		return err
 	}
+	normalizeSuggestions(out.Topics, a)
 	return ok(w, map[string]any{"suggestions": out.Topics, "refs": res.Refs, "ai_call_id": res.CallID})
 }
 
@@ -228,13 +404,16 @@ func (s *Server) updateTopic(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.ownedAccountRow(r.Context(), "topic", id); err != nil {
+	ctx := r.Context()
+	accountID, err := s.ownedAccountRow(ctx, "topic", id)
+	if err != nil {
 		return err
 	}
 	var in struct {
 		Title  *string `json:"title"`
 		Angle  *string `json:"angle"`
 		Status *string `json:"status"`
+		topicFields
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -242,11 +421,21 @@ func (s *Server) updateTopic(w http.ResponseWriter, r *http.Request) error {
 	if in.Status != nil && *in.Status != "pending" && *in.Status != "adopted" && *in.Status != "dropped" {
 		return validation("状态只能是待定、已采用或已放弃")
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE topic SET title=coalesce($2,title), angle=coalesce($3,angle), status=coalesce($4,status), updated_at=now() WHERE id=$1`,
+	if err := in.topicFields.validate(); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE topic SET title=coalesce($2,title), angle=coalesce($3,angle), status=coalesce($4,status), updated_at=now() WHERE id=$1`,
 		id, in.Title, in.Angle, in.Status); err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"ok": true})
+	if err := s.applyTopicFields(ctx, id, accountID, in.topicFields); err != nil {
+		return err
+	}
+	t, err := scanTopic(s.db.QueryRow(ctx, `SELECT `+topicCols+` FROM topic t WHERE t.id=$1`, id))
+	if err != nil {
+		return err
+	}
+	return ok(w, map[string]any{"ok": true, "topic": t})
 }
 
 func (s *Server) deleteTopic(w http.ResponseWriter, r *http.Request) error {
@@ -263,6 +452,8 @@ func (s *Server) deleteTopic(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, map[string]any{"ok": true})
 }
 
+// startWorkFromTopic creates the work; the angle is only a placeholder hint (H-02: the viewpoint is written by the author),
+// and materials matching "需要的素材" are preselected (EX-C-01).
 func (s *Server) startWorkFromTopic(w http.ResponseWriter, r *http.Request) error {
 	id, err := pathID(r, "id")
 	if err != nil {
@@ -278,12 +469,134 @@ func (s *Server) startWorkFromTopic(w http.ResponseWriter, r *http.Request) erro
 		return err
 	}
 	var title, angle string
-	if err := s.db.QueryRow(ctx, `UPDATE topic SET status='adopted', updated_at=now() WHERE id=$1 RETURNING title, angle`, id).Scan(&title, &angle); err != nil {
+	var needed []string
+	var planned *string
+	if err := s.db.QueryRow(ctx, `UPDATE topic SET status='adopted', updated_at=now() WHERE id=$1 RETURNING title, angle, needed_materials, to_char(planned_date,'YYYY-MM-DD')`,
+		id).Scan(&title, &angle, &needed, &planned); err != nil {
 		return err
 	}
 	workID, err := s.insertWork(ctx, a, &id, title, angle)
 	if err != nil {
 		return err
 	}
+	if planned != nil {
+		_, _ = s.db.Exec(ctx, `UPDATE work SET planned_date=$2::date WHERE id=$1`, workID, *planned)
+	}
+	preselected := []uuid.UUID{}
+	seen := map[string]bool{}
+	for _, q := range append(needed, title+" "+angle) {
+		if strings.TrimSpace(q) == "" {
+			continue
+		}
+		hits, _, err := s.retrieveMaterials(ctx, a, q, nil, 3)
+		if err != nil {
+			continue
+		}
+		for _, h := range hits {
+			if h.Score < 0.35 || seen[h.ID] || len(preselected) >= 8 {
+				continue
+			}
+			seen[h.ID] = true
+			if u, err := uuid.Parse(h.ID); err == nil {
+				preselected = append(preselected, u)
+			}
+		}
+	}
+	for _, mid := range preselected {
+		_, _ = s.db.Exec(ctx, `INSERT INTO work_material (work_id, material_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, workID, mid)
+	}
 	return s.writeWork(w, r, workID)
+}
+
+// scoreTopics runs topic_score for up to 20 unscored pending topics in the task center (EX-C-02). It never changes status.
+func (s *Server) scoreTopics(w http.ResponseWriter, r *http.Request) error {
+	a, err := s.accountFromPath(r)
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	rows, err := s.db.Query(ctx, `SELECT id, title, angle FROM topic WHERE account_id=$1 AND deleted_at IS NULL AND status='pending'
+		AND (scored_at IS NULL OR scored_at < updated_at) ORDER BY created_at DESC LIMIT 20`, a.ID)
+	if err != nil {
+		return err
+	}
+	type tp struct {
+		id           uuid.UUID
+		title, angle string
+	}
+	var list []tp
+	for rows.Next() {
+		var x tp
+		if rows.Scan(&x.id, &x.title, &x.angle) == nil {
+			list = append(list, x)
+		}
+	}
+	rows.Close()
+	if len(list) == 0 {
+		return ok(w, map[string]any{"job_id": nil, "count": 0})
+	}
+	jobID, err := s.startBackgroundJob(ctx, jobSpec{TaskType: "topic_score", Label: fmt.Sprintf("选题评分（%d 个）", len(list)), Link: "/a/" + a.ID.String() + "/topics", AccountID: &a.ID},
+		func(jctx context.Context) (any, error) {
+			var b strings.Builder
+			valid := map[string]bool{}
+			for _, x := range list {
+				fmt.Fprintf(&b, "- [选题 id=%s] %s（角度：%s）\n", x.id, x.title, nz(x.angle, "未填"))
+				valid[x.id.String()] = true
+			}
+			user := `## 待评分的选题
+` + b.String() + `
+## 任务说明
+只评估每个选题与账号定位档案的契合度（0–100），并给出一句理由。不评估其他方面。
+
+## 输出格式
+只输出 JSON：{"scores":[{"topic_id":"id","fit":80,"reason":"理由"}]}`
+			var out struct {
+				Scores []struct {
+					TopicID string `json:"topic_id"`
+					Fit     int    `json:"fit"`
+					Reason  string `json:"reason"`
+				} `json:"scores"`
+			}
+			res, err := s.runAIJSON(jctx, aiTask{Type: "topic_score", Account: a, User: user, SkipStyle: true, Tier: "economy"}, &out, func() error {
+				if len(out.Scores) == 0 {
+					return fmt.Errorf("没有评分")
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			n := 0
+			for _, sc := range out.Scores {
+				if !valid[sc.TopicID] {
+					continue
+				}
+				fit := max(0, min(100, sc.Fit))
+				if _, err := s.db.Exec(jctx, `UPDATE topic SET score_fit=$2, score_reason=$3, scored_at=now() WHERE id=$1`, sc.TopicID, fit, truncate(sc.Reason, 200)); err == nil {
+					n++
+				}
+			}
+			return map[string]any{"scored": n, "ai_call_id": res.CallID}, nil
+		})
+	if err != nil {
+		return err
+	}
+	return ok(w, map[string]any{"job_id": jobID, "count": len(list)})
+}
+
+// sortTopicsByScore is used by clients that ask for the combined ranking (契合 0.5 + 素材 0.3 + 新颖 0.2).
+func sortTopicsByScore(list []Topic) {
+	score := func(t Topic) float64 {
+		fit := 50.0
+		if t.ScoreFit != nil {
+			fit = float64(*t.ScoreFit)
+		}
+		return 0.5*fit + 0.3*float64(t.ScoreMaterial) + 0.2*float64(t.ScoreNovelty)
+	}
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].Pinned != list[j].Pinned {
+			return list[i].Pinned
+		}
+		return score(list[i]) > score(list[j])
+	})
 }

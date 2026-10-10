@@ -1,20 +1,21 @@
 import { useQuery } from '@tanstack/react-query'
-import { FileText, GitBranch, ImageIcon, PenLine, Search, Trash2 } from 'lucide-react'
+import { Bookmark, CalendarDays, FileText, GitBranch, ImageIcon, PenLine, Search, Star, Trash2, UserRound, X } from 'lucide-react'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
-import { confirm } from '@/components/dialog'
-import { Button, Card, Empty, IconButton, Input, PageHeader, PageLoading, StatusBadge, Tabs } from '@/components/ui'
-import { del, get } from '@/lib/api'
+import { Button, Card, cn, Empty, IconButton, Input, PageHeader, PageLoading, StatusBadge, Tabs } from '@/components/ui'
+import { del, errorMessage, get, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
-import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
-import type { WorkListItem, WorkStatus } from '@/lib/types'
+import { deleteWithUndo } from '@/lib/undo'
+import { useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
+import type { StarItem, WorkListItem, WorkStatus } from '@/lib/types'
+import { usePrefetchWork, usePrefs, useSavePrefs } from '@/lib/v3'
 import { useCreateWork } from './Dashboard'
 
 type Filter = 'all' | 'drafting' | 'checking' | 'ready' | 'out' | 'published'
 const filterStatus: Record<Filter, WorkStatus[] | null> = {
-  all: null, drafting: ['drafting'], checking: ['checking'], ready: ['ready'], out: ['pushed', 'packed'], published: ['published'],
+  all: null, drafting: ['drafting'], checking: ['checking', 'reviewing'], ready: ['ready'], out: ['pushed', 'packed'], published: ['published'],
 }
 
 export function workLink(w: { id: string; status: WorkStatus }) {
@@ -26,17 +27,89 @@ export function workLink(w: { id: string; status: WorkStatus }) {
   }
 }
 
+function currentWeek(): [string, string] {
+  const d = new Date()
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7))
+  const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6)
+  const iso = (x: Date) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`
+  return [iso(monday), iso(sunday)]
+}
+
+function SavedViews({ current, onApply }: { current: string; onApply: (query: string) => void }) {
+  const prefs = usePrefs()
+  const save = useSavePrefs()
+  const [naming, setNaming] = useState<string | null>(null)
+  const views = prefs.saved_views.filter((v) => v.page === 'works')
+  const add = () => {
+    const name = (naming ?? '').trim()
+    if (!name) return
+    save.mutate({ saved_views: [...prefs.saved_views, { id: crypto.randomUUID(), name: name.slice(0, 20), page: 'works', query: current }] }, {
+      onSuccess: () => { setNaming(null); toast.success('视图已保存') },
+      onError: (e) => toast.error(errorMessage(e)),
+    })
+  }
+  const remove = (id: string) => save.mutate({ saved_views: prefs.saved_views.filter((v) => v.id !== id) })
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-1.5 text-[12.5px]">
+      <Bookmark className="size-3.5 text-mist-400" />
+      {views.map((v) => (
+        <span key={v.id} className={cn('group inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5', v.query === current ? 'border-ink-300 bg-ink-50 text-ink-800' : 'border-mist-200 text-mist-600')}>
+          <button className="cursor-pointer" onClick={() => onApply(v.query)}>{v.name}</button>
+          <button className="cursor-pointer text-mist-400 opacity-0 transition group-hover:opacity-100 hover:text-danger" title="删除视图" onClick={() => remove(v.id)}><X className="size-3" /></button>
+        </span>
+      ))}
+      {naming === null ? (
+        <button className="cursor-pointer rounded-full px-2 py-0.5 text-ink-700 hover:bg-ink-50" onClick={() => setNaming('')}>保存当前筛选为视图</button>
+      ) : (
+        <span className="inline-flex items-center gap-1">
+          <Input autoFocus value={naming} maxLength={20} placeholder="视图名称" className="h-7 w-36 text-[12.5px]"
+            onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); if (e.key === 'Escape') setNaming(null) }} />
+          <Button size="sm" variant="secondary" loading={save.isPending} onClick={add}>保存</Button>
+          <Button size="sm" variant="ghost" onClick={() => setNaming(null)}>取消</Button>
+        </span>
+      )}
+    </div>
+  )
+}
+
 export default function Works() {
+  const prefetch = usePrefetchWork()
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
-  const [filter, setFilter] = useState<Filter>('all')
-  const [q, setQ] = useState('')
+  const { data: me } = useMe()
+  const [params, setParams] = useSearchParams()
+  const filter = (params.get('status') as Filter) || 'all'
+  const q = params.get('q') ?? ''
+  const onlyStar = params.get('star') === '1'
+  const onlyMine = params.get('mine') === '1'
+  const thisWeek = params.get('week') === '1'
+  const setParam = (k: string, v: string) => {
+    const p = new URLSearchParams(params)
+    if (v && v !== 'all') p.set(k, v)
+    else p.delete(k)
+    setParams(p, { replace: true })
+  }
+  const setFilter = (f: Filter) => setParam('status', f)
+  const setQ = (v: string) => setParam('q', v)
   const [derive, setDerive] = useState<WorkListItem | null>(null)
   const inv = useInvalidate()
   const create = useCreateWork(acc?.id)
   const { data, isLoading } = useQuery({ queryKey: ['works', acc?.id, q], queryFn: () => get<WorkListItem[]>(`/accounts/${acc!.id}/works?q=${encodeURIComponent(q)}`), enabled: !!acc })
+  const stars = useQuery({ queryKey: ['stars'], queryFn: () => get<StarItem[]>('/stars'), staleTime: 60_000 })
   if (!acc) return <PageLoading />
-  const list = data ?? []
+  const starSet = new Set((stars.data ?? []).filter((s) => s.object_type === 'work').map((s) => s.object_id))
+  const toggleStar = async (w: WorkListItem) => {
+    try {
+      if (starSet.has(w.id)) await del(`/stars/work/${w.id}`)
+      else await post('/stars', { object_type: 'work', object_id: w.id })
+      void stars.refetch()
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
+  const [weekStart, weekEnd] = currentWeek()
+  const list = (data ?? []).filter((w) => (!onlyStar || starSet.has(w.id)) && (!onlyMine || (!!me?.user_id && w.assignee_id === me.user_id))
+    && (!thisWeek || (!!w.planned_date && w.planned_date.slice(0, 10) >= weekStart && w.planned_date.slice(0, 10) <= weekEnd)))
   const shown = list.filter((w) => !filterStatus[filter] || filterStatus[filter]!.includes(w.status))
   const count = (f: Filter) => list.filter((w) => !filterStatus[f] || filterStatus[f]!.includes(w.status)).length
   const remove = async (w: WorkListItem) => {
@@ -44,10 +117,7 @@ export default function Works() {
       w.derived_count > 0 && `这篇作品有 ${w.derived_count} 篇衍生作品，它们不受影响，只会显示「源作品已删除」。`,
       (w.status === 'pushed' || w.status === 'published') && acc.platform === 'wechat_mp' && '公众号草稿箱里的草稿不会被删除。',
     ].filter(Boolean)
-    if (!(await confirm({ title: `删除「${w.title || '未命名作品'}」？`, desc: <>{extra.map((x) => <p key={String(x)} className="mb-1">{x}</p>)}<p>删除后可以在回收站中恢复（保留 30 天）。</p></>, confirmText: '删除', danger: true }))) return
-    await del(`/works/${w.id}`)
-    inv(['works', acc.id])
-    toast.success('已移到回收站')
+    await deleteWithUndo('work', w.id, `「${w.title || '未命名作品'}」`, () => inv(['works', acc.id]), extra.join(''))
   }
   return (
     <div className="animate-fade-in">
@@ -61,11 +131,26 @@ export default function Works() {
           { value: 'out', label: acc.platform === 'wechat_mp' ? '已进草稿箱' : '发布包', count: count('out') },
           { value: 'published', label: '已发布', count: count('published') },
         ]} />
-        <div className="relative ml-auto w-64">
+        <div className="flex items-center gap-1.5">
+          <button onClick={() => setParam('star', onlyStar ? '' : '1')}
+            className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[12.5px]', onlyStar ? 'border-gamboge-300 bg-gamboge-50 text-gamboge-800' : 'border-mist-200 text-mist-600 hover:border-mist-300')}>
+            <Star className="size-3.5" />收藏
+          </button>
+          <button onClick={() => setParam('mine', onlyMine ? '' : '1')}
+            className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[12.5px]', onlyMine ? 'border-ink-300 bg-ink-50 text-ink-800' : 'border-mist-200 text-mist-600 hover:border-mist-300')}>
+            <UserRound className="size-3.5" />我负责的
+          </button>
+          <button onClick={() => setParam('week', thisWeek ? '' : '1')} title="计划发布日在本周（周一至周日）的作品"
+            className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[12.5px]', thisWeek ? 'border-ink-300 bg-ink-50 text-ink-800' : 'border-mist-200 text-mist-600 hover:border-mist-300')}>
+            <CalendarDays className="size-3.5" />本周要发
+          </button>
+        </div>
+        <div className="relative ml-auto w-full sm:w-64">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist-400" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索标题" className="pl-9" />
         </div>
       </div>
+      <SavedViews current={params.toString()} onApply={(query) => setParams(new URLSearchParams(query), { replace: true })} />
       {isLoading ? <PageLoading /> : shown.length === 0 ? (
         <Card><Empty icon={<FileText className="size-5" />} title="这里还没有作品" desc={canWrite ? '从选题池开始，或者直接新建一篇。' : '当前为观察者，只能浏览已有作品。'} action={canWrite ? <Button variant="primary" onClick={() => create()}>新建作品</Button> : undefined} /></Card>
       ) : (
@@ -74,7 +159,7 @@ export default function Works() {
             const thumb = w.cover_asset_id ?? w.first_asset_id
             return (
               <div key={w.id} className="group flex items-center gap-4 px-5 py-3.5 transition hover:bg-mist-50/70">
-                <Link to={workLink(w)} className="flex min-w-0 flex-1 items-center gap-4">
+                <Link to={workLink(w)} {...prefetch.hover(w.id)} className="flex min-w-0 flex-1 items-center gap-4">
                   <div className="flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-mist-100 text-mist-300">
                     {thumb ? <img src={`/api/v1/assets/${thumb}/file`} className="size-full object-cover" alt="" /> : <ImageIcon className="size-5" />}
                   </div>
@@ -85,10 +170,17 @@ export default function Works() {
                       <span>{w.section_count} 段 · {w.char_count.toLocaleString()} 字</span>
                       {w.source_title !== null && w.source_work_id && <span className="inline-flex items-center gap-1 text-ink-600"><GitBranch className="size-3" />派生自《{w.source_title || '未命名'}》</span>}
                       {w.derived_count > 0 && <span className="inline-flex items-center gap-1"><GitBranch className="size-3" />{w.derived_count} 篇衍生</span>}
+                      {!!w.todos_total && (w.todos_done ?? 0) < w.todos_total && (
+                        <span className="rounded bg-gamboge-50 px-1.5 py-0.5 text-gamboge-700">后台待办 {w.todos_done ?? 0}/{w.todos_total}</span>
+                      )}
                       <span>{relTime(w.updated_at)}更新</span>
                     </div>
                   </div>
                 </Link>
+                <IconButton label={starSet.has(w.id) ? '取消收藏' : '收藏'} onClick={() => toggleStar(w)}
+                  className={cn(starSet.has(w.id) ? 'text-gamboge-500' : 'opacity-0 transition group-hover:opacity-100')}>
+                  <Star className={cn('size-4', starSet.has(w.id) && 'fill-current')} />
+                </IconButton>
                 {canWrite && (
                   <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
                     <IconButton label="派生到其他平台" onClick={() => setDerive(w)}><GitBranch className="size-4" /></IconButton>

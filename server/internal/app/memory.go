@@ -199,13 +199,28 @@ func (s *Server) deleteStyleSample(w http.ResponseWriter, r *http.Request) error
 }
 
 type Material struct {
-	ID        uuid.UUID  `json:"id"`
-	AccountID *uuid.UUID `json:"account_id"`
-	Kind      string     `json:"kind"`
-	Content   string     `json:"content"`
-	Source    string     `json:"source"`
-	Tags      []string   `json:"tags"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID         uuid.UUID  `json:"id"`
+	AccountID  *uuid.UUID `json:"account_id"`
+	Kind       string     `json:"kind"`
+	Content    string     `json:"content"`
+	Source     string     `json:"source"`
+	Tags       []string   `json:"tags"`
+	ValidUntil *string    `json:"valid_until"`
+	UsageCount int        `json:"usage_count"`
+	LastUsedAt *time.Time `json:"last_used_at"`
+	Expired    bool       `json:"expired"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+const materialCols = `m.id, m.account_id, m.kind, m.content, m.source, m.tags, to_char(m.valid_until, 'YYYY-MM-DD'),
+	(SELECT count(*) FROM work_material wm JOIN work w ON w.id=wm.work_id AND w.deleted_at IS NULL WHERE wm.material_id=m.id),
+	(SELECT max(w.updated_at) FROM work_material wm JOIN work w ON w.id=wm.work_id AND w.deleted_at IS NULL WHERE wm.material_id=m.id),
+	coalesce(m.valid_until < current_date, false), m.created_at`
+
+func scanMaterial(row interface{ Scan(...any) error }) (Material, error) {
+	var m Material
+	err := row.Scan(&m.ID, &m.AccountID, &m.Kind, &m.Content, &m.Source, &m.Tags, &m.ValidUntil, &m.UsageCount, &m.LastUsedAt, &m.Expired, &m.CreatedAt)
+	return m, err
 }
 
 var materialKinds = map[string]bool{"experience": true, "opinion": true, "case": true, "data": true}
@@ -220,30 +235,38 @@ func (s *Server) listMaterials(w http.ResponseWriter, r *http.Request) error {
 	if _, err := s.account(ctx, accountID); err != nil {
 		return err
 	}
-	sql := `SELECT id, account_id, kind, content, source, tags, created_at FROM material
-		WHERE workspace_id=$1 AND deleted_at IS NULL AND `
+	sql := `SELECT ` + materialCols + ` FROM material m
+		WHERE m.workspace_id=$1 AND m.deleted_at IS NULL AND `
 	switch q.Get("scope") {
 	case "account":
-		sql += `account_id=$2`
+		sql += `m.account_id=$2`
 	case "shared":
-		sql += `account_id IS NULL AND $2::uuid IS NOT NULL`
+		sql += `m.account_id IS NULL AND $2::uuid IS NOT NULL`
 	default:
-		sql += `(account_id=$2 OR account_id IS NULL)`
+		sql += `(m.account_id=$2 OR m.account_id IS NULL)`
 	}
 	args := []any{ident(ctx).WorkspaceID, accountID}
 	if kw := strings.TrimSpace(q.Get("q")); kw != "" {
-		sql += ` AND (content ILIKE $3 OR source ILIKE $3 OR array_to_string(tags, ' ') ILIKE $3)`
+		sql += ` AND (m.content ILIKE $3 OR m.source ILIKE $3 OR array_to_string(m.tags, ' ') ILIKE $3)`
 		args = append(args, "%"+kw+"%")
 	}
-	rows, err := s.db.Query(ctx, sql+` ORDER BY created_at DESC LIMIT 500`, args...)
+	switch q.Get("usage") {
+	case "unused":
+		sql += ` AND NOT EXISTS (SELECT 1 FROM work_material wm WHERE wm.material_id=m.id)`
+	case "used":
+		sql += ` AND EXISTS (SELECT 1 FROM work_material wm WHERE wm.material_id=m.id)`
+	case "expired":
+		sql += ` AND m.valid_until < current_date`
+	}
+	rows, err := s.db.Query(ctx, sql+` ORDER BY m.created_at DESC LIMIT 500`, args...)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	list := []Material{}
 	for rows.Next() {
-		var m Material
-		if err := rows.Scan(&m.ID, &m.AccountID, &m.Kind, &m.Content, &m.Source, &m.Tags, &m.CreatedAt); err != nil {
+		m, err := scanMaterial(rows)
+		if err != nil {
 			return err
 		}
 		list = append(list, m)
@@ -251,12 +274,47 @@ func (s *Server) listMaterials(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, list)
 }
 
+// materialUsage lists the works that used one material (EX-D-04).
+func (s *Server) materialUsage(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	if err := s.ownedMaterial(ctx, id); err != nil {
+		return err
+	}
+	rows, err := s.db.Query(ctx, `SELECT w.id, w.account_id, w.title, w.status, w.updated_at FROM work_material wm
+		JOIN work w ON w.id=wm.work_id AND w.deleted_at IS NULL WHERE wm.material_id=$1 ORDER BY w.updated_at DESC LIMIT 50`, id)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type use struct {
+		WorkID    uuid.UUID `json:"work_id"`
+		AccountID uuid.UUID `json:"account_id"`
+		Title     string    `json:"title"`
+		Status    string    `json:"status"`
+		At        time.Time `json:"at"`
+	}
+	list := []use{}
+	for rows.Next() {
+		var u use
+		if err := rows.Scan(&u.WorkID, &u.AccountID, &u.Title, &u.Status, &u.At); err != nil {
+			return err
+		}
+		list = append(list, u)
+	}
+	return ok(w, list)
+}
+
 type materialInput struct {
-	AccountID *uuid.UUID `json:"account_id"`
-	Kind      string     `json:"kind"`
-	Content   string     `json:"content"`
-	Source    string     `json:"source"`
-	Tags      []string   `json:"tags"`
+	AccountID  *uuid.UUID `json:"account_id"`
+	Kind       string     `json:"kind"`
+	Content    string     `json:"content"`
+	Source     string     `json:"source"`
+	Tags       []string   `json:"tags"`
+	ValidUntil *string    `json:"valid_until"`
 }
 
 func (s *Server) validMaterial(ctx context.Context, in *materialInput) error {
@@ -266,6 +324,16 @@ func (s *Server) validMaterial(ctx context.Context, in *materialInput) error {
 	}
 	if !materialKinds[in.Kind] {
 		return validation("素材类型只能是经历、观点、案例或数据")
+	}
+	if in.ValidUntil != nil {
+		v := strings.TrimSpace(*in.ValidUntil)
+		if v == "" {
+			in.ValidUntil = nil
+		} else if _, err := time.Parse("2006-01-02", v); err != nil {
+			return validation("有效期格式应为 YYYY-MM-DD")
+		} else {
+			in.ValidUntil = &v
+		}
 	}
 	if in.AccountID != nil {
 		if _, err := s.account(ctx, *in.AccountID); err != nil {
@@ -284,12 +352,17 @@ func (s *Server) createMaterial(w http.ResponseWriter, r *http.Request) error {
 	if err := s.validMaterial(ctx, &in); err != nil {
 		return err
 	}
-	var m Material
-	if err := s.db.QueryRow(ctx, `INSERT INTO material (workspace_id, account_id, kind, content, source, tags) VALUES ($1,$2,$3,$4,$5,$6)
-		RETURNING id, account_id, kind, content, source, tags, created_at`, ident(ctx).WorkspaceID, in.AccountID, in.Kind, in.Content,
-		strings.TrimSpace(in.Source), cleanList(in.Tags)).Scan(&m.ID, &m.AccountID, &m.Kind, &m.Content, &m.Source, &m.Tags, &m.CreatedAt); err != nil {
+	var id uuid.UUID
+	if err := s.db.QueryRow(ctx, `INSERT INTO material (workspace_id, account_id, kind, content, source, tags, valid_until) VALUES ($1,$2,$3,$4,$5,$6,$7::date)
+		RETURNING id`, ident(ctx).WorkspaceID, in.AccountID, in.Kind, in.Content,
+		strings.TrimSpace(in.Source), cleanList(in.Tags), in.ValidUntil).Scan(&id); err != nil {
 		return err
 	}
+	m, err := scanMaterial(s.db.QueryRow(ctx, `SELECT `+materialCols+` FROM material m WHERE m.id=$1`, id))
+	if err != nil {
+		return err
+	}
+	s.markEmbeddingStale(ctx, "material", id)
 	return ok(w, m)
 }
 
@@ -314,10 +387,11 @@ func (s *Server) updateMaterial(w http.ResponseWriter, r *http.Request) error {
 	if err := s.validMaterial(ctx, &in); err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE material SET account_id=$2, kind=$3, content=$4, source=$5, tags=$6, updated_at=now() WHERE id=$1`,
-		id, in.AccountID, in.Kind, in.Content, strings.TrimSpace(in.Source), cleanList(in.Tags)); err != nil {
+	if _, err := s.db.Exec(ctx, `UPDATE material SET account_id=$2, kind=$3, content=$4, source=$5, tags=$6, valid_until=$7::date, updated_at=now() WHERE id=$1`,
+		id, in.AccountID, in.Kind, in.Content, strings.TrimSpace(in.Source), cleanList(in.Tags), in.ValidUntil); err != nil {
 		return err
 	}
+	s.markEmbeddingStale(ctx, "material", id)
 	return ok(w, map[string]any{"ok": true})
 }
 

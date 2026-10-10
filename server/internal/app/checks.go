@@ -50,6 +50,7 @@ var allowedResolutions = map[string][]string{
 	"ai_disclosure": {"acknowledged"},
 	"similarity":    {"acknowledged", "modified"},
 	"ad_law":        {"acknowledged", "modified"},
+	"stale":         {"verified", "modified"},
 }
 
 var pendingMarker = regexp.MustCompile(`【待核实[^】]*】`)
@@ -190,27 +191,10 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 	}
 
 	// 敏感词：基础词库 + 自定义词库 + 账号禁用词（Aho-Corasick 级别的规模用逐词查找即可）。
-	type word struct{ w, source string }
-	var words []word
-	rows, err := s.db.Query(ctx, `SELECT word, source FROM sensitive_word WHERE workspace_id=$1`, ident(ctx).WorkspaceID)
+	words, err := s.checkWords(ctx, w.AccountID)
 	if err != nil {
 		return nil, err
 	}
-	for rows.Next() {
-		var x word
-		if err := rows.Scan(&x.w, &x.source); err == nil {
-			words = append(words, x)
-		}
-	}
-	rows.Close()
-	p, err := s.loadProfile(ctx, w.AccountID)
-	if err != nil {
-		return nil, err
-	}
-	for _, b := range p.BannedWords {
-		words = append(words, word{b, "account"})
-	}
-	sourceLabel := map[string]string{"base": "通用词库", "custom": "自定义词库", "account": "账号禁用词"}
 	hits := 0
 	for _, f := range workFields(w) {
 		for _, wd := range words {
@@ -239,7 +223,6 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 	items = append(items, CheckItem{Category: "ai_disclosure", Message: "AI 声明", Detail: disclosure, Location: map[string]any{}, fingerprint: "ai_disclosure|" + w.Platform})
 
 	// FR-M9-07 广告法极限词（提示项，需确认）
-	adWords := []string{"最", "第一", "唯一", "首个", "顶级", "极致", "绝对", "100%", "永久", "国家级", "世界级"}
 	adHits := 0
 	for _, f := range workFields(w) {
 		for _, wd := range adWords {
@@ -271,7 +254,56 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 				fingerprint: fingerprint("similarity", title, w.Title)})
 		}
 	}
+
+	// EX-D-04 引用的数据类素材已过有效期
+	srows, err := s.db.Query(ctx, `SELECT DISTINCT m.id, m.content, to_char(m.valid_until,'YYYY-MM-DD') FROM material m
+		WHERE m.valid_until IS NOT NULL AND m.valid_until < $2::date AND m.deleted_at IS NULL
+		AND (m.id IN (SELECT material_id FROM work_material WHERE work_id=$1)
+		  OR m.id IN (SELECT unnest(material_ids) FROM work_section WHERE work_id=$1 AND deleted_at IS NULL))`, w.ID, s.now().In(s.loc).Format("2006-01-02"))
+	if err == nil {
+		for srows.Next() {
+			var id uuid.UUID
+			var content, until string
+			if srows.Scan(&id, &content, &until) == nil {
+				items = append(items, CheckItem{Category: "stale", MatchedText: truncate(content, 60), Location: map[string]any{"material_id": id.String()},
+					Message: "数据可能已过时：" + truncate(content, 30), Detail: "这条素材的有效期到 " + until + "，请核实数据是否仍然准确，或换用新数据。",
+					fingerprint: fingerprint("stale", id.String(), until)})
+			}
+		}
+		srows.Close()
+	}
 	return items, nil
+}
+
+// adWords are the 广告法极限词 shared by the formal check and live lint.
+var adWords = []string{"最", "第一", "唯一", "首个", "顶级", "极致", "绝对", "100%", "永久", "国家级", "世界级"}
+
+type checkWord struct{ w, source string }
+
+var sourceLabel = map[string]string{"base": "通用词库", "custom": "自定义词库", "account": "账号禁用词", "memory": "AI 记忆中的避免用词"}
+
+// checkWords is the word list used by both the formal check and /lint, so their results agree (EX-E-09).
+func (s *Server) checkWords(ctx context.Context, accountID uuid.UUID) ([]checkWord, error) {
+	var words []checkWord
+	rows, err := s.db.Query(ctx, `SELECT word, source FROM sensitive_word WHERE workspace_id=$1`, ident(ctx).WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var x checkWord
+		if err := rows.Scan(&x.w, &x.source); err == nil {
+			words = append(words, x)
+		}
+	}
+	rows.Close()
+	p, err := s.loadProfile(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range p.BannedWords {
+		words = append(words, checkWord{b, "account"})
+	}
+	return words, nil
 }
 
 func (s *Server) similarWorks(ctx context.Context, w *Work) ([]string, error) {
@@ -374,8 +406,14 @@ func (s *Server) startCheck(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if factStatus == "pending" {
-		bg := context.WithValue(context.Background(), ctxMember, ident(ctx))
-		go s.runFactCheck(bg, wk, m.Account, runID)
+		_, err := s.startBackgroundJob(ctx, jobSpec{TaskType: "fact_flag", Label: "事实核查" + titleOr(wk.Title), Link: "/works/" + m.ID.String() + "/check",
+			AccountID: &m.Account.ID, WorkID: &m.ID}, func(jctx context.Context) (any, error) {
+			s.runFactCheck(jctx, wk, m.Account, runID)
+			return map[string]any{"run_id": runID}, nil
+		})
+		if err != nil {
+			return err
+		}
 	}
 	return s.writeLatestCheck(w, r, m.ID)
 }
@@ -593,7 +631,11 @@ func (s *Server) resolveCheckItem(w http.ResponseWriter, r *http.Request) error 
 		t := s.now()
 		resolvedAt = &t
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE check_item SET resolution=$2, resolved_at=$3 WHERE id=$1`, id, in.Resolution, resolvedAt); err != nil {
+	var resolver *uuid.UUID
+	if resolvedAt != nil {
+		resolver = &ident(ctx).UserID
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE check_item SET resolution=$2, resolved_at=$3, resolved_by=$4 WHERE id=$1`, id, in.Resolution, resolvedAt, resolver); err != nil {
 		return err
 	}
 	s.audit(ctx, "check_resolve", "check_item", id.String(), "ok", map[string]any{"work_id": m.ID.String(), "resolution": in.Resolution})
@@ -628,9 +670,119 @@ func (s *Server) completeCheck(w http.ResponseWriter, r *http.Request) error {
 	if _, err := s.db.Exec(ctx, `UPDATE check_run SET completed_at=now() WHERE id=$1`, run.ID); err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE work SET status='ready', updated_at=now() WHERE id=$1 AND status IN ('checking','drafting')`, m.ID); err != nil {
+	var status string
+	var reviewer *uuid.UUID
+	if err := s.db.QueryRow(ctx, `UPDATE work SET status = CASE WHEN review_required AND reviewed_at IS NULL THEN 'reviewing' ELSE 'ready' END, updated_at=now()
+		WHERE id=$1 AND status IN ('checking','drafting') RETURNING status, reviewer_id`, m.ID).Scan(&status, &reviewer); err != nil && err != pgx.ErrNoRows {
 		return err
 	}
 	s.audit(ctx, "check_complete", "work", m.ID.String(), "ok", map[string]any{"items": run.Total})
+	if status == "reviewing" {
+		id := ident(ctx)
+		s.notifyWorkspace(ctx, id.WorkspaceID, []string{"owner"}, "review_request", titleOr(m.Title)+"等待审阅", "检查已完成，审阅通过后才能推送或生成发布包",
+			"/works/"+m.ID.String()+"/check", "review:"+m.ID.String()+":"+fmt.Sprint(m.Revision))
+		if reviewer != nil && *reviewer != id.UserID {
+			s.notify(ctx, id.WorkspaceID, *reviewer, "review_request", titleOr(m.Title)+"等待你审阅", "", "/works/"+m.ID.String()+"/check", "")
+		}
+	}
 	return s.writeWork(w, r, m.ID)
+}
+
+// approveReview is H-09: an owner (or the assigned reviewer) confirms a reviewing work before push / pack (HC-19).
+func (s *Server) approveReview(w http.ResponseWriter, r *http.Request) error {
+	m, err := s.workMetaFromPath(r)
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	id := ident(ctx)
+	if m.Status != "reviewing" {
+		return stateInvalid("这篇作品不在待审阅状态")
+	}
+	var reviewer, assignee *uuid.UUID
+	_ = s.db.QueryRow(ctx, `SELECT reviewer_id, assignee_id FROM work WHERE id=$1`, m.ID).Scan(&reviewer, &assignee)
+	isReviewer := reviewer != nil && *reviewer == id.UserID && (assignee == nil || *assignee != id.UserID)
+	if id.Role != "owner" && !isReviewer && !(id.SystemAdmin && id.AdminOverride) {
+		return apiErr(403, "forbidden", "只有工作区所有者或指定的审阅人可以审阅通过（负责人不能审阅自己负责的作品）")
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE work SET status='ready', reviewed_by=$2, reviewed_at=now(), updated_at=now() WHERE id=$1 AND status='reviewing'`,
+		m.ID, id.UserID); err != nil {
+		return err
+	}
+	s.audit(ctx, "review_approve", "work", m.ID.String(), "ok", map[string]any{"checkpoint": "H-09"})
+	return s.writeWork(w, r, m.ID)
+}
+
+// fixSuggest proposes 1–3 rewrites of the single hit sentence of one check item (EX-H-02).
+// There is no batch variant; applying a fix changes the content, so the item must be checked and confirmed again (HC-18).
+func (s *Server) fixSuggest(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	var workID uuid.UUID
+	var category, matched, message, detail string
+	var locJSON []byte
+	if err := s.db.QueryRow(ctx, `SELECT cr.work_id, ci.category, ci.matched_text, ci.message, ci.detail, ci.location FROM check_item ci
+		JOIN check_run cr ON cr.id=ci.check_run_id WHERE ci.id=$1`, id).Scan(&workID, &category, &matched, &message, &detail, &locJSON); err != nil {
+		return err
+	}
+	if category != "sensitive" && category != "ad_law" && category != "fact" {
+		return validation("这一类检查项不支持 AI 修复建议")
+	}
+	m, err := s.workMeta(ctx, workID)
+	if err != nil {
+		return err
+	}
+	var loc map[string]any
+	_ = json.Unmarshal(locJSON, &loc)
+	var paragraph string
+	if sid, okID := loc["section_id"].(string); okID {
+		_ = s.db.QueryRow(ctx, `SELECT content_md FROM work_section WHERE id=$1 AND work_id=$2`, sid, workID).Scan(&paragraph)
+	}
+	sentence := matched
+	if category != "fact" {
+		sentence = detail
+		if i := strings.Index(detail, "原文："); i >= 0 {
+			sentence = detail[i+len("原文："):]
+		}
+		if paragraph != "" && matched != "" {
+			if i := strings.Index(paragraph, matched); i >= 0 {
+				sentence = sentenceAround(paragraph, i, len(matched))
+			}
+		}
+	}
+	if strings.TrimSpace(sentence) == "" {
+		return validation("找不到命中的句子，请在原文中手动修改")
+	}
+	user := fmt.Sprintf(`## 检查项
+命中原因：%s
+命中内容：%s
+命中的句子：%s
+所在段落：
+%s
+
+## 任务说明
+只改写命中的这一句，给出 1 到 3 个候选，保持原意，去掉或替换有问题的表达；不新增事实。
+
+## 输出格式
+只输出 JSON：{"variants":[{"text":"改写后的句子","note":"改了什么"}]}`, message, matched, sentence, truncate(nz(paragraph, "（无）"), 1500))
+	var out struct {
+		Variants []variant `json:"variants"`
+	}
+	res, err := s.runAIJSON(ctx, aiTask{Type: "fix_suggest", Account: m.Account, WorkID: &m.ID, User: user, SkipStyle: true, Tier: "economy"}, &out, func() error {
+		if len(out.Variants) == 0 {
+			return fmt.Errorf("没有候选")
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(out.Variants) > 3 {
+		out.Variants = out.Variants[:3]
+	}
+	return ok(w, map[string]any{"item_id": id, "sentence": sentence, "section_id": loc["section_id"], "variants": out.Variants,
+		"ai_call_id": res.CallID, "refs": res.Refs})
 }

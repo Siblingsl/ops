@@ -1,12 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, BookOpenCheck, CheckCircle2, Circle, ClipboardCheck, Cpu, FilePen, KeyRound, Lightbulb, PenLine, Send, Sparkles, TrendingUp, UploadCloud } from 'lucide-react'
+import { ArrowRight, BookOpenCheck, Brain, CalendarDays, CheckCircle2, Circle, ClipboardCheck, Compass, Cpu, FilePen, HeartPulse, KeyRound, Lightbulb, PenLine, Send, Sparkles, TrendingUp, UploadCloud } from 'lucide-react'
+import { useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Button, Card, cn, Empty, PageHeader, PageLoading, StatusBadge } from '@/components/ui'
-import { errorMessage, get, post } from '@/lib/api'
+import { confirm } from '@/components/dialog'
+import { Button, Card, cn, Empty, Notice, PageHeader, PageLoading, StatusBadge } from '@/components/ui'
+import { del, errorMessage, get, post } from '@/lib/api'
 import { fmtNum, relTime } from '@/lib/format'
-import { useCanWrite, useCurrentAccount } from '@/lib/session'
-import type { Account, AILimit, Work, WorkStatus } from '@/lib/types'
+import { useAccounts, useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
+import type { Account, AILimit, HealthItem, NextAction, Work, WorkStatus } from '@/lib/types'
+import { usePendingMemories, usePrefetchWork } from '@/lib/v3'
 
 interface Todo { work_id: string; title: string; status: WorkStatus; kind: string; hint: string; at: string }
 interface Dash {
@@ -66,17 +69,150 @@ function Stat({ label, value, sub, icon, to }: { label: string; value: React.Rea
   return to ? <Link to={to}>{body}</Link> : body
 }
 
+function NextActions({ accountId }: { accountId: string }) {
+  const { data: all } = useQuery({ queryKey: ['next-actions', accountId], queryFn: () => get<NextAction[]>(`/accounts/${accountId}/next-actions`), staleTime: 30_000 })
+  const data = all?.filter((a) => a.kind !== 'memory')
+  if (!data || data.length === 0) return null
+  return (
+    <Card className="mb-6 overflow-hidden border-ink-100">
+      <div className="flex items-center gap-2 border-b border-ink-100 bg-ink-50/50 px-5 py-3">
+        <Compass className="size-4 text-ink-600" />
+        <h3 className="text-[14px] font-semibold text-mist-900">现在最值得做的</h3>
+        <span className="text-xs text-mist-400">按截止日、进度和数据提醒排序</span>
+      </div>
+      <ul className="divide-y divide-mist-100">
+        {data.map((a, i) => (
+          <li key={a.kind + i}>
+            <Link to={a.link} className="group flex items-center gap-3 px-5 py-3 transition hover:bg-mist-50">
+              <span className={cn('flex size-6 shrink-0 items-center justify-center rounded-full text-[12px] font-bold', i === 0 ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-500')}>{i + 1}</span>
+              <span className="min-w-0 flex-1 text-[13.5px] text-mist-800 group-hover:text-ink-700">{a.text}</span>
+              <span className="shrink-0 rounded-full border border-mist-200 px-2.5 py-0.5 text-[12px] text-mist-600 group-hover:border-ink-300 group-hover:text-ink-700">{a.action}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  )
+}
+
+function HealthAndRhythm({ accountId }: { accountId: string }) {
+  const health = useQuery({ queryKey: ['health', accountId], queryFn: () => get<{ score: number; items: HealthItem[] }>(`/accounts/${accountId}/health`), staleTime: 60_000 })
+  const rhythm = useQuery({ queryKey: ['rhythm', accountId], queryFn: () => get<{ week_start: string; published: number; planned: number; past_avg: number }>(`/accounts/${accountId}/rhythm`), staleTime: 60_000 })
+  return (
+    <div className="mb-8 grid gap-4 lg:grid-cols-3">
+      <Card className="p-5 lg:col-span-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <HeartPulse className="size-4 text-ink-600" />
+            <h3 className="text-[14px] font-semibold text-mist-900">AI 对这个账号的了解程度</h3>
+          </div>
+          {health.data && <span className="font-display text-[22px] font-bold tabular-nums text-mist-900">{health.data.score}<span className="text-sm text-mist-400"> / 100</span></span>}
+        </div>
+        <div className="mt-3 grid gap-x-6 gap-y-2.5 sm:grid-cols-2">
+          {(health.data?.items ?? []).map((it) => (
+            <Link key={it.key} to={it.link} className="group block">
+              <div className="flex items-center justify-between text-[12.5px]">
+                <span className="text-mist-700 group-hover:text-ink-700">{it.label}</span>
+                <span className="tabular-nums text-mist-400">{it.score}/{it.max}</span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-mist-100">
+                <div className={cn('h-full rounded-full', it.score >= it.max ? 'bg-success' : 'bg-ink-500')} style={{ width: `${Math.round((it.score / it.max) * 100)}%` }} />
+              </div>
+              {it.hint && <p className="mt-0.5 text-[11.5px] text-mist-400">{it.hint}</p>}
+            </Link>
+          ))}
+        </div>
+      </Card>
+      <Card className="p-5">
+        <div className="flex items-center gap-2">
+          <CalendarDays className="size-4 text-ink-600" />
+          <h3 className="text-[14px] font-semibold text-mist-900">本周节奏</h3>
+        </div>
+        {rhythm.data && (
+          <>
+            <div className="mt-3 flex items-end gap-6">
+              <div><div className="font-display text-[28px] font-bold tabular-nums text-mist-900">{rhythm.data.published}</div><div className="text-xs text-mist-500">本周已发布</div></div>
+              <div><div className="font-display text-[28px] font-bold tabular-nums text-mist-500">{rhythm.data.planned}</div><div className="text-xs text-mist-500">本周计划</div></div>
+            </div>
+            <p className="mt-3 text-[12.5px] leading-relaxed text-mist-500">
+              过去 4 周平均每周 {rhythm.data.past_avg.toFixed(1)} 篇。
+              {rhythm.data.published < rhythm.data.past_avg ? '本周略慢于平时，可以去日历排一下计划发布日。' : '节奏不错，保持住。'}
+            </p>
+            <Link to={`/a/${accountId}/calendar`} className="mt-2 inline-flex items-center gap-1 text-[12.5px] text-ink-700 hover:underline">打开内容日历 <ArrowRight className="size-3.5" /></Link>
+          </>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+function DemoCard({ acc, owner }: { acc: Account; owner: boolean }) {
+  const inv = useInvalidate()
+  const nav = useNavigate()
+  const { data: accounts } = useAccounts()
+  const hasDemo = (accounts ?? []).some((a) => a.is_demo)
+  if (!owner) return null
+  if (acc.is_demo) {
+    return (
+      <Notice tone="gamboge" className="mb-6">
+        这是示例账号，里面的档案、素材和作品都是演示数据，可以随便试。试完后
+        <button type="button" className="mx-1 cursor-pointer font-medium underline" onClick={async () => {
+          if (!(await confirm({ title: '清除示例数据？', desc: '会删除示例账号及其全部内容，你自己的账号不受影响。', confirmText: '清除', danger: true }))) return
+          try {
+            await del('/demo')
+            await inv(['accounts'])
+            toast.success('示例数据已清除')
+            nav('/')
+          } catch (e) {
+            toast.error(errorMessage(e))
+          }
+        }}>一键清除示例数据</button>
+      </Notice>
+    )
+  }
+  if (hasDemo) return null
+  return (
+    <button type="button" className="mb-6 flex w-full cursor-pointer items-center gap-3 rounded-xl border border-dashed border-mist-300 px-5 py-3 text-left text-[13px] text-mist-600 transition hover:border-ink-300 hover:bg-ink-50/40"
+      onClick={async () => {
+        try {
+          const r = await post<{ account_id: string }>('/demo')
+          await inv(['accounts'])
+          toast.success('已导入示例账号')
+          nav(`/a/${r.account_id}`)
+        } catch (e) {
+          toast.error(errorMessage(e))
+        }
+      }}>
+      <Sparkles className="size-4 text-gamboge-500" />
+      <span className="flex-1">想先看看完整流程？导入一个示例账号（含档案、风格样本、素材和一篇进行中的作品），随时可一键清除。</span>
+      <ArrowRight className="size-4 text-mist-400" />
+    </button>
+  )
+}
+
 export default function Dashboard() {
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
+  const { data: me } = useMe()
   const { data, isLoading } = useQuery({ queryKey: ['dashboard', acc?.id], queryFn: () => get<Dash>(`/accounts/${acc!.id}/dashboard`), enabled: !!acc })
   const create = useCreateWork(acc?.id)
+  const prefetch = usePrefetchWork()
+  const pendingMemories = usePendingMemories(acc?.id)
+  const health = useQuery({ queryKey: ['health', acc?.id], queryFn: () => get<{ score: number; items: HealthItem[] }>(`/accounts/${acc!.id}/health`), enabled: !!acc, staleTime: 60_000 })
+  const firstTodos = (data?.todos ?? []).slice(0, 3).map((t) => t.work_id).join(',')
+  useEffect(() => {
+    if (firstTodos) for (const id of firstTodos.split(',')) void prefetch.load(id)
+  }, [firstTodos]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!acc || isLoading || !data) return <PageLoading />
   const s = data.setup
   const setupItems = [
     { done: s.ai, label: '配置模型', desc: 'AI 功能需要至少一个模型', to: '/settings/models', icon: <Cpu className="size-4" /> },
-    { done: s.profile, label: '填写定位档案', desc: '定位、读者、语气', to: `/a/${acc.id}/profile`, icon: <BookOpenCheck className="size-4" /> },
-    { done: s.samples, label: '补充风格样本', desc: '建议 3 篇以上过往作品', to: `/a/${acc.id}/profile?tab=samples`, icon: <PenLine className="size-4" /> },
+    ...(health.data
+      ? health.data.items.map((it) => ({ done: it.score >= it.max, label: it.label, desc: it.hint || `${it.score}/${it.max}`, to: it.link, icon: <HeartPulse className="size-4" /> }))
+      : [
+          { done: s.profile, label: '填写定位档案', desc: '定位、读者、语气', to: `/a/${acc.id}/profile`, icon: <BookOpenCheck className="size-4" /> },
+          { done: s.samples, label: '补充风格样本', desc: '建议 3 篇以上过往作品', to: `/a/${acc.id}/profile?tab=samples`, icon: <PenLine className="size-4" /> },
+        ]),
     ...(acc.platform === 'wechat_mp' ? [{ done: s.credential, label: '连接公众号', desc: 'AppID、AppSecret 和 IP 白名单', to: '/settings/accounts', icon: <KeyRound className="size-4" /> }] : []),
   ]
   const pendingSetup = setupItems.filter((i) => !i.done)
@@ -95,6 +231,16 @@ export default function Dashboard() {
           <Button variant="primary" icon={<PenLine className="size-4" />} onClick={() => create()}>新建作品</Button>
         </> : undefined}
       />
+
+      {pendingMemories > 0 && (
+        <Link to={`/a/${acc.id}/profile?tab=memory`} className="mb-5 block">
+          <Notice tone="gamboge" icon={<Brain className="size-4" />} className="transition hover:border-gamboge-300">
+            AI 学到了 {pendingMemories} 条新偏好，去确认 →<span className="ml-1 text-[12px] opacity-75">确认前不会影响任何生成</span>
+          </Notice>
+        </Link>
+      )}
+      <DemoCard acc={acc} owner={me?.role === 'owner'} />
+      <NextActions accountId={acc.id} />
 
       {pendingSetup.length > 0 && (
         <Card className="mb-6 overflow-hidden">
@@ -127,6 +273,8 @@ export default function Dashboard() {
         <Stat label="今日 AI 用量" value={fmtNum(data.tokens_today)} sub={data.ai_limit.enabled ? `上限 ${fmtNum(data.ai_limit.daily_tokens)} token` : '未设置每日上限'} icon={<Cpu />} to="/settings/usage" />
       </div>
 
+      <HealthAndRhythm accountId={acc.id} />
+
       <div className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-4">
         {groups.map((g) => {
           const items = data.todos.filter((t) => g.kinds.includes(t.kind))
@@ -143,7 +291,7 @@ export default function Dashboard() {
                 <ul className="divide-y divide-mist-100">
                   {items.slice(0, 6).map((t) => (
                     <li key={t.work_id + t.kind}>
-                      <Link to={todoLink(t, acc.id)} className="group flex items-center gap-3 px-5 py-3 transition hover:bg-mist-50">
+                      <Link to={todoLink(t, acc.id)} {...prefetch.hover(t.work_id)} className="group flex items-center gap-3 px-5 py-3 transition hover:bg-mist-50">
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-[13.5px] font-medium text-mist-800 group-hover:text-ink-700">{t.title || '未命名作品'}</div>
                           <div className="mt-0.5 flex items-center gap-2 text-xs text-mist-500"><StatusBadge status={t.status} /> {t.hint} · {relTime(t.at)}</div>
@@ -159,7 +307,8 @@ export default function Dashboard() {
         })}
       </div>
       {data.todos.length === 0 && pendingSetup.length === 0 && (
-        <Empty className="mt-6" icon={<PenLine className="size-5" />} title="一切就绪" desc="从选题池挑一个题目，或者直接新建作品开始写。" />
+        <Empty className="mt-6" icon={<PenLine className="size-5" />} title="一切就绪" desc="从选题池挑一个题目，或者直接新建作品开始写。"
+          action={<Link to={`/a/${acc.id}/topics`}><Button variant="primary" icon={<Lightbulb className="size-4" />}>去选题池</Button></Link>} />
       )}
     </div>
   )

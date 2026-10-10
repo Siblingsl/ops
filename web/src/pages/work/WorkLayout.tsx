@@ -1,23 +1,143 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Check, GitBranch, History, Lock, RotateCcw, Save } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ArrowLeft, CalendarDays, Check, ChevronDown, ChevronUp, GitBranch, History, Layers, Lock, Maximize2, Minimize2, RotateCcw, Save, Star } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
 import { confirm, Drawer } from '@/components/dialog'
-import { Badge, Button, cn, Notice, PageLoading, PlatformMark, StatusBadge } from '@/components/ui'
-import { ApiError, errorMessage, get, post } from '@/lib/api'
+import { Badge, Button, cn, Field, Input, Notice, PageLoading, PlatformMark, Select, StatusBadge, Switch } from '@/components/ui'
+import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { rememberAccount, useCanWrite } from '@/lib/session'
-import type { Work } from '@/lib/types'
+import type { Platform, StarItem, Work, WorkspaceMember, WorkStatus } from '@/lib/types'
+import { rememberRecent, useCustomTheme, usePrefs, useWorkCmd } from '@/lib/v3'
 
 export interface WorkCtx {
   work: Work
   setWork: (w: Work) => void
   patchWork: (p: Partial<Work> | ((w: Work) => Partial<Work>)) => void
   refresh: () => Promise<unknown>
+  focus: boolean
+  setFocus: (v: boolean) => void
+  presence: Presence[]
+  reportSection: (id: string | null) => void
+  reportEditing: (id: string) => void
 }
 export const useWork = () => useOutletContext<WorkCtx>()
+
+interface Presence { user_id: string; username: string; section_id: string | null; editing: boolean; at: string }
+
+/** PlanPopover holds fields that never count as content edits: 计划发布日, 目标字数, 负责人, 审阅 (H-09). */
+function PlanPopover({ work, onSaved }: { work: Work; onSaved: (w: Work) => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const canWrite = useCanWrite()
+  const members = useQuery({ queryKey: ['members'], queryFn: () => get<WorkspaceMember[]>('/workspaces/current/members'), enabled: open })
+  useEffect(() => {
+    const h = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false)
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [])
+  const save = async (p: Record<string, unknown>) => {
+    try {
+      onSaved(await patch<Work>(`/works/${work.id}`, p))
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
+  const assignee = members.data?.find((m) => m.user_id === work.assignee_id)
+  return (
+    <div ref={ref} className="relative">
+      <Button size="sm" variant="ghost" icon={<CalendarDays className="size-4" />} onClick={() => setOpen((v) => !v)}>
+        <span className="hidden xl:inline">{work.planned_date ? `计划 ${work.planned_date.slice(5)}` : '计划'}</span>
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 w-72 animate-fade-in space-y-3 rounded-xl border border-mist-200 bg-white p-4 shadow-pop">
+          <Field label="计划发布日" hint="只用于提醒和日历，不会自动发布">
+            <Input type="date" disabled={!canWrite} value={work.planned_date ?? ''} onChange={(e) => save({ planned_date: e.target.value })} />
+          </Field>
+          <Field label="目标字数" hint="编辑器里会显示进度">
+            <Input type="number" min={0} step={100} disabled={!canWrite} defaultValue={work.target_chars ?? ''} placeholder="不设"
+              onBlur={(e) => { const v = Number(e.target.value || 0); if (v !== (work.target_chars ?? 0)) void save({ target_chars: v }) }} />
+          </Field>
+          <Field label="负责人">
+            <Select disabled={!canWrite} value={work.assignee_id ?? ''} onChange={(e) => save({ assignee_id: e.target.value })}>
+              <option value="">未指定</option>
+              {(members.data ?? []).filter((m) => m.status === 'active').map((m) => <option key={m.user_id} value={m.user_id}>{m.username}</option>)}
+              {work.assignee_id && !assignee && <option value={work.assignee_id}>当前负责人</option>}
+            </Select>
+          </Field>
+          <label className="flex items-start gap-2 text-[13px] text-mist-700">
+            <Switch checked={!!work.review_required} disabled={!canWrite} onChange={(v) => save({ review_required: v })} />
+            <span>发布前需要审阅<span className="block text-[11.5px] text-mist-400">检查确认后进入「待审阅」，由所有者或指定的审阅人审阅通过后才能写入草稿或生成发布包（H-09）。</span></span>
+          </label>
+          {work.review_required && (
+            <Field label="审阅人" hint="负责人不能审阅自己负责的作品；不指定时由所有者审阅">
+              <Select disabled={!canWrite} value={work.reviewer_id ?? ''} onChange={(e) => save({ reviewer_id: e.target.value })}>
+                <option value="">所有者</option>
+                {(members.data ?? []).filter((m) => m.status === 'active' && m.role !== 'viewer' && m.user_id !== work.assignee_id)
+                  .map((m) => <option key={m.user_id} value={m.user_id}>{m.username}</option>)}
+                {work.reviewer_id && !members.data?.some((m) => m.user_id === work.reviewer_id) && <option value={work.reviewer_id}>当前审阅人</option>}
+              </Select>
+            </Field>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface FamilyMember { id: string; source_id: string | null; title: string; status: WorkStatus; platform: Platform; account: string; depth: number; needs_sync: boolean }
+const FAMILY_KEY = 'ops.family.collapsed'
+
+/** FamilyStrip shows the root work and every derived version (any depth) side by side at the top of the work (EX-F-04). */
+function FamilyStrip({ work }: { work: Work }) {
+  const related = !!work.source || work.derived.length > 0
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(FAMILY_KEY) === '1')
+  const fam = useQuery({
+    queryKey: ['work', work.id, 'family', work.revision],
+    queryFn: () => get<FamilyMember[]>(`/works/${work.id}/family`),
+    enabled: related,
+    staleTime: 30_000,
+  })
+  const list = fam.data ?? []
+  if (!related || list.length < 2) return null
+  const toggle = () => {
+    localStorage.setItem(FAMILY_KEY, collapsed ? '0' : '1')
+    setCollapsed(!collapsed)
+  }
+  return (
+    <div className="border-t border-mist-100 bg-mist-50/60 px-5 py-2">
+      <button type="button" onClick={toggle} className="flex cursor-pointer items-center gap-1.5 text-[12px] text-mist-500 hover:text-mist-800">
+        <Layers className="size-3.5" />版本族 · {list.length} 个版本
+        {list.some((m) => m.needs_sync) && <Badge tone="gamboge">有版本需要同步</Badge>}
+        {collapsed ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
+      </button>
+      {!collapsed && (
+        <ul className="scrollbar-thin mt-2 flex gap-2 overflow-x-auto pb-1">
+          {list.map((m) => (
+            <li key={m.id} className="w-52 shrink-0">
+              <Link to={`/works/${m.id}`}
+                className={cn('block rounded-lg border bg-white p-2.5 text-[12.5px] transition hover:border-ink-300', m.id === work.id ? 'border-ink-400 ring-1 ring-ink-200' : 'border-mist-200')}>
+                <div className="flex items-center gap-1.5">
+                  <PlatformMark platform={m.platform} />
+                  <span className="truncate text-mist-500">{m.account}</span>
+                  {m.depth === 0 ? <Badge tone="gray" className="ml-auto">源</Badge> : m.depth > 1 && <span className="ml-auto text-[10.5px] text-mist-400">第 {m.depth} 层</span>}
+                </div>
+                <div className="mt-1 truncate font-medium text-mist-800">{m.title || '未命名'}</div>
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <StatusBadge status={m.status} />
+                  {m.needs_sync && <Badge tone="gamboge">需要同步</Badge>}
+                  {m.id === work.id && <span className="ml-auto text-[11px] text-ink-600">当前</span>}
+                </div>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
 
 const reasonLabel: Record<string, string> = { auto: '自动保存', ai: 'AI 生成', manual: '手动保存', check: '提交检查', restore: '恢复版本' }
 
@@ -95,10 +215,68 @@ export default function WorkLayout() {
   const q = useQuery({ queryKey: ['work', workId], queryFn: () => get<Work>(`/works/${workId}`) })
   const [versions, setVersions] = useState(false)
   const [derive, setDerive] = useState(false)
+  const prefs = usePrefs()
+  const [focus, setFocusState] = useState(prefs.focus_default)
+  const [presence, setPresence] = useState<Presence[]>([])
+  const sectionRef = useRef<string | null>(null)
+  useCustomTheme(q.data?.account_id)
+  const stars = useQuery({ queryKey: ['stars'], queryFn: () => get<StarItem[]>('/stars'), staleTime: 60_000 })
+  const starred = (stars.data ?? []).some((s) => s.object_type === 'work' && s.object_id === workId)
   useEffect(() => {
-    if (q.data) rememberAccount(q.data.account_id)
-  }, [q.data])
-  if (q.isLoading) return <PageLoading />
+    if (q.data) {
+      rememberAccount(q.data.account_id)
+      rememberRecent({ type: 'work', title: q.data.title || '未命名作品', link: `/works/${q.data.id}` })
+    }
+  }, [q.data?.id, q.data?.title]) // eslint-disable-line react-hooks/exhaustive-deps
+  const setFocus = useCallback((v: boolean) => {
+    setFocusState(v)
+    window.dispatchEvent(new CustomEvent('ops:focus', { detail: v }))
+  }, [])
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('ops:focus', { detail: focus }))
+    return () => { window.dispatchEvent(new CustomEvent('ops:focus', { detail: false })) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'F11' || ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f')) {
+        e.preventDefault()
+        setFocus(!focus)
+      }
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [focus, setFocus])
+  useWorkCmd((c) => {
+    if (c.cmd === 'versions') setVersions(true)
+    if (c.cmd === 'derive') setDerive(true)
+    if (c.cmd === 'focus') setFocus(!focus)
+  })
+  // Presence (S3 协同提示): heartbeat every 20s; the server forgets entries after 30s.
+  useEffect(() => {
+    if (!workId) return
+    let alive = true
+    const beat = () => post<Presence[]>(`/works/${workId}/presence`, { section_id: sectionRef.current }).then((l) => alive && setPresence(l)).catch(() => undefined)
+    void beat()
+    const t = window.setInterval(beat, 20_000)
+    return () => {
+      alive = false
+      window.clearInterval(t)
+      void post(`/works/${workId}/presence`, { leave: true }).catch(() => undefined)
+    }
+  }, [workId])
+  const reportSection = useCallback((id: string | null) => {
+    if (sectionRef.current === id) return
+    sectionRef.current = id
+    void post<Presence[]>(`/works/${workId}/presence`, { section_id: id }).then(setPresence).catch(() => undefined)
+  }, [workId])
+  const editedAt = useRef(0)
+  const reportEditing = useCallback((id: string) => {
+    if (sectionRef.current === id && Date.now() - editedAt.current < 10_000) return
+    sectionRef.current = id
+    editedAt.current = Date.now()
+    void post<Presence[]>(`/works/${workId}/presence`, { section_id: id, editing: true }).then(setPresence).catch(() => undefined)
+  }, [workId])
+  if (q.isLoading) return <PageLoading variant="editor" />
   if (q.isError || !q.data) {
     return <div className="p-10"><Notice tone="red">{q.error instanceof ApiError ? q.error.message : '作品不存在或已删除'}</Notice></div>
   }
@@ -106,9 +284,20 @@ export default function WorkLayout() {
   const setWork = (w: Work) => qc.setQueryData(['work', workId], w)
   const patchWork = (p: Partial<Work> | ((w: Work) => Partial<Work>)) =>
     qc.setQueryData<Work>(['work', workId], (w) => (w ? { ...w, ...(typeof p === 'function' ? p(w) : p) } : w))
-  const ctx: WorkCtx = { work, setWork, patchWork, refresh: () => q.refetch() }
+  const ctx: WorkCtx = { work, setWork, patchWork, refresh: () => q.refetch(), focus, setFocus, presence, reportSection, reportEditing }
   const wx = work.platform === 'wechat_mp'
-  const order = ['drafting', 'checking', 'ready', 'pushed', 'packed', 'published']
+  const todos = work.post_push_todos ?? []
+  const todosDone = todos.filter((t) => t.done).length
+  const order = ['drafting', 'checking', 'reviewing', 'ready', 'pushed', 'packed', 'published']
+  const toggleStar = async () => {
+    try {
+      if (starred) await del(`/stars/work/${work.id}`)
+      else await post('/stars', { object_type: 'work', object_id: work.id })
+      void stars.refetch()
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
   const reached = (s: string) => order.indexOf(work.status) >= order.indexOf(s)
   const comic = work.content_format === 'comic'
   const steps = [
@@ -142,12 +331,31 @@ export default function WorkLayout() {
             <div className="text-[11.5px] text-mist-500">{work.account_name}</div>
           </div>
           <span className="shrink-0"><StatusBadge status={work.status} /></span>
+          {todos.length > 0 && todosDone < todos.length && (
+            <Link to={`/works/${work.id}/${work.platform === 'xhs' ? 'pack' : 'push'}`} title="在平台后台还要完成的事项"
+              className="hidden shrink-0 rounded-full bg-gamboge-50 px-2 py-0.5 text-[11.5px] text-gamboge-700 hover:bg-gamboge-100 sm:inline">
+              后台待办 {todosDone}/{todos.length}
+            </Link>
+          )}
           {work.source && (
             <Link to={`/works/${work.source.id}`} className="hidden min-w-0 max-w-[220px] shrink items-center gap-1 truncate text-xs text-ink-600 hover:underline 2xl:inline-flex">
               <GitBranch className="size-3" />{work.source.deleted ? '源作品已删除' : `源：${work.source.title || '未命名'}`}
             </Link>
           )}
-          <nav className="mx-auto hidden shrink-0 items-center gap-1 lg:flex">
+          <button type="button" onClick={toggleStar} title={starred ? '取消收藏' : '收藏'} className={cn('shrink-0 cursor-pointer rounded p-1', starred ? 'text-gamboge-500' : 'text-mist-300 hover:text-gamboge-500')}>
+            <Star className="size-4" fill={starred ? 'currentColor' : 'none'} />
+          </button>
+          {presence.length > 0 && (
+            <div className="hidden shrink-0 items-center gap-1 md:flex" title={presence.map((p) => `${p.username} 正在查看`).join('\n')}>
+              <div className="flex -space-x-1.5">
+                {presence.slice(0, 3).map((p) => (
+                  <span key={p.user_id} className="flex size-6 items-center justify-center rounded-full border-2 border-white bg-gamboge-400 text-[10px] font-bold text-mist-900">{p.username[0]?.toUpperCase()}</span>
+                ))}
+              </div>
+              <span className="text-[11.5px] text-mist-500">{presence.length === 1 ? `${presence[0].username} 也在这里` : `${presence.length} 人也在这里`}</span>
+            </div>
+          )}
+          <nav className={cn('mx-auto hidden shrink-0 items-center gap-1', !focus && 'lg:flex')}>
             {steps.map((s, i) => (
               <NavLink key={s.to} to={s.to} end={s.end}
                 className={({ isActive }) => cn('flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] transition',
@@ -162,11 +370,14 @@ export default function WorkLayout() {
               </NavLink>
             ))}
           </nav>
-          <div className="ml-auto flex shrink-0 items-center gap-1 lg:ml-0">
-            <Button size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}>版本</Button>
-            {canWrite && <Button size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}>派生</Button>}
+          <div className={cn('ml-auto flex shrink-0 items-center gap-1', !focus && 'lg:ml-0')}>
+            <PlanPopover work={work} onSaved={setWork} />
+            <Button size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
+            {canWrite && <Button size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}><span className="hidden xl:inline">派生</span></Button>}
+            <Button size="sm" variant="ghost" title="专注模式（F11）" icon={focus ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />} onClick={() => setFocus(!focus)} />
           </div>
         </div>
+        {!focus && <FamilyStrip work={work} />}
         {!canWrite && (
           <div className="border-t border-mist-100 bg-mist-50 px-5 py-2 text-[13px] text-mist-600">观察者只读：可浏览作品，不能编辑、检查确认、派生或推送。</div>
         )}

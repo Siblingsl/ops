@@ -1,15 +1,19 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { marked } from 'marked'
-import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, PenLine, RefreshCw, ShieldCheck, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowRight, CheckCircle2, FileText, Loader2, PenLine, RefreshCw, ShieldCheck, Sparkles, UserCheck, XCircle } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { sendFeedback } from '@/components/refs'
+import { aiError } from '@/lib/ai-error'
 import { Badge, Button, Card, cn, HumanGate, Notice, PageLoading, Textarea } from '@/components/ui'
 import { ApiError, errorMessage, get, patch, post } from '@/lib/api'
 import { htmlStats, renderWechat } from '@/lib/render'
-import { useCanWrite } from '@/lib/session'
-import type { CheckItem, CheckRun, ComicPanel, Section, Work } from '@/lib/types'
+import { useCanWrite, useMe } from '@/lib/session'
+import type { CheckItem, CheckRun, ComicPanel, Section, Variant, Work } from '@/lib/types'
 import { useWork } from './WorkLayout'
+
+interface FixResp { item_id: string; sentence: string; section_id: string | null; variants: Variant[]; ai_call_id: string }
 
 const catMeta: Record<CheckItem['category'], { label: string; tone: 'gray' | 'red' | 'blue' | 'gamboge' | 'ink' }> = {
   format: { label: '格式', tone: 'gray' },
@@ -18,6 +22,7 @@ const catMeta: Record<CheckItem['category'], { label: string; tone: 'gray' | 're
   ai_disclosure: { label: 'AI 声明', tone: 'gamboge' },
   similarity: { label: '同质化', tone: 'ink' },
   ad_law: { label: '广告法', tone: 'ink' },
+  stale: { label: '数据过期', tone: 'gamboge' },
 }
 
 const options: Record<string, { value: string; label: string }[]> = {
@@ -26,6 +31,7 @@ const options: Record<string, { value: string; label: string }[]> = {
   ai_disclosure: [{ value: 'acknowledged', label: '已知悉，发布时会声明' }],
   similarity: [{ value: 'acknowledged', label: '已知悉' }, { value: 'modified', label: '已修改' }],
   ad_law: [{ value: 'acknowledged', label: '已知悉' }, { value: 'modified', label: '已修改' }],
+  stale: [{ value: 'verified', label: '已核实仍准确' }, { value: 'modified', label: '已换用新数据' }],
 }
 
 function escapeRe(s: string) {
@@ -124,7 +130,7 @@ function PanelView({ panel, items, active, onPick, onSaved, editable }: {
   )
 }
 
-function SectionView({ section, index, items, active, onPick, onSaved, editable }: {
+function SectionView({ section, index, items, active, onPick, onSaved, editable, editSignal }: {
   section: Section
   index: number
   items: CheckItem[]
@@ -132,11 +138,26 @@ function SectionView({ section, index, items, active, onPick, onSaved, editable 
   onPick: (id: string) => void
   onSaved: () => void
   editable: boolean
+  editSignal?: { text: string; n: number } | null
 }) {
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(section.content_md)
   const [saving, setSaving] = useState(false)
+  const ta = useRef<HTMLTextAreaElement>(null)
   useEffect(() => setText(section.content_md), [section.content_md])
+  // 就地修复（EX-H-01）：打开本段编辑并选中命中的文字。
+  useEffect(() => {
+    if (!editSignal || !editable) return
+    setEditing(true)
+    window.setTimeout(() => {
+      const el = ta.current
+      if (!el) return
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const i = editSignal.text ? el.value.indexOf(editSignal.text) : -1
+      el.focus()
+      if (i >= 0) el.setSelectionRange(i, i + editSignal.text.length)
+    }, 50)
+  }, [editSignal?.n]) // eslint-disable-line react-hooks/exhaustive-deps
   const marks = items.filter((i) => i.matched_text).map((i) => ({ text: i.matched_text, id: i.id, tone: i.category === 'fact' ? 'blue' : i.category === 'format' ? 'red' : 'gamboge' }))
   const html = useMemo(() => highlight(marked.parse(section.content_md, { async: false }) as string, marks, active), [section.content_md, marks, active])
   const save = async () => {
@@ -164,7 +185,7 @@ function SectionView({ section, index, items, active, onPick, onSaved, editable 
       </div>
       {editing ? (
         <div>
-          <Textarea rows={Math.min(16, Math.max(4, text.split('\n').length + 1))} value={text} onChange={(e) => setText(e.target.value)} className="font-mono text-[13px]" />
+          <Textarea ref={ta} rows={Math.min(16, Math.max(4, text.split('\n').length + 1))} value={text} onChange={(e) => setText(e.target.value)} className="font-mono text-[13px]" />
           <div className="mt-2 flex justify-end gap-2">
             <Button size="sm" variant="ghost" onClick={() => { setText(section.content_md); setEditing(false) }}>取消</Button>
             <Button size="sm" variant="primary" loading={saving} onClick={save}>保存并重新检查</Button>
@@ -178,17 +199,33 @@ function SectionView({ section, index, items, active, onPick, onSaved, editable 
   )
 }
 
-function ItemCard({ item, active, onPick, onResolve, disabled, workId }: {
+function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInPlace, onApplyFix }: {
   item: CheckItem
   active: boolean
   onPick: () => void
   onResolve: (v: string | null) => void
   disabled: boolean
   workId: string
+  onEditInPlace?: () => void
+  onApplyFix?: (fix: FixResp, i: number) => Promise<void>
 }) {
   const meta = catMeta[item.category]
   const isFormat = item.category === 'format'
   const done = isFormat ? item.passed : !!item.resolution
+  const [fix, setFix] = useState<FixResp | null>(null)
+  const [fixBusy, setFixBusy] = useState(false)
+  const [applying, setApplying] = useState<number | null>(null)
+  const canFix = !disabled && !done && !!item.location.section_id && ['sensitive', 'ad_law', 'fact'].includes(item.category)
+  const suggest = async () => {
+    setFixBusy(true)
+    try {
+      setFix(await post<FixResp>(`/check-items/${item.id}/fix-suggest`))
+    } catch (e) {
+      aiError(e, '建议改法', suggest)
+    } finally {
+      setFixBusy(false)
+    }
+  }
   const fieldLink = item.location.field === 'title' || item.location.field === 'summary' ? '#step-title' : item.location.field === 'cover' || item.location.field === 'images' ? '#step-images' : ''
   return (
     <div onClick={onPick} className={cn('cursor-pointer rounded-lg border p-3 transition',
@@ -208,6 +245,33 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId }: {
             <p className="mt-1.5 text-[12px] font-medium text-danger">
               格式问题必须修改，不能保留。{fieldLink && <Link to={`/works/${workId}${fieldLink}`} className="underline">去修改</Link>}
             </p>
+          )}
+          {!disabled && !done && item.location.section_id && (onEditInPlace || canFix) && (
+            <div className="mt-2 flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
+              {onEditInPlace && <Button size="sm" variant="ghost" icon={<PenLine className="size-3" />} onClick={onEditInPlace}>在原文中修改</Button>}
+              {canFix && <Button size="sm" variant="ghost" icon={<Sparkles className="size-3" />} loading={fixBusy} onClick={suggest}>建议改法</Button>}
+            </div>
+          )}
+          {fix && (
+            <div className="mt-2 space-y-1.5 rounded-lg border border-ink-100 bg-ink-50/40 p-2" onClick={(e) => e.stopPropagation()}>
+              <p className="text-[11.5px] text-mist-500">原句：{fix.sentence}</p>
+              {fix.variants.map((v, i) => (
+                <div key={i} className="rounded-md bg-white p-2 text-[12.5px]">
+                  <p className="leading-relaxed text-mist-800">{v.text}</p>
+                  {v.note && <p className="mt-0.5 text-[11px] text-mist-400">{v.note}</p>}
+                  <div className="mt-1 flex justify-end">
+                    <Button size="sm" variant="primary" loading={applying === i} disabled={applying !== null} onClick={async () => {
+                      setApplying(i)
+                      try { await onApplyFix?.(fix, i); setFix(null) } finally { setApplying(null) }
+                    }}>用这个替换</Button>
+                  </div>
+                </div>
+              ))}
+              <div className="flex items-center justify-between text-[11px] text-mist-400">
+                替换后会重新检查，这一项需要你再确认一次
+                <button type="button" className="cursor-pointer hover:text-mist-600" onClick={() => { sendFeedback(fix.ai_call_id, { outcome: 'rejected' }); setFix(null) }}>收起</button>
+              </div>
+            </div>
           )}
           {!isFormat && (
             <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5" onClick={(e) => e.stopPropagation()}>
@@ -236,6 +300,9 @@ export default function Check() {
   const [active, setActive] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const [approving, setApproving] = useState(false)
+  const [editSignal, setEditSignal] = useState<{ sectionId: string; text: string; n: number } | null>(null)
+  const { data: me } = useMe()
   const editable = canWrite && !work.locked
   const key = ['check', work.id]
   const q = useQuery({
@@ -291,13 +358,43 @@ export default function Check() {
   const complete = async () => {
     setCompleting(true)
     try {
-      setWork(await post<Work>(`/works/${work.id}/checks/complete`))
+      const w = await post<Work>(`/works/${work.id}/checks/complete`)
+      setWork(w)
       q.refetch()
-      toast.success('检查完成，作品可以发布了')
+      toast.success(w.status === 'reviewing' ? '检查完成，已提交审阅' : '检查完成，作品可以发布了')
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
       setCompleting(false)
+    }
+  }
+  const approve = async () => {
+    setApproving(true)
+    try {
+      setWork(await post<Work>(`/works/${work.id}/review/approve`))
+      toast.success('审阅通过，可以写入草稿或生成发布包了')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setApproving(false)
+    }
+  }
+  // 逐项 AI 修复（EX-H-02）：只替换命中的一句，随后重新检查，该项需要重新确认（HC-18）。
+  const applyFix = async (fix: FixResp, i: number) => {
+    const fresh = await get<Work>(`/works/${work.id}`)
+    const sec = fresh.sections.find((s) => s.id === fix.section_id)
+    if (!sec || !sec.content_md.includes(fix.sentence)) {
+      toast.info('原句已经改动过，请用「在原文中修改」手动处理')
+      return
+    }
+    try {
+      await patch(`/sections/${sec.id}`, { content_md: sec.content_md.replace(fix.sentence, fix.variants[i].text), base_revision: sec.revision })
+      sendFeedback(fix.ai_call_id, { outcome: 'accepted', choice_index: i })
+      await refresh()
+      await start()
+      toast.success('已替换并重新检查')
+    } catch (e) {
+      toast.error(errorMessage(e))
     }
   }
   const pick = (id: string) => {
@@ -315,13 +412,15 @@ export default function Check() {
   }
 
   if (q.isLoading) return <PageLoading />
-  const groups = (['format', 'sensitive', 'fact', 'ai_disclosure', 'similarity', 'ad_law'] as const)
+  const groups = (['format', 'sensitive', 'fact', 'stale', 'ai_disclosure', 'similarity', 'ad_law'] as const)
     .map((c) => ({ c, items: (run?.items ?? []).filter((i) => i.category === c) }))
     .filter((g) => g.items.length)
   const formatFailed = run?.items.filter((i) => i.category === 'format' && !i.passed) ?? []
   const factPending = run?.fact_status === 'pending'
   const canComplete = !!run && !run.stale && !factPending && run.blocking === 0 && run.confirmed === run.total
   const isDone = !!run?.completed_at && !run.stale && ['ready', 'pushed', 'packed', 'published'].includes(work.status)
+  const reviewing = work.status === 'reviewing'
+  const canApprove = reviewing && (me?.role === 'owner' || (!!me?.user_id && me.user_id === work.reviewer_id && me.user_id !== work.assignee_id))
   const wx = work.platform === 'wechat_mp'
   const comic = work.content_format === 'comic'
   const sectionItems = (sid: string) => (run?.items ?? []).filter((i) => i.location.section_id === sid && (i.category !== 'format' || !i.passed))
@@ -339,6 +438,9 @@ export default function Check() {
             <Stat label="格式问题" value={String(run.blocking)} ok={run.blocking === 0} />
             <Stat label="事实核查" value={factPending ? '进行中' : run.fact_status === 'done' ? '已完成' : run.fact_status === 'failed' ? '需人工' : '—'} ok={run.fact_status === 'done'} />
             <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} loading={starting} disabled={!editable} onClick={start}>重新检查</Button>
+            {run.completed_at && !run.stale && (
+              <Link to={`/works/${work.id}/check/report`} target="_blank" className="inline-flex items-center gap-1 text-[13px] text-ink-700 hover:underline"><FileText className="size-3.5" />检查报告</Link>
+            )}
           </div>
         )}
       </div>
@@ -364,7 +466,8 @@ export default function Check() {
                 ))
                 : work.sections.map((s, i) => (
                   <SectionView key={s.id + s.revision} section={s} index={i} items={sectionItems(s.id)} active={active} onPick={pick}
-                    editable={editable} onSaved={async () => { await refresh(); await start() }} />
+                    editable={editable} onSaved={async () => { await refresh(); await start() }}
+                    editSignal={editSignal?.sectionId === s.id ? editSignal : null} />
                 ))}
             </div>
           </Card>
@@ -384,14 +487,26 @@ export default function Check() {
                 <div className="space-y-2">
                   {g.items.map((it) => (
                     <div key={it.id} id={`item-${it.id}`}>
-                      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v) => resolve(it, v)} disabled={!editable || run.stale} workId={work.id} />
+                      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v) => resolve(it, v)} disabled={!editable || run.stale} workId={work.id}
+                        onEditInPlace={!comic && it.location.section_id ? () => setEditSignal({ sectionId: it.location.section_id!, text: it.matched_text, n: Date.now() }) : undefined}
+                        onApplyFix={comic ? undefined : applyFix} />
                     </div>
                   ))}
                 </div>
               </div>
             ))}
             <div className="sticky bottom-0 -mx-1 space-y-2 bg-gradient-to-t from-[var(--color-paper,#f7f6f2)] via-[var(--color-paper,#f7f6f2)] to-transparent px-1 pb-1 pt-6">
-              {isDone ? (
+              {reviewing && run.completed_at && !run.stale ? (
+                <>
+                  <Notice tone="gamboge" icon={<UserCheck className="size-4" />}>检查已完成，这篇作品需要审阅。审阅通过前不能写入草稿或生成发布包。</Notice>
+                  {canApprove ? (
+                    <>
+                      <HumanGate code="H-09">请通读正文和上面的检查记录，确认可以发布后再点通过。</HumanGate>
+                      <Button variant="human" size="lg" className="w-full" loading={approving} onClick={approve} icon={<UserCheck className="size-4" />}>审阅通过</Button>
+                    </>
+                  ) : <p className="text-center text-[12.5px] text-mist-500">已通知工作区所有者{work.reviewer_id ? '和指定的审阅人' : ''}审阅。</p>}
+                </>
+              ) : isDone ? (
                 <>
                   <Notice tone="ink" icon={<CheckCircle2 className="size-4" />}>检查已完成，作品处于「{work.status === 'ready' ? '可发布' : '已进入下一步'}」状态。</Notice>
                   <Button variant="primary" size="lg" className="w-full" onClick={() => nav(`/works/${work.id}/${wx ? 'push' : 'pack'}`)}>

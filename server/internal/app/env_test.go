@@ -39,6 +39,9 @@ type testEnv struct {
 
 const testPassword = "test-password-123"
 
+// testAdminPassword is a throwaway value for the permanent super admin in tests only.
+const testAdminPassword = "test-admin-pass-456"
+
 var env *testEnv
 
 func TestMain(m *testing.M) {
@@ -95,7 +98,8 @@ func runWithEnv(m *testing.M) (int, error) {
 	defer os.RemoveAll(dataDir)
 	key := bytes.Repeat([]byte{7}, 32)
 	cfg := &config.Config{Dev: true, DatabaseURL: dbURL, DataDir: dataDir, MasterKey: key,
-		WechatBase: mockSrv.URL, MockListen: strings.TrimPrefix(mockSrv.URL, "http://")}
+		WechatBase: mockSrv.URL, MockListen: strings.TrimPrefix(mockSrv.URL, "http://"),
+		SystemAdminUser: "skyeder", SystemAdminPassword: testAdminPassword}
 	srv, err := New(cfg, pool)
 	if err != nil {
 		return 0, err
@@ -109,6 +113,9 @@ func runWithEnv(m *testing.M) (int, error) {
 	env = &testEnv{srv: srv, http: hs, mockWX: wx, mock: mockSrv, client: &http.Client{Jar: jar, Timeout: time.Minute}}
 	if st, body := env.do("POST", "/api/v1/auth/setup", map[string]string{"username": "owner", "password": testPassword}); st != 200 {
 		return 0, fmt.Errorf("setup: %d %s", st, body)
+	}
+	if err := srv.EnsurePermanentAdmin(ctx); err != nil {
+		return 0, err
 	}
 	var me struct {
 		CSRF string `json:"csrf_token"`

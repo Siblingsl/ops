@@ -89,7 +89,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) error {
 	}
 	switched := false
 	if in.Switch {
-		if _, err := s.db.Exec(r.Context(), `UPDATE session SET current_workspace_id=$2 WHERE id=$1`, id.SessionID, wsID); err != nil {
+		if _, err := s.db.Exec(r.Context(), `UPDATE session SET current_workspace_id=$2, admin_override=false WHERE id=$1`, id.SessionID, wsID); err != nil {
 			return err
 		}
 		switched = true
@@ -147,7 +147,7 @@ func (s *Server) switchWorkspace(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE session SET current_workspace_id=$2 WHERE id=$1`, id.SessionID, wsID); err != nil {
+	if _, err := s.db.Exec(r.Context(), `UPDATE session SET current_workspace_id=$2, admin_override=false WHERE id=$1`, id.SessionID, wsID); err != nil {
 		return err
 	}
 	s.audit(r.Context(), "workspace_switch", "workspace", wsID.String(), "ok", nil)
@@ -327,7 +327,7 @@ func (s *Server) leaveWorkspace(w http.ResponseWriter, r *http.Request) error {
 		s.audit(r.Context(), "workspace_leave", "workspace", id.WorkspaceID.String(), "ok", map[string]any{"orphaned": true})
 		return ok(w, map[string]any{"ok": true, "needs_workspace": true})
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE session SET current_workspace_id=$2 WHERE id=$1`, id.SessionID, next); err != nil {
+	if _, err := s.db.Exec(r.Context(), `UPDATE session SET current_workspace_id=$2, admin_override=false WHERE id=$1`, id.SessionID, next); err != nil {
 		return err
 	}
 	s.audit(r.Context(), "workspace_leave", "workspace", id.WorkspaceID.String(), "ok", nil)
@@ -395,9 +395,9 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		Role     string `json:"role"`
-		MaxUses  int    `json:"max_uses"`
-		Days     int    `json:"days"`
+		Role    string `json:"role"`
+		MaxUses int    `json:"max_uses"`
+		Days    int    `json:"days"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -550,7 +550,7 @@ func (s *Server) joinWorkspace(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if doSwitch && wsID != uuid.Nil {
-		if _, err := s.db.Exec(r.Context(), `UPDATE session SET current_workspace_id=$2 WHERE id=$1`,
+		if _, err := s.db.Exec(r.Context(), `UPDATE session SET current_workspace_id=$2, admin_override=false WHERE id=$1`,
 			ident(r.Context()).SessionID, wsID); err != nil {
 			return err
 		}
@@ -620,7 +620,23 @@ func (s *Server) consumeInvite(ctx context.Context, userID uuid.UUID, code strin
 		return uuid.Nil, err
 	}
 	s.audit(ctx, "workspace_join", "workspace", wsID.String(), "ok", map[string]any{"invite_id": invID.String()})
+	s.notifyInviteAccepted(ctx, wsID, invID, userID, role)
 	return wsID, nil
+}
+
+// notifyInviteAccepted tells the owners and whoever created the invite that a member joined (4.4).
+func (s *Server) notifyInviteAccepted(ctx context.Context, wsID, invID, userID uuid.UUID, role string) {
+	var name string
+	var inviter *uuid.UUID
+	_ = s.db.QueryRow(ctx, `SELECT username FROM app_user WHERE id=$1`, userID).Scan(&name)
+	_ = s.db.QueryRow(ctx, `SELECT created_by_user_id FROM workspace_invite WHERE id=$1`, invID).Scan(&inviter)
+	roles := map[string]string{"owner": "所有者", "editor": "编辑", "viewer": "只读"}
+	title, body := nz(name, "新成员")+" 通过邀请码加入了工作区", "角色："+nz(roles[role], role)
+	key := "join:" + wsID.String() + ":" + userID.String()
+	s.notifyWorkspace(ctx, wsID, []string{"owner"}, "member_joined", title, body, "/settings/members", key)
+	if inviter != nil && *inviter != userID {
+		s.notify(ctx, wsID, *inviter, "member_joined", title, body, "/settings/members", key)
+	}
 }
 
 const inviteAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"

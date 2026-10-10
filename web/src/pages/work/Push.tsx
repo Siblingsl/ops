@@ -3,7 +3,7 @@ import { CheckCircle2, Circle, Copy, ExternalLink, Loader2, Send, XCircle } from
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
-import { BackfillForm } from '@/components/backfill'
+import { BackfillForm, PostPushTodos } from '@/components/backfill'
 import { CropPreview } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, PageLoading, Switch } from '@/components/ui'
@@ -135,17 +135,21 @@ export default function Push() {
               </a>
             </div>
             <div className="p-6">
-              <div className="mb-3 text-[13px] font-semibold text-mist-700">在后台还需要你完成</div>
-              <ul className="space-y-2">
-                {backendTodos.map((t, i) => (
-                  <li key={t}>
-                    <label className="flex cursor-pointer items-start gap-2.5 text-[14px] text-mist-700">
-                      <input type="checkbox" className="mt-1 accent-ink-600" checked={todos[i]} onChange={(e) => setTodos(todos.map((x, j) => (j === i ? e.target.checked : x)))} />
-                      <span className={cn(todos[i] && 'text-mist-400 line-through')}>{t}</span>
-                    </label>
-                  </li>
-                ))}
-              </ul>
+              {(work.post_push_todos ?? []).length > 0 ? <PostPushTodos work={work} setWork={setWork} /> : (
+                <>
+                  <div className="mb-3 text-[13px] font-semibold text-mist-700">在后台还需要你完成</div>
+                  <ul className="space-y-2">
+                    {backendTodos.map((t, i) => (
+                      <li key={t}>
+                        <label className="flex cursor-pointer items-start gap-2.5 text-[14px] text-mist-700">
+                          <input type="checkbox" className="mt-1 accent-ink-600" checked={todos[i]} onChange={(e) => setTodos(todos.map((x, j) => (j === i ? e.target.checked : x)))} />
+                          <span className={cn(todos[i] && 'text-mist-400 line-through')}>{t}</span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
               <p className="mt-4 text-xs text-mist-400">系统只写入草稿，不会自动发表或群发。</p>
             </div>
           </Card>
@@ -236,6 +240,9 @@ export default function Push() {
           </Card>
         )}
 
+        {!result && (work.status === 'pushed' || work.status === 'published') && (work.post_push_todos ?? []).length > 0 && (
+          <Card className="p-5"><PostPushTodos work={work} setWork={setWork} /></Card>
+        )}
         {(work.status === 'pushed' || work.status === 'published') && <div id="backfill"><BackfillForm work={work} setWork={setWork} /></div>}
         {work.status === 'pushed' && work.wechat_draft_media_id && (
           <Card className="flex items-center gap-3 p-4">

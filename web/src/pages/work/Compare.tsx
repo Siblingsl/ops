@@ -8,12 +8,63 @@ import { confirm } from '@/components/dialog'
 import { RefsNote } from '@/components/refs'
 import { type EditorHandle, PlainEditor, RichEditor } from '@/components/section-editor'
 import { Badge, Button, Card, cn, Field, Input, Notice, PageLoading, PlatformMark } from '@/components/ui'
+import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, get, patch, stream } from '@/lib/api'
 import { type AIRefs, parseTopics, runeLen } from '@/lib/format'
 import type { Section, Work } from '@/lib/types'
+import { TagSuggest } from './editor-tools'
 import { useWork } from './WorkLayout'
 
-function DerivedSection({ section, index, work, active, onFocus, patchWork, refresh }: {
+interface SourceChange { source_id: string; heading: string; changed: boolean; deleted: boolean; old_content: string; new_content: string }
+interface SourceDiffItem { section_id: string; changed: boolean; sources: SourceChange[] }
+
+function sentences(s: string): string[] {
+  return s.match(/[^。！？!?\n]+[。！？!?]?|\n/g)?.filter((x) => x.trim()) ?? []
+}
+
+/** diffSentences is a sentence-level LCS diff, enough to show what changed in a source paragraph. */
+function diffSentences(a: string, b: string): { t: string; k: 'same' | 'add' | 'del' }[] {
+  const x = sentences(a)
+  const y = sentences(b)
+  const dp = Array.from({ length: x.length + 1 }, () => new Array<number>(y.length + 1).fill(0))
+  for (let i = x.length - 1; i >= 0; i--) for (let j = y.length - 1; j >= 0; j--) dp[i][j] = x[i] === y[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+  const out: { t: string; k: 'same' | 'add' | 'del' }[] = []
+  let i = 0
+  let j = 0
+  while (i < x.length && j < y.length) {
+    if (x[i] === y[j]) { out.push({ t: x[i], k: 'same' }); i++; j++ }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) out.push({ t: x[i++], k: 'del' })
+    else out.push({ t: y[j++], k: 'add' })
+  }
+  while (i < x.length) out.push({ t: x[i++], k: 'del' })
+  while (j < y.length) out.push({ t: y[j++], k: 'add' })
+  return out
+}
+
+function SourceDiffNote({ item }: { item: SourceDiffItem }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mt-2 rounded-lg border border-gamboge-200 bg-gamboge-50/60 p-2 text-[12.5px]">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="cursor-pointer font-medium text-gamboge-800">
+        源段已修改 · {open ? '收起差异' : '查看差异'}
+      </button>
+      {open && item.sources.filter((s) => s.changed).map((s) => (
+        <div key={s.source_id} className="mt-2 leading-relaxed">
+          {s.deleted ? <p className="text-mist-500">对应的源段已删除。</p> : !s.old_content ? <p className="text-mist-500">找不到改写时的源段版本，以下为最新源段：{s.new_content}</p> : (
+            <p>
+              {diffSentences(s.old_content, s.new_content).map((d, i) => (
+                <span key={i} className={cn(d.k === 'add' && 'bg-ink-100 text-ink-900', d.k === 'del' && 'text-mist-400 line-through')}>{d.t}</span>
+              ))}
+            </p>
+          )}
+        </div>
+      ))}
+      <p className="mt-1.5 text-[11.5px] text-mist-500">需要同步时点右侧「按新源段重新改写本段」，每次只改这一段。</p>
+    </div>
+  )
+}
+
+function DerivedSection({ section, index, work, active, onFocus, patchWork, refresh, changed, onRewritten }: {
   section: Section
   index: number
   work: Work
@@ -21,6 +72,8 @@ function DerivedSection({ section, index, work, active, onFocus, patchWork, refr
   onFocus: () => void
   patchWork: (p: Partial<Work> | ((w: Work) => Partial<Work>)) => void
   refresh: () => Promise<unknown>
+  changed?: boolean
+  onRewritten?: () => void
 }) {
   const xhs = work.platform === 'xhs'
   const editor = useRef<EditorHandle>(null)
@@ -79,8 +132,9 @@ function DerivedSection({ section, index, work, active, onFocus, patchWork, refr
       setLen(runeLen(r.result.content_md))
       setResetKey((k) => k + 1)
       refresh()
+      onRewritten?.()
     } catch (e) {
-      if ((e as Error).name !== 'AbortError') toast.error(errorMessage(e))
+      aiError(e, '改写本段', rewrite)
     } finally {
       setStreaming(null)
     }
@@ -96,7 +150,9 @@ function DerivedSection({ section, index, work, active, onFocus, patchWork, refr
         {streaming !== null ? (
           <Button size="sm" variant="ghost" icon={<Square className="size-3.5" />} onClick={() => abort.current?.abort()}>停止</Button>
         ) : (
-          <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} disabled={work.locked || section.source_section_ids.length === 0} onClick={rewrite}>重新改写本段</Button>
+          <Button size="sm" variant={changed ? 'secondary' : 'ghost'} icon={<RefreshCw className="size-3.5" />} disabled={work.locked || section.source_section_ids.length === 0} onClick={rewrite}>
+            {changed ? '按新源段重新改写本段' : '重新改写本段'}
+          </Button>
         )}
       </div>
       {streaming !== null ? (
@@ -106,7 +162,7 @@ function DerivedSection({ section, index, work, active, onFocus, patchWork, refr
       ) : (
         <>
           <Editor ref={editor} value={content.current} resetKey={resetKey} onChange={onChange} editable={!work.locked} />
-          <RefsNote refs={refs} className="mt-2" />
+          <RefsNote refs={refs} className="mt-2" onRetry={rewrite} />
         </>
       )}
     </div>
@@ -118,6 +174,8 @@ export default function Compare() {
   const nav = useNavigate()
   const [active, setActive] = useState<string | null>(null)
   const src = useQuery({ queryKey: ['work', work.source?.id], queryFn: () => get<Work>(`/works/${work.source!.id}`), enabled: !!work.source && !work.source.deleted, retry: false })
+  const diff = useQuery({ queryKey: ['source-diff', work.id], queryFn: () => get<SourceDiffItem[]>(`/works/${work.id}/source-diff`), enabled: !!work.source && !work.source.deleted && work.content_format !== 'comic' })
+  const diffBy = new Map((diff.data ?? []).map((d) => [d.section_id, d]))
   const [topics, setTopics] = useState(work.topics.map((t) => '#' + t).join(' '))
   const [title, setTitle] = useState(work.title)
   if (!work.source) return <div className="p-10"><Notice>这篇作品不是派生作品。</Notice></div>
@@ -183,8 +241,10 @@ export default function Compare() {
                     <div className="md text-[14px] leading-[1.85] text-mist-600" dangerouslySetInnerHTML={{ __html: marked.parse(x.content_md, { async: false }) as string }} />
                   </div>
                 ))}
+                {diffBy.get(s.id)?.changed && <SourceDiffNote item={diffBy.get(s.id)!} />}
               </div>
-              <DerivedSection section={s} index={i} work={work} active={on} onFocus={() => setActive(s.id)} patchWork={patchWork} refresh={refresh} />
+              <DerivedSection section={s} index={i} work={work} active={on} onFocus={() => setActive(s.id)} patchWork={patchWork} refresh={refresh}
+                changed={diffBy.get(s.id)?.changed} onRewritten={() => void diff.refetch()} />
             </div>
           )
         })}
@@ -199,10 +259,17 @@ export default function Compare() {
                   const list = parseTopics(topics)
                   if (list.join(' ') !== work.topics.join(' ')) saveField({ topics: list })
                 }} />
+              <TagSuggest workId={work.id} current={parseTopics(topics)} disabled={work.locked} onAdd={(t) => {
+                const list = [...parseTopics(topics), t]
+                setTopics(list.map((x) => '#' + x).join(' '))
+                saveField({ topics: list })
+              }} />
             </div>
           )}
           <span className="text-[13px] text-mist-500">正文 <span className="font-semibold tabular-nums text-mist-800">{total}</span> 字{xhs && <span className="text-mist-400">（上限待核实 V-012，建议 1000 字以内）</span>}</span>
-          <Badge tone={work.source_updated ? 'gamboge' : 'gray'} className="ml-auto">{work.source_updated ? '源稿已更新' : '与源稿同步时间一致'}</Badge>
+          <Badge tone={work.source_updated ? 'gamboge' : 'gray'} className="ml-auto">
+            {(diff.data ?? []).some((d) => d.changed) ? `${(diff.data ?? []).filter((d) => d.changed).length} 段的源段已修改` : work.source_updated ? '源稿已更新' : '与源稿同步时间一致'}
+          </Badge>
         </div>
       </div>
     </div>

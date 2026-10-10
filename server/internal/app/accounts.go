@@ -24,6 +24,7 @@ type Account struct {
 	Status         string     `json:"status"`
 	DailyPushLimit int        `json:"daily_push_limit"`
 	CreatedAt      time.Time  `json:"created_at"`
+	IsDemo         bool       `json:"is_demo"`
 	Credential     *CredState `json:"credential,omitempty"`
 }
 
@@ -49,7 +50,7 @@ func validFormat(platform, format string) bool {
 	return false
 }
 
-const accountCols = `a.id, a.platform, a.name, a.content_format, a.status, a.daily_push_limit, a.created_at,
+const accountCols = `a.id, a.platform, a.name, a.content_format, a.status, a.daily_push_limit, a.created_at, a.is_demo,
 	c.app_id, c.app_secret_enc, c.last_check_at, c.last_check_ok, c.last_check_result`
 
 func (s *Server) scanAccount(row pgx.Row) (*Account, error) {
@@ -59,7 +60,7 @@ func (s *Server) scanAccount(row pgx.Row) (*Account, error) {
 	var checkAt *time.Time
 	var checkOK *bool
 	var checkResult *string
-	if err := row.Scan(&a.ID, &a.Platform, &a.Name, &a.ContentFormat, &a.Status, &a.DailyPushLimit, &a.CreatedAt,
+	if err := row.Scan(&a.ID, &a.Platform, &a.Name, &a.ContentFormat, &a.Status, &a.DailyPushLimit, &a.CreatedAt, &a.IsDemo,
 		&appID, &secretEnc, &checkAt, &checkOK, &checkResult); err != nil {
 		return nil, err
 	}
@@ -255,8 +256,17 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request) error {
 		return apiErr(409, "confirm_required", "删除后该账号下的作品、选题、档案、凭证等将一并清除且无法恢复，请确认。")
 	}
 	ctx := r.Context()
+	if err := s.hardDeleteAccount(ctx, a.ID); err != nil {
+		return err
+	}
+	s.audit(ctx, "account_delete", "platform_account", a.ID.String(), "ok", map[string]any{"name": a.Name, "platform": a.Platform})
+	return ok(w, map[string]any{"ok": true})
+}
+
+func (s *Server) hardDeleteAccount(ctx context.Context, accountID uuid.UUID) error {
+	a := struct{ ID uuid.UUID }{accountID}
 	var workIDs []uuid.UUID
-	err = s.withTx(ctx, func(tx pgx.Tx) error {
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		rows, qerr := tx.Query(ctx, `SELECT id FROM work WHERE account_id=$1`, a.ID)
 		if qerr != nil {
 			return qerr
@@ -282,6 +292,7 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request) error {
 			{`UPDATE material SET account_id=NULL WHERE account_id=$1`, []any{a.ID}},
 			{`UPDATE asset SET account_id=NULL WHERE account_id=$1`, []any{a.ID}},
 			{`UPDATE ai_call SET account_id=NULL WHERE account_id=$1`, []any{a.ID}},
+			{`UPDATE ai_job SET account_id=NULL WHERE account_id=$1`, []any{a.ID}},
 			{`DELETE FROM platform_account WHERE id=$1`, []any{a.ID}},
 		}
 		for _, step := range steps {
@@ -297,8 +308,7 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request) error {
 	for _, wid := range workIDs {
 		_ = os.RemoveAll(filepath.Join(s.cfg.DataDir, "assets", wid.String()))
 	}
-	s.audit(ctx, "account_delete", "platform_account", a.ID.String(), "ok", map[string]any{"name": a.Name, "platform": a.Platform})
-	return ok(w, map[string]any{"ok": true})
+	return nil
 }
 
 func (s *Server) saveWechatCredential(w http.ResponseWriter, r *http.Request) error {

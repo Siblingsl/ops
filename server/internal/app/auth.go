@@ -40,7 +40,12 @@ func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) error {
 	if err := s.db.QueryRow(r.Context(), `SELECT count(*) FROM app_user`).Scan(&n); err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"needs_setup": n == 0, "dev": s.cfg.Dev})
+	regOpen, _ := s.systemBool(r.Context(), "registration_open", true)
+	maint, _ := s.systemBool(r.Context(), "maintenance_mode", false)
+	return ok(w, map[string]any{
+		"needs_setup": n == 0, "dev": s.cfg.Dev,
+		"registration_open": regOpen, "maintenance_mode": maint,
+	})
 }
 
 func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) error {
@@ -60,6 +65,19 @@ func (s *Server) authSetup(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) authRegister(w http.ResponseWriter, r *http.Request) error {
+	var n int
+	if err := s.db.QueryRow(r.Context(), `SELECT count(*) FROM app_user`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		open, err := s.systemBool(r.Context(), "registration_open", true)
+		if err != nil {
+			return err
+		}
+		if !open {
+			return apiErr(403, "registration_closed", "当前已关闭开放注册，请联系管理员")
+		}
+	}
 	var in struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -120,7 +138,7 @@ func (s *Server) createRegisteredUser(ctx context.Context, username, password st
 		}
 	}
 	err = tx.QueryRow(ctx,
-		`INSERT INTO app_user (username, password_hash) VALUES ($1,$2) RETURNING id`,
+		`INSERT INTO app_user (username, password_hash, is_system_admin) VALUES ($1,$2,false) RETURNING id`,
 		username, hash).Scan(&userID)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -171,14 +189,18 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) error {
 		failed      int
 		lockedUntil *time.Time
 	)
-	err := s.db.QueryRow(ctx, `SELECT id, password_hash, failed_logins, locked_until FROM app_user WHERE username=$1`,
-		strings.TrimSpace(in.Username)).Scan(&id, &hash, &failed, &lockedUntil)
+	var disabledAt *time.Time
+	err := s.db.QueryRow(ctx, `SELECT id, password_hash, failed_logins, locked_until, disabled_at FROM app_user WHERE username=$1`,
+		strings.TrimSpace(in.Username)).Scan(&id, &hash, &failed, &lockedUntil, &disabledAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		s.audit(ctx, "login_failed", "user", "", "failed", map[string]any{"ip": clientIP(r), "reason": "unknown_user"})
 		return apiErr(401, "unauthenticated", "用户名或密码不正确")
 	}
 	if err != nil {
 		return err
+	}
+	if disabledAt != nil {
+		return apiErr(403, "account_disabled", "账号已被管理员禁用")
 	}
 	now := s.now()
 	if lockedUntil != nil && lockedUntil.After(now) {
@@ -279,53 +301,74 @@ func (s *Server) loadIdentity(ctx context.Context, token string) (*identity, err
 		expires     time.Time
 		reauthUntil *time.Time
 		lastSeen    time.Time
+		override    bool
+		sysAdmin    bool
+		disabledAt  *time.Time
+		role        *string
 	)
 	err := s.db.QueryRow(ctx, `
-		SELECT s.id, s.expires_at, s.reauth_until, s.last_seen_at,
-		       u.id, u.username, s.current_workspace_id, wm.role
+		SELECT s.id, s.expires_at, s.reauth_until, s.last_seen_at, coalesce(s.admin_override, false),
+		       u.id, u.username, coalesce(u.is_system_admin, false), u.disabled_at,
+		       s.current_workspace_id, wm.role
 		FROM session s
 		JOIN app_user u ON u.id = s.user_id
-		JOIN workspace_member wm ON wm.user_id = u.id AND wm.workspace_id = s.current_workspace_id AND wm.status = 'active'
+		LEFT JOIN workspace_member wm ON wm.user_id = u.id AND wm.workspace_id = s.current_workspace_id AND wm.status = 'active'
 		WHERE s.token_hash=$1`,
 		secure.SHA256([]byte(token))).Scan(
-		&id.SessionID, &expires, &reauthUntil, &lastSeen,
-		&id.UserID, &id.Username, &id.WorkspaceID, &id.Role)
+		&id.SessionID, &expires, &reauthUntil, &lastSeen, &override,
+		&id.UserID, &id.Username, &sysAdmin, &disabledAt,
+		&id.WorkspaceID, &role)
 	if err != nil || expires.Before(s.now()) {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// Fallback: membership lost for current workspace — switch to another.
-			var sessionID, userID uuid.UUID
-			var exp time.Time
-			var reauth *time.Time
-			var seen time.Time
-			var username string
-			err2 := s.db.QueryRow(ctx, `
-				SELECT s.id, s.expires_at, s.reauth_until, s.last_seen_at, u.id, u.username
-				FROM session s JOIN app_user u ON u.id = s.user_id
-				WHERE s.token_hash=$1`, secure.SHA256([]byte(token))).
-				Scan(&sessionID, &exp, &reauth, &seen, &userID, &username)
-			if err2 != nil || exp.Before(s.now()) {
-				return nil, errUnauthenticated
-			}
-			wsID, err3 := s.pickWorkspace(ctx, userID)
-			if err3 != nil {
-				return nil, errUnauthenticated
-			}
-			if _, err := s.db.Exec(ctx, `UPDATE session SET current_workspace_id=$2 WHERE id=$1`, sessionID, wsID); err != nil {
-				return nil, err
-			}
-			var role string
-			if err := s.db.QueryRow(ctx, `SELECT role FROM workspace_member WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
-				wsID, userID).Scan(&role); err != nil {
-				return nil, err
-			}
-			id = identity{UserID: userID, SessionID: sessionID, WorkspaceID: wsID, Username: username, Role: role, lastSeen: seen}
-			id.ReauthOK = reauth != nil && reauth.After(s.now())
-			return &id, nil
+			return nil, errUnauthenticated
+		}
+		if err != nil {
+			return nil, errUnauthenticated
 		}
 		return nil, errUnauthenticated
 	}
+	if disabledAt != nil {
+		return nil, errUnauthenticated
+	}
+	id.SystemAdmin = sysAdmin || s.isPermanentAdminUsername(id.Username)
+	id.AdminOverride = override && id.SystemAdmin
 	id.ReauthOK = reauthUntil != nil && reauthUntil.After(s.now())
 	id.lastSeen = lastSeen
+
+	if id.AdminOverride {
+		// Super admin visiting a workspace without membership — act as owner.
+		var exists bool
+		if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workspace WHERE id=$1)`, id.WorkspaceID).Scan(&exists); err != nil || !exists {
+			return nil, errUnauthenticated
+		}
+		id.Role = "owner"
+		return &id, nil
+	}
+
+	if role != nil {
+		id.Role = *role
+		return &id, nil
+	}
+
+	// Membership lost for current workspace — clear override and switch to another.
+	if _, err := s.db.Exec(ctx, `UPDATE session SET admin_override=false WHERE id=$1`, id.SessionID); err != nil {
+		return nil, err
+	}
+	wsID, err3 := s.pickWorkspace(ctx, id.UserID)
+	if err3 != nil {
+		return nil, errUnauthenticated
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE session SET current_workspace_id=$2 WHERE id=$1`, id.SessionID, wsID); err != nil {
+		return nil, err
+	}
+	var memberRole string
+	if err := s.db.QueryRow(ctx, `SELECT role FROM workspace_member WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
+		wsID, id.UserID).Scan(&memberRole); err != nil {
+		return nil, err
+	}
+	id.WorkspaceID = wsID
+	id.Role = memberRole
+	id.AdminOverride = false
 	return &id, nil
 }
 
@@ -354,8 +397,22 @@ func (s *Server) requireReauth(ctx context.Context) error {
 
 func (s *Server) requireOwner(ctx context.Context) error {
 	id := ident(ctx)
-	if id == nil || id.Role != "owner" {
+	if id == nil {
+		return errUnauthorized
+	}
+	if id.AdminOverride && id.SystemAdmin {
+		return nil
+	}
+	if id.Role != "owner" {
 		return apiErr(403, "forbidden", "需要工作区所有者权限")
+	}
+	return nil
+}
+
+func (s *Server) requireSystemAdmin(ctx context.Context) error {
+	id := ident(ctx)
+	if id == nil || !id.SystemAdmin {
+		return apiErr(403, "forbidden", "需要系统超级管理员权限")
 	}
 	return nil
 }
@@ -366,6 +423,9 @@ func (s *Server) requireEditor(ctx context.Context) error {
 	if id == nil {
 		return errUnauthorized
 	}
+	if id.AdminOverride && id.SystemAdmin {
+		return nil
+	}
 	if id.Role == "viewer" {
 		return apiErr(403, "forbidden", "观察者仅可浏览，不能修改内容")
 	}
@@ -373,6 +433,32 @@ func (s *Server) requireEditor(ctx context.Context) error {
 		return apiErr(403, "forbidden", "需要编辑权限")
 	}
 	return nil
+}
+
+// blockMaintenance rejects authenticated non-admin traffic while maintenance_mode is on.
+func (s *Server) blockMaintenance(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := ident(r.Context())
+		if id != nil && id.SystemAdmin {
+			next.ServeHTTP(w, r)
+			return
+		}
+		path := r.URL.Path
+		if path == "/api/v1/auth/me" || path == "/api/v1/auth/logout" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		on, err := s.systemBool(r.Context(), "maintenance_mode", false)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		if on {
+			writeError(w, r, apiErr(503, "maintenance", "系统维护中，请稍后再试"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // blockViewerWrites rejects mutating HTTP methods for viewers except allowlisted auth/workspace paths.
@@ -399,11 +485,26 @@ func (s *Server) blockViewerWrites(next http.Handler) http.Handler {
 func viewerMutateAllowed(path string) bool {
 	switch path {
 	case "/api/v1/auth/logout", "/api/v1/auth/reauth", "/api/v1/auth/password",
-		"/api/v1/workspaces", "/api/v1/workspaces/join", "/api/v1/workspaces/current/leave":
+		"/api/v1/workspaces", "/api/v1/workspaces/join", "/api/v1/workspaces/current/leave",
+		"/api/v1/notifications/read-all", "/api/v1/me/preferences", "/api/v1/stars", "/api/v1/ux-events", "/api/v1/client-errors":
 		return true
 	}
 	// POST /api/v1/workspaces/{id}/switch
 	if strings.HasPrefix(path, "/api/v1/workspaces/") && strings.HasSuffix(path, "/switch") {
+		return true
+	}
+	// 个人状态：通知已读、星标、在线状态
+	if strings.HasPrefix(path, "/api/v1/notifications/") && strings.HasSuffix(path, "/read") {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/v1/stars/") {
+		return true
+	}
+	// 批注不改正文，viewer 可写（EX-L-01）
+	if strings.HasPrefix(path, "/api/v1/works/") && (strings.HasSuffix(path, "/comments") || strings.HasSuffix(path, "/presence")) {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/v1/comments/") {
 		return true
 	}
 	return false
@@ -424,14 +525,16 @@ func (s *Server) authMe(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return ok(w, map[string]any{
-		"username":      id.Username,
-		"user_id":       id.UserID,
-		"role":          id.Role,
-		"csrf_token":    s.csrfToken(id.SessionID),
-		"reauth_ok":     id.ReauthOK,
-		"prev_login_at": prevAt,
-		"prev_login_ip": prevIP,
-		"dev":           s.cfg.Dev,
+		"username":        id.Username,
+		"user_id":         id.UserID,
+		"role":            id.Role,
+		"is_system_admin": id.SystemAdmin,
+		"admin_override":  id.AdminOverride,
+		"csrf_token":      s.csrfToken(id.SessionID),
+		"reauth_ok":       id.ReauthOK,
+		"prev_login_at":   prevAt,
+		"prev_login_ip":   prevIP,
+		"dev":             s.cfg.Dev,
 		"workspace": map[string]any{
 			"id":   id.WorkspaceID,
 			"name": wsName,

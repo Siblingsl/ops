@@ -1,14 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
-import { BarChart3, Check, Lightbulb, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
+import { BarChart3, Brain, Check, Lightbulb, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Badge, Button, Card, CardHeader, cn, Empty, Field, HumanGate, IconButton, Input, PageHeader, PageLoading, Select, StatusBadge, Textarea } from '@/components/ui'
+import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post, rawRequest } from '@/lib/api'
+import { waitJob } from '@/lib/v3'
 import { describeRefs, fmtNum, fmtTime, toLocalInput } from '@/lib/format'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { BoardRow, Metric, Platform, ReviewReport } from '@/lib/types'
+import { AttributionCard, DigestsCard, TopWorksCard } from './review-insights'
 
 type ImportPreviewRow = { title: string; work_id: string | null; matched: boolean; reads: number; likes: number }
 
@@ -89,12 +92,20 @@ const metricFields: Record<Platform, { key: MetricKey; label: string }[]> = {
   ],
 }
 
-function MetricForm({ workId, platform, editing, onDone }: { workId: string; platform: Platform; editing: Metric | null; onDone: () => void }) {
+function MetricForm({ workId, platform, editing, prefill, onDone, onNext }: {
+  workId: string
+  platform: Platform
+  editing: Metric | null
+  prefill?: Metric | null
+  onDone: () => void
+  onNext?: () => void
+}) {
+  const base = editing ?? prefill ?? null
   const [at, setAt] = useState(toLocalInput(editing?.captured_at))
-  const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(metricFields[platform].map((f) => [f.key, editing?.[f.key]?.toString() ?? ''])))
+  const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(metricFields[platform].map((f) => [f.key, base?.[f.key]?.toString() ?? ''])))
   const [note, setNote] = useState(editing?.note ?? '')
   const [busy, setBusy] = useState(false)
-  const save = async () => {
+  const save = async (next = false) => {
     const body: Record<string, unknown> = { captured_at: new Date(at).toISOString(), note }
     for (const f of metricFields[platform]) body[f.key] = vals[f.key] === '' ? null : Number(vals[f.key])
     setBusy(true)
@@ -102,7 +113,8 @@ function MetricForm({ workId, platform, editing, onDone }: { workId: string; pla
       if (editing) await patch(`/metrics/${editing.id}`, body)
       else await post(`/works/${workId}/metrics`, body)
       toast.success('数据已保存')
-      onDone()
+      if (next && onNext) onNext()
+      else onDone()
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
@@ -112,7 +124,8 @@ function MetricForm({ workId, platform, editing, onDone }: { workId: string; pla
   return (
     <div className="space-y-4 rounded-xl border border-mist-200 bg-mist-50/50 p-4">
       <Field label="数据采集时间" hint="同一篇作品可以录入多次，例如发布后 1 天、7 天"><Input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} /></Field>
-      <div className="grid grid-cols-3 gap-3">
+      {!editing && prefill && <p className="text-[12px] text-mist-500">已预填上次录入的数值，改成平台后台的最新数字即可。</p>}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {metricFields[platform].map((f) => (
           <Field key={f.key} label={f.label}>
             <Input type="number" min={0} inputMode="numeric" value={vals[f.key]} onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })} />
@@ -120,15 +133,16 @@ function MetricForm({ workId, platform, editing, onDone }: { workId: string; pla
         ))}
       </div>
       <Field label="备注"><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：被某大号转载" /></Field>
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
         <Button variant="ghost" onClick={onDone}>取消</Button>
-        <Button variant="primary" loading={busy} onClick={save}>保存</Button>
+        {onNext && !editing && <Button variant="secondary" loading={busy} onClick={() => save(true)}>保存，录下一篇</Button>}
+        <Button variant="primary" loading={busy} onClick={() => save()}>保存</Button>
       </div>
     </div>
   )
 }
 
-function MetricsDrawer({ row, platform, onClose }: { row: BoardRow; platform: Platform; onClose: () => void }) {
+function MetricsDrawer({ row, platform, onClose, onNext }: { row: BoardRow; platform: Platform; onClose: () => void; onNext?: () => void }) {
   const { data, refetch } = useQuery({ queryKey: ['metrics', row.id], queryFn: () => get<Metric[]>(`/works/${row.id}/metrics`) })
   const [form, setForm] = useState<{ editing: Metric | null } | null>(data && data.length === 0 ? { editing: null } : null)
   const inv = useInvalidate()
@@ -147,7 +161,8 @@ function MetricsDrawer({ row, platform, onClose }: { row: BoardRow; platform: Pl
   }
   return (
     <Drawer open onClose={onClose} title={row.title || '未命名'} desc="数据需要你从平台后台手动抄录。" width="w-[560px]">
-      {form ? <MetricForm workId={row.id} platform={platform} editing={form.editing} onDone={done} /> : (
+      {form ? <MetricForm key={`${row.id}-${form.editing?.id ?? 'new'}-${data?.length ?? 0}`} workId={row.id} platform={platform} editing={form.editing} prefill={data?.[data.length - 1] ?? null} onDone={done}
+        onNext={onNext && (() => { inv(['board']); onNext() })} /> : (
         <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setForm({ editing: null })}>录入一次数据</Button>
       )}
       <div className="mt-5 space-y-2">
@@ -175,6 +190,31 @@ function MetricsDrawer({ row, platform, onClose }: { row: BoardRow; platform: Pl
 
 function ReportCard({ report, onAdopted }: { report: ReviewReport; onAdopted: () => void }) {
   const [busy, setBusy] = useState<number | null>(null)
+  const [remembering, setRemembering] = useState<number | null>(null)
+  const [remembered, setRemembered] = useState<number[]>(report.remembered ?? [])
+  const [ignored, setIgnored] = useState<number[]>(report.ignored ?? [])
+  const insights = report.content.writing_insights ?? []
+  const ignore = async (i: number) => {
+    setIgnored((x) => [...x, i])
+    try {
+      await post(`/review-reports/${report.id}/insights/${i}/ignore`)
+    } catch (e) {
+      setIgnored((x) => x.filter((k) => k !== i))
+      toast.error(errorMessage(e))
+    }
+  }
+  const remember = async (i: number) => {
+    setRemembering(i)
+    try {
+      await post(`/review-reports/${report.id}/insights/${i}/remember`)
+      setRemembered((r) => [...r, i])
+      toast.success('已记住，之后生成标题和正文时会参考')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setRemembering(null)
+    }
+  }
   const adopt = async (i: number) => {
     setBusy(i)
     try {
@@ -199,6 +239,24 @@ function ReportCard({ report, onAdopted }: { report: ReviewReport; onAdopted: ()
             ))}
           </ul>
         </div>
+        {insights.length > 0 && (
+          <div>
+            <div className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-mist-700"><Brain className="size-4" />写作层面的结论</div>
+            <ul className="space-y-1.5">
+              {insights.map((t, i) => ignored.includes(i) ? null : (
+                <li key={i} className={cn('flex items-start gap-2 rounded-lg border p-2.5 text-[13.5px]', remembered.includes(i) ? 'border-ink-200 bg-ink-50/40' : 'border-mist-200')}>
+                  <span className="flex-1 leading-relaxed text-mist-700">{t}</span>
+                  {remembered.includes(i) ? <Badge tone="ink"><Check className="size-3" />已记住</Badge> : (
+                    <>
+                      <Button size="sm" variant="outline" loading={remembering === i} onClick={() => remember(i)}>记住</Button>
+                      <Button size="sm" variant="ghost" onClick={() => ignore(i)}>忽略</Button>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div>
           <div className="mb-2 text-[13px] font-semibold text-mist-700">选题建议</div>
           <div className="space-y-2">
@@ -232,19 +290,27 @@ export default function Review() {
   const inv = useInvalidate()
   const board = useQuery({ queryKey: ['board', acc?.id], queryFn: () => get<BoardRow[]>(`/accounts/${acc!.id}/board`), enabled: !!acc })
   const reports = useQuery({ queryKey: ['reviews', acc?.id], queryFn: () => get<ReviewReport[]>(`/accounts/${acc!.id}/reviews`), enabled: !!acc })
+  const wantDigest = params.get('tab') === 'digest'
+  const loaded = !!acc && !board.isLoading
+  useEffect(() => {
+    if (wantDigest && loaded) document.getElementById('digests')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [wantDigest, loaded])
   if (!acc || board.isLoading) return <PageLoading />
   const rows = board.data ?? []
   const openRow = rows.find((r) => r.id === params.get('work'))
+  const nextRow = openRow && rows[rows.indexOf(openRow) + 1]
   const fields = metricFields[acc.platform].slice(0, 4)
   const runReview = async () => {
     setRunning(true)
     try {
-      await post(`/accounts/${acc.id}/reviews`, selected.length ? { work_ids: selected } : { recent: Number(recent) })
-      reports.refetch()
+      const { job_id } = await post<{ job_id: string }>(`/accounts/${acc.id}/reviews`, { ...(selected.length ? { work_ids: selected } : { recent: Number(recent) }), background: true })
+      toast.message('AI 正在复盘，可以先去做别的，完成后会通知你')
+      await waitJob(job_id)
+      void reports.refetch()
       const note = describeRefs({ works: selected.length || Number(recent) })
       toast.success(note ? `复盘报告已生成 · ${note}` : '复盘报告已生成')
     } catch (e) {
-      toast.error(errorMessage(e))
+      aiError(e, '生成复盘报告', runReview)
     } finally {
       setRunning(false)
     }
@@ -271,7 +337,8 @@ export default function Review() {
             <ImportMetrics accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />
           </>} />
         {rows.length === 0 ? (
-          <Empty icon={<BarChart3 className="size-5" />} title="还没有可以复盘的作品" desc="作品写入草稿箱或生成发布包后会出现在这里。" />
+          <Empty icon={<BarChart3 className="size-5" />} title="还没有可以复盘的作品" desc="作品写入草稿箱或生成发布包后会出现在这里。"
+            action={<Link to={`/a/${acc.id}/works`}><Button variant="primary">去作品列表</Button></Link>} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-[13.5px]">
@@ -322,10 +389,21 @@ export default function Review() {
         </Card>
         <div className="space-y-4">
           {reports.data?.length ? reports.data.map((r) => <ReportCard key={r.id} report={r} onAdopted={() => { reports.refetch(); inv(['topics', acc.id]) }} />)
-            : <Card><Empty icon={<Lightbulb className="size-5" />} title="还没有复盘报告" desc="录入几篇作品的数据后，生成第一份复盘报告。" /></Card>}
+            : <Card><Empty icon={<Lightbulb className="size-5" />} title="还没有复盘报告" desc="录入几篇作品的数据后，生成第一份复盘报告。"
+              action={<Button variant="primary" icon={<Sparkles className="size-4" />} loading={running} onClick={runReview}>生成复盘报告</Button>} /></Card>}
         </div>
       </div>
-      {openRow && <MetricsDrawer row={openRow} platform={acc.platform} onClose={() => setParams({}, { replace: true })} />}
+      <div className="mt-6 space-y-6">
+        <AttributionCard accountId={acc.id} />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <TopWorksCard accountId={acc.id} />
+          <div id="digests" className={cn('rounded-xl transition', params.get('tab') === 'digest' && 'ring-2 ring-ink-300')}>
+            <DigestsCard accountId={acc.id} />
+          </div>
+        </div>
+      </div>
+      {openRow && <MetricsDrawer key={openRow.id} row={openRow} platform={acc.platform} onClose={() => setParams({}, { replace: true })}
+        onNext={nextRow ? () => setParams({ work: nextRow.id }, { replace: true }) : undefined} />}
     </div>
   )
 }

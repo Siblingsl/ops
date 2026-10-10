@@ -1,8 +1,9 @@
-import { Check, Copy, Download, Package, Smartphone, Sparkles } from 'lucide-react'
+import { Check, Copy, Download, LayoutTemplate, Package, Smartphone, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
-import { BackfillForm } from '@/components/backfill'
+import { BackfillForm, PostPushTodos } from '@/components/backfill'
+import { XhsCardMaker } from '@/components/xhs-cards'
 import { Button, Card, cn, HumanGate, Notice } from '@/components/ui'
 import { errorMessage, post } from '@/lib/api'
 import { copyText, runeLen } from '@/lib/format'
@@ -29,15 +30,51 @@ function CopyBlock({ label, meta, text, multiline }: { label: string; meta?: str
       <div className={cn('rounded-lg bg-mist-50 px-3 py-2.5 text-[14.5px] text-mist-800', multiline ? 'max-h-80 overflow-y-auto whitespace-pre-wrap leading-[1.85]' : 'font-medium')}>
         {text || <span className="text-mist-400">（空）</span>}
       </div>
+      <button onClick={copy} disabled={!text}
+        className={cn('mt-3 flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-xl text-[15px] font-semibold transition sm:hidden',
+          copied ? 'bg-emerald-50 text-emerald-700' : 'bg-ink-600 text-white active:bg-ink-700')}>
+        {copied ? <><Check className="size-4" />已复制 ✓</> : <><Copy className="size-4" />复制{label}</>}
+      </button>
     </Card>
   )
 }
 
+/** saveImages hands images to the system share sheet (save to album on phones), else downloads them one by one. */
+async function saveImages(urls: string[], zip: string) {
+  try {
+    const files = await Promise.all(urls.map(async (u, i) => {
+      const b = await (await fetch(u)).blob()
+      return new File([b], `${String(i + 1).padStart(2, '0')}.${b.type.split('/')[1] || 'jpg'}`, { type: b.type })
+    }))
+    if (navigator.canShare?.({ files })) {
+      await navigator.share({ files })
+      return
+    }
+    for (const [i, f] of files.entries()) {
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(f)
+      a.download = f.name
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000)
+      if (i < files.length - 1) await new Promise((r) => setTimeout(r, 400))
+    }
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') return
+    toast.info('浏览器不允许逐张保存，已改为下载 zip')
+    location.href = zip
+  }
+}
+
 export default function Pack() {
-  const { work, setWork } = useWork()
+  const { work, setWork, refresh } = useWork()
   const [busy, setBusy] = useState(false)
   const [pages, setPages] = useState<{ title: string; body: string }[] | null>(null)
   const [pageBusy, setPageBusy] = useState(false)
+  const [cards, setCards] = useState(false)
+  const maker = (
+    <XhsCardMaker workId={work.id} pages={pages} open={cards} onClose={() => setCards(false)} onAdded={() => void refresh()}
+      warn={work.status === 'packed' ? '加入新图片会修改作品内容，需要重新检查后再生成发布包。' : undefined} />
+  )
   const packed = work.status === 'packed' || work.status === 'published'
   const suggestPages = async () => {
     setPageBusy(true)
@@ -76,7 +113,9 @@ export default function Pack() {
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           <Button variant="primary" size="lg" loading={busy} onClick={create} icon={<Package className="size-4" />}>生成发布包</Button>
           <Button size="lg" variant="secondary" loading={pageBusy} onClick={suggestPages} icon={<Sparkles className="size-4" />}>分页文案建议</Button>
+          <Button size="lg" variant="ghost" onClick={() => setCards(true)} icon={<LayoutTemplate className="size-4" />}>生成文字卡片</Button>
         </div>
+        {maker}
         {pages && (
           <div className="mt-6 space-y-2 text-left">
             {pages.map((p, i) => (
@@ -159,7 +198,9 @@ export default function Pack() {
               <span className="text-[13px] font-semibold text-mist-700">分页文案建议</span>
               <span className="text-xs text-mist-400">封面页 + 要点页，便于做成竖图</span>
               <Button size="sm" variant="secondary" className="ml-auto" loading={pageBusy} onClick={suggestPages} icon={<Sparkles className="size-3.5" />}>生成</Button>
+              {work.status !== 'published' && <Button size="sm" variant="ghost" onClick={() => setCards(true)} icon={<LayoutTemplate className="size-3.5" />}>做成文字卡片</Button>}
             </div>
+            {maker}
             {pages ? (
               <div className="space-y-2">
                 {pages.map((p, i) => (
@@ -180,7 +221,11 @@ export default function Pack() {
           <Card className="p-4">
             <div className="mb-3 flex items-center gap-2">
               <span className="text-[13px] font-semibold text-mist-700">图片</span>
-              <span className="text-xs text-mist-400">{images.length} 张，按编号顺序上传</span>
+              <span className="text-xs text-mist-400">{images.length} 张，按编号顺序上传；手机上可长按单张保存</span>
+              {images.length > 0 && (
+                <Button size="sm" variant="secondary" className="ml-auto" icon={<Download className="size-3.5" />}
+                  onClick={() => saveImages(images.map((a) => a!.url), `/api/v1/works/${work.id}/xhs/pack.zip`)}>逐张保存到相册</Button>
+              )}
             </div>
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
               {images.map((a, i) => a && (
@@ -206,9 +251,17 @@ export default function Pack() {
             </ol>
           </Card>
           <Notice tone="gamboge">AI 声明：内容使用了 AI 辅助时，按平台规则必须声明。漏标可能导致限流或处罚。</Notice>
-          <BackfillForm work={work} setWork={setWork} />
+          {(work.status === 'packed' || work.status === 'published') && (work.post_push_todos ?? []).length > 0 && <Card className="p-4"><PostPushTodos work={work} setWork={setWork} /></Card>}
+          <div id="backfill" className="scroll-mt-20"><BackfillForm work={work} setWork={setWork} /></div>
         </aside>
       </div>
+      {work.status === 'packed' && (
+        <div className="sticky bottom-16 z-20 mt-6 sm:hidden">
+          <Button variant="primary" size="lg" className="w-full shadow-pop" onClick={() => document.getElementById('backfill')?.scrollIntoView({ behavior: 'smooth' })}>
+            我已在小红书发布，去回填
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

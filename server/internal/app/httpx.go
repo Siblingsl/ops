@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -44,8 +46,8 @@ var (
 	errNotFound        = apiErr(404, "not_found", "内容不存在或已删除")
 )
 
-func validation(msg string) *APIError    { return apiErr(422, "validation_failed", msg) }
-func stateInvalid(msg string) *APIError  { return apiErr(409, "state_invalid", msg) }
+func validation(msg string) *APIError   { return apiErr(422, "validation_failed", msg) }
+func stateInvalid(msg string) *APIError { return apiErr(409, "state_invalid", msg) }
 func humanStep(h, msg string) *APIError {
 	return apiErr(409, "human_step_required", msg).With(map[string]string{"checkpoint": h})
 }
@@ -87,6 +89,24 @@ func ok(w http.ResponseWriter, v any) error {
 func decode(r *http.Request, v any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 8<<20))
 	if err := dec.Decode(v); err != nil {
+		return validation("请求格式不正确：" + err.Error())
+	}
+	return nil
+}
+
+// decodeOptional accepts an empty body (all fields keep their zero value).
+func decodeOptional(r *http.Request, v any) error {
+	if r.Body == nil {
+		return nil
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, 8<<20))
+	if err != nil {
+		return validation("请求格式不正确：" + err.Error())
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(raw, v); err != nil {
 		return validation("请求格式不正确：" + err.Error())
 	}
 	return nil
@@ -164,16 +184,29 @@ type ctxKey int
 
 const (
 	ctxMember ctxKey = iota
+	ctxPreferFallback
 )
 
+// preferFallback lets a retry go straight to the route's backup model (UX-07「换备用模型」).
+func preferFallback(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-AI-Prefer") == "fallback" {
+			r = r.WithContext(context.WithValue(r.Context(), ctxPreferFallback, true))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 type identity struct {
-	UserID      uuid.UUID
-	SessionID   uuid.UUID
-	WorkspaceID uuid.UUID
-	Username    string
-	Role        string
-	ReauthOK    bool
-	lastSeen    time.Time
+	UserID        uuid.UUID
+	SessionID     uuid.UUID
+	WorkspaceID   uuid.UUID
+	Username      string
+	Role          string
+	SystemAdmin   bool
+	AdminOverride bool
+	ReauthOK      bool
+	lastSeen      time.Time
 }
 
 func ident(ctx context.Context) *identity {

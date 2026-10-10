@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -201,14 +203,17 @@ type ReviewContent struct {
 		Angle  string `json:"angle"`
 		Reason string `json:"reason"`
 	} `json:"topic_suggestions"`
+	WritingInsights []string `json:"writing_insights"`
 }
 
 type ReviewReport struct {
-	ID        uuid.UUID     `json:"id"`
-	WorkIDs   []uuid.UUID   `json:"work_ids"`
-	Content   ReviewContent `json:"content"`
-	Adopted   []int32       `json:"adopted"`
-	CreatedAt time.Time     `json:"created_at"`
+	ID         uuid.UUID     `json:"id"`
+	WorkIDs    []uuid.UUID   `json:"work_ids"`
+	Content    ReviewContent `json:"content"`
+	Adopted    []int32       `json:"adopted"`
+	Remembered []int32       `json:"remembered"`
+	Ignored    []int32       `json:"ignored"`
+	CreatedAt  time.Time     `json:"created_at"`
 }
 
 // createReview only produces suggestions; nothing is written to the topic pool (H-08, HC-08).
@@ -218,23 +223,46 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		WorkIDs []uuid.UUID `json:"work_ids"`
-		Recent  int         `json:"recent"`
+		WorkIDs    []uuid.UUID `json:"work_ids"`
+		Recent     int         `json:"recent"`
+		Background bool        `json:"background"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
 	ctx := r.Context()
-	ids := in.WorkIDs
+	if in.Background {
+		jobID, err := s.startBackgroundJob(ctx, jobSpec{TaskType: "review_analysis", Label: "AI 复盘 · " + a.Name, AccountID: &a.ID,
+			Link: "/a/" + a.ID.String() + "/review"}, func(jctx context.Context) (any, error) {
+			rep, err := s.buildReview(jctx, a, in.WorkIDs, in.Recent)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"report_id": rep.ID}, nil
+		})
+		if err != nil {
+			return err
+		}
+		return ok(w, map[string]any{"job_id": jobID})
+	}
+	rep, err := s.buildReview(ctx, a, in.WorkIDs, in.Recent)
+	if err != nil {
+		return err
+	}
+	return ok(w, rep)
+}
+
+func (s *Server) buildReview(ctx context.Context, a *Account, workIDs []uuid.UUID, recent int) (*ReviewReport, error) {
+	ids := workIDs
 	if len(ids) == 0 {
-		n := in.Recent
+		n := recent
 		if n <= 0 || n > 30 {
 			n = 10
 		}
 		rows, err := s.db.Query(ctx, `SELECT w.id FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL
 			AND EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id) ORDER BY coalesce(w.published_at, w.updated_at) DESC LIMIT $2`, a.ID, n)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for rows.Next() {
 			var id uuid.UUID
@@ -244,7 +272,7 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) error {
 		rows.Close()
 	}
 	if len(ids) == 0 {
-		return validation("还没有录入过数据的作品，请先在看板中录入数据")
+		return nil, validation("还没有录入过数据的作品，请先在看板中录入数据")
 	}
 	var b strings.Builder
 	var used []uuid.UUID
@@ -263,7 +291,7 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) error {
 		b.WriteString("\n")
 		rows, err := s.db.Query(ctx, `SELECT `+metricCols+` FROM metric_snapshot WHERE work_id=$1 ORDER BY captured_at`, id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for rows.Next() {
 			m, err := scanMetric(rows)
@@ -275,14 +303,14 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) error {
 		rows.Close()
 	}
 	if len(used) == 0 {
-		return validation("所选作品不存在")
+		return nil, validation("所选作品不存在")
 	}
 	user := "## 作品及数据\n" + b.String() + `
 ## 任务说明
-根据以上作品数据做复盘：总结哪些做法有效、哪些无效（结论要基于数据，不要编造），并给出不少于 3 条下一步的选题建议。
+根据以上作品数据做复盘：总结哪些做法有效、哪些无效（结论要基于数据，不要编造），并给出不少于 3 条下一步的选题建议。另外给出写作层面的结论（如标题、开头、结构上的规律），每条一句可执行的规则，没有依据时可以为空。
 
 ## 输出格式
-只输出 JSON：{"conclusions":["结论"],"topic_suggestions":[{"title":"选题标题","angle":"切入角度","reason":"依据"}]}`
+只输出 JSON：{"conclusions":["结论"],"topic_suggestions":[{"title":"选题标题","angle":"切入角度","reason":"依据"}],"writing_insights":["写作层面的规律"]}`
 	var out ReviewContent
 	res, err := s.runAIJSON(ctx, aiTask{Type: "review_analysis", Account: a, User: user, SkipStyle: true, Refs: map[string]any{"works": len(used)}}, &out, func() error {
 		if len(out.TopicSuggestions) < 3 {
@@ -291,16 +319,101 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	content, _ := json.Marshal(out)
 	var rep ReviewReport
 	if err := s.db.QueryRow(ctx, `INSERT INTO review_report (account_id, work_ids, content, ai_call_id) VALUES ($1,$2,$3,$4) RETURNING id, created_at`,
 		a.ID, used, content, res.CallID).Scan(&rep.ID, &rep.CreatedAt); err != nil {
+		return nil, err
+	}
+	if out.WritingInsights == nil {
+		out.WritingInsights = []string{}
+	}
+	rep.WorkIDs, rep.Content, rep.Adopted, rep.Remembered, rep.Ignored = used, out, []int32{}, []int32{}, []int32{}
+	return &rep, nil
+}
+
+// rememberInsight turns one writing insight into an active memory (EX-J-03); the click is the human confirmation.
+func (s *Server) rememberInsight(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r, "id")
+	if err != nil {
 		return err
 	}
-	rep.WorkIDs, rep.Content, rep.Adopted = used, out, []int32{}
-	return ok(w, rep)
+	idx := queryIntParam(r, "index")
+	ctx := r.Context()
+	var accountID uuid.UUID
+	var content []byte
+	var remembered []int32
+	if err := s.db.QueryRow(ctx, `SELECT account_id, content, remembered FROM review_report WHERE id=$1`, id).Scan(&accountID, &content, &remembered); err != nil {
+		return err
+	}
+	if _, err := s.account(ctx, accountID); err != nil {
+		return err
+	}
+	var rc ReviewContent
+	_ = json.Unmarshal(content, &rc)
+	if idx < 0 || idx >= len(rc.WritingInsights) {
+		return validation("结论不存在")
+	}
+	for _, x := range remembered {
+		if int(x) == idx {
+			return stateInvalid("这条结论已经记住了")
+		}
+	}
+	text := truncate(strings.TrimSpace(rc.WritingInsights[idx]), 200)
+	uid := ident(ctx).UserID
+	var memID uuid.UUID
+	err = s.withTx(ctx, func(q pgx.Tx) error {
+		ev, _ := json.Marshal(map[string]any{"review_report_id": id, "index": idx})
+		if err := q.QueryRow(ctx, `INSERT INTO account_memory (account_id, kind, scope, text, status, source, evidence, created_by, confirmed_by, confirmed_at)
+			VALUES ($1,$2,'all',$3,'active','review',$4,$5,$5,now()) RETURNING id`, accountID, guessMemoryKind(text), text, ev, uid).Scan(&memID); err != nil {
+			return err
+		}
+		_, err := q.Exec(ctx, `UPDATE review_report SET remembered = array_append(remembered, $2) WHERE id=$1`, id, idx)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	s.audit(ctx, "memory_confirm", "account_memory", memID.String(), "ok", map[string]any{"source": "review"})
+	return ok(w, map[string]any{"memory_id": memID})
+}
+
+// ignoreInsight hides one writing insight for good and counts it as a rejected AI output.
+func (s *Server) ignoreInsight(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	idx := queryIntParam(r, "index")
+	ctx := r.Context()
+	var accountID uuid.UUID
+	var content []byte
+	var callID *uuid.UUID
+	if err := s.db.QueryRow(ctx, `SELECT account_id, content, ai_call_id FROM review_report WHERE id=$1`, id).Scan(&accountID, &content, &callID); err != nil {
+		return err
+	}
+	if _, err := s.account(ctx, accountID); err != nil {
+		return err
+	}
+	var rc ReviewContent
+	_ = json.Unmarshal(content, &rc)
+	if idx < 0 || idx >= len(rc.WritingInsights) {
+		return validation("结论不存在")
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE review_report SET ignored = array_append(ignored, $2) WHERE id=$1 AND NOT ($2 = ANY(ignored)) AND NOT ($2 = ANY(remembered))`, id, idx); err != nil {
+		return err
+	}
+	if callID != nil {
+		reason := "其他"
+		note := "忽略写作结论：" + truncate(rc.WritingInsights[idx], 80)
+		o := "rejected"
+		if err := s.recordFeedback(ctx, *callID, feedbackInput{Outcome: &o, ReasonTags: []string{reason}, Note: &note}); err != nil {
+			slog.Warn("记录 AI 反馈失败", "err", err)
+		}
+	}
+	return ok(w, map[string]any{"ok": true})
 }
 
 func metricLine(m Metric) string {
@@ -328,7 +441,7 @@ func (s *Server) listReviews(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT id, work_ids, content, adopted, created_at FROM review_report WHERE account_id=$1 ORDER BY created_at DESC LIMIT 50`, a.ID)
+	rows, err := s.db.Query(r.Context(), `SELECT id, work_ids, content, adopted, remembered, ignored, created_at FROM review_report WHERE account_id=$1 ORDER BY created_at DESC LIMIT 50`, a.ID)
 	if err != nil {
 		return err
 	}
@@ -337,10 +450,13 @@ func (s *Server) listReviews(w http.ResponseWriter, r *http.Request) error {
 	for rows.Next() {
 		var rep ReviewReport
 		var content []byte
-		if err := rows.Scan(&rep.ID, &rep.WorkIDs, &content, &rep.Adopted, &rep.CreatedAt); err != nil {
+		if err := rows.Scan(&rep.ID, &rep.WorkIDs, &content, &rep.Adopted, &rep.Remembered, &rep.Ignored, &rep.CreatedAt); err != nil {
 			return err
 		}
 		_ = json.Unmarshal(content, &rep.Content)
+		if rep.Content.WritingInsights == nil {
+			rep.Content.WritingInsights = []string{}
+		}
 		list = append(list, rep)
 	}
 	return ok(w, list)
@@ -388,6 +504,10 @@ func (s *Server) adoptSuggestion(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	s.audit(ctx, "review_adopt", "topic", topicID.String(), "ok", map[string]any{"report": id.String(), "index": idx})
+	var callID *uuid.UUID
+	if s.db.QueryRow(ctx, `SELECT ai_call_id FROM review_report WHERE id=$1`, id).Scan(&callID) == nil && callID != nil {
+		s.implicitFeedback(ctx, *callID, "accepted", &idx, nil)
+	}
 	return ok(w, map[string]any{"topic_id": topicID})
 }
 
@@ -458,7 +578,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) error {
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM topic WHERE account_id=$1 AND status='pending' AND deleted_at IS NULL`, a.ID).Scan(&pendingTopics)
 	todayPush, _ = s.todayPushCount(ctx, a.ID)
 	var tokensToday int
-	_ = s.db.QueryRow(ctx, `SELECT coalesce(sum(prompt_tokens+completion_tokens),0) FROM ai_call WHERE created_at >= $1`, s.today()).Scan(&tokensToday)
+	tokensToday = s.tokensToday(ctx)
 	var aiReady bool
 	_ = s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM model_route r JOIN model_provider p ON p.id=r.provider_id
 		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND r.task_type='default' AND p.status='active')`, ident(ctx).WorkspaceID).Scan(&aiReady)

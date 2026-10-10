@@ -34,10 +34,14 @@ func main() {
 		err = migrate()
 	case "reset-password":
 		err = resetPassword()
+	case "grant-admin":
+		err = setAdmin(true)
+	case "revoke-admin":
+		err = setAdmin(false)
 	case "version":
 		fmt.Println(app.Version)
 	default:
-		fmt.Fprintf(os.Stderr, "用法：ops [serve|migrate|reset-password <username>|version]\n")
+		fmt.Fprintf(os.Stderr, "用法：ops [serve|migrate|reset-password <username>|grant-admin <username>|revoke-admin <username>|version]\n")
 		os.Exit(2)
 	}
 	if err != nil {
@@ -51,7 +55,20 @@ func migrate() error {
 	if err != nil {
 		return err
 	}
-	return db.Migrate(cfg.DatabaseURL)
+	if err := db.Migrate(cfg.DatabaseURL); err != nil {
+		return err
+	}
+	ctx := context.Background()
+	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	srv, err := app.New(cfg, pool)
+	if err != nil {
+		return err
+	}
+	return srv.EnsurePermanentAdmin(ctx)
 }
 
 func serve() error {
@@ -72,6 +89,9 @@ func serve() error {
 	srv, err := app.New(cfg, pool)
 	if err != nil {
 		return err
+	}
+	if err := srv.EnsurePermanentAdmin(ctx); err != nil {
+		return fmt.Errorf("初始化永久超级管理员失败：%w", err)
 	}
 	if cfg.Dev {
 		go serveMock(cfg.MockListen)
@@ -153,5 +173,39 @@ func resetPassword() error {
 		return err
 	}
 	fmt.Printf("用户 %s 的密码已重置，所有已登录的会话都已退出。\n", name)
+	return nil
+}
+
+func setAdmin(grant bool) error {
+	if len(os.Args) < 3 || strings.TrimSpace(os.Args[2]) == "" {
+		if grant {
+			return errors.New("用法：ops grant-admin <username>")
+		}
+		return errors.New("用法：ops revoke-admin <username>")
+	}
+	username := strings.TrimSpace(os.Args[2])
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	srv, err := app.New(cfg, pool)
+	if err != nil {
+		return err
+	}
+	name, err := app.SetSystemAdmin(ctx, srv, username, grant)
+	if err != nil {
+		return err
+	}
+	if grant {
+		fmt.Printf("用户 %s 已授予系统超级管理员。\n", name)
+	} else {
+		fmt.Printf("用户 %s 已撤销系统超级管理员。\n", name)
+	}
 	return nil
 }

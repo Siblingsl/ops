@@ -22,9 +22,13 @@ const queryClient = new QueryClient({
 registerUnauthenticated(() => {
   queryClient.setQueryData(['me'], null)
   if (!location.pathname.startsWith('/login') && !location.pathname.startsWith('/setup')) {
-    location.href = '/login?next=' + encodeURIComponent(location.pathname)
+    location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search)
   }
 })
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => undefined))
+}
 
 registerReauthPrompt(
   () =>

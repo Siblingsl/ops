@@ -143,6 +143,48 @@ func stream(ctx context.Context, hc *http.Client, req Request, onDelta func(stri
 	return out.String(), usage, nil
 }
 
+// Embed calls the OpenAI-compatible /embeddings endpoint and returns one vector per input.
+func Embed(ctx context.Context, hc *http.Client, baseURL, apiKey, model string, inputs []string) ([][]float32, error) {
+	b, _ := json.Marshal(map[string]any{"model": model, "input": inputs})
+	url := strings.TrimRight(baseURL, "/") + "/embeddings"
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	hreq.Header.Set("Content-Type", "application/json")
+	hreq.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := hc.Do(hreq)
+	if err != nil {
+		return nil, fmt.Errorf("无法连接向量模型服务：%w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, &UpstreamError{Status: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
+	}
+	var out struct {
+		Data []struct {
+			Index     int       `json:"index"`
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	vecs := make([][]float32, len(inputs))
+	for _, d := range out.Data {
+		if d.Index >= 0 && d.Index < len(vecs) {
+			vecs[d.Index] = d.Embedding
+		}
+	}
+	for i := range vecs {
+		if vecs[i] == nil {
+			return nil, fmt.Errorf("向量模型缺少第 %d 条结果", i+1)
+		}
+	}
+	return vecs, nil
+}
+
 // ExtractJSON returns the first top-level JSON object in s (models sometimes wrap JSON in fences).
 func ExtractJSON(s string) string {
 	start := strings.Index(s, "{")

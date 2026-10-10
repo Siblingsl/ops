@@ -40,6 +40,21 @@ func (l *LLM) Handler() http.Handler {
 			"data":    []any{map[string]string{"b64_json": png1}},
 		})
 	})
+	mux.HandleFunc("/v1/embeddings", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string   `json:"model"`
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(400)
+			return
+		}
+		data := make([]any, len(req.Input))
+		for i, in := range req.Input {
+			data[i] = map[string]any{"index": i, "embedding": embed(in)}
+		}
+		writeJSON(w, map[string]any{"data": data, "model": req.Model})
+	})
 	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") == "bad-key" {
 			w.WriteHeader(401)
@@ -49,6 +64,11 @@ func (l *LLM) Handler() http.Handler {
 		var req chatReq
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.WriteHeader(400)
+			return
+		}
+		if req.Model == "mock-down" {
+			w.WriteHeader(503)
+			_, _ = w.Write([]byte(`{"error":{"message":"service unavailable"}}`))
 			return
 		}
 		var sys, user string
@@ -75,6 +95,9 @@ func (l *LLM) Handler() http.Handler {
 		fl, _ := w.(http.Flusher)
 		runes := []rune(reply)
 		delay := l.Delay
+		if req.Model == "mock-slow" {
+			delay = 80 * time.Millisecond
+		}
 		for i := 0; i < len(runes); i += 6 {
 			end := min(i+6, len(runes))
 			chunk := map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]string{"content": string(runes[i:end])}}}}
@@ -101,6 +124,9 @@ func (l *LLM) Handler() http.Handler {
 }
 
 var taskRe = regexp.MustCompile(`任务：([a-z_]+)`)
+
+// tplRe reads the outline structure template so the fake outline follows it step by step.
+var tplRe = regexp.MustCompile(`结构模板「[^」]*」：([^\n]+?)。大纲必须按这个结构展开`)
 
 func field(prompt, label string) string {
 	for _, line := range strings.Split(prompt, "\n") {
@@ -150,6 +176,45 @@ func js(v any) string {
 	return string(b)
 }
 
+// embed hashes character bigrams into a fixed-size vector so texts sharing words are close.
+func embed(s string) []float32 {
+	const dim = 128
+	v := make([]float32, dim)
+	rs := []rune(s)
+	for i := 0; i+1 < len(rs); i++ {
+		h := uint32(2166136261)
+		for _, r := range rs[i : i+2] {
+			h ^= uint32(r)
+			h *= 16777619
+		}
+		v[h%dim]++
+	}
+	return v
+}
+
+var idRe = regexp.MustCompile(`id=([0-9a-f-]{36})`)
+
+func firstSentence(s string) string {
+	for _, m := range regexp.MustCompile(`[^。！？\n]+[。！？]?`).FindAllString(s, -1) {
+		if t := strings.TrimSpace(m); utf8.RuneCountInString(t) >= 6 && !strings.HasPrefix(t, "#") && !strings.HasPrefix(t, "【") {
+			return t
+		}
+	}
+	return ""
+}
+
+func sectionAfter(prompt, marker string) string {
+	i := strings.Index(prompt, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := prompt[i+len(marker):]
+	if j := strings.Index(rest, "\n## "); j >= 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSpace(rest)
+}
+
 func respond(prompt string) string {
 	task := ""
 	if m := taskRe.FindStringSubmatch(prompt); m != nil {
@@ -197,6 +262,14 @@ func respond(prompt string) string {
 		return js(map[string]any{"topics": items})
 	case "outline":
 		heads := []string{"先说结论", "为什么会这样", "我的亲身经历", "具体怎么做", "需要注意的地方"}
+		if m := tplRe.FindStringSubmatch(prompt); m != nil {
+			heads = nil
+			for _, step := range strings.Split(m[1], "→") {
+				if s := strings.TrimSpace(step); s != "" && len(heads) < 8 {
+					heads = append(heads, short(s, 16))
+				}
+			}
+		}
 		var items []map[string]any
 		for i, h := range heads {
 			items = append(items, map[string]any{"heading": h, "key_point": fmt.Sprintf("围绕「%s」展开第 %d 层论述", short(viewpoint, 24), i+1), "material_ids": []string{}})
@@ -211,6 +284,13 @@ func respond(prompt string) string {
 		return para
 	case "section_edit":
 		sel := field(prompt, "选中内容：")
+		if field(prompt, "候选数：") == "3" {
+			return js(map[string]any{"variants": []map[string]string{
+				{"label": "更口语", "text": "说白了，" + sel},
+				{"label": "更精炼", "text": short(sel, max(4, utf8.RuneCountInString(sel)/2)) + "。"},
+				{"label": "换个角度", "text": "如果从读者的角度看，这件事可以这样理解：先想清楚为什么，再决定怎么做，最后才是做多少。"},
+			}})
+		}
 		switch field(prompt, "模式：") {
 		case "expand":
 			return sel + "换句话说，这件事的关键不在于做得多，而在于每一步都想清楚为什么要做。"
@@ -274,7 +354,8 @@ func respond(prompt string) string {
 		return "## " + short(key, 20) + "\n\n" + strings.TrimSpace(b.String()) + "\n\n这里展开说说背后的原因和具体做法。"
 	case "review_analysis":
 		return js(map[string]any{
-			"conclusions": []string{"带有亲身经历的文章阅读完成度更高", "标题中给出明确对象（如「写给新手」）的作品分享更多", "发布时间集中在晚上 8 点后的作品互动更好"},
+			"writing_insights": []string{"标题里写出具体数字的作品阅读更高", "开头先讲一个具体场景的作品读完率更好"},
+			"conclusions":      []string{"带有亲身经历的文章阅读完成度更高", "标题中给出明确对象（如「写给新手」）的作品分享更多", "发布时间集中在晚上 8 点后的作品互动更好"},
 			"topic_suggestions": []map[string]string{
 				{"title": "写给新手的第一份避坑清单", "angle": "延续表现最好的清单体", "reason": "清单体分享率高"},
 				{"title": "我做错过的三个决定", "angle": "真实经历复盘", "reason": "经历类完成度高"},
@@ -303,12 +384,12 @@ func respond(prompt string) string {
 				cids = []string{charID}
 			}
 			panels = append(panels, map[string]any{
-				"scene":          fmt.Sprintf("场景 %d：围绕「%s」的一幕", i+1, short(viewpoint, 16)),
-				"character_ids":  cids,
-				"action":         fmt.Sprintf("角色做出第 %d 步反应", i+1),
-				"shot":           []string{"远景", "中景", "近景", "特写", "过肩", "俯视"}[i%6],
-				"narration":      fmt.Sprintf("旁白：关于「%s」的第 %d 层说明。", short(viewpoint, 12), i+1),
-				"dialogue":       short(fmt.Sprintf("对白 %d", i+1), 20),
+				"scene":         fmt.Sprintf("场景 %d：围绕「%s」的一幕", i+1, short(viewpoint, 16)),
+				"character_ids": cids,
+				"action":        fmt.Sprintf("角色做出第 %d 步反应", i+1),
+				"shot":          []string{"远景", "中景", "近景", "特写", "过肩", "俯视"}[i%6],
+				"narration":     fmt.Sprintf("旁白：关于「%s」的第 %d 层说明。", short(viewpoint, 12), i+1),
+				"dialogue":      short(fmt.Sprintf("对白 %d", i+1), 20),
 			})
 		}
 		return js(map[string]any{"panels": panels})
@@ -347,6 +428,130 @@ func respond(prompt string) string {
 		}})
 	case "organize_notes":
 		return "## 先说结论\n\n" + short(viewpoint, 80) + "\n\n## 具体怎么做\n\n把要点按顺序整理成可执行的步骤，不添加新的事实。"
+	case "section_continue":
+		return "换句话说，真正重要的是先想清楚下一步要做什么。"
+	case "hook_suggest":
+		return js(map[string]any{"variants": []map[string]string{
+			{"label": "场景", "text": "上周三晚上十点，我还在改一份没人会看的报告。"},
+			{"label": "提问", "text": "你有没有算过，自己一周有多少时间花在了没必要的事情上？"},
+			{"label": "反常识", "text": "做得越多，不一定越好；很多时候，少做一件事反而更有用。"},
+		}})
+	case "outline_review":
+		return js(map[string]any{"issues": []map[string]any{
+			{"items": []int{1, 2}, "problem": "第 1、2 项的论点有重叠", "suggestion": "合并为一项，或让第 2 项聚焦原因"},
+			{"items": []int{4}, "problem": "缺少具体的例子支撑", "suggestion": "补充一条经历类素材"},
+		}, "overall": "结构清楚，先结论后展开；建议补充论据并减少重复。"})
+	case "copilot_chat":
+		if strings.Contains(prompt, "请逐段起草") || strings.Contains(prompt, "整篇或多段正文") {
+			return "请逐段起草：建议按大纲顺序，从「先说结论」开始，一段写完再让我看论证。"
+		}
+		if sel := sectionAfter(prompt, "## 当前上下文：选中的文字"); sel != "" {
+			return "这段的意思清楚，但可以更具体。\n\n建议改为：" + short(firstSentence(sel)+"比如，我上周就因为这件事少开了两个会。", 120)
+		}
+		return "从论证看，这段先给了结论，但缺少一个具体例子。可以补一条你的亲身经历，或者从素材库里选一条案例。"
+	case "polish_check":
+		var issues []map[string]string
+		for _, b := range blocks(prompt) {
+			if s := firstSentence(b.Body); s != "" {
+				issues = append(issues, map[string]string{"section_id": b.ID, "quote": s, "problem": "这里的论据还不够具体", "suggestion": "补一个具体的例子或数据来源"})
+			}
+		}
+		if issues == nil {
+			issues = []map[string]string{}
+		}
+		return js(map[string]any{"issues": issues})
+	case "fix_suggest":
+		sent := field(prompt, "命中的句子：")
+		if sent == "" {
+			sent = "这句话"
+		}
+		clean := strings.NewReplacer("最", "很", "第一", "领先", "绝对", "相当").Replace(sent)
+		return js(map[string]any{"variants": []map[string]string{
+			{"text": clean, "note": "去掉绝对化表达"},
+			{"text": "在我的经验里，" + clean, "note": "改为个人经验表述"},
+		}})
+	case "topic_score":
+		var scores []map[string]any
+		for i, m := range regexp.MustCompile(`选题 id=([0-9a-f-]{36})`).FindAllStringSubmatch(prompt, -1) {
+			scores = append(scores, map[string]any{"topic_id": m[1], "fit": 85 - i*7%40, "reason": "与账号定位的方向一致"})
+		}
+		if scores == nil {
+			scores = []map[string]any{}
+		}
+		return js(map[string]any{"scores": scores})
+	case "profile_bootstrap":
+		return js(map[string]any{
+			"positioning_tags": []string{"职场成长", "效率方法"}, "target_audience": "工作 1–5 年的职场人",
+			"persona_tone": "像一位有经验的同事，真诚具体", "banned_words_suggest": []string{"颠覆"},
+			"style_summary": "短段落，先讲场景再给建议，结尾落到一个可执行的小动作。",
+			"evidence":      map[string]string{"positioning_tags": "样本多次讨论会议、周报等职场话题", "target_audience": "样本中的场景多为入职不久的同事"},
+		})
+	case "material_extract":
+		src := sectionAfter(prompt, "## 原文")
+		var items []map[string]any
+		for _, line := range strings.Split(src, "\n") {
+			line = strings.TrimSpace(line)
+			if utf8.RuneCountInString(line) < 8 {
+				continue
+			}
+			kind := "opinion"
+			switch {
+			case regexp.MustCompile(`\d`).MatchString(line):
+				kind = "data"
+			case strings.Contains(line, "我"):
+				kind = "experience"
+			case strings.Contains(line, "公司") || strings.Contains(line, "案例"):
+				kind = "case"
+			}
+			items = append(items, map[string]any{"kind": kind, "content": short(line, 200), "source_hint": "原文", "tags": []string{"提炼"}})
+			if len(items) >= 8 {
+				break
+			}
+		}
+		if items == nil {
+			items = []map[string]any{}
+		}
+		return js(map[string]any{"items": items})
+	case "material_tag":
+		return js(map[string]any{"kind": "opinion", "tags": []string{"方法论", "职场"}})
+	case "inbox_triage":
+		text := sectionAfter(prompt, "## 灵感")
+		if regexp.MustCompile(`\d|我`).MatchString(text) {
+			return js(map[string]any{"as": "material", "kind": "experience", "tags": []string{"灵感"}, "reason": "更像一条可引用的经历"})
+		}
+		return js(map[string]any{"as": "topic", "title": short(text, 24), "angle": "从读者的一个具体困扰切入", "audience": "关注这个话题的读者", "reason": "可以展开成一篇完整的内容"})
+	case "memory_distill":
+		return js(map[string]any{"memories": []map[string]string{
+			{"kind": "tone", "scope": "draft", "text": "段落开头先讲一个具体场景", "evidence": "多次把抽象开头改成了场景"},
+		}})
+	case "tag_suggest":
+		return js(map[string]any{"tags": []map[string]string{
+			{"text": "#职场成长", "reason": "与正文主题一致"}, {"text": "#效率工具", "reason": "正文提到了具体方法"}, {"text": "#打工人日常", "reason": "贴近读者场景"},
+		}})
+	case "review_attribution":
+		return js(map[string]any{"conclusions": []map[string]string{
+			{"text": "标题含数字的作品平均阅读更高", "confidence": "基于本账号已录入数据的分组对比，每组样本不少于 3 篇"},
+			{"text": "晚上发布的作品互动倾向更好", "confidence": "部分分组样本少于 3 篇，仅供参考"},
+		}})
+	case "work_breakdown":
+		return js(map[string]any{
+			"structure": []string{"开头：具体场景引入", "中段：拆解原因", "后段：给出方法", "结尾：一个可执行的小动作"},
+			"opening":   "用一个具体时间和场景开头", "title_features": []string{"给出明确对象", "包含具体动作"},
+			"angle": "从一个常见困扰切入", "reusable_rules": []string{"开头先讲场景再讲观点", "结尾给一个今天就能做的小动作"},
+			"outline_template": []map[string]string{{"heading": "一个具体场景", "key_point": "让读者代入"}, {"heading": "为什么会这样", "key_point": "拆解原因"},
+				{"heading": "我的做法", "key_point": "给出方法"}, {"heading": "从今天开始", "key_point": "一个小动作"}},
+		})
+	case "weekly_digest":
+		return js(map[string]any{"summary": "上周按计划完成了发布，整体节奏稳定。", "highlights": []string{"保持了稳定的更新节奏"}, "next_focus": []string{"补录上周作品的数据"}})
+	case "layout_suggest":
+		sugs := []map[string]any{{"section": 1, "kind": "bold", "text": "这一句原文里没有", "reason": "编造的句子应被丢弃"}}
+		if i := strings.Index(prompt, "### 第 1 段\n"); i >= 0 {
+			body := prompt[i+len("### 第 1 段\n"):]
+			if j := strings.Index(body, "。"); j > 0 {
+				sugs = append(sugs, map[string]any{"section": 1, "kind": "bold", "text": strings.TrimSpace(body[:j+len("。")]), "reason": "开篇第一句适合加粗"})
+			}
+		}
+		return js(map[string]any{"suggestions": sugs})
 	default:
 		return "好的。"
 	}

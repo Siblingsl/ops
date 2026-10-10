@@ -41,8 +41,15 @@ async function parseError(res: Response): Promise<ApiError> {
   return new ApiError(res.status, 'internal', `请求失败（${res.status}）`)
 }
 
+let fallbackUntil = 0
+/** preferFallbackModel sends AI requests straight to each route's backup model for the next few minutes. */
+export function preferFallbackModel(minutes = 10) {
+  fallbackUntil = Date.now() + minutes * 60_000
+}
+
 export async function rawRequest(method: string, path: string, body?: unknown, init?: RequestInit): Promise<Response> {
   const headers: Record<string, string> = { 'X-CSRF-Token': csrf }
+  if (fallbackUntil > Date.now()) headers['X-AI-Prefer'] = 'fallback'
   let payload: BodyInit | undefined
   if (body instanceof FormData) payload = body
   else if (body !== undefined) {
@@ -65,14 +72,14 @@ export async function rawRequest(method: string, path: string, body?: unknown, i
   throw err
 }
 
-export async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await rawRequest(method, path, body)
+export async function api<T = unknown>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
+  const res = await rawRequest(method, path, body, init)
   const text = await res.text()
   return (text ? JSON.parse(text) : null) as T
 }
 
 export const get = <T>(p: string) => api<T>('GET', p)
-export const post = <T>(p: string, b?: unknown) => api<T>('POST', p, b ?? {})
+export const post = <T>(p: string, b?: unknown, signal?: AbortSignal) => api<T>('POST', p, b ?? {}, signal ? { signal } : undefined)
 export const put = <T>(p: string, b?: unknown) => api<T>('PUT', p, b ?? {})
 export const patch = <T>(p: string, b?: unknown) => api<T>('PATCH', p, b ?? {})
 export const del = <T>(p: string, b?: unknown) => api<T>('DELETE', p, b)

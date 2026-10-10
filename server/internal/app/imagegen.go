@@ -117,9 +117,9 @@ func (s *Server) runImageGen(ctx context.Context, account *Account, workID *uuid
 		accountID = &account.ID
 	}
 	var callID uuid.UUID
-	_ = s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO ai_call (account_id, work_id, task_type, provider, model, context_refs,
-		prompt_tokens, completion_tokens, latency_ms, status, error) VALUES ($1,$2,'image_gen',$3,$4,$5,0,0,$6,$7,$8) RETURNING id`,
-		accountID, workID, rt.ProviderName, rt.Model, refsJSON, time.Since(start).Milliseconds(), status, truncate(errText, 500)).Scan(&callID)
+	_ = s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO ai_call (workspace_id, account_id, work_id, task_type, provider, model, context_refs,
+		prompt_tokens, completion_tokens, latency_ms, status, error) VALUES ($1,$2,$3,'image_gen',$4,$5,$6,0,0,$7,$8,$9) RETURNING id`,
+		ident(ctx).WorkspaceID, accountID, workID, rt.ProviderName, rt.Model, refsJSON, time.Since(start).Milliseconds(), status, truncate(errText, 500)).Scan(&callID)
 	if callErr != nil {
 		return Asset{}, apiErr(502, "ai_upstream_error", "文生图失败："+truncate(callErr.Error(), 300))
 	}
@@ -157,8 +157,9 @@ func (s *Server) generateWorkImage(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 	var in struct {
-		Prompt string `json:"prompt"`
-		Size   string `json:"size"`
+		Prompt     string `json:"prompt"`
+		Size       string `json:"size"`
+		Background bool   `json:"background"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -169,6 +170,21 @@ func (s *Server) generateWorkImage(w http.ResponseWriter, r *http.Request) error
 	}
 	if !strings.Contains(prompt, "AI") && !strings.Contains(strings.ToLower(prompt), "ai") {
 		prompt = prompt + "。画面风格清晰，适合内容配图。"
+	}
+	if in.Background {
+		jobID, err := s.startBackgroundJob(r.Context(), jobSpec{TaskType: "image_gen", Label: "AI 出图" + titleOr(m.Title), Link: "/works/" + m.ID.String(),
+			AccountID: &m.Account.ID, WorkID: &m.ID}, func(jctx context.Context) (any, error) {
+			asset, err := s.runImageGen(jctx, m.Account, &m.ID, prompt, in.Size)
+			if err != nil {
+				return nil, err
+			}
+			s.audit(jctx, "image_gen", "asset", asset.ID.String(), "ok", map[string]any{"work_id": m.ID.String()})
+			return asset, nil
+		})
+		if err != nil {
+			return err
+		}
+		return ok(w, map[string]any{"job_id": jobID})
 	}
 	asset, err := s.runImageGen(r.Context(), m.Account, &m.ID, prompt, in.Size)
 	if err != nil {

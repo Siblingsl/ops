@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -20,17 +21,28 @@ type Config struct {
 	MockListen   string
 	PublicIP     string
 	CookieSecure bool
+	// AIWorkers is the per-workspace concurrency of background AI jobs (10 文档 3.5).
+	AIWorkers int
+	// Permanent system admin (D-044). Ensured on every serve start.
+	SystemAdminUser     string
+	SystemAdminPassword string
 }
 
 func Load() (*Config, error) {
 	c := &Config{
-		Dev:         os.Getenv("OPS_DEV") != "0",
-		Listen:      env("OPS_LISTEN", ":8080"),
-		DatabaseURL: env("OPS_DATABASE_URL", "postgres://ops:ops_dev_password@localhost:5440/ops?sslmode=disable"),
-		DataDir:     env("OPS_DATA_DIR", "./data"),
-		StaticDir:   os.Getenv("OPS_STATIC_DIR"),
-		MockListen:  env("OPS_MOCK_LISTEN", "127.0.0.1:8091"),
-		PublicIP:    os.Getenv("OPS_PUBLIC_IP"),
+		Dev:                 os.Getenv("OPS_DEV") != "0",
+		Listen:              env("OPS_LISTEN", ":8080"),
+		DatabaseURL:         env("OPS_DATABASE_URL", "postgres://ops:ops_dev_password@localhost:5440/ops?sslmode=disable"),
+		DataDir:             env("OPS_DATA_DIR", "./data"),
+		StaticDir:           os.Getenv("OPS_STATIC_DIR"),
+		MockListen:          env("OPS_MOCK_LISTEN", "127.0.0.1:8091"),
+		PublicIP:            os.Getenv("OPS_PUBLIC_IP"),
+		SystemAdminUser:     env("OPS_SYSTEM_ADMIN_USER", "skyeder"),
+		SystemAdminPassword: os.Getenv("OPS_SYSTEM_ADMIN_PASSWORD"),
+	}
+	c.AIWorkers = 3
+	if n, err := strconv.Atoi(os.Getenv("OPS_AI_WORKERS")); err == nil && n >= 1 && n <= 32 {
+		c.AIWorkers = n
 	}
 	c.WechatBase = os.Getenv("OPS_WECHAT_BASE")
 	if c.WechatBase == "" {
@@ -77,4 +89,3 @@ func env(key, def string) string {
 	}
 	return def
 }
-

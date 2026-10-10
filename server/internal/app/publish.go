@@ -18,6 +18,10 @@ import (
 	"ops/internal/wechat"
 )
 
+// Default 后台待办 checklists stored on first push / pack (EX-I-01).
+const wechatTodos = `[{"key":"preview","label":"在后台预览，检查排版是否正常","done":false},{"key":"original","label":"按需设置原创声明（接口不支持，只能在后台设置）","done":false},{"key":"ai","label":"内容使用了 AI 辅助时，按平台要求做 AI 内容声明","done":false},{"key":"backfill","label":"发表后回到这里回填链接","done":false}]`
+const xhsTodos = `[{"key":"images","label":"按顺序上传图片","done":false},{"key":"ai","label":"在「笔记内容声明」中勾选 AI 合成内容（如适用）","done":false},{"key":"backfill","label":"发布后回到这里回填链接","done":false}]`
+
 func (s *Server) todayPushCount(ctx context.Context, accountID uuid.UUID) (int, error) {
 	var n int
 	err := s.db.QueryRow(ctx, `SELECT count(*) FROM push_record WHERE account_id=$1 AND status='ok' AND created_at >= $2`, accountID, s.today()).Scan(&n)
@@ -127,6 +131,9 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 	wk, err := s.loadWork(ctx, m.ID)
 	if err != nil {
 		return err
+	}
+	if wk.Status == "reviewing" {
+		return humanStep("H-09", "这篇作品需要审阅，审阅通过后才能写入草稿")
 	}
 	if wk.Status != "ready" && wk.Status != "pushed" {
 		return humanStep("H-04", "发布前检查还没有全部确认，不能写入草稿")
@@ -341,7 +348,7 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 		return e
 	})
 	fieldsJSON, _ := json.Marshal(in.Fields)
-	if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE work SET status='pushed', wechat_draft_media_id=$2, wechat_draft_hash=$3, wechat_fields=$4, updated_at=now() WHERE id=$1`,
+	if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE work SET status='pushed', wechat_draft_media_id=$2, wechat_draft_hash=$3, wechat_fields=$4, updated_at=now(), post_push_todos=CASE WHEN post_push_todos='[]'::jsonb THEN '`+wechatTodos+`'::jsonb ELSE post_push_todos END WHERE id=$1`,
 		m.ID, draftID, hash, fieldsJSON); err != nil {
 		sse.fail(err)
 		return nil
@@ -496,7 +503,7 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 		ArticleType: "newspic", Title: wk.Title, Author: in.Fields.Author, Content: content,
 		ContentSourceURL: in.Fields.SourceURL,
 		NeedOpenComment:  b2i(in.Fields.OpenComment), OnlyFansCanComment: b2i(in.Fields.FansOnlyComment),
-		ImageInfo:        &wechat.ImageInfo{ImageList: imageList},
+		ImageInfo: &wechat.ImageInfo{ImageList: imageList},
 	}
 	// First image is the cover; optional 1:1 crop from first panel if cover_crops present.
 	if len(wk.CoverCrops) > 0 {
@@ -540,7 +547,7 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 		return e
 	})
 	fieldsJSON, _ := json.Marshal(in.Fields)
-	if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE work SET status='pushed', wechat_draft_media_id=$2, wechat_draft_hash=$3, wechat_fields=$4, updated_at=now() WHERE id=$1`,
+	if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE work SET status='pushed', wechat_draft_media_id=$2, wechat_draft_hash=$3, wechat_fields=$4, updated_at=now(), post_push_todos=CASE WHEN post_push_todos='[]'::jsonb THEN '`+wechatTodos+`'::jsonb ELSE post_push_todos END WHERE id=$1`,
 		m.ID, draftID, hash, fieldsJSON); err != nil {
 		sse.fail(err)
 		return nil
@@ -598,10 +605,14 @@ func (s *Server) createPack(w http.ResponseWriter, r *http.Request) error {
 	if m.Account.Platform != "xhs" {
 		return validation("只有小红书作品生成发布包")
 	}
+	if m.Status == "reviewing" {
+		return humanStep("H-09", "这篇作品需要审阅，审阅通过后才能生成发布包")
+	}
 	if m.Status != "ready" && m.Status != "packed" {
 		return humanStep("H-04", "发布前检查还没有全部确认，不能生成发布包")
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE work SET status='packed', updated_at=now() WHERE id=$1 AND status='ready'`, m.ID); err != nil {
+	if _, err := s.db.Exec(r.Context(), `UPDATE work SET status='packed', updated_at=now(),
+		post_push_todos = CASE WHEN post_push_todos='[]'::jsonb THEN '`+xhsTodos+`'::jsonb ELSE post_push_todos END WHERE id=$1 AND status='ready'`, m.ID); err != nil {
 		return err
 	}
 	s.audit(r.Context(), "xhs_pack", "work", m.ID.String(), "ok", nil)

@@ -1,19 +1,409 @@
 import { useQuery } from '@tanstack/react-query'
-import { FileText, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { Brain, Check, FileText, Palette, Pencil, Plus, Sparkles, Trash2, Wand2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
-import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, IconButton, Input, PageHeader, PageLoading, PlatformMark, Switch, Tabs, Textarea } from '@/components/ui'
+import { AIFeedback } from '@/components/refs'
+import { aiError } from '@/lib/ai-error'
+import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, IconButton, Input, PageHeader, PageLoading, PlatformMark, Select, Switch, Tabs, Textarea } from '@/components/ui'
 import { del, errorMessage, get, patch, post, put, rawRequest, stream } from '@/lib/api'
 import { relTime, runeLen } from '@/lib/format'
-import { themes } from '@/lib/render'
-import { useCurrentAccount, useInvalidate } from '@/lib/session'
-import type { Account, CharacterCard, Profile, StyleSample } from '@/lib/types'
+import { CUSTOM_THEME_ID, customTheme, renderWechat, setCustomTheme, themes } from '@/lib/render'
+import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
+import type { Account, CharacterCard, CustomTheme, HealthItem, Memory, Profile, StyleSample } from '@/lib/types'
+import { memoryKindLabel, memoryScopeLabel, memorySourceLabel, useCustomTheme } from '@/lib/v3'
 
 const splitList = (s: string) => s.split(/[,，、\s]+/).map((x) => x.trim()).filter(Boolean)
 
+interface BootstrapDraft {
+  positioning_tags: string[]
+  target_audience: string
+  persona_tone: string
+  banned_words_suggest: string[]
+  style_summary: string
+  evidence: Record<string, string>
+}
+
+const draftFields: { key: keyof Omit<BootstrapDraft, 'evidence'>; label: string }[] = [
+  { key: 'positioning_tags', label: '定位标签' },
+  { key: 'target_audience', label: '目标读者' },
+  { key: 'persona_tone', label: '人设与语气' },
+  { key: 'banned_words_suggest', label: '建议禁用词' },
+  { key: 'style_summary', label: '风格摘要' },
+]
+
+/** splitPasted cuts one big paste into articles at "---" lines or Markdown heading lines (EX-A-01). */
+export function splitPasted(text: string): { title: string; content: string }[] {
+  const out: { title: string; content: string }[] = []
+  let cur: { title: string; lines: string[] } = { title: '', lines: [] }
+  const push = () => {
+    const content = cur.lines.join('\n').trim()
+    if (content) out.push({ title: cur.title, content })
+  }
+  for (const line of text.replace(/\r\n/g, '\n').split('\n')) {
+    if (/^\s*-{3,}\s*$/.test(line)) {
+      push()
+      cur = { title: '', lines: [] }
+    } else if (/^#{1,2}\s+\S/.test(line) && cur.lines.some((l) => l.trim())) {
+      push()
+      cur = { title: line.replace(/^#+\s+/, '').trim(), lines: [] }
+    } else if (/^#{1,2}\s+\S/.test(line) && !cur.title) {
+      cur.title = line.replace(/^#+\s+/, '').trim()
+    } else cur.lines.push(line)
+  }
+  push()
+  return out.slice(0, 10)
+}
+
+/** BootstrapWizard (EX-A-01): paste a few past works, get a draft profile with evidence, edit it, and only "确认建档" saves. */
+function BootstrapWizard({ account, onClose, onApply }: { account: Account; onClose: () => void; onApply: (d: BootstrapDraft, fields: Record<string, boolean>) => Promise<boolean> }) {
+  const inv = useInvalidate()
+  const [samples, setSamples] = useState([{ title: '', content: '', keep: true }, { title: '', content: '', keep: true }, { title: '', content: '', keep: true }])
+  const [bulk, setBulk] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [streamText, setStreamText] = useState('')
+  const [draft, setDraft] = useState<BootstrapDraft | null>(null)
+  const [callId, setCallId] = useState<string | null>(null)
+  const [pick, setPick] = useState<Record<string, boolean>>({})
+  const abort = useRef<AbortController | null>(null)
+  const filled = samples.filter((s) => s.content.trim())
+  const applyBulk = () => {
+    const parts = splitPasted(bulk)
+    if (parts.length === 0) return toast.info('没有识别到正文')
+    setSamples(parts.map((p) => ({ ...p, keep: true })))
+    setBulk('')
+    toast.success(`已拆成 ${parts.length} 篇，可以逐篇检查和调整`)
+  }
+  const [texts, setTexts] = useState<Record<string, string>>({})
+  const edited = (): BootstrapDraft | null => draft && {
+    ...draft,
+    positioning_tags: splitList(texts.positioning_tags ?? ''),
+    banned_words_suggest: splitList(texts.banned_words_suggest ?? ''),
+    target_audience: (texts.target_audience ?? '').trim(),
+    persona_tone: (texts.persona_tone ?? '').trim(),
+    style_summary: (texts.style_summary ?? '').trim(),
+  }
+  const run = async () => {
+    setBusy(true)
+    setStreamText('')
+    setDraft(null)
+    abort.current = new AbortController()
+    try {
+      const done = await stream<{ result: BootstrapDraft; ai_call_id: string }>(`/accounts/${account.id}/profile/bootstrap`, { samples: filled }, {
+        signal: abort.current.signal,
+        onDelta: (d) => setStreamText((t) => t + d),
+      })
+      if (done?.result) {
+        setDraft(done.result)
+        setCallId(done.ai_call_id)
+        const p: Record<string, boolean> = {}
+        const t: Record<string, string> = {}
+        for (const f of draftFields) {
+          const v = done.result[f.key]
+          p[f.key] = Array.isArray(v) ? v.length > 0 : !!v
+          t[f.key] = Array.isArray(v) ? v.join('、') : v
+        }
+        setPick(p)
+        setTexts(t)
+      }
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') aiError(e, '生成定位档案草稿', run)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const adopt = async () => {
+    const d = edited()
+    if (!d) return
+    setSaving(true)
+    try {
+      if (!(await onApply(d, pick))) return
+      const keep = filled.filter((s) => s.keep)
+      let saved = 0
+      for (const s of keep) {
+        await post(`/accounts/${account.id}/style-samples`, { title: s.title.trim() || s.content.trim().slice(0, 20), content_md: s.content }).then(() => saved++, () => undefined)
+      }
+      if (keep.length) toast.success(`已存入 ${saved} 篇风格样本`)
+      inv(['samples', account.id], ['health', account.id], ['dashboard', account.id])
+      onClose()
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <Dialog open onClose={onClose} title="从过往作品生成档案" width="max-w-3xl"
+      desc="粘贴 1–10 篇你写过的作品，AI 只根据这些样本推断定位档案草稿，并说明每一项的依据。无法判断的会留空，不会编造你的身份或经历。"
+      footer={draft ? <>
+        <Button variant="ghost" className="mr-auto" onClick={() => setDraft(null)}>返回修改样本</Button>
+        <Button variant="ghost" onClick={run} disabled={busy}>重新生成</Button>
+        <Button variant="human" loading={saving} disabled={!Object.values(pick).some(Boolean)} onClick={adopt} icon={<Check className="size-4" />}>确认建档</Button>
+      </> : <>
+        <Button variant="ghost" onClick={onClose}>跳过，手动填写</Button>
+        {busy ? <Button onClick={() => abort.current?.abort()}>停止</Button> : <Button variant="primary" icon={<Sparkles className="size-4" />} disabled={filled.length === 0} onClick={run}>生成档案草稿</Button>}
+      </>}>
+      <ol className="mb-4 flex gap-2 text-[12px]">
+        {['粘贴过往作品', '分析', '确认档案'].map((s, i) => {
+          const step = draft ? 2 : busy ? 1 : 0
+          return <li key={s} className={cn('rounded-full px-2.5 py-0.5', i === step ? 'bg-ink-600 text-white' : i < step ? 'bg-ink-50 text-ink-700' : 'bg-mist-100 text-mist-400')}>{i + 1}. {s}</li>
+        })}
+      </ol>
+      {!draft ? (
+        busy ? (
+          <pre className="scrollbar-thin max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-mist-50 p-3 font-mono text-[12px] text-mist-600">{streamText || '正在识别你的选题方向、读者、语气…'}</pre>
+        ) : (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-dashed border-mist-300 p-3">
+              <Textarea rows={3} value={bulk} onChange={(e) => setBulk(e.target.value)} placeholder={'一次粘贴多篇：用单独一行「---」分隔，或每篇以「# 标题」开头'} />
+              <div className="mt-2 flex justify-end"><Button size="sm" variant="secondary" disabled={!bulk.trim()} onClick={applyBulk}>自动拆分</Button></div>
+            </div>
+            {samples.map((s, i) => (
+              <div key={i} className="rounded-lg border border-mist-200 p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <Input value={s.title} onChange={(e) => setSamples((l) => l.map((x, k) => (k === i ? { ...x, title: e.target.value } : x)))} placeholder={`作品 ${i + 1} 标题（可选）`} />
+                  <label className="flex shrink-0 items-center gap-1.5 text-[12px] text-mist-600" title="确认建档时把这一篇存为风格样本">
+                    <input type="checkbox" className="accent-ink-600" checked={s.keep} onChange={(e) => setSamples((l) => l.map((x, k) => (k === i ? { ...x, keep: e.target.checked } : x)))} />存为样本
+                  </label>
+                  {samples.length > 1 && <IconButton label="移除这一篇" onClick={() => setSamples((l) => l.filter((_, k) => k !== i))}><X className="size-3.5" /></IconButton>}
+                </div>
+                <Textarea rows={4} value={s.content} onChange={(e) => setSamples((l) => l.map((x, k) => (k === i ? { ...x, content: e.target.value } : x)))} placeholder="粘贴正文" />
+              </div>
+            ))}
+            {samples.length < 10 && <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => setSamples((l) => [...l, { title: '', content: '', keep: true }])}>再加一篇</Button>}
+          </div>
+        )
+      ) : (
+        <div className="space-y-3">
+          {draftFields.map((f) => {
+            const text = texts[f.key] ?? ''
+            return (
+              <div key={f.key} className={cn('flex gap-3 rounded-lg border p-3', pick[f.key] ? 'border-ink-300 bg-ink-50/40' : 'border-mist-200')}>
+                <input type="checkbox" aria-label={`采用${f.label}`} className="mt-1 accent-ink-600" checked={!!pick[f.key]} onChange={(e) => setPick((p) => ({ ...p, [f.key]: e.target.checked }))} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-semibold text-mist-500">{f.label}</div>
+                  <Textarea rows={f.key === 'style_summary' ? 3 : 1} className="mt-1 text-[13.5px]" value={text}
+                    placeholder="无法从样本判断，留空；也可以自己填" onChange={(e) => { const v = e.target.value; setTexts((t) => ({ ...t, [f.key]: v })); if (v.trim()) setPick((p) => ({ ...p, [f.key]: true })) }} />
+                  {draft.evidence[f.key] && <div className="mt-1 text-[12px] text-mist-500">依据：{draft.evidence[f.key]}</div>}
+                </div>
+              </div>
+            )
+          })}
+          <p className="text-[12px] text-mist-500">勾选「存为样本」的 {filled.filter((s) => s.keep).length} 篇作品会在确认后存入风格样本。</p>
+          {callId && <AIFeedback callId={callId} />}
+        </div>
+      )}
+    </Dialog>
+  )
+}
+
+function MemoryTab({ account }: { account: Account }) {
+  const canWrite = useCanWrite()
+  const inv = useInvalidate()
+  const { data, isLoading } = useQuery({ queryKey: ['memories', account.id], queryFn: () => get<Memory[]>(`/accounts/${account.id}/memories`) })
+  const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<Memory | null>(null)
+  const [text, setText] = useState('')
+  const [kind, setKind] = useState<Memory['kind']>('wording')
+  const [scope, setScope] = useState<Memory['scope']>('all')
+  const list = data ?? []
+  const open = (m: Memory | null) => {
+    setEditing(m)
+    setText(m?.text ?? '')
+    setKind(m?.kind ?? 'wording')
+    setScope(m?.scope ?? 'all')
+    setAdding(true)
+  }
+  const save = async () => {
+    try {
+      if (editing) await patch(`/memories/${editing.id}`, { text, kind, scope })
+      else await post(`/accounts/${account.id}/memories`, { text, kind, scope })
+      inv(['memories', account.id], ['health', account.id])
+      setAdding(false)
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
+  const setStatus = async (m: Memory, status: Memory['status']) => {
+    try {
+      await patch(`/memories/${m.id}`, { status })
+      inv(['memories', account.id], ['health', account.id], ['next-actions', account.id])
+      if (status === 'active') toast.success('已确认，之后的生成会遵守这条记忆')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
+  const remove = async (m: Memory) => {
+    if (!(await confirm({ title: '删除这条记忆？', danger: true, confirmText: '删除' }))) return
+    await del(`/memories/${m.id}`).catch((e) => toast.error(errorMessage(e)))
+    inv(['memories', account.id], ['health', account.id])
+  }
+  const distill = async () => {
+    try {
+      await post(`/accounts/${account.id}/memories/distill`)
+      toast.success('正在后台从最近 60 天的修改中提炼', { description: '提炼出的只是建议，需要你逐条确认后才会生效。' })
+    } catch (e) {
+      aiError(e, '提炼记忆', distill)
+    }
+  }
+  const groups: { status: Memory['status']; title: string; desc: string }[] = [
+    { status: 'suggested', title: '待确认', desc: 'AI 从你的修改、放弃和复盘里总结出来的，确认前不会影响任何生成。' },
+    { status: 'active', title: '生效中', desc: '起草、改写、标题、选题时会按作用范围带上这些记忆。' },
+    { status: 'disabled', title: '已停用', desc: '' },
+  ]
+  return (
+    <Card>
+      <CardHeader title="AI 写作记忆" desc="记住你的偏好，让 AI 越用越懂你。每条记忆都要你确认后才生效，随时可以停用。"
+        action={canWrite ? <>
+          <Button size="sm" icon={<Brain className="size-3.5" />} onClick={distill}>从最近修改中提炼</Button>
+          <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => open(null)}>手动添加</Button>
+        </> : undefined} />
+      {isLoading ? <PageLoading /> : list.length === 0 ? (
+        <Empty icon={<Brain className="size-5" />} title="还没有记忆" desc="例如「不用感叹号」「结尾给一个可执行的小建议」。你在编辑器里反复使用的指令，也会被建议成记忆。"
+          action={canWrite ? <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => open(null)}>写下第一条记忆</Button> : undefined} />
+      ) : (
+        <div className="divide-y divide-mist-100">
+          {groups.map((g) => {
+            const items = list.filter((m) => m.status === g.status)
+            if (items.length === 0) return null
+            return (
+              <div key={g.status} className="px-5 py-4">
+                <div className="mb-2 flex items-baseline gap-2">
+                  <h4 className="text-[13.5px] font-semibold text-mist-800">{g.title}</h4>
+                  <span className="text-xs text-mist-400">{items.length}</span>
+                  {g.desc && <span className="text-[12px] text-mist-400">{g.desc}</span>}
+                </div>
+                <ul className="space-y-2">
+                  {items.map((m) => (
+                    <li key={m.id} className={cn('flex items-start gap-3 rounded-lg border px-3 py-2.5', m.status === 'suggested' ? 'border-gamboge-200 bg-gamboge-50/40' : 'border-mist-100')}>
+                      <div className="min-w-0 flex-1">
+                        <p className={cn('text-[13.5px] text-mist-800', m.status === 'disabled' && 'text-mist-400 line-through')}>{m.text}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-mist-400">
+                          <Badge>{memoryKindLabel[m.kind]}</Badge>
+                          <Badge>{memoryScopeLabel[m.scope]}</Badge>
+                          <span>{memorySourceLabel[m.source] ?? m.source}</span>
+                          {m.evidence?.note && <span>· {m.evidence.note}</span>}
+                          {m.use_count > 0 && <span>· 已使用 {m.use_count} 次</span>}
+                        </div>
+                      </div>
+                      {canWrite && (
+                        <div className="flex shrink-0 items-center gap-1">
+                          {m.status === 'suggested' && <Button size="sm" variant="human" icon={<Check className="size-3.5" />} onClick={() => setStatus(m, 'active')}>确认</Button>}
+                          {m.status === 'active' && <Switch checked onChange={() => setStatus(m, 'disabled')} label="停用" />}
+                          {m.status === 'disabled' && <Switch checked={false} onChange={() => setStatus(m, 'active')} label="启用" />}
+                          <IconButton label="编辑" onClick={() => open(m)}><Pencil className="size-3.5" /></IconButton>
+                          {m.status === 'suggested' ? (
+                            <IconButton label="忽略" onClick={() => setStatus(m, 'disabled')}><X className="size-3.5" /></IconButton>
+                          ) : (
+                            <IconButton label="删除" className="hover:text-danger" onClick={() => remove(m)}><Trash2 className="size-3.5" /></IconButton>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )
+          })}
+        </div>
+      )}
+      <Dialog open={adding} onClose={() => setAdding(false)} title={editing ? '编辑记忆' : '添加记忆'}
+        footer={<><Button variant="ghost" onClick={() => setAdding(false)}>取消</Button><Button variant="primary" disabled={!text.trim()} onClick={save}>保存</Button></>}>
+        <div className="space-y-4">
+          <Field label="记忆内容" counter={{ value: runeLen(text), max: 200 }}><Textarea autoFocus rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder="例如：开头先讲一个具体场景，不要用设问句开头" /></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="类型">
+              <Select value={kind} onChange={(e) => setKind(e.target.value as Memory['kind'])}>
+                {Object.entries(memoryKindLabel).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </Select>
+            </Field>
+            <Field label="作用范围">
+              <Select value={scope} onChange={(e) => setScope(e.target.value as Memory['scope'])}>
+                {Object.entries(memoryScopeLabel).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </Select>
+            </Field>
+          </div>
+          {!editing && <p className="text-[12px] text-mist-400">你亲手写的记忆会直接生效。</p>}
+        </div>
+      </Dialog>
+    </Card>
+  )
+}
+
+const defaultCustom: CustomTheme = { base: 'ink', primary_color: '#2F5D62', font_size: 16, line_height: 1.8, paragraph_gap: 18, heading_style: 'underline', quote_style: 'bar' }
+const previewSections = [
+  { heading: '这是一个小标题', content_md: '这是正文段落。好的排版让读者**一眼抓住重点**，也让长文读起来不累。\n\n> 引用的句子会这样显示。\n\n- 列表第一项\n- 列表第二项' },
+]
+
+function CustomThemeCard({ account, profile, onSaved }: { account: Account; profile: Profile; onSaved: (p: Profile) => void }) {
+  const q = useCustomTheme(account.id)
+  const [ct, setCt] = useState<CustomTheme>(defaultCustom)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { if (q.data) setCt(q.data) }, [q.data])
+  const save = async (makeDefault: boolean) => {
+    setBusy(true)
+    try {
+      await put(`/accounts/${account.id}/custom-theme`, ct)
+      setCustomTheme(ct)
+      void q.refetch()
+      if (makeDefault) onSaved(await put<Profile>(`/accounts/${account.id}/profile`, { ...profile, default_theme: CUSTOM_THEME_ID }))
+      toast.success(makeDefault ? '已保存，并设为新作品的默认主题' : '已保存我的主题')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const html = renderWechat(previewSections, customTheme(ct))
+  return (
+    <Card className="mt-5">
+      <CardHeader title={<span className="flex items-center gap-2"><Palette className="size-4 text-ink-600" />我的主题</span>} desc="在预设主题基础上调整颜色、字号和间距。只使用公众号支持的基础样式。" />
+      <div className="grid gap-6 p-5 lg:grid-cols-2">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="基于">
+              <Select value={ct.base} onChange={(e) => setCt({ ...ct, base: e.target.value })}>
+                {themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </Select>
+            </Field>
+            <Field label="主色">
+              <div className="flex items-center gap-2">
+                <input type="color" value={ct.primary_color} onChange={(e) => setCt({ ...ct, primary_color: e.target.value })} className="h-9 w-12 cursor-pointer rounded border border-mist-200" />
+                <Input value={ct.primary_color} onChange={(e) => setCt({ ...ct, primary_color: e.target.value })} className="font-mono" />
+              </div>
+            </Field>
+          </div>
+          <Field label={`正文字号：${ct.font_size}px`}><input type="range" min={14} max={17} value={ct.font_size} onChange={(e) => setCt({ ...ct, font_size: +e.target.value })} className="w-full accent-ink-600" /></Field>
+          <Field label={`行距：${ct.line_height.toFixed(1)}`}><input type="range" min={1.4} max={2.2} step={0.1} value={ct.line_height} onChange={(e) => setCt({ ...ct, line_height: +e.target.value })} className="w-full accent-ink-600" /></Field>
+          <Field label={`段间距：${ct.paragraph_gap}px`}><input type="range" min={8} max={32} value={ct.paragraph_gap} onChange={(e) => setCt({ ...ct, paragraph_gap: +e.target.value })} className="w-full accent-ink-600" /></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="小标题样式">
+              <Select value={ct.heading_style} onChange={(e) => setCt({ ...ct, heading_style: e.target.value as CustomTheme['heading_style'] })}>
+                <option value="plain">纯文字</option><option value="underline">下划线</option><option value="bar">左侧竖条</option><option value="block">色块</option>
+              </Select>
+            </Field>
+            <Field label="引用样式">
+              <Select value={ct.quote_style} onChange={(e) => setCt({ ...ct, quote_style: e.target.value as CustomTheme['quote_style'] })}>
+                <option value="bar">左侧竖条</option><option value="box">边框</option><option value="italic">斜体</option>
+              </Select>
+            </Field>
+          </div>
+        </div>
+        <div className="rounded-xl border border-mist-200 bg-white p-4">
+          <div className="mb-2 text-[11.5px] text-mist-400">预览</div>
+          <div dangerouslySetInnerHTML={{ __html: html || '' }} />
+        </div>
+      </div>
+      <div className="flex justify-end gap-2 border-t border-mist-100 px-5 py-3">
+        <Button loading={busy} onClick={() => save(false)}>保存</Button>
+        <Button variant="primary" loading={busy} onClick={() => save(true)}>保存并设为默认主题</Button>
+      </div>
+    </Card>
+  )
+}
+
 function PositioningTab({ account, profile, onSaved }: { account: Account; profile: Profile; onSaved: (p: Profile) => void }) {
+  const inv = useInvalidate()
   const [tags, setTags] = useState(profile.positioning_tags.join(' '))
   const [audience, setAudience] = useState(profile.target_audience)
   const [tone, setTone] = useState(profile.persona_tone)
@@ -28,6 +418,7 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
       onSaved(await put<Profile>(`/accounts/${account.id}/profile`, {
         ...profile, positioning_tags: splitList(tags), target_audience: audience, persona_tone: tone, banned_words: splitList(banned), style_summary: summary,
       }))
+      inv(['health', account.id], ['dashboard', account.id])
       toast.success('定位档案已保存，之后的 AI 生成都会使用新档案')
     } catch (e) {
       toast.error(errorMessage(e))
@@ -47,14 +438,47 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
       if (done?.text) setSummary(done.text)
       toast.success('已生成风格摘要，请编辑后保存')
     } catch (e) {
-      if ((e as Error).name !== 'AbortError') toast.error(errorMessage(e))
+      if ((e as Error).name !== 'AbortError') aiError(e, '生成风格摘要', genSummary)
     } finally {
       setGenBusy(false)
     }
   }
+  const [params, setParams] = useSearchParams()
+  const [wizard, setWizard] = useState(params.get('wizard') === '1')
+  const closeWizard = () => {
+    setWizard(false)
+    if (params.has('wizard')) setParams((p) => { const n = new URLSearchParams(p); n.delete('wizard'); return n }, { replace: true })
+  }
+  const apply = async (d: BootstrapDraft, fields: Record<string, boolean>): Promise<boolean> => {
+    const next = {
+      tags: fields.positioning_tags ? d.positioning_tags.join(' ') : tags,
+      audience: fields.target_audience ? d.target_audience : audience,
+      tone: fields.persona_tone ? d.persona_tone : tone,
+      banned: fields.banned_words_suggest ? [...new Set([...splitList(banned), ...d.banned_words_suggest])].join(' ') : banned,
+      summary: fields.style_summary ? d.style_summary : summary,
+    }
+    try {
+      onSaved(await put<Profile>(`/accounts/${account.id}/profile`, {
+        ...profile, positioning_tags: splitList(next.tags), target_audience: next.audience, persona_tone: next.tone, banned_words: splitList(next.banned), style_summary: next.summary,
+      }))
+      setTags(next.tags)
+      setAudience(next.audience)
+      setTone(next.tone)
+      setBanned(next.banned)
+      setSummary(next.summary)
+      inv(['health', account.id], ['dashboard', account.id])
+      toast.success('已建档，之后的 AI 生成都会使用这份档案')
+      return true
+    } catch (e) {
+      toast.error(errorMessage(e))
+      return false
+    }
+  }
   return (
     <Card>
-      <CardHeader title="定位档案" desc="AI 每次生成都会带上这份档案。" />
+      <CardHeader title="定位档案" desc="AI 每次生成都会带上这份档案。"
+        action={<Button size="sm" icon={<Wand2 className="size-3.5" />} onClick={() => setWizard(true)}>从过往作品生成</Button>} />
+      {wizard && <BootstrapWizard account={account} onClose={closeWizard} onApply={apply} />}
       <div className="grid gap-5 p-5 md:grid-cols-2">
         <Field label="内容形态" hint={<>修改内容形态请到 <Link to="/settings/accounts" className="text-ink-600 underline">设置 → 平台账号</Link></>}>
           <div className="flex h-9 items-center gap-2 rounded-lg bg-mist-50 px-3 text-sm text-mist-700"><PlatformMark platform={account.platform} size="sm" />{formatLabel[account.content_format]}</div>
@@ -87,7 +511,7 @@ function SampleDialog({ accountId, editing, onClose }: { accountId: string; edit
     try {
       if (editing) await patch(`/style-samples/${editing.id}`, { title, content_md: content })
       else await post(`/accounts/${accountId}/style-samples`, { title, content_md: content })
-      inv(['samples', accountId])
+      inv(['samples', accountId], ['health', accountId], ['dashboard', accountId])
       onClose()
     } catch (e) {
       toast.error(errorMessage(e))
@@ -116,7 +540,7 @@ function SamplesTab({ account }: { account: Account }) {
   const remove = async (s: StyleSample) => {
     if (!(await confirm({ title: `删除「${s.title}」？`, desc: '可以在回收站中恢复（30 天）。', confirmText: '删除', danger: true }))) return
     await del(`/style-samples/${s.id}`).catch((e) => toast.error(errorMessage(e)))
-    inv(['samples', account.id])
+    inv(['samples', account.id], ['health', account.id], ['dashboard', account.id])
   }
   return (
     <Card>
@@ -124,7 +548,8 @@ function SamplesTab({ account }: { account: Account }) {
         desc="建议 3–10 篇。生成时按篇幅挑选最相关的几篇放入提示词。"
         action={<Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ editing: null })} disabled={list.length >= 10}>添加</Button>} />
       {isLoading ? <PageLoading /> : list.length === 0 ? (
-        <Empty icon={<FileText className="size-5" />} title="还没有风格样本" desc="粘贴你过去写的作品，AI 起草时会模仿你的语气和段落节奏。" />
+        <Empty icon={<FileText className="size-5" />} title="还没有风格样本" desc="粘贴你过去写的作品，AI 起草时会模仿你的语气和段落节奏。"
+          action={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>粘贴第一篇样本</Button>} />
       ) : (
         <ul className="divide-y divide-mist-100">
           {list.map((s) => (
@@ -245,7 +670,8 @@ function CharactersTab({ account }: { account: Account }) {
         desc="归属本账号，可被所有漫画作品引用。可上传参考图，出图时用于保持外貌一致。"
         action={<Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => setDialog({ editing: null })}>添加角色</Button>} />
       {isLoading ? <PageLoading /> : list.length === 0 ? (
-        <Empty icon={<FileText className="size-5" />} title="还没有角色" desc="先建立固定角色，分镜和绘图提示词才会稳定。" />
+        <Empty icon={<FileText className="size-5" />} title="还没有角色" desc="先建立固定角色，分镜和绘图提示词才会稳定。"
+          action={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加第一个角色</Button>} />
       ) : (
         <ul className="divide-y divide-mist-100">
           {list.map((c) => (
@@ -275,6 +701,7 @@ function LayoutTab({ account, profile, onSaved }: { account: Account; profile: P
   const [theme, setTheme] = useState(profile.default_theme)
   const [d, setD] = useState(profile.wechat_defaults)
   const [busy, setBusy] = useState(false)
+  const custom = useCustomTheme(account.id)
   const save = async () => {
     setBusy(true)
     try {
@@ -287,12 +714,13 @@ function LayoutTab({ account, profile, onSaved }: { account: Account; profile: P
     }
   }
   return (
+    <>
     <Card>
       <CardHeader title="排版与文章默认值" desc="只影响之后新建的作品；推送时还可以单篇修改。" />
       <div className="space-y-5 p-5">
         <Field label="默认主题">
-          <div className="grid gap-2 sm:grid-cols-4">
-            {themes.map((t) => (
+          <div className="grid gap-2 sm:grid-cols-5">
+            {[...themes, ...(custom.data ? [customTheme(custom.data)] : [])].map((t) => (
               <button key={t.id} type="button" onClick={() => setTheme(t.id)}
                 className={cn('cursor-pointer rounded-lg border p-3 text-left transition', theme === t.id ? 'border-ink-400 bg-ink-50/50 ring-3 ring-ink-100' : 'border-mist-200 hover:border-mist-300')}>
                 <div className="mb-1.5 flex -space-x-1">{t.swatch.map((c) => <span key={c} className="size-4 rounded-full border-2 border-white" style={{ background: c }} />)}</div>
@@ -311,6 +739,43 @@ function LayoutTab({ account, profile, onSaved }: { account: Account; profile: P
         </div>
       </div>
       <div className="flex justify-end border-t border-mist-100 px-5 py-3"><Button variant="primary" loading={busy} onClick={save} disabled={runeLen(d.author) > 16}>保存</Button></div>
+      </Card>
+      <CustomThemeCard account={account} profile={profile} onSaved={(p) => { setTheme(p.default_theme); onSaved(p) }} />
+    </>
+  )
+}
+
+function HealthRing({ accountId }: { accountId: string }) {
+  const { data } = useQuery({ queryKey: ['health', accountId], queryFn: () => get<{ score: number; items: HealthItem[] }>(`/accounts/${accountId}/health`), staleTime: 30_000 })
+  if (!data) return null
+  const r = 26
+  const c = 2 * Math.PI * r
+  const lacking = data.items.filter((it) => it.score < it.max)
+  return (
+    <Card className="mb-5 flex flex-wrap items-center gap-5 p-4">
+      <div className="relative size-16 shrink-0">
+        <svg viewBox="0 0 64 64" className="size-16 -rotate-90">
+          <circle cx="32" cy="32" r={r} fill="none" strokeWidth="6" className="stroke-mist-100" />
+          <circle cx="32" cy="32" r={r} fill="none" strokeWidth="6" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - data.score / 100)}
+            className={cn('transition-all duration-500', data.score >= 80 ? 'stroke-success' : 'stroke-ink-500')} />
+        </svg>
+        <span className="absolute inset-0 flex items-center justify-center font-display text-[17px] font-bold tabular-nums text-mist-900">{data.score}</span>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-[13.5px] font-semibold text-mist-800">账号健康度</div>
+        <p className="text-[12px] text-mist-500">{lacking.length === 0 ? 'AI 已经掌握了这个账号的全部基础信息。' : 'AI 对这个账号的了解程度，补齐下面几项会让生成更贴合。'}</p>
+        {lacking.length > 0 && (
+          <ul className="mt-2 flex flex-wrap gap-2">
+            {lacking.map((it) => (
+              <li key={it.key} className="flex items-center gap-2 rounded-lg border border-mist-200 px-2.5 py-1 text-[12px]" title={it.hint}>
+                <span className="text-mist-700">{it.label}</span>
+                <span className="tabular-nums text-mist-400">{it.score}/{it.max}</span>
+                <Link to={it.link} className="font-medium text-ink-700 hover:underline">去补充</Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </Card>
   )
 }
@@ -318,7 +783,7 @@ function LayoutTab({ account, profile, onSaved }: { account: Account; profile: P
 export default function ProfilePage() {
   const acc = useCurrentAccount()
   const [params, setParams] = useSearchParams()
-  const tab = (params.get('tab') as 'positioning' | 'samples' | 'characters' | 'layout') || 'positioning'
+  const tab = (params.get('tab') as 'positioning' | 'samples' | 'memory' | 'characters' | 'layout') || 'positioning'
   const { data, isLoading, refetch } = useQuery({ queryKey: ['profile', acc?.id], queryFn: () => get<Profile>(`/accounts/${acc!.id}/profile`), enabled: !!acc })
   const [profile, setProfile] = useState<Profile | null>(null)
   useEffect(() => setProfile(data ?? null), [data])
@@ -328,15 +793,18 @@ export default function ProfilePage() {
   const items = [
     { value: 'positioning' as const, label: '定位' },
     { value: 'samples' as const, label: '风格样本' },
+    { value: 'memory' as const, label: 'AI 记忆' },
     ...(comic ? [{ value: 'characters' as const, label: '角色卡' }] : []),
     ...(wx ? [{ value: 'layout' as const, label: '排版' }] : []),
   ]
   return (
     <div className="animate-fade-in">
       <PageHeader eyebrow={acc.name} title="账号档案" desc="定位、风格和默认设置。每个账号单独维护。" />
+      <HealthRing accountId={acc.id} />
       <Tabs value={tab} onChange={(v) => setParams({ tab: v }, { replace: true })} items={items} className="mb-5" />
       {tab === 'positioning' && <PositioningTab key={acc.id} account={acc} profile={profile} onSaved={(p) => { setProfile(p); refetch() }} />}
       {tab === 'samples' && <SamplesTab account={acc} />}
+      {tab === 'memory' && <MemoryTab account={acc} />}
       {tab === 'characters' && comic && <CharactersTab account={acc} />}
       {tab === 'layout' && wx && <LayoutTab key={acc.id} account={acc} profile={profile} onSaved={(p) => { setProfile(p); refetch() }} />}
     </div>

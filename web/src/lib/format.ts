@@ -50,12 +50,30 @@ export function parseTopics(s: string): string[] {
   return s.split(/[\s,，]+/).map((t) => t.replace(/^#/, '')).filter(Boolean)
 }
 
+export interface RefSlot {
+  name: string
+  label: string
+  chars: number
+  budget: number
+  truncated: boolean
+  items: { id?: string; label: string; chars: number; used: boolean }[] | null
+}
+
 export interface AIRefs {
   profile?: boolean
   style_samples?: number
   style_summary?: boolean
   materials?: string[] | null
   works?: number
+  slots?: RefSlot[]
+  memories?: number
+  user_instruction?: string
+  fallback_used?: boolean
+  fallback_model?: string
+  primary_model?: string
+  outline_template?: string
+  latency_ms?: number
+  tokens?: number
 }
 
 /** describeRefs renders "本次参考了什么" for an AI result (FR-M2-04). */
@@ -67,6 +85,8 @@ export function describeRefs(r?: AIRefs | null): string {
   if (r.style_summary) parts.push('风格描述')
   if (r.materials?.length) parts.push('素材' + r.materials.map((m) => `「${m}」`).join(''))
   if (r.works) parts.push(`作品数据 ${r.works} 篇`)
+  if (r.memories) parts.push(`AI 记忆 ${r.memories} 条`)
+  if (r.outline_template) parts.push(`大纲模板「${r.outline_template}」`)
   return parts.length ? `本次参考：${parts.join('、')}` : ''
 }
 

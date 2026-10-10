@@ -128,7 +128,8 @@ func processImage(raw []byte) ([]byte, string, int, int, error) {
 	}
 	img = flatten(img)
 	for attempt := 0; attempt < 12; attempt++ {
-		for _, q := range []int{88, 78, 68} {
+		// 先降质量再缩尺寸，尽量保住 1242×1656 等固定规格（EX-F-03）。
+		for _, q := range []int{88, 78, 68, 58} {
 			var buf bytes.Buffer
 			if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: q}); err != nil {
 				return nil, "", 0, 0, err

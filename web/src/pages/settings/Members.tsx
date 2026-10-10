@@ -234,7 +234,8 @@ export default function SettingsMembers() {
             </div>
           </div>
           <Notice tone="ink">可邀请编辑者或观察者；7 天有效，最多 10 次。也可填写邮箱直接发送（需在「登录与安全」配置 SMTP）。</Notice>
-          {(invites.data ?? []).length === 0 ? <Empty title="还没有有效邀请码" /> : (
+          {(invites.data ?? []).length === 0 ? <Empty title="还没有有效邀请码" desc="生成一个邀请码发给同事，对方注册时填写即可加入这个工作区。"
+            action={<Button variant="primary" loading={busy} icon={<Plus className="size-4" />} onClick={createInvite}>生成邀请码</Button>} /> : (
             <ul className="space-y-3">
               {(invites.data ?? []).map((i) => (
                 <li key={i.id} className="space-y-2 rounded-xl border border-mist-100 px-3 py-2.5">

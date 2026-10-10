@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -13,10 +14,10 @@ import (
 
 func (s *Server) sectionMeta(ctx context.Context, id uuid.UUID) (*Section, *workMeta, error) {
 	var workID uuid.UUID
-	var sec Section
-	err := s.db.QueryRow(ctx, `SELECT work_id, id, position, heading, key_point, content_md, ai_raw_md, origin, source_section_ids, material_ids, revision, updated_at
-		FROM work_section WHERE id=$1`, id).Scan(&workID, &sec.ID, &sec.Position, &sec.Heading, &sec.KeyPoint, &sec.ContentMD, &sec.AIRawMD, &sec.Origin,
-		&sec.SourceSectionIDs, &sec.MaterialIDs, &sec.Revision, &sec.UpdatedAt)
+	if err := s.db.QueryRow(ctx, `SELECT work_id FROM work_section WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&workID); err != nil {
+		return nil, nil, err
+	}
+	sec, err := scanSection(s.db.QueryRow(ctx, `SELECT `+sectionCols+` FROM work_section WHERE id=$1`, id))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -78,33 +79,41 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 	if strings.TrimSpace(m.Viewpoint) == "" {
 		return humanStep("H-02", "请先写下你自己的核心观点，再生成大纲")
 	}
+	var in struct {
+		Template string `json:"template"`
+	}
+	if err := decodeOptional(r, &in); err != nil {
+		return err
+	}
 	ctx := r.Context()
 	mids, err := s.workMaterialIDs(ctx, m.ID)
 	if err != nil {
 		return err
 	}
-	mats, names, err := s.materialsBlock(ctx, mids)
+	mids = s.rankMaterials(ctx, mids, m.Viewpoint)
+	work, err := s.workBrief(ctx, m)
 	if err != nil {
 		return err
 	}
-	var angle string
-	_ = s.db.QueryRow(ctx, `SELECT coalesce(t.angle,'') FROM work w LEFT JOIN topic t ON t.id=w.topic_id WHERE w.id=$1`, m.ID).Scan(&angle)
-	user := fmt.Sprintf(`%s
-## 作品
-选题：%s
-切入角度：%s
-核心观点：%s
-
-## 任务说明
-围绕作者的核心观点，列出 4 到 8 个段落的大纲。每项给出小标题和本段要点；如果某段适合使用某条素材，在 material_ids 中填写该素材的 id（只能使用上面列出的素材 id）。
+	structure := ""
+	refs := map[string]any{}
+	if in.Template != "" {
+		tpl, err := s.findOutlineTemplate(ctx, in.Template)
+		if err != nil {
+			return err
+		}
+		structure = fmt.Sprintf("\n结构模板「%s」：%s。大纲必须按这个结构展开。", tpl.Name, tpl.Structure)
+		refs["outline_template"] = tpl.Name
+	}
+	user := fmt.Sprintf(`## 任务说明
+围绕作者的核心观点，列出 4 到 8 个段落的大纲。每项给出小标题和本段要点；如果某段适合使用某条素材，在 material_ids 中填写该素材的 id（只能使用上面列出的素材 id）。%s
 
 ## 输出格式
-只输出 JSON：{"items":[{"heading":"小标题","key_point":"本段要点","material_ids":[]}]}`,
-		mats, m.Title, angle, m.Viewpoint)
+只输出 JSON：{"items":[{"heading":"小标题","key_point":"本段要点","material_ids":[]}]}`, structure)
 	var out struct {
 		Items []OutlineItem `json:"items"`
 	}
-	res, err := s.runAIJSON(ctx, aiTask{Type: "outline", Account: m.Account, WorkID: &m.ID, User: user, Refs: map[string]any{"materials": names}}, &out, func() error {
+	res, err := s.runAIJSON(ctx, aiTask{Type: "outline", Account: m.Account, WorkID: &m.ID, User: user, Materials: mids, Work: work, Refs: refs}, &out, func() error {
 		if len(out.Items) < 2 {
 			return fmt.Errorf("大纲项太少")
 		}
@@ -293,6 +302,11 @@ func (s *Server) updateSection(w http.ResponseWriter, r *http.Request) error {
 		Heading      *string `json:"heading"`
 		ContentMD    *string `json:"content_md"`
 		BaseRevision int     `json:"base_revision"`
+		// Applied marks that this save includes AI text the user accepted in the editor (改写替换 / 续写).
+		Applied *struct {
+			Kind     string     `json:"kind"`
+			AICallID *uuid.UUID `json:"ai_call_id"`
+		} `json:"applied"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -301,20 +315,32 @@ func (s *Server) updateSection(w http.ResponseWriter, r *http.Request) error {
 		return apiErr(409, "version_conflict", "这一段已在其他地方修改过").With(map[string]any{"server": sec})
 	}
 	ctx := r.Context()
+	changed := in.ContentMD != nil && *in.ContentMD != sec.ContentMD
 	var out Section
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
 		origin := sec.Origin
-		if in.ContentMD != nil && *in.ContentMD != sec.ContentMD && origin == "ai" {
+		if changed && origin == "ai" {
 			origin = "mixed"
 		}
-		if in.ContentMD != nil && sec.ContentMD == "" && origin == "human" {
-			origin = "human"
+		revOrigin, revCall := origin, (*uuid.UUID)(nil)
+		if changed && in.Applied != nil {
+			origin = "mixed"
+			revOrigin, revCall = "mixed", in.Applied.AICallID
+			if in.Applied.Kind == "rewrite" {
+				revOrigin = "rewrite"
+			}
 		}
-		if err := tx.QueryRow(ctx, `UPDATE work_section SET heading=coalesce($2,heading), content_md=coalesce($3,content_md), origin=$4,
-			revision=revision+1, updated_at=now() WHERE id=$1
-			RETURNING id, position, heading, key_point, content_md, origin, source_section_ids, material_ids, revision, updated_at`,
-			sec.ID, in.Heading, in.ContentMD, origin).Scan(&out.ID, &out.Position, &out.Heading, &out.KeyPoint, &out.ContentMD, &out.Origin,
-			&out.SourceSectionIDs, &out.MaterialIDs, &out.Revision, &out.UpdatedAt); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE work_section SET heading=coalesce($2,heading), content_md=coalesce($3,content_md), origin=$4,
+			revision=revision+1, updated_at=now() WHERE id=$1`, sec.ID, in.Heading, in.ContentMD, origin); err != nil {
+			return err
+		}
+		if changed {
+			if err := s.addSectionRevision(ctx, tx, sec.ID, *in.ContentMD, revOrigin, revCall); err != nil {
+				return err
+			}
+		}
+		var err error
+		if out, err = scanSection(tx.QueryRow(ctx, `SELECT `+sectionCols+` FROM work_section WHERE id=$1`, sec.ID)); err != nil {
 			return err
 		}
 		if err := s.touchContent(ctx, tx, m.ID); err != nil {
@@ -324,6 +350,14 @@ func (s *Server) updateSection(w http.ResponseWriter, r *http.Request) error {
 	})
 	if err != nil {
 		return err
+	}
+	if in.ContentMD != nil && sec.AICallID != nil && strings.TrimSpace(sec.AIRawMD) != "" && *in.ContentMD != sec.ContentMD {
+		ratio := sectionEditRatio(sec.AIRawMD, *in.ContentMD)
+		outcome := "accepted"
+		if ratio > 0.02 {
+			outcome = "edited"
+		}
+		s.implicitFeedback(ctx, *sec.AICallID, outcome, nil, &ratio)
 	}
 	var rev int
 	var status string
@@ -343,7 +377,7 @@ func (s *Server) deleteSection(w http.ResponseWriter, r *http.Request) error {
 		if err := s.addVersion(r.Context(), tx, m.ID, "manual"); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(r.Context(), `DELETE FROM work_section WHERE id=$1`, sec.ID); err != nil {
+		if _, err := tx.Exec(r.Context(), `UPDATE work_section SET deleted_at=now() WHERE id=$1`, sec.ID); err != nil {
 			return err
 		}
 		return s.touchContent(r.Context(), tx, m.ID)
@@ -354,13 +388,78 @@ func (s *Server) deleteSection(w http.ResponseWriter, r *http.Request) error {
 	return s.writeWork(w, r, m.ID)
 }
 
-func (s *Server) saveAIContent(ctx context.Context, sec *Section, m *workMeta, text string) (*Section, error) {
+// restoreSection undoes a section delete at its original position (4.3 撤销体系).
+func (s *Server) restoreSection(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	var workID uuid.UUID
+	if err := s.db.QueryRow(ctx, `SELECT work_id FROM work_section WHERE id=$1 AND deleted_at IS NOT NULL`, id).Scan(&workID); err != nil {
+		return err
+	}
+	m, err := s.workMeta(ctx, workID)
+	if err != nil {
+		return err
+	}
+	if err := m.editable(); err != nil {
+		return err
+	}
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE work_section SET deleted_at=NULL, updated_at=now() WHERE id=$1`, id); err != nil {
+			return err
+		}
+		return s.touchContent(ctx, tx, m.ID)
+	})
+	if err != nil {
+		return err
+	}
+	return s.writeWork(w, r, m.ID)
+}
+
+// addSectionRevision records one section change (EX-E-12): identical content is skipped and only the latest 30 are kept.
+func (s *Server) addSectionRevision(ctx context.Context, tx pgx.Tx, sectionID uuid.UUID, content, origin string, callID *uuid.UUID) error {
+	var last string
+	err := tx.QueryRow(ctx, `SELECT content_md FROM section_revision WHERE section_id=$1 ORDER BY created_at DESC LIMIT 1`, sectionID).Scan(&last)
+	if err == nil && last == content {
+		return nil
+	}
+	var user *uuid.UUID
+	if id := ident(ctx); id != nil && id.UserID != uuid.Nil {
+		user = &id.UserID
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO section_revision (section_id, content_md, origin, ai_call_id, created_by) VALUES ($1,$2,$3,$4,$5)`,
+		sectionID, content, origin, callID, user); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `DELETE FROM section_revision WHERE section_id=$1 AND id NOT IN
+		(SELECT id FROM section_revision WHERE section_id=$1 ORDER BY created_at DESC LIMIT 30)`, sectionID)
+	return err
+}
+
+// saveAIContent writes an AI draft into an empty or regenerated section; the previous untouched draft counts as regenerated.
+func (s *Server) saveAIContent(ctx context.Context, sec *Section, m *workMeta, text string, res *aiResult) (*Section, error) {
 	var out Section
+	var callID *uuid.UUID
+	if res != nil {
+		callID = &res.CallID
+	}
+	var prevCall *uuid.UUID
+	var prevContent, prevRaw string
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `UPDATE work_section SET content_md=$2, ai_raw_md=$2, origin='ai', revision=revision+1, updated_at=now() WHERE id=$1
-			RETURNING id, position, heading, key_point, content_md, origin, source_section_ids, material_ids, revision, updated_at`,
-			sec.ID, strings.TrimSpace(text)).Scan(&out.ID, &out.Position, &out.Heading, &out.KeyPoint, &out.ContentMD, &out.Origin,
-			&out.SourceSectionIDs, &out.MaterialIDs, &out.Revision, &out.UpdatedAt); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT ai_call_id, content_md, ai_raw_md FROM work_section WHERE id=$1 FOR UPDATE`, sec.ID).Scan(&prevCall, &prevContent, &prevRaw); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE work_section SET content_md=$2, ai_raw_md=$2, origin='ai', ai_call_id=$3, revision=revision+1, updated_at=now() WHERE id=$1`,
+			sec.ID, strings.TrimSpace(text), callID); err != nil {
+			return err
+		}
+		if err := s.addSectionRevision(ctx, tx, sec.ID, strings.TrimSpace(text), "ai", callID); err != nil {
+			return err
+		}
+		var err error
+		if out, err = scanSection(tx.QueryRow(ctx, `SELECT `+sectionCols+` FROM work_section WHERE id=$1`, sec.ID)); err != nil {
 			return err
 		}
 		if err := s.touchContent(ctx, tx, m.ID); err != nil {
@@ -368,10 +467,22 @@ func (s *Server) saveAIContent(ctx context.Context, sec *Section, m *workMeta, t
 		}
 		return s.addVersion(ctx, tx, m.ID, "ai")
 	})
-	return &out, err
+	if err != nil {
+		return nil, err
+	}
+	if prevCall != nil && strings.TrimSpace(prevContent) != "" {
+		if prevContent == prevRaw {
+			s.implicitFeedback(ctx, *prevCall, "regenerated", nil, nil)
+		}
+	}
+	if callID != nil {
+		s.implicitFeedback(ctx, *callID, "accepted", nil, nil)
+	}
+	return &out, nil
 }
 
 // draftSection drafts exactly one block (UX-05: no "draft all"). Requires H-02 and H-03.
+// Optional JSON body: {"instruction":"..."} — one-shot author direction for this draft only.
 func (s *Server) draftSection(w http.ResponseWriter, r *http.Request) error {
 	sec, m, err := s.sectionFromPath(r)
 	if err != nil {
@@ -386,14 +497,85 @@ func (s *Server) draftSection(w http.ResponseWriter, r *http.Request) error {
 	if err := requireOutline(m); err != nil {
 		return err
 	}
+	var in struct {
+		Instruction string `json:"instruction"`
+		Tier        string `json:"tier"`
+	}
+	if err := decodeOptional(r, &in); err != nil {
+		return err
+	}
 	ctx := r.Context()
-	outline, err := s.workOutline(ctx, m.ID)
+	work, neighbors, err := s.sectionContext(ctx, m, sec)
 	if err != nil {
 		return err
 	}
-	secs, err := s.loadSections(ctx, nil, m.ID)
+	mids, err := s.sectionMaterialIDs(ctx, m, sec)
 	if err != nil {
 		return err
+	}
+	length := "300 到 600 字"
+	if m.Account.Platform == "xhs" {
+		length = "80 到 200 字，语气口语化，可以适度使用表情符号"
+	}
+	user := fmt.Sprintf(`## 本段
+本段小标题：%s
+本段要点：%s
+
+## 任务说明
+只写本段正文，不要写本段小标题。长度约 %s。素材中没有的数据写成"【待核实：需要的内容】"。
+
+## 输出格式
+直接输出 Markdown 正文。`, sec.Heading, sec.KeyPoint, length)
+	t := aiTask{Type: "section_draft", Account: m.Account, WorkID: &m.ID, User: user, Materials: mids, Work: work, Neighbors: neighbors,
+		History: sec.Heading + " " + sec.KeyPoint, Instruction: in.Instruction, Tier: s.pickTier(ctx, in.Tier), Refs: map[string]any{"section_id": sec.ID}}
+	label := "起草「" + truncate(nz(sec.Heading, sec.KeyPoint), 16) + "」"
+	return s.streamAIJob(w, r, t, jobMeta{SectionID: &sec.ID, Label: label, Link: "/works/" + m.ID.String() + "#section-" + sec.ID.String()},
+		func(text string, res *aiResult) (any, error) {
+			return s.saveAIContent(context.WithoutCancel(ctx), sec, m, text, res)
+		})
+}
+
+// workBrief is the work slot: title, topic fields, viewpoint, confirmed outline and series neighbours.
+func (s *Server) workBrief(ctx context.Context, m *workMeta) (string, error) {
+	var angle, audience, hook string
+	var seriesID, topicID *uuid.UUID
+	_ = s.db.QueryRow(ctx, `SELECT coalesce(t.angle,''), coalesce(t.audience,''), coalesce(t.hook,''), t.series_id, t.id
+		FROM work w LEFT JOIN topic t ON t.id=w.topic_id WHERE w.id=$1`, m.ID).Scan(&angle, &audience, &hook, &seriesID, &topicID)
+	outline, err := s.workOutline(ctx, m.ID)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("## 作品\n")
+	fmt.Fprintf(&b, "标题：%s\n", nz(m.Title, "（未定）"))
+	if angle != "" {
+		fmt.Fprintf(&b, "切入角度：%s\n", angle)
+	}
+	if audience != "" {
+		fmt.Fprintf(&b, "目标读者：%s\n", audience)
+	}
+	if hook != "" {
+		fmt.Fprintf(&b, "钩子：%s\n", hook)
+	}
+	fmt.Fprintf(&b, "核心观点：%s\n", m.Viewpoint)
+	if m.OutlineConfirmedAt != nil && len(outline) > 0 {
+		b.WriteString("\n## 已确认的大纲\n" + outlineText(outline))
+	}
+	if seriesID != nil {
+		b.WriteString(s.seriesNeighbours(ctx, *seriesID, topicID))
+	}
+	return b.String(), nil
+}
+
+// sectionContext returns the work slot and the neighbour paragraphs (trimmed first when over budget).
+func (s *Server) sectionContext(ctx context.Context, m *workMeta, sec *Section) (string, string, error) {
+	work, err := s.workBrief(ctx, m)
+	if err != nil {
+		return "", "", err
+	}
+	secs, err := s.loadSections(ctx, nil, m.ID)
+	if err != nil {
+		return "", "", err
 	}
 	var prev, next string
 	for i, x := range secs {
@@ -406,44 +588,72 @@ func (s *Server) draftSection(w http.ResponseWriter, r *http.Request) error {
 			}
 		}
 	}
-	mids := sec.MaterialIDs
-	if len(mids) == 0 {
-		if mids, err = s.workMaterialIDs(ctx, m.ID); err != nil {
-			return err
+	return work, fmt.Sprintf("## 相邻段落\n上一段：%s\n下一段：%s\n", nz(prev, "（无）"), nz(next, "（无）")), nil
+}
+
+// sectionMaterialIDs uses the section's bound materials, falling back to the work's (EX-E-05),
+// most relevant to this section first.
+func (s *Server) sectionMaterialIDs(ctx context.Context, m *workMeta, sec *Section) ([]uuid.UUID, error) {
+	ids := sec.MaterialIDs
+	if len(ids) == 0 {
+		var err error
+		if ids, err = s.workMaterialIDs(ctx, m.ID); err != nil {
+			return nil, err
 		}
 	}
-	mats, names, err := s.materialsBlock(ctx, mids)
+	return s.rankMaterials(ctx, ids, sec.Heading+" "+sec.KeyPoint+" "+truncate(sec.ContentMD, 300)), nil
+}
+
+func (s *Server) pickTier(ctx context.Context, requested string) string {
+	if costTiers[requested] || requested == "standard" {
+		return requested
+	}
+	return s.userPrefs(ctx).CostTier
+}
+
+// setSectionMaterials binds materials to one section ("用于本段", EX-D-03 / EX-E-05).
+func (s *Server) setSectionMaterials(w http.ResponseWriter, r *http.Request) error {
+	sec, m, err := s.sectionFromPath(r)
 	if err != nil {
 		return err
 	}
-	length := "300 到 600 字"
-	if m.Account.Platform == "xhs" {
-		length = "80 到 200 字，语气口语化，可以适度使用表情符号"
+	if err := m.editable(); err != nil {
+		return err
 	}
-	user := fmt.Sprintf(`%s
-## 作品
-标题：%s
-核心观点：%s
-
-## 已确认的大纲
-%s
-## 相邻段落
-上一段：%s
-下一段：%s
-
-## 本段
-本段小标题：%s
-本段要点：%s
-
-## 任务说明
-只写本段正文，不要写本段小标题。长度约 %s。素材中没有的数据写成"【待核实：需要的内容】"。
-
-## 输出格式
-直接输出 Markdown 正文。`, mats, m.Title, m.Viewpoint, outlineText(outline), nz(prev, "（无）"), nz(next, "（无）"), sec.Heading, sec.KeyPoint, length)
-	return s.streamAI(w, r, aiTask{Type: "section_draft", Account: m.Account, WorkID: &m.ID, User: user, Refs: map[string]any{"materials": names}},
-		func(text string, _ *aiResult) (any, error) {
-			return s.saveAIContent(context.WithoutCancel(ctx), sec, m, text)
-		})
+	var in struct {
+		MaterialIDs []uuid.UUID `json:"material_ids"`
+	}
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	ctx := r.Context()
+	ids := []uuid.UUID{}
+	rows, err := s.db.Query(ctx, `SELECT id FROM material WHERE id = ANY($1) AND workspace_id=$2 AND deleted_at IS NULL AND (account_id IS NULL OR account_id=$3)`,
+		in.MaterialIDs, ident(ctx).WorkspaceID, m.Account.ID)
+	if err != nil {
+		return err
+	}
+	okIDs := map[uuid.UUID]bool{}
+	for rows.Next() {
+		var id uuid.UUID
+		if rows.Scan(&id) == nil {
+			okIDs[id] = true
+		}
+	}
+	rows.Close()
+	for _, id := range in.MaterialIDs {
+		if okIDs[id] {
+			ids = append(ids, id)
+			okIDs[id] = false
+		}
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE work_section SET material_ids=$2, updated_at=now() WHERE id=$1`, sec.ID, ids); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		_, _ = s.db.Exec(ctx, `INSERT INTO work_material (work_id, material_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, m.ID, id)
+	}
+	return s.writeWork(w, r, m.ID)
 }
 
 // editSection returns replacement text for the selection; the client applies and saves it.
@@ -459,6 +669,8 @@ func (s *Server) editSection(w http.ResponseWriter, r *http.Request) error {
 		Mode        string `json:"mode"`
 		Selection   string `json:"selection"`
 		Instruction string `json:"instruction"`
+		Variants    int    `json:"variants"`
+		Tier        string `json:"tier"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -468,13 +680,17 @@ func (s *Server) editSection(w http.ResponseWriter, r *http.Request) error {
 	if !okMode {
 		return validation("模式只能是改写、扩写或缩写")
 	}
+	if in.Variants != 0 && in.Variants != 1 && in.Variants != 3 {
+		return validation("候选数量只能是 1 或 3")
+	}
 	if strings.TrimSpace(in.Selection) == "" {
 		in.Selection = sec.ContentMD
 	}
 	if strings.TrimSpace(in.Selection) == "" {
 		return validation("这一段还没有内容")
 	}
-	user := fmt.Sprintf(`## 上下文
+	ctx := r.Context()
+	base := fmt.Sprintf(`## 上下文
 本段小标题：%s
 本段全文：
 %s
@@ -482,12 +698,65 @@ func (s *Server) editSection(w http.ResponseWriter, r *http.Request) error {
 ## 任务说明
 模式：%s
 要求：%s
-作者补充要求：%s
 选中内容：%s
+`, sec.Heading, truncate(sec.ContentMD, 1500), in.Mode, desc, in.Selection)
+	t := aiTask{Type: "section_edit", Account: m.Account, WorkID: &m.ID, Instruction: in.Instruction, History: sec.Heading + " " + truncate(in.Selection, 200),
+		Tier: s.pickTier(ctx, in.Tier), Refs: map[string]any{"section_id": sec.ID}}
+	if in.Variants == 3 {
+		t.Refs["variants"] = 3
+		t.User = base + `
+给出 3 个风格明显不同的候选（例如更口语、更精炼、换个角度），每个都只替换选中内容。
+候选数：3
 
 ## 输出格式
-只输出替换后的文字，不改动未选中的部分，不加任何说明。`, sec.Heading, truncate(sec.ContentMD, 1500), in.Mode, desc, nz(strings.TrimSpace(in.Instruction), "无"), in.Selection)
-	return s.streamAI(w, r, aiTask{Type: "section_edit", Account: m.Account, WorkID: &m.ID, User: user}, nil)
+只输出 JSON：{"variants":[{"label":"风格","text":"替换后的文字"}]}`
+		var out struct {
+			Variants []variant `json:"variants"`
+		}
+		res, err := s.runAIJSON(ctx, t, &out, func() error { return validateVariants(out.Variants, 3) })
+		if err != nil {
+			return err
+		}
+		return ok(w, map[string]any{"variants": out.Variants, "ai_call_id": res.CallID, "refs": res.Refs, "fallback_used": res.FallbackUsed})
+	}
+	t.User = base + `
+## 输出格式
+只输出替换后的文字，不改动未选中的部分，不加任何说明。`
+	return s.streamAI(w, r, t, nil)
+}
+
+type variant struct {
+	Label string `json:"label"`
+	Text  string `json:"text"`
+	Note  string `json:"note,omitempty"`
+}
+
+// validateVariants requires n non-empty candidates that differ from each other (similarity < 0.8).
+func validateVariants(vs []variant, n int) error {
+	if len(vs) < n {
+		return fmt.Errorf("候选少于 %d 个", n)
+	}
+	for i := range vs {
+		if strings.TrimSpace(vs[i].Text) == "" {
+			return fmt.Errorf("候选为空")
+		}
+		for j := 0; j < i; j++ {
+			if textSimilarity(vs[i].Text, vs[j].Text) >= 0.8 {
+				return fmt.Errorf("候选过于相似")
+			}
+		}
+	}
+	return nil
+}
+
+// textSimilarity is 1 - normalised edit distance.
+func textSimilarity(a, b string) float64 {
+	ra, rb := []rune(a), []rune(b)
+	n := max(len(ra), len(rb))
+	if n == 0 {
+		return 1
+	}
+	return 1 - float64(runeDistance(ra, rb))/float64(n)
 }
 
 func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
@@ -495,14 +764,28 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	var in struct {
+		Base string `json:"base"`
+	}
+	if err := decodeOptional(r, &in); err != nil {
+		return err
+	}
 	ctx := r.Context()
 	secs, err := s.loadSections(ctx, nil, m.ID)
 	if err != nil {
 		return err
 	}
+	maxLen := 32
 	limit := "不超过 32 字"
 	if m.Account.Platform == "xhs" {
+		maxLen = 20
 		limit = "不超过 20 字，口语化，可以带一个表情符号"
+	}
+	want := 5
+	task := fmt.Sprintf("平台：%s。给出不少于 5 个标题候选，每个%s，风格各不相同；不使用标题党和夸大表达。", platformNames[m.Account.Platform], limit)
+	if base := strings.TrimSpace(in.Base); base != "" {
+		want = 3
+		task = fmt.Sprintf("平台：%s。在保留原意的前提下，把这个标题再改写出 3 个不同写法，每个%s：%s", platformNames[m.Account.Platform], limit, truncate(base, 64))
 	}
 	user := fmt.Sprintf(`## 作品
 核心观点：%s
@@ -510,10 +793,10 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 %s
 
 ## 任务说明
-平台：%s。给出不少于 5 个标题候选，每个%s，风格各不相同；不使用标题党和夸大表达。
+%s
 
 ## 输出格式
-只输出 JSON：{"titles":[{"text":"标题","style":"风格说明"}]}`, m.Viewpoint, bodyDigest(secs, 1500), platformNames[m.Account.Platform], limit)
+只输出 JSON：{"titles":[{"text":"标题","style":"风格说明"}]}`, m.Viewpoint, bodyDigest(secs, 1500), task)
 	var out struct {
 		Titles []struct {
 			Text  string `json:"text"`
@@ -521,15 +804,108 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 		} `json:"titles"`
 	}
 	res, err := s.runAIJSON(ctx, aiTask{Type: "title", Account: m.Account, WorkID: &m.ID, User: user, SkipStyle: true}, &out, func() error {
-		if len(out.Titles) < 5 {
-			return fmt.Errorf("标题少于 5 个")
+		if len(out.Titles) < want {
+			return fmt.Errorf("标题少于 %d 个", want)
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"titles": out.Titles, "refs": res.Refs})
+	strong := s.highPerformingTitleFeatures(ctx, m.Account.ID)
+	type cand struct {
+		Text       string   `json:"text"`
+		Style      string   `json:"style"`
+		Chars      int      `json:"chars"`
+		OverLimit  bool     `json:"over_limit"`
+		Features   []string `json:"features"`
+		StrongHits []string `json:"strong_hits"`
+	}
+	list := []cand{}
+	for _, t := range out.Titles {
+		c := cand{Text: strings.TrimSpace(t.Text), Style: nz(strings.TrimSpace(t.Style), "其他"), Chars: runeLen(strings.TrimSpace(t.Text))}
+		c.OverLimit = c.Chars > maxLen
+		c.Features = titleFeatures(c.Text)
+		c.StrongHits = []string{}
+		for _, f := range c.Features {
+			if strong[f] {
+				c.StrongHits = append(c.StrongHits, f)
+			}
+		}
+		list = append(list, c)
+	}
+	strongList := []string{}
+	for f := range strong {
+		strongList = append(strongList, f)
+	}
+	return ok(w, map[string]any{"titles": list, "refs": res.Refs, "ai_call_id": res.CallID, "max_chars": maxLen, "strong_features": strongList})
+}
+
+// titleFeatures are explainable traits only — never a predicted popularity number (EX-E-14).
+func titleFeatures(t string) []string {
+	f := []string{}
+	if strings.ContainsAny(t, "0123456789一二三四五六七八九十百千万") {
+		f = append(f, "含数字")
+	}
+	if strings.ContainsAny(t, "？?") || strings.Contains(t, "吗") || strings.Contains(t, "为什么") || strings.Contains(t, "怎么") {
+		f = append(f, "提问式")
+	}
+	if strings.ContainsAny(t, "：:｜|") {
+		f = append(f, "分隔结构")
+	}
+	if strings.Contains(t, "我") {
+		f = append(f, "第一人称")
+	}
+	n := runeLen(t)
+	switch {
+	case n <= 14:
+		f = append(f, "短标题")
+	case n >= 24:
+		f = append(f, "长标题")
+	}
+	return f
+}
+
+// highPerformingTitleFeatures returns traits shared by the account's top-read titles (needs ≥ 5 works with data).
+func (s *Server) highPerformingTitleFeatures(ctx context.Context, accountID uuid.UUID) map[string]bool {
+	rows, err := s.db.Query(ctx, `SELECT w.title, (SELECT max(reads) FROM metric_snapshot m WHERE m.work_id=w.id) AS reads FROM work w
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id) ORDER BY reads DESC NULLS LAST LIMIT 200`, accountID)
+	out := map[string]bool{}
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	var titles []string
+	for rows.Next() {
+		var t string
+		var reads *int
+		if rows.Scan(&t, &reads) == nil {
+			titles = append(titles, t)
+		}
+	}
+	if len(titles) < 5 {
+		return out
+	}
+	top := titles[:max(1, len(titles)*3/10)]
+	count := func(list []string) map[string]float64 {
+		c := map[string]float64{}
+		for _, t := range list {
+			for _, f := range titleFeatures(t) {
+				c[f]++
+			}
+		}
+		for k := range c {
+			c[k] /= float64(len(list))
+		}
+		return c
+	}
+	topC, allC := count(top), count(titles)
+	for f, share := range topC {
+		if share >= 0.5 && share > allC[f]+0.1 {
+			out[f] = true
+		}
+	}
+	return out
 }
 
 func (s *Server) generateSummary(w http.ResponseWriter, r *http.Request) error {
@@ -667,8 +1043,10 @@ func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
 		Topics []string `json:"topics"`
 	}
 	valid := map[string]bool{}
+	revOf := map[string]int{}
 	for _, x := range secs {
 		valid[x.ID.String()] = true
+		revOf[x.ID.String()] = x.Revision
 	}
 	if _, err := s.runAIJSON(ctx, aiTask{Type: "rewrite_plan", Account: dst, User: user}, &plan, func() error {
 		if len(plan.Sections) == 0 {
@@ -698,18 +1076,21 @@ func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
 		}
 		for i, ps := range plan.Sections {
 			ids := []uuid.UUID{}
+			revs := map[string]int{revsAtKey: int(s.now().UnixMilli())}
 			for _, sid := range ps.SourceSectionIDs {
 				if valid[sid] {
 					ids = append(ids, uuid.MustParse(sid))
+					revs[sid] = revOf[sid]
 				}
 			}
 			heading := ""
 			if dst.Platform == "wechat_mp" {
 				heading = truncateRunes(ps.KeyPoint, 24)
 			}
+			rb, _ := json.Marshal(revs)
 			var sid uuid.UUID
-			if err := tx.QueryRow(ctx, `INSERT INTO work_section (work_id, position, heading, key_point, source_section_ids) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-				newID, i, heading, ps.KeyPoint, ids).Scan(&sid); err != nil {
+			if err := tx.QueryRow(ctx, `INSERT INTO work_section (work_id, position, heading, key_point, source_section_ids, source_revisions) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+				newID, i, heading, ps.KeyPoint, ids, rb).Scan(&sid); err != nil {
 				return err
 			}
 			outline = append(outline, OutlineItem{Heading: nz(heading, truncateRunes(ps.KeyPoint, 24)), KeyPoint: ps.KeyPoint, MaterialIDs: []string{}, SectionID: sid.String()})
@@ -742,16 +1123,20 @@ func (s *Server) rewriteSection(w http.ResponseWriter, r *http.Request) error {
 		return validation("这篇作品不是派生作品")
 	}
 	ctx := r.Context()
-	rows, err := s.db.Query(ctx, `SELECT id, heading, content_md FROM work_section WHERE work_id=$1 AND id = ANY($2) ORDER BY position`, *m.SourceWorkID, sec.SourceSectionIDs)
+	rows, err := s.db.Query(ctx, `SELECT id, heading, content_md, revision FROM work_section WHERE work_id=$1 AND id = ANY($2) AND deleted_at IS NULL ORDER BY position`,
+		*m.SourceWorkID, sec.SourceSectionIDs)
 	if err != nil {
 		return err
 	}
 	var b strings.Builder
+	srcRevs := map[string]int{revsAtKey: int(s.now().UnixMilli())}
 	for rows.Next() {
 		var id uuid.UUID
 		var h, c string
-		if err := rows.Scan(&id, &h, &c); err == nil {
+		var rev int
+		if err := rows.Scan(&id, &h, &c, &rev); err == nil {
 			fmt.Fprintf(&b, "【源段落 id=%s】小标题：%s\n%s\n", id, h, truncate(c, 2000))
+			srcRevs[id.String()] = rev
 		}
 	}
 	rows.Close()
@@ -772,8 +1157,149 @@ func (s *Server) rewriteSection(w http.ResponseWriter, r *http.Request) error {
 
 ## 输出格式
 %s。直接输出正文。`, platformNames[srcPlatform], platformNames[m.Account.Platform], sec.KeyPoint, nz(b.String(), "（源段落已删除）\n"), format)
-	return s.streamAI(w, r, aiTask{Type: "section_rewrite", Account: m.Account, WorkID: &m.ID, User: user},
-		func(text string, _ *aiResult) (any, error) {
-			return s.saveAIContent(context.WithoutCancel(ctx), sec, m, text)
+	return s.streamAIJob(w, r, aiTask{Type: "section_rewrite", Account: m.Account, WorkID: &m.ID, User: user, Refs: map[string]any{"section_id": sec.ID}},
+		jobMeta{SectionID: &sec.ID, Label: "改写「" + truncate(nz(sec.Heading, sec.KeyPoint), 16) + "」", Link: "/works/" + m.ID.String() + "/derive"},
+		func(text string, res *aiResult) (any, error) {
+			bg := context.WithoutCancel(ctx)
+			rb, _ := json.Marshal(srcRevs)
+			if _, err := s.db.Exec(bg, `UPDATE work_section SET source_revisions=$2 WHERE id=$1`, sec.ID, rb); err != nil {
+				return nil, err
+			}
+			return s.saveAIContent(bg, sec, m, text, res)
 		})
+}
+
+type FamilyMember struct {
+	ID        uuid.UUID  `json:"id"`
+	SourceID  *uuid.UUID `json:"source_id"`
+	Title     string     `json:"title"`
+	Status    string     `json:"status"`
+	Platform  string     `json:"platform"`
+	Account   string     `json:"account"`
+	Depth     int        `json:"depth"`
+	NeedsSync bool       `json:"needs_sync"`
+}
+
+// workFamily walks up to the root work and lists every derived descendant (EX-F-04), within the workspace.
+func (s *Server) workFamily(w http.ResponseWriter, r *http.Request) error {
+	m, err := s.workMetaFromPath(r)
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	ws := ident(ctx).WorkspaceID
+	var root uuid.UUID
+	if err := s.db.QueryRow(ctx, `WITH RECURSIVE up AS (
+			SELECT w.id, w.source_work_id, 0 AS d FROM work w WHERE w.id=$1
+			UNION ALL
+			SELECT p.id, p.source_work_id, up.d+1 FROM work p JOIN up ON p.id=up.source_work_id
+			JOIN platform_account a ON a.id=p.account_id
+			WHERE p.deleted_at IS NULL AND a.workspace_id=$2 AND up.d < 20)
+		SELECT id FROM up ORDER BY d DESC LIMIT 1`, m.ID, ws).Scan(&root); err != nil {
+		return err
+	}
+	rows, err := s.db.Query(ctx, `WITH RECURSIVE down AS (
+			SELECT w.id, 0 AS d FROM work w WHERE w.id=$1
+			UNION ALL
+			SELECT c.id, down.d+1 FROM work c JOIN down ON c.source_work_id=down.id WHERE c.deleted_at IS NULL AND down.d < 20)
+		SELECT w.id, w.source_work_id, w.title, w.status, a.platform, a.name, down.d,
+			coalesce(sw.deleted_at IS NULL AND w.source_revision > 0 AND sw.revision > w.source_revision, false)
+		FROM down JOIN work w ON w.id=down.id JOIN platform_account a ON a.id=w.account_id
+		LEFT JOIN work sw ON sw.id=w.source_work_id
+		WHERE a.workspace_id=$2 ORDER BY down.d, w.created_at`, root, ws)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	list := []FamilyMember{}
+	for rows.Next() {
+		var x FamilyMember
+		if err := rows.Scan(&x.ID, &x.SourceID, &x.Title, &x.Status, &x.Platform, &x.Account, &x.Depth, &x.NeedsSync); err != nil {
+			return err
+		}
+		list = append(list, x)
+	}
+	return ok(w, list)
+}
+
+// revsAtKey stores, inside source_revisions, the unix milliseconds of the derive / rewrite the revisions belong to.
+const revsAtKey = "@at"
+
+// sourceDiff returns, per derived section, whether its source sections changed since the last rewrite (EX-F-01).
+func (s *Server) sourceDiff(w http.ResponseWriter, r *http.Request) error {
+	m, err := s.workMetaFromPath(r)
+	if err != nil {
+		return err
+	}
+	if m.SourceWorkID == nil {
+		return validation("这篇作品不是派生作品")
+	}
+	ctx := r.Context()
+	secs, err := s.loadSections(ctx, nil, m.ID)
+	if err != nil {
+		return err
+	}
+	src, err := s.loadSections(ctx, nil, *m.SourceWorkID)
+	if err != nil {
+		return err
+	}
+	byID := map[string]Section{}
+	for _, x := range src {
+		byID[x.ID.String()] = x
+	}
+	type srcChange struct {
+		SourceID   string `json:"source_id"`
+		Heading    string `json:"heading"`
+		Changed    bool   `json:"changed"`
+		Deleted    bool   `json:"deleted"`
+		OldContent string `json:"old_content"`
+		NewContent string `json:"new_content"`
+	}
+	type item struct {
+		SectionID string      `json:"section_id"`
+		Changed   bool        `json:"changed"`
+		Sources   []srcChange `json:"sources"`
+	}
+	out := []item{}
+	for _, x := range secs {
+		var revs map[string]int
+		_ = json.Unmarshal(x.SourceRevisions, &revs)
+		// 基线时间：派生 / 改写当时记录的时间；旧数据没有记录时退回到本段最后修改时间。
+		baseline := x.UpdatedAt
+		if at, okAt := revs[revsAtKey]; okAt {
+			baseline = time.UnixMilli(int64(at))
+		}
+		it := item{SectionID: x.ID.String(), Sources: []srcChange{}}
+		for _, sid := range x.SourceSectionIDs {
+			cur, okSrc := byID[sid.String()]
+			c := srcChange{SourceID: sid.String()}
+			if !okSrc {
+				c.Deleted, c.Changed = true, true
+			} else {
+				c.Heading = cur.Heading
+				c.NewContent = cur.ContentMD
+				old, had := revs[sid.String()]
+				if (had && cur.Revision > old) || (!had && cur.UpdatedAt.After(baseline)) {
+					c.Changed = true
+					c.OldContent = s.sectionContentAt(ctx, sid, baseline)
+				}
+			}
+			if c.Changed {
+				it.Changed = true
+			}
+			it.Sources = append(it.Sources, c)
+		}
+		out = append(out, it)
+	}
+	return ok(w, out)
+}
+
+// sectionContentAt is the source section's content as of the derived section's last rewrite (from section history).
+func (s *Server) sectionContentAt(ctx context.Context, sectionID uuid.UUID, at time.Time) string {
+	var c string
+	if err := s.db.QueryRow(ctx, `SELECT content_md FROM section_revision WHERE section_id=$1 AND created_at <= $2 ORDER BY created_at DESC LIMIT 1`,
+		sectionID, at).Scan(&c); err != nil {
+		return ""
+	}
+	return c
 }
