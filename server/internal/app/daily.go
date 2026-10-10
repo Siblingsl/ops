@@ -79,7 +79,16 @@ func (s *Server) dailyAI(ctx context.Context, a *Account, strategy *Strategy, co
 	var out struct {
 		Items []DailyItem `json:"items"`
 	}
-	user := fmt.Sprintf("推荐数量：%d\n主推数量：%d\n日期：%s\n方案：%s\n规则候选：%s\n近期标题（不要重复）：%s\n放弃标题（换个角度）：%s\n优先高权重；每条至少一个有效 basis，只能引用输入中的 type/id/name。不得编造用户经历、热点细节；输出 {items:[{title,angle,audience,hook,needed_materials:[],format,reason,basis:[{type,id,name}],primary}]}。", count, primary, s.today().Format("2006-01-02"), sb, b, strings.Join(recent, "、"), strings.Join(avoid, "、"))
+	user := fmt.Sprintf(`推荐数量：%d
+主推数量：%d
+作品类型：%s
+日期：%s
+方案：%s
+规则候选：%s
+近期标题（不要重复）：%s
+放弃标题（换个角度）：%s
+每条推荐的 format 必须是上面的作品类型，内容必须适合这种类型的表达方式，并与账号的领域、受众、内容支柱相关。优先高权重；每条至少一个有效 basis，只能引用输入中的 type/id/name。不得编造用户经历、热点细节；输出 {items:[{title,angle,audience,hook,needed_materials:[],format,reason,basis:[{type,id,name}],primary}]}。`,
+		count, primary, a.ContentFormat, s.today().Format("2006-01-02"), sb, b, strings.Join(recent, "、"), strings.Join(avoid, "、"))
 	ai, e := s.runAIJSON(ctx, aiTask{Type: "daily_recommend", Account: a, Tier: "quality", SkipStyle: true, User: user, Refs: map[string]any{"candidate_count": len(candidates)}}, &out, func() error {
 		if len(out.Items) != count {
 			return fmt.Errorf("推荐数量必须为 %d", count)
@@ -103,8 +112,12 @@ func (s *Server) dailyAI(ctx context.Context, a *Account, strategy *Strategy, co
 				}
 				x.Basis[j] = c.DailyBasis
 			}
-			if !validFormat(a.Platform, x.Format) {
+			// D-048 第 5.4 节：推荐只能是账号类型；模型输出其他类型时重试后明确失败，
+			// 不允许把 format 改成账号值伪装匹配。空值按账号类型补齐。
+			if x.Format == "" {
 				x.Format = a.ContentFormat
+			} else if x.Format != a.ContentFormat {
+				return fmt.Errorf("推荐的作品类型必须为 %s（账号类型），模型返回了 %s", formatNames[a.ContentFormat], formatNames[x.Format])
 			}
 			x.NeededMaterials = limitList(x.NeededMaterials, 10, 100)
 			x.Primary = i < primary
@@ -341,6 +354,10 @@ func (s *Server) dailyAction(w http.ResponseWriter, r *http.Request) error {
 	} else if action == "dismiss" {
 		storedAction, outcome = "dismissed", "rejected"
 	} else {
+		// D-048 第 5.5 节：历史跨类型推荐不得照常采用或开写；给出原因，由人决定换一个或忽略。
+		if item.Format != "" && item.Format != a.ContentFormat {
+			return stateInvalid(fmt.Sprintf("这条推荐的作品类型（%s）与账号类型（%s）不一致，不能采用或开写。请用「换一个」重新生成，或选择不感兴趣。", formatNames[item.Format], formatNames[a.ContentFormat]))
+		}
 		if tid == nil {
 			if in.Title != "" {
 				item.Title = truncateRunes(in.Title, 100)

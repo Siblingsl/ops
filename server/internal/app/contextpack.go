@@ -76,7 +76,11 @@ func (p *ContextPack) refs() map[string]any {
 
 func profileText(a *Account, p *Profile) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "平台：%s；内容形态：%s；账号名：%s\n", platformNames[a.Platform], formatNames[a.ContentFormat], a.Name)
+	fmt.Fprintf(&b, "平台：%s；账号类型：%s；账号名：%s\n", platformNames[a.Platform], formatNames[a.ContentFormat], a.Name)
+	// D-048 第 9 节：类型补充说明只影响提示词与定位文案，不扩展能力。
+	if strings.TrimSpace(a.TypeNote) != "" {
+		fmt.Fprintf(&b, "类型补充说明（只影响表达方式，不改创作流程）：%s\n", strings.TrimSpace(a.TypeNote))
+	}
 	if len(p.PositioningTags) > 0 {
 		fmt.Fprintf(&b, "定位标签：%s\n", strings.Join(p.PositioningTags, "、"))
 	}

@@ -15,6 +15,9 @@ import (
 // real model. Replies are deterministic and derived from the prompt so the UI flow is testable.
 type LLM struct {
 	Delay time.Duration
+	// ForceDailyFormat forces daily_recommend to emit the given format for every item.
+	// Test knob for D-048: reproduces a model returning a type the account does not use.
+	ForceDailyFormat string
 }
 
 type chatReq struct {
@@ -90,7 +93,7 @@ func (l *LLM) Handler() http.Handler {
 				user = m.Content
 			}
 		}
-		reply := respond(user)
+		reply := l.respond(user)
 		promptTokens := utf8.RuneCountInString(sys+user) * 2 / 3
 		completionTokens := utf8.RuneCountInString(reply) * 2 / 3
 		usage := map[string]int{"prompt_tokens": promptTokens, "completion_tokens": completionTokens, "total_tokens": promptTokens + completionTokens}
@@ -233,7 +236,7 @@ func sectionAfter(prompt, marker string) string {
 	return strings.TrimSpace(rest)
 }
 
-func respond(prompt string) string {
+func (l *LLM) respond(prompt string) string {
 	task := ""
 	if m := taskRe.FindStringSubmatch(prompt); m != nil {
 		task = m[1]
@@ -561,6 +564,10 @@ func respond(prompt string) string {
 		}
 		var candidates []map[string]any
 		_ = json.Unmarshal([]byte(field(prompt, "规则候选：")), &candidates)
+		format := l.ForceDailyFormat
+		if format == "" {
+			format = nzs(field(prompt, "作品类型："), "image_note")
+		}
 		items := []map[string]any{}
 		for i := 0; i < count && len(candidates) > 0; i++ {
 			c := candidates[i%len(candidates)]
@@ -571,7 +578,7 @@ func respond(prompt string) string {
 			if c["name"] != nil {
 				basis["name"] = c["name"]
 			}
-			items = append(items, map[string]any{"title": fmt.Sprintf("%v：实践问题 %d（%d）", c["title"], i+1, len(prompt)), "angle": "由作者自己的实践展开", "audience": "正在尝试实践的读者", "hook": "一次真实困惑", "needed_materials": []string{"个人经历"}, "format": "image_note", "reason": "优先补齐近期支柱与已确认计划", "basis": []map[string]any{basis}, "primary": i < 2})
+			items = append(items, map[string]any{"title": fmt.Sprintf("%v：实践问题 %d（%d）", c["title"], i+1, len(prompt)), "angle": "由作者自己的实践展开", "audience": "正在尝试实践的读者", "hook": "一次真实困惑", "needed_materials": []string{"个人经历"}, "format": format, "reason": "优先补齐近期支柱与已确认计划", "basis": []map[string]any{basis}, "primary": i < 2})
 		}
 		return js(map[string]any{"items": items})
 	case "reference_analyze":

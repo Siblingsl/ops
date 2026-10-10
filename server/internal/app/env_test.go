@@ -33,6 +33,7 @@ type testEnv struct {
 	http   *httptest.Server
 	mockWX *mock.Wechat
 	mock   *httptest.Server
+	llm    *mock.LLM
 	client *http.Client
 	csrf   string
 }
@@ -113,7 +114,7 @@ func runWithEnv(m *testing.M) (int, error) {
 	hs := httptest.NewServer(srv.Router())
 	defer hs.Close()
 	jar, _ := cookiejar.New(nil)
-	env = &testEnv{srv: srv, http: hs, mockWX: wx, mock: mockSrv, client: &http.Client{Jar: jar, Timeout: time.Minute}}
+	env = &testEnv{srv: srv, http: hs, mockWX: wx, mock: mockSrv, llm: llm, client: &http.Client{Jar: jar, Timeout: time.Minute}}
 	if st, body := env.do("POST", "/api/v1/auth/setup", map[string]string{"username": "owner", "password": testPassword}); st != 200 {
 		return 0, fmt.Errorf("setup: %d %s", st, body)
 	}

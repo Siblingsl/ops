@@ -52,7 +52,14 @@ func scanTopic(row interface{ Scan(...any) error }) (Topic, error) {
 	return t, err
 }
 
-var topicFormats = map[string]bool{"": true, "long_article": true, "image_note": true, "comic": true}
+// D-048 第 5.7 节：账号类型创建后固定，选题的预计形态只能是空或账号类型；
+// 历史选题的其他形态值保留展示（列表有"形态与账号类型不匹配"提示），但开写会被拦截。
+func validateTopicFormat(a *Account, f *topicFields) error {
+	if f.Format != nil && *f.Format != "" && *f.Format != a.ContentFormat {
+		return validation(fmt.Sprintf("这个账号的类型是%s，选题预计形态只能是账号类型或留空", formatNames[a.ContentFormat]))
+	}
+	return nil
+}
 
 func (s *Server) listTopics(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.accountFromPath(r)
@@ -167,9 +174,6 @@ type topicFields struct {
 }
 
 func (f *topicFields) validate() error {
-	if f.Format != nil && !topicFormats[*f.Format] {
-		return validation("预计形态只能是长图文、图文笔记或漫画")
-	}
 	if f.PlannedDate != nil && *f.PlannedDate != "" {
 		if _, err := time.Parse("2006-01-02", *f.PlannedDate); err != nil {
 			return validation("计划发布日格式不正确")
@@ -250,6 +254,9 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 	if err := in.topicFields.validate(); err != nil {
 		return err
 	}
+	if err := validateTopicFormat(a, &in.topicFields); err != nil {
+		return err
+	}
 	switch in.Source {
 	case "ai", "review", "hot", "plan", "daily":
 	default:
@@ -286,7 +293,14 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, map[string]any{"topic": t, "similar": similar})
 }
 
-const topicSuggestFormat = `只输出 JSON：{"topics":[{"title":"选题标题","angle":"一句话切入角度","reason":"推荐理由","audience":"目标读者","hook":"开头抓人的点","needed_materials":["需要的素材"],"format":"long_article|image_note|comic"}]}`
+// topicSuggestOutput builds the JSON contract for topic suggestions. D-048 第 5.4 节：
+// 选题建议的形态只能是账号类型——账号类型创建后固定，其他形态的选题永远无法开写。
+func topicSuggestOutput(a *Account, hot bool) string {
+	if hot {
+		return fmt.Sprintf(`只输出 JSON：{"topics":[{"title":"选题标题","angle":"切入角度","reason":"推荐理由","timeliness":"时效提示","audience":"目标读者","hook":"钩子","needed_materials":[],"format":"%s","hot_item_id":null,"source_url":""}]}`, a.ContentFormat)
+	}
+	return fmt.Sprintf(`只输出 JSON：{"topics":[{"title":"选题标题","angle":"一句话切入角度","reason":"推荐理由","audience":"目标读者","hook":"开头抓人的点","needed_materials":["需要的素材"],"format":"%s"}]}`, a.ContentFormat)
+}
 
 type topicSuggestion struct {
 	HotItemID       *uuid.UUID `json:"hot_item_id,omitempty"`
@@ -303,7 +317,7 @@ type topicSuggestion struct {
 
 func normalizeSuggestions(list []topicSuggestion, a *Account) {
 	for i := range list {
-		if !topicFormats[list[i].Format] || list[i].Format == "" {
+		if list[i].Format == "" {
 			list[i].Format = a.ContentFormat
 		}
 		if list[i].NeededMaterials == nil {
@@ -341,6 +355,7 @@ func (s *Server) suggestTopics(w http.ResponseWriter, r *http.Request) error {
 	_ = decodeOptional(r, &in)
 	user := fmt.Sprintf(`## 选题需求
 方向关键词：%s
+账号类型：%s（每个选题必须适合这种类型的表达方式）
 最近的选题和作品标题（避免重复）：
 %s
 
@@ -348,13 +363,20 @@ func (s *Server) suggestTopics(w http.ResponseWriter, r *http.Request) error {
 为这个账号提出不少于 6 个选题建议。每个选题给出标题、切入角度、推荐理由、目标读者、钩子、需要的素材和预计形态。选题要贴合账号定位和目标读者，与最近的选题不重复；不要追逐无法核实的热点。
 
 ## 输出格式
-%s`, strings.TrimSpace(in.Direction), "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "), topicSuggestFormat)
+%s`, strings.TrimSpace(in.Direction), a.ContentFormat, "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "), topicSuggestOutput(a, false))
 	var out struct {
 		Topics []topicSuggestion `json:"topics"`
 	}
 	res, err := s.runAIJSON(r.Context(), aiTask{Type: "topic_suggest", Account: a, User: user, SkipStyle: true}, &out, func() error {
 		if len(out.Topics) < 5 {
 			return fmt.Errorf("选题少于 5 条")
+		}
+		for i := range out.Topics {
+			if out.Topics[i].Format == "" {
+				out.Topics[i].Format = a.ContentFormat
+			} else if out.Topics[i].Format != a.ContentFormat {
+				return fmt.Errorf("选题的预计形态必须为 %s（账号类型），不能输出其他类型", a.ContentFormat)
+			}
 		}
 		return nil
 	})
@@ -412,6 +434,7 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 	}
 	user := fmt.Sprintf(`## 热点选题需求（合规来源）
 方向关键词：%s
+账号类型：%s（每个选题必须适合这种类型的表达方式）
 用户粘贴的公开资讯摘要（可为空）：
 %s
 
@@ -426,8 +449,8 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 4. 每个选题给出标题、切入角度、推荐理由，以及可选的时效提示（如「本周热点」「常青但当下有讨论」）。
 
 ## 输出格式
-只输出 JSON：{"topics":[{"title":"选题标题","angle":"切入角度","reason":"推荐理由","timeliness":"时效提示","audience":"目标读者","hook":"钩子","needed_materials":[],"format":"long_article|image_note|comic","hot_item_id":null,"source_url":""}]}`,
-		strings.TrimSpace(in.Direction), ctxText, "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "))
+%s`,
+		strings.TrimSpace(in.Direction), a.ContentFormat, ctxText, "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "), topicSuggestOutput(a, true))
 	var out struct {
 		Topics []topicSuggestion `json:"topics"`
 	}
@@ -445,6 +468,11 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 				item.SourceURL = h.URL
 			} else {
 				item.SourceURL = ""
+			}
+			if item.Format == "" {
+				item.Format = a.ContentFormat
+			} else if item.Format != a.ContentFormat {
+				return fmt.Errorf("选题的预计形态必须为 %s（账号类型），不能输出其他类型", a.ContentFormat)
 			}
 		}
 		return nil
@@ -480,6 +508,18 @@ func (s *Server) updateTopic(w http.ResponseWriter, r *http.Request) error {
 	}
 	if err := in.topicFields.validate(); err != nil {
 		return err
+	}
+	a, err := s.account(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	// 编辑允许把历史不匹配形态改为账号类型或留空；原值原样保存（不改类型）也兼容。
+	if in.Format != nil && *in.Format != "" && *in.Format != a.ContentFormat {
+		var cur string
+		_ = s.db.QueryRow(ctx, `SELECT coalesce(format,'') FROM topic WHERE id=$1`, id).Scan(&cur)
+		if *in.Format != cur {
+			return validation(fmt.Sprintf("这个账号的类型是%s，选题预计形态只能是账号类型或留空", formatNames[a.ContentFormat]))
+		}
 	}
 	if _, err := s.db.Exec(ctx, `UPDATE topic SET title=coalesce($2,title), angle=coalesce($3,angle), status=coalesce($4,status), updated_at=now() WHERE id=$1`,
 		id, in.Title, in.Angle, in.Status); err != nil {
@@ -524,6 +564,14 @@ func (s *Server) startWorkFromTopic(w http.ResponseWriter, r *http.Request) erro
 	a, err := s.account(ctx, accountID)
 	if err != nil {
 		return err
+	}
+	// D-048 第 5.5 节：跨类型选题不能开写；历史不匹配选题明确提示，由人决定改形态或放弃。
+	var tformat string
+	if err := s.db.QueryRow(ctx, `SELECT coalesce(format,'') FROM topic WHERE id=$1`, id).Scan(&tformat); err != nil {
+		return err
+	}
+	if tformat != "" && tformat != a.ContentFormat {
+		return stateInvalid(fmt.Sprintf("这个选题的预计形态是%s，与账号类型（%s）不一致，不能开写。请在编辑选题卡中改为账号类型，或放弃这条选题。", formatNames[tformat], formatNames[a.ContentFormat]))
 	}
 	var title, angle string
 	var needed []string
