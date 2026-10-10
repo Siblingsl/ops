@@ -196,7 +196,11 @@ func blocked(b []byte, status int) bool {
 }
 
 // Read performs one source operation. Robots and target requests share the daily budget.
-func (c *Client) Read(ctx context.Context, source Source, lim Limits) (body []byte, out Outcome, err error) {
+func (c *Client) Read(ctx context.Context, source Source, lim Limits) ([]byte, Outcome, error) {
+	return c.ReadValidated(ctx, source, lim, nil)
+}
+
+func (c *Client) ReadValidated(ctx context.Context, source Source, lim Limits, validate func([]byte) error) (body []byte, out Outcome, err error) {
 	if c.options.Mode == nil || !c.options.Mode() || !lim.Enabled {
 		return nil, out, ErrDisabled
 	}
@@ -264,6 +268,9 @@ func (c *Client) Read(ctx context.Context, source Source, lim Limits) (body []by
 		err = errors.New("来源触发访问限制，已暂停")
 	} else if out.Status < 200 || out.Status >= 300 {
 		err = fmt.Errorf("来源返回 HTTP %d", out.Status)
+	}
+	if err == nil && validate != nil {
+		err = validate(body)
 	}
 	return
 }

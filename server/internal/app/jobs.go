@@ -11,6 +11,8 @@ import (
 // RunJobs runs periodic maintenance until ctx is cancelled.
 func (s *Server) RunJobs(ctx context.Context) {
 	t := time.NewTicker(10 * time.Minute)
+	ct := time.NewTicker(time.Minute)
+	defer ct.Stop()
 	defer t.Stop()
 	s.interruptJobs(ctx)
 	s.runJobsOnce(ctx)
@@ -20,6 +22,8 @@ func (s *Server) RunJobs(ctx context.Context) {
 			return
 		case <-t.C:
 			s.runJobsOnce(ctx)
+		case <-ct.C:
+			s.collectHot(ctx)
 		}
 	}
 }
@@ -41,6 +45,7 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	s.purgeDeletedSections(ctx)
 	s.metricRemindersJob(ctx)
 	s.reindexEmbeddings(ctx)
+	s.purgeHot(ctx)
 	// 每日 / 每周任务只在凌晨后跑一次（markOnce 保证幂等）
 	if h := s.now().In(s.loc).Hour(); h >= 3 {
 		s.distillDaily(ctx)

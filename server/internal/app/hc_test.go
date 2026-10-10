@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,7 +16,82 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"ops/internal/crawl"
 )
+
+// HC-21 and HC-23 cover the collector seam, in addition to crawl's fake-clock tests.
+func TestHC21_CrawlOffMakesNoRequests(t *testing.T) {
+	enableTestCrawl(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 10, 0, 0, 0, 0, env.srv.loc)
+	env.srv.now = func() time.Time { return now }
+	_, err := env.srv.db.Exec(ctx, `UPDATE crawl_source SET enabled=true WHERE key='baidu'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after int
+	if err = env.srv.db.QueryRow(ctx, `SELECT count(*) FROM crawl_run`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"deployment_off", "level_off"} {
+		env.srv.cfg.CrawlMode = "allow"
+		if mode == "deployment_off" {
+			env.srv.cfg.CrawlMode = "off"
+		} else {
+			_, _ = env.srv.db.Exec(ctx, `UPDATE system_setting SET value='"off"' WHERE key='crawl.level'`)
+		}
+		for range 1440 {
+			env.srv.collectHot(ctx)
+			now = now.Add(time.Minute)
+		}
+	}
+	if err = env.srv.db.QueryRow(ctx, `SELECT count(*) FROM crawl_run`).Scan(&after); err != nil || after != before {
+		t.Fatalf("disabled collector ran: %d -> %d %v", before, after, err)
+	}
+	if err = env.srv.db.QueryRow(ctx, `SELECT coalesce(sum(requests),0)::int FROM crawl_budget`).Scan(&after); err != nil || after != 0 {
+		t.Fatalf("off requests=%d %v", after, err)
+	}
+}
+
+func TestHC23_CrawlRequestIdentity(t *testing.T) {
+	enableTestCrawl(t)
+	calls := 0
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Header.Get("Cookie") != "" || r.Header.Get("Authorization") != "" || r.Header.Get("User-Agent") != crawl.UserAgent {
+			t.Errorf("unexpected identity headers")
+		}
+		if r.URL.Path == "/robots.txt" {
+			_, _ = w.Write([]byte("User-agent: *\nAllow: /\n"))
+		} else {
+			_, _ = w.Write([]byte(`{"data":[{"Title":"公开标题","Url":"https://example.com/a"}]}`))
+		}
+	}))
+	defer mockServer.Close()
+	old := env.srv.cfg.MockListen
+	env.srv.cfg.MockListen = strings.TrimPrefix(mockServer.URL, "http://")
+	t.Cleanup(func() { env.srv.cfg.MockListen = old })
+	ctx := context.Background()
+	_, _ = env.srv.db.Exec(ctx, `UPDATE crawl_source SET enabled=true,last_attempt_at=NULL WHERE key='toutiao'`)
+	source, err := scanCrawlSource(env.srv.db.QueryRow(ctx, `SELECT `+crawlSourceCols+` FROM crawl_source WHERE key='toutiao'`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.srv.collectSource(ctx, source); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("requests %d", calls)
+	}
+	// Adapters may not instantiate their own network clients.
+	sourceCode, err := os.ReadFile("../crawl/sources.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(sourceCode), "http.Client") || strings.Contains(string(sourceCode), "http.Get(") {
+		t.Fatal("adapter bypasses unified client")
+	}
+}
 
 func topicCount(t *testing.T, accountID string) int {
 	t.Helper()

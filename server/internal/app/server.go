@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ops/internal/config"
+	"ops/internal/crawl"
 	"ops/internal/secure"
 	"ops/internal/wechat"
 )
@@ -45,6 +46,8 @@ type Server struct {
 
 	// lastPacks keeps the latest context per workspace/task in memory only, for saving prompt regression cases.
 	lastPacks sync.Map
+	crawlMu   sync.Mutex
+	crawler   *crawl.Client
 }
 
 func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {

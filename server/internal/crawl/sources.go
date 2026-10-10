@@ -33,45 +33,46 @@ type Adapter struct {
 func (a Adapter) Key() string  { return a.Source.Key }
 func (a Adapter) Kind() string { return a.Source.Kind }
 func (a Adapter) Fetch(ctx context.Context, l Limits) ([]Item, Outcome, error) {
-	b, out, err := a.Client.Read(ctx, a.Source, l)
-	if err != nil {
-		return nil, out, err
-	}
-	var items []Item
-	if a.Source.Kind == "rss" {
-		items, err = ParseRSS(b, a.Source.URL)
-	} else if a.Source.Key == "baidu" {
-		items, err = ParseBaidu(b)
-	} else if a.Source.Key == "toutiao" {
-		items, err = ParseToutiao(b)
-	} else if a.Source.Kind == "aggregator" {
-		err = json.Unmarshal(b, &items)
-	} else {
-		err = errors.New("未知榜单来源")
-	}
-	if err != nil {
-		return nil, out, err
-	}
-	clean := []Item{}
-	seen := map[string]bool{}
-	for _, item := range items {
-		item.Title = strings.TrimSpace(item.Title)
-		u, e := url.Parse(item.URL)
-		if e != nil || u.Host == "" || u.User != nil || u.Scheme != "https" && u.Scheme != "http" || item.Title == "" || seen[item.Title+item.URL] {
-			continue
+	var clean []Item
+	_, out, err := a.Client.ReadValidated(ctx, a.Source, l, func(b []byte) error {
+		var err error
+		var items []Item
+		if a.Source.Kind == "rss" {
+			items, err = ParseRSS(b, a.Source.URL)
+		} else if a.Source.Key == "baidu" {
+			items, err = ParseBaidu(b)
+		} else if a.Source.Key == "toutiao" {
+			items, err = ParseToutiao(b)
+		} else if a.Source.Kind == "aggregator" {
+			err = json.Unmarshal(b, &items)
+		} else {
+			err = errors.New("未知榜单来源")
 		}
-		seen[item.Title+item.URL] = true
-		item.Title = cut(item.Title, 200)
-		item.Summary = cut(plain(item.Summary), 500)
-		clean = append(clean, item)
-		if len(clean) >= l.MaxItems {
-			break
+		if err != nil {
+			return err
 		}
-	}
-	if len(clean) == 0 {
-		return nil, out, errors.New("榜单未返回有效标题和链接，请检查来源页面结构")
-	}
-	return clean, out, nil
+		clean = []Item{}
+		seen := map[string]bool{}
+		for _, item := range items {
+			item.Title = strings.TrimSpace(item.Title)
+			u, e := url.Parse(item.URL)
+			if e != nil || u.Host == "" || u.User != nil || u.Scheme != "https" && u.Scheme != "http" || item.Title == "" || seen[item.Title+item.URL] {
+				continue
+			}
+			seen[item.Title+item.URL] = true
+			item.Title = cut(item.Title, 200)
+			item.Summary = cut(plain(item.Summary), 500)
+			clean = append(clean, item)
+			if len(clean) >= l.MaxItems {
+				break
+			}
+		}
+		if len(clean) == 0 {
+			return errors.New("榜单未返回有效标题和链接，请检查来源页面结构")
+		}
+		return nil
+	})
+	return clean, out, err
 }
 func cut(s string, n int) string {
 	r := []rune(s)
