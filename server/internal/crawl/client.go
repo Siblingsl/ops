@@ -55,7 +55,7 @@ type Outcome struct {
 // Store makes budgets and source claims shared across workers and restarts.
 type Store interface {
 	Claim(context.Context, Source, time.Time, Limits) error
-	Reserve(context.Context, time.Time, int) error
+	Reserve(context.Context, Source, time.Time, int) error
 	Finish(context.Context, Source, time.Time, Limits, Outcome)
 }
 
@@ -156,11 +156,11 @@ func (c *Client) validURL(raw string, source Source) (*url.URL, error) {
 	return u, nil
 }
 
-func (c *Client) request(ctx context.Context, u *url.URL, lim Limits, out *Outcome) ([]byte, int, error) {
+func (c *Client) request(ctx context.Context, u *url.URL, source Source, lim Limits, out *Outcome) ([]byte, int, error) {
 	if c.options.Mode == nil || !c.options.Mode() || !lim.Enabled {
 		return nil, 0, ErrDisabled
 	}
-	if err := c.options.Store.Reserve(ctx, c.options.Now(), lim.DailyRequests); err != nil {
+	if err := c.options.Store.Reserve(ctx, Source{Key: source.Key, Kind: source.Kind, URL: u.String()}, c.options.Now(), lim.DailyRequests); err != nil {
 		return nil, 0, err
 	}
 	out.Requests++
@@ -229,7 +229,10 @@ func (c *Client) ReadValidated(ctx context.Context, source Source, lim Limits, v
 	c.mu.Unlock()
 	if !ok || !c.options.Now().Before(cache.until) {
 		ru, _ := url.Parse(origin + "/robots.txt")
-		b, status, e := c.request(ctx, ru, lim, &out)
+		b, status, e := c.request(ctx, ru, source, lim, &out)
+		if errors.Is(e, ErrLimited) || errors.Is(e, ErrDisabled) {
+			return nil, out, e
+		}
 		cache = robotCache{until: c.options.Now().Add(24 * time.Hour)}
 		if e != nil {
 			cache.err = e
@@ -259,7 +262,7 @@ func (c *Client) ReadValidated(ctx context.Context, source Source, lim Limits, v
 	if !out.RobotsAllow {
 		return nil, out, ErrRobots
 	}
-	body, out.Status, err = c.request(ctx, u, lim, &out)
+	body, out.Status, err = c.request(ctx, u, source, lim, &out)
 	if err != nil {
 		return
 	}

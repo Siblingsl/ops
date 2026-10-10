@@ -270,6 +270,7 @@ func (s *Server) Router() http.Handler {
 
 			s.v3Routes(r)
 			s.v4Routes(r)
+			r.Put("/admin/crawl/platforms/{platform}", s.h(s.adminPutPlatform))
 		})
 	})
 

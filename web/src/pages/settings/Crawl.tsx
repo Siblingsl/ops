@@ -7,6 +7,14 @@ import { errorMessage, get, post, put } from '@/lib/api'
 import { useInvalidate, useMe } from '@/lib/session'
 import type { CrawlRun, CrawlSettings, CrawlSource, HotSourcesResult } from '@/lib/types'
 
+type Platform = { platform: string; enabled: boolean; level: string; interval_min: number; daily_max: number; repeat_hours: number; jitter_min: number; today_requests: number; paused_until: string | null; strikes_7d: number }
+function PlatformRow({ value, refresh, dev }: { value: Platform; refresh: () => void; dev: boolean }) {
+ const [form, setForm] = useState(value)
+ const [busy,setBusy]=useState(false)
+ const save=async()=>{setBusy(true);try{await put(`/admin/crawl/platforms/${form.platform}`,form);refresh();toast.success('平台参数已保存')}catch(e){toast.error(errorMessage(e))}finally{setBusy(false)}}
+ return <div className="space-y-3 p-5 border-b border-mist-100"><strong>{form.platform==='xhs_page'?'小红书':'公众号'}页面读取</strong><Notice>只读取免登录可见的单篇页面；碰到验证码或登录要求会自动停止，不会尝试绕过。真实平台 robots 禁止，保持停用。</Notice><Field label="档位"><Select value={form.level} onChange={e=>{const level=e.target.value;setForm({...form,level,interval_min:level==='standard'?5:10,daily_max:level==='standard'?80:30,repeat_hours:level==='standard'?24:72,jitter_min:level==='standard'?3:5})}}><option value="conservative">保守</option><option value="standard">标准</option></Select></Field><div className="grid gap-3 md:grid-cols-4">{([{key:'interval_min',label:'间隔（分钟）',min:3,max:1440},{key:'daily_max',label:'每日请求',min:1,max:100},{key:'repeat_hours',label:'重复读取（小时）',min:12,max:720},{key:'jitter_min',label:'随机等待（分钟）',min:0,max:5}] as const).map(f=><Field key={f.key} label={f.label}><Input type="number" min={f.min} max={f.max} value={form[f.key]} onChange={e=>setForm({...form,[f.key]:Number(e.target.value)})}/></Field>)}</div><p className="text-sm">今日 {value.today_requests} 次 · 七天内风控 {value.strikes_7d} 次{value.paused_until&&` · 暂停至 ${new Date(value.paused_until).toLocaleString('zh-CN')}`}</p>{dev&&<label className="flex gap-2 text-sm"><input type="checkbox" checked={form.enabled} onChange={e=>setForm({...form,enabled:e.target.checked})}/>启用本地 mock 页面读取（仍遵守限额）</label>}<Button loading={busy} onClick={save}>保存平台参数</Button></div>
+}
+
 function SourceRow({ source, onChange, disabled }: { source: CrawlSource; onChange: () => void; disabled: boolean }) {
   const [interval, setInterval] = useState(source.interval_min)
   const [maxItems, setMaxItems] = useState(source.max_items)
@@ -41,7 +49,7 @@ function SourceRow({ source, onChange, disabled }: { source: CrawlSource; onChan
 export default function Crawl() {
   const { data: me } = useMe()
   const inv = useInvalidate()
-  const query = useQuery({ queryKey: ['crawl-admin'], queryFn: () => get<{ settings: CrawlSettings; sources: CrawlSource[] }>('/admin/crawl'), enabled: !!me?.is_system_admin })
+  const query = useQuery({ queryKey: ['crawl-admin'], queryFn: () => get<{ settings: CrawlSettings; sources: CrawlSource[]; platforms: Platform[] }>('/admin/crawl'), enabled: !!me?.is_system_admin })
   const runs = useQuery({ queryKey: ['crawl-runs'], queryFn: () => get<CrawlRun[]>('/admin/crawl/runs'), enabled: !!me?.is_system_admin })
   const [form, setForm] = useState<CrawlSettings | null>(null)
   const [busy, setBusy] = useState(false)
@@ -61,6 +69,7 @@ export default function Crawl() {
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" disabled={form.level !== 'standard'} checked={form.summary_fetch} onChange={(e) => setForm({ ...form, summary_fetch: e.target.checked })} />原文摘要抓取（仅 title/meta，每日最多 20 次）</label>
         <Button variant="primary" loading={busy} onClick={save}>保存参数</Button>
       </div></Card>
+      <Card><CardHeader title="小红书 / 公众号页面读取（低频）" />{query.data?.platforms.map(p=><PlatformRow key={`${p.platform}-${p.enabled}-${p.interval_min}-${p.daily_max}`} value={p} refresh={refresh} dev={false} />)}</Card>
       <Card><CardHeader title="来源开关与限额" desc="试采计入每日请求预算，并受来源最短间隔约束。" />{query.data?.sources.map((source) => <SourceRow key={`${source.key}-${source.interval_min}-${source.max_items}`} source={source} onChange={refresh} disabled={form.mode !== 'allow' || query.data.settings.level === 'off'} />)}</Card>
     </>}
     <Card><CardHeader title="最近采集日志" action={<Button size="sm" onClick={() => runs.refetch()}>刷新</Button>} />{runs.isError ? <Notice tone="red">{errorMessage(runs.error)}</Notice> : !runs.data?.length ? <Empty title="暂无采集记录" /> : <div className="overflow-x-auto p-5"><table className="w-full text-left text-sm"><thead><tr>{['来源', '时间', '请求', 'HTTP', '条数', '错误'].map((x) => <th key={x} className="p-2">{x}</th>)}</tr></thead><tbody>{runs.data.map((r) => <tr key={r.id} className="border-t border-mist-100"><td className="p-2">{r.source_key}</td><td>{new Date(r.started_at).toLocaleString('zh-CN')}</td><td>{r.requests}</td><td>{r.http_status || '—'}</td><td>{r.items}</td><td>{r.error || '成功'}</td></tr>)}</tbody></table></div>}</Card>

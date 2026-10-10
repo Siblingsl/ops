@@ -25,7 +25,7 @@ func (s *testStore) Claim(_ context.Context, _ Source, now time.Time, l Limits) 
 	s.last = now
 	return nil
 }
-func (s *testStore) Reserve(_ context.Context, now time.Time, n int) error {
+func (s *testStore) Reserve(_ context.Context, _ Source, now time.Time, n int) error {
 	date := now.Format("2006-01-02")
 	if date != s.date {
 		s.date = date
@@ -137,14 +137,14 @@ func TestDailyBudget(t *testing.T) {
 	s := &testStore{}
 	now := time.Now()
 	for range 2 {
-		if err := s.Reserve(context.Background(), now, 2); err != nil {
+		if err := s.Reserve(context.Background(), Source{}, now, 2); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if s.Reserve(context.Background(), now, 2) != ErrLimited {
+	if s.Reserve(context.Background(), Source{}, now, 2) != ErrLimited {
 		t.Fatal("budget exceeded")
 	}
-	if s.Reserve(context.Background(), now.Add(24*time.Hour), 2) != nil {
+	if s.Reserve(context.Background(), Source{}, now.Add(24*time.Hour), 2) != nil {
 		t.Fatal("budget did not reset")
 	}
 }

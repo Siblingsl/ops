@@ -36,6 +36,9 @@ func (s *Server) loadCrawl(ctx context.Context) crawlConfig {
 type crawlStore struct{ s *Server }
 
 func (st crawlStore) Claim(ctx context.Context, source crawl.Source, now time.Time, l crawl.Limits) error {
+	if source.Kind == "xhs_page" || source.Kind == "wechat_page" {
+		return st.s.claimPlatform(ctx, source, now)
+	}
 	tag, err := st.s.db.Exec(ctx, `UPDATE crawl_source SET last_attempt_at=$2 WHERE key=$1 AND enabled AND coalesce(paused_until,$2)<=$2
   AND (last_attempt_at IS NULL OR last_attempt_at <= $2 - make_interval(mins => GREATEST(interval_min,$3)))`, source.Key, now, l.IntervalMin)
 	if err != nil {
@@ -46,18 +49,17 @@ func (st crawlStore) Claim(ctx context.Context, source crawl.Source, now time.Ti
 	}
 	return nil
 }
-func (st crawlStore) Reserve(ctx context.Context, now time.Time, max int) error {
-	tag, err := st.s.db.Exec(ctx, `INSERT INTO crawl_budget(date,requests) VALUES($1::date,1)
-  ON CONFLICT(date) DO UPDATE SET requests=crawl_budget.requests+1 WHERE crawl_budget.requests<$2`, now.In(st.s.loc).Format("2006-01-02"), max)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return crawl.ErrLimited
-	}
-	return nil
+func (st crawlStore) Reserve(ctx context.Context, source crawl.Source, now time.Time, max int) error {
+	return st.s.reserveCrawl(ctx, source, now, max)
 }
 func (st crawlStore) Finish(ctx context.Context, source crawl.Source, now time.Time, l crawl.Limits, out crawl.Outcome) {
+	if out.Error == crawl.ErrLimited.Error() || out.Error == crawl.ErrDisabled.Error() {
+		return
+	}
+	if source.Kind == "xhs_page" || source.Kind == "wechat_page" {
+		st.s.finishPlatform(ctx, source, now, out)
+		return
+	}
 	_, _ = st.s.db.Exec(ctx, `UPDATE crawl_source SET fail_count=CASE WHEN $3='' THEN 0 ELSE fail_count+1 END,
   last_ok_at=CASE WHEN $3='' THEN $2 ELSE last_ok_at END,error=$3,robots_checked_at=$2,robots_allow=$4,
   paused_until=CASE WHEN $5 THEN $2+interval '24 hours' WHEN $3<>'' AND fail_count+1>=$6 THEN $2+make_interval(hours=>$7) ELSE paused_until END WHERE key=$1`, source.Key, now, out.Error, out.RobotsAllow, out.Paused, l.FailLimit, l.PauseHours)

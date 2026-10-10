@@ -316,7 +316,7 @@ func TestCrawlBudgetConcurrentClaims(t *testing.T) {
 	st := crawlStore{env.srv}
 	results := make(chan error, 20)
 	for range 20 {
-		go func() { results <- st.Reserve(ctx, now, 5) }()
+		go func() { results <- st.Reserve(ctx, crawl.Source{}, now, 5) }()
 	}
 	accepted := 0
 	for range 20 {

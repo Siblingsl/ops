@@ -20,7 +20,11 @@ func (s *Server) adminGetCrawl(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"settings": s.loadCrawl(r.Context()), "sources": sources})
+	platforms, err := s.crawlPlatforms(r.Context())
+	if err != nil {
+		return err
+	}
+	return ok(w, map[string]any{"settings": s.loadCrawl(r.Context()), "sources": sources, "platforms": platforms})
 }
 func (s *Server) crawlSources(ctx context.Context, ws *uuid.UUID, all bool) ([]CrawlSource, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+crawlSourceCols+` FROM crawl_source WHERE $1 OR workspace_id IS NULL OR workspace_id=$2 ORDER BY workspace_id NULLS FIRST,key`, all, ws)
