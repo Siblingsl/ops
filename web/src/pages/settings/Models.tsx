@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle2, Cpu, Pencil, Plug, Plus, Trash2, XCircle } from 'lucide-react'
+import { Activity, CheckCircle2, CircleAlert, Cpu, MinusCircle, Pencil, Plug, Plus, Trash2, XCircle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
@@ -8,6 +8,38 @@ import { ApiError, del, errorMessage, get, patch, post, put } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { useInvalidate, useMe } from '@/lib/session'
 import type { AILimit, ModelRoute, Provider } from '@/lib/types'
+
+// DEV-U101（12 文档）：供应商能力自检结果。
+interface SelfTestProbe { key: string; label: string; ok: boolean; skipped: boolean; latency_ms: number; detail: string }
+interface SelfTestResult { model: string; summary: string; ok: boolean; results: SelfTestProbe[] }
+
+function SelfTestDialog({ result, onClose }: { result: SelfTestResult; onClose: () => void }) {
+  const icon = (p: SelfTestProbe) => p.skipped
+    ? <MinusCircle className="size-4 text-mist-400" />
+    : p.ok ? <CheckCircle2 className="size-4 text-ink-600" /> : <XCircle className="size-4 text-danger" />
+  return (
+    <Dialog open onClose={onClose} title="供应商能力自检" desc={`模型 ${result.model} · ${result.summary}`} width="max-w-xl">
+      <div className="divide-y divide-mist-100 rounded-lg border border-mist-100">
+        {result.results.map((p) => (
+          <div key={p.key} className="flex items-start gap-3 px-4 py-3">
+            <div className="mt-0.5">{icon(p)}</div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-[13.5px] font-medium text-mist-800">
+                {p.label}
+                {p.skipped && <Badge>已跳过</Badge>}
+                {!p.skipped && <span className="font-mono text-[11.5px] text-mist-400">{p.latency_ms} ms</span>}
+              </div>
+              <p className={p.ok || p.skipped ? 'mt-0.5 text-[12.5px] text-mist-500' : 'mt-0.5 text-[12.5px] text-danger'}>{p.detail}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <Notice tone="ink" icon={<CircleAlert className="size-4" />}>
+        自检直接调用供应商接口，会产生少量 token 与出图费用；调用不计入用量统计和质量看板。
+      </Notice>
+    </Dialog>
+  )
+}
 
 function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClose: () => void }) {
   const [name, setName] = useState(editing?.name ?? '')
@@ -170,6 +202,8 @@ export default function Models() {
   const { data, isLoading, refetch } = useQuery({ queryKey: ['providers'], queryFn: () => get<Provider[]>('/model-providers') })
   const [dialog, setDialog] = useState<{ editing: Provider | null } | null>(null)
   const [testing, setTesting] = useState<string | null>(null)
+  const [selfTesting, setSelfTesting] = useState<string | null>(null)
+  const [selfTest, setSelfTest] = useState<{ providerName: string; result: SelfTestResult } | null>(null)
   const inv = useInvalidate()
   if (isLoading) return <PageLoading />
   const list = data ?? []
@@ -183,6 +217,18 @@ export default function Models() {
       toast.error(errorMessage(e))
     } finally {
       setTesting(null)
+    }
+  }
+  const runSelfTest = async (p: Provider) => {
+    setSelfTesting(p.id)
+    try {
+      const r = await post<SelfTestResult>(`/model-providers/${p.id}/selftest`, {})
+      setSelfTest({ providerName: p.name, result: r })
+      refetch()
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setSelfTesting(null)
     }
   }
   const remove = async (p: Provider, confirmed = false): Promise<void> => {
@@ -237,6 +283,8 @@ export default function Models() {
                 {isOwner && (
                   <div className="ml-auto flex items-center gap-2">
                     <Switch checked={p.status === 'active'} onChange={() => toggle(p)} label="启用" />
+                    <Button size="sm" variant="ghost" icon={<Activity className="size-3.5" />} loading={selfTesting === p.id}
+                      onClick={() => runSelfTest(p)} title="一次探测对话、JSON、流式、出图与联网搜索能力">自检</Button>
                     <Button size="sm" variant="ghost" icon={<Plug className="size-3.5" />} loading={testing === p.id} onClick={() => test(p)}>测试</Button>
                   </div>
                 )}
@@ -249,6 +297,9 @@ export default function Models() {
       {isOwner && list.length > 0 && <RoutesCard providers={list} />}
       {isOwner && <LimitCard />}
       {isOwner && dialog && <ProviderDialog editing={dialog.editing} onClose={() => setDialog(null)} />}
+      {isOwner && selfTest && (
+        <SelfTestDialog result={selfTest.result} onClose={() => setSelfTest(null)} />
+      )}
     </div>
   )
 }

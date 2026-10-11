@@ -253,6 +253,7 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/model-providers/{id}", s.h(s.updateProvider))
 			r.Delete("/model-providers/{id}", s.h(s.deleteProvider))
 			r.Post("/model-providers/{id}/test", s.h(s.testProvider))
+			r.Post("/model-providers/{id}/selftest", s.h(s.selftestProvider))
 			r.Get("/model-routes", s.h(s.getRoutes))
 			r.Put("/model-routes", s.h(s.putRoutes))
 			r.Get("/usage", s.h(s.usage))
