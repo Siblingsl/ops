@@ -886,9 +886,13 @@ function LibraryDialog({ work, onClose, onPicked }: { work: Work; onClose: () =>
 // ---------- 页面 ----------
 
 export default function Editor() {
-  const { work } = useWork()
+  const { work, setWork } = useWork()
   if (work.content_format === 'comic') return <ComicEditor />
-  if (work.content_format === 'card_post') return <CardEditor />
+  if (work.content_format === 'card_post') return <div className="mx-auto max-w-3xl space-y-4">
+    <ViewpointCard work={work} setWork={setWork} readOnly={work.locked} />
+    <OutlineCard work={work} setWork={setWork} readOnly={work.locked} />
+    <CardEditor />
+  </div>
   return <ArticleEditor />
 }
 

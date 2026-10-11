@@ -1,6 +1,5 @@
 import { ImagePlus, RefreshCw, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, cn, HumanGate, Input } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
@@ -35,12 +34,12 @@ export default function CardEditor() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 animate-fade-in">
-      <Card id="step-outline" className="scroll-mt-24 p-5">
+      <Card id="step-cards" className="scroll-mt-24 p-5">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="font-display text-[17px] font-bold text-mist-900">卡片清单</h2>
           {work.outline_confirmed_at ? <Badge tone="green">已确认</Badge> : <Badge tone="gamboge">H-03 确认大纲后生成卡片</Badge>}
           <div className="ml-auto">
-            <Link to={`/works/${work.id}`} className="text-[13px] text-ink-600 hover:underline">回创作页修改大纲</Link>
+            <a href="#step-outline" className="text-[13px] text-ink-600 hover:underline">修改大纲</a>
           </div>
         </div>
         {!work.outline_confirmed_at && (

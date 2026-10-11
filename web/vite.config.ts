@@ -1,14 +1,14 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { '@': '/src' } },
   server: {
     port: 5173,
     host: true,
-    proxy: { '/api': { target: 'http://localhost:8080', changeOrigin: false } },
+    proxy: { '/api': { target: loadEnv(mode, '.', 'OPS_').OPS_API_TARGET || 'http://localhost:8080', changeOrigin: false } },
   },
   build: { outDir: 'dist', chunkSizeWarningLimit: 1500 },
-})
+}))

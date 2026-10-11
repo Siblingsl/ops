@@ -14,6 +14,8 @@ web/node_modules/
 web/dist/
 web/.vite/
 web/*.tsbuildinfo
+web/playwright-report/
+web/test-results/
 
 # 本地数据
 data/
