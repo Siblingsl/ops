@@ -32,12 +32,12 @@ func TestU107PromptEvalBatch(t *testing.T) {
 	case3 := insertCase("section_draft", "起草用例", "你是一位内容助手。", "任务：section_draft\n本段小标题：为什么\n本段要点：批量重放自检", false)
 
 	// 未知任务类型拒绝。
-	env.expectErr(t, "POST", "/api/v1/prompt-eval/batch", map[string]any{"task_types": []string{"nope"}}, "validation_failed")
+	env.expectErr(t, "POST", "/api/v1/prompt-eval/replay", map[string]any{"task_types": []string{"nope"}}, "validation_failed")
 
 	var start struct {
 		JobID uuid.UUID `json:"job_id"`
 	}
-	env.mustJSON(t, "POST", "/api/v1/prompt-eval/batch", map[string]any{"task_types": []string{"topic_suggest"}}, &start)
+	env.mustJSON(t, "POST", "/api/v1/prompt-eval/replay", map[string]any{"task_types": []string{"topic_suggest"}}, &start)
 	if start.JobID == uuid.Nil {
 		t.Fatal("no job")
 	}
@@ -97,7 +97,7 @@ func TestU107PromptEvalBatch(t *testing.T) {
 	}
 
 	// 第二次：包含文本任务（section_draft 无 JSON 断言）。
-	env.mustJSON(t, "POST", "/api/v1/prompt-eval/batch", map[string]any{"task_types": []string{"topic_suggest", "section_draft"}}, &start)
+	env.mustJSON(t, "POST", "/api/v1/prompt-eval/replay", map[string]any{"task_types": []string{"topic_suggest", "section_draft"}}, &start)
 	var result2 json.RawMessage
 	deadline = time.Now().Add(30 * time.Second)
 	for {
@@ -152,5 +152,5 @@ func TestU107PromptEvalBatch(t *testing.T) {
 	_ = case3
 
 	// 没有用例的任务类型：明确报错。
-	env.expectErr(t, "POST", "/api/v1/prompt-eval/batch", map[string]any{"task_types": []string{"title"}}, "validation_failed")
+	env.expectErr(t, "POST", "/api/v1/prompt-eval/replay", map[string]any{"task_types": []string{"title"}}, "validation_failed")
 }

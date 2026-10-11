@@ -27,7 +27,7 @@ const (
 	promptBatchTotalMax = 30
 )
 
-func (s *Server) runPromptEvalBatch(w http.ResponseWriter, r *http.Request) error {
+func (s *Server) runPromptEvalReplay(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	if err := s.requireOwner(ctx); err != nil {
 		return err

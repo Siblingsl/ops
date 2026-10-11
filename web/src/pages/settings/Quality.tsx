@@ -32,7 +32,7 @@ function BatchReplay({ cases, label }: { cases: EvalCase[]; label: (t: string) =
   const start = async () => {
     setBusy(true)
     try {
-      const r = await post<{ job_id: string; total: number }>('/prompt-eval/batch', { task_types: selected })
+      const r = await post<{ job_id: string; total: number }>('/prompt-eval/replay', { task_types: selected })
       const res = await waitJob<BatchResult>(r.job_id)
       setResult(res)
       toast.success(`批量重放完成：${res.rows.length} 条用例`)
