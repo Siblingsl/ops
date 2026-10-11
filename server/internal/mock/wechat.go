@@ -31,6 +31,7 @@ type Wechat struct {
 
 	articleTotals map[string][]map[string]any // nil: one sample article per day
 	datacubeErr   int
+	userCubeErr   int // getusersummary / getusercumulate only
 }
 
 // SetArticleTotals replaces the getarticletotal data keyed by ref_date; nil restores the sample.
@@ -54,6 +55,13 @@ func (m *Wechat) SetDatacubeError(code int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.datacubeErr = code
+}
+
+// SetUserDatacubeError makes only the follower datacube endpoints fail with the given errcode (0 clears it).
+func (m *Wechat) SetUserDatacubeError(code int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.userCubeErr = code
 }
 
 func NewWechat() *Wechat {
@@ -242,6 +250,62 @@ func (m *Wechat) Handler() http.Handler {
 					"share_user": 8 * (d + 1), "share_count": 10 * (d + 1), "add_to_fav_user": 3 * (d + 1), "add_to_fav_count": 3 * (d + 1)})
 			}
 			list = append(list, map[string]any{"ref_date": in.BeginDate, "msgid": "1000" + ref.Format("0102") + "_1", "title": "模拟稿件", "details": details})
+		}
+		writeJSON(w, map[string]any{"list": list})
+	})
+	// getusersummary / getusercumulate: span ≤ 7 days, never past yesterday; summary has two follow sources per day.
+	userDays := func(w http.ResponseWriter, r *http.Request) ([]time.Time, bool) {
+		if !m.checkToken(w, r) {
+			return nil, false
+		}
+		var in struct {
+			BeginDate string `json:"begin_date"`
+			EndDate   string `json:"end_date"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		m.mu.Lock()
+		code := m.datacubeErr
+		if code == 0 {
+			code = m.userCubeErr
+		}
+		m.mu.Unlock()
+		if code != 0 {
+			wxErr(w, code, "mock datacube failure")
+			return nil, false
+		}
+		begin, e1 := time.Parse("2006-01-02", in.BeginDate)
+		end, e2 := time.Parse("2006-01-02", in.EndDate)
+		if e1 != nil || e2 != nil || end.Before(begin) || end.Sub(begin) > 6*24*time.Hour {
+			wxErr(w, 61501, "date range error")
+			return nil, false
+		}
+		var days []time.Time
+		for d := begin; !d.After(end); d = d.AddDate(0, 0, 1) {
+			days = append(days, d)
+		}
+		return days, true
+	}
+	mux.HandleFunc("/datacube/getusersummary", func(w http.ResponseWriter, r *http.Request) {
+		days, ok := userDays(w, r)
+		if !ok {
+			return
+		}
+		list := []map[string]any{}
+		for _, d := range days {
+			list = append(list,
+				map[string]any{"ref_date": d.Format("2006-01-02"), "user_source": 0, "new_user": 10 + d.Day(), "cancel_user": 2},
+				map[string]any{"ref_date": d.Format("2006-01-02"), "user_source": 30, "new_user": 5, "cancel_user": 1})
+		}
+		writeJSON(w, map[string]any{"list": list})
+	})
+	mux.HandleFunc("/datacube/getusercumulate", func(w http.ResponseWriter, r *http.Request) {
+		days, ok := userDays(w, r)
+		if !ok {
+			return
+		}
+		list := []map[string]any{}
+		for _, d := range days {
+			list = append(list, map[string]any{"ref_date": d.Format("2006-01-02"), "cumulate_user": 5000 + 10*d.YearDay()})
 		}
 		writeJSON(w, map[string]any{"list": list})
 	})

@@ -276,3 +276,39 @@ func (c *Client) DatacubeArticleTotal(ctx context.Context, token, day string) ([
 	}
 	return out.List, nil
 }
+
+// UserSummary is one day × one follow source of datacube/getusersummary; a day may have several rows.
+type UserSummary struct {
+	RefDate    string `json:"ref_date"`
+	UserSource int    `json:"user_source"`
+	NewUser    int    `json:"new_user"`
+	CancelUser int    `json:"cancel_user"`
+}
+
+// UserCumulate is the follower total at the end of ref_date (datacube/getusercumulate).
+type UserCumulate struct {
+	RefDate      string `json:"ref_date"`
+	CumulateUser int    `json:"cumulate_user"`
+}
+
+// DatacubeUserSummary pulls daily follows and unfollows (span at most 7 days, DEV-DR09).
+func (c *Client) DatacubeUserSummary(ctx context.Context, token, begin, end string) ([]UserSummary, error) {
+	var out struct {
+		List []UserSummary `json:"list"`
+	}
+	if err := c.postJSON(ctx, "/datacube/getusersummary", token, map[string]string{"begin_date": begin, "end_date": end}, &out); err != nil {
+		return nil, err
+	}
+	return out.List, nil
+}
+
+// DatacubeUserCumulate pulls the daily follower totals (span at most 7 days, DEV-DR09).
+func (c *Client) DatacubeUserCumulate(ctx context.Context, token, begin, end string) ([]UserCumulate, error) {
+	var out struct {
+		List []UserCumulate `json:"list"`
+	}
+	if err := c.postJSON(ctx, "/datacube/getusercumulate", token, map[string]string{"begin_date": begin, "end_date": end}, &out); err != nil {
+		return nil, err
+	}
+	return out.List, nil
+}

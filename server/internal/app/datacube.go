@@ -81,6 +81,9 @@ type datacubeResult struct {
 	Written   int `json:"written"`
 	Unmatched int `json:"unmatched"`
 	Ignored   int `json:"ignored"`
+	// FollowerDays is how many days of account follower data were stored; FollowerError explains a skip.
+	FollowerDays  int    `json:"follower_days"`
+	FollowerError string `json:"follower_error,omitempty"`
 }
 
 // syncDatacube looks back 7 days, one request per send date, and writes cumulative snapshots.
@@ -109,6 +112,11 @@ func (s *Server) syncDatacube(ctx context.Context, a *Account) (*datacubeResult,
 		}
 	}
 	s.setDatacubeState(ctx, a.ID, "ok")
+	if n, err := s.syncFollowers(ctx, a, token); err != nil {
+		res.FollowerError = errText(datacubeErr(err))
+	} else {
+		res.FollowerDays = n
+	}
 	return res, nil
 }
 
@@ -248,6 +256,11 @@ func (s *Server) syncWechatMetrics(w http.ResponseWriter, r *http.Request) error
 	msg := fmt.Sprintf("已同步最近 %d 天群发的 %d 篇文章，对上作品 %d 篇", res.Days, res.Articles, res.Matched)
 	if res.Unmatched > 0 {
 		msg += fmt.Sprintf("；%d 篇没对上，请在\"待匹配\"里逐条指定", res.Unmatched)
+	}
+	if res.FollowerDays > 0 {
+		msg += fmt.Sprintf("；账号粉丝数据 %d 天", res.FollowerDays)
+	} else if res.FollowerError != "" {
+		msg += "；粉丝数据没有同步：" + res.FollowerError
 	}
 	return ok(w, map[string]any{"result": res, "message": msg})
 }

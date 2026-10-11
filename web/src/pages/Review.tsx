@@ -12,6 +12,7 @@ import { waitJob } from '@/lib/v3'
 import { describeRefs, fmtNum, fmtTime, toLocalInput } from '@/lib/format'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { BoardRow, Metric, MetricSource, Platform, ReviewReport } from '@/lib/types'
+import { FollowersCard } from './review-followers'
 import { AttributionCard, DigestsCard, TopWorksCard } from './review-insights'
 import { metricFields, type MetricKey, ScreenshotImport } from './review-screenshots'
 
@@ -512,6 +513,7 @@ export default function Review() {
                   board.refetch()
                   inv(['board'])
                   inv(['unmatched', acc.id])
+                  inv(['followers', acc.id])
                   inv(['accounts'])
                 }
               }}>同步公众号数据</Button>
@@ -593,6 +595,7 @@ export default function Review() {
         </div>
       </div>
       <div className="mt-6 space-y-6">
+        <FollowersCard accountId={acc.id} wechat={acc.platform === 'wechat_mp'} />
         <DailyStatsCard accountId={acc.id} />
  <AttributionCard accountId={acc.id} />
         <div className="grid gap-6 lg:grid-cols-2">

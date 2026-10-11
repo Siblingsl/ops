@@ -191,6 +191,8 @@ func (s *Server) Router() http.Handler {
 			r.Post("/metrics/unmatched/{id}/ignore", s.h(s.ignoreUnmatchedMetric))
 			r.Post("/accounts/{accountId}/metrics/screenshots", s.h(s.recognizeMetricScreenshots))
 			r.Post("/metrics/screenshots/{id}/rows/{idx}/confirm", s.h(s.confirmMetricScreenshotRow))
+			r.Get("/accounts/{accountId}/followers", s.h(s.listFollowers))
+			r.Post("/accounts/{accountId}/followers", s.h(s.recordFollowers))
 
 			r.Get("/accounts/{accountId}/topics", s.h(s.listTopics))
 			r.Post("/accounts/{accountId}/topics", s.h(s.createTopic))

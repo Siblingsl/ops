@@ -36,6 +36,20 @@ export interface WechatAuto {
   note?: string
 }
 
+export interface FollowerDay {
+  date: string
+  source: 'wechat_api' | 'manual'
+  new_follow: number | null
+  cancel_follow: number | null
+  net: number | null
+  cumulate: number | null
+}
+
+export interface FollowerList {
+  days: FollowerDay[]
+  api: boolean
+}
+
 export interface WechatDefaults {
   author: string
   open_comment: boolean
