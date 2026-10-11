@@ -594,6 +594,24 @@ func (l *LLM) respond(prompt string) string {
 			items = append(items, "有 "+pending+" 篇已发布的作品还差数据回填。")
 		}
 		return js(map[string]any{"items": items})
+	case "read_through":
+		blocks := blocks(prompt)
+		var su []map[string]any
+		for i, bl := range blocks {
+			if i >= 2 {
+				break
+			}
+			action := "rewrite"
+			if i == 1 {
+				action = "append"
+			}
+			su = append(su, map[string]any{"section_id": bl.ID, "action": action,
+				"text": fmt.Sprintf("换个更具体的说法：%s", short(bl.Head, 18)), "reason": "通读后认为该段可以更具体"})
+		}
+		if su == nil {
+			su = []map[string]any{}
+		}
+		return js(map[string]any{"suggestions": su})
 	case "reference_analyze":
 		return js(map[string]any{"title_pattern": "问题场景加行动收益", "hook_type": "情景提问", "structure": []string{"界定问题", "分析障碍", "给出行动", "总结启发"}, "angle": "以读者困难组织论证", "tags": []string{"写作方法"}, "takeaways": []string{"将建议拆成可以验证的小任务"}})
 	case "hot_relevance":

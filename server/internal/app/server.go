@@ -202,6 +202,7 @@ func (s *Server) Router() http.Handler {
 			r.Put("/works/{id}/post-push-todos", s.h(s.setPostPushTodos))
 			r.Put("/works/{id}/title-favorites", s.h(s.setTitleFavorites))
 			r.Delete("/works/{id}", s.h(s.deleteWork))
+			r.Post("/works/{id}/read-through", s.h(s.readThrough))
 			r.Post("/works/{id}/outline/generate", s.h(s.generateOutline))
 			r.Put("/works/{id}/outline", s.h(s.saveOutline))
 			r.Post("/works/{id}/storyboard/generate", s.h(s.generateStoryboard))

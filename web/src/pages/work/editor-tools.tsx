@@ -22,7 +22,7 @@ export type EditorEvent =
   /** Every mounted section pushes its pending save into wait. */
   | { type: 'flush'; wait: Promise<unknown>[] }
 
-export type SidebarTab = 'materials' | 'copilot' | 'polish' | 'pending' | 'comments' | 'activity'
+export type SidebarTab = 'materials' | 'copilot' | 'polish' | 'readthrough' | 'pending' | 'comments' | 'activity'
 
 export function emitEditor(e: EditorEvent) {
   window.dispatchEvent(new CustomEvent<EditorEvent>('ops:editor', { detail: e }))

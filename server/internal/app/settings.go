@@ -323,6 +323,7 @@ var taskTypes = []struct{ Type, Label string }{
 	{"hook_suggest", "开头钩子"},
 	{"outline_review", "大纲体检"},
 	{"copilot_chat", "副驾驶对话"},
+	{"read_through", "整篇通读"},
 	{"polish_check", "表达体检"},
 	{"fix_suggest", "检查项改法建议"},
 	{"topic_score", "选题评分"},

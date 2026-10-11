@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Activity, AlertCircle, Bot, Check, ChevronsRight, History, Library, MessageSquare, Plus, Send, Sparkles, Square, Stethoscope, Trash2,
+  Activity, AlertCircle, BookOpenCheck, Bot, Check, ChevronsRight, History, Library, MessageSquare, Plus, Send, Sparkles, Square, Stethoscope, Trash2,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -30,6 +30,7 @@ const tabs: { id: SidebarTab; label: string; icon: React.ReactNode }[] = [
   { id: 'materials', label: '素材', icon: <Library className="size-3.5" /> },
   { id: 'copilot', label: '副驾驶', icon: <Bot className="size-3.5" /> },
   { id: 'polish', label: '体检', icon: <Stethoscope className="size-3.5" /> },
+  { id: 'readthrough', label: '通读', icon: <BookOpenCheck className="size-3.5" /> },
   { id: 'pending', label: '待核实', icon: <AlertCircle className="size-3.5" /> },
   { id: 'comments', label: '批注', icon: <MessageSquare className="size-3.5" /> },
   { id: 'activity', label: '动态', icon: <Activity className="size-3.5" /> },
@@ -60,6 +61,7 @@ export function EditorSidebar({ work, setWork, active, selection, tab, onTab: se
         {tab === 'materials' && <MaterialsTab work={work} setWork={setWork} active={active} />}
         {tab === 'copilot' && <CopilotTab work={work} active={active} selection={selection} />}
         {tab === 'polish' && <PolishTab work={work} />}
+        {tab === 'readthrough' && <ReadThroughTab work={work} active={active} />}
         {tab === 'pending' && <PendingTab work={work} />}
         {tab === 'comments' && <CommentsTab work={work} active={active} selection={selection} list={comments.data ?? []} refetch={() => comments.refetch()} />}
         {tab === 'activity' && <ActivityTab work={work} />}
@@ -516,5 +518,69 @@ function ActivityTab({ work }: { work: Work }) {
         </li>
       ))}
     </ol>
+  )
+}
+
+// ---------- 整篇通读（DEV-A107，13 文档） ----------
+
+interface ReadThroughSuggestion { section_id: string; action: 'rewrite' | 'append'; text: string; reason: string }
+
+function ReadThroughTab({ work, active }: { work: Work; active: Section | null }) {
+  const canWrite = useCanWrite()
+  const [sugs, setSugs] = useState<ReadThroughSuggestion[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const noViewpoint = !work.viewpoint.trim()
+  const drafted = work.sections.some((s) => s.content_md.trim())
+  const run = async () => {
+    setBusy(true)
+    try {
+      const r = await post<{ suggestions: ReadThroughSuggestion[] }>(`/works/${work.id}/read-through`, {})
+      setSugs(r.suggestions)
+    } catch (e) {
+      aiError(e, '整篇通读')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const secById = new Map(work.sections.map((s) => [s.id, s]))
+  return (
+    <div className="space-y-3">
+      <Hint>AI 通读整篇后按段落给出可执行的改写或补充建议；每条由你确认应用，不会批量改写。</Hint>
+      {noViewpoint ? (
+        <p className="rounded-lg border border-dashed border-mist-200 px-3 py-4 text-center text-[12.5px] text-mist-400">先写下你的核心观点（H-02），AI 通读才有判断依据。</p>
+      ) : !drafted ? (
+        <p className="rounded-lg border border-dashed border-mist-200 px-3 py-6 text-center text-[12.5px] text-mist-400">先确认大纲并起草，才有可通读的内容。</p>
+      ) : (
+        <>
+          <Button variant="primary" className="w-full" loading={busy} onClick={run} icon={<BookOpenCheck className="size-4" />}>让 AI 通读整篇</Button>
+          {sugs != null && sugs.length === 0 && (
+            <p className="rounded-lg border border-dashed border-mist-200 px-3 py-4 text-center text-[12.5px] text-mist-400">通读完成：这一稿结构完整，没有值得硬改的地方。</p>
+          )}
+          {sugs != null && sugs.length > 0 && canWrite && sugs.map((su, i) => {
+            const sec = secById.get(su.section_id)
+            const target = active?.id ?? su.section_id
+            const applyTo = su.section_id
+            return (
+              <div key={i} className="rounded-lg border border-mist-200 p-3">
+                <div className="flex items-center gap-1.5">
+                  <Badge tone="ink">{su.action === 'rewrite' ? '改写' : '补充'} · {sec ? sec.heading || '未命名段' : '段落'}</Badge>
+                </div>
+                <p className="mt-1.5 whitespace-pre-wrap text-[12.5px] leading-relaxed text-mist-700">{su.text}</p>
+                <p className="mt-1 text-[11.5px] text-mist-400">{su.reason}</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {su.action === 'rewrite' && (
+                    <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: applyTo, text: su.text, target: 'section', callId: null })}>应用到该段</Button>
+                  )}
+                  {su.action === 'append' && (
+                    <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: applyTo, text: su.text, target: 'end', callId: null })}>补充到段末</Button>
+                  )}
+                  {target !== applyTo && <span className="self-center text-[10.5px] text-mist-400">目标段落会自动滚动定位</span>}
+                </div>
+              </div>
+            )
+          })}
+        </>
+      )}
+    </div>
   )
 }
