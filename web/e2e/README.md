@@ -17,3 +17,20 @@ pnpm e2e
 失败截图与 trace 在 `test-results/`，HTML 报告在 `playwright-report/`，均已忽略提交。可用 `pnpm exec playwright show-report` 查看报告，或 `pnpm exec playwright show-trace <trace.zip>` 查看具体失败过程。重复运行使用 `pnpm e2e --repeat-each=2`。该层补充 Go API/HC 回归，不能替代真实模型效果、真实平台草稿和视觉人工验收。
 
 配置参考：[Playwright webServer](https://playwright.dev/docs/test-webserver)。
+
+生产打包验收（DEV-U103）在仓库根目录运行：
+
+```powershell
+docker compose -p ops-prod-e2e -f deploy/docker-compose.prod.yml -f deploy/docker-compose.e2e.yml config --quiet
+docker compose -p ops-prod-e2e -f deploy/docker-compose.prod.yml -f deploy/docker-compose.e2e.yml up -d --build --wait
+cd web
+$env:OPS_E2E_PROD = '1'
+pnpm e2e
+Remove-Item Env:OPS_E2E_PROD
+cd ..
+docker compose -p ops-prod-e2e -f deploy/docker-compose.prod.yml -f deploy/docker-compose.e2e.yml stop
+```
+
+此模式固定连接 `127.0.0.1:44538`，API 使用 `OPS_DEV=0`、生产静态资源与独立 `ops-prod-e2e` 数据卷；内部 mock 容器提供模型/微信测试接口，不对外暴露。覆盖文件清除生产 `.env` 依赖并覆盖测试密钥/数据库口令/接口地址，不能用作真实部署。Compose 可能提示原文件变量未设置，合并后的值均由测试覆盖文件提供。每次测试新注册用户、显式配置 mock 模型，并在浏览器退出后重新密码登录；不跳过人工创作门槛。默认本地 Vite 模式保持不变。
+
+升级/回滚演练可用 `OPS_E2E_IMAGE` 在本地旧测试镜像与 `ops-app:prod-e2e` 间切换。切换前保存数据库与 assets；回滚需配套恢复该镜像对应备份，不用 Down 强行收紧已有新类型约束。测试结束只停止此项目，保留卷供排查；不会删除日常开发数据库或操作线上部署。

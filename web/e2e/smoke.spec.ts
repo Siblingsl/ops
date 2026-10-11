@@ -8,8 +8,9 @@ async function api(page: Page, method: string, path: string, data?: unknown) {
 }
 
 async function registerAccount(page: Page, type = '图文笔记') {
+  const username = `e2e-${Date.now()}-${test.info().workerIndex}`
   await page.goto('/register')
-  await page.getByLabel('用户名', { exact: true }).fill(`e2e-${Date.now()}-${test.info().workerIndex}`)
+  await page.getByLabel('用户名', { exact: true }).fill(username)
   await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
   await page.getByRole('button', { name: '创建账号', exact: true }).click()
   const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '添加平台账号', exact: true }) })
@@ -22,6 +23,21 @@ async function registerAccount(page: Page, type = '图文笔记') {
   const account = await (await created).json()
   await page.goto(`/a/${account.id}`)
   await expect(page.getByRole('heading', { name: /今天写点什么/ })).toBeVisible()
+  if (process.env.OPS_E2E_PROD === '1') {
+    const provider = await api(page, 'POST', '/model-providers', {
+      name: '隔离生产验收模拟模型', base_url: 'http://mock:8191/v1', api_key: 'local-e2e-key', models: ['mock-writer'],
+    })
+    await api(page, 'PUT', '/model-routes', [{ task_type: 'default', provider_id: provider.id, model: 'mock-writer' }])
+    // 注册已经创建会话；生产形态另验一次退出与密码登录。
+    await api(page, 'POST', '/auth/logout')
+    await page.goto('/login')
+    await page.getByLabel('用户名', { exact: true }).fill(username)
+    await page.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+    await page.getByRole('button', { name: '登录', exact: true }).click()
+    await expect(page.getByRole('heading', { name: /今天写点什么/ })).toBeVisible()
+    await page.goto(`/a/${account.id}`)
+    await expect(page.getByRole('heading', { name: /今天写点什么/ })).toBeVisible()
+  }
   return account
 }
 
