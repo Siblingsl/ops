@@ -180,6 +180,10 @@ func (s *Server) collectSource(ctx context.Context, source CrawlSource) ([]crawl
 	}
 	return items, nil
 }
+
+const hotClusterLookupSQL = `SELECT c.id FROM hot_cluster c JOIN hot_item h ON h.cluster_id=c.id JOIN crawl_source src ON src.key=h.source_key
+  WHERE src.workspace_id IS NOT DISTINCT FROM $2::uuid AND h.title_norm % $1 ORDER BY similarity(h.title_norm,$1) DESC LIMIT 1`
+
 func (s *Server) storeHotItem(ctx context.Context, source CrawlSource, item crawl.Item) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -187,13 +191,12 @@ func (s *Server) storeHotItem(ctx context.Context, source CrawlSource, item craw
 	}
 	defer tx.Rollback(ctx)
 	// Serialize clustering so concurrent collectors do not create duplicate clusters.
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(471414)`); err != nil {
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(471414), set_config('pg_trgm.similarity_threshold','0.6',true)`); err != nil {
 		return err
 	}
 	norm := normalizeHot(item.Title)
 	var cluster uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT c.id FROM hot_cluster c JOIN hot_item h ON h.cluster_id=c.id JOIN crawl_source src ON src.key=h.source_key
-  WHERE src.workspace_id IS NOT DISTINCT FROM $2::uuid AND similarity(h.title_norm,$1)>=0.6 ORDER BY similarity(h.title_norm,$1) DESC LIMIT 1`, norm, source.WorkspaceID).Scan(&cluster)
+	err = tx.QueryRow(ctx, hotClusterLookupSQL, norm, source.WorkspaceID).Scan(&cluster)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = tx.QueryRow(ctx, `INSERT INTO hot_cluster(title,sources,best_rank,first_seen_at,last_seen_at) VALUES($1,$2,$3,$4,$4) RETURNING id`, item.Title, []string{source.Key}, item.Rank, s.now()).Scan(&cluster)
 	}
