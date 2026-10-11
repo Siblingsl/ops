@@ -2,28 +2,33 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"ops/internal/ai"
 )
 
 // AI 副驾驶（EX-E-01）：只针对当前段落或选中内容给建议；对话按作品保存；不提供写入正文的接口（HC-17）。
 
 const copilotRules = `6. 你是作者的写作副驾驶，只能针对当前段落或选中内容给出分析和修改建议。
 7. 如果作者要求你写整篇文章或一次写多段，回答"请逐段起草"，并给出建议的段落顺序，不输出整篇或多段正文。
-8. 给出可替换的文字时，用「建议改为：」开头单独成段；需要增补内容时，用「建议补充：」开头单独成段。最多三条建议，每条只针对一处，不要混合使用其他标记。`
+8. 只输出 JSON：{"reply":"分析说明","suggestions":[{"kind":"rewrite|append|delete","target":"section|selection","text":"建议正文，delete 时留空","original":"selection 时精确引用当前段落中要改的原文","reason":"修改理由"}]}。
+9. 最多三条建议，仅针对作者提供的当前段落或选区；不得猜测其他段落。删除只建议删除当前段落或明确引用的文字，不直接执行。每条必须有理由；没有必要修改时 suggestions=[]。`
 
 type CopilotMessage struct {
-	ID           uuid.UUID  `json:"id"`
-	Role         string     `json:"role"`
-	Content      string     `json:"content"`
-	ContextScope string     `json:"context_scope"`
-	SectionID    *uuid.UUID `json:"section_id"`
-	AICallID     *uuid.UUID `json:"ai_call_id"`
-	CreatedAt    time.Time  `json:"created_at"`
+	ID           uuid.UUID               `json:"id"`
+	Role         string                  `json:"role"`
+	Content      string                  `json:"content"`
+	ContextScope string                  `json:"context_scope"`
+	SectionID    *uuid.UUID              `json:"section_id"`
+	AICallID     *uuid.UUID              `json:"ai_call_id"`
+	CreatedAt    time.Time               `json:"created_at"`
+	Suggestions  []copilotSuggestionItem `json:"suggestions"`
 }
 
 func (s *Server) listCopilot(w http.ResponseWriter, r *http.Request) error {
@@ -31,7 +36,7 @@ func (s *Server) listCopilot(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT id, role, content, context_scope, section_id, ai_call_id, created_at FROM copilot_message
+	rows, err := s.db.Query(r.Context(), `SELECT id, role, content, context_scope, section_id, ai_call_id, created_at, suggestions FROM copilot_message
 		WHERE work_id=$1 ORDER BY created_at, role DESC LIMIT 200`, m.ID)
 	if err != nil {
 		return err
@@ -40,7 +45,7 @@ func (s *Server) listCopilot(w http.ResponseWriter, r *http.Request) error {
 	list := []CopilotMessage{}
 	for rows.Next() {
 		var x CopilotMessage
-		if err := rows.Scan(&x.ID, &x.Role, &x.Content, &x.ContextScope, &x.SectionID, &x.AICallID, &x.CreatedAt); err != nil {
+		if err := rows.Scan(&x.ID, &x.Role, &x.Content, &x.ContextScope, &x.SectionID, &x.AICallID, &x.CreatedAt, &x.Suggestions); err != nil {
 			return err
 		}
 		list = append(list, x)
@@ -159,17 +164,19 @@ func (s *Server) chatCopilot(w http.ResponseWriter, r *http.Request) error {
 	}
 	t := aiTask{Type: "copilot_chat", Account: m.Account, WorkID: &m.ID, User: user, ExtraRules: copilotRules, Materials: mids, Work: work, SkipStyle: true}
 	return s.streamAIJob(w, r, t, jobMeta{Label: "副驾驶回复", Link: "/works/" + m.ID.String()}, func(text string, res *aiResult) (any, error) {
-		reply := strings.TrimSpace(text)
+		reply, suggestions := parseCopilotResponse(text, sec, in.Selection)
 		if whole {
 			reply = copilotRefusal(reply)
+			suggestions = []copilotSuggestionItem{}
 		}
+		payload, _ := json.Marshal(suggestions)
 		var id uuid.UUID
-		err := s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO copilot_message (work_id, role, content, context_scope, section_id, ai_call_id, created_by)
-			VALUES ($1,'assistant',$2,$3,$4,$5,$6) RETURNING id`, m.ID, reply, scope, in.SectionID, res.CallID, uid).Scan(&id)
+		err := s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO copilot_message (work_id, role, content, context_scope, section_id, ai_call_id, created_by, suggestions)
+			VALUES ($1,'assistant',$2,$3,$4,$5,$6,$7) RETURNING id`, m.ID, reply, scope, in.SectionID, res.CallID, uid, payload).Scan(&id)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"message_id": id, "reply": reply, "suggestion": copilotSuggestion(reply), "suggestions": copilotSuggestions(reply)}, nil
+		return map[string]any{"message_id": id, "reply": reply, "suggestion": copilotSuggestion(reply), "suggestions": suggestions}, nil
 	})
 }
 
@@ -216,9 +223,14 @@ func copilotSuggestions(reply string) []copilotSuggestionItem {
 }
 
 type copilotSuggestionItem struct {
-	Kind string `json:"kind"` // rewrite | append
-	Text string `json:"text"`
+	Kind      string     `json:"kind"` // rewrite | append | delete
+	Text      string     `json:"text"`
+	Reason    string     `json:"reason,omitempty"`
+	Target    string     `json:"target,omitempty"`
+	SectionID *uuid.UUID `json:"section_id,omitempty"`
+	Original  string     `json:"original,omitempty"`
 }
+
 func copilotSuggestion(reply string) string {
 	i := strings.Index(reply, "建议改为：")
 	if i < 0 {
@@ -229,4 +241,68 @@ func copilotSuggestion(reply string) string {
 		rest = rest[:j]
 	}
 	return truncate(strings.TrimSpace(rest), 800)
+}
+
+// parseCopilotResponse binds actions to the author's original target, never to a
+// later active section. Unsupported actions and ambiguous excerpts are omitted.
+func parseCopilotResponse(text string, sec *Section, selection string) (string, []copilotSuggestionItem) {
+	var out struct {
+		Reply       string                  `json:"reply"`
+		Suggestions []copilotSuggestionItem `json:"suggestions"`
+	}
+	if err := json.Unmarshal([]byte(ai.ExtractJSON(text)), &out); err != nil || strings.TrimSpace(out.Reply) == "" {
+		// Compatible with historical workspace prompt templates; plain analysis is safe.
+		out.Reply = strings.TrimSpace(text)
+		out.Suggestions = copilotSuggestions(text)
+		for i := range out.Suggestions {
+			out.Suggestions[i].Reason = "旧版提示词未提供单独理由，请结合分析核对"
+		}
+	}
+	list := []copilotSuggestionItem{}
+	if sec == nil {
+		return strings.TrimSpace(out.Reply), list
+	}
+	for _, item := range out.Suggestions {
+		if item.Kind != "rewrite" && item.Kind != "append" && item.Kind != "delete" {
+			continue
+		}
+		if item.Kind != "append" && item.Target != "" && item.Target != "section" && item.Target != "selection" {
+			continue
+		}
+		item.Reason = truncate(strings.TrimSpace(item.Reason), 300)
+		item.Text = truncate(strings.TrimSpace(item.Text), 800)
+		if item.Reason == "" || (item.Kind != "delete" && item.Text == "") {
+			continue
+		}
+		item.SectionID = &sec.ID
+		if item.Kind == "append" {
+			item.Target = "end"
+			item.Original = ""
+		} else {
+			if strings.TrimSpace(selection) != "" {
+				item.Target = "selection"
+				item.Original = strings.TrimSpace(selection)
+			}
+			if item.Target == "selection" {
+				item.Original = strings.TrimSpace(item.Original)
+				if item.Original == "" || strings.Count(sec.ContentMD, item.Original) != 1 {
+					continue
+				}
+			} else {
+				item.Target = "section"
+				item.Original = sec.ContentMD
+			}
+		}
+		if item.Kind == "delete" {
+			item.Text = ""
+			if strings.TrimSpace(item.Original) == "" {
+				continue
+			}
+		}
+		list = append(list, item)
+		if len(list) == 3 {
+			break
+		}
+	}
+	return strings.TrimSpace(out.Reply), list
 }

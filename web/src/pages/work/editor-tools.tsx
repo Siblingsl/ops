@@ -12,7 +12,7 @@ import type { LintHit, Material, RetrieveHit, Section, SectionRevision, Variant,
 // ---------- 编辑器内部事件（侧栏 ↔ 段落） ----------
 
 export type EditorEvent =
-  | { type: 'apply'; sectionId: string; text: string; target: 'section' | 'selection' | 'end'; callId?: string | null }
+  | { type: 'apply'; sectionId: string; text: string; target: 'section' | 'selection' | 'end'; original?: string; callId?: string | null }
   | { type: 'fix-sentence'; sectionId: string; sentence: string }
   | { type: 'insert'; sectionId: string; text: string }
   | { type: 'open-pending'; sectionId: string; index: number }

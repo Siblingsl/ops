@@ -477,13 +477,15 @@ func (l *LLM) respond(prompt string) string {
 			{"items": []int{4}, "problem": "缺少具体的例子支撑", "suggestion": "补充一条经历类素材"},
 		}, "overall": "结构清楚，先结论后展开；建议补充论据并减少重复。"})
 	case "copilot_chat":
-		if strings.Contains(prompt, "请逐段起草") || strings.Contains(prompt, "整篇或多段正文") {
+		question := sectionAfter(prompt, "## 作者的问题")
+		if strings.Contains(question, "请逐段起草") || strings.Contains(question, "整篇或多段正文") {
 			return "请逐段起草：建议按大纲顺序，从「先说结论」开始，一段写完再让我看论证。"
 		}
-		if sel := sectionAfter(prompt, "## 当前上下文：选中的文字"); sel != "" {
-			return "这段的意思清楚，但可以更具体。\n\n建议改为：" + short(firstSentence(sel)+"比如，我上周就因为这件事少开了两个会。", 120)
-		}
-		return "从论证看，这段先给了结论，但缺少一个具体例子。可以补一条你的亲身经历，或者从素材库里选一条案例。"
+		return js(map[string]any{"reply": "这段可以更紧凑，先给结论，再补自己的实际经历。", "suggestions": []map[string]string{
+			{"kind": "rewrite", "target": "section", "text": "先明确问题，再写下亲身经历和下一步行动。", "reason": "先给结论，减少铺垫"},
+			{"kind": "append", "text": "记录尝试的结果，下次继续改进。", "reason": "补充具体行动"},
+			{"kind": "delete", "target": "section", "reason": "如果本段重复其他论据，可以单独确认清空本段"},
+		}})
 	case "polish_check":
 		var issues []map[string]string
 		for _, b := range blocks(prompt) {

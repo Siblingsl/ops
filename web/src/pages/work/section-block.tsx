@@ -459,6 +459,7 @@ export function SectionBlock({
     const cur = content.current
     switch (mode) {
       case 'whole':
+        if (cur !== original) { toast.info('原文已改动，请重新生成建议'); return false }
         editor.current?.setMarkdown(text)
         break
       case 'selection':
@@ -470,7 +471,7 @@ export function SectionBlock({
         }
         break
       case 'excerpt':
-        if (!cur.includes(original)) {
+        if (!original || cur.split(original).length !== 2) {
           toast.info('这句话已经改动过，请手动选中后改写')
           return false
         }
@@ -606,7 +607,12 @@ export function SectionBlock({
       return
     }
     if (e.type === 'apply') {
-      if (e.target === 'end') {
+      if (streaming) return toast.info('当前段仍在生成，请稍后应用建议')
+      if (e.original !== undefined && e.target !== 'end') {
+        if (e.target === 'section' && content.current !== e.original) return toast.info('原文已改动，请重新生成建议')
+        if (e.target === 'selection' && (!e.original || content.current.split(e.original).length !== 2)) return toast.info('目标原文已改动或不唯一，请重新生成建议')
+        setProposal({ original: e.original, text: e.text, mode: e.target === 'selection' ? 'excerpt' : 'whole', callId: e.callId })
+      } else if (e.target === 'end') {
         setProposal({ original: '', text: e.text, mode: 'append', callId: e.callId })
       } else {
         const sel = e.target === 'selection' ? editor.current?.selectedText() || '' : ''
@@ -736,11 +742,11 @@ export function SectionBlock({
           <div className="mt-3 animate-fade-in rounded-lg border border-ink-200 bg-ink-50/40 p-3">
             <div className="grid gap-3 text-[13.5px] leading-relaxed md:grid-cols-2">
               <div><div className="mb-1 text-xs font-medium text-mist-400">原文</div><p className="whitespace-pre-wrap text-mist-500 line-through decoration-mist-300">{proposal.original}</p></div>
-              <div><div className="mb-1 text-xs font-medium text-ink-600">建议</div><p className="whitespace-pre-wrap text-mist-800">{proposal.text}</p></div>
+              <div><div className="mb-1 text-xs font-medium text-ink-600">建议</div><p className="whitespace-pre-wrap text-mist-800">{proposal.text || '（删除以上原文）'}</p></div>
             </div>
             <div className="mt-3 flex justify-end gap-2">
               <Button size="sm" variant="ghost" onClick={discard}>放弃</Button>
-              <Button size="sm" variant="primary" onClick={accept} icon={<Check className="size-3.5" />}>替换</Button>
+              <Button size="sm" variant={proposal.text ? 'primary' : 'danger'} onClick={accept} icon={<Check className="size-3.5" />}>{proposal.text ? '替换' : '确认删除这一处'}</Button>
             </div>
           </div>
         )}

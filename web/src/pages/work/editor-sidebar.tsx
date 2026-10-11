@@ -161,7 +161,7 @@ function MaterialsTab({ work, setWork, active }: { work: Work; setWork: (w: Work
 
 // ---------- 副驾驶（EX-E-01，HC-17） ----------
 
-interface CopilotMessage { id: string; role: 'user' | 'assistant'; content: string; context_scope: string; section_id: string | null; ai_call_id: string | null; created_at: string }
+interface CopilotMessage { id: string; role: 'user' | 'assistant'; content: string; context_scope: string; section_id: string | null; ai_call_id: string | null; created_at: string; suggestions?: CopilotSuggestion[] }
 
 const quickAsks = ['这段论证够不够？', '给我几个举例方向', '这段读起来顺吗？', '结构有没有问题？', '读者可能会有什么疑问？']
 
@@ -174,8 +174,8 @@ function suggestionOf(reply: string): string {
   return rest.trim()
 }
 
-// DEV-A104（13 文档）：副驾驶回复可含多条可执行建议（改写/补充），逐条应用。
-interface CopilotSuggestion { kind: 'rewrite' | 'append'; text: string }
+// DEV-A104（13 文档）：副驾驶回复可含多条可执行建议（改写/补充/删除，含目标与理由），逐条应用。
+interface CopilotSuggestion { kind: 'rewrite' | 'append' | 'delete'; text: string; reason?: string; target?: 'section' | 'selection' | 'end'; section_id?: string; original?: string }
 
 function suggestionsOf(reply: string): CopilotSuggestion[] {
   const out: CopilotSuggestion[] = []
@@ -185,6 +185,15 @@ function suggestionsOf(reply: string): CopilotSuggestion[] {
     else if (line.startsWith('建议补充：')) out.push({ kind: 'append', text: line.slice(5).trim() })
   }
   return out.filter((s) => s.text).slice(0, 3)
+}
+
+// 流式 JSON 只展示 reply 文本，不把建议契约暴露到聊天气泡。
+function copilotPreview(text: string): string {
+  const raw = text.trimStart().replace(/^```(?:json)?\s*/, '')
+  if (!raw.startsWith('{')) return text
+  const reply = /"reply"\s*:\s*"((?:\\.|[^"\\])*)/.exec(raw)?.[1]
+  if (reply === undefined) return ''
+  try { return JSON.parse('"' + reply + '"') as string } catch { return '' }
 }
 
 function CopilotTab({ work, active, selection }: { work: Work; active: Section | null; selection: string }) {
@@ -200,7 +209,7 @@ function CopilotTab({ work, active, selection }: { work: Work; active: Section |
     if (selection && scope === 'section') setScope('selection')
     if (!selection && scope === 'selection') setScope('section')
   }, [selection]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => bottom.current?.scrollIntoView({ block: 'end' }), [list.data, pending?.a])
+  useEffect(() => { bottom.current?.scrollIntoView({ block: 'end' }) }, [list.data, pending?.a])
   const ask = async (message: string) => {
     if (!message.trim() || pending) return
     setText('')
@@ -242,7 +251,7 @@ function CopilotTab({ work, active, selection }: { work: Work; active: Section |
         {pending && (
           <>
             <div className="ml-6 rounded-lg bg-ink-600 px-3 py-2 text-[12.5px] text-white">{pending.q}</div>
-            <div className="mr-4 whitespace-pre-wrap rounded-lg bg-mist-100 px-3 py-2 text-[12.5px] leading-relaxed text-mist-700">{pending.a || <Spinner />}</div>
+            <div className="mr-4 whitespace-pre-wrap rounded-lg bg-mist-100 px-3 py-2 text-[12.5px] leading-relaxed text-mist-700">{copilotPreview(pending.a) || <Spinner />}</div>
           </>
         )}
         <div ref={bottom} />
@@ -265,9 +274,9 @@ function CopilotTab({ work, active, selection }: { work: Work; active: Section |
 
 function CopilotBubble({ m, active, selection, canApply }: { m: CopilotMessage; active: Section | null; selection: string; canApply: boolean }) {
   if (m.role === 'user') return <div className="ml-6 whitespace-pre-wrap rounded-lg bg-ink-600 px-3 py-2 text-[12.5px] text-white">{m.content}</div>
-  const suggestions = suggestionsOf(m.content)
+  const suggestions = m.suggestions?.length ? m.suggestions : suggestionsOf(m.content)
   const legacy = suggestions.length === 0 ? (suggestionOf(m.content) ? [{ kind: 'rewrite' as const, text: suggestionOf(m.content) }] : []) : suggestions
-  const target = active?.id ?? m.section_id
+  const target = m.section_id
   return (
     <div className="mr-4 rounded-lg bg-mist-100 px-3 py-2">
       <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-mist-700">{m.content}</p>
@@ -275,11 +284,15 @@ function CopilotBubble({ m, active, selection, canApply }: { m: CopilotMessage; 
         <div className="mt-2 space-y-1.5">
           {legacy.map((s, i) => (
             <div key={i} className="flex flex-wrap items-center gap-1.5 rounded border border-mist-200 bg-white px-2 py-1.5">
-              <Badge tone="ink">{s.kind === 'rewrite' ? '改写建议' : '补充建议'}</Badge>
-              <span className="min-w-0 flex-1 truncate text-[12px] text-mist-600" title={s.text}>{s.text}</span>
-              {s.kind === 'rewrite' && <>
+              <Badge tone="ink">{s.kind === 'rewrite' ? '改写建议' : s.kind === 'delete' ? '删除建议' : '补充建议'}</Badge>
+              <span className="min-w-0 flex-1 truncate text-[12px] text-mist-600" title={s.text}>{s.text || s.original || '删除原文'}</span>
+              {s.reason && <p className="w-full text-[11.5px] text-mist-500">理由：{s.reason}</p>}
+              {s.section_id && s.target && (s.kind === 'rewrite' || s.kind === 'delete') ? <Button size="sm" variant={s.kind === 'delete' ? 'danger' : 'secondary'} onClick={() => {
+                scrollToSection(s.section_id!)
+                emitEditor({ type: 'apply', sectionId: s.section_id!, text: s.text, target: s.target === 'selection' ? 'selection' : 'section', original: s.original, callId: m.ai_call_id })
+              }}>{s.kind === 'delete' ? '预览删除这一处' : '预览修改这一处'}</Button> : s.kind === 'rewrite' && m.context_scope !== 'selection' && <>
                 <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: s.text, target: 'section', callId: m.ai_call_id })}>应用到当前段</Button>
-                {selection && <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: s.text, target: 'selection', callId: m.ai_call_id })}>应用到选中处</Button>}
+                {selection && active?.id === target && <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: s.text, target: 'selection', callId: m.ai_call_id })}>应用到选中处</Button>}
               </>}
               {s.kind === 'append' && <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: s.text, target: 'end', callId: m.ai_call_id })}>补充到段末</Button>}
             </div>
