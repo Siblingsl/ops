@@ -23,9 +23,18 @@ export interface Account {
   is_demo?: boolean
   credential?: CredState
   datacube_state?: DatacubeState
+  metrics_wechat_auto?: WechatAuto
 }
 
 export type DatacubeState = 'ok' | 'no_permission' | 'unknown'
+
+/** 公众号数据接口每日后台只读同步（DEV-DR06） */
+export interface WechatAuto {
+  enabled: boolean
+  fails: number
+  last_at?: string
+  note?: string
+}
 
 export interface WechatDefaults {
   author: string

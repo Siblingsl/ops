@@ -557,6 +557,13 @@ export default function Review() {
         {acc.platform === 'wechat_mp' && acc.datacube_state === 'no_permission' && (
           <p className="border-t border-mist-100 px-5 py-3 text-xs text-mist-500">当前公众号没有数据统计接口权限（通常需要微信认证），数据请用截图识别、粘贴回填或手动录入。</p>
         )}
+        {acc.platform === 'wechat_mp' && acc.datacube_state === 'ok' && acc.metrics_wechat_auto && (
+          <p className="border-t border-mist-100 px-5 py-3 text-xs text-mist-500">
+            {acc.metrics_wechat_auto.enabled
+              ? `每天 10:00 后自动同步公众号数据${acc.metrics_wechat_auto.last_at ? `，上次同步 ${fmtTime(acc.metrics_wechat_auto.last_at)}` : ''}；已同步的作品不再提醒手动录入。`
+              : `每日自动同步已关闭${acc.metrics_wechat_auto.note ? `（${acc.metrics_wechat_auto.note}）` : ''}，可在「设置 → 账号」重新打开；期间会照常提醒录入。`}
+          </p>
+        )}
       </Card>
       {acc.platform === 'wechat_mp' && <UnmatchedCard accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />}
 

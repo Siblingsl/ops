@@ -252,6 +252,77 @@ func (s *Server) syncWechatMetrics(w http.ResponseWriter, r *http.Request) error
 	return ok(w, map[string]any{"result": res, "message": msg})
 }
 
+const (
+	wechatDailyHour     = 10
+	wechatDailyMaxFails = 3
+)
+
+// wechatMetricsDaily runs one read-only datacube sync per permitted WeChat account per day after 10:00
+// (DEV-DR06，14 文档 4.2 第 4 条). No permission, or 3 failed days in a row, turns it off with a notice.
+func (s *Server) wechatMetricsDaily(ctx context.Context) {
+	if s.now().In(s.loc).Hour() < wechatDailyHour {
+		return
+	}
+	rows, err := s.db.Query(ctx, `SELECT a.id, a.workspace_id FROM platform_account a JOIN wechat_credential c ON c.account_id=a.id
+		WHERE a.platform='wechat_mp' AND a.status='active' AND NOT a.is_demo AND a.datacube_state='ok' AND a.metrics_wechat_auto AND c.last_check_ok`)
+	if err != nil {
+		return
+	}
+	type acc struct{ id, ws uuid.UUID }
+	var list []acc
+	for rows.Next() {
+		var x acc
+		if rows.Scan(&x.id, &x.ws) == nil {
+			list = append(list, x)
+		}
+	}
+	rows.Close()
+	day := s.today().Format("2006-01-02")
+	for _, x := range list {
+		if !s.markOnce(ctx, "wechat-metrics:"+x.id.String()+":"+day) {
+			continue
+		}
+		jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: x.ws})
+		a, err := s.account(jctx, x.id)
+		if err != nil {
+			continue
+		}
+		s.wechatMetricsOnce(jctx, a)
+	}
+}
+
+func (s *Server) wechatMetricsOnce(ctx context.Context, a *Account) {
+	ws := ident(ctx).WorkspaceID
+	link := "/a/" + a.ID.String() + "/review"
+	res, err := s.syncDatacube(ctx, a)
+	if err == nil {
+		_, _ = s.db.Exec(ctx, `UPDATE platform_account SET metrics_wechat_fails=0, metrics_wechat_last_at=$2 WHERE id=$1`, a.ID, s.now())
+		s.audit(ctx, "metrics_sync_daily", "account", a.ID.String(), "ok", map[string]any{"articles": res.Articles, "matched": res.Matched, "unmatched": res.Unmatched})
+		if res.Unmatched > 0 {
+			s.notifyWorkspace(ctx, ws, []string{"owner", "editor"}, "metric", fmt.Sprintf("公众号数据已同步，%d 篇文章没对上作品", res.Unmatched), a.Name,
+				link, "wechat-unmatched:"+a.ID.String()+":"+s.today().Format("2006-01-02"))
+		}
+		return
+	}
+	var fails int
+	if qerr := s.db.QueryRow(ctx, `UPDATE platform_account SET metrics_wechat_fails=metrics_wechat_fails+1 WHERE id=$1 RETURNING metrics_wechat_fails`, a.ID).Scan(&fails); qerr != nil {
+		return
+	}
+	s.audit(ctx, "metrics_sync_daily", "account", a.ID.String(), "failed", map[string]any{"error": truncate(err.Error(), 200), "fails": fails})
+	var note string
+	switch {
+	case datacubeDenied(err):
+		note = "公众号没有数据统计接口权限，已关闭每日同步"
+	case fails >= wechatDailyMaxFails:
+		note = fmt.Sprintf("连续 %d 天同步失败（%s），已关闭每日同步", fails, truncate(errText(datacubeErr(err)), 60))
+	default:
+		return
+	}
+	_, _ = s.db.Exec(ctx, `UPDATE platform_account SET metrics_wechat_auto=false, metrics_wechat_note=$2 WHERE id=$1`, a.ID, note)
+	s.notifyWorkspace(ctx, ws, []string{"owner", "editor"}, "metric", "公众号数据每日同步已关闭", a.Name+"："+note+"。可在账号设置里重新打开，期间请用截图识别或手动录入。",
+		link, "wechat-auto-off:"+a.ID.String()+":"+s.today().Format("2006-01-02"))
+}
+
 type unmatchedRow struct {
 	ID         uuid.UUID `json:"id"`
 	ExternalID string    `json:"external_id"`

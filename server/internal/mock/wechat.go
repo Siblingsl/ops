@@ -29,8 +29,8 @@ type Wechat struct {
 	images map[string][]byte
 	calls  []string
 
-	articleTotals  map[string][]map[string]any // nil: one sample article per day
-	datacubeDenied bool
+	articleTotals map[string][]map[string]any // nil: one sample article per day
+	datacubeErr   int
 }
 
 // SetArticleTotals replaces the getarticletotal data keyed by ref_date; nil restores the sample.
@@ -42,9 +42,18 @@ func (m *Wechat) SetArticleTotals(data map[string][]map[string]any) {
 
 // SetDatacubeDenied makes datacube calls fail with 48001, like an unverified account.
 func (m *Wechat) SetDatacubeDenied(denied bool) {
+	code := 0
+	if denied {
+		code = 48001
+	}
+	m.SetDatacubeError(code)
+}
+
+// SetDatacubeError makes datacube calls fail with the given errcode (0 clears it).
+func (m *Wechat) SetDatacubeError(code int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.datacubeDenied = denied
+	m.datacubeErr = code
 }
 
 func NewWechat() *Wechat {
@@ -207,10 +216,15 @@ func (m *Wechat) Handler() http.Handler {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		m.mu.Lock()
-		denied, data := m.datacubeDenied, m.articleTotals
+		code, data := m.datacubeErr, m.articleTotals
 		m.mu.Unlock()
-		if denied {
-			wxErr(w, 48001, "api unauthorized")
+		switch code {
+		case 0:
+		case 48001:
+			wxErr(w, code, "api unauthorized")
+			return
+		default:
+			wxErr(w, code, "mock datacube failure")
 			return
 		}
 		if in.BeginDate == "" || in.BeginDate != in.EndDate {

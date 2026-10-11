@@ -32,6 +32,15 @@ type Account struct {
 	IsDemo         bool       `json:"is_demo"`
 	Credential     *CredState `json:"credential,omitempty"`
 	DatacubeState  string     `json:"datacube_state,omitempty"` // 公众号数据接口：ok | no_permission | unknown
+	WechatAuto     *WechatAuto `json:"metrics_wechat_auto,omitempty"`
+}
+
+// WechatAuto is the daily read-only datacube sync switch of a WeChat account (DEV-DR06).
+type WechatAuto struct {
+	Enabled bool       `json:"enabled"`
+	Fails   int        `json:"fails"`
+	LastAt  *time.Time `json:"last_at,omitempty"`
+	Note    string     `json:"note,omitempty"`
 }
 
 type CredState struct {
@@ -60,7 +69,8 @@ func validFormat(platform, format string) bool {
 }
 
 const accountCols = `a.id, a.platform, a.name, a.content_format, a.type_note, a.status, a.daily_push_limit, a.created_at, a.is_demo,
-	c.app_id, c.app_secret_enc, c.last_check_at, c.last_check_ok, c.last_check_result, a.datacube_state`
+	c.app_id, c.app_secret_enc, c.last_check_at, c.last_check_ok, c.last_check_result, a.datacube_state,
+	a.metrics_wechat_auto, a.metrics_wechat_fails, a.metrics_wechat_last_at, a.metrics_wechat_note`
 
 func (s *Server) scanAccount(row pgx.Row) (*Account, error) {
 	var a Account
@@ -69,14 +79,17 @@ func (s *Server) scanAccount(row pgx.Row) (*Account, error) {
 	var checkAt *time.Time
 	var checkOK *bool
 	var checkResult *string
+	var auto WechatAuto
 	if err := row.Scan(&a.ID, &a.Platform, &a.Name, &a.ContentFormat, &a.TypeNote, &a.Status, &a.DailyPushLimit, &a.CreatedAt, &a.IsDemo,
-		&appID, &secretEnc, &checkAt, &checkOK, &checkResult, &a.DatacubeState); err != nil {
+		&appID, &secretEnc, &checkAt, &checkOK, &checkResult, &a.DatacubeState,
+		&auto.Enabled, &auto.Fails, &auto.LastAt, &auto.Note); err != nil {
 		return nil, err
 	}
 	if a.Platform != "wechat_mp" {
 		a.DatacubeState = ""
 	}
 	if a.Platform == "wechat_mp" {
+		a.WechatAuto = &auto
 		cs := &CredState{State: "not_configured"}
 		if appID != nil {
 			cs.AppID = *appID
@@ -203,9 +216,19 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) error {
 		ContentFormat  *string `json:"content_format"`
 		TypeNote       *string `json:"type_note"`
 		DailyPushLimit *int    `json:"daily_push_limit"`
+		WechatAuto     *bool   `json:"metrics_wechat_auto"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
+	}
+	if in.WechatAuto != nil {
+		if a.Platform != "wechat_mp" {
+			return validation("只有公众号账号有数据接口每日同步")
+		}
+		if _, err := s.db.Exec(r.Context(), `UPDATE platform_account SET metrics_wechat_auto=$2, metrics_wechat_fails=0, metrics_wechat_note='' WHERE id=$1`,
+			a.ID, *in.WechatAuto); err != nil {
+			return err
+		}
 	}
 	if in.Name != nil {
 		a.Name = strings.TrimSpace(*in.Name)

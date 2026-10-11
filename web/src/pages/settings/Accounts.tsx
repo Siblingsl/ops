@@ -4,8 +4,9 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AccountCreateForm, credTone, CredentialPanel } from '@/components/account-forms'
 import { confirm, Dialog } from '@/components/dialog'
-import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, Input, PageHeader, PageLoading, PlatformMark, platformLabel, Textarea } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, Input, PageHeader, PageLoading, PlatformMark, platformLabel, Switch, Textarea } from '@/components/ui'
 import { del, errorMessage, patch, post } from '@/lib/api'
+import { fmtTime } from '@/lib/format'
 import { useAccounts, useInvalidate, useMe } from '@/lib/session'
 import type { Account } from '@/lib/types'
 
@@ -116,6 +117,19 @@ function AccountDetail({ account, onStatusChange, canManage }: {
               {platformLabel[account.platform]}
             </div>
           </Field>
+          {account.platform === 'wechat_mp' && account.metrics_wechat_auto && (
+            <Field label="数据接口每日同步" hint={account.datacube_state === 'ok'
+              ? '每天 10:00 后在后台只读同步一次最近 7 天群发的文章数据；连续 3 天失败或没有权限时会自动关闭并通知你。'
+              : account.datacube_state === 'no_permission' ? '当前公众号没有数据统计接口权限（通常需要微信认证），不会同步。' : '凭证测试通过、确认有数据接口权限后才会同步。'}>
+              <div className="flex min-h-9 flex-wrap items-center gap-3 text-[13px] text-mist-600">
+                <Switch label="数据接口每日同步" checked={account.metrics_wechat_auto.enabled} disabled={!canManage || account.status === 'disabled'}
+                  onChange={(v) => save({ metrics_wechat_auto: v })} />
+                <span>{account.metrics_wechat_auto.enabled ? '已开启' : '已关闭'}</span>
+                {account.metrics_wechat_auto.last_at && <span className="text-mist-400">上次同步 {fmtTime(account.metrics_wechat_auto.last_at)}</span>}
+              </div>
+              {account.metrics_wechat_auto.note && <p className="mt-1 text-[12px] text-amber-700">{account.metrics_wechat_auto.note}</p>}
+            </Field>
+          )}
         </div>
       </Card>
       {account.platform === 'wechat_mp' ? (

@@ -522,7 +522,7 @@ var metricReminderDays = []int{1, 3, 7}
 // Works a permitted WeChat datacube sync covers are skipped (DEV-DR04，14 文档 4.3 第 5 条).
 func (s *Server) metricRemindersJob(ctx context.Context) {
 	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.account_id, a.workspace_id, a.name, w.published_at,
-		(a.platform='wechat_mp' AND a.datacube_state='ok' AND w.wechat_msgid IS NOT NULL),
+		(a.platform='wechat_mp' AND a.datacube_state='ok' AND a.metrics_wechat_auto AND w.wechat_msgid IS NOT NULL),
 		ARRAY(SELECT DISTINCT metric_node(m.day_offset) FROM metric_snapshot m WHERE m.work_id=w.id AND metric_node(m.day_offset) IS NOT NULL)
 		FROM work w JOIN platform_account a ON a.id=w.account_id
 		WHERE a.status='active' AND w.deleted_at IS NULL AND w.published_at IS NOT NULL AND w.published_at > $1::timestamptz - interval '10 days'`, s.now())
@@ -574,6 +574,7 @@ func nodeDueExpr(nowParam, apiParam int) string {
 	return strings.NewReplacer("$now", fmt.Sprintf("$%d", nowParam), "$api", fmt.Sprintf("$%d", apiParam)).Replace(metricNodeDueSQL)
 }
 
+// datacubeCovers: only the daily background sync counts as coverage; with it off the user is reminded again.
 func datacubeCovers(a *Account) bool {
-	return a.Platform == "wechat_mp" && a.DatacubeState == "ok"
+	return a.Platform == "wechat_mp" && a.DatacubeState == "ok" && a.WechatAuto != nil && a.WechatAuto.Enabled
 }
