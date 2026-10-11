@@ -1,6 +1,6 @@
 import { DailyStatsCard } from './ops/DailyStats'
 import { useQuery } from '@tanstack/react-query'
-import { BarChart3, Brain, Check, Lightbulb, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
+import { BarChart3, Brain, Check, ClipboardPaste, Lightbulb, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -14,13 +14,26 @@ import { useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { BoardRow, Metric, Platform, ReviewReport } from '@/lib/types'
 import { AttributionCard, DigestsCard, TopWorksCard } from './review-insights'
 
-type ImportPreviewRow = { title: string; work_id: string | null; matched: boolean; reads: number; likes: number }
+type ImportPreviewRow = {
+  title: string; work_id: string | null; matched: boolean; match_type?: 'exact' | 'fuzzy' | 'none'; similarity?: number
+  estimated?: boolean; error?: string
+  reads: number | null; likes: number | null; wows?: number | null; favorites?: number | null
+  comments?: number | null; shares?: number | null; follows_gained?: number | null
+}
+
+const num = (v: number | null | undefined) => (v == null ? '—' : fmtNum(v))
 
 function ImportMetrics({ accountId, works, onDone }: { accountId: string; works: BoardRow[]; onDone: () => void }) {
   const [open, setOpen] = useState(false)
+  const [pasteOpen, setPasteOpen] = useState(false)
+  const [pasteText, setPasteText] = useState('')
   const [rows, setRows] = useState<ImportPreviewRow[]>([])
   const [busy, setBusy] = useState(false)
   const input = useRef<HTMLInputElement>(null)
+  const applyPreview = (preview: ImportPreviewRow[]) => {
+    setRows((preview ?? []).map((r) => ({ ...r, work_id: r.work_id ?? null })))
+    setOpen(true)
+  }
   const upload = async (file: File) => {
     setBusy(true)
     try {
@@ -28,8 +41,22 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
       fd.append('file', file)
       const res = await rawRequest('POST', `/accounts/${accountId}/metrics/import`, fd)
       const data = await res.json() as { preview: ImportPreviewRow[] }
-      setRows((data.preview ?? []).map((r) => ({ ...r, work_id: r.work_id ?? null })))
-      setOpen(true)
+      applyPreview(data.preview ?? [])
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  // DEV-U106（12 文档）：粘贴平台后台复制的表格文本，批量解析并匹配作品。
+  const paste = async () => {
+    if (!pasteText.trim()) return
+    setBusy(true)
+    try {
+      const data = await post<{ preview: ImportPreviewRow[] }>(`/accounts/${accountId}/metrics/import`, { text: pasteText })
+      applyPreview(data.preview ?? [])
+      setPasteOpen(false)
+      setPasteText('')
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
@@ -37,7 +64,10 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
     }
   }
   const confirmImport = async () => {
-    const payload = rows.filter((r) => r.work_id).map((r) => ({ title: r.title, work_id: r.work_id!, reads: r.reads, likes: r.likes }))
+    const payload = rows.filter((r) => r.work_id).map((r) => ({
+      title: r.title, work_id: r.work_id!, reads: r.reads, likes: r.likes, wows: r.wows,
+      favorites: r.favorites, comments: r.comments, shares: r.shares, follows_gained: r.follows_gained,
+    }))
     if (!payload.length) {
       toast.error('请至少为一行指定作品')
       return
@@ -56,23 +86,44 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
   }
   return (
     <>
-      <Button size="sm" variant="secondary" icon={<Upload className="size-3.5" />} loading={busy && !open} onClick={() => input.current?.click()}>导入 CSV</Button>
+      <Button size="sm" variant="secondary" icon={<ClipboardPaste className="size-3.5" />} onClick={() => setPasteOpen(true)}>粘贴回填</Button>
+      <Button size="sm" variant="ghost" icon={<Upload className="size-3.5" />} loading={busy && !open && !pasteOpen} onClick={() => input.current?.click()}>导入 CSV</Button>
       <input ref={input} type="file" accept=".csv,text/csv" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) upload(f) }} />
-      <Dialog open={open} onClose={() => setOpen(false)} title="确认作品匹配" desc="按标题自动匹配；未匹配的行请人工指定作品后再导入。" width="max-w-2xl"
+      <Dialog open={pasteOpen} onClose={() => setPasteOpen(false)} title="粘贴数据回填" width="max-w-2xl"
+        footer={<><Button variant="ghost" onClick={() => setPasteOpen(false)}>取消</Button><Button variant="primary" loading={busy} disabled={!pasteText.trim()} onClick={paste}>解析并匹配</Button></>}>
+        <Field label="表格文本" hint="每行一篇：标题 + 各项数据，用 Tab、竖线或两个以上空格分隔；首行可以是表头（标题/阅读/点赞/在看/收藏/评论/分享/涨粉）。「10万+」按 100000 计入并标注为估计值。">
+          <Textarea rows={7} value={pasteText} onChange={(e) => setPasteText(e.target.value)}
+            placeholder={'标题\t阅读\t点赞\t在看\t收藏\t评论\t分享\t涨粉\n谈谈内容运营的三个习惯\t1,234\t56\t7\t8\t9\t10\t2'} className="font-mono text-[12.5px]" />
+        </Field>
+        <p className="text-xs text-mist-400">数据完全来自你粘贴的内容；解析后逐行确认匹配的作品，不会自动访问任何平台。</p>
+      </Dialog>
+      <Dialog open={open} onClose={() => setOpen(false)} title="确认作品匹配" desc="按标题自动匹配（高相似度为模糊匹配，请确认）；未匹配的行请人工指定作品后再导入。" width="max-w-3xl"
         footer={<><Button variant="ghost" onClick={() => setOpen(false)}>取消</Button><Button variant="primary" loading={busy} onClick={confirmImport}>确认导入</Button></>}>
-        <div className="scrollbar-thin max-h-[50vh] space-y-2 overflow-y-auto">
+        <div className="scrollbar-thin max-h-[55vh] space-y-2 overflow-y-auto">
           {rows.map((r, i) => (
-            <div key={i} className="grid gap-2 rounded-lg border border-mist-200 p-3 sm:grid-cols-[1fr_180px_80px_80px]">
-              <div className="min-w-0">
-                <div className="truncate text-[13.5px] font-medium text-mist-800">{r.title}</div>
-                <div className="text-xs text-mist-400">{r.matched ? '已自动匹配' : '未匹配，请选择作品'}</div>
+            <div key={i} className={cn('rounded-lg border p-3', r.error ? 'border-danger bg-orange-50/60' : 'border-mist-200')}>
+              <div className="grid gap-2 sm:grid-cols-[1fr_180px]">
+                <div className="min-w-0">
+                  <div className="truncate text-[13.5px] font-medium text-mist-800">{r.title}</div>
+                  <div className="text-xs text-mist-400">
+                    {r.error ? <span className="text-danger">{r.error}</span> : r.match_type === 'exact' ? '已精确匹配'
+                      : r.match_type === 'fuzzy' ? `模糊匹配 ${Math.round((r.similarity ?? 0) * 100)}%，请确认` : '未匹配，请选择作品或跳过'}
+                  </div>
+                </div>
+                <Select value={r.work_id ?? ''} onChange={(e) => setRows((list) => list.map((x, j) => j === i ? { ...x, work_id: e.target.value || null, matched: !!e.target.value } : x))}>
+                  <option value="">跳过此行</option>
+                  {works.map((w) => <option key={w.id} value={w.id}>{w.title || '未命名'}</option>)}
+                </Select>
               </div>
-              <Select value={r.work_id ?? ''} onChange={(e) => setRows((list) => list.map((x, j) => j === i ? { ...x, work_id: e.target.value || null, matched: !!e.target.value } : x))}>
-                <option value="">跳过此行</option>
-                {works.map((w) => <option key={w.id} value={w.id}>{w.title || '未命名'}</option>)}
-              </Select>
-              <div className="text-[12.5px] text-mist-500">阅读 {r.reads}</div>
-              <div className="text-[12.5px] text-mist-500">点赞 {r.likes}</div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-mist-500">
+                <span>阅读 {num(r.reads)}{r.estimated && r.reads != null && <Badge>≥ 估计</Badge>}</span>
+                <span>点赞 {num(r.likes)}</span>
+                <span>在看 {num(r.wows)}</span>
+                <span>收藏 {num(r.favorites)}</span>
+                <span>评论 {num(r.comments)}</span>
+                <span>分享 {num(r.shares)}</span>
+                <span>涨粉 {num(r.follows_gained)}</span>
+              </div>
             </div>
           ))}
         </div>
