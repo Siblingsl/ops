@@ -43,3 +43,11 @@ curl -fsS http://127.0.0.1:44537/healthz
 - `update.sh` 使用 `git reset --hard origin/main`，部署目录不要有本地改动。
 - 迁移在服务启动时自动执行（`serve`/`migrate` 均会跑 goose），无需手动迁移。
 - 降级前先看 90 文档对应迁移的 Down 说明（如 00020 的 Down 要求没有新类型账号数据）。
+
+## 3. 本地隔离验收记录（2026-10-11，DEV-U105）
+
+使用 `docker-compose.prod.yml` + `docker-compose.e2e.yml`、项目名 `ops-prod-e2e` 与独立卷。旧镜像 `ops-app:local` 的数据库为迁移 20，先注册测试用户与账号、在 `/data` 写入验收标记，再保存 `pg_dump -Fc` 与数据卷归档。切换 `ops-app:prod-e2e` 后自动升级到迁移 23，原账号保持可读，healthz 200，六条生产模式浏览器冒烟通过。
+
+回滚采用恢复到新实例的方式：在同一隔离 PostgreSQL 内新建 `ops_rollback_20261011`，通过 `pg_restore --no-owner --exit-on-error` 恢复升级前备份；将 assets 归档恢复到独立 `ops-prod-e2e_rollback_assets` 卷，用旧镜像启动回环端口 44539 的 `ops-prod-e2e-rollback`。确认迁移仍为 20、原用户密码可登录、账号 ID/名称/类型不变、文件标记一致、healthz 200。升级后的库（23）及文件卷保留，无 Down 迁移或日常库删除。演练中的模型/密钥全部是本地 mock 测试值，不能用于真实部署。
+
+本轮停止 PostgreSQL 容器动作被自动审批拒绝，未执行；此前的停库 503/起库 200 实测记录保留，独立回归 `TestU105HealthzChecksDatabase` 再次通过。此项与回滚恢复验证分别记录，不把未执行动作写成成功。公网证书、真实模型/平台仍需另行验收。
