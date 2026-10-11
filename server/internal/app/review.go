@@ -25,13 +25,20 @@ type Metric struct {
 	Shares        *int      `json:"shares"`
 	FollowsGained *int      `json:"follows_gained"`
 	Note          string    `json:"note"`
+	Source        string    `json:"source"`
+	DayOffset     *int      `json:"day_offset"`
+	ExternalID    *string   `json:"external_id"`
 }
 
-const metricCols = `id, work_id, captured_at, reads, likes, wows, favorites, comments, shares, follows_gained, note`
+const metricCols = `id, work_id, captured_at, reads, likes, wows, favorites, comments, shares, follows_gained, note, source, day_offset, external_id`
+
+func metricDest(m *Metric) []any {
+	return []any{&m.ID, &m.WorkID, &m.CapturedAt, &m.Reads, &m.Likes, &m.Wows, &m.Favorites, &m.Comments, &m.Shares, &m.FollowsGained, &m.Note, &m.Source, &m.DayOffset, &m.ExternalID}
+}
 
 func scanMetric(row interface{ Scan(...any) error }) (Metric, error) {
 	var m Metric
-	err := row.Scan(&m.ID, &m.WorkID, &m.CapturedAt, &m.Reads, &m.Likes, &m.Wows, &m.Favorites, &m.Comments, &m.Shares, &m.FollowsGained, &m.Note)
+	err := row.Scan(metricDest(&m)...)
 	return m, err
 }
 
@@ -142,12 +149,16 @@ func (s *Server) createMetric(w http.ResponseWriter, r *http.Request) error {
 	if in.CapturedAt != nil {
 		at = *in.CapturedAt
 	}
-	x, err := scanMetric(s.db.QueryRow(r.Context(), `INSERT INTO metric_snapshot (work_id, captured_at, reads, likes, wows, favorites, comments, shares, follows_gained, note)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+metricCols, m.ID, at, in.Reads, in.Likes, in.Wows, in.Favorites, in.Comments, in.Shares, in.FollowsGained, strings.TrimSpace(in.Note)))
+	x, merged, err := upsertMetric(r.Context(), s.db, metricWrite{WorkID: m.ID, CapturedAt: at, Source: "manual",
+		Reads: in.Reads, Likes: in.Likes, Wows: in.Wows, Favorites: in.Favorites, Comments: in.Comments, Shares: in.Shares,
+		FollowsGained: in.FollowsGained, Note: strings.TrimSpace(in.Note)})
 	if err != nil {
 		return err
 	}
-	return ok(w, x)
+	return ok(w, struct {
+		Metric
+		Merged bool `json:"merged"`
+	}{x, merged})
 }
 
 func (s *Server) metricOwned(r *http.Request) (uuid.UUID, error) {
@@ -179,6 +190,9 @@ func (s *Server) updateMetric(w http.ResponseWriter, r *http.Request) error {
 	}
 	x, err := scanMetric(s.db.QueryRow(r.Context(), `UPDATE metric_snapshot SET captured_at=coalesce($2, captured_at), reads=$3, likes=$4, wows=$5, favorites=$6,
 		comments=$7, shares=$8, follows_gained=$9, note=$10 WHERE id=$1 RETURNING `+metricCols, id, in.CapturedAt, in.Reads, in.Likes, in.Wows, in.Favorites, in.Comments, in.Shares, in.FollowsGained, strings.TrimSpace(in.Note)))
+	if isUniqueViolation(err) {
+		return validation("这篇作品在该发布天数已经有一条同来源的数据，请直接编辑那一条")
+	}
 	if err != nil {
 		return err
 	}

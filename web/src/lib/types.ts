@@ -369,7 +369,12 @@ export interface Metric {
   shares: number | null
   follows_gained: number | null
   note: string
+  source: MetricSource
+  day_offset: number | null
+  external_id: string | null
 }
+
+export type MetricSource = 'manual' | 'paste' | 'file' | 'wechat_api' | 'screenshot'
 
 export interface BoardRow {
   id: string

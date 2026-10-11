@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"ops/internal/wechat"
 )
@@ -85,14 +84,9 @@ func (s *Server) syncWechatMetrics(w http.ResponseWriter, r *http.Request) error
 			continue
 		}
 		captured, _ := time.ParseInLocation("2006-01-02", day, s.loc)
-		err := s.withTx(ctx, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `INSERT INTO metric_snapshot (work_id, captured_at, reads, likes, wows, favorites, comments, shares, follows_gained, note)
-				VALUES ($1,$2,$3,0,0,$4,0,$5,0,$6)`,
-				*workID, captured, row.IntPageReadUser, row.AddToFavUser, row.ShareUser,
-				"微信 datacube 同步 "+day)
-			return err
-		})
-		if err != nil {
+		reads, favs, shares := row.IntPageReadUser, row.AddToFavUser, row.ShareUser
+		if _, _, err := upsertMetric(ctx, s.db, metricWrite{WorkID: *workID, CapturedAt: captured, Source: "wechat_api",
+			Reads: &reads, Favorites: &favs, Shares: &shares, Note: "微信 datacube 同步 " + day}); err != nil {
 			return err
 		}
 		imported++

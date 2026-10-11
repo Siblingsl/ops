@@ -11,8 +11,14 @@ import { del, errorMessage, get, patch, post, rawRequest } from '@/lib/api'
 import { waitJob } from '@/lib/v3'
 import { describeRefs, fmtNum, fmtTime, toLocalInput } from '@/lib/format'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
-import type { BoardRow, Metric, Platform, ReviewReport } from '@/lib/types'
+import type { BoardRow, Metric, MetricSource, Platform, ReviewReport } from '@/lib/types'
 import { AttributionCard, DigestsCard, TopWorksCard } from './review-insights'
+
+const metricSourceLabel: Record<MetricSource, string> = {
+  manual: '手动录入', paste: '粘贴回填', file: '表格导入', wechat_api: '公众号接口', screenshot: '截图识别',
+}
+
+const nodeLabel = (m: Pick<Metric, 'day_offset'>) => (m.day_offset == null ? '发布时间未知' : `发布后第 ${m.day_offset} 天`)
 
 type ImportPreviewRow = {
   title: string; work_id: string | null; matched: boolean; match_type?: 'exact' | 'fuzzy' | 'none'; similarity?: number
@@ -28,10 +34,12 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
   const [pasteOpen, setPasteOpen] = useState(false)
   const [pasteText, setPasteText] = useState('')
   const [rows, setRows] = useState<ImportPreviewRow[]>([])
+  const [source, setSource] = useState<'paste' | 'file'>('paste')
   const [busy, setBusy] = useState(false)
   const input = useRef<HTMLInputElement>(null)
-  const applyPreview = (preview: ImportPreviewRow[]) => {
+  const applyPreview = (preview: ImportPreviewRow[], from: 'paste' | 'file') => {
     setRows((preview ?? []).map((r) => ({ ...r, work_id: r.work_id ?? null })))
+    setSource(from)
     setOpen(true)
   }
   const upload = async (file: File) => {
@@ -41,7 +49,7 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
       fd.append('file', file)
       const res = await rawRequest('POST', `/accounts/${accountId}/metrics/import`, fd)
       const data = await res.json() as { preview: ImportPreviewRow[] }
-      applyPreview(data.preview ?? [])
+      applyPreview(data.preview ?? [], 'file')
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
@@ -54,7 +62,7 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
     setBusy(true)
     try {
       const data = await post<{ preview: ImportPreviewRow[] }>(`/accounts/${accountId}/metrics/import`, { text: pasteText })
-      applyPreview(data.preview ?? [])
+      applyPreview(data.preview ?? [], 'paste')
       setPasteOpen(false)
       setPasteText('')
     } catch (e) {
@@ -74,7 +82,7 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
     }
     setBusy(true)
     try {
-      const r = await post<{ imported: number }>(`/accounts/${accountId}/metrics/import`, { rows: payload })
+      const r = await post<{ imported: number }>(`/accounts/${accountId}/metrics/import`, { source, rows: payload })
       toast.success(`已导入 ${r.imported} 行`)
       setOpen(false)
       onDone()
@@ -162,9 +170,13 @@ function MetricForm({ workId, platform, editing, prefill, onDone, onNext }: {
     for (const f of metricFields[platform]) body[f.key] = vals[f.key] === '' ? null : Number(vals[f.key])
     setBusy(true)
     try {
-      if (editing) await patch(`/metrics/${editing.id}`, body)
-      else await post(`/works/${workId}/metrics`, body)
-      toast.success('数据已保存')
+      if (editing) {
+        await patch(`/metrics/${editing.id}`, body)
+        toast.success('数据已保存')
+      } else {
+        const res = await post<Metric & { merged: boolean }>(`/works/${workId}/metrics`, body)
+        toast.success(res.merged ? `已合并到${nodeLabel(res)}的同一条记录` : '数据已保存')
+      }
       if (next && onNext) onNext()
       else onDone()
     } catch (e) {
@@ -175,7 +187,7 @@ function MetricForm({ workId, platform, editing, prefill, onDone, onNext }: {
   }
   return (
     <div className="space-y-4 rounded-xl border border-mist-200 bg-mist-50/50 p-4">
-      <Field label="数据采集时间" hint="同一篇作品可以录入多次，例如发布后 1 天、7 天"><Input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} /></Field>
+      <Field label="数据采集时间" hint="按发布后第几天记录，例如第 1、3、7 天；同一天再次录入会合并到同一条"><Input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} /></Field>
       {!editing && prefill && <p className="text-[12px] text-mist-500">已预填上次录入的数值，改成平台后台的最新数字即可。</p>}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {metricFields[platform].map((f) => (
@@ -221,7 +233,9 @@ function MetricsDrawer({ row, platform, onClose, onNext }: { row: BoardRow; plat
         {data?.map((m) => (
           <div key={m.id} className="group rounded-lg border border-mist-200 p-3">
             <div className="mb-2 flex items-center gap-2">
-              <span className="text-[13px] font-medium text-mist-700">{fmtTime(m.captured_at)}</span>
+              <span className="text-[13px] font-medium text-mist-700">{nodeLabel(m)}</span>
+              <span className="text-xs text-mist-400">{fmtTime(m.captured_at)}</span>
+              <Badge>{metricSourceLabel[m.source] ?? m.source}</Badge>
               <div className="ml-auto flex opacity-0 transition group-hover:opacity-100">
                 <IconButton label="编辑" onClick={() => setForm({ editing: m })}><Pencil className="size-3.5" /></IconButton>
                 <IconButton label="删除" className="hover:text-danger" onClick={() => remove(m)}><Trash2 className="size-3.5" /></IconButton>
@@ -229,7 +243,7 @@ function MetricsDrawer({ row, platform, onClose, onNext }: { row: BoardRow; plat
             </div>
             <div className="grid grid-cols-3 gap-2 text-[13px]">
               {metricFields[platform].map((f) => (
-                <div key={f.key}><span className="text-mist-400">{f.label} </span><span className="font-semibold tabular-nums text-mist-800">{fmtNum(m[f.key])}</span></div>
+                <div key={f.key}><span className="text-mist-400">{f.label} </span><span className="font-semibold tabular-nums text-mist-800">{num(m[f.key])}</span></div>
               ))}
             </div>
             {m.note && <p className="mt-2 text-xs text-mist-500">{m.note}</p>}

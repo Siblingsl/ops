@@ -769,6 +769,7 @@ func (s *Server) markPublished(w http.ResponseWriter, r *http.Request) error {
 		m.ID, url, at); err != nil {
 		return err
 	}
+	s.recomputeMetricOffsets(r.Context(), m.ID)
 	s.audit(r.Context(), "mark_published", "work", m.ID.String(), "ok", map[string]any{"url": url})
 	return s.writeWork(w, r, m.ID)
 }

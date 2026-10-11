@@ -210,8 +210,9 @@ func (s *Server) importMetrics(w http.ResponseWriter, r *http.Request) error {
 	}
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		var in struct {
-			Text string `json:"text"`
-			Rows []struct {
+			Text   string `json:"text"`
+			Source string `json:"source"` // paste | file
+			Rows   []struct {
 				Title         string `json:"title"`
 				WorkID        string `json:"work_id"`
 				Reads         *int   `json:"reads"`
@@ -230,6 +231,10 @@ func (s *Server) importMetrics(w http.ResponseWriter, r *http.Request) error {
 			return ok(w, map[string]any{"preview": s.parseMetricText(r.Context(), a.ID, in.Text),
 				"message": "请人工确认匹配后，以 JSON 提交 rows 完成导入"})
 		}
+		source := "paste"
+		if in.Source == "file" {
+			source = "file"
+		}
 		n := 0
 		err = s.withTx(r.Context(), func(tx pgx.Tx) error {
 			for i, row := range in.Rows {
@@ -241,8 +246,9 @@ func (s *Server) importMetrics(w http.ResponseWriter, r *http.Request) error {
 				if err := tx.QueryRow(r.Context(), `SELECT id FROM work WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL`, id, a.ID).Scan(&okID); err != nil {
 					return validation(fmt.Sprintf("第 %d 行的作品不存在或不属于当前账号", i+1))
 				}
-				if _, err := tx.Exec(r.Context(), `INSERT INTO metric_snapshot (work_id, captured_at, reads, likes, wows, favorites, comments, shares, follows_gained)
-					VALUES ($1, now(), $2,$3,$4,$5,$6,$7,$8)`, okID, row.Reads, row.Likes, row.Wows, row.Favorites, row.Comments, row.Shares, row.FollowsGained); err != nil {
+				if _, _, err := upsertMetric(r.Context(), tx, metricWrite{WorkID: okID, CapturedAt: s.now(), Source: source,
+					Reads: row.Reads, Likes: row.Likes, Wows: row.Wows, Favorites: row.Favorites, Comments: row.Comments,
+					Shares: row.Shares, FollowsGained: row.FollowsGained}); err != nil {
 					return err
 				}
 				n++
