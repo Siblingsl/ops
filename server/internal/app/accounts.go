@@ -1,8 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -364,6 +368,70 @@ func (s *Server) saveWechatCredential(w http.ResponseWriter, r *http.Request) er
 		return err
 	}
 	return ok(w, a)
+}
+
+// wechatLinkCheck probes the publish chain up to material upload (DEV-U102, 12 文档):
+// access_token 获取 → add_material 上传一张测试图。不写草稿、不发表、不产生 push_record。
+func (s *Server) wechatLinkCheck(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireOwner(r.Context()); err != nil {
+		return err
+	}
+	a, err := s.accountFromPath(r)
+	if err != nil {
+		return err
+	}
+	if a.Platform != "wechat_mp" {
+		return validation("只有公众号需要做发布链路预检")
+	}
+	ctx := r.Context()
+	var appID string
+	var enc []byte
+	if err := s.db.QueryRow(ctx, `SELECT app_id, app_secret_enc FROM wechat_credential WHERE account_id=$1`, a.ID).Scan(&appID, &enc); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return validation("请先填写 AppID 和 AppSecret")
+		}
+		return err
+	}
+	start := time.Now()
+	fail := func(perr error) error {
+		msg := perr.Error()
+		var we *wechat.Error
+		if errors.As(perr, &we) {
+			msg = we.Readable()
+			if we.Code == 40164 {
+				msg += "（需要添加的 IP：" + s.egressHint() + "）"
+			}
+		}
+		return ok(w, map[string]any{"ok": false, "message": msg, "latency_ms": time.Since(start).Milliseconds()})
+	}
+	secret, err := s.box.Decrypt(enc)
+	if err != nil {
+		return fail(err)
+	}
+	tok, err := s.wx.GetToken(ctx, appID, secret)
+	if err != nil {
+		return fail(err)
+	}
+	mediaID, _, err := s.wx.AddImageMaterial(ctx, tok.AccessToken, "link-check.png", selfCheckPNG())
+	if err != nil {
+		return fail(err)
+	}
+	s.audit(ctx, "wechat_link_check", "platform_account", a.ID.String(), "ok", nil)
+	return ok(w, map[string]any{"ok": true, "media_id": mediaID, "latency_ms": time.Since(start).Milliseconds(),
+		"message": "链路正常：已获取 access_token 并上传测试素材。没有写入草稿；这张自检图可在公众号后台素材库删除。"})
+}
+
+// selfCheckPNG renders a tiny PNG for the link check upload.
+func selfCheckPNG() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			img.Set(x, y, color.RGBA{70, 130, 180, 255})
+		}
+	}
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
 }
 
 func (s *Server) egressHint() string {

@@ -132,7 +132,7 @@ export function CredentialPanel({ account, onChanged }: { account: Account; onCh
   const c = account.credential
   const [appId, setAppId] = useState(c?.app_id ?? '')
   const [secret, setSecret] = useState('')
-  const [busy, setBusy] = useState<'save' | 'test' | null>(null)
+  const [busy, setBusy] = useState<'save' | 'test' | 'link' | null>(null)
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
   const save = async () => {
     setBusy('save')
@@ -161,6 +161,20 @@ export function CredentialPanel({ account, onChanged }: { account: Account; onCh
       setBusy(null)
     }
   }
+  // DEV-U102（12 文档）：发布链路预检——上传一张测试素材验证完整链路，不写草稿。
+  const linkCheck = async () => {
+    setBusy('link')
+    try {
+      const r = await post<{ ok: boolean; message: string }>(`/accounts/${account.id}/wechat/link-check`)
+      setResult(r)
+      onChanged?.()
+    } catch (e) {
+      setResult({ ok: false, message: errorMessage(e) })
+      onChanged?.()
+    } finally {
+      setBusy(null)
+    }
+  }
   const tone = credTone(c)
   return (
     <div className="space-y-4">
@@ -180,6 +194,9 @@ export function CredentialPanel({ account, onChanged }: { account: Account; onCh
       <div className="flex items-center gap-2">
         <Button variant="primary" onClick={save} loading={busy === 'save'} disabled={!appId.trim() || !secret.trim()} icon={<ShieldCheck className="size-4" />}>保存并检测</Button>
         {c && c.state !== 'not_configured' && <Button onClick={test} loading={busy === 'test'}>重新检测</Button>}
+        {c && c.state !== 'not_configured' && (
+          <Button onClick={linkCheck} loading={busy === 'link'} title="上传一张测试素材，验证 access_token 到素材上传的完整链路（不写草稿）">链路预检</Button>
+        )}
       </div>
       {(result || c?.last_result) && (
         <Notice tone={(result?.ok ?? c?.state === 'ok') ? 'ink' : 'red'} icon={(result?.ok ?? c?.state === 'ok') ? <CheckCircle2 className="size-4" /> : <CircleAlert className="size-4" />}>

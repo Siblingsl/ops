@@ -182,6 +182,7 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/topics/{id}", s.h(s.deleteTopic))
 			r.Post("/topics/{id}/works", s.h(s.startWorkFromTopic))
 
+			r.Post("/accounts/{accountId}/wechat/link-check", s.h(s.wechatLinkCheck))
 			r.Get("/accounts/{accountId}/works", s.h(s.listWorks))
 			r.Post("/accounts/{accountId}/works", s.h(s.createWork))
 			r.Get("/works/{id}", s.h(s.getWork))
