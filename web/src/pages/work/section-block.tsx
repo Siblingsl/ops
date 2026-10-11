@@ -591,8 +591,12 @@ export function SectionBlock({
     }
     if (readOnly) return
     if (e.type === 'apply') {
-      const sel = e.target === 'selection' ? editor.current?.selectedText() || '' : ''
-      setProposal({ original: sel || content.current, text: e.text, mode: sel ? 'selection' : 'whole', callId: e.callId })
+      if (e.target === 'end') {
+        setProposal({ original: '', text: e.text, mode: 'append', callId: e.callId })
+      } else {
+        const sel = e.target === 'selection' ? editor.current?.selectedText() || '' : ''
+        setProposal({ original: sel || content.current, text: e.text, mode: sel ? 'selection' : 'whole', callId: e.callId })
+      }
     } else if (e.type === 'insert') {
       editor.current?.insertAtCursor(e.text)
     } else if (e.type === 'fix-sentence') {

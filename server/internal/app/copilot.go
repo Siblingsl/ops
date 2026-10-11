@@ -14,7 +14,7 @@ import (
 
 const copilotRules = `6. 你是作者的写作副驾驶，只能针对当前段落或选中内容给出分析和修改建议。
 7. 如果作者要求你写整篇文章或一次写多段，回答"请逐段起草"，并给出建议的段落顺序，不输出整篇或多段正文。
-8. 给出可替换的文字时，用「建议改为：」开头单独成段，只给一处。`
+8. 给出可替换的文字时，用「建议改为：」开头单独成段；需要增补内容时，用「建议补充：」开头单独成段。最多三条建议，每条只针对一处，不要混合使用其他标记。`
 
 type CopilotMessage struct {
 	ID           uuid.UUID  `json:"id"`
@@ -169,7 +169,7 @@ func (s *Server) chatCopilot(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"message_id": id, "reply": reply, "suggestion": copilotSuggestion(reply)}, nil
+		return map[string]any{"message_id": id, "reply": reply, "suggestion": copilotSuggestion(reply), "suggestions": copilotSuggestions(reply)}, nil
 	})
 }
 
@@ -187,7 +187,38 @@ func copilotRefusal(reply string) string {
 	return "请逐段起草：副驾驶不输出整篇或多段正文。建议按大纲顺序逐段起草，每段写完后再让我帮你看论证和表达。"
 }
 
-// copilotSuggestion extracts one replaceable passage ("建议改为：…"); applying it always goes through the compare card.
+// copilotSuggestions extracts up to three applyable suggestions (DEV-A104):
+// 「建议改为：」replaces the section (or selection), 「建议补充：」appends at the end.
+// Applying is always per suggestion through the compare card — never batched.
+func copilotSuggestions(reply string) []copilotSuggestionItem {
+	out := []copilotSuggestionItem{}
+	for _, line := range strings.Split(reply, "\n") {
+		line = strings.TrimSpace(line)
+		var kind, prefix string
+		switch {
+		case strings.HasPrefix(line, "建议改为："):
+			kind, prefix = "rewrite", "建议改为："
+		case strings.HasPrefix(line, "建议补充："):
+			kind, prefix = "append", "建议补充："
+		default:
+			continue
+		}
+		text := truncate(strings.TrimSpace(strings.TrimPrefix(line, prefix)), 800)
+		if text == "" {
+			continue
+		}
+		out = append(out, copilotSuggestionItem{Kind: kind, Text: text})
+		if len(out) >= 3 {
+			break
+		}
+	}
+	return out
+}
+
+type copilotSuggestionItem struct {
+	Kind string `json:"kind"` // rewrite | append
+	Text string `json:"text"`
+}
 func copilotSuggestion(reply string) string {
 	i := strings.Index(reply, "建议改为：")
 	if i < 0 {

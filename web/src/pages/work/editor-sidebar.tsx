@@ -172,6 +172,19 @@ function suggestionOf(reply: string): string {
   return rest.trim()
 }
 
+// DEV-A104（13 文档）：副驾驶回复可含多条可执行建议（改写/补充），逐条应用。
+interface CopilotSuggestion { kind: 'rewrite' | 'append'; text: string }
+
+function suggestionsOf(reply: string): CopilotSuggestion[] {
+  const out: CopilotSuggestion[] = []
+  for (const raw of reply.split('\n')) {
+    const line = raw.trim()
+    if (line.startsWith('建议改为：')) out.push({ kind: 'rewrite', text: line.slice(5).trim() })
+    else if (line.startsWith('建议补充：')) out.push({ kind: 'append', text: line.slice(5).trim() })
+  }
+  return out.filter((s) => s.text).slice(0, 3)
+}
+
 function CopilotTab({ work, active, selection }: { work: Work; active: Section | null; selection: string }) {
   const qc = useQueryClient()
   const canWrite = useCanWrite()
@@ -250,15 +263,26 @@ function CopilotTab({ work, active, selection }: { work: Work; active: Section |
 
 function CopilotBubble({ m, active, selection, canApply }: { m: CopilotMessage; active: Section | null; selection: string; canApply: boolean }) {
   if (m.role === 'user') return <div className="ml-6 whitespace-pre-wrap rounded-lg bg-ink-600 px-3 py-2 text-[12.5px] text-white">{m.content}</div>
-  const sug = suggestionOf(m.content)
+  const suggestions = suggestionsOf(m.content)
+  const legacy = suggestions.length === 0 ? (suggestionOf(m.content) ? [{ kind: 'rewrite' as const, text: suggestionOf(m.content) }] : []) : suggestions
   const target = active?.id ?? m.section_id
   return (
     <div className="mr-4 rounded-lg bg-mist-100 px-3 py-2">
       <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-mist-700">{m.content}</p>
-      {sug && canApply && target && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: sug, target: 'section', callId: m.ai_call_id })}>应用到当前段</Button>
-          {selection && <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: sug, target: 'selection', callId: m.ai_call_id })}>应用到选中处</Button>}
+      {canApply && target && legacy.length > 0 && (
+        <div className="mt-2 space-y-1.5">
+          {legacy.map((s, i) => (
+            <div key={i} className="flex flex-wrap items-center gap-1.5 rounded border border-mist-200 bg-white px-2 py-1.5">
+              <Badge tone="ink">{s.kind === 'rewrite' ? '改写建议' : '补充建议'}</Badge>
+              <span className="min-w-0 flex-1 truncate text-[12px] text-mist-600" title={s.text}>{s.text}</span>
+              {s.kind === 'rewrite' && <>
+                <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: s.text, target: 'section', callId: m.ai_call_id })}>应用到当前段</Button>
+                {selection && <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: s.text, target: 'selection', callId: m.ai_call_id })}>应用到选中处</Button>}
+              </>}
+              {s.kind === 'append' && <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: s.text, target: 'end', callId: m.ai_call_id })}>补充到段末</Button>}
+            </div>
+          ))}
+          <p className="text-[10.5px] text-mist-400">建议逐条确认应用；应用前会显示改动对比。</p>
         </div>
       )}
       <div className="mt-1 flex items-center text-[10.5px] text-mist-400">{fmtTime(m.created_at)}<AIFeedback callId={m.ai_call_id} className="ml-auto" /></div>
