@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
-import { Button, Card, cn, Notice, PageHeader, PageLoading, StatusBadge } from '@/components/ui'
+import { Button, Card, cn, Notice, PageHeader, PageState, StatusBadge } from '@/components/ui'
 import { del, errorMessage, get, post } from '@/lib/api'
 import { fmtNum, relTime } from '@/lib/format'
 import { useAccounts, useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
@@ -247,7 +247,7 @@ export default function Dashboard() {
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
   const { data: me } = useMe()
-  const { data, isLoading } = useQuery({ queryKey: ['dashboard', acc?.id], queryFn: () => get<Dash>(`/accounts/${acc!.id}/dashboard`), enabled: !!acc })
+  const { data, isLoading, error, failureReason, isFetching, refetch } = useQuery({ queryKey: ['dashboard', acc?.id], queryFn: () => get<Dash>(`/accounts/${acc!.id}/dashboard`), enabled: !!acc })
   const create = useCreateWork(acc?.id)
   const prefetch = usePrefetchWork()
   const daily = useQuery({ queryKey: ['daily', acc?.id], queryFn: () => get<DailyResult>(`/accounts/${acc!.id}/daily`), enabled: !!acc })
@@ -256,7 +256,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (firstTodos) for (const id of firstTodos.split(',')) void prefetch.load(id)
   }, [firstTodos]) // eslint-disable-line react-hooks/exhaustive-deps
-  if (!acc || isLoading || !data) return <PageLoading />
+  if (!acc || isLoading || !data) return <PageState loading={!acc || isLoading} error={error ?? failureReason} retrying={isFetching} onRetry={() => void refetch()} emptyTitle="暂无工作台数据" />
   const s = data.setup
   const setupItems = [
     { done: s.ai, label: '配置模型', desc: 'AI 功能需要至少一个模型', to: '/settings/models', icon: <Cpu className="size-4" /> },

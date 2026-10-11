@@ -32,6 +32,91 @@ test('OPT04 流式起草排队提示在执行后清除', async ({ page }) => {
   await expect(page.getByText('排队中', { exact: true })).toBeHidden({ timeout: 5_000 })
 })
 
+test('OPT13 工作台加载、首次失败一秒内提示、空态与手动重试恢复', async ({ page }) => {
+  const account = await registerAccount(page)
+  let mode: 'loading' | 'error' | 'empty' | 'ready' = 'loading'
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const endpoint = `/api/v1/accounts/${account.id}/dashboard`
+  await page.route((url) => url.pathname === endpoint, async (route) => {
+    await gate
+    if (mode === 'error') return route.fulfill({ status: 500, json: { error: { code: 'internal', message: '模拟工作台加载失败，请重试' } } })
+    if (mode === 'empty') return route.fulfill({ status: 200, json: null })
+    return route.continue()
+  })
+  const first = page.waitForResponse((r) => new URL(r.url()).pathname === endpoint)
+  await page.goto(`/a/${account.id}`)
+  const main = page.locator('main')
+  await expect(main.getByLabel('加载中', { exact: true })).toBeVisible()
+  mode = 'error'
+  release()
+  expect((await first).status()).toBe(500)
+  const failedAt = Date.now()
+  const alert = main.getByRole('alert')
+  await expect(alert.getByText('模拟工作台加载失败，请重试')).toBeVisible({ timeout: 1_000 })
+  await expect(alert.getByRole('button', { name: '重试', exact: true })).toBeVisible({ timeout: 1_000 })
+  const elapsed = Date.now() - failedAt
+  expect(elapsed).toBeLessThanOrEqual(1_000)
+  test.info().annotations.push({ type: 'OPT13 响应到错误与重试入口', description: `${elapsed}ms` })
+  console.log(`OPT13 工作台错误与重试入口 ${elapsed}ms`)
+  await expect(main.getByLabel('加载中', { exact: true })).toBeHidden()
+  await expect(alert.getByText('正在重试…')).toBeVisible()
+  await expect(alert.getByRole('button', { name: '重试', exact: true })).toBeDisabled()
+  await expect(alert.getByRole('button', { name: '重试', exact: true })).toBeEnabled({ timeout: 6_000 })
+  mode = 'empty'
+  await alert.getByRole('button', { name: '重试', exact: true }).click()
+  await expect(main.getByText('暂无工作台数据', { exact: true })).toBeVisible()
+  await expect(alert).toBeHidden()
+  mode = 'ready'
+  await main.getByRole('button', { name: '重试', exact: true }).click()
+  await expect(main.getByRole('heading', { name: /今天写点什么/ })).toBeVisible()
+  await expect(main.getByText('暂无工作台数据', { exact: true })).toBeHidden()
+})
+
+test('OPT13 同类页面首次失败及时提示且重试恢复', async ({ page }) => {
+  const account = await registerAccount(page)
+  const wechat = await api(page, 'POST', '/accounts', { platform: 'wechat_mp', name: '错误恢复验收公众号', content_format: 'long_article' })
+  const work = await api(page, 'POST', `/accounts/${wechat.id}/works`, { title: '只验证预览，不执行写入' })
+  const cases = [
+    { name: '账号档案', path: `/a/${account.id}/profile`, endpoint: `/api/v1/accounts/${account.id}/profile`, ready: '账号健康度' },
+    { name: 'AI 用量', path: '/settings/usage', endpoint: '/api/v1/usage', ready: '区间合计' },
+    { name: '质量看板', path: '/settings/quality', endpoint: '/api/v1/quality', ready: '各任务效果' },
+    { name: '推送预览', path: `/works/${work.id}/push`, endpoint: `/api/v1/works/${work.id}/wechat/push-preview`, ready: '去检查' },
+  ]
+  for (const item of cases) {
+    await test.step(item.name, async () => {
+      let failing = true
+      const match = (url: URL) => url.pathname === item.endpoint
+      await page.route(match, (route) => failing
+        ? route.fulfill({ status: 500, json: { error: { code: 'internal', message: `模拟${item.name}加载失败` } } })
+        : route.continue())
+      const first = page.waitForResponse((r) => new URL(r.url()).pathname === item.endpoint).then((response) => ({ response, at: Date.now() }))
+      await page.goto(item.path, { waitUntil: 'domcontentloaded' })
+      const failed = await first
+      expect(failed.response.status()).toBe(500)
+      const failedAt = failed.at
+      const main = page.locator('main')
+      const alert = main.getByRole('alert')
+      await expect(alert.getByText(`模拟${item.name}加载失败`)).toBeVisible({ timeout: 1_000 })
+      await expect(alert.getByRole('button', { name: '重试', exact: true })).toBeVisible({ timeout: 1_000 })
+      const elapsed = Date.now() - failedAt
+      expect(elapsed).toBeLessThanOrEqual(1_000)
+      console.log(`OPT13 ${item.name}错误与重试入口 ${elapsed}ms`)
+      await expect(alert.getByRole('button', { name: '重试', exact: true })).toBeEnabled({ timeout: 6_000 })
+      failing = false
+      await alert.getByRole('button', { name: '重试', exact: true }).click()
+      await expect(alert).toBeHidden()
+      await expect(main.getByText(item.ready, { exact: true }).first()).toBeVisible()
+      if (item.name === '推送预览') {
+        await expect(main.getByText('H-04', { exact: true }).locator('..')).toContainText('发布前检查还没有全部确认，不能写入草稿。')
+        await expect(main.getByRole('button', { name: '写入草稿箱', exact: true })).toHaveCount(0)
+        await expect(main.getByRole('link', { name: '去检查', exact: true })).toHaveAttribute('href', `/works/${work.id}/check`)
+      }
+      await page.unroute(match)
+    })
+  }
+})
+
 async function api(page: Page, method: string, path: string, data?: unknown) {
   const me = await (await page.request.get('/api/v1/auth/me')).json()
   const response = await page.request.fetch('/api/v1' + path, { method, data, headers: { 'X-CSRF-Token': me.csrf_token } })

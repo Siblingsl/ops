@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { Loader2 } from 'lucide-react'
 import React, { forwardRef } from 'react'
 import type { ContentFormat, Platform, WorkStatus } from '@/lib/types'
+import { errorMessage } from '@/lib/api'
 
 export const cn = clsx
 
@@ -314,6 +315,22 @@ export function Empty({ icon, title, desc, action, className }: { icon?: React.R
       {action && <div className="mt-5">{action}</div>}
     </div>
   )
+}
+
+export function PageState({ loading, error, retrying, onRetry, emptyTitle = '暂无数据' }: {
+  loading: boolean
+  error?: unknown
+  retrying?: boolean
+  onRetry: () => void
+  emptyTitle?: string
+}) {
+  const action = <div className="space-y-2">
+    <Button loading={retrying} onClick={onRetry}>重试</Button>
+    {retrying && <p className="text-xs text-mist-500">正在重试…</p>}
+  </div>
+  if (error) return <div role="alert"><Empty title="加载失败" desc={errorMessage(error)} action={action} /></div>
+  if (loading) return <PageLoading />
+  return <Empty title={emptyTitle} action={action} />
 }
 
 export function Switch({ checked, onChange, disabled, label }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; label?: string }) {

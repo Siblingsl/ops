@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { BackfillForm, PostPushTodos } from '@/components/backfill'
 import { CropPreview } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
-import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, PageLoading, Switch } from '@/components/ui'
+import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, PageState, Switch } from '@/components/ui'
 import { ApiError, errorMessage, get, post, stream } from '@/lib/api'
 import { runeLen } from '@/lib/format'
 import { useCanWrite } from '@/lib/session'
@@ -63,7 +63,7 @@ export default function Push() {
   const [result, setResult] = useState<{ action: string; backend_url: string; today_count: number } | null>(null)
   const [todos, setTodos] = useState<boolean[]>(backendTodos.map(() => false))
 
-  if (pv.isLoading || !pv.data) return <PageLoading />
+  if (pv.isLoading || !pv.data) return <PageState loading={pv.isLoading} error={pv.error ?? pv.failureReason} retrying={pv.isFetching} onRetry={() => void pv.refetch()} emptyTitle="暂无推送预览数据" />
   const p = pv.data
   const f = fields ?? p.fields
   const setF = (patch: Partial<WechatDefaults>) => setFields({ ...f, ...patch })

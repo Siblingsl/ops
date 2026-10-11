@@ -3,7 +3,7 @@ import { ClipboardList, FlaskConical, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Badge, Button, Card, CardHeader, cn, Empty, Field, PageHeader, PageLoading, Select, Tabs, Textarea } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, cn, Empty, Field, PageHeader, PageState, Select, Tabs, Textarea } from '@/components/ui'
 import { confirm } from '@/components/dialog'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
@@ -147,9 +147,9 @@ export function QualityBoard() {
   const [days, setDays] = useState('30')
   const [drill, setDrill] = useState<string | null>(null)
   const [trendTask, setTrendTask] = useState('')
-  const { data, isLoading } = useQuery({ queryKey: ['quality', days, trendTask], queryFn: () => get<Board>(`/quality?days=${days}&task_type=${trendTask}`), placeholderData: (prev) => prev })
+  const { data, isLoading, error, failureReason, isFetching, refetch } = useQuery({ queryKey: ['quality', days, trendTask], queryFn: () => get<Board>(`/quality?days=${days}&task_type=${trendTask}`), placeholderData: (prev) => prev })
   const calls = useQuery({ queryKey: ['quality-calls', drill], queryFn: () => get<CallRow[]>(`/quality/calls?task_type=${drill}`), enabled: !!drill })
-  if (isLoading || !data) return <PageLoading />
+  if (isLoading || !data) return <PageState loading={isLoading} error={error ?? failureReason} retrying={isFetching} onRetry={() => void refetch()} emptyTitle="暂无质量数据" />
   const maxCalls = Math.max(1, ...data.trend.map((t) => t.calls))
   return (
     <div className="space-y-5">
