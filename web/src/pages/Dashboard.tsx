@@ -2,7 +2,7 @@ import { DailyPanel } from './ops/Daily'
 import HotPanel from './ops/Hot'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, BookOpenCheck, Brain, CalendarDays, CheckCircle2, Circle, ClipboardCheck, Compass, Cpu, FilePen, HeartPulse, KeyRound, Lightbulb, PenLine, Send, Sparkles, TrendingUp, UploadCloud } from 'lucide-react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
@@ -69,6 +69,37 @@ function Stat({ label, value, sub, icon, to }: { label: string; value: React.Rea
     </Card>
   )
   return to ? <Link to={to}>{body}</Link> : body
+}
+
+// DEV-A106（13 文档）：今日智能简报——AI 解读昨日数据与今日重点，每账号每天一条。
+function BriefCard({ accountId }: { accountId: string }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const q = useQuery({
+    queryKey: ['brief', accountId],
+    queryFn: () => get<{ brief: { items: string[] } | null; preparing?: boolean }>(`/accounts/${accountId}/brief`),
+  })
+  const items = q.data?.brief?.items ?? []
+  if (!items.length) return null
+  return (
+    <Card className="p-5">
+      <div className="flex items-center gap-2">
+        <Sparkles className="size-4 text-ink-600" />
+        <h3 className="text-[14px] font-semibold text-mist-900">今日智能简报</h3>
+        <span className="text-[11.5px] text-mist-400">AI 解读，数字来自已录入的数据</span>
+        <button type="button" className="ml-auto cursor-pointer text-[12px] text-mist-400 hover:text-mist-600" onClick={() => setCollapsed(!collapsed)}>
+          {collapsed ? '展开' : '收起'}
+        </button>
+      </div>
+      {!collapsed && (
+        <ul className="mt-2 space-y-1 text-[13px] text-mist-600">
+          {items.map((it, i) => (
+            <li key={i} className="flex gap-1.5"><span className="text-ink-500">·</span><span>{it}</span></li>
+          ))}
+        </ul>
+      )}
+      <Link to={`/a/${accountId}/ops`} className="mt-2 inline-block text-[12px] text-ink-600 hover:underline">去运营页处理今日推荐 →</Link>
+    </Card>
+  )
 }
 
 function NextActions({ accountId }: { accountId: string }) {
@@ -242,6 +273,7 @@ export default function Dashboard() {
         </Link>
       )}
       <DemoCard acc={acc} owner={me?.role === 'owner'} />
+      <BriefCard accountId={acc.id} />
       <NextActions accountId={acc.id} />
  <div className="mb-6 grid gap-5 xl:grid-cols-2"><DailyPanel key={`daily-${acc.id}`} accountId={acc.id} compact/><HotPanel key={`hot-${acc.id}`} account={acc} compact/></div>
 

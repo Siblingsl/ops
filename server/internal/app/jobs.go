@@ -57,6 +57,7 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 		s.distillDaily(ctx)
 		s.inboxTriageDaily(ctx)
 		s.weeklyDigestJob(ctx)
+		s.dailyBriefJob(ctx)
 	}
 	_, _ = s.db.Exec(ctx, `DELETE FROM job_marker WHERE created_at < now() - interval '60 days'`)
 	_, _ = s.db.Exec(ctx, `DELETE FROM ux_event WHERE created_at < now() - interval '180 days'`)

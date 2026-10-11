@@ -320,6 +320,7 @@ func (s *Server) v3Routes(r chi.Router) {
 	// 冷启动与工作台
 	r.Post("/accounts/{accountId}/profile/bootstrap", s.h(s.profileBootstrap))
 	r.Get("/accounts/{accountId}/health", s.h(s.accountHealth))
+			r.Get("/accounts/{accountId}/brief", s.h(s.getBrief))
 	r.Get("/accounts/{accountId}/next-actions", s.h(s.getNextActions))
 	r.Get("/accounts/{accountId}/rhythm", s.h(s.accountRhythm))
 	r.Get("/calendar", s.h(s.calendar))
