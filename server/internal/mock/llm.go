@@ -24,9 +24,38 @@ type chatReq struct {
 	Model    string `json:"model"`
 	Stream   bool   `json:"stream"`
 	Messages []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
+}
+
+// content reads a plain string or OpenAI multimodal parts, returning the text and the image count.
+func content(raw json.RawMessage) (string, int) {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s, 0
+	}
+	var parts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+	_ = json.Unmarshal(raw, &parts)
+	var b strings.Builder
+	n := 0
+	for _, p := range parts {
+		switch p.Type {
+		case "text":
+			b.WriteString(p.Text)
+		case "image_url":
+			if strings.HasPrefix(p.ImageURL.URL, "data:image/") {
+				n++
+			}
+		}
+	}
+	return b.String(), n
 }
 
 func (l *LLM) Handler() http.Handler {
@@ -86,14 +115,26 @@ func (l *LLM) Handler() http.Handler {
 			return
 		}
 		var sys, user string
+		images := 0
 		for _, m := range req.Messages {
+			text, n := content(m.Content)
 			if m.Role == "system" {
-				sys += m.Content
+				sys += text
 			} else if m.Role == "user" {
-				user = m.Content
+				user, images = text, n
 			}
 		}
-		reply := l.respond(user)
+		var reply string
+		if strings.Contains(user, "任务：metric_screenshot") {
+			if images == 0 {
+				w.WriteHeader(400)
+				_, _ = w.Write([]byte(`{"error":{"message":"this task needs image input"}}`))
+				return
+			}
+			reply = l.metricScreenshot(user, images)
+		} else {
+			reply = l.respond(user)
+		}
 		promptTokens := utf8.RuneCountInString(sys+user) * 2 / 3
 		completionTokens := utf8.RuneCountInString(reply) * 2 / 3
 		usage := map[string]int{"prompt_tokens": promptTokens, "completion_tokens": completionTokens, "total_tokens": promptTokens + completionTokens}
@@ -698,4 +739,31 @@ func (l *LLM) respond(prompt string) string {
 	default:
 		return "好的。"
 	}
+}
+
+var shotWorkRe = regexp.MustCompile(`(?m)^- 《(.+?)》`)
+
+// metricScreenshot fakes a vision model: one row per image, titled after the listed works in order.
+// The comments value never appears in raw_text, so the server must drop it as invented.
+func (l *LLM) metricScreenshot(prompt string, images int) string {
+	var titles []string
+	for _, m := range shotWorkRe.FindAllStringSubmatch(prompt, -1) {
+		titles = append(titles, m[1])
+	}
+	reads := []string{"1.2万", "3,456", "10万+"}
+	var rows []map[string]any
+	for i := range images {
+		title := ""
+		if len(titles) > 0 {
+			title = titles[i%len(titles)]
+		}
+		r := reads[i%len(reads)]
+		likes := strconv.Itoa(36 + i)
+		rows = append(rows, map[string]any{
+			"title": title, "published_at": "", "day_hint": "截至今日",
+			"metrics":  map[string]any{"reads": r, "likes": likes, "favorites": 8, "comments": "999"},
+			"raw_text": fmt.Sprintf("%s 阅读 %s 点赞 %s 收藏 8", title, r, likes),
+		})
+	}
+	return js(map[string]any{"rows": rows})
 }

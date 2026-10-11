@@ -17,6 +17,22 @@ import (
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Images are data URLs; when set the message is sent as OpenAI multimodal content parts.
+	Images []string `json:"-"`
+}
+
+func (m Message) MarshalJSON() ([]byte, error) {
+	if len(m.Images) == 0 {
+		return json.Marshal(struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}{m.Role, m.Content})
+	}
+	parts := []map[string]any{{"type": "text", "text": m.Content}}
+	for _, u := range m.Images {
+		parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]string{"url": u}})
+	}
+	return json.Marshal(map[string]any{"role": m.Role, "content": parts})
 }
 
 type Usage struct {

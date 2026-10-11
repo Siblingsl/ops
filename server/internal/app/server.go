@@ -189,6 +189,8 @@ func (s *Server) Router() http.Handler {
 			r.Get("/accounts/{accountId}/metrics/unmatched", s.h(s.listUnmatchedMetrics))
 			r.Post("/metrics/unmatched/{id}/assign", s.h(s.assignUnmatchedMetric))
 			r.Post("/metrics/unmatched/{id}/ignore", s.h(s.ignoreUnmatchedMetric))
+			r.Post("/accounts/{accountId}/metrics/screenshots", s.h(s.recognizeMetricScreenshots))
+			r.Post("/metrics/screenshots/{id}/rows/{idx}/confirm", s.h(s.confirmMetricScreenshotRow))
 
 			r.Get("/accounts/{accountId}/topics", s.h(s.listTopics))
 			r.Post("/accounts/{accountId}/topics", s.h(s.createTopic))

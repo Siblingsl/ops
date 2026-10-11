@@ -47,6 +47,7 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	}
 	s.purgeDeletedSections(ctx)
 	s.metricRemindersJob(ctx)
+	s.purgeMetricUploads(ctx)
 	s.reindexEmbeddings(ctx)
 	s.purgeHot(ctx)
 	s.collectReferences(ctx)

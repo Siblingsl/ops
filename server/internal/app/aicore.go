@@ -49,6 +49,10 @@ type aiTask struct {
 	Neighbors   string
 	Instruction string
 	Tier        string
+	// Images are data URLs sent with the user message (the route must point at a vision model).
+	Images []string
+	// Bare keeps the account on ai_call but leaves profile, strategy, memories and style out of the prompt.
+	Bare bool
 }
 
 type aiResult struct {
@@ -193,7 +197,7 @@ func (s *Server) callModel(ctx context.Context, rt *route, p *ContextPack, jsonM
 	defer timer.Stop()
 	text, usage, err := ai.Stream(actx, s.aiHTTP, ai.Request{
 		BaseURL: rt.BaseURL, APIKey: rt.APIKey, Model: rt.Model, JSON: jsonMode,
-		Messages: []ai.Message{{Role: "system", Content: p.System}, {Role: "user", Content: p.User}},
+		Messages: []ai.Message{{Role: "system", Content: p.System}, {Role: "user", Content: p.User, Images: p.Images}},
 	}, func(d string) {
 		got.Store(true)
 		*streamed = true

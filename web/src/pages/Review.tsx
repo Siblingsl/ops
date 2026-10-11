@@ -13,6 +13,7 @@ import { describeRefs, fmtNum, fmtTime, toLocalInput } from '@/lib/format'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { BoardRow, Metric, MetricSource, Platform, ReviewReport } from '@/lib/types'
 import { AttributionCard, DigestsCard, TopWorksCard } from './review-insights'
+import { metricFields, type MetricKey, ScreenshotImport } from './review-screenshots'
 
 const metricSourceLabel: Record<MetricSource, string> = {
   manual: '手动录入', paste: '粘贴回填', file: '表格导入', wechat_api: '公众号接口', screenshot: '截图识别',
@@ -151,18 +152,6 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
   )
 }
 
-type MetricKey = 'reads' | 'likes' | 'wows' | 'favorites' | 'comments' | 'shares' | 'follows_gained'
-const metricFields: Record<Platform, { key: MetricKey; label: string }[]> = {
-  wechat_mp: [
-    { key: 'reads', label: '阅读' }, { key: 'likes', label: '点赞' }, { key: 'wows', label: '在看' },
-    { key: 'shares', label: '分享' }, { key: 'comments', label: '留言' }, { key: 'follows_gained', label: '新增关注' },
-  ],
-  xhs: [
-    { key: 'reads', label: '观看' }, { key: 'likes', label: '点赞' }, { key: 'favorites', label: '收藏' },
-    { key: 'comments', label: '评论' }, { key: 'shares', label: '分享' }, { key: 'follows_gained', label: '涨粉' },
-  ],
-}
-
 const localDay = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000
 
 // 合理性提示（DEV-DR04）：只提醒，不阻止保存。
@@ -264,7 +253,9 @@ function MetricForm({ workId, platform, editing, prefill, publishedAt, history, 
   )
 }
 
-function MetricsDrawer({ row, platform, node, onClose, onNext }: { row: BoardRow; platform: Platform; node?: number; onClose: () => void; onNext?: () => void }) {
+function MetricsDrawer({ row, works, accountId, platform, node, onClose, onNext }: {
+  row: BoardRow; works: BoardRow[]; accountId: string; platform: Platform; node?: number; onClose: () => void; onNext?: () => void
+}) {
   const { data, refetch } = useQuery({ queryKey: ['metrics', row.id], queryFn: () => get<Metric[]>(`/works/${row.id}/metrics`) })
   const [form, setForm] = useState<{ editing: Metric | null } | null>(node || (data && data.length === 0) ? { editing: null } : null)
   const inv = useInvalidate()
@@ -284,6 +275,10 @@ function MetricsDrawer({ row, platform, node, onClose, onNext }: { row: BoardRow
   return (
     <Drawer open onClose={onClose} title={row.title || '未命名'} width="w-[560px]"
       desc={node ? `发布满 ${node} 天 · 快速录入：照着平台数据页填数字，回车跳到下一格` : '照着平台数据页抄录数字；也可以用粘贴回填一次补多篇。'}>
+      <div className="mb-3 flex items-center gap-2 rounded-lg bg-mist-50 px-3 py-2 text-[12.5px] text-mist-500">
+        <span className="flex-1">不想抄数字？上传这篇的数据页截图，识别后核对一下再导入。</span>
+        <ScreenshotImport accountId={accountId} platform={platform} works={works} workId={row.id} label="上传截图识别" onDone={done} />
+      </div>
       {form ? <MetricForm key={`${row.id}-${form.editing?.id ?? 'new'}-${data?.length ?? 0}`} workId={row.id} platform={platform} editing={form.editing} prefill={data?.[data.length - 1] ?? null}
         publishedAt={row.published_at} history={data ?? []} onDone={done}
         onNext={onNext && (() => { inv(['board']); onNext() })} /> : (
@@ -518,6 +513,7 @@ export default function Review() {
                 }
               }}>同步公众号数据</Button>
             )}
+            <ScreenshotImport accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />
             <ImportMetrics accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />
           </>} />
         {rows.length === 0 ? (
@@ -596,7 +592,7 @@ export default function Review() {
           </div>
         </div>
       </div>
-      {openRow && <MetricsDrawer key={openRow.id} row={openRow} platform={acc.platform} node={Number(params.get('node')) || undefined} onClose={() => setParams({}, { replace: true })}
+      {openRow && <MetricsDrawer key={openRow.id} row={openRow} works={rows} accountId={acc.id} platform={acc.platform} node={Number(params.get('node')) || undefined} onClose={() => setParams({}, { replace: true })}
         onNext={nextRow ? () => setParams({ work: nextRow.id }, { replace: true }) : undefined} />}
     </div>
   )

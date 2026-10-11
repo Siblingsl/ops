@@ -342,6 +342,7 @@ var taskTypes = []struct{ Type, Label string }{
 	{"review_attribution", "归因解读"},
 	{"work_breakdown", "作品拆解"},
 	{"weekly_digest", "周报"},
+	{"metric_screenshot", "数据截图识别（需选支持图片输入的模型）"},
 	{"layout_suggest", "排版建议"},
 	{"embedding", "向量检索（embedding）"},
 	{"tier_economy", "经济档（覆盖各任务）"},

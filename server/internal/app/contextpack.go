@@ -48,6 +48,7 @@ type ContextPack struct {
 	Instruction string
 	// UserRest is the user message without the editable task-instruction block (prompt regression snapshots).
 	UserRest string
+	Images   []string
 }
 
 func (p *ContextPack) add(sl Slot) {
@@ -102,7 +103,7 @@ func profileText(a *Account, p *Profile) string {
 
 // buildContext fills the slots in priority order, trimming the trimmable ones to budget.
 func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, error) {
-	p := &ContextPack{Legacy: map[string]any{}}
+	p := &ContextPack{Legacy: map[string]any{}, Images: t.Images}
 	var sys, usr strings.Builder
 
 	rules := systemRules
@@ -112,7 +113,7 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 	sys.WriteString(rules)
 	p.add(Slot{Name: "rules", Chars: runeLen(rules)})
 
-	if t.Account != nil {
+	if t.Account != nil && !t.Bare {
 		prof, err := s.loadProfile(ctx, t.Account.ID)
 		if err != nil {
 			return nil, err
