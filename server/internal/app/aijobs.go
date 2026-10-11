@@ -105,6 +105,27 @@ func (s *Server) workspaceSem(ws uuid.UUID) chan struct{} {
 	return sem
 }
 
+func (s *Server) waitAIWorker(ctx context.Context, queued func()) (func(), error) {
+	sem := s.workspaceSem(ident(ctx).WorkspaceID)
+	release := func() { <-sem }
+	select {
+	case sem <- struct{}{}:
+		return release, nil
+	default:
+	}
+	queued()
+	timer := time.NewTimer(s.aiQueueTimeout)
+	defer timer.Stop()
+	select {
+	case sem <- struct{}{}:
+		return release, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+		return nil, apiErr(503, "ai_queue_timeout", "AI 任务排队超过 60 秒，请稍后重试")
+	}
+}
+
 func (s *Server) runningSectionJob(ctx context.Context, sectionID uuid.UUID) (uuid.UUID, bool) {
 	var id uuid.UUID
 	err := s.db.QueryRow(ctx, `SELECT id FROM ai_job WHERE section_id=$1 AND status IN ('queued','running') AND created_at > now() - interval '10 minutes'

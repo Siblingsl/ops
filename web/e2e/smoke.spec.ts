@@ -1,5 +1,37 @@
 import { test, expect, type Page } from '@playwright/test'
 
+test('OPT04 流式起草排队提示在执行后清除', async ({ page }) => {
+  await registerAccount(page)
+  const id = await createOutline(page)
+  const work = await api(page, 'GET', `/works/${id}`)
+  const section = work.sections[0]
+  await page.evaluate((section) => {
+    const originalFetch = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (!url.endsWith(`/sections/${section.id}/draft`)) return originalFetch(input, init)
+      const encoder = new TextEncoder()
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: stage\ndata: {"stage":"queued"}\n\n'))
+          window.setTimeout(() => {
+            controller.enqueue(encoder.encode('event: stage\ndata: {"stage":"context"}\n\n'))
+            const done = { result: { section: { ...section, content_md: '队列结束后生成的测试正文', revision: section.revision + 1 } }, refs: [], ai_call_id: null }
+            controller.enqueue(encoder.encode(`event: done\ndata: ${JSON.stringify(done)}\n\n`))
+            controller.close()
+            window.fetch = originalFetch
+          }, 2_000)
+        },
+      })
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
+    }
+  }, section)
+  await page.locator(`#sec-${section.id}`).getByRole('button', { name: '起草本段', exact: true }).click()
+  await expect(page.getByText('排队中', { exact: true })).toBeVisible()
+  await expect(page.getByText('当前工作区的 AI 任务正在运行，请稍候', { exact: true })).toBeVisible()
+  await expect(page.getByText('排队中', { exact: true })).toBeHidden({ timeout: 5_000 })
+})
+
 async function api(page: Page, method: string, path: string, data?: unknown) {
   const me = await (await page.request.get('/api/v1/auth/me')).json()
   const response = await page.request.fetch('/api/v1' + path, { method, data, headers: { 'X-CSRF-Token': me.csrf_token } })

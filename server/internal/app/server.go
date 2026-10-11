@@ -34,6 +34,7 @@ type Server struct {
 	aiHTTP *http.Client
 
 	firstTokenTimeout time.Duration
+	aiQueueTimeout    time.Duration
 
 	jobMu      sync.Mutex
 	jobCancels map[uuid.UUID]context.CancelFunc
@@ -72,6 +73,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 		aiHTTP: &http.Client{Timeout: 5 * time.Minute},
 
 		firstTokenTimeout: 15 * time.Second,
+		aiQueueTimeout:    time.Minute,
 		jobCancels:        map[uuid.UUID]context.CancelFunc{},
 		jobSems:           map[uuid.UUID]chan struct{}{},
 		notifySubs:        map[uuid.UUID][]chan struct{}{},

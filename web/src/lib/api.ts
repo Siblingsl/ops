@@ -1,3 +1,5 @@
+import { toast } from 'sonner'
+
 export class ApiError extends Error {
   status: number
   code: string
@@ -100,6 +102,7 @@ export async function stream<T = any>(path: string, body: unknown, h: SSEHandler
   let buf = ''
   let done: T | undefined
   let failure: ApiError | undefined
+  let queuedToast: string | number | undefined
   const handle = (block: string) => {
     let name = 'message'
     let data = ''
@@ -109,24 +112,34 @@ export async function stream<T = any>(path: string, body: unknown, h: SSEHandler
     }
     if (!data) return
     const parsed = JSON.parse(data)
+    if (name === 'stage' && parsed.stage === 'queued') {
+      queuedToast ??= toast.loading('排队中', { description: '当前工作区的 AI 任务正在运行，请稍候', duration: Infinity })
+    } else if (queuedToast !== undefined && (name === 'stage' || name === 'delta')) {
+      toast.dismiss(queuedToast)
+      queuedToast = undefined
+    }
     if (name === 'delta') h.onDelta?.(parsed.text)
     else if (name === 'error') failure = new ApiError(500, parsed.code || 'internal', parsed.message || '生成失败', parsed.detail)
     else if (name === 'done') done = parsed
     h.onEvent?.(name, parsed)
   }
-  for (;;) {
-    const { value, done: end } = await reader.read()
-    if (end) break
-    buf += decoder.decode(value, { stream: true })
-    let idx
-    while ((idx = buf.indexOf('\n\n')) >= 0) {
-      handle(buf.slice(0, idx))
-      buf = buf.slice(idx + 2)
+  try {
+    for (;;) {
+      const { value, done: end } = await reader.read()
+      if (end) break
+      buf += decoder.decode(value, { stream: true })
+      let idx
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        handle(buf.slice(0, idx))
+        buf = buf.slice(idx + 2)
+      }
     }
+    if (buf.trim()) handle(buf)
+    if (failure) throw failure
+    return done as T
+  } finally {
+    if (queuedToast !== undefined) toast.dismiss(queuedToast)
   }
-  if (buf.trim()) handle(buf)
-  if (failure) throw failure
-  return done as T
 }
 
 export function errorMessage(e: unknown): string {

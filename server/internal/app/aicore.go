@@ -340,6 +340,14 @@ func (s *Server) streamAIEphemeral(w http.ResponseWriter, r *http.Request, t aiT
 		return err
 	}
 	sse := newSSE(w)
+	release, err := s.waitAIWorker(ctx, func() {
+		sse.send("stage", map[string]string{"stage": "queued"})
+	})
+	if err != nil {
+		sse.send("error", asAPIError(err))
+		return nil
+	}
+	defer release()
 	sse.send("stage", map[string]string{"stage": "generating"})
 	res, err := s.runAI(ctx, t, func(d string) { sse.send("delta", map[string]string{"text": d}) })
 	if err != nil {
@@ -389,13 +397,12 @@ func (s *Server) streamAIJob(w http.ResponseWriter, r *http.Request, t aiTask, m
 	if t.Account != nil {
 		spec.AccountID = &t.Account.ID
 	}
-	jobID, err := s.createJob(ctx, spec, "running")
+	jobID, err := s.createJob(ctx, spec, "queued")
 	if err != nil {
 		return err
 	}
 	sse := newSSE(w)
 	sse.send("job", map[string]any{"id": jobID})
-	sse.send("stage", map[string]string{"stage": "context"})
 	events := make(chan sseMsg, 8192)
 	push := func(m sseMsg) {
 		select {
@@ -410,6 +417,25 @@ func (s *Server) streamAIJob(w http.ResponseWriter, r *http.Request, t aiTask, m
 		defer close(events)
 		defer cancel()
 		defer s.unregisterJobCancel(jobID)
+		release, err := s.waitAIWorker(jctx, func() {
+			push(sseMsg{"stage", map[string]string{"stage": "queued"}})
+		})
+		if err != nil {
+			status := "failed"
+			if jctx.Err() != nil {
+				status = "cancelled"
+			}
+			s.finishJob(jobID, status, nil, errText(err), nil)
+			push(sseMsg{"error", asAPIError(err)})
+			return
+		}
+		defer release()
+		if _, err := s.db.Exec(jctx, `UPDATE ai_job SET status='running', started_at=now() WHERE id=$1 AND status='queued'`, jobID); err != nil {
+			s.finishJob(jobID, "failed", nil, errText(err), nil)
+			push(sseMsg{"error", asAPIError(err)})
+			return
+		}
+		push(sseMsg{"stage", map[string]string{"stage": "context"}})
 		first := true
 		res, err := s.runAI(jctx, t, func(d string) {
 			if first {
