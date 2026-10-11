@@ -670,6 +670,27 @@ function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: 
   const [coverInit, setCoverInit] = useState<Record<string, CropBox> | null>(null)
   const [library, setLibrary] = useState(false)
   const [cardMaker, setCardMaker] = useState(false)
+  // DEV-A108（13 文档）：AI 生成封面候选——复用文生图链路，人工挑选后走既有封面裁剪流程。
+  const [coverBusy, setCoverBusy] = useState(false)
+  const [coverCands, setCoverCands] = useState<Asset[] | null>(null)
+  const genCover = async () => {
+    setCoverBusy(true)
+    try {
+      const base = `公众号封面插图：围绕「${(work.title || work.viewpoint).slice(0, 24)}」的主题画面，构图简洁、留出文字空间，画面中不出现文字。`
+      const cands: Asset[] = []
+      for (let i = 0; i < 3; i++) {
+        const { job_id } = await post<{ job_id: string }>(`/works/${work.id}/generate-image`, { prompt: `${base}（构图方案 ${i + 1}）`, background: true })
+        cands.push(await waitJob<Asset>(job_id))
+      }
+      setCoverCands(cands)
+      setWork(await get<Work>(`/works/${work.id}`))
+      toast.success('已生成 3 张封面候选')
+    } catch (e) {
+      aiError(e, '生成封面候选')
+    } finally {
+      setCoverBusy(false)
+    }
+  }
   const setCover = async (a: Asset) => {
     let init = a.id === work.cover_asset_id && work.cover_crops ? work.cover_crops : null
     if (!init) {
@@ -706,7 +727,27 @@ function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: 
         )}
       </div>
       {!readOnly && (
-        <div className="mb-4 flex flex-wrap gap-2">
+        <>
+          {wx && (
+            <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-mist-200 px-3 py-2.5">
+              <Sparkles className="size-4 text-ink-500" />
+              <span className="text-[12.5px] text-mist-500">没有合适的封面图？让 AI 按标题生成 3 张候选（会计入 AI 用量），挑一张再裁剪。</span>
+              <Button size="sm" variant="secondary" className="ml-auto" icon={<Sparkles className="size-3.5" />} loading={coverBusy} onClick={genCover}>AI 封面候选</Button>
+            </div>
+          )}
+          {coverCands && (
+            <Dialog open onClose={() => setCoverCands(null)} title="封面候选" desc="挑选一张后进入裁剪确认；候选图同时保存在这篇作品的图片里。" width="max-w-2xl">
+              <div className="grid grid-cols-3 gap-3">
+                {coverCands.map((a) => (
+                  <div key={a.id} className="overflow-hidden rounded-lg border border-mist-200">
+                    <img src={a.url} alt="封面候选" className="h-28 w-full object-cover" />
+                    <div className="p-2"><Button size="sm" variant="secondary" className="w-full" onClick={() => { setCoverCands(null); void setCover(a) }}>设为封面</Button></div>
+                  </div>
+                ))}
+              </div>
+            </Dialog>
+          )}
+          <div className="mb-4 flex flex-wrap gap-2">
           <Input className="h-9 min-w-[220px] flex-1" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} placeholder="AI 出图提示词（生成图带「AI 生成」标识）" />
           <Button size="sm" variant="secondary" icon={<Sparkles className="size-3.5" />} loading={aiBusy} disabled={!aiPrompt.trim()} onClick={async () => {
             setAiBusy(true)
@@ -720,6 +761,7 @@ function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: 
             finally { setAiBusy(false) }
           }}>AI 出图</Button>
         </div>
+        </>
       )}
       {wx && (
         <div className="mb-4 flex items-center gap-4 rounded-xl bg-mist-50 p-3">
