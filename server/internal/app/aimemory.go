@@ -275,12 +275,12 @@ type distillPair struct {
 	AI, Final string
 }
 
-func (s *Server) distillInputs(ctx context.Context, accountID uuid.UUID, since time.Time) ([]distillPair, []string, error) {
+func (s *Server) distillInputs(ctx context.Context, accountID uuid.UUID, since time.Time) ([]distillPair, []string, []string, error) {
 	rows, err := s.db.Query(ctx, `SELECT s.ai_raw_md, s.content_md FROM work_section s JOIN work w ON w.id=s.work_id
 		WHERE w.account_id=$1 AND s.deleted_at IS NULL AND w.deleted_at IS NULL AND s.ai_raw_md<>'' AND s.content_md<>s.ai_raw_md AND s.updated_at > $2
 		ORDER BY s.updated_at DESC LIMIT 40`, accountID, since)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var pairs []distillPair
 	for rows.Next() {
@@ -300,7 +300,7 @@ func (s *Server) distillInputs(ctx context.Context, accountID uuid.UUID, since t
 	frows, err := s.db.Query(ctx, `SELECT f.reason_tags, f.note, c.task_type FROM ai_feedback f JOIN ai_call c ON c.id=f.ai_call_id
 		WHERE c.account_id=$1 AND (f.outcome='rejected' OR f.rating=-1) AND f.updated_at > $2 ORDER BY f.updated_at DESC LIMIT 40`, accountID, since)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var rejections []string
 	for frows.Next() {
@@ -311,17 +311,79 @@ func (s *Server) distillInputs(ctx context.Context, accountID uuid.UUID, since t
 		}
 	}
 	frows.Close()
-	return pairs, rejections, nil
+	// DEV-A102：作者大幅修改过的输出（edit_ratio ≥ 0.3）也是最强的偏好信号之一。
+	erows, err := s.db.Query(ctx, `SELECT c.task_type, f.edit_ratio, f.reason_tags, f.note FROM ai_feedback f JOIN ai_call c ON c.id=f.ai_call_id
+		WHERE c.account_id=$1 AND f.outcome='edited' AND f.edit_ratio >= 0.3 AND f.updated_at > $2 ORDER BY f.updated_at DESC LIMIT 20`, accountID, since)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var edited []string
+	for erows.Next() {
+		var task string
+		var ratio float64
+		var tags []string
+		var note string
+		if erows.Scan(&task, &ratio, &tags, &note) == nil {
+			line := fmt.Sprintf("%s：作者修改了 %.0f%%", taskLabel(task), ratio*100)
+			if len(tags) > 0 {
+				line += "（" + strings.Join(tags, "、") + "）"
+			}
+			if note != "" {
+				line += "：" + note
+			}
+			edited = append(edited, line)
+		}
+	}
+	erows.Close()
+	return pairs, rejections, edited, nil
 }
 
 // distillMemories runs memory_distill for one account; returns how many suggestions were added.
+// aggregateRejectionTags turns repeatedly-rejected reason tags into memory candidates
+// (DEV-A102)：同一任务类型的同一被拒原因出现 ≥3 次，就值得让作者确认一条避免性偏好。
+func (s *Server) aggregateRejectionTags(ctx context.Context, a *Account, since time.Time) (int, error) {
+	rows, err := s.db.Query(ctx, `SELECT c.task_type, tag, count(*) FROM ai_feedback f JOIN ai_call c ON c.id=f.ai_call_id,
+		unnest(f.reason_tags) AS tag WHERE c.account_id=$1 AND f.outcome='rejected' AND f.updated_at > $2
+		GROUP BY c.task_type, tag HAVING count(*) >= 3 ORDER BY count(*) DESC LIMIT 3`, a.ID, since)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	added := 0
+	for rows.Next() {
+		var task, tag string
+		var n int
+		if err := rows.Scan(&task, &tag, &n); err != nil {
+			return added, err
+		}
+		scope := taskMemoryScope(task)
+		if scope == "" {
+			scope = "all"
+		}
+		text := fmt.Sprintf("「%s」类输出常因「%s」被拒（出现 %d 次），生成时避免同类问题", taskLabel(task), tag, n)
+		ok, err := s.suggestMemory(ctx, a.ID, "avoid", scope, text, "rejection", map[string]any{"count": n, "note": fmt.Sprintf("最近 60 天被拒 %d 次的相同原因", n)})
+		if err != nil {
+			return added, err
+		}
+		if ok {
+			added++
+		}
+	}
+	return added, rows.Err()
+}
+
 func (s *Server) distillMemories(ctx context.Context, a *Account, since time.Time) (int, *uuid.UUID, error) {
-	pairs, rejections, err := s.distillInputs(ctx, a.ID, since)
+	pairs, rejections, edited, err := s.distillInputs(ctx, a.ID, since)
+	if err != nil {
+		return 0, nil, err
+	}
+	// DEV-A102：被拒原因聚合不依赖提炼阈值，独立产出候选。
+	tagAdded, err := s.aggregateRejectionTags(ctx, a, since)
 	if err != nil {
 		return 0, nil, err
 	}
 	if len(pairs) < 5 && len(rejections) < 5 {
-		return 0, nil, nil
+		return tagAdded, nil, nil
 	}
 	existing, _ := s.activeMemories(ctx, a.ID, "")
 	var b strings.Builder
@@ -339,6 +401,13 @@ func (s *Server) distillMemories(ctx context.Context, a *Account, since time.Tim
 		for _, x := range rejections {
 			b.WriteString("- " + x + "\n")
 		}
+	}
+	if len(edited) > 0 {
+		b.WriteString("## 作者大幅修改过的 AI 输出（改动模式）\n")
+		for _, x := range edited {
+			b.WriteString("- " + x + "\n")
+		}
+		b.WriteString("\n")
 	}
 	b.WriteString("\n## 已有记忆（不要重复）\n")
 	for _, m := range existing {
@@ -376,7 +445,7 @@ func (s *Server) distillMemories(ctx context.Context, a *Account, since time.Tim
 			added++
 		}
 	}
-	return added, &res.CallID, nil
+	return added + tagAdded, &res.CallID, nil
 }
 
 func (s *Server) startDistill(w http.ResponseWriter, r *http.Request) error {

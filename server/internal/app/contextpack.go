@@ -12,7 +12,7 @@ import (
 var slotBudgets = map[string]int{
 	"profile": 800, "memory": 1200, "task_instruction": 1500, "style": 4000,
 	"materials": 4000, "history": 2000, "work": 3000, "user_instruction": 300,
-	"strategy": 1200,
+	"strategy": 1200, "data_prefs": 500,
 }
 
 var slotLabels = map[string]string{
@@ -43,6 +43,7 @@ type ContextPack struct {
 	User        string
 	Slots       []Slot
 	MemoryIDs   []uuid.UUID
+	DataPrefIDs []uuid.UUID
 	Legacy      map[string]any
 	Instruction string
 	// UserRest is the user message without the editable task-instruction block (prompt regression snapshots).
@@ -68,6 +69,9 @@ func (p *ContextPack) refs() map[string]any {
 	}
 	out["slots"] = p.Slots
 	out["memories"] = len(p.MemoryIDs)
+	if len(p.DataPrefIDs) > 0 {
+		out["data_pref_ids"] = p.DataPrefIDs
+	}
 	if p.Instruction != "" {
 		out["user_instruction"] = p.Instruction
 	}
@@ -155,6 +159,38 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 				sys.WriteString("\n## 作者确认过的写作偏好（必须遵守）\n" + mb.String())
 			}
 			p.add(sl)
+		}
+
+		// DEV-A103：读者数据偏好（来自本账号数据归因的规则结论）只注入指定任务。
+		if dataPrefTasks[t.Type] {
+			prefs, err := s.loadDataPreferences(ctx, t.Account.ID)
+			if err != nil {
+				return nil, err
+			}
+			if len(prefs) > 0 {
+				sl := Slot{Name: "data_prefs", Budget: slotBudgets["data_prefs"]}
+				var pb strings.Builder
+				for _, pref := range prefs {
+					line := "- " + pref.Conclusion
+					if pref.Basis != "" {
+						line += "（依据：" + pref.Basis + "）"
+					}
+					line += "\n"
+					used := sl.Chars+runeLen(line) <= sl.Budget
+					if used {
+						pb.WriteString(line)
+						sl.Chars += runeLen(line)
+						p.DataPrefIDs = append(p.DataPrefIDs, pref.ID)
+					} else {
+						sl.Truncated = true
+					}
+					sl.Items = append(sl.Items, SlotItem{ID: pref.ID.String(), Label: truncate(pref.Conclusion, 40), Chars: runeLen(line), Used: used})
+				}
+				if pb.Len() > 0 {
+					sys.WriteString("\n## 读者数据偏好（来自本账号已录入数据的归因，供参考，不作为事实依据）\n" + pb.String())
+				}
+				p.add(sl)
+			}
 		}
 
 		if !t.SkipStyle {

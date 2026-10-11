@@ -202,6 +202,10 @@ func (s *Server) attribution(w http.ResponseWriter, r *http.Request) error {
 			"message": fmt.Sprintf("数据还不够：已有 %d 篇作品录入了数据，至少需要 %d 篇", len(samples), minAttributionSamples), "features": []AttrFeature{}})
 	}
 	feats := attributionStats(samples, s.loc)
+	// DEV-A102：把样本量达标的分组对比沉淀为"读者数据偏好"，供生成端注入（DEV-A103）。
+	if err := s.saveDataPreferences(ctx, a.ID, deriveDataPreferences(feats)); err != nil {
+		return err
+	}
 	var b strings.Builder
 	for _, f := range feats {
 		fmt.Fprintf(&b, "### %s\n", f.Label)
