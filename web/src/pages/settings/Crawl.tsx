@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, Empty, Field, Input, Notice, PageHeader, Select, Spinner, Textarea } from '@/components/ui'
 import { errorMessage, get, post, put } from '@/lib/api'
 import { useInvalidate, useMe } from '@/lib/session'
-import type { CrawlRun, CrawlSettings, CrawlSource, HotSourcesResult, Provider } from '@/lib/types'
+import type { CrawlHealth, CrawlRun, CrawlSettings, CrawlSource, HotSourcesResult, Provider } from '@/lib/types'
 
 type Platform = { platform: string; enabled: boolean; level: string; interval_min: number; daily_max: number; repeat_hours: number; jitter_min: number; today_requests: number; paused_until: string | null; strikes_7d: number }
 function PlatformRow({ value, refresh, dev }: { value: Platform; refresh: () => void; dev: boolean }) {
@@ -46,6 +46,19 @@ function SourceRow({ source, onChange, disabled }: { source: CrawlSource; onChan
   </div>
 }
 
+function SourceHealth() {
+  const [days, setDays] = useState<7 | 30>(7)
+  const q = useQuery({ queryKey: ['crawl-health'], queryFn: () => get<CrawlHealth>('/admin/crawl/health') })
+  return <Card><CardHeader title="来源健康度" desc="按现有记录汇总，不发起采集请求。" action={<Button size="sm" onClick={() => q.refetch()}>刷新统计</Button>} />
+    <div className="space-y-3 p-5"><Field label="统计窗口"><Select value={days} onChange={e => setDays(Number(e.target.value) as 7 | 30)}><option value={7}>最近 7 天</option><option value={30}>最近 30 天</option></Select></Field>
+      <Notice>采纳按同一推荐项去重，采用后开写不重复计数。转选题按匹配创建时间归入窗口；热点清理后关联统计可能减少{q.data ? `，当前热点保留 ${q.data.retention_days} 天` : ''}。</Notice>
+      {q.isError ? <Notice tone="red">{errorMessage(q.error)}</Notice> : q.isPending ? <Spinner /> : !q.data.sources.length ? <Empty title="暂无来源" /> : <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr>{['来源', '采集次数', '成功率', '条目数', '匹配数', '转选题数', '推荐采纳数'].map(x => <th key={x} className="p-2">{x}</th>)}</tr></thead><tbody>{q.data.sources.map(row => {
+        const stats = days === 7 ? row.days_7 : row.days_30
+        return <tr key={row.key} className="border-t border-mist-100"><td className="p-2">{row.name}<span className="block text-xs text-mist-400">{row.key}</span></td><td>{stats.runs || '暂无数据'}</td><td>{stats.success_rate === null ? '—' : `${(stats.success_rate * 100).toFixed(1)}%`}</td><td>{stats.items}</td><td>{stats.matches}</td><td>{stats.converted}</td><td>{stats.adopted}</td></tr>
+      })}</tbody></table></div>}
+    </div></Card>
+}
+
 export default function Crawl() {
   const { data: me } = useMe()
   const inv = useInvalidate()
@@ -55,7 +68,7 @@ export default function Crawl() {
   const [busy, setBusy] = useState(false)
   useEffect(() => { if (query.data) setForm(query.data.settings) }, [query.data])
   if (me && !me.is_system_admin) return <Navigate to="/settings/accounts" replace />
-  const refresh = () => { inv(['crawl-admin'], ['crawl-runs'], ['hot-sources']) }
+  const refresh = () => { inv(['crawl-admin'], ['crawl-runs'], ['crawl-health'], ['hot-sources']) }
   const save = async () => {
     setBusy(true)
     try { await put('/admin/crawl', form); refresh(); toast.success('采集设置已保存') } catch (e) { toast.error(errorMessage(e)) } finally { setBusy(false) }
@@ -72,6 +85,7 @@ export default function Crawl() {
       <Card><CardHeader title="小红书 / 公众号页面读取（低频）" />{query.data?.platforms.map(p=><PlatformRow key={`${p.platform}-${p.enabled}-${p.interval_min}-${p.daily_max}`} value={p} refresh={refresh} dev={false} />)}</Card>
       <Card><CardHeader title="来源开关与限额" desc="试采计入每日请求预算，并受来源最短间隔约束。" />{query.data?.sources.map((source) => <SourceRow key={`${source.key}-${source.interval_min}-${source.max_items}`} source={source} onChange={refresh} disabled={form.mode !== 'allow' || query.data.settings.level === 'off'} />)}</Card>
     </>}
+    {me?.is_system_admin && <SourceHealth />}
     <Card><CardHeader title="最近采集日志" action={<Button size="sm" onClick={() => runs.refetch()}>刷新</Button>} />{runs.isError ? <Notice tone="red">{errorMessage(runs.error)}</Notice> : !runs.data?.length ? <Empty title="暂无采集记录" /> : <div className="overflow-x-auto p-5"><table className="w-full text-left text-sm"><thead><tr>{['来源', '时间', '请求', 'HTTP', '条数', '错误'].map((x) => <th key={x} className="p-2">{x}</th>)}</tr></thead><tbody>{runs.data.map((r) => <tr key={r.id} className="border-t border-mist-100"><td className="p-2">{r.source_key}</td><td>{new Date(r.started_at).toLocaleString('zh-CN')}</td><td>{r.requests}</td><td>{r.http_status || '—'}</td><td>{r.items}</td><td>{r.error || '成功'}</td></tr>)}</tbody></table></div>}</Card>
   </div>
 }

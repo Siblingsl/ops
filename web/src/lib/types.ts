@@ -710,3 +710,7 @@ export interface DailyResult {date:string;recommendation:DailyRecommendation|nul
 export interface HotTrend {id:string;title:string;first_seen_at:string;last_seen_at:string;sources:{name:string;rank:number;url:string}[];points:{at:string;rank:number;source:string}[];writing:{account:string;work_id:string;title:string}[]}
 
 export interface DailyStatsResult {total:number;adopted:number;rate:number;sources:{type:string;total:number;adopted:number;rate:number;reduced:boolean;published:number;avg_reads:number|null;avg_likes:number|null}[];performance:{recommended:boolean;works:number;avg_reads:number|null;avg_likes:number|null}[]}
+
+export interface SourceHealthWindow { runs: number; successful: number; success_rate: number | null; items: number; matches: number; converted: number; adopted: number }
+export interface SourceHealthRow { key: string; name: string; days_7: SourceHealthWindow; days_30: SourceHealthWindow }
+export interface CrawlHealth { sources: SourceHealthRow[]; generated_at: string; retention_days: number }

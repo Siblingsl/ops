@@ -134,6 +134,7 @@ func (s *Server) Router() http.Handler {
 			r.Put("/admin/crawl/sources/{key}", s.h(s.adminPutCrawlSource))
 			r.Post("/admin/crawl/sources/{key}/test", s.h(s.adminTestCrawlSource))
 			r.Get("/admin/crawl/runs", s.h(s.adminCrawlRuns))
+			r.Get("/admin/crawl/health", s.h(s.adminCrawlHealth))
 			r.Get("/hot-sources", s.h(s.getHotSources))
 			r.Put("/hot-sources", s.h(s.putHotSources))
 			r.Get("/hot-items", s.h(s.listHotItems))
