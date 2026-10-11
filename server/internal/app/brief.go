@@ -90,9 +90,8 @@ func (s *Server) generateBrief(ctx context.Context, accountID uuid.UUID) error {
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM topic t WHERE t.account_id=$1 AND t.status='adopted' AND t.deleted_at IS NULL
 		AND NOT EXISTS (SELECT 1 FROM work w WHERE w.topic_id=t.id AND w.deleted_at IS NULL)`, a.ID).Scan(&adopted)
 	var pendingMetrics int
-	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.published_at IS NOT NULL
-		AND w.published_at > now() - interval '9 days'
-		AND NOT EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id)`, a.ID).Scan(&pendingMetrics)
+	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND `+nodeDueExpr(2, 3)+` IS NOT NULL`,
+		a.ID, s.now(), datacubeCovers(a)).Scan(&pendingMetrics)
 	recTitles := []string{}
 	recRows, err := s.db.Query(ctx, `SELECT it->>'title' FROM daily_recommendation d, jsonb_array_elements(d.items) it
 		WHERE d.account_id=$1 AND d.date=$2 ORDER BY d.version DESC LIMIT 5`, a.ID, today)

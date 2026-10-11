@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -517,11 +518,14 @@ func (s *Server) generateDigest(ctx context.Context, accountID uuid.UUID, from, 
 
 var metricReminderDays = []int{1, 3, 7}
 
+// metricRemindersJob reminds at 09:00 on publish day + 1/3/7 (within 48h) for nodes still empty.
+// Works a permitted WeChat datacube sync covers are skipped (DEV-DR04，14 文档 4.3 第 5 条).
 func (s *Server) metricRemindersJob(ctx context.Context) {
 	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.account_id, a.workspace_id, a.name, w.published_at,
-		(SELECT max(captured_at) FROM metric_snapshot m WHERE m.work_id=w.id)
+		(a.platform='wechat_mp' AND a.datacube_state='ok' AND w.wechat_msgid IS NOT NULL),
+		ARRAY(SELECT DISTINCT metric_node(m.day_offset) FROM metric_snapshot m WHERE m.work_id=w.id AND metric_node(m.day_offset) IS NOT NULL)
 		FROM work w JOIN platform_account a ON a.id=w.account_id
-		WHERE a.status='active' AND w.deleted_at IS NULL AND w.published_at IS NOT NULL AND w.published_at > now() - interval '9 days'`)
+		WHERE a.status='active' AND w.deleted_at IS NULL AND w.published_at IS NOT NULL AND w.published_at > $1::timestamptz - interval '10 days'`, s.now())
 	if err != nil {
 		return
 	}
@@ -529,26 +533,47 @@ func (s *Server) metricRemindersJob(ctx context.Context) {
 		id, account, ws uuid.UUID
 		title, name     string
 		published       time.Time
-		last            *time.Time
+		apiCovered      bool
+		nodes           []int32
 	}
 	var list []item
 	for rows.Next() {
 		var x item
-		if rows.Scan(&x.id, &x.title, &x.account, &x.ws, &x.name, &x.published, &x.last) == nil {
+		if rows.Scan(&x.id, &x.title, &x.account, &x.ws, &x.name, &x.published, &x.apiCovered, &x.nodes) == nil {
 			list = append(list, x)
 		}
 	}
 	rows.Close()
 	now := s.now()
 	for _, x := range list {
+		if x.apiCovered {
+			continue
+		}
+		p := x.published.In(s.loc)
 		for _, d := range metricReminderDays {
-			due := x.published.Add(time.Duration(d) * 24 * time.Hour)
-			if now.Before(due) || now.After(due.Add(48*time.Hour)) || (x.last != nil && !x.last.Before(due)) {
+			due := time.Date(p.Year(), p.Month(), p.Day(), 9, 0, 0, 0, s.loc).AddDate(0, 0, d)
+			if now.Before(due) || now.After(due.Add(48*time.Hour)) || slices.Contains(x.nodes, int32(d)) {
 				continue
 			}
 			jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: x.ws})
-			s.notifyWorkspace(jctx, x.ws, []string{"owner", "editor"}, "metric", fmt.Sprintf("《%s》发布已满 %d 天，录入数据", x.title, d), x.name,
-				"/a/"+x.account.String()+"/review?work="+x.id.String(), fmt.Sprintf("metric:%s:%d", x.id, d))
+			s.notifyWorkspace(jctx, x.ws, []string{"owner", "editor"}, "metric", fmt.Sprintf("《%s》发布满 %d 天，点开直接录入", x.title, d), x.name,
+				fmt.Sprintf("/a/%s/review?work=%s&node=%d", x.account, x.id, d), fmt.Sprintf("metric:%s:%d", x.id, d))
 		}
 	}
+}
+
+// metricNodeDueSQL is the node a published work is in today (within 30 days), or NULL when that
+// node already has data or a permitted datacube sync ($api) covers it. Expects alias w.
+const metricNodeDueSQL = `(SELECT n FROM (SELECT metric_node((($now::timestamptz) AT TIME ZONE 'Asia/Shanghai')::date - (w.published_at AT TIME ZONE 'Asia/Shanghai')::date) n) cur
+	WHERE w.status IN ('published') AND w.published_at IS NOT NULL AND w.published_at > $now::timestamptz - interval '30 days' AND cur.n IS NOT NULL
+	AND NOT ($api AND w.wechat_msgid IS NOT NULL)
+	AND NOT EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id AND metric_node(m.day_offset)=cur.n))`
+
+// nodeDueExpr binds metricNodeDueSQL to positional parameters.
+func nodeDueExpr(nowParam, apiParam int) string {
+	return strings.NewReplacer("$now", fmt.Sprintf("$%d", nowParam), "$api", fmt.Sprintf("$%d", apiParam)).Replace(metricNodeDueSQL)
+}
+
+func datacubeCovers(a *Account) bool {
+	return a.Platform == "wechat_mp" && a.DatacubeState == "ok"
 }

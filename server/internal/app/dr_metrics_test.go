@@ -236,6 +236,80 @@ func TestDR03WechatDatacubeSync(t *testing.T) {
 	}
 }
 
+// DEV-DR04（14 文档 4.3）：提醒按 1/3/7 天节点直达快录（链接带 work 与 node）；节点已有数据、
+// 或已获授权的公众号接口会覆盖的作品不提醒；工作台待办只提示当前所在节点。
+func TestDR04NodeReminders(t *testing.T) {
+	ctx := context.Background()
+	orig := env.srv.now
+	today := env.srv.today()
+	env.srv.now = func() time.Time { return today.Add(10 * time.Hour) }
+	defer func() { env.srv.now = orig }()
+
+	x := drAccount(t, "xhs", "快录提醒验收号")
+	pub := today.AddDate(0, 0, -3).Add(20 * time.Hour)
+	empty := drWork(t, x, "第三天还没录", "published", &pub)
+	done := drWork(t, x, "第三天已录", "published", &pub)
+	drMetric(t, done.ID, "manual", 3, 80)
+
+	wx := drAccount(t, "wechat_mp", "接口覆盖验收号")
+	covered := drWork(t, wx, "接口会同步的文章", "published", &pub)
+	if _, err := env.srv.db.Exec(ctx, `UPDATE work SET wechat_msgid='2247489999_1' WHERE id=$1`, covered.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.srv.db.Exec(ctx, `UPDATE platform_account SET datacube_state='ok' WHERE id=$1`, wx.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	env.srv.metricRemindersJob(ctx)
+	links := map[string]string{}
+	rows, err := env.srv.db.Query(ctx, `SELECT dedupe_key, link FROM notification WHERE kind='metric' AND dedupe_key LIKE 'metric:%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var k, l string
+		if rows.Scan(&k, &l) == nil {
+			links[k] = l
+		}
+	}
+	rows.Close()
+	if l := links["metric:"+empty.ID.String()+":3"]; l != "/a/"+x.ID.String()+"/review?work="+empty.ID.String()+"&node=3" {
+		t.Fatalf("empty node should be reminded with a quick-entry link, got %q", l)
+	}
+	if _, ok := links["metric:"+done.ID.String()+":3"]; ok {
+		t.Fatal("node with data must not be reminded")
+	}
+	if _, ok := links["metric:"+covered.ID.String()+":3"]; ok {
+		t.Fatal("works covered by the datacube sync must not be reminded")
+	}
+
+	var dash struct {
+		Todos []struct {
+			WorkID uuid.UUID `json:"work_id"`
+			Kind   string    `json:"kind"`
+			Node   *int      `json:"node"`
+		} `json:"todos"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/accounts/"+x.ID.String()+"/dashboard", nil, &dash)
+	seen := map[uuid.UUID]*int{}
+	for _, td := range dash.Todos {
+		if td.Kind == "metric" {
+			seen[td.WorkID] = td.Node
+		}
+	}
+	if n := seen[empty.ID]; n == nil || *n != 3 {
+		t.Fatalf("dashboard should ask for the day-3 node: %+v", dash.Todos)
+	}
+	if _, ok := seen[done.ID]; ok {
+		t.Fatal("work whose current node has data should not be a todo")
+	}
+	// 第 6 天的接口数据计入第 7 天节点（getarticletotal 只到第 6 天）。
+	var node int
+	if err := env.srv.db.QueryRow(ctx, `SELECT metric_node(6)`).Scan(&node); err != nil || node != 7 {
+		t.Fatalf("day 6 should belong to the 7-day node: %d %v", node, err)
+	}
+}
+
 func drMetric(t *testing.T, workID uuid.UUID, source string, day int, reads int) {
 	t.Helper()
 	if _, err := env.srv.db.Exec(context.Background(), `INSERT INTO metric_snapshot (work_id, captured_at, source, day_offset, reads, likes)

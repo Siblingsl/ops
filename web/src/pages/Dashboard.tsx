@@ -14,7 +14,7 @@ import { useAccounts, useCanWrite, useCurrentAccount, useInvalidate, useMe } fro
 import type { Account, AILimit, HealthItem, NextAction, Work, WorkStatus } from '@/lib/types'
 import { usePendingMemories, usePrefetchWork } from '@/lib/v3'
 
-interface Todo { work_id: string; title: string; status: WorkStatus; kind: string; hint: string; at: string }
+interface Todo { work_id: string; title: string; status: WorkStatus; kind: string; hint: string; at: string; node?: number }
 interface Dash {
   account: Account
   counts: Partial<Record<WorkStatus, number>>
@@ -31,7 +31,7 @@ const groups: { kinds: string[]; title: string; icon: React.ReactNode; empty: st
   { kinds: ['publish'], title: '待回填', icon: <UploadCloud className="size-4" />, empty: '没有等待回填的作品' },
   { kinds: ['push', 'pack'], title: '可发布', icon: <Send className="size-4" />, empty: '检查确认后的作品会出现在这里' },
   { kinds: ['write', 'check'], title: '进行中', icon: <FilePen className="size-4" />, empty: '还没有进行中的作品' },
-  { kinds: ['metric'], title: '复盘提醒', icon: <TrendingUp className="size-4" />, empty: '发布满一天后提醒你录入数据' },
+  { kinds: ['metric'], title: '复盘提醒', icon: <TrendingUp className="size-4" />, empty: '发布满 1、3、7 天时提醒你录入数据' },
 ]
 
 function todoLink(t: Todo, accountId: string) {
@@ -40,7 +40,7 @@ function todoLink(t: Todo, accountId: string) {
     case 'push': return `/works/${t.work_id}/push`
     case 'pack': return `/works/${t.work_id}/pack`
     case 'publish': return `/works/${t.work_id}/${t.status === 'packed' ? 'pack' : 'push'}`
-    case 'metric': return `/a/${accountId}/review?work=${t.work_id}`
+    case 'metric': return `/a/${accountId}/review?work=${t.work_id}${t.node ? `&node=${t.node}` : ''}`
     default: return `/works/${t.work_id}`
   }
 }

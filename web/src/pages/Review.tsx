@@ -106,7 +106,7 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
   return (
     <>
       <Button size="sm" variant="secondary" icon={<ClipboardPaste className="size-3.5" />} onClick={() => setPasteOpen(true)}>粘贴回填</Button>
-      <Button size="sm" variant="ghost" icon={<Upload className="size-3.5" />} loading={busy && !open && !pasteOpen} onClick={() => input.current?.click()}>导入 CSV</Button>
+      <Button size="sm" variant="ghost" icon={<Upload className="size-3.5" />} loading={busy && !open && !pasteOpen} onClick={() => input.current?.click()}>导入表格（CSV）</Button>
       <input ref={input} type="file" accept=".csv,text/csv" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) upload(f) }} />
       <Dialog open={pasteOpen} onClose={() => setPasteOpen(false)} title="粘贴数据回填" width="max-w-2xl"
         footer={<><Button variant="ghost" onClick={() => setPasteOpen(false)}>取消</Button><Button variant="primary" loading={busy} disabled={!pasteText.trim()} onClick={paste}>解析并匹配</Button></>}>
@@ -163,11 +163,41 @@ const metricFields: Record<Platform, { key: MetricKey; label: string }[]> = {
   ],
 }
 
-function MetricForm({ workId, platform, editing, prefill, onDone, onNext }: {
+const localDay = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000
+
+// 合理性提示（DEV-DR04）：只提醒，不阻止保存。
+function metricWarnings(platform: Platform, vals: Record<string, string>, at: string, publishedAt: string | null | undefined, history: Metric[], editingId?: string) {
+  const fields = metricFields[platform]
+  const val = (k: MetricKey) => (vals[k] === '' || vals[k] == null ? null : Number(vals[k]))
+  const out: string[] = []
+  const reads = val('reads')
+  const readsLabel = fields[0].label
+  for (const f of fields) {
+    const v = val(f.key)
+    if (f.key !== 'reads' && f.key !== 'follows_gained' && reads != null && v != null && v > reads) out.push(`${f.label}比${readsLabel}还多，请确认没有填错格`)
+  }
+  if (publishedAt && at) {
+    const offset = localDay(new Date(at)) - localDay(new Date(publishedAt))
+    const prev = history.filter((m) => m.id !== editingId && m.day_offset != null && m.day_offset < offset)
+      .sort((a, b) => (b.day_offset ?? 0) - (a.day_offset ?? 0))[0]
+    if (prev) {
+      for (const f of fields) {
+        const v = val(f.key)
+        const p = prev[f.key]
+        if (f.key !== 'follows_gained' && v != null && p != null && v < p) out.push(`${f.label}比第 ${prev.day_offset} 天的 ${fmtNum(p)} 还少，累计数一般不会变少`)
+      }
+    }
+  }
+  return out
+}
+
+function MetricForm({ workId, platform, editing, prefill, publishedAt, history, onDone, onNext }: {
   workId: string
   platform: Platform
   editing: Metric | null
   prefill?: Metric | null
+  publishedAt?: string | null
+  history: Metric[]
   onDone: () => void
   onNext?: () => void
 }) {
@@ -176,6 +206,9 @@ function MetricForm({ workId, platform, editing, prefill, onDone, onNext }: {
   const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(metricFields[platform].map((f) => [f.key, base?.[f.key]?.toString() ?? ''])))
   const [note, setNote] = useState(editing?.note ?? '')
   const [busy, setBusy] = useState(false)
+  const inputs = useRef<(HTMLInputElement | null)[]>([])
+  useEffect(() => { inputs.current[0]?.focus() }, [])
+  const warnings = metricWarnings(platform, vals, at, publishedAt, history, editing?.id)
   const save = async (next = false) => {
     const body: Record<string, unknown> = { captured_at: new Date(at).toISOString(), note }
     for (const f of metricFields[platform]) body[f.key] = vals[f.key] === '' ? null : Number(vals[f.key])
@@ -201,12 +234,26 @@ function MetricForm({ workId, platform, editing, prefill, onDone, onNext }: {
       <Field label="数据采集时间" hint="按发布后第几天记录，例如第 1、3、7 天；同一天再次录入会合并到同一条"><Input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} /></Field>
       {!editing && prefill && <p className="text-[12px] text-mist-500">已预填上次录入的数值，改成平台后台的最新数字即可。</p>}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {metricFields[platform].map((f) => (
+        {metricFields[platform].map((f, i) => (
           <Field key={f.key} label={f.label}>
-            <Input type="number" min={0} inputMode="numeric" value={vals[f.key]} onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })} />
+            <Input ref={(el) => { inputs.current[i] = el }} type="number" min={0} inputMode="numeric" enterKeyHint={i === metricFields[platform].length - 1 ? 'done' : 'next'}
+              value={vals[f.key]} onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+                e.preventDefault()
+                const next = inputs.current[i + 1]
+                if (next) next.focus()
+                else void save()
+              }} />
           </Field>
         ))}
       </div>
+      {warnings.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] leading-relaxed text-amber-800">
+          {warnings.map((w) => <div key={w}>{w}</div>)}
+          <div className="text-amber-700/70">只是提醒，确认无误可以直接保存。</div>
+        </div>
+      )}
       <Field label="备注"><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：被某大号转载" /></Field>
       <div className="flex flex-wrap justify-end gap-2">
         <Button variant="ghost" onClick={onDone}>取消</Button>
@@ -217,9 +264,9 @@ function MetricForm({ workId, platform, editing, prefill, onDone, onNext }: {
   )
 }
 
-function MetricsDrawer({ row, platform, onClose, onNext }: { row: BoardRow; platform: Platform; onClose: () => void; onNext?: () => void }) {
+function MetricsDrawer({ row, platform, node, onClose, onNext }: { row: BoardRow; platform: Platform; node?: number; onClose: () => void; onNext?: () => void }) {
   const { data, refetch } = useQuery({ queryKey: ['metrics', row.id], queryFn: () => get<Metric[]>(`/works/${row.id}/metrics`) })
-  const [form, setForm] = useState<{ editing: Metric | null } | null>(data && data.length === 0 ? { editing: null } : null)
+  const [form, setForm] = useState<{ editing: Metric | null } | null>(node || (data && data.length === 0) ? { editing: null } : null)
   const inv = useInvalidate()
   useEffect(() => {
     if (data && data.length === 0) setForm({ editing: null })
@@ -235,8 +282,10 @@ function MetricsDrawer({ row, platform, onClose, onNext }: { row: BoardRow; plat
     done()
   }
   return (
-    <Drawer open onClose={onClose} title={row.title || '未命名'} desc="数据需要你从平台后台手动抄录。" width="w-[560px]">
-      {form ? <MetricForm key={`${row.id}-${form.editing?.id ?? 'new'}-${data?.length ?? 0}`} workId={row.id} platform={platform} editing={form.editing} prefill={data?.[data.length - 1] ?? null} onDone={done}
+    <Drawer open onClose={onClose} title={row.title || '未命名'} width="w-[560px]"
+      desc={node ? `发布满 ${node} 天 · 快速录入：照着平台数据页填数字，回车跳到下一格` : '照着平台数据页抄录数字；也可以用粘贴回填一次补多篇。'}>
+      {form ? <MetricForm key={`${row.id}-${form.editing?.id ?? 'new'}-${data?.length ?? 0}`} workId={row.id} platform={platform} editing={form.editing} prefill={data?.[data.length - 1] ?? null}
+        publishedAt={row.published_at} history={data ?? []} onDone={done}
         onNext={onNext && (() => { inv(['board']); onNext() })} /> : (
         <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setForm({ editing: null })}>录入一次数据</Button>
       )}
@@ -547,7 +596,7 @@ export default function Review() {
           </div>
         </div>
       </div>
-      {openRow && <MetricsDrawer key={openRow.id} row={openRow} platform={acc.platform} onClose={() => setParams({}, { replace: true })}
+      {openRow && <MetricsDrawer key={openRow.id} row={openRow} platform={acc.platform} node={Number(params.get('node')) || undefined} onClose={() => setParams({}, { replace: true })}
         onNext={nextRow ? () => setParams({ work: nextRow.id }, { replace: true }) : undefined} />}
     </div>
   )

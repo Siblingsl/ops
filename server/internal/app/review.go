@@ -567,19 +567,19 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) error {
 		Kind   string    `json:"kind"`
 		Hint   string    `json:"hint"`
 		At     time.Time `json:"at"`
+		Node   *int      `json:"node,omitempty"`
 	}
 	todos := []todo{}
-	trows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.status, w.updated_at,
-		(w.status IN ('pushed','packed','published') AND w.updated_at < now() - interval '1 day' AND NOT EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id))
-		FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND (w.status <> 'published' OR NOT EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id))
-		ORDER BY w.updated_at DESC LIMIT 30`, a.ID)
+	due := nodeDueExpr(2, 3)
+	trows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.status, w.updated_at, `+due+`
+		FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND (w.status <> 'published' OR `+due+` IS NOT NULL)
+		ORDER BY w.updated_at DESC LIMIT 30`, a.ID, s.now(), datacubeCovers(a))
 	if err != nil {
 		return err
 	}
 	for trows.Next() {
 		var t todo
-		var needMetric bool
-		if err := trows.Scan(&t.WorkID, &t.Title, &t.Status, &t.At, &needMetric); err != nil {
+		if err := trows.Scan(&t.WorkID, &t.Title, &t.Status, &t.At, &t.Node); err != nil {
 			trows.Close()
 			return err
 		}
@@ -597,10 +597,10 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) error {
 		case "pushed", "packed":
 			t.Kind, t.Hint = "publish", "在平台发布后回来标记已发布"
 		case "published":
-			if !needMetric {
+			if t.Node == nil {
 				continue
 			}
-			t.Kind, t.Hint = "metric", "发布超过一天，录入数据"
+			t.Kind, t.Hint = "metric", fmt.Sprintf("录入第 %d 天数据", *t.Node)
 		}
 		todos = append(todos, t)
 	}
