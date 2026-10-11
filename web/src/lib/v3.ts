@@ -140,6 +140,13 @@ export function usePendingMemories(accountId: string | undefined) {
   return (q.data ?? []).filter((m) => m.status === 'suggested').length
 }
 
+export interface AIStatus { ready: boolean; vision_route: boolean; image_route: boolean }
+
+/** useAIStatus tells whether AI is configured and which optional routes exist (DEV-UX01), so the UI can warn before a call fails. */
+export function useAIStatus() {
+  return useQuery({ queryKey: ['ai-status'], queryFn: () => get<AIStatus>('/ai/status'), staleTime: 60_000 }).data
+}
+
 export type WorkCmd = { cmd: 'goto'; sectionId: string } | { cmd: 'titles' | 'versions' | 'derive' | 'focus' }
 
 /** workCmd lets the command palette drive the open work page (4.1「本作品」分组). */

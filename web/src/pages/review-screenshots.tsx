@@ -1,11 +1,12 @@
 import { Check, ScanText } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Dialog } from '@/components/dialog'
+import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, cn, Input, Select } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { errorMessage, post, rawRequest } from '@/lib/api'
 import type { Metric, Platform } from '@/lib/types'
+import { useAIStatus } from '@/lib/v3'
 
 export type MetricKey = 'reads' | 'likes' | 'wows' | 'favorites' | 'comments' | 'shares' | 'follows_gained'
 export const metricFields: Record<Platform, { key: MetricKey; label: string }[]> = {
@@ -49,6 +50,20 @@ export function ScreenshotImport({ accountId, platform, works, workId, onDone, l
   const [previews, setPreviews] = useState<string[]>([])
   const [saving, setSaving] = useState<number | null>(null)
   const fields = metricFields[platform]
+  const ai = useAIStatus()
+
+  const pick = async () => {
+    if (ai && !ai.ready) {
+      toast.error('还没有配置模型', { description: '截图识别需要模型。所有者可以在「设置 → 模型配置」用快速配置添加；也可以先手动录入。' })
+      return
+    }
+    if (ai && !ai.vision_route && !(await confirm({
+      title: '还没有指定图片识别模型',
+      desc: '截图识别会使用默认模型；默认模型不支持图片输入时会识别失败。所有者可以在「设置 → 模型配置 → 快速配置」里填写图片识别模型。',
+      confirmText: '仍要上传',
+    }))) return
+    input.current?.click()
+  }
 
   useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews])
 
@@ -113,7 +128,7 @@ export function ScreenshotImport({ accountId, platform, works, workId, onDone, l
 
   return (
     <>
-      <Button size="sm" variant="secondary" icon={<ScanText className="size-3.5" />} loading={busy} onClick={() => input.current?.click()}>{label}</Button>
+      <Button size="sm" variant="secondary" icon={<ScanText className="size-3.5" />} loading={busy} onClick={() => void pick()}>{label}</Button>
       <input ref={input} type="file" accept="image/png,image/jpeg" multiple hidden
         onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) void recognize(fs) }} />
       <Dialog open={!!upload} onClose={close} title="核对截图识别结果" width="max-w-5xl"

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, CheckCircle2, CircleAlert, Cpu, MinusCircle, Pencil, Plug, Plus, Trash2, XCircle } from 'lucide-react'
+import { Activity, CheckCircle2, CircleAlert, Cpu, MinusCircle, Pencil, Plug, Plus, Trash2, XCircle, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
@@ -68,7 +68,7 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
         const t = await post<{ ok: boolean; result: string }>(`/model-providers/${p.id}/test`)
         t.ok ? toast.success(t.result) : toast.error(t.result)
       }
-      inv(['providers'], ['routes'])
+      inv(['providers'], ['routes'], ['ai-status'])
       onClose()
     } catch (e) {
       toast.error(errorMessage(e))
@@ -97,11 +97,98 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
   )
 }
 
+// DEV-UX01（D-052 第 1 条）：只收录满足"API 数据不用于训练"准入条件的供应商；模型名只是建议，以控制台为准。
+type QuickRole = 'default' | 'tier_economy' | 'tier_quality' | 'metric_screenshot'
+const quickRoles: { key: QuickRole; label: string; hint: string }[] = [
+  { key: 'default', label: '主力模型', hint: '必填。没有单独指定的任务都用它' },
+  { key: 'tier_economy', label: '经济档模型', hint: '选填。偏好里切到经济档时所有任务改用它，适合便宜快速的模型' },
+  { key: 'tier_quality', label: '质量档模型', hint: '选填。偏好里切到质量档时所有任务改用它' },
+  { key: 'metric_screenshot', label: '图片识别模型', hint: '选填。数据截图识别必须用支持图片输入的模型' },
+]
+const templates: { id: string; name: string; base: string; models: Partial<Record<QuickRole, string>>; note: string }[] = [
+  {
+    id: 'bailian', name: '阿里云百炼', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    models: { default: 'qwen-plus', tier_economy: 'qwen-turbo', tier_quality: 'qwen-max', metric_screenshot: 'qwen-vl-plus' },
+    note: '使用按量付费 API。模型名是建议值，以百炼控制台"模型广场"为准。',
+  },
+  {
+    id: 'ark', name: '火山方舟', base: 'https://ark.cn-beijing.volces.com/api/v3', models: {},
+    note: '模型处填写方舟控制台里的模型名或推理接入点 ID（ep- 开头）。不要签署数据授权协议。',
+  },
+  { id: 'custom', name: '其他 OpenAI 兼容接口', base: '', models: {}, note: '接口地址以 /v1 结尾。请确认服务条款写明 API 数据不用于训练。' },
+]
+
+function QuickSetupDialog({ onClose }: { onClose: () => void }) {
+  const [tpl, setTpl] = useState(templates[0])
+  const [name, setName] = useState(templates[0].name)
+  const [base, setBase] = useState(templates[0].base)
+  const [key, setKey] = useState('')
+  const [roles, setRoles] = useState<Record<QuickRole, string>>({ default: '', tier_economy: '', tier_quality: '', metric_screenshot: '', ...templates[0].models })
+  const [busy, setBusy] = useState(false)
+  const inv = useInvalidate()
+  const choose = (id: string) => {
+    const t = templates.find((x) => x.id === id) ?? templates[0]
+    setTpl(t)
+    setName(t.name)
+    setBase(t.base)
+    setRoles({ default: '', tier_economy: '', tier_quality: '', metric_screenshot: '', ...t.models })
+  }
+  const save = async () => {
+    const assign = Object.fromEntries(quickRoles.map((r) => [r.key, roles[r.key].trim()]).filter(([, m]) => m))
+    const models = [...new Set(Object.values(assign))]
+    setBusy(true)
+    try {
+      const p = await post<Provider & { assigned: QuickRole[]; kept: QuickRole[] }>('/model-providers', { name, base_url: base, api_key: key, models, assign })
+      const label = (k: QuickRole) => quickRoles.find((r) => r.key === k)?.label ?? k
+      const t = await post<{ ok: boolean; result: string }>(`/model-providers/${p.id}/test`)
+      const parts = [p.assigned.length ? `已设置：${p.assigned.map(label).join('、')}` : '', p.kept.length ? `保留原有：${p.kept.map(label).join('、')}` : ''].filter(Boolean)
+      t.ok ? toast.success(t.result, { description: parts.join('；') }) : toast.error(t.result, { description: parts.join('；') })
+      inv(['providers'], ['routes'], ['ai-status'], ['dashboard'], ['next-actions'])
+      onClose()
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog open onClose={onClose} title="快速配置模型" desc="选一个供应商、填一次密钥，按用途填模型名。只会写入还空着的任务路由，已有的配置不会被覆盖。" width="max-w-lg"
+      footer={<><Button variant="ghost" onClick={onClose}>取消</Button>
+        <Button variant="primary" loading={busy} onClick={save} disabled={!name.trim() || !base.trim() || !key.trim() || !roles.default.trim()}>保存并测试</Button></>}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-3 gap-2">
+          {templates.map((t) => (
+            <button key={t.id} type="button" onClick={() => choose(t.id)}
+              className={`cursor-pointer rounded-lg border px-3 py-2 text-left text-[13px] transition ${tpl.id === t.id ? 'border-ink-400 bg-ink-50 font-medium text-ink-800' : 'border-mist-200 text-mist-600 hover:border-mist-300'}`}>{t.name}</button>
+          ))}
+        </div>
+        <p className="text-[12.5px] text-mist-500">{tpl.note}</p>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="名称"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
+          <Field label="API 密钥"><Input type="password" autoFocus value={key} onChange={(e) => setKey(e.target.value)} autoComplete="new-password" className="font-mono text-[13px]" /></Field>
+        </div>
+        <Field label="接口地址"><Input value={base} onChange={(e) => setBase(e.target.value)} placeholder="https://api.example.com/v1" className="font-mono text-[13px]" /></Field>
+        {quickRoles.map((r) => (
+          <Field key={r.key} label={r.label} hint={r.hint}>
+            <Input value={roles[r.key]} onChange={(e) => setRoles({ ...roles, [r.key]: e.target.value })} placeholder={r.key === 'default' ? '模型名' : '可留空'} className="font-mono text-[13px]" />
+          </Field>
+        ))}
+        <Notice tone="gamboge">请只使用服务条款明确「API 数据不用于训练」的供应商。保存后会用主力模型做一次连通测试，产生少量 token 费用。</Notice>
+      </div>
+    </Dialog>
+  )
+}
+
+const keyRoutes = ['default', 'tier_economy', 'tier_quality', 'metric_screenshot', 'image_gen']
+
 function RoutesCard({ providers }: { providers: Provider[] }) {
   const { data } = useQuery({ queryKey: ['routes'], queryFn: () => get<ModelRoute[]>('/model-routes') })
   const [routes, setRoutes] = useState<ModelRoute[]>([])
   const [busy, setBusy] = useState(false)
+  const [showAll, setShowAll] = useState(false)
+  const inv = useInvalidate()
   useEffect(() => setRoutes(data ?? []), [data])
+  const custom = routes.filter((r) => !keyRoutes.includes(r.task_type) && r.provider_id).length
   const set = (i: number, p: Partial<ModelRoute>) => setRoutes(routes.map((r, j) => (j === i ? { ...r, ...p } : r)))
   const save = async () => {
     setBusy(true)
@@ -111,6 +198,7 @@ function RoutesCard({ providers }: { providers: Provider[] }) {
         fallback_provider_id: r.fallback_provider_id || null, fallback_model: r.fallback_model ?? '',
       }))))
       toast.success('任务路由已保存')
+      inv(['ai-status'])
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
@@ -127,6 +215,7 @@ function RoutesCard({ providers }: { providers: Provider[] }) {
       </div>
       <div className="divide-y divide-mist-100">
         {routes.map((r, i) => {
+          if (!showAll && !keyRoutes.includes(r.task_type)) return null
           const prov = providers.find((p) => p.id === r.provider_id)
           const fb = providers.find((p) => p.id === r.fallback_provider_id)
           return (
@@ -158,6 +247,10 @@ function RoutesCard({ providers }: { providers: Provider[] }) {
           )
         })}
       </div>
+      <button type="button" onClick={() => setShowAll((v) => !v)}
+        className="w-full cursor-pointer border-t border-mist-100 px-5 py-2.5 text-left text-[12.5px] text-mist-500 hover:bg-mist-50 hover:text-ink-700">
+        {showAll ? '收起其他任务' : `其他 ${routes.length - keyRoutes.length} 类任务默认跟随主力模型，需要时再单独指定${custom ? `（已单独指定 ${custom} 类）` : ''} →`}
+      </button>
     </Card>
   )
 }
@@ -230,6 +323,7 @@ export default function Models() {
   const isOwner = me?.role === 'owner'
   const { data, isLoading, refetch } = useQuery({ queryKey: ['providers'], queryFn: () => get<Provider[]>('/model-providers') })
   const [dialog, setDialog] = useState<{ editing: Provider | null } | null>(null)
+  const [quick, setQuick] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
   const [selfTesting, setSelfTesting] = useState<string | null>(null)
   const [selfTest, setSelfTest] = useState<{ providerName: string; result: SelfTestResult } | null>(null)
@@ -278,11 +372,14 @@ export default function Models() {
   return (
     <div className="animate-fade-in space-y-6">
       <PageHeader title="模型配置" desc="接入工作区自己的大模型 API。密钥加密保存，仅所有者可修改。"
-        action={isOwner ? <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加供应商</Button> : undefined} />
+        action={isOwner ? <>
+          <Button icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>手动添加</Button>
+          <Button variant="primary" icon={<Zap className="size-4" />} onClick={() => setQuick(true)}>快速配置</Button>
+        </> : undefined} />
       {!isOwner && <Notice tone="ink">你是编辑者，可查看模型配置，但不能修改密钥或路由。</Notice>}
       {list.length === 0 ? (
-        <Card><Empty icon={<Cpu className="size-5" />} title="还没有配置模型" desc="没有模型时 AI 按钮不可用，写作、检查和推送不受影响。"
-          action={isOwner ? <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加第一个供应商</Button> : undefined} /></Card>
+        <Card><Empty icon={<Cpu className="size-5" />} title="还没有配置模型" desc="没有模型时 AI 按钮不可用，写作、检查和推送不受影响。快速配置只需选供应商、填一次密钥，按用途填模型名。"
+          action={isOwner ? <Button variant="primary" icon={<Zap className="size-4" />} onClick={() => setQuick(true)}>快速配置</Button> : undefined} /></Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {list.map((p) => (
@@ -327,6 +424,7 @@ export default function Models() {
       {isOwner && <LimitCard />}
       {isOwner && <WeeklyDraftCard />}
       {isOwner && dialog && <ProviderDialog editing={dialog.editing} onClose={() => setDialog(null)} />}
+      {isOwner && quick && <QuickSetupDialog onClose={() => setQuick(false)} />}
       {isOwner && selfTest && (
         <SelfTestDialog result={selfTest.result} onClose={() => setSelfTest(null)} />
       )}

@@ -277,6 +277,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/model-providers/{id}/test", s.h(s.testProvider))
 			r.Post("/model-providers/{id}/selftest", s.h(s.selftestProvider))
 			r.Get("/model-routes", s.h(s.getRoutes))
+			r.Get("/ai/status", s.h(s.aiStatus))
 			r.Put("/model-routes", s.h(s.putRoutes))
 			r.Get("/usage", s.h(s.usage))
 			r.Get("/settings", s.h(s.getSettings))

@@ -77,7 +77,12 @@ type providerInput struct {
 	// Prices are optional; a negative value clears the price.
 	PricePrompt   *float64 `json:"price_per_1k_prompt"`
 	PriceComplete *float64 `json:"price_per_1k_completion"`
+	// Assign maps a quick-setup role (route task type) to one of Models; only empty routes are written (DEV-UX01).
+	Assign map[string]string `json:"assign"`
 }
+
+// quickRoles are the routes the quick setup may fill: main model, the two cost tiers and screenshot recognition.
+var quickRoles = map[string]string{"default": "主力模型", "tier_economy": "经济档", "tier_quality": "质量档", "metric_screenshot": "图片识别"}
 
 func priceArg(p *float64) any {
 	if p == nil || *p < 0 {
@@ -106,7 +111,28 @@ func (in *providerInput) validate(create bool) error {
 	if in.Status != nil && *in.Status != "active" && *in.Status != "disabled" {
 		return validation("状态不正确")
 	}
+	if len(in.Assign) > 0 && !create {
+		return validation("只能在添加供应商时一并指定用途")
+	}
+	models := cleanList(in.Models)
+	for role, m := range in.Assign {
+		if _, ok := quickRoles[role]; !ok {
+			return validation("未知的模型用途：" + role)
+		}
+		if m = strings.TrimSpace(m); m != "" && !containsStr(models, m) {
+			return validation(fmt.Sprintf("%s「%s」不在可用模型里", quickRoles[role], m))
+		}
+	}
 	return nil
+}
+
+func containsStr(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) createProvider(w http.ResponseWriter, r *http.Request) error {
@@ -128,14 +154,64 @@ func (s *Server) createProvider(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	p, err := s.scanProvider(s.db.QueryRow(ctx, `INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models,
-		price_per_1k_prompt, price_per_1k_completion) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+providerCols,
-		ident(ctx).WorkspaceID, strings.TrimSpace(*in.Name), *in.BaseURL, enc, s.box.Version, cleanList(in.Models), priceArg(in.PricePrompt), priceArg(in.PriceComplete)))
+	ws := ident(ctx).WorkspaceID
+	var p *Provider
+	assigned, kept := []string{}, []string{}
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		p, err = s.scanProvider(tx.QueryRow(ctx, `INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models,
+			price_per_1k_prompt, price_per_1k_completion) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+providerCols,
+			ws, strings.TrimSpace(*in.Name), *in.BaseURL, enc, s.box.Version, cleanList(in.Models), priceArg(in.PricePrompt), priceArg(in.PriceComplete)))
+		if err != nil {
+			return err
+		}
+		for _, role := range []string{"default", "tier_economy", "tier_quality", "metric_screenshot"} {
+			m := strings.TrimSpace(in.Assign[role])
+			if m == "" {
+				continue
+			}
+			tag, err := tx.Exec(ctx, `INSERT INTO model_route (workspace_id, task_type, provider_id, model) VALUES ($1,$2,$3,$4)
+				ON CONFLICT (workspace_id, task_type) DO NOTHING`, ws, role, p.ID, m)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 1 {
+				assigned = append(assigned, role)
+			} else {
+				kept = append(kept, role)
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	s.audit(ctx, "model_provider_create", "model_provider", p.ID.String(), "ok", map[string]any{"name": p.Name, "base_url": p.BaseURL})
-	return ok(w, p)
+	s.audit(ctx, "model_provider_create", "model_provider", p.ID.String(), "ok", map[string]any{"name": p.Name, "base_url": p.BaseURL, "assigned": assigned})
+	return ok(w, struct {
+		*Provider
+		Assigned []string `json:"assigned"`
+		Kept     []string `json:"kept"`
+	}{p, assigned, kept})
+}
+
+// aiStatus tells any member whether AI is usable and which optional routes exist, so the UI can warn before a call fails.
+func (s *Server) aiStatus(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	rows, err := s.db.Query(ctx, `SELECT r.task_type FROM model_route r JOIN model_provider p ON p.id=r.provider_id
+		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND p.status='active' AND r.task_type = ANY($2)`,
+		ident(ctx).WorkspaceID, []string{"default", "metric_screenshot", "image_gen"})
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	set := map[string]bool{}
+	for rows.Next() {
+		var t string
+		if rows.Scan(&t) == nil {
+			set[t] = true
+		}
+	}
+	return ok(w, map[string]bool{"ready": set["default"], "vision_route": set["metric_screenshot"], "image_route": set["image_gen"]})
 }
 
 func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
