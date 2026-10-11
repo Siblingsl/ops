@@ -282,8 +282,12 @@ function MemoryTab({ account }: { account: Account }) {
                           <Badge>{memoryKindLabel[m.kind]}</Badge>
                           <Badge>{memoryScopeLabel[m.scope]}</Badge>
                           <span>{memorySourceLabel[m.source] ?? m.source}</span>
+                          {m.evidence?.count != null && <span>· 依据 {m.evidence.count} 次相同指令</span>}
+                          {m.evidence?.pairs != null && m.evidence.pairs > 0 && <span>· 基于 {m.evidence.pairs} 组采纳前后对比</span>}
+                          {m.evidence?.rejections != null && m.evidence.rejections > 0 && <span>· {m.evidence.rejections} 条被拒反馈</span>}
                           {m.evidence?.note && <span>· {m.evidence.note}</span>}
-                          {m.use_count > 0 && <span>· 已使用 {m.use_count} 次</span>}
+                          {m.use_count > 0 && <span>· 生成时已使用 {m.use_count} 次</span>}
+                          <span>· {relTime(m.created_at)}</span>
                         </div>
                       </div>
                       {canWrite && (

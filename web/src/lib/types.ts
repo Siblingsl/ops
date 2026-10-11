@@ -507,7 +507,7 @@ export interface Memory {
   text: string
   status: 'suggested' | 'active' | 'disabled'
   source: string
-  evidence: { note?: string; count?: number } | null
+  evidence: { note?: string; count?: number; pairs?: number; rejections?: number } | null
   use_count: number
   last_used_at: string | null
   confirmed_at: string | null
