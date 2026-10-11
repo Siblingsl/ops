@@ -310,6 +310,48 @@ test('OPT14 流式等待与正文超过三十秒仍完成且主动停止保留�
   await expect(page.getByText(/服务暂不可用/)).toHaveCount(0)
 })
 
+test('OPT06 草稿写入期间按钮禁用、并发提示与人工重试', async ({ page }) => {
+  await registerAccount(page)
+  const account = await api(page, 'POST', '/accounts', { platform: 'wechat_mp', name: '并发写入验收号', content_format: 'card_post' })
+  await api(page, 'POST', '/auth/reauth', { password: 'local-e2e-password-123' })
+  await api(page, 'PUT', `/accounts/${account.id}/wechat-credential`, { app_id: 'wx1234567890', app_secret: 's3cret-value-for-test' })
+  await api(page, 'POST', `/accounts/${account.id}/wechat-credential/test`)
+  let work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: '把任务拆成小步骤' })
+  const id = work.id
+  await api(page, 'PATCH', `/works/${id}`, { viewpoint: '先做小目标更容易坚持，这是我的经验判断。' })
+  const outline = await api(page, 'POST', `/works/${id}/outline/generate`)
+  work = await api(page, 'PUT', `/works/${id}/outline`, { items: outline.items, confirm: true })
+  for (const section of work.sections) {
+    await api(page, 'PATCH', `/sections/${section.id}`, { content_md: '先明确目标，再安排一小步，完成后记录感受。', base_revision: section.revision })
+    await api(page, 'POST', `/works/${id}/cards/${section.id}/generate-image`)
+  }
+  await finishChecks(page, id)
+  let requests = 0
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  await page.route(`**/api/v1/works/${id}/wechat/push`, async (route) => {
+    requests++
+    if (requests !== 1) return route.continue()
+    await gate
+    return route.fulfill({ status: 409, json: { error: { code: 'wechat_push_running', message: '正在写入，请稍候' } } })
+  })
+  await page.goto(`/works/${id}/push`)
+  const write = page.getByRole('button', { name: '写入图片消息草稿', exact: true })
+  await expect(write).toBeEnabled()
+  await write.click()
+  await expect(write).toBeDisabled()
+  await expect.poll(() => requests).toBe(1)
+  release()
+  await expect(page.getByText('写入失败：正在写入，请稍候', { exact: true })).toBeVisible()
+  await expect(write).toBeEnabled()
+  expect((await api(page, 'GET', `/works/${id}/wechat/push-preview`)).today_count).toBe(0)
+  await page.getByRole('button', { name: '重试', exact: true }).click()
+  await expect(page.getByText('已写入公众号草稿箱', { exact: true })).toBeVisible()
+  expect(requests).toBe(2)
+  expect((await api(page, 'GET', `/works/${id}/wechat/push-preview`)).today_count).toBe(1)
+  expect((await api(page, 'GET', `/works/${id}`)).wechat_draft_media_id).toMatch(/^mock-draft-/)
+})
+
 async function api(page: Page, method: string, path: string, data?: unknown) {
   const me = await (await page.request.get('/api/v1/auth/me')).json()
   const response = await page.request.fetch('/api/v1' + path, { method, data, headers: { 'X-CSRF-Token': me.csrf_token } })

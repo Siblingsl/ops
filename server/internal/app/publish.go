@@ -172,27 +172,17 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 	if runeLen(content) >= 20000 || len(content) >= 1<<20 {
 		return validation("排版后的正文超出公众号限制（需少于 2 万字符、小于 1MB）")
 	}
-	count, err := s.todayPushCount(ctx, m.Account.ID)
+	record, err := s.reserveWechatPush(ctx, m, wk, in, "add")
 	if err != nil {
 		return err
 	}
-	overLimit := count >= m.Account.DailyPushLimit
-	if overLimit && !in.ConfirmOverLimit {
-		return apiErr(409, "push_limit_reached", fmt.Sprintf("今天已写入草稿 %d 次，达到上限 %d 次。频繁写入可能被平台视为批量发布（3.27.2），确认仍要继续吗？", count, m.Account.DailyPushLimit)).
-			With(map[string]int{"today_count": count, "daily_limit": m.Account.DailyPushLimit})
-	}
+	recordID, count, overLimit := record.ID, record.Count, record.OverLimit
 
 	sse := newSSE(w)
 	step := func(name, status string, cur, total int) {
 		sse.send("step", map[string]any{"name": name, "status": status, "current": cur, "total": total})
 	}
 	action := "add"
-	var recordID uuid.UUID
-	if err := s.db.QueryRow(ctx, `INSERT INTO push_record (work_id, account_id, action, status, over_limit) VALUES ($1,$2,'add','running',$3) RETURNING id`,
-		m.ID, m.Account.ID, overLimit).Scan(&recordID); err != nil {
-		sse.fail(err)
-		return nil
-	}
 	fail := func(f pushFail) {
 		code, msg := "", f.err.Error()
 		var we *wechat.Error
@@ -422,27 +412,17 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 	if runeLen(content) >= 20000 || len(content) >= 1<<20 {
 		return validation("图片消息正文超出公众号限制（需少于 2 万字符、小于 1MB）")
 	}
-	count, err := s.todayPushCount(ctx, m.Account.ID)
+	record, err := s.reserveWechatPush(ctx, m, wk, in, "newspic")
 	if err != nil {
 		return err
 	}
-	overLimit := count >= m.Account.DailyPushLimit
-	if overLimit && !in.ConfirmOverLimit {
-		return apiErr(409, "push_limit_reached", fmt.Sprintf("今天已写入草稿 %d 次，达到上限 %d 次。频繁写入可能被平台视为批量发布（3.27.2），确认仍要继续吗？", count, m.Account.DailyPushLimit)).
-			With(map[string]int{"today_count": count, "daily_limit": m.Account.DailyPushLimit})
-	}
+	recordID, count := record.ID, record.Count
 
 	sse := newSSE(w)
 	step := func(name, status string, cur, total int) {
 		sse.send("step", map[string]any{"name": name, "status": status, "current": cur, "total": total})
 	}
 	action := "newspic"
-	var recordID uuid.UUID
-	if err := s.db.QueryRow(ctx, `INSERT INTO push_record (work_id, account_id, action, status, over_limit) VALUES ($1,$2,'newspic','running',$3) RETURNING id`,
-		m.ID, m.Account.ID, overLimit).Scan(&recordID); err != nil {
-		sse.fail(err)
-		return nil
-	}
 	fail := func(f pushFail) {
 		code, msg := "", f.err.Error()
 		var we *wechat.Error
