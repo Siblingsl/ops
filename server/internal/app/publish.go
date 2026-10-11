@@ -765,8 +765,9 @@ func (s *Server) markPublished(w http.ResponseWriter, r *http.Request) error {
 	if url != "" && !strings.HasPrefix(url, "http") {
 		return validation("链接需要以 http 开头")
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE work SET status='published', published_url=nullif($2,''), published_at=$3, locked=true, updated_at=now() WHERE id=$1`,
-		m.ID, url, at); err != nil {
+	if _, err := s.db.Exec(r.Context(), `UPDATE work SET status='published', published_url=nullif($2,''), published_at=$3, locked=true, updated_at=now(),
+		wechat_msgid=coalesce(nullif($4,''), wechat_msgid) WHERE id=$1`,
+		m.ID, url, at, parseWechatMsgID(url)); err != nil {
 		return err
 	}
 	s.recomputeMetricOffsets(r.Context(), m.ID)

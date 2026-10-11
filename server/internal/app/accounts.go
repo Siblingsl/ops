@@ -31,6 +31,7 @@ type Account struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	IsDemo         bool       `json:"is_demo"`
 	Credential     *CredState `json:"credential,omitempty"`
+	DatacubeState  string     `json:"datacube_state,omitempty"` // 公众号数据接口：ok | no_permission | unknown
 }
 
 type CredState struct {
@@ -59,7 +60,7 @@ func validFormat(platform, format string) bool {
 }
 
 const accountCols = `a.id, a.platform, a.name, a.content_format, a.type_note, a.status, a.daily_push_limit, a.created_at, a.is_demo,
-	c.app_id, c.app_secret_enc, c.last_check_at, c.last_check_ok, c.last_check_result`
+	c.app_id, c.app_secret_enc, c.last_check_at, c.last_check_ok, c.last_check_result, a.datacube_state`
 
 func (s *Server) scanAccount(row pgx.Row) (*Account, error) {
 	var a Account
@@ -69,8 +70,11 @@ func (s *Server) scanAccount(row pgx.Row) (*Account, error) {
 	var checkOK *bool
 	var checkResult *string
 	if err := row.Scan(&a.ID, &a.Platform, &a.Name, &a.ContentFormat, &a.TypeNote, &a.Status, &a.DailyPushLimit, &a.CreatedAt, &a.IsDemo,
-		&appID, &secretEnc, &checkAt, &checkOK, &checkResult); err != nil {
+		&appID, &secretEnc, &checkAt, &checkOK, &checkResult, &a.DatacubeState); err != nil {
 		return nil, err
+	}
+	if a.Platform != "wechat_mp" {
+		a.DatacubeState = ""
 	}
 	if a.Platform == "wechat_mp" {
 		cs := &CredState{State: "not_configured"}
@@ -493,7 +497,11 @@ func (s *Server) testWechatCredential(w http.ResponseWriter, r *http.Request) er
 		a.ID, okFlag, result); err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"ok": okFlag, "message": result})
+	out := map[string]any{"ok": okFlag, "message": result}
+	if okFlag {
+		out["datacube_state"] = s.probeDatacube(ctx, a.ID, tok.AccessToken)
+	}
+	return ok(w, out)
 }
 
 // accessToken returns a cached token, refreshing it under a row lock (F-011, 06 文档第 5.3 节).

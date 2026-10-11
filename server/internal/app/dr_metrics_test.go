@@ -109,6 +109,133 @@ func TestDR01MetricNodes(t *testing.T) {
 	}
 }
 
+func drWechatAccount(t *testing.T, name string) Account {
+	t.Helper()
+	a := drAccount(t, "wechat_mp", name)
+	env.reauth(t)
+	env.mustJSON(t, "PUT", "/api/v1/accounts/"+a.ID.String()+"/wechat-credential", map[string]string{"app_id": "wx1234567890", "app_secret": "s3cret-value-for-test"}, nil)
+	return a
+}
+
+func detailRows(ref time.Time, reads ...int) []map[string]any {
+	out := []map[string]any{}
+	for i, r := range reads {
+		out = append(out, map[string]any{"stat_date": ref.AddDate(0, 0, i).Format("2006-01-02"), "target_user": 1000,
+			"int_page_read_user": r, "int_page_read_count": r + 10, "share_user": i + 1, "share_count": i + 2, "add_to_fav_user": i, "add_to_fav_count": i})
+	}
+	return out
+}
+
+// DEV-DR03（14 文档 4.2 第 1–3 条）：getarticletotal 回看 7 天、累计口径按天写节点；msgid 精确匹配，
+// 标题规范化 + 发布日 ±1 天匹配；重名或对不上进入待匹配，由人逐条指定或忽略；能力检测记录到账号。
+func TestDR03WechatDatacubeSync(t *testing.T) {
+	ctx := context.Background()
+	if got := parseWechatMsgID("https://mp.weixin.qq.com/s?__biz=MzA5&mid=2247480001&idx=2&sn=abc"); got != "2247480001_2" {
+		t.Fatalf("long link msgid: %q", got)
+	}
+	if got := parseWechatMsgID("https://mp.weixin.qq.com/s/AbCdEf123"); got != "" {
+		t.Fatalf("short link has no msgid: %q", got)
+	}
+
+	a := drWechatAccount(t, "数据接口验收号")
+	var probe struct {
+		OK            bool   `json:"ok"`
+		DatacubeState string `json:"datacube_state"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/wechat-credential/test", nil, &probe)
+	if !probe.OK || probe.DatacubeState != "ok" {
+		t.Fatalf("capability probe on a permitted account: %+v", probe)
+	}
+	env.mockWX.SetDatacubeDenied(true)
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/wechat-credential/test", nil, &probe)
+	if probe.DatacubeState != "no_permission" {
+		env.mockWX.SetDatacubeDenied(false)
+		t.Fatalf("unverified account should be detected: %+v", probe)
+	}
+	env.expectErr(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/sync-wechat", nil, "wechat_capability")
+	env.mockWX.SetDatacubeDenied(false)
+
+	ref := env.srv.today().AddDate(0, 0, -3)
+	pub := ref.Add(20 * time.Hour)
+	exact := drWork(t, a, "精确匹配的文章", "pushed", nil)
+	env.mustJSON(t, "POST", "/api/v1/works/"+exact.ID.String()+"/published", map[string]any{
+		"url": "https://mp.weixin.qq.com/s?__biz=MzA5&mid=2247480001&idx=1&sn=abc", "published_at": pub}, nil)
+	byTitle := drWork(t, a, "标题匹配：同名文章", "published", &pub)
+	twinA := drWork(t, a, "系列文章", "published", &pub)
+	_ = drWork(t, a, "系列文章", "published", &pub)
+	env.mockWX.SetArticleTotals(map[string][]map[string]any{ref.Format("2006-01-02"): {
+		{"ref_date": ref.Format("2006-01-02"), "msgid": "2247480001_1", "title": "随便改过的标题", "details": detailRows(ref, 100, 180, 220)},
+		{"ref_date": ref.Format("2006-01-02"), "msgid": "2247480002_1", "title": "标题匹配：同名文章！", "details": detailRows(ref, 50)},
+		{"ref_date": ref.Format("2006-01-02"), "msgid": "2247480003_1", "title": "系列文章", "details": detailRows(ref, 30, 40)},
+		{"ref_date": ref.Format("2006-01-02"), "msgid": "2247480004_1", "title": "不是用本工具写的", "details": detailRows(ref, 10)},
+	}})
+	defer env.mockWX.SetArticleTotals(nil)
+
+	type syncOut struct {
+		Result datacubeResult `json:"result"`
+	}
+	var s1 syncOut
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/sync-wechat", nil, &s1)
+	if s1.Result.Days != 7 || s1.Result.Articles != 4 || s1.Result.Matched != 2 || s1.Result.Unmatched != 2 || s1.Result.Written != 4 {
+		t.Fatalf("first sync: %+v", s1.Result)
+	}
+	var reads, day int
+	var likes *int
+	var ext string
+	if err := env.srv.db.QueryRow(ctx, `SELECT reads, day_offset, likes, external_id FROM metric_snapshot WHERE work_id=$1 AND source='wechat_api' ORDER BY day_offset DESC LIMIT 1`, exact.ID).
+		Scan(&reads, &day, &likes, &ext); err != nil || reads != 220 || day != 2 || likes != nil || ext != "2247480001_1" {
+		t.Fatalf("cumulative node for exact match: reads=%d day=%d likes=%v ext=%s err=%v", reads, day, likes, ext, err)
+	}
+	var msgid *string
+	_ = env.srv.db.QueryRow(ctx, `SELECT wechat_msgid FROM work WHERE id=$1`, byTitle.ID).Scan(&msgid)
+	if msgid == nil || *msgid != "2247480002_1" {
+		t.Fatalf("title match should remember msgid: %v", msgid)
+	}
+
+	var s2 syncOut
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/sync-wechat", nil, &s2)
+	if n := metricCount(t, exact.ID); n != 3 {
+		t.Fatalf("re-sync must not duplicate nodes, got %d rows", n)
+	}
+
+	var pending []unmatchedRow
+	env.mustJSON(t, "GET", "/api/v1/accounts/"+a.ID.String()+"/metrics/unmatched", nil, &pending)
+	if len(pending) != 2 {
+		t.Fatalf("pending list: %+v", pending)
+	}
+	var twin, outside unmatchedRow
+	for _, p := range pending {
+		if p.ExternalID == "2247480003_1" {
+			twin = p
+		} else {
+			outside = p
+		}
+	}
+	if twin.Reason != "ambiguous" || outside.Reason != "none" || twin.Reads == nil || *twin.Reads != 40 {
+		t.Fatalf("pending reasons: %+v %+v", twin, outside)
+	}
+	env.mustJSON(t, "POST", "/api/v1/metrics/unmatched/"+twin.ID.String()+"/assign", map[string]any{"work_id": twinA.ID}, nil)
+	env.mustJSON(t, "POST", "/api/v1/metrics/unmatched/"+outside.ID.String()+"/ignore", nil, nil)
+	env.expectErr(t, "POST", "/api/v1/metrics/unmatched/"+outside.ID.String()+"/ignore", nil, "state_invalid")
+	if n := metricCount(t, twinA.ID); n != 2 {
+		t.Fatalf("assigned work should get 2 nodes, got %d", n)
+	}
+	var s3 syncOut
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/sync-wechat", nil, &s3)
+	if s3.Result.Matched != 3 || s3.Result.Unmatched != 0 || s3.Result.Ignored != 1 {
+		t.Fatalf("after assign/ignore: %+v", s3.Result)
+	}
+	env.mustJSON(t, "GET", "/api/v1/accounts/"+a.ID.String()+"/metrics/unmatched", nil, &pending)
+	if len(pending) != 0 {
+		t.Fatalf("nothing should stay pending: %+v", pending)
+	}
+	var acc Account
+	env.mustJSON(t, "GET", "/api/v1/accounts/"+a.ID.String(), nil, &acc)
+	if acc.DatacubeState != "ok" {
+		t.Fatalf("successful sync marks the account ok: %q", acc.DatacubeState)
+	}
+}
+
 func drMetric(t *testing.T, workID uuid.UUID, source string, day int, reads int) {
 	t.Helper()
 	if _, err := env.srv.db.Exec(context.Background(), `INSERT INTO metric_snapshot (work_id, captured_at, source, day_offset, reads, likes)

@@ -22,7 +22,10 @@ export interface Account {
   created_at: string
   is_demo?: boolean
   credential?: CredState
+  datacube_state?: DatacubeState
 }
+
+export type DatacubeState = 'ok' | 'no_permission' | 'unknown'
 
 export interface WechatDefaults {
   author: string

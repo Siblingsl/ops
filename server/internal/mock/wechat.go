@@ -28,6 +28,23 @@ type Wechat struct {
 	drafts map[string]*draft
 	images map[string][]byte
 	calls  []string
+
+	articleTotals  map[string][]map[string]any // nil: one sample article per day
+	datacubeDenied bool
+}
+
+// SetArticleTotals replaces the getarticletotal data keyed by ref_date; nil restores the sample.
+func (m *Wechat) SetArticleTotals(data map[string][]map[string]any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.articleTotals = data
+}
+
+// SetDatacubeDenied makes datacube calls fail with 48001, like an unverified account.
+func (m *Wechat) SetDatacubeDenied(denied bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.datacubeDenied = denied
 }
 
 func NewWechat() *Wechat {
@@ -180,19 +197,39 @@ func (m *Wechat) Handler() http.Handler {
 		}
 		writeJSON(w, map[string]any{"news_item": []any{d.Article}})
 	})
-	mux.HandleFunc("/datacube/getarticlesummary", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/datacube/getarticletotal", func(w http.ResponseWriter, r *http.Request) {
 		if !m.checkToken(w, r) {
 			return
 		}
-		writeJSON(w, map[string]any{
-			"list": []any{
-				map[string]any{
-					"ref_date": "2026-10-09", "title": "模拟稿件", "user_source": 0,
-					"int_page_read_user": 120, "int_page_read_count": 180,
-					"share_user": 8, "share_count": 10, "add_to_fav_user": 3, "add_to_fav_count": 3,
-				},
-			},
-		})
+		var in struct {
+			BeginDate string `json:"begin_date"`
+			EndDate   string `json:"end_date"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		m.mu.Lock()
+		denied, data := m.datacubeDenied, m.articleTotals
+		m.mu.Unlock()
+		if denied {
+			wxErr(w, 48001, "api unauthorized")
+			return
+		}
+		if in.BeginDate == "" || in.BeginDate != in.EndDate {
+			wxErr(w, 61501, "date range error")
+			return
+		}
+		list := []map[string]any{}
+		if data != nil {
+			list = append(list, data[in.BeginDate]...)
+		} else if ref, err := time.Parse("2006-01-02", in.BeginDate); err == nil {
+			details := []any{}
+			for d := 0; d < 7 && !ref.AddDate(0, 0, d).After(time.Now().AddDate(0, 0, -1)); d++ {
+				details = append(details, map[string]any{"stat_date": ref.AddDate(0, 0, d).Format("2006-01-02"),
+					"target_user": 1000, "int_page_read_user": 120 * (d + 1), "int_page_read_count": 180 * (d + 1),
+					"share_user": 8 * (d + 1), "share_count": 10 * (d + 1), "add_to_fav_user": 3 * (d + 1), "add_to_fav_count": 3 * (d + 1)})
+			}
+			list = append(list, map[string]any{"ref_date": in.BeginDate, "msgid": "1000" + ref.Format("0102") + "_1", "title": "模拟稿件", "details": details})
+		}
+		writeJSON(w, map[string]any{"list": list})
 	})
 	mux.HandleFunc("/cgi-bin/draft/batchget", func(w http.ResponseWriter, r *http.Request) {
 		if !m.checkToken(w, r) {

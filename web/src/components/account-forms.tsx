@@ -151,8 +151,10 @@ export function CredentialPanel({ account, onChanged }: { account: Account; onCh
   const test = async () => {
     setBusy('test')
     try {
-      const r = await post<{ ok: boolean; message: string }>(`/accounts/${account.id}/wechat-credential/test`)
-      setResult(r)
+      const r = await post<{ ok: boolean; message: string; datacube_state?: string }>(`/accounts/${account.id}/wechat-credential/test`)
+      const cube = r.datacube_state === 'ok' ? '数据统计接口可用，复盘页可以同步文章数据。'
+        : r.datacube_state === 'no_permission' ? '数据统计接口不可用（通常需要微信认证），复盘数据请用截图识别或手动录入。' : ''
+      setResult({ ok: r.ok, message: cube ? `${r.message}；${cube}` : r.message })
       onChanged?.()
     } catch (e) {
       setResult({ ok: false, message: errorMessage(e) })

@@ -186,6 +186,9 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/materials/{id}", s.h(s.deleteMaterial))
 			r.Post("/accounts/{accountId}/metrics/import", s.h(s.importMetrics))
 			r.Post("/accounts/{accountId}/metrics/sync-wechat", s.h(s.syncWechatMetrics))
+			r.Get("/accounts/{accountId}/metrics/unmatched", s.h(s.listUnmatchedMetrics))
+			r.Post("/metrics/unmatched/{id}/assign", s.h(s.assignUnmatchedMetric))
+			r.Post("/metrics/unmatched/{id}/ignore", s.h(s.ignoreUnmatchedMetric))
 
 			r.Get("/accounts/{accountId}/topics", s.h(s.listTopics))
 			r.Post("/accounts/{accountId}/topics", s.h(s.createTopic))

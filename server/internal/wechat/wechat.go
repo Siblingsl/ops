@@ -243,26 +243,34 @@ func (c *Client) DraftBatchGet(ctx context.Context, token string, offset, count 
 	return ids, out.TotalCount, nil
 }
 
-// ArticleSummary is one row from datacube/getarticlesummary (FR-M11-05；通常需企业认证).
-type ArticleSummary struct {
-	RefDate        string `json:"ref_date"`
-	Title          string `json:"title"`
-	UserSource     int    `json:"user_source"`
-	IntPageReadUser int   `json:"int_page_read_user"`
-	IntPageReadCount int  `json:"int_page_read_count"`
-	ShareUser      int    `json:"share_user"`
-	ShareCount     int    `json:"share_count"`
-	AddToFavUser   int    `json:"add_to_fav_user"`
-	AddToFavCount  int    `json:"add_to_fav_count"`
+// ArticleTotalDetail is one day of cumulative stats for an article (datacube/getarticletotal).
+type ArticleTotalDetail struct {
+	StatDate         string `json:"stat_date"`
+	TargetUser       int    `json:"target_user"`
+	IntPageReadUser  int    `json:"int_page_read_user"`
+	IntPageReadCount int    `json:"int_page_read_count"`
+	ShareUser        int    `json:"share_user"`
+	ShareCount       int    `json:"share_count"`
+	AddToFavUser     int    `json:"add_to_fav_user"`
+	AddToFavCount    int    `json:"add_to_fav_count"`
 }
 
-// DatacubeArticleSummary pulls article stats for a date range (max 1 day per WeChat docs for summary).
-func (c *Client) DatacubeArticleSummary(ctx context.Context, token, begin, end string) ([]ArticleSummary, error) {
+// ArticleTotal is one article sent on ref_date with up to 7 days of cumulative details.
+// MsgID is "{msg_data_id}_{index}" (FR-M11-05；通常需企业认证，F-008、V-020).
+type ArticleTotal struct {
+	RefDate string               `json:"ref_date"`
+	MsgID   string               `json:"msgid"`
+	Title   string               `json:"title"`
+	Details []ArticleTotalDetail `json:"details"`
+}
+
+// DatacubeArticleTotal pulls articles sent on one day (the API allows a 1-day span).
+func (c *Client) DatacubeArticleTotal(ctx context.Context, token, day string) ([]ArticleTotal, error) {
 	var out struct {
-		List []ArticleSummary `json:"list"`
+		List []ArticleTotal `json:"list"`
 	}
-	if err := c.postJSON(ctx, "/datacube/getarticlesummary", token, map[string]string{
-		"begin_date": begin, "end_date": end,
+	if err := c.postJSON(ctx, "/datacube/getarticletotal", token, map[string]string{
+		"begin_date": day, "end_date": day,
 	}, &out); err != nil {
 		return nil, err
 	}

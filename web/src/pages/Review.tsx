@@ -265,6 +265,58 @@ function MetricsDrawer({ row, platform, onClose, onNext }: { row: BoardRow; plat
   )
 }
 
+type UnmatchedRow = { id: string; external_id: string; title: string; ref_date: string; reason: 'none' | 'ambiguous'; days: number; reads: number | null }
+
+// DEV-DR03：接口同步中没对上作品的文章，逐条由人指定或忽略，不自动猜。
+function UnmatchedCard({ accountId, works, onDone }: { accountId: string; works: BoardRow[]; onDone: () => void }) {
+  const { data, refetch } = useQuery({ queryKey: ['unmatched', accountId], queryFn: () => get<UnmatchedRow[]>(`/accounts/${accountId}/metrics/unmatched`) })
+  const [pick, setPick] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState<string | null>(null)
+  if (!data?.length) return null
+  const act = async (row: UnmatchedRow, kind: 'assign' | 'ignore') => {
+    setBusy(row.id)
+    try {
+      if (kind === 'assign') {
+        const r = await post<{ written: number }>(`/metrics/unmatched/${row.id}/assign`, { work_id: pick[row.id] })
+        toast.success(`已对应到作品，写入 ${r.written} 天数据`)
+        onDone()
+      } else {
+        await post(`/metrics/unmatched/${row.id}/ignore`)
+      }
+      void refetch()
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+  return (
+    <Card className="mb-6">
+      <CardHeader title={`待匹配的公众号文章（${data.length}）`} desc="数据接口里有这些文章，但没能确定对应哪篇作品。请逐条指定；不是用本工具写的文章可以忽略，以后同步会跳过。" />
+      <div className="divide-y divide-mist-100">
+        {data.map((row) => (
+          <div key={row.id} className="grid items-center gap-2 px-5 py-3 sm:grid-cols-[1fr_220px_auto]">
+            <div className="min-w-0">
+              <div className="truncate text-[13.5px] font-medium text-mist-800">{row.title || '（无标题）'}</div>
+              <div className="text-xs text-mist-400">
+                {row.ref_date} 群发 · {row.reason === 'ambiguous' ? '有多篇同名作品' : '没有找到同名作品'} · {row.days} 天数据{row.reads != null && ` · 阅读 ${fmtNum(row.reads)}`}
+              </div>
+            </div>
+            <Select value={pick[row.id] ?? ''} onChange={(e) => setPick({ ...pick, [row.id]: e.target.value })}>
+              <option value="">选择对应的作品</option>
+              {works.map((w) => <option key={w.id} value={w.id}>{w.title || '未命名'}{w.published_at ? `（${fmtTime(w.published_at)}）` : ''}</option>)}
+            </Select>
+            <div className="flex gap-1.5">
+              <Button size="sm" variant="primary" disabled={!pick[row.id]} loading={busy === row.id} onClick={() => act(row, 'assign')}>指定</Button>
+              <Button size="sm" variant="ghost" disabled={busy === row.id} onClick={() => act(row, 'ignore')}>忽略</Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
 function ReportCard({ report, onAdopted }: { report: ReviewReport; onAdopted: () => void }) {
   const [busy, setBusy] = useState<number | null>(null)
   const [remembering, setRemembering] = useState<number | null>(null)
@@ -364,6 +416,7 @@ export default function Review() {
   const [selected, setSelected] = useState<string[]>([])
   const [recent, setRecent] = useState('10')
   const [running, setRunning] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const inv = useInvalidate()
   const board = useQuery({ queryKey: ['board', acc?.id], queryFn: () => get<BoardRow[]>(`/accounts/${acc!.id}/board`), enabled: !!acc })
   const reports = useQuery({ queryKey: ['reviews', acc?.id], queryFn: () => get<ReviewReport[]>(`/accounts/${acc!.id}/reviews`), enabled: !!acc })
@@ -399,17 +452,22 @@ export default function Review() {
       <Card className="mb-6 overflow-hidden">
         <CardHeader title="作品数据看板" desc="只列出已进入草稿箱、已生成发布包或已发布的作品；数字统一取发布后第 7 天的数据，便于作品之间比较"
           action={<>
-            {acc.platform === 'wechat_mp' && (
-              <Button size="sm" variant="secondary" icon={<BarChart3 className="size-3.5" />} onClick={async () => {
+            {acc.platform === 'wechat_mp' && acc.datacube_state !== 'no_permission' && (
+              <Button size="sm" variant="secondary" icon={<BarChart3 className="size-3.5" />} loading={syncing} onClick={async () => {
+                setSyncing(true)
                 try {
-                  const r = await post<{ imported: number; unmatched: number; message: string }>(`/accounts/${acc.id}/metrics/sync-wechat`, {})
-                  toast.success(r.message || `已同步 ${r.imported} 条`)
-                  board.refetch()
-                  inv(['board'])
+                  const r = await post<{ message: string }>(`/accounts/${acc.id}/metrics/sync-wechat`, {})
+                  toast.success(r.message)
                 } catch (e) {
                   toast.error(errorMessage(e))
+                } finally {
+                  setSyncing(false)
+                  board.refetch()
+                  inv(['board'])
+                  inv(['unmatched', acc.id])
+                  inv(['accounts'])
                 }
-              }}>同步微信数据</Button>
+              }}>同步公众号数据</Button>
             )}
             <ImportMetrics accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />
           </>} />
@@ -451,7 +509,11 @@ export default function Review() {
             </table>
           </div>
         )}
+        {acc.platform === 'wechat_mp' && acc.datacube_state === 'no_permission' && (
+          <p className="border-t border-mist-100 px-5 py-3 text-xs text-mist-500">当前公众号没有数据统计接口权限（通常需要微信认证），数据请用截图识别、粘贴回填或手动录入。</p>
+        )}
       </Card>
+      {acc.platform === 'wechat_mp' && <UnmatchedCard accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />}
 
       <div className="grid gap-6 lg:grid-cols-[340px_1fr] 2xl:grid-cols-[380px_1fr]">
         <Card className="h-fit p-5">
