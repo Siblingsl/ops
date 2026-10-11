@@ -279,11 +279,32 @@ func (s *Server) reorderSections(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &in); err != nil {
 		return err
 	}
+	seen := map[uuid.UUID]bool{}
+	for _, id := range in.IDs {
+		if seen[id] {
+			return validation("排序不能包含重复段落")
+		}
+		seen[id] = true
+	}
 	err = s.withTx(r.Context(), func(tx pgx.Tx) error {
+		var total, matched int
+		if err := tx.QueryRow(r.Context(), `SELECT count(*), count(*) FILTER(WHERE id=ANY($2::uuid[])) FROM work_section WHERE work_id=$1 AND deleted_at IS NULL`, m.ID, in.IDs).Scan(&total, &matched); err != nil {
+			return err
+		}
+		if total != len(in.IDs) || matched != total {
+			return validation("请提供本作品全部有效段落，不能遗漏或包含其他作品段落")
+		}
 		for i, id := range in.IDs {
-			if _, err := tx.Exec(r.Context(), `UPDATE work_section SET position=$3 WHERE id=$1 AND work_id=$2`, id, m.ID, i); err != nil {
+			if _, err := tx.Exec(r.Context(), `UPDATE work_section SET position=$3 WHERE id=$1 AND work_id=$2 AND deleted_at IS NULL`, id, m.ID, i); err != nil {
 				return err
 			}
+		}
+		if _, err := tx.Exec(r.Context(), `UPDATE work_card c SET position=s.position,updated_at=now() FROM work_section s WHERE c.section_id=s.id AND c.work_id=$1 AND s.deleted_at IS NULL`, m.ID); err != nil {
+			return err
+		}
+		// 已确认大纲按段落事实顺序同步，保留全部文案和素材引用。
+		if _, err := tx.Exec(r.Context(), `UPDATE work SET outline=coalesce((SELECT jsonb_agg(item ORDER BY s.position NULLS LAST,idx) FROM jsonb_array_elements(outline) WITH ORDINALITY o(item,idx) LEFT JOIN work_section s ON s.id::text=item->>'section_id' AND s.work_id=$1 AND s.deleted_at IS NULL),'[]'::jsonb) WHERE id=$1 AND outline_confirmed_at IS NOT NULL`, m.ID); err != nil {
+			return err
 		}
 		return s.touchContent(r.Context(), tx, m.ID)
 	})

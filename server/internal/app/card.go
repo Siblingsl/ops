@@ -14,15 +14,15 @@ import (
 // D-048 图文卡片（card_post）：卡片 = 作品段落（卡片标题与正文）+ 逐卡 AI 配图。
 // 大纲确认后每段是一张卡片；打包与公众号图片消息按卡片图取材，文案随包输出。
 type WorkCard struct {
-	ID           uuid.UUID `json:"id"`
-	SectionID    uuid.UUID `json:"section_id"`
-	Position     int       `json:"position"`
-	Heading      string    `json:"heading"`
-	Body         string    `json:"body"`
-	ImageAssetID *uuid.UUID
-	ImageURL     string    `json:"image_url,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           uuid.UUID  `json:"id"`
+	SectionID    uuid.UUID  `json:"section_id"`
+	Position     int        `json:"position"`
+	Heading      string     `json:"heading"`
+	Body         string     `json:"body"`
+	ImageAssetID *uuid.UUID `json:"image_asset_id"`
+	ImageURL     string     `json:"image_url,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 func (s *Server) loadCards(ctx context.Context, q pgx.Tx, workID uuid.UUID) ([]WorkCard, error) {

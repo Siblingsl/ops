@@ -148,6 +148,30 @@ test('卡片大纲确认、逐卡配图、检查与含文案发布包', async ({
     await buttons.first().click()
     await expect(page.getByRole('button', { name: '重新生成配图', exact: true })).toHaveCount(i + 1)
   }
+  work = await api(page, 'GET', `/works/${id}`)
+  const firstId = work.sections[0].id
+  const secondId = work.sections[1].id
+  await page.getByRole('button', { name: '下移卡片 1', exact: true }).click()
+  await expect.poll(async () => (await api(page, 'GET', `/works/${id}`)).cards[0].section_id).toBe(secondId)
+  await page.getByRole('button', { name: '上移卡片 2', exact: true }).click()
+  await expect.poll(async () => (await api(page, 'GET', `/works/${id}`)).cards[0].section_id).toBe(firstId)
+  const first = page.locator(`[data-card-section="${firstId}"]`)
+  await first.getByLabel('配图提示词（可选）').fill('绿色书桌与笔记本，保持留白')
+  let generations = 0
+  page.on('request', r => { if (r.url().endsWith('/generate-image') && r.method() === 'POST') generations++ })
+  await first.getByRole('button', { name: '重新生成配图', exact: true }).click()
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  expect(generations).toBe(0)
+  const oldURL = work.cards[0].image_url
+  await first.getByRole('button', { name: '重新生成配图', exact: true }).click()
+  await expect(page.getByRole('dialog')).toContainText('旧图保留')
+  const regenerated = page.waitForResponse(r => r.url().endsWith('/generate-image') && r.request().method() === 'POST')
+  await page.getByRole('button', { name: '重新生成这一张', exact: true }).click()
+  const response = await regenerated
+  expect(response.request().postDataJSON().prompt).toBe('绿色书桌与笔记本，保持留白')
+  expect(response.ok()).toBeTruthy()
+  expect(generations).toBe(1)
+  expect((await page.request.get(oldURL)).ok()).toBeTruthy()
   await api(page, 'PATCH', `/works/${id}`, { title: '把任务拆成小步骤' })
   await finishChecks(page, id)
   await page.goto(`/works/${id}/pack`)

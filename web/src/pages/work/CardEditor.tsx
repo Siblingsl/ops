@@ -1,15 +1,16 @@
-import { ImagePlus, RefreshCw, Sparkles } from 'lucide-react'
+import { ArrowDown, ArrowUp, ImagePlus, RefreshCw, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge, Button, Card, cn, HumanGate, Input } from '@/components/ui'
+import { confirm } from '@/components/dialog'
 import { aiError } from '@/lib/ai-error'
-import { errorMessage, patch, post } from '@/lib/api'
+import { errorMessage, patch, post, put } from '@/lib/api'
 import { useCanWrite } from '@/lib/session'
 import type { WorkCard } from '@/lib/types'
 import { useWork } from './WorkLayout'
 
 // D-048 图文卡片编辑器：每张卡片 = 段落标题与正文 + 逐卡 AI 配图。
-// 卡片清单由大纲确认生成；增删与排序通过「修改大纲」完成，与文字作品一致。
+// 卡片清单由大纲确认生成；增删通过「修改大纲」，排序同步段落、大纲和卡片。
 export default function CardEditor() {
   const { work, refresh } = useWork()
   const canWrite = useCanWrite()
@@ -19,10 +20,10 @@ export default function CardEditor() {
   const ordered = work.sections.map((s) => ({ sec: s, card: bySection.get(s.id) }))
   const [busy, setBusy] = useState<string | null>(null)
 
-  const gen = async (sectionId: string) => {
+  const gen = async (sectionId: string, prompt: string) => {
     setBusy(sectionId)
     try {
-      await post(`/works/${work.id}/cards/${sectionId}/generate-image`)
+      await post(`/works/${work.id}/cards/${sectionId}/generate-image`, { prompt: prompt.trim() })
       await refresh()
       toast.success('卡片配图已生成')
     } catch (e) {
@@ -30,6 +31,19 @@ export default function CardEditor() {
     } finally {
       setBusy(null)
     }
+  }
+
+  const move = async (index: number, offset: number) => {
+    const ids = work.sections.map(s => s.id)
+    const target = index + offset
+    if (target < 0 || target >= ids.length || busy) return
+    ;[ids[index], ids[target]] = [ids[target], ids[index]]
+    setBusy('order')
+    try {
+      await put(`/works/${work.id}/sections/order`, { ids })
+      await refresh()
+      toast.success('卡片顺序已更新')
+    } catch (e) { toast.error(errorMessage(e)) } finally { setBusy(null) }
   }
 
   return (
@@ -48,7 +62,8 @@ export default function CardEditor() {
       </Card>
       {ordered.map(({ sec, card }, i) => (
         <CardRow key={sec.id} index={i + 1} card={card} heading={sec.heading} body={sec.content_md} revision={sec.revision}
-          readOnly={readOnly || !work.outline_confirmed_at} canWrite={canWrite} busy={busy === sec.id} onGenerate={() => gen(sec.id)} onChanged={refresh} />
+          readOnly={readOnly || !work.outline_confirmed_at} canWrite={canWrite} busy={busy === sec.id} blocked={!!busy}
+          total={ordered.length} onMove={offset => move(i, offset)} onGenerate={prompt => gen(sec.id, prompt)} onChanged={refresh} />
       ))}
       {ordered.length === 0 && (
         <Card className="p-8 text-center text-[13px] text-mist-400">还没有卡片：先在创作页写下核心观点并生成大纲。</Card>
@@ -60,7 +75,7 @@ export default function CardEditor() {
   )
 }
 
-function CardRow({ index, card, heading, body, revision, readOnly, canWrite, busy, onGenerate, onChanged }: {
+function CardRow({ index, card, heading, body, revision, readOnly, canWrite, busy, blocked, total, onMove, onGenerate, onChanged }: {
   index: number
   card?: WorkCard
   heading: string
@@ -69,14 +84,18 @@ function CardRow({ index, card, heading, body, revision, readOnly, canWrite, bus
   readOnly: boolean
   canWrite: boolean
   busy: boolean
-  onGenerate: () => void
+  blocked: boolean
+  total: number
+  onMove: (offset: number) => void
+  onGenerate: (prompt: string) => void
   onChanged: () => Promise<unknown>
 }) {
   const [h, setH] = useState(heading)
   const [b, setB] = useState(body)
+  const [prompt, setPrompt] = useState('')
   const base = useRef(revision)
   useEffect(() => { setH(heading); setB(body); base.current = revision }, [heading, body, revision])
-  const editable = canWrite && !readOnly
+  const editable = canWrite && !readOnly && !blocked
   const save = async () => {
     if (!editable) return
     if (h === heading && b === body) return
@@ -88,14 +107,20 @@ function CardRow({ index, card, heading, body, revision, readOnly, canWrite, bus
     }
   }
   const image = card?.image_url
+  const generate = async () => {
+    if (image && !(await confirm({ title: '重新生成这张卡片配图？', desc: '仅替换这张卡片的当前配图，旧图保留在图片库和作品资产中；相同图片会去重，不额外创建副本。', confirmText: '重新生成这一张' }))) return
+    onGenerate(prompt)
+  }
   return (
-    <Card className="p-5">
+    <Card className="p-5" data-card-section={card?.section_id}>
       <div className="mb-3 flex items-center gap-2">
         <Badge tone="ink">卡 {index}</Badge>
+        <Button size="sm" variant="ghost" aria-label={`上移卡片 ${index}`} disabled={!editable || index === 1} onClick={() => onMove(-1)} icon={<ArrowUp className="size-3.5" />} />
+        <Button size="sm" variant="ghost" aria-label={`下移卡片 ${index}`} disabled={!editable || index === total} onClick={() => onMove(1)} icon={<ArrowDown className="size-3.5" />} />
         <Input className="h-8 flex-1 font-medium" value={h} placeholder="卡片标题（8 字以内）" disabled={!editable}
           onChange={(e) => setH(e.target.value)} onBlur={save} />
-        {editable && (
-          <Button size="sm" variant={image ? 'ghost' : 'secondary'} loading={busy} onClick={onGenerate}
+        {canWrite && !readOnly && (
+          <Button size="sm" variant={image ? 'ghost' : 'secondary'} loading={busy} disabled={blocked} onClick={generate}
             icon={image ? <RefreshCw className="size-3.5" /> : <ImagePlus className="size-3.5" />}>
             {image ? '重新生成配图' : '生成配图'}
           </Button>
@@ -105,6 +130,10 @@ function CardRow({ index, card, heading, body, revision, readOnly, canWrite, bus
         className={cn('w-full resize-y rounded-lg border border-mist-200 bg-white px-3 py-2 text-[13.5px] leading-relaxed focus:border-ink-300 focus:outline-none',
           !editable && 'bg-mist-50 text-mist-500')}
         onChange={(e) => setB(e.target.value)} onBlur={save} />
+      {canWrite && !readOnly && <label className="mt-3 block text-xs text-mist-500">
+        配图提示词（可选）
+        <Input className="mt-1" value={prompt} disabled={blocked} onChange={e => setPrompt(e.target.value)} placeholder="留空则按卡片文案生成；例如：绿色书桌与笔记本，保持留白" />
+      </label>}
       {image ? (
         <div className="mt-3 overflow-hidden rounded-lg border border-mist-100 bg-mist-50">
           <img src={image} alt={`卡片 ${index} 配图`} className="max-h-80 w-full object-contain" />
