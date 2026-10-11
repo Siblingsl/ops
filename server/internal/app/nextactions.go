@@ -29,11 +29,11 @@ type naWork struct {
 	OutlineConfirmed  bool
 	Viewpoint         bool
 	EmptySections     []uuid.UUID
-	MetricCount       int
 	OpenTodos         int
-	ReviewPending     bool
 	PushedOrPacked    bool
 	PendingCheckItems int
+	// DueNode is the day-1/3/7/30 data node this published work is in and still lacks (same rule as DR04 reminders).
+	DueNode *int
 }
 
 type naInput struct {
@@ -46,6 +46,11 @@ type naInput struct {
 	PendingDaily      int
 	PendingMemories   int
 	WriteEndingFirst  bool
+	// DEV-UX02: workspace-level items for the dashboard main line.
+	AIMissing    bool
+	IsOwner      bool
+	Unmatched    int
+	DraftPending int
 }
 
 const (
@@ -115,15 +120,19 @@ func nextActions(in naInput, limit int) []NextAction {
 					Text: fmt.Sprintf("%s计划%s发布，还在创作中", titleOr(w.Title), when), Action: "继续写", Link: link})
 			}
 		}
-		if w.PushedOrPacked && w.PublishedAt != nil {
-			d := days(in.Now, *w.PublishedAt)
-			for _, mark := range []int{7, 3, 1} {
-				if d >= mark && w.MetricCount < metricExpected(mark) {
-					offer(w.ID, NextAction{Kind: "metrics", Score: naTimely + float64(mark),
-						Text: fmt.Sprintf("%s发布已满 %d 天，录入数据可以让复盘更准", titleOr(w.Title), mark), Action: "去录入", Link: acc + "/review?work=" + w.ID.String()})
-					break
-				}
+		if w.DueNode != nil {
+			n := *w.DueNode
+			offer(w.ID, NextAction{Kind: "metrics", Score: naTimely + float64(min(n, 7)),
+				Text: fmt.Sprintf("%s发布已满 %d 天，录入第 %d 天数据可以让复盘更准", titleOr(w.Title), n, n), Action: "去录入",
+				Link: fmt.Sprintf("%s/review?work=%s&node=%d", acc, w.ID, n)})
+		}
+		if (w.Status == "pushed" || w.Status == "packed") && idle >= 1 {
+			where := "已写入草稿箱"
+			if w.Status == "packed" {
+				where = "已生成发布包"
 			}
+			offer(w.ID, NextAction{Kind: "publish", Score: naTimely - 30 + float64(min(idle, 10)),
+				Text: fmt.Sprintf("%s%s %d 天，在平台发布后回来标记已发布", titleOr(w.Title), where, idle), Action: "去回填", Link: link + publish})
 		}
 		// Open back-office todos stay listed alongside the work's other action until every item is ticked (EX-I-01).
 		if w.PushedOrPacked && w.OpenTodos > 0 {
@@ -143,7 +152,20 @@ func nextActions(in naInput, limit int) []NextAction {
 		extra = append(extra, NextAction{Kind: "daily", Score: naNew + 10, Text: fmt.Sprintf("今天还有 %d 条推荐未处理", in.PendingDaily), Action: "选择今天写什么", Link: acc + "/ops"})
 	}
 	if in.PendingMemories > 0 {
-		extra = append(extra, NextAction{Kind: "memory", Score: naNew - 10, Text: fmt.Sprintf("AI 学到了 %d 条新偏好，等你确认", in.PendingMemories), Action: "去确认", Link: acc + "/profile?tab=memory"})
+		extra = append(extra, NextAction{Kind: "memory", Score: naNew - 10, Text: fmt.Sprintf("AI 学到了 %d 条新偏好，等你确认（确认前不影响生成）", in.PendingMemories), Action: "去确认", Link: acc + "/profile?tab=memory"})
+	}
+	if in.AIMissing {
+		a := NextAction{Kind: "setup", Score: naBlocking + 200, Text: "还没有配置模型，AI 功能暂时不能用（写作、检查和推送不受影响）", Action: "快速配置", Link: "/settings/models"}
+		if !in.IsOwner {
+			a.Text, a.Action = "工作区还没有配置模型，请所有者在「设置 → 模型配置」里配置", "查看"
+		}
+		extra = append(extra, a)
+	}
+	if in.Unmatched > 0 {
+		extra = append(extra, NextAction{Kind: "unmatched", Score: naTimely - 40, Text: fmt.Sprintf("公众号数据里有 %d 篇文章没对上作品，逐条指定后才计入复盘", in.Unmatched), Action: "去指定", Link: acc + "/review"})
+	}
+	if in.DraftPending > 0 {
+		extra = append(extra, NextAction{Kind: "report", Score: naNew + 5, Text: fmt.Sprintf("每周复盘草稿里还有 %d 条选题建议没处理", in.DraftPending), Action: "去看看", Link: acc + "/review"})
 	}
 	list := extra
 	for _, a := range best {
@@ -159,18 +181,6 @@ func nextActions(in naInput, limit int) []NextAction {
 		list = list[:limit]
 	}
 	return list
-}
-
-// metricExpected is how many data entries are expected by day 1 / 3 / 7 (EX-J-01).
-func metricExpected(day int) int {
-	switch day {
-	case 1:
-		return 1
-	case 3:
-		return 2
-	default:
-		return 3
-	}
 }
 
 func truncDay(t time.Time) time.Time {

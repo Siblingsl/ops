@@ -25,13 +25,14 @@ func TestNextActionsOrdering(t *testing.T) {
 	}
 	published := now.AddDate(0, 0, -4)
 	planned := truncDay(now)
+	node3 := 3
 	in := naInput{Now: now, AccountID: uuid.New(), Platform: "wechat_mp", AdoptedNotStarted: 2, PendingMemories: 1, Works: []naWork{
 		{ID: ids[0], Title: "待推送", Status: "ready", UpdatedAt: now.AddDate(0, 0, -3)},
 		{ID: ids[1], Title: "待审阅", Status: "reviewing", UpdatedAt: now},
 		{ID: ids[2], Title: "检查中", Status: "checking", UpdatedAt: now, PendingCheckItems: 2},
 		{ID: ids[3], Title: "起草中", Status: "drafting", UpdatedAt: now, OutlineConfirmed: true, Viewpoint: true, EmptySections: []uuid.UUID{uuid.New(), uuid.New()}},
 		{ID: ids[4], Title: "今天计划", Status: "drafting", UpdatedAt: now, PlannedDate: &planned},
-		{ID: ids[5], Title: "已推送", Status: "pushed", UpdatedAt: now, PushedOrPacked: true, PublishedAt: &published, MetricCount: 1, OpenTodos: 2},
+		{ID: ids[5], Title: "已发布", Status: "published", UpdatedAt: now, PushedOrPacked: true, PublishedAt: &published, DueNode: &node3, OpenTodos: 2},
 	}}
 	list := nextActions(in, 20)
 	kinds := map[string]bool{}

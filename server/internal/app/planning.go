@@ -275,23 +275,29 @@ func (s *Server) getNextActions(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
-	in := naInput{Now: s.now().In(s.loc), AccountID: a.ID, Platform: a.Platform, WriteEndingFirst: s.userPrefs(ctx).WriteEndingFirst}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 3
+	}
+	limit = min(limit, 10)
+	in := naInput{Now: s.now().In(s.loc), AccountID: a.ID, Platform: a.Platform, WriteEndingFirst: s.userPrefs(ctx).WriteEndingFirst,
+		IsOwner: ident(ctx).Role == "owner"}
 	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.status, w.updated_at, w.published_at, w.planned_date, w.outline_confirmed_at IS NOT NULL,
-		w.viewpoint<>'', (SELECT count(*) FROM metric_snapshot m WHERE m.work_id=w.id),
+		w.viewpoint<>'', `+nodeDueExpr(2, 3)+`,
 		(SELECT count(*) FROM jsonb_array_elements(w.post_push_todos) e WHERE NOT coalesce((e->>'done')::boolean,false)),
 		w.status IN ('pushed','packed','published'),
 		(SELECT count(*) FROM check_item ci JOIN check_run cr ON cr.id=ci.check_run_id WHERE cr.work_id=w.id AND cr.revision=w.revision AND NOT ci.passed AND ci.resolution IS NULL),
 		coalesce((SELECT array_agg(s.id ORDER BY s.position, s.created_at) FROM work_section s WHERE s.work_id=w.id AND s.deleted_at IS NULL AND btrim(s.content_md)=''), '{}')
-		FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND (w.status<>'published' OR w.published_at > now() - interval '10 days'
+		FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND (w.status<>'published' OR w.published_at > $2::timestamptz - interval '30 days'
 			OR EXISTS (SELECT 1 FROM jsonb_array_elements(w.post_push_todos) e WHERE NOT coalesce((e->>'done')::boolean,false)))
-		ORDER BY w.updated_at DESC LIMIT 100`, a.ID)
+		ORDER BY w.updated_at DESC LIMIT 100`, a.ID, s.now(), datacubeCovers(a))
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var x naWork
 		var planned *time.Time
-		if err := rows.Scan(&x.ID, &x.Title, &x.Status, &x.UpdatedAt, &x.PublishedAt, &planned, &x.OutlineConfirmed, &x.Viewpoint, &x.MetricCount,
+		if err := rows.Scan(&x.ID, &x.Title, &x.Status, &x.UpdatedAt, &x.PublishedAt, &planned, &x.OutlineConfirmed, &x.Viewpoint, &x.DueNode,
 			&x.OpenTodos, &x.PushedOrPacked, &x.PendingCheckItems, &x.EmptySections); err != nil {
 			rows.Close()
 			return err
@@ -319,7 +325,15 @@ func (s *Server) getNextActions(w http.ResponseWriter, r *http.Request) error {
 			}
 		}
 	}
-	return ok(w, nextActions(in, 3))
+	var aiReady bool
+	_ = s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM model_route r JOIN model_provider p ON p.id=r.provider_id
+		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND r.task_type='default' AND p.status='active')`, ident(ctx).WorkspaceID).Scan(&aiReady)
+	in.AIMissing = !aiReady
+	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM metric_unmatched WHERE account_id=$1 AND status='pending'`, a.ID).Scan(&in.Unmatched)
+	_ = s.db.QueryRow(ctx, `SELECT greatest(coalesce(jsonb_array_length(content->'topic_suggestions'),0) - coalesce(cardinality(adopted),0), 0)
+		FROM review_report WHERE account_id=$1 AND origin='weekly_draft' AND created_at > $2 ORDER BY created_at DESC LIMIT 1`,
+		a.ID, s.now().AddDate(0, 0, -14)).Scan(&in.DraftPending)
+	return ok(w, nextActions(in, limit))
 }
 
 type HealthItem struct {

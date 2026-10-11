@@ -2,17 +2,17 @@ import { FirstValueGuide } from '@/components/first-value-guide'
 import { DailyPanel } from './ops/Daily'
 import HotPanel from './ops/Hot'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, BookOpenCheck, Brain, CalendarDays, CheckCircle2, Circle, ClipboardCheck, Compass, Cpu, FilePen, HeartPulse, KeyRound, Lightbulb, PenLine, Send, Sparkles, TrendingUp, UploadCloud } from 'lucide-react'
+import { ArrowRight, BookOpenCheck, CalendarDays, CheckCircle2, Circle, ClipboardCheck, Compass, Cpu, FilePen, HeartPulse, KeyRound, Lightbulb, PenLine, Send, Sparkles, TrendingUp, UploadCloud } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
-import { Button, Card, cn, Empty, Notice, PageHeader, PageLoading, StatusBadge } from '@/components/ui'
+import { Button, Card, cn, Notice, PageHeader, PageLoading, StatusBadge } from '@/components/ui'
 import { del, errorMessage, get, post } from '@/lib/api'
 import { fmtNum, relTime } from '@/lib/format'
 import { useAccounts, useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
-import type { Account, AILimit, HealthItem, NextAction, Work, WorkStatus } from '@/lib/types'
-import { usePendingMemories, usePrefetchWork } from '@/lib/v3'
+import type { Account, AILimit, DailyResult, HealthItem, NextAction, Work, WorkStatus } from '@/lib/types'
+import { usePrefetchWork } from '@/lib/v3'
 
 interface Todo { work_id: string; title: string; status: WorkStatus; kind: string; hint: string; at: string; node?: number }
 interface Dash {
@@ -103,28 +103,48 @@ function BriefCard({ accountId }: { accountId: string }) {
   )
 }
 
-function NextActions({ accountId }: { accountId: string }) {
-  const { data: all } = useQuery({ queryKey: ['next-actions', accountId], queryFn: () => get<NextAction[]>(`/accounts/${accountId}/next-actions`), staleTime: 30_000 })
-  const data = all?.filter((a) => a.kind !== 'memory')
-  if (!data || data.length === 0) return null
+// DEV-UX02（D-052 第 2 条）：首屏只有一条按规则排好序的主线，每一项直接打开对应的下一步；不调用模型，不批量处理。
+function MainLine({ accountId, hideSetup, onCreate }: { accountId: string; hideSetup: boolean; onCreate?: () => void }) {
+  const { data: all, isLoading } = useQuery({ queryKey: ['next-actions', accountId, 'main'], queryFn: () => get<NextAction[]>(`/accounts/${accountId}/next-actions?limit=8`), staleTime: 30_000 })
+  const data = (all ?? []).filter((a) => !(hideSetup && a.kind === 'setup'))
+  if (isLoading) return null
+  const [first, ...rest] = data
   return (
     <Card className="mb-6 overflow-hidden border-ink-100">
       <div className="flex items-center gap-2 border-b border-ink-100 bg-ink-50/50 px-5 py-3">
         <Compass className="size-4 text-ink-600" />
-        <h3 className="text-[14px] font-semibold text-mist-900">现在最值得做的</h3>
-        <span className="text-xs text-mist-400">按截止日、进度和数据提醒排序</span>
+        <h3 className="text-[14px] font-semibold text-mist-900">今天的主线</h3>
+        <span className="text-xs text-mist-400">按"卡住发布 → 有时效 → 进行中 → 新任务"排好了，从第 1 项做起</span>
       </div>
-      <ul className="divide-y divide-mist-100">
-        {data.map((a, i) => (
-          <li key={a.kind + i}>
-            <Link to={a.link} className="group flex items-center gap-3 px-5 py-3 transition hover:bg-mist-50">
-              <span className={cn('flex size-6 shrink-0 items-center justify-center rounded-full text-[12px] font-bold', i === 0 ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-500')}>{i + 1}</span>
-              <span className="min-w-0 flex-1 text-[13.5px] text-mist-800 group-hover:text-ink-700">{a.text}</span>
-              <span className="shrink-0 rounded-full border border-mist-200 px-2.5 py-0.5 text-[12px] text-mist-600 group-hover:border-ink-300 group-hover:text-ink-700">{a.action}</span>
-            </Link>
-          </li>
-        ))}
-      </ul>
+      {!first ? (
+        <div className="flex flex-wrap items-center gap-3 px-5 py-5">
+          <CheckCircle2 className="size-5 text-success" />
+          <span className="flex-1 text-[13.5px] text-mist-700">主线上的事都处理完了。可以从选题池挑一个题目，或者直接新建作品。</span>
+          <Link to={`/a/${accountId}/topics`}><Button size="sm" icon={<Lightbulb className="size-3.5" />}>去选题池</Button></Link>
+          {onCreate && <Button size="sm" variant="primary" icon={<PenLine className="size-3.5" />} onClick={onCreate}>新建作品</Button>}
+        </div>
+      ) : (
+        <>
+          <Link to={first.link} className="group flex items-center gap-4 px-5 py-4 transition hover:bg-ink-50/40">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-ink-600 text-[13px] font-bold text-white">1</span>
+            <span className="min-w-0 flex-1 text-[14.5px] font-medium text-mist-900 group-hover:text-ink-800">{first.text}</span>
+            <span className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg bg-ink-600 px-3.5 text-[13px] font-medium text-white group-hover:bg-ink-700">{first.action}<ArrowRight className="size-3.5" /></span>
+          </Link>
+          {rest.length > 0 && (
+            <ul className="divide-y divide-mist-100 border-t border-mist-100">
+              {rest.map((a, i) => (
+                <li key={a.kind + (a.work_id ?? '') + i}>
+                  <Link to={a.link} className="group flex items-center gap-3 px-5 py-2.5 transition hover:bg-mist-50">
+                    <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-mist-100 text-[12px] font-bold text-mist-500">{i + 2}</span>
+                    <span className="min-w-0 flex-1 text-[13.5px] text-mist-700 group-hover:text-ink-700">{a.text}</span>
+                    <span className="shrink-0 rounded-full border border-mist-200 px-2.5 py-0.5 text-[12px] text-mist-600 group-hover:border-ink-300 group-hover:text-ink-700">{a.action}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
     </Card>
   )
 }
@@ -231,7 +251,7 @@ export default function Dashboard() {
   const { data, isLoading } = useQuery({ queryKey: ['dashboard', acc?.id], queryFn: () => get<Dash>(`/accounts/${acc!.id}/dashboard`), enabled: !!acc })
   const create = useCreateWork(acc?.id)
   const prefetch = usePrefetchWork()
-  const pendingMemories = usePendingMemories(acc?.id)
+  const daily = useQuery({ queryKey: ['daily', acc?.id], queryFn: () => get<DailyResult>(`/accounts/${acc!.id}/daily`), enabled: !!acc })
   const health = useQuery({ queryKey: ['health', acc?.id], queryFn: () => get<{ score: number; items: HealthItem[] }>(`/accounts/${acc!.id}/health`), enabled: !!acc, staleTime: 60_000 })
   const firstTodos = (data?.todos ?? []).slice(0, 3).map((t) => t.work_id).join(',')
   useEffect(() => {
@@ -250,6 +270,7 @@ export default function Dashboard() {
     ...(acc.platform === 'wechat_mp' ? [{ done: s.credential, label: '连接公众号', desc: 'AppID、AppSecret 和 IP 白名单', to: '/settings/accounts', icon: <KeyRound className="size-4" /> }] : []),
   ]
   const pendingSetup = setupItems.filter((i) => !i.done)
+  const guideVisible = canWrite && !!daily.data && !daily.data.recommendation
   const inProgress = (data.counts.drafting ?? 0) + (data.counts.checking ?? 0)
   const hour = new Date().getHours()
   const greet = hour < 6 ? '夜深了' : hour < 12 ? '早上好' : hour < 18 ? '下午好' : '晚上好'
@@ -266,38 +287,11 @@ export default function Dashboard() {
         </> : undefined}
       />
 
-      {pendingMemories > 0 && (
-        <Link to={`/a/${acc.id}/profile?tab=memory`} className="mb-5 block">
-          <Notice tone="gamboge" icon={<Brain className="size-4" />} className="transition hover:border-gamboge-300">
-            AI 学到了 {pendingMemories} 条新偏好，去确认 →<span className="ml-1 text-[12px] opacity-75">确认前不会影响任何生成</span>
-          </Notice>
-        </Link>
-      )}
       <DemoCard acc={acc} owner={me?.role === 'owner'} />
       {canWrite && <FirstValueGuide key={acc.id} accountId={acc.id} modelReady={s.ai} profileReady={s.profile} />}
+      <MainLine accountId={acc.id} hideSetup={guideVisible} onCreate={canWrite ? () => create() : undefined} />
       <BriefCard accountId={acc.id} />
-      <NextActions accountId={acc.id} />
- <div className="mb-6 grid gap-5 xl:grid-cols-2"><DailyPanel key={`daily-${acc.id}`} accountId={acc.id} compact/><HotPanel key={`hot-${acc.id}`} account={acc} compact/></div>
-
-      {pendingSetup.length > 0 && (
-        <Card className="mb-6 overflow-hidden">
-          <div className="flex items-center justify-between border-b border-mist-100 bg-gamboge-50/50 px-5 py-3">
-            <div className="text-[13.5px] font-semibold text-mist-800">进阶提升 · 还有 {pendingSetup.length} 项可补充</div>
-            <div className="text-xs text-mist-500">{setupItems.length - pendingSetup.length} / {setupItems.length} 已完成 · 不阻塞首条推荐</div>
-          </div>
-          <div className="grid divide-mist-100 sm:grid-cols-2 lg:grid-cols-4 lg:divide-x">
-            {setupItems.map((i) => (
-              <Link key={i.label} to={i.to} className={cn('group flex items-start gap-3 px-5 py-4 transition hover:bg-mist-50', i.done && 'opacity-55')}>
-                {i.done ? <CheckCircle2 className="mt-0.5 size-4 text-success" /> : <Circle className="mt-0.5 size-4 text-gamboge-400" />}
-                <div>
-                  <div className="text-[13.5px] font-medium text-mist-800 group-hover:text-ink-700">{i.label}</div>
-                  <div className="text-xs text-mist-500">{i.desc}</div>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </Card>
-      )}
+      <div className="mb-6 grid gap-5 xl:grid-cols-2"><DailyPanel key={`daily-${acc.id}`} accountId={acc.id} compact /><HotPanel key={`hot-${acc.id}`} account={acc} compact /></div>
 
       <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat label="进行中的作品" value={inProgress} sub={`共 ${Object.values(data.counts).reduce((a, b) => a + (b ?? 0), 0)} 篇作品`} icon={<FilePen />} to={`/a/${acc.id}/works`} />
@@ -310,9 +304,8 @@ export default function Dashboard() {
         <Stat label="今日 AI 用量" value={fmtNum(data.tokens_today)} sub={data.ai_limit.enabled ? `上限 ${fmtNum(data.ai_limit.daily_tokens)} token` : '未设置每日上限'} icon={<Cpu />} to="/settings/usage" />
       </div>
 
-      <HealthAndRhythm accountId={acc.id} />
-
-      <div className="grid gap-5 lg:grid-cols-2 2xl:grid-cols-4">
+      <h2 className="mb-3 text-[13px] font-semibold text-mist-500">全部作品待办</h2>
+      <div className="mb-8 grid gap-5 lg:grid-cols-2 2xl:grid-cols-4">
         {groups.map((g) => {
           const items = data.todos.filter((t) => g.kinds.includes(t.kind))
           return (
@@ -343,9 +336,27 @@ export default function Dashboard() {
           )
         })}
       </div>
-      {data.todos.length === 0 && pendingSetup.length === 0 && (
-        <Empty className="mt-6" icon={<PenLine className="size-5" />} title="一切就绪" desc="从选题池挑一个题目，或者直接新建作品开始写。"
-          action={<Link to={`/a/${acc.id}/topics`}><Button variant="primary" icon={<Lightbulb className="size-4" />}>去选题池</Button></Link>} />
+
+      <HealthAndRhythm accountId={acc.id} />
+
+      {pendingSetup.length > 0 && (
+        <Card className="mb-6 overflow-hidden">
+          <div className="flex items-center justify-between border-b border-mist-100 bg-gamboge-50/50 px-5 py-3">
+            <div className="text-[13.5px] font-semibold text-mist-800">进阶提升 · 还有 {pendingSetup.length} 项可补充</div>
+            <div className="text-xs text-mist-500">{setupItems.length - pendingSetup.length} / {setupItems.length} 已完成 · 不阻塞首条推荐</div>
+          </div>
+          <div className="grid divide-mist-100 sm:grid-cols-2 lg:grid-cols-4 lg:divide-x">
+            {setupItems.map((i) => (
+              <Link key={i.label} to={i.to} className={cn('group flex items-start gap-3 px-5 py-4 transition hover:bg-mist-50', i.done && 'opacity-55')}>
+                {i.done ? <CheckCircle2 className="mt-0.5 size-4 text-success" /> : <Circle className="mt-0.5 size-4 text-gamboge-400" />}
+                <div>
+                  <div className="text-[13.5px] font-medium text-mist-800 group-hover:text-ink-700">{i.label}</div>
+                  <div className="text-xs text-mist-500">{i.desc}</div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </Card>
       )}
     </div>
   )
