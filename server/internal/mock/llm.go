@@ -581,6 +581,19 @@ func (l *LLM) respond(prompt string) string {
 			items = append(items, map[string]any{"title": fmt.Sprintf("%v：实践问题 %d（%d）", c["title"], i+1, len(prompt)), "angle": "由作者自己的实践展开", "audience": "正在尝试实践的读者", "hook": "一次真实困惑", "needed_materials": []string{"个人经历"}, "format": format, "reason": "优先补齐近期支柱与已确认计划", "basis": []map[string]any{basis}, "primary": i < 2})
 		}
 		return js(map[string]any{"items": items})
+	case "daily_brief":
+		pending := field(prompt, "待回填数据的已发布作品：")
+		rec := field(prompt, "今日推荐")
+		items := []string{}
+		if strings.HasPrefix(rec, "0 条") {
+			items = append(items, "今天没有新的推荐，先处理昨天的采用。")
+		} else {
+			items = append(items, "从今日推荐里挑一条开始写。")
+		}
+		if pending != "" && pending != "0" {
+			items = append(items, "有 "+pending+" 篇已发布的作品还差数据回填。")
+		}
+		return js(map[string]any{"items": items})
 	case "reference_analyze":
 		return js(map[string]any{"title_pattern": "问题场景加行动收益", "hook_type": "情景提问", "structure": []string{"界定问题", "分析障碍", "给出行动", "总结启发"}, "angle": "以读者困难组织论证", "tags": []string{"写作方法"}, "takeaways": []string{"将建议拆成可以验证的小任务"}})
 	case "hot_relevance":
