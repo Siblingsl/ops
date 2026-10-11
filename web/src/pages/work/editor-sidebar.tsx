@@ -165,27 +165,8 @@ interface CopilotMessage { id: string; role: 'user' | 'assistant'; content: stri
 
 const quickAsks = ['这段论证够不够？', '给我几个举例方向', '这段读起来顺吗？', '结构有没有问题？', '读者可能会有什么疑问？']
 
-function suggestionOf(reply: string): string {
-  const i = reply.indexOf('建议改为：')
-  if (i < 0) return ''
-  let rest = reply.slice(i + 5).trim()
-  const j = rest.indexOf('\n\n')
-  if (j >= 0) rest = rest.slice(0, j)
-  return rest.trim()
-}
-
 // DEV-A104（13 文档）：副驾驶回复可含多条可执行建议（改写/补充/删除，含目标与理由），逐条应用。
 interface CopilotSuggestion { kind: 'rewrite' | 'append' | 'delete'; text: string; reason?: string; target?: 'section' | 'selection' | 'end'; section_id?: string; original?: string }
-
-function suggestionsOf(reply: string): CopilotSuggestion[] {
-  const out: CopilotSuggestion[] = []
-  for (const raw of reply.split('\n')) {
-    const line = raw.trim()
-    if (line.startsWith('建议改为：')) out.push({ kind: 'rewrite', text: line.slice(5).trim() })
-    else if (line.startsWith('建议补充：')) out.push({ kind: 'append', text: line.slice(5).trim() })
-  }
-  return out.filter((s) => s.text).slice(0, 3)
-}
 
 // 流式 JSON 只展示 reply 文本，不把建议契约暴露到聊天气泡。
 function copilotPreview(text: string): string {
@@ -247,7 +228,7 @@ function CopilotTab({ work, active, selection }: { work: Work; active: Section |
       <p className="-mt-1.5 truncate text-[11.5px] text-mist-400">{ctxLabel}</p>
       <div className="space-y-3">
         {(list.data ?? []).length === 0 && !pending && <Hint>像问同事一样提问。副驾驶只给分析和单处修改建议，不会写整篇。</Hint>}
-        {(list.data ?? []).map((m) => <CopilotBubble key={m.id} m={m} active={active} selection={selection} canApply={canWrite && !work.locked} />)}
+        {(list.data ?? []).map((m) => <CopilotBubble key={m.id} m={m} canApply={canWrite && !work.locked} />)}
         {pending && (
           <>
             <div className="ml-6 rounded-lg bg-ink-600 px-3 py-2 text-[12.5px] text-white">{pending.q}</div>
@@ -272,17 +253,17 @@ function CopilotTab({ work, active, selection }: { work: Work; active: Section |
   )
 }
 
-function CopilotBubble({ m, active, selection, canApply }: { m: CopilotMessage; active: Section | null; selection: string; canApply: boolean }) {
+function CopilotBubble({ m, canApply }: { m: CopilotMessage; canApply: boolean }) {
   if (m.role === 'user') return <div className="ml-6 whitespace-pre-wrap rounded-lg bg-ink-600 px-3 py-2 text-[12.5px] text-white">{m.content}</div>
-  const suggestions = m.suggestions?.length ? m.suggestions : suggestionsOf(m.content)
-  const legacy = suggestions.length === 0 ? (suggestionOf(m.content) ? [{ kind: 'rewrite' as const, text: suggestionOf(m.content) }] : []) : suggestions
+  // 空数组也是服务端的有效判定；历史消息仅展示，不重建未校验动作。
+  const suggestions = m.suggestions ?? []
   const target = m.section_id
   return (
     <div className="mr-4 rounded-lg bg-mist-100 px-3 py-2">
       <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-mist-700">{m.content}</p>
-      {canApply && target && legacy.length > 0 && (
+      {canApply && target && suggestions.length > 0 && (
         <div className="mt-2 space-y-1.5">
-          {legacy.map((s, i) => (
+          {suggestions.map((s, i) => (
             <div key={i} className="flex flex-wrap items-center gap-1.5 rounded border border-mist-200 bg-white px-2 py-1.5">
               <Badge tone="ink">{s.kind === 'rewrite' ? '改写建议' : s.kind === 'delete' ? '删除建议' : '补充建议'}</Badge>
               <span className="min-w-0 flex-1 truncate text-[12px] text-mist-600" title={s.text}>{s.text || s.original || '删除原文'}</span>
@@ -290,10 +271,7 @@ function CopilotBubble({ m, active, selection, canApply }: { m: CopilotMessage; 
               {s.section_id && s.target && (s.kind === 'rewrite' || s.kind === 'delete') ? <Button size="sm" variant={s.kind === 'delete' ? 'danger' : 'secondary'} onClick={() => {
                 scrollToSection(s.section_id!)
                 emitEditor({ type: 'apply', sectionId: s.section_id!, text: s.text, target: s.target === 'selection' ? 'selection' : 'section', original: s.original, callId: m.ai_call_id })
-              }}>{s.kind === 'delete' ? '预览删除这一处' : '预览修改这一处'}</Button> : s.kind === 'rewrite' && m.context_scope !== 'selection' && <>
-                <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: s.text, target: 'section', callId: m.ai_call_id })}>应用到当前段</Button>
-                {selection && active?.id === target && <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: s.text, target: 'selection', callId: m.ai_call_id })}>应用到选中处</Button>}
-              </>}
+              }}>{s.kind === 'delete' ? '预览删除这一处' : '预览修改这一处'}</Button> : null}
               {s.kind === 'append' && <Button size="sm" variant="secondary" onClick={() => emitEditor({ type: 'apply', sectionId: target, text: s.text, target: 'end', callId: m.ai_call_id })}>补充到段末</Button>}
             </div>
           ))}

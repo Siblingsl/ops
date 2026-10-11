@@ -228,7 +228,7 @@ type copilotSuggestionItem struct {
 	Reason    string     `json:"reason,omitempty"`
 	Target    string     `json:"target,omitempty"`
 	SectionID *uuid.UUID `json:"section_id,omitempty"`
-	Original  string     `json:"original,omitempty"`
+	Original  string     `json:"original"`
 }
 
 func copilotSuggestion(reply string) string {
@@ -256,6 +256,7 @@ func parseCopilotResponse(text string, sec *Section, selection string) (string, 
 		out.Suggestions = copilotSuggestions(text)
 		for i := range out.Suggestions {
 			out.Suggestions[i].Reason = "旧版提示词未提供单独理由，请结合分析核对"
+			out.Suggestions[i].Target = "section"
 		}
 	}
 	list := []copilotSuggestionItem{}
@@ -266,7 +267,7 @@ func parseCopilotResponse(text string, sec *Section, selection string) (string, 
 		if item.Kind != "rewrite" && item.Kind != "append" && item.Kind != "delete" {
 			continue
 		}
-		if item.Kind != "append" && item.Target != "" && item.Target != "section" && item.Target != "selection" {
+		if item.Kind != "append" && item.Target != "section" && item.Target != "selection" {
 			continue
 		}
 		item.Reason = truncate(strings.TrimSpace(item.Reason), 300)

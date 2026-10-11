@@ -33,6 +33,27 @@ func TestA104StructuredTargetReasonAndDelete(t *testing.T) {
 	if len(ambiguous) != 0 {
 		t.Fatal("重复锚点不能猜测删除位置")
 	}
+	_, missingTarget := parseCopilotResponse(`{"reply":"删重复句","suggestions":[{"kind":"delete","original":"重复。","reason":"重复"}]}`, sec, "")
+	if len(missingTarget) != 0 {
+		t.Fatal("缺少目标的 JSON 删除不能扩大为整段删除")
+	}
+}
+
+func TestA104EmptySnapshotIsSerialized(t *testing.T) {
+	sec := &Section{ID: uuid.New()}
+	_, list := parseCopilotResponse(`{"reply":"给空段落一个方向","suggestions":[{"kind":"rewrite","target":"section","text":"正文建议","reason":"补充说明"}]}`, sec, "")
+	if len(list) != 1 {
+		t.Fatal("缺少建议")
+	}
+	payload, err := json.Marshal(list[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	_ = json.Unmarshal(payload, &fields)
+	if original, ok := fields["original"]; !ok || original != "" {
+		t.Fatalf("空字符串快照被丢失: %s", payload)
+	}
 }
 
 func TestA104ActionsPersistWithoutApplying(t *testing.T) {
