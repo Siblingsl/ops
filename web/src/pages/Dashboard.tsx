@@ -104,7 +104,7 @@ function BriefCard({ accountId }: { accountId: string }) {
 }
 
 // DEV-UX02（D-052 第 2 条）：首屏只有一条按规则排好序的主线，每一项直接打开对应的下一步；不调用模型，不批量处理。
-function MainLine({ accountId, hideSetup, onCreate }: { accountId: string; hideSetup: boolean; onCreate?: () => void }) {
+function MainLine({ accountId, hideSetup }: { accountId: string; hideSetup: boolean }) {
   const { data: all, isLoading } = useQuery({ queryKey: ['next-actions', accountId, 'main'], queryFn: () => get<NextAction[]>(`/accounts/${accountId}/next-actions?limit=8`), staleTime: 30_000 })
   const data = (all ?? []).filter((a) => !(hideSetup && a.kind === 'setup'))
   if (isLoading) return null
@@ -119,9 +119,8 @@ function MainLine({ accountId, hideSetup, onCreate }: { accountId: string; hideS
       {!first ? (
         <div className="flex flex-wrap items-center gap-3 px-5 py-5">
           <CheckCircle2 className="size-5 text-success" />
-          <span className="flex-1 text-[13.5px] text-mist-700">主线上的事都处理完了。可以从选题池挑一个题目，或者直接新建作品。</span>
+          <span className="flex-1 text-[13.5px] text-mist-700">主线上的事都处理完了。可以从选题池挑一个题目，或者点右上角新建作品。</span>
           <Link to={`/a/${accountId}/topics`}><Button size="sm" icon={<Lightbulb className="size-3.5" />}>去选题池</Button></Link>
-          {onCreate && <Button size="sm" variant="primary" icon={<PenLine className="size-3.5" />} onClick={onCreate}>新建作品</Button>}
         </div>
       ) : (
         <>
@@ -289,7 +288,7 @@ export default function Dashboard() {
 
       <DemoCard acc={acc} owner={me?.role === 'owner'} />
       {canWrite && <FirstValueGuide key={acc.id} accountId={acc.id} modelReady={s.ai} profileReady={s.profile} />}
-      <MainLine accountId={acc.id} hideSetup={guideVisible} onCreate={canWrite ? () => create() : undefined} />
+      <MainLine accountId={acc.id} hideSetup={guideVisible} />
       <BriefCard accountId={acc.id} />
       <div className="mb-6 grid gap-5 xl:grid-cols-2"><DailyPanel key={`daily-${acc.id}`} accountId={acc.id} compact /><HotPanel key={`hot-${acc.id}`} account={acc} compact /></div>
 
