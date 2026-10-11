@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -374,11 +375,16 @@ func (s *Server) accountHealth(w http.ResponseWriter, r *http.Request) error {
 	mm := min(mems, 5) * 3
 	items = append(items, HealthItem{Key: "memory", Label: "已确认的 AI 记忆", Score: mm, Max: 15, Hint: hintIf(mm < 15, "确认或添加几条写作偏好，AI 会更懂你"), Link: acc + "/profile?tab=memory"})
 
-	var withData int
-	_ = s.db.QueryRow(ctx, `SELECT count(DISTINCT w.id) FROM work w JOIN metric_snapshot m ON m.work_id=w.id WHERE w.account_id=$1 AND w.deleted_at IS NULL
-		AND m.captured_at > now() - interval '30 days'`, a.ID).Scan(&withData)
-	md := min(withData, 3) * 10 / 3
-	items = append(items, HealthItem{Key: "metrics", Label: "近 30 天复盘数据", Score: md, Max: 10, Hint: hintIf(md < 10, "录入最近作品的数据，复盘和标题建议会更准"), Link: acc + "/review"})
+	due, covered, err := s.metricNodeCoverage(ctx, a.ID, 30)
+	if err != nil {
+		return err
+	}
+	md, mdHint := 0, "发布作品后按第 1、3、7 天录入数据，复盘和标题建议会更准"
+	if due > 0 {
+		md = covered * 10 / due
+		mdHint = hintIf(md < 10, fmt.Sprintf("近 30 天已到期的数据节点 %d 个，已录 %d 个；补齐后复盘更准", due, covered))
+	}
+	items = append(items, HealthItem{Key: "metrics", Label: "近 30 天复盘数据", Score: md, Max: 10, Hint: mdHint, Link: acc + "/review"})
 
 	ops, e := s.opsHealth(ctx, a.ID)
 	if e != nil {

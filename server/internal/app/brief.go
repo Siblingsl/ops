@@ -84,8 +84,8 @@ func (s *Server) generateBrief(ctx context.Context, accountID uuid.UUID) error {
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL AND published_at >= $2 AND published_at < $3`,
 		a.ID, today.AddDate(0, 0, -1), today).Scan(&published)
 	var reads int
-	_ = s.db.QueryRow(ctx, `SELECT coalesce(sum(m.reads),0) FROM metric_snapshot m JOIN work w ON w.id=m.work_id
-		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND m.captured_at >= $2`, a.ID, today.AddDate(0, 0, -7)).Scan(&reads)
+	_ = s.db.QueryRow(ctx, `SELECT coalesce(sum(d.reads),0) FROM work_metric_d7 d JOIN work w ON w.id=d.work_id
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.published_at >= $2`, a.ID, today.AddDate(0, 0, -7)).Scan(&reads)
 	var adopted int
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM topic t WHERE t.account_id=$1 AND t.status='adopted' AND t.deleted_at IS NULL
 		AND NOT EXISTS (SELECT 1 FROM work w WHERE w.topic_id=t.id AND w.deleted_at IS NULL)`, a.ID).Scan(&adopted)
@@ -109,7 +109,7 @@ func (s *Server) generateBrief(ctx context.Context, accountID uuid.UUID) error {
 		return nil // 没有可说的内容，不生成也不编造。
 	}
 
-	data := fmt.Sprintf("昨日发布：%d\n近 7 天阅读合计：%d\n今日推荐 %d 条：%s\n待采用未开写的选题：%d\n待回填数据的已发布作品：%d",
+	data := fmt.Sprintf("昨日发布：%d\n近 7 天发布作品的阅读合计：%d\n今日推荐 %d 条：%s\n待采用未开写的选题：%d\n待回填数据的已发布作品：%d",
 		published, reads, len(recTitles), strings.Join(recTitles, "、"), adopted, pendingMetrics)
 	user := "## 今日数据\n" + data + `
 ## 任务说明

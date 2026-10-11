@@ -772,7 +772,7 @@ func (s *Server) workTagSuggest(w http.ResponseWriter, r *http.Request) error {
 	}
 	history := []tagSug{}
 	rows, err := s.db.Query(ctx, `SELECT t, count(*), coalesce(avg(mx.reads),0)::int FROM work w, unnest(w.topics) t
-		LEFT JOIN LATERAL (SELECT max(reads) reads FROM metric_snapshot ms WHERE ms.work_id=w.id) mx ON true
+		LEFT JOIN LATERAL (SELECT reads FROM work_metric_d7 d WHERE d.work_id=w.id) mx ON true
 		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.id <> $2 GROUP BY t ORDER BY 3 DESC, 2 DESC LIMIT 10`, m.Account.ID, m.ID)
 	if err != nil {
 		return err

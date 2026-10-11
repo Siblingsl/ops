@@ -702,7 +702,7 @@ func (s *Server) reviseStrategy(w http.ResponseWriter, r *http.Request) error {
 	}
 	rows, err := s.db.Query(ctx, `SELECT w.title, coalesce(t.strategy_pillar,''), w.status, m.reads, m.likes, m.favorites, m.comments
 		FROM work w LEFT JOIN topic t ON t.id=w.topic_id
-		LEFT JOIN LATERAL (SELECT reads, likes, favorites, comments FROM metric_snapshot WHERE work_id=w.id ORDER BY captured_at DESC LIMIT 1) m ON true
+		LEFT JOIN work_metric_d7 m ON m.work_id=w.id
 		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.title<>'' AND w.created_at > now() - interval '30 days'
 		ORDER BY w.created_at DESC LIMIT 30`, a.ID)
 	if err != nil {

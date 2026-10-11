@@ -108,3 +108,79 @@ func TestDR01MetricNodes(t *testing.T) {
 		t.Fatalf("calendar day offset: %d %d %v", d0, d1, err)
 	}
 }
+
+func drMetric(t *testing.T, workID uuid.UUID, source string, day int, reads int) {
+	t.Helper()
+	if _, err := env.srv.db.Exec(context.Background(), `INSERT INTO metric_snapshot (work_id, captured_at, source, day_offset, reads, likes)
+		VALUES ($1, now(), $2, $3, $4, 1)`, workID, source, day, reads); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// DEV-DR02（14 文档 4.1 第 3–4 条）：统计统一取第 7 天口径——老作品不因"最新快照"被高估；
+// 没有第 7 天时取 ≤ 7 的最近节点；同节点多来源按优先级取；节点完整度与账号健康度按到期节点计分。
+func TestDR02DaySevenBasis(t *testing.T) {
+	ctx := context.Background()
+	a := drAccount(t, "wechat_mp", "第七天口径验收号")
+	pub := env.srv.now().AddDate(0, 0, -40)
+	old := drWork(t, a, "老作品：30 天后数字很大", "published", &pub)
+	drMetric(t, old.ID, "manual", 1, 100)
+	drMetric(t, old.ID, "manual", 7, 700)
+	drMetric(t, old.ID, "manual", 30, 3000)
+	early := drWork(t, a, "只有第 3 天数据", "published", &pub)
+	drMetric(t, early.ID, "manual", 3, 300)
+	multi := drWork(t, a, "第 7 天两个来源", "published", &pub)
+	drMetric(t, multi.ID, "manual", 7, 500)
+	drMetric(t, multi.ID, "wechat_api", 7, 600)
+
+	want := map[uuid.UUID][2]int{old.ID: {700, 7}, early.ID: {300, 3}, multi.ID: {600, 7}}
+	for id, w := range want {
+		var reads, day int
+		if err := env.srv.db.QueryRow(ctx, `SELECT reads, day_offset FROM work_metric_d7 WHERE work_id=$1`, id).Scan(&reads, &day); err != nil || reads != w[0] || day != w[1] {
+			t.Fatalf("d7 for %s: reads=%d day=%d err=%v, want %v", id, reads, day, err, w)
+		}
+	}
+	samples, err := env.srv.perfSamples(ctx, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range samples {
+		if p.WorkID == old.ID && p.Reads != 700 {
+			t.Fatalf("attribution must use the day-7 figure, got %d", p.Reads)
+		}
+	}
+
+	var board []BoardRow
+	env.mustJSON(t, "GET", "/api/v1/accounts/"+a.ID.String()+"/board", nil, &board)
+	found := false
+	for _, b := range board {
+		if b.ID == old.ID {
+			found = true
+			if b.D7 == nil || b.D7.Reads == nil || *b.D7.Reads != 700 || len(b.Nodes) != 3 || b.Nodes[0] != 1 || b.Nodes[2] != 30 {
+				t.Fatalf("board row should carry d7 and nodes [1 7 30]: %+v d7=%+v", b.Nodes, b.D7)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("old work missing from board")
+	}
+
+	recent := env.srv.now().AddDate(0, 0, -10)
+	fresh := drWork(t, a, "十天前发布", "published", &recent)
+	drMetric(t, fresh.ID, "manual", 1, 50)
+	var nv struct {
+		Nodes []metricNodeView `json:"nodes"`
+		D7    *Metric          `json:"d7"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/works/"+fresh.ID.String()+"/metrics?view=nodes", nil, &nv)
+	if len(nv.Nodes) != 4 || !nv.Nodes[0].Due || nv.Nodes[0].Metric == nil || !nv.Nodes[2].Due || nv.Nodes[2].Metric != nil || nv.Nodes[3].Due {
+		t.Fatalf("nodes view: %+v", nv.Nodes)
+	}
+	if nv.D7 == nil || *nv.D7.DayOffset != 1 {
+		t.Fatalf("d7 should fall back to day 1: %+v", nv.D7)
+	}
+	due, covered, err := env.srv.metricNodeCoverage(ctx, a.ID, 30)
+	if err != nil || due != 3 || covered != 1 {
+		t.Fatalf("coverage for the 10-day-old work: due=%d covered=%d err=%v", due, covered, err)
+	}
+}

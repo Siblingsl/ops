@@ -29,12 +29,10 @@ type perfSample struct {
 
 func (s *Server) perfSamples(ctx context.Context, accountID uuid.UUID) ([]perfSample, error) {
 	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, coalesce(w.published_at, w.updated_at), w.topics,
-		coalesce(mx.reads,0), coalesce(mx.inter,0),
+		d.reads, coalesce(d.interactions,0),
 		(SELECT coalesce(sum(char_length(content_md)),0) FROM work_section ws WHERE ws.work_id=w.id AND ws.deleted_at IS NULL)
-		FROM work w JOIN LATERAL (SELECT max(coalesce(reads,0)) reads,
-			max(coalesce(likes,0)+coalesce(wows,0)+coalesce(favorites,0)+coalesce(comments,0)+coalesce(shares,0)) inter
-			FROM metric_snapshot m WHERE m.work_id=w.id) mx ON true
-		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id)
+		FROM work w JOIN work_metric_d7 d ON d.work_id=w.id
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND d.reads IS NOT NULL
 		ORDER BY 3 DESC LIMIT 500`, accountID)
 	if err != nil {
 		return nil, err
@@ -325,9 +323,10 @@ func (s *Server) breakdownWork(w http.ResponseWriter, r *http.Request) error {
 	}
 	var metrics string
 	var reads, inter int
-	if s.db.QueryRow(ctx, `SELECT coalesce(max(reads),0), coalesce(max(coalesce(likes,0)+coalesce(favorites,0)+coalesce(comments,0)+coalesce(shares,0)),0)
-		FROM metric_snapshot WHERE work_id=$1`, m.ID).Scan(&reads, &inter) == nil && (reads > 0 || inter > 0) {
-		metrics = fmt.Sprintf("阅读 %d，互动 %d", reads, inter)
+	var day *int
+	if s.db.QueryRow(ctx, `SELECT coalesce(reads,0), coalesce(interactions,0), day_offset FROM work_metric_d7 WHERE work_id=$1`, m.ID).
+		Scan(&reads, &inter, &day) == nil && (reads > 0 || inter > 0) {
+		metrics = fmt.Sprintf("阅读 %d，互动 %d（%s）", reads, inter, dayOffsetLabel(day))
 	}
 	user := fmt.Sprintf(`## 本账号的作品
 标题：%s
@@ -404,9 +403,8 @@ type digestStats struct {
 
 func (s *Server) digestStats(ctx context.Context, accountID uuid.UUID, from, to time.Time) (digestStats, error) {
 	var st digestStats
-	rows, err := s.db.Query(ctx, `SELECT w.title, coalesce(mx.reads,0), coalesce(mx.inter,0) FROM work w
-		LEFT JOIN LATERAL (SELECT max(coalesce(reads,0)) reads, max(coalesce(likes,0)+coalesce(wows,0)+coalesce(favorites,0)+coalesce(comments,0)+coalesce(shares,0)) inter
-			FROM metric_snapshot m WHERE m.work_id=w.id) mx ON true
+	rows, err := s.db.Query(ctx, `SELECT w.title, coalesce(d.reads,0), coalesce(d.interactions,0) FROM work w
+		LEFT JOIN work_metric_d7 d ON d.work_id=w.id
 		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.published_at >= $2 AND w.published_at < $3 ORDER BY w.published_at`, accountID, from, to)
 	if err != nil {
 		return st, err

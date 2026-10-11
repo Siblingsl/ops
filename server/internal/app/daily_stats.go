@@ -70,7 +70,7 @@ func (s *Server) getDailyStats(w http.ResponseWriter, r *http.Request) error {
 	}
 	for i := range sources {
 		x := &sources[i]
-		e = s.db.QueryRow(ctx, `SELECT count(DISTINCT w.id),avg(m.reads)::float8,avg(m.likes)::float8 FROM work w LEFT JOIN LATERAL(SELECT reads,likes FROM metric_snapshot WHERE work_id=w.id ORDER BY captured_at DESC LIMIT 1)m ON true WHERE w.account_id=$1 AND w.status IN ('published') AND w.deleted_at IS NULL AND w.published_at>$2 AND EXISTS(SELECT 1 FROM daily_recommendation_action act JOIN daily_recommendation d ON d.id=act.recommendation_id CROSS JOIN LATERAL jsonb_array_elements(d.items->act.item_index->'basis') b WHERE act.topic_id=w.topic_id AND b->>'type'=$3 AND act.action IN ('adopted','started'))`, a.ID, s.today().AddDate(0, 0, -30), x.Type).Scan(&x.Published, &x.AvgReads, &x.AvgLikes)
+		e = s.db.QueryRow(ctx, `SELECT count(DISTINCT w.id),avg(m.reads)::float8,avg(m.likes)::float8 FROM work w LEFT JOIN work_metric_d7 m ON m.work_id=w.id WHERE w.account_id=$1 AND w.status IN ('published') AND w.deleted_at IS NULL AND w.published_at>$2 AND EXISTS(SELECT 1 FROM daily_recommendation_action act JOIN daily_recommendation d ON d.id=act.recommendation_id CROSS JOIN LATERAL jsonb_array_elements(d.items->act.item_index->'basis') b WHERE act.topic_id=w.topic_id AND b->>'type'=$3 AND act.action IN ('adopted','started'))`, a.ID, s.today().AddDate(0, 0, -30), x.Type).Scan(&x.Published, &x.AvgReads, &x.AvgLikes)
 		if e != nil {
 			return e
 		}
@@ -83,7 +83,7 @@ func (s *Server) getDailyStats(w http.ResponseWriter, r *http.Request) error {
 	if out.Total > 0 {
 		out.Rate = float64(out.Adopted) / float64(out.Total)
 	}
-	rows, e := s.db.Query(ctx, `SELECT EXISTS(SELECT 1 FROM daily_recommendation_action a WHERE a.topic_id=w.topic_id AND a.action IN ('adopted','started')) recommended,count(*),avg(m.reads)::float8,avg(m.likes)::float8 FROM work w LEFT JOIN LATERAL(SELECT reads,likes FROM metric_snapshot WHERE work_id=w.id ORDER BY captured_at DESC LIMIT 1)m ON true WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.status IN ('published') AND w.published_at>$2 GROUP BY recommended ORDER BY recommended DESC`, a.ID, s.today().AddDate(0, 0, -30))
+	rows, e := s.db.Query(ctx, `SELECT EXISTS(SELECT 1 FROM daily_recommendation_action a WHERE a.topic_id=w.topic_id AND a.action IN ('adopted','started')) recommended,count(*),avg(m.reads)::float8,avg(m.likes)::float8 FROM work w LEFT JOIN work_metric_d7 m ON m.work_id=w.id WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.status IN ('published') AND w.published_at>$2 GROUP BY recommended ORDER BY recommended DESC`, a.ID, s.today().AddDate(0, 0, -30))
 	if e != nil {
 		return e
 	}

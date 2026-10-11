@@ -909,8 +909,8 @@ func titleFeatures(t string) []string {
 
 // highPerformingTitleFeatures returns traits shared by the account's top-read titles (needs ≥ 5 works with data).
 func (s *Server) highPerformingTitleFeatures(ctx context.Context, accountID uuid.UUID) map[string]bool {
-	rows, err := s.db.Query(ctx, `SELECT w.title, (SELECT max(reads) FROM metric_snapshot m WHERE m.work_id=w.id) AS reads FROM work w
-		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id) ORDER BY reads DESC NULLS LAST LIMIT 200`, accountID)
+	rows, err := s.db.Query(ctx, `SELECT w.title, d.reads FROM work w JOIN work_metric_d7 d ON d.work_id=w.id
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL ORDER BY d.reads DESC NULLS LAST LIMIT 200`, accountID)
 	out := map[string]bool{}
 	if err != nil {
 		return out

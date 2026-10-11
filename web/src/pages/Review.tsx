@@ -20,6 +20,17 @@ const metricSourceLabel: Record<MetricSource, string> = {
 
 const nodeLabel = (m: Pick<Metric, 'day_offset'>) => (m.day_offset == null ? '发布时间未知' : `发布后第 ${m.day_offset} 天`)
 
+function NodeDots({ nodes }: { nodes: number[] }) {
+  return (
+    <span className="inline-flex items-center gap-1" title="第 1 / 3 / 7 天数据是否已录入">
+      {[1, 3, 7].map((n) => (
+        <span key={n} className={cn('inline-flex size-[18px] items-center justify-center rounded-full text-[10px] tabular-nums',
+          nodes.includes(n) ? 'bg-ink-600 text-white' : 'border border-mist-200 text-mist-400')}>{n}</span>
+      ))}
+    </span>
+  )
+}
+
 type ImportPreviewRow = {
   title: string; work_id: string | null; matched: boolean; match_type?: 'exact' | 'fuzzy' | 'none'; similarity?: number
   estimated?: boolean; error?: string
@@ -386,7 +397,7 @@ export default function Review() {
     <div className="animate-fade-in">
       <PageHeader title="数据复盘" desc="手动录入平台数据，让 AI 帮你找规律。复盘建议需要你逐条采纳。" />
       <Card className="mb-6 overflow-hidden">
-        <CardHeader title="作品数据看板" desc="只列出已进入草稿箱、已生成发布包或已发布的作品"
+        <CardHeader title="作品数据看板" desc="只列出已进入草稿箱、已生成发布包或已发布的作品；数字统一取发布后第 7 天的数据，便于作品之间比较"
           action={<>
             {acc.platform === 'wechat_mp' && (
               <Button size="sm" variant="secondary" icon={<BarChart3 className="size-3.5" />} onClick={async () => {
@@ -414,6 +425,7 @@ export default function Review() {
                   <th className="py-2.5 font-medium">作品</th>
                   <th className="py-2.5 font-medium">状态</th>
                   <th className="py-2.5 font-medium">发布时间</th>
+                  <th className="py-2.5 font-medium">数据节点</th>
                   {fields.map((f) => <th key={f.key} className="py-2.5 text-right font-medium">{f.label}</th>)}
                   <th className="py-2.5 pr-5 text-right font-medium">记录</th>
                 </tr>
@@ -425,7 +437,11 @@ export default function Review() {
                     <td className="max-w-xs py-3"><Link to={`/works/${r.id}`} className="line-clamp-1 font-medium text-mist-800 hover:text-ink-700">{r.title || '未命名'}</Link></td>
                     <td className="py-3"><StatusBadge status={r.status} /></td>
                     <td className="py-3 text-mist-500">{r.published_at ? fmtTime(r.published_at) : '—'}</td>
-                    {fields.map((f) => <td key={f.key} className="py-3 text-right tabular-nums text-mist-700">{fmtNum(r.latest?.[f.key])}</td>)}
+                    <td className="py-3">
+                      <NodeDots nodes={r.nodes ?? []} />
+                      {r.d7 && r.d7.day_offset !== 7 && <div className="mt-0.5 text-[11px] text-mist-400">按{r.d7.day_offset == null ? '发布时间未知的' : `第 ${r.d7.day_offset} 天`}数据</div>}
+                    </td>
+                    {fields.map((f) => <td key={f.key} className="py-3 text-right tabular-nums text-mist-700">{fmtNum(r.d7?.[f.key])}</td>)}
                     <td className="py-3 pr-5 text-right">
                       <Button size="sm" variant={r.points ? 'ghost' : 'outline'} onClick={() => setParams({ work: r.id })}>{r.points ? `${r.points} 次 · 录入` : '录入数据'}</Button>
                     </td>

@@ -381,7 +381,8 @@ export interface BoardRow {
   title: string
   status: WorkStatus
   published_at: string | null
-  latest: Metric | null
+  d7: Metric | null
+  nodes: number[]
   points: number
 }
 

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -63,6 +64,65 @@ func upsertMetric(ctx context.Context, q dbtx, in metricWrite) (m Metric, merged
 		in.Reads, in.Likes, in.Wows, in.Favorites, in.Comments, in.Shares, in.FollowsGained, in.Note)
 	err = row.Scan(append(metricDest(&m), &merged)...)
 	return m, merged, err
+}
+
+// ---------- 第 7 天口径与节点完整度（DEV-DR02，14 文档 4.1 第 3–4 条） ----------
+
+var metricNodes = []int{1, 3, 7, 30}
+
+const metricSourceOrder = `array_position(ARRAY['wechat_api','file','screenshot','paste','manual'], source)`
+
+func dayOffsetLabel(d *int) string {
+	if d == nil {
+		return "发布时间未知"
+	}
+	return fmt.Sprintf("第 %d 天数据", *d)
+}
+
+// metricNodeCoverage counts the 1/3/7-day nodes already due for works published in the last
+// `days` days, and how many of them have data.
+func (s *Server) metricNodeCoverage(ctx context.Context, accountID uuid.UUID, days int) (due, covered int, err error) {
+	err = s.db.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id AND metric_node(m.day_offset)=n.node))
+		FROM work w CROSS JOIN (VALUES (1),(3),(7)) n(node)
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.published_at IS NOT NULL AND w.published_at > $3::timestamptz - make_interval(days => $2)
+		AND (w.published_at AT TIME ZONE 'Asia/Shanghai')::date + n.node <= ($3::timestamptz AT TIME ZONE 'Asia/Shanghai')::date`,
+		accountID, days, s.now()).Scan(&due, &covered)
+	return
+}
+
+type metricNodeView struct {
+	Node   int        `json:"node"`
+	Due    bool       `json:"due"`
+	DueAt  *time.Time `json:"due_at"`
+	Metric *Metric    `json:"metric"`
+}
+
+// metricNodesView is GET /works/{id}/metrics?view=nodes: one slot per node plus the day-7 figure.
+func (s *Server) metricNodesView(ctx context.Context, workID uuid.UUID, publishedAt *time.Time) (map[string]any, error) {
+	nodes := make([]metricNodeView, 0, len(metricNodes))
+	for _, n := range metricNodes {
+		v := metricNodeView{Node: n}
+		if publishedAt != nil {
+			p := publishedAt.In(s.loc)
+			at := time.Date(p.Year(), p.Month(), p.Day(), 0, 0, 0, 0, s.loc).AddDate(0, 0, n)
+			v.DueAt, v.Due = &at, !s.now().Before(at)
+		}
+		m, err := scanMetric(s.db.QueryRow(ctx, `SELECT `+metricCols+` FROM metric_snapshot WHERE work_id=$1 AND metric_node(day_offset)=$2
+			ORDER BY abs(day_offset-$2), `+metricSourceOrder+`, captured_at DESC LIMIT 1`, workID, n))
+		if err == nil {
+			v.Metric = &m
+		} else if err != pgx.ErrNoRows {
+			return nil, err
+		}
+		nodes = append(nodes, v)
+	}
+	var d7 *Metric
+	if m, err := scanMetric(s.db.QueryRow(ctx, `SELECT `+metricCols+` FROM metric_snapshot WHERE id=(SELECT metric_id FROM work_metric_d7 WHERE work_id=$1)`, workID)); err == nil {
+		d7 = &m
+	} else if err != pgx.ErrNoRows {
+		return nil, err
+	}
+	return map[string]any{"nodes": nodes, "d7": d7, "published_at": publishedAt}, nil
 }
 
 // recomputeMetricOffsets realigns day_offset after published_at changes. Rows that would collide

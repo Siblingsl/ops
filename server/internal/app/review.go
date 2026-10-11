@@ -47,7 +47,8 @@ type BoardRow struct {
 	Title       string     `json:"title"`
 	Status      string     `json:"status"`
 	PublishedAt *time.Time `json:"published_at"`
-	Latest      *Metric    `json:"latest"`
+	D7          *Metric    `json:"d7"`
+	Nodes       []int32    `json:"nodes"`
 	Points      int        `json:"points"`
 }
 
@@ -57,7 +58,8 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
-	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.status, w.published_at, (SELECT count(*) FROM metric_snapshot WHERE work_id=w.id)
+	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.status, w.published_at, (SELECT count(*) FROM metric_snapshot WHERE work_id=w.id),
+		ARRAY(SELECT DISTINCT metric_node(day_offset) FROM metric_snapshot WHERE work_id=w.id AND metric_node(day_offset) IS NOT NULL ORDER BY 1)
 		FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.status IN ('pushed','packed','published')
 		ORDER BY coalesce(w.published_at, w.updated_at) DESC LIMIT 200`, a.ID)
 	if err != nil {
@@ -66,7 +68,7 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) error {
 	list := []BoardRow{}
 	for rows.Next() {
 		var b BoardRow
-		if err := rows.Scan(&b.ID, &b.Title, &b.Status, &b.PublishedAt, &b.Points); err != nil {
+		if err := rows.Scan(&b.ID, &b.Title, &b.Status, &b.PublishedAt, &b.Points, &b.Nodes); err != nil {
 			rows.Close()
 			return err
 		}
@@ -77,9 +79,9 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) error {
 		if list[i].Points == 0 {
 			continue
 		}
-		m, err := scanMetric(s.db.QueryRow(ctx, `SELECT `+metricCols+` FROM metric_snapshot WHERE work_id=$1 ORDER BY captured_at DESC LIMIT 1`, list[i].ID))
+		m, err := scanMetric(s.db.QueryRow(ctx, `SELECT `+metricCols+` FROM metric_snapshot WHERE id=(SELECT metric_id FROM work_metric_d7 WHERE work_id=$1)`, list[i].ID))
 		if err == nil {
-			list[i].Latest = &m
+			list[i].D7 = &m
 		}
 	}
 	return ok(w, list)
@@ -90,7 +92,18 @@ func (s *Server) listMetrics(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT `+metricCols+` FROM metric_snapshot WHERE work_id=$1 ORDER BY captured_at`, m.ID)
+	if r.URL.Query().Get("view") == "nodes" {
+		var publishedAt *time.Time
+		if err := s.db.QueryRow(r.Context(), `SELECT published_at FROM work WHERE id=$1`, m.ID).Scan(&publishedAt); err != nil {
+			return err
+		}
+		out, err := s.metricNodesView(r.Context(), m.ID, publishedAt)
+		if err != nil {
+			return err
+		}
+		return ok(w, out)
+	}
+	rows, err := s.db.Query(r.Context(), `SELECT `+metricCols+` FROM metric_snapshot WHERE work_id=$1 ORDER BY day_offset NULLS LAST, captured_at`, m.ID)
 	if err != nil {
 		return err
 	}
@@ -303,7 +316,7 @@ func (s *Server) buildReview(ctx context.Context, a *Account, workIDs []uuid.UUI
 			fmt.Fprintf(&b, "（发布于 %s）", publishedAt.In(s.loc).Format("2006-01-02 15:04"))
 		}
 		b.WriteString("\n")
-		rows, err := s.db.Query(ctx, `SELECT `+metricCols+` FROM metric_snapshot WHERE work_id=$1 ORDER BY captured_at`, id)
+		rows, err := s.db.Query(ctx, `SELECT `+metricCols+` FROM metric_snapshot WHERE work_id=$1 ORDER BY day_offset NULLS LAST, captured_at`, id)
 		if err != nil {
 			return nil, err
 		}
@@ -312,7 +325,7 @@ func (s *Server) buildReview(ctx context.Context, a *Account, workIDs []uuid.UUI
 			if err != nil {
 				break
 			}
-			fmt.Fprintf(&b, "- %s：%s\n", m.CapturedAt.In(s.loc).Format("01-02 15:04"), metricLine(m))
+			fmt.Fprintf(&b, "- %s（%s 采集）：%s\n", dayOffsetLabel(m.DayOffset), m.CapturedAt.In(s.loc).Format("01-02"), metricLine(m))
 		}
 		rows.Close()
 	}
@@ -321,7 +334,7 @@ func (s *Server) buildReview(ctx context.Context, a *Account, workIDs []uuid.UUI
 	}
 	user := "## 作品及数据\n" + b.String() + `
 ## 任务说明
-根据以上作品数据做复盘：总结哪些做法有效、哪些无效（结论要基于数据，不要编造），并给出不少于 3 条下一步的选题建议。另外给出写作层面的结论（如标题、开头、结构上的规律），每条一句可执行的规则，没有依据时可以为空。
+根据以上作品数据做复盘：作品之间比较时以"第 7 天数据"为准（没有第 7 天的按最接近的天数，并说明），不要拿不同天数的数字直接比较。总结哪些做法有效、哪些无效（结论要基于数据，不要编造），并给出不少于 3 条下一步的选题建议。另外给出写作层面的结论（如标题、开头、结构上的规律），每条一句可执行的规则，没有依据时可以为空。
 
 ## 输出格式
 只输出 JSON：{"conclusions":["结论"],"topic_suggestions":[{"title":"选题标题","angle":"切入角度","reason":"依据"}],"writing_insights":["写作层面的规律"]}`
