@@ -117,6 +117,199 @@ test('OPT13 同类页面首次失败及时提示且重试恢复', async ({ page 
   }
 })
 
+test('OPT14 网关 GET 仅重试一次、停机及时提示、写请求不重试', async ({ page }) => {
+  await registerAccount(page)
+  for (const status of [502, 503, 504]) {
+    let calls = 0
+    const endpoint = '/api/v1/usage'
+    await page.route((url) => url.pathname === endpoint, (route) => ++calls === 1
+      ? route.fulfill({ status, contentType: 'text/html', body: '<html>gateway unavailable</html>' })
+      : route.continue())
+    await page.goto('/settings/usage')
+    await expect(page.locator('main').getByText('区间合计', { exact: true })).toBeVisible()
+    expect(calls).toBe(2)
+    await page.unroute((url) => url.pathname === endpoint)
+  }
+  const began = Date.now()
+  await page.route('**/api/v1/usage*', (route) => route.fulfill({ status: 502, contentType: 'text/html', body: '<html>backend stopped</html>' }))
+  await page.goto('/settings/usage', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('main').getByRole('alert')).toContainText('服务暂不可用')
+  const elapsed = Date.now() - began
+  expect(elapsed).toBeLessThanOrEqual(30_000)
+  console.log(`OPT14 后端停止提示 ${elapsed}ms`)
+  await page.unroute('**/api/v1/usage*')
+  await page.goto('/settings/export')
+  let writes = 0
+  await page.route('**/api/v1/exports', (route) => {
+    writes++
+    return route.fulfill({ status: 503, contentType: 'text/html', body: '<html>unavailable</html>' })
+  })
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  await expect(page.getByText('服务暂不可用，请稍后重试', { exact: true })).toBeVisible()
+  expect(writes).toBe(1)
+  await page.unroute('**/api/v1/exports')
+  await page.route('**/api/v1/exports', (route) => route.fulfill({ status: 429, contentType: 'text/html', body: '<html>too many requests</html>' }))
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  await expect(page.getByText('请求太频繁，请稍后重试', { exact: true })).toBeVisible()
+  await page.unroute('**/api/v1/exports')
+  await page.route('**/api/v1/exports', (route) => route.fulfill({ status: 422, json: { error: { code: 'validation', message: '保留服务端校验原因' } } }))
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  await expect(page.getByText('保留服务端校验原因', { exact: true })).toBeVisible()
+  await page.unroute('**/api/v1/exports')
+  const bytes = Buffer.from([0, 255, 128, 13, 10, 65])
+  await page.route('**/api/v1/exports', (route) => route.fulfill({ status: 200, contentType: 'application/octet-stream', body: bytes }))
+  const downloaded = page.waitForEvent('download')
+  await page.getByRole('button', { name: '导出', exact: true }).click()
+  const chunks: Buffer[] = []
+  for await (const chunk of await (await downloaded).createReadStream()) chunks.push(chunk)
+  expect(Buffer.concat(chunks)).toEqual(bytes)
+})
+
+for (const body of [false, true]) {
+  test(`OPT14 普通请求${body ? '响应体' : '响应头'}在三十秒超时`, async ({ page }) => {
+    await registerAccount(page)
+    await page.clock.install()
+    await page.clock.pauseAt(new Date(Date.now() + 1_000))
+    await page.evaluate((body) => {
+      const original = window.fetch.bind(window)
+      window.fetch = async (input, init) => {
+        if (typeof input !== 'string' || !input.startsWith('/api/v1/usage')) return original(input, init)
+        const started = Date.now()
+        Object.assign(window, { opt14RequestAt: started })
+        init?.signal?.addEventListener('abort', () => Object.assign(window, { opt14Elapsed: Date.now() - started }), { once: true })
+        if (!body) return new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true }))
+        return new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{'))
+            init?.signal?.addEventListener('abort', () => controller.error(new DOMException('cancelled', 'AbortError')), { once: true })
+          },
+        }), { headers: { 'Content-Type': 'application/json' } })
+      }
+    }, body)
+    await page.getByRole('button', { name: /今日.*token/ }).click()
+    await expect(page.locator('main').getByLabel('加载中', { exact: true })).toBeAttached()
+    const remaining = await page.evaluate(() => 30_000 - (Date.now() - (window as any).opt14RequestAt))
+    expect(remaining).toBeGreaterThan(0)
+    await page.clock.fastForward(remaining - 1)
+    await expect(page.locator('main').getByRole('alert')).toHaveCount(0)
+    await page.clock.fastForward(1)
+    expect(await page.evaluate(() => (window as any).opt14Elapsed)).toBe(30_000)
+    await page.clock.resume()
+    await expect(page.locator('main').getByRole('alert')).toContainText('服务暂不可用，请求超时，请稍后重试')
+    console.log(`OPT14 ${body ? '响应体' : '响应头'}悬挂：浏览器时钟 30000ms 超时`)
+  })
+}
+
+test('OPT14 三十 MB 上传提示限制且上传独立于普通期限', async ({ page }) => {
+  await registerAccount(page)
+  const id = await createOutline(page)
+  const input = page.locator('#step-images input[type="file"]')
+  const file = { name: 'local-30MB.png', mimeType: 'image/png', buffer: Buffer.alloc(30 * 1024 * 1024) }
+  let uploads = 0
+  await page.route(`**/api/v1/works/${id}/assets`, (route) => {
+    uploads++
+    return route.fulfill({ status: 413, contentType: 'text/html', body: '<html>request entity too large</html>' })
+  })
+  await input.setInputFiles(file)
+  await expect(page.getByText('local-30MB.png：文件太大，最大 20MB', { exact: true })).toBeVisible()
+  expect(uploads).toBe(0)
+  await input.setInputFiles({ ...file, name: 'local-gateway.png', buffer: Buffer.alloc(1_024) })
+  await expect(page.getByText('local-gateway.png：文件太大，最大 20MB', { exact: true })).toBeVisible()
+  expect(uploads).toBe(1)
+  await page.unroute(`**/api/v1/works/${id}/assets`)
+  await page.clock.install()
+  await page.clock.pauseAt(new Date(Date.now() + 1_000))
+  const image = await page.evaluate((id) => {
+    const original = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      if (input === `/api/v1/works/${id}/assets`) await new Promise<void>((resolve, reject) => {
+        window.setTimeout(resolve, 45_000)
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true })
+      })
+      return original(input, init)
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = 100; canvas.height = 100
+    return canvas.toDataURL('image/png').split(',')[1]
+  }, id)
+  await input.setInputFiles({ name: 'local-delayed.png', mimeType: 'image/png', buffer: Buffer.from(image, 'base64') })
+  await page.clock.fastForward(30_000)
+  await expect(page.locator('#step-images').getByRole('button', { name: '上传图片', exact: true })).toBeDisabled()
+  await page.clock.fastForward(15_000)
+  await expect.poll(async () => (await api(page, 'GET', `/works/${id}`)).assets.length).toBe(1)
+  await expect(page.locator('#step-images').getByRole('button', { name: '上传图片', exact: true })).toBeEnabled()
+  await page.clock.resume()
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 1_000)))
+  await page.evaluate((id) => {
+    const original = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      if (input !== `/api/v1/works/${id}/assets`) return original(input, init)
+      const started = Date.now()
+      return new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => {
+        Object.assign(window, { opt14UploadElapsed: Date.now() - started })
+        reject(new DOMException('cancelled', 'AbortError'))
+      }, { once: true }))
+    }
+  }, id)
+  await input.setInputFiles({ name: 'local-timeout.png', mimeType: 'image/png', buffer: Buffer.from(image, 'base64') })
+  await page.clock.fastForward(120_000)
+  expect(await page.evaluate(() => (window as any).opt14UploadElapsed)).toBe(120_000)
+  await page.clock.resume()
+  await expect(page.getByText('local-timeout.png：服务暂不可用，请求超时，请稍后重试', { exact: true })).toBeVisible()
+})
+
+test('OPT14 流式等待与正文超过三十秒仍完成且主动停止保留取消', async ({ page }) => {
+  await registerAccount(page)
+  const id = await createOutline(page)
+  const work = await api(page, 'GET', `/works/${id}`)
+  await page.clock.install()
+  await page.clock.pauseAt(new Date(Date.now() + 1_000))
+  await page.evaluate((sections) => {
+    const original = window.fetch.bind(window)
+    window.fetch = async (input, init) => {
+      const index = sections.findIndex((s: any) => input === `/api/v1/sections/${s.id}/draft`)
+      if (index < 0) return original(input, init)
+      if (index === 0) await new Promise<void>((resolve, reject) => {
+        window.setTimeout(resolve, 45_000)
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true })
+      })
+      const encoder = new TextEncoder()
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: delta\ndata: {"text":"流式生成仍在继续"}\n\n'))
+          init?.signal?.addEventListener('abort', () => {
+            Object.assign(window, { opt14Cancelled: true })
+            controller.error(new DOMException('cancelled', 'AbortError'))
+          }, { once: true })
+          if (index === 0) window.setTimeout(() => {
+            const done = { result: { section: { ...sections[0], content_md: '较慢的完整正文', revision: sections[0].revision + 1 } }, refs: [], ai_call_id: null }
+            controller.enqueue(encoder.encode(`event: done\ndata: ${JSON.stringify(done)}\n\n`))
+            controller.close()
+          }, 45_000)
+        },
+      }), { headers: { 'Content-Type': 'text/event-stream' } })
+    }
+  }, work.sections.slice(0, 2))
+  const first = page.locator(`#sec-${work.sections[0].id}`)
+  await first.getByRole('button', { name: '起草本段', exact: true }).click()
+  await page.clock.fastForward(30_000)
+  await expect(first.getByRole('button', { name: '停止生成', exact: true })).toBeVisible()
+  await page.clock.fastForward(15_000)
+  await expect(first.getByText('流式生成仍在继续', { exact: true })).toBeVisible()
+  await page.clock.fastForward(30_000)
+  await expect(first.getByRole('button', { name: '停止生成', exact: true })).toBeVisible()
+  await page.clock.fastForward(15_000)
+  await page.clock.resume()
+  await expect(first.getByRole('button', { name: '停止生成', exact: true })).toBeHidden()
+  const second = page.locator(`#sec-${work.sections[1].id}`)
+  await second.getByRole('button', { name: '起草本段', exact: true }).click()
+  await expect(second.getByText('流式生成仍在继续', { exact: true })).toBeVisible()
+  await second.getByRole('button', { name: '停止生成', exact: true }).click()
+  await expect(second.getByRole('button', { name: '起草本段', exact: true })).toBeVisible()
+  expect(await page.evaluate(() => (window as any).opt14Cancelled)).toBe(true)
+  await expect(page.getByText(/服务暂不可用/)).toHaveCount(0)
+})
+
 async function api(page: Page, method: string, path: string, data?: unknown) {
   const me = await (await page.request.get('/api/v1/auth/me')).json()
   const response = await page.request.fetch('/api/v1' + path, { method, data, headers: { 'X-CSRF-Token': me.csrf_token } })

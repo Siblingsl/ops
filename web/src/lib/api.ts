@@ -40,7 +40,14 @@ async function parseError(res: Response): Promise<ApiError> {
   } catch {
     /* not JSON */
   }
-  return new ApiError(res.status, 'internal', `请求失败（${res.status}）`)
+  const messages: Record<number, string> = {
+    413: '文件太大，最大 20MB',
+    429: '请求太频繁，请稍后重试',
+    502: '服务暂不可用，服务正在重启，请稍后重试',
+    503: '服务暂不可用，请稍后重试',
+    504: '服务暂不可用，请求超时，请稍后重试',
+  }
+  return new ApiError(res.status, 'internal', messages[res.status] || `请求失败（${res.status}）`)
 }
 
 let fallbackUntil = 0
@@ -49,29 +56,51 @@ export function preferFallbackModel(minutes = 10) {
   fallbackUntil = Date.now() + minutes * 60_000
 }
 
-export async function rawRequest(method: string, path: string, body?: unknown, init?: RequestInit): Promise<Response> {
+async function fetchResponse(method: string, path: string, payload: BodyInit | undefined, headers: Record<string, string>, init: RequestInit | undefined, streaming: boolean): Promise<Response> {
+  const timeout = streaming ? 90_000 : payload instanceof FormData ? 120_000 : 30_000
+  const controller = new AbortController()
+  const signal = init?.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal
+  const timer = window.setTimeout(() => controller.abort(), timeout)
+  try {
+    for (let attempt = 0; ; attempt++) {
+      let res = await fetch('/api/v1' + path, { method, headers, body: payload, credentials: 'same-origin', ...init, signal })
+      if (streaming && res.ok && res.headers.get('Content-Type')?.startsWith('text/event-stream')) return res
+      if (res.body) res = new Response(await res.arrayBuffer(), { status: res.status, statusText: res.statusText, headers: res.headers })
+      if (method === 'GET' && attempt === 0 && [502, 503, 504].includes(res.status)) continue
+      if (res.ok) return res
+      throw await parseError(res)
+    }
+  } catch (e) {
+    if (init?.signal?.aborted) throw e
+    if (controller.signal.aborted) throw new ApiError(504, 'timeout', '服务暂不可用，请求超时，请稍后重试')
+    if (e instanceof ApiError) throw e
+    throw new ApiError(0, 'network', '服务暂不可用，请检查网络后重试')
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
+export async function rawRequest(method: string, path: string, body?: unknown, init?: RequestInit, streaming = false): Promise<Response> {
   const headers: Record<string, string> = { 'X-CSRF-Token': csrf }
   if (fallbackUntil > Date.now()) headers['X-AI-Prefer'] = 'fallback'
   let payload: BodyInit | undefined
-  if (body instanceof FormData) payload = body
-  else if (body !== undefined) {
+  if (body instanceof FormData) {
+    for (const value of body.values()) {
+      if (value instanceof File && value.size > 20 * 1024 * 1024) throw new ApiError(413, 'upload_too_large', '文件太大，最大 20MB')
+    }
+    payload = body
+  } else if (body !== undefined) {
     headers['Content-Type'] = 'application/json'
     payload = JSON.stringify(body)
   }
-  let res: Response
   try {
-    res = await fetch('/api/v1' + path, { method, headers, body: payload, credentials: 'same-origin', ...init })
+    return await fetchResponse(method, path, payload, headers, init, streaming)
   } catch (e) {
-    if ((e as Error).name === 'AbortError') throw e
-    throw new ApiError(0, 'network', '网络连接失败，请检查网络后重试')
+    if (!(e instanceof ApiError)) throw e
+    if (e.code === 'unauthenticated' && !path.startsWith('/auth/')) onUnauthenticated?.()
+    if (e.code === 'reauth_required' && reauthPrompt && await reauthPrompt()) return rawRequest(method, path, body, init, streaming)
+    throw e
   }
-  if (res.ok) return res
-  const err = await parseError(res)
-  if (err.code === 'unauthenticated' && !path.startsWith('/auth/')) onUnauthenticated?.()
-  if (err.code === 'reauth_required' && reauthPrompt) {
-    if (await reauthPrompt()) return rawRequest(method, path, body, init)
-  }
-  throw err
 }
 
 export async function api<T = unknown>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
@@ -94,7 +123,7 @@ export interface SSEHandlers {
 
 /** stream posts and reads server-sent events; resolves with the `done` payload. */
 export async function stream<T = any>(path: string, body: unknown, h: SSEHandlers = {}): Promise<T> {
-  const res = await rawRequest('POST', path, body, { signal: h.signal })
+  const res = await rawRequest('POST', path, body, { signal: h.signal }, true)
   const ctype = res.headers.get('Content-Type') || ''
   if (!ctype.startsWith('text/event-stream')) return (await res.json()) as T
   const reader = res.body!.getReader()
