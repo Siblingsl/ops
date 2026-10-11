@@ -169,6 +169,7 @@ func (s *Server) latestDaily(ctx context.Context, a *Account, date string) (*Dai
 	return d, nil
 }
 func (s *Server) generateDaily(ctx context.Context, a *Account, trigger string, force bool) (*Daily, error) {
+	day := s.today()
 	strategy, e := s.activeStrategy(ctx, a.ID)
 	if e != nil {
 		return nil, e
@@ -181,24 +182,23 @@ func (s *Server) generateDaily(ctx context.Context, a *Account, trigger string, 
 		return nil, e
 	}
 	defer tx.Rollback(ctx)
-	if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,423))`, a.ID.String()+s.today().Format("2006-01-02")); e != nil {
-		return nil, e
-	}
-	current, e := s.latestDaily(ctx, a, s.today().Format("2006-01-02"))
+	version, count, e := dailyGenerationState(ctx, tx, a.ID, day, force)
 	if e != nil {
 		return nil, e
 	}
-	if current != nil && !force {
-		return current, nil
-	}
-	if force {
-		var count int
-		_ = tx.QueryRow(ctx, `SELECT manual_count FROM account_daily_claim WHERE account_id=$1 AND date=$2`, a.ID, s.today()).Scan(&count)
-		if count >= 3 {
-			return nil, stateInvalid("今日重新生成已达 3 次上限")
+	if version > 0 && !force {
+		if e = tx.Commit(ctx); e != nil {
+			return nil, e
 		}
+		return s.latestDaily(ctx, a, day.Format("2006-01-02"))
 	}
-	p, n := dailyCounts(strategy, s.today())
+	if count >= 3 {
+		return nil, stateInvalid("今日重新生成已达 3 次上限")
+	}
+	if e = tx.Commit(ctx); e != nil {
+		return nil, e
+	}
+	p, n := dailyCounts(strategy, day)
 	settings := s.effectiveDaily(ctx, strategy)
 	if settings.PrimaryCount > 0 {
 		p = settings.PrimaryCount
@@ -211,16 +211,30 @@ func (s *Server) generateDaily(ctx context.Context, a *Account, trigger string, 
 		return nil, e
 	}
 	b, _ := json.Marshal(items)
-	v := 1
-	if current != nil {
-		v = current.Version + 1
+	tx, e = s.db.Begin(ctx)
+	if e != nil {
+		return nil, e
 	}
-	d, e := scanDaily(tx.QueryRow(ctx, `INSERT INTO daily_recommendation(account_id,date,version,items,ai_call_id,generated_at,trigger) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING `+dailyCols, a.ID, s.today(), v, b, ai.CallID, s.now(), trigger))
+	defer tx.Rollback(ctx)
+	currentVersion, count, e := dailyGenerationState(ctx, tx, a.ID, day, force)
+	if e != nil {
+		return nil, e
+	}
+	if currentVersion != version {
+		if e = tx.Commit(ctx); e != nil {
+			return nil, e
+		}
+		return s.latestDaily(ctx, a, day.Format("2006-01-02"))
+	}
+	if count >= 3 {
+		return nil, stateInvalid("今日重新生成已达 3 次上限")
+	}
+	d, e := scanDaily(tx.QueryRow(ctx, `INSERT INTO daily_recommendation(account_id,date,version,items,ai_call_id,generated_at,trigger) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING `+dailyCols, a.ID, day, version+1, b, ai.CallID, s.now(), trigger))
 	if e != nil {
 		return nil, e
 	}
 	if force {
-		_, e = tx.Exec(ctx, `INSERT INTO account_daily_claim(account_id,date,manual_count) VALUES($1,$2,1) ON CONFLICT(account_id,date) DO UPDATE SET manual_count=account_daily_claim.manual_count+1`, a.ID, s.today())
+		_, e = tx.Exec(ctx, `INSERT INTO account_daily_claim(account_id,date,manual_count) VALUES($1,$2,1) ON CONFLICT(account_id,date) DO UPDATE SET manual_count=account_daily_claim.manual_count+1`, a.ID, day)
 		if e != nil {
 			return nil, e
 		}
@@ -229,6 +243,23 @@ func (s *Server) generateDaily(ctx context.Context, a *Account, trigger string, 
 		return nil, e
 	}
 	return d, nil
+}
+
+func dailyGenerationState(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, day time.Time, force bool) (int, int, error) {
+	if _, e := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,423))`, accountID.String()+day.Format("2006-01-02")); e != nil {
+		return 0, 0, e
+	}
+	var version, count int
+	if e := tx.QueryRow(ctx, `SELECT coalesce(max(version),0) FROM daily_recommendation WHERE account_id=$1 AND date=$2`, accountID, day).Scan(&version); e != nil {
+		return 0, 0, e
+	}
+	if force {
+		e := tx.QueryRow(ctx, `SELECT manual_count FROM account_daily_claim WHERE account_id=$1 AND date=$2`, accountID, day).Scan(&count)
+		if e != nil && e != pgx.ErrNoRows {
+			return 0, 0, e
+		}
+	}
+	return version, count, nil
 }
 func (s *Server) getDaily(w http.ResponseWriter, r *http.Request) error {
 	a, e := s.accountFromPath(r)
@@ -316,6 +347,7 @@ func (s *Server) dailyAction(w http.ResponseWriter, r *http.Request) error {
 		return validation("推荐序号不正确")
 	}
 	item := d.Items[idx]
+	originalCall := d.AICallID
 	var prior string
 	var tid, wid *uuid.UUID
 	e = tx.QueryRow(ctx, `SELECT action,topic_id,work_id FROM daily_recommendation_action WHERE recommendation_id=$1 AND item_index=$2 AND action<>'replaced' ORDER BY created_at DESC LIMIT 1`, id, idx).Scan(&prior, &tid, &wid)
@@ -328,6 +360,10 @@ func (s *Server) dailyAction(w http.ResponseWriter, r *http.Request) error {
 	outcome := "accepted"
 	storedAction := "adopted"
 	if action == "replace" {
+		if e = tx.Commit(ctx); e != nil {
+			return e
+		}
+		snapshot, _ := json.Marshal(item)
 		strategy, e := s.activeStrategy(ctx, a.ID)
 		if e != nil {
 			return e
@@ -342,6 +378,23 @@ func (s *Server) dailyAction(w http.ResponseWriter, r *http.Request) error {
 		replacement, ai, e := s.dailyAI(ctx, a, strategy, 1, 0, avoid)
 		if e != nil {
 			return e
+		}
+		tx, e = s.db.Begin(ctx)
+		if e != nil {
+			return e
+		}
+		defer tx.Rollback(ctx)
+		d, e = scanDaily(tx.QueryRow(ctx, `SELECT `+dailyCols+` FROM daily_recommendation WHERE id=$1 FOR UPDATE`, id))
+		if e != nil {
+			return e
+		}
+		current, _ := json.Marshal(d.Items[idx])
+		var processed bool
+		if e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM daily_recommendation_action WHERE recommendation_id=$1 AND item_index=$2 AND action<>'replaced')`, id, idx).Scan(&processed); e != nil {
+			return e
+		}
+		if string(current) != string(snapshot) || processed {
+			return stateInvalid("推荐在生成期间已被修改，请刷新后重试")
 		}
 		replacement[0].Primary = item.Primary
 		d.Items[idx] = replacement[0]
@@ -440,6 +493,6 @@ func (s *Server) dailyAction(w http.ResponseWriter, r *http.Request) error {
 	if e = tx.Commit(ctx); e != nil {
 		return e
 	}
-	s.implicitFeedback(ctx, d.AICallID, outcome, &idx, nil)
+	s.implicitFeedback(ctx, originalCall, outcome, &idx, nil)
 	return ok(w, map[string]any{"topic_id": tid, "work_id": wid, "recommendation": d})
 }
