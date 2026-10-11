@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // APIError is rendered as {"error":{"code","message","detail"}} (06 文档第 13.1 节).
@@ -66,8 +67,11 @@ func (s *Server) h(fn handlerFunc) http.HandlerFunc {
 
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var ae *APIError
+	var pe *pgconn.PgError
 	if errors.Is(err, pgx.ErrNoRows) {
 		ae = errNotFound
+	} else if errors.As(err, &pe) && pe.Code == "57014" {
+		ae = apiErr(http.StatusGatewayTimeout, "database_timeout", "数据库操作超时，请稍后重试")
 	} else if !errors.As(err, &ae) {
 		slog.Error("请求处理失败", "path", r.URL.Path, "err", err)
 		ae = apiErr(500, "internal", "服务器内部错误，请稍后重试")

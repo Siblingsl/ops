@@ -405,7 +405,7 @@ func (s *Server) materialDuplicates(w http.ResponseWriter, r *http.Request) erro
 		if len(ids) < 2 {
 			continue
 		}
-		mrows, err := s.db.Query(ctx, `SELECT `+materialCols+` FROM material m WHERE m.id = ANY($1) ORDER BY m.created_at`, ids)
+		mrows, err := s.db.Query(ctx, `SELECT `+materialCols+` FROM material m WHERE m.id = ANY($1) ORDER BY m.created_at`, ids, s.today())
 		if err != nil {
 			return err
 		}

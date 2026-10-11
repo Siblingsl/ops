@@ -215,7 +215,7 @@ type Material struct {
 const materialCols = `m.id, m.account_id, m.kind, m.content, m.source, m.tags, to_char(m.valid_until, 'YYYY-MM-DD'),
 	(SELECT count(*) FROM work_material wm JOIN work w ON w.id=wm.work_id AND w.deleted_at IS NULL WHERE wm.material_id=m.id),
 	(SELECT max(w.updated_at) FROM work_material wm JOIN work w ON w.id=wm.work_id AND w.deleted_at IS NULL WHERE wm.material_id=m.id),
-	coalesce(m.valid_until < current_date, false), m.created_at`
+	coalesce(m.valid_until < $2::date, false), m.created_at`
 
 func scanMaterial(row interface{ Scan(...any) error }) (Material, error) {
 	var m Material
@@ -239,15 +239,15 @@ func (s *Server) listMaterials(w http.ResponseWriter, r *http.Request) error {
 		WHERE m.workspace_id=$1 AND m.deleted_at IS NULL AND `
 	switch q.Get("scope") {
 	case "account":
-		sql += `m.account_id=$2`
+		sql += `m.account_id=$3`
 	case "shared":
-		sql += `m.account_id IS NULL AND $2::uuid IS NOT NULL`
+		sql += `m.account_id IS NULL AND $3::uuid IS NOT NULL`
 	default:
-		sql += `(m.account_id=$2 OR m.account_id IS NULL)`
+		sql += `(m.account_id=$3 OR m.account_id IS NULL)`
 	}
-	args := []any{ident(ctx).WorkspaceID, accountID}
+	args := []any{ident(ctx).WorkspaceID, s.today(), accountID}
 	if kw := strings.TrimSpace(q.Get("q")); kw != "" {
-		sql += ` AND (m.content ILIKE $3 OR m.source ILIKE $3 OR array_to_string(m.tags, ' ') ILIKE $3)`
+		sql += ` AND (m.content ILIKE $4 OR m.source ILIKE $4 OR array_to_string(m.tags, ' ') ILIKE $4)`
 		args = append(args, "%"+kw+"%")
 	}
 	switch q.Get("usage") {
@@ -256,7 +256,7 @@ func (s *Server) listMaterials(w http.ResponseWriter, r *http.Request) error {
 	case "used":
 		sql += ` AND EXISTS (SELECT 1 FROM work_material wm WHERE wm.material_id=m.id)`
 	case "expired":
-		sql += ` AND m.valid_until < current_date`
+		sql += ` AND m.valid_until < $2::date`
 	}
 	rows, err := s.db.Query(ctx, sql+` ORDER BY m.created_at DESC LIMIT 500`, args...)
 	if err != nil {
@@ -376,7 +376,7 @@ func (s *Server) createMaterial(w http.ResponseWriter, r *http.Request) error {
 	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
-	m, err := scanMaterial(s.db.QueryRow(ctx, `SELECT `+materialCols+` FROM material m WHERE m.id=$1`, id))
+	m, err := scanMaterial(s.db.QueryRow(ctx, `SELECT `+materialCols+` FROM material m WHERE m.id=$1`, id, s.today()))
 	if err != nil {
 		return err
 	}
