@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { RefsNote, sendFeedback } from '@/components/refs'
 import { type EditorHandle, PlainEditor, RichEditor } from '@/components/section-editor'
-import { Badge, Button, cn, Field, IconButton, Select, Textarea } from '@/components/ui'
+import { Badge, Button, cn, Field, IconButton, Notice, Select, Textarea } from '@/components/ui'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, get, patch, post, put, stream } from '@/lib/api'
@@ -140,6 +140,8 @@ export function SectionBlock({
   const [revOpen, setRevOpen] = useState(false)
   const [pendingOpen, setPendingOpen] = useState<PendingMark | null>(null)
   const [lintText, setLintText] = useState(section.content_md)
+  // DEV-A105：起草自检前置的修正记录（可还原）。
+  const [selfCheck, setSelfCheck] = useState<{ fixes: { from: string; to: string; count: number }[]; original: string; sectionId: string } | null>(null)
   const [showHits, setShowHits] = useState(false)
   const abort = useRef<AbortController | null>(null)
   const ghostAbort = useRef<AbortController | null>(null)
@@ -298,21 +300,28 @@ export function SectionBlock({
     setStreaming({ kind: 'draft', text: '', stage: 'context' })
     try {
       const body = { ...(instruction.trim() ? { instruction: instruction.trim() } : {}), ...(tier ? { tier } : {}) }
-      const r = await stream<{ result: Section; refs: AIRefs; ai_call_id: string }>(`/sections/${section.id}/draft`, body, {
+      const r = await stream<{ result: { section: Section; self_check?: { fixes: { from: string; to: string; count: number }[]; original: string } }; refs: AIRefs; ai_call_id: string }>(`/sections/${section.id}/draft`, body, {
         signal: abort.current.signal,
         onDelta: (t) => setStreaming((s) => (s ? { ...s, text: s.text + t } : s)),
         onEvent: onStreamEvent,
       })
       setRefs(r.refs)
       setCallId(r.ai_call_id)
-      content.current = r.result.content_md
-      revision.current = r.result.revision
+      const sec0 = r.result.section
+      content.current = sec0.content_md
+      revision.current = sec0.revision
       setOrigin('ai')
       setIsEmpty(false)
-      setLintText(r.result.content_md)
+      setLintText(sec0.content_md)
       setResetKey((k) => k + 1)
       await refresh()
       onDrafted?.(section.id)
+      // DEV-A105：起草自检前置——展示自动修正并支持还原到 AI 原始输出。
+      if (r.result.self_check?.fixes?.length) {
+        setSelfCheck({ ...r.result.self_check, sectionId: section.id })
+      } else {
+        setSelfCheck(null)
+      }
       if (prev.trim()) undoToast('已重新起草', prev, r.ai_call_id)
     } catch (e) {
       aiError(e, `第 ${index + 1} 段起草`, draft)
@@ -666,6 +675,20 @@ export function SectionBlock({
       </div>
       {section.key_point && !xhs && <div className="px-4 pt-2.5 text-[12.5px] text-mist-400 sm:px-5">要点：{section.key_point}</div>}
       <div className="px-4 py-3 sm:px-5">
+        {selfCheck && selfCheck.sectionId === section.id && !readOnly && (
+          <Notice tone="ink" className="mb-3">
+            <span>
+              AI 自检修正了 {selfCheck.fixes.length} 处绝对化表达：
+              {selfCheck.fixes.map((f) => `${f.from}→${f.to}`).join('、')}。
+            </span>
+            <button type="button" className="ml-1.5 cursor-pointer text-ink-600 underline" onClick={async () => {
+              content.current = selfCheck.original
+              setLintText(selfCheck.original)
+              setSelfCheck(null)
+              await persist({ content_md: selfCheck.original })
+            }}>还原 AI 原文</button>
+          </Notice>
+        )}
         {streaming?.kind === 'draft' ? (
           <div className="min-h-[4em] whitespace-pre-wrap text-[15px] leading-[1.9] text-mist-700">
             {streaming.text}<span className="ml-0.5 inline-block h-4 w-[2px] translate-y-0.5 animate-pulse bg-ink-500" />

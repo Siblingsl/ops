@@ -539,7 +539,16 @@ func (s *Server) draftSection(w http.ResponseWriter, r *http.Request) error {
 	label := "起草「" + truncate(nz(sec.Heading, sec.KeyPoint), 16) + "」"
 	return s.streamAIJob(w, r, t, jobMeta{SectionID: &sec.ID, Label: label, Link: "/works/" + m.ID.String() + "#section-" + sec.ID.String()},
 		func(text string, res *aiResult) (any, error) {
-			return s.saveAIContent(context.WithoutCancel(ctx), sec, m, text, res)
+			// DEV-A105：起草自检前置——绝对化用语等机械问题在初稿上直接修正并透明标注。
+			fixed, fixes, changed := selfCheckDraft(text)
+			out, err := s.saveAIContent(context.WithoutCancel(ctx), sec, m, fixed, res)
+			if err != nil {
+				return nil, err
+			}
+			if !changed {
+				return map[string]any{"section": out}, nil
+			}
+			return map[string]any{"section": out, "self_check": map[string]any{"fixes": fixes, "original": text}}, nil
 		})
 }
 
