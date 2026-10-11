@@ -1,3 +1,4 @@
+import { FirstValueGuide } from '@/components/first-value-guide'
 import { DailyPanel } from './ops/Daily'
 import HotPanel from './ops/Hot'
 import { useQuery } from '@tanstack/react-query'
@@ -273,6 +274,7 @@ export default function Dashboard() {
         </Link>
       )}
       <DemoCard acc={acc} owner={me?.role === 'owner'} />
+      {canWrite && <FirstValueGuide key={acc.id} accountId={acc.id} modelReady={s.ai} profileReady={s.profile} />}
       <BriefCard accountId={acc.id} />
       <NextActions accountId={acc.id} />
  <div className="mb-6 grid gap-5 xl:grid-cols-2"><DailyPanel key={`daily-${acc.id}`} accountId={acc.id} compact/><HotPanel key={`hot-${acc.id}`} account={acc} compact/></div>
@@ -280,8 +282,8 @@ export default function Dashboard() {
       {pendingSetup.length > 0 && (
         <Card className="mb-6 overflow-hidden">
           <div className="flex items-center justify-between border-b border-mist-100 bg-gamboge-50/50 px-5 py-3">
-            <div className="text-[13.5px] font-semibold text-mist-800">还差 {pendingSetup.length} 步，让 AI 更懂这个账号</div>
-            <div className="text-xs text-mist-500">{setupItems.length - pendingSetup.length} / {setupItems.length} 已完成</div>
+            <div className="text-[13.5px] font-semibold text-mist-800">进阶提升 · 还有 {pendingSetup.length} 项可补充</div>
+            <div className="text-xs text-mist-500">{setupItems.length - pendingSetup.length} / {setupItems.length} 已完成 · 不阻塞首条推荐</div>
           </div>
           <div className="grid divide-mist-100 sm:grid-cols-2 lg:grid-cols-4 lg:divide-x">
             {setupItems.map((i) => (

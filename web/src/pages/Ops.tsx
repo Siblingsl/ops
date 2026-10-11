@@ -762,7 +762,7 @@ function PlanPanel({ account }: { account: Account }) {
           <Button onClick={() => query.refetch()}>重试</Button>
         </Notice>
       ) : !query.data?.has_strategy ? (
-        <Empty title="先启用运营方案" desc="方案启用后，按计划发布日生成槽位。" />
+        <Empty title="先启用运营方案" desc="方案启用后，按计划发布日生成槽位。" action={<a href="#strategy"><Button>去启用运营方案</Button></a>} />
       ) : (
         <div className="space-y-4 p-5">
           <HumanGate code="逐槽采用">AI 只填写建议。每个槽位由你选择采用、换一个或留空。</HumanGate>
@@ -897,7 +897,7 @@ export default function Ops() {
   return (
     <div className="space-y-6">
       <PageHeader title="账号运营" desc={`${account.name} · 定位、内容节奏与每天的创作参考`} />
-      <StrategyPanel key={`strategy-${account.id}`} account={account} />
+      <div id="strategy" className="scroll-mt-24"><StrategyPanel key={`strategy-${account.id}`} account={account} /></div>
  <DailyStatsCard key={`stats-${account.id}`} accountId={account.id} warningsOnly/>
       <PlanPanel key={`plan-${account.id}`} account={account} />
       <HotPanel key={`hot-${account.id}`} account={account} />
