@@ -161,4 +161,3 @@ func (s *Server) generateBrief(ctx context.Context, accountID uuid.UUID) error {
 	}
 	return nil
 }
-
