@@ -97,6 +97,7 @@ func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
+	r.Use(middleware.Compress(5, "text/html", "text/css", "application/json", "application/javascript", "text/javascript", "image/svg+xml"))
 
 	r.Get("/healthz", s.healthz)
 
@@ -462,12 +463,16 @@ func spaHandler(dir string) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		p := filepath.Join(dir, filepath.Clean(r.URL.Path))
+		w.Header().Set("Cache-Control", "no-cache")
+		cleanPath := filepath.ToSlash(filepath.Clean(r.URL.Path))
+		p := filepath.Join(dir, cleanPath)
 		if st, err := os.Stat(p); err != nil || st.IsDir() {
-			if !strings.HasPrefix(r.URL.Path, "/assets/") {
+			if !strings.HasPrefix(cleanPath, "/assets/") {
 				http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 				return
 			}
+		} else if strings.HasPrefix(cleanPath, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
 		fs.ServeHTTP(w, r)
 	})
