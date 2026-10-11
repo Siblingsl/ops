@@ -1040,18 +1040,26 @@ function ArticleEditor() {
     : !titleDone ? 'step-title'
     : 'step-images'
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  const jumpNextEmpty = (afterId?: string) => {
+  const jumpNextEmpty = (afterId?: string, focusDraft = false) => {
+    const go = (id: string) => {
+      scrollTo(`sec-${id}`)
+      if (focusDraft) {
+        // 首次事件唤醒 LazyMount，渲染后再次把焦点交给单段按钮。
+        emitEditor({ type: 'focus-draft', sectionId: id })
+        window.setTimeout(() => emitEditor({ type: 'focus-draft', sectionId: id }), 100)
+      }
+    }
     const list = work.sections
     const isEmpty = (s: (typeof list)[number]) => s.id !== afterId && !s.content_md.trim()
     const last = list[list.length - 1]
     if (!afterId && prefs.write_ending_first && last && isEmpty(last) && list.length > 1) {
-      scrollTo(`sec-${last.id}`)
+      go(last.id)
       return true
     }
     const start = afterId ? list.findIndex((s) => s.id === afterId) + 1 : 0
     const next = list.slice(Math.max(0, start)).find(isEmpty) ?? list.find(isEmpty)
     if (next) {
-      scrollTo(`sec-${next.id}`)
+      go(next.id)
       return true
     }
     return false
@@ -1062,7 +1070,7 @@ function ArticleEditor() {
   const onDrafted = (sectionId: string) => {
     if (!prefs.auto_jump_next_empty) return
     window.setTimeout(() => {
-      if (jumpNextEmpty(sectionId)) toast.message('已跳到下一段空稿')
+      if (jumpNextEmpty(sectionId, true)) toast.message('已聚焦下一段起草按钮，按 Ctrl/⌘+Enter 起草这一段')
     }, 120)
   }
   // F8：跳到下一处待核实并打开处理面板（EX-E-04）。

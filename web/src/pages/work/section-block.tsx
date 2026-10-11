@@ -110,6 +110,7 @@ export function SectionBlock({
   const warnedConflict = useRef(false)
   const xhs = work.platform === 'xhs'
   const editor = useRef<EditorHandle>(null)
+  const draftButton = useRef<HTMLButtonElement>(null)
   const [heading, setHeading] = useState(section.heading)
   const headingRef = useRef(heading)
   headingRef.current = heading
@@ -291,6 +292,7 @@ export function SectionBlock({
   }
 
   const draft = async () => {
+    if (readOnly || streaming || !work.outline_confirmed_at) return
     const prev = content.current
     if (prev.trim() && !(await confirm({ title: '重新起草这一段？', desc: '当前内容会被替换，替换前的内容保存在段落历史中，也可以马上撤销。', confirmText: '重新起草' }))) return
     window.clearTimeout(timer.current)
@@ -599,6 +601,10 @@ export function SectionBlock({
       return
     }
     if (readOnly) return
+    if (e.type === 'focus-draft') {
+      draftButton.current?.focus({ preventScroll: true })
+      return
+    }
     if (e.type === 'apply') {
       if (e.target === 'end') {
         setProposal({ original: '', text: e.text, mode: 'append', callId: e.callId })
@@ -808,7 +814,7 @@ export function SectionBlock({
               <Button size="sm" variant="ghost" icon={<Square className="size-3.5" />} onClick={stop}>停止生成</Button>
             ) : (
               <>
-                <Button size="sm" variant={isEmpty ? 'primary' : 'ghost'} icon={<Sparkles className="size-3.5" />} onClick={draft}
+                <Button size="sm" variant={isEmpty ? 'primary' : 'ghost'} icon={<Sparkles className="size-3.5" />} onClick={draft} ref={draftButton}
                   disabled={!work.outline_confirmed_at} title="Ctrl/⌘+Enter">{isEmpty ? '起草本段' : '重新起草'}</Button>
                 <Button size="sm" variant="ghost" icon={<Repeat2 className="size-3.5" />} disabled={isEmpty} onClick={() => edit('rewrite')}>{selection ? '改写选中' : '改写'}</Button>
                 <Button size="sm" variant="ghost" icon={<Wand2 className="size-3.5" />} disabled={isEmpty} onClick={() => edit('expand')}>扩写</Button>

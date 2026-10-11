@@ -30,9 +30,12 @@ async function createOutline(page: Page) {
   await page.waitForURL(/\/works\/[a-f0-9-]+$/)
   const id = page.url().split('/').pop()!
   const viewpoint = page.locator('#step-viewpoint textarea').first()
+  await expect(page.getByRole('button', { name: 'AI 生成大纲', exact: true })).toBeDisabled()
   await viewpoint.fill('少而精的步骤更容易长期坚持，这是我的经验判断。')
   await viewpoint.blur()
   await page.getByRole('button', { name: 'AI 生成大纲', exact: true }).click()
+  await expect(page.getByRole('button', { name: '确认大纲', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '起草本段', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '确认大纲', exact: true }).click()
   await expect(page.getByText('已确认', { exact: true }).first()).toBeVisible()
   return id
@@ -44,12 +47,19 @@ async function finishChecks(page: Page, id: string) {
     const { run } = await api(page, 'GET', `/works/${id}/checks/latest`)
     return !!run && run.fact_status !== 'pending'
   }, { timeout: 20_000 }).toBeTruthy()
+  await expect(page.getByText('事实核查', { exact: true }).locator('..')).toContainText('已完成')
   const { run } = await api(page, 'GET', `/works/${id}/checks/latest`)
   expect(run).toBeTruthy()
   for (const item of run.items) {
     if (item.category === 'format') expect(item.passed, `${item.message}: ${item.detail}`).toBeTruthy()
     else if (!item.resolution) {
-      if (item.category === 'ai_disclosure') await page.getByRole('checkbox', { name: '已知悉，发布时会声明' }).check()
+      if (item.category === 'ai_disclosure') {
+        const saved = page.waitForResponse(r => r.url().endsWith(`/check-items/${item.id}`) && r.request().method() === 'PATCH')
+        const checkbox = page.getByRole('checkbox', { name: '已知悉，发布时会声明' })
+        await checkbox.click()
+        expect((await saved).ok()).toBeTruthy()
+        await expect(checkbox).toBeChecked()
+      }
       else await page.locator(`input[name="${item.id}"]`).first().check()
     }
   }
@@ -60,10 +70,20 @@ async function finishChecks(page: Page, id: string) {
 test('注册、创建作品、大纲、逐段起草、检查与小红书打包', async ({ page }) => {
   await registerAccount(page)
   const id = await createOutline(page)
-  const drafted = page.waitForResponse(r => /\/sections\/[^/]+\/draft$/.test(r.url()) && r.request().method() === 'POST')
-  await page.getByRole('button', { name: '起草本段', exact: true }).first().click()
-  expect((await drafted).ok()).toBeTruthy()
-  await expect.poll(async () => (await api(page, 'GET', `/works/${id}`)).sections[0].content_md).not.toBe('')
+  const initial = await api(page, 'GET', `/works/${id}`)
+  const draftRequests: string[] = []
+  page.on('request', r => { if (/\/sections\/[^/]+\/draft$/.test(r.url()) && r.method() === 'POST') draftRequests.push(r.url()) })
+  await page.locator(`#sec-${initial.sections[0].id}`).getByRole('button', { name: '起草本段', exact: true }).focus()
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press('Control+Enter')
+    await expect.poll(async () => (await api(page, 'GET', `/works/${id}`)).sections[i].content_md).not.toBe('')
+    const next = page.locator(`#sec-${initial.sections[i + 1].id}`).getByRole('button', { name: '起草本段', exact: true })
+    await expect(next).toBeFocused()
+    expect(draftRequests).toHaveLength(i + 1)
+    expect(draftRequests[i]).toContain(initial.sections[i].id)
+  }
+  // 焦点移动不会启动下一次生成，下一空段仍保持空白。
+  expect((await api(page, 'GET', `/works/${id}`)).sections[3].content_md).toBe('')
   // 人工整理稿件与图片属于测试准备，不跳过检查或直接改状态。
   let work = await api(page, 'GET', `/works/${id}`)
   for (const section of work.sections) await api(page, 'PATCH', `/sections/${section.id}`, { content_md: '先明确要解决的问题，再把任务拆成能够完成的一小步。记录自己的过程，比追求复杂的方法更容易持续。', base_revision: section.revision })
@@ -153,8 +173,11 @@ test('卡片大纲确认、逐卡配图、检查与含文案发布包', async ({
   const secondId = work.sections[1].id
   await page.getByRole('button', { name: '下移卡片 1', exact: true }).click()
   await expect.poll(async () => (await api(page, 'GET', `/works/${id}`)).cards[0].section_id).toBe(secondId)
+  await expect(page.locator('[data-card-section]').first()).toHaveAttribute('data-card-section', secondId)
+  await expect(page.getByRole('button', { name: '上移卡片 2', exact: true })).toBeEnabled()
   await page.getByRole('button', { name: '上移卡片 2', exact: true }).click()
   await expect.poll(async () => (await api(page, 'GET', `/works/${id}`)).cards[0].section_id).toBe(firstId)
+  await expect(page.locator('[data-card-section]').first()).toHaveAttribute('data-card-section', firstId)
   const first = page.locator(`[data-card-section="${firstId}"]`)
   await first.getByLabel('配图提示词（可选）').fill('绿色书桌与笔记本，保持留白')
   let generations = 0

@@ -19,6 +19,7 @@ export type EditorEvent =
   | { type: 'sidebar'; tab: SidebarTab }
   | { type: 'comment'; sectionId: string | null; anchor: string }
   | { type: 'focus'; sectionId: string }
+  | { type: 'focus-draft'; sectionId: string }
   /** Every mounted section pushes its pending save into wait. */
   | { type: 'flush'; wait: Promise<unknown>[] }
 
