@@ -79,15 +79,27 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 	}, nil
 }
 
+// healthz is the liveness/readiness probe (DEV-U105): 503 when the database is unreachable,
+// so compose healthcheck and the upgrade script stop before cutting traffic to a broken instance.
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+	defer cancel()
+	if err := s.db.Ping(ctx); err != nil {
+		http.Error(w, "数据库不可用", http.StatusServiceUnavailable)
+		return
+	}
+	_, _ = w.Write([]byte("ok"))
+}
+
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	r.Get("/healthz", s.healthz)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+		r.Get("/healthz", s.healthz)
 		r.Get("/auth/status", s.h(s.authStatus))
 		r.Post("/auth/setup", s.h(s.authSetup))
 		r.Post("/auth/register", s.h(s.authRegister))
