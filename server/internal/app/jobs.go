@@ -49,6 +49,7 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	s.metricRemindersJob(ctx)
 	s.purgeMetricUploads(ctx)
 	s.wechatMetricsDaily(ctx)
+	s.day7PrefsJob(ctx)
 	s.reindexEmbeddings(ctx)
 	s.purgeHot(ctx)
 	s.collectReferences(ctx)
@@ -59,6 +60,7 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 		s.distillDaily(ctx)
 		s.inboxTriageDaily(ctx)
 		s.weeklyDigestJob(ctx)
+		s.weeklyReviewDraftJob(ctx)
 		s.dailyBriefJob(ctx)
 	}
 	_, _ = s.db.Exec(ctx, `DELETE FROM job_marker WHERE created_at < now() - interval '60 days'`)

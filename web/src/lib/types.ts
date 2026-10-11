@@ -405,6 +405,7 @@ export interface ReviewReport {
   adopted: number[]
   remembered?: number[]
   ignored?: number[]
+  origin?: 'manual' | 'weekly_draft'
   created_at: string
 }
 

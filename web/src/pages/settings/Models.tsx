@@ -196,6 +196,35 @@ function LimitCard() {
   )
 }
 
+// DEV-DR08（14 文档 4.6 第 2 条）：默认关闭；打开后每周一用经济档模型生成一次复盘草稿。
+function WeeklyDraftCard() {
+  const { data, refetch } = useQuery({ queryKey: ['settings'], queryFn: () => get<{ review_weekly_draft?: 'on' | 'off' }>('/settings') })
+  if (!data) return null
+  const on = data.review_weekly_draft === 'on'
+  const save = async (v: boolean) => {
+    try {
+      await put('/settings', { review_weekly_draft: v ? 'on' : 'off' })
+      toast.success(v ? '已开启每周复盘草稿' : '已关闭每周复盘草稿')
+      refetch()
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
+  return (
+    <Card className="p-5">
+      <div className="flex items-start gap-4">
+        <div className="flex-1">
+          <div className="text-[15px] font-semibold text-mist-900">每周复盘草稿</div>
+          <p className="mt-0.5 text-[13px] text-mist-500">
+            每周一在后台用经济档模型，按近 30 天作品的第 7 天数据为每个账号生成一份复盘草稿，并发通知。草稿里的建议仍要逐条采纳；第 7 天数据少于 3 篇时不生成，只提醒先补数据。会消耗 AI 用量。
+          </p>
+        </div>
+        <Switch checked={on} onChange={save} label="每周复盘草稿" />
+      </div>
+    </Card>
+  )
+}
+
 export default function Models() {
   const { data: me } = useMe()
   const isOwner = me?.role === 'owner'
@@ -296,6 +325,7 @@ export default function Models() {
       )}
       {isOwner && list.length > 0 && <RoutesCard providers={list} />}
       {isOwner && <LimitCard />}
+      {isOwner && <WeeklyDraftCard />}
       {isOwner && dialog && <ProviderDialog editing={dialog.editing} onClose={() => setDialog(null)} />}
       {isOwner && selfTest && (
         <SelfTestDialog result={selfTest.result} onClose={() => setSelfTest(null)} />

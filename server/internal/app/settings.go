@@ -562,8 +562,17 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) error {
 	}
 	return ok(w, map[string]any{
 		"ai_limit": s.loadLimit(r.Context()), "trash_days": trashDays, "version": Version,
-		"smtp": smtp,
+		"smtp": smtp, "review_weekly_draft": s.weeklyDraftSetting(r.Context(), ident(r.Context()).WorkspaceID),
 	})
+}
+
+// weeklyDraftSetting is review.weekly_draft (14 文档 4.6 第 2 条): "off" unless the owner turned it on.
+func (s *Server) weeklyDraftSetting(ctx context.Context, ws uuid.UUID) string {
+	var v string
+	if err := s.db.QueryRow(ctx, `SELECT value #>> '{}' FROM app_setting WHERE workspace_id=$1 AND key='review_weekly_draft'`, ws).Scan(&v); err != nil || v != "on" {
+		return "off"
+	}
+	return "on"
 }
 
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) error {
@@ -571,13 +580,26 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		AILimit *aiLimit    `json:"ai_limit"`
-		SMTP    *smtpConfig `json:"smtp"`
+		AILimit     *aiLimit    `json:"ai_limit"`
+		SMTP        *smtpConfig `json:"smtp"`
+		WeeklyDraft *string     `json:"review_weekly_draft"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
 	ws := ident(r.Context()).WorkspaceID
+	if in.WeeklyDraft != nil {
+		v := *in.WeeklyDraft
+		if v != "on" && v != "off" {
+			return validation("每周复盘草稿只能是 on 或 off")
+		}
+		b, _ := json.Marshal(v)
+		if _, err := s.db.Exec(r.Context(), `INSERT INTO app_setting (workspace_id, key, value) VALUES ($1,'review_weekly_draft',$2)
+			ON CONFLICT (workspace_id, key) DO UPDATE SET value=excluded.value`, ws, b); err != nil {
+			return err
+		}
+		s.audit(r.Context(), "settings_update", "app_setting", "review_weekly_draft", "ok", map[string]any{"value": v})
+	}
 	if in.AILimit != nil {
 		if in.AILimit.DailyTokens < 1000 {
 			return validation("每日上限至少 1000 token")

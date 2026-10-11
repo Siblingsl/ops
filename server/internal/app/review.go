@@ -240,6 +240,7 @@ type ReviewReport struct {
 	Adopted    []int32       `json:"adopted"`
 	Remembered []int32       `json:"remembered"`
 	Ignored    []int32       `json:"ignored"`
+	Origin     string        `json:"origin"` // manual | weekly_draft
 	CreatedAt  time.Time     `json:"created_at"`
 }
 
@@ -280,6 +281,11 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) buildReview(ctx context.Context, a *Account, workIDs []uuid.UUID, recent int) (*ReviewReport, error) {
+	return s.buildReviewAs(ctx, a, workIDs, recent, "manual", "")
+}
+
+// buildReviewAs records who started the review (origin) and may force a cost tier (weekly drafts run on economy).
+func (s *Server) buildReviewAs(ctx context.Context, a *Account, workIDs []uuid.UUID, recent int, origin, tier string) (*ReviewReport, error) {
 	ids := workIDs
 	if len(ids) == 0 {
 		n := recent
@@ -339,7 +345,7 @@ func (s *Server) buildReview(ctx context.Context, a *Account, workIDs []uuid.UUI
 ## 输出格式
 只输出 JSON：{"conclusions":["结论"],"topic_suggestions":[{"title":"选题标题","angle":"切入角度","reason":"依据"}],"writing_insights":["写作层面的规律"]}`
 	var out ReviewContent
-	res, err := s.runAIJSON(ctx, aiTask{Type: "review_analysis", Account: a, User: user, SkipStyle: true, Refs: map[string]any{"works": len(used)}}, &out, func() error {
+	res, err := s.runAIJSON(ctx, aiTask{Type: "review_analysis", Account: a, User: user, SkipStyle: true, Tier: tier, Refs: map[string]any{"works": len(used), "origin": origin}}, &out, func() error {
 		if len(out.TopicSuggestions) < 3 {
 			return fmt.Errorf("建议少于 3 条")
 		}
@@ -350,10 +356,11 @@ func (s *Server) buildReview(ctx context.Context, a *Account, workIDs []uuid.UUI
 	}
 	content, _ := json.Marshal(out)
 	var rep ReviewReport
-	if err := s.db.QueryRow(ctx, `INSERT INTO review_report (account_id, work_ids, content, ai_call_id) VALUES ($1,$2,$3,$4) RETURNING id, created_at`,
-		a.ID, used, content, res.CallID).Scan(&rep.ID, &rep.CreatedAt); err != nil {
+	if err := s.db.QueryRow(ctx, `INSERT INTO review_report (account_id, work_ids, content, ai_call_id, origin) VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at`,
+		a.ID, used, content, res.CallID, origin).Scan(&rep.ID, &rep.CreatedAt); err != nil {
 		return nil, err
 	}
+	rep.Origin = origin
 	if out.WritingInsights == nil {
 		out.WritingInsights = []string{}
 	}
@@ -468,7 +475,7 @@ func (s *Server) listReviews(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT id, work_ids, content, adopted, remembered, ignored, created_at FROM review_report WHERE account_id=$1 ORDER BY created_at DESC LIMIT 50`, a.ID)
+	rows, err := s.db.Query(r.Context(), `SELECT id, work_ids, content, adopted, remembered, ignored, origin, created_at FROM review_report WHERE account_id=$1 ORDER BY created_at DESC LIMIT 50`, a.ID)
 	if err != nil {
 		return err
 	}
@@ -477,7 +484,7 @@ func (s *Server) listReviews(w http.ResponseWriter, r *http.Request) error {
 	for rows.Next() {
 		var rep ReviewReport
 		var content []byte
-		if err := rows.Scan(&rep.ID, &rep.WorkIDs, &content, &rep.Adopted, &rep.Remembered, &rep.Ignored, &rep.CreatedAt); err != nil {
+		if err := rows.Scan(&rep.ID, &rep.WorkIDs, &content, &rep.Adopted, &rep.Remembered, &rep.Ignored, &rep.Origin, &rep.CreatedAt); err != nil {
 			return err
 		}
 		_ = json.Unmarshal(content, &rep.Content)

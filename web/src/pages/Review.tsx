@@ -402,7 +402,10 @@ function ReportCard({ report, onAdopted }: { report: ReviewReport; onAdopted: ()
   }
   return (
     <Card>
-      <CardHeader title={`复盘报告 · ${fmtTime(report.created_at)}`} desc={`覆盖 ${report.work_ids.length} 篇作品`} />
+      <CardHeader title={`${report.origin === 'weekly_draft' ? '每周复盘草稿' : '复盘报告'} · ${fmtTime(report.created_at)}`}
+        desc={report.origin === 'weekly_draft'
+          ? `后台按第 7 天数据自动生成，覆盖 ${report.work_ids.length} 篇作品；建议要你逐条采纳，不采纳不影响任何东西`
+          : `覆盖 ${report.work_ids.length} 篇作品`} />
       <div className="space-y-5 p-5">
         <div>
           <div className="mb-2 text-[13px] font-semibold text-mist-700">结论</div>
