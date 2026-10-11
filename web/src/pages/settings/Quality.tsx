@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { FlaskConical, Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { ClipboardList, FlaskConical, Plus, Trash2 } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, cn, Empty, Field, PageHeader, PageLoading, Select, Tabs, Textarea } from '@/components/ui'
@@ -8,7 +8,88 @@ import { confirm } from '@/components/dialog'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import { useMe } from '@/lib/session'
+import { waitJob } from '@/lib/v3'
 import type { EvalCase, EvalRun } from '@/lib/types'
+
+// DEV-U107（12 文档）：提示词用例按当前模型与模板批量重放，输出 JSON 合规率与逐条结果。
+interface BatchTaskSummary { task_type: string; cases: number; json_ok: number; failed: number; avg_chars: number }
+interface BatchCaseRow {
+  case_id: string; name: string; task_type: string; ok: boolean; json_ok: boolean | null
+  chars: number; latency_ms: number; error: string; output: string
+}
+interface BatchResult { tasks: BatchTaskSummary[]; rows: BatchCaseRow[] }
+
+function BatchReplay({ cases, label }: { cases: EvalCase[]; label: (t: string) => string }) {
+  const [selected, setSelected] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<BatchResult | null>(null)
+  const counts = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const c of cases) m[c.task_type] = (m[c.task_type] ?? 0) + 1
+    return m
+  }, [cases])
+  const toggle = (t: string) => setSelected((list) => (list.includes(t) ? list.filter((x) => x !== t) : [...list, t]))
+  const start = async () => {
+    setBusy(true)
+    try {
+      const r = await post<{ job_id: string; total: number }>('/prompt-eval/batch', { task_types: selected })
+      const res = await waitJob<BatchResult>(r.job_id)
+      setResult(res)
+      toast.success(`批量重放完成：${res.rows.length} 条用例`)
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const types = Object.keys(counts).sort()
+  return (
+    <Card className="p-5">
+      <CardHeader title="批量重放（当前模型）" desc="把保存的用例用当前模型与模板逐条重跑，检验真实输出质量与 JSON 合规率。调用计入 AI 用量（标记为对比测试）；不会自动修改提示词。"
+        action={<Button size="sm" variant="primary" icon={<ClipboardList className="size-4" />} loading={busy} disabled={!types.length} onClick={start}>开始重放</Button>} />
+      {types.length === 0 ? <p className="text-[13px] text-mist-400">还没有测试用例。先在左侧保存用例。</p> : (
+        <div className="flex flex-wrap gap-2">
+          {types.map((t) => (
+            <button key={t} type="button" onClick={() => toggle(t)}
+              className={cn('cursor-pointer rounded-full px-3 py-1 text-[12.5px] transition',
+                selected.includes(t) ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-600 hover:bg-mist-200')}>
+              {label(t)} · {counts[t]}
+            </button>
+          ))}
+          {!selected.length && <span className="self-center text-[12px] text-mist-400">不勾选则重放全部任务类型</span>}
+        </div>
+      )}
+      {result && (
+        <div className="mt-4 space-y-3">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {result.tasks.map((t) => (
+              <div key={t.task_type} className="rounded-lg border border-mist-100 bg-mist-50/60 p-3 text-[12.5px]">
+                <div className="font-semibold text-mist-800">{label(t.task_type)}</div>
+                <div className="mt-1 text-mist-500">
+                  {t.cases} 条 · JSON 合规 {t.json_ok}/{t.cases - t.failed} · 失败 {t.failed} · 平均 {t.avg_chars} 字
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="scrollbar-thin max-h-80 divide-y divide-mist-100 overflow-y-auto rounded-lg border border-mist-100">
+            {result.rows.map((r) => (
+              <div key={r.case_id} className="px-3 py-2.5 text-[12.5px]">
+                <div className="flex items-center gap-2">
+                  <span className="truncate font-medium text-mist-800">{r.name}</span>
+                  <Badge tone={r.ok ? 'green' : 'red'}>{r.ok ? '成功' : '失败'}</Badge>
+                  {r.json_ok != null && <Badge tone={r.json_ok ? 'green' : 'red'}>{r.json_ok ? 'JSON 合规' : 'JSON 不合规'}</Badge>}
+                  <span className="ml-auto font-mono text-[11px] text-mist-400">{r.chars} 字 · {r.latency_ms}ms</span>
+                </div>
+                {r.error && <p className="mt-0.5 text-danger">{r.error}</p>}
+                <p className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-mist-500">{r.output}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Card>
+  )
+}
 
 interface TaskRow {
   task_type: string
@@ -238,6 +319,7 @@ export function PromptEval({ initialTask = '', candidate }: { initialTask?: stri
           </ul>
         )}
       </Card>
+      {owner && <BatchReplay cases={cases.data ?? []} label={label} />}
       {sel ? (
         <div className="space-y-4">
           {owner && (

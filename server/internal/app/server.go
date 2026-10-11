@@ -412,6 +412,7 @@ func (s *Server) v3Routes(r chi.Router) {
 	r.Delete("/prompt-eval/cases/{id}", s.h(s.deleteEvalCase))
 	r.Get("/prompt-eval/cases/{id}/runs", s.h(s.listEvalRuns))
 	r.Post("/prompt-eval/runs", s.h(s.createEvalRun))
+			r.Post("/prompt-eval/batch", s.h(s.runPromptEvalBatch))
 	r.Patch("/prompt-eval/runs/{id}", s.h(s.patchEvalRun))
 }
 
