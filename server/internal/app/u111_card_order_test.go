@@ -8,12 +8,135 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"ops/internal/wechat"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"ops/internal/wechat"
 
 	"github.com/google/uuid"
 )
+
+func TestU111ImageCompletionAfterReorder(t *testing.T) {
+	_, wk := buildCardWork(t, "xhs")
+	ctx := context.Background()
+	var providerID uuid.UUID
+	var originalURL string
+	if err := env.srv.db.QueryRow(ctx, `SELECT p.id,p.base_url FROM model_route r JOIN model_provider p ON p.id=r.provider_id WHERE r.workspace_id=(SELECT workspace_id FROM platform_account WHERE id=$1) AND r.task_type IN ('default','image_gen') ORDER BY (r.task_type='image_gen') DESC LIMIT 1`, wk.AccountID).Scan(&providerID, &originalURL); err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		env.llm.Handler().ServeHTTP(w, r)
+	}))
+	defer model.Close()
+	defer unblock()
+	if _, err := env.srv.db.Exec(ctx, `UPDATE model_provider SET base_url=$2 WHERE id=$1`, providerID, model.URL+"/v1"); err != nil {
+		t.Fatal(err)
+	}
+	defer env.srv.db.Exec(ctx, `UPDATE model_provider SET base_url=$2 WHERE id=$1`, providerID, originalURL)
+	finished := make(chan int, 1)
+	go func() {
+		status, _ := env.do("POST", "/api/v1/works/"+wk.ID.String()+"/cards/"+wk.Sections[0].ID.String()+"/generate-image", map[string]string{"prompt": "并发排序测试插画"})
+		finished <- status
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("生图请求未到模型")
+	}
+	ids := make([]uuid.UUID, len(wk.Sections))
+	for i, sec := range wk.Sections {
+		ids[len(ids)-i-1] = sec.ID
+	}
+	env.mustJSON(t, "PUT", "/api/v1/works/"+wk.ID.String()+"/sections/order", map[string]any{"ids": ids}, nil)
+	unblock()
+	select {
+	case status := <-finished:
+		if status != 200 {
+			t.Fatalf("生图失败: %d", status)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("生图未完成")
+	}
+	env.mustJSON(t, "GET", "/api/v1/works/"+wk.ID.String(), nil, &wk)
+	for i, card := range wk.Cards {
+		if card.SectionID != ids[i] || card.Position != i {
+			t.Fatalf("生图回写了排序前位置: %+v", wk.Cards)
+		}
+	}
+}
+
+func TestU111ReorderDuringSectionSave(t *testing.T) {
+	_, wk := buildCardWork(t, "xhs")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	writer, err := env.srv.db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback(context.Background())
+	var writerPID int
+	if err := writer.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&writerPID); err != nil {
+		t.Fatal(err)
+	}
+	// 复现自动保存/AI 落稿的段落→作品锁顺序；内容更新尚未提交。
+	if _, err := writer.Exec(ctx, `UPDATE work_section SET content_md='协作者的新正文' WHERE id=$1`, wk.Sections[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]uuid.UUID, len(wk.Sections))
+	for i, sec := range wk.Sections {
+		ids[len(ids)-i-1] = sec.ID
+	}
+	finished := make(chan int, 1)
+	go func() {
+		status, _ := env.do("PUT", "/api/v1/works/"+wk.ID.String()+"/sections/order", map[string]any{"ids": ids})
+		finished <- status
+	}()
+	// 直到排序确实等在上述段落锁，才让保存继续 touchContent。
+	for {
+		var blocked bool
+		if err := env.srv.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))`, writerPID).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("排序没有进入预期交错点")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := env.srv.touchContent(ctx, writer, wk.ID); err != nil {
+		t.Fatalf("保存与排序锁顺序冲突: %v", err)
+	}
+	if err := writer.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case status := <-finished:
+		if status != 200 {
+			t.Fatalf("并发排序失败: %d", status)
+		}
+	case <-ctx.Done():
+		t.Fatal("保存提交后排序未完成")
+	}
+	env.mustJSON(t, "GET", "/api/v1/works/"+wk.ID.String(), nil, &wk)
+	if wk.Sections[len(wk.Sections)-1].ContentMD != "协作者的新正文" {
+		t.Fatal("丢失协作者保存")
+	}
+	for i, card := range wk.Cards {
+		if card.SectionID != ids[i] || card.Position != i {
+			t.Fatal("保存期间排序不一致")
+		}
+	}
+}
 
 func TestU111CardOrderAndImageRetention(t *testing.T) {
 	_, wk := buildCardWork(t, "xhs")

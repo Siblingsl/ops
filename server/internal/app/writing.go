@@ -287,6 +287,9 @@ func (s *Server) reorderSections(w http.ResponseWriter, r *http.Request) error {
 		seen[id] = true
 	}
 	err = s.withTx(r.Context(), func(tx pgx.Tx) error {
+		if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended('card-order:' || $1::text,0))`, m.ID.String()); err != nil {
+			return err
+		}
 		var total, matched int
 		if err := tx.QueryRow(r.Context(), `SELECT count(*), count(*) FILTER(WHERE id=ANY($2::uuid[])) FROM work_section WHERE work_id=$1 AND deleted_at IS NULL`, m.ID, in.IDs).Scan(&total, &matched); err != nil {
 			return err

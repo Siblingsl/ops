@@ -91,10 +91,9 @@ func (s *Server) generateCardImage(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 	ctx := r.Context()
-	var position int
 	var heading, body string
-	err = s.db.QueryRow(ctx, `SELECT position, heading, content_md FROM work_section WHERE id=$1 AND work_id=$2 AND deleted_at IS NULL`,
-		sectionID, m.ID).Scan(&position, &heading, &body)
+	err = s.db.QueryRow(ctx, `SELECT heading, content_md FROM work_section WHERE id=$1 AND work_id=$2 AND deleted_at IS NULL`,
+		sectionID, m.ID).Scan(&heading, &body)
 	if err != nil {
 		return validation("卡片不存在或不属于这篇作品")
 	}
@@ -111,9 +110,20 @@ func (s *Server) generateCardImage(w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(ctx, `INSERT INTO work_card (work_id, section_id, position, image_asset_id) VALUES ($1,$2,$3,$4)
-		ON CONFLICT (work_id, section_id) DO UPDATE SET image_asset_id=$4, position=$3, updated_at=now()`,
-		m.ID, sectionID, position, asset.ID); err != nil {
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		// 与排序共用专用事务锁；不改变正文保存的段落→作品锁顺序。
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('card-order:' || $1::text,0))`, m.ID.String()); err != nil {
+			return err
+		}
+		var position int
+		if err := tx.QueryRow(ctx, `SELECT position FROM work_section WHERE id=$1 AND work_id=$2 AND deleted_at IS NULL`, sectionID, m.ID).Scan(&position); err != nil {
+			return validation("卡片已删除或不属于这篇作品")
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO work_card (work_id, section_id, position, image_asset_id) VALUES ($1,$2,$3,$4)
+			ON CONFLICT (work_id, section_id) DO UPDATE SET image_asset_id=$4, position=$3, updated_at=now()`, m.ID, sectionID, position, asset.ID)
+		return err
+	})
+	if err != nil {
 		return err
 	}
 	s.audit(ctx, "card_image_gen", "work_card", m.ID.String(), "ok", map[string]any{"asset_id": asset.ID.String()})
