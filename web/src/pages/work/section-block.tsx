@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { RefsNote, sendFeedback } from '@/components/refs'
 import { type EditorHandle, PlainEditor, RichEditor } from '@/components/section-editor'
-import { Badge, Button, cn, Field, IconButton, Notice, Select, Textarea } from '@/components/ui'
+import { Badge, Button, cn, Field, IconButton, MoreMenu, Notice, Select, Textarea } from '@/components/ui'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, get, patch, post, put, stream } from '@/lib/api'
@@ -135,6 +135,7 @@ export function SectionBlock({
   const [hookBusy, setHookBusy] = useState<string | null>(null)
   const [isEmpty, setIsEmpty] = useState(!section.content_md.trim())
   const [instruction, setInstruction] = useState('')
+  const [chipsOpen, setChipsOpen] = useState(false)
   const [tier, setTier] = useState<'' | 'economy' | 'standard' | 'quality'>('')
   const [ghost, setGhost] = useState<{ text: string; loading: boolean; callId?: string | null } | null>(null)
   const applied = useRef<{ kind: 'rewrite' | 'continue'; ai_call_id?: string | null } | null>(null)
@@ -643,6 +644,14 @@ export function SectionBlock({
   }
 
   const pickImage = () => fileInput.current?.click()
+  const suggestImages = async () => {
+    setImgBusy(true)
+    try {
+      const r = await post<{ suggestions: { description: string; prompt: string }[] }>(`/sections/${section.id}/image-suggest`)
+      setImgSuggest(r.suggestions)
+    } catch (e) { aiError(e, '配图建议') }
+    finally { setImgBusy(false) }
+  }
   const pending = findPending(lintText)
   const Editor = xhs ? PlainEditor : RichEditor
   const busy = !!streaming
@@ -792,6 +801,7 @@ export function SectionBlock({
                 <input
                   value={instruction}
                   onChange={(e) => setInstruction(e.target.value)}
+                  onFocus={() => setChipsOpen(true)}
                   placeholder="本段临时指令（可选），起草/改写/扩写/缩写都会带上"
                   className="h-8 min-w-0 flex-1 rounded-md border border-mist-200 bg-white px-2.5 text-[12.5px] text-mist-800 outline-none placeholder:text-mist-400 focus:border-ink-300"
                 />
@@ -803,7 +813,7 @@ export function SectionBlock({
                   <option value="quality">高质量</option>
                 </select>
               </div>
-              <div className="flex flex-wrap gap-1">
+              {(chipsOpen || instruction.trim() !== '') && <div className="flex flex-wrap gap-1">
                 {toneChips.map((c) => (
                   <button
                     key={c}
@@ -812,7 +822,7 @@ export function SectionBlock({
                     className="cursor-pointer rounded-md border border-mist-200 bg-mist-50 px-2 py-0.5 text-[11.5px] text-mist-600 hover:border-ink-200 hover:bg-ink-50 hover:text-ink-700"
                   >{c}</button>
                 ))}
-              </div>
+              </div>}
             </div>
           )}
           <div className="flex flex-wrap items-center gap-1">
@@ -820,23 +830,25 @@ export function SectionBlock({
               <Button size="sm" variant="ghost" icon={<Square className="size-3.5" />} onClick={stop}>停止生成</Button>
             ) : (
               <>
-                <Button size="sm" variant={isEmpty ? 'primary' : 'ghost'} icon={<Sparkles className="size-3.5" />} onClick={draft} ref={draftButton}
-                  disabled={!work.outline_confirmed_at} title="Ctrl/⌘+Enter">{isEmpty ? '起草本段' : '重新起草'}</Button>
-                <Button size="sm" variant="ghost" icon={<Repeat2 className="size-3.5" />} disabled={isEmpty} onClick={() => edit('rewrite')}>{selection ? '改写选中' : '改写'}</Button>
-                <Button size="sm" variant="ghost" icon={<Wand2 className="size-3.5" />} disabled={isEmpty} onClick={() => edit('expand')}>扩写</Button>
-                <Button size="sm" variant="ghost" icon={<Minimize2 className="size-3.5" />} disabled={isEmpty} onClick={() => edit('shorten')}>缩写</Button>
-                {index === 0 && <Button size="sm" variant="ghost" loading={hookBusy === 'opening'} onClick={() => hooks('opening')}>开头候选</Button>}
-                {index === total - 1 && total > 1 && <Button size="sm" variant="ghost" loading={hookBusy === 'ending'} onClick={() => hooks('ending')}>结尾候选</Button>}
-                {xhs && selection && <Button size="sm" variant="ghost" loading={hookBusy === 'quote'} onClick={() => hooks('quote')}>提炼金句</Button>}
-                <Button size="sm" variant="ghost" icon={<ImagePlus className="size-3.5" />} loading={imgBusy} disabled={isEmpty} onClick={async () => {
-                  setImgBusy(true)
-                  try {
-                    const r = await post<{ suggestions: { description: string; prompt: string }[] }>(`/sections/${section.id}/image-suggest`)
-                    setImgSuggest(r.suggestions)
-                  } catch (e) { aiError(e, '配图建议') }
-                  finally { setImgBusy(false) }
-                }}>配图建议</Button>
-                {!xhs && <Button size="sm" variant="ghost" icon={<ImagePlus className="size-3.5" />} onClick={pickImage}>插入图片</Button>}
+                {isEmpty ? (
+                  <Button size="sm" variant="primary" icon={<Sparkles className="size-3.5" />} onClick={draft} ref={draftButton}
+                    disabled={!work.outline_confirmed_at} title="Ctrl/⌘+Enter">起草本段</Button>
+                ) : (
+                  <>
+                    <Button size="sm" variant="ghost" icon={<Repeat2 className="size-3.5" />} onClick={() => edit('rewrite')}>{selection ? '改写选中' : '改写'}</Button>
+                    <Button size="sm" variant="ghost" icon={<Wand2 className="size-3.5" />} onClick={() => edit('expand')}>扩写</Button>
+                    <Button size="sm" variant="ghost" icon={<Minimize2 className="size-3.5" />} onClick={() => edit('shorten')}>缩写</Button>
+                    <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={draft} ref={draftButton}
+                      disabled={!work.outline_confirmed_at} title="按大纲重写这一段（Ctrl/⌘+Enter）">重新起草</Button>
+                  </>
+                )}
+                <MoreMenu items={[
+                  ...(index === 0 ? [{ label: '开头候选', loading: hookBusy === 'opening', onClick: () => void hooks('opening') }] : []),
+                  ...(index === total - 1 && total > 1 ? [{ label: '结尾候选', loading: hookBusy === 'ending', onClick: () => void hooks('ending') }] : []),
+                  ...(xhs && selection ? [{ label: '提炼金句', icon: <Quote />, loading: hookBusy === 'quote', onClick: () => void hooks('quote') }] : []),
+                  ...(!isEmpty ? [{ label: '配图建议', icon: <ImagePlus />, loading: imgBusy, onClick: () => void suggestImages() }] : []),
+                  ...(!xhs ? [{ label: '插入图片', icon: <ImagePlus />, onClick: pickImage }] : []),
+                ]} />
                 <VoiceButton onText={(t) => editor.current?.insertAtCursor(t)} />
               </>
             )}

@@ -54,6 +54,46 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   )
 })
 
+export interface MoreMenuItem { label: string; icon?: React.ReactNode; onClick: () => void; disabled?: boolean; loading?: boolean; hint?: string }
+
+/** MoreMenu tucks secondary actions behind one "更多" button; each item still runs one action on click. */
+export function MoreMenu({ items, label = '更多', className }: { items: MoreMenuItem[]; label?: string; className?: string }) {
+  const [open, setOpen] = React.useState(false)
+  const box = React.useRef<HTMLDivElement>(null)
+  React.useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !box.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', close)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', close)
+    }
+  }, [open])
+  if (!items.length) return null
+  const busy = items.some((i) => i.loading)
+  return (
+    <div ref={box} className={cn('relative', className)}>
+      <Button size="sm" variant="ghost" aria-haspopup="menu" aria-expanded={open} loading={busy} onClick={() => setOpen((v) => !v)}>
+        {label}<span aria-hidden className="text-mist-400">▾</span>
+      </Button>
+      {open && (
+        <div role="menu" className="absolute bottom-full left-0 z-30 mb-1 min-w-44 rounded-lg border border-mist-200 bg-white p-1 shadow-pop">
+          {items.map((it) => (
+            <button key={it.label} type="button" role="menuitem" disabled={it.disabled || it.loading} title={it.hint}
+              onClick={() => { setOpen(false); it.onClick() }}
+              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] text-mist-700 hover:bg-mist-100 disabled:cursor-not-allowed disabled:opacity-45 [&>svg]:size-3.5">
+              {it.icon}{it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function IconButton({ className, label, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
   return (
     <button

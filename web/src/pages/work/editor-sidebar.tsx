@@ -26,14 +26,22 @@ interface Props {
   onClose: () => void
 }
 
-const tabs: { id: SidebarTab; label: string; icon: React.ReactNode }[] = [
-  { id: 'materials', label: '素材', icon: <Library className="size-3.5" /> },
-  { id: 'copilot', label: '副驾驶', icon: <Bot className="size-3.5" /> },
-  { id: 'polish', label: '体检', icon: <Stethoscope className="size-3.5" /> },
-  { id: 'readthrough', label: '通读', icon: <BookOpenCheck className="size-3.5" /> },
-  { id: 'pending', label: '待核实', icon: <AlertCircle className="size-3.5" /> },
-  { id: 'comments', label: '批注', icon: <MessageSquare className="size-3.5" /> },
-  { id: 'activity', label: '动态', icon: <Activity className="size-3.5" /> },
+type TabDef = { id: SidebarTab; label: string; icon: React.ReactNode }
+
+const tabGroups: { label: string; tabs: TabDef[] }[] = [
+  { label: '写作', tabs: [
+    { id: 'materials', label: '素材', icon: <Library className="size-3.5" /> },
+    { id: 'copilot', label: '副驾驶', icon: <Bot className="size-3.5" /> },
+    { id: 'pending', label: '待核实', icon: <AlertCircle className="size-3.5" /> },
+  ] },
+  { label: '修改', tabs: [
+    { id: 'readthrough', label: '通读', icon: <BookOpenCheck className="size-3.5" /> },
+    { id: 'polish', label: '体检', icon: <Stethoscope className="size-3.5" /> },
+  ] },
+  { label: '协作', tabs: [
+    { id: 'comments', label: '批注', icon: <MessageSquare className="size-3.5" /> },
+    { id: 'activity', label: '动态', icon: <Activity className="size-3.5" /> },
+  ] },
 ]
 
 export function EditorSidebar({ work, setWork, active, selection, tab, onTab: setTab, onClose }: Props) {
@@ -44,16 +52,21 @@ export function EditorSidebar({ work, setWork, active, selection, tab, onTab: se
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-0.5 border-b border-mist-200 px-1.5 py-1.5">
-        <div className="scrollbar-thin flex flex-1 gap-0.5 overflow-x-auto">
-          {tabs.map((t) => {
-            const n = t.id === 'pending' ? pendingCount : t.id === 'comments' ? openComments : 0
-            return (
-              <button key={t.id} type="button" onClick={() => setTab(t.id)} title={t.label}
-                className={cn('flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[12px] transition', tab === t.id ? 'bg-ink-50 font-medium text-ink-800' : 'text-mist-500 hover:bg-mist-100')}>
-                {t.icon}{t.label}{n > 0 && <span className="rounded-full bg-gamboge-400 px-1 text-[10px] font-bold text-mist-900">{n}</span>}
-              </button>
-            )
-          })}
+        <div className="scrollbar-thin flex flex-1 items-center gap-0.5 overflow-x-auto">
+          {tabGroups.map((g, gi) => (
+            <div key={g.label} role="group" aria-label={g.label} title={g.label}
+              className={cn('flex shrink-0 items-center gap-0.5', gi > 0 && 'ml-1 border-l border-mist-200 pl-1')}>
+              {g.tabs.map((t) => {
+                const n = t.id === 'pending' ? pendingCount : t.id === 'comments' ? openComments : 0
+                return (
+                  <button key={t.id} type="button" onClick={() => setTab(t.id)} title={`${g.label} · ${t.label}`}
+                    className={cn('flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[12px] transition', tab === t.id ? 'bg-ink-50 font-medium text-ink-800' : 'text-mist-500 hover:bg-mist-100')}>
+                    {t.icon}{t.label}{n > 0 && <span className="rounded-full bg-gamboge-400 px-1 text-[10px] font-bold text-mist-900">{n}</span>}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
         </div>
         <button type="button" onClick={onClose} title="收起侧栏" className="cursor-pointer rounded p-1 text-mist-400 hover:bg-mist-100"><ChevronsRight className="size-4" /></button>
       </div>

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, CheckCircle2, Circle, CloudOff, Crop, ImagePlus, Images, Layers, Loader2,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BookOpenCheck, Check, CheckCircle2, Circle, CloudOff, Crop, ImagePlus, Images, Layers, Loader2,
   PanelRightOpen, PenLine, Plus, Sparkles, Star, Stethoscope, Trash2, Wand2, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -1022,6 +1022,7 @@ function ArticleEditor() {
   }
   const drafted = work.sections.filter((s) => s.content_md.trim()).length
   const emptySections = work.sections.filter((s) => !s.content_md.trim())
+  const allDrafted = !readOnly && !!work.outline_confirmed_at && work.sections.length > 0 && emptySections.length === 0
   const totalChars = work.sections.reduce((n, s) => n + runeLen(s.content_md.replace(/[#>*_`[\]()!-]/g, '')), 0)
   const target = work.target_chars ?? 0
   const pendingAll = work.sections.flatMap((s) => findPending(s.content_md).map((p) => ({ s, p })))
@@ -1208,6 +1209,16 @@ function ArticleEditor() {
           {!readOnly && emptySections.length > 0 && work.outline_confirmed_at && (
             <Button size="sm" variant="secondary" className="mt-3 w-full" onClick={() => jumpNextEmpty()}>下一段空稿</Button>
           )}
+          {allDrafted && (
+            <div className="mt-3 rounded-lg border border-ink-100 bg-ink-50/60 p-2.5 text-[12px] text-ink-800">
+              <div className="font-medium">全文已起草，进入修改阶段</div>
+              <div className="mt-0.5 text-mist-500">先通读看衔接，再体检挑表达问题。</div>
+              <div className="mt-2 flex gap-1.5">
+                <Button size="sm" variant="secondary" className="flex-1" icon={<BookOpenCheck className="size-3.5" />} onClick={() => emitEditor({ type: 'sidebar', tab: 'readthrough' })}>通读整篇</Button>
+                <Button size="sm" variant="ghost" className="flex-1" icon={<Stethoscope className="size-3.5" />} onClick={() => emitEditor({ type: 'sidebar', tab: 'polish' })}>表达体检</Button>
+              </div>
+            </div>
+          )}
           <div className="mt-6 border-t border-mist-200 pt-4 text-xs text-mist-500">
             {save.offline ? <span className="flex items-center gap-1.5 text-danger"><CloudOff className="size-3.5" />离线，未保存（恢复后自动同步）</span>
               : save.pending > 0 ? <span className="flex items-center gap-1.5"><Loader2 className="size-3.5 animate-spin" />保存中…</span>
@@ -1239,6 +1250,9 @@ function ArticleEditor() {
             <span className="text-xs text-mist-400">每一段单独起草，没有「全部起草」</span>
             {!readOnly && emptySections.length > 0 && work.outline_confirmed_at && (
               <Button size="sm" variant="ghost" className="ml-auto" onClick={() => jumpNextEmpty()}>跳到下一段空稿（{emptySections.length}）</Button>
+            )}
+            {allDrafted && (
+              <Button size="sm" variant="ghost" className="ml-auto" icon={<BookOpenCheck className="size-3.5" />} onClick={() => emitEditor({ type: 'sidebar', tab: 'readthrough' })}>全文已起草，去通读</Button>
             )}
           </div>
           {!work.outline_confirmed_at ? (
