@@ -39,6 +39,15 @@ func TestA102A103DataPreferences(t *testing.T) {
 		}
 	}
 
+	// 共享 fixture 清理：本测试写入的数据不得影响其他用例的上下文断言。
+	t.Cleanup(func() {
+		env.srv.db.Exec(context.Background(), `DELETE FROM account_data_preference WHERE account_id=$1`, f.wechat.ID)
+		env.srv.db.Exec(context.Background(), `DELETE FROM account_memory WHERE account_id=$1 AND (text LIKE '「%」类输出常因%' OR source IN ('edit_diff','rejection'))`, f.wechat.ID)
+		env.srv.db.Exec(context.Background(), `DELETE FROM ai_feedback WHERE workspace_id=$1 AND note IN ('标题太夸张了','删掉了开头设问')`, ws)
+		env.srv.db.Exec(context.Background(), `DELETE FROM ai_call WHERE workspace_id=$1 AND task_type='topic_suggest' AND provider='mock'`, ws)
+		env.srv.db.Exec(context.Background(), `DELETE FROM work WHERE account_id=$1 AND title LIKE '运营实战%'`, f.wechat.ID)
+	})
+
 	var res struct {
 		Enough bool `json:"enough"`
 	}
