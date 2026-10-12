@@ -9,7 +9,7 @@ import { aiError } from '@/lib/ai-error'
 import { ApiError, del, errorMessage, get, patch, post, put, rawRequest, stream } from '@/lib/api'
 import { fmtTime, runeLen } from '@/lib/format'
 import { useCanWrite } from '@/lib/session'
-import type { AIJob, Asset, LintHit, Material, MaterialKind, Section, SeriesContext, SeriesNeighbour, Work } from '@/lib/types'
+import type { AIJob, Asset, LintHit, MaterialPreview, MaterialKind, Section, SeriesContext, SeriesNeighbour, Work } from '@/lib/types'
 import { usePrefs, useWorkCmd } from '@/lib/v3'
 import CardEditor from './CardEditor'
 import ComicEditor from './ComicEditor'
@@ -53,13 +53,19 @@ function SeriesStrip({ sc }: { sc: SeriesContext }) {
   )
 }
 
-function ViewpointCard({ work, setWork, readOnly }: { work: Work; setWork: (w: Work) => void; readOnly: boolean }) {
+function ViewpointCard({ work, setWork, readOnly, loadMaterials = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; loadMaterials?: boolean }) {
   const [text, setText] = useState(work.viewpoint)
   const [picking, setPicking] = useState(false)
   const [matQ, setMatQ] = useState('')
   const { data: materials } = useQuery({
     queryKey: ['materials', work.account_id, ''],
-    queryFn: () => get<Material[]>(`/materials?account_id=${work.account_id}`),
+    queryFn: () => get<MaterialPreview[]>(`/materials?account_id=${work.account_id}`),
+    enabled: picking || loadMaterials,
+  })
+  const search = useQuery({
+    queryKey: ['materials', work.account_id, 'search', matQ.trim()],
+    queryFn: () => get<MaterialPreview[]>(`/materials?account_id=${work.account_id}&q=${encodeURIComponent(matQ.trim())}`),
+    enabled: picking && !!matQ.trim(),
   })
   const seriesCtx = useQuery({
     queryKey: ['series-context', work.id],
@@ -89,11 +95,10 @@ function ViewpointCard({ work, setWork, readOnly }: { work: Work; setWork: (w: W
     }
   }
   const selected = (materials ?? []).filter((m) => ids.includes(m.id))
-  const filtered = (materials ?? []).filter((m) => {
-    if (!matQ.trim()) return true
-    const q = matQ.trim().toLowerCase()
-    return m.content.toLowerCase().includes(q) || (m.source || '').toLowerCase().includes(q) || kindLabel[m.kind].includes(matQ.trim())
-  })
+  const filtered = matQ.trim() ? [...new Map([
+    ...(search.data ?? []),
+    ...(materials ?? []).filter(m => kindLabel[m.kind].includes(matQ.trim())),
+  ].map(m => [m.id, m] as const)).values()].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)) : materials ?? []
   return (
     <Card id="step-viewpoint" className="scroll-mt-24 p-5">
       <div className="mb-3 flex items-center gap-2">
@@ -112,7 +117,7 @@ function ViewpointCard({ work, setWork, readOnly }: { work: Work; setWork: (w: W
           {!readOnly && <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => { setMatQ(''); setPicking(true) }}>选择素材</Button>}
         </div>
         {selected.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-mist-200 px-3 py-3 text-[13px] text-mist-400">还没有选择素材。没有素材时，AI 遇到需要数据的地方会写成「【待核实：…】」让你补充。</p>
+          <p className="rounded-lg border border-dashed border-mist-200 px-3 py-3 text-[13px] text-mist-400">{ids.length ? `已关联 ${ids.length} 条素材，打开素材选择框可查看。` : '还没有选择素材。没有素材时，AI 遇到需要数据的地方会写成「【待核实：…】」让你补充。'}</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {selected.map((m) => (
@@ -128,6 +133,8 @@ function ViewpointCard({ work, setWork, readOnly }: { work: Work; setWork: (w: W
       <Dialog open={picking} onClose={() => setPicking(false)} title="选择参考素材" desc="只列出本账号和共享的素材。点芯片可快速取消。" width="max-w-xl"
         footer={<Button variant="primary" onClick={() => setPicking(false)}>完成{ids.length ? `（已选 ${ids.length}）` : ''}</Button>}>
         <Input value={matQ} onChange={(e) => setMatQ(e.target.value)} placeholder="搜索素材内容、来源或类型…" className="mb-3" />
+        {matQ.trim() && search.isFetching && <p className="mb-2 text-sm text-mist-400">正在搜索…</p>}
+        {search.isError && <Notice tone="red">{errorMessage(search.error)}<Button size="sm" onClick={() => void search.refetch()}>重试</Button></Notice>}
         <div className="scrollbar-thin max-h-[50vh] space-y-2 overflow-y-auto">
           {(materials ?? []).length === 0 && <p className="py-8 text-center text-sm text-mist-400">素材库是空的，可以先去「素材库」添加经历、观点、案例和数据。</p>}
           {(materials ?? []).length > 0 && filtered.length === 0 && <p className="py-6 text-center text-sm text-mist-400">没有匹配「{matQ}」的素材。</p>}
@@ -135,7 +142,7 @@ function ViewpointCard({ work, setWork, readOnly }: { work: Work; setWork: (w: W
             <label key={m.id} className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition', ids.includes(m.id) ? 'border-ink-300 bg-ink-50/50' : 'border-mist-200 hover:border-mist-300')}>
               <input type="checkbox" className="mt-1 accent-ink-600" checked={ids.includes(m.id)} onChange={() => toggle(m.id)} />
               <div className="min-w-0">
-                <div className="flex items-center gap-2"><Badge tone="ink">{kindLabel[m.kind]}</Badge>{!m.account_id && <Badge>共享</Badge>}</div>
+                <div className="flex items-center gap-2"><Badge tone="ink">{kindLabel[m.kind]}</Badge>{m.shared && <Badge>共享</Badge>}</div>
                 <p className="mt-1 text-[13px] leading-relaxed text-mist-700">{m.content}</p>
                 {m.source && <p className="mt-0.5 text-xs text-mist-400">来源：{m.source}</p>}
               </div>
@@ -270,6 +277,11 @@ function ArticleEditor() {
   const fromMention = new URLSearchParams(location.search).has('comment')
   const [sidebar, setSidebar] = useState(() => fromMention || localStorage.getItem(SIDEBAR_KEY) !== '0')
   const [sideTab, setSideTab] = useState<SidebarTab>(fromMention ? 'comments' : 'materials')
+  const [materialsOpened, setMaterialsOpened] = useState(false)
+  const selectSideTab = (tab: SidebarTab) => {
+    setSideTab(tab)
+    if (tab === 'materials') setMaterialsOpened(true)
+  }
   const lintCounts = useRef<Record<string, number>>({})
   const resumeJobs = useQuery({
     queryKey: ['work-jobs', work.id],
@@ -289,10 +301,11 @@ function ArticleEditor() {
   }, [])
   const toggleSidebar = (v: boolean) => {
     setSidebar(v)
+    if (v && sideTab === 'materials') setMaterialsOpened(true)
     localStorage.setItem(SIDEBAR_KEY, v ? '1' : '0')
   }
   useEditorEvents((e) => {
-    if (e.type === 'sidebar') setSideTab(e.tab)
+    if (e.type === 'sidebar') selectSideTab(e.tab)
     if (e.type === 'comment') setSideTab('comments')
     if ((e.type === 'sidebar' || e.type === 'comment') && !sidebar) toggleSidebar(true)
   })
@@ -580,7 +593,7 @@ function ArticleEditor() {
           </div>
         )}
         {!focus && <OrganizeNotesCard work={work} setWork={setWorkStable} readOnly={readOnly} />}
-        {!focus && <ViewpointCard work={work} setWork={setWorkStable} readOnly={readOnly} />}
+        {!focus && <ViewpointCard work={work} setWork={setWorkStable} readOnly={readOnly} loadMaterials={materialsOpened && showSidebar && sideTab === 'materials'} />}
         {!focus && <OutlineCard work={work} setWork={setWorkStable} readOnly={readOnly} onConfirmed={onOutlineConfirmed} />}
         <section id="step-sections" className="scroll-mt-24 space-y-4">
           <div className="flex flex-wrap items-center gap-2 pt-2">
@@ -627,7 +640,7 @@ function ArticleEditor() {
 
       {showSidebar ? (
         <aside className="sticky top-20 hidden h-[calc(100vh-6.5rem)] w-[320px] shrink-0 overflow-hidden rounded-xl border border-mist-200 bg-white shadow-card xl:block 2xl:w-[360px]">
-          <EditorSidebar work={work} setWork={setWorkStable} active={active} selection={selection} tab={sideTab} onTab={setSideTab} onClose={() => toggleSidebar(false)} />
+          <EditorSidebar work={work} setWork={setWorkStable} active={active} selection={selection} tab={sideTab} onTab={selectSideTab} onClose={() => toggleSidebar(false)} />
         </aside>
       ) : !focus && (
         <button type="button" onClick={() => toggleSidebar(true)} title="打开助手侧栏：素材推荐、副驾驶、体检、待核实、批注、动态"

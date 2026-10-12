@@ -12,7 +12,7 @@ import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post, put, stream } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { useCanWrite, useMe } from '@/lib/session'
-import type { ActivityItem, Comment, PolishIssue, RetrieveHit, Section, Work, WorkspaceMember } from '@/lib/types'
+import type { ActivityItem, Comment, Material, PolishIssue, RetrieveHit, Section, Work, WorkspaceMember } from '@/lib/types'
 import { usePendingMemories, usePrefs, waitJob } from '@/lib/v3'
 import { emitEditor, findPending, scrollToSection, type SidebarTab, useEditorEvents } from './editor-tools'
 
@@ -109,13 +109,25 @@ function MaterialsTab({ work, setWork, active }: { work: Work; setWork: (w: Work
     staleTime: 30_000,
   })
   const [open, setOpen] = useState<string | null>(null)
+  const [fulls, setFulls] = useState<Record<string, Material>>({})
   if (!active) return <Hint>点一下任意段落，这里会推荐与这一段相关的素材，以及你以前写过的类似段落。</Hint>
   const mats = (q.data?.items ?? []).filter((h) => h.type === 'material').slice(0, 5)
-  const cite = (h: RetrieveHit) => {
-    const text = (h.content ?? '').trim()
-    if (!text) return
-    emitEditor({ type: 'insert', sectionId: active.id, text: h.source ? `${text}（来源：${h.source}）` : text })
-    toast.success('已在光标处插入素材原文')
+  const view = async (h: RetrieveHit) => {
+    if (open === h.id) { setOpen(null); return }
+    try {
+      const full = await get<Material>(`/materials/${h.id}`)
+      setFulls(x => ({ ...x, [h.id]: full }))
+      setOpen(h.id)
+    } catch (e) { toast.error(errorMessage(e)) }
+  }
+  const cite = async (h: RetrieveHit) => {
+    try {
+      const full = await get<Material>(`/materials/${h.id}`)
+      const text = full.content.trim()
+      if (!text) return
+      emitEditor({ type: 'insert', sectionId: active.id, text: full.source ? `${text}（来源：${full.source}）` : text })
+      toast.success('已在光标处插入素材原文')
+    } catch (e) { toast.error(errorMessage(e)) }
   }
   const hist = (q.data?.items ?? []).filter((h) => h.type === 'history')
   const use = async (id: string) => {
@@ -135,15 +147,15 @@ function MaterialsTab({ work, setWork, active }: { work: Work; setWork: (w: Work
           <ul className="space-y-2">
             {mats.map((h) => (
               <li key={h.id} className="rounded-lg border border-mist-200 p-2.5">
-                <p className={cn('whitespace-pre-wrap text-[12.5px] leading-relaxed text-mist-700', open !== h.id && 'line-clamp-4')}>{h.content}</p>
+                <p className={cn('whitespace-pre-wrap text-[12.5px] leading-relaxed text-mist-700', open !== h.id && 'line-clamp-4')}>{open === h.id ? fulls[h.id]?.content : h.content}</p>
                 {open === h.id && (h.source || h.tags?.length) && (
                   <p className="mt-1 text-[11px] text-mist-400">{h.source && `来源：${h.source}`}{h.tags?.length ? ` · ${h.tags.join('、')}` : ''}</p>
                 )}
                 <div className="mt-1 truncate text-[11px] text-mist-400" title={h.reason}>{h.reason}</div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                  <Button size="sm" variant="ghost" onClick={() => setOpen(open === h.id ? null : h.id)}>{open === h.id ? '收起' : '查看'}</Button>
+                  <Button size="sm" variant="ghost" onClick={() => void view(h)}>{open === h.id ? '收起' : '查看'}</Button>
                   {canWrite && !work.locked && <>
-                    <Button size="sm" variant="ghost" onClick={() => cite(h)}>插入引用</Button>
+                    <Button size="sm" variant="ghost" onClick={() => void cite(h)}>插入引用</Button>
                     <Button size="sm" variant="secondary" icon={<Plus className="size-3" />} className="ml-auto" onClick={() => use(h.id)}>用于本段</Button>
                   </>}
                 </div>

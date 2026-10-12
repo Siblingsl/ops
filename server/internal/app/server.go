@@ -187,6 +187,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/characters/{id}/ref", s.h(s.uploadCharacterRef))
 			r.Delete("/characters/{id}/ref", s.h(s.deleteCharacterRef))
 			r.Get("/materials", s.h(s.listMaterials))
+			r.Get("/materials/{id}", s.h(s.getMaterial))
 			r.Post("/materials", s.h(s.createMaterial))
 			r.Patch("/materials/{id}", s.h(s.updateMaterial))
 			r.Delete("/materials/{id}", s.h(s.deleteMaterial))

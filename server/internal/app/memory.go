@@ -225,6 +225,33 @@ func scanMaterial(row interface{ Scan(...any) error }) (Material, error) {
 
 var materialKinds = map[string]bool{"experience": true, "opinion": true, "case": true, "data": true}
 
+type materialPreview struct {
+	ID         uuid.UUID  `json:"id"`
+	Shared     bool       `json:"shared,omitempty"`
+	Kind       string     `json:"kind"`
+	Content    string     `json:"content"`
+	Source     string     `json:"source,omitempty"`
+	Tags       []string   `json:"tags"`
+	ValidUntil *string    `json:"valid_until,omitempty"`
+	UsageCount int        `json:"usage_count,omitempty"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Expired    bool       `json:"expired,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+func (s *Server) getMaterial(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	m, err := scanMaterial(s.db.QueryRow(r.Context(), `SELECT `+materialCols+` FROM material m
+		WHERE m.id=$1 AND m.workspace_id=$3 AND m.deleted_at IS NULL`, id, s.today(), ident(r.Context()).WorkspaceID))
+	if err != nil {
+		return err
+	}
+	return ok(w, m)
+}
+
 func (s *Server) listMaterials(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	q := r.URL.Query()
@@ -235,7 +262,7 @@ func (s *Server) listMaterials(w http.ResponseWriter, r *http.Request) error {
 	if _, err := s.account(ctx, accountID); err != nil {
 		return err
 	}
-	sql := `SELECT ` + materialCols + ` FROM material m
+	sql := `SELECT ` + strings.Replace(materialCols, "m.content", "left(m.content,120)", 1) + ` FROM material m
 		WHERE m.workspace_id=$1 AND m.deleted_at IS NULL AND `
 	switch q.Get("scope") {
 	case "account":
@@ -263,13 +290,17 @@ func (s *Server) listMaterials(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer rows.Close()
-	list := []Material{}
+	list := []materialPreview{}
 	for rows.Next() {
 		m, err := scanMaterial(rows)
 		if err != nil {
 			return err
 		}
-		list = append(list, m)
+		list = append(list, materialPreview{ID: m.ID, Shared: m.AccountID == nil, Kind: m.Kind, Content: m.Content,
+			Source: m.Source, Tags: m.Tags, ValidUntil: m.ValidUntil, UsageCount: m.UsageCount, LastUsedAt: m.LastUsedAt, Expired: m.Expired, CreatedAt: m.CreatedAt})
+	}
+	if err := rows.Err(); err != nil {
+		return err
 	}
 	return ok(w, list)
 }

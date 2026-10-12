@@ -128,6 +128,8 @@ export interface Material {
   created_at: string
 }
 
+export type MaterialPreview = Omit<Material, 'account_id' | 'source'> & { shared?: boolean; source?: string }
+
 export interface StrategyFields {
   niche: string
   audience: string

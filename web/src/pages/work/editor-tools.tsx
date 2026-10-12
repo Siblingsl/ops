@@ -7,7 +7,7 @@ import { Badge, Button, cn, Spinner, Textarea } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, get, post, put } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
-import type { LintHit, Material, RetrieveHit, Section, SectionRevision, Variant, Work } from '@/lib/types'
+import type { LintHit, Material, MaterialPreview, RetrieveHit, Section, SectionRevision, Variant, Work } from '@/lib/types'
 import { SectionConflictDialog } from './section-save-dialogs'
 
 // ---------- 编辑器内部事件（侧栏 ↔ 段落） ----------
@@ -269,7 +269,7 @@ export function SectionMaterials({ work, section, readOnly, onWork }: { work: Wo
   const ids = section.material_ids ?? []
   const materials = useQuery({
     queryKey: ['materials', work.account_id, ''],
-    queryFn: () => get<Material[]>(`/materials?account_id=${work.account_id}`),
+    queryFn: () => get<MaterialPreview[]>(`/materials?account_id=${work.account_id}`),
     enabled: open,
   })
   const query = `${section.heading} ${section.key_point} ${section.content_md.slice(0, 300)}`.trim()

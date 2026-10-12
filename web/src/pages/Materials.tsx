@@ -13,7 +13,7 @@ import { errorMessage, get, patch, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import { deleteWithUndo } from '@/lib/undo'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
-import type { AIJob, Material, MaterialKind, WorkStatus } from '@/lib/types'
+import type { AIJob, Material, MaterialPreview, MaterialKind, WorkStatus } from '@/lib/types'
 
 export const kindMeta: Record<MaterialKind, { label: string; desc: string; tone: 'ink' | 'blue' | 'gamboge' | 'green' }> = {
   experience: { label: '经历', desc: '亲身经历、故事、见闻', tone: 'ink' },
@@ -253,7 +253,7 @@ function DuplicatesDrawer({ open, onClose, accountId }: { open: boolean; onClose
 }
 
 /** TagSuggestDrawer (EX-D-02): suggestions for the selected materials are shown one by one; each is accepted separately. */
-function TagSuggestDrawer({ items, onClose }: { items: Material[]; onClose: () => void }) {
+function TagSuggestDrawer({ items, onClose }: { items: MaterialPreview[]; onClose: () => void }) {
   const inv = useInvalidate()
   const [sugs, setSugs] = useState<Record<string, TagSuggestion | 'error' | 'done' | 'skip'>>({})
   useEffect(() => {
@@ -262,7 +262,8 @@ function TagSuggestDrawer({ items, onClose }: { items: Material[]; onClose: () =
       for (const m of items) {
         if (!alive) return
         try {
-          const r = await post<TagSuggestion>('/materials/tag-suggest', { content: m.content })
+          const full = await get<Material>(`/materials/${m.id}`)
+          const r = await post<TagSuggestion>('/materials/tag-suggest', { content: full.content })
           if (alive) setSugs((s) => ({ ...s, [m.id]: r }))
         } catch {
           if (alive) setSugs((s) => ({ ...s, [m.id]: 'error' }))
@@ -271,9 +272,10 @@ function TagSuggestDrawer({ items, onClose }: { items: Material[]; onClose: () =
     })()
     return () => { alive = false }
   }, [items])
-  const accept = async (m: Material, s: TagSuggestion) => {
+  const accept = async (m: MaterialPreview, s: TagSuggestion) => {
     try {
-      await patch(`/materials/${m.id}`, materialBody(m, { kind: s.kind, tags: [...new Set([...m.tags, ...s.tags])] }))
+      const full = await get<Material>(`/materials/${m.id}`)
+      await patch(`/materials/${m.id}`, materialBody(full, { kind: s.kind, tags: [...new Set([...full.tags, ...s.tags])] }))
       setSugs((x) => ({ ...x, [m.id]: 'done' }))
       if (s.ai_call_id) void sendFeedback(s.ai_call_id, { outcome: 'accepted' })
       inv(['materials'])
@@ -281,7 +283,7 @@ function TagSuggestDrawer({ items, onClose }: { items: Material[]; onClose: () =
       toast.error(errorMessage(e))
     }
   }
-  const skip = (m: Material, s: TagSuggestion) => {
+  const skip = (m: MaterialPreview, s: TagSuggestion) => {
     setSugs((x) => ({ ...x, [m.id]: 'skip' }))
     if (s.ai_call_id) void sendFeedback(s.ai_call_id, { outcome: 'rejected' })
   }
@@ -315,7 +317,7 @@ function TagSuggestDrawer({ items, onClose }: { items: Material[]; onClose: () =
   )
 }
 
-function UsagePopover({ m }: { m: Material }) {
+function UsagePopover({ m }: { m: Pick<Material, 'id' | 'usage_count'> }) {
   const [open, setOpen] = useState(false)
   const { data } = useQuery({
     queryKey: ['material-usage', m.id],
@@ -351,18 +353,20 @@ export default function Materials() {
   const [usage, setUsage] = useState<'' | 'used' | 'unused' | 'expired'>('')
   const [q, setQ] = useState('')
   const [dialog, setDialog] = useState<{ editing: Material | null } | null>(null)
+  const [detail, setDetail] = useState<Material | null>(null)
+  const [reading, setReading] = useState(false)
   const [extract, setExtract] = useState(params.get('extract') === '1')
   const [dups, setDups] = useState(false)
   const [tag, setTag] = useState<string | null>(null)
   const [selecting, setSelecting] = useState(false)
   const [picked, setPicked] = useState<string[]>([])
-  const [tagging, setTagging] = useState<Material[] | null>(null)
+  const [tagging, setTagging] = useState<MaterialPreview[] | null>(null)
   const focus = params.get('focus')
   const focusRef = useRef<HTMLDivElement>(null)
   const inv = useInvalidate()
   const { data, isLoading } = useQuery({
     queryKey: ['materials', acc?.id, scope, q, usage],
-    queryFn: () => get<Material[]>(`/materials?account_id=${acc!.id}${scope !== 'all' ? `&scope=${scope}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}${usage ? `&usage=${usage}` : ''}`),
+    queryFn: () => get<MaterialPreview[]>(`/materials?account_id=${acc!.id}${scope !== 'all' ? `&scope=${scope}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}${usage ? `&usage=${usage}` : ''}`),
     enabled: !!acc,
   })
   const dupGroups = useQuery({
@@ -388,7 +392,15 @@ export default function Materials() {
   const maxCount = cloud[0]?.[1] ?? 1
   const untagged = (data ?? []).filter((m) => m.tags.length === 0).length
   const list = (data ?? []).filter((m) => (!kind || m.kind === kind) && (tag === null || (tag === '' ? m.tags.length === 0 : m.tags.includes(tag))))
-  const remove = (m: Material) => deleteWithUndo('material', m.id, '这条素材', () => inv(['materials']), '已引用它的作品不受影响。')
+  const remove = (m: Pick<Material, 'id'>) => deleteWithUndo('material', m.id, '这条素材', () => inv(['materials']), '已引用它的作品不受影响。')
+  const read = async (id: string, edit = false) => {
+    setReading(true)
+    try {
+      const full = await get<Material>(`/materials/${id}`)
+      if (edit) setDialog({ editing: full })
+      else setDetail(full)
+    } catch (e) { toast.error(errorMessage(e)) } finally { setReading(false) }
+  }
   const togglePick = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : p.length >= 10 ? (toast.info('一次最多选 10 条'), p) : [...p, id]))
   const dupCount = dupGroups.data?.length ?? 0
   return (
@@ -459,18 +471,19 @@ export default function Materials() {
                 <div className="mb-2 flex items-center gap-2">
                   {selecting && <input type="checkbox" aria-label="选择这条素材" className="accent-ink-600" checked={picked.includes(m.id)} onChange={() => togglePick(m.id)} />}
                   <Badge tone={kindMeta[m.kind].tone}>{kindMeta[m.kind].label}</Badge>
-                  {m.account_id === null && <Badge>共享</Badge>}
+                  {m.shared && <Badge>共享</Badge>}
                   {m.expired ? <Badge tone="red"><CalendarClock className="size-3" />已过期</Badge> : m.valid_until && <Badge><CalendarClock className="size-3" />有效至 {m.valid_until}</Badge>}
                   <span className="text-xs text-mist-400">{relTime(m.created_at)}</span>
                   <StarButton type="material" id={m.id} className="ml-auto" />
                   {canWrite && (
                     <div className="flex opacity-60 transition group-hover:opacity-100">
-                      <IconButton label="编辑" onClick={() => setDialog({ editing: m })}><Pencil className="size-3.5" /></IconButton>
+                      <IconButton label="编辑" disabled={reading} onClick={() => void read(m.id, true)}><Pencil className="size-3.5" /></IconButton>
                       <IconButton label="删除" className="hover:text-danger" onClick={() => remove(m)}><Trash2 className="size-3.5" /></IconButton>
                     </div>
                   )}
                 </div>
                 <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-mist-700">{m.content}</p>
+                <Button size="sm" variant="ghost" disabled={reading} onClick={() => void read(m.id)}>查看全文</Button>
                 <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-mist-100 pt-2.5 text-xs text-mist-400">
                   <UsagePopover m={m} />
                   {m.last_used_at && <span>· 最近 {relTime(m.last_used_at)}</span>}
@@ -483,6 +496,9 @@ export default function Materials() {
         </div>
       )}
       {dialog && <MaterialDialog open onClose={() => setDialog(null)} accountId={acc.id} editing={dialog.editing} />}
+      <Drawer open={!!detail} onClose={() => setDetail(null)} title="素材全文">
+        <p className="whitespace-pre-wrap">{detail?.content}</p>
+      </Drawer>
       <ExtractDrawer open={extract} onClose={() => setExtract(false)} accountId={acc.id} />
       <DuplicatesDrawer open={dups} onClose={() => { setDups(false); void dupGroups.refetch() }} accountId={acc.id} />
       {tagging && <TagSuggestDrawer items={tagging} onClose={() => { setTagging(null); setPicked([]) }} />}

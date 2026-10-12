@@ -417,6 +417,8 @@ test('首次价值路径：旧文建档、方案启用、生成推荐并逐条�
   await expect.poll(async () => (await api(page, 'GET', `/accounts/${account.id}/strategy`)).active?.id).toBeTruthy()
   await page.goto(`/a/${account.id}`)
   const generate = page.getByRole('button', { name: '生成第一条推荐', exact: true })
+  const adopt = page.getByRole('button', { name: '采用为选题', exact: true }).first()
+  await expect.poll(async () => await generate.isVisible() || await adopt.isVisible()).toBe(true)
   if (await generate.isVisible()) await generate.click()
   await expect(page.getByRole('button', { name: '采用为选题', exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: '采用为选题', exact: true }).first().click()
