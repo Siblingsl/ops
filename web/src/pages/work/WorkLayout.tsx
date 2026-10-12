@@ -11,6 +11,7 @@ import { fmtTime } from '@/lib/format'
 import { rememberAccount, useCanWrite } from '@/lib/session'
 import type { Platform, StarItem, Work, WorkspaceMember, WorkStatus } from '@/lib/types'
 import { rememberRecent, useCustomTheme, usePrefs, useWorkCmd } from '@/lib/v3'
+import { usePageVisible } from '@/lib/visibility'
 
 export interface WorkCtx {
   work: Work
@@ -209,6 +210,7 @@ function Versions({ work, open, onClose, onRestored }: { work: Work; open: boole
 }
 
 export default function WorkLayout() {
+  const visible = usePageVisible()
   const { workId } = useParams()
   const qc = useQueryClient()
   const canWrite = useCanWrite()
@@ -253,24 +255,29 @@ export default function WorkLayout() {
   })
   // Presence (S3 协同提示): heartbeat every 20s; the server forgets entries after 30s.
   useEffect(() => {
-    if (!workId) return
+    if (!workId || !visible) return
     let alive = true
-    const beat = () => post<Presence[]>(`/works/${workId}/presence`, { section_id: sectionRef.current }).then((l) => alive && setPresence(l)).catch(() => undefined)
+    const beat = () => {
+      if (document.hidden) return
+      void post<Presence[]>(`/works/${workId}/presence`, { section_id: sectionRef.current }).then((l) => alive && setPresence(l)).catch(() => undefined)
+    }
     void beat()
     const t = window.setInterval(beat, 20_000)
     return () => {
       alive = false
       window.clearInterval(t)
-      void post(`/works/${workId}/presence`, { leave: true }).catch(() => undefined)
+      if (!document.hidden) void post(`/works/${workId}/presence`, { leave: true }).catch(() => undefined)
     }
-  }, [workId])
+  }, [workId, visible])
   const reportSection = useCallback((id: string | null) => {
     if (sectionRef.current === id) return
     sectionRef.current = id
+    if (document.hidden) return
     void post<Presence[]>(`/works/${workId}/presence`, { section_id: id }).then(setPresence).catch(() => undefined)
   }, [workId])
   const editedAt = useRef(0)
   const reportEditing = useCallback((id: string) => {
+    if (document.hidden) return
     if (sectionRef.current === id && Date.now() - editedAt.current < 10_000) return
     sectionRef.current = id
     editedAt.current = Date.now()

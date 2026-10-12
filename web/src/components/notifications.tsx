@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { errorMessage, get, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import type { AIJob, AppNotification } from '@/lib/types'
+import { usePageVisible } from '@/lib/visibility'
 import { Badge, cn, Tabs } from './ui'
 
 type NotiList = { items: AppNotification[]; unread: number; active_jobs: number }
@@ -20,32 +21,38 @@ const jobStatus: Record<AIJob['status'], { label: string; tone: 'gray' | 'ink' |
 }
 
 /** useNotificationStream refetches notifications whenever the server pushes "changed" (S3：通知改 SSE); returns whether the stream is live. */
-function useNotificationStream() {
+function useNotificationStream(visible: boolean) {
   const qc = useQueryClient()
   const [live, setLive] = useState(false)
   useEffect(() => {
-    if (typeof EventSource === 'undefined') return
+    if (!visible || typeof EventSource === 'undefined') return
+    let alive = true
     let es: EventSource | null = null
     let retry: number | undefined
     const open = () => {
+      if (!alive || document.hidden) return
       es = new EventSource('/api/v1/notifications/stream')
-      es.onopen = () => setLive(true)
+      es.onopen = () => { if (alive && !document.hidden) setLive(true) }
       es.addEventListener('changed', () => {
+        if (!alive || document.hidden) return
         void qc.invalidateQueries({ queryKey: ['notifications'] })
         void qc.invalidateQueries({ queryKey: ['ai-jobs'] })
       })
       es.onerror = () => {
         setLive(false)
         es?.close()
-        retry = window.setTimeout(open, 15_000)
+        if (alive && !document.hidden) retry = window.setTimeout(open, 15_000)
       }
     }
     open()
     return () => {
+      alive = false
+      if (es) { es.onopen = null; es.onerror = null }
       es?.close()
       window.clearTimeout(retry)
+      setLive(false)
     }
-  }, [qc])
+  }, [qc, visible])
   return live
 }
 
@@ -56,21 +63,28 @@ function elapsed(from: string | null, now: number) {
 }
 
 export function NotificationBell() {
+  const visible = usePageVisible()
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<'noti' | 'jobs'>('noti')
   const ref = useRef<HTMLDivElement>(null)
   const nav = useNavigate()
   const qc = useQueryClient()
-  const live = useNotificationStream()
-  const noti = useQuery({ queryKey: ['notifications'], queryFn: () => get<NotiList>('/notifications'), refetchInterval: live ? 120_000 : 30_000 })
+  const live = useNotificationStream(visible)
+  const noti = useQuery({ queryKey: ['notifications'], queryFn: () => get<NotiList>('/notifications'), enabled: visible, refetchInterval: visible ? (live ? 120_000 : 30_000) : false })
   const jobs = useQuery({
     queryKey: ['ai-jobs'],
     queryFn: () => get<AIJob[]>('/ai-jobs'),
-    enabled: open && tab === 'jobs',
-    refetchInterval: open && tab === 'jobs' ? 4000 : false,
+    enabled: visible && open && tab === 'jobs',
+    refetchInterval: visible && open && tab === 'jobs' ? 4000 : false,
   })
+  useEffect(() => {
+    if (visible) {
+      void noti.refetch({ cancelRefetch: false })
+      if (open && tab === 'jobs') void jobs.refetch({ cancelRefetch: false })
+    }
+  }, [visible, noti.refetch, jobs.refetch])
   const [now, setNow] = useState(() => Date.now())
-  const ticking = open && tab === 'jobs' && (jobs.data ?? []).some((j) => j.status === 'running' || j.status === 'queued')
+  const ticking = visible && open && tab === 'jobs' && (jobs.data ?? []).some((j) => j.status === 'running' || j.status === 'queued')
   useEffect(() => {
     if (!ticking) return
     const t = window.setInterval(() => setNow(Date.now()), 1000)

@@ -14,6 +14,7 @@ import { fmtTime } from '@/lib/format'
 import { useCanWrite, useMe } from '@/lib/session'
 import type { ActivityItem, Comment, Material, PolishIssue, RetrieveHit, Section, Work, WorkspaceMember } from '@/lib/types'
 import { usePendingMemories, usePrefs, waitJob } from '@/lib/v3'
+import { usePageVisible } from '@/lib/visibility'
 import { emitEditor, findPending, scrollToSection, type SidebarTab, useEditorEvents } from './editor-tools'
 
 interface Props {
@@ -45,8 +46,12 @@ const tabGroups: { label: string; tabs: TabDef[] }[] = [
 ]
 
 export function EditorSidebar({ work, setWork, active, selection, tab, onTab: setTab, onClose }: Props) {
+  const visible = usePageVisible()
   const pendingCount = work.sections.reduce((n, s) => n + findPending(s.content_md).length, 0)
-  const comments = useQuery({ queryKey: ['comments', work.id], queryFn: () => get<Comment[]>(`/works/${work.id}/comments`), refetchInterval: 60_000 })
+  const comments = useQuery({ queryKey: ['comments', work.id], queryFn: () => get<Comment[]>(`/works/${work.id}/comments`), enabled: visible, refetchInterval: visible ? 60_000 : false })
+  useEffect(() => {
+    if (visible) void comments.refetch({ cancelRefetch: false })
+  }, [visible, comments.refetch])
   const openComments = (comments.data ?? []).filter((c) => !c.resolved_at).length
   const pendingMemories = usePendingMemories(work.account_id)
   return (
