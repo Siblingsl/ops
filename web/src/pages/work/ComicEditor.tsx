@@ -9,9 +9,10 @@ import { confirm } from '@/components/dialog'
 import { RefsNote } from '@/components/refs'
 import { aiError } from '@/lib/ai-error'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, Select, Textarea } from '@/components/ui'
-import { errorMessage, get, patch, post, put, rawRequest } from '@/lib/api'
+import { ApiError, errorMessage, get, patch, post, put, rawRequest } from '@/lib/api'
 import { type AIRefs, copyText, fmtTime, runeLen } from '@/lib/format'
 import type { Asset, CharacterCard, ComicBubble, ComicPanel, Work } from '@/lib/types'
+import { WorkConflictDialog } from './section-save-dialogs'
 import { useCanWrite } from '@/lib/session'
 import { useWork } from './WorkLayout'
 
@@ -62,12 +63,15 @@ export default function ComicEditor() {
       toast.error(errorMessage(e))
     }
   }
-  const saveTitle = async () => {
+  const [titleConflict, setTitleConflict] = useState<Work | null>(null)
+  const saveTitle = async (base = work.revision) => {
     if (title.trim() === work.title) return
     try {
-      setWork(await patch<Work>(`/works/${work.id}`, { title }))
+      setWork(await patch<Work>(`/works/${work.id}`, { title, base_revision: base }))
+      setTitleConflict(null)
     } catch (e) {
-      toast.error(errorMessage(e))
+      if (e instanceof ApiError && e.code === 'version_conflict') setTitleConflict((e.detail as { server: Work }).server)
+      else toast.error(errorMessage(e))
     }
   }
 
@@ -162,6 +166,11 @@ export default function ComicEditor() {
 
   return (
     <div className="mx-auto flex w-full max-w-[1280px] gap-8 px-6 py-8">
+      <WorkConflictDialog server={titleConflict} mine={{ ...work, title }} onClose={() => setTitleConflict(null)} onResolve={keepMine => {
+        if (!titleConflict) return
+        if (keepMine) void saveTitle(titleConflict.revision)
+        else { setWork(titleConflict); setTitleConflict(null) }
+      }} />
       <aside className="sticky top-24 hidden h-fit w-52 shrink-0 lg:block">
         <div className="mb-3 text-[11px] font-semibold tracking-wider text-mist-400">漫画步骤</div>
         <ol className="space-y-0.5">
@@ -188,7 +197,7 @@ export default function ComicEditor() {
       <div className="min-w-0 flex-1 space-y-5">
         <Card className="flex flex-wrap items-end gap-4 p-5">
           <Field label="作品标题" className="min-w-[240px] flex-1">
-            <Input value={title} disabled={readOnly} onChange={(e) => setTitle(e.target.value)} onBlur={saveTitle} placeholder="漫画标题" />
+            <Input value={title} disabled={readOnly} onChange={(e) => setTitle(e.target.value)} onBlur={() => saveTitle()} placeholder="漫画标题" />
           </Field>
           <Field label="格数">
             <Select value={String(panelCount)} disabled={readOnly || confirmed} onChange={(e) => setPanelCount(Number(e.target.value))}>

@@ -418,6 +418,7 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 	}
 	var in struct {
 		Title        *string            `json:"title"`
+		BaseRevision *int               `json:"base_revision"`
 		Summary      *string            `json:"summary"`
 		Viewpoint    *string            `json:"viewpoint"`
 		Theme        *string            `json:"theme"`
@@ -447,6 +448,11 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if in.Title != nil || in.Summary != nil {
+		if err := s.checkWorkRevision(ctx, tx, m, in.BaseRevision); err != nil {
+			return err
+		}
+	}
 	content := false
 	if in.Title != nil {
 		t := strings.TrimSpace(*in.Title)

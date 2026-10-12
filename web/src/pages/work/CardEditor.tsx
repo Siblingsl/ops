@@ -4,15 +4,17 @@ import { toast } from 'sonner'
 import { Badge, Button, Card, cn, HumanGate, Input } from '@/components/ui'
 import { confirm } from '@/components/dialog'
 import { aiError } from '@/lib/ai-error'
-import { errorMessage, patch, post, put } from '@/lib/api'
+import { ApiError, errorMessage, patch, post, put } from '@/lib/api'
 import { useCanWrite } from '@/lib/session'
-import type { WorkCard } from '@/lib/types'
+import type { Work, WorkCard } from '@/lib/types'
+import { WorkConflictDialog } from './section-save-dialogs'
 import { useWork } from './WorkLayout'
 
 // D-048 图文卡片编辑器：每张卡片 = 段落标题与正文 + 逐卡 AI 配图。
 // 卡片清单由大纲确认生成；增删通过「修改大纲」，排序同步段落、大纲和卡片。
 export default function CardEditor() {
-  const { work, refresh } = useWork()
+  const { work, refresh, setWork } = useWork()
+  const [orderConflict, setOrderConflict] = useState<{ server: Work; ids: string[] } | null>(null)
   const canWrite = useCanWrite()
   const readOnly = work.locked
   const cards = work.cards ?? []
@@ -40,14 +42,25 @@ export default function CardEditor() {
     ;[ids[index], ids[target]] = [ids[target], ids[index]]
     setBusy('order')
     try {
-      await put(`/works/${work.id}/sections/order`, { ids })
+      await put(`/works/${work.id}/sections/order`, { ids, base_revision: work.revision })
       await refresh()
       toast.success('卡片顺序已更新')
-    } catch (e) { toast.error(errorMessage(e)) } finally { setBusy(null) }
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'version_conflict') setOrderConflict({ server: (e.detail as { server: Work }).server, ids })
+      else toast.error(errorMessage(e))
+    } finally { setBusy(null) }
   }
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 animate-fade-in">
+      {orderConflict && <WorkConflictDialog server={orderConflict.server} mine={{ ...work, sections: orderConflict.ids.map(id => work.sections.find(section => section.id === id)!) }} onClose={() => setOrderConflict(null)} onResolve={async keepMine => {
+        if (!keepMine) { setWork(orderConflict.server); setOrderConflict(null); return }
+        try { setWork(await put<Work>(`/works/${work.id}/sections/order`, { ids: orderConflict.ids, base_revision: orderConflict.server.revision })); setOrderConflict(null) }
+        catch (e) {
+          if (e instanceof ApiError && e.code === 'version_conflict') setOrderConflict({ ...orderConflict, server: (e.detail as { server: Work }).server })
+          else toast.error(errorMessage(e))
+        }
+      }} />}
       <Card id="step-cards" className="scroll-mt-24 p-5">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="font-display text-[17px] font-bold text-mist-900">卡片清单</h2>

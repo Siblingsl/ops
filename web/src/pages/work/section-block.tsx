@@ -1,53 +1,25 @@
 import {
   ArrowDown, ArrowUp, BookmarkPlus, Check, History, ImagePlus, Loader2, MessageSquare, Minimize2, Quote, Repeat2, Sparkles, Square, Trash2, Wand2,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { RefsNote, sendFeedback } from '@/components/refs'
 import { type EditorHandle, PlainEditor, RichEditor } from '@/components/section-editor'
-import { Badge, Button, cn, Field, IconButton, MoreMenu, Notice, Select, Textarea } from '@/components/ui'
+import { Badge, Button, cn, IconButton, MoreMenu, Notice } from '@/components/ui'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
-import { ApiError, errorMessage, get, patch, post, put, stream } from '@/lib/api'
-import { type AIRefs, copyText, fmtTime, runeLen } from '@/lib/format'
-import { clearDraft, enqueueSync, readDraft, writeDraft } from '@/lib/local-draft'
-import type { Asset, LintHit, MaterialKind, Section, UserPrefs, Variant, Work } from '@/lib/types'
+import { ApiError, errorMessage, get, post, put, stream } from '@/lib/api'
+import { type AIRefs, copyText, runeLen } from '@/lib/format'
+import { writeDraft } from '@/lib/local-draft'
+import type { Asset, LintHit, Section, UserPrefs, Variant, Work } from '@/lib/types'
 import { matchGhostKey, waitJob } from '@/lib/v3'
 import {
   emitEditor, findPending, highlightAt, lintCategoryLabel, PendingDialog, type PendingMark, removeSentenceAt, replaceNth, RevisionsDialog, SectionMaterials, setHighlights,
   useEditorEvents, useLint, VariantsCard,
 } from './editor-tools'
-
-const kindLabel: Record<MaterialKind, string> = { experience: '经历', opinion: '观点', case: '案例', data: '数据' }
-
-function SaveToMaterial({ text, work, onClose }: { text: string; work: Work; onClose: () => void }) {
-  const [kind, setKind] = useState<MaterialKind>('opinion')
-  const [content, setContent] = useState(text)
-  const [shared, setShared] = useState(false)
-  const save = async () => {
-    try {
-      await post('/materials', { account_id: shared ? null : work.account_id, kind, content, source: `作品《${work.title || '未命名'}》` })
-      toast.success('已存入素材库')
-      onClose()
-    } catch (e) {
-      toast.error(errorMessage(e))
-    }
-  }
-  return (
-    <Dialog open onClose={onClose} title="存入素材库" footer={<><Button variant="ghost" onClick={onClose}>取消</Button><Button variant="primary" onClick={save}>保存</Button></>}>
-      <div className="space-y-4">
-        <Field label="类型">
-          <Select value={kind} onChange={(e) => setKind(e.target.value as MaterialKind)}>
-            {Object.entries(kindLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </Select>
-        </Field>
-        <Field label="内容"><Textarea rows={4} value={content} onChange={(e) => setContent(e.target.value)} /></Field>
-        <label className="flex items-center gap-2 text-[13px] text-mist-600"><input type="checkbox" className="accent-ink-600" checked={shared} onChange={(e) => setShared(e.target.checked)} />设为共享素材（所有账号都能引用）</label>
-      </div>
-    </Dialog>
-  )
-}
+import { AIConflictPanel, type AIConflict, SaveToMaterial, SectionConflictDialog } from './section-save-dialogs'
+import { useSectionSave } from './use-section-save'
 
 const originMeta = { ai: { label: 'AI 生成', tone: 'ink' as const }, human: { label: '手写', tone: 'gray' as const }, mixed: { label: 'AI + 人工修改', tone: 'blue' as const } }
 
@@ -83,7 +55,7 @@ export interface SectionBlockProps {
   total: number
   work: Work
   prefs: UserPrefs
-  patchWork: (p: Partial<Work>) => void
+  patchWork: (p: Partial<Work> | ((w: Work) => Partial<Work>)) => void
   setWork: (w: Work) => void
   refresh: () => Promise<unknown>
   readOnly: boolean
@@ -111,13 +83,10 @@ export function SectionBlock({
   const xhs = work.platform === 'xhs'
   const editor = useRef<EditorHandle>(null)
   const draftButton = useRef<HTMLButtonElement>(null)
-  const [heading, setHeading] = useState(section.heading)
-  const headingRef = useRef(heading)
-  headingRef.current = heading
-  const [resetKey, setResetKey] = useState(0)
-  const content = useRef(section.content_md)
-  const revision = useRef(section.revision)
-  const [origin, setOrigin] = useState(section.origin)
+  const { heading, setHeading, headingRef, resetKey, content, revision, origin, dirty, applied, conflict, setConflict, persist, schedule, flush, resolveConflict, load } = useSectionSave({
+    section, index, patchWork, onSave, onLoaded: text => { setIsEmpty(!text.trim()); setLintText(text) },
+  })
+  const [aiConflict, setAIConflict] = useState<AIConflict | null>(null)
   const [streaming, setStreaming] = useState<{ kind: 'draft' | 'edit'; text: string; stage?: Stage; resumed?: boolean } | null>(null)
   const jobId = useRef<string | null>(null)
   const [proposal, setProposal] = useState<Proposal | null>(null)
@@ -126,9 +95,7 @@ export function SectionBlock({
   const [refs, setRefs] = useState<AIRefs | null>(null)
   const [callId, setCallId] = useState<string | null>(null)
   const lastRun = useRef<(() => void) | null>(null)
-  const dirty = useRef(false)
   const [selection, setSelection] = useState('')
-  const [conflict, setConflict] = useState<Section | null>(null)
   const [toMaterial, setToMaterial] = useState<string | null>(null)
   const [imgSuggest, setImgSuggest] = useState<{ description: string; prompt: string }[] | null>(null)
   const [imgBusy, setImgBusy] = useState(false)
@@ -138,7 +105,6 @@ export function SectionBlock({
   const [chipsOpen, setChipsOpen] = useState(false)
   const [tier, setTier] = useState<'' | 'economy' | 'standard' | 'quality'>('')
   const [ghost, setGhost] = useState<{ text: string; loading: boolean; callId?: string | null } | null>(null)
-  const applied = useRef<{ kind: 'rewrite' | 'continue'; ai_call_id?: string | null } | null>(null)
   const [revOpen, setRevOpen] = useState(false)
   const [pendingOpen, setPendingOpen] = useState<PendingMark | null>(null)
   const [lintText, setLintText] = useState(section.content_md)
@@ -147,92 +113,10 @@ export function SectionBlock({
   const [showHits, setShowHits] = useState(false)
   const abort = useRef<AbortController | null>(null)
   const ghostAbort = useRef<AbortController | null>(null)
-  const timer = useRef<number>()
   const lintTimer = useRef<number>()
   const fileInput = useRef<HTMLInputElement>(null)
   const hits = useLint(work.id, lintText, prefs.live_lint && !readOnly)
-  const offline = useRef(false)
-
-  useEffect(() => {
-    // 恢复本地暂存但未同步的内容（E-12 / EX-N-04）。
-    let alive = true
-    void readDraft(section.id).then((s) => {
-      if (!alive || !s) return
-      const headingChanged = s.heading !== undefined && s.heading !== section.heading
-      if (s.content === section.content_md && !headingChanged) {
-        void clearDraft(section.id)
-        return
-      }
-      content.current = s.content
-      if (s.heading !== undefined) setHeading(s.heading)
-      setResetKey((k) => k + 1)
-      if (s.revision === section.revision) {
-        schedule()
-        toast.info(`第 ${index + 1} 段恢复了未同步的修改`)
-      } else {
-        // 断网期间另一处也改过：不静默丢弃，交给冲突对比由用户选择保留哪一版。
-        dirty.current = true
-        setConflict(section)
-      }
-    })
-    return () => { alive = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const persist = useCallback(async (body: Record<string, unknown>) => {
-    onSave(1)
-    dirty.current = false
-    if (body.content_md !== undefined && applied.current) {
-      body = { ...body, applied: applied.current }
-      applied.current = null
-    }
-    try {
-      const r = await patch<{ section: Section; work_revision: number; work_status: Work['status'] }>(`/sections/${section.id}`, { ...body, base_revision: revision.current })
-      revision.current = r.section.revision
-      setOrigin(r.section.origin)
-      offline.current = false
-      if (!dirty.current) void clearDraft(section.id)
-      patchWork({ status: r.work_status, revision: r.work_revision })
-      onSave(-1)
-    } catch (e) {
-      if (e instanceof ApiError && e.code === 'version_conflict') {
-        setConflict((e.detail as { server: Section }).server)
-        onSave(-1)
-      } else if (e instanceof ApiError && e.code === 'network') {
-        void writeDraft(section.id, { content: content.current, heading: headingRef.current, revision: revision.current, at: Date.now() })
-        offline.current = true
-        onSave(-1, true)
-        window.setTimeout(() => { if (offline.current) void enqueueSync(() => persistRef.current({ content_md: content.current, heading: headingRef.current })) }, 5000)
-      } else {
-        onSave(-1)
-        toast.error(errorMessage(e))
-      }
-    }
-  }, [section.id, patchWork, onSave])
-  const persistRef = useRef(persist)
-  persistRef.current = persist
-  useEffect(() => {
-    const h = () => { if (offline.current) void enqueueSync(() => persistRef.current({ content_md: content.current, heading: headingRef.current })) }
-    window.addEventListener('online', h)
-    return () => window.removeEventListener('online', h)
-  }, [])
-
-  useEffect(() => {
-    if (section.revision === revision.current || dirty.current) return
-    revision.current = section.revision
-    content.current = section.content_md
-    setHeading(section.heading)
-    setOrigin(section.origin)
-    setIsEmpty(!section.content_md.trim())
-    setLintText(section.content_md)
-    setResetKey((k) => k + 1)
-  }, [section.revision, section.content_md, section.heading, section.origin])
-
-  const schedule = () => {
-    window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(() => persist({ content_md: content.current }), 1200)
-  }
-  useEffect(() => () => { window.clearTimeout(timer.current); window.clearTimeout(lintTimer.current) }, [])
+  useEffect(() => () => window.clearTimeout(lintTimer.current), [])
 
   const onChange = (md: string) => {
     content.current = md
@@ -296,7 +180,7 @@ export function SectionBlock({
     if (readOnly || streaming || !work.outline_confirmed_at) return
     const prev = content.current
     if (prev.trim() && !(await confirm({ title: '重新起草这一段？', desc: '当前内容会被替换，替换前的内容保存在段落历史中，也可以马上撤销。', confirmText: '重新起草' }))) return
-    window.clearTimeout(timer.current)
+    if (!(await flush())) return
     lastRun.current = () => void draft()
     abort.current = new AbortController()
     jobId.current = null
@@ -311,12 +195,7 @@ export function SectionBlock({
       setRefs(r.refs)
       setCallId(r.ai_call_id)
       const sec0 = r.result.section
-      content.current = sec0.content_md
-      revision.current = sec0.revision
-      setOrigin('ai')
-      setIsEmpty(false)
-      setLintText(sec0.content_md)
-      setResetKey((k) => k + 1)
+      load(sec0)
       await refresh()
       onDrafted?.(section.id)
       // DEV-A105：起草自检前置——展示自动修正并支持还原到 AI 原始输出。
@@ -327,7 +206,13 @@ export function SectionBlock({
       }
       if (prev.trim()) undoToast('已重新起草', prev, r.ai_call_id)
     } catch (e) {
-      aiError(e, `第 ${index + 1} 段起草`, draft)
+      if (e instanceof ApiError && e.code === 'version_conflict') {
+        const detail = e.detail as AIConflict
+        setRefs(detail.refs ?? null); setCallId(detail.ai_call_id ?? null)
+        load(detail.server)
+        setAIConflict(detail)
+        await refresh()
+      } else aiError(e, `第 ${index + 1} 段起草`, draft)
     } finally {
       jobId.current = null
       setStreaming(null)
@@ -379,12 +264,6 @@ export function SectionBlock({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resumeJob])
 
-  const flush = async () => {
-    if (!dirty.current) return
-    window.clearTimeout(timer.current)
-    await persist({ content_md: content.current })
-  }
-
   /** edit asks for 1 or 3 candidates (prefs.default_variants); sentence forces an exact-sentence rewrite (表达体检). */
   const edit = async (mode: 'rewrite' | 'expand' | 'shorten', opts: { sentence?: string; count?: 1 | 3 } = {}) => {
     const sel = opts.sentence ?? (editor.current?.selectedText() || '')
@@ -393,7 +272,7 @@ export function SectionBlock({
     const applyMode: ApplyMode = opts.sentence ? 'excerpt' : sel ? 'selection' : 'whole'
     const count = opts.count ?? prefs.default_variants
     lastRun.current = () => void edit(mode, opts)
-    await flush()
+    if (!(await flush())) return
     const body = { mode, selection: sel, ...(instruction.trim() ? { instruction: instruction.trim() } : {}), ...(tier ? { tier } : {}) }
     const modeName = { rewrite: '改写', expand: '扩写', shorten: '缩写' }[mode]
     if (count === 3) {
@@ -445,7 +324,7 @@ export function SectionBlock({
       setVariants({ title: target ? `${title} · 替换${kind === 'opening' ? '开头' : '结尾'}` : title, original: sel || target || undefined, list: r.variants, callId: r.ai_call_id, mode, rerun: run })
     }
     lastRun.current = () => void hooks(kind)
-    await flush()
+    if (!(await flush())) return
     setHookBusy(kind)
     try {
       await run()
@@ -594,7 +473,7 @@ export function SectionBlock({
 
   useEditorEvents((e) => {
     if (e.type === 'flush') {
-      if (!readOnly) e.wait.push(flush())
+      if (!readOnly) e.wait.push(flush().then(saved => { if (!saved) throw new Error('请先保存或处理段落冲突') }))
       return
     }
     if (!('sectionId' in e) || e.sectionId !== section.id) return
@@ -628,20 +507,6 @@ export function SectionBlock({
       if (p) setPendingOpen(p)
     }
   })
-
-  const resolveConflict = (keepMine: boolean) => {
-    if (!conflict) return
-    revision.current = conflict.revision
-    if (keepMine) persist({ content_md: content.current, heading })
-    else {
-      content.current = conflict.content_md
-      setHeading(conflict.heading)
-      setResetKey((k) => k + 1)
-      dirty.current = false
-      void clearDraft(section.id)
-    }
-    setConflict(null)
-  }
 
   const pickImage = () => fileInput.current?.click()
   const suggestImages = async () => {
@@ -684,7 +549,7 @@ export function SectionBlock({
           <span className="shrink-0 rounded-full bg-danger/10 px-2 py-0.5 text-[11px] text-danger" title="仍可编辑，但同时修改可能产生冲突">{othersEditing.join('、')} 正在编辑</span>
         ) : othersHere && othersHere.length > 0 && <span className="shrink-0 rounded-full bg-gamboge-100 px-2 py-0.5 text-[11px] text-gamboge-800">{othersHere.join('、')} 正在看这段</span>}
         <SectionMaterials work={work} section={section} readOnly={readOnly} onWork={setWork} />
-        <IconButton label="段落历史" onClick={() => setRevOpen(true)}><History className="size-3.5" /></IconButton>
+        <IconButton label="段落历史" onClick={async () => { if (await flush()) setRevOpen(true) }}><History className="size-3.5" /></IconButton>
         <Badge tone={originMeta[origin].tone}>{originMeta[origin].label}</Badge>
         {!readOnly && (
           <div className="flex items-center opacity-0 transition group-hover/sec:opacity-100">
@@ -704,9 +569,10 @@ export function SectionBlock({
             </span>
             <button type="button" className="ml-1.5 cursor-pointer text-ink-600 underline" onClick={async () => {
               content.current = selfCheck.original
+              editor.current?.setMarkdown(selfCheck.original)
               setLintText(selfCheck.original)
               setSelfCheck(null)
-              await persist({ content_md: selfCheck.original })
+              await flush()
             }}>还原 AI 原文</button>
           </Notice>
         )}
@@ -868,19 +734,19 @@ export function SectionBlock({
         const a = await onUploadImage(f)
         if (a) editor.current?.insertImage(a.url)
       }} />
-      <Dialog open={!!conflict} onClose={() => setConflict(null)} title="这一段已在其他地方修改过" desc="可能是另一个标签页、设备或同事。请选择保留哪个版本。" width="max-w-2xl"
-        footer={<><Button onClick={() => resolveConflict(false)}>使用另一处的版本</Button><Button variant="primary" onClick={() => resolveConflict(true)}>保留我现在的版本</Button></>}>
-        <div className="grid gap-4 md:grid-cols-2">
-          <div><div className="mb-1.5 text-xs font-medium text-mist-500">另一处保存的（{conflict && fmtTime(conflict.updated_at)}）</div>
-            {conflict && conflict.heading !== heading && <div className="mb-1 text-[13px] font-semibold text-mist-800">小标题：{conflict.heading || '（无）'}</div>}
-            <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-mist-50 p-3 text-[13px]">{conflict?.content_md}</div></div>
-          <div><div className="mb-1.5 text-xs font-medium text-ink-600">我现在的（含断网期间暂存在本机的修改）</div>
-            {conflict && conflict.heading !== heading && <div className="mb-1 text-[13px] font-semibold text-ink-800">小标题：{heading || '（无）'}</div>}
-            <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-ink-50/60 p-3 text-[13px]">{content.current}</div></div>
-        </div>
-      </Dialog>
+      <SectionConflictDialog server={conflict} heading={heading} content={content.current} onClose={() => setConflict(null)} onResolve={resolveConflict} />
+      {aiConflict && <AIConflictPanel conflict={aiConflict} onKeep={() => { sendFeedback(aiConflict.ai_call_id, { outcome: 'rejected' }); setAIConflict(null) }} onReplace={async () => {
+        const value = aiConflict
+        load(value.server)
+        applied.current = { kind: 'draft', ai_call_id: value.ai_call_id, ...(value.source_revisions ? { source_revisions: value.source_revisions } : {}) }
+        content.current = value.candidate
+        editor.current?.setMarkdown(value.candidate)
+        setLintText(value.candidate)
+        setIsEmpty(!value.candidate.trim())
+        if (await persist()) { setAIConflict(null); setSelfCheck(value.self_check ? { ...value.self_check, sectionId: section.id } : null); await refresh() }
+      }} />}
       {toMaterial !== null && <SaveToMaterial text={toMaterial} work={work} onClose={() => setToMaterial(null)} />}
-      {revOpen && <RevisionsDialog section={section} onClose={() => setRevOpen(false)} onRestored={setWork} />}
+      {revOpen && <RevisionsDialog section={{ ...section, revision: revision.current }} workId={work.id} onClose={() => setRevOpen(false)} onRestored={setWork} />}
       {pendingOpen && (
         <PendingDialog work={work} section={section} mark={pendingOpen} onClose={() => setPendingOpen(null)}
           onReplace={async (text, materialId) => {
