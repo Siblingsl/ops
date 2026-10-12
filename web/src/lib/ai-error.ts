@@ -15,7 +15,8 @@ function goModels() {
 export function aiError(e: unknown, step: string, retry?: () => unknown) {
   if ((e as Error)?.name === 'AbortError') return
   const code = e instanceof ApiError ? e.code : ''
-  const reason = errorMessage(e).replace(/[。，]?\s*(你的|原有)内容没有被改动[^]*$/, '')
+  const trace = e instanceof ApiError && e.requestId ? `（请求 ID：${e.shortRequestId}）` : ''
+  const reason = errorMessage(e).replace(/[。，]?\s*(你的|原有)内容没有被改动[^]*$/, '').replace(trace, '')
   const hasFallback = e instanceof ApiError && !!(e.detail as { fallback_available?: boolean } | undefined)?.fallback_available
   const switchModel = modelFailures.has(code)
     ? hasFallback && retry
@@ -23,7 +24,7 @@ export function aiError(e: unknown, step: string, retry?: () => unknown) {
       : { label: '换备用模型', onClick: goModels }
     : undefined
   toast.error(`${step}失败`, {
-    description: `${reason} · 你的内容没有被改动`,
+    description: `${reason} · 你的内容没有被改动${trace}`,
     duration: 10_000,
     action: retry ? { label: '重试', onClick: () => void retry() } : undefined,
     cancel: switchModel,

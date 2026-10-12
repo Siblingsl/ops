@@ -118,7 +118,7 @@ func serve() error {
 		slog.Warn("开发模式：微信接口和模型都使用本地模拟服务器", "mock", "http://"+cfg.MockListen, "drafts", "http://"+cfg.MockListen+"/mock/drafts")
 	}
 	go srv.RunJobs(ctx)
-	hs := &http.Server{Addr: cfg.Listen, Handler: srv.Router(), ReadHeaderTimeout: 10 * time.Second}
+	hs := srv.HTTPServer(cfg.Listen)
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

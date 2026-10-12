@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -344,20 +345,20 @@ func (s *Server) streamAIEphemeral(w http.ResponseWriter, r *http.Request, t aiT
 		sse.send("stage", map[string]string{"stage": "queued"})
 	})
 	if err != nil {
-		sse.send("error", asAPIError(err))
+		sse.send("error", asAPIError(ctx, err))
 		return nil
 	}
 	defer release()
 	sse.send("stage", map[string]string{"stage": "generating"})
 	res, err := s.runAI(ctx, t, func(d string) { sse.send("delta", map[string]string{"text": d}) })
 	if err != nil {
-		sse.send("error", asAPIError(err))
+		sse.send("error", asAPIError(ctx, err))
 		return nil
 	}
 	var extra any
 	if onDone != nil {
 		if extra, err = onDone(res.Text, res); err != nil {
-			sse.send("error", asAPIError(err))
+			sse.send("error", asAPIError(ctx, err))
 			return nil
 		}
 	}
@@ -426,13 +427,13 @@ func (s *Server) streamAIJob(w http.ResponseWriter, r *http.Request, t aiTask, m
 				status = "cancelled"
 			}
 			s.finishJob(jobID, status, nil, errText(err), nil)
-			push(sseMsg{"error", asAPIError(err)})
+			push(sseMsg{"error", asAPIError(ctx, err)})
 			return
 		}
 		defer release()
 		if _, err := s.db.Exec(jctx, `UPDATE ai_job SET status='running', started_at=now() WHERE id=$1 AND status='queued'`, jobID); err != nil {
 			s.finishJob(jobID, "failed", nil, errText(err), nil)
-			push(sseMsg{"error", asAPIError(err)})
+			push(sseMsg{"error", asAPIError(ctx, err)})
 			return
 		}
 		push(sseMsg{"stage", map[string]string{"stage": "context"}})
@@ -450,14 +451,14 @@ func (s *Server) streamAIJob(w http.ResponseWriter, r *http.Request, t aiTask, m
 				status = "cancelled"
 			}
 			s.finishJob(jobID, status, nil, errText(err), nil)
-			push(sseMsg{"error", asAPIError(err)})
+			push(sseMsg{"error", asAPIError(ctx, err)})
 			return
 		}
 		var extra any
 		if onDone != nil {
 			if extra, err = onDone(res.Text, res); err != nil {
 				s.finishJob(jobID, "failed", nil, errText(err), &res.CallID)
-				push(sseMsg{"error", asAPIError(err)})
+				push(sseMsg{"error", asAPIError(ctx, err)})
 				return
 			}
 		}
@@ -483,7 +484,7 @@ func (s *Server) streamAIJob(w http.ResponseWriter, r *http.Request, t aiTask, m
 	}
 }
 
-func asAPIError(err error) *APIError {
+func asAPIError(ctx context.Context, err error) *APIError {
 	var ae *APIError
 	if errors.As(err, &ae) {
 		return ae
@@ -491,7 +492,7 @@ func asAPIError(err error) *APIError {
 	if errors.Is(err, context.Canceled) {
 		return apiErr(499, "cancelled", "已停止生成，内容没有被改动")
 	}
-	slog.Error("AI 任务失败", "err", err)
+	slog.ErrorContext(ctx, "AI 任务失败", "request_id", middleware.GetReqID(ctx), "err", err)
 	return apiErr(500, "internal", "服务器内部错误，请稍后重试")
 }
 

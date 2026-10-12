@@ -8,23 +8,26 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// APIError is rendered as {"error":{"code","message","detail"}} (06 文档第 13.1 节).
+// APIError is rendered as {"error":{"code","message","detail","request_id"}} (06 文档第 13.1 节).
 type APIError struct {
-	Status  int    `json:"-"`
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Detail  any    `json:"detail,omitempty"`
+	Status    int    `json:"-"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Detail    any    `json:"detail,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
 }
 
 func (e *APIError) Error() string { return e.Code + ": " + e.Message }
@@ -73,10 +76,10 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	} else if errors.As(err, &pe) && pe.Code == "57014" {
 		ae = apiErr(http.StatusGatewayTimeout, "database_timeout", "数据库操作超时，请稍后重试")
 	} else if !errors.As(err, &ae) {
-		slog.Error("请求处理失败", "path", r.URL.Path, "err", err)
+		slog.ErrorContext(r.Context(), "请求处理失败", "request_id", middleware.GetReqID(r.Context()), "route", requestRoute(r.Context()), "err", err)
 		ae = apiErr(500, "internal", "服务器内部错误，请稍后重试")
 	}
-	writeJSON(w, ae.Status, map[string]any{"error": ae})
+	writeJSON(w, ae.Status, map[string]any{"error": errorRequestID(ae, middleware.GetReqID(r.Context()))})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -93,6 +96,10 @@ func ok(w http.ResponseWriter, v any) error {
 func decode(r *http.Request, v any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 8<<20))
 	if err := dec.Decode(v); err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return apiErr(408, "request_read_timeout", "请求读取超时，请稍后重试")
+		}
 		return validation("请求格式不正确：" + err.Error())
 	}
 	return nil
@@ -105,6 +112,10 @@ func decodeOptional(r *http.Request, v any) error {
 	}
 	raw, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, 8<<20))
 	if err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return apiErr(408, "request_read_timeout", "请求读取超时，请稍后重试")
+		}
 		return validation("请求格式不正确：" + err.Error())
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
@@ -164,6 +175,11 @@ func newSSE(w http.ResponseWriter) *sseWriter {
 }
 
 func (s *sseWriter) send(event string, data any) {
+	if event == "error" {
+		if ae, ok := data.(*APIError); ok {
+			data = errorRequestID(ae, s.w.Header().Get("X-Request-ID"))
+		}
+	}
 	b, _ := json.Marshal(data)
 	fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event, b)
 	s.flush()
@@ -172,7 +188,7 @@ func (s *sseWriter) send(event string, data any) {
 func (s *sseWriter) fail(err error) {
 	var ae *APIError
 	if !errors.As(err, &ae) {
-		slog.Error("流式请求失败", "err", err)
+		slog.Error("流式请求失败", "request_id", s.w.Header().Get("X-Request-ID"), "err", err)
 		ae = apiErr(500, "internal", "服务器内部错误，请稍后重试")
 	}
 	s.send("error", ae)

@@ -96,6 +96,9 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
+	r.Use(middleware.RequestID)
+	r.Use(requestReadDeadline(r))
+	r.Use(requestLog)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5, "text/html", "text/css", "application/json", "application/javascript", "text/javascript", "image/svg+xml"))
 

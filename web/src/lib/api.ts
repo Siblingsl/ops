@@ -4,12 +4,15 @@ export class ApiError extends Error {
   status: number
   code: string
   detail: unknown
-  constructor(status: number, code: string, message: string, detail?: unknown) {
-    super(message)
+  requestId: string
+  constructor(status: number, code: string, message: string, detail?: unknown, requestId = '') {
+    super(message + (requestId ? `（请求 ID：${requestId.slice(-12)}）` : ''))
     this.status = status
     this.code = code
     this.detail = detail
+    this.requestId = requestId
   }
+  get shortRequestId() { return this.requestId.slice(-12) }
   get checkpoint(): string | undefined {
     const d = this.detail as { checkpoint?: string } | undefined
     return d?.checkpoint
@@ -33,10 +36,11 @@ export function registerUnauthenticated(fn: () => void) {
 }
 
 async function parseError(res: Response): Promise<ApiError> {
+  const requestId = res.headers.get('X-Request-ID') || ''
   try {
     const body = await res.json()
     const e = body?.error
-    if (e) return new ApiError(res.status, e.code, e.message, e.detail)
+    if (e) return new ApiError(res.status, e.code, e.message, e.detail, requestId || e.request_id)
   } catch {
     /* not JSON */
   }
@@ -47,7 +51,7 @@ async function parseError(res: Response): Promise<ApiError> {
     503: '服务暂不可用，请稍后重试',
     504: '服务暂不可用，请求超时，请稍后重试',
   }
-  return new ApiError(res.status, 'internal', messages[res.status] || `请求失败（${res.status}）`)
+  return new ApiError(res.status, 'internal', messages[res.status] || `请求失败（${res.status}）`, undefined, requestId)
 }
 
 let fallbackUntil = 0
@@ -61,9 +65,12 @@ async function fetchResponse(method: string, path: string, payload: BodyInit | u
   const controller = new AbortController()
   const signal = init?.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal
   const timer = window.setTimeout(() => controller.abort(), timeout)
+  let requestId = ''
   try {
     for (let attempt = 0; ; attempt++) {
+      requestId = ''
       let res = await fetch('/api/v1' + path, { method, headers, body: payload, credentials: 'same-origin', ...init, signal })
+      requestId = res.headers.get('X-Request-ID') || ''
       if (streaming && res.ok && res.headers.get('Content-Type')?.startsWith('text/event-stream')) return res
       if (res.body) res = new Response(await res.arrayBuffer(), { status: res.status, statusText: res.statusText, headers: res.headers })
       if (method === 'GET' && attempt === 0 && [502, 503, 504].includes(res.status)) continue
@@ -72,7 +79,7 @@ async function fetchResponse(method: string, path: string, payload: BodyInit | u
     }
   } catch (e) {
     if (init?.signal?.aborted) throw e
-    if (controller.signal.aborted) throw new ApiError(504, 'timeout', '服务暂不可用，请求超时，请稍后重试')
+    if (controller.signal.aborted) throw new ApiError(504, 'timeout', '服务暂不可用，请求超时，请稍后重试', undefined, requestId)
     if (e instanceof ApiError) throw e
     throw new ApiError(0, 'network', '服务暂不可用，请检查网络后重试')
   } finally {
@@ -148,7 +155,7 @@ export async function stream<T = any>(path: string, body: unknown, h: SSEHandler
       queuedToast = undefined
     }
     if (name === 'delta') h.onDelta?.(parsed.text)
-    else if (name === 'error') failure = new ApiError(500, parsed.code || 'internal', parsed.message || '生成失败', parsed.detail)
+    else if (name === 'error') failure = new ApiError(500, parsed.code || 'internal', parsed.message || '生成失败', parsed.detail, res.headers.get('X-Request-ID') || parsed.request_id)
     else if (name === 'done') done = parsed
     h.onEvent?.(name, parsed)
   }

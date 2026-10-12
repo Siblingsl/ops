@@ -291,6 +291,9 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		if s.now().Sub(id.lastSeen) > time.Minute {
 			_, _ = s.db.Exec(r.Context(), `UPDATE session SET last_seen_at=now() WHERE id=$1`, id.SessionID)
 		}
+		if trace, ok := r.Context().Value(requestTraceKey{}).(*requestTrace); ok {
+			trace.WorkspaceID = id.WorkspaceID
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxMember, id)))
 	})
 }
