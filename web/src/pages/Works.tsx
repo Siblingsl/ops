@@ -1,15 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
-import { Bookmark, CalendarDays, FileText, GitBranch, ImageIcon, PenLine, Search, Star, Trash2, UserRound, X } from 'lucide-react'
+import { Bookmark, CalendarDays, Copy, FileText, GitBranch, ImageIcon, PenLine, Search, Star, Trash2, UserRound, X } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
-import { Button, Card, cn, Empty, IconButton, Input, PageHeader, PageLoading, StatusBadge, Tabs } from '@/components/ui'
+import { Button, Card, cn, Empty, IconButton, Input, MoreMenu, PageHeader, PageLoading, StatusBadge, Tabs } from '@/components/ui'
 import { del, errorMessage, get, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import { deleteWithUndo } from '@/lib/undo'
 import { useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
-import type { StarItem, WorkListItem, WorkStatus } from '@/lib/types'
+import type { StarItem, Work, WorkListItem, WorkStatus } from '@/lib/types'
 import { usePrefetchWork, usePrefs, useSavePrefs } from '@/lib/v3'
 import { useCreateWork } from './Dashboard'
 
@@ -73,6 +73,8 @@ function SavedViews({ current, onApply }: { current: string; onApply: (query: st
 }
 
 export default function Works() {
+  const nav = useNavigate()
+  const [copying, setCopying] = useState<string | null>(null)
   const prefetch = usePrefetchWork()
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
@@ -118,6 +120,15 @@ export default function Works() {
       (w.status === 'pushed' || w.status === 'published') && acc.platform === 'wechat_mp' && '公众号草稿箱里的草稿不会被删除。',
     ].filter(Boolean)
     await deleteWithUndo('work', w.id, `「${w.title || '未命名作品'}」`, () => inv(['works', acc.id]), extra.join(''))
+  }
+  const duplicate = async (id: string) => {
+    if (copying) return
+    setCopying(id)
+    try {
+      const work = await post<Work>(`/works/${id}/duplicate`)
+      inv(['works', acc.id])
+      nav(`/works/${work.id}`)
+    } catch (e) { toast.error(errorMessage(e)) } finally { setCopying(null) }
   }
   return (
     <div className="animate-fade-in">
@@ -184,6 +195,7 @@ export default function Works() {
                 {canWrite && (
                   <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
                     <IconButton label="派生到其他平台" onClick={() => setDerive(w)}><GitBranch className="size-4" /></IconButton>
+                    <MoreMenu items={[{ label: '复制为新草稿', icon: <Copy />, disabled: !!copying, loading: copying === w.id, onClick: () => void duplicate(w.id) }]} />
                     <IconButton label="删除" onClick={() => remove(w)} className="hover:text-danger"><Trash2 className="size-4" /></IconButton>
                   </div>
                 )}

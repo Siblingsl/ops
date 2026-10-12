@@ -1,17 +1,18 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarDays, Check, ChevronDown, ChevronUp, GitBranch, History, Layers, Lock, Maximize2, Minimize2, RotateCcw, Save, Star } from 'lucide-react'
+import { ArrowLeft, CalendarDays, Check, ChevronDown, ChevronUp, Copy, GitBranch, History, Layers, Lock, Maximize2, Minimize2, RotateCcw, Save, Star } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router-dom'
+import { Link, NavLink, Outlet, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
 import { confirm, Drawer } from '@/components/dialog'
-import { Badge, Button, cn, Field, Input, Notice, PageLoading, PlatformMark, Select, StatusBadge, Switch } from '@/components/ui'
+import { Badge, Button, cn, Field, Input, MoreMenu, Notice, PageLoading, PlatformMark, Select, StatusBadge, Switch } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { rememberAccount, useCanWrite } from '@/lib/session'
 import type { Platform, StarItem, Work, WorkspaceMember, WorkStatus } from '@/lib/types'
 import { rememberRecent, useCustomTheme, usePrefs, useWorkCmd } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
+import { emitEditor } from './editor-tools'
 
 export interface WorkCtx {
   work: Work
@@ -210,6 +211,8 @@ function Versions({ work, open, onClose, onRestored }: { work: Work; open: boole
 }
 
 export default function WorkLayout() {
+  const nav = useNavigate()
+  const [copying, setCopying] = useState(false)
   const visible = usePageVisible()
   const { workId } = useParams()
   const qc = useQueryClient()
@@ -288,6 +291,18 @@ export default function WorkLayout() {
     return <div className="p-10"><Notice tone="red">{q.error instanceof ApiError ? q.error.message : '作品不存在或已删除'}</Notice></div>
   }
   const work = q.data
+  const duplicate = async () => {
+    if (copying) return
+    setCopying(true)
+    try {
+      const wait: Promise<unknown>[] = []
+      emitEditor({ type: 'flush', wait })
+      await Promise.all(wait)
+      const copied = await post<Work>(`/works/${work.id}/duplicate`)
+      void qc.invalidateQueries({ queryKey: ['works', work.account_id] })
+      nav(`/works/${copied.id}`)
+    } catch (e) { toast.error(errorMessage(e)) } finally { setCopying(false) }
+  }
   const setWork = (w: Work) => qc.setQueryData(['work', workId], w)
   const patchWork = (p: Partial<Work> | ((w: Work) => Partial<Work>)) =>
     qc.setQueryData<Work>(['work', workId], (w) => (w ? { ...w, ...(typeof p === 'function' ? p(w) : p) } : w))
@@ -383,6 +398,7 @@ export default function WorkLayout() {
             <PlanPopover work={work} onSaved={setWork} />
             <Button size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
             {canWrite && <Button size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}><span className="hidden xl:inline">派生</span></Button>}
+            {canWrite && <MoreMenu className="[&_[role=menu]]:bottom-auto [&_[role=menu]]:top-full [&_[role=menu]]:mb-0 [&_[role=menu]]:mt-1" items={[{ label: '复制为新草稿', icon: <Copy />, loading: copying, onClick: () => void duplicate() }]} />}
             <Button size="sm" variant="ghost" title="专注模式（F11）" icon={focus ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />} onClick={() => setFocus(!focus)} />
           </div>
         </div>

@@ -1,0 +1,32 @@
+import { expect, test } from '@playwright/test'
+import { api, createOutline, registerAccount } from './support'
+
+test('OPT20 编辑器和列表逐篇复制，独立草稿保留正文并重置确认', async ({ page }) => {
+  const account = await registerAccount(page)
+  const original = await createOutline(page)
+  const before = await api(page, 'GET', `/works/${original}`)
+  await api(page, 'PATCH', `/works/${original}`, { title: '复制验收原作', base_revision: before.revision })
+  await page.reload()
+  const section = page.locator(`#sec-${before.sections[0].id}`)
+  await section.locator('textarea').first().fill('复制前尚未保存的正文')
+  await page.locator('header').getByRole('button', { name: '更多', exact: true }).click()
+  await page.getByRole('menuitem', { name: '复制为新草稿', exact: true }).click()
+  await expect.poll(() => page.url().split('/').pop()).not.toBe(original)
+  const copiedID = page.url().split('/').pop()!
+  const copied = await api(page, 'GET', `/works/${copiedID}`)
+  expect(copied.status).toBe('drafting')
+  expect(copied.title).toBe('复制验收原作（副本）')
+  expect(copied.outline_confirmed_at).toBeNull()
+  expect(copied.sections[0].content_md).toBe('复制前尚未保存的正文')
+  expect(copied.sections[0].id).not.toBe(before.sections[0].id)
+  await api(page, 'PATCH', `/sections/${copied.sections[0].id}`, { content_md: '只修改副本', base_revision: copied.sections[0].revision })
+  expect((await api(page, 'GET', `/works/${original}`)).sections[0].content_md).toBe('复制前尚未保存的正文')
+  await page.goto(`/a/${account.id}/works`)
+  const row = page.locator('div.group').filter({ has: page.getByText('复制验收原作', { exact: true }) })
+  await row.getByRole('button', { name: '更多', exact: true }).click()
+  await page.getByRole('menuitem', { name: '复制为新草稿', exact: true }).click()
+  await page.waitForURL(/\/works\/[a-f0-9-]+$/)
+  expect(page.url().split('/').pop()).not.toBe(original)
+  expect(page.url().split('/').pop()).not.toBe(copiedID)
+  expect((await api(page, 'GET', `/accounts/${account.id}/works`))).toHaveLength(3)
+})

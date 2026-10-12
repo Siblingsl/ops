@@ -247,6 +247,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/works/{id}/versions/{no}", s.h(s.getVersion))
 			r.Post("/works/{id}/versions/{no}/restore", s.h(s.restoreVersion))
 			r.Post("/works/{id}/derive", s.h(s.deriveWork))
+			r.Post("/works/{id}/duplicate", s.h(s.duplicateWork))
 			r.Post("/works/{id}/unlock", s.h(s.unlockWork))
 
 			r.Post("/works/{id}/assets", s.h(s.uploadAsset))
