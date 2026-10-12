@@ -218,6 +218,10 @@ export default function WorkLayout() {
   const qc = useQueryClient()
   const canWrite = useCanWrite()
   const q = useQuery({ queryKey: ['work', workId], queryFn: () => get<Work>(`/works/${workId}`) })
+  const setWork = useCallback((w: Work) => qc.setQueryData(['work', workId], w), [qc, workId])
+  const patchWork = useCallback((p: Partial<Work> | ((w: Work) => Partial<Work>)) =>
+    qc.setQueryData<Work>(['work', workId], (w) => (w ? { ...w, ...(typeof p === 'function' ? p(w) : p) } : w)), [qc, workId])
+  const refresh = useCallback(() => q.refetch(), [q.refetch])
   const [versions, setVersions] = useState(false)
   const [derive, setDerive] = useState(false)
   const prefs = usePrefs()
@@ -303,10 +307,7 @@ export default function WorkLayout() {
       nav(`/works/${copied.id}`)
     } catch (e) { toast.error(errorMessage(e)) } finally { setCopying(false) }
   }
-  const setWork = (w: Work) => qc.setQueryData(['work', workId], w)
-  const patchWork = (p: Partial<Work> | ((w: Work) => Partial<Work>)) =>
-    qc.setQueryData<Work>(['work', workId], (w) => (w ? { ...w, ...(typeof p === 'function' ? p(w) : p) } : w))
-  const ctx: WorkCtx = { work, setWork, patchWork, refresh: () => q.refetch(), focus, setFocus, presence, reportSection, reportEditing }
+  const ctx: WorkCtx = { work, setWork, patchWork, refresh, focus, setFocus, presence, reportSection, reportEditing }
   const wx = work.platform === 'wechat_mp'
   const todos = work.post_push_todos ?? []
   const todosDone = todos.filter((t) => t.done).length

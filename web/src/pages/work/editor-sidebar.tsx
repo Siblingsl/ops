@@ -15,7 +15,8 @@ import { useCanWrite, useMe } from '@/lib/session'
 import type { ActivityItem, Comment, Material, PolishIssue, RetrieveHit, Section, Work, WorkspaceMember } from '@/lib/types'
 import { usePendingMemories, usePrefs, waitJob } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
-import { emitEditor, findPending, scrollToSection, type SidebarTab, useEditorEvents } from './editor-tools'
+import { emitEditor, scrollToSection, type SidebarTab, useEditorEvents } from './editor-tools'
+import { usePendingSections } from './editor-pending'
 
 interface Props {
   work: Work
@@ -47,7 +48,7 @@ const tabGroups: { label: string; tabs: TabDef[] }[] = [
 
 export function EditorSidebar({ work, setWork, active, selection, tab, onTab: setTab, onClose }: Props) {
   const visible = usePageVisible()
-  const pendingCount = work.sections.reduce((n, s) => n + findPending(s.content_md).length, 0)
+  const pendingCount = usePendingSections(work.sections).length
   const comments = useQuery({ queryKey: ['comments', work.id], queryFn: () => get<Comment[]>(`/works/${work.id}/comments`), enabled: visible, refetchInterval: visible ? 60_000 : false })
   useEffect(() => {
     if (visible) void comments.refetch({ cancelRefetch: false })
@@ -408,7 +409,7 @@ function PolishTab({ work }: { work: Work }) {
 // ---------- 待核实（EX-E-04） ----------
 
 function PendingTab({ work }: { work: Work }) {
-  const all = work.sections.flatMap((s) => findPending(s.content_md).map((p) => ({ s, p })))
+  const all = usePendingSections(work.sections)
   if (all.length === 0) return <Hint>没有待核实的地方。</Hint>
   return (
     <div className="space-y-2">

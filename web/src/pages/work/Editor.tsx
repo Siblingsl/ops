@@ -1,20 +1,21 @@
 import { useQuery } from '@tanstack/react-query'
-import { BookOpenCheck, Check, CheckCircle2, Circle, CloudOff, Layers, Loader2, PanelRightOpen, PenLine, Plus, Stethoscope, Wand2, X } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { BookOpenCheck, CheckCircle2, Circle, Layers, PanelRightOpen, PenLine, Plus, Stethoscope, Wand2, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, Textarea } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { ApiError, del, errorMessage, get, patch, post, put, rawRequest, stream } from '@/lib/api'
-import { fmtTime, runeLen } from '@/lib/format'
+import { runeLen } from '@/lib/format'
 import { useCanWrite } from '@/lib/session'
-import type { AIJob, Asset, LintHit, MaterialPreview, MaterialKind, Section, SeriesContext, SeriesNeighbour, Work } from '@/lib/types'
+import type { AIJob, Asset, LintHit, MaterialPreview, MaterialKind, SeriesContext, SeriesNeighbour, Work } from '@/lib/types'
 import { usePrefs, useWorkCmd } from '@/lib/v3'
 import CardEditor from './CardEditor'
 import ComicEditor from './ComicEditor'
-import { EditorSidebar } from './editor-sidebar'
-import { emitEditor, type EditorEvent, findPending, scrollToSection, type SidebarTab, useEditorEvents } from './editor-tools'
+import { createSaveStatus, SaveStatus, SelectedSidebar } from './editor-state'
+import { usePendingSections } from './editor-pending'
+import { emitEditor, type EditorEvent, scrollToSection, type SidebarTab, useEditorEvents } from './editor-tools'
 import { SectionBlock } from './section-block'
 import { OutlineCard } from './editor-outline'
 import { TitleCard } from './editor-title'
@@ -23,8 +24,6 @@ import { WorkConflictDialog } from './section-save-dialogs'
 import { useWork } from './WorkLayout'
 
 const kindLabel: Record<MaterialKind, string> = { experience: '经历', opinion: '观点', case: '案例', data: '数据' }
-
-type SaveState = { pending: number; offline: boolean; last: string | null }
 
 // ---------- 核心观点（H-02） ----------
 
@@ -271,9 +270,30 @@ function ArticleEditor() {
   const canWrite = useCanWrite()
   const prefs = usePrefs()
   const readOnly = work.locked || !canWrite
-  const [save, setSave] = useState<SaveState>({ pending: 0, offline: false, last: null })
+  const saveStatus = useMemo(createSaveStatus, [])
   const [activeId, setActiveId] = useState<string | null>(null)
-  const [selection, setSelection] = useState('')
+  const selection = useRef('')
+  const currentWork = useRef(work)
+  currentWork.current = work
+  const sectionWork = useMemo(() => ({ id: work.id, platform: work.platform, outline_confirmed_at: work.outline_confirmed_at, account_id: work.account_id, title: work.title }), [work.id, work.platform, work.outline_confirmed_at, work.account_id, work.title])
+  const memberCache = useRef(new Map<string, { here: string[]; editing: string[] }>())
+  const memberKey = JSON.stringify(presence.map(p => [p.section_id, p.username, !!p.editing]))
+  const members = useMemo(() => {
+    const grouped = new Map<string, { here: string[]; editing: string[] }>()
+    for (const p of presence) {
+      if (!p.section_id) continue
+      const group = grouped.get(p.section_id) ?? { here: [], editing: [] }
+      group.here.push(p.username)
+      if (p.editing) group.editing.push(p.username)
+      grouped.set(p.section_id, group)
+    }
+    for (const [id, group] of grouped) {
+      const prev = memberCache.current.get(id)
+      if (prev && JSON.stringify(prev) === JSON.stringify(group)) grouped.set(id, prev)
+    }
+    memberCache.current = grouped
+    return grouped
+  }, [memberKey])
   const fromMention = new URLSearchParams(location.search).has('comment')
   const [sidebar, setSidebar] = useState(() => fromMention || localStorage.getItem(SIDEBAR_KEY) !== '0')
   const [sideTab, setSideTab] = useState<SidebarTab>(fromMention ? 'comments' : 'materials')
@@ -290,9 +310,8 @@ function ArticleEditor() {
     refetchOnWindowFocus: false,
     select: (list) => Object.fromEntries(list.filter((j) => j.task_type === 'section_draft' && j.section_id).map((j) => [j.section_id!, j.id])),
   })
-  const onSave = useCallback((d: number, offline = false) => {
-    setSave((s) => ({ pending: Math.max(0, s.pending + d), offline, last: d < 0 && !offline ? new Date().toISOString() : s.last }))
-  }, [])
+  const onSave = saveStatus.report
+  const onLint = useCallback((id: string, n: number) => { lintCounts.current[id] = n }, [])
   const setWorkStable = setWork
   useEffect(() => {
     if (!location.hash) return
@@ -311,11 +330,12 @@ function ArticleEditor() {
   })
   const onActive = useCallback((id: string, sel: string) => {
     setActiveId(id)
-    setSelection(sel)
+    selection.current = sel
+    emitEditor({ type: 'selection', text: sel })
     reportSection(id)
   }, [reportSection])
 
-  const upload = async (f: File): Promise<Asset | null> => {
+  const upload = useCallback(async (f: File): Promise<Asset | null> => {
     const fd = new FormData()
     fd.append('file', f)
     try {
@@ -327,7 +347,7 @@ function ArticleEditor() {
       toast.error(`${f.name}：${errorMessage(e)}`)
       return null
     }
-  }
+  }, [work.id, patchWork])
   const addSection = async () => {
     try {
       setWork(await post<Work>(`/works/${work.id}/sections`, { heading: '' }))
@@ -335,32 +355,33 @@ function ArticleEditor() {
       toast.error(errorMessage(e))
     }
   }
-  const moveSection = async (i: number, d: number) => {
-    const before = work
-    const sections = [...work.sections]
+  const moveSection = useCallback(async (id: string, d: number) => {
+    const before = currentWork.current
+    const sections = [...before.sections]
+    const i = sections.findIndex(s => s.id === id)
     const j = i + d
     ;[sections[i], sections[j]] = [sections[j], sections[i]]
-    setWork({ ...work, sections })
+    setWork({ ...before, sections })
     try {
-      setWork(await put<Work>(`/works/${work.id}/sections/order`, { ids: sections.map((s) => s.id), base_revision: before.revision }))
+      setWork(await put<Work>(`/works/${before.id}/sections/order`, { ids: sections.map((s) => s.id), base_revision: before.revision }))
     } catch (e) {
       setWork(before)
       if (e instanceof ApiError && e.code === 'version_conflict') setOrderConflict({ server: (e.detail as { server: Work }).server, mine: { ...before, sections }, ids: sections.map(s => s.id) })
       else toast.error(errorMessage(e))
     }
-  }
+  }, [setWork])
   // 删除不再二次确认，改为可撤销（4.3 撤销体系）。
-  const removeSection = async (s: Section) => {
-    const n = work.sections.findIndex((x) => x.id === s.id) + 1
+  const removeSection = useCallback(async (id: string) => {
+    const n = currentWork.current.sections.findIndex((x) => x.id === id) + 1
     try {
-      setWork(await del<Work>(`/sections/${s.id}`))
+      setWork(await del<Work>(`/sections/${id}`))
       toast(`已删除第 ${n} 段`, {
         duration: 10_000,
         action: {
           label: '撤销',
           onClick: async () => {
             try {
-              setWork(await post<Work>(`/sections/${s.id}/restore`))
+              setWork(await post<Work>(`/sections/${id}/restore`))
             } catch (e) {
               toast.error(errorMessage(e))
             }
@@ -370,13 +391,13 @@ function ArticleEditor() {
     } catch (e) {
       toast.error(errorMessage(e))
     }
-  }
+  }, [setWork])
   const drafted = work.sections.filter((s) => s.content_md.trim()).length
   const emptySections = work.sections.filter((s) => !s.content_md.trim())
   const allDrafted = !readOnly && !!work.outline_confirmed_at && work.sections.length > 0 && emptySections.length === 0
   const totalChars = work.sections.reduce((n, s) => n + runeLen(s.content_md.replace(/[#>*_`[\]()!-]/g, '')), 0)
   const target = work.target_chars ?? 0
-  const pendingAll = work.sections.flatMap((s) => findPending(s.content_md).map((p) => ({ s, p })))
+  const pendingAll = usePendingSections(work.sections)
   const titleDone = !!work.title.trim()
   const imagesDone = work.platform === 'wechat_mp' ? !!work.cover_asset_id : work.assets.length > 0
   const steps = [
@@ -419,12 +440,14 @@ function ArticleEditor() {
   const onOutlineConfirmed = () => {
     window.setTimeout(() => scrollTo('step-sections'), 80)
   }
-  const onDrafted = (sectionId: string) => {
+  const draftedAction = useRef<(sectionId: string) => void>(() => {})
+  draftedAction.current = (sectionId: string) => {
     if (!prefs.auto_jump_next_empty) return
     window.setTimeout(() => {
       if (jumpNextEmpty(sectionId, true)) toast.message('已聚焦下一段起草按钮，按 Ctrl/⌘+Enter 起草这一段')
     }, 120)
   }
+  const onDrafted = useCallback((id: string) => draftedAction.current(id), [])
   // F8：跳到下一处待核实并打开处理面板（EX-E-04）。
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -570,12 +593,7 @@ function ArticleEditor() {
               </div>
             </div>
           )}
-          <div className="mt-6 border-t border-mist-200 pt-4 text-xs text-mist-500">
-            {save.offline ? <span className="flex items-center gap-1.5 text-danger"><CloudOff className="size-3.5" />离线，未保存（恢复后自动同步）</span>
-              : save.pending > 0 ? <span className="flex items-center gap-1.5"><Loader2 className="size-3.5 animate-spin" />保存中…</span>
-              : save.last ? <span className="flex items-center gap-1.5"><Check className="size-3.5 text-ink-500" />已保存 {fmtTime(save.last)}</span>
-              : <span>自动保存已开启</span>}
-          </div>
+          <SaveStatus store={saveStatus} />
           {!readOnly && (
             <Button variant="primary" className="mt-4 w-full" onClick={toCheck} disabled={drafted === 0} icon={<PenLine className="size-4" />}>
               {work.platform === 'wechat_mp' ? '排版并检查' : '提交检查'}
@@ -612,12 +630,12 @@ function ArticleEditor() {
             <>
               {work.sections.map((s, i) => (
                 <LazyMount key={s.id} id={s.id} enabled={work.sections.length > 30 && i > 3} preview={s.content_md}>
-                <SectionBlock key={s.id} section={s} index={i} total={work.sections.length} work={work} prefs={prefs} patchWork={patchWork} setWork={setWorkStable}
+                <SectionBlock key={s.id} section={s} index={i} total={work.sections.length} work={sectionWork} prefs={prefs} patchWork={patchWork} setWork={setWorkStable}
                   refresh={refresh} readOnly={readOnly} dim={focus && activeIdx >= 0 && Math.abs(i - activeIdx) > 1}
-                  othersHere={presence.filter((p) => p.section_id === s.id).map((p) => p.username)}
-                  othersEditing={presence.filter((p) => p.section_id === s.id && p.editing).map((p) => p.username)} onEditing={reportEditing}
-                  onSave={onSave} onMove={(d) => moveSection(i, d)} onRemove={() => removeSection(s)} onUploadImage={upload} onDrafted={onDrafted}
-                  onActive={onActive} onLint={(id, n) => { lintCounts.current[id] = n }} resumeJob={resumeJobs.data?.[s.id]} />
+                  othersHere={members.get(s.id)?.here}
+                  othersEditing={members.get(s.id)?.editing} onEditing={reportEditing}
+                  onSave={onSave} onMove={moveSection} onRemove={removeSection} onUploadImage={upload} onDrafted={onDrafted}
+                  onActive={onActive} onLint={onLint} resumeJob={resumeJobs.data?.[s.id]} />
                 </LazyMount>
               ))}
               {!readOnly && (
@@ -640,7 +658,7 @@ function ArticleEditor() {
 
       {showSidebar ? (
         <aside className="sticky top-20 hidden h-[calc(100vh-6.5rem)] w-[320px] shrink-0 overflow-hidden rounded-xl border border-mist-200 bg-white shadow-card xl:block 2xl:w-[360px]">
-          <EditorSidebar work={work} setWork={setWorkStable} active={active} selection={selection} tab={sideTab} onTab={selectSideTab} onClose={() => toggleSidebar(false)} />
+          <SelectedSidebar work={work} setWork={setWorkStable} active={active} selectionRef={selection} tab={sideTab} onTab={selectSideTab} onClose={() => toggleSidebar(false)} />
         </aside>
       ) : !focus && (
         <button type="button" onClick={() => toggleSidebar(true)} title="打开助手侧栏：素材推荐、副驾驶、体检、待核实、批注、动态"

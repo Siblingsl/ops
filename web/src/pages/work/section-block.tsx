@@ -1,7 +1,7 @@
 import {
   ArrowDown, ArrowUp, BookmarkPlus, Check, History, ImagePlus, Loader2, MessageSquare, Minimize2, Quote, Repeat2, Sparkles, Square, Trash2, Wand2,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { RefsNote, sendFeedback } from '@/components/refs'
@@ -53,7 +53,7 @@ export interface SectionBlockProps {
   section: Section
   index: number
   total: number
-  work: Work
+  work: Pick<Work, 'id' | 'platform' | 'outline_confirmed_at' | 'account_id' | 'title'>
   prefs: UserPrefs
   patchWork: (p: Partial<Work> | ((w: Work) => Partial<Work>)) => void
   setWork: (w: Work) => void
@@ -65,8 +65,8 @@ export interface SectionBlockProps {
   othersEditing?: string[]
   onEditing?: (sectionId: string) => void
   onSave: (d: number, offline?: boolean) => void
-  onMove: (d: number) => void
-  onRemove: () => void
+  onMove: (id: string, d: number) => void
+  onRemove: (id: string) => void
   onUploadImage: (f: File) => Promise<Asset | null>
   onDrafted?: (sectionId: string) => void
   onActive?: (sectionId: string, selection: string) => void
@@ -75,7 +75,7 @@ export interface SectionBlockProps {
   resumeJob?: string
 }
 
-export function SectionBlock({
+export const SectionBlock = memo(function SectionBlock({
   section, index, total, work, prefs, patchWork, setWork, refresh, readOnly, dim, othersHere, othersEditing, onEditing, onSave, onMove, onRemove, onUploadImage, onDrafted,
   onActive, onLint, resumeJob,
 }: SectionBlockProps) {
@@ -116,6 +116,7 @@ export function SectionBlock({
   const lintTimer = useRef<number>()
   const fileInput = useRef<HTMLInputElement>(null)
   const hits = useLint(work.id, lintText, prefs.live_lint && !readOnly)
+  const pending = useMemo(() => findPending(lintText), [lintText])
   useEffect(() => () => window.clearTimeout(lintTimer.current), [])
 
   const onChange = (md: string) => {
@@ -142,8 +143,8 @@ export function SectionBlock({
     const root = editor.current?.root() ?? null
     setHighlights('ops-lint', section.id, root, hits.filter((h) => h.category === 'sensitive' || h.category === 'ad_law').map((h) => h.word))
     setHighlights('ops-lint-memory', section.id, root, hits.filter((h) => h.category === 'memory').map((h) => h.word))
-    setHighlights('ops-pending', section.id, root, findPending(lintText).map((p) => p.marker))
-  }, [hits, lintText, resetKey, section.id])
+    setHighlights('ops-pending', section.id, root, pending.map((p) => p.marker))
+  }, [hits, pending, resetKey, section.id])
   useEffect(() => () => {
     for (const n of ['ops-lint', 'ops-lint-memory', 'ops-pending']) setHighlights(n, section.id, null, [])
   }, [section.id])
@@ -517,7 +518,6 @@ export function SectionBlock({
     } catch (e) { aiError(e, '配图建议') }
     finally { setImgBusy(false) }
   }
-  const pending = findPending(lintText)
   const Editor = xhs ? PlainEditor : RichEditor
   const busy = !!streaming
   const bubble = (
@@ -553,9 +553,9 @@ export function SectionBlock({
         <Badge tone={originMeta[origin].tone}>{originMeta[origin].label}</Badge>
         {!readOnly && (
           <div className="flex items-center opacity-0 transition group-hover/sec:opacity-100">
-            <IconButton label="上移" disabled={index === 0} onClick={() => onMove(-1)}><ArrowUp className="size-3.5" /></IconButton>
-            <IconButton label="下移" disabled={index === total - 1} onClick={() => onMove(1)}><ArrowDown className="size-3.5" /></IconButton>
-            <IconButton label="删除段落" className="hover:text-danger" onClick={onRemove}><Trash2 className="size-3.5" /></IconButton>
+            <IconButton label="上移" disabled={index === 0} onClick={() => onMove(section.id, -1)}><ArrowUp className="size-3.5" /></IconButton>
+            <IconButton label="下移" disabled={index === total - 1} onClick={() => onMove(section.id, 1)}><ArrowDown className="size-3.5" /></IconButton>
+            <IconButton label="删除段落" className="hover:text-danger" onClick={() => onRemove(section.id)}><Trash2 className="size-3.5" /></IconButton>
           </div>
         )}
       </div>
@@ -792,4 +792,4 @@ export function SectionBlock({
       </Dialog>
     </div>
   )
-}
+})

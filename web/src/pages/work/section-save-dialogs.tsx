@@ -62,7 +62,7 @@ export function AIConflictPanel({ conflict, onKeep, onReplace }: { conflict: AIC
   </>
 }
 
-export function SaveToMaterial({ text, work, onClose }: { text: string; work: Work; onClose: () => void }) {
+export function SaveToMaterial({ text, work, onClose }: { text: string; work: Pick<Work, 'account_id' | 'title'>; onClose: () => void }) {
   const [kind, setKind] = useState<MaterialKind>('opinion')
   const [content, setContent] = useState(text)
   const [shared, setShared] = useState(false)

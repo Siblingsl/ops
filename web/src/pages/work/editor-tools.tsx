@@ -13,6 +13,7 @@ import { SectionConflictDialog } from './section-save-dialogs'
 // ---------- 编辑器内部事件（侧栏 ↔ 段落） ----------
 
 export type EditorEvent =
+  | { type: 'selection'; text: string }
   | { type: 'apply'; sectionId: string; text: string; target: 'section' | 'selection' | 'end'; original?: string; callId?: string | null }
   | { type: 'fix-sentence'; sectionId: string; sentence: string }
   | { type: 'insert'; sectionId: string; text: string }
@@ -86,7 +87,7 @@ export function removeSentenceAt(text: string, needle: string, n: number): strin
 }
 
 export function PendingDialog({ work, section, mark, onClose, onReplace, onDelete }: {
-  work: Work
+  work: Pick<Work, 'account_id' | 'title'>
   section: Section
   mark: PendingMark
   onClose: () => void
@@ -263,7 +264,7 @@ export function RevisionsDialog({ section, workId, onClose, onRestored }: { sect
 
 // ---------- 段落级素材绑定（EX-E-05） ----------
 
-export function SectionMaterials({ work, section, readOnly, onWork }: { work: Work; section: Section; readOnly: boolean; onWork: (w: Work) => void }) {
+export function SectionMaterials({ work, section, readOnly, onWork }: { work: Pick<Work, 'account_id'>; section: Section; readOnly: boolean; onWork: (w: Work) => void }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const ids = section.material_ids ?? []
