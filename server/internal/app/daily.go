@@ -279,7 +279,7 @@ func (s *Server) getDaily(w http.ResponseWriter, r *http.Request) error {
 	}
 	var job *uuid.UUID
 	preparing := false
-	if date == s.today().Format("2006-01-02") {
+	if date == s.today().Format("2006-01-02") && r.URL.Query().Get("prepare") != "false" {
 		s.opsOpened(r.Context(), a)
 		job, preparing, e = s.prepareOps(r.Context(), a, "on_open")
 		if e != nil {

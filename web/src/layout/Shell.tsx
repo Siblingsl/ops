@@ -1,10 +1,10 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Activity, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronDown, ChevronRight, ChevronsUpDown, Clock, Cpu, Eye, FileText, Gauge, Images, Inbox, KeyRound,
   LayoutDashboard, Lightbulb, LogOut, Pencil, Plus, Power, ScrollText, Search, Send, Settings2, Shield, ShieldAlert, SlidersHorizontal, Trash2,
   UserCircle2, UserPlus, Users,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -14,8 +14,8 @@ import { ErrorBoundary } from '@/components/error-boundary'
 import { NotificationBell } from '@/components/notifications'
 import { QuickCollect } from '@/components/quick-collect'
 import { cn, Kbd, PlatformMark, platformLabel } from '@/components/ui'
-import { del, errorMessage, get, post } from '@/lib/api'
-import { fmtNum } from '@/lib/format'
+import { del, errorMessage, post } from '@/lib/api'
+import { TodayUsage, useChromeMeta } from './today-usage'
 import { useAccounts, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
 import type { Account, Platform } from '@/lib/types'
 import { setUXEnabled, usePrefs, useRecentWorks } from '@/lib/v3'
@@ -633,43 +633,9 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   )
 }
 
-function useChromeMeta() {
-  const loc = useLocation()
-  const acc = useCurrentAccount()
-  return useMemo(() => {
-    const path = loc.pathname
-    if (path.startsWith('/settings/')) {
-      const hit = settingsItems.find((s) => path.startsWith(s.to))
-      return { crumb: '设置', title: hit?.label ?? '设置' }
-    }
-    if (path.startsWith('/works/')) return { crumb: acc?.name ?? '作品', title: '创作中' }
-    if (path.startsWith('/search')) return { crumb: '工作区', title: '搜索' }
-    if (path.startsWith('/images')) return { crumb: '工作区', title: '图片库' }
-    if (!acc) return { crumb: '运助', title: '选择账号' }
-    const map: { test: RegExp; title: string }[] = [
-      { test: /\/topics$/, title: '选题池' },
-      { test: /\/ops$/, title: '账号运营' },
-      { test: /\/calendar$/, title: '内容日历' },
-      { test: /\/works$/, title: '作品' },
-      { test: /\/materials$/, title: '素材库' },
-      { test: /\/review$/, title: '数据复盘' },
-      { test: /\/profile$/, title: '账号档案' },
-      { test: /\/a\/[^/]+$/, title: '工作台' },
-    ]
-    return { crumb: acc.name, title: map.find((m) => m.test.test(path))?.title ?? '工作台' }
-  }, [loc.pathname, acc])
-}
-
 function TopBar({ username, onLogout, dense }: { username?: string; onLogout: () => void; dense?: boolean }) {
-  const meta = useChromeMeta()
+  const meta = useChromeMeta(settingsItems)
   const acc = useCurrentAccount()
-  const navigate = useNavigate()
-  const dash = useQuery({
-    queryKey: ['dashboard', acc?.id],
-    queryFn: () => get<{ tokens_today: number }>('/accounts/' + acc!.id + '/dashboard'),
-    enabled: !!acc && !dense,
-    staleTime: 60_000,
-  })
 
   return (
     <header className={cn(
@@ -694,17 +660,7 @@ function TopBar({ username, onLogout, dense }: { username?: string; onLogout: ()
           <span className="hidden md:inline">搜索</span>
           <span className="hidden md:inline"><Kbd>Ctrl K</Kbd></span>
         </button>
-        {!dense && (
-          <button
-            type="button"
-            onClick={() => navigate('/settings/usage')}
-            className="hidden h-9 cursor-pointer items-center gap-1.5 rounded-full border border-mist-200 bg-white px-3 text-[12.5px] text-mist-600 transition hover:border-mist-300 hover:text-mist-800 xl:inline-flex"
-            title="查看 AI 用量"
-          >
-            <Gauge className="size-3.5 text-ink-600" />
-            {dash.data ? <>今日 {fmtNum(dash.data.tokens_today)} token</> : 'AI 用量'}
-          </button>
-        )}
+        {!dense && <TodayUsage enabled={!!acc} />}
         <NotificationBell />
         <UserMenu username={username} onLogout={onLogout} />
       </div>

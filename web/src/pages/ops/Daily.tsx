@@ -9,7 +9,7 @@ import type { DailyResult, DailyItem, StrategyResult } from '@/lib/types'
 
 export function DailyPanel({ accountId, compact=false }: { accountId:string;compact?:boolean }){
  const {data:me}=useMe();const edit=me?.role!=='viewer';const inv=useInvalidate();const nav=useNavigate()
- const q=useQuery({queryKey:['daily',accountId],queryFn:()=>get<DailyResult>(`/accounts/${accountId}/daily`),refetchInterval:q=>q.state.data?.preparing?2000:false})
+ const q=useQuery({queryKey:compact?['daily',accountId,'preview']:['daily',accountId],queryFn:()=>get<DailyResult>(`/accounts/${accountId}/daily${compact?'?prepare=false':''}`),refetchInterval:q=>q.state.data?.preparing?2000:false})
  const strategy=useQuery({queryKey:['strategy',accountId],queryFn:()=>get<StrategyResult>(`/accounts/${accountId}/strategy`)})
  const [busy,setBusy]=useState(false);const [chosen,setChosen]=useState<{idx:number;item:DailyItem;start:boolean}|null>(null);const [planned,setPlanned]=useState(false)
  const refresh=async()=>{setBusy(true);try{await post(`/accounts/${accountId}/daily/regenerate`);await inv(['daily',accountId],['daily-stats',accountId],['next-actions',accountId],['dashboard',accountId]);toast.success('今日推荐已生成')}catch(e){toast.error(errorMessage(e))}finally{setBusy(false)}}

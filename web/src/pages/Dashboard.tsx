@@ -250,7 +250,7 @@ export default function Dashboard() {
   const { data, isLoading, error, failureReason, isFetching, refetch } = useQuery({ queryKey: ['dashboard', acc?.id], queryFn: () => get<Dash>(`/accounts/${acc!.id}/dashboard`), enabled: !!acc })
   const create = useCreateWork(acc?.id)
   const prefetch = usePrefetchWork()
-  const daily = useQuery({ queryKey: ['daily', acc?.id], queryFn: () => get<DailyResult>(`/accounts/${acc!.id}/daily`), enabled: !!acc })
+  const daily = useQuery({ queryKey: ['daily', acc?.id, 'preview'], queryFn: () => get<DailyResult>(`/accounts/${acc!.id}/daily?prepare=false`), enabled: !!acc })
   const health = useQuery({ queryKey: ['health', acc?.id], queryFn: () => get<{ score: number; items: HealthItem[] }>(`/accounts/${acc!.id}/health`), enabled: !!acc, staleTime: 60_000 })
   const firstTodos = (data?.todos ?? []).slice(0, 3).map((t) => t.work_id).join(',')
   useEffect(() => {

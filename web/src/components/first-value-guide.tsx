@@ -12,7 +12,7 @@ export function FirstValueGuide({ accountId, modelReady, profileReady }: { accou
   const [skipped, setSkipped] = useState(false)
   const [busy, setBusy] = useState(false)
   const strategy = useQuery({ queryKey: ['strategy', accountId], queryFn: () => get<StrategyResult>(`/accounts/${accountId}/strategy`) })
-  const daily = useQuery({ queryKey: ['daily', accountId], queryFn: () => get<DailyResult>(`/accounts/${accountId}/daily`), refetchInterval: q => q.state.data?.preparing ? 2000 : false })
+  const daily = useQuery({ queryKey: ['daily', accountId, 'preview'], queryFn: () => get<DailyResult>(`/accounts/${accountId}/daily?prepare=false`), refetchInterval: q => q.state.data?.preparing ? 2000 : false })
   if (daily.data?.recommendation) return null
   const steps = [
     { title: '配置模型', time: '约 1 分钟', done: modelReady, to: '/settings/models', action: '去配置模型' },
