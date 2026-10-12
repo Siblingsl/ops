@@ -65,6 +65,7 @@ type aiResult struct {
 }
 
 type route struct {
+	ProviderID   uuid.UUID
 	ProviderName string
 	BaseURL      string
 	APIKey       string
@@ -89,10 +90,10 @@ func (s *Server) resolveRouteTier(ctx context.Context, taskType, tier string) (*
 	var enc []byte
 	var fbProvider *uuid.UUID
 	var fbModel, picked string
-	err := s.db.QueryRow(ctx, `SELECT r.task_type, p.name, p.base_url, p.api_key_enc, r.model, r.fallback_provider_id, r.fallback_model FROM model_route r
+	err := s.db.QueryRow(ctx, `SELECT r.task_type, p.id, p.name, p.base_url, p.api_key_enc, r.model, r.fallback_provider_id, r.fallback_model FROM model_route r
 		JOIN model_provider p ON p.id=r.provider_id
 		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND r.task_type = ANY($2) AND p.status='active'
-		ORDER BY array_position($2::text[], r.task_type) LIMIT 1`, ws, keys).Scan(&picked, &rt.ProviderName, &rt.BaseURL, &enc, &rt.Model, &fbProvider, &fbModel)
+		ORDER BY array_position($2::text[], r.task_type) LIMIT 1`, ws, keys).Scan(&picked, &rt.ProviderID, &rt.ProviderName, &rt.BaseURL, &enc, &rt.Model, &fbProvider, &fbModel)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apiErr(503, "ai_not_configured", "还没有配置模型，请先到「设置 → 模型配置」添加模型并指定默认模型")
 	}
@@ -103,7 +104,7 @@ func (s *Server) resolveRouteTier(ctx context.Context, taskType, tier string) (*
 		return nil, err
 	}
 	if fbProvider != nil && strings.TrimSpace(fbModel) != "" {
-		var fb route
+		fb := route{ProviderID: *fbProvider}
 		var fenc []byte
 		if err := s.db.QueryRow(ctx, `SELECT name, base_url, api_key_enc FROM model_provider WHERE id=$1 AND workspace_id=$2 AND status='active'`,
 			*fbProvider, ws).Scan(&fb.ProviderName, &fb.BaseURL, &fenc); err == nil {
@@ -187,6 +188,10 @@ var errFirstToken = errors.New("模型超过 15 秒没有返回内容")
 
 // callModel streams one attempt, cancelling it if no content arrives within the first-token timeout.
 func (s *Server) callModel(ctx context.Context, rt *route, p *ContextPack, jsonMode bool, onDelta func(string), streamed *bool) (string, ai.Usage, error) {
+	attempt, err := s.beginProviderCall(rt.ProviderID)
+	if err != nil {
+		return "", ai.Usage{}, err
+	}
 	actx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var got atomic.Bool
@@ -209,6 +214,7 @@ func (s *Server) callModel(ctx context.Context, rt *route, p *ContextPack, jsonM
 	if err != nil && ctx.Err() == nil && actx.Err() != nil && !got.Load() {
 		err = errFirstToken
 	}
+	s.finishProviderCall(rt.ProviderID, attempt, ctx, err)
 	return text, usage, err
 }
 
@@ -285,6 +291,10 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 		if i+1 < len(attempts) && retryable(callErr) && !streamed {
 			slog.Warn("主模型不可用，切换备用模型", "task", t.Type, "err", callErr)
 			continue
+		}
+		var unavailable *APIError
+		if errors.As(callErr, &unavailable) && unavailable.Code == "ai_provider_unavailable" {
+			return nil, unavailable.With(failDetail)
 		}
 		return nil, apiErr(502, "ai_upstream_error", "模型服务调用失败："+truncate(callErr.Error(), 300)+"。你的内容没有被改动，可以重试或在模型配置中设置备用模型。").With(failDetail)
 	}

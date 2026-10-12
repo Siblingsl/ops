@@ -321,7 +321,7 @@ function WeeklyDraftCard() {
 export default function Models() {
   const { data: me } = useMe()
   const isOwner = me?.role === 'owner'
-  const { data, isLoading, refetch } = useQuery({ queryKey: ['providers'], queryFn: () => get<Provider[]>('/model-providers') })
+  const { data, isLoading, refetch } = useQuery({ queryKey: ['providers'], queryFn: () => get<Provider[]>('/model-providers'), refetchInterval: 5000 })
   const [dialog, setDialog] = useState<{ editing: Provider | null } | null>(null)
   const [quick, setQuick] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
@@ -390,6 +390,8 @@ export default function Models() {
                   <div className="flex items-center gap-2">
                     <span className="text-[15px] font-semibold text-mist-900">{p.name}</span>
                     {p.status === 'disabled' && <Badge>已停用</Badge>}
+                    {p.status === 'active' && p.circuit_state === 'closed' && <Badge>未熔断</Badge>}
+                    {p.status === 'active' && p.circuit_state === 'half_open' && <Badge tone="gamboge">等待恢复探测</Badge>}
                   </div>
                   <div className="truncate font-mono text-xs text-mist-500">{p.base_url}</div>
                 </div>
@@ -400,6 +402,7 @@ export default function Models() {
                   </div>
                 )}
               </div>
+              {p.status === 'active' && p.circuit_state === 'open' && <p className="mt-2 text-xs text-danger">供应商暂不可用，约 {p.retry_after_seconds} 秒后恢复</p>}
               <div className="mt-3 flex flex-wrap gap-1.5">{p.models.map((m) => <span key={m} className="rounded bg-mist-100 px-1.5 py-0.5 font-mono text-[11.5px] text-mist-600">{m}</span>)}</div>
               <div className="mt-3 flex items-center gap-2 border-t border-mist-100 pt-3 text-xs">
                 <span className="font-mono text-mist-400">{p.key_mask}</span>

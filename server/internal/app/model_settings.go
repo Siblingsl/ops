@@ -28,6 +28,8 @@ type Provider struct {
 	LastTestResult string     `json:"last_test_result"`
 	PricePrompt    *float64   `json:"price_per_1k_prompt"`
 	PriceComplete  *float64   `json:"price_per_1k_completion"`
+	CircuitState   string     `json:"circuit_state"`
+	RetryAfter     int        `json:"retry_after_seconds"`
 }
 
 const providerCols = `id, name, base_url, api_key_enc, models, status, last_test_at, last_test_ok, last_test_result,
@@ -43,6 +45,7 @@ func (s *Server) scanProvider(row pgx.Row) (*Provider, error) {
 	if key, err := s.box.Decrypt(enc); err == nil {
 		p.KeyMask = secure.Mask(key)
 	}
+	p.CircuitState, p.RetryAfter = s.providerCircuitStatus(p.ID)
 	return &p, nil
 }
 
@@ -320,6 +323,9 @@ func (s *Server) deleteProvider(w http.ResponseWriter, r *http.Request) error {
 		return errNotFound
 	}
 	s.audit(ctx, "model_provider_delete", "model_provider", id.String(), "ok", nil)
+	s.providerMu.Lock()
+	delete(s.providerCircuits, id)
+	s.providerMu.Unlock()
 	return ok(w, map[string]any{"ok": true})
 }
 

@@ -432,6 +432,8 @@ export interface Provider {
   key_mask: string
   models: string[]
   status: 'active' | 'disabled'
+  circuit_state: 'closed' | 'open' | 'half_open'
+  retry_after_seconds: number
   last_test_at: string | null
   last_test_ok: boolean | null
   last_test_result: string

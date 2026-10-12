@@ -66,6 +66,7 @@ test('OPT22 隐藏五分钟在线批注通知零请求，关闭推送，切回�
   expect((await streams(page)).every(s => s === 2)).toBe(true)
   await api(page, 'POST', `/works/${work}/comments`, { body: 'OPT22 切回后立即可见的新批注' })
   for (const key of Object.keys(completed)) delete completed[key]
+  await page.clock.resume()
   const resumedAt = Date.now()
   await visibility(page, false)
   await expect.poll(() => Object.keys(completed).length, { timeout: 1000, intervals: [10, 20, 50] }).toBe(3)

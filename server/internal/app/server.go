@@ -35,6 +35,8 @@ type Server struct {
 
 	firstTokenTimeout time.Duration
 	aiQueueTimeout    time.Duration
+	providerMu        sync.Mutex
+	providerCircuits  map[uuid.UUID]*providerCircuit
 
 	jobMu      sync.Mutex
 	jobCancels map[uuid.UUID]context.CancelFunc
@@ -74,6 +76,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 
 		firstTokenTimeout: 15 * time.Second,
 		aiQueueTimeout:    time.Minute,
+		providerCircuits:  map[uuid.UUID]*providerCircuit{},
 		jobCancels:        map[uuid.UUID]context.CancelFunc{},
 		jobSems:           map[uuid.UUID]chan struct{}{},
 		notifySubs:        map[uuid.UUID][]chan struct{}{},
