@@ -148,6 +148,10 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 
 // workBrief is the work slot: title, topic fields, viewpoint, confirmed outline and series neighbours.
 func (s *Server) workBrief(ctx context.Context, m *workMeta) (string, error) {
+	return s.workBriefForSection(ctx, m, nil)
+}
+
+func (s *Server) workBriefForSection(ctx context.Context, m *workMeta, sectionID *uuid.UUID) (string, error) {
 	var angle, audience, hook string
 	var seriesID, topicID *uuid.UUID
 	_ = s.db.QueryRow(ctx, `SELECT coalesce(t.angle,''), coalesce(t.audience,''), coalesce(t.hook,''), t.series_id, t.id
@@ -169,18 +173,35 @@ func (s *Server) workBrief(ctx context.Context, m *workMeta) (string, error) {
 		fmt.Fprintf(&b, "钩子：%s\n", hook)
 	}
 	fmt.Fprintf(&b, "核心观点：%s\n", m.Viewpoint)
+	prefix := b.String()
 	if m.OutlineConfirmedAt != nil && len(outline) > 0 {
 		b.WriteString("\n## 已确认的大纲\n" + outlineText(outline))
 	}
+	main, series := b.String(), ""
 	if seriesID != nil {
-		b.WriteString(s.seriesNeighbours(ctx, *seriesID, topicID))
+		series = s.seriesNeighbours(ctx, *seriesID, topicID)
 	}
-	return b.String(), nil
+	if runeLen(main)+runeLen(series) > slotBudgets["work"] {
+		series = ""
+	}
+	if runeLen(main) > slotBudgets["work"] && sectionID != nil && m.OutlineConfirmedAt != nil {
+		b.Reset()
+		b.WriteString(prefix + "\n## 已确认的大纲（其他段仅保留小标题）\n")
+		for i, item := range outline {
+			if item.SectionID == sectionID.String() {
+				fmt.Fprintf(&b, "%d. %s —— %s\n", i+1, item.Heading, item.KeyPoint)
+			} else {
+				fmt.Fprintf(&b, "%d. %s\n", i+1, item.Heading)
+			}
+		}
+		main = b.String()
+	}
+	return main + series, nil
 }
 
 // sectionContext returns the work slot and the neighbour paragraphs (trimmed first when over budget).
 func (s *Server) sectionContext(ctx context.Context, m *workMeta, sec *Section) (string, string, error) {
-	work, err := s.workBrief(ctx, m)
+	work, err := s.workBriefForSection(ctx, m, &sec.ID)
 	if err != nil {
 		return "", "", err
 	}

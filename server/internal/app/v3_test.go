@@ -256,7 +256,7 @@ func TestRetrievalRecall(t *testing.T) {
 	}
 }
 
-// 上下文组装器（3.1）：槽位按优先级排列，超预算时按调用方给的相关度顺序保留素材、先裁相邻段落，并完整记录每个条目。
+// 上下文槽按优先级排列，素材全部保留，作品优先于邻文，引用只记录条目和字数。
 func TestContextPackBudgets(t *testing.T) {
 	f := env.accounts(t)
 	ctx := context.Background()
@@ -295,19 +295,16 @@ func TestContextPackBudgets(t *testing.T) {
 		}
 	}
 	ms := slots["materials"]
-	if !ms.Truncated || ms.Chars > ms.Budget || len(ms.Items) != len(mats) {
+	if ms.Truncated || ms.Budget != 0 || ms.Chars <= 4000 || len(ms.Items) != len(mats) {
 		t.Fatalf("materials slot: %+v", ms)
 	}
 	for i, it := range ms.Items {
 		if it.ID != mats[i].String() {
 			t.Fatalf("material %d recorded out of order", i)
 		}
-		if want := i < 4; it.Used != want {
-			t.Fatalf("material %d used=%v, want %v (keep the most relevant first)", i, it.Used, want)
+		if !it.Used || !strings.Contains(pack.User, fmt.Sprintf("预算测试素材%d：%s", i, strings.Repeat("长", 900))) {
+			t.Fatalf("material %d was not fully retained", i)
 		}
-	}
-	if strings.Contains(pack.User, "预算测试素材5") || !strings.Contains(pack.User, "预算测试素材0") {
-		t.Fatal("trimmed material leaked into the prompt or kept one missing")
 	}
 	w := slots["work"]
 	if !w.Truncated || w.Chars > w.Budget || len(w.Items) != 2 || !w.Items[0].Used || w.Items[0].Chars != runeLen(main) {

@@ -11,7 +11,7 @@ import (
 // Slot budgets in characters for context assembler v2 (10 文档第 3.1 节).
 var slotBudgets = map[string]int{
 	"profile": 800, "memory": 1200, "task_instruction": 1500, "style": 4000,
-	"materials": 4000, "history": 2000, "work": 3000, "user_instruction": 300,
+	"history": 2000, "work": 3000, "user_instruction": 300,
 	"strategy": 1200, "data_prefs": 500,
 }
 
@@ -267,16 +267,13 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 		main, neigh := t.Work, t.Neighbors
 		sl := Slot{Name: "work", Budget: budget}
 		if runeLen(main)+runeLen(neigh) > budget {
-			sl.Truncated = true
+			sl.Truncated = neigh != ""
 			// truncate appends "…", so leave one rune for it.
 			room := budget - runeLen(main) - 1
 			if room <= 0 {
 				neigh = ""
 			} else {
 				neigh = truncate(neigh, room)
-			}
-			if runeLen(main) > budget {
-				main = truncate(main, budget-1)
 			}
 		}
 		sl.Chars = runeLen(main) + runeLen(neigh)
@@ -362,9 +359,9 @@ func (s *Server) styleSlot(ctx context.Context, accountID uuid.UUID, summary str
 
 var materialKindNames = map[string]string{"experience": "经历", "opinion": "观点", "case": "案例", "data": "数据"}
 
-// materialsSlot keeps the caller's order (most relevant first) and drops what exceeds the budget.
+// materialsSlot preserves every selected material in the caller's order.
 func (s *Server) materialsSlot(ctx context.Context, ids []uuid.UUID) (string, Slot, []string, error) {
-	sl := Slot{Name: "materials", Budget: slotBudgets["materials"]}
+	sl := Slot{Name: "materials"}
 	rows, err := s.db.Query(ctx, `SELECT id, kind, content, source FROM material WHERE id = ANY($1) AND workspace_id=$2 AND deleted_at IS NULL`,
 		ids, ident(ctx).WorkspaceID)
 	if err != nil {
@@ -396,15 +393,10 @@ func (s *Server) materialsSlot(ctx context.Context, ids []uuid.UUID) (string, Sl
 			line += "（来源：" + m.source + "）"
 		}
 		line += "\n"
-		used := sl.Chars+runeLen(line) <= sl.Budget
-		if used {
-			b.WriteString(line)
-			sl.Chars += runeLen(line)
-			names = append(names, truncate(m.content, 16))
-		} else {
-			sl.Truncated = true
-		}
-		sl.Items = append(sl.Items, SlotItem{ID: id.String(), Label: truncate(m.content, 40), Chars: runeLen(m.content), Used: used})
+		b.WriteString(line)
+		sl.Chars += runeLen(line)
+		names = append(names, truncate(m.content, 16))
+		sl.Items = append(sl.Items, SlotItem{ID: id.String(), Label: truncate(m.content, 40), Chars: runeLen(m.content), Used: true})
 	}
 	if b.Len() == 0 {
 		return "", sl, names, nil

@@ -288,6 +288,11 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 		if authFailure(callErr) {
 			return nil, apiErr(502, "ai_key_invalid", "模型密钥失效或没有权限（"+cur.ProviderName+"），请到「设置 → 模型配置」更新密钥。原有内容没有被改动。").With(failDetail)
 		}
+		var tooLong *ai.UpstreamError
+		if len(t.Materials) > 0 && errors.As(callErr, &tooLong) && (tooLong.Status == http.StatusRequestEntityTooLarge ||
+			tooLong.Status == http.StatusBadRequest && strings.Contains(tooLong.Body, "context_length_exceeded")) {
+			return nil, apiErr(422, "ai_context_too_long", "选中素材过长，请减少").With(failDetail)
+		}
 		if i+1 < len(attempts) && retryable(callErr) && !streamed {
 			slog.Warn("主模型不可用，切换备用模型", "task", t.Type, "err", callErr)
 			continue
