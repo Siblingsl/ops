@@ -331,6 +331,7 @@ func (s *Server) runAIJSON(ctx context.Context, t aiTask, out any, validate func
 		if validate != nil {
 			if err := validate(); err != nil {
 				last = err
+				t.User += "\n\n上一次输出不符合要求：" + err.Error() + "。只输出修正后的 JSON。"
 				continue
 			}
 		}

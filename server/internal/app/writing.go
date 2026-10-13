@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -420,6 +421,33 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	profile, err := s.loadProfile(ctx, m.Account.ID)
+	if err != nil {
+		return err
+	}
+	rows, err := s.db.Query(ctx, `SELECT title FROM work WHERE account_id=$1 AND id<>$2 AND deleted_at IS NULL AND title<>'' ORDER BY created_at DESC LIMIT 20`, m.Account.ID, m.ID)
+	if err != nil {
+		return err
+	}
+	var recent []string
+	for rows.Next() {
+		var title string
+		if err := rows.Scan(&title); err != nil {
+			rows.Close()
+			return err
+		}
+		recent = append(recent, title)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	strong := s.highPerformingTitleFeatures(ctx, m.Account.ID)
+	strongList := []string{}
+	for feature := range strong {
+		strongList = append(strongList, feature)
+	}
+	sort.Strings(strongList)
 	maxLen := 32
 	limit := "不超过 32 字"
 	if m.Account.Platform == "xhs" {
@@ -442,22 +470,54 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 
 ## 输出格式
 只输出 JSON：{"titles":[{"text":"标题","style":"风格说明"}]}`, m.Viewpoint, bodyDigest(secs, 1500), task)
+	if len(recent) > 0 {
+		user += "\n\n避免与这些近期标题雷同：\n- " + strings.Join(recent, "\n- ")
+	}
+	if len(strongList) > 0 {
+		user += "\n\n本号读者对以下特征反馈更好：" + strings.Join(strongList, "、")
+	}
 	var out struct {
 		Titles []struct {
 			Text  string `json:"text"`
 			Style string `json:"style"`
 		} `json:"titles"`
 	}
-	res, err := s.runAIJSON(ctx, aiTask{Type: "title", Account: m.Account, WorkID: &m.ID, User: user, SkipStyle: true}, &out, func() error {
+	res, err := s.runAIJSON(ctx, aiTask{Type: "title", Account: m.Account, WorkID: &m.ID, User: user, StyleSummaryOnly: true}, &out, func() error {
+		kept := out.Titles[:0]
+		long, banned, empty := 0, 0, 0
+		for _, title := range out.Titles {
+			text := strings.TrimSpace(title.Text)
+			if text == "" {
+				empty++
+				continue
+			}
+			if runeLen(text) > maxLen {
+				long++
+				continue
+			}
+			blocked := false
+			for _, word := range profile.BannedWords {
+				if strings.TrimSpace(word) != "" && strings.Contains(text, strings.TrimSpace(word)) {
+					blocked = true
+					break
+				}
+			}
+			if blocked {
+				banned++
+				continue
+			}
+			title.Text = text
+			kept = append(kept, title)
+		}
+		out.Titles = kept
 		if len(out.Titles) < want {
-			return fmt.Errorf("标题少于 %d 个", want)
+			return fmt.Errorf("有效标题少于 %d 个：%d 条超过 %d 字，%d 条包含禁用词，%d 条为空", want, long, maxLen, banned, empty)
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	strong := s.highPerformingTitleFeatures(ctx, m.Account.ID)
 	type cand struct {
 		Text       string   `json:"text"`
 		Style      string   `json:"style"`
@@ -478,10 +538,6 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 			}
 		}
 		list = append(list, c)
-	}
-	strongList := []string{}
-	for f := range strong {
-		strongList = append(strongList, f)
 	}
 	return ok(w, map[string]any{"titles": list, "refs": res.Refs, "ai_call_id": res.CallID, "max_chars": maxLen, "strong_features": strongList})
 }
