@@ -202,6 +202,31 @@ type block struct {
 }
 
 var blockRe = regexp.MustCompile(`^【(?:源)?段落 id=([0-9a-f-]+)】(.*)$`)
+var materialBlockHeaderRe = regexp.MustCompile(`^<<<素材 id=([0-9a-f-]+)>>>$`)
+
+type factMaterial struct {
+	ID      string
+	Content string
+}
+
+func factMaterials(prompt string) []factMaterial {
+	lines := strings.Split(prompt, "\n")
+	var out []factMaterial
+	for i := 0; i+2 < len(lines); i++ {
+		match := materialBlockHeaderRe.FindStringSubmatch(lines[i])
+		if match == nil || lines[i+2] != "<<<结束>>>" {
+			continue
+		}
+		var payload struct {
+			Content string `json:"content"`
+		}
+		if json.Unmarshal([]byte(lines[i+1]), &payload) == nil {
+			out = append(out, factMaterial{ID: match[1], Content: payload.Content})
+		}
+		i += 2
+	}
+	return out
+}
 
 func blocks(prompt string) []block {
 	var out []block
@@ -405,16 +430,30 @@ func (l *LLM) respond(prompt string) string {
 		return js(map[string]string{"summary": short("这篇文章想说的是："+viewpoint+"。从亲身经历出发，讲清楚为什么、怎么做和需要注意的地方。", 110)})
 	case "fact_flag":
 		var items []map[string]string
+		materials := factMaterials(prompt)
 		for _, b := range blocks(prompt) {
 			for _, sent := range regexp.MustCompile(`[^。！？\n]+[。！？]?`).FindAllString(b.Body, -1) {
 				sent = strings.TrimSpace(sent)
+				var item map[string]string
 				switch {
 				case regexp.MustCompile(`\d`).MatchString(sent) || strings.Contains(sent, "%"):
-					items = append(items, map[string]string{"section_id": b.ID, "quote": sent, "claim_type": "data", "reason": "包含具体数字，需要确认来源"})
+					item = map[string]string{"section_id": b.ID, "quote": sent, "claim_type": "data", "reason": "包含具体数字，需要确认来源"}
 				case strings.Contains(sent, "调查") || strings.Contains(sent, "研究"):
-					items = append(items, map[string]string{"section_id": b.ID, "quote": sent, "claim_type": "quote", "reason": "引用了调查或研究，需要给出出处"})
+					item = map[string]string{"section_id": b.ID, "quote": sent, "claim_type": "quote", "reason": "引用了调查或研究，需要给出出处"}
 				case strings.Contains(sent, "最") || strings.Contains(sent, "第一") || strings.Contains(sent, "绝对"):
-					items = append(items, map[string]string{"section_id": b.ID, "quote": sent, "claim_type": "absolute", "reason": "绝对化表达，确认是否有依据"})
+					item = map[string]string{"section_id": b.ID, "quote": sent, "claim_type": "absolute", "reason": "绝对化表达，确认是否有依据"}
+				}
+				if item != nil {
+					item["support_status"] = "unverified"
+					for _, material := range materials {
+						if strings.Contains(material.Content, sent) {
+							item["support_status"] = "supported"
+							item["material_id"] = material.ID
+							item["material_quote"] = sent
+							break
+						}
+					}
+					items = append(items, item)
 				}
 			}
 		}

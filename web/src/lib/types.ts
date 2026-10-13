@@ -364,7 +364,7 @@ export interface CheckItem {
   category: 'format' | 'sensitive' | 'fact' | 'ai_disclosure' | 'similarity' | 'ad_law' | 'stale'
   passed: boolean
   matched_text: string
-  location: { field?: string; label?: string; section_id?: string; found?: boolean }
+  location: { field?: string; label?: string; section_id?: string; found?: boolean; material_support?: { material_id: string; quote: string } }
   message: string
   detail: string
   resolution: string | null

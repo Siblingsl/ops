@@ -240,6 +240,7 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
           </div>
           {item.detail && <p className="mt-1 text-[12.5px] leading-relaxed text-mist-500">{item.detail}</p>}
           {item.matched_text && item.category === 'fact' && <p className="mt-1.5 rounded bg-sky-50 px-2 py-1 text-[12.5px] text-sky-800">「{item.matched_text}」</p>}
+          {item.location.material_support && <p className="mt-1.5 rounded bg-ink-50 px-2 py-1 text-[12px] text-ink-700">关联素材引句：「{item.location.material_support.quote}」</p>}
           {item.location.label && <p className="mt-1 text-[11.5px] text-mist-400">位置：{item.location.label}{item.location.found === false && '（未在正文中定位到原文）'}</p>}
           {isFormat && !item.passed && (
             <p className="mt-1.5 text-[12px] font-medium text-danger">
@@ -424,6 +425,13 @@ export default function Check() {
   const wx = work.platform === 'wechat_mp'
   const comic = work.content_format === 'comic'
   const sectionItems = (sid: string) => (run?.items ?? []).filter((i) => i.location.section_id === sid && (i.category !== 'format' || !i.passed))
+  const renderItem = (it: CheckItem) => (
+    <div key={it.id} id={`item-${it.id}`}>
+      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v) => resolve(it, v)} disabled={!editable || run!.stale} workId={work.id}
+        onEditInPlace={!comic && it.location.section_id ? () => setEditSignal({ sectionId: it.location.section_id!, text: it.matched_text, n: Date.now() }) : undefined}
+        onApplyFix={comic ? undefined : applyFix} />
+    </div>
+  )
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-6 py-6 2xl:max-w-[1600px]">
@@ -474,7 +482,7 @@ export default function Check() {
 
           <div className="lg:sticky lg:top-20 lg:h-[calc(100vh-7rem)] lg:overflow-y-auto scrollbar-thin space-y-4 pr-1">
             {factPending && (
-              <Notice tone="ink" icon={<Loader2 className="size-4 animate-spin" />}>AI 正在标出需要核实的数据、引语和绝对化表达，完成后会出现在「事实」分组中。</Notice>
+              <Notice tone="ink" icon={<Loader2 className="size-4 animate-spin" />}>AI 正在区分有素材支撑和待核实的事实句子，完成后会分别显示。</Notice>
             )}
             {groups.map((g) => (
               <div key={g.c}>
@@ -485,13 +493,17 @@ export default function Check() {
                   </span>
                 </div>
                 <div className="space-y-2">
-                  {g.items.map((it) => (
-                    <div key={it.id} id={`item-${it.id}`}>
-                      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v) => resolve(it, v)} disabled={!editable || run.stale} workId={work.id}
-                        onEditInPlace={!comic && it.location.section_id ? () => setEditSignal({ sectionId: it.location.section_id!, text: it.matched_text, n: Date.now() }) : undefined}
-                        onApplyFix={comic ? undefined : applyFix} />
+                  {g.c === 'fact' ? [
+                    { label: '有素材支撑', items: g.items.filter((it) => !!it.location.material_support) },
+                    { label: '待核实', items: g.items.filter((it) => !it.location.material_support) },
+                  ].filter((group) => group.items.length > 0).map((group) => (
+                    <div key={group.label} data-testid={group.label === '有素材支撑' ? 'fact-subgroup-supported' : 'fact-subgroup-unverified'} className="space-y-2">
+                      <div className="flex items-center gap-2 pt-1 text-[12px] font-medium text-mist-600">
+                        {group.label}<span className="font-normal text-mist-400">{group.items.filter((it) => it.resolution).length} / {group.items.length} 已处理</span>
+                      </div>
+                      {group.items.map(renderItem)}
                     </div>
-                  ))}
+                  )) : g.items.map(renderItem)}
                 </div>
               </div>
             ))}
