@@ -1,11 +1,12 @@
 import { Check, Copy, Download, LayoutTemplate, Package, Smartphone, Sparkles } from 'lucide-react'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BackfillForm, PostPushTodos } from '@/components/backfill'
 import { XhsCardMaker } from '@/components/xhs-cards'
 import { Button, Card, cn, HumanGate, Notice } from '@/components/ui'
-import { errorMessage, post } from '@/lib/api'
+import { aiError } from '@/lib/ai-error'
+import { ApiError, errorMessage, post } from '@/lib/api'
 import { copyText, runeLen } from '@/lib/format'
 import type { Work } from '@/lib/types'
 import { useWork } from './WorkLayout'
@@ -66,6 +67,7 @@ async function saveImages(urls: string[], zip: string) {
 }
 
 export default function Pack() {
+  const nav = useNavigate()
   const { work, setWork, refresh } = useWork()
   const [busy, setBusy] = useState(false)
   const [pages, setPages] = useState<{ title: string; body: string }[] | null>(null)
@@ -82,7 +84,7 @@ export default function Pack() {
       const r = await post<{ pages: { title: string; body: string }[] }>(`/works/${work.id}/xhs/pages`)
       setPages(r.pages)
     } catch (e) {
-      toast.error(errorMessage(e))
+      aiError(e, '分页文案建议', suggestPages)
     } finally {
       setPageBusy(false)
     }
@@ -92,7 +94,11 @@ export default function Pack() {
     try {
       setWork(await post<Work>(`/works/${work.id}/xhs/pack`))
     } catch (e) {
-      toast.error(errorMessage(e))
+      toast.error(errorMessage(e), {
+        duration: Number.POSITIVE_INFINITY,
+        action: { label: '重试', onClick: () => void create() },
+        cancel: e instanceof ApiError && e.code === 'human_step_required' ? { label: '去检查', onClick: () => nav(`/works/${work.id}/check`) } : undefined,
+      })
     } finally {
       setBusy(false)
     }
