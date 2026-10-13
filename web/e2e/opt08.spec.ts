@@ -39,8 +39,14 @@ test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交�
   await expect(page.locator('#step-sections .tiptap')).toHaveCount(20)
   const outlined = await api(page, 'GET', `/works/${work.id}`)
   for (const section of outlined.sections) await api(page, 'PATCH', `/sections/${section.id}`, { content_md: '这是这一段的人工正文，用于选区和自动保存验收。', base_revision: section.revision })
+  const lintResponses = { count: 0 }
+  page.on('response', response => {
+    if (response.url().endsWith(`/works/${work.id}/lint`) && response.request().method() === 'POST') lintResponses.count++
+  })
   await page.reload()
   await expect(page.locator('#step-sections .tiptap')).toHaveCount(20)
+  await expect.poll(() => lintResponses.count, { timeout: 15_000 }).toBe(20)
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   const id = outlined.sections[0].id
   const editor = page.locator(`#sec-${id} .tiptap`)
   await editor.click()

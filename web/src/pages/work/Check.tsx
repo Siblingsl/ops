@@ -11,7 +11,7 @@ import { ApiError, errorMessage, get, patch, post } from '@/lib/api'
 import { htmlStats, renderWechat } from '@/lib/render'
 import { useCanWrite, useMe } from '@/lib/session'
 import type { CheckItem, CheckRun, ComicPanel, Section, Variant, Work } from '@/lib/types'
-import { useWork } from './WorkLayout'
+import { useWork, WorkHeaderAction } from './WorkLayout'
 
 interface FixResp { item_id: string; sentence: string; section_id: string | null; variants: Variant[]; ai_call_id: string }
 
@@ -435,6 +435,16 @@ export default function Check() {
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-6 py-6 2xl:max-w-[1600px]">
+      {!run && !starting && editable && <WorkHeaderAction>
+        <Button size="sm" variant="primary" onClick={start} icon={<ShieldCheck className="size-4" />}>开始检查</Button>
+      </WorkHeaderAction>}
+      {run && <WorkHeaderAction>
+        {reviewing && run.completed_at && !run.stale
+          ? canApprove ? <Button size="sm" variant="human" loading={approving} onClick={approve} icon={<UserCheck className="size-4" />}>审阅通过</Button> : null
+          : isDone
+            ? <Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/${wx ? 'push' : 'pack'}`)}>{wx ? '去写入草稿箱' : '生成发布包'}<ArrowRight className="size-4" /></Button>
+            : <Button size="sm" variant="human" disabled={!canComplete || !editable} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>确认完成检查</Button>}
+      </WorkHeaderAction>}
       <div className="mb-5 flex flex-wrap items-center gap-4">
         <div>
           <h1 className="font-display text-[22px] font-bold text-mist-900">发布前检查</h1>
@@ -457,7 +467,7 @@ export default function Check() {
       {run?.stale && !starting && editable && (
         <Notice tone="gamboge" className="mb-4">内容在检查后又修改过。<button className="cursor-pointer font-medium underline" onClick={start}>重新检查</button>，已确认且文字没变的项会保持确认。</Notice>
       )}
-      {!run && !starting && editable && <Card className="p-10 text-center"><Button variant="primary" onClick={start} icon={<ShieldCheck className="size-4" />}>开始检查</Button></Card>}
+      {!run && !starting && editable && <Card className="p-10 text-center text-mist-500">还没有检查记录。</Card>}
       {!run && !starting && !canWrite && <Card className="p-10 text-center text-mist-500">还没有检查记录。</Card>}
       {starting && !run && <Card className="flex items-center justify-center gap-2 p-10 text-mist-500"><Loader2 className="size-4 animate-spin" />正在检查…</Card>}
 
@@ -512,26 +522,17 @@ export default function Check() {
                 <>
                   <Notice tone="gamboge" icon={<UserCheck className="size-4" />}>检查已完成，这篇作品需要审阅。审阅通过前不能写入草稿或生成发布包。</Notice>
                   {canApprove ? (
-                    <>
-                      <HumanGate code="H-09">请通读正文和上面的检查记录，确认可以发布后再点通过。</HumanGate>
-                      <Button variant="human" size="lg" className="w-full" loading={approving} onClick={approve} icon={<UserCheck className="size-4" />}>审阅通过</Button>
-                    </>
+                    <HumanGate code="H-09">请通读正文和上面的检查记录，再在页头点击“审阅通过”。</HumanGate>
                   ) : <p className="text-center text-[12.5px] text-mist-500">已通知工作区所有者{work.reviewer_id ? '和指定的审阅人' : ''}审阅。</p>}
                 </>
               ) : isDone ? (
                 <>
                   <Notice tone="ink" icon={<CheckCircle2 className="size-4" />}>检查已完成，作品处于「{work.status === 'ready' ? '可发布' : '已进入下一步'}」状态。</Notice>
-                  <Button variant="primary" size="lg" className="w-full" onClick={() => nav(`/works/${work.id}/${wx ? 'push' : 'pack'}`)}>
-                    {wx ? '去写入草稿箱' : '生成发布包'}<ArrowRight className="size-4" />
-                  </Button>
                 </>
               ) : (
                 <>
                   {formatFailed.length > 0 && <Notice tone="red">还有 {formatFailed.length} 项格式问题，修改后重新检查。</Notice>}
                   <HumanGate code="H-04">每一条敏感词和事实都需要你单独确认，没有「全部确认」。</HumanGate>
-                  <Button variant="human" size="lg" className="w-full" disabled={!canComplete || !editable} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>
-                    确认完成检查
-                  </Button>
                 </>
               )}
             </div>

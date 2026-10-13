@@ -198,10 +198,16 @@ export function CommandPalette() {
       }))
       list.push(
         { id: 'w-titles', group: g, label: '生成标题', icon: Sparkles, keywords: 'title', run: () => inEditor(() => workCmd({ cmd: 'titles' })) },
-        { id: 'w-check', group: g, label: '提交检查', icon: ShieldCheck, keywords: 'check', run: () => go(`/works/${workId}/check`) },
+        { id: 'w-check', group: g, label: '去检查', icon: ShieldCheck, keywords: 'check 提交检查 发布前检查', run: () => go(`/works/${workId}/check`) },
         { id: 'w-versions', group: g, label: '查看版本历史', icon: History, keywords: 'version history', run: () => { setOpen(false); workCmd({ cmd: 'versions' }) } },
         { id: 'w-focus', group: g, label: '专注模式', hint: 'F11', icon: Maximize2, keywords: 'focus zen', run: () => { setOpen(false); workCmd({ cmd: 'focus' }) } },
       )
+      if (work.platform === 'wechat_mp' && !['comic', 'card_post'].includes(work.content_format)) {
+        list.push({ id: 'w-preview', group: g, label: '打开排版预览', icon: FileText, keywords: 'layout preview 排版', run: () => go(`/works/${workId}/preview`) })
+      }
+      list.push(work.platform === 'wechat_mp'
+        ? { id: 'w-push', group: g, label: '去写入草稿箱', icon: FileText, keywords: 'draft push 草稿', run: () => go(`/works/${workId}/push`) }
+        : { id: 'w-pack', group: g, label: '去生成发布包', icon: FileText, keywords: 'pack 发布包', run: () => go(`/works/${workId}/pack`) })
       if (canWrite) list.push({ id: 'w-derive', group: g, label: '派生到其他账号', icon: GitBranch, keywords: 'derive', run: () => { setOpen(false); workCmd({ cmd: 'derive' }) } })
     }
     if (acc) {

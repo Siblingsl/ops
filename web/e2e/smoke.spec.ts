@@ -111,7 +111,10 @@ test('OPT13 同类页面首次失败及时提示且重试恢复', async ({ page 
       if (item.name === '推送预览') {
         await expect(main.getByText('H-04', { exact: true }).locator('..')).toContainText('发布前检查还没有全部确认，不能写入草稿。')
         await expect(main.getByRole('button', { name: '写入草稿箱', exact: true })).toHaveCount(0)
-        await expect(main.getByRole('link', { name: '去检查', exact: true })).toHaveAttribute('href', `/works/${work.id}/check`)
+        const nextAction = page.locator('[data-testid="work-next-action"]').getByRole('button', { name: '去检查', exact: true })
+        await expect(nextAction).toBeVisible()
+        await nextAction.click()
+        await expect(page).toHaveURL(`/works/${work.id}/check`)
       }
       await page.unroute(match)
     })

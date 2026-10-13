@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { CheckCircle2, Circle, Copy, ExternalLink, Loader2, Send, XCircle } from 'lucide-react'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BackfillForm, PostPushTodos } from '@/components/backfill'
 import { CropPreview } from '@/components/cover-crop'
@@ -12,7 +12,7 @@ import { runeLen } from '@/lib/format'
 import { useCanWrite } from '@/lib/session'
 import type { CredState, CropBox, WechatDefaults, Work } from '@/lib/types'
 import { useWechatHtml } from './Preview'
-import { useWork } from './WorkLayout'
+import { useWork, WorkHeaderAction } from './WorkLayout'
 
 interface PushPreview {
   mode: 'new' | 'overwrite'
@@ -50,6 +50,7 @@ const backendTodos = [
 
 export default function Push() {
   const { work, setWork, refresh } = useWork()
+  const nav = useNavigate()
   const canWrite = useCanWrite()
   // D-048：图文卡片与漫画一样写入图片消息草稿。
   const comic = work.content_format === 'comic' || work.content_format === 'card_post'
@@ -113,15 +114,29 @@ export default function Push() {
 
   if (!p.can_push && work.status !== 'published' && !result) {
     return (
-      <div className="mx-auto max-w-2xl px-6 py-12">
-        <HumanGate code="H-04">发布前检查还没有全部确认，不能写入草稿。<Link to={`/works/${work.id}/check`} className="ml-1 font-semibold underline">去检查</Link></HumanGate>
-      </div>
+      <>
+        <WorkHeaderAction><Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/check`)}>去检查</Button></WorkHeaderAction>
+        <div className="mx-auto max-w-2xl px-6 py-12">
+          <HumanGate code="H-04">发布前检查还没有全部确认，不能写入草稿。</HumanGate>
+        </div>
+      </>
     )
   }
 
   const showSteps = running || Object.keys(steps).length > 0 || failure
   return (
     <div className="mx-auto grid w-full max-w-[1280px] gap-6 px-6 py-8 lg:grid-cols-[1fr_380px] 2xl:max-w-[1480px]">
+      <WorkHeaderAction>
+        {!result && work.status !== 'published' ? (
+          <Button size="sm" variant="human" loading={running}
+            disabled={!canWrite || !credOk || runeLen(f.author) > 16 || (!comic && !cover) || (comic && !(p.panel_images && p.panel_images > 0))}
+            onClick={() => push()} icon={<Send className="size-4" />}>
+            {p.mode === 'overwrite' ? '更新草稿' : comic ? '写入图片消息草稿' : '写入草稿箱'}
+          </Button>
+        ) : result && work.status !== 'published' ? (
+          <Button size="sm" variant="primary" onClick={() => { setResult(null); setSteps({}) }}>再次写入（更新草稿）</Button>
+        ) : null}
+      </WorkHeaderAction>
       <div className="space-y-5">
         {result ? (
           <Card className="overflow-hidden">
@@ -264,17 +279,9 @@ export default function Push() {
           <Card className="p-5">
             <HumanGate code="H-05">每次只写入这一篇，由你亲自点击。系统不会发表或群发。</HumanGate>
             {!canWrite && <Notice tone="gray" className="mt-4">观察者只读，不能写入草稿。</Notice>}
-            <Button variant="human" size="lg" className="mt-4 w-full" loading={running}
-              disabled={!canWrite || !credOk || runeLen(f.author) > 16 || (!comic && !cover) || (comic && !(p.panel_images && p.panel_images > 0))}
-              onClick={() => push()} icon={<Send className="size-4" />}>
-              {p.mode === 'overwrite' ? '更新草稿' : comic ? '写入图片消息草稿' : '写入草稿箱'}
-            </Button>
             {!comic && <Button variant="ghost" className="mt-2 w-full" icon={<Copy className="size-4" />} onClick={copyHTML}>复制 HTML（兜底）</Button>}
             {comic && <p className="mt-2 text-center text-xs text-mist-400">每张图会上传为永久素材（占用素材额度），正文为纯文本。</p>}
           </Card>
-        )}
-        {result && work.status !== 'published' && (
-          <Button variant="ghost" className="w-full" onClick={() => { setResult(null); setSteps({}) }}>再次写入（更新草稿）</Button>
         )}
         <Notice tone="gray">写入草稿只是把内容放进公众号后台的草稿箱，正式发表需要你在后台操作。每日写入上限可在「设置 → 平台账号」中调整。</Notice>
       </aside>

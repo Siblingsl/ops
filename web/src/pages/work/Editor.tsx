@@ -22,7 +22,7 @@ import { OutlineCard } from './editor-outline'
 import { TitleCard } from './editor-title'
 import { ImagesCard } from './editor-images'
 import { WorkConflictDialog } from './section-save-dialogs'
-import { useWork } from './WorkLayout'
+import { useWork, WorkHeaderAction } from './WorkLayout'
 
 const kindLabel: Record<MaterialKind, string> = { experience: '经历', opinion: '观点', case: '案例', data: '数据' }
 
@@ -578,6 +578,11 @@ function ArticleEditor() {
 
   return (
     <div className={cn('mx-auto flex w-full gap-6 px-4 py-6 sm:px-6 sm:py-8 xl:gap-8', focus ? 'max-w-[860px]' : showSidebar ? 'max-w-[1600px]' : 'max-w-[1280px] 2xl:max-w-[1480px]')}>
+      {!readOnly && <WorkHeaderAction>
+        <Button size="sm" variant="primary" onClick={toCheck} disabled={drafted === 0} icon={<PenLine className="size-4" />}>
+          {work.platform === 'wechat_mp' ? '排版并检查' : '提交检查'}
+        </Button>
+      </WorkHeaderAction>}
       {!focus && (
         <aside className="sticky top-24 hidden h-fit w-52 shrink-0 lg:block">
           <div className="mb-3 text-[11px] font-semibold tracking-wider text-mist-400">创作步骤</div>
@@ -626,11 +631,6 @@ function ArticleEditor() {
             </div>
           )}
           <SaveStatus store={saveStatus} />
-          {!readOnly && (
-            <Button variant="primary" className="mt-4 w-full" onClick={toCheck} disabled={drafted === 0} icon={<PenLine className="size-4" />}>
-              {work.platform === 'wechat_mp' ? '排版并检查' : '提交检查'}
-            </Button>
-          )}
         </aside>
       )}
 
@@ -684,11 +684,6 @@ function ArticleEditor() {
         </section>
         {!focus && <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} />}
         {!focus && <ImagesCard work={work} setWork={setWorkStable} readOnly={readOnly} upload={upload} />}
-        {!readOnly && !focus && (
-          <div className="flex justify-end pb-10 lg:hidden">
-            <Button variant="primary" onClick={toCheck} disabled={drafted === 0}>{work.platform === 'wechat_mp' ? '排版并检查' : '提交检查'}</Button>
-          </div>
-        )}
         {work.locked && <Notice tone="gray">作品已发布，当前为只读模式。</Notice>}
       </div>
 

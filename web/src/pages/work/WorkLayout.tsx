@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, CalendarDays, Check, ChevronDown, ChevronUp, Copy, GitBranch, History, Layers, Lock, Maximize2, Minimize2, RotateCcw, Save, Star } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
@@ -26,6 +27,12 @@ export interface WorkCtx {
   reportEditing: (id: string) => void
 }
 export const useWork = () => useOutletContext<WorkCtx>()
+
+export function WorkHeaderAction({ children }: { children: ReactNode }) {
+  const [target, setTarget] = useState<HTMLElement | null>(null)
+  useEffect(() => { setTarget(document.getElementById('work-header-action-target')) }, [])
+  return target ? createPortal(children, target) : null
+}
 
 interface Presence { user_id: string; username: string; section_id: string | null; editing: boolean; at: string }
 
@@ -396,6 +403,7 @@ export default function WorkLayout() {
             ))}
           </nav>
           <div className={cn('ml-auto flex shrink-0 items-center gap-1', !focus && 'lg:ml-0')}>
+            <div id="work-header-action-target" data-testid="work-next-action" className="mr-1 flex shrink-0 items-center" />
             <PlanPopover work={work} onSaved={setWork} />
             <Button size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
             {canWrite && <Button size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}><span className="hidden xl:inline">派生</span></Button>}

@@ -10,7 +10,7 @@ import { fmtBytes } from '@/lib/format'
 import { CUSTOM_THEME_ID, customTheme, HTML_BYTE_LIMIT, HTML_CHAR_LIMIT, htmlStats, renderWechat, setCustomTheme, themeById, themes } from '@/lib/render'
 import type { Work } from '@/lib/types'
 import { useCustomTheme } from '@/lib/v3'
-import { useWork } from './WorkLayout'
+import { useWork, WorkHeaderAction } from './WorkLayout'
 
 export function PhoneFrame({ title, account, children }: { title: string; account: string; children: React.ReactNode }) {
   return (
@@ -158,6 +158,11 @@ export default function Preview() {
   }
   return (
     <div className="mx-auto flex w-full max-w-[1280px] gap-10 px-6 py-8 2xl:max-w-[1480px]">
+      <WorkHeaderAction>
+        <Button size="sm" variant="primary" disabled={over} onClick={() => nav(`/works/${work.id}/check?start=1`)}>
+          下一步：发布前检查<ArrowRight className="size-4" />
+        </Button>
+      </WorkHeaderAction>
       <aside className="w-72 shrink-0 space-y-5">
         <div>
           <h2 className="mb-1 font-display text-[17px] font-bold text-mist-900">排版主题</h2>
@@ -189,9 +194,6 @@ export default function Preview() {
         </Card>
         <div className="space-y-2">
           <Button className="w-full" icon={<Copy className="size-4" />} onClick={copy}>复制 HTML</Button>
-          <Button variant="primary" className="w-full" disabled={over} onClick={() => nav(`/works/${work.id}/check?start=1`)}>
-            下一步：发布前检查<ArrowRight className="size-4" />
-          </Button>
         </div>
         {params.get('next') === 'check' && <Notice tone="ink" icon={<Smartphone className="size-4" />}>先确认排版效果，再进入发布前检查。检查时会使用这里的排版结果统计正文体积。</Notice>}
         <p className="text-xs leading-relaxed text-mist-400">预览按手机宽度模拟，最终效果以公众号后台预览为准（D-024 实测前，主题只使用基础样式）。</p>
