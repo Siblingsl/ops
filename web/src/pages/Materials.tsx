@@ -348,16 +348,23 @@ export default function Materials() {
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
   const [params, setParams] = useSearchParams()
-  const [scope, setScope] = useState<'all' | 'account' | 'shared'>('all')
-  const [kind, setKind] = useState<'' | MaterialKind>('')
-  const [usage, setUsage] = useState<'' | 'used' | 'unused' | 'expired'>('')
-  const [q, setQ] = useState('')
+  const scope = (['account', 'shared'].includes(params.get('scope') ?? '') ? params.get('scope') : 'all') as 'all' | 'account' | 'shared'
+  const requestedKind = params.get('kind') ?? ''
+  const kind = Object.keys(kindMeta).includes(requestedKind) ? requestedKind as MaterialKind : ''
+  const usage = (['used', 'unused', 'expired'].includes(params.get('usage') ?? '') ? params.get('usage') : '') as '' | 'used' | 'unused' | 'expired'
+  const q = params.get('q') ?? ''
+  const updateFilter = (name: string, value: string | null) => {
+    const next = new URLSearchParams(params)
+    if (value === null) next.delete(name)
+    else next.set(name, value)
+    setParams(next, { replace: true })
+  }
   const [dialog, setDialog] = useState<{ editing: Material | null } | null>(null)
   const [detail, setDetail] = useState<Material | null>(null)
   const [reading, setReading] = useState(false)
   const [extract, setExtract] = useState(params.get('extract') === '1')
   const [dups, setDups] = useState(false)
-  const [tag, setTag] = useState<string | null>(null)
+  const tag = params.get('tag')
   const [selecting, setSelecting] = useState(false)
   const [picked, setPicked] = useState<string[]>([])
   const [tagging, setTagging] = useState<MaterialPreview[] | null>(null)
@@ -412,12 +419,12 @@ export default function Materials() {
           <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加素材</Button>
         </> : undefined} />
       <div className="mb-5 flex flex-wrap items-center gap-3">
-        <Tabs value={scope} onChange={setScope} items={[{ value: 'all', label: '全部' }, { value: 'account', label: '本账号' }, { value: 'shared', label: '共享' }]} />
-        <Select value={kind} onChange={(e) => setKind(e.target.value as MaterialKind | '')} className="w-32">
+        <Tabs value={scope} onChange={value => updateFilter('scope', value === 'all' ? null : value)} items={[{ value: 'all', label: '全部' }, { value: 'account', label: '本账号' }, { value: 'shared', label: '共享' }]} />
+        <Select value={kind} onChange={(e) => updateFilter('kind', e.target.value || null)} className="w-32">
           <option value="">全部类型</option>
           {(Object.keys(kindMeta) as MaterialKind[]).map((k) => <option key={k} value={k}>{kindMeta[k].label}</option>)}
         </Select>
-        <Select value={usage} onChange={(e) => setUsage(e.target.value as typeof usage)} className="w-36">
+        <Select value={usage} onChange={(e) => updateFilter('usage', e.target.value || null)} className="w-36">
           <option value="">引用情况不限</option>
           <option value="unused">从未被引用</option>
           <option value="used">已被引用</option>
@@ -428,7 +435,7 @@ export default function Materials() {
         )}
         <div className="relative w-full sm:ml-auto sm:w-72">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist-400" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索内容、来源、标签" className="pl-9" />
+          <Input value={q} onChange={(e) => updateFilter('q', e.target.value || null)} placeholder="搜索内容、来源、标签" className="pl-9" />
         </div>
       </div>
       {dupCount > 0 && canWrite && (
@@ -440,12 +447,12 @@ export default function Materials() {
       {(cloud.length > 0 || untagged > 0) && (
         <div className="mb-4 flex flex-wrap items-center gap-1.5">
           <Tag className="size-3.5 text-mist-400" />
-          <button type="button" onClick={() => setTag(null)} className={cn('cursor-pointer rounded-full px-2.5 py-0.5 text-[12px]', tag === null ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-600 hover:bg-mist-200')}>全部标签</button>
+          <button type="button" onClick={() => updateFilter('tag', null)} className={cn('cursor-pointer rounded-full px-2.5 py-0.5 text-[12px]', tag === null ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-600 hover:bg-mist-200')}>全部标签</button>
           {untagged > 0 && (
-            <button type="button" onClick={() => setTag(tag === '' ? null : '')} className={cn('cursor-pointer rounded-full px-2.5 py-0.5 text-[12px]', tag === '' ? 'bg-ink-600 text-white' : 'border border-dashed border-mist-300 text-mist-500 hover:border-ink-300')}>未打标签 {untagged}</button>
+            <button type="button" onClick={() => updateFilter('tag', tag === '' ? null : '')} className={cn('cursor-pointer rounded-full px-2.5 py-0.5 text-[12px]', tag === '' ? 'bg-ink-600 text-white' : 'border border-dashed border-mist-300 text-mist-500 hover:border-ink-300')}>未打标签 {untagged}</button>
           )}
           {cloud.map(([t, n]) => (
-            <button key={t} type="button" onClick={() => setTag(tag === t ? null : t)} style={{ fontSize: `${11.5 + Math.round((n / maxCount) * 3)}px` }}
+            <button key={t} type="button" onClick={() => updateFilter('tag', tag === t ? null : t)} style={{ fontSize: `${11.5 + Math.round((n / maxCount) * 3)}px` }}
               className={cn('cursor-pointer rounded-full px-2.5 py-0.5', tag === t ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-600 hover:bg-mist-200')}>
               {t}<span className="ml-1 opacity-60">{n}</span>
             </button>
@@ -488,7 +495,7 @@ export default function Materials() {
                   <UsagePopover m={m} />
                   {m.last_used_at && <span>· 最近 {relTime(m.last_used_at)}</span>}
                   {m.source && <span className="ml-1">来源：{m.source}</span>}
-                  {m.tags.map((t) => <button key={t} type="button" onClick={() => setTag(t)} className="cursor-pointer rounded bg-mist-100 px-1.5 py-0.5 text-mist-500 hover:bg-mist-200">{t}</button>)}
+                  {m.tags.map((t) => <button key={t} type="button" onClick={() => updateFilter('tag', t)} className="cursor-pointer rounded bg-mist-100 px-1.5 py-0.5 text-mist-500 hover:bg-mist-200">{t}</button>)}
                 </div>
               </Card>
             </div>
