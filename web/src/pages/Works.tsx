@@ -7,6 +7,7 @@ import { DeriveDialog } from '@/components/derive'
 import { Button, Card, cn, Empty, IconButton, Input, MoreMenu, PageHeader, PageLoading, StatusBadge, Tabs } from '@/components/ui'
 import { del, errorMessage, get, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { deleteWithUndo } from '@/lib/undo'
 import { useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
 import type { StarItem, Work, WorkListItem, WorkStatus } from '@/lib/types'
@@ -63,7 +64,7 @@ function SavedViews({ current, onApply }: { current: string; onApply: (query: st
       ) : (
         <span className="inline-flex items-center gap-1">
           <Input autoFocus value={naming} maxLength={20} placeholder="视图名称" className="h-7 w-36 text-[12.5px]"
-            onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); if (e.key === 'Escape') setNaming(null) }} />
+            onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => { if (isEnterWithoutComposition(e.nativeEvent)) add(); if (e.key === 'Escape') setNaming(null) }} />
           <Button size="sm" variant="secondary" loading={save.isPending} onClick={add}>保存</Button>
           <Button size="sm" variant="ghost" onClick={() => setNaming(null)}>取消</Button>
         </span>

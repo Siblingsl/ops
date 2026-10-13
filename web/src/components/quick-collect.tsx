@@ -5,6 +5,7 @@ import { Button, Field, Select, Tabs, Textarea } from '@/components/ui'
 import { Dialog } from '@/components/dialog'
 import { VoiceButton } from '@/components/voice'
 import { errorMessage, post } from '@/lib/api'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { MaterialKind } from '@/lib/types'
 
@@ -108,7 +109,7 @@ export function QuickCollect() {
           )}
           <Field label={<span className="flex items-center justify-between">内容<VoiceButton onText={(t) => setText((v) => v + t)} /></span>}>
             <Textarea rows={6} autoFocus value={text} onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void save() } }}
+              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && isEnterWithoutComposition(e.nativeEvent)) { e.preventDefault(); void save() } }}
               placeholder={mode === 'inbox' ? '一句话也行：看到的、想到的、被问到的…' : '选中文字后按 Ctrl+Shift+M，或在此粘贴'} />
           </Field>
           {acc && /https:\/\/(?:[^\s/]+\.)?(?:xiaohongshu\.com|xhslink\.com|mp\.weixin\.qq\.com)\//i.test(text) && <label className="flex items-center gap-2 text-sm text-mist-600"><input type="checkbox" checked={readPage} onChange={(e) => setReadPage(e.target.checked)} />读取页面为对标参考（受 robots 和限额约束，可手动粘贴）</label>}

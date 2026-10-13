@@ -9,6 +9,7 @@ import { Badge, Button, Card, CardHeader, cn, Empty, Field, HumanGate, IconButto
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post, rawRequest } from '@/lib/api'
 import { waitJob } from '@/lib/v3'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { describeRefs, fmtNum, fmtTime, toLocalInput } from '@/lib/format'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { BoardRow, Metric, MetricSource, Platform, ReviewReport } from '@/lib/types'
@@ -229,7 +230,7 @@ function MetricForm({ workId, platform, editing, prefill, publishedAt, history, 
             <Input ref={(el) => { inputs.current[i] = el }} type="number" min={0} inputMode="numeric" enterKeyHint={i === metricFields[platform].length - 1 ? 'done' : 'next'}
               value={vals[f.key]} onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })}
               onKeyDown={(e) => {
-                if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+                if (!isEnterWithoutComposition(e.nativeEvent)) return
                 e.preventDefault()
                 const next = inputs.current[i + 1]
                 if (next) next.focus()

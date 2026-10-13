@@ -12,6 +12,7 @@ import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, get, post, put, stream } from '@/lib/api'
 import { type AIRefs, copyText, runeLen } from '@/lib/format'
 import { writeDraft } from '@/lib/local-draft'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import type { Asset, LintHit, Section, UserPrefs, Variant, Work } from '@/lib/types'
 import { matchGhostKey, waitJob } from '@/lib/v3'
 import {
@@ -451,7 +452,7 @@ export const SectionBlock = memo(function SectionBlock({
         if (!streaming && !isEmpty) void edit('rewrite')
         return
       }
-      if (!(e.metaKey || e.ctrlKey) || e.key !== 'Enter') return
+      if (!(e.metaKey || e.ctrlKey) || !isEnterWithoutComposition(e)) return
       if (streaming) return
       e.preventDefault()
       void draft()

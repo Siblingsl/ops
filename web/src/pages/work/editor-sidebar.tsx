@@ -11,6 +11,7 @@ import { Badge, Button, cn, Select, Spinner, Textarea } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post, put, stream } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useCanWrite, useMe } from '@/lib/session'
 import type { ActivityItem, Comment, Material, PolishIssue, RetrieveHit, Section, Work, WorkspaceMember } from '@/lib/types'
 import { usePendingMemories, usePrefs, waitJob } from '@/lib/v3'
@@ -276,7 +277,7 @@ function CopilotTab({ work, active, selection }: { work: Work; active: Section |
       </div>
       <div className="flex items-end gap-1.5">
         <Textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="问点什么…（Ctrl+Enter 发送）" className="text-[12.5px]"
-          onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void ask(text) } }} />
+          onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && isEnterWithoutComposition(e.nativeEvent)) { e.preventDefault(); void ask(text) } }} />
         {pending ? <Button size="sm" variant="ghost" icon={<Square className="size-3.5" />} onClick={() => abort.current?.abort()} />
           : <Button size="sm" variant="primary" icon={<Send className="size-3.5" />} disabled={!text.trim()} onClick={() => ask(text)} />}
       </div>

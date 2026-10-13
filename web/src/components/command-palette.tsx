@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { errorMessage, get, post } from '@/lib/api'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useAccounts, useCanWrite, useCurrentAccount, useMe } from '@/lib/session'
 import type { SearchHit, StarItem, Work } from '@/lib/types'
 import { fuzzyMatch, recentItems, rememberRecent, workCmd } from '@/lib/v3'
@@ -300,7 +301,7 @@ export function CommandPalette() {
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setIdx((i) => Math.max(0, i - 1))
-    } else if (e.key === 'Enter') {
+    } else if (isEnterWithoutComposition(e.nativeEvent)) {
       e.preventDefault()
       items[idx]?.run()
     } else if (e.key === 'Escape') {

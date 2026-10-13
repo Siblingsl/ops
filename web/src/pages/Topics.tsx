@@ -13,6 +13,7 @@ import { openQuickCollect } from '@/components/quick-collect'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { type AIRefs, relTime } from '@/lib/format'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import { deleteWithUndo } from '@/lib/undo'
@@ -128,7 +129,7 @@ function SuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose: (
   return (
     <Drawer open={open} onClose={onClose} title="AI 选题建议" desc="建议不会自动进入选题池，需要你逐条挑选。" width="w-[560px]">
       <div className="flex gap-2">
-        <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="方向关键词（可选），例如：时间管理" onKeyDown={(e) => e.key === 'Enter' && run()} />
+        <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="方向关键词（可选），例如：时间管理" onKeyDown={(e) => isEnterWithoutComposition(e.nativeEvent) && run()} />
         <Button variant="primary" onClick={run} loading={busy} icon={<Sparkles className="size-4" />}>生成</Button>
       </div>
       <HumanGate code="H-01" className="mt-4">每条建议都需要你单独点「入库」。这里刻意没有「全部入库」。</HumanGate>
@@ -168,7 +169,7 @@ function HotSuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose
     <Drawer open={open} onClose={onClose} title="热点选题" desc="使用已匹配的受控来源热点，也可粘贴公开资讯摘要；建议逐条入库。" width="w-[560px]">
       <div className="space-y-3">
         <Field label="方向（可选）">
-          <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="例如：职场沟通、育儿" onKeyDown={(e) => e.key === 'Enter' && run()} />
+          <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="例如：职场沟通、育儿" onKeyDown={(e) => isEnterWithoutComposition(e.nativeEvent) && run()} />
         </Field>
         <Field label="公开资讯摘要（可选）" hint="粘贴新闻或公告要点；采集关闭时仍可使用。">
           <Textarea rows={4} value={context} onChange={(e) => setContext(e.target.value)} placeholder="把公开报道或公告的要点贴在这里…" />
@@ -459,7 +460,7 @@ function InboxPanel({ accountId }: { accountId: string }) {
         <Card className="p-3">
           <div className="flex items-start gap-2">
             <Textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="随手记一条灵感，不用想好怎么分类…（Ctrl+Enter 保存）"
-              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void add() } }} />
+              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && isEnterWithoutComposition(e.nativeEvent)) { e.preventDefault(); void add() } }} />
             <div className="flex flex-col gap-1.5">
               <Button variant="primary" onClick={add} disabled={!text.trim()}>记下</Button>
               <VoiceButton onText={(t) => setText((v) => v + t)} className="self-center" />

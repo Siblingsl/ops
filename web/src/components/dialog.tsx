@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { Button, cn, Input } from './ui'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 
 function useEsc(open: boolean, onClose: () => void) {
   useEffect(() => {
@@ -133,7 +134,7 @@ export function PasswordPrompt({ onDone, submit }: { onDone: (ok: boolean) => vo
         <Button variant="primary" loading={busy} onClick={go} disabled={!pw}>确认</Button>
       </>}>
       <p className="mb-3 text-[13px] leading-relaxed text-mist-500">修改凭证、模型密钥等敏感操作需要再次输入登录密码，5 分钟内有效。</p>
-      <Input type="password" autoFocus value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && pw && go()} placeholder="登录密码" invalid={!!err} />
+      <Input type="password" autoFocus value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => isEnterWithoutComposition(e.nativeEvent) && pw && go()} placeholder="登录密码" invalid={!!err} />
       {err && <p className="mt-2 text-xs text-danger">{err}</p>}
     </Dialog>
   )
