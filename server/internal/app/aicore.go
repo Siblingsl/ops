@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -324,8 +325,18 @@ func (s *Server) runAIJSON(ctx context.Context, t aiTask, out any, validate func
 		if err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal([]byte(ai.ExtractJSON(res.Text)), out); err != nil {
-			last = err
+		reflect.ValueOf(out).Elem().SetZero()
+		raw := ai.ExtractJSON(res.Text)
+		parseErr := json.Unmarshal([]byte(raw), out)
+		if parseErr != nil {
+			if completed := completeJSONBrackets(res.Text); completed != raw && json.Valid([]byte(completed)) {
+				reflect.ValueOf(out).Elem().SetZero()
+				parseErr = json.Unmarshal([]byte(completed), out)
+			}
+		}
+		if parseErr != nil {
+			last = parseErr
+			t.User += "\n\n上一次输出不符合要求：" + parseErr.Error() + "。只输出修正后的 JSON。"
 			continue
 		}
 		if validate != nil {
@@ -338,6 +349,50 @@ func (s *Server) runAIJSON(ctx context.Context, t aiTask, out any, validate func
 		return res, nil
 	}
 	return nil, apiErr(502, "ai_output_invalid", "模型返回的内容格式不正确（已重试一次），请再试一次或更换模型。").With(truncate(fmt.Sprint(last), 200))
+}
+
+func completeJSONBrackets(text string) string {
+	raw := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(text), "```"))
+	start := strings.Index(raw, "{")
+	if start < 0 {
+		return raw
+	}
+	raw = raw[start:]
+	var stack []rune
+	quoted, escaped := false, false
+	for _, char := range raw {
+		if quoted {
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == '"' {
+				quoted = false
+			}
+			continue
+		}
+		switch char {
+		case '"':
+			quoted = true
+		case '{':
+			stack = append(stack, '}')
+		case '[':
+			stack = append(stack, ']')
+		case '}', ']':
+			if len(stack) == 0 || stack[len(stack)-1] != char {
+				return raw
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+	if quoted {
+		return raw
+	}
+	var suffix strings.Builder
+	for i := len(stack) - 1; i >= 0; i-- {
+		suffix.WriteRune(stack[i])
+	}
+	return raw + suffix.String()
 }
 
 type jobMeta struct {
