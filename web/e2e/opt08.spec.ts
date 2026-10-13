@@ -3,23 +3,25 @@ import { api, registerAccount } from './support'
 
 test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交小于16ms', async ({ page }) => {
   await page.addInitScript(() => {
-    const state = { record: false, commits: [] as { sections: string[]; duration: number }[] }
+    const state = { record: false, commits: [] as { sections: string[]; duration: number; owners: { name: string; duration: number }[] }[] }
     ;(window as any).__opt08 = state
     ;(window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
       supportsFiber: true, renderers: new Map(), inject: () => 1,
       onCommitFiberRoot: (_renderer: number, root: any) => {
         if (!state.record) return
         const sections: string[] = []
+        const owners: { name: string; duration: number }[] = []
         const visit = (fiber: any) => {
           if (!fiber) return
           if (fiber.memoizedProps?.section && fiber.memoizedProps?.onSave && (fiber.flags & 1)) {
             sections.push(fiber.memoizedProps.section.id)
           }
+          if ((fiber.flags & 1) && typeof fiber.type === 'function') owners.push({ name: fiber.type.name, duration: fiber.actualDuration })
           visit(fiber.child)
           visit(fiber.sibling)
         }
         visit(root.current)
-        state.commits.push({ sections, duration: root.current.actualDuration })
+        state.commits.push({ sections, duration: root.current.actualDuration, owners: owners.sort((a, b) => b.duration - a.duration).slice(0, 8) })
       },
       onCommitFiberUnmount: () => {},
     }
@@ -45,7 +47,7 @@ test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交�
   await page.keyboard.press('Control+Home')
   await expect.poll(async () => (await api(page, 'GET', `/works/${work.id}`)).outline_confirmed_at).toBeTruthy()
   const start = () => page.evaluate(() => { (window as any).__opt08.commits = []; (window as any).__opt08.record = true })
-  const stop = () => page.evaluate(() => { const state = (window as any).__opt08; state.record = false; return state.commits as { sections: string[]; duration: number }[] })
+  const stop = () => page.evaluate(() => { const state = (window as any).__opt08; state.record = false; return state.commits as { sections: string[]; duration: number; owners: { name: string; duration: number }[] }[] })
   await start()
   await page.keyboard.press('Shift+ArrowRight')
   await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).not.toBe('')
@@ -62,6 +64,7 @@ test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交�
     const updated = [...new Set(commits.flatMap(c => c.sections))]
     const max = Math.max(...commits.map(c => c.duration))
     console.log(`OPT08 ${name}: sections=${updated.length}, max actualDuration=${max.toFixed(3)}ms, commits=${commits.length}`)
+    console.log(`OPT08 ${name} slowest owners=${JSON.stringify(commits.find(c => c.duration === max)?.owners)}`)
     return { updated, max }
   })
   for (const { updated, max } of measurements) {

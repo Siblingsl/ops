@@ -16,6 +16,10 @@ pnpm e2e
 
 失败截图与 trace 在 `test-results/`，HTML 报告在 `playwright-report/`，均已忽略提交。可用 `pnpm exec playwright show-report` 查看报告，或 `pnpm exec playwright show-trace <trace.zip>` 查看具体失败过程。重复运行使用 `pnpm e2e --repeat-each=2`。该层补充 Go API/HC 回归，不能替代真实模型效果、真实平台草稿和视觉人工验收。
 
+OPT-17 / D-070：main 推送和面向 main 的 PR 通过 `.github/workflows/ci.yml` 的独立 E2E job 运行完整用例。PostgreSQL、Go、Node 与 Chromium 均在临时 runner 中准备，API/模型/微信由 `ops-e2e` 启动并只连接本地模拟服务；失败上传 trace、截图和 HTML 报告。`opt17.spec.ts` 覆盖公众号长文逐段起草、人工编辑待核实内容、逐项确认检查、单篇写入草稿箱，以及人工回填已发布后录入第一天节点数据；不执行平台发表。
+
+CI 沿用 `npm ci` 与 npm 锁文件；Playwright 启动前端使用 `npm run dev` 执行同一个 Vite 脚本，本地 `pnpm e2e` / `pnpm dev` 仍可用。`package-lock.json` 和 `pnpm-lock.yaml` 保持原样，统一工具链等待用户确认。仓库配置与本地通过不能代替远端 CI 的实际运行记录；本任务不推送或触发部署。失败产物上传参数参考 [upload-artifact](https://github.com/actions/upload-artifact)，浏览器安装参考 [Playwright CI](https://playwright.dev/docs/ci-intro)。
+
 配置参考：[Playwright webServer](https://playwright.dev/docs/test-webserver)。
 
 生产打包验收（DEV-U103）在仓库根目录运行：

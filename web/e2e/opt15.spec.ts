@@ -14,6 +14,7 @@ test('OPT15 真实错误短 ID 可复制并对应响应与服务端日志', asyn
   await page.goto(`/works/${id}`)
   const error = page.getByText(/内容不存在或已删除（请求 ID：[^）]+）/, { exact: true })
   await expect(error).toBeVisible()
+  await expect.poll(() => responses.length).toBeGreaterThan(0)
   const last = responses.at(-1)!
   expect(last.id).toBeTruthy()
   expect(last.bodyId).toBe(last.id)
