@@ -165,7 +165,7 @@ export default function Compare() {
     return (
       <div className="p-10">
         <Notice>漫画衍生作品在漫画编辑器中核对旁白与对白，不使用段落对照页。
-          <button type="button" className="ml-2 cursor-pointer font-medium underline" onClick={() => nav(`/works/${work.id}/edit`)}>打开漫画编辑器</button>
+          <button type="button" className="ml-2 cursor-pointer font-medium underline" onClick={() => nav(`/works/${work.id}`)}>打开漫画编辑器</button>
         </Notice>
       </div>
     )
