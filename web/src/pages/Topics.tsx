@@ -260,16 +260,27 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
     if (focused) ref.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [focused])
   const setStatus = async (status: Topic['status']) => {
+    let saved = false
     const key = ['topics', accountId]
     const before = qc.getQueriesData<Topic[]>({ queryKey: key })
     qc.setQueriesData<Topic[]>({ queryKey: key }, (list) => list?.map((x) => (x.id === t.id ? { ...x, status } : x)))
     try {
       await patch(`/topics/${t.id}`, { status })
+      saved = true
     } catch (e) {
       for (const [k, v] of before) qc.setQueryData(k, v)
       toast.error(errorMessage(e))
     }
     inv(key)
+    return saved
+  }
+  const drop = async () => {
+    setMenu(false)
+    const previous = t.status
+    if (await setStatus('dropped')) toast(`已放弃选题「${t.title}」`, {
+      duration: 10_000,
+      action: { label: '撤销', onClick: () => void setStatus(previous) },
+    })
   }
   const togglePin = async () => {
     setMenu(false)
@@ -322,7 +333,7 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
                   <button onClick={() => { setMenu(false); setEdit(true) }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><Pencil className="size-3.5" />编辑选题卡</button>
                   <button onClick={togglePin} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50">{t.pinned ? <><PinOff className="size-3.5" />取消置顶</> : <><Pin className="size-3.5" />置顶</>}</button>
                   {t.status !== 'pending' && <button onClick={() => { setMenu(false); setStatus('pending') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><RotateCcw className="size-3.5" />放回待定</button>}
-                  {t.status !== 'dropped' && <button onClick={() => { setMenu(false); setStatus('dropped') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><X className="size-3.5" />放弃</button>}
+                  {t.status !== 'dropped' && <button onClick={drop} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><X className="size-3.5" />放弃</button>}
                   <button onClick={remove} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-danger hover:bg-orange-50"><Trash2 className="size-3.5" />删除</button>
                 </div>
               )}
