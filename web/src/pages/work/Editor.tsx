@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { BookOpenCheck, CheckCircle2, Circle, Layers, PanelRightOpen, PenLine, Plus, Stethoscope, Wand2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, Textarea } from '@/components/ui'
@@ -235,7 +235,7 @@ export default function Editor() {
     <OutlineCard work={work} setWork={setWork} readOnly={work.locked} />
     <CardEditor />
   </div>
-  return <ArticleEditor />
+  return <ArticleEditor key={work.id} />
 }
 
 const SIDEBAR_KEY = 'ops.editor.sidebar'
@@ -267,11 +267,21 @@ function ArticleEditor() {
   const [orderConflict, setOrderConflict] = useState<{ server: Work; mine: Work; ids: string[] } | null>(null)
   const { work, setWork, patchWork, refresh, focus, presence, reportSection, reportEditing } = useWork()
   const nav = useNavigate()
+  const route = useLocation()
   const canWrite = useCanWrite()
   const prefs = usePrefs()
   const readOnly = work.locked || !canWrite
   const saveStatus = useMemo(createSaveStatus, [])
+  const positionKey = `ops.editor.position.${work.id}`
+  const [position] = useState<{ sectionId?: string; tab?: SidebarTab }>(() => {
+    try {
+      const value = JSON.parse(localStorage.getItem(positionKey) || '{}')
+      const tabs: SidebarTab[] = ['materials', 'copilot', 'polish', 'readthrough', 'pending', 'comments', 'activity']
+      return { sectionId: typeof value?.sectionId === 'string' ? value.sectionId : undefined, tab: tabs.includes(value?.tab) ? value.tab : undefined }
+    } catch { return {} }
+  })
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [resumedSection, setResumedSection] = useState<number | null>(null)
   const selection = useRef('')
   const currentWork = useRef(work)
   currentWork.current = work
@@ -296,7 +306,7 @@ function ArticleEditor() {
   }, [memberKey])
   const fromMention = new URLSearchParams(location.search).has('comment')
   const [sidebar, setSidebar] = useState(() => fromMention || localStorage.getItem(SIDEBAR_KEY) !== '0')
-  const [sideTab, setSideTab] = useState<SidebarTab>(fromMention ? 'comments' : 'materials')
+  const [sideTab, setSideTab] = useState<SidebarTab>(fromMention ? 'comments' : position.tab ?? 'materials')
   const [materialsOpened, setMaterialsOpened] = useState(false)
   const selectSideTab = (tab: SidebarTab) => {
     setSideTab(tab)
@@ -314,10 +324,21 @@ function ArticleEditor() {
   const onLint = useCallback((id: string, n: number) => { lintCounts.current[id] = n }, [])
   const setWorkStable = setWork
   useEffect(() => {
-    if (!location.hash) return
-    const t = window.setTimeout(() => document.getElementById(location.hash.slice(1).replace(/^section-/, 'sec-'))?.scrollIntoView({ behavior: 'smooth' }), 300)
+    try { localStorage.setItem(positionKey, JSON.stringify({ sectionId: activeId ?? position.sectionId, tab: sideTab })) } catch {}
+  }, [positionKey, activeId, sideTab, position.sectionId])
+  useEffect(() => {
+    setResumedSection(null)
+    if (route.hash) {
+      const t = window.setTimeout(() => document.getElementById(route.hash.slice(1).replace(/^section-/, 'sec-'))?.scrollIntoView({ behavior: 'smooth' }), 300)
+      return () => window.clearTimeout(t)
+    }
+    const index = work.sections.findIndex(s => s.id === (activeId ?? position.sectionId))
+    if (index < 0 || !work.outline_confirmed_at) return
+    setActiveId(work.sections[index].id)
+    setResumedSection(index + 1)
+    const t = window.setTimeout(() => scrollToSection(work.sections[index].id), 300)
     return () => window.clearTimeout(t)
-  }, [])
+  }, [route.hash])
   const toggleSidebar = (v: boolean) => {
     setSidebar(v)
     if (v && sideTab === 'materials') setMaterialsOpened(true)
@@ -603,6 +624,10 @@ function ArticleEditor() {
       )}
 
       <div className="min-w-0 flex-1 space-y-5">
+        {resumedSection !== null && <Notice tone="ink" className="fixed bottom-6 left-1/2 z-40 -translate-x-1/2 shadow-pop"><div className="flex items-center gap-3">
+          <span>已回到上次编辑的第 {resumedSection} 段</span>
+          <Button size="sm" variant="ghost" className="ml-auto" aria-label="关闭位置提示" onClick={() => setResumedSection(null)} icon={<X className="size-3.5" />} />
+        </div></Notice>}
         {focus && (
           <div className="flex items-center gap-3 text-[12px] text-mist-500">
             <span>专注模式 · F11 退出</span>
