@@ -307,7 +307,7 @@ func (s *Server) editSection(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &in); err != nil {
 		return err
 	}
-	modes := map[string]string{"rewrite": "换一种说法改写，意思不变", "expand": "在不增加新事实的前提下扩写，补充解释和过渡", "shorten": "缩写到原来的一半左右，保留关键信息"}
+	modes := map[string]string{"rewrite": "换一种说法改写，意思不变", "expand": "只用素材中的事实展开，补充解释和过渡；没有素材依据的具体事实写成【待核实：需要的内容】", "shorten": "缩写到原来的一半左右，保留关键信息"}
 	desc, okMode := modes[in.Mode]
 	if !okMode {
 		return validation("模式只能是改写、扩写或缩写")
@@ -322,6 +322,19 @@ func (s *Server) editSection(w http.ResponseWriter, r *http.Request) error {
 		return validation("这一段还没有内容")
 	}
 	ctx := r.Context()
+	mids, err := s.sectionMaterialIDs(ctx, m, sec)
+	if err != nil {
+		return err
+	}
+	outline, err := s.workOutline(ctx, m.ID)
+	if err != nil {
+		return err
+	}
+	var work strings.Builder
+	fmt.Fprintf(&work, "## 作品脉络\n核心观点：%s\n各段小标题：\n", m.Viewpoint)
+	for i, item := range outline {
+		fmt.Fprintf(&work, "%d. %s\n", i+1, item.Heading)
+	}
 	base := fmt.Sprintf(`## 上下文
 本段小标题：%s
 本段全文：
@@ -333,7 +346,7 @@ func (s *Server) editSection(w http.ResponseWriter, r *http.Request) error {
 选中内容：%s
 `, sec.Heading, truncate(sec.ContentMD, 1500), in.Mode, desc, in.Selection)
 	t := aiTask{Type: "section_edit", Account: m.Account, WorkID: &m.ID, Instruction: in.Instruction, History: sec.Heading + " " + truncate(in.Selection, 200),
-		Tier: s.pickTier(ctx, in.Tier), Refs: map[string]any{"section_id": sec.ID}}
+		Materials: mids, Work: work.String(), Tier: s.pickTier(ctx, in.Tier), Refs: map[string]any{"section_id": sec.ID}}
 	if in.Variants == 3 {
 		t.Refs["variants"] = 3
 		t.User = base + `
