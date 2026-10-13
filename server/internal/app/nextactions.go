@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +30,9 @@ type naWork struct {
 	OutlineConfirmed  bool
 	Viewpoint         bool
 	EmptySections     []uuid.UUID
+	ContentFormat     string
+	HasSections       bool
+	ImagesReady       bool
 	OpenTodos         int
 	PushedOrPacked    bool
 	PendingCheckItems int
@@ -104,11 +108,30 @@ func nextActions(in naInput, limit int) []NextAction {
 			} else if !w.Viewpoint || !w.OutlineConfirmed {
 				offer(w.ID, NextAction{Kind: "draft", Score: naProgress - 20 - float64(min(idle, 30))*2,
 					Text: titleOr(w.Title) + "还没确认观点和大纲", Action: "继续写", Link: link})
+			} else if w.HasSections && w.ContentFormat != "comic" && w.ContentFormat != "card_post" {
+				action := NextAction{Kind: "layout", Score: naProgress - float64(min(idle, 30))*2,
+					Text: titleOr(w.Title) + "正文已写好，下一步排版检查", Action: "去排版检查", Link: link + "/preview?next=check"}
+				if in.Platform == "xhs" {
+					action.Link = link + "/check?start=1"
+				}
+				if strings.TrimSpace(w.Title) == "" {
+					action.Kind, action.Text, action.Action, action.Link = "title", titleOr(w.Title)+"正文已写好，还没有标题", "去拟标题", link+"#step-title"
+				} else if !w.ImagesReady {
+					action.Kind, action.Text, action.Action, action.Link = "cover", titleOr(w.Title)+"正文已写好，还缺封面或图片", "去配封面", link+"#step-images"
+					if in.Platform == "xhs" {
+						action.Action = "去配图"
+					}
+				}
+				offer(w.ID, action)
 			}
 		}
 		if w.PlannedDate != nil && (w.Status == "drafting" || w.Status == "checking") {
 			left := int(w.PlannedDate.Sub(truncDay(in.Now)).Hours() / 24)
 			if left <= 1 {
+				plannedLink := link
+				if next, ok := best[w.ID]; ok && (next.Kind == "title" || next.Kind == "cover" || next.Kind == "layout") {
+					plannedLink = next.Link
+				}
 				when := "明天"
 				switch {
 				case left < 0:
@@ -117,7 +140,7 @@ func nextActions(in naInput, limit int) []NextAction {
 					when = "今天"
 				}
 				offer(w.ID, NextAction{Kind: "planned", Score: naTimely + 50 - float64(left)*10,
-					Text: fmt.Sprintf("%s计划%s发布，还在创作中", titleOr(w.Title), when), Action: "继续写", Link: link})
+					Text: fmt.Sprintf("%s计划%s发布，还在创作中", titleOr(w.Title), when), Action: "继续写", Link: plannedLink})
 			}
 		}
 		if w.DueNode != nil {
