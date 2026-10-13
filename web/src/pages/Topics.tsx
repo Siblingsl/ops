@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowRight, BookOpen, CalendarDays, Check, Gauge, Inbox, Layers, Lightbulb, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Sparkles, Trash2, Wand2, X,
+  ArrowRight, BookOpen, CalendarDays, Check, Gauge, Inbox, Layers, Lightbulb, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Sparkles, Trash2, X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -9,7 +9,7 @@ import { Dialog, Drawer, confirm } from '@/components/dialog'
 import { AIFeedback, RefsNote, sendFeedback } from '@/components/refs'
 import { StarButton } from '@/components/star-button'
 import { Badge, Button, Card, cn, Empty, Field, formatLabel, HumanGate, IconButton, Input, Notice, PageHeader, PageLoading, Select, Switch, Tabs, Textarea } from '@/components/ui'
-import { openQuickCollect } from '@/components/quick-collect'
+import { InboxPanel } from '@/components/inbox-panel'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
@@ -17,7 +17,7 @@ import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { type AIRefs, relTime } from '@/lib/format'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import { deleteWithUndo } from '@/lib/undo'
-import type { InboxItem, InboxSuggestion, MaterialKind, Series, Topic, Work } from '@/lib/types'
+import type { InboxItem, Series, Topic, Work } from '@/lib/types'
 
 interface Suggestion {
 	hot_item_id?: string | null
@@ -362,144 +362,6 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
         {primed && !t.work_id && canWrite && <p className="mt-2 text-[12px] text-ink-700">这是最早采用、还没开始写的选题，点「开始创作」进入编辑器。</p>}
       </Card>
       {edit && <TopicEditDialog t={{ ...t, account_id: t.account_id ?? accountId }} accountFormat={accountFormat} series={series} onClose={() => setEdit(false)} />}
-    </div>
-  )
-}
-
-function ConvertDialog({ item, accountId, suggestion, onClose }: { item: InboxItem; accountId: string; suggestion: InboxSuggestion | null; onClose: () => void }) {
-  const inv = useInvalidate()
-  const [to, setTo] = useState<'topic' | 'material'>(suggestion?.as ?? 'topic')
-  const [title, setTitle] = useState(suggestion?.title || item.content.slice(0, 30))
-  const [angle, setAngle] = useState(suggestion?.angle ?? '')
-  const [audience, setAudience] = useState(suggestion?.audience ?? '')
-  const [kind, setKind] = useState<MaterialKind>((suggestion?.kind as MaterialKind) || 'opinion')
-  const [content, setContent] = useState(item.content)
-  const [tags, setTags] = useState((suggestion?.tags ?? []).join('、'))
-  const [busy, setBusy] = useState(false)
-  const go = async () => {
-    setBusy(true)
-    try {
-      await post(`/inbox/${item.id}/convert`, to === 'topic'
-        ? { to, account_id: accountId, title, angle, audience }
-        : { to, account_id: accountId, kind, content, tags: tags.split(/[、,，]/).map((x) => x.trim()).filter(Boolean) })
-      inv(['inbox'], ['topics', accountId], ['materials'])
-      toast.success(to === 'topic' ? '已转为选题' : '已存入素材库')
-      onClose()
-    } catch (e) {
-      toast.error(errorMessage(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <Dialog open onClose={onClose} title="整理这条灵感" desc="只处理这一条。确认后原灵感会标记为已整理。"
-      footer={<><Button variant="ghost" onClick={onClose}>取消</Button><Button variant="primary" loading={busy} onClick={go}>{to === 'topic' ? '转为选题' : '存为素材'}</Button></>}>
-      <div className="space-y-4">
-        <Tabs value={to} onChange={setTo} items={[{ value: 'topic', label: '转为选题' }, { value: 'material', label: '存为素材' }]} />
-        {suggestion?.reason && <Notice tone="ink" icon={<Sparkles className="size-4" />}>AI 建议{suggestion.as === 'topic' ? '作为选题' : '作为素材'}：{suggestion.reason}</Notice>}
-        {to === 'topic' ? (
-          <>
-            <Field label="选题标题"><Input value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
-            <Field label="切入角度"><Textarea rows={2} value={angle} onChange={(e) => setAngle(e.target.value)} /></Field>
-            <Field label="目标读者"><Input value={audience} onChange={(e) => setAudience(e.target.value)} /></Field>
-          </>
-        ) : (
-          <>
-            <Field label="类型">
-              <Select value={kind} onChange={(e) => setKind(e.target.value as MaterialKind)}>
-                <option value="experience">经历</option><option value="opinion">观点</option><option value="case">案例</option><option value="data">数据</option>
-              </Select>
-            </Field>
-            <Field label="内容"><Textarea rows={4} value={content} onChange={(e) => setContent(e.target.value)} /></Field>
-            <Field label="标签" hint="用顿号分隔"><Input value={tags} onChange={(e) => setTags(e.target.value)} /></Field>
-          </>
-        )}
-      </div>
-    </Dialog>
-  )
-}
-
-function InboxPanel({ accountId }: { accountId: string }) {
-  const canWrite = useCanWrite()
-  const inv = useInvalidate()
-  const { data, isLoading } = useQuery({ queryKey: ['inbox'], queryFn: () => get<InboxItem[]>('/inbox') })
-  const [text, setText] = useState('')
-  const [readPage, setReadPage] = useState(false)
-  const [busyId, setBusyId] = useState<string | null>(null)
-  const [suggestions, setSuggestions] = useState<Record<string, InboxSuggestion>>({})
-  const [converting, setConverting] = useState<InboxItem | null>(null)
-  const add = async () => {
-    if (!text.trim()) return
-    try {
-      await post('/inbox', { account_id: accountId, content: text.trim(), source: 'quick', read_page: readPage && /https:\/\/(?:[^\s/]+\.)?(?:xiaohongshu\.com|xhslink\.com|mp\.weixin\.qq\.com)\//i.test(text) })
-      setText('')
-      setReadPage(false)
-      if (readPage) inv(['references'])
-      inv(['inbox'])
-    } catch (e) {
-      toast.error(errorMessage(e))
-    }
-  }
-  const triage = async (it: InboxItem) => {
-    setBusyId(it.id)
-    try {
-      const s = await post<InboxSuggestion>(`/inbox/${it.id}/triage`)
-      setSuggestions((m) => ({ ...m, [it.id]: s }))
-    } catch (e) {
-      toast.error(errorMessage(e))
-    } finally {
-      setBusyId(null)
-    }
-  }
-  const dismiss = async (it: InboxItem) => {
-    await del(`/inbox/${it.id}`).catch((e) => toast.error(errorMessage(e)))
-    inv(['inbox'])
-  }
-  if (isLoading) return <PageLoading />
-  const list = data ?? []
-  return (
-    <div className="space-y-4">
-      {canWrite && (
-        <Card className="p-3">
-          <div className="flex items-start gap-2">
-            <Textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="随手记一条灵感，不用想好怎么分类…（Ctrl+Enter 保存）"
-              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && isEnterWithoutComposition(e.nativeEvent)) { e.preventDefault(); void add() } }} />
-            <div className="flex flex-col gap-1.5">
-              <Button variant="primary" onClick={add} disabled={!text.trim()}>记下</Button>
-              <VoiceButton onText={(t) => setText((v) => v + t)} className="self-center" />
-            </div>
-          </div>
-          {/https:\/\/(?:[^\s/]+\.)?(?:xiaohongshu\.com|xhslink\.com|mp\.weixin\.qq\.com)\//i.test(text) && <label className="mt-2 flex items-center gap-2 text-sm text-mist-600"><input type="checkbox" checked={readPage} onChange={(e) => setReadPage(e.target.checked)} />读取页面为对标参考（受 robots 和限额约束，可手动粘贴）</label>}
-        </Card>
-      )}
-      <Notice icon={<Inbox className="size-4" />}>收件箱里的灵感需要你一条一条处理：可以先让 AI 建议归类，再决定转为选题、存为素材，或者丢掉。系统每天也会为新灵感预先生成归类建议，但不会替你转换。</Notice>
-      {list.length === 0 ? <Card><Empty icon={<Inbox className="size-5" />} title="收件箱是空的" desc="任何页面按 Ctrl+Shift+I 都能快速记一条灵感，手机上可以用右下角按钮。"
-        action={canWrite ? <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => openQuickCollect('inbox')}>记一条灵感</Button> : undefined} /></Card> : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {list.map((it) => {
-            const sug = suggestions[it.id] ?? it.suggestion
-            return (
-              <Card key={it.id} className="p-4">
-                <p className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-mist-800">{it.content}</p>
-                <div className="mt-1.5 text-[11.5px] text-mist-400">{relTime(it.created_at)} · {{ quick: '随手记', share: '分享', palette: '命令面板', mobile: '手机' }[it.source] ?? it.source}</div>
-                {sug && (
-                  <div className="mt-2 rounded-lg bg-ink-50/60 px-2.5 py-1.5 text-[12.5px] text-ink-800">
-                    <Sparkles className="mr-1 inline size-3.5" />建议{sug.as === 'topic' ? `作为选题「${sug.title}」` : '作为素材'}{sug.reason && `：${sug.reason}`}
-                  </div>
-                )}
-                {canWrite && (
-                  <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                    {!sug && <Button size="sm" variant="ghost" icon={<Wand2 className="size-3.5" />} loading={busyId === it.id} onClick={() => triage(it)}>AI 建议归类</Button>}
-                    <Button size="sm" variant="outline" icon={<Lightbulb className="size-3.5" />} onClick={() => setConverting(it)}>整理</Button>
-                    <Button size="sm" variant="ghost" className="ml-auto text-mist-400" onClick={() => dismiss(it)}>丢掉</Button>
-                  </div>
-                )}
-              </Card>
-            )
-          })}
-        </div>
-      )}
-      {converting && <ConvertDialog item={converting} accountId={accountId} suggestion={suggestions[converting.id] ?? converting.suggestion} onClose={() => setConverting(null)} />}
     </div>
   )
 }

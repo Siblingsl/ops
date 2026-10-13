@@ -3,7 +3,8 @@ import { BookOpenCheck, CheckCircle2, Circle, Layers, PanelRightOpen, PenLine, P
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { confirm, Dialog } from '@/components/dialog'
+import { confirm, Dialog, Drawer } from '@/components/dialog'
+import { InboxPanel } from '@/components/inbox-panel'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, Textarea } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { ApiError, del, errorMessage, get, patch, post, put, rawRequest, stream } from '@/lib/api'
@@ -55,6 +56,7 @@ function SeriesStrip({ sc }: { sc: SeriesContext }) {
 function ViewpointCard({ work, setWork, readOnly, loadMaterials = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; loadMaterials?: boolean }) {
   const [text, setText] = useState(work.viewpoint)
   const [picking, setPicking] = useState(false)
+  const [inbox, setInbox] = useState(false)
   const [matQ, setMatQ] = useState('')
   const { data: materials } = useQuery({
     queryKey: ['materials', work.account_id, ''],
@@ -135,7 +137,13 @@ function ViewpointCard({ work, setWork, readOnly, loadMaterials = false }: { wor
         {matQ.trim() && search.isFetching && <p className="mb-2 text-sm text-mist-400">正在搜索…</p>}
         {search.isError && <Notice tone="red">{errorMessage(search.error)}<Button size="sm" onClick={() => void search.refetch()}>重试</Button></Notice>}
         <div className="scrollbar-thin max-h-[50vh] space-y-2 overflow-y-auto">
-          {(materials ?? []).length === 0 && <p className="py-8 text-center text-sm text-mist-400">素材库是空的，可以先去「素材库」添加经历、观点、案例和数据。</p>}
+          {(materials ?? []).length === 0 && <div className="space-y-3 py-8 text-center text-sm text-mist-400">
+            <p>素材库是空的，可以先添加经历、观点、案例和数据。</p>
+            <div className="flex justify-center gap-4">
+              <Link className="text-ink-600 underline" to={`/a/${work.account_id}/materials`}>去素材库添加</Link>
+              <button type="button" className="cursor-pointer text-ink-600 underline" onClick={() => { setPicking(false); setInbox(true) }}>从收件箱整理</button>
+            </div>
+          </div>}
           {(materials ?? []).length > 0 && filtered.length === 0 && <p className="py-6 text-center text-sm text-mist-400">没有匹配「{matQ}」的素材。</p>}
           {filtered.map((m) => (
             <label key={m.id} className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition', ids.includes(m.id) ? 'border-ink-300 bg-ink-50/50' : 'border-mist-200 hover:border-mist-300')}>
@@ -149,6 +157,9 @@ function ViewpointCard({ work, setWork, readOnly, loadMaterials = false }: { wor
           ))}
         </div>
       </Dialog>
+      <Drawer open={inbox} onClose={() => setInbox(false)} title="从收件箱整理" desc="逐条确认素材，可选择同时关联到当前作品。">
+        <InboxPanel accountId={work.account_id} work={work} onLinked={setWork} />
+      </Drawer>
     </Card>
   )
 }

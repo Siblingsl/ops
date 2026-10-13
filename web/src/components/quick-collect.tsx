@@ -1,5 +1,6 @@
 import { BookmarkPlus } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button, Field, Select, Tabs, Textarea } from '@/components/ui'
 import { Dialog } from '@/components/dialog'
@@ -18,6 +19,7 @@ export function openQuickCollect(mode: Mode, text = '', source?: 'palette') {
 
 export function QuickCollect() {
   const acc = useCurrentAccount()
+  const nav = useNavigate()
   const inv = useInvalidate()
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<Mode>('inbox')
@@ -68,7 +70,7 @@ export function QuickCollect() {
         inv(['materials'])
       } else {
         await post('/inbox', { account_id: acc?.id ?? null, content: text.trim(), read_page: readPage && /https:\/\/(?:[^\s/]+\.)?(?:xiaohongshu\.com|xhslink\.com|mp\.weixin\.qq\.com)\//i.test(text), source: source ?? (window.innerWidth < 768 ? 'mobile' : 'quick') })
-        toast.success('已记入灵感收件箱', { description: '空闲时到选题池「收件箱」里逐条整理。' })
+        toast.success('已记入灵感收件箱', { description: '空闲时到选题池「收件箱」里逐条整理。', action: acc ? { label: '去整理', onClick: () => nav(`/a/${acc.id}/topics?tab=inbox`) } : undefined })
         inv(['inbox'])
       }
       setOpen(false)
