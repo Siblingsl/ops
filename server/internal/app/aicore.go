@@ -41,7 +41,8 @@ type aiTask struct {
 	User      string
 	JSON      bool
 	Refs      map[string]any
-	SkipStyle bool
+	SkipStyle        bool
+	StyleSummaryOnly bool
 
 	ExtraRules  string
 	MemoryScope string

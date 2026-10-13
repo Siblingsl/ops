@@ -378,8 +378,12 @@ func (l *LLM) respond(prompt string) string {
 		}
 	case "title":
 		var ts []map[string]string
+		maxChars := 30
+		if strings.Contains(prompt, "平台：小红书") {
+			maxChars = 20
+		}
 		for i, t := range []string{"%s", "我花了三年才想明白：%s", "关于%s，说点实在的", "%s，其实没那么难", "写给新手：%s", "一个被低估的道理：%s"} {
-			ts = append(ts, map[string]string{"text": short(fmt.Sprintf(t, short(viewpoint, 14)), 30), "style": []string{"直述", "经历", "口语", "反常识", "对象", "观点"}[i]})
+			ts = append(ts, map[string]string{"text": short(fmt.Sprintf(t, short(viewpoint, 14)), maxChars), "style": []string{"直述", "经历", "口语", "反常识", "对象", "观点"}[i]})
 		}
 		return js(map[string]any{"titles": ts})
 	case "summary":

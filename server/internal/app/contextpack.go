@@ -195,7 +195,7 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 			}
 		}
 
-		if !t.SkipStyle {
+		if !t.SkipStyle && (!t.StyleSummaryOnly || strings.TrimSpace(prof.StyleSummary) != "") {
 			text, sl, n, err := s.styleSlot(ctx, t.Account.ID, prof.StyleSummary)
 			if err != nil {
 				return nil, err
