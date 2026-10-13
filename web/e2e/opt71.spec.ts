@@ -1,0 +1,41 @@
+import { expect, test } from '@playwright/test'
+import { api, createOutline, registerAccount } from './support'
+
+test('OPT71 AI 改写一分钟后可恢复，下一次手动修改使入口失效', async ({ page }) => {
+  const account = await registerAccount(page, '长图文', 'wechat_mp')
+  await page.goto(`/a/${account.id}`)
+  const id = await createOutline(page)
+  const work = await api(page, 'GET', `/works/${id}`)
+  const section = work.sections[0]
+  const block = page.locator(`#sec-${section.id}`)
+  const original = '这是作者自己的原文，先明确问题，再安排一个能完成的小步骤。'
+  await block.locator('.tiptap').fill(original)
+  const content = async () => (await api(page, 'GET', `/works/${id}`)).sections[0].content_md
+  await expect.poll(content).toBe(original)
+  await block.getByRole('button', { name: '改写', exact: true }).click()
+  await expect(block.getByText('建议', { exact: true })).toBeVisible()
+  const rewritten = (await block.getByText('建议', { exact: true }).locator('..').locator('p').innerText()).trim()
+  expect(rewritten).not.toBe(original)
+  await page.clock.install()
+  const appliedAt = await page.evaluate(() => Date.now())
+  await block.getByRole('button', { name: '替换', exact: true }).click()
+  await page.clock.runFor(2_000)
+  await expect.poll(content).toBe(rewritten)
+  await page.clock.runFor(61_000)
+  expect(await page.evaluate(() => Date.now()) - appliedAt).toBeGreaterThanOrEqual(60_000)
+  await page.clock.resume()
+  await expect(page.getByRole('button', { name: '撤销', exact: true })).toHaveCount(0)
+  const restore = block.getByRole('button', { name: '恢复改写前', exact: true })
+  await expect(restore).toBeVisible()
+  await restore.click()
+  await expect(block.locator('.tiptap')).toHaveText(original)
+  await expect.poll(content).toBe(original)
+  await expect(restore).toHaveCount(0)
+  await block.getByRole('button', { name: '改写', exact: true }).click()
+  await expect(block.getByText('建议', { exact: true })).toBeVisible()
+  await block.getByRole('button', { name: '替换', exact: true }).click()
+  await expect(restore).toBeVisible()
+  await block.locator('.tiptap').fill('改写后下一次手动输入，应保留这段作者的新修改。')
+  await expect(restore).toHaveCount(0)
+  await expect.poll(content).toBe('改写后下一次手动输入，应保留这段作者的新修改。')
+})

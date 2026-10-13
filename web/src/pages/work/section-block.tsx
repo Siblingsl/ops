@@ -20,6 +20,7 @@ import {
 } from './editor-tools'
 import { AIConflictPanel, type AIConflict, SaveToMaterial, SectionConflictDialog } from './section-save-dialogs'
 import { useSectionSave } from './use-section-save'
+import { useSectionUndo } from './use-section-undo'
 
 const originMeta = { ai: { label: 'AI 生成', tone: 'ink' as const }, human: { label: '手写', tone: 'gray' as const }, mixed: { label: 'AI + 人工修改', tone: 'blue' as const } }
 
@@ -115,11 +116,13 @@ export const SectionBlock = memo(function SectionBlock({
   const ghostAbort = useRef<AbortController | null>(null)
   const lintTimer = useRef<number>()
   const fileInput = useRef<HTMLInputElement>(null)
+  const { available: canUndoAI, clearUndo, restoreBefore, undoToast } = useSectionUndo({ index, editor, content, applied, setLintText, disabled: readOnly || !!streaming })
   const hits = useLint(work.id, lintText, prefs.live_lint && !readOnly)
   const pending = useMemo(() => findPending(lintText), [lintText])
   useEffect(() => () => window.clearTimeout(lintTimer.current), [])
 
   const onChange = (md: string) => {
+    clearUndo()
     content.current = md
     dirty.current = true
     onEditing?.(section.id)
@@ -218,21 +221,6 @@ export const SectionBlock = memo(function SectionBlock({
       jobId.current = null
       setStreaming(null)
     }
-  }
-
-  /** undoToast offers a 10-second undo after AI text replaced the paragraph (4.3). */
-  const undoToast = (label: string, before: string, aiCall?: string | null) => {
-    toast(`${label} · 第 ${index + 1} 段`, {
-      duration: 10_000,
-      action: {
-        label: '撤销',
-        onClick: () => {
-          editor.current?.setMarkdown(before)
-          setLintText(before)
-          sendFeedback(aiCall, { outcome: 'rejected' })
-        },
-      },
-    })
   }
 
   // 刷新前开始的起草仍在后台进行（EX-N-01）：显示生成中并轮询，完成后取回结果。
@@ -540,6 +528,7 @@ export const SectionBlock = memo(function SectionBlock({
           <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-mist-600">{section.key_point || `第 ${index + 1} 段`}</span>
         ) : (
           <input value={heading} disabled={readOnly} onChange={(e) => {
+            clearUndo()
             setHeading(e.target.value)
             void writeDraft(section.id, { content: content.current, heading: e.target.value, revision: revision.current, at: Date.now() })
           }} onBlur={() => heading !== section.heading && persist({ heading })}
@@ -692,6 +681,7 @@ export const SectionBlock = memo(function SectionBlock({
             </div>
           )}
           <div className="flex flex-wrap items-center gap-1">
+            {canUndoAI && <Button size="sm" variant="ghost" disabled={busy} onClick={restoreBefore}>恢复改写前</Button>}
             {busy ? (
               <Button size="sm" variant="ghost" icon={<Square className="size-3.5" />} onClick={stop}>停止生成</Button>
             ) : (
@@ -737,13 +727,14 @@ export const SectionBlock = memo(function SectionBlock({
       <SectionConflictDialog server={conflict} heading={heading} content={content.current} onClose={() => setConflict(null)} onResolve={resolveConflict} />
       {aiConflict && <AIConflictPanel conflict={aiConflict} onKeep={() => { sendFeedback(aiConflict.ai_call_id, { outcome: 'rejected' }); setAIConflict(null) }} onReplace={async () => {
         const value = aiConflict
+        const before = value.server.content_md
         load(value.server)
         applied.current = { kind: 'draft', ai_call_id: value.ai_call_id, ...(value.source_revisions ? { source_revisions: value.source_revisions } : {}) }
         content.current = value.candidate
         editor.current?.setMarkdown(value.candidate)
         setLintText(value.candidate)
         setIsEmpty(!value.candidate.trim())
-        if (await persist()) { setAIConflict(null); setSelfCheck(value.self_check ? { ...value.self_check, sectionId: section.id } : null); await refresh() }
+        if (await persist()) { setAIConflict(null); setSelfCheck(value.self_check ? { ...value.self_check, sectionId: section.id } : null); await refresh(); undoToast('已替换', before, value.ai_call_id) }
       }} />}
       {toMaterial !== null && <SaveToMaterial text={toMaterial} work={work} onClose={() => setToMaterial(null)} />}
       {revOpen && <RevisionsDialog section={{ ...section, revision: revision.current }} workId={work.id} onClose={() => setRevOpen(false)} onRestored={setWork} />}
