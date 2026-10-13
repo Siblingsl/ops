@@ -184,9 +184,14 @@ var taskRe = regexp.MustCompile(`任务：([a-z_]+)`)
 var tplRe = regexp.MustCompile(`结构模板「[^」]*」：([^\n]+?)。大纲必须按这个结构展开`)
 
 func field(prompt, label string) string {
-	for _, line := range strings.Split(prompt, "\n") {
+	lines := strings.Split(prompt, "\n")
+	for i, line := range lines {
 		if strings.HasPrefix(line, label) {
-			return strings.TrimSpace(strings.TrimPrefix(line, label))
+			value := strings.TrimSpace(strings.TrimPrefix(line, label))
+			if strings.HasPrefix(value, "<<<") && i+1 < len(lines) {
+				return lines[i+1]
+			}
+			return value
 		}
 	}
 	return ""
@@ -274,13 +279,23 @@ func sectionAfter(prompt, marker string) string {
 	if j := strings.Index(rest, "\n## "); j >= 0 {
 		rest = rest[:j]
 	}
-	return strings.TrimSpace(rest)
+	rest = strings.TrimSpace(rest)
+	if strings.HasPrefix(rest, "<<<") {
+		lines := strings.Split(rest, "\n")
+		if len(lines) > 1 {
+			var text string
+			if json.Unmarshal([]byte(lines[1]), &text) == nil {
+				return text
+			}
+		}
+	}
+	return rest
 }
 
 func (l *LLM) respond(prompt string) string {
 	task := ""
-	if m := taskRe.FindStringSubmatch(prompt); m != nil {
-		task = m[1]
+	if matches := taskRe.FindAllStringSubmatch(prompt, -1); len(matches) > 0 {
+		task = matches[len(matches)-1][1]
 	}
 	viewpoint := field(prompt, "核心观点：")
 	if viewpoint == "" {

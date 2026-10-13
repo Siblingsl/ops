@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
 	"net/http"
@@ -205,7 +204,7 @@ func (s *Server) matchHot(ctx context.Context, a *Account, force bool) error {
 		succeeded = true
 		return nil
 	}
-	input, _ := json.Marshal(items)
+	input := externalBlock("热点", "candidates", items)
 	var negative string
 	rows, e := s.db.Query(ctx, `SELECT h.title FROM account_hot_match m JOIN hot_item h ON h.id=m.hot_item_id WHERE m.account_id=$1 AND m.status='dismissed' AND m.date>=$2 LIMIT 30`, a.ID, s.today().AddDate(0, 0, -14))
 	if e == nil {
@@ -217,7 +216,7 @@ func (s *Server) matchHot(ctx context.Context, a *Account, force bool) error {
 		}
 		rows.Close()
 	}
-	user := fmt.Sprintf("## 运营方案\n%s\n## 候选热点（只引用输入 id，不补充细节）\n%s\n## 近14天不感兴趣\n%s\n只输出 JSON：{\"items\":[{\"hot_item_id\":\"\",\"relevance\":0,\"reason\":\"\",\"angle\":\"\",\"risk\":[]}]}。风险标签限定 disaster/tragedy/politics/unverified/commercial。不相关给低分。", strategyBrief(st), input, negative)
+	user := fmt.Sprintf("## 运营方案\n%s\n## 候选热点（只引用输入 id，不补充细节）\n%s\n## 近14天不感兴趣\n%s\n只输出 JSON：{\"items\":[{\"hot_item_id\":\"\",\"relevance\":0,\"reason\":\"\",\"angle\":\"\",\"risk\":[]}]}。风险标签限定 disaster/tragedy/politics/unverified/commercial。不相关给低分。", strategyBrief(st), input, externalBlock("热点", "dismissed", negative))
 	var out struct {
 		Items []struct {
 			ID        uuid.UUID `json:"hot_item_id"`

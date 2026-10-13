@@ -185,6 +185,7 @@ const hotClusterLookupSQL = `SELECT c.id FROM hot_cluster c JOIN hot_item h ON h
   WHERE src.workspace_id IS NOT DISTINCT FROM $2::uuid AND h.title_norm % $1 ORDER BY similarity(h.title_norm,$1) DESC LIMIT 1`
 
 func (s *Server) storeHotItem(ctx context.Context, source CrawlSource, item crawl.Item) error {
+	item.Title, item.Summary, item.Category = cleanExternalText(item.Title), cleanExternalText(item.Summary), cleanExternalText(item.Category)
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err

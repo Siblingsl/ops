@@ -62,7 +62,7 @@ func (s *Server) dailyAI(ctx context.Context, a *Account, strategy *Strategy, co
 	for _, c := range candidates {
 		known[basisKey(c.DailyBasis)] = c
 	}
-	b, _ := json.Marshal(candidates)
+	b := externalBlock("推荐依据", "candidates", candidates)
 	sb, _ := json.Marshal(strategy.StrategyFields)
 	var recent []string
 	rows, e := s.db.Query(ctx, `SELECT title FROM work WHERE account_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 30`, a.ID)

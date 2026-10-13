@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -404,6 +403,9 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 	}
 	ctxText := strings.TrimSpace(in.Context)
 	ctxText = truncateRunes(ctxText, 4000)
+	if ctxText != "" {
+		ctxText = externalBlock("资讯摘要", "pasted", cleanExternalText(ctxText))
+	}
 	known := map[uuid.UUID]HotItem{}
 	strategy, strategyErr := s.activeStrategy(r.Context(), a.ID)
 	if strategyErr != nil {
@@ -425,8 +427,7 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 			}
 		}
 		if len(input) > 0 {
-			b, _ := json.Marshal(input)
-			ctxText += "\n## 以下真实热点（已匹配，带 id 和链接）\n" + string(b)
+			ctxText += "\n## 以下真实热点（已匹配，带 id 和链接）\n" + externalBlock("热点", "matched", input)
 		}
 	}
 	if ctxText == "" {

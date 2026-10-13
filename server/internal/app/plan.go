@@ -257,7 +257,7 @@ func (s *Server) outlineSuggest(ctx context.Context, a *Account, st *Strategy, s
 			}
 		}
 	}
-	hotJSON, _ := json.Marshal(hot)
+	hotJSON := externalBlock("热点", "plan", hot)
 	recent := s.recentTitles(ctx, a.ID)
 	pending := s.pendingTopicTitles(ctx, a.ID)
 	user := fmt.Sprintf(`## 运营方案

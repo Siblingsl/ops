@@ -381,6 +381,9 @@ func (s *Server) materialsSlot(ctx context.Context, ids []uuid.UUID) (string, Sl
 		found[id] = m
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return "", sl, nil, err
+	}
 	var b strings.Builder
 	names := []string{}
 	seen := map[uuid.UUID]bool{}
@@ -390,11 +393,7 @@ func (s *Server) materialsSlot(ctx context.Context, ids []uuid.UUID) (string, Sl
 			continue
 		}
 		seen[id] = true
-		line := fmt.Sprintf("- [素材 id=%s][%s] %s", id, materialKindNames[m.kind], m.content)
-		if m.source != "" {
-			line += "（来源：" + m.source + "）"
-		}
-		line += "\n"
+		line := externalBlock("素材", id.String(), map[string]string{"kind": materialKindNames[m.kind], "content": m.content, "source": m.source})
 		b.WriteString(line)
 		sl.Chars += runeLen(line)
 		names = append(names, truncate(m.content, 16))

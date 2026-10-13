@@ -562,8 +562,7 @@ func (s *Server) strategyOptions(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		if len(hot) > 0 {
-			b, _ := json.Marshal(hot)
-			t.User += "\n## 近7天领域热点快照（仅公开标题与链接，不补充事件细节）\n" + string(b)
+			t.User += "\n## 近7天领域热点快照（仅公开标题与链接，不补充事件细节）\n" + externalBlock("热点", "positioning", hot)
 			t.Refs["hot_items"] = hot
 		}
 	}
