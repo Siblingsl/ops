@@ -349,8 +349,11 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
         <div className="mt-3 flex items-center gap-2">
           <Badge tone={sourceLabel[t.source]?.tone ?? 'gray'}>{sourceLabel[t.source]?.label ?? t.source}</Badge>
           <span className="text-xs text-mist-400">{relTime(t.created_at)}</span>
-          <div className="ml-auto">
-            {canWrite && t.status === 'pending' && <Button size="sm" variant="ghost" onClick={() => setStatus('adopted')} icon={<Check className="size-3.5" />}>采用</Button>}
+          <div className="ml-auto flex items-center gap-2">
+            {canWrite && t.status === 'pending' && <>
+              <Button size="sm" variant="primary" loading={busy} onClick={start}>采用并开始写</Button>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setStatus('adopted')} icon={<Check className="size-3.5" />}>采用</Button>
+            </>}
             {t.status === 'adopted' && (t.work_id
               ? <Link to={`/works/${t.work_id}`}><Button size="sm" variant="ghost">打开作品<ArrowRight className="size-3.5" /></Button></Link>
               : canWrite ? <Button size="sm" variant="primary" loading={busy} onClick={start} className={cn(primed && 'animate-pulse')}>开始创作</Button> : null)}
