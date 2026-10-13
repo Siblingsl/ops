@@ -23,7 +23,13 @@ export default function HotPanel({ account, compact=false }: { account: Account;
   const [angle, setAngle] = useState('')
   const run = async (path: string, body?: unknown) => {
     setBusy(true)
-    try { await post(path, body); setEditing(null); await inv(['account-hot', account.id], ['hot-trends', account.id], ['references', account.id], ['plan', account.id], ['daily', account.id], ['next-actions', account.id], ['topics', account.id], ['dashboard', account.id]); toast.success('已更新') }
+    try {
+      await post(path, body)
+      setEditing(null)
+      if (path.startsWith('/hot-matches/') && path.endsWith('/convert')) await inv(['account-hot', account.id], ['topics', account.id])
+      else await inv(['account-hot', account.id], ['hot-trends', account.id], ['references', account.id], ['plan', account.id], ['daily', account.id], ['next-actions', account.id], ['topics', account.id], ['dashboard', account.id])
+      toast.success('已更新')
+    }
     catch (e) { toast.error(errorMessage(e)) } finally { setBusy(false) }
   }
   const paste = canWrite ? <Link to={`/a/${account.id}/topics?hot=1`}><Button>去选题池粘贴资讯</Button></Link> : undefined

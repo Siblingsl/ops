@@ -265,13 +265,13 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
     const before = qc.getQueriesData<Topic[]>({ queryKey: key })
     qc.setQueriesData<Topic[]>({ queryKey: key }, (list) => list?.map((x) => (x.id === t.id ? { ...x, status } : x)))
     try {
-      await patch(`/topics/${t.id}`, { status })
+      const result = await patch<{ topic: Topic }>(`/topics/${t.id}`, { status })
+      qc.setQueriesData<Topic[]>({ queryKey: key }, (list) => list?.map((x) => (x.id === result.topic.id ? result.topic : x)))
       saved = true
     } catch (e) {
       for (const [k, v] of before) qc.setQueryData(k, v)
       toast.error(errorMessage(e))
     }
-    inv(key)
     return saved
   }
   const drop = async () => {
