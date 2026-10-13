@@ -47,8 +47,9 @@ type ContextPack struct {
 	Legacy      map[string]any
 	Instruction string
 	// UserRest is the user message without the editable task-instruction block (prompt regression snapshots).
-	UserRest string
-	Images   []string
+	UserRest    string
+	Images      []string
+	Temperature *float64
 }
 
 func (p *ContextPack) add(sl Slot) {
@@ -308,6 +309,7 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 	usr.WriteString("\n\n任务：" + t.Type)
 	p.System, p.User = sys.String(), usr.String()
 	p.UserRest = p.User[restStart:]
+	p.Temperature = s.taskTemperature(ctx, t.Type, t.JSON)
 	return p, nil
 }
 

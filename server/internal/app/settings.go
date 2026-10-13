@@ -124,7 +124,8 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) error {
 	}
 	return ok(w, map[string]any{
 		"ai_limit": s.loadLimit(r.Context()), "trash_days": trashDays, "version": Version,
-		"smtp": smtp, "review_weekly_draft": s.weeklyDraftSetting(r.Context(), ident(r.Context()).WorkspaceID),
+		"ai_sampling": s.loadSampling(r.Context()),
+		"smtp":        smtp, "review_weekly_draft": s.weeklyDraftSetting(r.Context(), ident(r.Context()).WorkspaceID),
 	})
 }
 
@@ -142,14 +143,25 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		AILimit     *aiLimit    `json:"ai_limit"`
-		SMTP        *smtpConfig `json:"smtp"`
-		WeeklyDraft *string     `json:"review_weekly_draft"`
+		AILimit     *aiLimit        `json:"ai_limit"`
+		AISampling  *samplingConfig `json:"ai_sampling"`
+		SMTP        *smtpConfig     `json:"smtp"`
+		WeeklyDraft *string         `json:"review_weekly_draft"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
 	ws := ident(r.Context()).WorkspaceID
+	if in.AISampling != nil {
+		if value := in.AISampling.Temperature; value != nil && (*value < 0 || *value > 2) {
+			return validation("采样温度必须在 0 到 2 之间")
+		}
+		b, _ := json.Marshal(in.AISampling)
+		if _, err := s.db.Exec(r.Context(), `INSERT INTO app_setting(workspace_id,key,value) VALUES($1,'ai_sampling',$2) ON CONFLICT(workspace_id,key) DO UPDATE SET value=excluded.value`, ws, b); err != nil {
+			return err
+		}
+		s.audit(r.Context(), "settings_update", "app_setting", "ai_sampling", "ok", map[string]any{"temperature": in.AISampling.Temperature})
+	}
 	if in.WeeklyDraft != nil {
 		v := *in.WeeklyDraft
 		if v != "on" && v != "off" {

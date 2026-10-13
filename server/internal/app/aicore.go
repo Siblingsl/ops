@@ -204,7 +204,8 @@ func (s *Server) callModel(ctx context.Context, rt *route, p *ContextPack, jsonM
 	defer timer.Stop()
 	text, usage, err := ai.Stream(actx, s.aiHTTP, ai.Request{
 		BaseURL: rt.BaseURL, APIKey: rt.APIKey, Model: rt.Model, JSON: jsonMode,
-		Messages: []ai.Message{{Role: "system", Content: p.System}, {Role: "user", Content: p.User, Images: p.Images}},
+		Temperature: p.Temperature,
+		Messages:    []ai.Message{{Role: "system", Content: p.System}, {Role: "user", Content: p.User, Images: p.Images}},
 	}, func(d string) {
 		got.Store(true)
 		*streamed = true
@@ -232,7 +233,7 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 	if err != nil {
 		return nil, err
 	}
-	s.lastPacks.Store(ident(ctx).WorkspaceID.String()+"/"+t.Type, evalSnapshot{System: pack.System, UserRest: pack.UserRest, JSON: t.JSON})
+	s.lastPacks.Store(ident(ctx).WorkspaceID.String()+"/"+t.Type, evalSnapshot{System: pack.System, UserRest: pack.UserRest, JSON: t.JSON, Temperature: pack.Temperature})
 	refs := pack.refs()
 	for k, v := range t.Refs {
 		refs[k] = v
