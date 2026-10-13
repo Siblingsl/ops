@@ -175,6 +175,7 @@ export default function Compare() {
   const srcById = new Map(srcWork?.sections.map((s) => [s.id, s]) ?? [])
   const activeSrc = new Set(work.sections.find((s) => s.id === active)?.source_section_ids ?? [])
   const xhs = work.platform === 'xhs'
+  const bodyReady = work.sections.length > 0 && work.sections.every(section => section.content_md.trim() !== '')
   const total = runeLen(work.sections.map((s) => s.content_md).join(''))
   const saveField = async (body: Record<string, unknown>, base = work.revision) => {
     try {
@@ -202,8 +203,8 @@ export default function Compare() {
           <PlatformMark platform={work.platform} size="sm" />
           <span className="font-medium text-mist-700">衍生作品（可编辑）</span>
           <span>{work.account_name}</span>
-          <Button size="sm" variant="primary" className="ml-auto" onClick={() => nav(xhs ? `/works/${work.id}#step-images` : `/works/${work.id}`)}>
-            继续编辑<ArrowRight className="size-3.5" />
+          <Button size="sm" variant="primary" className="ml-auto" onClick={() => nav(bodyReady ? `/works/${work.id}/check` : xhs ? `/works/${work.id}#step-images` : `/works/${work.id}`)}>
+            {bodyReady ? '去检查' : '继续编辑'}<ArrowRight className="size-3.5" />
           </Button>
         </div>
       </div>
