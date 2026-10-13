@@ -648,14 +648,38 @@ func (s *Server) generateSummary(w http.ResponseWriter, r *http.Request) error {
 }
 
 func bodyDigest(secs []Section, limit int) string {
-	var b strings.Builder
-	for _, x := range secs {
-		if x.Heading != "" {
-			b.WriteString("## " + x.Heading + "\n")
-		}
-		b.WriteString(x.ContentMD + "\n\n")
+	if len(secs) == 0 {
+		return ""
 	}
-	return truncate(b.String(), limit)
+	headings := make([]string, len(secs))
+	fixed := len(secs) * 2
+	for i, section := range secs {
+		if section.Heading != "" {
+			headings[i] = "## " + section.Heading + "\n"
+		}
+		fixed += runeLen(headings[i])
+	}
+	remaining := max(0, limit-fixed)
+	var b strings.Builder
+	for i, section := range secs {
+		b.WriteString(headings[i])
+		budget := remaining / len(secs)
+		if i < remaining%len(secs) {
+			budget++
+		}
+		body := []rune(strings.TrimSpace(section.ContentMD))
+		if len(body) <= budget {
+			b.WriteString(string(body))
+		} else if budget > 3 {
+			room := budget - 3
+			start, end := (room+1)/2, room/2
+			b.WriteString(string(body[:start]) + "\n…\n" + string(body[len(body)-end:]))
+		} else if budget > 0 {
+			b.WriteString(string(body[:budget]))
+		}
+		b.WriteString("\n\n")
+	}
+	return b.String()
 }
 
 // ---------- 派生改写（FR-M5，06 文档第 5.8 节两步法） ----------
