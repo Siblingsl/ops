@@ -57,7 +57,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <BrowserRouter>
         <App />
       </BrowserRouter>
-      <Toaster position="top-center" richColors closeButton toastOptions={{ style: { fontFamily: 'var(--font-sans)' } }} />
+      <Toaster position="top-center" richColors closeButton duration={8000} toastOptions={{ style: { fontFamily: 'var(--font-sans)' } }} />
     </QueryClientProvider>
   </React.StrictMode>,
 )

@@ -25,7 +25,7 @@ export function aiError(e: unknown, step: string, retry?: () => unknown) {
     : undefined
   toast.error(`${step}失败`, {
     description: `${reason} · 你的内容没有被改动${trace}`,
-    duration: 10_000,
+    duration: retry || switchModel ? Number.POSITIVE_INFINITY : 10_000,
     action: retry ? { label: '重试', onClick: () => void retry() } : undefined,
     cancel: switchModel,
   })
