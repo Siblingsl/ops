@@ -137,7 +137,7 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 		if scope == "" {
 			scope = taskMemoryScope(t.Type)
 		}
-		mems, err := s.activeMemories(ctx, t.Account.ID, scope)
+		mems, err := s.activeMemories(ctx, t.Account.ID, scope, t.Type == "fact_flag")
 		if err != nil {
 			return nil, err
 		}

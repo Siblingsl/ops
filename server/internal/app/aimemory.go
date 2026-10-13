@@ -45,17 +45,17 @@ func taskMemoryScope(taskType string) string {
 	switch taskType {
 	case "title":
 		return "title"
-	case "topic_suggest", "topic_hot_suggest", "topic_score", "inbox_triage":
+	case "topic_suggest", "topic_hot_suggest", "topic_score", "inbox_triage", "daily_recommend":
 		return "topic"
-	case "section_draft", "section_edit", "section_rewrite", "section_continue", "hook_suggest", "copilot_chat", "fix_suggest", "organize_notes":
+	case "section_draft", "section_edit", "section_rewrite", "section_continue", "hook_suggest", "copilot_chat", "fix_suggest", "organize_notes", "outline", "outline_review", "summary", "rewrite_plan":
 		return "draft"
 	}
 	return ""
 }
 
-func (s *Server) activeMemories(ctx context.Context, accountID uuid.UUID, scope string) ([]Memory, error) {
+func (s *Server) activeMemories(ctx context.Context, accountID uuid.UUID, scope string, factsOnly bool) ([]Memory, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+memoryCols+` FROM account_memory WHERE account_id=$1 AND status='active'
-		AND (scope='all' OR scope=$2) ORDER BY (kind='avoid') DESC, use_count DESC, created_at`, accountID, scope)
+		AND (($3 AND kind='fact') OR (NOT $3 AND (scope='all' OR scope=$2))) ORDER BY (kind='avoid') DESC, use_count DESC, created_at`, accountID, scope, factsOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -385,7 +385,7 @@ func (s *Server) distillMemories(ctx context.Context, a *Account, since time.Tim
 	if len(pairs) < 5 && len(rejections) < 5 {
 		return tagAdded, nil, nil
 	}
-	existing, _ := s.activeMemories(ctx, a.ID, "")
+	existing, _ := s.activeMemories(ctx, a.ID, "", false)
 	var b strings.Builder
 	if len(pairs) >= 5 {
 		b.WriteString("## AI 原稿与作者终稿对比\n")
