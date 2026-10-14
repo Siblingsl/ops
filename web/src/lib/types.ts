@@ -296,6 +296,7 @@ export interface Work {
   cover_crops: Record<string, CropBox> | null
   wechat_fields: WechatDefaults
   topics: string[]
+  tags: string[]
   wechat_draft_media_id: string | null
   published_url: string | null
   published_at: string | null
@@ -341,6 +342,7 @@ export interface WorkCard {
 export interface WorkListItem {
   id: string
   title: string
+  tags: string[]
   status: WorkStatus
   content_format: ContentFormat
   source_work_id: string | null

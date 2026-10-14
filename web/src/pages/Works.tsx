@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import { Bookmark, CalendarDays, Copy, FileText, GitBranch, ImageIcon, PenLine, Search, Star, Trash2, UserRound, X } from 'lucide-react'
-import { useState } from 'react'
+import { Bookmark, CalendarDays, Copy, FileText, GitBranch, ImageIcon, PenLine, Search, Star, Tag, Trash2, UserRound, X } from 'lucide-react'
+import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
+import { Dialog } from '@/components/dialog'
 import { Button, Card, cn, Empty, IconButton, Input, MoreMenu, PageHeader, PageLoading, StatusBadge, Tabs } from '@/components/ui'
-import { del, errorMessage, get, post } from '@/lib/api'
+import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { deleteWithUndo } from '@/lib/undo'
@@ -74,6 +75,39 @@ function SavedViews({ current, onApply }: { current: string; onApply: (query: st
   )
 }
 
+function WorkTagsDialog({ work, onClose, onSave }: { work: WorkListItem; onClose: () => void; onSave: (tags: string[]) => void }) {
+  const [tags, setTags] = useState(work.tags ?? [])
+  const [draft, setDraft] = useState('')
+  const add = (e: FormEvent) => {
+    e.preventDefault()
+    const tag = draft.trim()
+    if (!tag || tags.includes(tag)) return
+    setTags([...tags, tag])
+    setDraft('')
+  }
+  return (
+    <Dialog open onClose={onClose} title="编辑作品标签" desc={work.title || '未命名作品'} width="max-w-md">
+      <div className="flex flex-wrap gap-1.5">
+        {tags.map((tag) => (
+          <span key={tag} className="inline-flex items-center gap-1 rounded-full border border-ink-200 bg-ink-50 px-2.5 py-1 text-xs text-ink-800">
+            {tag}
+            <button type="button" aria-label={`移除标签 ${tag}`} onClick={() => setTags(tags.filter((item) => item !== tag))} className="cursor-pointer text-ink-500 hover:text-danger">×</button>
+          </span>
+        ))}
+        {tags.length === 0 && <span className="text-xs text-mist-400">尚无标签</span>}
+      </div>
+      <form onSubmit={add} className="mt-4 flex gap-2">
+        <Input aria-label="新增标签" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="输入标签" />
+        <Button type="submit" disabled={!draft.trim()}>添加</Button>
+      </form>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>取消</Button>
+        <Button variant="primary" onClick={() => onSave(tags)}>保存标签</Button>
+      </div>
+    </Dialog>
+  )
+}
+
 export default function Works() {
   const nav = useNavigate()
   const [copying, setCopying] = useState<string | null>(null)
@@ -84,6 +118,7 @@ export default function Works() {
   const [params, setParams] = useSearchParams()
   const filter = (params.get('status') as Filter) || 'all'
   const q = params.get('q') ?? ''
+  const tag = params.get('tag') ?? ''
   const onlyStar = params.get('star') === '1'
   const onlyMine = params.get('mine') === '1'
   const thisWeek = params.get('week') === '1'
@@ -96,6 +131,7 @@ export default function Works() {
   const setFilter = (f: Filter) => setParam('status', f)
   const setQ = (v: string) => setParam('q', v)
   const [derive, setDerive] = useState<WorkListItem | null>(null)
+  const [tagEditing, setTagEditing] = useState<WorkListItem | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const inv = useInvalidate()
   const create = useCreateWork(acc?.id)
@@ -113,8 +149,9 @@ export default function Works() {
     }
   }
   const [weekStart, weekEnd] = currentWeek()
-  const list = (data ?? []).filter((w) => (!onlyStar || starSet.has(w.id)) && (!onlyMine || (!!me?.user_id && w.assignee_id === me.user_id))
+  const list = (data ?? []).filter((w) => (!tag || (w.tags ?? []).includes(tag)) && (!onlyStar || starSet.has(w.id)) && (!onlyMine || (!!me?.user_id && w.assignee_id === me.user_id))
     && (!thisWeek || (!!w.planned_date && w.planned_date.slice(0, 10) >= weekStart && w.planned_date.slice(0, 10) <= weekEnd)))
+  const tagOptions = [...new Set([...(data ?? []).flatMap((w) => w.tags ?? []), ...(tag ? [tag] : [])])].sort()
   const shown = list.filter((w) => !filterStatus[filter] || filterStatus[filter]!.includes(w.status))
   const count = (f: Filter) => list.filter((w) => !filterStatus[f] || filterStatus[f]!.includes(w.status)).length
   const remove = async (w: WorkListItem) => {
@@ -132,6 +169,15 @@ export default function Works() {
       inv(['works', acc.id])
       nav(`/works/${work.id}`)
     } catch (e) { toast.error(errorMessage(e)) } finally { setCopying(null) }
+  }
+  const saveTags = async (tags: string[]) => {
+    if (!tagEditing) return
+    try {
+      await patch(`/works/${tagEditing.id}`, { tags })
+      inv(['works', acc.id])
+      setTagEditing(null)
+      toast.success('标签已保存')
+    } catch (e) { toast.error(errorMessage(e)) }
   }
   return (
     <div className="animate-fade-in">
@@ -161,6 +207,11 @@ export default function Works() {
             className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[12.5px]', thisWeek ? 'border-ink-300 bg-ink-50 text-ink-800' : 'border-mist-200 text-mist-600 hover:border-mist-300')}>
             <CalendarDays className="size-3.5" />本周要发
           </button>
+          <select aria-label="按标签筛选" value={tag} onChange={(e) => setParam('tag', e.target.value)}
+            className="h-8 rounded-full border border-mist-200 bg-white px-2.5 text-[12.5px] text-mist-600 outline-none focus:border-ink-300">
+            <option value="">全部标签</option>
+            {tagOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
         </div>
         <div className="relative ml-auto w-full sm:w-64">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist-400" />
@@ -184,6 +235,7 @@ export default function Works() {
                     <div className="truncate font-display text-[15.5px] font-semibold text-mist-900 group-hover:text-ink-700">{w.title || '未命名作品'}</div>
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-mist-500">
                       <StatusBadge status={w.status} />
+                      {(w.tags ?? []).map((item) => <span key={item} className="rounded-full bg-ink-50 px-2 py-0.5 text-ink-700">{item}</span>)}
                       <span>{w.section_count} 段 · {w.char_count.toLocaleString()} 字</span>
                       {w.source_title !== null && w.source_work_id && <span className="inline-flex items-center gap-1 text-ink-600"><GitBranch className="size-3" />派生自《{w.source_title || '未命名'}》</span>}
                       {w.derived_count > 0 && <span className="inline-flex items-center gap-1"><GitBranch className="size-3" />{w.derived_count} 篇衍生</span>}
@@ -194,6 +246,7 @@ export default function Works() {
                     </div>
                   </div>
                 </Link>
+                {canWrite && <IconButton label="编辑作品标签" onClick={() => setTagEditing(w)} className="text-mist-400 hover:text-ink-700"><Tag className="size-4" /></IconButton>}
                 <IconButton label={starSet.has(w.id) ? '取消收藏' : '收藏'} onClick={() => toggleStar(w)}
                   className={cn(starSet.has(w.id) ? 'text-gamboge-500' : 'opacity-0 transition group-hover:opacity-100')}>
                   <Star className={cn('size-4', starSet.has(w.id) && 'fill-current')} />
@@ -211,6 +264,7 @@ export default function Works() {
         </Card>
       )}
       {derive && canWrite && <DeriveDialog open onClose={() => setDerive(null)} workId={derive.id} platform={acc.platform} format={derive.content_format} />}
+      {tagEditing && canWrite && <WorkTagsDialog key={tagEditing.id} work={tagEditing} onClose={() => setTagEditing(null)} onSave={saveTags} />}
       {importOpen && canWrite && <WorkImportDialog accountId={acc.id} onClose={() => setImportOpen(false)} onImported={id => { setImportOpen(false); inv(['works', acc.id]); nav(`/works/${id}`) }} />}
     </div>
   )

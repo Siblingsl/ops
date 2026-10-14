@@ -124,10 +124,10 @@ func (s *Server) globalSearch(w http.ResponseWriter, r *http.Request) error {
 	}
 	if types["work"] {
 		rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.status, a.id, a.name, w.updated_at,
-			coalesce((SELECT string_agg(s.heading || ' ' || s.content_md, ' ' ORDER BY s.position) FROM work_section s WHERE s.work_id=w.id AND s.deleted_at IS NULL), '')
+			coalesce((SELECT string_agg(s.heading || ' ' || s.content_md, ' ' ORDER BY s.position) FROM work_section s WHERE s.work_id=w.id AND s.deleted_at IS NULL), '') || ' ' || array_to_string(w.tags, ' ')
 			FROM work w JOIN platform_account a ON a.id=w.account_id
 			WHERE a.workspace_id=$1 AND w.deleted_at IS NULL AND ($3::uuid IS NULL OR a.id=$3)
-			AND (w.title ILIKE ANY($2) OR w.viewpoint ILIKE ANY($2) OR EXISTS (SELECT 1 FROM work_section s WHERE s.work_id=w.id AND s.deleted_at IS NULL AND s.content_md ILIKE ANY($2)))
+			AND (w.title ILIKE ANY($2) OR w.viewpoint ILIKE ANY($2) OR array_to_string(w.tags, ' ') ILIKE ANY($2) OR EXISTS (SELECT 1 FROM work_section s WHERE s.work_id=w.id AND s.deleted_at IS NULL AND s.content_md ILIKE ANY($2)))
 			ORDER BY w.updated_at DESC LIMIT 300`, ws, pats, accountID)
 		if err != nil {
 			return err
