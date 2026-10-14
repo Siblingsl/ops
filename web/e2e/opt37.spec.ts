@@ -20,6 +20,11 @@ test('OPT37 扫码预览公开展示与当前公众号主题相同的只读排�
 
   await page.goto(`/works/${work.id}/preview`)
   const sourceHtml = await page.getByTestId('wechat-rendered-html').innerHTML()
+  const normalizeHtml = (html: string) => page.evaluate((value) => {
+    const template = document.createElement('template')
+    template.innerHTML = value
+    return template.innerHTML
+  }, html)
   await page.getByRole('button', { name: '生成手机扫码预览' }).click()
   await expect(page.getByRole('img', { name: '手机扫码预览二维码' })).toBeVisible()
   await expect(page.getByText(/24 小时后过期/)).toBeVisible()
@@ -30,7 +35,8 @@ test('OPT37 扫码预览公开展示与当前公众号主题相同的只读排�
   await page.goto(link!)
   await expect(page.getByRole('heading', { name: 'OPT37 手机预览验收' })).toBeVisible()
   await expect(page.getByText('浏览器验收号')).toBeVisible()
-  await expect(page.getByTestId('wechat-rendered-html')).toHaveJSProperty('innerHTML', sourceHtml)
+  const publicHtml = await page.getByTestId('wechat-rendered-html').innerHTML()
+  expect(await normalizeHtml(publicHtml)).toBe(await normalizeHtml(sourceHtml))
   expect(await page.getByTestId('wechat-rendered-html').locator('h2').evaluate(el => getComputedStyle(el).borderBottomColor)).toBe('rgb(47, 93, 98)')
   await expect(page.getByRole('button')).toHaveCount(0)
 })
