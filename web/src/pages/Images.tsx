@@ -65,7 +65,7 @@ export default function ImagesPage() {
           {list.map((a) => (
             <button key={a.id} type="button" onClick={() => setOpen(a)}
               className="group relative cursor-pointer overflow-hidden rounded-xl border border-mist-200 bg-mist-50 text-left transition hover:border-ink-400">
-              <img src={a.url} alt="" loading="lazy" className="aspect-square w-full object-cover" />
+              <img src={`${a.url}?variant=256`} alt="" loading="lazy" className="aspect-square w-full object-cover" />
               {a.ai_generated && <span className="absolute left-1.5 top-1.5 rounded bg-mist-900/70 px-1.5 text-[10.5px] text-white">AI</span>}
               <div className="bg-white px-2 py-1.5">
                 <div className="truncate text-[12.5px] font-medium text-mist-800">{a.work_title || '未命名'}</div>

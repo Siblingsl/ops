@@ -229,7 +229,7 @@ export default function Works() {
               <div key={w.id} className="group flex items-center gap-4 px-5 py-3.5 transition hover:bg-mist-50/70">
                 <Link to={workLink(w)} {...prefetch.hover(w.id)} className="flex min-w-0 flex-1 items-center gap-4">
                   <div className="flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-mist-100 text-mist-300">
-                    {thumb ? <img src={`/api/v1/assets/${thumb}/file`} className="size-full object-cover" alt="" /> : <ImageIcon className="size-5" />}
+                    {thumb ? <img src={`/api/v1/assets/${thumb}/file?variant=256`} className="size-full object-cover" alt="" /> : <ImageIcon className="size-5" />}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-display text-[15.5px] font-semibold text-mist-900 group-hover:text-ink-700">{w.title || '未命名作品'}</div>
