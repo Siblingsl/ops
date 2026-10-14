@@ -33,6 +33,7 @@ type naWork struct {
 	ContentFormat     string
 	HasSections       bool
 	ImagesReady       bool
+	HasXhsDerived     bool
 	OpenTodos         int
 	PushedOrPacked    bool
 	PendingCheckItems int
@@ -124,6 +125,10 @@ func nextActions(in naInput, limit int) []NextAction {
 				}
 				offer(w.ID, action)
 			}
+		}
+		if w.Status == "published" && in.Platform == "wechat_mp" && w.ContentFormat == "long_article" && !w.HasXhsDerived {
+			offer(w.ID, NextAction{Kind: "derive", Score: naTimely + 20,
+				Text: titleOr(w.Title) + "已发布，可以派生为小红书笔记", Action: "派生小红书", Link: link})
 		}
 		if w.PlannedDate != nil && (w.Status == "drafting" || w.Status == "checking") {
 			left := int(w.PlannedDate.Sub(truncDay(in.Now)).Hours() / 24)

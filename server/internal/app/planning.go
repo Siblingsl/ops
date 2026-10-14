@@ -289,7 +289,8 @@ func (s *Server) getNextActions(w http.ResponseWriter, r *http.Request) error {
 		(SELECT count(*) FROM check_item ci JOIN check_run cr ON cr.id=ci.check_run_id WHERE cr.work_id=w.id AND cr.revision=w.revision AND NOT ci.passed AND ci.resolution IS NULL),
 		coalesce((SELECT array_agg(s.id ORDER BY s.position, s.created_at) FROM work_section s WHERE s.work_id=w.id AND s.deleted_at IS NULL AND btrim(s.content_md)=''), '{}'),
 		w.content_format, EXISTS (SELECT 1 FROM work_section s WHERE s.work_id=w.id AND s.deleted_at IS NULL),
-		CASE WHEN $4='wechat_mp' THEN w.cover_asset_id IS NOT NULL ELSE EXISTS (SELECT 1 FROM asset WHERE work_id=w.id) END
+		CASE WHEN $4='wechat_mp' THEN w.cover_asset_id IS NOT NULL ELSE EXISTS (SELECT 1 FROM asset WHERE work_id=w.id) END,
+		EXISTS (SELECT 1 FROM work d JOIN platform_account da ON da.id=d.account_id WHERE d.source_work_id=w.id AND d.deleted_at IS NULL AND da.platform='xhs')
 		FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND (w.status<>'published' OR w.published_at > $2::timestamptz - interval '30 days'
 			OR EXISTS (SELECT 1 FROM jsonb_array_elements(w.post_push_todos) e WHERE NOT coalesce((e->>'done')::boolean,false)))
 		ORDER BY w.updated_at DESC LIMIT 100`, a.ID, s.now(), datacubeCovers(a), a.Platform)
@@ -300,7 +301,7 @@ func (s *Server) getNextActions(w http.ResponseWriter, r *http.Request) error {
 		var x naWork
 		var planned *time.Time
 		if err := rows.Scan(&x.ID, &x.Title, &x.Status, &x.UpdatedAt, &x.PublishedAt, &planned, &x.OutlineConfirmed, &x.Viewpoint, &x.DueNode,
-			&x.OpenTodos, &x.PushedOrPacked, &x.PendingCheckItems, &x.EmptySections, &x.ContentFormat, &x.HasSections, &x.ImagesReady); err != nil {
+			&x.OpenTodos, &x.PushedOrPacked, &x.PendingCheckItems, &x.EmptySections, &x.ContentFormat, &x.HasSections, &x.ImagesReady, &x.HasXhsDerived); err != nil {
 			rows.Close()
 			return err
 		}

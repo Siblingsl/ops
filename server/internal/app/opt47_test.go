@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func TestOPT47CompletedBodyOffersTitleImagesThenExistingCheckFlow(t *testing.T) 
 	assert("planned", "#step-title")
 }
 
-func TestOPT47DoesNotBypassOutlineOrEmptySectionsOrAddPublishedDerivation(t *testing.T) {
+func TestOPT47DoesNotBypassOutlineOrEmptySections(t *testing.T) {
 	now := time.Now()
 	base := naWork{ID: uuid.New(), Status: "drafting", UpdatedAt: now, OutlineConfirmed: true, Viewpoint: true, HasSections: true, ContentFormat: "long_article"}
 	for _, change := range []func(*naWork){
@@ -55,12 +56,41 @@ func TestOPT47DoesNotBypassOutlineOrEmptySectionsOrAddPublishedDerivation(t *tes
 		func(w *naWork) { w.HasSections = false },
 		func(w *naWork) { w.ContentFormat = "comic" },
 		func(w *naWork) { w.ContentFormat = "card_post" },
-		func(w *naWork) { w.Status = "published" },
 	} {
 		w := base
 		change(&w)
 		if list := nextActions(naInput{Now: now, Platform: "wechat_mp", Works: []naWork{w}}, 10); len(list) != 0 {
 			t.Fatalf("unavailable/gated action: %+v", list)
+		}
+	}
+}
+
+func TestOPT47PublishedWechatSuggestsManualXhsDerivation(t *testing.T) {
+	now := time.Now()
+	w := naWork{ID: uuid.New(), Title: "已发布公众号文章", Status: "published", UpdatedAt: now, ContentFormat: "long_article"}
+	get := func(platform string, work naWork) []NextAction {
+		t.Helper()
+		return nextActions(naInput{Now: now, AccountID: uuid.New(), Platform: platform, Works: []naWork{work}}, 10)
+	}
+	list := get("wechat_mp", w)
+	if len(list) != 1 || list[0].Kind != "derive" || list[0].Action != "派生小红书" || list[0].Link != "/works/"+w.ID.String() {
+		t.Fatalf("published WeChat article should offer a manual derive step: %+v", list)
+	}
+	for name, variant := range map[string]struct {
+		platform string
+		change   func(*naWork)
+	}{
+		"already-derived": {"wechat_mp", func(w *naWork) { w.HasXhsDerived = true }},
+		"other-platform":  {"xhs", func(*naWork) {}},
+		"other-format":    {"wechat_mp", func(w *naWork) { w.ContentFormat = "comic" }},
+		"not-published":   {"wechat_mp", func(w *naWork) { w.Status = "pushed" }},
+	} {
+		w := w
+		variant.change(&w)
+		for _, action := range get(variant.platform, w) {
+			if action.Kind == "derive" {
+				t.Fatalf("%s unexpectedly offered derivation: %+v", name, action)
+			}
 		}
 	}
 }
@@ -87,4 +117,39 @@ func TestOPT47NextActionsAPIIncludesCompletedUntitledWork(t *testing.T) {
 	if !found {
 		t.Fatalf("completed untitled work missing: %+v", actions)
 	}
+}
+
+func TestOPT47NextActionsAPIOffersDerivationOnlyUntilXhsChildExists(t *testing.T) {
+	guest := env.registerClient(t, "opt47-derived-"+uuid.NewString()[:8], testPassword)
+	t.Cleanup(func() { guest.restore(env) })
+	var source Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{"platform": "wechat_mp", "content_format": "long_article", "name": "已发布公众号"}, &source)
+	work := outlinedWork(t, source, "发布后尚可逐篇派生")
+	if _, err := env.srv.db.Exec(context.Background(), `UPDATE work SET status='published', published_at=$2 WHERE id=$1`, work.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	getActions := func() []NextAction {
+		t.Helper()
+		var actions []NextAction
+		env.mustJSON(t, "GET", "/api/v1/accounts/"+source.ID.String()+"/next-actions?limit=10", nil, &actions)
+		return actions
+	}
+	assertDerive := func(want bool) {
+		t.Helper()
+		found := false
+		for _, action := range getActions() {
+			if action.WorkID != nil && *action.WorkID == work.ID && action.Kind == "derive" {
+				found = action.Link == "/works/"+work.ID.String() && action.Action == "派生小红书"
+			}
+		}
+		if found != want {
+			t.Fatalf("derive prompt found=%v want=%v", found, want)
+		}
+	}
+	assertDerive(true)
+	var target Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{"platform": "xhs", "content_format": "image_note", "name": "派生目标"}, &target)
+	var derived Work
+	env.mustJSON(t, "POST", "/api/v1/works/"+work.ID.String()+"/derive", map[string]string{"target_account_id": target.ID.String()}, &derived)
+	assertDerive(false)
 }
