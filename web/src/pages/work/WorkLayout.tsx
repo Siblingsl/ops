@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarDays, Check, ChevronDown, ChevronUp, Copy, GitBranch, History, Layers, Lock, Maximize2, Minimize2, RotateCcw, Save, Star } from 'lucide-react'
+import { ArrowLeft, CalendarDays, Check, ChevronDown, ChevronUp, Copy, Download, GitBranch, History, Layers, Lock, Maximize2, Minimize2, RotateCcw, Save, Star } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Link, NavLink, Outlet, useNavigate, useOutletContext, useParams } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
 import { confirm, Drawer } from '@/components/dialog'
@@ -27,6 +27,17 @@ export interface WorkCtx {
   reportEditing: (id: string) => void
 }
 export const useWork = () => useOutletContext<WorkCtx>()
+
+function markdownForWork(work: Work, origin: string) {
+  const blocks = [`# ${work.title.trim() || '未命名作品'}`]
+  for (const section of work.sections) {
+    if (section.heading.trim()) blocks.push(`## ${section.heading.trim()}`)
+    const body = section.content_md.replace(/(!\[[^\]]*\]\()\/api\/v1\/assets\/([^\s)]+)(\))/g,
+      (_match, imageStart: string, path: string, close: string) => `${imageStart}${origin}/api/v1/assets/${path}${close}`)
+    if (body.trim()) blocks.push(body)
+  }
+  return `${blocks.join('\n\n')}\n`
+}
 
 export function WorkHeaderAction({ children }: { children: ReactNode }) {
   const [target, setTarget] = useState<HTMLElement | null>(null)
@@ -218,8 +229,10 @@ function Versions({ work, open, onClose, onRestored }: { work: Work; open: boole
 }
 
 export default function WorkLayout() {
+  const location = useLocation()
   const nav = useNavigate()
   const [copying, setCopying] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const visible = usePageVisible()
   const { workId } = useParams()
   const qc = useQueryClient()
@@ -314,6 +327,24 @@ export default function WorkLayout() {
       nav(`/works/${copied.id}`)
     } catch (e) { toast.error(errorMessage(e)) } finally { setCopying(false) }
   }
+  const exportMarkdown = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const wait: Promise<unknown>[] = []
+      emitEditor({ type: 'flush', wait })
+      await Promise.all(wait)
+      const current = await get<Work>(`/works/${work.id}`)
+      const url = URL.createObjectURL(new Blob([markdownForWork(current, window.location.origin)], { type: 'text/markdown;charset=utf-8' }))
+      const link = document.createElement('a')
+      const filename = (current.title.trim() || '未命名作品').replace(/[\\/:*?"<>|]/g, '_').replace(/[. ]+$/, '') || '未命名作品'
+      link.href = url
+      link.download = `${filename}.md`
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 4000)
+      toast.success('已开始下载')
+    } catch (e) { toast.error(errorMessage(e)) } finally { setExporting(false) }
+  }
   const ctx: WorkCtx = { work, setWork, patchWork, refresh, focus, setFocus, presence, reportSection, reportEditing }
   const wx = work.platform === 'wechat_mp'
   const todos = work.post_push_todos ?? []
@@ -407,7 +438,10 @@ export default function WorkLayout() {
             <PlanPopover work={work} onSaved={setWork} />
             <Button size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
             {canWrite && <Button size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}><span className="hidden xl:inline">派生</span></Button>}
-            {canWrite && <MoreMenu className="[&_[role=menu]]:bottom-auto [&_[role=menu]]:top-full [&_[role=menu]]:mb-0 [&_[role=menu]]:mt-1" items={[{ label: '复制为新草稿', icon: <Copy />, loading: copying, onClick: () => void duplicate() }]} />}
+            {canWrite && <MoreMenu className="[&_[role=menu]]:bottom-auto [&_[role=menu]]:top-full [&_[role=menu]]:mb-0 [&_[role=menu]]:mt-1" items={[
+              { label: '复制为新草稿', icon: <Copy />, loading: copying, onClick: () => void duplicate() },
+              ...(location.pathname === `/works/${work.id}` ? [{ label: '导出 Markdown', icon: <Download />, loading: exporting, onClick: () => void exportMarkdown() }] : []),
+            ]} />}
             <Button size="sm" variant="ghost" title="专注模式（F11）" icon={focus ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />} onClick={() => setFocus(!focus)} />
           </div>
         </div>
