@@ -37,7 +37,20 @@ func (s *Server) pushPreview(w http.ResponseWriter, r *http.Request) error {
 		return validation("只有公众号作品可以写入草稿")
 	}
 	ctx := r.Context()
-	wk, err := s.loadWork(ctx, m.ID)
+	var fieldsRaw, coverCrops []byte
+	var draftMediaID *string
+	var coverAssetID *uuid.UUID
+	var status, title, summary, contentFormat string
+	var revision, assetCount, panelImages int
+	err = s.db.QueryRow(ctx, `SELECT w.wechat_fields, w.status, w.revision, w.wechat_draft_media_id,
+		(SELECT count(*) FROM asset WHERE work_id=w.id), w.cover_asset_id, w.cover_crops, w.title, w.summary, w.content_format,
+		CASE WHEN w.content_format='card_post' THEN
+			(SELECT count(*) FROM work_card WHERE work_id=w.id AND image_asset_id IS NOT NULL)
+		ELSE (SELECT count(*) FROM comic_panel WHERE work_id=w.id AND asset_id IS NOT NULL) END
+		FROM work w WHERE w.id=$1 AND w.deleted_at IS NULL
+		AND EXISTS (SELECT 1 FROM platform_account a WHERE a.id=w.account_id AND a.workspace_id=$2)`,
+		m.ID, ident(ctx).WorkspaceID).Scan(&fieldsRaw, &status, &revision, &draftMediaID,
+		&assetCount, &coverAssetID, &coverCrops, &title, &summary, &contentFormat, &panelImages)
 	if err != nil {
 		return err
 	}
@@ -46,40 +59,28 @@ func (s *Server) pushPreview(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	mode := "new"
-	if wk.WechatDraftMediaID != nil {
+	if draftMediaID != nil {
 		mode = "overwrite"
 	}
-	panelCount := 0
-	if wk.ContentFormat == "card_post" {
-		for _, c := range wk.Cards {
-			if c.ImageAssetID != nil {
-				panelCount++
-			}
-		}
-	} else {
-		for _, p := range wk.Panels {
-			if p.AssetID != nil {
-				panelCount++
-			}
-		}
-	}
+	var fields WechatDefaults
+	_ = json.Unmarshal(fieldsRaw, &fields)
 	return ok(w, map[string]any{
 		"mode":           mode,
 		"today_count":    count,
 		"daily_limit":    m.Account.DailyPushLimit,
-		"fields":         wk.WechatFields,
+		"fields":         fields,
 		"credential":     m.Account.Credential,
-		"status":         wk.Status,
-		"revision":       wk.Revision,
+		"status":         status,
+		"revision":       revision,
 		"backend_url":    s.backendURL(),
-		"can_push":       wk.Status == "ready" || wk.Status == "pushed",
-		"asset_count":    len(wk.Assets),
-		"cover_asset":    wk.CoverAssetID,
-		"cover_crops":    wk.CoverCrops,
-		"title":          wk.Title,
-		"summary":        wk.Summary,
-		"content_format": wk.ContentFormat,
-		"panel_images":   panelCount,
+		"can_push":       status == "ready" || status == "pushed",
+		"asset_count":    assetCount,
+		"cover_asset":    coverAssetID,
+		"cover_crops":    json.RawMessage(coverCrops),
+		"title":          title,
+		"summary":        summary,
+		"content_format": contentFormat,
+		"panel_images":   panelImages,
 	})
 }
 
