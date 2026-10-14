@@ -476,6 +476,11 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 	if len(strongList) > 0 {
 		user += "\n\n本号读者对以下特征反馈更好：" + strings.Join(strongList, "、")
 	}
+	samples, err := s.feedbackSamples(ctx, m.Account.ID, "title")
+	if err != nil {
+		return err
+	}
+	user += feedbackSampleBlock("title", samples)
 	var out struct {
 		Titles []struct {
 			Text  string `json:"text"`

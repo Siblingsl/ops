@@ -116,7 +116,7 @@ export function TitleCard({ work, setWork, readOnly }: { work: Work; setWork: (w
     save({ title: t })
     const c = titles.find((x) => x.text === t)
     picked.current = c ?? null
-    if (c?.call) sendFeedback(c.call, { outcome: 'accepted', choice_index: c.idx })
+    if (c?.call) sendFeedback(c.call, { outcome: 'accepted', choice_index: c.idx, sample_text: c.text })
   }
   // 标题候选"是否改写后使用"（10 文档 3.3）：选用后又手改，记为 edited。
   const titleEdited = (next: string) => {
@@ -183,7 +183,7 @@ export function TitleCard({ work, setWork, readOnly }: { work: Work; setWork: (w
                 <div className="grid gap-2 sm:grid-cols-2">{titles.filter((t) => t.style.replace('（改写自候选）', '') === g).map(titleRow)}</div>
               </div>
             ))}
-            <RefsNote refs={titleRefs} callId={titleCall} onRetry={readOnly ? undefined : genTitles} />
+            <RefsNote refs={titleRefs} callId={titleCall} sampleText={titles.map((t) => t.text).join('\n')} onRetry={readOnly ? undefined : genTitles} />
           </div>
         )}
         {wx ? (

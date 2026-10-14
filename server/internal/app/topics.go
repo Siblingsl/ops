@@ -494,7 +494,7 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if in.AICallID != nil {
-		s.implicitFeedback(ctx, *in.AICallID, "accepted", in.ChoiceIndex, nil)
+		s.implicitFeedback(ctx, *in.AICallID, "accepted", in.ChoiceIndex, nil, in.Title+"｜"+strings.TrimSpace(in.Angle))
 	}
 	t, err := scanTopic(s.db.QueryRow(ctx, `SELECT `+topicCols+` FROM topic t WHERE t.id=$1`, id))
 	if err != nil {
@@ -574,6 +574,11 @@ func (s *Server) suggestTopics(w http.ResponseWriter, r *http.Request) error {
 
 ## 输出格式
 %s`, strings.TrimSpace(in.Direction), a.ContentFormat, "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "), topicSuggestOutput(a, false))
+	samples, err := s.feedbackSamples(r.Context(), a.ID, "topic_suggest")
+	if err != nil {
+		return err
+	}
+	user += feedbackSampleBlock("topic_suggest", samples)
 	var out struct {
 		Topics []topicSuggestion `json:"topics"`
 	}

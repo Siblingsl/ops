@@ -5,7 +5,7 @@ import { errorMessage, patch, post } from '@/lib/api'
 import { type AIRefs, describeRefs } from '@/lib/format'
 import { cn } from './ui'
 
-const reasonTags = ['太长', '太短', '跑题', '语气不对', '编造内容', '其他'] as const
+const reasonTags = ['太夸张', '太长', '太短', '跑题', '语气不对', '编造内容', '其他'] as const
 
 /** sendFeedback records an explicit or implicit outcome for one AI call (3.3). Failures are silent. */
 export function sendFeedback(callId: string | null | undefined, body: Record<string, unknown>) {
@@ -13,7 +13,7 @@ export function sendFeedback(callId: string | null | undefined, body: Record<str
   post(`/ai-calls/${callId}/feedback`, body).catch(() => undefined)
 }
 
-export function AIFeedback({ callId, className }: { callId?: string | null; className?: string }) {
+export function AIFeedback({ callId, className, sampleText }: { callId?: string | null; className?: string; sampleText?: string }) {
   const [rating, setRating] = useState<0 | 1 | -1>(0)
   const [tags, setTags] = useState<string[]>([])
   if (!callId) return null
@@ -21,13 +21,13 @@ export function AIFeedback({ callId, className }: { callId?: string | null; clas
     const next = rating === v ? 0 : v
     setRating(next)
     if (next === 1) setTags([])
-    sendFeedback(callId, { rating: next })
+    sendFeedback(callId, { rating: next, ...(sampleText != null ? { sample_text: sampleText } : {}) })
     if (next === 1) toast.success('收到，AI 会参考你的评价', { duration: 1500 })
   }
   const toggleTag = (t: string) => {
     const next = tags.includes(t) ? tags.filter((x) => x !== t) : [...tags, t]
     setTags(next)
-    sendFeedback(callId, { rating: -1, reason_tags: next })
+    sendFeedback(callId, { rating: -1, outcome: 'rejected', reason_tags: next, ...(sampleText != null ? { sample_text: next.length ? sampleText : '' } : {}) })
   }
   return (
     <div className={cn('flex flex-wrap items-center gap-1', className)}>
@@ -64,7 +64,7 @@ async function disableMemory(id: string) {
 }
 
 /** RefsNote is the expandable 「本次参考」 panel (DEV-V301): what went into the prompt, per slot; plus 👍👎, retry and cost on hover (9.2). */
-export function RefsNote({ refs, className, callId, onRetry }: { refs?: AIRefs | null; className?: string; callId?: string | null; onRetry?: () => void }) {
+export function RefsNote({ refs, className, callId, onRetry, sampleText }: { refs?: AIRefs | null; className?: string; callId?: string | null; onRetry?: () => void; sampleText?: string }) {
   const [open, setOpen] = useState(false)
   const text = describeRefs(refs)
   if (!text && !callId) return null
@@ -89,7 +89,7 @@ export function RefsNote({ refs, className, callId, onRetry }: { refs?: AIRefs |
               <RotateCcw className="size-3.5" />
             </button>
           )}
-          <AIFeedback callId={callId} />
+          <AIFeedback callId={callId} sampleText={sampleText} />
         </span>
       </div>
       {open && (

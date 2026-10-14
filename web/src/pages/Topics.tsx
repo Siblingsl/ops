@@ -80,9 +80,9 @@ function useAddSuggestion(accountId: string, source: string, callId: string | nu
   const [ignored, setIgnored] = useState<Record<number, boolean>>({})
   const [adding, setAdding] = useState<number | null>(null)
   // 选题建议的去向（10 文档 3.3）：本批一条都没入库时记为放弃；之后再入库会覆盖为接受。
-  const ignore = (i: number) => {
+  const ignore = (i: number, sampleText: string) => {
     setIgnored((x) => ({ ...x, [i]: true }))
-    if (!Object.values(added).some(Boolean)) sendFeedback(callId, { outcome: 'rejected' })
+    if (!Object.values(added).some(Boolean)) sendFeedback(callId, { outcome: 'rejected', sample_text: sampleText })
   }
   // H-01：每条建议单独入库，没有"全部入库"。
   const add = async (i: number, s: Suggestion) => {
@@ -133,10 +133,10 @@ function SuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose: (
         <Button variant="primary" onClick={run} loading={busy} icon={<Sparkles className="size-4" />}>生成</Button>
       </div>
       <HumanGate code="H-01" className="mt-4">每条建议都需要你单独点「入库」。这里刻意没有「全部入库」。</HumanGate>
-      {!busy && <RefsNote refs={refs} callId={callId} className="mt-3" onRetry={run} />}
+      {!busy && <RefsNote refs={refs} callId={callId} sampleText={list.map((x) => [x.title, x.angle].filter(Boolean).join('｜')).join('\n')} className="mt-3" onRetry={run} />}
       <div className="mt-4 space-y-3">
         {busy && list.length === 0 && Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-mist-100" />)}
-        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!s.added[i]} adding={s.adding === i} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i)} />)}
+        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!s.added[i]} adding={s.adding === i} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} />)}
         {!busy && list.length === 0 && <Empty icon={<Sparkles className="size-5" />} title="输入一个方向，或直接生成" desc="AI 会参考账号定位档案、已确认的写作记忆和最近的选题，避免重复。" />}
       </div>
     </Drawer>
@@ -177,10 +177,10 @@ function HotSuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose
         <Button variant="primary" onClick={run} loading={busy} icon={<Sparkles className="size-4" />}>生成热点选题</Button>
       </div>
       <HumanGate code="H-01" className="mt-4">每条建议都需要你单独点「入库」，引用热点前请核实原文。</HumanGate>
-      {!busy && <RefsNote refs={refs} callId={callId} className="mt-3" onRetry={run} />}
+      {!busy && <RefsNote refs={refs} callId={callId} sampleText={list.map((x) => [x.title, x.angle].filter(Boolean).join('｜')).join('\n')} className="mt-3" onRetry={run} />}
       <div className="mt-4 space-y-3">
         {busy && list.length === 0 && Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-mist-100" />)}
-        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!s.added[i]} adding={s.adding === i} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i)} />)}
+        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!s.added[i]} adding={s.adding === i} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} />)}
         {!busy && list.length === 0 && <Empty icon={<Sparkles className="size-5" />} title="生成有时效感的选题" desc="可贴资讯摘要；仍须逐条入库。" />}
       </div>
     </Drawer>
@@ -471,9 +471,9 @@ function SeriesSuggestDrawer({ s, accountId, onClose }: { s: Series; accountId: 
   return (
     <Drawer open onClose={onClose} title={`补全「${s.name}」`} desc="根据总纲找出系列里还缺的选题，逐条入库。">
       <Button variant="primary" loading={busy} icon={<Sparkles className="size-4" />} onClick={run}>{list.length ? '换一批' : '生成建议'}</Button>
-      {callId && <div className="mt-2"><AIFeedback callId={callId} /></div>}
+      {callId && <div className="mt-2"><AIFeedback callId={callId} sampleText={list.map((x) => [x.title, x.angle].filter(Boolean).join('｜')).join('\n')} /></div>}
       <div className="mt-4 space-y-3">
-        {list.map((x, i) => add.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!add.added[i]} adding={add.adding === i} onAdd={() => add.add(i, x)} onIgnore={() => add.ignore(i)} />)}
+        {list.map((x, i) => add.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!add.added[i]} adding={add.adding === i} onAdd={() => add.add(i, x)} onIgnore={() => add.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} />)}
       </div>
     </Drawer>
   )
