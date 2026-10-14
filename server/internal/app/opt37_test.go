@@ -97,11 +97,14 @@ func TestOPT37PreviewLinkIsReadOnlyAndExpires(t *testing.T) {
 	if strings.Contains(string(body), `"status"`) || strings.Contains(string(body), `"wechat_fields"`) {
 		t.Fatalf("public response contains non-preview work fields: %s", body)
 	}
-	last := "A"
-	if strings.HasSuffix(token, last) {
-		last = "B"
+	dot := strings.LastIndexByte(token, '.')
+	tamperedSignature := []byte(token[dot+1:])
+	if tamperedSignature[0] == 'A' {
+		tamperedSignature[0] = 'B'
+	} else {
+		tamperedSignature[0] = 'A'
 	}
-	invalid := opt37AnonymousGet(t, "/api/v1/public-previews/"+token[:len(token)-1]+last)
+	invalid := opt37AnonymousGet(t, "/api/v1/public-previews/"+token[:dot+1]+string(tamperedSignature))
 	defer invalid.Body.Close()
 	if invalid.StatusCode != http.StatusNotFound {
 		t.Fatalf("tampered preview status = %d, want 404", invalid.StatusCode)
