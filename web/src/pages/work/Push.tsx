@@ -127,7 +127,12 @@ export default function Push() {
   if (!p.can_push && work.status !== 'published' && !result) {
     return (
       <>
-        <WorkHeaderAction><Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/check`)}>去检查</Button></WorkHeaderAction>
+        <WorkHeaderAction>
+          <div className="flex items-center gap-2">
+            <Link to={`/works/${work.id}/preview`} className="inline-flex items-center rounded-lg border border-mist-200 px-3 py-2 text-xs font-medium text-mist-700 hover:bg-mist-50">看排版</Link>
+            <Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/check`)}>去检查</Button>
+          </div>
+        </WorkHeaderAction>
         <div className="mx-auto max-w-2xl px-6 py-12">
           <HumanGate code="H-04">发布前检查还没有全部确认，不能写入草稿。</HumanGate>
         </div>
@@ -139,15 +144,18 @@ export default function Push() {
   return (
     <div className="mx-auto grid w-full max-w-[1280px] gap-6 px-6 py-8 lg:grid-cols-[1fr_380px] 2xl:max-w-[1480px]">
       <WorkHeaderAction>
-        {!result && work.status !== 'published' ? (
-          <Button size="sm" variant="human" loading={running}
-            disabled={!canWrite || !credOk || runeLen(f.author) > 16 || (!comic && !cover) || (comic && !(p.panel_images && p.panel_images > 0))}
-            onClick={() => push()} icon={<Send className="size-4" />}>
-            {p.mode === 'overwrite' ? '更新草稿' : comic ? '写入图片消息草稿' : '写入草稿箱'}
-          </Button>
-        ) : result && work.status !== 'published' ? (
-          <Button size="sm" variant="primary" onClick={() => { setResult(null); setSteps({}) }}>再次写入（更新草稿）</Button>
-        ) : null}
+        <div className="flex items-center gap-2">
+          <Link to={`/works/${work.id}/preview`} className="inline-flex items-center rounded-lg border border-mist-200 px-3 py-2 text-xs font-medium text-mist-700 hover:bg-mist-50">看排版</Link>
+          {!result && work.status !== 'published' ? (
+            <Button size="sm" variant="human" loading={running}
+              disabled={!canWrite || !credOk || runeLen(f.author) > 16 || (!comic && !cover) || (comic && !(p.panel_images && p.panel_images > 0))}
+              onClick={() => push()} icon={<Send className="size-4" />}>
+              {p.mode === 'overwrite' ? '更新草稿' : comic ? '写入图片消息草稿' : '写入草稿箱'}
+            </Button>
+          ) : result && work.status !== 'published' ? (
+            <Button size="sm" variant="primary" onClick={() => { setResult(null); setSteps({}) }}>再次写入（更新草稿）</Button>
+          ) : null}
+        </div>
       </WorkHeaderAction>
       <div className="space-y-5">
         {result ? (

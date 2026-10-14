@@ -438,15 +438,16 @@ export default function Check() {
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-6 py-6 2xl:max-w-[1600px]">
-      {!run && !starting && editable && <WorkHeaderAction>
-        <Button size="sm" variant="primary" onClick={start} icon={<ShieldCheck className="size-4" />}>开始检查</Button>
-      </WorkHeaderAction>}
-      {run && <WorkHeaderAction>
-        {reviewing && run.completed_at && !run.stale
-          ? canApprove ? <Button size="sm" variant="human" loading={approving} onClick={approve} icon={<UserCheck className="size-4" />}>审阅通过</Button> : null
-          : isDone
-            ? <Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/${wx ? 'push' : 'pack'}`)}>{wx ? '去写入草稿箱' : '生成发布包'}<ArrowRight className="size-4" /></Button>
-            : <Button size="sm" variant="human" disabled={!canComplete || !editable} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>确认完成检查</Button>}
+      {(wx || (!run && !starting && editable) || !!run) && <WorkHeaderAction>
+        <div className="flex items-center gap-2">
+          {wx && <Link to={`/works/${work.id}/preview`} className="inline-flex items-center rounded-lg border border-mist-200 px-3 py-2 text-xs font-medium text-mist-700 hover:bg-mist-50">看排版</Link>}
+          {!run && !starting && editable && <Button size="sm" variant="primary" onClick={start} icon={<ShieldCheck className="size-4" />}>开始检查</Button>}
+          {run && (reviewing && run.completed_at && !run.stale
+            ? canApprove ? <Button size="sm" variant="human" loading={approving} onClick={approve} icon={<UserCheck className="size-4" />}>审阅通过</Button> : null
+            : isDone
+              ? <Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/${wx ? 'push' : 'pack'}`)}>{wx ? '去写入草稿箱' : '生成发布包'}<ArrowRight className="size-4" /></Button>
+              : <Button size="sm" variant="human" disabled={!canComplete || !editable} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>确认完成检查</Button>)}
+        </div>
       </WorkHeaderAction>}
       <div className="mb-5 flex flex-wrap items-center gap-4">
         <div>

@@ -577,7 +577,7 @@ function ArticleEditor() {
       if (pendingAll.length) emitEditor({ type: 'sidebar', tab: 'pending' })
       return
     }
-    nav(work.platform === 'wechat_mp' ? `/works/${work.id}/preview?next=check` : `/works/${work.id}/check?start=1`)
+    nav(`/works/${work.id}/check?start=1`)
   }
   const remainHints: string[] = []
   if (work.outline_confirmed_at && emptySections.length > 0) remainHints.push(`还差 ${emptySections.length} 段未起草`)
