@@ -37,7 +37,9 @@ test('OPT21 单篇粘贴旧文预览后确认为已发布并可派生到小红�
   const work = await api(page, 'GET', `/works/${workId}`)
   expect(work.status).toBe('published')
   expect(work.locked).toBe(true)
-  expect(work.published_at).toContain('2024-06-15')
+  const publishedAt = Date.parse(work.published_at)
+  expect(Number.isFinite(publishedAt)).toBeTruthy()
+  expect(new Date(publishedAt + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)).toBe('2024-06-15')
   expect(work.sections.map((section: { heading: string }) => section.heading)).toEqual(['先说明问题', '再给方法'])
 
   await page.getByRole('button', { name: '派生', exact: true }).click()
