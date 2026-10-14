@@ -13,6 +13,7 @@ const queryClient = new QueryClient({
   queryCache: new QueryCache(),
   defaultOptions: {
     queries: {
+      staleTime: 30_000,
       refetchOnWindowFocus: false,
       retry: (count, err) => !(err instanceof ApiError && err.status > 0 && err.status < 500) && count < 2,
     },
