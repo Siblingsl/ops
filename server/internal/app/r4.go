@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"ops/internal/wechat"
 )
 
 // humanEditRatio returns 0–1 share of characters that differ from the AI raw draft (FR-M4-07).
@@ -329,28 +332,16 @@ func (s *Server) draftMissing(ctx context.Context, accountID uuid.UUID, mediaID 
 	if err != nil {
 		return false, err
 	}
-	ids, total, err := s.wx.DraftBatchGet(ctx, token, 0, 20)
-	if err != nil {
-		return false, err
+	_, err = s.wx.DraftGet(ctx, token, mediaID)
+	if wechatErrorCode(err, 40007) {
+		return true, nil
 	}
-	for _, id := range ids {
-		if id == mediaID {
-			return false, nil
-		}
-	}
-	// Scan further pages if needed (cap 100).
-	for offset := 20; offset < total && offset < 100; offset += 20 {
-		more, _, err := s.wx.DraftBatchGet(ctx, token, offset, 20)
-		if err != nil {
-			return false, err
-		}
-		for _, id := range more {
-			if id == mediaID {
-				return false, nil
-			}
-		}
-	}
-	return true, nil
+	return false, err
+}
+
+func wechatErrorCode(err error, code int) bool {
+	var we *wechat.Error
+	return errors.As(err, &we) && we.Code == code
 }
 
 func (s *Server) syncDraftsJob(ctx context.Context) {
@@ -386,11 +377,11 @@ func (s *Server) syncDraftsJob(ctx context.Context) {
 }
 
 type PromptTemplate struct {
-	TaskType string    `json:"task_type"`
-	Label    string    `json:"label"`
-	Version  int       `json:"version"`
-	Content  string    `json:"content"`
-	Active   bool      `json:"active"`
+	TaskType  string    `json:"task_type"`
+	Label     string    `json:"label"`
+	Version   int       `json:"version"`
+	Content   string    `json:"content"`
+	Active    bool      `json:"active"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 

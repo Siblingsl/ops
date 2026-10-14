@@ -320,15 +320,39 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	step("write_draft", "running", 0, 0)
-	if draftID == "" {
-		err = call(func(tok string) error {
+	writeDraft := func(tok string) error {
+		if draftID == "" {
 			var e error
 			draftID, e = s.wx.DraftAdd(ctx, tok, article)
 			return e
-		})
-	} else {
+		}
 		action = "update"
-		err = call(func(tok string) error { return s.wx.DraftUpdate(ctx, tok, draftID, article) })
+		return s.wx.DraftUpdate(ctx, tok, draftID, article)
+	}
+	err = call(writeDraft)
+	if wechatErrorCode(err, 40007) {
+		if draftID != "" {
+			checkErr := call(func(tok string) error {
+				_, e := s.wx.DraftGet(ctx, tok, draftID)
+				return e
+			})
+			if wechatErrorCode(checkErr, 40007) {
+				_, _ = s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID)
+				sse.send("need_choice", map[string]any{"reason": "missing", "message": "原草稿已不在草稿箱，可能已经发表或被删除。可以回填已发布，或新建一篇草稿（计入当日次数）。"})
+				return nil
+			}
+			if checkErr != nil {
+				fail(pushFail{"check_backend", checkErr})
+				return nil
+			}
+		}
+		ids, refreshErr := s.refreshCachedMedia(ctx, m.Account.ID, []*assetRow{coverRow}, []string{thumbID}, "image", call)
+		if refreshErr != nil {
+			fail(pushFail{"upload_cover", refreshErr})
+			return nil
+		}
+		article.ThumbMediaID = ids[0]
+		err = call(writeDraft)
 	}
 	if err != nil {
 		fail(pushFail{"write_draft", err})
@@ -492,6 +516,7 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 	}
 
 	imageList := make([]wechat.ImageListItem, 0, len(imageAssets))
+	imageIDs := make([]string, 0, len(imageAssets))
 	for i, ar := range imageAssets {
 		step("upload_images", "running", i+1, len(imageAssets))
 		mediaID, err := s.cachedMedia(ctx, m.Account.ID, ar, "image", call)
@@ -500,6 +525,7 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 			return nil
 		}
 		imageList = append(imageList, wechat.ImageListItem{ImageMediaID: mediaID})
+		imageIDs = append(imageIDs, mediaID)
 	}
 	step("upload_images", "done", len(imageAssets), len(imageAssets))
 
@@ -525,15 +551,42 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 	}
 
 	step("write_draft", "running", 0, 0)
-	if draftID == "" {
-		err = call(func(tok string) error {
+	writeDraft := func(tok string) error {
+		if draftID == "" {
 			var e error
 			draftID, e = s.wx.DraftAdd(ctx, tok, article)
 			return e
-		})
-	} else {
+		}
 		action = "update"
-		err = call(func(tok string) error { return s.wx.DraftUpdate(ctx, tok, draftID, article) })
+		return s.wx.DraftUpdate(ctx, tok, draftID, article)
+	}
+	err = call(writeDraft)
+	if wechatErrorCode(err, 40007) {
+		if draftID != "" {
+			checkErr := call(func(tok string) error {
+				_, e := s.wx.DraftGet(ctx, tok, draftID)
+				return e
+			})
+			if wechatErrorCode(checkErr, 40007) {
+				_, _ = s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID)
+				sse.send("need_choice", map[string]any{"reason": "missing", "message": "原草稿已不在草稿箱，可能已经发表或被删除。可以回填已发布，或新建一篇草稿（计入当日次数）。"})
+				return nil
+			}
+			if checkErr != nil {
+				fail(pushFail{"check_backend", checkErr})
+				return nil
+			}
+		}
+		imageIDs, err = s.refreshCachedMedia(ctx, m.Account.ID, imageAssets, imageIDs, "image", call)
+		if err != nil {
+			fail(pushFail{"upload_images", err})
+			return nil
+		}
+		for i := range imageList {
+			imageList[i].ImageMediaID = imageIDs[i]
+		}
+		article.ImageInfo.ImageList = imageList
+		err = call(writeDraft)
 	}
 	if err != nil {
 		fail(pushFail{"write_draft", err})
