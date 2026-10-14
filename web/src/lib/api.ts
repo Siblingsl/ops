@@ -4,12 +4,14 @@ export class ApiError extends Error {
   status: number
   code: string
   detail: unknown
+  fields: Record<string, string>
   requestId: string
-  constructor(status: number, code: string, message: string, detail?: unknown, requestId = '') {
+  constructor(status: number, code: string, message: string, detail?: unknown, requestId = '', fields: Record<string, string> = {}) {
     super(message + (requestId ? `（请求 ID：${requestId.slice(-12)}）` : ''))
     this.status = status
     this.code = code
     this.detail = detail
+    this.fields = fields
     this.requestId = requestId
   }
   get shortRequestId() { return this.requestId.slice(-12) }
@@ -40,7 +42,7 @@ async function parseError(res: Response): Promise<ApiError> {
   try {
     const body = await res.json()
     const e = body?.error
-    if (e) return new ApiError(res.status, e.code, e.message, e.detail, requestId || e.request_id)
+    if (e) return new ApiError(res.status, e.code, e.message, e.detail, requestId || e.request_id, e.fields)
   } catch {
     /* not JSON */
   }
