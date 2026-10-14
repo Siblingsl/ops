@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import { Inbox, Lightbulb, Plus, Sparkles, Wand2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -10,7 +10,7 @@ import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useCanWrite, useInvalidate } from '@/lib/session'
-import type { InboxItem, InboxSuggestion, MaterialKind, Work } from '@/lib/types'
+import type { InboxItem, InboxPage, InboxSuggestion, MaterialKind, Work } from '@/lib/types'
 
 function ConvertDialog({ item, accountId, suggestion, work, onLinked, onClose }: { item: InboxItem; accountId: string; suggestion: InboxSuggestion | null; work?: Work; onLinked?: (work: Work) => void; onClose: () => void }) {
   const inv = useInvalidate()
@@ -86,7 +86,12 @@ function ConvertDialog({ item, accountId, suggestion, work, onLinked, onClose }:
 export function InboxPanel({ accountId, work, onLinked }: { accountId: string; work?: Work; onLinked?: (work: Work) => void }) {
   const canWrite = useCanWrite()
   const inv = useInvalidate()
-  const { data, isLoading } = useQuery({ queryKey: ['inbox'], queryFn: () => get<InboxItem[]>('/inbox') })
+  const inbox = useInfiniteQuery({
+    queryKey: ['inbox'],
+    queryFn: ({ pageParam }) => get<InboxPage>(`/inbox${pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : ''}`),
+    initialPageParam: '' as string,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  })
   const [text, setText] = useState('')
   const [readPage, setReadPage] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -119,8 +124,9 @@ export function InboxPanel({ accountId, work, onLinked }: { accountId: string; w
     await del(`/inbox/${it.id}`).catch((e) => toast.error(errorMessage(e)))
     inv(['inbox'])
   }
-  if (isLoading) return <PageLoading />
-  const list = data ?? []
+  if (inbox.isLoading) return <PageLoading />
+  const list = inbox.data?.pages.flatMap((page) => page.items) ?? []
+  const total = inbox.data?.pages[0]?.total ?? 0
   return (
     <div className="space-y-4">
       {canWrite && (
@@ -137,6 +143,7 @@ export function InboxPanel({ accountId, work, onLinked }: { accountId: string; w
         </Card>
       )}
       <Notice icon={<Inbox className="size-4" />}>收件箱里的灵感需要你一条一条处理：可以先让 AI 建议归类，再决定转为选题、存为素材，或者丢掉。系统每天也会为新灵感预先生成归类建议，但不会替你转换。</Notice>
+      <p className="text-[12px] text-mist-400">当前收件箱共 {total} 条灵感</p>
       {list.length === 0 ? <Card><Empty icon={<Inbox className="size-5" />} title="收件箱是空的" desc="任何页面按 Ctrl+Shift+I 都能快速记一条灵感，手机上可以用右下角按钮。"
         action={canWrite ? <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => openQuickCollect('inbox')}>记一条灵感</Button> : undefined} /></Card> : (
         <div className="grid gap-3 md:grid-cols-2">
@@ -163,6 +170,7 @@ export function InboxPanel({ accountId, work, onLinked }: { accountId: string; w
           })}
         </div>
       )}
+      {inbox.hasNextPage && <div className="text-center"><Button size="sm" variant="ghost" loading={inbox.isFetchingNextPage} onClick={() => { void inbox.fetchNextPage() }}>加载更多</Button></div>}
       {converting && <ConvertDialog item={converting} accountId={accountId} work={work} onLinked={onLinked} suggestion={suggestions[converting.id] ?? converting.suggestion} onClose={() => setConverting(null)} />}
     </div>
   )

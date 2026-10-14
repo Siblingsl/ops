@@ -652,6 +652,8 @@ export interface InboxItem {
   created_at: string
 }
 
+export interface InboxPage { items: InboxItem[]; total: number; next_cursor: string | null }
+
 export interface InboxSuggestion { as: 'topic' | 'material'; title: string; angle: string; audience: string; kind: string; tags: string[]; reason: string }
 
 export interface Series { id: string; account_id: string; name: string; outline: string; topics: number; created_at: string }

@@ -72,15 +72,24 @@ func (s *Server) notifyBudget(ctx context.Context, used, limit int) {
 func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	id := ident(ctx)
+	cursor, err := parseListCursor(r)
+	if err != nil {
+		return err
+	}
 	args := []any{id.UserID, id.WorkspaceID}
 	sql := `SELECT id, kind, title, body, link, read_at, created_at FROM notification WHERE user_id=$1 AND workspace_id=$2`
 	if since := r.URL.Query().Get("since"); since != "" {
 		if t, err := time.Parse(time.RFC3339Nano, since); err == nil {
 			args = append(args, t)
-			sql += ` AND created_at > $3`
+			sql += fmt.Sprintf(` AND created_at > $%d`, len(args))
 		}
 	}
-	rows, err := s.db.Query(ctx, sql+` ORDER BY created_at DESC LIMIT 50`, args...)
+	if cursor != nil {
+		args = append(args, cursor.CreatedAt, cursor.ID)
+		sql += fmt.Sprintf(` AND (created_at,id) < ($%d,$%d)`, len(args)-1, len(args))
+	}
+	args = append(args, listPageSize+1)
+	rows, err := s.db.Query(ctx, sql+fmt.Sprintf(` ORDER BY created_at DESC,id DESC LIMIT $%d`, len(args)), args...)
 	if err != nil {
 		return err
 	}
@@ -93,11 +102,24 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) error
 		}
 		list = append(list, n)
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	hasMore := len(list) > listPageSize
+	if hasMore {
+		list = list[:listPageSize]
+	}
+	var nextCursor *string
+	if hasMore {
+		last := list[len(list)-1]
+		v := encodeListCursor(last.CreatedAt, last.ID)
+		nextCursor = &v
+	}
 	var unread int
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM notification WHERE user_id=$1 AND workspace_id=$2 AND read_at IS NULL`, id.UserID, id.WorkspaceID).Scan(&unread)
 	var active int
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM ai_job WHERE workspace_id=$1 AND created_by=$2 AND status IN ('queued','running')`, id.WorkspaceID, id.UserID).Scan(&active)
-	return ok(w, map[string]any{"items": list, "unread": unread, "active_jobs": active})
+	return ok(w, map[string]any{"items": list, "unread": unread, "active_jobs": active, "next_cursor": nextCursor})
 }
 
 func (s *Server) readNotification(w http.ResponseWriter, r *http.Request) error {
