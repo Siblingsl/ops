@@ -228,9 +228,10 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
   }
   const fieldLink = item.location.field === 'title' || item.location.field === 'summary' ? '#step-title' : item.location.field === 'cover' || item.location.field === 'images' ? '#step-images' : ''
   return (
-    <div onClick={onPick} className={cn('cursor-pointer rounded-lg border p-3 transition',
+    <div className={cn('rounded-lg border p-3 transition',
       active ? 'border-gamboge-300 bg-gamboge-50/60 ring-3 ring-gamboge-100' : done ? 'border-mist-200 bg-white' : isFormat ? 'border-orange-200 bg-orange-50/40' : 'border-mist-200 bg-white hover:border-mist-300')}>
-      <div className="flex items-start gap-2">
+      <button type="button" aria-label={`定位检查项：${item.message}`} onClick={onPick}
+        className="flex w-full cursor-pointer items-start gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ink-400">
         {isFormat ? (item.passed ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-ink-500" /> : <XCircle className="mt-0.5 size-4 shrink-0 text-danger" />)
           : done ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-ink-500" /> : <AlertTriangle className="mt-0.5 size-4 shrink-0 text-gamboge-500" />}
         <div className="min-w-0 flex-1">
@@ -242,51 +243,53 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
           {item.matched_text && item.category === 'fact' && <p className="mt-1.5 rounded bg-sky-50 px-2 py-1 text-[12.5px] text-sky-800">「{item.matched_text}」</p>}
           {item.location.material_support && <p className="mt-1.5 rounded bg-ink-50 px-2 py-1 text-[12px] text-ink-700">关联素材引句：「{item.location.material_support.quote}」</p>}
           {item.location.label && <p className="mt-1 text-[11.5px] text-mist-400">位置：{item.location.label}{item.location.found === false && '（未在正文中定位到原文）'}</p>}
-          {isFormat && !item.passed && (
-            <p className="mt-1.5 text-[12px] font-medium text-danger">
-              格式问题必须修改，不能保留。{fieldLink && <Link to={`/works/${workId}${fieldLink}`} className="underline">去修改</Link>}
-            </p>
-          )}
-          {!disabled && !done && item.location.section_id && (onEditInPlace || canFix) && (
-            <div className="mt-2 flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
-              {onEditInPlace && <Button size="sm" variant="ghost" icon={<PenLine className="size-3" />} onClick={onEditInPlace}>在原文中修改</Button>}
-              {canFix && <Button size="sm" variant="ghost" icon={<Sparkles className="size-3" />} loading={fixBusy} onClick={suggest}>建议改法</Button>}
-            </div>
-          )}
-          {fix && (
-            <div className="mt-2 space-y-1.5 rounded-lg border border-ink-100 bg-ink-50/40 p-2" onClick={(e) => e.stopPropagation()}>
-              <p className="text-[11.5px] text-mist-500">原句：{fix.sentence}</p>
-              {fix.variants.map((v, i) => (
-                <div key={i} className="rounded-md bg-white p-2 text-[12.5px]">
-                  <p className="leading-relaxed text-mist-800">{v.text}</p>
-                  {v.note && <p className="mt-0.5 text-[11px] text-mist-400">{v.note}</p>}
-                  <div className="mt-1 flex justify-end">
-                    <Button size="sm" variant="primary" loading={applying === i} disabled={applying !== null} onClick={async () => {
-                      setApplying(i)
-                      try { await onApplyFix?.(fix, i); setFix(null) } finally { setApplying(null) }
-                    }}>用这个替换</Button>
-                  </div>
-                </div>
-              ))}
-              <div className="flex items-center justify-between text-[11px] text-mist-400">
-                替换后会重新检查，这一项需要你再确认一次
-                <button type="button" className="cursor-pointer hover:text-mist-600" onClick={() => { sendFeedback(fix.ai_call_id, { outcome: 'rejected' }); setFix(null) }}>收起</button>
-              </div>
-            </div>
-          )}
-          {!isFormat && (
-            <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5" onClick={(e) => e.stopPropagation()}>
-              {options[item.category]?.map((o) => (
-                <label key={o.value} className={cn('flex cursor-pointer items-center gap-1.5 text-[13px]', item.resolution === o.value ? 'font-medium text-ink-700' : 'text-mist-600')}>
-                  <input type={item.category === 'ai_disclosure' ? 'checkbox' : 'radio'} name={item.id} disabled={disabled} className="accent-ink-600"
-                    checked={item.resolution === o.value}
-                    onChange={(e) => onResolve(item.category === 'ai_disclosure' && !e.target.checked ? null : o.value)} />
-                  {o.label}
-                </label>
-              ))}
-            </div>
-          )}
         </div>
+      </button>
+      <div className="ml-6">
+        {isFormat && !item.passed && (
+          <p className="mt-1.5 text-[12px] font-medium text-danger">
+            格式问题必须修改，不能保留。{fieldLink && <Link to={`/works/${workId}${fieldLink}`} className="underline">去修改</Link>}
+          </p>
+        )}
+        {!disabled && !done && item.location.section_id && (onEditInPlace || canFix) && (
+          <div className="mt-2 flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
+            {onEditInPlace && <Button size="sm" variant="ghost" icon={<PenLine className="size-3" />} onClick={onEditInPlace}>在原文中修改</Button>}
+            {canFix && <Button size="sm" variant="ghost" icon={<Sparkles className="size-3" />} loading={fixBusy} onClick={suggest}>建议改法</Button>}
+          </div>
+        )}
+        {fix && (
+          <div className="mt-2 space-y-1.5 rounded-lg border border-ink-100 bg-ink-50/40 p-2" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[11.5px] text-mist-500">原句：{fix.sentence}</p>
+            {fix.variants.map((v, i) => (
+              <div key={i} className="rounded-md bg-white p-2 text-[12.5px]">
+                <p className="leading-relaxed text-mist-800">{v.text}</p>
+                {v.note && <p className="mt-0.5 text-[11px] text-mist-400">{v.note}</p>}
+                <div className="mt-1 flex justify-end">
+                  <Button size="sm" variant="primary" loading={applying === i} disabled={applying !== null} onClick={async () => {
+                    setApplying(i)
+                    try { await onApplyFix?.(fix, i); setFix(null) } finally { setApplying(null) }
+                  }}>用这个替换</Button>
+                </div>
+              </div>
+            ))}
+            <div className="flex items-center justify-between text-[11px] text-mist-400">
+              替换后会重新检查，这一项需要你再确认一次
+              <button type="button" className="cursor-pointer hover:text-mist-600" onClick={() => { sendFeedback(fix.ai_call_id, { outcome: 'rejected' }); setFix(null) }}>收起</button>
+            </div>
+          </div>
+        )}
+        {!isFormat && (
+          <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5" onClick={(e) => e.stopPropagation()}>
+            {options[item.category]?.map((o) => (
+              <label key={o.value} className={cn('flex cursor-pointer items-center gap-1.5 text-[13px]', item.resolution === o.value ? 'font-medium text-ink-700' : 'text-mist-600')}>
+                <input type={item.category === 'ai_disclosure' ? 'checkbox' : 'radio'} name={item.id} disabled={disabled} className="accent-ink-600"
+                  checked={item.resolution === o.value}
+                  onChange={(e) => onResolve(item.category === 'ai_disclosure' && !e.target.checked ? null : o.value)} />
+                {o.label}
+              </label>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

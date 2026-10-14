@@ -62,6 +62,7 @@ export default function Push() {
   const [failure, setFailure] = useState<{ step: string; message: string } | null>(null)
   const [choice, setChoice] = useState<{ reason: 'modified' | 'missing'; message: string } | null>(null)
   const [result, setResult] = useState<{ action: string; backend_url: string; today_count: number } | null>(null)
+  const [syncingDraft, setSyncingDraft] = useState(false)
   const [todos, setTodos] = useState<boolean[]>(backendTodos.map(() => false))
 
   if (pv.isLoading || !pv.data) return <PageState loading={pv.isLoading} error={pv.error ?? pv.failureReason} retrying={pv.isFetching} onRetry={() => void pv.refetch()} emptyTitle="暂无推送预览数据" />
@@ -110,6 +111,17 @@ export default function Push() {
   const copyHTML = async () => {
     await navigator.clipboard.writeText(html)
     toast.success('已复制 HTML，可以粘贴到公众号编辑器')
+  }
+
+  const syncDraft = async () => {
+    if (syncingDraft) return
+    setSyncingDraft(true)
+    try {
+      const r = await post<{ message: string }>(`/works/${work.id}/wechat/sync-draft`)
+      toast.message(r.message)
+      await refresh()
+    } catch (e) { toast.error(errorMessage(e)) }
+    finally { setSyncingDraft(false) }
   }
 
   if (!p.can_push && work.status !== 'published' && !result) {
@@ -263,13 +275,7 @@ export default function Push() {
         {work.status === 'pushed' && work.wechat_draft_media_id && (
           <Card className="flex items-center gap-3 p-4">
             <div className="min-w-0 flex-1 text-[13px] text-mist-600">同步草稿箱状态：检查这篇草稿是否仍在公众号草稿箱（不会自动改作品状态）。</div>
-            <Button size="sm" variant="secondary" onClick={async () => {
-              try {
-                const r = await post<{ message: string }>(`/works/${work.id}/wechat/sync-draft`)
-                toast.message(r.message)
-                await refresh()
-              } catch (e) { toast.error(errorMessage(e)) }
-            }}>同步状态</Button>
+            <Button size="sm" variant="secondary" loading={syncingDraft} onClick={syncDraft}>同步状态</Button>
           </Card>
         )}
       </div>
