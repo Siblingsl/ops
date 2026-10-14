@@ -3,13 +3,14 @@ import { api, registerAccount } from './support'
 
 test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交小于16ms', async ({ page }) => {
   await page.addInitScript(() => {
-    const state = { record: false, commits: [] as { sections: string[]; duration: number; owners: { name: string; duration: number }[] }[] }
+    const state = { record: false, commits: [] as { sections: string[]; sectionDurations: { id: string; duration: number }[]; duration: number; owners: { name: string; duration: number }[] }[] }
     ;(window as any).__opt08 = state
     ;(window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
       supportsFiber: true, renderers: new Map(), inject: () => 1,
       onCommitFiberRoot: (_renderer: number, root: any) => {
         if (!state.record) return
         const sections: string[] = []
+        const sectionDurations: { id: string; duration: number }[] = []
         const owners: { name: string; duration: number }[] = []
         const previousFibers = new Set<any>()
         const findPrevious = (fiber: any) => {
@@ -29,13 +30,19 @@ test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交�
         findPreviousSections(root.current.alternate?.child)
         const visit = (fiber: any) => {
           if (!fiber) return
-          if (fiber.memoizedProps?.section && fiber.memoizedProps?.onSave && previousSections.get(fiber.memoizedProps.section.id) !== fiber) sections.push(fiber.memoizedProps.section.id)
-          if (!previousFibers.has(fiber) && typeof fiber.type === 'function') owners.push({ name: fiber.type.name, duration: fiber.actualDuration })
+          if (fiber.memoizedProps?.section && fiber.memoizedProps?.onSave && previousSections.get(fiber.memoizedProps.section.id) !== fiber) {
+            sections.push(fiber.memoizedProps.section.id)
+            sectionDurations.push({ id: fiber.memoizedProps.section.id, duration: fiber.actualDuration })
+          }
+          if (!previousFibers.has(fiber)) {
+            const type = fiber.type?.type ?? fiber.type
+            if (typeof type === 'function') owners.push({ name: type.displayName || type.name, duration: fiber.actualDuration })
+          }
           visit(fiber.child)
           visit(fiber.sibling)
         }
         visit(root.current)
-        state.commits.push({ sections, duration: root.current.actualDuration, owners })
+        state.commits.push({ sections, sectionDurations, duration: root.current.actualDuration, owners })
       },
       onCommitFiberUnmount: () => {},
     }
@@ -67,7 +74,7 @@ test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交�
   await page.keyboard.press('Control+Home')
   await expect.poll(async () => (await api(page, 'GET', `/works/${work.id}`)).outline_confirmed_at).toBeTruthy()
   const start = () => page.evaluate(() => { (window as any).__opt08.commits = []; (window as any).__opt08.record = true })
-  const stop = () => page.evaluate(() => { const state = (window as any).__opt08; state.record = false; return state.commits as { sections: string[]; duration: number; owners: { name: string; duration: number }[] }[] })
+  const stop = () => page.evaluate(() => { const state = (window as any).__opt08; state.record = false; return state.commits as { sections: string[]; sectionDurations: { id: string; duration: number }[]; duration: number; owners: { name: string; duration: number }[] }[] })
   await start()
   await page.keyboard.press('Shift+ArrowRight')
   await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).not.toBe('')
@@ -82,12 +89,18 @@ test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交�
   const autosave = await stop()
   const measurements = ([['selection', selection], ['autosave', autosave]] as const).map(([name, commits]) => {
     const updated = [...new Set(commits.flatMap(c => c.sections))]
-    const max = Math.max(...commits.map(c => c.duration))
-    console.log(`OPT08 ${name}: sections=${updated.length}, max actualDuration=${max.toFixed(3)}ms, commits=${commits.length}, rendered=${JSON.stringify(commits.find(c => c.duration === max)?.owners.sort((a, b) => b.duration - a.duration).slice(0, 8))}`)
-    return { updated, max }
+    const editorDurations = commits.flatMap(c => c.owners.filter(o => o.name === 'ArticleEditor').map(o => o.duration))
+    const sectionDurations = commits.flatMap(c => c.sectionDurations.map(s => s.duration))
+    const editorMax = Math.max(...editorDurations)
+    const sectionMax = Math.max(...sectionDurations)
+    const rootMax = Math.max(...commits.map(c => c.duration))
+    console.log(`OPT08 ${name}: sections=${updated.length}, ArticleEditor=${editorMax.toFixed(3)}ms, SectionBlock=${sectionMax.toFixed(3)}ms, appRoot=${rootMax.toFixed(3)}ms, commits=${commits.length}`)
+    return { updated, max: Math.max(editorMax, sectionMax), editorCount: editorDurations.length, sectionCount: sectionDurations.length }
   })
-  for (const { updated, max } of measurements) {
+  for (const { updated, max, editorCount, sectionCount } of measurements) {
     expect(updated).toEqual([id])
+    expect(editorCount).toBeGreaterThan(0)
+    expect(sectionCount).toBeGreaterThan(0)
     expect(max).toBeLessThan(16)
   }
   const final = await api(page, 'GET', `/works/${work.id}`)
