@@ -60,14 +60,14 @@ test('OPT62 公众号四阶段主操作共用页头，检查命令直达且不�
   await finishChecks(page, id)
   await expectHeaderAction(page, '去写入草稿箱')
 
-  await page.keyboard.press('Control+k')
+  await page.getByRole('button', { name: '搜索 Ctrl K' }).click()
   const pushPalette = page.getByRole('dialog', { name: '命令面板' })
   await pushPalette.getByPlaceholder(/搜索作品/).fill('写入草稿')
   await pushPalette.getByRole('button', { name: '去写入草稿箱', exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/works/${id}/push$`))
   await expectHeaderAction(page, '写入草稿箱')
 
-  await page.keyboard.press('Control+k')
+  await page.getByRole('button', { name: '搜索 Ctrl K' }).click()
   const previewPalette = page.getByRole('dialog', { name: '命令面板' })
   await previewPalette.getByPlaceholder(/搜索作品/).fill('排版')
   await previewPalette.getByRole('button', { name: '打开排版预览', exact: true }).click()
@@ -88,6 +88,7 @@ test('OPT62 小红书命令面板打开当前作品发布包与派生，生成�
     if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/xhs/pack')) packRequests.push(request.url())
   })
   await page.goto(`/works/${work.id}`)
+  await expect(page.getByRole('button', { name: '搜索 Ctrl K' })).toBeVisible()
   await page.keyboard.press('Control+k')
   const palette = page.getByRole('dialog', { name: '命令面板' })
   await palette.getByPlaceholder(/搜索作品/).fill('发布包')
@@ -96,7 +97,7 @@ test('OPT62 小红书命令面板打开当前作品发布包与派生，生成�
   await expect(page.getByText('发布前检查还没有全部确认，不能生成发布包。')).toBeVisible()
 
   await page.goto(`/works/${work.id}`)
-  await page.keyboard.press('Control+k')
+  await page.getByRole('button', { name: '搜索 Ctrl K' }).click()
   const derivePalette = page.getByRole('dialog', { name: '命令面板' })
   await derivePalette.getByPlaceholder(/搜索作品/).fill('派生')
   await derivePalette.getByRole('button', { name: '派生到其他账号', exact: true }).click()
