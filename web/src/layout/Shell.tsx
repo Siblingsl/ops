@@ -15,6 +15,7 @@ import { NotificationBell } from '@/components/notifications'
 import { QuickCollect } from '@/components/quick-collect'
 import { cn, Kbd, PlatformMark, platformLabel } from '@/components/ui'
 import { del, errorMessage, post } from '@/lib/api'
+import { fmtTime } from '@/lib/format'
 import { TodayUsage, useChromeMeta } from './today-usage'
 import { useAccounts, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
 import type { Account, Platform } from '@/lib/types'
@@ -678,6 +679,11 @@ export default function Shell() {
   const prefs = usePrefs()
   useEffect(() => setUXEnabled(prefs.ux_events), [prefs.ux_events])
   const [focusMode, setFocusMode] = useState(false)
+  const [timeNow, setTimeNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setTimeNow(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
   useEffect(() => {
     const h = (e: Event) => setFocusMode(!!(e as CustomEvent<boolean>).detail)
     window.addEventListener('ops:focus', h)
@@ -719,6 +725,11 @@ export default function Shell() {
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         {!focus && <TopBar username={me?.username} onLogout={logout} dense={fullBleed} />}
+        {me?.session_expires_at && Date.parse(me.session_expires_at) > timeNow && Date.parse(me.session_expires_at) - timeNow < 24 * 60 * 60 * 1000 && (
+          <div role="status" className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12.5px] text-gamboge-800">
+            会话将于 {fmtTime(me.session_expires_at, true)} 到期，请先保存后重新登录以续期。
+          </div>
+        )}
         {me?.admin_override && (
           <div className="flex items-center justify-center gap-3 border-b border-danger/30 bg-danger/10 px-5 py-2 text-[12.5px] text-danger">
             <span>正在以超级管理员访问「{me.workspace?.name}」</span>

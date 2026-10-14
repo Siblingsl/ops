@@ -336,6 +336,7 @@ func (s *Server) loadIdentity(ctx context.Context, token string) (*identity, err
 	id.SystemAdmin = sysAdmin || s.isPermanentAdminUsername(id.Username)
 	id.AdminOverride = override && id.SystemAdmin
 	id.ReauthOK = reauthUntil != nil && reauthUntil.After(s.now())
+	id.sessionExpiresAt = expires
 	id.lastSeen = lastSeen
 
 	if id.AdminOverride {
@@ -528,16 +529,17 @@ func (s *Server) authMe(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return ok(w, map[string]any{
-		"username":        id.Username,
-		"user_id":         id.UserID,
-		"role":            id.Role,
-		"is_system_admin": id.SystemAdmin,
-		"admin_override":  id.AdminOverride,
-		"csrf_token":      s.csrfToken(id.SessionID),
-		"reauth_ok":       id.ReauthOK,
-		"prev_login_at":   prevAt,
-		"prev_login_ip":   prevIP,
-		"dev":             s.cfg.Dev,
+		"username":           id.Username,
+		"user_id":            id.UserID,
+		"role":               id.Role,
+		"is_system_admin":    id.SystemAdmin,
+		"admin_override":     id.AdminOverride,
+		"csrf_token":         s.csrfToken(id.SessionID),
+		"session_expires_at": id.sessionExpiresAt,
+		"reauth_ok":          id.ReauthOK,
+		"prev_login_at":      prevAt,
+		"prev_login_ip":      prevIP,
+		"dev":                s.cfg.Dev,
 		"workspace": map[string]any{
 			"id":   id.WorkspaceID,
 			"name": wsName,

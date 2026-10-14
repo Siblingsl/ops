@@ -229,15 +229,16 @@ func preferFallback(next http.Handler) http.Handler {
 }
 
 type identity struct {
-	UserID        uuid.UUID
-	SessionID     uuid.UUID
-	WorkspaceID   uuid.UUID
-	Username      string
-	Role          string
-	SystemAdmin   bool
-	AdminOverride bool
-	ReauthOK      bool
-	lastSeen      time.Time
+	UserID           uuid.UUID
+	SessionID        uuid.UUID
+	WorkspaceID      uuid.UUID
+	Username         string
+	Role             string
+	SystemAdmin      bool
+	AdminOverride    bool
+	ReauthOK         bool
+	sessionExpiresAt time.Time
+	lastSeen         time.Time
 }
 
 func ident(ctx context.Context) *identity {

@@ -7,13 +7,15 @@ import type { Account, Me, SystemInfo } from './types'
 export function useMe() {
   const q = useQuery({
     queryKey: ['me'],
-    queryFn: () => get<Me>('/auth/me'),
+    queryFn: async () => {
+      const me = await get<Me>('/auth/me')
+      setCsrf(me.csrf_token)
+      return me
+    },
     retry: false,
     staleTime: 60_000,
+    refetchOnWindowFocus: 'always',
   })
-  useEffect(() => {
-    if (q.data) setCsrf(q.data.csrf_token)
-  }, [q.data])
   return q
 }
 

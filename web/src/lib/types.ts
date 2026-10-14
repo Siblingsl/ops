@@ -467,6 +467,7 @@ export interface Me {
   is_system_admin?: boolean
   admin_override?: boolean
   csrf_token: string
+  session_expires_at: string
   reauth_ok: boolean
   prev_login_at: string | null
   prev_login_ip: string | null
