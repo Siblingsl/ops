@@ -58,11 +58,15 @@ func (s *Server) refreshDataPreferences(ctx context.Context, accountID uuid.UUID
 // weeklyReviewDraftJob: with review.weekly_draft on, every Monday each account gets one review draft
 // on the economy tier from its day-7 data of the last 30 days. Suggestions still need adopting one by one.
 func (s *Server) weeklyReviewDraftJob(ctx context.Context) {
-	now := s.now().In(s.loc)
-	if now.Weekday() != time.Monday {
+	s.weeklyReviewDraftJobForDay(ctx, s.today())
+}
+
+func (s *Server) weeklyReviewDraftJobForDay(ctx context.Context, day time.Time) {
+	day = time.Date(day.In(s.loc).Year(), day.In(s.loc).Month(), day.In(s.loc).Day(), 0, 0, 0, 0, s.loc)
+	if day.Weekday() != time.Monday {
 		return
 	}
-	week := weekStart(now).Format("2006-01-02")
+	week := weekStart(day).Format("2006-01-02")
 	rows, err := s.db.Query(ctx, `SELECT a.id, a.workspace_id FROM platform_account a
 		JOIN app_setting st ON st.workspace_id=a.workspace_id AND st.key='review_weekly_draft' AND st.value #>> '{}' = 'on'
 		WHERE a.status='active' AND NOT a.is_demo`)
@@ -83,21 +87,27 @@ func (s *Server) weeklyReviewDraftJob(ctx context.Context) {
 			continue
 		}
 		jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: x.ws})
-		if err := s.weeklyReviewDraft(jctx, x.id, week); err != nil {
+		now := s.now().In(s.loc)
+		asOf := time.Date(day.Year(), day.Month(), day.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), s.loc)
+		if err := s.weeklyReviewDraftAt(jctx, x.id, week, asOf); err != nil {
 			slog.Warn("生成每周复盘草稿失败", "account", x.id, "err", err)
 		}
 	}
 }
 
 func (s *Server) weeklyReviewDraft(ctx context.Context, accountID uuid.UUID, week string) error {
+	return s.weeklyReviewDraftAt(ctx, accountID, week, s.now())
+}
+
+func (s *Server) weeklyReviewDraftAt(ctx context.Context, accountID uuid.UUID, week string, asOf time.Time) error {
 	a, err := s.account(ctx, accountID)
 	if err != nil {
 		return err
 	}
-	since := s.now().AddDate(0, 0, -30)
+	since := asOf.AddDate(0, 0, -30)
 	rows, err := s.db.Query(ctx, `SELECT w.id FROM work w JOIN work_metric_d7 d ON d.work_id=w.id
-		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND d.reads IS NOT NULL AND w.published_at > $2
-		ORDER BY w.published_at DESC LIMIT 10`, a.ID, since)
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND d.reads IS NOT NULL AND w.published_at > $2 AND w.published_at < $3
+		ORDER BY w.published_at DESC LIMIT 10`, a.ID, since, asOf)
 	if err != nil {
 		return err
 	}
@@ -113,7 +123,7 @@ func (s *Server) weeklyReviewDraft(ctx context.Context, accountID uuid.UUID, wee
 	link := "/a/" + a.ID.String() + "/review"
 	if len(ids) < minWeeklyDraftWorks {
 		var published int
-		_ = s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL AND published_at > $2`, a.ID, since).Scan(&published)
+		_ = s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL AND published_at > $2 AND published_at < $3`, a.ID, since, asOf).Scan(&published)
 		if published > 0 {
 			s.notifyWorkspace(ctx, ws, []string{"owner", "editor"}, "review", "本周复盘草稿没有生成：先补数据",
 				fmt.Sprintf("%s近 30 天只有 %d 篇作品有第 7 天数据，至少 %d 篇才生成复盘草稿。", a.Name, len(ids), minWeeklyDraftWorks),

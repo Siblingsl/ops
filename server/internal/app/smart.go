@@ -630,8 +630,12 @@ func (s *Server) convertInbox(w http.ResponseWriter, r *http.Request) error {
 
 // inboxTriageDaily fills suggestions for new items once a day; it never converts anything.
 func (s *Server) inboxTriageDaily(ctx context.Context) {
-	day := s.today().Format("2006-01-02")
-	rows, err := s.db.Query(ctx, `SELECT workspace_id, id FROM inbox_item WHERE status='new' AND suggestion IS NULL ORDER BY created_at LIMIT 100`)
+	s.inboxTriageDailyForDay(ctx, s.today())
+}
+
+func (s *Server) inboxTriageDailyForDay(ctx context.Context, day time.Time) {
+	day = time.Date(day.In(s.loc).Year(), day.In(s.loc).Month(), day.In(s.loc).Day(), 0, 0, 0, 0, s.loc)
+	rows, err := s.db.Query(ctx, `SELECT workspace_id, id FROM inbox_item WHERE status='new' AND suggestion IS NULL AND created_at < $1 ORDER BY created_at LIMIT 100`, day.AddDate(0, 0, 1))
 	if err != nil {
 		return
 	}
@@ -645,7 +649,7 @@ func (s *Server) inboxTriageDaily(ctx context.Context) {
 	}
 	rows.Close()
 	for _, p := range list {
-		if !s.markOnce(ctx, "inbox:"+p.id.String()+":"+day) {
+		if !s.markOnce(ctx, "inbox:"+p.id.String()+":"+day.Format("2006-01-02")) {
 			continue
 		}
 		jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: p.ws})
