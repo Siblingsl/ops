@@ -353,10 +353,14 @@ export default function Materials() {
   const kind = Object.keys(kindMeta).includes(requestedKind) ? requestedKind as MaterialKind : ''
   const usage = (['used', 'unused', 'expired'].includes(params.get('usage') ?? '') ? params.get('usage') : '') as '' | 'used' | 'unused' | 'expired'
   const q = params.get('q') ?? ''
+  const [visibleCount, setVisibleCount] = useState(50)
+  const focusedMaterial = useRef<string | null>(null)
   const updateFilter = (name: string, value: string | null) => {
     const next = new URLSearchParams(params)
     if (value === null) next.delete(name)
     else next.set(name, value)
+    focusedMaterial.current = null
+    setVisibleCount(50)
     setParams(next, { replace: true })
   }
   const [dialog, setDialog] = useState<{ editing: Material | null } | null>(null)
@@ -390,8 +394,19 @@ export default function Materials() {
     }
   }, [params, setParams])
   useEffect(() => {
-    if (focus && data) focusRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [focus, data])
+    if (!focus || !data) return
+    const index = data.filter((m) => (!kind || m.kind === kind) && (tag === null || (tag === '' ? m.tags.length === 0 : m.tags.includes(tag))))
+      .findIndex((m) => m.id === focus)
+    if (index < 0) return
+    if (index >= visibleCount) {
+      setVisibleCount(index + 1)
+      return
+    }
+    if (focusedMaterial.current !== focus) {
+      focusRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      focusedMaterial.current = focus
+    }
+  }, [focus, data, kind, tag, visibleCount])
   if (!acc) return <PageLoading />
   const tagCounts = new Map<string, number>()
   for (const m of data ?? []) for (const t of m.tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1)
@@ -472,7 +487,7 @@ export default function Materials() {
           action={!q && canWrite && <div className="flex gap-2"><Button icon={<Scissors className="size-4" />} onClick={() => setExtract(true)}>从长文提炼</Button><Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加第一条素材</Button></div>} /></Card>
       ) : (
         <div className="columns-1 gap-4 md:columns-2 xl:columns-3 2xl:columns-4">
-          {list.map((m) => (
+          {list.slice(0, visibleCount).map((m) => (
             <div key={m.id} ref={m.id === focus ? focusRef : undefined}>
               <Card className={cn('group mb-4 break-inside-avoid p-4', m.id === focus && 'ring-2 ring-ink-300', m.expired && 'border-orange-200')}>
                 <div className="mb-2 flex items-center gap-2">
@@ -500,6 +515,11 @@ export default function Materials() {
               </Card>
             </div>
           ))}
+        </div>
+      )}
+      {!isLoading && list.length > visibleCount && (
+        <div className="mt-5 flex justify-center">
+          <Button variant="outline" onClick={() => setVisibleCount((count) => Math.min(count + 50, list.length))}>加载更多素材</Button>
         </div>
       )}
       {dialog && <MaterialDialog open onClose={() => setDialog(null)} accountId={acc.id} editing={dialog.editing} />}
