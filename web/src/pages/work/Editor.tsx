@@ -250,6 +250,7 @@ export default function Editor() {
 }
 
 const SIDEBAR_KEY = 'ops.editor.sidebar'
+const SIDEBAR_WIDE_QUERY = '(min-width: 1280px)'
 
 /** LazyMount renders a light placeholder until the block comes near the viewport, then keeps it mounted (4.5). */
 function LazyMount({ id, enabled, children, preview }: { id: string; enabled: boolean; children: React.ReactNode; preview: string }) {
@@ -317,6 +318,8 @@ function ArticleEditor() {
   }, [memberKey])
   const fromMention = new URLSearchParams(location.search).has('comment')
   const [sidebar, setSidebar] = useState(() => fromMention || localStorage.getItem(SIDEBAR_KEY) !== '0')
+  const [narrowSidebar, setNarrowSidebar] = useState(false)
+  const [wide, setWide] = useState(() => window.matchMedia(SIDEBAR_WIDE_QUERY).matches)
   const [sideTab, setSideTab] = useState<SidebarTab>(fromMention ? 'comments' : position.tab ?? 'materials')
   const [materialsOpened, setMaterialsOpened] = useState(false)
   const selectSideTab = (tab: SidebarTab) => {
@@ -335,6 +338,15 @@ function ArticleEditor() {
   const onLint = useCallback((id: string, n: number) => { lintCounts.current[id] = n }, [])
   const setWorkStable = setWork
   useEffect(() => {
+    const media = window.matchMedia(SIDEBAR_WIDE_QUERY)
+    const change = () => {
+      setWide(media.matches)
+      if (media.matches) setNarrowSidebar(false)
+    }
+    media.addEventListener('change', change)
+    return () => media.removeEventListener('change', change)
+  }, [])
+  useEffect(() => {
     try { localStorage.setItem(positionKey, JSON.stringify({ sectionId: activeId ?? position.sectionId, tab: sideTab })) } catch {}
   }, [positionKey, activeId, sideTab, position.sectionId])
   useEffect(() => {
@@ -351,14 +363,16 @@ function ArticleEditor() {
     return () => window.clearTimeout(t)
   }, [route.hash])
   const toggleSidebar = (v: boolean) => {
-    setSidebar(v)
+    if (wide) {
+      setSidebar(v)
+      localStorage.setItem(SIDEBAR_KEY, v ? '1' : '0')
+    } else setNarrowSidebar(v)
     if (v && sideTab === 'materials') setMaterialsOpened(true)
-    localStorage.setItem(SIDEBAR_KEY, v ? '1' : '0')
   }
   useEditorEvents((e) => {
     if (e.type === 'sidebar') selectSideTab(e.tab)
     if (e.type === 'comment') setSideTab('comments')
-    if ((e.type === 'sidebar' || e.type === 'comment') && !sidebar) toggleSidebar(true)
+    if (e.type === 'sidebar' || e.type === 'comment') toggleSidebar(true)
   })
   const onActive = useCallback((id: string, sel: string) => {
     setActiveId(id)
@@ -521,10 +535,10 @@ function ArticleEditor() {
       }
       if (mod && e.key.toLowerCase() === 'j') {
         e.preventDefault()
-        if (showSidebar && sideTab === 'copilot') toggleSidebar(false)
+        if (wide ? showSidebar && sideTab === 'copilot' : narrowSidebar && sideTab === 'copilot') toggleSidebar(false)
         else {
           setSideTab('copilot')
-          if (!sidebar) toggleSidebar(true)
+          toggleSidebar(true)
         }
         return
       }
@@ -687,17 +701,30 @@ function ArticleEditor() {
         {work.locked && <Notice tone="gray">作品已发布，当前为只读模式。</Notice>}
       </div>
 
-      {showSidebar ? (
+      {showSidebar && (
         <aside className="sticky top-20 hidden h-[calc(100vh-6.5rem)] w-[320px] shrink-0 overflow-hidden rounded-xl border border-mist-200 bg-white shadow-card xl:block 2xl:w-[360px]">
           <SelectedSidebar work={work} setWork={setWorkStable} active={active} selectionRef={selection} tab={sideTab} onTab={selectSideTab} onClose={() => toggleSidebar(false)} />
         </aside>
-      ) : !focus && (
+      )}
+      {!focus && !showSidebar && (
         <button type="button" onClick={() => toggleSidebar(true)} title="打开助手侧栏：素材推荐、副驾驶、体检、待核实、批注、动态"
           className="fixed right-4 top-1/2 z-20 hidden -translate-y-1/2 cursor-pointer flex-col items-center gap-1 rounded-xl border border-mist-200 bg-white px-2 py-3 text-[11px] text-mist-500 shadow-pop transition hover:text-ink-700 xl:flex">
           <PanelRightOpen className="size-4" />助手
           {pendingAll.length > 0 && <span className="rounded-full bg-gamboge-400 px-1 text-[10px] font-bold text-mist-900">{pendingAll.length}</span>}
         </button>
       )}
+      {!focus && (
+        <button type="button" onClick={() => toggleSidebar(true)} aria-label="打开助手工具"
+          className="fixed right-4 top-1/2 z-20 flex -translate-y-1/2 cursor-pointer flex-col items-center gap-1 rounded-xl border border-mist-200 bg-white px-2 py-3 text-[11px] text-mist-500 shadow-pop transition hover:text-ink-700 xl:hidden">
+          <PanelRightOpen className="size-4" />助手
+          {pendingAll.length > 0 && <span className="rounded-full bg-gamboge-400 px-1 text-[10px] font-bold text-mist-900">{pendingAll.length}</span>}
+        </button>
+      )}
+      <Drawer open={!wide && narrowSidebar && !focus} onClose={() => toggleSidebar(false)} title="作品工具" desc="素材、修改与协作工具">
+        <div className="-mx-6 -my-5 h-full">
+          <SelectedSidebar work={work} setWork={setWorkStable} active={active} selectionRef={selection} tab={sideTab} onTab={selectSideTab} onClose={() => toggleSidebar(false)} />
+        </div>
+      </Drawer>
       {orderConflict && <WorkConflictDialog server={orderConflict.server} mine={orderConflict.mine} onClose={() => setOrderConflict(null)} onResolve={async keepMine => {
         if (!keepMine) { setWork(orderConflict.server); setOrderConflict(null); return }
         try { setWork(await put<Work>(`/works/${work.id}/sections/order`, { ids: orderConflict.ids, base_revision: orderConflict.server.revision })); setOrderConflict(null) }
