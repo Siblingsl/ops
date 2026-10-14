@@ -48,5 +48,5 @@ test('OPT57 收集后一次点击去整理，空素材入口与逐条可选关�
   expect(latest.material_ids).toContain(existing.id)
   expect(latest.material_ids).toHaveLength(2)
   expect(converts).toBe(1)
-  expect((await api(page, 'GET', '/inbox')).find((item: { id: string }) => item.id === second.id)).toBeUndefined()
+  expect((await api(page, 'GET', '/inbox')).items.find((item: { id: string }) => item.id === second.id)).toBeUndefined()
 })

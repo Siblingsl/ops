@@ -17,7 +17,7 @@ import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { type AIRefs, relTime } from '@/lib/format'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import { deleteWithUndo } from '@/lib/undo'
-import type { InboxItem, Series, Topic, TopicPage, Work } from '@/lib/types'
+import type { InboxPage, Series, Topic, TopicPage, Work } from '@/lib/types'
 
 interface Suggestion {
 	hot_item_id?: string | null
@@ -512,7 +512,13 @@ export default function Topics() {
     enabled: !!acc,
   })
   const series = useQuery({ queryKey: ['series', acc?.id], queryFn: () => get<Series[]>(`/accounts/${acc!.id}/series`), enabled: !!acc })
-  const inbox = useQuery({ queryKey: ['inbox'], queryFn: () => get<InboxItem[]>('/inbox'), enabled: !!acc })
+  const inbox = useInfiniteQuery({
+    queryKey: ['inbox'],
+    queryFn: ({ pageParam }) => get<InboxPage>(`/inbox${pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : ''}`),
+    initialPageParam: '' as string,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    enabled: !!acc,
+  })
   useEffect(() => {
     if (params.get('suggest') || params.get('new') || params.get('hot')) {
       if (params.get('hot') === '1') setHotSuggest(true)
@@ -576,7 +582,7 @@ export default function Topics() {
           { value: 'pending', label: '待定', count: counts?.pending },
           { value: 'adopted', label: '已采用', count: counts?.adopted },
           { value: 'dropped', label: '已放弃', count: counts?.dropped },
-          { value: 'inbox', label: <span className="inline-flex items-center gap-1"><Inbox className="size-3.5" />收件箱</span>, count: inbox.data?.length || undefined },
+          { value: 'inbox', label: <span className="inline-flex items-center gap-1"><Inbox className="size-3.5" />收件箱</span>, count: inbox.data?.pages[0]?.total || undefined },
           { value: 'series', label: <span className="inline-flex items-center gap-1"><Layers className="size-3.5" />系列</span>, count: series.data?.length || undefined },
         ]} />
         {tab === 'pending' && (

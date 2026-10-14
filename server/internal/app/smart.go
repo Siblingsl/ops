@@ -399,8 +399,23 @@ func (s *Server) listInbox(w http.ResponseWriter, r *http.Request) error {
 	if status == "" {
 		status = "new"
 	}
-	rows, err := s.db.Query(ctx, `SELECT `+inboxCols+` FROM inbox_item WHERE workspace_id=$1 AND status=$2 ORDER BY created_at DESC LIMIT 200`,
-		ident(ctx).WorkspaceID, status)
+	cursor, err := parseListCursor(r)
+	if err != nil {
+		return err
+	}
+	workspaceID := ident(ctx).WorkspaceID
+	var total int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM inbox_item WHERE workspace_id=$1 AND status=$2`, workspaceID, status).Scan(&total); err != nil {
+		return err
+	}
+	args := []any{workspaceID, status}
+	sql := `SELECT ` + inboxCols + ` FROM inbox_item WHERE workspace_id=$1 AND status=$2`
+	if cursor != nil {
+		args = append(args, cursor.CreatedAt, cursor.ID)
+		sql += fmt.Sprintf(` AND (created_at,id) < ($%d,$%d)`, len(args)-1, len(args))
+	}
+	args = append(args, listPageSize+1)
+	rows, err := s.db.Query(ctx, sql+fmt.Sprintf(` ORDER BY created_at DESC,id DESC LIMIT $%d`, len(args)), args...)
 	if err != nil {
 		return err
 	}
@@ -413,7 +428,20 @@ func (s *Server) listInbox(w http.ResponseWriter, r *http.Request) error {
 		}
 		list = append(list, x)
 	}
-	return ok(w, list)
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	hasMore := len(list) > listPageSize
+	if hasMore {
+		list = list[:listPageSize]
+	}
+	var nextCursor *string
+	if hasMore {
+		last := list[len(list)-1]
+		v := encodeListCursor(last.CreatedAt, last.ID)
+		nextCursor = &v
+	}
+	return ok(w, map[string]any{"items": list, "total": total, "next_cursor": nextCursor})
 }
 
 func (s *Server) createInbox(w http.ResponseWriter, r *http.Request) error {

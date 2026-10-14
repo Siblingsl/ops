@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity, AlertCircle, BookOpenCheck, Bot, Check, ChevronsRight, History, Library, MessageSquare, Plus, Send, Sparkles, Square, Stethoscope, Trash2,
 } from 'lucide-react'
@@ -30,6 +30,7 @@ interface Props {
 }
 
 type TabDef = { id: SidebarTab; label: string; icon: React.ReactNode }
+type CommentPage = { items: Comment[]; open_count: number; next_cursor: string | null }
 
 const tabGroups: { label: string; tabs: TabDef[] }[] = [
   { label: '写作', tabs: [
@@ -50,11 +51,25 @@ const tabGroups: { label: string; tabs: TabDef[] }[] = [
 export function EditorSidebar({ work, setWork, active, selection, tab, onTab: setTab, onClose }: Props) {
   const visible = usePageVisible()
   const pendingCount = usePendingSections(work.sections).length
-  const comments = useQuery({ queryKey: ['comments', work.id], queryFn: () => get<Comment[]>(`/works/${work.id}/comments`), enabled: visible, refetchInterval: visible ? 60_000 : false })
+  const comments = useInfiniteQuery({
+    queryKey: ['comments', work.id],
+    queryFn: ({ pageParam }) => get<CommentPage>(`/works/${work.id}/comments${pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : ''}`),
+    initialPageParam: '' as string,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    enabled: visible,
+    refetchInterval: visible ? 60_000 : false,
+  })
+  const commentList = comments.data?.pages.flatMap((page) => page.items) ?? []
+  const commentTarget = new URLSearchParams(location.search).get('comment')
   useEffect(() => {
     if (visible) void comments.refetch({ cancelRefetch: false })
   }, [visible, comments.refetch])
-  const openComments = (comments.data ?? []).filter((c) => !c.resolved_at).length
+  useEffect(() => {
+    if (commentTarget && !commentList.some((comment) => comment.id === commentTarget) && comments.hasNextPage && !comments.isFetchingNextPage) {
+      void comments.fetchNextPage()
+    }
+  }, [commentTarget, commentList.length, comments.hasNextPage, comments.isFetchingNextPage, comments.fetchNextPage])
+  const openComments = comments.data?.pages[0]?.open_count ?? commentList.filter((c) => !c.resolved_at).length
   const pendingMemories = usePendingMemories(work.account_id)
   return (
     <div className="flex h-full flex-col">
@@ -83,7 +98,7 @@ export function EditorSidebar({ work, setWork, active, selection, tab, onTab: se
         {tab === 'polish' && <PolishTab work={work} />}
         {tab === 'readthrough' && <ReadThroughTab work={work} active={active} />}
         {tab === 'pending' && <PendingTab work={work} />}
-        {tab === 'comments' && <CommentsTab work={work} active={active} selection={selection} list={comments.data ?? []} refetch={() => comments.refetch()} />}
+        {tab === 'comments' && <CommentsTab work={work} active={active} selection={selection} list={commentList} refetch={() => { void comments.refetch() }} hasMore={comments.hasNextPage} loadingMore={comments.isFetchingNextPage} loadMore={() => { void comments.fetchNextPage() }} />}
         {tab === 'activity' && <ActivityTab work={work} />}
       </div>
       {pendingMemories > 0 && (
@@ -428,7 +443,7 @@ function PendingTab({ work }: { work: Work }) {
 
 // ---------- 批注（EX-L-02） ----------
 
-function CommentsTab({ work, active, selection, list, refetch }: { work: Work; active: Section | null; selection: string; list: Comment[]; refetch: () => void }) {
+function CommentsTab({ work, active, selection, list, refetch, hasMore, loadingMore, loadMore }: { work: Work; active: Section | null; selection: string; list: Comment[]; refetch: () => void; hasMore: boolean; loadingMore: boolean; loadMore: () => void }) {
   const { data: me } = useMe()
   const members = useQuery({ queryKey: ['members'], queryFn: () => get<WorkspaceMember[]>('/workspaces/current/members'), staleTime: 300_000 })
   const [body, setBody] = useState('')
@@ -520,6 +535,7 @@ function CommentsTab({ work, active, selection, list, refetch }: { work: Work; a
           ))}
         </ul>
       )}
+      {hasMore && <div className="text-center"><Button size="sm" variant="ghost" loading={loadingMore} onClick={loadMore}>加载更多</Button></div>}
     </div>
   )
 }
