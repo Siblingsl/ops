@@ -201,7 +201,7 @@ export const PlainEditor = forwardRef<EditorHandle, Props>(function PlainEditor(
       defaultValue={value}
       readOnly={!editable}
       placeholder={placeholder}
-      onChange={(e) => { onChange(e.target.value); grow() }}
+      onChange={(e) => onChange(e.target.value)}
       onSelect={track}
       onKeyUp={track}
       onMouseUp={track}
