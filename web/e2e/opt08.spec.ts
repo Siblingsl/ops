@@ -11,17 +11,31 @@ test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交�
         if (!state.record) return
         const sections: string[] = []
         const owners: { name: string; duration: number }[] = []
+        const previousFibers = new Set<any>()
+        const findPrevious = (fiber: any) => {
+          if (!fiber) return
+          previousFibers.add(fiber)
+          findPrevious(fiber.child)
+          findPrevious(fiber.sibling)
+        }
+        findPrevious(root.current.alternate)
+        const previousSections = new Map<string, any>()
+        const findPreviousSections = (fiber: any) => {
+          if (!fiber) return
+          if (fiber.memoizedProps?.section && fiber.memoizedProps?.onSave) previousSections.set(fiber.memoizedProps.section.id, fiber)
+          findPreviousSections(fiber.child)
+          findPreviousSections(fiber.sibling)
+        }
+        findPreviousSections(root.current.alternate?.child)
         const visit = (fiber: any) => {
           if (!fiber) return
-          if (fiber.memoizedProps?.section && fiber.memoizedProps?.onSave && (fiber.flags & 1)) {
-            sections.push(fiber.memoizedProps.section.id)
-          }
-          if ((fiber.flags & 1) && typeof fiber.type === 'function') owners.push({ name: fiber.type.name, duration: fiber.actualDuration })
+          if (fiber.memoizedProps?.section && fiber.memoizedProps?.onSave && previousSections.get(fiber.memoizedProps.section.id) !== fiber) sections.push(fiber.memoizedProps.section.id)
+          if (!previousFibers.has(fiber) && typeof fiber.type === 'function') owners.push({ name: fiber.type.name, duration: fiber.actualDuration })
           visit(fiber.child)
           visit(fiber.sibling)
         }
         visit(root.current)
-        state.commits.push({ sections, duration: root.current.actualDuration, owners: owners.sort((a, b) => b.duration - a.duration).slice(0, 8) })
+        state.commits.push({ sections, duration: root.current.actualDuration, owners })
       },
       onCommitFiberUnmount: () => {},
     }
@@ -69,8 +83,7 @@ test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交�
   const measurements = ([['selection', selection], ['autosave', autosave]] as const).map(([name, commits]) => {
     const updated = [...new Set(commits.flatMap(c => c.sections))]
     const max = Math.max(...commits.map(c => c.duration))
-    console.log(`OPT08 ${name}: sections=${updated.length}, max actualDuration=${max.toFixed(3)}ms, commits=${commits.length}`)
-    console.log(`OPT08 ${name} slowest owners=${JSON.stringify(commits.find(c => c.duration === max)?.owners)}`)
+    console.log(`OPT08 ${name}: sections=${updated.length}, max actualDuration=${max.toFixed(3)}ms, commits=${commits.length}, rendered=${JSON.stringify(commits.find(c => c.duration === max)?.owners.sort((a, b) => b.duration - a.duration).slice(0, 8))}`)
     return { updated, max }
   })
   for (const { updated, max } of measurements) {

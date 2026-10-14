@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { BookOpenCheck, CheckCircle2, Circle, Layers, PanelRightOpen, PenLine, Plus, Stethoscope, Wand2, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
@@ -253,7 +253,15 @@ const SIDEBAR_KEY = 'ops.editor.sidebar'
 const SIDEBAR_WIDE_QUERY = '(min-width: 1280px)'
 
 /** LazyMount renders a light placeholder until the block comes near the viewport, then keeps it mounted (4.5). */
-function LazyMount({ id, enabled, children, preview }: { id: string; enabled: boolean; children: React.ReactNode; preview: string }) {
+function sameElementProps(a: React.ReactElement, b: React.ReactElement) {
+  if (a.type !== b.type || a.key !== b.key) return false
+  const previous = a.props as Record<string, unknown>
+  const next = b.props as Record<string, unknown>
+  const keys = Object.keys(previous)
+  return keys.length === Object.keys(next).length && keys.every(key => Object.is(previous[key], next[key]))
+}
+
+const LazyMount = memo(function LazyMount({ id, enabled, children, preview }: { id: string; enabled: boolean; children: React.ReactNode; preview: string }) {
   const [shown, setShown] = useState(!enabled)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -273,7 +281,10 @@ function LazyMount({ id, enabled, children, preview }: { id: string; enabled: bo
       <p className="line-clamp-4 whitespace-pre-wrap">{preview || '（空段落）'}</p>
     </div>
   )
-}
+}, (previous, next) => previous.id === next.id && previous.enabled === next.enabled && previous.preview === next.preview &&
+  (isValidElement(previous.children) && isValidElement(next.children)
+    ? sameElementProps(previous.children, next.children)
+    : previous.children === next.children))
 
 function ArticleEditor() {
   const [orderConflict, setOrderConflict] = useState<{ server: Work; mine: Work; ids: string[] } | null>(null)
