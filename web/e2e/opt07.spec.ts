@@ -151,6 +151,7 @@ test('OPT07 标题与排序携带过期修订，显示对比并保留人工选�
   await dialog.getByRole('button', { name: '保留我现在的版本', exact: true }).click()
   await expect.poll(async () => (await api(page, 'GET', `/works/${work.id}`)).title).toBe('我选择的标题')
   await page.reload()
+  await expect(title).toHaveValue('我选择的标题')
   const before = await api(page, 'GET', `/works/${work.id}`)
   await api(page, 'PATCH', `/works/${work.id}`, { summary: '另一标签更新的摘要', base_revision: before.revision })
   const first = page.locator(`#sec-${before.sections[0].id}`)
