@@ -58,6 +58,7 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	// 每日 / 每周任务只在凌晨后跑一次（markOnce 保证幂等）
 	if h := s.now().In(s.loc).Hour(); h >= 3 {
 		s.runDailyHousekeeping(ctx)
+		s.runRetentionCleanup(ctx)
 	}
 	_, _ = s.db.Exec(ctx, `DELETE FROM job_marker WHERE created_at < now() - interval '60 days'`)
 	_, _ = s.db.Exec(ctx, `DELETE FROM ux_event WHERE created_at < now() - interval '180 days'`)

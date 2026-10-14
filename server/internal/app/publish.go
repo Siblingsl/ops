@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/microcosm-cc/bluemonday"
 
 	"ops/internal/secure"
@@ -790,6 +791,14 @@ func (s *Server) packZip(w http.ResponseWriter, r *http.Request) error {
 	return zw.Close()
 }
 
+func (s *Server) setWorkPublished(ctx context.Context, tx pgx.Tx, id uuid.UUID, url string, at *time.Time) error {
+	if _, err := tx.Exec(ctx, `UPDATE work SET status='published', published_url=nullif($2,''), published_at=$3, locked=true, updated_at=now(),
+		wechat_msgid=coalesce(nullif($4,''), wechat_msgid) WHERE id=$1`, id, url, at, parseWechatMsgID(url)); err != nil {
+		return err
+	}
+	return s.addVersion(ctx, tx, id, "publish")
+}
+
 // markPublished is the only way a work becomes 已发布 (H-07, HC-07).
 func (s *Server) markPublished(w http.ResponseWriter, r *http.Request) error {
 	m, err := s.workMetaFromPath(r)
@@ -814,9 +823,7 @@ func (s *Server) markPublished(w http.ResponseWriter, r *http.Request) error {
 	if url != "" && !strings.HasPrefix(url, "http") {
 		return validation("链接需要以 http 开头")
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE work SET status='published', published_url=nullif($2,''), published_at=$3, locked=true, updated_at=now(),
-		wechat_msgid=coalesce(nullif($4,''), wechat_msgid) WHERE id=$1`,
-		m.ID, url, at, parseWechatMsgID(url)); err != nil {
+	if err := s.withTx(r.Context(), func(tx pgx.Tx) error { return s.setWorkPublished(r.Context(), tx, m.ID, url, &at) }); err != nil {
 		return err
 	}
 	s.recomputeMetricOffsets(r.Context(), m.ID)
