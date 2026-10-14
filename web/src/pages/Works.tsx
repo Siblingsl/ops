@@ -13,6 +13,7 @@ import { useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/sess
 import type { StarItem, Work, WorkListItem, WorkStatus } from '@/lib/types'
 import { usePrefetchWork, usePrefs, useSavePrefs } from '@/lib/v3'
 import { useCreateWork } from './Dashboard'
+import { WorkImportDialog } from './work-import-dialog'
 
 type Filter = 'all' | 'drafting' | 'checking' | 'ready' | 'out' | 'published'
 const filterStatus: Record<Filter, WorkStatus[] | null> = {
@@ -95,6 +96,7 @@ export default function Works() {
   const setFilter = (f: Filter) => setParam('status', f)
   const setQ = (v: string) => setParam('q', v)
   const [derive, setDerive] = useState<WorkListItem | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
   const inv = useInvalidate()
   const create = useCreateWork(acc?.id)
   const { data, isLoading } = useQuery({ queryKey: ['works', acc?.id, q], queryFn: () => get<WorkListItem[]>(`/accounts/${acc!.id}/works?q=${encodeURIComponent(q)}`), enabled: !!acc })
@@ -133,7 +135,10 @@ export default function Works() {
   }
   return (
     <div className="animate-fade-in">
-      <PageHeader title="作品" desc={`${acc.name} 的全部作品`} action={canWrite ? <Button variant="primary" icon={<PenLine className="size-4" />} onClick={() => create()}>新建作品</Button> : undefined} />
+      <PageHeader title="作品" desc={`${acc.name} 的全部作品`} action={canWrite ? <div className="flex gap-2">
+        {acc.platform === 'wechat_mp' && acc.content_format === 'long_article' && <Button variant="secondary" onClick={() => setImportOpen(true)}>导入旧文</Button>}
+        <Button variant="primary" icon={<PenLine className="size-4" />} onClick={() => create()}>新建作品</Button>
+      </div> : undefined} />
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <Tabs value={filter} onChange={setFilter} items={[
           { value: 'all', label: '全部', count: count('all') },
@@ -206,6 +211,7 @@ export default function Works() {
         </Card>
       )}
       {derive && canWrite && <DeriveDialog open onClose={() => setDerive(null)} workId={derive.id} platform={acc.platform} format={derive.content_format} />}
+      {importOpen && canWrite && <WorkImportDialog accountId={acc.id} onClose={() => setImportOpen(false)} onImported={id => { setImportOpen(false); inv(['works', acc.id]); nav(`/works/${id}`) }} />}
     </div>
   )
 }

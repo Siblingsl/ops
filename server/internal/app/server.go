@@ -215,6 +215,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/accounts/{accountId}/wechat/link-check", s.h(s.wechatLinkCheck))
 			r.Get("/accounts/{accountId}/works", s.h(s.listWorks))
 			r.Post("/accounts/{accountId}/works", s.h(s.createWork))
+			r.Post("/accounts/{accountId}/works/import", s.h(s.importPastedWork))
 			r.Get("/works/{id}", s.h(s.getWork))
 			r.Patch("/works/{id}", s.h(s.updateWork))
 			r.Put("/works/{id}/post-push-todos", s.h(s.setPostPushTodos))
