@@ -231,6 +231,12 @@ export interface Topic {
   pinned?: boolean
 }
 
+export interface TopicPage {
+  items: Topic[]
+  status_counts: { pending: number; adopted: number; dropped: number }
+  next_cursor: string | null
+}
+
 export interface OutlineItem {
   heading: string
   key_point: string

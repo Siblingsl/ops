@@ -347,13 +347,18 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	sql := `SELECT w.id, w.title, w.tags, w.status, w.content_format, w.source_work_id, sw.title,
-		(SELECT count(*) FROM work d WHERE d.source_work_id=w.id AND d.deleted_at IS NULL),
-		w.cover_asset_id, (SELECT id FROM asset WHERE work_id=w.id ORDER BY position LIMIT 1),
-		(SELECT coalesce(sum(char_length(content_md)),0) FROM work_section WHERE work_id=w.id AND deleted_at IS NULL),
-		(SELECT count(*) FROM work_section WHERE work_id=w.id AND deleted_at IS NULL),
+		d.derived_count, w.cover_asset_id, first_asset.id,
+		sections.char_count, sections.section_count,
 		w.published_at, w.updated_at, to_char(w.planned_date,'YYYY-MM-DD'), w.assignee_id, w.target_chars,
-		(SELECT count(*) FROM jsonb_array_elements(w.post_push_todos) e WHERE coalesce((e->>'done')::boolean,false)), jsonb_array_length(w.post_push_todos)
-		FROM work w LEFT JOIN work sw ON sw.id=w.source_work_id WHERE w.account_id=$1 AND w.deleted_at IS NULL`
+		todos.done, todos.total
+		FROM work w LEFT JOIN work sw ON sw.id=w.source_work_id
+		LEFT JOIN LATERAL (SELECT count(*) AS derived_count FROM work d WHERE d.source_work_id=w.id AND d.deleted_at IS NULL) d ON true
+		LEFT JOIN LATERAL (SELECT id FROM asset WHERE work_id=w.id ORDER BY position, created_at LIMIT 1) first_asset ON true
+		LEFT JOIN LATERAL (SELECT coalesce(sum(char_length(content_md)),0) AS char_count, count(*) AS section_count
+			FROM work_section WHERE work_id=w.id AND deleted_at IS NULL) sections ON true
+		LEFT JOIN LATERAL (SELECT count(*) FILTER (WHERE coalesce((e->>'done')::boolean,false)) AS done,
+			jsonb_array_length(w.post_push_todos) AS total FROM jsonb_array_elements(w.post_push_todos) e) todos ON true
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL`
 	args := []any{a.ID}
 	if st := r.URL.Query().Get("status"); st != "" {
 		args = append(args, strings.Split(st, ","))

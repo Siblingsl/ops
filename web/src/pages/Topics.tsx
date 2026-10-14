@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import {
   ArrowRight, BookOpen, CalendarDays, Check, Gauge, Inbox, Layers, Lightbulb, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Sparkles, Trash2, X,
 } from 'lucide-react'
@@ -17,7 +17,7 @@ import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { type AIRefs, relTime } from '@/lib/format'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import { deleteWithUndo } from '@/lib/undo'
-import type { InboxItem, Series, Topic, Work } from '@/lib/types'
+import type { InboxItem, Series, Topic, TopicPage, Work } from '@/lib/types'
 
 interface Suggestion {
 	hot_item_id?: string | null
@@ -262,11 +262,23 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
   const setStatus = async (status: Topic['status']) => {
     let saved = false
     const key = ['topics', accountId]
-    const before = qc.getQueriesData<Topic[]>({ queryKey: key })
-    qc.setQueriesData<Topic[]>({ queryKey: key }, (list) => list?.map((x) => (x.id === t.id ? { ...x, status } : x)))
+    const before = qc.getQueriesData<InfiniteData<TopicPage, string>>({ queryKey: key })
+    const update = (data: InfiniteData<TopicPage, string> | undefined, next: Topic, adjustCounts: boolean) => data && ({
+      ...data,
+      pages: data.pages.map((page, index) => ({
+        ...page,
+        status_counts: adjustCounts && index === 0 && t.status !== next.status ? {
+          ...page.status_counts,
+          [t.status]: Math.max(0, page.status_counts[t.status] - 1),
+          [next.status]: page.status_counts[next.status] + 1,
+        } : page.status_counts,
+        items: page.items.map((x) => x.id === next.id ? next : x),
+      })),
+    })
+    qc.setQueriesData<InfiniteData<TopicPage, string>>({ queryKey: key }, (data) => update(data, { ...t, status }, true))
     try {
       const result = await patch<{ topic: Topic }>(`/topics/${t.id}`, { status })
-      qc.setQueriesData<Topic[]>({ queryKey: key }, (list) => list?.map((x) => (x.id === result.topic.id ? result.topic : x)))
+      qc.setQueriesData<InfiniteData<TopicPage, string>>({ queryKey: key }, (data) => update(data, result.topic, false))
       saved = true
     } catch (e) {
       for (const [k, v] of before) qc.setQueryData(k, v)
@@ -492,9 +504,11 @@ export default function Topics() {
   const startId = params.get('start')
   const focus = params.get('focus') || startId
   const inv = useInvalidate()
-  const { data, isLoading } = useQuery({
+  const topicQuery = useInfiniteQuery({
     queryKey: ['topics', acc?.id, byScore],
-    queryFn: () => get<Topic[]>(`/accounts/${acc!.id}/topics?scores=1${byScore ? '&sort=score' : ''}`),
+    queryFn: ({ pageParam }) => get<TopicPage>(`/accounts/${acc!.id}/topics?limit=50&scores=1${byScore ? '&sort=score' : ''}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`),
+    initialPageParam: '' as string,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled: !!acc,
   })
   const series = useQuery({ queryKey: ['series', acc?.id], queryFn: () => get<Series[]>(`/accounts/${acc!.id}/series`), enabled: !!acc })
@@ -512,14 +526,17 @@ export default function Topics() {
       setParams(n, { replace: true })
     }
   }, [params, setParams])
+  const data = topicQuery.data?.pages.flatMap((page) => page.items)
   useEffect(() => {
     if (focus && data) {
       const t = data.find((x) => x.id === focus)
       if (t) setTab(t.status)
+      else if (topicQuery.hasNextPage && !topicQuery.isFetchingNextPage) void topicQuery.fetchNextPage()
     }
-  }, [focus, data])
-  if (!acc || isLoading) return <PageLoading />
+  }, [focus, data, topicQuery.hasNextPage, topicQuery.isFetchingNextPage, topicQuery.fetchNextPage])
+  if (!acc || topicQuery.isLoading) return <PageLoading />
   const list = data ?? []
+  const counts = topicQuery.data?.pages[0]?.status_counts
   const shown = list.filter((t) => t.status === tab)
   const save = async () => {
     try {
@@ -556,9 +573,9 @@ export default function Topics() {
         </> : undefined} />
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <Tabs value={tab} onChange={setTab} items={[
-          { value: 'pending', label: '待定', count: list.filter((t) => t.status === 'pending').length },
-          { value: 'adopted', label: '已采用', count: list.filter((t) => t.status === 'adopted').length },
-          { value: 'dropped', label: '已放弃', count: list.filter((t) => t.status === 'dropped').length },
+          { value: 'pending', label: '待定', count: counts?.pending },
+          { value: 'adopted', label: '已采用', count: counts?.adopted },
+          { value: 'dropped', label: '已放弃', count: counts?.dropped },
           { value: 'inbox', label: <span className="inline-flex items-center gap-1"><Inbox className="size-3.5" />收件箱</span>, count: inbox.data?.length || undefined },
           { value: 'series', label: <span className="inline-flex items-center gap-1"><Layers className="size-3.5" />系列</span>, count: series.data?.length || undefined },
         ]} />
@@ -579,6 +596,7 @@ export default function Topics() {
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{shown.map((t) => <TopicCard key={t.id} t={t} accountId={acc.id} accountFormat={acc.content_format} series={series.data ?? []} focused={t.id === focus} primed={t.id === startId} />)}</div>
         </>
       )}
+      {tab !== 'inbox' && topicQuery.hasNextPage && <div className="mt-5 flex justify-center"><Button variant="outline" loading={topicQuery.isFetchingNextPage} onClick={() => void topicQuery.fetchNextPage()}>加载更多选题</Button></div>}
       <SuggestDrawer open={suggest} onClose={() => setSuggest(false)} accountId={acc.id} />
       <HotSuggestDrawer open={hotSuggest} onClose={() => setHotSuggest(false)} accountId={acc.id} />
       <Dialog open={adding} onClose={() => setAdding(false)} title="添加选题"
