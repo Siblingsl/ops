@@ -113,6 +113,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/auth/setup", s.h(s.authSetup))
 		r.Post("/auth/register", s.h(s.authRegister))
 		r.Post("/auth/login", s.h(s.authLogin))
+		r.Get("/public-previews/{token}", s.h(s.getPublicPreview))
+		r.Get("/public-previews/{token}/assets/{assetId}", s.h(s.getPublicPreviewAsset))
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireSession)
@@ -217,6 +219,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/accounts/{accountId}/works", s.h(s.createWork))
 			r.Post("/accounts/{accountId}/works/import", s.h(s.importPastedWork))
 			r.Get("/works/{id}", s.h(s.getWork))
+			r.Post("/works/{id}/preview-link", s.h(s.createPreviewLink))
 			r.Patch("/works/{id}", s.h(s.updateWork))
 			r.Put("/works/{id}/post-push-todos", s.h(s.setPostPushTodos))
 			r.Put("/works/{id}/title-favorites", s.h(s.setTitleFavorites))
@@ -474,6 +477,9 @@ func spaHandler(dir string) http.Handler {
 		}
 		w.Header().Set("Cache-Control", "no-cache")
 		cleanPath := filepath.ToSlash(filepath.Clean(r.URL.Path))
+		if strings.HasPrefix(cleanPath, "/preview/") {
+			w.Header().Set("Referrer-Policy", "no-referrer")
+		}
 		p := filepath.Join(dir, cleanPath)
 		if st, err := os.Stat(p); err != nil || st.IsDir() {
 			if !strings.HasPrefix(cleanPath, "/assets/") {

@@ -42,6 +42,7 @@ const Check = lazy(() => import('./pages/work/Check'))
 const CheckReport = lazy(() => import('./pages/work/CheckReport'))
 const Push = lazy(() => import('./pages/work/Push'))
 const Pack = lazy(() => import('./pages/work/Pack'))
+const PublicPreview = lazy(() => import('./pages/PublicPreview'))
 const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
 const Setup = lazy(() => import('./pages/Setup'))
@@ -126,6 +127,7 @@ export default function App() {
       <Route path="/login" element={<S><Login /></S>} />
       <Route path="/register" element={<S><Register /></S>} />
       <Route path="/setup" element={<S><Setup /></S>} />
+      <Route path="/preview/:token" element={<S><PublicPreview /></S>} />
       <Route path="/*" element={<Authed />} />
     </Routes>
   )

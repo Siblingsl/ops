@@ -1,5 +1,6 @@
 import { ArrowRight, Check, Copy, Smartphone, Wand2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { QRCodeSVG } from 'qrcode.react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AIFeedback } from '@/components/refs'
@@ -134,18 +135,35 @@ export default function Preview() {
   const { work, setWork, refresh } = useWork()
   const nav = useNavigate()
   const [params] = useSearchParams()
+  const [previewLink, setPreviewLink] = useState<{ token: string; expires_at: string } | null>(null)
+  const [creatingPreviewLink, setCreatingPreviewLink] = useState(false)
+  const [savingTheme, setSavingTheme] = useState(false)
   const ct = useCustomTheme(work.account_id).data
   const [themeId, setThemeId] = useState(work.theme === CUSTOM_THEME_ID ? CUSTOM_THEME_ID : themeById(work.theme).id)
   const allThemes = ct ? [...themes, { ...customTheme(ct), id: CUSTOM_THEME_ID, name: '我的主题', desc: '账号自定义主题，可在账号档案中调整' }] : themes
   const { html, chars, bytes } = useWechatHtml(work, themeId)
+  const previewURL = previewLink ? `${window.location.origin}/preview/${previewLink.token}` : ''
   const over = chars >= HTML_CHAR_LIMIT || bytes >= HTML_BYTE_LIMIT
+  const createPreviewLink = async () => {
+    setCreatingPreviewLink(true)
+    try {
+      setPreviewLink(await post<{ token: string; expires_at: string }>(`/works/${work.id}/preview-link`))
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setCreatingPreviewLink(false)
+    }
+  }
   const pick = async (id: string) => {
     if (id === themeId) return
     setThemeId(id)
+    setSavingTheme(true)
     try {
       setWork(await patch<Work>(`/works/${work.id}`, { theme: id }))
     } catch (e) {
       toast.error(errorMessage(e))
+    } finally {
+      setSavingTheme(false)
     }
   }
   const copy = async () => {
@@ -192,6 +210,22 @@ export default function Preview() {
           <Meter label="大小" value={bytes} max={HTML_BYTE_LIMIT} text={`${fmtBytes(bytes)} / 1 MB`} />
           {over && <p className="mt-2 text-xs text-danger">超出公众号正文上限，需要精简内容或拆成多篇后才能推送。</p>}
         </Card>
+        <Card className="space-y-3 p-4">
+          <div>
+            <div className="text-[13px] font-medium text-mist-700">手机扫码预览</div>
+            <p className="mt-1 text-[12px] text-mist-400">生成的链接只读，有效期 24 小时。</p>
+          </div>
+          <Button size="sm" variant="secondary" loading={creatingPreviewLink} disabled={creatingPreviewLink || savingTheme} onClick={() => void createPreviewLink()}>
+            生成手机扫码预览
+          </Button>
+          {previewLink && <div className="space-y-2 text-center">
+            <div role="img" aria-label="手机扫码预览二维码" className="mx-auto w-fit rounded-lg bg-white p-2">
+              <QRCodeSVG value={previewURL} size={176} marginSize={4} />
+            </div>
+            <a href={previewURL} target="_blank" rel="noreferrer" className="block text-[12px] text-ink-700 underline">打开手机预览</a>
+            <p className="text-[11px] text-mist-400">24 小时后过期 · 有效至 {new Date(previewLink.expires_at).toLocaleString('zh-CN', { hour12: false })}</p>
+          </div>}
+        </Card>
         <div className="space-y-2">
           <Button className="w-full" icon={<Copy className="size-4" />} onClick={copy}>复制 HTML</Button>
         </div>
@@ -200,7 +234,7 @@ export default function Preview() {
       </aside>
       <div className="flex flex-1 justify-center">
         <PhoneFrame title={work.title} account={work.account_name}>
-          <div dangerouslySetInnerHTML={{ __html: html }} />
+          <div data-testid="wechat-rendered-html" dangerouslySetInnerHTML={{ __html: html }} />
         </PhoneFrame>
       </div>
     </div>
