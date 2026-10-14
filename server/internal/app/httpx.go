@@ -21,13 +21,14 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// APIError is rendered as {"error":{"code","message","detail","request_id"}} (06 文档第 13.1 节).
+// APIError is rendered as {"error":{"code","message","detail","fields","request_id"}} (06 文档第 13.1 节).
 type APIError struct {
-	Status    int    `json:"-"`
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Detail    any    `json:"detail,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
+	Status    int               `json:"-"`
+	Code      string            `json:"code"`
+	Message   string            `json:"message"`
+	Detail    any               `json:"detail,omitempty"`
+	Fields    map[string]string `json:"fields,omitempty"`
+	RequestID string            `json:"request_id,omitempty"`
 }
 
 func (e *APIError) Error() string { return e.Code + ": " + e.Message }
@@ -50,7 +51,12 @@ var (
 	errNotFound        = apiErr(404, "not_found", "内容不存在或已删除")
 )
 
-func validation(msg string) *APIError   { return apiErr(422, "validation_failed", msg) }
+func validation(msg string) *APIError { return apiErr(422, "validation_failed", msg) }
+func validationFields(msg string, fields map[string]string) *APIError {
+	ae := validation(msg)
+	ae.Fields = fields
+	return ae
+}
 func stateInvalid(msg string) *APIError { return apiErr(409, "state_invalid", msg) }
 func humanStep(h, msg string) *APIError {
 	return apiErr(409, "human_step_required", msg).With(map[string]string{"checkpoint": h})
@@ -100,9 +106,14 @@ func decode(r *http.Request, v any) error {
 		if errors.As(err, &ne) && ne.Timeout() {
 			return apiErr(408, "request_read_timeout", "请求读取超时，请稍后重试")
 		}
-		return validation("请求格式不正确：" + err.Error())
+		return requestFormatError(r.Context(), err)
 	}
 	return nil
+}
+
+func requestFormatError(ctx context.Context, err error) *APIError {
+	slog.WarnContext(ctx, "请求 JSON 格式错误", "err", err)
+	return validation("请求格式不正确，请检查 JSON 语法和字段类型")
 }
 
 // decodeOptional accepts an empty body (all fields keep their zero value).
@@ -116,13 +127,13 @@ func decodeOptional(r *http.Request, v any) error {
 		if errors.As(err, &ne) && ne.Timeout() {
 			return apiErr(408, "request_read_timeout", "请求读取超时，请稍后重试")
 		}
-		return validation("请求格式不正确：" + err.Error())
+		return requestFormatError(r.Context(), err)
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil
 	}
 	if err := json.Unmarshal(raw, v); err != nil {
-		return validation("请求格式不正确：" + err.Error())
+		return requestFormatError(r.Context(), err)
 	}
 	return nil
 }

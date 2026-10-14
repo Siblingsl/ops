@@ -21,17 +21,17 @@ import (
 )
 
 type Account struct {
-	ID             uuid.UUID  `json:"id"`
-	Platform       string     `json:"platform"`
-	Name           string     `json:"name"`
-	ContentFormat  string     `json:"content_format"`
-	TypeNote       string     `json:"type_note"`
-	Status         string     `json:"status"`
-	DailyPushLimit int        `json:"daily_push_limit"`
-	CreatedAt      time.Time  `json:"created_at"`
-	IsDemo         bool       `json:"is_demo"`
-	Credential     *CredState `json:"credential,omitempty"`
-	DatacubeState  string     `json:"datacube_state,omitempty"` // 公众号数据接口：ok | no_permission | unknown
+	ID             uuid.UUID   `json:"id"`
+	Platform       string      `json:"platform"`
+	Name           string      `json:"name"`
+	ContentFormat  string      `json:"content_format"`
+	TypeNote       string      `json:"type_note"`
+	Status         string      `json:"status"`
+	DailyPushLimit int         `json:"daily_push_limit"`
+	CreatedAt      time.Time   `json:"created_at"`
+	IsDemo         bool        `json:"is_demo"`
+	Credential     *CredState  `json:"credential,omitempty"`
+	DatacubeState  string      `json:"datacube_state,omitempty"` // 公众号数据接口：ok | no_permission | unknown
 	WechatAuto     *WechatAuto `json:"metrics_wechat_auto,omitempty"`
 }
 
@@ -161,13 +161,13 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) error {
 	}
 	in.Name = strings.TrimSpace(in.Name)
 	if in.Name == "" {
-		return validation("请填写账号名称")
+		return validationFields("请完善账号信息", map[string]string{"name": "请填写账号名称"})
 	}
 	if _, ok := formatMatrix[in.Platform]; !ok {
-		return validation("平台只能是公众号或小红书")
+		return validationFields("请完善账号信息", map[string]string{"platform": "请选择公众号或小红书"})
 	}
 	if !validFormat(in.Platform, in.ContentFormat) {
-		return validation("该平台不支持这种内容类型（见账号类型说明）")
+		return validationFields("请完善账号信息", map[string]string{"content_format": "该平台不支持这种内容类型（见账号类型说明）"})
 	}
 	in.TypeNote = truncateRunes(strings.TrimSpace(in.TypeNote), 200)
 	ctx := r.Context()
