@@ -47,9 +47,12 @@ test('OPT68 星标立即切换，请求中禁用以阻止重复请求', async ({
   await star.click()
   await expect(star).toHaveAttribute('aria-pressed', 'false')
   await expect(star).toBeEnabled()
-  await page.route('**/api/v1/stars', route => route.request().method() === 'POST'
-    ? route.fulfill({ status: 500, json: { error: { message: '星标失败模拟' } } })
-    : route.continue())
+  await page.route('**/api/v1/stars', async route => {
+    if (route.request().method() === 'POST') {
+      await new Promise(resolve => setTimeout(resolve, 250))
+      await route.fulfill({ status: 500, json: { error: { message: '星标失败模拟' } } })
+    } else await route.continue()
+  })
   await star.click()
   await expect(star).toHaveAttribute('aria-pressed', 'true', { timeout: 150 })
   await expect(star).toHaveAttribute('aria-pressed', 'false')
