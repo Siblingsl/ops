@@ -10,6 +10,7 @@ interface PreviewData {
   theme: string
   custom_theme: CustomTheme | null
   sections: { heading: string; content_md: string }[]
+  assets: { id: string; alt_text: string }[]
 }
 
 export default function PublicPreview() {
@@ -35,7 +36,7 @@ export default function PublicPreview() {
     const theme = data.theme === CUSTOM_THEME_ID && data.custom_theme
       ? customTheme(data.custom_theme)
       : themeById(data.theme)
-    return renderWechat(data.sections, theme).replace(
+    return renderWechat(data.sections, theme, data.assets).replace(
       /\/api\/v1\/assets\/([0-9a-f-]{36})\/file/g,
       `/api/v1/public-previews/${token}/assets/$1`,
     )

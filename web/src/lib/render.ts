@@ -1,5 +1,5 @@
 import { marked } from 'marked'
-import type { CustomTheme, Section } from './types'
+import type { Asset, CustomTheme, Section } from './types'
 
 /**
  * 公众号 HTML 渲染模块（FR-M6-01、D-015）。预览、检查统计和推送都使用这里的输出，保证所见即所得。
@@ -181,7 +181,7 @@ function sanitizeAndStyle(root: Element, theme: Theme) {
   walk(root)
 }
 
-export function renderWechat(sections: Pick<Section, 'heading' | 'content_md'>[], themeOrId: string | Theme): string {
+export function renderWechat(sections: Pick<Section, 'heading' | 'content_md'>[], themeOrId: string | Theme, assets: Pick<Asset, 'id' | 'alt_text'>[] = []): string {
   const theme = typeof themeOrId === 'string' ? themeById(themeOrId) : themeOrId
   const parts = sections.map((s) => {
     const heading = s.heading.trim() ? `<h2>${escapeHTML(s.heading.trim())}</h2>` : ''
@@ -191,6 +191,12 @@ export function renderWechat(sections: Pick<Section, 'heading' | 'content_md'>[]
   const doc = new DOMParser().parseFromString(`<section>${parts.join('')}</section>`, 'text/html')
   const root = doc.body.firstElementChild!
   sanitizeAndStyle(root, theme)
+  const altByAssetId = new Map(assets.map((asset) => [asset.id, asset.alt_text.trim()]))
+  for (const img of Array.from(root.querySelectorAll('img'))) {
+    const assetId = /\/api\/v1\/assets\/([0-9a-f-]{36})\/file(?:[?#]|$)/i.exec(img.getAttribute('src') ?? '')?.[1]
+    const altText = assetId && altByAssetId.get(assetId)
+    if (altText) img.setAttribute('alt', altText)
+  }
   for (const h2 of Array.from(root.querySelectorAll('h2'))) h2.setAttribute('style', theme.sectionHeading)
   root.setAttribute('style', theme.root)
   return root.outerHTML

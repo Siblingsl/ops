@@ -39,9 +39,9 @@ export function useWechatHtml(work: Work, themeId?: string) {
   const ct = useCustomTheme(work.account_id).data
   return useMemo(() => {
     setCustomTheme(ct ?? null)
-    const html = renderWechat(work.sections, themeId ?? work.theme)
+    const html = renderWechat(work.sections, themeId ?? work.theme, work.assets)
     return { html, ...htmlStats(html) }
-  }, [work.sections, work.theme, themeId, ct])
+  }, [work.sections, work.assets, work.theme, themeId, ct])
 }
 
 interface LayoutSuggestion { section_id: string; kind: 'bold' | 'list' | 'divider'; text: string; reason: string }

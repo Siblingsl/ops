@@ -323,7 +323,7 @@ export default function Check() {
       const body: Record<string, number> = {}
       if (work.platform === 'wechat_mp') {
         const fresh = await get<Work>(`/works/${work.id}`)
-        const s = htmlStats(renderWechat(fresh.sections, fresh.theme))
+        const s = htmlStats(renderWechat(fresh.sections, fresh.theme, fresh.assets))
         body.html_chars = s.chars
         body.html_bytes = s.bytes
       }

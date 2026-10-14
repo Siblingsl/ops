@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"image"
 	"image/draw"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,6 +33,7 @@ type Asset struct {
 	Height      int       `json:"height"`
 	Bytes       int       `json:"bytes"`
 	Position    int       `json:"position"`
+	AltText     string    `json:"alt_text"`
 	URL         string    `json:"url"`
 	AIGenerated bool      `json:"ai_generated"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -44,7 +47,7 @@ const (
 )
 
 func (s *Server) loadAssets(ctx context.Context, workID uuid.UUID) ([]Asset, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, work_id, mime, width, height, bytes, position, coalesce(ai_generated,false), created_at FROM asset WHERE work_id=$1 ORDER BY position, created_at`, workID)
+	rows, err := s.db.Query(ctx, `SELECT id, work_id, mime, width, height, bytes, position, alt_text, coalesce(ai_generated,false), created_at FROM asset WHERE work_id=$1 ORDER BY position, created_at`, workID)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +55,7 @@ func (s *Server) loadAssets(ctx context.Context, workID uuid.UUID) ([]Asset, err
 	list := []Asset{}
 	for rows.Next() {
 		var a Asset
-		if err := rows.Scan(&a.ID, &a.WorkID, &a.Mime, &a.Width, &a.Height, &a.Bytes, &a.Position, &a.AIGenerated, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkID, &a.Mime, &a.Width, &a.Height, &a.Bytes, &a.Position, &a.AltText, &a.AIGenerated, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		a.URL = "/api/v1/assets/" + a.ID.String() + "/file"
@@ -327,12 +330,13 @@ type assetRow struct {
 	StoragePath string
 	Mime        string
 	SHA256      string
+	AltText     string
 }
 
 func (s *Server) assetRow(ctx context.Context, id uuid.UUID) (*assetRow, error) {
 	var a assetRow
-	err := s.db.QueryRow(ctx, `SELECT id, work_id, storage_path, mime, sha256 FROM asset WHERE id=$1 AND workspace_id=$2`, id, ident(ctx).WorkspaceID).
-		Scan(&a.ID, &a.WorkID, &a.StoragePath, &a.Mime, &a.SHA256)
+	err := s.db.QueryRow(ctx, `SELECT id, work_id, storage_path, mime, sha256, alt_text FROM asset WHERE id=$1 AND workspace_id=$2`, id, ident(ctx).WorkspaceID).
+		Scan(&a.ID, &a.WorkID, &a.StoragePath, &a.Mime, &a.SHA256, &a.AltText)
 	return &a, err
 }
 
@@ -399,28 +403,39 @@ func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		Position int `json:"position"`
+		Position *int    `json:"position"`
+		AltText  *string `json:"alt_text"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
+	if in.Position == nil && in.AltText == nil {
+		return validation("请提供图片顺序或替代文字")
+	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id FROM asset WHERE work_id=$1 AND id<>$2 ORDER BY position, created_at`, workID, a.ID)
-		if err != nil {
-			return err
-		}
-		var ids []uuid.UUID
-		for rows.Next() {
-			var x uuid.UUID
-			_ = rows.Scan(&x)
-			ids = append(ids, x)
-		}
-		rows.Close()
-		pos := min(max(in.Position, 0), len(ids))
-		ids = append(ids[:pos], append([]uuid.UUID{a.ID}, ids[pos:]...)...)
-		for i, x := range ids {
-			if _, err := tx.Exec(ctx, `UPDATE asset SET position=$2 WHERE id=$1`, x, i); err != nil {
+		if in.AltText != nil {
+			if _, err := tx.Exec(ctx, `UPDATE asset SET alt_text=$2 WHERE id=$1`, a.ID, strings.TrimSpace(*in.AltText)); err != nil {
 				return err
+			}
+		}
+		if in.Position != nil {
+			rows, err := tx.Query(ctx, `SELECT id FROM asset WHERE work_id=$1 AND id<>$2 ORDER BY position, created_at`, workID, a.ID)
+			if err != nil {
+				return err
+			}
+			var ids []uuid.UUID
+			for rows.Next() {
+				var x uuid.UUID
+				_ = rows.Scan(&x)
+				ids = append(ids, x)
+			}
+			rows.Close()
+			pos := min(max(*in.Position, 0), len(ids))
+			ids = append(ids[:pos], append([]uuid.UUID{a.ID}, ids[pos:]...)...)
+			for i, x := range ids {
+				if _, err := tx.Exec(ctx, `UPDATE asset SET position=$2 WHERE id=$1`, x, i); err != nil {
+					return err
+				}
 			}
 		}
 		return s.touchContent(ctx, tx, workID)
@@ -433,6 +448,46 @@ func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return ok(w, list)
+}
+
+func (s *Server) suggestAssetAlt(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	a, err := s.assetRow(ctx, id)
+	if err != nil {
+		return err
+	}
+	workID, err := s.requireWorkAsset(a)
+	if err != nil {
+		return err
+	}
+	m, err := s.workMeta(ctx, workID)
+	if err != nil {
+		return err
+	}
+	if err := m.editable(); err != nil {
+		return err
+	}
+	data, err := s.assetBytes(a)
+	if err != nil {
+		return validation("读取原图失败")
+	}
+	result, err := s.runAI(ctx, aiTask{
+		Type: "image_alt", Account: m.Account, WorkID: &workID, Bare: true, SkipStyle: true,
+		User:   "请用中文写一句简洁、客观的图片替代文字，描述可见主体和必要情境。不要以“图片”开头，不推测图中不可见的信息，只输出替代文字。",
+		Images: []string{"data:" + a.Mime + ";base64," + base64.StdEncoding.EncodeToString(data)},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	suggestion := strings.Trim(strings.TrimSpace(result.Text), "\"'“”‘’")
+	if suggestion == "" {
+		return apiErr(http.StatusBadGateway, "ai_empty_response", "图片替代文字建议为空，请重试")
+	}
+	return ok(w, map[string]string{"suggestion": suggestion})
 }
 
 func (s *Server) deleteAsset(w http.ResponseWriter, r *http.Request) error {
@@ -547,9 +602,9 @@ func (s *Server) cropAsset(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO asset (id, workspace_id, account_id, work_id, storage_path, mime, width, height, bytes, sha256, position)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT coalesce(max(position),-1)+1 FROM asset WHERE work_id=$4))`,
-			newID, ident(ctx).WorkspaceID, m.Account.ID, m.ID, filepath.ToSlash(rel), mime, width, height, len(data), secure.SHA256Hex(data)); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO asset (id, workspace_id, account_id, work_id, storage_path, mime, width, height, bytes, sha256, position, alt_text)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT coalesce(max(position),-1)+1 FROM asset WHERE work_id=$4),$11)`,
+			newID, ident(ctx).WorkspaceID, m.Account.ID, m.ID, filepath.ToSlash(rel), mime, width, height, len(data), secure.SHA256Hex(data), src.AltText); err != nil {
 			return err
 		}
 		return s.touchContent(ctx, tx, m.ID)

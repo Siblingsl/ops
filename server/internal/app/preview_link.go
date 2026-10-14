@@ -30,6 +30,11 @@ type previewSection struct {
 	ContentMD string `json:"content_md"`
 }
 
+type previewAsset struct {
+	ID      uuid.UUID `json:"id"`
+	AltText string    `json:"alt_text"`
+}
+
 func (s *Server) previewSigningKey() []byte {
 	mac := hmac.New(sha256.New, s.cfg.MasterKey)
 	_, _ = mac.Write([]byte("ops:public-preview:v1"))
@@ -142,6 +147,24 @@ func (s *Server) getPublicPreview(w http.ResponseWriter, r *http.Request) error 
 		return err
 	}
 	rows.Close()
+	assetRows, err := s.db.Query(r.Context(), `SELECT id, alt_text FROM asset WHERE work_id=$1 ORDER BY position, created_at`, claims.WorkID)
+	if err != nil {
+		return err
+	}
+	assets := []previewAsset{}
+	for assetRows.Next() {
+		var asset previewAsset
+		if err := assetRows.Scan(&asset.ID, &asset.AltText); err != nil {
+			assetRows.Close()
+			return err
+		}
+		assets = append(assets, asset)
+	}
+	if err := assetRows.Err(); err != nil {
+		assetRows.Close()
+		return err
+	}
+	assetRows.Close()
 	var customTheme *CustomTheme
 	var raw []byte
 	if err := s.db.QueryRow(r.Context(), `SELECT custom_theme FROM account_profile WHERE account_id=$1`, accountID).Scan(&raw); err != nil {
@@ -155,7 +178,7 @@ func (s *Server) getPublicPreview(w http.ResponseWriter, r *http.Request) error 
 	}
 	return ok(w, map[string]any{
 		"title": title, "account_name": accountName, "theme": theme,
-		"custom_theme": customTheme, "sections": sections,
+		"custom_theme": customTheme, "sections": sections, "assets": assets,
 	})
 }
 

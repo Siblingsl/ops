@@ -259,6 +259,7 @@ func (s *Server) Router() http.Handler {
 
 			r.Post("/works/{id}/assets", s.h(s.uploadAsset))
 			r.Patch("/assets/{id}", s.h(s.updateAsset))
+			r.Post("/assets/{id}/alt-suggestion", s.h(s.suggestAssetAlt))
 			r.Post("/assets/{id}/crop", s.h(s.cropAsset))
 			r.Delete("/assets/{id}", s.h(s.deleteAsset))
 			r.Get("/assets/{id}/file", s.h(s.assetFile))

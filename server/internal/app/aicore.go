@@ -86,7 +86,9 @@ func (s *Server) resolveRoute(ctx context.Context, taskType string) (*route, err
 func (s *Server) resolveRouteTier(ctx context.Context, taskType, tier string) (*route, error) {
 	ws := ident(ctx).WorkspaceID
 	keys := []string{taskType, "default"}
-	if costTiers[tier] {
+	if taskType == "image_alt" {
+		keys = []string{"metric_screenshot"}
+	} else if costTiers[tier] {
 		keys = []string{"tier_" + tier, taskType, "default"}
 	}
 	var rt route
@@ -98,6 +100,9 @@ func (s *Server) resolveRouteTier(ctx context.Context, taskType, tier string) (*
 		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND r.task_type = ANY($2) AND p.status='active'
 		ORDER BY array_position($2::text[], r.task_type) LIMIT 1`, ws, keys).Scan(&picked, &rt.ProviderID, &rt.ProviderName, &rt.BaseURL, &enc, &rt.Model, &fbProvider, &fbModel)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if taskType == "image_alt" {
+			return nil, apiErr(503, "ai_not_configured", "请先在模型配置中设置支持图片输入的“图片识别”模型")
+		}
 		return nil, apiErr(503, "ai_not_configured", "还没有配置模型，请先到「设置 → 模型配置」添加模型并指定默认模型")
 	}
 	if err != nil {
@@ -230,6 +235,9 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 	rt, err := s.resolveRouteTier(ctx, t.Type, t.Tier)
 	if err != nil {
 		return nil, err
+	}
+	if t.Type == "image_alt" {
+		rt.Fallback = nil
 	}
 	pack, err := s.buildContext(ctx, t)
 	if err != nil {

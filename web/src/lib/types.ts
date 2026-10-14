@@ -265,6 +265,7 @@ export interface Asset {
   height: number
   bytes: number
   position: number
+  alt_text: string
   url: string
   ai_generated?: boolean
   created_at?: string
