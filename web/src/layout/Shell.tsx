@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { CommandPalette, openPalette } from '@/components/command-palette'
+import { CommandPaletteHost } from '@/components/command-palette-host'
 import { confirm } from '@/components/dialog'
 import { ErrorBoundary } from '@/components/error-boundary'
 import { NotificationBell } from '@/components/notifications'
@@ -652,7 +652,7 @@ function TopBar({ username, onLogout, dense }: { username?: string; onLogout: ()
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <button
           type="button"
-          onClick={openPalette}
+          onClick={() => window.dispatchEvent(new Event('ops:palette'))}
           title="搜索与命令（Ctrl+K）"
           className="flex h-9 cursor-pointer items-center gap-2 rounded-full border border-mist-200 bg-white px-2.5 text-[12.5px] text-mist-500 transition hover:border-mist-300 hover:text-mist-800 sm:px-3"
         >
@@ -770,7 +770,7 @@ export default function Shell() {
           </button>
         </nav>
       )}
-      <CommandPalette />
+      <CommandPaletteHost />
       {me?.role !== 'viewer' && <QuickCollect />}
     </div>
   )

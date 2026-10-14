@@ -5,7 +5,6 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import App from './App'
-import { PasswordPrompt } from './components/dialog'
 import { ApiError, post, registerReauthPrompt, registerUnauthenticated } from './lib/api'
 import './styles.css'
 
@@ -37,18 +36,24 @@ registerReauthPrompt(
       const host = document.createElement('div')
       document.body.appendChild(host)
       const root = createRoot(host)
-      root.render(
-        <PasswordPrompt
-          submit={async (password) => {
-            await post('/auth/reauth', { password })
-          }}
-          onDone={(ok) => {
-            root.unmount()
-            host.remove()
-            resolve(ok)
-          }}
-        />,
-      )
+      void import('./components/dialog').then(({ PasswordPrompt }) => {
+        root.render(
+          <PasswordPrompt
+            submit={async (password) => {
+              await post('/auth/reauth', { password })
+            }}
+            onDone={(ok) => {
+              root.unmount()
+              host.remove()
+              resolve(ok)
+            }}
+          />,
+        )
+      }).catch(() => {
+        root.unmount()
+        host.remove()
+        resolve(false)
+      })
     }),
 )
 
