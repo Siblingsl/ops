@@ -652,6 +652,21 @@ func (s *Server) cachedMedia(ctx context.Context, accountID uuid.UUID, a *assetR
 	return mediaID, nil
 }
 
+func (s *Server) refreshCachedMedia(ctx context.Context, accountID uuid.UUID, assets []*assetRow, staleIDs []string, kind string, call func(func(string) error) error) ([]string, error) {
+	ids := make([]string, len(assets))
+	for i, a := range assets {
+		if _, err := s.db.Exec(ctx, `DELETE FROM wechat_media_cache WHERE account_id=$1 AND sha256=$2 AND kind=$3 AND media_id=$4`, accountID, a.SHA256, kind, staleIDs[i]); err != nil {
+			return nil, err
+		}
+		id, err := s.cachedMedia(ctx, accountID, a, kind, call)
+		if err != nil {
+			return nil, err
+		}
+		ids[i] = id
+	}
+	return ids, nil
+}
+
 // ---------- 小红书发布包 ----------
 
 func (s *Server) createPack(w http.ResponseWriter, r *http.Request) error {
