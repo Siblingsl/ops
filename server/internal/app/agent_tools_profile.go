@@ -168,7 +168,7 @@ var agentToolsProfile = []AgentTool{
 		Description: "上传角色参考图。图片来自用户在本对话中上传的图片附件。",
 		Params: []ToolParam{
 			pPath("id"),
-			pFile("file", true),
+			pFile("attachment_id", "file", true),
 		},
 		MinRole: roleEditor,
 		Target:  target("character", "id"),

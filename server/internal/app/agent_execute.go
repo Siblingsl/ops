@@ -334,15 +334,19 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// 第 7 项：条件更新为 executing，然后组装最终请求经分发器执行。
-	if _, err := s.db.Exec(ctx, `UPDATE agent_action SET status='executing', decided_by=$2, executed_at=now()
-		WHERE id=$1 AND status IN ('pending','needs_input') AND expires_at > now()`,
-		act.ID, ident(ctx).UserID); err != nil {
-		return err
-	}
+	// 第 7 项：组装最终请求；第 8.4 节的附件在执行前校验并装载（失败时卡片保持 pending）。
 	final := agentFinalArgs(act, t, edits, req.ClientPayload)
 	human, err := agentHumanArgs(t, req)
 	if err != nil {
+		return err
+	}
+	files, err := s.agentAttachmentUploadFiles(ctx, t, final, act.ConversationID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE agent_action SET status='executing', decided_by=$2, executed_at=now()
+		WHERE id=$1 AND status IN ('pending','needs_input') AND expires_at > now()`,
+		act.ID, ident(ctx).UserID); err != nil {
 		return err
 	}
 	sse := newSSE(w)
@@ -353,6 +357,7 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 		Args:          final,
 		Human:         human,
 		ClientPayload: req.ClientPayload,
+		Files:         files,
 		Timeout:       t.ExecTimeout,
 		OnEvent: func(event string, data []byte) error {
 			sse.send(event, json.RawMessage(data))

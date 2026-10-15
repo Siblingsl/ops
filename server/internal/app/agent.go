@@ -969,8 +969,11 @@ func (s *Server) removeAgentFiles(paths []string) {
 		if strings.TrimSpace(p) == "" {
 			continue
 		}
-		if err := os.Remove(s.agentAttachmentFile(p)); err != nil && !os.IsNotExist(err) {
-			slog.Warn("删除智能体附件文件失败", "err", err)
+		// 第 8.2 节第 2 项：图片附件同时清理 model 与 thumb 变体。
+		for _, full := range agentAttachmentAllPaths(p) {
+			if err := os.Remove(s.agentAttachmentFile(full)); err != nil && !os.IsNotExist(err) {
+				slog.Warn("删除智能体附件文件失败", "err", err)
+			}
 		}
 	}
 }
@@ -1014,5 +1017,9 @@ func (s *Server) agentRoutes(r chi.Router) {
 		// 第 11.3 节：/agent/actions 下只有 {id}/execute 与 {id}/reject（HC-27 静态检查）。
 		r.Post("/agent/actions/{id}/execute", s.h(s.postAgentActionExecute))
 		r.Post("/agent/actions/{id}/reject", s.h(s.postAgentActionReject))
+		// 第 11.1 节：附件上传、读取与删除。
+		r.Post("/agent/attachments", s.h(s.postAgentAttachment))
+		r.Get("/agent/attachments/{id}/file", s.h(s.getAgentAttachmentFile))
+		r.Delete("/agent/attachments/{id}", s.h(s.deleteAgentAttachment))
 	})
 }

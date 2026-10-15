@@ -157,7 +157,7 @@ var agentToolsReview = []AgentTool{
 		Description: "识别用户上传的数据截图并返回待确认的数据行，不会直接写入数据。",
 		Params: []ToolParam{
 			pPath("accountId"),
-			pFile("files", true),
+			pFiles("attachment_ids", "files", true),
 		},
 		MinRole:     roleEditor,
 		ExecTimeout: agentExecAITimeout,

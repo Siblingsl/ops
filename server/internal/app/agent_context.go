@@ -200,7 +200,12 @@ func (s *Server) agentAttachToMessage(ctx context.Context, st *agentRunState, ms
 			}
 			texts = append(texts, "[图片 "+a.ID.String()+"，已在先前发送]")
 		case "text":
-			texts = append(texts, "文本附件 "+a.Name+"：\n"+truncate(a.TextContent, agentAttachmentChars))
+			// 第 6.2 节第 5 项：单个附件最多 20000 字，超出截断并注明。
+			content := a.TextContent
+			if runeLen(content) > agentAttachmentChars {
+				content = truncate(content, agentAttachmentChars) + "\n（文本附件过长，已截断；全文仍可用于来源校验与工具输入）"
+			}
+			texts = append(texts, "文本附件 "+a.Name+"：\n"+content)
 		}
 	}
 	if len(texts) > 0 {
@@ -234,15 +239,20 @@ func (s *Server) agentAttachmentOf(ctx context.Context, id uuid.UUID) (*agentAtt
 	return &a, nil
 }
 
-// agentAttachmentDataURL 把图片附件读成 data URL（第 6.2 节第 4 项）。
+// agentAttachmentDataURL 把图片附件读成 data URL（第 6.2 节第 4 项、第 8.3 节第 1 项）：
+// 优先使用 model 变体（长边 1568 的 JPEG）；历史文件缺少变体时回退原图。
 func (s *Server) agentAttachmentDataURL(a *agentAttachmentRow) (string, error) {
-	raw, err := os.ReadFile(s.agentAttachmentFile(a.StoragePath))
+	raw, err := os.ReadFile(s.agentAttachmentFile(agentAttachmentVariantPath(a.StoragePath, "model")))
+	mime := "image/jpeg"
 	if err != nil {
-		return "", err
-	}
-	mime := a.Mime
-	if strings.TrimSpace(mime) == "" {
-		mime = "image/png"
+		raw, err = os.ReadFile(s.agentAttachmentFile(a.StoragePath))
+		if err != nil {
+			return "", err
+		}
+		mime = a.Mime
+		if strings.TrimSpace(mime) == "" {
+			mime = "image/png"
+		}
 	}
 	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(raw), nil
 }

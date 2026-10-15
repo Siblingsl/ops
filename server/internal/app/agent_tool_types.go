@@ -38,6 +38,7 @@ const (
 type ToolParam struct {
 	Name     string
 	In       string // path | query | body | multipart
+	Field    string // multipart：构造出的表单字段名（第 8.4 节，模型传的是附件 ID）
 	Schema   json.RawMessage
 	Required bool
 	Source   string // U | G | O | F，第 4 节；空表示 F
@@ -215,9 +216,16 @@ func pBodyFixed(name, schema string, required bool) ToolParam {
 	return pBody(name, schema, required, "")
 }
 
-// pFile 是 multipart 文件字段（第 8.4 节）。
-func pFile(name string, required bool) ToolParam {
-	return ToolParam{Name: name, In: "multipart", Schema: js(schemaStr), Required: required}
+// pFile 是单附件参数（第 8.4 节）：name 是模型看到的参数名（attachment_id），
+// field 是分发时构造出的 multipart 表单字段名（file）。
+func pFile(name, field string, required bool) ToolParam {
+	return ToolParam{Name: name, In: "multipart", Field: field, Schema: js(schemaUUID), Required: required}
+}
+
+// pFiles 是多附件参数（attachment_ids → files，第 8.4 节）。
+func pFiles(name, field string, required bool) ToolParam {
+	return ToolParam{Name: name, In: "multipart", Field: field,
+		Schema: js(`{"type":"array","items":{"type":"string","format":"uuid"},"minItems":1}`), Required: required}
 }
 
 // hQuery / hBody 构造人工字段（第 3.5 节）。

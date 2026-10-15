@@ -50,6 +50,7 @@ type agentEnvPayload struct {
 	Accounts   []agentEnvAccount `json:"accounts"`
 	AI         map[string]any    `json:"ai"`
 	Vision     bool              `json:"vision"`
+	VisionNote string            `json:"vision_note,omitempty"`
 	Domains    []string          `json:"domains"`
 	AllDomains []map[string]any  `json:"all_domains"`
 	OpenCards  []map[string]any  `json:"open_cards"`
@@ -127,6 +128,10 @@ func (s *Server) agentEnvPayload(ctx context.Context, st *agentRunState) (agentE
 	limit := s.loadLimit(ctx)
 	p.AI = map[string]any{"used": s.tokensToday(ctx), "limit": limit.DailyTokens, "limit_enabled": limit.Enabled}
 	p.Vision = st.Vision
+	if !st.Vision {
+		// 第 8.3 节第 2 项：环境块注明当前模型不能看图。
+		p.VisionNote = "当前模型不能看图，图片只能用于保存或数据截图识别"
+	}
 
 	for _, d := range agentDomains {
 		p.AllDomains = append(p.AllDomains, map[string]any{"name": d.Name, "desc": d.Desc})

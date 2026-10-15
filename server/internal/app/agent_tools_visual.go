@@ -33,7 +33,7 @@ var agentToolsVisual = []AgentTool{
 		Description: "为作品上传一张图片。图片来自用户在本对话中上传的图片附件。",
 		Params: []ToolParam{
 			pPath("id"),
-			pFile("file", true),
+			pFile("attachment_id", "file", true),
 		},
 		MinRole: roleEditor,
 		Target:  target("work", "id"),

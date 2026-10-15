@@ -247,7 +247,7 @@ func agentSplitParams(t *AgentTool, req agentDispatchRequest) (map[string]any, m
 		case "body":
 			body[name] = v
 		case "multipart":
-			return nil, nil, nil, apiErr(422, "validation_failed", "工具参数不正确：文件字段不能由模型提供")
+			// 第 8.4 节：multipart 参数的值是附件 ID，由执行层读取文件后构造请求，不进入请求体。
 		}
 	}
 	for i := range t.Params {
@@ -319,8 +319,8 @@ func agentFixedPosition(t *AgentTool, name string, placeholders map[string]bool)
 func agentMultipartFiles(t *AgentTool, req agentDispatchRequest) []agentUploadFile {
 	allowed := map[string]bool{}
 	for _, p := range t.Params {
-		if p.In == "multipart" {
-			allowed[p.Name] = true
+		if p.In == "multipart" && p.Field != "" {
+			allowed[p.Field] = true
 		}
 	}
 	if len(allowed) == 0 {

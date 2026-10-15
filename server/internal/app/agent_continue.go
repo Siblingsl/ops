@@ -66,6 +66,10 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	if runeLen(text) > agentMessageChars {
 		return validation("消息最长 8000 字")
 	}
+	// 第 9.5 节、E-28：疑似包含密钥或密码的消息拒绝发送，内容不保存。
+	if agentContainsSecret(text, s.agentSecretValues(ctx, ident(ctx).WorkspaceID)) {
+		return apiErr(422, "validation_failed", "消息中疑似包含密钥或密码，请到设置页填写，不要发给智能体")
+	}
 	attIDs, err := s.agentCheckMessageAttachments(ctx, conv.ID, req.AttachmentIDs)
 	if err != nil {
 		return err
@@ -78,6 +82,10 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 	if _, err := s.agentInsertRow(ctx, conv.ID, nil, "user", text, nil, "", "", attIDs); err != nil {
+		return err
+	}
+	// 第 8.2 节第 4 项：消息引用的附件标记为已引用并绑定对话。
+	if err := s.agentMarkAttachmentsReferenced(ctx, conv.ID, attIDs); err != nil {
 		return err
 	}
 	s.agentAutoTitle(ctx, conv, text)
@@ -294,6 +302,15 @@ func (s *Server) agentStreamRun(w http.ResponseWriter, r *http.Request, conv *ag
 	if err != nil {
 		return err
 	}
+	// 第 6.2 节第 4 项、第 8.3 节第 1 项：把触发本次运行的最后一条用户消息关联到本次运行；
+	// 图片附件据此只在触发它的运行中以多模态发送，之后的运行替换为文字占位。
+	if trigger != "continue" {
+		if _, err := s.db.Exec(ctx, `UPDATE agent_message SET run_id=$1 WHERE conversation_id=$2 AND seq=(
+			SELECT max(seq) FROM agent_message WHERE conversation_id=$2 AND role='user')`,
+			st.RunID, conv.ID); err != nil {
+			return err
+		}
+	}
 	rt, err := s.agentResolveModel(ctx, st)
 	if err != nil {
 		s.finishAgentRun(ctx, st, "failed", "", nil)
@@ -481,6 +498,10 @@ func (s *Server) postAgentMessageEdit(w http.ResponseWriter, r *http.Request) er
 	if runeLen(text) > agentMessageChars {
 		return validation("消息最长 8000 字")
 	}
+	// 第 9.5 节、E-28：疑似包含密钥或密码的消息拒绝发送，内容不保存。
+	if agentContainsSecret(text, s.agentSecretValues(ctx, ident(ctx).WorkspaceID)) {
+		return apiErr(422, "validation_failed", "消息中疑似包含密钥或密码，请到设置页填写，不要发给智能体")
+	}
 	attIDs, err := s.agentCheckMessageAttachments(ctx, conv.ID, req.AttachmentIDs)
 	if err != nil {
 		return err
@@ -490,6 +511,10 @@ func (s *Server) postAgentMessageEdit(w http.ResponseWriter, r *http.Request) er
 	}
 	if _, err := s.db.Exec(ctx, `UPDATE agent_message SET content=$2, attachment_ids=$3 WHERE id=$1`,
 		messageID, text, attIDs); err != nil {
+		return err
+	}
+	// 第 8.2 节第 4 项：编辑后引用的附件标记为已引用并绑定对话。
+	if err := s.agentMarkAttachmentsReferenced(ctx, conv.ID, attIDs); err != nil {
 		return err
 	}
 	if err := s.agentRewriteTail(ctx, conv.ID, last.Seq, last.CreatedAt); err != nil {
