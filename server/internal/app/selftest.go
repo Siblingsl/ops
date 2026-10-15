@@ -71,7 +71,7 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 	}
 
 	run("chat", "对话连通", func(ctx context.Context) (string, error) {
-		text, _, err := ai.Stream(ctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model,
+		text, _, _, _, err := ai.Stream(ctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model,
 			Messages: []ai.Message{{Role: "user", Content: "请只回复：连接正常\n\n任务：connectivity_test"}}}, nil)
 		if err != nil {
 			return "", err
@@ -79,7 +79,7 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 		return "回复：" + truncate(text, 40), nil
 	})
 	run("json", "JSON 模式", func(ctx context.Context) (string, error) {
-		text, _, err := ai.Stream(ctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model, JSON: true,
+		text, _, _, _, err := ai.Stream(ctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model, JSON: true,
 			Messages: []ai.Message{{Role: "user", Content: "只输出一个 JSON 对象：{\"ok\":true}，不要输出任何其他内容。\n\n任务：material_tag"}}}, nil)
 		if err != nil {
 			return "", err
@@ -92,7 +92,7 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 	})
 	run("stream", "流式输出", func(ctx context.Context) (string, error) {
 		chunks := 0
-		_, _, err := ai.Stream(ctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model,
+		_, _, _, _, err := ai.Stream(ctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model,
 			Messages: []ai.Message{{Role: "user", Content: "请用大约 60 字概括一位内容作者的写作风格。\n\n任务：style_summary"}}}, func(string) { chunks++ })
 		if err != nil {
 			return "", err
@@ -123,6 +123,59 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 			Detail: "该接口地址没有已核验的原生联网搜索契约（目前支持百炼 DashScope 与火山方舟），已跳过"})
 	}
 
+	// D-117（16 文档第 7.2 节）：智能体所需的原生工具调用与看图能力。
+	probeTool := ai.Tool{Type: "function", Function: ai.ToolFunction{
+		Name: "ops_probe_echo", Description: "回显参数，用于能力自检",
+		Parameters: json.RawMessage(`{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}`),
+	}}
+	run("tools", "工具调用", func(ctx context.Context) (string, error) {
+		msgs := []ai.Message{{Role: "user", Content: "调用 ops_probe_echo，value 填 ok"}}
+		_, _, calls, _, err := ai.Stream(ctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model,
+			Tools: []ai.Tool{probeTool}, ToolChoice: "auto", Messages: msgs}, nil)
+		if err != nil {
+			return "", err
+		}
+		var call *ai.ToolCall
+		for i := range calls {
+			if calls[i].Function.Name == "ops_probe_echo" {
+				call = &calls[i]
+				break
+			}
+		}
+		if call == nil {
+			return "", fmt.Errorf("模型没有调用 ops_probe_echo（本轮返回 %d 个工具调用）", len(calls))
+		}
+		var args struct {
+			Value string `json:"value"`
+		}
+		if e := json.Unmarshal([]byte(call.Function.Arguments), &args); e != nil || args.Value != "ok" {
+			return "", fmt.Errorf("ops_probe_echo 的参数不是 {\"value\":\"ok\"}：%s", truncate(call.Function.Arguments, 80))
+		}
+		follow := []ai.Message{msgs[0],
+			{Role: "assistant", ToolCalls: calls},
+			{Role: "tool", ToolCallID: call.ID, Name: "ops_probe_echo", Content: `{"value":"ok"}`}}
+		text, _, _, _, err := ai.Stream(ctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model,
+			Tools: []ai.Tool{probeTool}, ToolChoice: "auto", Messages: follow}, nil)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(text) == "" {
+			return "", fmt.Errorf("回传工具结果后模型没有返回文字")
+		}
+		return "工具调用与结果回传正常", nil
+	})
+	run("vision", "看图", func(ctx context.Context) (string, error) {
+		text, _, _, _, err := ai.Stream(ctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model,
+			Messages: []ai.Message{{Role: "user", Content: "图片是什么颜色？只回答颜色", Images: []string{probeRedPNG}}}}, nil)
+		if err != nil {
+			return "", err
+		}
+		if !strings.Contains(text, "红") {
+			return "", fmt.Errorf("模型没有识别出红色（回复：%s）", truncate(text, 40))
+		}
+		return "识别到红色", nil
+	})
+
 	passed := 0
 	usable := 0
 	for _, p := range results {
@@ -140,5 +193,29 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 		id, allOK, summary, ws); err != nil {
 		return err
 	}
+	// D-117（16 文档第 7.2 节）：按供应商 + 模型覆盖保存工具调用与看图能力。
+	toolsOK, visionOK := false, false
+	capDetail := map[string]string{}
+	for _, p := range results {
+		switch p.Key {
+		case "tools":
+			toolsOK = p.OK
+			capDetail["tools"] = truncate(p.Detail, 300)
+		case "vision":
+			visionOK = p.OK
+			capDetail["vision"] = truncate(p.Detail, 300)
+		}
+	}
+	detailJSON, _ := json.Marshal(capDetail)
+	if _, err := s.db.Exec(ctx, `INSERT INTO model_capability (provider_id, model, workspace_id, tools_ok, vision_ok, detail, tested_at)
+		VALUES ($1,$2,$3,$4,$5,$6,now())
+		ON CONFLICT (provider_id, model) DO UPDATE SET tools_ok=excluded.tools_ok, vision_ok=excluded.vision_ok,
+		detail=excluded.detail, tested_at=excluded.tested_at`,
+		id, model, ws, toolsOK, visionOK, detailJSON); err != nil {
+		return err
+	}
 	return ok(w, map[string]any{"model": model, "summary": summary, "ok": allOK, "results": results})
 }
+
+// probeRedPNG is a built-in 64×64 pure red PNG used by the vision probe (16 文档第 7.2 节).
+const probeRedPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAS0lEQVR42u3PQQkAAAgAsetfWiP4FgYrsKZeS0BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEDgsqnc8OJg6Ln3AAAAAElFTkSuQmCC"

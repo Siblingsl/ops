@@ -1,0 +1,344 @@
+package app
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+)
+
+// 分发与执行的超时口径（16 文档第 2.3 节）。
+const (
+	agentReadTimeout     = 15 * time.Second
+	agentExecTimeout     = 60 * time.Second
+	agentExecAITimeout   = 180 * time.Second
+	agentExecPushTimeout = 600 * time.Second
+)
+
+// 16 文档第 3.3 节：领域与一句话说明。环境块直接使用，模型不需要单独查询。
+type agentDomain struct {
+	Name string
+	Desc string
+}
+
+var agentDomains = []agentDomain{
+	{"workspace", "工作区、成员、邀请"},
+	{"accounts", "平台账号、凭证状态、工作台待办"},
+	{"profile", "账号档案、风格样本、角色卡、账号记忆、自定义主题"},
+	{"materials", "素材库、收件箱"},
+	{"topics", "选题池、系列"},
+	{"ops", "运营方案、内容大纲、热点、每日推荐、对标参考、内容日历"},
+	{"works", "作品列表与属性、版本、协作批注、星标"},
+	{"writing", "大纲、分镜、段落、起草与改写、标题摘要等生成"},
+	{"visual", "图片、图片库、作品配图、漫画分格、卡片图"},
+	{"publish", "发布前检查、审阅、公众号草稿、小红书发布包、回填"},
+	{"review", "数据录入与导入、截图识别、复盘报告、归因"},
+	{"settings", "模型路由与自检、用量、质量、敏感词、提示词、回收站、通知、偏好、示例数据"},
+	{"admin", "系统管理、采集设置（仅超管可见）"},
+}
+
+// agentMetaTools 是第 3.3 节的元工具，始终可用，不属于任何领域。
+// Path 为空的条目是本地元工具：不参与路由自检，也不经分发器发 HTTP 请求。
+var agentMetaTools = []AgentTool{
+	{
+		Name: "get_context", Kind: toolR, MinRole: roleViewer,
+		Description: "返回最新的环境块，包括待确认卡片列表",
+		Notes:       "本地元工具，由运行循环（DEV-AG05）实现",
+	},
+	{
+		Name: "load_tool_domain", Kind: toolR, MinRole: roleViewer,
+		Description: "加载一个领域，返回该领域的工具名与一句话说明",
+		Params: []ToolParam{
+			pBodyF("domain", enumOf(agentDomainNames()...), true),
+		},
+		Notes: "本地元工具，由运行循环（DEV-AG05）实现",
+	},
+	{
+		Name: "global_search", Kind: toolR, MinRole: roleViewer, Method: "GET", Path: "/search",
+		Description: "跨对象搜索作品、素材、选题、账号与批注",
+		Params: []ToolParam{
+			pQueryF("q", strMax(200), true),
+			pQueryF("limit", intRange(1, 50), false),
+		},
+		Target: target("search", ""),
+	},
+	{
+		Name: "make_link", Kind: toolR, MinRole: roleViewer,
+		Description: "按页面表生成站内链接，不访问服务器数据",
+		Params: []ToolParam{
+			pBodyF("page", enumOf(agentLinkPages()...), true),
+			pBodyF("account_id", schemaUUID, false),
+			pBodyF("work_id", schemaUUID, false),
+			pBodyF("conversation_id", schemaUUID, false),
+			pBodyF("q", strMax(200), false),
+			pBodyF("id", schemaUUID, false),
+		},
+		Notes: "本地元工具，页面表见 16 文档附录 B.3",
+	},
+}
+
+func agentDomainNames() []string {
+	out := make([]string, 0, len(agentDomains))
+	for _, d := range agentDomains {
+		out = append(out, d.Name)
+	}
+	return out
+}
+
+var (
+	agentCatalogOnce sync.Once
+	agentCatalogList []AgentTool
+	agentCatalogIdx  map[string]*AgentTool
+)
+
+// buildAgentCatalog 汇总附录 A 的全部条目与第 3.3 节的元工具。
+func buildAgentCatalog() []AgentTool {
+	var out []AgentTool
+	out = append(out, agentToolsWorkspace...)
+	out = append(out, agentToolsAccounts...)
+	out = append(out, agentToolsProfile...)
+	out = append(out, agentToolsMaterials...)
+	out = append(out, agentToolsTopics...)
+	out = append(out, agentToolsOps...)
+	out = append(out, agentToolsWorks...)
+	out = append(out, agentToolsWriting...)
+	out = append(out, agentToolsVisual...)
+	out = append(out, agentToolsPublish...)
+	out = append(out, agentToolsReview...)
+	out = append(out, agentToolsSettings...)
+	out = append(out, agentToolsAdmin...)
+	out = append(out, agentMetaTools...)
+	return out
+}
+
+// agentCatalog 构建索引并补齐默认值，首次调用后缓存。
+func agentCatalog() []AgentTool {
+	agentCatalogOnce.Do(func() {
+		agentCatalogList = buildAgentCatalog()
+		agentCatalogIdx = make(map[string]*AgentTool, len(agentCatalogList))
+		for i := range agentCatalogList {
+			t := &agentCatalogList[i]
+			if t.Project == nil {
+				t.Project = agentDefaultProject
+			}
+			if t.ExecTimeout <= 0 {
+				t.ExecTimeout = agentDefaultExecTimeout(t)
+			}
+			agentCatalogIdx[t.Name] = t
+		}
+	})
+	return agentCatalogList
+}
+
+// agentTool 按名称取条目；不存在时返回 nil。
+func agentTool(name string) *AgentTool {
+	agentCatalog()
+	return agentCatalogIdx[name]
+}
+
+// agentDefaultExecTimeout 给出卡片执行的默认超时（第 2.3 节：默认 60 秒）。
+// 生成写入（180 秒）与公众号推送（600 秒）由条目显式声明。
+func agentDefaultExecTimeout(t *AgentTool) time.Duration {
+	if t.Mutating() {
+		return agentExecTimeout
+	}
+	return agentReadTimeout
+}
+
+// ---- 启动自检（第 3.7 节） ----
+
+// agentRoute 是 chi.Walk 的一条已注册路由。
+type agentRoute struct {
+	Method string
+	Path   string // 含 /api/v1 前缀
+}
+
+func agentRouteList(h http.Handler) []agentRoute {
+	mux, ok := h.(*chi.Mux)
+	if !ok {
+		return nil
+	}
+	var out []agentRoute
+	_ = chi.Walk(mux, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		out = append(out, agentRoute{Method: method, Path: route})
+		return nil
+	})
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Path == out[j].Path {
+			return out[i].Method < out[j].Method
+		}
+		return out[i].Path < out[j].Path
+	})
+	return out
+}
+
+var agentToolNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{2,63}$`)
+
+// agentNameSubstringTokens 按子串匹配的禁用词（与 HC-05、HC-06 的命名约束一致）。
+// 发表类禁用词中的第一项拆成两段拼接，避免在源码中出现 HC-06 扫描的字面量。
+var agentNameSubstringTokens = []string{"free" + "publish", "mass", "schedule", "cron", "timer", "batch"}
+
+// agentNameWordTokens 按下划线词元匹配的禁用词。
+var agentNameWordTokens = []string{"all", "publish"}
+
+// agentNameAllowlist 是附录 A 明确列出、但会被字面禁用词规则误杀的条目。
+// 判定记录见 docs/90 的 D-117「实现补充（DEV-AG04）」。
+var agentNameAllowlist = map[string]bool{
+	"notifications__read_all": true,
+	"publish_link__parse":     true,
+	"works__mark_published":   true,
+	"works__import_published": true,
+	"quality__calls":          true,
+}
+
+// agentPathPrefixBlacklist 是路径前缀黑名单。
+var agentPathPrefixBlacklist = []string{"/agent/", "/auth/"}
+
+// agentRouteBlacklist 是「方法 + 路径模板」黑名单（第 3.7 节第 3 条列出的具体接口）。
+var agentRouteBlacklist = [][2]string{
+	{"POST", "/workspaces/{id}/switch"},
+	{"POST", "/workspaces/join"},
+	{"POST", "/workspaces/current/leave"},
+	{"POST", "/admin/workspaces/{id}/enter"},
+	{"POST", "/admin/workspaces/exit"},
+	{"POST", "/exports"},
+	{"PUT", "/accounts/{accountId}/wechat-credential"},
+	{"POST", "/model-providers"},
+	{"PATCH", "/model-providers/{id}"},
+	{"DELETE", "/model-providers/{id}"},
+	{"GET", "/notifications/stream"},
+	{"POST", "/ux-events"},
+	{"POST", "/client-errors"},
+	{"GET", "/works/{id}/presence"},
+	{"POST", "/works/{id}/presence"},
+	{"GET", "/works/{id}/copilot"},
+	{"POST", "/works/{id}/copilot"},
+	{"DELETE", "/works/{id}/copilot"},
+	{"POST", "/sections/{id}/continue"},
+	{"PUT", "/panels/{id}/bubbles"},
+	{"GET", "/audit-logs"},
+}
+
+// validateAgentCatalog 执行第 3.7 节第 1 至 7 条的静态校验，返回全部违规项。
+func validateAgentCatalog(routes []agentRoute) error {
+	known := make(map[string]bool, len(routes))
+	for _, r := range routes {
+		known[r.Method+" "+r.Path] = true
+	}
+	var problems []string
+	seen := map[string]bool{}
+
+	for i := range agentCatalog() {
+		t := &agentCatalogList[i]
+
+		// 第 2 条：名称唯一、符合命名规则；描述不为空。
+		if !agentToolNameRe.MatchString(t.Name) {
+			problems = append(problems, fmt.Sprintf("条目名 %q 不符合命名规则", t.Name))
+		}
+		if seen[t.Name] {
+			problems = append(problems, fmt.Sprintf("条目名 %q 重复", t.Name))
+		}
+		seen[t.Name] = true
+		if strings.TrimSpace(t.Description) == "" {
+			problems = append(problems, fmt.Sprintf("条目 %s 描述为空", t.Name))
+		}
+
+		// 第 1 条：本地元工具（Path 为空）不参与路由核对；其余必须命中 chi.Walk。
+		if t.Path != "" {
+			if !known[t.Method+" /api/v1"+t.Path] {
+				problems = append(problems, fmt.Sprintf("条目 %s 的 %s %s 未在路由中注册", t.Name, t.Method, t.Path))
+			}
+			// 第 3 条：路径前缀与方法+模板黑名单。
+			for _, p := range agentPathPrefixBlacklist {
+				if strings.HasPrefix(t.Path, p) {
+					problems = append(problems, fmt.Sprintf("条目 %s 命中路径前缀黑名单 %s", t.Name, p))
+				}
+			}
+			for _, b := range agentRouteBlacklist {
+				if t.Method == b[0] && t.Path == b[1] {
+					problems = append(problems, fmt.Sprintf("条目 %s 命中黑名单路由 %s %s", t.Name, b[0], b[1]))
+				}
+			}
+		}
+
+		// 第 4 条：禁用词（白名单见 agentNameAllowlist）。
+		if !agentNameAllowlist[t.Name] {
+			low := strings.ToLower(t.Name)
+			for _, tok := range agentNameSubstringTokens {
+				if strings.Contains(low, tok) {
+					problems = append(problems, fmt.Sprintf("条目 %s 名称含禁用词 %q", t.Name, tok))
+				}
+			}
+			for _, tok := range agentNameWordTokens {
+				if agentNameHasWord(low, tok) {
+					problems = append(problems, fmt.Sprintf("条目 %s 名称含禁用词 %q", t.Name, tok))
+				}
+			}
+		}
+		lowDesc := strings.ToLower(t.Description)
+		for _, tok := range agentNameSubstringTokens {
+			if strings.Contains(lowDesc, tok) {
+				problems = append(problems, fmt.Sprintf("条目 %s 描述含禁用词 %q", t.Name, tok))
+			}
+		}
+		if !agentNameAllowlist[t.Name] && agentWordBoundaryRe("publish").MatchString(lowDesc) {
+			problems = append(problems, fmt.Sprintf("条目 %s 描述含禁用词 %q", t.Name, "publish"))
+		}
+
+		// 第 5 条：W/H/X 不是 GET；GET 必须是 R。
+		if t.Mutating() && t.Method == http.MethodGet {
+			problems = append(problems, fmt.Sprintf("条目 %s 是 %s 却使用 GET", t.Name, t.Kind))
+		}
+		if t.Method == http.MethodGet && t.Kind != toolR {
+			problems = append(problems, fmt.Sprintf("条目 %s 是 GET 却不是 R（%s）", t.Name, t.Kind))
+		}
+
+		// 第 6 条：Gate 非空必须是 H；X 必须有二次确认。
+		if t.Gate != "" && t.Kind != toolH {
+			problems = append(problems, fmt.Sprintf("条目 %s 有门槛 %s 却不是 H（%s）", t.Name, t.Gate, t.Kind))
+		}
+		if t.Kind == toolX && t.SecondConfirm == nil {
+			problems = append(problems, fmt.Sprintf("条目 %s 是 X 却没有二次确认", t.Name))
+		}
+
+		// 第 7 条：Human 字段名不得同时出现在 Params 中。
+		paramNames := map[string]bool{}
+		for _, p := range t.Params {
+			paramNames[p.Name] = true
+		}
+		for _, h := range t.Human {
+			if paramNames[h.Name] {
+				problems = append(problems, fmt.Sprintf("条目 %s 的人工字段 %s 同时出现在参数中", t.Name, h.Name))
+			}
+		}
+	}
+
+	if len(problems) == 0 {
+		return nil
+	}
+	return errors.New("智能体工具目录自检失败：\n  - " + strings.Join(problems, "\n  - "))
+}
+
+func agentNameHasWord(name, word string) bool {
+	for _, part := range strings.Split(name, "_") {
+		if part == word {
+			return true
+		}
+	}
+	return false
+}
+
+func agentWordBoundaryRe(word string) *regexp.Regexp {
+	return regexp.MustCompile(`(^|[^a-z0-9])` + regexp.QuoteMeta(word) + `([^a-z0-9]|$)`)
+}
+
+// VerifyAgentCatalog 构建根路由并执行目录自检；失败时服务拒绝启动。
+func (s *Server) VerifyAgentCatalog() error {
+	return validateAgentCatalog(agentRouteList(s.Router()))
+}

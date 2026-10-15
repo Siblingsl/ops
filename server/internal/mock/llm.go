@@ -3,10 +3,13 @@ package mock
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -18,15 +21,74 @@ type LLM struct {
 	// ForceDailyFormat forces daily_recommend to emit the given format for every item.
 	// Test knob for D-048: reproduces a model returning a type the account does not use.
 	ForceDailyFormat string
+	// NoTools simulates a model that does not support native tool calls (16 文档第 13.4 节第 3 项).
+	// OPS_MOCK_NO_TOOLS=1 has the same effect.
+	NoTools bool
+	// NoVision simulates a model that cannot read images. OPS_MOCK_NO_VISION=1 has the same effect.
+	NoVision bool
+
+	mu       sync.Mutex
+	requests []string // full request bodies received, for HC-30 assertions
+}
+
+// Requests returns a copy of the request bodies received so far (16 文档第 13.4 节第 5 项).
+func (l *LLM) Requests() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]string, len(l.requests))
+	copy(out, l.requests)
+	return out
+}
+
+// ResetRequests clears the recorded request bodies.
+func (l *LLM) ResetRequests() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.requests = nil
+}
+
+func (l *LLM) recordRequest(body string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.requests = append(l.requests, body)
+	if len(l.requests) > 500 {
+		l.requests = l.requests[len(l.requests)-500:]
+	}
 }
 
 type chatReq struct {
-	Model    string `json:"model"`
-	Stream   bool   `json:"stream"`
+	Model      string          `json:"model"`
+	Stream     bool            `json:"stream"`
+	ToolChoice json.RawMessage `json:"tool_choice"`
+	MaxTokens  *int            `json:"max_tokens"`
+	Tools      []struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
+		} `json:"function"`
+	} `json:"tools"`
 	Messages []struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
+		Role      string          `json:"role"`
+		Content   json.RawMessage `json:"content"`
+		ToolCalls []struct {
+			ID       string `json:"id"`
+			Type     string `json:"type"`
+			Function struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"function"`
+		} `json:"tool_calls"`
+		ToolCallID string `json:"tool_call_id"`
+		Name       string `json:"name"`
 	} `json:"messages"`
+}
+
+// mockToolCall is a tool call the fake decides to emit.
+type mockToolCall struct {
+	Name      string
+	Arguments string
 }
 
 // content reads a plain string or OpenAI multimodal parts, returning the text and the image count.
@@ -104,8 +166,10 @@ func (l *LLM) Handler() http.Handler {
 			_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key provided","type":"invalid_request_error"}}`))
 			return
 		}
+		raw, _ := io.ReadAll(r.Body)
+		l.recordRequest(string(raw))
 		var req chatReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.Unmarshal(raw, &req); err != nil {
 			w.WriteHeader(400)
 			return
 		}
@@ -114,8 +178,12 @@ func (l *LLM) Handler() http.Handler {
 			_, _ = w.Write([]byte(`{"error":{"message":"service unavailable"}}`))
 			return
 		}
+		noTools := l.NoTools || os.Getenv("OPS_MOCK_NO_TOOLS") == "1"
+		noVision := l.NoVision || os.Getenv("OPS_MOCK_NO_VISION") == "1"
 		var sys, user string
 		images := 0
+		historyCalls := 0
+		lastRole, lastContent := "", ""
 		for _, m := range req.Messages {
 			text, n := content(m.Content)
 			if m.Role == "system" {
@@ -123,51 +191,119 @@ func (l *LLM) Handler() http.Handler {
 			} else if m.Role == "user" {
 				user, images = text, n
 			}
+			historyCalls += len(m.ToolCalls)
+			lastRole, lastContent = m.Role, text
 		}
+		task := ""
+		if m := taskRe.FindAllStringSubmatch(sys+"\n"+user, -1); len(m) > 0 {
+			task = m[len(m)-1][1]
+		}
+		toolsSent := len(req.Tools) > 0 || len(req.ToolChoice) > 0
+
 		var reply string
-		if strings.Contains(user, "任务：metric_screenshot") {
+		var calls []mockToolCall
+		switch {
+		case strings.Contains(user, "图片是什么颜色"):
+			// 看图自检探测：内置红色图片（16 文档第 13.4 节第 3 项）。
+			if noVision {
+				reply = "无法识别图片内容"
+			} else {
+				reply = "红色"
+			}
+		case lastRole != "tool" && hasTool(req, "ops_probe_echo"):
+			if noTools {
+				reply = "本模型不支持工具调用"
+			} else {
+				calls = []mockToolCall{{Name: "ops_probe_echo", Arguments: `{"value":"ok"}`}}
+			}
+		case task == "agent_summary":
+			reply = "对话历史摘要：用户正在整理账号内容，之前的结论与待办保持不变。"
+		case task == "agent_chat":
+			reply, calls = l.agentChat(user, lastRole, lastContent, toolsSent, historyCalls, noTools)
+		case strings.Contains(user, "任务：metric_screenshot"):
 			if images == 0 {
 				w.WriteHeader(400)
 				_, _ = w.Write([]byte(`{"error":{"message":"this task needs image input"}}`))
 				return
 			}
 			reply = l.metricScreenshot(user, images)
-		} else {
+		case lastRole == "tool":
+			reply = "已读取：" + short(strings.TrimSpace(lastContent), 60)
+		default:
 			reply = l.respond(user)
+		}
+		// 单轮输出上限：max_tokens 已设置且输出超过上限时截断，并以 finish_reason=length 结束
+		// （16 文档第 6.5 节）。token 估算口径与下方 usage 一致（runes*2/3）。
+		truncated := false
+		if req.MaxTokens != nil && *req.MaxTokens > 0 {
+			maxRunes := *req.MaxTokens * 3 / 2
+			if runes := []rune(reply); len(runes) > maxRunes {
+				reply = string(runes[:maxRunes])
+				truncated = true
+				calls = nil
+			}
 		}
 		promptTokens := utf8.RuneCountInString(sys+user) * 2 / 3
 		completionTokens := utf8.RuneCountInString(reply) * 2 / 3
 		usage := map[string]int{"prompt_tokens": promptTokens, "completion_tokens": completionTokens, "total_tokens": promptTokens + completionTokens}
 		if !req.Stream {
+			msg := map[string]any{"role": "assistant", "content": reply}
+			finish := "stop"
+			if truncated {
+				finish = "length"
+			}
+			if len(calls) > 0 {
+				finish = "tool_calls"
+				msg["tool_calls"] = toolCallsJSON(calls)
+				if reply == "" {
+					msg["content"] = nil
+				}
+			}
 			writeJSON(w, map[string]any{
 				"id": "mock", "object": "chat.completion", "model": req.Model,
-				"choices": []any{map[string]any{"index": 0, "message": map[string]string{"role": "assistant", "content": reply}, "finish_reason": "stop"}},
+				"choices": []any{map[string]any{"index": 0, "message": msg, "finish_reason": finish}},
 				"usage":   usage,
 			})
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fl, _ := w.(http.Flusher)
-		runes := []rune(reply)
 		delay := l.Delay
 		if req.Model == "mock-slow" {
 			delay = 80 * time.Millisecond
 		}
-		for i := 0; i < len(runes); i += 6 {
-			end := min(i+6, len(runes))
-			chunk := map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]string{"content": string(runes[i:end])}}}}
-			b, _ := json.Marshal(chunk)
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			if fl != nil {
-				fl.Flush()
-			}
-			if delay > 0 {
-				select {
-				case <-r.Context().Done():
-					return
-				case <-time.After(delay):
+		if len(calls) > 0 {
+			// 工具调用分片下发：先给 id/name，再逐段给 arguments，供适配层验证按 index 累积。
+			for i, c := range calls {
+				writeSSE(w, fl, map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{
+					"tool_calls": []any{map[string]any{"index": i, "id": fmt.Sprintf("call_mock_%d", i+1), "type": "function",
+						"function": map[string]any{"name": c.Name, "arguments": ""}}},
+				}}}})
+				for _, piece := range splitPieces(c.Arguments, 8) {
+					writeSSE(w, fl, map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{
+						"tool_calls": []any{map[string]any{"index": i, "function": map[string]any{"arguments": piece}}},
+					}}}})
 				}
 			}
+			writeSSE(w, fl, map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls"}}})
+		} else {
+			runes := []rune(reply)
+			for i := 0; i < len(runes); i += 6 {
+				end := min(i+6, len(runes))
+				writeSSE(w, fl, map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]string{"content": string(runes[i:end])}}}})
+				if delay > 0 {
+					select {
+					case <-r.Context().Done():
+						return
+					case <-time.After(delay):
+					}
+				}
+			}
+			finish := "stop"
+			if truncated {
+				finish = "length"
+			}
+			writeSSE(w, fl, map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}})
 		}
 		b, _ := json.Marshal(map[string]any{"choices": []any{}, "usage": usage})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", b)
@@ -176,6 +312,96 @@ func (l *LLM) Handler() http.Handler {
 		}
 	})
 	return mux
+}
+
+// hasTool reports whether the request declares a tool with the given function name.
+func hasTool(req chatReq, name string) bool {
+	for _, t := range req.Tools {
+		if t.Function.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// writeSSE writes one SSE frame and flushes it.
+func writeSSE(w http.ResponseWriter, fl http.Flusher, v any) {
+	b, _ := json.Marshal(v)
+	fmt.Fprintf(w, "data: %s\n\n", b)
+	if fl != nil {
+		fl.Flush()
+	}
+}
+
+// splitPieces splits s into rune chunks of at most n runes.
+func splitPieces(s string, n int) []string {
+	if s == "" {
+		return nil
+	}
+	rs := []rune(s)
+	var out []string
+	for i := 0; i < len(rs); i += n {
+		out = append(out, string(rs[i:min(i+n, len(rs))]))
+	}
+	return out
+}
+
+// toolCallsJSON renders tool calls in the OpenAI response shape.
+func toolCallsJSON(calls []mockToolCall) []any {
+	out := make([]any, 0, len(calls))
+	for i, c := range calls {
+		out = append(out, map[string]any{
+			"id": fmt.Sprintf("call_mock_%d", i+1), "type": "function",
+			"function": map[string]any{"name": c.Name, "arguments": c.Arguments},
+		})
+	}
+	return out
+}
+
+// agentToolRe matches a "#tool name {json}" test instruction line.
+var agentToolRe = regexp.MustCompile(`^#tool\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+(\{.*\}))?\s*$`)
+
+// parseAgentInstructions reads the #tool / #text test instructions from the last user message.
+func parseAgentInstructions(user string) ([]mockToolCall, string) {
+	var calls []mockToolCall
+	var texts []string
+	for _, raw := range strings.Split(user, "\n") {
+		line := strings.TrimSpace(raw)
+		if m := agentToolRe.FindStringSubmatch(line); m != nil {
+			args := m[2]
+			if args == "" {
+				args = "{}"
+			}
+			calls = append(calls, mockToolCall{Name: m[1], Arguments: args})
+			continue
+		}
+		if strings.HasPrefix(line, "#text ") {
+			texts = append(texts, strings.TrimSpace(strings.TrimPrefix(line, "#text ")))
+		}
+	}
+	return calls, strings.Join(texts, "\n")
+}
+
+// agentChat answers one agent_chat round (16 文档第 13.4 节第 1、2 项).
+func (l *LLM) agentChat(user, lastRole, lastContent string, toolsSent bool, historyCalls int, noTools bool) (string, []mockToolCall) {
+	// 卡片说明轮：本轮不发送工具定义，也没有 tool_choice。
+	if !toolsSent && historyCalls > 0 {
+		return fmt.Sprintf("已为你准备了 %d 张卡片。", historyCalls), nil
+	}
+	calls, text := parseAgentInstructions(user)
+	if len(calls) > 0 {
+		if noTools {
+			return "本模型不支持工具调用，无法执行这一步。", nil
+		}
+		return text, calls
+	}
+	if text != "" {
+		return text, nil
+	}
+	if lastRole == "tool" {
+		return "已读取：" + short(strings.TrimSpace(lastContent), 60), nil
+	}
+	return "我可以帮你查询和整理系统里的内容；需要写入时会先给出操作卡片，由你逐张确认。", nil
 }
 
 var taskRe = regexp.MustCompile(`任务：([a-z_]+)`)

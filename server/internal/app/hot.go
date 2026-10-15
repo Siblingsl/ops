@@ -396,7 +396,7 @@ func (s *Server) getAccountHot(w http.ResponseWriter, r *http.Request) error {
 	enabled := s.loadCrawl(ctx).Limits.Enabled && st != nil && st.HotEnabled != nil && *st.HotEnabled
 	var job *uuid.UUID
 	preparing := false
-	if date == s.today().Format("2006-01-02") {
+	if date == s.today().Format("2006-01-02") && r.URL.Query().Get("prepare") != "false" {
 		s.opsOpened(ctx, a)
 		job, preparing, err = s.prepareOps(ctx, a, "on_open")
 		if err != nil {

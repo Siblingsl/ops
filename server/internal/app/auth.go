@@ -278,6 +278,25 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, userID, wo
 
 func (s *Server) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 进程内分发器：不读 Cookie，改用 loadIdentityBySession（16 文档第 2.3 节「身份」第 3 项）。
+		if p := agentPrincipalOf(r.Context()); p != nil {
+			id, err := s.loadIdentityBySession(r.Context(), p.SessionID)
+			if err != nil {
+				writeError(w, r, errUnauthenticated)
+				return
+			}
+			if id.WorkspaceID != p.WorkspaceID {
+				writeError(w, r, stateInvalid("当前会话已切换到其他工作区，请回到原工作区继续"))
+				return
+			}
+			// 内部请求的 ReauthOK 强制为 false（第 2.3 节「身份」第 4 项）。
+			id.ReauthOK = false
+			if trace, ok := r.Context().Value(requestTraceKey{}).(*requestTrace); ok {
+				trace.WorkspaceID = id.WorkspaceID
+			}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxMember, id)))
+			return
+		}
 		c, err := r.Cookie(sessionCookie)
 		if err != nil || c.Value == "" {
 			writeError(w, r, errUnauthenticated)
@@ -298,7 +317,27 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 	})
 }
 
+// identitySelect 是 loadIdentity 与 loadIdentityBySession 共用的同一条查询。
+const identitySelect = `
+	SELECT s.id, s.expires_at, s.reauth_until, s.last_seen_at, coalesce(s.admin_override, false),
+	       u.id, u.username, coalesce(u.is_system_admin, false), u.disabled_at,
+	       s.current_workspace_id, wm.role
+	FROM session s
+	JOIN app_user u ON u.id = s.user_id
+	LEFT JOIN workspace_member wm ON wm.user_id = u.id AND wm.workspace_id = s.current_workspace_id AND wm.status = 'active'
+	WHERE %s=$1`
+
 func (s *Server) loadIdentity(ctx context.Context, token string) (*identity, error) {
+	return s.scanIdentity(ctx, "s.token_hash", secure.SHA256([]byte(token)), true)
+}
+
+// loadIdentityBySession 与 loadIdentity 共用同一条查询，条件改为 s.id=$1；
+// 在「当前工作区成员资格丢失」时直接返回 errUnauthenticated，不执行切换工作区的写入。
+func (s *Server) loadIdentityBySession(ctx context.Context, sessionID uuid.UUID) (*identity, error) {
+	return s.scanIdentity(ctx, "s.id", sessionID, false)
+}
+
+func (s *Server) scanIdentity(ctx context.Context, column string, arg any, allowSwitch bool) (*identity, error) {
 	var (
 		id          identity
 		expires     time.Time
@@ -309,15 +348,7 @@ func (s *Server) loadIdentity(ctx context.Context, token string) (*identity, err
 		disabledAt  *time.Time
 		role        *string
 	)
-	err := s.db.QueryRow(ctx, `
-		SELECT s.id, s.expires_at, s.reauth_until, s.last_seen_at, coalesce(s.admin_override, false),
-		       u.id, u.username, coalesce(u.is_system_admin, false), u.disabled_at,
-		       s.current_workspace_id, wm.role
-		FROM session s
-		JOIN app_user u ON u.id = s.user_id
-		LEFT JOIN workspace_member wm ON wm.user_id = u.id AND wm.workspace_id = s.current_workspace_id AND wm.status = 'active'
-		WHERE s.token_hash=$1`,
-		secure.SHA256([]byte(token))).Scan(
+	err := s.db.QueryRow(ctx, fmt.Sprintf(identitySelect, column), arg).Scan(
 		&id.SessionID, &expires, &reauthUntil, &lastSeen, &override,
 		&id.UserID, &id.Username, &sysAdmin, &disabledAt,
 		&id.WorkspaceID, &role)
@@ -354,6 +385,11 @@ func (s *Server) loadIdentity(ctx context.Context, token string) (*identity, err
 		return &id, nil
 	}
 
+	if !allowSwitch {
+		// 智能体分发：成员资格丢失时运行必须停止，不做任何会话写入。
+		return nil, errUnauthenticated
+	}
+
 	// Membership lost for current workspace — clear override and switch to another.
 	if _, err := s.db.Exec(ctx, `UPDATE session SET admin_override=false WHERE id=$1`, id.SessionID); err != nil {
 		return nil, err
@@ -368,7 +404,7 @@ func (s *Server) loadIdentity(ctx context.Context, token string) (*identity, err
 	var memberRole string
 	if err := s.db.QueryRow(ctx, `SELECT role FROM workspace_member WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
 		wsID, id.UserID).Scan(&memberRole); err != nil {
-		return nil, err
+		return nil, errUnauthenticated
 	}
 	id.WorkspaceID = wsID
 	id.Role = memberRole
@@ -382,6 +418,11 @@ func (s *Server) csrfToken(sessionID uuid.UUID) string {
 
 func (s *Server) requireCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 有 agentPrincipal 时跳过 CSRF 比对：CSRF 保护的是浏览器请求（16 文档第 2.3 节「身份」第 5 项）。
+		if agentPrincipalOf(r.Context()) != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			if r.Header.Get("X-CSRF-Token") != s.csrfToken(ident(r.Context()).SessionID) {
 				writeError(w, r, errCSRF)
@@ -509,6 +550,20 @@ func viewerMutateAllowed(path string) bool {
 		return true
 	}
 	if strings.HasPrefix(path, "/api/v1/comments/") {
+		return true
+	}
+	// 智能体（D-117 / 16 文档第 9.2 节第 1 项）：观察者可管理自己的对话与附件；
+	// POST /agent/actions/{id}/execute 不加入白名单，观察者也不会收到卡片。
+	if path == "/api/v1/agent/conversations" || path == "/api/v1/agent/attachments" {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/v1/agent/conversations/") || strings.HasPrefix(path, "/api/v1/agent/attachments/") {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/v1/agent/runs/") && strings.HasSuffix(path, "/cancel") {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/v1/agent/actions/") && strings.HasSuffix(path, "/reject") {
 		return true
 	}
 	return false

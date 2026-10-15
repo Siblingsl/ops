@@ -16,6 +16,14 @@ import (
 
 // ---------- 模型配置（P-22） ----------
 
+// Capability is one saved self-test result (16 文档第 7.2 节), keyed by provider + model.
+type Capability struct {
+	Model    string     `json:"model"`
+	ToolsOK  *bool      `json:"tools_ok"`
+	VisionOK *bool      `json:"vision_ok"`
+	TestedAt *time.Time `json:"tested_at"`
+}
+
 type Provider struct {
 	ID             uuid.UUID  `json:"id"`
 	Name           string     `json:"name"`
@@ -30,6 +38,8 @@ type Provider struct {
 	PriceComplete  *float64   `json:"price_per_1k_completion"`
 	CircuitState   string     `json:"circuit_state"`
 	RetryAfter     int        `json:"retry_after_seconds"`
+	// Capabilities lists the per-model tool-calling / vision self-test results.
+	Capabilities []Capability `json:"capabilities"`
 }
 
 const providerCols = `id, name, base_url, api_key_enc, models, status, last_test_at, last_test_ok, last_test_result,
@@ -46,11 +56,13 @@ func (s *Server) scanProvider(row pgx.Row) (*Provider, error) {
 		p.KeyMask = secure.Mask(key)
 	}
 	p.CircuitState, p.RetryAfter = s.providerCircuitStatus(p.ID)
+	p.Capabilities = []Capability{}
 	return &p, nil
 }
 
 func (s *Server) listProviders(w http.ResponseWriter, r *http.Request) error {
-	rows, err := s.db.Query(r.Context(), `SELECT `+providerCols+` FROM model_provider WHERE workspace_id=$1 ORDER BY created_at`, ident(r.Context()).WorkspaceID)
+	ws := ident(r.Context()).WorkspaceID
+	rows, err := s.db.Query(r.Context(), `SELECT `+providerCols+` FROM model_provider WHERE workspace_id=$1 ORDER BY created_at`, ws)
 	if err != nil {
 		return err
 	}
@@ -63,7 +75,43 @@ func (s *Server) listProviders(w http.ResponseWriter, r *http.Request) error {
 		}
 		list = append(list, p)
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := s.attachCapabilities(r.Context(), ws, list); err != nil {
+		return err
+	}
 	return ok(w, list)
+}
+
+// attachCapabilities fills each provider's capabilities from model_capability (16 文档第 7.2 节第 3 项).
+func (s *Server) attachCapabilities(ctx context.Context, ws uuid.UUID, list []*Provider) error {
+	if len(list) == 0 {
+		return nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT provider_id, model, tools_ok, vision_ok, tested_at FROM model_capability WHERE workspace_id=$1 ORDER BY model`, ws)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byProvider := map[uuid.UUID][]Capability{}
+	for rows.Next() {
+		var pid uuid.UUID
+		var c Capability
+		if err := rows.Scan(&pid, &c.Model, &c.ToolsOK, &c.VisionOK, &c.TestedAt); err != nil {
+			return err
+		}
+		byProvider[pid] = append(byProvider[pid], c)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, p := range list {
+		if caps := byProvider[p.ID]; caps != nil {
+			p.Capabilities = caps
+		}
+	}
+	return nil
 }
 
 type providerInput struct {
@@ -269,6 +317,16 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 				return err
 			}
 		}
+		// D-117（16 文档第 7.2 节第 2 项）：改地址或密钥时能力记录清空为未测试；删除模型时删除对应记录。
+		if in.BaseURL != nil || in.APIKey != nil {
+			if _, err := tx.Exec(ctx, `DELETE FROM model_capability WHERE provider_id=$1 AND workspace_id=$2`, id, ws); err != nil {
+				return err
+			}
+		} else if in.Models != nil {
+			if _, err := tx.Exec(ctx, `DELETE FROM model_capability WHERE provider_id=$1 AND workspace_id=$2 AND NOT (model = ANY($3))`, id, ws, cleanList(in.Models)); err != nil {
+				return err
+			}
+		}
 		if in.Status != nil {
 			if _, err := tx.Exec(ctx, `UPDATE model_provider SET status=$2 WHERE id=$1 AND workspace_id=$3`, id, *in.Status, ws); err != nil {
 				return err
@@ -360,7 +418,7 @@ func (s *Server) testProvider(w http.ResponseWriter, r *http.Request) error {
 	tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	start := time.Now()
-	text, _, callErr := ai.Stream(tctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model,
+	text, _, _, _, callErr := ai.Stream(tctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model,
 		Messages: []ai.Message{{Role: "user", Content: "请只回复：连接正常\n\n任务：connectivity_test"}}}, nil)
 	elapsed := time.Since(start).Milliseconds()
 	okFlag := callErr == nil
@@ -420,6 +478,8 @@ var taskTypes = []struct{ Type, Label string }{
 	{"weekly_digest", "周报"},
 	{"metric_screenshot", "数据截图识别（需选支持图片输入的模型）"},
 	{"layout_suggest", "排版建议"},
+	{"agent_chat", "智能体对话"},
+	{"agent_summary", "智能体摘要"},
 	{"embedding", "向量检索（embedding）"},
 	{"tier_economy", "经济档（覆盖各任务）"},
 	{"tier_quality", "质量档（覆盖各任务）"},

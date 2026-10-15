@@ -88,7 +88,8 @@ func (s *Server) resolveRouteTier(ctx context.Context, taskType, tier string) (*
 	keys := []string{taskType, "default"}
 	if taskType == "image_alt" {
 		keys = []string{"metric_screenshot"}
-	} else if costTiers[tier] {
+	} else if costTiers[tier] && taskType != "agent_chat" {
+		// 档位覆盖不作用于 agent_chat，避免把对话切到不支持工具调用的模型（16 文档第 7.3 节第 4 项）。
 		keys = []string{"tier_" + tier, taskType, "default"}
 	}
 	var rt route
@@ -209,7 +210,7 @@ func (s *Server) callModel(ctx context.Context, rt *route, p *ContextPack, jsonM
 		}
 	})
 	defer timer.Stop()
-	text, usage, err := ai.Stream(actx, s.aiHTTP, ai.Request{
+	text, usage, _, _, err := ai.Stream(actx, s.aiHTTP, ai.Request{
 		BaseURL: rt.BaseURL, APIKey: rt.APIKey, Model: rt.Model, JSON: jsonMode,
 		Temperature: p.Temperature,
 		Messages:    []ai.Message{{Role: "system", Content: p.System}, {Role: "user", Content: p.User, Images: p.Images}},

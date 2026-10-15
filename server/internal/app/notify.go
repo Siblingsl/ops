@@ -209,6 +209,8 @@ type UserPrefs struct {
 	UXEvents          bool   `json:"ux_events"`
 	CostTier          string `json:"cost_tier"`
 	SavedViews        []any  `json:"saved_views"`
+	// AgentPrivacyNoticeSeen 记录用户是否已关闭智能体页的隐私说明（16 文档第 9.4 节第 5 项）。
+	AgentPrivacyNoticeSeen bool `json:"agent_privacy_notice_seen"`
 }
 
 func defaultPrefs() UserPrefs {

@@ -75,7 +75,16 @@ func requestLog(next http.Handler) http.Handler {
 			if duration > time.Second {
 				level = slog.LevelWarn
 			}
-			slog.Log(r.Context(), level, "HTTP 请求", "request_id", requestID, "method", r.Method, "route", route, "status", status, "duration_ms", float64(duration)/float64(time.Millisecond), "workspace_id", workspace)
+			attrs := []any{"request_id", requestID, "method", r.Method, "route", route, "status", status,
+				"duration_ms", float64(duration) / float64(time.Millisecond), "workspace_id", workspace}
+			// 16 文档第 2.3 节「请求构造」第 6 项：经分发器的请求在访问日志中标记 via=agent。
+			if p := agentPrincipalOf(r.Context()); p != nil {
+				attrs = append(attrs, "via", "agent")
+				if p.ActionID != uuid.Nil {
+					attrs = append(attrs, "agent_action_id", p.ActionID.String())
+				}
+			}
+			slog.Log(r.Context(), level, "HTTP 请求", attrs...)
 		}()
 		next.ServeHTTP(wrapped, r)
 	})

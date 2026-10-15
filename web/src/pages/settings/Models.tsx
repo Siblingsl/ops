@@ -41,6 +41,13 @@ function SelfTestDialog({ result, onClose }: { result: SelfTestResult; onClose: 
   )
 }
 
+// CapabilityTag shows one model's tool-calling / vision self-test state (D-117, 16 文档第 7.2 节第 3 项).
+function CapabilityTag({ label, ok }: { label: string; ok?: boolean | null }) {
+  const state = ok === true ? '通过' : ok === false ? '未通过' : '未测试'
+  const cls = ok === true ? 'bg-ink-50 text-ink-700' : ok === false ? 'bg-mist-100 text-danger' : 'bg-mist-100 text-mist-400'
+  return <span className={`rounded px-1 text-[10.5px] ${cls}`} title={`${label}：${state}`}>{label}·{state}</span>
+}
+
 function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClose: () => void }) {
   const [name, setName] = useState(editing?.name ?? '')
   const [base, setBase] = useState(editing?.base_url ?? '')
@@ -434,7 +441,18 @@ export default function Models() {
                 )}
               </div>
               {p.status === 'active' && p.circuit_state === 'open' && <p className="mt-2 text-xs text-danger">供应商暂不可用，约 {p.retry_after_seconds} 秒后恢复</p>}
-              <div className="mt-3 flex flex-wrap gap-1.5">{p.models.map((m) => <span key={m} className="rounded bg-mist-100 px-1.5 py-0.5 font-mono text-[11.5px] text-mist-600">{m}</span>)}</div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {p.models.map((m) => {
+                  const cap = p.capabilities?.find((c) => c.model === m)
+                  return (
+                    <span key={m} className="inline-flex items-center gap-1.5 rounded border border-mist-200 bg-white px-1.5 py-0.5">
+                      <span className="font-mono text-[11.5px] text-mist-700">{m}</span>
+                      <CapabilityTag label="工具调用" ok={cap?.tools_ok} />
+                      <CapabilityTag label="看图" ok={cap?.vision_ok} />
+                    </span>
+                  )
+                })}
+              </div>
               <div className="mt-3 flex items-center gap-2 border-t border-mist-100 pt-3 text-xs">
                 <span className="font-mono text-mist-400">{p.key_mask}</span>
                 {p.price_per_1k_prompt != null && <span className="text-mist-400">¥{p.price_per_1k_prompt} / 千 token</span>}
@@ -444,7 +462,7 @@ export default function Models() {
                   <div className="ml-auto flex items-center gap-2">
                     <Switch checked={p.status === 'active'} onChange={() => toggle(p)} label="启用" />
                     <Button size="sm" variant="ghost" icon={<Activity className="size-3.5" />} loading={selfTesting === p.id}
-                      onClick={() => runSelfTest(p)} title="一次探测对话、JSON、流式、出图与联网搜索能力">自检</Button>
+                      onClick={() => runSelfTest(p)} title="探测对话、JSON、流式、出图、联网搜索、工具调用与看图能力">自检</Button>
                     <Button size="sm" variant="ghost" icon={<Plug className="size-3.5" />} loading={testing === p.id} onClick={() => test(p)}>测试</Button>
                   </div>
                 )}

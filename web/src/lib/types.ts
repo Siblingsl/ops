@@ -448,6 +448,14 @@ export interface Provider {
   last_test_result: string
   price_per_1k_prompt?: number | null
   price_per_1k_completion?: number | null
+  capabilities?: ModelCapability[]
+}
+
+export interface ModelCapability {
+  model: string
+  tools_ok: boolean | null
+  vision_ok: boolean | null
+  tested_at: string | null
 }
 
 export interface ModelRoute {

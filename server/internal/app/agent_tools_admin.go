@@ -1,0 +1,167 @@
+package app
+
+// 附录 A.13 admin 系统管理（仅超管）。
+
+var agentToolsAdmin = []AgentTool{
+	{
+		Name: "admin__users", Domain: "admin", Kind: toolR, Method: "GET", Path: "/admin/users",
+		Description: "列出全站用户及其超管标识、停用状态、工作区数量与会话数量。",
+		MinRole:     roleSystemAdmin,
+		Target:      target("user", ""),
+	},
+	{
+		Name: "admin__workspaces", Domain: "admin", Kind: toolR, Method: "GET", Path: "/admin/workspaces",
+		Description: "列出全站工作区及其创建者、成员数量与账号数量。",
+		MinRole:     roleSystemAdmin,
+		Target:      target("workspace", ""),
+		Notes:       "进入或退出只给链接",
+	},
+	{
+		Name: "admin__audit_logs", Domain: "admin", Kind: toolR, Method: "GET", Path: "/admin/audit-logs",
+		Description: "查看全站的审计日志，可按动作筛选、按时间向前翻页。",
+		Params: []ToolParam{
+			pQueryF("action", strMax(60), false),
+			pQueryF("limit", intRange(1, 50), false),
+			pQueryF("before", `{"type":"string","format":"date-time"}`, false),
+		},
+		MinRole: roleSystemAdmin,
+		Target:  target("audit_log", ""),
+		Notes:   "全站日志，超管本就可见",
+	},
+	{
+		Name: "admin__usage", Domain: "admin", Kind: toolR, Method: "GET", Path: "/admin/usage",
+		Description: "查看全站的 AI 调用用量，可按日期范围与维度分组统计。",
+		Params: []ToolParam{
+			pQueryF("from", `{"type":"string","format":"date"}`, false),
+			pQueryF("to", `{"type":"string","format":"date"}`, false),
+			pQueryF("group_by", enumOf("day", "task", "model", "workspace", "account"), false),
+		},
+		MinRole: roleSystemAdmin,
+		Target:  target("usage", ""),
+	},
+	{
+		Name: "admin__system_settings", Domain: "admin", Kind: toolR, Method: "GET", Path: "/admin/system-settings",
+		Description: "查看注册开关与维护模式的当前状态。",
+		MinRole:     roleSystemAdmin,
+		Target:      target("system_settings", ""),
+	},
+	{
+		Name: "admin__crawl", Domain: "admin", Kind: toolR, Method: "GET", Path: "/admin/crawl",
+		Description: "查看全站采集设置、全部来源与平台档位。",
+		MinRole:     roleSystemAdmin,
+		Target:      target("crawl", ""),
+	},
+	{
+		Name: "admin__crawl_runs", Domain: "admin", Kind: toolR, Method: "GET", Path: "/admin/crawl/runs",
+		Description: "查看最近 100 条采集运行记录及其请求数与结果。",
+		MinRole:     roleSystemAdmin,
+		Target:      target("crawl_run", ""),
+	},
+	{
+		Name: "admin__crawl_health", Domain: "admin", Kind: toolR, Method: "GET", Path: "/admin/crawl/health",
+		Description: "查看每个来源在近 7 天与近 30 天的采集健康度。",
+		MinRole:     roleSystemAdmin,
+		Target:      target("crawl_source", ""),
+	},
+	{
+		Name: "admin__patch_user", Domain: "admin", Kind: toolX, Method: "PATCH", Path: "/admin/users/{id}",
+		Description: "禁用或启用用户，或授予、取消超管权限。需要用户输入用户名确认。",
+		Params: []ToolParam{
+			pPath("id"),
+			pBodyF("disabled", schemaBool, false),
+			pBodyF("is_system_admin", schemaBool, false),
+		},
+		MinRole:       roleSystemAdmin,
+		SecondConfirm: secondConfirmUsername(),
+		Target:        target("user", "id"),
+	},
+	{
+		Name: "admin__reset_password", Domain: "admin", Kind: toolX, Method: "POST", Path: "/admin/users/{id}/reset-password",
+		Description: "为用户生成一个临时密码，并让该用户的其他会话失效。需要用户输入用户名确认。",
+		Params: []ToolParam{
+			pPath("id"),
+		},
+		MinRole:       roleSystemAdmin,
+		SecondConfirm: secondConfirmUsername(),
+		Target:        target("user", "id"),
+		Secrets:       []string{"temporary_password"},
+		Notes:         "临时密码只在结果中返回一次",
+	},
+	{
+		Name: "admin__revoke_sessions", Domain: "admin", Kind: toolX, Method: "POST", Path: "/admin/users/{id}/revoke-sessions",
+		Description: "让该用户的全部登录会话失效。需要用户输入用户名确认。",
+		Params: []ToolParam{
+			pPath("id"),
+		},
+		MinRole:       roleSystemAdmin,
+		SecondConfirm: secondConfirmUsername(),
+		Target:        target("user", "id"),
+	},
+	{
+		Name: "admin__system_settings_update", Domain: "admin", Kind: toolX, Method: "PUT", Path: "/admin/system-settings",
+		Description: "开启或关闭维护模式与注册开关。维护模式会影响所有用户的访问，需要用户确认。",
+		Params: []ToolParam{
+			pBodyF("registration_open", schemaBool, false),
+			pBodyF("maintenance_mode", schemaBool, false),
+		},
+		MinRole:       roleSystemAdmin,
+		SecondConfirm: secondConfirmPlain(),
+		Target:        target("system_settings", ""),
+		Notes:         "第 3.4 节第 6 条核对：接口按字段部分更新（只更新传入的开关，未传的保持不变），不是整体替换",
+	},
+	{
+		Name: "admin__crawl_update", Domain: "admin", Kind: toolW, Method: "PUT", Path: "/admin/crawl",
+		Description: "修改全站采集强度、限额、保留天数与原文摘要开关。",
+		Params: []ToolParam{
+			pBodyF("level", enumOf("off", "conservative", "standard"), false),
+			pBodyF("limits", `{"type":"object","properties":{"interval_min":{"type":"integer"},"max_items":{"type":"integer"},"daily_requests":{"type":"integer"},"fail_limit":{"type":"integer"},"pause_hours":{"type":"integer"}}}`, false),
+			pBodyF("retention_days", intRange(1, 60), false),
+			pBodyF("summary_fetch", schemaBool, false),
+		},
+		MinRole: roleSystemAdmin,
+		Target:  target("crawl", ""),
+		Preview: previewFields("level", "limits", "retention_days", "summary_fetch"),
+		Notes:   "整体替换类（第 3.4 节第 6 条）：只接受要修改的字段，提出卡片时读当前完整值合并；不能突破部署开关与硬上限（HC-21、HC-25）",
+	},
+	{
+		Name: "admin__crawl_source_update", Domain: "admin", Kind: toolW, Method: "PUT", Path: "/admin/crawl/sources/{key}",
+		Description: "修改一个采集来源的启用状态、采集间隔与单次条数。",
+		Params: []ToolParam{
+			pPathStr("key"),
+			pBodyF("enabled", schemaBool, false),
+			pBodyF("interval_min", `{"type":"integer","minimum":10}`, false),
+			pBodyF("max_items", intRange(1, 100), false),
+		},
+		MinRole: roleSystemAdmin,
+		Target:  target("crawl_source", "key"),
+		Preview: previewFields("enabled", "interval_min", "max_items"),
+		Notes:   "整体替换类（第 3.4 节第 6 条）：只接受要修改的字段，提出卡片时读当前完整值合并",
+	},
+	{
+		Name: "admin__crawl_source_test", Domain: "admin", Kind: toolW, Method: "POST", Path: "/admin/crawl/sources/{key}/test",
+		Description: "立即用一个来源试取少量条目，返回条目与 robots 检查结果。",
+		Params: []ToolParam{
+			pPathStr("key"),
+		},
+		MinRole: roleSystemAdmin,
+		Target:  target("crawl_source", "key"),
+		Notes:   "经采集客户端请求来源（HC-23）",
+	},
+	{
+		Name: "admin__crawl_platform_update", Domain: "admin", Kind: toolW, Method: "PUT", Path: "/admin/crawl/platforms/{platform}",
+		Description: "修改一个敏感平台的档位、最短间隔、每日上限、重复间隔与抖动。",
+		Params: []ToolParam{
+			pPathEnum("platform", "xhs_page", "wechat_page"),
+			pBodyF("enabled", schemaBool, false),
+			pBodyF("level", enumOf("conservative", "standard"), false),
+			pBodyF("interval_min", `{"type":"integer","minimum":3}`, false),
+			pBodyF("daily_max", intRange(1, 100), false),
+			pBodyF("repeat_hours", `{"type":"integer","minimum":12}`, false),
+			pBodyF("jitter_min", intRange(0, 5), false),
+		},
+		MinRole: roleSystemAdmin,
+		Target:  target("crawl_platform", "platform"),
+		Preview: previewFields("enabled", "level", "interval_min", "daily_max", "repeat_hours", "jitter_min"),
+		Notes:   "整体替换类（第 3.4 节第 6 条）：只接受要修改的字段，提出卡片时读当前完整值合并",
+	},
+}

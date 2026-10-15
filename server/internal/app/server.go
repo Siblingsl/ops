@@ -42,6 +42,10 @@ type Server struct {
 	jobCancels map[uuid.UUID]context.CancelFunc
 	jobSems    map[uuid.UUID]chan struct{}
 
+	// 智能体运行的取消句柄（16 文档第 6.7 节第 4 项）。
+	agentRunMu      sync.Mutex
+	agentRunCancels map[uuid.UUID]context.CancelFunc
+
 	notifySubs map[uuid.UUID][]chan struct{}
 
 	presenceMu sync.Mutex
@@ -51,6 +55,10 @@ type Server struct {
 	lastPacks sync.Map
 	crawlMu   sync.Mutex
 	crawler   *crawl.Client
+
+	// handler 缓存首次构建的根路由（16 文档第 2.3 节「身份」第 1 项）。
+	handlerOnce sync.Once
+	handler     http.Handler
 }
 
 func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
@@ -79,6 +87,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 		providerCircuits:  map[uuid.UUID]*providerCircuit{},
 		jobCancels:        map[uuid.UUID]context.CancelFunc{},
 		jobSems:           map[uuid.UUID]chan struct{}{},
+		agentRunCancels:   map[uuid.UUID]context.CancelFunc{},
 		notifySubs:        map[uuid.UUID][]chan struct{}{},
 		presence:          map[uuid.UUID]map[uuid.UUID]presenceEntry{},
 	}, nil
@@ -96,7 +105,16 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
+// Router 首次构建路由后缓存到 s.handler（sync.Once），再次调用返回同一实例；
+// 分发器调用 s.handler.ServeHTTP，不新建路由（16 文档第 2.3 节）。
 func (s *Server) Router() http.Handler {
+	s.handlerOnce.Do(func() {
+		s.handler = s.buildRouter()
+	})
+	return s.handler
+}
+
+func (s *Server) buildRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(middleware.RequestID)
@@ -311,6 +329,7 @@ func (s *Server) Router() http.Handler {
 
 			s.v3Routes(r)
 			s.v4Routes(r)
+			s.agentRoutes(r)
 			r.Put("/admin/crawl/platforms/{platform}", s.h(s.adminPutPlatform))
 		})
 	})
@@ -346,7 +365,7 @@ func (s *Server) v3Routes(r chi.Router) {
 	// 冷启动与工作台
 	r.Post("/accounts/{accountId}/profile/bootstrap", s.h(s.profileBootstrap))
 	r.Get("/accounts/{accountId}/health", s.h(s.accountHealth))
-			r.Get("/accounts/{accountId}/brief", s.h(s.getBrief))
+	r.Get("/accounts/{accountId}/brief", s.h(s.getBrief))
 	r.Get("/accounts/{accountId}/next-actions", s.h(s.getNextActions))
 	r.Get("/accounts/{accountId}/rhythm", s.h(s.accountRhythm))
 	r.Get("/calendar", s.h(s.calendar))
@@ -439,7 +458,7 @@ func (s *Server) v3Routes(r chi.Router) {
 	r.Delete("/prompt-eval/cases/{id}", s.h(s.deleteEvalCase))
 	r.Get("/prompt-eval/cases/{id}/runs", s.h(s.listEvalRuns))
 	r.Post("/prompt-eval/runs", s.h(s.createEvalRun))
-			r.Post("/prompt-eval/replay", s.h(s.runPromptEvalReplay))
+	r.Post("/prompt-eval/replay", s.h(s.runPromptEvalReplay))
 	r.Patch("/prompt-eval/runs/{id}", s.h(s.patchEvalRun))
 }
 
@@ -501,6 +520,16 @@ func (s *Server) audit(ctx context.Context, action, targetType, targetID, result
 	}
 	if detail == nil {
 		detail = map[string]any{}
+	}
+	// 16 文档第 9.6 节：经分发器执行的业务写入在 detail 中追加来源标记。
+	if p := agentPrincipalOf(ctx); p != nil {
+		detail["via_agent"] = true
+		if p.ActionID != uuid.Nil {
+			detail["agent_action_id"] = p.ActionID.String()
+		}
+		if p.ConversationID != uuid.Nil {
+			detail["agent_conversation_id"] = p.ConversationID.String()
+		}
 	}
 	b, _ := json.Marshal(detail)
 	if _, err := s.db.Exec(context.WithoutCancel(ctx),

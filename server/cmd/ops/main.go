@@ -110,6 +110,14 @@ func serve() error {
 	if err := srv.EnsurePermanentAdmin(ctx); err != nil {
 		return fmt.Errorf("初始化永久超级管理员失败：%w", err)
 	}
+	// 16 文档第 3.7 节：工具目录自检失败时服务拒绝启动。
+	if err := srv.VerifyAgentCatalog(); err != nil {
+		return err
+	}
+	// 16 文档第 6.8 节第 2 项：上次服务中断的 queued/running 运行改为 failed(interrupted)。
+	if err := srv.RecoverAgentRunsOnBoot(ctx); err != nil {
+		slog.Warn("恢复中断的智能体运行失败", "err", err)
+	}
 	if cfg.Dev {
 		go serveMock(cfg.MockListen)
 		if err := srv.SeedDevModel(ctx); err != nil {

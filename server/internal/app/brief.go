@@ -66,7 +66,8 @@ func (s *Server) getBrief(w http.ResponseWriter, r *http.Request) error {
 		return ok(w, map[string]any{"brief": b})
 	}
 	jobQueued := false
-	if s.markOnce(ctx, "brief:"+a.ID.String()+":"+today.Format("2006-01-02")) {
+	// prepare=false 为只读模式：不登记任务标记，也不创建 daily_brief 任务（16 文档第 14.2 节第 2 项）。
+	if r.URL.Query().Get("prepare") != "false" && s.markOnce(ctx, "brief:"+a.ID.String()+":"+today.Format("2006-01-02")) {
 		if _, err := s.startBackgroundJob(ctx, jobSpec{TaskType: "daily_brief", Label: "今日智能简报", AccountID: &a.ID},
 			func(jctx context.Context) (any, error) {
 				if err := s.generateBrief(jctx, a.ID); err != nil {
