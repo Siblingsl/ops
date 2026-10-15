@@ -71,6 +71,19 @@ func (s *Server) agentPropose(ctx context.Context, st *agentRunState, id *identi
 			"error": map[string]any{"code": "content_provenance_failed", "message": msg}})
 		return s.agentToolOutcome(ctx, st, call, agentToolRecord{Model: payload, Raw: payload, Summary: msg}, false, send)
 	}
+	// 第 5.6 节：H-03/H-04/H-05/H-09 等卡片需要条目专属的当前状态与额外差异；
+	// 钩子同时把提出时的守卫值（如 base_revision）写入参数，随卡片冻结。
+	var extraChanges []agentChange
+	if t.ProposePreview != nil {
+		changes, hookBefore, err := t.ProposePreview(ctx, s, st, t, args)
+		if err != nil {
+			return s.agentToolError(ctx, st, call, "internal", "读取当前状态失败，暂时不能提出这张卡片", send)
+		}
+		extraChanges = changes
+		if hookBefore != nil {
+			before = hookBefore
+		}
+	}
 	frozen := agentFrozenArgs(args, prov.Blanked)
 
 	// 第 5.2 节第 5 项：按 Preview 规则读“修改前”的值并生成逐字段差异；
@@ -85,7 +98,7 @@ func (s *Server) agentPropose(ctx context.Context, st *agentRunState, id *identi
 
 	// 第 5.2 节第 6 项：写 agent_action（pending，24 小时过期）。
 	preview := agentBuildPreview(t, targetType, targetID, st.AccountID, st.ExternalRead)
-	preview.Changes = agentCardChanges(t, frozen, before, prov.Blanked)
+	preview.Changes = append(agentCardChanges(t, frozen, before, prov.Blanked), extraChanges...)
 	previewJSON, _ := json.Marshal(preview)
 	editable := agentEditableFields(t)
 	blank := append([]string{}, prov.Blanked...)
@@ -217,7 +230,7 @@ func agentFrozenArgs(args map[string]any, blanked []string) map[string]any {
 func agentEditableFields(t *AgentTool) []string {
 	out := []string{}
 	for _, p := range t.Params {
-		if editableFor(p.Source) && p.In != "path" {
+		if p.Editable && p.In != "path" {
 			out = append(out, p.Name)
 		}
 	}

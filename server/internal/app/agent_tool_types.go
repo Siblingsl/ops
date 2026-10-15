@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 )
@@ -94,9 +95,14 @@ type AgentTool struct {
 	// ProjectArgs 是需要读取参数才能投影的场合（第 3.6 节第 1 项的 works__read_sections）。
 	// 非空时优先于 Project。这是 §3.1 结构的最小扩展，登记在 docs/90 的 D-117。
 	ProjectArgs func(args map[string]any, status int, body []byte) any
-	Secrets     []string
-	ExecTimeout time.Duration
-	Notes       string
+	// ProposePreview 在提出卡片时读取条目专属状态（第 5.6 节）：返回额外展示的差异与
+	// 指纹来源对象，并把提出时的守卫值（如 base_revision）写入 args 随卡片冻结。
+	ProposePreview func(ctx context.Context, s *Server, st *agentRunState, t *AgentTool, args map[string]any) ([]agentChange, map[string]any, error)
+	// EnrichExecute 在执行前重新读取当前状态，把分发所需的完整参数写入 args（第 5.3 节第 7 项）。
+	EnrichExecute func(ctx context.Context, s *Server, st *agentRunState, t *AgentTool, args map[string]any) error
+	Secrets       []string
+	ExecTimeout   time.Duration
+	Notes         string
 }
 
 // Mutating 表示该条目会产生业务写入，需要提出卡片（第 5 节）。

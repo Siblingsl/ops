@@ -73,11 +73,18 @@ func (s *Server) agentPreviewAt(ctx context.Context, st *agentRunState, t *Agent
 	args map[string]any, path string) (map[string]any, bool) {
 	gt := agentPreviewTool(t)
 	gt.Path = path
+	// 只带路径参数：预览读取是只读 GET，其余参数会被当作未声明参数拒绝。
+	pathArgs := map[string]any{}
+	for _, p := range gt.Params {
+		if v, ok := args[p.Name]; ok {
+			pathArgs[p.Name] = v
+		}
+	}
 	res, err := s.dispatchAgentTool(ctx, agentDispatchRequest{
 		Principal: agentPrincipal{SessionID: st.SessionID, WorkspaceID: st.WorkspaceID,
 			ConversationID: st.ConversationID, RunID: st.RunID},
 		Tool:    &gt,
-		Args:    args,
+		Args:    pathArgs,
 		Timeout: agentReadTimeout,
 	})
 	if err != nil || res == nil || res.Status >= 400 {

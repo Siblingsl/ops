@@ -178,23 +178,44 @@ func agentRetryable(code string) bool {
 }
 
 // agentNeedKind 从接口响应里识别需要人工选择的情况（第 5.3 节表格）。
-func agentNeedKind(status int, body []byte, done json.RawMessage) (string, map[string]any) {
-	if status == http.StatusConflict {
+func agentNeedKind(res *agentDispatchResult) (string, map[string]any) {
+	if res == nil {
+		return "", nil
+	}
+	if res.Status == http.StatusConflict {
 		var env struct {
 			Error struct {
 				Code string `json:"code"`
 			} `json:"error"`
 		}
-		_ = json.Unmarshal(body, &env)
+		_ = json.Unmarshal(res.Raw, &env)
 		if env.Error.Code == "push_limit_reached" {
 			return "over_limit", map[string]any{"kind": "over_limit"}
 		}
 	}
+	// 第 5.3 节第 2 项：推送接口在草稿缺失或被修改时以 need_choice 事件表达（第 5.6 节 H-05）。
+	for _, ev := range res.Events {
+		if ev.Event != "need_choice" {
+			continue
+		}
+		var payload struct {
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(ev.Data, &payload) != nil {
+			continue
+		}
+		switch payload.Reason {
+		case "missing":
+			return "draft_missing", map[string]any{"kind": "draft_missing", "message": payload.Message}
+		case "modified":
+			return "draft_modified", map[string]any{"kind": "draft_modified", "message": payload.Message}
+		}
+	}
 	var payload struct {
 		NeedChoice string `json:"need_choice"`
-		Draft      any    `json:"draft"`
 	}
-	_ = json.Unmarshal(done, &payload)
+	_ = json.Unmarshal(res.Done, &payload)
 	switch payload.NeedChoice {
 	case "draft_missing":
 		return "draft_missing", map[string]any{"kind": "draft_missing"}
@@ -202,6 +223,23 @@ func agentNeedKind(status int, body []byte, done json.RawMessage) (string, map[s
 		return "draft_modified", map[string]any{"kind": "draft_modified"}
 	}
 	return "", nil
+}
+
+// agentCheckClientPayload 校验前端载荷（第 5.4、11.3 节）：字段平铺；
+// wechat_html 至少需要 revision（html 由推送接口按作品形态校验）。
+func agentCheckClientPayload(t *AgentTool, payload map[string]any) error {
+	if t.ClientPayload == "" {
+		return nil
+	}
+	if payload == nil {
+		return apiErr(422, "validation_failed", "这张卡片需要前端载荷（"+t.ClientPayload+"）")
+	}
+	if t.ClientPayload == "wechat_html" {
+		if v, ok := payload["revision"]; !ok || agentIsBlankValue(v) {
+			return apiErr(422, "validation_failed", "前端载荷缺少 revision")
+		}
+	}
+	return nil
 }
 
 // agentConfirmTargetName 取服务端当前对象名称，用于二次确认的文本比对（第 5.3 节第 3 项）。
@@ -307,11 +345,9 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		return err
 	}
-	// 第 5 项：client_payload 必须带齐（第 5.4 节）。
-	if t.ClientPayload != "" {
-		if v, ok := req.ClientPayload[t.ClientPayload]; !ok || agentIsBlankValue(v) {
-			return apiErr(422, "validation_failed", "这张卡片需要前端提供 "+t.ClientPayload)
-		}
+	// 第 5 项：client_payload 是平铺字段（第 5.4、11.3 节）。
+	if err := agentCheckClientPayload(t, req.ClientPayload); err != nil {
+		return err
 	}
 	if err := s.agentCheckChoice(act, req); err != nil {
 		return err
@@ -320,9 +356,24 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 		return apiErr(422, "validation_failed", "resolution 只对检查项处理卡片有效")
 	}
 
-	// 第 6 项：指纹。整体替换类必须开启；有接口自身修订号校验的条目由接口判定。
+	// 第 7 项：组装最终请求；条目专属参数（第 5.6 节）与第 8.4 节的附件都在执行前补齐
+	// （失败时卡片保持 pending）。
+	final := agentFinalArgs(act, t, edits, req.ClientPayload)
+	if t.EnrichExecute != nil {
+		st := &agentRunState{SessionID: ident(ctx).SessionID, WorkspaceID: act.WorkspaceID,
+			ConversationID: act.ConversationID, RunID: act.RunID}
+		if err := t.EnrichExecute(ctx, s, st, t, final); err != nil {
+			return err
+		}
+	}
+
+	// 第 6 项：指纹。整体替换类必须开启；分镜等条目在补齐参数后按同一来源比对。
 	if t.Fingerprint {
-		now := agentFingerprint(agentFingerprintFields(t), s.agentPreviewReadForExecute(ctx, act))
+		source := s.agentPreviewReadForExecute(ctx, act)
+		if source == nil {
+			source = final
+		}
+		now := agentFingerprint(agentFingerprintFields(t), source)
 		if act.Fingerprint == "" || now == "" || now != act.Fingerprint {
 			_ = s.agentFailStale(ctx, act)
 			view, _ := s.agentActionByID(ctx, act.ID)
@@ -334,8 +385,6 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// 第 7 项：组装最终请求；第 8.4 节的附件在执行前校验并装载（失败时卡片保持 pending）。
-	final := agentFinalArgs(act, t, edits, req.ClientPayload)
 	human, err := agentHumanArgs(t, req)
 	if err != nil {
 		return err
@@ -375,7 +424,7 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 	// 第 4.4 节第 6 项：命中 G 来源时为段落注入 applied（在落库前修正最终请求体）。
 	s.agentInjectApplied(ctx, act, t, final)
 
-	kind, need := agentNeedKind(res.Status, res.Raw, res.Done)
+	kind, need := agentNeedKind(res)
 	switch {
 	case res.Status >= 200 && res.Status < 300 && kind == "":
 		err = s.agentSucceed(ctx, act, res)
@@ -436,7 +485,7 @@ func (s *Server) agentCheckEdits(ctx context.Context, act *agentActionRow, t *Ag
 	in map[string]any) (map[string]any, error) {
 	allowed := map[string]ToolParam{}
 	for _, p := range t.Params {
-		if editableFor(p.Source) && p.In != "path" {
+		if p.Editable && p.In != "path" {
 			allowed[p.Name] = p
 		}
 	}
@@ -774,9 +823,15 @@ func (s *Server) postAgentActionReject(w http.ResponseWriter, r *http.Request) e
 		return err
 	}
 	// 第 5.9 节第 4 项：拒绝也写一条 action_result，供续跑时告知模型。
-	return s.agentWriteActionResults(ctx, act.ConversationID, []map[string]any{{
+	if err := s.agentWriteActionResults(ctx, act.ConversationID, []map[string]any{{
 		"id": act.ID, "tool_name": act.ToolName, "status": "rejected",
 		"target":        map[string]any{"type": act.Preview.TargetName},
 		"reject_reason": reason,
-	}})
+	}}); err != nil {
+		return err
+	}
+	// 第 6.4 节：拒绝后由前端据批次与续跑状态决定是否继续。
+	return ok(w, map[string]any{"ok": true,
+		"batch_resolved": s.agentBatchResolved(ctx, act),
+		"can_continue":   s.agentCanContinue(ctx, act)})
 }

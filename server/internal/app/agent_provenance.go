@@ -147,6 +147,10 @@ func agentToolSourceKind(name string) string {
 func agentResultTexts(body string) []string {
 	var v any
 	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		// 非 JSON 的工具结果按整段文本作为唯一候选（第 4.4 节第 2 项）。
+		if t := strings.TrimSpace(body); t != "" {
+			return []string{t}
+		}
 		return nil
 	}
 	out := []string{}
