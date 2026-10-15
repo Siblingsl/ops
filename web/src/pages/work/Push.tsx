@@ -11,7 +11,7 @@ import { ApiError, errorMessage, get, post, stream } from '@/lib/api'
 import { runeLen } from '@/lib/format'
 import { useCanWrite } from '@/lib/session'
 import type { CredState, CropBox, WechatDefaults, Work } from '@/lib/types'
-import { useWechatHtml } from './Preview'
+import { useWechatHtml } from '@/lib/wechat-html'
 import { useWork, WorkHeaderAction } from './WorkLayout'
 
 interface PushPreview {

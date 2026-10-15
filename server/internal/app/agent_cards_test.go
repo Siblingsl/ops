@@ -398,6 +398,19 @@ func TestAG06ContractRejectReturnsContinue(t *testing.T) {
 	if !payload.OK || !payload.BatchResolved || !payload.CanContinue {
 		t.Fatalf("拒绝响应应带批次与续跑状态：%s", body)
 	}
+	status, detailBody := env.do("GET", "/api/v1/agent/conversations/"+c.ID.String(), nil)
+	if status != 200 {
+		t.Fatalf("读取对话详情失败：%d %s", status, detailBody)
+	}
+	var detail struct {
+		CanContinue bool `json:"can_continue"`
+	}
+	if err := json.Unmarshal(detailBody, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if !detail.CanContinue {
+		t.Fatalf("刷新对话后应能恢复续跑入口：%s", detailBody)
+	}
 }
 
 // 判据 11（第 5.7 节、第 11.2 节）：二次确认的输入对象类型以 type_name 序列化。
@@ -419,5 +432,76 @@ func TestAG06ContractSecondConfirmTypeName(t *testing.T) {
 	}
 	if second["type_name"] != "account_name" {
 		t.Fatalf("二次确认类型应为 type_name=account_name：%+v", second)
+	}
+}
+
+func TestAG09PushHumanFieldsAllowInitialExecutionAndNeedsInputChoices(t *testing.T) {
+	tool := agentTool("wechat__push")
+	initial, err := agentHumanArgs(tool, agentExecuteRequest{})
+	if err != nil {
+		t.Fatalf("首次推送不应要求 needs_input choice：%v", err)
+	}
+	if initial["confirm_over_limit"] != false {
+		t.Fatalf("首次推送应明确不确认超限：%#v", initial)
+	}
+	if _, exists := initial["overwrite_choice"]; exists {
+		t.Fatalf("首次推送不应预选草稿处理方式：%#v", initial)
+	}
+
+	choice := &struct {
+		OverwriteChoice  string `json:"overwrite_choice"`
+		ConfirmOverLimit bool   `json:"confirm_over_limit"`
+	}{OverwriteChoice: "overwrite", ConfirmOverLimit: true}
+	selected, err := agentHumanArgs(tool, agentExecuteRequest{Choice: choice})
+	if err != nil {
+		t.Fatalf("已作出的需要选择应传给分发器：%v", err)
+	}
+	if selected["overwrite_choice"] != "overwrite" || selected["confirm_over_limit"] != true {
+		t.Fatalf("choice 未正确转换为人工字段：%#v", selected)
+	}
+}
+
+func TestAG09PushChoiceOnlyAllowedAfterNeedsInput(t *testing.T) {
+	server := &Server{}
+	pending := &agentActionRow{Status: "pending"}
+	if err := server.agentCheckChoice(pending, agentExecuteRequest{}); err != nil {
+		t.Fatalf("首次执行无 choice 应通过：%v", err)
+	}
+	choice := &struct {
+		OverwriteChoice  string `json:"overwrite_choice"`
+		ConfirmOverLimit bool   `json:"confirm_over_limit"`
+	}{OverwriteChoice: "overwrite"}
+	if err := server.agentCheckChoice(pending, agentExecuteRequest{Choice: choice}); err == nil {
+		t.Fatal("pending 卡片不应接收预选 choice")
+	}
+	needsInput := &agentActionRow{Status: "needs_input", Need: map[string]any{"kind": "draft_modified"}}
+	if err := server.agentCheckChoice(needsInput, agentExecuteRequest{Choice: choice}); err != nil {
+		t.Fatalf("needs_input 应接受有效覆盖选择：%v", err)
+	}
+}
+
+func TestAG06TopicCreateTargetKeyUsesCandidateIdentity(t *testing.T) {
+	server := &Server{}
+	tool := agentTool("topics__create")
+	accountID := uuid.NewString()
+	args := map[string]any{"accountId": accountID, "title": "标题 A", "angle": "从实践拆解"}
+	typ, firstKey, targetID, workID := server.agentActionTarget(context.Background(), tool, args)
+	if typ != "topic" || targetID != "" || workID != nil {
+		t.Fatalf("新选题卡应保留无已创建目标的语义：type=%q target=%q work=%v", typ, targetID, workID)
+	}
+	_, secondKey, _, _ := server.agentActionTarget(context.Background(), tool,
+		map[string]any{"accountId": accountID, "title": "标题 B", "angle": "从实践拆解"})
+	if firstKey == secondKey {
+		t.Fatalf("同一账号的不同选题候选不应冲突：%q", firstKey)
+	}
+	_, duplicateKey, _, _ := server.agentActionTarget(context.Background(), tool,
+		map[string]any{"accountId": accountID, "title": " 标题 A ", "angle": "从实践拆解"})
+	if firstKey != duplicateKey {
+		t.Fatalf("相同选题候选应得到稳定唯一键：%q != %q", firstKey, duplicateKey)
+	}
+	_, otherAccountKey, _, _ := server.agentActionTarget(context.Background(), tool,
+		map[string]any{"accountId": uuid.NewString(), "title": "标题 A", "angle": "从实践拆解"})
+	if firstKey == otherAccountKey {
+		t.Fatalf("不同账号的选题候选不应冲突：%q", firstKey)
 	}
 }

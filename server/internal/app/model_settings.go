@@ -489,6 +489,9 @@ func taskLabel(taskType string) string {
 	if taskType == "hot_search" {
 		return "原生联网搜索" // 服务商与模型由热点来源配置。
 	}
+	if taskType == "image_alt" {
+		return "图片替代文字建议"
+	}
 	for _, t := range taskTypes {
 		if t.Type == taskType {
 			return t.Label

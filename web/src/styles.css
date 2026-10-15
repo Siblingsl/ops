@@ -125,3 +125,19 @@ mark.hl.hl-active { background: var(--color-gamboge-300); box-shadow: 0 0 0 2px 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+/* D-117 agent Markdown is sanitized in agent-markdown.tsx; keep its elements readable without inline styles. */
+.agent-markdown > * + * { margin-top: 0.7rem; }
+.agent-markdown h3, .agent-markdown h4 { color: #263b3d; font-weight: 650; line-height: 1.35; }
+.agent-markdown h3 { font-size: 1.05rem; }
+.agent-markdown h4 { font-size: 0.96rem; }
+.agent-markdown ul, .agent-markdown ol { padding-left: 1.35rem; }
+.agent-markdown ul { list-style: disc; }
+.agent-markdown ol { list-style: decimal; }
+.agent-markdown blockquote { border-left: 3px solid #cbd5d3; padding-left: 0.75rem; color: #65716f; }
+.agent-markdown code { border-radius: 0.25rem; background: #f1f3f1; padding: 0.08rem 0.25rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+.agent-markdown pre { overflow-x: auto; border-radius: 0.65rem; background: #202b2c; padding: 0.75rem; color: #f4f6f5; }
+.agent-markdown pre code { background: transparent; padding: 0; color: inherit; }
+.agent-markdown a { color: #2f5d62; text-decoration: underline; text-underline-offset: 2px; }
+.agent-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.agent-markdown th, .agent-markdown td { border: 1px solid #e5e9e7; padding: 0.35rem 0.55rem; text-align: left; }
+.agent-markdown th { background: #f5f7f5; font-weight: 600; }

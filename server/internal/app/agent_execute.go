@@ -537,6 +537,8 @@ func agentIsBlankValue(v any) bool {
 }
 
 // agentFinalArgs 组装最终请求参数：冻结参数 + 用户修改（第 5.3 节第 7 项）。
+// client_payload 只在条目声明时并入；用户未改动的字段保持提出时的值。
+// agentFinalArgs 组装最终请求参数：冻结参数 + 用户修改（第 5.3 节第 7 项）。
 // client_payload 不进入参数校验：由分发器在参数校验后并入请求体（第 5.4 节），
 // 否则载荷字段会被当作「未声明的参数」拒绝。
 func agentFinalArgs(act *agentActionRow, t *AgentTool, edits map[string]any, payload map[string]any) map[string]any {
@@ -560,13 +562,13 @@ func agentHumanArgs(t *AgentTool, req agentExecuteRequest) (map[string]any, erro
 				return nil, apiErr(409, "agent_gate_ack_required", "请选择这项检查的处理方式")
 			}
 			out[h.Name] = req.Resolution
-		case "overwrite_choice", "confirm_over_limit":
-			if req.Choice == nil {
-				return nil, apiErr(409, "agent_gate_ack_required", "需要先在上一步做出选择")
-			}
-			if h.Name == "overwrite_choice" {
+		case "overwrite_choice":
+			if req.Choice != nil && req.Choice.OverwriteChoice != "" {
 				out[h.Name] = req.Choice.OverwriteChoice
-			} else {
+			}
+		case "confirm_over_limit":
+			out[h.Name] = false
+			if req.Choice != nil {
 				out[h.Name] = req.Choice.ConfirmOverLimit
 			}
 		default:
@@ -577,6 +579,9 @@ func agentHumanArgs(t *AgentTool, req agentExecuteRequest) (map[string]any, erro
 	}
 	// 开关类 human 字段在卡片确认时统一置真（H-07 的 confirm_published 等）。
 	for _, h := range t.Human {
+		if h.Name == "overwrite_choice" || h.Name == "confirm_over_limit" {
+			continue
+		}
 		if _, ok := out[h.Name]; !ok {
 			out[h.Name] = true
 		}

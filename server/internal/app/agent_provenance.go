@@ -258,8 +258,10 @@ func (set *agentSourceSet) match(kinds []string, value string) (agentProvenanceH
 		return agentProvenanceHit{Kind: "F"}, true
 	}
 	// 第 4.4 节第 4 项：段落正文例外，按空行拆分后逐段判定，且全部段落来自同一个来源。
-	var hit agentProvenanceHit
-	matched := false
+	// 当多个来源都包含某一段时（例如同一文本既在用户消息里、也在文本附件里），
+	// 逐段取命中来源的交集：只要存在单一来源覆盖全部段落即通过；
+	// 交集为空（不同段落分别只来自不同来源）才视为跨来源拼接而拒绝。
+	var common map[int]bool
 	for _, para := range strings.Split(value, "\n\n") {
 		if strings.TrimSpace(para) == "" {
 			continue
@@ -268,37 +270,55 @@ func (set *agentSourceSet) match(kinds []string, value string) (agentProvenanceH
 		if utf8.RuneCountInString(pn) < agentMinProvenanceChars {
 			continue
 		}
-		one, ok := set.matchParagraph(kinds, pn)
-		if !ok {
+		hits := set.matchParagraphIndexes(kinds, pn)
+		if len(hits) == 0 {
 			return agentProvenanceHit{}, false
 		}
-		if matched && (one.Kind != hit.Kind || one.AICallID != hit.AICallID) {
+		if common == nil {
+			common = hits
+		} else {
+			for idx := range common {
+				if !hits[idx] {
+					delete(common, idx)
+				}
+			}
+		}
+		if len(common) == 0 {
 			// 第 4.4 节第 4 项：不允许跨来源拼接。
 			return agentProvenanceHit{}, false
 		}
-		hit, matched = one, true
 	}
-	if !matched {
+	if common == nil {
 		// 全部段落都因过短而豁免。
 		return agentProvenanceHit{Kind: "F"}, true
 	}
-	return hit, true
+	// 取下标最小的公共来源，保持与来源遍历顺序一致的确定性。
+	best := -1
+	for idx := range common {
+		if best == -1 || idx < best {
+			best = idx
+		}
+	}
+	src := set.sources[best]
+	return agentProvenanceHit{Kind: src.Kind, AICallID: src.AICallID}, true
 }
 
-// matchParagraph 在来源集合里查找包含该归一化段落的候选（第 4.4 节第 3 项：
-// 必须是某一个候选文本的连续子串）。
-func (set *agentSourceSet) matchParagraph(kinds []string, norm string) (agentProvenanceHit, bool) {
-	for _, src := range set.sources {
+// matchParagraphIndexes 返回包含该归一化段落的全部来源下标（第 4.4 节第 3 项：
+// 必须是某一个候选文本的连续子串；同一来源命中多个候选只计一次）。
+func (set *agentSourceSet) matchParagraphIndexes(kinds []string, norm string) map[int]bool {
+	out := map[int]bool{}
+	for i, src := range set.sources {
 		if !agentKindAllowed(kinds, src.Kind) {
 			continue
 		}
 		for _, cand := range src.Norms {
 			if strings.Contains(cand, norm) {
-				return agentProvenanceHit{Kind: src.Kind, AICallID: src.AICallID}, true
+				out[i] = true
+				break
 			}
 		}
 	}
-	return agentProvenanceHit{}, false
+	return out
 }
 
 // agentKindAllowed 判断来源类别是否满足字段声明的类别组合（第 4.2 节）。

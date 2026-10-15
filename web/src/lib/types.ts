@@ -608,6 +608,7 @@ export interface UserPrefs {
   ux_events: boolean
   cost_tier: 'economy' | 'standard' | 'quality'
   saved_views: SavedView[]
+  agent_privacy_notice_seen?: boolean
 }
 
 export interface SavedView { id: string; name: string; page: string; query: string }

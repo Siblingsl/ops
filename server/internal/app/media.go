@@ -5,7 +5,6 @@ import (
 	"image"
 	"math"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -232,11 +231,7 @@ func (s *Server) reuseAsset(w http.ResponseWriter, r *http.Request) error {
 	newID := uuid.New()
 	ext := filepath.Ext(src.StoragePath)
 	rel := filepath.Join("assets", m.ID.String(), newID.String()+ext)
-	abs := filepath.Join(s.cfg.DataDir, rel)
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
+	if err := s.writeAssetFiles(filepath.ToSlash(rel), data, src.Mime); err != nil {
 		return err
 	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
@@ -248,7 +243,7 @@ func (s *Server) reuseAsset(w http.ResponseWriter, r *http.Request) error {
 		return s.touchContent(ctx, tx, m.ID)
 	})
 	if err != nil {
-		_ = os.Remove(abs)
+		removeAssetFiles(s.cfg.DataDir, filepath.ToSlash(rel))
 		return err
 	}
 	return ok(w, Asset{ID: newID, WorkID: m.ID, Mime: src.Mime, Width: width, Height: height, Bytes: len(data),

@@ -513,7 +513,7 @@ func (s *Server) agentInsertMessage(ctx context.Context, st *agentRunState, role
 		WHERE id=$1 RETURNING next_seq`, st.ConversationID).Scan(&seq); err != nil {
 		return nil, err
 	}
-	view := agentMessageView{Seq: seq, Role: role, Content: content, RunID: &st.RunID}
+	view := agentMessageView{Seq: seq, Role: role, Content: content, AICallID: callID, RunID: &st.RunID}
 	if err := s.db.QueryRow(ctx, `INSERT INTO agent_message
 		(conversation_id, seq, run_id, role, content, tool_calls, tool_call_id, tool_name, attachment_ids, ai_call_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, created_at`,

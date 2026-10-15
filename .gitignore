@@ -26,3 +26,7 @@ server/data/
 Thumbs.db
 .idea/
 .vscode/
+
+Reference_Projects/
+# 工具目录（工作记忆等）
+.workbuddy-ai/

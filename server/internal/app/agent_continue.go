@@ -379,6 +379,22 @@ func (s *Server) postAgentContinue(w http.ResponseWriter, r *http.Request) error
 	return s.agentStreamRun(w, r, conv, "continue")
 }
 
+// agentConversationCanContinue 暴露刷新后仍可恢复的续跑状态（第 6.4 节第 3 项）。
+func (s *Server) agentConversationCanContinue(ctx context.Context, conv *agentConversation) bool {
+	var batchID uuid.UUID
+	err := s.db.QueryRow(ctx, `SELECT batch_id FROM agent_action
+		WHERE conversation_id=$1 AND reported_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 1`, conv.ID).Scan(&batchID)
+	if errors.Is(err, pgx.ErrNoRows) || err != nil {
+		return false
+	}
+	act := &agentActionRow{ConversationID: conv.ID, BatchID: batchID}
+	if !s.agentCanContinue(ctx, act) {
+		return false
+	}
+	_, err = s.agentRunModel(ctx, conv)
+	return err == nil
+}
+
 // ---------- 重新生成与编辑（第 6.7 节第 1、2、3 项） ----------
 
 type agentLastUserMessage struct {

@@ -328,7 +328,16 @@ func (s *Server) deleteWord(w http.ResponseWriter, r *http.Request) error {
 func (s *Server) auditLogs(w http.ResponseWriter, r *http.Request) error {
 	q := r.URL.Query()
 	args := []any{}
-	where := "1=1"
+	where := "l.workspace_id=$1"
+	if r.URL.Path == "/api/v1/admin/audit-logs" {
+		where = "1=1"
+	} else {
+		id := ident(r.Context())
+		if id == nil {
+			return errUnauthenticated
+		}
+		args = append(args, id.WorkspaceID)
+	}
 	if a := q.Get("action"); a != "" {
 		args = append(args, a+"%")
 		where += fmt.Sprintf(" AND l.action LIKE $%d", len(args))

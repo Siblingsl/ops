@@ -1,4 +1,5 @@
 import { marked } from 'marked'
+import { getCustomTheme } from './custom-theme-state'
 import type { Asset, CustomTheme, Section } from './types'
 
 /**
@@ -145,14 +146,8 @@ export function customTheme(ct: CustomTheme): Theme {
   }
 }
 
-let activeCustom: CustomTheme | null = null
-/** setCustomTheme registers the current account's custom theme so that themeById('custom') resolves to it. */
-export function setCustomTheme(ct: CustomTheme | null) {
-  activeCustom = ct
-}
-
 export const themeById = (id: string | null | undefined): Theme =>
-  (id === CUSTOM_THEME_ID && activeCustom ? customTheme(activeCustom) : themes.find((t) => t.id === id)) ?? themes.find((t) => t.id === defaultThemeId)!
+  (id === CUSTOM_THEME_ID && getCustomTheme() ? customTheme(getCustomTheme()!) : themes.find((t) => t.id === id)) ?? themes.find((t) => t.id === defaultThemeId)!
 
 const allowedTags = new Set(['section', 'h2', 'h3', 'p', 'blockquote', 'ul', 'ol', 'li', 'strong', 'b', 'em', 'i', 'a', 'img', 'br', 'hr', 'span', 'del', 's'])
 const allowedAttrs = new Set(['href', 'src', 'alt', 'style'])

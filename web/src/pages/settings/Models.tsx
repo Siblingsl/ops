@@ -458,12 +458,12 @@ export default function Models() {
                 {p.price_per_1k_prompt != null && <span className="text-mist-400">¥{p.price_per_1k_prompt} / 千 token</span>}
                 {p.last_test_at && (p.last_test_ok ? <span className="flex items-center gap-1 text-ink-600"><CheckCircle2 className="size-3.5" />{fmtTime(p.last_test_at)} 测试通过</span>
                   : <span className="flex items-center gap-1 text-danger" title={p.last_test_result}><XCircle className="size-3.5" />测试失败</span>)}
-                {isOwner && (
+                {(isOwner || me?.role === 'editor') && (
                   <div className="ml-auto flex items-center gap-2">
-                    <Switch checked={p.status === 'active'} onChange={() => toggle(p)} label="启用" />
+                    {isOwner && <Switch checked={p.status === 'active'} onChange={() => toggle(p)} label="启用" />}
                     <Button size="sm" variant="ghost" icon={<Activity className="size-3.5" />} loading={selfTesting === p.id}
                       onClick={() => runSelfTest(p)} title="探测对话、JSON、流式、出图、联网搜索、工具调用与看图能力">自检</Button>
-                    <Button size="sm" variant="ghost" icon={<Plug className="size-3.5" />} loading={testing === p.id} onClick={() => test(p)}>测试</Button>
+                    {isOwner && <Button size="sm" variant="ghost" icon={<Plug className="size-3.5" />} loading={testing === p.id} onClick={() => test(p)}>测试</Button>}
                   </div>
                 )}
               </div>
@@ -478,7 +478,7 @@ export default function Models() {
       {isOwner && <WeeklyDraftCard />}
       {isOwner && dialog && <ProviderDialog editing={dialog.editing} onClose={() => setDialog(null)} />}
       {isOwner && quick && <QuickSetupDialog onClose={() => setQuick(false)} />}
-      {isOwner && selfTest && (
+      {selfTest && (
         <SelfTestDialog result={selfTest.result} onClose={() => setSelfTest(null)} />
       )}
     </div>

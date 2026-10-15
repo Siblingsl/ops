@@ -34,10 +34,7 @@ func (s *Server) duplicateWork(w http.ResponseWriter, r *http.Request) error {
 	committed := false
 	defer func() {
 		if !committed {
-			for _, path := range paths {
-				_ = os.Remove(filepath.Join(s.cfg.DataDir, filepath.FromSlash(path)))
-			}
-			_ = os.Remove(filepath.Join(s.cfg.DataDir, "assets", newID.String()))
+			_ = os.RemoveAll(filepath.Join(s.cfg.DataDir, "assets", newID.String()))
 		}
 	}()
 	for _, a := range src.Assets {
@@ -51,12 +48,8 @@ func (s *Server) duplicateWork(w http.ResponseWriter, r *http.Request) error {
 		}
 		id := uuid.New()
 		rel := filepath.Join("assets", newID.String(), id.String()+filepath.Ext(row.StoragePath))
-		abs := filepath.Join(s.cfg.DataDir, rel)
-		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-			return err
-		}
 		paths[a.ID] = filepath.ToSlash(rel)
-		if err := os.WriteFile(abs, data, 0o644); err != nil {
+		if err := s.writeAssetFiles(filepath.ToSlash(rel), data, row.Mime); err != nil {
 			return err
 		}
 		assets[a.ID] = id
@@ -108,8 +101,8 @@ func (s *Server) duplicateWork(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		for old, id := range assets {
-			if _, err := tx.Exec(ctx, `INSERT INTO asset(id,workspace_id,account_id,work_id,storage_path,mime,width,height,bytes,sha256,position,ai_generated,origin_asset_id)
-				SELECT $1,workspace_id,account_id,$2,$3,mime,width,height,bytes,sha256,position,ai_generated,id FROM asset WHERE id=$4`,
+			if _, err := tx.Exec(ctx, `INSERT INTO asset(id,workspace_id,account_id,work_id,storage_path,mime,width,height,bytes,sha256,position,ai_generated,origin_asset_id,alt_text)
+				SELECT $1,workspace_id,account_id,$2,$3,mime,width,height,bytes,sha256,position,ai_generated,id,alt_text FROM asset WHERE id=$4`,
 				id, newID, paths[old], old); err != nil {
 				return err
 			}

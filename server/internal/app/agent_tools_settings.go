@@ -26,6 +26,17 @@ var settingsTrashTypes = []string{"work", "topic", "material", "style_sample", "
 
 var agentToolsSettings = []AgentTool{
 	{
+		Name: "audit__list", Domain: "settings", Kind: toolR, Method: "GET", Path: "/audit-logs",
+		Description: "查看当前工作区的操作日志，可按动作筛选、按时间向前翻页。未能归属工作区的历史记录仅系统管理员可见。",
+		Params: []ToolParam{
+			pQueryF("action", strMax(60), false),
+			pQueryF("limit", intRange(1, 50), false),
+			pQueryF("before", `{"type":"string","format":"date-time"}`, false),
+		},
+		MinRole: roleViewer,
+		Target:  target("audit_log", ""),
+	},
+	{
 		Name: "models__providers", Domain: "settings", Kind: toolR, Method: "GET", Path: "/model-providers",
 		Description: "列出工作区的模型供应商，给出名称、模型、状态、能力与熔断状态。密钥只显示脱敏后的掩码。",
 		MinRole:     roleViewer,

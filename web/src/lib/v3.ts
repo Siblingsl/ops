@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { get, post, put } from './api'
-import { setCustomTheme } from './render'
+import { setCustomTheme } from './custom-theme-state'
 import type { AIJob, CustomTheme, Memory, UserPrefs, Work } from './types'
 
 /** waitJob polls a background AI job (ai_job) until it finishes; rejects on failure or cancellation. */
@@ -103,7 +103,7 @@ export function useRecentWorks(limit = 5): RecentItem[] {
 
 export const defaultPrefs: UserPrefs = {
   default_variants: 1, use_history: true, live_lint: true, ghost_text: true, ghost_key: 'Alt+/', auto_jump_next_empty: true,
-  focus_default: false, write_ending_first: false, ux_events: false, cost_tier: 'standard', saved_views: [],
+  focus_default: false, write_ending_first: false, ux_events: false, cost_tier: 'standard', saved_views: [], agent_privacy_notice_seen: false,
 }
 
 export const ghostKeys = ['Alt+/', 'Alt+.', 'Ctrl+.'] as const

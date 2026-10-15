@@ -269,8 +269,8 @@ type ag03Bootstrap struct {
 }
 
 type ag03ConversationList struct {
-	Items      []agentConversation `json:"items"`
-	NextCursor *string             `json:"next_cursor"`
+	Items      []agentConversationListItem `json:"items"`
+	NextCursor *string                     `json:"next_cursor"`
 }
 
 type ag03Detail struct {
@@ -521,6 +521,9 @@ func TestAG03ConversationCRUD(t *testing.T) {
 	if len(list.Items) < 2 || list.Items[0].ID != c2.ID {
 		t.Fatalf("置顶应排在最前：%+v", list.Items)
 	}
+	if list.Items[0].PendingActions != 0 || list.Items[0].HasActiveRun {
+		t.Fatalf("空对话列表汇总应无待处理卡片或运行：%+v", list.Items[0])
+	}
 	env.mustJSON(t, "GET", "/api/v1/agent/conversations?q="+url.QueryEscape("第一篇"), nil, &list)
 	if len(list.Items) != 1 || list.Items[0].ID != c1.ID {
 		t.Fatalf("按标题搜索失败：%+v", list.Items)
@@ -582,8 +585,9 @@ func TestAG03ConversationDetailWindow(t *testing.T) {
 	// 工具调用折叠
 	tc := env.createConversation(t, map[string]any{})
 	t.Cleanup(func() { deleteConversations(t, tc.ID) })
-	if _, err := env.srv.db.Exec(ctx, `INSERT INTO agent_message (conversation_id, seq, role, content, tool_calls)
-		VALUES ($1,1,'assistant','','[{"id":"tc1","name":"works__list","arguments":"{}"}]'::jsonb)`, tc.ID); err != nil {
+	callID := uuid.New()
+	if _, err := env.srv.db.Exec(ctx, `INSERT INTO agent_message (conversation_id, seq, role, content, tool_calls, ai_call_id)
+		VALUES ($1,1,'assistant','','[{"id":"tc1","name":"works__list","arguments":"{}"}]'::jsonb,$2)`, tc.ID, callID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := env.srv.db.Exec(ctx, `INSERT INTO agent_message (conversation_id, seq, role, content, tool_call_id, tool_name)
@@ -600,6 +604,9 @@ func TestAG03ConversationDetailWindow(t *testing.T) {
 	call := detail.Messages[0].ToolCalls[0]
 	if call.ID != "tc1" || call.Name != "works__list" || call.Summary != "作品列表（18 篇）" || call.ResultPreview != "作品列表（18 篇）" {
 		t.Fatalf("工具调用折叠错误：%+v", call)
+	}
+	if detail.Messages[0].AICallID == nil || *detail.Messages[0].AICallID != callID {
+		t.Fatalf("助手消息应返回对应 ai_call_id 以显示反馈入口：%+v", detail.Messages[0])
 	}
 }
 

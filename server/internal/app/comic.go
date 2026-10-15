@@ -264,11 +264,7 @@ func (s *Server) uploadCharacterRef(w http.ResponseWriter, r *http.Request) erro
 		ext = ".png"
 	}
 	rel := filepath.Join("assets", "chars", a.ID.String(), id.String()+ext)
-	abs := filepath.Join(s.cfg.DataDir, rel)
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
+	if err := s.writeAssetFiles(filepath.ToSlash(rel), data, mime); err != nil {
 		return err
 	}
 	old := cur.RefAssetID
@@ -284,7 +280,7 @@ func (s *Server) uploadCharacterRef(w http.ResponseWriter, r *http.Request) erro
 		return nil
 	})
 	if err != nil {
-		_ = os.Remove(abs)
+		removeAssetFiles(s.cfg.DataDir, filepath.ToSlash(rel))
 		return err
 	}
 	if old != nil {
@@ -330,7 +326,7 @@ func (s *Server) removeOrphanCharacterAsset(ctx context.Context, id uuid.UUID) {
 	if _, err := s.db.Exec(ctx, `DELETE FROM asset WHERE id=$1`, id); err != nil {
 		return
 	}
-	_ = os.Remove(filepath.Join(s.cfg.DataDir, filepath.FromSlash(path)))
+	removeAssetFiles(s.cfg.DataDir, path)
 }
 
 func (s *Server) loadPanels(ctx context.Context, workID uuid.UUID) ([]ComicPanel, error) {
@@ -988,17 +984,13 @@ func (s *Server) cloneWorkAsset(ctx context.Context, srcID, newWorkID, accountID
 		}
 	}
 	rel := filepath.Join("assets", newWorkID.String(), id.String()+ext)
-	abs := filepath.Join(s.cfg.DataDir, rel)
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return uuid.Nil, err
-	}
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
+	if err := s.writeAssetFiles(filepath.ToSlash(rel), data, mime); err != nil {
 		return uuid.Nil, err
 	}
 	if _, err := s.db.Exec(ctx, `INSERT INTO asset (id, workspace_id, account_id, work_id, storage_path, mime, width, height, bytes, sha256, position, ai_generated)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT coalesce(max(position),-1)+1 FROM asset WHERE work_id=$4),$11)`,
 		id, ident(ctx).WorkspaceID, accountID, newWorkID, filepath.ToSlash(rel), mime, width, height, len(data), sha, aiGen); err != nil {
-		_ = os.Remove(abs)
+		removeAssetFiles(s.cfg.DataDir, filepath.ToSlash(rel))
 		return uuid.Nil, err
 	}
 	return id, nil

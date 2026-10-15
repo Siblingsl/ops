@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  Activity, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronDown, ChevronRight, ChevronsUpDown, Clock, Cpu, Eye, FileText, Gauge, Images, Inbox, KeyRound,
+  Activity, BarChart3, Bell, BookOpen, Bot, CalendarDays, Check, ChevronDown, ChevronRight, ChevronsUpDown, Clock, Cpu, Eye, FileText, Gauge, Images, Inbox, KeyRound,
   LayoutDashboard, Lightbulb, LogOut, Pencil, Plus, Power, ScrollText, Search, Send, Settings2, Shield, ShieldAlert, SlidersHorizontal, Trash2,
   UserCircle2, UserPlus, Users,
 } from 'lucide-react'
@@ -8,8 +8,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { CommandPaletteHost } from '@/components/command-palette-host'
 import { confirm } from '@/components/dialog'
+import { CommandPaletteHost } from '@/components/command-palette-host'
 import { ErrorBoundary } from '@/components/error-boundary'
 import { NotificationBell } from '@/components/notifications'
 import { QuickCollect } from '@/components/quick-collect'
@@ -20,6 +20,7 @@ import { TodayUsage, useChromeMeta } from './today-usage'
 import { useAccounts, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
 import type { Account, Platform } from '@/lib/types'
 import { setUXEnabled, usePrefs, useRecentWorks } from '@/lib/v3'
+import { useAgentBootstrap } from '@/lib/agent'
 
 const nav: { end?: boolean; path: string; icon: typeof LayoutDashboard; label: string; mobile?: string }[] = [
   { end: true, path: '', icon: LayoutDashboard, label: '工作台', mobile: '工作台' },
@@ -44,6 +45,7 @@ const settingsItems: { to: string; icon: ReactNode; label: string; adminOnly?: b
   { to: '/settings/accounts', icon: <Users />, label: '平台账号与凭证' },
   { to: '/settings/members', icon: <Users />, label: '成员与邀请' },
   { to: '/settings/models', icon: <Cpu />, label: '模型配置' },
+  { to: '/settings/agent', icon: <Bot />, label: '智能体设置' },
   { to: '/settings/usage', icon: <Gauge />, label: 'AI 用量与成本' },
   { to: '/settings/quality', icon: <Activity />, label: 'AI 质量看板' },
   { to: '/settings/words', icon: <ShieldAlert />, label: '敏感词库' },
@@ -667,7 +669,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   )
 }
 
-function TopBar({ username, onLogout, dense }: { username?: string; onLogout: () => void; dense?: boolean }) {
+function TopBar({ username, onLogout, dense, showAgent }: { username?: string; onLogout: () => void; dense?: boolean; showAgent?: boolean }) {
   const meta = useChromeMeta(settingsItems)
   const acc = useCurrentAccount()
 
@@ -684,6 +686,7 @@ function TopBar({ username, onLogout, dense }: { username?: string; onLogout: ()
         <span className="truncate font-semibold text-mist-800">{meta.title}</span>
       </nav>
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        {showAgent && <Link to="/agent" aria-label="打开智能体" title="打开智能体" className="flex size-9 items-center justify-center rounded-full text-mist-500 hover:bg-mist-100 hover:text-ink-700 md:hidden"><Bot className="size-4" /></Link>}
         <button
           type="button"
           onClick={() => window.dispatchEvent(new Event('ops:palette'))}
@@ -705,9 +708,11 @@ function TopBar({ username, onLogout, dense }: { username?: string; onLogout: ()
 export default function Shell() {
   const acc = useCurrentAccount()
   const { data: me } = useMe()
+  const agentBootstrap = useAgentBootstrap()
   const qc = useQueryClient()
   const loc = useLocation()
-  const fullBleed = loc.pathname.startsWith('/works/')
+  const fullBleed = loc.pathname.startsWith('/works/') || loc.pathname.startsWith('/agent')
+  const showAgent = !!agentBootstrap.data && (agentBootstrap.data.can_use || agentBootstrap.data.reason === 'no_model')
   const base = acc ? `/a/${acc.id}` : '/'
   const prefs = usePrefs()
   useEffect(() => setUXEnabled(prefs.ux_events), [prefs.ux_events])
@@ -734,6 +739,7 @@ export default function Shell() {
         <Brand />
         <nav className="scrollbar-thin flex-1 space-y-1 overflow-y-auto px-3 pb-4">
           <div className="mb-1.5 px-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400">创作</div>
+          {showAgent && <NavItem to="/agent" icon={Bot}>智能体</NavItem>}
           {nav.map((item) => (
             <NavItem
               key={item.path || 'home'}
@@ -757,7 +763,7 @@ export default function Shell() {
         )}
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        {!focus && <TopBar username={me?.username} onLogout={logout} dense={fullBleed} />}
+        {!focus && <TopBar username={me?.username} onLogout={logout} dense={fullBleed} showAgent={showAgent} />}
         {me?.session_expires_at && Date.parse(me.session_expires_at) > timeNow && Date.parse(me.session_expires_at) - timeNow < 24 * 60 * 60 * 1000 && (
           <div role="status" className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12.5px] text-gamboge-800">
             会话将于 {fmtTime(me.session_expires_at, true)} 到期，请先保存后重新登录以续期。

@@ -23,6 +23,7 @@ interface UsageResp { group_by: string; from: string; to: string; rows: Row[]; t
 const day = (d: Date) => d.toISOString().slice(0, 10)
 const money = (v: number | null) => (v == null ? '—' : `¥${v < 1 ? v.toFixed(3) : v.toFixed(2)}`)
 const rate = (r: Row) => (r.adoption_rate == null ? '—' : `${Math.round(r.adoption_rate * 100)}%`)
+const taskLabels: Record<string, string> = { agent_chat: '智能体对话', agent_summary: '智能体摘要' }
 
 /** Usage and cost (P-18 / EX-P-03), with the quality board (EX-P-02) as a second tab. */
 export default function Usage() {
@@ -96,7 +97,7 @@ function UsageStats() {
               <tbody>
                 {data.rows.map((r) => (
                   <tr key={r.key} className="border-b border-mist-50">
-                    <td className="py-2.5 pl-5 text-mist-800">{r.key}</td>
+                    <td className="py-2.5 pl-5 text-mist-800">{group === 'task' ? taskLabels[r.key] ?? r.key : r.key}</td>
                     <td className="py-2.5 pr-4"><div className="h-2 rounded-full bg-ink-400/80" style={{ width: `${((r.prompt_tokens + r.completion_tokens) / max) * 100}%` }} /></td>
                     <td className="py-2.5 text-right tabular-nums">{r.calls}</td>
                     <td className="py-2.5 text-right tabular-nums text-mist-600">{fmtNum(r.prompt_tokens)}</td>

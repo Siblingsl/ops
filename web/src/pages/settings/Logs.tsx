@@ -17,7 +17,8 @@ const actionLabels: Record<string, string> = {
   check_resolve: '确认检查项', check_complete: '完成检查', review_adopt: '采纳复盘建议',
   model_provider_create: '添加模型供应商', model_provider_update: '修改模型供应商', model_provider_delete: '删除模型供应商', model_routes_update: '修改任务路由',
   settings_update: '修改设置', trash_restore: '从回收站恢复', trash_purge: '彻底删除', trash_expire: '回收站到期清理',
-  work_unlock: '解锁已发布作品', work_delete: '删除作品',
+  agent_settings_update: '修改智能体设置',
+  work_update: '修改作品', work_unlock: '解锁已发布作品', work_delete: '删除作品',
 }
 
 const filters = [
@@ -53,6 +54,7 @@ export default function Logs() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-[13.5px] font-medium text-mist-800">{actionLabels[l.action] ?? l.action}</span>
+                    {l.detail != null && typeof l.detail === 'object' && 'via_agent' in l.detail && l.detail.via_agent === true && <Badge tone="ink">来自智能体</Badge>}
                     {l.result !== 'ok' && <Badge tone="red">{l.result === 'failed' ? '失败' : l.result}</Badge>}
                   </div>
                   {l.detail != null && JSON.stringify(l.detail) !== '{}' && JSON.stringify(l.detail) !== 'null' && (

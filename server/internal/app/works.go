@@ -440,6 +440,52 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 	if err := s.applyWorkPlanning(ctx, m, workPlanning{in.PlannedDate, in.TargetChars, in.ReviewRequired, in.AssigneeID, in.ReviewerID, in.PostPushTodos}); err != nil {
 		return err
 	}
+	fields := []string{}
+	if in.Title != nil {
+		fields = append(fields, "title")
+	}
+	if in.Summary != nil {
+		fields = append(fields, "summary")
+	}
+	if in.Viewpoint != nil {
+		fields = append(fields, "viewpoint")
+	}
+	if in.Theme != nil {
+		fields = append(fields, "theme")
+	}
+	if in.ClearCover || in.CoverAssetID != nil || in.CoverCrops != nil {
+		fields = append(fields, "cover")
+	}
+	if in.WechatFields != nil {
+		fields = append(fields, "wechat_fields")
+	}
+	if in.Topics != nil {
+		fields = append(fields, "topics")
+	}
+	if in.Tags != nil {
+		fields = append(fields, "tags")
+	}
+	if in.MaterialIDs != nil {
+		fields = append(fields, "materials")
+	}
+	if in.PlannedDate != nil {
+		fields = append(fields, "planned_date")
+	}
+	if in.TargetChars != nil {
+		fields = append(fields, "target_chars")
+	}
+	if in.ReviewRequired != nil {
+		fields = append(fields, "review_required")
+	}
+	if in.AssigneeID != nil {
+		fields = append(fields, "assignee_id")
+	}
+	if in.ReviewerID != nil {
+		fields = append(fields, "reviewer_id")
+	}
+	if len(in.PostPushTodos) > 0 {
+		fields = append(fields, "post_push_todos")
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -559,6 +605,9 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
+	}
+	if len(fields) > 0 {
+		s.audit(ctx, "work_update", "work", m.ID.String(), "ok", map[string]any{"fields": fields})
 	}
 	return s.writeWork(w, r, m.ID)
 }

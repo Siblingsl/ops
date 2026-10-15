@@ -222,7 +222,6 @@ var agentRouteBlacklist = [][2]string{
 	{"DELETE", "/works/{id}/copilot"},
 	{"POST", "/sections/{id}/continue"},
 	{"PUT", "/panels/{id}/bubbles"},
-	{"GET", "/audit-logs"},
 }
 
 // validateAgentCatalog 执行第 3.7 节第 1 至 7 条的静态校验，返回全部违规项。

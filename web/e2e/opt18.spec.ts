@@ -17,11 +17,11 @@ test('OPT18 设置菜单默认仅显四个常用项，高级项可展开且命�
   await expect(advanced).toHaveAttribute('aria-expanded', 'false')
   await advanced.click()
   await expect(advanced).toHaveAttribute('aria-expanded', 'true')
-  for (const label of ['AI 用量与成本', 'AI 质量看板', '敏感词库', '提示词模板', '数据导出', '操作日志', '回收站', '登录与安全', '热点来源', '每日推荐设置']) {
+  for (const label of ['智能体设置', 'AI 用量与成本', 'AI 质量看板', '敏感词库', '提示词模板', '数据导出', '操作日志', '回收站', '登录与安全', '热点来源', '每日推荐设置']) {
     await expect(menu.getByRole('menuitem', { name: label, exact: true })).toBeVisible()
   }
   await expect(menu.getByRole('menuitem', { name: '热点采集与日志', exact: true })).toHaveCount(0)
-  await expect(menu.getByRole('menuitem')).toHaveCount(15)
+  await expect(menu.getByRole('menuitem')).toHaveCount(16)
 
   await userMenu.click()
   await page.keyboard.press('Control+k')

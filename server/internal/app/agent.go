@@ -261,6 +261,12 @@ type agentConversation struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
+type agentConversationListItem struct {
+	agentConversation
+	PendingActions int  `json:"pending_actions"`
+	HasActiveRun   bool `json:"has_active_run"`
+}
+
 const agentConversationCols = `c.id, c.title, c.title_source, c.pinned_at, c.model_provider_id, c.model,
 	c.account_id, c.last_message_at, c.created_at, c.updated_at`
 
@@ -371,21 +377,26 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	args = append(args, limit+1)
-	rows, err := s.db.Query(ctx, `SELECT `+agentConversationCols+` FROM agent_conversation c
+	rows, err := s.db.Query(ctx, `SELECT `+agentConversationCols+`,
+		(SELECT count(*) FROM agent_action a WHERE a.conversation_id=c.id AND a.status IN ('pending','needs_input')),
+		EXISTS (SELECT 1 FROM agent_run r WHERE r.conversation_id=c.id AND r.status IN ('queued','running'))
+		FROM agent_conversation c
 		WHERE c.workspace_id=$1 AND c.user_id=$2`+where+fmt.Sprintf(`
 		ORDER BY (c.pinned_at IS NULL), c.pinned_at DESC, c.last_message_at DESC, c.id DESC LIMIT $%d`, len(args)), args...)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	list := []agentConversation{}
+	list := []agentConversationListItem{}
 	for rows.Next() {
 		var c agentConversation
+		var summary agentConversationListItem
 		if err := rows.Scan(&c.ID, &c.Title, &c.TitleSource, &c.PinnedAt, &c.ModelProviderID, &c.Model,
-			&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &summary.PendingActions, &summary.HasActiveRun); err != nil {
 			return err
 		}
-		list = append(list, c)
+		summary.agentConversation = c
+		list = append(list, summary)
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -396,7 +407,7 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 	}
 	var nextCursor *string
 	if hasMore {
-		v := encodeAgentCursor(&list[len(list)-1])
+		v := encodeAgentCursor(&list[len(list)-1].agentConversation)
 		nextCursor = &v
 	}
 	return ok(w, map[string]any{"items": list, "next_cursor": nextCursor})
@@ -620,6 +631,7 @@ type agentMessageView struct {
 	Seq         int                   `json:"seq"`
 	Role        string                `json:"role"`
 	Content     string                `json:"content"`
+	AICallID    *uuid.UUID            `json:"ai_call_id"`
 	ToolCalls   []agentToolCallView   `json:"tool_calls"`
 	Attachments []agentAttachmentView `json:"attachments"`
 	RunID       *uuid.UUID            `json:"run_id"`
@@ -655,6 +667,7 @@ type agentCardPreview struct {
 
 type agentActionView struct {
 	ID             uuid.UUID       `json:"id"`
+	RunID          uuid.UUID       `json:"run_id"`
 	ToolName       string          `json:"tool_name"`
 	Title          string          `json:"title"`
 	Kind           string          `json:"kind"`
@@ -724,13 +737,14 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 	return ok(w, map[string]any{
 		"conversation": c, "messages": messages, "actions": actions, "usage": usage,
 		"active_run": active, "has_more": hasMore,
+		"can_continue": s.agentConversationCanContinue(ctx, c),
 	})
 }
 
 // agentMessages 返回窗口内的消息；role=tool 不单独列出，而是折叠为助手消息的工具调用摘要（第 11.2 节）。
 func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int) ([]agentMessageView, bool, error) {
 	args := []any{convID}
-	sql := `SELECT id, seq, role, content, tool_calls, tool_call_id, attachment_ids, run_id, created_at
+	sql := `SELECT id, seq, role, content, ai_call_id, tool_calls, tool_call_id, attachment_ids, run_id, created_at
 		FROM agent_message WHERE conversation_id=$1`
 	if before > 0 {
 		args = append(args, before)
@@ -753,7 +767,7 @@ func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int
 	for rows.Next() {
 		var m rawMessage
 		var toolCalls []byte
-		if err := rows.Scan(&m.view.ID, &m.view.Seq, &m.view.Role, &m.view.Content, &toolCalls,
+		if err := rows.Scan(&m.view.ID, &m.view.Seq, &m.view.Role, &m.view.Content, &m.view.AICallID, &toolCalls,
 			&m.toolID, &m.ids, &m.view.RunID, &m.view.CreatedAt); err != nil {
 			rows.Close()
 			return nil, false, err
@@ -850,7 +864,7 @@ func (s *Server) agentAttachments(ctx context.Context, ids []uuid.UUID) (map[uui
 }
 
 func (s *Server) agentActions(ctx context.Context, convID uuid.UUID) ([]agentActionView, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, tool_name, kind, gate, status, target_type, target_id, work_id,
+	rows, err := s.db.Query(ctx, `SELECT id, run_id, tool_name, kind, gate, status, target_type, target_id, work_id,
 		preview, editable_fields, blank_fields, need, result, error, last_error, expires_at, batch_id, created_at
 		FROM agent_action WHERE conversation_id=$1 ORDER BY created_at, id`, convID)
 	if err != nil {
@@ -868,7 +882,7 @@ func (s *Server) agentActions(ctx context.Context, convID uuid.UUID) ([]agentAct
 	return list, rows.Err()
 }
 
-const agentActionCols = `id, tool_name, kind, gate, status, target_type, target_id, work_id,
+const agentActionCols = `id, run_id, tool_name, kind, gate, status, target_type, target_id, work_id,
 	preview, editable_fields, blank_fields, need, result, error, last_error, expires_at, batch_id, created_at`
 
 // agentActionViewFrom 扫描一行 agent_action 并组装成前端 / SSE 用的卡片视图（第 11.2 节）。
@@ -883,7 +897,7 @@ func agentActionViewFrom(row pgx.Row) (*agentActionView, error) {
 		targetType string
 		targetID   string
 	)
-	if err := row.Scan(&a.ID, &a.ToolName, &a.Kind, &a.Gate, &a.Status, &targetType, &targetID, &workID,
+	if err := row.Scan(&a.ID, &a.RunID, &a.ToolName, &a.Kind, &a.Gate, &a.Status, &targetType, &targetID, &workID,
 		&preview, &a.EditableFields, &a.BlankFields, &need, &res, &errJSON, &lastErr,
 		&a.ExpiresAt, &a.BatchID, &a.CreatedAt); err != nil {
 		return nil, err

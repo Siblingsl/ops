@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  BarChart3, BookOpen, Building2, CalendarDays, Clock, FileText, GitBranch, Hash, History, Inbox, Keyboard, LayoutDashboard, Lightbulb,
+  BarChart3, BookOpen, Bot, Building2, CalendarDays, Clock, FileText, GitBranch, Hash, History, Inbox, Keyboard, LayoutDashboard, Lightbulb,
   Maximize2, Plus, Search, Settings2, ShieldCheck, Sparkles, Star, UserCircle2, type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -12,6 +12,7 @@ import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useAccounts, useCanWrite, useCurrentAccount, useMe } from '@/lib/session'
 import type { SearchHit, StarItem, Work } from '@/lib/types'
 import { fuzzyMatch, recentItems, rememberRecent, workCmd } from '@/lib/v3'
+import { useAgentBootstrap } from '@/lib/agent'
 import { Dialog } from './dialog'
 import { openQuickCollect } from './quick-collect'
 import { cn, Kbd, PlatformMark } from './ui'
@@ -48,6 +49,7 @@ export const shortcutList: { keys: string[]; label: string; group: string }[] = 
   { group: '写作', keys: ['Ctrl', 'J'], label: '打开 / 收起副驾驶' },
   { group: '写作', keys: ['F11'], label: '专注模式（也可用 Ctrl+Shift+F）' },
   { group: '写作', keys: ['Ctrl', 'S'], label: '立即保存并留一个手动版本' },
+  { group: '写作', keys: ['Ctrl', 'Z'], label: '撤销当前段落内的修改（不跨段落）' },
   { group: '写作', keys: ['1 / 2 / 3'], label: '在候选卡片里选第几个' },
   { group: '写作', keys: ['Esc'], label: '停止生成 / 放弃候选 / 关闭弹窗' },
 ]
@@ -91,6 +93,7 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
   const acc = useCurrentAccount()
   const { data: accounts } = useAccounts()
   const { data: me } = useMe()
+  const agentBootstrap = useAgentBootstrap()
   const canWrite = useCanWrite()
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -143,6 +146,18 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
   const commands = useMemo<Cmd[]>(() => {
     const base = acc ? `/a/${acc.id}` : ''
     const list: Cmd[] = []
+    if (agentBootstrap.data?.can_use || agentBootstrap.data?.reason === 'no_model') {
+      list.push({ id: 'agent-open', group: '页面', label: '打开智能体', icon: Bot, keywords: 'agent 对话 AI', run: () => go('/agent', '智能体') })
+    }
+    if (agentBootstrap.data?.can_use && agentBootstrap.data.role !== 'viewer') {
+      list.push({ id: 'agent-new', group: '操作', label: '新建智能体对话', icon: Bot, keywords: 'agent new chat', run: async () => {
+        onOpenChange(false)
+        try {
+          const conversation = await post<{ id: string }>('/agent/conversations', acc ? { account_id: acc.id } : {})
+          nav(`/agent/c/${conversation.id}`)
+        } catch (error) { toast.error(errorMessage(error)) }
+      } })
+    }
     if (work && workId) {
       const g = '本作品'
       work.sections.forEach((s, i) => list.push({
@@ -220,7 +235,7 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
     }
     return list
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [acc, accounts, canWrite, q, work, workId, me])
+  }, [acc, accounts, canWrite, q, work, workId, me, agentBootstrap.data])
 
   const items = useMemo(() => {
     const out: Cmd[] = []

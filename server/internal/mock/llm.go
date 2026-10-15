@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -183,6 +184,7 @@ func (l *LLM) Handler() http.Handler {
 		var sys, user string
 		images := 0
 		historyCalls := 0
+		handledCalls := 0
 		lastRole, lastContent := "", ""
 		for _, m := range req.Messages {
 			text, n := content(m.Content)
@@ -190,8 +192,12 @@ func (l *LLM) Handler() http.Handler {
 				sys += text
 			} else if m.Role == "user" {
 				user, images = text, n
+				handledCalls = 0
 			}
 			historyCalls += len(m.ToolCalls)
+			if m.Role == "assistant" {
+				handledCalls += len(m.ToolCalls)
+			}
 			lastRole, lastContent = m.Role, text
 		}
 		task := ""
@@ -219,7 +225,7 @@ func (l *LLM) Handler() http.Handler {
 		case task == "agent_summary":
 			reply = "对话历史摘要：用户正在整理账号内容，之前的结论与待办保持不变。"
 		case task == "agent_chat":
-			reply, calls = l.agentChat(user, lastRole, lastContent, toolsSent, historyCalls, noTools)
+			reply, calls = l.agentChat(user, lastRole, lastContent, toolsSent, historyCalls, handledCalls, noTools)
 		case strings.Contains(user, "任务：metric_screenshot"):
 			if images == 0 {
 				w.WriteHeader(400)
@@ -275,8 +281,9 @@ func (l *LLM) Handler() http.Handler {
 		if len(calls) > 0 {
 			// 工具调用分片下发：先给 id/name，再逐段给 arguments，供适配层验证按 index 累积。
 			for i, c := range calls {
+				callID := nextMockToolCallID()
 				writeSSE(w, fl, map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{
-					"tool_calls": []any{map[string]any{"index": i, "id": fmt.Sprintf("call_mock_%d", i+1), "type": "function",
+					"tool_calls": []any{map[string]any{"index": i, "id": callID, "type": "function",
 						"function": map[string]any{"name": c.Name, "arguments": ""}}},
 				}}}})
 				for _, piece := range splitPieces(c.Arguments, 8) {
@@ -349,9 +356,9 @@ func splitPieces(s string, n int) []string {
 // toolCallsJSON renders tool calls in the OpenAI response shape.
 func toolCallsJSON(calls []mockToolCall) []any {
 	out := make([]any, 0, len(calls))
-	for i, c := range calls {
+	for _, c := range calls {
 		out = append(out, map[string]any{
-			"id": fmt.Sprintf("call_mock_%d", i+1), "type": "function",
+			"id": nextMockToolCallID(), "type": "function",
 			"function": map[string]any{"name": c.Name, "arguments": c.Arguments},
 		})
 	}
@@ -361,13 +368,34 @@ func toolCallsJSON(calls []mockToolCall) []any {
 // agentToolRe matches a "#tool name {json}" test instruction line.
 var agentToolRe = regexp.MustCompile(`^#tool\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+(\{.*\}))?\s*$`)
 
-// parseAgentInstructions reads the #tool / #text test instructions from the last user message.
-func parseAgentInstructions(user string) ([]mockToolCall, string) {
+// agentRepeatRe matches a "#repeat name {json}" instruction line: the call is
+// returned on every round (used to reach limits such as the round cap in tests).
+var agentRepeatRe = regexp.MustCompile(`^#repeat\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+(\{.*\}))?\s*$`)
+
+var mockToolCallSequence atomic.Uint64
+
+func nextMockToolCallID() string { return fmt.Sprintf("call_mock_%d", mockToolCallSequence.Add(1)) }
+
+// parseAgentInstructions reads the #tool / #repeat / #text test instructions from the last user message.
+func parseAgentInstructions(user string, handledCalls int) ([]mockToolCall, string) {
 	var calls []mockToolCall
 	var texts []string
 	for _, raw := range strings.Split(user, "\n") {
 		line := strings.TrimSpace(raw)
+		if m := agentRepeatRe.FindStringSubmatch(line); m != nil {
+			// 持续调用指令：每轮都重新返回，不参与已处理去重（用于轮次上限等场景）。
+			args := m[2]
+			if args == "" {
+				args = "{}"
+			}
+			calls = append(calls, mockToolCall{Name: m[1], Arguments: args})
+			continue
+		}
 		if m := agentToolRe.FindStringSubmatch(line); m != nil {
+			if handledCalls > 0 {
+				handledCalls--
+				continue
+			}
 			args := m[2]
 			if args == "" {
 				args = "{}"
@@ -383,12 +411,15 @@ func parseAgentInstructions(user string) ([]mockToolCall, string) {
 }
 
 // agentChat answers one agent_chat round (16 文档第 13.4 节第 1、2 项).
-func (l *LLM) agentChat(user, lastRole, lastContent string, toolsSent bool, historyCalls int, noTools bool) (string, []mockToolCall) {
+func (l *LLM) agentChat(user, lastRole, lastContent string, toolsSent bool, historyCalls, handledCalls int, noTools bool) (string, []mockToolCall) {
 	// 卡片说明轮：本轮不发送工具定义，也没有 tool_choice。
 	if !toolsSent && historyCalls > 0 {
 		return fmt.Sprintf("已为你准备了 %d 张卡片。", historyCalls), nil
 	}
-	calls, text := parseAgentInstructions(user)
+	if lastRole == "user" && strings.HasPrefix(lastContent, "以下是用户在操作卡片上的处理结果（系统生成，不是用户的话）") {
+		return "我已核对操作结果，当前批次处理完毕。", nil
+	}
+	calls, text := parseAgentInstructions(user, handledCalls)
 	if len(calls) > 0 {
 		if noTools {
 			return "本模型不支持工具调用，无法执行这一步。", nil

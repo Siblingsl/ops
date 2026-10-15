@@ -84,7 +84,7 @@ var agentToolsAccounts = []AgentTool{
 			pPath("accountId"),
 			pBodyF("name", strMinMax(1, 60), false),
 			pBodyF("type_note", strMax(200), false),
-			pBodyF("daily_push_limit", intRange(0, 100), false),
+			pBodyF("daily_push_limit", intRange(1, 20), false),
 			pBodyF("metrics_wechat_auto", schemaBool, false),
 		},
 		MinRole: roleOwner,

@@ -60,9 +60,9 @@ func TestAG05RoundLimit(t *testing.T) {
 	c := env.agentRunConversation(t, pid)
 	defer deleteConversations(t, c.ID)
 
-	// 每轮都重新下达同样两个指令：加载领域 + 读取作品列表。
-	text := "#tool load_tool_domain {\"domain\":\"works\"}\n" +
-		"#tool works__list {\"accountId\":\"" + acc.wechat.ID.String() + "\"}"
+	// 每轮都重新下达同样两个指令（#repeat：持续返回直到轮次用尽）。
+	text := "#repeat load_tool_domain {\"domain\":\"works\"}\n" +
+		"#repeat works__list {\"accountId\":\"" + acc.wechat.ID.String() + "\"}"
 	evs := env.sse(t, agentRunPath(c, "messages"), map[string]any{"text": text})
 	if len(evs) == 0 {
 		t.Fatal("没有收到 SSE 事件")

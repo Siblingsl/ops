@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -202,7 +204,20 @@ func (s *Server) agentActionTarget(ctx context.Context, t *AgentTool, args map[s
 			workID = s.agentWorkIDOf(ctx, u)
 		}
 	}
-	return typ, typ + ":" + id, targetID, workID
+	if t.Name == "topics__create" {
+		accountID := agentArgStr(args, "accountId")
+		if parsed, err := uuid.Parse(accountID); err == nil {
+			accountID = parsed.String()
+		}
+		candidate := strings.ToLower(strings.TrimSpace(agentArgStr(args, "title"))) + "\x00" +
+			strings.ToLower(strings.TrimSpace(agentArgStr(args, "angle")))
+		sum := sha256.Sum256([]byte(accountID + "\x00" + candidate))
+		key = typ + ":" + hex.EncodeToString(sum[:])
+	}
+	if key == "" {
+		key = typ + ":" + id
+	}
+	return typ, key, targetID, workID
 }
 
 // agentWorkIDOf 解析段落 / 分镜 / 版本 / 段落修订所属的作品。

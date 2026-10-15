@@ -515,8 +515,12 @@ func spaHandler(dir string) http.Handler {
 
 func (s *Server) audit(ctx context.Context, action, targetType, targetID, result string, detail map[string]any) {
 	var actor *uuid.UUID
+	var workspace *uuid.UUID
 	if id := ident(ctx); id != nil {
 		actor = &id.UserID
+		if id.WorkspaceID != uuid.Nil {
+			workspace = &id.WorkspaceID
+		}
 	}
 	if detail == nil {
 		detail = map[string]any{}
@@ -533,8 +537,8 @@ func (s *Server) audit(ctx context.Context, action, targetType, targetID, result
 	}
 	b, _ := json.Marshal(detail)
 	if _, err := s.db.Exec(context.WithoutCancel(ctx),
-		`INSERT INTO audit_log (actor_id, action, target_type, target_id, result, detail) VALUES ($1,$2,$3,$4,$5,$6)`,
-		actor, action, targetType, targetID, result, b); err != nil {
+		`INSERT INTO audit_log (actor_id, workspace_id, action, target_type, target_id, result, detail) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		actor, workspace, action, targetType, targetID, result, b); err != nil {
 		slog.Error("写操作日志失败", "err", err)
 	}
 }

@@ -161,6 +161,14 @@ func TestAG06ParagraphSingleSource(t *testing.T) {
 	if _, ok := set.match(kinds, "第一段的正文内容\n\n别处的文字"); ok {
 		t.Fatal("跨来源拼接不应该通过")
 	}
+	// 段 1 同时命中两个来源、段 2 只命中其一：应取交集（存在单一来源覆盖全部段落），不得误判为跨来源。
+	set2 := &agentSourceSet{sources: []agentSource{
+		{Kind: agentSrcUser, AICallID: uuid.Nil, Norms: []string{"第一段的正文内容"}},
+		{Kind: agentSrcG, AICallID: uuid.New(), Norms: []string{"第一段的正文内容", "第二段的正文内容"}},
+	}}
+	if hit, ok := set2.match(kinds, "第一段的正文内容\n\n第二段的正文内容"); !ok || hit.Kind != agentSrcG {
+		t.Fatalf("段 1 命中多来源、段 2 命中其一时应取交集并返回 G：%v %v", hit, ok)
+	}
 	if _, ok := set.match(nil, "无"); !ok {
 		t.Fatal("短值应按 F 放行")
 	}

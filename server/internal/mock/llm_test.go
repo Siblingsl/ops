@@ -166,6 +166,68 @@ func TestAgentChatToolInstructions(t *testing.T) {
 	}
 }
 
+// #repeat 指令：每轮都重新返回（不受已处理去重影响），用于轮次上限等场景。
+func TestAgentChatRepeatInstruction(t *testing.T) {
+	h := (&LLM{}).Handler()
+	// 历史中已有两个被处理的调用（handledCalls=2），#repeat 仍应返回。
+	res := chat(t, h, map[string]any{
+		"model": "mock", "stream": true,
+		"tools": []any{tool("load_tool_domain")},
+		"messages": []any{
+			userMsg("任务：agent_chat\n#repeat load_tool_domain {\"domain\":\"works\"}"),
+			map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{
+				map[string]any{"id": "call_1", "type": "function", "function": map[string]any{"name": "load_tool_domain", "arguments": `{"domain":"works"}`}},
+				map[string]any{"id": "call_2", "type": "function", "function": map[string]any{"name": "load_tool_domain", "arguments": `{"domain":"works"}`}},
+			}},
+			map[string]any{"role": "tool", "tool_call_id": "call_1", "content": `{"ok":true}`},
+			map[string]any{"role": "tool", "tool_call_id": "call_2", "content": `{"ok":true}`},
+		},
+	})
+	if len(res.Calls) != 1 || res.Calls[0].Name != "load_tool_domain" {
+		t.Fatalf("已处理去重后 #repeat 仍应返回调用：%+v", res.Calls)
+	}
+}
+
+func TestAgentChatDoesNotRepeatConsumedToolInstructions(t *testing.T) {
+	h := (&LLM{}).Handler()
+	assistant := map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{
+		map[string]any{"id": "call_1", "type": "function", "function": map[string]any{"name": "load_tool_domain", "arguments": `{"domain":"writing"}`}},
+		map[string]any{"id": "call_2", "type": "function", "function": map[string]any{"name": "outline__generate", "arguments": `{"id":"work-id"}`}},
+	}}
+	res := chat(t, h, map[string]any{
+		"model": "mock", "stream": true,
+		"tools": []any{tool("load_tool_domain"), tool("outline__generate")},
+		"messages": []any{
+			userMsg("任务：agent_chat\n#tool load_tool_domain {\"domain\":\"writing\"}\n#tool outline__generate {\"id\":\"work-id\"}"),
+			assistant,
+			map[string]any{"role": "tool", "tool_call_id": "call_1", "content": `{"ok":true}`},
+			map[string]any{"role": "tool", "tool_call_id": "call_2", "content": `{"items":[{"heading":"结论","key_point":"结果"}]}`},
+		},
+	})
+	if len(res.Calls) != 0 {
+		t.Fatalf("同一用户指令已执行后不应重复调用：%+v", res.Calls)
+	}
+}
+
+func TestAgentChatToolCallIDsAreUniqueAcrossRequests(t *testing.T) {
+	h := (&LLM{}).Handler()
+	request := func(value string) chatResult {
+		return chat(t, h, map[string]any{
+			"model": "mock", "stream": true,
+			"tools":    []any{tool("works__read")},
+			"messages": []any{userMsg("任务：agent_chat\n#tool works__read {\"id\":\"" + value + "\"}")},
+		})
+	}
+	first := request("one")
+	second := request("two")
+	if len(first.Calls) != 1 || len(second.Calls) != 1 {
+		t.Fatalf("两次请求都应产生一个工具调用：first=%+v second=%+v", first.Calls, second.Calls)
+	}
+	if first.Calls[0].ID == second.Calls[0].ID {
+		t.Fatalf("不同模型请求的工具调用 ID 必须唯一：%q", first.Calls[0].ID)
+	}
+}
+
 // 判据 2：#text 指令返回纯文字。
 func TestAgentChatTextInstruction(t *testing.T) {
 	h := (&LLM{}).Handler()
@@ -200,6 +262,27 @@ func TestAgentChatCardExplanationRound(t *testing.T) {
 	}
 	if len(res.Calls) != 0 {
 		t.Fatalf("说明轮不应再返回工具调用：%+v", res.Calls)
+	}
+}
+
+func TestAgentChatContinuationReportsResolvedActionsInsteadOfRepeatingScript(t *testing.T) {
+	h := (&LLM{}).Handler()
+	assistant := map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{
+		map[string]any{"id": "call_1", "type": "function", "function": map[string]any{"name": "topics__create", "arguments": "{}"}},
+	}}
+	res := chat(t, h, map[string]any{
+		"model": "mock", "stream": true,
+		"tools": []any{tool("topics__create")},
+		"messages": []any{
+			map[string]any{"role": "system", "content": "任务：agent_chat"},
+			userMsg("任务：agent_chat\n#tool topics__create {\"title\":\"已处理选题\"}"),
+			assistant,
+			map[string]any{"role": "tool", "tool_call_id": "call_1", "content": "{\"status\":\"pending_user_confirmation\"}"},
+			userMsg("以下是用户在操作卡片上的处理结果（系统生成，不是用户的话）\n操作结果：选题已入库"),
+		},
+	})
+	if len(res.Calls) != 0 || !strings.Contains(res.Content, "操作结果") {
+		t.Fatalf("续跑应汇报结果而非重复脚本：%q calls=%+v", res.Content, res.Calls)
 	}
 }
 

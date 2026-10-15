@@ -10,7 +10,6 @@ import (
 	"image/draw"
 	"image/png"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -70,11 +69,7 @@ func (s *Server) storeProcessedAsset(ctx context.Context, workID, accountID uuid
 		ext = ".png"
 	}
 	rel := filepath.Join("assets", workID.String(), id.String()+ext)
-	abs := filepath.Join(s.cfg.DataDir, rel)
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return Asset{}, err
-	}
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
+	if err := s.writeAssetFiles(filepath.ToSlash(rel), data, mime); err != nil {
 		return Asset{}, err
 	}
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
@@ -86,7 +81,7 @@ func (s *Server) storeProcessedAsset(ctx context.Context, workID, accountID uuid
 		return s.touchContent(ctx, tx, workID)
 	})
 	if err != nil {
-		_ = os.Remove(abs)
+		removeAssetFiles(s.cfg.DataDir, filepath.ToSlash(rel))
 		return Asset{}, err
 	}
 	return Asset{

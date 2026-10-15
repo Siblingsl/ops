@@ -18,7 +18,9 @@ const Ops = lazy(() => import('./pages/Ops'))
 const SearchPage = lazy(() => import('./pages/Search'))
 const SharePage = lazy(() => import('./pages/Share'))
 const ImagesPage = lazy(() => import('./pages/Images'))
+const Agent = lazy(() => import('./pages/Agent'))
 const SettingsAccounts = lazy(() => import('./pages/settings/Accounts'))
+const AgentSettings = lazy(() => import('./pages/settings/Agent'))
 const Logs = lazy(() => import('./pages/settings/Logs'))
 const Members = lazy(() => import('./pages/settings/Members'))
 const Models = lazy(() => import('./pages/settings/Models'))
@@ -88,6 +90,8 @@ function Authed() {
         <Route path="search" element={<S><SearchPage /></S>} />
         <Route path="share" element={<S><SharePage /></S>} />
         <Route path="images" element={<S><ImagesPage /></S>} />
+        <Route path="agent" element={<S><Agent /></S>} />
+        <Route path="agent/c/:conversationId" element={<S><Agent /></S>} />
         <Route path="works/:workId" element={<S><WorkLayout /></S>}>
           <Route index element={<S><Editor /></S>} />
           <Route path="compare" element={<S><Compare /></S>} />
@@ -114,6 +118,7 @@ function Authed() {
           <Route path="crawl" element={<S><CrawlSettings /></S>} />
           <Route path="hot-sources" element={<S><HotSources /></S>} />
  <Route path="daily" element={<S><DailySettings /></S>} />
+          <Route path="agent" element={<S><AgentSettings /></S>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

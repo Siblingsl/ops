@@ -128,7 +128,7 @@ function ExtractDrawer({ open, onClose, accountId }: { open: boolean; onClose: (
   const [dropped, setDropped] = useState<Record<number, boolean>>({})
   const [callId, setCallId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const jobs = useQuery({ queryKey: ['ai-jobs', 'extract'], queryFn: () => get<AIJob[]>('/ai-jobs'), enabled: open })
+  const jobs = useQuery({ queryKey: ['ai-jobs', 'extract'], queryFn: () => get<AIJob[]>('/ai-jobs'), enabled: open, staleTime: 0 })
   const lastJob = (jobs.data ?? []).find((j) => j.task_type === 'material_extract' && j.status === 'done')
   const run = async () => {
     setBusy(true)

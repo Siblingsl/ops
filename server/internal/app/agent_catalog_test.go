@@ -133,7 +133,6 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/client-errors",
 		"GET /api/v1/works/{id}/presence",
 		"POST /api/v1/works/{id}/presence",
-		"GET /api/v1/audit-logs",
 		"GET /api/v1/healthz",
 		"GET /healthz",
 		"GET /api/v1/auth/status",
@@ -176,8 +175,8 @@ func TestAG04CatalogShape(t *testing.T) {
 		}
 	}
 	// 附录 A 共 277 条，加第 3.3 节的 4 个元工具。
-	if len(agentCatalog()) != 281 {
-		t.Fatalf("目录条目数 %d，期望 281（附录 A 277 条 + 元工具 4 条）", len(agentCatalog()))
+	if len(agentCatalog()) != 282 {
+		t.Fatalf("目录条目数 %d，期望 282（附录 A 278 条 + 元工具 4 条）", len(agentCatalog()))
 	}
 	for _, d := range agentDomains {
 		if counts[d.Name] == 0 {
