@@ -399,3 +399,25 @@ func TestAG06ContractRejectReturnsContinue(t *testing.T) {
 		t.Fatalf("拒绝响应应带批次与续跑状态：%s", body)
 	}
 }
+
+// 判据 11（第 5.7 节、第 11.2 节）：二次确认的输入对象类型以 type_name 序列化。
+func TestAG06ContractSecondConfirmTypeName(t *testing.T) {
+	pid := env.ensureToolModel(t)
+	acc := env.accounts(t)
+	c := env.agentRunConversation(t, pid)
+	defer deleteConversations(t, c.ID)
+
+	evs := env.sse(t, agentRunPath(c, "messages"), map[string]any{"text": "删除这个账号\n" +
+		agentLoadDomain("accounts") + "\n#tool accounts__delete {\"accountId\":\"" + acc.wechat.ID.String() + "\"}"})
+	action := findActionEvent(t, evs)
+	if action == nil {
+		t.Fatal("应提出 accounts__delete 卡片")
+	}
+	second, ok := action.SecondConfirm.(map[string]any)
+	if !ok {
+		t.Fatalf("二次确认应为对象：%+v", action.SecondConfirm)
+	}
+	if second["type_name"] != "account_name" {
+		t.Fatalf("二次确认类型应为 type_name=account_name：%+v", second)
+	}
+}

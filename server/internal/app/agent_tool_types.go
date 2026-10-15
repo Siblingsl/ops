@@ -56,7 +56,7 @@ type HumanField struct {
 // SecondConfirm 描述不可逆操作的二次确认方式（16 文档第 5.7 节）。
 // TypeName 为空表示输入用户名。
 type SecondConfirm struct {
-	TypeName string
+	TypeName string `json:"type_name"`
 }
 
 // TargetRule 从参数得出目标对象，用于卡片唯一性、预览与链接。
