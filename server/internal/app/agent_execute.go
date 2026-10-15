@@ -537,7 +537,8 @@ func agentIsBlankValue(v any) bool {
 }
 
 // agentFinalArgs 组装最终请求参数：冻结参数 + 用户修改（第 5.3 节第 7 项）。
-// client_payload 只在条目声明时并入；用户未改动的字段保持提出时的值。
+// client_payload 不进入参数校验：由分发器在参数校验后并入请求体（第 5.4 节），
+// 否则载荷字段会被当作「未声明的参数」拒绝。
 func agentFinalArgs(act *agentActionRow, t *AgentTool, edits map[string]any, payload map[string]any) map[string]any {
 	out := map[string]any{}
 	for k, v := range act.Params {
@@ -545,11 +546,6 @@ func agentFinalArgs(act *agentActionRow, t *AgentTool, edits map[string]any, pay
 	}
 	for k, v := range edits {
 		out[k] = v
-	}
-	if t.ClientPayload != "" {
-		for k, v := range payload {
-			out[k] = v
-		}
 	}
 	return out
 }

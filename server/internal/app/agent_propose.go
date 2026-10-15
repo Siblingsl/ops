@@ -193,7 +193,10 @@ func (s *Server) agentActionTarget(ctx context.Context, t *AgentTool, args map[s
 		}
 	} else if u, err := uuid.Parse(id); err == nil {
 		switch typ {
-		case "work", "account", "series", "material", "topic":
+		case "work":
+			// 作品即目标对象：work_id 记录作品自身，正文类唯一规则（第 5.5 节）依赖它。
+			workID = &u
+		case "account", "series", "material", "topic":
 			// 直接以参数 ID 为目标。
 		default:
 			workID = s.agentWorkIDOf(ctx, u)
