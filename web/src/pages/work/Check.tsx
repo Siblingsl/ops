@@ -11,7 +11,7 @@ import { ApiError, errorMessage, get, patch, post } from '@/lib/api'
 import { htmlStats, renderWechat } from '@/lib/render'
 import { useCanWrite, useMe } from '@/lib/session'
 import type { CheckItem, CheckRun, ComicPanel, Section, Variant, Work } from '@/lib/types'
-import { useWork } from './WorkLayout'
+import { useWork, WorkHeaderAction } from './WorkLayout'
 
 interface FixResp { item_id: string; sentence: string; section_id: string | null; variants: Variant[]; ai_call_id: string }
 
@@ -228,9 +228,10 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
   }
   const fieldLink = item.location.field === 'title' || item.location.field === 'summary' ? '#step-title' : item.location.field === 'cover' || item.location.field === 'images' ? '#step-images' : ''
   return (
-    <div onClick={onPick} className={cn('cursor-pointer rounded-lg border p-3 transition',
+    <div className={cn('rounded-lg border p-3 transition',
       active ? 'border-gamboge-300 bg-gamboge-50/60 ring-3 ring-gamboge-100' : done ? 'border-mist-200 bg-white' : isFormat ? 'border-orange-200 bg-orange-50/40' : 'border-mist-200 bg-white hover:border-mist-300')}>
-      <div className="flex items-start gap-2">
+      <button type="button" aria-label={`定位检查项：${item.message}`} onClick={onPick}
+        className="flex w-full cursor-pointer items-start gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ink-400">
         {isFormat ? (item.passed ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-ink-500" /> : <XCircle className="mt-0.5 size-4 shrink-0 text-danger" />)
           : done ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-ink-500" /> : <AlertTriangle className="mt-0.5 size-4 shrink-0 text-gamboge-500" />}
         <div className="min-w-0 flex-1">
@@ -240,52 +241,55 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
           </div>
           {item.detail && <p className="mt-1 text-[12.5px] leading-relaxed text-mist-500">{item.detail}</p>}
           {item.matched_text && item.category === 'fact' && <p className="mt-1.5 rounded bg-sky-50 px-2 py-1 text-[12.5px] text-sky-800">「{item.matched_text}」</p>}
+          {item.location.material_support && <p className="mt-1.5 rounded bg-ink-50 px-2 py-1 text-[12px] text-ink-700">关联素材引句：「{item.location.material_support.quote}」</p>}
           {item.location.label && <p className="mt-1 text-[11.5px] text-mist-400">位置：{item.location.label}{item.location.found === false && '（未在正文中定位到原文）'}</p>}
-          {isFormat && !item.passed && (
-            <p className="mt-1.5 text-[12px] font-medium text-danger">
-              格式问题必须修改，不能保留。{fieldLink && <Link to={`/works/${workId}${fieldLink}`} className="underline">去修改</Link>}
-            </p>
-          )}
-          {!disabled && !done && item.location.section_id && (onEditInPlace || canFix) && (
-            <div className="mt-2 flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
-              {onEditInPlace && <Button size="sm" variant="ghost" icon={<PenLine className="size-3" />} onClick={onEditInPlace}>在原文中修改</Button>}
-              {canFix && <Button size="sm" variant="ghost" icon={<Sparkles className="size-3" />} loading={fixBusy} onClick={suggest}>建议改法</Button>}
-            </div>
-          )}
-          {fix && (
-            <div className="mt-2 space-y-1.5 rounded-lg border border-ink-100 bg-ink-50/40 p-2" onClick={(e) => e.stopPropagation()}>
-              <p className="text-[11.5px] text-mist-500">原句：{fix.sentence}</p>
-              {fix.variants.map((v, i) => (
-                <div key={i} className="rounded-md bg-white p-2 text-[12.5px]">
-                  <p className="leading-relaxed text-mist-800">{v.text}</p>
-                  {v.note && <p className="mt-0.5 text-[11px] text-mist-400">{v.note}</p>}
-                  <div className="mt-1 flex justify-end">
-                    <Button size="sm" variant="primary" loading={applying === i} disabled={applying !== null} onClick={async () => {
-                      setApplying(i)
-                      try { await onApplyFix?.(fix, i); setFix(null) } finally { setApplying(null) }
-                    }}>用这个替换</Button>
-                  </div>
-                </div>
-              ))}
-              <div className="flex items-center justify-between text-[11px] text-mist-400">
-                替换后会重新检查，这一项需要你再确认一次
-                <button type="button" className="cursor-pointer hover:text-mist-600" onClick={() => { sendFeedback(fix.ai_call_id, { outcome: 'rejected' }); setFix(null) }}>收起</button>
-              </div>
-            </div>
-          )}
-          {!isFormat && (
-            <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5" onClick={(e) => e.stopPropagation()}>
-              {options[item.category]?.map((o) => (
-                <label key={o.value} className={cn('flex cursor-pointer items-center gap-1.5 text-[13px]', item.resolution === o.value ? 'font-medium text-ink-700' : 'text-mist-600')}>
-                  <input type={item.category === 'ai_disclosure' ? 'checkbox' : 'radio'} name={item.id} disabled={disabled} className="accent-ink-600"
-                    checked={item.resolution === o.value}
-                    onChange={(e) => onResolve(item.category === 'ai_disclosure' && !e.target.checked ? null : o.value)} />
-                  {o.label}
-                </label>
-              ))}
-            </div>
-          )}
         </div>
+      </button>
+      <div className="ml-6">
+        {isFormat && !item.passed && (
+          <p className="mt-1.5 text-[12px] font-medium text-danger">
+            格式问题必须修改，不能保留。{fieldLink && <Link to={`/works/${workId}${fieldLink}`} className="underline">去修改</Link>}
+          </p>
+        )}
+        {!disabled && !done && item.location.section_id && (onEditInPlace || canFix) && (
+          <div className="mt-2 flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
+            {onEditInPlace && <Button size="sm" variant="ghost" icon={<PenLine className="size-3" />} onClick={onEditInPlace}>在原文中修改</Button>}
+            {canFix && <Button size="sm" variant="ghost" icon={<Sparkles className="size-3" />} loading={fixBusy} onClick={suggest}>建议改法</Button>}
+          </div>
+        )}
+        {fix && (
+          <div className="mt-2 space-y-1.5 rounded-lg border border-ink-100 bg-ink-50/40 p-2" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[11.5px] text-mist-500">原句：{fix.sentence}</p>
+            {fix.variants.map((v, i) => (
+              <div key={i} className="rounded-md bg-white p-2 text-[12.5px]">
+                <p className="leading-relaxed text-mist-800">{v.text}</p>
+                {v.note && <p className="mt-0.5 text-[11px] text-mist-400">{v.note}</p>}
+                <div className="mt-1 flex justify-end">
+                  <Button size="sm" variant="primary" loading={applying === i} disabled={applying !== null} onClick={async () => {
+                    setApplying(i)
+                    try { await onApplyFix?.(fix, i); setFix(null) } finally { setApplying(null) }
+                  }}>用这个替换</Button>
+                </div>
+              </div>
+            ))}
+            <div className="flex items-center justify-between text-[11px] text-mist-400">
+              替换后会重新检查，这一项需要你再确认一次
+              <button type="button" className="cursor-pointer hover:text-mist-600" onClick={() => { sendFeedback(fix.ai_call_id, { outcome: 'rejected' }); setFix(null) }}>收起</button>
+            </div>
+          </div>
+        )}
+        {!isFormat && (
+          <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5" onClick={(e) => e.stopPropagation()}>
+            {options[item.category]?.map((o) => (
+              <label key={o.value} className={cn('flex cursor-pointer items-center gap-1.5 text-[13px]', item.resolution === o.value ? 'font-medium text-ink-700' : 'text-mist-600')}>
+                <input type={item.category === 'ai_disclosure' ? 'checkbox' : 'radio'} name={item.id} disabled={disabled} className="accent-ink-600"
+                  checked={item.resolution === o.value}
+                  onChange={(e) => onResolve(item.category === 'ai_disclosure' && !e.target.checked ? null : o.value)} />
+                {o.label}
+              </label>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -319,7 +323,7 @@ export default function Check() {
       const body: Record<string, number> = {}
       if (work.platform === 'wechat_mp') {
         const fresh = await get<Work>(`/works/${work.id}`)
-        const s = htmlStats(renderWechat(fresh.sections, fresh.theme))
+        const s = htmlStats(renderWechat(fresh.sections, fresh.theme, fresh.assets))
         body.html_chars = s.chars
         body.html_bytes = s.bytes
       }
@@ -424,9 +428,27 @@ export default function Check() {
   const wx = work.platform === 'wechat_mp'
   const comic = work.content_format === 'comic'
   const sectionItems = (sid: string) => (run?.items ?? []).filter((i) => i.location.section_id === sid && (i.category !== 'format' || !i.passed))
+  const renderItem = (it: CheckItem) => (
+    <div key={it.id} id={`item-${it.id}`}>
+      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v) => resolve(it, v)} disabled={!editable || run!.stale} workId={work.id}
+        onEditInPlace={!comic && it.location.section_id ? () => setEditSignal({ sectionId: it.location.section_id!, text: it.matched_text, n: Date.now() }) : undefined}
+        onApplyFix={comic ? undefined : applyFix} />
+    </div>
+  )
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-6 py-6 2xl:max-w-[1600px]">
+      {(wx || (!run && !starting && editable) || !!run) && <WorkHeaderAction>
+        <div className="flex items-center gap-2">
+          {wx && <Link to={`/works/${work.id}/preview`} className="inline-flex items-center rounded-lg border border-mist-200 px-3 py-2 text-xs font-medium text-mist-700 hover:bg-mist-50">看排版</Link>}
+          {!run && !starting && editable && <Button size="sm" variant="primary" onClick={start} icon={<ShieldCheck className="size-4" />}>开始检查</Button>}
+          {run && (reviewing && run.completed_at && !run.stale
+            ? canApprove ? <Button size="sm" variant="human" loading={approving} onClick={approve} icon={<UserCheck className="size-4" />}>审阅通过</Button> : null
+            : isDone
+              ? <Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/${wx ? 'push' : 'pack'}`)}>{wx ? '去写入草稿箱' : '生成发布包'}<ArrowRight className="size-4" /></Button>
+              : <Button size="sm" variant="human" disabled={!canComplete || !editable} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>确认完成检查</Button>)}
+        </div>
+      </WorkHeaderAction>}
       <div className="mb-5 flex flex-wrap items-center gap-4">
         <div>
           <h1 className="font-display text-[22px] font-bold text-mist-900">发布前检查</h1>
@@ -449,7 +471,7 @@ export default function Check() {
       {run?.stale && !starting && editable && (
         <Notice tone="gamboge" className="mb-4">内容在检查后又修改过。<button className="cursor-pointer font-medium underline" onClick={start}>重新检查</button>，已确认且文字没变的项会保持确认。</Notice>
       )}
-      {!run && !starting && editable && <Card className="p-10 text-center"><Button variant="primary" onClick={start} icon={<ShieldCheck className="size-4" />}>开始检查</Button></Card>}
+      {!run && !starting && editable && <Card className="p-10 text-center text-mist-500">还没有检查记录。</Card>}
       {!run && !starting && !canWrite && <Card className="p-10 text-center text-mist-500">还没有检查记录。</Card>}
       {starting && !run && <Card className="flex items-center justify-center gap-2 p-10 text-mist-500"><Loader2 className="size-4 animate-spin" />正在检查…</Card>}
 
@@ -474,7 +496,7 @@ export default function Check() {
 
           <div className="lg:sticky lg:top-20 lg:h-[calc(100vh-7rem)] lg:overflow-y-auto scrollbar-thin space-y-4 pr-1">
             {factPending && (
-              <Notice tone="ink" icon={<Loader2 className="size-4 animate-spin" />}>AI 正在标出需要核实的数据、引语和绝对化表达，完成后会出现在「事实」分组中。</Notice>
+              <Notice tone="ink" icon={<Loader2 className="size-4 animate-spin" />}>AI 正在区分有素材支撑和待核实的事实句子，完成后会分别显示。</Notice>
             )}
             {groups.map((g) => (
               <div key={g.c}>
@@ -485,13 +507,17 @@ export default function Check() {
                   </span>
                 </div>
                 <div className="space-y-2">
-                  {g.items.map((it) => (
-                    <div key={it.id} id={`item-${it.id}`}>
-                      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v) => resolve(it, v)} disabled={!editable || run.stale} workId={work.id}
-                        onEditInPlace={!comic && it.location.section_id ? () => setEditSignal({ sectionId: it.location.section_id!, text: it.matched_text, n: Date.now() }) : undefined}
-                        onApplyFix={comic ? undefined : applyFix} />
+                  {g.c === 'fact' ? [
+                    { label: '有素材支撑', items: g.items.filter((it) => !!it.location.material_support) },
+                    { label: '待核实', items: g.items.filter((it) => !it.location.material_support) },
+                  ].filter((group) => group.items.length > 0).map((group) => (
+                    <div key={group.label} data-testid={group.label === '有素材支撑' ? 'fact-subgroup-supported' : 'fact-subgroup-unverified'} className="space-y-2">
+                      <div className="flex items-center gap-2 pt-1 text-[12px] font-medium text-mist-600">
+                        {group.label}<span className="font-normal text-mist-400">{group.items.filter((it) => it.resolution).length} / {group.items.length} 已处理</span>
+                      </div>
+                      {group.items.map(renderItem)}
                     </div>
-                  ))}
+                  )) : g.items.map(renderItem)}
                 </div>
               </div>
             ))}
@@ -500,26 +526,17 @@ export default function Check() {
                 <>
                   <Notice tone="gamboge" icon={<UserCheck className="size-4" />}>检查已完成，这篇作品需要审阅。审阅通过前不能写入草稿或生成发布包。</Notice>
                   {canApprove ? (
-                    <>
-                      <HumanGate code="H-09">请通读正文和上面的检查记录，确认可以发布后再点通过。</HumanGate>
-                      <Button variant="human" size="lg" className="w-full" loading={approving} onClick={approve} icon={<UserCheck className="size-4" />}>审阅通过</Button>
-                    </>
+                    <HumanGate code="H-09">请通读正文和上面的检查记录，再在页头点击“审阅通过”。</HumanGate>
                   ) : <p className="text-center text-[12.5px] text-mist-500">已通知工作区所有者{work.reviewer_id ? '和指定的审阅人' : ''}审阅。</p>}
                 </>
               ) : isDone ? (
                 <>
                   <Notice tone="ink" icon={<CheckCircle2 className="size-4" />}>检查已完成，作品处于「{work.status === 'ready' ? '可发布' : '已进入下一步'}」状态。</Notice>
-                  <Button variant="primary" size="lg" className="w-full" onClick={() => nav(`/works/${work.id}/${wx ? 'push' : 'pack'}`)}>
-                    {wx ? '去写入草稿箱' : '生成发布包'}<ArrowRight className="size-4" />
-                  </Button>
                 </>
               ) : (
                 <>
                   {formatFailed.length > 0 && <Notice tone="red">还有 {formatFailed.length} 项格式问题，修改后重新检查。</Notice>}
                   <HumanGate code="H-04">每一条敏感词和事实都需要你单独确认，没有「全部确认」。</HumanGate>
-                  <Button variant="human" size="lg" className="w-full" disabled={!canComplete || !editable} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>
-                    确认完成检查
-                  </Button>
                 </>
               )}
             </div>

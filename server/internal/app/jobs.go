@@ -57,14 +57,38 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	s.collectSummaries(ctx)
 	// 每日 / 每周任务只在凌晨后跑一次（markOnce 保证幂等）
 	if h := s.now().In(s.loc).Hour(); h >= 3 {
-		s.distillDaily(ctx)
-		s.inboxTriageDaily(ctx)
-		s.weeklyDigestJob(ctx)
-		s.weeklyReviewDraftJob(ctx)
-		s.dailyBriefJob(ctx)
+		s.runDailyHousekeeping(ctx)
+		s.runRetentionCleanup(ctx)
 	}
 	_, _ = s.db.Exec(ctx, `DELETE FROM job_marker WHERE created_at < now() - interval '60 days'`)
 	_, _ = s.db.Exec(ctx, `DELETE FROM ux_event WHERE created_at < now() - interval '180 days'`)
+}
+
+func (s *Server) runDailyHousekeeping(ctx context.Context) {
+	today := s.today()
+	s.runDailyHousekeepingFor(ctx, today.AddDate(0, 0, -1))
+	s.runDailyHousekeepingFor(ctx, today)
+}
+
+func (s *Server) runDailyHousekeepingFor(ctx context.Context, day time.Time) {
+	day = time.Date(day.In(s.loc).Year(), day.In(s.loc).Month(), day.In(s.loc).Day(), 0, 0, 0, 0, s.loc)
+	key := "daily-housekeeping:" + day.Format("2006-01-02")
+	var done bool
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM job_marker WHERE key=$1)`, key).Scan(&done); err != nil {
+		slog.Error("读取每日任务标记失败", "day", day.Format("2006-01-02"), "err", err)
+		return
+	}
+	if done {
+		return
+	}
+	s.distillDailyForDay(ctx, day)
+	s.inboxTriageDailyForDay(ctx, day)
+	s.weeklyDigestJobForDay(ctx, day)
+	s.weeklyReviewDraftJobForDay(ctx, day)
+	s.dailyBriefJobForDay(ctx, day)
+	if !s.markOnce(ctx, key) {
+		slog.Warn("记录每日任务标记失败", "day", day.Format("2006-01-02"))
+	}
 }
 
 // PurgeExpiredTrash permanently deletes items that stayed in the trash longer than trashDays.

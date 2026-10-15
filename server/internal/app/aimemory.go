@@ -45,17 +45,17 @@ func taskMemoryScope(taskType string) string {
 	switch taskType {
 	case "title":
 		return "title"
-	case "topic_suggest", "topic_hot_suggest", "topic_score", "inbox_triage":
+	case "topic_suggest", "topic_hot_suggest", "topic_score", "inbox_triage", "daily_recommend":
 		return "topic"
-	case "section_draft", "section_edit", "section_rewrite", "section_continue", "hook_suggest", "copilot_chat", "fix_suggest", "organize_notes":
+	case "section_draft", "section_edit", "section_rewrite", "section_continue", "hook_suggest", "copilot_chat", "fix_suggest", "organize_notes", "outline", "outline_review", "summary", "rewrite_plan":
 		return "draft"
 	}
 	return ""
 }
 
-func (s *Server) activeMemories(ctx context.Context, accountID uuid.UUID, scope string) ([]Memory, error) {
+func (s *Server) activeMemories(ctx context.Context, accountID uuid.UUID, scope string, factsOnly bool) ([]Memory, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+memoryCols+` FROM account_memory WHERE account_id=$1 AND status='active'
-		AND (scope='all' OR scope=$2) ORDER BY (kind='avoid') DESC, use_count DESC, created_at`, accountID, scope)
+		AND (($3 AND kind='fact') OR (NOT $3 AND (scope='all' OR scope=$2))) ORDER BY (kind='avoid') DESC, use_count DESC, created_at`, accountID, scope, factsOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -385,7 +385,7 @@ func (s *Server) distillMemories(ctx context.Context, a *Account, since time.Tim
 	if len(pairs) < 5 && len(rejections) < 5 {
 		return tagAdded, nil, nil
 	}
-	existing, _ := s.activeMemories(ctx, a.ID, "")
+	existing, _ := s.activeMemories(ctx, a.ID, "", false)
 	var b strings.Builder
 	if len(pairs) >= 5 {
 		b.WriteString("## AI 原稿与作者终稿对比\n")
@@ -473,9 +473,16 @@ func (s *Server) startDistill(w http.ResponseWriter, r *http.Request) error {
 
 // distillDaily runs at most once a day per active account and only when there is new data.
 func (s *Server) distillDaily(ctx context.Context) {
-	day := s.today().Format("2006-01-02")
+	s.distillDailyForDay(ctx, s.today())
+}
+
+func (s *Server) distillDailyForDay(ctx context.Context, day time.Time) {
+	day = time.Date(day.In(s.loc).Year(), day.In(s.loc).Month(), day.In(s.loc).Day(), 0, 0, 0, 0, s.loc)
+	now := s.now().In(s.loc)
+	until := time.Date(day.Year(), day.Month(), day.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), s.loc)
+	since := until.Add(-24 * time.Hour)
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT a.id, a.workspace_id FROM platform_account a JOIN work w ON w.account_id=a.id
-		WHERE a.status='active' AND w.updated_at > now() - interval '1 day'`)
+		WHERE a.status='active' AND w.updated_at >= $1 AND w.updated_at < $2`, since, until)
 	if err != nil {
 		return
 	}
@@ -489,7 +496,7 @@ func (s *Server) distillDaily(ctx context.Context) {
 	}
 	rows.Close()
 	for _, x := range list {
-		if !s.markOnce(ctx, "distill:"+x.id.String()+":"+day) {
+		if !s.markOnce(ctx, "distill:"+x.id.String()+":"+day.Format("2006-01-02")) {
 			continue
 		}
 		jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: x.ws})
@@ -497,14 +504,14 @@ func (s *Server) distillDaily(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		n, _, err := s.distillMemories(jctx, a, s.now().AddDate(0, 0, -1))
+		n, _, err := s.distillMemories(jctx, a, since)
 		if err != nil {
 			slog.Warn("每日记忆提炼失败", "account", x.id, "err", err)
 			continue
 		}
 		if n > 0 {
 			s.notifyWorkspace(jctx, x.ws, []string{"owner", "editor"}, "memory", fmt.Sprintf("AI 学到了 %d 条新偏好，去确认", n),
-				a.Name, "/a/"+a.ID.String()+"/profile?tab=memory", "distill:"+x.id.String()+":"+day)
+				a.Name, "/a/"+a.ID.String()+"/profile?tab=memory", "distill:"+x.id.String()+":"+day.Format("2006-01-02"))
 		}
 	}
 }

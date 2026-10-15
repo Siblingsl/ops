@@ -432,11 +432,15 @@ func (s *Server) digestStats(ctx context.Context, accountID uuid.UUID, from, to 
 
 // weeklyDigestJob generates last week's digest on Mondays; weeks without published works are skipped.
 func (s *Server) weeklyDigestJob(ctx context.Context) {
-	now := s.now().In(s.loc)
-	if now.Weekday() != time.Monday {
+	s.weeklyDigestJobForDay(ctx, s.today())
+}
+
+func (s *Server) weeklyDigestJobForDay(ctx context.Context, day time.Time) {
+	day = time.Date(day.In(s.loc).Year(), day.In(s.loc).Month(), day.In(s.loc).Day(), 0, 0, 0, 0, s.loc)
+	if day.Weekday() != time.Monday {
 		return
 	}
-	to := weekStart(now)
+	to := weekStart(day)
 	from := to.AddDate(0, 0, -7)
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT a.id, a.workspace_id FROM platform_account a JOIN work w ON w.account_id=a.id
 		WHERE a.status='active' AND NOT a.is_demo AND w.published_at >= $1 AND w.published_at < $2 AND w.deleted_at IS NULL`, from, to)

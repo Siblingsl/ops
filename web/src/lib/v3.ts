@@ -140,7 +140,7 @@ export function usePendingMemories(accountId: string | undefined) {
   return (q.data ?? []).filter((m) => m.status === 'suggested').length
 }
 
-export interface AIStatus { ready: boolean; vision_route: boolean; image_route: boolean }
+export interface AIStatus { ready: boolean; vision_route: boolean; image_route: boolean; tokens_today: number }
 
 /** useAIStatus tells whether AI is configured and which optional routes exist (DEV-UX01), so the UI can warn before a call fails. */
 export function useAIStatus() {

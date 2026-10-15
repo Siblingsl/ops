@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { marked } from 'marked'
 import { ArrowRight, Loader2, RefreshCw, Square } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
@@ -14,6 +14,8 @@ import { type AIRefs, parseTopics, runeLen } from '@/lib/format'
 import type { Section, Work } from '@/lib/types'
 import { TagSuggest } from './editor-tools'
 import { useWork } from './WorkLayout'
+import { AIConflictPanel, type AIConflict, SectionConflictDialog, WorkConflictDialog } from './section-save-dialogs'
+import { useSectionSave } from './use-section-save'
 
 interface SourceChange { source_id: string; heading: string; changed: boolean; deleted: boolean; old_content: string; new_content: string }
 interface SourceDiffItem { section_id: string; changed: boolean; sources: SourceChange[] }
@@ -77,48 +79,19 @@ function DerivedSection({ section, index, work, active, onFocus, patchWork, refr
 }) {
   const xhs = work.platform === 'xhs'
   const editor = useRef<EditorHandle>(null)
-  const content = useRef(section.content_md)
-  const revision = useRef(section.revision)
-  const [resetKey, setResetKey] = useState(0)
   const [streaming, setStreaming] = useState<string | null>(null)
   const [len, setLen] = useState(runeLen(section.content_md))
   const [refs, setRefs] = useState<AIRefs | null>(null)
+  const [aiConflict, setAIConflict] = useState<AIConflict | null>(null)
   const abort = useRef<AbortController | null>(null)
-  const timer = useRef<number>()
-  useEffect(() => () => window.clearTimeout(timer.current), [])
+  const { content, resetKey, dirty, applied, conflict, heading, setConflict, persist, schedule, flush, resolveConflict, load } = useSectionSave({
+    section, index, patchWork, onSave: () => undefined, onLoaded: text => setLen(runeLen(text)),
+  })
+  const onChange = (md: string) => { content.current = md; dirty.current = true; setLen(runeLen(md)); schedule() }
 
-  const save = async () => {
-    try {
-      const r = await patch<{ section: Section; work_revision: number; work_status: Work['status'] }>(`/sections/${section.id}`, { content_md: content.current, base_revision: revision.current })
-      revision.current = r.section.revision
-      patchWork((w) => ({
-        status: r.work_status,
-        revision: r.work_revision,
-        sections: w.sections.map((s) => (s.id === r.section.id ? r.section : s)),
-      }))
-    } catch (e) {
-      if (e instanceof ApiError && e.code === 'version_conflict') {
-        const server = (e.detail as { server: Section }).server
-        if (await confirm({ title: '这一段在别处被修改过', desc: '选择「保留我的」会用当前内容覆盖；取消则载入另一处的版本。', confirmText: '保留我的' })) {
-          revision.current = server.revision
-          save()
-        } else {
-          revision.current = server.revision
-          content.current = server.content_md
-          setResetKey((k) => k + 1)
-        }
-      } else toast.error(errorMessage(e))
-    }
-  }
-  const onChange = (md: string) => {
-    content.current = md
-    setLen(runeLen(md))
-    window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(save, 1200)
-  }
   const rewrite = async () => {
     if (content.current.trim() && !(await confirm({ title: '重新改写这一段？', desc: '当前内容会被替换，替换前的内容保存在版本历史中。', confirmText: '重新改写' }))) return
-    window.clearTimeout(timer.current)
+    if (!(await flush())) return
     abort.current = new AbortController()
     setStreaming('')
     try {
@@ -127,14 +100,12 @@ function DerivedSection({ section, index, work, active, onFocus, patchWork, refr
         onDelta: (t) => setStreaming((s) => (s ?? '') + t),
       })
       setRefs(r.refs)
-      content.current = r.result.content_md
-      revision.current = r.result.revision
-      setLen(runeLen(r.result.content_md))
-      setResetKey((k) => k + 1)
+      load(r.result)
       refresh()
       onRewritten?.()
     } catch (e) {
-      aiError(e, '改写本段', rewrite)
+      if (e instanceof ApiError && e.code === 'version_conflict') { const detail = e.detail as AIConflict; load(detail.server); setRefs(detail.refs ?? null); setAIConflict(detail); await refresh() }
+      else aiError(e, '改写本段', rewrite)
     } finally {
       setStreaming(null)
     }
@@ -143,6 +114,16 @@ function DerivedSection({ section, index, work, active, onFocus, patchWork, refr
   return (
     <div onFocusCapture={onFocus} onClick={onFocus}
       className={cn('group/sec rounded-xl border bg-white p-4 transition', active ? 'border-ink-300 ring-3 ring-ink-100' : 'border-mist-200')}>
+      <SectionConflictDialog server={conflict} heading={heading} content={content.current} onClose={() => setConflict(null)} onResolve={resolveConflict} />
+      {aiConflict && <AIConflictPanel conflict={aiConflict} onKeep={() => setAIConflict(null)} onReplace={async () => {
+        const value = aiConflict
+        load(value.server)
+        applied.current = { kind: 'draft', ai_call_id: value.ai_call_id, ...(value.source_revisions ? { source_revisions: value.source_revisions } : {}) }
+        content.current = value.candidate
+        editor.current?.setMarkdown(value.candidate)
+        setLen(runeLen(value.candidate))
+        if (await persist()) { setAIConflict(null); await refresh(); onRewritten?.() }
+      }} />}
       <div className="mb-2 flex items-center gap-2">
         <span className="font-mono text-xs text-mist-400">{String(index + 1).padStart(2, '0')}</span>
         <span className="text-[13.5px] font-semibold text-mist-800">{section.heading || section.key_point || `第 ${index + 1} 段`}</span>
@@ -178,12 +159,13 @@ export default function Compare() {
   const diffBy = new Map((diff.data ?? []).map((d) => [d.section_id, d]))
   const [topics, setTopics] = useState(work.topics.map((t) => '#' + t).join(' '))
   const [title, setTitle] = useState(work.title)
+  const [fieldConflict, setFieldConflict] = useState<{ server: Work; body: Record<string, unknown> } | null>(null)
   if (!work.source) return <div className="p-10"><Notice>这篇作品不是派生作品。</Notice></div>
   if (work.content_format === 'comic') {
     return (
       <div className="p-10">
         <Notice>漫画衍生作品在漫画编辑器中核对旁白与对白，不使用段落对照页。
-          <button type="button" className="ml-2 cursor-pointer font-medium underline" onClick={() => nav(`/works/${work.id}/edit`)}>打开漫画编辑器</button>
+          <button type="button" className="ml-2 cursor-pointer font-medium underline" onClick={() => nav(`/works/${work.id}`)}>打开漫画编辑器</button>
         </Notice>
       </div>
     )
@@ -193,16 +175,24 @@ export default function Compare() {
   const srcById = new Map(srcWork?.sections.map((s) => [s.id, s]) ?? [])
   const activeSrc = new Set(work.sections.find((s) => s.id === active)?.source_section_ids ?? [])
   const xhs = work.platform === 'xhs'
+  const bodyReady = work.sections.length > 0 && work.sections.every(section => section.content_md.trim() !== '')
   const total = runeLen(work.sections.map((s) => s.content_md).join(''))
-  const saveField = async (body: Record<string, unknown>) => {
+  const saveField = async (body: Record<string, unknown>, base = work.revision) => {
     try {
-      setWork(await patch<Work>(`/works/${work.id}`, body))
+      setWork(await patch<Work>(`/works/${work.id}`, { ...body, base_revision: base }))
+      setFieldConflict(null)
     } catch (e) {
-      toast.error(errorMessage(e))
+      if (e instanceof ApiError && e.code === 'version_conflict') setFieldConflict({ server: (e.detail as { server: Work }).server, body })
+      else toast.error(errorMessage(e))
     }
   }
   return (
     <div className="mx-auto w-full max-w-[1480px] px-6 py-6 2xl:max-w-[1680px]">
+      <WorkConflictDialog server={fieldConflict?.server ?? null} mine={{ ...work, title }} onClose={() => setFieldConflict(null)} onResolve={keepMine => {
+        if (!fieldConflict) return
+        if (keepMine) void saveField(fieldConflict.body, fieldConflict.server.revision)
+        else { setWork(fieldConflict.server); setFieldConflict(null) }
+      }} />
       <div className="mb-4 grid grid-cols-2 gap-6">
         <div className="flex items-center gap-2 text-[13px] text-mist-500">
           {srcWork && <PlatformMark platform={srcWork.platform} size="sm" />}
@@ -213,8 +203,8 @@ export default function Compare() {
           <PlatformMark platform={work.platform} size="sm" />
           <span className="font-medium text-mist-700">衍生作品（可编辑）</span>
           <span>{work.account_name}</span>
-          <Button size="sm" variant="primary" className="ml-auto" onClick={() => nav(xhs ? `/works/${work.id}#step-images` : `/works/${work.id}`)}>
-            继续编辑<ArrowRight className="size-3.5" />
+          <Button size="sm" variant="primary" className="ml-auto" onClick={() => nav(bodyReady ? `/works/${work.id}/check` : xhs ? `/works/${work.id}#step-images` : `/works/${work.id}`)}>
+            {bodyReady ? '去检查' : '继续编辑'}<ArrowRight className="size-3.5" />
           </Button>
         </div>
       </div>

@@ -152,104 +152,6 @@ func keepFaithfulNumbers(items []MaterialCandidate, source string) []MaterialCan
 	return out
 }
 
-func splitChunks(text string, size int) []string {
-	rs := []rune(text)
-	var out []string
-	for start := 0; start < len(rs); {
-		end := min(start+size, len(rs))
-		if end < len(rs) {
-			for k := end; k > start+size/2; k-- {
-				if rs[k-1] == '\n' || rs[k-1] == '。' {
-					end = k
-					break
-				}
-			}
-		}
-		out = append(out, string(rs[start:end]))
-		start = end
-	}
-	return out
-}
-
-func (s *Server) extractMaterialsFrom(ctx context.Context, a *Account, text string) ([]MaterialCandidate, *uuid.UUID, error) {
-	var all []MaterialCandidate
-	var lastCall *uuid.UUID
-	for _, chunk := range splitChunks(text, 6000) {
-		user := `## 原文
-` + chunk + `
-
-## 任务说明
-从原文中拆出可复用的原子素材，类型只能是 experience（亲身经历）、opinion（观点）、case（案例）、data（数据）。
-只摘录原文中有的信息，不改写事实；数据类必须保留原文中的数字和出处；每条素材独立成意，不超过 300 字；每条最多 5 个标签。
-
-## 输出格式
-只输出 JSON：{"items":[{"kind":"experience|opinion|case|data","content":"素材内容","source_hint":"出处线索","tags":["标签"]}]}`
-		var out struct {
-			Items []MaterialCandidate `json:"items"`
-		}
-		res, err := s.runAIJSON(ctx, aiTask{Type: "material_extract", Account: a, User: user, SkipStyle: true}, &out, nil)
-		if err != nil {
-			return nil, nil, err
-		}
-		lastCall = &res.CallID
-		all = append(all, keepFaithfulNumbers(out.Items, chunk)...)
-	}
-	return all, lastCall, nil
-}
-
-func (s *Server) extractMaterials(w http.ResponseWriter, r *http.Request) error {
-	var in struct {
-		AccountID *uuid.UUID `json:"account_id"`
-		Text      string     `json:"text"`
-	}
-	if err := decode(r, &in); err != nil {
-		return err
-	}
-	ctx := r.Context()
-	text := strings.TrimSpace(in.Text)
-	if text == "" {
-		return validation("请粘贴要提炼的文本")
-	}
-	if runeLen(text) > 20000 {
-		return validation("文本最多 2 万字，请分段提炼")
-	}
-	var a *Account
-	if in.AccountID != nil {
-		acc, err := s.account(ctx, *in.AccountID)
-		if err != nil {
-			return err
-		}
-		a = acc
-	}
-	if runeLen(text) <= 6000 {
-		items, callID, err := s.extractMaterialsFrom(ctx, a, text)
-		if err != nil {
-			return err
-		}
-		return ok(w, map[string]any{"items": items, "ai_call_id": callID})
-	}
-	spec := jobSpec{TaskType: "material_extract", Label: "素材提炼", Link: "/materials?extract=1"}
-	if a != nil {
-		spec.AccountID = &a.ID
-		spec.Link = "/a/" + a.ID.String() + "/materials?extract=1"
-	}
-	jobID, err := s.startBackgroundJob(ctx, spec, func(jctx context.Context) (any, error) {
-		items, callID, err := s.extractMaterialsFrom(jctx, a, text)
-		if err != nil {
-			return nil, err
-		}
-		res := map[string]any{"items": items}
-		if callID != nil {
-			res["ai_call_id"] = *callID
-		}
-		return res, nil
-	})
-	if err != nil {
-		return err
-	}
-	return ok(w, map[string]any{"job_id": jobID})
-}
-
 // ---------- EX-D-02 类型与标签建议（规则 + 轻量 AI） ----------
 
 func guessMaterialKind(text string) string {
@@ -325,7 +227,7 @@ func (s *Server) materialTagSuggest(w http.ResponseWriter, r *http.Request) erro
 		known = known[:60]
 	}
 	user := `## 素材
-` + truncate(text, 1500) + `
+` + externalBlock("素材", "tag", truncate(text, 1500)) + `
 
 ## 已有标签（优先复用）
 ` + strings.Join(known, "、") + `
@@ -405,7 +307,7 @@ func (s *Server) materialDuplicates(w http.ResponseWriter, r *http.Request) erro
 		if len(ids) < 2 {
 			continue
 		}
-		mrows, err := s.db.Query(ctx, `SELECT `+materialCols+` FROM material m WHERE m.id = ANY($1) ORDER BY m.created_at`, ids)
+		mrows, err := s.db.Query(ctx, `SELECT `+materialCols+` FROM material m WHERE m.id = ANY($1) ORDER BY m.created_at`, ids, s.today())
 		if err != nil {
 			return err
 		}
@@ -497,8 +399,23 @@ func (s *Server) listInbox(w http.ResponseWriter, r *http.Request) error {
 	if status == "" {
 		status = "new"
 	}
-	rows, err := s.db.Query(ctx, `SELECT `+inboxCols+` FROM inbox_item WHERE workspace_id=$1 AND status=$2 ORDER BY created_at DESC LIMIT 200`,
-		ident(ctx).WorkspaceID, status)
+	cursor, err := parseListCursor(r)
+	if err != nil {
+		return err
+	}
+	workspaceID := ident(ctx).WorkspaceID
+	var total int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM inbox_item WHERE workspace_id=$1 AND status=$2`, workspaceID, status).Scan(&total); err != nil {
+		return err
+	}
+	args := []any{workspaceID, status}
+	sql := `SELECT ` + inboxCols + ` FROM inbox_item WHERE workspace_id=$1 AND status=$2`
+	if cursor != nil {
+		args = append(args, cursor.CreatedAt, cursor.ID)
+		sql += fmt.Sprintf(` AND (created_at,id) < ($%d,$%d)`, len(args)-1, len(args))
+	}
+	args = append(args, listPageSize+1)
+	rows, err := s.db.Query(ctx, sql+fmt.Sprintf(` ORDER BY created_at DESC,id DESC LIMIT $%d`, len(args)), args...)
 	if err != nil {
 		return err
 	}
@@ -511,7 +428,20 @@ func (s *Server) listInbox(w http.ResponseWriter, r *http.Request) error {
 		}
 		list = append(list, x)
 	}
-	return ok(w, list)
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	hasMore := len(list) > listPageSize
+	if hasMore {
+		list = list[:listPageSize]
+	}
+	var nextCursor *string
+	if hasMore {
+		last := list[len(list)-1]
+		v := encodeListCursor(last.CreatedAt, last.ID)
+		nextCursor = &v
+	}
+	return ok(w, map[string]any{"items": list, "total": total, "next_cursor": nextCursor})
 }
 
 func (s *Server) createInbox(w http.ResponseWriter, r *http.Request) error {
@@ -605,7 +535,7 @@ func (s *Server) triageInboxItem(ctx context.Context, x *InboxItem) (*inboxSugge
 		a, _ = s.account(ctx, *x.AccountID)
 	}
 	user := `## 灵感
-` + x.Content + `
+` + externalBlock("收件箱", x.ID.String(), x.Content) + `
 
 ## 任务说明
 判断这条灵感更适合作为"选题"（topic）还是"素材"（material）。只建议归类，不改写原意。
@@ -728,8 +658,12 @@ func (s *Server) convertInbox(w http.ResponseWriter, r *http.Request) error {
 
 // inboxTriageDaily fills suggestions for new items once a day; it never converts anything.
 func (s *Server) inboxTriageDaily(ctx context.Context) {
-	day := s.today().Format("2006-01-02")
-	rows, err := s.db.Query(ctx, `SELECT workspace_id, id FROM inbox_item WHERE status='new' AND suggestion IS NULL ORDER BY created_at LIMIT 100`)
+	s.inboxTriageDailyForDay(ctx, s.today())
+}
+
+func (s *Server) inboxTriageDailyForDay(ctx context.Context, day time.Time) {
+	day = time.Date(day.In(s.loc).Year(), day.In(s.loc).Month(), day.In(s.loc).Day(), 0, 0, 0, 0, s.loc)
+	rows, err := s.db.Query(ctx, `SELECT workspace_id, id FROM inbox_item WHERE status='new' AND suggestion IS NULL AND created_at < $1 ORDER BY created_at LIMIT 100`, day.AddDate(0, 0, 1))
 	if err != nil {
 		return
 	}
@@ -743,7 +677,7 @@ func (s *Server) inboxTriageDaily(ctx context.Context) {
 	}
 	rows.Close()
 	for _, p := range list {
-		if !s.markOnce(ctx, "inbox:"+p.id.String()+":"+day) {
+		if !s.markOnce(ctx, "inbox:"+p.id.String()+":"+day.Format("2006-01-02")) {
 			continue
 		}
 		jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: p.ws})

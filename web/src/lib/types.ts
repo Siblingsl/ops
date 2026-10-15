@@ -128,6 +128,8 @@ export interface Material {
   created_at: string
 }
 
+export type MaterialPreview = Omit<Material, 'account_id' | 'source'> & { shared?: boolean; source?: string }
+
 export interface StrategyFields {
   niche: string
   audience: string
@@ -229,6 +231,12 @@ export interface Topic {
   pinned?: boolean
 }
 
+export interface TopicPage {
+  items: Topic[]
+  status_counts: { pending: number; adopted: number; dropped: number }
+  next_cursor: string | null
+}
+
 export interface OutlineItem {
   heading: string
   key_point: string
@@ -257,6 +265,7 @@ export interface Asset {
   height: number
   bytes: number
   position: number
+  alt_text: string
   url: string
   ai_generated?: boolean
   created_at?: string
@@ -294,6 +303,7 @@ export interface Work {
   cover_crops: Record<string, CropBox> | null
   wechat_fields: WechatDefaults
   topics: string[]
+  tags: string[]
   wechat_draft_media_id: string | null
   published_url: string | null
   published_at: string | null
@@ -339,6 +349,7 @@ export interface WorkCard {
 export interface WorkListItem {
   id: string
   title: string
+  tags: string[]
   status: WorkStatus
   content_format: ContentFormat
   source_work_id: string | null
@@ -362,7 +373,7 @@ export interface CheckItem {
   category: 'format' | 'sensitive' | 'fact' | 'ai_disclosure' | 'similarity' | 'ad_law' | 'stale'
   passed: boolean
   matched_text: string
-  location: { field?: string; label?: string; section_id?: string; found?: boolean }
+  location: { field?: string; label?: string; section_id?: string; found?: boolean; material_support?: { material_id: string; quote: string } }
   message: string
   detail: string
   resolution: string | null
@@ -430,6 +441,8 @@ export interface Provider {
   key_mask: string
   models: string[]
   status: 'active' | 'disabled'
+  circuit_state: 'closed' | 'open' | 'half_open'
+  retry_after_seconds: number
   last_test_at: string | null
   last_test_ok: boolean | null
   last_test_result: string
@@ -463,6 +476,7 @@ export interface Me {
   is_system_admin?: boolean
   admin_override?: boolean
   csrf_token: string
+  session_expires_at: string
   reauth_ok: boolean
   prev_login_at: string | null
   prev_login_ip: string | null
@@ -647,6 +661,8 @@ export interface InboxItem {
   status: 'new' | 'converted' | 'dismissed'
   created_at: string
 }
+
+export interface InboxPage { items: InboxItem[]; total: number; next_cursor: string | null }
 
 export interface InboxSuggestion { as: 'topic' | 'material'; title: string; angle: string; audience: string; kind: string; tags: string[]; reason: string }
 

@@ -1,12 +1,13 @@
-import { useQuery } from '@tanstack/react-query'
-import { ExternalLink, Images as ImagesIcon } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { ExternalLink, Images as ImagesIcon, Sparkles } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
-import { Button, Card, Empty, PageHeader, Select, Spinner } from '@/components/ui'
-import { get } from '@/lib/api'
+import { Button, Card, Empty, PageHeader, Select, Spinner, Textarea } from '@/components/ui'
+import { errorMessage, get, patch, post } from '@/lib/api'
 import { fmtNum, relTime } from '@/lib/format'
-import { useAccounts } from '@/lib/session'
+import { useAccounts, useCanWrite } from '@/lib/session'
 import type { LibraryAsset } from '@/lib/types'
 
 /** 图片库（EX-G-04）：工作区内所有作品的图片；复用在编辑器"从图片库选择"里完成，不重复上传。 */
@@ -16,6 +17,11 @@ export default function ImagesPage() {
   const workId = params.get('work') ?? ''
   const ai = params.get('ai') ?? ''
   const [open, setOpen] = useState<LibraryAsset | null>(null)
+  const [altText, setAltText] = useState('')
+  const [savingAlt, setSavingAlt] = useState(false)
+  const [suggestingAlt, setSuggestingAlt] = useState(false)
+  const canWrite = useCanWrite()
+  const qc = useQueryClient()
   const { data: accounts } = useAccounts()
   const set = (k: string, v: string) => setParams((p) => {
     const n = new URLSearchParams(p)
@@ -63,9 +69,9 @@ export default function ImagesPage() {
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {list.map((a) => (
-            <button key={a.id} type="button" onClick={() => setOpen(a)}
+            <button key={a.id} type="button" onClick={() => { setAltText(a.alt_text ?? ''); setOpen(a) }}
               className="group relative cursor-pointer overflow-hidden rounded-xl border border-mist-200 bg-mist-50 text-left transition hover:border-ink-400">
-              <img src={a.url} alt="" loading="lazy" className="aspect-square w-full object-cover" />
+              <img src={`${a.url}?variant=256`} alt={a.alt_text || ''} loading="lazy" className="aspect-square w-full object-cover" />
               {a.ai_generated && <span className="absolute left-1.5 top-1.5 rounded bg-mist-900/70 px-1.5 text-[10.5px] text-white">AI</span>}
               <div className="bg-white px-2 py-1.5">
                 <div className="truncate text-[12.5px] font-medium text-mist-800">{a.work_title || '未命名'}</div>
@@ -77,8 +83,39 @@ export default function ImagesPage() {
       )}
       {open && (
         <Dialog open onClose={() => setOpen(null)} title={open.work_title || '未命名'} desc={`${open.account_name} · ${open.width}×${open.height} · ${open.ai_generated ? 'AI 生成' : '上传'}`} width="max-w-3xl"
-          footer={<Link to={`/works/${open.work_id}`}><Button variant="primary" icon={<ExternalLink className="size-3.5" />}>打开所在作品</Button></Link>}>
-          <img src={open.url} alt="" className="max-h-[65vh] w-full rounded-lg object-contain" />
+          footer={<div className="flex flex-wrap items-center justify-between gap-2">
+            {canWrite && <div className="flex gap-2">
+              <Button variant="ghost" icon={<Sparkles className="size-3.5" />} loading={suggestingAlt} disabled={savingAlt || suggestingAlt}
+                onClick={async () => {
+                  setSuggestingAlt(true)
+                  try {
+                    const result = await post<{ suggestion: string }>(`/assets/${open.id}/alt-suggestion`)
+                    setAltText(result.suggestion)
+                  } catch (e) { toast.error(errorMessage(e)) }
+                  finally { setSuggestingAlt(false) }
+                }}>生成 AI 建议</Button>
+              <Button variant="primary" loading={savingAlt} disabled={savingAlt || suggestingAlt}
+                onClick={async () => {
+                  setSavingAlt(true)
+                  try {
+                    await patch<LibraryAsset[]>(`/assets/${open.id}`, { alt_text: altText })
+                    setOpen({ ...open, alt_text: altText.trim() })
+                    await q.refetch()
+                    void qc.invalidateQueries({ queryKey: ['work', open.work_id] })
+                    toast.success('替代文字已保存')
+                  } catch (e) { toast.error(errorMessage(e)) }
+                  finally { setSavingAlt(false) }
+                }}>保存替代文字</Button>
+            </div>}
+            <Link to={`/works/${open.work_id}`}><Button variant={canWrite ? 'secondary' : 'primary'} icon={<ExternalLink className="size-3.5" />}>打开所在作品</Button></Link>
+          </div>}>
+          <img src={open.url} alt={open.alt_text || ''} className="max-h-[55vh] w-full rounded-lg object-contain" />
+          <div className="mt-4 space-y-2">
+            <label htmlFor="image-alt-text" className="text-[13px] font-medium text-mist-700">替代文字</label>
+            {canWrite
+              ? <Textarea id="image-alt-text" value={altText} onChange={(e) => setAltText(e.target.value)} rows={3} placeholder="描述图片中重要的主体和信息" disabled={savingAlt || suggestingAlt} />
+              : <p className="text-sm text-mist-500">{open.alt_text || '尚未填写替代文字'}</p>}
+          </div>
         </Dialog>
       )}
     </div>

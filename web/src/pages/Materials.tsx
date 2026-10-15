@@ -13,7 +13,7 @@ import { errorMessage, get, patch, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import { deleteWithUndo } from '@/lib/undo'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
-import type { AIJob, Material, MaterialKind, WorkStatus } from '@/lib/types'
+import type { AIJob, Material, MaterialPreview, MaterialKind, WorkStatus } from '@/lib/types'
 
 export const kindMeta: Record<MaterialKind, { label: string; desc: string; tone: 'ink' | 'blue' | 'gamboge' | 'green' }> = {
   experience: { label: '经历', desc: '亲身经历、故事、见闻', tone: 'ink' },
@@ -253,7 +253,7 @@ function DuplicatesDrawer({ open, onClose, accountId }: { open: boolean; onClose
 }
 
 /** TagSuggestDrawer (EX-D-02): suggestions for the selected materials are shown one by one; each is accepted separately. */
-function TagSuggestDrawer({ items, onClose }: { items: Material[]; onClose: () => void }) {
+function TagSuggestDrawer({ items, onClose }: { items: MaterialPreview[]; onClose: () => void }) {
   const inv = useInvalidate()
   const [sugs, setSugs] = useState<Record<string, TagSuggestion | 'error' | 'done' | 'skip'>>({})
   useEffect(() => {
@@ -262,7 +262,8 @@ function TagSuggestDrawer({ items, onClose }: { items: Material[]; onClose: () =
       for (const m of items) {
         if (!alive) return
         try {
-          const r = await post<TagSuggestion>('/materials/tag-suggest', { content: m.content })
+          const full = await get<Material>(`/materials/${m.id}`)
+          const r = await post<TagSuggestion>('/materials/tag-suggest', { content: full.content })
           if (alive) setSugs((s) => ({ ...s, [m.id]: r }))
         } catch {
           if (alive) setSugs((s) => ({ ...s, [m.id]: 'error' }))
@@ -271,9 +272,10 @@ function TagSuggestDrawer({ items, onClose }: { items: Material[]; onClose: () =
     })()
     return () => { alive = false }
   }, [items])
-  const accept = async (m: Material, s: TagSuggestion) => {
+  const accept = async (m: MaterialPreview, s: TagSuggestion) => {
     try {
-      await patch(`/materials/${m.id}`, materialBody(m, { kind: s.kind, tags: [...new Set([...m.tags, ...s.tags])] }))
+      const full = await get<Material>(`/materials/${m.id}`)
+      await patch(`/materials/${m.id}`, materialBody(full, { kind: s.kind, tags: [...new Set([...full.tags, ...s.tags])] }))
       setSugs((x) => ({ ...x, [m.id]: 'done' }))
       if (s.ai_call_id) void sendFeedback(s.ai_call_id, { outcome: 'accepted' })
       inv(['materials'])
@@ -281,7 +283,7 @@ function TagSuggestDrawer({ items, onClose }: { items: Material[]; onClose: () =
       toast.error(errorMessage(e))
     }
   }
-  const skip = (m: Material, s: TagSuggestion) => {
+  const skip = (m: MaterialPreview, s: TagSuggestion) => {
     setSugs((x) => ({ ...x, [m.id]: 'skip' }))
     if (s.ai_call_id) void sendFeedback(s.ai_call_id, { outcome: 'rejected' })
   }
@@ -315,7 +317,7 @@ function TagSuggestDrawer({ items, onClose }: { items: Material[]; onClose: () =
   )
 }
 
-function UsagePopover({ m }: { m: Material }) {
+function UsagePopover({ m }: { m: Pick<Material, 'id' | 'usage_count'> }) {
   const [open, setOpen] = useState(false)
   const { data } = useQuery({
     queryKey: ['material-usage', m.id],
@@ -346,23 +348,36 @@ export default function Materials() {
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
   const [params, setParams] = useSearchParams()
-  const [scope, setScope] = useState<'all' | 'account' | 'shared'>('all')
-  const [kind, setKind] = useState<'' | MaterialKind>('')
-  const [usage, setUsage] = useState<'' | 'used' | 'unused' | 'expired'>('')
-  const [q, setQ] = useState('')
+  const scope = (['account', 'shared'].includes(params.get('scope') ?? '') ? params.get('scope') : 'all') as 'all' | 'account' | 'shared'
+  const requestedKind = params.get('kind') ?? ''
+  const kind = Object.keys(kindMeta).includes(requestedKind) ? requestedKind as MaterialKind : ''
+  const usage = (['used', 'unused', 'expired'].includes(params.get('usage') ?? '') ? params.get('usage') : '') as '' | 'used' | 'unused' | 'expired'
+  const q = params.get('q') ?? ''
+  const [visibleCount, setVisibleCount] = useState(50)
+  const focusedMaterial = useRef<string | null>(null)
+  const updateFilter = (name: string, value: string | null) => {
+    const next = new URLSearchParams(params)
+    if (value === null) next.delete(name)
+    else next.set(name, value)
+    focusedMaterial.current = null
+    setVisibleCount(50)
+    setParams(next, { replace: true })
+  }
   const [dialog, setDialog] = useState<{ editing: Material | null } | null>(null)
+  const [detail, setDetail] = useState<Material | null>(null)
+  const [reading, setReading] = useState(false)
   const [extract, setExtract] = useState(params.get('extract') === '1')
   const [dups, setDups] = useState(false)
-  const [tag, setTag] = useState<string | null>(null)
+  const tag = params.get('tag')
   const [selecting, setSelecting] = useState(false)
   const [picked, setPicked] = useState<string[]>([])
-  const [tagging, setTagging] = useState<Material[] | null>(null)
+  const [tagging, setTagging] = useState<MaterialPreview[] | null>(null)
   const focus = params.get('focus')
   const focusRef = useRef<HTMLDivElement>(null)
   const inv = useInvalidate()
   const { data, isLoading } = useQuery({
     queryKey: ['materials', acc?.id, scope, q, usage],
-    queryFn: () => get<Material[]>(`/materials?account_id=${acc!.id}${scope !== 'all' ? `&scope=${scope}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}${usage ? `&usage=${usage}` : ''}`),
+    queryFn: () => get<MaterialPreview[]>(`/materials?account_id=${acc!.id}${scope !== 'all' ? `&scope=${scope}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}${usage ? `&usage=${usage}` : ''}`),
     enabled: !!acc,
   })
   const dupGroups = useQuery({
@@ -379,8 +394,19 @@ export default function Materials() {
     }
   }, [params, setParams])
   useEffect(() => {
-    if (focus && data) focusRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [focus, data])
+    if (!focus || !data) return
+    const index = data.filter((m) => (!kind || m.kind === kind) && (tag === null || (tag === '' ? m.tags.length === 0 : m.tags.includes(tag))))
+      .findIndex((m) => m.id === focus)
+    if (index < 0) return
+    if (index >= visibleCount) {
+      setVisibleCount(index + 1)
+      return
+    }
+    if (focusedMaterial.current !== focus) {
+      focusRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      focusedMaterial.current = focus
+    }
+  }, [focus, data, kind, tag, visibleCount])
   if (!acc) return <PageLoading />
   const tagCounts = new Map<string, number>()
   for (const m of data ?? []) for (const t of m.tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1)
@@ -388,7 +414,15 @@ export default function Materials() {
   const maxCount = cloud[0]?.[1] ?? 1
   const untagged = (data ?? []).filter((m) => m.tags.length === 0).length
   const list = (data ?? []).filter((m) => (!kind || m.kind === kind) && (tag === null || (tag === '' ? m.tags.length === 0 : m.tags.includes(tag))))
-  const remove = (m: Material) => deleteWithUndo('material', m.id, '这条素材', () => inv(['materials']), '已引用它的作品不受影响。')
+  const remove = (m: Pick<Material, 'id'>) => deleteWithUndo('material', m.id, '这条素材', () => inv(['materials']), '已引用它的作品不受影响。')
+  const read = async (id: string, edit = false) => {
+    setReading(true)
+    try {
+      const full = await get<Material>(`/materials/${id}`)
+      if (edit) setDialog({ editing: full })
+      else setDetail(full)
+    } catch (e) { toast.error(errorMessage(e)) } finally { setReading(false) }
+  }
   const togglePick = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : p.length >= 10 ? (toast.info('一次最多选 10 条'), p) : [...p, id]))
   const dupCount = dupGroups.data?.length ?? 0
   return (
@@ -400,12 +434,12 @@ export default function Materials() {
           <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加素材</Button>
         </> : undefined} />
       <div className="mb-5 flex flex-wrap items-center gap-3">
-        <Tabs value={scope} onChange={setScope} items={[{ value: 'all', label: '全部' }, { value: 'account', label: '本账号' }, { value: 'shared', label: '共享' }]} />
-        <Select value={kind} onChange={(e) => setKind(e.target.value as MaterialKind | '')} className="w-32">
+        <Tabs value={scope} onChange={value => updateFilter('scope', value === 'all' ? null : value)} items={[{ value: 'all', label: '全部' }, { value: 'account', label: '本账号' }, { value: 'shared', label: '共享' }]} />
+        <Select value={kind} onChange={(e) => updateFilter('kind', e.target.value || null)} className="w-32">
           <option value="">全部类型</option>
           {(Object.keys(kindMeta) as MaterialKind[]).map((k) => <option key={k} value={k}>{kindMeta[k].label}</option>)}
         </Select>
-        <Select value={usage} onChange={(e) => setUsage(e.target.value as typeof usage)} className="w-36">
+        <Select value={usage} onChange={(e) => updateFilter('usage', e.target.value || null)} className="w-36">
           <option value="">引用情况不限</option>
           <option value="unused">从未被引用</option>
           <option value="used">已被引用</option>
@@ -416,7 +450,7 @@ export default function Materials() {
         )}
         <div className="relative w-full sm:ml-auto sm:w-72">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist-400" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索内容、来源、标签" className="pl-9" />
+          <Input value={q} onChange={(e) => updateFilter('q', e.target.value || null)} placeholder="搜索内容、来源、标签" className="pl-9" />
         </div>
       </div>
       {dupCount > 0 && canWrite && (
@@ -428,12 +462,12 @@ export default function Materials() {
       {(cloud.length > 0 || untagged > 0) && (
         <div className="mb-4 flex flex-wrap items-center gap-1.5">
           <Tag className="size-3.5 text-mist-400" />
-          <button type="button" onClick={() => setTag(null)} className={cn('cursor-pointer rounded-full px-2.5 py-0.5 text-[12px]', tag === null ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-600 hover:bg-mist-200')}>全部标签</button>
+          <button type="button" onClick={() => updateFilter('tag', null)} className={cn('cursor-pointer rounded-full px-2.5 py-0.5 text-[12px]', tag === null ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-600 hover:bg-mist-200')}>全部标签</button>
           {untagged > 0 && (
-            <button type="button" onClick={() => setTag(tag === '' ? null : '')} className={cn('cursor-pointer rounded-full px-2.5 py-0.5 text-[12px]', tag === '' ? 'bg-ink-600 text-white' : 'border border-dashed border-mist-300 text-mist-500 hover:border-ink-300')}>未打标签 {untagged}</button>
+            <button type="button" onClick={() => updateFilter('tag', tag === '' ? null : '')} className={cn('cursor-pointer rounded-full px-2.5 py-0.5 text-[12px]', tag === '' ? 'bg-ink-600 text-white' : 'border border-dashed border-mist-300 text-mist-500 hover:border-ink-300')}>未打标签 {untagged}</button>
           )}
           {cloud.map(([t, n]) => (
-            <button key={t} type="button" onClick={() => setTag(tag === t ? null : t)} style={{ fontSize: `${11.5 + Math.round((n / maxCount) * 3)}px` }}
+            <button key={t} type="button" onClick={() => updateFilter('tag', tag === t ? null : t)} style={{ fontSize: `${11.5 + Math.round((n / maxCount) * 3)}px` }}
               className={cn('cursor-pointer rounded-full px-2.5 py-0.5', tag === t ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-600 hover:bg-mist-200')}>
               {t}<span className="ml-1 opacity-60">{n}</span>
             </button>
@@ -453,36 +487,45 @@ export default function Materials() {
           action={!q && canWrite && <div className="flex gap-2"><Button icon={<Scissors className="size-4" />} onClick={() => setExtract(true)}>从长文提炼</Button><Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加第一条素材</Button></div>} /></Card>
       ) : (
         <div className="columns-1 gap-4 md:columns-2 xl:columns-3 2xl:columns-4">
-          {list.map((m) => (
+          {list.slice(0, visibleCount).map((m) => (
             <div key={m.id} ref={m.id === focus ? focusRef : undefined}>
               <Card className={cn('group mb-4 break-inside-avoid p-4', m.id === focus && 'ring-2 ring-ink-300', m.expired && 'border-orange-200')}>
                 <div className="mb-2 flex items-center gap-2">
                   {selecting && <input type="checkbox" aria-label="选择这条素材" className="accent-ink-600" checked={picked.includes(m.id)} onChange={() => togglePick(m.id)} />}
                   <Badge tone={kindMeta[m.kind].tone}>{kindMeta[m.kind].label}</Badge>
-                  {m.account_id === null && <Badge>共享</Badge>}
+                  {m.shared && <Badge>共享</Badge>}
                   {m.expired ? <Badge tone="red"><CalendarClock className="size-3" />已过期</Badge> : m.valid_until && <Badge><CalendarClock className="size-3" />有效至 {m.valid_until}</Badge>}
                   <span className="text-xs text-mist-400">{relTime(m.created_at)}</span>
                   <StarButton type="material" id={m.id} className="ml-auto" />
                   {canWrite && (
                     <div className="flex opacity-60 transition group-hover:opacity-100">
-                      <IconButton label="编辑" onClick={() => setDialog({ editing: m })}><Pencil className="size-3.5" /></IconButton>
+                      <IconButton label="编辑" disabled={reading} onClick={() => void read(m.id, true)}><Pencil className="size-3.5" /></IconButton>
                       <IconButton label="删除" className="hover:text-danger" onClick={() => remove(m)}><Trash2 className="size-3.5" /></IconButton>
                     </div>
                   )}
                 </div>
                 <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-mist-700">{m.content}</p>
+                <Button size="sm" variant="ghost" disabled={reading} onClick={() => void read(m.id)}>查看全文</Button>
                 <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-mist-100 pt-2.5 text-xs text-mist-400">
                   <UsagePopover m={m} />
                   {m.last_used_at && <span>· 最近 {relTime(m.last_used_at)}</span>}
                   {m.source && <span className="ml-1">来源：{m.source}</span>}
-                  {m.tags.map((t) => <button key={t} type="button" onClick={() => setTag(t)} className="cursor-pointer rounded bg-mist-100 px-1.5 py-0.5 text-mist-500 hover:bg-mist-200">{t}</button>)}
+                  {m.tags.map((t) => <button key={t} type="button" onClick={() => updateFilter('tag', t)} className="cursor-pointer rounded bg-mist-100 px-1.5 py-0.5 text-mist-500 hover:bg-mist-200">{t}</button>)}
                 </div>
               </Card>
             </div>
           ))}
         </div>
       )}
+      {!isLoading && list.length > visibleCount && (
+        <div className="mt-5 flex justify-center">
+          <Button variant="outline" onClick={() => setVisibleCount((count) => Math.min(count + 50, list.length))}>加载更多素材</Button>
+        </div>
+      )}
       {dialog && <MaterialDialog open onClose={() => setDialog(null)} accountId={acc.id} editing={dialog.editing} />}
+      <Drawer open={!!detail} onClose={() => setDetail(null)} title="素材全文">
+        <p className="whitespace-pre-wrap">{detail?.content}</p>
+      </Drawer>
       <ExtractDrawer open={extract} onClose={() => setExtract(false)} accountId={acc.id} />
       <DuplicatesDrawer open={dups} onClose={() => { setDups(false); void dupGroups.refetch() }} accountId={acc.id} />
       {tagging && <TagSuggestDrawer items={tagging} onClose={() => { setTagging(null); setPicked([]) }} />}

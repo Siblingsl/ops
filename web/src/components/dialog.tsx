@@ -1,8 +1,9 @@
 import { X } from 'lucide-react'
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { Button, cn, Input } from './ui'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 
 function useEsc(open: boolean, onClose: () => void) {
   useEffect(() => {
@@ -24,10 +25,55 @@ export function Dialog({ open, onClose, title, desc, children, footer, width = '
   className?: string
 }) {
   useEsc(open, onClose)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const previousFocus = useRef<HTMLElement | null>(null)
+  const wasOpen = useRef(false)
+  if (open && !wasOpen.current) {
+    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  }
+  wasOpen.current = open
+  useEffect(() => {
+    if (!open) return
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]'))
+      .filter(el => el.tabIndex >= 0 && !el.matches(':disabled') && el.getClientRects().length > 0)
+    if (!dialog.contains(document.activeElement)) {
+      const initial = dialog.querySelector<HTMLElement>('[autofocus]') ?? focusable()[0] ?? dialog
+      initial.focus()
+    }
+    const containTab = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return
+      const items = focusable()
+      if (items.length === 0) {
+        e.preventDefault()
+        dialog.focus()
+        return
+      }
+      const first = items[0]
+      const last = items[items.length - 1]
+      const active = document.activeElement
+      if (!dialog.contains(active)) {
+        e.preventDefault()
+        ;(e.shiftKey ? last : first).focus()
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', containTab, true)
+    return () => {
+      document.removeEventListener('keydown', containTab, true)
+      if (previousFocus.current?.isConnected) previousFocus.current.focus()
+    }
+  }, [open])
   if (!open) return null
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-mist-900/35 p-4 pt-[8vh] backdrop-blur-[2px]" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={cn('w-full animate-fade-in rounded-2xl bg-white shadow-pop', width, className)} role="dialog" aria-modal="true">
+      <div ref={dialogRef} tabIndex={-1} className={cn('w-full animate-fade-in rounded-2xl bg-white shadow-pop', width, className)} role="dialog" aria-modal="true">
         {title && (
           <div className="flex items-start justify-between gap-4 px-6 pb-2 pt-5">
             <div>
@@ -133,7 +179,7 @@ export function PasswordPrompt({ onDone, submit }: { onDone: (ok: boolean) => vo
         <Button variant="primary" loading={busy} onClick={go} disabled={!pw}>确认</Button>
       </>}>
       <p className="mb-3 text-[13px] leading-relaxed text-mist-500">修改凭证、模型密钥等敏感操作需要再次输入登录密码，5 分钟内有效。</p>
-      <Input type="password" autoFocus value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && pw && go()} placeholder="登录密码" invalid={!!err} />
+      <Input type="password" autoFocus value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => isEnterWithoutComposition(e.nativeEvent) && pw && go()} placeholder="登录密码" invalid={!!err} />
       {err && <p className="mt-2 text-xs text-danger">{err}</p>}
     </Dialog>
   )

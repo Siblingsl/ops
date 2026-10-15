@@ -551,22 +551,33 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
-	s.opsOpened(ctx, a)
-	if _, _, err = s.prepareOps(ctx, a, "on_open"); err != nil {
-		return err
-	}
 	counts := map[string]int{}
-	rows, err := s.db.Query(ctx, `SELECT status, count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL GROUP BY status`, a.ID)
+	var countsRaw, limitRaw []byte
+	var pendingTopics, todayPush, tokensToday, samples int
+	var aiReady, profileReady bool
+	err = s.db.QueryRow(ctx, `WITH status_counts AS (
+		SELECT status, count(*) AS n FROM work WHERE account_id=$1 AND deleted_at IS NULL GROUP BY status
+	) SELECT
+		coalesce((SELECT jsonb_object_agg(status,n) FROM status_counts),'{}'::jsonb),
+		(SELECT count(*) FROM topic WHERE account_id=$1 AND status='pending' AND deleted_at IS NULL),
+		(SELECT count(*) FROM push_record WHERE account_id=$1 AND status='ok' AND created_at >= $3),
+		(SELECT coalesce(sum(prompt_tokens+completion_tokens),0) FROM ai_call WHERE workspace_id=$2 AND created_at >= $3),
+		EXISTS(SELECT 1 FROM model_route r JOIN model_provider p ON p.id=r.provider_id
+			WHERE r.workspace_id=$2 AND p.workspace_id=$2 AND r.task_type='default' AND p.status='active'),
+		(SELECT count(*) FROM style_sample WHERE account_id=$1 AND deleted_at IS NULL),
+		EXISTS(SELECT 1 FROM account_profile WHERE account_id=$1 AND
+			(cardinality(positioning_tags)>0 OR target_audience<>'' OR persona_tone<>'')),
+		coalesce((SELECT value FROM app_setting WHERE workspace_id=$2 AND key='ai_limit'),
+			'{"enabled":false,"daily_tokens":2000000}'::jsonb)`, a.ID, ident(ctx).WorkspaceID, s.today()).Scan(
+		&countsRaw, &pendingTopics, &todayPush, &tokensToday, &aiReady, &samples, &profileReady, &limitRaw)
 	if err != nil {
 		return err
 	}
-	for rows.Next() {
-		var st string
-		var n int
-		_ = rows.Scan(&st, &n)
-		counts[st] = n
+	if err := json.Unmarshal(countsRaw, &counts); err != nil {
+		return err
 	}
-	rows.Close()
+	limit := aiLimit{DailyTokens: 2000000}
+	_ = json.Unmarshal(limitRaw, &limit)
 	type todo struct {
 		WorkID uuid.UUID `json:"work_id"`
 		Title  string    `json:"title"`
@@ -612,18 +623,9 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) error {
 		todos = append(todos, t)
 	}
 	trows.Close()
-	var pendingTopics, todayPush int
-	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM topic WHERE account_id=$1 AND status='pending' AND deleted_at IS NULL`, a.ID).Scan(&pendingTopics)
-	todayPush, _ = s.todayPushCount(ctx, a.ID)
-	var tokensToday int
-	tokensToday = s.tokensToday(ctx)
-	var aiReady bool
-	_ = s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM model_route r JOIN model_provider p ON p.id=r.provider_id
-		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND r.task_type='default' AND p.status='active')`, ident(ctx).WorkspaceID).Scan(&aiReady)
-	var samples int
-	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM style_sample WHERE account_id=$1 AND deleted_at IS NULL`, a.ID).Scan(&samples)
-	p, _ := s.loadProfile(ctx, a.ID)
-	profileReady := p != nil && (len(p.PositioningTags) > 0 || p.TargetAudience != "" || p.PersonaTone != "")
+	if err := trows.Err(); err != nil {
+		return err
+	}
 	return ok(w, map[string]any{
 		"account":        a,
 		"counts":         counts,
@@ -632,7 +634,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) error {
 		"today_push":     todayPush,
 		"daily_limit":    a.DailyPushLimit,
 		"tokens_today":   tokensToday,
-		"ai_limit":       s.loadLimit(ctx),
+		"ai_limit":       limit,
 		"setup": map[string]bool{
 			"ai":         aiReady,
 			"profile":    profileReady,

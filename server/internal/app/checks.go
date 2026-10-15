@@ -441,6 +441,40 @@ func (s *Server) startCheck(w http.ResponseWriter, r *http.Request) error {
 func (s *Server) runFactCheck(ctx context.Context, wk *Work, a *Account, runID uuid.UUID) {
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 	defer cancel()
+	materialIDs := append([]uuid.UUID(nil), wk.MaterialIDs...)
+	seenMaterials := map[uuid.UUID]bool{}
+	for _, id := range materialIDs {
+		seenMaterials[id] = true
+	}
+	for _, sec := range wk.Sections {
+		for _, id := range sec.MaterialIDs {
+			if !seenMaterials[id] {
+				materialIDs = append(materialIDs, id)
+				seenMaterials[id] = true
+			}
+		}
+	}
+	materialTexts := map[uuid.UUID]string{}
+	var err error
+	if len(materialIDs) > 0 {
+		var rows pgx.Rows
+		rows, err = s.db.Query(ctx, `SELECT id, content FROM material WHERE id=ANY($1) AND workspace_id=$2 AND deleted_at IS NULL`, materialIDs, ident(ctx).WorkspaceID)
+		if err == nil {
+			for rows.Next() {
+				var id uuid.UUID
+				var content string
+				if scanErr := rows.Scan(&id, &content); scanErr != nil {
+					err = scanErr
+					break
+				}
+				materialTexts[id] = content
+			}
+			if err == nil {
+				err = rows.Err()
+			}
+			rows.Close()
+		}
+	}
 	var b strings.Builder
 	for _, sec := range wk.Sections {
 		fmt.Fprintf(&b, "【段落 id=%s】%s\n%s\n", sec.ID, sec.Heading, sec.ContentMD)
@@ -461,19 +495,24 @@ func (s *Server) runFactCheck(ctx context.Context, wk *Work, a *Account, runID u
 
 %s
 ## 任务说明
-找出文中需要人工核实的句子：具体数据、引语、时间、人物或机构，以及"最、第一、绝对"等绝对化断言。quote 必须是原文中逐字摘录的完整句子，不要改写；section_id 填句子所在%s的 id。不要判断真假，只标出需要核实的地方。
+找出文中需要人工处理的事实句子：具体数据、引语、时间、人物或机构，以及"最、第一、绝对"等绝对化断言。逐条判断作者提供的关联素材是否含有能直接对应该句的出处。有直接出处时 support_status 填 supported，并给出素材 id 和素材中逐字摘录的引句；没有直接出处时填 unverified，不要猜测出处。素材支撑不代表事实真实，也不要判断真假。正文 quote 必须是原文中逐字摘录的完整句子，不要改写；section_id 填句子所在%s的 id。未能直接引用素材的句子仍须列出并说明待核实原因。
 
 ## 输出格式
-只输出 JSON：{"items":[{"section_id":"%s id","quote":"原文句子","claim_type":"data|quote|absolute|time|entity","reason":"为什么需要核实"}]}`, wk.Title, b.String(), unit, unit)
+只输出 JSON：{"items":[{"section_id":"%s id","quote":"原文句子","claim_type":"data|quote|absolute|time|entity","reason":"为什么需要核实","support_status":"supported|unverified","material_id":"素材 id 或空字符串","material_quote":"素材中的逐字引句或空字符串"}]}`, wk.Title, b.String(), unit, unit)
 	var out struct {
 		Items []struct {
-			SectionID string `json:"section_id"`
-			Quote     string `json:"quote"`
-			ClaimType string `json:"claim_type"`
-			Reason    string `json:"reason"`
+			SectionID     string `json:"section_id"`
+			Quote         string `json:"quote"`
+			ClaimType     string `json:"claim_type"`
+			Reason        string `json:"reason"`
+			SupportStatus string `json:"support_status"`
+			MaterialID    string `json:"material_id"`
+			MaterialQuote string `json:"material_quote"`
 		} `json:"items"`
 	}
-	_, err := s.runAIJSON(ctx, aiTask{Type: "fact_flag", Account: a, WorkID: &wk.ID, User: user, SkipStyle: true}, &out, nil)
+	if err == nil {
+		_, err = s.runAIJSON(ctx, aiTask{Type: "fact_flag", Account: a, WorkID: &wk.ID, User: user, SkipStyle: true, Materials: materialIDs}, &out, nil)
+	}
 	claimLabel := map[string]string{"data": "数据", "quote": "引语", "absolute": "绝对化断言", "time": "时间", "entity": "人物或机构"}
 	var items []CheckItem
 	status := "done"
@@ -528,8 +567,19 @@ func (s *Server) runFactCheck(ctx context.Context, wk *Work, a *Account, runID u
 				break
 			}
 		}
+		message := "需要核实的" + nz(claimLabel[it.ClaimType], "内容")
+		detail := it.Reason
+		if it.SupportStatus == "supported" {
+			materialID, parseErr := uuid.Parse(it.MaterialID)
+			materialQuote := strings.TrimSpace(it.MaterialQuote)
+			if parseErr == nil && materialQuote != "" && strings.Contains(materialTexts[materialID], materialQuote) {
+				location["material_support"] = map[string]string{"material_id": materialID.String(), "quote": materialQuote}
+				message = "有素材支撑的" + nz(claimLabel[it.ClaimType], "内容")
+				detail = "关联素材中有对应出处；这不代表系统已验证事实真实性，仍需你逐条确认。"
+			}
+		}
 		items = append(items, CheckItem{Category: "fact", MatchedText: quote, Location: location,
-			Message: "需要核实的" + nz(claimLabel[it.ClaimType], "内容"), Detail: it.Reason, fingerprint: fingerprint("fact", quote, quote)})
+			Message: message, Detail: detail, fingerprint: fingerprint("fact", quote, quote)})
 	}
 	err = s.withTx(context.WithoutCancel(ctx), func(tx pgx.Tx) error {
 		if err := s.insertItems(ctx, tx, wk.ID, runID, items); err != nil {

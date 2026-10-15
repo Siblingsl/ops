@@ -94,10 +94,14 @@ func TestU111ReorderDuringSectionSave(t *testing.T) {
 	for i, sec := range wk.Sections {
 		ids[len(ids)-i-1] = sec.ID
 	}
-	finished := make(chan int, 1)
+	type orderResponse struct {
+		status int
+		body   []byte
+	}
+	finished := make(chan orderResponse, 1)
 	go func() {
-		status, _ := env.do("PUT", "/api/v1/works/"+wk.ID.String()+"/sections/order", map[string]any{"ids": ids})
-		finished <- status
+		status, body := env.do("PUT", "/api/v1/works/"+wk.ID.String()+"/sections/order", map[string]any{"ids": ids, "base_revision": wk.Revision})
+		finished <- orderResponse{status, body}
 	}()
 	// 直到排序确实等在上述段落锁，才让保存继续 touchContent。
 	for {
@@ -120,14 +124,18 @@ func TestU111ReorderDuringSectionSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case status := <-finished:
-		if status != 200 {
-			t.Fatalf("并发排序失败: %d", status)
+	case result := <-finished:
+		if result.status != 409 || !bytes.Contains(result.body, []byte(`"code":"version_conflict"`)) {
+			t.Fatalf("旧修订排序未拒绝: %d %s", result.status, result.body)
 		}
 	case <-ctx.Done():
 		t.Fatal("保存提交后排序未完成")
 	}
 	env.mustJSON(t, "GET", "/api/v1/works/"+wk.ID.String(), nil, &wk)
+	if wk.Sections[0].ContentMD != "协作者的新正文" {
+		t.Fatal("冲突后丢失协作者保存")
+	}
+	env.mustJSON(t, "PUT", "/api/v1/works/"+wk.ID.String()+"/sections/order", map[string]any{"ids": ids, "base_revision": wk.Revision}, &wk)
 	if wk.Sections[len(wk.Sections)-1].ContentMD != "协作者的新正文" {
 		t.Fatal("丢失协作者保存")
 	}

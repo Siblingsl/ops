@@ -1,16 +1,19 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarDays, Check, ChevronDown, ChevronUp, GitBranch, History, Layers, Lock, Maximize2, Minimize2, RotateCcw, Save, Star } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router-dom'
+import { ArrowLeft, CalendarDays, Check, ChevronDown, ChevronUp, Copy, Download, GitBranch, History, Layers, Lock, Maximize2, Minimize2, RotateCcw, Save, Star } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
 import { confirm, Drawer } from '@/components/dialog'
-import { Badge, Button, cn, Field, Input, Notice, PageLoading, PlatformMark, Select, StatusBadge, Switch } from '@/components/ui'
+import { Badge, Button, cn, Field, Input, MoreMenu, Notice, PageLoading, PlatformMark, Select, StatusBadge, Switch } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { rememberAccount, useCanWrite } from '@/lib/session'
 import type { Platform, StarItem, Work, WorkspaceMember, WorkStatus } from '@/lib/types'
 import { rememberRecent, useCustomTheme, usePrefs, useWorkCmd } from '@/lib/v3'
+import { usePageVisible } from '@/lib/visibility'
+import { emitEditor } from './editor-tools'
 
 export interface WorkCtx {
   work: Work
@@ -24,6 +27,23 @@ export interface WorkCtx {
   reportEditing: (id: string) => void
 }
 export const useWork = () => useOutletContext<WorkCtx>()
+
+function markdownForWork(work: Work, origin: string) {
+  const blocks = [`# ${work.title.trim() || '未命名作品'}`]
+  for (const section of work.sections) {
+    if (section.heading.trim()) blocks.push(`## ${section.heading.trim()}`)
+    const body = section.content_md.replace(/(!\[[^\]]*\]\()\/api\/v1\/assets\/([^\s)]+)(\))/g,
+      (_match, imageStart: string, path: string, close: string) => `${imageStart}${origin}/api/v1/assets/${path}${close}`)
+    if (body.trim()) blocks.push(body)
+  }
+  return `${blocks.join('\n\n')}\n`
+}
+
+export function WorkHeaderAction({ children }: { children: ReactNode }) {
+  const [target, setTarget] = useState<HTMLElement | null>(null)
+  useEffect(() => { setTarget(document.getElementById('work-header-action-target')) }, [])
+  return target ? createPortal(children, target) : null
+}
 
 interface Presence { user_id: string; username: string; section_id: string | null; editing: boolean; at: string }
 
@@ -209,10 +229,19 @@ function Versions({ work, open, onClose, onRestored }: { work: Work; open: boole
 }
 
 export default function WorkLayout() {
+  const location = useLocation()
+  const nav = useNavigate()
+  const [copying, setCopying] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const visible = usePageVisible()
   const { workId } = useParams()
   const qc = useQueryClient()
   const canWrite = useCanWrite()
   const q = useQuery({ queryKey: ['work', workId], queryFn: () => get<Work>(`/works/${workId}`) })
+  const setWork = useCallback((w: Work) => qc.setQueryData(['work', workId], w), [qc, workId])
+  const patchWork = useCallback((p: Partial<Work> | ((w: Work) => Partial<Work>)) =>
+    qc.setQueryData<Work>(['work', workId], (w) => (w ? { ...w, ...(typeof p === 'function' ? p(w) : p) } : w)), [qc, workId])
+  const refresh = useCallback(() => q.refetch(), [q.refetch])
   const [versions, setVersions] = useState(false)
   const [derive, setDerive] = useState(false)
   const prefs = usePrefs()
@@ -253,24 +282,29 @@ export default function WorkLayout() {
   })
   // Presence (S3 协同提示): heartbeat every 20s; the server forgets entries after 30s.
   useEffect(() => {
-    if (!workId) return
+    if (!workId || !visible) return
     let alive = true
-    const beat = () => post<Presence[]>(`/works/${workId}/presence`, { section_id: sectionRef.current }).then((l) => alive && setPresence(l)).catch(() => undefined)
+    const beat = () => {
+      if (document.hidden) return
+      void post<Presence[]>(`/works/${workId}/presence`, { section_id: sectionRef.current }).then((l) => alive && setPresence(l)).catch(() => undefined)
+    }
     void beat()
     const t = window.setInterval(beat, 20_000)
     return () => {
       alive = false
       window.clearInterval(t)
-      void post(`/works/${workId}/presence`, { leave: true }).catch(() => undefined)
+      if (!document.hidden) void post(`/works/${workId}/presence`, { leave: true }).catch(() => undefined)
     }
-  }, [workId])
+  }, [workId, visible])
   const reportSection = useCallback((id: string | null) => {
     if (sectionRef.current === id) return
     sectionRef.current = id
+    if (document.hidden) return
     void post<Presence[]>(`/works/${workId}/presence`, { section_id: id }).then(setPresence).catch(() => undefined)
   }, [workId])
   const editedAt = useRef(0)
   const reportEditing = useCallback((id: string) => {
+    if (document.hidden) return
     if (sectionRef.current === id && Date.now() - editedAt.current < 10_000) return
     sectionRef.current = id
     editedAt.current = Date.now()
@@ -281,10 +315,37 @@ export default function WorkLayout() {
     return <div className="p-10"><Notice tone="red">{q.error instanceof ApiError ? q.error.message : '作品不存在或已删除'}</Notice></div>
   }
   const work = q.data
-  const setWork = (w: Work) => qc.setQueryData(['work', workId], w)
-  const patchWork = (p: Partial<Work> | ((w: Work) => Partial<Work>)) =>
-    qc.setQueryData<Work>(['work', workId], (w) => (w ? { ...w, ...(typeof p === 'function' ? p(w) : p) } : w))
-  const ctx: WorkCtx = { work, setWork, patchWork, refresh: () => q.refetch(), focus, setFocus, presence, reportSection, reportEditing }
+  const duplicate = async () => {
+    if (copying) return
+    setCopying(true)
+    try {
+      const wait: Promise<unknown>[] = []
+      emitEditor({ type: 'flush', wait })
+      await Promise.all(wait)
+      const copied = await post<Work>(`/works/${work.id}/duplicate`)
+      void qc.invalidateQueries({ queryKey: ['works', work.account_id] })
+      nav(`/works/${copied.id}`)
+    } catch (e) { toast.error(errorMessage(e)) } finally { setCopying(false) }
+  }
+  const exportMarkdown = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const wait: Promise<unknown>[] = []
+      emitEditor({ type: 'flush', wait })
+      await Promise.all(wait)
+      const current = await get<Work>(`/works/${work.id}`)
+      const url = URL.createObjectURL(new Blob([markdownForWork(current, window.location.origin)], { type: 'text/markdown;charset=utf-8' }))
+      const link = document.createElement('a')
+      const filename = (current.title.trim() || '未命名作品').replace(/[\\/:*?"<>|]/g, '_').replace(/[. ]+$/, '') || '未命名作品'
+      link.href = url
+      link.download = `${filename}.md`
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 4000)
+      toast.success('已开始下载')
+    } catch (e) { toast.error(errorMessage(e)) } finally { setExporting(false) }
+  }
+  const ctx: WorkCtx = { work, setWork, patchWork, refresh, focus, setFocus, presence, reportSection, reportEditing }
   const wx = work.platform === 'wechat_mp'
   const todos = work.post_push_todos ?? []
   const todosDone = todos.filter((t) => t.done).length
@@ -373,9 +434,14 @@ export default function WorkLayout() {
             ))}
           </nav>
           <div className={cn('ml-auto flex shrink-0 items-center gap-1', !focus && 'lg:ml-0')}>
+            <div id="work-header-action-target" data-testid="work-next-action" className="mr-1 flex shrink-0 items-center" />
             <PlanPopover work={work} onSaved={setWork} />
             <Button size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
             {canWrite && <Button size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}><span className="hidden xl:inline">派生</span></Button>}
+            {canWrite && <MoreMenu className="[&_[role=menu]]:bottom-auto [&_[role=menu]]:top-full [&_[role=menu]]:mb-0 [&_[role=menu]]:mt-1" items={[
+              { label: '复制为新草稿', icon: <Copy />, loading: copying, onClick: () => void duplicate() },
+              ...(location.pathname === `/works/${work.id}` ? [{ label: '导出 Markdown', icon: <Download />, loading: exporting, onClick: () => void exportMarkdown() }] : []),
+            ]} />}
             <Button size="sm" variant="ghost" title="专注模式（F11）" icon={focus ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />} onClick={() => setFocus(!focus)} />
           </div>
         </div>

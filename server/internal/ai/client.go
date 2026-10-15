@@ -41,11 +41,12 @@ type Usage struct {
 }
 
 type Request struct {
-	BaseURL  string
-	APIKey   string
-	Model    string
-	Messages []Message
-	JSON     bool
+	BaseURL     string
+	APIKey      string
+	Model       string
+	Messages    []Message
+	JSON        bool
+	Temperature *float64
 }
 
 type UpstreamError struct {
@@ -84,6 +85,9 @@ func stream(ctx context.Context, hc *http.Client, req Request, onDelta func(stri
 	}
 	if jsonMode {
 		body["response_format"] = map[string]string{"type": "json_object"}
+	}
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
 	}
 	b, _ := json.Marshal(body)
 	url := strings.TrimRight(req.BaseURL, "/") + "/chat/completions"

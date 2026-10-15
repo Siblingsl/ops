@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"image"
 	"image/draw"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,6 +33,7 @@ type Asset struct {
 	Height      int       `json:"height"`
 	Bytes       int       `json:"bytes"`
 	Position    int       `json:"position"`
+	AltText     string    `json:"alt_text"`
 	URL         string    `json:"url"`
 	AIGenerated bool      `json:"ai_generated"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -40,10 +43,11 @@ const (
 	maxUploadBytes = 20 << 20
 	maxStoredBytes = 1 << 20 // 公众号正文图不超过 1MB（F-007）
 	maxDimension   = 2560
+	maxImagePixels = 16_000_000
 )
 
 func (s *Server) loadAssets(ctx context.Context, workID uuid.UUID) ([]Asset, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, work_id, mime, width, height, bytes, position, coalesce(ai_generated,false), created_at FROM asset WHERE work_id=$1 ORDER BY position, created_at`, workID)
+	rows, err := s.db.Query(ctx, `SELECT id, work_id, mime, width, height, bytes, position, alt_text, coalesce(ai_generated,false), created_at FROM asset WHERE work_id=$1 ORDER BY position, created_at`, workID)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +55,7 @@ func (s *Server) loadAssets(ctx context.Context, workID uuid.UUID) ([]Asset, err
 	list := []Asset{}
 	for rows.Next() {
 		var a Asset
-		if err := rows.Scan(&a.ID, &a.WorkID, &a.Mime, &a.Width, &a.Height, &a.Bytes, &a.Position, &a.AIGenerated, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.WorkID, &a.Mime, &a.Width, &a.Height, &a.Bytes, &a.Position, &a.AltText, &a.AIGenerated, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		a.URL = "/api/v1/assets/" + a.ID.String() + "/file"
@@ -104,10 +108,128 @@ func flatten(img image.Image) image.Image {
 	return dst
 }
 
+func thumbnailStoragePath(storagePath string, width int, mime string) string {
+	ext := ".jpg"
+	if mime == "image/png" {
+		ext = ".png"
+	}
+	return fmt.Sprintf("%s.thumb-%d%s", filepath.ToSlash(storagePath), width, ext)
+}
+
+func encodeThumbnail(img image.Image, width int, mime string) ([]byte, error) {
+	b := img.Bounds()
+	if b.Dx() <= 0 || b.Dy() <= 0 {
+		return nil, validation("图片尺寸无效")
+	}
+	w := min(width, b.Dx())
+	h := max(1, int(float64(b.Dy())*float64(w)/float64(b.Dx())+0.5))
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Over, nil)
+	var out bytes.Buffer
+	if mime == "image/png" {
+		if err := png.Encode(&out, dst); err != nil {
+			return nil, err
+		}
+	} else if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 78}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func removeAssetFiles(dataDir, storagePath string) {
+	base := filepath.Join(dataDir, filepath.FromSlash(storagePath))
+	_ = os.Remove(base)
+	for _, width := range []int{256, 512} {
+		for _, ext := range []string{".jpg", ".png"} {
+			_ = os.Remove(base + fmt.Sprintf(".thumb-%d%s", width, ext))
+		}
+	}
+}
+
+func (s *Server) writeAssetFiles(storagePath string, data []byte, mime string) error {
+	path := filepath.Join(s.cfg.DataDir, filepath.FromSlash(storagePath))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		removeAssetFiles(s.cfg.DataDir, storagePath)
+		return err
+	}
+	for _, width := range []int{256, 512} {
+		thumb, err := encodeThumbnail(img, width, mime)
+		if err != nil {
+			removeAssetFiles(s.cfg.DataDir, storagePath)
+			return err
+		}
+		thumbPath := filepath.Join(s.cfg.DataDir, filepath.FromSlash(thumbnailStoragePath(storagePath, width, mime)))
+		if err := os.WriteFile(thumbPath, thumb, 0o644); err != nil {
+			removeAssetFiles(s.cfg.DataDir, storagePath)
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) assetThumbnail(a *assetRow, width int) ([]byte, error) {
+	thumbPath := filepath.Join(s.cfg.DataDir, filepath.FromSlash(thumbnailStoragePath(a.StoragePath, width, a.Mime)))
+	data, err := os.ReadFile(thumbPath)
+	if err == nil {
+		return data, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+	original, err := s.assetBytes(a)
+	if err != nil {
+		return nil, err
+	}
+	img, _, err := image.Decode(bytes.NewReader(original))
+	if err != nil {
+		return nil, err
+	}
+	data, err = encodeThumbnail(img, width, a.Mime)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(thumbPath), 0o755); err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(thumbPath), ".thumb-*")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmpPath, thumbPath); err != nil {
+		if _, statErr := os.Stat(thumbPath); statErr != nil {
+			return nil, err
+		}
+	}
+	return data, nil
+}
+
 // processImage converts any supported upload to jpg or png within 1MB (FR-M7-02).
 func processImage(raw []byte) ([]byte, string, int, int, error) {
 	if isHEIC(raw) {
 		return nil, "", 0, 0, validation("暂不支持 HEIC 格式，请先在手机或电脑上转为 JPG 后再上传")
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return nil, "", 0, 0, validation("无法识别的图片格式，请上传 JPG、PNG、WebP 或 GIF")
+	}
+	if config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > maxImagePixels {
+		return nil, "", 0, 0, validation("图片像素数超过 1600 万，请缩小后再上传")
 	}
 	img, format, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
@@ -175,11 +297,7 @@ func (s *Server) uploadAsset(w http.ResponseWriter, r *http.Request) error {
 		ext = ".png"
 	}
 	rel := filepath.Join("assets", m.ID.String(), id.String()+ext)
-	abs := filepath.Join(s.cfg.DataDir, rel)
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
+	if err := s.writeAssetFiles(filepath.ToSlash(rel), data, mime); err != nil {
 		return err
 	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
@@ -191,7 +309,7 @@ func (s *Server) uploadAsset(w http.ResponseWriter, r *http.Request) error {
 		return s.touchContent(ctx, tx, m.ID)
 	})
 	if err != nil {
-		_ = os.Remove(abs)
+		removeAssetFiles(s.cfg.DataDir, filepath.ToSlash(rel))
 		return err
 	}
 	list, err := s.loadAssets(ctx, m.ID)
@@ -212,12 +330,13 @@ type assetRow struct {
 	StoragePath string
 	Mime        string
 	SHA256      string
+	AltText     string
 }
 
 func (s *Server) assetRow(ctx context.Context, id uuid.UUID) (*assetRow, error) {
 	var a assetRow
-	err := s.db.QueryRow(ctx, `SELECT id, work_id, storage_path, mime, sha256 FROM asset WHERE id=$1 AND workspace_id=$2`, id, ident(ctx).WorkspaceID).
-		Scan(&a.ID, &a.WorkID, &a.StoragePath, &a.Mime, &a.SHA256)
+	err := s.db.QueryRow(ctx, `SELECT id, work_id, storage_path, mime, sha256, alt_text FROM asset WHERE id=$1 AND workspace_id=$2`, id, ident(ctx).WorkspaceID).
+		Scan(&a.ID, &a.WorkID, &a.StoragePath, &a.Mime, &a.SHA256, &a.AltText)
 	return &a, err
 }
 
@@ -241,11 +360,22 @@ func (s *Server) assetFile(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	data, err := s.assetBytes(a)
+	var data []byte
+	mime := a.Mime
+	switch r.URL.Query().Get("variant") {
+	case "", "original":
+		data, err = s.assetBytes(a)
+	case "256":
+		data, err = s.assetThumbnail(a, 256)
+	case "512":
+		data, err = s.assetThumbnail(a, 512)
+	default:
+		return validation("图片缩略图规格无效")
+	}
 	if err != nil {
 		return errNotFound
 	}
-	w.Header().Set("Content-Type", a.Mime)
+	w.Header().Set("Content-Type", mime)
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	_, _ = w.Write(data)
 	return nil
@@ -273,28 +403,39 @@ func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		Position int `json:"position"`
+		Position *int    `json:"position"`
+		AltText  *string `json:"alt_text"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
+	if in.Position == nil && in.AltText == nil {
+		return validation("请提供图片顺序或替代文字")
+	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id FROM asset WHERE work_id=$1 AND id<>$2 ORDER BY position, created_at`, workID, a.ID)
-		if err != nil {
-			return err
-		}
-		var ids []uuid.UUID
-		for rows.Next() {
-			var x uuid.UUID
-			_ = rows.Scan(&x)
-			ids = append(ids, x)
-		}
-		rows.Close()
-		pos := min(max(in.Position, 0), len(ids))
-		ids = append(ids[:pos], append([]uuid.UUID{a.ID}, ids[pos:]...)...)
-		for i, x := range ids {
-			if _, err := tx.Exec(ctx, `UPDATE asset SET position=$2 WHERE id=$1`, x, i); err != nil {
+		if in.AltText != nil {
+			if _, err := tx.Exec(ctx, `UPDATE asset SET alt_text=$2 WHERE id=$1`, a.ID, strings.TrimSpace(*in.AltText)); err != nil {
 				return err
+			}
+		}
+		if in.Position != nil {
+			rows, err := tx.Query(ctx, `SELECT id FROM asset WHERE work_id=$1 AND id<>$2 ORDER BY position, created_at`, workID, a.ID)
+			if err != nil {
+				return err
+			}
+			var ids []uuid.UUID
+			for rows.Next() {
+				var x uuid.UUID
+				_ = rows.Scan(&x)
+				ids = append(ids, x)
+			}
+			rows.Close()
+			pos := min(max(*in.Position, 0), len(ids))
+			ids = append(ids[:pos], append([]uuid.UUID{a.ID}, ids[pos:]...)...)
+			for i, x := range ids {
+				if _, err := tx.Exec(ctx, `UPDATE asset SET position=$2 WHERE id=$1`, x, i); err != nil {
+					return err
+				}
 			}
 		}
 		return s.touchContent(ctx, tx, workID)
@@ -307,6 +448,46 @@ func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return ok(w, list)
+}
+
+func (s *Server) suggestAssetAlt(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	a, err := s.assetRow(ctx, id)
+	if err != nil {
+		return err
+	}
+	workID, err := s.requireWorkAsset(a)
+	if err != nil {
+		return err
+	}
+	m, err := s.workMeta(ctx, workID)
+	if err != nil {
+		return err
+	}
+	if err := m.editable(); err != nil {
+		return err
+	}
+	data, err := s.assetBytes(a)
+	if err != nil {
+		return validation("读取原图失败")
+	}
+	result, err := s.runAI(ctx, aiTask{
+		Type: "image_alt", Account: m.Account, WorkID: &workID, Bare: true, SkipStyle: true,
+		User:   "请用中文写一句简洁、客观的图片替代文字，描述可见主体和必要情境。不要以“图片”开头，不推测图中不可见的信息，只输出替代文字。",
+		Images: []string{"data:" + a.Mime + ";base64," + base64.StdEncoding.EncodeToString(data)},
+	}, nil)
+	if err != nil {
+		return err
+	}
+	suggestion := strings.Trim(strings.TrimSpace(result.Text), "\"'“”‘’")
+	if suggestion == "" {
+		return apiErr(http.StatusBadGateway, "ai_empty_response", "图片替代文字建议为空，请重试")
+	}
+	return ok(w, map[string]string{"suggestion": suggestion})
 }
 
 func (s *Server) deleteAsset(w http.ResponseWriter, r *http.Request) error {
@@ -342,7 +523,7 @@ func (s *Server) deleteAsset(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	_ = os.Remove(filepath.Join(s.cfg.DataDir, filepath.FromSlash(a.StoragePath)))
+	removeAssetFiles(s.cfg.DataDir, a.StoragePath)
 	return ok(w, map[string]any{"ok": true})
 }
 
@@ -417,23 +598,19 @@ func (s *Server) cropAsset(w http.ResponseWriter, r *http.Request) error {
 		ext = ".png"
 	}
 	rel := filepath.Join("assets", m.ID.String(), newID.String()+ext)
-	abs := filepath.Join(s.cfg.DataDir, rel)
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
+	if err := s.writeAssetFiles(filepath.ToSlash(rel), data, mime); err != nil {
 		return err
 	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO asset (id, workspace_id, account_id, work_id, storage_path, mime, width, height, bytes, sha256, position)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT coalesce(max(position),-1)+1 FROM asset WHERE work_id=$4))`,
-			newID, ident(ctx).WorkspaceID, m.Account.ID, m.ID, filepath.ToSlash(rel), mime, width, height, len(data), secure.SHA256Hex(data)); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO asset (id, workspace_id, account_id, work_id, storage_path, mime, width, height, bytes, sha256, position, alt_text)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT coalesce(max(position),-1)+1 FROM asset WHERE work_id=$4),$11)`,
+			newID, ident(ctx).WorkspaceID, m.Account.ID, m.ID, filepath.ToSlash(rel), mime, width, height, len(data), secure.SHA256Hex(data), src.AltText); err != nil {
 			return err
 		}
 		return s.touchContent(ctx, tx, m.ID)
 	})
 	if err != nil {
-		_ = os.Remove(abs)
+		removeAssetFiles(s.cfg.DataDir, filepath.ToSlash(rel))
 		return err
 	}
 	list, err := s.loadAssets(ctx, m.ID)

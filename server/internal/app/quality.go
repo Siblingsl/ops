@@ -204,9 +204,10 @@ func (s *Server) qualityCalls(w http.ResponseWriter, r *http.Request) error {
 // ---------- EX-P-01 提示词回归集 ----------
 
 type evalSnapshot struct {
-	System   string `json:"system"`
-	UserRest string `json:"user_rest"`
-	JSON     bool   `json:"json"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	System      string   `json:"system"`
+	UserRest    string   `json:"user_rest"`
+	JSON        bool     `json:"json"`
 }
 
 type EvalCase struct {
@@ -306,7 +307,7 @@ func (s *Server) runSnapshot(ctx context.Context, task string, snap evalSnapshot
 	if err != nil {
 		return "", err
 	}
-	p := &ContextPack{System: snap.System, User: instructionBlock(template) + snap.UserRest}
+	p := &ContextPack{System: snap.System, User: instructionBlock(template) + snap.UserRest, Temperature: snap.Temperature}
 	streamed := false
 	start := time.Now()
 	text, usage, callErr := s.callModel(ctx, rt, p, snap.JSON, nil, &streamed)

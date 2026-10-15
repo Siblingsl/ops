@@ -6,17 +6,18 @@ import (
 )
 
 var (
-	reHeading   = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
-	reBold      = regexp.MustCompile(`\*\*(.+?)\*\*|__(.+?)__`)
-	reItalic    = regexp.MustCompile(`\*(.+?)\*|_(.+?)_`)
-	reUL        = regexp.MustCompile(`(?m)^\s*[-*+]\s+(.+)$`)
-	reOL        = regexp.MustCompile(`(?m)^\s*\d+\.\s+(.+)$`)
-	reQuote     = regexp.MustCompile(`(?m)^>\s?(.*)$`)
-	reLink      = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`)
-	reImage     = regexp.MustCompile(`!\[[^\]]*\]\([^)]+\)`)
-	reCodeFence = regexp.MustCompile("(?s)```[\\w]*\\n?(.*?)```")
+	reHeading    = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
+	reBold       = regexp.MustCompile(`\*\*(.+?)\*\*|__(.+?)__`)
+	reItalic     = regexp.MustCompile(`\*(.+?)\*|_(.+?)_`)
+	reUL         = regexp.MustCompile(`(?m)^\s*[-*+]\s+(.+)$`)
+	reOL         = regexp.MustCompile(`(?m)^\s*\d+\.\s+(.+)$`)
+	reQuote      = regexp.MustCompile(`(?m)^>\s?(.*)$`)
+	reLink       = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`)
+	reImage      = regexp.MustCompile(`!\[[^\]]*\]\([^)]+\)`)
+	reCodeFence  = regexp.MustCompile("(?s)```[\\w]*\\n?(.*?)```")
 	reInlineCode = regexp.MustCompile("`([^`]+)`")
-	reBlankRuns = regexp.MustCompile(`\n{3,}`)
+	reBlankRuns  = regexp.MustCompile(`\n{3,}`)
+	reOLPrefix   = regexp.MustCompile(`^\s*(\d+)\.`)
 )
 
 // mdToPlain converts Markdown to plain text using 06 文档第 5.4 节规则（小红书 / newspic 共用）.
@@ -33,7 +34,7 @@ func mdToPlain(md string) string {
 			return line
 		}
 		// Keep original number if present.
-		num := regexp.MustCompile(`^\s*(\d+)\.`).FindStringSubmatch(line)
+		num := reOLPrefix.FindStringSubmatch(line)
 		if len(num) >= 2 {
 			return num[1] + ". " + m[1]
 		}

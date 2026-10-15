@@ -165,15 +165,15 @@ type ImageInfo struct {
 }
 
 type Article struct {
-	ArticleType        string `json:"article_type,omitempty"`
-	Title              string `json:"title"`
-	Author             string `json:"author,omitempty"`
-	Digest             string `json:"digest,omitempty"`
-	Content            string `json:"content"`
-	ContentSourceURL   string `json:"content_source_url,omitempty"`
-	ThumbMediaID       string `json:"thumb_media_id,omitempty"`
-	NeedOpenComment    int    `json:"need_open_comment"`
-	OnlyFansCanComment int    `json:"only_fans_can_comment"`
+	ArticleType        string     `json:"article_type,omitempty"`
+	Title              string     `json:"title"`
+	Author             string     `json:"author,omitempty"`
+	Digest             string     `json:"digest,omitempty"`
+	Content            string     `json:"content"`
+	ContentSourceURL   string     `json:"content_source_url,omitempty"`
+	ThumbMediaID       string     `json:"thumb_media_id,omitempty"`
+	NeedOpenComment    int        `json:"need_open_comment"`
+	OnlyFansCanComment int        `json:"only_fans_can_comment"`
 	ImageInfo          *ImageInfo `json:"image_info,omitempty"`
 	CoverInfo          *struct {
 		CropPercentList []Crop `json:"crop_percent_list"`
@@ -220,27 +220,6 @@ func (c *Client) DraftGet(ctx context.Context, token, mediaID string) (*DraftIte
 		return nil, &Error{Code: 40007, Msg: "draft empty"}
 	}
 	return &out.NewsItem[0], nil
-}
-
-// DraftBatchGet lists draft media IDs (FR-M10-06). offset/count follow WeChat draft/batchget.
-func (c *Client) DraftBatchGet(ctx context.Context, token string, offset, count int) ([]string, int, error) {
-	var out struct {
-		TotalCount int `json:"total_count"`
-		ItemCount  int `json:"item_count"`
-		Item       []struct {
-			MediaID string `json:"media_id"`
-		} `json:"item"`
-	}
-	if err := c.postJSON(ctx, "/cgi-bin/draft/batchget", token, map[string]any{"offset": offset, "count": count, "no_content": 1}, &out); err != nil {
-		return nil, 0, err
-	}
-	ids := make([]string, 0, len(out.Item))
-	for _, it := range out.Item {
-		if it.MediaID != "" {
-			ids = append(ids, it.MediaID)
-		}
-	}
-	return ids, out.TotalCount, nil
 }
 
 // ArticleTotalDetail is one day of cumulative stats for an article (datacube/getarticletotal).

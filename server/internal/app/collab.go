@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"regexp"
 	"sort"
@@ -39,8 +40,18 @@ func (s *Server) listComments(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT `+commentCols+` FROM comment c LEFT JOIN app_user u ON u.id=c.author_id
-		WHERE c.work_id=$1 ORDER BY c.created_at`, m.ID)
+	cursor, err := parseListCursor(r)
+	if err != nil {
+		return err
+	}
+	args := []any{m.ID}
+	sql := `SELECT ` + commentCols + ` FROM comment c LEFT JOIN app_user u ON u.id=c.author_id WHERE c.work_id=$1`
+	if cursor != nil {
+		args = append(args, cursor.CreatedAt, cursor.ID)
+		sql += ` AND (c.created_at,c.id) < ($2,$3)`
+	}
+	args = append(args, listPageSize+1)
+	rows, err := s.db.Query(r.Context(), sql+fmt.Sprintf(` ORDER BY c.created_at DESC,c.id DESC LIMIT $%d`, len(args)), args...)
 	if err != nil {
 		return err
 	}
@@ -53,7 +64,24 @@ func (s *Server) listComments(w http.ResponseWriter, r *http.Request) error {
 		}
 		list = append(list, c)
 	}
-	return ok(w, list)
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	hasMore := len(list) > listPageSize
+	if hasMore {
+		list = list[:listPageSize]
+	}
+	var nextCursor *string
+	if hasMore {
+		last := list[len(list)-1]
+		v := encodeListCursor(last.CreatedAt, last.ID)
+		nextCursor = &v
+	}
+	var openCount int
+	if err := s.db.QueryRow(r.Context(), `SELECT count(*) FROM comment WHERE work_id=$1 AND resolved_at IS NULL`, m.ID).Scan(&openCount); err != nil {
+		return err
+	}
+	return ok(w, map[string]any{"items": list, "open_count": openCount, "next_cursor": nextCursor})
 }
 
 var mentionRe = regexp.MustCompile(`@([\p{L}\p{N}_.-]{1,32})`)

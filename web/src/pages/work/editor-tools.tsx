@@ -5,13 +5,15 @@ import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
 import { Badge, Button, cn, Spinner, Textarea } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
-import { errorMessage, get, post, put } from '@/lib/api'
+import { ApiError, errorMessage, get, post, put } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
-import type { LintHit, Material, RetrieveHit, Section, SectionRevision, Variant, Work } from '@/lib/types'
+import type { LintHit, Material, MaterialPreview, RetrieveHit, Section, SectionRevision, Variant, Work } from '@/lib/types'
+import { SectionConflictDialog } from './section-save-dialogs'
 
 // ---------- 编辑器内部事件（侧栏 ↔ 段落） ----------
 
 export type EditorEvent =
+  | { type: 'selection'; text: string }
   | { type: 'apply'; sectionId: string; text: string; target: 'section' | 'selection' | 'end'; original?: string; callId?: string | null }
   | { type: 'fix-sentence'; sectionId: string; sentence: string }
   | { type: 'insert'; sectionId: string; text: string }
@@ -85,7 +87,7 @@ export function removeSentenceAt(text: string, needle: string, n: number): strin
 }
 
 export function PendingDialog({ work, section, mark, onClose, onReplace, onDelete }: {
-  work: Work
+  work: Pick<Work, 'account_id' | 'title'>
   section: Section
   mark: PendingMark
   onClose: () => void
@@ -210,29 +212,31 @@ export function VariantsCard({ title, original, variants, onPick, onClose, onMor
 
 const revOrigin: Record<string, string> = { ai: 'AI 生成', human: '人工编辑', mixed: 'AI + 人工修改', rewrite: '改写替换' }
 
-export function RevisionsDialog({ section, onClose, onRestored }: { section: Section; onClose: () => void; onRestored: (w: Work) => void }) {
+export function RevisionsDialog({ section, workId, onClose, onRestored }: { section: Section; workId: string; onClose: () => void; onRestored: (w: Work) => void }) {
   const q = useQuery({ queryKey: ['section-revisions', section.id], queryFn: () => get<SectionRevision[]>(`/sections/${section.id}/revisions`) })
   const [pick, setPick] = useState<SectionRevision | null>(null)
   const [busy, setBusy] = useState(false)
+  const [conflict, setConflict] = useState<Section | null>(null)
   useEffect(() => {
     if (!pick && q.data?.length) setPick(q.data[0])
   }, [q.data, pick])
-  const restore = async () => {
+  const restore = async (base = section.revision) => {
     if (!pick) return
     setBusy(true)
     try {
-      onRestored(await post<Work>(`/sections/${section.id}/revisions/${pick.id}/restore`))
+      onRestored(await post<Work>(`/sections/${section.id}/revisions/${pick.id}/restore`, { base_revision: base }))
       toast.success('已回退这一段，其他段落不受影响')
       onClose()
     } catch (e) {
-      toast.error(errorMessage(e))
+      if (e instanceof ApiError && e.code === 'version_conflict') setConflict((e.detail as { server: Section }).server)
+      else toast.error(errorMessage(e))
     } finally {
       setBusy(false)
     }
   }
   return (
     <Dialog open onClose={onClose} title={`段落历史 · ${section.heading || section.key_point || '本段'}`} desc="最近 10 次变化。回退只影响这一段，整篇版本历史仍然保留。" width="max-w-3xl"
-      footer={<><Button variant="ghost" onClick={onClose}>关闭</Button><Button variant="primary" loading={busy} disabled={!pick} icon={<RotateCcw className="size-3.5" />} onClick={restore}>回退到这个版本</Button></>}>
+      footer={<><Button variant="ghost" onClick={onClose}>关闭</Button><Button variant="primary" loading={busy} disabled={!pick} icon={<RotateCcw className="size-3.5" />} onClick={() => restore()}>回退到这个版本</Button></>}>
       {q.isLoading ? <Spinner /> : (q.data ?? []).length === 0 ? <p className="py-8 text-center text-sm text-mist-400">这一段还没有历史记录。</p> : (
         <div className="grid gap-3 md:grid-cols-[200px_1fr]">
           <ul className="scrollbar-thin max-h-[50vh] space-y-1 overflow-y-auto">
@@ -249,19 +253,24 @@ export function RevisionsDialog({ section, onClose, onRestored }: { section: Sec
           <div className="scrollbar-thin max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded-lg bg-mist-50 p-3 text-[13.5px] leading-relaxed text-mist-700">{pick?.content_md || '（空）'}</div>
         </div>
       )}
+      <SectionConflictDialog server={conflict} heading={section.heading} content={pick?.content_md ?? ''} onClose={() => setConflict(null)} onResolve={async keepMine => {
+        if (!conflict) return
+        if (keepMine) await restore(conflict.revision)
+        else { onRestored(await get<Work>(`/works/${workId}`)); onClose() }
+      }} />
     </Dialog>
   )
 }
 
 // ---------- 段落级素材绑定（EX-E-05） ----------
 
-export function SectionMaterials({ work, section, readOnly, onWork }: { work: Work; section: Section; readOnly: boolean; onWork: (w: Work) => void }) {
+export function SectionMaterials({ work, section, readOnly, onWork }: { work: Pick<Work, 'account_id'>; section: Section; readOnly: boolean; onWork: (w: Work) => void }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const ids = section.material_ids ?? []
   const materials = useQuery({
     queryKey: ['materials', work.account_id, ''],
-    queryFn: () => get<Material[]>(`/materials?account_id=${work.account_id}`),
+    queryFn: () => get<MaterialPreview[]>(`/materials?account_id=${work.account_id}`),
     enabled: open,
   })
   const query = `${section.heading} ${section.key_point} ${section.content_md.slice(0, 300)}`.trim()

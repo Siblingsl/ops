@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -20,6 +21,11 @@ type DailyBrief struct {
 }
 
 func (s *Server) dailyBriefJob(ctx context.Context) {
+	s.dailyBriefJobForDay(ctx, s.today())
+}
+
+func (s *Server) dailyBriefJobForDay(ctx context.Context, day time.Time) {
+	day = time.Date(day.In(s.loc).Year(), day.In(s.loc).Month(), day.In(s.loc).Day(), 0, 0, 0, 0, s.loc)
 	rows, err := s.db.Query(ctx, `SELECT id, workspace_id FROM platform_account WHERE status='active' AND NOT is_demo`)
 	if err != nil {
 		return
@@ -34,12 +40,12 @@ func (s *Server) dailyBriefJob(ctx context.Context) {
 	}
 	rows.Close()
 	for _, x := range list {
-		if !s.markOnce(ctx, "brief:"+x.id.String()+":"+s.today().Format("2006-01-02")) {
+		if !s.markOnce(ctx, "brief:"+x.id.String()+":"+day.Format("2006-01-02")) {
 			continue
 		}
 		jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: x.ws})
-		if err := s.generateBrief(jctx, x.id); err != nil {
-			slog.Warn("生成今日简报失败", "account", x.id, "err", err)
+		if err := s.generateBriefForDay(jctx, x.id, day); err != nil {
+			slog.Warn("生成每日简报失败", "account", x.id, "date", day.Format("2006-01-02"), "err", err)
 		}
 	}
 }
@@ -75,23 +81,32 @@ func (s *Server) getBrief(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) generateBrief(ctx context.Context, accountID uuid.UUID) error {
+	return s.generateBriefForDay(ctx, accountID, s.today())
+}
+
+func (s *Server) generateBriefForDay(ctx context.Context, accountID uuid.UUID, day time.Time) error {
 	a, err := s.account(ctx, accountID)
 	if err != nil {
 		return err
 	}
-	today := s.today()
+	today := time.Date(day.In(s.loc).Year(), day.In(s.loc).Month(), day.In(s.loc).Day(), 0, 0, 0, 0, s.loc)
+	end := today.AddDate(0, 0, 1)
 	var published int
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL AND published_at >= $2 AND published_at < $3`,
 		a.ID, today.AddDate(0, 0, -1), today).Scan(&published)
 	var reads int
 	_ = s.db.QueryRow(ctx, `SELECT coalesce(sum(d.reads),0) FROM work_metric_d7 d JOIN work w ON w.id=d.work_id
-		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.published_at >= $2`, a.ID, today.AddDate(0, 0, -7)).Scan(&reads)
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.published_at >= $2 AND w.published_at < $3`, a.ID, today.AddDate(0, 0, -7), end).Scan(&reads)
 	var adopted int
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM topic t WHERE t.account_id=$1 AND t.status='adopted' AND t.deleted_at IS NULL
 		AND NOT EXISTS (SELECT 1 FROM work w WHERE w.topic_id=t.id AND w.deleted_at IS NULL)`, a.ID).Scan(&adopted)
 	var pendingMetrics int
+	asOf := s.now()
+	if !today.Equal(s.today()) {
+		asOf = end.Add(-time.Nanosecond)
+	}
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND `+nodeDueExpr(2, 3)+` IS NOT NULL`,
-		a.ID, s.now(), datacubeCovers(a)).Scan(&pendingMetrics)
+		a.ID, asOf, datacubeCovers(a)).Scan(&pendingMetrics)
 	recTitles := []string{}
 	recRows, err := s.db.Query(ctx, `SELECT it->>'title' FROM daily_recommendation d, jsonb_array_elements(d.items) it
 		WHERE d.account_id=$1 AND d.date=$2 ORDER BY d.version DESC LIMIT 5`, a.ID, today)

@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity, AlertCircle, BookOpenCheck, Bot, Check, ChevronsRight, History, Library, MessageSquare, Plus, Send, Sparkles, Square, Stethoscope, Trash2,
 } from 'lucide-react'
@@ -11,10 +11,13 @@ import { Badge, Button, cn, Select, Spinner, Textarea } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post, put, stream } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useCanWrite, useMe } from '@/lib/session'
-import type { ActivityItem, Comment, PolishIssue, RetrieveHit, Section, Work, WorkspaceMember } from '@/lib/types'
+import type { ActivityItem, Comment, Material, PolishIssue, RetrieveHit, Section, Work, WorkspaceMember } from '@/lib/types'
 import { usePendingMemories, usePrefs, waitJob } from '@/lib/v3'
-import { emitEditor, findPending, scrollToSection, type SidebarTab, useEditorEvents } from './editor-tools'
+import { usePageVisible } from '@/lib/visibility'
+import { emitEditor, scrollToSection, type SidebarTab, useEditorEvents } from './editor-tools'
+import { usePendingSections } from './editor-pending'
 
 interface Props {
   work: Work
@@ -27,6 +30,7 @@ interface Props {
 }
 
 type TabDef = { id: SidebarTab; label: string; icon: React.ReactNode }
+type CommentPage = { items: Comment[]; open_count: number; next_cursor: string | null }
 
 const tabGroups: { label: string; tabs: TabDef[] }[] = [
   { label: '写作', tabs: [
@@ -45,9 +49,27 @@ const tabGroups: { label: string; tabs: TabDef[] }[] = [
 ]
 
 export function EditorSidebar({ work, setWork, active, selection, tab, onTab: setTab, onClose }: Props) {
-  const pendingCount = work.sections.reduce((n, s) => n + findPending(s.content_md).length, 0)
-  const comments = useQuery({ queryKey: ['comments', work.id], queryFn: () => get<Comment[]>(`/works/${work.id}/comments`), refetchInterval: 60_000 })
-  const openComments = (comments.data ?? []).filter((c) => !c.resolved_at).length
+  const visible = usePageVisible()
+  const pendingCount = usePendingSections(work.sections).length
+  const comments = useInfiniteQuery({
+    queryKey: ['comments', work.id],
+    queryFn: ({ pageParam }) => get<CommentPage>(`/works/${work.id}/comments${pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : ''}`),
+    initialPageParam: '' as string,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    enabled: visible,
+    refetchInterval: visible ? 60_000 : false,
+  })
+  const commentList = comments.data?.pages.flatMap((page) => page.items) ?? []
+  const commentTarget = new URLSearchParams(location.search).get('comment')
+  useEffect(() => {
+    if (visible) void comments.refetch({ cancelRefetch: false })
+  }, [visible, comments.refetch])
+  useEffect(() => {
+    if (commentTarget && !commentList.some((comment) => comment.id === commentTarget) && comments.hasNextPage && !comments.isFetchingNextPage) {
+      void comments.fetchNextPage()
+    }
+  }, [commentTarget, commentList.length, comments.hasNextPage, comments.isFetchingNextPage, comments.fetchNextPage])
+  const openComments = comments.data?.pages[0]?.open_count ?? commentList.filter((c) => !c.resolved_at).length
   const pendingMemories = usePendingMemories(work.account_id)
   return (
     <div className="flex h-full flex-col">
@@ -76,7 +98,7 @@ export function EditorSidebar({ work, setWork, active, selection, tab, onTab: se
         {tab === 'polish' && <PolishTab work={work} />}
         {tab === 'readthrough' && <ReadThroughTab work={work} active={active} />}
         {tab === 'pending' && <PendingTab work={work} />}
-        {tab === 'comments' && <CommentsTab work={work} active={active} selection={selection} list={comments.data ?? []} refetch={() => comments.refetch()} />}
+        {tab === 'comments' && <CommentsTab work={work} active={active} selection={selection} list={commentList} refetch={() => { void comments.refetch() }} hasMore={comments.hasNextPage} loadingMore={comments.isFetchingNextPage} loadMore={() => { void comments.fetchNextPage() }} />}
         {tab === 'activity' && <ActivityTab work={work} />}
       </div>
       {pendingMemories > 0 && (
@@ -109,13 +131,25 @@ function MaterialsTab({ work, setWork, active }: { work: Work; setWork: (w: Work
     staleTime: 30_000,
   })
   const [open, setOpen] = useState<string | null>(null)
+  const [fulls, setFulls] = useState<Record<string, Material>>({})
   if (!active) return <Hint>点一下任意段落，这里会推荐与这一段相关的素材，以及你以前写过的类似段落。</Hint>
   const mats = (q.data?.items ?? []).filter((h) => h.type === 'material').slice(0, 5)
-  const cite = (h: RetrieveHit) => {
-    const text = (h.content ?? '').trim()
-    if (!text) return
-    emitEditor({ type: 'insert', sectionId: active.id, text: h.source ? `${text}（来源：${h.source}）` : text })
-    toast.success('已在光标处插入素材原文')
+  const view = async (h: RetrieveHit) => {
+    if (open === h.id) { setOpen(null); return }
+    try {
+      const full = await get<Material>(`/materials/${h.id}`)
+      setFulls(x => ({ ...x, [h.id]: full }))
+      setOpen(h.id)
+    } catch (e) { toast.error(errorMessage(e)) }
+  }
+  const cite = async (h: RetrieveHit) => {
+    try {
+      const full = await get<Material>(`/materials/${h.id}`)
+      const text = full.content.trim()
+      if (!text) return
+      emitEditor({ type: 'insert', sectionId: active.id, text: full.source ? `${text}（来源：${full.source}）` : text })
+      toast.success('已在光标处插入素材原文')
+    } catch (e) { toast.error(errorMessage(e)) }
   }
   const hist = (q.data?.items ?? []).filter((h) => h.type === 'history')
   const use = async (id: string) => {
@@ -135,15 +169,15 @@ function MaterialsTab({ work, setWork, active }: { work: Work; setWork: (w: Work
           <ul className="space-y-2">
             {mats.map((h) => (
               <li key={h.id} className="rounded-lg border border-mist-200 p-2.5">
-                <p className={cn('whitespace-pre-wrap text-[12.5px] leading-relaxed text-mist-700', open !== h.id && 'line-clamp-4')}>{h.content}</p>
+                <p className={cn('whitespace-pre-wrap text-[12.5px] leading-relaxed text-mist-700', open !== h.id && 'line-clamp-4')}>{open === h.id ? fulls[h.id]?.content : h.content}</p>
                 {open === h.id && (h.source || h.tags?.length) && (
                   <p className="mt-1 text-[11px] text-mist-400">{h.source && `来源：${h.source}`}{h.tags?.length ? ` · ${h.tags.join('、')}` : ''}</p>
                 )}
                 <div className="mt-1 truncate text-[11px] text-mist-400" title={h.reason}>{h.reason}</div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                  <Button size="sm" variant="ghost" onClick={() => setOpen(open === h.id ? null : h.id)}>{open === h.id ? '收起' : '查看'}</Button>
+                  <Button size="sm" variant="ghost" onClick={() => void view(h)}>{open === h.id ? '收起' : '查看'}</Button>
                   {canWrite && !work.locked && <>
-                    <Button size="sm" variant="ghost" onClick={() => cite(h)}>插入引用</Button>
+                    <Button size="sm" variant="ghost" onClick={() => void cite(h)}>插入引用</Button>
                     <Button size="sm" variant="secondary" icon={<Plus className="size-3" />} className="ml-auto" onClick={() => use(h.id)}>用于本段</Button>
                   </>}
                 </div>
@@ -258,7 +292,7 @@ function CopilotTab({ work, active, selection }: { work: Work; active: Section |
       </div>
       <div className="flex items-end gap-1.5">
         <Textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="问点什么…（Ctrl+Enter 发送）" className="text-[12.5px]"
-          onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void ask(text) } }} />
+          onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && isEnterWithoutComposition(e.nativeEvent)) { e.preventDefault(); void ask(text) } }} />
         {pending ? <Button size="sm" variant="ghost" icon={<Square className="size-3.5" />} onClick={() => abort.current?.abort()} />
           : <Button size="sm" variant="primary" icon={<Send className="size-3.5" />} disabled={!text.trim()} onClick={() => ask(text)} />}
       </div>
@@ -391,7 +425,7 @@ function PolishTab({ work }: { work: Work }) {
 // ---------- 待核实（EX-E-04） ----------
 
 function PendingTab({ work }: { work: Work }) {
-  const all = work.sections.flatMap((s) => findPending(s.content_md).map((p) => ({ s, p })))
+  const all = usePendingSections(work.sections)
   if (all.length === 0) return <Hint>没有待核实的地方。</Hint>
   return (
     <div className="space-y-2">
@@ -409,7 +443,7 @@ function PendingTab({ work }: { work: Work }) {
 
 // ---------- 批注（EX-L-02） ----------
 
-function CommentsTab({ work, active, selection, list, refetch }: { work: Work; active: Section | null; selection: string; list: Comment[]; refetch: () => void }) {
+function CommentsTab({ work, active, selection, list, refetch, hasMore, loadingMore, loadMore }: { work: Work; active: Section | null; selection: string; list: Comment[]; refetch: () => void; hasMore: boolean; loadingMore: boolean; loadMore: () => void }) {
   const { data: me } = useMe()
   const members = useQuery({ queryKey: ['members'], queryFn: () => get<WorkspaceMember[]>('/workspaces/current/members'), staleTime: 300_000 })
   const [body, setBody] = useState('')
@@ -501,6 +535,7 @@ function CommentsTab({ work, active, selection, list, refetch }: { work: Work; a
           ))}
         </ul>
       )}
+      {hasMore && <div className="text-center"><Button size="sm" variant="ghost" loading={loadingMore} onClick={loadMore}>加载更多</Button></div>}
     </div>
   )
 }

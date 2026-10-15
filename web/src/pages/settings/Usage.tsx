@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
-import { Card, CardHeader, cn, Empty, Input, PageHeader, PageLoading, Tabs } from '@/components/ui'
+import { Card, CardHeader, cn, Empty, Input, PageHeader, PageState, Tabs } from '@/components/ui'
 import { get } from '@/lib/api'
 import { fmtNum } from '@/lib/format'
 import type { AILimit } from '@/lib/types'
@@ -40,8 +40,8 @@ function UsageStats() {
   const [group, setGroup] = useState<'day' | 'task' | 'model' | 'account'>('day')
   const [from, setFrom] = useState(day(new Date(Date.now() - 29 * 86400_000)))
   const [to, setTo] = useState(day(new Date()))
-  const { data, isLoading } = useQuery({ queryKey: ['usage', group, from, to], queryFn: () => get<UsageResp>(`/usage?group_by=${group}&from=${from}&to=${to}`) })
-  if (isLoading || !data) return <PageLoading />
+  const { data, isLoading, error, failureReason, isFetching, refetch } = useQuery({ queryKey: ['usage', group, from, to], queryFn: () => get<UsageResp>(`/usage?group_by=${group}&from=${from}&to=${to}`) })
+  if (isLoading || !data) return <PageState loading={isLoading} error={error ?? failureReason} retrying={isFetching} onRetry={() => void refetch()} emptyTitle="暂无用量数据" />
   const max = Math.max(1, ...data.rows.map((r) => r.prompt_tokens + r.completion_tokens))
   const pct = data.limit.enabled ? Math.min(100, (data.today_tokens / data.limit.daily_tokens) * 100) : 0
   const hasCost = data.total.cost != null

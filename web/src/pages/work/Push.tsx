@@ -1,18 +1,18 @@
 import { useQuery } from '@tanstack/react-query'
 import { CheckCircle2, Circle, Copy, ExternalLink, Loader2, Send, XCircle } from 'lucide-react'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BackfillForm, PostPushTodos } from '@/components/backfill'
 import { CropPreview } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
-import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, PageLoading, Switch } from '@/components/ui'
+import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, PageState, Switch } from '@/components/ui'
 import { ApiError, errorMessage, get, post, stream } from '@/lib/api'
 import { runeLen } from '@/lib/format'
 import { useCanWrite } from '@/lib/session'
 import type { CredState, CropBox, WechatDefaults, Work } from '@/lib/types'
 import { useWechatHtml } from './Preview'
-import { useWork } from './WorkLayout'
+import { useWork, WorkHeaderAction } from './WorkLayout'
 
 interface PushPreview {
   mode: 'new' | 'overwrite'
@@ -50,6 +50,7 @@ const backendTodos = [
 
 export default function Push() {
   const { work, setWork, refresh } = useWork()
+  const nav = useNavigate()
   const canWrite = useCanWrite()
   // D-048：图文卡片与漫画一样写入图片消息草稿。
   const comic = work.content_format === 'comic' || work.content_format === 'card_post'
@@ -61,9 +62,10 @@ export default function Push() {
   const [failure, setFailure] = useState<{ step: string; message: string } | null>(null)
   const [choice, setChoice] = useState<{ reason: 'modified' | 'missing'; message: string } | null>(null)
   const [result, setResult] = useState<{ action: string; backend_url: string; today_count: number } | null>(null)
+  const [syncingDraft, setSyncingDraft] = useState(false)
   const [todos, setTodos] = useState<boolean[]>(backendTodos.map(() => false))
 
-  if (pv.isLoading || !pv.data) return <PageLoading />
+  if (pv.isLoading || !pv.data) return <PageState loading={pv.isLoading} error={pv.error ?? pv.failureReason} retrying={pv.isFetching} onRetry={() => void pv.refetch()} emptyTitle="暂无推送预览数据" />
   const p = pv.data
   const f = fields ?? p.fields
   const setF = (patch: Partial<WechatDefaults>) => setFields({ ...f, ...patch })
@@ -111,17 +113,50 @@ export default function Push() {
     toast.success('已复制 HTML，可以粘贴到公众号编辑器')
   }
 
+  const syncDraft = async () => {
+    if (syncingDraft) return
+    setSyncingDraft(true)
+    try {
+      const r = await post<{ message: string }>(`/works/${work.id}/wechat/sync-draft`)
+      toast.message(r.message)
+      await refresh()
+    } catch (e) { toast.error(errorMessage(e)) }
+    finally { setSyncingDraft(false) }
+  }
+
   if (!p.can_push && work.status !== 'published' && !result) {
     return (
-      <div className="mx-auto max-w-2xl px-6 py-12">
-        <HumanGate code="H-04">发布前检查还没有全部确认，不能写入草稿。<Link to={`/works/${work.id}/check`} className="ml-1 font-semibold underline">去检查</Link></HumanGate>
-      </div>
+      <>
+        <WorkHeaderAction>
+          <div className="flex items-center gap-2">
+            <Link to={`/works/${work.id}/preview`} className="inline-flex items-center rounded-lg border border-mist-200 px-3 py-2 text-xs font-medium text-mist-700 hover:bg-mist-50">看排版</Link>
+            <Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/check`)}>去检查</Button>
+          </div>
+        </WorkHeaderAction>
+        <div className="mx-auto max-w-2xl px-6 py-12">
+          <HumanGate code="H-04">发布前检查还没有全部确认，不能写入草稿。</HumanGate>
+        </div>
+      </>
     )
   }
 
   const showSteps = running || Object.keys(steps).length > 0 || failure
   return (
     <div className="mx-auto grid w-full max-w-[1280px] gap-6 px-6 py-8 lg:grid-cols-[1fr_380px] 2xl:max-w-[1480px]">
+      <WorkHeaderAction>
+        <div className="flex items-center gap-2">
+          <Link to={`/works/${work.id}/preview`} className="inline-flex items-center rounded-lg border border-mist-200 px-3 py-2 text-xs font-medium text-mist-700 hover:bg-mist-50">看排版</Link>
+          {!result && work.status !== 'published' ? (
+            <Button size="sm" variant="human" loading={running}
+              disabled={!canWrite || !credOk || runeLen(f.author) > 16 || (!comic && !cover) || (comic && !(p.panel_images && p.panel_images > 0))}
+              onClick={() => push()} icon={<Send className="size-4" />}>
+              {p.mode === 'overwrite' ? '更新草稿' : comic ? '写入图片消息草稿' : '写入草稿箱'}
+            </Button>
+          ) : result && work.status !== 'published' ? (
+            <Button size="sm" variant="primary" onClick={() => { setResult(null); setSteps({}) }}>再次写入（更新草稿）</Button>
+          ) : null}
+        </div>
+      </WorkHeaderAction>
       <div className="space-y-5">
         {result ? (
           <Card className="overflow-hidden">
@@ -248,13 +283,7 @@ export default function Push() {
         {work.status === 'pushed' && work.wechat_draft_media_id && (
           <Card className="flex items-center gap-3 p-4">
             <div className="min-w-0 flex-1 text-[13px] text-mist-600">同步草稿箱状态：检查这篇草稿是否仍在公众号草稿箱（不会自动改作品状态）。</div>
-            <Button size="sm" variant="secondary" onClick={async () => {
-              try {
-                const r = await post<{ message: string }>(`/works/${work.id}/wechat/sync-draft`)
-                toast.message(r.message)
-                await refresh()
-              } catch (e) { toast.error(errorMessage(e)) }
-            }}>同步状态</Button>
+            <Button size="sm" variant="secondary" loading={syncingDraft} onClick={syncDraft}>同步状态</Button>
           </Card>
         )}
       </div>
@@ -264,17 +293,9 @@ export default function Push() {
           <Card className="p-5">
             <HumanGate code="H-05">每次只写入这一篇，由你亲自点击。系统不会发表或群发。</HumanGate>
             {!canWrite && <Notice tone="gray" className="mt-4">观察者只读，不能写入草稿。</Notice>}
-            <Button variant="human" size="lg" className="mt-4 w-full" loading={running}
-              disabled={!canWrite || !credOk || runeLen(f.author) > 16 || (!comic && !cover) || (comic && !(p.panel_images && p.panel_images > 0))}
-              onClick={() => push()} icon={<Send className="size-4" />}>
-              {p.mode === 'overwrite' ? '更新草稿' : comic ? '写入图片消息草稿' : '写入草稿箱'}
-            </Button>
             {!comic && <Button variant="ghost" className="mt-2 w-full" icon={<Copy className="size-4" />} onClick={copyHTML}>复制 HTML（兜底）</Button>}
             {comic && <p className="mt-2 text-center text-xs text-mist-400">每张图会上传为永久素材（占用素材额度），正文为纯文本。</p>}
           </Card>
-        )}
-        {result && work.status !== 'published' && (
-          <Button variant="ghost" className="w-full" onClick={() => { setResult(null); setSteps({}) }}>再次写入（更新草稿）</Button>
         )}
         <Notice tone="gray">写入草稿只是把内容放进公众号后台的草稿箱，正式发表需要你在后台操作。每日写入上限可在「设置 → 平台账号」中调整。</Notice>
       </aside>

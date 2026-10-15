@@ -163,7 +163,7 @@ type LibraryAsset struct {
 func (s *Server) listLibrary(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	q := r.URL.Query()
-	sql := `SELECT x.id, x.work_id, x.mime, x.width, x.height, x.bytes, x.position, coalesce(x.ai_generated,false), x.created_at,
+	sql := `SELECT x.id, x.work_id, x.mime, x.width, x.height, x.bytes, x.position, x.alt_text, coalesce(x.ai_generated,false), x.created_at,
 		x.account_id, coalesce(a.name,''), coalesce(w.title,'')
 		FROM asset x LEFT JOIN work w ON w.id=x.work_id LEFT JOIN platform_account a ON a.id=x.account_id
 		WHERE x.workspace_id=$1 AND x.work_id IS NOT NULL AND (w.deleted_at IS NULL) AND x.origin_asset_id IS NULL`
@@ -190,7 +190,7 @@ func (s *Server) listLibrary(w http.ResponseWriter, r *http.Request) error {
 	list := []LibraryAsset{}
 	for rows.Next() {
 		var x LibraryAsset
-		if err := rows.Scan(&x.ID, &x.WorkID, &x.Mime, &x.Width, &x.Height, &x.Bytes, &x.Position, &x.AIGenerated, &x.CreatedAt,
+		if err := rows.Scan(&x.ID, &x.WorkID, &x.Mime, &x.Width, &x.Height, &x.Bytes, &x.Position, &x.AltText, &x.AIGenerated, &x.CreatedAt,
 			&x.AccountID, &x.AccountName, &x.WorkTitle); err != nil {
 			return err
 		}
@@ -240,9 +240,9 @@ func (s *Server) reuseAsset(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO asset (id, workspace_id, account_id, work_id, storage_path, mime, width, height, bytes, sha256, position, ai_generated, origin_asset_id)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT coalesce(max(position),-1)+1 FROM asset WHERE work_id=$4),$11,$12)`,
-			newID, ident(ctx).WorkspaceID, m.Account.ID, m.ID, filepath.ToSlash(rel), src.Mime, width, height, len(data), secure.SHA256Hex(data), aiGen, src.ID); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO asset (id, workspace_id, account_id, work_id, storage_path, mime, width, height, bytes, sha256, position, ai_generated, origin_asset_id, alt_text)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT coalesce(max(position),-1)+1 FROM asset WHERE work_id=$4),$11,$12,$13)`,
+			newID, ident(ctx).WorkspaceID, m.Account.ID, m.ID, filepath.ToSlash(rel), src.Mime, width, height, len(data), secure.SHA256Hex(data), aiGen, src.ID, src.AltText); err != nil {
 			return err
 		}
 		return s.touchContent(ctx, tx, m.ID)
@@ -252,5 +252,5 @@ func (s *Server) reuseAsset(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return ok(w, Asset{ID: newID, WorkID: m.ID, Mime: src.Mime, Width: width, Height: height, Bytes: len(data),
-		URL: "/api/v1/assets/" + newID.String() + "/file", AIGenerated: aiGen, CreatedAt: time.Now()})
+		AltText: src.AltText, URL: "/api/v1/assets/" + newID.String() + "/file", AIGenerated: aiGen, CreatedAt: time.Now()})
 }

@@ -255,6 +255,37 @@ function RoutesCard({ providers }: { providers: Provider[] }) {
   )
 }
 
+function SamplingCard() {
+  const { data, refetch } = useQuery({ queryKey: ['settings'], queryFn: () => get<{ ai_sampling: { temperature: number | null } }>('/settings') })
+  const [fixed, setFixed] = useState(false)
+  const [value, setValue] = useState('0.7')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!data) return
+    setFixed(data.ai_sampling.temperature !== null)
+    setValue(String(data.ai_sampling.temperature ?? 0.7))
+  }, [data])
+  if (!data) return null
+  const save = async () => {
+    setBusy(true)
+    try {
+      await put('/settings', { ai_sampling: { temperature: fixed ? Number(value) : null } })
+      await refetch()
+      toast.success('采样温度已保存')
+    } catch (e) { toast.error(errorMessage(e)) } finally { setBusy(false) }
+  }
+  return <Card className="space-y-4 p-5">
+    <div className="flex items-start gap-4">
+      <div className="flex-1"><div className="text-[15px] font-semibold text-mist-900">采样温度</div>
+        <p className="mt-0.5 text-[13px] text-mist-500">默认按任务设置：标题和选题更发散，事实核查更稳定。部分模型会忽略此参数，以供应商支持为准。</p>
+      </div>
+      <Switch checked={fixed} onChange={setFixed} label="统一温度" />
+    </div>
+    {fixed && <Field label="统一温度值"><Input type="number" min={0} max={2} step={0.1} value={value} onChange={e => setValue(e.target.value)} /></Field>}
+    <Button size="sm" loading={busy} onClick={save} disabled={fixed && (value.trim() === '' || !Number.isFinite(Number(value)) || Number(value) < 0 || Number(value) > 2)}>保存采样温度</Button>
+  </Card>
+}
+
 function LimitCard() {
   const { data } = useQuery({ queryKey: ['settings'], queryFn: () => get<{ ai_limit: AILimit }>('/settings') })
   const [limit, setLimit] = useState<AILimit | null>(null)
@@ -321,7 +352,7 @@ function WeeklyDraftCard() {
 export default function Models() {
   const { data: me } = useMe()
   const isOwner = me?.role === 'owner'
-  const { data, isLoading, refetch } = useQuery({ queryKey: ['providers'], queryFn: () => get<Provider[]>('/model-providers') })
+  const { data, isLoading, refetch } = useQuery({ queryKey: ['providers'], queryFn: () => get<Provider[]>('/model-providers'), refetchInterval: 5000 })
   const [dialog, setDialog] = useState<{ editing: Provider | null } | null>(null)
   const [quick, setQuick] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
@@ -390,6 +421,8 @@ export default function Models() {
                   <div className="flex items-center gap-2">
                     <span className="text-[15px] font-semibold text-mist-900">{p.name}</span>
                     {p.status === 'disabled' && <Badge>已停用</Badge>}
+                    {p.status === 'active' && p.circuit_state === 'closed' && <Badge>未熔断</Badge>}
+                    {p.status === 'active' && p.circuit_state === 'half_open' && <Badge tone="gamboge">等待恢复探测</Badge>}
                   </div>
                   <div className="truncate font-mono text-xs text-mist-500">{p.base_url}</div>
                 </div>
@@ -400,6 +433,7 @@ export default function Models() {
                   </div>
                 )}
               </div>
+              {p.status === 'active' && p.circuit_state === 'open' && <p className="mt-2 text-xs text-danger">供应商暂不可用，约 {p.retry_after_seconds} 秒后恢复</p>}
               <div className="mt-3 flex flex-wrap gap-1.5">{p.models.map((m) => <span key={m} className="rounded bg-mist-100 px-1.5 py-0.5 font-mono text-[11.5px] text-mist-600">{m}</span>)}</div>
               <div className="mt-3 flex items-center gap-2 border-t border-mist-100 pt-3 text-xs">
                 <span className="font-mono text-mist-400">{p.key_mask}</span>
@@ -421,6 +455,7 @@ export default function Models() {
         </div>
       )}
       {isOwner && list.length > 0 && <RoutesCard providers={list} />}
+      {isOwner && <SamplingCard />}
       {isOwner && <LimitCard />}
       {isOwner && <WeeklyDraftCard />}
       {isOwner && dialog && <ProviderDialog editing={dialog.editing} onClose={() => setDialog(null)} />}

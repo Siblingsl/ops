@@ -24,7 +24,7 @@ export function DeriveDialog({ open, onClose, workId, platform, format }: { open
       const w = await post<Work>(`/works/${workId}/derive`, { target_account_id: target })
       toast.success(comic ? '已创建衍生漫画，分格与图片已复用，旁白对白已按目标平台改写' : '已创建衍生作品，接下来逐段改写')
       onClose()
-      nav(comic ? `/works/${w.id}/edit` : `/works/${w.id}/compare`)
+      nav(comic ? `/works/${w.id}` : `/works/${w.id}/compare`)
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {

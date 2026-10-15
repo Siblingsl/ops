@@ -184,14 +184,31 @@ func (s *Server) restoreSectionRevision(w http.ResponseWriter, r *http.Request) 
 		return err
 	}
 	ctx := r.Context()
+	var in struct {
+		BaseRevision *int `json:"base_revision"`
+	}
+	if err := decodeOptional(r, &in); err != nil {
+		return err
+	}
 	var content, origin string
 	if err := s.db.QueryRow(ctx, `SELECT content_md, origin FROM section_revision WHERE id=$1 AND section_id=$2`, rid, sec.ID).Scan(&content, &origin); err != nil {
 		return err
 	}
-	if (origin == "ai" && content != sec.AIRawMD) || (origin != "ai" && origin != "human") {
-		origin = "mixed"
-	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		current, err := scanSection(tx.QueryRow(ctx, `SELECT `+sectionCols+` FROM work_section WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, sec.ID))
+		if err != nil {
+			return err
+		}
+		base := sec.Revision
+		if in.BaseRevision != nil {
+			base = *in.BaseRevision
+		}
+		if current.Revision != base {
+			return apiErr(409, "version_conflict", "这一段已在其他地方修改过").With(map[string]any{"server": current})
+		}
+		if (origin == "ai" && content != current.AIRawMD) || (origin != "ai" && origin != "human") {
+			origin = "mixed"
+		}
 		if err := s.addVersion(ctx, tx, m.ID, "manual"); err != nil {
 			return err
 		}

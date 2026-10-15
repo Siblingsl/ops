@@ -34,6 +34,9 @@ type Server struct {
 	aiHTTP *http.Client
 
 	firstTokenTimeout time.Duration
+	aiQueueTimeout    time.Duration
+	providerMu        sync.Mutex
+	providerCircuits  map[uuid.UUID]*providerCircuit
 
 	jobMu      sync.Mutex
 	jobCancels map[uuid.UUID]context.CancelFunc
@@ -72,6 +75,8 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 		aiHTTP: &http.Client{Timeout: 5 * time.Minute},
 
 		firstTokenTimeout: 15 * time.Second,
+		aiQueueTimeout:    time.Minute,
+		providerCircuits:  map[uuid.UUID]*providerCircuit{},
 		jobCancels:        map[uuid.UUID]context.CancelFunc{},
 		jobSems:           map[uuid.UUID]chan struct{}{},
 		notifySubs:        map[uuid.UUID][]chan struct{}{},
@@ -94,7 +99,11 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
+	r.Use(middleware.RequestID)
+	r.Use(requestReadDeadline(r))
+	r.Use(requestLog)
 	r.Use(middleware.Recoverer)
+	r.Use(middleware.Compress(5, "text/html", "text/css", "application/json", "application/javascript", "text/javascript", "image/svg+xml"))
 
 	r.Get("/healthz", s.healthz)
 
@@ -104,6 +113,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/auth/setup", s.h(s.authSetup))
 		r.Post("/auth/register", s.h(s.authRegister))
 		r.Post("/auth/login", s.h(s.authLogin))
+		r.Get("/public-previews/{token}", s.h(s.getPublicPreview))
+		r.Get("/public-previews/{token}/assets/{assetId}", s.h(s.getPublicPreviewAsset))
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireSession)
@@ -181,6 +192,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/characters/{id}/ref", s.h(s.uploadCharacterRef))
 			r.Delete("/characters/{id}/ref", s.h(s.deleteCharacterRef))
 			r.Get("/materials", s.h(s.listMaterials))
+			r.Get("/materials/{id}", s.h(s.getMaterial))
 			r.Post("/materials", s.h(s.createMaterial))
 			r.Patch("/materials/{id}", s.h(s.updateMaterial))
 			r.Delete("/materials/{id}", s.h(s.deleteMaterial))
@@ -205,7 +217,9 @@ func (s *Server) Router() http.Handler {
 			r.Post("/accounts/{accountId}/wechat/link-check", s.h(s.wechatLinkCheck))
 			r.Get("/accounts/{accountId}/works", s.h(s.listWorks))
 			r.Post("/accounts/{accountId}/works", s.h(s.createWork))
+			r.Post("/accounts/{accountId}/works/import", s.h(s.importPastedWork))
 			r.Get("/works/{id}", s.h(s.getWork))
+			r.Post("/works/{id}/preview-link", s.h(s.createPreviewLink))
 			r.Patch("/works/{id}", s.h(s.updateWork))
 			r.Put("/works/{id}/post-push-todos", s.h(s.setPostPushTodos))
 			r.Put("/works/{id}/title-favorites", s.h(s.setTitleFavorites))
@@ -240,10 +254,12 @@ func (s *Server) Router() http.Handler {
 			r.Get("/works/{id}/versions/{no}", s.h(s.getVersion))
 			r.Post("/works/{id}/versions/{no}/restore", s.h(s.restoreVersion))
 			r.Post("/works/{id}/derive", s.h(s.deriveWork))
+			r.Post("/works/{id}/duplicate", s.h(s.duplicateWork))
 			r.Post("/works/{id}/unlock", s.h(s.unlockWork))
 
 			r.Post("/works/{id}/assets", s.h(s.uploadAsset))
 			r.Patch("/assets/{id}", s.h(s.updateAsset))
+			r.Post("/assets/{id}/alt-suggestion", s.h(s.suggestAssetAlt))
 			r.Post("/assets/{id}/crop", s.h(s.cropAsset))
 			r.Delete("/assets/{id}", s.h(s.deleteAsset))
 			r.Get("/assets/{id}/file", s.h(s.assetFile))
@@ -460,12 +476,19 @@ func spaHandler(dir string) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		p := filepath.Join(dir, filepath.Clean(r.URL.Path))
+		w.Header().Set("Cache-Control", "no-cache")
+		cleanPath := filepath.ToSlash(filepath.Clean(r.URL.Path))
+		if strings.HasPrefix(cleanPath, "/preview/") {
+			w.Header().Set("Referrer-Policy", "no-referrer")
+		}
+		p := filepath.Join(dir, cleanPath)
 		if st, err := os.Stat(p); err != nil || st.IsDir() {
-			if !strings.HasPrefix(r.URL.Path, "/assets/") {
+			if !strings.HasPrefix(cleanPath, "/assets/") {
 				http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 				return
 			}
+		} else if strings.HasPrefix(cleanPath, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
 		fs.ServeHTTP(w, r)
 	})

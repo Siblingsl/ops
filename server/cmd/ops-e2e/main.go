@@ -85,5 +85,5 @@ func run() error {
 	}
 	defer mockServer.Close()
 	go mockServer.Serve(listener)
-	return http.ListenAndServe(cfg.Listen, srv.Router())
+	return srv.HTTPServer(cfg.Listen).ListenAndServe()
 }

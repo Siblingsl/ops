@@ -1,0 +1,42 @@
+import { expect, test } from '@playwright/test'
+import { api, registerAccount } from './support'
+
+test('OPT54 第七段与侧栏刷新恢复，提示可关闭、锚点优先且作品隔离', async ({ page }) => {
+  await page.addInitScript(() => { history.scrollRestoration = 'manual' })
+  const account = await registerAccount(page, '长图文', 'wechat_mp')
+  let work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: '编辑位置验收' })
+  work = await api(page, 'PATCH', `/works/${work.id}`, { viewpoint: '这是作者提供的编辑位置验收观点。', base_revision: work.revision })
+  await api(page, 'PUT', `/works/${work.id}/outline`, {
+    items: Array.from({ length: 8 }, (_, i) => ({ heading: `第${i + 1}段`, key_point: '人工提供的段落要点', material_ids: [] })),
+    base_revision: work.revision,
+  })
+  await page.goto(`/works/${work.id}`)
+  await page.getByRole('button', { name: '确认大纲', exact: true }).click()
+  await expect(page.locator('#step-sections .tiptap')).toHaveCount(8)
+  work = await api(page, 'GET', `/works/${work.id}`)
+  const seventh = page.locator(`#sec-${work.sections[6].id}`)
+  await seventh.locator('.tiptap').fill('第七段的人工正文，刷新后继续编辑。')
+  await page.getByRole('button', { name: '副驾驶', exact: true }).click()
+  await expect.poll(async () => (await api(page, 'GET', `/works/${work.id}`)).sections[6].content_md).toBe('第七段的人工正文，刷新后继续编辑。')
+  await expect.poll(() => page.evaluate(id => JSON.parse(localStorage.getItem(`ops.editor.position.${id}`) || '{}'), work.id))
+    .toEqual({ sectionId: work.sections[6].id, tab: 'copilot' })
+  await page.reload()
+  await expect(page.getByText('已回到上次编辑的第 7 段', { exact: true })).toBeVisible()
+  await expect(page.getByText('已回到上次编辑的第 7 段', { exact: true })).toBeInViewport()
+  await expect(seventh).toBeInViewport()
+  await expect(page.getByRole('button', { name: '副驾驶', exact: true })).toHaveClass(/bg-ink-50/)
+  await page.getByRole('button', { name: '关闭位置提示', exact: true }).click()
+  await expect(page.getByText('已回到上次编辑的第 7 段', { exact: true })).toHaveCount(0)
+  await page.goto(`/a/${account.id}`)
+  await page.goto(`/works/${work.id}#section-${work.sections[1].id}`)
+  await expect(page.locator(`#sec-${work.sections[1].id}`)).toBeInViewport()
+  await expect(seventh).not.toBeInViewport()
+  await expect(page.getByText(/已回到上次编辑的第/)).toHaveCount(0)
+  const another = await api(page, 'POST', `/accounts/${account.id}/works`, { title: '另一篇独立作品' })
+  await page.goto(`/works/${another.id}`)
+  await expect(page.getByText(/已回到上次编辑的第/)).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '素材', exact: true })).toHaveClass(/bg-ink-50/)
+  await page.goto(`/works/${work.id}`)
+  await expect(page.getByText('已回到上次编辑的第 7 段', { exact: true })).toBeVisible()
+  await expect(seventh).toBeInViewport()
+})

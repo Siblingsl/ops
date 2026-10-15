@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,18 +36,19 @@ type Topic struct {
 	Pinned          bool       `json:"pinned"`
 	StrategyPillar  *string    `json:"strategy_pillar"`
 	HotItemID       *uuid.UUID `json:"hot_item_id"`
+	pinnedAt        *time.Time
 }
 
 const topicCols = `t.id, t.account_id, t.title, t.angle, t.source, t.status,
 	(SELECT id FROM work WHERE topic_id=t.id AND deleted_at IS NULL ORDER BY created_at LIMIT 1), t.created_at,
 	t.audience, t.hook, t.needed_materials, t.format, to_char(t.planned_date,'YYYY-MM-DD'), t.series_id, t.score_fit, t.score_reason, t.pinned_at IS NOT NULL,
-	t.strategy_pillar, t.hot_item_id`
+	t.strategy_pillar, t.hot_item_id, t.pinned_at`
 
 func scanTopic(row interface{ Scan(...any) error }) (Topic, error) {
 	var t Topic
 	err := row.Scan(&t.ID, &t.AccountID, &t.Title, &t.Angle, &t.Source, &t.Status, &t.WorkID, &t.CreatedAt,
 		&t.Audience, &t.Hook, &t.NeededMaterials, &t.Format, &t.PlannedDate, &t.SeriesID, &t.ScoreFit, &t.ScoreReason, &t.Pinned,
-		&t.StrategyPillar, &t.HotItemID)
+		&t.StrategyPillar, &t.HotItemID, &t.pinnedAt)
 	if t.NeededMaterials == nil {
 		t.NeededMaterials = []string{}
 	}
@@ -67,27 +70,160 @@ func (s *Server) listTopics(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
-	rows, err := s.db.Query(ctx, `SELECT `+topicCols+` FROM topic t WHERE t.account_id=$1 AND t.deleted_at IS NULL ORDER BY t.pinned_at DESC NULLS LAST, t.created_at DESC`, a.ID)
+	paged := r.URL.Query().Has("limit") || r.URL.Query().Has("cursor") || r.URL.Query().Get("scores") == "1"
+	if !paged {
+		rows, err := s.db.Query(ctx, `SELECT `+topicCols+` FROM topic t WHERE t.account_id=$1 AND t.deleted_at IS NULL
+			ORDER BY t.pinned_at DESC NULLS LAST, t.created_at DESC, t.id DESC`, a.ID)
+		if err != nil {
+			return err
+		}
+		list, err := scanTopics(rows)
+		if err != nil {
+			return err
+		}
+		if r.URL.Query().Get("sort") == "score" {
+			s.ruleTopicScores(ctx, a, list)
+			sortTopicsByScore(list)
+		}
+		return ok(w, list)
+	}
+	limit := listPageSize
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 100 {
+			return validation("每页选题数量须在 1 到 100 之间")
+		}
+	}
+	counts, err := s.topicStatusCounts(ctx, a.ID)
 	if err != nil {
 		return err
 	}
+	scoreSort := r.URL.Query().Get("sort") == "score"
+	cursor, err := parseTopicCursor(r.URL.Query().Get("cursor"), scoreSort)
+	if err != nil {
+		return validation("选题分页游标无效")
+	}
+	var list []Topic
+	var nextCursor *string
+	if scoreSort {
+		rows, err := s.db.Query(ctx, `SELECT `+topicCols+` FROM topic t WHERE t.account_id=$1 AND t.deleted_at IS NULL
+			ORDER BY t.pinned_at DESC NULLS LAST, t.created_at DESC, t.id DESC`, a.ID)
+		if err != nil {
+			return err
+		}
+		list, err = scanTopics(rows)
+		if err != nil {
+			return err
+		}
+		s.ruleTopicScores(ctx, a, list)
+		sortTopicsByScore(list)
+		start := cursor.Offset
+		if start > len(list) {
+			start = len(list)
+		}
+		end := min(start+limit, len(list))
+		all := list
+		list = all[start:end]
+		if end < len(all) {
+			encoded := encodeTopicCursor(topicCursor{Sort: "score", Offset: end})
+			nextCursor = &encoded
+		}
+	} else {
+		query := `SELECT ` + topicCols + ` FROM topic t WHERE t.account_id=$1 AND t.deleted_at IS NULL`
+		args := []any{a.ID}
+		if r.URL.Query().Get("cursor") != "" {
+			args = append(args, cursor.PinnedAt, cursor.CreatedAt, cursor.ID)
+			query += ` AND CASE WHEN $2::timestamptz IS NULL
+				THEN t.pinned_at IS NULL AND (t.created_at,t.id)<($3::timestamptz,$4::uuid)
+				ELSE t.pinned_at IS NULL OR t.pinned_at<$2::timestamptz OR
+					(t.pinned_at=$2::timestamptz AND (t.created_at,t.id)<($3::timestamptz,$4::uuid)) END`
+		}
+		args = append(args, limit+1)
+		rows, err := s.db.Query(ctx, query+fmt.Sprintf(` ORDER BY t.pinned_at DESC NULLS LAST, t.created_at DESC, t.id DESC LIMIT $%d`, len(args)), args...)
+		if err != nil {
+			return err
+		}
+		list, err = scanTopics(rows)
+		if err != nil {
+			return err
+		}
+		if len(list) > limit {
+			last := list[limit-1]
+			list = list[:limit]
+			encoded := encodeTopicCursor(topicCursor{Sort: "created", PinnedAt: last.pinnedAt, CreatedAt: last.CreatedAt, ID: last.ID})
+			nextCursor = &encoded
+		}
+		if r.URL.Query().Get("scores") == "1" {
+			s.ruleTopicScores(ctx, a, list)
+		}
+	}
+	return ok(w, map[string]any{"items": list, "status_counts": counts, "next_cursor": nextCursor})
+}
+
+type topicStatusCounts struct {
+	Pending int `json:"pending"`
+	Adopted int `json:"adopted"`
+	Dropped int `json:"dropped"`
+}
+
+func (s *Server) topicStatusCounts(ctx context.Context, accountID uuid.UUID) (topicStatusCounts, error) {
+	var counts topicStatusCounts
+	err := s.db.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status='pending'), count(*) FILTER (WHERE status='adopted'), count(*) FILTER (WHERE status='dropped')
+		FROM topic WHERE account_id=$1 AND deleted_at IS NULL`, accountID).Scan(&counts.Pending, &counts.Adopted, &counts.Dropped)
+	return counts, err
+}
+
+type topicCursor struct {
+	Sort      string     `json:"s,omitempty"`
+	Offset    int        `json:"o,omitempty"`
+	PinnedAt  *time.Time `json:"p,omitempty"`
+	CreatedAt time.Time  `json:"c,omitempty"`
+	ID        uuid.UUID  `json:"i,omitempty"`
+}
+
+func parseTopicCursor(raw string, scoreSort bool) (*topicCursor, error) {
+	if raw == "" {
+		return &topicCursor{Sort: map[bool]string{true: "score", false: "created"}[scoreSort]}, nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, err
+	}
+	var cursor topicCursor
+	if err := json.Unmarshal(b, &cursor); err != nil {
+		return nil, err
+	}
+	if scoreSort {
+		if cursor.Sort != "score" || cursor.Offset < 0 {
+			return nil, fmt.Errorf("invalid score cursor")
+		}
+	} else if cursor.Sort != "created" || cursor.ID == uuid.Nil || cursor.CreatedAt.IsZero() {
+		return nil, fmt.Errorf("invalid topic cursor")
+	}
+	return &cursor, nil
+}
+
+func encodeTopicCursor(cursor topicCursor) string {
+	b, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func scanTopics(rows interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+	Close()
+}) ([]Topic, error) {
+	defer rows.Close()
 	list := []Topic{}
 	for rows.Next() {
 		t, err := scanTopic(rows)
 		if err != nil {
-			rows.Close()
-			return err
+			return nil, err
 		}
 		list = append(list, t)
 	}
-	rows.Close()
-	if r.URL.Query().Get("scores") == "1" || r.URL.Query().Get("sort") == "score" {
-		s.ruleTopicScores(ctx, a, list)
-	}
-	if r.URL.Query().Get("sort") == "score" {
-		sortTopicsByScore(list)
-	}
-	return ok(w, list)
+	return list, rows.Err()
 }
 
 // ruleTopicScores fills 素材充足度 and 新颖度 for pending topics (EX-C-02); 契合度 comes from topic_score.
@@ -103,19 +239,14 @@ func (s *Server) ruleTopicScores(ctx context.Context, a *Account, list []Topic) 
 		}
 		rows.Close()
 	}
+	var pending []int
+	var queries []string
 	for i := range list {
 		if list[i].Status != "pending" {
 			continue
 		}
-		q := strings.Join([]string{list[i].Title, list[i].Angle, strings.Join(list[i].NeededMaterials, " ")}, " ")
-		hits, _, err := s.retrieveMaterials(ctx, a, q, nil, 10)
-		if err == nil {
-			var sum float64
-			for _, h := range hits {
-				sum += h.Score
-			}
-			list[i].ScoreMaterial = min(100, int(sum*40))
-		}
+		pending = append(pending, i)
+		queries = append(queries, strings.Join([]string{list[i].Title, list[i].Angle, strings.Join(list[i].NeededMaterials, " ")}, " "))
 		maxSim := 0.0
 		qt := terms(list[i].Title)
 		for _, t := range titles {
@@ -124,6 +255,85 @@ func (s *Server) ruleTopicScores(ctx context.Context, a *Account, list []Topic) 
 			}
 		}
 		list[i].ScoreNovelty = int((1 - maxSim) * 100)
+	}
+	if len(pending) == 0 {
+		return
+	}
+	combinedQuery := strings.Join(queries, " ")
+	rows, err = s.db.Query(ctx, `WITH scope AS (
+			SELECT * FROM material WHERE workspace_id=$1 AND deleted_at IS NULL AND (account_id IS NULL OR account_id=$2)
+		), ids AS (
+			(SELECT id FROM scope ORDER BY created_at DESC LIMIT 3000)
+			UNION
+			(SELECT id FROM scope WHERE search_tsv @@ plainto_tsquery('simple', $3) OR content ILIKE ANY($4) ORDER BY created_at DESC LIMIT 2000)
+		)
+		SELECT m.id, m.account_id, m.content, m.source, m.tags,
+			EXISTS (
+				SELECT 1 FROM work_section s JOIN work w ON w.id=s.work_id
+				WHERE w.account_id=$2 AND w.deleted_at IS NULL AND s.updated_at > now() - interval '30 days' AND m.id=ANY(s.material_ids)
+				UNION
+				SELECT 1 FROM work_material wm JOIN work w ON w.id=wm.work_id
+				WHERE w.account_id=$2 AND w.deleted_at IS NULL AND w.updated_at > now() - interval '30 days' AND wm.material_id=m.id
+			) AS recent
+		FROM scope m JOIN ids USING (id)`, ident(ctx).WorkspaceID, a.ID, combinedQuery, likePatterns(terms(combinedQuery)))
+	if err != nil {
+		return
+	}
+	type materialCandidate struct {
+		matCandidate
+		recent bool
+	}
+	var cands []materialCandidate
+	for rows.Next() {
+		var c materialCandidate
+		if err := rows.Scan(&c.id, &c.account, &c.content, &c.source, &c.tags, &c.recent); err != nil {
+			rows.Close()
+			return
+		}
+		c.terms = terms(c.content + " " + c.source + " " + strings.Join(c.tags, " "))
+		cands = append(cands, c)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return
+	}
+	for _, topicIndex := range pending {
+		query := strings.Join([]string{list[topicIndex].Title, list[topicIndex].Angle, strings.Join(list[topicIndex].NeededMaterials, " ")}, " ")
+		q := terms(query)
+		docs := make([]*scoredDoc, len(cands))
+		for i := range cands {
+			docs[i] = &scoredDoc{terms: cands[i].terms}
+		}
+		idfCoverage(q, docs)
+		lowerQ := strings.ToLower(query)
+		scores := make([]float64, 0, len(cands))
+		for i, c := range cands {
+			tagScore := 0.0
+			for _, tag := range c.tags {
+				if tag != "" && strings.Contains(lowerQ, strings.ToLower(tag)) {
+					tagScore = 1
+					break
+				}
+			}
+			textScore := 0.85 * docs[i].text
+			if textScore == 0 && tagScore == 0 {
+				continue
+			}
+			score := 0.6*textScore + 0.2*tagScore
+			if c.account != nil && *c.account == a.ID {
+				score += 0.1
+			}
+			if c.recent {
+				score += 0.1
+			}
+			scores = append(scores, score)
+		}
+		sort.Sort(sort.Reverse(sort.Float64Slice(scores)))
+		var sum float64
+		for i := 0; i < min(10, len(scores)); i++ {
+			sum += scores[i]
+		}
+		list[topicIndex].ScoreMaterial = min(100, int(sum*40))
 	}
 }
 
@@ -284,7 +494,7 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if in.AICallID != nil {
-		s.implicitFeedback(ctx, *in.AICallID, "accepted", in.ChoiceIndex, nil)
+		s.implicitFeedback(ctx, *in.AICallID, "accepted", in.ChoiceIndex, nil, in.Title+"｜"+strings.TrimSpace(in.Angle))
 	}
 	t, err := scanTopic(s.db.QueryRow(ctx, `SELECT `+topicCols+` FROM topic t WHERE t.id=$1`, id))
 	if err != nil {
@@ -364,6 +574,11 @@ func (s *Server) suggestTopics(w http.ResponseWriter, r *http.Request) error {
 
 ## 输出格式
 %s`, strings.TrimSpace(in.Direction), a.ContentFormat, "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "), topicSuggestOutput(a, false))
+	samples, err := s.feedbackSamples(r.Context(), a.ID, "topic_suggest")
+	if err != nil {
+		return err
+	}
+	user += feedbackSampleBlock("topic_suggest", samples)
 	var out struct {
 		Topics []topicSuggestion `json:"topics"`
 	}
@@ -404,6 +619,9 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 	}
 	ctxText := strings.TrimSpace(in.Context)
 	ctxText = truncateRunes(ctxText, 4000)
+	if ctxText != "" {
+		ctxText = externalBlock("资讯摘要", "pasted", cleanExternalText(ctxText))
+	}
 	known := map[uuid.UUID]HotItem{}
 	strategy, strategyErr := s.activeStrategy(r.Context(), a.ID)
 	if strategyErr != nil {
@@ -425,8 +643,7 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 			}
 		}
 		if len(input) > 0 {
-			b, _ := json.Marshal(input)
-			ctxText += "\n## 以下真实热点（已匹配，带 id 和链接）\n" + string(b)
+			ctxText += "\n## 以下真实热点（已匹配，带 id 和链接）\n" + externalBlock("热点", "matched", input)
 		}
 	}
 	if ctxText == "" {

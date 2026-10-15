@@ -77,6 +77,7 @@ type Work struct {
 	CoverCrops          json.RawMessage `json:"cover_crops"`
 	WechatFields        WechatDefaults  `json:"wechat_fields"`
 	Topics              []string        `json:"topics"`
+	Tags                []string        `json:"tags"`
 	WechatDraftMediaID  *string         `json:"wechat_draft_media_id"`
 	PublishedURL        *string         `json:"published_url"`
 	PublishedAt         *time.Time      `json:"published_at"`
@@ -187,22 +188,31 @@ func (s *Server) loadSections(ctx context.Context, q pgx.Tx, workID uuid.UUID) (
 
 func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 	var w Work
-	var outline, wf []byte
+	var outline, wf, materialIDs, derived []byte
 	var sourceRevision *int
 	var sourceID *uuid.UUID
+	var sourceTitle, sourceAccountName, sourcePlatform *string
+	var sourceCurrentRevision *int
+	var sourceDeletedAt *time.Time
 	var topicAngle *string
 	err := s.db.QueryRow(ctx, `SELECT w.id, w.account_id, a.platform, a.name, w.topic_id, t.angle, w.source_work_id, w.source_revision,
 		w.content_format, w.status, w.title, w.summary, w.viewpoint, w.outline, w.outline_confirmed_at, w.theme, w.cover_asset_id,
-		w.cover_crops, w.wechat_fields, w.topics, w.wechat_draft_media_id, w.published_url, w.published_at, w.locked, w.revision,
+		w.cover_crops, w.wechat_fields, w.topics, w.tags, w.wechat_draft_media_id, w.published_url, w.published_at, w.locked, w.revision,
 		coalesce(w.draft_maybe_published,false), coalesce(t.audience,''), coalesce(t.hook,''), to_char(w.planned_date,'YYYY-MM-DD'), w.target_chars,
-		w.post_push_todos, w.title_favorites, w.assignee_id, w.reviewer_id, w.review_required, w.reviewed_by, w.reviewed_at, w.created_at, w.updated_at
+		w.post_push_todos, w.title_favorites, w.assignee_id, w.reviewer_id, w.review_required, w.reviewed_by, w.reviewed_at, w.created_at, w.updated_at,
+		coalesce((SELECT jsonb_agg(wm.material_id) FROM work_material wm WHERE wm.work_id=w.id), '[]'::jsonb),
+		coalesce((SELECT jsonb_agg(jsonb_build_object('id', d.id, 'title', d.title, 'account_name', da.name, 'platform', da.platform) ORDER BY d.created_at)
+			FROM work d JOIN platform_account da ON da.id=d.account_id WHERE d.source_work_id=w.id AND d.deleted_at IS NULL), '[]'::jsonb),
+		source.title, sa.name, sa.platform, source.revision, source.deleted_at
 		FROM work w JOIN platform_account a ON a.id=w.account_id LEFT JOIN topic t ON t.id=w.topic_id
+		LEFT JOIN work source ON source.id=w.source_work_id LEFT JOIN platform_account sa ON sa.id=source.account_id
 		WHERE w.id=$1 AND a.workspace_id=$2 AND w.deleted_at IS NULL`, id, ident(ctx).WorkspaceID).Scan(
 		&w.ID, &w.AccountID, &w.Platform, &w.AccountName, &w.TopicID, &topicAngle, &sourceID, &sourceRevision,
 		&w.ContentFormat, &w.Status, &w.Title, &w.Summary, &w.Viewpoint, &outline, &w.OutlineConfirmedAt, &w.Theme, &w.CoverAssetID,
-		&w.CoverCrops, &wf, &w.Topics, &w.WechatDraftMediaID, &w.PublishedURL, &w.PublishedAt, &w.Locked, &w.Revision,
+		&w.CoverCrops, &wf, &w.Topics, &w.Tags, &w.WechatDraftMediaID, &w.PublishedURL, &w.PublishedAt, &w.Locked, &w.Revision,
 		&w.DraftMaybePublished, &w.TopicAudience, &w.TopicHook, &w.PlannedDate, &w.TargetChars,
-		&w.PostPushTodos, &w.TitleFavorites, &w.AssigneeID, &w.ReviewerID, &w.ReviewRequired, &w.ReviewedBy, &w.ReviewedAt, &w.CreatedAt, &w.UpdatedAt)
+		&w.PostPushTodos, &w.TitleFavorites, &w.AssigneeID, &w.ReviewerID, &w.ReviewRequired, &w.ReviewedBy, &w.ReviewedAt, &w.CreatedAt, &w.UpdatedAt,
+		&materialIDs, &derived, &sourceTitle, &sourceAccountName, &sourcePlatform, &sourceCurrentRevision, &sourceDeletedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -210,10 +220,22 @@ func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 		w.TopicAngle = *topicAngle
 	}
 	if sourceID != nil {
-		w.Source = &WorkRef{ID: *sourceID}
+		ref := &WorkRef{ID: *sourceID}
+		if sourceTitle != nil {
+			ref.Title = *sourceTitle
+		}
+		if sourceAccountName != nil {
+			ref.AccountName = *sourceAccountName
+		}
+		if sourcePlatform != nil {
+			ref.Platform = *sourcePlatform
+		}
+		ref.Deleted = sourceDeletedAt != nil
+		w.Source = ref
 		if sourceRevision != nil {
 			w.sourceRevision = *sourceRevision
 		}
+		w.SourceUpdated = !ref.Deleted && sourceCurrentRevision != nil && w.sourceRevision > 0 && *sourceCurrentRevision > w.sourceRevision
 	}
 	_ = json.Unmarshal(outline, &w.Outline)
 	if w.Outline == nil {
@@ -238,31 +260,10 @@ func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 	if w.Assets, err = s.loadAssets(ctx, id); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(ctx, `SELECT material_id FROM work_material WHERE work_id=$1`, id)
-	if err != nil {
-		return nil, err
-	}
 	w.MaterialIDs = []uuid.UUID{}
-	for rows.Next() {
-		var m uuid.UUID
-		if err := rows.Scan(&m); err == nil {
-			w.MaterialIDs = append(w.MaterialIDs, m)
-		}
-	}
-	rows.Close()
 	w.Derived = []WorkRef{}
-	drows, err := s.db.Query(ctx, `SELECT w.id, w.title, a.name, a.platform FROM work w JOIN platform_account a ON a.id=w.account_id
-		WHERE w.source_work_id=$1 AND w.deleted_at IS NULL ORDER BY w.created_at`, id)
-	if err != nil {
-		return nil, err
-	}
-	for drows.Next() {
-		var ref WorkRef
-		if err := drows.Scan(&ref.ID, &ref.Title, &ref.AccountName, &ref.Platform); err == nil {
-			w.Derived = append(w.Derived, ref)
-		}
-	}
-	drows.Close()
+	_ = json.Unmarshal(materialIDs, &w.MaterialIDs)
+	_ = json.Unmarshal(derived, &w.Derived)
 	return &w, nil
 }
 
@@ -270,17 +271,6 @@ func (s *Server) writeWork(w http.ResponseWriter, r *http.Request, id uuid.UUID)
 	wk, err := s.loadWork(r.Context(), id)
 	if err != nil {
 		return err
-	}
-	if wk.Source != nil {
-		var revision int
-		var deleted *time.Time
-		err := s.db.QueryRow(r.Context(), `SELECT w.title, a.name, a.platform, w.revision, w.deleted_at FROM work w
-			JOIN platform_account a ON a.id=w.account_id WHERE w.id=$1`, wk.Source.ID).Scan(&wk.Source.Title, &wk.Source.AccountName, &wk.Source.Platform, &revision, &deleted)
-		if err != nil {
-			return err
-		}
-		wk.Source.Deleted = deleted != nil
-		wk.SourceUpdated = !wk.Source.Deleted && wk.sourceRevision > 0 && revision > wk.sourceRevision
 	}
 	return ok(w, wk)
 }
@@ -332,6 +322,7 @@ func (s *Server) createWork(w http.ResponseWriter, r *http.Request) error {
 type WorkListItem struct {
 	ID            uuid.UUID  `json:"id"`
 	Title         string     `json:"title"`
+	Tags          []string   `json:"tags"`
 	Status        string     `json:"status"`
 	ContentFormat string     `json:"content_format"`
 	SourceWorkID  *uuid.UUID `json:"source_work_id"`
@@ -355,14 +346,19 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	sql := `SELECT w.id, w.title, w.status, w.content_format, w.source_work_id, sw.title,
-		(SELECT count(*) FROM work d WHERE d.source_work_id=w.id AND d.deleted_at IS NULL),
-		w.cover_asset_id, (SELECT id FROM asset WHERE work_id=w.id ORDER BY position LIMIT 1),
-		(SELECT coalesce(sum(char_length(content_md)),0) FROM work_section WHERE work_id=w.id AND deleted_at IS NULL),
-		(SELECT count(*) FROM work_section WHERE work_id=w.id AND deleted_at IS NULL),
+	sql := `SELECT w.id, w.title, w.tags, w.status, w.content_format, w.source_work_id, sw.title,
+		d.derived_count, w.cover_asset_id, first_asset.id,
+		sections.char_count, sections.section_count,
 		w.published_at, w.updated_at, to_char(w.planned_date,'YYYY-MM-DD'), w.assignee_id, w.target_chars,
-		(SELECT count(*) FROM jsonb_array_elements(w.post_push_todos) e WHERE coalesce((e->>'done')::boolean,false)), jsonb_array_length(w.post_push_todos)
-		FROM work w LEFT JOIN work sw ON sw.id=w.source_work_id WHERE w.account_id=$1 AND w.deleted_at IS NULL`
+		todos.done, todos.total
+		FROM work w LEFT JOIN work sw ON sw.id=w.source_work_id
+		LEFT JOIN LATERAL (SELECT count(*) AS derived_count FROM work d WHERE d.source_work_id=w.id AND d.deleted_at IS NULL) d ON true
+		LEFT JOIN LATERAL (SELECT id FROM asset WHERE work_id=w.id ORDER BY position, created_at LIMIT 1) first_asset ON true
+		LEFT JOIN LATERAL (SELECT coalesce(sum(char_length(content_md)),0) AS char_count, count(*) AS section_count
+			FROM work_section WHERE work_id=w.id AND deleted_at IS NULL) sections ON true
+		LEFT JOIN LATERAL (SELECT count(*) FILTER (WHERE coalesce((e->>'done')::boolean,false)) AS done,
+			jsonb_array_length(w.post_push_todos) AS total FROM jsonb_array_elements(w.post_push_todos) e) todos ON true
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL`
 	args := []any{a.ID}
 	if st := r.URL.Query().Get("status"); st != "" {
 		args = append(args, strings.Split(st, ","))
@@ -384,7 +380,7 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 	list := []WorkListItem{}
 	for rows.Next() {
 		var x WorkListItem
-		if err := rows.Scan(&x.ID, &x.Title, &x.Status, &x.ContentFormat, &x.SourceWorkID, &x.SourceTitle, &x.DerivedCount,
+		if err := rows.Scan(&x.ID, &x.Title, &x.Tags, &x.Status, &x.ContentFormat, &x.SourceWorkID, &x.SourceTitle, &x.DerivedCount,
 			&x.CoverAssetID, &x.FirstAssetID, &x.CharCount, &x.SectionCount, &x.PublishedAt, &x.UpdatedAt, &x.PlannedDate, &x.AssigneeID, &x.TargetChars, &x.TodosDone, &x.TodosTotal); err != nil {
 			return err
 		}
@@ -394,11 +390,11 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) getWork(w http.ResponseWriter, r *http.Request) error {
-	m, err := s.workMetaFromPath(r)
+	id, err := pathID(r, "id")
 	if err != nil {
 		return err
 	}
-	return s.writeWork(w, r, m.ID)
+	return s.writeWork(w, r, id)
 }
 
 type cropBox struct {
@@ -418,6 +414,7 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 	}
 	var in struct {
 		Title        *string            `json:"title"`
+		BaseRevision *int               `json:"base_revision"`
 		Summary      *string            `json:"summary"`
 		Viewpoint    *string            `json:"viewpoint"`
 		Theme        *string            `json:"theme"`
@@ -426,6 +423,7 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		CoverCrops   map[string]cropBox `json:"cover_crops"`
 		WechatFields *WechatDefaults    `json:"wechat_fields"`
 		Topics       []string           `json:"topics"`
+		Tags         []string           `json:"tags"`
 		MaterialIDs  []uuid.UUID        `json:"material_ids"`
 
 		PlannedDate    *string         `json:"planned_date"`
@@ -447,6 +445,11 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if in.Title != nil || in.Summary != nil {
+		if err := s.checkWorkRevision(ctx, tx, m, in.BaseRevision); err != nil {
+			return err
+		}
+	}
 	content := false
 	if in.Title != nil {
 		t := strings.TrimSpace(*in.Title)
@@ -530,6 +533,11 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		content = true
+	}
+	if in.Tags != nil {
+		if _, err := tx.Exec(ctx, `UPDATE work SET tags=$2 WHERE id=$1`, m.ID, cleanList(in.Tags)); err != nil {
+			return err
+		}
 	}
 	if in.MaterialIDs != nil {
 		if _, err := tx.Exec(ctx, `DELETE FROM work_material WHERE work_id=$1`, m.ID); err != nil {

@@ -1,10 +1,12 @@
 import { BookmarkPlus } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button, Field, Select, Tabs, Textarea } from '@/components/ui'
 import { Dialog } from '@/components/dialog'
 import { VoiceButton } from '@/components/voice'
 import { errorMessage, post } from '@/lib/api'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { MaterialKind } from '@/lib/types'
 
@@ -17,6 +19,7 @@ export function openQuickCollect(mode: Mode, text = '', source?: 'palette') {
 
 export function QuickCollect() {
   const acc = useCurrentAccount()
+  const nav = useNavigate()
   const inv = useInvalidate()
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<Mode>('inbox')
@@ -67,7 +70,7 @@ export function QuickCollect() {
         inv(['materials'])
       } else {
         await post('/inbox', { account_id: acc?.id ?? null, content: text.trim(), read_page: readPage && /https:\/\/(?:[^\s/]+\.)?(?:xiaohongshu\.com|xhslink\.com|mp\.weixin\.qq\.com)\//i.test(text), source: source ?? (window.innerWidth < 768 ? 'mobile' : 'quick') })
-        toast.success('已记入灵感收件箱', { description: '空闲时到选题池「收件箱」里逐条整理。' })
+        toast.success('已记入灵感收件箱', { description: '空闲时到选题池「收件箱」里逐条整理。', action: acc ? { label: '去整理', onClick: () => nav(`/a/${acc.id}/topics?tab=inbox`) } : undefined })
         inv(['inbox'])
       }
       setOpen(false)
@@ -108,7 +111,7 @@ export function QuickCollect() {
           )}
           <Field label={<span className="flex items-center justify-between">内容<VoiceButton onText={(t) => setText((v) => v + t)} /></span>}>
             <Textarea rows={6} autoFocus value={text} onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void save() } }}
+              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && isEnterWithoutComposition(e.nativeEvent)) { e.preventDefault(); void save() } }}
               placeholder={mode === 'inbox' ? '一句话也行：看到的、想到的、被问到的…' : '选中文字后按 Ctrl+Shift+M，或在此粘贴'} />
           </Field>
           {acc && /https:\/\/(?:[^\s/]+\.)?(?:xiaohongshu\.com|xhslink\.com|mp\.weixin\.qq\.com)\//i.test(text) && <label className="flex items-center gap-2 text-sm text-mist-600"><input type="checkbox" checked={readPage} onChange={(e) => setReadPage(e.target.checked)} />读取页面为对标参考（受 robots 和限额约束，可手动粘贴）</label>}

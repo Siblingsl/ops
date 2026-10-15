@@ -1,14 +1,15 @@
 import { Check, Copy, Download, LayoutTemplate, Package, Smartphone, Sparkles } from 'lucide-react'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BackfillForm, PostPushTodos } from '@/components/backfill'
 import { XhsCardMaker } from '@/components/xhs-cards'
 import { Button, Card, cn, HumanGate, Notice } from '@/components/ui'
-import { errorMessage, post } from '@/lib/api'
+import { aiError } from '@/lib/ai-error'
+import { ApiError, errorMessage, post } from '@/lib/api'
 import { copyText, runeLen } from '@/lib/format'
 import type { Work } from '@/lib/types'
-import { useWork } from './WorkLayout'
+import { useWork, WorkHeaderAction } from './WorkLayout'
 
 function CopyBlock({ label, meta, text, multiline }: { label: string; meta?: string; text: string; multiline?: boolean }) {
   const [copied, setCopied] = useState(false)
@@ -66,6 +67,7 @@ async function saveImages(urls: string[], zip: string) {
 }
 
 export default function Pack() {
+  const nav = useNavigate()
   const { work, setWork, refresh } = useWork()
   const [busy, setBusy] = useState(false)
   const [pages, setPages] = useState<{ title: string; body: string }[] | null>(null)
@@ -82,7 +84,7 @@ export default function Pack() {
       const r = await post<{ pages: { title: string; body: string }[] }>(`/works/${work.id}/xhs/pages`)
       setPages(r.pages)
     } catch (e) {
-      toast.error(errorMessage(e))
+      aiError(e, '分页文案建议', suggestPages)
     } finally {
       setPageBusy(false)
     }
@@ -92,41 +94,52 @@ export default function Pack() {
     try {
       setWork(await post<Work>(`/works/${work.id}/xhs/pack`))
     } catch (e) {
-      toast.error(errorMessage(e))
+      toast.error(errorMessage(e), {
+        duration: Number.POSITIVE_INFINITY,
+        action: { label: '重试', onClick: () => void create() },
+        cancel: e instanceof ApiError && e.code === 'human_step_required' ? { label: '去检查', onClick: () => nav(`/works/${work.id}/check`) } : undefined,
+      })
     } finally {
       setBusy(false)
     }
   }
   if (!packed && work.status !== 'ready') {
     return (
-      <div className="mx-auto max-w-2xl px-6 py-12">
-        <HumanGate code="H-04">发布前检查还没有全部确认，不能生成发布包。<Link to={`/works/${work.id}/check`} className="ml-1 font-semibold underline">去检查</Link></HumanGate>
-      </div>
+      <>
+        <WorkHeaderAction><Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/check`)}>去检查</Button></WorkHeaderAction>
+        <div className="mx-auto max-w-2xl px-6 py-12">
+          <HumanGate code="H-04">发布前检查还没有全部确认，不能生成发布包。</HumanGate>
+        </div>
+      </>
     )
   }
   if (!packed) {
     return (
-      <div className="mx-auto max-w-xl px-6 py-16 text-center">
-        <div className="mx-auto mb-5 flex size-14 items-center justify-center rounded-2xl bg-xhs/10 text-xhs"><Package className="size-7" /></div>
-        <h1 className="font-display text-[22px] font-bold text-mist-900">生成小红书发布包</h1>
-        <p className="mx-auto mt-2 max-w-md text-[13.5px] leading-relaxed text-mist-500">发布包包含标题、正文、话题和按顺序编号的图片。你需要在小红书 App 或创作服务平台里亲自发布，系统不会代发。</p>
-        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-          <Button variant="primary" size="lg" loading={busy} onClick={create} icon={<Package className="size-4" />}>生成发布包</Button>
-          <Button size="lg" variant="secondary" loading={pageBusy} onClick={suggestPages} icon={<Sparkles className="size-4" />}>分页文案建议</Button>
-          <Button size="lg" variant="ghost" onClick={() => setCards(true)} icon={<LayoutTemplate className="size-4" />}>生成文字卡片</Button>
-        </div>
-        {maker}
-        {pages && (
-          <div className="mt-6 space-y-2 text-left">
-            {pages.map((p, i) => (
-              <div key={i} className="rounded-lg border border-mist-200 px-3 py-2.5">
-                <div className="text-[13.5px] font-semibold text-mist-800">{i + 1}. {p.title}</div>
-                <p className="mt-1 text-[13px] text-mist-600">{p.body}</p>
-              </div>
-            ))}
+      <>
+        <WorkHeaderAction>
+          <Button size="sm" variant="primary" loading={busy} onClick={create} icon={<Package className="size-4" />}>生成发布包</Button>
+        </WorkHeaderAction>
+        <div className="mx-auto max-w-xl px-6 py-16 text-center">
+          <div className="mx-auto mb-5 flex size-14 items-center justify-center rounded-2xl bg-xhs/10 text-xhs"><Package className="size-7" /></div>
+          <h1 className="font-display text-[22px] font-bold text-mist-900">生成小红书发布包</h1>
+          <p className="mx-auto mt-2 max-w-md text-[13.5px] leading-relaxed text-mist-500">发布包包含标题、正文、话题和按顺序编号的图片。你需要在小红书 App 或创作服务平台里亲自发布，系统不会代发。</p>
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+            <Button size="lg" variant="secondary" loading={pageBusy} onClick={suggestPages} icon={<Sparkles className="size-4" />}>分页文案建议</Button>
+            <Button size="lg" variant="ghost" onClick={() => setCards(true)} icon={<LayoutTemplate className="size-4" />}>生成文字卡片</Button>
           </div>
-        )}
-      </div>
+          {maker}
+          {pages && (
+            <div className="mt-6 space-y-2 text-left">
+              {pages.map((p, i) => (
+                <div key={i} className="rounded-lg border border-mist-200 px-3 py-2.5">
+                  <div className="text-[13.5px] font-semibold text-mist-800">{i + 1}. {p.title}</div>
+                  <p className="mt-1 text-[13px] text-mist-600">{p.body}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </>
     )
   }
   const comic = work.content_format === 'comic'

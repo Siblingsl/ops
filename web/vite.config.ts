@@ -10,5 +10,15 @@ export default defineConfig(({ mode }) => ({
     host: true,
     proxy: { '/api': { target: loadEnv(mode, '.', 'OPS_').OPS_API_TARGET || 'http://localhost:8080', changeOrigin: false } },
   },
-  build: { outDir: 'dist', chunkSizeWarningLimit: 1500 },
+  build: {
+    outDir: 'dist',
+    chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('lucide-react/dist/esm/')) return 'lucide-react'
+        },
+      },
+    },
+  },
 }))

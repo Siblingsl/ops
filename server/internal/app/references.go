@@ -199,7 +199,7 @@ func overlapLong(source, output string) bool {
 }
 func (s *Server) analyzeReference(ctx context.Context, a *Account, id uuid.UUID, body, platform string) error {
 	var result ReferenceAnalysis
-	ai, e := s.runAIJSON(ctx, aiTask{Type: "reference_analyze", Account: a, Tier: "economy", SkipStyle: true, User: "只总结写作方法，不复述原句；输出 title_pattern, hook_type, structure[], angle, tags[], takeaways[]。\n平台：" + platform + "\n## 原文\n" + truncateRunes(body, 4000), Refs: map[string]any{"reference_id": id}}, &result, func() error {
+	ai, e := s.runAIJSON(ctx, aiTask{Type: "reference_analyze", Account: a, Tier: "economy", SkipStyle: true, User: "只总结写作方法，不复述原句；输出 title_pattern, hook_type, structure[], angle, tags[], takeaways[]。\n平台：" + platform + "\n## 原文\n" + externalBlock("对标原文", id.String(), truncateRunes(body, 4000)), Refs: map[string]any{"reference_id": id}}, &result, func() error {
 		b, _ := json.Marshal(result)
 		if result.TitlePattern == "" || len(result.Takeaways) == 0 || overlapLong(body, string(b)) {
 			return validation("提炼必须包含方法，不能连续复述原文超过 15 字")
@@ -304,11 +304,11 @@ func (s *Server) collectReferences(ctx context.Context) {
 			jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: x.ws, Role: "owner"})
 			a, err := s.account(jctx, x.aid)
 			if err == nil {
-				err = s.analyzeReference(jctx, a, x.id, page.Body, x.platform)
+				err = s.analyzeReference(jctx, a, x.id, cleanExternalText(page.Body), x.platform)
 			}
 			if err == nil {
 				b, _ := json.Marshal(page.Metrics)
-				_, _ = s.db.Exec(ctx, `UPDATE reference_item SET title=$2,author=$3,published_at=$4,metrics=$5 WHERE id=$1`, x.id, page.Title, page.Author, page.PublishedAt, b)
+				_, _ = s.db.Exec(ctx, `UPDATE reference_item SET title=$2,author=$3,published_at=$4,metrics=$5 WHERE id=$1`, x.id, cleanExternalText(page.Title), cleanExternalText(page.Author), page.PublishedAt, b)
 				continue
 			}
 			msg = err.Error()

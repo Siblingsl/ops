@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/microcosm-cc/bluemonday"
 
 	"ops/internal/secure"
@@ -37,7 +38,20 @@ func (s *Server) pushPreview(w http.ResponseWriter, r *http.Request) error {
 		return validation("只有公众号作品可以写入草稿")
 	}
 	ctx := r.Context()
-	wk, err := s.loadWork(ctx, m.ID)
+	var fieldsRaw, coverCrops []byte
+	var draftMediaID *string
+	var coverAssetID *uuid.UUID
+	var status, title, summary, contentFormat string
+	var revision, assetCount, panelImages int
+	err = s.db.QueryRow(ctx, `SELECT w.wechat_fields, w.status, w.revision, w.wechat_draft_media_id,
+		(SELECT count(*) FROM asset WHERE work_id=w.id), w.cover_asset_id, w.cover_crops, w.title, w.summary, w.content_format,
+		CASE WHEN w.content_format='card_post' THEN
+			(SELECT count(*) FROM work_card WHERE work_id=w.id AND image_asset_id IS NOT NULL)
+		ELSE (SELECT count(*) FROM comic_panel WHERE work_id=w.id AND asset_id IS NOT NULL) END
+		FROM work w WHERE w.id=$1 AND w.deleted_at IS NULL
+		AND EXISTS (SELECT 1 FROM platform_account a WHERE a.id=w.account_id AND a.workspace_id=$2)`,
+		m.ID, ident(ctx).WorkspaceID).Scan(&fieldsRaw, &status, &revision, &draftMediaID,
+		&assetCount, &coverAssetID, &coverCrops, &title, &summary, &contentFormat, &panelImages)
 	if err != nil {
 		return err
 	}
@@ -46,40 +60,28 @@ func (s *Server) pushPreview(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	mode := "new"
-	if wk.WechatDraftMediaID != nil {
+	if draftMediaID != nil {
 		mode = "overwrite"
 	}
-	panelCount := 0
-	if wk.ContentFormat == "card_post" {
-		for _, c := range wk.Cards {
-			if c.ImageAssetID != nil {
-				panelCount++
-			}
-		}
-	} else {
-		for _, p := range wk.Panels {
-			if p.AssetID != nil {
-				panelCount++
-			}
-		}
-	}
+	var fields WechatDefaults
+	_ = json.Unmarshal(fieldsRaw, &fields)
 	return ok(w, map[string]any{
 		"mode":           mode,
 		"today_count":    count,
 		"daily_limit":    m.Account.DailyPushLimit,
-		"fields":         wk.WechatFields,
+		"fields":         fields,
 		"credential":     m.Account.Credential,
-		"status":         wk.Status,
-		"revision":       wk.Revision,
+		"status":         status,
+		"revision":       revision,
 		"backend_url":    s.backendURL(),
-		"can_push":       wk.Status == "ready" || wk.Status == "pushed",
-		"asset_count":    len(wk.Assets),
-		"cover_asset":    wk.CoverAssetID,
-		"cover_crops":    wk.CoverCrops,
-		"title":          wk.Title,
-		"summary":        wk.Summary,
-		"content_format": wk.ContentFormat,
-		"panel_images":   panelCount,
+		"can_push":       status == "ready" || status == "pushed",
+		"asset_count":    assetCount,
+		"cover_asset":    coverAssetID,
+		"cover_crops":    json.RawMessage(coverCrops),
+		"title":          title,
+		"summary":        summary,
+		"content_format": contentFormat,
+		"panel_images":   panelImages,
 	})
 }
 
@@ -172,27 +174,17 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 	if runeLen(content) >= 20000 || len(content) >= 1<<20 {
 		return validation("排版后的正文超出公众号限制（需少于 2 万字符、小于 1MB）")
 	}
-	count, err := s.todayPushCount(ctx, m.Account.ID)
+	record, err := s.reserveWechatPush(ctx, m, wk, in, "add")
 	if err != nil {
 		return err
 	}
-	overLimit := count >= m.Account.DailyPushLimit
-	if overLimit && !in.ConfirmOverLimit {
-		return apiErr(409, "push_limit_reached", fmt.Sprintf("今天已写入草稿 %d 次，达到上限 %d 次。频繁写入可能被平台视为批量发布（3.27.2），确认仍要继续吗？", count, m.Account.DailyPushLimit)).
-			With(map[string]int{"today_count": count, "daily_limit": m.Account.DailyPushLimit})
-	}
+	recordID, count, overLimit := record.ID, record.Count, record.OverLimit
 
 	sse := newSSE(w)
 	step := func(name, status string, cur, total int) {
 		sse.send("step", map[string]any{"name": name, "status": status, "current": cur, "total": total})
 	}
 	action := "add"
-	var recordID uuid.UUID
-	if err := s.db.QueryRow(ctx, `INSERT INTO push_record (work_id, account_id, action, status, over_limit) VALUES ($1,$2,'add','running',$3) RETURNING id`,
-		m.ID, m.Account.ID, overLimit).Scan(&recordID); err != nil {
-		sse.fail(err)
-		return nil
-	}
 	fail := func(f pushFail) {
 		code, msg := "", f.err.Error()
 		var we *wechat.Error
@@ -330,15 +322,39 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	step("write_draft", "running", 0, 0)
-	if draftID == "" {
-		err = call(func(tok string) error {
+	writeDraft := func(tok string) error {
+		if draftID == "" {
 			var e error
 			draftID, e = s.wx.DraftAdd(ctx, tok, article)
 			return e
-		})
-	} else {
+		}
 		action = "update"
-		err = call(func(tok string) error { return s.wx.DraftUpdate(ctx, tok, draftID, article) })
+		return s.wx.DraftUpdate(ctx, tok, draftID, article)
+	}
+	err = call(writeDraft)
+	if wechatErrorCode(err, 40007) {
+		if draftID != "" {
+			checkErr := call(func(tok string) error {
+				_, e := s.wx.DraftGet(ctx, tok, draftID)
+				return e
+			})
+			if wechatErrorCode(checkErr, 40007) {
+				_, _ = s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID)
+				sse.send("need_choice", map[string]any{"reason": "missing", "message": "原草稿已不在草稿箱，可能已经发表或被删除。可以回填已发布，或新建一篇草稿（计入当日次数）。"})
+				return nil
+			}
+			if checkErr != nil {
+				fail(pushFail{"check_backend", checkErr})
+				return nil
+			}
+		}
+		ids, refreshErr := s.refreshCachedMedia(ctx, m.Account.ID, []*assetRow{coverRow}, []string{thumbID}, "image", call)
+		if refreshErr != nil {
+			fail(pushFail{"upload_cover", refreshErr})
+			return nil
+		}
+		article.ThumbMediaID = ids[0]
+		err = call(writeDraft)
 	}
 	if err != nil {
 		fail(pushFail{"write_draft", err})
@@ -422,27 +438,17 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 	if runeLen(content) >= 20000 || len(content) >= 1<<20 {
 		return validation("图片消息正文超出公众号限制（需少于 2 万字符、小于 1MB）")
 	}
-	count, err := s.todayPushCount(ctx, m.Account.ID)
+	record, err := s.reserveWechatPush(ctx, m, wk, in, "newspic")
 	if err != nil {
 		return err
 	}
-	overLimit := count >= m.Account.DailyPushLimit
-	if overLimit && !in.ConfirmOverLimit {
-		return apiErr(409, "push_limit_reached", fmt.Sprintf("今天已写入草稿 %d 次，达到上限 %d 次。频繁写入可能被平台视为批量发布（3.27.2），确认仍要继续吗？", count, m.Account.DailyPushLimit)).
-			With(map[string]int{"today_count": count, "daily_limit": m.Account.DailyPushLimit})
-	}
+	recordID, count := record.ID, record.Count
 
 	sse := newSSE(w)
 	step := func(name, status string, cur, total int) {
 		sse.send("step", map[string]any{"name": name, "status": status, "current": cur, "total": total})
 	}
 	action := "newspic"
-	var recordID uuid.UUID
-	if err := s.db.QueryRow(ctx, `INSERT INTO push_record (work_id, account_id, action, status, over_limit) VALUES ($1,$2,'newspic','running',$3) RETURNING id`,
-		m.ID, m.Account.ID, overLimit).Scan(&recordID); err != nil {
-		sse.fail(err)
-		return nil
-	}
 	fail := func(f pushFail) {
 		code, msg := "", f.err.Error()
 		var we *wechat.Error
@@ -512,6 +518,7 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 	}
 
 	imageList := make([]wechat.ImageListItem, 0, len(imageAssets))
+	imageIDs := make([]string, 0, len(imageAssets))
 	for i, ar := range imageAssets {
 		step("upload_images", "running", i+1, len(imageAssets))
 		mediaID, err := s.cachedMedia(ctx, m.Account.ID, ar, "image", call)
@@ -520,6 +527,7 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 			return nil
 		}
 		imageList = append(imageList, wechat.ImageListItem{ImageMediaID: mediaID})
+		imageIDs = append(imageIDs, mediaID)
 	}
 	step("upload_images", "done", len(imageAssets), len(imageAssets))
 
@@ -545,15 +553,42 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 	}
 
 	step("write_draft", "running", 0, 0)
-	if draftID == "" {
-		err = call(func(tok string) error {
+	writeDraft := func(tok string) error {
+		if draftID == "" {
 			var e error
 			draftID, e = s.wx.DraftAdd(ctx, tok, article)
 			return e
-		})
-	} else {
+		}
 		action = "update"
-		err = call(func(tok string) error { return s.wx.DraftUpdate(ctx, tok, draftID, article) })
+		return s.wx.DraftUpdate(ctx, tok, draftID, article)
+	}
+	err = call(writeDraft)
+	if wechatErrorCode(err, 40007) {
+		if draftID != "" {
+			checkErr := call(func(tok string) error {
+				_, e := s.wx.DraftGet(ctx, tok, draftID)
+				return e
+			})
+			if wechatErrorCode(checkErr, 40007) {
+				_, _ = s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID)
+				sse.send("need_choice", map[string]any{"reason": "missing", "message": "原草稿已不在草稿箱，可能已经发表或被删除。可以回填已发布，或新建一篇草稿（计入当日次数）。"})
+				return nil
+			}
+			if checkErr != nil {
+				fail(pushFail{"check_backend", checkErr})
+				return nil
+			}
+		}
+		imageIDs, err = s.refreshCachedMedia(ctx, m.Account.ID, imageAssets, imageIDs, "image", call)
+		if err != nil {
+			fail(pushFail{"upload_images", err})
+			return nil
+		}
+		for i := range imageList {
+			imageList[i].ImageMediaID = imageIDs[i]
+		}
+		article.ImageInfo.ImageList = imageList
+		err = call(writeDraft)
 	}
 	if err != nil {
 		fail(pushFail{"write_draft", err})
@@ -617,6 +652,21 @@ func (s *Server) cachedMedia(ctx context.Context, accountID uuid.UUID, a *assetR
 		return url, nil
 	}
 	return mediaID, nil
+}
+
+func (s *Server) refreshCachedMedia(ctx context.Context, accountID uuid.UUID, assets []*assetRow, staleIDs []string, kind string, call func(func(string) error) error) ([]string, error) {
+	ids := make([]string, len(assets))
+	for i, a := range assets {
+		if _, err := s.db.Exec(ctx, `DELETE FROM wechat_media_cache WHERE account_id=$1 AND sha256=$2 AND kind=$3 AND media_id=$4`, accountID, a.SHA256, kind, staleIDs[i]); err != nil {
+			return nil, err
+		}
+		id, err := s.cachedMedia(ctx, accountID, a, kind, call)
+		if err != nil {
+			return nil, err
+		}
+		ids[i] = id
+	}
+	return ids, nil
 }
 
 // ---------- 小红书发布包 ----------
@@ -741,6 +791,14 @@ func (s *Server) packZip(w http.ResponseWriter, r *http.Request) error {
 	return zw.Close()
 }
 
+func (s *Server) setWorkPublished(ctx context.Context, tx pgx.Tx, id uuid.UUID, url string, at *time.Time) error {
+	if _, err := tx.Exec(ctx, `UPDATE work SET status='published', published_url=nullif($2,''), published_at=$3, locked=true, updated_at=now(),
+		wechat_msgid=coalesce(nullif($4,''), wechat_msgid) WHERE id=$1`, id, url, at, parseWechatMsgID(url)); err != nil {
+		return err
+	}
+	return s.addVersion(ctx, tx, id, "publish")
+}
+
 // markPublished is the only way a work becomes 已发布 (H-07, HC-07).
 func (s *Server) markPublished(w http.ResponseWriter, r *http.Request) error {
 	m, err := s.workMetaFromPath(r)
@@ -765,9 +823,7 @@ func (s *Server) markPublished(w http.ResponseWriter, r *http.Request) error {
 	if url != "" && !strings.HasPrefix(url, "http") {
 		return validation("链接需要以 http 开头")
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE work SET status='published', published_url=nullif($2,''), published_at=$3, locked=true, updated_at=now(),
-		wechat_msgid=coalesce(nullif($4,''), wechat_msgid) WHERE id=$1`,
-		m.ID, url, at, parseWechatMsgID(url)); err != nil {
+	if err := s.withTx(r.Context(), func(tx pgx.Tx) error { return s.setWorkPublished(r.Context(), tx, m.ID, url, &at) }); err != nil {
 		return err
 	}
 	s.recomputeMetricOffsets(r.Context(), m.ID)

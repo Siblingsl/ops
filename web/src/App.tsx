@@ -3,13 +3,10 @@ import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { PageSkeleton } from './components/error-boundary'
 import { PageLoading, Spinner } from './components/ui'
-import Shell from './layout/Shell'
 import { get } from './lib/api'
 import { rememberedAccount, useAccounts, useMe } from './lib/session'
-import Login from './pages/Login'
-import Register from './pages/Register'
-import Setup from './pages/Setup'
 
+const Shell = lazy(() => import('./layout/Shell'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Topics = lazy(() => import('./pages/Topics'))
 const CalendarPage = lazy(() => import('./pages/Calendar'))
@@ -45,6 +42,10 @@ const Check = lazy(() => import('./pages/work/Check'))
 const CheckReport = lazy(() => import('./pages/work/CheckReport'))
 const Push = lazy(() => import('./pages/work/Push'))
 const Pack = lazy(() => import('./pages/work/Pack'))
+const PublicPreview = lazy(() => import('./pages/PublicPreview'))
+const Login = lazy(() => import('./pages/Login'))
+const Register = lazy(() => import('./pages/Register'))
+const Setup = lazy(() => import('./pages/Setup'))
 
 function Home() {
   const me = useMe()
@@ -72,7 +73,7 @@ function Authed() {
   return (
     <Routes>
       <Route path="works/:workId/check/report" element={<S><CheckReport /></S>} />
-      <Route element={<Shell />}>
+      <Route element={<S><Shell /></S>}>
         <Route index element={<Home />} />
         <Route path="a/:accountId">
           <Route index element={<S><Dashboard /></S>} />
@@ -123,9 +124,10 @@ function Authed() {
 export default function App() {
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
-      <Route path="/setup" element={<Setup />} />
+      <Route path="/login" element={<S><Login /></S>} />
+      <Route path="/register" element={<S><Register /></S>} />
+      <Route path="/setup" element={<S><Setup /></S>} />
+      <Route path="/preview/:token" element={<S><PublicPreview /></S>} />
       <Route path="/*" element={<Authed />} />
     </Routes>
   )

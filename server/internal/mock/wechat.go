@@ -23,11 +23,12 @@ type draft struct {
 }
 
 type Wechat struct {
-	mu     sync.Mutex
-	tokens map[string]time.Time
-	drafts map[string]*draft
-	images map[string][]byte
-	calls  []string
+	mu        sync.Mutex
+	tokens    map[string]time.Time
+	drafts    map[string]*draft
+	images    map[string][]byte
+	materials map[string]bool
+	calls     []string
 
 	articleTotals map[string][]map[string]any // nil: one sample article per day
 	datacubeErr   int
@@ -65,7 +66,13 @@ func (m *Wechat) SetUserDatacubeError(code int) {
 }
 
 func NewWechat() *Wechat {
-	return &Wechat{tokens: map[string]time.Time{}, drafts: map[string]*draft{}, images: map[string][]byte{}}
+	return &Wechat{tokens: map[string]time.Time{}, drafts: map[string]*draft{}, images: map[string][]byte{}, materials: map[string]bool{}}
+}
+
+func (m *Wechat) DeleteMaterial(mediaID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.materials, mediaID)
 }
 
 func (m *Wechat) Calls() []string {
@@ -142,10 +149,12 @@ func (m *Wechat) Handler() http.Handler {
 			return
 		}
 		id := uuid.NewString()
+		mediaID := "mock-media-" + id
 		m.mu.Lock()
 		m.images[id] = data
+		m.materials[mediaID] = true
 		m.mu.Unlock()
-		writeJSON(w, map[string]any{"media_id": "mock-media-" + id, "url": "http://" + r.Host + "/mock/img/" + id})
+		writeJSON(w, map[string]any{"media_id": mediaID, "url": "http://" + r.Host + "/mock/img/" + id})
 	})
 	mux.HandleFunc("/cgi-bin/draft/add", func(w http.ResponseWriter, r *http.Request) {
 		if !m.checkToken(w, r) {
@@ -158,7 +167,7 @@ func (m *Wechat) Handler() http.Handler {
 			wxErr(w, 44003, "empty news data")
 			return
 		}
-		if code, msg := validateArticle(in.Articles[0]); code != 0 {
+		if code, msg := m.validateArticle(in.Articles[0]); code != 0 {
 			wxErr(w, code, msg)
 			return
 		}
@@ -180,7 +189,7 @@ func (m *Wechat) Handler() http.Handler {
 			wxErr(w, 44003, "empty news data")
 			return
 		}
-		if code, msg := validateArticle(in.Articles); code != 0 {
+		if code, msg := m.validateArticle(in.Articles); code != 0 {
 			wxErr(w, code, msg)
 			return
 		}
@@ -309,38 +318,6 @@ func (m *Wechat) Handler() http.Handler {
 		}
 		writeJSON(w, map[string]any{"list": list})
 	})
-	mux.HandleFunc("/cgi-bin/draft/batchget", func(w http.ResponseWriter, r *http.Request) {
-		if !m.checkToken(w, r) {
-			return
-		}
-		var in struct {
-			Offset int `json:"offset"`
-			Count  int `json:"count"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&in)
-		if in.Count <= 0 {
-			in.Count = 20
-		}
-		m.mu.Lock()
-		ids := make([]string, 0, len(m.drafts))
-		for id := range m.drafts {
-			ids = append(ids, id)
-		}
-		m.mu.Unlock()
-		total := len(ids)
-		if in.Offset > total {
-			in.Offset = total
-		}
-		end := in.Offset + in.Count
-		if end > total {
-			end = total
-		}
-		items := []any{}
-		for _, id := range ids[in.Offset:end] {
-			items = append(items, map[string]any{"media_id": id})
-		}
-		writeJSON(w, map[string]any{"total_count": total, "item_count": len(items), "item": items})
-	})
 	mux.HandleFunc("/mock/img/", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		data, ok := m.images[strings.TrimPrefix(r.URL.Path, "/mock/img/")]
@@ -402,6 +379,31 @@ func validateArticle(a map[string]any) (int, string) {
 		if thumb, _ := a["thumb_media_id"].(string); thumb == "" {
 			return 40007, "invalid media_id"
 		}
+	}
+	return 0, ""
+}
+
+func (m *Wechat) validateArticle(a map[string]any) (int, string) {
+	if code, msg := validateArticle(a); code != 0 {
+		return code, msg
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, _ := a["article_type"].(string); t == "newspic" {
+		info, _ := a["image_info"].(map[string]any)
+		list, _ := info["image_list"].([]any)
+		for _, it := range list {
+			item, _ := it.(map[string]any)
+			id, _ := item["image_media_id"].(string)
+			if !m.materials[id] {
+				return 40007, "invalid media_id"
+			}
+		}
+		return 0, ""
+	}
+	id, _ := a["thumb_media_id"].(string)
+	if !m.materials[id] {
+		return 40007, "invalid media_id"
 	}
 	return 0, ""
 }

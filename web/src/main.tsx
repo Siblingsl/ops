@@ -5,7 +5,6 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import App from './App'
-import { PasswordPrompt } from './components/dialog'
 import { ApiError, post, registerReauthPrompt, registerUnauthenticated } from './lib/api'
 import './styles.css'
 
@@ -13,6 +12,7 @@ const queryClient = new QueryClient({
   queryCache: new QueryCache(),
   defaultOptions: {
     queries: {
+      staleTime: 30_000,
       refetchOnWindowFocus: false,
       retry: (count, err) => !(err instanceof ApiError && err.status > 0 && err.status < 500) && count < 2,
     },
@@ -36,18 +36,24 @@ registerReauthPrompt(
       const host = document.createElement('div')
       document.body.appendChild(host)
       const root = createRoot(host)
-      root.render(
-        <PasswordPrompt
-          submit={async (password) => {
-            await post('/auth/reauth', { password })
-          }}
-          onDone={(ok) => {
-            root.unmount()
-            host.remove()
-            resolve(ok)
-          }}
-        />,
-      )
+      void import('./components/dialog').then(({ PasswordPrompt }) => {
+        root.render(
+          <PasswordPrompt
+            submit={async (password) => {
+              await post('/auth/reauth', { password })
+            }}
+            onDone={(ok) => {
+              root.unmount()
+              host.remove()
+              resolve(ok)
+            }}
+          />,
+        )
+      }).catch(() => {
+        root.unmount()
+        host.remove()
+        resolve(false)
+      })
     }),
 )
 
@@ -57,7 +63,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <BrowserRouter>
         <App />
       </BrowserRouter>
-      <Toaster position="top-center" richColors closeButton toastOptions={{ style: { fontFamily: 'var(--font-sans)' } }} />
+      <Toaster position="top-center" richColors closeButton duration={8000} toastOptions={{ style: { fontFamily: 'var(--font-sans)' } }} />
     </QueryClientProvider>
   </React.StrictMode>,
 )

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { CalendarDays, ChevronLeft, ChevronRight, Info, Lightbulb } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { Button, Card, cn, Notice, PageHeader, PageLoading, PlatformMark, StatusBadge, Tabs } from '@/components/ui'
 import { errorMessage, get, patch } from '@/lib/api'
 import { useAccounts, useCanWrite, useCurrentAccount } from '@/lib/session'
-import type { CalendarItem, Topic, WorkListItem, WorkStatus } from '@/lib/types'
+import type { CalendarItem, TopicPage, WorkListItem, WorkStatus } from '@/lib/types'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
@@ -54,9 +54,11 @@ export default function CalendarPage() {
     queryFn: () => get<WorkListItem[]>(`/accounts/${acc!.id}/works?q=`),
     enabled: !!acc,
   })
-  const topics = useQuery({
+  const topics = useInfiniteQuery({
     queryKey: ['topics', acc?.id, 'calendar'],
-    queryFn: () => get<Topic[]>(`/accounts/${acc!.id}/topics`),
+    queryFn: ({ pageParam }) => get<TopicPage>(`/accounts/${acc!.id}/topics?limit=50${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`),
+    initialPageParam: '' as string,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled: !!acc,
   })
   if (!acc) return <PageLoading />
@@ -67,7 +69,8 @@ export default function CalendarPage() {
   const byDate = new Map<string, CalendarItem[]>()
   for (const it of cal.data?.items ?? []) byDate.set(it.date, [...(byDate.get(it.date) ?? []), it])
   const unplanned = (works.data ?? []).filter((w) => !w.planned_date && ['drafting', 'checking', 'reviewing', 'ready'].includes(w.status))
-  const unplannedTopics = (topics.data ?? []).filter((t) => !t.planned_date && !t.work_id && t.status !== 'dropped')
+  const topicList = topics.data?.pages.flatMap((page) => page.items) ?? []
+  const unplannedTopics = topicList.filter((t) => !t.planned_date && !t.work_id && t.status !== 'dropped')
   const today = iso(new Date())
   const shownAccounts = [...new Map((cal.data?.items ?? []).map((it) => [it.account_id, it.account_name])).entries()]
 
@@ -190,6 +193,7 @@ export default function CalendarPage() {
                     {canWrite && <input type="date" aria-label="计划发布日" className="mt-1.5 w-full rounded border border-mist-200 px-1.5 py-0.5 text-[12px] text-mist-600" onChange={(e) => e.target.value && setDate('topic', t.id, e.target.value)} />}
                   </li>
                 ))}
+                {topics.hasNextPage && <li className="pt-2"><Button size="sm" variant="ghost" loading={topics.isFetchingNextPage} onClick={() => void topics.fetchNextPage()}>加载更多选题</Button></li>}
               </ul>
             )}
           </Card>

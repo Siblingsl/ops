@@ -8,22 +8,27 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// APIError is rendered as {"error":{"code","message","detail"}} (06 文档第 13.1 节).
+// APIError is rendered as {"error":{"code","message","detail","fields","request_id"}} (06 文档第 13.1 节).
 type APIError struct {
-	Status  int    `json:"-"`
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Detail  any    `json:"detail,omitempty"`
+	Status    int               `json:"-"`
+	Code      string            `json:"code"`
+	Message   string            `json:"message"`
+	Detail    any               `json:"detail,omitempty"`
+	Fields    map[string]string `json:"fields,omitempty"`
+	RequestID string            `json:"request_id,omitempty"`
 }
 
 func (e *APIError) Error() string { return e.Code + ": " + e.Message }
@@ -46,7 +51,12 @@ var (
 	errNotFound        = apiErr(404, "not_found", "内容不存在或已删除")
 )
 
-func validation(msg string) *APIError   { return apiErr(422, "validation_failed", msg) }
+func validation(msg string) *APIError { return apiErr(422, "validation_failed", msg) }
+func validationFields(msg string, fields map[string]string) *APIError {
+	ae := validation(msg)
+	ae.Fields = fields
+	return ae
+}
 func stateInvalid(msg string) *APIError { return apiErr(409, "state_invalid", msg) }
 func humanStep(h, msg string) *APIError {
 	return apiErr(409, "human_step_required", msg).With(map[string]string{"checkpoint": h})
@@ -66,13 +76,16 @@ func (s *Server) h(fn handlerFunc) http.HandlerFunc {
 
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var ae *APIError
+	var pe *pgconn.PgError
 	if errors.Is(err, pgx.ErrNoRows) {
 		ae = errNotFound
+	} else if errors.As(err, &pe) && pe.Code == "57014" {
+		ae = apiErr(http.StatusGatewayTimeout, "database_timeout", "数据库操作超时，请稍后重试")
 	} else if !errors.As(err, &ae) {
-		slog.Error("请求处理失败", "path", r.URL.Path, "err", err)
+		slog.ErrorContext(r.Context(), "请求处理失败", "request_id", middleware.GetReqID(r.Context()), "route", requestRoute(r.Context()), "err", err)
 		ae = apiErr(500, "internal", "服务器内部错误，请稍后重试")
 	}
-	writeJSON(w, ae.Status, map[string]any{"error": ae})
+	writeJSON(w, ae.Status, map[string]any{"error": errorRequestID(ae, middleware.GetReqID(r.Context()))})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -89,9 +102,18 @@ func ok(w http.ResponseWriter, v any) error {
 func decode(r *http.Request, v any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 8<<20))
 	if err := dec.Decode(v); err != nil {
-		return validation("请求格式不正确：" + err.Error())
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return apiErr(408, "request_read_timeout", "请求读取超时，请稍后重试")
+		}
+		return requestFormatError(r.Context(), err)
 	}
 	return nil
+}
+
+func requestFormatError(ctx context.Context, err error) *APIError {
+	slog.WarnContext(ctx, "请求 JSON 格式错误", "err", err)
+	return validation("请求格式不正确，请检查 JSON 语法和字段类型")
 }
 
 // decodeOptional accepts an empty body (all fields keep their zero value).
@@ -101,13 +123,17 @@ func decodeOptional(r *http.Request, v any) error {
 	}
 	raw, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, 8<<20))
 	if err != nil {
-		return validation("请求格式不正确：" + err.Error())
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return apiErr(408, "request_read_timeout", "请求读取超时，请稍后重试")
+		}
+		return requestFormatError(r.Context(), err)
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil
 	}
 	if err := json.Unmarshal(raw, v); err != nil {
-		return validation("请求格式不正确：" + err.Error())
+		return requestFormatError(r.Context(), err)
 	}
 	return nil
 }
@@ -160,6 +186,11 @@ func newSSE(w http.ResponseWriter) *sseWriter {
 }
 
 func (s *sseWriter) send(event string, data any) {
+	if event == "error" {
+		if ae, ok := data.(*APIError); ok {
+			data = errorRequestID(ae, s.w.Header().Get("X-Request-ID"))
+		}
+	}
 	b, _ := json.Marshal(data)
 	fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event, b)
 	s.flush()
@@ -168,7 +199,7 @@ func (s *sseWriter) send(event string, data any) {
 func (s *sseWriter) fail(err error) {
 	var ae *APIError
 	if !errors.As(err, &ae) {
-		slog.Error("流式请求失败", "err", err)
+		slog.Error("流式请求失败", "request_id", s.w.Header().Get("X-Request-ID"), "err", err)
 		ae = apiErr(500, "internal", "服务器内部错误，请稍后重试")
 	}
 	s.send("error", ae)
@@ -198,15 +229,16 @@ func preferFallback(next http.Handler) http.Handler {
 }
 
 type identity struct {
-	UserID        uuid.UUID
-	SessionID     uuid.UUID
-	WorkspaceID   uuid.UUID
-	Username      string
-	Role          string
-	SystemAdmin   bool
-	AdminOverride bool
-	ReauthOK      bool
-	lastSeen      time.Time
+	UserID           uuid.UUID
+	SessionID        uuid.UUID
+	WorkspaceID      uuid.UUID
+	Username         string
+	Role             string
+	SystemAdmin      bool
+	AdminOverride    bool
+	ReauthOK         bool
+	sessionExpiresAt time.Time
+	lastSeen         time.Time
 }
 
 func ident(ctx context.Context) *identity {

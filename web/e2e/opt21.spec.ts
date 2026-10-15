@@ -1,0 +1,74 @@
+import { expect, test } from '@playwright/test'
+import { api, registerAccount } from './support'
+
+test('OPT21 单篇粘贴旧文预览后确认为已发布并可派生到小红书', async ({ page }) => {
+  const account = await registerAccount(page, '长图文', 'wechat_mp')
+  const target = await api(page, 'POST', '/accounts', {
+    platform: 'xhs', name: 'OPT21 派生目标', content_format: 'image_note',
+  })
+  await page.goto(`/a/${account.id}/works`)
+
+  await page.getByRole('button', { name: '导入旧文', exact: true }).click()
+  const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '导入已发布旧文', exact: true }) })
+  await dialog.getByLabel('作品标题').fill('OPT21 粘贴导入文章')
+  const firstBody = '这是一段用于验证旧文完整导入的中文内容。'.repeat(100)
+  const secondPrefix = '导入后保留标题顺序，并且仍可逐篇派生。'
+  const secondBody = secondPrefix.repeat(Math.ceil((3000 - firstBody.length) / secondPrefix.length)).slice(0, 3000 - firstBody.length)
+  expect(firstBody.length + secondBody.length).toBe(3000)
+  const markdown = `## 先说明问题\n\n${firstBody}\n\n## 再给方法\n\n${secondBody}`
+  await dialog.getByLabel('旧文正文').fill(markdown)
+  await dialog.getByLabel('发布日期').fill('2024-06-15')
+
+  await page.evaluate(() => { (window as Window & { opt21StartedAt?: number }).opt21StartedAt = performance.now() })
+  await dialog.getByRole('button', { name: '预览分段', exact: true }).click()
+  const preview = dialog.getByTestId('import-preview-section')
+  await expect(preview).toHaveCount(2)
+  await expect(preview.nth(0)).toContainText('先说明问题')
+  await expect(preview.nth(0)).toContainText(firstBody)
+  await expect(preview.nth(1)).toContainText('再给方法')
+  await expect(preview.nth(1)).toContainText(secondBody)
+  await dialog.getByRole('button', { name: '确认导入为已发布作品', exact: true }).click()
+  await page.waitForURL(/\/works\/[a-f0-9-]+$/)
+
+  const duration = await page.evaluate(() => performance.now() - (window as Window & { opt21StartedAt?: number }).opt21StartedAt!)
+  console.log(`OPT21 3000 字导入耗时 ${duration.toFixed(1)}ms`)
+  expect(duration).toBeLessThan(10_000)
+  const workId = page.url().split('/').pop()!
+  const work = await api(page, 'GET', `/works/${workId}`)
+  expect(work.status).toBe('published')
+  expect(work.locked).toBe(true)
+  const publishedAt = Date.parse(work.published_at)
+  expect(Number.isFinite(publishedAt)).toBeTruthy()
+  expect(new Date(publishedAt + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)).toBe('2024-06-15')
+  expect(work.sections.map((section: { heading: string }) => section.heading)).toEqual(['先说明问题', '再给方法'])
+
+  await page.getByRole('button', { name: '派生', exact: true }).click()
+  const derive = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '派生到其他平台', exact: true }) })
+  await derive.getByRole('button', { name: new RegExp(target.name) }).click()
+  await derive.getByRole('button', { name: '开始派生', exact: true }).click()
+  await expect(page).toHaveURL(/\/works\/[a-f0-9-]+\/compare$/)
+})
+
+test('OPT21 公众号富文本粘贴保留标题、段落和强调格式', async ({ page }) => {
+  const account = await registerAccount(page, '长图文', 'wechat_mp')
+  await page.goto(`/a/${account.id}/works`)
+  await page.getByRole('button', { name: '导入旧文', exact: true }).click()
+  const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '导入已发布旧文', exact: true }) })
+  const field = dialog.getByLabel('旧文正文')
+  await field.evaluate((element) => {
+    const clipboardData = new DataTransfer()
+    clipboardData.setData('text/html', '<h2>富文本标题</h2><p>先看<strong>关键步骤</strong>，再按顺序执行。</p><h2>后续检查</h2><p>最后复核结果并保存记录。</p>')
+    clipboardData.setData('text/plain', '富文本标题\n先看关键步骤，再按顺序执行。\n后续检查\n最后复核结果并保存记录。')
+    element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData }))
+  })
+  await expect(field).toHaveValue('## 富文本标题\n\n先看**关键步骤**，再按顺序执行。\n\n## 后续检查\n\n最后复核结果并保存记录。')
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+  await dialog.getByLabel('作品标题').fill('OPT21 富文本导入')
+  await expect(dialog.getByLabel('作品标题')).toHaveValue('OPT21 富文本导入')
+  await dialog.getByRole('button', { name: '预览分段', exact: true }).click()
+  const preview = dialog.getByTestId('import-preview-section')
+  await expect(preview).toHaveCount(2)
+  await expect(preview.nth(0)).toContainText('富文本标题')
+  await expect(preview.nth(0)).toContainText('先看**关键步骤**')
+  await expect(preview.nth(1)).toContainText('后续检查')
+})

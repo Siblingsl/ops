@@ -1,21 +1,22 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Activity, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronDown, ChevronRight, ChevronsUpDown, Clock, Cpu, Eye, FileText, Gauge, Images, Inbox, KeyRound,
   LayoutDashboard, Lightbulb, LogOut, Pencil, Plus, Power, ScrollText, Search, Send, Settings2, Shield, ShieldAlert, SlidersHorizontal, Trash2,
   UserCircle2, UserPlus, Users,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { CommandPalette, openPalette } from '@/components/command-palette'
+import { CommandPaletteHost } from '@/components/command-palette-host'
 import { confirm } from '@/components/dialog'
 import { ErrorBoundary } from '@/components/error-boundary'
 import { NotificationBell } from '@/components/notifications'
 import { QuickCollect } from '@/components/quick-collect'
 import { cn, Kbd, PlatformMark, platformLabel } from '@/components/ui'
-import { del, errorMessage, get, post } from '@/lib/api'
-import { fmtNum } from '@/lib/format'
+import { del, errorMessage, post } from '@/lib/api'
+import { fmtTime } from '@/lib/format'
+import { TodayUsage, useChromeMeta } from './today-usage'
 import { useAccounts, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
 import type { Account, Platform } from '@/lib/types'
 import { setUXEnabled, usePrefs, useRecentWorks } from '@/lib/v3'
@@ -56,6 +57,8 @@ const settingsItems: { to: string; icon: ReactNode; label: string; adminOnly?: b
   { to: '/settings/hot-sources', icon: <Activity />, label: '热点来源' },
  { to: '/settings/daily', icon: <Activity />, label: '每日推荐设置' },
 ]
+
+const commonSettings = new Set(['/settings/accounts', '/settings/models', '/settings/members', '/settings/preferences'])
 
 function Brand() {
   return (
@@ -122,12 +125,15 @@ function RecentWorks() {
 
 function UserMenu({ username, onLogout }: { username?: string; onLogout: () => void }) {
   const [open, setOpen] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(() => localStorage.getItem('ops-settings-advanced-open') === '1')
   const navigate = useNavigate()
   const loc = useLocation()
   const { data: me } = useMe()
   const ref = useRef<HTMLDivElement>(null)
   const inSettings = loc.pathname.startsWith('/settings/')
   const items = settingsItems.filter((item) => !item.adminOnly || me?.is_system_admin)
+  const common = items.filter((item) => commonSettings.has(item.to))
+  const advanced = items.filter((item) => !commonSettings.has(item.to))
   useEffect(() => {
     const h = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false)
     document.addEventListener('mousedown', h)
@@ -155,7 +161,35 @@ function UserMenu({ username, onLogout }: { username?: string; onLogout: () => v
       {open && (
         <div role="menu" className="absolute right-0 top-[calc(100%+8px)] z-40 w-[260px] animate-fade-in rounded-xl border border-mist-200 bg-white p-1.5 shadow-pop">
           <div className="px-2.5 pb-1.5 pt-1.5 text-[11px] font-semibold tracking-wider text-mist-400">工作区设置</div>
-          {items.map((item) => (
+          {common.map((item) => (
+            <button
+              key={item.to}
+              type="button"
+              role="menuitem"
+              onClick={() => { setOpen(false); navigate(item.to) }}
+              className={cn(
+                'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13.5px] transition',
+                loc.pathname.startsWith(item.to) ? 'bg-ink-50 font-medium text-ink-700' : 'text-mist-700 hover:bg-mist-50',
+              )}
+            >
+              <span className="[&>svg]:size-4 opacity-80">{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            aria-expanded={advancedOpen}
+            onClick={() => setAdvancedOpen((value) => {
+              const next = !value
+              localStorage.setItem('ops-settings-advanced-open', next ? '1' : '0')
+              return next
+            })}
+            className="flex w-full cursor-pointer items-center justify-between rounded-lg px-2.5 py-2 text-left text-[13px] font-medium text-mist-500 hover:bg-mist-50"
+          >
+            高级设置
+            {advancedOpen ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          </button>
+          {advancedOpen && advanced.map((item) => (
             <button
               key={item.to}
               type="button"
@@ -633,43 +667,9 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   )
 }
 
-function useChromeMeta() {
-  const loc = useLocation()
-  const acc = useCurrentAccount()
-  return useMemo(() => {
-    const path = loc.pathname
-    if (path.startsWith('/settings/')) {
-      const hit = settingsItems.find((s) => path.startsWith(s.to))
-      return { crumb: '设置', title: hit?.label ?? '设置' }
-    }
-    if (path.startsWith('/works/')) return { crumb: acc?.name ?? '作品', title: '创作中' }
-    if (path.startsWith('/search')) return { crumb: '工作区', title: '搜索' }
-    if (path.startsWith('/images')) return { crumb: '工作区', title: '图片库' }
-    if (!acc) return { crumb: '运助', title: '选择账号' }
-    const map: { test: RegExp; title: string }[] = [
-      { test: /\/topics$/, title: '选题池' },
-      { test: /\/ops$/, title: '账号运营' },
-      { test: /\/calendar$/, title: '内容日历' },
-      { test: /\/works$/, title: '作品' },
-      { test: /\/materials$/, title: '素材库' },
-      { test: /\/review$/, title: '数据复盘' },
-      { test: /\/profile$/, title: '账号档案' },
-      { test: /\/a\/[^/]+$/, title: '工作台' },
-    ]
-    return { crumb: acc.name, title: map.find((m) => m.test.test(path))?.title ?? '工作台' }
-  }, [loc.pathname, acc])
-}
-
 function TopBar({ username, onLogout, dense }: { username?: string; onLogout: () => void; dense?: boolean }) {
-  const meta = useChromeMeta()
+  const meta = useChromeMeta(settingsItems)
   const acc = useCurrentAccount()
-  const navigate = useNavigate()
-  const dash = useQuery({
-    queryKey: ['dashboard', acc?.id],
-    queryFn: () => get<{ tokens_today: number }>('/accounts/' + acc!.id + '/dashboard'),
-    enabled: !!acc && !dense,
-    staleTime: 60_000,
-  })
 
   return (
     <header className={cn(
@@ -686,7 +686,7 @@ function TopBar({ username, onLogout, dense }: { username?: string; onLogout: ()
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <button
           type="button"
-          onClick={openPalette}
+          onClick={() => window.dispatchEvent(new Event('ops:palette'))}
           title="搜索与命令（Ctrl+K）"
           className="flex h-9 cursor-pointer items-center gap-2 rounded-full border border-mist-200 bg-white px-2.5 text-[12.5px] text-mist-500 transition hover:border-mist-300 hover:text-mist-800 sm:px-3"
         >
@@ -694,17 +694,7 @@ function TopBar({ username, onLogout, dense }: { username?: string; onLogout: ()
           <span className="hidden md:inline">搜索</span>
           <span className="hidden md:inline"><Kbd>Ctrl K</Kbd></span>
         </button>
-        {!dense && (
-          <button
-            type="button"
-            onClick={() => navigate('/settings/usage')}
-            className="hidden h-9 cursor-pointer items-center gap-1.5 rounded-full border border-mist-200 bg-white px-3 text-[12.5px] text-mist-600 transition hover:border-mist-300 hover:text-mist-800 xl:inline-flex"
-            title="查看 AI 用量"
-          >
-            <Gauge className="size-3.5 text-ink-600" />
-            {dash.data ? <>今日 {fmtNum(dash.data.tokens_today)} token</> : 'AI 用量'}
-          </button>
-        )}
+        {!dense && <TodayUsage enabled={!!acc} />}
         <NotificationBell />
         <UserMenu username={username} onLogout={onLogout} />
       </div>
@@ -722,6 +712,11 @@ export default function Shell() {
   const prefs = usePrefs()
   useEffect(() => setUXEnabled(prefs.ux_events), [prefs.ux_events])
   const [focusMode, setFocusMode] = useState(false)
+  const [timeNow, setTimeNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setTimeNow(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
   useEffect(() => {
     const h = (e: Event) => setFocusMode(!!(e as CustomEvent<boolean>).detail)
     window.addEventListener('ops:focus', h)
@@ -763,6 +758,11 @@ export default function Shell() {
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         {!focus && <TopBar username={me?.username} onLogout={logout} dense={fullBleed} />}
+        {me?.session_expires_at && Date.parse(me.session_expires_at) > timeNow && Date.parse(me.session_expires_at) - timeNow < 24 * 60 * 60 * 1000 && (
+          <div role="status" className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12.5px] text-gamboge-800">
+            会话将于 {fmtTime(me.session_expires_at, true)} 到期，请先保存后重新登录以续期。
+          </div>
+        )}
         {me?.admin_override && (
           <div className="flex items-center justify-center gap-3 border-b border-danger/30 bg-danger/10 px-5 py-2 text-[12.5px] text-danger">
             <span>正在以超级管理员访问「{me.workspace?.name}」</span>
@@ -814,7 +814,7 @@ export default function Shell() {
           </button>
         </nav>
       )}
-      <CommandPalette />
+      <CommandPaletteHost />
       {me?.role !== 'viewer' && <QuickCollect />}
     </div>
   )

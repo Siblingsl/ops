@@ -1,6 +1,6 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import {
-  ArrowRight, BookOpen, CalendarDays, Check, Gauge, Inbox, Layers, Lightbulb, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Sparkles, Trash2, Wand2, X,
+  ArrowRight, BookOpen, CalendarDays, Check, Gauge, Inbox, Layers, Lightbulb, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Sparkles, Trash2, X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -9,14 +9,15 @@ import { Dialog, Drawer, confirm } from '@/components/dialog'
 import { AIFeedback, RefsNote, sendFeedback } from '@/components/refs'
 import { StarButton } from '@/components/star-button'
 import { Badge, Button, Card, cn, Empty, Field, formatLabel, HumanGate, IconButton, Input, Notice, PageHeader, PageLoading, Select, Switch, Tabs, Textarea } from '@/components/ui'
-import { openQuickCollect } from '@/components/quick-collect'
+import { InboxPanel } from '@/components/inbox-panel'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { type AIRefs, relTime } from '@/lib/format'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import { deleteWithUndo } from '@/lib/undo'
-import type { InboxItem, InboxSuggestion, MaterialKind, Series, Topic, Work } from '@/lib/types'
+import type { InboxPage, Series, Topic, TopicPage, Work } from '@/lib/types'
 
 interface Suggestion {
 	hot_item_id?: string | null
@@ -79,9 +80,9 @@ function useAddSuggestion(accountId: string, source: string, callId: string | nu
   const [ignored, setIgnored] = useState<Record<number, boolean>>({})
   const [adding, setAdding] = useState<number | null>(null)
   // 选题建议的去向（10 文档 3.3）：本批一条都没入库时记为放弃；之后再入库会覆盖为接受。
-  const ignore = (i: number) => {
+  const ignore = (i: number, sampleText: string) => {
     setIgnored((x) => ({ ...x, [i]: true }))
-    if (!Object.values(added).some(Boolean)) sendFeedback(callId, { outcome: 'rejected' })
+    if (!Object.values(added).some(Boolean)) sendFeedback(callId, { outcome: 'rejected', sample_text: sampleText })
   }
   // H-01：每条建议单独入库，没有"全部入库"。
   const add = async (i: number, s: Suggestion) => {
@@ -128,14 +129,14 @@ function SuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose: (
   return (
     <Drawer open={open} onClose={onClose} title="AI 选题建议" desc="建议不会自动进入选题池，需要你逐条挑选。" width="w-[560px]">
       <div className="flex gap-2">
-        <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="方向关键词（可选），例如：时间管理" onKeyDown={(e) => e.key === 'Enter' && run()} />
+        <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="方向关键词（可选），例如：时间管理" onKeyDown={(e) => isEnterWithoutComposition(e.nativeEvent) && run()} />
         <Button variant="primary" onClick={run} loading={busy} icon={<Sparkles className="size-4" />}>生成</Button>
       </div>
       <HumanGate code="H-01" className="mt-4">每条建议都需要你单独点「入库」。这里刻意没有「全部入库」。</HumanGate>
-      {!busy && <RefsNote refs={refs} callId={callId} className="mt-3" onRetry={run} />}
+      {!busy && <RefsNote refs={refs} callId={callId} sampleText={list.map((x) => [x.title, x.angle].filter(Boolean).join('｜')).join('\n')} className="mt-3" onRetry={run} />}
       <div className="mt-4 space-y-3">
         {busy && list.length === 0 && Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-mist-100" />)}
-        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!s.added[i]} adding={s.adding === i} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i)} />)}
+        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!s.added[i]} adding={s.adding === i} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} />)}
         {!busy && list.length === 0 && <Empty icon={<Sparkles className="size-5" />} title="输入一个方向，或直接生成" desc="AI 会参考账号定位档案、已确认的写作记忆和最近的选题，避免重复。" />}
       </div>
     </Drawer>
@@ -168,7 +169,7 @@ function HotSuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose
     <Drawer open={open} onClose={onClose} title="热点选题" desc="使用已匹配的受控来源热点，也可粘贴公开资讯摘要；建议逐条入库。" width="w-[560px]">
       <div className="space-y-3">
         <Field label="方向（可选）">
-          <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="例如：职场沟通、育儿" onKeyDown={(e) => e.key === 'Enter' && run()} />
+          <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="例如：职场沟通、育儿" onKeyDown={(e) => isEnterWithoutComposition(e.nativeEvent) && run()} />
         </Field>
         <Field label="公开资讯摘要（可选）" hint="粘贴新闻或公告要点；采集关闭时仍可使用。">
           <Textarea rows={4} value={context} onChange={(e) => setContext(e.target.value)} placeholder="把公开报道或公告的要点贴在这里…" />
@@ -176,10 +177,10 @@ function HotSuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose
         <Button variant="primary" onClick={run} loading={busy} icon={<Sparkles className="size-4" />}>生成热点选题</Button>
       </div>
       <HumanGate code="H-01" className="mt-4">每条建议都需要你单独点「入库」，引用热点前请核实原文。</HumanGate>
-      {!busy && <RefsNote refs={refs} callId={callId} className="mt-3" onRetry={run} />}
+      {!busy && <RefsNote refs={refs} callId={callId} sampleText={list.map((x) => [x.title, x.angle].filter(Boolean).join('｜')).join('\n')} className="mt-3" onRetry={run} />}
       <div className="mt-4 space-y-3">
         {busy && list.length === 0 && Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-mist-100" />)}
-        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!s.added[i]} adding={s.adding === i} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i)} />)}
+        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!s.added[i]} adding={s.adding === i} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} />)}
         {!busy && list.length === 0 && <Empty icon={<Sparkles className="size-5" />} title="生成有时效感的选题" desc="可贴资讯摘要；仍须逐条入库。" />}
       </div>
     </Drawer>
@@ -259,16 +260,39 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
     if (focused) ref.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [focused])
   const setStatus = async (status: Topic['status']) => {
+    let saved = false
     const key = ['topics', accountId]
-    const before = qc.getQueriesData<Topic[]>({ queryKey: key })
-    qc.setQueriesData<Topic[]>({ queryKey: key }, (list) => list?.map((x) => (x.id === t.id ? { ...x, status } : x)))
+    const before = qc.getQueriesData<InfiniteData<TopicPage, string>>({ queryKey: key })
+    const update = (data: InfiniteData<TopicPage, string> | undefined, next: Topic, adjustCounts: boolean) => data && ({
+      ...data,
+      pages: data.pages.map((page, index) => ({
+        ...page,
+        status_counts: adjustCounts && index === 0 && t.status !== next.status ? {
+          ...page.status_counts,
+          [t.status]: Math.max(0, page.status_counts[t.status] - 1),
+          [next.status]: page.status_counts[next.status] + 1,
+        } : page.status_counts,
+        items: page.items.map((x) => x.id === next.id ? next : x),
+      })),
+    })
+    qc.setQueriesData<InfiniteData<TopicPage, string>>({ queryKey: key }, (data) => update(data, { ...t, status }, true))
     try {
-      await patch(`/topics/${t.id}`, { status })
+      const result = await patch<{ topic: Topic }>(`/topics/${t.id}`, { status })
+      qc.setQueriesData<InfiniteData<TopicPage, string>>({ queryKey: key }, (data) => update(data, result.topic, false))
+      saved = true
     } catch (e) {
       for (const [k, v] of before) qc.setQueryData(k, v)
       toast.error(errorMessage(e))
     }
-    inv(key)
+    return saved
+  }
+  const drop = async () => {
+    setMenu(false)
+    const previous = t.status
+    if (await setStatus('dropped')) toast(`已放弃选题「${t.title}」`, {
+      duration: 10_000,
+      action: { label: '撤销', onClick: () => void setStatus(previous) },
+    })
   }
   const togglePin = async () => {
     setMenu(false)
@@ -321,7 +345,7 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
                   <button onClick={() => { setMenu(false); setEdit(true) }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><Pencil className="size-3.5" />编辑选题卡</button>
                   <button onClick={togglePin} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50">{t.pinned ? <><PinOff className="size-3.5" />取消置顶</> : <><Pin className="size-3.5" />置顶</>}</button>
                   {t.status !== 'pending' && <button onClick={() => { setMenu(false); setStatus('pending') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><RotateCcw className="size-3.5" />放回待定</button>}
-                  {t.status !== 'dropped' && <button onClick={() => { setMenu(false); setStatus('dropped') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><X className="size-3.5" />放弃</button>}
+                  {t.status !== 'dropped' && <button onClick={drop} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><X className="size-3.5" />放弃</button>}
                   <button onClick={remove} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-danger hover:bg-orange-50"><Trash2 className="size-3.5" />删除</button>
                 </div>
               )}
@@ -348,8 +372,11 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
         <div className="mt-3 flex items-center gap-2">
           <Badge tone={sourceLabel[t.source]?.tone ?? 'gray'}>{sourceLabel[t.source]?.label ?? t.source}</Badge>
           <span className="text-xs text-mist-400">{relTime(t.created_at)}</span>
-          <div className="ml-auto">
-            {canWrite && t.status === 'pending' && <Button size="sm" variant="ghost" onClick={() => setStatus('adopted')} icon={<Check className="size-3.5" />}>采用</Button>}
+          <div className="ml-auto flex items-center gap-2">
+            {canWrite && t.status === 'pending' && <>
+              <Button size="sm" variant="primary" loading={busy} onClick={start}>采用并开始写</Button>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setStatus('adopted')} icon={<Check className="size-3.5" />}>采用</Button>
+            </>}
             {t.status === 'adopted' && (t.work_id
               ? <Link to={`/works/${t.work_id}`}><Button size="sm" variant="ghost">打开作品<ArrowRight className="size-3.5" /></Button></Link>
               : canWrite ? <Button size="sm" variant="primary" loading={busy} onClick={start} className={cn(primed && 'animate-pulse')}>开始创作</Button> : null)}
@@ -358,144 +385,6 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
         {primed && !t.work_id && canWrite && <p className="mt-2 text-[12px] text-ink-700">这是最早采用、还没开始写的选题，点「开始创作」进入编辑器。</p>}
       </Card>
       {edit && <TopicEditDialog t={{ ...t, account_id: t.account_id ?? accountId }} accountFormat={accountFormat} series={series} onClose={() => setEdit(false)} />}
-    </div>
-  )
-}
-
-function ConvertDialog({ item, accountId, suggestion, onClose }: { item: InboxItem; accountId: string; suggestion: InboxSuggestion | null; onClose: () => void }) {
-  const inv = useInvalidate()
-  const [to, setTo] = useState<'topic' | 'material'>(suggestion?.as ?? 'topic')
-  const [title, setTitle] = useState(suggestion?.title || item.content.slice(0, 30))
-  const [angle, setAngle] = useState(suggestion?.angle ?? '')
-  const [audience, setAudience] = useState(suggestion?.audience ?? '')
-  const [kind, setKind] = useState<MaterialKind>((suggestion?.kind as MaterialKind) || 'opinion')
-  const [content, setContent] = useState(item.content)
-  const [tags, setTags] = useState((suggestion?.tags ?? []).join('、'))
-  const [busy, setBusy] = useState(false)
-  const go = async () => {
-    setBusy(true)
-    try {
-      await post(`/inbox/${item.id}/convert`, to === 'topic'
-        ? { to, account_id: accountId, title, angle, audience }
-        : { to, account_id: accountId, kind, content, tags: tags.split(/[、,，]/).map((x) => x.trim()).filter(Boolean) })
-      inv(['inbox'], ['topics', accountId], ['materials'])
-      toast.success(to === 'topic' ? '已转为选题' : '已存入素材库')
-      onClose()
-    } catch (e) {
-      toast.error(errorMessage(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <Dialog open onClose={onClose} title="整理这条灵感" desc="只处理这一条。确认后原灵感会标记为已整理。"
-      footer={<><Button variant="ghost" onClick={onClose}>取消</Button><Button variant="primary" loading={busy} onClick={go}>{to === 'topic' ? '转为选题' : '存为素材'}</Button></>}>
-      <div className="space-y-4">
-        <Tabs value={to} onChange={setTo} items={[{ value: 'topic', label: '转为选题' }, { value: 'material', label: '存为素材' }]} />
-        {suggestion?.reason && <Notice tone="ink" icon={<Sparkles className="size-4" />}>AI 建议{suggestion.as === 'topic' ? '作为选题' : '作为素材'}：{suggestion.reason}</Notice>}
-        {to === 'topic' ? (
-          <>
-            <Field label="选题标题"><Input value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
-            <Field label="切入角度"><Textarea rows={2} value={angle} onChange={(e) => setAngle(e.target.value)} /></Field>
-            <Field label="目标读者"><Input value={audience} onChange={(e) => setAudience(e.target.value)} /></Field>
-          </>
-        ) : (
-          <>
-            <Field label="类型">
-              <Select value={kind} onChange={(e) => setKind(e.target.value as MaterialKind)}>
-                <option value="experience">经历</option><option value="opinion">观点</option><option value="case">案例</option><option value="data">数据</option>
-              </Select>
-            </Field>
-            <Field label="内容"><Textarea rows={4} value={content} onChange={(e) => setContent(e.target.value)} /></Field>
-            <Field label="标签" hint="用顿号分隔"><Input value={tags} onChange={(e) => setTags(e.target.value)} /></Field>
-          </>
-        )}
-      </div>
-    </Dialog>
-  )
-}
-
-function InboxPanel({ accountId }: { accountId: string }) {
-  const canWrite = useCanWrite()
-  const inv = useInvalidate()
-  const { data, isLoading } = useQuery({ queryKey: ['inbox'], queryFn: () => get<InboxItem[]>('/inbox') })
-  const [text, setText] = useState('')
-  const [readPage, setReadPage] = useState(false)
-  const [busyId, setBusyId] = useState<string | null>(null)
-  const [suggestions, setSuggestions] = useState<Record<string, InboxSuggestion>>({})
-  const [converting, setConverting] = useState<InboxItem | null>(null)
-  const add = async () => {
-    if (!text.trim()) return
-    try {
-      await post('/inbox', { account_id: accountId, content: text.trim(), source: 'quick', read_page: readPage && /https:\/\/(?:[^\s/]+\.)?(?:xiaohongshu\.com|xhslink\.com|mp\.weixin\.qq\.com)\//i.test(text) })
-      setText('')
-      setReadPage(false)
-      if (readPage) inv(['references'])
-      inv(['inbox'])
-    } catch (e) {
-      toast.error(errorMessage(e))
-    }
-  }
-  const triage = async (it: InboxItem) => {
-    setBusyId(it.id)
-    try {
-      const s = await post<InboxSuggestion>(`/inbox/${it.id}/triage`)
-      setSuggestions((m) => ({ ...m, [it.id]: s }))
-    } catch (e) {
-      toast.error(errorMessage(e))
-    } finally {
-      setBusyId(null)
-    }
-  }
-  const dismiss = async (it: InboxItem) => {
-    await del(`/inbox/${it.id}`).catch((e) => toast.error(errorMessage(e)))
-    inv(['inbox'])
-  }
-  if (isLoading) return <PageLoading />
-  const list = data ?? []
-  return (
-    <div className="space-y-4">
-      {canWrite && (
-        <Card className="p-3">
-          <div className="flex items-start gap-2">
-            <Textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="随手记一条灵感，不用想好怎么分类…（Ctrl+Enter 保存）"
-              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void add() } }} />
-            <div className="flex flex-col gap-1.5">
-              <Button variant="primary" onClick={add} disabled={!text.trim()}>记下</Button>
-              <VoiceButton onText={(t) => setText((v) => v + t)} className="self-center" />
-            </div>
-          </div>
-          {/https:\/\/(?:[^\s/]+\.)?(?:xiaohongshu\.com|xhslink\.com|mp\.weixin\.qq\.com)\//i.test(text) && <label className="mt-2 flex items-center gap-2 text-sm text-mist-600"><input type="checkbox" checked={readPage} onChange={(e) => setReadPage(e.target.checked)} />读取页面为对标参考（受 robots 和限额约束，可手动粘贴）</label>}
-        </Card>
-      )}
-      <Notice icon={<Inbox className="size-4" />}>收件箱里的灵感需要你一条一条处理：可以先让 AI 建议归类，再决定转为选题、存为素材，或者丢掉。系统每天也会为新灵感预先生成归类建议，但不会替你转换。</Notice>
-      {list.length === 0 ? <Card><Empty icon={<Inbox className="size-5" />} title="收件箱是空的" desc="任何页面按 Ctrl+Shift+I 都能快速记一条灵感，手机上可以用右下角按钮。"
-        action={canWrite ? <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => openQuickCollect('inbox')}>记一条灵感</Button> : undefined} /></Card> : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {list.map((it) => {
-            const sug = suggestions[it.id] ?? it.suggestion
-            return (
-              <Card key={it.id} className="p-4">
-                <p className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-mist-800">{it.content}</p>
-                <div className="mt-1.5 text-[11.5px] text-mist-400">{relTime(it.created_at)} · {{ quick: '随手记', share: '分享', palette: '命令面板', mobile: '手机' }[it.source] ?? it.source}</div>
-                {sug && (
-                  <div className="mt-2 rounded-lg bg-ink-50/60 px-2.5 py-1.5 text-[12.5px] text-ink-800">
-                    <Sparkles className="mr-1 inline size-3.5" />建议{sug.as === 'topic' ? `作为选题「${sug.title}」` : '作为素材'}{sug.reason && `：${sug.reason}`}
-                  </div>
-                )}
-                {canWrite && (
-                  <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                    {!sug && <Button size="sm" variant="ghost" icon={<Wand2 className="size-3.5" />} loading={busyId === it.id} onClick={() => triage(it)}>AI 建议归类</Button>}
-                    <Button size="sm" variant="outline" icon={<Lightbulb className="size-3.5" />} onClick={() => setConverting(it)}>整理</Button>
-                    <Button size="sm" variant="ghost" className="ml-auto text-mist-400" onClick={() => dismiss(it)}>丢掉</Button>
-                  </div>
-                )}
-              </Card>
-            )
-          })}
-        </div>
-      )}
-      {converting && <ConvertDialog item={converting} accountId={accountId} suggestion={suggestions[converting.id] ?? converting.suggestion} onClose={() => setConverting(null)} />}
     </div>
   )
 }
@@ -582,9 +471,9 @@ function SeriesSuggestDrawer({ s, accountId, onClose }: { s: Series; accountId: 
   return (
     <Drawer open onClose={onClose} title={`补全「${s.name}」`} desc="根据总纲找出系列里还缺的选题，逐条入库。">
       <Button variant="primary" loading={busy} icon={<Sparkles className="size-4" />} onClick={run}>{list.length ? '换一批' : '生成建议'}</Button>
-      {callId && <div className="mt-2"><AIFeedback callId={callId} /></div>}
+      {callId && <div className="mt-2"><AIFeedback callId={callId} sampleText={list.map((x) => [x.title, x.angle].filter(Boolean).join('｜')).join('\n')} /></div>}
       <div className="mt-4 space-y-3">
-        {list.map((x, i) => add.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!add.added[i]} adding={add.adding === i} onAdd={() => add.add(i, x)} onIgnore={() => add.ignore(i)} />)}
+        {list.map((x, i) => add.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!add.added[i]} adding={add.adding === i} onAdd={() => add.add(i, x)} onIgnore={() => add.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} />)}
       </div>
     </Drawer>
   )
@@ -596,7 +485,14 @@ export default function Topics() {
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
   const [params, setParams] = useSearchParams()
-  const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) || 'pending')
+  const tab: Tab = ['pending', 'adopted', 'dropped', 'inbox', 'series'].includes(params.get('tab') ?? '') ? params.get('tab') as Tab : 'pending'
+  const setTab = (value: Tab) => {
+    if (tab === value) return
+    const next = new URLSearchParams(params)
+    if (value === 'pending') next.delete('tab')
+    else next.set('tab', value)
+    setParams(next, { replace: true })
+  }
   const [suggest, setSuggest] = useState(params.get('suggest') === '1')
   const [hotSuggest, setHotSuggest] = useState(params.get('hot') === '1')
   const [adding, setAdding] = useState(false)
@@ -608,35 +504,45 @@ export default function Topics() {
   const startId = params.get('start')
   const focus = params.get('focus') || startId
   const inv = useInvalidate()
-  const { data, isLoading } = useQuery({
+  const topicQuery = useInfiniteQuery({
     queryKey: ['topics', acc?.id, byScore],
-    queryFn: () => get<Topic[]>(`/accounts/${acc!.id}/topics?scores=1${byScore ? '&sort=score' : ''}`),
+    queryFn: ({ pageParam }) => get<TopicPage>(`/accounts/${acc!.id}/topics?limit=50&scores=1${byScore ? '&sort=score' : ''}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`),
+    initialPageParam: '' as string,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled: !!acc,
   })
   const series = useQuery({ queryKey: ['series', acc?.id], queryFn: () => get<Series[]>(`/accounts/${acc!.id}/series`), enabled: !!acc })
-  const inbox = useQuery({ queryKey: ['inbox'], queryFn: () => get<InboxItem[]>('/inbox'), enabled: !!acc })
+  const inbox = useInfiniteQuery({
+    queryKey: ['inbox'],
+    queryFn: ({ pageParam }) => get<InboxPage>(`/inbox${pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : ''}`),
+    initialPageParam: '' as string,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    enabled: !!acc,
+  })
   useEffect(() => {
-    if (params.get('suggest') || params.get('tab') || params.get('new') || params.get('hot')) {
+    if (params.get('suggest') || params.get('new') || params.get('hot')) {
       if (params.get('hot') === '1') setHotSuggest(true)
-      if (params.get('tab')) setTab(params.get('tab') as Tab)
       if (params.get('new')) {
         setSimilar([])
         setTitle(params.get('title') ?? '')
         setAdding(true)
       }
       const n = new URLSearchParams(params)
-      for (const k of ['suggest', 'tab', 'new', 'title', 'hot']) n.delete(k)
+      for (const k of ['suggest', 'new', 'title', 'hot']) n.delete(k)
       setParams(n, { replace: true })
     }
   }, [params, setParams])
+  const data = topicQuery.data?.pages.flatMap((page) => page.items)
   useEffect(() => {
     if (focus && data) {
       const t = data.find((x) => x.id === focus)
       if (t) setTab(t.status)
+      else if (topicQuery.hasNextPage && !topicQuery.isFetchingNextPage) void topicQuery.fetchNextPage()
     }
-  }, [focus, data])
-  if (!acc || isLoading) return <PageLoading />
+  }, [focus, data, topicQuery.hasNextPage, topicQuery.isFetchingNextPage, topicQuery.fetchNextPage])
+  if (!acc || topicQuery.isLoading) return <PageLoading />
   const list = data ?? []
+  const counts = topicQuery.data?.pages[0]?.status_counts
   const shown = list.filter((t) => t.status === tab)
   const save = async () => {
     try {
@@ -673,10 +579,10 @@ export default function Topics() {
         </> : undefined} />
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <Tabs value={tab} onChange={setTab} items={[
-          { value: 'pending', label: '待定', count: list.filter((t) => t.status === 'pending').length },
-          { value: 'adopted', label: '已采用', count: list.filter((t) => t.status === 'adopted').length },
-          { value: 'dropped', label: '已放弃', count: list.filter((t) => t.status === 'dropped').length },
-          { value: 'inbox', label: <span className="inline-flex items-center gap-1"><Inbox className="size-3.5" />收件箱</span>, count: inbox.data?.length || undefined },
+          { value: 'pending', label: '待定', count: counts?.pending },
+          { value: 'adopted', label: '已采用', count: counts?.adopted },
+          { value: 'dropped', label: '已放弃', count: counts?.dropped },
+          { value: 'inbox', label: <span className="inline-flex items-center gap-1"><Inbox className="size-3.5" />收件箱</span>, count: inbox.data?.pages[0]?.total || undefined },
           { value: 'series', label: <span className="inline-flex items-center gap-1"><Layers className="size-3.5" />系列</span>, count: series.data?.length || undefined },
         ]} />
         {tab === 'pending' && (
@@ -696,6 +602,7 @@ export default function Topics() {
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{shown.map((t) => <TopicCard key={t.id} t={t} accountId={acc.id} accountFormat={acc.content_format} series={series.data ?? []} focused={t.id === focus} primed={t.id === startId} />)}</div>
         </>
       )}
+      {tab !== 'inbox' && topicQuery.hasNextPage && <div className="mt-5 flex justify-center"><Button variant="outline" loading={topicQuery.isFetchingNextPage} onClick={() => void topicQuery.fetchNextPage()}>加载更多选题</Button></div>}
       <SuggestDrawer open={suggest} onClose={() => setSuggest(false)} accountId={acc.id} />
       <HotSuggestDrawer open={hotSuggest} onClose={() => setHotSuggest(false)} accountId={acc.id} />
       <Dialog open={adding} onClose={() => setAdding(false)} title="添加选题"

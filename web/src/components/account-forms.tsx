@@ -2,7 +2,7 @@ import { CheckCircle2, CircleAlert, Copy, Globe2, ShieldCheck } from 'lucide-rea
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Badge, Button, cn, Field, Input, Notice, PlatformMark, Textarea } from '@/components/ui'
-import { errorMessage, post, put } from '@/lib/api'
+import { ApiError, errorMessage, post, put } from '@/lib/api'
 import { copyText, fmtTime } from '@/lib/format'
 import { useSystemInfo } from '@/lib/session'
 import type { Account, ContentFormat, CredState, Platform } from '@/lib/types'
@@ -39,10 +39,12 @@ export function AccountCreateForm({
   const [format, setFormat] = useState<ContentFormat>(matrix[defaultPlatform][0].value)
   const [name, setName] = useState('')
   const [typeNote, setTypeNote] = useState('')
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; platform?: string; content_format?: string }>({})
   const [busy, setBusy] = useState(false)
   const pick = (p: Platform) => {
     setPlatform(p)
     setFormat(matrix[p][0].value)
+    setFieldErrors((current) => ({ ...current, platform: undefined, content_format: undefined }))
   }
   const submit = async () => {
     setBusy(true)
@@ -50,7 +52,8 @@ export function AccountCreateForm({
       const a = await post<Account>('/accounts', { platform, name, content_format: format, type_note: typeNote.trim() })
       onCreated(a)
     } catch (e) {
-      toast.error(errorMessage(e))
+      if (e instanceof ApiError && Object.keys(e.fields).length > 0) setFieldErrors(e.fields)
+      else toast.error(errorMessage(e))
     } finally {
       setBusy(false)
     }
@@ -72,9 +75,10 @@ export function AccountCreateForm({
             </button>
           ))}
         </div>
+        {fieldErrors.platform && <p role="alert" className="mt-1.5 text-xs text-danger">{fieldErrors.platform}</p>}
       </div>
-      <Field label="账号名称" hint="只用于区分账号，可以和平台上的名称不同">
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={platform === 'wechat_mp' ? '例如：周末读书会' : '例如：小周的生活笔记'} />
+      <Field label="账号名称" hint="只用于区分账号，可以和平台上的名称不同" error={fieldErrors.name}>
+        <Input value={name} onChange={(e) => { setName(e.target.value); setFieldErrors((current) => ({ ...current, name: undefined })) }} placeholder={platform === 'wechat_mp' ? '例如：周末读书会' : '例如：小周的生活笔记'} />
       </Field>
       <div>
         <div className="mb-2 text-[13px] font-medium text-mist-700">账号类型</div>
@@ -82,7 +86,7 @@ export function AccountCreateForm({
           {matrix[platform].map((f) => (
             <label key={f.value} className={cn('flex cursor-pointer items-center gap-3 rounded-lg border px-3.5 py-2.5 transition',
               format === f.value ? 'border-ink-400 bg-ink-50/50' : 'border-mist-200 hover:border-mist-300')}>
-              <input type="radio" className="accent-ink-600" checked={format === f.value} onChange={() => setFormat(f.value)} />
+              <input type="radio" className="accent-ink-600" checked={format === f.value} onChange={() => { setFormat(f.value); setFieldErrors((current) => ({ ...current, content_format: undefined })) }} />
               <span className="flex-1">
                 <span className="text-sm font-medium text-mist-800">{f.label}</span>
                 <span className="ml-2 text-xs text-mist-500">{f.desc}</span>
@@ -90,13 +94,14 @@ export function AccountCreateForm({
             </label>
           ))}
         </div>
+        {fieldErrors.content_format && <p role="alert" className="mt-1.5 text-xs text-danger">{fieldErrors.content_format}</p>}
         <p className="mt-2 text-xs text-mist-400">类型决定这个账号的编辑器、检查和输出方式，创建后不可修改。</p>
       </div>
       <Field label="类型补充说明（可选）" hint="最多 200 字。只帮助 AI 理解定位，不改变创作流程。">
         <Textarea rows={2} value={typeNote} maxLength={200} onChange={(e) => setTypeNote(e.target.value)}
           placeholder={format === 'comic' ? '例如：四格职场日常，主角是入职三年的产品助理' : '例如：面向转型工程师，多写可复现的实操步骤'} />
       </Field>
-      <Button variant="primary" onClick={submit} loading={busy} disabled={!name.trim()} className="w-full">{submitText}</Button>
+      <Button variant="primary" onClick={submit} loading={busy} className="w-full">{submitText}</Button>
     </div>
   )
 }

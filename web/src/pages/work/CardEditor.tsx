@@ -4,15 +4,17 @@ import { toast } from 'sonner'
 import { Badge, Button, Card, cn, HumanGate, Input } from '@/components/ui'
 import { confirm } from '@/components/dialog'
 import { aiError } from '@/lib/ai-error'
-import { errorMessage, patch, post, put } from '@/lib/api'
+import { ApiError, errorMessage, patch, post, put } from '@/lib/api'
 import { useCanWrite } from '@/lib/session'
-import type { WorkCard } from '@/lib/types'
+import type { Section, Work, WorkCard } from '@/lib/types'
+import { SectionConflictDialog, WorkConflictDialog } from './section-save-dialogs'
 import { useWork } from './WorkLayout'
 
 // D-048 图文卡片编辑器：每张卡片 = 段落标题与正文 + 逐卡 AI 配图。
 // 卡片清单由大纲确认生成；增删通过「修改大纲」，排序同步段落、大纲和卡片。
 export default function CardEditor() {
-  const { work, refresh } = useWork()
+  const { work, refresh, setWork } = useWork()
+  const [orderConflict, setOrderConflict] = useState<{ server: Work; ids: string[] } | null>(null)
   const canWrite = useCanWrite()
   const readOnly = work.locked
   const cards = work.cards ?? []
@@ -40,14 +42,25 @@ export default function CardEditor() {
     ;[ids[index], ids[target]] = [ids[target], ids[index]]
     setBusy('order')
     try {
-      await put(`/works/${work.id}/sections/order`, { ids })
+      await put(`/works/${work.id}/sections/order`, { ids, base_revision: work.revision })
       await refresh()
       toast.success('卡片顺序已更新')
-    } catch (e) { toast.error(errorMessage(e)) } finally { setBusy(null) }
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'version_conflict') setOrderConflict({ server: (e.detail as { server: Work }).server, ids })
+      else toast.error(errorMessage(e))
+    } finally { setBusy(null) }
   }
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 animate-fade-in">
+      {orderConflict && <WorkConflictDialog server={orderConflict.server} mine={{ ...work, sections: orderConflict.ids.map(id => work.sections.find(section => section.id === id)!) }} onClose={() => setOrderConflict(null)} onResolve={async keepMine => {
+        if (!keepMine) { setWork(orderConflict.server); setOrderConflict(null); return }
+        try { setWork(await put<Work>(`/works/${work.id}/sections/order`, { ids: orderConflict.ids, base_revision: orderConflict.server.revision })); setOrderConflict(null) }
+        catch (e) {
+          if (e instanceof ApiError && e.code === 'version_conflict') setOrderConflict({ ...orderConflict, server: (e.detail as { server: Work }).server })
+          else toast.error(errorMessage(e))
+        }
+      }} />}
       <Card id="step-cards" className="scroll-mt-24 p-5">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="font-display text-[17px] font-bold text-mist-900">卡片清单</h2>
@@ -61,7 +74,7 @@ export default function CardEditor() {
         )}
       </Card>
       {ordered.map(({ sec, card }, i) => (
-        <CardRow key={sec.id} index={i + 1} card={card} heading={sec.heading} body={sec.content_md} revision={sec.revision}
+        <CardRow key={sec.id} sectionId={sec.id} index={i + 1} card={card} heading={sec.heading} body={sec.content_md} revision={sec.revision}
           readOnly={readOnly || !work.outline_confirmed_at} canWrite={canWrite} busy={busy === sec.id} blocked={!!busy}
           total={ordered.length} onMove={offset => move(i, offset)} onGenerate={prompt => gen(sec.id, prompt)} onChanged={refresh} />
       ))}
@@ -75,7 +88,8 @@ export default function CardEditor() {
   )
 }
 
-function CardRow({ index, card, heading, body, revision, readOnly, canWrite, busy, blocked, total, onMove, onGenerate, onChanged }: {
+function CardRow({ sectionId, index, card, heading, body, revision, readOnly, canWrite, busy, blocked, total, onMove, onGenerate, onChanged }: {
+  sectionId: string
   index: number
   card?: WorkCard
   heading: string
@@ -93,18 +107,35 @@ function CardRow({ index, card, heading, body, revision, readOnly, canWrite, bus
   const [h, setH] = useState(heading)
   const [b, setB] = useState(body)
   const [prompt, setPrompt] = useState('')
+  const [conflict, setConflict] = useState<Section | null>(null)
   const base = useRef(revision)
+  const resolving = useRef(false)
   useEffect(() => { setH(heading); setB(body); base.current = revision }, [heading, body, revision])
   const editable = canWrite && !readOnly && !blocked
-  const save = async () => {
-    if (!editable) return
-    if (h === heading && b === body) return
+  const save = async (keepMine = false) => {
+    if (!editable || (conflict && !keepMine)) return
+    if (!conflict && h === heading && b === body) return
     try {
-      await patch(`/sections/${card?.section_id}`, { heading: h, content_md: b, base_revision: base.current })
+      const result = await patch<{ section: Section }>(`/sections/${sectionId}`, { heading: h, content_md: b, base_revision: keepMine ? conflict!.revision : base.current })
+      base.current = result.section.revision
+      setConflict(null)
       await onChanged()
     } catch (e) {
-      toast.error(errorMessage(e))
+      if (e instanceof ApiError && e.code === 'version_conflict') setConflict((e.detail as { server: Section }).server)
+      else toast.error(errorMessage(e))
     }
+  }
+  const resolveConflict = async (keepMine: boolean) => {
+    if (!conflict || resolving.current) return
+    resolving.current = true
+    try {
+      if (keepMine) { await save(true); return }
+      setH(conflict.heading)
+      setB(conflict.content_md)
+      base.current = conflict.revision
+      setConflict(null)
+      await onChanged()
+    } finally { resolving.current = false }
   }
   const image = card?.image_url
   const generate = async () => {
@@ -112,13 +143,14 @@ function CardRow({ index, card, heading, body, revision, readOnly, canWrite, bus
     onGenerate(prompt)
   }
   return (
-    <Card className="p-5" data-card-section={card?.section_id}>
+    <Card className="p-5" data-card-section={sectionId}>
+      <SectionConflictDialog server={conflict} heading={h} content={b} onClose={() => setConflict(null)} onResolve={resolveConflict} />
       <div className="mb-3 flex items-center gap-2">
         <Badge tone="ink">卡 {index}</Badge>
         <Button size="sm" variant="ghost" aria-label={`上移卡片 ${index}`} disabled={!editable || index === 1} onClick={() => onMove(-1)} icon={<ArrowUp className="size-3.5" />} />
         <Button size="sm" variant="ghost" aria-label={`下移卡片 ${index}`} disabled={!editable || index === total} onClick={() => onMove(1)} icon={<ArrowDown className="size-3.5" />} />
         <Input className="h-8 flex-1 font-medium" value={h} placeholder="卡片标题（8 字以内）" disabled={!editable}
-          onChange={(e) => setH(e.target.value)} onBlur={save} />
+          onChange={(e) => setH(e.target.value)} onBlur={() => void save()} />
         {canWrite && !readOnly && (
           <Button size="sm" variant={image ? 'ghost' : 'secondary'} loading={busy} disabled={blocked} onClick={generate}
             icon={image ? <RefreshCw className="size-3.5" /> : <ImagePlus className="size-3.5" />}>
@@ -129,7 +161,7 @@ function CardRow({ index, card, heading, body, revision, readOnly, canWrite, bus
       <textarea rows={3} value={b} placeholder="卡片正文：两三行以内，可直接照做或收藏" disabled={!editable}
         className={cn('w-full resize-y rounded-lg border border-mist-200 bg-white px-3 py-2 text-[13.5px] leading-relaxed focus:border-ink-300 focus:outline-none',
           !editable && 'bg-mist-50 text-mist-500')}
-        onChange={(e) => setB(e.target.value)} onBlur={save} />
+        onChange={(e) => setB(e.target.value)} onBlur={() => void save()} />
       {canWrite && !readOnly && <label className="mt-3 block text-xs text-mist-500">
         配图提示词（可选）
         <Input className="mt-1" value={prompt} disabled={blocked} onChange={e => setPrompt(e.target.value)} placeholder="留空则按卡片文案生成；例如：绿色书桌与笔记本，保持留白" />

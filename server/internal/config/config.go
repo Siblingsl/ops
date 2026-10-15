@@ -22,7 +22,7 @@ type Config struct {
 	MockListen   string
 	PublicIP     string
 	CookieSecure bool
-	// AIWorkers is the per-workspace concurrency of background AI jobs (10 文档 3.5).
+	// AIWorkers is the per-workspace concurrency of background and streaming AI jobs (D-054).
 	AIWorkers int
 	// Permanent system admin (D-044). Ensured on every serve start.
 	SystemAdminUser     string

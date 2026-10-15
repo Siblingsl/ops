@@ -74,7 +74,7 @@ func (s *Server) collectSummaries(ctx context.Context) {
 		_, _ = s.db.Exec(ctx, `INSERT INTO crawl_summary_url(url,attempt_at) VALUES($1,$2) ON CONFLICT(url) DO UPDATE SET attempt_at=excluded.attempt_at`, x.url, s.now())
 		_, _ = s.db.Exec(ctx, `INSERT INTO crawl_run(source_key,started_at,finished_at,requests,http_status,items,error) VALUES($1,$2,$3,$4,$5,$6,$7)`, x.key, started, s.now(), out.Requests, out.Status, map[bool]int{true: 1}[e == nil], msg)
 		if e == nil {
-			_, _ = s.db.Exec(ctx, `UPDATE hot_item SET page_title=$2,summary=$3,summary_at=$4 WHERE url=$1`, x.url, meta.Title, meta.Summary, s.now())
+			_, _ = s.db.Exec(ctx, `UPDATE hot_item SET page_title=$2,summary=$3,summary_at=$4 WHERE url=$1`, x.url, cleanExternalText(meta.Title), cleanExternalText(meta.Summary), s.now())
 		}
 	}
 }
