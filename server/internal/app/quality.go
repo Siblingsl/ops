@@ -870,7 +870,8 @@ func (s *Server) checkReport(w http.ResponseWriter, r *http.Request) error {
 	var revision int
 	var platform string
 	var at time.Time
-	if err := s.db.QueryRow(ctx, `SELECT id, revision, target_platform, created_at FROM check_run WHERE work_id=$1 ORDER BY created_at DESC LIMIT 1`, m.ID).
+	// 与 loadLatestCheck 同口径：修订号优先，避免数据库时钟回拨时取到旧运行。
+	if err := s.db.QueryRow(ctx, `SELECT id, revision, target_platform, created_at FROM check_run WHERE work_id=$1 ORDER BY revision DESC, created_at DESC LIMIT 1`, m.ID).
 		Scan(&runID, &revision, &platform, &at); err != nil {
 		return validation("这篇作品还没有做过发布前检查")
 	}

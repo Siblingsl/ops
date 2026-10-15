@@ -595,7 +595,9 @@ func (s *Server) runFactCheck(ctx context.Context, wk *Work, a *Account, runID u
 
 func (s *Server) loadLatestCheck(ctx context.Context, workID uuid.UUID) (*CheckRun, error) {
 	var run CheckRun
-	err := s.db.QueryRow(ctx, `SELECT id, revision, target_platform, fact_status, completed_at, created_at FROM check_run WHERE work_id=$1 ORDER BY created_at DESC LIMIT 1`, workID).
+	// 修订号优先取「最新检查」：数据库时钟回拨时（WSL2/Docker 容器时钟漂移）
+	// created_at 可能倒挂，按修订号排序可稳定取到新修订的运行（同修订号运行内容相同，次序无观测差异）。
+	err := s.db.QueryRow(ctx, `SELECT id, revision, target_platform, fact_status, completed_at, created_at FROM check_run WHERE work_id=$1 ORDER BY revision DESC, created_at DESC LIMIT 1`, workID).
 		Scan(&run.ID, &run.Revision, &run.TargetPlatform, &run.FactStatus, &run.CompletedAt, &run.CreatedAt)
 	if err != nil {
 		return nil, err
