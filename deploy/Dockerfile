@@ -4,11 +4,13 @@
 FROM node:22-bookworm-slim AS web
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 WORKDIR /web
-COPY web/package.json web/package-lock.json ./
-RUN npm config set registry "${NPM_REGISTRY}" && npm ci
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@10.14.0 --activate \
+    && pnpm config set registry "${NPM_REGISTRY}" \
+    && pnpm install --frozen-lockfile
 COPY web/ ./
 # 生产镜像内只做打包；tsc 已在本地/开发机验证，小机上 tsc -b 可达 20+ 分钟并触发部署超时
-RUN npx vite build
+RUN pnpm exec vite build
 
 FROM golang:1.26-bookworm AS server
 ARG GOPROXY=https://goproxy.cn,direct
