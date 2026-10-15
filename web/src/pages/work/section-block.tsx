@@ -1,7 +1,7 @@
 import {
   ArrowDown, ArrowUp, BookmarkPlus, Check, History, ImagePlus, Loader2, MessageSquare, Minimize2, Quote, Repeat2, Sparkles, Square, Trash2, Wand2,
 } from 'lucide-react'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { RefsNote, sendFeedback } from '@/components/refs'
@@ -141,6 +141,16 @@ export const SectionBlock = memo(function SectionBlock({
     window.clearTimeout(lintTimer.current)
     lintTimer.current = window.setTimeout(() => setLintText(md), 1500)
   }
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+  const onRichChange = useCallback((md: string) => onChangeRef.current(md), [])
+  const selectionRef = useRef({ onActive, sectionId: section.id, setSelection })
+  selectionRef.current = { onActive, sectionId: section.id, setSelection }
+  const onRichSelection = useCallback((text: string) => {
+    const current = selectionRef.current
+    current.setSelection(text)
+    current.onActive?.(current.sectionId, text)
+  }, [])
 
   // 实时提示与待核实高亮（不改动编辑器内容）。
   useEffect(() => {
@@ -499,6 +509,9 @@ export const SectionBlock = memo(function SectionBlock({
   })
 
   const pickImage = () => fileInput.current?.click()
+  const pickImageRef = useRef(pickImage)
+  pickImageRef.current = pickImage
+  const onRichPickImage = useCallback(() => pickImageRef.current(), [])
   const suggestImages = async () => {
     setImgBusy(true)
     try {
@@ -509,14 +522,16 @@ export const SectionBlock = memo(function SectionBlock({
   }
   const Editor = xhs ? PlainEditor : RichEditor
   const busy = !!streaming
-  const bubble = (
+  const bubbleActions = useRef({ edit, hooks, setToMaterial })
+  bubbleActions.current = { edit, hooks, setToMaterial }
+  const bubble = useMemo(() => (
     <div className="flex items-center gap-0.5 rounded-lg border border-mist-200 bg-white p-1 shadow-pop">
-      <Button size="sm" variant="ghost" icon={<Repeat2 className="size-3.5" />} onClick={() => edit('rewrite')}>改写选中部分</Button>
-      <Button size="sm" variant="ghost" icon={<Quote className="size-3.5" />} onClick={() => hooks('quote')}>提炼金句</Button>
+      <Button size="sm" variant="ghost" icon={<Repeat2 className="size-3.5" />} onClick={() => bubbleActions.current.edit('rewrite')}>改写选中部分</Button>
+      <Button size="sm" variant="ghost" icon={<Quote className="size-3.5" />} onClick={() => bubbleActions.current.hooks('quote')}>提炼金句</Button>
       <Button size="sm" variant="ghost" icon={<MessageSquare className="size-3.5" />} onClick={() => emitEditor({ type: 'comment', sectionId: section.id, anchor: editor.current?.selectedText() || '' })}>批注</Button>
-      <Button size="sm" variant="ghost" icon={<BookmarkPlus className="size-3.5" />} onClick={() => setToMaterial(editor.current?.selectedText() || '')}>存入素材库</Button>
+      <Button size="sm" variant="ghost" icon={<BookmarkPlus className="size-3.5" />} onClick={() => bubbleActions.current.setToMaterial(editor.current?.selectedText() || '')}>存入素材库</Button>
     </div>
-  )
+  ), [])
   const reportActive = () => onActive?.(section.id, editor.current?.selectedText() || '')
 
   return (
@@ -578,9 +593,9 @@ export const SectionBlock = memo(function SectionBlock({
           </div>
         ) : (
           <div onMouseMove={onEditorHover} onMouseLeave={() => setHoverHit(null)} onClick={onEditorClick}>
-            <Editor ref={editor} value={content.current} resetKey={resetKey} onChange={onChange} editable={!readOnly && !busy}
-              placeholder={isEmpty ? '点「起草本段」让 AI 写初稿，或者直接自己写。' : ''} onSelection={(t) => { setSelection(t); onActive?.(section.id, t) }}
-              bubble={xhs ? undefined : bubble} onPickImage={xhs ? undefined : pickImage} />
+            <Editor ref={editor} value={content.current} resetKey={resetKey} onChange={onRichChange} editable={!readOnly && !busy}
+              placeholder={isEmpty ? '点「起草本段」让 AI 写初稿，或者直接自己写。' : ''} onSelection={onRichSelection}
+              bubble={xhs ? undefined : bubble} onPickImage={xhs ? undefined : onRichPickImage} />
           </div>
         )}
         {hoverHit && (

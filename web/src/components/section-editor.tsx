@@ -43,7 +43,7 @@ function ToolBtn({ active, onClick, label, children }: { active?: boolean; onCli
 }
 
 /** RichEditor edits one section as WYSIWYG while storing Markdown (D-022). */
-export const RichEditor = forwardRef<EditorHandle, Props>(function RichEditor({ value, resetKey, onChange, editable, placeholder, onSelection, bubble, onPickImage }, ref) {
+export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function RichEditor({ value, resetKey, onChange, editable, placeholder, onSelection, bubble, onPickImage }, ref) {
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
   const onSelRef = useRef(onSelection)
@@ -138,7 +138,7 @@ export const RichEditor = forwardRef<EditorHandle, Props>(function RichEditor({ 
       </div>
     </div>
   )
-})
+}))
 
 /** PlainEditor is used for Xiaohongshu: plain text only (06 文档第 5.4 节). */
 export const PlainEditor = forwardRef<EditorHandle, Props>(function PlainEditor({ value, resetKey, onChange, editable, placeholder, onSelection }, ref) {
