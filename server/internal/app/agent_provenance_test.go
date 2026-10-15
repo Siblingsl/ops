@@ -114,6 +114,39 @@ func TestAG06SourceKinds(t *testing.T) {
 	}
 }
 
+// TestAG06KindsOfMapping：第 4.2 节的类别映射——G 含 U 的全部来源；第 4.5 节仅纯 U 字段
+// 失败时清空，含 G/O 的组合（U/G/O、U/O、G/O）按 G、O 类直接拒绝（HC-29）。
+func TestAG06KindsOfMapping(t *testing.T) {
+	contains := func(kinds []string, want ...string) bool {
+		set := map[string]bool{}
+		for _, k := range kinds {
+			set[k] = true
+		}
+		for _, w := range want {
+			if !set[w] {
+				return false
+			}
+		}
+		return true
+	}
+	if got := agentKindsOf("G"); !contains(got, agentSrcUser, agentSrcAttachment, agentSrcG) {
+		t.Fatalf("G 应含 U 的全部来源与生成结果：%v", got)
+	}
+	if got := agentKindsOf("G/O"); !contains(got, agentSrcUser, agentSrcAttachment, agentSrcG, agentSrcO) {
+		t.Fatalf("G/O 应含用户、生成与系统记录：%v", got)
+	}
+	if got := agentKindsOf("U/G/O"); !contains(got, agentSrcUser, agentSrcAttachment, agentSrcG, agentSrcO) {
+		t.Fatalf("U/G/O 应含全部四类：%v", got)
+	}
+	for source, want := range map[string]bool{
+		"U": true, "U/G/O": false, "U/O": false, "G/O": false, "G": false, "O": false, "F": false, "": false,
+	} {
+		if got := agentSourceIsU(source); got != want {
+			t.Errorf("agentSourceIsU(%q) = %v，期望 %v", source, got, want)
+		}
+	}
+}
+
 // TestAG06ParagraphSingleSource：第 4.4 节第 4 项，段落可分别来自同一来源的不同候选，
 // 但不能跨来源拼接。
 func TestAG06ParagraphSingleSource(t *testing.T) {

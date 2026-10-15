@@ -29,6 +29,8 @@ type agentExecuteRequest struct {
 		ConfirmOverLimit bool   `json:"confirm_over_limit"`
 	} `json:"choice"`
 	ClientPayload map[string]any `json:"client_payload"`
+	// 第 11.3 节第 1 项：执行只针对路径中的一张卡片；请求体出现卡片 ID 列表视为批量尝试（HC-27）。
+	IDs []string `json:"ids"`
 }
 
 // agentActionRow 是执行阶段需要的卡片与归属信息。
@@ -296,6 +298,10 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 	var req agentExecuteRequest
 	if err := agentDecodeBody(r, &req); err != nil {
 		return err
+	}
+	// 第 11.3 节第 1 项：请求体不能包含卡片 ID 列表（HC-27，同样与卡片是否存在无关）。
+	if len(req.IDs) > 0 {
+		return apiErr(400, "validation_failed", "一次只能执行一张卡片，请求体不能包含卡片 ID 列表")
 	}
 	act, err := s.agentLoadAction(ctx, id)
 	if err != nil {

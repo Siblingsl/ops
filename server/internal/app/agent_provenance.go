@@ -325,7 +325,8 @@ func agentKindsOf(source string) []string {
 		case "U":
 			out = append(out, agentSrcUser, agentSrcAttachment)
 		case "G":
-			out = append(out, agentSrcG)
+			// 第 4.2 节：G 是「用户原文或受控生成」，来源集合为 U 的全部来源加生成结果。
+			out = append(out, agentSrcUser, agentSrcAttachment, agentSrcG)
 		case "O":
 			out = append(out, agentSrcO)
 		}
@@ -333,15 +334,19 @@ func agentKindsOf(source string) []string {
 	return out
 }
 
-// agentSourceIsU 判断字段类别是否含 U（第 4.5 节：U 类失败清空并请用户亲填，
-// G / O 类失败直接拒绝创建卡片）。
+// agentSourceIsU 判断字段是否只允许用户来源（第 4.5 节：仅 U 类字段失败时清空并请用户亲填；
+// 含 G 或 O 的组合字段（如 U/G/O、U/O、G/O）失败时按 G、O 类处理，直接拒绝创建卡片，HC-29）。
 func agentSourceIsU(source string) bool {
-	for _, k := range agentKindsOf(source) {
-		if k == agentSrcUser || k == agentSrcAttachment {
-			return true
+	kinds := agentKindsOf(source)
+	if len(kinds) == 0 {
+		return false
+	}
+	for _, k := range kinds {
+		if k != agentSrcUser && k != agentSrcAttachment {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // agentNeedsProvenance 判断参数是否需要来源校验。
