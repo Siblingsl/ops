@@ -197,9 +197,13 @@ func (s *Server) buildAgentRequest(t *AgentTool, req agentDispatchRequest) (*htt
 		return nil, apiErr(422, "validation_failed", "工具参数不正确：请求体超过 1 MB")
 	}
 
-	var rdr io.Reader
+	var rdr io.Reader = http.NoBody
 	if payload != nil {
 		rdr = bytes.NewReader(payload)
+	} else if t.Method != "" && t.Method != "GET" {
+		// 非 GET 请求始终带 JSON 空对象：r.Body 为 nil 时 handler 解码会崩溃（曾导致 500）。
+		rdr = bytes.NewReader([]byte("{}"))
+		ctype = "application/json"
 	}
 	httpReq, err := http.NewRequest(t.Method, u, rdr)
 	if err != nil {
