@@ -1,10 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  Activity, BarChart3, Bell, BookOpen, Bot, CalendarDays, Check, ChevronDown, ChevronRight, ChevronsUpDown, Clock, Cpu, Eye, FileText, Gauge, Images, Inbox, KeyRound,
+  Activity, BarChart3, Bell, BookOpen, Bot, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, Clock, Cpu, Eye, FileText, Gauge, Images, Inbox, KeyRound,
   LayoutDashboard, Lightbulb, LogOut, Pencil, Plus, Power, ScrollText, Search, Send, Settings2, Shield, ShieldAlert, SlidersHorizontal, Trash2,
   UserCircle2, UserPlus, Users,
 } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -64,7 +64,7 @@ const commonSettings = new Set(['/settings/accounts', '/settings/models', '/sett
 
 function Brand() {
   return (
-    <div className="px-5 pb-5 pt-5">
+    <div className="flex h-14 shrink-0 items-center px-5">
       <div className="flex items-center gap-3">
         <div className="flex size-10 shrink-0 items-center justify-center rounded-[14px] bg-ink-600 text-white shadow-[0_8px_20px_-10px_rgb(47_93_98/0.85)]">
           <svg viewBox="0 0 32 32" className="size-[22px]" aria-hidden>
@@ -669,24 +669,28 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   )
 }
 
-function TopBar({ username, onLogout, dense, showAgent }: { username?: string; onLogout: () => void; dense?: boolean; showAgent?: boolean }) {
+function TopBar({ username, onLogout, dense, showAgent, agentMode, homeTo }: { username?: string; onLogout: () => void; dense?: boolean; showAgent?: boolean; agentMode?: boolean; homeTo: string }) {
   const meta = useChromeMeta(settingsItems)
   const acc = useCurrentAccount()
 
   return (
     <header className={cn(
-      'sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b border-mist-200/80 bg-white/90 px-3 backdrop-blur sm:gap-3 sm:px-5 xl:px-7',
-      dense ? 'h-12' : 'h-14',
+      'sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b border-mist-200/80 bg-white/90 px-3 backdrop-blur sm:gap-3 sm:px-5 xl:px-7',
     )}>
       <WorkspaceAccountTree compact={dense} />
       <div className="hidden h-4 w-px bg-mist-200 lg:block" />
       <nav className="hidden min-w-0 flex-1 items-center gap-2 text-[13px] lg:flex" aria-label="当前位置">
         <span className="truncate text-mist-400">{meta.crumb}</span>
         <span className="text-mist-300">/</span>
-        <span className="truncate font-semibold text-mist-800">{meta.title}</span>
+        {agentMode
+          ? <div id="agent-title-slot" className="min-w-0 flex-1 truncate font-semibold text-mist-800" />
+          : <span className="truncate font-semibold text-mist-800">{meta.title}</span>}
       </nav>
       <div className="ml-auto flex shrink-0 items-center gap-2">
-        {showAgent && <Link to="/agent" aria-label="打开智能体" title="打开智能体" className="flex size-9 items-center justify-center rounded-full text-mist-500 hover:bg-mist-100 hover:text-ink-700 md:hidden"><Bot className="size-4" /></Link>}
+        {agentMode && <div id="agent-toolbar-slot" className="hidden shrink-0 items-center lg:flex" />}
+        {agentMode
+          ? <Link to={homeTo} aria-label="返回工作台" title="返回工作台" className={cn('flex size-9 items-center justify-center rounded-full text-mist-500 hover:bg-mist-100 hover:text-ink-700', showAgent && 'md:hidden', !showAgent && 'md:w-auto md:gap-2 md:px-2.5')}><ChevronLeft className="size-4" /><span className={cn('hidden text-xs', !showAgent && 'md:inline')}>返回工作台</span></Link>
+          : showAgent && <Link to="/agent" aria-label="打开 AI 对话" title="打开 AI 对话" className="flex size-9 items-center justify-center rounded-full text-mist-500 hover:bg-mist-100 hover:text-ink-700 md:hidden"><Bot className="size-4" /></Link>}
         <button
           type="button"
           onClick={() => window.dispatchEvent(new Event('ops:palette'))}
@@ -711,6 +715,9 @@ export default function Shell() {
   const agentBootstrap = useAgentBootstrap()
   const qc = useQueryClient()
   const loc = useLocation()
+  const agentMode = loc.pathname.startsWith('/agent')
+  const previousAgentMode = useRef(agentMode)
+  const [contentSlide, setContentSlide] = useState<'from-left' | 'from-right' | null>(null)
   const fullBleed = loc.pathname.startsWith('/works/') || loc.pathname.startsWith('/agent')
   const showAgent = !!agentBootstrap.data && (agentBootstrap.data.can_use || agentBootstrap.data.reason === 'no_model')
   const base = acc ? `/a/${acc.id}` : '/'
@@ -727,6 +734,13 @@ export default function Shell() {
     window.addEventListener('ops:focus', h)
     return () => window.removeEventListener('ops:focus', h)
   }, [])
+  useLayoutEffect(() => {
+    if (previousAgentMode.current === agentMode) return
+    previousAgentMode.current = agentMode
+    setContentSlide(agentMode ? 'from-right' : 'from-left')
+    const timer = window.setTimeout(() => setContentSlide(null), 300)
+    return () => window.clearTimeout(timer)
+  }, [agentMode])
   const focus = focusMode && fullBleed
   const logout = async () => {
     await post('/auth/logout').catch(() => undefined)
@@ -735,35 +749,42 @@ export default function Shell() {
   }
   return (
     <div className="flex h-full">
-      <aside className={cn('hidden w-[248px] shrink-0 flex-col border-r border-mist-200 bg-mist-50', !focus && 'md:flex')}>
+      <aside className={cn('hidden w-[248px] shrink-0 flex-col border-r border-mist-200 bg-mist-50', (!focus || agentMode) && 'md:flex')}>
         <Brand />
-        <nav className="scrollbar-thin flex-1 space-y-1 overflow-y-auto px-3 pb-4">
-          <div className="mb-1.5 px-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400">创作</div>
-          {showAgent && <NavItem to="/agent" icon={Bot}>智能体</NavItem>}
-          {nav.map((item) => (
-            <NavItem
-              key={item.path || 'home'}
-              to={acc ? `${base}${item.path}` : '/settings/accounts'}
-              end={item.end}
-              icon={item.icon}
-            >
-              {item.label}
-            </NavItem>
-          ))}
-          <div className="mb-1.5 px-3 pt-4 text-[11px] font-semibold tracking-[0.16em] text-mist-400">工作区</div>
-          <NavItem to="/images" icon={Images}>图片库</NavItem>
-          <RecentWorks />
-        </nav>
-        {me?.dev && (
-          <div className="px-4 pb-4">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          <nav aria-hidden={agentMode} className={cn('scrollbar-thin absolute inset-0 space-y-1 overflow-y-auto px-3 pb-4 pt-3', agentMode && 'hidden')}>
+            <div className="mb-1.5 px-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400">创作</div>
+            {nav.map((item) => (
+              <NavItem
+                key={item.path || 'home'}
+                to={acc ? `${base}${item.path}` : '/settings/accounts'}
+                end={item.end}
+                icon={item.icon}
+              >
+                {item.label}
+              </NavItem>
+            ))}
+            <div className="mb-1.5 px-3 pt-4 text-[11px] font-semibold tracking-[0.16em] text-mist-400">工作区</div>
+            <NavItem to="/images" icon={Images}>图片库</NavItem>
+            <RecentWorks />
+          </nav>
+          <div id="agent-sidebar-slot" aria-hidden={!agentMode} className={cn('absolute inset-0 flex flex-col overflow-hidden', !agentMode && 'hidden')}>
+            {agentMode && agentBootstrap.isLoading && <div className="px-4 py-3 text-sm text-mist-400">正在打开 AI 对话…</div>}
+          </div>
+        </div>
+        <div className="space-y-2 px-3 pb-4">
+          {me?.dev && (
             <div className="rounded-2xl border border-gamboge-200/80 bg-gamboge-50/70 px-3 py-2.5 text-[11.5px] leading-relaxed text-gamboge-700">
               本地开发 · 模拟接口
             </div>
-          </div>
-        )}
+          )}
+          {agentMode
+            ? <Link to={base} className="group flex items-center gap-3 rounded-2xl px-3 py-2.5 text-[14.5px] font-medium text-mist-600 transition-all hover:bg-mist-100/90 hover:text-mist-900"><ChevronLeft className="size-[18px] shrink-0 text-mist-400 group-hover:text-mist-600" strokeWidth={1.8} />返回工作台</Link>
+            : showAgent && <NavItem to="/agent" icon={Bot}>AI 对话</NavItem>}
+        </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        {!focus && <TopBar username={me?.username} onLogout={logout} dense={fullBleed} showAgent={showAgent} />}
+        {!focus && <TopBar username={me?.username} onLogout={logout} dense={loc.pathname.startsWith('/works/')} showAgent={showAgent} agentMode={agentMode} homeTo={base} />}
         {me?.session_expires_at && Date.parse(me.session_expires_at) > timeNow && Date.parse(me.session_expires_at) - timeNow < 24 * 60 * 60 * 1000 && (
           <div role="status" className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12.5px] text-gamboge-800">
             会话将于 {fmtTime(me.session_expires_at, true)} 到期，请先保存后重新登录以续期。
@@ -794,9 +815,18 @@ export default function Shell() {
             当前为观察者：可浏览内容，不能创建、编辑或推送。
           </div>
         )}
-        <main className={cn('scrollbar-thin min-w-0 flex-1 overflow-y-auto pb-16 md:pb-0', !fullBleed && 'px-4 py-5 sm:px-8 sm:py-7 md:px-10 xl:px-12 2xl:px-14 md:pb-7')}>
+        <main className={cn('scrollbar-thin min-w-0 flex-1 overflow-y-auto pb-16 md:pb-0', contentSlide && 'overflow-x-hidden', !fullBleed && 'px-4 py-5 sm:px-8 sm:py-7 md:px-10 xl:px-12 2xl:px-14 md:pb-7')}>
           <ErrorBoundary resetKey={loc.pathname}>
-            {fullBleed ? <Outlet /> : <div className="mx-auto w-full max-w-[1400px] 2xl:max-w-[1680px]"><Outlet /></div>}
+            <div
+              key={agentMode ? 'agent' : 'workspace'}
+              className={cn(
+                fullBleed ? 'h-full min-h-0' : 'min-h-full',
+                contentSlide === 'from-right' && 'shell-content-slide-from-right',
+                contentSlide === 'from-left' && 'shell-content-slide-from-left',
+              )}
+            >
+              {fullBleed ? <Outlet /> : <div className="mx-auto w-full max-w-[1400px] 2xl:max-w-[1680px]"><Outlet /></div>}
+            </div>
           </ErrorBoundary>
         </main>
       </div>

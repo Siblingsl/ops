@@ -73,7 +73,7 @@ export default function Crawl() {
     setBusy(true)
     try { await put('/admin/crawl', form); refresh(); toast.success('采集设置已保存') } catch (e) { toast.error(errorMessage(e)) } finally { setBusy(false) }
   }
-  return <div className="space-y-5"><PageHeader title="热点采集" desc="公开内容内部参考；固定身份、遵守 robots，限速与风控熔断无法关闭。" />
+  return <div className="animate-fade-in space-y-5"><PageHeader title="热点采集" desc="公开内容内部参考；固定身份、遵守 robots，限速与风控熔断无法关闭。" />
     {query.isError ? <Notice tone="red">{errorMessage(query.error)}</Notice> : !form ? <Spinner /> : <>
       <Card><CardHeader title="全站采集参数" /><div className="space-y-4 p-5">
         {form.mode !== 'allow' && <Notice tone="gamboge">部署方未开启采集，当前无法开启来源。</Notice>}
@@ -110,7 +110,7 @@ export function HotSources() {
     setBusy(true)
     try { await put('/hot-sources', { sources: selected, rss }); await inv(['hot-sources']); toast.success('热点来源已保存') } catch (e) { toast.error(errorMessage(e)) } finally { setBusy(false) }
   }
-  return <div className="max-w-3xl space-y-5"><PageHeader title="工作区热点来源" desc="只使用全站已启用的来源和本工作区的 RSS。" />
+  return <div className="max-w-3xl animate-fade-in space-y-5"><PageHeader title="工作区热点来源" desc="只使用全站已启用的来源和本工作区的 RSS。" />
     {query.isError ? <Notice tone="red">{errorMessage(query.error)}</Notice> : query.isPending ? <Spinner /> : <Card><div className="space-y-4 p-5">
       {!query.data.enabled && <Notice>热点采集未开启；来源配置会保存，当前不发出采集请求。</Notice>}
       {query.data.sources.map((s) => <label key={s.key} className="flex items-center gap-2 text-sm"><input type="checkbox" disabled={!owner || busy} checked={selected.includes(s.key)} onChange={(e) => setSelected((v) => e.target.checked ? [...v, s.key] : v.filter((key) => key !== s.key))} />{s.name}</label>)}

@@ -895,7 +895,7 @@ export default function Ops() {
   const account = useCurrentAccount()
   if (!account) return <Empty title="请选择账号" />
   return (
-    <div className="space-y-6">
+    <div className="animate-fade-in space-y-6">
       <PageHeader title="账号运营" desc={`${account.name} · 定位、内容节奏与每天的创作参考`} />
       <div id="strategy" className="scroll-mt-24"><StrategyPanel key={`strategy-${account.id}`} account={account} /></div>
  <DailyStatsCard key={`stats-${account.id}`} accountId={account.id} warningsOnly/>

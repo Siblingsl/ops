@@ -40,7 +40,7 @@ export default function ImagesPage() {
   const list = (q.data ?? []).filter((a) => !workId || a.work_id === workId)
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="mx-auto max-w-6xl animate-fade-in">
       <PageHeader eyebrow="工作区" title="图片库" desc="汇总所有作品里的图片。要在别的作品里用，打开那篇作品的编辑器，点「从图片库选择」即可复用，不用重新上传。" />
       <Card className="mb-4 flex flex-wrap items-center gap-2 p-3">
         <Select className="h-8 w-40 text-[12.5px]" value={account} onChange={(e) => set('account', e.target.value)} aria-label="按账号筛选">

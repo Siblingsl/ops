@@ -14,7 +14,33 @@ function useEsc(open: boolean, onClose: () => void) {
   }, [open, onClose])
 }
 
-export function Dialog({ open, onClose, title, desc, children, footer, width = 'max-w-lg', className }: {
+function usePresence(open: boolean, duration: number, onExited?: () => void) {
+  const [present, setPresent] = useState(open)
+  const [exiting, setExiting] = useState(false)
+  const onExitedRef = useRef(onExited)
+
+  useEffect(() => { onExitedRef.current = onExited }, [onExited])
+  useEffect(() => {
+    if (open) {
+      setPresent(true)
+      setExiting(false)
+      return
+    }
+    if (!present) return
+    setExiting(true)
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const timer = window.setTimeout(() => {
+      setPresent(false)
+      setExiting(false)
+      onExitedRef.current?.()
+    }, reducedMotion ? 0 : duration)
+    return () => window.clearTimeout(timer)
+  }, [open, duration])
+
+  return { present, exiting }
+}
+
+export function Dialog({ open, onClose, title, desc, children, footer, width = 'max-w-lg', className, onExited }: {
   open: boolean
   onClose: () => void
   title?: React.ReactNode
@@ -23,17 +49,19 @@ export function Dialog({ open, onClose, title, desc, children, footer, width = '
   footer?: React.ReactNode
   width?: string
   className?: string
+  onExited?: () => void
 }) {
+  const { present, exiting } = usePresence(open, 180, onExited)
   useEsc(open, onClose)
   const dialogRef = useRef<HTMLDivElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
-  if (open && !wasOpen.current) {
+  if (present && !wasOpen.current) {
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
   }
-  wasOpen.current = open
+  wasOpen.current = present
   useEffect(() => {
-    if (!open) return
+    if (!open || !present) return
     const dialog = dialogRef.current
     if (!dialog) return
     const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]'))
@@ -69,11 +97,11 @@ export function Dialog({ open, onClose, title, desc, children, footer, width = '
       document.removeEventListener('keydown', containTab, true)
       if (previousFocus.current?.isConnected) previousFocus.current.focus()
     }
-  }, [open])
-  if (!open) return null
+  }, [open, present])
+  if (!present) return null
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-mist-900/35 p-4 pt-[8vh] backdrop-blur-[2px]" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={dialogRef} tabIndex={-1} className={cn('w-full animate-fade-in rounded-2xl bg-white shadow-pop', width, className)} role="dialog" aria-modal="true">
+    <div className={cn('fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-mist-900/35 p-4 pt-[8vh] backdrop-blur-[2px]', exiting ? 'animate-dialog-backdrop-out' : 'animate-dialog-backdrop-in')} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={dialogRef} tabIndex={-1} className={cn('w-full rounded-2xl bg-white shadow-pop', exiting ? 'animate-dialog-panel-out' : 'animate-dialog-panel-in', width, className)} role="dialog" aria-modal="true">
         {title && (
           <div className="flex items-start justify-between gap-4 px-6 pb-2 pt-5">
             <div>
@@ -102,11 +130,12 @@ export function Drawer({ open, onClose, title, desc, children, footer, width = '
   footer?: React.ReactNode
   width?: string
 }) {
+  const { present, exiting } = usePresence(open, 180)
   useEsc(open, onClose)
-  if (!open) return null
+  if (!present) return null
   return createPortal(
-    <div className="fixed inset-0 z-40 flex justify-end bg-mist-900/25" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={cn('flex h-full max-w-full animate-slide-in flex-col bg-white shadow-pop', width)}>
+    <div className={cn('fixed inset-0 z-40 flex justify-end bg-mist-900/25', exiting ? 'animate-dialog-backdrop-out' : 'animate-dialog-backdrop-in')} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className={cn('flex h-full max-w-full flex-col bg-white shadow-pop', exiting ? 'animate-drawer-panel-out' : 'animate-drawer-panel-in', width)}>
         <div className="flex items-start justify-between gap-4 border-b border-mist-100 px-6 py-4">
           <div>
             <h2 className="font-display text-lg font-bold text-mist-900">{title}</h2>
@@ -144,16 +173,27 @@ export function confirm(opts: ConfirmOptions): Promise<boolean> {
       host.remove()
       resolve(v)
     }
-    root.render(
-      <Dialog open onClose={() => finish(false)} title={opts.title} desc={undefined} width="max-w-md"
-        footer={<>
-          <Button variant="ghost" onClick={() => finish(false)}>{opts.cancelText ?? '取消'}</Button>
-          <Button autoFocus variant={opts.danger ? 'danger' : opts.human ? 'human' : 'primary'} onClick={() => finish(true)}>{opts.confirmText ?? '确定'}</Button>
-        </>}>
-        {opts.desc && <div className="text-sm leading-relaxed text-mist-600">{opts.desc}</div>}
-      </Dialog>,
-    )
+    root.render(<ConfirmDialog opts={opts} finish={finish} />)
   })
+}
+
+function ConfirmDialog({ opts, finish }: { opts: ConfirmOptions; finish: (value: boolean) => void }) {
+  const [open, setOpen] = useState(true)
+  const result = useRef(false)
+  const close = (value: boolean) => {
+    if (!open) return
+    result.current = value
+    setOpen(false)
+  }
+  return (
+    <Dialog open={open} onClose={() => close(false)} onExited={() => finish(result.current)} title={opts.title} desc={undefined} width="max-w-md"
+      footer={<>
+        <Button variant="ghost" onClick={() => close(false)}>{opts.cancelText ?? '取消'}</Button>
+        <Button autoFocus variant={opts.danger ? 'danger' : opts.human ? 'human' : 'primary'} onClick={() => close(true)}>{opts.confirmText ?? '确定'}</Button>
+      </>}>
+      {opts.desc && <div className="text-sm leading-relaxed text-mist-600">{opts.desc}</div>}
+    </Dialog>
+  )
 }
 
 export function PasswordPrompt({ onDone, submit }: { onDone: (ok: boolean) => void; submit: (pw: string) => Promise<void> }) {

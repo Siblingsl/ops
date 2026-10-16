@@ -92,7 +92,7 @@ export function EditorSidebar({ work, setWork, active, selection, tab, onTab: se
         </div>
         <button type="button" onClick={onClose} title="收起侧栏" className="cursor-pointer rounded p-1 text-mist-400 hover:bg-mist-100"><ChevronsRight className="size-4" /></button>
       </div>
-      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-3">
+      <div key={tab} className="scrollbar-thin min-h-0 flex-1 animate-fade-in overflow-y-auto p-3">
         {tab === 'materials' && <MaterialsTab work={work} setWork={setWork} active={active} />}
         {tab === 'copilot' && <CopilotTab work={work} active={active} selection={selection} />}
         {tab === 'polish' && <PolishTab work={work} />}

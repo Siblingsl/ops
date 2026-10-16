@@ -32,6 +32,7 @@ export function useChromeMeta(settings: { to: string; label: string }[]) {
       const hit = settings.find((s) => path.startsWith(s.to))
       return { crumb: '设置', title: hit?.label ?? '设置' }
     }
+    if (path.startsWith('/agent')) return { crumb: acc?.name ?? '工作区', title: 'AI 对话' }
     if (path.startsWith('/works/')) return { crumb: acc?.name ?? '作品', title: '创作中' }
     if (path.startsWith('/search')) return { crumb: '工作区', title: '搜索' }
     if (path.startsWith('/images')) return { crumb: '工作区', title: '图片库' }

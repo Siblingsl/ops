@@ -114,7 +114,7 @@ export default function SettingsMembers() {
   if (members.isLoading || !me) return <PageLoading />
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
+    <div className="mx-auto max-w-3xl animate-fade-in space-y-6 p-6">
       <PageHeader title="成员与邀请" desc={`当前工作区：${me.workspace.name}`} />
 
       <Card className="space-y-3 p-5">

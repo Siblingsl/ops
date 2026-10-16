@@ -147,10 +147,10 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
     const base = acc ? `/a/${acc.id}` : ''
     const list: Cmd[] = []
     if (agentBootstrap.data?.can_use || agentBootstrap.data?.reason === 'no_model') {
-      list.push({ id: 'agent-open', group: '页面', label: '打开智能体', icon: Bot, keywords: 'agent 对话 AI', run: () => go('/agent', '智能体') })
+      list.push({ id: 'agent-open', group: '页面', label: '打开 AI 对话', icon: Bot, keywords: 'agent 对话 AI', run: () => go('/agent', 'AI 对话') })
     }
     if (agentBootstrap.data?.can_use && agentBootstrap.data.role !== 'viewer') {
-      list.push({ id: 'agent-new', group: '操作', label: '新建智能体对话', icon: Bot, keywords: 'agent new chat', run: async () => {
+      list.push({ id: 'agent-new', group: '操作', label: '新建对话', icon: Bot, keywords: 'agent new chat', run: async () => {
         onOpenChange(false)
         try {
           const conversation = await post<{ id: string }>('/agent/conversations', acc ? { account_id: acc.id } : {})

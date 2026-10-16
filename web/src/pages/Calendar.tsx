@@ -118,44 +118,46 @@ export default function CalendarPage() {
               <Tabs value={view} onChange={setView} items={[{ value: 'month', label: '月' }, { value: 'week', label: '周' }]} />
             </div>
           </div>
-          <div className="grid grid-cols-7 border-b border-mist-100 bg-mist-50/60 text-center text-[11.5px] text-mist-400">
-            {WEEK.map((w, i) => <div key={w} className="py-1.5">周{w}{view === 'week' && ` · ${grid[i].getDate()}`}</div>)}
-          </div>
-          <div className="grid grid-cols-7">
-            {grid.map((d) => {
-              const k = iso(d)
-              const items = byDate.get(k) ?? []
-              const other = view === 'month' && d.getMonth() !== month.getMonth()
-              return (
-                <div key={k}
-                  onDragOver={(e) => { if (canWrite) { e.preventDefault(); setDragOver(k) } }}
-                  onDragLeave={() => setDragOver((v) => (v === k ? '' : v))}
-                  onDrop={(e) => onDrop(k, e)}
-                  className={cn('border-b border-r border-mist-100 p-1.5 transition-colors', view === 'week' ? 'min-h-[420px]' : 'min-h-[92px] sm:min-h-[110px]',
-                    other && 'bg-mist-50/50', dragOver === k && 'bg-ink-50 ring-2 ring-inset ring-ink-300')}>
-                  {view === 'month' && (
-                    <div className={cn('mb-1 flex size-6 items-center justify-center rounded-full text-[12px] tabular-nums',
-                      k === today ? 'bg-ink-600 font-bold text-white' : other ? 'text-mist-300' : 'text-mist-600')}>{d.getDate()}</div>
-                  )}
-                  {view === 'week' && k === today && <div className="mb-1 h-0.5 rounded bg-ink-500" />}
-                  <div className="space-y-1">
-                    {items.slice(0, perCell).map((it) => (
-                      <Link key={it.kind + it.id} to={it.kind === 'work' ? `/works/${it.id}` : `/a/${it.account_id}/topics?focus=${it.id}`}
-                        draggable={canWrite && it.date_kind === 'planned'} onDragStart={dragStart(it.kind, it.id)}
-                        title={`${it.account_name} · ${it.title || '未命名'}${it.date_kind === 'published' ? '（已发布）' : '（计划）'}`}
-                        style={scope === 'all' ? { borderLeft: `3px solid ${colorOf(it.account_id)}` } : undefined}
-                        className={cn('flex items-center gap-1 rounded px-1 py-0.5 leading-tight', view === 'week' ? 'text-[12px]' : 'truncate text-[11.5px]',
-                          it.kind === 'topic' ? 'border border-dashed border-gamboge-300 text-gamboge-700' : phaseClass[phaseOf(it)])}>
-                        {scope === 'all' && <PlatformMark platform={it.platform} size="sm" />}
-                        {it.kind === 'topic' && <Lightbulb className="size-3 shrink-0" />}
-                        <span className={view === 'week' ? 'line-clamp-2' : 'truncate'}>{it.title || '未命名'}</span>
-                      </Link>
-                    ))}
-                    {items.length > perCell && <div className="px-1 text-[11px] text-mist-400">还有 {items.length - perCell} 项</div>}
+          <div key={view} className="animate-fade-in">
+            <div className="grid grid-cols-7 border-b border-mist-100 bg-mist-50/60 text-center text-[11.5px] text-mist-400">
+              {WEEK.map((w, i) => <div key={w} className="py-1.5">周{w}{view === 'week' && ` · ${grid[i].getDate()}`}</div>)}
+            </div>
+            <div className="grid grid-cols-7">
+              {grid.map((d) => {
+                const k = iso(d)
+                const items = byDate.get(k) ?? []
+                const other = view === 'month' && d.getMonth() !== month.getMonth()
+                return (
+                  <div key={k}
+                    onDragOver={(e) => { if (canWrite) { e.preventDefault(); setDragOver(k) } }}
+                    onDragLeave={() => setDragOver((v) => (v === k ? '' : v))}
+                    onDrop={(e) => onDrop(k, e)}
+                    className={cn('border-b border-r border-mist-100 p-1.5 transition-colors', view === 'week' ? 'min-h-[420px]' : 'min-h-[92px] sm:min-h-[110px]',
+                      other && 'bg-mist-50/50', dragOver === k && 'bg-ink-50 ring-2 ring-inset ring-ink-300')}>
+                    {view === 'month' && (
+                      <div className={cn('mb-1 flex size-6 items-center justify-center rounded-full text-[12px] tabular-nums',
+                        k === today ? 'bg-ink-600 font-bold text-white' : other ? 'text-mist-300' : 'text-mist-600')}>{d.getDate()}</div>
+                    )}
+                    {view === 'week' && k === today && <div className="mb-1 h-0.5 rounded bg-ink-500" />}
+                    <div className="space-y-1">
+                      {items.slice(0, perCell).map((it) => (
+                        <Link key={it.kind + it.id} to={it.kind === 'work' ? `/works/${it.id}` : `/a/${it.account_id}/topics?focus=${it.id}`}
+                          draggable={canWrite && it.date_kind === 'planned'} onDragStart={dragStart(it.kind, it.id)}
+                          title={`${it.account_name} · ${it.title || '未命名'}${it.date_kind === 'published' ? '（已发布）' : '（计划）'}`}
+                          style={scope === 'all' ? { borderLeft: `3px solid ${colorOf(it.account_id)}` } : undefined}
+                          className={cn('flex items-center gap-1 rounded px-1 py-0.5 leading-tight', view === 'week' ? 'text-[12px]' : 'truncate text-[11.5px]',
+                            it.kind === 'topic' ? 'border border-dashed border-gamboge-300 text-gamboge-700' : phaseClass[phaseOf(it)])}>
+                          {scope === 'all' && <PlatformMark platform={it.platform} size="sm" />}
+                          {it.kind === 'topic' && <Lightbulb className="size-3 shrink-0" />}
+                          <span className={view === 'week' ? 'line-clamp-2' : 'truncate'}>{it.title || '未命名'}</span>
+                        </Link>
+                      ))}
+                      {items.length > perCell && <div className="px-1 text-[11px] text-mist-400">还有 {items.length - perCell} 项</div>}
+                    </div>
                   </div>
-                </div>
-              )
-            })}
+                )
+              })}
+            </div>
           </div>
         </Card>
         <div className="space-y-4">
@@ -163,39 +165,41 @@ export default function CalendarPage() {
             <div className="mb-2 flex items-center gap-2 text-[13.5px] font-semibold text-mist-900"><CalendarDays className="size-4 text-ink-600" />未排期</div>
             <Tabs value={side} onChange={setSide} className="mb-2" items={[{ value: 'works', label: `作品 ${unplanned.length}` }, { value: 'topics', label: `选题 ${unplannedTopics.length}` }]} />
             <p className="mb-3 text-[12px] text-mist-500">拖到日历上的某一天，或直接选日期。</p>
-            {side === 'works' ? (
-              unplanned.length === 0 ? <p className="py-4 text-center text-[12.5px] text-mist-400">作品都排好了</p> : (
+            <div key={side} className="animate-fade-in">
+              {side === 'works' ? (
+                unplanned.length === 0 ? <p className="py-4 text-center text-[12.5px] text-mist-400">作品都排好了</p> : (
+                  <ul className="space-y-1.5">
+                    {unplanned.slice(0, 20).map((w) => (
+                      <li key={w.id} draggable={canWrite} onDragStart={dragStart('work', w.id)}
+                        className="rounded-lg border border-mist-200 bg-white px-2.5 py-2 text-[12.5px] hover:border-ink-200">
+                        <div className="flex items-center gap-2">
+                          <Link to={`/works/${w.id}`} className="min-w-0 flex-1 truncate font-medium text-mist-800 hover:text-ink-700">{w.title || '未命名作品'}</Link>
+                          <StatusBadge status={w.status as WorkStatus} />
+                        </div>
+                        {canWrite && <input type="date" aria-label="计划发布日" className="mt-1.5 w-full rounded border border-mist-200 px-1.5 py-0.5 text-[12px] text-mist-600" onChange={(e) => e.target.value && setDate('work', w.id, e.target.value)} />}
+                      </li>
+                    ))}
+                  </ul>
+                )
+              ) : unplannedTopics.length === 0 ? (
+                <p className="py-4 text-center text-[12.5px] text-mist-400">没有待排期的选题，<Link to={`/a/${acc.id}/topics`} className="text-ink-700 hover:underline">去选题池</Link></p>
+              ) : (
                 <ul className="space-y-1.5">
-                  {unplanned.slice(0, 20).map((w) => (
-                    <li key={w.id} draggable={canWrite} onDragStart={dragStart('work', w.id)}
-                      className="rounded-lg border border-mist-200 bg-white px-2.5 py-2 text-[12.5px] hover:border-ink-200">
+                  {unplannedTopics.slice(0, 20).map((t) => (
+                    <li key={t.id} draggable={canWrite} onDragStart={dragStart('topic', t.id)}
+                      className="rounded-lg border border-dashed border-gamboge-300 bg-white px-2.5 py-2 text-[12.5px] hover:border-gamboge-400">
                       <div className="flex items-center gap-2">
-                        <Link to={`/works/${w.id}`} className="min-w-0 flex-1 truncate font-medium text-mist-800 hover:text-ink-700">{w.title || '未命名作品'}</Link>
-                        <StatusBadge status={w.status as WorkStatus} />
+                        <Lightbulb className="size-3.5 shrink-0 text-gamboge-500" />
+                        <Link to={`/a/${acc.id}/topics?focus=${t.id}`} className="min-w-0 flex-1 truncate font-medium text-mist-800 hover:text-ink-700">{t.title}</Link>
+                        <span className="shrink-0 text-[11px] text-mist-400">{t.status === 'adopted' ? '已采用' : '待定'}</span>
                       </div>
-                      {canWrite && <input type="date" aria-label="计划发布日" className="mt-1.5 w-full rounded border border-mist-200 px-1.5 py-0.5 text-[12px] text-mist-600" onChange={(e) => e.target.value && setDate('work', w.id, e.target.value)} />}
+                      {canWrite && <input type="date" aria-label="计划发布日" className="mt-1.5 w-full rounded border border-mist-200 px-1.5 py-0.5 text-[12px] text-mist-600" onChange={(e) => e.target.value && setDate('topic', t.id, e.target.value)} />}
                     </li>
                   ))}
+                  {topics.hasNextPage && <li className="pt-2"><Button size="sm" variant="ghost" loading={topics.isFetchingNextPage} onClick={() => void topics.fetchNextPage()}>加载更多选题</Button></li>}
                 </ul>
-              )
-            ) : unplannedTopics.length === 0 ? (
-              <p className="py-4 text-center text-[12.5px] text-mist-400">没有待排期的选题，<Link to={`/a/${acc.id}/topics`} className="text-ink-700 hover:underline">去选题池</Link></p>
-            ) : (
-              <ul className="space-y-1.5">
-                {unplannedTopics.slice(0, 20).map((t) => (
-                  <li key={t.id} draggable={canWrite} onDragStart={dragStart('topic', t.id)}
-                    className="rounded-lg border border-dashed border-gamboge-300 bg-white px-2.5 py-2 text-[12.5px] hover:border-gamboge-400">
-                    <div className="flex items-center gap-2">
-                      <Lightbulb className="size-3.5 shrink-0 text-gamboge-500" />
-                      <Link to={`/a/${acc.id}/topics?focus=${t.id}`} className="min-w-0 flex-1 truncate font-medium text-mist-800 hover:text-ink-700">{t.title}</Link>
-                      <span className="shrink-0 text-[11px] text-mist-400">{t.status === 'adopted' ? '已采用' : '待定'}</span>
-                    </div>
-                    {canWrite && <input type="date" aria-label="计划发布日" className="mt-1.5 w-full rounded border border-mist-200 px-1.5 py-0.5 text-[12px] text-mist-600" onChange={(e) => e.target.value && setDate('topic', t.id, e.target.value)} />}
-                  </li>
-                ))}
-                {topics.hasNextPage && <li className="pt-2"><Button size="sm" variant="ghost" loading={topics.isFetchingNextPage} onClick={() => void topics.fetchNextPage()}>加载更多选题</Button></li>}
-              </ul>
-            )}
+              )}
+            </div>
           </Card>
           <Notice icon={<Info className="size-4" />}>
             <b>计划发布日</b>只是给人看的提醒：到日子会出现在工作台「现在最值得做的」里。系统不会在这一天自动写入草稿、推送或发布。

@@ -128,16 +128,17 @@ function FamilyStrip({ work }: { work: Work }) {
   }
   return (
     <div className="border-t border-mist-100 bg-mist-50/60 px-5 py-2">
-      <button type="button" onClick={toggle} className="flex cursor-pointer items-center gap-1.5 text-[12px] text-mist-500 hover:text-mist-800">
+      <button type="button" aria-expanded={!collapsed} aria-controls="work-family-content" onClick={toggle} className="flex cursor-pointer items-center gap-1.5 text-[12px] text-mist-500 hover:text-mist-800">
         <Layers className="size-3.5" />版本族 · {list.length} 个版本
         {list.some((m) => m.needs_sync) && <Badge tone="gamboge">有版本需要同步</Badge>}
         {collapsed ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
       </button>
-      {!collapsed && (
-        <ul className="scrollbar-thin mt-2 flex gap-2 overflow-x-auto pb-1">
+      <div id="work-family-content" aria-hidden={collapsed} className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${collapsed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100'}`}>
+        <div className="min-h-0 overflow-hidden">
+          <ul className="scrollbar-thin mt-2 flex gap-2 overflow-x-auto pb-1">
           {list.map((m) => (
             <li key={m.id} className="w-52 shrink-0">
-              <Link to={`/works/${m.id}`}
+              <Link to={`/works/${m.id}`} tabIndex={collapsed ? -1 : undefined}
                 className={cn('block rounded-lg border bg-white p-2.5 text-[12.5px] transition hover:border-ink-300', m.id === work.id ? 'border-ink-400 ring-1 ring-ink-200' : 'border-mist-200')}>
                 <div className="flex items-center gap-1.5">
                   <PlatformMark platform={m.platform} />
@@ -153,8 +154,9 @@ function FamilyStrip({ work }: { work: Work }) {
               </Link>
             </li>
           ))}
-        </ul>
-      )}
+          </ul>
+        </div>
+      </div>
     </div>
   )
 }
@@ -481,7 +483,7 @@ export default function WorkLayout() {
           </div>
         )}
       </header>
-      <div className="flex-1">
+      <div key={location.pathname} className="min-h-0 flex-1 animate-fade-in">
         <Outlet context={ctx} />
       </div>
       <Versions work={work} open={versions} onClose={() => setVersions(false)} onRestored={setWork} />

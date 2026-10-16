@@ -1,14 +1,15 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Bot, ChevronDown, ChevronLeft, Clipboard, FileText, LoaderCircle, Menu,
-  MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Search, Send, Square, Trash2, X,
+  MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Search, Send, Settings2, Square, Trash2, X,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AIFeedback } from '@/components/refs'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
-import { Button, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
+import { Button, cn, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post, rawRequest, stream } from '@/lib/api'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useAccounts, useCurrentAccount } from '@/lib/session'
@@ -39,10 +40,11 @@ function splitDate(value: string) {
 }
 
 function AgentConversationList({
-  currentID, search, setSearch, onSelect, onNew, onClose,
+  currentID, search, setSearch, onSelect, onNew, onClose, sidebarTitle,
 }: {
   currentID?: string; search: string; setSearch: (v: string) => void
   onSelect: (id: string) => void; onNew: () => void; onClose?: () => void
+  sidebarTitle?: string
 }) {
   const list = useInfiniteQuery({
     queryKey: ['agent-conversations', search],
@@ -72,7 +74,8 @@ function AgentConversationList({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 p-3">
+      {sidebarTitle !== undefined && <div className="mb-1.5 min-w-0 px-6 pt-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400"><div className="truncate" title={sidebarTitle}>{sidebarTitle}</div></div>}
+      <div className={cn('flex items-center gap-2', sidebarTitle !== undefined ? 'px-3 pb-3 pt-0' : 'p-3')}>
         <Button variant="primary" className="flex-1" icon={<MessageSquarePlus className="size-4" />} onClick={onNew}>新对话</Button>
         {onClose && <IconButton label="关闭对话列表" onClick={onClose}><X className="size-4" /></IconButton>}
       </div>
@@ -163,6 +166,7 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
   message: AgentMessage; lastAssistant: boolean; canSeeImages: boolean; onEdit?: () => void; onRegenerate?: () => void
 }) {
   const [toolsOpen, setToolsOpen] = useState(false)
+  const toolsId = useId()
   const user = message.role === 'user'
   return (
     <article className={`group flex ${user ? 'justify-end' : 'justify-start'}`}>
@@ -176,16 +180,20 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
         {user ? <p className="whitespace-pre-wrap break-words text-[14px] leading-relaxed">{message.content}</p>
           : <AgentMarkdown text={message.content} />}
         {message.tool_calls?.length > 0 && <div className={`mt-2 border-t pt-2 ${user ? 'border-white/20' : 'border-mist-100'}`}>
-          <button type="button" onClick={() => setToolsOpen((value) => !value)} className={`inline-flex cursor-pointer items-center gap-1 text-[12px] ${user ? 'text-white/75' : 'text-mist-500 hover:text-mist-700'}`}>
+          <button type="button" aria-expanded={toolsOpen} aria-controls={toolsId} onClick={() => setToolsOpen((value) => !value)} className={`inline-flex cursor-pointer items-center gap-1 text-[12px] ${user ? 'text-white/75' : 'text-mist-500 hover:text-mist-700'}`}>
             <ChevronDown className={`size-3.5 transition-transform ${toolsOpen ? '' : '-rotate-90'}`} />
             已读取 {message.tool_calls.length} 项
           </button>
-          {toolsOpen && <div className={`mt-2 space-y-2 text-xs ${user ? 'text-white/80' : 'text-mist-500'}`}>
-            {message.tool_calls.map((call) => <details key={call.id} className="rounded-lg border border-current/10 px-2.5 py-2">
-              <summary className="cursor-pointer">{call.summary || call.name}</summary>
-              {call.result_preview && <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-sans">{call.result_preview}</pre>}
-            </details>)}
-          </div>}
+          <div id={toolsId} aria-hidden={!toolsOpen} className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${toolsOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+            <div className="min-h-0 overflow-hidden">
+              <div className={`mt-2 space-y-2 text-xs ${user ? 'text-white/80' : 'text-mist-500'}`}>
+                {message.tool_calls.map((call) => <details key={call.id} className="rounded-lg border border-current/10 px-2.5 py-2">
+                  <summary tabIndex={toolsOpen ? undefined : -1} className="cursor-pointer">{call.summary || call.name}</summary>
+                  {call.result_preview && <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-sans">{call.result_preview}</pre>}
+                </details>)}
+              </div>
+            </div>
+          </div>
         </div>}
         <div className={`mt-1.5 flex items-center gap-1 text-[10.5px] ${user ? 'text-white/60' : 'text-mist-400'}`}>
           <time>{new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
@@ -231,6 +239,7 @@ export default function Agent() {
   const [runID, setRunID] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedAccount, setSelectedAccount] = useState('')
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [privacyOpen, setPrivacyOpen] = useState(false)
   const [editMessage, setEditMessage] = useState<AgentMessage | null>(null)
   const [olderMessages, setOlderMessages] = useState<AgentMessage[]>([])
@@ -479,37 +488,43 @@ export default function Agent() {
   if (bootstrap.isError || !bootstrapData) return <div className="m-auto max-w-xl p-6 text-center"><p className="text-sm text-danger">{errorMessage(bootstrap.error)}</p><Button className="mt-3" onClick={() => void bootstrap.refetch()}>重试</Button></div>
   if (!bootstrapData.can_use && bootstrapData.reason !== 'no_model') return <Unavailable bootstrap={bootstrapData} />
 
+  const sidebarSlot = document.getElementById('agent-sidebar-slot')
+  const titleSlot = document.getElementById('agent-title-slot')
+  const toolbarSlot = document.getElementById('agent-toolbar-slot')
+  const renderTitle = () => (
+    <>
+      {conversation
+        ? <input key={conversation.id} defaultValue={conversation.title} aria-label="对话标题" maxLength={60}
+            onBlur={(event) => {
+              const title = event.target.value.trim()
+              if (title && title !== conversation.title) void patch(`/agent/conversations/${conversation.id}`, { title }).then(() => invalidate()).catch((error) => toast.error(errorMessage(error)))
+            }} className="min-w-0 max-w-[320px] truncate border-0 bg-transparent text-[13px] font-semibold text-mist-800 outline-none" />
+        : <span className="text-[13px] font-semibold text-mist-800">AI 对话</span>}
+      {conversation && <span className="hidden text-[10.5px] text-mist-400 xl:inline">本对话 {detail?.usage.prompt_tokens ?? 0} 输入 / {detail?.usage.completion_tokens ?? 0} 输出 token</span>}
+    </>
+  )
   return (
-    <div className="relative flex h-full min-h-0 overflow-hidden bg-[#f7f8f6]">
-      <aside className="hidden w-[272px] shrink-0 border-r border-mist-200 bg-white md:flex md:flex-col">
-        <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} />
-      </aside>
+    <>
+      {sidebarSlot && createPortal(
+        <div className="absolute inset-0 flex min-h-0 flex-col">
+          <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle={conversation?.title || '对话'} />
+        </div>,
+        sidebarSlot,
+      )}
+      {titleSlot && createPortal(<div className="flex min-w-0 items-center gap-2">{renderTitle()}</div>, titleSlot)}
+      {toolbarSlot && createPortal(
+        <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>,
+        toolbarSlot,
+      )}
+      <div className="relative flex h-full min-h-0 overflow-hidden bg-[#f7f8f6]">
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-mist-200 bg-white px-3 sm:px-5">
+        <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-mist-200 bg-white px-3 sm:px-5 lg:hidden">
           <IconButton label="打开对话列表" className="md:hidden" onClick={() => setMobileListOpen(true)}><Menu className="size-4" /></IconButton>
-          <div className="min-w-0 flex-1">
-            {conversation ? <input key={conversation.id} defaultValue={conversation.title} aria-label="对话标题" maxLength={60}
-              onBlur={(event) => {
-                const title = event.target.value.trim()
-                if (title && title !== conversation.title) void patch(`/agent/conversations/${conversation.id}`, { title }).then(() => invalidate()).catch((error) => toast.error(errorMessage(error)))
-              }} className="w-full truncate border-0 bg-transparent text-[14px] font-semibold text-mist-800 outline-none" />
-              : <div className="flex items-center gap-2 text-[14px] font-semibold text-mist-800"><Bot className="size-4 text-ink-600" />智能体</div>}
-            {conversation && <div className="text-[10.5px] text-mist-400">本对话用量 {detail?.usage.prompt_tokens ?? 0} 输入 / {detail?.usage.completion_tokens ?? 0} 输出 token</div>}
-          </div>
-          {bootstrapData.models.length > 0 && <Select aria-label="选择模型" value={selectedModel} disabled={!canWrite || !bootstrapData.allow_model_pick || busy} onChange={(event) => void updateSelection('model', event.target.value)} className="max-w-[140px] text-[11px] sm:max-w-[250px] sm:text-xs">
-            {!selectedModel && <option value="">选择模型</option>}
-            {bootstrapData.default_model_unsupported && <option value="" disabled>默认模型未通过工具调用自检</option>}
-            {selectedModel && !bootstrapData.models.some((model) => modelKey(model.provider_id, model.model) === selectedModel) && <option value={selectedModel}>所选模型已不可用</option>}
-            {bootstrapData.models.map((model) => <option key={modelKey(model.provider_id, model.model)} value={modelKey(model.provider_id, model.model)}>{model.provider_name} · {model.model}{model.vision ? ' · 看图' : ''}{model.is_default ? ' · 默认' : ''}</option>)}
-          </Select>}
-          <Select aria-label="选择账号" value={selectedAccount} disabled={!canWrite || busy || accounts.isLoading} onChange={(event) => void updateSelection('account', event.target.value)} className="max-w-[105px] text-[11px] sm:max-w-[180px] sm:text-xs">
-            <option value="">不指定账号</option>
-            {accountList.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
-          </Select>
+          <div className="flex min-w-0 flex-1 items-center gap-2">{renderTitle()}</div>
+          <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>
         </header>
 
         {bootstrapData.read_only && <div className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12px] text-gamboge-800">当前为观察者：智能体只能查询，不能修改。</div>}
-        {bootstrapData.default_model_unsupported && <div className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12px] text-gamboge-800">默认模型未通过工具调用自检，请在模型配置页选择可用于智能体的模型。</div>}
 
         <div className="relative flex min-h-0 flex-1 flex-col">
           {dragging && <div className="absolute inset-3 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-ink-400 bg-white/90 text-ink-700">松开以上传图片或文本</div>}
@@ -567,10 +582,30 @@ export default function Agent() {
       <Drawer open={mobileListOpen} onClose={() => setMobileListOpen(false)} title="对话" width="w-[min(88vw,360px)]">
         <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} onClose={() => setMobileListOpen(false)} />
       </Drawer>
+      <Dialog open={settingsOpen} onClose={() => setSettingsOpen(false)} title="对话设置" desc="选择本对话使用的模型与操作账号。">
+        <div className="space-y-4">
+          <label className="block space-y-1.5 text-[13px] font-medium text-mist-700">模型
+            <Select aria-label="选择模型" value={selectedModel} disabled={!canWrite || !bootstrapData.allow_model_pick || busy} onChange={(event) => void updateSelection('model', event.target.value)}>
+              {!selectedModel && <option value="">选择模型</option>}
+              {bootstrapData.default_model_unsupported && <option value="" disabled>默认模型未通过工具调用自检</option>}
+              {selectedModel && !bootstrapData.models.some((model) => modelKey(model.provider_id, model.model) === selectedModel) && <option value={selectedModel}>所选模型已不可用</option>}
+              {bootstrapData.models.map((model) => <option key={modelKey(model.provider_id, model.model)} value={modelKey(model.provider_id, model.model)}>{model.provider_name} · {model.model}{model.vision ? ' · 看图' : ''}{model.is_default ? ' · 默认' : ''}</option>)}
+            </Select>
+            {bootstrapData.models.length === 0 && <span className="block text-xs font-normal text-mist-500">暂无可用于智能体的模型，请先到模型配置页完成能力自检。</span>}
+          </label>
+          <label className="block space-y-1.5 text-[13px] font-medium text-mist-700">操作账号
+            <Select aria-label="选择账号" value={selectedAccount} disabled={!canWrite || busy || accounts.isLoading} onChange={(event) => void updateSelection('account', event.target.value)}>
+              <option value="">不指定账号</option>
+              {accountList.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+            </Select>
+          </label>
+        </div>
+      </Dialog>
       <Dialog open={privacyOpen} onClose={() => { setPrivacyOpen(false); savePrefs.mutate({ agent_privacy_notice_seen: true }) }} title="智能体隐私说明" desc="对话仅你本人可见。工作区所有者和系统管理员也无法查看你的对话；卡片执行会照常写入操作日志，并标记为来自智能体。" footer={<Button variant="primary" onClick={() => { setPrivacyOpen(false); savePrefs.mutate({ agent_privacy_notice_seen: true }) }}>我知道了</Button>}>
         <p className="text-[13px] leading-relaxed text-mist-600">不要在对话或附件中发送 API 密钥、平台密钥、密码或邀请码。智能体读取的信息会按系统规则传给当前选择的模型供应商。</p>
       </Dialog>
-    </div>
+      </div>
+    </>
   )
 }
 

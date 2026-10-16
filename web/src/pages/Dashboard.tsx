@@ -87,17 +87,19 @@ function BriefCard({ accountId }: { accountId: string }) {
         <Sparkles className="size-4 text-ink-600" />
         <h3 className="text-[14px] font-semibold text-mist-900">今日智能简报</h3>
         <span className="text-[11.5px] text-mist-400">AI 解读，数字来自已录入的数据</span>
-        <button type="button" className="ml-auto cursor-pointer text-[12px] text-mist-400 hover:text-mist-600" onClick={() => setCollapsed(!collapsed)}>
+        <button type="button" aria-expanded={!collapsed} aria-controls="dashboard-brief-content" className="ml-auto cursor-pointer text-[12px] text-mist-400 hover:text-mist-600" onClick={() => setCollapsed(!collapsed)}>
           {collapsed ? '展开' : '收起'}
         </button>
       </div>
-      {!collapsed && (
-        <ul className="mt-2 space-y-1 text-[13px] text-mist-600">
+      <div id="dashboard-brief-content" aria-hidden={collapsed} className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${collapsed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100'}`}>
+        <div className="min-h-0 overflow-hidden">
+          <ul className="mt-2 space-y-1 text-[13px] text-mist-600">
           {items.map((it, i) => (
             <li key={i} className="flex gap-1.5"><span className="text-ink-500">·</span><span>{it}</span></li>
           ))}
-        </ul>
-      )}
+          </ul>
+        </div>
+      </div>
       <Link to={`/a/${accountId}/ops`} className="mt-2 inline-block text-[12px] text-ink-600 hover:underline">去运营页处理今日推荐 →</Link>
     </Card>
   )
