@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ops/internal/config"
@@ -33,14 +34,16 @@ type Server struct {
 	loc    *time.Location
 	aiHTTP *http.Client
 
-	firstTokenTimeout time.Duration
-	aiQueueTimeout    time.Duration
-	providerMu        sync.Mutex
-	providerCircuits  map[uuid.UUID]*providerCircuit
+	firstTokenTimeout          time.Duration
+	desktopFirstContentTimeout time.Duration
+	aiQueueTimeout             time.Duration
+	providerMu                 sync.Mutex
+	providerCircuits           map[uuid.UUID]*providerCircuit
 
 	jobMu      sync.Mutex
 	jobCancels map[uuid.UUID]context.CancelFunc
 	jobSems    map[uuid.UUID]chan struct{}
+	desktop    *desktopRuntime
 
 	// 智能体运行的取消句柄（16 文档第 6.7 节第 4 项）。
 	agentRunMu      sync.Mutex
@@ -73,6 +76,10 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "assets"), 0o755); err != nil {
 		return nil, err
 	}
+	desktopFirstContentTimeout, err := desktopFirstContentTimeoutFromEnv()
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
 		cfg:    cfg,
 		db:     pool,
@@ -82,14 +89,16 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 		loc:    loc,
 		aiHTTP: &http.Client{Timeout: 5 * time.Minute},
 
-		firstTokenTimeout: 15 * time.Second,
-		aiQueueTimeout:    time.Minute,
-		providerCircuits:  map[uuid.UUID]*providerCircuit{},
-		jobCancels:        map[uuid.UUID]context.CancelFunc{},
-		jobSems:           map[uuid.UUID]chan struct{}{},
-		agentRunCancels:   map[uuid.UUID]context.CancelFunc{},
-		notifySubs:        map[uuid.UUID][]chan struct{}{},
-		presence:          map[uuid.UUID]map[uuid.UUID]presenceEntry{},
+		firstTokenTimeout:          15 * time.Second,
+		desktopFirstContentTimeout: desktopFirstContentTimeout,
+		aiQueueTimeout:             time.Minute,
+		providerCircuits:           map[uuid.UUID]*providerCircuit{},
+		jobCancels:                 map[uuid.UUID]context.CancelFunc{},
+		jobSems:                    map[uuid.UUID]chan struct{}{},
+		desktop:                    newDesktopRuntime(),
+		agentRunCancels:            map[uuid.UUID]context.CancelFunc{},
+		notifySubs:                 map[uuid.UUID][]chan struct{}{},
+		presence:                   map[uuid.UUID]map[uuid.UUID]presenceEntry{},
 	}, nil
 }
 
@@ -99,6 +108,7 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 	defer cancel()
 	if err := s.db.Ping(ctx); err != nil {
+		slog.Warn("数据库健康检查失败", "error", err, "acquired_conns", s.db.Stat().AcquiredConns(), "idle_conns", s.db.Stat().IdleConns())
 		http.Error(w, "数据库不可用", http.StatusServiceUnavailable)
 		return
 	}
@@ -119,6 +129,7 @@ func (s *Server) buildRouter() http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.RequestID)
 	r.Use(requestReadDeadline(r))
+	r.Use(stripNulQuery)
 	r.Use(requestLog)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5, "text/html", "text/css", "application/json", "application/javascript", "text/javascript", "image/svg+xml"))
@@ -127,6 +138,14 @@ func (s *Server) buildRouter() http.Handler {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/healthz", s.healthz)
+		r.Get("/desktop/capabilities", s.h(s.desktopCapabilities))
+		// The WebSocket upgrade authenticates only a short-lived, one-use ticket.
+		r.Get("/desktop/channel", s.desktopChannel)
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireDesktopAccountSession)
+			r.Get("/desktop/devices", s.h(s.desktopListDevices))
+			r.Delete("/desktop/devices/{id}", s.h(s.desktopRevokeOwnDevice))
+		})
 		r.Get("/auth/status", s.h(s.authStatus))
 		r.Post("/auth/setup", s.h(s.authSetup))
 		r.Post("/auth/register", s.h(s.authRegister))
@@ -135,6 +154,7 @@ func (s *Server) buildRouter() http.Handler {
 		r.Get("/public-previews/{token}/assets/{assetId}", s.h(s.getPublicPreviewAsset))
 
 		r.Group(func(r chi.Router) {
+			r.Use(s.desktopRequestContext)
 			r.Use(s.requireSession)
 			r.Use(s.requireCSRF)
 			r.Use(s.blockMaintenance)
@@ -146,6 +166,26 @@ func (s *Server) buildRouter() http.Handler {
 			r.Post("/auth/reauth", s.h(s.authReauth))
 			r.Put("/auth/password", s.h(s.authChangePassword))
 			r.Get("/system/info", s.h(s.systemInfo))
+
+			r.Get("/desktop/policy", s.h(s.desktopGetPolicy))
+			r.Put("/desktop/policy", s.h(s.desktopPutPolicy))
+			r.Post("/desktop/challenges", s.h(s.desktopCreateChallenge))
+			r.Post("/desktop/devices", s.h(s.desktopRegisterDevice))
+			// 平台采集一律走 /desktop/platform/*，与 AI 的 /desktop/* 命名分开；
+			// 首个端点只做设备登记，任务/连接端点在 DEV-PS04/07 接入。
+			r.Post("/desktop/platform/devices", s.h(s.desktopPlatformRegisterDevice))
+			r.Get("/platform-collection/policy", s.h(s.platformGetPolicy))
+			r.Put("/platform-collection/policy", s.h(s.platformPutPolicy))
+
+			r.Get("/desktop/models", s.h(s.desktopListModels))
+			r.Post("/desktop/models", s.h(s.desktopCreateModel))
+			r.Put("/desktop/models/{id}", s.h(s.desktopUpdateModel))
+			r.Delete("/desktop/models/{id}", s.h(s.desktopDeleteModel))
+			r.Post("/desktop/models/{id}/test", s.h(s.desktopStartModelTest))
+			r.Get("/desktop/model-tests/{id}", s.h(s.desktopGetModelTest))
+			r.Get("/desktop/routes", s.h(s.desktopGetRoutes))
+			r.Put("/desktop/routes", s.h(s.desktopPutRoutes))
+			r.Post("/desktop/connections", s.h(s.desktopCreateConnectionTicket))
 
 			r.Get("/admin/users", s.h(s.adminListUsers))
 			r.Patch("/admin/users/{id}", s.h(s.adminPatchUser))
@@ -292,6 +332,9 @@ func (s *Server) buildRouter() http.Handler {
 			r.Post("/works/{id}/xhs/pack", s.h(s.createPack))
 			r.Get("/works/{id}/xhs/pack", s.h(s.getPack))
 			r.Get("/works/{id}/xhs/pack.zip", s.h(s.packZip))
+			r.Post("/works/{id}/toutiao/pack", s.h(s.toutiaoPackCreate))
+			r.Get("/works/{id}/toutiao/pack", s.h(s.toutiaoPackGet))
+			r.Get("/works/{id}/toutiao/pack.zip", s.h(s.toutiaoPackZip))
 			r.Post("/works/{id}/published", s.h(s.markPublished))
 
 			r.Get("/accounts/{accountId}/board", s.h(s.board))
@@ -310,6 +353,8 @@ func (s *Server) buildRouter() http.Handler {
 			r.Delete("/model-providers/{id}", s.h(s.deleteProvider))
 			r.Post("/model-providers/{id}/test", s.h(s.testProvider))
 			r.Post("/model-providers/{id}/selftest", s.h(s.selftestProvider))
+			// 只读：拉取供应商 /models 列表，不写库（用户保存时才持久化）。
+			r.Post("/model-providers/models", s.h(s.discoverProviderModels))
 			r.Get("/model-routes", s.h(s.getRoutes))
 			r.Get("/ai/status", s.h(s.aiStatus))
 			r.Put("/model-routes", s.h(s.putRoutes))
@@ -432,6 +477,7 @@ func (s *Server) v3Routes(r chi.Router) {
 	r.Post("/review-reports/{id}/insights/{index}/remember", s.h(s.rememberInsight))
 	r.Post("/review-reports/{id}/insights/{index}/ignore", s.h(s.ignoreInsight))
 	r.Post("/accounts/{accountId}/reviews/attribution", s.h(s.attribution))
+	r.Get("/accounts/{accountId}/data-preferences", s.h(s.listDataPreferences))
 	r.Get("/accounts/{accountId}/top-works", s.h(s.topWorks))
 	r.Post("/works/{id}/breakdown", s.h(s.breakdownWork))
 	r.Get("/accounts/{accountId}/digests", s.h(s.listDigests))
@@ -541,6 +587,48 @@ func (s *Server) audit(ctx context.Context, action, targetType, targetID, result
 		actor, workspace, action, targetType, targetID, result, b); err != nil {
 		slog.Error("写操作日志失败", "err", err)
 	}
+}
+
+func (s *Server) auditTx(ctx context.Context, tx pgx.Tx, action, targetType, targetID, result string, detail map[string]any) error {
+	var actor *uuid.UUID
+	var workspace *uuid.UUID
+	if id := ident(ctx); id != nil {
+		if id.UserID != uuid.Nil {
+			actor = &id.UserID
+		}
+		if id.WorkspaceID != uuid.Nil {
+			workspace = &id.WorkspaceID
+		}
+	}
+	if detail == nil {
+		detail = map[string]any{}
+	} else {
+		copyDetail := make(map[string]any, len(detail)+3)
+		for key, value := range detail {
+			copyDetail[key] = value
+		}
+		detail = copyDetail
+	}
+	if actor == nil {
+		detail["actor_type"] = "system"
+	}
+	if p := agentPrincipalOf(ctx); p != nil {
+		detail["via_agent"] = true
+		if p.ActionID != uuid.Nil {
+			detail["agent_action_id"] = p.ActionID.String()
+		}
+		if p.ConversationID != uuid.Nil {
+			detail["agent_conversation_id"] = p.ConversationID.String()
+		}
+	}
+	b, err := json.Marshal(detail)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx,
+		`INSERT INTO audit_log (actor_id, workspace_id, action, target_type, target_id, result, detail) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		actor, workspace, action, targetType, targetID, result, b)
+	return err
 }
 
 // today returns the start of the current day in China time.

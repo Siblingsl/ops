@@ -22,6 +22,11 @@ type Config struct {
 	MockListen   string
 	PublicIP     string
 	CookieSecure bool
+	// DesktopAIEnabled is an explicit global kill switch for desktop model routing.
+	DesktopAIEnabled bool
+	// DesktopPlatformEnabled is an explicit global kill switch for platform collection
+	// (D-129). It is process configuration, never overridable by a workspace policy row.
+	DesktopPlatformEnabled bool
 	// AIWorkers is the per-workspace concurrency of background and streaming AI jobs (D-054).
 	AIWorkers int
 	// Permanent system admin (D-044). Ensured on every serve start.
@@ -40,6 +45,28 @@ func Load() (*Config, error) {
 		PublicIP:            os.Getenv("OPS_PUBLIC_IP"),
 		SystemAdminUser:     env("OPS_SYSTEM_ADMIN_USER", "skyeder"),
 		SystemAdminPassword: os.Getenv("OPS_SYSTEM_ADMIN_PASSWORD"),
+		DesktopAIEnabled:    false,
+		DesktopPlatformEnabled: false,
+	}
+	if v := strings.TrimSpace(os.Getenv("OPS_DESKTOP_AI_ENABLED")); v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true":
+			c.DesktopAIEnabled = true
+		case "0", "false":
+			c.DesktopAIEnabled = false
+		default:
+			return nil, errors.New("OPS_DESKTOP_AI_ENABLED 只能为 0/1/false/true")
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("OPS_DESKTOP_PLATFORM_ENABLED")); v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true":
+			c.DesktopPlatformEnabled = true
+		case "0", "false":
+			c.DesktopPlatformEnabled = false
+		default:
+			return nil, errors.New("OPS_DESKTOP_PLATFORM_ENABLED 只能为 0/1/false/true")
+		}
 	}
 	c.AIWorkers = 3
 	c.CrawlMode = env("OPS_CRAWL_MODE", "off")

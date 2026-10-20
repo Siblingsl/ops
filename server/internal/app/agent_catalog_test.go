@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -86,6 +87,7 @@ func agentClassifiedRouteList() map[string]string {
 	for _, r := range []string{
 		"PUT /api/v1/accounts/{accountId}/wechat-credential",
 		"POST /api/v1/model-providers",
+		"POST /api/v1/model-providers/models",
 		"PATCH /api/v1/model-providers/{id}",
 		"DELETE /api/v1/model-providers/{id}",
 		"PUT /api/v1/auth/password",
@@ -104,11 +106,13 @@ func agentClassifiedRouteList() map[string]string {
 		"DELETE /api/v1/works/{id}/copilot",
 		"GET /api/v1/assets/{id}/file",
 		"GET /api/v1/works/{id}/xhs/pack.zip",
+		"GET /api/v1/works/{id}/toutiao/pack.zip",
 	} {
 		out[r] = "附录 B.1：只给链接"
 	}
 	// 附录 B.2 不提供。
 	for _, r := range []string{
+		"GET /api/v1/accounts/{accountId}/data-preferences",
 		"GET /api/v1/agent/bootstrap",
 		"GET /api/v1/agent/conversations",
 		"POST /api/v1/agent/conversations",
@@ -136,6 +140,27 @@ func agentClassifiedRouteList() map[string]string {
 		"GET /api/v1/healthz",
 		"GET /healthz",
 		"GET /api/v1/auth/status",
+		"GET /api/v1/desktop/capabilities",
+		"POST /api/v1/desktop/challenges",
+		"GET /api/v1/desktop/channel",
+		"POST /api/v1/desktop/connections",
+		"GET /api/v1/desktop/devices",
+		"POST /api/v1/desktop/devices",
+		"DELETE /api/v1/desktop/devices/{id}",
+		"GET /api/v1/desktop/model-tests/{id}",
+		"GET /api/v1/desktop/models",
+		"POST /api/v1/desktop/models",
+		"DELETE /api/v1/desktop/models/{id}",
+		"PUT /api/v1/desktop/models/{id}",
+		"POST /api/v1/desktop/models/{id}/test",
+		"GET /api/v1/desktop/policy",
+		"PUT /api/v1/desktop/policy",
+		"GET /api/v1/desktop/routes",
+		"PUT /api/v1/desktop/routes",
+		// D-129 平台采集：设备证明登记与工作区采集策略，同样不向智能体提供。
+		"POST /api/v1/desktop/platform/devices",
+		"GET /api/v1/platform-collection/policy",
+		"PUT /api/v1/platform-collection/policy",
 		"POST /api/v1/auth/setup",
 		"POST /api/v1/auth/register",
 		"POST /api/v1/auth/login",
@@ -174,14 +199,77 @@ func TestAG04CatalogShape(t *testing.T) {
 			t.Errorf("条目 %s 缺少执行超时", tool.Name)
 		}
 	}
-	// 附录 A 共 277 条，加第 3.3 节的 4 个元工具。
-	if len(agentCatalog()) != 282 {
-		t.Fatalf("目录条目数 %d，期望 282（附录 A 278 条 + 元工具 4 条）", len(agentCatalog()))
+	// 附录 A 共 280 条，加第 3.3 节的 4 个元工具。
+	if len(agentCatalog()) != 284 {
+		t.Fatalf("目录条目数 %d，期望 284（附录 A 280 条 + 元工具 4 条）", len(agentCatalog()))
 	}
 	for _, d := range agentDomains {
 		if counts[d.Name] == 0 {
 			t.Errorf("领域 %s 没有任何条目", d.Name)
 		}
+	}
+}
+
+func TestToutiaoAgentCatalogUsesShapeAndServerFrozenPackageBasis(t *testing.T) {
+	param := func(name string, tool *AgentTool) *ToolParam {
+		for i := range tool.Params {
+			if tool.Params[i].Name == name {
+				return &tool.Params[i]
+			}
+		}
+		return nil
+	}
+	assertEnum := func(t *testing.T, p *ToolParam, want ...string) {
+		t.Helper()
+		if p == nil {
+			t.Fatal("missing tool parameter")
+		}
+		var schema struct {
+			Enum []string `json:"enum"`
+		}
+		if err := json.Unmarshal(p.Schema, &schema); err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range want {
+			if !slices.Contains(schema.Enum, value) {
+				t.Errorf("enum %v is missing %q", schema.Enum, value)
+			}
+		}
+	}
+	account := agentTool("accounts__create")
+	assertEnum(t, param("platform", account), "toutiao")
+	assertEnum(t, param("content_format", account), "micro_post", "long_article")
+	assertEnum(t, param("content_format", agentTool("works__create")), "micro_post", "long_article")
+	assertEnum(t, param("target_content_format", agentTool("works__derive")), "micro_post", "long_article")
+
+	create := agentTool("toutiao__create_pack")
+	if create == nil || create.Kind != toolW || create.ProposePreview == nil || create.Project == nil {
+		t.Fatal("Toutiao package creation must be a reviewed write with preview and safe projection")
+	}
+	basis := param("basis_revision", create)
+	if basis == nil || basis.Required || basis.Source != "" {
+		t.Fatalf("basis_revision must be optional and server-controlled, got %+v", basis)
+	}
+	get := agentTool("toutiao__get_pack")
+	if get == nil || get.Kind != toolR || get.Path != "/works/{id}/toutiao/pack" {
+		t.Fatal("Toutiao package view must be a read tool mapped to its platform route")
+	}
+	queryBasis := param("basis_revision", get)
+	if queryBasis == nil || !queryBasis.Required || queryBasis.In != "query" {
+		t.Fatalf("package view must require the basis revision query, got %+v", queryBasis)
+	}
+	for _, name := range []string{"metrics__create", "metrics__update", "metrics__confirm_screenshot_row"} {
+		if param("impressions", agentTool(name)) == nil {
+			t.Errorf("%s is missing impressions", name)
+		}
+	}
+	if param("content_format", agentTool("reviews__create")) == nil || param("content_format", agentTool("review__top_works")) == nil {
+		t.Fatal("Toutiao review tools must accept a content format")
+	}
+
+	projected, ok := projectToutiaoPack(200, []byte(`{"platform":"toutiao","content_format":"micro_post","basis_revision":7,"internal_title":"internal","body_text":"private-body","body_chars":12,"topics":["阅读"],"images":[{"file":"images/01.jpg","url":"/api/v1/private","asset_id":"asset","position":1}]}`)).(map[string]any)
+	if !ok || projected["body_text"] != nil || !strings.Contains(agentChangeText(projected["images"]), "images/01.jpg") || strings.Contains(agentChangeText(projected["images"]), "private") {
+		t.Fatalf("Toutiao package projection leaked text or protected image URL: %#v", projected)
 	}
 }
 
