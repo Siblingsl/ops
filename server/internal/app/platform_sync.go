@@ -70,7 +70,7 @@ type platformRun struct {
 // schedulePlatformRuns 是 §10.1.1 的调度入口，由 RunJobs 每 10 分钟调用一次。
 // 只处理同时满足条件[1]的连接；任何不满足的状态都不派新采集任务。
 func (s *Server) schedulePlatformRuns(ctx context.Context) {
-	if !s.cfg.DesktopPlatformEnabled {
+	if !s.platformCollectionGloballyEnabled(ctx) {
 		return
 	}
 	now := s.now()
@@ -342,6 +342,10 @@ func (s *Server) reassignExpiredRun(ctx context.Context, runID, connectionID, wo
 // claimPlatformRun 是 POST /desktop/platform/runs/claim：每台设备一次只返回一条 run。
 // 选择顺序为 manual 优先，其次 created_at 最早。
 func (s *Server) claimPlatformRun(ctx context.Context, deviceID uuid.UUID) (*platformRun, error) {
+	// claim 是最后一道闸门：即使排队时开关是开的，领取时也要重新确认（§17.3）。
+	if !s.platformCollectionGloballyEnabled(ctx) {
+		return nil, apiErr(403, "platform_collection_disabled", "服务端已关闭平台数据采集")
+	}
 	id := ident(ctx)
 	var run platformRun
 	err := s.withTx(ctx, func(tx pgx.Tx) error {

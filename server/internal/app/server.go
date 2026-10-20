@@ -187,6 +187,8 @@ func (s *Server) buildRouter() http.Handler {
 			r.Get("/desktop/platform/runs/{id}/receipts/{seq}", s.h(s.desktopGetPlatformRunReceipt))
 			r.Get("/platform-collection/policy", s.h(s.platformGetPolicy))
 			r.Put("/platform-collection/policy", s.h(s.platformPutPolicy))
+			// 运营诊断（20 文档 §14）：owner 查看本工作区近 7 天计数，不含业务内容。
+			r.Get("/platform-collection/diagnostics", s.h(s.platformDiagnosticsHandler))
 
 			r.Get("/desktop/models", s.h(s.desktopListModels))
 			r.Post("/desktop/models", s.h(s.desktopCreateModel))

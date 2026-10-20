@@ -462,7 +462,14 @@ func (s *Server) adminGetSystemSettings(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"registration_open": reg, "maintenance_mode": maint})
+	killed, err := s.systemBool(r.Context(), platformKillSwitchKey, false)
+	if err != nil {
+		return err
+	}
+	return ok(w, map[string]any{
+		"registration_open": reg, "maintenance_mode": maint,
+		"platform_kill_switch": killed,
+	})
 }
 
 func (s *Server) adminPutSystemSettings(w http.ResponseWriter, r *http.Request) error {
@@ -470,14 +477,23 @@ func (s *Server) adminPutSystemSettings(w http.ResponseWriter, r *http.Request) 
 		return err
 	}
 	var in struct {
-		RegistrationOpen *bool `json:"registration_open"`
-		MaintenanceMode  *bool `json:"maintenance_mode"`
+		RegistrationOpen   *bool `json:"registration_open"`
+		MaintenanceMode    *bool `json:"maintenance_mode"`
+		PlatformKillSwitch *bool `json:"platform_kill_switch"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
-	if in.RegistrationOpen == nil && in.MaintenanceMode == nil {
+	if in.RegistrationOpen == nil && in.MaintenanceMode == nil && in.PlatformKillSwitch == nil {
 		return validation("请指定要修改的开关")
+	}
+	if in.PlatformKillSwitch != nil {
+		// 平台采集总开关（§17.3）：关闭后立即停止领取与提交，不需要重启进程。
+		if err := s.putSystemBool(r.Context(), platformKillSwitchKey, *in.PlatformKillSwitch); err != nil {
+			return err
+		}
+		s.audit(r.Context(), "platform_kill_switch", "system_setting", platformKillSwitchKey, "ok",
+			map[string]any{"kill_switch": *in.PlatformKillSwitch})
 	}
 	if in.RegistrationOpen != nil {
 		if err := s.putSystemBool(r.Context(), "registration_open", *in.RegistrationOpen); err != nil {

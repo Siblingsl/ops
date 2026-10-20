@@ -582,6 +582,8 @@ export interface AdminWorkspace {
 export interface SystemSettings {
   registration_open: boolean
   maintenance_mode: boolean
+  /** 平台采集总开关（20 文档 §17.3）：与部署配置任一关闭即停。 */
+  platform_kill_switch: boolean
 }
 
 export interface WorkspaceInvite {

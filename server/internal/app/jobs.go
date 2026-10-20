@@ -48,6 +48,7 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	s.purgeDeletedSections(ctx)
 	s.metricRemindersJob(ctx)
 	// 平台采集调度（20 文档 §10.1.1）：每 10 分钟按 next_due_at 生成有界任务。
+	s.enforcePlatformGrayThresholds(ctx)
 	s.schedulePlatformRuns(ctx)
 	s.purgeMetricUploads(ctx)
 	s.wechatMetricsDaily(ctx)

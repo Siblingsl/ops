@@ -161,6 +161,18 @@ export default function SettingsAdmin() {
                   />
                 </div>
               </Field>
+              <Field label="平台数据采集总开关">
+                <div className="flex items-center justify-between gap-4">
+                  <p className="text-[13px] text-mist-500">
+                    关闭后立即停止领取新任务并拒绝提交，已领任务按取消处理；与部署配置 <code>OPS_DESKTOP_PLATFORM_ENABLED</code> 任一关闭即停。
+                  </p>
+                  <Switch
+                    checked={!settings.data.platform_kill_switch}
+                    disabled={busy}
+                    onChange={(v) => saveSettings({ platform_kill_switch: !v })}
+                  />
+                </div>
+              </Field>
             </>
           )}
         </div>

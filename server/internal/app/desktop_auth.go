@@ -60,7 +60,7 @@ func (s *Server) desktopCapabilities(w http.ResponseWriter, r *http.Request) err
 		// 不尝试调用任何 `/desktop/platform/*` 端点（20 文档 §11.1）。
 		"platform_collection": map[string]any{
 			"protocol_version": desktopPlatformProtocolVersion,
-			"enabled":          s.cfg.DesktopPlatformEnabled,
+			"enabled":          s.platformCollectionGloballyEnabled(r.Context()),
 			"platforms":        []string{"wechat_mp", "xhs"},
 			"purpose":          desktopPlatformRegisterPurpose,
 			"operations":       platformOperations,
@@ -293,7 +293,8 @@ func (s *Server) desktopRequirePlatformCollectionAccess(ctx context.Context, dev
 	if id == nil || id.AdminOverride {
 		return apiErr(403, "forbidden", "当前身份不能使用平台数据采集")
 	}
-	if !s.cfg.DesktopPlatformEnabled {
+	// 进程配置与 DB 级 kill switch 叠加：任一关闭即停（§17.3）。
+	if !s.platformCollectionGloballyEnabled(ctx) {
 		return apiErr(403, "platform_collection_disabled", "服务端尚未启用平台数据采集")
 	}
 	policy, err := s.platformCollectionPolicy(ctx, id.WorkspaceID)
@@ -326,7 +327,11 @@ func (s *Server) platformGetPolicy(w http.ResponseWriter, r *http.Request) error
 	}
 	policy.WorkspaceID = id.WorkspaceID
 	w.Header().Set("Cache-Control", "no-store")
-	return ok(w, map[string]any{"global_enabled": s.cfg.DesktopPlatformEnabled, "policy": policy})
+	return ok(w, map[string]any{
+		"global_enabled": s.platformCollectionGloballyEnabled(r.Context()),
+		"gray":           s.platformGrayStatus(r.Context()),
+		"policy":         policy,
+	})
 }
 
 // platformPutPolicy 只接受固定键，并要求提交当前 authorization_revision 做版本比较：

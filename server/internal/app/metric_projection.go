@@ -322,15 +322,22 @@ func replaceAutoMetric(ctx context.Context, tx pgx.Tx, proj metricProjection) (M
 }
 
 // metricNodePublic 读取统一入口，供节点视图与绩效样本使用（§8.4）。
+// 它调用数据库函数 metric_node_public()，与 SQL 侧共用同一套“排除 held/superseded、
+// 只认 approved、按来源排序”的规则，避免两处实现口径漂移。
 func (s *Server) metricNodePublic(ctx context.Context, workID uuid.UUID, node *int) ([]Metric, error) {
 	var nodeArg any
 	if node != nil {
 		nodeArg = *node
 	}
-	rows, err := s.db.Query(ctx, `SELECT `+metricCols+` FROM metric_snapshot
-		WHERE work_id=$1 AND quality_state='approved'
-		  AND ($2::int IS NULL OR day_offset <= $2)
-		ORDER BY metric_source_rank(source), captured_at DESC`, workID, nodeArg)
+	// 函数返回的是投影后的列，按 metricCols 的顺序取同名字段。
+	rows, err := s.db.Query(ctx, `SELECT
+		  metric_id, $1::uuid, captured_at, reads, impressions, likes, wows, favorites, comments, shares,
+		  follows_gained, ''::text, source, day_offset, null::text, 0,
+		  coalesce(read_unit,'unknown'), coalesce(share_unit,'unknown'), coalesce(quality_state,'approved'),
+		  observation_id, observed_at, as_of_at,
+		  coalesce(metric_meta,'{}'::jsonb) || jsonb_build_object('missing_fields', to_jsonb(missing_fields))
+		FROM metric_node_public($1, $2)
+		ORDER BY metric_source_rank(source)`, workID, nodeArg)
 	if err != nil {
 		return nil, err
 	}
