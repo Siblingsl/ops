@@ -256,6 +256,19 @@ var platformOperations = []string{
 	"platform.run.receipt",
 }
 
+type desktopVerifiedDeviceKey struct{}
+
+// withDesktopVerifiedDevice 把验签通过的设备写进请求上下文，供处理器读取归属。
+// 挑战在验签时即被消费，之后的处理器不能靠重新解析请求头获得设备身份。
+func withDesktopVerifiedDevice(ctx context.Context, deviceID uuid.UUID) context.Context {
+	return context.WithValue(ctx, desktopVerifiedDeviceKey{}, deviceID)
+}
+
+func desktopVerifiedDevice(ctx context.Context) (uuid.UUID, bool) {
+	id, ok := ctx.Value(desktopVerifiedDeviceKey{}).(uuid.UUID)
+	return id, ok && id != uuid.Nil
+}
+
 func desktopSignaturePayload(c desktopChallenge) []byte {
 	return []byte(fmt.Sprintf("OPS-DESKTOP-CHALLENGE\n%d\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%d",
 		desktopProtocolVersion, c.ID, base64.StdEncoding.EncodeToString(c.Nonce), c.UserID,
@@ -318,6 +331,8 @@ func (s *Server) desktopReadAndVerifyProof(r *http.Request, operation string) ([
 		}
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
+	// 验签通过后把设备绑定写入上下文：后续处理器只认这个值，不再解析请求头。
+	*r = *r.WithContext(withDesktopVerifiedDevice(r.Context(), c.DeviceID))
 	return body, c, nil
 }
 

@@ -81,6 +81,10 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		ae = errNotFound
 	} else if errors.As(err, &pe) && pe.Code == "57014" {
 		ae = apiErr(http.StatusGatewayTimeout, "database_timeout", "数据库操作超时，请稍后重试")
+	} else if errors.As(err, &pe) && pe.Code == "22021" {
+		// PostgreSQL 的 text 不接受 NUL 等编码外字符（例如从别处粘贴进来的 0x00）。
+		// 这是输入问题，不是服务故障，必须回 4xx 而不是 500。
+		ae = validation("内容包含无法保存的字符（如空字符），请删除后重试")
 	} else if !errors.As(err, &ae) {
 		slog.ErrorContext(r.Context(), "请求处理失败", "request_id", middleware.GetReqID(r.Context()), "route", requestRoute(r.Context()), "err", err)
 		ae = apiErr(500, "internal", "服务器内部错误，请稍后重试")
@@ -148,11 +152,26 @@ func pathID(r *http.Request, name string) (uuid.UUID, error) {
 
 func chiParam(r *http.Request, name string) string { return chi.URLParam(r, name) }
 
+// pathInt 解析路径里的非负整数，用于 ID 之外的序号（如批次回执的 seq）。
+func pathInt(r *http.Request, name string) (int, error) {
+	n, err := strconv.Atoi(chi.URLParam(r, name))
+	if err != nil || n < 0 {
+		return 0, errNotFound
+	}
+	return n, nil
+}
+
 func queryInt(r *http.Request, name string, def int) int {
 	if v, err := strconv.Atoi(r.URL.Query().Get(name)); err == nil {
 		return v
 	}
 	return def
+}
+
+// queryText 读取用户输入的检索词并去掉 PostgreSQL 文本无法存储的 NUL。
+// 浏览器可以把 %00 原样送上来，不做清洗会让 ILIKE 查询直接报编码错误并返回 500。
+func queryText(r *http.Request, name string) string {
+	return strings.ReplaceAll(strings.TrimSpace(r.URL.Query().Get(name)), "\x00", "")
 }
 
 func runeLen(s string) int { return len([]rune(s)) }

@@ -177,6 +177,14 @@ func (s *Server) buildRouter() http.Handler {
 			// 平台采集一律走 /desktop/platform/*，与 AI 的 /desktop/* 命名分开；
 			// 首个端点只做设备登记，任务/连接端点在 DEV-PS04/07 接入。
 			r.Post("/desktop/platform/devices", s.h(s.desktopPlatformRegisterDevice))
+			// 平台采集的连接与任务端点（DEV-PS07）：全部要求设备证明，见 PS02 的 operation 白名单。
+			r.Post("/desktop/platform/connections", s.h(s.desktopCreatePlatformConnection))
+			r.Post("/desktop/platform/connections/{id}/verify", s.h(s.desktopVerifyPlatformConnection))
+			r.Post("/desktop/platform/presence", s.h(s.desktopPlatformPresence))
+			r.Post("/desktop/platform/runs/claim", s.h(s.desktopClaimPlatformRun))
+			r.Post("/desktop/platform/runs/{id}/heartbeat", s.h(s.desktopHeartbeatPlatformRun))
+			r.Post("/desktop/platform/runs/{id}/results", s.h(s.desktopSubmitPlatformResults))
+			r.Get("/desktop/platform/runs/{id}/receipts/{seq}", s.h(s.desktopGetPlatformRunReceipt))
 			r.Get("/platform-collection/policy", s.h(s.platformGetPolicy))
 			r.Put("/platform-collection/policy", s.h(s.platformPutPolicy))
 
@@ -347,6 +355,8 @@ func (s *Server) buildRouter() http.Handler {
 			// 平台连接摘要与撤销（20 文档 §11.2）。创建/验证连接由本机证明在 PS07 接入。
 			r.Get("/accounts/{accountId}/platform-connection", s.h(s.getPlatformConnection))
 			r.Delete("/accounts/{accountId}/platform-connection", s.h(s.deletePlatformConnection))
+			// 手动采集只建待办，且仅连接保管人可发起（20 文档 §10.1.1）。
+			r.Post("/accounts/{accountId}/platform-sync", s.h(s.requestPlatformSync))
 			r.Get("/works/{id}/metrics", s.h(s.listMetrics))
 			r.Post("/works/{id}/metrics", s.h(s.createMetric))
 			r.Patch("/metrics/{id}", s.h(s.updateMetric))

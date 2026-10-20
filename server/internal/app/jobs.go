@@ -47,6 +47,8 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	}
 	s.purgeDeletedSections(ctx)
 	s.metricRemindersJob(ctx)
+	// 平台采集调度（20 文档 §10.1.1）：每 10 分钟按 next_due_at 生成有界任务。
+	s.schedulePlatformRuns(ctx)
 	s.purgeMetricUploads(ctx)
 	s.wechatMetricsDaily(ctx)
 	s.day7PrefsJob(ctx)
@@ -166,7 +168,7 @@ func (s *Server) SeedDevModel(ctx context.Context) error {
 
 func (s *Server) seedDevModelFor(ctx context.Context, ws uuid.UUID) error {
 	var exists bool
-	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM model_provider WHERE workspace_id=$1)`, ws).Scan(&exists); err != nil || exists {
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM model_provider WHERE workspace_id=$1 AND execution_location='server')`, ws).Scan(&exists); err != nil || exists {
 		return err
 	}
 	enc, err := s.box.Encrypt("local-dev-key")
