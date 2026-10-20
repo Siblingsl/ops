@@ -164,8 +164,10 @@ func (s *Server) applyArticleTotal(ctx context.Context, a *Account, art wechat.A
 	return err
 }
 
-// matchArticle: exact msgid first; else normalized title equal and publish date within ±1 day
-// of the send date. Ambiguous or missing matches go to the pending list, never guessed.
+// matchArticle: exact msgid first. Title matching no longer binds automatically (D-129 / 20 文档 §7.2):
+// a normalized-title hit only proves similarity, not ownership, so it is reported as legacy_title and
+// left for one-by-one human confirmation; writing wechat_msgid here would make every later browser
+// sync treat a guess as a verified binding.
 func (s *Server) matchArticle(ctx context.Context, accountID uuid.UUID, msgid, title string, refDate time.Time) (*uuid.UUID, string, error) {
 	var id uuid.UUID
 	err := s.db.QueryRow(ctx, `SELECT id FROM work WHERE account_id=$1 AND wechat_msgid=$2 AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1`, accountID, msgid).Scan(&id)
@@ -181,26 +183,22 @@ func (s *Server) matchArticle(ctx context.Context, accountID uuid.UUID, msgid, t
 		return nil, "", err
 	}
 	want := normTitle(title)
-	var hits []uuid.UUID
+	hits := 0
 	for rows.Next() {
 		var wid uuid.UUID
 		var wt string
 		if rows.Scan(&wid, &wt) == nil && want != "" && normTitle(wt) == want {
-			hits = append(hits, wid)
+			hits++
 		}
 	}
 	rows.Close()
-	switch len(hits) {
-	case 0:
+	if hits == 0 {
 		return nil, "none", nil
-	case 1:
-		if _, err := s.db.Exec(ctx, `UPDATE work SET wechat_msgid=$2 WHERE id=$1 AND wechat_msgid IS NULL`, hits[0], msgid); err != nil {
-			return nil, "", err
-		}
-		return &hits[0], "", nil
-	default:
-		return nil, "ambiguous", nil
 	}
+	if hits == 1 {
+		return nil, "legacy_title", nil
+	}
+	return nil, "ambiguous", nil
 }
 
 // writeArticleDetails stores each cumulative day as one wechat_api node (day = stat_date - ref_date).
@@ -217,8 +215,12 @@ func (s *Server) writeArticleDetails(ctx context.Context, workID uuid.UUID, msgi
 		}
 		reads, favs, shares := d.IntPageReadUser, d.AddToFavUser, d.ShareUser
 		ext := msgid
-		if _, _, err := upsertMetric(ctx, s.db, metricWrite{WorkID: workID, CapturedAt: stat.Add(23*time.Hour + 59*time.Minute),
-			Source: "wechat_api", DayOffset: &day, ExternalID: &ext, Reads: &reads, Favorites: &favs, Shares: &shares}); err != nil {
+		err = s.withTx(ctx, func(tx pgx.Tx) error {
+			_, _, err := s.upsertMetricWithAudit(ctx, tx, metricWrite{WorkID: workID, CapturedAt: stat.Add(23*time.Hour + 59*time.Minute),
+				Source: "wechat_api", DayOffset: &day, ExternalID: &ext, Reads: &reads, Favorites: &favs, Shares: &shares})
+			return err
+		})
+		if err != nil {
 			return n, err
 		}
 		n++

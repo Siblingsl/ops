@@ -145,6 +145,9 @@ func (s *Server) buildRouter() http.Handler {
 			r.Use(s.requireDesktopAccountSession)
 			r.Get("/desktop/devices", s.h(s.desktopListDevices))
 			r.Delete("/desktop/devices/{id}", s.h(s.desktopRevokeOwnDevice))
+			// 账户级回收：失去工作区后仍能收回本人设备上的平台连接（20 文档 §11.1，只减权）。
+			r.Get("/desktop/platform/connections/mine", s.h(s.listMinePlatformConnections))
+			r.Delete("/desktop/platform/connections/{id}", s.h(s.revokeMinePlatformConnection))
 		})
 		r.Get("/auth/status", s.h(s.authStatus))
 		r.Post("/auth/setup", s.h(s.authSetup))
@@ -336,8 +339,14 @@ func (s *Server) buildRouter() http.Handler {
 			r.Get("/works/{id}/toutiao/pack", s.h(s.toutiaoPackGet))
 			r.Get("/works/{id}/toutiao/pack.zip", s.h(s.toutiaoPackZip))
 			r.Post("/works/{id}/published", s.h(s.markPublished))
+			// 平台作品绑定逐篇确认（20 文档 §7.2）：没有批量接口，每次只处理一篇。
+			r.Put("/works/{id}/platform-binding", s.h(s.putPlatformBinding))
+			r.Delete("/works/{id}/platform-binding", s.h(s.deletePlatformBinding))
 
 			r.Get("/accounts/{accountId}/board", s.h(s.board))
+			// 平台连接摘要与撤销（20 文档 §11.2）。创建/验证连接由本机证明在 PS07 接入。
+			r.Get("/accounts/{accountId}/platform-connection", s.h(s.getPlatformConnection))
+			r.Delete("/accounts/{accountId}/platform-connection", s.h(s.deletePlatformConnection))
 			r.Get("/works/{id}/metrics", s.h(s.listMetrics))
 			r.Post("/works/{id}/metrics", s.h(s.createMetric))
 			r.Patch("/metrics/{id}", s.h(s.updateMetric))

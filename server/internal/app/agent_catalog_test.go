@@ -161,6 +161,13 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/desktop/platform/devices",
 		"GET /api/v1/platform-collection/policy",
 		"PUT /api/v1/platform-collection/policy",
+		// D-129 平台连接与作品绑定：连接/授权/绑定只能由用户逐条操作，智能体不提供工具。
+		"GET /api/v1/accounts/{accountId}/platform-connection",
+		"DELETE /api/v1/accounts/{accountId}/platform-connection",
+		"GET /api/v1/desktop/platform/connections/mine",
+		"DELETE /api/v1/desktop/platform/connections/{id}",
+		"PUT /api/v1/works/{id}/platform-binding",
+		"DELETE /api/v1/works/{id}/platform-binding",
 		"POST /api/v1/auth/setup",
 		"POST /api/v1/auth/register",
 		"POST /api/v1/auth/login",

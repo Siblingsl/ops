@@ -76,7 +76,7 @@ func TestDR01MetricNodes(t *testing.T) {
 	if m3.DayOffset == nil || *m3.DayOffset != 3 || m3.Merged {
 		t.Fatalf("day 3 should be a new node: %+v", m3)
 	}
-	env.expectErr(t, "PATCH", "/api/v1/metrics/"+m3.ID.String(), map[string]any{"captured_at": pub.Add(14 * time.Hour), "reads": 300}, "validation_failed")
+	env.expectErr(t, "PATCH", "/api/v1/metrics/"+m3.ID.String(), map[string]any{"base_revision": m3.Revision, "captured_at": pub.Add(14 * time.Hour), "reads": 300}, "validation_failed")
 
 	// 粘贴回填与手动录入分开保存，同节点互不覆盖。
 	var imp struct {
@@ -176,7 +176,8 @@ func TestDR03WechatDatacubeSync(t *testing.T) {
 	}
 	var s1 syncOut
 	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/sync-wechat", nil, &s1)
-	if s1.Result.Days != 7 || s1.Result.Articles != 4 || s1.Result.Matched != 2 || s1.Result.Unmatched != 2 || s1.Result.Written != 4 {
+	// D-129：标题相同但编号未经确认的文章不再自动绑定，只落待确认（legacy_title）。
+	if s1.Result.Days != 7 || s1.Result.Articles != 4 || s1.Result.Matched != 1 || s1.Result.Unmatched != 3 || s1.Result.Written != 3 {
 		t.Fatalf("first sync: %+v", s1.Result)
 	}
 	var reads, day int
@@ -186,10 +187,12 @@ func TestDR03WechatDatacubeSync(t *testing.T) {
 		Scan(&reads, &day, &likes, &ext); err != nil || reads != 220 || day != 2 || likes != nil || ext != "2247480001_1" {
 		t.Fatalf("cumulative node for exact match: reads=%d day=%d likes=%v ext=%s err=%v", reads, day, likes, ext, err)
 	}
+	// 标题匹配不再写编号：编号只能由精确链接、用户确认或官方审计建立。
 	var msgid *string
-	_ = env.srv.db.QueryRow(ctx, `SELECT wechat_msgid FROM work WHERE id=$1`, byTitle.ID).Scan(&msgid)
-	if msgid == nil || *msgid != "2247480002_1" {
-		t.Fatalf("title match should remember msgid: %v", msgid)
+	var bindingSource *string
+	_ = env.srv.db.QueryRow(ctx, `SELECT wechat_msgid, platform_binding_source FROM work WHERE id=$1`, byTitle.ID).Scan(&msgid, &bindingSource)
+	if msgid != nil || bindingSource != nil {
+		t.Fatalf("title similarity must not create a binding: msgid=%v source=%v", msgid, bindingSource)
 	}
 
 	var s2 syncOut
@@ -200,22 +203,30 @@ func TestDR03WechatDatacubeSync(t *testing.T) {
 
 	var pending []unmatchedRow
 	env.mustJSON(t, "GET", "/api/v1/accounts/"+a.ID.String()+"/metrics/unmatched", nil, &pending)
-	if len(pending) != 2 {
+	if len(pending) != 3 {
 		t.Fatalf("pending list: %+v", pending)
 	}
-	var twin, outside unmatchedRow
+	var twin, outside, similar unmatchedRow
 	for _, p := range pending {
-		if p.ExternalID == "2247480003_1" {
+		switch p.ExternalID {
+		case "2247480003_1":
 			twin = p
-		} else {
+		case "2247480002_1":
+			similar = p
+		default:
 			outside = p
 		}
 	}
 	if twin.Reason != "ambiguous" || outside.Reason != "none" || twin.Reads == nil || *twin.Reads != 40 {
 		t.Fatalf("pending reasons: %+v %+v", twin, outside)
 	}
+	if similar.Reason != "legacy_title" {
+		t.Fatalf("title-only match must stay pending as legacy_title: %+v", similar)
+	}
 	env.mustJSON(t, "POST", "/api/v1/metrics/unmatched/"+twin.ID.String()+"/assign", map[string]any{"work_id": twinA.ID}, nil)
 	env.mustJSON(t, "POST", "/api/v1/metrics/unmatched/"+outside.ID.String()+"/ignore", nil, nil)
+	// 只靠标题相似的那一条也要人逐条确认后才绑定，不能被下一次同步自动收编。
+	env.mustJSON(t, "POST", "/api/v1/metrics/unmatched/"+similar.ID.String()+"/assign", map[string]any{"work_id": byTitle.ID}, nil)
 	env.expectErr(t, "POST", "/api/v1/metrics/unmatched/"+outside.ID.String()+"/ignore", nil, "state_invalid")
 	if n := metricCount(t, twinA.ID); n != 2 {
 		t.Fatalf("assigned work should get 2 nodes, got %d", n)

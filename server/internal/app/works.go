@@ -81,6 +81,8 @@ type Work struct {
 	WechatDraftMediaID  *string         `json:"wechat_draft_media_id"`
 	PublishedURL        *string         `json:"published_url"`
 	PublishedAt         *time.Time      `json:"published_at"`
+	PublishRevision     int             `json:"publish_revision"`
+	WorkPlatformBinding
 	Locked              bool            `json:"locked"`
 	Revision            int             `json:"revision"`
 	Sections            []Section       `json:"sections"`
@@ -195,26 +197,36 @@ func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 	var sourceCurrentRevision *int
 	var sourceDeletedAt *time.Time
 	var topicAngle *string
+	var wechatMsgID, xhsNoteID *string
 	err := s.db.QueryRow(ctx, `SELECT w.id, w.account_id, a.platform, a.name, w.topic_id, t.angle, w.source_work_id, w.source_revision,
 		w.content_format, w.status, w.title, w.summary, w.viewpoint, w.outline, w.outline_confirmed_at, w.theme, w.cover_asset_id,
-		w.cover_crops, w.wechat_fields, w.topics, w.tags, w.wechat_draft_media_id, w.published_url, w.published_at, w.locked, w.revision,
+		w.cover_crops, w.wechat_fields, w.topics, w.tags, w.wechat_draft_media_id, w.published_url, w.published_at, w.publish_revision, w.locked, w.revision,
 		coalesce(w.draft_maybe_published,false), coalesce(t.audience,''), coalesce(t.hook,''), to_char(w.planned_date,'YYYY-MM-DD'), w.target_chars,
 		w.post_push_todos, w.title_favorites, w.assignee_id, w.reviewer_id, w.review_required, w.reviewed_by, w.reviewed_at, w.created_at, w.updated_at,
 		coalesce((SELECT jsonb_agg(wm.material_id) FROM work_material wm WHERE wm.work_id=w.id), '[]'::jsonb),
 		coalesce((SELECT jsonb_agg(jsonb_build_object('id', d.id, 'title', d.title, 'account_name', da.name, 'platform', da.platform) ORDER BY d.created_at)
 			FROM work d JOIN platform_account da ON da.id=d.account_id WHERE d.source_work_id=w.id AND d.deleted_at IS NULL), '[]'::jsonb),
-		source.title, sa.name, sa.platform, source.revision, source.deleted_at
+		source.title, sa.name, sa.platform, source.revision, source.deleted_at,
+		w.wechat_msgid, w.xhs_note_id, w.metric_binding_revision, w.metric_binding_confirmed_at,
+		w.platform_binding_source, w.platform_binding_verified_at
 		FROM work w JOIN platform_account a ON a.id=w.account_id LEFT JOIN topic t ON t.id=w.topic_id
 		LEFT JOIN work source ON source.id=w.source_work_id LEFT JOIN platform_account sa ON sa.id=source.account_id
 		WHERE w.id=$1 AND a.workspace_id=$2 AND w.deleted_at IS NULL`, id, ident(ctx).WorkspaceID).Scan(
 		&w.ID, &w.AccountID, &w.Platform, &w.AccountName, &w.TopicID, &topicAngle, &sourceID, &sourceRevision,
 		&w.ContentFormat, &w.Status, &w.Title, &w.Summary, &w.Viewpoint, &outline, &w.OutlineConfirmedAt, &w.Theme, &w.CoverAssetID,
-		&w.CoverCrops, &wf, &w.Topics, &w.Tags, &w.WechatDraftMediaID, &w.PublishedURL, &w.PublishedAt, &w.Locked, &w.Revision,
+		&w.CoverCrops, &wf, &w.Topics, &w.Tags, &w.WechatDraftMediaID, &w.PublishedURL, &w.PublishedAt, &w.PublishRevision, &w.Locked, &w.Revision,
 		&w.DraftMaybePublished, &w.TopicAudience, &w.TopicHook, &w.PlannedDate, &w.TargetChars,
 		&w.PostPushTodos, &w.TitleFavorites, &w.AssigneeID, &w.ReviewerID, &w.ReviewRequired, &w.ReviewedBy, &w.ReviewedAt, &w.CreatedAt, &w.UpdatedAt,
-		&materialIDs, &derived, &sourceTitle, &sourceAccountName, &sourcePlatform, &sourceCurrentRevision, &sourceDeletedAt)
+		&materialIDs, &derived, &sourceTitle, &sourceAccountName, &sourcePlatform, &sourceCurrentRevision, &sourceDeletedAt,
+		&wechatMsgID, &xhsNoteID, &w.MetricBindingRevision, &w.MetricBindingAt,
+		&w.PlatformBindingSource, &w.PlatformBindingAt)
 	if err != nil {
 		return nil, err
+	}
+	if w.Platform == "xhs" {
+		w.ExternalID = xhsNoteID
+	} else {
+		w.ExternalID = wechatMsgID
 	}
 	if topicAngle != nil {
 		w.TopicAngle = *topicAngle
@@ -275,9 +287,13 @@ func (s *Server) writeWork(w http.ResponseWriter, r *http.Request, id uuid.UUID)
 	return ok(w, wk)
 }
 
-func (s *Server) insertWork(ctx context.Context, a *Account, topicID *uuid.UUID, title, _ string) (uuid.UUID, error) {
+func (s *Server) insertWork(ctx context.Context, a *Account, topicID *uuid.UUID, title, requestedFormat, sourceFormat string) (uuid.UUID, error) {
 	if a.Status != "active" {
 		return uuid.Nil, stateInvalid("账号已停用，不能新建作品")
+	}
+	format, err := resolveCreationFormat(a, requestedFormat, sourceFormat)
+	if err != nil {
+		return uuid.Nil, err
 	}
 	p, err := s.loadProfile(ctx, a.ID)
 	if err != nil {
@@ -286,7 +302,7 @@ func (s *Server) insertWork(ctx context.Context, a *Account, topicID *uuid.UUID,
 	wf, _ := json.Marshal(p.WechatDefaults)
 	var id uuid.UUID
 	err = s.db.QueryRow(ctx, `INSERT INTO work (account_id, topic_id, content_format, title, theme, wechat_fields) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		a.ID, topicID, a.ContentFormat, truncateRunes(strings.TrimSpace(title), 64), p.DefaultTheme, wf).Scan(&id)
+		a.ID, topicID, format, truncateRunes(strings.TrimSpace(title), 64), p.DefaultTheme, wf).Scan(&id)
 	if err == nil {
 		s.audit(ctx, "work_create", "work", id.String(), "ok", nil)
 	}
@@ -307,12 +323,13 @@ func (s *Server) createWork(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		Title string `json:"title"`
+		Title         string `json:"title"`
+		ContentFormat string `json:"content_format"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
-	id, err := s.insertWork(r.Context(), a, nil, in.Title, "")
+	id, err := s.insertWork(r.Context(), a, nil, in.Title, in.ContentFormat, "")
 	if err != nil {
 		return err
 	}
@@ -368,7 +385,7 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 		args = append(args, ident(r.Context()).UserID)
 		sql += fmt.Sprintf(` AND w.assignee_id = $%d`, len(args))
 	}
-	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+	if q := queryText(r, "q"); q != "" {
 		args = append(args, "%"+q+"%")
 		sql += fmt.Sprintf(` AND w.title ILIKE $%d`, len(args))
 	}
@@ -413,18 +430,19 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		Title        *string            `json:"title"`
-		BaseRevision *int               `json:"base_revision"`
-		Summary      *string            `json:"summary"`
-		Viewpoint    *string            `json:"viewpoint"`
-		Theme        *string            `json:"theme"`
-		CoverAssetID *uuid.UUID         `json:"cover_asset_id"`
-		ClearCover   bool               `json:"clear_cover"`
-		CoverCrops   map[string]cropBox `json:"cover_crops"`
-		WechatFields *WechatDefaults    `json:"wechat_fields"`
-		Topics       []string           `json:"topics"`
-		Tags         []string           `json:"tags"`
-		MaterialIDs  []uuid.UUID        `json:"material_ids"`
+		Title         *string            `json:"title"`
+		ContentFormat json.RawMessage    `json:"content_format"`
+		BaseRevision  *int               `json:"base_revision"`
+		Summary       *string            `json:"summary"`
+		Viewpoint     *string            `json:"viewpoint"`
+		Theme         *string            `json:"theme"`
+		CoverAssetID  *uuid.UUID         `json:"cover_asset_id"`
+		ClearCover    bool               `json:"clear_cover"`
+		CoverCrops    map[string]cropBox `json:"cover_crops"`
+		WechatFields  *WechatDefaults    `json:"wechat_fields"`
+		Topics        []string           `json:"topics"`
+		Tags          []string           `json:"tags"`
+		MaterialIDs   []uuid.UUID        `json:"material_ids"`
 
 		PlannedDate    *string         `json:"planned_date"`
 		TargetChars    *int            `json:"target_chars"`
@@ -435,6 +453,9 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 	}
 	if err := decode(r, &in); err != nil {
 		return err
+	}
+	if in.ContentFormat != nil {
+		return validation("作品形态创建后不能直接修改，请按目标形态新建作品")
 	}
 	ctx := r.Context()
 	if err := s.applyWorkPlanning(ctx, m, workPlanning{in.PlannedDate, in.TargetChars, in.ReviewRequired, in.AssigneeID, in.ReviewerID, in.PostPushTodos}); err != nil {
@@ -491,7 +512,7 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if in.Title != nil || in.Summary != nil {
+	if in.Title != nil || in.Summary != nil || in.MaterialIDs != nil {
 		if err := s.checkWorkRevision(ctx, tx, m, in.BaseRevision); err != nil {
 			return err
 		}
@@ -586,6 +607,9 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	if in.MaterialIDs != nil {
+		if err := lockMaterialRowsForShare(ctx, tx, ident(ctx).WorkspaceID, m.Account.ID, in.MaterialIDs); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM work_material WHERE work_id=$1`, m.ID); err != nil {
 			return err
 		}
@@ -649,20 +673,11 @@ func (s *Server) unlockWork(w http.ResponseWriter, r *http.Request) error {
 
 // ---------- 版本 ----------
 
-func (s *Server) snapshot(ctx context.Context, tx pgx.Tx, workID uuid.UUID) ([]byte, error) {
-	var title, summary, viewpoint string
-	var outline []byte
-	if err := tx.QueryRow(ctx, `SELECT title, summary, viewpoint, outline FROM work WHERE id=$1`, workID).Scan(&title, &summary, &viewpoint, &outline); err != nil {
-		return nil, err
-	}
-	secs, err := s.loadSections(ctx, tx, workID)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(map[string]any{"title": title, "summary": summary, "viewpoint": viewpoint, "outline": json.RawMessage(outline), "sections": secs})
-}
-
 func (s *Server) addVersion(ctx context.Context, tx pgx.Tx, workID uuid.UUID, reason string) error {
+	var lockedID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM work WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, workID).Scan(&lockedID); err != nil {
+		return err
+	}
 	if reason == "auto" {
 		var recent bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM work_version WHERE work_id=$1 AND created_at > now() - interval '10 minutes')`, workID).Scan(&recent); err != nil {
@@ -729,7 +744,12 @@ func (s *Server) getVersion(w http.ResponseWriter, r *http.Request) error {
 	if err := s.db.QueryRow(r.Context(), `SELECT snapshot FROM work_version WHERE work_id=$1 AND version_no=$2`, m.ID, queryIntParam(r, "no")).Scan(&snap); err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"snapshot": snap})
+	current, err := s.loadWork(r.Context(), m.ID)
+	if err != nil {
+		return err
+	}
+	preview := s.assessVersionRestore(r.Context(), m.ID, m.Account.ID, snap, current)
+	return ok(w, map[string]any{"snapshot": snap, "restore_preview": preview})
 }
 
 func (s *Server) createManualVersion(w http.ResponseWriter, r *http.Request) error {
@@ -752,51 +772,71 @@ func (s *Server) restoreVersion(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
-	var snap struct {
-		Title     string          `json:"title"`
-		Summary   string          `json:"summary"`
-		Viewpoint string          `json:"viewpoint"`
-		Outline   json.RawMessage `json:"outline"`
-		Sections  []Section       `json:"sections"`
+	var in struct {
+		BaseRevision *int `json:"base_revision"`
+	}
+	if err := decodeOptional(r, &in); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('card-order:' || $1::text,0))`, m.ID.String()); err != nil {
+		return err
+	}
+	if err := lockVersionSections(ctx, tx, m.ID); err != nil {
+		return err
+	}
+	if err := s.checkWorkRevision(ctx, tx, m, in.BaseRevision); err != nil {
+		return err
+	}
+	var currentLocked bool
+	var currentFormat string
+	if err := tx.QueryRow(ctx, `SELECT locked,content_format FROM work WHERE id=$1`, m.ID).Scan(&currentLocked, &currentFormat); err != nil {
+		return err
+	}
+	if currentLocked {
+		return stateInvalid("已发布的作品默认只读。如需修改，请先「解锁编辑」。修改不会同步到平台。")
 	}
 	var raw []byte
-	if err := s.db.QueryRow(ctx, `SELECT snapshot FROM work_version WHERE work_id=$1 AND version_no=$2`, m.ID, queryIntParam(r, "no")).Scan(&raw); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT snapshot FROM work_version WHERE work_id=$1 AND version_no=$2`, m.ID, queryIntParam(r, "no")).Scan(&raw); err != nil {
 		return err
 	}
-	if err := json.Unmarshal(raw, &snap); err != nil {
-		return err
-	}
-	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		if err := s.addVersion(ctx, tx, m.ID, "manual"); err != nil {
-			return err
-		}
-		if len(snap.Outline) == 0 {
-			snap.Outline = json.RawMessage("[]")
-		}
-		if _, err := tx.Exec(ctx, `UPDATE work SET title=$2, summary=$3, viewpoint=$4, outline=$5 WHERE id=$1`, m.ID, snap.Title, snap.Summary, snap.Viewpoint, []byte(snap.Outline)); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM work_section WHERE work_id=$1`, m.ID); err != nil {
-			return err
-		}
-		for i, sec := range snap.Sections {
-			if sec.SourceSectionIDs == nil {
-				sec.SourceSectionIDs = []uuid.UUID{}
-			}
-			if sec.MaterialIDs == nil {
-				sec.MaterialIDs = []uuid.UUID{}
-			}
-			if _, err := tx.Exec(ctx, `INSERT INTO work_section (id, work_id, position, heading, key_point, content_md, origin, source_section_ids, material_ids)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, sec.ID, m.ID, i, sec.Heading, sec.KeyPoint, sec.ContentMD, nz(sec.Origin, "human"), sec.SourceSectionIDs, sec.MaterialIDs); err != nil {
-				return err
-			}
-		}
-		if err := s.touchContent(ctx, tx, m.ID); err != nil {
-			return err
-		}
-		return s.addVersion(ctx, tx, m.ID, "restore")
-	})
+	snap, legacy, err := decodeWorkVersionSnapshot(raw, currentFormat)
 	if err != nil {
+		return versionRestoreUnsupported(err.Error(), nil)
+	}
+	if legacy {
+		var hasStructures bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM work_card WHERE work_id=$1) OR EXISTS(SELECT 1 FROM comic_panel WHERE work_id=$1)`, m.ID).Scan(&hasStructures); err != nil {
+			return err
+		}
+		if hasStructures {
+			return versionRestoreUnsupported("旧文字快照不能覆盖当前卡片或漫画结构", nil)
+		}
+	}
+	missing, err := s.validateVersionDependencies(ctx, tx, m.ID, m.Account.ID, snap, legacy, true)
+	if err != nil {
+		return err
+	}
+	if len(missing) > 0 {
+		return versionRestoreUnsupported("快照关联资源缺失或已离开当前作品范围", missing)
+	}
+	if err := s.addVersion(ctx, tx, m.ID, "manual"); err != nil {
+		return err
+	}
+	if err := s.restoreVersionSnapshot(ctx, tx, m.ID, snap, legacy); err != nil {
+		return err
+	}
+	if err := s.touchContent(ctx, tx, m.ID); err != nil {
+		return err
+	}
+	if err := s.addVersion(ctx, tx, m.ID, "restore"); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	s.audit(ctx, "version_restore", "work", m.ID.String(), "ok", map[string]any{"version": queryIntParam(r, "no")})
