@@ -28,6 +28,11 @@ import {
   type PlatformIPCEnvelope,
   type PlatformIPCError
 } from './platform-ipc';
+import {
+  findPlatformBrowser,
+  PlatformBrowserError,
+  probePlatformBrowser
+} from './platform-worker';
 import { parseDesktopUiIntent, type DesktopUiIntent } from './ui-intents';
 import {
   buildDesktopRequestHeaders,
@@ -936,6 +941,13 @@ function registerIpcHandlers(): void {
     assertTrustedLocalSender(event);
     return runPlatformCommand(raw);
   });
+
+  // 浏览器探测单独一条通道：拉起浏览器比其它本机命令慢，不能共用 5 秒超时。
+  ipcHandle('settings:platform-browser', async (event, raw) => {
+    assertTrustedLocalSender(event);
+    const force = raw !== null && typeof raw === 'object' && (raw as { refresh?: unknown }).refresh === true;
+    return readPlatformBrowserStatus(force);
+  });
 }
 
 // 平台命令的单一执行入口：先校验信封、命令白名单与参数形状，再单飞执行；
@@ -961,12 +973,14 @@ async function runPlatformCommand(raw: unknown): Promise<{ ok: true; data?: unkn
 async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<unknown> {
   switch (envelope.cmd) {
     case 'read-status': {
-      // 只回报能力摘要，不含本机路径或会话内容。
+      // 只回报能力摘要与浏览器探测结论，不含本机路径或会话内容。
       const capability = await desktopClient?.getPlatformCollectionCapability();
+      const browser = await readPlatformBrowserStatus();
       return {
         supported: capability ? capability.enabled : false,
         protocolVersion: capability?.protocol_version ?? null,
-        platforms: capability?.platforms ?? []
+        platforms: capability?.platforms ?? [],
+        browser
       };
     }
     case 'open-login':
@@ -981,6 +995,65 @@ async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<un
     default:
       throw new PlatformIPCErrorException('ipc_unknown_command', '不支持的本机命令');
   }
+}
+
+// 浏览器探测结论只在主进程缓存：一次会话里浏览器不会中途换，重复探测只会反复拉起进程。
+// 缓存的是结论而不是候选路径，对外结构里不出现任何本机路径。
+interface PlatformBrowserStatus {
+  state: 'ready' | 'unsupported' | 'launch_failed'
+  family: string | null
+  name: string | null
+  version: string | null
+  major: number | null
+  errorCode: string | null
+  checkedAt: string
+}
+
+let platformBrowserStatus: PlatformBrowserStatus | null = null;
+let platformBrowserProbe: Promise<PlatformBrowserStatus> | null = null;
+
+async function readPlatformBrowserStatus(force = false): Promise<PlatformBrowserStatus> {
+  if (!force && platformBrowserStatus) return platformBrowserStatus;
+  if (!force && platformBrowserProbe) return platformBrowserProbe;
+  platformBrowserProbe = probePlatformBrowserOnce().finally(() => {
+    platformBrowserProbe = null;
+  });
+  return platformBrowserProbe;
+}
+
+async function probePlatformBrowserOnce(): Promise<PlatformBrowserStatus> {
+  const checkedAt = new Date().toISOString();
+  try {
+    const candidate = await findPlatformBrowser();
+    // 用一次性临时 profile 探测，不碰任何真实连接的会话目录。
+    const probeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ops-platform-probe-'));
+    try {
+      const probe = await probePlatformBrowser({ candidate, profileDir: probeDir });
+      platformBrowserStatus = {
+        state: 'ready',
+        family: probe.family,
+        name: probe.name,
+        version: probe.version,
+        major: probe.major,
+        errorCode: null,
+        checkedAt
+      };
+    } finally {
+      await fs.rm(probeDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  } catch (error) {
+    const code = error instanceof PlatformBrowserError ? error.code : 'platform_browser_launch_failed';
+    platformBrowserStatus = {
+      state: code === 'platform_browser_unsupported' ? 'unsupported' : 'launch_failed',
+      family: null,
+      name: null,
+      version: null,
+      major: null,
+      errorCode: code,
+      checkedAt
+    };
+  }
+  return platformBrowserStatus;
 }
 
 function ipcHandle<T>(

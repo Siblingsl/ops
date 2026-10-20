@@ -28,5 +28,7 @@ contextBridge.exposeInMainWorld('opsDesktopSettings', {
   // 平台采集的本机命令（20 文档 §11.4）：固定信封 {v,id,cmd,payload}，
   // 命令白名单在 main 侧再校验一次，页面不能借这里调用任意通道。
   platformCommand: (envelope: { v: number; id: string; cmd: string; payload?: unknown }) =>
-    ipcRenderer.invoke('settings:platform-command', envelope)
+    ipcRenderer.invoke('settings:platform-command', envelope),
+  // 平台浏览器探测结论（D-129 v0.5）：只回品牌、版本与错误码，不含本机路径。
+  platformBrowser: (input?: { refresh?: boolean }) => ipcRenderer.invoke('settings:platform-browser', input)
 });

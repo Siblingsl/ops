@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>OPS Desktop 设置</title>
+    <link rel="stylesheet" href="/settings.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header class="desktop-window-titlebar" aria-label="OPS 应用标题栏">
+        <div class="desktop-window-brand"><span class="desktop-window-mark" aria-hidden="true">✦</span><strong>OPS</strong><span>创作空间</span></div>
+        <nav class="desktop-window-menus" aria-label="应用菜单">
+          <a href="ops-desktop://ui/menu/client" target="_blank" rel="noreferrer">客户端</a>
+          <a href="ops-desktop://ui/menu/edit" target="_blank" rel="noreferrer">编辑</a>
+          <a href="ops-desktop://ui/menu/view" target="_blank" rel="noreferrer">视图</a>
+        </nav>
+        <span class="desktop-window-title">客户端设置</span>
+        <button class="desktop-window-theme" type="button" data-desktop-theme-toggle aria-label="切换浅深主题">◐</button>
+        <button class="desktop-window-motion" type="button" data-desktop-motion-toggle aria-label="减少动态效果" title="减少动态效果">动效</button>
+      </header>
+      <div class="eyebrow">OPS DESKTOP</div>
+      <h1>客户端设置</h1>
+      <p class="lead">业务页面与数据仍由线上系统提供。业务页面中的“模型配置”只管理线上服务器模型；本窗口配置此客户端可用的模型。本地模型密钥只保存在此 Windows 用户的系统加密存储中。</p>
+
+      <nav class="settings-nav" aria-label="客户端设置分类" role="tablist" aria-orientation="vertical">
+        <button id="tab-connection" class="active" type="button" role="tab" aria-selected="true" aria-controls="panel-connection" data-settings-tab="connection">连接与模式</button>
+        <button id="tab-models" type="button" role="tab" aria-selected="false" aria-controls="panel-models" data-settings-tab="models" tabindex="-1">本机模型</button>
+        <button id="tab-selftest" type="button" role="tab" aria-selected="false" aria-controls="panel-selftest" data-settings-tab="selftest" tabindex="-1">能力自检</button>
+        <button id="tab-routes" type="button" role="tab" aria-selected="false" aria-controls="panel-routes" data-settings-tab="routes" tabindex="-1">任务映射</button>
+        <button id="tab-account" type="button" role="tab" aria-selected="false" aria-controls="panel-account" data-settings-tab="account" tabindex="-1">账号与设备</button>
+        <button id="tab-policy" type="button" role="tab" aria-selected="false" aria-controls="panel-policy" data-settings-tab="policy" tabindex="-1">工作区策略</button>
+        <button id="tab-diagnostics" type="button" role="tab" aria-selected="false" aria-controls="panel-diagnostics" data-settings-tab="diagnostics" tabindex="-1">诊断与支持</button>
+      </nav>
+
+      <div class="settings-content" id="settings-content">
+        <section class="settings-tab-panel" id="panel-connection" role="tabpanel" aria-labelledby="tab-connection" tabindex="0" data-settings-panel="connection">
+          <h2>连接与模式</h2>
+          <p class="settings-description">业务数据仍由线上服务提供；连接通道不调用模型，自检需单独启动。</p>
+          <section class="card" aria-labelledby="connection-title">
+            <h3 id="connection-title">线上服务</h3>
+            <dl>
+              <div><dt>服务地址</dt><dd id="origin">读取中…</dd></div>
+              <div><dt>连接状态</dt><dd id="connection-state">读取中…</dd></div>
+              <div><dt>客户端版本</dt><dd id="version">读取中…</dd></div>
+            </dl>
+          </section>
+          <section class="notice" aria-labelledby="ai-title">
+            <h3 id="ai-title">AI 使用说明</h3>
+            <p id="ai-status">读取中…</p>
+          </section>
+          <section class="card" aria-labelledby="channel-title">
+            <h3 id="channel-title">客户端 AI 通道</h3>
+            <p class="hint">连接只验证设备与 WSS 通道，不会发起计费模型请求。能力自检由你单独启动，可能产生模型费用。</p>
+            <div class="button-row">
+              <button id="connect-ai" class="primary" type="button">连接 WSS 通道</button>
+              <button id="disconnect-ai" class="secondary" type="button">断开</button>
+            </div>
+          </section>
+          <section class="card" aria-labelledby="mode-title">
+            <h3 id="mode-title">业务 AI 执行模式</h3>
+            <p id="current-mode" class="hint">当前模式：读取中…</p>
+            <label for="mode-select">应用模式</label>
+            <select id="mode-select">
+              <option value="server">服务器 AI（默认）</option>
+              <option value="desktop">此客户端 AI</option>
+            </select>
+            <p class="hint">切换前请先保存业务页面内容。应用后会重新加载业务页；客户端模式只对已明确配置的任务映射生效，不会自动切换到服务器模型。</p>
+            <button id="apply-mode" class="primary" type="button">确认应用并重新加载</button>
+          </section>
+          <div class="actions">
+            <button id="login" class="secondary" type="button">重新登录</button>
+            <button id="retry" class="primary" type="button">重新加载业务页</button>
+          </div>
+        </section>
+
+        <section class="settings-tab-panel" id="panel-models" role="tabpanel" aria-labelledby="tab-models" tabindex="0" data-settings-panel="models" hidden>
+          <h2>本机模型</h2>
+          <p class="settings-description">API Key 只保存在此 Windows 用户的系统加密存储中，不会返回业务页面。</p>
+          <section class="card" aria-labelledby="models-title">
+            <div class="section-heading">
+              <h3 id="models-title">本机模型配置</h3>
+              <button id="refresh-models" class="secondary small" type="button">刷新</button>
+            </div>
+            <label for="model-select">已保存配置</label>
+            <select id="model-select">
+              <option value="">新建配置…</option>
+            </select>
+            <form id="model-form">
+              <label for="model-name">配置名称</label>
+              <input id="model-name" maxlength="80" required autocomplete="off" />
+              <label for="base-url">API 基础地址</label>
+              <input id="base-url" type="url" maxlength="500" required placeholder="https://api.example.com/v1/ 或 http://127.0.0.1:1234/v1/" />
+              <p class="hint">只允许公网 HTTPS，或 localhost / 127.0.0.1 / ::1 回环地址。公网目标会在本机解析并固定 IP 后连接。</p>
+              <label for="model-proxy-mode">模型服务代理</label>
+              <select id="model-proxy-mode">
+                <option value="direct">直连</option>
+                <option value="system">系统代理</option>
+                <option value="manual">手动 HTTP(S) 代理</option>
+              </select>
+              <label for="model-proxy-url">手动代理地址</label>
+              <input id="model-proxy-url" type="url" maxlength="500" placeholder="http://127.0.0.1:8080 或 https://proxy.example.com:8443" />
+              <label for="model-proxy-username">代理用户名 <span id="proxy-auth-state" class="muted"></span></label>
+              <input id="model-proxy-username" maxlength="1024" autocomplete="off" />
+              <label for="model-proxy-password">代理密码</label>
+              <input id="model-proxy-password" type="password" maxlength="4096" autocomplete="new-password" placeholder="代理地址不变时，留空保留已保存凭证" />
+              <p class="hint">回环模型强制直连。系统代理仅使用系统解析出的首个规则，不会失败后静默直连；不支持 SOCKS、远端 DNS 目标解析或未经校验的代理。</p>
+              <label for="model-names">模型名称</label>
+              <textarea id="model-names" rows="3" required placeholder="每行或逗号分隔一个模型名称"></textarea>
+              <label for="allowed-image-hosts">允许的图片 CDN 域名</label>
+              <input id="allowed-image-hosts" maxlength="1000" autocomplete="off" placeholder="images.example.com, cdn.example.net" />
+              <p class="hint">仅对上一张图片生成响应中返回的 URL 生效；只按完整域名匹配，不支持通配符。与模型 API 不同源的地址必须是 HTTPS。</p>
+              <label for="api-key">API Key <span id="key-state" class="muted"></span></label>
+              <input id="api-key" type="password" maxlength="4096" autocomplete="new-password" placeholder="留空保留已保存的密钥；新配置可留空用于无鉴权服务" />
+              <div class="button-row">
+                <button id="save-model" class="primary" type="submit">保存配置</button>
+                <button id="delete-model" class="danger" type="button" hidden>删除配置</button>
+                <button id="clear-form" class="secondary" type="button">新建</button>
+              </div>
+            </form>
+          </section>
+        </section>
+
+        <section class="settings-tab-panel" id="panel-selftest" role="tabpanel" aria-labelledby="tab-selftest" tabindex="0" data-settings-panel="selftest" hidden>
+          <h2>能力自检</h2>
+          <p class="settings-description">网络连通性、WSS 连接和模型能力自检相互独立。</p>
+          <section class="card" aria-labelledby="selftest-title">
+            <h3 id="selftest-title">模型能力自检</h3>
+            <p class="hint">自检会实际调用模型，可能计费；不执行业务工具，也不会读取作品内容。</p>
+            <label for="test-model">本机模型</label>
+            <select id="test-model"><option value="">请选择模型</option></select>
+            <button id="start-model-test" class="secondary" type="button">启动能力自检</button>
+            <pre id="test-result" class="test-result" aria-live="polite"></pre>
+          </section>
+        </section>
+
+        <section class="settings-tab-panel" id="panel-routes" role="tabpanel" aria-labelledby="tab-routes" tabindex="0" data-settings-panel="routes" hidden>
+          <h2>任务映射</h2>
+          <p class="settings-description">保存后仍是本机草稿；确认应用此客户端 AI 模式时才提交线上映射。</p>
+          <section class="card" aria-labelledby="routes-title">
+            <div class="section-heading">
+              <h3 id="routes-title">任务执行映射</h3>
+              <button id="refresh-routes" class="secondary small" type="button">刷新</button>
+            </div>
+            <p class="hint">每项任务必须明确选择服务器、本机或停用。默认任务为必填；向量检索只允许服务器执行。</p>
+            <div id="route-list" class="route-list"><p class="hint">请先启用工作区桌面 AI 策略并完成本机模型配置。</p></div>
+            <p id="route-status" class="hint" aria-live="polite"></p>
+            <button id="save-routes" class="secondary" type="button">保存本机映射草稿</button>
+          </section>
+        </section>
+
+        <section class="settings-tab-panel" id="panel-account" role="tabpanel" aria-labelledby="tab-account" tabindex="0" data-settings-panel="account" hidden>
+          <h2>账号与设备</h2>
+          <p class="settings-description">本机密钥与线上设备分别管理；清理本机数据不会撤销线上设备。</p>
+          <section class="card" aria-labelledby="account-title">
+            <h3 id="account-title">账号与本机保护</h3>
+            <dl>
+              <div><dt>账号 / 工作区</dt><dd id="account">读取中…</dd></div>
+              <div><dt>重新认证</dt><dd id="reauth-state">读取中…</dd></div>
+              <div><dt>系统密钥库</dt><dd id="storage-state">读取中…</dd></div>
+              <div><dt>本机设备</dt><dd id="device-state">读取中…</dd></div>
+              <div><dt>WSS 通道</dt><dd id="channel-state">读取中…</dd></div>
+            </dl>
+            <p class="hint">清理会删除当前账号的本机 AI 配置并退出登录；线上设备撤销需要单独操作。</p>
+            <button id="clear-account-data" class="danger" type="button" disabled>清除此账号本机数据</button>
+            <p class="hint">卸载客户端时，Windows 可能保留本机用户目录中的配置。卸载前请逐个登录并清理需要移除的账号；线上设备如需注销，请另行撤销。</p>
+          </section>
+          <section class="card" aria-labelledby="platform-browser-title">
+            <h3 id="platform-browser-title">平台采集浏览器</h3>
+            <p class="hint">平台数据采集只使用你电脑上已安装的正式浏览器，独立配置目录，不读取你日常浏览器的登录状态。</p>
+            <dl>
+              <div><dt>本机浏览器</dt><dd id="platform-browser-state">尚未检测</dd></div>
+              <div><dt>检测时间</dt><dd id="platform-browser-checked">—</dd></div>
+            </dl>
+            <button id="detect-platform-browser" class="secondary" type="button">检测本机浏览器</button>
+            <p id="platform-browser-status" class="hint" aria-live="polite"></p>
+          </section>
+          <section class="card" aria-labelledby="reauth-title">
+            <h3 id="reauth-title">账号重新认证</h3>
+            <p class="hint">创建本机设备或更新线上模型元数据前，需要输入当前 OPS 账号密码。密码仅用于本次认证，不会保存在本机配置中。</p>
+            <label for="password">当前账号密码</label>
+            <input id="password" type="password" maxlength="1024" autocomplete="current-password" />
+            <button id="reauth" class="secondary" type="button">重新认证</button>
+          </section>
+          <section class="card" aria-labelledby="devices-title">
+            <div class="section-heading">
+              <h3 id="devices-title">本人已注册设备</h3>
+              <button id="refresh-devices" class="secondary small" type="button">刷新</button>
+            </div>
+            <p class="hint">可在策略关闭或离开工作区后回收本人设备。回收会立即终止该设备的 AI 通道。</p>
+            <div id="device-list" class="device-list">读取中…</div>
+          </section>
+          <section class="card" aria-labelledby="account-type-title">
+            <h3 id="account-type-title">账号内容类型</h3>
+            <p class="hint">同一平台内可更换内容类型。已有作品保持原类型不变，之后新建的作品使用新类型；更换平台仍需在业务页面新建账号。</p>
+            <label for="account-type-target">账号</label>
+            <select id="account-type-target" disabled>
+              <option value="">读取中…</option>
+            </select>
+            <label for="account-type-choice">新的内容类型</label>
+            <select id="account-type-choice" disabled></select>
+            <button id="apply-account-type" class="primary" type="button" disabled>更换内容类型</button>
+            <p id="account-type-status" class="hint" aria-live="polite">读取中…</p>
+          </section>
+        </section>
+
+        <section class="settings-tab-panel" id="panel-policy" role="tabpanel" aria-labelledby="tab-policy" tabindex="0" data-settings-panel="policy" hidden>
+          <h2>工作区策略</h2>
+          <p class="settings-description">仅工作区 owner 可修改策略。允许成员配置端点后，业务上下文可能发送到其配置的 AI 服务。</p>
+          <section class="card" aria-labelledby="policy-title">
+            <h3 id="policy-title">工作区桌面 AI 策略</h3>
+            <p class="hint">回环地址不等于数据不会离开本机。</p>
+            <label class="check-row"><input id="policy-enabled" type="checkbox" />允许此工作区使用桌面 AI</label>
+            <label class="check-row"><input id="policy-members" type="checkbox" />允许 editor 使用各自的桌面 AI 端点</label>
+            <button id="save-policy" class="secondary" type="button">保存工作区策略</button>
+            <p id="policy-status" class="hint" aria-live="polite">读取中…</p>
+          </section>
+        </section>
+
+        <section class="settings-tab-panel" id="panel-diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" tabindex="0" data-settings-panel="diagnostics" hidden>
+          <h2>诊断与支持</h2>
+          <p class="settings-description">导出文件仅含脱敏连接和版本信息，可用于支持排查。</p>
+          <section class="card" aria-labelledby="diagnostics-title">
+            <h3 id="diagnostics-title">客户端诊断</h3>
+            <p class="hint">不包含账号名、设备标识、本机模型 API 地址、模型名、提示词或密钥。</p>
+            <button id="export-diagnostics" class="secondary" type="button">导出脱敏诊断信息</button>
+          </section>
+        </section>
+        <p id="action-status" class="action-status" aria-live="polite"></p>
+        <p class="footnote">本地 AI 密钥不会传回页面脚本或写入线上配置。服务端仍负责业务上下文、工具权限、确认卡片及数据保存。</p>
+      </div>
+    </main>
+    <script src="/desktop-theme.js"></script>
+    <script src="/settings.js"></script>
+  </body>
+</html>

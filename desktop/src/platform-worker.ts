@@ -1,6 +1,10 @@
 // 平台采集工作进程（D-129 / 20 文档 §5.1、§13.1）。
-// 只负责三件事：发现本机已安装的标准 Google Chrome、按固定参数启动、通过 CDP pipe 做只读操作。
-// 不使用 Playwright / Puppeteer 及其自带浏览器，不开放调试端口，不回退 Edge 或自带内核。
+// 只负责三件事：发现本机已安装的正式 Chromium 浏览器、按固定参数启动、通过 CDP pipe 做只读操作。
+//
+// 浏览器选择顺序（D-129 v0.5）：Google Chrome → Microsoft Edge → Brave → Vivaldi → Opera
+// → Chromium → 本机已安装的 Playwright Chromium。只用用户机器上已有的可执行文件，
+// 客户端不下载、不打包任何浏览器内核；找不到时明确报错，不静默失败。
+// 不开放调试端口；不使用 Playwright 的驱动库（只借用它已经下载到本机的 Chromium 可执行文件）。
 //
 // 纯 Node 模块（不依赖 Electron）：启动参数、版本判定与 CDP 帧编解码都可单测。
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -25,34 +29,247 @@ export class PlatformBrowserError extends Error {
 
 // ---------- 浏览器发现 ----------
 
+export type BrowserFamily = 'chrome' | 'edge' | 'brave' | 'vivaldi' | 'opera' | 'chromium' | 'playwright';
+
+// 优先级固定：用户机器上的正式浏览器优先，Playwright 已下载的 Chromium 只作最后一档兜底。
+export const PLATFORM_BROWSER_FAMILIES: ReadonlyArray<BrowserFamily> = Object.freeze([
+  'chrome',
+  'edge',
+  'brave',
+  'vivaldi',
+  'opera',
+  'chromium',
+  'playwright'
+]);
+
+// 展示名只用于界面与诊断，不含路径。
+export const PLATFORM_BROWSER_NAMES: Readonly<Record<BrowserFamily, string>> = Object.freeze({
+  chrome: 'Google Chrome',
+  edge: 'Microsoft Edge',
+  brave: 'Brave',
+  vivaldi: 'Vivaldi',
+  opera: 'Opera',
+  chromium: 'Chromium',
+  playwright: 'Playwright Chromium'
+});
+
 export interface BrowserCandidate {
   executablePath: string;
-  source: 'registry' | 'standard';
+  source: 'registry' | 'standard' | 'playwright';
+  family: BrowserFamily;
 }
 
-// 标准安装路径只列出 Google Chrome 自己的位置，不含 Edge 或 Chromium 自带内核。
-export function standardChromePaths(env: NodeJS.ProcessEnv): string[] {
-  const paths: string[] = [];
+// 每个品牌的 Windows 标准安装位置；只列正式发行版，不含便携版、Beta/Dev 通道。
+export function standardBrowserPaths(env: NodeJS.ProcessEnv, family: BrowserFamily): string[] {
   const programFiles = env['ProgramFiles'] ?? '';
   const programFilesX86 = env['ProgramFiles(x86)'] ?? '';
   const localAppData = env['LOCALAPPDATA'] ?? '';
-  if (programFiles) paths.push(path.join(programFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'));
-  if (programFilesX86) paths.push(path.join(programFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'));
-  if (localAppData) paths.push(path.join(localAppData, 'Google', 'Chrome', 'Application', 'chrome.exe'));
-  return paths;
+  const roots = [programFiles, programFilesX86, localAppData].filter((root) => root !== '');
+  let paths: string[];
+  switch (family) {
+    case 'chrome':
+      paths = roots.map((root) => path.join(root, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+      break;
+    case 'edge':
+      // Edge 在 64 位系统上默认装到 Program Files (x86)。
+      paths = [programFilesX86, programFiles, localAppData]
+        .filter((root) => root !== '')
+        .map((root) => path.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
+      break;
+    case 'brave':
+      paths = roots.map((root) => path.join(root, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'));
+      break;
+    case 'vivaldi':
+      paths = roots.map((root) => path.join(root, 'Vivaldi', 'Application', 'vivaldi.exe'));
+      break;
+    case 'opera':
+      // Opera 默认按用户安装，也可能装到系统目录。
+      paths = [
+        localAppData && path.join(localAppData, 'Programs', 'Opera', 'opera.exe'),
+        localAppData && path.join(localAppData, 'Programs', 'Opera GX', 'opera.exe'),
+        programFiles && path.join(programFiles, 'Opera', 'opera.exe'),
+        programFilesX86 && path.join(programFilesX86, 'Opera', 'opera.exe')
+      ].filter((value): value is string => typeof value === 'string' && value !== '');
+      break;
+    case 'chromium':
+      paths = roots.map((root) => path.join(root, 'Chromium', 'Application', 'chrome.exe'));
+      break;
+    case 'playwright':
+      // Playwright 的 Chromium 由目录扫描得到，不按固定路径猜测。
+      paths = [];
+      break;
+    default:
+      paths = [];
+  }
+  return [...new Set(paths)];
 }
 
-// pickExistingChrome 返回第一个真实存在的候选；一个都没有时明确报错，不找替代浏览器。
-export async function pickExistingChrome(candidates: ReadonlyArray<BrowserCandidate>): Promise<BrowserCandidate> {
-  for (const candidate of candidates) {
-    try {
-      const stat = await fs.stat(candidate.executablePath);
-      if (stat.isFile()) return candidate;
-    } catch {
-      continue;
+const REGISTRY_APP_PATHS = 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths';
+const REGISTRY_EXECUTABLES: Readonly<Partial<Record<BrowserFamily, string>>> = Object.freeze({
+  chrome: 'chrome.exe',
+  edge: 'msedge.exe',
+  brave: 'brave.exe',
+  vivaldi: 'vivaldi.exe',
+  opera: 'opera.exe'
+});
+
+// registryAppPathKeys 给出该品牌可能登记的 App Paths 键；没登记的品牌返回空。
+export function registryAppPathKeys(family: BrowserFamily): string[] {
+  const exe = REGISTRY_EXECUTABLES[family];
+  if (!exe) return [];
+  return [
+    `HKLM\\${REGISTRY_APP_PATHS}\\${exe}`,
+    `HKCU\\${REGISTRY_APP_PATHS}\\${exe}`,
+    `HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${exe}`
+  ];
+}
+
+// parseRegistryAppPath 从 `reg query ... /ve` 的输出里取默认值路径。
+// 输出形如：`    (Default)    REG_SZ    C:\Program Files\Google\Chrome\Application\chrome.exe`
+export function parseRegistryAppPath(stdout: string): string | null {
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /\bREG_(?:EXPAND_)?SZ\s+(.+?)\s*$/.exec(line);
+    if (!match) continue;
+    const value = match[1].trim().replace(/^"(.*)"$/, '$1');
+    if (value.toLowerCase().endsWith('.exe')) return value;
+  }
+  return null;
+}
+
+// playwrightBrowsersDir 是 Playwright 默认的浏览器缓存位置；环境变量可覆盖。
+export function playwrightBrowsersDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): string {
+  const override = env['PLAYWRIGHT_BROWSERS_PATH'];
+  if (override && override !== '0') return override;
+  const home = env['USERPROFILE'] ?? env['HOME'] ?? '';
+  switch (platform) {
+    case 'win32':
+      return path.join(env['LOCALAPPDATA'] ?? home, 'ms-playwright');
+    case 'darwin':
+      return path.join(home, 'Library', 'Caches', 'ms-playwright');
+    default:
+      return path.join(home, '.cache', 'ms-playwright');
+  }
+}
+
+// playwrightChromiumCandidates 把目录名（如 chromium-1248）按构建号从新到旧展开成候选可执行文件。
+// 只用已经下载到本机的文件，不触发任何下载。
+export function playwrightChromiumCandidates(baseDir: string, entries: ReadonlyArray<string>): BrowserCandidate[] {
+  const builds = entries
+    .map((name) => /^chromium-(\d+)$/.exec(name))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => ({ dir: match[0], build: Number(match[1]) }))
+    .filter((entry) => Number.isSafeInteger(entry.build) && entry.build > 0)
+    .sort((a, b) => b.build - a.build);
+  const layouts: ReadonlyArray<ReadonlyArray<string>> = [
+    ['chrome-win64', 'chrome.exe'],
+    ['chrome-win', 'chrome.exe'],
+    ['chrome-linux64', 'chrome'],
+    ['chrome-linux', 'chrome'],
+    ['chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium']
+  ];
+  const candidates: BrowserCandidate[] = [];
+  for (const build of builds) {
+    for (const layout of layouts) {
+      candidates.push({
+        executablePath: path.join(baseDir, build.dir, ...layout),
+        source: 'playwright',
+        family: 'playwright'
+      });
     }
   }
-  throw new PlatformBrowserError('platform_browser_unsupported', '未安装受支持的标准 Google Chrome');
+  return candidates;
+}
+
+export interface BrowserDiscoveryRuntime {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  readdir?: (dir: string) => Promise<string[]>;
+  isFile?: (file: string) => Promise<boolean>;
+  queryRegistry?: (key: string) => Promise<string | null>;
+}
+
+async function defaultIsFile(file: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(file);
+    return stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function defaultQueryRegistry(key: string): Promise<string | null> {
+  const { execFile } = await import('node:child_process');
+  return new Promise<string | null>((resolve) => {
+    execFile('reg', ['query', key, '/ve'], { windowsHide: true, timeout: 3000 }, (error, stdout) => {
+      if (error) {
+        resolve(null);
+        return;
+      }
+      resolve(parseRegistryAppPath(stdout));
+    });
+  });
+}
+
+// discoverPlatformBrowser 按固定优先级返回本机真实存在的浏览器候选；路径不对外展示。
+export async function discoverPlatformBrowser(runtime: BrowserDiscoveryRuntime = {}): Promise<BrowserCandidate[]> {
+  const env = runtime.env ?? process.env;
+  const platform = runtime.platform ?? process.platform;
+  const readdir = runtime.readdir ?? ((dir: string) => fs.readdir(dir));
+  const isFile = runtime.isFile ?? defaultIsFile;
+  const queryRegistry = runtime.queryRegistry ?? defaultQueryRegistry;
+  const found: BrowserCandidate[] = [];
+  for (const family of PLATFORM_BROWSER_FAMILIES) {
+    if (family === 'playwright') {
+      const baseDir = playwrightBrowsersDir(env, platform);
+      const entries = await readdir(baseDir).catch(() => [] as string[]);
+      for (const candidate of playwrightChromiumCandidates(baseDir, entries)) {
+        if (await isFile(candidate.executablePath)) found.push(candidate);
+      }
+      continue;
+    }
+    if (platform === 'win32') {
+      // 注册表能覆盖装到非标准目录的情况；查询失败不影响标准路径判定。
+      for (const key of registryAppPathKeys(family)) {
+        const exe = await queryRegistry(key).catch(() => null);
+        if (exe && (await isFile(exe))) {
+          found.push({ executablePath: exe, source: 'registry', family });
+        }
+      }
+    }
+    for (const executablePath of standardBrowserPaths(env, family)) {
+      if (await isFile(executablePath)) {
+        found.push({ executablePath, source: 'standard', family });
+      }
+    }
+  }
+  // 同一可执行文件只保留优先级最高的那条（注册表与标准路径常指向同一个文件）。
+  const seen = new Set<string>();
+  return found.filter((candidate) => {
+    const key = candidate.executablePath.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// findPlatformBrowser 返回优先级最高的候选；一个都没有时明确报错，不静默失败。
+export async function findPlatformBrowser(runtime: BrowserDiscoveryRuntime = {}): Promise<BrowserCandidate> {
+  const candidates = await discoverPlatformBrowser(runtime);
+  if (candidates.length === 0) {
+    throw new PlatformBrowserError(
+      'platform_browser_unsupported',
+      '未找到可用的浏览器，请先安装 Google Chrome 或 Microsoft Edge'
+    );
+  }
+  return candidates[0];
+}
+
+// pickExistingBrowser 返回第一个真实存在的候选；一个都没有时明确报错。
+export async function pickExistingBrowser(candidates: ReadonlyArray<BrowserCandidate>): Promise<BrowserCandidate> {
+  for (const candidate of candidates) {
+    if (await defaultIsFile(candidate.executablePath)) return candidate;
+  }
+  throw new PlatformBrowserError('platform_browser_unsupported', '未找到可用的浏览器，请先安装 Google Chrome 或 Microsoft Edge');
 }
 
 // ---------- 启动参数 ----------
@@ -188,24 +405,46 @@ export function assertRedirectAllowed(chain: ReadonlyArray<string>, platform: st
 
 // ---------- CDP pipe 帧 ----------
 
-// parseCDPFrameHeader 解析 "\0<长度>\0" 形式的帧头。
-// CDP 的 pipe 传输是 NUL 分隔的长度前缀：帧 = "\0" + 十进制长度 + "\0" + JSON。
+// CDP 的 pipe 传输是「JSON + NUL 结尾」：每条消息是一段 UTF-8 JSON，后跟一个 \0 分隔符，
+// 没有长度前缀（Chromium 的 PipeTransport 用 '\0' 作为分隔符切分）。
+// 2026-10-20 用本机 Chrome 155 实测确认：写成 "\0<长度>\0<JSON>" 会被回
+// `{"error":{"code":-32700,"message":"JSON: no input at position 0"}}`。
 export function encodeCDPMessage(message: unknown): Buffer {
   const body = Buffer.from(JSON.stringify(message), 'utf8');
-  return Buffer.concat([Buffer.from('\0', 'ascii'), Buffer.from(String(body.length), 'ascii'), Buffer.from('\0', 'ascii'), body]);
+  return Buffer.concat([body, Buffer.from('\0', 'ascii')]);
 }
 
-// parseCDPFrame 从缓冲区取出一帧；不足一帧时返回 null 与原始缓冲区。
+// 单条 CDP 消息的上限：页面快照与响应体能到几百 KB，超过 8 MiB 一定是异常流，
+// 不能无限累积缓冲区把工作进程撑爆。
+export const CDP_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+
+// parseCDPFrame 从缓冲区取出以 NUL 结尾的一条消息；不足一条时返回 null。
 export function parseCDPFrame(buffer: Buffer<ArrayBufferLike>): { message: unknown; rest: Buffer<ArrayBufferLike> } | null {
-  if (buffer.length === 0 || buffer[0] !== 0) return null;
-  const lengthEnd = buffer.indexOf(0, 1);
-  if (lengthEnd < 0) return null;
-  const length = Number(buffer.subarray(1, lengthEnd).toString('ascii'));
-  if (!Number.isSafeInteger(length) || length < 0) return null;
-  const start = lengthEnd + 1;
-  if (buffer.length < start + length) return null;
-  const body = buffer.subarray(start, start + length).toString('utf8');
-  return { message: JSON.parse(body), rest: buffer.subarray(start + length) };
+  let offset = 0;
+  for (;;) {
+    const end = buffer.indexOf(0, offset);
+    if (end < 0) {
+      if (buffer.length - offset > CDP_MAX_MESSAGE_BYTES) {
+        throw new PlatformBrowserError('platform_schema_changed', '浏览器调试消息超出允许大小');
+      }
+      return null;
+    }
+    const body = buffer.subarray(offset, end).toString('utf8');
+    const rest = buffer.subarray(end + 1);
+    // 连续分隔符不产生消息，继续找下一条。
+    if (body.trim() !== '') {
+      if (body.length > CDP_MAX_MESSAGE_BYTES) {
+        throw new PlatformBrowserError('platform_schema_changed', '浏览器调试消息超出允许大小');
+      }
+      try {
+        return { message: JSON.parse(body), rest };
+      } catch {
+        // 半个 JSON 说明这条消息还没写完：保留缓冲区继续等，不能当成错误帧丢掉。
+        return null;
+      }
+    }
+    offset = end + 1;
+  }
 }
 
 // ---------- 进程 ----------
@@ -214,10 +453,12 @@ export interface PlatformBrowserProcess {
   child: ChildProcess;
   send: (message: unknown) => void;
   onMessage: (listener: (message: unknown) => void) => void;
+  /** 子进程在握手前退出或根本无法启动时返回稳定错误，用于把“找不到”与“起不来”分开。 */
+  failure: () => PlatformBrowserError | null;
   close: () => Promise<void>;
 }
 
-// launchPlatformBrowser 启动 Chrome 并建立 pipe 会话。
+// launchPlatformBrowser 启动浏览器并建立 pipe 会话。
 // 主进程与子进程之间只用 `stdio: ['ignore','ignore','pipe','pipe','pipe']` 的私有管道：
 // fd 3/4 是 CDP 的输入/输出管道，本机其他程序无法借端口接管会话。
 export async function launchPlatformBrowser(
@@ -242,11 +483,28 @@ export async function launchPlatformBrowser(
     env,
     windowsHide: false
   });
+  // spawn 失败（路径失效、无权限、被策略拦截）是异步 error 事件；
+  // 不挂监听会让主进程直接崩掉，这里压成稳定错误码交给上层。
+  let failureError: PlatformBrowserError | null = null;
+  child.on('error', () => {
+    failureError = new PlatformBrowserError(
+      'platform_browser_launch_failed',
+      '无法启动本机浏览器，请确认该浏览器可以正常打开'
+    );
+  });
+  child.on('exit', () => {
+    if (!failureError) {
+      failureError = new PlatformBrowserError(
+        'platform_browser_launch_failed',
+        '浏览器启动后立即退出，请确认该浏览器可以正常打开'
+      );
+    }
+  });
   const toBrowser = child.stdio[3] as NodeJS.WritableStream | null;
   const fromBrowser = child.stdio[4] as NodeJS.ReadableStream | null;
   if (!toBrowser || !fromBrowser) {
     child.kill();
-    throw new PlatformBrowserError('platform_browser_unsupported', '无法建立浏览器调试管道');
+    throw new PlatformBrowserError('platform_browser_launch_failed', '无法建立浏览器调试管道');
   }
   const listeners: Array<(message: unknown) => void> = [];
   let pending: Buffer<ArrayBufferLike> = Buffer.alloc(0);
@@ -263,6 +521,7 @@ export async function launchPlatformBrowser(
     child,
     send: (message: unknown) => { toBrowser.write(encodeCDPMessage(message)); },
     onMessage: (listener) => { listeners.push(listener); },
+    failure: () => failureError,
     close: async () => new Promise<void>((resolve) => {
       if (child.exitCode !== null) {
         resolve();
@@ -274,4 +533,106 @@ export async function launchPlatformBrowser(
       setTimeout(resolve, 2000).unref();
     })
   };
+}
+
+// ---------- CDP 握手 ----------
+
+export interface CDPClient {
+  request: (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown>;
+  close: () => Promise<void>;
+}
+
+// createCDPClient 是最小请求/响应配对：按自增 id 匹配响应，超时明确失败。
+// 只用于握手与后续只读调用，不实现事件订阅以外的能力。
+export function createCDPClient(process: PlatformBrowserProcess, defaultTimeoutMs = 10_000): CDPClient {
+  let nextID = 1;
+  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  process.onMessage((message) => {
+    const frame = message as { id?: unknown; result?: unknown; error?: { message?: unknown } };
+    if (typeof frame.id !== 'number') return;
+    const waiter = pending.get(frame.id);
+    if (!waiter) return;
+    pending.delete(frame.id);
+    clearTimeout(waiter.timer);
+    if (frame.error) {
+      waiter.reject(new PlatformBrowserError('platform_schema_changed', '浏览器返回了无法识别的调试响应'));
+      return;
+    }
+    waiter.resolve(frame.result);
+  });
+  return {
+    request: (method, params, timeoutMs) => new Promise((resolve, reject) => {
+      const failure = process.failure();
+      if (failure) {
+        reject(failure);
+        return;
+      }
+      const id = nextID++;
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new PlatformBrowserError('platform_browser_launch_failed', '浏览器调试通道无响应'));
+      }, timeoutMs ?? defaultTimeoutMs);
+      pending.set(id, { resolve, reject, timer });
+      process.send({ id, method, params: params ?? {} });
+    }),
+    close: async () => {
+      for (const waiter of pending.values()) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new PlatformBrowserError('platform_browser_launch_failed', '浏览器调试会话已结束'));
+      }
+      pending.clear();
+      await process.close();
+    }
+  };
+}
+
+export interface PlatformBrowserProbe {
+  family: BrowserFamily;
+  name: string;
+  version: string;
+  major: number | null;
+}
+
+// parseBrowserProduct 从 CDP `Browser.getVersion` 的 product 串取产品名与版本：
+// Chrome 报 "Chrome/155.0.8059.85"，Edge 报 "Edg/155.0.4283.62"，Chromium 报 "Chromium/…"。
+// 2026-10-20 在本机实测确认了 Chrome 与 Edge 两种形态。
+export function parseBrowserProduct(product: string): { brand: string; version: string } | null {
+  const match = /^([A-Za-z][A-Za-z0-9 ]*)\/(\d+\.\d+[\w.\-]*)$/.exec(product.trim());
+  if (!match) return null;
+  return { brand: match[1], version: match[2] };
+}
+
+// probePlatformBrowser 用隔离 profile 启动一次浏览器，读回版本后立即关闭。
+// 这是“本机确实能用这个浏览器”的唯一可信证据：只看路径存在不算验证通过。
+export async function probePlatformBrowser(
+  options: { candidate: BrowserCandidate; profileDir: string; timeoutMs?: number },
+  runtime: { spawnImpl?: typeof spawn; env?: NodeJS.ProcessEnv } = {}
+): Promise<PlatformBrowserProbe> {
+  const browser = await launchPlatformBrowser(
+    { executablePath: options.candidate.executablePath, profileDir: options.profileDir },
+    runtime
+  );
+  const cdp = createCDPClient(browser, options.timeoutMs ?? 15_000);
+  try {
+    const result = (await cdp.request('Browser.getVersion')) as { product?: unknown };
+    const product = typeof result?.product === 'string' ? result.product : '';
+    const parsed = parseBrowserProduct(product);
+    if (!parsed) {
+      throw new PlatformBrowserError('platform_browser_unsupported', '无法识别浏览器版本');
+    }
+    return {
+      family: options.candidate.family,
+      name: PLATFORM_BROWSER_NAMES[options.candidate.family],
+      version: parsed.version,
+      major: chromeMajorVersion(parsed.version)
+    };
+  } catch (error) {
+    // 握手前子进程就退出或根本没起来：给出“起不来”而不是“不支持”，
+    // 否则用户会去重装一个其实已经装好的浏览器。
+    const failure = browser.failure();
+    if (failure) throw failure;
+    throw error;
+  } finally {
+    await cdp.close();
+  }
 }
