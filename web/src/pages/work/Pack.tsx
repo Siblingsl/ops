@@ -2,14 +2,16 @@ import { Check, Copy, Download, LayoutTemplate, Package, Smartphone, Sparkles } 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { BackfillForm, PostPushTodos } from '@/components/backfill'
+import { BackfillForm, PlatformBinding, PostPushTodos } from '@/components/backfill'
 import { XhsCardMaker } from '@/components/xhs-cards'
 import { Button, Card, cn, HumanGate, Notice } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
-import { ApiError, errorMessage, post } from '@/lib/api'
+import { ApiError, errorMessage, post, rawRequest } from '@/lib/api'
 import { copyText, runeLen } from '@/lib/format'
 import type { Work } from '@/lib/types'
+import { useMe } from '@/lib/session'
 import { useWork, WorkHeaderAction } from './WorkLayout'
+import { ToutiaoPack } from './ToutiaoPack'
 
 function CopyBlock({ label, meta, text, multiline }: { label: string; meta?: string; text: string; multiline?: boolean }) {
   const [copied, setCopied] = useState(false)
@@ -41,7 +43,7 @@ function CopyBlock({ label, meta, text, multiline }: { label: string; meta?: str
 }
 
 /** saveImages hands images to the system share sheet (save to album on phones), else downloads them one by one. */
-async function saveImages(urls: string[], zip: string) {
+async function saveImages(urls: string[], downloadZip: () => Promise<void>) {
   try {
     const files = await Promise.all(urls.map(async (u, i) => {
       const b = await (await fetch(u)).blob()
@@ -62,14 +64,17 @@ async function saveImages(urls: string[], zip: string) {
   } catch (e) {
     if ((e as Error).name === 'AbortError') return
     toast.info('浏览器不允许逐张保存，已改为下载 zip')
-    location.href = zip
+    await downloadZip()
   }
 }
 
 export default function Pack() {
   const nav = useNavigate()
   const { work, setWork, refresh } = useWork()
+  const { data: me } = useMe()
+  const canManage = me?.role === 'owner' || me?.role === 'editor'
   const [busy, setBusy] = useState(false)
+  const [zipBusy, setZipBusy] = useState(false)
   const [pages, setPages] = useState<{ title: string; body: string }[] | null>(null)
   const [pageBusy, setPageBusy] = useState(false)
   const [cards, setCards] = useState(false)
@@ -77,6 +82,7 @@ export default function Pack() {
     <XhsCardMaker workId={work.id} pages={pages} open={cards} onClose={() => setCards(false)} onAdded={() => void refresh()}
       warn={work.status === 'packed' ? '加入新图片会修改作品内容，需要重新检查后再生成发布包。' : undefined} />
   )
+  if (work.platform === 'toutiao') return <ToutiaoPack work={work} setWork={setWork} refresh={refresh} />
   const packed = work.status === 'packed' || work.status === 'published'
   const suggestPages = async () => {
     setPageBusy(true)
@@ -92,15 +98,47 @@ export default function Pack() {
   const create = async () => {
     setBusy(true)
     try {
-      setWork(await post<Work>(`/works/${work.id}/xhs/pack`))
+      setWork(await post<Work>(`/works/${work.id}/xhs/pack`, { basis_revision: work.revision }))
     } catch (e) {
+      const conflict = e instanceof ApiError && e.code === 'version_conflict'
+      const materialBasisStale = e instanceof ApiError && e.code === 'material_basis_stale'
+      const needsCheck = materialBasisStale || (e instanceof ApiError && e.code === 'human_step_required')
       toast.error(errorMessage(e), {
         duration: Number.POSITIVE_INFINITY,
-        action: { label: '重试', onClick: () => void create() },
-        cancel: e instanceof ApiError && e.code === 'human_step_required' ? { label: '去检查', onClick: () => nav(`/works/${work.id}/check`) } : undefined,
+        action: conflict
+          ? { label: '刷新', onClick: () => void refresh() }
+          : needsCheck ? undefined : { label: '重试', onClick: () => void create() },
+        cancel: needsCheck ? { label: '去检查', onClick: () => nav(`/works/${work.id}/check`) } : undefined,
       })
     } finally {
       setBusy(false)
+    }
+  }
+  const downloadZip = async () => {
+    setZipBusy(true)
+    try {
+      const query = new URLSearchParams({ basis_revision: String(work.revision) })
+      const response = await rawRequest('GET', `/works/${work.id}/xhs/pack.zip?${query}`)
+      const responseBasis = response.headers.get('X-OPS-Basis-Revision')
+      if (responseBasis && responseBasis !== String(work.revision)) {
+        throw new ApiError(409, 'version_conflict', '作品已修改，请刷新后重新下载发布包')
+      }
+      const objectURL = URL.createObjectURL(await response.blob())
+      const link = document.createElement('a')
+      link.href = objectURL
+      link.download = `xhs-${new Date().toISOString().slice(0, 10)}.zip`
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(objectURL), 10_000)
+    } catch (e) {
+      const conflict = e instanceof ApiError && e.code === 'version_conflict'
+      const materialBasisStale = e instanceof ApiError && e.code === 'material_basis_stale'
+      toast.error(conflict ? '作品内容已变化，请刷新后重新下载发布包。' : errorMessage(e), {
+        duration: Number.POSITIVE_INFINITY,
+        action: conflict ? { label: '刷新', onClick: () => void refresh() } : undefined,
+        cancel: materialBasisStale ? { label: '去检查', onClick: () => nav(`/works/${work.id}/check`) } : undefined,
+      })
+    } finally {
+      setZipBusy(false)
     }
   }
   if (!packed && work.status !== 'ready') {
@@ -155,7 +193,7 @@ export default function Pack() {
       <div className="mb-5 flex flex-wrap items-end gap-3">
         <div>
           <h1 className="font-display text-[22px] font-bold text-mist-900">小红书发布包</h1>
-          <p className="text-[13px] text-mist-500">{work.account_name} · 在手机上打开本页也可以直接复制</p>
+          <p className="text-[13px] text-mist-500">{work.account_name} · 内容修订 {work.revision} · 在手机上打开本页也可以直接复制</p>
         </div>
         <div className="flex flex-wrap gap-2 sm:ml-auto">
           <Button
@@ -193,15 +231,13 @@ export default function Pack() {
           >
             复制伴侣深链
           </Button>
-          <a href={`/api/v1/works/${work.id}/xhs/pack.zip`} download>
-            <Button variant="primary" icon={<Download className="size-4" />}>下载图片 zip</Button>
-          </a>
+          <Button variant="primary" loading={zipBusy} onClick={() => void downloadZip()} icon={<Download className="size-4" />}>下载图片 zip</Button>
         </div>
       </div>
       <Notice tone="ink" className="mb-5">
         小红书官方分享 SDK 需独立移动 App 与开放平台资质（FR-M10-08）。当前提供 Web 系统分享、伴侣深链（<code className="rounded bg-mist-100 px-1">ops-xhs://</code>）与发布包；Expo 工程见 <code className="rounded bg-mist-100 px-1">mobile/</code>。
       </Notice>
-      <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
+      <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
         <div className="space-y-4">
           <CopyBlock label="标题" meta={`${runeLen(work.title)} 字`} text={work.title} />
           <CopyBlock label="正文" meta={`${runeLen(body)} 字`} text={body} multiline />
@@ -237,7 +273,7 @@ export default function Pack() {
               <span className="text-xs text-mist-400">{images.length} 张，按编号顺序上传；手机上可长按单张保存</span>
               {images.length > 0 && (
                 <Button size="sm" variant="secondary" className="ml-auto" icon={<Download className="size-3.5" />}
-                  onClick={() => saveImages(images.map((a) => a!.url), `/api/v1/works/${work.id}/xhs/pack.zip`)}>逐张保存到相册</Button>
+                  onClick={() => saveImages(images.map((a) => a!.url), downloadZip)}>逐张保存到相册</Button>
               )}
             </div>
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
@@ -266,6 +302,9 @@ export default function Pack() {
           <Notice tone="gamboge">AI 声明：内容使用了 AI 辅助时，按平台规则必须声明。漏标可能导致限流或处罚。</Notice>
           {(work.status === 'packed' || work.status === 'published') && (work.post_push_todos ?? []).length > 0 && <Card className="p-4"><PostPushTodos work={work} setWork={setWork} /></Card>}
           <div id="backfill" className="scroll-mt-20"><BackfillForm work={work} setWork={setWork} /></div>
+          {(work.status === 'published' || work.status === 'packed') && (
+            <PlatformBinding work={work} setWork={setWork} canManage={canManage} />
+          )}
         </aside>
       </div>
       {work.status === 'packed' && (

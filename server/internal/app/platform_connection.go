@@ -253,6 +253,119 @@ func platformConnectionSummary(c platformConnection) map[string]any {
 	}
 }
 
+// patchPlatformConnection 是 PATCH /accounts/{accountId}/platform-connection：
+// 只接受固定键，增权项要求 owner + 重新认证，暂停允许连接保管人本人（§4.3、§11.2）。
+func (s *Server) patchPlatformConnection(w http.ResponseWriter, r *http.Request) error {
+	accountID, err := pathID(r, "accountId")
+	if err != nil {
+		return err
+	}
+	id := ident(r.Context())
+	if id.AdminOverride {
+		return apiErr(403, "forbidden", "系统管理员代访问工作区不能修改平台连接")
+	}
+	if err := s.requireAccountInWorkspace(r.Context(), accountID); err != nil {
+		return err
+	}
+	var in struct {
+		State       *string `json:"state"`
+		AutoCollect *bool   `json:"auto_collect"`
+		AutoAdopt   *bool   `json:"auto_adopt"`
+		// 增权项用授权版本比较，自动采用用 adoption_revision，避免两类改动互相覆盖。
+		AuthorizationRevision *int64 `json:"authorization_revision"`
+		AdoptionRevision      *int64 `json:"adoption_revision"`
+	}
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	c, err := s.platformConnectionForAccount(r.Context(), id.WorkspaceID, accountID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errNotFound
+		}
+		return err
+	}
+	isHolder := c.UserID == id.UserID
+	isOwner := id.Role == "owner"
+	if !isOwner && !isHolder {
+		return apiErr(403, "forbidden", "只有所有者或连接保管人可以修改该连接")
+	}
+
+	// 暂停只减权，保管人本人即可；其余（开启采集/采用）是增权，必须 owner + 重新认证。
+	onlyPause := in.State != nil && *in.State == "paused" && in.AutoCollect == nil && in.AutoAdopt == nil
+	if !onlyPause {
+		if !isOwner {
+			return apiErr(403, "forbidden", "只有工作区所有者可以开启自动采集或自动采用")
+		}
+		if err := s.requireReauth(r.Context()); err != nil {
+			return err
+		}
+	}
+	if in.State != nil && *in.State != "paused" {
+		return validation("该接口只支持暂停，恢复请重新验证身份")
+	}
+	if in.AutoAdopt != nil && *in.AutoAdopt {
+		// D-129：正式验收（每平台 10 篇以上逐字段对照）完成前不开启自动采用。
+		return apiErr(409, "platform_consent_required", "自动采用需先完成正式验收，当前版本不支持开启")
+	}
+	if in.AutoCollect != nil && !*in.AutoCollect && c.AutoAdopt {
+		return validation("关闭自动采集前请先关闭自动采用")
+	}
+
+	var updated platformConnection
+	err = s.withTx(r.Context(), func(tx pgx.Tx) error {
+		var current platformConnection
+		if err := tx.QueryRow(r.Context(), `SELECT authorization_revision, adoption_revision
+			FROM platform_connection WHERE id=$1 FOR UPDATE`, c.ID).Scan(
+			&current.AuthorizationRevision, &current.AdoptionRevision); err != nil {
+			return err
+		}
+		if in.AuthorizationRevision != nil && *in.AuthorizationRevision != current.AuthorizationRevision {
+			return apiErr(409, "platform_authorization_changed", "连接授权已变化，请刷新后重试")
+		}
+		if in.AdoptionRevision != nil && *in.AdoptionRevision != current.AdoptionRevision {
+			return apiErr(409, "platform_authorization_changed", "自动采用设置已变化，请刷新后重试")
+		}
+		// 只在真的改了增权字段时递增授权版本，暂停不递增（§12 的暂停语义）。
+		if err := tx.QueryRow(r.Context(), `UPDATE platform_connection SET
+			state=coalesce($2, state),
+			auto_collect=coalesce($3, auto_collect),
+			authorization_revision=authorization_revision +
+			  CASE WHEN ($2 IS NOT NULL OR $3 IS DISTINCT FROM auto_collect) THEN 1 ELSE 0 END,
+			next_due_at=CASE WHEN $2='paused' THEN NULL ELSE next_due_at END,
+			updated_at=now()
+			WHERE id=$1
+			RETURNING id, workspace_id, account_id, platform, user_id, device_id, external_account_key,
+			  state, availability, authorization_revision, adoption_revision, auto_collect, auto_adopt,
+			  last_verified_at, last_seen_at, next_due_at, failure_count, platform_consent_version,
+			  consented_at, created_at, updated_at`,
+			c.ID, in.State, in.AutoCollect).Scan(
+			&updated.ID, &updated.WorkspaceID, &updated.AccountID, &updated.Platform, &updated.UserID,
+			&updated.DeviceID, &updated.ExternalAccountKey, &updated.State, &updated.Availability,
+			&updated.AuthorizationRevision, &updated.AdoptionRevision, &updated.AutoCollect, &updated.AutoAdopt,
+			&updated.LastVerifiedAt, &updated.LastSeenAt, &updated.NextDueAt, &updated.FailureCount,
+			&updated.PlatformConsentVersion, &updated.ConsentedAt, &updated.CreatedAt, &updated.UpdatedAt); err != nil {
+			return err
+		}
+		if updated.State == "paused" {
+			// 暂停后取消未结束任务，不留下会继续跑的执行。
+			if _, err := tx.Exec(r.Context(), `UPDATE platform_sync_run SET status='canceled',
+				cancel_requested_at=now(), finished_at=now()
+				WHERE connection_id=$1 AND status IN ('queued','leased','running')`, c.ID); err != nil {
+				return err
+			}
+		}
+		return s.auditTx(r.Context(), tx, "platform_connection_update", "platform_connection", c.ID.String(), "ok",
+			map[string]any{"state": updated.State, "auto_collect": updated.AutoCollect,
+				"auto_adopt": updated.AutoAdopt, "authorization_revision": updated.AuthorizationRevision})
+	})
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	return ok(w, platformConnectionSummary(updated))
+}
+
 // getPlatformConnection 是 GET /accounts/{accountId}/platform-connection 的读取端。
 func (s *Server) getPlatformConnection(w http.ResponseWriter, r *http.Request) error {
 	accountID, err := pathID(r, "accountId")

@@ -358,6 +358,7 @@ func (s *Server) buildRouter() http.Handler {
 			// 平台连接摘要与撤销（20 文档 §11.2）。创建/验证连接由本机证明在 PS07 接入。
 			r.Get("/accounts/{accountId}/platform-connection", s.h(s.getPlatformConnection))
 			r.Delete("/accounts/{accountId}/platform-connection", s.h(s.deletePlatformConnection))
+			r.Patch("/accounts/{accountId}/platform-connection", s.h(s.patchPlatformConnection))
 			// 手动采集只建待办，且仅连接保管人可发起（20 文档 §10.1.1）。
 			r.Post("/accounts/{accountId}/platform-sync", s.h(s.requestPlatformSync))
 			r.Get("/works/{id}/metrics", s.h(s.listMetrics))

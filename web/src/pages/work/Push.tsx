@@ -3,7 +3,8 @@ import { CheckCircle2, Circle, Copy, ExternalLink, Loader2, Send, XCircle } from
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { BackfillForm, PostPushTodos } from '@/components/backfill'
+import { BackfillForm, PlatformBinding, PostPushTodos } from '@/components/backfill'
+import { useMe } from '@/lib/session'
 import { CropPreview } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, PageState, Switch } from '@/components/ui'
@@ -24,6 +25,8 @@ interface PushPreview {
   revision: number
   backend_url: string
   can_push: boolean
+  material_basis_stale: boolean
+  check_revision_stale: boolean
   asset_count: number
   cover_asset: string | null
   cover_crops: Record<string, CropBox> | null
@@ -52,9 +55,11 @@ export default function Push() {
   const { work, setWork, refresh } = useWork()
   const nav = useNavigate()
   const canWrite = useCanWrite()
+  const { data: me } = useMe()
+  const canManage = me?.role === 'owner' || me?.role === 'editor'
   // D-048：图文卡片与漫画一样写入图片消息草稿。
   const comic = work.content_format === 'comic' || work.content_format === 'card_post'
-  const pv = useQuery({ queryKey: ['push-preview', work.id, work.status, work.revision], queryFn: () => get<PushPreview>(`/works/${work.id}/wechat/push-preview`) })
+  const pv = useQuery({ queryKey: ['push-preview', work.id, work.status, work.revision], queryFn: () => get<PushPreview>(`/works/${work.id}/wechat/push-preview`), enabled: work.platform === 'wechat_mp' })
   const { html, chars } = useWechatHtml(work)
   const [fields, setFields] = useState<WechatDefaults | null>(null)
   const [steps, setSteps] = useState<Record<string, StepState>>({})
@@ -65,6 +70,20 @@ export default function Push() {
   const [syncingDraft, setSyncingDraft] = useState(false)
   const [todos, setTodos] = useState<boolean[]>(backendTodos.map(() => false))
 
+  // 小红书作品没有公众号草稿接口：直接给出说明和出口，避免把 422 渲染成「加载失败」。
+  if (work.platform !== 'wechat_mp') {
+    return (
+      <>
+        <WorkHeaderAction><Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/pack`)}>去发布包</Button></WorkHeaderAction>
+        <div className="mx-auto max-w-2xl px-6 py-12">
+          <Notice tone="gray">
+            这是{work.platform === 'xhs' ? '小红书' : '当前平台'}作品，不能写入公众号草稿。
+            请到「发布包」导出图文，按顺序手动发布；发布后可以回来回填链接。
+          </Notice>
+        </div>
+      </>
+    )
+  }
   if (pv.isLoading || !pv.data) return <PageState loading={pv.isLoading} error={pv.error ?? pv.failureReason} retrying={pv.isFetching} onRetry={() => void pv.refetch()} emptyTitle="暂无推送预览数据" />
   const p = pv.data
   const f = fields ?? p.fields
@@ -134,7 +153,11 @@ export default function Push() {
           </div>
         </WorkHeaderAction>
         <div className="mx-auto max-w-2xl px-6 py-12">
-          <HumanGate code="H-04">发布前检查还没有全部确认，不能写入草稿。</HumanGate>
+          {p.material_basis_stale
+            ? <Notice tone="gamboge">素材依据已变化，需重新检查后才能写入草稿。</Notice>
+            : p.check_revision_stale
+              ? <Notice tone="gamboge">作品内容已变化，需重新检查后才能写入草稿。</Notice>
+            : <HumanGate code="H-04">发布前检查还没有全部确认，不能写入草稿。</HumanGate>}
         </div>
       </>
     )
@@ -279,7 +302,7 @@ export default function Push() {
         {!result && (work.status === 'pushed' || work.status === 'published') && (work.post_push_todos ?? []).length > 0 && (
           <Card className="p-5"><PostPushTodos work={work} setWork={setWork} /></Card>
         )}
-        {(work.status === 'pushed' || work.status === 'published') && <div id="backfill"><BackfillForm work={work} setWork={setWork} /></div>}
+        {(work.status === 'pushed' || work.status === 'published') && (<div id="backfill" className="space-y-4"><BackfillForm work={work} setWork={setWork} /><PlatformBinding work={work} setWork={setWork} canManage={canManage} /></div>)}
         {work.status === 'pushed' && work.wechat_draft_media_id && (
           <Card className="flex items-center gap-3 p-4">
             <div className="min-w-0 flex-1 text-[13px] text-mist-600">同步草稿箱状态：检查这篇草稿是否仍在公众号草稿箱（不会自动改作品状态）。</div>

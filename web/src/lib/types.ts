@@ -28,6 +28,47 @@ export interface Account {
 
 export type DatacubeState = 'ok' | 'no_permission' | 'unknown'
 
+/** 平台连接可用性（20 文档 §5.2）：全文“可用”均指 availability='ready'。 */
+export type PlatformAvailability =
+  | 'unknown' | 'login_required' | 'verifying' | 'ready' | 'challenge_required'
+  | 'restricted' | 'identity_mismatch' | 'degraded' | 'unsupported'
+
+/** 平台数据连接摘要（20 文档 §11.2）：不包含凭据或本机路径。 */
+export interface PlatformConnection {
+  id: string
+  account_id: string
+  platform: 'wechat_mp' | 'xhs'
+  state: 'active' | 'paused' | 'revoked'
+  availability: PlatformAvailability
+  external_account_key: string
+  auto_collect: boolean
+  auto_adopt: boolean
+  last_verified_at: string | null
+  last_seen_at: string | null
+  next_due_at: string | null
+  failure_count: number
+  authorization_revision: number
+  adoption_revision: number
+  platform_consent_version: number
+  consented_at: string | null
+}
+
+/** 最小观测（20 文档 §8.1）：页面只读展示，不返回原始网络数据。 */
+export interface PlatformObservation {
+  id: string
+  external_id: string | null
+  scope: 'account' | 'work'
+  source: MetricSource
+  observed_at: string
+  as_of_at: string | null
+  quality_state: 'valid' | 'needs_confirmation' | 'rejected' | 'superseded'
+  match_state: 'not_applicable' | 'bound' | 'unmatched' | 'ignored'
+  adapter_version: string
+  mapping_version: number
+  values: Record<string, { value: number; precision: string; unit: MetricUnit }>
+  field_paths: Record<string, string>
+}
+
 /** 公众号数据接口每日后台只读同步（DEV-DR06） */
 export interface WechatAuto {
   enabled: boolean
@@ -308,6 +349,12 @@ export interface Work {
   published_url: string | null
   published_at: string | null
   publish_revision: number
+  // 平台绑定（20 文档 §7.1）：external_id 按平台从 wechat_msgid/xhs_note_id 派生。
+  external_id?: string | null
+  metric_binding_revision: number
+  metric_binding_confirmed_at?: string | null
+  platform_binding_source?: 'user_link' | 'user_confirm' | 'official_exact' | 'legacy_title' | null
+  platform_binding_verified_at?: string | null
   locked: boolean
   revision: number
   sections: Section[]

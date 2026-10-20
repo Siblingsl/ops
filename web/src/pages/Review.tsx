@@ -57,6 +57,15 @@ const metricDisplay = (metric: Metric | null | undefined, key: MetricKey) => key
 
 const contentFormatName = (format: string) => format === 'micro_post' ? '微头条' : format === 'long_article' ? '文章' : format
 
+// 口径提示（20 文档 §9.1）：单位未知的读数不能与人数/次数相加，界面必须说明而不是当成 0。
+const unitHint = (metric: Metric | null | undefined): string => {
+  if (!metric) return ''
+  if (metric.read_unit === 'users') return '阅读人数'
+  if (metric.read_unit === 'times') return '阅读次数'
+  if (metric.source === 'wechat_browser' || metric.source === 'xhs_browser') return '口径不明（未计入统计）'
+  return ''
+}
+
 function ImportMetrics({ accountId, platform, works, onDone }: { accountId: string; platform: Platform; works: BoardRow[]; onDone: () => void }) {
   const inv = useInvalidate()
   const [open, setOpen] = useState(false)
@@ -645,7 +654,7 @@ export default function Review() {
                     {acc.platform === 'toutiao' && <><td className="text-right tabular-nums">{metricDisplay(r.d7, 'impressions')}</td><td className="text-right tabular-nums">{ctrLabel(r.d7?.ctr)}</td></>}
                     <td className="text-right tabular-nums">{fmtNum(r.d7?.favorites)}</td>
                     <td className="text-right tabular-nums">{fmtNum(r.d7?.shares)}</td>
-                    <td><div className="desktop-review-source-cell"><Badge>{r.d7 ? metricSourceLabel[r.d7.source] ?? r.d7.source : '尚未录入'}</Badge><IconButton label={`录入${r.title || '作品'}数据`} onClick={() => setParams({ work: r.id })}><Plus className="size-3.5" /></IconButton></div></td>
+                    <td><div className="desktop-review-source-cell"><Badge>{r.d7 ? metricSourceLabel[r.d7.source] ?? r.d7.source : '尚未录入'}</Badge>{unitHint(r.d7) && <span className="text-[11.5px] text-mist-400">{unitHint(r.d7)}</span>}<IconButton label={`录入${r.title || '作品'}数据`} onClick={() => setParams({ work: r.id })}><Plus className="size-3.5" /></IconButton></div></td>
                   </tr>
                 ))}</tbody>
               </table>

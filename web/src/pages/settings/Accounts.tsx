@@ -1,16 +1,121 @@
-import { Pencil, Plus, Power, Search, Trash2, Users } from 'lucide-react'
+import { Pencil, Plus, Power, RefreshCw, Search, Trash2, Users } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AccountCreateForm, credTone, CredentialPanel } from '@/components/account-forms'
 import { confirm, Dialog } from '@/components/dialog'
-import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, Input, PageHeader, PageLoading, PlatformMark, platformLabel, Switch, Textarea } from '@/components/ui'
-import { del, errorMessage, patch, post } from '@/lib/api'
+import { PlatformConnectionCard } from '@/components/platform-connection'
+import { Badge, Button, Card, CardHeader, cn, Empty, Field, Input, PageHeader, PageLoading, PlatformMark, platformFormatLabel, platformLabel, platformFormats, Switch, Textarea } from '@/components/ui'
+import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { useAccounts, useInvalidate, useMe } from '@/lib/session'
-import type { Account } from '@/lib/types'
+import type { Account, ContentFormat, Platform } from '@/lib/types'
+import { useSettingsDraft } from '@/lib/desktop-settings'
 
 type Filter = 'all' | 'active' | 'disabled'
+
+/** 账号类型迁移弹窗（D-123 / DEV-415）：同平台内改类型，已有作品保持原类型。 */
+function ChangeTypeDialog({ account, open, onClose, onChanged }: {
+  account: Account
+  open: boolean
+  onClose: () => void
+  onChanged: (a: Account, summary: Record<string, unknown>) => void
+}) {
+  const options = platformFormats[account.platform].filter((f) => f !== account.content_format)
+  const [format, setFormat] = useState<ContentFormat>(options[0])
+  const [busy, setBusy] = useState(false)
+  const [impact, setImpact] = useState<{ works: number; cards: number } | null>(null)
+  useSettingsDraft(false, busy)
+
+  useEffect(() => {
+    if (!open) return
+    setFormat(options[0])
+    setImpact(null)
+    let alive = true
+    void (async () => {
+      try {
+        const [works, cards] = await Promise.all([
+          get<{ id: string }[]>(`/accounts/${account.id}/works`),
+          get<{ id: string }[]>(`/accounts/${account.id}/characters`).catch(() => [] as { id: string }[]),
+        ])
+        if (alive) setImpact({ works: works.length, cards: cards.length })
+      } catch {
+        if (alive) setImpact({ works: 0, cards: 0 })
+      }
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, account.id])
+
+  const submit = async () => {
+    setBusy(true)
+    try {
+      // 服务端只在类型确实变化时返回 {account, type_change}；竞态下（例如他人已改为同类型）
+      // 返回裸账号对象，这里两种形态都接受，避免把正常响应误判为失败。
+      type ChangeTypeRes = Account & { account?: Account; type_change?: Record<string, unknown> }
+      const res = await patch<ChangeTypeRes>(`/accounts/${account.id}`, {
+        content_format: format,
+        confirm_type_change: true,
+      })
+      const updated = res.account ?? res
+      if (!updated?.id) throw new Error('服务端未返回更新后的账号，请刷新后重试。')
+      toast.success(`${account.platform === 'toutiao' ? '默认创作形态' : '账号类型'}已改为「${platformFormatLabel(account.platform, format)}」`)
+      onChanged(updated, res.type_change ?? {})
+      onClose()
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={account.platform === 'toutiao' ? '修改默认创作形态' : '修改账号类型'}
+      desc={account.platform === 'toutiao' ? '只改变后续创作的默认选项；每篇仍可选择文章或微头条，已有作品、选题和计划保持原形态。' : '同平台内可以更换类型；已有作品不受影响，新作品使用新类型。'}
+      footer={(
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={busy}>取消</Button>
+          <Button variant="primary" onClick={submit} disabled={busy || !options.length}>
+            {busy ? '提交中…' : '确认修改'}
+          </Button>
+        </div>
+      )}
+    >
+      <div className="space-y-4">
+        <fieldset className="space-y-2">
+          <legend className="mb-2 text-[12.5px] font-medium text-mist-600">{account.platform === 'toutiao' ? '选择新的默认创作形态' : '选择新的账号类型'}</legend>
+          {options.map((f) => (
+            <label key={f} className={cn(
+              'flex cursor-pointer items-start gap-2.5 rounded-lg border p-3 text-[13px] transition-colors',
+              format === f ? 'border-ink-600 bg-ink-50' : 'border-mist-200 hover:border-mist-300',
+            )}>
+              <input type="radio" name="change-type" className="mt-0.5 accent-ink-600" checked={format === f} onChange={() => setFormat(f)} />
+              <span>
+                <span className="font-medium text-ink-800">{platformFormatLabel(account.platform, f)}</span>
+                {f === 'comic' && <span className="ml-2 text-[12px] text-mist-500">角色卡 + 分镜脚本 + 逐格文案</span>}
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        <div className="rounded-lg bg-mist-50 p-3 text-[12.5px] leading-relaxed text-mist-700">
+          <p className="mb-1.5 font-medium text-ink-800">这次修改会带来什么</p>
+          <ul className="list-disc space-y-1 pl-4">
+            <li>已有 {impact?.works ?? '…'} 篇作品保持原类型，检查、推送与打包行为完全不变。</li>
+            <li>之后新建的作品将使用「{platformFormatLabel(account.platform, format)}」。</li>
+            <li>
+              {format === 'comic'
+                ? '转为漫画后角色卡立刻可用。'
+                : `转出漫画后角色卡会保留${impact?.cards ? `（${impact.cards} 张）` : ''}，只要账号里还有漫画作品就仍可管理。`}
+            </li>
+          </ul>
+        </div>
+      </div>
+    </Dialog>
+  )
+}
 
 function AccountDetail({ account, onStatusChange, canManage }: {
   account: Account
@@ -21,16 +126,20 @@ function AccountDetail({ account, onStatusChange, canManage }: {
   const [name, setName] = useState(account.name)
   const [limit, setLimit] = useState(String(account.daily_push_limit))
   const [typeNote, setTypeNote] = useState(account.type_note ?? '')
-  useEffect(() => { setName(account.name); setLimit(String(account.daily_push_limit)); setTypeNote(account.type_note ?? '') }, [account])
+  const [typeOpen, setTypeOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  useSettingsDraft(canManage && (name !== account.name || Number(limit) !== account.daily_push_limit || typeNote !== (account.type_note ?? '')), saving)
+  useEffect(() => { setName(account.name); setLimit(String(account.daily_push_limit)); setTypeNote(account.type_note ?? ''); setTypeOpen(false) }, [account])
 
   const save = async (body: Record<string, unknown>) => {
+    setSaving(true)
     try {
       await patch(`/accounts/${account.id}`, body)
-      inv(['accounts'])
+      await inv(['accounts'])
       toast.success('已保存')
     } catch (e) {
       toast.error(errorMessage(e))
-    }
+    } finally { setSaving(false) }
   }
 
   const toggle = async () => {
@@ -91,9 +200,16 @@ function AccountDetail({ account, onStatusChange, canManage }: {
           <Field label="账号名称">
             <Input value={name} disabled={!canManage} onChange={(e) => setName(e.target.value)} onBlur={() => canManage && name.trim() && name !== account.name && save({ name })} />
           </Field>
-          <Field label="账号类型" hint="创建时选定后固定，不可修改；如需其他类型请新建账号">
-            <div className="flex h-9 items-center gap-2 text-[13.5px] text-mist-700">
-              {formatLabel[account.content_format] ?? account.content_format}
+          <Field label={account.platform === 'toutiao' ? '默认创作形态' : '账号类型'} hint={account.platform === 'toutiao' ? '每篇可选文章或微头条；修改默认值不影响已有内容' : '同平台内可以更换类型；跨平台请新建账号'} plain>
+            {/* 窄列（如 1024 视口下详情卡只有约 370px、字段列 157px）时徽标＋按钮合计 162px 会撑破字段列，
+                因此允许换行并用 min-h 兜住基准行高；宽屏下与原来的单行 h-9 完全一致。 */}
+            <div className="flex min-h-9 flex-wrap items-center gap-2 text-[13.5px] text-mist-700">
+              <Badge tone="ink">{platformFormatLabel(account.platform, account.content_format)}</Badge>
+              {canManage && (
+                <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} onClick={() => setTypeOpen(true)}>
+                  {account.platform === 'toutiao' ? '修改默认形态' : '修改类型'}
+                </Button>
+              )}
             </div>
           </Field>
           <Field label="类型补充说明" hint="只帮助 AI 理解定位，不改变创作流程；最多 200 字">
@@ -132,6 +248,22 @@ function AccountDetail({ account, onStatusChange, canManage }: {
           )}
         </div>
       </Card>
+      <ChangeTypeDialog
+        account={account}
+        open={typeOpen}
+        onClose={() => setTypeOpen(false)}
+        onChanged={(_a, summary) => {
+          inv(['accounts'])
+          const kept = summary?.works_kept
+          if (typeof kept === 'number' && kept > 0) {
+            toast.success(`已有 ${kept} 篇作品保持原类型`)
+          }
+          const stale = summary?.stale_plan_slots
+          if (typeof stale === 'number' && stale > 0) {
+            toast.warning(`有 ${stale} 个未采用的计划槽位仍是旧类型，请到运营方案页启用新方案后重建`)
+          }
+        }}
+      />
       {account.platform === 'wechat_mp' ? (
         canManage ? (
           <Card>
@@ -143,8 +275,14 @@ function AccountDetail({ account, onStatusChange, canManage }: {
         )
       ) : (
         <Card className="p-5 text-[13px] leading-relaxed text-mist-600">
-          小红书没有面向个人创作者的发布接口。本系统不登录小红书、不保存小红书账号密码，作品通过「发布包」由你手动发布。
+          {account.platform === 'xhs'
+            ? '小红书作品通过「发布包」由你手动发布。'
+            : '今日头条作品通过「发布包」由你手动发布；系统账号不代表已绑定或验证头条号身份。'}
         </Card>
+      )}
+      {/* 平台数据连接（D-129）：只对首版支持的两个平台展示；头条不提供本机采集。 */}
+      {(account.platform === 'wechat_mp' || account.platform === 'xhs') && (
+        <PlatformConnectionCard key={account.id} accountId={account.id} platform={account.platform} canManage={canManage} />
       )}
     </div>
   )
@@ -162,7 +300,7 @@ export default function SettingsAccounts() {
   const inv = useInvalidate()
   const creating = params.get('new') === '1'
   const focusSearch = params.get('q') === '1'
-  const createPlatform = params.get('platform') === 'xhs' ? 'xhs' : params.get('platform') === 'wechat_mp' ? 'wechat_mp' : undefined
+  const createPlatform = (['wechat_mp', 'xhs', 'toutiao'] as Platform[]).find((p) => p === params.get('platform'))
   const list = data ?? []
 
   const filtered = useMemo(() => {
@@ -189,8 +327,8 @@ export default function SettingsAccounts() {
   }, [focusSearch])
 
   useEffect(() => {
-    if (!selected && filtered.length) setSelected(filtered[0].id)
-  }, [filtered, selected])
+    if (!selected && filtered.length) setSelected(filtered.find((account) => account.id === params.get('id'))?.id ?? filtered[0].id)
+  }, [filtered, selected, params])
 
   useEffect(() => {
     if (selected && !filtered.some((a) => a.id === selected)) {
@@ -220,12 +358,12 @@ export default function SettingsAccounts() {
           <Empty
             icon={<Users className="size-5" />}
             title="还没有平台账号"
-            desc={canManage ? '先添加公众号或小红书账号。凭证、定位档案、风格样本和模型可在添加后随时配置。' : '请联系工作区所有者添加平台账号。'}
+            desc={canManage ? '先添加平台账号。公众号凭证、定位档案、风格样本和模型可在添加后配置。' : '请联系工作区所有者添加平台账号。'}
             action={canManage ? <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setParams({ new: '1' })}>添加账号</Button> : undefined}
           />
           <ol className="space-y-2 border-t border-mist-100 bg-mist-50/60 px-6 py-4 text-[13px] text-mist-600">
             <li><span className="font-medium text-mist-800">1. 添加账号</span> — 本页</li>
-            <li><span className="font-medium text-mist-800">2. 公众号凭证</span> — 添加公众号后在本页下方填写（小红书可跳过）</li>
+            <li><span className="font-medium text-mist-800">2. 平台凭证</span> — 仅公众号需要；小红书和今日头条可手动发布</li>
             <li><span className="font-medium text-mist-800">3. 定位档案 / 风格样本</span> — 左侧「账号档案」</li>
             <li><span className="font-medium text-mist-800">4. 模型</span> — 头像菜单 → 模型配置</li>
           </ol>
@@ -277,7 +415,7 @@ export default function SettingsAccounts() {
                           <span className="truncate text-[13.5px] font-medium text-mist-900">{a.name}</span>
                           {selected === a.id && <Pencil className="size-3 shrink-0 text-ink-500" />}
                         </div>
-                        <div className="text-[11.5px] text-mist-500">{platformLabel[a.platform]} · {formatLabel[a.content_format]}</div>
+                        <div className="text-[11.5px] text-mist-500">{platformLabel[a.platform]} · {platformFormatLabel(a.platform, a.content_format)}</div>
                       </div>
                       {a.status === 'disabled' ? <Badge>已停用</Badge> : a.platform === 'wechat_mp' && <Badge tone={t.tone}>{t.label}</Badge>}
                     </button>
