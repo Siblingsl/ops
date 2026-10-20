@@ -177,6 +177,9 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/desktop/platform/runs/{id}/results",
 		"GET /api/v1/desktop/platform/runs/{id}/receipts/{seq}",
 		"POST /api/v1/accounts/{accountId}/platform-sync",
+		// DEV-PS08 观测查看与逐条确认：确认只作用于当前一条，智能体不提供批量工具。
+		"GET /api/v1/accounts/{accountId}/metrics/observations",
+		"POST /api/v1/metrics/observations/{id}/confirm",
 		"POST /api/v1/auth/setup",
 		"POST /api/v1/auth/register",
 		"POST /api/v1/auth/login",

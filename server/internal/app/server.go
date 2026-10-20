@@ -270,6 +270,9 @@ func (s *Server) buildRouter() http.Handler {
 			r.Get("/accounts/{accountId}/metrics/unmatched", s.h(s.listUnmatchedMetrics))
 			r.Post("/metrics/unmatched/{id}/assign", s.h(s.assignUnmatchedMetric))
 			r.Post("/metrics/unmatched/{id}/ignore", s.h(s.ignoreUnmatchedMetric))
+			// 观测查看与逐条确认（20 文档 §11.2）：确认只作用于当前一条，不联动其他行。
+			r.Get("/accounts/{accountId}/metrics/observations", s.h(s.listObservations))
+			r.Post("/metrics/observations/{id}/confirm", s.h(s.confirmObservationHandler))
 			r.Post("/accounts/{accountId}/metrics/screenshots", s.h(s.recognizeMetricScreenshots))
 			r.Post("/metrics/screenshots/{id}/rows/{idx}/confirm", s.h(s.confirmMetricScreenshotRow))
 			r.Get("/accounts/{accountId}/followers", s.h(s.listFollowers))

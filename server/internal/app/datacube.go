@@ -215,9 +215,12 @@ func (s *Server) writeArticleDetails(ctx context.Context, workID uuid.UUID, msgi
 		}
 		reads, favs, shares := d.IntPageReadUser, d.AddToFavUser, d.ShareUser
 		ext := msgid
+		// 官方字段口径固定：int_page_read_user 与 share_user 都是人数，必须显式写单位（§9.1）。
+		readUnit, shareUnit := metricUnitUsers, metricUnitUsers
 		err = s.withTx(ctx, func(tx pgx.Tx) error {
 			_, _, err := s.upsertMetricWithAudit(ctx, tx, metricWrite{WorkID: workID, CapturedAt: stat.Add(23*time.Hour + 59*time.Minute),
-				Source: "wechat_api", DayOffset: &day, ExternalID: &ext, Reads: &reads, Favorites: &favs, Shares: &shares})
+				Source: "wechat_api", DayOffset: &day, ExternalID: &ext, Reads: &reads, Favorites: &favs, Shares: &shares,
+				ReadUnit: &readUnit, ShareUnit: &shareUnit})
 			return err
 		})
 		if err != nil {

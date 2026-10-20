@@ -1,6 +1,6 @@
-export type Platform = 'wechat_mp' | 'xhs'
-// D-048 首批账号类型（90 文档第 9 节）：预设类型决定真实工作流，创建后固定。
-export type ContentFormat = 'long_article' | 'image_note' | 'comic' | 'qa_article' | 'briefing' | 'list_note' | 'card_post' | 'script'
+export type Platform = 'wechat_mp' | 'xhs' | 'toutiao'
+// D-048 首批账号类型（90 文档第 9 节）：预设类型决定真实工作流；账号类型可在同平台内迁移（D-123）。
+export type ContentFormat = 'long_article' | 'image_note' | 'comic' | 'qa_article' | 'briefing' | 'list_note' | 'card_post' | 'script' | 'micro_post'
 export type WorkStatus = 'drafting' | 'checking' | 'reviewing' | 'ready' | 'pushed' | 'packed' | 'published'
 
 export interface CredState {
@@ -307,6 +307,7 @@ export interface Work {
   wechat_draft_media_id: string | null
   published_url: string | null
   published_at: string | null
+  publish_revision: number
   locked: boolean
   revision: number
   sections: Section[]
@@ -388,6 +389,8 @@ export interface CheckRun {
   completed_at: string | null
   created_at: string
   stale: boolean
+  material_basis_stale: boolean
+  material_basis_unavailable: number
   items: CheckItem[]
   total: number
   confirmed: number
@@ -399,6 +402,9 @@ export interface Metric {
   work_id: string
   captured_at: string
   reads: number | null
+  impressions: number | null
+  impressions_exact?: string | null
+  ctr: number | null
   likes: number | null
   wows: number | null
   favorites: number | null
@@ -409,13 +415,26 @@ export interface Metric {
   source: MetricSource
   day_offset: number | null
   external_id: string | null
+  revision: number
+  // 口径与质量（20 文档 §9.1）：单位未知时不得与人数/次数聚合。
+  read_unit: MetricUnit
+  share_unit: MetricUnit
+  quality_state: 'approved' | 'held' | 'superseded'
+  observation_id: string | null
+  observed_at: string | null
+  as_of_at: string | null
+  metric_meta: Record<string, unknown>
+  ctr_unavailable?: string
 }
 
-export type MetricSource = 'manual' | 'paste' | 'file' | 'wechat_api' | 'screenshot'
+export type MetricUnit = 'users' | 'times' | 'unknown'
+
+export type MetricSource = 'manual' | 'paste' | 'file' | 'wechat_api' | 'screenshot' | 'wechat_browser' | 'xhs_browser'
 
 export interface BoardRow {
   id: string
   title: string
+  content_format: string
   status: WorkStatus
   published_at: string | null
   d7: Metric | null
@@ -426,7 +445,7 @@ export interface BoardRow {
 export interface ReviewReport {
   id: string
   work_ids: string[]
-  content: { conclusions: string[]; topic_suggestions: { title: string; angle: string; reason: string }[]; writing_insights?: string[] }
+  content: { content_format?: ContentFormat; conclusions: string[]; topic_suggestions: { title: string; angle: string; reason: string }[]; writing_insights?: string[] }
   adopted: number[]
   remembered?: number[]
   ignored?: number[]
@@ -633,6 +652,7 @@ export interface CalendarItem {
   account_id: string
   account_name: string
   platform: Platform
+  content_format: ContentFormat | ''
   title: string
   status: string
   date: string
@@ -699,6 +719,8 @@ export interface SearchHit {
   snippet: string
   account_id: string | null
   account_name: string
+  platform?: Platform
+  content_format?: ContentFormat
   status?: string
   link: string
   score: number

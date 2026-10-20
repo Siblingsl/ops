@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,42 +15,86 @@ import (
 )
 
 type Metric struct {
-	ID            uuid.UUID `json:"id"`
-	WorkID        uuid.UUID `json:"work_id"`
-	CapturedAt    time.Time `json:"captured_at"`
-	Reads         *int      `json:"reads"`
-	Likes         *int      `json:"likes"`
-	Wows          *int      `json:"wows"`
-	Favorites     *int      `json:"favorites"`
-	Comments      *int      `json:"comments"`
-	Shares        *int      `json:"shares"`
-	FollowsGained *int      `json:"follows_gained"`
-	Note          string    `json:"note"`
-	Source        string    `json:"source"`
-	DayOffset     *int      `json:"day_offset"`
-	ExternalID    *string   `json:"external_id"`
+	ID               uuid.UUID `json:"id"`
+	WorkID           uuid.UUID `json:"work_id"`
+	CapturedAt       time.Time `json:"captured_at"`
+	Reads            *int      `json:"reads"`
+	Impressions      *int64    `json:"impressions"`
+	ImpressionsExact *string   `json:"impressions_exact"`
+	CTR              *float64  `json:"ctr"`
+	Likes            *int      `json:"likes"`
+	Wows             *int      `json:"wows"`
+	Favorites        *int      `json:"favorites"`
+	Comments         *int      `json:"comments"`
+	Shares           *int      `json:"shares"`
+	FollowsGained    *int      `json:"follows_gained"`
+	Note             string    `json:"note"`
+	Source           string    `json:"source"`
+	DayOffset        *int      `json:"day_offset"`
+	ExternalID       *string   `json:"external_id"`
+	Revision         int       `json:"revision"`
+	// 口径与质量（20 文档 §9.1、§8.5）：单位未知时不得与人数/次数聚合。
+	ReadUnit       string          `json:"read_unit"`
+	ShareUnit      string          `json:"share_unit"`
+	QualityState   string          `json:"quality_state"`
+	ObservationID  *uuid.UUID      `json:"observation_id"`
+	ObservedAt     *time.Time      `json:"observed_at"`
+	AsOfAt         *time.Time      `json:"as_of_at"`
+	MetricMeta     json.RawMessage `json:"metric_meta"`
+	CTRUnavailable string          `json:"ctr_unavailable,omitempty"`
 }
 
-const metricCols = `id, work_id, captured_at, reads, likes, wows, favorites, comments, shares, follows_gained, note, source, day_offset, external_id`
+const metricCols = `id, work_id, captured_at, reads, impressions, likes, wows, favorites, comments, shares, follows_gained, note, source, day_offset, external_id, revision,
+	read_unit, share_unit, quality_state, observation_id, observed_at, as_of_at, metric_meta`
 
 func metricDest(m *Metric) []any {
-	return []any{&m.ID, &m.WorkID, &m.CapturedAt, &m.Reads, &m.Likes, &m.Wows, &m.Favorites, &m.Comments, &m.Shares, &m.FollowsGained, &m.Note, &m.Source, &m.DayOffset, &m.ExternalID}
+	return []any{&m.ID, &m.WorkID, &m.CapturedAt, &m.Reads, &m.Impressions, &m.Likes, &m.Wows, &m.Favorites, &m.Comments, &m.Shares, &m.FollowsGained, &m.Note, &m.Source, &m.DayOffset, &m.ExternalID, &m.Revision,
+		&m.ReadUnit, &m.ShareUnit, &m.QualityState, &m.ObservationID, &m.ObservedAt, &m.AsOfAt, &m.MetricMeta}
+}
+
+// metricCTR 按 §9.1 派生点击率。规则按来源区分：
+//   - 浏览器新来源（wechat_browser/xhs_browser）：只有同一快照、两者均有值、impressions>0
+//     且 read_unit='times' 时才计算；users 或 unknown 返回 NULL 并标“口径不可比”。
+//   - 旧来源（含头条、官方同步、人工）保持原行为：19 文档已按同快照 reads/impressions 派生，
+//     本轮不改既有报表口径。
+func metricCTR(m *Metric) (*float64, string) {
+	if m.Reads == nil || m.Impressions == nil || *m.Impressions <= 0 {
+		return nil, ""
+	}
+	if isBrowserMetricSource(m.Source) && m.ReadUnit != "times" {
+		return nil, "read_unit_not_times"
+	}
+	ctr := float64(*m.Reads) / float64(*m.Impressions)
+	return &ctr, ""
+}
+
+// isBrowserMetricSource 判断是否为网页后台读取的新来源。
+func isBrowserMetricSource(source string) bool {
+	return source == "wechat_browser" || source == "xhs_browser"
 }
 
 func scanMetric(row interface{ Scan(...any) error }) (Metric, error) {
 	var m Metric
 	err := row.Scan(metricDest(&m)...)
+	if err == nil {
+		m.CTR, m.CTRUnavailable = metricCTR(&m)
+	}
+	if err == nil && m.Impressions != nil {
+		exact := strconv.FormatInt(*m.Impressions, 10)
+		m.ImpressionsExact = &exact
+	}
 	return m, err
 }
 
 type BoardRow struct {
-	ID          uuid.UUID  `json:"id"`
-	Title       string     `json:"title"`
-	Status      string     `json:"status"`
-	PublishedAt *time.Time `json:"published_at"`
-	D7          *Metric    `json:"d7"`
-	Nodes       []int32    `json:"nodes"`
-	Points      int        `json:"points"`
+	ID            uuid.UUID  `json:"id"`
+	Title         string     `json:"title"`
+	ContentFormat string     `json:"content_format"`
+	Status        string     `json:"status"`
+	PublishedAt   *time.Time `json:"published_at"`
+	D7            *Metric    `json:"d7"`
+	Nodes         []int32    `json:"nodes"`
+	Points        int        `json:"points"`
 }
 
 func (s *Server) board(w http.ResponseWriter, r *http.Request) error {
@@ -58,17 +103,24 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
-	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.status, w.published_at, (SELECT count(*) FROM metric_snapshot WHERE work_id=w.id),
+	format := strings.TrimSpace(r.URL.Query().Get("content_format"))
+	if a.Platform == "toutiao" && format != "" && format != "long_article" && format != "micro_post" {
+		return validation("头条数据看板形态无效")
+	}
+	if a.Platform != "toutiao" && format != "" && format != a.ContentFormat {
+		return validation("该账号不支持所选数据形态")
+	}
+	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.content_format, w.status, w.published_at, (SELECT count(*) FROM metric_snapshot WHERE work_id=w.id),
 		ARRAY(SELECT DISTINCT metric_node(day_offset) FROM metric_snapshot WHERE work_id=w.id AND metric_node(day_offset) IS NOT NULL ORDER BY 1)
-		FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.status IN ('pushed','packed','published')
-		ORDER BY coalesce(w.published_at, w.updated_at) DESC LIMIT 200`, a.ID)
+		FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.status IN ('pushed','packed','published') AND ($2='' OR w.content_format=$2)
+		ORDER BY coalesce(w.published_at, w.updated_at) DESC LIMIT 200`, a.ID, format)
 	if err != nil {
 		return err
 	}
 	list := []BoardRow{}
 	for rows.Next() {
 		var b BoardRow
-		if err := rows.Scan(&b.ID, &b.Title, &b.Status, &b.PublishedAt, &b.Points, &b.Nodes); err != nil {
+		if err := rows.Scan(&b.ID, &b.Title, &b.ContentFormat, &b.Status, &b.PublishedAt, &b.Points, &b.Nodes); err != nil {
 			rows.Close()
 			return err
 		}
@@ -121,7 +173,9 @@ func (s *Server) listMetrics(w http.ResponseWriter, r *http.Request) error {
 
 type metricInput struct {
 	CapturedAt    *time.Time `json:"captured_at"`
+	BaseRevision  *int       `json:"base_revision"`
 	Reads         *int       `json:"reads"`
+	Impressions   *int64     `json:"impressions"`
 	Likes         *int       `json:"likes"`
 	Wows          *int       `json:"wows"`
 	Favorites     *int       `json:"favorites"`
@@ -131,13 +185,22 @@ type metricInput struct {
 	Note          string     `json:"note"`
 }
 
-func (in *metricInput) validate() error {
+func (in *metricInput) validate(platform string) error {
+	if in.BaseRevision != nil && *in.BaseRevision < 1 {
+		return validation("数据修订号无效")
+	}
 	for _, v := range []*int{in.Reads, in.Likes, in.Wows, in.Favorites, in.Comments, in.Shares, in.FollowsGained} {
 		if v != nil && *v < 0 {
 			return validation("数据不能为负数")
 		}
 	}
-	if in.Reads == nil && in.Likes == nil && in.Wows == nil && in.Favorites == nil && in.Comments == nil && in.Shares == nil && in.FollowsGained == nil {
+	if in.Impressions != nil && *in.Impressions < 0 {
+		return validation("展现量不能为负数")
+	}
+	if platform != "toutiao" && in.Impressions != nil {
+		return validation("展现量仅适用于今日头条作品")
+	}
+	if in.Reads == nil && in.Impressions == nil && in.Likes == nil && in.Wows == nil && in.Favorites == nil && in.Comments == nil && in.Shares == nil && in.FollowsGained == nil {
 		return validation("至少填写一项数据")
 	}
 	return nil
@@ -148,23 +211,33 @@ func (s *Server) createMetric(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if m.Status != "pushed" && m.Status != "packed" && m.Status != "published" {
-		return stateInvalid("作品发布后才能录入数据")
-	}
 	var in metricInput
 	if err := decode(r, &in); err != nil {
 		return err
 	}
-	if err := in.validate(); err != nil {
+	if err := in.validate(m.Account.Platform); err != nil {
 		return err
 	}
 	at := s.now()
 	if in.CapturedAt != nil {
 		at = *in.CapturedAt
 	}
-	x, merged, err := upsertMetric(r.Context(), s.db, metricWrite{WorkID: m.ID, CapturedAt: at, Source: "manual",
-		Reads: in.Reads, Likes: in.Likes, Wows: in.Wows, Favorites: in.Favorites, Comments: in.Comments, Shares: in.Shares,
-		FollowsGained: in.FollowsGained, Note: strings.TrimSpace(in.Note)})
+	var x Metric
+	var merged bool
+	err = s.withTx(r.Context(), func(tx pgx.Tx) error {
+		var status string
+		if err := tx.QueryRow(r.Context(), `SELECT status FROM work WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, m.ID).Scan(&status); err != nil {
+			return err
+		}
+		if status != "pushed" && status != "packed" && status != "published" {
+			return stateInvalid("作品发布后才能录入数据")
+		}
+		var err error
+		x, merged, err = s.upsertMetricWithAudit(r.Context(), tx, metricWrite{WorkID: m.ID, CapturedAt: at, Source: "manual",
+			Reads: in.Reads, Impressions: in.Impressions, Likes: in.Likes, Wows: in.Wows, Favorites: in.Favorites, Comments: in.Comments, Shares: in.Shares,
+			FollowsGained: in.FollowsGained, Note: strings.TrimSpace(in.Note)})
+		return err
+	})
 	if err != nil {
 		return err
 	}
@@ -174,23 +247,23 @@ func (s *Server) createMetric(w http.ResponseWriter, r *http.Request) error {
 	}{x, merged})
 }
 
-func (s *Server) metricOwned(r *http.Request) (uuid.UUID, error) {
+func (s *Server) metricOwned(r *http.Request) (uuid.UUID, uuid.UUID, error) {
 	id, err := pathID(r, "id")
 	if err != nil {
-		return uuid.Nil, err
+		return uuid.Nil, uuid.Nil, err
 	}
 	var workID uuid.UUID
 	if err := s.db.QueryRow(r.Context(), `SELECT work_id FROM metric_snapshot WHERE id=$1`, id).Scan(&workID); err != nil {
-		return uuid.Nil, err
+		return uuid.Nil, uuid.Nil, err
 	}
 	if _, err := s.workMeta(r.Context(), workID); err != nil {
-		return uuid.Nil, err
+		return uuid.Nil, uuid.Nil, err
 	}
-	return id, nil
+	return id, workID, nil
 }
 
 func (s *Server) updateMetric(w http.ResponseWriter, r *http.Request) error {
-	id, err := s.metricOwned(r)
+	id, workID, err := s.metricOwned(r)
 	if err != nil {
 		return err
 	}
@@ -198,14 +271,42 @@ func (s *Server) updateMetric(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &in); err != nil {
 		return err
 	}
-	if err := in.validate(); err != nil {
+	work, err := s.workMeta(r.Context(), workID)
+	if err != nil {
 		return err
 	}
-	x, err := scanMetric(s.db.QueryRow(r.Context(), `UPDATE metric_snapshot SET captured_at=coalesce($2, captured_at), reads=$3, likes=$4, wows=$5, favorites=$6,
-		comments=$7, shares=$8, follows_gained=$9, note=$10 WHERE id=$1 RETURNING `+metricCols, id, in.CapturedAt, in.Reads, in.Likes, in.Wows, in.Favorites, in.Comments, in.Shares, in.FollowsGained, strings.TrimSpace(in.Note)))
-	if isUniqueViolation(err) {
-		return validation("这篇作品在该发布天数已经有一条同来源的数据，请直接编辑那一条")
+	if err := in.validate(work.Account.Platform); err != nil {
+		return err
 	}
+	if in.BaseRevision == nil {
+		return validation("请刷新数据后再修改")
+	}
+	var x Metric
+	err = s.withTx(r.Context(), func(tx pgx.Tx) error {
+		if _, err := lockMetricWork(r.Context(), tx, workID); err != nil {
+			return err
+		}
+		before, err := scanMetric(tx.QueryRow(r.Context(), `SELECT `+metricCols+` FROM metric_snapshot WHERE id=$1 AND work_id=$2 FOR UPDATE`, id, workID))
+		if err == pgx.ErrNoRows {
+			return stateInvalid("这条数据已被删除，请刷新后重试")
+		}
+		if err != nil {
+			return err
+		}
+		if before.Revision != *in.BaseRevision {
+			return stateInvalid("这条数据已被其他成员修改，请刷新后重试")
+		}
+		x, err = scanMetric(tx.QueryRow(r.Context(), `UPDATE metric_snapshot SET captured_at=coalesce($2, captured_at), reads=$3, impressions=$4, likes=$5, wows=$6, favorites=$7,
+			comments=$8, shares=$9, follows_gained=$10, note=$11 WHERE id=$1 RETURNING `+metricCols,
+			id, in.CapturedAt, in.Reads, in.Impressions, in.Likes, in.Wows, in.Favorites, in.Comments, in.Shares, in.FollowsGained, strings.TrimSpace(in.Note)))
+		if isUniqueViolation(err) {
+			return validation("这篇作品在该发布天数已经有一条同来源的数据，请直接编辑那一条")
+		}
+		if err != nil {
+			return err
+		}
+		return s.auditMetricMutation(r.Context(), tx, "metric_update", &before, &x, false)
+	})
 	if err != nil {
 		return err
 	}
@@ -213,17 +314,45 @@ func (s *Server) updateMetric(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) deleteMetric(w http.ResponseWriter, r *http.Request) error {
-	id, err := s.metricOwned(r)
+	id, workID, err := s.metricOwned(r)
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(r.Context(), `DELETE FROM metric_snapshot WHERE id=$1`, id); err != nil {
+	raw := r.URL.Query().Get("base_revision")
+	if raw == "" {
+		return validation("请刷新数据后再删除")
+	}
+	baseRevision, err := strconv.Atoi(raw)
+	if err != nil || baseRevision < 1 {
+		return validation("数据修订号无效")
+	}
+	err = s.withTx(r.Context(), func(tx pgx.Tx) error {
+		if _, err := lockMetricWork(r.Context(), tx, workID); err != nil {
+			return err
+		}
+		before, err := scanMetric(tx.QueryRow(r.Context(), `SELECT `+metricCols+` FROM metric_snapshot WHERE id=$1 AND work_id=$2 FOR UPDATE`, id, workID))
+		if err == pgx.ErrNoRows {
+			return stateInvalid("这条数据已被删除，请刷新后重试")
+		}
+		if err != nil {
+			return err
+		}
+		if before.Revision != baseRevision {
+			return stateInvalid("这条数据已被其他成员修改，请刷新后重试")
+		}
+		if _, err := tx.Exec(r.Context(), `DELETE FROM metric_snapshot WHERE id=$1`, id); err != nil {
+			return err
+		}
+		return s.auditMetricMutation(r.Context(), tx, "metric_delete", &before, nil, false)
+	})
+	if err != nil {
 		return err
 	}
 	return ok(w, map[string]any{"ok": true})
 }
 
 type ReviewContent struct {
+	ContentFormat    string   `json:"content_format,omitempty"`
 	Conclusions      []string `json:"conclusions"`
 	TopicSuggestions []struct {
 		Title  string `json:"title"`
@@ -251,18 +380,25 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		WorkIDs    []uuid.UUID `json:"work_ids"`
-		Recent     int         `json:"recent"`
-		Background bool        `json:"background"`
+		WorkIDs       []uuid.UUID `json:"work_ids"`
+		Recent        int         `json:"recent"`
+		ContentFormat string      `json:"content_format"`
+		Background    bool        `json:"background"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
 	ctx := r.Context()
+	if a.Platform == "toutiao" && in.ContentFormat != "long_article" && in.ContentFormat != "micro_post" {
+		return validation("请选择文章或微头条后再生成复盘")
+	}
+	if a.Platform != "toutiao" && in.ContentFormat != "" && in.ContentFormat != a.ContentFormat {
+		return validation("该账号不支持所选复盘形态")
+	}
 	if in.Background {
 		jobID, err := s.startBackgroundJob(ctx, jobSpec{TaskType: "review_analysis", Label: "AI 复盘 · " + a.Name, AccountID: &a.ID,
 			Link: "/a/" + a.ID.String() + "/review"}, func(jctx context.Context) (any, error) {
-			rep, err := s.buildReview(jctx, a, in.WorkIDs, in.Recent)
+			rep, err := s.buildReviewAsFormat(jctx, a, in.WorkIDs, in.Recent, in.ContentFormat, "manual", "")
 			if err != nil {
 				return nil, err
 			}
@@ -273,7 +409,7 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) error {
 		}
 		return ok(w, map[string]any{"job_id": jobID})
 	}
-	rep, err := s.buildReview(ctx, a, in.WorkIDs, in.Recent)
+	rep, err := s.buildReviewAsFormat(ctx, a, in.WorkIDs, in.Recent, in.ContentFormat, "manual", "")
 	if err != nil {
 		return err
 	}
@@ -286,6 +422,20 @@ func (s *Server) buildReview(ctx context.Context, a *Account, workIDs []uuid.UUI
 
 // buildReviewAs records who started the review (origin) and may force a cost tier (weekly drafts run on economy).
 func (s *Server) buildReviewAs(ctx context.Context, a *Account, workIDs []uuid.UUID, recent int, origin, tier string) (*ReviewReport, error) {
+	return s.buildReviewAsFormat(ctx, a, workIDs, recent, "", origin, tier)
+}
+
+func (s *Server) buildReviewAsFormat(ctx context.Context, a *Account, workIDs []uuid.UUID, recent int, contentFormat, origin, tier string) (*ReviewReport, error) {
+	if a.Platform == "toutiao" {
+		if contentFormat == "" {
+			contentFormat = a.ContentFormat
+		}
+		if contentFormat != "long_article" && contentFormat != "micro_post" {
+			return nil, validation("请选择文章或微头条后再生成复盘")
+		}
+	} else if contentFormat != "" && contentFormat != a.ContentFormat {
+		return nil, validation("该账号不支持所选复盘形态")
+	}
 	ids := workIDs
 	if len(ids) == 0 {
 		n := recent
@@ -293,7 +443,8 @@ func (s *Server) buildReviewAs(ctx context.Context, a *Account, workIDs []uuid.U
 			n = 10
 		}
 		rows, err := s.db.Query(ctx, `SELECT w.id FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL
-			AND EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id) ORDER BY coalesce(w.published_at, w.updated_at) DESC LIMIT $2`, a.ID, n)
+			AND ($3='' OR w.content_format=$3) AND EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id)
+			ORDER BY coalesce(w.published_at, w.updated_at) DESC LIMIT $2`, a.ID, n, contentFormat)
 		if err != nil {
 			return nil, err
 		}
@@ -310,14 +461,20 @@ func (s *Server) buildReviewAs(ctx context.Context, a *Account, workIDs []uuid.U
 	var b strings.Builder
 	var used []uuid.UUID
 	for _, id := range ids {
-		var title, status string
+		var title, status, format string
 		var publishedAt *time.Time
-		if err := s.db.QueryRow(ctx, `SELECT title, status, published_at FROM work WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL`, id, a.ID).
-			Scan(&title, &status, &publishedAt); err != nil {
+		if err := s.db.QueryRow(ctx, `SELECT title, status, published_at, content_format FROM work WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL`, id, a.ID).
+			Scan(&title, &status, &publishedAt, &format); err != nil {
 			continue
+		}
+		if contentFormat != "" && format != contentFormat {
+			return nil, validation("所选作品中包含其他形态，请按文章或微头条分开复盘")
 		}
 		used = append(used, id)
 		fmt.Fprintf(&b, "### 《%s》", title)
+		if a.Platform == "toutiao" {
+			fmt.Fprintf(&b, "（%s）", map[string]string{"long_article": "文章", "micro_post": "微头条"}[format])
+		}
 		if publishedAt != nil {
 			fmt.Fprintf(&b, "（发布于 %s）", publishedAt.In(s.loc).Format("2006-01-02 15:04"))
 		}
@@ -331,7 +488,7 @@ func (s *Server) buildReviewAs(ctx context.Context, a *Account, workIDs []uuid.U
 			if err != nil {
 				break
 			}
-			fmt.Fprintf(&b, "- %s（%s 采集）：%s\n", dayOffsetLabel(m.DayOffset), m.CapturedAt.In(s.loc).Format("01-02"), metricLine(m))
+			fmt.Fprintf(&b, "- %s（%s 采集，来源 %s）：%s\n", dayOffsetLabel(m.DayOffset), m.CapturedAt.In(s.loc).Format("2006-01-02"), m.Source, metricLine(m))
 		}
 		rows.Close()
 	}
@@ -340,12 +497,17 @@ func (s *Server) buildReviewAs(ctx context.Context, a *Account, workIDs []uuid.U
 	}
 	user := "## 作品及数据\n" + b.String() + `
 ## 任务说明
-根据以上作品数据做复盘：作品之间比较时以"第 7 天数据"为准（没有第 7 天的按最接近的天数，并说明），不要拿不同天数的数字直接比较。总结哪些做法有效、哪些无效（结论要基于数据，不要编造），并给出不少于 3 条下一步的选题建议。另外给出写作层面的结论（如标题、开头、结构上的规律），每条一句可执行的规则，没有依据时可以为空。
+根据以上作品数据做复盘：作品之间比较时以"第 7 天数据"为准（没有第 7 天的按最接近的天数，并说明），不要拿不同天数的数字直接比较。展现与阅读是不同指标；不得根据缺失展现推算推荐量，不得比较不同形态，也不得把累计指标解释为观察时点以外的区间值。总结哪些做法有效、哪些无效（结论要基于数据，不要编造），并给出不少于 3 条下一步的选题建议。另外给出写作层面的结论（如标题、开头、结构上的规律），每条一句可执行的规则，没有依据时可以为空。
 
 ## 输出格式
 只输出 JSON：{"conclusions":["结论"],"topic_suggestions":[{"title":"选题标题","angle":"切入角度","reason":"依据"}],"writing_insights":["写作层面的规律"]}`
 	var out ReviewContent
-	res, err := s.runAIJSON(ctx, aiTask{Type: "review_analysis", Account: a, User: user, SkipStyle: true, Tier: tier, Refs: map[string]any{"works": len(used), "origin": origin}}, &out, func() error {
+	account := *a
+	if a.Platform == "toutiao" {
+		account.ContentFormat = contentFormat
+		out.ContentFormat = contentFormat
+	}
+	res, err := s.runAIJSON(ctx, aiTask{Type: "review_analysis", Account: &account, User: user, SkipStyle: true, Tier: tier, Refs: map[string]any{"works": len(used), "origin": origin, "content_format": contentFormat}}, &out, func() error {
 		if len(out.TopicSuggestions) < 3 {
 			return fmt.Errorf("建议少于 3 条")
 		}
@@ -457,6 +619,9 @@ func metricLine(m Metric) string {
 			parts = append(parts, fmt.Sprintf("%s %d", label, *v))
 		}
 	}
+	if m.Impressions != nil {
+		parts = append(parts, fmt.Sprintf("展现 %d", *m.Impressions))
+	}
 	add("阅读", m.Reads)
 	add("点赞", m.Likes)
 	add("在看", m.Wows)
@@ -464,6 +629,9 @@ func metricLine(m Metric) string {
 	add("评论", m.Comments)
 	add("分享", m.Shares)
 	add("涨粉", m.FollowsGained)
+	if m.CTR != nil {
+		parts = append(parts, fmt.Sprintf("CTR %.2f%%", *m.CTR*100))
+	}
 	if m.Note != "" {
 		parts = append(parts, "备注："+m.Note)
 	}
@@ -585,11 +753,13 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) error {
 		Kind   string    `json:"kind"`
 		Hint   string    `json:"hint"`
 		At     time.Time `json:"at"`
-		Node   *int      `json:"node,omitempty"`
+		// D-123：账号类型可迁移，账号下作品类型可能混杂；看板行带作品级类型，前端据此标注（§2.7）。
+		Format string `json:"content_format"`
+		Node   *int   `json:"node,omitempty"`
 	}
 	todos := []todo{}
 	due := nodeDueExpr(2, 3)
-	trows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.status, w.updated_at, `+due+`
+	trows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.status, w.updated_at, w.content_format, `+due+`
 		FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND (w.status <> 'published' OR `+due+` IS NOT NULL)
 		ORDER BY w.updated_at DESC LIMIT 30`, a.ID, s.now(), datacubeCovers(a))
 	if err != nil {
@@ -597,7 +767,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) error {
 	}
 	for trows.Next() {
 		var t todo
-		if err := trows.Scan(&t.WorkID, &t.Title, &t.Status, &t.At, &t.Node); err != nil {
+		if err := trows.Scan(&t.WorkID, &t.Title, &t.Status, &t.At, &t.Format, &t.Node); err != nil {
 			trows.Close()
 			return err
 		}

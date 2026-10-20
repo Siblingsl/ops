@@ -19,6 +19,7 @@ import { metricFields, type MetricKey, ScreenshotImport } from './review-screens
 
 const metricSourceLabel: Record<MetricSource, string> = {
   manual: '手动录入', paste: '粘贴回填', file: '表格导入', wechat_api: '公众号接口', screenshot: '截图识别',
+  wechat_browser: '公众号后台', xhs_browser: '小红书后台',
 }
 
 const nodeLabel = (m: Pick<Metric, 'day_offset'>) => (m.day_offset == null ? '发布时间未知' : `发布后第 ${m.day_offset} 天`)
@@ -36,14 +37,28 @@ function NodeDots({ nodes }: { nodes: number[] }) {
 
 type ImportPreviewRow = {
   title: string; work_id: string | null; matched: boolean; match_type?: 'exact' | 'fuzzy' | 'none'; similarity?: number
+  url?: string; content_format?: string; published_at?: string; captured_at?: string
   estimated?: boolean; error?: string
-  reads: number | null; likes: number | null; wows?: number | null; favorites?: number | null
+  reads: number | null; impressions?: number | null; impressions_exact?: string | null; likes: number | null; wows?: number | null; favorites?: number | null
   comments?: number | null; shares?: number | null; follows_gained?: number | null
 }
 
 const num = (v: number | null | undefined) => (v == null ? '—' : fmtNum(v))
 
-function ImportMetrics({ accountId, works, onDone }: { accountId: string; works: BoardRow[]; onDone: () => void }) {
+const formatInt64 = (v: string) => {
+  try { return new Intl.NumberFormat('zh-CN').format(BigInt(v)) } catch { return v }
+}
+
+const ctrLabel = (ctr: number | null | undefined) => ctr == null ? '—' : new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 2 }).format(ctr)
+
+const metricDisplay = (metric: Metric | null | undefined, key: MetricKey) => key === 'impressions'
+  ? (metric?.impressions_exact ? formatInt64(metric.impressions_exact) : num(metric?.impressions))
+  : num(metric?.[key])
+
+const contentFormatName = (format: string) => format === 'micro_post' ? '微头条' : format === 'long_article' ? '文章' : format
+
+function ImportMetrics({ accountId, platform, works, onDone }: { accountId: string; platform: Platform; works: BoardRow[]; onDone: () => void }) {
+  const inv = useInvalidate()
   const [open, setOpen] = useState(false)
   const [pasteOpen, setPasteOpen] = useState(false)
   const [pasteText, setPasteText] = useState('')
@@ -87,11 +102,16 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
   }
   const confirmImport = async () => {
     const payload = rows.filter((r) => r.work_id).map((r) => ({
-      title: r.title, work_id: r.work_id!, reads: r.reads, likes: r.likes, wows: r.wows,
+      title: r.title, work_id: r.work_id!, url: r.url, content_format: r.content_format, published_at: r.published_at,
+      captured_at: r.captured_at, reads: r.reads, impressions: r.impressions, likes: r.likes, wows: r.wows,
       favorites: r.favorites, comments: r.comments, shares: r.shares, follows_gained: r.follows_gained,
     }))
     if (!payload.length) {
       toast.error('请至少为一行指定作品')
+      return
+    }
+    if (platform === 'toutiao' && rows.some((r) => r.work_id && r.impressions_exact && !Number.isSafeInteger(Number(r.impressions_exact)))) {
+      toast.error('展现量超出 JavaScript 安全整数范围，请先核对并修正这些行')
       return
     }
     setBusy(true)
@@ -100,6 +120,7 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
       toast.success(`已导入 ${r.imported} 行`)
       setOpen(false)
       onDone()
+      inv(['data-preferences', accountId])
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
@@ -126,18 +147,20 @@ function ImportMetrics({ accountId, works, onDone }: { accountId: string; works:
             <div key={i} className={cn('rounded-lg border p-3', r.error ? 'border-danger bg-orange-50/60' : 'border-mist-200')}>
               <div className="grid gap-2 sm:grid-cols-[1fr_180px]">
                 <div className="min-w-0">
-                  <div className="truncate text-[13.5px] font-medium text-mist-800">{r.title}</div>
+                  <div className="truncate text-[13.5px] font-medium text-mist-800">{r.title || '（无外部标题）'}</div>
                   <div className="text-xs text-mist-400">
                     {r.error ? <span className="text-danger">{r.error}</span> : r.match_type === 'exact' ? '已精确匹配'
                       : r.match_type === 'fuzzy' ? `模糊匹配 ${Math.round((r.similarity ?? 0) * 100)}%，请确认` : '未匹配，请选择作品或跳过'}
+                    {r.content_format && ` · ${contentFormatName(r.content_format)}`}{r.published_at && ` · ${r.published_at}`}
                   </div>
                 </div>
                 <Select value={r.work_id ?? ''} onChange={(e) => setRows((list) => list.map((x, j) => j === i ? { ...x, work_id: e.target.value || null, matched: !!e.target.value } : x))}>
                   <option value="">跳过此行</option>
-                  {works.map((w) => <option key={w.id} value={w.id}>{w.title || '未命名'}</option>)}
+                  {works.map((w) => <option key={w.id} value={w.id}>{w.title || '未命名'}{platform === 'toutiao' ? ` · ${contentFormatName(w.content_format)}` : ''}</option>)}
                 </Select>
               </div>
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-mist-500">
+                {platform === 'toutiao' && <span>展现 {r.impressions_exact ? formatInt64(r.impressions_exact) : num(r.impressions)}{r.estimated && r.impressions != null && <Badge>≥ 估计</Badge>}</span>}
                 <span>阅读 {num(r.reads)}{r.estimated && r.reads != null && <Badge>≥ 估计</Badge>}</span>
                 <span>点赞 {num(r.likes)}</span>
                 <span>在看 {num(r.wows)}</span>
@@ -162,10 +185,12 @@ function metricWarnings(platform: Platform, vals: Record<string, string>, at: st
   const val = (k: MetricKey) => (vals[k] === '' || vals[k] == null ? null : Number(vals[k]))
   const out: string[] = []
   const reads = val('reads')
+  const impressions = val('impressions')
   const readsLabel = fields[0].label
+  if (reads != null && impressions != null && reads > impressions) out.push('阅读量大于展现量，请核对平台口径和录入数字')
   for (const f of fields) {
     const v = val(f.key)
-    if (f.key !== 'reads' && f.key !== 'follows_gained' && reads != null && v != null && v > reads) out.push(`${f.label}比${readsLabel}还多，请确认没有填错格`)
+    if (f.key !== 'reads' && f.key !== 'impressions' && f.key !== 'follows_gained' && reads != null && v != null && v > reads) out.push(`${f.label}比${readsLabel}还多，请确认没有填错格`)
   }
   if (publishedAt && at) {
     const offset = localDay(new Date(at)) - localDay(new Date(publishedAt))
@@ -194,7 +219,8 @@ function MetricForm({ workId, platform, editing, prefill, publishedAt, history, 
 }) {
   const base = editing ?? prefill ?? null
   const [at, setAt] = useState(toLocalInput(editing?.captured_at))
-  const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(metricFields[platform].map((f) => [f.key, base?.[f.key]?.toString() ?? ''])))
+  const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(metricFields[platform].map((f) => [f.key,
+    f.key === 'impressions' ? (base?.impressions_exact ?? base?.impressions?.toString() ?? '') : (base?.[f.key]?.toString() ?? '')])))
   const [note, setNote] = useState(editing?.note ?? '')
   const [busy, setBusy] = useState(false)
   const inputs = useRef<(HTMLInputElement | null)[]>([])
@@ -202,7 +228,25 @@ function MetricForm({ workId, platform, editing, prefill, publishedAt, history, 
   const warnings = metricWarnings(platform, vals, at, publishedAt, history, editing?.id)
   const save = async (next = false) => {
     const body: Record<string, unknown> = { captured_at: new Date(at).toISOString(), note }
-    for (const f of metricFields[platform]) body[f.key] = vals[f.key] === '' ? null : Number(vals[f.key])
+    if (editing) body.base_revision = editing.revision
+    for (const f of metricFields[platform]) {
+      if (vals[f.key] === '') body[f.key] = null
+      else if (f.key === 'impressions') {
+        const n = Number(vals[f.key])
+        if (!/^\d+$/.test(vals[f.key]) || !Number.isSafeInteger(n) || n < 0) {
+          toast.error('展现量必须是 JavaScript 安全范围内的非负整数，请核对后再保存')
+          return
+        }
+        body[f.key] = n
+      } else {
+        const n = Number(vals[f.key])
+        if (!Number.isSafeInteger(n) || n < 0) {
+          toast.error(`${f.label}必须是非负整数`)
+          return
+        }
+        body[f.key] = n
+      }
+    }
     setBusy(true)
     try {
       if (editing) {
@@ -227,7 +271,7 @@ function MetricForm({ workId, platform, editing, prefill, publishedAt, history, 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {metricFields[platform].map((f, i) => (
           <Field key={f.key} label={f.label}>
-            <Input ref={(el) => { inputs.current[i] = el }} type="number" min={0} inputMode="numeric" enterKeyHint={i === metricFields[platform].length - 1 ? 'done' : 'next'}
+            <Input ref={(el) => { inputs.current[i] = el }} type="number" min={0} max={f.key === 'impressions' ? Number.MAX_SAFE_INTEGER : undefined} step={1} inputMode="numeric" enterKeyHint={i === metricFields[platform].length - 1 ? 'done' : 'next'}
               value={vals[f.key]} onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })}
               onKeyDown={(e) => {
                 if (!isEnterWithoutComposition(e.nativeEvent)) return
@@ -239,6 +283,8 @@ function MetricForm({ workId, platform, editing, prefill, publishedAt, history, 
           </Field>
         ))}
       </div>
+      {platform === 'toutiao' && <p className="text-[12px] text-mist-500">展现量与阅读量分开记录；大于安全整数范围的数字请通过原始平台数据核对后再录入。</p>}
+      {platform === 'toutiao' && <div className="rounded-lg bg-mist-50 px-3 py-2 text-[13px] text-mist-600">只读 CTR：{vals.reads !== '' && vals.impressions !== '' && Number(vals.impressions) > 0 ? ctrLabel(Number(vals.reads) / Number(vals.impressions)) : '—'}</div>}
       {warnings.length > 0 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] leading-relaxed text-amber-800">
           {warnings.map((w) => <div key={w}>{w}</div>)}
@@ -268,10 +314,11 @@ function MetricsDrawer({ row, works, accountId, platform, node, onClose, onNext 
     setForm(null)
     refetch()
     inv(['board'])
+    inv(['data-preferences', accountId])
   }
   const remove = async (m: Metric) => {
     if (!(await confirm({ title: '删除这条数据？', confirmText: '删除', danger: true }))) return
-    await del(`/metrics/${m.id}`)
+    await del(`/metrics/${m.id}?base_revision=${m.revision}`)
     done()
   }
   return (
@@ -300,9 +347,10 @@ function MetricsDrawer({ row, works, accountId, platform, node, onClose, onNext 
             </div>
             <div className="grid grid-cols-3 gap-2 text-[13px]">
               {metricFields[platform].map((f) => (
-                <div key={f.key}><span className="text-mist-400">{f.label} </span><span className="font-semibold tabular-nums text-mist-800">{num(m[f.key])}</span></div>
+                <div key={f.key}><span className="text-mist-400">{f.label} </span><span className="font-semibold tabular-nums text-mist-800">{metricDisplay(m, f.key)}</span></div>
               ))}
             </div>
+            {platform === 'toutiao' && <div className="mt-2 text-[12px] text-mist-500">CTR {ctrLabel(m.ctr)}</div>}
             {m.note && <p className="mt-2 text-xs text-mist-500">{m.note}</p>}
           </div>
         ))}
@@ -404,7 +452,7 @@ function ReportCard({ report, onAdopted }: { report: ReviewReport; onAdopted: ()
   }
   return (
     <Card>
-      <CardHeader title={`${report.origin === 'weekly_draft' ? '每周复盘草稿' : '复盘报告'} · ${fmtTime(report.created_at)}`}
+      <CardHeader title={`${report.origin === 'weekly_draft' ? '每周复盘草稿' : '复盘报告'}${report.content.content_format ? ` · ${contentFormatName(report.content.content_format)}` : ''} · ${fmtTime(report.created_at)}`}
         desc={report.origin === 'weekly_draft'
           ? `后台按第 7 天数据自动生成，覆盖 ${report.work_ids.length} 篇作品；建议要你逐条采纳，不采纳不影响任何东西`
           : `覆盖 ${report.work_ids.length} 篇作品`} />
@@ -462,27 +510,49 @@ function ReportCard({ report, onAdopted }: { report: ReviewReport; onAdopted: ()
 export default function Review() {
   const acc = useCurrentAccount()
   const [params, setParams] = useSearchParams()
+  const [toutiaoFormat, setToutiaoFormat] = useState('long_article')
   const [selected, setSelected] = useState<string[]>([])
   const [recent, setRecent] = useState('10')
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [running, setRunning] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const inv = useInvalidate()
-  const board = useQuery({ queryKey: ['board', acc?.id], queryFn: () => get<BoardRow[]>(`/accounts/${acc!.id}/board`), enabled: !!acc })
+  useEffect(() => {
+    if (acc?.platform === 'toutiao') setToutiaoFormat(acc.content_format)
+  }, [acc?.id])
+  const boardFormat = acc?.platform === 'toutiao' ? toutiaoFormat : ''
+  const board = useQuery({ queryKey: ['board', acc?.id, boardFormat], queryFn: () => get<BoardRow[]>(`/accounts/${acc!.id}/board${boardFormat ? `?content_format=${boardFormat}` : ''}`), enabled: !!acc })
   const reports = useQuery({ queryKey: ['reviews', acc?.id], queryFn: () => get<ReviewReport[]>(`/accounts/${acc!.id}/reviews`), enabled: !!acc })
   const wantDigest = params.get('tab') === 'digest'
+  const weeklyDraft = reports.data?.find((report) => report.origin === 'weekly_draft')
+  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const loaded = !!acc && !board.isLoading
   useEffect(() => {
     if (wantDigest && loaded) document.getElementById('digests')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [wantDigest, loaded])
   if (!acc || board.isLoading) return <PageLoading />
   const rows = board.data ?? []
+  const summaryRows = rows.flatMap((row) => row.d7?.day_offset === 7 ? [row.d7] : [])
+  const summaryValue = (key: MetricKey) => {
+    if (key === 'impressions') {
+      const exact = summaryRows.map((metric) => metric.impressions_exact).filter((value): value is string => !!value)
+      if (exact.length === summaryRows.length && exact.length > 0) {
+        return formatInt64(exact.reduce((total, value) => total + BigInt(value), 0n).toString())
+      }
+    }
+    const values = summaryRows.map((metric) => metric[key]).filter((value): value is number => value != null)
+    return values.length ? fmtNum(values.reduce((total, value) => total + value, 0)) : '—'
+  }
   const openRow = rows.find((r) => r.id === params.get('work'))
   const nextRow = openRow && rows[rows.indexOf(openRow) + 1]
   const fields = metricFields[acc.platform].slice(0, 4)
+  const desktopStats: [string, MetricKey][] = acc.platform === 'toutiao'
+    ? [['近 7 天展现', 'impressions'], ['近 7 天阅读', 'reads'], ['点赞', 'likes'], ['收藏', 'favorites']]
+    : [['近 7 天阅读', 'reads'], ['收藏', 'favorites'], ['分享', 'shares'], ['粉丝净增', 'follows_gained']]
   const runReview = async () => {
     setRunning(true)
     try {
-      const { job_id } = await post<{ job_id: string }>(`/accounts/${acc.id}/reviews`, { ...(selected.length ? { work_ids: selected } : { recent: Number(recent) }), background: true })
+      const { job_id } = await post<{ job_id: string }>(`/accounts/${acc.id}/reviews`, { ...(selected.length ? { work_ids: selected } : { recent: Number(recent) }), ...(acc.platform === 'toutiao' ? { content_format: toutiaoFormat } : {}), background: true })
       toast.message('AI 正在复盘，可以先去做别的，完成后会通知你')
       await waitJob(job_id)
       void reports.refetch()
@@ -495,38 +565,91 @@ export default function Review() {
     }
   }
   const toggle = (id: string) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
+  const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const revealAdvanced = (id: string) => {
+    setShowAdvanced(true)
+    window.setTimeout(() => scrollTo(id), 0)
+  }
+  const syncWechat = async () => {
+    setSyncing(true)
+    try {
+      const r = await post<{ message: string }>(`/accounts/${acc.id}/metrics/sync-wechat`, {})
+      toast.success(r.message)
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setSyncing(false)
+      board.refetch()
+      inv(['board'])
+      inv(['data-preferences', acc.id])
+      inv(['unmatched', acc.id])
+      inv(['followers', acc.id])
+      inv(['accounts'])
+    }
+  }
+  const syncMatch = () => {
+    if (acc.platform === 'wechat_mp' && acc.datacube_state !== 'no_permission') void syncWechat()
+    else scrollTo('desktop-review-board')
+  }
+  const boardActions = <>
+    {desktopPresentation && <>
+      <Button size="sm" variant="ghost" onClick={() => revealAdvanced('desktop-review-followers')}>粉丝记录</Button>
+      <Button size="sm" variant="ghost" loading={syncing} onClick={syncMatch}>同步与匹配</Button>
+    </>}
+    {acc.platform === 'wechat_mp' && acc.datacube_state !== 'no_permission' && (
+      <Button size="sm" variant="secondary" icon={<BarChart3 className="size-3.5" />} loading={syncing} onClick={() => void syncWechat()}>同步公众号数据</Button>
+    )}
+    {!desktopPresentation && <ImportMetrics accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />}
+  </>
   return (
-    <div className="animate-fade-in">
-      <PageHeader title="数据复盘" desc="手动录入平台数据，让 AI 帮你找规律。复盘建议需要你逐条采纳。" />
-      <Card className="mb-6 overflow-hidden">
-        <CardHeader title="作品数据看板" desc="只列出已进入草稿箱、已生成发布包或已发布的作品；数字统一取发布后第 7 天的数据，便于作品之间比较"
-          action={<>
-            {acc.platform === 'wechat_mp' && acc.datacube_state !== 'no_permission' && (
-              <Button size="sm" variant="secondary" icon={<BarChart3 className="size-3.5" />} loading={syncing} onClick={async () => {
-                setSyncing(true)
-                try {
-                  const r = await post<{ message: string }>(`/accounts/${acc.id}/metrics/sync-wechat`, {})
-                  toast.success(r.message)
-                } catch (e) {
-                  toast.error(errorMessage(e))
-                } finally {
-                  setSyncing(false)
-                  board.refetch()
-                  inv(['board'])
-                  inv(['unmatched', acc.id])
-                  inv(['followers', acc.id])
-                  inv(['accounts'])
-                }
-              }}>同步公众号数据</Button>
-            )}
-            <ScreenshotImport accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />
-            <ImportMetrics accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />
-          </>} />
+    <div className={cn('animate-fade-in', desktopPresentation && 'desktop-review-page')}>
+      <PageHeader title="数据复盘" desc={desktopPresentation ? '先记录真实结果，再把观察变成下一次创作的参考。' : '手动录入平台数据，让 AI 帮你找规律。复盘建议需要你逐条采纳。'} action={desktopPresentation && <>
+        <ScreenshotImport accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']); inv(['data-preferences', acc.id]) }} label="截图识别" />
+        <Button variant="primary" disabled={!rows.length} onClick={() => rows[0] && setParams({ work: rows[0].id })}>录入数据</Button>
+      </>} />
+      {desktopPresentation && <div className="desktop-review-stats" data-testid="desktop-review-stats">
+        {desktopStats.map(([label, key]) => (
+          <div className="desktop-review-stat" key={label}><small>{label}</small><strong>{summaryValue(key)}</strong></div>
+        ))}
+      </div>}
+      {desktopPresentation && <div className="desktop-review-board-heading">
+        <h2>作品数据 · 发布后第 7 天</h2>
+        <div>{boardActions}</div>
+      </div>}
+      <Card className="mb-6 overflow-hidden" id="desktop-review-board">
+        {!desktopPresentation && <CardHeader title="作品数据看板" desc="只列出已进入草稿箱、已生成发布包或已发布的作品；数字统一取发布后第 7 天的数据，便于作品之间比较" action={<>
+          {acc.platform === 'wechat_mp' && acc.datacube_state !== 'no_permission' && (
+            <Button size="sm" variant="secondary" icon={<BarChart3 className="size-3.5" />} loading={syncing} onClick={() => void syncWechat()}>同步公众号数据</Button>
+          )}
+          <ScreenshotImport accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']); inv(['data-preferences', acc.id]) }} />
+          <ImportMetrics accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />
+        </>} />}
+        {acc.platform === 'toutiao' && <div className="flex flex-wrap items-center justify-between gap-3 border-b border-mist-100 px-5 py-3">
+          <div><div className="text-[13px] font-medium text-mist-700">复盘形态</div><div className="text-xs text-mist-400">文章与微头条分开比较和取样</div></div>
+          <Select aria-label="复盘内容形态" className="w-40" value={toutiaoFormat} onChange={(e) => { setToutiaoFormat(e.target.value); setSelected([]) }}>
+            <option value="long_article">文章</option><option value="micro_post">微头条</option>
+          </Select>
+        </div>}
         {rows.length === 0 ? (
           <Empty icon={<BarChart3 className="size-5" />} title="还没有可以复盘的作品" desc="作品写入草稿箱或生成发布包后会出现在这里。"
             action={<Link to={`/a/${acc.id}/works`}><Button variant="primary">去作品列表</Button></Link>} />
         ) : (
           <div className="overflow-x-auto">
+            {desktopPresentation ? (
+              <table className="desktop-review-table" data-testid="desktop-review-table">
+                <thead><tr><th>作品</th><th className="text-right">阅读</th>{acc.platform === 'toutiao' && <><th className="text-right">展现</th><th className="text-right">CTR</th></>}<th className="text-right">收藏</th><th className="text-right">分享</th><th>记录方式</th></tr></thead>
+                <tbody>{rows.map((r) => (
+                  <tr key={r.id}>
+                    <td><Link to={`/works/${r.id}`} className="desktop-review-work-title">{r.title || '未命名'}</Link></td>
+                    <td className="text-right tabular-nums">{metricDisplay(r.d7, 'reads')}</td>
+                    {acc.platform === 'toutiao' && <><td className="text-right tabular-nums">{metricDisplay(r.d7, 'impressions')}</td><td className="text-right tabular-nums">{ctrLabel(r.d7?.ctr)}</td></>}
+                    <td className="text-right tabular-nums">{fmtNum(r.d7?.favorites)}</td>
+                    <td className="text-right tabular-nums">{fmtNum(r.d7?.shares)}</td>
+                    <td><div className="desktop-review-source-cell"><Badge>{r.d7 ? metricSourceLabel[r.d7.source] ?? r.d7.source : '尚未录入'}</Badge><IconButton label={`录入${r.title || '作品'}数据`} onClick={() => setParams({ work: r.id })}><Plus className="size-3.5" /></IconButton></div></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            ) : (
             <table className="w-full text-[13.5px]">
               <thead>
                 <tr className="border-b border-mist-100 text-left text-xs text-mist-400">
@@ -536,6 +659,7 @@ export default function Review() {
                   <th className="py-2.5 font-medium">发布时间</th>
                   <th className="py-2.5 font-medium">数据节点</th>
                   {fields.map((f) => <th key={f.key} className="py-2.5 text-right font-medium">{f.label}</th>)}
+                  {acc.platform === 'toutiao' && <th className="py-2.5 text-right font-medium">CTR</th>}
                   <th className="py-2.5 pr-5 text-right font-medium">记录</th>
                 </tr>
               </thead>
@@ -550,7 +674,8 @@ export default function Review() {
                       <NodeDots nodes={r.nodes ?? []} />
                       {r.d7 && r.d7.day_offset !== 7 && <div className="mt-0.5 text-[11px] text-mist-400">按{r.d7.day_offset == null ? '发布时间未知的' : `第 ${r.d7.day_offset} 天`}数据</div>}
                     </td>
-                    {fields.map((f) => <td key={f.key} className="py-3 text-right tabular-nums text-mist-700">{fmtNum(r.d7?.[f.key])}</td>)}
+                    {fields.map((f) => <td key={f.key} className="py-3 text-right tabular-nums text-mist-700">{metricDisplay(r.d7, f.key)}</td>)}
+                    {acc.platform === 'toutiao' && <td className="py-3 text-right tabular-nums text-mist-700">{ctrLabel(r.d7?.ctr)}</td>}
                     <td className="py-3 pr-5 text-right">
                       <Button size="sm" variant={r.points ? 'ghost' : 'outline'} onClick={() => setParams({ work: r.id })}>{r.points ? `${r.points} 次 · 录入` : '录入数据'}</Button>
                     </td>
@@ -558,6 +683,7 @@ export default function Review() {
                 ))}
               </tbody>
             </table>
+            )}
           </div>
         )}
         {acc.platform === 'wechat_mp' && acc.datacube_state === 'no_permission' && (
@@ -571,9 +697,24 @@ export default function Review() {
           </p>
         )}
       </Card>
-      {acc.platform === 'wechat_mp' && <UnmatchedCard accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />}
+        {acc.platform === 'wechat_mp' && <div id="desktop-review-unmatched"><UnmatchedCard accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']); inv(['data-preferences', acc.id]) }} /></div>}
 
-      <div className="grid gap-6 lg:grid-cols-[340px_1fr] 2xl:grid-cols-[380px_1fr]">
+      {desktopPresentation && <div className="desktop-review-teasers" data-testid="desktop-review-teasers">
+        <Card className="desktop-review-teaser">
+          <h3>本周复盘草稿</h3>
+          <p>{weeklyDraft?.content.conclusions[0] ?? '本周复盘草稿会在生成后显示在这里。录入第 7 天数据后，可以生成复盘报告并逐条处理选题建议。'}</p>
+          <div className="desktop-review-teaser-actions">
+            <Button variant="secondary" onClick={() => revealAdvanced('desktop-review-report-list')}>查看报告与证据</Button>
+            <Button variant="human" disabled={!weeklyDraft?.content.topic_suggestions.length} onClick={() => revealAdvanced('desktop-review-report-list')}>采纳这一条建议</Button>
+          </div>
+        </Card>
+        <Card className="desktop-review-teaser">
+          <h3>趋势与数据来源</h3>
+          <p>保留原数据看板、趋势分析、待匹配文章、粉丝记录与逐条建议采纳。数字不会仅因界面动画而变化。</p>
+          <div className="desktop-review-teaser-actions"><Button variant="secondary" onClick={() => revealAdvanced('desktop-review-insights')}>查看趋势</Button></div>
+        </Card>
+      </div>}
+      {(!desktopPresentation || showAdvanced) && <div id="desktop-review-advanced" className="grid gap-6 lg:grid-cols-[340px_1fr] 2xl:grid-cols-[380px_1fr] scroll-mt-24">
         <Card className="h-fit p-5">
           <h3 className="mb-1 font-display text-[16px] font-bold text-mist-900">AI 复盘</h3>
           <p className="mb-4 text-[13px] text-mist-500">在看板中勾选作品，或按最近几篇有数据的作品分析。</p>
@@ -588,24 +729,25 @@ export default function Review() {
           )}
           <Button variant="primary" className="w-full" loading={running} onClick={runReview} icon={<Sparkles className="size-4" />}>生成复盘报告</Button>
           <HumanGate code="H-08" className="mt-4">AI 的选题建议不会自动进入选题池，需要你逐条采纳。</HumanGate>
+          {desktopPresentation && <div className="desktop-review-import-actions"><ImportMetrics accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} /></div>}
         </Card>
-        <div className="space-y-4">
+        <div id="desktop-review-report-list" className="space-y-4 scroll-mt-24">
           {reports.data?.length ? reports.data.map((r) => <ReportCard key={r.id} report={r} onAdopted={() => { reports.refetch(); inv(['topics', acc.id]) }} />)
             : <Card><Empty icon={<Lightbulb className="size-5" />} title="还没有复盘报告" desc="录入几篇作品的数据后，生成第一份复盘报告。"
               action={<Button variant="primary" icon={<Sparkles className="size-4" />} loading={running} onClick={runReview}>生成复盘报告</Button>} /></Card>}
         </div>
-      </div>
-      <div className="mt-6 space-y-6">
+      </div>}
+      {(!desktopPresentation || showAdvanced) && <div id="desktop-review-followers" className="mt-6 space-y-6 scroll-mt-24">
         <FollowersCard accountId={acc.id} wechat={acc.platform === 'wechat_mp'} />
         <DailyStatsCard accountId={acc.id} />
- <AttributionCard accountId={acc.id} />
+        <div id="desktop-review-insights" className="scroll-mt-24"><AttributionCard accountId={acc.id} contentFormat={acc.platform === 'toutiao' ? toutiaoFormat : undefined} /></div>
         <div className="grid gap-6 lg:grid-cols-2">
-          <TopWorksCard accountId={acc.id} />
+          <TopWorksCard accountId={acc.id} contentFormat={acc.platform === 'toutiao' ? toutiaoFormat : undefined} />
           <div id="digests" className={cn('rounded-xl transition', params.get('tab') === 'digest' && 'ring-2 ring-ink-300')}>
             <DigestsCard accountId={acc.id} />
           </div>
         </div>
-      </div>
+      </div>}
       {openRow && <MetricsDrawer key={openRow.id} row={openRow} works={rows} accountId={acc.id} platform={acc.platform} node={Number(params.get('node')) || undefined} onClose={() => setParams({}, { replace: true })}
         onNext={nextRow ? () => setParams({ work: nextRow.id }, { replace: true }) : undefined} />}
     </div>
