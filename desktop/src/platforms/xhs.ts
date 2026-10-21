@@ -395,8 +395,54 @@ export function noteToObservation(
     adapter_version: XHS_ADAPTER_VERSION,
     mapping_version: XHS_MAPPING_VERSION,
     values,
-    field_paths: fieldPaths
+    field_paths: fieldPaths,
+    // 平台侧的发布时间（笔记列表接口的 `time` 字段）。
+    // 服务端用它回填 `work.published_at`——`metric_day_offset`（D1/D3/D7 天数）
+    // 完全依赖它，缺了就全部算成 0，按天对比的指标失真
+    // （公众号适配器就是漏了这一步，DEV-PS49 已修）。
+    // 解析失败就不带该字段：宁可保持原值，也不写错时间。
+    ...(normalizeXhsNoteTime(note.recordedAt) ? { platform_published_at: normalizeXhsNoteTime(note.recordedAt)! } : {})
   };
+}
+
+// normalizeXhsNoteTime 把小红书笔记时间转成 RFC3339，识别不出来返回 null。
+//
+// 该字段实测形态不统一：可能是 Unix 秒、Unix 毫秒，也可能是
+// `YYYY-MM-DD HH:mm[:ss]`（北京时间裸串）。三种都要接受，
+// 但**不能猜**——超出合理区间的数值一律返回 null。
+export function normalizeXhsNoteTime(raw: string | number | null): string | null {
+  if (raw === null || raw === undefined) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed === '') return null;
+  // 纯数字：按毫秒/秒两种量级判断（毫秒 13 位、秒 10 位）。
+  if (/^\d+$/.test(trimmed)) {
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const ms = trimmed.length >= 12 ? n : n * 1000;
+    // 合理区间：2015-01-01 之后、明天之前。
+    if (ms < 1420070400000 || ms > Date.now() + 24 * 3600 * 1000) return null;
+    return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  }
+  // 已带时区的 ISO 串：直接归一化。
+  if (/T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(trimmed)) {
+    const parsed = new Date(trimmed);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  }
+  // 北京时间裸串 `YYYY-MM-DD HH:mm[:ss]`：显式按 +08:00 解释，避免依赖本机时区。
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/.exec(trimmed);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  const year = Number(y), month = Number(mo), day = Number(d);
+  const hour = Number(h), minute = Number(mi), second = Number(s ?? '0');
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  const utcMillis = Date.UTC(year, month - 1, day, hour, minute, second) - 8 * 3600 * 1000;
+  const back = new Date(utcMillis + 8 * 3600 * 1000);
+  // 反向校验，防止 `2026-02-31` 被 Date 悄悄进位。
+  if (back.getUTCFullYear() !== year || back.getUTCMonth() !== month - 1 || back.getUTCDate() !== day) {
+    return null;
+  }
+  return new Date(utcMillis).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 // ---------- 分享文本与短链 ----------
