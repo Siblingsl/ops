@@ -71,6 +71,12 @@ export interface PlatformReceipt {
   rejected: number;
   duplicate: number;
   run_status: string;
+  // auto_adopt 开启时，投影失败的行数与第一条原因（服务端 DEV-PS46 起返回）。
+  // 观测本身已入库（accepted 仍计入），但没进正式指标。
+  // 不消费这两个字段的话，用户只会看到"采集成功"，以为数据已生效——
+  // 这类"静默半成功"比彻底失败更难发现。
+  adopt_errors?: number;
+  adopt_reason?: string;
 }
 
 // signedRequest 由主进程实现：拿到授权信息、设备密钥并完成一次挑战握手。

@@ -106,6 +106,7 @@ protocol.registerSchemesAsPrivileged([
 
 let businessWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
+let pendingPlatformLoginTarget: Extract<DesktopUiIntent, { type: 'platform-login' }> | null = null;
 let failureWindow: BrowserWindow | null = null;
 let businessLoadTimeout: ReturnType<typeof setTimeout> | null = null;
 let businessFailureReason: 'unreachable' | 'icp-block' | 'render-failed' = 'unreachable';
@@ -959,6 +960,13 @@ function registerIpcHandlers(): void {
     showSettingsWindow();
   });
 
+  ipcHandle('settings:take-platform-login-target', (event) => {
+    assertTrustedLocalSender(event);
+    const target = pendingPlatformLoginTarget;
+    pendingPlatformLoginTarget = null;
+    return target ? { accountId: target.accountId, platform: target.platform } : null;
+  });
+
   ipcHandle('settings:close-local-window', (event) => {
     assertTrustedLocalSender(event);
     const localWindow = BrowserWindow.fromWebContents(event.sender);
@@ -1283,6 +1291,11 @@ interface PlatformCollectOutcome {
   rejected: number;
   stopReason: string | null;
   errorCode: string | null;
+  // auto_adopt 开启时未能投影为正式指标的行数与原因。
+  // accepted 仍计入（观测确实入库），但"没进正式指标"必须让用户看见，
+  // 否则只会看到一条显示成功的日志。
+  adoptErrors: number;
+  adoptReason: string | null;
 }
 
 async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformClaimedRun): Promise<PlatformCollectOutcome> {
@@ -1307,7 +1320,7 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
   if (!run) {
     return {
       performed: true, runId: null, runStatus: 'no_task',
-      accepted: 0, rejected: 0, stopReason: null, errorCode: null
+      accepted: 0, rejected: 0, stopReason: null, errorCode: null, adoptErrors: 0, adoptReason: null
     };
   }
   if (run.platform !== 'xhs' && run.platform !== 'wechat_mp') {
@@ -1321,7 +1334,7 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
     });
     return {
       performed: true, runId: run.id, runStatus: 'failed',
-      accepted: 0, rejected: 0, stopReason: 'platform_not_supported', errorCode: 'platform_not_supported'
+      accepted: 0, rejected: 0, stopReason: 'platform_not_supported', errorCode: 'platform_not_supported', adoptErrors: 0, adoptReason: null
     };
   }
   const platform = run.platform as PlatformLoginPlatform;
@@ -1346,7 +1359,7 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
   }));
   if (!stored.meta) {
     await client.submit({ final_batch: true, run_status: 'failed', stop_reason: 'login_required', error_code: 'platform_login_required', observations: [] });
-    return { performed: true, runId: run.id, runStatus: 'failed', accepted: 0, rejected: 0, stopReason: 'login_required', errorCode: 'platform_login_required' };
+    return { performed: true, runId: run.id, runStatus: 'failed', accepted: 0, rejected: 0, stopReason: 'login_required', errorCode: 'platform_login_required', adoptErrors: 0, adoptReason: null };
   }
   const candidate = selectLoginBrowser(await trustedLoginBrowsers(), stored.meta.browserFamily);
   const browser = await launchPlatformBrowser({ executablePath: candidate.executablePath, profileDir });
@@ -1368,7 +1381,8 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
       return {
         performed: true, runId: run.id, runStatus: receipt.run_status,
         accepted: receipt.accepted, rejected: receipt.rejected,
-        stopReason: 'login_required', errorCode: 'platform_login_required'
+        stopReason: 'login_required', errorCode: 'platform_login_required',
+        adoptErrors: 0, adoptReason: null
       };
     }
     // 心跳：确认租约仍在、未被取消。
@@ -1379,7 +1393,8 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
       });
       return {
         performed: true, runId: run.id, runStatus: receipt.run_status,
-        accepted: receipt.accepted, rejected: receipt.rejected, stopReason: 'canceled', errorCode: null
+        accepted: receipt.accepted, rejected: receipt.rejected, stopReason: 'canceled', errorCode: null,
+        adoptErrors: 0, adoptReason: null
       };
     }
 
@@ -1466,7 +1481,11 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
     rejected = receipt.rejected;
     return {
       performed: true, runId: run.id, runStatus: receipt.run_status,
-      accepted, rejected, stopReason: incomplete, errorCode: null
+      accepted, rejected, stopReason: incomplete, errorCode: null,
+      // auto_adopt 开启时，服务端会把未能投影的行数放回执。
+      // 这些行"观测已入库但没进正式指标"，必须透出来，不能让用户以为全部生效。
+      adoptErrors: receipt.adopt_errors ?? 0,
+      adoptReason: receipt.adopt_reason ?? null
     };
   } catch (error) {
     const code = error instanceof PlatformBrowserError ? error.code : 'platform_network_unavailable';
@@ -1479,7 +1498,7 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
     });
     return {
       performed: true, runId: run.id, runStatus: 'failed',
-      accepted: 0, rejected: 0, stopReason: 'collect_failed', errorCode: code
+      accepted: 0, rejected: 0, stopReason: 'collect_failed', errorCode: code, adoptErrors: 0, adoptReason: null
     };
   } finally {
     await cdp.close();
@@ -1714,8 +1733,18 @@ function startPlatformClaimLoop(): void {
       const outcome = await runPlatformCollect(run.account_id, run);
       console.error('[platform-auto] 完成', JSON.stringify({
         runStatus: outcome.runStatus, accepted: outcome.accepted,
-        rejected: outcome.rejected, errorCode: outcome.errorCode
+        rejected: outcome.rejected, errorCode: outcome.errorCode,
+        // 投影失败时把原因一并记下。不记的话，日志里只有"完成"，而数据其实没进正式指标。
+        adoptErrors: outcome.adoptErrors, adoptReason: outcome.adoptReason
       }));
+      // 自动采用失败要单独告警：这是"采集成功但数据没生效"的静默失败，
+      // 靠一行 JSON 容易被忽略，所以再打一条明确的中文提示。
+      if (outcome.adoptErrors > 0) {
+        console.error(
+          `[platform-auto] 有 ${outcome.adoptErrors} 条观测已采集但未写入正式指标，原因：${outcome.adoptReason ?? '未知'}。` +
+          '请在平台连接卡片里逐条确认。'
+        );
+      }
     } catch (error) {
       // 不弹窗、不打断用户；错误会在 run 的终批里体现。
       console.error('[platform-auto] 循环异常', describeError(error));
@@ -2058,8 +2087,13 @@ function assertTrustedLocalSender(event: IpcMainInvokeEvent): void {
   }
 }
 
-function showSettingsWindow(): void {
+function showSettingsWindow(target?: Extract<DesktopUiIntent, { type: 'platform-login' }>): void {
+  if (target) pendingPlatformLoginTarget = target;
   if (settingsWindow && !settingsWindow.isDestroyed()) {
+    if (target && !settingsWindow.webContents.isLoading()) {
+      settingsWindow.webContents.send('settings:platform-login-target', { accountId: target.accountId, platform: target.platform });
+      pendingPlatformLoginTarget = null;
+    }
     settingsWindow.show();
     settingsWindow.focus();
     return;
@@ -2172,6 +2206,11 @@ function closeFailureWindow(): void {
 function applyDesktopUiIntent(window: BrowserWindow, intent: DesktopUiIntent): void {
   if (intent.type === 'settings') {
     showSettingsWindow();
+    return;
+  }
+
+  if (intent.type === 'platform-login') {
+    showSettingsWindow(intent);
     return;
   }
 
@@ -2367,7 +2406,7 @@ function installApplicationMenu(): void {
       submenu: [
         { id: 'ops-native-client-status', label: '工作区：读取中 · 模式：读取中', enabled: false },
         { type: 'separator' },
-        { label: 'AI 连接设置…', click: showSettingsWindow },
+        { label: 'AI 连接设置…', click: () => showSettingsWindow() },
         { label: '重新登录…', click: () => void navigateBusiness(`${businessOrigin}/login`) },
         { type: 'separator' },
         {
