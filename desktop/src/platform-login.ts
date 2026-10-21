@@ -153,6 +153,49 @@ export function requiresPlatformSignature(path: string): boolean {
   return SIGNED_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
+// 公众号后台的会话 token 在页面 URL 里（`?token=…`），接口必须带上它，
+// 否则回 `{"ret":200040,"err_msg":"invalid csrf token"}`（2026-10-21 实测）。
+// 只允许在路径上追加 `token` 这一个参数，不接受调用方传入任意值。
+export const PATH_TOKEN_PLATFORMS: ReadonlyArray<PlatformLoginPlatform> = Object.freeze(['wechat_mp']);
+export const PATH_TOKEN_PARAM = 'token';
+
+// withPagePathToken 给需要页面 token 的接口补上 token 参数。
+// token 由页面自身 URL 提供（调用方从 session 取），这里只做拼接与去重。
+export function withPagePathToken(path: string, token: string): string {
+  if (token.trim() === '') return path;
+  const hashIndex = path.indexOf('#');
+  const base = hashIndex >= 0 ? path.slice(0, hashIndex) : path;
+  const queryIndex = base.indexOf('?');
+  const query = queryIndex >= 0 ? base.slice(queryIndex + 1) : '';
+  const existing = new URLSearchParams(query);
+  if (existing.has(PATH_TOKEN_PARAM)) return path;
+  existing.set(PATH_TOKEN_PARAM, token.trim());
+  const pathname = queryIndex >= 0 ? base.slice(0, queryIndex) : base;
+  return `${pathname}?${existing.toString()}`;
+}
+
+// buildTokenAwareFetchScript 生成“先取页面 token、再带 token 请求”的固定脚本。
+// 与 buildReadOnlyFetchScript 同样的只读约束，只是多一个 token 参数。
+export function buildTokenAwareFetchScript(path: string): string {
+  assertReadOnlyPath(path);
+  return `(async () => {
+  try {
+    const token = new URLSearchParams(location.search).get('${PATH_TOKEN_PARAM}') || '';
+    const url = new URL(${JSON.stringify(path)}, location.origin);
+    if (token) url.searchParams.set('${PATH_TOKEN_PARAM}', token);
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' }
+    });
+    const text = await response.text();
+    return JSON.stringify({ ok: response.ok, status: response.status, body: text.slice(0, 524288) });
+  } catch (error) {
+    return JSON.stringify({ ok: false, status: 0, body: '' });
+  }
+})()`;
+}
+
 export function assertReadOnlyPath(path: string): void {
   if (!path.startsWith('/')) {
     throw new PlatformBrowserError('platform_network_unavailable', '只读请求必须是同源相对路径');
@@ -212,7 +255,9 @@ export function createPageResponseSource(session: PlatformLoginSession): {
   };
   return {
     fetchJSON: async (path: string) => {
-      const script = buildReadOnlyFetchScript(path);
+      // 公众号后台的接口必须带页面 URL 里的 token，否则回 invalid csrf token。
+      const needsToken = PATH_TOKEN_PLATFORMS.includes(session.platform);
+      const script = needsToken ? buildTokenAwareFetchScript(path) : buildReadOnlyFetchScript(path);
       const result = await session.cdp.request('Runtime.evaluate', {
         expression: script,
         awaitPromise: true,

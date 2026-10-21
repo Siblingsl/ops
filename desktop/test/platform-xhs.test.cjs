@@ -180,6 +180,24 @@ test('PS-T32：分页按 note_id 去重，到页数上限如实报告未完成�
   assert.equal(full.coverage.incomplete_reason, null);
 });
 
+test('PS-T32 加固：平台恒回同一页时按内容重复收口，不空转到页数上限', async () => {
+  // 实测小红书只有一页时回 page:-1（已被 hasMore 拦住）。
+  // 但若平台忽略 page 参数、恒回同一批且 page>=0，不拦就会重复请求到页数上限。
+  let calls = 0;
+  const source = {
+    fetchJSON: async () => {
+      calls += 1;
+      // 每一页都声称还有下一页，内容完全相同。
+      return { success: true, data: { notes: [noteA, noteB], page: calls, cursor: null } };
+    }
+  };
+  const result = await collectPostedNotes(source, { maxPages: 3 });
+  assert.equal(result.pagesRead, 2, '第 2 页全是重复即停，不做第 3 次请求');
+  assert.equal(result.notes.length, 2);
+  assert.equal(result.duplicates, 2, '第 2 页两条都算重复');
+  assert.equal(result.coverage.incomplete_reason, 'page_repeated');
+});
+
 test('分享文本：可取短链或完整链接，跳出允许域名与私网一律拒绝', () => {
   const short = extractShareURL('57 虚构标题 http://xhslink.com/a/AbCd 复制本条信息，打开【小红书】App查看精彩内容！');
   assert.ok(short);

@@ -310,18 +310,28 @@ export async function collectPostedNotes(
       : await source.fetchJSON(path);
     const parsed = parsePostedNotesPage(payload);
     pagesRead += 1;
+    // 上一页已有的编号在本页再次出现时计数；整页全是重复则说明平台没有推进。
+    let pageNew = 0;
     for (const note of parsed.notes) {
       if (seen.has(note.noteId)) {
         duplicates += 1;
         continue;
       }
       seen.set(note.noteId, note);
+      pageNew += 1;
     }
     hasMore = parsed.hasMore;
     // 游标与上一页完全相同说明平台没有推进：停止并如实标记，避免无限循环。
     if (parsed.hasMore && parsed.cursor !== null && parsed.cursor === previousCursor) {
       incompleteReason = 'cursor_stalled';
       cursor = parsed.cursor;
+      break;
+    }
+    // 页形态兜底：这一页非空但没有任何新编号，说明平台恒回同一页（page 参数被忽略）。
+    // 实测小红书在只有一页时会回 `page:-1`（已由 hasMore 拦住），但其它形态下
+    // page>=0 却恒回同一批数据时若不拦就会重复请求到页数上限。
+    if (parsed.notes.length > 0 && pageNew === 0) {
+      incompleteReason = 'page_repeated';
       break;
     }
     previousCursor = parsed.cursor;

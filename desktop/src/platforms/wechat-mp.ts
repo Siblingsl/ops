@@ -75,7 +75,7 @@ export interface WechatDiscoveryResult {
   pagesRead: number;
   hasMore: boolean;
   nextCursor: string | null;
-  coverage: { pages_read: number; has_more: boolean; incomplete_reason: string | null };
+  coverage: { pages_read: number; has_more: boolean; incomplete_reason: string | null; total_count?: number | null };
   duplicates: number;
   invalidRows: number;
 }
@@ -207,10 +207,27 @@ export function parsePublishPage(payload: unknown): {
   articles: WechatArticleFact[];
   page: number | null;
   hasMore: boolean;
+  totalCount: number | null;
   invalidRows: number;
 } {
-  const body = payload as { publish_page?: unknown } | null;
-  const page = body?.publish_page;
+  const body = payload as { publish_page?: unknown; base_resp?: { ret?: unknown } } | null;
+  // 平台把失败也回 200，靠 base_resp.ret 判断；非 0 时按未登录/受限处理，
+  // 不返回空列表冒充“没有作品”。
+  const ret = body?.base_resp?.ret;
+  if (typeof ret === 'number' && ret !== 0) {
+    throw new WechatAdapterError('platform_login_required', '公众号后台会话无效或要求验证');
+  }
+  // 实测：`publish_page` 是一个**嵌套的 JSON 字符串**，不是对象（2026-10-21）。
+  // 两种形态都要接受，否则永远解析不出文章。
+  const raw = body?.publish_page;
+  let page: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      page = JSON.parse(raw);
+    } catch {
+      throw new WechatAdapterError('platform_schema_changed', '发表记录结构已变化');
+    }
+  }
   if (!page || typeof page !== 'object') {
     throw new WechatAdapterError('platform_login_required', '公众号后台未返回发表记录');
   }
@@ -227,12 +244,22 @@ export function parsePublishPage(payload: unknown): {
     // 发送时间在 sent_info.time；缺失时为 null，不编造。
     const sentInfo = r.sent_info as Record<string, unknown> | undefined;
     const sentAt = sentInfo && typeof sentInfo.time === 'string' && sentInfo.time.trim() !== ''
-      ? sentInfo.time.trim() : null;
+      ? sentInfo.time.trim()
+      : sentInfo && typeof sentInfo.time === 'number' ? String(sentInfo.time) : null;
     const publishType = typeof r.publish_type === 'number' ? r.publish_type : Number(r.publish_type);
     // publish_type=101 是“仅发表、未群发”，与群发一样当作已发布作品（D-129）。
     const publishOnly = publishType === 101;
-    const info = r.publish_info as Record<string, unknown> | undefined;
-    const appmsgInfo = info?.appmsg_info;
+    // `publish_info` 同样是嵌套 JSON 字符串。
+    let info = r.publish_info as unknown;
+    if (typeof info === 'string') {
+      try {
+        info = JSON.parse(info);
+      } catch {
+        invalidRows += 1;
+        continue;
+      }
+    }
+    const appmsgInfo = (info as Record<string, unknown> | undefined)?.appmsg_info;
     if (!Array.isArray(appmsgInfo)) {
       invalidRows += 1;
       continue;
@@ -245,8 +272,12 @@ export function parsePublishPage(payload: unknown): {
   }
   const total = typeof p.total_count === 'number' ? p.total_count : null;
   const pageNo = typeof p.page === 'number' ? p.page : typeof p.page_no === 'number' ? p.page_no : null;
-  const hasMore = total !== null ? articles.length > 0 && total > articles.length : false;
-  return { articles, page: pageNo, hasMore, invalidRows };
+  // 注意：单页只能看到“本页有数据”，判断不出全局是否还有更多。
+  // 实测第 2 页（begin=10，返回 6 条，total=16）单看本页会得出 hasMore=true，
+  // 但累计已达 16，应收口。因此真正判定放在 collectPublishedArticles 里按已收集数量与
+  // total_count 比较；这里只用“本页非空”作为粗粒度信号，避免误导。
+  const hasMore = articles.length > 0 && (total === null || total > articles.length);
+  return { articles, page: pageNo, hasMore, totalCount: total, invalidRows };
 }
 
 // collectPublishedArticles 跨页收集并按稳定编号去重；页数上限 3 与 §10.1 一致。
@@ -255,7 +286,7 @@ export async function collectPublishedArticles(
   options: { maxPages?: number; buildPath?: (state: { page: number }) => string } = {}
 ): Promise<WechatDiscoveryResult> {
   const maxPages = Math.max(1, Math.min(options.maxPages ?? 3, 3));
-  const buildPath = options.buildPath ?? ((s: { page: number }) => `${WECHAT_MP_API.publishedList}?sub=list&begin=${s.page * 10}&count=10`);
+  const buildPath = options.buildPath ?? ((s: { page: number }) => `${WECHAT_MP_API.publishedList}?sub=list&begin=${s.page * 10}&count=10&lang=zh_CN&f=json&ajax=1`);
   const seen = new Map<string, WechatArticleFact>();
   let duplicates = 0;
   let invalidRows = 0;
@@ -263,6 +294,7 @@ export async function collectPublishedArticles(
   let page = 0;
   let hasMore = false;
   let incompleteReason: string | null = null;
+  let totalCount: number | null = null;
   for (;;) {
     if (pagesRead >= maxPages) {
       incompleteReason = 'page_budget';
@@ -272,12 +304,18 @@ export async function collectPublishedArticles(
     const parsed = parsePublishPage(payload);
     pagesRead += 1;
     invalidRows += parsed.invalidRows;
+    if (parsed.totalCount !== null) totalCount = parsed.totalCount;
     for (const article of parsed.articles) {
       if (seen.has(article.externalID)) {
         duplicates += 1;
         continue;
       }
       seen.set(article.externalID, article);
+    }
+    // total_count 是总量：已收集够多就不再请求，避免按“本页有数据”无限翻页。
+    if (totalCount !== null && seen.size >= totalCount) {
+      hasMore = false;
+      break;
     }
     hasMore = parsed.hasMore;
     if (!hasMore) break;
@@ -288,7 +326,7 @@ export async function collectPublishedArticles(
     pagesRead,
     hasMore,
     nextCursor: hasMore ? String(page) : null,
-    coverage: { pages_read: pagesRead, has_more: hasMore, incomplete_reason: incompleteReason },
+    coverage: { pages_read: pagesRead, has_more: hasMore, incomplete_reason: incompleteReason, total_count: totalCount },
     duplicates,
     invalidRows
   };

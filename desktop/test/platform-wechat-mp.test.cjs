@@ -52,6 +52,66 @@ function record(infoList, overrides = {}) {
   };
 }
 
+// 2026-10-21 真实账号实测：平台把 publish_page 与 publish_info 都作为**嵌套 JSON 字符串**返回。
+// 虚构样本只保留结构，不包含真实 bizuin/appmsgid。
+test('嵌套 JSON 字符串：publish_page 与 publish_info 都要二次解析', () => {
+  const inner = JSON.stringify({
+    publish_list: [{
+      publish_type: 101,
+      sent_info: { time: 1783745092 },
+      publish_info: JSON.stringify({
+        appmsg_info: [{ appmsgid: '2247480009', itemidx: 1, title: '虚构', content_url: 'https://mp.weixin.qq.com/s?mid=2247480009&idx=1', is_deleted: false }]
+      })
+    }],
+    total_count: 1,
+    page: 0
+  });
+  const parsed = parsePublishPage({ base_resp: { ret: 0 }, publish_page: inner });
+  assert.equal(parsed.articles.length, 1);
+  assert.equal(parsed.articles[0].externalID, '2247480009_1');
+  assert.equal(parsed.totalCount, 1);
+  // 数字形态的 sent_info.time 也要接受，不能因为不是字符串就丢掉时间。
+  assert.equal(parsed.articles[0].sentAt, '1783745092');
+  // publish_type=101（仅发表未群发）仍算已发布作品。
+  assert.equal(parsed.articles[0].status, 'published');
+
+  // 非 0 base_resp.ret 视为会话无效，不能返回空列表冒充没有作品。
+  assert.throws(
+    () => parsePublishPage({ base_resp: { ret: 200040, err_msg: 'invalid csrf token' }, publish_page: inner }),
+    (err) => err instanceof WechatAdapterError && err.code === 'platform_login_required'
+  );
+  // publish_page 是无法解析的字符串：结构变化，不静默当空。
+  assert.throws(
+    () => parsePublishPage({ base_resp: { ret: 0 }, publish_page: 'not json' }),
+    (err) => err instanceof WechatAdapterError && err.code === 'platform_schema_changed'
+  );
+});
+
+test('多页按 total_count 收口：收集够总量就停，不因本页非空继续翻页', async () => {
+  // 仿真实测：第 1 页 10 条、第 2 页 6 条、total=16。
+  // 单看第 2 页会得出“还有更多”，但累计已达 16，必须收口。
+  const pageOne = Array.from({ length: 10 }, (_, i) => appmsg({ appmsgid: `22474801${String(i).padStart(2, '0')}`, itemidx: 1 }));
+  const pageTwo = Array.from({ length: 6 }, (_, i) => appmsg({ appmsgid: `22474802${String(i).padStart(2, '0')}`, itemidx: 1 }));
+  const pages = [
+    { publish_page: { publish_list: [record(pageOne)], total_count: 16, page: 0 } },
+    { publish_page: { publish_list: [record(pageTwo)], total_count: 16, page: 1 } }
+  ];
+  let calls = 0;
+  const source = {
+    fetchJSON: async () => {
+      const payload = pages[calls] ?? { publish_page: { publish_list: [], total_count: 16, page: calls } };
+      calls += 1;
+      return payload;
+    }
+  };
+  const result = await collectPublishedArticles(source, { maxPages: 3 });
+  assert.equal(result.articles.length, 16, '必须收满 16 篇');
+  assert.equal(result.pagesRead, 2, '第 2 页收满后不能再请求第 3 页');
+  assert.equal(result.hasMore, false);
+  assert.equal(result.coverage.total_count, 16);
+  assert.equal(result.duplicates, 0);
+});
+
 test('身份：优先管理员条目，且必须同时有 bizuin 与原始 ID', () => {
   const payload = {
     biz_list: {
