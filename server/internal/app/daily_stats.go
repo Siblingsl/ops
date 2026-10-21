@@ -82,12 +82,23 @@ func (s *Server) getDailyStats(w http.ResponseWriter, r *http.Request) error {
 	}
 	for i := range sources {
 		x := &sources[i]
-		// avg 同样按 `read_unit` 分组（§8.4）：unknown 不参与，已知单位不一致则整列 NULL。
-		// 否则会把"次数"和"人数"平均成一个没有含义的数。
-		e = s.db.QueryRow(ctx, `WITH base AS (
-				SELECT count(DISTINCT w.id) OVER () AS works, m.reads, m.likes,
-				       coalesce(m.read_unit,'unknown') AS unit
-				FROM work w LEFT JOIN LATERAL metric_node_d7_public(w.id) m ON true
+		// avg(reads) 不按单位过滤——**读数列本身已经是"单位确定"的产物**。
+		//
+		// 上一版（DEV-PS44）在这里加了 `unit <> 'unknown'` 过滤，是**错的**：
+		// `metric_snapshot.read_unit` 的列默认值就是 `'unknown'` 且 NOT NULL，
+		// 历史行、人工录入行、以及所有没显式标单位的行都是 `'unknown'`。
+		// 过滤掉它们会让绝大多数账号的均值直接变空（实测 `TestV433` 因此失败）。
+		//
+		// 单位保护的正确位置在**投影**（`projectObservation` 只在 `unit='times'`/
+		// `'users'` 时才写 reads），而不是在这里再过滤一次。
+		//
+		// 作品数用独立子查询统计，不能写成 `count(DISTINCT w.id) OVER ()`——
+		// PostgreSQL 不支持 `DISTINCT` 配窗口函数，会报
+		// `DISTINCT is not implemented for window functions (SQLSTATE 0A000)`
+		// 让整个 daily/stats 接口 500（同样是 DEV-PS44 引入的回归，本轮一并修）。
+		e = s.db.QueryRow(ctx, `WITH works AS (
+				SELECT count(DISTINCT w.id) AS n
+				FROM work w
 				WHERE w.account_id=$1 AND w.status IN ('published') AND w.deleted_at IS NULL
 				  AND w.published_at>$2 AND ($4='' OR w.content_format=$4)
 				  AND EXISTS(SELECT 1 FROM daily_recommendation_action act
@@ -95,11 +106,24 @@ func (s *Server) getDailyStats(w http.ResponseWriter, r *http.Request) error {
 				             CROSS JOIN LATERAL jsonb_array_elements(d.items->act.item_index->'basis') b
 				             WHERE act.topic_id=w.topic_id AND b->>'type'=$3 AND act.action IN ('adopted','started'))
 			)
-			SELECT coalesce(max(works),0),
-			       CASE WHEN count(DISTINCT unit) FILTER (WHERE reads IS NOT NULL AND unit <> 'unknown') > 1 THEN NULL
-			            ELSE avg(reads) FILTER (WHERE unit <> 'unknown')::float8 END,
-			       avg(likes)::float8
-			FROM base`, a.ID, s.today().AddDate(0, 0, -30), x.Type, format).
+			SELECT (SELECT n FROM works),
+			       (SELECT avg(m.reads)::float8
+			        FROM work w LEFT JOIN LATERAL metric_node_d7_public(w.id) m ON true
+			        WHERE w.account_id=$1 AND w.status IN ('published') AND w.deleted_at IS NULL
+			          AND w.published_at>$2 AND ($4='' OR w.content_format=$4)
+			          AND EXISTS(SELECT 1 FROM daily_recommendation_action act
+			                     JOIN daily_recommendation d ON d.id=act.recommendation_id
+			                     CROSS JOIN LATERAL jsonb_array_elements(d.items->act.item_index->'basis') b
+			                     WHERE act.topic_id=w.topic_id AND b->>'type'=$3 AND act.action IN ('adopted','started'))),
+			       (SELECT avg(m.likes)::float8
+			        FROM work w LEFT JOIN LATERAL metric_node_d7_public(w.id) m ON true
+			        WHERE w.account_id=$1 AND w.status IN ('published') AND w.deleted_at IS NULL
+			          AND w.published_at>$2 AND ($4='' OR w.content_format=$4)
+			          AND EXISTS(SELECT 1 FROM daily_recommendation_action act
+			                     JOIN daily_recommendation d ON d.id=act.recommendation_id
+			                     CROSS JOIN LATERAL jsonb_array_elements(d.items->act.item_index->'basis') b
+			                     WHERE act.topic_id=w.topic_id AND b->>'type'=$3 AND act.action IN ('adopted','started')))`,
+			a.ID, s.today().AddDate(0, 0, -30), x.Type, format).
 			Scan(&x.Published, &x.AvgReads, &x.AvgLikes)
 		if e != nil {
 			return e
@@ -113,20 +137,15 @@ func (s *Server) getDailyStats(w http.ResponseWriter, r *http.Request) error {
 	if out.Total > 0 {
 		out.Rate = float64(out.Adopted) / float64(out.Total)
 	}
-	// 同样按 read_unit 分组：unknown 不参与，已知单位不一致时 avg 为 NULL（§8.4）。
-	rows, e := s.db.Query(ctx, `WITH base AS (
-			SELECT EXISTS(SELECT 1 FROM daily_recommendation_action a
+	// avg(reads) 不按单位过滤——理由同上：`read_unit` 的列默认值就是 `'unknown'`，
+	// 过滤掉会让旧数据的均值全部变空。单位保护在投影层，不在这里。
+	rows, e := s.db.Query(ctx, `SELECT EXISTS(SELECT 1 FROM daily_recommendation_action a
 			              WHERE a.topic_id=w.topic_id AND a.action IN ('adopted','started')) AS recommended,
-			       m.reads, m.likes, coalesce(m.read_unit,'unknown') AS unit
-			FROM work w LEFT JOIN LATERAL metric_node_d7_public(w.id) m ON true
-			WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.status IN ('published')
-			  AND w.published_at>$2 AND ($3='' OR w.content_format=$3)
-		)
-		SELECT recommended, count(*),
-		       CASE WHEN count(DISTINCT unit) FILTER (WHERE reads IS NOT NULL AND unit <> 'unknown') > 1 THEN NULL
-		            ELSE avg(reads) FILTER (WHERE unit <> 'unknown')::float8 END,
-		       avg(likes)::float8
-		FROM base GROUP BY recommended ORDER BY recommended DESC`, a.ID, s.today().AddDate(0, 0, -30), format)
+		       count(*), avg(m.reads)::float8, avg(m.likes)::float8
+		FROM work w LEFT JOIN LATERAL metric_node_d7_public(w.id) m ON true
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.status IN ('published')
+		  AND w.published_at>$2 AND ($3='' OR w.content_format=$3)
+		GROUP BY recommended ORDER BY recommended DESC`, a.ID, s.today().AddDate(0, 0, -30), format)
 	if e != nil {
 		return e
 	}
