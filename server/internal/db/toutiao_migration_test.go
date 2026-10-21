@@ -1,4 +1,4 @@
-package db
+﻿package db
 
 import (
 	"bytes"
@@ -31,6 +31,10 @@ func TestToutiaoLegacyBinaryRollbackCapability(t *testing.T) {
 	}
 	database, databaseURL := newToutiaoMigrationTestDB(t)
 	if err := Migrate(databaseURL); err != nil {
+		t.Fatal(err)
+	}
+	initialVersion, err := goose.GetDBVersion(database)
+	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -127,8 +131,8 @@ func TestToutiaoLegacyBinaryRollbackCapability(t *testing.T) {
 	if err := database.QueryRow(`SELECT count(*) FROM work WHERE id=$1 AND content_format='micro_post'`, workID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("legacy attempt changed new work: count=%d err=%v", count, err)
 	}
-	if version, err := goose.GetDBVersion(database); err != nil || version != 47 {
-		t.Fatalf("legacy attempt changed schema version: %d %v", version, err)
+	if version, err := goose.GetDBVersion(database); err != nil || version != initialVersion {
+		t.Fatalf("legacy attempt changed schema version: initial=%d current=%d err=%v", initialVersion, version, err)
 	}
 	t.Log("actual HEAD legacy binary can read unknown enum strings but lacks the Toutiao package route (404): it is not an acceptable rollback target; data and schema were preserved")
 }
@@ -145,7 +149,7 @@ func TestToutiaoMigrationUpgradeAndDataPreservingRollback(t *testing.T) {
 	if err := Migrate(freshURL); err != nil {
 		t.Fatalf("migrate fresh database: %v", err)
 	}
-	if version, err := goose.GetDBVersion(freshDB); err != nil || version != 50 {
+	if version, err := goose.GetDBVersion(freshDB); err != nil || version != 51 {
 		t.Fatalf("fresh migration version: got %d, err=%v", version, err)
 	}
 	assertToutiaoAccountFormat(t, freshDB, "long_article")
@@ -162,7 +166,7 @@ func TestToutiaoMigrationUpgradeAndDataPreservingRollback(t *testing.T) {
 	if err := Migrate(upgradeURL); err != nil {
 		t.Fatalf("upgrade existing two-platform database: %v", err)
 	}
-	if version, err := goose.GetDBVersion(upgradeDB); err != nil || version != 50 {
+	if version, err := goose.GetDBVersion(upgradeDB); err != nil || version != 51 {
 		t.Fatalf("upgraded migration version: got %d, err=%v", version, err)
 	}
 	assertLegacyPlatformData(t, upgradeDB, legacy)

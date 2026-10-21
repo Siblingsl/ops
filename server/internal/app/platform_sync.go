@@ -157,8 +157,10 @@ func (s *Server) scheduleConnection(ctx context.Context, connectionID, workspace
 		var connRev int64
 		var adapter, browser string
 		var mapping int
-		if err := tx.QueryRow(ctx, `SELECT authorization_revision, capabilities->>'adapter_version',
-			coalesce((capabilities->>'mapping_version')::int, 1), capabilities->>'browser_version'
+		if err := tx.QueryRow(ctx, `SELECT authorization_revision,
+			coalesce(capabilities->>'adapterVersion', ''),
+			coalesce((capabilities->>'mappingVersion')::int, 1),
+			coalesce(capabilities->>'browserVersion', '')
 			FROM platform_connection WHERE id=$1 FOR UPDATE`, connectionID).Scan(&connRev, &adapter, &mapping, &browser); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
@@ -358,6 +360,13 @@ func (s *Server) claimPlatformRun(ctx context.Context, deviceID uuid.UUID) (*pla
 			  AND c.user_id=$2
 			  AND c.device_id=$3
 			  AND c.state='active'
+			  -- 适配器版本熔断期间不领取：该版本已按 §12 判定为不可信，
+			  -- 继续派发只会写入更多错数。
+			  AND NOT EXISTS (
+			    SELECT 1 FROM platform_adapter_breaker b
+			    WHERE b.platform = c.platform
+			      AND b.adapter_version = coalesce(c.capabilities->>'adapterVersion', '')
+			      AND b.state = 'open')
 			ORDER BY CASE WHEN r.trigger='manual' THEN 0 ELSE 1 END, r.created_at
 			LIMIT 1 FOR UPDATE OF r SKIP LOCKED`, id.WorkspaceID, id.UserID, deviceID).Scan(&runID)
 		if err != nil {
@@ -514,9 +523,9 @@ func (s *Server) requestPlatformSync(w http.ResponseWriter, r *http.Request) err
 			 authorization_revision, workspace_authorization_revision, adapter_version, mapping_version,
 			 browser_version, binding_snapshot, deadline_at)
 			VALUES ($1,$2,$3,$4,'manual','collect','queued',$5,$6,
-			  coalesce((SELECT capabilities->>'adapter_version' FROM platform_connection WHERE id=$1),''),
-			  coalesce((SELECT (capabilities->>'mapping_version')::int FROM platform_connection WHERE id=$1),1),
-			  coalesce((SELECT capabilities->>'browser_version' FROM platform_connection WHERE id=$1),''),
+			  coalesce((SELECT capabilities->>'adapterVersion' FROM platform_connection WHERE id=$1),''),
+			  coalesce((SELECT (capabilities->>'mappingVersion')::int FROM platform_connection WHERE id=$1),1),
+			  coalesce((SELECT capabilities->>'browserVersion' FROM platform_connection WHERE id=$1),''),
 			  $7,$8)
 			RETURNING id`,
 			c.ID, id.WorkspaceID, accountID, id.UserID, c.AuthorizationRevision, policyRev, binding,
@@ -792,7 +801,11 @@ func (s *Server) checkRunTarget(ctx context.Context, tx pgx.Tx, runID uuid.UUID,
 	return "", apiErr(409, "platform_result_conflict", "观测对应的作品不在本次任务目标内")
 }
 
-// applyRunFailureAction 按错误码执行连接级动作（§12）：不可恢复的错误直接停用自动采集。
+// applyRunFailureAction 按错误码执行动作（§12）。分两级：
+//   - 连接级：登录失效/验证/身份不符 → 只改该连接的可用性；账号受限/需重新授权 → 暂停该连接。
+//   - 版本级：`platform_schema_changed` 表示页面或响应结构变了，是**适配器版本**的问题，
+//     不是单条连接的问题。此时对 `(platform, adapter_version)` 全局熔断，避免所有同版本
+//     客户端继续按旧映射写入错数（§12、§8.5）。
 func (s *Server) applyRunFailureAction(ctx context.Context, tx pgx.Tx, connectionID uuid.UUID, errorCode *string) error {
 	if errorCode == nil {
 		return nil
@@ -806,9 +819,74 @@ func (s *Server) applyRunFailureAction(ctx context.Context, tx pgx.Tx, connectio
 		_, err := tx.Exec(ctx, `UPDATE platform_connection SET state='paused', auto_collect=false,
 			auto_adopt=false, authorization_revision=authorization_revision+1, updated_at=now() WHERE id=$1`, connectionID)
 		return err
+	case "platform_schema_changed":
+		// 版本级熔断：先停该连接，再按平台+适配器版本全局打开熔断。
+		// 恢复必须发布新 mapping_version 并重新实测，不能靠时间自动恢复。
+		if _, err := tx.Exec(ctx, `UPDATE platform_connection SET auto_collect=false, availability='degraded',
+			updated_at=now() WHERE id=$1`, connectionID); err != nil {
+			return err
+		}
+		return s.openAdapterBreaker(ctx, tx, connectionID, *errorCode)
 	default:
 		return nil
 	}
+}
+
+// openAdapterBreaker 对连接所属的 (platform, adapter_version) 打开熔断。
+// 同一版本重复触发时只累加受影响连接数，不重复建行（部分唯一索引兜底）。
+func (s *Server) openAdapterBreaker(ctx context.Context, tx pgx.Tx, connectionID uuid.UUID, errorCode string) error {
+	var platform, adapterVersion string
+	var mappingVersion *int
+	// 适配器版本以连接能力快照为准；快照缺失时不猜版本，直接返回让上层记录。
+	if err := tx.QueryRow(ctx, `SELECT platform,
+			coalesce(capabilities->>'adapterVersion', ''),
+			NULLIF(capabilities->>'mappingVersion', '')::int
+		FROM platform_connection WHERE id=$1`, connectionID).Scan(&platform, &adapterVersion, &mappingVersion); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if strings.TrimSpace(adapterVersion) == "" {
+		// 没有版本信息就无法按版本熔断，只保留上面的连接级停用。
+		return nil
+	}
+	var affected int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM platform_connection
+		WHERE platform=$1 AND capabilities->>'adapterVersion'=$2 AND state='active'`,
+		platform, adapterVersion).Scan(&affected); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO platform_adapter_breaker
+		(platform, adapter_version, error_code, mapping_version, state, affected_connections)
+		VALUES ($1,$2,$3,$4,'open',$5)
+		ON CONFLICT (platform, adapter_version) WHERE state='open'
+		DO UPDATE SET affected_connections = EXCLUDED.affected_connections, updated_at = now()`,
+		platform, adapterVersion, errorCode, mappingVersion, affected)
+	if err != nil {
+		return err
+	}
+	slog.Warn("平台采集：适配器版本熔断已打开", "platform", platform,
+		"adapter_version", adapterVersion, "error_code", errorCode, "affected_connections", affected)
+	return nil
+}
+
+// adapterBreakerOpen 判断某平台的某适配器版本是否处于熔断状态。
+// 领取任务前必须检查：熔断期间不再派发该版本的任务，避免继续写入错数。
+func (s *Server) adapterBreakerOpen(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, platform, adapterVersion string) (bool, error) {
+	if strings.TrimSpace(platform) == "" || strings.TrimSpace(adapterVersion) == "" {
+		return false, nil
+	}
+	var open bool
+	err := q.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM platform_adapter_breaker
+		WHERE platform=$1 AND adapter_version=$2 AND state='open')`, platform, adapterVersion).Scan(&open)
+	if err != nil {
+		return false, err
+	}
+	return open, nil
 }
 
 func failureAvailability(code string) string {
