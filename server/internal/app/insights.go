@@ -19,22 +19,23 @@ import (
 // 复盘 v2（10 文档模块 J）：归因、拆解、周报、录入提醒。统计全部基于本账号已有数据，不预测爆款。
 
 type perfSample struct {
-	WorkID       uuid.UUID
-	Title        string
-	PublishedAt  time.Time
-	Reads        int
-	Interactions int
-	Chars        int
-	Topics       []string
+	WorkID        uuid.UUID
+	Title         string
+	ContentFormat string
+	PublishedAt   time.Time
+	Reads         int
+	Interactions  int
+	Chars         int
+	Topics        []string
 }
 
 func (s *Server) perfSamples(ctx context.Context, accountID uuid.UUID) ([]perfSample, error) {
-	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, coalesce(w.published_at, w.updated_at), w.topics,
+	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.content_format, coalesce(w.published_at, w.updated_at), w.topics,
 		d.reads, coalesce(d.interactions,0),
 		(SELECT coalesce(sum(char_length(content_md)),0) FROM work_section ws WHERE ws.work_id=w.id AND ws.deleted_at IS NULL)
 		FROM work w JOIN work_metric_d7 d ON d.work_id=w.id
 		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND d.reads IS NOT NULL
-		ORDER BY 3 DESC LIMIT 500`, accountID)
+		ORDER BY 4 DESC, w.id DESC LIMIT 500`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +43,7 @@ func (s *Server) perfSamples(ctx context.Context, accountID uuid.UUID) ([]perfSa
 	var out []perfSample
 	for rows.Next() {
 		var p perfSample
-		if err := rows.Scan(&p.WorkID, &p.Title, &p.PublishedAt, &p.Topics, &p.Reads, &p.Interactions, &p.Chars); err != nil {
+		if err := rows.Scan(&p.WorkID, &p.Title, &p.ContentFormat, &p.PublishedAt, &p.Topics, &p.Reads, &p.Interactions, &p.Chars); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -192,9 +193,40 @@ func (s *Server) attribution(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
+	var in struct {
+		ContentFormat string `json:"content_format"`
+	}
+	if r.ContentLength != 0 {
+		if err := decode(r, &in); err != nil {
+			return err
+		}
+	}
+	if a.Platform == "toutiao" && in.ContentFormat != "long_article" && in.ContentFormat != "micro_post" {
+		return validation("请选择文章或微头条后再进行复盘")
+	}
+	inputRevision, err := s.preferenceInputRevision(ctx, a.ID)
+	if err != nil {
+		return err
+	}
 	samples, err := s.perfSamples(ctx, a.ID)
 	if err != nil {
 		return err
+	}
+	if a.Platform == "toutiao" {
+		applied, err := s.persistToutiaoDataPreferences(ctx, a.ID, inputRevision, samples, false)
+		if err != nil {
+			return err
+		}
+		if !applied {
+			return stateInvalid("作品数据已变化，请刷新后重新生成归因分析")
+		}
+		filtered := make([]perfSample, 0, len(samples))
+		for _, sample := range samples {
+			if sample.ContentFormat == in.ContentFormat {
+				filtered = append(filtered, sample)
+			}
+		}
+		samples = filtered
 	}
 	if len(samples) < minAttributionSamples {
 		return ok(w, map[string]any{"enough": false, "samples": len(samples), "need": minAttributionSamples,
@@ -202,8 +234,14 @@ func (s *Server) attribution(w http.ResponseWriter, r *http.Request) error {
 	}
 	feats := attributionStats(samples, s.loc)
 	// DEV-A102：把样本量达标的分组对比沉淀为"读者数据偏好"，供生成端注入（DEV-A103）。
-	if err := s.saveDataPreferences(ctx, a.ID, deriveDataPreferences(feats)); err != nil {
-		return err
+	if a.Platform != "toutiao" {
+		applied, err := s.persistDataPreferences(ctx, a.ID, inputRevision, samples, deriveDataPreferences(feats), true, false)
+		if err != nil {
+			return err
+		}
+		if !applied {
+			return stateInvalid("作品数据已变化，请刷新后重新生成归因分析")
+		}
 	}
 	var b strings.Builder
 	for _, f := range feats {
@@ -212,20 +250,26 @@ func (s *Server) attribution(w http.ResponseWriter, r *http.Request) error {
 			fmt.Fprintf(&b, "- %s：%d 篇，平均阅读 %.0f，平均互动 %.0f\n", g.Value, g.N, g.AvgReads, g.AvgInteractions)
 		}
 	}
-	user := fmt.Sprintf(`## 本账号作品分组统计（共 %d 篇）
+	shape := ""
+	account := *a
+	if a.Platform == "toutiao" {
+		account.ContentFormat = in.ContentFormat
+		shape = "\n作品形态：" + map[string]string{"long_article": "今日头条文章", "micro_post": "今日头条微头条"}[in.ContentFormat]
+	}
+	user := fmt.Sprintf(`## 本账号作品分组统计（共 %d 篇）%s
 %s
 ## 任务说明
 把以上分组统计翻译成 3–5 条可读结论。每条必须写明依据的样本量；某组样本少于 3 篇时只能说"倾向"，不能下结论。不要预测未来数据，不要编造统计中没有的数字。
 
 ## 输出格式
-只输出 JSON：{"conclusions":[{"text":"结论","confidence":"样本量与置信度说明"}]}`, len(samples), b.String())
+只输出 JSON：{"conclusions":[{"text":"结论","confidence":"样本量与置信度说明"}]}`, len(samples), shape, b.String())
 	var out struct {
 		Conclusions []struct {
 			Text       string `json:"text"`
 			Confidence string `json:"confidence"`
 		} `json:"conclusions"`
 	}
-	res, err := s.runAIJSON(ctx, aiTask{Type: "review_attribution", Account: a, User: user, SkipStyle: true}, &out, func() error {
+	res, err := s.runAIJSON(ctx, aiTask{Type: "review_attribution", Account: &account, User: user, SkipStyle: true}, &out, func() error {
 		if len(out.Conclusions) == 0 {
 			return fmt.Errorf("没有结论")
 		}
@@ -245,7 +289,7 @@ func (s *Server) attribution(w http.ResponseWriter, r *http.Request) error {
 	if len(out.Conclusions) > 5 {
 		out.Conclusions = out.Conclusions[:5]
 	}
-	return ok(w, map[string]any{"enough": true, "samples": len(samples), "features": feats, "conclusions": out.Conclusions, "ai_call_id": res.CallID})
+	return ok(w, map[string]any{"enough": true, "samples": len(samples), "content_format": in.ContentFormat, "features": feats, "conclusions": out.Conclusions, "ai_call_id": res.CallID})
 }
 
 // topWorks returns the account's own best performers (top 10%, at least one) that may be broken down.
@@ -254,28 +298,49 @@ func (s *Server) topWorks(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	samples, err := s.topSamples(r.Context(), a.ID)
+	format := strings.TrimSpace(r.URL.Query().Get("content_format"))
+	if a.Platform == "toutiao" && format != "long_article" && format != "micro_post" {
+		return validation("请选择文章或微头条后查看高表现作品")
+	}
+	samples, err := s.topSamplesForFormat(r.Context(), a.ID, format)
 	if err != nil {
 		return err
 	}
 	type top struct {
-		WorkID       uuid.UUID `json:"work_id"`
-		Title        string    `json:"title"`
-		Reads        int       `json:"reads"`
-		Interactions int       `json:"interactions"`
+		WorkID        uuid.UUID `json:"work_id"`
+		Title         string    `json:"title"`
+		ContentFormat string    `json:"content_format"`
+		Reads         int       `json:"reads"`
+		Interactions  int       `json:"interactions"`
 	}
 	list := []top{}
 	for _, p := range samples {
-		list = append(list, top{p.WorkID, p.Title, p.Reads, p.Interactions})
+		list = append(list, top{p.WorkID, p.Title, p.ContentFormat, p.Reads, p.Interactions})
 	}
 	return ok(w, list)
 }
 
 // topSamples is the top 10% (at least one) of the account's works by reads + 5×interactions.
 func (s *Server) topSamples(ctx context.Context, accountID uuid.UUID) ([]perfSample, error) {
+	return s.topSamplesForFormat(ctx, accountID, "")
+}
+
+func (s *Server) topSamplesForFormat(ctx context.Context, accountID uuid.UUID, contentFormat string) ([]perfSample, error) {
 	samples, err := s.perfSamples(ctx, accountID)
 	if err != nil || len(samples) == 0 {
 		return nil, err
+	}
+	if contentFormat != "" {
+		filtered := make([]perfSample, 0, len(samples))
+		for _, sample := range samples {
+			if sample.ContentFormat == contentFormat {
+				filtered = append(filtered, sample)
+			}
+		}
+		samples = filtered
+		if len(samples) == 0 {
+			return samples, nil
+		}
 	}
 	sort.Slice(samples, func(i, j int) bool {
 		return samples[i].Reads+samples[i].Interactions*5 > samples[j].Reads+samples[j].Interactions*5
@@ -307,7 +372,7 @@ func (s *Server) breakdownWork(w http.ResponseWriter, r *http.Request) error {
 	default:
 		return stateInvalid("只能拆解本账号已发布的作品")
 	}
-	top, err := s.topSamples(ctx, m.Account.ID)
+	top, err := s.topSamplesForFormat(ctx, m.Account.ID, m.ContentFormat)
 	if err != nil {
 		return err
 	}
@@ -527,7 +592,10 @@ var metricReminderDays = []int{1, 3, 7}
 func (s *Server) metricRemindersJob(ctx context.Context) {
 	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.account_id, a.workspace_id, a.name, w.published_at,
 		(a.platform='wechat_mp' AND a.datacube_state='ok' AND a.metrics_wechat_auto AND w.wechat_msgid IS NOT NULL),
-		ARRAY(SELECT DISTINCT metric_node(m.day_offset) FROM metric_snapshot m WHERE m.work_id=w.id AND metric_node(m.day_offset) IS NOT NULL)
+		-- 覆盖判断只计 approved（§8.4）：held/superseded 不算已填，
+		-- 否则待确认的数据会让提醒提前静默。
+		ARRAY(SELECT DISTINCT metric_node(m.day_offset) FROM metric_snapshot m
+			WHERE m.work_id=w.id AND metric_node(m.day_offset) IS NOT NULL AND m.quality_state='approved'))
 		FROM work w JOIN platform_account a ON a.id=w.account_id
 		WHERE a.status='active' AND w.deleted_at IS NULL AND w.published_at IS NOT NULL AND w.published_at > $1::timestamptz - interval '10 days'`, s.now())
 	if err != nil {
@@ -568,10 +636,13 @@ func (s *Server) metricRemindersJob(ctx context.Context) {
 
 // metricNodeDueSQL is the node a published work is in today (within 30 days), or NULL when that
 // node already has data or a permitted datacube sync ($api) covers it. Expects alias w.
+//
+// 覆盖判断只计 approved（§8.4）：held/superseded 不算“已填”，否则待确认数据会让提醒提前静默，
+// 用户就再也不会被提醒去补这一天。
 const metricNodeDueSQL = `(SELECT n FROM (SELECT metric_node((($now::timestamptz) AT TIME ZONE 'Asia/Shanghai')::date - (w.published_at AT TIME ZONE 'Asia/Shanghai')::date) n) cur
 	WHERE w.status IN ('published') AND w.published_at IS NOT NULL AND w.published_at > $now::timestamptz - interval '30 days' AND cur.n IS NOT NULL
 	AND NOT ($api AND w.wechat_msgid IS NOT NULL)
-	AND NOT EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id AND metric_node(m.day_offset)=cur.n))`
+	AND NOT EXISTS (SELECT 1 FROM metric_snapshot m WHERE m.work_id=w.id AND metric_node(m.day_offset)=cur.n AND m.quality_state='approved'))`
 
 // nodeDueExpr binds metricNodeDueSQL to positional parameters.
 func nodeDueExpr(nowParam, apiParam int) string {
