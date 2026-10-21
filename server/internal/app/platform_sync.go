@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 import (
 	"context"
@@ -692,7 +692,11 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 				ExternalID: row.ExternalID, Scope: scope, Source: row.Source, TemporalKind: row.TemporalKind,
 				ObservedAt: row.ObservedAt, AsOfAt: row.AsOfAt, WindowStart: row.WindowStart, WindowEnd: row.WindowEnd,
 				Values: row.Values, FieldPaths: row.FieldPaths, AdapterVersion: row.AdapterVersion,
-				MappingVersion: row.MappingVersion, QualityState: observationQualityValid, MatchState: matchState,
+				MappingVersion: row.MappingVersion,
+				// 不在这里指定 QualityState：由 insertPlatformObservation 按 §9.2 默认置
+				// `needs_confirmation`。采集入站的观测是"待用户确认"的，不是已生效的读数。
+				// 早期这里写死 `valid`，导致前端"确认这一条"按钮永远不显示。
+				MatchState: matchState,
 			}
 			obsID, dup, err := insertPlatformObservation(ctx, tx, in)
 			if err != nil {

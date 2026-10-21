@@ -246,7 +246,13 @@ func validatePlatformObservation(in *platformObservationInput) error {
 		return validation("观测没有字段")
 	}
 	if in.QualityState == "" {
-		in.QualityState = observationQualityValid
+		// 采集到的观测默认是"待确认"，不是"valid"（§9.2：待确认观测不写快照）。
+		// 早期实现默认写 `valid`，结果是前端"确认这一条"按钮的条件
+		// （`quality_state === 'needs_confirmation'`）永远不成立——用户看得到观测，
+		// 却没有任何办法把它确认进正式指标（`auto_adopt` 关闭时功能等于不可用）。
+		// `platform_gray.go` 的自动采用率统计里本来就有 `needs_confirmation` 计数，
+		// 说明设计上预期存在这个状态，只是入库路径漏了设置。
+		in.QualityState = observationQualityNeedsConfirm
 	}
 	if in.MatchState == "" {
 		in.MatchState = observationMatchNotApplicable

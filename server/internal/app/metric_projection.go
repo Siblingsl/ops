@@ -446,6 +446,10 @@ func (s *Server) confirmObservation(ctx context.Context, observationID uuid.UUID
 		if qualityState == observationQualityRejected {
 			return apiErr(409, "platform_result_conflict", "该观测已被拒绝，不能确认")
 		}
+		// 已被更新观测替代的旧观测不能再确认：确认它等于把过时读数写回正式指标。
+		if qualityState == observationQualitySuperseded {
+			return apiErr(409, "platform_result_conflict", "该观测已被更新的观测替代，不能确认")
+		}
 		if matchState != observationMatchBound {
 			return apiErr(409, "platform_result_conflict", "该观测尚未匹配到已绑定作品")
 		}
