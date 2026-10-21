@@ -212,6 +212,13 @@ func projectObservation(platform, adapterVersion string, mappingVersion int, obs
 		if probe.Precision != "exact" || rule.ProjectsTo == "" {
 			continue
 		}
+		// 观测**自报单位为 unknown** 时一律不投影（§8.4、§9.1）。
+		// 映射表里的 Unit 只是"若确实是这个单位就投到哪"，不能反过来当成
+		// "适配器没确认单位也照投"——那会把口径未知的数字写进正式指标。
+		// 实例：公众号适配器把 share_times 标为 unknown，早期实现仍按 times 投影成 shares。
+		if probe.Unit == metricUnitUnknown {
+			continue
+		}
 		if err := assignProjectedField(&proj, rule, value, obs.FieldPaths[key]); err != nil {
 			return metricProjection{}, err
 		}
