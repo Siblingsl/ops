@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -812,9 +813,18 @@ func (s *Server) applyRunFailureAction(ctx context.Context, tx pgx.Tx, connectio
 	}
 	switch strings.TrimSpace(*errorCode) {
 	case "platform_login_required", "platform_challenge_required", "platform_identity_mismatch":
-		_, err := tx.Exec(ctx, `UPDATE platform_connection SET availability=$2, updated_at=now() WHERE id=$1`,
-			connectionID, failureAvailability(*errorCode))
-		return err
+		availability := failureAvailability(*errorCode)
+		if _, err := tx.Exec(ctx, `UPDATE platform_connection SET availability=$2, updated_at=now() WHERE id=$1`,
+			connectionID, availability); err != nil {
+			return err
+		}
+		// §6.4：会话失效时通知保管人一次，说明"需要谁扫码"。
+		// 用 dedupeKey 保证同一次失效只通知一次——否则每轮采集失败都会再发一遍，
+		// 用户会被同一件事反复打扰，最后当成噪音忽略掉真正需要处理的那条。
+		if err := s.notifyPlatformReauth(ctx, tx, connectionID, availability); err != nil {
+			return err
+		}
+		return nil
 	case "platform_account_restricted", "platform_consent_required":
 		_, err := tx.Exec(ctx, `UPDATE platform_connection SET state='paused', auto_collect=false,
 			auto_adopt=false, authorization_revision=authorization_revision+1, updated_at=now() WHERE id=$1`, connectionID)
@@ -978,6 +988,63 @@ func (s *Server) listAdapterBreakers(ctx context.Context, onlyOpen bool) ([]map[
 		})
 	}
 	return out, rows.Err()
+}
+
+// notifyPlatformReauth 在平台会话失效时通知连接保管人（§6.4）。
+//
+// 三件事必须说清，否则用户不知道该怎么办：
+//   - 哪个平台/账号（链接指向账号页）；
+//   - 需要**谁**扫码（保管人本人）；
+//   - 不去后台反复拉二维码，需要用户主动重新连接。
+//
+// dedupeKey 只依赖"连接 + 失效类型"，不依赖时间：同一次失效期间多次采集失败只发一条；
+// 用户重新扫码后 availability 回到 ready，下次再失效时 key 相同但语义是新的一轮——
+// 因此 key 里带上最后一次成功验证的时刻，保证"每次新失效都能再提醒一次"。
+func (s *Server) notifyPlatformReauth(ctx context.Context, tx pgx.Tx, connectionID uuid.UUID, availability string) error {
+	var platform, accountName, accountID, holderID string
+	var workspaceID uuid.UUID
+	var lastVerified *time.Time
+	if err := tx.QueryRow(ctx, `SELECT c.platform, coalesce(a.name, ''), c.account_id::text,
+			c.user_id::text, c.workspace_id, c.last_verified_at
+		FROM platform_connection c LEFT JOIN platform_account a ON a.id = c.account_id
+		WHERE c.id=$1`, connectionID).Scan(&platform, &accountName, &accountID, &holderID, &workspaceID, &lastVerified); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	platformLabel := "平台"
+	switch platform {
+	case "xhs":
+		platformLabel = "小红书"
+	case "wechat_mp":
+		platformLabel = "公众号"
+	}
+	var title, body string
+	switch availability {
+	case "login_required":
+		title = platformLabel + "登录已失效，需要你重新扫码"
+		body = fmt.Sprintf("「%s」的登录状态已失效，自动采集已暂停。请在客户端「在本机连接平台账号」里重新扫码，只有该连接的保管人本人可以完成。", accountName)
+	case "challenge_required":
+		title = platformLabel + "要求安全验证"
+		body = fmt.Sprintf("「%s」需要先完成平台的安全验证才能继续采集。已暂停自动采集，不会自动重试或绕过。", accountName)
+	default:
+		title = platformLabel + "账号身份与连接不一致"
+		body = fmt.Sprintf("「%s」读到的平台身份与已保存的连接不一致，自动采集已暂停。请确认登录的是正确账号后重新连接。", accountName)
+	}
+	// 同一次失效只发一条：key 绑定连接、失效类型与"最后一次成功验证"时刻。
+	verified := "never"
+	if lastVerified != nil {
+		verified = lastVerified.UTC().Format(time.RFC3339)
+	}
+	dedupeKey := fmt.Sprintf("platform_reauth:%s:%s:%s", connectionID, availability, verified)
+	link := "/a/" + accountID + "/settings/accounts"
+	holder, err := uuid.Parse(holderID)
+	if err != nil {
+		return nil
+	}
+	s.notify(ctx, workspaceID, holder, "platform_reauth", title, body, link, dedupeKey)
+	return nil
 }
 
 func failureAvailability(code string) string {
