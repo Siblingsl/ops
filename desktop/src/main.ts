@@ -46,7 +46,7 @@ import {
   type PlatformLoginPlatform,
   type PlatformLoginSession
 } from './platform-login';
-import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace } from './platform-profile';
+import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace, orphanConnections } from './platform-profile';
 import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation } from './platforms/wechat-mp';
 import { PlatformClient, type PlatformObservationDraft } from './platform-client';
@@ -1024,14 +1024,16 @@ function describeError(error: unknown): string {
 async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<unknown> {
   switch (envelope.cmd) {
     case 'read-status': {
-      // 只回报能力摘要与浏览器探测结论，不含本机路径或会话内容。
+      // 只回报能力摘要、浏览器探测结论与待清理目录数量，不含本机路径或会话内容。
       const capability = await desktopClient?.getPlatformCollectionCapability();
       const browser = await readPlatformBrowserStatus();
+      const orphans = await countOrphanProfiles();
       return {
         supported: capability ? capability.enabled : false,
         protocolVersion: capability?.protocol_version ?? null,
         platforms: capability?.platforms ?? [],
-        browser
+        browser,
+        orphanProfiles: orphans
       };
     }
     case 'open-login': {
@@ -1048,6 +1050,10 @@ async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<un
     case 'clear-account-data': {
       const payload = envelope.payload as { accountId: string };
       return clearPlatformAccountData(payload.accountId);
+    }
+    case 'clear-orphan-profiles': {
+      const payload = envelope.payload as { platform: PlatformLoginPlatform };
+      return clearOrphanProfiles(payload.platform);
     }
     default:
       throw new PlatformIPCErrorException('ipc_unknown_command', '不支持的本机命令');
@@ -1437,6 +1443,99 @@ async function clearPlatformAccountData(accountId: string): Promise<PlatformClea
   });
   console.error('[platform-clear]', JSON.stringify({ revoked: true, removed: removed.removed }));
   return { performed: true, revoked: true, removed: removed.removed, connectionId, errorCode: null };
+}
+
+// ---------- 无主 profile 目录扫描（DEV-PS26 / 20 文档 §5.4） ----------
+//
+// "无主目录"指本机存在、但服务端已不认识（连接被撤销/账号被删除/换了设备）的 profile。
+// 它们不会自动消失，会一直占磁盘，还留着平台登录态。
+// 策略：只扫描与计数，不自动删除——删除必须由用户确认，且要确认浏览器未占用目录。
+
+interface OrphanProfileSummary {
+  xhs: number;
+  wechat_mp: number;
+  total: number;
+}
+
+// countOrphanProfiles 对比本机目录与服务端连接列表，返回各平台的待清理数量。
+// 服务端不可达时返回 null（不把"读不到"当成"没有无主目录"）。
+async function countOrphanProfiles(): Promise<OrphanProfileSummary | null> {
+  if (!desktopClient) return null;
+  let auth;
+  try {
+    auth = await desktopClient.getAuthContext();
+  } catch {
+    return null;
+  }
+  let connections: Array<Record<string, unknown>>;
+  try {
+    connections = await desktopClient.listPlatformConnections();
+  } catch {
+    // 服务端读不到就不下结论，避免把网络问题显示成"有 N 个待清理"。
+    return null;
+  }
+  const userData = await app.getPath('userData');
+  const out: OrphanProfileSummary = { xhs: 0, wechat_mp: 0, total: 0 };
+  for (const platform of ['xhs', 'wechat_mp'] as const) {
+    const known = connections
+      .filter((c) => String(c.platform ?? '') === platform)
+      .map((c) => String(c.id ?? ''))
+      .filter((id) => id !== '');
+    const orphans = await orphanConnections(userData, { userId: auth.userId, platform }, known)
+      .catch(() => [] as string[]);
+    out[platform] = orphans.length;
+    out.total += orphans.length;
+  }
+  return out;
+}
+
+interface OrphanClearOutcome {
+  performed: boolean;
+  platform: PlatformLoginPlatform;
+  found: number;
+  removed: number;
+  // 浏览器占用目录时删不掉，如实报告，不假装成功。
+  skipped: number;
+  errorCode: string | null;
+}
+
+// clearOrphanProfiles 清理某一平台的无主 profile 目录。
+//
+// 安全边界：
+//  - 只处理**服务端不认识**的连接目录，绝不动仍在服务端登记的那条；
+//  - 单个平台的显式调用，不提供"全部清理"；
+//  - 删不掉的（浏览器占用）如实计入 skipped，不重试、不强行删。
+async function clearOrphanProfiles(platform: PlatformLoginPlatform): Promise<OrphanClearOutcome> {
+  if (!desktopClient) throw new Error('客户端设置尚未初始化。');
+  if (activeLogin) {
+    throw new PlatformBrowserError('platform_profile_busy', '平台登录正在进行，请先完成或关闭它');
+  }
+  const auth = await desktopClient.getAuthContext();
+  const connections = await desktopClient.listPlatformConnections();
+  const known = connections
+    .filter((c) => String(c.platform ?? '') === platform)
+    .map((c) => String(c.id ?? ''))
+    .filter((id) => id !== '');
+  const userData = await app.getPath('userData');
+  const orphans = await orphanConnections(userData, { userId: auth.userId, platform }, known);
+  let removed = 0;
+  for (const connectionId of orphans) {
+    const result = await removeConnectionNamespace(userData, {
+      userId: auth.userId, platform, connectionId
+    }).catch(() => ({ removed: false }));
+    if (result.removed) removed += 1;
+  }
+  console.error('[platform-clear-orphans]', JSON.stringify({
+    platform, found: orphans.length, removed
+  }));
+  return {
+    performed: true,
+    platform,
+    found: orphans.length,
+    removed,
+    skipped: orphans.length - removed,
+    errorCode: null
+  };
 }
 
 // WECHAT_IDENTITY_PATH 是公众号账号列表接口。它只在页面首次进后台时由页面自己发起，

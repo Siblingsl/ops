@@ -14,7 +14,9 @@ export const PLATFORM_IPC_COMMANDS = Object.freeze([
   'read-status',
   'request-collect',
   'pause',
-  'clear-account-data'
+  'clear-account-data',
+  // 清理本机无主 profile 目录（服务端已不认识的连接残留）。必须由用户逐个确认触发。
+  'clear-orphan-profiles'
 ] as const);
 
 export type PlatformIPCCommand = typeof PLATFORM_IPC_COMMANDS[number];
@@ -151,6 +153,15 @@ export function validatePayloadShape(cmd: PlatformIPCCommand, payload: unknown):
     case 'clear-account-data':
       if (!isPlainObject(payload) || typeof payload.accountId !== 'string' || Object.keys(payload).length !== 1) {
         throw new PlatformIPCErrorException('ipc_invalid', '清理参数无效');
+      }
+      return;
+    case 'clear-orphan-profiles':
+      // 只接受单个平台的显式清理，不接受"全部清理"这类批量语义。
+      if (!isPlainObject(payload) || typeof payload.platform !== 'string' || Object.keys(payload).length !== 1) {
+        throw new PlatformIPCErrorException('ipc_invalid', '清理参数无效');
+      }
+      if (payload.platform !== 'xhs' && payload.platform !== 'wechat_mp') {
+        throw new PlatformIPCErrorException('platform_not_supported', '不支持的平台');
       }
       return;
     default:

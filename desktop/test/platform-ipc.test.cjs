@@ -44,8 +44,12 @@ test('信封体积超过 64 KiB 直接拒绝', () => {
 
 test('命令白名单是固定集合，不随页面输入扩展', () => {
   assert.deepEqual([...PLATFORM_IPC_COMMANDS].sort(), [
-    'clear-account-data', 'open-login', 'pause', 'read-status', 'request-collect'
+    'clear-account-data', 'clear-orphan-profiles', 'open-login', 'pause', 'read-status', 'request-collect'
   ]);
+  // 红线：不允许任何"批量/全部"语义的命令。
+  for (const cmd of PLATFORM_IPC_COMMANDS) {
+    assert.ok(!/all|batch|every/i.test(cmd), `命令 ${cmd} 不应带批量语义`);
+  }
 });
 
 test('参数形状逐命令校验，拒绝额外字段', () => {
