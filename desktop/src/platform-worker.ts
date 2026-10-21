@@ -542,25 +542,47 @@ export interface CDPClient {
   close: () => Promise<void>;
 }
 
+// CDPPageClient 额外提供“连到具体页面”的能力：Page/Runtime 域只在 page session 里可用。
+export interface CDPPageClient extends CDPClient {
+  attachToPage: (timeoutMs?: number) => Promise<string>;
+  detach: () => Promise<void>;
+}
+
 // createCDPClient 是最小请求/响应配对：按自增 id 匹配响应，超时明确失败。
 // 只用于握手与后续只读调用，不实现事件订阅以外的能力。
-export function createCDPClient(process: PlatformBrowserProcess, defaultTimeoutMs = 10_000): CDPClient {
+//
+// 注意：`--remote-debugging-pipe` 建立的是 **Browser 级**会话，Page/Runtime/Network 这些域
+// 只在具体 target 的 session 里存在。直接发 `Page.enable` 会被回
+// `{"code":-32601,"message":"'Page.enable' wasn't found"}`（2026-10-21 实测）。
+// 因此本客户端默认先 attach 到一个 page target，之后的请求自动带上 sessionId。
+export function createCDPClient(process: PlatformBrowserProcess, defaultTimeoutMs = 10_000): CDPPageClient {
   let nextID = 1;
-  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  const pending = new Map<number, {
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+    timer: NodeJS.Timeout;
+  }>();
   process.onMessage((message) => {
-    const frame = message as { id?: unknown; result?: unknown; error?: { message?: unknown } };
+    const frame = message as { id?: unknown; result?: unknown; error?: { message?: unknown; code?: unknown } };
     if (typeof frame.id !== 'number') return;
     const waiter = pending.get(frame.id);
     if (!waiter) return;
     pending.delete(frame.id);
     clearTimeout(waiter.timer);
     if (frame.error) {
-      waiter.reject(new PlatformBrowserError('platform_schema_changed', '浏览器返回了无法识别的调试响应'));
+      // 把浏览器的真实错误码带进错误信息，便于定位是“域不存在”还是“参数不合法”。
+      const code = typeof frame.error.code === 'number' ? frame.error.code : 0;
+      const text = typeof frame.error.message === 'string' ? frame.error.message : '';
+      waiter.reject(new PlatformBrowserError(
+        'platform_schema_changed',
+        `浏览器调试调用失败（${code}）${text ? `：${text.slice(0, 120)}` : ''}`
+      ));
       return;
     }
     waiter.resolve(frame.result);
   });
-  return {
+  let pageSessionId: string | null = null;
+  const client: CDPClient = {
     request: (method, params, timeoutMs) => new Promise((resolve, reject) => {
       const failure = process.failure();
       if (failure) {
@@ -573,7 +595,10 @@ export function createCDPClient(process: PlatformBrowserProcess, defaultTimeoutM
         reject(new PlatformBrowserError('platform_browser_launch_failed', '浏览器调试通道无响应'));
       }, timeoutMs ?? defaultTimeoutMs);
       pending.set(id, { resolve, reject, timer });
-      process.send({ id, method, params: params ?? {} });
+      // 已 attach 到 page 之后，所有域调用都带 sessionId；Browser 级方法（Target.*）不带。
+      const frame: Record<string, unknown> = { id, method, params: params ?? {} };
+      if (pageSessionId && !method.startsWith('Target.')) frame.sessionId = pageSessionId;
+      process.send(frame);
     }),
     close: async () => {
       for (const waiter of pending.values()) {
@@ -582,6 +607,31 @@ export function createCDPClient(process: PlatformBrowserProcess, defaultTimeoutM
       }
       pending.clear();
       await process.close();
+    }
+  };
+  return {
+    ...client,
+    // attachToPage 取第一个 page target 并建立 flat session。
+    // pipe 启动时自带一个 about:blank 页面；没有 page target 时明确报错，不静默重试。
+    attachToPage: async (timeoutMs?: number): Promise<string> => {
+      const targets = (await client.request('Target.getTargets', {}, timeoutMs)) as {
+        targetInfos?: Array<{ targetId?: unknown; type?: unknown }>;
+      };
+      const page = (targets?.targetInfos ?? []).find((t) => t.type === 'page' && typeof t.targetId === 'string');
+      if (!page || typeof page.targetId !== 'string') {
+        throw new PlatformBrowserError('platform_browser_launch_failed', '浏览器没有可用的页面');
+      }
+      const attached = (await client.request('Target.attachToTarget', { targetId: page.targetId, flatten: true }, timeoutMs)) as {
+        sessionId?: unknown;
+      };
+      if (typeof attached?.sessionId !== 'string' || attached.sessionId === '') {
+        throw new PlatformBrowserError('platform_browser_launch_failed', '无法连接到浏览器页面');
+      }
+      pageSessionId = attached.sessionId;
+      return pageSessionId;
+    },
+    detach: async (): Promise<void> => {
+      pageSessionId = null;
     }
   };
 }

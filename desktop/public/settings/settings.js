@@ -34,6 +34,9 @@ const accountTypeStatus = document.getElementById('account-type-status');
 const platformBrowserState = document.getElementById('platform-browser-state');
 const platformBrowserChecked = document.getElementById('platform-browser-checked');
 const platformBrowserStatus = document.getElementById('platform-browser-status');
+const platformLoginAccount = document.getElementById('platform-login-account');
+const platformLoginStart = document.getElementById('platform-login-start');
+const platformLoginStatus = document.getElementById('platform-login-status');
 // D-123 / DEV-415：与后端 formatMatrix 一致；客户端只读展示，校验以服务端为准。
 const accountFormats = {
   wechat_mp: [['long_article', '长图文'], ['qa_article', '问答体长图文'], ['briefing', '资讯简报'],
@@ -611,6 +614,90 @@ function renderAccountTypeOptions() {
   }；更换后已有作品保持原类型。`);
 }
 
+// D-129 / DEV-PS13：在本机连接平台账号。
+// 只把「账号 ID + 平台」交给主进程；登录页、profile 与只读脚本全部由客户端固定，
+// 页面不能指定 URL、脚本或浏览器路径。
+function renderPlatformLoginAccounts(accounts) {
+  const candidates = accounts.filter((item) => item.platform === 'xhs' || item.platform === 'wechat_mp');
+  platformLoginAccount.textContent = '';
+  for (const item of candidates) {
+    const option = document.createElement('option');
+    option.value = `${item.id}|${item.platform}`;
+    const platform = item.platform === 'xhs' ? '小红书' : '公众号';
+    option.textContent = item.status === 'active'
+      ? `${item.name}（${platform}）`
+      : `${item.name}（${platform}，已停用）`;
+    option.disabled = item.status !== 'active';
+    platformLoginAccount.append(option);
+  }
+  if (!candidates.length) {
+    platformLoginAccount.append(new Option('没有可连接的平台账号', ''));
+    platformLoginStart.disabled = true;
+    platformLoginStatus.textContent = '当前工作区还没有小红书或公众号账号；请先在业务页面添加账号。';
+    return;
+  }
+  const firstEnabled = Array.from(platformLoginAccount.options).find((option) => !option.disabled);
+  if (firstEnabled) platformLoginAccount.value = firstEnabled.value;
+  platformLoginAccount.disabled = false;
+  platformLoginStart.disabled = !firstEnabled;
+}
+
+async function loadPlatformLoginAccounts() {
+  try {
+    const accounts = await window.opsDesktopSettings.getBusinessAccounts();
+    renderPlatformLoginAccounts(accounts);
+  } catch (error) {
+    platformLoginStatus.textContent = userFacingError(error, '无法读取业务账号。');
+  }
+}
+
+const platformLoginFailure = {
+  platform_profile_busy: '另一个平台登录正在进行，请先完成或关闭它。',
+  platform_browser_unsupported: '没有找到可用的浏览器，请先安装 Google Chrome 或 Microsoft Edge。',
+  platform_browser_launch_failed: '浏览器无法启动，请先手动打开一次该浏览器确认没有被拦截。',
+  platform_login_required: '还没有读到登录状态，请在弹出的浏览器里完成扫码。',
+  platform_identity_mismatch: '平台返回的账号标识不完整，无法建立稳定连接。',
+  platform_connection_conflict: '该账号已有未撤销的连接，请先在业务页面查看并处理。',
+  platform_network_unavailable: '网络不可用或页面打不开，请检查代理后重试。'
+};
+
+platformLoginStart.addEventListener('click', async () => {
+  const value = platformLoginAccount.value;
+  if (!value) {
+    platformLoginStatus.textContent = '请先选择一个平台账号。';
+    return;
+  }
+  const [accountId, platform] = value.split('|');
+  platformLoginStart.disabled = true;
+  platformLoginStatus.textContent = '已打开官方后台，请在浏览器窗口中完成扫码；最多等待 3 分钟…';
+  try {
+    const result = await window.opsDesktopSettings.platformCommand({
+      v: 1,
+      id: `login_${Date.now()}`,
+      cmd: 'open-login',
+      payload: { accountId, platform }
+    });
+    if (result && result.ok === false) {
+      const code = result.error?.code ?? '';
+      platformLoginStatus.textContent = platformLoginFailure[code] ?? (result.error?.message || '本机登录失败，请重试。');
+      return;
+    }
+    const data = result?.data ?? {};
+    if (data.connected) {
+      platformLoginStatus.textContent = `连接成功：${data.displayName ?? data.externalAccountKey}。已建立待确认的连接，自动采集仍默认关闭。`;
+      await Promise.all([loadDevices(), loadInfo()]);
+    } else if (data.timedOut) {
+      platformLoginStatus.textContent = '等待超时，没有读到登录状态。可再次点击「在本机连接」重试，不需要重新安装。';
+    } else {
+      platformLoginStatus.textContent = '没有读到登录状态，请确认已在弹出的浏览器里完成扫码后重试。';
+    }
+  } catch (error) {
+    platformLoginStatus.textContent = userFacingError(error, '本机登录失败。');
+  } finally {
+    platformLoginStart.disabled = false;
+  }
+});
+
 async function loadAccountTypes() {
   accountTypeApply.disabled = true;
   accountTypeChoice.disabled = true;
@@ -771,4 +858,4 @@ document.getElementById('detect-platform-browser').addEventListener('click', asy
 
 syncProxyFields();
 activateSettingsTab('connection');
-void Promise.all([loadInfo(), loadModels(), loadPolicy(), loadRoutes(), loadDevices(), loadAccountTypes(), loadPlatformBrowser()]);
+void Promise.all([loadInfo(), loadModels(), loadPolicy(), loadRoutes(), loadDevices(), loadAccountTypes(), loadPlatformBrowser(), loadPlatformLoginAccounts()]);

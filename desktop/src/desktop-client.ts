@@ -1533,6 +1533,105 @@ export class DesktopClient {
     return device;
   }
 
+  // getAuthContext 给本机平台登录用：只暴露启动隔离 profile 所需的最小标识，
+  // 不含 Cookie、token 或设备私钥。
+  async getAuthContext(): Promise<{
+    userId: string;
+    workspaceId: string;
+    deviceId: string;
+    connectionNamespaceId: string;
+  }> {
+    const auth = await this.getAuthInfo();
+    const device = await this.ensurePlatformDevice();
+    return {
+      userId: auth.user_id,
+      workspaceId: auth.workspace.id,
+      deviceId: device.id,
+      // 登录会话的 profile 命名空间：按「用户 + 设备」稳定派生，
+      // 保证同一用户在同一台设备上重复登录复用同一目录，换设备则隔离。
+      connectionNamespaceId: stableUuid(`${auth.user_id}\n${device.id}`)
+    };
+  }
+
+  // createPlatformConnection 为某个 OPS 账号建立待验证连接（20 文档 §11.2）。
+  // 一次只建一个；已存在未撤销连接时服务端返回 409，这里原样上抛。
+  async createPlatformConnection(input: {
+    accountId: string;
+    externalAccountKey: string;
+    consentVersion: number;
+  }): Promise<Record<string, unknown>> {
+    const capability = await this.getPlatformCollectionCapability();
+    const endpoint = resolvePlatformEndpoint(capability, 'platform.connection.create');
+    const device = await this.ensurePlatformDevice();
+    const auth = await this.getAuthInfo();
+    return this.platformSignedRequest<Record<string, unknown>>(
+      auth, device, 'platform.connection.create', endpoint.method,
+      endpoint.path.slice(API_PREFIX.length),
+      {
+        account_id: input.accountId,
+        external_account_key: input.externalAccountKey,
+        platform_consent_version: input.consentVersion
+      }
+    );
+  }
+
+  // verifyPlatformConnection 绑定真实平台身份与能力快照（20 文档 §11.2）。
+  // 身份冲突由服务端返回 409，不在这里重试或覆盖。
+  async verifyPlatformConnection(input: {
+    connectionId: string;
+    externalAccountKey: string;
+    capabilities: Record<string, unknown>;
+  }): Promise<Record<string, unknown>> {
+    const capability = await this.getPlatformCollectionCapability();
+    const endpoint = resolvePlatformEndpoint(capability, 'platform.connection.verify');
+    const device = await this.ensurePlatformDevice();
+    const auth = await this.getAuthInfo();
+    return this.platformSignedRequest<Record<string, unknown>>(
+      auth, device, 'platform.connection.verify', endpoint.method,
+      endpoint.path.slice(API_PREFIX.length).replace('{id}', encodeURIComponent(input.connectionId)),
+      { external_account_key: input.externalAccountKey, capabilities: input.capabilities }
+    );
+  }
+
+  // platformSignedRequest 复用同一套设备证明：挑战 → 签名 → 带证明头请求。
+  // 平台端点不传 purpose（只有登记类操作需要）。
+  private async platformSignedRequest<T>(
+    auth: AuthInfo,
+    device: StoredDevice,
+    operation: string,
+    method: string,
+    pathName: string,
+    bodyValue: unknown
+  ): Promise<T> {
+    const body = JSON.stringify(bodyValue);
+    const requestPath = `${API_PREFIX}${pathName}`;
+    const challenge = await this.request<{ challenge_id: string; signature_payload: string }>(
+      '/desktop/challenges', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': auth.csrf_token },
+        body: JSON.stringify({
+          device_id: device.id,
+          operation,
+          method,
+          path: requestPath,
+          body_sha256: createHash('sha256').update(body).digest('hex')
+        })
+      }
+    );
+    const privateKey = createPrivateKey(this.decrypt(device.encryptedPrivateKey));
+    const signature = sign(null, Buffer.from(challenge.signature_payload, 'base64'), privateKey).toString('base64');
+    return this.request<T>(pathName, {
+      method,
+      headers: {
+        'X-CSRF-Token': auth.csrf_token,
+        'X-OPS-Desktop-Device': device.id,
+        'X-OPS-Desktop-Challenge': challenge.challenge_id,
+        'X-OPS-Desktop-Signature': signature
+      },
+      body
+    });
+  }
+
   private async signedRequest<T = unknown>(
     auth: AuthInfo,
     device: StoredDevice,
@@ -1806,6 +1905,14 @@ function isPositiveInt(value: unknown): value is number {
 
 function isDesktopOperation(value: unknown): value is PendingRequest['operation'] {
   return value === 'chat_completions' || value === 'image_generations' || value === 'generated_image_fetch';
+}
+
+// stableUuid 从任意稳定字符串派生一个固定的 UUIDv5 形状标识。
+// 用途仅限本机 profile 目录命名空间：同一输入永远得到同一目录，不含任何凭据。
+function stableUuid(input: string): string {
+  const hex = createHash('sha256').update(input).digest('hex');
+  const variant = ((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, '0');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(18, 20)}-${hex.slice(20, 32)}`;
 }
 
 function normalizeUuid(value: unknown): string {

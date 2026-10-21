@@ -49,10 +49,17 @@ test('命令白名单是固定集合，不随页面输入扩展', () => {
 });
 
 test('参数形状逐命令校验，拒绝额外字段', () => {
-  assert.doesNotThrow(() => validatePayloadShape('open-login', { accountId }));
-  assert.throws(() => validatePayloadShape('open-login', { accountId, script: 'x' }), /登录参数无效/);
-  assert.throws(() => validatePayloadShape('open-login', { accountId: '../../etc' }), /登录参数无效/);
+  // open-login 现在必须同时带 accountId 与 platform：平台决定 profile 命名空间与允许的登录页。
+  assert.doesNotThrow(() => validatePayloadShape('open-login', { accountId, platform: 'xhs' }));
+  assert.doesNotThrow(() => validatePayloadShape('open-login', { accountId, platform: 'wechat_mp' }));
+  assert.throws(() => validatePayloadShape('open-login', { accountId, platform: 'xhs', script: 'x' }), /登录参数无效/);
+  assert.throws(() => validatePayloadShape('open-login', { accountId, platform: 'xhs', url: 'https://evil.example.com' }), /登录参数无效/);
+  assert.throws(() => validatePayloadShape('open-login', { accountId: '../../etc', platform: 'xhs' }), /登录参数无效/);
   assert.throws(() => validatePayloadShape('open-login', {}), /登录参数无效/);
+  // 缺平台或平台不在首版支持范围内都拒绝，不能默认成小红书。
+  assert.throws(() => validatePayloadShape('open-login', { accountId }), /登录参数无效/);
+  assert.throws(() => validatePayloadShape('open-login', { accountId, platform: 'toutiao' }), (err) => err.code === 'platform_not_supported');
+  assert.throws(() => validatePayloadShape('open-login', { accountId, platform: 'xhs\n' }), (err) => err.code === 'platform_not_supported');
   assert.doesNotThrow(() => validatePayloadShape('read-status', undefined));
   assert.throws(() => validatePayloadShape('read-status', 'all'), /状态查询参数无效/);
   assert.doesNotThrow(() => validatePayloadShape('request-collect', { accountId }));

@@ -33,6 +33,19 @@ import {
   PlatformBrowserError,
   probePlatformBrowser
 } from './platform-worker';
+import {
+  createCDPClient,
+  launchPlatformBrowser
+} from './platform-worker';
+import {
+  openLoginPage,
+  waitForLogin,
+  type PlatformLoginPlatform,
+  type PlatformLoginSession
+} from './platform-login';
+import { connectionProfileDir, buildProfileMeta, profileMetaPath } from './platform-profile';
+import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities } from './platforms/xhs';
+import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities } from './platforms/wechat-mp';
 import { parseDesktopUiIntent, type DesktopUiIntent } from './ui-intents';
 import {
   buildDesktopRequestHeaders,
@@ -983,9 +996,10 @@ async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<un
         browser
       };
     }
-    case 'open-login':
-      // 登录窗口由主进程受控打开；具体页面在 PS05/06 适配器接入后由工作进程驱动。
-      return { opened: false, errorCode: 'platform_client_required' };
+    case 'open-login': {
+      const payload = envelope.payload as { accountId: string; platform: PlatformLoginPlatform };
+      return openPlatformLogin(payload.accountId, payload.platform);
+    }
     case 'request-collect':
     case 'pause':
     case 'clear-account-data':
@@ -994,6 +1008,135 @@ async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<un
       return { performed: false, errorCode: 'platform_client_required' };
     default:
       throw new PlatformIPCErrorException('ipc_unknown_command', '不支持的本机命令');
+  }
+}
+
+// ---------- 本机平台登录（DEV-PS13 / 20 文档 §4.1、§5.1） ----------
+//
+// 一次登录会话的生命周期：建/复用连接命名空间 profile → 启动本机浏览器 →
+// 打开官方后台 → 等用户本人扫码 → 页面内固定只读请求读回身份 → 建连接并验证 → 关浏览器。
+// 浏览器与 profile 只在本次会话内存在，会话结束后不保留任何登录凭据到 OPS 侧。
+
+// 同意说明版本：内容变更时递增，服务端据此要求重新确认（§4.1 步骤 3）。
+const PLATFORM_CONSENT_VERSION = 1;
+
+// 同一时刻只允许一个登录会话：一个浏览器、一个 profile，避免双开争用同一目录。
+let activeLogin: { accountId: string; platform: PlatformLoginPlatform } | null = null;
+
+interface PlatformLoginOutcome {
+  opened: true;
+  connected: boolean;
+  externalAccountKey: string | null;
+  connectionId: string | null;
+  displayName: string | null;
+  timedOut: boolean;
+  attempts: number;
+}
+
+async function openPlatformLogin(accountId: string, platform: PlatformLoginPlatform): Promise<PlatformLoginOutcome> {
+  if (!desktopClient) throw new Error('客户端设置尚未初始化。');
+  if (activeLogin) {
+    // 已有会话在跑：明确拒绝，不静默顶掉另一个正在扫码的窗口。
+    throw new PlatformBrowserError('platform_profile_busy', '另一个平台登录正在进行，请先完成或关闭它');
+  }
+  activeLogin = { accountId, platform };
+  let session: PlatformLoginSession | null = null;
+  try {
+    const auth = await desktopClient.getAuthContext();
+    const candidate = await findPlatformBrowser();
+    // profile 按「登录用户 / 平台 / 连接」隔离；首版一次登录对应一个待验证连接，
+    // 连接 ID 在服务端建好后才存在，因此这里先用账号维度的一次性命名空间，
+    // 登录成功后由服务端返回的连接 ID 接管后续采集会话（见 D-129 的 PS13 口径）。
+    const profileDir = connectionProfileDir(await app.getPath('userData'), {
+      userId: auth.userId,
+      platform,
+      connectionId: auth.connectionNamespaceId
+    });
+    await fs.mkdir(path.dirname(profileDir), { recursive: true });
+    await fs.writeFile(profileMetaPath(profileDir), JSON.stringify(buildProfileMeta({
+      origin: businessOrigin,
+      userId: auth.userId,
+      workspaceId: auth.workspaceId,
+      deviceId: auth.deviceId,
+      platform,
+      connectionId: auth.connectionNamespaceId,
+      externalAccountKey: ''
+    }), null, 2), { encoding: 'utf8', mode: 0o600 });
+
+    const browser = await launchPlatformBrowser({ executablePath: candidate.executablePath, profileDir });
+    const cdp = createCDPClient(browser, 20_000);
+    session = { platform, profileDir, browser, cdp };
+    try {
+      await openLoginPage(session);
+      const outcome = await waitForLogin(session);
+      if (!outcome.loggedIn || !outcome.payload) {
+        return {
+          opened: true,
+          connected: false,
+          externalAccountKey: null,
+          connectionId: null,
+          displayName: null,
+          timedOut: outcome.timedOut,
+          attempts: outcome.attempts
+        };
+      }
+      // 身份解析用 PS05/06 已有的适配器，不在这里另写一套字段提取。
+      // 两个平台的 identity 形状不同，分开走各自的 probe，不做联合类型收窄。
+      const parsed = JSON.parse(outcome.payload);
+      const now = new Date().toISOString();
+      let externalAccountKey: string;
+      let displayName: string | null;
+      let capabilities: Record<string, unknown>;
+      if (platform === 'xhs') {
+        const identity = parseXhsIdentity(parsed);
+        externalAccountKey = identity.externalAccountKey;
+        displayName = identity.redId || null;
+        capabilities = probeXhsCapabilities({
+          mainSiteLoggedIn: true,
+          identity,
+          postedNotesReadable: true,
+          followerInfoReadable: true,
+          now
+        }) as unknown as Record<string, unknown>;
+      } else {
+        const identity = parseWechatIdentity(parsed);
+        externalAccountKey = identity.externalAccountKey;
+        displayName = identity.originalID || null;
+        capabilities = probeWechatCapabilities({
+          backendLoggedIn: true,
+          identity,
+          listReadable: true,
+          now
+        }) as unknown as Record<string, unknown>;
+      }
+      const created = await desktopClient.createPlatformConnection({
+        accountId,
+        externalAccountKey,
+        consentVersion: PLATFORM_CONSENT_VERSION
+      });
+      const connectionId = typeof created.id === 'string' ? created.id : null;
+      if (connectionId) {
+        await desktopClient.verifyPlatformConnection({
+          connectionId,
+          externalAccountKey,
+          capabilities
+        });
+      }
+      return {
+        opened: true,
+        connected: true,
+        externalAccountKey,
+        connectionId,
+        displayName,
+        timedOut: false,
+        attempts: outcome.attempts
+      };
+    } finally {
+      await cdp.close();
+    }
+  } finally {
+    activeLogin = null;
+    session = null;
   }
 }
 

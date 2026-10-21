@@ -120,11 +120,17 @@ export function validatePayloadShape(cmd: PlatformIPCCommand, payload: unknown):
     typeof v === 'object' && v !== null && !Array.isArray(v);
   switch (cmd) {
     case 'open-login':
-      if (!isPlainObject(payload) || typeof payload.accountId !== 'string' || Object.keys(payload).length !== 1) {
+      // 本机连接需要同时知道「哪个 OPS 账号」与「哪个平台」：
+      // 平台决定 profile 命名空间与允许的登录页，缺一个都无法安全启动浏览器。
+      if (!isPlainObject(payload) || typeof payload.accountId !== 'string'
+        || typeof payload.platform !== 'string' || Object.keys(payload).length !== 2) {
         throw new PlatformIPCErrorException('ipc_invalid', '登录参数无效');
       }
       if (!/^[0-9a-f-]{36}$/i.test(payload.accountId)) {
         throw new PlatformIPCErrorException('ipc_invalid', '登录参数无效');
+      }
+      if (payload.platform !== 'xhs' && payload.platform !== 'wechat_mp') {
+        throw new PlatformIPCErrorException('platform_not_supported', '该平台暂不支持本机登录采集');
       }
       return;
     case 'read-status':

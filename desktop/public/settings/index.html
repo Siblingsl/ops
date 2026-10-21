@@ -170,6 +170,16 @@
             <button id="clear-account-data" class="danger" type="button" disabled>清除此账号本机数据</button>
             <p class="hint">卸载客户端时，Windows 可能保留本机用户目录中的配置。卸载前请逐个登录并清理需要移除的账号；线上设备如需注销，请另行撤销。</p>
           </section>
+          <section class="card" aria-labelledby="platform-login-title">
+            <h3 id="platform-login-title">在本机连接平台账号</h3>
+            <p class="hint">会在这台电脑上打开官方后台页面，由你本人扫码。平台会话只保存在独立配置目录，不上传、不写入业务页面。</p>
+            <label for="platform-login-account">OPS 账号</label>
+            <select id="platform-login-account" disabled>
+              <option value="">读取中…</option>
+            </select>
+            <button id="platform-login-start" class="primary" type="button" disabled>在本机连接</button>
+            <p id="platform-login-status" class="hint" aria-live="polite"></p>
+          </section>
           <section class="card" aria-labelledby="platform-browser-title">
             <h3 id="platform-browser-title">平台采集浏览器</h3>
             <p class="hint">平台数据采集只使用你电脑上已安装的正式浏览器，独立配置目录，不读取你日常浏览器的登录状态。</p>
