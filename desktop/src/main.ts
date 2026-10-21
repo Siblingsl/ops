@@ -1337,19 +1337,14 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
     connectionId: auth.connectionNamespaceId
   });
   const stored = await readAccountProfile(app.getPath('userData'), { ...auth, origin: businessOrigin, accountId: run.account_id, platform });
-  const metaAccountId = (stored.meta as { accountId?: string } | null)?.accountId ?? '';
-  const accountMatches = metaAccountId === '' || metaAccountId === run.account_id;
-  const platformMatches = stored.meta?.platform === platform;
-  // 诊断：只记布尔值与结构键名，不记路径与账号标识，便于定位"为什么判成未登录"。
+  // 归属校验全部由 readAccountProfile 负责（含历史 profile 缺 accountId 的兼容），
+  // 这里只判断"有没有可用的归属信息"：meta 为 null 表示该 slot 从未登录过。
   console.error('[collect] profile-check', JSON.stringify({
     hasMeta: stored.meta !== null,
-    accountMatches,
-    platformMatches,
-    metaHasAccountId: metaAccountId !== '',
     metaPlatform: stored.meta?.platform ?? null,
     runPlatform: platform
   }));
-  if (!stored.meta || !accountMatches || !platformMatches) {
+  if (!stored.meta) {
     await client.submit({ final_batch: true, run_status: 'failed', stop_reason: 'login_required', error_code: 'platform_login_required', observations: [] });
     return { performed: true, runId: run.id, runStatus: 'failed', accepted: 0, rejected: 0, stopReason: 'login_required', errorCode: 'platform_login_required' };
   }

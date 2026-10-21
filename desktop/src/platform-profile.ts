@@ -396,11 +396,33 @@ export async function readAccountProfile(userDataDir: string, scope: AccountProf
     throw new PlatformProfileError('profile_meta_invalid', '会话元数据无法读取');
   }
   const meta = raw as AccountProfileMeta;
-  for (const key of ['userId', 'workspaceId', 'deviceId', 'accountId', 'platform'] as const) {
+  // `accountId` 是后来才加进 meta 的字段：早期版本写的 profile 没有它。
+  // 这类历史 profile 只校验其余字段（仍能确认是本机、本用户、本工作区、本平台），
+  // 否则升级后所有老用户都会被判"归属不一致"而无法采集——表现成"明明登录了却说没登录"。
+  // 新写入的 meta 一律带 accountId，缺失只可能是历史数据。
+  const requiredKeys = ['userId', 'workspaceId', 'deviceId', 'platform'] as const;
+  for (const key of requiredKeys) {
     if (typeof meta[key] !== 'string' || meta[key].toLowerCase() !== scope[key].toLowerCase()) throw new PlatformProfileError('profile_meta_mismatch', '本机会话归属与当前账号不一致');
   }
-  if (meta.version !== 1 || meta.origin !== new URL(scope.origin).origin || meta.slotId !== slotId || !UUID_RE.test(meta.connectionId)
-    || !['chrome', 'edge'].includes(meta.browserFamily) || typeof meta.externalAccountKey !== 'string') {
+  const metaAccountId = typeof meta.accountId === 'string' ? meta.accountId : '';
+  if (metaAccountId !== '' && metaAccountId.toLowerCase() !== scope.accountId.toLowerCase()) {
+    throw new PlatformProfileError('profile_meta_mismatch', '本机会话归属与当前账号不一致');
+  }
+  // `accountId`（上）、`slotId`、`browserFamily` 都是后来才加入 meta 的字段。
+  // 实测历史 profile 三个都没有，因此只能用"存在则校验"的方式：
+  //   - slotId：存在时必须等于当前 slot（防止把别的账号目录挪过来）；
+  //   - browserFamily：存在时必须是已知值。
+  // 强制要求存在会让升级后的老用户全部无法采集。
+  const metaSlotId = typeof meta.slotId === 'string' ? meta.slotId : '';
+  if (metaSlotId !== '' && metaSlotId !== slotId) {
+    throw new PlatformProfileError('profile_meta_mismatch', '本机会话元数据不匹配');
+  }
+  const metaFamily = typeof meta.browserFamily === 'string' ? meta.browserFamily : '';
+  if (metaFamily !== '' && !['chrome', 'edge'].includes(metaFamily)) {
+    throw new PlatformProfileError('profile_meta_mismatch', '本机会话元数据不匹配');
+  }
+  if (meta.version !== 1 || meta.origin !== new URL(scope.origin).origin || !UUID_RE.test(meta.connectionId)
+    || typeof meta.externalAccountKey !== 'string') {
     throw new PlatformProfileError('profile_meta_mismatch', '本机会话元数据不匹配');
   }
   return { profileDir, meta };
