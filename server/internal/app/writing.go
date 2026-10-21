@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Server) sectionMeta(ctx context.Context, id uuid.UUID) (*Section, *workMeta, error) {
@@ -103,16 +104,24 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 		}
 		structure = fmt.Sprintf("\n结构模板「%s」：%s。大纲必须按这个结构展开。", tpl.Name, tpl.Structure)
 		refs["outline_template"] = tpl.Name
-	} else if fb := formatBrief(m.ContentFormat); fb != "" {
+	} else if fb := platformFormatBrief(m.Account.Platform, m.ContentFormat); fb != "" {
 		// D-048：新文字类型按作品自身的类型注入结构约定；用户选择了模板时以模板为准。
 		structure = "\n结构要求：" + fb
 		refs["format_brief"] = m.ContentFormat
 	}
+	outlineRange := "4 到 8 个段落"
+	if m.Account.Platform == "toutiao" && m.ContentFormat == "micro_post" {
+		outlineRange = "建议 1 到 3 个短要点；这是起草建议，作者可以按需要调整数量"
+		if structure == "" {
+			structure = "\n结构要求：" + platformFormatBrief(m.Account.Platform, m.ContentFormat)
+			refs["format_brief"] = m.ContentFormat
+		}
+	}
 	user := fmt.Sprintf(`## 任务说明
-围绕作者的核心观点，列出 4 到 8 个段落的大纲。每项给出小标题和本段要点；如果某段适合使用某条素材，在 material_ids 中填写该素材的 id（只能使用上面列出的素材 id）。%s
+围绕作者的核心观点，列出%s的大纲。每项给出小标题和本段要点；如果某段适合使用某条素材，在 material_ids 中填写该素材的 id（只能使用上面列出的素材 id）。%s
 
 ## 输出格式
-只输出 JSON：{"items":[{"heading":"小标题","key_point":"本段要点","material_ids":[]}]}`, structure)
+只输出 JSON：{"items":[{"heading":"小标题","key_point":"本段要点","material_ids":[]}]}`, outlineRange, structure)
 	var out struct {
 		Items []OutlineItem `json:"items"`
 	}
@@ -163,7 +172,11 @@ func (s *Server) workBriefForSection(ctx context.Context, m *workMeta, sectionID
 	}
 	var b strings.Builder
 	b.WriteString("## 作品\n")
-	fmt.Fprintf(&b, "标题：%s\n", nz(m.Title, "（未定）"))
+	titleLabel := "标题"
+	if m.Account.Platform == "toutiao" && m.ContentFormat == "micro_post" {
+		titleLabel = "系统内部名称（不用于发布）"
+	}
+	fmt.Fprintf(&b, "%s：%s\n", titleLabel, nz(m.Title, "（未定）"))
 	if angle != "" {
 		fmt.Fprintf(&b, "切入角度：%s\n", angle)
 	}
@@ -260,31 +273,53 @@ func (s *Server) setSectionMaterials(w http.ResponseWriter, r *http.Request) err
 		return err
 	}
 	ctx := r.Context()
-	ids := []uuid.UUID{}
-	rows, err := s.db.Query(ctx, `SELECT id FROM material WHERE id = ANY($1) AND workspace_id=$2 AND deleted_at IS NULL AND (account_id IS NULL OR account_id=$3)`,
-		in.MaterialIDs, ident(ctx).WorkspaceID, m.Account.ID)
-	if err != nil {
-		return err
-	}
-	okIDs := map[uuid.UUID]bool{}
-	for rows.Next() {
-		var id uuid.UUID
-		if rows.Scan(&id) == nil {
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		var workID uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT id FROM work WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, m.ID).Scan(&workID); err != nil {
+			return err
+		}
+		ids := []uuid.UUID{}
+		rows, err := tx.Query(ctx, `SELECT id FROM material WHERE id = ANY($1) AND workspace_id=$2 AND deleted_at IS NULL AND (account_id IS NULL OR account_id=$3) ORDER BY id FOR SHARE`,
+			in.MaterialIDs, ident(ctx).WorkspaceID, m.Account.ID)
+		if err != nil {
+			return err
+		}
+		okIDs := map[uuid.UUID]bool{}
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
 			okIDs[id] = true
 		}
-	}
-	rows.Close()
-	for _, id := range in.MaterialIDs {
-		if okIDs[id] {
-			ids = append(ids, id)
-			okIDs[id] = false
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
 		}
-	}
-	if _, err := s.db.Exec(ctx, `UPDATE work_section SET material_ids=$2, updated_at=now() WHERE id=$1`, sec.ID, ids); err != nil {
+		rows.Close()
+		for _, id := range in.MaterialIDs {
+			if okIDs[id] {
+				ids = append(ids, id)
+				okIDs[id] = false
+			}
+		}
+		command, err := tx.Exec(ctx, `UPDATE work_section SET material_ids=$2, updated_at=now() WHERE id=$1 AND work_id=$3 AND deleted_at IS NULL`, sec.ID, ids, m.ID)
+		if err != nil {
+			return err
+		}
+		if command.RowsAffected() != 1 {
+			return pgx.ErrNoRows
+		}
+		for _, id := range ids {
+			if _, err := tx.Exec(ctx, `INSERT INTO work_material (work_id, material_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, m.ID, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return err
-	}
-	for _, id := range ids {
-		_, _ = s.db.Exec(ctx, `INSERT INTO work_material (work_id, material_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, m.ID, id)
 	}
 	return s.writeWork(w, r, m.ID)
 }
@@ -450,15 +485,27 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 	sort.Strings(strongList)
 	maxLen := 32
 	limit := "不超过 32 字"
+	internalName := m.Account.Platform == "toutiao" && m.ContentFormat == "micro_post"
 	if m.Account.Platform == "xhs" {
 		maxLen = 20
 		limit = "不超过 20 字，口语化，可以带一个表情符号"
+	} else if m.Account.Platform == "toutiao" {
+		maxLen = 0
+		if internalName {
+			limit = "作为系统内部名称，便于识别和检索；不是微头条发布标题，不设平台字数上限"
+		} else {
+			limit = "平台标题上限待实测，不要假设字数限制"
+		}
 	}
 	want := 5
-	task := fmt.Sprintf("平台：%s。给出不少于 5 个标题候选，每个%s，风格各不相同；不使用标题党和夸大表达。", platformNames[m.Account.Platform], limit)
+	label := "标题"
+	if internalName {
+		label = "系统内部名称候选"
+	}
+	task := fmt.Sprintf("平台：%s。给出不少于 5 个%s，每个%s，风格各不相同；不使用标题党和夸大表达。", platformNames[m.Account.Platform], label, limit)
 	if base := strings.TrimSpace(in.Base); base != "" {
 		want = 3
-		task = fmt.Sprintf("平台：%s。在保留原意的前提下，把这个标题再改写出 3 个不同写法，每个%s：%s", platformNames[m.Account.Platform], limit, truncate(base, 64))
+		task = fmt.Sprintf("平台：%s。在保留原意的前提下，把这个%s再改写出 3 个不同写法，每个%s：%s", platformNames[m.Account.Platform], label, limit, truncate(base, 64))
 	}
 	user := fmt.Sprintf(`## 作品
 核心观点：%s
@@ -496,7 +543,7 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 				empty++
 				continue
 			}
-			if runeLen(text) > maxLen {
+			if maxLen > 0 && runeLen(text) > maxLen {
 				long++
 				continue
 			}
@@ -516,7 +563,10 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 		}
 		out.Titles = kept
 		if len(out.Titles) < want {
-			return fmt.Errorf("有效标题少于 %d 个：%d 条超过 %d 字，%d 条包含禁用词，%d 条为空", want, long, maxLen, banned, empty)
+			if maxLen > 0 {
+				return fmt.Errorf("有效标题少于 %d 个：%d 条超过 %d 字，%d 条包含禁用词，%d 条为空", want, long, maxLen, banned, empty)
+			}
+			return fmt.Errorf("有效候选少于 %d 个：%d 条包含禁用词，%d 条为空", want, banned, empty)
 		}
 		return nil
 	})
@@ -534,7 +584,7 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 	list := []cand{}
 	for _, t := range out.Titles {
 		c := cand{Text: strings.TrimSpace(t.Text), Style: nz(strings.TrimSpace(t.Style), "其他"), Chars: runeLen(strings.TrimSpace(t.Text))}
-		c.OverLimit = c.Chars > maxLen
+		c.OverLimit = maxLen > 0 && c.Chars > maxLen
 		c.Features = titleFeatures(c.Text)
 		c.StrongHits = []string{}
 		for _, f := range c.Features {
@@ -573,8 +623,11 @@ func titleFeatures(t string) []string {
 }
 
 // highPerformingTitleFeatures returns traits shared by the account's top-read titles (needs ≥ 5 works with data).
+// 指标读取走统一入口 metric_node_d7_public（§8.4）：保留 d7 兜底语义，
+// 且与视图共用同一套 approved 过滤与来源排序。
 func (s *Server) highPerformingTitleFeatures(ctx context.Context, accountID uuid.UUID) map[string]bool {
-	rows, err := s.db.Query(ctx, `SELECT w.title, d.reads FROM work w JOIN work_metric_d7 d ON d.work_id=w.id
+	rows, err := s.db.Query(ctx, `SELECT w.title, d.reads FROM work w
+		JOIN LATERAL metric_node_d7_public(w.id) d ON true
 		WHERE w.account_id=$1 AND w.deleted_at IS NULL ORDER BY d.reads DESC NULLS LAST LIMIT 200`, accountID)
 	out := map[string]bool{}
 	if err != nil {

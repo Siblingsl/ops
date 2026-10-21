@@ -44,7 +44,6 @@ var metricD7LegacyConsumers = map[string]string{
 	"review_loop.go":     "复盘循环筛选；待迁移",
 	"smart.go":           "智能建议的表现排序；待迁移",
 	"strategy.go":        "策略生成的表现依据；待迁移",
-	"writing.go":         "写作上下文的表现参考；待迁移",
 }
 
 // metricReadAllowlist 是额外的已审核例外：文件 → 理由。

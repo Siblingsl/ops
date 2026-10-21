@@ -321,6 +321,43 @@ func replaceAutoMetric(ctx context.Context, tx pgx.Tx, proj metricProjection) (M
 	}
 }
 
+// metricNodeD7Public 按 D7 语义批量读取多个作品的表现（§8.4 迁移用）。
+//
+// 与 metricNodePublic 的区别：保留 `work_metric_d7` 的**兜底**规则——没有 `day_offset<=7`
+// 数据时会取 `>7` 的记录，而 `metric_node_public(work, 7)` 不会。这样迁移前后读数一致。
+// 一次查询覆盖多个作品，避免逐个调用造成的 N+1。
+func (s *Server) metricNodeD7Public(ctx context.Context, workIDs []uuid.UUID) ([]Metric, error) {
+	if len(workIDs) == 0 {
+		return []Metric{}, nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT
+		  metric_id, work_id, captured_at, reads, impressions, likes, wows, favorites, comments, shares,
+		  follows_gained, ''::text, source, day_offset, null::text, 0,
+		  coalesce(read_unit,'unknown'), coalesce(share_unit,'unknown'), coalesce(quality_state,'approved'),
+		  observation_id, observed_at, as_of_at,
+		  coalesce(metric_meta,'{}'::jsonb) || jsonb_build_object('missing_fields', to_jsonb(missing_fields))
+		FROM metric_node_d7_public_all($1)
+		ORDER BY work_id, metric_source_rank(source)`, workIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Metric{}
+	for rows.Next() {
+		m, err := scanMetric(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// metricKey 是"作品 + 指标"的稳定键，供批量结果建索引。
+func metricKey(workID uuid.UUID, metricID uuid.UUID) string {
+	return workID.String() + ":" + metricID.String()
+}
+
 // metricNodePublic 读取统一入口，供节点视图与绩效样本使用（§8.4）。
 // 它调用数据库函数 metric_node_public()，与 SQL 侧共用同一套“排除 held/superseded、
 // 只认 approved、按来源排序”的规则，避免两处实现口径漂移。
