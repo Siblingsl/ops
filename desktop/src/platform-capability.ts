@@ -11,6 +11,8 @@ export const PLATFORM_OPERATION_PATHS: Readonly<Record<string, { method: string;
   // 验证连接：登录读到身份后必须调用，否则连接会停在 verifying（§4.1 步骤 5）。
   'platform.connection.verify': { method: 'POST', path: '/api/v1/desktop/platform/connections/{id}/verify' },
   'platform.connection.mine.list': { method: 'GET', path: '/api/v1/desktop/platform/connections/mine' },
+  // 本人回收连接：只减权，回收成功后必须清理本机 profile（§5.4）。
+  'platform.connection.mine.revoke': { method: 'DELETE', path: '/api/v1/desktop/platform/connections/{id}' },
   'platform.presence': { method: 'POST', path: '/api/v1/desktop/platform/presence' },
   'platform.run.claim': { method: 'POST', path: '/api/v1/desktop/platform/runs/claim' }
 });

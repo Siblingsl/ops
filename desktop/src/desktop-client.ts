@@ -1624,6 +1624,35 @@ export class DesktopClient {
     );
   }
 
+  // listPlatformConnections 取本人持有的全部连接摘要（账户级只读，不要求工作区策略）。
+  async listPlatformConnections(): Promise<Array<Record<string, unknown>>> {
+    const capability = await this.getPlatformCollectionCapability();
+    const endpoint = resolvePlatformEndpoint(capability, 'platform.connection.mine.list');
+    const device = await this.ensurePlatformDevice();
+    const auth = await this.getAuthInfo();
+    const payload = await this.platformSignedRequest<{ connections?: unknown }>(
+      auth, device, 'platform.connection.mine.list', endpoint.method,
+      endpoint.path.slice(API_PREFIX.length), {}
+    );
+    return Array.isArray(payload?.connections)
+      ? payload.connections.filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
+      : [];
+  }
+
+  // revokePlatformConnection 本人回收连接（只减权，不需要工作区策略）。
+  // 服务端成功后才允许清理本机 profile：先减权、再删本地凭据，顺序不能反。
+  async revokePlatformConnection(connectionId: string): Promise<Record<string, unknown>> {
+    const capability = await this.getPlatformCollectionCapability();
+    const endpoint = resolvePlatformEndpoint(capability, 'platform.connection.mine.revoke');
+    const device = await this.ensurePlatformDevice();
+    const auth = await this.getAuthInfo();
+    return this.platformSignedRequest<Record<string, unknown>>(
+      auth, device, 'platform.connection.mine.revoke', endpoint.method,
+      endpoint.path.slice(API_PREFIX.length).replace('{id}', encodeURIComponent(connectionId)),
+      {}
+    );
+  }
+
   // platformSignedRequest 复用同一套设备证明：挑战 → 签名 → 带证明头请求。
   // 平台端点不传 purpose（只有登记类操作需要）。
   private async platformSignedRequest<T>(

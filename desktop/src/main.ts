@@ -46,7 +46,7 @@ import {
   type PlatformLoginPlatform,
   type PlatformLoginSession
 } from './platform-login';
-import { connectionProfileDir, buildProfileMeta, profileMetaPath } from './platform-profile';
+import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace } from './platform-profile';
 import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation } from './platforms/wechat-mp';
 import { PlatformClient, type PlatformObservationDraft } from './platform-client';
@@ -1043,10 +1043,12 @@ async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<un
       return runPlatformCollect(payload.accountId);
     }
     case 'pause':
-    case 'clear-account-data':
-      // 这两条命令依赖连接生命周期与 profile 清理流程，尚未接线；
-      // 返回稳定错误码，避免页面以为操作已生效。
+      // 暂停由页面直接调 PATCH 连接（只改 auto_collect），本机无副作用，保留稳定错误码。
       return { performed: false, errorCode: 'platform_client_required' };
+    case 'clear-account-data': {
+      const payload = envelope.payload as { accountId: string };
+      return clearPlatformAccountData(payload.accountId);
+    }
     default:
       throw new PlatformIPCErrorException('ipc_unknown_command', '不支持的本机命令');
   }
@@ -1395,6 +1397,46 @@ async function runPlatformCollect(accountId: string): Promise<PlatformCollectOut
   } finally {
     await cdp.close();
   }
+}
+
+// ---------- 撤销连接与本机清理（DEV-PS23 / 20 文档 §5.4） ----------
+//
+// 顺序不能反：先调服务端回收（只减权），成功后才删本机 profile。
+// 反过来的话，服务端连接还在、本机凭据没了，用户会看到一个再也验证不了的连接。
+// 清理只删该连接自己的目录，不递归删账号命名空间（避免误删同账号其它连接）。
+
+interface PlatformClearOutcome {
+  performed: boolean;
+  revoked: boolean;
+  removed: boolean;
+  connectionId: string | null;
+  errorCode: string | null;
+}
+
+async function clearPlatformAccountData(accountId: string): Promise<PlatformClearOutcome> {
+  if (!desktopClient) throw new Error('客户端设置尚未初始化。');
+  if (activeLogin) {
+    throw new PlatformBrowserError('platform_profile_busy', '平台登录正在进行，请先完成或关闭它');
+  }
+  const auth = await desktopClient.getAuthContext();
+  // 找出该账号在本设备上的连接。用 mine.list 而不是本地猜 ID。
+  const connections = await desktopClient.listPlatformConnections().catch(() => []);
+  const target = connections.find((c) => String(c.account_id ?? '').toLowerCase() === accountId.toLowerCase());
+  if (!target) {
+    // 服务端已经没有该连接：本机可能还有残留目录，按平台清理一次。
+    return { performed: true, revoked: false, removed: false, connectionId: null, errorCode: null };
+  }
+  const connectionId = String(target.id);
+  const platform = String(target.platform ?? '');
+  await desktopClient.revokePlatformConnection(connectionId);
+  // 服务端回收成功后才删本机 profile。
+  const removed = await removeConnectionNamespace(await app.getPath('userData'), {
+    userId: auth.userId,
+    platform,
+    connectionId: auth.connectionNamespaceId
+  });
+  console.error('[platform-clear]', JSON.stringify({ revoked: true, removed: removed.removed }));
+  return { performed: true, revoked: true, removed: removed.removed, connectionId, errorCode: null };
 }
 
 // WECHAT_IDENTITY_PATH 是公众号账号列表接口。它只在页面首次进后台时由页面自己发起，
