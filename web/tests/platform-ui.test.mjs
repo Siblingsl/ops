@@ -110,3 +110,30 @@ test('共享电脑与离线提示存在，关闭窗口等于暂停', async () =>
   assert.match(source, /客户端离线/);
   assert.match(source, /不会代你登录/);
 });
+
+// DEV-PS30：熔断恢复的管理页界面（20 文档 §12）。
+// 浏览器实测受业务窗口路由守卫限制，改用源码契约测试锁住关键约束。
+test('熔断卡片：必须让用户手填新 mapping_version，不得静默自增', async () => {
+  const source = await readSource('pages/settings/Admin.tsx');
+  // 必须有恢复入口与查询。
+  assert.match(source, /\/admin\/platform\/breakers/);
+  assert.match(source, /breakers\/\$\{[^}]+\}\/resolve/);
+  // 必须要求用户输入版本号（prompt），而不是直接写死 +1 提交。
+  assert.match(source, /window\.prompt\(/);
+  assert.match(source, /mapping_version/);
+  // 恢复前必须有二次确认。
+  assert.match(source, /确认恢复熔断/);
+  // 红线：不得出现“全部恢复/批量恢复”这类操作。
+  for (const pattern of [/<Button[^>]*>[^<]*全部恢复/, /<Button[^>]*>[^<]*批量恢复/, /resolveAll/, /batchResolve/]) {
+    assert.equal(pattern.test(source), false, `不应出现 ${pattern}`);
+  }
+});
+
+test('熔断卡片：明确告知恢复后不会自动重开自动采集', async () => {
+  const source = await readSource('pages/settings/Admin.tsx');
+  // 这是恢复动作最容易被误解的一点：用户以为“恢复了就一切照旧”。
+  assert.match(source, /不会自动重开/);
+  // 必须显示熔断原因与影响范围，便于判断该不该恢复。
+  assert.match(source, /error_code/);
+  assert.match(source, /affected_connections/);
+});
