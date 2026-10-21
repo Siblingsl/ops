@@ -577,6 +577,11 @@ export interface CDPClient {
 export interface CDPPageClient extends CDPClient {
   attachToPage: (timeoutMs?: number) => Promise<string>;
   detach: () => Promise<void>;
+  // collectResponses 监听页面自身发出的请求，取回匹配路径前缀的 JSON 响应体。
+  // 只读：不注入脚本、不改请求头、不重放请求；用于需要平台签名的接口。
+  collectResponses: (pathPrefix: string, timeoutMs?: number) => Promise<unknown | null>;
+  // onEvent 订阅 CDP 事件（Network.* 等），返回取消订阅函数。
+  onEvent: (listener: (method: string, params: unknown) => void) => () => void;
 }
 
 // createCDPClient 是最小请求/响应配对：按自增 id 匹配响应，超时明确失败。
@@ -593,9 +598,25 @@ export function createCDPClient(process: PlatformBrowserProcess, defaultTimeoutM
     reject: (error: Error) => void;
     timer: NodeJS.Timeout;
   }>();
+  // 事件订阅者：Network.* 等无 id 的帧按 method 分发给监听者。
+  const eventListeners = new Set<(method: string, params: unknown) => void>();
   process.onMessage((message) => {
-    const frame = message as { id?: unknown; result?: unknown; error?: { message?: unknown; code?: unknown } };
-    if (typeof frame.id !== 'number') return;
+    const frame = message as {
+      id?: unknown; result?: unknown; method?: unknown; params?: unknown;
+      error?: { message?: unknown; code?: unknown };
+    };
+    if (typeof frame.id !== 'number') {
+      if (typeof frame.method === 'string') {
+        for (const listener of eventListeners) {
+          try {
+            listener(frame.method, frame.params);
+          } catch {
+            // 监听器异常不能打断 CDP 主循环。
+          }
+        }
+      }
+      return;
+    }
     const waiter = pending.get(frame.id);
     if (!waiter) return;
     pending.delete(frame.id);
@@ -663,7 +684,66 @@ export function createCDPClient(process: PlatformBrowserProcess, defaultTimeoutM
     },
     detach: async (): Promise<void> => {
       pageSessionId = null;
-    }
+    },
+    onEvent: (listener) => {
+      eventListeners.add(listener);
+      return () => {
+        eventListeners.delete(listener);
+      };
+    },
+    // collectResponses 等页面自己发出匹配 pathPrefix 的请求，再取回它的响应体。
+    // 只读：不构造请求、不复制签名头、不重放。
+    collectResponses: (pathPrefix: string, timeoutMs = 30_000) => new Promise<unknown | null>((resolve, reject) => {
+      const requestIDs = new Set<string>();
+      let settled = false;
+      let unsubscribe = () => {};
+      const finish = (value: unknown | null, error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        unsubscribe();
+        if (error) reject(error);
+        else resolve(value);
+      };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      // 直接订阅内部事件集合：client 的类型是 CDPClient，onEvent 在返回对象上。
+      const listener = (method: string, params: unknown) => {
+        if (method === 'Network.responseReceived') {
+          const p = params as { requestId?: unknown; response?: { url?: unknown; status?: unknown; mimeType?: unknown } };
+          const url = typeof p?.response?.url === 'string' ? p.response.url : '';
+          // 只认与 pathPrefix 匹配的响应，且必须成功。
+          if (typeof p?.requestId !== 'string' || !url.includes(pathPrefix)) return;
+          const status = typeof p.response?.status === 'number' ? p.response.status : 0;
+          if (status < 200 || status >= 300) return;
+          requestIDs.add(p.requestId);
+          return;
+        }
+        if (method === 'Network.loadingFinished') {
+          const p = params as { requestId?: unknown };
+          if (typeof p?.requestId !== 'string' || !requestIDs.has(p.requestId)) return;
+          requestIDs.delete(p.requestId);
+          client.request('Network.getResponseBody', { requestId: p.requestId }, 15_000)
+            .then((body) => {
+              const text = (body as { body?: unknown })?.body;
+              if (typeof text !== 'string' || text.trim() === '') {
+                finish(null);
+                return;
+              }
+              try {
+                finish(JSON.parse(text));
+              } catch {
+                // 非 JSON 响应（HTML 错误页等）不算可用数据。
+                finish(null);
+              }
+            })
+            .catch(() => finish(null));
+        }
+      };
+      eventListeners.add(listener);
+      unsubscribe = () => { eventListeners.delete(listener); };
+      // 打开 Network 域后才能收到 responseReceived/loadingFinished。
+      client.request('Network.enable', {}, 10_000).catch((error) => finish(null, error));
+    })
   };
 }
 

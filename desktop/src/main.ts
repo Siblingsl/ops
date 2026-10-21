@@ -38,14 +38,16 @@ import {
   launchPlatformBrowser
 } from './platform-worker';
 import {
+  createPageResponseSource,
   openLoginPage,
   waitForLogin,
   type PlatformLoginPlatform,
   type PlatformLoginSession
 } from './platform-login';
 import { connectionProfileDir, buildProfileMeta, profileMetaPath } from './platform-profile';
-import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities } from './platforms/xhs';
+import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities } from './platforms/wechat-mp';
+import { PlatformClient, type PlatformObservationDraft } from './platform-client';
 import { parseDesktopUiIntent, type DesktopUiIntent } from './ui-intents';
 import {
   buildDesktopRequestHeaders,
@@ -973,12 +975,13 @@ async function runPlatformCommand(raw: unknown): Promise<{ ok: true; data?: unkn
     validatePayloadShape(envelope.cmd, envelope.payload);
     platformIPC.begin(envelope.cmd);
     try {
-      // 超时按命令区分：`open-login` 要等用户本人扫码，最长 3 分钟，
-      // 用 5 秒的通用超时会在扫码完成前就把命令判死（实测必然复现）。
-      // 其它命令仍是 5 秒，保持“本机操作不能挂住页面”的约束。
+      // 超时按命令区分：`open-login` 要等用户本人扫码（最长 3 分钟），
+      // `request-collect` 要读页面、抓响应、提交批次，同样远超 5 秒。
+      // 用 5 秒的通用超时会在流程走完前就把命令判死（2026-10-21 实测两次复现）。
+      // `read-status`/`pause` 等快命令仍是 5 秒，保持“本机操作不能挂住页面”的约束。
       const data = await withTimeout(
         executePlatformCommand(envelope),
-        envelope.cmd === 'open-login' ? PLATFORM_LOGIN_IPC_TIMEOUT_MS : undefined
+        platformCommandTimeout(envelope.cmd)
       );
       return { ok: true, data };
     } finally {
@@ -992,8 +995,15 @@ async function runPlatformCommand(raw: unknown): Promise<{ ok: true; data?: unkn
   }
 }
 
-function envelopeCmdOf(raw: unknown): string {
-  try {
+// platformCommandTimeout 给每条本机命令一个与其真实耗时相称的上限。
+// 快命令保持 5 秒（默认值），需要等用户或跑完整流程的命令单独放宽。
+function platformCommandTimeout(cmd: string): number | undefined {
+  if (cmd === 'open-login') return PLATFORM_LOGIN_IPC_TIMEOUT_MS;
+  if (cmd === 'request-collect') return PLATFORM_COLLECT_IPC_TIMEOUT_MS;
+  return undefined;
+}
+
+function envelopeCmdOf(raw: unknown): string {  try {
     const v = raw as { cmd?: unknown } | null;
     return typeof v?.cmd === 'string' ? v.cmd : '(unknown)';
   } catch {
@@ -1026,11 +1036,14 @@ async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<un
       const payload = envelope.payload as { accountId: string; platform: PlatformLoginPlatform };
       return openPlatformLogin(payload.accountId, payload.platform);
     }
-    case 'request-collect':
+    case 'request-collect': {
+      const payload = envelope.payload as { accountId: string };
+      return runPlatformCollect(payload.accountId);
+    }
     case 'pause':
     case 'clear-account-data':
-      // 这三条命令的具体实现依赖 PS05/06 适配器与连接生命周期；
-      // 现在返回稳定错误码，避免页面以为操作已生效。
+      // 这两条命令依赖连接生命周期与 profile 清理流程，尚未接线；
+      // 返回稳定错误码，避免页面以为操作已生效。
       return { performed: false, errorCode: 'platform_client_required' };
     default:
       throw new PlatformIPCErrorException('ipc_unknown_command', '不支持的本机命令');
@@ -1050,6 +1063,10 @@ const PLATFORM_CONSENT_VERSION = 1;
 // 再加 30 秒余量给浏览器启动、身份解析与服务端建连接。
 // 不能用 5 秒的通用超时：那会在用户还没扫完码时就把命令判成失败。
 const PLATFORM_LOGIN_IPC_TIMEOUT_MS = 210_000;
+
+// 采集命令的 IPC 超时：claim + 心跳 + 页面取数 + 解析 + 提交终批，
+// 首次采集还要启动浏览器与导航，给 3 分钟。
+const PLATFORM_COLLECT_IPC_TIMEOUT_MS = 180_000;
 
 // 同一时刻只允许一个登录会话：一个浏览器、一个 profile，避免双开争用同一目录。
 let activeLogin: { accountId: string; platform: PlatformLoginPlatform } | null = null;
@@ -1169,6 +1186,216 @@ async function openPlatformLogin(accountId: string, platform: PlatformLoginPlatf
     activeLogin = null;
     session = null;
   }
+}
+
+// ---------- 本机平台采集（DEV-PS15 / 20 文档 §4.2、§10） ----------
+//
+// 一次采集：claim 取一条 run → 按 query_scope 读页面 → 适配器解析成观测 →
+// 按批次提交 → 终批报告 run_status。只读，不点发布/删除/修改。
+// 采集会话同样用独立 profile，结束后优雅关闭以保住登录会话。
+
+interface PlatformCollectOutcome {
+  performed: boolean;
+  runId: string | null;
+  runStatus: string;
+  accepted: number;
+  rejected: number;
+  stopReason: string | null;
+  errorCode: string | null;
+}
+
+async function runPlatformCollect(accountId: string): Promise<PlatformCollectOutcome> {
+  if (!desktopClient) throw new Error('客户端设置尚未初始化。');
+  if (activeLogin) {
+    throw new PlatformBrowserError('platform_profile_busy', '另一个平台登录正在进行，请先完成或关闭它');
+  }
+  const capability = await desktopClient.getPlatformCollectionCapability();
+  const client = new PlatformClient(capability, async (operation, method, path, body) =>
+    desktopClient!.platformSignedCall(operation, method, path, body));
+
+  // 先发一次 presence，让服务端知道本设备在线（调度按 presence 派任务）。
+  await client.presence();
+  const run = await client.claim();
+  if (!run) {
+    return {
+      performed: true, runId: null, runStatus: 'no_task',
+      accepted: 0, rejected: 0, stopReason: null, errorCode: null
+    };
+  }
+  if (run.platform !== 'xhs') {
+    // 公众号适配器尚未接入真实网络读取，明确报不支持，不伪装成功。
+    await client.submit({
+      final_batch: true,
+      run_status: 'failed',
+      stop_reason: 'adapter_not_wired',
+      error_code: 'platform_not_supported',
+      observations: []
+    });
+    return {
+      performed: true, runId: run.id, runStatus: 'failed',
+      accepted: 0, rejected: 0, stopReason: 'adapter_not_wired', errorCode: 'platform_not_supported'
+    };
+  }
+
+  const profileDir = await resolveCollectProfileDir(run.platform);
+  const candidate = await findPlatformBrowser();
+  const browser = await launchPlatformBrowser({ executablePath: candidate.executablePath, profileDir });
+  const cdp = createCDPClient(browser, 20_000);
+  const session = { platform: run.platform as PlatformLoginPlatform, profileDir, browser, cdp };
+  let accepted = 0;
+  let rejected = 0;
+  try {
+    const page = await openLoginPage(session);
+    if (!page.url.includes('creator.xiaohongshu.com') || page.url.includes('/login')) {
+      // 会话失效：如实报告需要重新登录，不重试、不反复拉二维码。
+      const receipt = await client.submit({
+        final_batch: true,
+        run_status: 'failed',
+        stop_reason: 'login_required',
+        error_code: 'platform_login_required',
+        observations: []
+      });
+      return {
+        performed: true, runId: run.id, runStatus: receipt.run_status,
+        accepted: receipt.accepted, rejected: receipt.rejected,
+        stopReason: 'login_required', errorCode: 'platform_login_required'
+      };
+    }
+    // 心跳：确认租约仍在、未被取消。
+    const beat = await client.heartbeat();
+    if (beat.canceled) {
+      const receipt = await client.submit({
+        final_batch: true, run_status: 'canceled', stop_reason: 'canceled', error_code: null, observations: []
+      });
+      return {
+        performed: true, runId: run.id, runStatus: receipt.run_status,
+        accepted: receipt.accepted, rejected: receipt.rejected, stopReason: 'canceled', errorCode: null
+      };
+    }
+
+    const source = createPageResponseSource(session);
+    // 笔记列表接口需要平台签名，直接 GET 会被回 406（2026-10-21 实测）。
+    // 适配器通过 source.fetchSigned 走“页面自发请求 + 响应监听”，不构造也不复制签名。
+    const discovery = await collectPostedNotes(source, { maxPages: 3 });
+    // 观测必须带真实的外部账号键，否则服务端无法把作品归到正确连接。
+    // 优先用 run 冻结的绑定快照，其次回读连接摘要。
+    const externalAccountKey = await resolveRunAccountKey(run);
+    if (!externalAccountKey) {
+      throw new PlatformBrowserError('platform_identity_mismatch', '本次任务缺少外部账号标识');
+    }
+    const observedAt = new Date().toISOString();
+    // 服务端按 run 冻结的 binding_snapshot 逐篇比对作品、绑定修订与发布修订；
+    // 客户端必须原样回传这两个 revision，否则会被判“绑定或发布信息已变化”。
+    const targets = parseRunTargets(run.binding_snapshot);
+    const drafts: PlatformObservationDraft[] = [];
+    let rowNo = 0;
+    let unmatched = 0;
+    for (const note of discovery.notes) {
+      const target = targets.get(note.noteId);
+      // 不提交快照之外的作品：§7.2 不允许把未绑定作品塞进采集结果。
+      if (!target) {
+        unmatched += 1;
+        continue;
+      }
+      const draft = noteToObservation(note, {
+        externalAccountKey,
+        observedAt,
+        bindingRevision: target.bindingRevision,
+        publishRevision: target.publishRevision
+      });
+      if (!draft) continue;
+      drafts.push({ ...draft, row_no: rowNo });
+      rowNo += 1;
+    }
+    console.error('[collect] discovery', JSON.stringify({
+      notes: discovery.notes.length,
+      published: discovery.notes.filter((n) => n.status === 'published').length,
+      targets: targets.size,
+      unmatched,
+      drafts: drafts.length,
+      coverage: discovery.coverage
+    }));
+    const receipt = await client.submit({
+      final_batch: true,
+      run_status: discovery.coverage.incomplete_reason ? 'partial' : 'succeeded',
+      stop_reason: discovery.coverage.incomplete_reason,
+      error_code: null,
+      coverage: discovery.coverage,
+      observations: drafts
+    });
+    accepted = receipt.accepted;
+    rejected = receipt.rejected;
+    return {
+      performed: true, runId: run.id, runStatus: receipt.run_status,
+      accepted, rejected, stopReason: discovery.coverage.incomplete_reason, errorCode: null
+    };
+  } catch (error) {
+    const code = error instanceof PlatformBrowserError ? error.code : 'platform_network_unavailable';
+    // 失败也要交终批，否则 run 会一直挂在 leased 直到租约过期。
+    console.error('[collect] failed', code, describeError(error));
+    await client.submit({
+      final_batch: true, run_status: 'failed', stop_reason: 'collect_failed', error_code: code, observations: []
+    }).catch((submitError) => {
+      console.error('[collect] final batch rejected', describeError(submitError));
+    });
+    return {
+      performed: true, runId: run.id, runStatus: 'failed',
+      accepted: 0, rejected: 0, stopReason: 'collect_failed', errorCode: code
+    };
+  } finally {
+    await cdp.close();
+  }
+}
+
+// parseRunTargets 从 run 冻结的 binding_snapshot 里取出每篇作品的绑定与发布修订。
+// 服务端提交时逐项比较，客户端必须原样回传，不能自己推断或升级修订。
+function parseRunTargets(snapshot: unknown): Map<string, { bindingRevision: number; publishRevision: number }> {
+  const out = new Map<string, { bindingRevision: number; publishRevision: number }>();
+  if (!Array.isArray(snapshot)) return out;
+  for (const item of snapshot) {
+    if (!item || typeof item !== 'object') continue;
+    const t = item as { external_id?: unknown; binding_revision?: unknown; publish_revision?: unknown };
+    if (typeof t.external_id !== 'string' || t.external_id === '') continue;
+    const bindingRevision = typeof t.binding_revision === 'number' ? t.binding_revision : Number.NaN;
+    const publishRevision = typeof t.publish_revision === 'number' ? t.publish_revision : Number.NaN;
+    if (!Number.isFinite(bindingRevision) || !Number.isFinite(publishRevision)) continue;
+    out.set(t.external_id.toLowerCase(), { bindingRevision, publishRevision });
+  }
+  return out;
+}
+
+// resolveRunAccountKey 取本次任务的外部账号键。
+// 优先用 run 冻结的 binding_snapshot（服务端权威值）；该快照在首版只含作品绑定时为空，
+// 因此回退到连接摘要里的 external_account_key。都取不到时返回 null，
+// 由调用方明确报错，不用空字符串让服务端静默丢观测。
+async function resolveRunAccountKey(run: { connection_id: string; binding_snapshot: unknown }): Promise<string | null> {
+  const snapshot = run.binding_snapshot;
+  if (snapshot && typeof snapshot === 'object') {
+    const key = (snapshot as { external_account_key?: unknown }).external_account_key;
+    if (typeof key === 'string' && key.trim() !== '') return key.trim();
+  }
+  const summary = await desktopClient!.getPlatformConnectionSummary(run.connection_id).catch((error) => {
+    console.error('[collect] connection summary failed', describeError(error));
+    return null;
+  });
+  const fromSummary = summary && typeof summary.external_account_key === 'string' ? summary.external_account_key : '';
+  if (fromSummary.trim() === '') {
+    console.error('[collect] summary missing key', JSON.stringify({
+      hasSummary: summary !== null,
+      keys: summary ? Object.keys(summary).slice(0, 20) : []
+    }));
+  }
+  return fromSummary.trim() !== '' ? fromSummary.trim() : null;
+}
+
+// resolveCollectProfileDir 复用登录时的 profile 命名空间，保证采集用的是同一份会话。
+async function resolveCollectProfileDir(platform: string): Promise<string> {
+  const auth = await desktopClient!.getAuthContext();
+  return connectionProfileDir(await app.getPath('userData'), {
+    userId: auth.userId,
+    platform,
+    connectionId: auth.connectionNamespaceId
+  });
 }
 
 // 浏览器探测结论只在主进程缓存：一次会话里浏览器不会中途换，重复探测只会反复拉起进程。

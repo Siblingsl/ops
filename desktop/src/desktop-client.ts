@@ -1553,6 +1553,37 @@ export class DesktopClient {
     };
   }
 
+  // getPlatformConnectionSummary 取本人持有的连接摘要（含 external_account_key）。
+  // 走 platform.connection.mine.list：账户级只读，不要求工作区策略开启。
+  async getPlatformConnectionSummary(connectionId: string): Promise<Record<string, unknown> | null> {
+    const capability = await this.getPlatformCollectionCapability();
+    const endpoint = resolvePlatformEndpoint(capability, 'platform.connection.mine.list');
+    const device = await this.ensurePlatformDevice();
+    const auth = await this.getAuthInfo();
+    const payload = await this.platformSignedRequest<{ connections?: unknown }>(
+      auth, device, 'platform.connection.mine.list', endpoint.method,
+      endpoint.path.slice(API_PREFIX.length), {}
+    );
+    const list = Array.isArray(payload?.connections) ? payload.connections : [];
+    for (const item of list) {
+      if (!item || typeof item !== 'object') continue;
+      // 服务端把 UUID 序列化成字符串，但这里仍按字符串比较，避免类型差异导致匹配失败。
+      const id = String((item as { id?: unknown }).id ?? '');
+      if (id.toLowerCase() === connectionId.toLowerCase()) {
+        return item as Record<string, unknown>;
+      }
+    }
+    return null;
+  }
+
+  // platformSignedCall 给平台采集协议客户端用：按操作名取端点、完成设备证明、发请求。
+  // 只接受 PLATFORM_OPERATION_PATHS 里登记的操作，不接受任意路径。
+  async platformSignedCall(operation: string, method: string, pathName: string, body: unknown): Promise<unknown> {
+    const device = await this.ensurePlatformDevice();
+    const auth = await this.getAuthInfo();
+    return this.platformSignedRequest<unknown>(auth, device, operation, method, pathName, body);
+  }
+
   // createPlatformConnection 为某个 OPS 账号建立待验证连接（20 文档 §11.2）。
   // 一次只建一个；已存在未撤销连接时服务端返回 409，这里原样上抛。
   async createPlatformConnection(input: {
@@ -1603,8 +1634,15 @@ export class DesktopClient {
     pathName: string,
     bodyValue: unknown
   ): Promise<T> {
-    const body = JSON.stringify(bodyValue);
-    const requestPath = `${API_PREFIX}${pathName}`;
+    // GET/HEAD 不能带 body（fetch 会直接抛错）。挑战里的 body_sha256 必须与真正发出的
+    // body 一致，否则服务端验签会失败；因此这里对 GET/HEAD 用空串的摘要。
+    const hasBody = method !== 'GET' && method !== 'HEAD';
+    const body = hasBody ? JSON.stringify(bodyValue) : '';
+    // 调用方有两种传法：`PlatformClient` 给的是带 /api/v1 的全路径，
+    // `createPlatformConnection` 等给的是去掉前缀的相对路径。两种都要接受，
+    // 否则会拼成 /api/v1/api/v1/...，服务端按未登记路径回“设备证明操作不受支持”。
+    const relative = pathName.startsWith(API_PREFIX) ? pathName.slice(API_PREFIX.length) : pathName;
+    const requestPath = `${API_PREFIX}${relative}`;
     const challenge = await this.request<{ challenge_id: string; signature_payload: string }>(
       '/desktop/challenges', {
         method: 'POST',
@@ -1620,7 +1658,10 @@ export class DesktopClient {
     );
     const privateKey = createPrivateKey(this.decrypt(device.encryptedPrivateKey));
     const signature = sign(null, Buffer.from(challenge.signature_payload, 'base64'), privateKey).toString('base64');
-    return this.request<T>(pathName, {
+    // request() 内部会拼 API_PREFIX，这里必须传相对路径，否则会变成 /api/v1/api/v1/...
+    // GET/HEAD 不能带 body（fetch 会直接抛错）；挑战里的 body_sha256 已是空串的摘要，
+    // 与服务端按空 body 计算的结果一致。
+    return this.request<T>(relative, {
       method,
       headers: {
         'X-CSRF-Token': auth.csrf_token,
@@ -1628,7 +1669,7 @@ export class DesktopClient {
         'X-OPS-Desktop-Challenge': challenge.challenge_id,
         'X-OPS-Desktop-Signature': signature
       },
-      body
+      ...(hasBody ? { body } : {})
     });
   }
 

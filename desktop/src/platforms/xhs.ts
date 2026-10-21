@@ -73,6 +73,9 @@ export interface XhsDiscoveryResult {
 // 只读响应源：由 CDP 会话在接入后实现；适配器只调用它取 JSON，不自己发请求。
 export interface ReadOnlyResponseSource {
   fetchJSON(path: string): Promise<unknown>;
+  // fetchSigned 用于需要平台签名的接口（如笔记列表）：由实现方让页面自己发起请求
+  // 并监听响应，适配器仍然只关心“拿到 JSON”。不提供时回退到 fetchJSON。
+  fetchSigned?(path: string): Promise<unknown>;
 }
 
 export class XhsAdapterError extends Error {
@@ -115,7 +118,24 @@ export function parseCount(raw: unknown): { value: number; precision: 'exact' | 
 }
 
 // mapNoteStatus 把平台的 tab_status 映射成独立状态；未知值保留 unknown，不推断删除。
+//
+// 平台实际返回的是**数字**：`tab_status: 1` 对应“已发布”
+// （2026-10-21 真实账号实测：列表接口返回 tab_status=1，页面“全部 1 / 已发布”也是这一篇）。
+// 只登记已实测确认的数值；其它数值保持 unknown，不猜成已发布，避免把草稿/审核中
+// 当作作品观测（§2、PS-T14）。
+export const XHS_TAB_STATUS_NUMBERS: Readonly<Record<number, XhsNoteStatus>> = Object.freeze({
+  1: 'published'
+});
+
 export function mapNoteStatus(raw: unknown): XhsNoteStatus {
+  // 数值形态优先按已登记表映射。
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return XHS_TAB_STATUS_NUMBERS[raw] ?? 'unknown';
+  }
+  // 纯数字字符串也按数值处理（平台不同接口的序列化不一致）。
+  if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
+    return XHS_TAB_STATUS_NUMBERS[Number(raw.trim())] ?? 'unknown';
+  }
   const text = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
   switch (text) {
     case 'published':
@@ -283,7 +303,11 @@ export async function collectPostedNotes(
       incompleteReason = 'page_budget';
       break;
     }
-    const payload = await source.fetchJSON(buildPath({ page, cursor }));
+    // 笔记列表接口需要平台签名；有 fetchSigned 时走“页面自发请求 + 响应监听”。
+    const path = buildPath({ page, cursor });
+    const payload = source.fetchSigned
+      ? await source.fetchSigned(path)
+      : await source.fetchJSON(path);
     const parsed = parsePostedNotesPage(payload);
     pagesRead += 1;
     for (const note of parsed.notes) {

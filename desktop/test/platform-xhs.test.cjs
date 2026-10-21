@@ -93,6 +93,19 @@ test('状态与类型映射：未知值保持 unknown，不推断删除', () => 
   assert.equal(mapNoteStatus('something_new'), 'unknown');
   assert.equal(mapNoteStatus(null), 'unknown');
 
+  // 平台实际返回的是数字：2026-10-21 真实账号实测 tab_status=1 对应“已发布”。
+  // 只映射已确认的数值，其它数值保持 unknown，不能猜成已发布。
+  assert.equal(mapNoteStatus(1), 'published');
+  assert.equal(mapNoteStatus('1'), 'published');
+  for (const unknown of [0, 2, 3, 99, '0', '2']) {
+    assert.equal(mapNoteStatus(unknown), 'unknown', String(unknown));
+  }
+  // 非有限数与非数字类型不能崩。
+  assert.equal(mapNoteStatus(Number.NaN), 'unknown');
+  assert.equal(mapNoteStatus(Infinity), 'unknown');
+  assert.equal(mapNoteStatus(true), 'unknown');
+  assert.equal(mapNoteStatus({}), 'unknown');
+
   assert.equal(mapNoteType('normal'), 'image');
   assert.equal(mapNoteType('video'), 'video');
   assert.equal(mapNoteType(0), 'image');

@@ -133,6 +133,162 @@ export function parseEvaluateResponse(result: unknown): IdentityProbeResult {
   return { loggedIn: true, payload: env.body };
 }
 
+// ---------- 采集用只读响应源 ----------
+//
+// 取数分两种接口（20 文档 §1307）：
+//   1. 不需要平台签名的同源只读接口（`/api/galaxy/user/info` 等）：用固定脚本直接 GET；
+//   2. 需要平台签名的接口（如笔记列表 `/api/galaxy/v2/creator/note/user/posted`）：
+//      直接 GET 会被回 406 `{"code":-1,"success":false}`。此时**不能自己造签名**，
+//      而是让正常后台页面按它自己的方式发起请求，我们监听 Network 响应取 body。
+//      §13.1 明确：不向服务器导出签名／会话，也不复制整套鉴权。
+export const READ_ONLY_PATH_PREFIXES: ReadonlyArray<string> = Object.freeze(['/api/', '/cgi-bin/']);
+
+// 需要平台签名的接口前缀：这些路径必须走页面自发请求 + 响应监听。
+// 直接 GET 会 406，因此不能放进 buildReadOnlyFetchScript 的调用集合。
+export const SIGNED_PATH_PREFIXES: ReadonlyArray<string> = Object.freeze([
+  '/api/galaxy/v2/creator/note/'
+]);
+
+export function requiresPlatformSignature(path: string): boolean {
+  return SIGNED_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+export function assertReadOnlyPath(path: string): void {
+  if (!path.startsWith('/')) {
+    throw new PlatformBrowserError('platform_network_unavailable', '只读请求必须是同源相对路径');
+  }
+  if (path.includes('..') || path.includes('\\') || path.includes('\0') || path.includes('#')) {
+    throw new PlatformBrowserError('platform_network_unavailable', '只读请求路径包含不允许的字符');
+  }
+  if (path.includes('://')) {
+    throw new PlatformBrowserError('platform_network_unavailable', '只读请求不允许绝对地址');
+  }
+  if (!READ_ONLY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+    throw new PlatformBrowserError('platform_network_unavailable', '只读请求路径不在允许的接口前缀内');
+  }
+}
+
+// buildReadOnlyFetchScript 生成一次同源 GET 的固定脚本。
+// 路径经 JSON.stringify 转义后嵌入，仍然只做 GET + 同源 + 返回原文，不含任何写操作。
+export function buildReadOnlyFetchScript(path: string): string {
+  assertReadOnlyPath(path);
+  return `(async () => {
+  try {
+    const response = await fetch(${JSON.stringify(path)}, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' }
+    });
+    const text = await response.text();
+    return JSON.stringify({ ok: response.ok, status: response.status, body: text.slice(0, 524288) });
+  } catch (error) {
+    return JSON.stringify({ ok: false, status: 0, body: '' });
+  }
+})()`;
+}
+
+// createPageResponseSource 把 CDP 页面会话包装成适配器需要的只读响应源。
+// 适配器只调用 fetchJSON(path)，不接触 CDP、不自己发请求。
+//
+// 签名接口走 observeResponse：让页面自己发起该请求（导航到对应页面或用页面内只读
+// 触发），我们只从 Network 域取回响应 body。这里不构造、不复制任何签名头。
+export function createPageResponseSource(session: PlatformLoginSession): {
+  fetchJSON: (path: string) => Promise<unknown>;
+  fetchSigned: (path: string) => Promise<unknown>;
+  observeResponse: (pathPrefix: string, trigger: () => Promise<void>, timeoutMs?: number) => Promise<unknown>;
+} {
+  const observe = async (pathPrefix: string, trigger: () => Promise<void>, timeoutMs = 30_000) => {
+    assertReadOnlyPath(pathPrefix);
+    if (!session.cdp.collectResponses) {
+      throw new PlatformBrowserError('platform_capability_denied', '当前调试会话不支持响应监听');
+    }
+    const collected = session.cdp.collectResponses(pathPrefix, timeoutMs);
+    await trigger();
+    const body = await collected;
+    if (body === null) {
+      throw new PlatformBrowserError('platform_network_unavailable', '没有捕获到平台的响应');
+    }
+    return body;
+  };
+  return {
+    fetchJSON: async (path: string) => {
+      const script = buildReadOnlyFetchScript(path);
+      const result = await session.cdp.request('Runtime.evaluate', {
+        expression: script,
+        awaitPromise: true,
+        returnByValue: true
+      }, 30_000).catch(() => null);
+      const envelope = parseRawEnvelope(result);
+      if (!envelope) {
+        throw new PlatformBrowserError('platform_network_unavailable', '页面内只读请求没有返回可用数据');
+      }
+      if (!envelope.ok) {
+        throw new PlatformBrowserError(
+          envelope.status === 401 || envelope.status === 403 ? 'platform_login_required'
+            : envelope.status === 406 ? 'platform_capability_denied'
+              : 'platform_network_unavailable',
+          '页面内只读请求失败'
+        );
+      }
+      return envelope.body;
+    },
+
+    // fetchSigned：签名接口不自己造签名，改为“让页面自己请求、我们监听响应”。
+    // 触发方式：先导航到 about:blank 再回到官方页面，强制页面重新加载并自然发起请求。
+    // 只导航到内置常量里的官方地址，不接受外部 URL。
+    fetchSigned: async (path: string) => {
+      const trigger = SIGNED_PATH_TRIGGERS[path.split('?')[0]];
+      if (!trigger) {
+        throw new PlatformBrowserError('platform_capability_denied', '该签名接口没有登记触发页面');
+      }
+      if (!isAllowedPlatformUrl(trigger.url, session.platform)) {
+        throw new PlatformBrowserError('platform_network_unavailable', '触发页面不在允许的官方域名内');
+      }
+      return observe(trigger.observe, async () => {
+        // 先离开再回来：同一 URL 的 Page.navigate 不会重新发请求。
+        await session.cdp.request('Page.navigate', { url: 'about:blank' }, 10_000).catch(() => undefined);
+        await session.cdp.request('Page.navigate', { url: trigger.url }, 30_000);
+      });
+    },
+
+    observeResponse: observe
+  };
+}
+
+// SIGNED_PATH_TRIGGERS 登记“签名接口 → 会自然触发它的官方页面”。
+// 只登记已确认的页面，不猜路径；新增接口必须随适配器版本一起加。
+export const SIGNED_PATH_TRIGGERS: Readonly<Record<string, { url: string; observe: string }>> = Object.freeze({
+  '/api/galaxy/v2/creator/note/user/posted': {
+    url: 'https://creator.xiaohongshu.com/new/note-manager',
+    observe: '/api/galaxy/v2/creator/note/user/posted'
+  }
+});
+
+// parseRawEnvelope 解析脚本自报的 {ok,status,body}；body 保持字符串，交给适配器自己 JSON.parse。
+export function parseRawEnvelope(result: unknown): { ok: boolean; status: number; body: unknown } | null {
+  const remote = (result as { result?: { value?: unknown; description?: unknown } } | null)?.result;
+  if (!remote) return null;
+  let raw: unknown = remote.value;
+  if (typeof raw !== 'string' && typeof remote.description === 'string') raw = remote.description;
+  if (typeof raw !== 'string' || raw.trim() === '') return null;
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const env = envelope as { ok?: unknown; status?: unknown; body?: unknown };
+  if (typeof env.ok !== 'boolean' || typeof env.body !== 'string') return null;
+  const status = typeof env.status === 'number' ? env.status : 0;
+  if (!env.ok) return { ok: false, status, body: null };
+  if (env.body.trim() === '') return { ok: false, status, body: null };
+  try {
+    return { ok: true, status, body: JSON.parse(env.body) };
+  } catch {
+    return null;
+  }
+}
+
 // ---------- 登录会话 ----------
 
 export interface PlatformLoginSession {
