@@ -34,6 +34,8 @@ export interface XhsCapabilities {
   // 单篇曝光/涨粉：首版不承诺，始终 unknown（§6.2）。
   noteImpressions: XhsCapabilityState;
   followerTotal: XhsCapabilityState;
+  // 会话实测有效期（§6.4）：未实测时为 null，不编造。
+  sessionTtlObserved: string | null;
   detectedAt: string;
   adapterVersion: string;
   mappingVersion: number;
@@ -197,6 +199,8 @@ export function probeCapabilities(input: {
   postedNotesReadable: boolean;
   followerInfoReadable: boolean;
   now: string;
+  // 会话实测有效期：只在真正做过“扫码到失效”实测时传入，未实测保持 null。
+  sessionTtlObserved?: string | null;
 }): XhsCapabilities {
   const creator = input.identity ? 'supported' : input.mainSiteLoggedIn ? 'denied' : 'unknown';
   const listState: XhsCapabilityState = creator === 'supported' && input.postedNotesReadable ? 'supported'
@@ -209,6 +213,8 @@ export function probeCapabilities(input: {
     // 未实测的字段保持 unknown，不声称已支持。
     noteImpressions: 'unknown',
     followerTotal: creator === 'supported' && input.followerInfoReadable ? 'supported' : 'unknown',
+    // 未实测时明确为 null，不写“未知”也不写猜测值。
+    sessionTtlObserved: input.sessionTtlObserved ?? null,
     detectedAt: input.now,
     adapterVersion: XHS_ADAPTER_VERSION,
     mappingVersion: XHS_MAPPING_VERSION

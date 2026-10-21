@@ -38,6 +38,8 @@ export interface WechatCapabilities {
   // 按日趋势是账号级区间数据，首版不上传（§9.1）。
   accountTrend: WechatCapabilityState;
   dataLatency: 'next_day' | 'unknown';
+  // 会话实测有效期（§6.4）：由实测写入，未实测时为 null，不能编造。
+  sessionTtlObserved: string | null;
   detectedAt: string;
   adapterVersion: string;
   mappingVersion: number;
@@ -134,6 +136,8 @@ export function probeCapabilities(input: {
   identity: WechatIdentity | null;
   listReadable: boolean;
   now: string;
+  // 会话实测有效期：只在真正做过“扫码到失效”实测时传入，未实测保持 null。
+  sessionTtlObserved?: string | null;
 }): WechatCapabilities {
   const login: WechatCapabilityState = input.backendLoggedIn ? 'supported' : 'unknown';
   const identityOK = input.identity !== null;
@@ -149,6 +153,8 @@ export function probeCapabilities(input: {
     accountTrend: 'unknown',
     // 首页标注“数据统计时间：前一日 00:00–24:00”，分析数据次日更新（§17.1.1）。
     dataLatency: 'next_day',
+    // 未实测时明确为 null，不写“未知”也不写猜测值。
+    sessionTtlObserved: input.sessionTtlObserved ?? null,
     detectedAt: input.now,
     adapterVersion: WECHAT_MP_ADAPTER_VERSION,
     mappingVersion: WECHAT_MP_MAPPING_VERSION
