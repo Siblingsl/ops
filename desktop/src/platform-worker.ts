@@ -522,16 +522,47 @@ export async function launchPlatformBrowser(
     send: (message: unknown) => { toBrowser.write(encodeCDPMessage(message)); },
     onMessage: (listener) => { listeners.push(listener); },
     failure: () => failureError,
-    close: async () => new Promise<void>((resolve) => {
-      if (child.exitCode !== null) {
-        resolve();
-        return;
+    // close 必须让浏览器自己正常退出，不能直接 kill。
+    // 2026-10-21 实测：`child.kill()` 强杀会让 Chromium 丢掉刚建立的登录会话，
+    // 同一 profile 重启后需要重新扫码；改用 CDP 的 `Browser.close` 优雅关闭后，
+    // 会话被正常刷盘，重启直接进入创作中心、无需扫码。
+    // 注意：等待用的定时器**不能 unref**——unref 的定时器不会保持事件循环，
+    // 在没有其它句柄时 await 会永远挂起（测试环境必然复现）。
+    close: async () => {
+      if (child.exitCode !== null) return;
+      // 等浏览器自己退出；超时只是兜底，必须 clearTimeout，否则定时器会挂住事件循环。
+      const waitExit = (ms: number): Promise<boolean> => new Promise((resolve) => {
+        if (child.exitCode !== null) {
+          resolve(true);
+          return;
+        }
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve(false);
+        }, ms);
+        child.once('exit', () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(true);
+        });
+      });
+      // 先请浏览器自己退出（会触发会话落盘）。
+      try {
+        toBrowser.write(encodeCDPMessage({ id: 0, method: 'Browser.close' }));
+      } catch {
+        // 管道已断：直接走下面的兜底。
       }
-      child.once('exit', () => resolve());
-      // 只结束自己启动的进程树，不影响用户正常浏览器（§13.1）。
-      child.kill();
-      setTimeout(resolve, 2000).unref();
-    })
+      const exitedCleanly = await waitExit(8000);
+      // 兜底：优雅关闭没生效时再强杀，避免留下孤儿进程占用 profile。
+      if (!exitedCleanly && child.exitCode === null) {
+        // 只结束自己启动的进程树，不影响用户正常浏览器（§13.1）。
+        child.kill();
+        await waitExit(2000);
+      }
+    }
   };
 }
 

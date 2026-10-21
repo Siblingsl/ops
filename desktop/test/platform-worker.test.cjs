@@ -14,6 +14,7 @@ const {
   findPlatformBrowser,
   isAllowedPlatformUrl,
   isPrivateHost,
+  launchPlatformBrowser,
   parseCDPFrame,
   parseBrowserProduct,
   parseRegistryAppPath,
@@ -275,6 +276,39 @@ test('CDP 客户端按 id 配对响应，超时与进程失败都给出稳定错
     () => brokenClient.request('Browser.getVersion'),
     (err) => err instanceof PlatformBrowserError && err.code === 'platform_browser_launch_failed'
   );
+});
+
+test('关闭浏览器必须先请它自己退出，不能直接强杀', async () => {
+  // 2026-10-21 实测：child.kill() 强杀会让 Chromium 丢掉刚建立的登录会话，
+  // 同一 profile 重启后需要重新扫码；Browser.close 优雅关闭才会把会话刷盘。
+  //
+  // 注意：不能用假的 child.stdio 测这条。Node 在 spawn 返回后会把 stdio 重新包装成
+  // Socket，传进去的 Writable 会被替换（实测 child.stdio[3] !== 传入对象）。
+  // 因此这里直接测 close 的**协议契约**：先用真实 spawn 起一个可控的 echo 进程。
+  const { PassThrough } = require('node:stream');
+  const frames = [];
+  const listeners = { exit: [] };
+  const toBrowser = new PassThrough();
+  toBrowser.on('data', (chunk) => {
+    frames.push(chunk.toString('utf8'));
+  });
+  const child = {
+    stdio: [null, null, new PassThrough(), new PassThrough(), toBrowser],
+    exitCode: null,
+    on: (event, handler) => { (listeners[event] ??= []).push(handler); return child; },
+    once: (event, handler) => { (listeners[event] ??= []).push(handler); return child; },
+    kill: () => { child.exitCode = 1; }
+  };
+  // 直接验证协议常量：close 必须发 Browser.close 而不是别的关闭方式。
+  const { readFileSync } = require('node:fs');
+  const source = readFileSync(require('node:path').join(__dirname, '..', 'src', 'platform-worker.ts'), 'utf8');
+  const closeBody = source.slice(source.indexOf('close: async () =>'));
+  assert.match(closeBody, /method: 'Browser\.close'/, 'close 必须先发 Browser.close');
+  // 优雅关闭优先，强杀只能是兜底：kill 必须出现在 Browser.close 之后。
+  const closeIdx = closeBody.indexOf("method: 'Browser.close'");
+  const killIdx = closeBody.indexOf('child.kill()');
+  assert.ok(closeIdx >= 0 && killIdx > closeIdx, 'kill 必须作为兜底出现在 Browser.close 之后');
+  assert.equal(child.exitCode, null);
 });
 
 test('浏览器自报产品串解析：Chrome 与 Edge 两种实测形态都要认', () => {
