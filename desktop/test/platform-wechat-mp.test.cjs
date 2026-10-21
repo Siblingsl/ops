@@ -52,14 +52,16 @@ function record(infoList, overrides = {}) {
   };
 }
 
-// 2026-10-21 真实账号实测：平台把 publish_page 与 publish_info 都作为**嵌套 JSON 字符串**返回。
-// 虚构样本只保留结构，不包含真实 bizuin/appmsgid。
+// 2026-10-21 真实账号实测：平台把 publish_page 与 publish_info 都作为**嵌套 JSON 字符串**返回，
+// 且发送时间藏在 `publish_info.sent_info.time`（不在记录顶层——记录顶层只有
+// `publish_type` 与 `publish_info`）。虚构样本只保留结构，不包含真实 bizuin/appmsgid。
 test('嵌套 JSON 字符串：publish_page 与 publish_info 都要二次解析', () => {
   const inner = JSON.stringify({
     publish_list: [{
       publish_type: 101,
-      sent_info: { time: 1783745092 },
       publish_info: JSON.stringify({
+        // 真实位置：sent_info 在 publish_info 内部。
+        sent_info: { time: 1783745092 },
         appmsg_info: [{ appmsgid: '2247480009', itemidx: 1, title: '虚构', content_url: 'https://mp.weixin.qq.com/s?mid=2247480009&idx=1', is_deleted: false }]
       })
     }],
@@ -70,8 +72,9 @@ test('嵌套 JSON 字符串：publish_page 与 publish_info 都要二次解析',
   assert.equal(parsed.articles.length, 1);
   assert.equal(parsed.articles[0].externalID, '2247480009_1');
   assert.equal(parsed.totalCount, 1);
-  // 数字形态的 sent_info.time 也要接受，不能因为不是字符串就丢掉时间。
-  assert.equal(parsed.articles[0].sentAt, '1783745092');
+  // 数字形态的 sent_info.time（Unix 秒）要转成 RFC3339，不能原样留着——
+  // 后续要写进 work.published_at，必须是可解析的时间。
+  assert.equal(parsed.articles[0].sentAt, '2026-07-11T04:44:52Z');
   // publish_type=101（仅发表未群发）仍算已发布作品。
   assert.equal(parsed.articles[0].status, 'published');
 
@@ -112,7 +115,7 @@ test('多页按 total_count 收口：收集够总量就停，不因本页非空�
   assert.equal(result.duplicates, 0);
 });
 
-test('身份：优先管理员条目，且必须同时有 bizuin 与原始 ID', () => {
+test('身份：多账号要求当前公众号证据，且必须同时有 bizuin 与原始 ID', () => {
   const payload = {
     biz_list: {
       list: [
@@ -121,10 +124,12 @@ test('身份：优先管理员条目，且必须同时有 bizuin 与原始 ID', 
       ]
     }
   };
-  const identity = parseIdentity(payload);
+  assert.throws(() => parseIdentity(payload), (error) => error.code === 'platform_identity_mismatch');
+  const identity = parseIdentity(payload, originalID);
   assert.equal(identity.externalAccountKey, `wechat_biz:${bizuin}`);
   assert.equal(identity.originalID, originalID);
   assert.equal(identity.isAdmin, true);
+  assert.equal(parseIdentity(payload, 'gh_other').externalAccountKey, 'wechat_biz:MzOTHER');
 
   // 只有昵称、拿不到原始 ID：不能启用自动采集。
   assert.throws(

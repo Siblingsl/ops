@@ -48,6 +48,12 @@ export interface PlatformObservationDraft {
   mapping_version: number;
   values: Record<string, unknown>;
   field_paths: Record<string, string>;
+  // 平台侧显示的作品发布时间（可选，RFC3339）。
+  //
+  // `metric_day_offset`（D1/D3/D7/D14 节点天数）完全靠 `work.published_at` 计算。
+  // 没有它，多篇作品会被写成同一个绑定时刻，节点天数全部塌成 0。
+  // 服务端只在作品缺发布时间（或现有值明显是采集时刻）时才回填，不覆盖手填值。
+  platform_published_at?: string;
 }
 
 export interface PlatformResultBatch {

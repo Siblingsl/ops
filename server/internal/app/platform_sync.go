@@ -572,6 +572,16 @@ type platformResultRow struct {
 	MappingVersion     int                        `json:"mapping_version"`
 	Values             map[string]json.RawMessage `json:"values"`
 	FieldPaths         map[string]string          `json:"field_paths"`
+	// PlatformPublishedAt 是平台侧显示的作品发布时间（可选）。
+	//
+	// 为什么需要它：`metric_day_offset`（D1/D3/D7/D14 节点天数）完全依赖
+	// `work.published_at`。实测发现绑定作品时若没有真实发布时间，7 篇会被写成
+	// **同一个** `published_at`（绑定时刻），于是所有节点天数都算成 0，
+	// 按天对比的指标全部失真。
+	//
+	// 客户端从平台列表里能读到这个时间（公众号的 `sentAt`），随观测一起上报，
+	// 服务端只在 `published_at` 为空或与平台值不一致时才回填，不覆盖用户手填的值。
+	PlatformPublishedAt *time.Time `json:"platform_published_at"`
 }
 
 // platformReceipt 是批次回执：逐行给出接收/待确认/拒绝/重复与原因。
@@ -698,6 +708,13 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 					return targetErr
 				}
 				matchState = state
+				// 回填真实发布时间：`metric_day_offset` 靠它算节点天数。
+				// 只在作品当前没有可信发布时间时才写，绝不覆盖用户手填的值。
+				if row.PlatformPublishedAt != nil && row.ExternalID != nil {
+					if err := backfillPublishedAt(ctx, tx, runAcct, platform, *row.ExternalID, *row.PlatformPublishedAt); err != nil {
+						return err
+					}
+				}
 			}
 			in := platformObservationInput{
 				RunID: &runID, BatchSeq: &batch.BatchSeq, RowNo: &row.RowNo,
@@ -875,6 +892,36 @@ func (s *Server) adoptInSavepoint(ctx context.Context, tx pgx.Tx, observationID,
 		return err
 	}
 	_, err := tx.Exec(ctx, `RELEASE SAVEPOINT platform_adopt`)
+	return err
+}
+
+// backfillPublishedAt 用平台上报的发布时间回填 work.published_at。
+//
+// 为什么需要（实测缺陷）：绑定作品时若没有真实发布时间，多篇作品会被写成
+// **同一个** `published_at`（绑定时刻），于是 `metric_day_offset` 对它们
+// 全部算成 0——D1/D3/D7/D14 节点塌成一个点，按天对比的指标全部失真。
+//
+// 只在以下两种情况下写，**绝不覆盖用户手填的真实发布日期**：
+//  1. `published_at IS NULL`：从没填过，直接补；
+//  2. 现有值与本次上报时间不同，且**不早于平台发布时间**：
+//     说明现有值是"绑定/首次采集时刻"而不是真实发布时间。
+//
+// 用户手动填的发布日期一定早于或等于首次采集时刻（否则作品还没发），
+// 且通常与平台值一致；因此这条规则不会误改手填值。
+func backfillPublishedAt(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, platform, externalID string, publishedAt time.Time) error {
+	// 平台时间只保留到秒，且必须落在合理区间（防止平台返回 0 或未来时间）。
+	if publishedAt.IsZero() || publishedAt.After(time.Now().Add(24*time.Hour)) {
+		return nil
+	}
+	column := "wechat_msgid"
+	if platform == "xhs" {
+		column = "xhs_note_id"
+	}
+	normalized := publishedAt.UTC().Truncate(time.Second)
+	_, err := tx.Exec(ctx, `UPDATE work SET published_at=$3
+		WHERE account_id=$1 AND `+column+`=$2 AND deleted_at IS NULL
+		  AND (published_at IS NULL OR published_at > $3)`,
+		accountID, externalID, normalized)
 	return err
 }
 

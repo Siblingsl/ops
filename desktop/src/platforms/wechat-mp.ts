@@ -93,9 +93,9 @@ export class WechatAdapterError extends Error {
 
 // ---------- 身份 ----------
 
-// parseIdentity 从 biz_list 里取当前公众号：优先 is_admin 的条目，
-// 没有管理员条目时取第一条；始终要求 bizuin 与原始 ID 同时存在。
-export function parseIdentity(payload: unknown): WechatIdentity {
+// parseIdentity 以页面当前原始 ID 选择公众号；仅一个候选时无需额外选择证据。
+// 始终要求 bizuin 与原始 ID 同时存在。
+export function parseIdentity(payload: unknown, currentOriginalID?: string): WechatIdentity {
   const body = payload as { biz_list?: unknown } | null;
   const list = (body?.biz_list as { list?: unknown } | undefined)?.list;
   if (!Array.isArray(list) || list.length === 0) {
@@ -105,8 +105,10 @@ export function parseIdentity(payload: unknown): WechatIdentity {
   if (entries.length === 0) {
     throw new WechatAdapterError('platform_login_required', '公众号后台未返回可用的账号列表');
   }
-  const admin = entries.find((e) => e.is_admin === true || e.is_admin === 1);
-  const chosen = admin ?? entries[0];
+  // 列表不等于当前账号；多个条目必须有页面当前主体证据，不能按管理员或第一项猜。
+  const chosen = currentOriginalID ? entries.find((entry) => entry.username === currentOriginalID)
+    : entries.length === 1 ? entries[0] : undefined;
+  if (!chosen) throw new WechatAdapterError('platform_identity_mismatch', '无法确定当前公众号，请在官方后台选择账号后重新核对');
   const bizuin = typeof chosen.bizuin === 'string' ? chosen.bizuin.trim()
     : typeof chosen.bizuin === 'number' ? String(chosen.bizuin) : '';
   const originalID = typeof chosen.username === 'string' ? chosen.username.trim() : '';
@@ -120,7 +122,7 @@ export function parseIdentity(payload: unknown): WechatIdentity {
   return {
     externalAccountKey: `wechat_biz:${bizuin}`,
     originalID,
-    isAdmin: admin !== undefined
+    isAdmin: chosen.is_admin === true || chosen.is_admin === 1
   };
 }
 
@@ -247,11 +249,6 @@ export function parsePublishPage(payload: unknown): {
       continue;
     }
     const r = record as Record<string, unknown>;
-    // 发送时间在 sent_info.time；缺失时为 null，不编造。
-    const sentInfo = r.sent_info as Record<string, unknown> | undefined;
-    const sentAt = sentInfo && typeof sentInfo.time === 'string' && sentInfo.time.trim() !== ''
-      ? sentInfo.time.trim()
-      : sentInfo && typeof sentInfo.time === 'number' ? String(sentInfo.time) : null;
     const publishType = typeof r.publish_type === 'number' ? r.publish_type : Number(r.publish_type);
     // publish_type=101 是“仅发表、未群发”，与群发一样当作已发布作品（D-129）。
     const publishOnly = publishType === 101;
@@ -265,6 +262,12 @@ export function parsePublishPage(payload: unknown): {
         continue;
       }
     }
+    // 发布时间必须在 `publish_info` 解析**之后**取：实测它位于
+    // `publish_info.sent_info.time`（Unix 秒），不在记录顶层
+    // （记录顶层只有 `publish_type` 与 `publish_info`）。
+    // 早期实现读 `r.sent_info`，永远是 undefined → `sentAt` 恒为 null
+    // → `work.published_at` 只能落成绑定时刻 → 节点天数全部算错。
+    const sentAt = extractArticleSentAt(r, info as Record<string, unknown> | undefined);
     const appmsgInfo = (info as Record<string, unknown> | undefined)?.appmsg_info;
     if (!Array.isArray(appmsgInfo)) {
       invalidRows += 1;
@@ -375,8 +378,106 @@ export function articleToObservation(
     adapter_version: WECHAT_MP_ADAPTER_VERSION,
     mapping_version: WECHAT_MP_MAPPING_VERSION,
     values,
-    field_paths: fieldPaths
+    field_paths: fieldPaths,
+    // 平台侧的发布时间（发表记录里的 `sent_info.time`，格式 `YYYY-MM-DD HH:mm`）。
+    // 服务端用它回填 `work.published_at`，节点天数才算得对。
+    // 解析失败就不带这个字段——宁可让服务端保持原值，也不要写错时间。
+    ...(normalizeWechatSentAt(article.sentAt) ? { platform_published_at: normalizeWechatSentAt(article.sentAt)! } : {})
   };
+}
+
+// extractArticleSentAt 从一条发表记录里取发布时间，返回 RFC3339 或 null。
+//
+// 实测该接口的结构（2026-10-21 抓包，`/cgi-bin/appmsg?action=list_ex`）：
+//
+//	{ base_resp, is_admin, publish_page: "<JSON 字符串>" }
+//	publish_page.publish_list[i] 只有 { publish_type, publish_info: "<JSON 字符串>" }
+//	publish_info.sent_info.time = 1783745092  ← 发布时间在这里（Unix 秒）
+//
+// 即 `sent_info` 藏在**两层嵌套的 JSON 字符串**里。早期实现读顶层 `r.sent_info`，
+// 永远是 undefined，于是 `sentAt` 恒为 null。
+//
+// 依次尝试：publish_info.sent_info.time → 顶层 sent_info.time → 顶层 create_time，
+// 全部取不到返回 null（不编造）。
+function extractArticleSentAt(
+  record: Record<string, unknown>,
+  publishInfo?: Record<string, unknown>
+): string | null {
+  // 1) publish_info.sent_info.time（实测真实位置）。
+  const fromInfo = readSentInfoTime(publishInfo);
+  if (fromInfo) return fromInfo;
+  // 2) 兼容顶层 sent_info（其它后台入口可能有）。
+  const fromRecord = readSentInfoTime(record);
+  if (fromRecord) return fromRecord;
+  // 3) 兜底：顶层 create_time（Unix 秒）。发送时间比创建时间更接近"发布"，故排后。
+  for (const key of ['create_time', 'update_time']) {
+    const v = record[key];
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return unixSecondsToIso(v);
+    if (typeof v === 'string' && /^\d{9,11}$/.test(v.trim())) return unixSecondsToIso(Number(v.trim()));
+  }
+  return null;
+}
+
+// readSentInfoTime 从对象里读 `sent_info.time`，支持 Unix 秒与日期串两种形态。
+function readSentInfoTime(obj?: Record<string, unknown>): string | null {
+  if (!obj) return null;
+  const sentInfo = obj.sent_info as Record<string, unknown> | undefined;
+  if (!sentInfo) return null;
+  const raw = sentInfo.time;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return unixSecondsToIso(raw);
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const trimmed = raw.trim();
+    if (/^\d{9,11}$/.test(trimmed)) return unixSecondsToIso(Number(trimmed));
+    return normalizeWechatSentAt(trimmed);
+  }
+  return null;
+}
+
+// unixSecondsToIso 把 Unix 秒转成不带毫秒的 ISO 串；越界返回 null。
+function unixSecondsToIso(seconds: number): string | null {
+  // 合理区间：2015-01-01 之后、明天之前。防止把 0 或明显异常值当成发布时间。
+  const ms = seconds * 1000;
+  if (ms < 1420070400000 || ms > Date.now() + 24 * 3600 * 1000) return null;
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+// normalizeWechatSentAt 把公众号的日期字符串转成 RFC3339。
+//
+// 平台的日期串是**北京时间**且**没有时区标记**（`YYYY-MM-DD HH:mm`）。
+// 直接交给 `new Date()` 会按运行环境时区解释，机器时区不是 UTC+8 时
+// 会整体偏移——所以显式按 +08:00 构造。
+// 已经是 RFC3339 的输入（以 Z 或 ±HH:MM 结尾）原样归一化返回。
+// 返回 null 表示格式不认识：调用方不带该字段，避免写入错误时间。
+export function normalizeWechatSentAt(raw: string | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  // 已经是带时区的 ISO 串（extractArticleSentAt 的输出会走这里）：
+  // 直接归一化，不要当成"北京时间裸串"再加 8 小时，否则会重复偏移。
+  if (/T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(trimmed)) {
+    const parsed = new Date(trimmed);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  }
+  // 平台可能不补零（`2026-1-5 9:05`），月/日/时/分都按 1-2 位接受。
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/.exec(trimmed);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  const year = Number(y), month = Number(mo), day = Number(d);
+  const hour = Number(h), minute = Number(mi), second = Number(s ?? '0');
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  // 用 UTC 构造再减去 8 小时，等价于 +08:00 的同一时刻，避免依赖本机时区。
+  const utcMillis = Date.UTC(year, month - 1, day, hour, minute, second) - 8 * 3600 * 1000;
+  const date = new Date(utcMillis);
+  if (Number.isNaN(date.getTime())) return null;
+  // 反向校验：防止 `2026-02-31` 这类溢出日期被 Date.UTC 悄悄「进位」成 3 月 3 日。
+  const back = new Date(utcMillis + 8 * 3600 * 1000);
+  if (back.getUTCFullYear() !== year || back.getUTCMonth() !== month - 1 || back.getUTCDate() !== day) {
+    return null;
+  }
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 // ---------- 文章链接 ----------
