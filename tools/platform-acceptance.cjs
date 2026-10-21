@@ -253,10 +253,34 @@ function printReport(platform, reading, obsResult, bound, options) {
     }
   }
 
-  // 样本量是否达标（§17.1 要求 ≥10 篇、≥3 个发布日）。
-  const enough = published.length >= 10 && bound.publishDays >= 3;
-  console.log(`\n样本量      ${enough ? '达标' : '不达标'}（要求 ≥10 篇且 ≥3 个发布日）`);
-  return { matched, mismatched };
+  // 每字段有效对照数：按**作品**去重，不是按观测条数。
+  // §17.1 要求"每字段至少 10 个有效对照"——同一篇作品的多次采集只算一个对照，
+  // 否则重复采集会把数字刷上去，看起来达标其实样本只有几篇。
+  const perField = new Map();
+  for (const r of rows) {
+    for (const f of r.fields) {
+      if (f.platformValue === null || f.platformValue === undefined) continue;
+      perField.set(f.label, (perField.get(f.label) ?? 0) + 1);
+    }
+  }
+  const fieldRows = [...perField.entries()].sort((a, b) => b[1] - a[1]);
+  console.log('\n每字段有效对照（按作品去重）：');
+  for (const [label, count] of fieldRows) {
+    console.log(`  ${label.padEnd(6)} ${String(count).padStart(2)} 篇 ${count >= 10 ? '✓' : '✗ 不足 10'}`);
+  }
+
+  // 样本量是否达标（§17.1 要求 ≥10 篇、≥3 个发布日、**每字段** ≥10 个对照）。
+  const worksEnough = published.length >= 10;
+  const daysEnough = bound.publishDays >= 3;
+  const fieldsEnough = fieldRows.length > 0 && fieldRows.every(([, count]) => count >= 10);
+  const enough = worksEnough && daysEnough && fieldsEnough;
+  console.log(
+    `\n样本量      ${enough ? '达标' : '不达标'}` +
+    `（篇数 ${published.length}/10 ${worksEnough ? '✓' : '✗'}，` +
+    `发布日 ${bound.publishDays}/3 ${daysEnough ? '✓' : '✗'}，` +
+    `每字段 ≥10 ${fieldsEnough ? '✓' : '✗'}）`
+  );
+  return { matched, mismatched, enough };
 }
 
 // ---------- 主流程 ----------
