@@ -149,6 +149,7 @@
             <p class="hint">每项任务必须明确选择服务器、本机或停用。默认任务为必填；向量检索只允许服务器执行。</p>
             <div id="route-list" class="route-list"><p class="hint">请先启用工作区桌面 AI 策略并完成本机模型配置。</p></div>
             <p id="route-status" class="hint" aria-live="polite"></p>
+            <button id="routes-reauth" class="secondary" type="button" hidden>去「账号与设备」重新认证</button>
             <button id="save-routes" class="secondary" type="button">保存本机映射草稿</button>
           </section>
         </section>
@@ -193,6 +194,7 @@
             </div>
             <p class="hint">可在策略关闭或离开工作区后回收本人设备。回收会立即终止该设备的 AI 通道。</p>
             <div id="device-list" class="device-list">读取中…</div>
+            <p id="device-status" class="hint" aria-live="polite"></p>
           </section>
           <section class="card" aria-labelledby="account-type-title">
             <h3 id="account-type-title">账号内容类型</h3>

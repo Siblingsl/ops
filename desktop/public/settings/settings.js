@@ -86,6 +86,39 @@ function userFacingError(error, fallback) {
   return message.replace(/^Error invoking remote method '[^']+': Error: /, '');
 }
 
+// 重新认证过期有两条来源，文案不同但用户要做的事一样：
+//   1) 服务端 requireReauth 返回 403 reauth_required →「这是敏感操作，请先输入登录密码确认」；
+//   2) 客户端 ensureDevice 在本地先拦（还没发请求）→「请先在本窗口完成密码重新认证，再创建本机设备。」
+// 两条都必须识别，否则界面会把第 2 种当成未知故障直接回显原始错误。
+// （auth.go 的 reauthWindow 只有 5 分钟，打开设置页时通常已经过期，所以这是常态不是故障。）
+const REAUTH_HINTS = [
+  '这是敏感操作，请先输入登录密码确认',
+  '请先在本窗口完成密码重新认证'
+];
+const REAUTH_HINT = REAUTH_HINTS[0];
+const REAUTH_ACTION_TEXT = '去「账号与设备」重新认证';
+
+function isReauthRequired(error) {
+  const message = userFacingError(error, '');
+  return REAUTH_HINTS.some((hint) => message.includes(hint));
+}
+
+// 服务端版本旧时该路由不存在，客户端拿到的是 HTTP 404。
+// 这与网络故障的处理方式完全不同：不该让用户去查网络或重装客户端。
+function isEndpointMissing(error) {
+  return /HTTP 404/.test(userFacingError(error, ''));
+}
+
+// guideToReauth 切到账号页并把焦点放到密码框，用户不需要自己找入口。
+function guideToReauth(focusTarget) {
+  activateSettingsTab('account');
+  const password = document.getElementById('password');
+  if (password) password.focus();
+  if (focusTarget) {
+    focusTarget.textContent = `${REAUTH_HINT}。已切到「账号与设备」，请输入当前账号密码。`;
+  }
+}
+
 function getSelectedModel() {
   return modelsById.get(modelSelect.value);
 }
@@ -233,7 +266,8 @@ async function loadPlatformBrowser(refresh = false) {
   }
 }
 
-async function loadDevices() {  const container = document.getElementById('device-list');
+async function loadDevices() {
+  const container = document.getElementById('device-list');
   try {
     const result = await window.opsDesktopSettings.getDevices();
     if (result.devices.length === 0) {
@@ -272,9 +306,23 @@ async function loadDevices() {  const container = document.getElementById('devic
     });
     container.replaceChildren(...rows);
     if (result.reauthRequired) {
-      policyStatus.textContent = '设备回收时需要当前账号密码；可在上方完成重新认证。';
+      // 原实现把这句话写进了 policyStatus（工作区策略页的元素），
+      // 用户在「账号与设备」页根本看不到，等于提示丢失。这里写回本卡片自己的状态行。
+      document.getElementById('device-status').textContent = '重新认证已过期（有效期 5 分钟）；回收设备前需要重新输入密码。';
+    } else {
+      document.getElementById('device-status').textContent = '';
     }
   } catch (error) {
+    if (isReauthRequired(error)) {
+      container.textContent = '重新认证已过期（有效期 5 分钟），完成认证后即可读取设备列表。';
+      return;
+    }
+    if (isEndpointMissing(error)) {
+      // 旧服务器没有 GET /desktop/devices（该路由随客户端新版本一起发布）。
+      // 直接说清“服务端版本旧”，不要显示成 HTTP 404 让用户去查网络。
+      container.textContent = '当前线上服务版本较旧，暂不提供设备列表。请先升级服务端后刷新。';
+      return;
+    }
     container.textContent = userFacingError(error, '无法读取本人设备列表。');
   }
 }
@@ -328,6 +376,9 @@ function makeRouteRow(type, existing) {
 }
 
 async function loadRoutes() {
+  const routeStatus = document.getElementById('route-status');
+  const reauthButton = document.getElementById('routes-reauth');
+  if (reauthButton) reauthButton.hidden = true;
   try {
     const result = await window.opsDesktopSettings.getRoutes();
     routeTypes = result.routeTypes;
@@ -340,12 +391,19 @@ async function loadRoutes() {
     const saved = new Map(sourceRoutes.map((route) => [route.task_type, route]));
     routeRows = routeTypes.map((type) => makeRouteRow(type, saved.get(type.task_type)));
     routeList.replaceChildren(...routeRows.map((row) => row.wrapper));
-    document.getElementById('route-status').textContent = result.desktopRoutes.has_draft
+    routeStatus.textContent = result.desktopRoutes.has_draft
       ? `本机有未应用草稿（基于路由版本 ${routeRevision}；当前线上版本 ${result.desktopRoutes.policy_revision}）。`
       : `当前线上路由版本 ${routeRevision}。`;
   } catch (error) {
-    routeList.textContent = userFacingError(error, '无法读取任务映射。请先启用工作区策略并完成重新认证。');
     routeRows = [];
+    if (isReauthRequired(error)) {
+      // 重新认证过期是常态而不是故障：说明原因并给出就地入口，不显示成读取失败。
+      routeList.textContent = '重新认证已过期（有效期 5 分钟），完成认证后即可读取任务映射。';
+      routeStatus.textContent = '';
+      if (reauthButton) reauthButton.hidden = false;
+      return;
+    }
+    routeList.textContent = userFacingError(error, '无法读取任务映射。请先启用工作区策略并完成重新认证。');
   }
 }
 
@@ -443,15 +501,26 @@ document.getElementById('model-form').addEventListener('submit', async (event) =
 
 document.getElementById('reauth').addEventListener('click', async () => {
   const password = document.getElementById('password');
+  if (!password.value) {
+    setStatus('请输入当前账号密码后再重新认证。');
+    password.focus();
+    return;
+  }
   setStatus('正在重新认证…');
   try {
     await window.opsDesktopSettings.reauthenticate(password.value);
     password.value = '';
-    await loadInfo();
-    setStatus('账号已重新认证。');
+    // 认证成功后必须重新拉取依赖认证状态的视图：原实现只刷新 loadInfo()，
+    // 导致「任务映射」和「设备列表」仍停在“需要重新认证”，用户会以为认证没生效。
+    await Promise.all([loadInfo(), loadDevices(), loadRoutes()]);
+    setStatus('账号已重新认证，有效期 5 分钟。');
   } catch (error) {
     setStatus(userFacingError(error, '重新认证失败。'));
   }
+});
+
+document.getElementById('routes-reauth').addEventListener('click', () => {
+  guideToReauth(document.getElementById('route-status'));
 });
 
 document.getElementById('clear-account-data').addEventListener('click', async (event) => {
