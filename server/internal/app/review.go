@@ -247,6 +247,49 @@ func (s *Server) createMetric(w http.ResponseWriter, r *http.Request) error {
 	}{x, merged})
 }
 
+// isAutoMetricSource 判断该来源是否由平台自动采集写入（不可原地改写）。
+func isAutoMetricSource(source string) bool {
+	return source == "wechat_browser" || source == "xhs_browser" || source == "wechat_api" || source == "toutiao_api"
+}
+
+// holdAutoAndWriteManual 是"人工更正自动来源数据"的正确路径（§9.3）。
+//
+// 三步，缺一不可：
+//  1. 原自动行标 `held`（保留原值，不删不改）——它是平台原始读数，用于对账与追溯；
+//  2. 同节点写/更新 `manual` 快照承载人工值，并记 `corrects_observation_id`
+//     指向被更正的观测（注意不是 `observation_id`：后者表示"这条指标来自该观测"）；
+//  3. 审计记录，便于回答"这个数字是谁改的、原值多少"。
+//
+// 为什么不原地改：原地改会让平台原值永久丢失，且下次采集按
+// `(work, source, day_offset)` 覆盖回来，用户的更正等于白做。
+func (s *Server) holdAutoAndWriteManual(ctx context.Context, tx pgx.Tx, workID uuid.UUID, before Metric, in metricInput) (Metric, error) {
+	// 1) 原自动行标 held（幂等：已经是 held 就不动）。
+	if _, err := tx.Exec(ctx, `UPDATE metric_snapshot SET quality_state='held'
+		WHERE id=$1 AND quality_state<>'held'`, before.ID); err != nil {
+		return Metric{}, err
+	}
+	// 2) 同节点写 manual。captured_at 沿用原行，确保落在同一 day_offset。
+	dayOffset := before.DayOffset
+	manual, _, err := s.upsertMetricWithAudit(ctx, tx, metricWrite{
+		WorkID: workID, CapturedAt: before.CapturedAt, Source: "manual", DayOffset: dayOffset,
+		Reads: in.Reads, Impressions: in.Impressions, Likes: in.Likes, Wows: in.Wows,
+		Favorites: in.Favorites, Comments: in.Comments, Shares: in.Shares,
+		FollowsGained: in.FollowsGained, Note: strings.TrimSpace(in.Note),
+	})
+	if err != nil {
+		return Metric{}, err
+	}
+	// 3) 记 corrects_observation_id：说明"这条人工值是在纠正哪条自动观测"。
+	//    与 observation_id 区分开——后者会让人误以为人工值来自平台。
+	if before.ObservationID != nil {
+		if _, err := tx.Exec(ctx, `UPDATE metric_snapshot SET corrects_observation_id=$2 WHERE id=$1`,
+			manual.ID, *before.ObservationID); err != nil {
+			return Metric{}, err
+		}
+	}
+	return manual, nil
+}
+
 func (s *Server) metricOwned(r *http.Request) (uuid.UUID, uuid.UUID, error) {
 	id, err := pathID(r, "id")
 	if err != nil {
@@ -295,6 +338,17 @@ func (s *Server) updateMetric(w http.ResponseWriter, r *http.Request) error {
 		}
 		if before.Revision != *in.BaseRevision {
 			return stateInvalid("这条数据已被其他成员修改，请刷新后重试")
+		}
+		// 自动来源（浏览器/官方接口）的快照**不能在原地改成另一组"平台原值"**（§9.3）：
+		//   - 原地改会让平台原始读数永久丢失，再也无法与平台对账；
+		//   - 且下次采集会按 (work, source, day_offset) 覆盖回来，用户的更正白做。
+		// 正确做法：新建/更新同节点的 manual 快照承载人工值，把原自动行标 `held` 保留下来。
+		if isAutoMetricSource(before.Source) {
+			x, err = s.holdAutoAndWriteManual(r.Context(), tx, workID, before, in)
+			if err != nil {
+				return err
+			}
+			return s.auditMetricMutation(r.Context(), tx, "metric_update", &before, &x, false)
 		}
 		x, err = scanMetric(tx.QueryRow(r.Context(), `UPDATE metric_snapshot SET captured_at=coalesce($2, captured_at), reads=$3, impressions=$4, likes=$5, wows=$6, favorites=$7,
 			comments=$8, shares=$9, follows_gained=$10, note=$11 WHERE id=$1 RETURNING `+metricCols,
