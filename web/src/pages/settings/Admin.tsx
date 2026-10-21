@@ -13,6 +13,19 @@ import type { AdminUser, AdminWorkspace, SystemSettings } from '@/lib/types'
 interface UsageRow { key: string; calls: number; prompt_tokens: number; completion_tokens: number; failed: number }
 interface UsageResp { group_by: string; from: string; to: string; rows: UsageRow[]; total: UsageRow }
 interface Log { id: string; action: string; target_type: string; target_id: string; result: string; created_at: string; actor: string | null }
+// 适配器版本熔断（20 文档 §12）：恢复必须发布更高 mapping_version 并重新实测。
+interface PlatformBreaker {
+  id: string
+  platform: string
+  adapter_version: string
+  error_code: string
+  mapping_version: number | null
+  state: string
+  opened_at: string
+  resolved_at: string | null
+  affected_connections: number
+  note: string | null
+}
 
 export default function SettingsAdmin() {
   const { data: me, isLoading: meLoading } = useMe()
@@ -46,9 +59,49 @@ export default function SettingsAdmin() {
     queryFn: () => get<Log[]>('/admin/audit-logs?limit=40'),
     enabled: !!me?.is_system_admin,
   })
+  const breakers = useQuery({
+    queryKey: ['admin-breakers'],
+    queryFn: () => get<{ breakers: PlatformBreaker[] }>('/admin/platform/breakers'),
+    enabled: !!me?.is_system_admin,
+  })
 
   if (meLoading) return <PageLoading />
   if (!me?.is_system_admin) return <Navigate to="/settings/accounts" replace />
+
+  // resolveBreaker 恢复一次熔断。要求输入新的 mapping_version，
+  // 因为"只翻状态不换映射"等于让同一个坏适配器继续写数（§12）。
+  const resolveBreaker = async (b: PlatformBreaker) => {
+    const suggested = String((b.mapping_version ?? 1) + 1)
+    const input = window.prompt(
+      `恢复 ${b.platform} 适配器 ${b.adapter_version} 的熔断。\n` +
+      `必须已发布更高的 mapping_version 并重新实测。\n\n新 mapping_version（当前 ${b.mapping_version ?? '未知'}）：`,
+      suggested
+    )
+    if (input === null) return
+    const mappingVersion = Number(input)
+    if (!Number.isInteger(mappingVersion) || mappingVersion <= 0) {
+      toast.error('mapping_version 必须是正整数')
+      return
+    }
+    if (!(await confirm({
+      title: '确认恢复熔断？',
+      desc: `将解除 ${b.platform} / ${b.adapter_version} 的熔断。被本次熔断停掉的自动采集不会自动重开，需用户重新确认。`,
+      confirmText: '恢复',
+    }))) return
+    setBusy(true)
+    try {
+      await post(`/admin/platform/breakers/${b.id}/resolve`, {
+        mapping_version: mappingVersion,
+        note: `管理页恢复：mapping_version ${b.mapping_version ?? '?'} → ${mappingVersion}`,
+      })
+      toast.success('熔断已恢复')
+      await inv(['admin-breakers'])
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const patchUser = async (id: string, body: { disabled?: boolean; is_system_admin?: boolean }) => {
     setBusy(true)
@@ -236,6 +289,40 @@ export default function SettingsAdmin() {
                   </div>
                 </div>
                 <Button size="sm" disabled={busy} onClick={() => enterWorkspace(ws)}>进入并管理</Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="平台采集适配器熔断"
+          desc="页面结构变化时按平台+适配器版本全局熔断，熔断期间不派发任务。恢复必须已发布更高 mapping_version 并重新实测。"
+        />
+        {!breakers.data ? <PageLoading /> : breakers.data.breakers.length === 0 ? (
+          <Empty title="没有熔断记录" desc="所有适配器版本均正常工作。" />
+        ) : (
+          <ul className="divide-y divide-mist-100">
+            {breakers.data.breakers.map((b) => (
+              <li key={b.id} className="flex flex-wrap items-center gap-3 px-5 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-mist-900">{b.platform}</span>
+                    <span className="text-xs text-mist-500">适配器 {b.adapter_version}</span>
+                    <Badge tone={b.state === 'open' ? 'red' : 'green'}>
+                      {b.state === 'open' ? '熔断中' : '已恢复'}
+                    </Badge>
+                  </div>
+                  <div className="mt-0.5 text-xs text-mist-400">
+                    触发 {b.error_code} · 映射版本 {b.mapping_version ?? '—'} · 影响 {b.affected_connections} 个连接 · {fmtTime(b.opened_at)}
+                    {b.resolved_at ? ` · 恢复于 ${fmtTime(b.resolved_at)}` : ''}
+                  </div>
+                  {b.note ? <div className="mt-0.5 text-xs text-mist-400">{b.note}</div> : null}
+                </div>
+                {b.state === 'open'
+                  ? <Button size="sm" disabled={busy} onClick={() => resolveBreaker(b)}>恢复</Button>
+                  : null}
               </li>
             ))}
           </ul>
