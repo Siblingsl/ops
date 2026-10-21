@@ -256,7 +256,11 @@ func (s *Server) metricNodesView(ctx context.Context, workID uuid.UUID, publishe
 			at := time.Date(p.Year(), p.Month(), p.Day(), 0, 0, 0, 0, s.loc).AddDate(0, 0, n)
 			v.DueAt, v.Due = &at, !s.now().Before(at)
 		}
+		// 必须过滤 `quality_state='approved'`（§8.4）：held/superseded 不进入正式消费。
+		// 漏掉这个条件时，被人工更正排除的自动候选（标 held）仍会以高 rank 胜出，
+		// 用户在复盘页看到的还是那条本应被排除的旧值。
 		m, err := scanMetric(s.db.QueryRow(ctx, `SELECT `+metricCols+` FROM metric_snapshot WHERE work_id=$1 AND metric_node(day_offset)=$2
+			AND quality_state='approved'
 			ORDER BY abs(day_offset-$2), `+metricSourceOrder+`, captured_at DESC LIMIT 1`, workID, n))
 		if err == nil {
 			v.Metric = &m
