@@ -397,6 +397,22 @@ func (s *Server) deleteMetric(w http.ResponseWriter, r *http.Request) error {
 		if _, err := tx.Exec(r.Context(), `DELETE FROM metric_snapshot WHERE id=$1`, id); err != nil {
 			return err
 		}
+		// 删除正式指标后，把来源观测退回「待确认」（§9.2）。
+		//
+		// 不回退会留下不一致：观测显示 `valid`（已确认），但对应的正式指标已不存在。
+		// 用户看到"这条已经确认过了"，实际数据已经没了；再想确认又会被
+		// "已被确认" 之外的路径卡住，状态与事实脱节。
+		//
+		// 只回退**指向这条快照**的观测（`observation_id`），
+		// 不碰人工来源（它们没有 observation_id）与已 superseded 的历史观测。
+		if before.ObservationID != nil {
+			if _, err := tx.Exec(r.Context(), `UPDATE platform_metric_observation
+				SET quality_state=$2
+				WHERE id=$1 AND quality_state=$3`,
+				*before.ObservationID, observationQualityNeedsConfirm, observationQualityValid); err != nil {
+				return err
+			}
+		}
 		return s.auditMetricMutation(r.Context(), tx, "metric_delete", &before, nil, false)
 	})
 	if err != nil {
