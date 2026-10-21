@@ -698,6 +698,102 @@ platformLoginStart.addEventListener('click', async () => {
   }
 });
 
+// ---------- 本机残留配置目录（§5.4） ----------
+//
+// 只做"检查 + 由用户点按钮清理单个平台"，不提供"全部清理"。
+// 清理范围仅限服务端已不认识的连接目录，主进程会再次核对，界面不下判断。
+
+const platformOrphanCount = document.getElementById('platform-orphan-count');
+const platformOrphanStatus = document.getElementById('platform-orphan-status');
+const platformOrphanCheck = document.getElementById('platform-orphan-check');
+const platformOrphanClear = document.getElementById('platform-orphan-clear');
+const platformOrphanClearWx = document.getElementById('platform-orphan-clear-wx');
+
+const PLATFORM_LABELS = { xhs: '小红书', wechat_mp: '公众号' };
+
+// renderOrphanCount 把 read-status 的结果画到卡片上；null 表示读不到，不冒充 0。
+function renderOrphanCount(orphans) {
+  if (!orphans) {
+    platformOrphanCount.textContent = '暂时读不到（需要连接到服务器）';
+    platformOrphanClear.disabled = true;
+    platformOrphanClearWx.disabled = true;
+    return;
+  }
+  const xhs = Number(orphans.xhs) || 0;
+  const wx = Number(orphans.wechat_mp) || 0;
+  const total = Number(orphans.total) || 0;
+  platformOrphanCount.textContent = total === 0
+    ? '没有残留目录'
+    : `小红书 ${xhs} 个、公众号 ${wx} 个`;
+  // 数量为 0 时按钮禁用，避免点了什么都没发生。
+  platformOrphanClear.disabled = xhs === 0;
+  platformOrphanClearWx.disabled = wx === 0;
+}
+
+async function refreshOrphanCount() {
+  try {
+    const result = await window.opsDesktopSettings.platformCommand({
+      v: 1, id: `orphan_${Date.now()}`, cmd: 'read-status'
+    });
+    if (result && result.ok === false) {
+      platformOrphanStatus.textContent = userFacingError(result, '读取失败。');
+      return;
+    }
+    renderOrphanCount(result?.data?.orphanProfiles ?? null);
+  } catch (error) {
+    platformOrphanStatus.textContent = userFacingError(error, '读取失败。');
+  }
+}
+
+async function clearOrphanFor(platform) {
+  const label = PLATFORM_LABELS[platform] ?? platform;
+  const button = platform === 'xhs' ? platformOrphanClear : platformOrphanClearWx;
+  button.disabled = true;
+  platformOrphanStatus.textContent = `正在清理${label}的残留目录…`;
+  try {
+    const result = await window.opsDesktopSettings.platformCommand({
+      v: 1,
+      id: `orphan_clear_${Date.now()}`,
+      cmd: 'clear-orphan-profiles',
+      payload: { platform }
+    });
+    if (result && result.ok === false) {
+      platformOrphanStatus.textContent = userFacingError(result, '清理失败。');
+      return;
+    }
+    const data = result?.data ?? {};
+    const found = Number(data.found) || 0;
+    const removed = Number(data.removed) || 0;
+    const skipped = Number(data.skipped) || 0;
+    if (found === 0) {
+      platformOrphanStatus.textContent = `没有需要清理的${label}残留目录。`;
+    } else if (skipped > 0) {
+      // 浏览器占用时删不掉，如实说明，不说"已完成"。
+      platformOrphanStatus.textContent = `清理了 ${removed} 个${label}目录，${skipped} 个被占用未能删除，请关闭对应浏览器窗口后重试。`;
+    } else {
+      platformOrphanStatus.textContent = `已清理 ${removed} 个${label}残留目录。`;
+    }
+    await refreshOrphanCount();
+  } catch (error) {
+    platformOrphanStatus.textContent = userFacingError(error, '清理失败。');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+platformOrphanCheck.addEventListener('click', async () => {
+  platformOrphanCheck.disabled = true;
+  platformOrphanStatus.textContent = '正在检查…';
+  try {
+    await refreshOrphanCount();
+    platformOrphanStatus.textContent = '';
+  } finally {
+    platformOrphanCheck.disabled = false;
+  }
+});
+platformOrphanClear.addEventListener('click', () => clearOrphanFor('xhs'));
+platformOrphanClearWx.addEventListener('click', () => clearOrphanFor('wechat_mp'));
+
 async function loadAccountTypes() {
   accountTypeApply.disabled = true;
   accountTypeChoice.disabled = true;

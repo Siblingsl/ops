@@ -180,6 +180,17 @@
             <button id="platform-login-start" class="primary" type="button" disabled>在本机连接</button>
             <p id="platform-login-status" class="hint" aria-live="polite"></p>
           </section>
+          <section class="card" aria-labelledby="platform-orphan-title">
+            <h3 id="platform-orphan-title">本机残留的配置目录</h3>
+            <p class="hint">平台连接被撤销、账号被删除或换了设备后，本机可能留下旧的配置目录。它们占磁盘、还带着平台登录状态，需要你确认后才清理。</p>
+            <dl>
+              <div><dt>待清理</dt><dd id="platform-orphan-count">尚未检查</dd></div>
+            </dl>
+            <button id="platform-orphan-check" class="secondary" type="button">检查残留目录</button>
+            <button id="platform-orphan-clear" class="secondary" type="button" disabled>清理小红书残留</button>
+            <button id="platform-orphan-clear-wx" class="secondary" type="button" disabled>清理公众号残留</button>
+            <p id="platform-orphan-status" class="hint" aria-live="polite"></p>
+          </section>
           <section class="card" aria-labelledby="platform-browser-title">
             <h3 id="platform-browser-title">平台采集浏览器</h3>
             <p class="hint">平台数据采集只使用你电脑上已安装的正式浏览器，独立配置目录，不读取你日常浏览器的登录状态。</p>

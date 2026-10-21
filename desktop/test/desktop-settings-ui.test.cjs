@@ -1,4 +1,4 @@
-const assert = require('node:assert/strict');
+﻿const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
@@ -155,4 +155,24 @@ test('服务端版本旧导致的 404 与网络故障分开提示', () => {
   assert.match(loadDevices[0], /线上服务版本较旧/);
   // 这条提示不能反过来把 404 说成网络问题或让用户重装客户端。
   assert.doesNotMatch(loadDevices[0], /线上服务版本较旧[\s\S]{0,40}重装/);
+});
+
+// 本机残留配置目录卡片（§5.4）：只做检查与逐平台清理，不能有批量入口。
+test('残留目录卡片：有检查与逐平台清理，没有批量清理入口', () => {
+  for (const id of ['platform-orphan-count', 'platform-orphan-check',
+    'platform-orphan-clear', 'platform-orphan-clear-wx', 'platform-orphan-status']) {
+    assert.match(settingsHtml, new RegExp(`id="${id}"`), `缺少 ${id}`);
+  }
+  // 两个按钮必须分别对应一个平台，而不是"全部"。
+  assert.match(settingsScript, /clearOrphanFor\('xhs'\)/);
+  assert.match(settingsScript, /clearOrphanFor\('wechat_mp'\)/);
+  // 红线：不得出现"一次性清掉所有平台"的命令或按钮。
+  assert.ok(!/clear-orphans-all|clear-all-profiles/.test(settingsScript),
+    '不得提供跨平台的批量清理命令');
+  assert.ok(!/data-clear-all|id="clear-all"/.test(settingsHtml),
+    '不得提供跨平台的批量清理按钮');
+  // 读不到时不能显示成 0（否则用户会以为没有残留）。
+  assert.match(settingsScript, /暂时读不到/);
+  // 被占用删不掉时必须如实说明，不能说"已完成"。
+  assert.match(settingsScript, /未能删除/);
 });
