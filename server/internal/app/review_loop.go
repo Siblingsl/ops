@@ -13,46 +13,63 @@ import (
 
 const minWeeklyDraftWorks = 3
 
-// day7PrefsJob refreshes the rule-based reader preferences (no model) whenever an account's
-// day-7 data changes: a new day-7 node, or a day-7 value edited.
+// day7PrefsJob refreshes deterministic reader preferences for every dirty account, without calling a model.
 func (s *Server) day7PrefsJob(ctx context.Context) {
-	rows, err := s.db.Query(ctx, `SELECT w.account_id, count(*), coalesce(sum(m.reads),0), max(m.captured_at)
-		FROM metric_snapshot m JOIN work w ON w.id=m.work_id JOIN platform_account a ON a.id=w.account_id
-		WHERE a.status='active' AND w.deleted_at IS NULL AND metric_node(m.day_offset)=7 GROUP BY w.account_id`)
+	rows, err := s.db.Query(ctx, `SELECT id FROM platform_account
+		WHERE status='active' AND pref_input_revision IS DISTINCT FROM pref_processed_revision ORDER BY id`)
 	if err != nil {
 		return
 	}
-	type state struct {
-		id          uuid.UUID
-		n, reads    int64
-		lastCapture time.Time
-	}
-	var list []state
+	var list []uuid.UUID
 	for rows.Next() {
-		var x state
-		if rows.Scan(&x.id, &x.n, &x.reads, &x.lastCapture) == nil {
-			list = append(list, x)
+		var id uuid.UUID
+		if rows.Scan(&id) == nil {
+			list = append(list, id)
 		}
 	}
 	rows.Close()
-	for _, x := range list {
-		if !s.markOnce(ctx, fmt.Sprintf("day7-prefs:%s:%d:%d:%d", x.id, x.n, x.reads, x.lastCapture.Unix())) {
-			continue
-		}
-		if _, err := s.refreshDataPreferences(ctx, x.id); err != nil {
-			slog.Warn("刷新读者数据偏好失败", "account", x.id, "err", err)
+	for _, id := range list {
+		if _, err := s.refreshDataPreferences(ctx, id); err != nil {
+			slog.Warn("刷新读者数据偏好失败", "account", id, "err", err)
 		}
 	}
 }
 
-// refreshDataPreferences recomputes attribution groups on day-7 data and stores the qualifying
-// preferences; below the attribution sample floor it leaves existing preferences untouched.
+// refreshDataPreferences recomputes preferences for the observed input revision. Below the sample
+// floor it preserves existing rows but marks them inapplicable; a concurrent newer input wins.
 func (s *Server) refreshDataPreferences(ctx context.Context, accountID uuid.UUID) (bool, error) {
-	samples, err := s.perfSamples(ctx, accountID)
-	if err != nil || len(samples) < minAttributionSamples {
+	revision, err := s.preferenceInputRevision(ctx, accountID)
+	if err != nil {
 		return false, err
 	}
-	return true, s.saveDataPreferences(ctx, accountID, deriveDataPreferences(attributionStats(samples, s.loc)))
+	samples, err := s.perfSamples(ctx, accountID)
+	if err != nil {
+		return false, err
+	}
+	var platform string
+	if err := s.db.QueryRow(ctx, `SELECT platform FROM platform_account WHERE id=$1`, accountID).Scan(&platform); err != nil {
+		return false, err
+	}
+	if platform == "toutiao" {
+		articleN, microN := 0, 0
+		for _, sample := range samples {
+			switch sample.ContentFormat {
+			case "long_article":
+				articleN++
+			case "micro_post":
+				microN++
+			}
+		}
+		applied, err := s.persistToutiaoDataPreferences(ctx, accountID, revision, samples, true)
+		return applied && (articleN >= minAttributionSamples || microN >= minAttributionSamples), err
+	}
+	applicable := len(samples) >= minAttributionSamples
+	var prefs []DataPreference
+	if applicable {
+		prefs = deriveDataPreferences(attributionStats(samples, s.loc))
+	}
+	applied, err := s.persistDataPreferences(ctx, accountID, revision, samples, prefs, applicable, true)
+	return applicable && applied, err
 }
 
 // weeklyReviewDraftJob: with review.weekly_draft on, every Monday each account gets one review draft
@@ -105,7 +122,41 @@ func (s *Server) weeklyReviewDraftAt(ctx context.Context, accountID uuid.UUID, w
 		return err
 	}
 	since := asOf.AddDate(0, 0, -30)
-	rows, err := s.db.Query(ctx, `SELECT w.id FROM work w JOIN work_metric_d7 d ON d.work_id=w.id
+	link := "/a/" + a.ID.String() + "/review"
+	if a.Platform == "toutiao" {
+		created := 0
+		for _, format := range []string{"long_article", "micro_post"} {
+			rows, err := s.db.Query(ctx, `SELECT w.id FROM work w
+				JOIN LATERAL metric_node_d7_public(w.id) d ON true
+				WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.content_format=$4 AND d.reads IS NOT NULL
+				AND w.published_at > $2 AND w.published_at < $3 ORDER BY w.published_at DESC LIMIT 10`, a.ID, since, asOf, format)
+			if err != nil {
+				return err
+			}
+			var ids []uuid.UUID
+			for rows.Next() {
+				var id uuid.UUID
+				if rows.Scan(&id) == nil {
+					ids = append(ids, id)
+				}
+			}
+			rows.Close()
+			if len(ids) < minWeeklyDraftWorks {
+				continue
+			}
+			if _, err := s.buildReviewAsFormat(ctx, a, ids, 0, format, "weekly_draft", "economy"); err != nil {
+				return err
+			}
+			created++
+		}
+		if created > 0 {
+			s.notifyWorkspace(ctx, ident(ctx).WorkspaceID, []string{"owner", "editor"}, "review", "上周复盘草稿已生成",
+				fmt.Sprintf("%s：按文章与微头条分别生成 %d 份第 7 天复盘草稿，建议需要你逐条采纳。", a.Name, created), link, "review-draft:"+a.ID.String()+":"+week)
+		}
+		return nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT w.id FROM work w
+		JOIN LATERAL metric_node_d7_public(w.id) d ON true
 		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND d.reads IS NOT NULL AND w.published_at > $2 AND w.published_at < $3
 		ORDER BY w.published_at DESC LIMIT 10`, a.ID, since, asOf)
 	if err != nil {
@@ -120,7 +171,6 @@ func (s *Server) weeklyReviewDraftAt(ctx context.Context, accountID uuid.UUID, w
 	}
 	rows.Close()
 	ws := ident(ctx).WorkspaceID
-	link := "/a/" + a.ID.String() + "/review"
 	if len(ids) < minWeeklyDraftWorks {
 		var published int
 		_ = s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL AND published_at > $2 AND published_at < $3`, a.ID, since, asOf).Scan(&published)

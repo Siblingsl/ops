@@ -18,7 +18,7 @@ RETURNS TABLE (
   work_id uuid, metric_id uuid, source text, day_offset int, actual_day_offset int, node_exact boolean,
   captured_at timestamptz, observed_at timestamptz, as_of_at timestamptz,
   reads int, read_unit text, likes int, wows int, favorites int, comments int, shares int, share_unit text,
-  follows_gained int, impressions bigint, quality_state text, observation_id uuid,
+  interactions int, follows_gained int, impressions bigint, quality_state text, observation_id uuid,
   missing_fields text[], metric_meta jsonb
 )
 LANGUAGE plpgsql STABLE AS $$
@@ -46,7 +46,13 @@ BEGIN
     (picked.day_offset = 7),
     picked.captured_at, picked.observed_at, picked.as_of_at,
     picked.reads, picked.read_unit, picked.likes, picked.wows, picked.favorites, picked.comments,
-    picked.shares, picked.share_unit, picked.follows_gained, picked.impressions, picked.quality_state,
+    picked.shares, picked.share_unit,
+    -- 与 work_metric_d7 视图完全同口径：全部为 NULL 时返回 NULL，否则把已知项相加。
+    CASE WHEN picked.likes IS NULL AND picked.wows IS NULL AND picked.favorites IS NULL
+              AND picked.comments IS NULL AND picked.shares IS NULL THEN NULL
+         ELSE coalesce(picked.likes,0)+coalesce(picked.wows,0)+coalesce(picked.favorites,0)
+              +coalesce(picked.comments,0)+coalesce(picked.shares,0) END,
+    picked.follows_gained, picked.impressions, picked.quality_state,
     picked.observation_id,
     ARRAY(
       SELECT key FROM (VALUES
@@ -70,7 +76,7 @@ RETURNS TABLE (
   work_id uuid, metric_id uuid, source text, day_offset int, actual_day_offset int, node_exact boolean,
   captured_at timestamptz, observed_at timestamptz, as_of_at timestamptz,
   reads int, read_unit text, likes int, wows int, favorites int, comments int, shares int, share_unit text,
-  follows_gained int, impressions bigint, quality_state text, observation_id uuid,
+  interactions int, follows_gained int, impressions bigint, quality_state text, observation_id uuid,
   missing_fields text[], metric_meta jsonb
 )
 LANGUAGE sql STABLE AS $$

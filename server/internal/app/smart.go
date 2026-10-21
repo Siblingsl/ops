@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"context"
@@ -67,7 +67,7 @@ func (s *Server) profileBootstrap(w http.ResponseWriter, r *http.Request) error 
 		return validation("请至少粘贴一篇过往作品")
 	}
 	user := fmt.Sprintf(`## 账号
-平台：%s；内容形态：%s
+平台：%s；账号当前类型：%s（仅作参考，样本内容优先）
 
 ## 过往作品样本
 %s
@@ -348,6 +348,52 @@ func (s *Server) mergeMaterials(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	err := s.withTx(ctx, func(q pgx.Tx) error {
+		workRows, err := q.Query(ctx, `SELECT w.id FROM work w
+			WHERE w.deleted_at IS NULL AND (
+				EXISTS (SELECT 1 FROM work_material wm WHERE wm.work_id=w.id AND wm.material_id=ANY($1))
+				OR EXISTS (SELECT 1 FROM work_section ws WHERE ws.work_id=w.id AND ws.deleted_at IS NULL AND ws.material_ids && $1)
+			) ORDER BY w.id FOR UPDATE`, in.DropIDs)
+		if err != nil {
+			return err
+		}
+		for workRows.Next() {
+			var workID uuid.UUID
+			if err := workRows.Scan(&workID); err != nil {
+				workRows.Close()
+				return err
+			}
+		}
+		if err := workRows.Err(); err != nil {
+			workRows.Close()
+			return err
+		}
+		workRows.Close()
+		materialIDs := append([]uuid.UUID{in.KeepID}, in.DropIDs...)
+		materialRows, err := q.Query(ctx, `SELECT id FROM material WHERE id=ANY($1) AND workspace_id=$2 AND deleted_at IS NULL ORDER BY id FOR UPDATE`, materialIDs, ident(ctx).WorkspaceID)
+		if err != nil {
+			return err
+		}
+		lockedMaterials := map[uuid.UUID]bool{}
+		for materialRows.Next() {
+			var materialID uuid.UUID
+			if err := materialRows.Scan(&materialID); err != nil {
+				materialRows.Close()
+				return err
+			}
+			lockedMaterials[materialID] = true
+		}
+		if err := materialRows.Err(); err != nil {
+			materialRows.Close()
+			return err
+		}
+		materialRows.Close()
+		wantedMaterials := map[uuid.UUID]bool{in.KeepID: true}
+		for _, id := range in.DropIDs {
+			wantedMaterials[id] = true
+		}
+		if len(lockedMaterials) != len(wantedMaterials) {
+			return stateInvalid("素材已删除或无法访问，请刷新后重试")
+		}
 		if _, err := q.Exec(ctx, `INSERT INTO work_material (work_id, material_id) SELECT work_id, $1 FROM work_material WHERE material_id = ANY($2)
 			ON CONFLICT DO NOTHING`, in.KeepID, in.DropIDs); err != nil {
 			return err
@@ -359,7 +405,7 @@ func (s *Server) mergeMaterials(w http.ResponseWriter, r *http.Request) error {
 			WHERE material_ids && $2`, in.KeepID, in.DropIDs); err != nil {
 			return err
 		}
-		_, err := q.Exec(ctx, `UPDATE material SET deleted_at=now() WHERE id = ANY($1)`, in.DropIDs)
+		_, err = q.Exec(ctx, `UPDATE material SET deleted_at=now() WHERE id = ANY($1)`, in.DropIDs)
 		return err
 	})
 	if err != nil {
@@ -706,8 +752,9 @@ func (s *Server) workTagSuggest(w http.ResponseWriter, r *http.Request) error {
 	}
 	history := []tagSug{}
 	rows, err := s.db.Query(ctx, `SELECT t, count(*), coalesce(avg(mx.reads),0)::int FROM work w, unnest(w.topics) t
-		LEFT JOIN LATERAL (SELECT reads FROM work_metric_d7 d WHERE d.work_id=w.id) mx ON true
-		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.id <> $2 GROUP BY t ORDER BY 3 DESC, 2 DESC LIMIT 10`, m.Account.ID, m.ID)
+		LEFT JOIN LATERAL (SELECT reads FROM metric_node_d7_public(w.id)) mx ON true
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.id <> $2
+		AND ($3<>'toutiao' OR w.content_format=$4) GROUP BY t ORDER BY 3 DESC, 2 DESC LIMIT 10`, m.Account.ID, m.ID, m.Account.Platform, m.ContentFormat)
 	if err != nil {
 		return err
 	}
@@ -728,13 +775,13 @@ func (s *Server) workTagSuggest(w http.ResponseWriter, r *http.Request) error {
 	if strings.TrimSpace(body) == "" && m.Title == "" {
 		return ok(w, resp)
 	}
-	user := "## 作品\n标题：" + m.Title + "\n" + truncate(body, 3000) + `
+	user := "## 作品\n标题：" + m.Title + "\n" + truncate(body, 3000) + fmt.Sprintf(`
 
 ## 任务说明
-根据正文建议不超过 10 个小红书话题标签（以 # 开头），每个给一句理由。不要声称任何热度或流量数据。
+根据正文建议不超过 10 个%s话题标签（以 # 开头），每个给一句理由。不要声称任何热度或流量数据。
 
 ## 输出格式
-只输出 JSON：{"tags":[{"text":"#话题","reason":"理由"}]}`
+只输出 JSON：{"tags":[{"text":"#话题","reason":"理由"}]}`, platformNames[m.Account.Platform])
 	var out struct {
 		Tags []tagSug `json:"tags"`
 	}

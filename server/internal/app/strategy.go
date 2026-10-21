@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"context"
@@ -169,12 +169,13 @@ func (f *StrategyFields) normalize(a *Account) error {
 	}
 	f.Cadence.Days = days
 	f.Cadence.PerWeek = len(days)
-	// D-048 第 5.6 节：账号类型创建后固定，方案的作品形态必须与之一致；
-	// 空值按账号类型补齐，不一致的保存/启用/恢复请求明确拒绝（遗留版本需调整后再启用）。
+	// D-048 第 5.6 节 / D-123：方案的作品形态必须与账号**当前**类型一致；
+	// 空值按账号类型补齐，不一致的保存/启用/恢复请求明确拒绝
+	//（类型迁移后的旧版本方案形态是旧类型，需重新生成后才能启用）。
 	if f.Cadence.Format == "" {
 		f.Cadence.Format = a.ContentFormat
 	} else if f.Cadence.Format != a.ContentFormat {
-		return validation(fmt.Sprintf("方案的作品形态（%s）与账号类型（%s）不一致。账号类型创建后固定，方案须沿用账号类型。", formatNames[f.Cadence.Format], formatNames[a.ContentFormat]))
+		return validation(fmt.Sprintf("方案的作品形态（%s）与账号当前类型（%s）不一致。该方案是类型变更前创建的，不能直接启用或恢复；请重新生成方案（新方案会按当前类型创建）。", formatNames[f.Cadence.Format], formatNames[a.ContentFormat]))
 	}
 	if f.Stage == "" {
 		f.Stage = "cold_start"
@@ -537,7 +538,7 @@ func (s *Server) strategyOptions(w http.ResponseWriter, r *http.Request) error {
 真实经历与资源：%s
 想吸引的读者：%s
 每周可投入：%s
-平台：%s；账号类型：%s（创建后固定，所有方案的 cadence.format 都必须是它）
+平台：%s；账号类型：%s（当前类型，所有新方案的 cadence.format 都必须是它）
 目标：%s
 
 ## 过往作品（可为空）
@@ -701,7 +702,7 @@ func (s *Server) reviseStrategy(w http.ResponseWriter, r *http.Request) error {
 	}
 	rows, err := s.db.Query(ctx, `SELECT w.title, coalesce(t.strategy_pillar,''), w.status, m.reads, m.likes, m.favorites, m.comments
 		FROM work w LEFT JOIN topic t ON t.id=w.topic_id
-		LEFT JOIN work_metric_d7 m ON m.work_id=w.id
+		LEFT JOIN LATERAL metric_node_d7_public(w.id) m ON true
 		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.title<>'' AND w.created_at > now() - interval '30 days'
 		ORDER BY w.created_at DESC LIMIT 30`, a.ID)
 	if err != nil {

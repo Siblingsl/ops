@@ -36,15 +36,7 @@ var metricStorageFiles = map[string]string{
 //
 // 每迁走一个就从这里删掉；删空即表示 §8.4 的消费点迁移完成。
 // 新增条目必须写明理由，且不能是为了绕过检查而把消费逻辑挪进新文件。
-var metricD7LegacyConsumers = map[string]string{
-	"brief.go":           "账号区间汇总（sum(reads)）；需按节点取数，待迁移",
-	"daily_candidates.go": "候选池统计；待迁移",
-	"daily_stats.go":     "账号日均表现（avg reads/likes）；待迁移",
-	"perf_context.go":    "绩效样本上下文；待迁移",
-	"review_loop.go":     "复盘循环筛选；待迁移",
-	"smart.go":           "智能建议的表现排序；待迁移",
-	"strategy.go":        "策略生成的表现依据；待迁移",
-}
+var metricD7LegacyConsumers = map[string]string{}
 
 // metricReadAllowlist 是额外的已审核例外：文件 → 理由。
 // 新增条目必须在这里写明为什么不能走 metric_node_public。

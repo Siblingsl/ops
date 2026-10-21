@@ -109,7 +109,7 @@ func (s *Server) dailyCandidates(ctx context.Context, a *Account, strategy *Stra
 		}
 	}
 	rows.Close()
-	rows, e = s.db.Query(ctx, `SELECT r.id,r.content,r.adopted FROM review_report r WHERE r.account_id=$1 AND cardinality(r.adopted)>0 AND r.created_at>$2 ORDER BY coalesce((SELECT max(d.reads) FROM work_metric_d7 d WHERE d.work_id=ANY(r.work_ids)),0) DESC,r.created_at DESC LIMIT 5`, a.ID, today.AddDate(0, 0, -30))
+	rows, e = s.db.Query(ctx, `SELECT r.id,r.content,r.adopted FROM review_report r WHERE r.account_id=$1 AND cardinality(r.adopted)>0 AND r.created_at>$2 ORDER BY coalesce((SELECT max(d.reads) FROM metric_node_d7_public_all(r.work_ids) d),0) DESC,r.created_at DESC LIMIT 5`, a.ID, today.AddDate(0, 0, -30))
 	if e != nil {
 		return nil, e
 	}

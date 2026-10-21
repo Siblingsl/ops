@@ -96,7 +96,9 @@ func (s *Server) generateBriefForDay(ctx context.Context, accountID uuid.UUID, d
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL AND published_at >= $2 AND published_at < $3`,
 		a.ID, today.AddDate(0, 0, -1), today).Scan(&published)
 	var reads int
-	_ = s.db.QueryRow(ctx, `SELECT coalesce(sum(d.reads),0) FROM work_metric_d7 d JOIN work w ON w.id=d.work_id
+	// 走统一入口 metric_node_d7_public（§8.4）：保留 d7 兜底语义与 approved 过滤。
+	_ = s.db.QueryRow(ctx, `SELECT coalesce(sum(d.reads),0) FROM work w
+		JOIN LATERAL metric_node_d7_public(w.id) d ON true
 		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.published_at >= $2 AND w.published_at < $3`, a.ID, today.AddDate(0, 0, -7), end).Scan(&reads)
 	var adopted int
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM topic t WHERE t.account_id=$1 AND t.status='adopted' AND t.deleted_at IS NULL
