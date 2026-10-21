@@ -617,12 +617,28 @@ func (s *Server) listObservations(w http.ResponseWriter, r *http.Request) error 
 	if err := s.requireAccountInWorkspace(r.Context(), accountID); err != nil {
 		return err
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT o.id, o.external_id, o.scope, o.source, o.observed_at,
-		  o.as_of_at, o.quality_state, o.match_state, o.adapter_version, o.mapping_version,
-		  o.values, o.field_paths
-		FROM platform_metric_observation o
-		WHERE o.account_id=$1
-		ORDER BY o.observed_at DESC, o.id
+	// 每个作品只列最新一条（`DISTINCT ON`），否则按时间倒序的前几条会被
+	// 同一批作品的重复采集占满——用户看不到"哪些作品还没确认"。
+	//
+	// 实测：7 篇作品、每篇采 8 次共 56 条观测。按 observed_at 倒序取 8 条时，
+	// 第二天再采一轮就会全部是同一批的第二次采集，列表看起来"没有新东西"，
+	// 而其它作品的待确认观测被挤出了视野。
+	//
+	// 外层再按「待确认优先 + 时间倒序」排列，把唯一需要用户动手的状态顶到前面。
+	// `DISTINCT ON` 要求内层 ORDER BY 以去重键开头，所以排序放在外层做。
+	rows, err := s.db.Query(r.Context(), `SELECT id, external_id, scope, source, observed_at,
+		  as_of_at, quality_state, match_state, adapter_version, mapping_version, values, field_paths
+		FROM (
+			SELECT DISTINCT ON (coalesce(o.external_id, ''))
+			  o.id, o.external_id, o.scope, o.source, o.observed_at,
+			  o.as_of_at, o.quality_state, o.match_state, o.adapter_version, o.mapping_version,
+			  o.values, o.field_paths
+			FROM platform_metric_observation o
+			WHERE o.account_id=$1
+			ORDER BY coalesce(o.external_id, ''), o.observed_at DESC, o.id DESC
+		) latest
+		ORDER BY CASE WHEN quality_state='needs_confirmation' THEN 0 ELSE 1 END,
+		         observed_at DESC, id
 		LIMIT 200`, accountID)
 	if err != nil {
 		return err
