@@ -101,6 +101,17 @@ export class PlatformClient {
     await this.sign('platform.presence', endpoint.method, endpoint.path, {});
   }
 
+  // adopt 接管一条**已经在别处领取**的 run。
+  //
+  // 后台循环先用一个 client 实例 claim，再把 run 交给采集流程；采集流程内部会新建自己的
+  // client（它要独立的提交状态）。那个新实例必须知道"已经有一条 run 在手"，
+  // 否则 heartbeat/submit 会报"当前没有已领取的平台采集任务"。
+  adopt(run: PlatformClaimedRun): void {
+    this.currentRun = run;
+    this.nextBatchSeq = 0;
+    this.acceptedRows = 0;
+  }
+
   // claim 一次只取一条 run；没有任务时返回 null，调用方等下个 60 秒轮询。
   async claim(): Promise<PlatformClaimedRun | null> {
     const endpoint = resolvePlatformEndpoint(this.capability, 'platform.run.claim');

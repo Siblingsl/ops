@@ -17,7 +17,7 @@ export const PLATFORM_PROFILE_DIR = 'profile';
 export const PLATFORM_PROFILE_USER_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
 export const PLATFORM_PROFILE_TOTAL_QUOTA_BYTES = 10 * 1024 * 1024 * 1024;
 
-export type PlatformId = 'wechat_mp' | 'xhs';
+export type PlatformId = 'wechat_mp' | 'xhs' | 'toutiao';
 
 // meta.json：启动时逐项校验，任何一项不符都不能复用该目录。
 export interface PlatformProfileMeta {
@@ -42,7 +42,7 @@ export class PlatformProfileError extends Error {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const PLATFORMS: ReadonlyArray<string> = ['wechat_mp', 'xhs'];
+const PLATFORMS: ReadonlyArray<string> = ['wechat_mp', 'xhs', 'toutiao'];
 
 // validatePlatformId 只接受首版支持的两个平台；头条等一律拒绝，不静默降级。
 export function validatePlatformId(value: string): PlatformId {
@@ -99,8 +99,13 @@ export function buildProfileMeta(input: {
   connectionId: string;
   externalAccountKey: string;
   createdAt?: string;
+  // 账号 slot 的归属字段：采集时靠它确认"这条 run 属于本机已登录的这个账号"。
+  // 连接命名空间的 meta 不写这个字段（那里按连接隔离，与账号 slot 是两套目录）。
+  accountId?: string;
+  slotId?: string;
+  browserFamily?: 'chrome' | 'edge';
 }): PlatformProfileMeta {
-  return {
+  const meta: PlatformProfileMeta = {
     version: 1,
     origin: input.origin,
     userId: input.userId,
@@ -111,6 +116,13 @@ export function buildProfileMeta(input: {
     externalAccountKey: input.externalAccountKey,
     createdAt: input.createdAt ?? new Date().toISOString()
   };
+  // 只在传入时写出，避免给连接命名空间的 meta 增加无意义字段。
+  if (input.accountId) (meta as PlatformProfileMeta & { accountId?: string }).accountId = input.accountId;
+  if (input.slotId) (meta as PlatformProfileMeta & { slotId?: string }).slotId = input.slotId;
+  if (input.browserFamily) {
+    (meta as PlatformProfileMeta & { browserFamily?: string }).browserFamily = input.browserFamily;
+  }
+  return meta;
 }
 
 // verifyProfileMeta 逐项比对。Origin、工作区或登录用户变化都不能靠移动目录解决，
@@ -255,6 +267,9 @@ export async function removeConnectionNamespace(
   const namespace = accountNamespace(userDataDir, input.userId);
   const connectionDir = path.dirname(connectionProfileDir(userDataDir, input));
   assertInsideNamespace(namespace, connectionDir);
+  await assertProfilePath(userDataDir, path.join(connectionDir, PLATFORM_PROFILE_DIR));
+  const busy = await fs.lstat(path.join(connectionDir, PLATFORM_PROFILE_DIR, 'SingletonLock')).then(() => true, () => false);
+  if (busy) return { removed: false };
   try {
     await fs.rm(connectionDir, { recursive: true, force: true });
     return { removed: true };
@@ -297,7 +312,20 @@ export async function orphanConnections(
 ): Promise<string[]> {
   const known = new Set(knownConnectionIds.map((id) => id.toLowerCase()));
   const existing = await listConnectionNamespaces(userDataDir, input);
-  return existing.filter((id) => !known.has(id.toLowerCase()));
+  const orphans: string[] = [];
+  for (const id of existing) {
+    if (known.has(id.toLowerCase())) continue;
+    if (!UUID_RE.test(id)) continue;
+    const profileDir = connectionProfileDir(userDataDir, { ...input, connectionId: id });
+    await assertProfilePath(userDataDir, profileDir);
+    let mappedId = '';
+    try {
+      const meta = JSON.parse(await fs.readFile(profileMetaPath(profileDir), 'utf8')) as { connectionId?: unknown };
+      if (typeof meta.connectionId === 'string') mappedId = meta.connectionId.toLowerCase();
+    } catch { /* 遗留没有映射的连接目录仍由用户明确清理。 */ }
+    if (!known.has(mappedId)) orphans.push(id);
+  }
+  return orphans;
 }
 
 // namespaceFingerprint 用于日志与诊断，不含任何路径（§13.1 不回显路径）。
@@ -308,4 +336,93 @@ export function namespaceFingerprint(userId: string, platform: string, connectio
 // 供测试使用的稳定临时标识。
 export function newNamespaceID(): string {
   return randomUUID();
+}
+
+// D-131：slot 是本机目录定位符；服务端 connectionId 始终是业务连接唯一标识。
+export interface AccountProfileScope {
+  origin: string;
+  userId: string;
+  workspaceId: string;
+  deviceId: string;
+  accountId: string;
+  platform: string;
+}
+
+export interface AccountProfileMeta extends PlatformProfileMeta {
+  slotId: string;
+  accountId: string;
+  browserFamily: 'chrome' | 'edge';
+  loginOperationId?: string;
+}
+
+export function accountProfileSlot(scope: AccountProfileScope): string {
+  for (const id of [scope.userId, scope.workspaceId, scope.deviceId, scope.accountId]) {
+    if (!UUID_RE.test(id)) throw new PlatformProfileError('invalid_namespace', '账号会话归属无效');
+  }
+  validatePlatformId(scope.platform);
+  const origin = new URL(scope.origin).origin;
+  const hash = createHash('sha256').update(JSON.stringify([origin, scope.userId.toLowerCase(), scope.workspaceId.toLowerCase(), scope.deviceId.toLowerCase(), scope.platform, scope.accountId.toLowerCase()])).digest('hex');
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}
+
+// 检查每一层，拒绝 junction / symlink；清理和读取共用此边界。
+export async function assertProfilePath(userDataDir: string, profileDir: string): Promise<void> {
+  const root = path.resolve(userDataDir);
+  assertInsideNamespace(path.join(root, PLATFORM_PROFILE_ROOT), profileDir);
+  let cursor = root;
+  for (const segment of path.relative(root, profileDir).split(path.sep)) {
+    cursor = path.join(cursor, segment);
+    try {
+      if ((await fs.lstat(cursor)).isSymbolicLink()) throw new PlatformProfileError('invalid_namespace', '会话目录存在链接，不能安全使用');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+}
+
+export async function readAccountProfile(userDataDir: string, scope: AccountProfileScope): Promise<{ profileDir: string; meta: AccountProfileMeta | null }> {
+  const slotId = accountProfileSlot(scope);
+  const profileDir = connectionProfileDir(userDataDir, { ...scope, connectionId: slotId });
+  await assertProfilePath(userDataDir, profileDir);
+  let raw: unknown;
+  try { raw = JSON.parse(await fs.readFile(profileMetaPath(profileDir), 'utf8')); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      // 未知目录不能被写入新归属。全新 slot 才允许创建草案。
+      const exists = await fs.stat(profileDir).then(() => true, () => false);
+      if (exists) throw new PlatformProfileError('profile_meta_invalid', '已有会话目录缺少归属信息');
+      return { profileDir, meta: null };
+    }
+    throw new PlatformProfileError('profile_meta_invalid', '会话元数据无法读取');
+  }
+  const meta = raw as AccountProfileMeta;
+  for (const key of ['userId', 'workspaceId', 'deviceId', 'accountId', 'platform'] as const) {
+    if (typeof meta[key] !== 'string' || meta[key].toLowerCase() !== scope[key].toLowerCase()) throw new PlatformProfileError('profile_meta_mismatch', '本机会话归属与当前账号不一致');
+  }
+  if (meta.version !== 1 || meta.origin !== new URL(scope.origin).origin || meta.slotId !== slotId || !UUID_RE.test(meta.connectionId)
+    || !['chrome', 'edge'].includes(meta.browserFamily) || typeof meta.externalAccountKey !== 'string') {
+    throw new PlatformProfileError('profile_meta_mismatch', '本机会话元数据不匹配');
+  }
+  return { profileDir, meta };
+}
+
+const profileWrites = new Map<string, Promise<void>>();
+export async function saveAccountProfile(userDataDir: string, profileDir: string, meta: AccountProfileMeta, expectedOperationId?: string, signal?: AbortSignal): Promise<void> {
+  const previous = profileWrites.get(profileDir) ?? Promise.resolve();
+  const pending = previous.catch(() => undefined).then(async () => {
+    await assertProfilePath(userDataDir, profileDir);
+    const target = profileMetaPath(profileDir);
+    if (expectedOperationId) {
+      const current = JSON.parse(await fs.readFile(target, 'utf8')) as AccountProfileMeta;
+      if (current.loginOperationId !== expectedOperationId) throw new PlatformProfileError('platform_login_stale', '旧操作不能覆盖新会话映射');
+    }
+    if (signal?.aborted) throw new PlatformProfileError('platform_login_cancelled', '登录操作已取消');
+    await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify(meta), { encoding: 'utf8', mode: 0o600 });
+    if (signal?.aborted) { await fs.unlink(temporary); throw new PlatformProfileError('platform_login_cancelled', '登录操作已取消'); }
+    await fs.rename(temporary, target);
+  });
+  profileWrites.set(profileDir, pending);
+  try { await pending; } finally { if (profileWrites.get(profileDir) === pending) profileWrites.delete(profileDir); }
 }

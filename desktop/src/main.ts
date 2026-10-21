@@ -49,8 +49,12 @@ import {
 import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace, orphanConnections } from './platform-profile';
 import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation } from './platforms/wechat-mp';
-import { PlatformClient, type PlatformObservationDraft } from './platform-client';
+import { PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun } from './platform-client';
 import { parseDesktopUiIntent, type DesktopUiIntent } from './ui-intents';
+import { PlatformLoginFlow, type LoginAction } from './platform-login-flow';
+import { startPlatformLogin, savePlatformLogin } from './platform-login-runtime';
+import { trustedLoginBrowsers, selectLoginBrowser, type LoginBrowserFamily } from './platform-browser-trust';
+import { readAccountProfile, accountProfileSlot } from './platform-profile';
 import {
   buildDesktopRequestHeaders,
   isBusinessApiUrl,
@@ -84,6 +88,7 @@ const LOCAL_PAGES: Record<string, { file: string; contentType: string }> = {
   '/settings.css': { file: 'settings.css', contentType: 'text/css; charset=utf-8' },
   '/desktop-theme.js': { file: 'desktop-theme.js', contentType: 'text/javascript; charset=utf-8' },
   '/settings.js': { file: 'settings.js', contentType: 'text/javascript; charset=utf-8' },
+  '/platform-login-ui.js': { file: 'platform-login-ui.js', contentType: 'text/javascript; charset=utf-8' },
   '/offline/': { file: 'offline.html', contentType: 'text/html; charset=utf-8' },
   '/offline/offline.js': { file: 'offline.js', contentType: 'text/javascript; charset=utf-8' }
 };
@@ -168,6 +173,11 @@ function startApplication(): void {
       await registerLocalProtocol(session.fromPartition('ops-settings'));
       const restoredMode = await desktopClient.restoreAppliedMode();
       void updateNativeClientStatus();
+      // 平台采集 presence 心跳：只在服务端开通且本地已登录时真正上报，
+      // 由 tick 内部判断，这里直接启动即可（重复调用幂等）。
+      startPlatformPresence();
+      // 后台领取循环：自动生成的任务只有客户端主动 claim 才会执行。
+      startPlatformClaimLoop();
       if (restoredMode === 'incompatible') showFailureWindow();
       else await loadBusinessPage();
     } catch (error) {
@@ -196,6 +206,8 @@ function startApplication(): void {
 
   app.on('before-quit', (event) => {
     if (quitConfirmed) {
+      stopPlatformPresence();
+      stopPlatformClaimLoop();
       desktopClient?.disconnect();
       return;
     }
@@ -398,6 +410,7 @@ function installDesktopRequestContext(businessSession: Session): void {
     }
 
     if (isWorkspaceContextChangeRequest(details.url, details.method)) {
+      void platformLoginFlow.stop();
       contextMutationRequests.add(details.id);
     }
 
@@ -975,7 +988,8 @@ async function runPlatformCommand(raw: unknown): Promise<{ ok: true; data?: unkn
   try {
     const envelope = parseEnvelope(raw);
     validatePayloadShape(envelope.cmd, envelope.payload);
-    platformIPC.begin(envelope.cmd);
+    // status/cancel 必须能在 probe/confirm 在途时执行；流程 owner 自行约束写步骤单飞。
+    if (envelope.cmd !== 'login-action') platformIPC.begin(envelope.cmd);
     try {
       // 超时按命令区分：`open-login` 要等用户本人扫码（最长 3 分钟），
       // `request-collect` 要读页面、抓响应、提交批次，同样远超 5 秒。
@@ -987,7 +1001,7 @@ async function runPlatformCommand(raw: unknown): Promise<{ ok: true; data?: unkn
       );
       return { ok: true, data };
     } finally {
-      platformIPC.end(envelope.cmd);
+      if (envelope.cmd !== 'login-action') platformIPC.end(envelope.cmd);
     }
   } catch (error) {
     // 诊断：把真实异常打到主进程日志，便于定位被 toIPCError 压掉的失败原因。
@@ -1001,6 +1015,8 @@ async function runPlatformCommand(raw: unknown): Promise<{ ok: true; data?: unkn
 // 快命令保持 5 秒（默认值），需要等用户或跑完整流程的命令单独放宽。
 function platformCommandTimeout(cmd: string): number | undefined {
   if (cmd === 'open-login') return PLATFORM_LOGIN_IPC_TIMEOUT_MS;
+  if (cmd === 'login-action') return 45_000;
+  if (cmd === 'login-browsers') return 40_000;
   if (cmd === 'request-collect') return PLATFORM_COLLECT_IPC_TIMEOUT_MS;
   return undefined;
 }
@@ -1037,8 +1053,19 @@ async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<un
       };
     }
     case 'open-login': {
-      const payload = envelope.payload as { accountId: string; platform: PlatformLoginPlatform };
-      return openPlatformLogin(payload.accountId, payload.platform);
+      const payload = envelope.payload as { accountId: string; platform: PlatformLoginPlatform; browserFamily?: LoginBrowserFamily; operationId?: string };
+      if (platformIPC.isBusy('request-collect')) throw new PlatformBrowserError('platform_profile_busy', '正在读取平台数据，请稍后连接');
+      return platformLoginFlow.open(payload.accountId, payload.platform, payload.browserFamily, payload.operationId);
+    }
+    case 'login-action': {
+      const payload = envelope.payload as { operationId: string; action: LoginAction };
+      return platformLoginFlow.action(payload.operationId, payload.action);
+    }
+    case 'login-browsers': {
+      const payload = envelope.payload as { accountId: string; platform: string };
+      const auth = await desktopClient!.getAuthContext();
+      const stored = await readAccountProfile(app.getPath('userData'), { ...auth, ...payload, origin: businessOrigin });
+      return { fixedFamily: stored.meta?.browserFamily ?? null, candidates: (await trustedLoginBrowsers()).map((candidate) => ({ family: candidate.family, name: candidate.family === 'chrome' ? 'Google Chrome' : 'Microsoft Edge' })) };
     }
     case 'request-collect': {
       const payload = envelope.payload as { accountId: string };
@@ -1072,7 +1099,7 @@ const PLATFORM_CONSENT_VERSION = 1;
 // 本机登录的 IPC 超时：等待用户扫码最长 3 分钟（与 platform-login 的轮询上限一致），
 // 再加 30 秒余量给浏览器启动、身份解析与服务端建连接。
 // 不能用 5 秒的通用超时：那会在用户还没扫完码时就把命令判成失败。
-const PLATFORM_LOGIN_IPC_TIMEOUT_MS = 210_000;
+const PLATFORM_LOGIN_IPC_TIMEOUT_MS = 220_000;
 
 // 采集命令的 IPC 超时：claim + 心跳 + 页面取数 + 解析 + 提交终批，
 // 首次采集还要启动浏览器与导航，给 3 分钟。
@@ -1080,6 +1107,21 @@ const PLATFORM_COLLECT_IPC_TIMEOUT_MS = 180_000;
 
 // 同一时刻只允许一个登录会话：一个浏览器、一个 profile，避免双开争用同一目录。
 let activeLogin: { accountId: string; platform: PlatformLoginPlatform } | null = null;
+
+const platformLoginFlow = new PlatformLoginFlow({
+  async context() {
+    if (!desktopClient) throw new Error('客户端尚未初始化');
+    const { userId, workspaceId, deviceId } = await desktopClient.getAuthContext();
+    return { origin: businessOrigin, userId, workspaceId, deviceId };
+  },
+  async account(accountId, platform) {
+    const account = (await desktopClient!.listBusinessAccounts()).find((item) => item.id === accountId && item.platform === platform && item.status === 'active');
+    if (!account) throw new PlatformBrowserError('platform_account_unavailable', '目标账号不存在或已停用');
+    return account;
+  },
+  async start(scope, family, operationId) { return startPlatformLogin(desktopClient!, app.getPath('userData'), scope, family, operationId); },
+  async save(scope, identity, handle, recoverOnly, signal) { return savePlatformLogin(desktopClient!, app.getPath('userData'), scope, identity, handle, recoverOnly, signal); }
+});
 
 interface PlatformLoginOutcome {
   opened: true;
@@ -1092,6 +1134,8 @@ interface PlatformLoginOutcome {
 }
 
 async function openPlatformLogin(accountId: string, platform: PlatformLoginPlatform): Promise<PlatformLoginOutcome> {
+  // D-131：旧 PS13 单步实现保留作协作期间历史参考，正式 IPC 仅走 platformLoginFlow。
+  // 不再从 UI 调用，避免绕过本人身份确认；按用户要求不删除其他工作中的代码。
   if (!desktopClient) throw new Error('客户端设置尚未初始化。');
   if (activeLogin) {
     // 已有会话在跑：明确拒绝，不静默顶掉另一个正在扫码的窗口。
@@ -1197,6 +1241,15 @@ async function openPlatformLogin(accountId: string, platform: PlatformLoginPlatf
           externalAccountKey,
           capabilities
         });
+        // 写入"账号 slot"的 meta：采集时要靠它确认"这条 run 属于本机已登录的这个账号"。
+        const loginAuth = await desktopClient.getAuthContext();
+        await writeAccountProfileMeta({
+          auth: loginAuth,
+          accountId,
+          platform,
+          externalAccountKey,
+          connectionId: accountProfileSlot({ ...loginAuth, origin: businessOrigin, accountId, platform })
+        });
       }
       return {
         opened: true,
@@ -1232,18 +1285,25 @@ interface PlatformCollectOutcome {
   errorCode: string | null;
 }
 
-async function runPlatformCollect(accountId: string): Promise<PlatformCollectOutcome> {
+async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformClaimedRun): Promise<PlatformCollectOutcome> {
   if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-  if (activeLogin) {
+  if (activeLogin || platformLoginFlow.active) {
     throw new PlatformBrowserError('platform_profile_busy', '另一个平台登录正在进行，请先完成或关闭它');
   }
   const capability = await desktopClient.getPlatformCollectionCapability();
   const client = new PlatformClient(capability, async (operation, method, path, body) =>
     desktopClient!.platformSignedCall(operation, method, path, body));
 
-  // 先发一次 presence，让服务端知道本设备在线（调度按 presence 派任务）。
-  await client.presence();
-  const run = await client.claim();
+  // 后台循环已经领过任务时直接用，避免重复 claim 把刚领到的 run 丢掉。
+  let run = preClaimedRun ?? null;
+  if (run) {
+    // 本实例还没 claim 过，必须显式接管，否则 heartbeat/submit 会报"没有已领取的任务"。
+    client.adopt(run);
+  } else {
+    // 先发一次 presence，让服务端知道本设备在线（调度按 presence 派任务）。
+    await client.presence();
+    run = await client.claim();
+  }
   if (!run) {
     return {
       performed: true, runId: null, runStatus: 'no_task',
@@ -1266,8 +1326,34 @@ async function runPlatformCollect(accountId: string): Promise<PlatformCollectOut
   }
   const platform = run.platform as PlatformLoginPlatform;
 
-  const profileDir = await resolveCollectProfileDir(platform);
-  const candidate = await findPlatformBrowser();
+  const auth = await desktopClient.getAuthContext();
+  // 采集必须用**连接命名空间**目录，那里才是浏览器登录态真正落盘的地方。
+  // 账号 slot（accountProfileSlot 派生的哈希目录）只承载归属元数据，里面没有平台会话——
+  // 早期实现拿账号 slot 当 profileDir，浏览器一启动就跳 /login?redirectReason=401，
+  // 于是每条自动任务都被判 login_required。
+  const profileDir = connectionProfileDir(await app.getPath('userData'), {
+    userId: auth.userId,
+    platform,
+    connectionId: auth.connectionNamespaceId
+  });
+  const stored = await readAccountProfile(app.getPath('userData'), { ...auth, origin: businessOrigin, accountId: run.account_id, platform });
+  const metaAccountId = (stored.meta as { accountId?: string } | null)?.accountId ?? '';
+  const accountMatches = metaAccountId === '' || metaAccountId === run.account_id;
+  const platformMatches = stored.meta?.platform === platform;
+  // 诊断：只记布尔值与结构键名，不记路径与账号标识，便于定位"为什么判成未登录"。
+  console.error('[collect] profile-check', JSON.stringify({
+    hasMeta: stored.meta !== null,
+    accountMatches,
+    platformMatches,
+    metaHasAccountId: metaAccountId !== '',
+    metaPlatform: stored.meta?.platform ?? null,
+    runPlatform: platform
+  }));
+  if (!stored.meta || !accountMatches || !platformMatches) {
+    await client.submit({ final_batch: true, run_status: 'failed', stop_reason: 'login_required', error_code: 'platform_login_required', observations: [] });
+    return { performed: true, runId: run.id, runStatus: 'failed', accepted: 0, rejected: 0, stopReason: 'login_required', errorCode: 'platform_login_required' };
+  }
+  const candidate = selectLoginBrowser(await trustedLoginBrowsers(), stored.meta.browserFamily);
   const browser = await launchPlatformBrowser({ executablePath: candidate.executablePath, profileDir });
   const cdp = createCDPClient(browser, 20_000);
   const session = { platform, profileDir, browser, cdp };
@@ -1421,13 +1507,13 @@ interface PlatformClearOutcome {
 
 async function clearPlatformAccountData(accountId: string): Promise<PlatformClearOutcome> {
   if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-  if (activeLogin) {
+  if (activeLogin || platformLoginFlow.active || platformIPC.isBusy('request-collect')) {
     throw new PlatformBrowserError('platform_profile_busy', '平台登录正在进行，请先完成或关闭它');
   }
   const auth = await desktopClient.getAuthContext();
   // 找出该账号在本设备上的连接。用 mine.list 而不是本地猜 ID。
   const connections = await desktopClient.listPlatformConnections().catch(() => []);
-  const target = connections.find((c) => String(c.account_id ?? '').toLowerCase() === accountId.toLowerCase());
+  const target = connections.find((c) => String(c.account_id ?? '').toLowerCase() === accountId.toLowerCase() && c.state !== 'revoked');
   if (!target) {
     // 服务端已经没有该连接：本机可能还有残留目录，按平台清理一次。
     return { performed: true, revoked: false, removed: false, connectionId: null, errorCode: null };
@@ -1439,7 +1525,7 @@ async function clearPlatformAccountData(accountId: string): Promise<PlatformClea
   const removed = await removeConnectionNamespace(await app.getPath('userData'), {
     userId: auth.userId,
     platform,
-    connectionId: auth.connectionNamespaceId
+    connectionId: accountProfileSlot({ ...auth, origin: businessOrigin, workspaceId: String(target.workspace_id), accountId, platform })
   });
   console.error('[platform-clear]', JSON.stringify({ revoked: true, removed: removed.removed }));
   return { performed: true, revoked: true, removed: removed.removed, connectionId, errorCode: null };
@@ -1507,7 +1593,7 @@ interface OrphanClearOutcome {
 //  - 删不掉的（浏览器占用）如实计入 skipped，不重试、不强行删。
 async function clearOrphanProfiles(platform: PlatformLoginPlatform): Promise<OrphanClearOutcome> {
   if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-  if (activeLogin) {
+  if (activeLogin || platformLoginFlow.active || platformIPC.isBusy('request-collect')) {
     throw new PlatformBrowserError('platform_profile_busy', '平台登录正在进行，请先完成或关闭它');
   }
   const auth = await desktopClient.getAuthContext();
@@ -1536,6 +1622,156 @@ async function clearOrphanProfiles(platform: PlatformLoginPlatform): Promise<Orp
     skipped: orphans.length - removed,
     errorCode: null
   };
+}
+
+// ---------- presence 心跳（DEV-PS33 / 20 文档 §5.2、§10.1.1） ----------
+//
+// 规范要求：客户端在平台开关开启时**每 30 秒发送一次 presence，即使没有任务也要发**，
+// 否则空闲连接永远等不到新任务。
+//
+// 原来只在 request-collect 里发一次。服务端 presenceTTL 是 90 秒、调度每 10 分钟跑一次，
+// 因此调度时设备早已被判离线，**自动采集完全不可能触发**。这是自动采集的阻断点。
+//
+// 设计约束：
+//  - 只在能力可用（服务端开通平台采集）且本地已登录时发；失败静默、不弹窗、不重试成风暴。
+//  - 不发 presence 期间不阻塞任何其它功能；网络问题只记一次日志。
+//  - 停止时机：应用退出、平台开关关闭、未登录。
+
+const PLATFORM_PRESENCE_INTERVAL_MS = 30_000;
+
+let presenceTimer: NodeJS.Timeout | null = null;
+let presenceInFlight = false;
+let presenceLastError: string | null = null;
+
+// startPlatformPresence 启动心跳。重复调用是幂等的。
+function startPlatformPresence(): void {
+  if (presenceTimer) return;
+  const tick = async () => {
+    if (presenceInFlight || !desktopClient) return;
+    presenceInFlight = true;
+    try {
+      const capability = await desktopClient.getPlatformCollectionCapability();
+      if (!capability.enabled) {
+        // 服务端未开通平台采集：不发 presence，也把错误状态清掉。
+        presenceLastError = null;
+        return;
+      }
+      await desktopClient.presence();
+      if (presenceLastError) {
+        // 从失败恢复时记一条，便于排查"为什么之前一直离线"。
+        console.error('[platform-presence] 已恢复上报');
+        presenceLastError = null;
+      }
+    } catch (error) {
+      // 静默失败：不弹窗、不打断用户。只在首次或错误变化时记一条，避免日志被刷满。
+      const code = error instanceof PlatformBrowserError ? error.code : 'presence_failed';
+      if (presenceLastError !== code) {
+        presenceLastError = code;
+        console.error('[platform-presence] 上报失败', code, describeError(error));
+      }
+    } finally {
+      presenceInFlight = false;
+    }
+  };
+  // 立即发一次：不要等 30 秒，否则刚启动的客户端在调度眼里仍是离线。
+  void tick();
+  presenceTimer = setInterval(() => void tick(), PLATFORM_PRESENCE_INTERVAL_MS);
+  // 心跳不应阻止进程退出。
+  presenceTimer.unref?.();
+}
+
+// stopPlatformPresence 停止心跳（应用退出或平台开关关闭时）。
+function stopPlatformPresence(): void {
+  if (!presenceTimer) return;
+  clearInterval(presenceTimer);
+  presenceTimer = null;
+}
+
+// ---------- 后台任务循环（DEV-PS34 / 20 文档 §5.2、§10.1.1） ----------
+//
+// 光有 presence 心跳还不够：文档 §5.2 说"每 30 秒发 presence，否则空闲连接永远等不到新任务"，
+// 但 presence 只让服务端认为设备在线；任务要**客户端主动 claim** 才会被执行。
+// 原来 claim 只在用户点"开始采集"时调用一次，因此自动生成的任务会一直 queued 到超时。
+//
+// 这里的循环：每 30 秒尝试 claim 一次；领到就执行，没领到就等下一轮。
+// 约束：同一时刻只跑一个采集（浏览器与 profile 不能并发），已经在采时跳过本轮。
+
+const PLATFORM_CLAIM_INTERVAL_MS = 30_000;
+
+let claimTimer: NodeJS.Timeout | null = null;
+let collectInFlight = false;
+
+// startPlatformClaimLoop 启动后台领取循环。重复调用幂等。
+function startPlatformClaimLoop(): void {
+  if (claimTimer) return;
+  const tick = async () => {
+    if (collectInFlight || !desktopClient) return;
+    if (activeLogin || platformLoginFlow.active) return; // 登录中不抢 profile
+    collectInFlight = true;
+    try {
+      const capability = await desktopClient.getPlatformCollectionCapability();
+      if (!capability.enabled) return;
+      const client = new PlatformClient(capability, async (operation, method, path, body) =>
+        desktopClient!.platformSignedCall(operation, method, path, body));
+      const run = await client.claim();
+      if (!run) return; // 没有任务：正常情况，不记日志
+      console.error('[platform-auto] 领到任务', JSON.stringify({ platform: run.platform, taskKind: run.task_kind }));
+      const outcome = await runPlatformCollect(run.account_id, run);
+      console.error('[platform-auto] 完成', JSON.stringify({
+        runStatus: outcome.runStatus, accepted: outcome.accepted,
+        rejected: outcome.rejected, errorCode: outcome.errorCode
+      }));
+    } catch (error) {
+      // 不弹窗、不打断用户；错误会在 run 的终批里体现。
+      console.error('[platform-auto] 循环异常', describeError(error));
+    } finally {
+      collectInFlight = false;
+    }
+  };
+  claimTimer = setInterval(() => void tick(), PLATFORM_CLAIM_INTERVAL_MS);
+  claimTimer.unref?.();
+}
+
+function stopPlatformClaimLoop(): void {
+  if (!claimTimer) return;
+  clearInterval(claimTimer);
+  claimTimer = null;
+}
+
+// writeAccountProfileMeta 写"账号 slot"的 meta.json。
+//
+// 采集时必须靠它确认"这条 run 属于本机已登录的这个账号"。账号 slot 的目录名由
+// `accountProfileSlot()` 按 (origin,user,workspace,device,platform,account) 派生，
+// 与登录时的"连接命名空间"目录是**两套目录**：
+//   - 连接命名空间（connectionNamespaceId）：承载平台登录态，浏览器 profile 实际所在；
+//   - 账号 slot：只记归属元数据，供调度侧确认 run 与账号的对应关系。
+// 两个平台在登录成功后都必须写，否则自动采集一律被判 login_required。
+async function writeAccountProfileMeta(input: {
+  auth: { userId: string; workspaceId: string; deviceId: string };
+  accountId: string;
+  platform: PlatformLoginPlatform;
+  externalAccountKey: string;
+  connectionId: string;
+}): Promise<void> {
+  const userData = await app.getPath('userData');
+  const profileDir = connectionProfileDir(userData, {
+    userId: input.auth.userId,
+    platform: input.platform,
+    connectionId: input.connectionId
+  });
+  await fs.mkdir(path.dirname(profileDir), { recursive: true });
+  await fs.writeFile(profileMetaPath(profileDir), JSON.stringify(buildProfileMeta({
+    origin: businessOrigin,
+    userId: input.auth.userId,
+    workspaceId: input.auth.workspaceId,
+    deviceId: input.auth.deviceId,
+    platform: input.platform,
+    connectionId: input.connectionId,
+    externalAccountKey: input.externalAccountKey,
+    // 归属字段：采集侧 readAccountProfile 会校验这个 accountId。
+    accountId: input.accountId,
+    slotId: input.connectionId
+  })), { encoding: 'utf8', mode: 0o600 });
 }
 
 // WECHAT_IDENTITY_PATH 是公众号账号列表接口。它只在页面首次进后台时由页面自己发起，
@@ -1579,6 +1815,15 @@ async function finishWechatLogin(accountId: string, payload: unknown): Promise<P
       connectionId,
       externalAccountKey: identity.externalAccountKey,
       capabilities
+    });
+    // 与小红书一致：写账号 slot 的 meta，否则自动采集找不到归属会判 login_required。
+    const loginAuth = await desktopClient!.getAuthContext();
+    await writeAccountProfileMeta({
+      auth: loginAuth,
+      accountId,
+      platform: 'wechat_mp',
+      externalAccountKey: identity.externalAccountKey,
+      connectionId: accountProfileSlot({ ...loginAuth, origin: businessOrigin, accountId, platform: 'wechat_mp' })
     });
   }
   return {
@@ -1830,6 +2075,7 @@ function showSettingsWindow(): void {
   currentWindow.on('closed', () => {
     localWindows.delete(currentWindow.id);
     settingsWindow = null;
+    void platformLoginFlow.stop();
   });
 }
 
@@ -2108,6 +2354,7 @@ async function confirmApplicationQuit(parent: BrowserWindow | null): Promise<voi
       ? await dialog.showMessageBox(parent, options)
       : await dialog.showMessageBox(options);
     if (response !== 1) return;
+    await platformLoginFlow.stop();
     quitConfirmed = true;
     desktopClient?.disconnect();
     app.quit();

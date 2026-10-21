@@ -1624,6 +1624,19 @@ export class DesktopClient {
     );
   }
 
+  // presence 上报设备在线（20 文档 §5.2）：服务端 presenceTTL 90 秒，
+  // 客户端必须每 30 秒发一次，否则调度时设备被判离线、空闲连接永远等不到任务。
+  async presence(): Promise<void> {
+    const capability = await this.getPlatformCollectionCapability();
+    const endpoint = resolvePlatformEndpoint(capability, 'platform.presence');
+    const device = await this.ensurePlatformDevice();
+    const auth = await this.getAuthInfo();
+    await this.platformSignedRequest<unknown>(
+      auth, device, 'platform.presence', endpoint.method,
+      endpoint.path.slice(API_PREFIX.length), {}
+    );
+  }
+
   // listPlatformConnections 取本人持有的全部连接摘要（账户级只读，不要求工作区策略）。
   async listPlatformConnections(): Promise<Array<Record<string, unknown>>> {
     const capability = await this.getPlatformCollectionCapability();
