@@ -279,7 +279,7 @@ export function createPageResponseSource(session: PlatformLoginSession): {
     },
 
     // fetchSigned：签名接口不自己造签名，改为“让页面自己请求、我们监听响应”。
-    // 触发方式：先导航到 about:blank 再回到官方页面，强制页面重新加载并自然发起请求。
+    // 触发方式是导航到登记过的官方页面，让页面自身发起该请求。
     // 只导航到内置常量里的官方地址，不接受外部 URL。
     fetchSigned: async (path: string) => {
       const trigger = SIGNED_PATH_TRIGGERS[path.split('?')[0]];
@@ -290,8 +290,12 @@ export function createPageResponseSource(session: PlatformLoginSession): {
         throw new PlatformBrowserError('platform_network_unavailable', '触发页面不在允许的官方域名内');
       }
       return observe(trigger.observe, async () => {
-        // 先离开再回来：同一 URL 的 Page.navigate 不会重新发请求。
-        await session.cdp.request('Page.navigate', { url: 'about:blank' }, 10_000).catch(() => undefined);
+        // 先离开再回来，保证“同一 URL 的 Page.navigate”也能重新触发请求。
+        // 公众号的 switchacct 只在从根进入后台时发起，因此这里不能用 about:blank
+        // 打断（实测会捕获不到），改为直接导航到登记页面。
+        if (trigger.resetViaBlank) {
+          await session.cdp.request('Page.navigate', { url: 'about:blank' }, 10_000).catch(() => undefined);
+        }
         await session.cdp.request('Page.navigate', { url: trigger.url }, 30_000);
       });
     },
@@ -302,10 +306,19 @@ export function createPageResponseSource(session: PlatformLoginSession): {
 
 // SIGNED_PATH_TRIGGERS 登记“签名接口 → 会自然触发它的官方页面”。
 // 只登记已确认的页面，不猜路径；新增接口必须随适配器版本一起加。
-export const SIGNED_PATH_TRIGGERS: Readonly<Record<string, { url: string; observe: string }>> = Object.freeze({
+export const SIGNED_PATH_TRIGGERS: Readonly<Record<string, { url: string; observe: string; resetViaBlank?: boolean }>> = Object.freeze({
   '/api/galaxy/v2/creator/note/user/posted': {
     url: 'https://creator.xiaohongshu.com/new/note-manager',
-    observe: '/api/galaxy/v2/creator/note/user/posted'
+    observe: '/api/galaxy/v2/creator/note/user/posted',
+    // 小红书同一 URL 的 Page.navigate 不会重新发请求，需要先离开再回来。
+    resetViaBlank: true
+  },
+  // 公众号账号列表：`switchacct` 由页面自身在进入后台时发起，参数含时效性签名，
+  // 构造不出来（直接请求恒回 `{"ret":200009,"err_msg":"not found"}`，2026-10-21 实测）。
+  // 只能让页面自己发；从根进入后台即可触发，中间插 about:blank 反而捕获不到。
+  '/cgi-bin/switchacct': {
+    url: 'https://mp.weixin.qq.com/',
+    observe: '/cgi-bin/switchacct'
   }
 });
 
@@ -352,7 +365,10 @@ export async function attachLoginPage(session: PlatformLoginSession): Promise<st
 
 // openLoginPage 打开官方后台并等首屏加载完成。
 // 导航目标必须同时通过 §13.1 的允许域名校验，否则拒绝启动。
-export async function openLoginPage(session: PlatformLoginSession): Promise<{ url: string; title: string }> {
+export async function openLoginPage(
+  session: PlatformLoginSession,
+  options: { captureBeforeNavigate?: ReadonlyArray<string>; captureTimeoutMs?: number } = {}
+): Promise<{ url: string; title: string; captured: Map<string, unknown> }> {
   const target = PLATFORM_LOGIN_URLS[session.platform];
   if (!isAllowedPlatformUrl(target, session.platform)) {
     throw new PlatformBrowserError('platform_network_unavailable', '登录页不在允许的官方域名内');
@@ -360,6 +376,20 @@ export async function openLoginPage(session: PlatformLoginSession): Promise<{ ur
   // 必须先连到具体页面：Browser 级会话没有 Page/Runtime 域。
   await attachLoginPage(session);
   await session.cdp.request('Page.enable');
+  // 有些接口只在“页面首次进入后台”时由页面自己发起（公众号 switchacct），
+  // 之后再导航不会重发。因此调用方要求捕获时，必须在导航**之前**就注册监听。
+  const captured = new Map<string, unknown>();
+  const pending: Array<{ prefix: string; done: Promise<void> }> = [];
+  for (const prefix of options.captureBeforeNavigate ?? []) {
+    assertReadOnlyPath(prefix);
+    const collected = session.cdp.collectResponses(prefix, options.captureTimeoutMs ?? 25_000);
+    pending.push({
+      prefix,
+      done: collected.then((body) => {
+        if (body !== null) captured.set(prefix, body);
+      }).catch(() => undefined)
+    });
+  }
   await session.cdp.request('Page.navigate', { url: target }, 30_000);
   // 等页面自身完成首屏：document.readyState 到 complete 即可开始探测身份。
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -371,6 +401,13 @@ export async function openLoginPage(session: PlatformLoginSession): Promise<{ ur
     if (value === 'complete') break;
     await delay(500);
   }
+  // 等预置监听收口：给页面一点时间把首次请求发完（有上限，不无限等）。
+  if (pending.length > 0) {
+    await Promise.race([
+      Promise.all(pending.map((p) => p.done)),
+      delay(options.captureTimeoutMs ?? 25_000)
+    ]);
+  }
   const info = await session.cdp.request('Runtime.evaluate', {
     expression: 'JSON.stringify({ url: location.href, title: document.title })',
     returnByValue: true
@@ -381,13 +418,14 @@ export async function openLoginPage(session: PlatformLoginSession): Promise<{ ur
       const parsed = JSON.parse(raw) as { url?: unknown; title?: unknown };
       return {
         url: typeof parsed.url === 'string' ? parsed.url : target,
-        title: typeof parsed.title === 'string' ? parsed.title : ''
+        title: typeof parsed.title === 'string' ? parsed.title : '',
+        captured
       };
     } catch {
       // 落到下面的默认值。
     }
   }
-  return { url: target, title: '' };
+  return { url: target, title: '', captured };
 }
 
 // probeIdentity 在页面内执行固定只读脚本，读回身份原文。

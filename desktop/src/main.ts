@@ -41,12 +41,14 @@ import {
   createPageResponseSource,
   openLoginPage,
   waitForLogin,
+  PLATFORM_LOGIN_POLL_MS,
+  PLATFORM_LOGIN_TIMEOUT_MS,
   type PlatformLoginPlatform,
   type PlatformLoginSession
 } from './platform-login';
 import { connectionProfileDir, buildProfileMeta, profileMetaPath } from './platform-profile';
 import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation } from './platforms/xhs';
-import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities } from './platforms/wechat-mp';
+import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation } from './platforms/wechat-mp';
 import { PlatformClient, type PlatformObservationDraft } from './platform-client';
 import { parseDesktopUiIntent, type DesktopUiIntent } from './ui-intents';
 import {
@@ -1115,7 +1117,25 @@ async function openPlatformLogin(accountId: string, platform: PlatformLoginPlatf
     const cdp = createCDPClient(browser, 20_000);
     session = { platform, profileDir, browser, cdp };
     try {
-      await openLoginPage(session);
+      // 公众号的账号列表只在页面首次进入后台时由页面自己发起（switchacct），
+      // 之后再导航不会重发，构造请求也恒回 not found。因此必须在导航前就注册监听。
+      // 新 profile 会先停在扫码页：此时监听仍在，用户扫码进后台后才会捕获到。
+      const page = await openLoginPage(session, platform === 'wechat_mp'
+        ? { captureBeforeNavigate: [WECHAT_IDENTITY_PATH], captureTimeoutMs: 20_000 }
+        : {});
+      // 公众号身份优先用导航期间捕获的 switchacct 响应，而不是页面内重新拼请求。
+      if (platform === 'wechat_mp') {
+        let capturedIdentity = page.captured.get(WECHAT_IDENTITY_PATH);
+        // 还没捕获到说明停在扫码页：继续等用户扫码，监听在后台仍有效。
+        if (capturedIdentity === undefined) {
+          capturedIdentity = await waitForWechatIdentity(session);
+        }
+        if (capturedIdentity !== undefined) {
+          return finishWechatLogin(accountId, capturedIdentity);
+        }
+        // 仍然没有：明确说明原因，不退回“只有 token 没有身份”的半可信状态。
+        throw new PlatformBrowserError('platform_identity_mismatch', '没有取到公众号账号身份，请重新登录后再试');
+      }
       const outcome = await waitForLogin(session);
       if (!outcome.loggedIn || !outcome.payload) {
         return {
@@ -1222,31 +1242,32 @@ async function runPlatformCollect(accountId: string): Promise<PlatformCollectOut
       accepted: 0, rejected: 0, stopReason: null, errorCode: null
     };
   }
-  if (run.platform !== 'xhs') {
-    // 公众号适配器尚未接入真实网络读取，明确报不支持，不伪装成功。
+  if (run.platform !== 'xhs' && run.platform !== 'wechat_mp') {
+    // 两个平台之外的任务一律拒绝，不猜测平台。
     await client.submit({
       final_batch: true,
       run_status: 'failed',
-      stop_reason: 'adapter_not_wired',
+      stop_reason: 'platform_not_supported',
       error_code: 'platform_not_supported',
       observations: []
     });
     return {
       performed: true, runId: run.id, runStatus: 'failed',
-      accepted: 0, rejected: 0, stopReason: 'adapter_not_wired', errorCode: 'platform_not_supported'
+      accepted: 0, rejected: 0, stopReason: 'platform_not_supported', errorCode: 'platform_not_supported'
     };
   }
+  const platform = run.platform as PlatformLoginPlatform;
 
-  const profileDir = await resolveCollectProfileDir(run.platform);
+  const profileDir = await resolveCollectProfileDir(platform);
   const candidate = await findPlatformBrowser();
   const browser = await launchPlatformBrowser({ executablePath: candidate.executablePath, profileDir });
   const cdp = createCDPClient(browser, 20_000);
-  const session = { platform: run.platform as PlatformLoginPlatform, profileDir, browser, cdp };
+  const session = { platform, profileDir, browser, cdp };
   let accepted = 0;
   let rejected = 0;
   try {
     const page = await openLoginPage(session);
-    if (!page.url.includes('creator.xiaohongshu.com') || page.url.includes('/login')) {
+    if (!isLoggedInLanding(platform, page.url)) {
       // 会话失效：如实报告需要重新登录，不重试、不反复拉二维码。
       const receipt = await client.submit({
         final_batch: true,
@@ -1274,9 +1295,6 @@ async function runPlatformCollect(accountId: string): Promise<PlatformCollectOut
     }
 
     const source = createPageResponseSource(session);
-    // 笔记列表接口需要平台签名，直接 GET 会被回 406（2026-10-21 实测）。
-    // 适配器通过 source.fetchSigned 走“页面自发请求 + 响应监听”，不构造也不复制签名。
-    const discovery = await collectPostedNotes(source, { maxPages: 3 });
     // 观测必须带真实的外部账号键，否则服务端无法把作品归到正确连接。
     // 优先用 run 冻结的绑定快照，其次回读连接摘要。
     const externalAccountKey = await resolveRunAccountKey(run);
@@ -1290,44 +1308,76 @@ async function runPlatformCollect(accountId: string): Promise<PlatformCollectOut
     const drafts: PlatformObservationDraft[] = [];
     let rowNo = 0;
     let unmatched = 0;
-    for (const note of discovery.notes) {
-      const target = targets.get(note.noteId);
-      // 不提交快照之外的作品：§7.2 不允许把未绑定作品塞进采集结果。
-      if (!target) {
-        unmatched += 1;
-        continue;
+    let discovered = 0;
+    let coverage: Record<string, unknown>;
+    if (platform === 'xhs') {
+      // 笔记列表接口需要平台签名，直接 GET 会被回 406（2026-10-21 实测）。
+      // 适配器通过 source.fetchSigned 走“页面自发请求 + 响应监听”，不构造也不复制签名。
+      const discovery = await collectPostedNotes(source, { maxPages: 3 });
+      discovered = discovery.notes.length;
+      coverage = discovery.coverage;
+      for (const note of discovery.notes) {
+        const target = targets.get(note.noteId);
+        // 不提交快照之外的作品：§7.2 不允许把未绑定作品塞进采集结果。
+        if (!target) {
+          unmatched += 1;
+          continue;
+        }
+        const draft = noteToObservation(note, {
+          externalAccountKey,
+          observedAt,
+          bindingRevision: target.bindingRevision,
+          publishRevision: target.publishRevision
+        });
+        if (!draft) continue;
+        drafts.push({ ...draft, row_no: rowNo });
+        rowNo += 1;
       }
-      const draft = noteToObservation(note, {
-        externalAccountKey,
-        observedAt,
-        bindingRevision: target.bindingRevision,
-        publishRevision: target.publishRevision
-      });
-      if (!draft) continue;
-      drafts.push({ ...draft, row_no: rowNo });
-      rowNo += 1;
+    } else {
+      // 公众号发表记录：接口需要页面 URL 里的 token（适配器经响应源自动补），
+      // `publish_page` 是嵌套 JSON 字符串，适配器已二次解析。
+      const discovery = await collectPublishedArticles(source, { maxPages: 3 });
+      discovered = discovery.articles.length;
+      coverage = discovery.coverage as unknown as Record<string, unknown>;
+      for (const article of discovery.articles) {
+        const target = targets.get(article.externalID.toLowerCase());
+        if (!target) {
+          unmatched += 1;
+          continue;
+        }
+        const draft = articleToObservation(article, {
+          externalAccountKey,
+          observedAt,
+          bindingRevision: target.bindingRevision,
+          publishRevision: target.publishRevision
+        });
+        if (!draft) continue;
+        drafts.push({ ...draft, row_no: rowNo });
+        rowNo += 1;
+      }
     }
     console.error('[collect] discovery', JSON.stringify({
-      notes: discovery.notes.length,
-      published: discovery.notes.filter((n) => n.status === 'published').length,
+      platform,
+      discovered,
       targets: targets.size,
       unmatched,
       drafts: drafts.length,
-      coverage: discovery.coverage
+      coverage
     }));
+    const incomplete = typeof coverage.incomplete_reason === 'string' ? coverage.incomplete_reason : null;
     const receipt = await client.submit({
       final_batch: true,
-      run_status: discovery.coverage.incomplete_reason ? 'partial' : 'succeeded',
-      stop_reason: discovery.coverage.incomplete_reason,
+      run_status: incomplete ? 'partial' : 'succeeded',
+      stop_reason: incomplete,
       error_code: null,
-      coverage: discovery.coverage,
+      coverage,
       observations: drafts
     });
     accepted = receipt.accepted;
     rejected = receipt.rejected;
     return {
       performed: true, runId: run.id, runStatus: receipt.run_status,
-      accepted, rejected, stopReason: discovery.coverage.incomplete_reason, errorCode: null
+      accepted, rejected, stopReason: incomplete, errorCode: null
     };
   } catch (error) {
     const code = error instanceof PlatformBrowserError ? error.code : 'platform_network_unavailable';
@@ -1345,6 +1395,82 @@ async function runPlatformCollect(accountId: string): Promise<PlatformCollectOut
   } finally {
     await cdp.close();
   }
+}
+
+// WECHAT_IDENTITY_PATH 是公众号账号列表接口。它只在页面首次进后台时由页面自己发起，
+// 参数含时效性签名，构造请求恒回 `{"ret":200009}`（2026-10-21 实测），只能监听。
+const WECHAT_IDENTITY_PATH = '/cgi-bin/switchacct';
+
+// waitForWechatIdentity 等用户扫码进入后台，并在进入的瞬间捕获 switchacct。
+// switchacct 是页面自己发的，且有签名；只能靠“监听已注册 + 页面跳转”触发，
+// 因此这里循环：重新注册监听 → 导航到根 → 看是否捕获到。
+// 已经登录时会立刻触发；停在扫码页时会一直等，直到超时。
+async function waitForWechatIdentity(session: PlatformLoginSession): Promise<unknown> {
+  const deadline = Date.now() + PLATFORM_LOGIN_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const collected = session.cdp.collectResponses(WECHAT_IDENTITY_PATH, 12_000);
+    await session.cdp.request('Page.navigate', { url: 'https://mp.weixin.qq.com/' }, 30_000).catch(() => undefined);
+    const captured = await collected;
+    if (captured !== null) return captured;
+    // 没捕获到：可能还在扫码页，等一会儿再重试。
+    await new Promise<void>((resolve) => setTimeout(resolve, PLATFORM_LOGIN_POLL_MS));
+  }
+  return undefined;
+}
+
+// finishWechatLogin 用导航期间捕获的 switchacct 响应完成公众号连接建立。
+async function finishWechatLogin(accountId: string, payload: unknown): Promise<PlatformLoginOutcome> {
+  const identity = parseWechatIdentity(payload);
+  const capabilities = probeWechatCapabilities({
+    backendLoggedIn: true,
+    identity,
+    listReadable: true,
+    now: new Date().toISOString()
+  }) as unknown as Record<string, unknown>;
+  const created = await desktopClient!.createPlatformConnection({
+    accountId,
+    externalAccountKey: identity.externalAccountKey,
+    consentVersion: PLATFORM_CONSENT_VERSION
+  });
+  const connectionId = typeof created.id === 'string' ? created.id : null;
+  if (connectionId) {
+    await desktopClient!.verifyPlatformConnection({
+      connectionId,
+      externalAccountKey: identity.externalAccountKey,
+      capabilities
+    });
+  }
+  return {
+    opened: true,
+    connected: true,
+    externalAccountKey: identity.externalAccountKey,
+    connectionId,
+    displayName: identity.originalID || null,
+    timedOut: false,
+    attempts: 1
+  };
+}
+
+// isLoggedInLanding 判断导航落点是否仍处于已登录的官方后台。
+// 两个平台的登录页形态不同：小红书会跳到 `/login`，公众号会停在扫码页或 `cgi-bin/loginpage`。
+// 只按域名与已知登录页后缀判断，不做内容嗅探。
+function isLoggedInLanding(platform: PlatformLoginPlatform, landedUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(landedUrl);
+  } catch {
+    return false;
+  }
+  if (platform === 'xhs') {
+    if (parsed.hostname !== 'creator.xiaohongshu.com') return false;
+    return !parsed.pathname.startsWith('/login');
+  }
+  if (parsed.hostname !== 'mp.weixin.qq.com') return false;
+  // 公众号未登录会落在 /cgi-bin/loginpage 或带 action=scanlogin 的地址。
+  if (parsed.pathname.startsWith('/cgi-bin/loginpage')) return false;
+  const action = parsed.searchParams.get('action') ?? '';
+  if (action.includes('scanlogin')) return false;
+  return true;
 }
 
 // parseRunTargets 从 run 冻结的 binding_snapshot 里取出每篇作品的绑定与发布修订。
