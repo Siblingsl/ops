@@ -23,6 +23,13 @@ import (
 // 用于验证"默认值"本身。既有 seedObservation 会显式传 valid，测不到默认行为。
 func seedPendingObservation(t *testing.T, f *platformRunFixture, externalID, source string, values map[string]any) uuid.UUID {
 	t.Helper()
+	// 取"作品发布日之后"的时刻：day_offset 必须 >= 0，否则节点无效、supersede 分支不执行。
+	pub := env.srv.today().AddDate(0, 0, -1).Add(20 * time.Hour)
+	return seedPendingObservationAt(t, f, externalID, source, values, pub.Add(2*time.Hour))
+}
+
+func seedPendingObservationAt(t *testing.T, f *platformRunFixture, externalID, source string, values map[string]any, at time.Time) uuid.UUID {
+	t.Helper()
 	raw := map[string]json.RawMessage{}
 	paths := map[string]string{}
 	for key, value := range values {
@@ -33,7 +40,7 @@ func seedPendingObservation(t *testing.T, f *platformRunFixture, externalID, sou
 		raw[key] = b
 		paths[key] = "fixture." + key
 	}
-	asOf := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	asOf := at
 	in := platformObservationInput{
 		WorkspaceID: f.Workspace, AccountID: f.Account.ID, ExternalAccountKey: f.externalKey(),
 		ExternalID: &externalID, Scope: observationScopeWork, Source: source,
@@ -145,5 +152,90 @@ func TestRejectedObservationCannotBeConfirmed(t *testing.T) {
 	}
 	if _, err := env.srv.confirmObservation(metricTestCtx(f), obsID); err == nil {
 		t.Fatal("已被拒绝的观测不应允许确认")
+	}
+}
+
+// TestConfirmingObservationSupersedesSiblings 确认一条观测后，
+// 同作品同节点的其它「待确认」观测应标 superseded（§8.3）。
+//
+// 缺陷背景：`markObservationSuperseded` 早已实现但从未被调用，
+// 实测同一作品 3 条观测全部确认后都是 `valid`，没有一条 `superseded`——
+// 用户无法分辨哪条被采用，再确认旧的就会把过时读数写回正式指标。
+func TestConfirmingObservationSupersedesSiblings(t *testing.T) {
+	f := newPlatformRunFixture(t, "wechat_mp", "wechat_biz:fixture_super_"+uuid.New().String()[:8])
+	f.bindWork(t, "同节点互斥", "2247480020_1")
+
+	// 两条同作品同节点、同一 as_of_at 的待确认观测（模拟重复采集）。
+	older := seedPendingObservation(t, f, "2247480020_1", "wechat_browser", map[string]any{
+		"like_count": map[string]any{"value": 1, "precision": "exact", "unit": "count"},
+	})
+	newer := seedPendingObservation(t, f, "2247480020_1", "wechat_browser", map[string]any{
+		"like_count": map[string]any{"value": 2, "precision": "exact", "unit": "count"},
+	})
+	if older == newer {
+		t.Fatal("前置条件：应为两条不同观测（内容不同则 hash 不同）")
+	}
+
+	// 确认后到的那条。
+	if _, err := env.srv.confirmObservation(metricTestCtx(f), newer); err != nil {
+		t.Fatal(err)
+	}
+
+	var olderState, newerState string
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT quality_state FROM platform_metric_observation WHERE id=$1`, older).Scan(&olderState); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT quality_state FROM platform_metric_observation WHERE id=$1`, newer).Scan(&newerState); err != nil {
+		t.Fatal(err)
+	}
+	if newerState != observationQualityValid {
+		t.Fatalf("被确认的观测应为 valid，实际 %s", newerState)
+	}
+	if olderState != observationQualitySuperseded {
+		t.Fatalf("同节点未确认的旧观测应标 superseded，实际 %s", olderState)
+	}
+
+	// 被替代的旧观测不能再确认——否则会把过时读数写回去。
+	if _, err := env.srv.confirmObservation(metricTestCtx(f), older); err == nil {
+		t.Fatal("已被 superseded 的观测不应允许确认")
+	}
+}
+
+// TestConfirmDoesNotTouchOtherNodesOrWorks 只影响同作品同节点，不波及相邻数据。
+func TestConfirmDoesNotTouchOtherNodesOrWorks(t *testing.T) {
+	f := newPlatformRunFixture(t, "wechat_mp", "wechat_biz:fixture_scope_"+uuid.New().String()[:8])
+	f.bindWork(t, "范围隔离 A", "2247480021_1")
+	f.bindWork(t, "范围隔离 B", "2247480022_1")
+
+	target := seedPendingObservation(t, f, "2247480021_1", "wechat_browser", map[string]any{
+		"like_count": map[string]any{"value": 3, "precision": "exact", "unit": "count"},
+	})
+	siblingSameNode := seedPendingObservation(t, f, "2247480021_1", "wechat_browser", map[string]any{
+		"like_count": map[string]any{"value": 4, "precision": "exact", "unit": "count"},
+	})
+	// 另一篇作品：绝不能被标记。
+	otherWork := seedPendingObservation(t, f, "2247480022_1", "wechat_browser", map[string]any{
+		"like_count": map[string]any{"value": 5, "precision": "exact", "unit": "count"},
+	})
+
+	if _, err := env.srv.confirmObservation(metricTestCtx(f), target); err != nil {
+		t.Fatal(err)
+	}
+
+	stateOf := func(id uuid.UUID) string {
+		var s string
+		if err := env.srv.db.QueryRow(context.Background(),
+			`SELECT quality_state FROM platform_metric_observation WHERE id=$1`, id).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if got := stateOf(siblingSameNode); got != observationQualitySuperseded {
+		t.Fatalf("同节点兄弟观测应 superseded，实际 %s", got)
+	}
+	if got := stateOf(otherWork); got != observationQualityNeedsConfirm {
+		t.Fatalf("另一篇作品的观测不应被动，实际 %s", got)
 	}
 }

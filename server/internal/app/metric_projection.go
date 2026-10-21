@@ -489,6 +489,29 @@ func (s *Server) confirmObservation(ctx context.Context, observationID uuid.UUID
 			SET quality_state=$2, match_state='bound' WHERE id=$1`, observationID, observationQualityValid); err != nil {
 			return err
 		}
+		// 同作品同节点的其它「待确认」观测被本次确认淘汰，标 superseded（§8.3、§4.3）。
+		// 不标的话：同一节点会同时存在多条 valid，用户无法分辨哪条被采用，
+		// 再确认旧的就会把过时读数写回正式指标。
+		//
+		// "同节点"必须按 day_offset（发布后天数）判定，不能用 as_of_at——后者只是
+		// 采集时刻，每次采集都不同（实测三条观测的 as_of_at 各不相同，按它匹配一条都命中不了）。
+		// 观测表没有 day_offset 列，因此按同一口径现算：as_of_at 相对作品发布日的天数。
+		// 只动 `needs_confirmation` 的，不碰已确认的历史观测。
+		if proj.DayOffset != nil {
+			if _, err := tx.Exec(ctx, `UPDATE platform_metric_observation o
+				SET quality_state=$4
+				FROM work w
+				WHERE w.id=$7 AND w.published_at IS NOT NULL
+				  AND o.account_id=$1 AND o.scope='work' AND coalesce(o.external_id,'')=$2
+				  AND o.id <> $5 AND o.quality_state=$6
+				  AND o.as_of_at IS NOT NULL
+				  AND (o.as_of_at AT TIME ZONE 'Asia/Shanghai')::date
+				      - (w.published_at AT TIME ZONE 'Asia/Shanghai')::date = $3`,
+				obs.AccountID, derefString(obs.ExternalID), *proj.DayOffset, observationQualitySuperseded,
+				observationID, observationQualityNeedsConfirm, workID); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(ctx, `UPDATE metric_snapshot SET observation_id=$2 WHERE id=$1`,
 			m.ID, observationID); err != nil {
 			return err
