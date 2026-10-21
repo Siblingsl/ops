@@ -973,14 +973,40 @@ async function runPlatformCommand(raw: unknown): Promise<{ ok: true; data?: unkn
     validatePayloadShape(envelope.cmd, envelope.payload);
     platformIPC.begin(envelope.cmd);
     try {
-      const data = await withTimeout(executePlatformCommand(envelope));
+      // 超时按命令区分：`open-login` 要等用户本人扫码，最长 3 分钟，
+      // 用 5 秒的通用超时会在扫码完成前就把命令判死（实测必然复现）。
+      // 其它命令仍是 5 秒，保持“本机操作不能挂住页面”的约束。
+      const data = await withTimeout(
+        executePlatformCommand(envelope),
+        envelope.cmd === 'open-login' ? PLATFORM_LOGIN_IPC_TIMEOUT_MS : undefined
+      );
       return { ok: true, data };
     } finally {
       platformIPC.end(envelope.cmd);
     }
   } catch (error) {
+    // 诊断：把真实异常打到主进程日志，便于定位被 toIPCError 压掉的失败原因。
+    // 只记录错误码与首行消息，不记录路径、堆栈或平台响应内容。
+    console.error('[platform-command]', envelopeCmdOf(raw), describeError(error));
     return { ok: false, error: toIPCError(error) };
   }
+}
+
+function envelopeCmdOf(raw: unknown): string {
+  try {
+    const v = raw as { cmd?: unknown } | null;
+    return typeof v?.cmd === 'string' ? v.cmd : '(unknown)';
+  } catch {
+    return '(unknown)';
+  }
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    const code = (error as { code?: unknown }).code;
+    return `${typeof code === 'string' ? code : error.name}: ${error.message.split('\n')[0].slice(0, 200)}`;
+  }
+  return String(error).slice(0, 200);
 }
 
 async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<unknown> {
@@ -1019,6 +1045,11 @@ async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<un
 
 // 同意说明版本：内容变更时递增，服务端据此要求重新确认（§4.1 步骤 3）。
 const PLATFORM_CONSENT_VERSION = 1;
+
+// 本机登录的 IPC 超时：等待用户扫码最长 3 分钟（与 platform-login 的轮询上限一致），
+// 再加 30 秒余量给浏览器启动、身份解析与服务端建连接。
+// 不能用 5 秒的通用超时：那会在用户还没扫完码时就把命令判成失败。
+const PLATFORM_LOGIN_IPC_TIMEOUT_MS = 210_000;
 
 // 同一时刻只允许一个登录会话：一个浏览器、一个 profile，避免双开争用同一目录。
 let activeLogin: { accountId: string; platform: PlatformLoginPlatform } | null = null;

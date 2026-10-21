@@ -8,6 +8,8 @@ export const PLATFORM_REGISTER_PURPOSE = 'platform_collection';
 export const PLATFORM_OPERATION_PATHS: Readonly<Record<string, { method: string; path: string }>> = Object.freeze({
   'platform.device.register': { method: 'POST', path: '/api/v1/desktop/platform/devices' },
   'platform.connection.create': { method: 'POST', path: '/api/v1/desktop/platform/connections' },
+  // 验证连接：登录读到身份后必须调用，否则连接会停在 verifying（§4.1 步骤 5）。
+  'platform.connection.verify': { method: 'POST', path: '/api/v1/desktop/platform/connections/{id}/verify' },
   'platform.connection.mine.list': { method: 'GET', path: '/api/v1/desktop/platform/connections/mine' },
   'platform.presence': { method: 'POST', path: '/api/v1/desktop/platform/presence' },
   'platform.run.claim': { method: 'POST', path: '/api/v1/desktop/platform/runs/claim' }

@@ -68,6 +68,21 @@ test('只发起客户端内置且服务端公布过的操作', () => {
     method: 'POST',
     path: '/api/v1/desktop/platform/devices'
   });
+  // 建连接与验证连接必须都在内置白名单里：
+  // 缺 create 无法建立连接；缺 verify 会让连接永远停在 verifying（§4.1 步骤 5）。
+  const full = { ...parsed, operations: [
+    'platform.device.register',
+    'platform.connection.create',
+    'platform.connection.verify',
+    'platform.connection.mine.list',
+    'platform.presence',
+    'platform.run.claim'
+  ] };
+  assert.equal(resolvePlatformEndpoint(full, 'platform.connection.create').path,
+    '/api/v1/desktop/platform/connections');
+  assert.equal(resolvePlatformEndpoint(full, 'platform.connection.verify').path,
+    '/api/v1/desktop/platform/connections/{id}/verify');
+  assert.equal(resolvePlatformEndpoint(full, 'platform.connection.verify').method, 'POST');
   // 服务端公布但客户端未内置：拒绝，避免服务端扩大客户端可发起的请求范围。
   assert.throws(
     () => resolvePlatformEndpoint({ ...parsed, operations: [...parsed.operations, 'platform.admin.reset'] },
