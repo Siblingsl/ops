@@ -95,11 +95,23 @@ func (s *Server) generateBriefForDay(ctx context.Context, accountID uuid.UUID, d
 	var published int
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL AND published_at >= $2 AND published_at < $3`,
 		a.ID, today.AddDate(0, 0, -1), today).Scan(&published)
-	var reads int
+	var reads *int
 	// 走统一入口 metric_node_d7_public（§8.4）：保留 d7 兜底语义与 approved 过滤。
-	_ = s.db.QueryRow(ctx, `SELECT coalesce(sum(d.reads),0) FROM work w
-		JOIN LATERAL metric_node_d7_public(w.id) d ON true
-		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.published_at >= $2 AND w.published_at < $3`, a.ID, today.AddDate(0, 0, -7), end).Scan(&reads)
+	//
+	// 求和必须按 `read_unit` 分组（§8.4："单位未知不得与已知值相加/平均"）：
+	// `unknown` 一律不参与（口径未确认，加进去就是拿错数当真数）；
+	// 已知单位若不止一种（times 与 users 混在一起），整个和返回 NULL，
+	// 由上层展示"口径不可比"，而不是给一个混合出来的假总量。
+	_ = s.db.QueryRow(ctx, `WITH v AS (
+			SELECT d.reads, coalesce(d.read_unit,'unknown') AS unit
+			FROM work w JOIN LATERAL metric_node_d7_public(w.id) d ON true
+			WHERE w.account_id=$1 AND w.deleted_at IS NULL
+			  AND w.published_at >= $2 AND w.published_at < $3
+			  AND d.reads IS NOT NULL AND coalesce(d.read_unit,'unknown') <> 'unknown'
+		)
+		SELECT CASE WHEN count(DISTINCT unit) > 1 THEN NULL
+		            ELSE coalesce(sum(reads),0) END
+		FROM v`, a.ID, today.AddDate(0, 0, -7), end).Scan(&reads)
 	var adopted int
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM topic t WHERE t.account_id=$1 AND t.status='adopted' AND t.deleted_at IS NULL
 		AND NOT EXISTS (SELECT 1 FROM work w WHERE w.topic_id=t.id AND w.deleted_at IS NULL)`, a.ID).Scan(&adopted)
@@ -126,8 +138,13 @@ func (s *Server) generateBriefForDay(ctx context.Context, accountID uuid.UUID, d
 		return nil // 没有可说的内容，不生成也不编造。
 	}
 
-	data := fmt.Sprintf("昨日发布：%d\n近 7 天发布作品的阅读合计：%d\n今日推荐 %d 条：%s\n待采用未开写的选题：%d\n待回填数据的已发布作品：%d",
-		published, reads, len(recTitles), strings.Join(recTitles, "、"), adopted, pendingMetrics)
+	// 单位不一致时为 nil：明确写成"口径不可比"，不编造一个混合出来的总量。
+	readsText := "口径不一致，暂不合计"
+	if reads != nil {
+		readsText = fmt.Sprintf("%d", *reads)
+	}
+	data := fmt.Sprintf("昨日发布：%d\n近 7 天发布作品的阅读合计：%s\n今日推荐 %d 条：%s\n待采用未开写的选题：%d\n待回填数据的已发布作品：%d",
+		published, readsText, len(recTitles), strings.Join(recTitles, "、"), adopted, pendingMetrics)
 	user := "## 今日数据\n" + data + `
 ## 任务说明
 用 3–5 条短句告诉作者今天值得关注什么：把上面的数字翻译成具体行动（先写哪条、先回填哪些数据、今天优先做什么）。每条不超过 60 字，所有数字只能来自上面的数据，没有依据的事不要说。

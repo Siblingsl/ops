@@ -751,10 +751,19 @@ func (s *Server) workTagSuggest(w http.ResponseWriter, r *http.Request) error {
 		Source string `json:"source"`
 	}
 	history := []tagSug{}
-	rows, err := s.db.Query(ctx, `SELECT t, count(*), coalesce(avg(mx.reads),0)::int FROM work w, unnest(w.topics) t
-		LEFT JOIN LATERAL (SELECT reads FROM metric_node_d7_public(w.id)) mx ON true
-		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.id <> $2
-		AND ($3<>'toutiao' OR w.content_format=$4) GROUP BY t ORDER BY 3 DESC, 2 DESC LIMIT 10`, m.Account.ID, m.ID, m.Account.Platform, m.ContentFormat)
+	// avg(reads) 按 read_unit 分组（§8.4）：unknown 不参与，已知单位不一致则该项为 NULL，
+	// 用 coalesce 落成 0 只用于排序（不把 0 当真实平均值展示）。
+	rows, err := s.db.Query(ctx, `WITH base AS (
+			SELECT t, mx.reads, coalesce(mx.read_unit,'unknown') AS unit
+			FROM work w, unnest(w.topics) t
+			LEFT JOIN LATERAL (SELECT reads, read_unit FROM metric_node_d7_public(w.id)) mx ON true
+			WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.id <> $2
+			  AND ($3<>'toutiao' OR w.content_format=$4)
+		)
+		SELECT t, count(*),
+		       coalesce(CASE WHEN count(DISTINCT unit) FILTER (WHERE reads IS NOT NULL AND unit <> 'unknown') > 1 THEN NULL
+		                     ELSE avg(reads) FILTER (WHERE unit <> 'unknown') END, 0)::int
+		FROM base GROUP BY t ORDER BY 3 DESC, 2 DESC LIMIT 10`, m.Account.ID, m.ID, m.Account.Platform, m.ContentFormat)
 	if err != nil {
 		return err
 	}
