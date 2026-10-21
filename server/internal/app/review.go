@@ -350,8 +350,21 @@ func (s *Server) updateMetric(w http.ResponseWriter, r *http.Request) error {
 			}
 			return s.auditMetricMutation(r.Context(), tx, "metric_update", &before, &x, false)
 		}
-		x, err = scanMetric(tx.QueryRow(r.Context(), `UPDATE metric_snapshot SET captured_at=coalesce($2, captured_at), reads=$3, impressions=$4, likes=$5, wows=$6, favorites=$7,
-			comments=$8, shares=$9, follows_gained=$10, note=$11 WHERE id=$1 RETURNING `+metricCols,
+		// 字段用 `coalesce` 保留原值：PATCH 只改传入的字段（与 `upsertMetric` 一致）。
+		//
+		// 早期这里是直接赋值 `reads=$3, likes=$5...`，未传的字段会被写成 NULL——
+		// 用户只想改阅读数，结果点赞/评论/分享被一起清空。实测把 reads 从 500 改成 999，
+		// likes=50、comments=10、shares=5 全部丢失，而且返回 200，用户不会察觉。
+		//
+		// `note` 例外：它用空串表示"清空备注"，这是有意的用户动作，
+		// 不能因为"没传"就悄悄保留旧备注。
+		x, err = scanMetric(tx.QueryRow(r.Context(), `UPDATE metric_snapshot SET
+			captured_at=coalesce($2, captured_at),
+			reads=coalesce($3, reads), impressions=coalesce($4, impressions), likes=coalesce($5, likes),
+			wows=coalesce($6, wows), favorites=coalesce($7, favorites), comments=coalesce($8, comments),
+			shares=coalesce($9, shares), follows_gained=coalesce($10, follows_gained),
+			note=CASE WHEN $11<>'' THEN $11 ELSE note END
+			WHERE id=$1 RETURNING `+metricCols,
 			id, in.CapturedAt, in.Reads, in.Impressions, in.Likes, in.Wows, in.Favorites, in.Comments, in.Shares, in.FollowsGained, strings.TrimSpace(in.Note)))
 		if isUniqueViolation(err) {
 			return validation("这篇作品在该发布天数已经有一条同来源的数据，请直接编辑那一条")

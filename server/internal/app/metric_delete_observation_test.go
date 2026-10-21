@@ -169,3 +169,56 @@ func TestDeleteManualMetricLeavesObservations(t *testing.T) {
 
 var _ = json.Marshal
 var _ = bytes.NewReader
+
+// TestPartialEditKeepsOtherFields PATCH 只改传入的字段，未传的必须保留原值。
+//
+// 缺陷背景：更新 SQL 早期是直接赋值（`reads=$3, likes=$5...`），
+// 未传字段被写成 NULL。实测把 reads 从 500 改成 999 后，
+// likes=50、comments=10、shares=5 全部丢失，接口还返回 200——
+// 用户完全不会察觉自己的数据被清空了。
+//
+// 与 `upsertMetric` 的 `coalesce` 语义对齐后修复。
+func TestPartialEditKeepsOtherFields(t *testing.T) {
+	f := newPlatformRunFixture(t, "wechat_mp", "wechat_biz:fixture_patch_"+uuid.New().String()[:8])
+	pub := env.srv.today().AddDate(0, 0, -8)
+	wk := drWork(t, f.Account, "局部编辑保留其它字段", "published", &pub)
+	if _, err := env.srv.db.Exec(context.Background(),
+		`UPDATE work SET wechat_msgid=$2, platform_binding_source='user_link' WHERE id=$1`,
+		wk.ID, "2247480070_1"); err != nil {
+		t.Fatal(err)
+	}
+	var metricID uuid.UUID
+	if err := env.srv.db.QueryRow(context.Background(), `INSERT INTO metric_snapshot
+		(work_id, day_offset, reads, likes, comments, shares, captured_at, source, quality_state, read_unit, share_unit)
+		VALUES ($1,7,500,50,10,5,now(),'manual','approved','times','times') RETURNING id`,
+		wk.ID).Scan(&metricID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM metric_snapshot WHERE work_id=$1`, wk.ID)
+	})
+
+	// 只传 reads。
+	status, resp := patchMetric(t, f, metricID, map[string]any{"reads": 999, "base_revision": 1})
+	if status != http.StatusOK {
+		t.Fatalf("编辑应成功：%d %s", status, resp)
+	}
+	var reads, likes, comments, shares *int
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT reads, likes, comments, shares FROM metric_snapshot WHERE id=$1`, metricID).
+		Scan(&reads, &likes, &comments, &shares); err != nil {
+		t.Fatal(err)
+	}
+	if reads == nil || *reads != 999 {
+		t.Fatalf("reads 应改为 999，实际 %v", reads)
+	}
+	if likes == nil || *likes != 50 {
+		t.Fatalf("未传的 likes 必须保留 50，实际 %v", likes)
+	}
+	if comments == nil || *comments != 10 {
+		t.Fatalf("未传的 comments 必须保留 10，实际 %v", comments)
+	}
+	if shares == nil || *shares != 5 {
+		t.Fatalf("未传的 shares 必须保留 5，实际 %v", shares)
+	}
+}
