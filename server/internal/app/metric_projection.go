@@ -425,12 +425,35 @@ func (s *Server) metricNodePublic(ctx context.Context, workID uuid.UUID, node *i
 // 逐条确认当前观测，重新校验归属与版本后投影，不联动其他行（§9.3、§11.2）。
 func (s *Server) confirmObservation(ctx context.Context, observationID uuid.UUID) (Metric, error) {
 	id := ident(ctx)
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		return s.confirmObservationTx(ctx, tx, observationID, id.WorkspaceID)
+	})
+	if err != nil {
+		return Metric{}, err
+	}
+	var m Metric
+	if err := s.db.QueryRow(ctx, `SELECT `+metricCols+` FROM metric_snapshot WHERE observation_id=$1`,
+		observationID).Scan(metricDest(&m)...); err != nil {
+		return Metric{}, err
+	}
+	m.CTR, m.CTRUnavailable = metricCTR(&m)
+	return m, nil
+}
+
+// confirmObservationTx 是"确认一条观测并投影为正式指标"的核心，**在调用方的事务内执行**。
+//
+// 抽出来的原因：`auto_adopt` 开启时，入站路径要在**自己的批次事务里**完成同样的投影。
+// 若让入站直接调 `confirmObservation`，那会开启嵌套事务；更要紧的是校验逻辑会分叉——
+// 手动确认能过、自动投影放过，正是这类功能最危险的口径漂移。
+//
+// 两侧共用这一份，校验（质量状态、绑定、单位、精度、修订、superseded 替代）完全一致。
+func (s *Server) confirmObservationTx(ctx context.Context, tx pgx.Tx, observationID, workspaceID uuid.UUID) error {
 	var obs platformObservationInput
 	var platform, adapterVersion string
 	var mappingVersion int
 	var qualityState, matchState string
 	var runID *uuid.UUID
-	err := s.withTx(ctx, func(tx pgx.Tx) error {
+	{
 		var externalID *string
 		var valuesRaw, pathsRaw []byte
 		var batchSeq, rowNo *int
@@ -442,7 +465,7 @@ func (s *Server) confirmObservation(ctx context.Context, observationID uuid.UUID
 			FROM platform_metric_observation o
 			JOIN platform_account a ON a.id=o.account_id
 			WHERE o.id=$1 AND a.workspace_id=$2
-			FOR UPDATE OF o`, observationID, id.WorkspaceID).Scan(
+			FOR UPDATE OF o`, observationID, workspaceID).Scan(
 			&runID, &batchSeq, &rowNo, &obs.WorkspaceID, &obs.AccountID, &obs.ExternalAccountKey,
 			&externalID, &obs.Scope, &obs.Source, &obs.ObservedAt, &asOf, &windowStart, &windowEnd,
 			&obs.TemporalKind, &valuesRaw, &pathsRaw, &obs.AdapterVersion, &obs.MappingVersion,
@@ -547,18 +570,8 @@ func (s *Server) confirmObservation(ctx context.Context, observationID uuid.UUID
 			}); err != nil {
 			return err
 		}
-		return nil
-	})
-	if err != nil {
-		return Metric{}, err
 	}
-	var m Metric
-	if err := s.db.QueryRow(ctx, `SELECT `+metricCols+` FROM metric_snapshot WHERE observation_id=$1`,
-		observationID).Scan(metricDest(&m)...); err != nil {
-		return Metric{}, err
-	}
-	m.CTR, m.CTRUnavailable = metricCTR(&m)
-	return m, nil
+	return nil
 }
 
 // metricDayOffset 用发布日与统计截止时点算真实日数；发布日未知时返回 nil（不编造节点）。

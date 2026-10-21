@@ -584,6 +584,11 @@ type platformReceipt struct {
 	Duplicate int              `json:"duplicate"`
 	RunStatus string           `json:"run_status"`
 	Rows      []map[string]any `json:"rows"`
+	// auto_adopt 开启时，投影失败的行数与此处第一条原因。
+	// 观测本身已入库（accepted 计数仍包含它），但没进正式指标——
+	// 不回传原因的话，用户只看到"采集成功"，以为数据已生效。
+	AdoptErrors int    `json:"adopt_errors,omitempty"`
+	AdoptReason string `json:"adopt_reason,omitempty"`
 }
 
 func batchBodyHash(body []byte) string {
@@ -606,12 +611,18 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 		var authRev int64
 		var attempt int
 		var receiptsRaw []byte
+		// autoAdopt 决定本次批次里的观测是否**立即投影为正式指标**（§9.2、D-129）。
+		// 默认为 false：只写观测，等用户逐条确认。
+		// 取连接的实时值而不是 run 创建时的快照——用户在采集过程中关掉开关应立即生效。
+		var autoAdopt bool
 		if err := tx.QueryRow(ctx, `SELECT r.status, r.connection_id, r.workspace_id, r.account_id,
-			  r.lease_generation, r.authorization_revision, r.attempt, r.batch_receipts, c.platform
+			  r.lease_generation, r.authorization_revision, r.attempt, r.batch_receipts, c.platform,
+			  c.auto_adopt
 			FROM platform_sync_run r JOIN platform_connection c ON c.id=r.connection_id
 			WHERE r.id=$1 AND r.workspace_id=$2 AND c.user_id=$3 AND c.device_id=$4
 			FOR UPDATE OF r`, runID, id.WorkspaceID, id.UserID, deviceID).Scan(
-			&status, &connID, &runWorkspace, &runAcct, &leaseGen, &authRev, &attempt, &receiptsRaw, &platform); err != nil {
+			&status, &connID, &runWorkspace, &runAcct, &leaseGen, &authRev, &attempt, &receiptsRaw, &platform,
+			&autoAdopt); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return errNotFound
 			}
@@ -673,6 +684,8 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 		}
 
 		receipt = platformReceipt{BatchSeq: batch.BatchSeq, ReceiptID: uuid.New(), Rows: []map[string]any{}}
+		// 记录第一条自动采用失败的原因，随回执回给客户端便于定位（不写观测内容）。
+		var adoptFirstError error
 		for index, row := range batch.Observations {
 			if row.RowNo != index {
 				return validation("观测 row_no 必须与数组位置一致")
@@ -707,9 +720,37 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 				receipt.Rows = append(receipt.Rows, map[string]any{"row_no": row.RowNo, "state": "duplicate", "observation_id": obsID})
 				continue
 			}
-			// 新来源只写观测，不投影正式指标（auto_adopt 默认关闭，PS08 才接入投影）。
+			// auto_adopt 开启时立即投影为正式指标；关闭时只写观测，等用户逐条确认。
+			//
+			// 复用 confirmObservationTx 而**不是**另写一套：那是同一份校验
+			// （质量状态、绑定、单位、精度、修订、superseded 替代），
+			// 两侧共用才不会出现"手动确认能过、自动投影放过"的口径漂移。
+			//
+			// 必须用 savepoint 隔离：`confirmObservationTx` 里的校验失败可能伴随
+			// **数据库错误**（唯一约束冲突等），届时整个事务进入 aborted 状态，
+			// 后续语句全部失败——一条投影失败会让整批观测连同回执一起丢掉。
+			// savepoint 只回滚这一条的投影副作用，观测行保持。
+			rowState := "accepted"
+			if autoAdopt {
+				if adoptErr := s.adoptInSavepoint(ctx, tx, obsID, runWorkspace); adoptErr != nil {
+					rowState = "adopted_failed"
+					// 诊断：只记错误码与首行消息，不记观测内容。
+					slog.Warn("平台采集：自动采用失败", "observation_id", obsID, "err", adoptErr)
+					adoptFirstError = adoptErr
+				} else {
+					rowState = "adopted"
+				}
+			}
 			receipt.Accepted++
-			receipt.Rows = append(receipt.Rows, map[string]any{"row_no": row.RowNo, "state": "accepted", "observation_id": obsID})
+			receipt.Rows = append(receipt.Rows, map[string]any{
+				"row_no": row.RowNo, "state": rowState, "observation_id": obsID,
+			})
+		}
+		// 自动采用若有失败，把第一条原因放进回执：客户端能展示"采到了但没入库"，
+		// 否则用户只看到 accepted，以为一切正常。
+		if adoptFirstError != nil {
+			receipt.AdoptErrors = 1
+			receipt.AdoptReason = adoptFirstError.Error()
 		}
 
 		nextStatus := status
@@ -811,6 +852,31 @@ func (s *Server) checkRunTarget(ctx context.Context, tx pgx.Tx, runID uuid.UUID,
 //   - 版本级：`platform_schema_changed` 表示页面或响应结构变了，是**适配器版本**的问题，
 //     不是单条连接的问题。此时对 `(platform, adapter_version)` 全局熔断，避免所有同版本
 //     客户端继续按旧映射写入错数（§12、§8.5）。
+// adoptInSavepoint 在 savepoint 内执行自动采用，失败只回滚这一条的投影副作用。
+//
+// 为什么必须有 savepoint：`confirmObservationTx` 内部可能遇到**数据库错误**
+// （唯一约束冲突、类型不匹配等），PostgreSQL 会让整个事务进入 aborted 状态，
+// 之后任何语句（包括写回执、更新 run）都会失败。没有 savepoint 时，
+// 单条投影失败会导致**整批观测连同回执一起丢失**——观测本身是有效原始记录，
+// 不该因为派生失败而消失。
+func (s *Server) adoptInSavepoint(ctx context.Context, tx pgx.Tx, observationID, workspaceID uuid.UUID) error {
+	if _, err := tx.Exec(ctx, `SAVEPOINT platform_adopt`); err != nil {
+		return err
+	}
+	if err := s.confirmObservationTx(ctx, tx, observationID, workspaceID); err != nil {
+		// 回滚到 savepoint 之后事务可继续使用；回滚本身失败则只能上报。
+		if _, rbErr := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT platform_adopt`); rbErr != nil {
+			return fmt.Errorf("%w（回滚失败：%v）", err, rbErr)
+		}
+		if _, relErr := tx.Exec(ctx, `RELEASE SAVEPOINT platform_adopt`); relErr != nil {
+			return relErr
+		}
+		return err
+	}
+	_, err := tx.Exec(ctx, `RELEASE SAVEPOINT platform_adopt`)
+	return err
+}
+
 func (s *Server) applyRunFailureAction(ctx context.Context, tx pgx.Tx, connectionID uuid.UUID, errorCode *string) error {
 	if errorCode == nil {
 		return nil
