@@ -852,6 +852,7 @@ func (s *Server) checkRunTarget(ctx context.Context, tx pgx.Tx, runID uuid.UUID,
 //   - 版本级：`platform_schema_changed` 表示页面或响应结构变了，是**适配器版本**的问题，
 //     不是单条连接的问题。此时对 `(platform, adapter_version)` 全局熔断，避免所有同版本
 //     客户端继续按旧映射写入错数（§12、§8.5）。
+//
 // adoptInSavepoint 在 savepoint 内执行自动采用，失败只回滚这一条的投影副作用。
 //
 // 为什么必须有 savepoint：`confirmObservationTx` 内部可能遇到**数据库错误**
