@@ -889,6 +889,97 @@ func (s *Server) adapterBreakerOpen(ctx context.Context, q interface {
 	return open, nil
 }
 
+// resolveAdapterBreaker 恢复一次版本熔断（§12：恢复必须发布新 mapping_version 并重新实测）。
+//
+// 只翻转状态不够，必须同时满足两个条件，否则等于让同一个坏适配器继续写数：
+//  1. `newMappingVersion` 必须**大于**熔断时记录的值（证明映射真的改过）；
+//  2. 操作人必须是超管（`requireSystemAdmin` 由路由层保证）。
+//
+// 恢复后不会自动重开自动采集：那些连接是被本次熔断停掉的，需要用户重新确认。
+func (s *Server) resolveAdapterBreaker(ctx context.Context, breakerID uuid.UUID, newMappingVersion int, note string) (map[string]any, error) {
+	var out map[string]any
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		var platform, adapterVersion, state string
+		var openedMapping *int
+		if err := tx.QueryRow(ctx, `SELECT platform, adapter_version, state, mapping_version
+			FROM platform_adapter_breaker WHERE id=$1 FOR UPDATE`, breakerID).
+			Scan(&platform, &adapterVersion, &state, &openedMapping); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errNotFound
+			}
+			return err
+		}
+		if state != "open" {
+			return apiErr(409, "platform_breaker_not_open", "该熔断已恢复，无需重复操作")
+		}
+		// 发布新映射才允许恢复：新版本必须严格大于熔断时记录的版本。
+		if openedMapping != nil && newMappingVersion <= *openedMapping {
+			return apiErr(422, "validation_failed",
+				"恢复熔断必须发布更高的 mapping_version 并重新实测")
+		}
+		tag, err := tx.Exec(ctx, `UPDATE platform_adapter_breaker
+			SET state='resolved', resolved_at=now(), updated_at=now(),
+			    note = COALESCE(NULLIF($2,''), note)
+			WHERE id=$1 AND state='open'`, breakerID, note)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return apiErr(409, "platform_breaker_not_open", "该熔断已恢复，无需重复操作")
+		}
+		out = map[string]any{
+			"id": breakerID, "platform": platform, "adapter_version": adapterVersion,
+			"state": "resolved", "mapping_version": newMappingVersion,
+		}
+		return s.auditTx(ctx, tx, "platform_adapter_breaker_resolved", "platform_adapter_breaker",
+			breakerID.String(), "ok", map[string]any{
+				"platform": platform, "adapter_version": adapterVersion,
+				"previous_mapping_version": openedMapping, "mapping_version": newMappingVersion,
+			})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// listAdapterBreakers 列出熔断记录（超管诊断用），按开启时间倒序。
+func (s *Server) listAdapterBreakers(ctx context.Context, onlyOpen bool) ([]map[string]any, error) {
+	query := `SELECT id, platform, adapter_version, error_code, mapping_version, state,
+		opened_at, resolved_at, affected_connections, note
+		FROM platform_adapter_breaker`
+	if onlyOpen {
+		query += ` WHERE state='open'`
+	}
+	query += ` ORDER BY opened_at DESC LIMIT 100`
+	rows, err := s.db.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id uuid.UUID
+		var platform, adapterVersion, errorCode, state string
+		var mappingVersion *int
+		var openedAt time.Time
+		var resolvedAt *time.Time
+		var affected int
+		var note *string
+		if err := rows.Scan(&id, &platform, &adapterVersion, &errorCode, &mappingVersion, &state,
+			&openedAt, &resolvedAt, &affected, &note); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{
+			"id": id, "platform": platform, "adapter_version": adapterVersion,
+			"error_code": errorCode, "mapping_version": mappingVersion, "state": state,
+			"opened_at": openedAt, "resolved_at": resolvedAt,
+			"affected_connections": affected, "note": note,
+		})
+	}
+	return out, rows.Err()
+}
+
 func failureAvailability(code string) string {
 	switch code {
 	case "platform_login_required":

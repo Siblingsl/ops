@@ -542,3 +542,45 @@ func SetSystemAdmin(ctx context.Context, s *Server, username string, admin bool)
 	}
 	return username, nil
 }
+
+// adminListPlatformBreakers 列出适配器版本熔断记录（超管诊断用）。
+// query `open=1` 只看当前未恢复的记录。
+func (s *Server) adminListPlatformBreakers(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireSystemAdmin(r.Context()); err != nil {
+		return err
+	}
+	list, err := s.listAdapterBreakers(r.Context(), r.URL.Query().Get("open") == "1")
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	return ok(w, map[string]any{"breakers": list})
+}
+
+// adminResolvePlatformBreaker 恢复一次熔断（§12）。必须带更高的 mapping_version，
+// 且会写审计；恢复后不自动重开被停掉的自动采集。
+func (s *Server) adminResolvePlatformBreaker(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireSystemAdmin(r.Context()); err != nil {
+		return err
+	}
+	id, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	var in struct {
+		MappingVersion int    `json:"mapping_version"`
+		Note           string `json:"note"`
+	}
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	if in.MappingVersion <= 0 {
+		return validation("必须给出已发布的新 mapping_version")
+	}
+	out, err := s.resolveAdapterBreaker(r.Context(), id, in.MappingVersion, in.Note)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	return ok(w, out)
+}

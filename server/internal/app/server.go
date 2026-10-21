@@ -208,6 +208,9 @@ func (s *Server) buildRouter() http.Handler {
 			r.Post("/admin/workspaces/{id}/enter", s.h(s.adminEnterWorkspace))
 			r.Post("/admin/workspaces/exit", s.h(s.adminExitWorkspace))
 			r.Get("/admin/audit-logs", s.h(s.adminAuditLogs))
+			// 适配器版本熔断（20 文档 §12）：恢复必须发布更高 mapping_version 并重新实测。
+			r.Get("/admin/platform/breakers", s.h(s.adminListPlatformBreakers))
+			r.Post("/admin/platform/breakers/{id}/resolve", s.h(s.adminResolvePlatformBreaker))
 			r.Get("/admin/usage", s.h(s.adminUsage))
 			r.Get("/admin/system-settings", s.h(s.adminGetSystemSettings))
 			r.Put("/admin/system-settings", s.h(s.adminPutSystemSettings))

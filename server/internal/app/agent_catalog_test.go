@@ -157,6 +157,10 @@ func agentClassifiedRouteList() map[string]string {
 		"PUT /api/v1/desktop/policy",
 		"GET /api/v1/desktop/routes",
 		"PUT /api/v1/desktop/routes",
+		// 适配器版本熔断的查看与恢复（20 文档 §12）：恢复要求发布更高 mapping_version
+		// 并写审计，属超管运维动作，不能让智能体自行解除熔断。
+		"GET /api/v1/admin/platform/breakers",
+		"POST /api/v1/admin/platform/breakers/{id}/resolve",
 		// D-129 平台采集：设备证明登记与工作区采集策略，同样不向智能体提供。
 		"POST /api/v1/desktop/platform/devices",
 		"GET /api/v1/platform-collection/policy",
@@ -278,6 +282,11 @@ func TestToutiaoAgentCatalogUsesShapeAndServerFrozenPackageBasis(t *testing.T) {
 	queryBasis := param("basis_revision", get)
 	if queryBasis == nil || !queryBasis.Required || queryBasis.In != "query" {
 		t.Fatalf("package view must require the basis revision query, got %+v", queryBasis)
+	}
+	share := agentTool("works__preview_link")
+	shareBasis := param("basis_revision", share)
+	if share.ProposePreview == nil || shareBasis == nil || shareBasis.Required || shareBasis.Source != "" {
+		t.Fatal("分享卡片必须由服务端冻结修订号，不能取模型自造值")
 	}
 	for _, name := range []string{"metrics__create", "metrics__update", "metrics__confirm_screenshot_row"} {
 		if param("impressions", agentTool(name)) == nil {
