@@ -14,12 +14,13 @@
 import type { CDPPageClient, PlatformBrowserProcess } from './platform-worker';
 import { isAllowedPlatformUrl, PlatformBrowserError } from './platform-worker';
 
-export type PlatformLoginPlatform = 'xhs' | 'wechat_mp';
+export type PlatformLoginPlatform = 'xhs' | 'wechat_mp' | 'toutiao';
 
 // 每个平台的官方后台入口。路径取自 §17.1.1 的实测落点，不接受服务端下发。
 export const PLATFORM_LOGIN_URLS: Readonly<Record<PlatformLoginPlatform, string>> = Object.freeze({
   xhs: 'https://creator.xiaohongshu.com/new/note-manager',
-  wechat_mp: 'https://mp.weixin.qq.com/'
+  wechat_mp: 'https://mp.weixin.qq.com/',
+  toutiao: 'https://mp.toutiao.com/'
 });
 
 // 轮询参数：3 分钟内每 3 秒探测一次（用户确认的取值）。
@@ -62,7 +63,7 @@ export const WECHAT_IDENTITY_SCRIPT = `(async () => {
   }
 })()`;
 
-export const PLATFORM_IDENTITY_SCRIPTS: Readonly<Record<PlatformLoginPlatform, string>> = Object.freeze({
+export const PLATFORM_IDENTITY_SCRIPTS: Readonly<Partial<Record<PlatformLoginPlatform, string>>> = Object.freeze({
   xhs: XHS_IDENTITY_SCRIPT,
   wechat_mp: WECHAT_IDENTITY_SCRIPT
 });
@@ -408,6 +409,12 @@ export async function openLoginPage(
       delay(options.captureTimeoutMs ?? 25_000)
     ]);
   }
+  // 等 URL 稳定：有些平台的"会话失效"不是 HTTP 重定向，而是页面加载完成后
+  // 由 JS 异步跳到 /login（小红书实测：先到 /new/note-manager，
+  // readyState 立刻变 complete，随后才跳 /login?redirectReason=401）。
+  // 只在 readyState=complete 时取一次 URL，会把失效会话误判成已登录——
+  // 表现为 availability=ready、failure_count=0，用户看不到"需要重新扫码"。
+  const stableUrl = await waitForStableURL(session, target);
   const info = await session.cdp.request('Runtime.evaluate', {
     expression: 'JSON.stringify({ url: location.href, title: document.title })',
     returnByValue: true
@@ -417,7 +424,8 @@ export async function openLoginPage(
     try {
       const parsed = JSON.parse(raw) as { url?: unknown; title?: unknown };
       return {
-        url: typeof parsed.url === 'string' ? parsed.url : target,
+        // 稳定窗口内若发生过跳转，以跳转后的 URL 为准（它才是真实落点）。
+        url: typeof parsed.url === 'string' ? parsed.url : stableUrl,
         title: typeof parsed.title === 'string' ? parsed.title : '',
         captured
       };
@@ -425,13 +433,51 @@ export async function openLoginPage(
       // 落到下面的默认值。
     }
   }
-  return { url: target, title: '', captured };
+  return { url: stableUrl, title: '', captured };
+}
+
+// waitForStableURL 观察一小段时间，等 JS 触发的跳转落定。
+//
+// 判定"稳定"的条件：连续两次采样（间隔 `pollMs`）URL 相同，且距上次变化
+// 已超过 `quietMs`。整段最多等 `maxMs`，超时就用当前 URL——
+// **不能无限等**：正常页面本来就不会变，等太久会拖慢每次采集。
+//
+// 返回最后的 URL；取不到时回退到 `fallback`。
+async function waitForStableURL(
+  session: PlatformLoginSession,
+  fallback: string,
+  options: { maxMs?: number; pollMs?: number; quietMs?: number } = {}
+): Promise<string> {
+  const maxMs = options.maxMs ?? 1_500;
+  const pollMs = options.pollMs ?? 250;
+  const quietMs = options.quietMs ?? 400;
+  const startedAt = Date.now();
+  let last = fallback;
+  let lastChangedAt = startedAt;
+  while (Date.now() - startedAt < maxMs) {
+    await delay(pollMs);
+    const info = await session.cdp.request('Runtime.evaluate', {
+      expression: 'location.href',
+      returnByValue: true
+    }, 3_000).catch(() => null);
+    const href = (info as { result?: { value?: unknown } } | null)?.result?.value;
+    if (typeof href !== 'string' || href === '') continue;
+    if (href !== last) {
+      last = href;
+      lastChangedAt = Date.now();
+      continue;
+    }
+    // URL 与上次相同，且已经安静足够久：认为跳转结束。
+    if (Date.now() - lastChangedAt >= quietMs) return last;
+  }
+  return last;
 }
 
 // probeIdentity 在页面内执行固定只读脚本，读回身份原文。
 // 返回 loggedIn=false 表示还没登录或页面还没就绪，调用方继续轮询。
 export async function probeIdentity(session: PlatformLoginSession): Promise<IdentityProbeResult> {
   const script = PLATFORM_IDENTITY_SCRIPTS[session.platform];
+  if (!script) throw new PlatformBrowserError('platform_capability_denied', '当前平台的稳定身份读取尚未通过验证');
   assertReadOnlyScript(script, session.platform);
   const result = await session.cdp.request('Runtime.evaluate', {
     expression: script,
