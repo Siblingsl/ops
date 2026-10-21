@@ -84,6 +84,25 @@ var metricMappings = []metricMapping{
 	},
 }
 
+// validMetricPrecision 限定 precision 的合法取值（§9.1）。
+//
+// 只有 `exact` 会写进正式指标；其余三种都只留在观测里供展示：
+//   - rounded：平台显示 `1.2万` 这类取整值，原始精确值不可得；
+//   - estimated：平台或适配器估算值；
+//   - unknown：无法判断精度。
+//
+// 注意：这里只校验"取值合法"，不要求等于映射登记值——映射登记的是
+// "正常情况下该字段的精度"，而 `rounded` 是平台在特定数值下的显示行为，
+// 两者并不冲突。
+func validMetricPrecision(value string) bool {
+	switch value {
+	case "exact", "rounded", "estimated", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
 func lookupMetricMapping(platform, adapterVersion string, mappingVersion int) (metricMapping, bool) {
 	for _, m := range metricMappings {
 		if m.Platform == platform && m.AdapterVersion == adapterVersion && m.MappingVersion == mappingVersion {
@@ -128,8 +147,13 @@ func validateObservationMapping(platform, adapterVersion string, mappingVersion 
 		if probe.Unit != "" && probe.Unit != rule.Unit && probe.Unit != metricUnitUnknown {
 			return validation("观测字段单位与映射登记不一致")
 		}
-		if probe.Precision != "" && probe.Precision != rule.Precision {
-			return validation("观测字段精度与映射登记不一致")
+		// 精度只校验"是不是已知取值"，不要求与映射登记一致（§9.1）：
+		// "1.2 万"这类取整值应作为 `rounded` 保留在观测里供展示，只是不写正式指标。
+		// 早期这里直接 422 拒绝整条，导致平台一旦显示取整值，**整条观测（含其它正常字段）
+		// 全部丢失**，连展示都做不到——用户看到的是"采集成功但一条数据都没有"。
+		// 投影侧的 `probe.Precision != "exact"` 判断会跳过 rounded，不会写进统计。
+		if probe.Precision != "" && !validMetricPrecision(probe.Precision) {
+			return validation("观测字段精度取值不合法")
 		}
 		_ = rule
 	}
