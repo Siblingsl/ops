@@ -88,6 +88,27 @@ func TestPlatformStopReasonOutsideEnumStillSettles(t *testing.T) {
 	if rawReason == nil || *rawReason != "page_repeated" {
 		t.Fatalf("原始停止原因应留在 counters.stop_reason_raw，实际 %v", rawReason)
 	}
+
+	// coverage 必须落库：否则用户只看到 partial，无法知道"为什么不完整"。
+	// 缺陷背景：coverage 字段曾被服务端解析后完全丢弃（2026-10-22 实测：
+	// 验收号 run 为 partial，但库里查不到 pages_read/has_more/incomplete_reason）。
+	var coverage map[string]any
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT counters->'coverage' FROM platform_sync_run WHERE id=$1`, runID).Scan(&coverage); err != nil {
+		t.Fatal(err)
+	}
+	if len(coverage) == 0 {
+		t.Fatal("终批的 coverage 必须写进 counters.coverage，实际为空")
+	}
+	if got, _ := coverage["incomplete_reason"].(string); got != "page_repeated" {
+		t.Fatalf("counters.coverage.incomplete_reason 应为 page_repeated，实际 %v", coverage["incomplete_reason"])
+	}
+	if pages, ok := coverage["pages_read"].(float64); !ok || pages != 2 {
+		t.Fatalf("counters.coverage.pages_read 应为 2，实际 %v", coverage["pages_read"])
+	}
+	if hasMore, ok := coverage["has_more"].(bool); !ok || !hasMore {
+		t.Fatalf("counters.coverage.has_more 应为 true，实际 %v", coverage["has_more"])
+	}
 }
 
 // TestPlatformStopReasonKnownValuePreserved 登记过的原因必须原样保留，不能被上面的过滤抹掉。

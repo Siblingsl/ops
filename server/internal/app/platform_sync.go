@@ -826,10 +826,25 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 				slog.Warn("平台采集：客户端上报的停止原因不在登记枚举内，按空值存库",
 					"run_id", runID, "stop_reason", rawStopReason)
 			}
+			// coverage 是客户端对"读了多少、还剩多少、为什么停"的自述（20 文档 §11.3
+			// 要求 partial 必须给出覆盖范围）。此前这个字段被解析后**完全丢弃**：服务端
+			// 不落库、界面拿不到，于是 page_repeated / page_budget 这类真实原因只存在
+			// 于客户端日志里，用户只看到"partial"而不知道为什么不完整（2026-10-22 实测：
+			// 验收号 run 状态 partial，但库里查不到任何覆盖信息）。
+			// 因此这里原样写进 counters.coverage，与 stop_reason_raw 同等对待。
+			coverageJSON := ""
+			if len(batch.Coverage) > 0 {
+				if raw, err := json.Marshal(batch.Coverage); err == nil {
+					coverageJSON = string(raw)
+				}
+			}
 			if _, err := tx.Exec(ctx, `UPDATE platform_sync_run SET status=$2, stop_reason=$3, error_code=$4,
 				counters=CASE WHEN $5::text='' THEN counters
-					ELSE counters || jsonb_build_object('stop_reason_raw',$5::text) END,
-				finished_at=now() WHERE id=$1`, runID, nextStatus, stopReason, batch.ErrorCode, rawStopReason); err != nil {
+					ELSE counters || jsonb_build_object('stop_reason_raw',$5::text) END
+					|| CASE WHEN $6::text='' THEN '{}'::jsonb
+					ELSE jsonb_build_object('coverage',$6::jsonb) END,
+				finished_at=now() WHERE id=$1`,
+				runID, nextStatus, stopReason, batch.ErrorCode, rawStopReason, coverageJSON); err != nil {
 				return err
 			}
 			// run 终态按 §10.1.1 更新连接：成功清零，失败顺延冷却并累计失败次数。
