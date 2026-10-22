@@ -165,12 +165,16 @@ func validateObservationMapping(platform, adapterVersion string, mappingVersion 
 
 // metricProjection 是一次字段级投影的结果：整节点快照，未观测字段写 NULL 并标 missing（§9.4）。
 type metricProjection struct {
-	WorkID      uuid.UUID
-	Source      string
-	DayOffset   *int
-	CapturedAt  time.Time
-	ObservedAt  time.Time
-	AsOfAt      *time.Time
+	WorkID     uuid.UUID
+	Source     string
+	DayOffset  *int
+	CapturedAt time.Time
+	ObservedAt time.Time
+	AsOfAt     *time.Time
+	// ExternalID 是平台侧作品编号，写入正式指标是为了让每条快照都能追溯到
+	// "这个数字是从平台哪一篇读来的"——少了它，正式指标无法按编号与平台核对
+	// （2026-10-22 实测：确认 10 条后 external_id 全为空）。
+	ExternalID  *string
 	Reads       *int
 	ReadUnit    string
 	Likes       *int
@@ -196,7 +200,9 @@ func projectObservation(platform, adapterVersion string, mappingVersion int, obs
 	}
 	proj := metricProjection{
 		Source: obs.Source, CapturedAt: obs.ObservedAt, ObservedAt: obs.ObservedAt, AsOfAt: obs.AsOfAt,
-		ReadUnit: metricUnitUnknown, ShareUnit: metricUnitUnknown,
+		// 平台编号必须一路带到正式指标：否则快照无法按编号与平台核对。
+		ExternalID: obs.ExternalID,
+		ReadUnit:   metricUnitUnknown, ShareUnit: metricUnitUnknown,
 		Meta: map[string]any{
 			"adapter_version": adapterVersion,
 			"mapping_version": mappingVersion,
@@ -334,21 +340,23 @@ func replaceAutoMetric(ctx context.Context, tx pgx.Tx, proj metricProjection) (M
 		m, err = scanMetric(tx.QueryRow(ctx, `UPDATE metric_snapshot SET
 			captured_at=$2, reads=$3, read_unit=$4, likes=$5, wows=$6, favorites=$7, comments=$8,
 			shares=$9, share_unit=$10, impressions=$11, observed_at=$12, as_of_at=$13,
-			metric_meta=$14, quality_state='approved'
+			external_id=$14,
+			metric_meta=$15, quality_state='approved'
 			WHERE id=$1 RETURNING `+metricCols,
 			existingID, proj.CapturedAt, proj.Reads, proj.ReadUnit, proj.Likes, proj.Wows, proj.Favorites,
-			proj.Comments, proj.Shares, proj.ShareUnit, proj.Impressions, proj.ObservedAt, proj.AsOfAt, meta))
+			proj.Comments, proj.Shares, proj.ShareUnit, proj.Impressions, proj.ObservedAt, proj.AsOfAt,
+			proj.ExternalID, meta))
 		return m, err
 	case errors.Is(err, pgx.ErrNoRows):
 		var m Metric
 		m, err = scanMetric(tx.QueryRow(ctx, `INSERT INTO metric_snapshot
 			(work_id, captured_at, source, day_offset, reads, read_unit, likes, wows, favorites, comments,
-			 shares, share_unit, impressions, observed_at, as_of_at, metric_meta, quality_state)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'approved')
+			 shares, share_unit, impressions, observed_at, as_of_at, external_id, metric_meta, quality_state)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'approved')
 			RETURNING `+metricCols,
 			proj.WorkID, proj.CapturedAt, proj.Source, proj.DayOffset, proj.Reads, proj.ReadUnit, proj.Likes,
 			proj.Wows, proj.Favorites, proj.Comments, proj.Shares, proj.ShareUnit, proj.Impressions,
-			proj.ObservedAt, proj.AsOfAt, meta))
+			proj.ObservedAt, proj.AsOfAt, proj.ExternalID, meta))
 		return m, err
 	default:
 		return Metric{}, err

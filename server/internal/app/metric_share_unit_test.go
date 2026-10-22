@@ -113,3 +113,33 @@ func TestXhsShareTimesRejectsCountUnit(t *testing.T) {
 
 // 编译期防呆：确认 json 包仍被使用（seedObservation 依赖 RawMessage 语义）。
 var _ = json.RawMessage(nil)
+
+// TestAutoMetricKeepsExternalID 确认后正式指标必须带上平台编号。
+//
+// 缺陷背景（2026-10-22 实测）：确认 10 条观测后 metric_snapshot 有 10 行、
+// observation_id 也都关联上了，但 external_id 全为空——`metricProjection`
+// 根本没有 ExternalID 字段，`replaceAutoMetric` 的 INSERT/UPDATE 也就不写它。
+// 后果是正式指标无法按平台编号与平台侧核对，"10 篇对照"只能靠 work_id 间接推。
+func TestAutoMetricKeepsExternalID(t *testing.T) {
+	f := newPlatformRunFixture(t, "xhs", "xhs_user_id:fixture_extid_"+uuid.New().String()[:8])
+	externalID := "6f0000000000000000000040"
+	f.bindWork(t, "正式指标带平台编号", externalID)
+
+	obsID := seedObservation(t, f, externalID, "xhs_browser", map[string]any{
+		"like_count":  map[string]any{"value": 5, "precision": "exact", "unit": "count"},
+		"share_times": map[string]any{"value": 3, "precision": "exact", "unit": "times"},
+	})
+	if _, err := env.srv.confirmObservation(metricTestCtx(f), obsID); err != nil {
+		t.Fatal(err)
+	}
+
+	var stored *string
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT external_id FROM metric_snapshot WHERE work_id=$1 AND source='xhs_browser'`,
+		f.workIDFor(t, externalID)).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || *stored != externalID {
+		t.Fatalf("正式指标必须带上平台编号 %q，实际 %v", externalID, stored)
+	}
+}
