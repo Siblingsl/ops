@@ -325,15 +325,27 @@ func intColumn(value int64, _ string) (int, error) {
 
 // replaceAutoMetric 是自动来源唯一的写入点：整节点替换，未观测字段写 NULL，
 // 不沿用 coalesce 合并，避免把昨天的收藏量与今天的阅读量拼成一条“今天完整数据”（§9.4）。
+//
+// day_offset 的匹配口径必须与触发器 `metric_snapshot_fill_offset`（迁移 00024）
+// 完全一致：触发器在 INSERT（day_offset 为 NULL 时）和**所有 UPDATE** 上都会用
+// `metric_day_offset(captured_at, published_at)` 重算。若这里改用调用方传入的
+// proj.DayOffset 去匹配，两侧一旦不一致（如 as_of_at 早于发布日导致 Go 侧为 nil），
+// 就匹配不到已存在的行而改走 INSERT，撞 metric_snapshot_node 唯一索引。
+// 因此这里按同一口径从库里现算，作为唯一真相。
 func replaceAutoMetric(ctx context.Context, tx pgx.Tx, proj metricProjection) (Metric, error) {
 	meta, err := json.Marshal(proj.Meta)
 	if err != nil {
 		return Metric{}, err
 	}
+	var nodeOffset *int
+	if err := tx.QueryRow(ctx, `SELECT metric_day_offset($2::timestamptz, w.published_at)
+		FROM work w WHERE w.id=$1`, proj.WorkID, proj.CapturedAt).Scan(&nodeOffset); err != nil {
+		return Metric{}, err
+	}
 	var existingID uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT id FROM metric_snapshot
 		WHERE work_id=$1 AND source=$2 AND day_offset IS NOT DISTINCT FROM $3
-		FOR UPDATE`, proj.WorkID, proj.Source, proj.DayOffset).Scan(&existingID)
+		FOR UPDATE`, proj.WorkID, proj.Source, nodeOffset).Scan(&existingID)
 	switch {
 	case err == nil:
 		var m Metric
@@ -349,12 +361,15 @@ func replaceAutoMetric(ctx context.Context, tx pgx.Tx, proj metricProjection) (M
 		return m, err
 	case errors.Is(err, pgx.ErrNoRows):
 		var m Metric
+		// day_offset 必须用与触发器相同的口径写入（nodeOffset），不能传 proj.DayOffset：
+		// 触发器对 INSERT 只在 day_offset 为 NULL 时才重算，若这里传 NULL 而触发器
+		// 又因 published_at 缺失算不出值，就会留下 NULL 行，之后每次确认都匹配不到。
 		m, err = scanMetric(tx.QueryRow(ctx, `INSERT INTO metric_snapshot
 			(work_id, captured_at, source, day_offset, reads, read_unit, likes, wows, favorites, comments,
 			 shares, share_unit, impressions, observed_at, as_of_at, external_id, metric_meta, quality_state)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'approved')
 			RETURNING `+metricCols,
-			proj.WorkID, proj.CapturedAt, proj.Source, proj.DayOffset, proj.Reads, proj.ReadUnit, proj.Likes,
+			proj.WorkID, proj.CapturedAt, proj.Source, nodeOffset, proj.Reads, proj.ReadUnit, proj.Likes,
 			proj.Wows, proj.Favorites, proj.Comments, proj.Shares, proj.ShareUnit, proj.Impressions,
 			proj.ObservedAt, proj.AsOfAt, proj.ExternalID, meta))
 		return m, err
@@ -586,6 +601,15 @@ func (s *Server) confirmObservationTx(ctx context.Context, tx pgx.Tx, observatio
 }
 
 // metricDayOffset 用发布日与统计截止时点算真实日数；发布日未知时返回 nil（不编造节点）。
+//
+// 口径必须与数据库触发器 `metric_snapshot_fill_offset`（迁移 00024）**完全一致**：
+// 触发器用 `metric_day_offset(NEW.captured_at, published_at)` 重算 day_offset。
+// 两侧不一致时会出现"Go 传 NULL、触发器落 0"，随后 replaceAutoMetric 按
+// `day_offset IS NOT DISTINCT FROM NULL` 匹配不到已存在的 0 行，改走 INSERT
+// 撞 metric_snapshot_node 唯一索引——2026-10-22 实测：同节点二次确认 500。
+//
+// 因此 as_of_at 早于发布日（offset<0）时按 0 处理，与触发器对 captured_at 的
+// 取整行为对齐，而不是返回 nil 制造一个"匹配不上的节点"。
 func metricDayOffset(tx pgx.Tx, ctx context.Context, workID uuid.UUID, asOf time.Time) (*int, error) {
 	var publishedAt *time.Time
 	if err := tx.QueryRow(ctx, `SELECT published_at FROM work WHERE id=$1`, workID).Scan(&publishedAt); err != nil {
@@ -601,7 +625,7 @@ func metricDayOffset(tx pgx.Tx, ctx context.Context, workID uuid.UUID, asOf time
 	cut := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, loc)
 	offset := int(cut.Sub(day).Hours()/24 + 0.5)
 	if offset < 0 {
-		return nil, nil
+		offset = 0
 	}
 	return &offset, nil
 }
