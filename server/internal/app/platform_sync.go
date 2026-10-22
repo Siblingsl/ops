@@ -44,6 +44,29 @@ const (
 	platformRunTargetsPerRun  = 20
 )
 
+// platformStopReason 把客户端上报的停止原因收敛到 `platform_sync_run.stop_reason`
+// 允许的枚举内（20 文档 §11.3、迁移 00049）。
+//
+// 为什么必须收敛：客户端会把适配器的"覆盖不完整原因"直接当 stop_reason 发上来——
+// 小红书翻页重复是 `page_repeated`，公众号页预算用尽是 `page_budget`，采集异常是
+// `collect_failed`。这些值不在 CHECK 里，直接写库抛 23514，而这一步与观测写入在**同一
+// 个事务**：整个终批回滚，观测全丢、run 卡在 running 直到租约过期，客户端只看到 500
+// （2026-10-22 16:30 实测，验收号 10 篇采集因此全部丢弃）。
+//
+// 认识的照原样存；不认识的不阻断入库，存空值，原值另存 counters.stop_reason_raw。
+func platformStopReason(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	switch *value {
+	case "budget", "login_required", "challenge_required", "schema_changed", "network",
+		"identity_mismatch", "canceled":
+		return value
+	default:
+		return nil
+	}
+}
+
 // platformRun 是领取与回执使用的最小任务视图，不包含任何凭据。
 type platformRun struct {
 	ID                             uuid.UUID
@@ -791,8 +814,22 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 			default:
 				return validation("run_status 只能是 succeeded/partial/failed/canceled")
 			}
+			// stop_reason 必须先过枚举校验：适配器的"覆盖不完整原因"（page_repeated、
+			// page_budget、collect_failed…）不在 CHECK 允许值内，直接写库会让整个终批
+			// 事务回滚（观测全丢、run 卡住）。原始值转存 counters，供排查时对照。
+			rawStopReason := ""
+			if batch.StopReason != nil {
+				rawStopReason = *batch.StopReason
+			}
+			stopReason := platformStopReason(batch.StopReason)
+			if rawStopReason != "" && stopReason == nil {
+				slog.Warn("平台采集：客户端上报的停止原因不在登记枚举内，按空值存库",
+					"run_id", runID, "stop_reason", rawStopReason)
+			}
 			if _, err := tx.Exec(ctx, `UPDATE platform_sync_run SET status=$2, stop_reason=$3, error_code=$4,
-				finished_at=now() WHERE id=$1`, runID, nextStatus, batch.StopReason, batch.ErrorCode); err != nil {
+				counters=CASE WHEN $5::text='' THEN counters
+					ELSE counters || jsonb_build_object('stop_reason_raw',$5::text) END,
+				finished_at=now() WHERE id=$1`, runID, nextStatus, stopReason, batch.ErrorCode, rawStopReason); err != nil {
 				return err
 			}
 			// run 终态按 §10.1.1 更新连接：成功清零，失败顺延冷却并累计失败次数。
