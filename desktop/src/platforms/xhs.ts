@@ -368,7 +368,11 @@ export function noteToObservation(
   if (note.status !== 'published') return null;
   const values: Record<string, unknown> = {};
   const fieldPaths: Record<string, string> = {};
-  const put = (key: string, value: number | null, unit: 'count' | 'unknown', path: string) => {
+  // 单位口径与后端 metric_unit 对齐（20 文档 §9.1）：count/times/users/unknown。
+  // 早期这里写成 'count' | 'unknown'，等于在编译期把口径钉死，导致 share_times
+  // 无法上报 times（它语义是"分享次数"）——服务端 share_unit 的 CHECK 只接受
+  // users/times/unknown，上报 count 会让确认投影抛 23514、整条事务回滚。
+  const put = (key: string, value: number | null, unit: 'count' | 'times' | 'users' | 'unknown', path: string) => {
     if (value === null) return;
     values[key] = { value, precision: 'exact', unit };
     fieldPaths[key] = path;
