@@ -70,6 +70,9 @@ export interface XhsDiscoveryResult {
   // 覆盖说明：读了几页、是否因预算或结构不完整提前结束。
   coverage: { pages_read: number; has_more: boolean; incomplete_reason: string | null };
   duplicates: number;
+  invalidRows: number;
+  enumerationComplete: boolean;
+  totalCount: number | null;
 }
 
 // 只读响应源：由 CDP 会话在接入后实现；适配器只调用它取 JSON，不自己发请求。
@@ -250,6 +253,8 @@ export function parsePostedNotesPage(payload: unknown): {
   page: number | null;
   cursor: string | null;
   hasMore: boolean;
+  paginationVerified: boolean;
+  totalCount: number | null;
   invalidRows: number;
 } {
   const body = payload as { data?: unknown; success?: unknown; code?: unknown } | null;
@@ -275,12 +280,31 @@ export function parsePostedNotesPage(payload: unknown): {
   // page:-1 表示平台没有更多页；cursor 形态则直接取游标。
   const cursorRaw = data?.cursor ?? data?.next_cursor;
   const cursor = typeof cursorRaw === 'string' && cursorRaw.trim() !== '' ? cursorRaw.trim() : null;
+  const paginationVerified = page !== null || !!data && ('cursor' in data || 'next_cursor' in data);
   const hasMore = cursor !== null ? true : page !== null ? page >= 0 : false;
+  const totalRaw = data?.total_count ?? data?.total;
+  const totalCount = typeof totalRaw === 'number' && Number.isInteger(totalRaw) && totalRaw >= 0 ? totalRaw : null;
   // 整页都解析不出来且平台声称有数据：结构变化，不能当作“没有作品”。
   if (notes.length === 0 && invalidRows > 0) {
     throw new XhsAdapterError('platform_schema_changed', '笔记列表结构已变化');
   }
-  return { notes, page, cursor, hasMore, invalidRows };
+  return { notes, page, cursor, hasMore, paginationVerified, totalCount, invalidRows };
+}
+
+// probePostedNotesReadable 仅核验首页目录结构，不分页、不保存作品；
+// 必须走创作中心自己发起的签名 GET，不能退回客户端构造请求。
+export async function probePostedNotesReadable(source: ReadOnlyResponseSource): Promise<boolean> {
+  if (!source.fetchSigned) {
+    throw new XhsAdapterError('platform_capability_denied', '作品列表核验需要创作中心签名请求');
+  }
+  const payload = await source.fetchSigned(`${XHS_API.postedNotes}?page=0&page_size=20`);
+  const parsed = parsePostedNotesPage(payload);
+  const body = payload as { data?: unknown } | null;
+  const data = (body?.data ?? payload) as Record<string, unknown> | null;
+  if (!data || (!Array.isArray(data.notes) && !Array.isArray(data.items)) || parsed.invalidRows > 0) {
+    throw new XhsAdapterError('platform_schema_changed', '作品列表结构尚未通过核验');
+  }
+  return true;
 }
 
 // collectPostedNotes 跨页收集并按 note_id 去重；到达页数上限或没有下一页时停止，
@@ -289,6 +313,7 @@ export async function collectPostedNotes(
   source: ReadOnlyResponseSource,
   options: {
     maxPages?: number;
+    startPage?: number;
     // page 形态每页请求的页码；prefix 用于把分页参数拼到路径上。
     buildPath?: (state: { page: number; cursor: string | null }) => string;
   } = {}
@@ -299,10 +324,13 @@ export async function collectPostedNotes(
   const seen = new Map<string, XhsNoteFact>();
   let duplicates = 0;
   let pagesRead = 0;
-  let page = 0;
+  let page = Math.max(0, Math.floor(options.startPage ?? 0));
   let cursor: string | null = null;
   let previousCursor: string | null = null;
   let hasMore = false;
+  let paginationVerified = false;
+  let totalCount: number | null = null;
+  let invalidRows = 0;
   let incompleteReason: string | null = null;
   for (;;) {
     if (pagesRead >= maxPages) {
@@ -316,6 +344,9 @@ export async function collectPostedNotes(
       : await source.fetchJSON(path);
     const parsed = parsePostedNotesPage(payload);
     pagesRead += 1;
+    invalidRows += parsed.invalidRows;
+    paginationVerified ||= parsed.paginationVerified;
+    if (parsed.totalCount !== null) totalCount = parsed.totalCount;
     // 上一页已有的编号在本页再次出现时计数；整页全是重复则说明平台没有推进。
     let pageNew = 0;
     for (const note of parsed.notes) {
@@ -325,6 +356,12 @@ export async function collectPostedNotes(
       }
       seen.set(note.noteId, note);
       pageNew += 1;
+    }
+    if (parsed.invalidRows > 0) {
+      incompleteReason = 'catalog_inconsistent';
+      hasMore = parsed.hasMore;
+      cursor = parsed.cursor;
+      break;
     }
     hasMore = parsed.hasMore;
     // 游标与上一页完全相同说明平台没有推进：停止并如实标记，避免无限循环。
@@ -353,7 +390,10 @@ export async function collectPostedNotes(
     hasMore,
     nextCursor: hasMore ? cursor : null,
     coverage: { pages_read: pagesRead, has_more: hasMore, incomplete_reason: incompleteReason },
-    duplicates
+    duplicates,
+    invalidRows,
+    enumerationComplete: invalidRows === 0 && !hasMore && incompleteReason === null && paginationVerified,
+    totalCount
   };
 }
 

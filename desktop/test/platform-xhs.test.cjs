@@ -12,6 +12,7 @@ const {
   parseIdentity,
   parsePostedNotesPage,
   probeCapabilities,
+  probePostedNotesReadable,
   resolveShareLink,
   stripSessionParams,
   verifyNoteAuthor,
@@ -70,6 +71,37 @@ test('PS-T03：主站登录但创作中心未登录时只报告可读范围', ()
   // 单篇曝光首版不承诺。
   assert.equal(caps.noteImpressions, 'unknown');
   assert.equal(caps.adapterVersion, XHS_ADAPTER_VERSION);
+});
+
+test('作品列表能力只在签名列表响应结构完整时通过核验', async () => {
+  const requested = [];
+  const source = {
+    fetchJSON: async () => { throw new Error('签名列表不得回退到普通 GET'); },
+    fetchSigned: async (path) => { requested.push(path); return page([noteA]); }
+  };
+
+  assert.equal(await probePostedNotesReadable(source), true);
+  assert.deepEqual(requested, ['/api/galaxy/v2/creator/note/user/posted?page=0&page_size=20']);
+});
+
+test('合法空列表可以证明接口可读，缺列表或包含无效行不能通过能力核验', async () => {
+  assert.equal(await probePostedNotesReadable({ fetchSigned: async () => page([]) }), true);
+  await assert.rejects(
+    () => probePostedNotesReadable({ fetchSigned: async () => ({ success: true, data: {} }) }),
+    (error) => error.code === 'platform_schema_changed'
+  );
+  await assert.rejects(
+    () => probePostedNotesReadable({ fetchSigned: async () => page([noteA, { id: 'bad-id' }]) }),
+    (error) => error.code === 'platform_schema_changed'
+  );
+  await assert.rejects(
+    () => probePostedNotesReadable({ fetchSigned: async () => ({ success: false }) }),
+    (error) => error.code === 'platform_login_required'
+  );
+  await assert.rejects(
+    () => probePostedNotesReadable({ fetchJSON: async () => page([noteA]) }),
+    (error) => error.code === 'platform_capability_denied'
+  );
 });
 
 test('PS-T15/T16：0 保留，缺失与占位为未知，不合理的数值不落成精确值', () => {
@@ -178,6 +210,14 @@ test('PS-T32：分页按 note_id 去重，到页数上限如实报告未完成�
   const full = await collectPostedNotes({ fetchJSON: async () => ({ success: true, data: { notes: [noteA], page: -1 } }) }, { maxPages: 3 });
   assert.equal(full.hasMore, false);
   assert.equal(full.coverage.incomplete_reason, null);
+});
+
+test('混合有效和无效作品行时目录不能报告完整', async () => {
+  const result = await collectPostedNotes({ fetchJSON: async () => page([noteA, { id: 'bad-id' }]) });
+  assert.equal(result.notes.length, 1, '保留同页成功解析的作品');
+  assert.equal(result.invalidRows, 1);
+  assert.equal(result.coverage.incomplete_reason, 'catalog_inconsistent');
+  assert.equal(result.enumerationComplete, false);
 });
 
 test('PS-T32 加固：平台恒回同一页时按内容重复收口，不空转到页数上限', async () => {
