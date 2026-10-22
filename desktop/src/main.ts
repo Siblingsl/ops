@@ -47,7 +47,7 @@ import {
   type PlatformLoginSession
 } from './platform-login';
 import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace, orphanConnections } from './platform-profile';
-import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation } from './platforms/xhs';
+import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, XHS_API } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation } from './platforms/wechat-mp';
 import { PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun } from './platform-client';
 import { parseDesktopUiIntent, type DesktopUiIntent } from './ui-intents';
@@ -1340,16 +1340,13 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
   const platform = run.platform as PlatformLoginPlatform;
 
   const auth = await desktopClient.getAuthContext();
-  // 采集必须用**连接命名空间**目录，那里才是浏览器登录态真正落盘的地方。
-  // 账号 slot（accountProfileSlot 派生的哈希目录）只承载归属元数据，里面没有平台会话——
-  // 早期实现拿账号 slot 当 profileDir，浏览器一启动就跳 /login?redirectReason=401，
-  // 于是每条自动任务都被判 login_required。
-  const profileDir = connectionProfileDir(await app.getPath('userData'), {
-    userId: auth.userId,
-    platform,
-    connectionId: auth.connectionNamespaceId
-  });
+  // profile 目录必须与**登录写入口**一致。v2 登录流程把平台会话写进账号 slot
+  // （accountProfileSlot 派生的哈希目录，见 platform-login-runtime.ts），
+  // 采集却读设备命名空间（connectionNamespaceId）时，那个目录里可能还留着
+  // 另一个账号的旧登录态，于是整批采集读成了别人的笔记
+  // （2026-10-22 实测：验收号只读到 1 篇，正是命名空间里残留账号的作品）。
   const stored = await readAccountProfile(app.getPath('userData'), { ...auth, origin: businessOrigin, accountId: run.account_id, platform });
+  const profileDir = stored.profileDir;
   // 归属校验全部由 readAccountProfile 负责（含历史 profile 缺 accountId 的兼容），
   // 这里只判断"有没有可用的归属信息"：meta 为 null 表示该 slot 从未登录过。
   console.error('[collect] profile-check', JSON.stringify({
@@ -1404,6 +1401,19 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
     const externalAccountKey = await resolveRunAccountKey(run);
     if (!externalAccountKey) {
       throw new PlatformBrowserError('platform_identity_mismatch', '本次任务缺少外部账号标识');
+    }
+    // 目录改对之后仍要核对"这份登录态就是本任务的账号"：采到别人的笔记比采不到更糟（§6.2）。
+    // 读不到身份时只跳过核对并留痕，不因此把整次采集判失败。
+    if (platform === 'xhs') {
+      try {
+        const current = parseXhsIdentity(await source.fetchJSON(XHS_API.userInfo));
+        if (current.externalAccountKey !== externalAccountKey) {
+          throw new PlatformBrowserError('platform_identity_mismatch', '浏览器登录的账号与本次任务不一致');
+        }
+      } catch (identityError) {
+        if (identityError instanceof PlatformBrowserError && identityError.code === 'platform_identity_mismatch') throw identityError;
+        console.error('[collect] identity-check skipped', describeError(identityError));
+      }
     }
     const observedAt = new Date().toISOString();
     // 服务端按 run 冻结的 binding_snapshot 逐篇比对作品、绑定修订与发布修订；
