@@ -696,6 +696,7 @@ html[data-presentation='ops-creative-desktop'] .desktop-topic-tabs .tabular-nums
 .desktop-topic-search > svg { position: absolute; z-index: 1; top: 10px; left: 10px; width: 15px; height: 15px; color: var(--ops-muted); }
 html[data-presentation='ops-creative-desktop'] .desktop-topic-search input { width: 100%; min-height: 38px; padding-left: 32px; font-size: 12px; }
 .desktop-topic-filterbar > select { width: 92px !important; min-width: 92px; height: 38px; min-height: 38px; flex: 0 0 92px; font-size: 12px; }
+.desktop-topic-scorectl { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: auto; }
 .desktop-topic-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; gap: 22px; }
 .desktop-topic-list, .desktop-topic-details { min-width: 0; border: 1px solid var(--ops-border); border-radius: 16px; background: var(--ops-surface); box-shadow: var(--shadow-card); }
 .desktop-topic-list { overflow: hidden; }
@@ -736,6 +737,8 @@ html[data-presentation='ops-creative-desktop'] .desktop-topic-search input { wid
 .desktop-topic-detail-meta dd { min-width: 0; margin: 0; color: var(--ops-text); overflow-wrap: anywhere; }
 .desktop-topic-detail-scores { display: grid; gap: 5px; margin-top: 15px; border-radius: 9px; padding: 10px; background: var(--ops-subtle); }
 .desktop-topic-details > .desktop-topic-detail-hint { margin-top: 18px; border-top: 1px solid var(--ops-border); padding-top: 13px; font-size: 11px; }
+.desktop-topic-detail-footer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; border-top: 1px solid var(--ops-border); padding-top: 14px; }
+.desktop-materials-pickbar { top: 8px; }
 .desktop-topic-detail-empty { display: grid; min-height: 210px; align-content: center; justify-items: center; text-align: center; }
 .desktop-topic-detail-icon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 16px; background: var(--ops-subtle); color: var(--ops-muted); }
 .desktop-topic-detail-empty h2 { margin-top: 14px; font-size: 16px; }
@@ -805,6 +808,13 @@ html[data-presentation='ops-creative-desktop'] .desktop-work-title { line-height
 html[data-presentation='ops-creative-desktop'] .desktop-work-title > div:first-child { font-size: 13px; }
 html[data-presentation='ops-creative-desktop'] .desktop-work-title > div:last-child { display: none; }
 html[data-presentation='ops-creative-desktop'] .desktop-workbar-flow { padding-inline: 0; }
+/* ED-05：流程条是「发布进度」，用小字标注语义，避免与左栏「创作步骤」混淆。 */
+html[data-presentation='ops-creative-desktop'] .desktop-workbar-flow-label {
+  margin-bottom: 4px;
+  color: var(--ops-muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
 html[data-presentation='ops-creative-desktop'] .desktop-workbar-flow nav {
   display: flex;
   width: fit-content;

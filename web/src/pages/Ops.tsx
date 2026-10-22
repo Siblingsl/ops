@@ -962,6 +962,7 @@ export default function Ops() {
   const cadence = strategy.data?.active?.cadence
   const nextPlanDate = plan.data?.slots.filter((slot) => slot.date >= plan.data!.today).sort((a, b) => a.date.localeCompare(b.date))[0]?.date
   const rhythmDays = cadence?.days.map((day) => weekdays[day - 1]).join('、')
+  // OP-01：桌面 tab 与网页长滚动共用同一顺序，桌面只改呈现不改信息架构。
   const desktopTabs = [
     ['strategy', '运营方案'], ['plan', '内容大纲'], ['hot', '热点参考'],
     ['references', '对标参考'], ['daily', '每日推荐'], ['stats', '推荐统计'],
@@ -998,11 +999,12 @@ export default function Ops() {
         </div>
       </> : <>
         <div id="strategy" className="scroll-mt-24"><StrategyPanel key={`strategy-${account.id}`} account={account} /></div>
-        <DailyStatsCard key={`stats-${account.id}`} accountId={account.id} warningsOnly />
+        <DailyStatsCard key={`warnings-${account.id}`} accountId={account.id} warningsOnly />
         <PlanPanel key={`plan-${account.id}`} account={account} />
         <HotPanel key={`hot-${account.id}`} account={account} />
         <References key={`refs-${account.id}`} accountId={account.id} />
         <DailyPanel key={`daily-${account.id}`} accountId={account.id} />
+        <div id="stats" className="scroll-mt-24"><DailyStatsCard key={`stats-${account.id}`} accountId={account.id} /></div>
       </>}
     </div>
   )

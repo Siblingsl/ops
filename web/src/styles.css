@@ -179,6 +179,9 @@ mark.hl.hl-active { background: var(--color-gamboge-300); box-shadow: 0 0 0 2px 
   .inbox-panel-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
+/* ED-05：页头流程条标注为「发布进度」，与编辑器左栏「创作步骤」区分开。 */
+.desktop-workbar-flow-label { margin-bottom: 4px; font-size: 11px; font-weight: 500; color: #8b8f96; }
+
 @media (max-width: 639px) {
   .work-topbar .workspace-account-compact { width: min(10rem, calc(100vw - 14.375rem)); }
   .work-header > div:first-child { height: auto; min-height: 3.5rem; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0.75rem; }

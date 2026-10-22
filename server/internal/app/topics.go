@@ -133,6 +133,11 @@ func (s *Server) listTopics(w http.ResponseWriter, r *http.Request) error {
 	} else {
 		query := `SELECT ` + topicCols + ` FROM topic t WHERE t.account_id=$1 AND t.deleted_at IS NULL`
 		args := []any{a.ID}
+		// TP-04：桌面端搜索原本只过滤已加载的一页，服务端支持 q 后才能真正搜全库。
+		if kw := strings.TrimSpace(r.URL.Query().Get("q")); kw != "" {
+			args = append(args, "%"+truncateRunes(kw, 100)+"%")
+			query += ` AND (t.title ILIKE $2 OR t.angle ILIKE $2 OR coalesce(t.audience,'') ILIKE $2 OR coalesce(t.hook,'') ILIKE $2)`
+		}
 		if r.URL.Query().Get("cursor") != "" {
 			args = append(args, cursor.PinnedAt, cursor.CreatedAt, cursor.ID)
 			query += ` AND CASE WHEN $2::timestamptz IS NULL

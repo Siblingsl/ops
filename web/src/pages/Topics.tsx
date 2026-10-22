@@ -1,4 +1,4 @@
-﻿import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import {
   ArrowRight, BookOpen, CalendarDays, Check, Gauge, Inbox, Layers, Lightbulb, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Search, Sparkles, Trash2, X,
 } from 'lucide-react'
@@ -521,6 +521,8 @@ export default function Topics() {
   const [similar, setSimilar] = useState<string[]>([])
   const [byScore, setByScore] = useState(false)
   const [scoring, setScoring] = useState(false)
+  const [detailBusy, setDetailBusy] = useState(false)
+  const nav = useNavigate()
   const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const [topicSearch, setTopicSearch] = useState(params.get('q') ?? '')
   const [sourceFilter, setSourceFilter] = useState(params.get('source') ?? 'all')
@@ -529,8 +531,8 @@ export default function Topics() {
   const focus = params.get('focus') || startId
   const inv = useInvalidate()
   const topicQuery = useInfiniteQuery({
-    queryKey: ['topics', acc?.id, byScore],
-    queryFn: ({ pageParam }) => get<TopicPage>(`/accounts/${acc!.id}/topics?limit=50&scores=1${byScore ? '&sort=score' : ''}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`),
+    queryKey: ['topics', acc?.id, byScore, params.get('q') ?? ''],
+    queryFn: ({ pageParam }) => get<TopicPage>(`/accounts/${acc!.id}/topics?limit=50&scores=1${byScore ? '&sort=score' : ''}${params.get('q') ? `&q=${encodeURIComponent(params.get('q')!)}` : ''}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`),
     initialPageParam: '' as string,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled: !!acc,
@@ -559,7 +561,6 @@ export default function Topics() {
   }, [params, setParams, acc?.content_format])
   const data = topicQuery.data?.pages.flatMap((page) => page.items)
   useEffect(() => {
-    setTopicSearch(params.get('q') ?? '')
     setSourceFilter(params.get('source') ?? 'all')
   }, [params])
   useEffect(() => {
@@ -578,11 +579,8 @@ export default function Topics() {
   const list = data ?? []
   const counts = topicQuery.data?.pages[0]?.status_counts
   const shown = list.filter((t) => t.status === tab)
-  const desktopShown = shown.filter((t) => {
-    const query = topicSearch.trim().toLocaleLowerCase()
-    const matchesQuery = !query || `${t.title} ${t.angle} ${t.audience ?? ''} ${t.hook ?? ''}`.toLocaleLowerCase().includes(query)
-    return matchesQuery && (sourceFilter === 'all' || t.source === sourceFilter)
-  })
+  // TP-04：`q` 已由服务端过滤（见 server listTopics），这里只保留来源筛选与 URL 同步。
+  const desktopShown = shown.filter((t) => sourceFilter === 'all' || t.source === sourceFilter)
   const selectedTopic = desktopShown.find((t) => t.id === selectedTopicId) ?? desktopShown.find((t) => t.id === focus) ?? desktopShown[0]
   const updateDesktopFilter = (key: 'q' | 'source', value: string) => {
     const next = new URLSearchParams(params)
@@ -622,6 +620,29 @@ export default function Topics() {
       setScoring(false)
     }
   }
+  // TP-03：详情栏主操作与列表卡片共用同一组接口，避免"读完详情还要回左边找按钮"。
+  const detailStart = async (t: Topic) => {
+    setDetailBusy(true)
+    try {
+      const w = await post<Work>(`/topics/${t.id}/works`)
+      inv(['topics', acc.id])
+      nav(`/works/${w.id}`)
+    } catch (e) {
+      toast.error(errorMessage(e))
+      setDetailBusy(false)
+    }
+  }
+  const detailStatus = async (t: Topic, status: Topic['status']) => {
+    setDetailBusy(true)
+    try {
+      await patch<{ topic: Topic }>(`/topics/${t.id}`, { status })
+      inv(['topics', acc.id])
+      toast.success('已标记为已采用，稍后再写。')
+    } catch (e) {
+      toast.error(errorMessage(e))
+      setDetailBusy(false)
+    }
+  }
   return (
     <div className={cn('animate-fade-in', desktopPresentation && 'desktop-topics-page')}>
       <PageHeader title="选题池" desc={desktopPresentation ? '先存下想法，再决定哪一条值得开始。' : '先把想法存下来，采用后再开始创作。'}
@@ -651,10 +672,14 @@ export default function Topics() {
         )}
       </div>
       {desktopPresentation && tab !== 'inbox' && tab !== 'series' && <div className="desktop-topic-filterbar">
-        <label className="desktop-topic-search"><Search aria-hidden="true" /><Input aria-label="搜索当前页选题" value={topicSearch} onChange={(e) => { setTopicSearch(e.target.value); updateDesktopFilter('q', e.target.value) }} placeholder="搜索当前页选题" /></label>
+        <label className="desktop-topic-search"><Search aria-hidden="true" /><Input aria-label="搜索选题" value={topicSearch} onChange={(e) => { setTopicSearch(e.target.value); updateDesktopFilter('q', e.target.value) }} placeholder="搜索全部选题" /></label>
         <Select aria-label="选题来源" value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); updateDesktopFilter('source', e.target.value) }}>
           <option value="all">全部来源</option><option value="manual">手动</option><option value="ai">AI 建议</option><option value="hot">热点</option><option value="review">复盘</option><option value="daily">每日推荐</option>
         </Select>
+        {tab === 'pending' && <div className="desktop-topic-scorectl">
+          <label className="flex items-center gap-2 text-[12.5px] text-mist-600"><Switch checked={byScore} onChange={setByScore} />按评分排序</label>
+          {canWrite && <Button size="sm" icon={<Gauge className="size-3.5" />} loading={scoring} onClick={score}>AI 评估契合度</Button>}
+        </div>}
       </div>}
       {desktopPresentation ? <div className="desktop-topic-layout" data-testid="desktop-topics-layout">
         <section className="desktop-topic-list" data-testid="desktop-topic-list" aria-label="选题列表">
@@ -687,6 +712,15 @@ export default function Topics() {
             </dl>
             {selectedTopic.status === 'pending' && (selectedTopic.score_fit != null || selectedTopic.score_material != null) && <div className="desktop-topic-detail-scores"><ScoreBar label="契合度" value={selectedTopic.score_fit} tip={selectedTopic.score_reason} /><ScoreBar label="素材充足" value={selectedTopic.score_material} tip="素材库里能支撑这个选题的素材多少" /><ScoreBar label="新颖度" value={selectedTopic.score_novelty} tip="与本账号写过的标题越不像，分越高" /></div>}
             <p className="desktop-topic-detail-hint">采用不会自动确认观点、大纲或起草正文。</p>
+            <div className="desktop-topic-detail-footer">
+              {canWrite && selectedTopic.status === 'pending' && <>
+                <Button size="sm" variant="primary" loading={detailBusy} onClick={() => void detailStart(selectedTopic)}>采用并开始写</Button>
+                <Button size="sm" variant="ghost" disabled={detailBusy} onClick={() => void detailStatus(selectedTopic, 'adopted')} icon={<Check className="size-3.5" />}>采用</Button>
+              </>}
+              {selectedTopic.status === 'adopted' && (selectedTopic.work_id
+                ? <Link to={`/works/${selectedTopic.work_id}`}><Button size="sm" variant="ghost">打开作品<ArrowRight className="size-3.5" /></Button></Link>
+                : canWrite ? <Button size="sm" variant="primary" loading={detailBusy} onClick={() => void detailStart(selectedTopic)}>开始创作</Button> : null)}
+            </div>
           </> : <div className="desktop-topic-detail-empty"><div className="desktop-topic-detail-icon"><Lightbulb className="size-5" /></div><h2>{tab === 'series' ? '系列与选题' : tab === 'inbox' ? '灵感收件箱' : '选题详情'}</h2><p>{tab === 'series' ? '把相关选题组成系列，起草时可以参考前后篇的观点。' : tab === 'inbox' ? '逐条整理收件箱里的灵感，再决定转成选题还是素材。' : '选择一条选题，在这里查看角度、参考与来源。'}</p></div>}
         </aside>
       </div> : tab === 'inbox' ? <InboxPanel accountId={acc.id} /> : tab === 'series' ? <SeriesPanel platform={acc.platform} accountId={acc.id} series={series.data ?? []} topics={list} /> : shown.length === 0 ? (

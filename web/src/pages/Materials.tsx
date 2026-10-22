@@ -447,6 +447,8 @@ export default function Materials() {
       <PageHeader title="素材库" desc={desktopPresentation ? '保留事实与真实经历，让表达有自己的来处。' : 'AI 只把这里的内容当作事实来源。素材越具体，初稿越像你自己写的。'}
         action={canWrite ? desktopPresentation ? <>
           <Button className="desktop-material-action" icon={<Inbox className="size-4" />} onClick={() => setInboxOpen(true)}>收件箱整理</Button>
+          <Button className="desktop-material-action" icon={<Copy className="size-4" />} onClick={() => setDups(true)}>相似素材</Button>
+          <Button className="desktop-material-action" icon={<Scissors className="size-4" />} onClick={() => setExtract(true)}>从长文提炼</Button>
           <Button className="desktop-material-action" variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加素材</Button>
         </> : <>
           <Button icon={<Copy className="size-4" />} onClick={() => setDups(true)}>相似素材</Button>
@@ -468,7 +470,7 @@ export default function Materials() {
           <option value="used">已被引用</option>
           <option value="expired">已过有效期</option>
         </Select>}
-        {!desktopPresentation && canWrite && (
+        {desktopPresentation && canWrite && (
           <Button size="sm" variant={selecting ? 'secondary' : 'ghost'} onClick={() => { setSelecting(!selecting); setPicked([]) }}>{selecting ? '退出多选' : '多选'}</Button>
         )}
         <div className={cn('relative w-full sm:ml-auto sm:w-72', desktopPresentation && 'desktop-materials-search')}>
@@ -481,7 +483,7 @@ export default function Materials() {
           <option value="shared">工作区共享</option>
         </Select> : null}
       </div>
-      {!desktopPresentation && dupCount > 0 && canWrite && (
+      {dupCount > 0 && canWrite && (
         <Notice tone="gamboge" icon={<Copy className="size-4" />} className="mb-4">
           发现 {dupCount} 组可能重复的素材。
           <button type="button" className="ml-1 cursor-pointer font-medium underline" onClick={() => setDups(true)}>逐组查看</button>
@@ -502,8 +504,8 @@ export default function Materials() {
           ))}
         </div>
       )}
-      {!desktopPresentation && selecting && (
-        <div className="sticky top-16 z-10 mb-4 flex items-center gap-3 rounded-xl border border-ink-200 bg-white/95 px-4 py-2 text-[13px] shadow-sm backdrop-blur">
+      {selecting && (
+        <div className={cn('sticky top-16 z-10 mb-4 flex items-center gap-3 rounded-xl border border-ink-200 bg-white/95 px-4 py-2 text-[13px] shadow-sm backdrop-blur', desktopPresentation && 'desktop-materials-pickbar')}>
           <span className="text-mist-600">已选 {picked.length} 条（最多 10 条）</span>
           <Button size="sm" variant="primary" icon={<Wand2 className="size-3.5" />} disabled={picked.length === 0}
             onClick={() => setTagging((data ?? []).filter((m) => picked.includes(m.id)))}>为选中的建议标签</Button>

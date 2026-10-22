@@ -15,6 +15,7 @@ import { rememberRecent, useCustomTheme, usePrefs, useWorkCmd } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
 import { emitEditor } from './editor-tools'
 import { flushWork } from './work-save'
+import { contentReady, creationSteps } from './work-progress'
 
 export interface WorkCtx {
   work: Work
@@ -500,8 +501,10 @@ export default function WorkLayout() {
     : null
   // D-048：图文卡片与漫画同为图片消息流程，不提供对照改写与排版预览。
   const imageMsg = comic || work.content_format === 'card_post'
+  // ED-05：流程条第一项的完成条件与编辑器左栏「创作步骤」同一判定，两套进度不矛盾。
+  const creationReady = contentReady(creationSteps(work, work.platform === 'toutiao' && work.content_format === 'micro_post'))
   const steps = [
-    { to: '', label: comic ? '漫画' : imageMsg ? '卡片' : '创作', end: true, done: comic ? work.panels.some((p) => p.asset_id) : work.sections.some((s) => s.content_md) },
+    { to: '', label: comic ? '漫画' : imageMsg ? '卡片' : '创作', end: true, done: creationReady },
     ...(work.source && !imageMsg ? [{ to: 'compare', label: '对照改写', end: false, done: false }] : []),
     ...(!imageMsg && wx ? [{ to: 'preview', label: '排版预览', end: false, done: false }] : []),
     { to: 'check', label: '发布前检查', end: false, done: reached('ready') },
@@ -588,7 +591,10 @@ export default function WorkLayout() {
           </div>
         </div>
         {!focus && <div className="desktop-workbar-flow">
-          <nav aria-label="作品流程">
+          {/* ED-05：这是「发布进度」，只随状态机推进；内容进度看左栏「创作步骤」。
+              第一项（创作）的完成条件与左栏同一判定（contentReady），两套进度不会互相矛盾。 */}
+          <div className="desktop-workbar-flow-label">发布进度：内容写完后按状态推进</div>
+          <nav aria-label="发布进度">
             {steps.map((s, i) => (
               <NavLink key={s.to} to={s.to} end={s.end}
                 className={({ isActive }) => cn('flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] transition',

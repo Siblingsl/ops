@@ -23,6 +23,7 @@ import { TitleCard } from './editor-title'
 import { ImagesCard } from './editor-images'
 import { WorkConflictDialog } from './section-save-dialogs'
 import { registerWorkFlush, useRegisterFlush, useSaveCoordinator, WorkSaveProvider, type WorkSaveCoordinator } from './work-save'
+import { activeCreationStep, creationSteps, creationProgress } from './work-progress'
 import { useWork, WorkHeaderAction } from './WorkLayout'
 
 const kindLabel: Record<MaterialKind, string> = { experience: '经历', opinion: '观点', case: '案例', data: '数据' }
@@ -607,18 +608,9 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
   // NW-B4：微头条不发布标题，内部名称不应成为第 4 步的完成条件。
   const titleDone = internalNameOnly || !!work.title.trim()
   const imagesDone = work.platform === 'wechat_mp' ? !!work.cover_asset_id : toutiao || work.assets.length > 0
-  const steps = [
-    { id: 'step-viewpoint', label: '核心观点', done: !!work.viewpoint.trim() },
-    { id: 'step-outline', label: '大纲', done: !!work.outline_confirmed_at },
-    { id: 'step-sections', label: '分段起稿', done: work.sections.length > 0 && drafted === work.sections.length, extra: work.sections.length ? `${drafted}/${work.sections.length}` : '' },
-    { id: 'step-title', label: work.platform === 'wechat_mp' ? '标题与摘要' : internalNameOnly ? '内部名称与话题（可选）' : toutiao ? '发布标题与话题' : '标题与话题', done: titleDone },
-    { id: 'step-images', label: work.platform === 'wechat_mp' ? '配图与封面' : toutiao ? '配图（可选）' : '笔记图片', done: imagesDone },
-  ]
-  const activeStep = !work.viewpoint.trim() ? 'step-viewpoint'
-    : !work.outline_confirmed_at ? 'step-outline'
-    : emptySections.length > 0 ? 'step-sections'
-    : !titleDone ? 'step-title'
-    : 'step-images'
+  // ED-05：步骤定义与当前项判定收敛到 work-progress.ts，页头流程条共用同一判定。
+  const steps = creationSteps(work, internalNameOnly)
+  const activeStep = activeCreationStep(steps)
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   const jumpNextEmpty = (afterId?: string, focusDraft = false) => {
     const go = (id: string) => {
@@ -774,7 +766,14 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
       {!focus && (
         <aside className={cn('sticky top-24 hidden h-fit w-52 shrink-0 lg:block', desktopPresentation && 'desktop-editor-steps')}
           data-testid={desktopPresentation ? 'desktop-editor-steps' : undefined}>
-          <div className="mb-3 text-[11px] font-semibold tracking-wider text-mist-400">创作步骤</div>
+          <div className="mb-3 flex items-baseline gap-2 text-[11px] font-semibold tracking-wider text-mist-400">
+            <span>创作步骤</span>
+            {/* ED-05：明确这是「内容进度」，与页头流程条的「发布进度」区分。 */}
+            <span className="font-mono text-[10px] font-normal text-mist-300" data-testid="creation-progress">
+              {creationProgress(steps).done}/{creationProgress(steps).total}
+            </span>
+          </div>
+          <div className="mb-2 text-[10px] font-normal tracking-normal text-mist-300" title="内容写完后，页头流程条会接着显示发布进度">内容进度</div>
           <ol className="space-y-0.5">
             {steps.map((s) => (
               <li key={s.id}>
