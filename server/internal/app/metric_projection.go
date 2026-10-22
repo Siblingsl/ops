@@ -64,8 +64,11 @@ var metricMappings = []metricMapping{
 			"like_count":     {Key: "like_count", Unit: metricUnitCount, Precision: "exact", ProjectsTo: "likes"},
 			"favorite_count": {Key: "favorite_count", Unit: metricUnitCount, Precision: "exact", ProjectsTo: "favorites"},
 			"comment_count":  {Key: "comment_count", Unit: metricUnitCount, Precision: "exact", ProjectsTo: "comments"},
-			"share_times":    {Key: "share_times", Unit: metricUnitCount, Precision: "exact", ProjectsTo: "shares"},
-			"impressions":    {Key: "impressions", Unit: metricUnitTimes, Precision: "exact", ProjectsTo: "impressions"},
+			// share_times 语义是"分享次数"，登记为 times（数据库 share_unit 只接受
+			// users/times/unknown，迁移 00050）。适配器必须同样上报 times——
+			// validateObservationMapping 要求观测单位与登记一致，上报 count 会被 422 拒绝。
+			"share_times": {Key: "share_times", Unit: metricUnitTimes, Precision: "exact", ProjectsTo: "shares"},
+			"impressions": {Key: "impressions", Unit: metricUnitTimes, Precision: "exact", ProjectsTo: "impressions"},
 		},
 	},
 	{

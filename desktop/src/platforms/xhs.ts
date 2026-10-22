@@ -378,7 +378,11 @@ export function noteToObservation(
   put('like_count', note.likes, 'count', 'fixture.note.likes');
   put('favorite_count', note.favorites, 'count', 'fixture.note.collected_count');
   put('comment_count', note.comments, 'count', 'fixture.note.comments_count');
-  put('share_times', note.shares, 'count', 'fixture.note.shared_count');
+  // share_times 是"分享次数"，单位必须是 times：`metric_snapshot.share_unit`
+  // 的 CHECK 只接受 users/times/unknown，且服务端要求观测单位与映射登记一致。
+  // 早期这里标成 count，导致逐条确认时投影 INSERT 抛 23514、整条事务回滚
+  // （2026-10-22 实测：10 篇观测确认全部 500）。
+  put('share_times', note.shares, 'times', 'fixture.note.shared_count');
   if (Object.keys(values).length === 0) return null;
   return {
     row_no: 0,
