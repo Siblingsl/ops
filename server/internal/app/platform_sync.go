@@ -695,7 +695,9 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 
 		receipt = platformReceipt{BatchSeq: batch.BatchSeq, ReceiptID: uuid.New(), Rows: []map[string]any{}}
 		// 记录第一条自动采用失败的原因，随回执回给客户端便于定位（不写观测内容）。
+		// 失败条数单独计数：回执里的数量要能对上"有几条没入库"，不能恒为 1。
 		var adoptFirstError error
+		adoptFailures := 0
 		for index, row := range batch.Observations {
 			if row.RowNo != index {
 				return validation("观测 row_no 必须与数组位置一致")
@@ -753,6 +755,7 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 					rowState = "adopted_failed"
 					// 诊断：只记错误码与首行消息，不记观测内容。
 					slog.Warn("平台采集：自动采用失败", "observation_id", obsID, "err", adoptErr)
+					adoptFailures++
 					adoptFirstError = adoptErr
 				} else {
 					rowState = "adopted"
@@ -764,10 +767,14 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 			})
 		}
 		// 自动采用若有失败，把第一条原因放进回执：客户端能展示"采到了但没入库"，
-		// 否则用户只看到 accepted，以为一切正常。
-		if adoptFirstError != nil {
-			receipt.AdoptErrors = 1
-			receipt.AdoptReason = adoptFirstError.Error()
+		// 否则用户只看到 accepted，以为一切正常。条数按实际失败数累加，不是恒为 1。
+		if adoptFailures > 0 {
+			receipt.AdoptErrors = adoptFailures
+			reason := adoptFirstError.Error()
+			if adoptFailures > 1 {
+				reason = fmt.Sprintf("%s（共 %d 条失败，其余见服务端日志）", reason, adoptFailures)
+			}
+			receipt.AdoptReason = reason
 		}
 
 		nextStatus := status

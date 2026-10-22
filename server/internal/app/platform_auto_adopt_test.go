@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"testing"
 	"time"
 
@@ -181,6 +182,79 @@ func TestAutoAdoptOnProjectsImmediately(t *testing.T) {
 	}
 	if !hasObservation {
 		t.Fatal("正式指标必须能追溯到来源观测")
+	}
+}
+
+// TestAutoAdoptReceiptCountsEveryFailedRow 回执里的 adopt_errors 表示"这一批有几条没入库"。
+//
+// 原实现恒写 1：两条一起失败时客户端以为只有一条有问题，影响面报小了。
+// 这里让两条观测都用映射表里不存在的版本——观测能进库（原始记录有效），
+// 投影那一步必然失败，正好用来验证计数。
+func TestAutoAdoptReceiptCountsEveryFailedRow(t *testing.T) {
+	f := newPlatformRunFixture(t, "wechat_mp", "wechat_biz:fixture_adopt_multi_"+uuid.New().String()[:8])
+	ids := []string{"2247480050_1", "2247480051_1"}
+	for _, id := range ids {
+		f.bindWork(t, "多条失败 "+id, id)
+	}
+	setAutoAdopt(t, f.Connection, true)
+
+	env.srv.schedulePlatformRuns(context.Background())
+	runID, gen, ok := f.claimWith(t)
+	if !ok {
+		t.Fatal("应能领到任务")
+	}
+	observations := make([]map[string]any, 0, len(ids))
+	for i, id := range ids {
+		bindingRev, publishRev := workRevisions(t, f.workIDFor(t, id))
+		observations = append(observations, map[string]any{
+			"row_no": i, "scope": "work", "external_account_key": f.externalKey(),
+			"external_id": id, "binding_revision": bindingRev, "publish_revision": publishRev,
+			"source": "wechat_browser", "temporal_kind": "cumulative",
+			"observed_at":     time.Now().UTC().Format(time.RFC3339),
+			"as_of_at":        time.Now().UTC().Truncate(time.Second).Format(time.RFC3339),
+			"adapter_version": "wechat-mp-1", "mapping_version": 999,
+			"values":      map[string]any{"like_count": map[string]any{"value": 6, "precision": "exact", "unit": "count"}},
+			"field_paths": map[string]any{"like_count": "fixture.like_count"},
+		})
+	}
+	body := map[string]any{
+		"protocol_version":       desktopPlatformProtocolVersion,
+		"lease_generation":       gen,
+		"authorization_revision": connectionAuthRevision(t, f.Connection),
+		"batch_seq":              0,
+		"final_batch":            true,
+		"run_status":             platformRunStatusSuccess,
+		"coverage":               map[string]any{"pages_read": 1, "has_more": false},
+		"observations":           observations,
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, resp := f.submit(t, runID, raw)
+	if status != http.StatusOK {
+		t.Fatalf("提交失败：%d %s", status, resp)
+	}
+	var receipt map[string]any
+	if err := json.Unmarshal(resp, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := receipt["adopt_errors"].(float64)
+	if int(got) != len(ids) {
+		t.Fatalf("回执应报告 %d 条自动采用失败，实际 %v：%s", len(ids), receipt["adopt_errors"], resp)
+	}
+	if reason, _ := receipt["adopt_reason"].(string); reason == "" {
+		t.Fatalf("应同时给出失败原因：%s", resp)
+	}
+	// 失败的是投影，原始观测必须留着（否则等于把采到的数据丢了）。
+	var kept int
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT count(*) FROM platform_metric_observation WHERE run_id=$1 AND quality_state=$2`,
+		runID, observationQualityNeedsConfirm).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != len(ids) {
+		t.Fatalf("自动采用失败后观测应保持待确认，实际 %d 条", kept)
 	}
 }
 
