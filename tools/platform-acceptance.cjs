@@ -38,14 +38,26 @@ function query(sql) {
   return out.split('\n').filter((line) => line.trim() !== '').map((line) => line.split('\t'));
 }
 
+// assertAccountId 校验 --account 的形态。SQL 是拼字符串执行的（psql 不走参数绑定），
+// 因此账号 ID 必须先严格校验，不能把任意输入直接拼进语句。
+function assertAccountId(value) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    throw new Error(`--account 需要账号 UUID，实际是 ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
 // loadObservations 取该平台最近一批观测（按 external_id 取最新一条）。
-function loadObservations(platform) {
+// accountId 有值时只取该账号的观测：同平台多个账号时，别把另一个账号的读数
+// 算进本次对照，也不要让"缺观测"被别的账号的数据掩盖。
+function loadObservations(platform, accountId) {
   const source = platform === 'xhs' ? 'xhs_browser' : 'wechat_browser';
+  const scope = accountId ? ` AND o.account_id='${accountId}'` : '';
   const rows = query(`SELECT DISTINCT ON (external_id) external_id, values, quality_state,
       (SELECT count(*) FROM platform_metric_observation o2
        WHERE o2.external_id=o.external_id AND o2.source=o.source) AS total_rows
     FROM platform_metric_observation o
-    WHERE source='${source}'
+    WHERE source='${source}'${scope}
     ORDER BY external_id, created_at DESC`);
   const out = new Map();
   for (const row of rows) {
@@ -58,24 +70,32 @@ function loadObservations(platform) {
 }
 
 // loadBoundWorks 取该平台已精确绑定且已发布的作品数（验收的"应有样本量"）。
-function loadBoundWorks(platform) {
+// accountId 有值时按账号过滤：同一平台有两个小红书账号时，平台侧读的是 A 账号，
+// 绑定数却混进 B 账号的作品，报告会说"已绑定 1 篇"而实际是 0 篇（2026-10-22 实测踩到）。
+function loadBoundWorks(platform, accountId) {
   const column = platform === 'xhs' ? 'xhs_note_id' : 'wechat_msgid';
+  const scope = accountId ? ` AND account_id='${accountId}'` : '';
   const rows = query(`SELECT count(*), count(DISTINCT date(published_at))
     FROM work WHERE ${column} IS NOT NULL AND deleted_at IS NULL AND published_at IS NOT NULL
-      AND platform_binding_source IN ('user_link','user_confirm','official_exact')`);
+      AND platform_binding_source IN ('user_link','user_confirm','official_exact')${scope}`);
   const [count, days] = rows[0] || ['0', '0'];
   return { works: Number(count) || 0, publishDays: Number(days) || 0 };
 }
 
 // ---------- 平台读取 ----------
 
-function profileDirFor(platform) {
-  // 客户端连接命名空间目录：登录态真正落盘的地方。
+function profileDirFor(platform, accountId) {
+  // 连接命名空间目录：登录态真正落盘的地方。
   // 这里按目录扫描定位，避免把 user/device ID 硬编码进来。
+  //
+  // **必须按 accountId 精确匹配**：同一台机器上可能有多个账号的 profile
+  // （实测同时存在 3 个小红书 profile）。早期实现"选目录最大的那个"，
+  // 会读到**别的账号**的作品列表——对照结果看起来正常，其实是张冠李戴。
   const base = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
     'OPS Desktop', 'platform-profiles', 'accounts');
   const fs = require('node:fs');
   let found = null;
+  const candidates = [];
   for (const user of fs.readdirSync(base, { withFileTypes: true })) {
     if (!user.isDirectory()) continue;
     const platformRoot = path.join(base, user.name, platform);
@@ -83,13 +103,28 @@ function profileDirFor(platform) {
     for (const conn of fs.readdirSync(platformRoot, { withFileTypes: true })) {
       if (!conn.isDirectory()) continue;
       const candidate = path.join(platformRoot, conn.name, 'profile');
-      // 选"有 Cookies 且文件最多"的那个（真实登录态所在的目录通常更大）。
       if (!fs.existsSync(path.join(candidate, 'Default', 'Network', 'Cookies'))) continue;
+      // 读 meta 里的 accountId，只认匹配的那一个。
+      let metaAccountId = '';
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(platformRoot, conn.name, 'meta.json'), 'utf8'));
+        metaAccountId = typeof meta.accountId === 'string' ? meta.accountId : '';
+      } catch { metaAccountId = ''; }
       const size = dirSize(candidate);
-      if (!found || size > found.size) found = { dir: candidate, size };
+      candidates.push({ dir: candidate, size, metaAccountId });
+      if (accountId && metaAccountId === accountId) found = { dir: candidate, size };
     }
   }
-  return found ? found.dir : null;
+  if (found) return found.dir;
+  if (accountId) {
+    // 指定了账号却找不到：明确报错，不要静默退回"最大的那个"。
+    // 静默退回会让报告看起来正常，实际比的是另一个账号——比报错危险得多。
+    const known = candidates.map((c) => c.metaAccountId || '(无归属)').join(', ');
+    throw new Error(`找不到账号 ${accountId} 的本机登录态（现有：${known}）`);
+  }
+  // 未指定账号时才退回"最大的那个"，并在报告里提示这是启发式选择。
+  candidates.sort((a, b) => b.size - a.size);
+  return candidates.length ? candidates[0].dir : null;
 }
 
 function dirSize(dir) {
@@ -110,8 +145,8 @@ function dirSize(dir) {
 }
 
 // readPlatform 用真实登录态读一次平台数据，返回 { notes/articles } 的统一结构。
-async function readPlatform(platform) {
-  const profileDir = profileDirFor(platform);
+async function readPlatform(platform, accountId) {
+  const profileDir = profileDirFor(platform, accountId);
   if (!profileDir) throw new Error(`找不到 ${platform} 的本机登录态目录，请先在客户端登录`);
   const candidate = await worker.findPlatformBrowser();
   const browser = await worker.launchPlatformBrowser({
@@ -233,6 +268,9 @@ function printReport(platform, reading, obsResult, bound, options) {
 
   console.log(`\n=== ${platform === 'xhs' ? '小红书' : '公众号'} 验收对照 ===`);
   console.log(`落点        ${reading.landed.slice(0, 70)}`);
+  if (options.accountId) {
+    console.log(`账号        ${options.accountId}（绑定与观测均已按该账号过滤）`);
+  }
   console.log(`平台作品    ${reading.items.length} 条（已发布 ${published.length}、已删除 ${deleted.length}）`);
   console.log(`已绑定作品  ${bound.works} 篇，跨 ${bound.publishDays} 个发布日`);
   console.log(`对照结果    一致 ${matched}、不一致 ${mismatched}、缺观测 ${missingObservation}`);
@@ -287,16 +325,23 @@ function printReport(platform, reading, obsResult, bound, options) {
 
 async function main() {
   const platform = process.argv[2];
-  const options = { json: process.argv.includes('--json') };
+  // --account <uuid>：指定要对照的 OPS 账号。**强烈建议总是传**——
+  // 同一台机器可能有多个账号的登录态，不传只能按目录大小猜。
+  const accIdx = process.argv.indexOf('--account');
+  const rawAccountId = accIdx > 0 ? process.argv[accIdx + 1] : undefined;
+  const options = {
+    json: process.argv.includes('--json'),
+    accountId: rawAccountId === undefined ? undefined : assertAccountId(rawAccountId)
+  };
   if (platform !== 'xhs' && platform !== 'wechat_mp') {
-    console.error('用法：node tools/platform-acceptance.cjs <xhs|wechat_mp> [--json]');
+    console.error('用法：node tools/platform-acceptance.cjs <xhs|wechat_mp> [--account <uuid>] [--json]');
     process.exit(2);
   }
-  const observations = loadObservations(platform);
-  const bound = loadBoundWorks(platform);
+  const observations = loadObservations(platform, options.accountId);
+  const bound = loadBoundWorks(platform, options.accountId);
   let reading;
   try {
-    reading = await readPlatform(platform);
+    reading = await readPlatform(platform, options.accountId);
   } catch (error) {
     console.error(`读取平台失败：${error.code || ''} ${error.message}`);
     process.exit(1);
