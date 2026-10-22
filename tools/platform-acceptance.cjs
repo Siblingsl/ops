@@ -165,6 +165,9 @@ async function readPlatform(platform, accountId) {
         items: discovery.notes.map((n) => ({
           externalId: n.noteId,
           status: n.status,
+          // 平台侧的发布时间（`time` 字段）。用来判断有没有 §17.1 要求的近期新作，
+          // 不要用本地作品的 published_at——那可能是占位时间。
+          recordedAt: n.recordedAt ?? null,
           metrics: {
             view_times: n.viewTimes,
             like_count: n.likes,
@@ -182,6 +185,7 @@ async function readPlatform(platform, accountId) {
       items: discovery.articles.map((a) => ({
         externalId: a.externalID,
         status: a.status,
+        recordedAt: a.sentAt ?? null,
         metrics: {
           read_times: a.readNum,
           like_count: a.likes,
@@ -202,6 +206,47 @@ const FIELD_LABELS = {
   view_times: '观看数', read_times: '阅读数', like_count: '点赞',
   favorite_count: '收藏', comment_count: '评论', share_times: '分享'
 };
+
+// parsePublishTime 解析平台侧的发布时间：小红书是 "2026-09-21 19:18:00"，
+// 公众号是 sent_info.time（秒级时间戳或日期串）。解析不了就返回 null——
+// 宁可在报告里写"无法解析"，也不要拿本地占位时间充数。
+function parsePublishTime(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const ms = value > 1e12 ? value : value * 1000;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/^\d{10}$/.test(text) || /^\d{13}$/.test(text)) return parsePublishTime(Number(text));
+  const normalized = text.includes('T') ? text : text.replace(' ', 'T');
+  const zoned = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(normalized) ? normalized : `${normalized}+08:00`;
+  const d = new Date(zoned);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+// freshnessOf 按平台发布时间判断 §17.1 要求的"近期新作"：最新一篇距今几天、D1/D3/D7 各几篇。
+function freshnessOf(published) {
+  const now = Date.now();
+  const dated = [];
+  let undated = 0;
+  for (const item of published) {
+    const at = parsePublishTime(item.recordedAt);
+    if (!at) { undated += 1; continue; }
+    dated.push({ at, days: Math.floor((now - at.getTime()) / 86_400_000) });
+  }
+  const newest = dated.reduce((acc, cur) => (acc === null || cur.at > acc.at ? cur : acc), null);
+  return {
+    dated: dated.length,
+    undated,
+    newestDays: newest ? newest.days : null,
+    newestAt: newest ? newest.at.toISOString() : null,
+    d1: dated.filter((d) => d.days <= 1).length,
+    d3: dated.filter((d) => d.days <= 3).length,
+    d7: dated.filter((d) => d.days <= 7).length
+  };
+}
 
 function compare(platform, platformItems, observations) {
   const rows = [];
@@ -256,12 +301,14 @@ function printReport(platform, reading, obsResult, bound, options) {
   const published = reading.items.filter((i) => i.status === 'published');
   const deleted = reading.items.filter((i) => i.status === 'deleted');
   const fieldsTotal = rows.reduce((sum, r) => sum + r.fields.length, 0);
+  const fresh = freshnessOf(published);
+  const freshEnough = fresh.newestDays !== null && fresh.newestDays <= 7;
 
   if (options.json) {
     console.log(JSON.stringify({
       platform, landed: reading.landed, coverage: reading.coverage,
       bound, publishedCount: published.length, deletedCount: deleted.length,
-      matched, mismatched, missingObservation, fieldsTotal, rows
+      matched, mismatched, missingObservation, fieldsTotal, freshness: fresh, rows
     }, null, 2));
     return { matched, mismatched };
   }
@@ -275,12 +322,27 @@ function printReport(platform, reading, obsResult, bound, options) {
   console.log(`已绑定作品  ${bound.works} 篇，跨 ${bound.publishDays} 个发布日`);
   console.log(`对照结果    一致 ${matched}、不一致 ${mismatched}、缺观测 ${missingObservation}`);
   console.log(`覆盖        ${JSON.stringify(reading.coverage)}`);
+  if (fresh.newestDays === null) {
+    console.log(`新作        无法从平台解析发布时间（${fresh.dated}/${published.length} 篇有日期）✗`);
+  } else {
+    console.log(
+      `新作        最新一篇距今 ${fresh.newestDays} 天（${fresh.newestAt.slice(0, 10)}），` +
+      `D1 ${fresh.d1} 篇 / D3 ${fresh.d3} 篇 / D7 ${fresh.d7} 篇 ${freshEnough ? '✓' : '✗'}` +
+      (fresh.undated ? `（另有 ${fresh.undated} 篇无发布时间）` : '')
+    );
+  }
 
   const bad = rows.filter((r) => r.fields.some((f) => f.verdict === 'mismatch' || f.verdict === 'obs_missing'));
-  if (bad.length === 0) {
+  // "无观测"的作品没有字段可比，不能因为它在 bad 里筛不出来就打印"全部一致"——
+  // 那会把"10 篇一条观测都没有"读成"10 篇全部对上"。
+  const missingRows = rows.filter((r) => r.fields.length === 0);
+  if (bad.length === 0 && missingRows.length === 0) {
     console.log('\n逐字段对照：全部一致。');
   } else {
-    console.log('\n逐字段对照（仅列出不一致项）：');
+    console.log('\n逐字段对照（仅列出不一致与无观测项）：');
+    for (const r of missingRows) {
+      console.log(`  ${r.externalId}  无观测：该作品还没有采集结果`);
+    }
     for (const r of bad) {
       console.log(`  ${r.externalId}`);
       for (const f of r.fields) {
@@ -303,20 +365,24 @@ function printReport(platform, reading, obsResult, bound, options) {
   }
   const fieldRows = [...perField.entries()].sort((a, b) => b[1] - a[1]);
   console.log('\n每字段有效对照（按作品去重）：');
+  if (fieldRows.length === 0) {
+    console.log('  （暂无观测，没有可计的对照）');
+  }
   for (const [label, count] of fieldRows) {
     console.log(`  ${label.padEnd(6)} ${String(count).padStart(2)} 篇 ${count >= 10 ? '✓' : '✗ 不足 10'}`);
   }
 
-  // 样本量是否达标（§17.1 要求 ≥10 篇、≥3 个发布日、**每字段** ≥10 个对照）。
+  // 样本量是否达标（§17.1 要求 ≥10 篇、≥3 个发布日、**每字段** ≥10 个对照，且有近期新作）。
   const worksEnough = published.length >= 10;
   const daysEnough = bound.publishDays >= 3;
   const fieldsEnough = fieldRows.length > 0 && fieldRows.every(([, count]) => count >= 10);
-  const enough = worksEnough && daysEnough && fieldsEnough;
+  const enough = worksEnough && daysEnough && fieldsEnough && freshEnough;
   console.log(
     `\n样本量      ${enough ? '达标' : '不达标'}` +
     `（篇数 ${published.length}/10 ${worksEnough ? '✓' : '✗'}，` +
     `发布日 ${bound.publishDays}/3 ${daysEnough ? '✓' : '✗'}，` +
-    `每字段 ≥10 ${fieldsEnough ? '✓' : '✗'}）`
+    `每字段 ≥10 ${fieldsEnough ? '✓' : '✗'}，` +
+    `近 7 天新作 ${freshEnough ? '✓' : '✗'}）`
   );
   return { matched, mismatched, enough };
 }
