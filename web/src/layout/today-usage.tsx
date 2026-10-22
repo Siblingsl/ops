@@ -5,6 +5,7 @@ import { useCurrentAccount } from '@/lib/session'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { get } from '@/lib/api'
 import { fmtNum } from '@/lib/format'
+import { settingsEntryFor } from '@/lib/settings-registry'
 import type { AIStatus } from '@/lib/v3'
 
 export function TodayUsage({ enabled }: { enabled: boolean }) {
@@ -23,13 +24,14 @@ export function TodayUsage({ enabled }: { enabled: boolean }) {
   )
 }
 
-export function useChromeMeta(settings: { to: string; label: string }[]) {
+// GL-02：设置页标题同样来自 settings-registry，桌面专属项也能显示正确名称。
+export function useChromeMeta() {
   const loc = useLocation()
   const acc = useCurrentAccount()
   return useMemo(() => {
     const path = loc.pathname
     if (path.startsWith('/settings/')) {
-      const hit = settings.find((s) => path.startsWith(s.to))
+      const hit = settingsEntryFor(path)
       return { crumb: '设置', title: hit?.label ?? '设置' }
     }
     if (path.startsWith('/agent')) return { crumb: acc?.name ?? '工作区', title: 'AI 对话' }
@@ -48,5 +50,5 @@ export function useChromeMeta(settings: { to: string; label: string }[]) {
       { test: /\/a\/[^/]+$/, title: '工作台' },
     ]
     return { crumb: acc.name, title: map.find((m) => m.test.test(path))?.title ?? '工作台' }
-  }, [loc.pathname, acc, settings])
+  }, [loc.pathname, acc])
 }

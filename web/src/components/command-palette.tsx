@@ -10,6 +10,7 @@ import { toast } from 'sonner'
 import { api, errorMessage, get, post } from '@/lib/api'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useAccounts, useCanWrite, useCurrentAccount, currentWorkQueryKey, useMe } from '@/lib/session'
+import { commandPaletteSettings, settingsEntries } from '@/lib/settings-registry'
 import type { SearchHit, StarItem, Work } from '@/lib/types'
 import { fuzzyMatch, recentItems, rememberRecent, workCmd } from '@/lib/v3'
 import { useAgentBootstrap } from '@/lib/agent'
@@ -195,14 +196,10 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
         { id: 'n-profile', group: '页面', label: '账号档案与 AI 记忆', icon: UserCircle2, keywords: 'profile memory', run: () => go(`${base}/profile`, '账号档案') },
       )
     }
-    const settings: [string, string][] = [
-      ['/settings/preferences', '偏好设置'], ['/settings/models', '模型配置'], ['/settings/usage', 'AI 用量与成本'], ['/settings/quality', 'AI 质量看板'],
-      ['/settings/prompts', '提示词模板'], ['/settings/words', '敏感词库'], ['/settings/members', '成员与邀请'], ['/settings/accounts', '平台账号与凭证'],
-      ['/settings/trash', '回收站'], ['/settings/logs', '操作日志'], ['/settings/export', '数据导出'], ['/settings/security', '登录与安全'],
-      ['/settings/hot-sources', '热点来源'], ['/settings/daily', '每日推荐设置'],
-    ]
-    if (me?.is_system_admin) settings.push(['/settings/admin', '系统管理'], ['/settings/crawl', '热点采集与日志'])
-    for (const [to, label] of settings) list.push({ id: 's' + to, group: '设置', label, icon: Settings2, run: () => go(to, label) })
+    // GL-02：设置项与用户菜单同源；管理员项由 settings-registry 统一标记。
+    const settings = commandPaletteSettings()
+    if (me?.is_system_admin) settings.push(...settingsEntries.filter((entry) => entry.adminOnly && !entry.webHidden).map((entry) => ({ to: entry.path, label: entry.label })))
+    for (const { to, label } of settings) list.push({ id: 's' + to, group: '设置', label, icon: Settings2, run: () => go(to, label) })
     list.push({ id: 'a-search', group: '操作', label: '打开搜索页', icon: Search, keywords: 'search', run: () => go('/search' + (q ? `?q=${encodeURIComponent(q)}` : ''), '搜索') })
     list.push({ id: 'a-keys', group: '操作', label: '查看快捷键', icon: Keyboard, keywords: 'shortcut help', run: () => { onOpenChange(false); onHelpChange(true) } })
     if (canWrite) {

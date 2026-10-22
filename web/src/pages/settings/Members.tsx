@@ -307,6 +307,7 @@ export default function SettingsMembers() {
             : '只有工作区所有者可以生成邀请码、管理成员与模型/凭证。'}
         </Notice>
       )}
+      {!embedded && <Notice tone="ink">角色差异：所有者管理成员与凭证；编辑者可创作、导出与发布，不能改凭证；观察者只读。</Notice>}
 
     </div>
   )

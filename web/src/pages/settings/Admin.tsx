@@ -5,6 +5,7 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
 import { Badge, Button, Card, CardHeader, Empty, Field, PageHeader, PageLoading, Select, Switch } from '@/components/ui'
+import { BackToSettings } from '@/components/back-to-settings'
 import { errorMessage, get, patch, post, put } from '@/lib/api'
 import { fmtNum, fmtTime } from '@/lib/format'
 import { useInvalidate, useMe } from '@/lib/session'
@@ -187,6 +188,7 @@ export default function SettingsAdmin() {
       <PageHeader
         title="系统管理"
         desc="全站超级管理员：管控用户与工作区、查看跨租户审计与用量、开关注册与维护模式。"
+        action={<BackToSettings />}
       />
 
       <Card>

@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, cn, Empty, Field, PageHeader, PageState, Select, Tabs, Textarea } from '@/components/ui'
+import { BackToSettings } from '@/components/back-to-settings'
 import { confirm } from '@/components/dialog'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
@@ -287,17 +288,17 @@ export function PromptEval({ initialTask = '', candidate }: { initialTask?: stri
     <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
       <Card className="p-4">
         <p className="mb-3 text-[12.5px] leading-relaxed text-mist-500">改提示词前，先把真实的调用上下文存成测试用例，再用新旧两版各跑一次，人工对比哪版更好。</p>
-        {owner && (
+        {owner ? (
           <div className="mb-4 flex gap-2">
             <Select value={task} onChange={(e) => setTask(e.target.value)} className="min-w-0 flex-1">
               {(tpls.data ?? []).map((t) => <option key={t.task_type} value={t.task_type}>{t.label}</option>)}
             </Select>
             <Button icon={<Plus className="size-4" />} onClick={addCase}>保存用例</Button>
           </div>
-        )}
+        ) : <p className="mb-4 text-[12.5px] leading-relaxed text-mist-500">只读模式：用例可查看，保存与对比跑批由所有者执行。</p>}
         {(cases.data ?? []).length === 0 ? <p className="py-6 text-center text-[12.5px] text-mist-400">还没有测试用例</p> : (
           <ul className="space-y-1">
-            {cases.data!.map((c) => (
+            {(cases.data ?? []).map((c) => (
               <li key={c.id}>
                 <button type="button" onClick={() => { setSel(c); setTplB(candidate && c.task_type === initialTask ? candidate : tpls.data?.find((x) => x.task_type === c.task_type)?.content ?? '') }}
                   className={cn('flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px]', sel?.id === c.id ? 'bg-ink-50 text-ink-800' : 'hover:bg-mist-50')}>
@@ -321,16 +322,17 @@ export function PromptEval({ initialTask = '', candidate }: { initialTask?: stri
         )}
       </Card>
       {owner && <BatchReplay cases={cases.data ?? []} label={label} />}
+      {!owner && <Card className="p-4"><p className="text-[12.5px] text-mist-500">你是{me?.role === 'viewer' ? '观察者' : '编辑者'}：质量看板可查看，批量重放与提示词对比由所有者执行。</p></Card>}
       {sel ? (
         <div className="space-y-4">
-          {owner && (
+          {owner ? (
             <Card className="p-4">
               <Field label="候选提示词（B）" hint="A 为当前正在使用的版本。对比满意后，到「提示词模板」里保存为新版本。">
                 <Textarea rows={8} value={tplB} onChange={(e) => setTplB(e.target.value)} />
               </Field>
               <div className="mt-3 flex justify-end"><Button variant="primary" icon={<FlaskConical className="size-4" />} loading={busy} disabled={!tplB.trim()} onClick={run}>新旧各跑一次</Button></div>
             </Card>
-          )}
+          ) : <p className="text-[12.5px] text-mist-500">新旧对比跑批由所有者执行；你仍可查看历史对比结果。</p>}
           {(runs.data ?? []).map((r) => (
             <Card key={r.id} className="p-4">
               <div className="mb-2 flex items-center justify-between text-[12px] text-mist-500">
@@ -364,7 +366,7 @@ export default function Quality() {
   return (
     <div className="animate-fade-in">
       <PageHeader title="AI 质量看板" desc="看看 AI 在哪些任务上帮得好、在哪些任务上总被重来，再有针对性地调整提示词或模型。"
-        action={<Tabs value={tab} onChange={(v) => setParams(v === 'eval' ? { tab: 'eval' } : {}, { replace: true })} items={[{ value: 'board', label: '效果统计' }, { value: 'eval', label: '提示词回归' }]} />} />
+        action={<><BackToSettings /><Tabs value={tab} onChange={(v) => setParams(v === 'eval' ? { tab: 'eval' } : {}, { replace: true })} items={[{ value: 'board', label: '效果统计' }, { value: 'eval', label: '提示词回归' }]} /></>} />
       {tab === 'board' ? <QualityBoard /> : <PromptEval initialTask={params.get('task') ?? ''} />}
     </div>
   )

@@ -1,10 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  Activity, BarChart3, Bell, BookOpen, Bot, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, Clock, Cpu, Eye, FileText, Gauge, Images, Inbox, KeyRound,
-  LayoutDashboard, Lightbulb, LogOut, PanelLeft, Pencil, Plus, Power, ScrollText, Search, Send, Settings2, Shield, ShieldAlert, SlidersHorizontal, Sparkles, Trash2,
-  UserCircle2, UserPlus, Users,
+  Activity, BarChart3, Bell, BookOpen, Bot, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, Clock, Eye, FileText, Images, Inbox, KeyRound,
+  LayoutDashboard, Lightbulb, LogOut, PanelLeft, Pencil, Plus, Power, Search, Send, Settings2, Sparkles, Trash2,
+  UserCircle2, UserPlus,
 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -20,6 +20,7 @@ import { cn, Kbd, PlatformMark, platformLabel } from '@/components/ui'
 import { del, errorMessage, post } from '@/lib/api'
 import { isElectronDesktop } from '@/lib/desktop-presentation.js'
 import { currentAccountSettingsPath, DESKTOP_ACCOUNT_CREATE_READY, DESKTOP_ACCOUNT_CREATE_REQUEST, DESKTOP_ACCOUNT_SWITCHER_READY, DESKTOP_ACCOUNT_SWITCHER_REQUEST, releaseDesktopLeaveGuard, requestDesktopLeaveGuard } from '@/lib/desktop-settings'
+import { commonSettingsPaths, settingsEntries } from '@/lib/settings-registry'
 import { fmtTime } from '@/lib/format'
 import { TodayUsage, useChromeMeta } from './today-usage'
 import DesktopStatusBar from './DesktopStatusBar'
@@ -52,27 +53,11 @@ const mobileNav: { path: string; icon: typeof LayoutDashboard; label: string }[]
   { path: '/works?status=ready', icon: Send, label: '发布' },
 ]
 
-const settingsItems: { to: string; icon: ReactNode; label: string; adminOnly?: boolean }[] = [
-  { to: '/settings/preferences', icon: <SlidersHorizontal />, label: '偏好设置' },
-  { to: '/settings/accounts', icon: <Users />, label: '平台账号与凭证' },
-  { to: '/settings/members', icon: <Users />, label: '成员与邀请' },
-  { to: '/settings/models', icon: <Cpu />, label: '模型配置' },
-  { to: '/settings/agent', icon: <Bot />, label: '智能体设置' },
-  { to: '/settings/usage', icon: <Gauge />, label: 'AI 用量与成本' },
-  { to: '/settings/quality', icon: <Activity />, label: 'AI 质量看板' },
-  { to: '/settings/words', icon: <ShieldAlert />, label: '敏感词库' },
-  { to: '/settings/prompts', icon: <ScrollText />, label: '提示词模板' },
-  { to: '/settings/export', icon: <Gauge />, label: '数据导出' },
-  { to: '/settings/logs', icon: <ScrollText />, label: '操作日志' },
-  { to: '/settings/trash', icon: <Trash2 />, label: '回收站' },
-  { to: '/settings/security', icon: <KeyRound />, label: '登录与安全' },
-  { to: '/settings/admin', icon: <Shield />, label: '系统管理', adminOnly: true },
-  { to: '/settings/crawl', icon: <Activity />, label: '热点采集与日志', adminOnly: true },
-  { to: '/settings/hot-sources', icon: <Activity />, label: '热点来源' },
- { to: '/settings/daily', icon: <Activity />, label: '每日推荐设置' },
-]
-
-const commonSettings = new Set(['/settings/accounts', '/settings/models', '/settings/members', '/settings/preferences'])
+// GL-02：用户菜单只列 Web 可见项；桌面端点击"设置…"打开设置窗，不走这里的分组。
+const settingsItems = settingsEntries
+  .filter((entry) => !entry.webHidden)
+  .map((entry) => ({ to: entry.path, icon: <entry.icon />, label: entry.label, adminOnly: entry.adminOnly }))
+const commonSettings = commonSettingsPaths
 
 function Brand({ desktop }: { desktop: boolean }) {
   if (desktop) {
@@ -864,7 +849,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
 }
 
 function TopBar({ username, onLogout, dense, showAgent, agentMode, homeTo, desktopNavExpanded, onToggleDesktopNav }: { username?: string; onLogout: () => void; dense?: boolean; showAgent?: boolean; agentMode?: boolean; homeTo: string; desktopNavExpanded: boolean; onToggleDesktopNav: () => void }) {
-  const meta = useChromeMeta(settingsItems)
+  const meta = useChromeMeta()
   const acc = useCurrentAccount()
   const navigate = useNavigate()
   const desktopPresentation = isElectronDesktop(navigator.userAgent)

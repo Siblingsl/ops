@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { Card, CardHeader, cn, Empty, Input, PageHeader, PageState, Tabs } from '@/components/ui'
+import { BackToSettings } from '@/components/back-to-settings'
 import { get } from '@/lib/api'
 import { fmtNum } from '@/lib/format'
 import type { AILimit } from '@/lib/types'
@@ -31,7 +32,7 @@ export default function Usage() {
   return (
     <div className="animate-fade-in space-y-6">
       <PageHeader title="AI 用量" desc="按 token 统计；在模型配置中填写单价后可以估算费用。采纳率 = 直接采用或小改后采用的次数 / 有反馈的调用次数。"
-        action={<Tabs value={tab} onChange={setTab} items={[{ value: 'usage', label: '用量与费用' }, { value: 'quality', label: '质量' }]} />} />
+        action={<><BackToSettings /><Tabs value={tab} onChange={setTab} items={[{ value: 'usage', label: '用量与费用' }, { value: 'quality', label: '质量' }]} /></>} />
       {tab === 'usage' ? <UsageStats /> : <QualityBoard />}
     </div>
   )

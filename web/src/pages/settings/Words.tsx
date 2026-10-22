@@ -3,8 +3,9 @@ import { Plus, Search, X } from 'lucide-react'
 import { useState } from 'react'
 import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
 import { toast } from 'sonner'
-import { Badge, Button, Card, CardHeader, Field, Input, PageHeader, PageLoading, Tabs, Textarea } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, Field, Input, Notice, PageHeader, PageLoading, Tabs, Textarea } from '@/components/ui'
 import { del, errorMessage, get, post } from '@/lib/api'
+import { useCanWrite } from '@/lib/session'
 
 interface Word { id: string; word: string; category: string; source: 'base' | 'custom'; created_at: string }
 
@@ -16,6 +17,7 @@ export default function Words() {
   const [q, setQ] = useState('')
   const [busy, setBusy] = useState(false)
   const embedded = useEmbeddedSettings()
+  const canWrite = useCanWrite()
   useSettingsDraft(!!(text.trim() || category.trim()), busy)
   if (isLoading) return <PageLoading />
   const list = (data ?? []).filter((w) => w.source === tab && (!q || w.word.includes(q)))
@@ -58,7 +60,9 @@ export default function Words() {
                 {w.word}
                 {w.category && <Badge className="ml-1">{w.category}</Badge>}
                 {w.source === 'custom' ? (
-                  <button onClick={() => remove(w)} className="cursor-pointer rounded p-0.5 text-mist-400 hover:bg-mist-100 hover:text-danger" aria-label="删除"><X className="size-3" /></button>
+                  canWrite
+                    ? <button onClick={() => remove(w)} className="cursor-pointer rounded p-0.5 text-mist-400 hover:bg-mist-100 hover:text-danger" aria-label="删除"><X className="size-3" /></button>
+                    : <span className="w-1" />
                 ) : <span className="w-1" />}
               </span>
             ))}
@@ -66,11 +70,11 @@ export default function Words() {
         </Card>
         <Card className="h-fit p-5">
           <h3 className="mb-4 text-[15px] font-semibold text-mist-900">添加自定义词</h3>
-          <div className="space-y-4">
+          {canWrite ? <div className="space-y-4">
             <Field label="敏感词" hint="一行一个，或用逗号分隔"><Textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} /></Field>
             <Field label="分类（可选）"><Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="例如：医疗、金融" /></Field>
             <Button variant="primary" className="w-full" loading={busy} disabled={!text.trim()} onClick={add} icon={<Plus className="size-4" />}>添加</Button>
-          </div>
+          </div> : <Notice>你是观察者，只能查看；敏感词由所有者或编辑者维护。</Notice>}
         </Card>
       </div>
     </div>

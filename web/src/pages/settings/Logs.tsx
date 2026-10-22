@@ -1,7 +1,9 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { ScrollText } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Badge, Button, Card, Empty, PageHeader, PageLoading, Select } from '@/components/ui'
+import { BackToSettings } from '@/components/back-to-settings'
 import { get } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 
@@ -31,6 +33,14 @@ const filters = [
   { value: 'trash_', label: '回收站' },
 ]
 
+/** 日志对象可点开（ST-09）：只对确实存在的业务对象给出跳转，其余保持纯文本。 */
+const targetLinks: Record<string, (id: string) => string | null> = {
+  work: (id) => `/works/${id}`,
+  platform_account: (id) => `/settings/accounts?id=${encodeURIComponent(id)}`,
+  topic: () => '/topics',
+  account_memory: () => '/a',
+}
+
 export default function Logs() {
   const [action, setAction] = useState('')
   const q = useInfiniteQuery({
@@ -44,7 +54,7 @@ export default function Logs() {
   return (
     <div className="animate-fade-in">
       <PageHeader title="操作日志" desc="登录、凭证、推送、检查确认等关键操作都会记录。日志中不包含密钥和正文。"
-        action={<Select value={action} onChange={(e) => setAction(e.target.value)} className="w-40">{filters.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}</Select>} />
+        action={<><BackToSettings /><Select value={action} onChange={(e) => setAction(e.target.value)} className="w-40">{filters.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}</Select></>} />
       <Card>
         {list.length === 0 ? <Empty icon={<ScrollText className="size-5" />} title="没有日志" /> : (
           <ul className="divide-y divide-mist-100">
@@ -59,6 +69,9 @@ export default function Logs() {
                   </div>
                   {l.detail != null && JSON.stringify(l.detail) !== '{}' && JSON.stringify(l.detail) !== 'null' && (
                     <div className="mt-0.5 truncate font-mono text-[11.5px] text-mist-400">{JSON.stringify(l.detail)}</div>
+                  )}
+                  {l.target_id && targetLinks[l.target_type]?.(l.target_id) && (
+                    <Link to={targetLinks[l.target_type]!(l.target_id)!} className="mt-1 inline-block text-[11.5px] text-ink-600 hover:underline">查看对象 ↗</Link>
                   )}
                 </div>
                 <span className="shrink-0 text-xs text-mist-400">{l.actor ?? '系统'}</span>

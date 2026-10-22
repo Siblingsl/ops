@@ -3,6 +3,7 @@ import { FlaskConical } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button, Card, CardHeader, Field, PageHeader, PageLoading, Tabs, Textarea } from '@/components/ui'
+import { BackToSettings } from '@/components/back-to-settings'
 import { errorMessage, get, put } from '@/lib/api'
 import { PromptEval } from './Quality'
 
@@ -50,7 +51,7 @@ export default function Prompts() {
   return (
     <div className="animate-fade-in">
       <PageHeader title="提示词模板" desc="只可编辑各任务的指令部分；系统规则（不编造事实等）始终生效。改之前可以先在「测试集」里新旧对比。"
-        action={<Tabs value={tab} onChange={setTab} items={[{ value: 'templates', label: '模板' }, { value: 'eval', label: '测试集' }]} />} />
+        action={<><BackToSettings /><Tabs value={tab} onChange={setTab} items={[{ value: 'templates', label: '模板' }, { value: 'eval', label: '测试集' }]} /></>} />
       {tab === 'eval' ? <PromptEval key={evalFor.task + (evalFor.candidate ?? '')} initialTask={evalFor.task} candidate={evalFor.candidate} /> : (
         <>
           <Card>

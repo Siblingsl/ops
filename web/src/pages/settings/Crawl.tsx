@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, Empty, Field, Input, Notice, PageHeader, Select, Spinner, Textarea } from '@/components/ui'
+import { BackToSettings } from '@/components/back-to-settings'
 import { errorMessage, get, post, put } from '@/lib/api'
 import { useInvalidate, useMe } from '@/lib/session'
 import type { CrawlHealth, CrawlRun, CrawlSettings, CrawlSource, HotSourcesResult, Provider } from '@/lib/types'
@@ -74,7 +75,7 @@ export default function Crawl() {
     setBusy(true)
     try { await put('/admin/crawl', form); refresh(); toast.success('采集设置已保存') } catch (e) { toast.error(errorMessage(e)) } finally { setBusy(false) }
   }
-  return <div className="animate-fade-in space-y-5"><PageHeader title="热点采集" desc="公开内容内部参考；固定身份、遵守 robots，限速与风控熔断无法关闭。" />
+  return <div className="animate-fade-in space-y-5"><PageHeader title="热点采集" desc="公开内容内部参考；固定身份、遵守 robots，限速与风控熔断无法关闭。" action={<BackToSettings />} />
     {query.isError ? <Notice tone="red">{errorMessage(query.error)}</Notice> : !form ? <Spinner /> : <>
       <Card><CardHeader title="全站采集参数" /><div className="space-y-4 p-5">
         {form.mode !== 'allow' && <Notice tone="gamboge">部署方未开启采集，当前无法开启来源。</Notice>}

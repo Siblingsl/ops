@@ -525,7 +525,7 @@ export default function Models() {
             <Button variant="primary" icon={<Zap className="size-4" />} onClick={() => setQuick(true)}>快速配置</Button>
           </>}
         </>} />
-      {!isOwner && <Notice tone="ink">你是编辑者，可查看模型配置，但不能修改密钥或路由。</Notice>}
+      {!isOwner && <Notice tone="ink">{me?.role === 'viewer' ? '你是观察者，只能查看模型配置；密钥与路由由所有者或编辑者维护。' : '你是编辑者，可查看模型配置，但不能修改密钥或路由。'}</Notice>}
       {list.length === 0 ? (
         <Card><Empty icon={<Cpu className="size-5" />} title="还没有配置模型" desc="没有模型时 AI 按钮不可用，写作、检查和推送不受影响。快速配置只需选供应商、填一次密钥，按用途填模型名。"
           action={isOwner ? <Button variant="primary" icon={<Zap className="size-4" />} onClick={() => setQuick(true)}>快速配置</Button> : undefined} /></Card>
