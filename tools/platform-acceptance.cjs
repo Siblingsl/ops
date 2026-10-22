@@ -302,13 +302,17 @@ function printReport(platform, reading, obsResult, bound, options) {
   const deleted = reading.items.filter((i) => i.status === 'deleted');
   const fieldsTotal = rows.reduce((sum, r) => sum + r.fields.length, 0);
   const fresh = freshnessOf(published);
+  // 豁免不是"算达标"，而是"这一条不参与判定"。两者必须分开表达：
+  // 报告若把豁免项打成 ✓，后来的人会以为 D1/D3/D7 真的验过了。
+  const freshnessWaived = options.waiveFreshness === true;
   const freshEnough = fresh.newestDays !== null && fresh.newestDays <= 7;
 
   if (options.json) {
     console.log(JSON.stringify({
       platform, landed: reading.landed, coverage: reading.coverage,
       bound, publishedCount: published.length, deletedCount: deleted.length,
-      matched, mismatched, missingObservation, fieldsTotal, freshness: fresh, rows
+      matched, mismatched, missingObservation, fieldsTotal, freshness: fresh,
+      freshnessWaived, rows
     }, null, 2));
     return { matched, mismatched };
   }
@@ -325,11 +329,16 @@ function printReport(platform, reading, obsResult, bound, options) {
   if (fresh.newestDays === null) {
     console.log(`新作        无法从平台解析发布时间（${fresh.dated}/${published.length} 篇有日期）✗`);
   } else {
+    const mark = freshnessWaived ? '已豁免' : freshEnough ? '✓' : '✗';
     console.log(
       `新作        最新一篇距今 ${fresh.newestDays} 天（${fresh.newestAt.slice(0, 10)}），` +
-      `D1 ${fresh.d1} 篇 / D3 ${fresh.d3} 篇 / D7 ${fresh.d7} 篇 ${freshEnough ? '✓' : '✗'}` +
+      `D1 ${fresh.d1} 篇 / D3 ${fresh.d3} 篇 / D7 ${fresh.d7} 篇 ${mark}` +
       (fresh.undated ? `（另有 ${fresh.undated} 篇无发布时间）` : '')
     );
+    if (freshnessWaived) {
+      // 必须打印豁免来源：否则下一个人只看数字，会以为这条达标了。
+      console.log('            豁免依据：docs/21 十七点三十三（用户 2026-10-22 书面豁免）');
+    }
   }
 
   const bad = rows.filter((r) => r.fields.some((f) => f.verdict === 'mismatch' || f.verdict === 'obs_missing'));
@@ -376,17 +385,23 @@ function printReport(platform, reading, obsResult, bound, options) {
   }
 
   // 样本量是否达标（§17.1 要求 ≥10 篇、≥3 个发布日、**每字段** ≥10 个对照，且有近期新作）。
+  // 豁免项不参与判定，但在明细里显示"已豁免"，不显示 ✓——避免把豁免读成达标。
   const worksEnough = published.length >= 10;
   const daysEnough = bound.publishDays >= 3;
   const fieldsEnough = fieldRows.length > 0 && fieldRows.every(([, count]) => count >= 10);
-  const enough = worksEnough && daysEnough && fieldsEnough && freshEnough;
+  const freshGate = freshnessWaived || freshEnough;
+  const enough = worksEnough && daysEnough && fieldsEnough && freshGate;
+  const freshLabel = freshnessWaived ? '已豁免' : freshEnough ? '✓' : '✗';
   console.log(
     `\n样本量      ${enough ? '达标' : '不达标'}` +
     `（篇数 ${published.length}/10 ${worksEnough ? '✓' : '✗'}，` +
     `发布日 ${bound.publishDays}/3 ${daysEnough ? '✓' : '✗'}，` +
     `每字段 ≥10 ${fieldsEnough ? '✓' : '✗'}，` +
-    `近 7 天新作 ${freshEnough ? '✓' : '✗'}）`
+    `近 7 天新作 ${freshLabel}）`
   );
+  if (freshnessWaived && !freshEnough) {
+    console.log('            注：豁免只免除"近期新作"这一条，其余门槛照常判定。');
+  }
   return { matched, mismatched, enough };
 }
 
@@ -400,10 +415,13 @@ async function main() {
   const rawAccountId = accIdx > 0 ? process.argv[accIdx + 1] : undefined;
   const options = {
     json: process.argv.includes('--json'),
-    accountId: rawAccountId === undefined ? undefined : assertAccountId(rawAccountId)
+    accountId: rawAccountId === undefined ? undefined : assertAccountId(rawAccountId),
+    // --waive-freshness：用户已书面豁免"近 7 天新作"（docs/21 十七点三十三）。
+    // 必须显式传，不设默认值——默认豁免等于把门槛悄悄拆了。
+    waiveFreshness: process.argv.includes('--waive-freshness')
   };
   if (platform !== 'xhs' && platform !== 'wechat_mp') {
-    console.error('用法：node tools/platform-acceptance.cjs <xhs|wechat_mp> [--account <uuid>] [--json]');
+    console.error('用法：node tools/platform-acceptance.cjs <xhs|wechat_mp> [--account <uuid>] [--json] [--waive-freshness]');
     process.exit(2);
   }
   const observations = loadObservations(platform, options.accountId);
