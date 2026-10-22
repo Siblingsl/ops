@@ -356,10 +356,13 @@ function printReport(platform, reading, obsResult, bound, options) {
   // 每字段有效对照数：按**作品**去重，不是按观测条数。
   // §17.1 要求"每字段至少 10 个有效对照"——同一篇作品的多次采集只算一个对照，
   // 否则重复采集会把数字刷上去，看起来达标其实样本只有几篇。
+  // 还要求**两侧都有值**：平台有读数、观测里没这个字段时不算对照——
+  // 早期实现只看平台侧非空，观测缺字段也能把计数堆到 10，达标是假的。
   const perField = new Map();
   for (const r of rows) {
     for (const f of r.fields) {
       if (f.platformValue === null || f.platformValue === undefined) continue;
+      if (f.obsValue === null || f.obsValue === undefined) continue;
       perField.set(f.label, (perField.get(f.label) ?? 0) + 1);
     }
   }
