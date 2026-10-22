@@ -20,6 +20,9 @@ func platformTestAccount(t *testing.T, platform, name string) Account {
 	t.Helper()
 	a := drAccount(t, platform, name)
 	if platform == "wechat_mp" {
+		// 写公众号凭据是增权操作。助手自己重新认证一次，而不是假设前序用例
+		// 留下的认证窗口还在：有测试会清掉 reauth 再断言 403，顺序一变这里就红。
+		env.reauth(t)
 		env.mustJSON(t, "PUT", "/api/v1/accounts/"+a.ID.String()+"/wechat-credential",
 			map[string]string{"app_id": "wx-fixture-app", "app_secret": "fixture-secret-value"}, nil)
 		var probe struct {
