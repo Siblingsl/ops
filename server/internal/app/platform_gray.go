@@ -192,7 +192,10 @@ func (s *Server) enforcePlatformGrayThresholds(ctx context.Context) {
 		if !diag.Degraded {
 			continue
 		}
-		tag, err := s.db.Exec(ctx, `UPDATE platform_connection SET auto_adopt=false, updated_at=now()
+		// 降级同样要递增 adoption_revision：界面手里那份版本号必须立刻失效，
+		// 否则它继续拿着旧版本提交"保持开启"也匹配得上（DEV-PS62）。
+		tag, err := s.db.Exec(ctx, `UPDATE platform_connection SET auto_adopt=false,
+			adoption_revision=adoption_revision+1, updated_at=now()
 			WHERE workspace_id=$1 AND auto_adopt`, ws)
 		if err != nil {
 			slog.Error("平台灰度：自动降级失败", "workspace_id", ws, "err", err)

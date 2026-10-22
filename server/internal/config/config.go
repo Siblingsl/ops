@@ -27,6 +27,10 @@ type Config struct {
 	// DesktopPlatformEnabled is an explicit global kill switch for platform collection
 	// (D-129). It is process configuration, never overridable by a workspace policy row.
 	DesktopPlatformEnabled bool
+	// DesktopPlatformAutoAdopt is the second gate for D-129: even with a connection's
+	// own switch on, platform readings are only written into official metrics when an
+	// operator has explicitly enabled this after formal acceptance (DEV-PS62).
+	DesktopPlatformAutoAdopt bool
 	// AIWorkers is the per-workspace concurrency of background and streaming AI jobs (D-054).
 	AIWorkers int
 	// Permanent system admin (D-044). Ensured on every serve start.
@@ -36,17 +40,18 @@ type Config struct {
 
 func Load() (*Config, error) {
 	c := &Config{
-		Dev:                 os.Getenv("OPS_DEV") != "0",
-		Listen:              env("OPS_LISTEN", ":8080"),
-		DatabaseURL:         env("OPS_DATABASE_URL", "postgres://ops:ops_dev_password@localhost:5440/ops?sslmode=disable"),
-		DataDir:             env("OPS_DATA_DIR", "./data"),
-		StaticDir:           os.Getenv("OPS_STATIC_DIR"),
-		MockListen:          env("OPS_MOCK_LISTEN", "127.0.0.1:8091"),
-		PublicIP:            os.Getenv("OPS_PUBLIC_IP"),
-		SystemAdminUser:     env("OPS_SYSTEM_ADMIN_USER", "skyeder"),
-		SystemAdminPassword: os.Getenv("OPS_SYSTEM_ADMIN_PASSWORD"),
-		DesktopAIEnabled:    false,
-		DesktopPlatformEnabled: false,
+		Dev:                      os.Getenv("OPS_DEV") != "0",
+		Listen:                   env("OPS_LISTEN", ":8080"),
+		DatabaseURL:              env("OPS_DATABASE_URL", "postgres://ops:ops_dev_password@localhost:5440/ops?sslmode=disable"),
+		DataDir:                  env("OPS_DATA_DIR", "./data"),
+		StaticDir:                os.Getenv("OPS_STATIC_DIR"),
+		MockListen:               env("OPS_MOCK_LISTEN", "127.0.0.1:8091"),
+		PublicIP:                 os.Getenv("OPS_PUBLIC_IP"),
+		SystemAdminUser:          env("OPS_SYSTEM_ADMIN_USER", "skyeder"),
+		SystemAdminPassword:      os.Getenv("OPS_SYSTEM_ADMIN_PASSWORD"),
+		DesktopAIEnabled:         false,
+		DesktopPlatformEnabled:   false,
+		DesktopPlatformAutoAdopt: false,
 	}
 	if v := strings.TrimSpace(os.Getenv("OPS_DESKTOP_AI_ENABLED")); v != "" {
 		switch strings.ToLower(v) {
@@ -66,6 +71,17 @@ func Load() (*Config, error) {
 			c.DesktopPlatformEnabled = false
 		default:
 			return nil, errors.New("OPS_DESKTOP_PLATFORM_ENABLED 只能为 0/1/false/true")
+		}
+	}
+	// 自动采用的闸门单独一个变量：验收未过也能回滚，且不必连带停掉自动采集。
+	if v := strings.TrimSpace(os.Getenv("OPS_DESKTOP_PLATFORM_AUTO_ADOPT")); v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true":
+			c.DesktopPlatformAutoAdopt = true
+		case "0", "false":
+			c.DesktopPlatformAutoAdopt = false
+		default:
+			return nil, errors.New("OPS_DESKTOP_PLATFORM_AUTO_ADOPT 只能为 0/1/false/true")
 		}
 	}
 	c.AIWorkers = 3

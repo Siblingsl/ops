@@ -306,7 +306,22 @@ func (s *Server) patchPlatformConnection(w http.ResponseWriter, r *http.Request)
 	}
 	if in.AutoAdopt != nil && *in.AutoAdopt {
 		// D-129：正式验收（每平台 10 篇以上逐字段对照）完成前不开启自动采用。
-		return apiErr(409, "platform_consent_required", "自动采用需先完成正式验收，当前版本不支持开启")
+		// 闸门是进程配置 `OPS_DESKTOP_PLATFORM_AUTO_ADOPT`（DEV-PS62），默认关闭：
+		// 验收结论进决策记录后由部署显式打开，回滚只需改环境变量。
+		if s.cfg == nil || !s.cfg.DesktopPlatformAutoAdopt {
+			return apiErr(409, "platform_consent_required", "自动采用需先完成正式验收，当前版本不支持开启")
+		}
+	}
+	if in.AutoAdopt != nil {
+		// 库上有 CHECK (NOT auto_adopt OR auto_collect)：先给出可读的参数错误，
+		// 不要让用户看到 23514 约束冲突。
+		collectAfter := c.AutoCollect
+		if in.AutoCollect != nil {
+			collectAfter = *in.AutoCollect
+		}
+		if *in.AutoAdopt && !collectAfter {
+			return validation("开启自动采用前请先开启自动采集")
+		}
 	}
 	if in.AutoCollect != nil && !*in.AutoCollect && c.AutoAdopt {
 		return validation("关闭自动采集前请先关闭自动采用")
@@ -330,8 +345,11 @@ func (s *Server) patchPlatformConnection(w http.ResponseWriter, r *http.Request)
 		if err := tx.QueryRow(r.Context(), `UPDATE platform_connection SET
 			state=coalesce($2, state),
 			auto_collect=coalesce($3, auto_collect),
+			auto_adopt=coalesce($4, auto_adopt),
 			authorization_revision=authorization_revision +
 			  CASE WHEN ($2 IS NOT NULL OR $3 IS DISTINCT FROM auto_collect) THEN 1 ELSE 0 END,
+			adoption_revision=adoption_revision +
+			  CASE WHEN $4 IS DISTINCT FROM auto_adopt THEN 1 ELSE 0 END,
 			next_due_at=CASE WHEN $2='paused' THEN NULL ELSE next_due_at END,
 			updated_at=now()
 			WHERE id=$1
@@ -339,7 +357,7 @@ func (s *Server) patchPlatformConnection(w http.ResponseWriter, r *http.Request)
 			  state, availability, authorization_revision, adoption_revision, auto_collect, auto_adopt,
 			  last_verified_at, last_seen_at, next_due_at, failure_count, platform_consent_version,
 			  consented_at, created_at, updated_at`,
-			c.ID, in.State, in.AutoCollect).Scan(
+			c.ID, in.State, in.AutoCollect, in.AutoAdopt).Scan(
 			&updated.ID, &updated.WorkspaceID, &updated.AccountID, &updated.Platform, &updated.UserID,
 			&updated.DeviceID, &updated.ExternalAccountKey, &updated.State, &updated.Availability,
 			&updated.AuthorizationRevision, &updated.AdoptionRevision, &updated.AutoCollect, &updated.AutoAdopt,

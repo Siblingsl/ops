@@ -126,12 +126,17 @@ func TestPlatformGrayDegradeTurnsOffAutoAdopt(t *testing.T) {
 	}
 	env.srv.enforcePlatformGrayThresholds(ctx)
 	var autoAdopt, autoCollect bool
-	if err := env.srv.db.QueryRow(ctx, `SELECT auto_adopt, auto_collect FROM platform_connection
-		WHERE id=$1`, f.Connection).Scan(&autoAdopt, &autoCollect); err != nil {
+	var adoptionRevision int64
+	if err := env.srv.db.QueryRow(ctx, `SELECT auto_adopt, auto_collect, adoption_revision FROM platform_connection
+		WHERE id=$1`, f.Connection).Scan(&autoAdopt, &autoCollect, &adoptionRevision); err != nil {
 		t.Fatal(err)
 	}
 	if autoAdopt {
 		t.Fatal("超阈值应关闭 auto_adopt")
+	}
+	// 降级也必须让界面手里的版本号失效，否则它拿旧版本继续提交"保持开启"仍然匹配。
+	if adoptionRevision <= 1 {
+		t.Fatalf("降级应递增 adoption_revision，实际 %d", adoptionRevision)
 	}
 	if !autoCollect {
 		t.Fatal("降级只关闭自动采用，不应停自动采集")
