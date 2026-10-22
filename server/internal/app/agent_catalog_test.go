@@ -170,6 +170,17 @@ func agentClassifiedRouteList() map[string]string {
 		"GET /api/v1/accounts/{accountId}/platform-connection",
 		"DELETE /api/v1/accounts/{accountId}/platform-connection",
 		"PATCH /api/v1/accounts/{accountId}/platform-connection",
+		// D-133 平台账号同步与镜像：本人平台内容的读取、关联和建稿由用户在业务页面逐篇操作。
+		"POST /api/v1/accounts/{accountId}/platform-account-sync",
+		"POST /api/v1/accounts/{accountId}/platform-metrics-refresh",
+		"GET /api/v1/accounts/{accountId}/platform-profile",
+		"GET /api/v1/accounts/{accountId}/platform-sync-operations",
+		"GET /api/v1/accounts/{accountId}/platform-sync-operations/{operationId}",
+		"POST /api/v1/accounts/{accountId}/platform-sync-operations/{operationId}/actions",
+		"GET /api/v1/accounts/{accountId}/platform-sync-operations/{operationId}/items",
+		"GET /api/v1/accounts/{accountId}/platform-works",
+		"GET /api/v1/accounts/{accountId}/platform-works/{platformWorkId}",
+		"POST /api/v1/accounts/{accountId}/platform-works/{platformWorkId}/draft",
 		"GET /api/v1/desktop/platform/connections/mine",
 		"DELETE /api/v1/desktop/platform/connections/{id}",
 		"PUT /api/v1/works/{id}/platform-binding",
@@ -191,6 +202,14 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/auth/login",
 		"GET /api/v1/public-previews/{token}",
 		"GET /api/v1/public-previews/{token}/assets/{assetId}",
+		// DEV-416 / D-140：创作模板由用户在创建面板维护，内置模板只读；
+		// 智能体不提供模板管理工具（避免模型替用户决定结构与语气）。
+		"GET /api/v1/creation-templates",
+		"POST /api/v1/creation-templates",
+		"PUT /api/v1/creation-templates/{id}",
+		"DELETE /api/v1/creation-templates/{id}",
+		// TP-01：丢掉灵感可撤销，但入口在收件箱，智能体不提供批量整理工具。
+		"POST /api/v1/inbox/{id}/restore",
 	} {
 		out[r] = "附录 B.2：不提供"
 	}

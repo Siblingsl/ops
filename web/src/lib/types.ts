@@ -38,6 +38,7 @@ export interface PlatformConnection {
   id: string
   account_id: string
   platform: 'wechat_mp' | 'xhs'
+  is_holder?: boolean
   state: 'active' | 'paused' | 'revoked'
   availability: PlatformAvailability
   external_account_key: string
@@ -51,6 +52,90 @@ export interface PlatformConnection {
   adoption_revision: number
   platform_consent_version: number
   consented_at: string | null
+  sync_capabilities?: {
+    catalog: 'supported' | 'denied' | 'unknown' | 'temporarily_unavailable' | 'unsupported'
+    content: 'supported' | 'denied' | 'unknown' | 'temporarily_unavailable' | 'unsupported'
+    metrics: 'supported' | 'denied' | 'unknown' | 'temporarily_unavailable' | 'unsupported'
+  }
+}
+
+export interface PlatformSyncOperation {
+  id: string
+  kind: 'account_sync' | 'metrics_refresh'
+  effective_mode: string
+  revision: number
+  status: 'queued' | 'running' | 'paused' | 'waiting_budget' | 'waiting_device' | 'waiting_login' | 'succeeded' | 'partial' | 'failed' | 'canceled'
+  stage: string
+  account_id: string
+  connection_id: string
+  created_at: string
+  scope_upper_bound: string | null
+  expires_at: string | null
+  next_allowed_at: string | null
+  pause_reason: string | null
+  coverage: Record<string, { state?: string; reason?: string | null; total_count?: number; discovered?: number; pending?: number }>
+  counters: Record<string, number>
+  last_error: { code: string } | null
+  available_actions: Array<'pause' | 'resume' | 'cancel'>
+}
+
+export interface PlatformWorkMirrorListItem {
+  id: string
+  external_id: string
+  remote_content_type: 'image_note' | 'video_note' | 'wechat_article' | 'toutiao_article' | 'toutiao_micro_post' | 'unknown'
+  remote_status: 'published' | 'draft' | 'reviewing' | 'hidden' | 'deleted' | 'unknown'
+  title: string
+  summary: string
+  cover_ref: string | null
+  canonical_url: string | null
+  published_at: string | null
+  remote_updated_at: string | null
+  content_state: string
+  content_error_code: string | null
+  field_coverage: Record<string, string>
+  last_seen_at: string
+  content_observed_at: string | null
+  revision: number
+  created_at: string
+  is_bound: boolean
+  latest_metric_as_of_at: string | null
+  latest_metric_observed_at: string | null
+}
+
+export interface PlatformWorkMirror extends PlatformWorkMirrorListItem {
+  account_id: string
+  platform: 'wechat_mp' | 'xhs'
+  external_account_key: string
+  author_display?: string
+  body_text: string
+  body_structure: Array<{ type: string; text?: string; media_index?: number; level?: number }>
+  topics: string[]
+  tags: string[]
+  media_refs: Array<{ kind: string; url: string; position: number; width?: number; height?: number; duration_seconds?: number }>
+  content_hash: string | null
+  content_revision: number
+  content_observed_at: string | null
+  bindings: Array<{ work_id: string; title: string; status: WorkStatus; published_at: string | null; binding_revision: number; publish_revision: number | null }>
+  metric_observations: PlatformObservation[]
+}
+
+export interface PlatformWorkMirrorPage {
+  items: PlatformWorkMirrorListItem[]
+  next_cursor: string | null
+}
+
+export interface PlatformAccountSnapshot {
+  account_id: string
+  display_name: string | null
+  public_account_id: string | null
+  avatar_ref: string | null
+  bio: string | null
+  verified_type: string | null
+  remote_account_type: string | null
+  safe_fields: Record<string, string>
+  field_states: Record<string, string>
+  revision: number
+  observed_at: string
 }
 
 /** 最小观测（20 文档 §8.1）：页面只读展示，不返回原始网络数据。 */
@@ -355,6 +440,9 @@ export interface Work {
   metric_binding_confirmed_at?: string | null
   platform_binding_source?: 'user_link' | 'user_confirm' | 'official_exact' | 'legacy_title' | null
   platform_binding_verified_at?: string | null
+  platform_source_mirror_id?: string | null
+  platform_source_content_revision?: number | null
+  platform_source_mirror_revision?: number | null
   locked: boolean
   revision: number
   sections: Section[]
@@ -784,6 +872,21 @@ export interface SectionRevision { id: string; content_md: string; origin: strin
 
 export interface OutlineTemplate { id: string; name: string; structure: string; builtin: boolean }
 
+// DEV-416 / D-140：创作模板是唯一的"模板"概念（结构 + 语气 + 段落区间 + 提示词补充）。
+export interface TemplateStep { heading: string; key_point: string; role?: string }
+export interface CreationTemplate {
+  id: string
+  content_format: ContentFormat
+  name: string
+  builtin: boolean
+  structure: TemplateStep[]
+  prompt_addon: string
+  section_min: number
+  section_max: number
+  tone: string
+  updated_at?: string
+}
+
 export interface WeeklyDigest {
   id: string
   week_start: string
@@ -838,7 +941,7 @@ export interface DailyResult {date:string;recommendation:DailyRecommendation|nul
 
 export interface HotTrend {id:string;title:string;first_seen_at:string;last_seen_at:string;sources:{name:string;rank:number;url:string}[];points:{at:string;rank:number;source:string}[];writing:{account:string;work_id:string;title:string}[]}
 
-export interface DailyStatsResult {total:number;adopted:number;rate:number;sources:{type:string;total:number;adopted:number;rate:number;reduced:boolean;published:number;avg_reads:number|null;avg_likes:number|null}[];performance:{recommended:boolean;works:number;avg_reads:number|null;avg_likes:number|null}[]}
+export interface DailyStatsResult {content_format?:ContentFormat;total:number;adopted:number;rate:number;sources:{type:string;total:number;adopted:number;rate:number;reduced:boolean;published:number;avg_reads:number|null;avg_likes:number|null}[];performance:{recommended:boolean;works:number;avg_reads:number|null;avg_likes:number|null}[]}
 
 export interface SourceHealthWindow { runs: number; successful: number; success_rate: number | null; items: number; matches: number; converted: number; adopted: number }
 export interface SourceHealthRow { key: string; name: string; days_7: SourceHealthWindow; days_30: SourceHealthWindow }

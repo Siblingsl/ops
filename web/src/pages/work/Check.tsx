@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { marked } from 'marked'
-import { AlertTriangle, ArrowRight, CheckCircle2, FileText, Loader2, PenLine, RefreshCw, ShieldCheck, Sparkles, UserCheck, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, FileText, Loader2, PenLine, RefreshCw, ShieldCheck, Sparkles, UserCheck, XCircle } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { sendFeedback } from '@/components/refs'
 import { aiError } from '@/lib/ai-error'
-import { Badge, Button, Card, cn, HumanGate, Notice, PageLoading, Textarea } from '@/components/ui'
+import { Badge, Button, Card, cn, HumanGate, Notice, PageLoading, platformLabel, Textarea } from '@/components/ui'
 import { ApiError, errorMessage, get, patch, post } from '@/lib/api'
 import { htmlStats, renderWechat } from '@/lib/render'
 import { useCanWrite, useMe } from '@/lib/session'
@@ -226,7 +226,10 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
       setFixBusy(false)
     }
   }
-  const fieldLink = item.location.field === 'title' || item.location.field === 'summary' ? '#step-title' : item.location.field === 'cover' || item.location.field === 'images' ? '#step-images' : ''
+  // NW-D3：正文/大纲类格式项也要有可点的"去修改"。
+  const fieldLink = item.location.field === 'title' || item.location.field === 'summary' ? '#step-title'
+    : item.location.field === 'cover' || item.location.field === 'images' ? '#step-images'
+      : item.location.field === 'sections' ? '' : ''
   return (
     <div className={cn('rounded-lg border p-3 transition',
       active ? 'border-gamboge-300 bg-gamboge-50/60 ring-3 ring-gamboge-100' : done ? 'border-mist-200 bg-white' : isFormat ? 'border-orange-200 bg-orange-50/40' : 'border-mist-200 bg-white hover:border-mist-300')}>
@@ -237,7 +240,7 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge tone={meta.tone}>{meta.label}</Badge>
-            <span className="text-[13.5px] font-medium text-mist-800">{item.message}</span>
+            {item.message !== meta.label && <span className="text-[13.5px] font-medium text-mist-800">{item.message}</span>}
           </div>
           {item.detail && <p className="mt-1 text-[12.5px] leading-relaxed text-mist-500">{item.detail}</p>}
           {item.matched_text && item.category === 'fact' && <p className="mt-1.5 rounded bg-sky-50 px-2 py-1 text-[12.5px] text-sky-800">「{item.matched_text}」</p>}
@@ -249,6 +252,7 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
         {isFormat && !item.passed && (
           <p className="mt-1.5 text-[12px] font-medium text-danger">
             格式问题必须修改，不能保留。{fieldLink && <Link to={`/works/${workId}${fieldLink}`} className="underline">去修改</Link>}
+            {item.location.field === 'sections' && <Link to={`/works/${workId}#step-sections`} className="underline">去写正文</Link>}
           </p>
         )}
         {!disabled && !done && item.location.section_id && (onEditInPlace || canFix) && (
@@ -304,8 +308,11 @@ export default function Check() {
   const [active, setActive] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const [resolving, setResolving] = useState<string[]>([])
   const [approving, setApproving] = useState(false)
   const [editSignal, setEditSignal] = useState<{ sectionId: string; text: string; n: number } | null>(null)
+  // CK-01：窄屏定位到正文后，提供一个明确的"回到检查项"出口。
+  const [returnTo, setReturnTo] = useState<string | null>(null)
   const { data: me } = useMe()
   const editable = canWrite && !work.locked
   const key = ['check', work.id]
@@ -337,29 +344,40 @@ export default function Check() {
     }
   }
 
+  // NW-D1：打开检查页只读取已有结果，不再自动发起检查。
+  // 只有显式深链 ?start=1（编辑器「去检查」）才自动开始，且空白作品不自动开始。
   useEffect(() => {
     if (q.isLoading || started.current || !canWrite || work.locked) return
-    if (params.get('start')) setParams({}, { replace: true })
-    if (!run || run.stale) {
-      started.current = true
-      start()
-    }
+    if (!params.get('start')) return
+    started.current = true
+    setParams({}, { replace: true })
+    if (!work.sections.some((s) => s.content_md.trim())) return
+    if (!run || run.stale || run.material_basis_stale) void start()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q.isLoading, canWrite])
 
   const resolve = async (item: CheckItem, v: string | null) => {
+    setResolving((ids) => [...ids, item.id])
     qc.setQueryData<{ run: CheckRun | null }>(key, (old) => old?.run
       ? { run: { ...old.run, items: old.run.items.map((i) => (i.id === item.id ? { ...i, resolution: v } : i)) } }
       : old)
     try {
       const r = await patch<{ run: CheckRun }>(`/check-items/${item.id}`, { resolution: v })
-      qc.setQueryData(key, r)
+      const saved = r.run.items.find((i) => i.id === item.id)
+      if (saved) qc.setQueryData<{ run: CheckRun | null }>(key, (old) => {
+        if (!old?.run || old.run.id !== r.run.id) return old
+        const items = old.run.items.map((i) => i.id === saved.id ? saved : i)
+        return { run: { ...old.run, items, confirmed: items.filter((i) => i.category !== 'format' && !!i.resolution).length } }
+      })
     } catch (e) {
       toast.error(errorMessage(e))
       q.refetch()
+    } finally {
+      setResolving((ids) => ids.filter((id) => id !== item.id))
     }
   }
   const complete = async () => {
+    if (resolving.length > 0) return
     setCompleting(true)
     try {
       const w = await post<Work>(`/works/${work.id}/checks/complete`)
@@ -411,6 +429,14 @@ export default function Check() {
       el?.classList.remove('flash')
       void el?.offsetWidth
       el?.classList.add('flash')
+      // CK-01：窄屏上下堆叠时不再把检查项本身滚进视口（否则正文又被顶出去），
+      // 改为滚动到正文并保持检查项选中态，用户可点"回到检查项"回来。
+      if (window.matchMedia('(min-width: 768px)').matches) {
+        document.getElementById(`item-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      } else {
+        setReturnTo(id)
+      }
+      return
     }
     document.getElementById(`item-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
@@ -421,46 +447,50 @@ export default function Check() {
     .filter((g) => g.items.length)
   const formatFailed = run?.items.filter((i) => i.category === 'format' && !i.passed) ?? []
   const factPending = run?.fact_status === 'pending'
-  const canComplete = !!run && !run.stale && !factPending && run.blocking === 0 && run.confirmed === run.total
-  const isDone = !!run?.completed_at && !run.stale && ['ready', 'pushed', 'packed', 'published'].includes(work.status)
+  const canComplete = !!run && !run.stale && !run.material_basis_stale && !factPending && run.blocking === 0 && run.confirmed === run.total
+  const isDone = !!run?.completed_at && !run.stale && !run.material_basis_stale && ['ready', 'pushed', 'packed', 'published'].includes(work.status)
   const reviewing = work.status === 'reviewing'
   const canApprove = reviewing && (me?.role === 'owner' || (!!me?.user_id && me.user_id === work.reviewer_id && me.user_id !== work.assignee_id))
   const wx = work.platform === 'wechat_mp'
   const comic = work.content_format === 'comic'
   const sectionItems = (sid: string) => (run?.items ?? []).filter((i) => i.location.section_id === sid && (i.category !== 'format' || !i.passed))
   const renderItem = (it: CheckItem) => (
-    <div key={it.id} id={`item-${it.id}`}>
-      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v) => resolve(it, v)} disabled={!editable || run!.stale} workId={work.id}
+      <div key={it.id} id={`item-${it.id}`}>
+      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v) => resolve(it, v)} disabled={!editable || run!.stale || run!.material_basis_stale || resolving.includes(it.id)} workId={work.id}
         onEditInPlace={!comic && it.location.section_id ? () => setEditSignal({ sectionId: it.location.section_id!, text: it.matched_text, n: Date.now() }) : undefined}
         onApplyFix={comic ? undefined : applyFix} />
     </div>
   )
 
   return (
-    <div className="mx-auto w-full max-w-[1400px] px-6 py-6 2xl:max-w-[1600px]">
+    <div className="mx-auto w-full max-w-[1400px] px-6 py-6 pb-28 md:pb-6 2xl:max-w-[1600px]">
       {(wx || (!run && !starting && editable) || !!run) && <WorkHeaderAction>
         <div className="flex items-center gap-2">
           {wx && <Link to={`/works/${work.id}/preview`} className="inline-flex items-center rounded-lg border border-mist-200 px-3 py-2 text-xs font-medium text-mist-700 hover:bg-mist-50">看排版</Link>}
           {!run && !starting && editable && <Button size="sm" variant="primary" onClick={start} icon={<ShieldCheck className="size-4" />}>开始检查</Button>}
-          {run && (reviewing && run.completed_at && !run.stale
+          {run && (reviewing && run.completed_at && !run.stale && !run.material_basis_stale
             ? canApprove ? <Button size="sm" variant="human" loading={approving} onClick={approve} icon={<UserCheck className="size-4" />}>审阅通过</Button> : null
             : isDone
               ? <Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/${wx ? 'push' : 'pack'}`)}>{wx ? '去写入草稿箱' : '生成发布包'}<ArrowRight className="size-4" /></Button>
-              : <Button size="sm" variant="human" disabled={!canComplete || !editable} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>确认完成检查</Button>)}
+              : <Button size="sm" variant="human" disabled={!canComplete || !editable || resolving.length > 0} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>确认完成检查</Button>)}
         </div>
       </WorkHeaderAction>}
       <div className="mb-5 flex flex-wrap items-center gap-4">
         <div>
           <h1 className="font-display text-[22px] font-bold text-mist-900">发布前检查</h1>
-          <p className="text-[13px] text-mist-500">目标：{wx ? '公众号' : '小红书'} · {work.account_name}</p>
+          <p className="text-[13px] text-mist-500">目标：{platformLabel[work.platform]} · {work.account_name}</p>
         </div>
+        {/* NW-D4：检查页随时能回到正文继续写，不用绕回作品列表。 */}
+        <Link to={`/works/${work.id}`} className="inline-flex items-center gap-1 text-[13px] text-ink-700 hover:underline">
+          <ArrowLeft className="size-3.5" />返回创作
+        </Link>
         {run && (
           <div className="ml-auto flex items-center gap-5">
             <Stat label="已确认" value={`${run.confirmed} / ${run.total}`} ok={run.confirmed === run.total} />
             <Stat label="格式问题" value={String(run.blocking)} ok={run.blocking === 0} />
             <Stat label="事实核查" value={factPending ? '进行中' : run.fact_status === 'done' ? '已完成' : run.fact_status === 'failed' ? '需人工' : '—'} ok={run.fact_status === 'done'} />
             <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} loading={starting} disabled={!editable} onClick={start}>重新检查</Button>
-            {run.completed_at && !run.stale && (
+            {run.completed_at && !run.stale && !run.material_basis_stale && (
               <Link to={`/works/${work.id}/check/report`} target="_blank" className="inline-flex items-center gap-1 text-[13px] text-ink-700 hover:underline"><FileText className="size-3.5" />检查报告</Link>
             )}
           </div>
@@ -470,6 +500,18 @@ export default function Check() {
       {!canWrite && <Notice tone="gray" className="mb-4">观察者只读：可查看检查结果，不能重新检查或确认。</Notice>}
       {run?.stale && !starting && editable && (
         <Notice tone="gamboge" className="mb-4">内容在检查后又修改过。<button className="cursor-pointer font-medium underline" onClick={start}>重新检查</button>，已确认且文字没变的项会保持确认。</Notice>
+      )}
+      {run?.material_basis_stale && !starting && (
+        <Notice tone="gamboge" className="mb-4">
+          素材正文、来源、有效期、归属范围或引用关系已变化，当前检查不能用于交付。
+          {editable ? <><button className="cursor-pointer font-medium underline" onClick={start}>重新检查</button>后再继续。</> : '请联系有编辑权限的成员重新检查。'}
+        </Notice>
+      )}
+      {!!run?.material_basis_unavailable && !starting && (
+        <Notice tone="gamboge" className="mb-4">
+          有 {run.material_basis_unavailable} 个素材引用已删除或不在当前作品可见范围内；事实核查不会读取这些素材内容。
+          {editable ? <>请在<Link to={`/works/${work.id}`} className="font-medium underline">编辑器</Link>更正引用后重新检查。</> : '请联系有编辑权限的成员更正引用。'}
+        </Notice>
       )}
       {!run && !starting && editable && <Card className="p-10 text-center text-mist-500">还没有检查记录。</Card>}
       {!run && !starting && !canWrite && <Card className="p-10 text-center text-mist-500">还没有检查记录。</Card>}
@@ -521,8 +563,9 @@ export default function Check() {
                 </div>
               </div>
             ))}
-            <div className="sticky bottom-0 -mx-1 space-y-2 bg-gradient-to-t from-[var(--color-paper,#f7f6f2)] via-[var(--color-paper,#f7f6f2)] to-transparent px-1 pb-1 pt-6">
-              {reviewing && run.completed_at && !run.stale ? (
+            <div className="pointer-events-none sticky bottom-20 -mx-1 bg-gradient-to-t from-[var(--color-paper,#f7f6f2)] via-[var(--color-paper,#f7f6f2)] to-transparent px-1 pb-1 pt-6 md:bottom-0">
+              <div className="pointer-events-auto space-y-2">
+              {reviewing && run.completed_at && !run.stale && !run.material_basis_stale ? (
                 <>
                   <Notice tone="gamboge" icon={<UserCheck className="size-4" />}>检查已完成，这篇作品需要审阅。审阅通过前不能写入草稿或生成发布包。</Notice>
                   {canApprove ? (
@@ -532,6 +575,12 @@ export default function Check() {
               ) : isDone ? (
                 <>
                   <Notice tone="ink" icon={<CheckCircle2 className="size-4" />}>检查已完成，作品处于「{work.status === 'ready' ? '可发布' : '已进入下一步'}」状态。</Notice>
+                  {/* CK-02：滚到底部就能直接进入下一步，不用回页头找按钮。 */}
+                  <div className="text-center">
+                    <Button variant="primary" onClick={() => nav(`/works/${work.id}/${wx ? 'push' : 'pack'}`)}>
+                      {wx ? '下一步：写入草稿箱' : '下一步：生成发布包'}<ArrowRight className="size-4" />
+                    </Button>
+                  </div>
                 </>
               ) : (
                 <>
@@ -539,9 +588,20 @@ export default function Check() {
                   <HumanGate code="H-04">每一条敏感词和事实都需要你单独确认，没有「全部确认」。</HumanGate>
                 </>
               )}
+              </div>
             </div>
           </div>
         </div>
+      )}
+      {/* CK-01：窄屏下定位到正文后，浮动按钮把用户带回刚看的检查项。 */}
+      {returnTo && (
+        <button type="button" onClick={() => {
+          document.getElementById(`item-${returnTo}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          setReturnTo(null)
+        }}
+          className="fixed bottom-24 left-1/2 z-30 -translate-x-1/2 rounded-full bg-ink-700 px-4 py-2 text-[12.5px] font-medium text-white shadow-pop md:hidden">
+          回到检查项
+        </button>
       )}
     </div>
   )

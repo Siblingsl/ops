@@ -189,16 +189,17 @@ func (s *Server) setTitleFavorites(w http.ResponseWriter, r *http.Request) error
 }
 
 type CalendarItem struct {
-	Kind        string     `json:"kind"` // work | topic
-	ID          uuid.UUID  `json:"id"`
-	AccountID   uuid.UUID  `json:"account_id"`
-	AccountName string     `json:"account_name"`
-	Platform    string     `json:"platform"`
-	Title       string     `json:"title"`
-	Status      string     `json:"status"`
-	Date        string     `json:"date"`
-	DateKind    string     `json:"date_kind"` // planned | published
-	WorkID      *uuid.UUID `json:"work_id,omitempty"`
+	Kind          string     `json:"kind"` // work | topic
+	ID            uuid.UUID  `json:"id"`
+	AccountID     uuid.UUID  `json:"account_id"`
+	AccountName   string     `json:"account_name"`
+	Platform      string     `json:"platform"`
+	ContentFormat string     `json:"content_format"`
+	Title         string     `json:"title"`
+	Status        string     `json:"status"`
+	Date          string     `json:"date"`
+	DateKind      string     `json:"date_kind"` // planned | published
+	WorkID        *uuid.UUID `json:"work_id,omitempty"`
 }
 
 // calendar lists planned and published dates; it is planning only — nothing is ever published on a date (HC-16).
@@ -230,7 +231,7 @@ func (s *Server) calendar(w http.ResponseWriter, r *http.Request) error {
 	list := []CalendarItem{}
 	rows, err := s.db.Query(ctx, `SELECT w.id, a.id, a.name, a.platform, w.title, w.status,
 		CASE WHEN w.published_at IS NOT NULL THEN to_char(w.published_at AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD') ELSE to_char(w.planned_date,'YYYY-MM-DD') END,
-		CASE WHEN w.published_at IS NOT NULL THEN 'published' ELSE 'planned' END
+		CASE WHEN w.published_at IS NOT NULL THEN 'published' ELSE 'planned' END,w.content_format
 		FROM work w JOIN platform_account a ON a.id=w.account_id
 		WHERE a.workspace_id=$1 AND w.deleted_at IS NULL`+accFilter+`
 		AND ((w.published_at IS NOT NULL AND (w.published_at AT TIME ZONE 'Asia/Shanghai')::date BETWEEN $2::date AND $3::date)
@@ -241,7 +242,7 @@ func (s *Server) calendar(w http.ResponseWriter, r *http.Request) error {
 	}
 	for rows.Next() {
 		var x CalendarItem
-		if err := rows.Scan(&x.ID, &x.AccountID, &x.AccountName, &x.Platform, &x.Title, &x.Status, &x.Date, &x.DateKind); err != nil {
+		if err := rows.Scan(&x.ID, &x.AccountID, &x.AccountName, &x.Platform, &x.Title, &x.Status, &x.Date, &x.DateKind, &x.ContentFormat); err != nil {
 			rows.Close()
 			return err
 		}
@@ -249,7 +250,7 @@ func (s *Server) calendar(w http.ResponseWriter, r *http.Request) error {
 		list = append(list, x)
 	}
 	rows.Close()
-	trows, err := s.db.Query(ctx, `SELECT t.id, a.id, a.name, a.platform, t.title, t.status, to_char(t.planned_date,'YYYY-MM-DD')
+	trows, err := s.db.Query(ctx, `SELECT t.id, a.id, a.name, a.platform, t.title, t.status, to_char(t.planned_date,'YYYY-MM-DD'),t.format
 		FROM topic t JOIN platform_account a ON a.id=t.account_id
 		WHERE a.workspace_id=$1 AND t.deleted_at IS NULL AND t.status<>'dropped' AND t.planned_date BETWEEN $2::date AND $3::date`+accFilter+`
 		AND NOT EXISTS (SELECT 1 FROM work w WHERE w.topic_id=t.id AND w.deleted_at IS NULL) ORDER BY t.planned_date`, args...)
@@ -258,7 +259,7 @@ func (s *Server) calendar(w http.ResponseWriter, r *http.Request) error {
 	}
 	for trows.Next() {
 		var x CalendarItem
-		if err := trows.Scan(&x.ID, &x.AccountID, &x.AccountName, &x.Platform, &x.Title, &x.Status, &x.Date); err != nil {
+		if err := trows.Scan(&x.ID, &x.AccountID, &x.AccountName, &x.Platform, &x.Title, &x.Status, &x.Date, &x.ContentFormat); err != nil {
 			trows.Close()
 			return err
 		}

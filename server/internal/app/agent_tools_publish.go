@@ -144,6 +144,33 @@ var agentToolsPublish = []AgentTool{
 		Notes:   "压缩包只给链接（页面键 `work_pack`）",
 	},
 	{
+		Name: "toutiao__create_pack", Domain: "publish", Kind: toolW, Method: "POST", Path: "/works/{id}/toutiao/pack",
+		Description: "为头条文章或微头条准备离线发布包。卡片会从服务端读取当前修订号；执行时再次核对，且必须先通过检查和审阅。",
+		Params: []ToolParam{
+			pPath("id"),
+			pBodyFixed("basis_revision", `{"type":"integer","minimum":1}`, false),
+		},
+		MinRole:        roleEditor,
+		Target:         target("work", "id"),
+		Preview:        previewFields("title", "content_format", "revision"),
+		Fingerprint:    true,
+		ProposePreview: previewToutiaoPack,
+		Project:        projectToutiaoPack,
+		Notes:          "不向模型返回正文或 ZIP 字节；下载只给链接（页面键 `work_pack`）",
+	},
+	{
+		Name: "toutiao__get_pack", Domain: "publish", Kind: toolR, Method: "GET", Path: "/works/{id}/toutiao/pack",
+		Description: "查看头条发布包的状态与交付清单。压缩包只给站内下载链接。",
+		Params: []ToolParam{
+			pPath("id"),
+			pQueryF("basis_revision", `{"type":"integer","minimum":1}`, true),
+		},
+		MinRole: roleViewer,
+		Target:  target("work", "id"),
+		Project: projectToutiaoPack,
+		Notes:   "只返回当前已授权作品信息；压缩包只给链接（页面键 `work_pack`）",
+	},
+	{
 		Name: "publish_link__parse", Domain: "publish", Kind: toolR, Method: "POST", Path: "/publish-link/parse",
 		Description: "解析一条平台文章链接，提取平台、作品标识与发布时间。只返回结果不写数据。",
 		Params: []ToolParam{
@@ -155,14 +182,19 @@ var agentToolsPublish = []AgentTool{
 	},
 	{
 		Name: "works__mark_published", Domain: "publish", Kind: toolH, Method: "POST", Path: "/works/{id}/published",
-		Description: "记录用户已在平台上发布这篇作品，回填链接与发布时间。需要用户确认。",
+		Description: "记录用户已在平台上发布这篇作品。首次回填使用 H-07；更正已发布记录时必须显式 mode=correction，并提供当前 publish_revision、原因和更正值。",
 		Params: []ToolParam{
 			pPath("id"),
 			pBody("url", strMax(1024), false, "U/O"),
 			pBody("published_at", `{"type":"string","format":"date-time"}`, false, "U/O"),
+			pBody("mode", `{"type":"string","enum":["initial","correction"]}`, false, "F"),
+			pBodyF("base_publish_revision", `{"type":"integer","minimum":1}`, false),
+			pBody("reason", strMinMax(1, 500), false, "U/O"),
 		},
-		MinRole: roleEditor,
-		Gate:    "H-07",
-		Target:  target("work", "id"),
+		Human:          []HumanField{hBody("confirm_published", schemaBool)},
+		MinRole:        roleEditor,
+		Gate:           "H-07",
+		Target:         target("work", "id"),
+		ProposePreview: previewMarkPublished,
 	},
 }

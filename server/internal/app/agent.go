@@ -168,10 +168,34 @@ type agentModelOption struct {
 
 // agentModels 返回可选模型（tools_ok=true）、默认模型，以及“默认模型未通过工具调用自检”标记（第 7.4 节）。
 func (s *Server) agentModels(ctx context.Context) ([]agentModelOption, *agentModelRef, bool, error) {
+	if request, ok := desktopRequestOf(ctx); ok {
+		rt, err := s.resolveDesktopRouteTier(ctx, "agent_chat", "", request)
+		if err != nil {
+			var apiError *APIError
+			if errors.As(err, &apiError) {
+				return []agentModelOption{}, nil, apiError.Code == "desktop_ai_capability_unsupported", nil
+			}
+			return nil, nil, false, err
+		}
+		list := []agentModelOption{}
+		def := &agentModelRef{ProviderID: rt.ProviderID, Model: rt.Model}
+		if rt.ToolsOK {
+			list = append(list, agentModelOption{ProviderID: rt.ProviderID, ProviderName: rt.ProviderName,
+				Model: rt.Model, Vision: rt.VisionOK, IsDefault: true})
+		}
+		if rt.Fallback != nil && rt.Fallback.ToolsOK {
+			list = append(list, agentModelOption{ProviderID: rt.Fallback.ProviderID, ProviderName: rt.Fallback.ProviderName,
+				Model: rt.Fallback.Model, Vision: rt.Fallback.VisionOK})
+		}
+		if len(list) == 0 {
+			return list, nil, true, nil
+		}
+		return list, def, false, nil
+	}
 	ws := ident(ctx).WorkspaceID
 	rows, err := s.db.Query(ctx, `SELECT p.id, p.name, m.model, coalesce(m.vision_ok,false)
 		FROM model_capability m JOIN model_provider p ON p.id=m.provider_id
-		WHERE m.workspace_id=$1 AND p.workspace_id=$1 AND p.status='active' AND m.tools_ok
+		WHERE m.workspace_id=$1 AND p.workspace_id=$1 AND p.execution_location='server' AND m.config_revision=p.desktop_config_revision AND p.status='active' AND m.tools_ok
 		ORDER BY p.created_at, m.model`, ws)
 	if err != nil {
 		return nil, nil, false, err
@@ -218,6 +242,9 @@ func (s *Server) agentModels(ctx context.Context) ([]agentModelOption, *agentMod
 
 func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	if _, ok := desktopRequestOf(ctx); ok {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	id := ident(ctx)
 	st, err := s.agentSettingsOf(ctx, id.WorkspaceID)
 	if err != nil {
@@ -229,7 +256,18 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) error {
 	}
 	reason := s.agentBlockedReason(ctx, st)
 	if reason == "" && len(models) == 0 {
-		reason = "no_model"
+		// 区分「没配模型」和「配了但没完成能力自检」：两者的处理动作不同，
+		// 前端提示文案也不同。前者去添加供应商，后者只需去点一次自检。
+		var hasProvider bool
+		if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM model_provider
+			WHERE workspace_id=$1 AND status='active' AND execution_location='server')`, id.WorkspaceID).Scan(&hasProvider); err != nil {
+			return err
+		}
+		if hasProvider {
+			reason = "not_tested"
+		} else {
+			reason = "no_model"
+		}
 	}
 	return ok(w, map[string]any{
 		"enabled":                   st.Enabled,
@@ -357,7 +395,7 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 	}
 	args := []any{id.WorkspaceID, id.UserID}
 	where := ""
-	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+	if q := queryText(r, "q"); q != "" {
 		args = append(args, truncateRunes(q, 100))
 		n := len(args)
 		where += fmt.Sprintf(` AND (c.title ILIKE '%%'||$%d||'%%' OR EXISTS (SELECT 1 FROM agent_message m

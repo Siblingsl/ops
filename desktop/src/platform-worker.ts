@@ -15,7 +15,8 @@ import path from 'node:path';
 // PS05/06 在适配器里引用这里的常量，新增域名必须改客户端版本。
 export const PLATFORM_ALLOWED_ORIGINS: Readonly<Record<string, ReadonlyArray<string>>> = Object.freeze({
   xhs: ['https://creator.xiaohongshu.com'],
-  wechat_mp: ['https://mp.weixin.qq.com']
+  wechat_mp: ['https://mp.weixin.qq.com'],
+  toutiao: ['https://mp.toutiao.com']
 });
 
 export class PlatformBrowserError extends Error {
@@ -292,14 +293,12 @@ export function buildLaunchArgs(options: { profileDir: string }): string[] {
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-background-networking',
-    '--disable-component-update',
     '--disable-default-apps',
     '--disable-extensions',
     '--disable-sync',
     '--disable-translate',
     '--metrics-recording-only',
-    '--password-store=basic',
-    '--use-mock-keychain',
+    // 使用浏览器原生凭据保护，不强制 basic 密码库或 mock keychain。
     // 沙箱保持启用：不出现 --no-sandbox / --disable-web-security。
     '--enable-features=NetworkServiceSandbox',
     'about:blank'
@@ -468,15 +467,16 @@ export async function launchPlatformBrowser(
   const args = buildLaunchArgs({ profileDir: options.profileDir });
   assertSafeLaunchArgs(args);
   const spawnImpl = runtime.spawnImpl ?? spawn;
+  const sourceEnv = runtime.env ?? process.env;
   // OPS_DESKTOP_NO_SANDBOX 等逃生配置不传给平台浏览器（§5.1）；
   // 只传递系统代理相关的最小环境变量。
   const env: NodeJS.ProcessEnv = {};
   for (const key of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE']) {
-    if (runtime.env?.[key]) env[key] = runtime.env[key];
+    if (sourceEnv[key]) env[key] = sourceEnv[key];
   }
-  if (runtime.env?.HTTP_PROXY) env.HTTP_PROXY = runtime.env.HTTP_PROXY;
-  if (runtime.env?.HTTPS_PROXY) env.HTTPS_PROXY = runtime.env.HTTPS_PROXY;
-  if (runtime.env?.NO_PROXY) env.NO_PROXY = runtime.env.NO_PROXY;
+  if (sourceEnv.HTTP_PROXY) env.HTTP_PROXY = sourceEnv.HTTP_PROXY;
+  if (sourceEnv.HTTPS_PROXY) env.HTTPS_PROXY = sourceEnv.HTTPS_PROXY;
+  if (sourceEnv.NO_PROXY) env.NO_PROXY = sourceEnv.NO_PROXY;
 
   const child = spawnImpl(options.executablePath, args, {
     stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
@@ -569,7 +569,7 @@ export async function launchPlatformBrowser(
 // ---------- CDP 握手 ----------
 
 export interface CDPClient {
-  request: (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown>;
+  request: (method: string, params?: unknown, timeoutMs?: number, sessionId?: string | null) => Promise<unknown>;
   close: () => Promise<void>;
 }
 
@@ -581,7 +581,7 @@ export interface CDPPageClient extends CDPClient {
   // 只读：不注入脚本、不改请求头、不重放请求；用于需要平台签名的接口。
   collectResponses: (pathPrefix: string, timeoutMs?: number) => Promise<unknown | null>;
   // onEvent 订阅 CDP 事件（Network.* 等），返回取消订阅函数。
-  onEvent: (listener: (method: string, params: unknown) => void) => () => void;
+  onEvent: (listener: (method: string, params: unknown, sessionId?: string) => void) => () => void;
 }
 
 // createCDPClient 是最小请求/响应配对：按自增 id 匹配响应，超时明确失败。
@@ -599,17 +599,17 @@ export function createCDPClient(process: PlatformBrowserProcess, defaultTimeoutM
     timer: NodeJS.Timeout;
   }>();
   // 事件订阅者：Network.* 等无 id 的帧按 method 分发给监听者。
-  const eventListeners = new Set<(method: string, params: unknown) => void>();
+  const eventListeners = new Set<(method: string, params: unknown, sessionId?: string) => void>();
   process.onMessage((message) => {
     const frame = message as {
       id?: unknown; result?: unknown; method?: unknown; params?: unknown;
-      error?: { message?: unknown; code?: unknown };
+      error?: { message?: unknown; code?: unknown }; sessionId?: string;
     };
     if (typeof frame.id !== 'number') {
       if (typeof frame.method === 'string') {
         for (const listener of eventListeners) {
           try {
-            listener(frame.method, frame.params);
+            listener(frame.method, frame.params, frame.sessionId);
           } catch {
             // 监听器异常不能打断 CDP 主循环。
           }
@@ -634,8 +634,10 @@ export function createCDPClient(process: PlatformBrowserProcess, defaultTimeoutM
     waiter.resolve(frame.result);
   });
   let pageSessionId: string | null = null;
+  let closed = false;
   const client: CDPClient = {
-    request: (method, params, timeoutMs) => new Promise((resolve, reject) => {
+    request: (method, params, timeoutMs, sessionOverride) => new Promise((resolve, reject) => {
+      if (closed) { reject(new PlatformBrowserError('platform_login_cancelled', '浏览器会话已结束')); return; }
       const failure = process.failure();
       if (failure) {
         reject(failure);
@@ -649,10 +651,13 @@ export function createCDPClient(process: PlatformBrowserProcess, defaultTimeoutM
       pending.set(id, { resolve, reject, timer });
       // 已 attach 到 page 之后，所有域调用都带 sessionId；Browser 级方法（Target.*）不带。
       const frame: Record<string, unknown> = { id, method, params: params ?? {} };
-      if (pageSessionId && !method.startsWith('Target.')) frame.sessionId = pageSessionId;
+      const targetSession = sessionOverride === undefined ? pageSessionId : sessionOverride;
+      if (targetSession && !method.startsWith('Browser.') && (sessionOverride !== undefined || !method.startsWith('Target.'))) frame.sessionId = targetSession;
       process.send(frame);
     }),
     close: async () => {
+      closed = true;
+      eventListeners.clear();
       for (const waiter of pending.values()) {
         clearTimeout(waiter.timer);
         waiter.reject(new PlatformBrowserError('platform_browser_launch_failed', '浏览器调试会话已结束'));

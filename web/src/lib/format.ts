@@ -99,8 +99,11 @@ export async function copyText(text: string): Promise<void> {
     ta.style.position = 'fixed'
     ta.style.opacity = '0'
     document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    ta.remove()
+    try {
+      ta.select()
+      if (!document.execCommand('copy')) throw new Error('浏览器未允许复制')
+    } finally {
+      ta.remove()
+    }
   }
 }

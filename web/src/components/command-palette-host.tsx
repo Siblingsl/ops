@@ -13,14 +13,30 @@ export function CommandPaletteHost() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
 
   useEffect(() => {
-    const palette = () => { setLoaded(true); setOpen(true) }
-    const shortcuts = () => { setLoaded(true); setShortcutsOpen(true) }
+    const palette = () => {
+      setLoaded(true)
+      setOpen(true)
+      window.dispatchEvent(new CustomEvent('ops:overlay', { detail: 'palette' }))
+    }
+    const shortcuts = () => {
+      setLoaded(true)
+      setShortcutsOpen(true)
+      window.dispatchEvent(new CustomEvent('ops:overlay', { detail: 'shortcuts' }))
+    }
+    const exclusive = (e: Event) => {
+      const from = (e as CustomEvent<string>).detail
+      if (from !== 'palette') setOpen(false)
+      if (from !== 'shortcuts') setShortcutsOpen(false)
+    }
     let gPending = 0
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
         setLoaded(true)
-        setOpen((value) => !value)
+        setOpen((value) => {
+          if (!value) window.dispatchEvent(new CustomEvent('ops:overlay', { detail: 'palette' }))
+          return !value
+        })
         return
       }
       const target = e.target as HTMLElement | null
@@ -49,10 +65,12 @@ export function CommandPaletteHost() {
     }
     window.addEventListener('ops:palette', palette)
     window.addEventListener('ops:shortcuts', shortcuts)
+    window.addEventListener('ops:overlay', exclusive)
     window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('ops:palette', palette)
       window.removeEventListener('ops:shortcuts', shortcuts)
+      window.removeEventListener('ops:overlay', exclusive)
       window.removeEventListener('keydown', onKey)
     }
   }, [accountID, navigate])

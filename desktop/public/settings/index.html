@@ -33,7 +33,6 @@
         <button id="tab-selftest" type="button" role="tab" aria-selected="false" aria-controls="panel-selftest" data-settings-tab="selftest" tabindex="-1">能力自检</button>
         <button id="tab-routes" type="button" role="tab" aria-selected="false" aria-controls="panel-routes" data-settings-tab="routes" tabindex="-1">任务映射</button>
         <button id="tab-account" type="button" role="tab" aria-selected="false" aria-controls="panel-account" data-settings-tab="account" tabindex="-1">账号与设备</button>
-        <button id="tab-policy" type="button" role="tab" aria-selected="false" aria-controls="panel-policy" data-settings-tab="policy" tabindex="-1">工作区策略</button>
         <button id="tab-diagnostics" type="button" role="tab" aria-selected="false" aria-controls="panel-diagnostics" data-settings-tab="diagnostics" tabindex="-1">诊断与支持</button>
       </nav>
 
@@ -171,14 +170,11 @@
             <p class="hint">卸载客户端时，Windows 可能保留本机用户目录中的配置。卸载前请逐个登录并清理需要移除的账号；线上设备如需注销，请另行撤销。</p>
           </section>
           <section class="card" aria-labelledby="platform-login-title">
-            <h3 id="platform-login-title">在本机连接平台账号</h3>
-            <p class="hint">会在这台电脑上打开官方后台页面，由你本人扫码。平台会话只保存在独立配置目录，不上传、不写入业务页面。</p>
-            <label for="platform-login-account">OPS 账号</label>
-            <select id="platform-login-account" disabled>
-              <option value="">读取中…</option>
-            </select>
-            <button id="platform-login-start" class="primary" type="button" disabled>在本机连接</button>
-            <p id="platform-login-status" class="hint" aria-live="polite"></p>
+            <h3 id="platform-login-title">平台连接</h3>
+            <p class="hint">平台登录目标固定为主窗口当前账号。请从该账号的「平台账号与凭证」设置发起登录；此独立工具页不提供账号选择。</p>
+            <select id="platform-login-account" hidden disabled aria-hidden="true"><option value="">未收到有效登录目标</option></select>
+            <button id="platform-login-start" class="primary" type="button" disabled>请从主窗口当前账号设置发起登录</button>
+            <p id="platform-login-status" class="hint" aria-live="polite">未收到有效登录目标。</p>
           </section>
           <section class="card" aria-labelledby="platform-orphan-title">
             <h3 id="platform-orphan-title">本机残留的配置目录</h3>
@@ -217,31 +213,6 @@
             <div id="device-list" class="device-list">读取中…</div>
             <p id="device-status" class="hint" aria-live="polite"></p>
           </section>
-          <section class="card" aria-labelledby="account-type-title">
-            <h3 id="account-type-title">账号内容类型</h3>
-            <p class="hint">同一平台内可更换内容类型。已有作品保持原类型不变，之后新建的作品使用新类型；更换平台仍需在业务页面新建账号。</p>
-            <label for="account-type-target">账号</label>
-            <select id="account-type-target" disabled>
-              <option value="">读取中…</option>
-            </select>
-            <label for="account-type-choice">新的内容类型</label>
-            <select id="account-type-choice" disabled></select>
-            <button id="apply-account-type" class="primary" type="button" disabled>更换内容类型</button>
-            <p id="account-type-status" class="hint" aria-live="polite">读取中…</p>
-          </section>
-        </section>
-
-        <section class="settings-tab-panel" id="panel-policy" role="tabpanel" aria-labelledby="tab-policy" tabindex="0" data-settings-panel="policy" hidden>
-          <h2>工作区策略</h2>
-          <p class="settings-description">仅工作区 owner 可修改策略。允许成员配置端点后，业务上下文可能发送到其配置的 AI 服务。</p>
-          <section class="card" aria-labelledby="policy-title">
-            <h3 id="policy-title">工作区桌面 AI 策略</h3>
-            <p class="hint">回环地址不等于数据不会离开本机。</p>
-            <label class="check-row"><input id="policy-enabled" type="checkbox" />允许此工作区使用桌面 AI</label>
-            <label class="check-row"><input id="policy-members" type="checkbox" />允许 editor 使用各自的桌面 AI 端点</label>
-            <button id="save-policy" class="secondary" type="button">保存工作区策略</button>
-            <p id="policy-status" class="hint" aria-live="polite">读取中…</p>
-          </section>
         </section>
 
         <section class="settings-tab-panel" id="panel-diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" tabindex="0" data-settings-panel="diagnostics" hidden>
@@ -252,12 +223,37 @@
             <p class="hint">不包含账号名、设备标识、本机模型 API 地址、模型名、提示词或密钥。</p>
             <button id="export-diagnostics" class="secondary" type="button">导出脱敏诊断信息</button>
           </section>
+          <section class="card" aria-labelledby="about-title">
+            <h3 id="about-title">关于 OPS</h3>
+            <dl>
+              <div><dt>客户端版本</dt><dd id="about-client-version">读取中…</dd></div>
+              <div><dt>服务版本</dt><dd id="about-service-version">读取中…</dd></div>
+              <div><dt>服务运行模式</dt><dd id="about-service-mode">读取中…</dd></div>
+              <div><dt>服务数据占用</dt><dd id="about-data-size">读取中…</dd></div>
+            </dl>
+          </section>
         </section>
         <p id="action-status" class="action-status" aria-live="polite"></p>
         <p class="footnote">本地 AI 密钥不会传回页面脚本或写入线上配置。服务端仍负责业务上下文、工具权限、确认卡片及数据保存。</p>
       </div>
     </main>
+    <dialog id="platform-login-dialog" class="login-flow" aria-labelledby="login-flow-title">
+      <header class="login-flow-header"><div><p class="eyebrow">平台连接</p><h2 id="login-flow-title">连接平台账号</h2><p id="login-flow-target" class="hint"></p></div><button id="login-flow-close" class="secondary" aria-label="关闭登录操作" type="button">×</button></header>
+      <ol class="login-flow-steps" aria-label="连接步骤"><li>1 官方登录</li><li>2 核对账号</li><li>3 完成</li></ol>
+      <div class="login-flow-body">
+        <div id="login-flow-icon" class="login-flow-icon" aria-hidden="true">↗</div>
+        <h3 id="login-flow-heading">选择专用登录浏览器</h3>
+        <p id="login-flow-message" class="hint" role="status" aria-live="polite"></p>
+        <div id="login-flow-browser-field"><label for="login-flow-browser">本机浏览器</label><select id="login-flow-browser"></select><p id="login-flow-browser-note" class="hint"></p></div>
+        <section id="login-flow-identity" class="login-flow-identity" hidden><h3>请核对当前平台账号</h3><dl><div><dt>目标 OPS 账号</dt><dd id="login-flow-account-name"></dd></div><div><dt>平台账号</dt><dd id="login-flow-display-name"></dd></div><div><dt>稳定编号</dt><dd id="login-flow-external-key"></dd></div><div id="login-flow-expected-row" hidden><dt>原连接编号</dt><dd id="login-flow-expected-key"></dd></div></dl></section>
+        <section id="login-flow-result" class="login-flow-identity" hidden><dl><div><dt>平台登录</dt><dd>已核对</dd></div><div><dt>OPS 连接</dt><dd>已收到服务端验证回执</dd></div><div><dt>作品数据</dt><dd>权限待验证，支持人工回填</dd></div><div><dt>自动读取／采用</dt><dd id="login-flow-switches"></dd></div></dl></section>
+        <p id="login-flow-deadline" class="hint"></p>
+        <p class="login-flow-boundary hint">二维码与安全验证由官方页面提供。OPS 不截取二维码，不代填密码或验证码。头条仅在官方提供时支持扫码。</p>
+      </div>
+      <footer class="login-flow-footer"><button id="login-flow-cancel" class="secondary" type="button">取消登录</button><div class="login-flow-actions"><button id="login-flow-secondary" class="secondary" type="button" hidden>显示登录窗口</button><button id="login-flow-primary" class="primary" type="button">打开专用登录窗口</button></div></footer>
+    </dialog>
     <script src="/desktop-theme.js"></script>
     <script src="/settings.js"></script>
+    <script src="/platform-login-ui.js"></script>
   </body>
 </html>

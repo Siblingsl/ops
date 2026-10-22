@@ -8,6 +8,7 @@ import { errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { useInvalidate, useMe } from '@/lib/session'
 import type { WorkspaceInvite, WorkspaceMember, WorkspaceRole } from '@/lib/types'
+import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
 
 const ROLE_LABEL: Record<WorkspaceRole, string> = {
   owner: '所有者',
@@ -19,6 +20,7 @@ export default function SettingsMembers() {
   const { data: me } = useMe()
   const inv = useInvalidate()
   const isOwner = me?.role === 'owner'
+  const embedded = useEmbeddedSettings()
   const members = useQuery({ queryKey: ['members'], queryFn: () => get<WorkspaceMember[]>('/workspaces/current/members') })
   const invites = useQuery({
     queryKey: ['invites'],
@@ -30,6 +32,7 @@ export default function SettingsMembers() {
   const [inviteRole, setInviteRole] = useState<'editor' | 'viewer'>('editor')
   const [busy, setBusy] = useState(false)
   const [emailFor, setEmailFor] = useState<Record<string, string>>({})
+  const clearDraft = useSettingsDraft(!!(joinCode.trim() || newWsName.trim()) || Object.values(emailFor).some((email) => email.trim()), busy)
 
   const createWorkspace = async () => {
     const name = newWsName.trim() || '新工作区'
@@ -42,6 +45,7 @@ export default function SettingsMembers() {
     try {
       await post('/workspaces', { name, switch: true })
       toast.success('已创建并切换')
+      clearDraft()
       window.location.assign('/')
     } catch (e) {
       toast.error(errorMessage(e))
@@ -70,6 +74,7 @@ export default function SettingsMembers() {
       toast.success('已加入工作区')
       setJoinCode('')
       await inv(['me'], ['accounts'], ['members'])
+      clearDraft()
       window.location.assign('/')
     } catch (e) {
       toast.error(errorMessage(e))
@@ -114,26 +119,30 @@ export default function SettingsMembers() {
   if (members.isLoading || !me) return <PageLoading />
 
   return (
-    <div className="mx-auto max-w-3xl animate-fade-in space-y-6 p-6">
-      <PageHeader title="成员与邀请" desc={`当前工作区：${me.workspace.name}`} />
+    <div className="max-w-3xl animate-fade-in space-y-6">
+      {!embedded && <PageHeader title="成员与邀请" desc={`当前工作区：${me.workspace.name}`} />}
 
-      <Card className="space-y-3 p-5">
-        <h2 className="text-sm font-semibold text-mist-800">加入其他工作区</h2>
-        <div className="flex flex-wrap gap-2">
-          <Input className="h-10 max-w-xs font-mono tracking-wider" placeholder="邀请码" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} />
-          <Button loading={busy} disabled={!joinCode.trim()} onClick={join}>加入并切换</Button>
-        </div>
-      </Card>
+      <div className="grid gap-6 xl:grid-cols-2">
+        <Card className="space-y-3 p-5">
+          <h2 className="text-sm font-semibold text-mist-800">加入其他工作区</h2>
+          <div className="flex flex-wrap gap-2">
+            <Input className="h-10 max-w-xs font-mono tracking-wider" placeholder="邀请码" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} />
+            <Button loading={busy} disabled={!joinCode.trim()} onClick={join}>加入并切换</Button>
+          </div>
+        </Card>
 
-      <Card className="space-y-3 p-5">
-        <h2 className="text-sm font-semibold text-mist-800">再创建一个工作区</h2>
-        <p className="text-[13px] text-mist-500">适合把客户号、个人号或团队拆开管理；创建后你是所有者。</p>
-        <div className="flex flex-wrap gap-2">
-          <Input className="h-10 max-w-xs" placeholder="工作区名称" value={newWsName} onChange={(e) => setNewWsName(e.target.value)} />
-          <Button loading={busy} onClick={() => void createWorkspace()}><Plus className="size-4" /> 创建并切换</Button>
-        </div>
-      </Card>
+        <Card className="space-y-3 p-5">
+          <h2 className="text-sm font-semibold text-mist-800">
+            再创建一个工作区
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            <Input className="h-10 max-w-xs" placeholder="工作区名称" value={newWsName} onChange={(e) => setNewWsName(e.target.value)} />
+            <Button loading={busy} onClick={() => void createWorkspace()}><Plus className="size-4" /> 创建并切换</Button>
+          </div>
+        </Card>
+      </div>
 
+      <div className={isOwner ? 'grid gap-6 xl:grid-cols-2' : undefined}>
       <Card className="space-y-3 p-5">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-mist-800">成员</h2>
@@ -220,20 +229,27 @@ export default function SettingsMembers() {
           </ul>
         )}
       </Card>
+      {isOwner && (
+        <Card className="space-y-3 p-5">
+          <h2 className="text-sm font-semibold text-mist-800">工作区名称</h2>
+          <RenameWorkspace name={me.workspace.name} id={me.workspace.id} onDone={() => inv(['me'])} />
+        </Card>
+      )}
+      </div>
 
       {isOwner ? (
         <Card className="space-y-3 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <h2 className="text-sm font-semibold text-mist-800">邀请码</h2>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-nowrap items-center gap-2">
+              <Button size="sm" loading={busy} onClick={createInvite}><Plus className="size-4" /> 生成邀请码</Button>
               <Select className="h-9 w-28" value={inviteRole} onChange={(e) => setInviteRole(e.target.value as 'editor' | 'viewer')}>
                 <option value="editor">编辑者</option>
                 <option value="viewer">观察者</option>
               </Select>
-              <Button size="sm" loading={busy} onClick={createInvite}><Plus className="size-4" /> 生成邀请码</Button>
             </div>
           </div>
-          <Notice tone="ink">可邀请编辑者或观察者；7 天有效，最多 10 次。也可填写邮箱直接发送（需在「登录与安全」配置 SMTP）。</Notice>
+          <Notice tone="ink">可邀请编辑者或观察者；7 天有效，最多 10 次。也可填写邮箱直接发送（需在「{embedded ? '邀请邮件' : '登录与安全'}」配置 SMTP）。</Notice>
           {(invites.data ?? []).length === 0 ? <Empty title="还没有有效邀请码" desc="生成一个邀请码发给同事，对方注册时填写即可加入这个工作区。"
             action={<Button variant="primary" loading={busy} icon={<Plus className="size-4" />} onClick={createInvite}>生成邀请码</Button>} /> : (
             <ul className="space-y-3">
@@ -292,12 +308,6 @@ export default function SettingsMembers() {
         </Notice>
       )}
 
-      {isOwner && (
-        <Card className="space-y-3 p-5">
-          <h2 className="text-sm font-semibold text-mist-800">工作区名称</h2>
-          <RenameWorkspace name={me.workspace.name} id={me.workspace.id} onDone={() => inv(['me'])} />
-        </Card>
-      )}
     </div>
   )
 }
@@ -305,6 +315,7 @@ export default function SettingsMembers() {
 function RenameWorkspace({ name, id, onDone }: { name: string; id: string; onDone: () => void }) {
   const [v, setV] = useState(name)
   const [busy, setBusy] = useState(false)
+  useSettingsDraft(v.trim() !== name, busy)
   return (
     <div className="flex flex-wrap gap-2">
       <Field label="名称" className="min-w-[220px] flex-1">

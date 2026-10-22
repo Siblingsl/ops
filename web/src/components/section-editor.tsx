@@ -3,7 +3,7 @@ import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import { BubbleMenu, EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { Bold, Heading3, ImagePlus, Link2, List, ListOrdered, Quote } from 'lucide-react'
+import { Bold, Heading3, ImagePlus, Italic, Link2, List, ListOrdered, Quote, Redo2, Undo2 } from 'lucide-react'
 import React, { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import { Markdown } from 'tiptap-markdown'
 import { cn } from './ui'
@@ -11,6 +11,8 @@ import { cn } from './ui'
 export interface EditorHandle {
   selectedText: () => string
   replaceSelection: (text: string) => void
+  /** Character offsets of the current selection inside the document text. */
+  selectionRange: () => { from: number; to: number } | null
   setMarkdown: (md: string) => void
   insertImage: (url: string) => void
   focus: () => void
@@ -81,6 +83,11 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
       const { from, to } = editor.state.selection
       return from === to ? '' : editor.state.doc.textBetween(from, to, '\n')
     },
+    selectionRange: () => {
+      if (!editor) return null
+      const { from, to } = editor.state.selection
+      return from === to ? null : { from, to }
+    },
     replaceSelection: (text) => {
       if (!editor) return
       const { from, to } = editor.state.selection
@@ -110,21 +117,26 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
   if (!editor) return null
   const setLink = () => {
     const prev = editor.getAttributes('link').href as string | undefined
-    const url = window.prompt('链接地址（公众号正文中只有已关联的公众号文章链接可以点击）', prev ?? 'https://')
+    const url = window.prompt('链接地址（正文中只有已关联且有权限访问的文章链接可以点击）', prev ?? 'https://')
     if (url === null) return
     if (url === '') editor.chain().focus().unsetLink().run()
     else editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
   }
   return (
     <div>
-      <div className={cn('mb-2 flex items-center gap-0.5 opacity-60 transition group-focus-within/sec:opacity-100', !editable && 'hidden')}>
+      <div className={cn('rich-editor-toolbar mb-2 flex items-center gap-0.5 opacity-60 transition group-focus-within/sec:opacity-100', !editable && 'hidden')}>
           <ToolBtn label="加粗" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()}><Bold className="size-3.5" /></ToolBtn>
+          <ToolBtn label="斜体" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()}><Italic className="size-3.5" /></ToolBtn>
+          <span className="rich-toolbar-divider" />
           <ToolBtn label="小标题" active={editor.isActive('heading')} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}><Heading3 className="size-3.5" /></ToolBtn>
           <ToolBtn label="引用" active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()}><Quote className="size-3.5" /></ToolBtn>
           <ToolBtn label="无序列表" active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()}><List className="size-3.5" /></ToolBtn>
           <ToolBtn label="有序列表" active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()}><ListOrdered className="size-3.5" /></ToolBtn>
           <ToolBtn label="链接" active={editor.isActive('link')} onClick={setLink}><Link2 className="size-3.5" /></ToolBtn>
           {onPickImage && <ToolBtn label="插入图片" onClick={onPickImage}><ImagePlus className="size-3.5" /></ToolBtn>}
+          <span className="rich-toolbar-divider" />
+          <ToolBtn label="撤销" onClick={() => editor.chain().focus().undo().run()}><Undo2 className="size-3.5" /></ToolBtn>
+          <ToolBtn label="重做" onClick={() => editor.chain().focus().redo().run()}><Redo2 className="size-3.5" /></ToolBtn>
       </div>
       <EditorContent editor={editor} />
       {/* BubbleMenu 的节点会被 tippy 移走，必须包在稳定的容器里，否则 React 增删兄弟节点时会报错。 */}
@@ -163,6 +175,11 @@ export const PlainEditor = forwardRef<EditorHandle, Props>(function PlainEditor(
   }
   useImperativeHandle(ref, () => ({
     selectedText: () => (ta.current ? ta.current.value.slice(sel.current[0], sel.current[1]) : ''),
+    selectionRange: () => {
+      const el = ta.current
+      if (!el || el.selectionStart === el.selectionEnd) return null
+      return { from: el.selectionStart, to: el.selectionEnd }
+    },
     replaceSelection: (text) => {
       const el = ta.current
       if (!el) return

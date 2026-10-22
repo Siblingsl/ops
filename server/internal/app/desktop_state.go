@@ -27,7 +27,9 @@ const (
 	desktopPlatformProtocolVersion = 1
 	desktopPlatformChallengePerMin = 60
 	desktopPlatformRequestBytes    = 64 << 10
-	desktopPlatformResultsBytes    = 512 << 10
+	desktopPlatformResultsBytes    = 2 << 20
+	desktopPlatformV1ResultsBytes  = 512 << 10
+	desktopPlatformProtocolV2      = 2
 )
 
 type desktopRuntime struct {

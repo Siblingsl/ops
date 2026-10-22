@@ -10,6 +10,7 @@ import { ApiError, errorMessage, get, post, put } from '@/lib/api'
 import { type AIRefs, runeLen } from '@/lib/format'
 import type { OutlineItem, OutlineTemplate, Work } from '@/lib/types'
 import { WorkConflictDialog } from './section-save-dialogs'
+import { useFlushAll } from './work-save'
 
 // ---------- 大纲（H-03） ----------
 
@@ -66,6 +67,7 @@ function TemplateManager({ open, onClose, list }: { open: boolean; onClose: () =
 
 export function OutlineCard({ work, setWork, readOnly, onConfirmed }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; onConfirmed?: () => void }) {
   const [conflict, setConflict] = useState<{ server: Work; confirm: boolean } | null>(null)
+  const flushAll = useFlushAll()
   const confirmed = !!work.outline_confirmed_at
   const [items, setItems] = useState<OutlineItem[]>(work.outline)
   const [editing, setEditing] = useState(!confirmed)
@@ -88,6 +90,8 @@ export function OutlineCard({ work, setWork, readOnly, onConfirmed }: { work: Wo
     if (items.length && !(await confirm({ title: '重新生成大纲？', desc: '当前未确认的大纲会被替换。已经确认生成的段落不受影响。', confirmText: '重新生成' }))) return
     setBusy('gen')
     try {
+      // NW-C3：观点可能还在 800ms 防抖里，先落库再让服务端读取。
+      await flushAll()
       const r = await post<{ items: OutlineItem[]; refs: AIRefs; ai_call_id: string }>(`/works/${work.id}/outline/generate`, template ? { template } : {})
       setItems(r.items)
       setRefs(r.refs)
@@ -114,6 +118,8 @@ export function OutlineCard({ work, setWork, readOnly, onConfirmed }: { work: Wo
   const save = async (confirmIt: boolean, base = work.revision) => {
     setBusy(confirmIt ? 'confirm' : 'save')
     try {
+      // NW-C2：确认大纲同样受 H-02 约束。先把观点落库，服务端才能校验；失败则保留大纲不确认。
+      if (confirmIt) await flushAll()
       const w = await put<Work>(`/works/${work.id}/outline`, { items, confirm: confirmIt, base_revision: base })
       setConflict(null)
       setWork(w)
@@ -158,7 +164,7 @@ export function OutlineCard({ work, setWork, readOnly, onConfirmed }: { work: Wo
           {confirmed && !editing && !readOnly && <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>修改大纲</Button>}
         </div>
       </div>
-      {noViewpoint && !confirmed && <HumanGate code="H-02" className="mb-3">先写下你的核心观点，才能生成大纲。</HumanGate>}
+      {noViewpoint && !confirmed && <HumanGate code="H-02" className="mb-3">先写下你的核心观点，才能生成或确认大纲。</HumanGate>}
       {template && editing && <p className="mb-2 text-[12px] text-mist-500">结构：{templates.data?.find((t) => t.id === template)?.structure}</p>}
       {!template && formatBriefHint[work.content_format] && <p className="mb-2 text-[12px] text-mist-500">{formatBriefHint[work.content_format]}</p>}
       <TemplateManager open={managing} onClose={() => setManaging(false)} list={templates.data ?? []} />
@@ -218,7 +224,8 @@ export function OutlineCard({ work, setWork, readOnly, onConfirmed }: { work: Wo
             <div className="ml-auto flex gap-2">
               {!confirmed && <Button size="sm" loading={busy === 'save'} disabled={!items.length} onClick={() => save(false)}>暂存</Button>}
               {confirmed && <Button size="sm" variant="ghost" onClick={() => { setItems(work.outline); setEditing(false) }}>取消</Button>}
-              <Button size="sm" variant="human" loading={busy === 'confirm'} disabled={!items.some((x) => x.heading.trim()) || readOnly} onClick={() => save(true)} icon={<Check className="size-3.5" />}>
+              <Button size="sm" variant="human" loading={busy === 'confirm'} disabled={!items.some((x) => x.heading.trim()) || noViewpoint || readOnly} onClick={() => save(true)} icon={<Check className="size-3.5" />}
+                title={noViewpoint ? '请先写下核心观点（H-02）' : undefined}>
                 确认大纲
               </Button>
             </div>

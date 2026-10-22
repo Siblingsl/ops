@@ -33,9 +33,9 @@ test('客户端设置脚本引用的业务控件仍全部存在于页面', () =>
   for (const id of expectedIds) assert.match(settingsHtml, new RegExp(`\\bid="${id}"`), `missing settings control: ${id}`);
 });
 
-test('七个客户端设置分类都有对应面板，主题与减少动效样式均有双主题覆盖', () => {
+test('六个客户端本机设置分类都有对应面板，主题与减少动效样式均有双主题覆盖', () => {
   const tabs = [...settingsHtml.matchAll(/data-settings-tab="([^"]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(tabs, ['connection', 'models', 'selftest', 'routes', 'account', 'policy', 'diagnostics']);
+  assert.deepEqual(tabs, ['connection', 'models', 'selftest', 'routes', 'account', 'diagnostics']);
   for (const tab of tabs) {
     assert.match(settingsHtml, new RegExp(`aria-controls="panel-${tab}"`), `missing tab panel control: ${tab}`);
     assert.match(settingsHtml, new RegExp(`data-settings-panel="${tab}"`), `missing settings panel: ${tab}`);
@@ -47,21 +47,39 @@ test('七个客户端设置分类都有对应面板，主题与减少动效样�
   assert.match(settingsCss, /data-reduced-motion="true"/);
 });
 
+test('DC12：统一设置中的四个本机嵌入面板各自只启用对应本机内容', () => {
+  assert.match(settingsScript, /embeddedPanel === 'ai' \? \['models', 'selftest', 'routes'\]/);
+  assert.match(settingsScript, /embeddedPanel === 'account-device' \? \['account'\]/);
+  assert.match(settingsScript, /embeddedPanel === 'diagnostics' \? \['diagnostics'\]/);
+  assert.match(settingsScript, /embeddedPanel === 'connection' \? \['connection'\]/);
+  assert.match(settingsScript, /reportLocalState\(\{ dirty, busy: activeOperations > 0 \|\| externalBusy \}\)/);
+  assert.match(settingsScript, /ops-desktop:\/\/ui\/settings\/close/);
+  assert.match(settingsCss, /body\.embedded-settings \.settings-content/);
+  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8');
+  for (const panel of ['connection', 'ai', 'account-device', 'diagnostics']) {
+    assert.match(main, new RegExp(`/embedded/${panel}`));
+  }
+});
+
+test('本机设置能区分在线账号状态与本机配置状态，并消除标题默认焦点框', () => {
+  assert.match(settingsScript, /state\.localConfigAvailable/);
+  assert.match(settingsScript, /本机配置文件无法读取/);
+  assert.match(settingsScript, /在线账号和工作区已读取/);
+  assert.match(settingsCss, /\.settings-tab-panel > h2:focus\s*\{\s*outline:\s*none;/);
+});
+
 test('离线页保留重试、设置和登录入口', () => {
   for (const id of ['settings', 'login', 'retry', 'action-status']) {
     assert.match(offlineHtml, new RegExp(`\\bid="${id}"`));
   }
 });
 
-test('D-123：客户端设置页有独立的账号内容类型入口，且与业务页面不是同一套控件', () => {
-  // 控件落在本地设置窗口的「账号与设备」面板里，而不是业务页面
-  assert.match(settingsHtml, /id="panel-account"[\s\S]*id="account-type-target"/);
-  for (const id of ['account-type-target', 'account-type-choice', 'apply-account-type', 'account-type-status']) {
-    assert.match(settingsHtml, new RegExp(`\\bid="${id}"`), `missing account type control: ${id}`);
-  }
-  // 客户端侧只有原生对话框确认，没有业务页面那种单选卡片列表
-  assert.match(settingsScript, /opsDesktopSettings\.changeAccountType/);
-  assert.match(settingsScript, /opsDesktopSettings\.getBusinessAccounts/);
+test('D-123/DC12：账号内容类型只在统一的当前账号设置中呈现', () => {
+  assert.doesNotMatch(settingsHtml, /account-type-target|account-type-choice|apply-account-type/);
+  assert.doesNotMatch(settingsScript, /changeAccountType|getBusinessAccounts/);
+  const accountSettings = fs.readFileSync(path.join(__dirname, '..', '..', 'web', 'src', 'pages', 'settings', 'Accounts.tsx'), 'utf8');
+  assert.match(accountSettings, /默认创作形态|账号类型/);
+  assert.match(accountSettings, /同平台内可以更换类型/);
   assert.doesNotMatch(settingsScript, /confirm_type_change/);
 });
 
@@ -89,9 +107,9 @@ test('D-123：客户端类型清单与后端 formatMatrix 一致', () => {
   for (const value of ['image_note', 'list_note', 'card_post', 'script', 'comic']) {
     assert.match(xhs, new RegExp(`"${value}"`), `xhs matrix missing ${value}`);
   }
-  const script = fs.readFileSync(path.join(settingsDir, 'settings.js'), 'utf8');
+  const script = fs.readFileSync(path.join(__dirname, '..', '..', 'web', 'src', 'components', 'ui.tsx'), 'utf8');
   for (const value of ['long_article', 'qa_article', 'briefing', 'card_post', 'script', 'comic', 'image_note', 'list_note']) {
-    assert.match(script, new RegExp(`'${value}'`), `client list missing ${value}`);
+    assert.match(script, new RegExp(`'${value}'`), `unified settings account-type list missing ${value}`);
   }
 });
 

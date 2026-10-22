@@ -73,8 +73,8 @@ export function EditorSidebar({ work, setWork, active, selection, tab, onTab: se
   const pendingMemories = usePendingMemories(work.account_id)
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-0.5 border-b border-mist-200 px-1.5 py-1.5">
-        <div className="scrollbar-thin flex flex-1 items-center gap-0.5 overflow-x-auto">
+      <div className="flex items-start gap-0.5 border-b border-mist-200 px-1.5 py-1.5">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-y-0.5">
           {tabGroups.map((g, gi) => (
             <div key={g.label} role="group" aria-label={g.label} title={g.label}
               className={cn('flex shrink-0 items-center gap-0.5', gi > 0 && 'ml-1 border-l border-mist-200 pl-1')}>
@@ -82,7 +82,7 @@ export function EditorSidebar({ work, setWork, active, selection, tab, onTab: se
                 const n = t.id === 'pending' ? pendingCount : t.id === 'comments' ? openComments : 0
                 return (
                   <button key={t.id} type="button" onClick={() => setTab(t.id)} title={`${g.label} · ${t.label}`}
-                    className={cn('flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[12px] transition', tab === t.id ? 'bg-ink-50 font-medium text-ink-800' : 'text-mist-500 hover:bg-mist-100')}>
+                    className={cn('flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-[12px] transition', tab === t.id ? 'bg-ink-50 font-medium text-ink-800' : 'text-mist-500 hover:bg-mist-100')}>
                     {t.icon}{t.label}{n > 0 && <span className="rounded-full bg-gamboge-400 px-1 text-[10px] font-bold text-mist-900">{n}</span>}
                   </button>
                 )
@@ -90,7 +90,7 @@ export function EditorSidebar({ work, setWork, active, selection, tab, onTab: se
             </div>
           ))}
         </div>
-        <button type="button" onClick={onClose} title="收起侧栏" className="cursor-pointer rounded p-1 text-mist-400 hover:bg-mist-100"><ChevronsRight className="size-4" /></button>
+        <button type="button" onClick={onClose} title="收起侧栏" className="mt-0.5 shrink-0 cursor-pointer rounded p-1 text-mist-400 hover:bg-mist-100"><ChevronsRight className="size-4" /></button>
       </div>
       <div key={tab} className="scrollbar-thin min-h-0 flex-1 animate-fade-in overflow-y-auto p-3">
         {tab === 'materials' && <MaterialsTab work={work} setWork={setWork} active={active} />}
@@ -132,7 +132,10 @@ function MaterialsTab({ work, setWork, active }: { work: Work; setWork: (w: Work
   })
   const [open, setOpen] = useState<string | null>(null)
   const [fulls, setFulls] = useState<Record<string, Material>>({})
-  if (!active) return <Hint>点一下任意段落，这里会推荐与这一段相关的素材，以及你以前写过的类似段落。</Hint>
+  // NW-B3：没有段落时不说"点一下任意段落"，给出此刻能做的事。
+  if (!active) return work.sections.length === 0
+    ? <Hint>还没有段落。先确认大纲并起草，或直接在左侧写下核心观点；有了段落这里会按段落推荐素材。</Hint>
+    : <Hint>点一下任意段落，这里会推荐与这一段相关的素材，以及你以前写过的类似段落。</Hint>
   const mats = (q.data?.items ?? []).filter((h) => h.type === 'material').slice(0, 5)
   const view = async (h: RetrieveHit) => {
     if (open === h.id) { setOpen(null); return }

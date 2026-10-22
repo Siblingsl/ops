@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"context"
@@ -12,21 +12,43 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+type deriveRule struct {
+	SourcePlatform string
+	SourceFormat   string
+	TargetPlatform string
+	TargetFormats  []string
+}
+
+var deriveMatrix = []deriveRule{
+	{SourcePlatform: "wechat_mp", SourceFormat: "long_article", TargetPlatform: "xhs", TargetFormats: []string{"image_note"}},
+	{SourcePlatform: "xhs", SourceFormat: "image_note", TargetPlatform: "wechat_mp", TargetFormats: []string{"long_article"}},
+	{SourcePlatform: "wechat_mp", SourceFormat: "comic", TargetPlatform: "xhs", TargetFormats: []string{"comic"}},
+	{SourcePlatform: "xhs", SourceFormat: "comic", TargetPlatform: "wechat_mp", TargetFormats: []string{"comic"}},
+	{SourcePlatform: "wechat_mp", SourceFormat: "long_article", TargetPlatform: "toutiao", TargetFormats: []string{"long_article", "micro_post"}},
+	{SourcePlatform: "xhs", SourceFormat: "image_note", TargetPlatform: "toutiao", TargetFormats: []string{"long_article", "micro_post"}},
+	{SourcePlatform: "toutiao", SourceFormat: "long_article", TargetPlatform: "wechat_mp", TargetFormats: []string{"long_article"}},
+	{SourcePlatform: "toutiao", SourceFormat: "long_article", TargetPlatform: "xhs", TargetFormats: []string{"image_note"}},
+}
+
 func deriveAllowed(src, dst *Account, srcFormat string) error {
+	return deriveAllowedForFormat(src, dst, srcFormat, dst.ContentFormat)
+}
+
+func deriveAllowedForFormat(src, dst *Account, srcFormat, targetFormat string) error {
 	if src.Platform == dst.Platform {
 		return validation("派生只能在不同平台之间进行（同平台派生容易造成同质内容）")
 	}
-	// D-048 第 5.9 节：首批只保留既有两条转换路径（长图文↔图文笔记、漫画↔漫画），
-	// 新类型（问答体/简报/清单/卡片/脚本）没有已实现的转换，派生入口一律禁用。
-	textual := map[string]bool{"long_article": true, "image_note": true}
-	switch {
-	case textual[srcFormat] && textual[dst.ContentFormat]:
-		return nil
-	case srcFormat == "comic" && dst.ContentFormat == "comic":
-		return nil
-	default:
-		return validation("这两种类型之间不支持派生（当前仅支持 长图文↔图文笔记、漫画↔漫画），请新建作品并引用同一选题")
+	for _, rule := range deriveMatrix {
+		if src.Platform != rule.SourcePlatform || srcFormat != rule.SourceFormat || dst.Platform != rule.TargetPlatform {
+			continue
+		}
+		for _, allowed := range rule.TargetFormats {
+			if targetFormat == allowed && validFormat(dst.Platform, targetFormat) {
+				return nil
+			}
+		}
 	}
+	return validation("这两种平台与内容形态之间不支持派生；请检查源稿形态和目标账号类型")
 }
 
 func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
@@ -35,7 +57,8 @@ func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		TargetAccountID uuid.UUID `json:"target_account_id"`
+		TargetAccountID     uuid.UUID `json:"target_account_id"`
+		TargetContentFormat *string   `json:"target_content_format"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -52,11 +75,22 @@ func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
 	if err := s.db.QueryRow(ctx, `SELECT content_format FROM work WHERE id=$1`, m.ID).Scan(&srcFormat); err != nil {
 		return err
 	}
-	if err := deriveAllowed(m.Account, dst, srcFormat); err != nil {
+	targetFormat := dst.ContentFormat
+	if dst.Platform == "toutiao" {
+		if in.TargetContentFormat == nil {
+			return validation("派生到今日头条时必须选择文章或微头条")
+		}
+		targetFormat = *in.TargetContentFormat
+	} else if in.TargetContentFormat != nil && *in.TargetContentFormat != dst.ContentFormat {
+		return validation("目标平台作品类型必须使用该账号当前默认类型")
+	}
+	dstForWork := *dst
+	dstForWork.ContentFormat = targetFormat
+	if err := deriveAllowedForFormat(m.Account, &dstForWork, srcFormat, targetFormat); err != nil {
 		return err
 	}
 	if srcFormat == "comic" {
-		return s.deriveComicWork(w, r, m, dst)
+		return s.deriveComicWork(w, r, m, &dstForWork)
 	}
 	secs, err := s.loadSections(ctx, nil, m.ID)
 	if err != nil {
@@ -69,26 +103,43 @@ func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
 	for _, x := range secs {
 		fmt.Fprintf(&b, "【源段落 id=%s】小标题：%s\n%s\n", x.ID, x.Heading, truncate(x.ContentMD, 1200))
 	}
-	direction := "把公众号长文压缩改写为小红书图文笔记：3 到 6 个要点段，每段短小，口语化"
-	if dst.Platform == "wechat_mp" {
+	direction := "把源稿改写成目标平台的内容，保留论据并调整表达。"
+	switch {
+	case dst.Platform == "toutiao" && targetFormat == "long_article" && m.Account.Platform == "xhs":
+		direction = "把小红书笔记已有要点展开为今日头条文章；缺少事实时注明待补素材，不虚构事实。"
+	case dst.Platform == "toutiao" && targetFormat == "long_article":
+		direction = "把公众号长文改写为今日头条文章，保留论述与事实来源并调整开头表达。"
+	case dst.Platform == "toutiao" && targetFormat == "micro_post" && m.Account.Platform == "xhs":
+		direction = "把小红书笔记整理为今日头条微头条短正文，不继承小红书专属引导语。"
+	case dst.Platform == "toutiao" && targetFormat == "micro_post":
+		direction = "把公众号长文压缩成一个清晰观点的今日头条微头条，保留事实出处，不新增事实。"
+	case m.Account.Platform == "toutiao" && dst.Platform == "wechat_mp":
+		direction = "把今日头条文章适配为公众号长文表达，保留论据并适配后续排版。"
+	case m.Account.Platform == "toutiao" && dst.Platform == "xhs":
+		direction = "把今日头条文章压缩为小红书图文笔记；另行选择图片并完成平台检查。"
+	case dst.Platform == "wechat_mp":
 		direction = "把小红书笔记扩写为公众号长文：4 到 8 个段落，每段有小标题，展开论述"
+	}
+	titleInstruction := "给出目标平台发布标题"
+	if dst.Platform == "toutiao" && targetFormat == "micro_post" {
+		titleInstruction = "给出便于系统内识别的微头条内部名称，不把它写入发布正文"
 	}
 	var viewpoint string
 	_ = s.db.QueryRow(ctx, `SELECT viewpoint FROM work WHERE id=$1`, m.ID).Scan(&viewpoint)
 	user := fmt.Sprintf(`## 源作品
-源平台：%s
-目标平台：%s
+源平台：%s（%s）
+目标平台：%s（%s）
 源标题：%s
 核心观点：%s
 
 %s
 ## 任务说明
-%s。规划目标作品的段落，并说明每个目标段落对应哪些源段落（source_section_ids 只能使用上面的 id）。给出目标平台的标题%s。
+ %s。规划目标作品的段落，并说明每个目标段落对应哪些源段落（source_section_ids 只能使用上面的 id）。%s%s。
 
 ## 输出格式
-只输出 JSON：{"title":"标题","sections":[{"source_section_ids":["id"],"key_point":"本段要点"}],"topics":["话题"]}`,
-		platformNames[m.Account.Platform], platformNames[dst.Platform], m.Title, viewpoint, b.String(), direction,
-		map[bool]string{true: "和 3 到 8 个话题", false: ""}[dst.Platform == "xhs"])
+ 只输出 JSON：{"title":"标题","sections":[{"source_section_ids":["id"],"key_point":"本段要点"}],"topics":["话题"]}`,
+		platformNames[m.Account.Platform], srcFormat, platformNames[dst.Platform], targetFormat, m.Title, viewpoint, b.String(), direction, titleInstruction,
+		map[bool]string{true: "；并提供用户可核对的话题建议", false: ""}[dst.Platform == "xhs" || dst.Platform == "toutiao"])
 	var plan struct {
 		Title    string `json:"title"`
 		Sections []struct {
@@ -103,7 +154,7 @@ func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
 		valid[x.ID.String()] = true
 		revOf[x.ID.String()] = x.Revision
 	}
-	if _, err := s.runAIJSON(ctx, aiTask{Type: "rewrite_plan", Account: dst, User: user}, &plan, func() error {
+	if _, err := s.runAIJSON(ctx, aiTask{Type: "rewrite_plan", Account: &dstForWork, User: user}, &plan, func() error {
 		if len(plan.Sections) == 0 {
 			return fmt.Errorf("没有段落")
 		}
@@ -119,14 +170,18 @@ func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
 		}
 		wf, _ := json.Marshal(p.WechatDefaults)
 		topics := []string{}
-		if dst.Platform == "xhs" {
+		if dst.Platform == "xhs" || dst.Platform == "toutiao" {
 			topics = cleanList(plan.Topics)
+		}
+		title := plan.Title
+		if dst.Platform != "toutiao" {
+			title = truncateRunes(title, 64)
 		}
 		var outline []OutlineItem
 		if err := tx.QueryRow(ctx, `INSERT INTO work (account_id, topic_id, source_work_id, source_revision, content_format, title, viewpoint,
 			outline_confirmed_at, theme, wechat_fields, topics)
 			SELECT $1, topic_id, id, revision, $2, $3, viewpoint, now(), $4, $5, $6 FROM work WHERE id=$7 RETURNING id`,
-			dst.ID, dst.ContentFormat, truncateRunes(plan.Title, 64), p.DefaultTheme, wf, topics, m.ID).Scan(&newID); err != nil {
+			dst.ID, targetFormat, title, p.DefaultTheme, wf, topics, m.ID).Scan(&newID); err != nil {
 			return err
 		}
 		for i, ps := range plan.Sections {
@@ -165,7 +220,7 @@ func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	s.audit(ctx, "work_derive", "work", newID.String(), "ok", map[string]any{"source": m.ID.String()})
+	s.audit(ctx, "work_derive", "work", newID.String(), "ok", map[string]any{"source": m.ID.String(), "kind": "derive"})
 	return s.writeWork(w, r, newID)
 }
 

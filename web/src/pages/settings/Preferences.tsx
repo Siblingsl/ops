@@ -4,6 +4,7 @@ import { Button, Card, CardHeader, cn, PageHeader, Switch } from '@/components/u
 import { errorMessage } from '@/lib/api'
 import type { UserPrefs } from '@/lib/types'
 import { ghostKeys, usePrefs, useSavePrefs } from '@/lib/v3'
+import { useSettingsDraft } from '@/lib/desktop-settings'
 
 function Row({ title, desc, children }: { title: string; desc?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -34,6 +35,7 @@ function Choice<T extends string | number>({ value, options, onChange }: { value
 export default function Preferences() {
   const prefs = usePrefs()
   const save = useSavePrefs()
+  useSettingsDraft(false, save.isPending)
   const set = (p: Partial<UserPrefs>) => save.mutate(p, { onError: (e) => toast.error(errorMessage(e)), onSuccess: () => toast.success('已保存', { duration: 1200 }) })
   return (
     <div className="max-w-3xl animate-fade-in">

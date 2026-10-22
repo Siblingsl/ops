@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"context"
@@ -49,8 +49,8 @@ type ComicPanel struct {
 	UpdatedAt    time.Time   `json:"updated_at"`
 }
 
-// requireComicAccount gates character-card management. D-048 第 5.8 节：账号类型创建后固定，
-// 但历史上被确认切换过类型的账号可能还有旧漫画作品——只要账号仍有漫画作品，角色卡仍可管理，
+// requireComicAccount gates character-card management. D-048 第 5.8 节 / D-123：账号类型可经显式确认
+// 在同平台内迁移，迁移后账号可能仍有旧漫画作品——只要账号仍有漫画作品，角色卡仍可管理，
 // 否则旧分镜的逐格文案与生图会失去角色一致性来源。新建漫画工作流仍只对漫画类型开放（作品级闸门）。
 func (s *Server) requireComicAccount(ctx context.Context, a *Account) error {
 	if a.ContentFormat == "comic" {

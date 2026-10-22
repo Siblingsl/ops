@@ -23,14 +23,40 @@ interface AttrResp {
   ai_error?: string
 }
 
+interface DataPreferenceView {
+  id: string
+  feature: string
+  conclusion: string
+  basis: string
+  sample_size: number
+  applicable: boolean
+  applicability: 'current' | 'stale' | 'insufficient_samples' | 'unverified'
+  basis_sample_count: number
+  computed_at: string | null
+}
+
+const preferenceApplicability: Record<DataPreferenceView['applicability'], { label: string; tone: 'green' | 'gamboge' | 'gray' }> = {
+  current: { label: '当前可用', tone: 'green' },
+  stale: { label: '数据已变化，等待重算', tone: 'gamboge' },
+  insufficient_samples: { label: '样本不足，暂停注入', tone: 'gamboge' },
+  unverified: { label: '旧记录未验证', tone: 'gray' },
+}
+
 /** Attribution groups the account's own data by simple features (EX-J-02); no prediction numbers. */
-export function AttributionCard({ accountId }: { accountId: string }) {
+export function AttributionCard({ accountId, contentFormat }: { accountId: string; contentFormat?: string }) {
   const [data, setData] = useState<AttrResp | null>(null)
   const [busy, setBusy] = useState(false)
+  const preferences = useQuery({
+    queryKey: ['data-preferences', accountId, contentFormat],
+    queryFn: () => get<DataPreferenceView[]>(`/accounts/${accountId}/data-preferences${contentFormat ? `?content_format=${contentFormat}` : ''}`),
+    staleTime: 0,
+    refetchOnMount: 'always',
+  })
   const run = async () => {
     setBusy(true)
     try {
-      setData(await post<AttrResp>(`/accounts/${accountId}/reviews/attribution`))
+      setData(await post<AttrResp>(`/accounts/${accountId}/reviews/attribution`, contentFormat ? { content_format: contentFormat } : undefined))
+      await preferences.refetch()
     } catch (e) {
       aiError(e, '归因分析', run)
     } finally {
@@ -39,9 +65,36 @@ export function AttributionCard({ accountId }: { accountId: string }) {
   }
   return (
     <Card>
-      <CardHeader title="什么在起作用" desc="按标题特征、发布时间、正文长度和话题分组，对比本账号作品的平均阅读和互动"
+      <CardHeader title="什么在起作用" desc={contentFormat ? `仅分析${contentFormat === 'micro_post' ? '微头条' : '文章'}，按标题特征、发布时间、正文长度和话题分组` : '按标题特征、发布时间、正文长度和话题分组，对比本账号作品的平均阅读和互动'}
         action={<Button size="sm" variant="secondary" loading={busy} icon={<TrendingUp className="size-3.5" />} onClick={run}>{data ? '重新分析' : '开始分析'}</Button>} />
       <div className="p-5">
+        <section className="mb-5 border-b border-mist-100 pb-5">
+          <div className="mb-1 text-[13px] font-semibold text-mist-700">写作生成使用的统计偏好</div>
+          <p className="mb-3 text-[12px] text-mist-500">只有标记为“当前可用”的偏好会进入指定生成任务；其他记录保留供查看，不会注入。</p>
+          {preferences.isLoading ? <p className="text-[12px] text-mist-400">正在读取偏好依据…</p> : preferences.isError ? (
+            <Notice tone="gamboge">读取偏好依据失败。<Button size="sm" variant="ghost" onClick={() => void preferences.refetch()}>重试</Button></Notice>
+          ) : !preferences.data?.length ? (
+            <p className="text-[12px] text-mist-400">暂无已保存的统计偏好；样本达到 10 篇后才会计算。</p>
+          ) : (
+            <ul className="space-y-2">
+              {preferences.data.map((preference) => {
+                const status = preferenceApplicability[preference.applicability]
+                return (
+                  <li key={preference.id} className="rounded-lg border border-mist-200 p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="flex-1 text-[13px] font-medium text-mist-800">{preference.conclusion}</span>
+                      <Badge tone={status.tone}>{status.label}</Badge>
+                    </div>
+                    <div className="mt-1 text-[12px] text-mist-500">
+                      {preference.basis || '旧记录未保存对比依据'} · {preference.basis_sample_count || preference.sample_size} 篇样本
+                      {preference.computed_at ? ` · 计算于 ${fmtTime(preference.computed_at)}` : ''}
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </section>
         {!data ? <p className="text-[13px] text-mist-500">只用你录入的数据做简单分组对比，不做预测。至少需要 10 篇有数据的作品。</p>
           : !data.enough ? <Notice tone="gamboge">{data.message}</Notice> : (
             <div className="space-y-5">
@@ -94,7 +147,7 @@ export function AttributionCard({ accountId }: { accountId: string }) {
   )
 }
 
-interface TopWork { work_id: string; title: string; reads: number; interactions: number }
+interface TopWork { work_id: string; title: string; content_format?: string; reads: number; interactions: number }
 interface Breakdown {
   structure: string[]
   opening: string
@@ -106,8 +159,8 @@ interface Breakdown {
 interface OutlineTemplate { id: string; name: string; structure: string; builtin: boolean }
 
 /** TopWorksCard lists the account's own best performers; only these can be broken down (EX-J-04). */
-export function TopWorksCard({ accountId }: { accountId: string }) {
-  const top = useQuery({ queryKey: ['top-works', accountId], queryFn: () => get<TopWork[]>(`/accounts/${accountId}/top-works`) })
+export function TopWorksCard({ accountId, contentFormat }: { accountId: string; contentFormat?: string }) {
+  const top = useQuery({ queryKey: ['top-works', accountId, contentFormat], queryFn: () => get<TopWork[]>(`/accounts/${accountId}/top-works${contentFormat ? `?content_format=${contentFormat}` : ''}`) })
   const [busy, setBusy] = useState<string | null>(null)
   const [result, setResult] = useState<{ work: TopWork; bd: Breakdown; callId: string } | null>(null)
   const breakdown = async (w: TopWork) => {
@@ -123,7 +176,7 @@ export function TopWorksCard({ accountId }: { accountId: string }) {
   }
   return (
     <Card>
-      <CardHeader title="表现最好的作品" desc="本账号阅读和互动排名前 10% 的作品，可以拆解它为什么有效" />
+      <CardHeader title="表现最好的作品" desc={contentFormat ? `${contentFormat === 'micro_post' ? '微头条' : '文章'}中阅读和互动排名前 10% 的作品` : '本账号阅读和互动排名前 10% 的作品，可以拆解它为什么有效'} />
       <div className="p-5">
         {top.isLoading ? null : !top.data?.length ? <Empty icon={<FileSearch className="size-5" />} title="还没有足够的数据" desc="录入作品数据后，这里会列出表现最好的作品。"
           action={<Button size="sm" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>去录入数据</Button>} /> : (

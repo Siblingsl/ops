@@ -130,12 +130,13 @@ func TestHistorySlotFollowsPreference(t *testing.T) {
 
 func TestSearchFilters(t *testing.T) {
 	f := env.accounts(t)
-	env.mustJSON(t, "POST", "/api/v1/accounts/"+f.wechat.ID.String()+"/topics", map[string]string{"title": "搜索筛选专用的蓝鲸选题"}, nil)
+	needle := "搜索筛选专用的" + uuid.NewString()
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+f.wechat.ID.String()+"/topics", map[string]string{"title": needle}, nil)
 	count := func(qs string) int {
 		var res struct {
 			Items []SearchHit `json:"items"`
 		}
-		env.mustJSON(t, "GET", "/api/v1/search?q="+url.QueryEscape("蓝鲸选题")+qs, nil, &res)
+		env.mustJSON(t, "GET", "/api/v1/search?q="+url.QueryEscape(needle)+qs, nil, &res)
 		return len(res.Items)
 	}
 	if count("") == 0 || count("&types=topic&status=pending&days=7") == 0 {

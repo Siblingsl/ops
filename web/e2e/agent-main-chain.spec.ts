@@ -49,9 +49,13 @@ async function prepareAgent(page: Page) {
   const privacy = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
   await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
   await expect(privacy).toBeHidden()
-  const accountSelect = page.getByRole('combobox', { name: '选择账号' })
+  await page.getByRole('button', { name: '对话设置' }).click()
+  const settings = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '对话设置', exact: true }) })
+  const accountSelect = settings.getByRole('combobox', { name: '选择账号' })
   await expect(accountSelect).toBeEnabled()
   await accountSelect.selectOption(account.id)
+  await page.keyboard.press('Escape')
+  await expect(settings).toBeHidden()
   return { account, work }
 }
 

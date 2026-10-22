@@ -228,14 +228,21 @@ interface PublicState {
   workspaceName: string;
   reauthRequired: boolean;
   storageAvailable: boolean;
-  deviceRegistered: boolean;
-  modelCount: number;
+  localConfigAvailable: boolean;
+  deviceRegistered: boolean | null;
+  modelCount: number | null;
   activeModelRequests: number;
   channelState: 'disconnected' | 'connecting' | 'ready' | 'error';
   channelMessage: string;
   mode: DesktopMode;
   routeRevision: number;
   deviceId: string;
+}
+
+export interface PublicSystemInfo {
+  version: string;
+  dev: boolean;
+  dataBytes: number;
 }
 
 export interface DesktopRoute {
@@ -317,14 +324,22 @@ export class DesktopClient {
       // Local settings must remain usable when the business session is offline.
     }
 
-    let modelCount = 0;
-    let deviceRegistered = false;
+    let modelCount: number | null = 0;
+    let deviceRegistered: boolean | null = false;
+    let localConfigAvailable = true;
     let deviceId = '';
     if (auth) {
-      const account = await this.getAccount(auth);
-      deviceRegistered = Boolean(account.device);
-      deviceId = account.device?.id ?? '';
-      modelCount = account.workspaces[auth.workspace.id]?.models.length ?? 0;
+      try {
+        const account = await this.getAccount(auth);
+        deviceRegistered = Boolean(account.device);
+        deviceId = account.device?.id ?? '';
+        modelCount = account.workspaces[auth.workspace.id]?.models.length ?? 0;
+      } catch {
+        // Online identity and runtime mode must remain readable when only the local AI config is damaged.
+        localConfigAvailable = false;
+        deviceRegistered = null;
+        modelCount = null;
+      }
     }
 
     return {
@@ -333,6 +348,7 @@ export class DesktopClient {
       workspaceName: auth?.workspace.name ?? '',
       reauthRequired: Boolean(auth && !auth.reauth_ok),
       storageAvailable: safeStorage.isEncryptionAvailable(),
+      localConfigAvailable,
       deviceRegistered,
       modelCount,
       activeModelRequests: this.pending.size,
@@ -350,6 +366,11 @@ export class DesktopClient {
 
   getActiveModelRequestCount(): number {
     return this.pending.size;
+  }
+
+  async getPublicSystemInfo(): Promise<PublicSystemInfo> {
+    const info = await this.request<{ version: string; dev: boolean; data_bytes: number }>('/system/info');
+    return { version: info.version, dev: info.dev, dataBytes: info.data_bytes };
   }
 
   consumeManagementRequestMarker(marker: string, requestUrl: string, method: string): boolean {
@@ -1578,10 +1599,44 @@ export class DesktopClient {
 
   // platformSignedCall 给平台采集协议客户端用：按操作名取端点、完成设备证明、发请求。
   // 只接受 PLATFORM_OPERATION_PATHS 里登记的操作，不接受任意路径。
-  async platformSignedCall(operation: string, method: string, pathName: string, body: unknown): Promise<unknown> {
+  async platformSignedCall(operation: string, method: string, pathName: string, body: unknown, extraHeaders: Record<string, string> = {}): Promise<unknown> {
     const device = await this.ensurePlatformDevice();
     const auth = await this.getAuthInfo();
-    return this.platformSignedRequest<unknown>(auth, device, operation, method, pathName, body);
+    return this.platformSignedRequest<unknown>(auth, device, operation, method, pathName, body, extraHeaders);
+  }
+
+  async requestPlatformAccountSync(input: { accountId: string; mode: 'incremental' | 'full_reconcile'; connectionRevision: number; idempotencyKey: string }): Promise<Record<string, unknown>> {
+    const capability = await this.getPlatformCollectionCapability();
+    const endpoint = resolvePlatformEndpoint(capability, 'platform.account.sync.request');
+    return await this.platformSignedCall('platform.account.sync.request', endpoint.method,
+      endpoint.path.replace('{accountId}', encodeURIComponent(input.accountId)), {
+        mode: input.mode,
+        expected_connection_revision: input.connectionRevision
+      }, { 'Idempotency-Key': input.idempotencyKey }) as Record<string, unknown>;
+  }
+
+  async requestPlatformMetricsRefresh(input: { accountId: string; connectionRevision: number; idempotencyKey: string; platformWorkIds?: string[] }): Promise<Record<string, unknown>> {
+    const capability = await this.getPlatformCollectionCapability();
+    const endpoint = resolvePlatformEndpoint(capability, 'platform.metrics.refresh.request');
+    return await this.platformSignedCall('platform.metrics.refresh.request', endpoint.method,
+      endpoint.path.replace('{accountId}', encodeURIComponent(input.accountId)), {
+        target_scope: input.platformWorkIds?.length ? 'explicit' : 'due_and_recent',
+        platform_work_ids: input.platformWorkIds ?? [],
+        work_ids: [],
+        expected_connection_revision: input.connectionRevision
+      }, { 'Idempotency-Key': input.idempotencyKey }) as Record<string, unknown>;
+  }
+
+  async resumePlatformSyncOperation(input: { accountId: string; operationId: string; expectedOperationRevision: number }): Promise<Record<string, unknown>> {
+    const capability = await this.getPlatformCollectionCapability();
+    const endpoint = resolvePlatformEndpoint(capability, 'platform.sync.operation.resume');
+    const pathName = endpoint.path
+      .replace('{accountId}', encodeURIComponent(input.accountId))
+      .replace('{operationId}', encodeURIComponent(input.operationId));
+    return await this.platformSignedCall('platform.sync.operation.resume', endpoint.method, pathName, {
+      action: 'resume',
+      expected_operation_revision: input.expectedOperationRevision
+    }) as Record<string, unknown>;
   }
 
   // createPlatformConnection 为某个 OPS 账号建立待验证连接（20 文档 §11.2）。
@@ -1674,7 +1729,8 @@ export class DesktopClient {
     operation: string,
     method: string,
     pathName: string,
-    bodyValue: unknown
+    bodyValue: unknown,
+    extraHeaders: Record<string, string> = {}
   ): Promise<T> {
     // GET/HEAD 不能带 body（fetch 会直接抛错）。挑战里的 body_sha256 必须与真正发出的
     // body 一致，否则服务端验签会失败；因此这里对 GET/HEAD 用空串的摘要。
@@ -1709,7 +1765,8 @@ export class DesktopClient {
         'X-CSRF-Token': auth.csrf_token,
         'X-OPS-Desktop-Device': device.id,
         'X-OPS-Desktop-Challenge': challenge.challenge_id,
-        'X-OPS-Desktop-Signature': signature
+        'X-OPS-Desktop-Signature': signature,
+        ...extraHeaders
       },
       ...(hasBody ? { body } : {})
     });

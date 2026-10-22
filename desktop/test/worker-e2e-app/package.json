@@ -1,0 +1,5 @@
+{
+  "name": "ops-desktop-worker-e2e-harness",
+  "private": true,
+  "main": "main.cjs"
+}

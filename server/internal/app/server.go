@@ -366,6 +366,16 @@ func (s *Server) buildRouter() http.Handler {
 			r.Patch("/accounts/{accountId}/platform-connection", s.h(s.patchPlatformConnection))
 			// 手动采集只建待办，且仅连接保管人可发起（20 文档 §10.1.1）。
 			r.Post("/accounts/{accountId}/platform-sync", s.h(s.requestPlatformSync))
+			r.Post("/accounts/{accountId}/platform-account-sync", s.h(s.requestPlatformAccountSync))
+			r.Post("/accounts/{accountId}/platform-metrics-refresh", s.h(s.requestPlatformMetricsRefresh))
+			r.Get("/accounts/{accountId}/platform-sync-operations", s.h(s.listPlatformSyncOperations))
+			r.Get("/accounts/{accountId}/platform-sync-operations/{operationId}", s.h(s.getPlatformSyncOperation))
+			r.Get("/accounts/{accountId}/platform-sync-operations/{operationId}/items", s.h(s.listPlatformSyncOperationItems))
+			r.Post("/accounts/{accountId}/platform-sync-operations/{operationId}/actions", s.h(s.platformSyncOperationAction))
+			r.Get("/accounts/{accountId}/platform-profile", s.h(s.getPlatformAccountSnapshot))
+			r.Get("/accounts/{accountId}/platform-works", s.h(s.listPlatformWorkMirrors))
+			r.Get("/accounts/{accountId}/platform-works/{platformWorkId}", s.h(s.getPlatformWorkMirror))
+			r.Post("/accounts/{accountId}/platform-works/{platformWorkId}/draft", s.h(s.createDraftFromPlatformMirror))
 			r.Get("/works/{id}/metrics", s.h(s.listMetrics))
 			r.Post("/works/{id}/metrics", s.h(s.createMetric))
 			r.Patch("/metrics/{id}", s.h(s.updateMetric))
@@ -457,6 +467,7 @@ func (s *Server) v3Routes(r chi.Router) {
 	r.Post("/inbox/{id}/triage", s.h(s.triageInbox))
 	r.Post("/inbox/{id}/convert", s.h(s.convertInbox))
 	r.Delete("/inbox/{id}", s.h(s.deleteInbox))
+	r.Post("/inbox/{id}/restore", s.h(s.restoreInbox))
 
 	// 素材
 	r.Post("/materials/extract", s.h(s.extractMaterials))
@@ -477,6 +488,11 @@ func (s *Server) v3Routes(r chi.Router) {
 	r.Get("/works/{id}/series-context", s.h(s.workSeriesContext))
 	r.Get("/outline-templates", s.h(s.listOutlineTemplates))
 	r.Put("/outline-templates", s.h(s.putOutlineTemplates))
+	// DEV-416 / D-140：创作模板是唯一的"模板"概念；outline-templates 仅保留兼容。
+	r.Get("/creation-templates", s.h(s.listCreationTemplates))
+	r.Post("/creation-templates", s.h(s.createCreationTemplate))
+	r.Put("/creation-templates/{id}", s.h(s.updateCreationTemplate))
+	r.Delete("/creation-templates/{id}", s.h(s.deleteCreationTemplate))
 	r.Post("/works/{id}/outline/review", s.h(s.reviewOutline))
 	r.Get("/works/{id}/copilot", s.h(s.listCopilot))
 	r.Post("/works/{id}/copilot", s.h(s.chatCopilot))

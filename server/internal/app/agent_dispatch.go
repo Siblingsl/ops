@@ -108,6 +108,9 @@ func (s *Server) dispatchAgentTool(ctx context.Context, req agentDispatchRequest
 	base, baseCancel := context.WithCancel(context.Background())
 	defer baseCancel()
 	inner := withAgentPrincipal(base, req.Principal)
+	if desktopRequest, ok := desktopRequestOf(ctx); ok {
+		inner = withDesktopRequest(inner, desktopRequest)
+	}
 	if v, ok := ctx.Value(ctxPreferFallback).(bool); ok {
 		inner = context.WithValue(inner, ctxPreferFallback, v)
 	}

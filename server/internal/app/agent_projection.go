@@ -115,11 +115,44 @@ func agentProjectWork(status int, body []byte) any {
 		"target_chars":      w["target_chars"],
 		"published_url":     w["published_url"],
 		"published_at":      w["published_at"],
+		"publish_revision":  w["publish_revision"],
 		"asset_count":       agentLenOf(w["assets"]),
 		"material_ids":      w["material_ids"],
 	}
 	out["sections"] = agentSectionDigests(w["sections"])
 	out["panels"] = agentPanelDigests(w["panels"])
+	return out
+}
+
+// projectToutiaoPack keeps package metadata useful to the model while dropping正文 and
+// app-protected image URLs. Users can inspect and download the complete package in work_pack.
+func projectToutiaoPack(_ int, body []byte) any {
+	pack := agentDecodeObject(body)
+	if pack == nil {
+		return map[string]any{}
+	}
+	out := map[string]any{}
+	for _, key := range []string{"work_id", "platform", "content_format", "basis_revision", "internal_title", "publish_title", "body_chars", "topics", "instructions", "warnings"} {
+		if value, ok := pack[key]; ok {
+			out[key] = value
+		}
+	}
+	images, _ := pack["images"].([]any)
+	projected := make([]any, 0, len(images))
+	for _, raw := range images {
+		image, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		item := map[string]any{}
+		for _, key := range []string{"asset_id", "file", "position", "mime", "ai_generated", "uses"} {
+			if value, ok := image[key]; ok {
+				item[key] = value
+			}
+		}
+		projected = append(projected, item)
+	}
+	out["images"] = projected
 	return out
 }
 

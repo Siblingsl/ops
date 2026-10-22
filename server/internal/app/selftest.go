@@ -28,7 +28,7 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 	var base string
 	var enc []byte
 	var models []string
-	if err := s.db.QueryRow(ctx, `SELECT base_url, api_key_enc, models FROM model_provider WHERE id=$1 AND workspace_id=$2`, id, ws).Scan(&base, &enc, &models); err != nil {
+	if err := s.db.QueryRow(ctx, `SELECT base_url, api_key_enc, models FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, id, ws).Scan(&base, &enc, &models); err != nil {
 		return err
 	}
 	key, err := s.box.Decrypt(enc)

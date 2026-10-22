@@ -50,6 +50,69 @@ func TestDR05NumberFaithfulness(t *testing.T) {
 	}
 }
 
+func TestToutiaoScreenshotIntervalRequiresCumulativeConfirmationAndMatchingFormat(t *testing.T) {
+	ctx := context.Background()
+	account := drAccount(t, "toutiao", "头条区间截图确认号")
+	publishedAt := env.srv.now().AddDate(0, 0, -3)
+	article := drWork(t, account, "累计数据文章", "published", &publishedAt)
+	var micro Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+account.ID.String()+"/works", map[string]string{
+		"title": "微头条数据作品", "content_format": "micro_post",
+	}, &micro)
+	if _, err := env.srv.db.Exec(ctx, `UPDATE work SET status='published',published_at=$2 WHERE id=$1`, micro.ID, publishedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	if !hasMetricIntervalHint("近 7 天") || !hasMetricIntervalHint("昨日阅读 80") || !hasMetricIntervalHint("本周") {
+		t.Fatal("common interval labels must be detected")
+	}
+	if hasMetricIntervalHint("截至今日") || hasMetricIntervalHint("发布后 7 天") {
+		t.Fatal("cumulative capture dates must not be treated as interval metrics")
+	}
+
+	status, body := uploadShots(t, account.ID.String(), 1, "")
+	if status != 200 {
+		t.Fatalf("recognize: %d %s", status, body)
+	}
+	var uploaded shotResp
+	if err := json.Unmarshal(body, &uploaded); err != nil || len(uploaded.Rows) != 1 {
+		t.Fatalf("decode recognized row: %v %s", err, body)
+	}
+	row := uploaded.Rows[0]
+	var matchedFormat string
+	if row.WorkID == nil || env.srv.db.QueryRow(ctx, `SELECT content_format FROM work WHERE id=$1`, *row.WorkID).Scan(&matchedFormat) != nil || row.ContentFormat != matchedFormat {
+		t.Fatalf("model candidate must retain the matching Toutiao shape: %+v", row)
+	}
+	var storedRows []metricShotRow
+	var raw []byte
+	if err := env.srv.db.QueryRow(ctx, `SELECT rows FROM metric_upload WHERE id=$1`, uploaded.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &storedRows); err != nil {
+		t.Fatal(err)
+	}
+	articleFormat := article.ContentFormat
+	storedRows[0].ContentFormat = articleFormat
+	storedRows[0].WorkID = &article.ID
+	storedRows[0].IntervalHint = true
+	rowsJSON, _ := json.Marshal(storedRows)
+	if _, err := env.srv.db.Exec(ctx, `UPDATE metric_upload SET rows=$2 WHERE id=$1`, uploaded.ID, rowsJSON); err != nil {
+		t.Fatal(err)
+	}
+
+	path := "/api/v1/metrics/screenshots/" + uploaded.ID + "/rows/0/confirm"
+	env.expectErr(t, "POST", path, map[string]any{"work_id": micro.ID, "reads": 80, "cumulative_confirmed": true}, "validation_failed")
+	env.expectErr(t, "POST", path, map[string]any{"work_id": article.ID, "reads": 80}, "validation_failed")
+	if metricCount(t, article.ID)+metricCount(t, micro.ID) != 0 {
+		t.Fatal("interval values must not be saved before explicit cumulative confirmation")
+	}
+	var saved metricResp
+	env.mustJSON(t, "POST", path, map[string]any{"work_id": article.ID, "reads": 80, "cumulative_confirmed": true}, &saved)
+	if saved.WorkID != article.ID || saved.Source != "screenshot" || saved.Reads == nil || *saved.Reads != 80 {
+		t.Fatalf("confirmed cumulative metric: %+v", saved.Metric)
+	}
+}
+
 // DEV-DR05（14 文档 4.4）：截图识别只返回待确认的行、不入库；原始文字里找不到的数字被丢弃；
 // 单位换算由代码完成；逐行确认写入 source=screenshot；截图不带账号档案与记忆；7 天后连文件一起删除。
 func TestDR05MetricScreenshot(t *testing.T) {
@@ -114,6 +177,7 @@ func TestDR05MetricScreenshot(t *testing.T) {
 	if got.Source != "screenshot" || got.Likes == nil || *got.Likes != 40 || got.Comments != nil || got.DayOffset == nil || *got.DayOffset != 2 {
 		t.Fatalf("confirmed metric: %+v", got.Metric)
 	}
+	assertMetricAudit(t, got.ID.String(), "metric_create", "screenshot", nil, map[string]any{"reads": float64(12000)})
 	env.expectErr(t, "POST", path, map[string]any{"work_id": w1.ID, "reads": 1}, "state_invalid")
 	if metricCount(t, w2.ID) != 0 {
 		t.Fatal("unconfirmed row must stay out of metrics")

@@ -80,6 +80,7 @@ export interface WechatDiscoveryResult {
   coverage: { pages_read: number; has_more: boolean; incomplete_reason: string | null; total_count?: number | null };
   duplicates: number;
   invalidRows: number;
+  enumerationComplete: boolean;
 }
 
 export class WechatAdapterError extends Error {
@@ -216,6 +217,7 @@ export function parsePublishPage(payload: unknown): {
   page: number | null;
   hasMore: boolean;
   totalCount: number | null;
+  publishRecordCount: number;
   invalidRows: number;
 } {
   const body = payload as { publish_page?: unknown; base_resp?: { ret?: unknown } } | null;
@@ -286,13 +288,13 @@ export function parsePublishPage(payload: unknown): {
   // 但累计已达 16，应收口。因此真正判定放在 collectPublishedArticles 里按已收集数量与
   // total_count 比较；这里只用“本页非空”作为粗粒度信号，避免误导。
   const hasMore = articles.length > 0 && (total === null || total > articles.length);
-  return { articles, page: pageNo, hasMore, totalCount: total, invalidRows };
+  return { articles, page: pageNo, hasMore, totalCount: total, publishRecordCount: list.length, invalidRows };
 }
 
 // collectPublishedArticles 跨页收集并按稳定编号去重；页数上限 3 与 §10.1 一致。
 export async function collectPublishedArticles(
   source: ReadOnlyResponseSource,
-  options: { maxPages?: number; buildPath?: (state: { page: number }) => string } = {}
+  options: { maxPages?: number; startPage?: number; buildPath?: (state: { page: number }) => string } = {}
 ): Promise<WechatDiscoveryResult> {
   const maxPages = Math.max(1, Math.min(options.maxPages ?? 3, 3));
   const buildPath = options.buildPath ?? ((s: { page: number }) => `${WECHAT_MP_API.publishedList}?sub=list&begin=${s.page * 10}&count=10&lang=zh_CN&f=json&ajax=1`);
@@ -300,10 +302,11 @@ export async function collectPublishedArticles(
   let duplicates = 0;
   let invalidRows = 0;
   let pagesRead = 0;
-  let page = 0;
+  let page = Math.max(0, Math.floor(options.startPage ?? 0));
   let hasMore = false;
   let incompleteReason: string | null = null;
   let totalCount: number | null = null;
+  let enumerationComplete = false;
   for (;;) {
     if (pagesRead >= maxPages) {
       incompleteReason = 'page_budget';
@@ -321,13 +324,27 @@ export async function collectPublishedArticles(
       }
       seen.set(article.externalID, article);
     }
-    // total_count 是总量：已收集够多就不再请求，避免按“本页有数据”无限翻页。
+    if (parsed.invalidRows > 0) {
+      incompleteReason = 'catalog_inconsistent';
+      hasMore = parsed.publishRecordCount > 0;
+      break;
+    }
+    // total_count 是可发布作品总量；按去重后的文章数收口，不能用当前页记录数估算。
     if (totalCount !== null && seen.size >= totalCount) {
+      hasMore = false;
+      enumerationComplete = true;
+      break;
+    }
+    hasMore = parsed.publishRecordCount > 0;
+    if (totalCount !== null && parsed.publishRecordCount === 0 && seen.size < totalCount) {
+      incompleteReason = 'catalog_inconsistent';
       hasMore = false;
       break;
     }
-    hasMore = parsed.hasMore;
-    if (!hasMore) break;
+    if (!hasMore) {
+      enumerationComplete = totalCount === 0 || totalCount === null && parsed.publishRecordCount === 0;
+      break;
+    }
     page += 1;
   }
   return {
@@ -337,7 +354,8 @@ export async function collectPublishedArticles(
     nextCursor: hasMore ? String(page) : null,
     coverage: { pages_read: pagesRead, has_more: hasMore, incomplete_reason: incompleteReason, total_count: totalCount },
     duplicates,
-    invalidRows
+    invalidRows,
+    enumerationComplete: incompleteReason === null && enumerationComplete
   };
 }
 

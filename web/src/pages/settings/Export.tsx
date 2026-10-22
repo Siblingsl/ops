@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Button, Card, CardHeader, PageHeader, Select } from '@/components/ui'
+import { Button, Card, CardHeader, PageHeader, Select, platformLabel } from '@/components/ui'
 import { errorMessage, rawRequest } from '@/lib/api'
 import { useAccounts } from '@/lib/session'
+import { useSettingsDraft } from '@/lib/desktop-settings'
 
 export default function ExportPage() {
   const { data: accounts } = useAccounts()
   const [kind, setKind] = useState('works')
   const [accountId, setAccountId] = useState('')
   const [busy, setBusy] = useState(false)
+  useSettingsDraft(false, busy)
   const run = async () => {
     setBusy(true)
     try {
@@ -46,7 +48,7 @@ export default function ExportPage() {
               <div className="mb-1.5 text-[13px] font-medium text-mist-700">账号（可选）</div>
               <Select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
                 <option value="">全部账号</option>
-                {(accounts ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                {(accounts ?? []).map((a) => <option key={a.id} value={a.id}>{platformLabel[a.platform]} · {a.name}</option>)}
               </Select>
             </div>
           )}

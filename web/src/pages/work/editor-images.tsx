@@ -15,6 +15,8 @@ import { waitJob } from '@/lib/v3'
 
 export function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; upload: (f: File) => Promise<Asset | null> }) {
   const wx = work.platform === 'wechat_mp'
+  const xhs = work.platform === 'xhs'
+  const toutiao = work.platform === 'toutiao'
   const [cropFor, setCropFor] = useState<Asset | null>(null)
   const [ratioCrop, setRatioCrop] = useState<Asset | null>(null)
   const [uploading, setUploading] = useState(0)
@@ -47,9 +49,15 @@ export function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; se
   const [coverBusy, setCoverBusy] = useState(false)
   const [coverCands, setCoverCands] = useState<Asset[] | null>(null)
   const genCover = async () => {
+    // NW-B7：标题和观点都为空时不能发空主题请求。
+    const theme = (work.title || work.viewpoint).trim()
+    if (!theme) {
+      toast.info('先写下标题或核心观点，再让 AI 生成封面')
+      return
+    }
     setCoverBusy(true)
     try {
-      const base = `公众号封面插图：围绕「${(work.title || work.viewpoint).slice(0, 24)}」的主题画面，构图简洁、留出文字空间，画面中不出现文字。`
+      const base = `公众号封面插图：围绕「${theme.slice(0, 24)}」的主题画面，构图简洁、留出文字空间，画面中不出现文字。`
       const cands: Asset[] = []
       for (let i = 0; i < 3; i++) {
         const { job_id } = await post<{ job_id: string }>(`/works/${work.id}/generate-image`, { prompt: `${base}（构图方案 ${i + 1}）`, background: true })
@@ -88,12 +96,12 @@ export function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; se
   }
   return (
     <Card id="step-images" className="scroll-mt-24 p-5">
-      <div className="mb-4 flex items-center gap-2">
-        <h2 className="font-display text-[17px] font-bold text-mist-900">{wx ? '配图与封面' : '笔记图片'}</h2>
-        <span className="text-xs text-mist-400">{wx ? '正文图片会自动压缩到 1MB 以内' : `${work.assets.length} / 18 张，按顺序发布`}</span>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <h2 className="font-display text-[17px] font-bold text-mist-900">{wx ? '配图与封面' : toutiao ? '头条配图' : '笔记图片'}</h2>
+        <span className="text-xs text-mist-400">{wx ? '正文图片会自动压缩到 1MB 以内' : toutiao ? `${work.assets.length} 张；配图可选，按此顺序导出，平台上限待实测` : `已选 ${work.assets.length} 张（最多 18 张），按顺序发布；第一张作为封面`}</span>
         {!readOnly && (
           <div className="ml-auto flex gap-2">
-            {!wx && <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={() => setCardMaker(true)}>文字卡片</Button>}
+            {xhs && <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={() => setCardMaker(true)}>文字卡片</Button>}
             <Button size="sm" variant="ghost" icon={<Images className="size-3.5" />} onClick={() => setLibrary(true)}>从图片库选择</Button>
             <Button size="sm" icon={<ImagePlus className="size-3.5" />} loading={uploading > 0} onClick={() => input.current?.click()}>上传图片</Button>
           </div>
@@ -160,7 +168,7 @@ export function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; se
         <div className="grid grid-cols-3 gap-3 md:grid-cols-4" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files) }}>
           {work.assets.map((a, i) => (
             <div key={a.id} className="group relative overflow-hidden rounded-lg border border-mist-200 bg-mist-50">
-              <img src={a.url} alt="" className={cn('w-full object-cover', wx ? 'aspect-[4/3]' : 'aspect-[3/4]')} />
+              <img src={a.url} alt="" className={cn('w-full object-cover', wx ? 'aspect-[4/3]' : xhs ? 'aspect-[3/4]' : 'aspect-square')} />
               <span className="absolute left-1.5 top-1.5 rounded bg-mist-900/60 px-1.5 text-[11px] font-medium text-white">{String(i + 1).padStart(2, '0')}</span>
               {a.id === work.cover_asset_id && <span className="absolute right-1.5 top-1.5 rounded bg-gamboge-400 px-1.5 text-[11px] font-bold text-mist-900">封面</span>}
               {a.ai_generated && <span className="absolute left-1.5 bottom-8 rounded bg-mist-900/70 px-1.5 text-[10px] text-white">AI</span>}
@@ -187,7 +195,7 @@ export function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; se
           initial={coverInit ?? defaultCrops(cropFor.width, cropFor.height)} onSave={saveCrop} />
       )}
       {library && <LibraryDialog work={work} onClose={() => setLibrary(false)} onPicked={(a) => setWork({ ...work, assets: [...work.assets, a] })} />}
-      {!wx && <XhsCardMaker workId={work.id} open={cardMaker} onClose={() => setCardMaker(false)} onAdded={(a) => setWork({ ...work, assets: [...work.assets, a] })} />}
+      {xhs && <XhsCardMaker workId={work.id} open={cardMaker} onClose={() => setCardMaker(false)} onAdded={(a) => setWork({ ...work, assets: [...work.assets, a] })} />}
       {ratioCrop && (
         <AssetCropDialog open onClose={() => setRatioCrop(null)} src={ratioCrop.url} width={ratioCrop.width} height={ratioCrop.height}
           onSave={async (box) => {

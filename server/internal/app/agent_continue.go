@@ -700,7 +700,8 @@ func (s *Server) agentSummarize(ctx context.Context, st *agentRunState, old, bod
 		return "", err
 	}
 	user := "已有摘要（更早的历史）：\n" + old + "\n\n需要压缩的历史：\n" + body
-	text, _, _, _, err := ai.Stream(ctx, s.aiHTTP, ai.Request{
+	modelCtx, client := s.aiClientForRoute(ctx, rt)
+	text, _, _, _, err := ai.Stream(modelCtx, client, ai.Request{
 		BaseURL: rt.BaseURL, APIKey: rt.APIKey, Model: rt.Model,
 		Messages: []ai.Message{
 			{Role: "system", Content: agentSummaryRules},

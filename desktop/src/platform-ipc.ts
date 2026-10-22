@@ -11,8 +11,13 @@ export const PLATFORM_IPC_MAX_BYTES = 64 * 1024;
 // 命令白名单固定；新增命令必须同时改 preload 与本文件，不能由页面任意拼接。
 export const PLATFORM_IPC_COMMANDS = Object.freeze([
   'open-login',
+  'login-action',
+  'login-browsers',
   'read-status',
   'request-collect',
+  'request-account-sync',
+  'request-metrics-refresh',
+  'resume-platform-sync',
   'pause',
   'clear-account-data',
   // 清理本机无主 profile 目录（服务端已不认识的连接残留）。必须由用户逐个确认触发。
@@ -125,14 +130,26 @@ export function validatePayloadShape(cmd: PlatformIPCCommand, payload: unknown):
       // 本机连接需要同时知道「哪个 OPS 账号」与「哪个平台」：
       // 平台决定 profile 命名空间与允许的登录页，缺一个都无法安全启动浏览器。
       if (!isPlainObject(payload) || typeof payload.accountId !== 'string'
-        || typeof payload.platform !== 'string' || Object.keys(payload).length !== 2) {
+        || typeof payload.platform !== 'string' || Object.keys(payload).some((key) => !['accountId', 'platform', 'browserFamily', 'operationId'].includes(key))) {
         throw new PlatformIPCErrorException('ipc_invalid', '登录参数无效');
       }
       if (!/^[0-9a-f-]{36}$/i.test(payload.accountId)) {
         throw new PlatformIPCErrorException('ipc_invalid', '登录参数无效');
       }
-      if (payload.platform !== 'xhs' && payload.platform !== 'wechat_mp') {
+      if (payload.platform !== 'xhs' && payload.platform !== 'wechat_mp' && payload.platform !== 'toutiao') {
         throw new PlatformIPCErrorException('platform_not_supported', '该平台暂不支持本机登录采集');
+      }
+      if (payload.browserFamily !== undefined && !['chrome', 'edge'].includes(String(payload.browserFamily))) throw new PlatformIPCErrorException('ipc_invalid', '浏览器参数无效');
+      if (payload.operationId !== undefined && (typeof payload.operationId !== 'string' || !/^[0-9a-f-]{36}$/i.test(payload.operationId))) throw new PlatformIPCErrorException('ipc_invalid', '登录操作标识无效');
+      return;
+    case 'login-browsers':
+      if (!isPlainObject(payload) || Object.keys(payload).length !== 2 || typeof payload.accountId !== 'string' || !/^[0-9a-f-]{36}$/i.test(payload.accountId)
+        || !['xhs', 'wechat_mp', 'toutiao'].includes(String(payload.platform))) throw new PlatformIPCErrorException('ipc_invalid', '浏览器检测参数无效');
+      return;
+    case 'login-action':
+      if (!isPlainObject(payload) || Object.keys(payload).length !== 2 || typeof payload.operationId !== 'string'
+        || !/^[0-9a-f-]{36}$/i.test(payload.operationId) || !['status', 'show', 'probe', 'confirm', 'cancel', 'back', 'recover'].includes(String(payload.action))) {
+        throw new PlatformIPCErrorException('ipc_invalid', '登录操作参数无效');
       }
       return;
     case 'read-status':
@@ -143,6 +160,31 @@ export function validatePayloadShape(cmd: PlatformIPCCommand, payload: unknown):
     case 'request-collect':
       if (!isPlainObject(payload) || typeof payload.accountId !== 'string' || Object.keys(payload).length !== 1) {
         throw new PlatformIPCErrorException('ipc_invalid', '采集参数无效');
+      }
+      return;
+    case 'request-account-sync':
+      if (!isPlainObject(payload) || Object.keys(payload).length !== 3 || typeof payload.accountId !== 'string'
+        || !/^[0-9a-f-]{36}$/i.test(payload.accountId) || !['incremental', 'full_reconcile'].includes(String(payload.mode))
+        || !Number.isSafeInteger(payload.connectionRevision) || Number(payload.connectionRevision) < 1) {
+        throw new PlatformIPCErrorException('ipc_invalid', '账号同步参数无效');
+      }
+      return;
+    case 'request-metrics-refresh':
+      if (!isPlainObject(payload) || ![2, 3].includes(Object.keys(payload).length) || typeof payload.accountId !== 'string'
+        || Object.keys(payload).some((key) => !['accountId', 'connectionRevision', 'platformWorkIds'].includes(key))
+        || !/^[0-9a-f-]{36}$/i.test(payload.accountId)
+        || !Number.isSafeInteger(payload.connectionRevision) || Number(payload.connectionRevision) < 1
+        || (payload.platformWorkIds !== undefined && (!Array.isArray(payload.platformWorkIds) || payload.platformWorkIds.length < 1 || payload.platformWorkIds.length > 20
+          || payload.platformWorkIds.some((id) => typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id))))) {
+        throw new PlatformIPCErrorException('ipc_invalid', '指标刷新参数无效');
+      }
+      return;
+    case 'resume-platform-sync':
+      if (!isPlainObject(payload) || Object.keys(payload).length !== 3 || typeof payload.accountId !== 'string'
+        || !/^[0-9a-f-]{36}$/i.test(payload.accountId) || typeof payload.operationId !== 'string'
+        || !/^[0-9a-f-]{36}$/i.test(payload.operationId)
+        || !Number.isSafeInteger(payload.expectedOperationRevision) || Number(payload.expectedOperationRevision) < 1) {
+        throw new PlatformIPCErrorException('ipc_invalid', '继续同步参数无效');
       }
       return;
     case 'pause':

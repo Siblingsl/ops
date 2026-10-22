@@ -67,11 +67,15 @@ async function fetchResponse(method: string, path: string, payload: BodyInit | u
   const controller = new AbortController()
   const signal = init?.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal
   const timer = window.setTimeout(() => controller.abort(), timeout)
+  // 调用方通过 init.headers 追加的头（如 Idempotency-Key）要与 CSRF/Content-Type 合并，
+  // 不能整体覆盖默认头。
+  const mergedHeaders = new Headers(headers)
+  if (init?.headers) new Headers(init.headers).forEach((value, key) => mergedHeaders.set(key, value))
   let requestId = ''
   try {
     for (let attempt = 0; ; attempt++) {
       requestId = ''
-      let res = await fetch('/api/v1' + path, { method, headers, body: payload, credentials: 'same-origin', ...init, signal })
+      let res = await fetch('/api/v1' + path, { ...init, method, headers: mergedHeaders, body: payload, credentials: 'same-origin', signal })
       requestId = res.headers.get('X-Request-ID') || ''
       if (streaming && res.ok && res.headers.get('Content-Type')?.startsWith('text/event-stream')) return res
       if (res.body) res = new Response(await res.arrayBuffer(), { status: res.status, statusText: res.statusText, headers: res.headers })
@@ -118,7 +122,7 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   return (text ? JSON.parse(text) : null) as T
 }
 
-export const get = <T>(p: string) => api<T>('GET', p)
+export const get = <T>(p: string, init?: RequestInit) => api<T>('GET', p, undefined, init)
 export const post = <T>(p: string, b?: unknown, signal?: AbortSignal) => api<T>('POST', p, b ?? {}, signal ? { signal } : undefined)
 export const put = <T>(p: string, b?: unknown) => api<T>('PUT', p, b ?? {})
 export const patch = <T>(p: string, b?: unknown) => api<T>('PATCH', p, b ?? {})

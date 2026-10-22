@@ -340,16 +340,19 @@ func TestPlatformProofRoleAndOverride(t *testing.T) {
 func TestPlatformProofWhitelistRejectsWildcards(t *testing.T) {
 	runID := uuid.New().String()
 	accepted := map[string][2]string{
-		"platform.device.register":        {http.MethodPost, "/api/v1/desktop/platform/devices"},
-		"platform.connection.create":      {http.MethodPost, "/api/v1/desktop/platform/connections"},
-		"platform.connection.verify":      {http.MethodPost, "/api/v1/desktop/platform/connections/" + runID + "/verify"},
-		"platform.connection.mine.list":   {http.MethodGet, "/api/v1/desktop/platform/connections/mine"},
-		"platform.connection.mine.revoke": {http.MethodDelete, "/api/v1/desktop/platform/connections/" + runID},
-		"platform.presence":               {http.MethodPost, "/api/v1/desktop/platform/presence"},
-		"platform.run.claim":              {http.MethodPost, "/api/v1/desktop/platform/runs/claim"},
-		"platform.run.heartbeat":          {http.MethodPost, "/api/v1/desktop/platform/runs/" + runID + "/heartbeat"},
-		"platform.run.result":             {http.MethodPost, "/api/v1/desktop/platform/runs/" + runID + "/results"},
-		"platform.run.receipt":            {http.MethodGet, "/api/v1/desktop/platform/runs/" + runID + "/receipts/0"},
+		"platform.device.register":         {http.MethodPost, "/api/v1/desktop/platform/devices"},
+		"platform.connection.create":       {http.MethodPost, "/api/v1/desktop/platform/connections"},
+		"platform.connection.verify":       {http.MethodPost, "/api/v1/desktop/platform/connections/" + runID + "/verify"},
+		"platform.connection.mine.list":    {http.MethodGet, "/api/v1/desktop/platform/connections/mine"},
+		"platform.connection.mine.revoke":  {http.MethodDelete, "/api/v1/desktop/platform/connections/" + runID},
+		"platform.presence":                {http.MethodPost, "/api/v1/desktop/platform/presence"},
+		"platform.run.claim":               {http.MethodPost, "/api/v1/desktop/platform/runs/claim"},
+		"platform.run.heartbeat":           {http.MethodPost, "/api/v1/desktop/platform/runs/" + runID + "/heartbeat"},
+		"platform.run.result":              {http.MethodPost, "/api/v1/desktop/platform/runs/" + runID + "/results"},
+		"platform.run.receipt":             {http.MethodGet, "/api/v1/desktop/platform/runs/" + runID + "/receipts/0"},
+		"platform.account.sync.request":    {http.MethodPost, "/api/v1/accounts/" + runID + "/platform-account-sync"},
+		"platform.metrics.refresh.request": {http.MethodPost, "/api/v1/accounts/" + runID + "/platform-metrics-refresh"},
+		"platform.sync.operation.resume":   {http.MethodPost, "/api/v1/accounts/" + runID + "/platform-sync-operations/" + runID + "/actions"},
 	}
 	for op, mp := range accepted {
 		if !desktopOperationPathAllowed(op, mp[0], mp[1]) {
@@ -364,7 +367,10 @@ func TestPlatformProofWhitelistRejectsWildcards(t *testing.T) {
 		if opDef.Scope == desktopProofAIScope {
 			continue
 		}
-		if !strings.HasPrefix(opDef.Path, "/api/v1/desktop/platform/") {
+		if !strings.HasPrefix(opDef.Path, "/api/v1/desktop/platform/") &&
+			opDef.Path != "/api/v1/accounts/{uuid}/platform-account-sync" &&
+			opDef.Path != "/api/v1/accounts/{uuid}/platform-metrics-refresh" &&
+			opDef.Path != "/api/v1/accounts/{uuid}/platform-sync-operations/{uuid}/actions" {
 			t.Errorf("平台操作 %s 的路径 %s 不在 /desktop/platform/ 下", op, opDef.Path)
 		}
 	}
@@ -678,7 +684,7 @@ func TestPlatformProofRechecksRevocationAndPolicy(t *testing.T) {
 }
 
 // TestPlatformProofBodyLimits 对应 §11.1：平台端点不复用 AI 的 32 MiB 上限，
-// claim/heartbeat/presence/receipt 在验签前按 64 KiB 拒绝，results 按 512 KiB 拒绝。
+// claim/heartbeat/presence/receipt 在验签前按 64 KiB 拒绝，results 按协议总上限 2 MiB 拒绝；v1 handler 另限 512 KiB。
 func TestPlatformProofBodyLimits(t *testing.T) {
 	p := newPlatformAccount(t, "limits")
 	withDesktopPlatformEnabled(t, true)
@@ -693,12 +699,12 @@ func TestPlatformProofBodyLimits(t *testing.T) {
 		t.Fatalf("超过 64 KiB 的平台请求必须按 413 platform_request_too_large 拒绝，实际 %v", err)
 	}
 
-	big := bytes.Repeat([]byte("a"), 512<<10+1)
+	big := bytes.Repeat([]byte("a"), desktopPlatformResultsBytes+1)
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/desktop/platform/runs/"+uuid.New().String()+"/results", bytes.NewReader(big))
 	req = req.WithContext(context.WithValue(req.Context(), ctxMember, p.identity("owner")))
 	_, _, err = env.srv.desktopReadAndVerifyProof(req, "platform.run.result")
 	if ae, ok := platformAPIError(err); !ok || ae.Status != http.StatusRequestEntityTooLarge {
-		t.Fatalf("超过 512 KiB 的结果批次必须被拒绝，实际 %v", err)
+		t.Fatalf("超过协议结果 body 上限的批次必须被拒绝，实际 %v", err)
 	}
 
 	// 同样大小的 body 对 AI 操作不应触发 413：AI 上限仍是 32 MiB，且错误码不变。
@@ -898,7 +904,8 @@ func TestPlatformCapabilitiesAdvertiseIndependentCollection(t *testing.T) {
 	}
 	if pc.Limits["challenge_per_minute"] != 60 ||
 		pc.Limits["request_bytes"] != 64<<10 ||
-		pc.Limits["results_bytes"] != 512<<10 {
-		t.Fatalf("平台限额必须与文档一致（60/分钟、64 KiB、512 KiB）：%v", pc.Limits)
+		pc.Limits["results_bytes"] != 2<<20 ||
+		pc.Limits["v1_results_bytes"] != 512<<10 {
+		t.Fatalf("平台限额必须与文档一致（60/分钟、64 KiB、v2 结果 2 MiB、v1 结果 512 KiB）：%v", pc.Limits)
 	}
 }

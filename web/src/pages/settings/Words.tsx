@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Search, X } from 'lucide-react'
 import { useState } from 'react'
+import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, Field, Input, PageHeader, PageLoading, Tabs, Textarea } from '@/components/ui'
 import { del, errorMessage, get, post } from '@/lib/api'
@@ -14,6 +15,8 @@ export default function Words() {
   const [category, setCategory] = useState('')
   const [q, setQ] = useState('')
   const [busy, setBusy] = useState(false)
+  const embedded = useEmbeddedSettings()
+  useSettingsDraft(!!(text.trim() || category.trim()), busy)
   if (isLoading) return <PageLoading />
   const list = (data ?? []).filter((w) => w.source === tab && (!q || w.word.includes(q)))
   const add = async () => {
@@ -22,6 +25,7 @@ export default function Words() {
       const r = await post<{ added: number; skipped: number }>('/sensitive-words', { words: text.split(/[\n,，、\s]+/).filter(Boolean), category })
       toast.success(`已添加 ${r.added} 个${r.skipped ? `，${r.skipped} 个已存在` : ''}`)
       setText('')
+      if (embedded) setCategory('')
       refetch()
     } catch (e) {
       toast.error(errorMessage(e))
@@ -38,11 +42,11 @@ export default function Words() {
       <PageHeader title="敏感词库" desc="发布前检查会逐条标出命中的词，由你决定修改还是保留。账号专属的禁用词在「账号档案」中维护。" />
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <Card>
-          <CardHeader title={<Tabs value={tab} onChange={setTab} items={[
+          <CardHeader title={<Tabs value={tab} onChange={setTab} className="[&>button]:shrink-0 [&>button]:whitespace-nowrap" items={[
             { value: 'custom', label: '自定义词库', count: (data ?? []).filter((w) => w.source === 'custom').length },
             { value: 'base', label: '通用词库（只读）', count: (data ?? []).filter((w) => w.source === 'base').length },
           ]} />} action={
-            <div className="relative w-48">
+            <div className="relative w-40">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-mist-400" />
               <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索" className="h-8 pl-8 text-[13px]" />
             </div>

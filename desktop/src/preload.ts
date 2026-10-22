@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 
 contextBridge.exposeInMainWorld('opsDesktopSettings', {
   getInfo: () => ipcRenderer.invoke('settings:get-info'),
@@ -24,7 +24,14 @@ contextBridge.exposeInMainWorld('opsDesktopSettings', {
   retryBusinessPage: () => ipcRenderer.invoke('settings:retry-business-page'),
   openLoginPage: () => ipcRenderer.invoke('settings:open-login-page'),
   openSettings: () => ipcRenderer.invoke('settings:open-settings'),
+  takePlatformLoginTarget: () => ipcRenderer.invoke('settings:take-platform-login-target'),
+  onPlatformLoginTarget: (listener: (target: { accountId: string; platform: 'xhs' | 'wechat_mp' | 'toutiao' }) => void) => {
+    const handler = (_event: IpcRendererEvent, target: { accountId: string; platform: 'xhs' | 'wechat_mp' | 'toutiao' }) => listener(target);
+    ipcRenderer.on('settings:platform-login-target', handler);
+    return () => ipcRenderer.removeListener('settings:platform-login-target', handler);
+  },
   closeLocalWindow: () => ipcRenderer.invoke('settings:close-local-window'),
+  reportLocalState: (state: { dirty: boolean; busy: boolean }) => ipcRenderer.send('settings:local-state', state),
   // 平台采集的本机命令（20 文档 §11.4）：固定信封 {v,id,cmd,payload}，
   // 命令白名单在 main 侧再校验一次，页面不能借这里调用任意通道。
   platformCommand: (envelope: { v: number; id: string; cmd: string; payload?: unknown }) =>

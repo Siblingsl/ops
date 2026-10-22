@@ -156,6 +156,37 @@ func TestHC02_OutlineRequiresViewpoint(t *testing.T) {
 	}
 }
 
+func TestHC02_ConfirmOutlineRequiresViewpoint(t *testing.T) {
+	f := env.accounts(t)
+	var wk Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+f.wechat.ID.String()+"/works", map[string]string{"title": "确认大纲但没有观点"}, &wk)
+	id := wk.ID.String()
+	ae := env.expectErr(t, "PUT", "/api/v1/works/"+id+"/outline", map[string]any{
+		"items":   []OutlineItem{{Heading: "第一段"}},
+		"confirm": true,
+	}, "human_step_required")
+	if !strings.Contains(string(ae.Error.Detail), "H-02") {
+		t.Fatalf("want H-02, got %s", ae.Error.Detail)
+	}
+	var confirmed *time.Time
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT outline_confirmed_at FROM work WHERE id=$1`, wk.ID).Scan(&confirmed); err != nil {
+		t.Fatal(err)
+	}
+	if confirmed != nil {
+		t.Fatal("rejected confirm must not set outline_confirmed_at")
+	}
+	// 写下观点后可以确认，且生成段落块。
+	env.mustJSON(t, "PATCH", "/api/v1/works/"+id, map[string]string{"viewpoint": "我自己的观点"}, nil)
+	var after Work
+	env.mustJSON(t, "PUT", "/api/v1/works/"+id+"/outline", map[string]any{
+		"items":   []OutlineItem{{Heading: "第一段"}},
+		"confirm": true,
+	}, &after)
+	if after.OutlineConfirmedAt == nil || len(after.Sections) != 1 {
+		t.Fatalf("confirm should create sections, got confirmed=%v sections=%d", after.OutlineConfirmedAt, len(after.Sections))
+	}
+}
+
 func TestHC03_DraftRequiresConfirmedOutline(t *testing.T) {
 	f := env.accounts(t)
 	var wk Work
@@ -175,7 +206,8 @@ func TestHC03_DraftRequiresConfirmedOutline(t *testing.T) {
 	}
 	for _, r := range routes(t) {
 		// 禁止绕过「确认大纲」的起稿入口；草稿箱同步（FR-M10-06）不含正文生成，允许。
-		if strings.Contains(r, "draft") && !strings.Contains(r, "/sections/{id}/draft") && !strings.Contains(r, "sync-draft") {
+		if strings.Contains(r, "draft") && !strings.Contains(r, "/sections/{id}/draft") && !strings.Contains(r, "sync-draft") &&
+			r != "POST /api/v1/accounts/{accountId}/platform-works/{platformWorkId}/draft" {
 			t.Fatalf("unexpected draft route: %s", r)
 		}
 	}
@@ -268,7 +300,9 @@ func TestHC07_OnlyHumanMarksPublished(t *testing.T) {
 	if got.Status != "pushed" {
 		t.Fatalf("after push and jobs, want pushed, got %s", got.Status)
 	}
-	setPublished := regexp.MustCompile(`status\s*=\s*'published'`)
+	// 只认 `UPDATE work ... SET ... status='published'` 这类写入。`WHERE w.status='published'`
+	// 是只读比较（头条发布包要判断"同一篇是否已发布到别的平台"），不属于自动改状态。
+	setPublished := regexp.MustCompile(`(?is)UPDATE\s+work\b[^;]*?\bSET\b[^;]*?\bstatus\s*=\s*'published'`)
 	count := 0
 	for p, src := range goSources(t) {
 		n := len(setPublished.FindAllStringIndex(src, -1))

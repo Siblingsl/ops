@@ -44,16 +44,18 @@ const (
 	platformRunTargetsPerRun  = 20
 )
 
-// platformStopReason 把客户端上报的停止原因收敛到 `platform_sync_run.stop_reason`
-// 允许的枚举内（20 文档 §11.3、迁移 00049）。
+// platformRunStopReasons 是 `platform_sync_run.stop_reason` 允许的取值（20 文档 §11.3 与迁移 00049）。
 //
-// 为什么必须收敛：客户端会把适配器的"覆盖不完整原因"直接当 stop_reason 发上来——
-// 小红书翻页重复是 `page_repeated`，公众号页预算用尽是 `page_budget`，采集异常是
-// `collect_failed`。这些值不在 CHECK 里，直接写库抛 23514，而这一步与观测写入在**同一
-// 个事务**：整个终批回滚，观测全丢、run 卡在 running 直到租约过期，客户端只看到 500
-// （2026-10-22 16:30 实测，验收号 10 篇采集因此全部丢弃）。
+// 为什么要在这里再校验一次：客户端会在终批里带 `stop_reason`，但**适配器的"覆盖不完整原因"
+// 与这个枚举不是同一套词**——小红书翻页重复时发的是 `page_repeated`，公众号页预算用尽时发
+// `page_budget`，采集异常时发 `collect_failed`。这些值不在 CHECK 里，直接写库会抛
+// 23514（check constraint violation），而这一步和观测写入在**同一个事务**里：
+// 整个终批回滚 → 观测全丢、run 卡在 running 直到租约过期，客户端只看到 500
+// （2026-10-22 16:30 实测，验收号的 10 篇采集因此全部丢弃）。
 //
-// 认识的照原样存；不认识的不阻断入库，存空值，原值另存 counters.stop_reason_raw。
+// 因此把"没见过的原因"折叠成 `schema_changed` 之外的中性值并不合适——那会把
+// "翻页没翻完"说成"页面结构变了"。这里改成：认识的照原样存，不认识的存 `null`
+// 并把原值留在 error_code 里，终批照常落库。
 func platformStopReason(value *string) *string {
 	if value == nil {
 		return nil
@@ -76,6 +78,9 @@ type platformRun struct {
 	Platform                       string
 	Trigger                        string
 	TaskKind                       string
+	WireProtocolVersion            int
+	OperationID                    *uuid.UUID
+	OperationStage                 string
 	Status                         string
 	QueryScope                     json.RawMessage
 	AuthorizationRevision          int64
@@ -91,6 +96,32 @@ type platformRun struct {
 	CancelRequestedAt              *time.Time
 }
 
+type platformClaimCapabilities struct {
+	ProtocolVersions []int
+	TaskKinds        []string
+	ResultTypes      []string
+	AdapterVersions  map[string]string
+	MappingVersions  map[string]int
+}
+
+func (c platformClaimCapabilities) supports(version int) bool {
+	for _, v := range c.ProtocolVersions {
+		if v == version {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPlatformValue(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 // schedulePlatformRuns 是 §10.1.1 的调度入口，由 RunJobs 每 10 分钟调用一次。
 // 只处理同时满足条件[1]的连接；任何不满足的状态都不派新采集任务。
 func (s *Server) schedulePlatformRuns(ctx context.Context) {
@@ -100,6 +131,8 @@ func (s *Server) schedulePlatformRuns(ctx context.Context) {
 	now := s.now()
 	// 先处理租约过期与排队超时：两者都是终态，重派另建新 run。
 	s.expirePlatformRuns(ctx, now)
+	// 把新操作拆成最多一个既有执行单元；daily 调度随后会看到活动 run 并让位。
+	s.schedulePlatformOperations(ctx, now)
 
 	rows, err := s.db.Query(ctx, `
 		SELECT c.id, c.workspace_id, c.account_id, c.platform, c.auto_collect, c.next_due_at,
@@ -161,34 +194,54 @@ func (s *Server) scheduleConnection(ctx context.Context, connectionID, workspace
 	if !platformWithinDailyWindow(now, s.loc) {
 		return nil
 	}
-	var policyRev int64
-	if err := s.db.QueryRow(ctx, `SELECT authorization_revision FROM platform_collection_policy
-		WHERE workspace_id=$1`, workspaceID).Scan(&policyRev); err != nil {
+	var externalKey string
+	if err := s.db.QueryRow(ctx, `SELECT external_account_key FROM platform_connection WHERE id=$1 AND workspace_id=$2 AND account_id=$3`,
+		connectionID, workspaceID, accountID).Scan(&externalKey); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		return err
 	}
 	return s.withTx(ctx, func(tx pgx.Tx) error {
+		if err := platformSubjectLock(ctx, tx, platform, externalKey); err != nil {
+			return err
+		}
 		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM platform_sync_run
-			WHERE connection_id=$1 AND status IN ('queued','leased','running'))`, connectionID).Scan(&exists); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM platform_sync_run r
+			JOIN platform_connection c ON c.id=r.connection_id
+			WHERE c.platform=$1 AND c.external_account_key=$2 AND r.status IN ('queued','leased','running'))`,
+			platform, externalKey).Scan(&exists); err != nil {
 			return err
 		}
 		if exists {
 			return nil
 		}
-		var connRev int64
+		var connRev, policyRev int64
 		var adapter, browser string
 		var mapping int
-		if err := tx.QueryRow(ctx, `SELECT authorization_revision,
+		var currentExternalKey string
+		if err := tx.QueryRow(ctx, `SELECT c.authorization_revision,c.external_account_key,p.authorization_revision,
 			coalesce(capabilities->>'adapterVersion', ''),
 			coalesce((capabilities->>'mappingVersion')::int, 1),
 			coalesce(capabilities->>'browserVersion', '')
-			FROM platform_connection WHERE id=$1 FOR UPDATE`, connectionID).Scan(&connRev, &adapter, &mapping, &browser); err != nil {
+			FROM platform_connection c JOIN platform_collection_policy p ON p.workspace_id=c.workspace_id
+			WHERE c.id=$1 AND c.workspace_id=$2 AND c.account_id=$3 AND c.state='active' AND c.availability='ready'
+			AND c.auto_collect AND p.enabled FOR UPDATE OF c`, connectionID, workspaceID, accountID).Scan(
+			&connRev, &currentExternalKey, &policyRev, &adapter, &mapping, &browser); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
+			return err
+		}
+		if currentExternalKey != externalKey {
+			return nil
+		}
+		allowed, nextAllowed, err := s.platformCanReserveRun(ctx, tx, workspaceID, platform, externalKey, now)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			_, err := tx.Exec(ctx, `UPDATE platform_connection SET next_due_at=$2,updated_at=$3 WHERE id=$1`, connectionID, nextAllowed, now)
 			return err
 		}
 		snapshot, err := s.platformTargetsSnapshot(ctx, tx, accountID, platform, now)
@@ -199,8 +252,9 @@ func (s *Server) scheduleConnection(ctx context.Context, connectionID, workspace
 			// 没有已精确绑定的作品：只探测能力，不猜目标。
 			_, err := tx.Exec(ctx, `INSERT INTO platform_sync_run
 				(connection_id, workspace_id, account_id, trigger, task_kind, status,
-				 authorization_revision, workspace_authorization_revision, adapter_version, mapping_version, browser_version)
-				VALUES ($1,$2,$3,'daily','probe','queued',$4,$5,$6,$7,$8)`,
+				 authorization_revision, workspace_authorization_revision, adapter_version, mapping_version, browser_version,
+				 budget_query_count)
+				VALUES ($1,$2,$3,'daily','probe','queued',$4,$5,$6,$7,$8,100)`,
 				connectionID, workspaceID, accountID, connRev, policyRev, adapter, mapping, browser)
 			return err
 		}
@@ -211,10 +265,10 @@ func (s *Server) scheduleConnection(ctx context.Context, connectionID, workspace
 		_, err = tx.Exec(ctx, `INSERT INTO platform_sync_run
 			(connection_id, workspace_id, account_id, trigger, task_kind, status,
 			 authorization_revision, workspace_authorization_revision, adapter_version, mapping_version,
-			 browser_version, binding_snapshot, deadline_at)
-			VALUES ($1,$2,$3,'daily','collect','queued',$4,$5,$6,$7,$8,$9,$10)`,
+			 browser_version, binding_snapshot, deadline_at,budget_query_count,budget_work_attempts)
+			VALUES ($1,$2,$3,'daily','collect','queued',$4,$5,$6,$7,$8,$9,$10,100,$11)`,
 			connectionID, workspaceID, accountID, connRev, policyRev, adapter, mapping, browser, body,
-			now.Add(24*time.Hour))
+			now.Add(24*time.Hour), len(snapshot))
 		return err
 	})
 }
@@ -367,7 +421,7 @@ func (s *Server) reassignExpiredRun(ctx context.Context, runID, connectionID, wo
 
 // claimPlatformRun 是 POST /desktop/platform/runs/claim：每台设备一次只返回一条 run。
 // 选择顺序为 manual 优先，其次 created_at 最早。
-func (s *Server) claimPlatformRun(ctx context.Context, deviceID uuid.UUID) (*platformRun, error) {
+func (s *Server) claimPlatformRun(ctx context.Context, deviceID uuid.UUID, client platformClaimCapabilities) (*platformRun, error) {
 	// claim 是最后一道闸门：即使排队时开关是开的，领取时也要重新确认（§17.3）。
 	if !s.platformCollectionGloballyEnabled(ctx) {
 		return nil, apiErr(403, "platform_collection_disabled", "服务端已关闭平台数据采集")
@@ -375,29 +429,102 @@ func (s *Server) claimPlatformRun(ctx context.Context, deviceID uuid.UUID) (*pla
 	id := ident(ctx)
 	var run platformRun
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		var runID uuid.UUID
-		err := tx.QueryRow(ctx, `
-			SELECT r.id FROM platform_sync_run r
-			JOIN platform_connection c ON c.id = r.connection_id
-			WHERE r.status='queued'
-			  AND r.workspace_id=$1
-			  AND c.user_id=$2
-			  AND c.device_id=$3
-			  AND c.state='active'
-			  -- 适配器版本熔断期间不领取：该版本已按 §12 判定为不可信，
-			  -- 继续派发只会写入更多错数。
-			  AND NOT EXISTS (
-			    SELECT 1 FROM platform_adapter_breaker b
-			    WHERE b.platform = c.platform
-			      AND b.adapter_version = coalesce(c.capabilities->>'adapterVersion', '')
-			      AND b.state = 'open')
-			ORDER BY CASE WHEN r.trigger='manual' THEN 0 ELSE 1 END, r.created_at
-			LIMIT 1 FOR UPDATE OF r SKIP LOCKED`, id.WorkspaceID, id.UserID, deviceID).Scan(&runID)
+		var runID, connectionID uuid.UUID
+		var operationID *uuid.UUID
+		var platform, externalAccountKey, operationKind, candidateStage string
+		var candidateVersion int
+		adapterVersionsJSON, _ := json.Marshal(client.AdapterVersions)
+		mappingVersionsJSON, _ := json.Marshal(client.MappingVersions)
+		err := tx.QueryRow(ctx, `SELECT r.id,r.connection_id,r.operation_id,r.wire_protocol_version,c.platform,
+			c.external_account_key,coalesce(o.kind,''),coalesce(o.stage,'') FROM platform_sync_run r
+			JOIN platform_connection c ON c.id=r.connection_id
+			LEFT JOIN platform_sync_operation o ON o.id=r.operation_id
+			WHERE r.status='queued' AND r.workspace_id=$1 AND c.user_id=$2 AND c.device_id=$3
+			AND ((r.wire_protocol_version=1 AND 1=ANY($4::int[])) OR
+				(r.wire_protocol_version=2 AND 2=ANY($4::int[]) AND r.task_kind=ANY($5::text[])
+				 AND CASE WHEN o.kind='account_sync'
+					THEN ARRAY['account_snapshot','work_catalog','work_content','metrics','control']::text[] <@ $6::text[]
+					ELSE ARRAY['metrics','control']::text[] <@ $6::text[] END
+				 AND r.adapter_version=coalesce($7::jsonb->>c.platform,'')
+				 AND r.mapping_version=coalesce(($8::jsonb->>c.platform)::int,0)))
+			AND NOT EXISTS (SELECT 1 FROM platform_adapter_breaker b WHERE b.platform=c.platform
+				AND b.adapter_version=coalesce(c.capabilities->>'adapterVersion','') AND b.state='open')
+			ORDER BY CASE WHEN r.trigger='manual' THEN 0 ELSE 1 END,r.created_at
+			LIMIT 1`, id.WorkspaceID, id.UserID, deviceID, client.ProtocolVersions, client.TaskKinds,
+			client.ResultTypes, adapterVersionsJSON, mappingVersionsJSON).Scan(
+			&runID, &connectionID, &operationID, &candidateVersion, &platform, &externalAccountKey, &operationKind, &candidateStage)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
 			return err
+		}
+		if err := platformSubjectLock(ctx, tx, platform, externalAccountKey); err != nil {
+			return err
+		}
+		var connectionUser, connectionDevice uuid.UUID
+		var connectionState, availability string
+		var connectionRevision int64
+		var lastSeen *time.Time
+		if err := tx.QueryRow(ctx, `SELECT user_id,device_id,state,availability,authorization_revision,last_seen_at
+			FROM platform_connection WHERE id=$1 AND workspace_id=$2 AND account_id=(SELECT account_id FROM platform_sync_run WHERE id=$3)
+			FOR UPDATE`, connectionID, id.WorkspaceID, runID).Scan(
+			&connectionUser, &connectionDevice, &connectionState, &availability, &connectionRevision, &lastSeen); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		if connectionUser != id.UserID || connectionDevice != deviceID || connectionState != "active" || availability != "ready" ||
+			lastSeen == nil || s.now().Sub(*lastSeen) > platformPresenceTTL {
+			return nil
+		}
+		var operationStatus string
+		if operationID != nil {
+			if err := tx.QueryRow(ctx, `SELECT status FROM platform_sync_operation WHERE id=$1
+				AND workspace_id=$2 AND account_id=(SELECT account_id FROM platform_sync_run WHERE id=$3) FOR UPDATE`,
+				*operationID, id.WorkspaceID, runID).Scan(&operationStatus); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil
+				}
+				return err
+			}
+			if operationStatus != "queued" && operationStatus != "running" {
+				return nil
+			}
+		}
+		var wireProtocolVersion int
+		var runAuthRevision, runWorkspaceRevision int64
+		err = tx.QueryRow(ctx, `SELECT wire_protocol_version,authorization_revision,workspace_authorization_revision
+			FROM platform_sync_run WHERE id=$1 AND status='queued' FOR UPDATE`, runID).Scan(
+			&wireProtocolVersion, &runAuthRevision, &runWorkspaceRevision)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if wireProtocolVersion != candidateVersion || (wireProtocolVersion == 2 &&
+			(operationKind == "" || !s.platformSyncFeatureEnabled(ctx, operationKind, platform))) {
+			if _, err := tx.Exec(ctx, `UPDATE platform_sync_run SET status='canceled',finished_at=$2 WHERE id=$1`, runID, s.now()); err != nil {
+				return err
+			}
+			if operationID != nil {
+				_, err = tx.Exec(ctx, `UPDATE platform_sync_operation SET status='canceled',stage='complete',
+				pause_reason='capability_changed',revision=revision+1,finished_at=$2,updated_at=$2 WHERE id=$1`, *operationID, s.now())
+			}
+			return err
+		}
+		var activeSubjectRun bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM platform_sync_run other
+			JOIN platform_connection oc ON oc.id=other.connection_id
+			JOIN platform_connection sc ON sc.id=$2
+			WHERE other.id<>$1 AND other.status IN ('leased','running')
+			AND oc.platform=sc.platform AND oc.external_account_key=sc.external_account_key)`, runID, connectionID).Scan(&activeSubjectRun); err != nil {
+			return err
+		}
+		if activeSubjectRun {
+			return nil
 		}
 		// 领取时重新核对策略与连接授权；策略关闭后旧 run 不能继续。
 		var policyOK bool
@@ -405,13 +532,30 @@ func (s *Server) claimPlatformRun(ctx context.Context, deviceID uuid.UUID) (*pla
 			JOIN platform_sync_run r ON r.workspace_id=p.workspace_id
 			WHERE r.id=$1 AND p.authorization_revision <= r.workspace_authorization_revision`, runID).Scan(&policyOK); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return nil
+				_, err = tx.Exec(ctx, `UPDATE platform_sync_run SET status='canceled',finished_at=now() WHERE id=$1`, runID)
+				if err == nil && operationID != nil {
+					_, err = tx.Exec(ctx, `UPDATE platform_sync_operation SET status='canceled',stage='complete',
+					pause_reason='authorization_expired',revision=revision+1,finished_at=now(),updated_at=now() WHERE id=$1`, *operationID)
+				}
+				return err
 			}
 			return err
 		}
 		if !policyOK {
 			_, err := tx.Exec(ctx, `UPDATE platform_sync_run SET status='canceled', finished_at=now()
 				WHERE id=$1`, runID)
+			if err == nil && operationID != nil {
+				_, err = tx.Exec(ctx, `UPDATE platform_sync_operation SET status='canceled',stage='complete',
+				pause_reason='authorization_expired',revision=revision+1,finished_at=now(),updated_at=now() WHERE id=$1`, *operationID)
+			}
+			return err
+		}
+		if runAuthRevision != connectionRevision {
+			_, err := tx.Exec(ctx, `UPDATE platform_sync_run SET status='canceled',finished_at=now() WHERE id=$1`, runID)
+			if err == nil && operationID != nil {
+				_, err = tx.Exec(ctx, `UPDATE platform_sync_operation SET status='waiting_login',pause_reason='authorization_expired',
+				revision=revision+1,updated_at=now() WHERE id=$1`, *operationID)
+			}
 			return err
 		}
 		now := s.now()
@@ -419,17 +563,29 @@ func (s *Server) claimPlatformRun(ctx context.Context, deviceID uuid.UUID) (*pla
 		if err := tx.QueryRow(ctx, `UPDATE platform_sync_run SET status='leased', lease_generation=lease_generation+1,
 			lease_expires_at=$2, started_at=coalesce(started_at,now())
 			WHERE id=$1
-			RETURNING id, connection_id, workspace_id, account_id, trigger, task_kind, status, query_scope,
+			RETURNING id, connection_id, workspace_id, account_id, trigger, task_kind, wire_protocol_version,status, query_scope,
 			  authorization_revision, workspace_authorization_revision, adapter_version, mapping_version,
 			  browser_version, lease_generation, lease_expires_at, deadline_at, binding_snapshot, attempt,
 			  cancel_requested_at`, runID, leaseUntil).Scan(
-			&run.ID, &run.ConnectionID, &run.WorkspaceID, &run.AccountID, &run.Trigger, &run.TaskKind, &run.Status,
+			&run.ID, &run.ConnectionID, &run.WorkspaceID, &run.AccountID, &run.Trigger, &run.TaskKind, &run.WireProtocolVersion, &run.Status,
 			&run.QueryScope, &run.AuthorizationRevision, &run.WorkspaceAuthorizationRevision, &run.AdapterVersion,
 			&run.MappingVersion, &run.BrowserVersion, &run.LeaseGeneration, &run.LeaseExpiresAt, &run.DeadlineAt,
 			&run.BindingSnapshot, &run.Attempt, &run.CancelRequestedAt); err != nil {
 			return err
 		}
-		return tx.QueryRow(ctx, `SELECT platform FROM platform_connection WHERE id=$1`, run.ConnectionID).Scan(&run.Platform)
+		run.WireProtocolVersion = wireProtocolVersion
+		run.OperationID = operationID
+		run.OperationStage = candidateStage
+		run.Platform = platform
+		if operationID != nil {
+			_, err = tx.Exec(ctx, `UPDATE platform_sync_operation SET status='running',started_at=coalesce(started_at,$2),
+				updated_at=$2,revision=revision+CASE WHEN status<>'running' THEN 1 ELSE 0 END WHERE id=$1`, *operationID, now)
+			if err != nil {
+				return err
+			}
+		}
+		_ = runWorkspaceRevision
+		return nil
 	})
 	if err != nil || run.ID == uuid.Nil {
 		return nil, err
@@ -438,23 +594,27 @@ func (s *Server) claimPlatformRun(ctx context.Context, deviceID uuid.UUID) (*pla
 }
 
 // heartbeatPlatformRun 续租并返回取消状态；任何策略或授权变化都立即让客户端停止。
-func (s *Server) heartbeatPlatformRun(ctx context.Context, runID uuid.UUID, deviceID uuid.UUID) (bool, *time.Time, error) {
+func (s *Server) heartbeatPlatformRun(ctx context.Context, runID uuid.UUID, deviceID uuid.UUID, generation int64) (bool, *time.Time, error) {
 	id := ident(ctx)
 	now := s.now()
 	var canceled bool
 	var leaseUntil *time.Time
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		var status string
+		var currentGeneration int64
 		var cancelRequested *time.Time
 		var deadline *time.Time
-		if err := tx.QueryRow(ctx, `SELECT r.status, r.cancel_requested_at, r.deadline_at
+		if err := tx.QueryRow(ctx, `SELECT r.status, r.cancel_requested_at, r.deadline_at,r.lease_generation
 			FROM platform_sync_run r JOIN platform_connection c ON c.id=r.connection_id
 			WHERE r.id=$1 AND r.workspace_id=$2 AND c.user_id=$3 AND c.device_id=$4
-			FOR UPDATE OF r`, runID, id.WorkspaceID, id.UserID, deviceID).Scan(&status, &cancelRequested, &deadline); err != nil {
+			FOR UPDATE OF r`, runID, id.WorkspaceID, id.UserID, deviceID).Scan(&status, &cancelRequested, &deadline, &currentGeneration); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return errNotFound
 			}
 			return err
+		}
+		if generation > 0 && generation != currentGeneration {
+			return apiErr(409, "platform_lease_stale", "该任务已由新的执行替代")
 		}
 		if status != platformRunStatusLeased && status != platformRunStatusRunning {
 			return apiErr(409, "platform_lease_stale", "任务已结束或已由新执行替代")
@@ -524,9 +684,14 @@ func (s *Server) requestPlatformSync(w http.ResponseWriter, r *http.Request) err
 	}
 	var runID uuid.UUID
 	err = s.withTx(r.Context(), func(tx pgx.Tx) error {
+		if err := platformSubjectLock(r.Context(), tx, c.Platform, c.ExternalAccountKey); err != nil {
+			return err
+		}
 		var active bool
-		if err := tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM platform_sync_run
-			WHERE connection_id=$1 AND status IN ('queued','leased','running'))`, c.ID).Scan(&active); err != nil {
+		if err := tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM platform_sync_run r
+			JOIN platform_connection sc ON sc.id=r.connection_id
+			WHERE sc.platform=$1 AND sc.external_account_key=$2 AND r.status IN ('queued','leased','running'))`,
+			c.Platform, c.ExternalAccountKey).Scan(&active); err != nil {
 			return err
 		}
 		if active {
@@ -534,8 +699,17 @@ func (s *Server) requestPlatformSync(w http.ResponseWriter, r *http.Request) err
 		}
 		var policyRev int64
 		if err := tx.QueryRow(r.Context(), `SELECT authorization_revision FROM platform_collection_policy
-			WHERE workspace_id=$1`, id.WorkspaceID).Scan(&policyRev); err != nil {
+			WHERE workspace_id=$1 AND enabled`, id.WorkspaceID).Scan(&policyRev); err != nil {
 			return err
+		}
+		allowed, nextAllowed, err := s.platformCanReserveRun(r.Context(), tx, id.WorkspaceID, c.Platform, c.ExternalAccountKey, now)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return apiErr(http.StatusTooManyRequests, "platform_budget_exhausted", "平台读取已到本次允许时间或主体日预算，请稍后再试").With(map[string]any{
+				"next_allowed_at": nextAllowed,
+			})
 		}
 		binding := []byte("[]")
 		targets, err := s.platformTargetsSnapshot(r.Context(), tx, accountID, c.Platform, now)
@@ -545,15 +719,15 @@ func (s *Server) requestPlatformSync(w http.ResponseWriter, r *http.Request) err
 		return tx.QueryRow(r.Context(), `INSERT INTO platform_sync_run
 			(connection_id, workspace_id, account_id, requested_by, trigger, task_kind, status,
 			 authorization_revision, workspace_authorization_revision, adapter_version, mapping_version,
-			 browser_version, binding_snapshot, deadline_at)
+			 browser_version, binding_snapshot, deadline_at,budget_query_count,budget_work_attempts)
 			VALUES ($1,$2,$3,$4,'manual','collect','queued',$5,$6,
 			  coalesce((SELECT capabilities->>'adapterVersion' FROM platform_connection WHERE id=$1),''),
 			  coalesce((SELECT (capabilities->>'mappingVersion')::int FROM platform_connection WHERE id=$1),1),
 			  coalesce((SELECT capabilities->>'browserVersion' FROM platform_connection WHERE id=$1),''),
-			  $7,$8)
+			  $7,$8,100,$9)
 			RETURNING id`,
 			c.ID, id.WorkspaceID, accountID, id.UserID, c.AuthorizationRevision, policyRev, binding,
-			now.Add(24*time.Hour)).Scan(&runID)
+			now.Add(24*time.Hour), len(targets)).Scan(&runID)
 	})
 	if err != nil {
 		return err
@@ -575,7 +749,9 @@ type platformResultBatch struct {
 	StopReason            *string             `json:"stop_reason"`
 	ErrorCode             *string             `json:"error_code"`
 	Coverage              map[string]any      `json:"coverage"`
-	Observations          []platformResultRow `json:"observations"`
+	ResultType            string              `json:"result_type,omitempty"`
+	Data                  json.RawMessage     `json:"data,omitempty"`
+	Observations          []platformResultRow `json:"observations,omitempty"`
 }
 
 type platformResultRow struct {
@@ -609,14 +785,19 @@ type platformResultRow struct {
 
 // platformReceipt 是批次回执：逐行给出接收/待确认/拒绝/重复与原因。
 type platformReceipt struct {
-	BatchSeq  int              `json:"batch_seq"`
-	ReceiptID uuid.UUID        `json:"receipt_id"`
-	Accepted  int              `json:"accepted"`
-	Pending   int              `json:"pending"`
-	Rejected  int              `json:"rejected"`
-	Duplicate int              `json:"duplicate"`
-	RunStatus string           `json:"run_status"`
-	Rows      []map[string]any `json:"rows"`
+	BatchSeq        int              `json:"batch_seq"`
+	ReceiptID       uuid.UUID        `json:"receipt_id"`
+	Accepted        int              `json:"accepted"`
+	Pending         int              `json:"pending"`
+	Rejected        int              `json:"rejected"`
+	Duplicate       int              `json:"duplicate"`
+	MirrorsCreated  int              `json:"mirrors_created,omitempty"`
+	MirrorsUpdated  int              `json:"mirrors_updated,omitempty"`
+	ContentReceived int              `json:"content_received,omitempty"`
+	MetricsObserved int              `json:"metrics_observed,omitempty"`
+	MetricsAdopted  int              `json:"metrics_adopted,omitempty"`
+	RunStatus       string           `json:"run_status"`
+	Rows            []map[string]any `json:"rows"`
 	// auto_adopt 开启时，投影失败的行数与此处第一条原因。
 	// 观测本身已入库（accepted 计数仍包含它），但没进正式指标——
 	// 不回传原因的话，用户只看到"采集成功"，以为数据已生效。
@@ -629,6 +810,46 @@ func batchBodyHash(body []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func receiptBatchSeq(receipt map[string]any) int {
+	value, ok := receipt["batch_seq"].(float64)
+	if !ok {
+		return -1
+	}
+	return int(value)
+}
+
+func platformReceiptFromMap(value map[string]any) platformReceipt {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return platformReceipt{}
+	}
+	var receipt platformReceipt
+	if json.Unmarshal(encoded, &receipt) != nil {
+		return platformReceipt{}
+	}
+	return receipt
+}
+
+func platformReceiptEntry(receipt platformReceipt, bodyHash string) map[string]any {
+	return map[string]any{
+		"batch_seq": receipt.BatchSeq, "receipt_id": receipt.ReceiptID.String(), "body_hash": bodyHash,
+		"accepted": receipt.Accepted, "pending": receipt.Pending, "rejected": receipt.Rejected,
+		"duplicate": receipt.Duplicate, "mirrors_created": receipt.MirrorsCreated,
+		"mirrors_updated": receipt.MirrorsUpdated, "content_received": receipt.ContentReceived,
+		"metrics_observed": receipt.MetricsObserved, "metrics_adopted": receipt.MetricsAdopted,
+		"adopt_errors": receipt.AdoptErrors, "adopt_reason": receipt.AdoptReason,
+		"run_status": receipt.RunStatus, "rows": receipt.Rows,
+	}
+}
+
+func platformV2ResultRowsForReceipt(batch platformResultBatch) int {
+	rows, err := platformV2ResultRowCount(batch.ResultType, batch.Data)
+	if err != nil {
+		return 0
+	}
+	return rows
+}
+
 // submitPlatformResults 处理 POST /desktop/platform/runs/{id}/results：
 // 批次幂等键为 (run_id, lease_generation, batch_seq)，相同键相同内容返回原回执，不同内容 409。
 func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid.UUID, rawBody []byte, batch platformResultBatch) (platformReceipt, error) {
@@ -636,60 +857,47 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 	hash := batchBodyHash(rawBody)
 	var receipt platformReceipt
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		var status, connectionID, workspaceID, accountID, platform string
+		var status, platform, operationStage, adapterVersion, browserVersion, externalAccountKey, taskKind, operationKind string
 		var connID uuid.UUID
 		var runAcct uuid.UUID
 		var runWorkspace uuid.UUID
+		var operationID *uuid.UUID
 		var leaseGen int64
 		var authRev int64
+		var workspaceAuthRev int64
 		var attempt int
+		var wireProtocolVersion, mappingVersion, existingResultRows int
+		var existingResultBytes int64
 		var receiptsRaw []byte
 		// autoAdopt 决定本次批次里的观测是否**立即投影为正式指标**（§9.2、D-129）。
 		// 默认为 false：只写观测，等用户逐条确认。
 		// 取连接的实时值而不是 run 创建时的快照——用户在采集过程中关掉开关应立即生效。
 		var autoAdopt bool
 		if err := tx.QueryRow(ctx, `SELECT r.status, r.connection_id, r.workspace_id, r.account_id,
-			  r.lease_generation, r.authorization_revision, r.attempt, r.batch_receipts, c.platform,
-			  c.auto_adopt
+			  r.lease_generation, r.authorization_revision, r.workspace_authorization_revision, r.attempt, r.batch_receipts,
+			  c.platform, c.auto_adopt, r.operation_id, r.wire_protocol_version, r.operation_stage, r.adapter_version,
+			  r.mapping_version, r.browser_version, c.external_account_key, r.task_kind, r.budget_result_rows, r.budget_result_bytes,
+			  coalesce(o.kind,'')
 			FROM platform_sync_run r JOIN platform_connection c ON c.id=r.connection_id
+			LEFT JOIN platform_sync_operation o ON o.id=r.operation_id
 			WHERE r.id=$1 AND r.workspace_id=$2 AND c.user_id=$3 AND c.device_id=$4
 			FOR UPDATE OF r`, runID, id.WorkspaceID, id.UserID, deviceID).Scan(
-			&status, &connID, &runWorkspace, &runAcct, &leaseGen, &authRev, &attempt, &receiptsRaw, &platform,
-			&autoAdopt); err != nil {
+			&status, &connID, &runWorkspace, &runAcct, &leaseGen, &authRev, &workspaceAuthRev, &attempt, &receiptsRaw,
+			&platform, &autoAdopt, &operationID, &wireProtocolVersion, &operationStage, &adapterVersion,
+			&mappingVersion, &browserVersion, &externalAccountKey, &taskKind, &existingResultRows, &existingResultBytes,
+			&operationKind); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return errNotFound
 			}
 			return err
 		}
-		_ = connectionID
-		_ = workspaceID
-		_ = accountID
 		// 幂等：同一 (generation, batch_seq) 已提交过就返回原回执，内容不同则冲突。
 		existing := []map[string]any{}
 		_ = json.Unmarshal(receiptsRaw, &existing)
 		for _, r := range existing {
-			if int(r["batch_seq"].(float64)) == batch.BatchSeq {
+			if receiptBatchSeq(r) == batch.BatchSeq {
 				if stored, _ := r["body_hash"].(string); stored == hash {
-					receipt = platformReceipt{BatchSeq: batch.BatchSeq, RunStatus: r["run_status"].(string)}
-					if v, ok := r["receipt_id"].(string); ok {
-						if rid, e := uuid.Parse(v); e == nil {
-							receipt.ReceiptID = rid
-						}
-					}
-					for _, k := range []string{"accepted", "pending", "rejected", "duplicate"} {
-						if v, ok := r[k].(float64); ok {
-							switch k {
-							case "accepted":
-								receipt.Accepted = int(v)
-							case "pending":
-								receipt.Pending = int(v)
-							case "rejected":
-								receipt.Rejected = int(v)
-							case "duplicate":
-								receipt.Duplicate = int(v)
-							}
-						}
-					}
+					receipt = platformReceiptFromMap(r)
 					return nil
 				}
 				return apiErr(409, "platform_result_conflict", "同一批次已提交过不同内容")
@@ -704,6 +912,12 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 		if status != platformRunStatusLeased && status != platformRunStatusRunning {
 			return apiErr(409, "platform_lease_stale", "任务已结束")
 		}
+		if batch.ProtocolVersion != wireProtocolVersion {
+			return apiErr(409, "platform_protocol_conflict", "结果协议与已领取的 run 不一致")
+		}
+		if batch.BatchSeq < 0 || batch.BatchSeq > 1000 {
+			return validation("batch_seq 超出允许范围")
+		}
 		if len(batch.Observations) > platformBatchMaxRows {
 			return validation("单批观测条数超过上限")
 		}
@@ -714,6 +928,79 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 		}
 		if !connActive {
 			return apiErr(403, "platform_authorization_changed", "连接已撤销或暂停")
+		}
+		if batch.ProtocolVersion == 2 {
+			if operationID == nil || *operationID == uuid.Nil || operationStage == "" || operationKind == "" || !s.platformSyncFeatureEnabled(ctx, operationKind, platform) {
+				return apiErr(409, "platform_operation_stale", "v2 run 的操作或功能状态已变化")
+			}
+			var valid bool
+			if err := tx.QueryRow(ctx, `SELECT c.authorization_revision=r.authorization_revision
+				AND c.platform_consent_version=o.platform_consent_version AND c.consented_at IS NOT NULL
+				AND c.state='active' AND c.availability='ready' AND p.enabled
+				AND p.authorization_revision=r.workspace_authorization_revision
+				AND o.authorization_revision=r.authorization_revision
+				AND o.workspace_authorization_revision=r.workspace_authorization_revision
+				AND o.kind=$5 AND ((o.kind='account_sync' AND r.task_kind='account_sync') OR (o.kind='metrics_refresh' AND r.task_kind='collect'))
+				AND o.stage=r.operation_stage AND o.status IN ('running','queued')
+				AND o.expires_at>now() AND o.frozen_scope->>'external_account_key'=c.external_account_key
+				FROM platform_sync_run r JOIN platform_connection c ON c.id=r.connection_id
+				JOIN platform_sync_operation o ON o.id=r.operation_id
+				JOIN platform_collection_policy p ON p.workspace_id=r.workspace_id
+				JOIN platform_account a ON a.id=r.account_id AND a.workspace_id=r.workspace_id
+				WHERE r.id=$1 AND r.operation_id=$2 AND r.operation_stage=$3 AND r.task_kind=$4 AND a.status='active'`,
+				runID, *operationID, operationStage, taskKind, operationKind).Scan(&valid); err != nil {
+				return err
+			}
+			if !valid {
+				return apiErr(409, "platform_authorization_changed", "工作区、平台授权或同步阶段已变化")
+			}
+			write := platformV2WriteContext{
+				RunID: runID, OperationID: *operationID, WorkspaceID: runWorkspace, AccountID: runAcct,
+				ConnectionID: connID, RequestedBy: id.UserID, Platform: platform,
+				ExternalAccountKey: externalAccountKey, AdapterVersion: adapterVersion,
+				MappingVersion: mappingVersion, BrowserVersion: browserVersion, Stage: operationStage,
+				OperationKind: operationKind, AutoAdopt: autoAdopt, BatchSeq: batch.BatchSeq,
+				LeaseGeneration: leaseGen, AuthorizationRevision: authRev, RawBytes: len(rawBody),
+				ExistingResultRows: existingResultRows, ExistingResultBytes: existingResultBytes,
+			}
+			v2Receipt, err := s.submitPlatformV2ResultBatchTx(ctx, tx, batch, write)
+			if err != nil {
+				return err
+			}
+			if err := s.platformV2AuditTx(ctx, tx, write, batch.ResultType, platformV2ResultRowsForReceipt(batch)); err != nil {
+				return err
+			}
+			if !batch.FinalBatch {
+				if _, err := tx.Exec(ctx, `UPDATE platform_sync_run SET status='running',lease_expires_at=LEAST(deadline_at,now()+$2)
+					WHERE id=$1`, runID, platformLeaseTTL); err != nil {
+					return err
+				}
+				v2Receipt.RunStatus = platformRunStatusRunning
+			} else {
+				v2Receipt.RunStatus = batch.RunStatus
+			}
+			entry := platformReceiptEntry(v2Receipt, hash)
+			existing = append(existing, entry)
+			updated, err := json.Marshal(existing)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE platform_sync_run SET batch_receipts=$2 WHERE id=$1`, runID, updated); err != nil {
+				return err
+			}
+			receipt = v2Receipt
+			return nil
+		}
+		if operationID != nil || wireProtocolVersion != 1 {
+			return apiErr(409, "platform_protocol_conflict", "v1 结果不能提交给 v2 run")
+		}
+		if len(rawBody) > desktopPlatformV1ResultsBytes || existingResultRows+len(batch.Observations) > platformRunMaxRows ||
+			existingResultBytes+int64(len(rawBody)) > int64(platformRunMaxBytes) {
+			return apiErr(http.StatusRequestEntityTooLarge, "platform_result_budget_exceeded", "本次 run 的指标结果超过行数或字节上限")
+		}
+		if _, err := tx.Exec(ctx, `UPDATE platform_sync_run SET budget_result_rows=budget_result_rows+$2,
+			budget_result_bytes=budget_result_bytes+$3 WHERE id=$1`, runID, len(batch.Observations), len(rawBody)); err != nil {
+			return err
 		}
 
 		receipt = platformReceipt{BatchSeq: batch.BatchSeq, ReceiptID: uuid.New(), Rows: []map[string]any{}}
@@ -871,16 +1158,7 @@ func (s *Server) submitPlatformResults(ctx context.Context, runID, deviceID uuid
 		}
 		receipt.RunStatus = nextStatus
 
-		entry := map[string]any{
-			"batch_seq":  batch.BatchSeq,
-			"receipt_id": receipt.ReceiptID.String(),
-			"body_hash":  hash,
-			"accepted":   receipt.Accepted,
-			"pending":    receipt.Pending,
-			"rejected":   receipt.Rejected,
-			"duplicate":  receipt.Duplicate,
-			"run_status": receipt.RunStatus,
-		}
+		entry := platformReceiptEntry(receipt, hash)
 		existing = append(existing, entry)
 		updated, err := json.Marshal(existing)
 		if err != nil {

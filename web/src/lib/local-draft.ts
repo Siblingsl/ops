@@ -43,8 +43,12 @@ export async function readDraft(sectionId: string): Promise<LocalDraft | null> {
   if (legacy) {
     try {
       const d = { at: Date.now(), ...(JSON.parse(legacy) as Omit<LocalDraft, 'at'>) }
-      localStorage.removeItem(legacyKey(sectionId))
-      await writeDraft(sectionId, d)
+      // 迁移到 IndexedDB 后删掉 localStorage 副本；IDB 不可用时保留副本，下次还能读到。
+      const db = await openDB()
+      if (db) {
+        await tx('readwrite', (s) => s.put(d, sectionId))
+        localStorage.removeItem(legacyKey(sectionId))
+      }
       return d
     } catch {
       localStorage.removeItem(legacyKey(sectionId))
@@ -56,11 +60,15 @@ export async function readDraft(sectionId: string): Promise<LocalDraft | null> {
 }
 
 export async function writeDraft(sectionId: string, d: LocalDraft): Promise<void> {
-  const db = await openDB()
-  if (!db) {
-    localStorage.setItem(legacyKey(sectionId), JSON.stringify(d))
-    return
+  // 先同步写一份到 localStorage：切页/关窗口时 IndexedDB 事务可能来不及提交，
+  // 而 localStorage 是同步 API，卸载过程中也会写完。大段正文跳过，避免占满 5MB 配额。
+  try {
+    if (d.content.length < 200_000) localStorage.setItem(legacyKey(sectionId), JSON.stringify(d))
+  } catch {
+    // 配额满或被禁用时忽略，IndexedDB 仍会尝试写入。
   }
+  const db = await openDB()
+  if (!db) return
   await tx('readwrite', (s) => s.put(d, sectionId))
 }
 

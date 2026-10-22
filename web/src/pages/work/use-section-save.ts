@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ApiError, errorMessage, patch } from '@/lib/api'
 import { clearDraft, enqueueSync, readDraft, writeDraft } from '@/lib/local-draft'
+import { DESKTOP_LEAVE_GUARD_REQUEST } from '@/lib/desktop-settings'
 import type { Section, Work } from '@/lib/types'
 import { createSectionSaveQueue, type SectionSnapshot } from './section-save-queue'
 
@@ -87,6 +88,18 @@ export function useSectionSave(options: SaveOptions) {
     } while (dirty.current)
     return true
   }
+  useEffect(() => {
+    const request = (event: Event) => {
+      const register = (event as CustomEvent<{ register?: (check: () => Promise<boolean> | boolean) => void }>).detail?.register
+      register?.(async () => {
+        const saved = await flush()
+        if (!saved) toast.info('作品草稿尚未保存成功，请处理保存冲突或网络问题后再离开。')
+        return saved
+      })
+    }
+    window.addEventListener(DESKTOP_LEAVE_GUARD_REQUEST, request)
+    return () => window.removeEventListener(DESKTOP_LEAVE_GUARD_REQUEST, request)
+  }, [])
   const load = (value: Section) => {
     revision.current = value.revision
     content.current = value.content_md
@@ -138,6 +151,21 @@ export function useSectionSave(options: SaveOptions) {
     load(section)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [section.revision, section.content_md, section.heading, section.origin])
+
+  // 离开页面时把还没落库的输入强制保存：切路由（卸载）、关窗口（pagehide）、切标签页（visibilitychange）。
+  // 防抖是 1.2 秒，没有这层保护时，打完最后一句立刻切走就会丢。
+  useEffect(() => {
+    const flushNow = () => { if (dirty.current) void persist() }
+    const onVisibility = () => { if (document.visibilityState === 'hidden') flushNow() }
+    window.addEventListener('pagehide', flushNow)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('pagehide', flushNow)
+      document.removeEventListener('visibilitychange', onVisibility)
+      flushNow()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return { content, revision, heading, headingRef, setHeading, origin, setOrigin, resetKey, setResetKey, dirty, applied, conflict, setConflict, persist, schedule, flush, resolveConflict, load }
 }

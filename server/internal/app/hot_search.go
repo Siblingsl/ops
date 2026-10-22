@@ -49,7 +49,7 @@ func (s *Server) addSearchSource(w http.ResponseWriter, r *http.Request) error {
 	}
 	var base string
 	var models []string
-	e := s.db.QueryRow(ctx, `SELECT base_url,models FROM model_provider WHERE id=$1 AND workspace_id=$2 AND status='active'`, in.ProviderID, ident(ctx).WorkspaceID).Scan(&base, &models)
+	e := s.db.QueryRow(ctx, `SELECT base_url,models FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server' AND status='active'`, in.ProviderID, ident(ctx).WorkspaceID).Scan(&base, &models)
 	if e != nil {
 		return e
 	}
@@ -94,7 +94,7 @@ func (s *Server) collectSearch(ctx context.Context, src CrawlSource, lim crawl.L
 	}
 	var base, name string
 	var enc []byte
-	e = s.db.QueryRow(ctx, `SELECT base_url,name,api_key_enc FROM model_provider WHERE id=$1 AND workspace_id=$2 AND status='active'`, pid, *src.WorkspaceID).Scan(&base, &name, &enc)
+	e = s.db.QueryRow(ctx, `SELECT base_url,name,api_key_enc FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server' AND status='active'`, pid, *src.WorkspaceID).Scan(&base, &name, &enc)
 	if e != nil {
 		return nil, e
 	}

@@ -24,7 +24,7 @@ func weeklyDrafts(t *testing.T, accountID uuid.UUID) int {
 	return n
 }
 
-// DEV-DR08（14 文档 4.6）：第 7 天数据到齐或改动时自动刷新读者数据偏好（不调模型，样本不足不动）；
+// DEV-DR08（14 文档 4.6）：偏好输入变化时自动确定性重算（不调模型；样本不足保留旧行但暂停注入）；
 // 每周复盘草稿默认关闭，打开后每周一用经济档生成一次，第 7 天数据不足 3 篇时只提示先补数据。
 func TestDR08ReviewLoop(t *testing.T) {
 	ctx := context.Background()

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -14,42 +15,80 @@ import (
 
 type requestTrace struct{ WorkspaceID uuid.UUID }
 type requestTraceKey struct{}
+type httpRequestBudget struct {
+	modelDeadline time.Time
+}
+type httpRequestBudgetKey struct{}
 
 func (s *Server) HTTPServer(addr string) *http.Server {
 	return &http.Server{Addr: addr, Handler: s.Router(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 }
 
 var streamingRequests = map[string]bool{
-	"POST /api/v1/accounts/{accountId}/style-summary":     true,
-	"POST /api/v1/accounts/{accountId}/profile/bootstrap": true,
-	"POST /api/v1/accounts/{accountId}/strategy/options":  true,
-	"POST /api/v1/works/{id}/organize-notes":              true,
-	"POST /api/v1/works/{id}/copilot":                     true,
-	"POST /api/v1/works/{id}/wechat/push":                 true,
-	"POST /api/v1/sections/{id}/draft":                    true,
-	"POST /api/v1/sections/{id}/edit":                     true,
-	"POST /api/v1/sections/{id}/rewrite":                  true,
-	"POST /api/v1/sections/{id}/continue":                 true,
-	"GET /api/v1/notifications/stream":                    true,
+	"POST /api/v1/accounts/{accountId}/style-summary":                 true,
+	"POST /api/v1/accounts/{accountId}/profile/bootstrap":             true,
+	"POST /api/v1/accounts/{accountId}/strategy/options":              true,
+	"POST /api/v1/works/{id}/organize-notes":                          true,
+	"POST /api/v1/works/{id}/copilot":                                 true,
+	"POST /api/v1/works/{id}/wechat/push":                             true,
+	"POST /api/v1/sections/{id}/draft":                                true,
+	"POST /api/v1/sections/{id}/edit":                                 true,
+	"POST /api/v1/sections/{id}/rewrite":                              true,
+	"POST /api/v1/sections/{id}/continue":                             true,
+	"POST /api/v1/agent/conversations/{id}/messages":                  true,
+	"POST /api/v1/agent/conversations/{id}/continue":                  true,
+	"POST /api/v1/agent/conversations/{id}/regenerate":                true,
+	"POST /api/v1/agent/conversations/{id}/messages/{messageId}/edit": true,
+	"GET /api/v1/notifications/stream":                                true,
 }
 
 func requestReadDeadline(router chi.Router) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			startedAt := time.Now()
 			budget := 30 * time.Second
+			modelBudget := 25 * time.Second
 			lookup := chi.NewRouteContext()
-			if router.Match(lookup, r.Method, r.URL.Path) && streamingRequests[r.Method+" "+lookup.RoutePattern()] {
+			streaming := router.Match(lookup, r.Method, r.URL.Path) && streamingRequests[r.Method+" "+lookup.RoutePattern()]
+			if streaming {
 				budget = 90 * time.Second
+				modelBudget = 0
 			}
 			if kind, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); kind == "multipart/form-data" {
 				budget = 120 * time.Second
+				modelBudget = 115 * time.Second
 			}
+			requestBudget := httpRequestBudget{}
+			if modelBudget > 0 {
+				requestBudget.modelDeadline = startedAt.Add(modelBudget)
+			}
+			r = r.WithContext(context.WithValue(r.Context(), httpRequestBudgetKey{}, requestBudget))
 			controller := http.NewResponseController(w)
-			_ = controller.SetReadDeadline(time.Now().Add(budget))
+			_ = controller.SetReadDeadline(startedAt.Add(budget))
 			defer controller.SetReadDeadline(time.Time{})
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func httpRequestBudgetOf(ctx context.Context) (httpRequestBudget, bool) {
+	budget, ok := ctx.Value(httpRequestBudgetKey{}).(httpRequestBudget)
+	return budget, ok
+}
+
+// stripNulQuery 删除查询串里的 NUL（%00）。PostgreSQL 的 text 不允许 NUL，
+// 未清洗时会以 57014/编码错误冒成 500；这里统一按“未提供该值”处理，避免整条接口不可用。
+func stripNulQuery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "%00") {
+			clone := *r
+			u := *r.URL
+			u.RawQuery = strings.ReplaceAll(r.URL.RawQuery, "%00", "")
+			clone.URL = &u
+			r = &clone
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func requestLog(next http.Handler) http.Handler {

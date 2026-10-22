@@ -3,7 +3,7 @@ import { BookOpen, FileText, Lightbulb, PenTool, Search as SearchIcon, Star } fr
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Button, Card, cn, Empty, Input, PageHeader, Select, Spinner, StatusBadge, statusMeta, Tabs } from '@/components/ui'
+import { Button, Card, cn, Empty, Input, PageHeader, Select, Spinner, StatusBadge, statusMeta, Tabs, platformLabel, platformFormatLabel } from '@/components/ui'
 import { del, errorMessage, get, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import { useAccounts } from '@/lib/session'
@@ -80,17 +80,17 @@ export default function SearchPage() {
         ]} />
       </div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Select value={account} onChange={(e) => setAccount(e.target.value)} className="w-auto min-w-36" aria-label="账号">
+        <Select value={account} onChange={(e) => setAccount(e.target.value)} className="!w-auto min-w-36" aria-label="账号">
           <option value="">全部账号</option>
           {(accounts ?? []).filter((a) => a.status === 'active').map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
         {statuses.length > 0 && (
-          <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-auto min-w-32" aria-label="状态">
+          <Select value={status} onChange={(e) => setStatus(e.target.value)} className="!w-auto min-w-32" aria-label="状态">
             <option value="">全部状态</option>
             {statuses.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </Select>
         )}
-        <Select value={days} onChange={(e) => setDays(e.target.value)} className="w-auto min-w-32" aria-label="时间">
+        <Select value={days} onChange={(e) => setDays(e.target.value)} className="!w-auto min-w-32" aria-label="时间">
           <option value="">不限时间</option>
           <option value="7">最近 7 天</option>
           <option value="30">最近 30 天</option>
@@ -132,6 +132,7 @@ export default function SearchPage() {
                   <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-relaxed text-mist-500"><Highlight text={h.snippet} terms={[query, ...h.matched]} /></p>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-[11.5px] text-mist-400">
                     <span>{M.label}</span>·<span>{h.account_name}</span>
+                    {h.platform && <span>{platformLabel[h.platform]}{h.content_format ? ` · ${platformFormatLabel(h.platform, h.content_format)}` : ''}</span>}
                     {h.type === 'work' && h.status && <StatusBadge status={h.status as WorkStatus} />}
                     <span>{relTime(h.updated_at)}</span>
                   </div>

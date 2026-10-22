@@ -103,6 +103,8 @@ type Request struct {
 	Round int
 	// MaxTokens caps one round's output; nil keeps the old request body (16 文档第 6.5 节).
 	MaxTokens *int
+	// OnActivity fires when a valid text or tool-call fragment arrives.
+	OnActivity func()
 }
 
 type UpstreamError struct {
@@ -225,6 +227,9 @@ func stream(ctx context.Context, hc *http.Client, req Request, onDelta func(stri
 			}
 			if piece != "" {
 				out.WriteString(piece)
+				if req.OnActivity != nil {
+					req.OnActivity()
+				}
 				if onDelta != nil {
 					onDelta(piece)
 				}
@@ -232,6 +237,9 @@ func stream(ctx context.Context, hc *http.Client, req Request, onDelta func(stri
 			// 流式工具调用：按 index 累积，id/name 取首次非空值，arguments 逐段拼接。
 			frags := append(append([]deltaToolCall{}, c.Delta.ToolCalls...), c.Message.ToolCalls...)
 			for _, f := range frags {
+				if req.OnActivity != nil && (f.ID != "" || f.Type != "" || f.Function.Name != "" || f.Function.Arguments != "") {
+					req.OnActivity()
+				}
 				idx := 0
 				if f.Index != nil {
 					idx = *f.Index

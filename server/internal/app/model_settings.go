@@ -62,7 +62,7 @@ func (s *Server) scanProvider(row pgx.Row) (*Provider, error) {
 
 func (s *Server) listProviders(w http.ResponseWriter, r *http.Request) error {
 	ws := ident(r.Context()).WorkspaceID
-	rows, err := s.db.Query(r.Context(), `SELECT `+providerCols+` FROM model_provider WHERE workspace_id=$1 ORDER BY created_at`, ws)
+	rows, err := s.db.Query(r.Context(), `SELECT `+providerCols+` FROM model_provider WHERE workspace_id=$1 AND execution_location='server' ORDER BY created_at`, ws)
 	if err != nil {
 		return err
 	}
@@ -89,7 +89,9 @@ func (s *Server) attachCapabilities(ctx context.Context, ws uuid.UUID, list []*P
 	if len(list) == 0 {
 		return nil
 	}
-	rows, err := s.db.Query(ctx, `SELECT provider_id, model, tools_ok, vision_ok, tested_at FROM model_capability WHERE workspace_id=$1 ORDER BY model`, ws)
+	rows, err := s.db.Query(ctx, `SELECT c.provider_id, c.model, c.tools_ok, c.vision_ok, c.tested_at FROM model_capability c
+		JOIN model_provider p ON p.id=c.provider_id AND p.workspace_id=c.workspace_id
+		WHERE c.workspace_id=$1 AND p.execution_location='server' ORDER BY c.model`, ws)
 	if err != nil {
 		return err
 	}
@@ -246,7 +248,7 @@ func (s *Server) aiStatus(w http.ResponseWriter, r *http.Request) error {
 	var routes []string
 	var tokens int
 	err := s.db.QueryRow(ctx, `SELECT ARRAY(SELECT r.task_type FROM model_route r JOIN model_provider p ON p.id=r.provider_id
-		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND p.status='active' AND r.task_type = ANY($2)),
+		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND p.execution_location='server' AND p.status='active' AND r.task_type = ANY($2)),
 		(SELECT coalesce(sum(prompt_tokens+completion_tokens),0) FROM ai_call WHERE workspace_id=$1 AND created_at >= $3)`,
 		ident(ctx).WorkspaceID, []string{"default", "metric_screenshot", "image_gen"}, s.today()).Scan(&routes, &tokens)
 	if err != nil {
@@ -255,6 +257,21 @@ func (s *Server) aiStatus(w http.ResponseWriter, r *http.Request) error {
 	set := map[string]bool{}
 	for _, task := range routes {
 		set[task] = true
+	}
+	if request, ok := desktopRequestOf(ctx); ok {
+		set["default"], err = s.desktopRouteReady(ctx, "default", request)
+		if err != nil {
+			return err
+		}
+		set["metric_screenshot"], err = s.desktopRouteReady(ctx, "image_alt", request)
+		if err != nil {
+			return err
+		}
+		set["image_gen"], err = s.desktopRouteReady(ctx, "image_gen", request)
+		if err != nil {
+			return err
+		}
+		w.Header().Set("Cache-Control", "no-store")
 	}
 	return ok(w, map[string]any{"ready": set["default"], "vision_route": set["metric_screenshot"], "image_route": set["image_gen"], "tokens_today": tokens})
 }
@@ -283,19 +300,19 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
 		var n int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM model_provider WHERE id=$1 AND workspace_id=$2`, id, ws).Scan(&n); err != nil || n == 0 {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, id, ws).Scan(&n); err != nil || n == 0 {
 			if err != nil {
 				return err
 			}
 			return errNotFound
 		}
 		if in.Name != nil {
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET name=$2 WHERE id=$1 AND workspace_id=$3`, id, strings.TrimSpace(*in.Name), ws); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET name=$2 WHERE id=$1 AND workspace_id=$3 AND execution_location='server'`, id, strings.TrimSpace(*in.Name), ws); err != nil {
 				return err
 			}
 		}
 		if in.BaseURL != nil {
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET base_url=$2 WHERE id=$1 AND workspace_id=$3`, id, *in.BaseURL, ws); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET base_url=$2 WHERE id=$1 AND workspace_id=$3 AND execution_location='server'`, id, *in.BaseURL, ws); err != nil {
 				return err
 			}
 		}
@@ -304,7 +321,7 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET api_key_enc=$2, key_version=$3, last_test_ok=NULL, last_test_result='' WHERE id=$1 AND workspace_id=$4`, id, enc, s.box.Version, ws); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET api_key_enc=$2, key_version=$3, last_test_ok=NULL, last_test_result='' WHERE id=$1 AND workspace_id=$4 AND execution_location='server'`, id, enc, s.box.Version, ws); err != nil {
 				return err
 			}
 		}
@@ -313,42 +330,42 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 			if len(models) == 0 {
 				return validation("至少保留一个模型名")
 			}
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET models=$2 WHERE id=$1 AND workspace_id=$3`, id, models, ws); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET models=$2 WHERE id=$1 AND workspace_id=$3 AND execution_location='server'`, id, models, ws); err != nil {
 				return err
 			}
 		}
 		// D-117（16 文档第 7.2 节第 2 项）：改地址或密钥时能力记录清空为未测试；删除模型时删除对应记录。
 		if in.BaseURL != nil || in.APIKey != nil {
-			if _, err := tx.Exec(ctx, `DELETE FROM model_capability WHERE provider_id=$1 AND workspace_id=$2`, id, ws); err != nil {
+			if _, err := tx.Exec(ctx, `DELETE FROM model_capability WHERE provider_id=$1 AND workspace_id=$2 AND provider_id IN (SELECT id FROM model_provider WHERE execution_location='server')`, id, ws); err != nil {
 				return err
 			}
 		} else if in.Models != nil {
-			if _, err := tx.Exec(ctx, `DELETE FROM model_capability WHERE provider_id=$1 AND workspace_id=$2 AND NOT (model = ANY($3))`, id, ws, cleanList(in.Models)); err != nil {
+			if _, err := tx.Exec(ctx, `DELETE FROM model_capability WHERE provider_id=$1 AND workspace_id=$2 AND provider_id IN (SELECT id FROM model_provider WHERE execution_location='server') AND NOT (model = ANY($3))`, id, ws, cleanList(in.Models)); err != nil {
 				return err
 			}
 		}
 		if in.Status != nil {
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET status=$2 WHERE id=$1 AND workspace_id=$3`, id, *in.Status, ws); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET status=$2 WHERE id=$1 AND workspace_id=$3 AND execution_location='server'`, id, *in.Status, ws); err != nil {
 				return err
 			}
 		}
 		if in.PricePrompt != nil {
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET price_per_1k_prompt=$2 WHERE id=$1 AND workspace_id=$3`, id, priceArg(in.PricePrompt), ws); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET price_per_1k_prompt=$2 WHERE id=$1 AND workspace_id=$3 AND execution_location='server'`, id, priceArg(in.PricePrompt), ws); err != nil {
 				return err
 			}
 		}
 		if in.PriceComplete != nil {
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET price_per_1k_completion=$2 WHERE id=$1 AND workspace_id=$3`, id, priceArg(in.PriceComplete), ws); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET price_per_1k_completion=$2 WHERE id=$1 AND workspace_id=$3 AND execution_location='server'`, id, priceArg(in.PriceComplete), ws); err != nil {
 				return err
 			}
 		}
-		_, err := tx.Exec(ctx, `UPDATE model_provider SET updated_at=now() WHERE id=$1 AND workspace_id=$2`, id, ws)
+		_, err := tx.Exec(ctx, `UPDATE model_provider SET updated_at=now() WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, id, ws)
 		return err
 	})
 	if err != nil {
 		return err
 	}
-	p, err := s.scanProvider(s.db.QueryRow(ctx, `SELECT `+providerCols+` FROM model_provider WHERE id=$1 AND workspace_id=$2`, id, ws))
+	p, err := s.scanProvider(s.db.QueryRow(ctx, `SELECT `+providerCols+` FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, id, ws))
 	if err != nil {
 		return err
 	}
@@ -373,7 +390,7 @@ func (s *Server) deleteProvider(w http.ResponseWriter, r *http.Request) error {
 	if routes > 0 && !in.Confirm {
 		return apiErr(409, "confirm_required", fmt.Sprintf("有 %d 个任务正在使用这个供应商，删除后这些任务会改用默认模型（如果默认模型也是它，AI 功能将不可用）。", routes))
 	}
-	tag, err := s.db.Exec(ctx, `DELETE FROM model_provider WHERE id=$1 AND workspace_id=$2`, id, ws)
+	tag, err := s.db.Exec(ctx, `DELETE FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, id, ws)
 	if err != nil {
 		return err
 	}
@@ -404,7 +421,7 @@ func (s *Server) testProvider(w http.ResponseWriter, r *http.Request) error {
 	var base string
 	var enc []byte
 	var models []string
-	if err := s.db.QueryRow(ctx, `SELECT base_url, api_key_enc, models FROM model_provider WHERE id=$1 AND workspace_id=$2`, id, ws).Scan(&base, &enc, &models); err != nil {
+	if err := s.db.QueryRow(ctx, `SELECT base_url, api_key_enc, models FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, id, ws).Scan(&base, &enc, &models); err != nil {
 		return err
 	}
 	key, err := s.box.Decrypt(enc)
@@ -564,7 +581,7 @@ func (s *Server) putRoutes(w http.ResponseWriter, r *http.Request) error {
 				continue
 			}
 			var models []string
-			if err := tx.QueryRow(ctx, `SELECT models FROM model_provider WHERE id=$1 AND workspace_id=$2`, *rt.ProviderID, ws).Scan(&models); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT models FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, *rt.ProviderID, ws).Scan(&models); err != nil {
 				return validation("供应商不存在")
 			}
 			fbModel := strings.TrimSpace(rt.FallbackModel)
@@ -573,7 +590,7 @@ func (s *Server) putRoutes(w http.ResponseWriter, r *http.Request) error {
 				fbProvider, fbModel = nil, ""
 			} else {
 				var n int
-				if err := tx.QueryRow(ctx, `SELECT count(*) FROM model_provider WHERE id=$1 AND workspace_id=$2`, *fbProvider, ws).Scan(&n); err != nil || n == 0 {
+				if err := tx.QueryRow(ctx, `SELECT count(*) FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, *fbProvider, ws).Scan(&n); err != nil || n == 0 {
 					return validation("备用模型的供应商不存在")
 				}
 			}

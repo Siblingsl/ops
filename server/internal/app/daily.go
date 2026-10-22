@@ -112,8 +112,11 @@ func (s *Server) dailyAI(ctx context.Context, a *Account, strategy *Strategy, co
 				}
 				x.Basis[j] = c.DailyBasis
 			}
-			// D-048 第 5.4 节：推荐只能是账号类型；模型输出其他类型时重试后明确失败，
+			// D-048 第 5.4 节：生成时推荐只能是账号类型；模型输出其他类型时明确失败，
 			// 不允许把 format 改成账号值伪装匹配。空值按账号类型补齐。
+			// D-123：账号迁移后，迁移前生成的旧类型推荐在采用/开写时会被明确拒绝
+			// （见下方 dailyAction）——迁移只保「已有作品」的原类型，新作品仍须与账号当前类型一致，
+			// 旧推荐需用「换一个」按当前类型重新生成。
 			if x.Format == "" {
 				x.Format = a.ContentFormat
 			} else if x.Format != a.ContentFormat {
@@ -323,9 +326,10 @@ func (s *Server) dailyAction(w http.ResponseWriter, r *http.Request) error {
 		return e
 	}
 	var in struct {
-		Title        string `json:"title"`
-		Angle        string `json:"angle"`
-		PlannedToday bool   `json:"planned_today"`
+		Title         string `json:"title"`
+		Angle         string `json:"angle"`
+		PlannedToday  bool   `json:"planned_today"`
+		ContentFormat string `json:"content_format"`
 	}
 	if e = decodeOptional(r, &in); e != nil {
 		return e
@@ -407,10 +411,16 @@ func (s *Server) dailyAction(w http.ResponseWriter, r *http.Request) error {
 	} else if action == "dismiss" {
 		storedAction, outcome = "dismissed", "rejected"
 	} else {
-		// D-048 第 5.5 节：历史跨类型推荐不得照常采用或开写；给出原因，由人决定换一个或忽略。
-		if item.Format != "" && item.Format != a.ContentFormat {
-			return stateInvalid(fmt.Sprintf("这条推荐的作品类型（%s）与账号类型（%s）不一致，不能采用或开写。请用「换一个」重新生成，或选择不感兴趣。", formatNames[item.Format], formatNames[a.ContentFormat]))
+		if action == "start" && prior == "adopted" && tid != nil {
+			if e = tx.QueryRow(ctx, `SELECT title,angle,format FROM topic WHERE id=$1`, tid).Scan(&item.Title, &item.Angle, &item.Format); e != nil {
+				return e
+			}
 		}
+		format, err := resolveCreationFormat(a, in.ContentFormat, item.Format)
+		if err != nil {
+			return err
+		}
+		item.Format = format
 		if tid == nil {
 			if in.Title != "" {
 				item.Title = truncateRunes(in.Title, 100)
@@ -451,19 +461,9 @@ func (s *Server) dailyAction(w http.ResponseWriter, r *http.Request) error {
 			tid = &topic
 		}
 		if action == "start" {
-			if prior == "adopted" {
-				if e = tx.QueryRow(ctx, `SELECT title,angle,format FROM topic WHERE id=$1`, tid).Scan(&item.Title, &item.Angle, &item.Format); e != nil {
-					return e
-				}
-			}
 			storedAction = "started"
-			p, e := s.loadProfile(ctx, a.ID)
-			if e != nil {
-				return e
-			}
-			wf, _ := json.Marshal(p.WechatDefaults)
-			var work uuid.UUID
-			e = tx.QueryRow(ctx, `INSERT INTO work(account_id,topic_id,content_format,title,theme,wechat_fields,viewpoint) VALUES($1,$2,$3,$4,$5,$6,'') RETURNING id`, a.ID, tid, item.Format, item.Title, p.DefaultTheme, wf).Scan(&work)
+			// NW-E1：日推建作品也走 insertWorkTx——停用账号被拒、审计与负责人一致。
+			work, e := s.insertWorkTx(ctx, tx, a, tid, item.Title, item.Format, item.Format, "", "daily")
 			if e != nil {
 				return e
 			}

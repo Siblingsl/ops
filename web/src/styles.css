@@ -173,3 +173,15 @@ mark.hl.hl-active { background: var(--color-gamboge-300); box-shadow: 0 0 0 2px 
 .agent-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 .agent-markdown th, .agent-markdown td { border: 1px solid #e5e9e7; padding: 0.35rem 0.55rem; text-align: left; }
 .agent-markdown th { background: #f5f7f5; font-weight: 600; }
+
+.inbox-panel { container-type: inline-size; }
+@container (min-width: 640px) {
+  .inbox-panel-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 639px) {
+  .work-topbar .workspace-account-compact { width: min(10rem, calc(100vw - 14.375rem)); }
+  .work-header > div:first-child { height: auto; min-height: 3.5rem; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0.75rem; }
+  .work-header > div:first-child > .desktop-work-title { flex: 1 1 6rem; }
+  .work-header-actions { flex: 1 0 100%; justify-content: flex-end; margin-left: 0; }
+}

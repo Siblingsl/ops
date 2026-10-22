@@ -101,10 +101,11 @@ var agentToolsWorks = []AgentTool{
 	},
 	{
 		Name: "works__create", Domain: "works", Kind: toolW, Method: "POST", Path: "/accounts/{accountId}/works",
-		Description: "在一个平台账号下新建作品。标题来自用户或标题生成结果，创建后进入编辑。",
+		Description: "在一个平台账号下新建作品。标题可留空（显示为未命名作品）；头条账号可按用户要求选择文章或微头条。创建后进入编辑，观点与大纲仍由用户自己写。",
 		Params: []ToolParam{
 			pPath("accountId"),
-			pBody("title", strMax(64), true, "G"),
+			pBody("title", strMax(64), false, "G"),
+			pBodyF("content_format", enumOf("long_article", "qa_article", "briefing", "card_post", "script", "comic", "image_note", "list_note", "micro_post"), false),
 		},
 		MinRole: roleEditor,
 		Target:  target("account", "accountId"),
@@ -196,10 +197,11 @@ var agentToolsWorks = []AgentTool{
 	},
 	{
 		Name: "works__derive", Domain: "works", Kind: toolW, Method: "POST", Path: "/works/{id}/derive",
-		Description: "把作品派生到另一个平台的账号，调用 AI 规划目标段落。目标账号必须与源账号平台不同。",
+		Description: "把作品派生到另一个平台的账号，调用 AI 规划目标段落。头条目标必须指定文章或微头条；服务端按已确认的跨平台矩阵校验。",
 		Params: []ToolParam{
 			pPath("id"),
 			pBodyF("target_account_id", schemaUUID, true),
+			pBodyF("target_content_format", enumOf("long_article", "micro_post"), false),
 		},
 		MinRole:     roleEditor,
 		Target:      target("work", "id"),
@@ -241,13 +243,15 @@ var agentToolsWorks = []AgentTool{
 	},
 	{
 		Name: "works__preview_link", Domain: "works", Kind: toolW, Method: "POST", Path: "/works/{id}/preview-link",
-		Description: "生成手机预览链接，用于在手机上查看公众号作品排版。链接只展示一次。",
+		Description: "生成 24 小时匿名分享预览链接；支持公众号与已准备发布包的头条作品，头条链接绑定卡片确认的修订。持有链接即可查看发布内容，链接只展示一次。",
 		Params: []ToolParam{
 			pPath("id"),
+			pBodyFixed("basis_revision", `{"type":"integer","minimum":1}`, false),
 		},
-		MinRole: roleEditor,
-		Target:  target("work", "id"),
-		Secrets: []string{"token"},
+		MinRole:        roleEditor,
+		Target:         target("work", "id"),
+		ProposePreview: previewShareLink,
+		Secrets:        []string{"token"},
 	},
 	{
 		Name: "works__polish_check", Domain: "works", Kind: toolG, Method: "POST", Path: "/works/{id}/polish-check",

@@ -1,8 +1,10 @@
 import clsx from 'clsx'
 import { Loader2 } from 'lucide-react'
 import React, { forwardRef } from 'react'
+import { createPortal } from 'react-dom'
 import type { ContentFormat, Platform, WorkStatus } from '@/lib/types'
 import { errorMessage } from '@/lib/api'
+import { useEmbeddedSettings } from '@/lib/desktop-settings'
 
 export const cn = clsx
 
@@ -60,28 +62,54 @@ export interface MoreMenuItem { label: string; icon?: React.ReactNode; onClick: 
 /** MoreMenu tucks secondary actions behind one "更多" button; each item still runs one action on click. */
 export function MoreMenu({ items, label = '更多', className }: { items: MoreMenuItem[]; label?: string; className?: string }) {
   const [open, setOpen] = React.useState(false)
+  const [position, setPosition] = React.useState<{ left: number; top: number } | null>(null)
   const box = React.useRef<HTMLDivElement>(null)
+  const menu = React.useRef<HTMLDivElement>(null)
+  React.useLayoutEffect(() => {
+    if (!open || !box.current || !menu.current) return
+    const anchor = box.current.getBoundingClientRect()
+    const bounds = menu.current.getBoundingClientRect()
+    setPosition({
+      left: Math.max(8, Math.min(anchor.right - bounds.width, window.innerWidth - bounds.width - 8)),
+      top: anchor.bottom + bounds.height + 4 <= window.innerHeight - 8
+        ? anchor.bottom + 4 : Math.max(8, anchor.top - bounds.height - 4),
+    })
+  }, [open])
+  React.useLayoutEffect(() => {
+    if (open && position) menu.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+  }, [open, position])
   React.useEffect(() => {
     if (!open) return
     const close = (e: MouseEvent | KeyboardEvent) => {
-      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !box.current?.contains(e.target as Node)) setOpen(false)
+      if (e instanceof KeyboardEvent) {
+        if (e.key !== 'Escape') return
+        setOpen(false)
+        box.current?.querySelector('button')?.focus()
+      } else if (!box.current?.contains(e.target as Node) && !menu.current?.contains(e.target as Node)) setOpen(false)
     }
+    const closeOnScroll = (e: Event) => { if (!menu.current?.contains(e.target as Node)) setOpen(false) }
+    const closeOnResize = () => setOpen(false)
     document.addEventListener('mousedown', close)
     document.addEventListener('keydown', close)
+    document.addEventListener('scroll', closeOnScroll, true)
+    window.addEventListener('resize', closeOnResize)
     return () => {
       document.removeEventListener('mousedown', close)
       document.removeEventListener('keydown', close)
+      document.removeEventListener('scroll', closeOnScroll, true)
+      window.removeEventListener('resize', closeOnResize)
     }
   }, [open])
   if (!items.length) return null
   const busy = items.some((i) => i.loading)
   return (
     <div ref={box} className={cn('relative', className)}>
-      <Button size="sm" variant="ghost" aria-haspopup="menu" aria-expanded={open} loading={busy} onClick={() => setOpen((v) => !v)}>
+      <Button size="sm" variant="ghost" aria-haspopup="menu" aria-expanded={open} loading={busy} onClick={() => { setPosition(null); setOpen((v) => !v) }}>
         {label}<span aria-hidden className="text-mist-400">▾</span>
       </Button>
-      {open && (
-        <div role="menu" className="absolute bottom-full left-0 z-30 mb-1 min-w-44 rounded-lg border border-mist-200 bg-white p-1 shadow-pop">
+      {open && createPortal(
+        <div ref={menu} role="menu" style={{ left: position?.left ?? 0, top: position?.top ?? 0, visibility: position ? 'visible' : 'hidden' }}
+          className="fixed z-50 max-h-[calc(100vh-16px)] min-w-44 overflow-y-auto rounded-lg border border-mist-200 bg-white p-1 shadow-pop">
           {items.map((it) => (
             <button key={it.label} type="button" role="menuitem" disabled={it.disabled || it.loading} title={it.hint}
               onClick={() => { setOpen(false); it.onClick() }}
@@ -89,7 +117,7 @@ export function MoreMenu({ items, label = '更多', className }: { items: MoreMe
               {it.icon}{it.label}
             </button>
           ))}
-        </div>
+        </div>, document.body
       )}
     </div>
   )
@@ -136,7 +164,7 @@ export function Select({ className, children, ...rest }: React.SelectHTMLAttribu
   )
 }
 
-export function Field({ label, hint, error, counter, children, className, required }: {
+export function Field({ label, hint, error, counter, children, className, required, plain }: {
   label?: React.ReactNode
   hint?: React.ReactNode
   error?: React.ReactNode
@@ -144,14 +172,17 @@ export function Field({ label, hint, error, counter, children, className, requir
   children: React.ReactNode
   className?: string
   required?: boolean
+  /** 纯展示字段（内含按钮等非表单控件）用 div 包裹：label 会把整段文案算进子控件的可访问名，并让点击文字触发控件。 */
+  plain?: boolean
 }) {
   const over = counter && counter.value > counter.max
+  const Tag = plain ? 'div' : 'label'
   return (
-    <label className={cn('block', className)}>
+    <Tag className={cn('block', className)}>
       {(label || counter) && (
         <div className="mb-1.5 flex items-baseline justify-between gap-3">
           {label && (
-            <span className="text-[13px] font-medium text-mist-700">
+            <span className="inline-flex items-center gap-1 text-[13px] font-medium text-mist-700">
               {label}
               {required && <span className="ml-0.5 text-danger">*</span>}
             </span>
@@ -165,7 +196,7 @@ export function Field({ label, hint, error, counter, children, className, requir
       )}
       {children}
       {error ? <p className="mt-1.5 text-xs text-danger">{error}</p> : hint ? <p className="mt-1.5 text-xs text-mist-500">{hint}</p> : null}
-    </label>
+    </Tag>
   )
 }
 
@@ -189,7 +220,7 @@ export function CardHeader({ title, desc, action, className }: { title: React.Re
   )
 }
 
-type Tone = 'gray' | 'ink' | 'gamboge' | 'green' | 'red' | 'wechat' | 'xhs' | 'blue'
+type Tone = 'gray' | 'ink' | 'gamboge' | 'green' | 'red' | 'wechat' | 'xhs' | 'toutiao' | 'blue'
 const tones: Record<Tone, string> = {
   gray: 'bg-mist-100 text-mist-600',
   ink: 'bg-ink-50 text-ink-700 ring-1 ring-inset ring-ink-100',
@@ -198,6 +229,7 @@ const tones: Record<Tone, string> = {
   red: 'bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-100',
   wechat: 'bg-[#e8f8ef] text-[#078a46]',
   xhs: 'bg-[#ffecef] text-[#d81b3a]',
+  toutiao: 'bg-[#fff0ed] text-[#d9362b]',
   blue: 'bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-100',
 }
 
@@ -232,16 +264,21 @@ export function StatusBadge({ status }: { status: WorkStatus }) {
   )
 }
 
-export const platformLabel: Record<Platform, string> = { wechat_mp: '公众号', xhs: '小红书' }
+export const platformLabel: Record<Platform, string> = { wechat_mp: '公众号', xhs: '小红书', toutiao: '今日头条' }
 export const formatLabel: Record<string, string> = {
   long_article: '长图文', image_note: '图文笔记', comic: '漫画',
   qa_article: '问答体长图文', briefing: '资讯简报', list_note: '清单合集笔记',
-  card_post: '图文卡片', script: '口播脚本',
+  card_post: '图文卡片', script: '口播脚本', micro_post: '微头条',
 }
-// 每平台可选的账号类型（D-048）。与后端 formatMatrix 保持一致；创建后不可修改。
+export function platformFormatLabel(platform: Platform, format: string) {
+  if (platform === 'toutiao' && format === 'long_article') return '文章'
+  return formatLabel[format] ?? format
+}
+// 每平台可选的账号类型（D-048）。与后端 formatMatrix 保持一致；创建后可在同平台内迁移（D-123）。
 export const platformFormats: Record<Platform, ContentFormat[]> = {
   wechat_mp: ['long_article', 'qa_article', 'briefing', 'card_post', 'script', 'comic'],
   xhs: ['image_note', 'list_note', 'card_post', 'script', 'comic'],
+  toutiao: ['long_article', 'micro_post'],
 }
 // 文字类新类型在大纲/起草时的结构约定提示（与后端 formatBriefs 一致）。
 export const formatBriefHint: Record<string, string> = {
@@ -254,8 +291,8 @@ export const formatBriefHint: Record<string, string> = {
 export function PlatformMark({ platform, size = 'md' }: { platform: Platform; size?: 'sm' | 'md' | 'lg' }) {
   const s = size === 'sm' ? 'size-5 text-[10px] rounded' : size === 'lg' ? 'size-10 text-sm rounded-xl' : 'size-7 text-[11px] rounded-lg'
   return (
-    <span className={cn('inline-flex shrink-0 items-center justify-center font-bold text-white', s, platform === 'wechat_mp' ? 'bg-wechat' : 'bg-xhs')}>
-      {platform === 'wechat_mp' ? '公' : '红'}
+    <span className={cn('inline-flex shrink-0 items-center justify-center font-bold text-white', s, platform === 'wechat_mp' ? 'bg-wechat' : platform === 'xhs' ? 'bg-xhs' : 'bg-ink-700')}>
+      {platform === 'wechat_mp' ? '公' : platform === 'xhs' ? '红' : '头'}
     </span>
   )
 }
@@ -350,17 +387,22 @@ export function Switch({ checked, onChange, disabled, label }: { checked: boolea
   )
 }
 
-export function Tabs<T extends string>({ value, onChange, items, className }: {
+export function Tabs<T extends string>({ value, onChange, items, className, role, ariaLabel }: {
   value: T
   onChange: (v: T) => void
   items: { value: T; label: React.ReactNode; count?: number }[]
   className?: string
+  role?: 'tablist'
+  ariaLabel?: string
 }) {
   return (
-    <div className={cn('inline-flex items-center gap-1 rounded-lg bg-mist-100 p-1', className)}>
+    <div role={role} aria-label={ariaLabel} className={cn('inline-flex items-center gap-1 rounded-lg bg-mist-100 p-1', className)}>
       {items.map((it) => (
         <button
           key={it.value}
+          type="button"
+          role={role ? 'tab' : undefined}
+          aria-selected={role ? value === it.value : undefined}
           onClick={() => onChange(it.value)}
           className={cn('inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-3 text-[13px] font-medium transition-all',
             value === it.value ? 'bg-white text-mist-900 shadow-sm' : 'text-mist-500 hover:text-mist-800')}
@@ -374,11 +416,12 @@ export function Tabs<T extends string>({ value, onChange, items, className }: {
 }
 
 /** HumanGate marks a step that only a person may perform (藤黄). */
-export function HumanGate({ code, children, className }: { code: string; children: React.ReactNode; className?: string }) {
+export function HumanGate({ code, children, className, action }: { code: string; children: React.ReactNode; className?: string; action?: React.ReactNode }) {
   return (
     <div className={cn('flex items-start gap-3 rounded-lg border border-gamboge-200 bg-gamboge-50 px-4 py-3 text-[13px] text-gamboge-700', className)}>
       <span className="mt-px shrink-0 rounded bg-gamboge-400 px-1.5 py-px text-[11px] font-bold text-mist-900">{code}</span>
-      <div className="leading-relaxed">{children}</div>
+      <div className="min-w-0 flex-1 leading-relaxed">{children}</div>
+      {action && <div className="shrink-0">{action}</div>}
     </div>
   )
 }
@@ -403,11 +446,12 @@ export function Kbd({ children }: { children: React.ReactNode }) {
 }
 
 export function PageHeader({ title, desc, action, eyebrow }: { title: React.ReactNode; desc?: React.ReactNode; action?: React.ReactNode; eyebrow?: React.ReactNode }) {
+  const embedded = useEmbeddedSettings()
   return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+    <div className={cn('mb-6 flex flex-wrap items-end justify-between gap-4', embedded && 'settings-embedded-page-header')}>
       <div className="min-w-0">
         {eyebrow && <div className="mb-1 text-xs font-medium tracking-wide text-ink-600">{eyebrow}</div>}
-        <h1 className="font-display text-[26px] font-bold leading-tight text-mist-900">{title}</h1>
+        {!embedded && <h1 className="page-header-title font-display text-[26px] font-bold leading-tight text-mist-900">{title}</h1>}
         {desc && <p className="mt-1.5 text-sm text-mist-500">{desc}</p>}
       </div>
       {action && <div className="flex items-center gap-2">{action}</div>}

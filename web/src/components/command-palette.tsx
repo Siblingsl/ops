@@ -7,15 +7,15 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { errorMessage, get, post } from '@/lib/api'
+import { api, errorMessage, get, post } from '@/lib/api'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
-import { useAccounts, useCanWrite, useCurrentAccount, useMe } from '@/lib/session'
+import { useAccounts, useCanWrite, useCurrentAccount, currentWorkQueryKey, useMe } from '@/lib/session'
 import type { SearchHit, StarItem, Work } from '@/lib/types'
 import { fuzzyMatch, recentItems, rememberRecent, workCmd } from '@/lib/v3'
 import { useAgentBootstrap } from '@/lib/agent'
 import { Dialog } from './dialog'
 import { openQuickCollect } from './quick-collect'
-import { cn, Kbd, PlatformMark } from './ui'
+import { cn, Kbd, PlatformMark, platformLabel, platformFormatLabel } from './ui'
 
 type Cmd = {
   id: string
@@ -96,6 +96,8 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
   const agentBootstrap = useAgentBootstrap()
   const canWrite = useCanWrite()
   const listRef = useRef<HTMLDivElement>(null)
+  // NW-A2：命令面板创建也要防连点（面板本身会立即关闭，但回车/双击可能触发两次 run）。
+  const creating = useRef(false)
 
   useEffect(() => {
     if (!open) {
@@ -123,7 +125,9 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
     nav(to)
   }
   const workId = location.pathname.match(/^\/works\/([0-9a-f-]{36})/)?.[1]
-  const work = useQuery({ queryKey: ['work', workId], queryFn: () => get<Work>(`/works/${workId}`), enabled: false }).data
+  // 与 WorkLayout 使用同一个作品查询键（含用户/工作区），否则命令面板读不到当前作品。
+  const workKey = currentWorkQueryKey(workId ?? '', me?.user_id ?? me?.username ?? '', me?.workspace.id ?? '')
+  const work = useQuery({ queryKey: workKey, queryFn: () => get<Work>(`/works/${workId}`), enabled: !!workId && !!me?.workspace.id, staleTime: 30_000 }).data
   const onEditor = !!workId && /^\/works\/[^/]+\/?$/.test(location.pathname)
   const inEditor = (fn: () => void) => {
     onOpenChange(false)
@@ -146,7 +150,7 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
   const commands = useMemo<Cmd[]>(() => {
     const base = acc ? `/a/${acc.id}` : ''
     const list: Cmd[] = []
-    if (agentBootstrap.data?.can_use || agentBootstrap.data?.reason === 'no_model') {
+    if (agentBootstrap.data?.can_use || agentBootstrap.data?.reason === 'no_model' || agentBootstrap.data?.reason === 'not_tested') {
       list.push({ id: 'agent-open', group: '页面', label: '打开 AI 对话', icon: Bot, keywords: 'agent 对话 AI', run: () => go('/agent', 'AI 对话') })
     }
     if (agentBootstrap.data?.can_use && agentBootstrap.data.role !== 'viewer') {
@@ -212,14 +216,23 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
           run: () => go(`/a/${acc.id}/topics?new=1${q && !/^[a-z]+$/i.test(q.trim()) ? `&title=${encodeURIComponent(q.trim())}` : ''}`),
         })
         list.push({
-          id: 'a-new', group: '操作', label: '新建作品', hint: acc.platform === 'xhs' ? '小红书笔记' : '公众号文章', icon: Plus, keywords: 'new work create 文章 笔记',
+          id: 'a-new', group: '操作', label: '新建作品', hint: acc.platform === 'xhs' ? '小红书笔记' : acc.platform === 'toutiao' ? '头条文章或微头条' : '公众号文章', icon: Plus, keywords: 'new work create 文章 笔记 微头条',
           run: async () => {
+            if (creating.current) return
             onOpenChange(false)
+            if (acc.platform === 'toutiao') {
+              nav(`/a/${acc.id}/works?create=1`)
+              return
+            }
+            creating.current = true
+            const key = crypto.randomUUID()
             try {
-              const w = await post<Work>(`/accounts/${acc.id}/works`, { title: '' })
+              const w = await api<Work>('POST', `/accounts/${acc.id}/works`, { title: '' }, { headers: { 'Idempotency-Key': key } })
               nav(`/works/${w.id}`)
             } catch (e) {
               toast.error(errorMessage(e))
+            } finally {
+              creating.current = false
             }
           },
         })
@@ -253,7 +266,7 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
     for (const type of ['work', 'topic', 'material', 'style_sample']) {
       for (const h of hits.filter((x) => x.type === type)) {
         out.push({
-          id: 'h-' + h.type + h.id, group: typeLabel[type], label: h.title, hint: h.account_name,
+          id: 'h-' + h.type + h.id, group: typeLabel[type], label: h.title, hint: [h.platform ? platformLabel[h.platform] : '', h.platform && h.content_format ? platformFormatLabel(h.platform, h.content_format) : '', h.account_name].filter(Boolean).join(' · '),
           icon: h.type === 'work' ? FileText : h.type === 'topic' ? Lightbulb : BookOpen,
           run: () => go(h.link, h.title, h.type),
         })

@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Printer } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
-import { Button, PageLoading } from '@/components/ui'
+import { Button, PageLoading, platformFormatLabel, platformLabel } from '@/components/ui'
 import { get } from '@/lib/api'
 
 interface ReportItem { category: string; passed: boolean; message: string; matched_text: string; resolution: string; resolved_at: string | null; resolved_by: string }
 interface Report {
   work: { id: string; title: string; account: string; status: string }
-  run: { id: string; revision: number; platform: string; at: string }
+  run: { id: string; revision: number; platform: string; content_format: string; at: string }
   items: ReportItem[]
   reviewer: string
   reviewed_at: string | null
@@ -40,7 +40,7 @@ export default function CheckReport() {
           <h1 className="mt-1 font-display text-[24px] font-bold text-mist-900">{data.work.title || '未命名作品'}</h1>
           <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-[12.5px] text-mist-600">
             <div><dt className="inline text-mist-400">账号：</dt><dd className="inline">{data.work.account}</dd></div>
-            <div><dt className="inline text-mist-400">目标平台：</dt><dd className="inline">{data.run.platform === 'xhs' ? '小红书' : '公众号'}</dd></div>
+            <div><dt className="inline text-mist-400">目标平台：</dt><dd className="inline">{platformLabel[data.run.platform as keyof typeof platformLabel] ?? data.run.platform} · {platformFormatLabel(data.run.platform as keyof typeof platformLabel, data.run.content_format)}</dd></div>
             <div><dt className="inline text-mist-400">检查时间：</dt><dd className="inline">{fmt(data.run.at)}</dd></div>
             <div><dt className="inline text-mist-400">内容版本：</dt><dd className="inline">第 {data.run.revision} 版</dd></div>
             <div><dt className="inline text-mist-400">审阅人：</dt><dd className="inline">{data.reviewer ? `${data.reviewer}（${fmt(data.reviewed_at)}）` : '未设置审阅'}</dd></div>
@@ -72,7 +72,7 @@ export default function CheckReport() {
           </ul>
         </section>
         <footer className="mt-10 border-t border-mist-200 pt-3 text-[11px] leading-relaxed text-mist-400">
-          本报告仅记录本平台内的检查与人工确认过程，不代表平台审核结论。发布由作者本人在公众号 / 小红书后台完成。
+          本报告仅记录本平台内的检查与人工确认过程，不代表平台审核结论。发布由作者本人在对应平台后台完成。
         </footer>
       </article>
     </div>

@@ -595,7 +595,7 @@ func (s *Server) metricRemindersJob(ctx context.Context) {
 		-- 覆盖判断只计 approved（§8.4）：held/superseded 不算已填，
 		-- 否则待确认的数据会让提醒提前静默。
 		ARRAY(SELECT DISTINCT metric_node(m.day_offset) FROM metric_snapshot m
-			WHERE m.work_id=w.id AND metric_node(m.day_offset) IS NOT NULL AND m.quality_state='approved'))
+			WHERE m.work_id=w.id AND metric_node(m.day_offset) IS NOT NULL AND m.quality_state='approved')
 		FROM work w JOIN platform_account a ON a.id=w.account_id
 		WHERE a.status='active' AND w.deleted_at IS NULL AND w.published_at IS NOT NULL AND w.published_at > $1::timestamptz - interval '10 days'`, s.now())
 	if err != nil {

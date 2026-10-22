@@ -57,7 +57,7 @@ test('自动采用开关显示但禁用，并写明原因', async () => {
   assert.match(source, /待每平台 10 篇以上逐字段正式验收完成后开放/);
   assert.match(source, /checked=\{connection\.auto_adopt\}\s+disabled\s+readOnly/);
   // 自动采集允许 owner 操作，但仍受 canManage 控制。
-  assert.match(source, /disabled=\{!canManage \|\| busy !== ''\}/);
+  assert.match(source, /disabled=\{!canManage \|\| busy !== '' \|\| accountStatus !== 'active'\}/);
 });
 
 test('在线状态按 90 秒 TTL 如实显示，不猜测', async () => {
@@ -87,22 +87,37 @@ test('口径不明时界面明确提示不计入统计，而不是显示成 0', 
   assert.match(connection, /unknown: '口径不明'/);
 });
 
-test('连接卡片只对首版两个平台展示，头条不提供本机采集', async () => {
-  const source = await readSource('pages/settings/Accounts.tsx');
-  assert.match(source, /account\.platform === 'wechat_mp' \|\| account\.platform === 'xhs'/);
+test('头条可打开官方登录页，但不读取连接与采集接口', async () => {
+  const accounts = await readSource('pages/settings/Accounts.tsx');
+  const connection = await readSource('components/platform-connection.tsx');
+  assert.match(accounts, /\['wechat_mp', 'xhs', 'toutiao'\]/);
+  assert.match(connection, /if \(platform === 'toutiao'\)/);
+  assert.match(connection, /const canOpenToutiao = !adminOverride && accountStatus === 'active' && role !== 'viewer'/);
+  assert.match(connection, /isToutiao \? '打开头条官方登录页' : '在本机扫码登录'/);
 });
 
 test('连接卡片调用的是固定端点，没有任意 URL 拼接', async () => {
   const source = await readSource('components/platform-connection.tsx');
-  // 只允许这三条已知路径。
-  const paths = [...source.matchAll(/\$\{accountId\}[^`'"]*/g)].map((m) => m[0]);
-  for (const p of paths) {
-    assert.ok(
-      p.includes('/platform-connection') || p.includes('/metrics/observations') || p.includes('/platform-sync'),
-      `出现未预期的端点拼接：${p}`
-    );
-  }
-  assert.equal(/fetch\(|window\.open\(|eval\(/.test(source), false);
+  for (const endpoint of [
+    /`\/accounts\/\$\{accountId\}\/platform-connection`/,
+    /`\/accounts\/\$\{accountId\}\/metrics\/observations`/,
+    /`\/accounts\/\$\{accountId\}\/platform-sync-operations\?limit=20`/,
+    /`\/metrics\/observations\/\$\{observationId\}\/confirm`/,
+  ]) assert.match(source, endpoint);
+  assert.match(source, /invokeDesktop\('request-account-sync'/);
+  assert.match(source, /invokeDesktop\('request-metrics-refresh'/);
+  assert.match(source, /window\.open\(`ops-desktop:\/\/ui\/platform-login\/\$\{accountId\}\/\$\{platform\}`/);
+  assert.equal(/\bfetch\(|\beval\(/.test(source), false);
+});
+
+test('平台作品详情只按明确选中的镜像 ID 请求单篇指标刷新', async () => {
+  const source = await readSource('pages/platform-works.tsx');
+  const desktopClient = await fs.readFile(path.join(repoRoot, '..', 'desktop', 'src', 'desktop-client.ts'), 'utf8');
+  assert.match(source, /刷新此篇指标/);
+  assert.match(source, /platformWorkIds: \[mirrorID\]/);
+  assert.match(source, /cmd: 'request-metrics-refresh'/);
+  assert.match(desktopClient, /platformWorkIds\?: string\[\]/);
+  assert.match(desktopClient, /target_scope: input\.platformWorkIds\?\.length \? 'explicit' : 'due_and_recent'/);
 });
 
 test('共享电脑与离线提示存在，关闭窗口等于暂停', async () => {

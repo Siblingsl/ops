@@ -22,6 +22,8 @@ test('OPT49 事实核查按素材支撑和待核实分组，仍逐条确认', as
   }).toBe(body)
 
   await page.goto(`/works/${id}/check`)
+  // NW-D1：打开检查页不再自动开始，显式发起一次。
+  await page.getByRole('button', { name: '开始检查', exact: true }).click()
   await expect.poll(async () => (await api(page, 'GET', `/works/${id}/checks/latest`)).run?.fact_status, { timeout: 30_000 }).toBe('done')
   const { run } = await api(page, 'GET', `/works/${id}/checks/latest`)
   const facts = run.items.filter((item: any) => item.category === 'fact' && item.matched_text)

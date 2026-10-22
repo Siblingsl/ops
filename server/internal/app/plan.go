@@ -447,8 +447,9 @@ func (s *Server) adoptSlot(w http.ResponseWriter, r *http.Request) error {
 		return stateInvalid("这个槽位已经采用过了")
 	}
 	var in struct {
-		Title *string `json:"title"`
-		Angle *string `json:"angle"`
+		Title         *string `json:"title"`
+		Angle         *string `json:"angle"`
+		ContentFormat string  `json:"content_format"`
 	}
 	if err := decodeOptional(r, &in); err != nil {
 		return err
@@ -468,9 +469,9 @@ func (s *Server) adoptSlot(w http.ResponseWriter, r *http.Request) error {
 		return validation("请填写选题标题")
 	}
 	ctx := r.Context()
-	// D-048 第 5.6 节：遗留槽位形态与账号类型不一致时明确提示，不静默转换。
-	if sl.Format != "" && sl.Format != a.ContentFormat {
-		return stateInvalid(fmt.Sprintf("这个槽位的形态（%s）与账号类型（%s）不一致，不能采用。请重新启用运营方案以重建大纲。", formatNames[sl.Format], formatNames[a.ContentFormat]))
+	format, err := resolveCreationFormat(a, in.ContentFormat, sl.Format)
+	if err != nil {
+		return err
 	}
 	similar, err := s.similarTitles(r, a.ID, title)
 	if err != nil {
@@ -490,7 +491,7 @@ func (s *Server) adoptSlot(w http.ResponseWriter, r *http.Request) error {
 		a.ID, title, strings.TrimSpace(angle), hot).Scan(&topicID); err != nil {
 		return err
 	}
-	date, pillar, format := sl.Date, sl.Pillar, sl.Format
+	date, pillar := sl.Date, sl.Pillar
 	if err := s.applyTopicFields(ctx, topicID, a.ID, topicFields{PlannedDate: &date, StrategyPillar: &pillar, Format: &format}); err != nil {
 		return err
 	}

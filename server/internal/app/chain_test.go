@@ -319,7 +319,8 @@ func TestCredentialErrors(t *testing.T) {
 	if a.Credential == nil || a.Credential.State != "error" || strings.Contains(string(b), "\"x\"") {
 		t.Fatalf("credential state: %+v", a.Credential)
 	}
-	env.expectErr(t, "PATCH", "/api/v1/accounts/"+a.ID.String(), map[string]any{"content_format": "comic", "confirm": true}, "validation_failed")
+	// D-123：跨平台类型变更（comic 在公众号合法、但需显式确认）在未确认时返回 confirm_required
+	env.expectErr(t, "PATCH", "/api/v1/accounts/"+a.ID.String(), map[string]any{"content_format": "comic", "confirm": true}, "confirm_required")
 	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/disable", nil, nil)
 	env.expectErr(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/works", map[string]string{"title": "x"}, "state_invalid")
 }

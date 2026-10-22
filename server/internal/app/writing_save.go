@@ -42,6 +42,10 @@ func (s *Server) saveOutline(w http.ResponseWriter, r *http.Request) error {
 	if in.Confirm && len(items) == 0 {
 		return validation("大纲至少需要一项")
 	}
+	// NW-C2 / H-02：观点必须由作者写。确认大纲是起稿的门槛，不能在没有观点时绕过。
+	if in.Confirm && strings.TrimSpace(m.Viewpoint) == "" {
+		return humanStep("H-02", "请先写下你自己的核心观点，再确认大纲")
+	}
 	ctx := r.Context()
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
 		if err := lockWorkSections(ctx, tx, m); err != nil {
@@ -49,6 +53,19 @@ func (s *Server) saveOutline(w http.ResponseWriter, r *http.Request) error {
 		}
 		if err := s.checkWorkRevision(ctx, tx, m, in.BaseRevision); err != nil {
 			return err
+		}
+		if in.Confirm {
+			materialIDs := []uuid.UUID{}
+			for _, item := range items {
+				for _, rawID := range item.MaterialIDs {
+					if id, err := uuid.Parse(rawID); err == nil {
+						materialIDs = append(materialIDs, id)
+					}
+				}
+			}
+			if err := lockMaterialRowsForShare(ctx, tx, ident(ctx).WorkspaceID, m.Account.ID, materialIDs); err != nil {
+				return err
+			}
 		}
 		if in.Confirm {
 			var maxPos int
@@ -123,6 +140,9 @@ func (s *Server) createSection(w http.ResponseWriter, r *http.Request) error {
 	}
 	_ = decode(r, &in)
 	err = s.withTx(r.Context(), func(tx pgx.Tx) error {
+		if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended('card-order:' || $1::text,0))`, m.ID.String()); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(r.Context(), `INSERT INTO work_section (work_id, position, heading)
 			VALUES ($1, (SELECT coalesce(max(position),-1)+1 FROM work_section WHERE work_id=$1), $2)`, m.ID, strings.TrimSpace(in.Heading)); err != nil {
 			return err
@@ -442,10 +462,23 @@ func (s *Server) draftSection(w http.ResponseWriter, r *http.Request) error {
 	length := "300 到 600 字"
 	if m.Account.Platform == "xhs" {
 		length = "80 到 200 字，语气口语化，可以适度使用表情符号"
+	} else if m.Account.Platform == "toutiao" && m.ContentFormat == "micro_post" {
+		length = "简短表达本段要点，不需要凑足篇幅；长度建议仅用于控制简洁度，不代表平台上限"
 	}
 	typeRule := ""
-	if fb := formatBrief(m.ContentFormat); fb != "" {
+	if fb := platformFormatBrief(m.Account.Platform, m.ContentFormat); fb != "" {
 		typeRule = "\n类型要求：" + fb + "\n按这个类型的结构约定写本段。"
+	}
+	// DEV-416 / D-140：模板管结构与语气；type_note 只补这篇的个别要求。
+	if m.TemplateID != nil {
+		if tpl, err := s.findCreationTemplate(ctx, *m.TemplateID); err == nil {
+			if tpl.Tone != "" {
+				typeRule += "\n模板语气：" + tpl.Tone + "。"
+			}
+			if tpl.PromptAddon != "" {
+				typeRule += "\n模板补充要求：" + tpl.PromptAddon
+			}
+		}
 	}
 	user := fmt.Sprintf(`## 本段
 本段小标题：%s

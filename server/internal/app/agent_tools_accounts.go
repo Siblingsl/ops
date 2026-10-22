@@ -69,9 +69,9 @@ var agentToolsAccounts = []AgentTool{
 		Name: "accounts__create", Domain: "accounts", Kind: toolW, Method: "POST", Path: "/accounts",
 		Description: "新建一个平台账号。账号类型创建后不能修改，请与用户确认后再执行。",
 		Params: []ToolParam{
-			pBodyF("platform", enumOf("wechat_mp", "xhs"), true),
+			pBodyF("platform", enumOf("wechat_mp", "xhs", "toutiao"), true),
 			pBodyF("name", strMinMax(1, 60), true),
-			pBodyF("content_format", enumOf("long_article", "qa_article", "briefing", "card_post", "script", "comic", "image_note", "list_note"), true),
+			pBodyF("content_format", enumOf("long_article", "qa_article", "briefing", "card_post", "script", "comic", "image_note", "list_note", "micro_post"), true),
 			pBodyF("type_note", strMax(200), false),
 		},
 		MinRole: roleOwner,

@@ -12,13 +12,13 @@ import (
 var slotBudgets = map[string]int{
 	"profile": 800, "memory": 1200, "task_instruction": 1500, "style": 4000,
 	"history": 2000, "work": 3000, "user_instruction": 300,
-	"strategy": 1200, "data_prefs": 500,
+	"strategy": 1200, "data_prefs": 500, "performance": 700,
 }
 
 var slotLabels = map[string]string{
 	"rules": "系统规则", "profile": "定位档案", "memory": "AI 记忆", "task_instruction": "工作区提示词",
 	"style": "风格参考", "references": "对标方法", "materials": "素材", "history": "历史作品写法", "work": "作品内容", "user_instruction": "临时指令",
-	"strategy": "运营方案",
+	"strategy": "运营方案", "performance": "本号高表现样本",
 }
 
 type SlotItem struct {
@@ -80,9 +80,21 @@ func (p *ContextPack) refs() map[string]any {
 	return out
 }
 
-func profileText(a *Account, p *Profile) string {
+func (s *Server) profileText(ctx context.Context, a *Account, p *Profile, workID *uuid.UUID) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "平台：%s；账号类型：%s；账号名：%s\n", platformNames[a.Platform], formatNames[a.ContentFormat], a.Name)
+	// D-123：账号类型迁移后，同一账号下会存在不同类型的历史作品。
+	// 生成类任务带 WorkID 时以作品级类型为准，标签同步写「本作品类型」——
+	// 否则迁移后会把旧作品的类型误标成账号类型，误导模型。
+	format := a.ContentFormat
+	typeLabel := "账号类型"
+	if workID != nil {
+		var wf string
+		if err := s.db.QueryRow(ctx, `SELECT content_format FROM work WHERE id=$1 AND deleted_at IS NULL`, *workID).Scan(&wf); err == nil && wf != "" {
+			format = wf
+			typeLabel = "本作品类型"
+		}
+	}
+	fmt.Fprintf(&b, "平台：%s；%s：%s；账号名：%s\n", platformNames[a.Platform], typeLabel, formatNames[format], a.Name)
 	// D-048 第 9 节：类型补充说明只影响提示词与定位文案，不扩展能力。
 	if strings.TrimSpace(a.TypeNote) != "" {
 		fmt.Fprintf(&b, "类型补充说明（只影响表达方式，不改创作流程）：%s\n", strings.TrimSpace(a.TypeNote))
@@ -115,11 +127,17 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 	p.add(Slot{Name: "rules", Chars: runeLen(rules)})
 
 	if t.Account != nil && !t.Bare {
+		targetFormat := t.Account.ContentFormat
+		if t.Account.Platform == "toutiao" && t.WorkID != nil {
+			if err := s.db.QueryRow(ctx, `SELECT content_format FROM work WHERE id=$1 AND deleted_at IS NULL`, *t.WorkID).Scan(&targetFormat); err != nil {
+				return nil, err
+			}
+		}
 		prof, err := s.loadProfile(ctx, t.Account.ID)
 		if err != nil {
 			return nil, err
 		}
-		pt := profileText(t.Account, prof)
+		pt := s.profileText(ctx, t.Account, prof, t.WorkID)
 		sys.WriteString("\n\n## 账号定位档案\n" + pt)
 		p.add(Slot{Name: "profile", Chars: runeLen(pt)})
 		p.Legacy["profile"] = true
@@ -165,7 +183,12 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 
 		// DEV-A103：读者数据偏好（来自本账号数据归因的规则结论）只注入指定任务。
 		if dataPrefTasks[t.Type] {
-			prefs, err := s.loadDataPreferences(ctx, t.Account.ID)
+			var prefs []DataPreference
+			if t.Account.Platform == "toutiao" {
+				prefs, err = s.loadDataPreferences(ctx, t.Account.ID, targetFormat)
+			} else {
+				prefs, err = s.loadDataPreferences(ctx, t.Account.ID)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -192,6 +215,29 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 					sys.WriteString("\n## 读者数据偏好（来自本账号已录入数据的归因，供参考，不作为事实依据）\n" + pb.String())
 				}
 				p.add(sl)
+			}
+		}
+
+		// 高表现样本：只给「决定怎么写」的任务；样本不足 perfTopLimit 篇时不注入，
+		// 避免拿一两条数据把模型带偏。统计型结论另走 data_prefs。
+		if perfTasks[t.Type] {
+			var samples []perfTopSample
+			if t.Account.Platform == "toutiao" {
+				samples, err = s.loadTopPerformance(ctx, t.Account.ID, t.WorkID, perfTopLimit, targetFormat)
+			} else {
+				samples, err = s.loadTopPerformance(ctx, t.Account.ID, t.WorkID, perfTopLimit)
+			}
+			if err != nil {
+				return nil, err
+			}
+			if len(samples) >= perfTopLimit {
+				text := truncateRunes(performanceText(samples), perfSlotBudget)
+				sys.WriteString("\n## 本号表现较好的作品（只参考标题和开头的写法，不要复用其中的事实或原句）\n" + text)
+				items := make([]SlotItem, 0, len(samples))
+				for _, sample := range samples {
+					items = append(items, SlotItem{ID: sample.WorkID.String(), Label: "《" + sample.Title + "》", Chars: runeLen(sample.Opening), Used: true})
+				}
+				p.add(Slot{Name: "performance", Budget: perfSlotBudget, Chars: runeLen(text), Items: items})
 			}
 		}
 
@@ -229,7 +275,11 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 	}
 
 	if len(t.Materials) > 0 {
-		text, sl, names, err := s.materialsSlot(ctx, t.Materials)
+		var accountID *uuid.UUID
+		if t.Account != nil {
+			accountID = &t.Account.ID
+		}
+		text, sl, names, err := s.materialsSlot(ctx, accountID, t.Materials)
 		if err != nil {
 			return nil, err
 		}
@@ -362,10 +412,10 @@ func (s *Server) styleSlot(ctx context.Context, accountID uuid.UUID, summary str
 var materialKindNames = map[string]string{"experience": "经历", "opinion": "观点", "case": "案例", "data": "数据"}
 
 // materialsSlot preserves every selected material in the caller's order.
-func (s *Server) materialsSlot(ctx context.Context, ids []uuid.UUID) (string, Slot, []string, error) {
+func (s *Server) materialsSlot(ctx context.Context, accountID *uuid.UUID, ids []uuid.UUID) (string, Slot, []string, error) {
 	sl := Slot{Name: "materials"}
-	rows, err := s.db.Query(ctx, `SELECT id, kind, content, source FROM material WHERE id = ANY($1) AND workspace_id=$2 AND deleted_at IS NULL`,
-		ids, ident(ctx).WorkspaceID)
+	rows, err := s.db.Query(ctx, `SELECT id, kind, content, source FROM material WHERE id = ANY($1) AND workspace_id=$2 AND deleted_at IS NULL
+		AND (account_id IS NULL OR account_id=$3)`, ids, ident(ctx).WorkspaceID, accountID)
 	if err != nil {
 		return "", sl, nil, err
 	}

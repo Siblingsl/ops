@@ -214,15 +214,16 @@ export function QualityBoard() {
       <div className="grid gap-5 lg:grid-cols-2">
         <Card className="p-5">
           <div className="mb-3 flex items-center justify-between gap-2">
-            <h3 className="text-[14px] font-semibold text-mist-900">每周趋势</h3>
-            <Select value={trendTask} onChange={(e) => setTrendTask(e.target.value)} className="h-8 w-40 text-[12.5px]">
+            <h3 className="shrink-0 whitespace-nowrap text-[14px] font-semibold text-mist-900">每周趋势</h3>
+            <Select value={trendTask} onChange={(e) => setTrendTask(e.target.value)} className="h-8 w-40 shrink-0 text-[12.5px]">
               <option value="">全部任务</option>
               {data.tasks.map((t) => <option key={t.task_type} value={t.task_type}>{t.label}</option>)}
             </Select>
           </div>
-          <div className="flex h-40 items-end gap-2">
+          <div className="flex h-40 items-end justify-center gap-2">
+            {data.trend.length === 0 && <p className="self-center text-[12.5px] text-mist-400">这段时间没有调用</p>}
             {data.trend.map((t) => (
-              <div key={t.week} className="flex flex-1 flex-col items-center gap-1" title={`${t.week}：${t.calls} 次，采纳率 ${pct(t.adoption_rate)}`}>
+              <div key={t.week} className="flex min-w-0 max-w-[64px] flex-1 flex-col items-center gap-1" title={`${t.week}：${t.calls} 次，采纳率 ${pct(t.adoption_rate)}`}>
                 <span className="text-[10.5px] tabular-nums text-mist-500">{pct(t.adoption_rate)}</span>
                 <div className="w-full rounded-t bg-ink-400" style={{ height: `${(t.calls / maxCalls) * 110}px` }} />
                 <span className="text-[10px] text-mist-400">{t.week.slice(5)}</span>

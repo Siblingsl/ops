@@ -122,7 +122,8 @@ func TestOPT03StatementTimeoutKeepsHealthzAvailable(t *testing.T) {
 			if err := json.Unmarshal(got.body, &ae); err != nil || ae.Error.Code != "database_timeout" || ae.Error.Message != "数据库操作超时，请稍后重试" {
 				t.Fatalf("timeout error: %s err=%v", got.body, err)
 			}
-			if got.elapsed < 29*time.Second || got.elapsed > 33*time.Second || checks < 25 {
+			// PoolConfig separately asserts 30s; allow 5s for local database and scheduler observation latency.
+			if got.elapsed < 29*time.Second || got.elapsed > 35*time.Second || checks < 25 {
 				t.Fatalf("duration=%s health checks=%d", got.elapsed, checks)
 			}
 			t.Logf("pg_sleep(40) cancelled after %s; healthz remained 200 for %d checks", got.elapsed, checks)

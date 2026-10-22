@@ -124,12 +124,17 @@ export function NotificationBell() {
   }, [ticking])
   useEffect(() => {
     const h = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false)
-    const show = () => { setTab('noti'); setOpen(true) }
+    const show = () => { setTab('noti'); setOpen(true); window.dispatchEvent(new CustomEvent('ops:overlay', { detail: 'notifications' })) }
+    const exclusive = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== 'notifications') setOpen(false)
+    }
     document.addEventListener('mousedown', h)
     window.addEventListener('ops:notifications', show)
+    window.addEventListener('ops:overlay', exclusive)
     return () => {
       document.removeEventListener('mousedown', h)
       window.removeEventListener('ops:notifications', show)
+      window.removeEventListener('ops:overlay', exclusive)
     }
   }, [])
   const notificationItems = noti.data?.pages.flatMap((page) => page.items) ?? []
@@ -155,7 +160,7 @@ export function NotificationBell() {
   }
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen((v) => !v)} title="通知与 AI 任务"
+      <button type="button" onClick={() => setOpen((v) => { if (!v) window.dispatchEvent(new CustomEvent('ops:overlay', { detail: 'notifications' })); return !v })} title="通知与 AI 任务"
         className={cn('relative flex size-9 cursor-pointer items-center justify-center rounded-full border bg-white text-mist-600 transition hover:text-mist-900',
           open ? 'border-ink-300 shadow-card' : 'border-mist-200 hover:border-mist-300')}>
         {active > 0 ? <Loader2 className="size-4 animate-spin text-ink-600" /> : <Bell className="size-4" />}

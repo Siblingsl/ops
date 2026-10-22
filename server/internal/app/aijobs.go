@@ -141,12 +141,23 @@ func (s *Server) runningSectionJob(ctx context.Context, sectionID uuid.UUID) (uu
 
 // startBackgroundJob queues fn in the workspace pool; it keeps running after the request returns.
 func (s *Server) startBackgroundJob(ctx context.Context, spec jobSpec, fn func(ctx context.Context) (any, error)) (uuid.UUID, error) {
+	if request, ok := desktopRequestOf(ctx); ok {
+		if request.RouteSnapshot == nil {
+			request.RouteSnapshot = &desktopRouteSnapshot{}
+			ctx = withDesktopRequest(ctx, request)
+		}
+		who := ident(ctx)
+		if _, err := s.desktopRouteSnapshotFor(ctx, request, who.WorkspaceID, who.UserID); err != nil {
+			return uuid.Nil, err
+		}
+	}
 	jobID, err := s.createJob(ctx, spec, "queued")
 	if err != nil {
 		return uuid.Nil, err
 	}
 	who := ident(ctx)
 	bg := context.WithValue(context.Background(), ctxMember, who)
+	bg = inheritDesktopRequestForBackground(ctx, bg)
 	jctx, cancel := context.WithCancel(bg)
 	s.registerJobCancel(jobID, cancel)
 	go func() {

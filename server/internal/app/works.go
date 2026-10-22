@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -56,56 +57,61 @@ type WorkRef struct {
 }
 
 type Work struct {
-	ID                  uuid.UUID       `json:"id"`
-	AccountID           uuid.UUID       `json:"account_id"`
-	Platform            string          `json:"platform"`
-	AccountName         string          `json:"account_name"`
-	TopicID             *uuid.UUID      `json:"topic_id"`
-	TopicAngle          string          `json:"topic_angle"`
-	Source              *WorkRef        `json:"source"`
-	SourceUpdated       bool            `json:"source_updated"`
-	Derived             []WorkRef       `json:"derived"`
-	ContentFormat       string          `json:"content_format"`
-	Status              string          `json:"status"`
-	Title               string          `json:"title"`
-	Summary             string          `json:"summary"`
-	Viewpoint           string          `json:"viewpoint"`
-	Outline             []OutlineItem   `json:"outline"`
-	OutlineConfirmedAt  *time.Time      `json:"outline_confirmed_at"`
-	Theme               string          `json:"theme"`
-	CoverAssetID        *uuid.UUID      `json:"cover_asset_id"`
-	CoverCrops          json.RawMessage `json:"cover_crops"`
-	WechatFields        WechatDefaults  `json:"wechat_fields"`
-	Topics              []string        `json:"topics"`
-	Tags                []string        `json:"tags"`
-	WechatDraftMediaID  *string         `json:"wechat_draft_media_id"`
-	PublishedURL        *string         `json:"published_url"`
-	PublishedAt         *time.Time      `json:"published_at"`
-	PublishRevision     int             `json:"publish_revision"`
+	ID                 uuid.UUID       `json:"id"`
+	AccountID          uuid.UUID       `json:"account_id"`
+	Platform           string          `json:"platform"`
+	AccountName        string          `json:"account_name"`
+	TopicID            *uuid.UUID      `json:"topic_id"`
+	TopicAngle         string          `json:"topic_angle"`
+	Source             *WorkRef        `json:"source"`
+	SourceUpdated      bool            `json:"source_updated"`
+	Derived            []WorkRef       `json:"derived"`
+	ContentFormat      string          `json:"content_format"`
+	Status             string          `json:"status"`
+	Title              string          `json:"title"`
+	Summary            string          `json:"summary"`
+	Viewpoint          string          `json:"viewpoint"`
+	Outline            []OutlineItem   `json:"outline"`
+	OutlineConfirmedAt *time.Time      `json:"outline_confirmed_at"`
+	Theme              string          `json:"theme"`
+	CoverAssetID       *uuid.UUID      `json:"cover_asset_id"`
+	CoverCrops         json.RawMessage `json:"cover_crops"`
+	WechatFields       WechatDefaults  `json:"wechat_fields"`
+	Topics             []string        `json:"topics"`
+	Tags               []string        `json:"tags"`
+	WechatDraftMediaID *string         `json:"wechat_draft_media_id"`
+	PublishedURL       *string         `json:"published_url"`
+	PublishedAt        *time.Time      `json:"published_at"`
+	PublishRevision    int             `json:"publish_revision"`
 	WorkPlatformBinding
-	Locked              bool            `json:"locked"`
-	Revision            int             `json:"revision"`
-	Sections            []Section       `json:"sections"`
-	Panels              []ComicPanel    `json:"panels"`
-	Cards               []WorkCard      `json:"cards"`
-	MaterialIDs         []uuid.UUID     `json:"material_ids"`
-	Assets              []Asset         `json:"assets"`
-	HumanEditRatio      *float64        `json:"human_edit_ratio"`
-	DraftMaybePublished bool            `json:"draft_maybe_published"`
-	TopicAudience       string          `json:"topic_audience"`
-	TopicHook           string          `json:"topic_hook"`
-	PlannedDate         *string         `json:"planned_date"`
-	TargetChars         *int            `json:"target_chars"`
-	PostPushTodos       json.RawMessage `json:"post_push_todos"`
-	TitleFavorites      json.RawMessage `json:"title_favorites"`
-	AssigneeID          *uuid.UUID      `json:"assignee_id"`
-	ReviewerID          *uuid.UUID      `json:"reviewer_id"`
-	ReviewRequired      bool            `json:"review_required"`
-	ReviewedBy          *uuid.UUID      `json:"reviewed_by"`
-	ReviewedAt          *time.Time      `json:"reviewed_at"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
-	sourceRevision      int
+	PlatformSourceMirrorID        *uuid.UUID      `json:"platform_source_mirror_id"`
+	PlatformSourceContentRevision *int            `json:"platform_source_content_revision"`
+	PlatformSourceMirrorRevision  *int64          `json:"platform_source_mirror_revision"`
+	Locked                        bool            `json:"locked"`
+	Revision                      int             `json:"revision"`
+	Sections                      []Section       `json:"sections"`
+	Panels                        []ComicPanel    `json:"panels"`
+	Cards                         []WorkCard      `json:"cards"`
+	MaterialIDs                   []uuid.UUID     `json:"material_ids"`
+	Assets                        []Asset         `json:"assets"`
+	HumanEditRatio                *float64        `json:"human_edit_ratio"`
+	DraftMaybePublished           bool            `json:"draft_maybe_published"`
+	TopicAudience                 string          `json:"topic_audience"`
+	TopicHook                     string          `json:"topic_hook"`
+	PlannedDate                   *string         `json:"planned_date"`
+	TargetChars                   *int            `json:"target_chars"`
+	PostPushTodos                 json.RawMessage `json:"post_push_todos"`
+	TitleFavorites                json.RawMessage `json:"title_favorites"`
+	AssigneeID                    *uuid.UUID      `json:"assignee_id"`
+	CreatedBy                     *uuid.UUID      `json:"created_by"`
+	TemplateID                    *uuid.UUID      `json:"template_id"`
+	ReviewerID                    *uuid.UUID      `json:"reviewer_id"`
+	ReviewRequired                bool            `json:"review_required"`
+	ReviewedBy                    *uuid.UUID      `json:"reviewed_by"`
+	ReviewedAt                    *time.Time      `json:"reviewed_at"`
+	CreatedAt                     time.Time       `json:"created_at"`
+	UpdatedAt                     time.Time       `json:"updated_at"`
+	sourceRevision                int
 }
 
 // workMeta is the minimal row used for permission and state checks.
@@ -120,14 +126,15 @@ type workMeta struct {
 	OutlineConfirmedAt *time.Time
 	SourceWorkID       *uuid.UUID
 	Title              string
+	TemplateID         *uuid.UUID
 }
 
 func (s *Server) workMeta(ctx context.Context, id uuid.UUID) (*workMeta, error) {
 	var m workMeta
 	var accountID uuid.UUID
-	err := s.db.QueryRow(ctx, `SELECT w.id, w.account_id, w.content_format, w.status, w.locked, w.revision, w.viewpoint, w.outline_confirmed_at, w.source_work_id, w.title
+	err := s.db.QueryRow(ctx, `SELECT w.id, w.account_id, w.content_format, w.status, w.locked, w.revision, w.viewpoint, w.outline_confirmed_at, w.source_work_id, w.title, w.template_id
 		FROM work w JOIN platform_account a ON a.id=w.account_id WHERE w.id=$1 AND a.workspace_id=$2 AND w.deleted_at IS NULL`,
-		id, ident(ctx).WorkspaceID).Scan(&m.ID, &accountID, &m.ContentFormat, &m.Status, &m.Locked, &m.Revision, &m.Viewpoint, &m.OutlineConfirmedAt, &m.SourceWorkID, &m.Title)
+		id, ident(ctx).WorkspaceID).Scan(&m.ID, &accountID, &m.ContentFormat, &m.Status, &m.Locked, &m.Revision, &m.Viewpoint, &m.OutlineConfirmedAt, &m.SourceWorkID, &m.Title, &m.TemplateID)
 	if err != nil {
 		return nil, err
 	}
@@ -151,9 +158,10 @@ func (m *workMeta) editable() error {
 }
 
 // touchContent bumps the revision and invalidates checks (05 文档第 4 节规则 1).
+// NW-D2（D-135）：内容一改就回 drafting，包含 checking——检查页只是查看，不是新的持久阶段。
 func (s *Server) touchContent(ctx context.Context, tx pgx.Tx, workID uuid.UUID) error {
 	_, err := tx.Exec(ctx, `UPDATE work SET revision=revision+1, updated_at=now(),
-		status = CASE WHEN status IN ('ready','pushed','packed','reviewing') THEN 'drafting' ELSE status END,
+		status = CASE WHEN status IN ('checking','ready','pushed','packed','reviewing') THEN 'drafting' ELSE status END,
 		reviewed_by = NULL, reviewed_at = NULL WHERE id=$1`, workID)
 	if err != nil {
 		return err
@@ -202,13 +210,14 @@ func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 		w.content_format, w.status, w.title, w.summary, w.viewpoint, w.outline, w.outline_confirmed_at, w.theme, w.cover_asset_id,
 		w.cover_crops, w.wechat_fields, w.topics, w.tags, w.wechat_draft_media_id, w.published_url, w.published_at, w.publish_revision, w.locked, w.revision,
 		coalesce(w.draft_maybe_published,false), coalesce(t.audience,''), coalesce(t.hook,''), to_char(w.planned_date,'YYYY-MM-DD'), w.target_chars,
-		w.post_push_todos, w.title_favorites, w.assignee_id, w.reviewer_id, w.review_required, w.reviewed_by, w.reviewed_at, w.created_at, w.updated_at,
+		w.post_push_todos, w.title_favorites, w.assignee_id, w.created_by, w.reviewer_id, w.review_required, w.reviewed_by, w.reviewed_at, w.created_at, w.updated_at,
 		coalesce((SELECT jsonb_agg(wm.material_id) FROM work_material wm WHERE wm.work_id=w.id), '[]'::jsonb),
 		coalesce((SELECT jsonb_agg(jsonb_build_object('id', d.id, 'title', d.title, 'account_name', da.name, 'platform', da.platform) ORDER BY d.created_at)
 			FROM work d JOIN platform_account da ON da.id=d.account_id WHERE d.source_work_id=w.id AND d.deleted_at IS NULL), '[]'::jsonb),
 		source.title, sa.name, sa.platform, source.revision, source.deleted_at,
 		w.wechat_msgid, w.xhs_note_id, w.metric_binding_revision, w.metric_binding_confirmed_at,
-		w.platform_binding_source, w.platform_binding_verified_at
+		w.platform_binding_source, w.platform_binding_verified_at,
+		w.platform_source_mirror_id, w.platform_source_content_revision, w.platform_source_mirror_revision, w.template_id
 		FROM work w JOIN platform_account a ON a.id=w.account_id LEFT JOIN topic t ON t.id=w.topic_id
 		LEFT JOIN work source ON source.id=w.source_work_id LEFT JOIN platform_account sa ON sa.id=source.account_id
 		WHERE w.id=$1 AND a.workspace_id=$2 AND w.deleted_at IS NULL`, id, ident(ctx).WorkspaceID).Scan(
@@ -216,10 +225,11 @@ func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 		&w.ContentFormat, &w.Status, &w.Title, &w.Summary, &w.Viewpoint, &outline, &w.OutlineConfirmedAt, &w.Theme, &w.CoverAssetID,
 		&w.CoverCrops, &wf, &w.Topics, &w.Tags, &w.WechatDraftMediaID, &w.PublishedURL, &w.PublishedAt, &w.PublishRevision, &w.Locked, &w.Revision,
 		&w.DraftMaybePublished, &w.TopicAudience, &w.TopicHook, &w.PlannedDate, &w.TargetChars,
-		&w.PostPushTodos, &w.TitleFavorites, &w.AssigneeID, &w.ReviewerID, &w.ReviewRequired, &w.ReviewedBy, &w.ReviewedAt, &w.CreatedAt, &w.UpdatedAt,
+		&w.PostPushTodos, &w.TitleFavorites, &w.AssigneeID, &w.CreatedBy, &w.ReviewerID, &w.ReviewRequired, &w.ReviewedBy, &w.ReviewedAt, &w.CreatedAt, &w.UpdatedAt,
 		&materialIDs, &derived, &sourceTitle, &sourceAccountName, &sourcePlatform, &sourceCurrentRevision, &sourceDeletedAt,
 		&wechatMsgID, &xhsNoteID, &w.MetricBindingRevision, &w.MetricBindingAt,
-		&w.PlatformBindingSource, &w.PlatformBindingAt)
+		&w.PlatformBindingSource, &w.PlatformBindingAt, &w.PlatformSourceMirrorID,
+		&w.PlatformSourceContentRevision, &w.PlatformSourceMirrorRevision, &w.TemplateID)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +297,18 @@ func (s *Server) writeWork(w http.ResponseWriter, r *http.Request, id uuid.UUID)
 	return ok(w, wk)
 }
 
-func (s *Server) insertWork(ctx context.Context, a *Account, topicID *uuid.UUID, title, requestedFormat, sourceFormat string) (uuid.UUID, error) {
+// insertWork creates one work and is the single write path for "new work" (NW-A4/E1).
+// source records where the work came from (blank/topic/import/duplicate/derive/daily/comic/agent).
+func (s *Server) insertWork(ctx context.Context, a *Account, topicID *uuid.UUID, title, requestedFormat, sourceFormat, clientRequestID string) (uuid.UUID, error) {
+	return s.insertWorkFrom(ctx, a, topicID, title, requestedFormat, sourceFormat, clientRequestID, "blank")
+}
+
+func (s *Server) insertWorkFrom(ctx context.Context, a *Account, topicID *uuid.UUID, title, requestedFormat, sourceFormat, clientRequestID, source string) (uuid.UUID, error) {
+	return s.insertWorkTx(ctx, s.db, a, topicID, title, requestedFormat, sourceFormat, clientRequestID, source)
+}
+
+// insertWorkTx is insertWork with an explicit querier so callers can include it in a transaction.
+func (s *Server) insertWorkTx(ctx context.Context, q dbtx, a *Account, topicID *uuid.UUID, title, requestedFormat, sourceFormat, clientRequestID, source string) (uuid.UUID, error) {
 	if a.Status != "active" {
 		return uuid.Nil, stateInvalid("账号已停用，不能新建作品")
 	}
@@ -299,12 +320,44 @@ func (s *Server) insertWork(ctx context.Context, a *Account, topicID *uuid.UUID,
 	if err != nil {
 		return uuid.Nil, err
 	}
+	// NW-A2：同一账号同一个幂等键只建一篇；重复请求返回已有作品。
+	clientRequestID = truncateRunes(strings.TrimSpace(clientRequestID), 128)
+	if clientRequestID != "" {
+		var existing uuid.UUID
+		err := q.QueryRow(ctx, `SELECT id FROM work WHERE account_id=$1 AND client_request_id=$2 AND deleted_at IS NULL`,
+			a.ID, clientRequestID).Scan(&existing)
+		if err == nil {
+			return existing, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, err
+		}
+	}
 	wf, _ := json.Marshal(p.WechatDefaults)
 	var id uuid.UUID
-	err = s.db.QueryRow(ctx, `INSERT INTO work (account_id, topic_id, content_format, title, theme, wechat_fields) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		a.ID, topicID, format, truncateRunes(strings.TrimSpace(title), 64), p.DefaultTheme, wf).Scan(&id)
+	var key any
+	if clientRequestID != "" {
+		key = clientRequestID
+	}
+	// NW-A8：新作品默认由当前用户负责，否则"我负责的"看不到刚建的作品。
+	var assignee any
+	if uid := ident(ctx).UserID; uid != uuid.Nil {
+		assignee = uid
+	}
+	title = strings.TrimSpace(title)
+	err = q.QueryRow(ctx, `INSERT INTO work (account_id, topic_id, content_format, title, theme, wechat_fields, client_request_id, assignee_id, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING id`,
+		a.ID, topicID, format, truncateRunes(title, 64), p.DefaultTheme, wf, key, assignee, assignee).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) && clientRequestID != "" {
+		// 并发请求先插入了同一个键：返回那一篇，不重复创建。
+		err = q.QueryRow(ctx, `SELECT id FROM work WHERE account_id=$1 AND client_request_id=$2 AND deleted_at IS NULL`,
+			a.ID, clientRequestID).Scan(&id)
+	}
 	if err == nil {
-		s.audit(ctx, "work_create", "work", id.String(), "ok", nil)
+		// NW-E2：审计记录来源、形态与标题长度，能区分空白/选题/导入等。
+		s.audit(ctx, "work_create", "work", id.String(), "ok", map[string]any{
+			"source": source, "content_format": format, "title_len": runeLen(title), "topic_id": topicID,
+		})
 	}
 	return id, err
 }
@@ -323,17 +376,83 @@ func (s *Server) createWork(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		Title         string `json:"title"`
-		ContentFormat string `json:"content_format"`
+		Title         string     `json:"title"`
+		ContentFormat string     `json:"content_format"`
+		TopicID       *uuid.UUID `json:"topic_id"`
+		TemplateID    *uuid.UUID `json:"template_id"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
-	id, err := s.insertWork(r.Context(), a, nil, in.Title, in.ContentFormat, "")
+	if in.TemplateID != nil {
+		tpl, err := s.findCreationTemplate(r.Context(), *in.TemplateID)
+		if err != nil {
+			return err
+		}
+		// D-124：用户只做一次决策（选模板），形态由模板隐含；请求显式给了形态时以请求为准（服务端仍校验一致性）。
+		if strings.TrimSpace(in.ContentFormat) == "" {
+			in.ContentFormat = tpl.ContentFormat
+		}
+	}
+	// NW-A7：从选题开始时，"采纳选题 + 建作品"必须同一事务；重复开始返回已有作品。
+	if in.TopicID != nil {
+		return s.createWorkFromTopic(w, r, a, *in.TopicID, in.Title, in.ContentFormat, in.TemplateID)
+	}
+	id, err := s.insertWork(r.Context(), a, nil, in.Title, in.ContentFormat, "", r.Header.Get("Idempotency-Key"))
 	if err != nil {
 		return err
 	}
+	if in.TemplateID != nil {
+		if _, err := s.db.Exec(r.Context(), `UPDATE work SET template_id=$2 WHERE id=$1`, id, *in.TemplateID); err != nil {
+			return err
+		}
+	}
 	return s.writeWork(w, r, id)
+}
+
+func (s *Server) createWorkFromTopic(w http.ResponseWriter, r *http.Request, a *Account, topicID uuid.UUID, title, requestedFormat string, templateID *uuid.UUID) error {
+	ctx := r.Context()
+	var workID uuid.UUID
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		var existing *uuid.UUID
+		var topicTitle, angle, tformat string
+		// 锁住选题行：并发的两个"开始创作"只有一个能建作品。
+		if err := tx.QueryRow(ctx, `SELECT title, angle, coalesce(format,'') FROM topic
+			WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL FOR UPDATE`, topicID, a.ID).Scan(&topicTitle, &angle, &tformat); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errNotFound
+			}
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT id FROM work WHERE topic_id=$1 AND deleted_at IS NULL ORDER BY created_at LIMIT 1`, topicID).Scan(&existing); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if existing != nil {
+			workID = *existing
+			return nil
+		}
+		if strings.TrimSpace(title) == "" {
+			title = topicTitle
+		}
+		id, err := s.insertWorkTx(ctx, tx, a, &topicID, title, requestedFormat, tformat, r.Header.Get("Idempotency-Key"), "topic")
+		if err != nil {
+			return err
+		}
+		if templateID != nil {
+			if _, err := tx.Exec(ctx, `UPDATE work SET template_id=$2 WHERE id=$1`, id, *templateID); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE topic SET status='adopted', updated_at=now() WHERE id=$1`, topicID); err != nil {
+			return err
+		}
+		workID = id
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return s.writeWork(w, r, workID)
 }
 
 type WorkListItem struct {
@@ -512,7 +631,9 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if in.Title != nil || in.Summary != nil || in.MaterialIDs != nil {
+	// NW-C5：观点/主题/封面/话题等也算内容，必须和标题一样受 revision 保护，否则会静默覆盖别人的修改。
+	if in.Title != nil || in.Summary != nil || in.MaterialIDs != nil || in.Viewpoint != nil || in.Theme != nil ||
+		in.ClearCover || in.CoverAssetID != nil || in.CoverCrops != nil || in.Topics != nil || in.Tags != nil {
 		if err := s.checkWorkRevision(ctx, tx, m, in.BaseRevision); err != nil {
 			return err
 		}
@@ -542,6 +663,8 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		if _, err := tx.Exec(ctx, `UPDATE work SET viewpoint=$2, updated_at=now() WHERE id=$1`, m.ID, strings.TrimSpace(*in.Viewpoint)); err != nil {
 			return err
 		}
+		// 观点也是正文的一部分：改动要推进 revision 并按 NW-D2 退回 drafting。
+		content = true
 	}
 	if in.Theme != nil {
 		if _, err := tx.Exec(ctx, `UPDATE work SET theme=$2 WHERE id=$1`, m.ID, *in.Theme); err != nil {

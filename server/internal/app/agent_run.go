@@ -179,6 +179,23 @@ func (st *agentRunState) loadedTool(id *identity, name string) *AgentTool {
 // agentResolveModel 解析对话所选模型：校验已通过工具调用自检、取供应商地址与密钥、
 // 读取“看图”能力，并解析备用模型（第 7.4 节第 1、3、5 项）。
 func (s *Server) agentResolveModel(ctx context.Context, st *agentRunState) (*route, error) {
+	if request, ok := desktopRequestOf(ctx); ok {
+		mapped, err := s.resolveDesktopRouteTier(ctx, "agent_chat", "", request)
+		if err != nil {
+			return nil, err
+		}
+		if mapped.ProviderID == st.Model.ProviderID && mapped.Model == st.Model.Model {
+			st.Vision, st.ProviderName = mapped.VisionOK, mapped.ProviderName
+			return mapped, nil
+		}
+		if mapped.Fallback != nil && mapped.Fallback.ProviderID == st.Model.ProviderID && mapped.Fallback.Model == st.Model.Model {
+			chosen := *mapped.Fallback
+			chosen.Fallback = mapped
+			st.Vision, st.ProviderName = chosen.VisionOK, chosen.ProviderName
+			return &chosen, nil
+		}
+		return nil, apiErr(422, "agent_model_unsupported", "所选模型不属于当前客户端 AI 的智能体路由，请重新选择")
+	}
 	models, _, _, err := s.agentModels(ctx)
 	if err != nil {
 		return nil, err
@@ -197,7 +214,7 @@ func (s *Server) agentResolveModel(ctx context.Context, st *agentRunState) (*rou
 	var enc []byte
 	rt := &route{ProviderID: st.Model.ProviderID, Model: st.Model.Model}
 	if err := s.db.QueryRow(ctx, `SELECT name, base_url, api_key_enc FROM model_provider
-		WHERE id=$1 AND workspace_id=$2 AND status='active'`, st.Model.ProviderID, st.WorkspaceID).
+		WHERE id=$1 AND workspace_id=$2 AND execution_location='server' AND status='active'`, st.Model.ProviderID, st.WorkspaceID).
 		Scan(&rt.ProviderName, &rt.BaseURL, &enc); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apiErr(422, "agent_model_unsupported", "所选模型的供应商已删除，请重新选择")
@@ -214,14 +231,14 @@ func (s *Server) agentResolveModel(ctx context.Context, st *agentRunState) (*rou
 	var fbModel string
 	_ = s.db.QueryRow(ctx, `SELECT r.fallback_provider_id, coalesce(r.fallback_model,'') FROM model_route r
 		JOIN model_provider p ON p.id=r.provider_id
-		WHERE r.workspace_id=$1 AND p.id=$2 AND r.model=$3 AND p.status='active'
+		WHERE r.workspace_id=$1 AND p.id=$2 AND r.model=$3 AND p.execution_location='server' AND p.status='active'
 		ORDER BY (r.task_type='agent_chat') DESC LIMIT 1`, st.WorkspaceID, st.Model.ProviderID, st.Model.Model).
 		Scan(&fbProvider, &fbModel)
 	if fbProvider != nil && strings.TrimSpace(fbModel) != "" {
 		fb := route{ProviderID: *fbProvider, Model: strings.TrimSpace(fbModel)}
 		var fenc []byte
 		if err := s.db.QueryRow(ctx, `SELECT name, base_url, api_key_enc FROM model_provider
-			WHERE id=$1 AND workspace_id=$2 AND status='active'`, *fbProvider, st.WorkspaceID).
+			WHERE id=$1 AND workspace_id=$2 AND execution_location='server' AND status='active'`, *fbProvider, st.WorkspaceID).
 			Scan(&fb.ProviderName, &fb.BaseURL, &fenc); err == nil {
 			if fb.APIKey, err = s.box.Decrypt(fenc); err == nil {
 				for _, m := range models {
@@ -298,27 +315,54 @@ func (s *Server) streamAgentRound(ctx context.Context, st *agentRunState, rt *ro
 	}
 	actx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	timer := time.AfterFunc(s.firstTokenTimeout, func() {
-		if !got.Load() {
-			cancel()
-		}
-	})
-	defer timer.Stop()
+	var desktopTimeout *desktopModelTimeout
+	if rt.Desktop != nil {
+		desktopTimeout = newDesktopModelTimeout(s.desktopFirstContentBudget(), desktopModelIdleTimeout, cancel)
+		defer desktopTimeout.Stop()
+	} else {
+		timer := time.AfterFunc(s.firstTokenTimeout, func() {
+			if !got.Load() {
+				cancel()
+			}
+		})
+		defer timer.Stop()
+	}
 	limit := agentMaxOutputTokens
-	text, usage, calls, finish, err := ai.Stream(actx, s.aiHTTP, ai.Request{
+	callRoute := rt
+	if rt.Desktop != nil && !st.Deadline.IsZero() {
+		copyRoute := *rt
+		copyExecution := *rt.Desktop
+		copyExecution.Deadline = st.Deadline
+		copyRoute.Desktop = &copyExecution
+		callRoute = &copyRoute
+	}
+	modelCtx, client := s.aiClientForRoute(actx, callRoute)
+	text, usage, calls, finish, err := ai.Stream(modelCtx, client, ai.Request{
 		BaseURL: rt.BaseURL, APIKey: rt.APIKey, Model: rt.Model,
 		Messages:   p.Messages,
 		Tools:      p.Tools,
 		ToolChoice: p.ToolChoice,
 		Round:      p.Round,
 		MaxTokens:  &limit,
+		OnActivity: func() {
+			if rt.Desktop != nil {
+				got.Store(true)
+				desktopTimeout.Activity()
+			}
+		},
 	}, func(d string) {
 		got.Store(true)
 		if send != nil {
 			send("delta", map[string]string{"text": d})
 		}
 	})
-	if err != nil && ctx.Err() == nil && actx.Err() != nil && !got.Load() {
+	var timeoutErr error
+	if desktopTimeout != nil {
+		timeoutErr = desktopTimeout.Error()
+	}
+	if timeoutErr != nil {
+		err = timeoutErr
+	} else if err != nil && ctx.Err() == nil && actx.Err() != nil && !got.Load() {
 		err = errFirstToken
 	}
 	s.finishProviderCall(rt.ProviderID, attempt, ctx, err)

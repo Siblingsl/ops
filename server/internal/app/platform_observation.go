@@ -44,6 +44,7 @@ type platformObservationInput struct {
 	RowNo               *int
 	WorkspaceID         uuid.UUID
 	AccountID           uuid.UUID
+	PlatformWorkID      *uuid.UUID
 	ExternalAccountKey  string
 	ExternalID          *string
 	Scope               string
@@ -285,14 +286,14 @@ func insertPlatformObservation(ctx context.Context, tx pgx.Tx, in platformObserv
 	var id uuid.UUID
 	err = tx.QueryRow(ctx, `
 		INSERT INTO platform_metric_observation (
-			supersedes_id, run_id, batch_seq, row_no, workspace_id, account_id, external_account_key,
+			supersedes_id, run_id, batch_seq, row_no, workspace_id, account_id, platform_work_id, external_account_key,
 			external_id, scope, source, observed_at, as_of_at, window_start, window_end, temporal_kind,
 			values, field_paths, adapter_version, mapping_version, browser_version, payload_hash,
 			quality_state, match_state)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
 		ON CONFLICT DO NOTHING
 		RETURNING id`,
-		in.SupersedesID, in.RunID, in.BatchSeq, in.RowNo, in.WorkspaceID, in.AccountID, in.ExternalAccountKey,
+		in.SupersedesID, in.RunID, in.BatchSeq, in.RowNo, in.WorkspaceID, in.AccountID, in.PlatformWorkID, in.ExternalAccountKey,
 		in.ExternalID, in.Scope, in.Source, in.ObservedAt, in.AsOfAt, in.WindowStart, in.WindowEnd, in.TemporalKind,
 		values, paths, in.AdapterVersion, in.MappingVersion, in.BrowserVersion, hash,
 		in.QualityState, in.MatchState).Scan(&id)

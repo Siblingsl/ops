@@ -30,6 +30,10 @@ type platformRunFixture struct {
 // newPlatformRunFixture 直接落库建连接（绕过 HTTP 握手），只让被测的任务路径走真实代码。
 func newPlatformRunFixture(t *testing.T, platform, externalKey string) *platformRunFixture {
 	t.Helper()
+	oldLocation := env.srv.loc
+	localHourOffset := (10 - env.srv.now().UTC().Hour()) * 60 * 60
+	env.srv.loc = time.FixedZone("platform-run-test", localHourOffset)
+	t.Cleanup(func() { env.srv.loc = oldLocation })
 	a := platformTestAccount(t, platform, "任务验收号 "+uuid.New().String()[:8])
 	wsID := accountWorkspace(t, a.ID)
 	userID := workspaceOwner(t, wsID)

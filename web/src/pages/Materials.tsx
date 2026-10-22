@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { CalendarClock, Check, Copy, Library, Link2, Pencil, Plus, Scissors, Search, Tag, Trash2, Wand2 } from 'lucide-react'
+import { CalendarClock, Check, Copy, Inbox, Library, Link2, Pencil, Plus, Scissors, Search, Tag, Trash2, Wand2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -7,6 +7,7 @@ import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { AIFeedback, sendFeedback } from '@/components/refs'
 import { aiError } from '@/lib/ai-error'
 import { StarButton } from '@/components/star-button'
+import { InboxPanel } from '@/components/inbox-panel'
 import { Badge, Button, Card, cn, Empty, Field, IconButton, Input, Notice, PageHeader, PageLoading, Select, StatusBadge, Tabs, Textarea } from '@/components/ui'
 import { VoiceButton } from '@/components/voice'
 import { errorMessage, get, patch, post } from '@/lib/api'
@@ -26,6 +27,11 @@ interface Candidate { kind: MaterialKind; content: string; source_hint: string; 
 interface TagSuggestion { kind: MaterialKind; tags: string[]; source: 'rule' | 'ai'; ai_call_id?: string }
 
 const runeCount = (s: string) => [...s].length
+const materialHeadline = (content: string) => {
+  const end = content.search(/[，。！？\n]/u)
+  return end < 0 ? content.slice(0, 32) : content.slice(0, end + (content[end] === '\n' ? 0 : 1)).trim()
+}
+const materialPreview = (content: string) => content.slice(materialHeadline(content).length).trim()
 const materialBody = (m: Material, p: Partial<Material> = {}) => {
   const x = { ...m, ...p }
   return { account_id: x.account_id, kind: x.kind, content: x.content, source: x.source, tags: x.tags, valid_until: x.valid_until || null }
@@ -80,10 +86,10 @@ function MaterialDialog({ open, onClose, accountId, editing }: { open: boolean; 
     <Dialog open={open} onClose={onClose} title={editing ? '编辑素材' : '添加素材'} width="max-w-xl"
       footer={<><Button variant="ghost" onClick={onClose}>取消</Button><Button variant="primary" loading={busy} disabled={!content.trim()} onClick={save}>保存</Button></>}>
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2">
           {(Object.keys(kindMeta) as MaterialKind[]).map((k) => (
             <button key={k} type="button" onClick={() => setKind(k)}
-              className={cn('cursor-pointer rounded-lg border px-2 py-2 text-left transition', kind === k ? 'border-ink-400 bg-ink-50 ring-3 ring-ink-100' : 'border-mist-200 hover:border-mist-300')}>
+              className={cn('flex h-full cursor-pointer flex-col rounded-lg border px-2.5 py-2 text-left transition', kind === k ? 'border-ink-400 bg-ink-50 ring-3 ring-ink-100' : 'border-mist-200 hover:border-mist-300')}>
               <div className="text-[13.5px] font-semibold text-mist-800">{kindMeta[k].label}</div>
               <div className="mt-0.5 text-[11px] leading-snug text-mist-500">{kindMeta[k].desc}</div>
             </button>
@@ -345,6 +351,7 @@ function UsagePopover({ m }: { m: Pick<Material, 'id' | 'usage_count'> }) {
 }
 
 export default function Materials() {
+  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
   const [params, setParams] = useSearchParams()
@@ -354,6 +361,7 @@ export default function Materials() {
   const usage = (['used', 'unused', 'expired'].includes(params.get('usage') ?? '') ? params.get('usage') : '') as '' | 'used' | 'unused' | 'expired'
   const q = params.get('q') ?? ''
   const [visibleCount, setVisibleCount] = useState(50)
+  const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(null)
   const focusedMaterial = useRef<string | null>(null)
   const updateFilter = (name: string, value: string | null) => {
     const next = new URLSearchParams(params)
@@ -367,6 +375,7 @@ export default function Materials() {
   const [detail, setDetail] = useState<Material | null>(null)
   const [reading, setReading] = useState(false)
   const [extract, setExtract] = useState(params.get('extract') === '1')
+  const [inboxOpen, setInboxOpen] = useState(false)
   const [dups, setDups] = useState(false)
   const tag = params.get('tag')
   const [selecting, setSelecting] = useState(false)
@@ -386,6 +395,13 @@ export default function Materials() {
     enabled: !!acc,
     staleTime: 5 * 60_000,
   })
+  useEffect(() => {
+    if (!data?.length) {
+      setSelectedMaterialId(null)
+      return
+    }
+    setSelectedMaterialId((current) => current && data.some((m) => m.id === current) ? current : data[0].id)
+  }, [data])
   useEffect(() => {
     if (params.get('extract')) {
       const n = new URLSearchParams(params)
@@ -414,6 +430,7 @@ export default function Materials() {
   const maxCount = cloud[0]?.[1] ?? 1
   const untagged = (data ?? []).filter((m) => m.tags.length === 0).length
   const list = (data ?? []).filter((m) => (!kind || m.kind === kind) && (tag === null || (tag === '' ? m.tags.length === 0 : m.tags.includes(tag))))
+  const selectedMaterial = list.find((m) => m.id === selectedMaterialId) ?? list[0] ?? null
   const remove = (m: Pick<Material, 'id'>) => deleteWithUndo('material', m.id, '这条素材', () => inv(['materials']), '已引用它的作品不受影响。')
   const read = async (id: string, edit = false) => {
     setReading(true)
@@ -426,40 +443,51 @@ export default function Materials() {
   const togglePick = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : p.length >= 10 ? (toast.info('一次最多选 10 条'), p) : [...p, id]))
   const dupCount = dupGroups.data?.length ?? 0
   return (
-    <div className="animate-fade-in">
-      <PageHeader title="素材库" desc="AI 只把这里的内容当作事实来源。素材越具体，初稿越像你自己写的。"
-        action={canWrite ? <>
+    <div className={cn('animate-fade-in', desktopPresentation && 'desktop-materials-page')}>
+      <PageHeader title="素材库" desc={desktopPresentation ? '保留事实与真实经历，让表达有自己的来处。' : 'AI 只把这里的内容当作事实来源。素材越具体，初稿越像你自己写的。'}
+        action={canWrite ? desktopPresentation ? <>
+          <Button className="desktop-material-action" icon={<Inbox className="size-4" />} onClick={() => setInboxOpen(true)}>收件箱整理</Button>
+          <Button className="desktop-material-action" variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加素材</Button>
+        </> : <>
           <Button icon={<Copy className="size-4" />} onClick={() => setDups(true)}>相似素材</Button>
           <Button icon={<Scissors className="size-4" />} onClick={() => setExtract(true)}>从长文提炼</Button>
           <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加素材</Button>
         </> : undefined} />
-      <div className="mb-5 flex flex-wrap items-center gap-3">
-        <Tabs value={scope} onChange={value => updateFilter('scope', value === 'all' ? null : value)} items={[{ value: 'all', label: '全部' }, { value: 'account', label: '本账号' }, { value: 'shared', label: '共享' }]} />
-        <Select value={kind} onChange={(e) => updateFilter('kind', e.target.value || null)} className="w-32">
+      {desktopPresentation && <Tabs role="tablist" ariaLabel="素材类型" className="desktop-material-type-tabs"
+        value={kind || 'all'} onChange={(value) => updateFilter('kind', value === 'all' ? null : value)}
+        items={[{ value: 'all', label: '全部' }, ...Object.entries(kindMeta).map(([value, meta]) => ({ value, label: meta.label }))]} />}
+      <div className={cn('mb-5 flex flex-wrap items-center gap-3', desktopPresentation && 'desktop-materials-filterbar')}>
+        {!desktopPresentation && <Tabs value={scope} onChange={value => updateFilter('scope', value === 'all' ? null : value)} items={[{ value: 'all', label: '全部' }, { value: 'account', label: '本账号' }, { value: 'shared', label: '共享' }]} />}
+        {!desktopPresentation && <Select value={kind} onChange={(e) => updateFilter('kind', e.target.value || null)} className="w-32">
           <option value="">全部类型</option>
           {(Object.keys(kindMeta) as MaterialKind[]).map((k) => <option key={k} value={k}>{kindMeta[k].label}</option>)}
-        </Select>
-        <Select value={usage} onChange={(e) => updateFilter('usage', e.target.value || null)} className="w-36">
+        </Select>}
+        {!desktopPresentation && <Select value={usage} onChange={(e) => updateFilter('usage', e.target.value || null)} className="w-36">
           <option value="">引用情况不限</option>
           <option value="unused">从未被引用</option>
           <option value="used">已被引用</option>
           <option value="expired">已过有效期</option>
-        </Select>
-        {canWrite && (
+        </Select>}
+        {!desktopPresentation && canWrite && (
           <Button size="sm" variant={selecting ? 'secondary' : 'ghost'} onClick={() => { setSelecting(!selecting); setPicked([]) }}>{selecting ? '退出多选' : '多选'}</Button>
         )}
-        <div className="relative w-full sm:ml-auto sm:w-72">
+        <div className={cn('relative w-full sm:ml-auto sm:w-72', desktopPresentation && 'desktop-materials-search')}>
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist-400" />
-          <Input value={q} onChange={(e) => updateFilter('q', e.target.value || null)} placeholder="搜索内容、来源、标签" className="pl-9" />
+          <Input aria-label={desktopPresentation ? '搜索素材' : '搜索素材内容、来源和标签'} value={q} onChange={(e) => updateFilter('q', e.target.value || null)} placeholder={desktopPresentation ? '搜索素材内容与来源' : '搜索内容、来源、标签'} className="pl-9" />
         </div>
+        {desktopPresentation ? <Select aria-label="素材范围" className="desktop-material-scope" value={scope === 'all' ? '' : scope} onChange={(e) => updateFilter('scope', e.target.value || null)}>
+          <option value="">本账号 + 工作区共享</option>
+          <option value="account">本账号</option>
+          <option value="shared">工作区共享</option>
+        </Select> : null}
       </div>
-      {dupCount > 0 && canWrite && (
+      {!desktopPresentation && dupCount > 0 && canWrite && (
         <Notice tone="gamboge" icon={<Copy className="size-4" />} className="mb-4">
           发现 {dupCount} 组可能重复的素材。
           <button type="button" className="ml-1 cursor-pointer font-medium underline" onClick={() => setDups(true)}>逐组查看</button>
         </Notice>
       )}
-      {(cloud.length > 0 || untagged > 0) && (
+      {!desktopPresentation && (cloud.length > 0 || untagged > 0) && (
         <div className="mb-4 flex flex-wrap items-center gap-1.5">
           <Tag className="size-3.5 text-mist-400" />
           <button type="button" onClick={() => updateFilter('tag', null)} className={cn('cursor-pointer rounded-full px-2.5 py-0.5 text-[12px]', tag === null ? 'bg-ink-600 text-white' : 'bg-mist-100 text-mist-600 hover:bg-mist-200')}>全部标签</button>
@@ -474,14 +502,71 @@ export default function Materials() {
           ))}
         </div>
       )}
-      {selecting && (
+      {!desktopPresentation && selecting && (
         <div className="sticky top-16 z-10 mb-4 flex items-center gap-3 rounded-xl border border-ink-200 bg-white/95 px-4 py-2 text-[13px] shadow-sm backdrop-blur">
           <span className="text-mist-600">已选 {picked.length} 条（最多 10 条）</span>
           <Button size="sm" variant="primary" icon={<Wand2 className="size-3.5" />} disabled={picked.length === 0}
             onClick={() => setTagging((data ?? []).filter((m) => picked.includes(m.id)))}>为选中的建议标签</Button>
         </div>
       )}
-      {isLoading ? <PageLoading /> : list.length === 0 ? (
+      {desktopPresentation ? <div className="desktop-materials-layout" data-testid="desktop-materials-layout">
+        <section className="desktop-material-list" data-testid="desktop-material-list" aria-label="素材列表">
+          {isLoading ? <PageLoading /> : list.length === 0 ? (
+            <Empty className="desktop-material-empty" icon={<Library className="size-5" />} title={q || kind || usage || tag !== null ? '没有符合条件的素材' : '素材库还是空的'}
+              desc="把你的经历、观点、案例和数据存进来。也可以粘贴过去写的长文，让 AI 拆成一条条素材。"
+              action={!q && canWrite && <div className="flex gap-2"><Button icon={<Scissors className="size-4" />} onClick={() => setExtract(true)}>从长文提炼</Button><Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加第一条素材</Button></div>} />
+          ) : <>
+            {list.slice(0, visibleCount).map((m) => {
+              const headline = materialHeadline(m.content)
+              const preview = materialPreview(m.content)
+              return <article key={m.id} ref={m.id === focus ? focusRef : undefined}
+                className={cn('desktop-material-row', preview && 'has-preview', selectedMaterial?.id === m.id && 'selected', m.id === focus && 'focused', m.expired && 'expired')}>
+                <div className="desktop-material-row-meta">
+                  {selecting && <input type="checkbox" aria-label="选择这条素材" className="accent-ink-600" checked={picked.includes(m.id)} onChange={() => togglePick(m.id)} />}
+                  <Badge tone={kindMeta[m.kind].tone}>{kindMeta[m.kind].label}</Badge>
+                  {desktopPresentation ? <small>{m.shared ? '工作区共享' : acc.name}</small> : <>
+                    {m.shared && <Badge>共享</Badge>}
+                    {m.expired ? <Badge tone="red"><CalendarClock className="size-3" />已过期</Badge> : m.valid_until && <Badge><CalendarClock className="size-3" />有效至 {m.valid_until}</Badge>}
+                    <span>{relTime(m.created_at)}</span>
+                    <StarButton type="material" id={m.id} className="ml-auto" />
+                  </>}
+                </div>
+                <button type="button" className="desktop-material-select" aria-pressed={selectedMaterial?.id === m.id} onClick={() => setSelectedMaterialId(m.id)}>
+                  <strong>{headline}</strong>
+                  {preview && <span>{preview.slice(0, 150)}{preview.length > 150 ? '…' : ''}</span>}
+                </button>
+                <div className="desktop-material-row-footer">
+                  <span>{m.source || '未记录来源'}</span>
+                  {!desktopPresentation && <span>{m.usage_count ?? 0} 次引用</span>}
+                  <span className="desktop-material-row-actions">
+                    <button type="button" onClick={() => void read(m.id, true)} disabled={reading}>{desktopPresentation ? '查看与编辑' : '查看全文'}</button>
+                    {canWrite && !desktopPresentation && <IconButton label="编辑" disabled={reading} onClick={() => void read(m.id, true)}><Pencil className="size-3.5" /></IconButton>}
+                    {canWrite && !desktopPresentation && <IconButton label="删除" className="hover:text-danger" onClick={() => remove(m)}><Trash2 className="size-3.5" /></IconButton>}
+                  </span>
+                </div>
+                {!desktopPresentation && m.tags.length > 0 && <div className="desktop-material-tags">{m.tags.map((t) => <button key={t} type="button" onClick={() => updateFilter('tag', t)}>{t}</button>)}</div>}
+              </article>
+            })}
+            {list.length > visibleCount && <div className="desktop-material-load-more"><Button variant="outline" onClick={() => setVisibleCount((count) => Math.min(count + 50, list.length))}>加载更多素材</Button></div>}
+          </>}
+        </section>
+        <aside className="desktop-material-details" data-testid="desktop-material-details" aria-label="素材详情">
+          {selectedMaterial ? <>
+            <div className="desktop-material-eyebrow">素材详情</div>
+            <div className="desktop-material-detail-badges"><Badge tone={kindMeta[selectedMaterial.kind].tone}>{kindMeta[selectedMaterial.kind].label}</Badge>{selectedMaterial.shared && <Badge>工作区共享</Badge>}{selectedMaterial.expired && <Badge tone="red">已过期</Badge>}</div>
+            <h2>{materialHeadline(selectedMaterial.content)}</h2>
+            <p className="desktop-material-detail-content">{selectedMaterial.content}</p>
+            <div className="desktop-material-divider" />
+            <h3>引用与关联</h3>
+            <dl><div><dt>素材来源</dt><dd>{selectedMaterial.source || '未记录'}</dd></div><div><dt>标签</dt><dd>{selectedMaterial.tags.length ? selectedMaterial.tags.join('、') : '暂无标签'}</dd></div><div><dt>引用次数</dt><dd><UsagePopover m={selectedMaterial} /></dd></div><div><dt>最近引用</dt><dd>{selectedMaterial.last_used_at ? relTime(selectedMaterial.last_used_at) : '尚未引用'}</dd></div></dl>
+            <p className="desktop-material-detail-hint">素材只会作为事实来源；引用前仍请核对来源和有效期。</p>
+            <div className="desktop-material-detail-actions">
+              {canWrite && <Button size="sm" onClick={() => void read(selectedMaterial.id, true)} disabled={reading}>编辑这条素材</Button>}
+              {canWrite && <Button size="sm" variant="ghost" className="hover:text-danger" onClick={() => remove(selectedMaterial)}>删除这条素材</Button>}
+            </div>
+          </> : <Empty className="desktop-material-detail-empty" icon={<Library className="size-5" />} title="素材详情" desc="选择一条素材，在这里查看来源、标签与引用情况。" />}
+        </aside>
+      </div> : isLoading ? <PageLoading /> : list.length === 0 ? (
         <Card><Empty icon={<Library className="size-5" />} title={q || kind || usage || tag !== null ? '没有符合条件的素材' : '素材库还是空的'}
           desc="把你的经历、观点、案例和数据存进来。也可以粘贴过去写的长文，让 AI 拆成一条条素材。"
           action={!q && canWrite && <div className="flex gap-2"><Button icon={<Scissors className="size-4" />} onClick={() => setExtract(true)}>从长文提炼</Button><Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加第一条素材</Button></div>} /></Card>
@@ -517,11 +602,14 @@ export default function Materials() {
           ))}
         </div>
       )}
-      {!isLoading && list.length > visibleCount && (
+      {!desktopPresentation && !isLoading && list.length > visibleCount && (
         <div className="mt-5 flex justify-center">
           <Button variant="outline" onClick={() => setVisibleCount((count) => Math.min(count + 50, list.length))}>加载更多素材</Button>
         </div>
       )}
+      {inboxOpen && <Drawer open onClose={() => setInboxOpen(false)} title="从收件箱整理" desc="逐条确认灵感，可选择转为选题或存为素材。">
+        <InboxPanel accountId={acc.id} />
+      </Drawer>}
       {dialog && <MaterialDialog open onClose={() => setDialog(null)} accountId={acc.id} editing={dialog.editing} />}
       <Drawer open={!!detail} onClose={() => setDetail(null)} title="素材全文">
         <p className="whitespace-pre-wrap">{detail?.content}</p>

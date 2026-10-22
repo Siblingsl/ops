@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"math/big"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -21,6 +24,12 @@ var metricColumnAliases = []struct {
 	Names []string
 }{
 	{"title", []string{"title", "标题", "题目"}},
+	{"work_id", []string{"work_id", "作品ID", "作品编号"}},
+	{"url", []string{"url", "链接", "作品链接"}},
+	{"content_format", []string{"content_format", "形态", "作品形态"}},
+	{"published_at", []string{"published_at", "发布时间"}},
+	{"captured_at", []string{"captured_at", "统计时间", "采集时间"}},
+	{"impressions", []string{"impressions", "展现量", "展现"}},
 	{"reads", []string{"reads", "阅读", "观看", "浏览", "阅读数", "播放"}},
 	{"likes", []string{"likes", "点赞", "赞"}},
 	{"wows", []string{"wows", "在看"}},
@@ -33,21 +42,27 @@ var metricColumnAliases = []struct {
 var metricSep = regexp.MustCompile(`\t+|\s{2,}|\|+`)
 
 type metricPreviewRow struct {
-	Title         string     `json:"title"`
-	WorkID        *uuid.UUID `json:"work_id"`
-	Matched       bool       `json:"matched"`
-	MatchType     string     `json:"match_type"` // exact | fuzzy | none
-	Similarity    float64    `json:"similarity"`
-	Estimated     bool       `json:"estimated"`
-	Reads         *int       `json:"reads"`
-	Likes         *int       `json:"likes"`
-	Wows          *int       `json:"wows"`
-	Favorites     *int       `json:"favorites"`
-	Comments      *int       `json:"comments"`
-	Shares        *int       `json:"shares"`
-	FollowsGained *int       `json:"follows_gained"`
-	Error         string     `json:"error"`
-	Raw           []string   `json:"raw,omitempty"`
+	Title            string     `json:"title"`
+	URL              string     `json:"url,omitempty"`
+	ContentFormat    string     `json:"content_format,omitempty"`
+	PublishedAt      string     `json:"published_at,omitempty"`
+	CapturedAt       string     `json:"captured_at,omitempty"`
+	WorkID           *uuid.UUID `json:"work_id"`
+	Matched          bool       `json:"matched"`
+	MatchType        string     `json:"match_type"` // exact | fuzzy | none
+	Similarity       float64    `json:"similarity"`
+	Estimated        bool       `json:"estimated"`
+	Reads            *int       `json:"reads"`
+	Impressions      *int64     `json:"impressions"`
+	ImpressionsExact *string    `json:"impressions_exact,omitempty"`
+	Likes            *int       `json:"likes"`
+	Wows             *int       `json:"wows"`
+	Favorites        *int       `json:"favorites"`
+	Comments         *int       `json:"comments"`
+	Shares           *int       `json:"shares"`
+	FollowsGained    *int       `json:"follows_gained"`
+	Error            string     `json:"error"`
+	Raw              []string   `json:"raw,omitempty"`
 }
 
 // parseCount parses 1,234 / 10万+ / 1.2万 / 3亿; a trailing "+" marks a lower-bound estimate.
@@ -76,26 +91,167 @@ func parseCount(cell string) (int, bool, error) {
 	return int(v * float64(mult)), estimated, nil
 }
 
-// matchWork resolves a pasted title to a work of the account: exact first, then trgm fuzzy ≥ 0.4.
-func (s *Server) matchWork(ctx context.Context, accountID uuid.UUID, title string) (*uuid.UUID, string, float64) {
-	var id uuid.UUID
-	if err := s.db.QueryRow(ctx, `SELECT id FROM work WHERE account_id=$1 AND deleted_at IS NULL AND title=$2 ORDER BY updated_at DESC LIMIT 1`,
-		accountID, title).Scan(&id); err == nil {
-		return &id, "exact", 1
+func parseCount64(cell string) (int64, bool, error) {
+	t := strings.ReplaceAll(strings.TrimSpace(cell), ",", "")
+	t = strings.ReplaceAll(t, "，", "")
+	if t == "" {
+		return 0, false, nil
 	}
-	var best uuid.UUID
-	var sim float64
-	if err := s.db.QueryRow(ctx, `SELECT id, similarity(title,$2) FROM work WHERE account_id=$1 AND deleted_at IS NULL
-		AND similarity(title,$2) >= 0.4 ORDER BY similarity(title,$2) DESC LIMIT 1`, accountID, title).Scan(&best, &sim); err != nil {
+	estimated := strings.HasSuffix(t, "+")
+	t = strings.TrimSuffix(t, "+")
+	multiplier := int64(1)
+	switch {
+	case strings.HasSuffix(t, "亿"):
+		multiplier, t = 100000000, strings.TrimSuffix(t, "亿")
+	case strings.HasSuffix(t, "万"):
+		multiplier, t = 10000, strings.TrimSuffix(t, "万")
+	}
+	if t == "" {
+		return 0, false, fmt.Errorf("「%s」不是数字", cell)
+	}
+	value, ok := new(big.Rat).SetString(t)
+	if !ok || value.Sign() < 0 {
+		return 0, false, fmt.Errorf("「%s」不是有效的展现量整数", cell)
+	}
+	value.Mul(value, new(big.Rat).SetInt64(multiplier))
+	if !value.IsInt() || !value.Num().IsInt64() {
+		return 0, false, fmt.Errorf("「%s」不是有效的展现量整数", cell)
+	}
+	return value.Num().Int64(), estimated, nil
+}
+
+// matchWork resolves a pasted title to a work of the account: exact first, then trgm fuzzy ≥ 0.4.
+func (s *Server) matchWork(ctx context.Context, accountID uuid.UUID, title string, conservative bool) (*uuid.UUID, string, float64) {
+	rows, err := s.db.Query(ctx, `SELECT id FROM work WHERE account_id=$1 AND deleted_at IS NULL AND title=$2 ORDER BY updated_at DESC LIMIT 2`, accountID, title)
+	if err == nil {
+		ids := []uuid.UUID{}
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, "none", 0
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if len(ids) == 1 {
+			return &ids[0], "exact", 1
+		}
+		if len(ids) > 1 {
+			if conservative {
+				return nil, "none", 0
+			}
+			return &ids[0], "exact", 1
+		}
+	}
+	fuzzy, err := s.db.Query(ctx, `SELECT id, similarity(title,$2) FROM work WHERE account_id=$1 AND deleted_at IS NULL
+		AND similarity(title,$2) >= 0.4 ORDER BY similarity(title,$2) DESC, updated_at DESC LIMIT 2`, accountID, title)
+	if err != nil {
 		return nil, "none", 0
 	}
-	return &best, "fuzzy", sim
+	defer fuzzy.Close()
+	var best uuid.UUID
+	var similarity float64
+	count := 0
+	for fuzzy.Next() {
+		var id uuid.UUID
+		var score float64
+		if err := fuzzy.Scan(&id, &score); err != nil {
+			return nil, "none", 0
+		}
+		if count == 0 {
+			best, similarity = id, score
+		}
+		count++
+	}
+	if count == 0 || (conservative && count > 1) {
+		return nil, "none", similarity
+	}
+	return &best, "fuzzy", similarity
+}
+
+func samePublishedURL(left, right string) bool {
+	parse := func(raw string) (string, bool) {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+			return "", false
+		}
+		u.Scheme = strings.ToLower(u.Scheme)
+		u.Host = strings.ToLower(u.Host)
+		u.Fragment = ""
+		u.RawFragment = ""
+		u.Path = strings.TrimRight(u.Path, "/")
+		if u.Path == "" {
+			u.Path = "/"
+		}
+		return u.String(), true
+	}
+	a, aok := parse(left)
+	b, bok := parse(right)
+	return aok && bok && a == b
+}
+
+func (s *Server) matchWorkURL(ctx context.Context, accountID uuid.UUID, rawURL string) *uuid.UUID {
+	rows, err := s.db.Query(ctx, `SELECT id, published_url FROM work WHERE account_id=$1 AND deleted_at IS NULL AND published_url IS NOT NULL`, accountID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var match uuid.UUID
+	count := 0
+	for rows.Next() {
+		var id uuid.UUID
+		var saved string
+		if err := rows.Scan(&id, &saved); err != nil {
+			return nil
+		}
+		if samePublishedURL(rawURL, saved) {
+			match = id
+			count++
+		}
+	}
+	if rows.Err() != nil || count != 1 {
+		return nil
+	}
+	return &match
+}
+
+func (s *Server) matchMetricImportRow(ctx context.Context, accountID uuid.UUID, platform string, cells []string, colByKey map[string]int, row *metricPreviewRow) {
+	if rawID := metricCell(cells, colByKey, "work_id"); rawID != "" {
+		id, err := uuid.Parse(rawID)
+		if err != nil {
+			row.Error = "作品 ID 格式无效"
+			return
+		}
+		var owned uuid.UUID
+		if err := s.db.QueryRow(ctx, `SELECT id FROM work WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL`, id, accountID).Scan(&owned); err != nil {
+			row.Error = "作品 ID 不属于当前账号"
+			return
+		}
+		row.WorkID, row.MatchType, row.Matched = &owned, "exact", true
+	}
+	if row.WorkID == nil && row.Error == "" && row.URL != "" {
+		row.WorkID = s.matchWorkURL(ctx, accountID, row.URL)
+		if row.WorkID != nil {
+			row.MatchType, row.Matched = "exact", true
+		}
+	}
+	if row.WorkID == nil && row.Error == "" && row.Title != "" {
+		id, kind, similarity := s.matchWork(ctx, accountID, row.Title, platform == "toutiao")
+		row.WorkID, row.MatchType, row.Similarity, row.Matched = id, kind, similarity, id != nil
+	}
+	if platform == "toutiao" && row.WorkID != nil && row.ContentFormat != "" {
+		var actualFormat string
+		if err := s.db.QueryRow(ctx, `SELECT content_format FROM work WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL`, *row.WorkID, accountID).Scan(&actualFormat); err != nil || actualFormat != row.ContentFormat {
+			row.WorkID, row.Matched, row.MatchType = nil, false, "none"
+		}
+	}
 }
 
 // fillMetricRow parses the numeric columns of one row into the preview row.
 func fillMetricRow(cells []string, colByKey map[string]int, row *metricPreviewRow) {
 	for _, def := range metricColumnAliases {
-		if def.Key == "title" {
+		if def.Key == "title" || def.Key == "work_id" || def.Key == "url" || def.Key == "content_format" || def.Key == "published_at" || def.Key == "captured_at" {
 			continue
 		}
 		i, ok := colByKey[def.Key]
@@ -104,6 +260,18 @@ func fillMetricRow(cells []string, colByKey map[string]int, row *metricPreviewRo
 		}
 		cell := strings.TrimSpace(cells[i])
 		if cell == "" {
+			continue
+		}
+		if def.Key == "impressions" {
+			v, estimated, err := parseCount64(cell)
+			if err != nil {
+				row.Error = fmt.Sprintf("「%s」列无法解析：%s", def.Names[0], cell)
+				continue
+			}
+			row.Impressions = &v
+			exact := strconv.FormatInt(v, 10)
+			row.ImpressionsExact = &exact
+			row.Estimated = row.Estimated || estimated
 			continue
 		}
 		v, estimated, err := parseCount(cell)
@@ -135,7 +303,7 @@ func fillMetricRow(cells []string, colByKey map[string]int, row *metricPreviewRo
 // parseMetricText parses pasted table text: one work per line, columns split by tab, pipe, or 2+ spaces.
 // A header line containing 标题 maps columns by alias; otherwise the default order is
 // 标题,阅读,点赞,在看,收藏,评论,分享,涨粉.
-func (s *Server) parseMetricText(ctx context.Context, accountID uuid.UUID, text string) []metricPreviewRow {
+func (s *Server) parseMetricText(ctx context.Context, accountID uuid.UUID, platform, text string) []metricPreviewRow {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	defaultOrder := []string{"reads", "likes", "wows", "favorites", "comments", "shares", "follows_gained"}
 	colByKey := map[string]int{"title": 0}
@@ -153,8 +321,12 @@ func (s *Server) parseMetricText(ctx context.Context, accountID uuid.UUID, text 
 		}
 		hasHeader := false
 		for _, c := range cells {
-			if c == "标题" || strings.EqualFold(c, "title") {
-				hasHeader = true
+			for _, def := range metricColumnAliases {
+				for _, name := range def.Names {
+					if strings.EqualFold(c, name) && (def.Key == "title" || platform == "toutiao") {
+						hasHeader = true
+					}
+				}
 			}
 		}
 		if hasHeader {
@@ -188,17 +360,25 @@ func (s *Server) parseMetricText(ctx context.Context, accountID uuid.UUID, text 
 			title = cells[j]
 		}
 		row.Title = title
+		row.URL = metricCell(cells, colByKey, "url")
+		row.ContentFormat = metricCell(cells, colByKey, "content_format")
+		row.PublishedAt = metricCell(cells, colByKey, "published_at")
+		row.CapturedAt = metricCell(cells, colByKey, "captured_at")
 		fillMetricRow(cells, colByKey, &row)
-		if title == "" {
+		s.matchMetricImportRow(ctx, accountID, platform, cells, colByKey, &row)
+		if title == "" && platform != "toutiao" {
 			row.Error = "缺少标题列"
-		} else if row.Error == "" {
-			id, matchType, sim := s.matchWork(ctx, accountID, title)
-			row.WorkID, row.MatchType, row.Similarity = id, matchType, sim
-			row.Matched = id != nil
 		}
 		out = append(out, row)
 	}
 	return out
+}
+
+func metricCell(cells []string, colByKey map[string]int, key string) string {
+	if i, ok := colByKey[key]; ok && i >= 0 && i < len(cells) {
+		return strings.TrimSpace(cells[i])
+	}
+	return ""
 }
 
 // importMetrics is the batch backfill entry (FR-M11-04, DEV-U106): paste text or CSV preview,
@@ -215,6 +395,10 @@ func (s *Server) importMetrics(w http.ResponseWriter, r *http.Request) error {
 			Rows   []struct {
 				Title         string `json:"title"`
 				WorkID        string `json:"work_id"`
+				URL           string `json:"url"`
+				ContentFormat string `json:"content_format"`
+				PublishedAt   string `json:"published_at"`
+				CapturedAt    string `json:"captured_at"`
 				Reads         *int   `json:"reads"`
 				Likes         *int   `json:"likes"`
 				Wows          *int   `json:"wows"`
@@ -222,13 +406,14 @@ func (s *Server) importMetrics(w http.ResponseWriter, r *http.Request) error {
 				Comments      *int   `json:"comments"`
 				Shares        *int   `json:"shares"`
 				FollowsGained *int   `json:"follows_gained"`
+				Impressions   *int64 `json:"impressions"`
 			} `json:"rows"`
 		}
 		if err := decode(r, &in); err != nil {
 			return err
 		}
 		if in.Text != "" {
-			return ok(w, map[string]any{"preview": s.parseMetricText(r.Context(), a.ID, in.Text),
+			return ok(w, map[string]any{"preview": s.parseMetricText(r.Context(), a.ID, a.Platform, in.Text),
 				"message": "请人工确认匹配后，以 JSON 提交 rows 完成导入"})
 		}
 		source := "paste"
@@ -239,15 +424,53 @@ func (s *Server) importMetrics(w http.ResponseWriter, r *http.Request) error {
 		err = s.withTx(r.Context(), func(tx pgx.Tx) error {
 			for i, row := range in.Rows {
 				id, err := uuid.Parse(strings.TrimSpace(row.WorkID))
-				if err != nil {
+				if err != nil && strings.TrimSpace(row.WorkID) != "" {
+					return validation(fmt.Sprintf("第 %d 行的作品 ID 格式无效", i+1))
+				}
+				if strings.TrimSpace(row.WorkID) == "" && strings.TrimSpace(row.Title) != "" {
+					matched, kind, _ := s.matchWork(r.Context(), a.ID, strings.TrimSpace(row.Title), a.Platform == "toutiao")
+					if matched != nil && kind == "exact" {
+						id, err = *matched, nil
+					}
+				}
+				if err != nil || id == uuid.Nil {
 					return validation(fmt.Sprintf("第 %d 行没有匹配的作品，请先为每行指定作品或删除该行", i+1))
 				}
-				var okID uuid.UUID
-				if err := tx.QueryRow(r.Context(), `SELECT id FROM work WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL`, id, a.ID).Scan(&okID); err != nil {
+				var platform, contentFormat, status string
+				var publishedAt *time.Time
+				var publishedURL *string
+				if err := tx.QueryRow(r.Context(), `SELECT a.platform,w.content_format,w.published_at,w.published_url,w.status FROM work w JOIN platform_account a ON a.id=w.account_id
+					WHERE w.id=$1 AND w.account_id=$2 AND w.deleted_at IS NULL`, id, a.ID).Scan(&platform, &contentFormat, &publishedAt, &publishedURL, &status); err != nil {
 					return validation(fmt.Sprintf("第 %d 行的作品不存在或不属于当前账号", i+1))
 				}
-				if _, _, err := upsertMetric(r.Context(), tx, metricWrite{WorkID: okID, CapturedAt: s.now(), Source: source,
-					Reads: row.Reads, Likes: row.Likes, Wows: row.Wows, Favorites: row.Favorites, Comments: row.Comments,
+				if platform == "toutiao" && status != "pushed" && status != "packed" && status != "published" {
+					return validation(fmt.Sprintf("第 %d 行的作品尚未准备发布，不能回填数据", i+1))
+				}
+				if row.ContentFormat != "" && row.ContentFormat != contentFormat {
+					return validation(fmt.Sprintf("第 %d 行的形态与所选作品不一致", i+1))
+				}
+				if row.PublishedAt != "" {
+					parsed, parseErr := time.Parse(time.RFC3339, row.PublishedAt)
+					if parseErr != nil || publishedAt == nil || !parsed.Equal(*publishedAt) {
+						return validation(fmt.Sprintf("第 %d 行的发布时间与所选作品不一致，请核对后再导入", i+1))
+					}
+				}
+				if row.URL != "" && (publishedURL == nil || !samePublishedURL(row.URL, *publishedURL)) {
+					return validation(fmt.Sprintf("第 %d 行的链接与所选作品不一致，请核对后再导入", i+1))
+				}
+				if row.Impressions != nil && platform != "toutiao" {
+					return validation(fmt.Sprintf("第 %d 行的展现量仅适用于今日头条作品", i+1))
+				}
+				okID := id
+				capturedAt := s.now()
+				if row.CapturedAt != "" {
+					capturedAt, err = time.Parse(time.RFC3339, row.CapturedAt)
+					if err != nil {
+						return validation(fmt.Sprintf("第 %d 行的采集时间格式无效", i+1))
+					}
+				}
+				if _, _, err := s.upsertMetricWithAudit(r.Context(), tx, metricWrite{WorkID: okID, CapturedAt: capturedAt, Source: source,
+					Reads: row.Reads, Impressions: row.Impressions, Likes: row.Likes, Wows: row.Wows, Favorites: row.Favorites, Comments: row.Comments,
 					Shares: row.Shares, FollowsGained: row.FollowsGained}); err != nil {
 					return err
 				}
@@ -289,27 +512,21 @@ func (s *Server) importMetrics(w http.ResponseWriter, r *http.Request) error {
 			}
 		}
 	}
-	if _, hasTitle := colByKey["title"]; !hasTitle {
+	if _, hasTitle := colByKey["title"]; !hasTitle && a.Platform != "toutiao" {
 		return validation("CSV 需要「标题」列以便匹配作品")
 	}
 	preview := make([]metricPreviewRow, 0, len(records)-1)
 	for _, rec := range records[1:] {
-		i, hasTitle := colByKey["title"]
-		if !hasTitle || i >= len(rec) {
-			continue
-		}
-		title := strings.TrimSpace(rec[i])
-		if title == "" {
-			continue
-		}
-		row := metricPreviewRow{Title: title, Raw: rec}
+		title := metricCell(rec, colByKey, "title")
+		row := metricPreviewRow{Title: title, Raw: rec, URL: metricCell(rec, colByKey, "url"),
+			ContentFormat: metricCell(rec, colByKey, "content_format"), PublishedAt: metricCell(rec, colByKey, "published_at"), CapturedAt: metricCell(rec, colByKey, "captured_at")}
 		fillMetricRow(rec, colByKey, &row)
-		if row.Error == "" {
-			id, matchType, sim := s.matchWork(r.Context(), a.ID, title)
-			row.WorkID, row.MatchType, row.Similarity = id, matchType, sim
-			row.Matched = id != nil
-		} else {
-			row.MatchType = "none"
+		if title == "" && a.Platform != "toutiao" {
+			continue
+		}
+		s.matchMetricImportRow(r.Context(), a.ID, a.Platform, rec, colByKey, &row)
+		if row.Error == "" && row.WorkID == nil && title == "" {
+			row.Error = "请选择本账号中对应的作品"
 		}
 		preview = append(preview, row)
 	}

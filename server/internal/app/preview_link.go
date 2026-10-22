@@ -20,9 +20,10 @@ const previewLinkTTL = 24 * time.Hour
 var errPreviewExpired = errors.New("preview link expired")
 
 type previewClaims struct {
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	WorkID      uuid.UUID `json:"work_id"`
-	ExpiresAt   int64     `json:"expires_at"`
+	WorkspaceID   uuid.UUID `json:"workspace_id"`
+	WorkID        uuid.UUID `json:"work_id"`
+	ExpiresAt     int64     `json:"expires_at"`
+	BasisRevision int       `json:"basis_revision,omitempty"`
 }
 
 type previewSection struct {
@@ -83,14 +84,35 @@ func (s *Server) createPreviewLink(w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
-	if m.Account.Platform != "wechat_mp" {
-		return validation("手机扫码预览仅支持公众号作品")
+	if m.Account.Platform != "wechat_mp" && m.Account.Platform != "toutiao" {
+		return validation("分享预览仅支持公众号和今日头条作品")
+	}
+	basis := 0
+	if m.Account.Platform == "toutiao" {
+		var in struct {
+			BasisRevision *int `json:"basis_revision"`
+		}
+		if err := decodeOptional(r, &in); err != nil {
+			return err
+		}
+		if in.BasisRevision == nil || *in.BasisRevision < 1 {
+			return validation("必须提供有效的作品修订号 basis_revision")
+		}
+		basis = *in.BasisRevision
+		_, source, err := s.buildToutiaoPack(r.Context(), m.ID, basis, false)
+		if err != nil {
+			return err
+		}
+		if err := s.verifyToutiaoPackBasis(r.Context(), m.ID, basis, source.Status); err != nil {
+			return err
+		}
 	}
 	expires := s.now().Add(previewLinkTTL).UTC().Truncate(time.Second)
 	token, err := s.signPreview(previewClaims{
-		WorkspaceID: ident(r.Context()).WorkspaceID,
-		WorkID:      m.ID,
-		ExpiresAt:   expires.Unix(),
+		WorkspaceID:   ident(r.Context()).WorkspaceID,
+		WorkID:        m.ID,
+		ExpiresAt:     expires.Unix(),
+		BasisRevision: basis,
 	})
 	if err != nil {
 		return err
@@ -116,17 +138,20 @@ func (s *Server) getPublicPreview(w http.ResponseWriter, r *http.Request) error 
 	if err != nil {
 		return err
 	}
-	var title, accountName, theme string
+	var title, accountName, theme, platform string
 	var accountID uuid.UUID
-	err = s.db.QueryRow(r.Context(), `SELECT w.title, a.name, w.theme, a.id
+	err = s.db.QueryRow(r.Context(), `SELECT w.title, a.name, w.theme, a.id, a.platform
 		FROM work w JOIN platform_account a ON a.id=w.account_id
-		WHERE w.id=$1 AND a.workspace_id=$2 AND a.platform='wechat_mp' AND w.deleted_at IS NULL`,
-		claims.WorkID, claims.WorkspaceID).Scan(&title, &accountName, &theme, &accountID)
+		WHERE w.id=$1 AND a.workspace_id=$2 AND a.platform IN ('wechat_mp','toutiao') AND w.deleted_at IS NULL`,
+		claims.WorkID, claims.WorkspaceID).Scan(&title, &accountName, &theme, &accountID, &platform)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errNotFound
 	}
 	if err != nil {
 		return err
+	}
+	if platform == "toutiao" {
+		return s.getToutiaoPublicPreview(w, r, claims, accountName)
 	}
 	rows, err := s.db.Query(r.Context(), `SELECT heading, content_md FROM work_section
 		WHERE work_id=$1 AND deleted_at IS NULL ORDER BY position, created_at`, claims.WorkID)
@@ -190,6 +215,17 @@ func (s *Server) getPublicPreviewAsset(w http.ResponseWriter, r *http.Request) e
 	assetID, err := uuid.Parse(chi.URLParam(r, "assetId"))
 	if err != nil {
 		return errNotFound
+	}
+	var platform string
+	if err := s.db.QueryRow(r.Context(), `SELECT a.platform FROM work w JOIN platform_account a ON a.id=w.account_id
+		WHERE w.id=$1 AND a.workspace_id=$2 AND w.deleted_at IS NULL`, claims.WorkID, claims.WorkspaceID).Scan(&platform); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errNotFound
+		}
+		return err
+	}
+	if platform == "toutiao" {
+		return s.getToutiaoPublicPreviewAsset(w, r, claims, assetID)
 	}
 	var a assetRow
 	err = s.db.QueryRow(r.Context(), `SELECT x.id, x.work_id, x.storage_path, x.mime, x.sha256

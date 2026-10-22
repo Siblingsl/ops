@@ -545,7 +545,7 @@ func (s *Server) createInbox(w http.ResponseWriter, r *http.Request) error {
 func (s *Server) ownedInbox(ctx context.Context, id uuid.UUID) (*InboxItem, error) {
 	x, err := scanInbox(s.db.QueryRow(ctx, `SELECT `+inboxCols+` FROM inbox_item WHERE id=$1 AND workspace_id=$2`, id, ident(ctx).WorkspaceID))
 	if err != nil {
-		return nil, err
+		return nil, errNotFound
 	}
 	return &x, nil
 }
@@ -562,6 +562,23 @@ func (s *Server) deleteInbox(w http.ResponseWriter, r *http.Request) error {
 	if _, err := s.db.Exec(ctx, `UPDATE inbox_item SET status='dismissed', updated_at=now() WHERE id=$1`, id); err != nil {
 		return err
 	}
+	return ok(w, map[string]any{"ok": true})
+}
+
+// restoreInbox puts a dismissed inbox item back so "丢掉" can be undone (TP-01).
+func (s *Server) restoreInbox(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	if _, err := s.ownedInbox(ctx, id); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE inbox_item SET status='new', updated_at=now() WHERE id=$1`, id); err != nil {
+		return err
+	}
+	s.audit(ctx, "inbox_restore", "inbox_item", id.String(), "ok", nil)
 	return ok(w, map[string]any{"ok": true})
 }
 

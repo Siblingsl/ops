@@ -54,7 +54,7 @@ func TestPlatformKillSwitchStopsCollection(t *testing.T) {
 	}
 	// claim 直接拒绝（即使队列里已有旧 run）。
 	if _, err := env.srv.claimPlatformRun(context.WithValue(context.Background(), ctxMember,
-		&identity{UserID: f.UserID, WorkspaceID: f.Workspace, Role: "owner"}), f.DeviceID); err == nil {
+		&identity{UserID: f.UserID, WorkspaceID: f.Workspace, Role: "owner"}), f.DeviceID, platformClaimCapabilities{ProtocolVersions: []int{1}}); err == nil {
 		t.Fatal("关闭后 claim 必须被拒绝")
 	} else if ae, ok := platformAPIError(err); !ok || ae.Code != "platform_collection_disabled" {
 		t.Fatalf("应返回 platform_collection_disabled，实际 %v", err)

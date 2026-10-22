@@ -53,10 +53,12 @@ type CredState struct {
 
 // formatMatrix 是账号类型（内容形态）的唯一权威清单（D-048 第 9 节，2026-10-10 确认）。
 // 每个类型必须有真实工作流支持：qa_article/briefing/list_note/script 复用文字流＋专属模板，
-// card_post 走逐卡 AI 生图流；类型在创建后固定（updateAccount 拒绝修改）。
+// card_post 走逐卡 AI 生图流；类型创建后选定，可经显式确认在同平台内迁移（D-123），
+// 跨平台与矩阵外一律拒绝（updateAccount）。
 var formatMatrix = map[string][]string{
 	"wechat_mp": {"long_article", "qa_article", "briefing", "card_post", "script", "comic"},
 	"xhs":       {"image_note", "list_note", "card_post", "script", "comic"},
+	"toutiao":   {"long_article", "micro_post"},
 }
 
 func validFormat(platform, format string) bool {
@@ -164,7 +166,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) error {
 		return validationFields("请完善账号信息", map[string]string{"name": "请填写账号名称"})
 	}
 	if _, ok := formatMatrix[in.Platform]; !ok {
-		return validationFields("请完善账号信息", map[string]string{"platform": "请选择公众号或小红书"})
+		return validationFields("请完善账号信息", map[string]string{"platform": "请选择有效平台"})
 	}
 	if !validFormat(in.Platform, in.ContentFormat) {
 		return validationFields("请完善账号信息", map[string]string{"content_format": "该平台不支持这种内容类型（见账号类型说明）"})
@@ -212,14 +214,19 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		Name           *string `json:"name"`
-		ContentFormat  *string `json:"content_format"`
-		TypeNote       *string `json:"type_note"`
-		DailyPushLimit *int    `json:"daily_push_limit"`
-		WechatAuto     *bool   `json:"metrics_wechat_auto"`
+		Name              *string `json:"name"`
+		Platform          *string `json:"platform"`
+		ContentFormat     *string `json:"content_format"`
+		TypeNote          *string `json:"type_note"`
+		DailyPushLimit    *int    `json:"daily_push_limit"`
+		WechatAuto        *bool   `json:"metrics_wechat_auto"`
+		ConfirmTypeChange bool    `json:"confirm_type_change"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
+	}
+	if in.Platform != nil && strings.TrimSpace(*in.Platform) != a.Platform {
+		return validation("账号不能跨平台修改，请新建对应平台账号")
 	}
 	if in.WechatAuto != nil {
 		if a.Platform != "wechat_mp" {
@@ -236,9 +243,26 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) error {
 			return validation("请填写账号名称")
 		}
 	}
-	// D-048 第 5.2 节：账号类型创建后固定，普通更新不接受类型变更，confirm 也不能绕过。
-	if in.ContentFormat != nil && *in.ContentFormat != a.ContentFormat {
-		return validation("账号类型在创建后不可修改。如需其他类型，请另建新账号；本账号的业务资料仍可继续修改。")
+	// D-123：同平台内允许迁移账号类型。必须显式确认；已有作品按作品级快照保持原类型
+	// （works.go 建作品时快照 content_format，检查/推送/打包/编辑器全读作品级），
+	// 因此迁移不动任何历史作品数据。跨平台不开放：凭证、封面比例、推送链路不同。
+	// 比较前先 TrimSpace：带空格的同值请求按未变化处理，不触发确认门也不误记审计。
+	typeChange := false
+	from, to := "", ""
+	if in.ContentFormat != nil {
+		target := strings.TrimSpace(*in.ContentFormat)
+		if target != a.ContentFormat {
+			if !in.ConfirmTypeChange {
+				return apiErr(409, "confirm_required",
+					"修改账号类型会影响后续新建作品，请确认后重试；已有作品保持原类型不变。")
+			}
+			if !validFormat(a.Platform, target) {
+				return validationFields("请完善账号信息", map[string]string{"content_format": "该平台不支持这种内容类型（见账号类型说明）"})
+			}
+			from, to = a.ContentFormat, target
+			a.ContentFormat = target
+			typeChange = true
+		}
 	}
 	if in.TypeNote != nil {
 		a.TypeNote = truncateRunes(strings.TrimSpace(*in.TypeNote), 200)
@@ -253,12 +277,44 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) error {
 		a.ID, a.Name, a.ContentFormat, a.TypeNote, a.DailyPushLimit); err != nil {
 		return err
 	}
-	s.audit(r.Context(), "account_update", "platform_account", a.ID.String(), "ok", nil)
+	var summary map[string]any
+	if typeChange {
+		summary, err = s.typeChangeSummary(r.Context(), a.ID, from, to)
+		if err != nil {
+			return err
+		}
+		s.audit(r.Context(), "account_type_change", "platform_account", a.ID.String(), "ok", summary)
+	} else {
+		s.audit(r.Context(), "account_update", "platform_account", a.ID.String(), "ok", nil)
+	}
 	a, err = s.account(r.Context(), a.ID)
 	if err != nil {
 		return err
 	}
+	if typeChange {
+		return ok(w, map[string]any{"account": a, "type_change": summary})
+	}
 	return ok(w, a)
+}
+
+// typeChangeSummary 汇总类型迁移的影响面：多少篇作品保持原类型、多少张角色卡保留、
+// 多少个未采用的计划槽位仍是旧类型（这些槽位不能用，需重新启用方案后按新类型重建）。
+func (s *Server) typeChangeSummary(ctx context.Context, accountID uuid.UUID, from, to string) (map[string]any, error) {
+	var works int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL`, accountID).Scan(&works); err != nil {
+		return nil, err
+	}
+	var cards int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM character_card WHERE account_id=$1`, accountID).Scan(&cards); err != nil {
+		return nil, err
+	}
+	var staleSlots int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM account_plan_slot
+		WHERE account_id=$1 AND date >= $2::date AND status <> 'adopted' AND coalesce(format,'') <> '' AND format <> $3`,
+		accountID, s.today().Format("2006-01-02"), to).Scan(&staleSlots); err != nil {
+		return nil, err
+	}
+	return map[string]any{"from": from, "to": to, "works_kept": works, "character_cards_kept": cards, "stale_plan_slots": staleSlots}, nil
 }
 
 func (s *Server) setAccountStatus(status string) handlerFunc {

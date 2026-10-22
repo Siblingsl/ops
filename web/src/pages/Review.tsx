@@ -1,11 +1,11 @@
-import { DailyStatsCard } from './ops/DailyStats'
+﻿import { DailyStatsCard } from './ops/DailyStats'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart3, Brain, Check, ClipboardPaste, Lightbulb, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
-import { Badge, Button, Card, CardHeader, cn, Empty, Field, HumanGate, IconButton, Input, PageHeader, PageLoading, Select, StatusBadge, Textarea } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, cn, Empty, Field, HumanGate, IconButton, Input, PageHeader, PageLoading, PageState, Select, StatusBadge, Textarea } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post, rawRequest } from '@/lib/api'
 import { waitJob } from '@/lib/v3'
@@ -540,6 +540,12 @@ export default function Review() {
     if (wantDigest && loaded) document.getElementById('digests')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [wantDigest, loaded])
   if (!acc || board.isLoading) return <PageLoading />
+  // XC-04：复盘看板请求失败要给"加载失败 + 重试"。
+  if (board.isError || reports.isError) {
+    return <div className="mx-auto max-w-2xl px-6 py-16"><PageState loading={false}
+      error={board.error ?? reports.error}
+      onRetry={() => { void board.refetch(); void reports.refetch() }} /></div>
+  }
   const rows = board.data ?? []
   const summaryRows = rows.flatMap((row) => row.d7?.day_offset === 7 ? [row.d7] : [])
   const summaryValue = (key: MetricKey) => {
@@ -748,7 +754,7 @@ export default function Review() {
       </div>}
       {(!desktopPresentation || showAdvanced) && <div id="desktop-review-followers" className="mt-6 space-y-6 scroll-mt-24">
         <FollowersCard accountId={acc.id} wechat={acc.platform === 'wechat_mp'} />
-        <DailyStatsCard accountId={acc.id} />
+        <DailyStatsCard accountId={acc.id} contentFormat={acc.platform === 'toutiao' ? toutiaoFormat : undefined} />
         <div id="desktop-review-insights" className="scroll-mt-24"><AttributionCard accountId={acc.id} contentFormat={acc.platform === 'toutiao' ? toutiaoFormat : undefined} /></div>
         <div className="grid gap-6 lg:grid-cols-2">
           <TopWorksCard accountId={acc.id} contentFormat={acc.platform === 'toutiao' ? toutiaoFormat : undefined} />

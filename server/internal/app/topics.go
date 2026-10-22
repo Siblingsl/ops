@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type Topic struct {
@@ -55,11 +57,11 @@ func scanTopic(row interface{ Scan(...any) error }) (Topic, error) {
 	return t, err
 }
 
-// D-048 第 5.7 节：账号类型创建后固定，选题的预计形态只能是空或账号类型；
-// 历史选题的其他形态值保留展示（列表有"形态与账号类型不匹配"提示），但开写会被拦截。
+// Existing platforms remain tied to the account default. Toutiao topics may choose either supported shape.
 func validateTopicFormat(a *Account, f *topicFields) error {
-	if f.Format != nil && *f.Format != "" && *f.Format != a.ContentFormat {
-		return validation(fmt.Sprintf("这个账号的类型是%s，选题预计形态只能是账号类型或留空", formatNames[a.ContentFormat]))
+	if f.Format != nil && *f.Format != "" {
+		_, err := resolveCreationFormat(a, *f.Format, "")
+		return err
 	}
 	return nil
 }
@@ -503,13 +505,12 @@ func (s *Server) createTopic(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, map[string]any{"topic": t, "similar": similar})
 }
 
-// topicSuggestOutput builds the JSON contract for topic suggestions. D-048 第 5.4 节：
-// 选题建议的形态只能是账号类型——账号类型创建后固定，其他形态的选题永远无法开写。
-func topicSuggestOutput(a *Account, hot bool) string {
+// topicSuggestOutput builds the JSON contract for the requested topic shape.
+func topicSuggestOutput(format string, hot bool) string {
 	if hot {
-		return fmt.Sprintf(`只输出 JSON：{"topics":[{"title":"选题标题","angle":"切入角度","reason":"推荐理由","timeliness":"时效提示","audience":"目标读者","hook":"钩子","needed_materials":[],"format":"%s","hot_item_id":null,"source_url":""}]}`, a.ContentFormat)
+		return fmt.Sprintf(`只输出 JSON：{"topics":[{"title":"选题标题","angle":"切入角度","reason":"推荐理由","timeliness":"时效提示","audience":"目标读者","hook":"钩子","needed_materials":[],"format":"%s","hot_item_id":null,"source_url":""}]}`, format)
 	}
-	return fmt.Sprintf(`只输出 JSON：{"topics":[{"title":"选题标题","angle":"一句话切入角度","reason":"推荐理由","audience":"目标读者","hook":"开头抓人的点","needed_materials":["需要的素材"],"format":"%s"}]}`, a.ContentFormat)
+	return fmt.Sprintf(`只输出 JSON：{"topics":[{"title":"选题标题","angle":"一句话切入角度","reason":"推荐理由","audience":"目标读者","hook":"开头抓人的点","needed_materials":["需要的素材"],"format":"%s"}]}`, format)
 }
 
 type topicSuggestion struct {
@@ -525,10 +526,10 @@ type topicSuggestion struct {
 	Format          string     `json:"format"`
 }
 
-func normalizeSuggestions(list []topicSuggestion, a *Account) {
+func normalizeSuggestions(list []topicSuggestion, format string) {
 	for i := range list {
 		if list[i].Format == "" {
-			list[i].Format = a.ContentFormat
+			list[i].Format = format
 		}
 		if list[i].NeededMaterials == nil {
 			list[i].NeededMaterials = []string{}
@@ -560,12 +561,19 @@ func (s *Server) suggestTopics(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		Direction string `json:"direction"`
+		Direction     string `json:"direction"`
+		ContentFormat string `json:"content_format"`
 	}
 	_ = decodeOptional(r, &in)
+	format, err := resolveCreationFormat(a, in.ContentFormat, "")
+	if err != nil {
+		return err
+	}
+	promptAccount := *a
+	promptAccount.ContentFormat = format
 	user := fmt.Sprintf(`## 选题需求
 方向关键词：%s
-账号类型：%s（每个选题必须适合这种类型的表达方式）
+本次作品形态：%s（每个选题必须适合这种形态的表达方式）
 最近的选题和作品标题（避免重复）：
 %s
 
@@ -573,7 +581,7 @@ func (s *Server) suggestTopics(w http.ResponseWriter, r *http.Request) error {
 为这个账号提出不少于 6 个选题建议。每个选题给出标题、切入角度、推荐理由、目标读者、钩子、需要的素材和预计形态。选题要贴合账号定位和目标读者，与最近的选题不重复；不要追逐无法核实的热点。
 
 ## 输出格式
-%s`, strings.TrimSpace(in.Direction), a.ContentFormat, "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "), topicSuggestOutput(a, false))
+%s`, strings.TrimSpace(in.Direction), formatNames[format], "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "), topicSuggestOutput(format, false))
 	samples, err := s.feedbackSamples(r.Context(), a.ID, "topic_suggest")
 	if err != nil {
 		return err
@@ -582,15 +590,15 @@ func (s *Server) suggestTopics(w http.ResponseWriter, r *http.Request) error {
 	var out struct {
 		Topics []topicSuggestion `json:"topics"`
 	}
-	res, err := s.runAIJSON(r.Context(), aiTask{Type: "topic_suggest", Account: a, User: user, SkipStyle: true}, &out, func() error {
+	res, err := s.runAIJSON(r.Context(), aiTask{Type: "topic_suggest", Account: &promptAccount, User: user, SkipStyle: true}, &out, func() error {
 		if len(out.Topics) < 5 {
 			return fmt.Errorf("选题少于 5 条")
 		}
 		for i := range out.Topics {
 			if out.Topics[i].Format == "" {
-				out.Topics[i].Format = a.ContentFormat
-			} else if out.Topics[i].Format != a.ContentFormat {
-				return fmt.Errorf("选题的预计形态必须为 %s（账号类型），不能输出其他类型", a.ContentFormat)
+				out.Topics[i].Format = format
+			} else if out.Topics[i].Format != format {
+				return fmt.Errorf("选题的预计形态必须为 %s，模型返回了 %s", format, out.Topics[i].Format)
 			}
 		}
 		return nil
@@ -598,7 +606,7 @@ func (s *Server) suggestTopics(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	normalizeSuggestions(out.Topics, a)
+	normalizeSuggestions(out.Topics, format)
 	return ok(w, map[string]any{"suggestions": out.Topics, "refs": res.Refs, "ai_call_id": res.CallID})
 }
 
@@ -611,12 +619,19 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 		return err
 	}
 	var in struct {
-		Direction string `json:"direction"`
-		Context   string `json:"context"` // 用户粘贴的公开资讯摘要，可选
+		Direction     string `json:"direction"`
+		Context       string `json:"context"` // 用户粘贴的公开资讯摘要，可选
+		ContentFormat string `json:"content_format"`
 	}
 	if err := decodeOptional(r, &in); err != nil {
 		return err
 	}
+	format, err := resolveCreationFormat(a, in.ContentFormat, "")
+	if err != nil {
+		return err
+	}
+	promptAccount := *a
+	promptAccount.ContentFormat = format
 	ctxText := strings.TrimSpace(in.Context)
 	ctxText = truncateRunes(ctxText, 4000)
 	if ctxText != "" {
@@ -651,7 +666,7 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 	}
 	user := fmt.Sprintf(`## 热点选题需求（合规来源）
 方向关键词：%s
-账号类型：%s（每个选题必须适合这种类型的表达方式）
+本次作品形态：%s（每个选题必须适合这种形态的表达方式）
 用户粘贴的公开资讯摘要（可为空）：
 %s
 
@@ -667,11 +682,11 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 
 ## 输出格式
 %s`,
-		strings.TrimSpace(in.Direction), a.ContentFormat, ctxText, "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "), topicSuggestOutput(a, true))
+		strings.TrimSpace(in.Direction), formatNames[format], ctxText, "- "+strings.Join(s.recentTitles(r.Context(), a.ID), "\n- "), topicSuggestOutput(format, true))
 	var out struct {
 		Topics []topicSuggestion `json:"topics"`
 	}
-	res, err := s.runAIJSON(r.Context(), aiTask{Type: "topic_hot_suggest", Account: a, User: user, SkipStyle: true, Refs: map[string]any{"hot_items": known}}, &out, func() error {
+	res, err := s.runAIJSON(r.Context(), aiTask{Type: "topic_hot_suggest", Account: &promptAccount, User: user, SkipStyle: true, Refs: map[string]any{"hot_items": known}}, &out, func() error {
 		if len(out.Topics) < 5 {
 			return fmt.Errorf("热点选题少于 5 条")
 		}
@@ -687,9 +702,9 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 				item.SourceURL = ""
 			}
 			if item.Format == "" {
-				item.Format = a.ContentFormat
-			} else if item.Format != a.ContentFormat {
-				return fmt.Errorf("选题的预计形态必须为 %s（账号类型），不能输出其他类型", a.ContentFormat)
+				item.Format = format
+			} else if item.Format != format {
+				return fmt.Errorf("选题的预计形态必须为 %s，模型返回了 %s", format, item.Format)
 			}
 		}
 		return nil
@@ -697,7 +712,7 @@ func (s *Server) suggestHotTopics(w http.ResponseWriter, r *http.Request) error 
 	if err != nil {
 		return err
 	}
-	normalizeSuggestions(out.Topics, a)
+	normalizeSuggestions(out.Topics, format)
 	return ok(w, map[string]any{"suggestions": out.Topics, "refs": res.Refs, "ai_call_id": res.CallID})
 }
 
@@ -730,8 +745,11 @@ func (s *Server) updateTopic(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	// 编辑允许把历史不匹配形态改为账号类型或留空；原值原样保存（不改类型）也兼容。
-	if in.Format != nil && *in.Format != "" && *in.Format != a.ContentFormat {
+	if a.Platform == "toutiao" {
+		if err := validateTopicFormat(a, &in.topicFields); err != nil {
+			return err
+		}
+	} else if in.Format != nil && *in.Format != "" && *in.Format != a.ContentFormat {
 		var cur string
 		_ = s.db.QueryRow(ctx, `SELECT coalesce(format,'') FROM topic WHERE id=$1`, id).Scan(&cur)
 		if *in.Format != cur {
@@ -782,27 +800,55 @@ func (s *Server) startWorkFromTopic(w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return err
 	}
-	// D-048 第 5.5 节：跨类型选题不能开写；历史不匹配选题明确提示，由人决定改形态或放弃。
+	var in struct {
+		ContentFormat string `json:"content_format"`
+	}
+	if err := decodeOptional(r, &in); err != nil {
+		return err
+	}
 	var tformat string
 	if err := s.db.QueryRow(ctx, `SELECT coalesce(format,'') FROM topic WHERE id=$1`, id).Scan(&tformat); err != nil {
 		return err
 	}
-	if tformat != "" && tformat != a.ContentFormat {
-		return stateInvalid(fmt.Sprintf("这个选题的预计形态是%s，与账号类型（%s）不一致，不能开写。请在编辑选题卡中改为账号类型，或放弃这条选题。", formatNames[tformat], formatNames[a.ContentFormat]))
+	format, err := resolveCreationFormat(a, in.ContentFormat, tformat)
+	if err != nil {
+		return err
 	}
 	var title, angle string
 	var needed []string
 	var planned *string
-	if err := s.db.QueryRow(ctx, `UPDATE topic SET status='adopted', updated_at=now() WHERE id=$1 RETURNING title, angle, needed_materials, to_char(planned_date,'YYYY-MM-DD')`,
-		id).Scan(&title, &angle, &needed, &planned); err != nil {
-		return err
-	}
-	workID, err := s.insertWork(ctx, a, &id, title, angle)
+	// NW-A7：采纳选题与建作品同一事务；已建过则直接返回那一篇，不再重复创建。
+	var workID uuid.UUID
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT title, angle, needed_materials, to_char(planned_date,'YYYY-MM-DD') FROM topic WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`,
+			id).Scan(&title, &angle, &needed, &planned); err != nil {
+			return err
+		}
+		var existing *uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT id FROM work WHERE topic_id=$1 AND deleted_at IS NULL ORDER BY created_at LIMIT 1`, id).Scan(&existing); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if existing != nil {
+			workID = *existing
+			return nil
+		}
+		id2, err := s.insertWorkTx(ctx, tx, a, &id, title, format, tformat, "", "topic")
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE topic SET status='adopted', updated_at=now() WHERE id=$1`, id); err != nil {
+			return err
+		}
+		if planned != nil {
+			if _, err := tx.Exec(ctx, `UPDATE work SET planned_date=$2::date WHERE id=$1`, id2, *planned); err != nil {
+				return err
+			}
+		}
+		workID = id2
+		return nil
+	})
 	if err != nil {
 		return err
-	}
-	if planned != nil {
-		_, _ = s.db.Exec(ctx, `UPDATE work SET planned_date=$2::date WHERE id=$1`, workID, *planned)
 	}
 	preselected := []uuid.UUID{}
 	seen := map[string]bool{}

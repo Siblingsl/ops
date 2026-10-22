@@ -11,6 +11,11 @@ import {
 } from './platform-capability';
 
 export const PLATFORM_PROTOCOL_VERSION = 1;
+export const PLATFORM_PROTOCOL_V2 = 2;
+const PLATFORM_ADAPTERS = Object.freeze({
+  xhs: { adapterVersion: 'xhs-1', mappingVersion: 1 },
+  wechat_mp: { adapterVersion: 'wechat-mp-1', mappingVersion: 1 }
+});
 
 // 服务端下发的固定动作与冻结目标；客户端不得自行扩大。
 export interface PlatformClaimedRun {
@@ -19,7 +24,10 @@ export interface PlatformClaimedRun {
   account_id: string;
   platform: 'wechat_mp' | 'xhs';
   trigger: 'manual' | 'daily' | 'node' | 'reconnect';
-  task_kind: 'probe' | 'discover' | 'collect';
+  task_kind: 'probe' | 'discover' | 'collect' | 'account_sync' | 'content';
+  wire_protocol_version?: number;
+  operation_id?: string | null;
+  operation_stage?: string;
   lease_generation: number;
   lease_expires_at: string | null;
   deadline_at: string | null;
@@ -69,6 +77,21 @@ export interface PlatformResultBatch {
   observations: PlatformObservationDraft[];
 }
 
+export type PlatformV2ResultType = 'account_snapshot' | 'work_catalog' | 'work_content' | 'metrics' | 'control';
+
+export interface PlatformV2ResultBatch {
+  protocol_version: 2;
+  lease_generation: number;
+  authorization_revision: number;
+  batch_seq: number;
+  final_batch: boolean;
+  run_status: 'succeeded' | 'partial' | 'failed' | 'canceled';
+  result_type: PlatformV2ResultType;
+  data: Record<string, unknown>;
+  stop_reason?: string | null;
+  error_code?: string | null;
+}
+
 export interface PlatformReceipt {
   batch_seq: number;
   receipt_id: string;
@@ -92,6 +115,27 @@ export interface PlatformSignedRequest {
 }
 
 const MAX_FINAL_BATCH_RETRIES = 1;
+const V2_BATCH_BYTES = Object.freeze({
+  account_snapshot: 512 << 10,
+  work_catalog: 512 << 10,
+  work_content: 2 << 20,
+  metrics: 512 << 10,
+  control: 512 << 10
+} satisfies Record<PlatformV2ResultType, number>);
+const V2_BATCH_ROWS = Object.freeze({
+  account_snapshot: 1,
+  work_catalog: 25,
+  work_content: 10,
+  metrics: 25,
+  control: 0
+} satisfies Record<PlatformV2ResultType, number>);
+const V2_RESULT_TYPE_LIMIT = Object.freeze({
+  account_snapshot: ['v2_account_batch_bytes', 'account_batch_bytes'],
+  work_catalog: ['v2_catalog_batch_bytes', 'catalog_batch_bytes'],
+  work_content: ['v2_content_batch_bytes', 'content_batch_bytes'],
+  metrics: ['results_bytes', 'metrics_batch_bytes'],
+  control: ['v2_account_batch_bytes', 'account_batch_bytes']
+} satisfies Record<PlatformV2ResultType, [string, string]>);
 
 export class PlatformClient {
   private readonly capability: PlatformCollectionCapability;
@@ -99,6 +143,7 @@ export class PlatformClient {
   private currentRun: PlatformClaimedRun | null = null;
   private nextBatchSeq = 0;
   private acceptedRows = 0;
+  private submittedContentBytes = 0;
 
   constructor(capability: PlatformCollectionCapability, sign: PlatformSignedRequest) {
     if (!capability.enabled) {
@@ -122,12 +167,23 @@ export class PlatformClient {
     this.currentRun = run;
     this.nextBatchSeq = 0;
     this.acceptedRows = 0;
+    this.submittedContentBytes = 0;
   }
 
   // claim 一次只取一条 run；没有任务时返回 null，调用方等下个 60 秒轮询。
   async claim(): Promise<PlatformClaimedRun | null> {
     const endpoint = resolvePlatformEndpoint(this.capability, 'platform.run.claim');
-    const payload = (await this.sign('platform.run.claim', endpoint.method, endpoint.path, {})) as {
+    const v2 = this.capability.v2?.enabled === true && this.capability.protocol_versions.includes(PLATFORM_PROTOCOL_V2)
+      ? this.capability.v2
+      : undefined;
+    const claimBody = v2 ? {
+      protocol_versions: [PLATFORM_PROTOCOL_VERSION, PLATFORM_PROTOCOL_V2],
+      task_kinds: v2.task_kinds,
+      result_types: v2.result_types,
+      adapter_versions: Object.fromEntries(Object.entries(PLATFORM_ADAPTERS).map(([platform, value]) => [platform, value.adapterVersion])),
+      mapping_versions: Object.fromEntries(Object.entries(PLATFORM_ADAPTERS).map(([platform, value]) => [platform, value.mappingVersion]))
+    } : { protocol_versions: [PLATFORM_PROTOCOL_VERSION] };
+    const payload = (await this.sign('platform.run.claim', endpoint.method, endpoint.path, claimBody)) as {
       run?: PlatformClaimedRun | null;
     };
     if (!payload.run) {
@@ -137,6 +193,7 @@ export class PlatformClient {
     this.currentRun = payload.run;
     this.nextBatchSeq = 0;
     this.acceptedRows = 0;
+    this.submittedContentBytes = 0;
     return payload.run;
   }
 
@@ -154,6 +211,9 @@ export class PlatformClient {
   // 服务端按 (run, generation, batch_seq) 幂等，重试不会重复写观测。
   async submit(batch: Omit<PlatformResultBatch, 'protocol_version' | 'lease_generation' | 'authorization_revision' | 'batch_seq'>): Promise<PlatformReceipt> {
     const run = this.requireRun();
+    if ((run.wire_protocol_version ?? PLATFORM_PROTOCOL_VERSION) !== PLATFORM_PROTOCOL_VERSION) {
+      throw new Error('v2 任务必须使用类型化结果提交。');
+    }
     if (this.acceptedRows + batch.observations.length > run.budget.max_rows) {
       throw new Error('本次任务已达读取预算，请以 partial 结束并保存游标。');
     }
@@ -180,6 +240,56 @@ export class PlatformClient {
     throw lastError;
   }
 
+  async submitV2(
+    resultType: PlatformV2ResultType,
+    data: Record<string, unknown>,
+    outcome: { status?: 'succeeded' | 'partial' | 'failed' | 'canceled'; stopReason?: string | null; errorCode?: string | null } = {}
+  ): Promise<PlatformReceipt> {
+    const run = this.requireRun();
+    if (run.wire_protocol_version !== PLATFORM_PROTOCOL_V2) throw new Error('当前任务不支持协议 v2。');
+    const v2Capability = this.capability.v2;
+    if (!v2Capability?.enabled || !v2Capability.result_types.includes(resultType)) throw new Error('服务端未公布此 v2 结果类型。');
+    if (resultType === 'control' && !outcome.status) throw new Error('control 结果必须给出 run 状态。');
+    if (resultType !== 'control' && outcome.status && outcome.status !== 'succeeded') throw new Error('只有 control 结果可以结束 v2 任务。');
+    const rowCount = Array.isArray(data.items) ? data.items.length
+      : Array.isArray(data.observations) ? data.observations.length
+        : resultType === 'account_snapshot' ? 1 : 0;
+    if (rowCount > V2_BATCH_ROWS[resultType]) throw new Error('该类型的结果行数超过单批上限。');
+    if (this.acceptedRows + rowCount > run.budget.max_rows) throw new Error('本次任务已达读取预算，请以 partial 结束并保存游标。');
+    const body: PlatformV2ResultBatch = {
+      protocol_version: PLATFORM_PROTOCOL_V2,
+      lease_generation: run.lease_generation,
+      authorization_revision: run.authorization_revision,
+      batch_seq: this.nextBatchSeq,
+      final_batch: resultType === 'control',
+      run_status: outcome.status ?? 'succeeded',
+      result_type: resultType,
+      data,
+      ...(outcome.stopReason !== undefined ? { stop_reason: outcome.stopReason } : {}),
+      ...(outcome.errorCode !== undefined ? { error_code: outcome.errorCode } : {})
+    };
+    const batchBytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
+    const [outerLimitName, v2LimitName] = V2_RESULT_TYPE_LIMIT[resultType];
+    const advertisedBatchLimit = Math.min(
+      this.capability.limits[outerLimitName] ?? V2_BATCH_BYTES[resultType],
+      v2Capability.limits[v2LimitName] ?? V2_BATCH_BYTES[resultType]
+    );
+    const advertisedRequestLimit = this.capability.limits.results_bytes ?? (2 << 20);
+    if (batchBytes > V2_BATCH_BYTES[resultType] || batchBytes > advertisedBatchLimit || batchBytes > advertisedRequestLimit) {
+      throw new Error('该类型的结果批次超过本机协商上限，未发送到服务端。');
+    }
+    const contentBytes = resultType === 'work_content' ? Buffer.byteLength(JSON.stringify(data), 'utf8') : 0;
+    const maxContentRunBytes = Math.min(v2Capability.limits.content_run_bytes ?? (8 << 20), 8 << 20);
+    if (this.submittedContentBytes + contentBytes > maxContentRunBytes) {
+      throw new Error('本次正文同步已达 run 字节上限，请以 partial 结束并保存游标。');
+    }
+    const receipt = await this.sendBatch(run, body);
+    this.nextBatchSeq += 1;
+    this.acceptedRows += receipt.accepted;
+    this.submittedContentBytes += contentBytes;
+    return receipt;
+  }
+
   // receipt 在网络失败后查询已提交批次的回执；它不延长租约。
   async receipt(batchSeq: number): Promise<PlatformReceipt | null> {
     const run = this.requireRun();
@@ -191,7 +301,7 @@ export class PlatformClient {
     }
   }
 
-  private async sendBatch(run: PlatformClaimedRun, body: PlatformResultBatch): Promise<PlatformReceipt> {
+  private async sendBatch(run: PlatformClaimedRun, body: PlatformResultBatch | PlatformV2ResultBatch): Promise<PlatformReceipt> {
     const endpoint = this.runEndpoint(run, 'results');
     return (await this.sign('platform.run.result', endpoint.method, endpoint.path, body)) as PlatformReceipt;
   }

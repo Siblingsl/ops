@@ -1,13 +1,13 @@
 package app
 
 import (
-	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,6 +59,10 @@ func (s *Server) pushPreview(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	hasCompletedCheck, materialBasisStale, checkRevisionStale, err := s.latestMaterialBasisState(ctx, s.db, m.ID)
+	if err != nil {
+		return err
+	}
 	mode := "new"
 	if draftMediaID != nil {
 		mode = "overwrite"
@@ -66,22 +70,24 @@ func (s *Server) pushPreview(w http.ResponseWriter, r *http.Request) error {
 	var fields WechatDefaults
 	_ = json.Unmarshal(fieldsRaw, &fields)
 	return ok(w, map[string]any{
-		"mode":           mode,
-		"today_count":    count,
-		"daily_limit":    m.Account.DailyPushLimit,
-		"fields":         fields,
-		"credential":     m.Account.Credential,
-		"status":         status,
-		"revision":       revision,
-		"backend_url":    s.backendURL(),
-		"can_push":       status == "ready" || status == "pushed",
-		"asset_count":    assetCount,
-		"cover_asset":    coverAssetID,
-		"cover_crops":    json.RawMessage(coverCrops),
-		"title":          title,
-		"summary":        summary,
-		"content_format": contentFormat,
-		"panel_images":   panelImages,
+		"mode":                 mode,
+		"today_count":          count,
+		"daily_limit":          m.Account.DailyPushLimit,
+		"fields":               fields,
+		"credential":           m.Account.Credential,
+		"status":               status,
+		"revision":             revision,
+		"backend_url":          s.backendURL(),
+		"can_push":             (status == "ready" || status == "pushed") && hasCompletedCheck && !materialBasisStale && !checkRevisionStale,
+		"material_basis_stale": materialBasisStale,
+		"check_revision_stale": checkRevisionStale,
+		"asset_count":          assetCount,
+		"cover_asset":          coverAssetID,
+		"cover_crops":          json.RawMessage(coverCrops),
+		"title":                title,
+		"summary":              summary,
+		"content_format":       contentFormat,
+		"panel_images":         panelImages,
 	})
 }
 
@@ -672,6 +678,12 @@ func (s *Server) refreshCachedMedia(ctx context.Context, accountID uuid.UUID, as
 // ---------- 小红书发布包 ----------
 
 func (s *Server) createPack(w http.ResponseWriter, r *http.Request) error {
+	var in struct {
+		BasisRevision *int `json:"basis_revision"`
+	}
+	if err := decodeOptional(r, &in); err != nil {
+		return err
+	}
 	m, err := s.workMetaFromPath(r)
 	if err != nil {
 		return err
@@ -679,16 +691,40 @@ func (s *Server) createPack(w http.ResponseWriter, r *http.Request) error {
 	if m.Account.Platform != "xhs" {
 		return validation("只有小红书作品生成发布包")
 	}
-	if m.Status == "reviewing" {
-		return humanStep("H-09", "这篇作品需要审阅，审阅通过后才能生成发布包")
+	if in.BasisRevision != nil && *in.BasisRevision < 1 {
+		return validation("作品修订号无效")
 	}
-	if m.Status != "ready" && m.Status != "packed" {
-		return humanStep("H-04", "发布前检查还没有全部确认，不能生成发布包")
-	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE work SET status='packed', updated_at=now(),
-		post_push_todos = CASE WHEN post_push_todos='[]'::jsonb THEN '`+xhsTodos+`'::jsonb ELSE post_push_todos END WHERE id=$1 AND status='ready'`, m.ID); err != nil {
+	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+		if err := s.checkWorkRevision(r.Context(), tx, m, in.BasisRevision); err != nil {
+			return err
+		}
+		var status string
+		if err := tx.QueryRow(r.Context(), `SELECT status FROM work WHERE id=$1`, m.ID).Scan(&status); err != nil {
+			return err
+		}
+		if status == "reviewing" {
+			return humanStep("H-09", "这篇作品需要审阅，审阅通过后才能生成发布包")
+		}
+		if status != "ready" && status != "packed" {
+			return humanStep("H-04", "发布前检查还没有全部确认，不能生成发布包")
+		}
+		if err := s.checkLatestMaterialBasis(r.Context(), tx, m.ID); err != nil {
+			return err
+		}
+		if status == "ready" {
+			_, err := tx.Exec(r.Context(), `UPDATE work SET status='packed', updated_at=now(),
+				post_push_todos = CASE WHEN post_push_todos='[]'::jsonb THEN '`+xhsTodos+`'::jsonb ELSE post_push_todos END WHERE id=$1`, m.ID)
+			return err
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
+	basis := m.Revision
+	if in.BasisRevision != nil {
+		basis = *in.BasisRevision
+	}
+	w.Header().Set("X-OPS-Basis-Revision", strconv.Itoa(basis))
 	s.audit(r.Context(), "xhs_pack", "work", m.ID.String(), "ok", nil)
 	return s.writeWork(w, r, m.ID)
 }
@@ -702,93 +738,6 @@ func (s *Server) getPack(w http.ResponseWriter, r *http.Request) error {
 		return stateInvalid("发布包还没有生成")
 	}
 	return s.writeWork(w, r, m.ID)
-}
-
-func (s *Server) packZip(w http.ResponseWriter, r *http.Request) error {
-	m, err := s.workMetaFromPath(r)
-	if err != nil {
-		return err
-	}
-	if m.Status != "packed" && m.Status != "published" {
-		return stateInvalid("发布包还没有生成")
-	}
-	ctx := r.Context()
-	sql := `SELECT id, work_id, storage_path, mime, sha256 FROM asset WHERE work_id=$1 ORDER BY position, created_at`
-	cardText := false
-	switch m.ContentFormat {
-	case "comic":
-		sql = `SELECT a.id, a.work_id, a.storage_path, a.mime, a.sha256 FROM comic_panel p
-			JOIN asset a ON a.id=p.asset_id WHERE p.work_id=$1 AND p.asset_id IS NOT NULL ORDER BY p.position`
-	case "card_post":
-		// D-048：图文卡片打包 = 卡片配图（按卡片顺序）+ 文案.txt（卡片标题与正文）。
-		sql = `SELECT a.id, a.work_id, a.storage_path, a.mime, a.sha256 FROM work_card c
-			JOIN asset a ON a.id=c.image_asset_id WHERE c.work_id=$1 AND c.image_asset_id IS NOT NULL ORDER BY c.position`
-		cardText = true
-	}
-	rows, err := s.db.Query(ctx, sql, m.ID)
-	if err != nil {
-		return err
-	}
-	var list []assetRow
-	for rows.Next() {
-		var a assetRow
-		if err := rows.Scan(&a.ID, &a.WorkID, &a.StoragePath, &a.Mime, &a.SHA256); err == nil {
-			list = append(list, a)
-		}
-	}
-	rows.Close()
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="xhs-%s.zip"`, time.Now().Format("20060102-1504")))
-	zw := zip.NewWriter(w)
-	for i := range list {
-		data, err := s.assetBytes(&list[i])
-		if err != nil {
-			continue
-		}
-		ext := ".jpg"
-		if list[i].Mime == "image/png" {
-			ext = ".png"
-		}
-		f, err := zw.Create(fmt.Sprintf("%02d%s", i+1, ext))
-		if err != nil {
-			return err
-		}
-		_, _ = f.Write(data)
-	}
-	if cardText {
-		var b strings.Builder
-		rows, err := s.db.Query(ctx, `SELECT heading, content_md FROM work_section WHERE work_id=$1 AND deleted_at IS NULL ORDER BY position, created_at`, m.ID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		first := true
-		for rows.Next() {
-			var h, body string
-			if err := rows.Scan(&h, &body); err != nil {
-				return err
-			}
-			if !first {
-				b.WriteString("\n\n")
-			}
-			first = false
-			if t := strings.TrimSpace(h); t != "" {
-				b.WriteString(t + "\n")
-			}
-			b.WriteString(strings.TrimSpace(body))
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		f, err := zw.Create("文案.txt")
-		if err != nil {
-			return err
-		}
-		if _, err := f.Write([]byte(b.String())); err != nil {
-			return err
-		}
-	}
-	return zw.Close()
 }
 
 func (s *Server) setWorkPublished(ctx context.Context, tx pgx.Tx, id uuid.UUID, url string, at *time.Time) error {
@@ -805,28 +754,9 @@ func (s *Server) markPublished(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if m.Status != "pushed" && m.Status != "packed" && m.Status != "published" {
-		return stateInvalid("作品还没有进入草稿箱或生成发布包")
-	}
-	var in struct {
-		URL         string     `json:"url"`
-		PublishedAt *time.Time `json:"published_at"`
-	}
+	var in publishInput
 	if err := decode(r, &in); err != nil {
 		return err
 	}
-	at := s.now()
-	if in.PublishedAt != nil {
-		at = *in.PublishedAt
-	}
-	url := strings.TrimSpace(in.URL)
-	if url != "" && !strings.HasPrefix(url, "http") {
-		return validation("链接需要以 http 开头")
-	}
-	if err := s.withTx(r.Context(), func(tx pgx.Tx) error { return s.setWorkPublished(r.Context(), tx, m.ID, url, &at) }); err != nil {
-		return err
-	}
-	s.recomputeMetricOffsets(r.Context(), m.ID)
-	s.audit(r.Context(), "mark_published", "work", m.ID.String(), "ok", map[string]any{"url": url})
-	return s.writeWork(w, r, m.ID)
+	return s.handlePublished(w, r, m.ID, in)
 }

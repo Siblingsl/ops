@@ -22,36 +22,110 @@ const apiKey = document.getElementById('api-key');
 const keyState = document.getElementById('key-state');
 const deleteModelButton = document.getElementById('delete-model');
 const modelsById = new Map();
-const policyStatus = document.getElementById('policy-status');
 const routeList = document.getElementById('route-list');
 const testModel = document.getElementById('test-model');
 const settingsTabs = Array.from(document.querySelectorAll('[data-settings-tab]'));
 const settingsPanels = Array.from(document.querySelectorAll('[data-settings-panel]'));
-const accountTypeTarget = document.getElementById('account-type-target');
-const accountTypeChoice = document.getElementById('account-type-choice');
-const accountTypeApply = document.getElementById('apply-account-type');
-const accountTypeStatus = document.getElementById('account-type-status');
 const platformBrowserState = document.getElementById('platform-browser-state');
 const platformBrowserChecked = document.getElementById('platform-browser-checked');
 const platformBrowserStatus = document.getElementById('platform-browser-status');
 const platformLoginAccount = document.getElementById('platform-login-account');
 const platformLoginStart = document.getElementById('platform-login-start');
 const platformLoginStatus = document.getElementById('platform-login-status');
-// D-123 / DEV-415：与后端 formatMatrix 一致；客户端只读展示，校验以服务端为准。
-const accountFormats = {
-  wechat_mp: [['long_article', '长图文'], ['qa_article', '问答体长图文'], ['briefing', '资讯简报'],
-    ['card_post', '图文卡片'], ['script', '口播脚本'], ['comic', '漫画']],
-  xhs: [['image_note', '图文笔记'], ['list_note', '清单合集笔记'], ['card_post', '图文卡片'],
-    ['script', '口播脚本'], ['comic', '漫画']],
-  toutiao: [['long_article', '文章'], ['micro_post', '微头条']]
-};
-let accountTypeAccounts = [];
 let routeTypes = [];
 let serverModels = [];
 let desktopModels = [];
 let routeRevision = 0;
 let routeRows = [];
 let currentDeviceId = '';
+
+const embeddedPanel = new URL(location.href).pathname.match(/^\/embedded\/(connection|ai|account-device|diagnostics)$/)?.[1] ?? null;
+const activePanelNames = embeddedPanel === 'ai' ? ['models', 'selftest', 'routes']
+  : embeddedPanel === 'account-device' ? ['account']
+    : embeddedPanel === 'diagnostics' ? ['diagnostics']
+      : embeddedPanel === 'connection' ? ['connection'] : [];
+let activeOperations = 0;
+let panelBaselines = new Map();
+let dirty = false;
+let externalBusy = false;
+
+function currentPanelValues(name) {
+  const panel = document.querySelector(`[data-settings-panel="${name}"]`);
+  if (!panel) return new Map();
+  return new Map(Array.from(panel.querySelectorAll('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)'))
+    .filter((control) => control.type !== 'hidden' && control.id !== 'test-model')
+    .map((control, index) => {
+      const row = control.closest('[data-task-type]');
+      const key = control.id || `${row?.dataset.taskType ?? name}:${index}`;
+      const value = control.type === 'checkbox' ? String(control.checked) : control.value;
+      return [key, value];
+    }));
+}
+
+function updateLocalState() {
+  if (embeddedPanel) {
+    dirty = activePanelNames.some((name) => {
+      const baseline = panelBaselines.get(name);
+      if (!baseline) return false;
+      const current = currentPanelValues(name);
+      return current.size !== baseline.size || Array.from(current).some(([key, value]) => baseline.get(key) !== value);
+    });
+    settingsApi.reportLocalState({ dirty, busy: activeOperations > 0 || externalBusy });
+  }
+}
+
+function savePanelBaseline(name) {
+  panelBaselines.set(name, currentPanelValues(name));
+  updateLocalState();
+}
+
+const busyMethods = new Set([
+  'getInfo', 'getModels', 'getDevices', 'getRoutes', 'platformBrowser', 'platformCommand',
+  'startModelTest', 'getModelTest', 'applyMode', 'reauthenticate', 'clearAccountData',
+  'saveModel', 'deleteModel', 'connectAI', 'disconnectAI', 'retryBusinessPage', 'openLoginPage',
+  'exportDiagnostics', 'revokeDevice'
+]);
+const desktopSettingsBridge = window.opsDesktopSettings;
+const settingsApi = new Proxy({}, {
+  get(_target, property) {
+    const value = desktopSettingsBridge[property];
+    if (typeof value !== 'function') return value;
+    const invoke = (...args) => value.apply(desktopSettingsBridge, args);
+    if (!busyMethods.has(property)) return invoke;
+    return (...args) => {
+      activeOperations += 1;
+      updateLocalState();
+      let result;
+      try { result = invoke(...args); }
+      catch (error) { activeOperations -= 1; updateLocalState(); throw error; }
+      return Promise.resolve(result).finally(() => { activeOperations -= 1; updateLocalState(); });
+    };
+  }
+});
+
+if (embeddedPanel) {
+  document.body.classList.add('embedded-settings');
+  document.body.dataset.embeddedPanel = embeddedPanel;
+  const content = document.getElementById('settings-content');
+  content.inert = true;
+  settingsPanels.forEach((panel) => { panel.hidden = !activePanelNames.includes(panel.dataset.settingsPanel); });
+  const heading = document.querySelector(`[data-settings-panel="${activePanelNames[0]}"] > h2`);
+  if (heading) { heading.tabIndex = -1; }
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !document.getElementById('platform-login-dialog').open) {
+      event.preventDefault();
+      window.location.href = 'ops-desktop://ui/settings/close';
+    }
+  }, true);
+}
+
+for (const eventName of ['input', 'change', 'click']) {
+  document.addEventListener(eventName, () => queueMicrotask(updateLocalState));
+}
+document.addEventListener('ops-local-settings-busy', (event) => {
+  externalBusy = Boolean(event.detail?.busy);
+  updateLocalState();
+});
 
 function activateSettingsTab(name, moveFocus = false) {
   settingsTabs.forEach((tab) => {
@@ -172,7 +246,7 @@ function renderModels(models) {
 
 async function loadInfo() {
   try {
-    const info = await window.opsDesktopSettings.getInfo();
+    const info = await settingsApi.getInfo();
     origin.textContent = info.businessOrigin;
     connectionState.textContent = {
       online: '已打开业务页面',
@@ -180,30 +254,50 @@ async function loadInfo() {
       unknown: '等待连接'
     }[info.connectionState];
     version.textContent = info.appVersion;
+    const clientVersion = document.getElementById('about-client-version');
+    const serviceVersion = document.getElementById('about-service-version');
+    const serviceMode = document.getElementById('about-service-mode');
+    const dataSize = document.getElementById('about-data-size');
+    if (clientVersion) clientVersion.textContent = info.appVersion;
+    if (serviceVersion) serviceVersion.textContent = info.systemInfo?.version ?? '当前无法读取';
+    if (serviceMode) serviceMode.textContent = info.systemInfo ? (info.systemInfo.dev ? '本地开发' : '生产') : '当前无法读取';
+    if (dataSize) dataSize.textContent = info.systemInfo ? `${(info.systemInfo.dataBytes / 1024 / 1024).toFixed(1)} MB` : '当前无法读取';
     aiStatus.textContent = info.aiStatus;
     const state = info.clientState;
-    if (!state) throw new Error('本地状态不可用');
-    currentDeviceId = state.deviceId;
-    document.getElementById('current-mode').textContent = `当前模式：${state.mode === 'desktop' ? '此客户端 AI' : '服务器 AI'}（路由版本 ${state.routeRevision}）`;
+    currentDeviceId = state.localConfigAvailable ? state.deviceId : '';
+    document.getElementById('current-mode').textContent = `当前模式：${state.mode === 'desktop' ? '此客户端 AI' : '服务器 AI'}（路由版本 ${state.routeRevision}）${state.localConfigAvailable ? '' : '；本机配置文件无法读取，暂不可更改'}`;
     document.getElementById('mode-select').value = state.mode;
+    document.getElementById('mode-select').disabled = !state.localConfigAvailable;
+    document.getElementById('apply-mode').disabled = !state.localConfigAvailable;
     account.textContent = state.signedIn
       ? `${state.username} · ${state.workspaceName}`
       : '未登录；请先打开线上业务页登录';
-    document.getElementById('clear-account-data').disabled = !state.signedIn;
+    document.getElementById('clear-account-data').disabled = !state.signedIn || !state.localConfigAvailable;
     reauthState.textContent = state.signedIn
       ? state.reauthRequired ? '需要重新认证' : '已认证'
       : '尚未登录';
     storageState.textContent = state.storageAvailable ? '可用（系统加密）' : '不可用；不会保存密钥';
-    deviceState.textContent = state.deviceRegistered ? '已注册' : '尚未注册';
+    deviceState.textContent = state.deviceRegistered === null ? '本机配置文件无法读取' : state.deviceRegistered ? '已注册' : '尚未注册';
     channelState.textContent = state.channelMessage;
-  } catch {
-    setStatus('无法读取客户端信息。请关闭并重新打开此窗口。');
+    setStatus(state.localConfigAvailable ? '' : '在线账号和工作区已读取；本机配置文件无法读取，模型、设备和模式修改已停用。');
+  } catch (error) {
+    const unavailable = '暂时无法读取';
+    currentDeviceId = '';
+    [origin, connectionState, version, aiStatus, account, reauthState, storageState, deviceState, channelState,
+      document.getElementById('about-client-version'), document.getElementById('about-service-version'),
+      document.getElementById('about-service-mode'), document.getElementById('about-data-size')]
+      .forEach((element) => { if (element) element.textContent = unavailable; });
+    document.getElementById('mode-select').disabled = true;
+    document.getElementById('apply-mode').disabled = true;
+    document.getElementById('current-mode').textContent = '当前客户端状态暂时无法读取';
+    document.getElementById('clear-account-data').disabled = true;
+    setStatus(userFacingError(error, '无法读取客户端信息。请检查主窗口连接后重新打开此设置分类。'));
   }
 }
 
 async function loadModels() {
   try {
-    const models = await window.opsDesktopSettings.getModels();
+    const models = await settingsApi.getModels();
     renderModels(models);
     renderTestModels(models);
   } catch (error) {
@@ -220,22 +314,6 @@ function renderTestModels(models) {
       const key = JSON.stringify({ providerId: model.providerId, model: name });
       testModel.add(new Option(`${model.name} · ${name}`, key));
     }
-  }
-}
-
-async function loadPolicy() {
-  try {
-    const result = await window.opsDesktopSettings.getPolicy();
-    document.getElementById('policy-enabled').checked = result.policy.enabled;
-    document.getElementById('policy-members').checked = result.policy.allow_member_endpoints;
-    document.getElementById('policy-enabled').disabled = !result.globalEnabled;
-    document.getElementById('policy-members').disabled = !result.globalEnabled;
-    document.getElementById('save-policy').disabled = !result.globalEnabled;
-    policyStatus.textContent = result.globalEnabled
-      ? `授权版本 ${result.policy.authorization_revision}`
-      : '服务端尚未启用桌面 AI。';
-  } catch (error) {
-    policyStatus.textContent = userFacingError(error, '无法读取工作区策略。');
   }
 }
 
@@ -263,7 +341,7 @@ function renderPlatformBrowser(status) {
 
 async function loadPlatformBrowser(refresh = false) {
   try {
-    renderPlatformBrowser(await window.opsDesktopSettings.platformBrowser(refresh ? { refresh: true } : undefined));
+    renderPlatformBrowser(await settingsApi.platformBrowser(refresh ? { refresh: true } : undefined));
   } catch (error) {
     platformBrowserStatus.textContent = userFacingError(error, '浏览器检测失败。');
   }
@@ -272,7 +350,7 @@ async function loadPlatformBrowser(refresh = false) {
 async function loadDevices() {
   const container = document.getElementById('device-list');
   try {
-    const result = await window.opsDesktopSettings.getDevices();
+    const result = await settingsApi.getDevices();
     if (result.devices.length === 0) {
       container.textContent = '尚未注册设备。';
       return;
@@ -293,7 +371,7 @@ async function loadDevices() {
         if (!window.confirm(`回收设备 ${device.name}？此操作会终止该设备的客户端 AI 通道。`)) return;
         setStatus('正在回收设备…');
         try {
-          await window.opsDesktopSettings.revokeDevice({
+          await settingsApi.revokeDevice({
             deviceId: device.id,
             password: document.getElementById('password').value
           });
@@ -309,8 +387,7 @@ async function loadDevices() {
     });
     container.replaceChildren(...rows);
     if (result.reauthRequired) {
-      // 原实现把这句话写进了 policyStatus（工作区策略页的元素），
-      // 用户在「账号与设备」页根本看不到，等于提示丢失。这里写回本卡片自己的状态行。
+      // 认证过期提示写回设备卡片自己的状态行，确保用户在当前页能看到。
       document.getElementById('device-status').textContent = '重新认证已过期（有效期 5 分钟）；回收设备前需要重新输入密码。';
     } else {
       document.getElementById('device-status').textContent = '';
@@ -383,7 +460,7 @@ async function loadRoutes() {
   const reauthButton = document.getElementById('routes-reauth');
   if (reauthButton) reauthButton.hidden = true;
   try {
-    const result = await window.opsDesktopSettings.getRoutes();
+    const result = await settingsApi.getRoutes();
     routeTypes = result.routeTypes;
     serverModels = result.serverModels;
     desktopModels = result.desktopModels.map((model) => ({ ...model, id: model.providerId, status: 'active' }));
@@ -445,7 +522,7 @@ deleteModelButton.addEventListener('click', async () => {
   if (!selected) return;
   setStatus('正在停用并移除模型配置…');
   try {
-    const models = await window.opsDesktopSettings.deleteModel({
+    const models = await settingsApi.deleteModel({
       providerId: selected.providerId,
       configRevision: selected.configRevision
     });
@@ -476,7 +553,7 @@ document.getElementById('model-form').addEventListener('submit', async (event) =
   const models = modelNames.value.split(/[\n,，]/).map((item) => item.trim()).filter(Boolean);
   setStatus('正在验证并保存配置…');
   try {
-    const saved = await window.opsDesktopSettings.saveModel({
+    const saved = await settingsApi.saveModel({
       ...(selected ? { providerId: selected.providerId, configRevision: selected.configRevision } : {}),
       name: modelName.value,
       baseUrl: baseUrl.value,
@@ -497,6 +574,7 @@ document.getElementById('model-form').addEventListener('submit', async (event) =
     if (latest) modelSelect.value = latest.providerId;
     await loadInfo();
     setStatus('配置已保存。密钥未返回页面。');
+    savePanelBaseline('models');
   } catch (error) {
     setStatus(userFacingError(error, '配置保存失败。'));
   }
@@ -511,11 +589,12 @@ document.getElementById('reauth').addEventListener('click', async () => {
   }
   setStatus('正在重新认证…');
   try {
-    await window.opsDesktopSettings.reauthenticate(password.value);
+    await settingsApi.reauthenticate(password.value);
     password.value = '';
     // 认证成功后必须重新拉取依赖认证状态的视图：原实现只刷新 loadInfo()，
     // 导致「任务映射」和「设备列表」仍停在“需要重新认证”，用户会以为认证没生效。
     await Promise.all([loadInfo(), loadDevices(), loadRoutes()]);
+    savePanelBaseline('account');
     setStatus('账号已重新认证，有效期 5 分钟。');
   } catch (error) {
     setStatus(userFacingError(error, '重新认证失败。'));
@@ -531,7 +610,7 @@ document.getElementById('clear-account-data').addEventListener('click', async (e
   button.disabled = true;
   setStatus('正在清除此账号的本机数据…');
   try {
-    const cleared = await window.opsDesktopSettings.clearAccountData();
+    const cleared = await settingsApi.clearAccountData();
     if (cleared) window.location.reload();
     else {
       await loadInfo();
@@ -548,7 +627,7 @@ document.getElementById('clear-account-data').addEventListener('click', async (e
 document.getElementById('connect-ai').addEventListener('click', async () => {
   setStatus('正在建立设备通道…');
   try {
-    await window.opsDesktopSettings.connectAI();
+    await settingsApi.connectAI();
     await loadInfo();
     setStatus('WSS 通道已连接；尚未发起模型自检或启用业务路由。');
   } catch (error) {
@@ -558,145 +637,12 @@ document.getElementById('connect-ai').addEventListener('click', async () => {
 });
 
 document.getElementById('disconnect-ai').addEventListener('click', async () => {
-  await window.opsDesktopSettings.disconnectAI();
+  await settingsApi.disconnectAI();
   await loadInfo();
   setStatus('客户端 AI 通道已断开。');
 });
 
-document.getElementById('policy-enabled').addEventListener('change', (event) => {
-  if (!event.currentTarget.checked) document.getElementById('policy-members').checked = false;
-});
-
-document.getElementById('save-policy').addEventListener('click', async () => {
-  setStatus('正在保存工作区策略…');
-  try {
-    const result = await window.opsDesktopSettings.setPolicy({
-      enabled: document.getElementById('policy-enabled').checked,
-      allowMemberEndpoints: document.getElementById('policy-members').checked
-    });
-    policyStatus.textContent = `已保存，授权版本 ${result.authorization_revision}`;
-    await loadRoutes();
-    setStatus('工作区策略已保存。');
-  } catch (error) {
-    setStatus(userFacingError(error, '工作区策略保存失败。'));
-  }
-});
-
 document.getElementById('refresh-devices').addEventListener('click', () => void loadDevices());
-
-// D-123 / DEV-415：账号内容类型（原生设置页，形态与业务页面不同）。
-function setAccountTypeStatus(message) {
-  accountTypeStatus.textContent = message;
-}
-
-function renderAccountTypeOptions() {
-  const account = accountTypeAccounts.find((item) => item.id === accountTypeTarget.value) ?? null;
-  const formats = account ? (accountFormats[account.platform] ?? []) : [];
-  const current = account?.content_format ?? '';
-  accountTypeChoice.textContent = '';
-  let available = 0;
-  for (const [value, label] of formats) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = value === current ? `${label}（当前）` : label;
-    option.disabled = value === current;
-    accountTypeChoice.append(option);
-    if (value !== current) available += 1;
-  }
-  const first = Array.from(accountTypeChoice.options).find((option) => !option.disabled);
-  if (first) accountTypeChoice.value = first.value;
-  accountTypeApply.disabled = !account || account.status !== 'active' || available === 0;
-  if (!account) setAccountTypeStatus('未找到可管理的业务账号，请先在业务页面登录。');
-  else if (account.status !== 'active') setAccountTypeStatus(`账号「${account.name}」已停用，启用后才能更换内容类型。`);
-  else if (available === 0) setAccountTypeStatus('该平台没有其他可选的内容类型。');
-  else setAccountTypeStatus(`账号「${account.name}」当前为 ${
-    (formats.find(([value]) => value === current)?.[1]) ?? current
-  }；更换后已有作品保持原类型。`);
-}
-
-// D-129 / DEV-PS13：在本机连接平台账号。
-// 只把「账号 ID + 平台」交给主进程；登录页、profile 与只读脚本全部由客户端固定，
-// 页面不能指定 URL、脚本或浏览器路径。
-function renderPlatformLoginAccounts(accounts) {
-  const candidates = accounts.filter((item) => item.platform === 'xhs' || item.platform === 'wechat_mp');
-  platformLoginAccount.textContent = '';
-  for (const item of candidates) {
-    const option = document.createElement('option');
-    option.value = `${item.id}|${item.platform}`;
-    const platform = item.platform === 'xhs' ? '小红书' : '公众号';
-    option.textContent = item.status === 'active'
-      ? `${item.name}（${platform}）`
-      : `${item.name}（${platform}，已停用）`;
-    option.disabled = item.status !== 'active';
-    platformLoginAccount.append(option);
-  }
-  if (!candidates.length) {
-    platformLoginAccount.append(new Option('没有可连接的平台账号', ''));
-    platformLoginStart.disabled = true;
-    platformLoginStatus.textContent = '当前工作区还没有小红书或公众号账号；请先在业务页面添加账号。';
-    return;
-  }
-  const firstEnabled = Array.from(platformLoginAccount.options).find((option) => !option.disabled);
-  if (firstEnabled) platformLoginAccount.value = firstEnabled.value;
-  platformLoginAccount.disabled = false;
-  platformLoginStart.disabled = !firstEnabled;
-}
-
-async function loadPlatformLoginAccounts() {
-  try {
-    const accounts = await window.opsDesktopSettings.getBusinessAccounts();
-    renderPlatformLoginAccounts(accounts);
-  } catch (error) {
-    platformLoginStatus.textContent = userFacingError(error, '无法读取业务账号。');
-  }
-}
-
-const platformLoginFailure = {
-  platform_profile_busy: '另一个平台登录正在进行，请先完成或关闭它。',
-  platform_browser_unsupported: '没有找到可用的浏览器，请先安装 Google Chrome 或 Microsoft Edge。',
-  platform_browser_launch_failed: '浏览器无法启动，请先手动打开一次该浏览器确认没有被拦截。',
-  platform_login_required: '还没有读到登录状态，请在弹出的浏览器里完成扫码。',
-  platform_identity_mismatch: '平台返回的账号标识不完整，无法建立稳定连接。',
-  platform_connection_conflict: '该账号已有未撤销的连接，请先在业务页面查看并处理。',
-  platform_network_unavailable: '网络不可用或页面打不开，请检查代理后重试。'
-};
-
-platformLoginStart.addEventListener('click', async () => {
-  const value = platformLoginAccount.value;
-  if (!value) {
-    platformLoginStatus.textContent = '请先选择一个平台账号。';
-    return;
-  }
-  const [accountId, platform] = value.split('|');
-  platformLoginStart.disabled = true;
-  platformLoginStatus.textContent = '已打开官方后台，请在浏览器窗口中完成扫码；最多等待 3 分钟…';
-  try {
-    const result = await window.opsDesktopSettings.platformCommand({
-      v: 1,
-      id: `login_${Date.now()}`,
-      cmd: 'open-login',
-      payload: { accountId, platform }
-    });
-    if (result && result.ok === false) {
-      const code = result.error?.code ?? '';
-      platformLoginStatus.textContent = platformLoginFailure[code] ?? (result.error?.message || '本机登录失败，请重试。');
-      return;
-    }
-    const data = result?.data ?? {};
-    if (data.connected) {
-      platformLoginStatus.textContent = `连接成功：${data.displayName ?? data.externalAccountKey}。已建立待确认的连接，自动采集仍默认关闭。`;
-      await Promise.all([loadDevices(), loadInfo()]);
-    } else if (data.timedOut) {
-      platformLoginStatus.textContent = '等待超时，没有读到登录状态。可再次点击「在本机连接」重试，不需要重新安装。';
-    } else {
-      platformLoginStatus.textContent = '没有读到登录状态，请确认已在弹出的浏览器里完成扫码后重试。';
-    }
-  } catch (error) {
-    platformLoginStatus.textContent = userFacingError(error, '本机登录失败。');
-  } finally {
-    platformLoginStart.disabled = false;
-  }
-});
 
 // ---------- 本机残留配置目录（§5.4） ----------
 //
@@ -732,7 +678,7 @@ function renderOrphanCount(orphans) {
 
 async function refreshOrphanCount() {
   try {
-    const result = await window.opsDesktopSettings.platformCommand({
+    const result = await settingsApi.platformCommand({
       v: 1, id: `orphan_${Date.now()}`, cmd: 'read-status'
     });
     if (result && result.ok === false) {
@@ -751,7 +697,7 @@ async function clearOrphanFor(platform) {
   button.disabled = true;
   platformOrphanStatus.textContent = `正在清理${label}的残留目录…`;
   try {
-    const result = await window.opsDesktopSettings.platformCommand({
+    const result = await settingsApi.platformCommand({
       v: 1,
       id: `orphan_clear_${Date.now()}`,
       cmd: 'clear-orphan-profiles',
@@ -794,61 +740,6 @@ platformOrphanCheck.addEventListener('click', async () => {
 platformOrphanClear.addEventListener('click', () => clearOrphanFor('xhs'));
 platformOrphanClearWx.addEventListener('click', () => clearOrphanFor('wechat_mp'));
 
-async function loadAccountTypes() {
-  accountTypeApply.disabled = true;
-  accountTypeChoice.disabled = true;
-  accountTypeTarget.disabled = true;
-  setAccountTypeStatus('读取中…');
-  try {
-    accountTypeAccounts = await window.opsDesktopSettings.getBusinessAccounts();
-    accountTypeTarget.textContent = '';
-    for (const item of accountTypeAccounts) {
-      const option = document.createElement('option');
-      option.value = item.id;
-      const platform = item.platform === 'wechat_mp' ? '公众号' : item.platform === 'toutiao' ? '今日头条' : '小红书';
-      option.textContent = item.status === 'active' ? `${item.name}（${platform}）` : `${item.name}（${platform}，已停用）`;
-      accountTypeTarget.append(option);
-    }
-    if (!accountTypeAccounts.length) {
-      accountTypeTarget.append(new Option('没有业务账号', ''));
-      accountTypeTarget.value = '';
-      setAccountTypeStatus('当前工作区还没有业务账号；请在业务页面添加后再来更换。');
-      return;
-    }
-    accountTypeTarget.disabled = false;
-    accountTypeChoice.disabled = false;
-    renderAccountTypeOptions();
-  } catch (error) {
-    setAccountTypeStatus(userFacingError(error, '无法读取业务账号。'));
-  }
-}
-
-accountTypeTarget.addEventListener('change', renderAccountTypeOptions);
-
-accountTypeApply.addEventListener('click', async () => {
-  const accountId = accountTypeTarget.value;
-  const contentFormat = accountTypeChoice.value;
-  if (!accountId || !contentFormat) return;
-  accountTypeApply.disabled = true;
-  setAccountTypeStatus('正在更换内容类型…');
-  try {
-    const result = await window.opsDesktopSettings.changeAccountType({ accountId, contentFormat });
-    const kept = result?.typeChange?.works_kept;
-    const cards = result?.typeChange?.character_cards_kept;
-    const stale = result?.typeChange?.stale_plan_slots;
-    const label = (accountFormats[result.account.platform] ?? []).find(([value]) => value === result.account.content_format)?.[1]
-      ?? result.account.content_format;
-    // 先刷新下拉与账号信息（刷新过程会重写状态行），最后定格结果消息，否则这段反馈在同一帧内被覆盖、用户看不到。
-    await loadAccountTypes();
-    await loadInfo();
-    setAccountTypeStatus(`已更换为「${label}」${typeof kept === 'number' && kept > 0 ? `；${kept} 篇作品保持原类型` : ''}${typeof cards === 'number' && cards > 0 ? `；${cards} 张角色卡保留，账号里还有漫画作品时仍可管理` : ''}${typeof stale === 'number' && stale > 0 ? `；${stale} 个未采用的计划槽位仍是旧类型，请到业务页启用新方案重建` : ''}。`);
-  } catch (error) {
-    const message = userFacingError(error, '更换内容类型失败。');
-    await loadAccountTypes();
-    setAccountTypeStatus(message);
-  }
-});
-
 document.getElementById('refresh-routes').addEventListener('click', () => void loadRoutes());
 
 document.getElementById('save-routes').addEventListener('click', async () => {
@@ -878,9 +769,10 @@ document.getElementById('save-routes').addEventListener('click', async () => {
       };
     });
     setStatus('正在保存本机映射草稿…');
-    const saved = await window.opsDesktopSettings.saveRoutes({ routes, expectedRevision: routeRevision });
+    const saved = await settingsApi.saveRoutes({ routes, expectedRevision: routeRevision });
     routeRevision = saved.policy_revision;
     await loadRoutes();
+    savePanelBaseline('routes');
     setStatus(`本机映射草稿已保存（基于路由版本 ${routeRevision}）；确认应用模式时才会提交线上映射。`);
   } catch (error) {
     setStatus(userFacingError(error, '任务映射保存失败。'));
@@ -891,8 +783,8 @@ document.getElementById('apply-mode').addEventListener('click', async () => {
   const mode = document.getElementById('mode-select').value;
   setStatus('正在校验并应用执行模式…');
   try {
-    const applied = await window.opsDesktopSettings.applyMode(mode);
-    if (applied) setStatus('模式已应用，业务页面正在重新加载。');
+    const applied = await settingsApi.applyMode(mode);
+    if (applied) { setStatus('模式已应用，业务页面正在重新加载。'); savePanelBaseline('connection'); }
     else setStatus('已取消。');
     await loadInfo();
   } catch (error) {
@@ -910,10 +802,10 @@ document.getElementById('start-model-test').addEventListener('click', async () =
   const output = document.getElementById('test-result');
   output.textContent = '正在连接并启动自检…';
   try {
-    await window.opsDesktopSettings.connectAI();
-    const started = await window.opsDesktopSettings.startModelTest(selected);
+    await settingsApi.connectAI();
+    const started = await settingsApi.startModelTest(selected);
     for (let attempt = 0; attempt < 120; attempt += 1) {
-      const result = await window.opsDesktopSettings.getModelTest(started.test_id);
+      const result = await settingsApi.getModelTest(started.test_id);
       output.textContent = `${result.status} · ${result.stage}\n${result.summary ?? ''}`;
       if (result.status !== 'running') {
         if (Array.isArray(result.results)) output.textContent += `\n${JSON.stringify(result.results, null, 2)}`;
@@ -929,13 +821,13 @@ document.getElementById('start-model-test').addEventListener('click', async () =
 
 document.getElementById('retry').addEventListener('click', async () => {
   setStatus('正在重新连接线上服务…');
-  await window.opsDesktopSettings.retryBusinessPage();
+  await settingsApi.retryBusinessPage();
 });
 
 document.getElementById('export-diagnostics').addEventListener('click', async () => {
   setStatus('正在准备脱敏诊断文件…');
   try {
-    const saved = await window.opsDesktopSettings.exportDiagnostics();
+    const saved = await settingsApi.exportDiagnostics();
     setStatus(saved ? '诊断文件已保存。' : '已取消导出。');
   } catch (error) {
     setStatus(userFacingError(error, '诊断文件导出失败。'));
@@ -944,7 +836,7 @@ document.getElementById('export-diagnostics').addEventListener('click', async ()
 
 document.getElementById('login').addEventListener('click', async () => {
   setStatus('正在打开登录页面…');
-  await window.opsDesktopSettings.openLoginPage();
+  await settingsApi.openLoginPage();
 });
 
 document.getElementById('detect-platform-browser').addEventListener('click', async () => {
@@ -953,5 +845,16 @@ document.getElementById('detect-platform-browser').addEventListener('click', asy
 });
 
 syncProxyFields();
-activateSettingsTab('connection');
-void Promise.all([loadInfo(), loadModels(), loadPolicy(), loadRoutes(), loadDevices(), loadAccountTypes(), loadPlatformBrowser(), loadPlatformLoginAccounts()]);
+if (!embeddedPanel) activateSettingsTab('connection');
+const initialLoads = embeddedPanel === 'connection' ? [loadInfo()]
+  : embeddedPanel === 'ai' ? [loadModels(), loadRoutes()]
+    : embeddedPanel === 'account-device' ? [loadInfo(), loadDevices(), loadPlatformBrowser()]
+      : embeddedPanel === 'diagnostics' ? [loadInfo()]
+        : [loadInfo(), loadModels(), loadRoutes(), loadDevices(), loadPlatformBrowser()];
+void Promise.all(initialLoads).finally(() => {
+  if (!embeddedPanel) return;
+  activePanelNames.forEach(savePanelBaseline);
+  document.getElementById('settings-content').inert = false;
+  document.querySelector(`[data-settings-panel="${activePanelNames[0]}"] > h2`)?.focus();
+  updateLocalState();
+});

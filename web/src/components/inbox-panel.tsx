@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Inbox, Lightbulb, Plus, Sparkles, Wand2 } from 'lucide-react'
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
 import { Button, Card, Empty, Field, Input, Notice, PageLoading, Select, Tabs, Textarea } from '@/components/ui'
@@ -14,6 +15,7 @@ import type { InboxItem, InboxPage, InboxSuggestion, MaterialKind, Work } from '
 
 function ConvertDialog({ item, accountId, suggestion, work, onLinked, onClose }: { item: InboxItem; accountId: string; suggestion: InboxSuggestion | null; work?: Work; onLinked?: (work: Work) => void; onClose: () => void }) {
   const inv = useInvalidate()
+  const nav = useNavigate()
   const [to, setTo] = useState<'topic' | 'material'>(suggestion?.as ?? 'topic')
   const [title, setTitle] = useState(suggestion?.title || item.content.slice(0, 30))
   const [angle, setAngle] = useState(suggestion?.angle ?? '')
@@ -44,7 +46,12 @@ function ConvertDialog({ item, accountId, suggestion, work, onLinked, onClose }:
         const linked = await patch<Work>(`/works/${work.id}`, { material_ids: [...new Set([...latest.material_ids, materialID])], base_revision: latest.revision })
         onLinked?.(linked)
       }
-      toast.success(to === 'topic' ? '已转为选题' : linkWork && work ? '已存入素材库并关联当前作品' : '已存入素材库')
+      toast.success(to === 'topic' ? '已转为选题' : linkWork && work ? '已存入素材库并关联当前作品' : '已存入素材库', {
+        // TP-02：整理完成要有出口——直接去刚生成的选题/素材，不用自己再找。
+        action: to === 'topic'
+          ? { label: '去选题池', onClick: () => { onClose(); nav(`/a/${accountId}/topics?adopted=1`) } }
+          : { label: '去素材库', onClick: () => { onClose(); nav(`/a/${accountId}/materials`) } },
+      })
       onClose()
     } catch (e) {
       toast.error(errorMessage(e), { description: materialID ? '素材已存入，关联未完成；可重试关联，或取消关联后完成。' : undefined })
@@ -120,15 +127,32 @@ export function InboxPanel({ accountId, work, onLinked }: { accountId: string; w
       setBusyId(null)
     }
   }
+  // TP-01：丢掉不再无路可退——软删除 + 10 秒撤销。
   const dismiss = async (it: InboxItem) => {
     await del(`/inbox/${it.id}`).catch((e) => toast.error(errorMessage(e)))
     inv(['inbox'])
+    toast(`已丢掉「${it.content.slice(0, 20)}${it.content.length > 20 ? '…' : ''}」`, {
+      description: '10 秒内可以撤销；丢掉只是移出收件箱。',
+      duration: 10_000,
+      action: {
+        label: '撤销',
+        onClick: async () => {
+          try {
+            await post(`/inbox/${it.id}/restore`)
+            inv(['inbox'])
+            toast.success('已恢复这条灵感')
+          } catch (e) {
+            toast.error(errorMessage(e))
+          }
+        },
+      },
+    })
   }
   if (inbox.isLoading) return <PageLoading />
   const list = inbox.data?.pages.flatMap((page) => page.items) ?? []
   const total = inbox.data?.pages[0]?.total ?? 0
   return (
-    <div className="space-y-4">
+    <div className="inbox-panel space-y-4">
       {canWrite && (
         <Card className="p-3">
           <div className="flex items-start gap-2">
@@ -146,7 +170,7 @@ export function InboxPanel({ accountId, work, onLinked }: { accountId: string; w
       <p className="text-[12px] text-mist-400">当前收件箱共 {total} 条灵感</p>
       {list.length === 0 ? <Card><Empty icon={<Inbox className="size-5" />} title="收件箱是空的" desc="任何页面按 Ctrl+Shift+I 都能快速记一条灵感，手机上可以用右下角按钮。"
         action={canWrite ? <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => openQuickCollect('inbox')}>记一条灵感</Button> : undefined} /></Card> : (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="inbox-panel-list grid gap-3">
           {list.map((it) => {
             const sug = suggestions[it.id] ?? it.suggestion
             return (

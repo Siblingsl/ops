@@ -99,8 +99,16 @@ func (s *Server) runImageGen(ctx context.Context, account *Account, workID *uuid
 		return Asset{}, err
 	}
 	start := time.Now()
-	imgRes, callErr := ai.GenerateImage(ctx, s.aiHTTP, ai.ImageRequest{
+	modelCtx, client := s.aiClientForRoute(ctx, rt)
+	var fetchURL func(context.Context, string) (ai.ImageResult, error)
+	if rt.Desktop != nil {
+		fetchURL = func(fetchCtx context.Context, imageURL string) (ai.ImageResult, error) {
+			return fetchDesktopGeneratedImage(fetchCtx, client, imageURL)
+		}
+	}
+	imgRes, callErr := ai.GenerateImage(modelCtx, client, ai.ImageRequest{
 		BaseURL: rt.BaseURL, APIKey: rt.APIKey, Model: rt.Model, Prompt: prompt, Size: size,
+		FetchURL: fetchURL,
 	})
 	status, errText := "ok", ""
 	if callErr != nil {

@@ -16,6 +16,10 @@ import (
 func TestOPT11RetentionPoliciesAndProtectedWorkVersions(t *testing.T) {
 	f := env.accounts(t)
 	ctx := context.Background()
+	previousNow := env.srv.now
+	testNow := env.srv.today().Add(10 * time.Hour)
+	env.srv.now = func() time.Time { return testNow }
+	t.Cleanup(func() { env.srv.now = previousNow })
 	marker := "opt11-retention:" + env.srv.today().Format("2006-01-02")
 	var previousMarker time.Time
 	err := env.srv.db.QueryRow(ctx, `DELETE FROM job_marker WHERE key=$1 RETURNING created_at`, marker).Scan(&previousMarker)

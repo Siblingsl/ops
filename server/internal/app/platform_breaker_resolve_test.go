@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 import (
 	"context"
@@ -115,8 +115,15 @@ func TestPlatformBreakerResolveUnblocksClaimButNotAutoCollect(t *testing.T) {
 	if breakerOpen(t, "xhs", version) {
 		t.Fatal("恢复后不应再处于熔断状态")
 	}
+	if _, _, ok := f.claimWith(t); ok {
+		t.Fatal("解除熔断不会自动恢复 degraded 连接，必须先用新映射重新验证")
+	}
+	if _, err := env.srv.db.Exec(context.Background(), `UPDATE platform_connection SET availability='ready',
+		capabilities=jsonb_set(capabilities,'{mappingVersion}','2'::jsonb),updated_at=now() WHERE id=$1`, f.Connection); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, ok := f.claimWith(t); !ok {
-		t.Fatal("恢复后应能领取任务")
+		t.Fatal("新映射重新验证后应能领取任务")
 	}
 
 	// 但自动采集不自动重开：那是用户的选择，不能替用户做主。

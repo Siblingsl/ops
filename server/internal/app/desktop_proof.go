@@ -188,16 +188,19 @@ var desktopOperations = map[string]desktopOperation{
 	"connection.create": {Name: "connection.create", Scope: desktopProofAIScope, Method: http.MethodPost, Path: "/api/v1/desktop/connections", Limit: desktopMaxModelRequest},
 
 	// 平台采集操作。`connection.create` 是 AI 模型连接，平台连接一律 `platform.connection.*`。
-	"platform.device.register":        {Name: "platform.device.register", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/devices", Limit: desktopPlatformRequestBytes, Register: true, Purpose: desktopPlatformRegisterPurpose},
-	"platform.connection.create":      {Name: "platform.connection.create", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/connections", Limit: desktopPlatformRequestBytes},
-	"platform.connection.verify":      {Name: "platform.connection.verify", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/connections/{uuid}/verify", Limit: desktopPlatformRequestBytes},
-	"platform.connection.mine.list":   {Name: "platform.connection.mine.list", Scope: desktopProofPlatformAccountScope, Method: http.MethodGet, Path: "/api/v1/desktop/platform/connections/mine", Limit: desktopPlatformRequestBytes},
-	"platform.connection.mine.revoke": {Name: "platform.connection.mine.revoke", Scope: desktopProofPlatformAccountScope, Method: http.MethodDelete, Path: "/api/v1/desktop/platform/connections/{uuid}", Limit: desktopPlatformRequestBytes},
-	"platform.presence":               {Name: "platform.presence", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/presence", Limit: desktopPlatformRequestBytes},
-	"platform.run.claim":              {Name: "platform.run.claim", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/runs/claim", Limit: desktopPlatformRequestBytes},
-	"platform.run.heartbeat":          {Name: "platform.run.heartbeat", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/runs/{uuid}/heartbeat", Limit: desktopPlatformRequestBytes},
-	"platform.run.result":             {Name: "platform.run.result", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/runs/{uuid}/results", Limit: desktopPlatformResultsBytes},
-	"platform.run.receipt":            {Name: "platform.run.receipt", Scope: desktopProofPlatformWorkspaceScope, Method: http.MethodGet, Path: "/api/v1/desktop/platform/runs/{uuid}/receipts/{int}", Limit: desktopPlatformRequestBytes},
+	"platform.device.register":         {Name: "platform.device.register", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/devices", Limit: desktopPlatformRequestBytes, Register: true, Purpose: desktopPlatformRegisterPurpose},
+	"platform.connection.create":       {Name: "platform.connection.create", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/connections", Limit: desktopPlatformRequestBytes},
+	"platform.connection.verify":       {Name: "platform.connection.verify", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/connections/{uuid}/verify", Limit: desktopPlatformRequestBytes},
+	"platform.connection.mine.list":    {Name: "platform.connection.mine.list", Scope: desktopProofPlatformAccountScope, Method: http.MethodGet, Path: "/api/v1/desktop/platform/connections/mine", Limit: desktopPlatformRequestBytes},
+	"platform.connection.mine.revoke":  {Name: "platform.connection.mine.revoke", Scope: desktopProofPlatformAccountScope, Method: http.MethodDelete, Path: "/api/v1/desktop/platform/connections/{uuid}", Limit: desktopPlatformRequestBytes},
+	"platform.presence":                {Name: "platform.presence", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/presence", Limit: desktopPlatformRequestBytes},
+	"platform.run.claim":               {Name: "platform.run.claim", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/runs/claim", Limit: desktopPlatformRequestBytes},
+	"platform.run.heartbeat":           {Name: "platform.run.heartbeat", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/runs/{uuid}/heartbeat", Limit: desktopPlatformRequestBytes},
+	"platform.run.result":              {Name: "platform.run.result", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/runs/{uuid}/results", Limit: desktopPlatformResultsBytes},
+	"platform.run.receipt":             {Name: "platform.run.receipt", Scope: desktopProofPlatformWorkspaceScope, Method: http.MethodGet, Path: "/api/v1/desktop/platform/runs/{uuid}/receipts/{int}", Limit: desktopPlatformRequestBytes},
+	"platform.account.sync.request":    {Name: "platform.account.sync.request", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/accounts/{uuid}/platform-account-sync", Limit: desktopPlatformRequestBytes},
+	"platform.metrics.refresh.request": {Name: "platform.metrics.refresh.request", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/accounts/{uuid}/platform-metrics-refresh", Limit: desktopPlatformRequestBytes},
+	"platform.sync.operation.resume":   {Name: "platform.sync.operation.resume", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/accounts/{uuid}/platform-sync-operations/{uuid}/actions", Limit: desktopPlatformRequestBytes},
 }
 
 func desktopOperationOf(operation string) (desktopOperation, bool) {
@@ -211,7 +214,9 @@ func desktopOperationPathAllowed(operation, method, path string) bool {
 }
 
 func (op desktopOperation) matches(method, path string) bool {
-	if path == "" || !strings.HasPrefix(path, "/api/v1/desktop/") || strings.Contains(path, "?") ||
+	pathAllowed := strings.HasPrefix(op.Path, "/api/v1/desktop/") ||
+		(op.Scope == desktopProofPlatformScope && strings.HasPrefix(op.Path, "/api/v1/accounts/"))
+	if path == "" || !pathAllowed || strings.Contains(path, "?") ||
 		strings.Contains(path, "#") || strings.Contains(path, "\\") || strings.Contains(path, "..") {
 		return false
 	}
@@ -254,6 +259,9 @@ var platformOperations = []string{
 	"platform.run.heartbeat",
 	"platform.run.result",
 	"platform.run.receipt",
+	"platform.account.sync.request",
+	"platform.metrics.refresh.request",
+	"platform.sync.operation.resume",
 }
 
 type desktopVerifiedDeviceKey struct{}

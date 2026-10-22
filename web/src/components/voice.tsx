@@ -22,12 +22,19 @@ function speechCtor(): (new () => SpeechRec) | null {
 export const voiceSupported = () => !!speechCtor()
 
 /** VoiceButton dictates into a text field with the browser's speech recognition (S3 语音输入). Audio never reaches our server. */
-export function VoiceButton({ onText, className }: { onText: (text: string) => void; className?: string }) {
+export function VoiceButton({ onText, className, triggerEvent }: { onText: (text: string) => void; className?: string; triggerEvent?: string }) {
   const [on, setOn] = useState(false)
   const rec = useRef<SpeechRec | null>(null)
+  const button = useRef<HTMLButtonElement>(null)
   const cb = useRef(onText)
   cb.current = onText
   useEffect(() => () => rec.current?.stop(), [])
+  useEffect(() => {
+    if (!triggerEvent) return
+    const click = () => button.current?.click()
+    window.addEventListener(triggerEvent, click)
+    return () => window.removeEventListener(triggerEvent, click)
+  }, [triggerEvent])
   const Ctor = speechCtor()
   if (!Ctor) return null
   const toggle = () => {
@@ -54,7 +61,7 @@ export function VoiceButton({ onText, className }: { onText: (text: string) => v
     setOn(true)
   }
   return (
-    <button type="button" onClick={toggle} title={on ? '停止语音输入' : '语音输入（由浏览器识别）'}
+    <button ref={button} type="button" onClick={toggle} title={on ? '停止语音输入' : '语音输入（由浏览器识别）'}
       className={cn('inline-flex size-8 cursor-pointer items-center justify-center rounded-md border transition',
         on ? 'animate-pulse border-xhs/40 bg-xhs/10 text-xhs' : 'border-mist-200 text-mist-500 hover:border-mist-300 hover:text-mist-800', className)}>
       {on ? <MicOff className="size-4" /> : <Mic className="size-4" />}

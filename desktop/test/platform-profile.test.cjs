@@ -42,7 +42,8 @@ test('profile 目录按 登录用户/平台/连接 分段，且禁止越界与�
   assert.notEqual(path.dirname(path.dirname(path.dirname(dir))), path.dirname(path.dirname(path.dirname(otherUser))));
 
   assert.throws(() => connectionProfileDir(root, { userId: '../escape', platform: 'xhs', connectionId: conn1 }), PlatformProfileError);
-  assert.throws(() => connectionProfileDir(root, { userId: userA, platform: 'toutiao', connectionId: conn1 }), /不支持/);
+  assert.doesNotThrow(() => connectionProfileDir(root, { userId: userA, platform: 'toutiao', connectionId: conn1 }));
+  assert.throws(() => connectionProfileDir(root, { userId: userA, platform: 'unknown', connectionId: conn1 }), /不支持/);
   assert.throws(() => connectionProfileDir(root, { userId: userA, platform: 'xhs', connectionId: '../../x' }), PlatformProfileError);
   assert.throws(() => assertInsideNamespace(accountNamespace(root, userA), path.join(root, 'accounts', userB)), PlatformProfileError);
 });

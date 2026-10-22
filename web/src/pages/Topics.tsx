@@ -1,23 +1,24 @@
-import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
+﻿import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import {
-  ArrowRight, BookOpen, CalendarDays, Check, Gauge, Inbox, Layers, Lightbulb, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Sparkles, Trash2, X,
+  ArrowRight, BookOpen, CalendarDays, Check, Gauge, Inbox, Layers, Lightbulb, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Search, Sparkles, Trash2, X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { openCreateWork } from '@/components/create-work-panel'
 import { toast } from 'sonner'
 import { Dialog, Drawer, confirm } from '@/components/dialog'
 import { AIFeedback, RefsNote, sendFeedback } from '@/components/refs'
 import { StarButton } from '@/components/star-button'
-import { Badge, Button, Card, cn, Empty, Field, formatLabel, HumanGate, IconButton, Input, Notice, PageHeader, PageLoading, Select, Switch, Tabs, Textarea } from '@/components/ui'
+import { Badge, Button, Card, cn, Empty, Field, platformFormatLabel, HumanGate, IconButton, Input, Notice, PageHeader, PageLoading, PageState, Select, Switch, Tabs, Textarea } from '@/components/ui'
 import { InboxPanel } from '@/components/inbox-panel'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
-import { type AIRefs, relTime } from '@/lib/format'
+import { type AIRefs, relTime, runeLen } from '@/lib/format'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import { deleteWithUndo } from '@/lib/undo'
-import type { InboxPage, Series, Topic, TopicPage, Work } from '@/lib/types'
+import type { ContentFormat, InboxPage, Platform, Series, Topic, TopicPage, Work } from '@/lib/types'
 
 interface Suggestion {
 	hot_item_id?: string | null
@@ -42,7 +43,8 @@ const sourceLabel: Record<Topic['source'], { label: string; tone: 'gray' | 'ink'
   daily: { label: '今日推荐', tone: 'ink' },
 }
 
-function SuggestionCard({ s, added, adding, onAdd, onIgnore }: { s: Suggestion; added: boolean; adding: boolean; onAdd: () => void; onIgnore?: () => void }) {
+function SuggestionCard({ s, platform, added, adding, addedTopicId, accountId, onAdd, onIgnore, onDone }: { s: Suggestion; platform: Platform; added: boolean; adding: boolean; addedTopicId?: string; accountId?: string; onAdd: () => void; onIgnore?: () => void; onDone?: () => void }) {
+  const nav = useNavigate()
   return (
     <div className={cn('rounded-xl border p-4 transition', added ? 'border-ink-200 bg-ink-50/40' : 'border-mist-200 bg-white')}>
       <div className="flex items-start justify-between gap-3">
@@ -56,13 +58,20 @@ function SuggestionCard({ s, added, adding, onAdd, onIgnore }: { s: Suggestion; 
           {s.source_url && <a className="text-xs text-ink-600" href={s.source_url} target="_blank" rel="noreferrer">核实热点原文</a>}
           {(s.needed_materials?.length || s.format) && (
             <div className="mt-2 flex flex-wrap gap-1">
-              {s.format && <Badge tone="ink">{formatLabel[s.format] ?? s.format}</Badge>}
+              {s.format && <Badge tone="ink">{platformFormatLabel(platform, s.format)}</Badge>}
               {s.needed_materials?.map((m) => <Badge key={m}>需要：{m}</Badge>)}
             </div>
           )}
         </div>
         {added ? (
-          <Badge tone="ink"><Check className="size-3" />已入库</Badge>
+          // TP-06：入库后要有下一步——直接看这条选题，或用它开始创作。
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            <Badge tone="ink"><Check className="size-3" />已入库</Badge>
+            {addedTopicId && <>
+              <Button size="sm" variant="ghost" onClick={() => { openCreateWork({ accountId, topicId: addedTopicId }); onDone?.() }}>用它开始创作</Button>
+              <Button size="sm" variant="ghost" className="text-mist-400" onClick={() => nav('/topics?tab=adopted')}>查看已采用</Button>
+            </>}
+          </div>
         ) : (
           <div className="flex shrink-0 flex-col items-end gap-1">
             <Button size="sm" variant="outline" loading={adding} onClick={onAdd} icon={<Plus className="size-3.5" />}>入库</Button>
@@ -77,6 +86,8 @@ function SuggestionCard({ s, added, adding, onAdd, onIgnore }: { s: Suggestion; 
 function useAddSuggestion(accountId: string, source: string, callId: string | null, seriesId?: string) {
   const inv = useInvalidate()
   const [added, setAdded] = useState<Record<number, boolean>>({})
+  // TP-06：记录每条建议入库后生成的选题 id，供"用它开始创作"使用。
+  const [topicIDs, setTopicIDs] = useState<Record<number, string>>({})
   const [ignored, setIgnored] = useState<Record<number, boolean>>({})
   const [adding, setAdding] = useState<number | null>(null)
   // 选题建议的去向（10 文档 3.3）：本批一条都没入库时记为放弃；之后再入库会覆盖为接受。
@@ -93,6 +104,7 @@ function useAddSuggestion(accountId: string, source: string, callId: string | nu
         ai_call_id: callId, choice_index: i, ...(seriesId ? { series_id: seriesId } : {}),
       })
       setAdded((a) => ({ ...a, [i]: true }))
+      setTopicIDs((ids) => ({ ...ids, [i]: r.topic.id }))
       inv(['topics', accountId], ['series', accountId])
       if (r.similar.length) toast.warning(`已入库。注意与「${r.similar[0]}」相似`)
       else toast.success('已加入选题池')
@@ -102,20 +114,22 @@ function useAddSuggestion(accountId: string, source: string, callId: string | nu
       setAdding(null)
     }
   }
-  return { added, adding, add, ignored, ignore, reset: () => { setAdded({}); setIgnored({}) } }
+  return { added, adding, add, topicIDs, ignored, ignore, reset: () => { setAdded({}); setTopicIDs({}); setIgnored({}) } }
 }
 
-function SuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose: () => void; accountId: string }) {
+function SuggestDrawer({ open, onClose, accountId, platform, accountFormat }: { open: boolean; onClose: () => void; accountId: string; platform: Platform; accountFormat: string }) {
   const [direction, setDirection] = useState('')
+  const [contentFormat, setContentFormat] = useState(accountFormat)
   const [list, setList] = useState<Suggestion[]>([])
   const [refs, setRefs] = useState<AIRefs | null>(null)
   const [callId, setCallId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const s = useAddSuggestion(accountId, 'ai', callId)
+  useEffect(() => setContentFormat(accountFormat), [accountFormat])
   const run = async () => {
     setBusy(true)
     try {
-      const r = await post<{ suggestions: Suggestion[]; refs: AIRefs; ai_call_id: string }>(`/accounts/${accountId}/topics/suggest`, { direction })
+      const r = await post<{ suggestions: Suggestion[]; refs: AIRefs; ai_call_id: string }>(`/accounts/${accountId}/topics/suggest`, { direction, ...(platform === 'toutiao' ? { content_format: contentFormat } : {}) })
       setList(r.suggestions)
       setRefs(r.refs)
       setCallId(r.ai_call_id)
@@ -128,6 +142,7 @@ function SuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose: (
   }
   return (
     <Drawer open={open} onClose={onClose} title="AI 选题建议" desc="建议不会自动进入选题池，需要你逐条挑选。" width="w-[560px]">
+      {platform === 'toutiao' && <Field className="mb-3" label="本批选题形态"><Select value={contentFormat} onChange={(e) => setContentFormat(e.target.value)}><option value="long_article">文章</option><option value="micro_post">微头条</option></Select></Field>}
       <div className="flex gap-2">
         <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="方向关键词（可选），例如：时间管理" onKeyDown={(e) => isEnterWithoutComposition(e.nativeEvent) && run()} />
         <Button variant="primary" onClick={run} loading={busy} icon={<Sparkles className="size-4" />}>生成</Button>
@@ -136,25 +151,27 @@ function SuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose: (
       {!busy && <RefsNote refs={refs} callId={callId} sampleText={list.map((x) => [x.title, x.angle].filter(Boolean).join('｜')).join('\n')} className="mt-3" onRetry={run} />}
       <div className="mt-4 space-y-3">
         {busy && list.length === 0 && Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-mist-100" />)}
-        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!s.added[i]} adding={s.adding === i} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} />)}
+        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} platform={platform} s={x} added={!!s.added[i]} adding={s.adding === i} addedTopicId={s.topicIDs[i]} accountId={accountId} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} onDone={onClose} />)}
         {!busy && list.length === 0 && <Empty icon={<Sparkles className="size-5" />} title="输入一个方向，或直接生成" desc="AI 会参考账号定位档案、已确认的写作记忆和最近的选题，避免重复。" />}
       </div>
     </Drawer>
   )
 }
 
-function HotSuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose: () => void; accountId: string }) {
+function HotSuggestDrawer({ open, onClose, accountId, platform, accountFormat }: { open: boolean; onClose: () => void; accountId: string; platform: Platform; accountFormat: string }) {
   const [direction, setDirection] = useState('')
+  const [contentFormat, setContentFormat] = useState(accountFormat)
   const [context, setContext] = useState('')
   const [list, setList] = useState<Suggestion[]>([])
   const [refs, setRefs] = useState<AIRefs | null>(null)
   const [callId, setCallId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const s = useAddSuggestion(accountId, 'hot', callId)
+  useEffect(() => setContentFormat(accountFormat), [accountFormat])
   const run = async () => {
     setBusy(true)
     try {
-      const r = await post<{ suggestions: Suggestion[]; refs: AIRefs; ai_call_id?: string }>(`/accounts/${accountId}/topics/hot-suggest`, { direction, context })
+      const r = await post<{ suggestions: Suggestion[]; refs: AIRefs; ai_call_id?: string }>(`/accounts/${accountId}/topics/hot-suggest`, { direction, context, ...(platform === 'toutiao' ? { content_format: contentFormat } : {}) })
       setList(r.suggestions)
       setRefs(r.refs)
       setCallId(r.ai_call_id ?? null)
@@ -168,6 +185,7 @@ function HotSuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose
   return (
     <Drawer open={open} onClose={onClose} title="热点选题" desc="使用已匹配的受控来源热点，也可粘贴公开资讯摘要；建议逐条入库。" width="w-[560px]">
       <div className="space-y-3">
+        {platform === 'toutiao' && <Field label="本批选题形态"><Select value={contentFormat} onChange={(e) => setContentFormat(e.target.value)}><option value="long_article">文章</option><option value="micro_post">微头条</option></Select></Field>}
         <Field label="方向（可选）">
           <Input value={direction} onChange={(e) => setDirection(e.target.value)} placeholder="例如：职场沟通、育儿" onKeyDown={(e) => isEnterWithoutComposition(e.nativeEvent) && run()} />
         </Field>
@@ -180,20 +198,21 @@ function HotSuggestDrawer({ open, onClose, accountId }: { open: boolean; onClose
       {!busy && <RefsNote refs={refs} callId={callId} sampleText={list.map((x) => [x.title, x.angle].filter(Boolean).join('｜')).join('\n')} className="mt-3" onRetry={run} />}
       <div className="mt-4 space-y-3">
         {busy && list.length === 0 && Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-mist-100" />)}
-        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!s.added[i]} adding={s.adding === i} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} />)}
+        {list.map((x, i) => s.ignored[i] ? null : <SuggestionCard key={i} platform={platform} s={x} added={!!s.added[i]} adding={s.adding === i} addedTopicId={s.topicIDs[i]} onAdd={() => s.add(i, x)} onIgnore={() => s.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} />)}
         {!busy && list.length === 0 && <Empty icon={<Sparkles className="size-5" />} title="生成有时效感的选题" desc="可贴资讯摘要；仍须逐条入库。" />}
       </div>
     </Drawer>
   )
 }
 
-function TopicEditDialog({ t, accountFormat, series, onClose }: { t: Topic; accountFormat: string; series: Series[]; onClose: () => void }) {
+function TopicEditDialog({ t, accountFormat, accountPlatform, series, onClose }: { t: Topic; accountFormat: string; accountPlatform: Platform; series: Series[]; onClose: () => void }) {
   const inv = useInvalidate()
   const [f, setF] = useState({
     title: t.title, angle: t.angle, audience: t.audience ?? '', hook: t.hook ?? '', needed: (t.needed_materials ?? []).join('、'),
     format: t.format ?? '', planned_date: t.planned_date ?? '', series_id: t.series_id ?? '',
   })
   const [busy, setBusy] = useState(false)
+  const formats = accountPlatform === 'toutiao' ? ['long_article', 'micro_post'] : accountFormat ? [accountFormat] : []
   const save = async () => {
     setBusy(true)
     try {
@@ -219,7 +238,7 @@ function TopicEditDialog({ t, accountFormat, series, onClose }: { t: Topic; acco
         <Field label="目标读者"><Input value={f.audience} onChange={(e) => setF({ ...f, audience: e.target.value })} placeholder="写给谁看" /></Field>
         <Field label="预计形态">
           <Select value={f.format} onChange={(e) => setF({ ...f, format: e.target.value })}>
-            <option value="">未定</option>{accountFormat && <option value={accountFormat}>{formatLabel[accountFormat] ?? accountFormat}</option>}
+            <option value="">未定</option>{formats.map((format) => <option key={format} value={format}>{platformFormatLabel(accountPlatform, format)}</option>)}
           </Select>
         </Field>
         <Field label="钩子" className="sm:col-span-2"><Input value={f.hook} onChange={(e) => setF({ ...f, hook: e.target.value })} placeholder="开头用什么抓住读者" /></Field>
@@ -247,7 +266,7 @@ function ScoreBar({ label, value, tip }: { label: string; value: number | null |
   )
 }
 
-function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t: Topic; accountId: string; accountFormat: string; series: Series[]; focused: boolean; primed?: boolean }) {
+function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focused, primed, desktop, selected, onSelect }: { t: Topic; accountId: string; accountFormat: string; accountPlatform: Platform; series: Series[]; focused: boolean; primed?: boolean; desktop?: boolean; selected?: boolean; onSelect?: () => void }) {
   const inv = useInvalidate()
   const qc = useQueryClient()
   const canWrite = useCanWrite()
@@ -322,15 +341,15 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
   const sr = series.find((s) => s.id === t.series_id)
   return (
     <div ref={ref}>
-      <Card className={cn('group relative p-4 transition hover:border-mist-300', focused && 'ring-2 ring-ink-300')}>
+      <Card data-testid={desktop ? 'desktop-topic-row' : undefined} className={cn('group relative p-4 transition hover:border-mist-300', focused && 'ring-2 ring-ink-300', desktop && 'desktop-topic-row-card', desktop && selected && 'desktop-topic-row-selected')}>
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            <div className="font-display text-[15px] font-semibold leading-snug text-mist-900">
-              {t.pinned && <Pin className="mr-1 inline size-3.5 -translate-y-px text-ink-500" aria-label="已置顶" />}{t.title}
+            <div className={cn('font-display text-[15px] font-semibold leading-snug text-mist-900', desktop && 'desktop-topic-row-title')}>
+              {desktop ? <button type="button" className="desktop-topic-select" aria-pressed={!!selected} onClick={onSelect}>{t.pinned && <Pin className="mr-1 inline size-3.5 -translate-y-px text-ink-500" aria-label="已置顶" />}{t.title}</button> : <>{t.pinned && <Pin className="mr-1 inline size-3.5 -translate-y-px text-ink-500" aria-label="已置顶" />}{t.title}</>}
             </div>
             {t.angle && <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-mist-500">{t.angle}</p>}
             {(t.audience || t.hook) && (
-              <div className="mt-1.5 space-y-0.5 text-[12.5px] text-mist-500">
+              <div className={cn('mt-1.5 space-y-0.5 text-[12.5px] text-mist-500', desktop && 'desktop-topic-row-extra')}>
                 {t.audience && <div><span className="text-mist-400">读者 · </span>{t.audience}</div>}
                 {t.hook && <div className="line-clamp-1"><span className="text-mist-400">钩子 · </span>{t.hook}</div>}
               </div>
@@ -353,23 +372,23 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
           )}
         </div>
         {((t.needed_materials?.length ?? 0) > 0 || t.format || t.planned_date || sr) && (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {t.format && <Badge tone="ink">{formatLabel[t.format] ?? t.format}</Badge>}
-            {t.format && accountFormat && t.format !== accountFormat && <Badge tone="red">形态与账号类型不匹配</Badge>}
+          <div className={cn('mt-2 flex flex-wrap gap-1', desktop && 'desktop-topic-row-tags')}>
+            {t.format && <Badge tone="ink">{platformFormatLabel(accountPlatform, t.format)}</Badge>}
+            {accountPlatform !== 'toutiao' && t.format && accountFormat && t.format !== accountFormat && <Badge tone="red">形态与账号类型不匹配</Badge>}
             {t.planned_date && <Badge tone="gamboge"><CalendarDays className="size-3" />计划 {t.planned_date.slice(5)}</Badge>}
             {sr && <Badge><Layers className="size-3" />{sr.name}</Badge>}
             {t.needed_materials?.slice(0, 3).map((m) => <Badge key={m}>需要：{m}</Badge>)}
           </div>
         )}
         {t.status === 'pending' && (t.score_fit != null || t.score_material != null) && (
-          <div className="mt-2.5 space-y-0.5 rounded-lg bg-mist-50/70 px-2.5 py-1.5">
+          <div className={cn('mt-2.5 space-y-0.5 rounded-lg bg-mist-50/70 px-2.5 py-1.5', desktop && 'desktop-topic-row-scores')}>
             <ScoreBar label="契合度" value={t.score_fit} tip={t.score_reason} />
             <ScoreBar label="素材充足" value={t.score_material} tip="素材库里能支撑这个选题的素材多少" />
             <ScoreBar label="新颖度" value={t.score_novelty} tip="与本账号写过的标题越不像，分越高" />
             {t.score_reason && <p className="pt-0.5 text-[11px] leading-snug text-mist-400">{t.score_reason}</p>}
           </div>
         )}
-        <div className="mt-3 flex items-center gap-2">
+        <div className={cn('mt-3 flex items-center gap-2', desktop && 'desktop-topic-row-footer')}>
           <Badge tone={sourceLabel[t.source]?.tone ?? 'gray'}>{sourceLabel[t.source]?.label ?? t.source}</Badge>
           <span className="text-xs text-mist-400">{relTime(t.created_at)}</span>
           <div className="ml-auto flex items-center gap-2">
@@ -384,12 +403,12 @@ function TopicCard({ t, accountId, accountFormat, series, focused, primed }: { t
         </div>
         {primed && !t.work_id && canWrite && <p className="mt-2 text-[12px] text-ink-700">这是最早采用、还没开始写的选题，点「开始创作」进入编辑器。</p>}
       </Card>
-      {edit && <TopicEditDialog t={{ ...t, account_id: t.account_id ?? accountId }} accountFormat={accountFormat} series={series} onClose={() => setEdit(false)} />}
+      {edit && <TopicEditDialog t={{ ...t, account_id: t.account_id ?? accountId }} accountFormat={accountFormat} accountPlatform={accountPlatform} series={series} onClose={() => setEdit(false)} />}
     </div>
   )
 }
 
-function SeriesPanel({ accountId, series, topics }: { accountId: string; series: Series[]; topics: Topic[] }) {
+function SeriesPanel({ accountId, platform, series, topics }: { accountId: string; platform: Platform; series: Series[]; topics: Topic[] }) {
   const canWrite = useCanWrite()
   const inv = useInvalidate()
   const [creating, setCreating] = useState(false)
@@ -445,12 +464,12 @@ function SeriesPanel({ accountId, series, topics }: { accountId: string; series:
           <Field label="总纲（可选）" hint="这个系列想讲清楚什么、分几块"><Textarea rows={4} value={outline} onChange={(e) => setOutline(e.target.value)} /></Field>
         </div>
       </Dialog>
-      {suggestFor && <SeriesSuggestDrawer s={suggestFor} accountId={accountId} onClose={() => setSuggestFor(null)} />}
+      {suggestFor && <SeriesSuggestDrawer platform={platform} s={suggestFor} accountId={accountId} onClose={() => setSuggestFor(null)} />}
     </div>
   )
 }
 
-function SeriesSuggestDrawer({ s, accountId, onClose }: { s: Series; accountId: string; onClose: () => void }) {
+function SeriesSuggestDrawer({ s, platform, accountId, onClose }: { s: Series; platform: Platform; accountId: string; onClose: () => void }) {
   const [list, setList] = useState<Suggestion[]>([])
   const [callId, setCallId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -473,7 +492,7 @@ function SeriesSuggestDrawer({ s, accountId, onClose }: { s: Series; accountId: 
       <Button variant="primary" loading={busy} icon={<Sparkles className="size-4" />} onClick={run}>{list.length ? '换一批' : '生成建议'}</Button>
       {callId && <div className="mt-2"><AIFeedback callId={callId} sampleText={list.map((x) => [x.title, x.angle].filter(Boolean).join('｜')).join('\n')} /></div>}
       <div className="mt-4 space-y-3">
-        {list.map((x, i) => add.ignored[i] ? null : <SuggestionCard key={i} s={x} added={!!add.added[i]} adding={add.adding === i} onAdd={() => add.add(i, x)} onIgnore={() => add.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} />)}
+        {list.map((x, i) => add.ignored[i] ? null : <SuggestionCard key={i} platform={platform} s={x} added={!!add.added[i]} adding={add.adding === i} addedTopicId={add.topicIDs[i]} accountId={accountId} onAdd={() => add.add(i, x)} onIgnore={() => add.ignore(i, [x.title, x.angle].filter(Boolean).join('｜'))} onDone={onClose} />)}
       </div>
     </Drawer>
   )
@@ -498,9 +517,14 @@ export default function Topics() {
   const [adding, setAdding] = useState(false)
   const [title, setTitle] = useState('')
   const [angle, setAngle] = useState('')
+  const [topicFormat, setTopicFormat] = useState(acc?.content_format ?? 'long_article')
   const [similar, setSimilar] = useState<string[]>([])
   const [byScore, setByScore] = useState(false)
   const [scoring, setScoring] = useState(false)
+  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
+  const [topicSearch, setTopicSearch] = useState(params.get('q') ?? '')
+  const [sourceFilter, setSourceFilter] = useState(params.get('source') ?? 'all')
+  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null)
   const startId = params.get('start')
   const focus = params.get('focus') || startId
   const inv = useInvalidate()
@@ -525,14 +549,19 @@ export default function Topics() {
       if (params.get('new')) {
         setSimilar([])
         setTitle(params.get('title') ?? '')
+        setTopicFormat(acc?.content_format ?? 'long_article')
         setAdding(true)
       }
       const n = new URLSearchParams(params)
       for (const k of ['suggest', 'new', 'title', 'hot']) n.delete(k)
       setParams(n, { replace: true })
     }
-  }, [params, setParams])
+  }, [params, setParams, acc?.content_format])
   const data = topicQuery.data?.pages.flatMap((page) => page.items)
+  useEffect(() => {
+    setTopicSearch(params.get('q') ?? '')
+    setSourceFilter(params.get('source') ?? 'all')
+  }, [params])
   useEffect(() => {
     if (focus && data) {
       const t = data.find((x) => x.id === focus)
@@ -541,12 +570,29 @@ export default function Topics() {
     }
   }, [focus, data, topicQuery.hasNextPage, topicQuery.isFetchingNextPage, topicQuery.fetchNextPage])
   if (!acc || topicQuery.isLoading) return <PageLoading />
+  // XC-04：选题请求失败要区分"加载失败"和"没有选题"。
+  if (topicQuery.isError) {
+    return <div className="mx-auto max-w-2xl px-6 py-16"><PageState loading={false} error={topicQuery.error}
+      onRetry={() => void topicQuery.refetch()} emptyTitle="这里还没有选题" /></div>
+  }
   const list = data ?? []
   const counts = topicQuery.data?.pages[0]?.status_counts
   const shown = list.filter((t) => t.status === tab)
+  const desktopShown = shown.filter((t) => {
+    const query = topicSearch.trim().toLocaleLowerCase()
+    const matchesQuery = !query || `${t.title} ${t.angle} ${t.audience ?? ''} ${t.hook ?? ''}`.toLocaleLowerCase().includes(query)
+    return matchesQuery && (sourceFilter === 'all' || t.source === sourceFilter)
+  })
+  const selectedTopic = desktopShown.find((t) => t.id === selectedTopicId) ?? desktopShown.find((t) => t.id === focus) ?? desktopShown[0]
+  const updateDesktopFilter = (key: 'q' | 'source', value: string) => {
+    const next = new URLSearchParams(params)
+    if (!value || (key === 'source' && value === 'all')) next.delete(key)
+    else next.set(key, value)
+    setParams(next, { replace: true })
+  }
   const save = async () => {
     try {
-      const r = await post<{ topic: Topic; similar: string[] }>(`/accounts/${acc.id}/topics`, { title, angle })
+      const r = await post<{ topic: Topic; similar: string[] }>(`/accounts/${acc.id}/topics`, { title, angle, ...(acc.platform === 'toutiao' ? { format: topicFormat } : {}) })
       inv(['topics', acc.id])
       setSimilar(r.similar)
       setTitle('')
@@ -556,6 +602,13 @@ export default function Topics() {
     } catch (e) {
       toast.error(errorMessage(e))
     }
+  }
+  const openAddTopic = () => {
+    setSimilar([])
+    setTitle('')
+    setAngle('')
+    setTopicFormat(acc.content_format)
+    setAdding(true)
   }
   const score = async () => {
     setScoring(true)
@@ -570,46 +623,91 @@ export default function Topics() {
     }
   }
   return (
-    <div className="animate-fade-in">
-      <PageHeader title="选题池" desc="先把想法存下来，采用后再开始创作。"
+    <div className={cn('animate-fade-in', desktopPresentation && 'desktop-topics-page')}>
+      <PageHeader title="选题池" desc={desktopPresentation ? '先存下想法，再决定哪一条值得开始。' : '先把想法存下来，采用后再开始创作。'}
         action={canWrite ? <>
-          <Button icon={<Plus className="size-4" />} onClick={() => { setSimilar([]); setAdding(true) }}>手动添加</Button>
-          <Button icon={<Sparkles className="size-4" />} onClick={() => setHotSuggest(true)}>热点选题</Button>
-          <Button variant="primary" icon={<Sparkles className="size-4" />} onClick={() => setSuggest(true)}>AI 选题建议</Button>
+          {desktopPresentation ? <>
+            <Button icon={<Sparkles className="size-4" />} onClick={() => setSuggest(true)}>AI 选题建议</Button>
+            <Button variant="primary" icon={<Plus className="size-4" />} onClick={openAddTopic}>添加选题</Button>
+          </> : <>
+            <Button icon={<Plus className="size-4" />} onClick={openAddTopic}>手动添加</Button>
+            <Button icon={<Sparkles className="size-4" />} onClick={() => setHotSuggest(true)}>热点选题</Button>
+            <Button variant="primary" icon={<Sparkles className="size-4" />} onClick={() => setSuggest(true)}>AI 选题建议</Button>
+          </>}
         </> : undefined} />
-      <div className="mb-5 flex flex-wrap items-center gap-3">
+      <div className={cn('mb-5 flex flex-wrap items-center gap-3', desktopPresentation && 'desktop-topic-tabs')}>
         <Tabs value={tab} onChange={setTab} items={[
           { value: 'pending', label: '待定', count: counts?.pending },
-          { value: 'adopted', label: '已采用', count: counts?.adopted },
-          { value: 'dropped', label: '已放弃', count: counts?.dropped },
-          { value: 'inbox', label: <span className="inline-flex items-center gap-1"><Inbox className="size-3.5" />收件箱</span>, count: inbox.data?.pages[0]?.total || undefined },
-          { value: 'series', label: <span className="inline-flex items-center gap-1"><Layers className="size-3.5" />系列</span>, count: series.data?.length || undefined },
+          { value: 'adopted', label: '已采用', count: desktopPresentation ? undefined : counts?.adopted },
+          { value: 'dropped', label: '已放弃', count: desktopPresentation ? undefined : counts?.dropped },
+          { value: 'inbox', label: desktopPresentation ? '收件箱' : <span className="inline-flex items-center gap-1"><Inbox className="size-3.5" />收件箱</span>, count: desktopPresentation ? undefined : inbox.data?.pages[0]?.total || undefined },
+          { value: 'series', label: desktopPresentation ? '系列' : <span className="inline-flex items-center gap-1"><Layers className="size-3.5" />系列</span>, count: desktopPresentation ? undefined : series.data?.length || undefined },
         ]} />
-        {tab === 'pending' && (
+        {tab === 'pending' && !desktopPresentation && (
           <div className="ml-auto flex items-center gap-3">
             <label className="flex items-center gap-2 text-[12.5px] text-mist-600"><Switch checked={byScore} onChange={setByScore} />按评分排序</label>
             {canWrite && <Button size="sm" icon={<Gauge className="size-3.5" />} loading={scoring} onClick={score}>AI 评估契合度</Button>}
           </div>
         )}
       </div>
-      {tab === 'inbox' ? <InboxPanel accountId={acc.id} /> : tab === 'series' ? <SeriesPanel accountId={acc.id} series={series.data ?? []} topics={list} /> : shown.length === 0 ? (
+      {desktopPresentation && tab !== 'inbox' && tab !== 'series' && <div className="desktop-topic-filterbar">
+        <label className="desktop-topic-search"><Search aria-hidden="true" /><Input aria-label="搜索当前页选题" value={topicSearch} onChange={(e) => { setTopicSearch(e.target.value); updateDesktopFilter('q', e.target.value) }} placeholder="搜索当前页选题" /></label>
+        <Select aria-label="选题来源" value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); updateDesktopFilter('source', e.target.value) }}>
+          <option value="all">全部来源</option><option value="manual">手动</option><option value="ai">AI 建议</option><option value="hot">热点</option><option value="review">复盘</option><option value="daily">每日推荐</option>
+        </Select>
+      </div>}
+      {desktopPresentation ? <div className="desktop-topic-layout" data-testid="desktop-topics-layout">
+        <section className="desktop-topic-list" data-testid="desktop-topic-list" aria-label="选题列表">
+          {tab === 'inbox' ? <InboxPanel accountId={acc.id} /> : tab === 'series' ? <SeriesPanel platform={acc.platform} accountId={acc.id} series={series.data ?? []} topics={list} /> : desktopShown.length === 0 ? (
+            <Empty className="desktop-topic-empty" icon={<Lightbulb className="size-5" />} title={topicSearch || sourceFilter !== 'all' ? '没有符合筛选条件的选题' : tab === 'pending' ? '还没有待定的选题' : tab === 'adopted' ? '还没有采用的选题' : '没有放弃的选题'}
+              desc={topicSearch || sourceFilter !== 'all' ? '试试调整关键词或来源。' : tab === 'pending' ? '手动记下一个想法，或者让 AI 根据账号定位给些建议。' : undefined}
+              action={canWrite && tab === 'pending' ? <div className="flex flex-wrap justify-center gap-2"><Button variant="primary" icon={<Sparkles className="size-4" />} onClick={() => setSuggest(true)}>AI 选题建议</Button><Button icon={<Plus className="size-4" />} onClick={openAddTopic}>手动添加</Button></div> : undefined} />
+          ) : <>
+            {tab === 'pending' && byScore && <p className="desktop-topic-score-note"><BookOpen className="mr-1 inline size-3.5" />综合排序 = 契合度、素材充足度、新颖度的加权；只是参考，不预测阅读量。</p>}
+            {desktopShown.map((t) => <TopicCard key={t.id} t={t} accountId={acc.id} accountFormat={acc.content_format} accountPlatform={acc.platform} series={series.data ?? []} focused={t.id === focus} primed={t.id === startId} desktop selected={t.id === selectedTopic?.id} onSelect={() => setSelectedTopicId(t.id)} />)}
+          </>}
+          {tab !== 'inbox' && topicQuery.hasNextPage && <div className="desktop-topic-load-more"><Button variant="outline" loading={topicQuery.isFetchingNextPage} onClick={() => void topicQuery.fetchNextPage()}>加载更多选题</Button></div>}
+        </section>
+        <aside className="desktop-topic-details" data-testid="desktop-topic-details" aria-label="选题详情">
+          {selectedTopic ? <>
+            <div className="desktop-topic-eyebrow">选题详情</div>
+            <h2>{selectedTopic.title}</h2>
+            <p><span>角度：</span>{selectedTopic.angle || '还没有补充切入角度。'}</p>
+            <div className="desktop-topic-detail-badges"><Badge tone={sourceLabel[selectedTopic.source]?.tone ?? 'gray'}>{sourceLabel[selectedTopic.source]?.label ?? selectedTopic.source}</Badge><Badge tone={selectedTopic.status === 'pending' ? 'gamboge' : selectedTopic.status === 'adopted' ? 'green' : 'gray'}>{selectedTopic.status === 'pending' ? '待定' : selectedTopic.status === 'adopted' ? '已采用' : '已放弃'}</Badge></div>
+            <div className="desktop-topic-divider" />
+            <h3>参考与来源</h3>
+            <dl className="desktop-topic-detail-meta">
+              <div><dt>目标读者</dt><dd>{selectedTopic.audience || '尚未填写'}</dd></div>
+              <div><dt>开篇钩子</dt><dd>{selectedTopic.hook || '尚未填写'}</dd></div>
+              <div><dt>选题来源</dt><dd>{sourceLabel[selectedTopic.source]?.label ?? selectedTopic.source} · {relTime(selectedTopic.created_at)}</dd></div>
+              {selectedTopic.strategy_pillar && <div><dt>账号定位</dt><dd>{selectedTopic.strategy_pillar}</dd></div>}
+              {selectedTopic.needed_materials?.length ? <div><dt>需要的素材</dt><dd>{selectedTopic.needed_materials.join('、')}</dd></div> : null}
+              {selectedTopic.planned_date && <div><dt>计划日期</dt><dd>{selectedTopic.planned_date}</dd></div>}
+              {selectedTopic.series_id && <div><dt>所属系列</dt><dd>{series.data?.find((s) => s.id === selectedTopic.series_id)?.name ?? '系列'}</dd></div>}
+            </dl>
+            {selectedTopic.status === 'pending' && (selectedTopic.score_fit != null || selectedTopic.score_material != null) && <div className="desktop-topic-detail-scores"><ScoreBar label="契合度" value={selectedTopic.score_fit} tip={selectedTopic.score_reason} /><ScoreBar label="素材充足" value={selectedTopic.score_material} tip="素材库里能支撑这个选题的素材多少" /><ScoreBar label="新颖度" value={selectedTopic.score_novelty} tip="与本账号写过的标题越不像，分越高" /></div>}
+            <p className="desktop-topic-detail-hint">采用不会自动确认观点、大纲或起草正文。</p>
+          </> : <div className="desktop-topic-detail-empty"><div className="desktop-topic-detail-icon"><Lightbulb className="size-5" /></div><h2>{tab === 'series' ? '系列与选题' : tab === 'inbox' ? '灵感收件箱' : '选题详情'}</h2><p>{tab === 'series' ? '把相关选题组成系列，起草时可以参考前后篇的观点。' : tab === 'inbox' ? '逐条整理收件箱里的灵感，再决定转成选题还是素材。' : '选择一条选题，在这里查看角度、参考与来源。'}</p></div>}
+        </aside>
+      </div> : tab === 'inbox' ? <InboxPanel accountId={acc.id} /> : tab === 'series' ? <SeriesPanel platform={acc.platform} accountId={acc.id} series={series.data ?? []} topics={list} /> : shown.length === 0 ? (
         <Card><Empty icon={<Lightbulb className="size-5" />} title={tab === 'pending' ? '还没有待定的选题' : tab === 'adopted' ? '还没有采用的选题' : '没有放弃的选题'}
           desc={tab === 'pending' ? '手动记下一个想法，或者让 AI 根据账号定位给些建议。' : undefined}
           action={canWrite && tab === 'pending' ? <Button variant="primary" icon={<Sparkles className="size-4" />} onClick={() => setSuggest(true)}>AI 选题建议</Button> : undefined} /></Card>
       ) : (
         <>
           {tab === 'pending' && byScore && <p className="mb-3 text-[12px] text-mist-400"><BookOpen className="mr-1 inline size-3.5" />综合排序 = 契合度、素材充足度、新颖度的加权；只是参考，不预测阅读量。</p>}
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{shown.map((t) => <TopicCard key={t.id} t={t} accountId={acc.id} accountFormat={acc.content_format} series={series.data ?? []} focused={t.id === focus} primed={t.id === startId} />)}</div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{shown.map((t) => <TopicCard key={t.id} t={t} accountId={acc.id} accountFormat={acc.content_format} accountPlatform={acc.platform} series={series.data ?? []} focused={t.id === focus} primed={t.id === startId} />)}</div>
         </>
       )}
-      {tab !== 'inbox' && topicQuery.hasNextPage && <div className="mt-5 flex justify-center"><Button variant="outline" loading={topicQuery.isFetchingNextPage} onClick={() => void topicQuery.fetchNextPage()}>加载更多选题</Button></div>}
-      <SuggestDrawer open={suggest} onClose={() => setSuggest(false)} accountId={acc.id} />
-      <HotSuggestDrawer open={hotSuggest} onClose={() => setHotSuggest(false)} accountId={acc.id} />
+      {!desktopPresentation && tab !== 'inbox' && topicQuery.hasNextPage && <div className="mt-5 flex justify-center"><Button variant="outline" loading={topicQuery.isFetchingNextPage} onClick={() => void topicQuery.fetchNextPage()}>加载更多选题</Button></div>}
+      <SuggestDrawer open={suggest} onClose={() => setSuggest(false)} accountId={acc.id} platform={acc.platform} accountFormat={acc.content_format} />
+      <HotSuggestDrawer open={hotSuggest} onClose={() => setHotSuggest(false)} accountId={acc.id} platform={acc.platform} accountFormat={acc.content_format} />
       <Dialog open={adding} onClose={() => setAdding(false)} title="添加选题"
         footer={<><Button variant="ghost" onClick={() => setAdding(false)}>{similar.length ? '完成' : '取消'}</Button><Button variant="primary" onClick={save} disabled={!title.trim()}>加入选题池</Button></>}>
         <div className="space-y-4">
-          <Field label={<span className="flex items-center justify-between">标题<VoiceButton onText={(t) => setTitle((v) => v + t)} /></span>}><Input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
+          <Field label={<span className="flex items-center justify-between">标题<VoiceButton onText={(t) => setTitle((v) => v + t)} /></span>} counter={{ value: runeLen(title), max: 80 }}><Input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (isEnterWithoutComposition(e.nativeEvent) && title.trim()) { e.preventDefault(); void save() } }} /></Field>
           <Field label="切入角度（可选）"><Textarea rows={3} value={angle} onChange={(e) => setAngle(e.target.value)} /></Field>
+          {acc.platform === 'toutiao' && <Field label="预计形态"><Select value={topicFormat} onChange={(e) => setTopicFormat(e.target.value as ContentFormat)}><option value="long_article">文章</option><option value="micro_post">微头条</option></Select></Field>}
           {similar.length > 0 && <Notice tone="gamboge">刚才入库的选题与「{similar.join('」「')}」相似，可以继续保留，也可以去删掉。</Notice>}
           <p className="text-[12px] text-mist-400">入库后可在卡片菜单里补充读者、钩子、需要的素材和计划发布日。</p>
         </div>

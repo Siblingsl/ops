@@ -47,6 +47,8 @@ const (
 
 func (s *Server) desktopCapabilities(w http.ResponseWriter, r *http.Request) error {
 	w.Header().Set("Cache-Control", "no-store")
+	accountSyncPlatforms := s.platformSyncFeaturePlatforms(r.Context(), "account_sync")
+	metricsRefreshPlatforms := s.platformSyncFeaturePlatforms(r.Context(), "metrics_refresh")
 	return ok(w, map[string]any{
 		"protocol_version":       desktopProtocolVersion,
 		"minimum_client_version": "1.0.0",
@@ -59,16 +61,41 @@ func (s *Server) desktopCapabilities(w http.ResponseWriter, r *http.Request) err
 		// 独立的平台采集能力。旧服务器没有该字段时客户端按“不支持”处理，
 		// 不尝试调用任何 `/desktop/platform/*` 端点（20 文档 §11.1）。
 		"platform_collection": map[string]any{
-			"protocol_version": desktopPlatformProtocolVersion,
-			"enabled":          s.platformCollectionGloballyEnabled(r.Context()),
-			"platforms":        []string{"wechat_mp", "xhs"},
-			"purpose":          desktopPlatformRegisterPurpose,
-			"operations":       platformOperations,
+			"protocol_version":  desktopPlatformProtocolVersion,
+			"protocol_versions": []int{desktopPlatformProtocolVersion, desktopPlatformProtocolV2},
+			"enabled":           s.platformCollectionGloballyEnabled(r.Context()),
+			"platforms":         []string{"wechat_mp", "xhs"},
+			"purpose":           desktopPlatformRegisterPurpose,
+			"operations":        platformOperations,
 			"limits": map[string]int{
-				"challenge_per_minute": desktopPlatformChallengePerMin,
-				"request_bytes":        desktopPlatformRequestBytes,
-				"results_bytes":        desktopPlatformResultsBytes,
+				"challenge_per_minute":   desktopPlatformChallengePerMin,
+				"request_bytes":          desktopPlatformRequestBytes,
+				"results_bytes":          desktopPlatformResultsBytes,
+				"v1_results_bytes":       desktopPlatformV1ResultsBytes,
+				"v2_content_bytes":       1 << 20,
+				"v2_account_batch_bytes": 512 << 10,
+				"v2_catalog_batch_bytes": 512 << 10,
+				"v2_content_batch_bytes": 2 << 20,
 			},
+			"v2": map[string]any{
+				"protocol_version":          desktopPlatformProtocolV2,
+				"enabled":                   len(accountSyncPlatforms) > 0 || len(metricsRefreshPlatforms) > 0,
+				"operations":                []string{"platform.account.sync.request", "platform.metrics.refresh.request", "platform.sync.operation.resume"},
+				"task_kinds":                []string{"account_sync", "content", "collect"},
+				"result_types":              []string{"account_snapshot", "work_catalog", "work_content", "metrics", "control"},
+				"account_sync_platforms":    accountSyncPlatforms,
+				"metrics_refresh_platforms": metricsRefreshPlatforms,
+				// 能力必须由连接自己的核验快照决定；全局接口不能把未核验项预报为可用。
+				"platform_capabilities": map[string]any{
+					"xhs":       map[string]string{"profile": "unknown", "catalog": "unknown", "content": "unknown", "metrics": "unknown"},
+					"wechat_mp": map[string]string{"profile": "unknown", "catalog": "unknown", "content": "unknown", "metrics": "unknown"},
+				},
+				"limits": map[string]int{"account_batch_rows": 25, "content_batch_rows": 10, "metrics_batch_bytes": 512 << 10,
+					"account_batch_bytes": 512 << 10, "catalog_batch_bytes": 512 << 10, "content_batch_bytes": 2 << 20, "run_rows": 100, "content_run_bytes": 8 << 20,
+					"content_item_bytes": 1 << 20, "max_media_refs": 200, "max_topics": 100, "max_tags": 100, "max_url_bytes": 8 << 10, "max_json_depth": 16},
+			},
+			"account_sync_platforms":    accountSyncPlatforms,
+			"metrics_refresh_platforms": metricsRefreshPlatforms,
 		},
 	})
 }
@@ -328,9 +355,11 @@ func (s *Server) platformGetPolicy(w http.ResponseWriter, r *http.Request) error
 	policy.WorkspaceID = id.WorkspaceID
 	w.Header().Set("Cache-Control", "no-store")
 	return ok(w, map[string]any{
-		"global_enabled": s.platformCollectionGloballyEnabled(r.Context()),
-		"gray":           s.platformGrayStatus(r.Context()),
-		"policy":         policy,
+		"global_enabled":            s.platformCollectionGloballyEnabled(r.Context()),
+		"account_sync_platforms":    s.platformSyncFeaturePlatforms(r.Context(), "account_sync"),
+		"metrics_refresh_platforms": s.platformSyncFeaturePlatforms(r.Context(), "metrics_refresh"),
+		"gray":                      s.platformGrayStatus(r.Context()),
+		"policy":                    policy,
 	})
 }
 

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -61,17 +60,14 @@ func (s *Server) importPastedWork(w http.ResponseWriter, r *http.Request) error 
 		publishedAt = &at
 	}
 
-	profile, err := s.loadProfile(r.Context(), a.ID)
-	if err != nil {
-		return err
-	}
-	wechatFields, _ := json.Marshal(profile.WechatDefaults)
 	var id uuid.UUID
 	err = s.withTx(r.Context(), func(tx pgx.Tx) error {
-		if err := tx.QueryRow(r.Context(), `INSERT INTO work (account_id, content_format, title, theme, wechat_fields)
-			VALUES ($1,'long_article',$2,$3,$4) RETURNING id`, a.ID, in.Title, profile.DefaultTheme, wechatFields).Scan(&id); err != nil {
+		// NW-E1：导入也走 insertWorkTx，统一停用账号校验、默认主题与创建审计。
+		created, err := s.insertWorkTx(r.Context(), tx, a, nil, in.Title, "long_article", "long_article", "", "import")
+		if err != nil {
 			return err
 		}
+		id = created
 		for i, section := range in.Sections {
 			if _, err := tx.Exec(r.Context(), `INSERT INTO work_section (work_id, position, heading, key_point, content_md, origin)
 				VALUES ($1,$2,$3,$3,$4,'human')`, id, i+1, section.Heading, section.ContentMD); err != nil {

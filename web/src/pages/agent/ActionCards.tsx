@@ -13,6 +13,7 @@ export interface AgentActionCardsProps {
   running: boolean
   onRefresh: () => Promise<unknown> | void
   onContinue: () => Promise<unknown> | void
+  desktopPresentation?: boolean
   /** 多组卡片按消息插入时，由对话页统一传播执行锁。 */
   onExecutingChange?: (executing: boolean) => void
 }
@@ -106,7 +107,7 @@ function missingPreview(action: AgentAction) {
   return ''
 }
 
-export function AgentActionCards({ actions, running, onRefresh, onContinue, onExecutingChange }: AgentActionCardsProps) {
+export function AgentActionCards({ actions, running, onRefresh, onContinue, onExecutingChange, desktopPresentation = false }: AgentActionCardsProps) {
   const [busy, setBusy] = useState<string | null>(null)
   const busyRef = useRef(false)
   const mounted = useRef(true)
@@ -174,15 +175,15 @@ export function AgentActionCards({ actions, running, onRefresh, onContinue, onEx
       const action = updated[original.id] ?? original
       return <ActionCard key={action.id} action={action} locked={locked} running={running} busy={busy === action.id}
         progress={progress[action.id]} secret={secrets[action.id]} onDismissSecret={() => setSecrets((old) => { const next = { ...old }; delete next[action.id]; return next })}
-        onExecute={(request) => decide(action, request)} onReject={() => decide(action)} />
+        onExecute={(request) => decide(action, request)} onReject={() => decide(action)} desktopPresentation={desktopPresentation} />
     })}
     {continueReady && <Button type="button" disabled={locked} onClick={() => { setContinueReady(false); void onContinue() }}>继续</Button>}
   </div>
 }
 
-function ActionCard({ action, locked, running, busy, progress, secret, onDismissSecret, onExecute, onReject }: {
+function ActionCard({ action, locked, running, busy, progress, secret, onDismissSecret, onExecute, onReject, desktopPresentation = false }: {
   action: AgentAction; locked: boolean; running: boolean; busy: boolean; progress?: string; secret?: Record<string, unknown>
-  onDismissSecret: () => void; onExecute: (request: Record<string, unknown>) => Promise<void>; onReject: () => Promise<void>
+  onDismissSecret: () => void; onExecute: (request: Record<string, unknown>) => Promise<void>; onReject: () => Promise<void>; desktopPresentation?: boolean
 }) {
   const [edits, setEdits] = useState<Record<string, string>>({})
   const [editTypes, setEditTypes] = useState<Record<string, 'text' | 'json'>>({})
@@ -241,8 +242,8 @@ function ActionCard({ action, locked, running, busy, progress, secret, onDismiss
     finally { setPreparing(false) }
   }
 
-  return <Card className={cn('space-y-4 border p-4', action.kind === 'X' ? 'border-red-300 bg-red-50/30' : action.kind === 'H' ? 'border-gamboge-300 bg-gamboge-50/30' : 'border-mist-200')}>
-    <div className="flex flex-wrap items-center gap-2">
+  return <Card className={cn('space-y-4 border p-4', action.kind === 'X' ? 'border-red-300 bg-red-50/30' : action.kind === 'H' ? 'border-gamboge-300 bg-gamboge-50/30' : 'border-mist-200', desktopPresentation && 'desktop-agent-action-card')}>
+    <div className={cn('flex flex-wrap items-center gap-2', desktopPresentation && 'desktop-agent-action-header')}>
       <h3 className="min-w-0 flex-1 font-semibold text-mist-900">{action.title}</h3>
       <Badge tone={action.kind === 'X' ? 'red' : action.kind === 'H' ? 'gamboge' : 'gray'}>{action.kind === 'X' ? '不可撤销' : action.kind === 'H' ? `人工确认 ${action.gate}` : '普通写入'}</Badge>
       <span className="text-xs text-mist-500">{statusText[action.status] ?? action.status}</span>

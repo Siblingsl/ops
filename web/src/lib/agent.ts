@@ -12,7 +12,7 @@ export interface AgentModel {
 export interface AgentBootstrap {
   enabled: boolean
   can_use: boolean
-  reason: '' | 'disabled' | 'viewer_disabled' | 'admin_override' | 'no_model' | string
+  reason: '' | 'disabled' | 'viewer_disabled' | 'admin_override' | 'no_model' | 'not_tested' | string
   role: 'owner' | 'editor' | 'viewer'
   read_only: boolean
   models: AgentModel[]

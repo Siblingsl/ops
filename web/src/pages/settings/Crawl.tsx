@@ -6,6 +6,7 @@ import { Badge, Button, Card, CardHeader, Empty, Field, Input, Notice, PageHeade
 import { errorMessage, get, post, put } from '@/lib/api'
 import { useInvalidate, useMe } from '@/lib/session'
 import type { CrawlHealth, CrawlRun, CrawlSettings, CrawlSource, HotSourcesResult, Provider } from '@/lib/types'
+import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
 
 type Platform = { platform: string; enabled: boolean; level: string; interval_min: number; daily_max: number; repeat_hours: number; jitter_min: number; today_requests: number; paused_until: string | null; strikes_7d: number }
 function PlatformRow({ value, refresh, dev }: { value: Platform; refresh: () => void; dev: boolean }) {
@@ -93,8 +94,10 @@ export default function Crawl() {
 function SearchSourceForm({refresh,disabled}:{refresh:()=>void;disabled:boolean}) {
  const providers=useQuery({queryKey:['providers'],queryFn:()=>get<Provider[]>('/model-providers')})
  const [provider,setProvider]=useState('');const [model,setModel]=useState('');const [query,setQuery]=useState('');const [busy,setBusy]=useState(false)
+ const embedded=useEmbeddedSettings()
+ useSettingsDraft(!disabled && !!(provider || model || query.trim()),busy)
  const current=providers.data?.find(p=>p.id===provider)
- return <div className="space-y-3 pt-4 border-t border-mist-100"><h3 className="font-semibold">联网搜索来源（默认关闭）</h3><Notice>复用支持百炼 DashScope / 方舟 Responses 原生联网搜索的供应商；只有返回搜索来源标题与链接时才入库，不使用模型回答代替新闻。配置后再勾选来源开启；受全站采集预算和工作区 AI 用量上限约束。</Notice><Field label="模型供应商"><Select disabled={disabled} value={provider} onChange={e=>{setProvider(e.target.value);setModel('')}}><option value="">选择已配置的供应商</option>{providers.data?.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field><Field label="模型（如 qwen-plus，或已开通搜索的豆包模型）"><Select disabled={disabled} value={model} onChange={e=>setModel(e.target.value)}><option value="">选择模型</option>{current?.models.map(m=><option key={m} value={m}>{m}</option>)}</Select></Field><Field label="搜索关键词"><Input disabled={disabled} maxLength={200} value={query} onChange={e=>setQuery(e.target.value)} /></Field><Button loading={busy} disabled={disabled||!provider||!model||!query.trim()} onClick={async()=>{setBusy(true);try{await post('/hot-sources/search',{provider_id:provider,model,query});refresh();toast.success('已配置，请勾选联网搜索来源后保存')}catch(e){toast.error(errorMessage(e))}finally{setBusy(false)}}}>保存搜索配置</Button></div>
+ return <div className="space-y-3 pt-4 border-t border-mist-100"><h3 className="font-semibold">联网搜索来源（默认关闭）</h3><Notice>复用支持百炼 DashScope / 方舟 Responses 原生联网搜索的供应商；只有返回搜索来源标题与链接时才入库，不使用模型回答代替新闻。配置后再勾选来源开启；受全站采集预算和工作区 AI 用量上限约束。</Notice><Field label="模型供应商"><Select disabled={disabled} value={provider} onChange={e=>{setProvider(e.target.value);setModel('')}}><option value="">选择已配置的供应商</option>{providers.data?.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field><Field label="模型（如 qwen-plus，或已开通搜索的豆包模型）"><Select disabled={disabled} value={model} onChange={e=>setModel(e.target.value)}><option value="">选择模型</option>{current?.models.map(m=><option key={m} value={m}>{m}</option>)}</Select></Field><Field label="搜索关键词"><Input disabled={disabled} maxLength={200} value={query} onChange={e=>setQuery(e.target.value)} /></Field><Button loading={busy} disabled={disabled||!provider||!model||!query.trim()} onClick={async()=>{setBusy(true);try{await post('/hot-sources/search',{provider_id:provider,model,query});if(embedded){setProvider('');setModel('');setQuery('')}refresh();toast.success('已配置，请勾选联网搜索来源后保存')}catch(e){toast.error(errorMessage(e))}finally{setBusy(false)}}}>保存搜索配置</Button></div>
 }
 
 export function HotSources() {
@@ -106,6 +109,8 @@ export function HotSources() {
   const [rss, setRSS] = useState<{ key: string; name: string; url: string }[]>([])
   const [busy, setBusy] = useState(false)
   useEffect(() => { if (query.data) { setSelected(query.data.selected); setRSS(query.data.sources.filter((s) => s.workspace_id && s.kind === 'rss').map((s) => ({ key: s.key, name: s.name, url: s.config.url ?? '' }))) } }, [query.data])
+  const storedRSS = query.data?.sources.filter((source) => source.workspace_id && source.kind === 'rss').map((source) => ({ key: source.key, name: source.name, url: source.config.url ?? '' })) ?? []
+  useSettingsDraft(owner && !!query.data && (JSON.stringify([...selected].sort()) !== JSON.stringify([...query.data.selected].sort()) || JSON.stringify(rss) !== JSON.stringify(storedRSS)), busy)
   const save = async () => {
     setBusy(true)
     try { await put('/hot-sources', { sources: selected, rss }); await inv(['hot-sources']); toast.success('热点来源已保存') } catch (e) { toast.error(errorMessage(e)) } finally { setBusy(false) }

@@ -2,6 +2,7 @@
 // 便于用 node --test 直接覆盖“旧服务器不支持时不调用未知端点”等规则。
 
 export const PLATFORM_REGISTER_PURPOSE = 'platform_collection';
+export const PLATFORM_PROTOCOL_V2 = 2;
 
 // 客户端只认这些操作名与端点；服务端即使公布更多操作，也不会被本客户端调用，
 // 避免服务器通过能力接口扩大客户端可发起的请求范围。
@@ -14,8 +15,23 @@ export const PLATFORM_OPERATION_PATHS: Readonly<Record<string, { method: string;
   // 本人回收连接：只减权，回收成功后必须清理本机 profile（§5.4）。
   'platform.connection.mine.revoke': { method: 'DELETE', path: '/api/v1/desktop/platform/connections/{id}' },
   'platform.presence': { method: 'POST', path: '/api/v1/desktop/platform/presence' },
-  'platform.run.claim': { method: 'POST', path: '/api/v1/desktop/platform/runs/claim' }
+  'platform.run.claim': { method: 'POST', path: '/api/v1/desktop/platform/runs/claim' },
+  'platform.account.sync.request': { method: 'POST', path: '/api/v1/accounts/{accountId}/platform-account-sync' },
+  'platform.metrics.refresh.request': { method: 'POST', path: '/api/v1/accounts/{accountId}/platform-metrics-refresh' },
+  'platform.sync.operation.resume': { method: 'POST', path: '/api/v1/accounts/{accountId}/platform-sync-operations/{operationId}/actions' }
 });
+
+export interface PlatformProtocolV2Capability {
+  protocol_version: number;
+  enabled: boolean;
+  operations: string[];
+  task_kinds: string[];
+  result_types: string[];
+  account_sync_platforms: string[];
+  metrics_refresh_platforms: string[];
+  platform_capabilities: Record<string, Record<string, string>>;
+  limits: Record<string, number>;
+}
 
 export interface PlatformCollectionCapability {
   protocol_version: number;
@@ -24,6 +40,8 @@ export interface PlatformCollectionCapability {
   purpose: string;
   operations: string[];
   limits: Record<string, number>;
+  protocol_versions: number[];
+  v2?: PlatformProtocolV2Capability;
 }
 
 export class PlatformCollectionUnsupportedError extends Error {
@@ -69,13 +87,54 @@ export function parsePlatformCollectionCapability(
       if (typeof value === 'number' && Number.isFinite(value)) limits[key] = value;
     }
   }
+  const versions = Array.isArray(candidate.protocol_versions)
+    ? candidate.protocol_versions.filter((value): value is number => typeof value === 'number' && Number.isInteger(value))
+    : [candidate.protocol_version];
+  const rawV2 = candidate.v2;
+  let v2: PlatformProtocolV2Capability | undefined;
+  if (rawV2 && typeof rawV2 === 'object') {
+    const value = rawV2 as Record<string, unknown>;
+    const readStrings = (key: string): string[] => Array.isArray(value[key])
+      ? (value[key] as unknown[]).filter((item): item is string => typeof item === 'string')
+      : [];
+    const v2Limits: Record<string, number> = {};
+    if (value.limits && typeof value.limits === 'object') {
+      for (const [key, limit] of Object.entries(value.limits as Record<string, unknown>)) {
+        if (typeof limit === 'number' && Number.isFinite(limit)) v2Limits[key] = limit;
+      }
+    }
+    const platformCapabilities: Record<string, Record<string, string>> = {};
+    if (value.platform_capabilities && typeof value.platform_capabilities === 'object') {
+      for (const [platform, capabilities] of Object.entries(value.platform_capabilities as Record<string, unknown>)) {
+        if (!capabilities || typeof capabilities !== 'object') continue;
+        platformCapabilities[platform] = Object.fromEntries(
+          Object.entries(capabilities as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+        );
+      }
+    }
+    if (value.protocol_version === PLATFORM_PROTOCOL_V2 && versions.includes(PLATFORM_PROTOCOL_V2)) {
+      v2 = {
+        protocol_version: PLATFORM_PROTOCOL_V2,
+        enabled: value.enabled === true,
+        operations: readStrings('operations'),
+        task_kinds: readStrings('task_kinds'),
+        result_types: readStrings('result_types'),
+        account_sync_platforms: readStrings('account_sync_platforms'),
+        metrics_refresh_platforms: readStrings('metrics_refresh_platforms'),
+        platform_capabilities: platformCapabilities,
+        limits: v2Limits
+      };
+    }
+  }
   return {
     protocol_version: candidate.protocol_version,
     enabled: candidate.enabled === true,
     platforms: candidate.platforms as string[],
     purpose: candidate.purpose,
     operations: candidate.operations as string[],
-    limits
+    limits,
+    protocol_versions: versions,
+    v2
   };
 }
 

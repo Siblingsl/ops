@@ -95,9 +95,9 @@ func (s *Server) duplicateWork(w http.ResponseWriter, r *http.Request) error {
 		if revision != src.Revision {
 			return apiErr(409, "version_conflict", "原作品在复制期间被修改，请重试")
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO work(id,account_id,content_format,title,viewpoint,outline,theme,cover_asset_id,cover_crops,wechat_fields,review_required,reviewer_id)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, newID, src.AccountID, src.ContentFormat,
-			truncateRunes(src.Title, 60)+"（副本）", src.Viewpoint, outline, src.Theme, cover, src.CoverCrops, wf, src.ReviewRequired, src.ReviewerID); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO work(id,account_id,content_format,title,viewpoint,outline,theme,cover_asset_id,cover_crops,wechat_fields,review_required,reviewer_id,assignee_id,created_by)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)`, newID, src.AccountID, src.ContentFormat,
+			truncateRunes(src.Title, 60)+"（副本）", src.Viewpoint, outline, src.Theme, cover, src.CoverCrops, wf, src.ReviewRequired, src.ReviewerID, ident(ctx).UserID); err != nil {
 			return err
 		}
 		for old, id := range assets {
@@ -145,6 +145,7 @@ func (s *Server) duplicateWork(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	committed = true
-	s.audit(ctx, "work_create", "work", newID.String(), "ok", map[string]any{"copied_from": src.ID})
+	// NW-E2：来源记为 duplicate，并保留被复制的作品。
+	s.audit(ctx, "work_create", "work", newID.String(), "ok", map[string]any{"source": "duplicate", "copied_from": src.ID})
 	return s.writeWork(w, r, newID)
 }

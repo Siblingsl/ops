@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>无法连接线上服务</title>
+    <link rel="stylesheet" href="/settings.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header class="desktop-window-titlebar" aria-label="OPS 应用标题栏">
+        <div class="desktop-window-brand"><span class="desktop-window-mark" aria-hidden="true">✦</span><strong>OPS</strong><span>创作空间</span></div>
+        <nav class="desktop-window-menus" aria-label="应用菜单">
+          <a href="ops-desktop://ui/menu/client" target="_blank" rel="noreferrer">客户端</a>
+          <a href="ops-desktop://ui/menu/edit" target="_blank" rel="noreferrer">编辑</a>
+          <a href="ops-desktop://ui/menu/view" target="_blank" rel="noreferrer">视图</a>
+        </nav>
+        <span class="desktop-window-title">连接状态</span>
+        <button class="desktop-window-theme" type="button" data-desktop-theme-toggle aria-label="切换浅深主题">◐</button>
+        <button class="desktop-window-motion" type="button" data-desktop-motion-toggle aria-label="减少动态效果" title="减少动态效果">动效</button>
+      </header>
+      <div class="eyebrow">OPS DESKTOP</div>
+      <h1>无法连接线上服务</h1>
+      <p id="lead" class="lead">检查网络连接后重试。若业务页面显示登录已过期，请重新登录。此页面不会使用离线缓存代替线上业务。</p>
+
+      <section class="card">
+        <h2>连接信息</h2>
+        <dl>
+          <div><dt>服务地址</dt><dd id="origin">读取中…</dd></div>
+          <div><dt>客户端版本</dt><dd id="version">读取中…</dd></div>
+        </dl>
+      </section>
+
+      <section class="notice">
+        <h2>AI 使用说明</h2>
+        <p id="ai-status">读取中…</p>
+      </section>
+
+      <div class="actions">
+        <button id="settings" class="secondary" type="button">客户端设置</button>
+        <button id="login" class="secondary" type="button">重新登录</button>
+        <button id="retry" class="primary" type="button">重试连接</button>
+      </div>
+      <p id="action-status" class="action-status" aria-live="polite"></p>
+    </main>
+    <script src="/desktop-theme.js"></script>
+    <script src="/offline/offline.js"></script>
+  </body>
+</html>

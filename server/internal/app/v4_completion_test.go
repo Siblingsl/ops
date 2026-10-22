@@ -244,7 +244,7 @@ func (f v4SearchTransport) RoundTrip(r *http.Request) (*http.Response, error) { 
 
 func TestV434Search429CircuitBreaker(t *testing.T) {
 	enableTestCrawl(t)
-	other := env.registerClient(t, "v434-search-429", testPassword)
+	other := env.registerClient(t, "v434-search-429-"+uuid.NewString(), testPassword)
 	defer other.restore(env)
 	a, _ := v4Account(t, "联网搜索熔断")
 	ctx := v4Context(t, a)

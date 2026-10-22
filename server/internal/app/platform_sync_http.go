@@ -46,7 +46,7 @@ func (s *Server) desktopCreatePlatformConnection(w http.ResponseWriter, r *http.
 		return err
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	return ok(w, platformConnectionSummary(conn))
+	return ok(w, platformConnectionSummary(conn, id.UserID))
 }
 
 // desktopVerifyPlatformConnection 处理 POST /desktop/platform/connections/{id}/verify：
@@ -56,7 +56,7 @@ func (s *Server) desktopVerifyPlatformConnection(w http.ResponseWriter, r *http.
 	if err != nil {
 		return err
 	}
-	body, _, err := s.desktopReadAndVerifyProof(r, "platform.connection.verify")
+	body, challenge, err := s.desktopReadAndVerifyProof(r, "platform.connection.verify")
 	if err != nil {
 		return err
 	}
@@ -71,7 +71,7 @@ func (s *Server) desktopVerifyPlatformConnection(w http.ResponseWriter, r *http.
 	var conn platformConnection
 	err = s.withTx(r.Context(), func(tx pgx.Tx) error {
 		var e error
-		conn, e = s.verifyPlatformConnection(r.Context(), tx, connectionID, id.WorkspaceID, id.UserID,
+		conn, e = s.verifyPlatformConnection(r.Context(), tx, connectionID, id.WorkspaceID, id.UserID, challenge.DeviceID,
 			in.ExternalAccountKey, in.Capabilities)
 		if e != nil {
 			return e
@@ -83,7 +83,7 @@ func (s *Server) desktopVerifyPlatformConnection(w http.ResponseWriter, r *http.
 		return err
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	return ok(w, platformConnectionSummary(conn))
+	return ok(w, platformConnectionSummary(conn, id.UserID))
 }
 
 // desktopPlatformPresence 处理 POST /desktop/platform/presence：客户端每 30 秒一次，
@@ -122,12 +122,34 @@ func (s *Server) desktopClaimPlatformRun(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		return err
 	}
-	_ = body
+	var in struct {
+		ProtocolVersions []int             `json:"protocol_versions"`
+		TaskKinds        []string          `json:"task_kinds,omitempty"`
+		ResultTypes      []string          `json:"result_types,omitempty"`
+		AdapterVersions  map[string]string `json:"adapter_versions,omitempty"`
+		MappingVersions  map[string]int    `json:"mapping_versions,omitempty"`
+	}
+	if err := decodeStrictPlatformJSON(body, &in); err != nil {
+		return requestFormatError(r.Context(), err)
+	}
+	versions := in.ProtocolVersions
+	if len(versions) == 0 {
+		versions = []int{1}
+	}
+	seen := map[int]bool{}
+	for _, version := range versions {
+		if (version != 1 && version != 2) || seen[version] {
+			return validation("protocol_versions 只能是去重后的 1 和/或 2")
+		}
+		seen[version] = true
+	}
 	deviceID, err := s.desktopDeviceOfProof(r)
 	if err != nil {
 		return err
 	}
-	run, err := s.claimPlatformRun(r.Context(), deviceID)
+	client := platformClaimCapabilities{ProtocolVersions: versions, TaskKinds: in.TaskKinds, ResultTypes: in.ResultTypes,
+		AdapterVersions: in.AdapterVersions, MappingVersions: in.MappingVersions}
+	run, err := s.claimPlatformRun(r.Context(), deviceID, client)
 	if err != nil {
 		return err
 	}
@@ -139,13 +161,18 @@ func (s *Server) desktopClaimPlatformRun(w http.ResponseWriter, r *http.Request)
 	return ok(w, map[string]any{"run": map[string]any{
 		"id": run.ID, "connection_id": run.ConnectionID, "account_id": run.AccountID,
 		"platform": run.Platform, "trigger": run.Trigger, "task_kind": run.TaskKind,
-		"lease_generation": run.LeaseGeneration, "lease_expires_at": run.LeaseExpiresAt,
+		"wire_protocol_version": run.WireProtocolVersion,
+		"lease_generation":      run.LeaseGeneration, "lease_expires_at": run.LeaseExpiresAt,
 		"deadline_at": run.DeadlineAt, "authorization_revision": run.AuthorizationRevision,
 		"adapter_version": run.AdapterVersion, "mapping_version": run.MappingVersion,
 		"query_scope": run.QueryScope, "binding_snapshot": run.BindingSnapshot,
+		"operation_stage": run.OperationStage,
+		"operation_id":    run.OperationID,
 		"budget": map[string]any{
 			"max_rows": platformRunMaxRows, "max_bytes": platformRunMaxBytes,
 			"max_duration_seconds": int(platformRunMaxDuration / time.Second),
+			"max_queries":          100, "max_work_attempts": 20,
+			"max_static_requests": platformRunStaticRequests, "max_static_bytes": platformRunStaticBytes,
 		},
 	}})
 }
@@ -156,19 +183,35 @@ func (s *Server) desktopHeartbeatPlatformRun(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		return err
 	}
-	if _, _, err := s.desktopReadAndVerifyProof(r, "platform.run.heartbeat"); err != nil {
+	body, _, err := s.desktopReadAndVerifyProof(r, "platform.run.heartbeat")
+	if err != nil {
 		return err
+	}
+	var in struct {
+		LeaseGeneration int64                           `json:"lease_generation"`
+		BudgetRequest   *platformHeartbeatBudgetRequest `json:"budget_request,omitempty"`
+	}
+	if err := decodeStrictPlatformJSON(body, &in); err != nil {
+		return requestFormatError(r.Context(), err)
 	}
 	deviceID, err := s.desktopDeviceOfProof(r)
 	if err != nil {
 		return err
 	}
-	canceled, leaseUntil, err := s.heartbeatPlatformRun(r.Context(), runID, deviceID)
+	canceled, leaseUntil, err := s.heartbeatPlatformRun(r.Context(), runID, deviceID, in.LeaseGeneration)
 	if err != nil {
 		return err
 	}
+	var budget *platformBudgetDecision
+	if in.BudgetRequest != nil {
+		decision, err := s.reservePlatformBudget(r.Context(), runID, deviceID, in.LeaseGeneration, *in.BudgetRequest)
+		if err != nil {
+			return err
+		}
+		budget = &decision
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	return ok(w, map[string]any{"canceled": canceled, "lease_expires_at": leaseUntil})
+	return ok(w, map[string]any{"canceled": canceled, "lease_expires_at": leaseUntil, "budget": budget})
 }
 
 // desktopSubmitPlatformResults 处理 POST /desktop/platform/runs/{id}/results。
@@ -183,11 +226,14 @@ func (s *Server) desktopSubmitPlatformResults(w http.ResponseWriter, r *http.Req
 		return err
 	}
 	var batch platformResultBatch
-	if err := json.Unmarshal(body, &batch); err != nil {
+	if err := decodeStrictPlatformJSON(body, &batch); err != nil {
 		return requestFormatError(r.Context(), err)
 	}
-	if batch.ProtocolVersion != desktopPlatformProtocolVersion {
+	if batch.ProtocolVersion != 1 && batch.ProtocolVersion != 2 {
 		return apiErr(426, "platform_protocol_unsupported", "客户端与服务的平台采集协议不兼容，请升级客户端")
+	}
+	if batch.ProtocolVersion == 1 && len(body) > desktopPlatformV1ResultsBytes {
+		return apiErr(http.StatusRequestEntityTooLarge, "platform_request_too_large", "v1 指标批次超过 512 KiB")
 	}
 	deviceID, err := s.desktopDeviceOfProof(r)
 	if err != nil {

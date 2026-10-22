@@ -9,10 +9,13 @@ import {
   protocol,
   session,
   shell,
+  WebContentsView,
+  type IpcMainEvent,
   type IpcMainInvokeEvent,
   type Session
 } from 'electron';
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { PRODUCTION_ORIGIN, resolveBusinessOrigin } from './business-origin';
@@ -47,10 +50,16 @@ import {
   type PlatformLoginSession
 } from './platform-login';
 import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace, orphanConnections } from './platform-profile';
-import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, XHS_API } from './platforms/xhs';
-import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation } from './platforms/wechat-mp';
-import { PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun } from './platform-client';
+import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, normalizeXhsNoteTime, XHS_API } from './platforms/xhs';
+import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation, normalizeWechatSentAt, WECHAT_MP_API } from './platforms/wechat-mp';
+import { PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun, type PlatformV2ResultType } from './platform-client';
 import { parseDesktopUiIntent, type DesktopUiIntent } from './ui-intents';
+import {
+  createLocalSettingsViewController,
+  EmbeddedSettingsSenderRegistry,
+  parseEmbeddedSettingsPanel,
+  type LocalSettingsPanel
+} from './settings-view';
 import { PlatformLoginFlow, type LoginAction } from './platform-login-flow';
 import { startPlatformLogin, savePlatformLogin } from './platform-login-runtime';
 import { trustedLoginBrowsers, selectLoginBrowser, type LoginBrowserFamily } from './platform-browser-trust';
@@ -89,6 +98,10 @@ const LOCAL_PAGES: Record<string, { file: string; contentType: string }> = {
   '/desktop-theme.js': { file: 'desktop-theme.js', contentType: 'text/javascript; charset=utf-8' },
   '/settings.js': { file: 'settings.js', contentType: 'text/javascript; charset=utf-8' },
   '/platform-login-ui.js': { file: 'platform-login-ui.js', contentType: 'text/javascript; charset=utf-8' },
+  '/embedded/connection': { file: 'index.html', contentType: 'text/html; charset=utf-8' },
+  '/embedded/ai': { file: 'index.html', contentType: 'text/html; charset=utf-8' },
+  '/embedded/account-device': { file: 'index.html', contentType: 'text/html; charset=utf-8' },
+  '/embedded/diagnostics': { file: 'index.html', contentType: 'text/html; charset=utf-8' },
   '/offline/': { file: 'offline.html', contentType: 'text/html; charset=utf-8' },
   '/offline/offline.js': { file: 'offline.js', contentType: 'text/javascript; charset=utf-8' }
 };
@@ -105,7 +118,6 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let businessWindow: BrowserWindow | null = null;
-let settingsWindow: BrowserWindow | null = null;
 let pendingPlatformLoginTarget: Extract<DesktopUiIntent, { type: 'platform-login' }> | null = null;
 let failureWindow: BrowserWindow | null = null;
 let businessLoadTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -113,9 +125,13 @@ let businessFailureReason: 'unreachable' | 'icp-block' | 'render-failed' = 'unre
 let businessOrigin = PRODUCTION_ORIGIN;
 let businessPartition = 'persist:ops-business-production';
 let businessSession: Session | null = null;
+let localSettingsSession: Session | null = null;
+let localSettingsViewController: ReturnType<typeof createLocalSettingsViewController> | null = null;
+let pendingNativeSettingsRequest = false;
 let desktopClient: DesktopClient | null = null;
 let externalPromptOpen = false;
 const localWindows = new Set<number>();
+const localSettingsSenderRegistry = new EmbeddedSettingsSenderRegistry();
 const requestProvenance = new Map<number, 'trusted' | 'untrusted' | 'redirected'>();
 const contextMutationRequests = new Set<number>();
 let routingRefreshPending = false;
@@ -156,10 +172,9 @@ function startApplication(): void {
       businessPartition = businessOrigin === PRODUCTION_ORIGIN
         ? 'persist:ops-business-production'
         : 'persist:ops-business-development';
-      registerIpcHandlers();
-      installApplicationMenu();
 
       businessSession = session.fromPartition(businessPartition);
+      localSettingsSession = session.fromPartition('ops-settings');
       desktopClient = new DesktopClient(businessSession, businessOrigin);
       registerDesktopPowerHandlers(
         powerMonitor,
@@ -170,8 +185,9 @@ function startApplication(): void {
       installDesktopRequestContext(businessSession);
       installDownloadHandling(businessSession);
       await registerLocalProtocol(businessSession);
-
-      await registerLocalProtocol(session.fromPartition('ops-settings'));
+      await registerLocalProtocol(localSettingsSession);
+      registerIpcHandlers();
+      installApplicationMenu();
       const restoredMode = await desktopClient.restoreAppliedMode();
       void updateNativeClientStatus();
       // 平台采集 presence 心跳：只在服务端开通且本地已登录时真正上报，
@@ -213,7 +229,7 @@ function startApplication(): void {
       return;
     }
     event.preventDefault();
-    void confirmApplicationQuit(businessWindow ?? settingsWindow ?? failureWindow ?? null);
+    void confirmApplicationQuit(businessWindow ?? failureWindow ?? null);
   });
 }
 
@@ -232,6 +248,7 @@ function createBusinessWindow(businessSession: Session): void {
     autoHideMenuBar: true,
     webPreferences: {
       session: businessSession,
+      preload: path.join(__dirname, 'business-ui-preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -321,6 +338,7 @@ function createBusinessWindow(businessSession: Session): void {
   currentWindow.webContents.on('did-finish-load', () => {
     clearBusinessLoadTimeout();
     if (currentWindow.isDestroyed() || mainFrameLoadFailed || !isBusinessUrl(currentWindow.webContents.getURL())) return;
+    flushPendingNativeSettingsRequest(currentWindow);
     setTimeout(() => {
       if (currentWindow.isDestroyed() || mainFrameLoadFailed || !isBusinessUrl(currentWindow.webContents.getURL())) return;
       // 渲染进程主线程无响应时 executeJavaScript 永不 settle，窗口会一直保持 show:false。
@@ -617,18 +635,33 @@ async function registerLocalProtocol(targetSession: Session): Promise<void> {
 }
 
 function registerIpcHandlers(): void {
+  ipcMain.on('settings:local-state', (event: IpcMainEvent, raw: unknown) => {
+    if (!localSettingsViewController?.isTrusted(event)) return;
+    if (!raw || typeof raw !== 'object' || Object.keys(raw).sort().join(',') !== 'busy,dirty') return;
+    const state = raw as { dirty: unknown; busy: unknown };
+    if (typeof state.dirty !== 'boolean' || typeof state.busy !== 'boolean') return;
+    const host = localSettingsViewController.currentHost;
+    if (host !== businessWindow || !businessWindow || businessWindow.isDestroyed() || businessWindow.webContents.isDestroyed()) return;
+    if (!isBusinessUrl(businessWindow.webContents.mainFrame.url)
+      || !isBusinessUrl(businessWindow.webContents.getURL())) return;
+    businessWindow.webContents.send('desktop-ui:local-settings-state', { dirty: state.dirty, busy: state.busy });
+  });
+
   ipcHandle('settings:get-info', async (event) => {
     assertTrustedLocalSender(event);
-    const clientState = await desktopClient?.getPublicState();
-    if (clientState) applyNativeClientStatus(clientState);
+    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
+    const clientState = await desktopClient.getPublicState();
+    const systemInfo = await desktopClient.getPublicSystemInfo().catch(() => null);
+    applyNativeClientStatus(clientState);
     return {
       appVersion: app.getVersion(),
       businessOrigin,
       connectionState: getConnectionState(),
       failureReason: businessFailureReason,
-      aiStatus: clientState?.mode === 'desktop'
-        ? `已应用此客户端 AI 模式；任务映射版本 ${clientState.routeRevision}。${clientState.channelState === 'ready' ? '本机通道已连接。' : '本机通道当前不可用。'}`
-        : '当前使用服务器 AI 模式；本机模型配置不会影响线上任务。',
+      systemInfo,
+      aiStatus: clientState.mode === 'desktop'
+        ? `已应用此客户端 AI 模式；任务映射版本 ${clientState.routeRevision}。${clientState.channelState === 'ready' ? '本机通道已连接。' : '本机通道当前不可用。'}${clientState.localConfigAvailable ? '' : ' 本机设置文件无法读取，模型与设备设置已停用。'}`
+        : `当前使用服务器 AI 模式；本机模型配置不会影响线上任务。${clientState.localConfigAvailable ? '' : ' 本机设置文件无法读取，模型与设备设置已停用。'}`,
       clientState
     };
   });
@@ -636,7 +669,7 @@ function registerIpcHandlers(): void {
   ipcHandle('settings:export-diagnostics', async (event) => {
     assertTrustedLocalSender(event);
     if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    const window = BrowserWindow.fromWebContents(event.sender);
+    const window = getLocalSettingsWindow(event);
     if (!window) throw new Error('设置窗口已关闭。');
     const state = await desktopClient.getPublicState();
     const report = {
@@ -654,6 +687,7 @@ function registerIpcHandlers(): void {
         signed_in: state.signedIn,
         reauth_required: state.reauthRequired,
         secure_storage_available: state.storageAvailable,
+        local_config_available: state.localConfigAvailable,
         device_registered: state.deviceRegistered,
         model_count: state.modelCount,
         active_model_requests: state.activeModelRequests,
@@ -759,7 +793,9 @@ function registerIpcHandlers(): void {
     assertTrustedLocalSender(event);
     if (!desktopClient || (value !== 'server' && value !== 'desktop')) throw new Error('执行模式无效。');
     const clientState = await desktopClient.getPublicState();
-    const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender)!, {
+    const window = getLocalSettingsWindow(event);
+    if (!window) throw new Error('设置窗口已关闭。');
+    const { response } = await dialog.showMessageBox(window, {
       type: value === 'desktop' ? 'warning' : 'question',
       title: value === 'desktop' ? '启用此客户端 AI' : '切换到服务器 AI',
       message: '请先保存业务页面中的未提交内容。客户端无法检测编辑器是否有尚未保存的修改。',
@@ -822,7 +858,7 @@ function registerIpcHandlers(): void {
     const account = accounts.find((item) => item.id === accountId);
     if (!account) throw new Error('账号不存在或已删除，请刷新设置。');
     if (account.content_format === contentFormat) throw new Error('账号已经是该内容类型。');
-    const window = BrowserWindow.fromWebContents(event.sender);
+    const window = getLocalSettingsWindow(event);
     if (!window) throw new Error('设置窗口已关闭。');
     const works = await desktopClient.countBusinessWorks(accountId);
     // 对话框面向用户，显示中文类型名；逻辑校验仍用枚举值。
@@ -854,7 +890,7 @@ function registerIpcHandlers(): void {
     const clientState = await desktopClient.getPublicState();
     if (!clientState.signedIn) throw new Error('请先登录要清理的 OPS 账号。');
     if (identity.username !== clientState.username) throw new Error('当前登录账号已变化，请刷新设置后重试。');
-    const window = BrowserWindow.fromWebContents(event.sender);
+    const window = getLocalSettingsWindow(event);
     if (!window) throw new Error('设置窗口已关闭。');
     const { response } = await dialog.showMessageBox(window, {
       type: 'warning',
@@ -918,7 +954,7 @@ function registerIpcHandlers(): void {
       || typeof input.configRevision !== 'number' || !Number.isSafeInteger(input.configRevision)) {
       throw new Error('模型删除字段无效。');
     }
-    const window = BrowserWindow.fromWebContents(event.sender);
+    const window = getLocalSettingsWindow(event);
     if (!window) throw new Error('设置窗口已关闭。');
     const { response } = await dialog.showMessageBox(window, {
       type: 'warning',
@@ -957,7 +993,7 @@ function registerIpcHandlers(): void {
 
   ipcHandle('settings:open-settings', (event) => {
     assertTrustedLocalSender(event);
-    showSettingsWindow();
+    openNativeSettings();
   });
 
   ipcHandle('settings:take-platform-login-target', (event) => {
@@ -969,6 +1005,16 @@ function registerIpcHandlers(): void {
 
   ipcHandle('settings:close-local-window', (event) => {
     assertTrustedLocalSender(event);
+    if (localSettingsViewController?.isTrusted(event)) {
+      if (businessWindow && !businessWindow.isDestroyed() && !businessWindow.webContents.isDestroyed()) {
+        businessWindow.webContents.send('desktop-ui:local-settings-state', { dirty: false, busy: false });
+      }
+      localSettingsViewController.destroy();
+      localSettingsViewController = null;
+      pendingPlatformLoginTarget = null;
+      void platformLoginFlow.stop();
+      return;
+    }
     const localWindow = BrowserWindow.fromWebContents(event.sender);
     localWindow?.close();
   });
@@ -1026,6 +1072,7 @@ function platformCommandTimeout(cmd: string): number | undefined {
   if (cmd === 'login-action') return 45_000;
   if (cmd === 'login-browsers') return 40_000;
   if (cmd === 'request-collect') return PLATFORM_COLLECT_IPC_TIMEOUT_MS;
+  if (cmd === 'request-account-sync' || cmd === 'request-metrics-refresh' || cmd === 'resume-platform-sync') return 30_000;
   return undefined;
 }
 
@@ -1078,6 +1125,21 @@ async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<un
     case 'request-collect': {
       const payload = envelope.payload as { accountId: string };
       return runPlatformCollect(payload.accountId);
+    }
+    case 'request-account-sync': {
+      if (!desktopClient) throw new Error('客户端设置尚未初始化。');
+      const payload = envelope.payload as { accountId: string; mode: 'incremental' | 'full_reconcile'; connectionRevision: number };
+      return desktopClient.requestPlatformAccountSync({ ...payload, idempotencyKey: randomUUID() });
+    }
+    case 'request-metrics-refresh': {
+      if (!desktopClient) throw new Error('客户端设置尚未初始化。');
+      const payload = envelope.payload as { accountId: string; connectionRevision: number; platformWorkIds?: string[] };
+      return desktopClient.requestPlatformMetricsRefresh({ ...payload, idempotencyKey: randomUUID() });
+    }
+    case 'resume-platform-sync': {
+      if (!desktopClient) throw new Error('客户端设置尚未初始化。');
+      const payload = envelope.payload as { accountId: string; operationId: string; expectedOperationRevision: number };
+      return desktopClient.resumePlatformSyncOperation(payload);
     }
     case 'pause':
       // 暂停由页面直接调 PATCH 连接（只改 auto_collect），本机无副作用，保留稳定错误码。
@@ -1323,6 +1385,9 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
       accepted: 0, rejected: 0, stopReason: null, errorCode: null, adoptErrors: 0, adoptReason: null
     };
   }
+  if (run.wire_protocol_version === 2) {
+    return runPlatformV2Collect(accountId, run, client);
+  }
   if (run.platform !== 'xhs' && run.platform !== 'wechat_mp') {
     // 两个平台之外的任务一律拒绝，不猜测平台。
     await client.submit({
@@ -1402,7 +1467,7 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
     if (!externalAccountKey) {
       throw new PlatformBrowserError('platform_identity_mismatch', '本次任务缺少外部账号标识');
     }
-    // 目录改对之后仍要核对"这份登录态就是本任务的账号"：采到别人的笔记比采不到更糟（§6.2）。
+    // 目录改对之后仍要核对“这份登录态就是本任务的账号”：采到别人的笔记比采不到更糟（§6.2）。
     // 读不到身份时只跳过核对并留痕，不因此把整次采集判失败。
     if (platform === 'xhs') {
       try {
@@ -1513,6 +1578,328 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
   } finally {
     await cdp.close();
   }
+}
+
+const PLATFORM_V2_PAGE_LIMIT = 3;
+const PLATFORM_V2_PAGE_SIZE = 20;
+const PLATFORM_V2_PACING_MS = 5_000;
+
+function pacedPlatformSource(source: ReturnType<typeof createPageResponseSource>): ReturnType<typeof createPageResponseSource> {
+  let lastRequestAt = 0;
+  const paced = async <T,>(read: () => Promise<T>): Promise<T> => {
+    const wait = PLATFORM_V2_PACING_MS - (Date.now() - lastRequestAt);
+    if (lastRequestAt > 0 && wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    const result = await read();
+    lastRequestAt = Date.now();
+    return result;
+  };
+  return {
+    ...source,
+    fetchJSON: (path) => paced(() => source.fetchJSON(path)),
+    fetchSigned: (path) => paced(() => source.fetchSigned(path)),
+    observeResponse: (path, trigger, timeout) => paced(() => source.observeResponse(path, trigger, timeout))
+  };
+}
+
+interface PlatformV2TargetSnapshot {
+  externalID: string;
+  bindingRevision?: number;
+  publishRevision?: number;
+}
+
+function parsePlatformV2Targets(snapshot: unknown): { local: Map<string, PlatformV2TargetSnapshot>; mirrors: Map<string, PlatformV2TargetSnapshot> } {
+  const local = new Map<string, PlatformV2TargetSnapshot>();
+  const mirrors = new Map<string, PlatformV2TargetSnapshot>();
+  if (!snapshot || typeof snapshot !== 'object') return { local, mirrors };
+  const value = snapshot as { local_bindings?: unknown; platform_works?: unknown };
+  if (Array.isArray(value.local_bindings)) for (const item of value.local_bindings) {
+    if (!item || typeof item !== 'object') continue;
+    const target = item as { external_id?: unknown; binding_revision?: unknown; publish_revision?: unknown };
+    if (typeof target.external_id !== 'string' || typeof target.binding_revision !== 'number' || typeof target.publish_revision !== 'number') continue;
+    local.set(target.external_id, { externalID: target.external_id, bindingRevision: target.binding_revision, publishRevision: target.publish_revision });
+  }
+  if (Array.isArray(value.platform_works)) for (const item of value.platform_works) {
+    if (!item || typeof item !== 'object') continue;
+    const target = item as { external_id?: unknown };
+    if (typeof target.external_id === 'string') mirrors.set(target.external_id, { externalID: target.external_id });
+  }
+  return { local, mirrors };
+}
+
+function platformV2StartPage(queryScope: unknown): number {
+  if (!queryScope || typeof queryScope !== 'object') return 0;
+  const checkpoint = (queryScope as { checkpoint?: unknown }).checkpoint;
+  if (!checkpoint || typeof checkpoint !== 'object') return 0;
+  const page = (checkpoint as { next_page?: unknown }).next_page;
+  return typeof page === 'number' && Number.isInteger(page) && page >= 0 ? page : 0;
+}
+
+function platformV2ScopeUpperBound(queryScope: unknown): number | null {
+  if (!queryScope || typeof queryScope !== 'object') return null;
+  const frozen = (queryScope as { frozen_scope?: unknown }).frozen_scope;
+  if (!frozen || typeof frozen !== 'object') return null;
+  const raw = (frozen as { scope_upper_bound?: unknown }).scope_upper_bound;
+  if (typeof raw !== 'string') return null;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function platformV2CatalogItem(input: {
+  externalID: string; accountKey: string; contentType: string; title: string; authorDisplay: string;
+  publishedAt: string | null; metrics: PlatformObservationDraft | null; upperBound: number | null;
+}): { item: Record<string, unknown> | null; outsideUpperBound: boolean; missingPublishedAt: boolean } {
+  const publishedTime = input.publishedAt ? Date.parse(input.publishedAt) : Number.NaN;
+  const outsideUpperBound = input.upperBound !== null && Number.isFinite(publishedTime) && publishedTime > input.upperBound;
+  if (outsideUpperBound) return { item: null, outsideUpperBound, missingPublishedAt: false };
+  const fieldStates: Record<string, string> = {
+    title: input.title ? 'present' : 'unknown',
+    summary: 'unknown', canonical_url: 'unknown', published_at: input.publishedAt ? 'present' : 'unknown',
+    remote_updated_at: 'unknown', cover_ref: 'unknown', topics: 'unknown', tags: 'unknown'
+  };
+  return {
+    outsideUpperBound,
+    missingPublishedAt: !input.publishedAt,
+    item: {
+      external_id: input.externalID,
+      author_external_account_key: input.accountKey,
+      remote_content_type: input.contentType,
+      remote_status: 'published',
+      title: input.title,
+      summary: '',
+      author_display: input.authorDisplay,
+      topics: [],
+      tags: [],
+      field_states: fieldStates,
+      ...(input.publishedAt ? { published_at: input.publishedAt } : {}),
+      ...(input.metrics ? { inline_metrics: [input.metrics] } : {})
+    }
+  };
+}
+
+async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, client: PlatformClient): Promise<PlatformCollectOutcome> {
+  if (!desktopClient) throw new Error('客户端设置尚未初始化。');
+  if (run.platform !== 'xhs' && run.platform !== 'wechat_mp') {
+    return submitV2ControlFailure(client, run, 'platform_browser_unsupported', 'platform_browser_unsupported');
+  }
+  if (activeLogin || platformLoginFlow.active) throw new PlatformBrowserError('platform_profile_busy', '另一个平台登录正在进行，请先完成或关闭它');
+  const platform = run.platform as PlatformLoginPlatform;
+  const auth = await desktopClient.getAuthContext();
+  // 与 v1 采集同理：登录态落在账号 slot 里，采集必须读同一个目录，
+  // 不能用设备命名空间（那里可能是另一个账号的历史登录态）。
+  const stored = await readAccountProfile(app.getPath('userData'), {
+    ...auth, origin: businessOrigin, accountId, platform
+  });
+  const profileDir = stored.profileDir;
+  if (!stored.meta || stored.meta.platform !== platform) {
+    return submitV2ControlFailure(client, run, 'platform_login_required', 'platform_login_required');
+  }
+  const candidate = selectLoginBrowser(await trustedLoginBrowsers(), stored.meta.browserFamily);
+  const browser = await launchPlatformBrowser({ executablePath: candidate.executablePath, profileDir });
+  const cdp = createCDPClient(browser, 20_000);
+  const session = { platform, profileDir, browser, cdp };
+  let accepted = 0;
+  let rejected = 0;
+  try {
+    const page = await openLoginPage(session);
+    if (!isLoggedInLanding(platform, page.url)) return submitV2ControlFailure(client, run, 'platform_login_required', 'platform_login_required');
+    const heartbeat = await client.heartbeat();
+    if (heartbeat.canceled) return { performed: true, runId: run.id, runStatus: 'canceled', accepted: 0, rejected: 0, stopReason: 'canceled', errorCode: null, adoptErrors: 0, adoptReason: null };
+
+    const source = pacedPlatformSource(createPageResponseSource(session));
+    const externalAccountKey = await resolveRunAccountKey(run);
+    if (!externalAccountKey) return submitV2ControlFailure(client, run, 'platform_identity_mismatch', 'platform_identity_mismatch');
+    let currentExternalKey = '';
+    let displayName = '';
+    if (platform === 'xhs') {
+      const identity = parseXhsIdentity(await source.fetchJSON(XHS_API.userInfo));
+      currentExternalKey = identity.externalAccountKey;
+      displayName = identity.redId;
+    } else {
+      const identityPayload = await source.fetchSigned(WECHAT_MP_API.switchAccount);
+      const current = await cdp.request('Runtime.evaluate', {
+        expression: `(() => { const id = globalThis.wx?.data?.user_name; return typeof id === 'string' && /^gh_[0-9a-zA-Z]+$/.test(id) ? id : null; })()`,
+        returnByValue: true
+      }) as { result?: { value?: unknown } };
+      const identity = parseWechatIdentity(identityPayload, typeof current.result?.value === 'string' ? current.result.value : undefined);
+      currentExternalKey = identity.externalAccountKey;
+      displayName = identity.originalID;
+    }
+    if (currentExternalKey !== externalAccountKey || stored.meta.externalAccountKey && stored.meta.externalAccountKey !== currentExternalKey) {
+      return submitV2ControlFailure(client, run, 'platform_identity_mismatch', 'platform_identity_mismatch');
+    }
+
+    const observedAt = new Date().toISOString();
+    const stage = run.operation_stage ?? 'metrics';
+    const targets = parsePlatformV2Targets(run.binding_snapshot);
+    const expectedMetrics = new Set([...targets.local.keys(), ...targets.mirrors.keys()]);
+    if (run.task_kind === 'account_sync' && stage === 'profile') {
+      return submitV2Control(client, run, {
+        state: 'unknown', reason: 'profile_capability_unverified', observed_at: observedAt
+      }, 'partial');
+    }
+    if (run.task_kind === 'account_sync' && stage === 'catalog') {
+      const startPage = platformV2StartPage(run.query_scope);
+      const upperBound = platformV2ScopeUpperBound(run.query_scope);
+      const items: Array<Record<string, unknown>> = [];
+      let uncertainBoundary = false;
+      let enumerationComplete = false;
+      let totalCount: number | null = null;
+      let pagesRead = 0;
+      let hasMore = false;
+      let incompleteReason: string | null = null;
+      const partition = platform === 'xhs' ? 'notes' : 'articles';
+      if (platform === 'xhs') {
+        const discovered = await collectPostedNotes(source, {
+          maxPages: PLATFORM_V2_PAGE_LIMIT,
+          startPage,
+          buildPath: ({ page: pageNo }) => `${XHS_API.postedNotes}?page=${pageNo}&page_size=${PLATFORM_V2_PAGE_SIZE}`
+        });
+        enumerationComplete = discovered.enumerationComplete;
+        totalCount = discovered.totalCount;
+        pagesRead = discovered.pagesRead;
+        hasMore = discovered.hasMore;
+        incompleteReason = discovered.coverage.incomplete_reason;
+        for (const note of discovered.notes) {
+          if (note.status !== 'published') continue;
+          const publishedAt = normalizeXhsNoteTime(note.recordedAt);
+          const metrics = noteToObservation(note, { externalAccountKey, observedAt });
+          const contentType = note.contentType === 'image' ? 'image_note' : note.contentType === 'video' ? 'video_note' : 'unknown';
+          const result = platformV2CatalogItem({ externalID: note.noteId, accountKey: externalAccountKey, contentType,
+            title: note.title, authorDisplay: displayName || externalAccountKey, publishedAt, metrics, upperBound });
+          uncertainBoundary ||= result.missingPublishedAt;
+          if (result.item) items.push(result.item);
+        }
+      } else {
+        const discovered = await collectPublishedArticles(source, { maxPages: PLATFORM_V2_PAGE_LIMIT, startPage });
+        enumerationComplete = discovered.enumerationComplete;
+        totalCount = discovered.coverage.total_count ?? null;
+        pagesRead = discovered.pagesRead;
+        hasMore = discovered.hasMore;
+        incompleteReason = discovered.coverage.incomplete_reason;
+        for (const article of discovered.articles) {
+          if (article.status !== 'published') continue;
+          const publishedAt = normalizeWechatSentAt(article.sentAt);
+          const metrics = articleToObservation(article, { externalAccountKey, observedAt });
+          const result = platformV2CatalogItem({ externalID: article.externalID, accountKey: externalAccountKey, contentType: 'wechat_article',
+            title: article.title, authorDisplay: displayName || externalAccountKey, publishedAt, metrics, upperBound });
+          uncertainBoundary ||= result.missingPublishedAt;
+          if (result.item) items.push(result.item);
+        }
+      }
+      for (let offset = 0; offset < items.length; offset += 25) {
+        const data: Record<string, unknown> = {
+          items: items.slice(offset, offset + 25), enumeration_complete: false,
+          partition: platform === 'xhs' ? 'notes' : 'articles', consistency: 'best_effort'
+        };
+        if (totalCount !== null) data.total_count = totalCount;
+        await client.submitV2('work_catalog', data);
+        accepted += Math.min(25, items.length - offset);
+      }
+      const nextPage = startPage + pagesRead;
+      const catalogComplete = enumerationComplete && !uncertainBoundary;
+      let terminalStatus: 'succeeded' | 'partial' = 'succeeded';
+      let terminalReason: string | null = null;
+      if (catalogComplete) {
+        const receipt = await client.submitV2('control', {
+          state: 'complete', enumeration_complete: true, total_count: totalCount ?? undefined,
+          partition, consistency: 'best_effort', observed_at: observedAt
+        }, { status: 'succeeded' });
+        accepted += receipt.accepted;
+      } else {
+        const reason = uncertainBoundary || !enumerationComplete ? 'catalog_inconsistent' : incompleteReason ?? 'page_budget';
+        const canContinue = reason === 'page_budget' && hasMore;
+        const receipt = await client.submitV2('control', {
+          state: 'partial', reason,
+          ...(canContinue ? { next_page: nextPage } : {}),
+          partition, consistency: 'best_effort', observed_at: observedAt
+        }, { status: 'partial', stopReason: reason });
+        accepted += receipt.accepted;
+        rejected += receipt.rejected;
+        terminalStatus = 'partial';
+        terminalReason = reason;
+      }
+      return { performed: true, runId: run.id, runStatus: terminalStatus, accepted, rejected, stopReason: terminalReason, errorCode: null, adoptErrors: 0, adoptReason: null };
+    }
+    if (run.task_kind === 'account_sync' && stage === 'content') {
+      return submitV2Control(client, run, {
+        state: 'unsupported', reason: 'content_capability_unverified', observed_at: observedAt
+      }, 'succeeded');
+    }
+
+    if ((run.task_kind === 'account_sync' && stage === 'metrics') || run.task_kind === 'collect' && stage === 'metrics') {
+      if (expectedMetrics.size === 0) {
+        const receipt = await client.submitV2('control', { state: 'complete', observed_at: observedAt }, { status: 'succeeded' });
+        return { performed: true, runId: run.id, runStatus: receipt.run_status, accepted: 0, rejected: 0, stopReason: null, errorCode: null, adoptErrors: 0, adoptReason: null };
+      }
+      const drafts: PlatformObservationDraft[] = [];
+      const found = new Set<string>();
+      if (platform === 'xhs') {
+        const discovered = await collectPostedNotes(source, { maxPages: PLATFORM_V2_PAGE_LIMIT, buildPath: ({ page: pageNo }) => `${XHS_API.postedNotes}?page=${pageNo}&page_size=${PLATFORM_V2_PAGE_SIZE}` });
+        for (const note of discovered.notes) {
+          if (!expectedMetrics.has(note.noteId) || note.status !== 'published') continue;
+          found.add(note.noteId);
+          const target = targets.local.get(note.noteId);
+          const draft = noteToObservation(note, { externalAccountKey, observedAt, bindingRevision: target?.bindingRevision, publishRevision: target?.publishRevision });
+          if (draft) drafts.push({ ...draft, row_no: drafts.length });
+        }
+      } else {
+        const discovered = await collectPublishedArticles(source, { maxPages: PLATFORM_V2_PAGE_LIMIT });
+        for (const article of discovered.articles) {
+          if (!expectedMetrics.has(article.externalID) || article.status !== 'published') continue;
+          found.add(article.externalID);
+          const target = targets.local.get(article.externalID);
+          const draft = articleToObservation(article, { externalAccountKey, observedAt, bindingRevision: target?.bindingRevision, publishRevision: target?.publishRevision });
+          if (draft) drafts.push({ ...draft, row_no: drafts.length });
+        }
+      }
+      for (let offset = 0; offset < drafts.length; offset += 25) {
+        const receipt = await client.submitV2('metrics', { observations: drafts.slice(offset, offset + 25) });
+        accepted += receipt.accepted;
+        rejected += receipt.rejected;
+      }
+      if (found.size < expectedMetrics.size) {
+        await client.submitV2('control', {
+          state: 'partial', reason: 'target_not_in_bounded_window', observed_at: observedAt
+        }, { status: 'partial', stopReason: 'target_not_in_bounded_window' });
+        return { performed: true, runId: run.id, runStatus: 'partial', accepted, rejected, stopReason: 'target_not_in_bounded_window', errorCode: null, adoptErrors: 0, adoptReason: null };
+      }
+      if (drafts.length === 0) {
+        await client.submitV2('control', { state: 'partial', reason: 'temporarily_unavailable', observed_at: observedAt }, { status: 'partial', stopReason: 'temporarily_unavailable' });
+        return { performed: true, runId: run.id, runStatus: 'partial', accepted, rejected, stopReason: 'temporarily_unavailable', errorCode: null, adoptErrors: 0, adoptReason: null };
+      }
+      const receipt = await client.submitV2('control', { state: 'complete', observed_at: observedAt }, { status: 'succeeded' });
+      accepted += receipt.accepted;
+      return { performed: true, runId: run.id, runStatus: receipt.run_status, accepted, rejected, stopReason: null, errorCode: null, adoptErrors: receipt.adopt_errors ?? 0, adoptReason: receipt.adopt_reason ?? null };
+    }
+    return submitV2Control(client, run, { state: 'unknown', reason: 'temporarily_unavailable', observed_at: observedAt }, 'failed');
+  } catch (error) {
+    const code = error instanceof PlatformBrowserError ? error.code : 'platform_network_unavailable';
+    console.error('[collect-v2] failed', code, describeError(error));
+    return submitV2ControlFailure(client, run, v2ControlReason(code), code);
+  } finally {
+    await cdp.close();
+  }
+}
+
+function v2ControlReason(errorCode: string): string {
+  if (errorCode === 'platform_identity_mismatch') return 'author_identity_unverified';
+  if (errorCode === 'platform_login_required' || errorCode === 'platform_challenge_required') return 'access_denied';
+  if (errorCode === 'platform_schema_changed') return 'catalog_inconsistent';
+  if (errorCode === 'platform_rate_limited' || errorCode === 'platform_account_restricted') return 'platform_risk';
+  return 'network_unavailable';
+}
+
+async function submitV2Control(client: PlatformClient, run: PlatformClaimedRun, data: Record<string, unknown>, status: 'succeeded' | 'partial' | 'failed' = 'succeeded'): Promise<PlatformCollectOutcome> {
+  const receipt = await client.submitV2('control', data, { status, stopReason: typeof data.reason === 'string' ? data.reason : null });
+  return { performed: true, runId: run.id, runStatus: receipt.run_status, accepted: receipt.accepted, rejected: receipt.rejected,
+    stopReason: typeof data.reason === 'string' ? data.reason : null, errorCode: null, adoptErrors: receipt.adopt_errors ?? 0, adoptReason: receipt.adopt_reason ?? null };
+}
+
+async function submitV2ControlFailure(client: PlatformClient, run: PlatformClaimedRun, errorCode: string, reasonCode: string): Promise<PlatformCollectOutcome> {
+  const data = { state: 'unknown', reason: v2ControlReason(reasonCode), observed_at: new Date().toISOString() };
+  const receipt = await client.submitV2('control', data, { status: 'failed', stopReason: data.reason, errorCode });
+  return { performed: true, runId: run.id, runStatus: receipt.run_status, accepted: receipt.accepted, rejected: receipt.rejected,
+    stopReason: data.reason, errorCode, adoptErrors: receipt.adopt_errors ?? 0, adoptReason: receipt.adopt_reason ?? null };
 }
 
 // ---------- 撤销连接与本机清理（DEV-PS23 / 20 文档 §5.4） ----------
@@ -2073,6 +2460,8 @@ function parseDesktopRoute(value: unknown): DesktopRoute {
 }
 
 function assertTrustedLocalSender(event: IpcMainInvokeEvent): void {
+  if (localSettingsViewController?.isTrusted(event)) return;
+
   const senderWindow = BrowserWindow.fromWebContents(event.sender);
   if (!senderWindow || !localWindows.has(senderWindow.id) || event.senderFrame !== event.sender.mainFrame) {
     throw new Error('不允许此窗口调用本地接口。');
@@ -2097,31 +2486,155 @@ function assertTrustedLocalSender(event: IpcMainInvokeEvent): void {
   }
 }
 
-function showSettingsWindow(target?: Extract<DesktopUiIntent, { type: 'platform-login' }>): void {
-  if (target) pendingPlatformLoginTarget = target;
-  if (settingsWindow && !settingsWindow.isDestroyed()) {
-    if (target && !settingsWindow.webContents.isLoading()) {
-      settingsWindow.webContents.send('settings:platform-login-target', { accountId: target.accountId, platform: target.platform });
-      pendingPlatformLoginTarget = null;
-    }
-    settingsWindow.show();
-    settingsWindow.focus();
+function getLocalSettingsWindow(event: IpcMainInvokeEvent): BrowserWindow | null {
+  if (localSettingsViewController?.isTrusted(event)
+    && localSettingsViewController.currentHost === businessWindow
+    && businessWindow && !businessWindow.isDestroyed()) return businessWindow;
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  return senderWindow && localWindows.has(senderWindow.id) ? senderWindow : null;
+}
+
+function openNativeSettings(): void {
+  if (failureWindow && !failureWindow.isDestroyed() && failureWindow.isVisible()) {
+    openFailureSettings(failureWindow);
     return;
   }
 
-  settingsWindow = createLocalWindow('OPS Desktop 设置', 'ops-desktop://settings/');
-  const currentWindow = settingsWindow;
-  currentWindow.on('closed', () => {
-    localWindows.delete(currentWindow.id);
-    settingsWindow = null;
-    void platformLoginFlow.stop();
+  if (businessWindow && !businessWindow.isDestroyed() && !businessWindow.webContents.isDestroyed()
+    && isBusinessUrl(businessWindow.webContents.mainFrame.url)
+    && isBusinessUrl(businessWindow.webContents.getURL())
+    && !businessWindow.webContents.isLoadingMainFrame()) {
+    pendingNativeSettingsRequest = false;
+    if (localSettingsViewController?.currentHost === businessWindow) localSettingsViewController.detach();
+    businessWindow.show();
+    businessWindow.focus();
+    businessWindow.webContents.send('desktop-ui:open-settings');
+    return;
+  }
+
+  pendingNativeSettingsRequest = true;
+  void loadBusinessPage().catch(() => {
+    if (failureWindow && !failureWindow.isDestroyed()) openFailureSettings(failureWindow);
   });
+}
+
+function flushPendingNativeSettingsRequest(window: BrowserWindow): void {
+  if (!pendingNativeSettingsRequest || window !== businessWindow || window.isDestroyed() || window.webContents.isDestroyed()) return;
+  if (!isBusinessUrl(window.webContents.mainFrame.url) || !isBusinessUrl(window.webContents.getURL())) return;
+  pendingNativeSettingsRequest = false;
+  window.webContents.send('desktop-ui:open-settings');
+}
+
+function openFailureSettings(window: BrowserWindow): void {
+  pendingNativeSettingsRequest = false;
+  let pathname = '';
+  try {
+    pathname = new URL(window.webContents.getURL()).pathname;
+  } catch {
+    return;
+  }
+  if (pathname === '/offline/') {
+    void window.loadURL(`${SETTINGS_PROTOCOL_ORIGIN}/`);
+    return;
+  }
+  if (pathname !== '/') return;
+  window.show();
+  window.focus();
+  if (pendingPlatformLoginTarget && !window.webContents.isLoading()) {
+    window.webContents.send('settings:platform-login-target', {
+      accountId: pendingPlatformLoginTarget.accountId,
+      platform: pendingPlatformLoginTarget.platform
+    });
+    pendingPlatformLoginTarget = null;
+  }
+}
+
+function showLocalSettingsView(window: BrowserWindow, panel: LocalSettingsPanel): void {
+  if (window !== businessWindow || window.isDestroyed() || window.webContents.isDestroyed()
+    || !isBusinessUrl(window.webContents.mainFrame.url) || !isBusinessUrl(window.webContents.getURL())) return;
+  if (!localSettingsSession) throw new Error('本机设置会话尚未初始化。');
+  if (!localSettingsViewController || localSettingsViewController.isDestroyed) {
+    localSettingsViewController = createLocalSettingsViewController({
+      registry: localSettingsSenderRegistry,
+      createView: () => {
+        const view = new WebContentsView({
+          webPreferences: {
+            session: localSettingsSession!,
+            preload: path.join(__dirname, 'preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
+            webSecurity: true,
+            webviewTag: false,
+            devTools: !app.isPackaged
+          }
+        });
+        view.webContents.setWindowOpenHandler(({ url }) => {
+          const intent = parseDesktopUiIntent(url);
+          if (intent?.type === 'settings-close') requestCloseLocalSettingsFromView(window);
+          else if (intent) applyDesktopUiIntent(window, intent);
+          return { action: 'deny' };
+        });
+        view.webContents.on('will-navigate', (event, url) => {
+          if (parseEmbeddedSettingsPanel(url)) return;
+          event.preventDefault();
+          const intent = parseDesktopUiIntent(url);
+          if (intent?.type === 'settings-close') requestCloseLocalSettingsFromView(window);
+          else if (intent) applyDesktopUiIntent(window, intent);
+        });
+        view.webContents.on('will-frame-navigate', (details) => {
+          if (!details.isMainFrame || !parseEmbeddedSettingsPanel(details.url)) details.preventDefault();
+        });
+        view.webContents.on('will-redirect', (details) => {
+          if (!parseEmbeddedSettingsPanel(details.url)) details.preventDefault();
+        });
+        view.webContents.on('did-finish-load', () => {
+          if (localSettingsViewController?.currentPanel !== 'account-device' || !pendingPlatformLoginTarget) return;
+          sendPlatformLoginTarget(view.webContents);
+        });
+        return view;
+      }
+    });
+  }
+  void localSettingsViewController.show(window, panel).then(() => {
+    if (panel === 'account-device' && pendingPlatformLoginTarget
+      && localSettingsViewController?.currentPanel === 'account-device') {
+      const view = localSettingsViewController;
+      // did-finish-load delivers the target for a newly loaded panel; this covers a reused panel.
+      if (view.currentHost === window) sendPlatformLoginTargetForCurrentView();
+    }
+  }).catch((error) => {
+    console.error('[settings] failed to show local panel', error instanceof Error ? error.message : 'unknown');
+  });
+}
+
+function sendPlatformLoginTarget(webContents: Electron.WebContents): void {
+  if (!pendingPlatformLoginTarget || webContents.isDestroyed()) return;
+  webContents.send('settings:platform-login-target', {
+    accountId: pendingPlatformLoginTarget.accountId,
+    platform: pendingPlatformLoginTarget.platform
+  });
+  pendingPlatformLoginTarget = null;
+}
+
+function sendPlatformLoginTargetForCurrentView(): void {
+  if (!localSettingsViewController || localSettingsViewController.isDestroyed
+    || localSettingsViewController.currentPanel !== 'account-device'
+    || localSettingsViewController.currentHost !== businessWindow) return;
+  const webContents = localSettingsViewController.webContents;
+  if (webContents && !webContents.isLoading()) sendPlatformLoginTarget(webContents);
+}
+
+function requestCloseLocalSettingsFromView(window: BrowserWindow): void {
+  if (localSettingsViewController?.currentHost !== window) return;
+  openNativeSettings();
 }
 
 function showFailureWindow(): void {
   if (failureWindow && !failureWindow.isDestroyed()) {
     failureWindow.show();
     failureWindow.focus();
+    if (pendingNativeSettingsRequest) openFailureSettings(failureWindow);
     return;
   }
 
@@ -2131,6 +2644,7 @@ function showFailureWindow(): void {
     localWindows.delete(currentWindow.id);
     failureWindow = null;
   });
+  if (pendingNativeSettingsRequest) currentWindow.webContents.once('did-finish-load', () => openFailureSettings(currentWindow));
 }
 
 function createLocalWindow(title: string, url: string): BrowserWindow {
@@ -2215,12 +2729,37 @@ function closeFailureWindow(): void {
 
 function applyDesktopUiIntent(window: BrowserWindow, intent: DesktopUiIntent): void {
   if (intent.type === 'settings') {
-    showSettingsWindow();
+    openNativeSettings();
+    return;
+  }
+
+  if (intent.type === 'settings-pane') {
+    showLocalSettingsView(window, intent.panel);
+    return;
+  }
+
+  if (intent.type === 'settings-detach') {
+    if (localSettingsViewController?.currentHost === window) localSettingsViewController.detach();
+    return;
+  }
+
+  if (intent.type === 'settings-close') {
+    if (localSettingsViewController
+      && (!localSettingsViewController.currentHost || localSettingsViewController.currentHost === window)) {
+      localSettingsViewController.destroy();
+      localSettingsViewController = null;
+      pendingPlatformLoginTarget = null;
+      void platformLoginFlow.stop();
+    }
     return;
   }
 
   if (intent.type === 'platform-login') {
-    showSettingsWindow(intent);
+    pendingPlatformLoginTarget = intent;
+    if (localSettingsViewController?.currentHost === businessWindow
+      && localSettingsViewController.currentPanel === 'account-device') {
+      sendPlatformLoginTargetForCurrentView();
+    }
     return;
   }
 
@@ -2416,7 +2955,7 @@ function installApplicationMenu(): void {
       submenu: [
         { id: 'ops-native-client-status', label: '工作区：读取中 · 模式：读取中', enabled: false },
         { type: 'separator' },
-        { label: 'AI 连接设置…', click: () => showSettingsWindow() },
+        { label: 'AI 连接设置…', click: () => openNativeSettings() },
         { label: '重新登录…', click: () => void navigateBusiness(`${businessOrigin}/login`) },
         { type: 'separator' },
         {

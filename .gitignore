@@ -28,5 +28,7 @@ Thumbs.db
 .vscode/
 
 Reference_Projects/
+output/
+docs/
 # 工具目录（工作记忆等）
 .workbuddy-ai/

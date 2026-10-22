@@ -513,6 +513,15 @@ func (s *Server) agentProvenanceBlanked(ctx context.Context, st *agentRunState, 
 		}
 		v, ok := args[p.Name]
 		if !ok || v == nil {
+			// U 类必填字段模型没给值：卡片照常创建，但必须由用户亲自填写（第 4.5 节）。
+			if p.Required && agentSourceIsU(p.Source) {
+				blanked = append(blanked, p.Name)
+			}
+			continue
+		}
+		// U 类字段显式传空串同样视为“模型没写”，不能当成通过来源校验后直接落库。
+		if agentSourceIsU(p.Source) && agentIsBlankValue(v) {
+			blanked = append(blanked, p.Name)
 			continue
 		}
 		if err := ensure(); err != nil {

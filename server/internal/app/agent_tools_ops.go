@@ -151,9 +151,10 @@ var agentToolsOps = []AgentTool{
 	},
 	{
 		Name: "daily__stats", Domain: "ops", Kind: toolR, Method: "GET", Path: "/accounts/{accountId}/daily/stats",
-		Description: "查看每日推荐的采用率与各来源的效果统计。",
+		Description: "查看每日推荐的账号采用率与各来源效果；头条按 content_format 分别查看文章或微头条表现，省略时取账号默认形态。",
 		Params: []ToolParam{
 			pPath("accountId"),
+			pQueryF("content_format", enumOf("long_article", "micro_post"), false),
 		},
 		MinRole: roleViewer,
 		Target:  target("account", "accountId"),

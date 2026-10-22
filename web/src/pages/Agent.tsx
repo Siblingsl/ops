@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Bot, ChevronDown, ChevronLeft, Clipboard, FileText, LoaderCircle, Menu,
+  Bot, Check, ChevronDown, ChevronLeft, Clipboard, FileText, LoaderCircle, Menu,
   MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Search, Send, Settings2, Square, Trash2, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -39,12 +39,17 @@ function splitDate(value: string) {
   return '更早'
 }
 
+function messageTime(value: string) {
+  return new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
 function AgentConversationList({
-  currentID, search, setSearch, onSelect, onNew, onClose, sidebarTitle,
+  currentID, search, setSearch, onSelect, onNew, onClose, sidebarTitle, desktopPresentation = false,
 }: {
   currentID?: string; search: string; setSearch: (v: string) => void
   onSelect: (id: string) => void; onNew: () => void; onClose?: () => void
   sidebarTitle?: string
+  desktopPresentation?: boolean
 }) {
   const list = useInfiniteQuery({
     queryKey: ['agent-conversations', search],
@@ -69,19 +74,19 @@ function AgentConversationList({
   const groups = ['今天', '昨天', '7 天内', '更早'].map((label) => ({ label, items: rest.filter((item) => splitDate(item.last_message_at) === label) }))
 
   const row = (item: AgentConversationListItem) => (
-    <ConversationRow key={item.id} item={item} selected={item.id === currentID} onSelect={() => { onSelect(item.id); onClose?.() }} />
+    <ConversationRow key={item.id} item={item} selected={item.id === currentID} desktopPresentation={desktopPresentation} onSelect={() => { onSelect(item.id); onClose?.() }} />
   )
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {sidebarTitle !== undefined && <div className="mb-1.5 min-w-0 px-6 pt-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400"><div className="truncate" title={sidebarTitle}>{sidebarTitle}</div></div>}
-      <div className={cn('flex items-center gap-2', sidebarTitle !== undefined ? 'px-3 pb-3 pt-0' : 'p-3')}>
+      {sidebarTitle !== undefined && <div className={cn('mb-1.5 min-w-0 px-6 pt-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400', desktopPresentation && 'desktop-agent-list-title')}><div className="truncate" title={sidebarTitle}>{sidebarTitle}</div></div>}
+      <div className={cn('flex items-center gap-2', desktopPresentation ? 'desktop-agent-list-new' : sidebarTitle !== undefined ? 'px-3 pb-3 pt-0' : 'p-3')}>
         <Button variant="primary" className="flex-1" icon={<MessageSquarePlus className="size-4" />} onClick={onNew}>新对话</Button>
         {onClose && <IconButton label="关闭对话列表" onClick={onClose}><X className="size-4" /></IconButton>}
       </div>
-      <label className="relative mx-3 mb-3 block">
-        <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-mist-400" />
-        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索对话" className="pl-9" aria-label="搜索对话" />
+      <label className={cn('relative mx-3 mb-3 block', desktopPresentation && 'desktop-agent-list-search')}>
+        {!desktopPresentation && <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-mist-400" />}
+        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={desktopPresentation ? '搜索最近的对话' : '搜索对话'} className={desktopPresentation ? '' : 'pl-9'} aria-label="搜索对话" />
       </label>
       {list.isLoading ? <div className="px-4 py-3 text-sm text-mist-400">正在加载对话…</div> : list.isError ? (
         <div className="px-4 py-3 text-sm text-danger">{errorMessage(list.error)} <button type="button" className="ml-1 underline" onClick={() => void list.refetch()}>重试</button></div>
@@ -94,6 +99,7 @@ function AgentConversationList({
           {list.isFetchingNextPage && <div className="py-3 text-center text-xs text-mist-400">加载更多…</div>}
         </div>
       )}
+      {desktopPresentation && <div className="desktop-agent-privacy-note">你的对话仅本人可见。操作卡片执行后，仍保留原操作日志。</div>}
     </div>
   )
 }
@@ -102,7 +108,7 @@ function ConversationGroup({ label, icon, children }: { label: string; icon?: Re
   return <section className="mb-3"><div className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold tracking-wide text-mist-400">{icon}{label}</div><div className="space-y-0.5">{children}</div></section>
 }
 
-function ConversationRow({ item, selected, onSelect }: { item: AgentConversationListItem; selected: boolean; onSelect: () => void }) {
+function ConversationRow({ item, selected, onSelect, desktopPresentation = false }: { item: AgentConversationListItem; selected: boolean; onSelect: () => void; desktopPresentation?: boolean }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [renameOpen, setRenameOpen] = useState(false)
@@ -117,6 +123,7 @@ function ConversationRow({ item, selected, onSelect }: { item: AgentConversation
       await patch(`/agent/conversations/${item.id}`, { title: title.trim() })
       setRenameOpen(false)
       await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+      if (selected) await qc.invalidateQueries({ queryKey: ['agent-conversation', item.id] })
     } catch (error) { toast.error(errorMessage(error)) }
   }
   const remove = async () => {
@@ -138,7 +145,7 @@ function ConversationRow({ item, selected, onSelect }: { item: AgentConversation
           <span className="truncate text-[13px] font-medium">{item.title || '新对话'}</span>
           {pending > 0 && <span className="rounded-full bg-gamboge-100 px-1.5 text-[10px] text-gamboge-800">{pending}</span>}
         </span>
-        <span className="mt-0.5 block truncate text-[11px] text-mist-400">{item.model || '尚未选择模型'}</span>
+        <span className="mt-0.5 block truncate text-[11px] text-mist-400" title={desktopPresentation ? item.model || '尚未选择模型' : undefined}>{desktopPresentation ? pending > 0 ? `${pending} 张待确认卡片` : splitDate(item.last_message_at) : item.model || '尚未选择模型'}</span>
       </button>
       <div className="relative mr-1">
         <IconButton label="对话操作" className="size-7 opacity-0 group-hover:opacity-100 focus:opacity-100" onClick={() => setMenuOpen((value) => !value)}><MoreHorizontal className="size-4" /></IconButton>
@@ -162,26 +169,32 @@ function MenuButton({ icon, label, onClick, danger }: { icon: React.ReactNode; l
   return <button type="button" role="menuitem" onClick={onClick} className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-mist-50 ${danger ? 'text-danger' : 'text-mist-600'}`}><span className="[&>svg]:size-3.5">{icon}</span>{label}</button>
 }
 
-function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerate }: {
-  message: AgentMessage; lastAssistant: boolean; canSeeImages: boolean; onEdit?: () => void; onRegenerate?: () => void
+function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerate, desktopPresentation = false }: {
+  message: AgentMessage; lastAssistant: boolean; canSeeImages: boolean; onEdit?: () => void; onRegenerate?: () => void; desktopPresentation?: boolean
 }) {
   const [toolsOpen, setToolsOpen] = useState(false)
   const toolsId = useId()
   const user = message.role === 'user'
+  const time = messageTime(message.created_at)
   return (
-    <article className={`group flex ${user ? 'justify-end' : 'justify-start'}`}>
-      <div className={`min-w-0 max-w-[92%] rounded-2xl px-4 py-3 sm:max-w-[82%] ${user ? 'bg-ink-600 text-white' : message.role === 'system' ? 'border border-gamboge-200 bg-gamboge-50 text-gamboge-900' : 'bg-white shadow-card'}`}>
+    <article className={`group flex ${user ? 'justify-end' : 'justify-start'} ${desktopPresentation ? `desktop-agent-message ${user ? 'user' : 'assistant'}` : ''}`}>
+      {desktopPresentation && <div className="desktop-agent-message-speaker">
+        {user ? <span className="desktop-agent-user-avatar">林</span> : <span className="desktop-agent-bot-avatar"><Bot /></span>}
+        <strong>{user ? '你' : 'OPS'}</strong>
+        <small>{user ? time : message.tool_calls?.length ? '已完成参考资料读取' : time}</small>
+      </div>}
+      <div className={`min-w-0 max-w-[92%] rounded-2xl px-4 py-3 sm:max-w-[82%] ${desktopPresentation ? 'desktop-agent-message-bubble' : ''} ${user ? 'bg-ink-600 text-white' : message.role === 'system' ? 'border border-gamboge-200 bg-gamboge-50 text-gamboge-900' : 'bg-white shadow-card'}`}>
         {message.attachments?.length > 0 && <div className="mb-2 flex flex-wrap gap-2">
           {message.attachments.map((attachment) => attachment.kind === 'image'
             ? <a key={attachment.id} href={`${attachment.url}?variant=original`} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg"><img src={`${attachment.url}?variant=thumb`} alt={attachment.name} className="size-24 object-cover" /></a>
             : <span key={attachment.id} className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs ${user ? 'bg-white/15' : 'bg-mist-100 text-mist-600'}`}><FileText className="size-3.5" />{attachment.name}</span>)}
         </div>}
         {user && !canSeeImages && message.attachments?.some((attachment) => attachment.kind === 'image') && <Notice tone="gamboge" className="mb-2">当前模型不能看图，图片只能用于保存或数据截图识别。</Notice>}
-        {user ? <p className="whitespace-pre-wrap break-words text-[14px] leading-relaxed">{message.content}</p>
+        {user ? <p className={`whitespace-pre-wrap break-words text-[14px] leading-relaxed ${desktopPresentation ? 'desktop-agent-user-content' : ''}`}>{message.content}</p>
           : <AgentMarkdown text={message.content} />}
         {message.tool_calls?.length > 0 && <div className={`mt-2 border-t pt-2 ${user ? 'border-white/20' : 'border-mist-100'}`}>
-          <button type="button" aria-expanded={toolsOpen} aria-controls={toolsId} onClick={() => setToolsOpen((value) => !value)} className={`inline-flex cursor-pointer items-center gap-1 text-[12px] ${user ? 'text-white/75' : 'text-mist-500 hover:text-mist-700'}`}>
-            <ChevronDown className={`size-3.5 transition-transform ${toolsOpen ? '' : '-rotate-90'}`} />
+          <button type="button" aria-expanded={toolsOpen} aria-controls={toolsId} onClick={() => setToolsOpen((value) => !value)} className={`inline-flex cursor-pointer items-center gap-1 text-[12px] ${desktopPresentation ? 'desktop-agent-tool-summary' : ''} ${user ? 'text-white/75' : 'text-mist-500 hover:text-mist-700'}`}>
+            {desktopPresentation ? <Check className="size-3.5" /> : <ChevronDown className={`size-3.5 transition-transform ${toolsOpen ? '' : '-rotate-90'}`} />}
             已读取 {message.tool_calls.length} 项
           </button>
           <div id={toolsId} aria-hidden={!toolsOpen} className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${toolsOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
@@ -195,8 +208,8 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
             </div>
           </div>
         </div>}
-        <div className={`mt-1.5 flex items-center gap-1 text-[10.5px] ${user ? 'text-white/60' : 'text-mist-400'}`}>
-          <time>{new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
+        <div className={`mt-1.5 flex items-center gap-1 text-[10.5px] ${desktopPresentation ? 'desktop-agent-message-footer' : ''} ${user ? 'text-white/60' : 'text-mist-400'}`}>
+          <time>{time}</time>
           {user && onEdit && <button type="button" onClick={onEdit} className="ml-2 cursor-pointer opacity-0 underline group-hover:opacity-100 focus:opacity-100">编辑</button>}
           {!user && message.role === 'assistant' && <div className="ml-auto flex items-center gap-1 opacity-70 group-hover:opacity-100">
             <button type="button" title="复制" onClick={() => void navigator.clipboard.writeText(message.content).then(() => toast.success('已复制')).catch(() => toast.error('复制失败'))} className="cursor-pointer rounded p-1 hover:bg-mist-100"><Clipboard className="size-3.5" /></button>
@@ -220,6 +233,7 @@ function RunStatus({ activeRun, streamStage, pendingActions, error, completedNot
 
 export default function Agent() {
   const { conversationId } = useParams()
+  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const navigate = useNavigate()
   const qc = useQueryClient()
   const bootstrap = useAgentBootstrap()
@@ -254,7 +268,7 @@ export default function Agent() {
   const [actionExecuting, setActionExecuting] = useState(false)
 
   const bootstrapData = bootstrap.data
-  const canRead = !!bootstrapData && (bootstrapData.can_use || bootstrapData.reason === 'no_model')
+  const canRead = !!bootstrapData && (bootstrapData.can_use || bootstrapData.reason === 'no_model' || bootstrapData.reason === 'not_tested')
   const canWrite = bootstrapData?.can_use === true
   const detailQuery = useQuery({
     queryKey: ['agent-conversation', conversationId],
@@ -483,80 +497,98 @@ export default function Agent() {
 
   const inputDisabled = !canWrite || busy || uploading
   const accountList = (accounts.data ?? []).filter((account) => account.status === 'active')
+  const selectedAccountName = accountList.find((account) => account.id === selectedAccount)?.name || '不指定账号'
+  const selectedModelName = selectedModelOption?.model || '选择模型'
 
   if (bootstrap.isLoading) return <div className="flex h-full items-center justify-center text-sm text-mist-400"><LoaderCircle className="mr-2 size-4 animate-spin" />正在准备智能体…</div>
   if (bootstrap.isError || !bootstrapData) return <div className="m-auto max-w-xl p-6 text-center"><p className="text-sm text-danger">{errorMessage(bootstrap.error)}</p><Button className="mt-3" onClick={() => void bootstrap.refetch()}>重试</Button></div>
-  if (!bootstrapData.can_use && bootstrapData.reason !== 'no_model') return <Unavailable bootstrap={bootstrapData} />
+  if (!bootstrapData.can_use && bootstrapData.reason !== 'no_model' && bootstrapData.reason !== 'not_tested') return <Unavailable bootstrap={bootstrapData} />
 
   const sidebarSlot = document.getElementById('agent-sidebar-slot')
   const titleSlot = document.getElementById('agent-title-slot')
   const toolbarSlot = document.getElementById('agent-toolbar-slot')
-  const renderTitle = () => (
+  const renderConversationTitle = () => (
     <>
       {conversation
-        ? <input key={conversation.id} defaultValue={conversation.title} aria-label="对话标题" maxLength={60}
+        ? <input key={`${conversation.id}:${conversation.title}`} defaultValue={conversation.title} aria-label="对话标题" maxLength={60}
+            style={{ width: `${Math.min(440, Math.max(42, Array.from(conversation.title).length * 12))}px` }}
             onBlur={(event) => {
               const title = event.target.value.trim()
               if (title && title !== conversation.title) void patch(`/agent/conversations/${conversation.id}`, { title }).then(() => invalidate()).catch((error) => toast.error(errorMessage(error)))
             }} className="min-w-0 max-w-[320px] truncate border-0 bg-transparent text-[13px] font-semibold text-mist-800 outline-none" />
         : <span className="text-[13px] font-semibold text-mist-800">AI 对话</span>}
-      {conversation && <span className="hidden text-[10.5px] text-mist-400 xl:inline">本对话 {detail?.usage.prompt_tokens ?? 0} 输入 / {detail?.usage.completion_tokens ?? 0} 输出 token</span>}
+      {conversation && !desktopPresentation && <span className="hidden text-[10.5px] text-mist-400 xl:inline">本对话 {detail?.usage.prompt_tokens ?? 0} 输入 / {detail?.usage.completion_tokens ?? 0} 输出 token</span>}
     </>
   )
+  const renderTitle = () => desktopPresentation
+    ? <span className="text-[13px] font-semibold text-mist-800">AI 对话</span>
+    : renderConversationTitle()
   return (
     <>
-      {sidebarSlot && createPortal(
+      {sidebarSlot && !desktopPresentation && createPortal(
         <div className="absolute inset-0 flex min-h-0 flex-col">
           <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle={conversation?.title || '对话'} />
         </div>,
         sidebarSlot,
       )}
       {titleSlot && createPortal(<div className="flex min-w-0 items-center gap-2">{renderTitle()}</div>, titleSlot)}
-      {toolbarSlot && createPortal(
+      {toolbarSlot && !desktopPresentation && createPortal(
         <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>,
         toolbarSlot,
       )}
-      <div className="relative flex h-full min-h-0 overflow-hidden bg-[#f7f8f6]">
+      <div className={`relative flex h-full min-h-0 overflow-hidden bg-[#f7f8f6] ${desktopPresentation ? 'desktop-agent-workspace' : ''}`}>
+      {desktopPresentation && <aside className="desktop-agent-list" aria-label="AI 对话列表" data-testid="desktop-agent-list">
+        <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle="AI 对话" desktopPresentation />
+      </aside>}
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-mist-200 bg-white px-3 sm:px-5 lg:hidden">
+        <header className={`flex min-h-14 shrink-0 items-center gap-2 border-b border-mist-200 bg-white px-3 sm:px-5 ${desktopPresentation ? 'desktop-agent-chat-header' : 'lg:hidden'}`}>
           <IconButton label="打开对话列表" className="md:hidden" onClick={() => setMobileListOpen(true)}><Menu className="size-4" /></IconButton>
-          <div className="flex min-w-0 flex-1 items-center gap-2">{renderTitle()}</div>
-          <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>
+          <div className={`flex min-w-0 items-center gap-2 ${desktopPresentation ? 'desktop-agent-chat-heading' : 'flex-1'}`}>
+            {desktopPresentation ? <>{renderConversationTitle()}<span className="desktop-agent-private-tag">仅本人可见</span></> : renderTitle()}
+          </div>
+          {desktopPresentation
+            ? <button type="button" className="desktop-agent-chat-settings" aria-label="对话设置" onClick={() => setSettingsOpen(true)}>对话设置 <Settings2 /></button>
+            : <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>}
         </header>
 
         {bootstrapData.read_only && <div className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12px] text-gamboge-800">当前为观察者：智能体只能查询，不能修改。</div>}
 
         <div className="relative flex min-h-0 flex-1 flex-col">
           {dragging && <div className="absolute inset-3 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-ink-400 bg-white/90 text-ink-700">松开以上传图片或文本</div>}
-          <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-5 sm:px-6" onDragEnter={(event) => { event.preventDefault(); if (canWrite && !busy && !uploading) { dragDepth.current++; setDragging(true) } }} onDragLeave={(event) => { event.preventDefault(); dragDepth.current--; if (dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false) } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void addFiles(event.dataTransfer.files) }}>
+          <div className={`scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-5 sm:px-6 ${desktopPresentation ? 'desktop-agent-chat-stream' : ''}`} onDragEnter={(event) => { event.preventDefault(); if (canWrite && !busy && !uploading) { dragDepth.current++; setDragging(true) } }} onDragLeave={(event) => { event.preventDefault(); dragDepth.current--; if (dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false) } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void addFiles(event.dataTransfer.files) }}>
             {detailQuery.isLoading && conversationId && <div className="mx-auto max-w-3xl py-12 text-center text-sm text-mist-400"><LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />正在加载对话…</div>}
             {detailQuery.isError && <Notice tone="red" className="mx-auto max-w-3xl">{errorMessage(detailQuery.error)} <button type="button" className="ml-2 underline" onClick={() => void detailQuery.refetch()}>重试</button></Notice>}
             {!conversationId && !messages.length && <Welcome onPrompt={(value) => setText(value)} noModel={!bootstrapData.can_use} />}
             {detail?.has_more && <div className="mx-auto mb-4 max-w-3xl text-center"><Button size="sm" variant="ghost" onClick={() => void loadOlder()}>加载更早的消息</Button></div>}
-            <div className="mx-auto flex max-w-3xl flex-col gap-4">
-              {messages.map((message) => <div key={message.id}>
-                <MessageView message={message} lastAssistant={message.id === lastAssistant?.id} canSeeImages={selectedModelOption?.vision === true}
+            <div className={`mx-auto flex max-w-3xl flex-col gap-4 ${desktopPresentation ? 'desktop-agent-message-column' : ''}`}>
+              {messages.map((message, index) => {
+                const previous = messages[index - 1]
+                const startsDay = desktopPresentation && (!previous || splitDate(previous.created_at) !== splitDate(message.created_at))
+                return <div key={message.id}>
+                {startsDay && <div className="desktop-agent-day">{splitDate(message.created_at)} · {messageTime(message.created_at)}</div>}
+                <MessageView message={message} lastAssistant={message.id === lastAssistant?.id} canSeeImages={selectedModelOption?.vision === true} desktopPresentation={desktopPresentation}
                   onEdit={message.id === lastUser?.id && !busy && canWrite && !message.attachments.length ? () => { setEditMessage(message); setText(message.content); setFiles([]); inputRef.current?.focus() } : undefined}
                   onRegenerate={message.id === lastAssistant?.id && !busy && canWrite ? regenerate : undefined} />
-                {message.role === 'assistant' && message.run_id && actionMessageByRun[message.run_id] === message.id && <AgentActionCards
+                {message.role === 'assistant' && message.run_id && actionMessageByRun[message.run_id] === message.id && <div className={desktopPresentation ? 'desktop-agent-action-wrapper' : ''}><AgentActionCards
                   actions={actions.filter((action) => action.run_id === message.run_id)}
                   running={busy || actionExecuting}
                   onRefresh={invalidate}
                   onContinue={continueRun}
                   onExecutingChange={setActionExecuting}
-                />}
-              </div>)}
+                  desktopPresentation={desktopPresentation}
+                /></div>}
+              </div>})}
               {streamText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card"><AgentMarkdown text={streamText} /></div></div>}
             </div>
             <div ref={bottomRef} />
           </div>
 
-          <div className="shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4">
-            <RunStatus activeRun={activeRun} streamStage={streamStage} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />
-            {!bootstrapData.can_use && bootstrapData.reason === 'no_model' && <Notice tone="gamboge" className="mx-auto mb-2 max-w-3xl">请到模型配置页选择支持工具调用的模型并完成能力自检。历史对话仍可查看。 <a href="/settings/models" className="underline">去模型配置</a></Notice>}
-            {pendingActions > 0 && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">等待你逐张处理 {pendingActions} 项后，智能体会继续。卡片操作入口显示在对应消息下方。</div>}
+          <div className={`shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4 ${desktopPresentation ? 'desktop-agent-compose-area' : ''}`}>
+            {(!desktopPresentation || !!streamError) && <RunStatus activeRun={activeRun} streamStage={streamStage} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
+            {!bootstrapData.can_use && (bootstrapData.reason === 'no_model' || bootstrapData.reason === 'not_tested') && <Notice tone="gamboge" className="mx-auto mb-2 max-w-3xl">{bootstrapData.reason === 'not_tested' ? '模型已经配置好了，但还没有完成能力自检。完成一次自检后就能开始对话。' : '还没有配置可用于对话的模型，请到模型配置页添加支持工具调用的模型。'}历史对话仍可查看。 <a href="/settings/models" className="underline">去模型配置</a></Notice>}
+            {pendingActions > 0 && !desktopPresentation && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">等待你逐张处理 {pendingActions} 项后，智能体会继续。卡片操作入口显示在对应消息下方。</div>}
             {detail?.can_continue && !busy && !actionExecuting && pendingActions === 0 && <div className="mx-auto mb-2 max-w-3xl text-right"><Button size="sm" variant="ghost" onClick={continueRun}>继续</Button></div>}
-            {activeRun && <div className="mx-auto mb-2 max-w-3xl text-right"><Button size="sm" variant="ghost" icon={<Square className="size-3" />} onClick={() => void stop()}>停止</Button></div>}
+            {activeRun && !desktopPresentation && <div className="mx-auto mb-2 max-w-3xl text-right"><Button size="sm" variant="ghost" icon={<Square className="size-3" />} onClick={() => void stop()}>停止</Button></div>}
             {conversation && !activeRun && detail?.actions.some((action) => action.status === 'executing') && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">有操作卡片正在执行，请稍候。</div>}
             {detail?.messages.length === 0 && bootstrapData.default_model_unsupported && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-gamboge-700">默认模型未通过工具调用自检，请先选择其他模型。</div>}
             {editMessage && <div className="mx-auto mb-2 flex max-w-3xl items-center justify-between rounded-lg bg-mist-50 px-3 py-1.5 text-xs text-mist-600"><span>编辑最后一条消息并重新运行</span><button type="button" className="cursor-pointer underline" onClick={() => { setEditMessage(null); setText('') }}>取消</button></div>}
@@ -566,15 +598,31 @@ export default function Agent() {
                 <span className="max-w-40 truncate">{file.name}</span><IconButton label={`移除 ${file.name}`} className="size-6" onClick={() => void removeFile(file)}><X className="size-3" /></IconButton>
               </div>)}
             </div>}
-            <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-mist-200 bg-white p-2 shadow-card focus-within:border-ink-300">
-              <input ref={fileRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,.txt,.md" className="hidden" onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = '' }} />
-              <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()} className="mb-0.5"><Paperclip className="size-4" /></IconButton>
-              <Textarea ref={inputRef} rows={1} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px` }} onKeyDown={onInputKeyDown}
-                placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? '请先配置支持工具调用的模型' : '发送消息…（Enter 发送，Shift+Enter 换行）'} className="max-h-48 min-h-10 resize-none border-0 bg-transparent px-2 py-2 shadow-none focus:border-transparent focus:ring-0 disabled:bg-transparent" />
-              {busy ? <Button variant="ghost" className="mb-0.5 shrink-0" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
-                : <Button variant="primary" className="mb-0.5 shrink-0" icon={<Send className="size-4" />} disabled={!canWrite || (!text.trim() && files.length === 0) || uploading || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>}
-            </div>
-            <div className="mx-auto mt-1 flex max-w-3xl justify-between px-2 text-[10.5px] text-mist-400"><span>{files.length ? `已添加 ${files.length} 个附件` : '附件支持图片、txt 与 md'}</span><span>{Array.from(text).length} / {bootstrapData.limits.message_chars}</span></div>
+            <input ref={fileRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,.txt,.md" className="hidden" onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = '' }} />
+            {desktopPresentation ? <>
+              <div className="desktop-agent-compose">
+                <Textarea ref={inputRef} rows={1} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px` }} onKeyDown={onInputKeyDown}
+                  placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '说说你想写什么，或继续调整上面的方向…'} className="desktop-agent-compose-input" />
+                <div className="desktop-agent-compose-toolbar">
+                  <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()}><Paperclip className="size-4" /></IconButton>
+                  <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择操作账号">{selectedAccountName} <ChevronDown /></button>
+                  <span className="desktop-agent-compose-spacer" />
+                  <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择模型">{selectedModelName} <ChevronDown /></button>
+                  {busy ? <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
+                    : <Button variant="primary" icon={<Send className="size-4" />} disabled={!canWrite || (!text.trim() && files.length === 0) || uploading || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>}
+                </div>
+              </div>
+              <div className="desktop-agent-compose-note">{pendingActions > 0 ? `等待你逐张确认 ${pendingActions} 项 · AI 输出请自行核实` : busy ? '正在生成，可随时停止 · Enter 发送 · Shift+Enter 换行' : completedNotice || 'Enter 发送 · Shift+Enter 换行 · AI 输出请自行核实，写入操作需逐张确认'}</div>
+            </> : <>
+              <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-mist-200 bg-white p-2 shadow-card focus-within:border-ink-300">
+                <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()} className="mb-0.5"><Paperclip className="size-4" /></IconButton>
+                <Textarea ref={inputRef} rows={1} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px` }} onKeyDown={onInputKeyDown}
+                  placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '发送消息…（Enter 发送，Shift+Enter 换行）'} className="max-h-48 min-h-10 resize-none border-0 bg-transparent px-2 py-2 shadow-none focus:border-transparent focus:ring-0 disabled:bg-transparent" />
+                {busy ? <Button variant="ghost" className="mb-0.5 shrink-0" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
+                  : <Button variant="primary" className="mb-0.5 shrink-0" icon={<Send className="size-4" />} disabled={!canWrite || (!text.trim() && files.length === 0) || uploading || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>}
+              </div>
+              <div className="mx-auto mt-1 flex max-w-3xl justify-between px-2 text-[10.5px] text-mist-400"><span>{files.length ? `已添加 ${files.length} 个附件` : '附件支持图片、txt 与 md'}</span><span>{Array.from(text).length} / {bootstrapData.limits.message_chars}</span></div>
+            </>}
           </div>
         </div>
       </section>

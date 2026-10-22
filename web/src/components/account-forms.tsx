@@ -1,11 +1,12 @@
 import { CheckCircle2, CircleAlert, Copy, Globe2, ShieldCheck } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Badge, Button, cn, Field, Input, Notice, PlatformMark, Textarea } from '@/components/ui'
+import { Badge, Button, cn, Field, Input, Notice, PlatformMark, platformLabel, Textarea } from '@/components/ui'
 import { ApiError, errorMessage, post, put } from '@/lib/api'
 import { copyText, fmtTime } from '@/lib/format'
 import { useSystemInfo } from '@/lib/session'
 import type { Account, ContentFormat, CredState, Platform } from '@/lib/types'
+import { useSettingsDraft } from '@/lib/desktop-settings'
 
 // D-048 首批预设类型（与 ui.tsx platformFormats、后端 formatMatrix 一致）。每个类型都有真实工作流。
 const matrix: Record<Platform, { value: ContentFormat; label: string; desc: string }[]> = {
@@ -24,16 +25,28 @@ const matrix: Record<Platform, { value: ContentFormat; label: string; desc: stri
     { value: 'script', label: '口播脚本', desc: '镜头化脚本文档（镜号/口播/画面），脚本辅助，不含视频制作' },
     { value: 'comic', label: '漫画', desc: '角色卡 + 分镜脚本 + 逐格文案与回传图片' },
   ],
+  toutiao: [
+    { value: 'long_article', label: '文章', desc: '头条文章，生成发布包后手动发布' },
+    { value: 'micro_post', label: '微头条', desc: '短内容，可不配图，生成发布包后手动发布' },
+  ],
 }
 
 export function AccountCreateForm({
   onCreated,
   submitText = '添加账号',
   defaultPlatform = 'wechat_mp',
+  fixedPlatform = false,
+  beforeSubmit,
+  onSubmitFinished,
+  onBusyChange,
 }: {
   onCreated: (a: Account) => void
   submitText?: string
   defaultPlatform?: Platform
+  fixedPlatform?: boolean
+  beforeSubmit?: () => boolean | Promise<boolean>
+  onSubmitFinished?: (success: boolean) => void
+  onBusyChange?: (busy: boolean) => void
 }) {
   const [platform, setPlatform] = useState<Platform>(defaultPlatform)
   const [format, setFormat] = useState<ContentFormat>(matrix[defaultPlatform][0].value)
@@ -41,44 +54,71 @@ export function AccountCreateForm({
   const [typeNote, setTypeNote] = useState('')
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; platform?: string; content_format?: string }>({})
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const clearDraft = useSettingsDraft(!!(name || typeNote) || platform !== defaultPlatform || format !== matrix[defaultPlatform][0].value, busy)
   const pick = (p: Platform) => {
     setPlatform(p)
     setFormat(matrix[p][0].value)
     setFieldErrors((current) => ({ ...current, platform: undefined, content_format: undefined }))
   }
   const submit = async () => {
+    if (busyRef.current) return
+    busyRef.current = true
     setBusy(true)
+    onBusyChange?.(true)
     try {
+      if (beforeSubmit && !(await beforeSubmit())) return
       const a = await post<Account>('/accounts', { platform, name, content_format: format, type_note: typeNote.trim() })
+      onSubmitFinished?.(true)
+      clearDraft()
+      setName('')
+      setTypeNote('')
+      setPlatform(defaultPlatform)
+      setFormat(matrix[defaultPlatform][0].value)
+      setBusy(false)
+      onBusyChange?.(false)
       onCreated(a)
     } catch (e) {
+      onSubmitFinished?.(false)
       if (e instanceof ApiError && Object.keys(e.fields).length > 0) setFieldErrors(e.fields)
       else toast.error(errorMessage(e))
     } finally {
+      busyRef.current = false
       setBusy(false)
+      onBusyChange?.(false)
     }
   }
   return (
     <div className="space-y-5">
       <div>
         <div className="mb-2 text-[13px] font-medium text-mist-700">平台</div>
-        <div className="grid grid-cols-2 gap-3">
-          {(['wechat_mp', 'xhs'] as Platform[]).map((p) => (
-            <button key={p} type="button" onClick={() => pick(p)}
-              className={cn('flex cursor-pointer items-center gap-3 rounded-xl border p-3.5 text-left transition',
-                platform === p ? 'border-ink-400 bg-ink-50/60 ring-3 ring-ink-100' : 'border-mist-200 hover:border-mist-300')}>
-              <PlatformMark platform={p} size="lg" />
-              <div>
-                <div className="text-sm font-semibold text-mist-900">{p === 'wechat_mp' ? '微信公众号' : '小红书'}</div>
-                <div className="text-xs text-mist-500">{p === 'wechat_mp' ? '官方接口写入草稿箱' : '生成发布包，手动发布'}</div>
-              </div>
-            </button>
-          ))}
-        </div>
+        {fixedPlatform ? (
+          <div className="flex items-center gap-3 rounded-xl border border-mist-200 bg-mist-50/60 p-3.5">
+            <PlatformMark platform={platform} size="lg" />
+            <div>
+              <div className="text-sm font-semibold text-mist-900">{platformLabel[platform]}</div>
+              <div className="text-xs text-mist-500">账号将添加到当前工作区</div>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {(['wechat_mp', 'xhs', 'toutiao'] as Platform[]).map((p) => (
+              <button key={p} type="button" onClick={() => pick(p)}
+                className={cn('flex cursor-pointer items-center gap-3 rounded-xl border p-3.5 text-left transition',
+                  platform === p ? 'border-ink-400 bg-ink-50/60 ring-3 ring-ink-100' : 'border-mist-200 hover:border-mist-300')}>
+                <PlatformMark platform={p} size="lg" />
+                <div>
+                  <div className="text-sm font-semibold text-mist-900">{platformLabel[p]}</div>
+                  <div className="text-xs text-mist-500">{p === 'wechat_mp' ? '官方接口写入草稿箱' : '人工发布，无需接口凭证'}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
         {fieldErrors.platform && <p role="alert" className="mt-1.5 text-xs text-danger">{fieldErrors.platform}</p>}
       </div>
       <Field label="账号名称" hint="只用于区分账号，可以和平台上的名称不同" error={fieldErrors.name}>
-        <Input value={name} onChange={(e) => { setName(e.target.value); setFieldErrors((current) => ({ ...current, name: undefined })) }} placeholder={platform === 'wechat_mp' ? '例如：周末读书会' : '例如：小周的生活笔记'} />
+        <Input value={name} onChange={(e) => { setName(e.target.value); setFieldErrors((current) => ({ ...current, name: undefined })) }} placeholder={platform === 'wechat_mp' ? '例如：周末读书会' : platform === 'toutiao' ? '例如：小周的阅读笔记' : '例如：小周的生活笔记'} />
       </Field>
       <div>
         <div className="mb-2 text-[13px] font-medium text-mist-700">账号类型</div>
@@ -95,13 +135,13 @@ export function AccountCreateForm({
           ))}
         </div>
         {fieldErrors.content_format && <p role="alert" className="mt-1.5 text-xs text-danger">{fieldErrors.content_format}</p>}
-        <p className="mt-2 text-xs text-mist-400">类型决定这个账号的编辑器、检查和输出方式，创建后不可修改。</p>
+        <p className="mt-2 text-xs text-mist-400">类型决定这个账号的编辑器、检查和输出方式；创建后可在设置页同平台内更换，已有作品保持原类型。</p>
       </div>
       <Field label="类型补充说明（可选）" hint="最多 200 字。只帮助 AI 理解定位，不改变创作流程。">
         <Textarea rows={2} value={typeNote} maxLength={200} onChange={(e) => setTypeNote(e.target.value)}
           placeholder={format === 'comic' ? '例如：四格职场日常，主角是入职三年的产品助理' : '例如：面向转型工程师，多写可复现的实操步骤'} />
       </Field>
-      <Button variant="primary" onClick={submit} loading={busy} className="w-full">{submitText}</Button>
+      <Button variant="primary" onClick={submit} loading={busy} disabled={busy} className="w-full">{submitText}</Button>
     </div>
   )
 }
@@ -133,12 +173,13 @@ export function EgressIP() {
   )
 }
 
-export function CredentialPanel({ account, onChanged }: { account: Account; onChanged?: () => void }) {
+export function CredentialPanel({ account, onChanged, desktop = false }: { account: Account; onChanged?: () => void; desktop?: boolean }) {
   const c = account.credential
   const [appId, setAppId] = useState(c?.app_id ?? '')
   const [secret, setSecret] = useState('')
   const [busy, setBusy] = useState<'save' | 'test' | 'link' | null>(null)
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+  useSettingsDraft(appId !== (c?.app_id ?? '') || !!secret, busy !== null)
   const save = async () => {
     setBusy('save')
     try {
@@ -184,13 +225,13 @@ export function CredentialPanel({ account, onChanged }: { account: Account; onCh
   }
   const tone = credTone(c)
   return (
-    <div className="space-y-4">
+    <div className={cn('space-y-4', desktop && '@container')}>
       <div className="flex items-center gap-2 text-[13px] text-mist-600">
         凭证状态 <Badge tone={tone.tone}>{tone.label}</Badge>
         {c?.last_check_at && <span className="text-xs text-mist-400">最近检测 {fmtTime(c.last_check_at)}</span>}
       </div>
       <EgressIP />
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className={cn('grid gap-4', desktop ? '@[640px]:grid-cols-2' : 'sm:grid-cols-2')}>
         <Field label="AppID">
           <Input value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="wx 开头" className="font-mono" />
         </Field>

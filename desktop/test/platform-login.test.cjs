@@ -58,7 +58,7 @@ test('登录页不在允许域名内时拒绝导航，不发出 Page.navigate', 
     // Object.freeze 的对象无法改，这里改用伪造 session 的 platform 触发未登记分支：
     // 未登记的 platform 在 isAllowedPlatformUrl 里没有允许域名，必须拒绝。
     const { calls, session } = fakeSession('xhs');
-    session.platform = 'toutiao';
+    session.platform = 'unknown';
     await assert.rejects(
       () => openLoginPage(session),
       (err) => err instanceof PlatformBrowserError && err.code === 'platform_network_unavailable'

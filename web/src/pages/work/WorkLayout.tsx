@@ -1,19 +1,20 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarDays, Check, ChevronDown, ChevronUp, Copy, Download, GitBranch, History, Layers, Lock, Maximize2, Minimize2, RotateCcw, Save, Star } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowLeft, CalendarDays, Check, ChevronDown, ChevronUp, Copy, Download, GitBranch, History, Layers, Lock, Maximize2, Minimize2, RotateCcw, Save, Star, Wand2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
-import { confirm, Drawer } from '@/components/dialog'
-import { Badge, Button, cn, Field, Input, MoreMenu, Notice, PageLoading, PlatformMark, Select, StatusBadge, Switch } from '@/components/ui'
+import { confirm, Dialog, Drawer } from '@/components/dialog'
+import { Badge, Button, cn, Field, Input, MoreMenu, Notice, PageLoading, platformFormatLabel, platformLabel, PlatformMark, Select, StatusBadge, Switch } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
-import { rememberAccount, useCanWrite } from '@/lib/session'
-import type { Platform, StarItem, Work, WorkspaceMember, WorkStatus } from '@/lib/types'
+import { currentWorkQueryKey, rememberAccount, useCanWrite, useMe } from '@/lib/session'
+import type { Platform, PlatformWorkMirror, StarItem, Work, WorkspaceMember, WorkStatus } from '@/lib/types'
 import { rememberRecent, useCustomTheme, usePrefs, useWorkCmd } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
 import { emitEditor } from './editor-tools'
+import { flushWork } from './work-save'
 
 export interface WorkCtx {
   work: Work
@@ -28,8 +29,24 @@ export interface WorkCtx {
 }
 export const useWork = () => useOutletContext<WorkCtx>()
 
+// ED-04/ED-03：作品当前状态对应的下一步。三个编辑器与预览页共用同一套判断。
+export function nextStepFor(status: Work['status'], wechat: boolean): { to: string; label: string } | null {
+  switch (status) {
+    case 'drafting': return { to: 'check', label: '去检查' }
+    case 'checking': return { to: 'check', label: '继续检查' }
+    case 'ready': return { to: wechat ? 'push' : 'pack', label: wechat ? '去写入草稿箱' : '生成发布包' }
+    case 'pushed': return { to: 'push', label: '去回填' }
+    case 'packed': return { to: 'pack', label: '去回填' }
+    case 'reviewing': return { to: 'check', label: '去审阅' }
+    default: return null
+  }
+}
+
 function markdownForWork(work: Work, origin: string) {
   const blocks = [`# ${work.title.trim() || '未命名作品'}`]
+  if (work.platform === 'toutiao') {
+    blocks.push(`> ${platformLabel[work.platform]} · ${platformFormatLabel(work.platform, work.content_format)}${work.content_format === 'micro_post' ? '；系统存档，内部名称与段落标题不作为发布正文' : ''}`)
+  }
   for (const section of work.sections) {
     if (section.heading.trim()) blocks.push(`## ${section.heading.trim()}`)
     const body = section.content_md.replace(/(!\[[^\]]*\]\()\/api\/v1\/assets\/([^\s)]+)(\))/g,
@@ -37,6 +54,20 @@ function markdownForWork(work: Work, origin: string) {
     if (body.trim()) blocks.push(body)
   }
   return `${blocks.join('\n\n')}\n`
+}
+
+function changedMiddle(before: string, after: string) {
+  const left = before.split(/\r?\n/)
+  const right = after.split(/\r?\n/)
+  let start = 0
+  while (start < left.length && start < right.length && left[start] === right[start]) start++
+  let leftEnd = left.length
+  let rightEnd = right.length
+  while (leftEnd > start && rightEnd > start && left[leftEnd - 1] === right[rightEnd - 1]) {
+    leftEnd--
+    rightEnd--
+  }
+  return { source: left.slice(start, leftEnd).join('\n'), local: right.slice(start, rightEnd).join('\n') }
 }
 
 export function WorkHeaderAction({ children }: { children: ReactNode }) {
@@ -67,7 +98,7 @@ function PlanPopover({ work, onSaved }: { work: Work; onSaved: (w: Work) => void
   }
   const assignee = members.data?.find((m) => m.user_id === work.assignee_id)
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="desktop-work-plan relative">
       <Button size="sm" variant="ghost" icon={<CalendarDays className="size-4" />} onClick={() => setOpen((v) => !v)}>
         <span className="hidden xl:inline">{work.planned_date ? `计划 ${work.planned_date.slice(5)}` : '计划'}</span>
       </Button>
@@ -163,26 +194,52 @@ function FamilyStrip({ work }: { work: Work }) {
 
 const reasonLabel: Record<string, string> = { auto: '自动保存', ai: 'AI 生成', manual: '手动保存', check: '提交检查', restore: '恢复版本' }
 
+interface VersionRestorePreview {
+  supported: boolean
+  legacy_text_only: boolean
+  reason?: string
+  current_revision: number
+  changed_fields: string[]
+  missing_dependencies: string[]
+  requires_h03: boolean
+  preserved_additional_assets: number
+}
+
 function Versions({ work, open, onClose, onRestored }: { work: Work; open: boolean; onClose: () => void; onRestored: (w: Work) => void }) {
   const { data, refetch } = useQuery({
     queryKey: ['versions', work.id],
     queryFn: () => get<{ version_no: number; reason: string; title: string | null; created_at: string }[]>(`/works/${work.id}/versions`),
     enabled: open,
   })
-  const [preview, setPreview] = useState<{ no: number; snap: { title: string; viewpoint: string; sections: { heading: string; content_md: string }[] } } | null>(null)
+  const [preview, setPreview] = useState<{ no: number; snap: any; restore: VersionRestorePreview } | null>(null)
   const show = async (no: number) => {
-    const r = await get<{ snapshot: any }>(`/works/${work.id}/versions/${no}`)
-    setPreview({ no, snap: r.snapshot })
+    try {
+      const wait: Promise<unknown>[] = []
+      emitEditor({ type: 'flush', wait })
+      await Promise.all(wait)
+      const r = await get<{ snapshot: any; restore_preview: VersionRestorePreview }>(`/works/${work.id}/versions/${no}`)
+      setPreview({ no, snap: r.snapshot, restore: r.restore_preview })
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
   }
   const restore = async (no: number) => {
-    if (!(await confirm({ title: `恢复到版本 ${no}？`, desc: '当前内容会先保存为一个版本，然后用所选版本覆盖标题、观点、大纲和全部段落。恢复后需要重新检查。', confirmText: '恢复' }))) return
+    if (!preview?.restore.supported) return
+    const scope = preview.restore.legacy_text_only ? '当时保存的长文标题、摘要、观点、大纲和段落' : preview.restore.changed_fields.join('、') || '已保存的作品结构'
+    const desc = `当前未提交的段落已先保存。系统会先保存当前版本，再恢复：${scope}。发布事实和账号配置不会回放；正文变化后需要重新检查和审阅。${preview.restore.requires_h03 ? '大纲语义已变化，恢复后需要重新确认 H-03。' : '大纲语义未变化，现有 H-03 确认保留。'}`
+    if (!(await confirm({ title: `恢复到版本 ${no}？`, desc, confirmText: '恢复' }))) return
     try {
-      const w = await post<Work>(`/works/${work.id}/versions/${no}/restore`)
+      const w = await post<Work>(`/works/${work.id}/versions/${no}/restore`, { base_revision: preview.restore.current_revision })
       onRestored(w)
       toast.success(`已恢复到版本 ${no}`)
       setPreview(null)
       refetch()
     } catch (e) {
+      if (e instanceof ApiError && e.code === 'version_conflict') {
+        await show(no)
+        toast.error('作品已被修改，已更新预览；请重新核对差异后再恢复')
+        return
+      }
       toast.error(errorMessage(e))
     }
   }
@@ -198,18 +255,42 @@ function Versions({ work, open, onClose, onRestored }: { work: Work; open: boole
         <div className="animate-fade-in">
           <div className="mb-4 flex items-center justify-between">
             <Button size="sm" variant="ghost" onClick={() => setPreview(null)} icon={<ArrowLeft className="size-4" />}>返回列表</Button>
-            <Button size="sm" variant="primary" disabled={work.locked} onClick={() => restore(preview.no)} icon={<RotateCcw className="size-3.5" />}>恢复这个版本</Button>
+            <Button size="sm" variant="primary" disabled={work.locked || !preview.restore.supported} onClick={() => restore(preview.no)} icon={<RotateCcw className="size-3.5" />}>恢复这个版本</Button>
           </div>
+          {preview.restore.legacy_text_only && <Notice tone="gamboge" className="mb-3">这是旧版文字快照，只恢复当时保存的文字字段；图片、主题和其他未保存字段保持当前值。</Notice>}
+          {!preview.restore.supported && <Notice tone="red" className="mb-3">
+            <div>{preview.restore.reason || '此版本当前不能安全恢复。'}</div>
+            {preview.restore.missing_dependencies.length > 0 && <ul className="mt-1 list-disc pl-5">{preview.restore.missing_dependencies.map((item) => <li key={item}>{item}</li>)}</ul>}
+          </Notice>}
+          {preview.restore.supported && <div className="mb-3 space-y-2">
+            <Notice tone="ink">与当前稿不同：{preview.restore.changed_fields.length ? preview.restore.changed_fields.join('、') : '没有可见字段差异'}。</Notice>
+            <Notice tone={preview.restore.requires_h03 ? 'gamboge' : 'gray'}>{preview.restore.requires_h03 ? '大纲语义变化，恢复后需重新确认 H-03。' : '大纲语义未变化，保留当前 H-03 确认。'}</Notice>
+            {preview.restore.preserved_additional_assets > 0 && <Notice tone="gray">快照后新增的 {preview.restore.preserved_additional_assets} 张作品图片会保留在历史图片之后。</Notice>}
+          </div>}
           <h3 className="font-display text-xl font-bold">{preview.snap.title || '未命名'}</h3>
           {preview.snap.viewpoint && <p className="mt-2 rounded-lg bg-mist-50 p-3 text-[13px] text-mist-600">观点：{preview.snap.viewpoint}</p>}
+          {!preview.restore.legacy_text_only && <div className="mt-3 flex flex-wrap gap-2 text-xs text-mist-500">
+            <Badge tone="gray">{preview.snap.content_format}</Badge>
+            <Badge tone="gray">{preview.snap.cards?.length ?? 0} 张卡片</Badge>
+            <Badge tone="gray">{preview.snap.panels?.length ?? 0} 个分格</Badge>
+            <Badge tone="gray">{preview.snap.assets?.length ?? 0} 张作品图片</Badge>
+          </div>}
           <div className="mt-4 space-y-4">
-            {preview.snap.sections?.map((s, i) => (
+            {preview.snap.sections?.map((s: { heading: string; content_md: string }, i: number) => (
               <div key={i}>
                 {s.heading && <div className="mb-1 font-semibold text-mist-800">{s.heading}</div>}
                 <p className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-mist-600">{s.content_md || '（空）'}</p>
               </div>
             ))}
           </div>
+          {preview.snap.panels?.length > 0 && <div className="mt-4 space-y-2 border-t border-mist-100 pt-4">
+            <h4 className="text-sm font-semibold text-mist-800">漫画分格与气泡</h4>
+            {preview.snap.panels.map((panel: { id: string; scene: string; dialogue: string; bubbles?: { text: string }[] }, i: number) => <div key={panel.id} className="rounded-lg bg-mist-50 p-3 text-[13px]">
+              <div className="font-medium">第 {i + 1} 格{panel.scene ? ` · ${panel.scene}` : ''}</div>
+              {panel.dialogue && <div className="mt-1">{panel.dialogue}</div>}
+              {!!panel.bubbles?.length && <div className="mt-1 text-mist-500">气泡：{panel.bubbles.map((bubble) => bubble.text).join(' / ')}</div>}
+            </div>)}
+          </div>}
         </div>
       ) : (
         <ul className="space-y-1">
@@ -233,19 +314,45 @@ function Versions({ work, open, onClose, onRestored }: { work: Work; open: boole
 export default function WorkLayout() {
   const location = useLocation()
   const nav = useNavigate()
+  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const [copying, setCopying] = useState(false)
   const [exporting, setExporting] = useState(false)
+  // NW-B6：页头重命名（空标题也可直接命名）。
+  const [renaming, setRenaming] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
   const visible = usePageVisible()
   const { workId } = useParams()
   const qc = useQueryClient()
+  const { data: me } = useMe()
   const canWrite = useCanWrite()
-  const q = useQuery({ queryKey: ['work', workId], queryFn: () => get<Work>(`/works/${workId}`) })
-  const setWork = useCallback((w: Work) => qc.setQueryData(['work', workId], w), [qc, workId])
+  const workKey = useMemo(() => currentWorkQueryKey(workId ?? '', me?.user_id ?? me?.username ?? '', me?.workspace.id ?? ''),
+    [workId, me?.user_id, me?.username, me?.workspace.id])
+  const q = useQuery({
+    queryKey: workKey,
+    queryFn: () => get<Work>(`/works/${workId}`),
+    enabled: !!workId && !!me?.workspace.id,
+    staleTime: 30_000,
+  })
+  const platformSource = useQuery({
+    queryKey: ['platform-work-mirror', q.data?.account_id, q.data?.platform_source_mirror_id],
+    queryFn: async () => (await get<{ work: PlatformWorkMirror }>(`/accounts/${q.data!.account_id}/platform-works/${q.data!.platform_source_mirror_id}`)).work,
+    enabled: !!q.data?.platform_source_mirror_id,
+    staleTime: 30_000,
+  })
+  const setWork = useCallback((w: Work) => {
+    qc.setQueryData(workKey, w)
+    qc.setQueryData(['work', workId], w)
+  }, [qc, workId, workKey])
   const patchWork = useCallback((p: Partial<Work> | ((w: Work) => Partial<Work>)) =>
-    qc.setQueryData<Work>(['work', workId], (w) => (w ? { ...w, ...(typeof p === 'function' ? p(w) : p) } : w)), [qc, workId])
+    {
+      const update = (w: Work | undefined) => w ? { ...w, ...(typeof p === 'function' ? p(w) : p) } : w
+      qc.setQueryData<Work>(workKey, update)
+      qc.setQueryData<Work>(['work', workId], update)
+    }, [qc, workId, workKey])
   const refresh = useCallback(() => q.refetch(), [q.refetch])
   const [versions, setVersions] = useState(false)
   const [derive, setDerive] = useState(false)
+  const [platformSourceDiffOpen, setPlatformSourceDiffOpen] = useState(false)
   const prefs = usePrefs()
   const [focus, setFocusState] = useState(prefs.focus_default)
   const [presence, setPresence] = useState<Presence[]>([])
@@ -255,10 +362,10 @@ export default function WorkLayout() {
   const starred = (stars.data ?? []).some((s) => s.object_type === 'work' && s.object_id === workId)
   useEffect(() => {
     if (q.data) {
-      rememberAccount(q.data.account_id)
+      rememberAccount(q.data.account_id, me?.user_id ?? me?.username, me?.workspace.id)
       rememberRecent({ type: 'work', title: q.data.title || '未命名作品', link: `/works/${q.data.id}` })
     }
-  }, [q.data?.id, q.data?.title]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [q.data?.id, q.data?.title, me?.user_id, me?.workspace.id])
   const setFocus = useCallback((v: boolean) => {
     setFocusState(v)
     window.dispatchEvent(new CustomEvent('ops:focus', { detail: v }))
@@ -289,6 +396,10 @@ export default function WorkLayout() {
     const beat = () => {
       if (document.hidden) return
       void post<Presence[]>(`/works/${workId}/presence`, { section_id: sectionRef.current }).then((l) => alive && setPresence(l)).catch(() => undefined)
+      // ED-16：别人改了这段时，本地缓存 30 秒内不会更新，建议卡会拿旧正文判断"原文在哪"，
+      // 然后被静默覆盖。心跳时顺带拉一次正文，别处改动就能及时反映到编辑器。
+      void qc.invalidateQueries({ queryKey: workKey })
+      void qc.invalidateQueries({ queryKey: ['work', workId] })
     }
     void beat()
     const t = window.setInterval(beat, 20_000)
@@ -297,7 +408,7 @@ export default function WorkLayout() {
       window.clearInterval(t)
       if (!document.hidden) void post(`/works/${workId}/presence`, { leave: true }).catch(() => undefined)
     }
-  }, [workId, visible])
+  }, [workId, visible, qc, workKey])
   const reportSection = useCallback((id: string | null) => {
     if (sectionRef.current === id) return
     sectionRef.current = id
@@ -314,7 +425,12 @@ export default function WorkLayout() {
   }, [workId])
   if (q.isLoading) return <PageLoading variant="editor" />
   if (q.isError || !q.data) {
-    return <div className="p-10"><Notice tone="red">{q.error instanceof ApiError ? q.error.message : '作品不存在或已删除'}</Notice></div>
+    // NW-A3：只有 404 才是"不存在或已删除"；网络/5xx 给重试，不误导用户重建。
+    const notFound = q.error instanceof ApiError && q.error.status === 404
+    return <div className="p-10"><Notice tone="red">
+      {notFound ? '作品不存在或已删除' : q.error instanceof ApiError ? q.error.message : '作品加载失败，请检查网络后重试'}
+      {!notFound && <Button size="sm" className="ml-3" onClick={() => void q.refetch()}>重试</Button>}
+    </Notice></div>
   }
   const work = q.data
   const duplicate = async () => {
@@ -323,7 +439,8 @@ export default function WorkLayout() {
     try {
       const wait: Promise<unknown>[] = []
       emitEditor({ type: 'flush', wait })
-      await Promise.all(wait)
+      // NW-C4：段落由事件 flush，观点/标题由编辑器注册的协调器 flush。
+      await Promise.all([Promise.all(wait), flushWork(work.id)])
       const copied = await post<Work>(`/works/${work.id}/duplicate`)
       void qc.invalidateQueries({ queryKey: ['works', work.account_id] })
       nav(`/works/${copied.id}`)
@@ -335,7 +452,7 @@ export default function WorkLayout() {
     try {
       const wait: Promise<unknown>[] = []
       emitEditor({ type: 'flush', wait })
-      await Promise.all(wait)
+      await Promise.all([Promise.all(wait), flushWork(work.id)])
       const current = await get<Work>(`/works/${work.id}`)
       const url = URL.createObjectURL(new Blob([markdownForWork(current, window.location.origin)], { type: 'text/markdown;charset=utf-8' }))
       const link = document.createElement('a')
@@ -348,6 +465,18 @@ export default function WorkLayout() {
     } catch (e) { toast.error(errorMessage(e)) } finally { setExporting(false) }
   }
   const ctx: WorkCtx = { work, setWork, patchWork, refresh, focus, setFocus, presence, reportSection, reportEditing }
+  const saveTitle = async () => {
+    const next = titleDraft.trim()
+    setRenaming(false)
+    if (next === work.title) return
+    try {
+      setWork(await patch<Work>(`/works/${work.id}`, { title: next, base_revision: work.revision }))
+      void qc.invalidateQueries({ queryKey: ['works', work.account_id] })
+      toast.success(next ? '标题已更新' : '已清空标题')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
   const wx = work.platform === 'wechat_mp'
   const todos = work.post_push_todos ?? []
   const todosDone = todos.filter((t) => t.done).length
@@ -363,6 +492,12 @@ export default function WorkLayout() {
   }
   const reached = (s: string) => order.indexOf(work.status) >= order.indexOf(s)
   const comic = work.content_format === 'comic'
+  const platformSourceChanged = !!platformSource.data && work.platform_source_content_revision != null
+    && platformSource.data.content_revision > work.platform_source_content_revision
+  const platformSourceLocalBody = work.sections.map((section) => section.content_md).filter(Boolean).join('\n\n')
+  const platformSourceDiff = platformSourceChanged && work.revision > 1 && platformSource.data
+    ? changedMiddle(platformSource.data.body_text, platformSourceLocalBody)
+    : null
   // D-048：图文卡片与漫画同为图片消息流程，不提供对照改写与排版预览。
   const imageMsg = comic || work.content_format === 'card_post'
   const steps = [
@@ -384,20 +519,36 @@ export default function WorkLayout() {
     }
   }
   return (
-    <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-20 border-b border-mist-200/80 bg-white/90 backdrop-blur">
+    <div className={cn('flex min-h-full flex-col', desktopPresentation && 'desktop-work-layout')} data-testid={desktopPresentation ? 'desktop-work-layout' : undefined}>
+      <header className={cn('work-header sticky top-0 z-20 border-b border-mist-200/80 bg-white/90 backdrop-blur', desktopPresentation && 'desktop-workbar')}>
         <div className="flex h-14 items-center gap-3 px-5">
           <Link to={`/a/${work.account_id}/works`} className="rounded-md p-1.5 text-mist-400 hover:bg-mist-100 hover:text-mist-700" title="返回作品列表">
             <ArrowLeft className="size-4" />
           </Link>
           <PlatformMark platform={work.platform} size="sm" />
-          <div className="min-w-0">
-            <div className="truncate text-[14.5px] font-semibold text-mist-900">{work.title || '未命名作品'}</div>
-            <div className="text-[11.5px] text-mist-500">{work.account_name}</div>
+          <div className="desktop-work-title min-w-0">
+            {/* NW-B6：页头标题可直接改名；空标题给"点击命名"。 */}
+            {renaming ? (
+              <input autoFocus value={titleDraft} maxLength={64} aria-label="作品标题"
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={() => void saveTitle()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void saveTitle() }
+                  if (e.key === 'Escape') { setRenaming(false); setTitleDraft(work.title) }
+                }}
+                className="w-full rounded border border-ink-300 px-1.5 py-0.5 text-[14.5px] font-semibold text-mist-900 outline-none" />
+            ) : (
+              <button type="button" disabled={!canWrite || work.locked} onClick={() => { setTitleDraft(work.title); setRenaming(true) }}
+                title={canWrite && !work.locked ? '点击修改标题' : undefined}
+                className={cn('block w-full truncate text-left text-[14.5px] font-semibold text-mist-900', canWrite && !work.locked && 'cursor-pointer rounded px-1 -mx-1 hover:bg-mist-100')}>
+                {work.title || <span className="text-mist-400">未命名作品 · 点击命名</span>}
+              </button>
+            )}
+            <div className="truncate text-[11.5px] text-mist-500" title={`${work.account_name} · ${platformLabel[work.platform]} · ${platformFormatLabel(work.platform, work.content_format)}`}>{work.account_name} · {platformLabel[work.platform]} · {platformFormatLabel(work.platform, work.content_format)}</div>
           </div>
           <span className="shrink-0"><StatusBadge status={work.status} /></span>
           {todos.length > 0 && todosDone < todos.length && (
-            <Link to={`/works/${work.id}/${work.platform === 'xhs' ? 'pack' : 'push'}`} title="在平台后台还要完成的事项"
+            <Link to={`/works/${work.id}/${wx ? 'push' : 'pack'}`} title="在平台后台还要完成的事项"
               className="hidden shrink-0 rounded-full bg-gamboge-50 px-2 py-0.5 text-[11.5px] text-gamboge-700 hover:bg-gamboge-100 sm:inline">
               后台待办 {todosDone}/{todos.length}
             </Link>
@@ -420,7 +571,24 @@ export default function WorkLayout() {
               <span className="text-[11.5px] text-mist-500">{presence.length === 1 ? `${presence[0].username} 也在这里` : `${presence.length} 人也在这里`}</span>
             </div>
           )}
-          <nav className={cn('mx-auto hidden shrink-0 items-center gap-1', !focus && 'lg:flex')}>
+          <div className={cn('work-header-actions ml-auto flex shrink-0 items-center gap-1', !focus && 'lg:ml-0')}>
+            <div id="work-header-action-target" data-testid="work-next-action" className="desktop-work-next mr-1 flex shrink-0 items-center" />
+            <PlanPopover work={work} onSaved={setWork} />
+            <Button className="desktop-work-history" size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
+            {canWrite && <Button className="desktop-work-derive" size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}><span className="hidden xl:inline">派生</span></Button>}
+            {canWrite && <MoreMenu className="desktop-work-more" items={[
+              ...(location.pathname === `/works/${work.id}` ? [{ label: '口述 / 要点扩写', icon: <Wand2 />, onClick: () => window.dispatchEvent(new Event('ops:organize-notes')) }] : []),
+              ...(location.pathname === `/works/${work.id}` ? [
+                { label: '生成标题候选', icon: <Wand2 />, onClick: () => window.dispatchEvent(new Event('ops:generate-titles')) },
+              ] : []),
+              { label: '复制为新草稿', icon: <Copy />, loading: copying, onClick: () => void duplicate() },
+              ...(location.pathname === `/works/${work.id}` ? [{ label: '导出 Markdown', icon: <Download />, loading: exporting, onClick: () => void exportMarkdown() }] : []),
+            ]} />}
+            <Button className="desktop-work-focus" size="sm" variant="ghost" title="专注模式（F11）" icon={focus ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />} onClick={() => setFocus(!focus)} />
+          </div>
+        </div>
+        {!focus && <div className="desktop-workbar-flow">
+          <nav aria-label="作品流程">
             {steps.map((s, i) => (
               <NavLink key={s.to} to={s.to} end={s.end}
                 className={({ isActive }) => cn('flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] transition',
@@ -435,18 +603,7 @@ export default function WorkLayout() {
               </NavLink>
             ))}
           </nav>
-          <div className={cn('ml-auto flex shrink-0 items-center gap-1', !focus && 'lg:ml-0')}>
-            <div id="work-header-action-target" data-testid="work-next-action" className="mr-1 flex shrink-0 items-center" />
-            <PlanPopover work={work} onSaved={setWork} />
-            <Button size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
-            {canWrite && <Button size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}><span className="hidden xl:inline">派生</span></Button>}
-            {canWrite && <MoreMenu className="[&_[role=menu]]:bottom-auto [&_[role=menu]]:top-full [&_[role=menu]]:mb-0 [&_[role=menu]]:mt-1" items={[
-              { label: '复制为新草稿', icon: <Copy />, loading: copying, onClick: () => void duplicate() },
-              ...(location.pathname === `/works/${work.id}` ? [{ label: '导出 Markdown', icon: <Download />, loading: exporting, onClick: () => void exportMarkdown() }] : []),
-            ]} />}
-            <Button size="sm" variant="ghost" title="专注模式（F11）" icon={focus ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />} onClick={() => setFocus(!focus)} />
-          </div>
-        </div>
+        </div>}
         {!focus && <FamilyStrip work={work} />}
         {!canWrite && (
           <div className="border-t border-mist-100 bg-mist-50 px-5 py-2 text-[13px] text-mist-600">观察者只读：可浏览作品，不能编辑、检查确认、派生或推送。</div>
@@ -462,6 +619,13 @@ export default function WorkLayout() {
             {comic
               ? '源稿已更新。衍生漫画不会自动同步，请在漫画编辑器中核对并改写旁白、对白。'
               : '源稿已更新。衍生作品不会自动重新改写，可以在「对照改写」中对需要的段落重新改写。'}
+          </div>
+        )}
+        {platformSourceChanged && work.revision > 1 && (
+          <div className="flex flex-wrap items-center gap-3 border-t border-gamboge-100 bg-gamboge-50 px-5 py-2 text-[13px] text-gamboge-800">
+            平台来源内容和本地草稿都已修改；系统不会自动合并。
+            <Button size="sm" variant="secondary" className="ml-auto" disabled={platformSource.isLoading || !platformSourceDiff}
+              onClick={() => setPlatformSourceDiffOpen(true)}>查看差异</Button>
           </div>
         )}
         {work.draft_maybe_published && (
@@ -483,11 +647,24 @@ export default function WorkLayout() {
           </div>
         )}
       </header>
-      <div key={location.pathname} className="min-h-0 flex-1 animate-fade-in">
+      <div key={location.pathname} className={cn('min-h-0 flex-1 animate-fade-in', desktopPresentation && location.pathname.endsWith('/pack') && 'desktop-work-pack-outlet')}>
         <Outlet context={ctx} />
       </div>
       <Versions work={work} open={versions} onClose={() => setVersions(false)} onRestored={setWork} />
       {derive && <DeriveDialog open onClose={() => setDerive(false)} workId={work.id} platform={work.platform} format={work.content_format} />}
+      {platformSourceDiffOpen && platformSource.data && platformSourceDiff && <Dialog open onClose={() => setPlatformSourceDiffOpen(false)}
+        title="平台来源与本地草稿差异" desc={`来源正文修订 ${work.platform_source_content_revision} → ${platformSource.data.content_revision}。以下只展示差异片段，不会自动写入本地作品。`} width="max-w-5xl">
+        <div className="grid gap-4 md:grid-cols-2">
+          <section className="min-w-0">
+            <h3 className="mb-2 text-sm font-semibold text-mist-800">平台当前内容：移除或变更部分</h3>
+            <pre className="max-h-[55vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-mist-200 bg-mist-50 p-4 font-sans text-[13px] leading-6">{platformSourceDiff.source || '（此处没有待移除的文字）'}</pre>
+          </section>
+          <section className="min-w-0">
+            <h3 className="mb-2 text-sm font-semibold text-mist-800">本地草稿：新增或变更部分</h3>
+            <pre className="max-h-[55vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-mist-200 bg-white p-4 font-sans text-[13px] leading-6">{platformSourceDiff.local || '（此处没有新增的文字）'}</pre>
+          </section>
+        </div>
+      </Dialog>}
     </div>
   )
 }

@@ -181,6 +181,9 @@ func TestOPT06ReservationExpiryAndHumanChecks(t *testing.T) {
 	_, err = env.srv.reserveWechatPush(ctx, m, &wk, in, "newspic")
 	checkError(err, "state_invalid")
 	in.Revision++
+	env.confirmChecks(t, wk.ID.String())
+	env.mustJSON(t, "GET", "/api/v1/works/"+wk.ID.String(), nil, &wk)
+	in.Revision = wk.Revision
 	if _, err := env.srv.db.Exec(ctx, `INSERT INTO push_record(work_id,account_id,action,status) SELECT $1,$2,'newspic','ok' FROM generate_series(1,$3)`, wk.ID, a.ID, a.DailyPushLimit); err != nil {
 		t.Fatal(err)
 	}

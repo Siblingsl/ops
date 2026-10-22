@@ -97,17 +97,26 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 	}
 	structure := ""
 	refs := map[string]any{}
-	if in.Template != "" {
+	// DEV-416 / D-140：作品记录模板时优先用模板（结构 + 语气 + 段落区间 + 补充要求）。
+	if m.TemplateID != nil {
+		if tpl, err := s.findCreationTemplate(ctx, *m.TemplateID); err == nil {
+			structure = templatePrompt(tpl)
+			refs["creation_template"] = tpl.Name
+		}
+	}
+	if structure == "" && in.Template != "" {
 		tpl, err := s.findOutlineTemplate(ctx, in.Template)
 		if err != nil {
 			return err
 		}
 		structure = fmt.Sprintf("\n结构模板「%s」：%s。大纲必须按这个结构展开。", tpl.Name, tpl.Structure)
 		refs["outline_template"] = tpl.Name
-	} else if fb := platformFormatBrief(m.Account.Platform, m.ContentFormat); fb != "" {
-		// D-048：新文字类型按作品自身的类型注入结构约定；用户选择了模板时以模板为准。
-		structure = "\n结构要求：" + fb
-		refs["format_brief"] = m.ContentFormat
+	} else if structure == "" {
+		if fb := platformFormatBrief(m.Account.Platform, m.ContentFormat); fb != "" {
+			// D-048：新文字类型按作品自身的类型注入结构约定；用户选择了模板时以模板为准。
+			structure = "\n结构要求：" + fb
+			refs["format_brief"] = m.ContentFormat
+		}
 	}
 	outlineRange := "4 到 8 个段落"
 	if m.Account.Platform == "toutiao" && m.ContentFormat == "micro_post" {

@@ -1,7 +1,7 @@
 import { ArrowRight, Check, Copy, Smartphone, Wand2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AIFeedback } from '@/components/refs'
 import { Button, Card, cn, Notice } from '@/components/ui'
@@ -12,7 +12,7 @@ import { CUSTOM_THEME_ID, customTheme, HTML_BYTE_LIMIT, HTML_CHAR_LIMIT, htmlSta
 import { setCustomTheme } from '@/lib/custom-theme-state'
 import type { Work } from '@/lib/types'
 import { useCustomTheme } from '@/lib/v3'
-import { useWork, WorkHeaderAction } from './WorkLayout'
+import { useWork, WorkHeaderAction, nextStepFor } from './WorkLayout'
 
 export function PhoneFrame({ title, account, children }: { title: string; account: string; children: React.ReactNode }) {
   return (
@@ -133,6 +133,11 @@ async function copyRich(html: string) {
 }
 
 export default function Preview() {
+  const { work } = useWork()
+  return work.platform === 'toutiao' ? <Navigate to={`/works/${work.id}/pack`} replace /> : <WechatPreview />
+}
+
+function WechatPreview() {
   const { work, setWork, refresh } = useWork()
   const nav = useNavigate()
   const [params] = useSearchParams()
@@ -178,9 +183,17 @@ export default function Preview() {
   return (
     <div className="mx-auto flex w-full max-w-[1280px] gap-10 px-6 py-8 2xl:max-w-[1480px]">
       <WorkHeaderAction>
-        <Button size="sm" variant="primary" disabled={over} onClick={() => nav(`/works/${work.id}/check?start=1`)}>
-          下一步：发布前检查<ArrowRight className="size-4" />
-        </Button>
+        {/* ED-04：按作品状态给下一步，不要固定"发布前检查"。 */}
+        {(() => {
+          const wx = work.platform === 'wechat_mp'
+          const next = nextStepFor(work.status, wx)
+          if (!next) return null
+          return (
+            <Button size="sm" variant="primary" disabled={over && next.to === 'check'} onClick={() => nav(next.to)}>
+              {next.label}<ArrowRight className="size-4" />
+            </Button>
+          )
+        })()}
       </WorkHeaderAction>
       <aside className="w-72 shrink-0 space-y-5">
         <div>

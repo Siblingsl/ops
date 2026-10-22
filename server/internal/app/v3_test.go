@@ -281,7 +281,11 @@ func TestContextPackBudgets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	order := map[string]int{"rules": 0, "profile": 1, "memory": 2, "task_instruction": 3, "style": 4, "materials": 5, "history": 6, "work": 7, "user_instruction": 8}
+	// 槽位顺序与 buildContext 的 p.add 调用顺序一致；包含只在特定数据条件下出现的槽位，
+	// 避免共享测试账号累积数据后（如 performance / strategy）出现未知槽位被当成 0 序。
+	order := map[string]int{"rules": 0, "profile": 1, "strategy": 2, "memory": 3, "data_prefs": 4,
+		"performance": 5, "style": 6, "references": 7, "task_instruction": 8, "materials": 9,
+		"history": 10, "work": 11, "user_instruction": 12}
 	last := -1
 	slots := map[string]Slot{}
 	for _, sl := range pack.Slots {

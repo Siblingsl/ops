@@ -26,6 +26,11 @@ func main() {
 
 func run() error {
 	// 固定独立库，不接受生产或 Go API 测试库，也不执行 DROP。
+	desktopAIEnabled := os.Getenv("OPS_E2E_DESKTOP_AI_ENABLED") == "1"
+	databaseName := "ops_e2e"
+	if desktopAIEnabled {
+		databaseName = "ops_e2e_desktop_ui"
+	}
 	adminURL := os.Getenv("OPS_E2E_ADMIN_URL")
 	if adminURL == "" {
 		adminURL = "postgres://ops:ops_dev_password@127.0.0.1:5440/ops?sslmode=disable"
@@ -43,19 +48,20 @@ func run() error {
 		return err
 	}
 	var exists bool
-	err = conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname='ops_e2e')`).Scan(&exists)
+	err = conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=$1)`, databaseName).Scan(&exists)
 	if err == nil && !exists {
-		_, err = conn.Exec(ctx, `CREATE DATABASE ops_e2e`)
+		_, err = conn.Exec(ctx, `CREATE DATABASE `+databaseName)
 	}
 	conn.Close(ctx)
 	if err != nil {
 		return err
 	}
-	u.Path = "/ops_e2e"
+	u.Path = "/" + databaseName
 	// 显式配置所有出站服务为本地 mock，避免继承真实凭证或地址。
 	cfg := &config.Config{Dev: true, Listen: "127.0.0.1:8180", DatabaseURL: u.String(),
 		DataDir: filepath.Join(os.TempDir(), "ops-e2e-assets"), MockListen: "127.0.0.1:8191",
-		WechatBase: "http://127.0.0.1:8191", MasterKey: make([]byte, 32), CrawlMode: "off", AIWorkers: 3}
+		WechatBase: "http://127.0.0.1:8191", MasterKey: make([]byte, 32), CrawlMode: "off", AIWorkers: 3,
+		DesktopAIEnabled: desktopAIEnabled}
 	if err := db.Migrate(cfg.DatabaseURL); err != nil {
 		return err
 	}

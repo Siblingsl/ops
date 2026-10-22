@@ -47,9 +47,11 @@ func TestStreamAccumulatesToolCalls(t *testing.T) {
 		`{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7}}`,
 	}
 	srv, _ := sseServer(t, frames)
+	activityCount := 0
 	text, usage, calls, finish, err := Stream(context.Background(), srv.Client(), Request{
 		BaseURL: srv.URL, APIKey: "k", Model: "m",
-		Messages: []Message{{Role: "user", Content: "hi"}},
+		Messages:   []Message{{Role: "user", Content: "hi"}},
+		OnActivity: func() { activityCount++ },
 	}, nil)
 	if err != nil {
 		t.Fatalf("Stream 出错：%v", err)
@@ -65,6 +67,9 @@ func TestStreamAccumulatesToolCalls(t *testing.T) {
 	}
 	if len(calls) != 2 {
 		t.Fatalf("应累积 2 个工具调用，得到 %d：%+v", len(calls), calls)
+	}
+	if activityCount != 4 {
+		t.Fatalf("纯工具调用流应按每个有效分片通知活动，得到 %d 次", activityCount)
 	}
 	if calls[0].ID != "call_a" || calls[0].Function.Name != "works__update" || calls[0].Function.Arguments != `{"title":"新标题"}` {
 		t.Fatalf("第 1 个工具调用解析错误：%+v", calls[0])

@@ -1,5 +1,6 @@
-import { ArrowDown, ArrowUp, ImagePlus, RefreshCw, Sparkles } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUp, ImagePlus, RefreshCw, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, cn, HumanGate, Input } from '@/components/ui'
 import { confirm } from '@/components/dialog'
@@ -8,12 +9,13 @@ import { ApiError, errorMessage, patch, post, put } from '@/lib/api'
 import { useCanWrite } from '@/lib/session'
 import type { Section, Work, WorkCard } from '@/lib/types'
 import { SectionConflictDialog, WorkConflictDialog } from './section-save-dialogs'
-import { useWork } from './WorkLayout'
+import { nextStepFor, useWork, WorkHeaderAction } from './WorkLayout'
 
 // D-048 图文卡片编辑器：每张卡片 = 段落标题与正文 + 逐卡 AI 配图。
 // 卡片清单由大纲确认生成；增删通过「修改大纲」，排序同步段落、大纲和卡片。
 export default function CardEditor() {
   const { work, refresh, setWork } = useWork()
+  const nav = useNavigate()
   const [orderConflict, setOrderConflict] = useState<{ server: Work; ids: string[] } | null>(null)
   const canWrite = useCanWrite()
   const readOnly = work.locked
@@ -53,6 +55,14 @@ export default function CardEditor() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 animate-fade-in">
+      {/* ED-03：卡片编辑器也要在页头给下一步（原来完全没有提交入口）。 */}
+      {!readOnly && <WorkHeaderAction>
+        {(() => {
+          const next = nextStepFor(work.status, work.platform === 'wechat_mp')
+          if (!next) return null
+          return <Button size="sm" variant="primary" onClick={() => nav(next.to)}>{next.label}<ArrowRight className="size-4" /></Button>
+        })()}
+      </WorkHeaderAction>}
       {orderConflict && <WorkConflictDialog server={orderConflict.server} mine={{ ...work, sections: orderConflict.ids.map(id => work.sections.find(section => section.id === id)!) }} onClose={() => setOrderConflict(null)} onResolve={async keepMine => {
         if (!keepMine) { setWork(orderConflict.server); setOrderConflict(null); return }
         try { setWork(await put<Work>(`/works/${work.id}/sections/order`, { ids: orderConflict.ids, base_revision: orderConflict.server.revision })); setOrderConflict(null) }

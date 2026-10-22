@@ -23,11 +23,12 @@ function card(tool = 'works__update', patch: Partial<AgentAction> = {}): AgentAc
 
 async function mount(page: Page, action: AgentAction) {
   // 保留 Vite 的 React 初始化与依赖版本，只把应用入口替换为隔离组件夹具。
-  await page.route('**/src/main.tsx', async (route) => {
+  await page.route('**/src/main.tsx*', async (route) => {
     const source = await (await route.fetch()).text()
     const imports = [...source.matchAll(/from "([^"]+)"/g)].map((match) => match[1])
     const dependency = (name: string) => imports.find((path) => path.includes(`/${name}.js`))!
     await route.fulfill({ contentType: 'application/javascript', body: `
+      import '/src/styles.css';
       import React from '${dependency('react')}';
       import ReactDOM from '${dependency('react-dom_client')}';
       import { QueryClient, QueryClientProvider } from '${dependency('@tanstack_react-query')}';
@@ -71,6 +72,22 @@ for (const tool of Object.keys(previewFields)) {
     await expect(page.getByText(/卡片尚未返回/)).toBeVisible()
   })
 }
+
+test('今日头条微头条动作卡在窄屏显示目标形态和来源提示，逐条确认', async ({ page }, testInfo) => {
+  const action = card('toutiao__create_pack', {
+    title: '为今日头条准备微头条发布包',
+    changes: [{ field: 'content_format', label: '作品形态', before: '', after: '微头条', editable: false, blank: false }],
+    notices: ['external_source'],
+  })
+  await page.setViewportSize({ width: 740, height: 640 })
+  await mount(page, action)
+  await expect(page.getByText(/修改后\s*微头条/)).toBeVisible()
+  await expect(page.getByText('本次参考了外部资料，请核对内容', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '执行', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /全部执行|全部确认/ })).toHaveCount(0)
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy()
+  await page.screenshot({ path: testInfo.outputPath('toutiao-agent-card-source-740x640.png'), fullPage: true })
+})
 
 for (const canContinue of [true, false]) {
   test(`拒绝响应 can_continue=${canContinue} 决定是否自动续跑`, async ({ page }) => {

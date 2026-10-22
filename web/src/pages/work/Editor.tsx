@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { BookOpenCheck, CheckCircle2, Circle, Layers, PanelRightOpen, PenLine, Plus, Stethoscope, Wand2, X } from 'lucide-react'
+import { ArrowRight, BookOpenCheck, CheckCircle2, Circle, Layers, PanelRightOpen, PenLine, Plus, Stethoscope, Wand2, X } from 'lucide-react'
 import { isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -22,6 +22,7 @@ import { OutlineCard } from './editor-outline'
 import { TitleCard } from './editor-title'
 import { ImagesCard } from './editor-images'
 import { WorkConflictDialog } from './section-save-dialogs'
+import { registerWorkFlush, useRegisterFlush, useSaveCoordinator, WorkSaveProvider, type WorkSaveCoordinator } from './work-save'
 import { useWork, WorkHeaderAction } from './WorkLayout'
 
 const kindLabel: Record<MaterialKind, string> = { experience: '经历', opinion: '观点', case: '案例', data: '数据' }
@@ -53,7 +54,7 @@ function SeriesStrip({ sc }: { sc: SeriesContext }) {
   )
 }
 
-function ViewpointCard({ work, setWork, readOnly, loadMaterials = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; loadMaterials?: boolean }) {
+function ViewpointCard({ work, setWork, readOnly, loadMaterials = false, desktopPresentation = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; loadMaterials?: boolean; desktopPresentation?: boolean }) {
   const [text, setText] = useState(work.viewpoint)
   const [picking, setPicking] = useState(false)
   const [inbox, setInbox] = useState(false)
@@ -74,17 +75,101 @@ function ViewpointCard({ work, setWork, readOnly, loadMaterials = false }: { wor
     enabled: !!work.topic_id,
     staleTime: 60_000,
   })
-  useEffect(() => setText(work.viewpoint), [work.viewpoint])
-  const save = async () => {
-    if (text.trim() === work.viewpoint) return
+  // NW-C1：本地输入以输入框为准。保存返回只在「服务端值 == 刚发送的值，且期间没有新输入」时回写，
+  // 否则保留用户正在敲的字；dirty 也只在真正落库后清除。
+  const textRef = useRef(work.viewpoint)
+  const serverText = useRef(work.viewpoint)
+  const dirty = useRef(false)
+  const timer = useRef<number>()
+  const flight = useRef<Promise<void> | null>(null)
+  useEffect(() => {
+    const previous = serverText.current
+    serverText.current = work.viewpoint
+    if (dirty.current) return
+    if (textRef.current === previous) {
+      textRef.current = work.viewpoint
+      setText(work.viewpoint)
+    }
+  }, [work.viewpoint])
+  const [conflict, setConflict] = useState<{ server: Work; mine: string } | null>(null)
+  const persist = useCallback(async () => {
+    const sent = textRef.current
+    if (sent.trim() === serverText.current.trim()) { dirty.current = false; return }
+    // NW-C5：带上 revision；冲突时不静默覆盖，交给用户选。
     try {
-      setWork(await patch<Work>(`/works/${work.id}`, { viewpoint: text }))
+      const next = await patch<Work>(`/works/${work.id}`, { viewpoint: sent, base_revision: work.revision })
+      serverText.current = next.viewpoint
+      setWork(next)
+      if (textRef.current === sent) {
+        dirty.current = false
+        if (next.viewpoint !== textRef.current) { textRef.current = next.viewpoint; setText(next.viewpoint) }
+      }
     } catch (e) {
-      toast.error(errorMessage(e))
+      if (e instanceof ApiError && e.code === 'version_conflict') {
+        setConflict({ server: (e.detail as { server: Work }).server, mine: sent })
+        return
+      }
+      throw e
+    }
+  }, [setWork, work.id, work.revision])
+  const save = useCallback(async () => {
+    if (flight.current) await flight.current
+    if (!dirty.current || textRef.current.trim() === serverText.current.trim()) { dirty.current = false; return }
+    const p = persist().finally(() => { flight.current = null })
+    flight.current = p
+    await p
+  }, [persist])
+  const saveRef = useRef(save)
+  saveRef.current = save
+  const saveWithToast = useCallback(() => { void saveRef.current().catch((e) => toast.error(errorMessage(e))) }, [])
+  useEffect(() => {
+    if (!dirty.current) return
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => saveWithToast(), 800)
+    return () => window.clearTimeout(timer.current)
+  }, [text, saveWithToast])
+  useEffect(() => () => { if (dirty.current) void saveRef.current().catch(() => {}) }, [])
+  // NW-C3/NW-C4：跨步骤动作前需要拿到已落库的观点（最多等正在飞行的那次保存）。
+  const flush = useCallback(async () => {
+    for (let i = 0; i < 3; i++) {
+      await saveRef.current()
+      if (!dirty.current || textRef.current.trim() === serverText.current.trim()) return
+    }
+  }, [])
+  useRegisterFlush('viewpoint', flush)
+  // NW-C5：冲突时让用户选，不静默覆盖。
+  const resolveConflict = async (keepMine: boolean) => {
+    const c = conflict
+    setConflict(null)
+    if (!c) return
+    if (!keepMine) {
+      serverText.current = c.server.viewpoint
+      textRef.current = c.server.viewpoint
+      setText(c.server.viewpoint)
+      dirty.current = false
+      setWork(c.server)
+      return
+    }
+    try {
+      const next = await patch<Work>(`/works/${work.id}`, { viewpoint: c.mine, base_revision: c.server.revision })
+      serverText.current = next.viewpoint
+      textRef.current = next.viewpoint
+      setText(next.viewpoint)
+      dirty.current = false
+      setWork(next)
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'version_conflict') setConflict({ server: (e.detail as { server: Work }).server, mine: c.mine })
+      else toast.error(errorMessage(e))
     }
   }
   const [ids, setIds] = useState(work.material_ids)
+  const [propertiesOpen, setPropertiesOpen] = useState(false)
   useEffect(() => setIds(work.material_ids), [work.material_ids])
+  useEffect(() => {
+    const toggle = () => setPropertiesOpen((open) => !open)
+    window.addEventListener('ops:viewpoint-properties', toggle)
+    return () => window.removeEventListener('ops:viewpoint-properties', toggle)
+  }, [])
   const toggle = async (id: string) => {
     const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]
     setIds(next)
@@ -100,37 +185,62 @@ function ViewpointCard({ work, setWork, readOnly, loadMaterials = false }: { wor
     ...(search.data ?? []),
     ...(materials ?? []).filter(m => kindLabel[m.kind].includes(matQ.trim())),
   ].map(m => [m.id, m] as const)).values()].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)) : materials ?? []
+  const referenceControls = <>
+    <div className="mb-2 flex items-center justify-between">
+      <span className="text-[13px] font-medium text-mist-700">参考素材 <span className="font-normal text-mist-400">· AI 只会把这些当作事实来源</span></span>
+      {!readOnly && <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => { setMatQ(''); setPicking(true) }}>选择素材</Button>}
+    </div>
+    {selected.length === 0 ? (
+      <p className="rounded-lg border border-dashed border-mist-200 px-3 py-3 text-[13px] text-mist-400">{ids.length ? `已关联 ${ids.length} 条素材，打开素材选择框可查看。` : '还没有选择素材。没有素材时，AI 遇到需要数据的地方会写成「【待核实：…】」让你补充。'}</p>
+    ) : (
+      <div className="flex flex-wrap gap-2">
+        {selected.map((m) => (
+          <span key={m.id} className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-mist-100 py-1 pl-2.5 pr-1 text-[12.5px] text-mist-700">
+            <Badge tone="ink">{kindLabel[m.kind]}</Badge>
+            <span className="max-w-64 truncate">{m.content}</span>
+            {!readOnly && <button type="button" onClick={() => toggle(m.id)} className="cursor-pointer rounded p-0.5 text-mist-400 hover:bg-mist-200 hover:text-mist-700"><X className="size-3" /></button>}
+          </span>
+        ))}
+      </div>
+    )}
+  </>
   return (
     <Card id="step-viewpoint" className="scroll-mt-24 p-5">
       <div className="mb-3 flex items-center gap-2">
         <h2 className="font-display text-[17px] font-bold text-mist-900">核心观点</h2>
         <Badge tone="gamboge">H-02 必须由你来写</Badge>
       </div>
-      <Textarea rows={3} value={text} disabled={readOnly} onChange={(e) => setText(e.target.value)} onBlur={save}
-        placeholder={work.topic_angle
-          ? `选题角度：${work.topic_angle}\n——这只是提示，请用你自己的话写下观点。`
-          : '用一两句话写下你自己的观点。AI 会围绕它组织大纲，不会替你决定立场。'}
-        className="font-display text-[16px] leading-relaxed" />
-      {seriesCtx.data && <SeriesStrip sc={seriesCtx.data} />}
-      <div className="mt-4">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-[13px] font-medium text-mist-700">参考素材 <span className="font-normal text-mist-400">· AI 只会把这些当作事实来源</span></span>
-          {!readOnly && <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => { setMatQ(''); setPicking(true) }}>选择素材</Button>}
-        </div>
-        {selected.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-mist-200 px-3 py-3 text-[13px] text-mist-400">{ids.length ? `已关联 ${ids.length} 条素材，打开素材选择框可查看。` : '还没有选择素材。没有素材时，AI 遇到需要数据的地方会写成「【待核实：…】」让你补充。'}</p>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {selected.map((m) => (
-              <span key={m.id} className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-mist-100 py-1 pl-2.5 pr-1 text-[12.5px] text-mist-700">
-                <Badge tone="ink">{kindLabel[m.kind]}</Badge>
-                <span className="max-w-64 truncate">{m.content}</span>
-                {!readOnly && <button type="button" onClick={() => toggle(m.id)} className="cursor-pointer rounded p-0.5 text-mist-400 hover:bg-mist-200 hover:text-mist-700"><X className="size-3" /></button>}
-              </span>
-            ))}
+      {desktopPresentation ? (
+        <div className="desktop-viewpoint-line">
+          <div className="desktop-viewpoint-intro">
+            <span>核心观点：</span>
+            <Textarea rows={1} value={text} disabled={readOnly} onChange={(e) => { setText(e.target.value); textRef.current = e.target.value; dirty.current = true }} onBlur={saveWithToast}
+              placeholder={work.topic_angle
+                ? `选题角度：${work.topic_angle}\n——这只是提示，请用你自己的话写下观点。`
+                : '用一两句话写下你自己的观点。AI 会围绕它组织大纲，不会替你决定立场。'}
+              className="font-display text-[16px] leading-relaxed" />
           </div>
-        )}
-      </div>
+          <details className="desktop-viewpoint-extra" open={propertiesOpen} onToggle={(e) => setPropertiesOpen(e.currentTarget.open)}>
+            <summary>作品属性与关系</summary>
+            <div>{seriesCtx.data && <SeriesStrip sc={seriesCtx.data} />}{referenceControls}</div>
+          </details>
+        </div>
+      ) : (
+        <>
+          <div>
+            <Textarea rows={3} value={text} disabled={readOnly} onChange={(e) => { setText(e.target.value); textRef.current = e.target.value; dirty.current = true }} onBlur={saveWithToast}
+              placeholder={work.topic_angle
+                ? `选题角度：${work.topic_angle}\n——这只是提示，请用你自己的话写下观点。`
+                : '用一两句话写下你自己的观点。AI 会围绕它组织大纲，不会替你决定立场。'}
+              className="font-display text-[16px] leading-relaxed" />
+          </div>
+          {seriesCtx.data && <details open><summary className="hidden">系列关联</summary><SeriesStrip sc={seriesCtx.data} /></details>}
+          <details className="mt-4" open>
+            <summary className="hidden">参考素材{selected.length ? ` · ${selected.length} 条已选` : ''}</summary>
+            <div className="mt-3">{referenceControls}</div>
+          </details>
+        </>
+      )}
       <Dialog open={picking} onClose={() => setPicking(false)} title="选择参考素材" desc="只列出本账号和共享的素材。点芯片可快速取消。" width="max-w-xl"
         footer={<Button variant="primary" onClick={() => setPicking(false)}>完成{ids.length ? `（已选 ${ids.length}）` : ''}</Button>}>
         <Input value={matQ} onChange={(e) => setMatQ(e.target.value)} placeholder="搜索素材内容、来源或类型…" className="mb-3" />
@@ -160,19 +270,33 @@ function ViewpointCard({ work, setWork, readOnly, loadMaterials = false }: { wor
       <Drawer open={inbox} onClose={() => setInbox(false)} title="从收件箱整理" desc="逐条确认素材，可选择同时关联到当前作品。">
         <InboxPanel accountId={work.account_id} work={work} onLinked={setWork} />
       </Drawer>
+      {/* NW-C5：观点冲突对话框——另一处已改过这篇作品时，由用户决定保留哪一版。 */}
+      <Dialog open={!!conflict} onClose={() => setConflict(null)} title="核心观点已在其他地方修改过" desc="可能是另一个标签页、设备或同事。请选择保留哪个版本。" width="max-w-2xl"
+        footer={<><Button onClick={() => void resolveConflict(false)}>使用另一处的版本</Button><Button variant="primary" onClick={() => void resolveConflict(true)}>保留我现在的版本</Button></>}>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div><div className="mb-2 text-sm font-medium">另一处保存的</div><div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-mist-50 p-3 text-sm">{conflict?.server.viewpoint || '（空）'}</div></div>
+          <div><div className="mb-2 text-sm font-medium">我现在的</div><div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-ink-50/60 p-3 text-sm">{conflict?.mine || '（空）'}</div></div>
+        </div>
+      </Dialog>
     </Card>
   )
 }
 
 // ---------- 口述 / 要点扩写 ----------
 
-function OrganizeNotesCard({ work, setWork, readOnly }: { work: Work; setWork: (w: Work) => void; readOnly: boolean }) {
+function OrganizeNotesCard({ work, setWork, readOnly, desktopPresentation = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; desktopPresentation?: boolean }) {
   const [open, setOpen] = useState(false)
   const [notes, setNotes] = useState('')
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [applying, setApplying] = useState(false)
   const abort = useRef<AbortController | null>(null)
+  useEffect(() => {
+    if (!desktopPresentation) return
+    const open = () => setOpen(true)
+    window.addEventListener('ops:organize-notes', open)
+    return () => window.removeEventListener('ops:organize-notes', open)
+  }, [desktopPresentation])
   const run = async () => {
     if (!notes.trim()) return
     setBusy(true)
@@ -207,6 +331,23 @@ function OrganizeNotesCard({ work, setWork, readOnly }: { work: Work; setWork: (
     }
   }
   if (readOnly) return null
+  const dialog = <Dialog open={open} onClose={() => { abort.current?.abort(); setOpen(false) }} title="要点整理成稿" desc="只组织你提供的内容；缺数据处会标【待核实】。" width="max-w-2xl"
+    footer={<>
+      <Button variant="ghost" onClick={() => { abort.current?.abort(); setOpen(false) }}>取消</Button>
+      {!text ? <Button variant="primary" loading={busy} disabled={!notes.trim()} onClick={run}>生成初稿</Button>
+        : <Button variant="primary" loading={applying} onClick={apply}>写入正文</Button>}
+    </>}>
+    <div className="space-y-4">
+      <Field label="要点或口述转写"><Textarea rows={6} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="每行一条要点，或粘贴语音转写全文" disabled={busy || !!text} /></Field>
+      {(busy || text) && (
+        <div className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border border-mist-200 bg-mist-50/60 p-3 text-[13.5px] leading-relaxed text-mist-800">
+          {text || <span className="text-mist-400">整理中…</span>}
+        </div>
+      )}
+      {text && !busy && <Button size="sm" variant="ghost" onClick={() => { setText('') }}>重新生成</Button>}
+    </div>
+  </Dialog>
+  if (desktopPresentation) return dialog
   return (
     <>
       <Card className="flex items-center gap-3 p-4">
@@ -216,22 +357,7 @@ function OrganizeNotesCard({ work, setWork, readOnly }: { work: Work; setWork: (
         </div>
         <Button size="sm" variant="secondary" icon={<Wand2 className="size-3.5" />} onClick={() => setOpen(true)}>开始整理</Button>
       </Card>
-      <Dialog open={open} onClose={() => { abort.current?.abort(); setOpen(false) }} title="要点整理成稿" desc="只组织你提供的内容；缺数据处会标【待核实】。" width="max-w-2xl"
-        footer={<>
-          <Button variant="ghost" onClick={() => { abort.current?.abort(); setOpen(false) }}>取消</Button>
-          {!text ? <Button variant="primary" loading={busy} disabled={!notes.trim()} onClick={run}>生成初稿</Button>
-            : <Button variant="primary" loading={applying} onClick={apply}>写入正文</Button>}
-        </>}>
-        <div className="space-y-4">
-          <Field label="要点或口述转写"><Textarea rows={6} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="每行一条要点，或粘贴语音转写全文" disabled={busy || !!text} /></Field>
-          {(busy || text) && (
-            <div className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border border-mist-200 bg-mist-50/60 p-3 text-[13.5px] leading-relaxed text-mist-800">
-              {text || <span className="text-mist-400">整理中…</span>}
-            </div>
-          )}
-          {text && !busy && <Button size="sm" variant="ghost" onClick={() => { setText(''); }}>重新生成</Button>}
-        </div>
-      </Dialog>
+      {dialog}
     </>
   )
 }
@@ -240,13 +366,14 @@ function OrganizeNotesCard({ work, setWork, readOnly }: { work: Work; setWork: (
 
 export default function Editor() {
   const { work, setWork } = useWork()
+  const saveCoordinator = useSaveCoordinator()
   if (work.content_format === 'comic') return <ComicEditor />
-  if (work.content_format === 'card_post') return <div className="mx-auto max-w-3xl space-y-4">
+  if (work.content_format === 'card_post') return <WorkSaveProvider value={saveCoordinator}><div className="mx-auto max-w-3xl space-y-4">
     <ViewpointCard work={work} setWork={setWork} readOnly={work.locked} />
     <OutlineCard work={work} setWork={setWork} readOnly={work.locked} />
     <CardEditor />
-  </div>
-  return <ArticleEditor key={work.id} />
+  </div></WorkSaveProvider>
+  return <ArticleEditor key={work.id} coordinator={saveCoordinator} />
 }
 
 const SIDEBAR_KEY = 'ops.editor.sidebar'
@@ -259,6 +386,13 @@ function sameElementProps(a: React.ReactElement, b: React.ReactElement) {
   const next = b.props as Record<string, unknown>
   const keys = Object.keys(previous)
   return keys.length === Object.keys(next).length && keys.every(key => Object.is(previous[key], next[key]))
+}
+
+// ED-16：段落内容被别处修改后，section prop 必须算"变了"，否则子组件拿旧正文判断"原文在哪"。
+function sameSectionProps(a: React.ReactElement, b: React.ReactElement) {
+  if (a.type !== b.type || a.key !== b.key) return false
+  if ((a.props as { section?: { revision?: number } }).section?.revision !== (b.props as { section?: { revision?: number } }).section?.revision) return false
+  return sameElementProps(a, b)
 }
 
 const LazyMount = memo(function LazyMount({ id, enabled, children, preview }: { id: string; enabled: boolean; children: React.ReactNode; preview: string }) {
@@ -283,11 +417,12 @@ const LazyMount = memo(function LazyMount({ id, enabled, children, preview }: { 
   )
 }, (previous, next) => previous.id === next.id && previous.enabled === next.enabled && previous.preview === next.preview &&
   (isValidElement(previous.children) && isValidElement(next.children)
-    ? sameElementProps(previous.children, next.children)
+    ? sameSectionProps(previous.children, next.children)
     : previous.children === next.children))
 
-function ArticleEditor() {
+function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
   const [orderConflict, setOrderConflict] = useState<{ server: Work; mine: Work; ids: string[] } | null>(null)
+  const [outlineOpen, setOutlineOpen] = useState(false)
   const { work, setWork, patchWork, refresh, focus, presence, reportSection, reportEditing } = useWork()
   const nav = useNavigate()
   const route = useLocation()
@@ -295,6 +430,8 @@ function ArticleEditor() {
   const prefs = usePrefs()
   const readOnly = work.locked || !canWrite
   const saveStatus = useMemo(createSaveStatus, [])
+  // NW-C4：把编辑器的 flushAll 暴露给 WorkLayout（复制/导出在父级触发）。
+  useEffect(() => registerWorkFlush(work.id, coordinator.flushAll), [coordinator.flushAll, work.id])
   const positionKey = `ops.editor.position.${work.id}`
   const [position] = useState<{ sectionId?: string; tab?: SidebarTab }>(() => {
     try {
@@ -331,10 +468,18 @@ function ArticleEditor() {
   const [sidebar, setSidebar] = useState(() => fromMention || localStorage.getItem(SIDEBAR_KEY) !== '0')
   const [narrowSidebar, setNarrowSidebar] = useState(false)
   const [wide, setWide] = useState(() => window.matchMedia(SIDEBAR_WIDE_QUERY).matches)
-  const [sideTab, setSideTab] = useState<SidebarTab>(fromMention ? 'comments' : position.tab ?? 'materials')
+  // NW-B3：还没有段落时，素材推荐页只能显示"点一下任意段落"；默认切到副驾驶。
+  // 这个默认值只是首屏提示，不写进 position，否则作品后来有了段落也会一直被钉在副驾驶。
+  const [sideTab, setSideTab] = useState<SidebarTab>(() => {
+    if (fromMention) return 'comments'
+    if (position.tab) return position.tab
+    return work.sections.length > 0 ? 'materials' : 'copilot'
+  })
+  const sideTabPicked = useRef(false)
   const [materialsOpened, setMaterialsOpened] = useState(false)
   const selectSideTab = (tab: SidebarTab) => {
     setSideTab(tab)
+    sideTabPicked.current = true
     if (tab === 'materials') setMaterialsOpened(true)
   }
   const lintCounts = useRef<Record<string, number>>({})
@@ -358,6 +503,8 @@ function ArticleEditor() {
     return () => media.removeEventListener('change', change)
   }, [])
   useEffect(() => {
+    // 只有用户真正切过 tab 才记住选择；默认值（首屏提示）不落库。
+    if (!sideTabPicked.current) return
     try { localStorage.setItem(positionKey, JSON.stringify({ sectionId: activeId ?? position.sectionId, tab: sideTab })) } catch {}
   }, [positionKey, activeId, sideTab, position.sectionId])
   useEffect(() => {
@@ -455,14 +602,17 @@ function ArticleEditor() {
   const totalChars = work.sections.reduce((n, s) => n + runeLen(s.content_md.replace(/[#>*_`[\]()!-]/g, '')), 0)
   const target = work.target_chars ?? 0
   const pendingAll = usePendingSections(work.sections)
-  const titleDone = !!work.title.trim()
-  const imagesDone = work.platform === 'wechat_mp' ? !!work.cover_asset_id : work.assets.length > 0
+  const toutiao = work.platform === 'toutiao'
+  const internalNameOnly = toutiao && work.content_format === 'micro_post'
+  // NW-B4：微头条不发布标题，内部名称不应成为第 4 步的完成条件。
+  const titleDone = internalNameOnly || !!work.title.trim()
+  const imagesDone = work.platform === 'wechat_mp' ? !!work.cover_asset_id : toutiao || work.assets.length > 0
   const steps = [
     { id: 'step-viewpoint', label: '核心观点', done: !!work.viewpoint.trim() },
     { id: 'step-outline', label: '大纲', done: !!work.outline_confirmed_at },
     { id: 'step-sections', label: '分段起稿', done: work.sections.length > 0 && drafted === work.sections.length, extra: work.sections.length ? `${drafted}/${work.sections.length}` : '' },
-    { id: 'step-title', label: work.platform === 'wechat_mp' ? '标题与摘要' : '标题与话题', done: titleDone },
-    { id: 'step-images', label: work.platform === 'wechat_mp' ? '配图与封面' : '笔记图片', done: imagesDone },
+    { id: 'step-title', label: work.platform === 'wechat_mp' ? '标题与摘要' : internalNameOnly ? '内部名称与话题（可选）' : toutiao ? '发布标题与话题' : '标题与话题', done: titleDone },
+    { id: 'step-images', label: work.platform === 'wechat_mp' ? '配图与封面' : toutiao ? '配图（可选）' : '笔记图片', done: imagesDone },
   ]
   const activeStep = !work.viewpoint.trim() ? 'step-viewpoint'
     : !work.outline_confirmed_at ? 'step-outline'
@@ -528,6 +678,7 @@ function ArticleEditor() {
     const wait: Promise<unknown>[] = []
     emitEditor({ type: 'flush', wait })
     try {
+      await coordinator.flushAll()
       await Promise.all(wait)
       await post(`/works/${work.id}/versions`)
       toast.success('已保存，并留了一个手动版本')
@@ -549,6 +700,7 @@ function ArticleEditor() {
         if (wide ? showSidebar && sideTab === 'copilot' : narrowSidebar && sideTab === 'copilot') toggleSidebar(false)
         else {
           setSideTab('copilot')
+          sideTabPicked.current = true
           toggleSidebar(true)
         }
         return
@@ -571,8 +723,14 @@ function ArticleEditor() {
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
   })
-  // 检查前预检（EX-H-03）：只提醒，可以继续。
+  // 检查前预检（EX-H-03）：只提醒，可以继续。先把观点/标题的本地缓冲落库，避免检查读到旧内容。
   const toCheck = async () => {
+    try {
+      await coordinator.flushAll()
+    } catch (e) {
+      toast.error(errorMessage(e))
+      return
+    }
     let lintTotal = Object.values(lintCounts.current).reduce((a, b) => a + b, 0)
     const body = work.sections.map((s) => s.content_md).join('\n\n')
     if (body.trim()) {
@@ -600,21 +758,27 @@ function ArticleEditor() {
   const activeIdx = work.sections.findIndex((s) => s.id === activeId)
   const active = activeIdx >= 0 ? work.sections[activeIdx] : null
   const showSidebar = sidebar && !focus
+  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
 
   return (
-    <div className={cn('mx-auto flex w-full gap-6 px-4 py-6 sm:px-6 sm:py-8 xl:gap-8', focus ? 'max-w-[860px]' : showSidebar ? 'max-w-[1600px]' : 'max-w-[1280px] 2xl:max-w-[1480px]')}>
+    <WorkSaveProvider value={coordinator}>
+    <div
+      className={cn('mx-auto flex w-full gap-6 px-4 py-6 sm:px-6 sm:py-8 xl:gap-8', focus ? 'max-w-[860px]' : showSidebar ? 'max-w-[1600px]' : 'max-w-[1280px] 2xl:max-w-[1480px]', desktopPresentation && 'desktop-editor-layout', desktopPresentation && focus && 'desktop-editor-focus')}
+      data-testid={desktopPresentation ? 'desktop-editor-layout' : undefined}
+    >
       {!readOnly && <WorkHeaderAction>
-        <Button size="sm" variant="primary" onClick={toCheck} disabled={drafted === 0} icon={<PenLine className="size-4" />}>
-          {work.platform === 'wechat_mp' ? '排版并检查' : '提交检查'}
+        <Button className="desktop-work-check" size="sm" variant="primary" onClick={toCheck} disabled={drafted === 0} icon={desktopPresentation ? <ArrowRight className="size-4" /> : <PenLine className="size-4" />}>
+          {desktopPresentation ? '去检查' : work.platform === 'wechat_mp' ? '排版并检查' : '提交检查'}
         </Button>
       </WorkHeaderAction>}
       {!focus && (
-        <aside className="sticky top-24 hidden h-fit w-52 shrink-0 lg:block">
+        <aside className={cn('sticky top-24 hidden h-fit w-52 shrink-0 lg:block', desktopPresentation && 'desktop-editor-steps')}
+          data-testid={desktopPresentation ? 'desktop-editor-steps' : undefined}>
           <div className="mb-3 text-[11px] font-semibold tracking-wider text-mist-400">创作步骤</div>
           <ol className="space-y-0.5">
             {steps.map((s) => (
               <li key={s.id}>
-                <a href={`#${s.id}`} onClick={(e) => { e.preventDefault(); scrollTo(s.id) }}
+                <a href={`#${s.id}`} onClick={(e) => { e.preventDefault(); if (desktopPresentation && s.id === 'step-outline') setOutlineOpen(true); else scrollTo(s.id) }}
                   className={cn(
                     'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13.5px] transition',
                     s.id === activeStep ? 'bg-ink-50 font-medium text-ink-800' : 'text-mist-600 hover:bg-mist-100 hover:text-mist-900',
@@ -626,6 +790,24 @@ function ArticleEditor() {
               </li>
             ))}
           </ol>
+          {work.sections.length > 0 && <>
+            <div className="mt-4 border-t border-mist-100 pt-3 text-[11px] font-medium tracking-wider text-mist-400">文稿目录</div>
+            <ol className="mt-1 space-y-0.5">
+              {work.sections.map((section, index) => (
+                <li key={section.id}>
+                  <button type="button" onClick={() => { setActiveId(section.id); scrollTo(`sec-${section.id}`) }}
+                    className="flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-left text-[11px] leading-relaxed text-mist-600 transition hover:bg-mist-100 hover:text-mist-900">
+                    <span className="shrink-0 font-mono text-[10px] text-mist-400">{String(index + 1).padStart(2, '0')}</span>
+                    <span className="line-clamp-2 min-w-0">{section.heading || `第 ${index + 1} 段`}</span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </>}
+          <div className="desktop-editor-properties-nav">
+            <button type="button" onClick={() => window.dispatchEvent(new Event('ops:viewpoint-properties'))}>作品属性与关系</button>
+            <button type="button" onClick={() => window.dispatchEvent(new Event('ops:title-properties'))}>标题、摘要与配图</button>
+          </div>
           <div className="mt-4 border-t border-mist-100 pt-3 text-[11.5px] text-mist-500">
             <div className="flex items-baseline justify-between">
               <span>{totalChars} 字{target ? ` / 目标 ${target}` : ''}</span>
@@ -659,7 +841,8 @@ function ArticleEditor() {
         </aside>
       )}
 
-      <div className="min-w-0 flex-1 space-y-5">
+      <div className={cn('min-w-0 flex-1 space-y-5', desktopPresentation && 'desktop-editor-content')}
+        data-testid={desktopPresentation ? 'desktop-editor-content' : undefined}>
         {resumedSection !== null && <Notice tone="ink" className="fixed bottom-6 left-1/2 z-40 -translate-x-1/2 shadow-pop"><div className="flex items-center gap-3">
           <span>已回到上次编辑的第 {resumedSection} 段</span>
           <Button size="sm" variant="ghost" className="ml-auto" aria-label="关闭位置提示" onClick={() => setResumedSection(null)} icon={<X className="size-3.5" />} />
@@ -667,13 +850,23 @@ function ArticleEditor() {
         {focus && (
           <div className="flex items-center gap-3 text-[12px] text-mist-500">
             <span>专注模式 · F11 退出</span>
+            {!work.outline_confirmed_at && !readOnly && <Button size="sm" variant="human" onClick={() => setOutlineOpen(true)}>确认大纲后起草</Button>}
+            {/* NW-C5：专注模式看不到左栏，保存状态要在这里也可见。 */}
+            <SaveStatus store={saveStatus} />
             <span className="ml-auto">{totalChars} 字{target ? ` / ${target}` : ''}</span>
             {target > 0 && <div className="h-1 w-32 overflow-hidden rounded-full bg-mist-100"><div className="h-full bg-ink-500" style={{ width: `${Math.min(100, (totalChars / target) * 100)}%` }} /></div>}
           </div>
         )}
-        {!focus && <OrganizeNotesCard work={work} setWork={setWorkStable} readOnly={readOnly} />}
-        {!focus && <ViewpointCard work={work} setWork={setWorkStable} readOnly={readOnly} loadMaterials={materialsOpened && showSidebar && sideTab === 'materials'} />}
-        {!focus && <OutlineCard work={work} setWork={setWorkStable} readOnly={readOnly} onConfirmed={onOutlineConfirmed} />}
+        {!focus && !desktopPresentation && <OrganizeNotesCard work={work} setWork={setWorkStable} readOnly={readOnly} />}
+        {!focus && desktopPresentation && <OrganizeNotesCard work={work} setWork={setWorkStable} readOnly={readOnly} desktopPresentation />}
+        <article className={desktopPresentation ? 'desktop-editor-paper space-y-5' : 'contents'}>
+        {!focus && desktopPresentation && <div className="desktop-editor-document-meta">
+          <span>{work.account_name}</span><span>/</span><span>{work.tags[0] ?? '创作正文'}</span>
+          <Badge tone="ink">{work.sections.some((section) => section.content_md.trim()) ? 'AI 草稿 · 可编辑' : '创作中 · 可编辑'}</Badge>
+        </div>}
+        {!focus && desktopPresentation && <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} desktopPresentation />}
+        {!focus && <ViewpointCard work={work} setWork={setWorkStable} readOnly={readOnly} desktopPresentation={desktopPresentation} loadMaterials={materialsOpened && showSidebar && sideTab === 'materials'} />}
+        {!focus && !desktopPresentation && <OutlineCard work={work} setWork={setWorkStable} readOnly={readOnly} onConfirmed={onOutlineConfirmed} />}
         <section id="step-sections" className="scroll-mt-24 space-y-4">
           <div className="flex flex-wrap items-center gap-2 pt-2">
             <h2 className="font-display text-[17px] font-bold text-mist-900">正文</h2>
@@ -686,13 +879,17 @@ function ArticleEditor() {
             )}
           </div>
           {!work.outline_confirmed_at ? (
-            <HumanGate code="H-03">确认大纲后，这里会按大纲生成段落块，然后你可以逐段起草和修改。</HumanGate>
+            <HumanGate code="H-03" action={!readOnly ? <Button size="sm" variant="human" onClick={() => desktopPresentation ? setOutlineOpen(true) : scrollTo('step-outline')}>{work.outline.length ? '去确认大纲' : '去写大纲'}</Button> : undefined}>
+              确认大纲后，这里会按大纲生成段落块，然后你可以逐段起草和修改。
+            </HumanGate>
           ) : (
             <>
               {work.sections.map((s, i) => (
                 <LazyMount key={s.id} id={s.id} enabled={work.sections.length > 30 && i > 3} preview={s.content_md}>
                 <SectionBlock key={s.id} section={s} index={i} total={work.sections.length} work={sectionWork} prefs={prefs} patchWork={patchWork} setWork={setWorkStable}
                   refresh={refresh} readOnly={readOnly} dim={focus && activeIdx >= 0 && Math.abs(i - activeIdx) > 1}
+                  desktopPresentation={desktopPresentation}
+                  active={desktopPresentation && (activeId === s.id || (!activeId && i === 0))}
                   othersHere={members.get(s.id)?.here}
                   othersEditing={members.get(s.id)?.editing} onEditing={reportEditing}
                   onSave={onSave} onMove={moveSection} onRemove={removeSection} onUploadImage={upload} onDrafted={onDrafted}
@@ -707,16 +904,26 @@ function ArticleEditor() {
             </>
           )}
         </section>
-        {!focus && <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} />}
+        {!focus && !desktopPresentation && <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} />}
         {!focus && <ImagesCard work={work} setWork={setWorkStable} readOnly={readOnly} upload={upload} />}
+        </article>
         {work.locked && <Notice tone="gray">作品已发布，当前为只读模式。</Notice>}
       </div>
 
       {showSidebar && (
-        <aside className="sticky top-20 hidden h-[calc(100vh-6.5rem)] w-[320px] shrink-0 overflow-hidden rounded-xl border border-mist-200 bg-white shadow-card xl:block 2xl:w-[360px]">
+        <aside className={cn('sticky top-20 hidden h-[calc(100vh-6.5rem)] w-[320px] shrink-0 overflow-hidden rounded-xl border border-mist-200 bg-white shadow-card xl:block 2xl:w-[360px]', desktopPresentation && 'desktop-editor-tools')}
+          data-testid={desktopPresentation ? 'desktop-editor-tools' : undefined}>
           <SelectedSidebar work={work} setWork={setWorkStable} active={active} selectionRef={selection} tab={sideTab} onTab={selectSideTab} onClose={() => toggleSidebar(false)} />
         </aside>
       )}
+      {desktopPresentation && <footer className="desktop-editor-bottom" data-testid="desktop-editor-bottom">
+        <span>{totalChars} 字 · {work.sections.length} 个段落</span>
+        <button type="button" onClick={() => toggleSidebar(!sidebar)}>作品工具</button>
+        <span>自动保存 · 冲突时逐项处理</span>
+      </footer>}
+      {desktopPresentation && <Dialog open={outlineOpen} onClose={() => setOutlineOpen(false)} title={work.outline_confirmed_at ? '已确认大纲' : '生成与确认大纲'} desc={work.outline_confirmed_at ? '大纲由你确认；修改后，段落内容仍逐项编辑。' : '先生成或手动编写大纲，确认后才能逐段起稿。'} width="max-w-3xl">
+        <OutlineCard work={work} setWork={setWorkStable} readOnly={readOnly} onConfirmed={() => setOutlineOpen(false)} />
+      </Dialog>}
       {!focus && !showSidebar && (
         <button type="button" onClick={() => toggleSidebar(true)} title="打开助手侧栏：素材推荐、副驾驶、体检、待核实、批注、动态"
           className="fixed right-4 top-1/2 z-20 hidden -translate-y-1/2 cursor-pointer flex-col items-center gap-1 rounded-xl border border-mist-200 bg-white px-2 py-3 text-[11px] text-mist-500 shadow-pop transition hover:text-ink-700 xl:flex">
@@ -745,5 +952,6 @@ function ArticleEditor() {
         }
       }} />}
     </div>
+    </WorkSaveProvider>
   )
 }

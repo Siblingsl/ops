@@ -49,7 +49,7 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) error {
 		sum(c.prompt_tokens/1000.0*p.price_per_1k_prompt + c.completion_tokens/1000.0*coalesce(p.price_per_1k_completion, p.price_per_1k_prompt))::float8,
 		count(f.id) FILTER (WHERE `+adoptedExpr+`), count(f.id) FILTER (WHERE f.outcome IS NOT NULL)
 		FROM ai_call c LEFT JOIN platform_account a ON a.id=c.account_id
-		LEFT JOIN model_provider p ON p.workspace_id=c.workspace_id AND p.name=c.provider
+		LEFT JOIN model_provider p ON p.workspace_id=c.workspace_id AND p.execution_location='server' AND p.name=c.provider
 		LEFT JOIN ai_feedback f ON f.ai_call_id=c.id
 		WHERE c.workspace_id=$3 AND c.created_at >= $1 AND c.created_at < $2 GROUP BY k ORDER BY k`, from, to, ws)
 	if err != nil {
@@ -392,12 +392,15 @@ var trashTables = map[string]struct{ table, title, account string }{
 
 func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) error {
 	type Item struct {
-		Type        string    `json:"type"`
-		ID          uuid.UUID `json:"id"`
-		Title       string    `json:"title"`
-		AccountName *string   `json:"account_name"`
-		DeletedAt   time.Time `json:"deleted_at"`
-		DaysLeft    int       `json:"days_left"`
+		Type          string     `json:"type"`
+		ID            uuid.UUID  `json:"id"`
+		Title         string     `json:"title"`
+		AccountName   *string    `json:"account_name"`
+		AccountID     *uuid.UUID `json:"account_id"`
+		Platform      *string    `json:"platform"`
+		ContentFormat *string    `json:"content_format"`
+		DeletedAt     time.Time  `json:"deleted_at"`
+		DaysLeft      int        `json:"days_left"`
 	}
 	list := []Item{}
 	ws := ident(r.Context()).WorkspaceID
@@ -414,14 +417,20 @@ func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) error {
 		if typ == "material" {
 			scope = `t.workspace_id=$1`
 		}
-		rows, err := s.db.Query(r.Context(), `SELECT t.id, coalesce(`+def.title+`, '（无标题）'), a.name, t.deleted_at FROM `+def.table+` t
+		format := `a.content_format`
+		if typ == "work" {
+			format = `t.content_format`
+		} else if typ == "topic" {
+			format = `nullif(t.format,'')`
+		}
+		rows, err := s.db.Query(r.Context(), `SELECT t.id, coalesce(`+def.title+`, '（无标题）'), a.name, t.deleted_at,a.id,a.platform,`+format+` FROM `+def.table+` t
 			LEFT JOIN platform_account a ON a.id=`+def.account+` WHERE t.deleted_at IS NOT NULL AND `+scope+` ORDER BY t.deleted_at DESC`, ws)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
 			it := Item{Type: typ}
-			if err := rows.Scan(&it.ID, &it.Title, &it.AccountName, &it.DeletedAt); err != nil {
+			if err := rows.Scan(&it.ID, &it.Title, &it.AccountName, &it.DeletedAt, &it.AccountID, &it.Platform, &it.ContentFormat); err != nil {
 				rows.Close()
 				return err
 			}

@@ -1,5 +1,5 @@
 import { Loader2, Sparkles, Star } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { RefsNote, sendFeedback } from '@/components/refs'
 import { Badge, Button, Card, cn, Field, Input, Textarea } from '@/components/ui'
@@ -10,15 +10,20 @@ import type { Work } from '@/lib/types'
 import { useWorkCmd } from '@/lib/v3'
 import { TagSuggest } from './editor-tools'
 import { WorkConflictDialog } from './section-save-dialogs'
+import { useRegisterFlush } from './work-save'
 
 interface TitleCand { text: string; style: string; chars: number; over_limit: boolean; features: string[]; strong_hits: string[]; call?: string; idx?: number }
 interface TitleResp { titles: TitleCand[]; refs: AIRefs; ai_call_id: string; max_chars: number; strong_features: string[] }
 
 // ---------- 标题与摘要 ----------
 
-export function TitleCard({ work, setWork, readOnly }: { work: Work; setWork: (w: Work) => void; readOnly: boolean }) {
+export function TitleCard({ work, setWork, readOnly, desktopPresentation = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; desktopPresentation?: boolean }) {
+  const [propertiesOpen, setPropertiesOpen] = useState(false)
   const [conflict, setConflict] = useState<{ server: Work; body: Record<string, unknown> } | null>(null)
   const wx = work.platform === 'wechat_mp'
+  const toutiao = work.platform === 'toutiao'
+  const internalName = toutiao && work.content_format === 'micro_post'
+  const titleMax = wx ? 32 : toutiao ? 0 : 20
   const [title, setTitle] = useState(work.title)
   const [summary, setSummary] = useState(work.summary)
   const [topics, setTopics] = useState(work.topics.map((t) => '#' + t).join(' '))
@@ -26,7 +31,7 @@ export function TitleCard({ work, setWork, readOnly }: { work: Work; setWork: (w
   const [titleRefs, setTitleRefs] = useState<AIRefs | null>(null)
   const [titleCall, setTitleCall] = useState<string | null>(null)
   const [strong, setStrong] = useState<string[]>([])
-  const toCand = (f: { text: string; style: string }): TitleCand => ({ ...f, chars: runeLen(f.text), over_limit: runeLen(f.text) > (wx ? 32 : 20), features: [], strong_hits: [] })
+  const toCand = (f: { text: string; style: string }): TitleCand => ({ ...f, chars: runeLen(f.text), over_limit: titleMax > 0 && runeLen(f.text) > titleMax, features: [], strong_hits: [] })
   const favs = (work.title_favorites ?? []).map(toCand)
   const [rewriting, setRewriting] = useState<string | null>(null)
   const [busy, setBusy] = useState<'t' | 's' | null>(null)
@@ -68,7 +73,6 @@ export function TitleCard({ work, setWork, readOnly }: { work: Work; setWork: (w
     }
   }
   useEffect(() => { setTitle(work.title); setSummary(work.summary); setTopics(work.topics.map((t) => '#' + t).join(' ')) }, [work.title, work.summary, work.topics])
-  const titleMax = wx ? 32 : 20
   const save = async (body: Record<string, unknown>, base = work.revision) => {
     try {
       setWork(await patch<Work>(`/works/${work.id}`, { ...body, base_revision: base }))
@@ -78,6 +82,17 @@ export function TitleCard({ work, setWork, readOnly }: { work: Work; setWork: (w
       else toast.error(errorMessage(e))
     }
   }
+  // NW-C4：标题只在 blur 保存；去检查/生成大纲/保存版本前，把本地未提交的标题补一次。
+  const titleRef = useRef(title)
+  titleRef.current = title
+  const saveRef = useRef(save)
+  saveRef.current = save
+  const flush = useCallback(async () => {
+    const next = titleRef.current
+    if (next === work.title || (wx && runeLen(next) > 32)) return
+    await saveRef.current({ title: next })
+  }, [work.title, wx])
+  useRegisterFlush('title', flush)
   const genTitles = async () => {
     setBusy('t')
     try {
@@ -86,12 +101,23 @@ export function TitleCard({ work, setWork, readOnly }: { work: Work; setWork: (w
       setTitleRefs(r.refs)
       setTitleCall(r.ai_call_id)
       setStrong(r.strong_features ?? [])
+      setPropertiesOpen(true)
     } catch (e) {
       aiError(e, '生成标题', genTitles)
     } finally {
       setBusy(null)
     }
   }
+  useEffect(() => {
+    const generate = () => { void genTitles() }
+    const toggleProperties = () => setPropertiesOpen((open) => !open)
+    window.addEventListener('ops:generate-titles', generate)
+    window.addEventListener('ops:title-properties', toggleProperties)
+    return () => {
+      window.removeEventListener('ops:generate-titles', generate)
+      window.removeEventListener('ops:title-properties', toggleProperties)
+    }
+  })
   useWorkCmd((c) => {
     if (c.cmd !== 'titles' || readOnly) return
     document.getElementById('step-title')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -153,63 +179,76 @@ export function TitleCard({ work, setWork, readOnly }: { work: Work; setWork: (w
       </div>
     )
   }
+  const extras = <>
+    {favs.length > 0 && (
+      <div>
+        <div className="mb-1.5 text-[12px] font-medium text-mist-600">收藏的候选</div>
+        <div className="grid gap-2 sm:grid-cols-2">{favs.map(titleRow)}</div>
+      </div>
+    )}
+    {titles.length > 0 && (
+      <div className="space-y-3 rounded-xl bg-mist-50/70 p-3">
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-mist-500">
+          {internalName ? '内部名称工作台' : '标题工作台'}
+          {strong.length > 0 && <span>· 你过去表现较好的标题常见特征：{strong.map((s) => <Badge key={s} tone="gamboge" className="ml-1">{s}</Badge>)}</span>}
+          <span className="text-mist-400">只展示可解释的特征，不做热度预测</span>
+        </div>
+        {groups.map((g) => (
+          <div key={g}>
+            <div className="mb-1 text-[11.5px] font-medium text-mist-500">{g}</div>
+            <div className="grid gap-2 sm:grid-cols-2">{titles.filter((t) => t.style.replace('（改写自候选）', '') === g).map(titleRow)}</div>
+          </div>
+        ))}
+        <RefsNote refs={titleRefs} callId={titleCall} sampleText={titles.map((t) => t.text).join('\n')} onRetry={readOnly ? undefined : genTitles} />
+      </div>
+    )}
+    {wx ? (
+      <Field label="摘要" counter={{ value: runeLen(summary), max: 120 }} hint="留空时微信会自动抓取正文前 54 个字">
+        <div className="flex gap-2">
+          <Textarea rows={2} value={summary} disabled={readOnly} onChange={(e) => setSummary(e.target.value)} invalid={runeLen(summary) > 120}
+            onBlur={() => summary !== work.summary && runeLen(summary) <= 120 && save({ summary })} />
+          {!readOnly && <Button icon={<Sparkles className="size-4" />} loading={busy === 's'} onClick={genSummary}>生成</Button>}
+        </div>
+      </Field>
+    ) : (
+      <Field label="话题标签" hint={toutiao
+        ? '用空格分隔，例如：#职场 #效率。发布前在头条话题选择器中核对添加；纯文本 #话题 不保证已关联活动。'
+        : '用空格分隔，例如：#职场 #效率。发布时在小红书里用话题选择器添加。'}>
+        <Input value={topics} disabled={readOnly} onChange={(e) => setTopics(e.target.value)}
+          onBlur={() => {
+            const list = parseTopics(topics)
+            if (list.join(' ') !== work.topics.join(' ')) save({ topics: list })
+          }} />
+        <div className="mt-2">
+          <TagSuggest workId={work.id} current={parseTopics(topics)} disabled={readOnly} onAdd={(t) => {
+            const list = [...parseTopics(topics), t]
+            setTopics(list.map((x) => '#' + x).join(' '))
+            save({ topics: list })
+          }} />
+        </div>
+      </Field>
+    )}
+  </>
   return (
     <Card id="step-title" className="scroll-mt-24 p-5">
-      <h2 className="mb-4 font-display text-[17px] font-bold text-mist-900">标题{wx ? '与摘要' : '与话题'}</h2>
+      <h2 className="mb-4 font-display text-[17px] font-bold text-mist-900">{internalName ? '内部名称与话题' : wx ? '标题与摘要' : '标题与话题'}</h2>
       <div className="space-y-4">
-        <Field label="标题" counter={{ value: runeLen(title), max: titleMax }} hint={wx ? '公众号标题不超过 32 字' : '小红书标题字数上限待核实（V-012），暂按 20 字提示'}>
+        <Field className={desktopPresentation ? 'desktop-title-main' : undefined} label={internalName ? '内部名称（仅系统内使用）' : '标题'} counter={titleMax > 0 ? { value: runeLen(title), max: titleMax } : undefined}
+          hint={internalName ? '用于系统识别、检索和数据匹配，不会作为微头条发布标题或导出正文。' : toutiao ? '今日头条文章发布标题；平台字数上限待实测（V-025）。' : wx ? '公众号标题不超过 32 字' : '小红书标题字数上限待核实（V-012），暂按 20 字提示'}>
           <div className="flex gap-2">
             <Input value={title} disabled={readOnly} onChange={(e) => setTitle(e.target.value)} invalid={wx && runeLen(title) > 32}
+              placeholder={internalName ? '未命名微头条 · 仅系统内使用' : '未命名作品 · 标题可以最后再定'}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.blur() } }}
               onBlur={() => { if (title !== work.title && !(wx && runeLen(title) > 32)) { titleEdited(title); void save({ title }) } }} className="font-display text-[15px] font-semibold" />
-            {!readOnly && <Button icon={<Sparkles className="size-4" />} loading={busy === 't'} onClick={genTitles}>候选</Button>}
+            {!readOnly && <Button className="desktop-title-generate" icon={<Sparkles className="size-4" />} loading={busy === 't'} onClick={genTitles}>候选</Button>}
           </div>
         </Field>
-        {favs.length > 0 && (
-          <div>
-            <div className="mb-1.5 text-[12px] font-medium text-mist-600">收藏的候选</div>
-            <div className="grid gap-2 sm:grid-cols-2">{favs.map(titleRow)}</div>
-          </div>
-        )}
-        {titles.length > 0 && (
-          <div className="space-y-3 rounded-xl bg-mist-50/70 p-3">
-            <div className="flex flex-wrap items-center gap-2 text-[12px] text-mist-500">
-              标题工作台
-              {strong.length > 0 && <span>· 你过去表现较好的标题常见特征：{strong.map((s) => <Badge key={s} tone="gamboge" className="ml-1">{s}</Badge>)}</span>}
-              <span className="text-mist-400">只展示可解释的特征，不做热度预测</span>
-            </div>
-            {groups.map((g) => (
-              <div key={g}>
-                <div className="mb-1 text-[11.5px] font-medium text-mist-500">{g}</div>
-                <div className="grid gap-2 sm:grid-cols-2">{titles.filter((t) => t.style.replace('（改写自候选）', '') === g).map(titleRow)}</div>
-              </div>
-            ))}
-            <RefsNote refs={titleRefs} callId={titleCall} sampleText={titles.map((t) => t.text).join('\n')} onRetry={readOnly ? undefined : genTitles} />
-          </div>
-        )}
-        {wx ? (
-          <Field label="摘要" counter={{ value: runeLen(summary), max: 120 }} hint="留空时微信会自动抓取正文前 54 个字">
-            <div className="flex gap-2">
-              <Textarea rows={2} value={summary} disabled={readOnly} onChange={(e) => setSummary(e.target.value)} invalid={runeLen(summary) > 120}
-                onBlur={() => summary !== work.summary && runeLen(summary) <= 120 && save({ summary })} />
-              {!readOnly && <Button icon={<Sparkles className="size-4" />} loading={busy === 's'} onClick={genSummary}>生成</Button>}
-            </div>
-          </Field>
-        ) : (
-          <Field label="话题标签" hint="用空格分隔，例如：#职场 #效率。发布时在小红书里用话题选择器添加。">
-            <Input value={topics} disabled={readOnly} onChange={(e) => setTopics(e.target.value)}
-              onBlur={() => {
-                const list = parseTopics(topics)
-                if (list.join(' ') !== work.topics.join(' ')) save({ topics: list })
-              }} />
-            <div className="mt-2">
-              <TagSuggest workId={work.id} current={parseTopics(topics)} disabled={readOnly} onAdd={(t) => {
-                const list = [...parseTopics(topics), t]
-                setTopics(list.map((x) => '#' + x).join(' '))
-                save({ topics: list })
-              }} />
-            </div>
-          </Field>
-        )}
+        {desktopPresentation ? (
+          <details className="desktop-title-extras" open={propertiesOpen} onToggle={(e) => setPropertiesOpen(e.currentTarget.open)}>
+            <summary>标题与摘要设置</summary>
+            <div className="space-y-4">{extras}</div>
+          </details>
+        ) : extras}
       </div>
       <WorkConflictDialog server={conflict?.server ?? null} mine={{ ...work, title, summary }} onClose={() => setConflict(null)} onResolve={keepMine => {
         if (!conflict) return

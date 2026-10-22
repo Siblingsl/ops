@@ -395,7 +395,9 @@ test('注册、创建作品、大纲、逐段起草、检查与小红书打包',
   await expect(page.getByRole('heading', { name: '小红书发布包', exact: true })).toBeVisible()
   work = await api(page, 'GET', `/works/${id}`)
   expect(work.status).toBe('packed')
-  expect((await page.request.get(`/api/v1/works/${id}/xhs/pack.zip`)).ok()).toBeTruthy()
+  const packZip = await page.request.get(`/api/v1/works/${id}/xhs/pack.zip?basis_revision=${work.revision}`)
+  expect(packZip.ok()).toBeTruthy()
+  expect(packZip.headers()['x-ops-basis-revision']).toBe(String(work.revision))
 })
 
 test('首次价值路径：旧文建档、方案启用、生成推荐并逐条采用', async ({ page }) => {
@@ -430,19 +432,41 @@ test('首次价值路径：旧文建档、方案启用、生成推荐并逐条�
   expect(Date.now() - began).toBeLessThan(10 * 60_000)
 })
 
-test('账号类型只读且 PATCH 无法绕过锁定', async ({ page }) => {
+// D-123 / DEV-415：账号类型不再「创建后固定」，改为同平台内需显式 confirm_type_change 才能迁移；
+// 目标形态仍必须属于本平台（跨平台请新建账号）。
+test('账号类型同平台内需显式确认才可迁移，平台不支持的形态仍被拒绝', async ({ page }) => {
   const account = await registerAccount(page)
   await page.goto('/settings/accounts')
-  await expect(page.getByText('创建时选定后固定，不可修改；如需其他类型请新建账号')).toBeVisible()
+  await expect(page.getByText('同平台内可以更换类型；跨平台请新建账号')).toBeVisible()
   await expect(page.getByRole('radio')).toHaveCount(0)
-  const result = await page.evaluate(async id => {
+
+  const patch = (body: Record<string, unknown>) => page.evaluate(async ([id, payload]) => {
     const me = await (await fetch('/api/v1/auth/me')).json()
-    const r = await fetch(`/api/v1/accounts/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: JSON.stringify({ content_format: 'comic', confirm: true }) })
+    const r = await fetch(`/api/v1/accounts/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: JSON.stringify(payload) })
     return { status: r.status, body: await r.json() }
-  }, account.id)
-  expect(result.status).toBeGreaterThanOrEqual(400)
-  expect(result.body.error.message).toContain('创建后不可修改')
+  }, [account.id, body] as [string, Record<string, unknown>])
+
+  // 未显式确认：拒绝，账号类型保持不变
+  const blocked = await patch({ content_format: 'comic' })
+  expect(blocked.status).toBe(409)
+  expect(blocked.body.error.code).toBe('confirm_required')
+  expect(blocked.body.error.message).toContain('已有作品保持原类型不变')
   expect((await api(page, 'GET', `/accounts/${account.id}`)).content_format).toBe('image_note')
+
+  // 目标形态不属于本平台（long_article 仅公众号）：即使带确认也拒绝
+  const notForPlatform = await patch({ content_format: 'long_article', confirm_type_change: true })
+  expect(notForPlatform.status).toBe(422)
+  expect(notForPlatform.body.error.fields.content_format).toContain('该平台不支持这种内容类型')
+  expect((await api(page, 'GET', `/accounts/${account.id}`)).content_format).toBe('image_note')
+
+  // 同平台 + 显式确认：迁移成功，并返回影响面摘要
+  const migrated = await patch({ content_format: 'comic', confirm_type_change: true })
+  expect(migrated.status).toBe(200)
+  expect(migrated.body.account.content_format).toBe('comic')
+  expect(migrated.body.type_change.from).toBe('image_note')
+  expect(migrated.body.type_change.to).toBe('comic')
+  expect(migrated.body.type_change.works_kept).toBe(0)
+  expect((await api(page, 'GET', `/accounts/${account.id}`)).content_format).toBe('comic')
 })
 
 test('卡片大纲确认、逐卡配图、检查与含文案发布包', async ({ page }) => {
@@ -491,10 +515,11 @@ test('卡片大纲确认、逐卡配图、检查与含文案发布包', async ({
   await page.goto(`/works/${id}/pack`)
   await page.getByRole('button', { name: '生成发布包', exact: true }).click()
   await expect(page.getByRole('heading', { name: '小红书发布包', exact: true })).toBeVisible()
-  const zip = await page.request.get(`/api/v1/works/${id}/xhs/pack.zip`)
-  expect(zip.ok()).toBeTruthy()
-  expect((await zip.body()).includes(Buffer.from('文案.txt'))).toBeTruthy()
   work = await api(page, 'GET', `/works/${id}`)
+  const zip = await page.request.get(`/api/v1/works/${id}/xhs/pack.zip?basis_revision=${work.revision}`)
+  expect(zip.ok()).toBeTruthy()
+  expect(zip.headers()['x-ops-basis-revision']).toBe(String(work.revision))
+  expect((await zip.body()).includes(Buffer.from('文案.txt'))).toBeTruthy()
   expect(work.cards).toHaveLength(count)
 })
 
@@ -503,6 +528,10 @@ test('新类型跨平台派生目标置灰', async ({ page }) => {
   await api(page, 'POST', '/accounts', { platform: 'wechat_mp', name: '目标脚本号', content_format: 'script' })
   await page.goto(`/a/${account.id}`)
   await page.getByRole('button', { name: '新建作品', exact: true }).click()
+  const createPanel = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '新建作品', exact: true }) })
+  await expect(createPanel).toBeVisible()
+  await createPanel.getByRole('button', { name: '开始创作', exact: true }).click()
+  await expect(page).toHaveURL(/\/works\/[a-f0-9-]+$/)
   await page.getByRole('button', { name: '派生', exact: true }).click()
   const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '派生到其他平台', exact: true }) })
   await expect(dialog.getByRole('button', { name: /目标脚本号/ })).toBeDisabled()

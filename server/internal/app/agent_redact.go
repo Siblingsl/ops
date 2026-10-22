@@ -105,7 +105,7 @@ func (s *Server) agentSecretValues(ctx context.Context, wsID uuid.UUID) []string
 		return nil
 	}
 	var out []string
-	rows, err := s.db.Query(ctx, `SELECT api_key_enc FROM model_provider WHERE workspace_id=$1`, wsID)
+	rows, err := s.db.Query(ctx, `SELECT api_key_enc FROM model_provider WHERE workspace_id=$1 AND execution_location='server' AND octet_length(api_key_enc)>0`, wsID)
 	if err == nil {
 		for rows.Next() {
 			var enc []byte

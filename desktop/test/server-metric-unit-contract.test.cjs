@@ -10,18 +10,17 @@ function readGo(name) {
   return fs.readFileSync(path.join(appDir, name), 'utf8');
 }
 
-// DEV-PS44 源码契约：聚合查询必须按 read_unit 分组（20 文档 §8.4）。
+// DEV-PS58 源码契约：日常统计消费单位安全投影，未知单位不写入正式读数。
 //
 // 为什么用源码契约而不是行为测试：这些聚合都在 `generateBriefForDay` / `dailyStats` /
 // `tagSuggest` 内部，需要构造完整上下文（AI 调用、推荐记录、议题关联），
-// 行为测试成本极高且不稳定。而缺陷本质就是"SQL 里少了单位判断"，
-// 直接断言 SQL 文本既可靠又低成本。
+// 行为测试成本极高且不稳定。brief 直接汇总节点时仍需按单位隔离；daily_stats
+// 和 smart 则读取 projectObservation 产出的公开节点，不重复过滤 unknown。
 //
-// 实测缺陷：`brief.go` 的 `sum(reads)`、`daily_stats.go` 的两处 `avg(reads)`、
-// `smart.go` 的 `avg(mx.reads)` 都不区分 read_unit，
-// 会把 `times`（次数）和 `users`（人数）直接相加/平均，得出没有含义的数字。
+// DEV-PS44 曾给 daily_stats 增加 unknown 过滤，导致旧记录的均值为空；DEV-PS58
+// 将单位保护收回投影层，且保留 brief 的多单位隔离。
 
-test('服务端聚合查询必须按 read_unit 分组（brief / daily_stats / smart）', () => {
+test('服务端统计保留 brief 单位隔离并在其他聚合中消费单位安全投影', () => {
   const brief = readGo('brief.go');
   // 求和必须排除 unknown 单位。
   assert.match(brief, /coalesce\(d\.read_unit,'unknown'\) <> 'unknown'/,
@@ -31,17 +30,22 @@ test('服务端聚合查询必须按 read_unit 分组（brief / daily_stats / sm
     'brief 在已知单位混在一起时必须返回 NULL');
 
   const daily = readGo('daily_stats.go');
-  const guarded = daily.match(/count\(DISTINCT unit\) FILTER \(WHERE reads IS NOT NULL AND unit <> 'unknown'\) > 1/g) ?? [];
-  assert.ok(guarded.length >= 2,
-    `daily_stats 的两处 avg 都要按单位分组，实际找到 ${guarded.length} 处`);
-  const filtered = daily.match(/avg\(reads\) FILTER \(WHERE unit <> 'unknown'\)/g) ?? [];
-  assert.ok(filtered.length >= 2,
-    `daily_stats 的两处 avg 都要排除 unknown，实际找到 ${filtered.length} 处`);
+  assert.match(daily, /metric_node_d7_public\(w\.id\)/,
+    'daily_stats 必须使用已投影并按节点选出的公开指标');
+  assert.equal(/FROM\s+metric_snapshot/i.test(daily), false,
+    'daily_stats 不应绕过公开指标投影直接读取原始快照');
 
   const smart = readGo('smart.go');
-  assert.match(smart, /count\(DISTINCT unit\) FILTER \(WHERE reads IS NOT NULL AND unit <> 'unknown'\) > 1/,
-    'smart 的话题均值必须按单位分组');
-  // 不允许再出现不区分单位的 avg。
-  assert.equal(/avg\(mx\.reads\)/.test(smart), false,
-    '不应存在不区分单位的 avg(mx.reads)');
+  assert.match(smart, /metric_node_d7_public\(w\.id\)/,
+    'smart 必须使用已投影并按节点选出的公开指标');
+  assert.equal(/FROM\s+metric_snapshot/i.test(smart), false,
+    'smart 不应绕过公开指标投影直接读取原始快照');
+
+  const projection = readGo('metric_projection.go');
+  assert.match(projection, /ReadUnit:\s+metricUnitUnknown/,
+    '正式读数的单位默认必须未知');
+  assert.match(projection, /if probe\.Unit == metricUnitUnknown/,
+    '观测单位未知时不得投影正式读数');
+  assert.match(projection, /proj\.ReadUnit = rule\.Unit/,
+    '投影后的正式读数必须保留其已确认单位');
 });

@@ -6,9 +6,22 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"strings"
+
+	_ "golang.org/x/image/webp"
+)
+
+const (
+	maxGeneratedImageBytes    = 12 << 20
+	maxGeneratedImageResponse = 18 << 20
+	maxGeneratedImagePixels   = 16_000_000
 )
 
 type ImageRequest struct {
@@ -18,6 +31,8 @@ type ImageRequest struct {
 	Prompt  string
 	Size    string // e.g. 1024x1024
 	N       int
+	// FetchURL overrides the URL-download path for constrained transports such as desktop AI.
+	FetchURL func(context.Context, string) (ImageResult, error)
 }
 
 type ImageResult struct {
@@ -53,7 +68,13 @@ func GenerateImage(ctx context.Context, hc *http.Client, req ImageRequest) (Imag
 		return ImageResult{}, fmt.Errorf("无法连接文生图服务：%w", err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 12<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxGeneratedImageResponse+1))
+	if err != nil {
+		return ImageResult{}, fmt.Errorf("读取文生图响应失败：%w", err)
+	}
+	if len(raw) > maxGeneratedImageResponse {
+		return ImageResult{}, fmt.Errorf("文生图响应超过大小限制")
+	}
 	if resp.StatusCode != 200 {
 		return ImageResult{}, &UpstreamError{Status: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
 	}
@@ -70,8 +91,14 @@ func GenerateImage(ctx context.Context, hc *http.Client, req ImageRequest) (Imag
 		return ImageResult{}, fmt.Errorf("文生图未返回图片")
 	}
 	if out.Data[0].B64JSON != "" {
+		if len(out.Data[0].B64JSON) > base64.StdEncoding.EncodedLen(maxGeneratedImageBytes)+4 {
+			return ImageResult{}, fmt.Errorf("文生图图片超过大小限制")
+		}
 		bin, err := base64.StdEncoding.DecodeString(out.Data[0].B64JSON)
 		if err != nil {
+			return ImageResult{}, err
+		}
+		if err := validateGeneratedImage(bin); err != nil {
 			return ImageResult{}, err
 		}
 		mime := http.DetectContentType(bin)
@@ -80,18 +107,52 @@ func GenerateImage(ctx context.Context, hc *http.Client, req ImageRequest) (Imag
 	if out.Data[0].URL == "" {
 		return ImageResult{}, fmt.Errorf("文生图未返回图片数据")
 	}
+	if req.FetchURL != nil {
+		return req.FetchURL(ctx, out.Data[0].URL)
+	}
+	parsedURL, err := neturl.ParseRequestURI(out.Data[0].URL)
+	if err != nil || (parsedURL.Scheme != "https" && parsedURL.Scheme != "http") || parsedURL.Host == "" || parsedURL.User != nil {
+		return ImageResult{}, fmt.Errorf("文生图返回了无效图片地址")
+	}
 	ireq, err := http.NewRequestWithContext(ctx, http.MethodGet, out.Data[0].URL, nil)
 	if err != nil {
 		return ImageResult{}, err
 	}
-	iresp, err := hc.Do(ireq)
+	imageClient := *hc
+	imageClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	iresp, err := imageClient.Do(ireq)
 	if err != nil {
 		return ImageResult{}, err
 	}
 	defer iresp.Body.Close()
-	bin, err := io.ReadAll(io.LimitReader(iresp.Body, 12<<20))
+	if iresp.StatusCode != http.StatusOK {
+		return ImageResult{}, fmt.Errorf("图片下载返回 HTTP %d", iresp.StatusCode)
+	}
+	bin, err := io.ReadAll(io.LimitReader(iresp.Body, maxGeneratedImageBytes+1))
 	if err != nil {
 		return ImageResult{}, err
 	}
-	return ImageResult{Bytes: bin, MIME: http.DetectContentType(bin)}, nil
+	if err := validateGeneratedImage(bin); err != nil {
+		return ImageResult{}, err
+	}
+	mime := http.DetectContentType(bin)
+	declaredMIME := strings.ToLower(strings.TrimSpace(strings.SplitN(iresp.Header.Get("Content-Type"), ";", 2)[0]))
+	if declaredMIME != "" && declaredMIME != "application/octet-stream" && !strings.HasPrefix(declaredMIME, "image/") {
+		return ImageResult{}, fmt.Errorf("图片下载返回了非图片类型")
+	}
+	if !strings.HasPrefix(mime, "image/") {
+		return ImageResult{}, fmt.Errorf("下载内容不是有效图片")
+	}
+	return ImageResult{Bytes: bin, MIME: mime}, nil
+}
+
+func validateGeneratedImage(raw []byte) error {
+	if len(raw) == 0 || len(raw) > maxGeneratedImageBytes {
+		return fmt.Errorf("文生图图片超过大小限制或为空")
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil || config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > maxGeneratedImagePixels {
+		return fmt.Errorf("文生图图片格式或尺寸不符合限制")
+	}
+	return nil
 }

@@ -426,10 +426,17 @@ type embedRoute struct {
 }
 
 func (s *Server) embeddingRoute(ctx context.Context) (*embedRoute, bool) {
+	if request, ok := desktopRequestOf(ctx); ok {
+		route, err := s.resolveDesktopRouteTier(ctx, "embedding", "", request)
+		if err != nil || route.Desktop != nil {
+			return nil, false
+		}
+		return &embedRoute{baseURL: route.BaseURL, apiKey: route.APIKey, model: route.Model}, true
+	}
 	var rt embedRoute
 	var enc []byte
 	err := s.db.QueryRow(ctx, `SELECT p.base_url, p.api_key_enc, r.model FROM model_route r JOIN model_provider p ON p.id=r.provider_id
-		WHERE r.workspace_id=$1 AND r.task_type='embedding' AND p.status='active'`, ident(ctx).WorkspaceID).Scan(&rt.baseURL, &enc, &rt.model)
+		WHERE r.workspace_id=$1 AND r.task_type='embedding' AND p.execution_location='server' AND p.status='active'`, ident(ctx).WorkspaceID).Scan(&rt.baseURL, &enc, &rt.model)
 	if err != nil {
 		return nil, false
 	}
@@ -515,7 +522,7 @@ func (s *Server) markEmbeddingStale(ctx context.Context, objectType string, id u
 // reindexEmbeddings precomputes material vectors for workspaces that configured an embedding route.
 func (s *Server) reindexEmbeddings(ctx context.Context) {
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT r.workspace_id FROM model_route r JOIN model_provider p ON p.id=r.provider_id
-		WHERE r.task_type='embedding' AND p.status='active'`)
+		WHERE r.task_type='embedding' AND p.execution_location='server' AND p.status='active'`)
 	if err != nil {
 		return
 	}

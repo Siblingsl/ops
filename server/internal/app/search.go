@@ -13,18 +13,20 @@ import (
 // 全局搜索（第 4.2 节）与收藏（EX-M-04）。只返回当前工作区的数据，viewer 也可用。
 
 type SearchHit struct {
-	Type        string     `json:"type"`
-	ID          uuid.UUID  `json:"id"`
-	Title       string     `json:"title"`
-	Snippet     string     `json:"snippet"`
-	AccountID   *uuid.UUID `json:"account_id"`
-	AccountName string     `json:"account_name"`
-	Status      string     `json:"status,omitempty"`
-	Link        string     `json:"link"`
-	Score       float64    `json:"score"`
-	Matched     []string   `json:"matched"`
-	Starred     bool       `json:"starred"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	Type          string     `json:"type"`
+	ID            uuid.UUID  `json:"id"`
+	Title         string     `json:"title"`
+	Snippet       string     `json:"snippet"`
+	AccountID     *uuid.UUID `json:"account_id"`
+	AccountName   string     `json:"account_name"`
+	Platform      string     `json:"platform,omitempty"`
+	ContentFormat string     `json:"content_format,omitempty"`
+	Status        string     `json:"status,omitempty"`
+	Link          string     `json:"link"`
+	Score         float64    `json:"score"`
+	Matched       []string   `json:"matched"`
+	Starred       bool       `json:"starred"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 // searchPatterns turns a query into ILIKE patterns: the whole query plus its most selective bigrams.
@@ -79,7 +81,7 @@ func snippetAround(text string, matched []string, q string) string {
 func (s *Server) globalSearch(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	qv := r.URL.Query()
-	q := strings.TrimSpace(qv.Get("q"))
+	q := queryText(r, "q")
 	if q == "" {
 		return ok(w, map[string]any{"items": []SearchHit{}})
 	}
@@ -124,7 +126,7 @@ func (s *Server) globalSearch(w http.ResponseWriter, r *http.Request) error {
 	}
 	if types["work"] {
 		rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.status, a.id, a.name, w.updated_at,
-			coalesce((SELECT string_agg(s.heading || ' ' || s.content_md, ' ' ORDER BY s.position) FROM work_section s WHERE s.work_id=w.id AND s.deleted_at IS NULL), '') || ' ' || array_to_string(w.tags, ' ')
+			coalesce((SELECT string_agg(s.heading || ' ' || s.content_md, ' ' ORDER BY s.position) FROM work_section s WHERE s.work_id=w.id AND s.deleted_at IS NULL), '') || ' ' || array_to_string(w.tags, ' '), a.platform,w.content_format
 			FROM work w JOIN platform_account a ON a.id=w.account_id
 			WHERE a.workspace_id=$1 AND w.deleted_at IS NULL AND ($3::uuid IS NULL OR a.id=$3)
 			AND (w.title ILIKE ANY($2) OR w.viewpoint ILIKE ANY($2) OR array_to_string(w.tags, ' ') ILIKE ANY($2) OR EXISTS (SELECT 1 FROM work_section s WHERE s.work_id=w.id AND s.deleted_at IS NULL AND s.content_md ILIKE ANY($2)))
@@ -136,7 +138,7 @@ func (s *Server) globalSearch(w http.ResponseWriter, r *http.Request) error {
 			var h SearchHit
 			var aid uuid.UUID
 			var body string
-			if err := rows.Scan(&h.ID, &h.Title, &h.Status, &aid, &h.AccountName, &h.UpdatedAt, &body); err == nil {
+			if err := rows.Scan(&h.ID, &h.Title, &h.Status, &aid, &h.AccountName, &h.UpdatedAt, &body, &h.Platform, &h.ContentFormat); err == nil {
 				h.Type, h.AccountID, h.Link = "work", &aid, "/works/"+h.ID.String()
 				h.Title = nz(h.Title, "未命名作品")
 				add(h, body)
@@ -145,7 +147,7 @@ func (s *Server) globalSearch(w http.ResponseWriter, r *http.Request) error {
 		rows.Close()
 	}
 	if types["topic"] {
-		rows, err := s.db.Query(ctx, `SELECT t.id, t.title, t.status, a.id, a.name, t.updated_at, t.angle || ' ' || t.hook || ' ' || t.audience
+		rows, err := s.db.Query(ctx, `SELECT t.id, t.title, t.status, a.id, a.name, t.updated_at, t.angle || ' ' || t.hook || ' ' || t.audience,a.platform,t.format
 			FROM topic t JOIN platform_account a ON a.id=t.account_id
 			WHERE a.workspace_id=$1 AND t.deleted_at IS NULL AND ($3::uuid IS NULL OR a.id=$3)
 			AND (t.title ILIKE ANY($2) OR t.angle ILIKE ANY($2) OR t.hook ILIKE ANY($2)) ORDER BY t.updated_at DESC LIMIT 300`, ws, pats, accountID)
@@ -156,7 +158,7 @@ func (s *Server) globalSearch(w http.ResponseWriter, r *http.Request) error {
 			var h SearchHit
 			var aid uuid.UUID
 			var body string
-			if err := rows.Scan(&h.ID, &h.Title, &h.Status, &aid, &h.AccountName, &h.UpdatedAt, &body); err == nil {
+			if err := rows.Scan(&h.ID, &h.Title, &h.Status, &aid, &h.AccountName, &h.UpdatedAt, &body, &h.Platform, &h.ContentFormat); err == nil {
 				h.Type, h.AccountID, h.Link = "topic", &aid, "/a/"+aid.String()+"/topics?focus="+h.ID.String()
 				add(h, body)
 			}

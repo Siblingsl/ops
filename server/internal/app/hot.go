@@ -57,7 +57,7 @@ func (s *Server) listHotItems(w http.ResponseWriter, r *http.Request) error {
 		}
 		since = d
 	}
-	rows, err := s.db.Query(ctx, `SELECT `+hotCols+` FROM hot_item h JOIN crawl_source src ON src.key=h.source_key WHERE (src.workspace_id IS NULL OR src.workspace_id=$1) AND h.last_seen_at>=$2 AND ($3='' OR h.source_key=$3) AND ($4='' OR h.title ILIKE '%'||$4||'%') ORDER BY h.last_seen_at DESC,h.rank LIMIT 100`, ident(ctx).WorkspaceID, since, r.URL.Query().Get("source"), truncateRunes(r.URL.Query().Get("q"), 100))
+	rows, err := s.db.Query(ctx, `SELECT `+hotCols+` FROM hot_item h JOIN crawl_source src ON src.key=h.source_key WHERE (src.workspace_id IS NULL OR src.workspace_id=$1) AND h.last_seen_at>=$2 AND ($3='' OR h.source_key=$3) AND ($4='' OR h.title ILIKE '%'||$4||'%') ORDER BY h.last_seen_at DESC,h.rank LIMIT 100`, ident(ctx).WorkspaceID, since, r.URL.Query().Get("source"), truncateRunes(queryText(r, "q"), 100))
 	if err != nil {
 		return err
 	}

@@ -526,7 +526,8 @@ func (s *Server) exportData(w http.ResponseWriter, r *http.Request) error {
 		}
 		return nil
 	default: // works
-		q := `SELECT a.name, w.title, w.status, w.content_format, w.viewpoint, w.published_url, w.updated_at FROM work w
+		q := `SELECT a.name, w.title, w.status, w.content_format, w.viewpoint, w.published_url, w.updated_at,
+			coalesce((SELECT jsonb_agg(to_jsonb(m) ORDER BY m.captured_at,m.id) FROM metric_snapshot m WHERE m.work_id=w.id),'[]'::jsonb), a.platform FROM work w
 			JOIN platform_account a ON a.id=w.account_id WHERE a.workspace_id=$1 AND w.deleted_at IS NULL`
 		args := []any{ws}
 		if in.AccountID != "" {
@@ -546,17 +547,18 @@ func (s *Server) exportData(w http.ResponseWriter, r *http.Request) error {
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="works.csv"`)
 		cw := csv.NewWriter(w)
-		_ = cw.Write([]string{"账号", "标题", "状态", "形态", "观点", "发布链接", "更新时间"})
+		_ = cw.Write([]string{"账号", "标题", "状态", "形态", "观点", "发布链接", "更新时间", "指标快照JSON", "平台"})
 		for rows.Next() {
-			var name, title, status, format, viewpoint string
+			var name, title, status, format, viewpoint, platform string
 			var url *string
 			var at time.Time
-			if err := rows.Scan(&name, &title, &status, &format, &viewpoint, &url, &at); err == nil {
+			var metrics []byte
+			if err := rows.Scan(&name, &title, &status, &format, &viewpoint, &url, &at, &metrics, &platform); err == nil {
 				u := ""
 				if url != nil {
 					u = *url
 				}
-				_ = cw.Write([]string{name, title, status, format, viewpoint, u, at.Format(time.RFC3339)})
+				_ = cw.Write([]string{name, title, status, format, viewpoint, u, at.Format(time.RFC3339), string(metrics), platformNames[platform]})
 			}
 		}
 		cw.Flush()

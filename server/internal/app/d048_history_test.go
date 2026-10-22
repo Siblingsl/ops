@@ -26,10 +26,12 @@ func TestD048HistoricalWorkSnapshot(t *testing.T) {
 	}
 	env.mustJSON(t, "POST", "/api/v1/works/"+wid+"/storyboard/generate", map[string]any{"panel_count": 2, "character_ids": []string{char.ID.String()}}, &gen)
 	env.mustJSON(t, "PUT", "/api/v1/works/"+wid+"/storyboard", map[string]any{"panels": gen.Panels, "confirm": true}, &wk)
-	env.mustJSON(t, "POST", "/api/v1/panels/"+wk.Panels[0].ID.String()+"/generate-image", nil, nil)
+	for _, panel := range wk.Panels {
+		env.mustJSON(t, "POST", "/api/v1/panels/"+panel.ID.String()+"/generate-image", nil, nil)
+	}
 	env.upload(t, wid, testPNG(300, 300))
 	var panelAssets int
-	if e := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM comic_panel WHERE work_id=$1 AND asset_id IS NOT NULL`, wk.ID).Scan(&panelAssets); e != nil || panelAssets != 1 {
+	if e := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM comic_panel WHERE work_id=$1 AND asset_id IS NOT NULL`, wk.ID).Scan(&panelAssets); e != nil || panelAssets != 2 {
 		t.Fatalf("panel image: %d %v", panelAssets, e)
 	}
 
@@ -43,6 +45,7 @@ func TestD048HistoricalWorkSnapshot(t *testing.T) {
 	env.mustJSON(t, "POST", "/api/v1/panels/"+wk.Panels[0].ID.String()+"/text", nil, nil)
 
 	// 打包只取分格图，不混入普通图片资产。
+	env.confirmChecks(t, wid)
 	if _, e := env.srv.db.Exec(context.Background(), `UPDATE work SET status='packed' WHERE id=$1`, wk.ID); e != nil {
 		t.Fatal(e)
 	}
@@ -56,8 +59,8 @@ func TestD048HistoricalWorkSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(zr.File) != 1 {
-		t.Fatalf("pack should contain only the panel image, got %d files", len(zr.File))
+	if len(zr.File) != 2 {
+		t.Fatalf("pack should contain only the two panel images, got %d files", len(zr.File))
 	}
 
 	// 切换后的账号只按锁定类型新建作品。

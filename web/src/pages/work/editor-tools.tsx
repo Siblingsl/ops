@@ -264,7 +264,7 @@ export function RevisionsDialog({ section, workId, onClose, onRestored }: { sect
 
 // ---------- 段落级素材绑定（EX-E-05） ----------
 
-export function SectionMaterials({ work, section, readOnly, onWork }: { work: Pick<Work, 'account_id'>; section: Section; readOnly: boolean; onWork: (w: Work) => void }) {
+export function SectionMaterials({ work, section, readOnly, onWork, triggerEvent }: { work: Pick<Work, 'account_id'>; section: Section; readOnly: boolean; onWork: (w: Work) => void; triggerEvent?: string }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const ids = section.material_ids ?? []
@@ -284,6 +284,12 @@ export function SectionMaterials({ work, section, readOnly, onWork }: { work: Pi
     document.addEventListener('mousedown', h)
     return () => document.removeEventListener('mousedown', h)
   }, [])
+  useEffect(() => {
+    if (!triggerEvent) return
+    const show = () => setOpen(true)
+    window.addEventListener(triggerEvent, show)
+    return () => window.removeEventListener(triggerEvent, show)
+  }, [triggerEvent])
   const setIds = async (next: string[]) => {
     try {
       onWork(await put<Work>(`/sections/${section.id}/materials`, { material_ids: next }))

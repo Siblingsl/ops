@@ -1,0 +1,35 @@
+{
+  "name": "ops-desktop",
+  "productName": "OPS Desktop",
+  "version": "0.1.0",
+  "description": "OPS 线上业务桌面壳",
+  "author": "OPS",
+  "private": true,
+  "main": ".build/main.js",
+  "packageManager": "pnpm@10.14.0",
+  "engines": {
+    "node": ">=22.12.0 <25",
+    "pnpm": "10.14.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "build": "tsc --project tsconfig.json",
+    "test": "pnpm build && node --test test/*.test.cjs",
+    "test:e2e": "pnpm build && node --test --test-concurrency=1 test/*.e2e.cjs",
+    "start": "pnpm build && node scripts/start.cjs",
+    "package": "pnpm build && electron-forge package --arch=x64",
+    "make": "pnpm build && electron-forge make --arch=x64"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "1.0.1",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "8.0.1",
+    "@electron-forge/maker-squirrel": "8.0.1",
+    "@types/node": "24.10.9",
+    "@types/ws": "8.18.1",
+    "electron": "44.8.0",
+    "typescript": "5.9.3"
+  }
+}

@@ -903,7 +903,7 @@ func (s *Server) checkReport(w http.ResponseWriter, r *http.Request) error {
 	_ = s.db.QueryRow(ctx, `SELECT coalesce(u.username,''), w.reviewed_at FROM work w LEFT JOIN app_user u ON u.id=w.reviewed_by WHERE w.id=$1`, m.ID).Scan(&reviewer, &reviewedAt)
 	return ok(w, map[string]any{
 		"work":  map[string]any{"id": m.ID, "title": m.Title, "account": m.Account.Name, "status": m.Status},
-		"run":   map[string]any{"id": runID, "revision": revision, "platform": platform, "at": at},
+		"run":   map[string]any{"id": runID, "revision": revision, "platform": platform, "content_format": m.ContentFormat, "at": at},
 		"items": items, "reviewer": reviewer, "reviewed_at": reviewedAt,
 		"generated_at": s.now(), "generated_by": ident(ctx).Username,
 		"summary": fmt.Sprintf("共 %d 项", len(items)),

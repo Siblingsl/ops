@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { buildFailedBatch, PlatformClient, PLATFORM_PROTOCOL_VERSION } = require('../.build/platform-client.js');
+const { buildFailedBatch, PlatformClient, PLATFORM_PROTOCOL_VERSION, PLATFORM_PROTOCOL_V2 } = require('../.build/platform-client.js');
 const { PLATFORM_REGISTER_PURPOSE, parsePlatformCollectionCapability } = require('../.build/platform-capability.js');
 
 const capability = parsePlatformCollectionCapability({
@@ -39,6 +39,41 @@ const run = {
   binding_snapshot: [],
   budget: { max_rows: 2, max_bytes: 2048, max_duration_seconds: 300 }
 };
+
+const v2Capability = parsePlatformCollectionCapability({
+  platform_collection: {
+    protocol_version: 1,
+    enabled: true,
+    platforms: ['wechat_mp', 'xhs'],
+    purpose: PLATFORM_REGISTER_PURPOSE,
+    operations: ['platform.run.claim', 'platform.run.heartbeat', 'platform.run.result', 'platform.run.receipt'],
+    limits: {
+      results_bytes: 2 << 20,
+      v2_account_batch_bytes: 512 << 10,
+      v2_catalog_batch_bytes: 512 << 10,
+      v2_content_batch_bytes: 2 << 20
+    },
+    protocol_versions: [1, 2],
+    v2: {
+      protocol_version: 2,
+      enabled: true,
+      operations: [],
+      task_kinds: ['account_sync', 'content'],
+      result_types: ['account_snapshot', 'work_catalog', 'work_content', 'metrics', 'control'],
+      account_sync_platforms: ['xhs'],
+      metrics_refresh_platforms: ['xhs'],
+      limits: {
+        account_batch_bytes: 512 << 10,
+        catalog_batch_bytes: 512 << 10,
+        content_batch_bytes: 2 << 20,
+        metrics_batch_bytes: 512 << 10,
+        content_run_bytes: 8 << 20
+      }
+    }
+  }
+}, 1);
+
+const v2Run = { ...run, task_kind: 'account_sync', wire_protocol_version: PLATFORM_PROTOCOL_V2, operation_stage: 'profile' };
 
 function observation(rowNo) {
   return {
@@ -169,4 +204,41 @@ test('服务端未启用时不允许构造客户端', () => {
     }
   }, 1);
   assert.throws(() => new PlatformClient(disabled, async () => ({})), /尚未启用/);
+});
+
+test('v2 claim 显式协商类型化结果与内置适配器版本', async () => {
+  const { sign, calls } = fakeSigner([
+    { run: v2Run },
+    { batch_seq: 0, receipt_id: 'v2-r0', accepted: 1, pending: 0, rejected: 0, duplicate: 0, run_status: 'running' }
+  ]);
+  const client = new PlatformClient(v2Capability, sign);
+  await client.claim();
+  assert.deepEqual(calls[0].body.protocol_versions, [PLATFORM_PROTOCOL_VERSION, PLATFORM_PROTOCOL_V2]);
+  assert.deepEqual(calls[0].body.result_types, v2Capability.v2.result_types);
+  assert.deepEqual(calls[0].body.adapter_versions, { xhs: 'xhs-1', wechat_mp: 'wechat-mp-1' });
+  await client.submitV2('account_snapshot', { identity_external_account_key: 'xhs_user_id:fixture-self' });
+  assert.equal(calls[1].body.result_type, 'account_snapshot');
+  assert.equal(calls[1].body.protocol_version, PLATFORM_PROTOCOL_V2);
+});
+
+test('v2 拒绝超过类型批次上限或未公布的结果类型，且不发送', async () => {
+  const { sign, calls } = fakeSigner([]);
+  const client = new PlatformClient(v2Capability, sign);
+  client.adopt(v2Run);
+  await assert.rejects(() => client.submitV2('account_snapshot', {
+    identity_external_account_key: 'xhs_user_id:fixture-self', pad: 'x'.repeat(520 << 10)
+  }), /超过本机协商上限/);
+  assert.equal(calls.length, 0);
+
+  const restricted = parsePlatformCollectionCapability({
+    platform_collection: {
+      protocol_version: 1, enabled: true, platforms: ['xhs'], purpose: PLATFORM_REGISTER_PURPOSE,
+      operations: ['platform.run.claim'], limits: { results_bytes: 2 << 20 }, protocol_versions: [1, 2],
+      v2: { protocol_version: 2, enabled: true, operations: [], task_kinds: ['account_sync'], result_types: ['control'], limits: {} }
+    }
+  }, 1);
+  const restrictedClient = new PlatformClient(restricted, sign);
+  restrictedClient.adopt(v2Run);
+  await assert.rejects(() => restrictedClient.submitV2('account_snapshot', {}), /未公布此 v2 结果类型/);
+  assert.equal(calls.length, 0);
 });

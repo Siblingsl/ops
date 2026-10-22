@@ -115,6 +115,17 @@ test('多页按 total_count 收口：收集够总量就停，不因本页非空�
   assert.equal(result.duplicates, 0);
 });
 
+test('混合有效和无效作品行时目录不能报告完整', async () => {
+  const result = await collectPublishedArticles({ fetchJSON: async () => page([
+    record([appmsg({ appmsgid: '2247480090', itemidx: 1 })]),
+    record([appmsg({ appmsgid: '2247480091', itemidx: undefined })])
+  ]) });
+  assert.equal(result.articles.length, 1, '保留同页成功解析的作品');
+  assert.equal(result.invalidRows, 1);
+  assert.equal(result.coverage.incomplete_reason, 'catalog_inconsistent');
+  assert.equal(result.enumerationComplete, false);
+});
+
 test('身份：多账号要求当前公众号证据，且必须同时有 bizuin 与原始 ID', () => {
   const payload = {
     biz_list: {

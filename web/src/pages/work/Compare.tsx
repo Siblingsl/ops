@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
 import { RefsNote } from '@/components/refs'
 import { type EditorHandle, PlainEditor, RichEditor } from '@/components/section-editor'
-import { Badge, Button, Card, cn, Field, Input, Notice, PageLoading, PlatformMark } from '@/components/ui'
+import { Badge, Button, Card, cn, Field, Input, Notice, PageLoading, platformFormatLabel, platformLabel, PlatformMark } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, get, patch, stream } from '@/lib/api'
 import { type AIRefs, parseTopics, runeLen } from '@/lib/format'
@@ -175,6 +175,9 @@ export default function Compare() {
   const srcById = new Map(srcWork?.sections.map((s) => [s.id, s]) ?? [])
   const activeSrc = new Set(work.sections.find((s) => s.id === active)?.source_section_ids ?? [])
   const xhs = work.platform === 'xhs'
+  const toutiao = work.platform === 'toutiao'
+  const internalName = toutiao && work.content_format === 'micro_post'
+  const titleLabel = internalName ? '内部名称' : toutiao ? '发布标题' : '标题'
   const bodyReady = work.sections.length > 0 && work.sections.every(section => section.content_md.trim() !== '')
   const total = runeLen(work.sections.map((s) => s.content_md).join(''))
   const saveField = async (body: Record<string, unknown>, base = work.revision) => {
@@ -197,12 +200,12 @@ export default function Compare() {
         <div className="flex items-center gap-2 text-[13px] text-mist-500">
           {srcWork && <PlatformMark platform={srcWork.platform} size="sm" />}
           <span className="font-medium text-mist-700">源作品（只读）</span>
-          {srcWork && <span className="truncate">{srcWork.account_name} ·《{srcWork.title || '未命名'}》</span>}
+          {srcWork && <span className="truncate">{srcWork.account_name} · {platformLabel[srcWork.platform]} · {platformFormatLabel(srcWork.platform, srcWork.content_format)} ·《{srcWork.title || '未命名'}》</span>}
         </div>
         <div className="flex items-center gap-2 text-[13px] text-mist-500">
           <PlatformMark platform={work.platform} size="sm" />
           <span className="font-medium text-mist-700">衍生作品（可编辑）</span>
-          <span>{work.account_name}</span>
+          <span className="truncate">{work.account_name} · {platformLabel[work.platform]} · {platformFormatLabel(work.platform, work.content_format)}</span>
           <Button size="sm" variant="primary" className="ml-auto" onClick={() => nav(bodyReady ? `/works/${work.id}/check` : xhs ? `/works/${work.id}#step-images` : `/works/${work.id}`)}>
             {bodyReady ? '去检查' : '继续编辑'}<ArrowRight className="size-3.5" />
           </Button>
@@ -210,9 +213,10 @@ export default function Compare() {
       </div>
       {!srcWork && <Notice tone="gamboge" className="mb-4">源作品已删除，只能查看和编辑衍生作品。</Notice>}
       <div className="mb-4 grid grid-cols-2 gap-6">
-        <Card className="bg-mist-50/60 p-4"><div className="text-xs text-mist-400">标题</div><div className="mt-1 font-display text-[16px] font-bold text-mist-800">{srcWork?.title}</div></Card>
+        <Card className="bg-mist-50/60 p-4"><div className="text-xs text-mist-400">源稿标题</div><div className="mt-1 font-display text-[16px] font-bold text-mist-800">{srcWork?.title}</div></Card>
         <Card className="p-4">
-          <Field label="标题" counter={{ value: runeLen(title), max: xhs ? 20 : 32 }}>
+          <Field label={titleLabel} counter={!toutiao ? { value: runeLen(title), max: xhs ? 20 : 32 } : undefined}
+            hint={internalName ? '仅供系统识别，不会写入微头条发布正文。' : toutiao ? '发布标题上限待实测（V-025）。' : undefined}>
             <Input value={title} disabled={work.locked} onChange={(e) => setTitle(e.target.value)} onBlur={() => title !== work.title && saveField({ title })} className="font-display font-semibold" />
           </Field>
         </Card>
@@ -241,7 +245,7 @@ export default function Compare() {
       </div>
       <div className="sticky bottom-0 z-10 mt-6 -mx-6 border-t border-mist-200 bg-white/95 px-6 py-3 backdrop-blur">
         <div className="flex flex-wrap items-center gap-4">
-          {xhs && (
+          {(xhs || toutiao) && (
             <div className="flex min-w-[320px] flex-1 items-center gap-2">
               <span className="shrink-0 text-[13px] text-mist-500">话题</span>
               <Input value={topics} disabled={work.locked} onChange={(e) => setTopics(e.target.value)} placeholder="#话题1 #话题2"
@@ -256,7 +260,7 @@ export default function Compare() {
               }} />
             </div>
           )}
-          <span className="text-[13px] text-mist-500">正文 <span className="font-semibold tabular-nums text-mist-800">{total}</span> 字{xhs && <span className="text-mist-400">（上限待核实 V-012，建议 1000 字以内）</span>}</span>
+          <span className="text-[13px] text-mist-500">正文 <span className="font-semibold tabular-nums text-mist-800">{total}</span> 字{toutiao ? <span className="text-mist-400">（平台上限待实测 V-025）</span> : xhs ? <span className="text-mist-400">（上限待核实 V-012，建议 1000 字以内）</span> : null}</span>
           <Badge tone={work.source_updated ? 'gamboge' : 'gray'} className="ml-auto">
             {(diff.data ?? []).some((d) => d.changed) ? `${(diff.data ?? []).filter((d) => d.changed).length} 段的源段已修改` : work.source_updated ? '源稿已更新' : '与源稿同步时间一致'}
           </Badge>

@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  Check, CheckCircle2, Circle, Copy, ImagePlus, Loader2, Sparkles, Upload, Users,
+  ArrowRight, Check, CheckCircle2, Circle, Copy, ImagePlus, Loader2, Sparkles, Upload, Users,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { confirm } from '@/components/dialog'
+import { confirm, Dialog } from '@/components/dialog'
 import { RefsNote } from '@/components/refs'
 import { aiError } from '@/lib/ai-error'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, Select, Textarea } from '@/components/ui'
@@ -14,7 +14,8 @@ import { type AIRefs, copyText, fmtTime, runeLen } from '@/lib/format'
 import type { Asset, CharacterCard, ComicBubble, ComicPanel, Work } from '@/lib/types'
 import { WorkConflictDialog } from './section-save-dialogs'
 import { useCanWrite } from '@/lib/session'
-import { useWork } from './WorkLayout'
+import { nextStepFor, useWork, WorkHeaderAction } from './WorkLayout'
+import { useViewpointField } from './use-viewpoint-field'
 
 const DIALOGUE_MAX = 30
 const PANEL_COUNTS = [4, 6, 9]
@@ -35,7 +36,6 @@ export default function ComicEditor() {
     queryFn: () => get<CharacterCard[]>(`/accounts/${work.account_id}/characters`),
   })
 
-  const [viewpoint, setViewpoint] = useState(work.viewpoint)
   const [title, setTitle] = useState(work.title)
   const [panelCount, setPanelCount] = useState(work.panels.length || 6)
   const [selectedChars, setSelectedChars] = useState<string[]>(() => {
@@ -48,21 +48,16 @@ export default function ComicEditor() {
   const [refs, setRefs] = useState<AIRefs | null>(null)
   const [panelBusy, setPanelBusy] = useState<string | null>(null)
 
-  useEffect(() => setViewpoint(work.viewpoint), [work.viewpoint])
   useEffect(() => setTitle(work.title), [work.title])
+  // NW-F2：与文章编辑器共用同一个观点字段实现，不再有第三份回写逻辑。
+  const viewpointField = useViewpointField(work, setWork)
+  const viewpoint = viewpointField.text
   useEffect(() => {
     setDraft(work.panels.map(toDraft))
     if (work.panels.length) setPanelCount(work.panels.length)
   }, [work.panels, work.revision])
 
-  const saveViewpoint = async () => {
-    if (viewpoint.trim() === work.viewpoint) return
-    try {
-      setWork(await patch<Work>(`/works/${work.id}`, { viewpoint }))
-    } catch (e) {
-      toast.error(errorMessage(e))
-    }
-  }
+  const saveViewpoint = viewpointField.save
   const [titleConflict, setTitleConflict] = useState<Work | null>(null)
   const saveTitle = async (base = work.revision) => {
     if (title.trim() === work.title) return
@@ -171,6 +166,22 @@ export default function ComicEditor() {
         if (keepMine) void saveTitle(titleConflict.revision)
         else { setWork(titleConflict); setTitleConflict(null) }
       }} />
+      {/* NW-F2：漫画编辑器的观点冲突与文章编辑器一致，由用户选版本。 */}
+      <Dialog open={!!viewpointField.conflict} onClose={() => void viewpointField.resolve(false)} title="核心观点已在其他地方修改过" desc="可能是另一个标签页、设备或同事。请选择保留哪个版本。" width="max-w-2xl"
+        footer={<><Button onClick={() => void viewpointField.resolve(false)}>使用另一处的版本</Button><Button variant="primary" onClick={() => void viewpointField.resolve(true)}>保留我现在的版本</Button></>}>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div><div className="mb-2 text-sm font-medium">另一处保存的</div><div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-mist-50 p-3 text-sm">{viewpointField.conflict?.server.viewpoint || '（空）'}</div></div>
+          <div><div className="mb-2 text-sm font-medium">我现在的</div><div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-ink-50/60 p-3 text-sm">{viewpointField.conflict?.mine || '（空）'}</div></div>
+        </div>
+      </Dialog>
+      {/* ED-03：漫画编辑器的提交入口原来只在左栏底部，页头（常驻区）也要有。 */}
+      {!readOnly && <WorkHeaderAction>
+        {(() => {
+          const next = nextStepFor(work.status, work.platform === 'wechat_mp')
+          if (!next) return null
+          return <Button size="sm" variant="primary" onClick={() => nav(next.to)}>{next.label}<ArrowRight className="size-4" /></Button>
+        })()}
+      </WorkHeaderAction>}
       <aside className="sticky top-24 hidden h-fit w-52 shrink-0 lg:block">
         <div className="mb-3 text-[11px] font-semibold tracking-wider text-mist-400">漫画步骤</div>
         <ol className="space-y-0.5">
@@ -214,7 +225,7 @@ export default function ComicEditor() {
             <h2 className="font-display text-[17px] font-bold text-mist-900">核心观点</h2>
             <Badge tone="gamboge">H-02 必须由你来写</Badge>
           </div>
-          <Textarea rows={3} value={viewpoint} disabled={readOnly} onChange={(e) => setViewpoint(e.target.value)} onBlur={saveViewpoint}
+          <Textarea rows={3} value={viewpoint} disabled={readOnly} onChange={(e) => viewpointField.change(e.target.value)} onBlur={saveViewpoint}
             placeholder="用一两句话写下这组漫画要表达的观点。AI 会围绕它生成分镜，不会替你决定立场。"
             className="font-display text-[16px] leading-relaxed" />
         </Card>

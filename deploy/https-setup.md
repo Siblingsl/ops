@@ -41,7 +41,7 @@ sudo certbot certificates
 
 ## 3. 启用 HTTPS 与短期 HSTS
 
-将仓库中的 HTTPS 模板安装为实际站点配置。模板将 HTTP 普通请求 301 到固定 HTTPS 域名，仅 ACME challenge 留在 HTTP；HTTPS 反代保留 SSE 透传设置，并先发送 `Strict-Transport-Security: max-age=300`。
+将仓库中的 HTTPS 模板安装为实际站点配置。模板将 HTTP 普通请求 301 到固定 HTTPS 域名，仅 ACME challenge 留在 HTTP；HTTPS 反代保留 SSE 透传设置，并为 `/api/v1/desktop/channel` 配置精确匹配的 WebSocket Upgrade 路由，再发送 `Strict-Transport-Security: max-age=300`。
 
 ```bash
 sudo cp -a nginx-ops-https.conf /etc/nginx/conf.d/ops.conf
@@ -63,7 +63,7 @@ curl -fsS https://ops.88813888.xyz/healthz
 sudo certbot renew --dry-run
 ```
 
-HTTP 应返回指向 HTTPS 的 301；健康检查应返回 `ok`。在浏览器登录响应的 `Set-Cookie` 中确认会话 Cookie 含 `Secure`、`HttpOnly`、`SameSite=Lax`，并确认 HTTPS 页面、登录和作品图片正常。等待短期 HSTS 验证后再做 SSL Labs 检查。
+HTTP 应返回指向 HTTPS 的 301；健康检查应返回 `ok`。以已认证桌面客户端完成 WSS 通道握手与一轮心跳/断开重连，不能只用健康检查替代 WebSocket 验收。在浏览器登录响应的 `Set-Cookie` 中确认会话 Cookie 含 `Secure`、`HttpOnly`、`SameSite=Lax`，并确认 HTTPS 页面、登录和作品图片正常。等待短期 HSTS 验证后再做 SSL Labs 检查。
 
 ## 4. 拉长 HSTS
 

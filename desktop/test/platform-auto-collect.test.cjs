@@ -5,6 +5,7 @@ const test = require('node:test');
 
 const srcDir = path.join(__dirname, '..', 'src');
 const mainSrc = fs.readFileSync(path.join(srcDir, 'main.ts'), 'utf8');
+const loginRuntimeSrc = fs.readFileSync(path.join(srcDir, 'platform-login-runtime.ts'), 'utf8');
 const clientSrc = fs.readFileSync(path.join(srcDir, 'desktop-client.ts'), 'utf8');
 const platformClientSrc = fs.readFileSync(path.join(srcDir, 'platform-client.ts'), 'utf8');
 
@@ -41,14 +42,12 @@ test('接管已领任务时必须以另一个 client 实例 adopt，否则提交
   assert.match(mainSrc, /client\.adopt\(run\)/);
 });
 
-test('采集必须用连接命名空间的 profile，不能用账号 slot', () => {
-  // 账号 slot 只存归属元数据，里面**没有**平台登录态；
-  // 用它当 profileDir 会让浏览器跳 /login?redirectReason=401。
-  assert.match(mainSrc, /profileDir = connectionProfileDir\(/);
-  assert.match(mainSrc, /connectionNamespaceId/);
-  // 反向断言：不能再把 stored.profileDir 当作采集目录。
-  assert.equal(/const profileDir = stored\.profileDir/.test(mainSrc), false,
-    '采集目录不能取自账号 slot（stored.profileDir）');
+test('登录与采集必须共用账号 slot profile，避免读到其他连接的旧会话', () => {
+  // 登录和采集都按 OPS 账号、平台与平台账号 ID 解析同一个专用 profile。
+  assert.match(loginRuntimeSrc, /readAccountProfile\(userData, scope\)/);
+  assert.match(loginRuntimeSrc, /launchPlatformBrowser\(\{ executablePath: browserCandidate\.executablePath, profileDir: stored\.profileDir \}\)/);
+  assert.match(mainSrc, /readAccountProfile\(app\.getPath\('userData'\), \{ \.\.\.auth, origin: businessOrigin, accountId: run\.account_id, platform \}\)/);
+  assert.match(mainSrc, /const profileDir = stored\.profileDir/);
 });
 
 test('登录成功后两个平台都要写账号 slot 的归属 meta', () => {

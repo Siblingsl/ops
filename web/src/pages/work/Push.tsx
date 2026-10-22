@@ -210,6 +210,13 @@ export default function Push() {
                 </>
               )}
               <p className="mt-4 text-xs text-mist-400">系统只写入草稿，不会自动发表或群发。</p>
+              {/* PB-01：写入成功只是"去后台发表"，发表后要能一键回到回填。 */}
+              {work.status !== 'published' && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-mist-50 px-3 py-2.5">
+                  <span className="text-[12.5px] text-mist-600">在后台发表完成后：</span>
+                  <Button size="sm" variant="primary" onClick={() => nav(`/a/${work.account_id}/review?work=${work.id}`)}>我已发布，去回填</Button>
+                </div>
+              )}
             </div>
           </Card>
         ) : (

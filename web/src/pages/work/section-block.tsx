@@ -1,5 +1,5 @@
 import {
-  ArrowDown, ArrowUp, BookmarkPlus, Check, History, ImagePlus, Loader2, MessageSquare, Minimize2, Quote, Repeat2, Sparkles, Square, Trash2, Wand2,
+  ArrowDown, ArrowUp, BookmarkPlus, Check, History, ImagePlus, Loader2, MessageSquare, Minimize2, Mic, Quote, Repeat2, Sparkles, Square, Trash2, Wand2,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -7,7 +7,7 @@ import { confirm, Dialog } from '@/components/dialog'
 import { RefsNote, sendFeedback } from '@/components/refs'
 import { type EditorHandle, PlainEditor, RichEditor } from '@/components/section-editor'
 import { Badge, Button, cn, IconButton, MoreMenu, Notice } from '@/components/ui'
-import { VoiceButton } from '@/components/voice'
+import { VoiceButton, voiceSupported } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, get, post, put, stream } from '@/lib/api'
 import { type AIRefs, copyText, runeLen } from '@/lib/format'
@@ -30,7 +30,7 @@ const toneChips = ['更口语', '更严谨', '少用比喻', '加过渡句'] as 
 /** How an accepted suggestion is written back: whole section, current selection, one exact sentence, or added at the start / end. */
 type ApplyMode = 'whole' | 'selection' | 'excerpt' | 'prepend' | 'append'
 
-interface Proposal { original: string; text: string; mode: ApplyMode; callId?: string | null }
+interface Proposal { original: string; text: string; mode: ApplyMode; callId?: string | null; range?: { from: number; to: number } | null }
 type Stage = 'context' | 'generating'
 interface VariantState {
   title: string
@@ -75,11 +75,13 @@ export interface SectionBlockProps {
   onLint?: (sectionId: string, n: number) => void
   /** id of a drafting job for this section that was started before the page loaded */
   resumeJob?: string
+  desktopPresentation?: boolean
+  active?: boolean
 }
 
 export const SectionBlock = memo(function SectionBlock({
   section, index, total, work, prefs, patchWork, setWork, refresh, readOnly, dim, othersHere, othersEditing, onEditing, onSave, onMove, onRemove, onUploadImage, onDrafted,
-  onActive, onLint, resumeJob,
+  onActive, onLint, resumeJob, desktopPresentation = false, active = false,
 }: SectionBlockProps) {
   const warnedConflict = useRef(false)
   const xhs = work.platform === 'xhs'
@@ -304,7 +306,8 @@ export const SectionBlock = memo(function SectionBlock({
       })
       setRefs(r.refs)
       setCallId(r.ai_call_id)
-      setProposal({ original, text: r.text.trim(), mode: applyMode, callId: r.ai_call_id })
+      // ED-13：记住生成时的选区位置；应用时用来发现"选区已经变了"。
+      setProposal({ original, text: r.text.trim(), mode: applyMode, callId: r.ai_call_id, range: applyMode === 'selection' ? editor.current?.selectionRange() ?? null : null })
     } catch (e) {
       aiError(e, modeName, () => edit(mode, opts))
     } finally {
@@ -335,26 +338,51 @@ export const SectionBlock = memo(function SectionBlock({
     }
   }
 
-  const applyText = (mode: ApplyMode, original: string, text: string): boolean => {
-    const cur = content.current
+  // ED-13/14/16：应用前必须能回答"原文现在在哪、是不是只有一处"。
+  const locateOriginal = (original: string) => {
+    const cur = section.content_md || content.current
+    if (!original) return { ok: false, reason: 'empty', hits: 0 }
+    const hits = cur.split(original).length - 1
+    if (hits === 0) return { ok: false, reason: 'gone', hits }
+    if (hits > 1) return { ok: false, reason: 'many', hits }
+    return { ok: true, reason: '', hits }
+  }
+  // ED-16：三种失败原因给三种提示，不再共用一句"已经改动过"。
+  const locateHint = (original: string) => {
+    const { reason } = locateOriginal(original)
+    if (reason === 'gone') return '原文已经不在这一段里了，请重新生成建议'
+    if (reason === 'many') return '原文在这段里出现多次，请手动选中要改的那一处再应用'
+    return '这句话已经改动过，请手动选中后改写'
+  }
+
+  const applyText = (mode: ApplyMode, original: string, text: string, range?: { from: number; to: number } | null): boolean => {
+    const cur = section.content_md || content.current
     switch (mode) {
       case 'whole':
-        if (cur !== original) { toast.info('原文已改动，请重新生成建议'); return false }
+        if (cur !== original) { toast.info(locateHint(original)); return false }
         editor.current?.setMarkdown(text)
         break
       case 'selection':
-        if (editor.current?.selectedText()) editor.current.replaceSelection(text)
-        else if (original && cur.includes(original)) editor.current?.setMarkdown(cur.replace(original, text))
-        else {
-          toast.info('选中的文字已经变了，请重新选中后再试')
-          return false
+        // ED-13：当前选区必须和生成建议时完全一致（文本 + 位置），否则会把建议写到别处。
+        const selected = editor.current?.selectedText()
+        const now = editor.current?.selectionRange() ?? null
+        if (selected) {
+          const moved = !range || !now || now.from !== range.from || now.to !== range.to || selected !== original
+          if (moved) {
+            toast.info('选区已经变了，请重新选中原文再应用', {
+              description: '建议是针对生成时选中的文字给的，现在选中的是别的内容。',
+            })
+            return false
+          }
+          editor.current?.replaceSelection(text)
+          break
         }
+        // ED-14：没有选区时按原文替换，要求唯一，否则会改到第一处。
+        if (locateOriginal(original).ok) editor.current?.setMarkdown(cur.replace(original, text))
+        else { toast.info(locateHint(original)); return false }
         break
       case 'excerpt':
-        if (!original || cur.split(original).length !== 2) {
-          toast.info('这句话已经改动过，请手动选中后改写')
-          return false
-        }
+        if (!locateOriginal(original).ok) { toast.info(locateHint(original)); return false }
         editor.current?.setMarkdown(cur.replace(original, text))
         break
       case 'prepend':
@@ -371,7 +399,7 @@ export const SectionBlock = memo(function SectionBlock({
     if (!proposal) return
     const before = content.current
     applied.current = { kind: 'rewrite', ai_call_id: proposal.callId }
-    if (applyText(proposal.mode, proposal.original, proposal.text)) {
+    if (applyText(proposal.mode, proposal.original, proposal.text, proposal.range)) {
       sendFeedback(proposal.callId, { outcome: 'accepted' })
       setProposal(null)
       undoToast('已替换', before, proposal.callId)
@@ -496,7 +524,7 @@ export const SectionBlock = memo(function SectionBlock({
         setProposal({ original: '', text: e.text, mode: 'append', callId: e.callId })
       } else {
         const sel = e.target === 'selection' ? editor.current?.selectedText() || '' : ''
-        setProposal({ original: sel || content.current, text: e.text, mode: sel ? 'selection' : 'whole', callId: e.callId })
+        setProposal({ original: sel || content.current, text: e.text, mode: sel ? 'selection' : 'whole', callId: e.callId, range: sel ? editor.current?.selectionRange() ?? null : null })
       }
     } else if (e.type === 'insert') {
       editor.current?.insertAtCursor(e.text)
@@ -536,9 +564,9 @@ export const SectionBlock = memo(function SectionBlock({
 
   return (
     <div id={`sec-${section.id}`} onFocus={reportActive} onMouseUp={reportActive} onKeyUp={reportActive}
-      className={cn('group/sec relative scroll-mt-24 rounded-xl border border-mist-200/80 bg-white shadow-card transition focus-within:border-ink-200 focus-within:shadow-pop', dim && 'focus-dim')}>
+      className={cn('group/sec relative scroll-mt-24 rounded-xl border border-mist-200/80 bg-white shadow-card transition focus-within:border-ink-200 focus-within:shadow-pop', dim && 'focus-dim', readOnly && 'read-only', desktopPresentation && active && 'desktop-active')}>
       <div className={cn('absolute bottom-3 left-0 top-3 w-[3px] rounded-r', origin === 'ai' ? 'bg-ink-300' : origin === 'mixed' ? 'bg-sky-300' : 'bg-mist-200')} />
-      <div className="flex items-center gap-2 border-b border-mist-100 px-4 py-2.5 sm:px-5">
+      <div className="desktop-section-heading flex items-center gap-2 border-b border-mist-100 px-4 py-2.5 sm:px-5">
         <span className="font-mono text-xs text-mist-400">{String(index + 1).padStart(2, '0')}</span>
         {xhs ? (
           <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-mist-600">{section.key_point || `第 ${index + 1} 段`}</span>
@@ -553,16 +581,19 @@ export const SectionBlock = memo(function SectionBlock({
         {othersEditing && othersEditing.length > 0 ? (
           <span className="shrink-0 rounded-full bg-danger/10 px-2 py-0.5 text-[11px] text-danger" title="仍可编辑，但同时修改可能产生冲突">{othersEditing.join('、')} 正在编辑</span>
         ) : othersHere && othersHere.length > 0 && <span className="shrink-0 rounded-full bg-gamboge-100 px-2 py-0.5 text-[11px] text-gamboge-800">{othersHere.join('、')} 正在看这段</span>}
-        <SectionMaterials work={work} section={section} readOnly={readOnly} onWork={setWork} />
-        <IconButton label="段落历史" onClick={async () => { if (await flush()) setRevOpen(true) }}><History className="size-3.5" /></IconButton>
-        <Badge tone={originMeta[origin].tone}>{originMeta[origin].label}</Badge>
-        {!readOnly && (
-          <div className="flex items-center opacity-0 transition group-hover/sec:opacity-100">
-            <IconButton label="上移" disabled={index === 0} onClick={() => onMove(section.id, -1)}><ArrowUp className="size-3.5" /></IconButton>
-            <IconButton label="下移" disabled={index === total - 1} onClick={() => onMove(section.id, 1)}><ArrowDown className="size-3.5" /></IconButton>
-            <IconButton label="删除段落" className="hover:text-danger" onClick={() => onRemove(section.id)}><Trash2 className="size-3.5" /></IconButton>
-          </div>
-        )}
+        <div className="desktop-section-header-tools flex items-center gap-2">
+          <SectionMaterials work={work} section={section} readOnly={readOnly} onWork={setWork}
+            triggerEvent={desktopPresentation ? `ops:section-materials:${section.id}` : undefined} />
+          <IconButton label="段落历史" onClick={async () => { if (await flush()) setRevOpen(true) }}><History className="size-3.5" /></IconButton>
+          <Badge tone={originMeta[origin].tone}>{originMeta[origin].label}</Badge>
+          {!readOnly && (
+            <div className="flex items-center opacity-0 transition group-hover/sec:opacity-100">
+              <IconButton label="上移" disabled={index === 0} onClick={() => onMove(section.id, -1)}><ArrowUp className="size-3.5" /></IconButton>
+              <IconButton label="下移" disabled={index === total - 1} onClick={() => onMove(section.id, 1)}><ArrowDown className="size-3.5" /></IconButton>
+              <IconButton label="删除段落" className="hover:text-danger" onClick={() => onRemove(section.id)}><Trash2 className="size-3.5" /></IconButton>
+            </div>
+          )}
+        </div>
       </div>
       {section.key_point && !xhs && <div className="px-4 pt-2.5 text-[12.5px] text-mist-400 sm:px-5">要点：{section.key_point}</div>}
       <div className="px-4 py-3 sm:px-5">
@@ -620,6 +651,17 @@ export const SectionBlock = memo(function SectionBlock({
         )}
         {proposal && (
           <div className="mt-3 animate-fade-in rounded-lg border border-ink-200 bg-ink-50/40 p-3">
+            {/* ED-15/16：把"原文在这段的第几处、前后是什么"显示出来，错位才可能被发现。 */}
+            {(() => {
+              const live = section.content_md || content.current
+              const hits = proposal.original ? live.split(proposal.original).length - 1 : 0
+              if (hits === 0) return <p className="mb-2 text-[12px] font-medium text-danger">原文已经不在这一段里，应用前会要求你重新生成。</p>
+              if (hits > 1) return <p className="mb-2 text-[12px] font-medium text-gamboge-700">原文在这段里出现 {hits} 处；没有选区时会改第一处，建议先手动选中要改的那一处。</p>
+              const at = live.indexOf(proposal.original)
+              const before = live.slice(Math.max(0, at - 20), at)
+              const after = live.slice(at + proposal.original.length, at + proposal.original.length + 20)
+              return <p className="mb-2 text-[12px] text-mist-500">…{before}<span className="font-medium text-mist-700">【此处】</span>{after}…</p>
+            })()}
             <div className="grid gap-3 text-[13.5px] leading-relaxed md:grid-cols-2">
               <div><div className="mb-1 text-xs font-medium text-mist-400">原文</div><p className="whitespace-pre-wrap text-mist-500 line-through decoration-mist-300">{proposal.original}</p></div>
               <div><div className="mb-1 text-xs font-medium text-ink-600">建议</div><p className="whitespace-pre-wrap text-mist-800">{proposal.text || '（删除以上原文）'}</p></div>
@@ -639,7 +681,7 @@ export const SectionBlock = memo(function SectionBlock({
               try { await variants.rerun!() } catch (e) { aiError(e, variants.title) } finally { setMoreBusy(false) }
             } : undefined} />
         )}
-        {!streaming && (refs || callId) && (
+        {!desktopPresentation && !streaming && (refs || callId) && (
           <div className="mt-2 rounded-lg border border-mist-100 bg-mist-50/80 px-2.5 py-1.5">
             <RefsNote refs={refs} callId={callId} onRetry={readOnly || !lastRun.current ? undefined : lastRun.current} />
           </div>
@@ -665,9 +707,9 @@ export const SectionBlock = memo(function SectionBlock({
         )}
       </div>
       {!readOnly && (
-        <div className="space-y-2 border-t border-mist-100 px-3 py-2">
+        <div className="desktop-section-footer space-y-2 border-t border-mist-100 px-3 py-2">
           {!busy && (
-            <div className="space-y-1.5">
+            <div className="desktop-section-instruction space-y-1.5">
               <div className="flex gap-1.5">
                 <input
                   value={instruction}
@@ -696,7 +738,7 @@ export const SectionBlock = memo(function SectionBlock({
               </div>}
             </div>
           )}
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="desktop-section-actions flex flex-wrap items-center gap-1">
             {canUndoAI && <Button size="sm" variant="ghost" disabled={busy} onClick={restoreBefore}>恢复改写前</Button>}
             {busy ? (
               <Button size="sm" variant="ghost" icon={<Square className="size-3.5" />} onClick={stop}>停止生成</Button>
@@ -707,21 +749,42 @@ export const SectionBlock = memo(function SectionBlock({
                     disabled={!work.outline_confirmed_at} title="Ctrl/⌘+Enter">起草本段</Button>
                 ) : (
                   <>
-                    <Button size="sm" variant="ghost" icon={<Repeat2 className="size-3.5" />} onClick={() => edit('rewrite')}>{selection ? '改写选中' : '改写'}</Button>
-                    <Button size="sm" variant="ghost" icon={<Wand2 className="size-3.5" />} onClick={() => edit('expand')}>扩写</Button>
-                    <Button size="sm" variant="ghost" icon={<Minimize2 className="size-3.5" />} onClick={() => edit('shorten')}>缩写</Button>
-                    <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={draft} ref={draftButton}
+                    <Button className="desktop-section-rewrite" size="sm" variant="ghost" icon={<Repeat2 className="size-3.5" />} onClick={() => edit('rewrite')}>{selection ? '改写选中' : '改写本段'}</Button>
+                    <Button className="desktop-section-expand" size="sm" variant="ghost" icon={<Wand2 className="size-3.5" />} onClick={() => edit('expand')}>扩写</Button>
+                    <Button className="desktop-section-shorten" size="sm" variant="ghost" icon={<Minimize2 className="size-3.5" />} onClick={() => edit('shorten')}>缩写</Button>
+                    <Button className="desktop-section-redraft" size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={draft} ref={draftButton}
                       disabled={!work.outline_confirmed_at} title="按大纲重写这一段（Ctrl/⌘+Enter）">重新起草</Button>
+                    {desktopPresentation && <>
+                      <Button size="sm" variant="ghost" onClick={() => { editor.current?.focus(); void requestGhost() }}>续写</Button>
+                      <Button size="sm" variant="ghost" onClick={() => void hooks(index === 0 ? 'opening' : index === total - 1 ? 'ending' : 'quote')}>查看候选</Button>
+                    </>}
                   </>
                 )}
-                <MoreMenu items={[
+                <MoreMenu className="desktop-section-more" items={[
                   ...(index === 0 ? [{ label: '开头候选', loading: hookBusy === 'opening', onClick: () => void hooks('opening') }] : []),
                   ...(index === total - 1 && total > 1 ? [{ label: '结尾候选', loading: hookBusy === 'ending', onClick: () => void hooks('ending') }] : []),
                   ...(xhs && selection ? [{ label: '提炼金句', icon: <Quote />, loading: hookBusy === 'quote', onClick: () => void hooks('quote') }] : []),
                   ...(!isEmpty ? [{ label: '配图建议', icon: <ImagePlus />, loading: imgBusy, onClick: () => void suggestImages() }] : []),
                   ...(!xhs ? [{ label: '插入图片', icon: <ImagePlus />, onClick: pickImage }] : []),
+                  ...(desktopPresentation ? [
+                    ...(!isEmpty ? [
+                      { label: '扩写本段', icon: <Wand2 />, onClick: () => void edit('expand') },
+                      { label: '缩写本段', icon: <Minimize2 />, onClick: () => void edit('shorten') },
+                      { label: '重新起草这一段', icon: <Sparkles />, onClick: () => void draft() },
+                    ] : []),
+                    { label: '本段素材', icon: <BookmarkPlus />, onClick: () => window.dispatchEvent(new Event(`ops:section-materials:${section.id}`)) },
+                    ...(!isEmpty ? [{ label: '整段存入素材库', icon: <BookmarkPlus />, onClick: () => setToMaterial(content.current) }] : []),
+                    { label: '段落历史', icon: <History />, onClick: async () => { if (await flush()) setRevOpen(true) } },
+                    { label: '上移段落', icon: <ArrowUp />, disabled: index === 0, onClick: () => onMove(section.id, -1) },
+                    { label: '下移段落', icon: <ArrowDown />, disabled: index === total - 1, onClick: () => onMove(section.id, 1) },
+                    { label: '删除段落', icon: <Trash2 />, onClick: () => onRemove(section.id) },
+                    ...(voiceSupported() ? [{ label: '语音输入', icon: <Mic />, onClick: () => window.dispatchEvent(new Event(`ops:section-voice:${section.id}`)) }] : []),
+                  ] : []),
                 ]} />
-                <VoiceButton onText={(t) => editor.current?.insertAtCursor(t)} />
+                <div className="desktop-section-voice">
+                  <VoiceButton onText={(t) => editor.current?.insertAtCursor(t)}
+                    triggerEvent={desktopPresentation ? `ops:section-voice:${section.id}` : undefined} />
+                </div>
               </>
             )}
             <div className="ml-auto flex items-center gap-2 pr-2 text-xs text-mist-400">
@@ -731,6 +794,11 @@ export const SectionBlock = memo(function SectionBlock({
               <span>{runeLen(content.current)} 字</span>
             </div>
           </div>
+        </div>
+      )}
+      {desktopPresentation && !streaming && (refs || callId) && (
+        <div className="desktop-section-reference">
+          <RefsNote refs={refs} callId={callId} onRetry={readOnly || !lastRun.current ? undefined : lastRun.current} />
         </div>
       )}
       <input ref={fileInput} type="file" accept="image/*" hidden onChange={async (e) => {
@@ -799,4 +867,12 @@ export const SectionBlock = memo(function SectionBlock({
       </Dialog>
     </div>
   )
-})
+// ED-16：正文被别处修改后必须重新渲染，否则建议卡拿旧正文判断"原文在哪"，然后静默覆盖别人刚写的内容。
+}, (previous, next) => previous.section.revision === next.section.revision && previous.section.content_md === next.section.content_md
+  && previous.index === next.index && previous.total === next.total && previous.work === next.work && previous.prefs === next.prefs
+  && previous.patchWork === next.patchWork && previous.setWork === next.setWork && previous.refresh === next.refresh
+  && previous.readOnly === next.readOnly && previous.dim === next.dim && previous.othersHere === next.othersHere
+  && previous.othersEditing === next.othersEditing && previous.onEditing === next.onEditing && previous.onSave === next.onSave
+  && previous.onMove === next.onMove && previous.onRemove === next.onRemove && previous.onUploadImage === next.onUploadImage
+  && previous.onDrafted === next.onDrafted && previous.onActive === next.onActive && previous.onLint === next.onLint
+  && previous.resumeJob === next.resumeJob && previous.desktopPresentation === next.desktopPresentation && previous.active === next.active)

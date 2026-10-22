@@ -94,7 +94,7 @@ func (f *platformRunFixture) workIDFor(t *testing.T, externalID string) uuid.UUI
 	}
 	var id uuid.UUID
 	if err := env.srv.db.QueryRow(context.Background(),
-		`SELECT id FROM work WHERE `+column+`=$1 AND deleted_at IS NULL`, externalID).Scan(&id); err != nil {
+		`SELECT id FROM work WHERE account_id=$1 AND `+column+`=$2 AND deleted_at IS NULL`, f.Account.ID, externalID).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id

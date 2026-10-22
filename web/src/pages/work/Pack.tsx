@@ -1,4 +1,4 @@
-import { Check, Copy, Download, LayoutTemplate, Package, Smartphone, Sparkles } from 'lucide-react'
+﻿import { Check, CheckCircle2, Copy, Download, LayoutTemplate, Package, Smartphone, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -99,6 +99,11 @@ export default function Pack() {
     setBusy(true)
     try {
       setWork(await post<Work>(`/works/${work.id}/xhs/pack`, { basis_revision: work.revision }))
+      // PB-02：发布包生成只是"去 App 发布"，发布后要能一键回到回填。
+      toast.success('发布包已生成，去小红书 App 发布', {
+        description: '发布完成后回来回填链接，这篇才会进入复盘。',
+        action: { label: '去回填', onClick: () => nav(`/a/${work.account_id}/review?work=${work.id}`) },
+      })
     } catch (e) {
       const conflict = e instanceof ApiError && e.code === 'version_conflict'
       const materialBasisStale = e instanceof ApiError && e.code === 'material_basis_stale'
@@ -196,6 +201,13 @@ export default function Pack() {
           <p className="text-[13px] text-mist-500">{work.account_name} · 内容修订 {work.revision} · 在手机上打开本页也可以直接复制</p>
         </div>
         <div className="flex flex-wrap gap-2 sm:ml-auto">
+          {/* PB-02：桌面端也要有一键回填（原来只有移动端底部按钮）。 */}
+          {work.status === 'packed' && (
+            <Button variant="primary" icon={<CheckCircle2 className="size-4" />}
+              onClick={() => document.getElementById('backfill')?.scrollIntoView({ behavior: 'smooth' })}>
+              我已发布，去回填
+            </Button>
+          )}
           <Button
             variant="secondary"
             icon={<Smartphone className="size-4" />}

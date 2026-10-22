@@ -65,13 +65,18 @@ func runWithEnv(m *testing.M) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	defer conn.Close(ctx)
+	// All app tests use one fixed database. Serialize separate go test processes
+	// before either process can drop and recreate it or run timing-sensitive tests.
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(20261019, 1)`); err != nil {
+		return 0, err
+	}
 	if _, err := conn.Exec(ctx, `DROP DATABASE IF EXISTS ops_test WITH (FORCE)`); err != nil {
 		return 0, err
 	}
 	if _, err := conn.Exec(ctx, `CREATE DATABASE ops_test`); err != nil {
 		return 0, err
 	}
-	conn.Close(ctx)
 	u, _ := url.Parse(admin)
 	u.Path = "/ops_test"
 	dbURL := u.String()

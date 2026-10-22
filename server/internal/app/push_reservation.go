@@ -43,6 +43,9 @@ func (s *Server) reserveWechatPush(ctx context.Context, m *workMeta, wk *Work, i
 	if in.Revision != revision {
 		return record, stateInvalid("内容在检查后又修改过，请重新检查")
 	}
+	if err := s.checkLatestMaterialBasis(ctx, tx, m.ID); err != nil {
+		return record, err
+	}
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM push_record WHERE account_id=$1 AND status='ok' AND created_at >= $2`, m.Account.ID, s.today()).Scan(&record.Count); err != nil {
 		return record, err
 	}

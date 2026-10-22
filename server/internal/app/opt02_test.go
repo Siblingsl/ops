@@ -164,7 +164,7 @@ func TestOPT02ConcurrentGenerationCreatesOneVersion(t *testing.T) {
 	}
 }
 
-func opt02DashboardLoad(t *testing.T, ctx context.Context, path string, perWorker int) time.Duration {
+func opt02DashboardLoad(t *testing.T, ctx context.Context, path string, perWorker int) []time.Duration {
 	t.Helper()
 	samples := make(chan time.Duration, 4*perWorker)
 	errors := make(chan string, 4*perWorker)
@@ -201,8 +201,12 @@ func opt02DashboardLoad(t *testing.T, ctx context.Context, path string, perWorke
 	if len(durations) != 4*perWorker {
 		t.Fatalf("dashboard samples=%d want=%d", len(durations), 4*perWorker)
 	}
-	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-	return durations[(len(durations)*95+99)/100-1]
+	return durations
+}
+
+func opt02DashboardP95(samples []time.Duration) time.Duration {
+	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+	return samples[(len(samples)*95+99)/100-1]
 }
 
 func TestOPT02SlowModelDoesNotHoldTransactionOrDelayDashboard(t *testing.T) {
@@ -210,7 +214,8 @@ func TestOPT02SlowModelDoesNotHoldTransactionOrDelayDashboard(t *testing.T) {
 	ctx, cancel := context.WithTimeout(v4Context(t, a), 70*time.Second)
 	defer cancel()
 	opt02DashboardLoad(t, ctx, path, 10)
-	baseline := opt02DashboardLoad(t, ctx, path, 200)
+	baselineSamples := append(opt02DashboardLoad(t, ctx, path, 200), opt02DashboardLoad(t, ctx, path, 200)...)
+	baseline := opt02DashboardP95(baselineSamples)
 	started := make(chan struct{}, 1)
 	opt02Model(t, func(w http.ResponseWriter, r *http.Request) {
 		opt02FirstDelta(w)
@@ -229,35 +234,60 @@ func TestOPT02SlowModelDoesNotHoldTransactionOrDelayDashboard(t *testing.T) {
 	waitStart := time.Now()
 	var peak atomic.Int32
 	var checks atomic.Int32
+	var peakIdleAgeMs atomic.Int64
+	var idleSnapshot atomic.Pointer[string]
 	stop := make(chan struct{})
 	monitorDone := make(chan struct{})
 	go func() {
 		defer close(monitorDone)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
 		for {
 			var count int32
-			if err := env.srv.db.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='idle in transaction'`).Scan(&count); err != nil {
+			var maxIdleAgeMs int64
+			var snapshot string
+			if err := env.srv.db.QueryRow(ctx, `SELECT count(*), coalesce(max(floor(extract(epoch FROM now()-xact_start)*1000)),0)::bigint,
+				coalesce(jsonb_agg(jsonb_build_object(
+				'pid',pid,'application_name',application_name,'state_change',state_change,
+				'xact_age_ms',floor(extract(epoch FROM now()-xact_start)*1000),
+				'wait_event_type',wait_event_type,'wait_event',wait_event,'query',left(query,200)
+			)),'[]'::jsonb)::text FROM pg_stat_activity
+				WHERE datname=current_database() AND state='idle in transaction'`).Scan(&count, &maxIdleAgeMs, &snapshot); err != nil {
 				peak.Store(-1)
 				return
 			}
 			checks.Add(1)
+			for old := peakIdleAgeMs.Load(); maxIdleAgeMs > old && !peakIdleAgeMs.CompareAndSwap(old, maxIdleAgeMs); old = peakIdleAgeMs.Load() {
+			}
+			if count > 0 && idleSnapshot.Load() == nil {
+				value := snapshot
+				idleSnapshot.CompareAndSwap(nil, &value)
+			}
 			for old := peak.Load(); count > old && !peak.CompareAndSwap(old, count); old = peak.Load() {
 			}
 			select {
 			case <-stop:
 				return
-			case <-time.After(time.Second):
+			case <-ticker.C:
 			}
 		}
 	}()
 	defer func() { close(stop); <-monitorDone }()
-	during := opt02DashboardLoad(t, ctx, path, 200)
+	duringSamples := append(opt02DashboardLoad(t, ctx, path, 200), opt02DashboardLoad(t, ctx, path, 200)...)
+	during := opt02DashboardP95(duringSamples)
 	if err := <-result; err != nil {
 		t.Fatal(err)
 	}
 	degradation := (float64(during)/float64(baseline) - 1) * 100
-	t.Logf("4 workers, 800 baseline/800 during requests, 25ms pacing: p95 baseline=%s during=%s degradation=%.2f%%; model wait=%s, idle peak=%d in %d samples", baseline, during, degradation, time.Since(waitStart), peak.Load(), checks.Load())
-	if peak.Load() != 0 || checks.Load() < 29 {
-		t.Errorf("idle in transaction peak=%d samples=%d", peak.Load(), checks.Load())
+	snapshot := "[]"
+	if value := idleSnapshot.Load(); value != nil {
+		snapshot = *value
+	}
+	t.Logf("4 workers, 1600 baseline/1600 during requests, 25ms pacing: p95 baseline=%s during=%s degradation=%.2f%%; model wait=%s, idle peak=%d, longest idle transaction=%dms in %d samples, idle snapshot=%s", baseline, during, degradation, time.Since(waitStart), peak.Load(), peakIdleAgeMs.Load(), checks.Load(), snapshot)
+	// Daily generation opens its short write transaction only after the model returns.
+	// Ignore sub-second gaps between its SQL statements; a transaction spanning the 30s model wait must exceed this bound.
+	if peak.Load() < 0 || peakIdleAgeMs.Load() >= 1000 || checks.Load() < 29 {
+		t.Errorf("idle in transaction peak=%d longest age=%dms samples=%d", peak.Load(), peakIdleAgeMs.Load(), checks.Load())
 	}
 	if degradation > 20 {
 		t.Errorf("dashboard p95 degradation %.2f%% exceeds 20%%", degradation)

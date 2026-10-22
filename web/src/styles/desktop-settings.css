@@ -1,0 +1,118 @@
+:root[data-presentation='ops-creative-desktop'] .desktop-global-header { z-index: 30; }
+
+:root[data-presentation='ops-creative-desktop'] .desktop-settings-overlay {
+  position: fixed;
+  /* 跟随窗口覆盖层高度：原生 titleBarOverlay 不随网页层变化，写死 38px 会在改过 overlay 高度后露缝。 */
+  inset: env(titlebar-area-height, 38px) 0 26px;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(35 26 53 / 25%);
+  backdrop-filter: blur(3px);
+}
+
+.desktop-settings-window {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  width: min(1120px, 100%);
+  height: min(800px, calc(100dvh - 96px));
+  overflow: hidden;
+  border: 1px solid var(--ops-border);
+  border-radius: 18px;
+  background: var(--ops-canvas);
+  color: var(--ops-text);
+  /* 负 spread 收住向上扩散：窗口上方是原生标题栏覆盖层，网页阴影压不到它，会露出色块。 */
+  box-shadow: 0 20px 44px -18px rgb(30 20 50 / 32%);
+}
+
+.desktop-settings-navigation { display: flex; min-height: 0; flex-direction: column; padding: 22px 12px 12px; background: var(--ops-subtle); }
+.desktop-settings-search { display: flex; align-items: center; gap: 7px; flex-shrink: 0; margin: 0 3px 12px; padding: 9px 10px; border: 1px solid var(--ops-border); border-radius: 9px; background: var(--ops-surface); color: var(--ops-muted); }
+.desktop-settings-search svg { width: 15px; height: 15px; flex-shrink: 0; }
+.desktop-settings-search input { width: 100%; min-width: 0; outline: none; background: transparent; color: var(--ops-text); font-size: 13px; }
+.desktop-settings-search:focus-within { outline: 2px solid var(--ops-accent); outline-offset: 1px; }
+.desktop-settings-navigation nav { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.desktop-settings-group { margin-bottom: 5px; }
+.desktop-settings-group-label { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; min-height: 38px; padding: 8px 10px; border-radius: 8px; text-align: left; color: var(--ops-text); font-size: 13px; font-weight: 600; cursor: pointer; }
+.desktop-settings-group-label:hover { background: var(--ops-surface); }
+.desktop-settings-group-label svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--ops-muted); }
+.desktop-settings-group-items { padding-left: 8px; }
+.desktop-settings-group-items button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 8px 10px; border-radius: 8px; text-align: left; font-size: 13px; cursor: pointer; }
+.desktop-settings-group-items button:hover { background: var(--ops-surface); }
+.desktop-settings-group-items button[aria-current='page'] { background: var(--ops-accent-soft); color: var(--ops-accent); font-weight: 600; }
+.desktop-settings-group-items button svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--ops-muted); }
+.desktop-settings-empty { padding: 16px 10px; color: var(--ops-muted); font-size: 13px; }
+.desktop-settings-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; container: desktop-settings / inline-size; }
+.desktop-settings-heading { display: flex; flex-shrink: 0; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 28px 18px; }
+.desktop-settings-heading span { color: var(--ops-muted); font-size: 12px; }
+.desktop-settings-heading h1 { margin-top: 5px; color: var(--ops-text); font-size: 23px; line-height: 1.4; font-weight: 650; }
+.desktop-settings-heading button { display: inline-flex; width: 32px; height: 32px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; color: var(--ops-muted); cursor: pointer; }
+.desktop-settings-heading button:hover { background: var(--ops-subtle); color: var(--ops-text); }
+.desktop-settings-heading button svg { width: 19px; height: 19px; }
+.desktop-settings-body { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 0 28px 24px; scrollbar-width: thin; }
+.desktop-settings-body > div { max-width: none; min-width: 0; }
+.desktop-settings-body .settings-embedded-page-header { margin-bottom: 18px; gap: 12px; }
+.desktop-settings-body .settings-embedded-page-header p { margin-top: 0; font-size: 13px; line-height: 1.6; }
+.desktop-settings-body .grid > * { min-width: 0; }
+.desktop-settings-body input, .desktop-settings-body select, .desktop-settings-body textarea { max-width: 100%; }
+.desktop-settings-body .grid { gap: 16px; }
+.desktop-current-account-settings { width: 100%; max-width: 960px; min-width: 0; margin-right: auto; }
+.desktop-current-account-settings > * { min-width: 0; }
+.desktop-current-account-summary > p { overflow-wrap: anywhere; }
+.desktop-basic-information-header { border-color: var(--ops-border); padding-inline: 20px; }
+.desktop-basic-information-grid { align-items: start; gap: 16px 24px; }
+.desktop-basic-information-grid > * { min-width: 0; }
+.desktop-basic-information-grid textarea { min-height: 68px; }
+.desktop-basic-information-footer { min-height: 54px; border-top: 1px solid var(--ops-border); }
+.desktop-platform-connection-header { border-color: var(--ops-border); padding-inline: 20px; }
+.desktop-platform-connection-notices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; border-color: var(--ops-border); padding: 11px 20px; background: transparent; line-height: 1.55; }
+.desktop-platform-connection-notices p { min-width: 0; }
+.desktop-platform-connection-progress { border-color: var(--ops-border); padding-block: 12px; background: transparent; }
+.desktop-platform-disconnected > p:first-child { border-left: 2px solid var(--ops-accent); border-radius: 0 8px 8px 0; padding: 10px 12px; background: var(--ops-subtle); }
+.desktop-platform-disconnected > p:not(:first-child) { font-size: 12.5px; }
+.desktop-platform-field { overflow-wrap: anywhere; }
+.desktop-platform-field > div:first-child { margin-bottom: 7px; }
+.desktop-platform-details { padding-top: 3px; }
+.desktop-platform-information-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; padding: 16px 20px 18px; }
+.desktop-platform-information-grid > * { min-width: 0; }
+.desktop-platform-collection { margin: 0 20px; border-top: 1px solid var(--ops-border); padding: 16px 0 18px; }
+.desktop-platform-collection-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.desktop-platform-collection-grid > * { min-width: 0; }
+.desktop-platform-schedule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; margin-top: 14px; }
+.desktop-platform-schedule-grid > * { min-width: 0; }
+.desktop-platform-schedule-single { grid-template-columns: minmax(0, 1fr); }
+.desktop-platform-observations { border-color: var(--ops-border); padding: 16px 20px; }
+.desktop-platform-observations > div:first-child { margin-bottom: 7px; color: var(--ops-text); }
+.desktop-account-actions summary { display: flex; align-items: center; gap: 4px; }
+.desktop-account-actions summary::after { content: '展开'; margin-left: auto; color: var(--ops-muted); font-size: 12px; font-weight: 400; }
+.desktop-account-actions details[open] > summary::after { content: '收起'; }
+.desktop-account-actions summary:focus-visible { outline: 2px solid var(--ops-accent); outline-offset: -2px; }
+.desktop-current-account-settings input, .desktop-current-account-settings textarea { min-width: 0; }
+.desktop-settings-footer { flex-shrink: 0; border-top: 1px solid var(--ops-border); padding: 10px 28px; color: var(--ops-muted); font-size: 11px; }
+
+@container desktop-settings (max-width: 760px) {
+  .desktop-settings-body .grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .desktop-settings-body .flex.items-center.justify-between { flex-wrap: wrap; }
+  .desktop-platform-connection-notices { grid-template-columns: minmax(0, 1fr); }
+  .desktop-platform-information-grid,
+  .desktop-platform-collection-grid,
+  .desktop-platform-schedule-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+}
+
+@container desktop-settings (max-width: 640px) {
+  .desktop-current-account-settings .grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .desktop-current-account-settings .desktop-current-account-summary { align-items: flex-start; }
+  .desktop-current-account-settings .desktop-account-actions summary span { display: none; }
+}
+
+@media (max-width: 800px) {
+  :root[data-presentation='ops-creative-desktop'] .desktop-settings-overlay { padding: 8px; }
+  .desktop-settings-window { grid-template-columns: 170px minmax(0, 1fr); height: calc(100dvh - 80px); border-radius: 12px; }
+  .desktop-settings-navigation { padding: 15px 8px 8px; }
+  .desktop-settings-group-label, .desktop-settings-group-items button { font-size: 12px; padding: 8px; }
+  .desktop-settings-heading { padding: 18px 16px 14px; }
+  .desktop-settings-heading h1 { font-size: 20px; }
+  .desktop-settings-body { padding: 0 16px 18px; }
+  .desktop-settings-footer { padding: 9px 16px; }
+}

@@ -2,13 +2,13 @@ import { Check, ScanText } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
-import { Badge, Button, cn, Input, Select } from '@/components/ui'
+import { Badge, Button, cn, Input, platformFormatLabel, Select } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { errorMessage, post, rawRequest } from '@/lib/api'
 import type { Metric, Platform } from '@/lib/types'
 import { useAIStatus } from '@/lib/v3'
 
-export type MetricKey = 'reads' | 'likes' | 'wows' | 'favorites' | 'comments' | 'shares' | 'follows_gained'
+export type MetricKey = 'impressions' | 'reads' | 'likes' | 'wows' | 'favorites' | 'comments' | 'shares' | 'follows_gained'
 export const metricFields: Record<Platform, { key: MetricKey; label: string }[]> = {
   wechat_mp: [
     { key: 'reads', label: '阅读' }, { key: 'likes', label: '点赞' }, { key: 'wows', label: '在看' },
@@ -18,15 +18,21 @@ export const metricFields: Record<Platform, { key: MetricKey; label: string }[]>
     { key: 'reads', label: '观看' }, { key: 'likes', label: '点赞' }, { key: 'favorites', label: '收藏' },
     { key: 'comments', label: '评论' }, { key: 'shares', label: '分享' }, { key: 'follows_gained', label: '涨粉' },
   ],
+  toutiao: [
+    { key: 'impressions', label: '展现量' }, { key: 'reads', label: '阅读' }, { key: 'likes', label: '点赞' },
+    { key: 'favorites', label: '收藏' },
+    { key: 'comments', label: '评论' }, { key: 'shares', label: '转发' }, { key: 'follows_gained', label: '涨粉' },
+  ],
 }
 
 type ShotRow = {
-  index: number; title: string; published_hint: string; day_hint: string
+  index: number; title: string; content_format?: string; published_hint: string; day_hint: string; interval_hint?: boolean
   work_id: string | null; match_type: 'exact' | 'fuzzy' | 'hint' | 'none'; similarity: number
+  impressions_exact?: string | null
   estimated: boolean; raw_text: string; dropped: string[]; status: 'pending' | 'confirmed'
 } & Record<MetricKey, number | null>
 
-type Draft = { work_id: string; vals: Record<MetricKey, string>; done: boolean }
+type Draft = { work_id: string; vals: Record<MetricKey, string>; cumulativeConfirmed: boolean; done: boolean }
 
 const MAX_SHOTS = 9
 
@@ -38,7 +44,7 @@ const matchText = (r: ShotRow) =>
 export function ScreenshotImport({ accountId, platform, works, workId, onDone, label = '截图识别' }: {
   accountId: string
   platform: Platform
-  works: { id: string; title: string }[]
+  works: { id: string; title: string; content_format?: string }[]
   workId?: string
   onDone: () => void
   label?: string
@@ -87,7 +93,8 @@ export function ScreenshotImport({ accountId, platform, works, workId, onDone, l
       setUpload(data)
       setDrafts(data.rows.map((r) => ({
         work_id: r.work_id ?? '',
-        vals: Object.fromEntries(fields.map((f) => [f.key, r[f.key]?.toString() ?? ''])) as Record<MetricKey, string>,
+        vals: Object.fromEntries(fields.map((f) => [f.key, f.key === 'impressions' ? (r.impressions_exact ?? r[f.key]?.toString() ?? '') : (r[f.key]?.toString() ?? '')])) as Record<MetricKey, string>,
+        cumulativeConfirmed: false,
         done: r.status === 'confirmed',
       })))
     } catch (e) {
@@ -104,8 +111,22 @@ export function ScreenshotImport({ accountId, platform, works, workId, onDone, l
       toast.error('请先为这一行选择作品')
       return
     }
-    const body: Record<string, unknown> = { work_id: d.work_id }
-    for (const f of fields) body[f.key] = d.vals[f.key] === '' ? null : Number(d.vals[f.key])
+    if (platform === 'toutiao' && upload.rows[i]?.interval_hint && !d.cumulativeConfirmed) {
+      toast.error('请先核对累计值并勾选确认')
+      return
+    }
+    const body: Record<string, unknown> = { work_id: d.work_id, cumulative_confirmed: d.cumulativeConfirmed }
+    for (const f of fields) {
+      if (d.vals[f.key] === '') body[f.key] = null
+      else if (f.key === 'impressions') {
+        const n = Number(d.vals[f.key])
+        if (!/^\d+$/.test(d.vals[f.key]) || !Number.isSafeInteger(n) || n < 0) {
+          toast.error('展现量必须是 JavaScript 安全范围内的非负整数，请核对原始截图')
+          return
+        }
+        body[f.key] = n
+      } else body[f.key] = Number(d.vals[f.key])
+    }
     setSaving(i)
     try {
       const res = await post<Metric & { merged: boolean }>(`/metrics/screenshots/${upload.id}/rows/${i}/confirm`, body)
@@ -135,7 +156,7 @@ export function ScreenshotImport({ accountId, platform, works, workId, onDone, l
         desc="对照左边的截图逐行核对，改对数字后点「导入这一行」；没导入的行不会保存。"
         footer={<Button variant="ghost" onClick={close}>完成</Button>}>
         <div className="grid gap-4 md:grid-cols-[260px_1fr]">
-          <div className="scrollbar-thin max-h-[60vh] space-y-2 overflow-y-auto">
+          <div className="scrollbar-thin max-h-[18vh] space-y-2 overflow-y-auto md:max-h-[60vh]">
             {previews.map((u, i) => <img key={u} src={u} alt={`截图 ${i + 1}`} className="w-full rounded-lg border border-mist-200" />)}
           </div>
           <div className="scrollbar-thin max-h-[60vh] space-y-3 overflow-y-auto">
@@ -148,19 +169,30 @@ export function ScreenshotImport({ accountId, platform, works, workId, onDone, l
                     <div className="min-w-0">
                       <div className="truncate text-[13.5px] font-medium text-mist-800">{r.title || '（截图里没有标题）'}</div>
                       <div className="text-xs text-mist-400">
+                        {platform === 'toutiao' && r.content_format && `${platformFormatLabel(platform, r.content_format)} · `}
                         {matchText(r)}{r.day_hint && ` · ${r.day_hint}`}{r.published_hint && ` · 发布于 ${r.published_hint}`}
                       </div>
                     </div>
                     <Select value={d.work_id} disabled={d.done} onChange={(e) => edit(i, { work_id: e.target.value })}>
                       <option value="">选择作品</option>
-                      {works.map((w) => <option key={w.id} value={w.id}>{w.title || '未命名'}</option>)}
+                      {works.map((w) => <option key={w.id} value={w.id}>{w.title || '未命名'}{platform === 'toutiao' && w.content_format ? ` · ${platformFormatLabel(platform, w.content_format)}` : ''}</option>)}
                     </Select>
                   </div>
+                  {platform === 'toutiao' && r.interval_hint && (
+                    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] leading-relaxed text-amber-900">
+                      截图中显示的是区间统计，首版只保存截至采集时间的累计作品数据。请对照头条后台把数字改成累计值后确认。
+                      <label className="mt-2 flex items-start gap-2 font-medium">
+                        <input type="checkbox" className="mt-0.5 accent-amber-700" disabled={d.done} checked={d.cumulativeConfirmed}
+                          onChange={(e) => edit(i, { cumulativeConfirmed: e.target.checked })} />
+                        <span>我已核对，并将本行数值改为截至采集时间的累计值</span>
+                      </label>
+                    </div>
+                  )}
                   <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-6">
                     {fields.map((f) => (
                       <label key={f.key} className="text-[12px] text-mist-500">
                         {f.label}
-                        <Input type="number" min={0} inputMode="numeric" disabled={d.done} value={d.vals[f.key]}
+                        <Input type="number" min={0} max={f.key === 'impressions' ? Number.MAX_SAFE_INTEGER : undefined} step={1} inputMode="numeric" disabled={d.done} value={d.vals[f.key]}
                           onChange={(e) => edit(i, { vals: { ...d.vals, [f.key]: e.target.value } })} />
                       </label>
                     ))}
@@ -174,7 +206,7 @@ export function ScreenshotImport({ accountId, platform, works, workId, onDone, l
                   {r.raw_text && <details className="mt-2 text-[12px] text-mist-400"><summary className="cursor-pointer">识别到的原始文字</summary><p className="mt-1 whitespace-pre-wrap">{r.raw_text}</p></details>}
                   <div className="mt-2 flex justify-end">
                     {d.done ? <span className="inline-flex items-center gap-1 text-[12.5px] text-emerald-700"><Check className="size-3.5" />已导入</span>
-                      : <Button size="sm" variant="primary" loading={saving === i} onClick={() => confirmRow(i)}>导入这一行</Button>}
+                      : <Button size="sm" variant="primary" disabled={platform === 'toutiao' && !!r.interval_hint && !d.cumulativeConfirmed} loading={saving === i} onClick={() => confirmRow(i)}>导入这一行</Button>}
                   </div>
                 </div>
               )

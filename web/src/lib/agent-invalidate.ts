@@ -13,7 +13,7 @@ const topics = ['topics', 'dashboard', 'next-actions', 'calendar', 'search', 'se
 const groups: [string, readonly string[]][] = [
   ['works__create works__import_published works__update works__set_viewpoint works__set_post_push_todos works__set_title_favorites works__delete works__duplicate works__derive works__unlock works__create_version works__restore_version works__preview_link works__polish_ignore works__golden_sentence works__approve_review works__mark_published works__organize_apply works__generate_image', work],
   ['outline__save outline__confirm storyboard__save storyboard__confirm sections__create sections__reorder sections__update sections__delete sections__restore sections__set_materials sections__draft sections__rewrite sections__restore_revision cards__generate_image panels__update panels__generate_text panels__generate_image', [...work, 'section-revisions', 'library', 'materials', 'material-usage']],
-  ['checks__start checks__resolve_item checks__complete wechat__push wechat__sync_draft xhs__create_pack', work],
+	['checks__start checks__resolve_item checks__complete wechat__push wechat__sync_draft xhs__create_pack toutiao__create_pack', work],
   ['assets__upload assets__reuse assets__update assets__crop assets__delete', [...work, 'library']],
   ['topics__score topics__create topics__update topics__delete', topics],
   ['topics__start_work', [...topics, ...work]],

@@ -1,31 +1,44 @@
 import { useQuery } from '@tanstack/react-query'
-import { Bookmark, CalendarDays, Copy, FileText, GitBranch, ImageIcon, PenLine, Search, Star, Tag, Trash2, UserRound, X } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { Bookmark, CalendarDays, Copy, FileText, GitBranch, ImageIcon, Lightbulb, PenLine, Search, Star, Tag, Trash2, UserRound, X } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
 import { Dialog } from '@/components/dialog'
-import { Button, Card, cn, Empty, IconButton, Input, MoreMenu, PageHeader, PageLoading, StatusBadge, Tabs } from '@/components/ui'
+import { Button, Card, cn, Empty, IconButton, Input, MoreMenu, PageHeader, PageLoading, PageState, StatusBadge, Tabs } from '@/components/ui'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { deleteWithUndo } from '@/lib/undo'
 import { useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
-import type { StarItem, Work, WorkListItem, WorkStatus } from '@/lib/types'
+import type { Account, StarItem, Work, WorkListItem, WorkStatus, WorkspaceMember } from '@/lib/types'
 import { usePrefetchWork, usePrefs, useSavePrefs } from '@/lib/v3'
 import { useCreateWork } from './Dashboard'
+import { openCreateWork } from '@/components/create-work-panel'
 import { WorkImportDialog } from './work-import-dialog'
+import { PlatformWorksView } from './platform-works'
 
-type Filter = 'all' | 'drafting' | 'checking' | 'ready' | 'out' | 'published'
+type Filter = 'all' | 'drafting' | 'checking' | 'reviewing' | 'ready' | 'out' | 'published'
 const filterStatus: Record<Filter, WorkStatus[] | null> = {
-  all: null, drafting: ['drafting'], checking: ['checking', 'reviewing'], ready: ['ready'], out: ['pushed', 'packed'], published: ['published'],
+  all: null, drafting: ['drafting'], checking: ['checking'], reviewing: ['reviewing'], ready: ['ready'], out: ['pushed', 'packed'], published: ['published'],
 }
 
-export function workLink(w: { id: string; status: WorkStatus }) {
+function EmptyCreateActions({ create, onTopics }: { create: () => void; onTopics: () => void }) {
+  return (
+    <div className="flex flex-wrap justify-center gap-2">
+      <Button variant="primary" onClick={create}>空白新建</Button>
+      <Button icon={<Lightbulb className="size-4" />} onClick={onTopics}>从选题开始</Button>
+    </div>
+  )
+}
+
+// WL-01：行点击按状态跳到"当前该做的下一步"，可发布不再落回编辑器。
+export function workLink(w: { id: string; status: WorkStatus }, platform?: Account['platform']) {
   switch (w.status) {
     case 'checking': return `/works/${w.id}/check`
     case 'pushed': return `/works/${w.id}/push`
     case 'packed': return `/works/${w.id}/pack`
+    case 'ready': return `/works/${w.id}/${platform === 'wechat_mp' ? 'push' : 'pack'}`
     default: return `/works/${w.id}`
   }
 }
@@ -38,7 +51,7 @@ function currentWeek(): [string, string] {
   return [iso(monday), iso(sunday)]
 }
 
-function SavedViews({ current, onApply }: { current: string; onApply: (query: string) => void }) {
+function SavedViews({ current, onApply, className }: { current: string; onApply: (query: string) => void; className?: string }) {
   const prefs = usePrefs()
   const save = useSavePrefs()
   const [naming, setNaming] = useState<string | null>(null)
@@ -53,7 +66,7 @@ function SavedViews({ current, onApply }: { current: string; onApply: (query: st
   }
   const remove = (id: string) => save.mutate({ saved_views: prefs.saved_views.filter((v) => v.id !== id) })
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-1.5 text-[12.5px]">
+    <div className={cn('mb-4 flex flex-wrap items-center gap-1.5 text-[12.5px]', className)}>
       <Bookmark className="size-3.5 text-mist-400" />
       {views.map((v) => (
         <span key={v.id} className={cn('group inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5', v.query === current ? 'border-ink-300 bg-ink-50 text-ink-800' : 'border-mist-200 text-mist-600')}>
@@ -109,16 +122,19 @@ function WorkTagsDialog({ work, onClose, onSave }: { work: WorkListItem; onClose
 }
 
 export default function Works() {
+  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const nav = useNavigate()
   const [copying, setCopying] = useState<string | null>(null)
   const prefetch = usePrefetchWork()
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
   const { data: me } = useMe()
+  const members = useQuery({ queryKey: ['members'], queryFn: () => get<WorkspaceMember[]>('/workspaces/current/members'), staleTime: 300_000 })
   const [params, setParams] = useSearchParams()
   const filter = (params.get('status') as Filter) || 'all'
   const q = params.get('q') ?? ''
   const tag = params.get('tag') ?? ''
+  const assignee = params.get('assignee') ?? ''
   const onlyStar = params.get('star') === '1'
   const onlyMine = params.get('mine') === '1'
   const thisWeek = params.get('week') === '1'
@@ -130,12 +146,24 @@ export default function Works() {
   }
   const setFilter = (f: Filter) => setParam('status', f)
   const setQ = (v: string) => setParam('q', v)
+  const sourceView = params.get('source') === 'platform' ? 'platform' : 'local'
+  const setSourceView = (value: 'local' | 'platform') => setParam('source', value === 'platform' ? 'platform' : '')
+  // NW-A5：头条不再绕行作品页；`?create=1` 只是深链，打开同一个创建面板。
+  const createDeepLink = params.get('create') === '1'
+  useEffect(() => {
+    if (!createDeepLink || !acc || !canWrite) return
+    const next = new URLSearchParams(params)
+    next.delete('create')
+    setParams(next, { replace: true })
+    openCreateWork({ accountId: acc.id, platform: acc.platform })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createDeepLink, acc?.id, canWrite])
   const [derive, setDerive] = useState<WorkListItem | null>(null)
   const [tagEditing, setTagEditing] = useState<WorkListItem | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const inv = useInvalidate()
-  const create = useCreateWork(acc?.id)
-  const { data, isLoading } = useQuery({ queryKey: ['works', acc?.id, q], queryFn: () => get<WorkListItem[]>(`/accounts/${acc!.id}/works?q=${encodeURIComponent(q)}`), enabled: !!acc })
+  const create = useCreateWork(acc?.id, acc?.platform)
+  const { data, isLoading, isError, error, refetch } = useQuery({ queryKey: ['works', acc?.id, q], queryFn: () => get<WorkListItem[]>(`/accounts/${acc!.id}/works?q=${encodeURIComponent(q)}`), enabled: !!acc })
   const stars = useQuery({ queryKey: ['stars'], queryFn: () => get<StarItem[]>('/stars'), staleTime: 60_000 })
   if (!acc) return <PageLoading />
   const starSet = new Set((stars.data ?? []).filter((s) => s.object_type === 'work').map((s) => s.object_id))
@@ -149,11 +177,30 @@ export default function Works() {
     }
   }
   const [weekStart, weekEnd] = currentWeek()
-  const list = (data ?? []).filter((w) => (!tag || (w.tags ?? []).includes(tag)) && (!onlyStar || starSet.has(w.id)) && (!onlyMine || (!!me?.user_id && w.assignee_id === me.user_id))
+  const list = (data ?? []).filter((w) => (!tag || (w.tags ?? []).includes(tag)) && (!assignee || w.assignee_id === assignee) && (!onlyStar || starSet.has(w.id)) && (!onlyMine || (!!me?.user_id && w.assignee_id === me.user_id))
     && (!thisWeek || (!!w.planned_date && w.planned_date.slice(0, 10) >= weekStart && w.planned_date.slice(0, 10) <= weekEnd)))
   const tagOptions = [...new Set([...(data ?? []).flatMap((w) => w.tags ?? []), ...(tag ? [tag] : [])])].sort()
   const shown = list.filter((w) => !filterStatus[filter] || filterStatus[filter]!.includes(w.status))
   const count = (f: Filter) => list.filter((w) => !filterStatus[f] || filterStatus[f]!.includes(w.status)).length
+  const savedViews = <SavedViews current={params.toString()} onApply={(query) => setParams(new URLSearchParams(query), { replace: true })} className={desktopPresentation ? 'desktop-works-saved-views' : undefined} />
+  const searchField = <div className="relative ml-auto w-full sm:w-64">
+    <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist-400" />
+    <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={desktopPresentation ? '搜索作品名称或标签' : '搜索标题'} className="pl-9" />
+  </div>
+  const quickFilters = <div className="flex items-center gap-1.5">
+    <button onClick={() => setParam('star', onlyStar ? '' : '1')}
+      className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[12.5px]', onlyStar ? 'border-gamboge-300 bg-gamboge-50 text-gamboge-800' : 'border-mist-200 text-mist-600 hover:border-mist-300')}>
+      <Star className="size-3.5" />收藏
+    </button>
+    <button onClick={() => setParam('mine', onlyMine ? '' : '1')}
+      className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[12.5px]', onlyMine ? 'border-ink-300 bg-ink-50 text-ink-800' : 'border-mist-200 text-mist-600 hover:border-mist-300')}>
+      <UserRound className="size-3.5" />我负责的
+    </button>
+    <button onClick={() => setParam('week', thisWeek ? '' : '1')} title="计划发布日在本周（周一至周日）的作品"
+      className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[12.5px]', thisWeek ? 'border-ink-300 bg-ink-50 text-ink-800' : 'border-mist-200 text-mist-600 hover:border-mist-300')}>
+      <CalendarDays className="size-3.5" />本周要发
+    </button>
+  </div>
   const remove = async (w: WorkListItem) => {
     const extra = [
       w.derived_count > 0 && `这篇作品有 ${w.derived_count} 篇衍生作品，它们不受影响，只会显示「源作品已删除」。`,
@@ -180,54 +227,94 @@ export default function Works() {
     } catch (e) { toast.error(errorMessage(e)) }
   }
   return (
-    <div className="animate-fade-in">
-      <PageHeader title="作品" desc={`${acc.name} 的全部作品`} action={canWrite ? <div className="flex gap-2">
+    <div className={cn('animate-fade-in', desktopPresentation && 'desktop-works-page')}>
+      <PageHeader title="作品" desc={desktopPresentation ? '每一篇内容，都有自己的生长节奏。' : `${acc.name} 的全部作品`} action={sourceView === 'local' && canWrite ? <div className="flex gap-2">
         {acc.platform === 'wechat_mp' && acc.content_format === 'long_article' && <Button variant="secondary" onClick={() => setImportOpen(true)}>导入旧文</Button>}
         <Button variant="primary" icon={<PenLine className="size-4" />} onClick={() => create()}>新建作品</Button>
       </div> : undefined} />
-      <div className="mb-5 flex flex-wrap items-center gap-3">
-        <Tabs value={filter} onChange={setFilter} items={[
+      <div className="mb-5">
+        <Tabs role="tablist" ariaLabel="作品来源" value={sourceView} onChange={setSourceView} items={[
+          { value: 'local', label: '本地创作' },
+          { value: 'platform', label: '平台作品' },
+        ]} />
+      </div>
+      {sourceView === 'platform' ? <PlatformWorksView account={acc} canWrite={canWrite} /> : <>
+      <div className={desktopPresentation ? 'desktop-works-status-row' : 'mb-5 flex flex-wrap items-center gap-3'}>
+        <Tabs role="tablist" ariaLabel="作品状态" value={filter} onChange={setFilter} items={[
           { value: 'all', label: '全部', count: count('all') },
           { value: 'drafting', label: '创作中', count: count('drafting') },
           { value: 'checking', label: '检查中', count: count('checking') },
+          { value: 'reviewing', label: '待审阅', count: count('reviewing') },
           { value: 'ready', label: '可发布', count: count('ready') },
           { value: 'out', label: acc.platform === 'wechat_mp' ? '已进草稿箱' : '发布包', count: count('out') },
           { value: 'published', label: '已发布', count: count('published') },
         ]} />
+      </div>
+      <div className={cn('mb-5 flex flex-wrap items-center gap-3', desktopPresentation && 'desktop-works-filter-row')}>
+        {desktopPresentation && searchField}
         <div className="flex items-center gap-1.5">
-          <button onClick={() => setParam('star', onlyStar ? '' : '1')}
-            className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[12.5px]', onlyStar ? 'border-gamboge-300 bg-gamboge-50 text-gamboge-800' : 'border-mist-200 text-mist-600 hover:border-mist-300')}>
-            <Star className="size-3.5" />收藏
-          </button>
-          <button onClick={() => setParam('mine', onlyMine ? '' : '1')}
-            className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[12.5px]', onlyMine ? 'border-ink-300 bg-ink-50 text-ink-800' : 'border-mist-200 text-mist-600 hover:border-mist-300')}>
-            <UserRound className="size-3.5" />我负责的
-          </button>
-          <button onClick={() => setParam('week', thisWeek ? '' : '1')} title="计划发布日在本周（周一至周日）的作品"
-            className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-2.5 py-1 text-[12.5px]', thisWeek ? 'border-ink-300 bg-ink-50 text-ink-800' : 'border-mist-200 text-mist-600 hover:border-mist-300')}>
-            <CalendarDays className="size-3.5" />本周要发
-          </button>
+          {!desktopPresentation && quickFilters}
           <select aria-label="按标签筛选" value={tag} onChange={(e) => setParam('tag', e.target.value)}
             className="h-8 rounded-full border border-mist-200 bg-white px-2.5 text-[12.5px] text-mist-600 outline-none focus:border-ink-300">
             <option value="">全部标签</option>
             {tagOptions.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
+          {desktopPresentation && <select aria-label="负责人" value={assignee} onChange={(e) => setParam('assignee', e.target.value)}
+            className="h-8 rounded-full border border-mist-200 bg-white px-2.5 text-[12.5px] text-mist-600 outline-none focus:border-ink-300">
+            <option value="">全部负责人</option>
+            {(members.data ?? []).filter((member) => member.status === 'active').map((member) => <option key={member.user_id} value={member.user_id}>{member.username}</option>)}
+          </select>}
+          {desktopPresentation && quickFilters}
         </div>
-        <div className="relative ml-auto w-full sm:w-64">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist-400" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索标题" className="pl-9" />
-        </div>
+        {!desktopPresentation && searchField}
+        {desktopPresentation && savedViews}
       </div>
-      <SavedViews current={params.toString()} onApply={(query) => setParams(new URLSearchParams(query), { replace: true })} />
-      {isLoading ? <PageLoading /> : shown.length === 0 ? (
-        <Card><Empty icon={<FileText className="size-5" />} title="这里还没有作品" desc={canWrite ? '从选题池开始，或者直接新建一篇。' : '当前为观察者，只能浏览已有作品。'} action={canWrite ? <Button variant="primary" onClick={() => create()}>新建作品</Button> : undefined} /></Card>
+      {!desktopPresentation && savedViews}
+      {/* XC-04：请求失败要说"加载失败"并可重试，不能显示成"这里还没有作品"。 */}
+      {isError ? <PageState loading={false} error={error} onRetry={() => void refetch()} />
+        : isLoading ? <PageLoading /> : shown.length === 0 ? (
+        desktopPresentation ? <section className="desktop-works-table" data-testid="desktop-works-table"><div className="desktop-works-empty"><Empty icon={<FileText className="size-5" />} title="这里还没有作品" desc={canWrite ? '从选题池开始，或者直接新建一篇。' : '当前为观察者，只能浏览已有作品。'} action={canWrite ? <EmptyCreateActions create={create} onTopics={() => nav(`/a/${acc.id}/topics`)} /> : undefined} /></div></section>
+          : <Card><Empty icon={<FileText className="size-5" />} title="这里还没有作品" desc={canWrite ? '从选题池开始，或者直接新建一篇。' : '当前为观察者，只能浏览已有作品。'} action={canWrite ? <EmptyCreateActions create={create} onTopics={() => nav(`/a/${acc.id}/topics`)} /> : undefined} /></Card>
       ) : (
-        <Card className="divide-y divide-mist-100">
+        desktopPresentation ? <section className="desktop-works-table" data-testid="desktop-works-table" role="table" aria-label="作品列表">
+          <div className="desktop-work-row desktop-work-header" role="row">
+            <span role="columnheader" aria-label="收藏" />
+            <span role="columnheader">作品名称</span>
+            <span role="columnheader">状态</span>
+            <span role="columnheader">计划发布</span>
+            <span role="columnheader">最近修改</span>
+            <span role="columnheader" aria-label="操作" />
+          </div>
+          {shown.map((w) => (
+            <div key={w.id} className="desktop-work-row" role="row" data-testid="desktop-work-row">
+              <span role="cell" className="desktop-work-star-cell">
+                <IconButton label={starSet.has(w.id) ? '取消收藏' : '收藏'} onClick={() => toggleStar(w)} className={starSet.has(w.id) ? 'text-gamboge-500' : 'text-mist-400'}>
+                  <Star className={cn('size-4', starSet.has(w.id) && 'fill-current')} />
+                </IconButton>
+              </span>
+              <span role="cell" className="desktop-work-title-cell">
+                <Link to={workLink(w, acc?.platform)} {...prefetch.hover(w.id)} data-testid="work-row-link">
+                  <FileText aria-hidden="true" />
+                  <span><strong>{w.title || '未命名作品'}</strong><small>{(w.tags ?? []).join(' · ') || `${w.section_count} 段 · ${w.char_count.toLocaleString()} 字`}{w.source_title !== null && w.source_work_id ? ` · 派生自《${w.source_title || '未命名'}》` : ''}</small></span>
+                </Link>
+              </span>
+              <span role="cell"><StatusBadge status={w.status} /></span>
+              <span role="cell" className="desktop-work-date-cell">{w.planned_date ? `${w.planned_date.slice(5, 7)} 月 ${w.planned_date.slice(8, 10)} 日` : '未安排'}</span>
+              <span role="cell" className="desktop-work-updated-cell">{relTime(w.updated_at)}</span>
+              <span role="cell" className="desktop-work-actions">
+                {canWrite && <IconButton label="编辑作品标签" onClick={() => setTagEditing(w)}><Tag className="size-4" /></IconButton>}
+                {canWrite && <IconButton label="派生到其他平台" onClick={() => setDerive(w)}><GitBranch className="size-4" /></IconButton>}
+                {canWrite && <MoreMenu items={[{ label: '复制为新草稿', icon: <Copy />, disabled: !!copying, loading: copying === w.id, onClick: () => void duplicate(w.id) }]} />}
+                {canWrite && <IconButton label="删除" onClick={() => void remove(w)} className="hover:text-danger"><Trash2 className="size-4" /></IconButton>}
+              </span>
+            </div>
+          ))}
+        </section> : <Card className="divide-y divide-mist-100">
           {shown.map((w) => {
             const thumb = w.cover_asset_id ?? w.first_asset_id
             return (
               <div key={w.id} className="group flex items-center gap-4 px-5 py-3.5 transition hover:bg-mist-50/70">
-                <Link to={workLink(w)} {...prefetch.hover(w.id)} className="flex min-w-0 flex-1 items-center gap-4">
+                <Link to={workLink(w, acc?.platform)} {...prefetch.hover(w.id)} data-testid="work-row-link" className="flex min-w-0 flex-1 items-center gap-4">
                   <div className="flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-mist-100 text-mist-300">
                     {thumb ? <img src={`/api/v1/assets/${thumb}/file?variant=256`} className="size-full object-cover" alt="" /> : <ImageIcon className="size-5" />}
                   </div>
@@ -263,9 +350,11 @@ export default function Works() {
           })}
         </Card>
       )}
+      {!isLoading && <p className="mt-[14px] text-[11px] text-mist-500">计划发布日只用于提醒；公众号草稿、小红书与头条发布包仍需你在对应平台完成发布。</p>}
       {derive && canWrite && <DeriveDialog open onClose={() => setDerive(null)} workId={derive.id} platform={acc.platform} format={derive.content_format} />}
       {tagEditing && canWrite && <WorkTagsDialog key={tagEditing.id} work={tagEditing} onClose={() => setTagEditing(null)} onSave={saveTags} />}
       {importOpen && canWrite && <WorkImportDialog accountId={acc.id} onClose={() => setImportOpen(false)} onImported={id => { setImportOpen(false); inv(['works', acc.id]); nav(`/works/${id}`) }} />}
+      </>}
     </div>
   )
 }

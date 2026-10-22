@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestOPT35MaterialsExpireAtShanghaiMidnight(t *testing.T) {
@@ -12,7 +14,7 @@ func TestOPT35MaterialsExpireAtShanghaiMidnight(t *testing.T) {
 	env.srv.now = func() time.Time {
 		return time.Date(2030, 1, 2, 0, 30, 0, 0, env.srv.loc)
 	}
-	guest := env.registerClient(t, "opt35-midnight", testPassword)
+	guest := env.registerClient(t, "opt35-midnight-"+uuid.NewString(), testPassword)
 	t.Cleanup(func() { guest.restore(env) })
 	var a Account
 	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{

@@ -12,9 +12,13 @@ import (
 // DEV-U107（12 文档）：提示词模板包真实模型批量重放——选定任务类型，后台逐用例以当前
 // 路由与模板重放（is_eval 用量），汇总 JSON 解析成功率与逐条输出；不自动改写提示词。
 func TestU107PromptEvalBatch(t *testing.T) {
-	_ = env.accounts(t)
+	username := "u107-eval-" + uuid.NewString()
+	guest := env.registerClient(t, username, testPassword)
+	defer guest.restore(env)
+	ctx := context.Background()
 	var ws uuid.UUID
-	if e := env.srv.db.QueryRow(context.Background(), `SELECT workspace_id FROM platform_account WHERE name='测试公众号' LIMIT 1`).Scan(&ws); e != nil {
+	var userID uuid.UUID
+	if e := env.srv.db.QueryRow(ctx, `SELECT w.id,u.id FROM workspace w JOIN app_user u ON u.id=w.created_by_user_id WHERE u.username=$1`, username).Scan(&ws, &userID); e != nil {
 		t.Fatal(e)
 	}
 	insertCase := func(task, name, system, user string, jsonMode bool) uuid.UUID {
@@ -22,7 +26,7 @@ func TestU107PromptEvalBatch(t *testing.T) {
 		var id uuid.UUID
 		if e := env.srv.db.QueryRow(context.Background(),
 			`INSERT INTO prompt_eval_case (workspace_id, task_type, name, context_snapshot, created_by)
-			 SELECT $1,$2,$3,$4, id FROM app_user LIMIT 1 RETURNING id`, ws, task, name, snap).Scan(&id); e != nil {
+			 VALUES ($1,$2,$3,$4,$5) RETURNING id`, ws, task, name, snap, userID).Scan(&id); e != nil {
 			t.Fatal(e)
 		}
 		return id
@@ -92,7 +96,7 @@ func TestU107PromptEvalBatch(t *testing.T) {
 	// 评测调用计入 is_eval 用量，且与业务调用区分。
 	var n int
 	if e := env.srv.db.QueryRow(context.Background(),
-		`SELECT count(*) FROM ai_call WHERE task_type='topic_suggest' AND is_eval AND context_refs->>'prompt_eval'='true'`).Scan(&n); e != nil || n < 2 {
+		`SELECT count(*) FROM ai_call WHERE workspace_id=$1 AND task_type='topic_suggest' AND is_eval AND context_refs->>'prompt_eval'='true'`, ws).Scan(&n); e != nil || n < 2 {
 		t.Fatalf("eval calls %d %v", n, e)
 	}
 

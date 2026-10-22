@@ -341,3 +341,43 @@ func previewApproveReview(ctx context.Context, s *Server, st *agentRunState, t *
 	}
 	return []agentChange{{Field: "check_summary", Label: "最近检查摘要", Before: summary, After: summary}}, nil, nil
 }
+
+// previewShareLink freezes the revision shown when the user confirms sharing.
+func previewShareLink(ctx context.Context, s *Server, st *agentRunState, t *AgentTool,
+	args map[string]any) ([]agentChange, map[string]any, error) {
+	body, err := agentHookRead(ctx, s, st, t, args, "/works/{id}")
+	if err != nil {
+		return nil, nil, err
+	}
+	revision, ok := agentRevisionOf(body)
+	if !ok || revision < 1 {
+		return nil, nil, validation("无法读取分享作品的修订号")
+	}
+	args["basis_revision"] = revision
+	return []agentChange{{Field: "basis_revision", Label: "分享修订", Before: "当前版本", After: agentItoa(revision)}}, nil, nil
+}
+
+// previewToutiaoPack takes the package basis revision from the authorized work record,
+// never from model-authored input. The create endpoint verifies it again on execution.
+func previewToutiaoPack(ctx context.Context, s *Server, st *agentRunState, t *AgentTool,
+	args map[string]any) ([]agentChange, map[string]any, error) {
+	body, err := agentHookRead(ctx, s, st, t, args, "/works/{id}")
+	if err != nil {
+		return nil, nil, err
+	}
+	platform, _ := body["platform"].(string)
+	format, _ := body["content_format"].(string)
+	revision, ok := agentRevisionOf(body)
+	if platform != "toutiao" || !validFormat(platform, format) || !ok || revision < 1 {
+		return nil, nil, apiErr(422, "validation_failed", "该作品无法准备头条发布包")
+	}
+	args["basis_revision"] = revision
+	formatLabel := "头条文章"
+	if format == "micro_post" {
+		formatLabel = "微头条"
+	}
+	return []agentChange{
+		{Field: "content_format", Label: "内容形态", Before: formatLabel, After: formatLabel},
+		{Field: "basis_revision", Label: "依据修订", Before: "当前版本", After: agentItoa(revision)},
+	}, nil, nil
+}

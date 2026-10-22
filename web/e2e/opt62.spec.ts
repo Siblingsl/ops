@@ -56,6 +56,8 @@ test('OPT62 公众号四阶段主操作共用页头，检查命令直达且不�
   await expect(goCheck).toBeVisible()
   await goCheck.click()
   await expect(page).toHaveURL(new RegExp(`/works/${id}/check$`))
+  // NW-D1：命令面板只负责打开检查页，显式点击才开始检查。
+  await page.getByRole('button', { name: '开始检查', exact: true }).click()
   await expectHeaderAction(page, '确认完成检查')
   await finishChecks(page, id)
   await expectHeaderAction(page, '去写入草稿箱')
@@ -73,7 +75,8 @@ test('OPT62 公众号四阶段主操作共用页头，检查命令直达且不�
   await previewPalette.getByRole('button', { name: '打开排版预览', exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/works/${id}/preview$`))
   await page.goto(`/works/${id}/preview`)
-  await expectHeaderAction(page, '下一步：发布前检查')
+  // ED-04：预览页按状态给下一步。此时检查已全部确认（ready），所以是"去写入草稿箱"。
+  await expectHeaderAction(page, '去写入草稿箱')
   await page.goto(`/works/${id}/push`)
   await expectHeaderAction(page, '写入草稿箱')
   await expect(page.getByText('每次只写入这一篇，由你亲自点击。系统不会发表或群发。')).toBeVisible()

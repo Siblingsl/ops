@@ -44,7 +44,8 @@ test('信封体积超过 64 KiB 直接拒绝', () => {
 
 test('命令白名单是固定集合，不随页面输入扩展', () => {
   assert.deepEqual([...PLATFORM_IPC_COMMANDS].sort(), [
-    'clear-account-data', 'clear-orphan-profiles', 'open-login', 'pause', 'read-status', 'request-collect'
+    'clear-account-data', 'clear-orphan-profiles', 'login-action', 'login-browsers', 'open-login', 'pause', 'read-status',
+    'request-account-sync', 'request-collect', 'request-metrics-refresh', 'resume-platform-sync'
   ]);
   // 红线：不允许任何"批量/全部"语义的命令。
   for (const cmd of PLATFORM_IPC_COMMANDS) {
@@ -62,12 +63,32 @@ test('参数形状逐命令校验，拒绝额外字段', () => {
   assert.throws(() => validatePayloadShape('open-login', {}), /登录参数无效/);
   // 缺平台或平台不在首版支持范围内都拒绝，不能默认成小红书。
   assert.throws(() => validatePayloadShape('open-login', { accountId }), /登录参数无效/);
-  assert.throws(() => validatePayloadShape('open-login', { accountId, platform: 'toutiao' }), (err) => err.code === 'platform_not_supported');
+  assert.doesNotThrow(() => validatePayloadShape('open-login', { accountId, platform: 'toutiao' }));
+  assert.throws(() => validatePayloadShape('open-login', { accountId, platform: 'unknown' }), (err) => err.code === 'platform_not_supported');
   assert.throws(() => validatePayloadShape('open-login', { accountId, platform: 'xhs\n' }), (err) => err.code === 'platform_not_supported');
   assert.doesNotThrow(() => validatePayloadShape('read-status', undefined));
   assert.throws(() => validatePayloadShape('read-status', 'all'), /状态查询参数无效/);
   assert.doesNotThrow(() => validatePayloadShape('request-collect', { accountId }));
   assert.throws(() => validatePayloadShape('request-collect', { accountId: 1 }), /采集参数无效/);
+  assert.doesNotThrow(() => validatePayloadShape('request-account-sync', { accountId, mode: 'incremental', connectionRevision: 2 }));
+  assert.throws(() => validatePayloadShape('request-account-sync', { accountId, mode: 'incremental', connectionRevision: 2, platform: 'xhs' }), /账号同步参数无效/);
+  assert.doesNotThrow(() => validatePayloadShape('request-metrics-refresh', { accountId, connectionRevision: 2 }));
+  assert.doesNotThrow(() => validatePayloadShape('request-metrics-refresh', {
+    accountId, connectionRevision: 2, platformWorkIds: ['44444444-4444-4444-8444-444444444444']
+  }));
+  assert.throws(() => validatePayloadShape('request-metrics-refresh', { accountId, connectionRevision: 2, targets: ['all'] }), /指标刷新参数无效/);
+  assert.throws(() => validatePayloadShape('request-metrics-refresh', {
+    accountId, connectionRevision: 2, platformWorkIds: ['all']
+  }), /指标刷新参数无效/);
+  assert.throws(() => validatePayloadShape('request-metrics-refresh', {
+    accountId, connectionRevision: 2, platformWorkIds: Array.from({ length: 21 }, () => '44444444-4444-4444-8444-444444444444')
+  }), /指标刷新参数无效/);
+  assert.doesNotThrow(() => validatePayloadShape('resume-platform-sync', {
+    accountId, operationId: '44444444-4444-4444-8444-444444444444', expectedOperationRevision: 3
+  }));
+  assert.throws(() => validatePayloadShape('resume-platform-sync', {
+    accountId, operationId: '44444444-4444-4444-8444-444444444444', expectedOperationRevision: 3, action: 'cancel'
+  }), /继续同步参数无效/);
   assert.doesNotThrow(() => validatePayloadShape('clear-account-data', { accountId }));
 });
 

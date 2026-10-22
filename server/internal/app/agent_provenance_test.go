@@ -281,6 +281,30 @@ func TestAG06ViewpointBlankedAndBlocked(t *testing.T) {
 		map[string]any{"confirm": true}, "agent_gate_ack_required")
 }
 
+// TestAG06EmptyViewpointBlanked：模型给出空观点时同样必须由用户亲自填写，
+// 不能带着空值直接执行（FR-M13-06 第 1 项）。
+func TestAG06EmptyViewpointBlanked(t *testing.T) {
+	pid := env.ensureToolModel(t)
+	acc := env.accounts(t)
+	wk := env.readyWork(t, acc.wechat, "初始观点")
+	defer agentDropWork(wk.ID)
+	c := env.agentRunConversation(t, pid)
+	defer deleteConversations(t, c.ID)
+
+	evs := env.sse(t, agentRunPath(c, "messages"), map[string]any{"text": "帮我留个观点\n" +
+		agentLoadDomain("works") +
+		"\n#tool works__set_viewpoint {\"id\":\"" + wk.ID.String() + "\",\"viewpoint\":\"\"}"})
+	action := findActionEvent(t, evs)
+	if action == nil {
+		t.Fatal("空观点也应创建卡片，等待用户填写")
+	}
+	if len(action.BlankFields) != 1 || action.BlankFields[0] != "viewpoint" {
+		t.Fatalf("空观点应标记为待用户填写：%+v", action.BlankFields)
+	}
+	env.expectErr(t, "POST", agentActionPath(action.ID, "execute"),
+		map[string]any{"confirm": true, "gate_ack": true}, "agent_gate_ack_required")
+}
+
 // TestAG06ExecuteRejectsArrayBody：执行接口只接受单个卡片 ID，数组返回 400（HC-27）。
 func TestAG06ExecuteRejectsArrayBody(t *testing.T) {
 	c := env.agentRunConversation(t, env.ensureToolModel(t))

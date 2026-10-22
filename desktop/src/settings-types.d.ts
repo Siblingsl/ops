@@ -3,6 +3,7 @@ interface DesktopSettingsInfo {
   businessOrigin: string;
   connectionState: 'online' | 'offline' | 'unknown';
   failureReason: 'unreachable' | 'icp-block' | 'render-failed';
+  systemInfo: { version: string; dev: boolean; dataBytes: number } | null | undefined;
   aiStatus: string;
   clientState: {
     signedIn: boolean;
@@ -10,15 +11,16 @@ interface DesktopSettingsInfo {
     workspaceName: string;
     reauthRequired: boolean;
     storageAvailable: boolean;
-    deviceRegistered: boolean;
-    modelCount: number;
+    localConfigAvailable: boolean;
+    deviceRegistered: boolean | null;
+    modelCount: number | null;
     activeModelRequests: number;
     channelState: 'disconnected' | 'connecting' | 'ready' | 'error';
     channelMessage: string;
     mode: 'server' | 'desktop';
     routeRevision: number;
     deviceId: string;
-  } | undefined;
+  };
 }
 
 interface DesktopDeviceState {
@@ -130,7 +132,10 @@ interface Window {
     retryBusinessPage(): Promise<void>;
     openLoginPage(): Promise<void>;
     openSettings(): Promise<void>;
+    takePlatformLoginTarget(): Promise<{ accountId: string; platform: 'xhs' | 'wechat_mp' | 'toutiao' } | null>;
+    onPlatformLoginTarget(listener: (target: { accountId: string; platform: 'xhs' | 'wechat_mp' | 'toutiao' }) => void): () => void;
     closeLocalWindow(): Promise<void>;
+    reportLocalState(state: { dirty: boolean; busy: boolean }): void;
     platformCommand(envelope: { v: number; id: string; cmd: string; payload?: unknown }): Promise<unknown>;
     platformBrowser(input?: { refresh?: boolean }): Promise<DesktopPlatformBrowserStatus>;
   };

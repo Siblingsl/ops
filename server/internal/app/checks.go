@@ -31,17 +31,19 @@ type CheckItem struct {
 }
 
 type CheckRun struct {
-	ID             uuid.UUID   `json:"id"`
-	Revision       int         `json:"revision"`
-	TargetPlatform string      `json:"target_platform"`
-	FactStatus     string      `json:"fact_status"`
-	CompletedAt    *time.Time  `json:"completed_at"`
-	CreatedAt      time.Time   `json:"created_at"`
-	Stale          bool        `json:"stale"`
-	Items          []CheckItem `json:"items"`
-	Total          int         `json:"total"`
-	Confirmed      int         `json:"confirmed"`
-	Blocking       int         `json:"blocking"`
+	ID                       uuid.UUID   `json:"id"`
+	Revision                 int         `json:"revision"`
+	TargetPlatform           string      `json:"target_platform"`
+	FactStatus               string      `json:"fact_status"`
+	CompletedAt              *time.Time  `json:"completed_at"`
+	CreatedAt                time.Time   `json:"created_at"`
+	Stale                    bool        `json:"stale"`
+	MaterialBasisStale       bool        `json:"material_basis_stale"`
+	MaterialBasisUnavailable int         `json:"material_basis_unavailable"`
+	Items                    []CheckItem `json:"items"`
+	Total                    int         `json:"total"`
+	Confirmed                int         `json:"confirmed"`
+	Blocking                 int         `json:"blocking"`
 }
 
 var allowedResolutions = map[string][]string{
@@ -144,12 +146,21 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 					"超出时请删减内容或减少样式", nil))
 			}
 		}
-	} else {
+	} else if w.Platform == "xhs" {
 		add(formatItem("title", title > 0, fmt.Sprintf("标题 %d 字", title), "标题不能为空；字数上限待核实（V-012）", map[string]any{"field": "title"}))
 		if !comic {
 			n := len(w.Assets)
 			add(formatItem("images", n >= 1 && n <= 18, fmt.Sprintf("图片 %d 张（需要 1–18 张）", n), "小红书图文笔记至少 1 张图片", map[string]any{"field": "images"}))
 		}
+	} else if w.Platform == "toutiao" {
+		label, detail := "发布标题", "标题不能为空；平台字数上限待实测（V-025）"
+		if w.ContentFormat == "micro_post" {
+			label, detail = "内部名称", "仅系统内识别和检索，不会作为微头条发布标题导出"
+		}
+		add(formatItem("title", title > 0, fmt.Sprintf("%s %d 字", label, title), detail, map[string]any{"field": "title"}))
+		add(formatItem("images", true, fmt.Sprintf("配图 %d 张（可选）", len(w.Assets)), "头条图片数量上限待实测（V-025）；无图不阻止创作", map[string]any{"field": "images"}))
+	} else {
+		return nil, fmt.Errorf("不支持的作品平台：%s", w.Platform)
 	}
 	oversize := 0
 	for _, a := range w.Assets {
@@ -157,7 +168,16 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 			oversize++
 		}
 	}
-	add(formatItem("image_size", oversize == 0, fmt.Sprintf("图片 %d 张，均不超过 1MB", len(w.Assets)), "", nil))
+	// 没有图片时不生成这条检查：否则「图片 0 张，均不超过 1MB」会与「需要 1–18 张」并列，
+	// 一条通过一条失败，读者无法判断到底该看哪条。
+	if len(w.Assets) > 0 {
+		message, detail := fmt.Sprintf("图片 %d 张，均不超过 1MB", len(w.Assets)), ""
+		if w.Platform == "toutiao" {
+			message = fmt.Sprintf("图片 %d 张，符合系统上传限制", len(w.Assets))
+			detail = "这是系统存储限制，不代表头条平台图片大小上限；平台规则待实测（V-025）"
+		}
+		add(formatItem("image_size", oversize == 0, message, detail, nil))
+	}
 	if comic {
 		missingImg, missingText := 0, 0
 		for _, p := range w.Panels {
@@ -182,7 +202,13 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 				empty++
 			}
 		}
-		add(formatItem("sections", len(w.Sections) > 0 && empty == 0, fmt.Sprintf("正文 %d 段，%d 段为空", len(w.Sections), empty), "每一段都需要有内容，空段可以删除", nil))
+		// NW-D3：0 段时给专门的项并带 sections 深链，让用户能点回正文。
+		if len(w.Sections) == 0 {
+			it := formatItem("sections", false, "还没有正文，先确认大纲并起草", "大纲确认后，按大纲逐段起草；这里不会替你写正文", map[string]any{"field": "sections"})
+			add(it)
+		} else {
+			add(formatItem("sections", empty == 0, fmt.Sprintf("正文 %d 段，%d 段为空", len(w.Sections), empty), "每一段都需要有内容，空段可以删除", map[string]any{"field": "sections"}))
+		}
 	}
 	for _, f := range workFields(w) {
 		for _, mm := range pendingMarker.FindAllStringIndex(f.Text, -1) {
@@ -221,6 +247,8 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 	disclosure := "发布时在公众号文末或后台声明内容使用了 AI 辅助"
 	if w.Platform == "xhs" {
 		disclosure = "发布时在「笔记内容声明」中勾选「笔记含 AI 合成内容」"
+	} else if w.Platform == "toutiao" {
+		disclosure = "发布前查看头条发布页当前的 AI 内容声明选项，并按真实创作情况处理；具体位置与规则待实测（V-029）"
 	}
 	items = append(items, CheckItem{Category: "ai_disclosure", Message: "AI 声明", Detail: disclosure, Location: map[string]any{}, fingerprint: "ai_disclosure|" + w.Platform})
 
@@ -343,27 +371,45 @@ func (s *Server) similarWorks(ctx context.Context, w *Work) ([]string, error) {
 }
 
 func (s *Server) insertItems(ctx context.Context, tx pgx.Tx, workID, runID uuid.UUID, items []CheckItem) error {
-	prev := map[string]string{}
-	rows, err := tx.Query(ctx, `SELECT DISTINCT ON (ci.fingerprint) ci.fingerprint, ci.resolution FROM check_item ci
+	var currentBasis string
+	if err := tx.QueryRow(ctx, `SELECT material_basis_hash FROM check_run WHERE id=$1 AND work_id=$2`, runID, workID).Scan(&currentBasis); err != nil {
+		return err
+	}
+	type priorResolution struct {
+		Value string
+		Basis string
+	}
+	prev := map[string]priorResolution{}
+	rows, err := tx.Query(ctx, `SELECT DISTINCT ON (ci.fingerprint) ci.fingerprint, ci.resolution, cr.material_basis_hash FROM check_item ci
 		JOIN check_run cr ON cr.id=ci.check_run_id WHERE cr.work_id=$1 AND ci.resolution IS NOT NULL AND ci.category<>'format'
 		ORDER BY ci.fingerprint, ci.resolved_at DESC`, workID)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
-		var fp, res string
-		if err := rows.Scan(&fp, &res); err == nil {
-			prev[fp] = res
+		var fp string
+		var res priorResolution
+		if err := rows.Scan(&fp, &res.Value, &res.Basis); err != nil {
+			rows.Close()
+			return err
 		}
+		prev[fp] = res
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
 	}
 	rows.Close()
 	for _, it := range items {
 		var res *string
 		var resolvedAt *time.Time
-		if r, ok := prev[it.fingerprint]; ok && it.Category != "format" {
-			res = &r
-			now := s.now()
-			resolvedAt = &now
+		if previous, ok := prev[it.fingerprint]; ok && it.Category != "format" {
+			if it.Category != "fact" || previous.Basis == currentBasis {
+				value := previous.Value
+				res = &value
+				now := s.now()
+				resolvedAt = &now
+			}
 		}
 		locJSON, _ := json.Marshal(it.Location)
 		if _, err := tx.Exec(ctx, `INSERT INTO check_item (check_run_id, category, passed, fingerprint, matched_text, location, message, detail, resolution, resolved_at)
@@ -408,17 +454,24 @@ func (s *Server) startCheck(w http.ResponseWriter, r *http.Request) error {
 	}
 	var runID uuid.UUID
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		if err := s.checkWorkRevision(ctx, tx, m, &wk.Revision); err != nil {
+			return err
+		}
+		basisHash, err := s.materialBasisHash(ctx, tx, m.ID, true)
+		if err != nil {
+			return err
+		}
 		if err := s.addVersion(ctx, tx, m.ID, "check"); err != nil {
 			return err
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO check_run (work_id, revision, target_platform, fact_status) VALUES ($1,$2,$3,$4) RETURNING id`,
-			m.ID, wk.Revision, wk.Platform, factStatus).Scan(&runID); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO check_run (work_id, revision, target_platform, fact_status, material_basis_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+			m.ID, wk.Revision, wk.Platform, factStatus, basisHash).Scan(&runID); err != nil {
 			return err
 		}
 		if err := s.insertItems(ctx, tx, m.ID, runID, items); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `UPDATE work SET status='checking', updated_at=now() WHERE id=$1 AND status<>'published'`, m.ID)
+		_, err = tx.Exec(ctx, `UPDATE work SET status='checking', updated_at=now() WHERE id=$1 AND status<>'published'`, m.ID)
 		return err
 	})
 	if err != nil {
@@ -458,7 +511,8 @@ func (s *Server) runFactCheck(ctx context.Context, wk *Work, a *Account, runID u
 	var err error
 	if len(materialIDs) > 0 {
 		var rows pgx.Rows
-		rows, err = s.db.Query(ctx, `SELECT id, content FROM material WHERE id=ANY($1) AND workspace_id=$2 AND deleted_at IS NULL`, materialIDs, ident(ctx).WorkspaceID)
+		rows, err = s.db.Query(ctx, `SELECT id, content FROM material WHERE id=ANY($1) AND workspace_id=$2 AND deleted_at IS NULL
+			AND (account_id IS NULL OR account_id=$3)`, materialIDs, ident(ctx).WorkspaceID, wk.AccountID)
 		if err == nil {
 			for rows.Next() {
 				var id uuid.UUID
@@ -582,10 +636,26 @@ func (s *Server) runFactCheck(ctx context.Context, wk *Work, a *Account, runID u
 			Message: message, Detail: detail, fingerprint: fingerprint("fact", quote, quote)})
 	}
 	err = s.withTx(context.WithoutCancel(ctx), func(tx pgx.Tx) error {
+		var revision int
+		if err := tx.QueryRow(context.WithoutCancel(ctx), `SELECT revision FROM work WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, wk.ID).Scan(&revision); err != nil {
+			return err
+		}
+		if revision != wk.Revision {
+			_, err := tx.Exec(context.WithoutCancel(ctx), `UPDATE check_run SET fact_status='failed' WHERE id=$1`, runID)
+			return err
+		}
+		matches, err := s.runMaterialBasisMatches(context.WithoutCancel(ctx), tx, wk.ID, runID)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			_, err := tx.Exec(context.WithoutCancel(ctx), `UPDATE check_run SET fact_status='failed' WHERE id=$1`, runID)
+			return err
+		}
 		if err := s.insertItems(ctx, tx, wk.ID, runID, items); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `UPDATE check_run SET fact_status=$2 WHERE id=$1`, runID, status)
+		_, err = tx.Exec(ctx, `UPDATE check_run SET fact_status=$2 WHERE id=$1`, runID, status)
 		return err
 	})
 	if err != nil {
@@ -597,8 +667,9 @@ func (s *Server) loadLatestCheck(ctx context.Context, workID uuid.UUID) (*CheckR
 	var run CheckRun
 	// 修订号优先取「最新检查」：数据库时钟回拨时（WSL2/Docker 容器时钟漂移）
 	// created_at 可能倒挂，按修订号排序可稳定取到新修订的运行（同修订号运行内容相同，次序无观测差异）。
-	err := s.db.QueryRow(ctx, `SELECT id, revision, target_platform, fact_status, completed_at, created_at FROM check_run WHERE work_id=$1 ORDER BY revision DESC, created_at DESC LIMIT 1`, workID).
-		Scan(&run.ID, &run.Revision, &run.TargetPlatform, &run.FactStatus, &run.CompletedAt, &run.CreatedAt)
+	var savedBasis string
+	err := s.db.QueryRow(ctx, `SELECT id, revision, target_platform, fact_status, completed_at, created_at, material_basis_hash FROM check_run WHERE work_id=$1 ORDER BY revision DESC, created_at DESC LIMIT 1`, workID).
+		Scan(&run.ID, &run.Revision, &run.TargetPlatform, &run.FactStatus, &run.CompletedAt, &run.CreatedAt, &savedBasis)
 	if err != nil {
 		return nil, err
 	}
@@ -607,6 +678,15 @@ func (s *Server) loadLatestCheck(ctx context.Context, workID uuid.UUID) (*CheckR
 		return nil, err
 	}
 	run.Stale = rev != run.Revision
+	currentBasis, err := s.materialBasisHash(ctx, s.db, workID, false)
+	if err != nil {
+		return nil, err
+	}
+	run.MaterialBasisStale = savedBasis == "" || savedBasis != currentBasis
+	run.MaterialBasisUnavailable, err = materialBasisUnavailableCount(ctx, s.db, workID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.db.Query(ctx, `SELECT id, category, passed, matched_text, location, message, detail, resolution, resolved_at FROM check_item
 		WHERE check_run_id=$1 ORDER BY CASE category WHEN 'format' THEN 0 WHEN 'sensitive' THEN 1 WHEN 'fact' THEN 2 ELSE 3 END, created_at`, run.ID)
 	if err != nil {
@@ -614,6 +694,7 @@ func (s *Server) loadLatestCheck(ctx context.Context, workID uuid.UUID) (*CheckR
 	}
 	defer rows.Close()
 	run.Items = []CheckItem{}
+	materialSupportIDs := []uuid.UUID{}
 	for rows.Next() {
 		var it CheckItem
 		var locJSON []byte
@@ -621,6 +702,13 @@ func (s *Server) loadLatestCheck(ctx context.Context, workID uuid.UUID) (*CheckR
 			return nil, err
 		}
 		_ = json.Unmarshal(locJSON, &it.Location)
+		if support, ok := it.Location["material_support"].(map[string]any); ok {
+			if rawID, ok := support["material_id"].(string); ok {
+				if id, err := uuid.Parse(rawID); err == nil {
+					materialSupportIDs = append(materialSupportIDs, id)
+				}
+			}
+		}
 		run.Items = append(run.Items, it)
 		if it.Category == "format" {
 			if it.Passed {
@@ -632,6 +720,46 @@ func (s *Server) loadLatestCheck(ctx context.Context, workID uuid.UUID) (*CheckR
 		run.Total++
 		if it.Resolution != nil {
 			run.Confirmed++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(materialSupportIDs) > 0 {
+		visible := map[uuid.UUID]bool{}
+		visibleRows, err := s.db.Query(ctx, `SELECT m.id FROM material m
+			JOIN work w ON w.id=$1
+			JOIN platform_account a ON a.id=w.account_id
+			WHERE m.id=ANY($2) AND m.workspace_id=a.workspace_id AND m.deleted_at IS NULL
+				AND (m.account_id IS NULL OR m.account_id=w.account_id)`, workID, materialSupportIDs)
+		if err != nil {
+			return nil, err
+		}
+		for visibleRows.Next() {
+			var id uuid.UUID
+			if err := visibleRows.Scan(&id); err != nil {
+				visibleRows.Close()
+				return nil, err
+			}
+			visible[id] = true
+		}
+		if err := visibleRows.Err(); err != nil {
+			visibleRows.Close()
+			return nil, err
+		}
+		visibleRows.Close()
+		for i := range run.Items {
+			support, ok := run.Items[i].Location["material_support"].(map[string]any)
+			if !ok {
+				continue
+			}
+			rawID, ok := support["material_id"].(string)
+			id, parseErr := uuid.Parse(rawID)
+			if !ok || parseErr != nil || !visible[id] {
+				delete(run.Items[i].Location, "material_support")
+				run.Items[i].Message = "需要核实的事实"
+				run.Items[i].Detail = "原引用素材已删除或不在当前作品可见范围，不能作为当前核查依据。"
+			}
 		}
 	}
 	return &run, nil
@@ -680,6 +808,9 @@ func (s *Server) resolveCheckItem(w http.ResponseWriter, r *http.Request) error 
 	if latest.ID != runID {
 		return stateInvalid("这是旧的检查结果，请刷新")
 	}
+	if latest.MaterialBasisStale {
+		return materialBasisStaleError()
+	}
 	var in struct {
 		Resolution *string `json:"resolution"`
 	}
@@ -726,6 +857,9 @@ func (s *Server) completeCheck(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if run.MaterialBasisStale {
+		return materialBasisStaleError()
+	}
 	if run.Stale {
 		return stateInvalid("内容在检查后又修改过，请重新检查")
 	}
@@ -738,13 +872,36 @@ func (s *Server) completeCheck(w http.ResponseWriter, r *http.Request) error {
 	if run.Confirmed < run.Total {
 		return humanStep("H-04", fmt.Sprintf("还有 %d 项需要逐项确认", run.Total-run.Confirmed))
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE check_run SET completed_at=now() WHERE id=$1`, run.ID); err != nil {
-		return err
-	}
 	var status string
 	var reviewer *uuid.UUID
-	if err := s.db.QueryRow(ctx, `UPDATE work SET status = CASE WHEN review_required AND reviewed_at IS NULL THEN 'reviewing' ELSE 'ready' END, updated_at=now()
-		WHERE id=$1 AND status IN ('checking','drafting') RETURNING status, reviewer_id`, m.ID).Scan(&status, &reviewer); err != nil && err != pgx.ErrNoRows {
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		var revision int
+		if err := tx.QueryRow(ctx, `SELECT revision FROM work WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, m.ID).Scan(&revision); err != nil {
+			return err
+		}
+		if revision != run.Revision {
+			return stateInvalid("内容在检查后又修改过，请重新检查")
+		}
+		var latestID uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT id FROM check_run WHERE work_id=$1 ORDER BY revision DESC, created_at DESC LIMIT 1`, m.ID).Scan(&latestID); err != nil {
+			return err
+		}
+		if latestID != run.ID {
+			return stateInvalid("已有新的检查记录，请刷新后重新检查")
+		}
+		if err := s.checkRunMaterialBasis(ctx, tx, m.ID, run.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE check_run SET completed_at=now() WHERE id=$1`, run.ID); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `UPDATE work SET status = CASE WHEN review_required AND reviewed_at IS NULL THEN 'reviewing' ELSE 'ready' END, updated_at=now()
+			WHERE id=$1 AND status IN ('checking','drafting') RETURNING status, reviewer_id`, m.ID).Scan(&status, &reviewer); err != nil && err != pgx.ErrNoRows {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	s.audit(ctx, "check_complete", "work", m.ID.String(), "ok", map[string]any{"items": run.Total})
@@ -767,17 +924,28 @@ func (s *Server) approveReview(w http.ResponseWriter, r *http.Request) error {
 	}
 	ctx := r.Context()
 	id := ident(ctx)
-	if m.Status != "reviewing" {
-		return stateInvalid("这篇作品不在待审阅状态")
-	}
-	var reviewer, assignee *uuid.UUID
-	_ = s.db.QueryRow(ctx, `SELECT reviewer_id, assignee_id FROM work WHERE id=$1`, m.ID).Scan(&reviewer, &assignee)
-	isReviewer := reviewer != nil && *reviewer == id.UserID && (assignee == nil || *assignee != id.UserID)
-	if id.Role != "owner" && !isReviewer && !(id.SystemAdmin && id.AdminOverride) {
-		return apiErr(403, "forbidden", "只有工作区所有者或指定的审阅人可以审阅通过（负责人不能审阅自己负责的作品）")
-	}
-	if _, err := s.db.Exec(ctx, `UPDATE work SET status='ready', reviewed_by=$2, reviewed_at=now(), updated_at=now() WHERE id=$1 AND status='reviewing'`,
-		m.ID, id.UserID); err != nil {
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		var status string
+		var reviewer, assignee *uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT status, reviewer_id, assignee_id FROM work WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, m.ID).
+			Scan(&status, &reviewer, &assignee); err != nil {
+			return err
+		}
+		if status != "reviewing" {
+			return stateInvalid("这篇作品不在待审阅状态")
+		}
+		isReviewer := reviewer != nil && *reviewer == id.UserID && (assignee == nil || *assignee != id.UserID)
+		if id.Role != "owner" && !isReviewer && !(id.SystemAdmin && id.AdminOverride) {
+			return apiErr(403, "forbidden", "只有工作区所有者或指定的审阅人可以审阅通过（负责人不能审阅自己负责的作品）")
+		}
+		if err := s.checkLatestMaterialBasis(ctx, tx, m.ID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `UPDATE work SET status='ready', reviewed_by=$2, reviewed_at=now(), updated_at=now() WHERE id=$1 AND status='reviewing'`,
+			m.ID, id.UserID)
+		return err
+	})
+	if err != nil {
 		return err
 	}
 	s.audit(ctx, "review_approve", "work", m.ID.String(), "ok", map[string]any{"checkpoint": "H-09"})

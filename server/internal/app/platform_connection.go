@@ -116,14 +116,14 @@ func (s *Server) createPlatformConnection(ctx context.Context, tx pgx.Tx, worksp
 	return c, err
 }
 
-// verifyPlatformConnection 绑定真实平台身份与能力快照。身份冲突返回 409，不覆盖原身份；
+// verifyPlatformConnection 仅允许连接绑定的持证设备核对真实平台身份与能力。身份冲突返回 409，不覆盖原身份；
 // 验证成功只是把可用性推进到 ready，不因此自动开启 auto_collect/auto_adopt。
-func (s *Server) verifyPlatformConnection(ctx context.Context, tx pgx.Tx, connectionID, workspaceID uuid.UUID, userID uuid.UUID, externalAccountKey string, capabilities map[string]any) (platformConnection, error) {
+func (s *Server) verifyPlatformConnection(ctx context.Context, tx pgx.Tx, connectionID, workspaceID uuid.UUID, userID, deviceID uuid.UUID, externalAccountKey string, capabilities map[string]any) (platformConnection, error) {
 	var c platformConnection
 	var currentKey, state string
 	err := tx.QueryRow(ctx, `SELECT external_account_key, state FROM platform_connection
-		WHERE id=$1 AND workspace_id=$2 AND user_id=$3 FOR UPDATE`,
-		connectionID, workspaceID, userID).Scan(&currentKey, &state)
+		WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND device_id=$4 FOR UPDATE`,
+		connectionID, workspaceID, userID, deviceID).Scan(&currentKey, &state)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return c, errNotFound
@@ -240,10 +240,11 @@ func (s *Server) requireAccountInWorkspace(ctx context.Context, accountID uuid.U
 }
 
 // platformConnectionSummary 是页面可读的最小摘要，不包含凭据或本机路径。
-func platformConnectionSummary(c platformConnection) map[string]any {
+func platformConnectionSummary(c platformConnection, viewerID uuid.UUID) map[string]any {
 	return map[string]any{
 		"id": c.ID, "account_id": c.AccountID, "platform": c.Platform,
-		"state": c.State, "availability": c.Availability,
+		"is_holder": c.UserID == viewerID,
+		"state":     c.State, "availability": c.Availability,
 		"external_account_key": c.ExternalAccountKey,
 		"auto_collect":         c.AutoCollect, "auto_adopt": c.AutoAdopt,
 		"last_verified_at": c.LastVerifiedAt, "last_seen_at": c.LastSeenAt,
@@ -381,7 +382,7 @@ func (s *Server) patchPlatformConnection(w http.ResponseWriter, r *http.Request)
 		return err
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	return ok(w, platformConnectionSummary(updated))
+	return ok(w, platformConnectionSummary(updated, id.UserID))
 }
 
 // getPlatformConnection 是 GET /accounts/{accountId}/platform-connection 的读取端。
@@ -402,8 +403,19 @@ func (s *Server) getPlatformConnection(w http.ResponseWriter, r *http.Request) e
 		}
 		return err
 	}
+	var capabilitiesRaw []byte
+	if err := s.db.QueryRow(r.Context(), `SELECT capabilities FROM platform_connection
+		WHERE id=$1 AND workspace_id=$2 AND account_id=$3`, c.ID, id.WorkspaceID, accountID).Scan(&capabilitiesRaw); err != nil {
+		return err
+	}
+	summary := platformConnectionSummary(c, id.UserID)
+	summary["sync_capabilities"] = map[string]string{
+		"catalog": platformSyncCapabilityState(capabilitiesRaw, c.Platform, "catalog"),
+		"content": platformSyncCapabilityState(capabilitiesRaw, c.Platform, "content"),
+		"metrics": platformSyncCapabilityState(capabilitiesRaw, c.Platform, "metrics"),
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	return ok(w, map[string]any{"connection": platformConnectionSummary(c)})
+	return ok(w, map[string]any{"connection": summary})
 }
 
 // deletePlatformConnection 是工作区撤销：owner 或本人。可离线撤销，不能保证远程清盘。
@@ -444,13 +456,14 @@ func (s *Server) deletePlatformConnection(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) listMinePlatformConnections(w http.ResponseWriter, r *http.Request) error {
-	list, err := s.listOwnedPlatformConnections(r.Context(), ident(r.Context()).UserID)
+	id := ident(r.Context())
+	list, err := s.listOwnedPlatformConnections(r.Context(), id.UserID)
 	if err != nil {
 		return err
 	}
 	out := make([]map[string]any, 0, len(list))
 	for _, c := range list {
-		out = append(out, platformConnectionSummary(c))
+		out = append(out, platformConnectionSummary(c, id.UserID))
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	return ok(w, map[string]any{"connections": out})

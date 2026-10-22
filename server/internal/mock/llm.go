@@ -123,6 +123,20 @@ func content(raw json.RawMessage) (string, int) {
 
 func (l *LLM) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// OpenAI 兼容的模型列表，供「获取可用模型」按钮在开发环境端到端联调。
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") == "bad-key" {
+			w.WriteHeader(401)
+			_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key"}}`))
+			return
+		}
+		writeJSON(w, map[string]any{"object": "list", "data": []map[string]any{
+			{"id": "mock-writer", "object": "model", "owned_by": "mock"},
+			{"id": "mock-fast", "object": "model", "owned_by": "mock"},
+			{"id": "mock-embed", "object": "model", "owned_by": "mock"},
+			{"id": "mock-vision", "object": "model", "owned_by": "mock"},
+		}})
+	})
 	mux.HandleFunc("/v1/search", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Parameters map[string]any `json:"parameters"`
@@ -253,6 +267,9 @@ func (l *LLM) Handler() http.Handler {
 		completionTokens := utf8.RuneCountInString(reply) * 2 / 3
 		usage := map[string]int{"prompt_tokens": promptTokens, "completion_tokens": completionTokens, "total_tokens": promptTokens + completionTokens}
 		if !req.Stream {
+			if l.Delay > 0 {
+				time.Sleep(l.Delay)
+			}
 			msg := map[string]any{"role": "assistant", "content": reply}
 			finish := "stop"
 			if truncated {
@@ -1056,28 +1073,31 @@ func (l *LLM) respond(prompt string) string {
 	}
 }
 
-var shotWorkRe = regexp.MustCompile(`(?m)^- 《(.+?)》`)
+var shotWorkRe = regexp.MustCompile(`(?m)^- 《(.+?)》 work_id=([0-9a-f-]+)，形态=([a-z_]+)`)
 
 // metricScreenshot fakes a vision model: one row per image, titled after the listed works in order.
 // The comments value never appears in raw_text, so the server must drop it as invented.
 func (l *LLM) metricScreenshot(prompt string, images int) string {
-	var titles []string
+	type shotWork struct {
+		title, id, contentFormat string
+	}
+	var works []shotWork
 	for _, m := range shotWorkRe.FindAllStringSubmatch(prompt, -1) {
-		titles = append(titles, m[1])
+		works = append(works, shotWork{title: m[1], id: m[2], contentFormat: m[3]})
 	}
 	reads := []string{"1.2万", "3,456", "10万+"}
 	var rows []map[string]any
 	for i := range images {
-		title := ""
-		if len(titles) > 0 {
-			title = titles[i%len(titles)]
+		var work shotWork
+		if len(works) > 0 {
+			work = works[i%len(works)]
 		}
 		r := reads[i%len(reads)]
 		likes := strconv.Itoa(36 + i)
 		rows = append(rows, map[string]any{
-			"title": title, "published_at": "", "day_hint": "截至今日",
+			"title": work.title, "work_id": work.id, "content_format": work.contentFormat, "published_at": "", "day_hint": "截至今日",
 			"metrics":  map[string]any{"reads": r, "likes": likes, "favorites": 8, "comments": "999"},
-			"raw_text": fmt.Sprintf("%s 阅读 %s 点赞 %s 收藏 8", title, r, likes),
+			"raw_text": fmt.Sprintf("%s 阅读 %s 点赞 %s 收藏 8", work.title, r, likes),
 		})
 	}
 	return js(map[string]any{"rows": rows})
