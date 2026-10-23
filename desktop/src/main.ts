@@ -50,8 +50,8 @@ import {
   type PlatformLoginSession
 } from './platform-login';
 import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace, orphanConnections } from './platform-profile';
-import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, normalizeXhsNoteTime, XHS_API } from './platforms/xhs';
-import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation, normalizeWechatSentAt, WECHAT_MP_API } from './platforms/wechat-mp';
+import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, normalizeXhsNoteTime, XHS_API, XhsAdapterError } from './platforms/xhs';
+import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation, normalizeWechatSentAt, WECHAT_MP_API, WechatAdapterError } from './platforms/wechat-mp';
 import { PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun, type PlatformV2ResultType } from './platform-client';
 import { parseDesktopUiIntent, type DesktopUiIntent } from './ui-intents';
 import {
@@ -1563,7 +1563,7 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
       adoptReason: receipt.adopt_reason ?? null
     };
   } catch (error) {
-    const code = error instanceof PlatformBrowserError ? error.code : 'platform_network_unavailable';
+    const code = platformCollectErrorCode(error);
     // 失败也要交终批，否则 run 会一直挂在 leased 直到租约过期。
     console.error('[collect] failed', code, describeError(error));
     await client.submit({
@@ -1873,12 +1873,19 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
     }
     return submitV2Control(client, run, { state: 'unknown', reason: 'temporarily_unavailable', observed_at: observedAt }, 'failed');
   } catch (error) {
-    const code = error instanceof PlatformBrowserError ? error.code : 'platform_network_unavailable';
+    const code = platformCollectErrorCode(error);
     console.error('[collect-v2] failed', code, describeError(error));
     return submitV2ControlFailure(client, run, v2ControlReason(code), code);
   } finally {
     await cdp.close();
   }
+}
+
+function platformCollectErrorCode(error: unknown): string {
+  if (error instanceof PlatformBrowserError || error instanceof XhsAdapterError || error instanceof WechatAdapterError) {
+    return error.code;
+  }
+  return 'platform_network_unavailable';
 }
 
 function v2ControlReason(errorCode: string): string {
