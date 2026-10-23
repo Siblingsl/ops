@@ -16,6 +16,7 @@ web/.vite/
 web/*.tsbuildinfo
 web/playwright-report/
 web/test-results/
+.playwright-results/
 
 # 本地数据
 data/
@@ -32,3 +33,5 @@ output/
 docs/
 # 工具目录（工作记忆等）
 .workbuddy-ai/
+.dsh-notes/
+.playwright-cli/
