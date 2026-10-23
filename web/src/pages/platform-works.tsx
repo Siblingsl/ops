@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
@@ -20,6 +20,18 @@ const contentStateName: Record<string, string> = {
   complete: '正文完整', partial: '正文部分可用', unsupported: '平台暂不支持读取正文', denied: '平台拒绝读取正文',
   not_requested: '尚未请求正文', failed: '正文读取失败', unknown: '完整性未知',
 }
+const syncStatusName: Record<PlatformSyncOperation['status'], string> = {
+  queued: '等待本机开始同步', running: '正在同步', paused: '同步已暂停', waiting_budget: '等待可用读取额度',
+  waiting_device: '等待保存登录态的客户端', waiting_login: '等待重新核对平台登录', succeeded: '同步完成',
+  partial: '同步部分完成', failed: '同步失败', canceled: '同步已取消',
+}
+const syncStageName: Record<string, string> = {
+  profile: '账号资料', catalog: '作品目录', content: '作品内容', metrics: '作品统计', complete: '结果整理',
+}
+const activeSyncStatuses = new Set<PlatformSyncOperation['status']>([
+  'queued', 'running', 'paused', 'waiting_budget', 'waiting_device', 'waiting_login',
+])
+const terminalSyncStatuses = new Set<PlatformSyncOperation['status']>(['succeeded', 'partial', 'failed', 'canceled'])
 
 function dateText(value: string | null | undefined) {
   return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '平台未提供'
@@ -241,6 +253,7 @@ export function PlatformWorksView({ account, canWrite }: { account: Account; can
   const [selectedID, setSelectedID] = useState('')
   const [linkingMirror, setLinkingMirror] = useState<PlatformWorkMirror | null>(null)
   const client = useQueryClient()
+  const completedSyncRefresh = useRef(new Set<string>())
   const navigate = useNavigate()
   const { data: me } = useMe()
   const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
@@ -258,6 +271,29 @@ export function PlatformWorksView({ account, canWrite }: { account: Account; can
     retry: false,
   })
   const connection = connectionQuery.data?.connection ?? null
+  const syncOperations = useQuery({
+    queryKey: ['platform-sync-operations', account.id],
+    queryFn: () => get<{ items: PlatformSyncOperation[] }>(`/accounts/${account.id}/platform-sync-operations?limit=20`),
+    enabled: desktopPresentation && account.platform !== 'toutiao',
+    staleTime: 5_000,
+    refetchInterval: (query) => {
+      const hasActiveSync = (query.state.data?.items ?? []).some((operation) =>
+        operation.kind === 'account_sync' && activeSyncStatuses.has(operation.status))
+      if (!hasActiveSync) return false
+      return document.visibilityState === 'visible' ? 5_000 : 30_000
+    },
+  })
+  const accountSync = syncOperations.data?.items.find((operation) => operation.kind === 'account_sync')
+  const activeAccountSync = syncOperations.data?.items.find((operation) =>
+    operation.kind === 'account_sync' && activeSyncStatuses.has(operation.status))
+  const accountSyncText = accountSync && [
+    syncStatusName[accountSync.status],
+    syncStageName[accountSync.stage] ?? accountSync.stage,
+    Number.isFinite(accountSync.counters.discovered) ? `发现 ${accountSync.counters.discovered} 篇` : '',
+    Number.isFinite(accountSync.counters.content_received) ? `详情完成 ${accountSync.counters.content_received} 篇` : '',
+    Number.isFinite(accountSync.counters.metrics_observed) ? `统计读取 ${accountSync.counters.metrics_observed} 篇` : '',
+    Number.isFinite(accountSync.counters.failed) && accountSync.counters.failed > 0 ? `未完成 ${accountSync.counters.failed} 项` : '',
+  ].filter(Boolean).join(' · ')
   const metricRefreshReason = !desktopPresentation ? '请在 OPS 桌面客户端刷新平台指标。'
     : me?.admin_override ? '系统管理员代入工作区时只能查看，不能读取平台数据。'
       : !canWrite ? '当前角色为只读，不能发起平台指标刷新。'
@@ -290,7 +326,15 @@ export function PlatformWorksView({ account, canWrite }: { account: Account; can
     queryFn: ({ pageParam }) => get<PlatformWorkMirrorPage>(`/accounts/${account.id}/platform-works?limit=20${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}${search.trim() ? `&q=${encodeURIComponent(search.trim())}` : ''}`),
     initialPageParam: '' as string,
     getNextPageParam: (page) => page.next_cursor ?? undefined,
+    refetchInterval: activeAccountSync && ['queued', 'running'].includes(activeAccountSync.status)
+      ? (document.visibilityState === 'visible' ? 15_000 : 30_000)
+      : false,
   })
+  useEffect(() => {
+    if (!accountSync || !terminalSyncStatuses.has(accountSync.status) || completedSyncRefresh.current.has(accountSync.id)) return
+    completedSyncRefresh.current.add(accountSync.id)
+    void works.refetch()
+  }, [accountSync?.id, accountSync?.status, works.refetch])
   const items = works.data?.pages.flatMap((page) => page.items) ?? []
   const createDraft = async (mirror: PlatformWorkMirror) => {
     try {
@@ -311,8 +355,17 @@ export function PlatformWorksView({ account, canWrite }: { account: Account; can
       <Input className="max-w-sm" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索平台作品标题" aria-label="搜索平台作品" />
       <p className="text-xs text-mist-500">镜像只读展示，不计入本地创作和发布数量。</p>
     </div>
+    {accountSyncText && <p className="rounded-lg border border-ink-100 bg-white px-3 py-2 text-xs text-mist-600" role="status" aria-live="polite">
+      {accountSyncText}{activeAccountSync && <span className="ml-2 text-mist-500">新发现的作品会自动显示。</span>}
+    </p>}
     {works.isLoading ? <PageLoading /> : works.isError ? <div className="rounded-xl border border-danger/20 bg-danger/5 p-5 text-sm text-danger">{errorMessage(works.error)} <button className="ml-1 underline" onClick={() => void works.refetch()}>重试</button></div>
-      : items.length === 0 ? <div className="rounded-xl border border-mist-200 bg-white p-5"><Empty title="还没有同步的平台作品" desc="请先在账号设置中发起平台账号同步。平台能力尚未核验时，同步入口会显示具体限制。" /></div>
+      : items.length === 0 ? <div className="rounded-xl border border-mist-200 bg-white p-5"><Empty
+        title={activeAccountSync ? '正在同步平台作品' : accountSync?.status === 'failed' ? '上次同步失败' : accountSync?.status === 'partial' ? '上次同步部分完成' : accountSync?.status === 'succeeded' ? '同步完成，暂无可显示作品' : '还没有同步的平台作品'}
+        desc={activeAccountSync ? '已保存到项目的作品会自动显示在这里；目录同步期间列表会定时刷新。'
+          : accountSync?.status === 'failed' ? '请到账号设置查看同步失败原因后重试。'
+            : accountSync?.status === 'partial' ? '请到账号设置查看未完成范围；已保存的作品会显示在这里。'
+              : accountSync?.status === 'succeeded' ? '本次同步没有返回可显示的已发布作品，请到账号设置查看目录覆盖情况。'
+                : '请先在账号设置中发起平台账号同步。平台能力尚未核验时，同步入口会显示具体限制。'} /></div>
         : <div className="space-y-2">{items.map((item: PlatformWorkMirrorListItem) => <button key={item.id} type="button" onClick={() => setSelectedID(item.id)}
           className="grid w-full cursor-pointer gap-3 rounded-xl border border-mist-200 bg-white p-4 text-left transition hover:border-ink-300 sm:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0">
