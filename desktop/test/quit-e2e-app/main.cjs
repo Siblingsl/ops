@@ -10,6 +10,10 @@ function send(message) {
 
 dialog.showMessageBox = async (...args) => {
   const options = args.at(-1);
+  if (options.title === '已取消退出') {
+    send({ type: 'quit-guard-warning', title: options.title, message: options.message, detail: options.detail });
+    return { response: 0, checkboxChecked: false };
+  }
   const response = responses.shift() ?? 0;
   send({
     type: 'quit-dialog',

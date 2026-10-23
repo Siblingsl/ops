@@ -187,6 +187,13 @@ func TestMainChain(t *testing.T) {
 	if derived.Source == nil || len(derived.Sections) == 0 || derived.OutlineConfirmedAt == nil {
 		t.Fatalf("derived: %+v", derived)
 	}
+	var deriveCreateMeta []byte
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT detail FROM audit_log WHERE action='work_create' AND target_id=$1 ORDER BY created_at DESC LIMIT 1`, derived.ID.String()).Scan(&deriveCreateMeta); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(deriveCreateMeta), `"source": "derive"`) {
+		t.Fatalf("derived create audit does not record the shared source: %s", deriveCreateMeta)
+	}
 	did := derived.ID.String()
 	for _, sec := range derived.Sections {
 		if ev := lastEvent(t, env.sse(t, "/api/v1/sections/"+sec.ID.String()+"/rewrite", nil)); ev.Name != "done" {

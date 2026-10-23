@@ -11,7 +11,8 @@ const desktopRoot = path.resolve(__dirname, '..');
 const harnessApp = path.join(__dirname, 'quit-e2e-app');
 const desktopBinary = require('electron');
 
-async function startBusinessServer() {
+async function startBusinessServer(guardResult = null) {
+  const guard = guardResult === null ? '' : `<script>window.addEventListener('ops:desktop-leave-guard-request', (event) => event.detail.register(() => ${JSON.stringify(guardResult)}));</script>`;
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
     if (url.pathname === '/api/v1/auth/me') {
@@ -20,7 +21,7 @@ async function startBusinessServer() {
       return;
     }
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    response.end('<!doctype html><meta charset="utf-8"><title>Quit E2E</title>');
+    response.end(`<!doctype html><meta charset="utf-8"><title>Quit E2E</title>${guard}`);
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -29,10 +30,18 @@ async function startBusinessServer() {
   return { server, origin: `http://127.0.0.1:${server.address().port}` };
 }
 
-async function runQuitScenario(t, responses) {
-  const expectsExit = responses.includes(1);
-  const { server, origin } = await startBusinessServer();
+async function runQuitScenario(t, responses, guardResult = null) {
+  const expectsExit = responses.includes(1) && guardResult !== false;
+  const { server, origin } = await startBusinessServer(guardResult);
   const userDataPath = await fs.mkdtemp(path.join(os.tmpdir(), 'ops-desktop-quit-e2e-'));
+  const childEnv = {
+    ...process.env,
+    OPS_DESKTOP_DEV_URL: origin,
+    OPS_DESKTOP_QUIT_TEST_ORIGIN: origin,
+    OPS_DESKTOP_QUIT_TEST_RESPONSES: JSON.stringify(responses),
+    ELECTRON_DISABLE_SECURITY_WARNINGS: 'true'
+  };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
   const child = spawn(desktopBinary, [
     `--user-data-dir=${userDataPath}`,
     '--disable-gpu',
@@ -40,13 +49,7 @@ async function runQuitScenario(t, responses) {
     harnessApp
   ], {
     cwd: desktopRoot,
-    env: {
-      ...process.env,
-      OPS_DESKTOP_DEV_URL: origin,
-      OPS_DESKTOP_QUIT_TEST_ORIGIN: origin,
-      OPS_DESKTOP_QUIT_TEST_RESPONSES: JSON.stringify(responses),
-      ELECTRON_DISABLE_SECURITY_WARNINGS: 'true'
-    },
+    env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true
   });
@@ -65,7 +68,8 @@ async function runQuitScenario(t, responses) {
       try {
         const event = JSON.parse(line);
         output.push(event);
-        if (!expectsExit && event.type === 'quit-cancelled' && output.filter((entry) => entry.type === 'quit-cancelled').length === responses.filter((response) => response === 0).length) {
+        if (event.type === 'quit-guard-warning'
+          || (!expectsExit && event.type === 'quit-cancelled' && output.filter((entry) => entry.type === 'quit-cancelled').length === responses.filter((response) => response === 0).length)) {
           resolveEvent(output);
         }
       } catch {
@@ -105,6 +109,13 @@ test('Electron close cancellation keeps the business window open and confirmed q
   assert.ok(dialogs[0].detail.includes('本机模型调用'));
   assert.ok(output.some((event) => event.type === 'quit-cancelled' && event.windowOpen));
   assert.notEqual(child.exitCode, null);
+});
+
+test('Electron cancels confirmed quit when the work save guard refuses', { timeout: 30_000 }, async (t) => {
+  const { output, child } = await runQuitScenario(t, [1], false);
+  assert.equal(output.filter((event) => event.type === 'quit-dialog').length, 1);
+  assert.ok(output.some((event) => event.type === 'quit-guard-warning' && event.title === '已取消退出'));
+  assert.equal(child.exitCode, null);
 });
 
 test('Electron stays open when the user cancels the close confirmation', { timeout: 30_000 }, async (t) => {

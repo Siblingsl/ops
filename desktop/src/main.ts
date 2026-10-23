@@ -56,7 +56,9 @@ import { buildPlatformCatalogCompletion, PlatformClient, type PlatformObservatio
 import {
   isBusinessWindowOnlyIntent,
   parseDesktopUiIntent,
+  CLIENT_HEALTH_CHANNEL,
   PLATFORM_INTENT_RESULT_CHANNEL,
+  type DesktopClientHealth,
   type DesktopUiIntent,
   type PlatformIntentResult
 } from './ui-intents';
@@ -135,6 +137,10 @@ let localSettingsSession: Session | null = null;
 let localSettingsViewController: ReturnType<typeof createLocalSettingsViewController> | null = null;
 let pendingNativeSettingsRequest = false;
 let desktopClient: DesktopClient | null = null;
+let clientHealthTimer: NodeJS.Timeout | null = null;
+let collectionHealth: DesktopClientHealth['collection'] = { status: 'idle', message: '自动采集状态尚未更新。', updatedAt: null };
+let presenceHealth: DesktopClientHealth['presence'] = { status: 'unknown', message: '平台连接状态尚未更新。', updatedAt: null };
+let lastClientHealthPayload = '';
 let externalPromptOpen = false;
 const localWindows = new Set<number>();
 const localSettingsSenderRegistry = new EmbeddedSettingsSenderRegistry();
@@ -149,6 +155,43 @@ let quitConfirmed = false;
 let quitDialogOpen = false;
 let desktopTheme: 'light' | 'dark' = 'light';
 let desktopReducedMotion: boolean | null = null;
+
+function setCollectionHealth(status: DesktopClientHealth['collection']['status'], message: string): void {
+  collectionHealth = { status, message: message.slice(0, 200), updatedAt: Date.now() };
+  broadcastClientHealth();
+}
+
+function setPresenceHealth(status: DesktopClientHealth['presence']['status'], message: string): void {
+  presenceHealth = { status, message: message.slice(0, 200), updatedAt: Date.now() };
+  broadcastClientHealth();
+}
+
+function broadcastClientHealth(force = false): void {
+  const window = businessWindow;
+  if (!desktopClient || !window || window.isDestroyed() || window.webContents.isDestroyed()
+    || !isBusinessUrl(window.webContents.getURL())) return;
+  const channel = desktopClient.getChannelHealth();
+  const payload: DesktopClientHealth = {
+    channelState: channel.state,
+    channelMessage: channel.message.slice(0, 200),
+    collection: collectionHealth,
+    presence: presenceHealth
+  };
+  const serialized = JSON.stringify(payload);
+  if (!force && serialized === lastClientHealthPayload) return;
+  try {
+    window.webContents.send(CLIENT_HEALTH_CHANNEL, payload);
+    lastClientHealthPayload = serialized;
+  } catch (error) {
+    console.error('[client-health] 无法更新桌面状态栏', describeError(error));
+  }
+}
+
+function startClientHealthBroadcast(): void {
+  if (clientHealthTimer) return;
+  clientHealthTimer = setInterval(() => broadcastClientHealth(), 1_000);
+  clientHealthTimer.unref?.();
+}
 
 function startApplication(): void {
   app.setAppUserModelId('com.squirrel.OpsDesktop.OPSDesktop');
@@ -182,10 +225,19 @@ function startApplication(): void {
       businessSession = session.fromPartition(businessPartition);
       localSettingsSession = session.fromPartition('ops-settings');
       desktopClient = new DesktopClient(businessSession, businessOrigin);
+      startClientHealthBroadcast();
       registerDesktopPowerHandlers(
         powerMonitor,
         () => desktopClient?.disconnect(),
-        () => updateNativeClientStatus()
+        async () => {
+          try {
+            await desktopClient?.reconnectAfterResume();
+          } catch (error) {
+            console.error('[desktop-channel] 恢复连接失败', describeError(error));
+          }
+          await updateNativeClientStatus();
+          broadcastClientHealth(true);
+        }
       );
       installBusinessPermissions(businessSession);
       installDesktopRequestContext(businessSession);
@@ -268,6 +320,8 @@ function createBusinessWindow(businessSession: Session): void {
   currentWindow.webContents.on('did-finish-load', () => {
     applyDesktopThemeToWindow(currentWindow, desktopTheme);
     applyDesktopMotionToWindow(currentWindow, desktopReducedMotion);
+    lastClientHealthPayload = '';
+    broadcastClientHealth(true);
   });
   currentWindow.webContents.setWindowOpenHandler(({ url, disposition }) => {
     const intent = parseDesktopUiIntent(url);
@@ -2065,9 +2119,11 @@ function startPlatformPresence(): void {
       if (!capability.enabled) {
         // 服务端未开通平台采集：不发 presence，也把错误状态清掉。
         presenceLastError = null;
+        setPresenceHealth('offline', '自动采集尚未启用。');
         return;
       }
       await desktopClient.presence();
+      setPresenceHealth('online', '平台采集服务在线。');
       if (presenceLastError) {
         // 从失败恢复时记一条，便于排查"为什么之前一直离线"。
         console.error('[platform-presence] 已恢复上报');
@@ -2080,6 +2136,7 @@ function startPlatformPresence(): void {
         presenceLastError = code;
         console.error('[platform-presence] 上报失败', code, describeError(error));
       }
+      setPresenceHealth('error', '平台连接状态暂不可用，请检查账号登录情况。');
     } finally {
       presenceInFlight = false;
     }
@@ -2121,11 +2178,18 @@ function startPlatformClaimLoop(): void {
     collectInFlight = true;
     try {
       const capability = await desktopClient.getPlatformCollectionCapability();
-      if (!capability.enabled) return;
+      if (!capability.enabled) {
+        setCollectionHealth('idle', '自动采集尚未启用。');
+        return;
+      }
       const client = new PlatformClient(capability, async (operation, method, path, body) =>
         desktopClient!.platformSignedCall(operation, method, path, body));
       const run = await client.claim();
-      if (!run) return; // 没有任务：正常情况，不记日志
+      if (!run) {
+        setCollectionHealth('idle', '自动采集服务在线，正在等待任务。');
+        return;
+      }
+      setCollectionHealth('running', '正在采集平台作品。');
       console.error('[platform-auto] 领到任务', JSON.stringify({ platform: run.platform, taskKind: run.task_kind }));
       const outcome = await runPlatformCollect(run.account_id, run);
       console.error('[platform-auto] 完成', JSON.stringify({
@@ -2134,7 +2198,15 @@ function startPlatformClaimLoop(): void {
         // 投影失败时把原因一并记下。不记的话，日志里只有"完成"，而数据其实没进正式指标。
         adoptErrors: outcome.adoptErrors, adoptReason: outcome.adoptReason
       }));
-      // 自动采用失败要单独告警：这是"采集成功但数据没生效"的静默失败，
+      // PB-11：采集成功但正式指标未写入时，在桌面状态栏给出可见提醒。
+      if (outcome.adoptErrors > 0) {
+        setCollectionHealth('partial', `${outcome.adoptErrors} 条观测未写入正式指标，请在平台连接设置中逐条确认。`);
+      } else if (outcome.runStatus === 'failed') {
+        setCollectionHealth('failed', '平台采集未能完成，请检查网络和平台连接设置后重试。');
+      } else {
+        setCollectionHealth('idle', '自动采集已完成。');
+      }
+      // 自动采用失败要单独告警：这是"采集成功但数据没进正式指标"的静默失败，
       // 靠一行 JSON 容易被忽略，所以再打一条明确的中文提示。
       if (outcome.adoptErrors > 0) {
         console.error(
@@ -2143,8 +2215,9 @@ function startPlatformClaimLoop(): void {
         );
       }
     } catch (error) {
-      // 不弹窗、不打断用户；错误会在 run 的终批里体现。
+      // PB-09：自动采集循环失败时显示概括原因，不把内部错误码暴露给用户。
       console.error('[platform-auto] 循环异常', describeError(error));
+      setCollectionHealth('failed', '自动采集最近失败，请检查网络和平台连接设置后重试。');
     } finally {
       collectInFlight = false;
     }
@@ -3104,6 +3177,55 @@ async function openExternalUrl(value: string): Promise<void> {
   }
 }
 
+async function flushBusinessWindowBeforeQuit(): Promise<boolean> {
+  const window = businessWindow;
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return true;
+  const url = window.webContents.getURL();
+  if (!isBusinessUrl(url)) return true;
+  const script = `new Promise((resolve) => {
+    let settled = false;
+    const checks = [];
+    const grants = [];
+    const finish = (allowed) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(rendererTimeout);
+      resolve(allowed);
+    };
+    const rendererTimeout = setTimeout(() => finish(false), 12000);
+    const detail = {
+      reserveNavigation: true,
+      register: (check) => { if (typeof check === 'function') checks.push(check); },
+      grant: (grant) => { if (typeof grant === 'function') grants.push(grant); }
+    };
+    window.dispatchEvent(new CustomEvent('ops:desktop-leave-guard-request', { detail }));
+    Promise.all(checks.map(async (check) => {
+      try { return await check(); } catch { return false; }
+    })).then((results) => {
+      if (settled) return;
+      const allowed = results.every((result) => result === true);
+      if (allowed) {
+        try { grants.forEach((grant) => grant()); } catch { finish(false); return; }
+      }
+      finish(allowed);
+    }, () => finish(false));
+  })`;
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    const allowed = await Promise.race([
+      window.webContents.executeJavaScript(script, true),
+      new Promise<boolean>((resolve) => { timeout = setTimeout(() => resolve(false), 15_000); })
+    ]);
+    if (timeout) clearTimeout(timeout);
+    if (!allowed) console.warn('[quit-guard] 作品保存失败或等待超时，已取消退出');
+    return allowed === true;
+  } catch (error) {
+    if (timeout) clearTimeout(timeout);
+    console.error('[quit-guard] 无法确认作品保存状态，已取消退出', describeError(error));
+    return false;
+  }
+}
+
 async function confirmApplicationQuit(parent: BrowserWindow | null): Promise<void> {
   if (quitDialogOpen || quitConfirmed) return;
   quitDialogOpen = true;
@@ -3115,7 +3237,7 @@ async function confirmApplicationQuit(parent: BrowserWindow | null): Promise<voi
       type: 'warning',
       title: '退出 OPS Desktop',
       message: '确定退出 OPS Desktop 吗？',
-      detail: `请先保存业务页面中尚未提交的内容；客户端无法判断编辑器是否有未保存修改。当前有 ${activeRequests} 条本机模型调用正在进行。退出会终止这些调用，模型服务可能已经计费；客户端不会自动重发。`,
+      detail: `退出前会先尝试保存业务页面中尚未提交的内容；保存失败或等待超时会取消退出。当前有 ${activeRequests} 条本机模型调用正在进行。退出会终止这些调用，模型服务可能已经计费；客户端不会自动重发。`,
       buttons: ['继续使用', '退出客户端'],
       defaultId: 0,
       cancelId: 0,
@@ -3125,6 +3247,21 @@ async function confirmApplicationQuit(parent: BrowserWindow | null): Promise<voi
       ? await dialog.showMessageBox(parent, options)
       : await dialog.showMessageBox(options);
     if (response !== 1) return;
+    const workSaved = await flushBusinessWindowBeforeQuit();
+    if (!workSaved) {
+      const warning: Electron.MessageBoxOptions = {
+        type: 'warning',
+        title: '已取消退出',
+        message: '业务页面还有内容未能确认保存。',
+        detail: '请返回作品页，等待保存完成后再退出 OPS Desktop。',
+        buttons: ['返回应用'],
+        defaultId: 0,
+        noLink: true
+      };
+      if (parent && !parent.isDestroyed()) await dialog.showMessageBox(parent, warning);
+      else await dialog.showMessageBox(warning);
+      return;
+    }
     await platformLoginFlow.stop();
     quitConfirmed = true;
     desktopClient?.disconnect();

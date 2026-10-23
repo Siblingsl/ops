@@ -1515,7 +1515,7 @@ func (s *Server) notifyPlatformReauth(ctx context.Context, tx pgx.Tx, connection
 		verified = lastVerified.UTC().Format(time.RFC3339)
 	}
 	dedupeKey := fmt.Sprintf("platform_reauth:%s:%s:%s", connectionID, availability, verified)
-	link := "/a/" + accountID + "/settings/accounts"
+	link := "/settings/accounts?id=" + accountID
 	holder, err := uuid.Parse(holderID)
 	if err != nil {
 		return nil

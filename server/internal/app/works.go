@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -345,9 +346,12 @@ func (s *Server) insertWorkTx(ctx context.Context, q dbtx, a *Account, topicID *
 		assignee = uid
 	}
 	title = strings.TrimSpace(title)
+	if runeLen(title) > 64 {
+		return uuid.Nil, validationFields("作品标题最多64字，超出部分请删减", map[string]string{"title": "最多64字"})
+	}
 	err = q.QueryRow(ctx, `INSERT INTO work (account_id, topic_id, content_format, title, theme, wechat_fields, client_request_id, assignee_id, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING id`,
-		a.ID, topicID, format, truncateRunes(title, 64), p.DefaultTheme, wf, key, assignee, assignee).Scan(&id)
+		a.ID, topicID, format, title, p.DefaultTheme, wf, key, assignee, assignee).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) && clientRequestID != "" {
 		// 并发请求先插入了同一个键：返回那一篇，不重复创建。
 		err = q.QueryRow(ctx, `SELECT id FROM work WHERE account_id=$1 AND client_request_id=$2 AND deleted_at IS NULL`,
@@ -477,9 +481,46 @@ type WorkListItem struct {
 	TodosTotal    int        `json:"todos_total"`
 }
 
+// WL-02：作品列表使用稳定游标分页。响应体仍是数组，保留历史调用方契约；
+// 分页信息走响应头，旧调用方仍可使用 offset，新前端使用 cursor。
+const (
+	worksPageDefault = 300 // 兼容历史行为：不带 limit 时一次最多给 300 条
+	worksPageMax     = 300
+)
+
 func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.accountFromPath(r)
 	if err != nil {
+		return err
+	}
+	where := ` WHERE w.account_id=$1 AND w.deleted_at IS NULL`
+	args := []any{a.ID}
+	if st := queryText(r, "status"); st != "" {
+		args = append(args, strings.Split(st, ","))
+		where += fmt.Sprintf(` AND w.status = ANY($%d)`, len(args))
+	}
+	if as := r.URL.Query().Get("assignee"); as == "me" {
+		args = append(args, ident(r.Context()).UserID)
+		where += fmt.Sprintf(` AND w.assignee_id = $%d`, len(args))
+	}
+	if q := queryText(r, "q"); q != "" {
+		args = append(args, "%"+q+"%")
+		where += fmt.Sprintf(` AND w.title ILIKE $%d`, len(args))
+	}
+	limit := queryInt(r, "limit", worksPageDefault)
+	if limit <= 0 || limit > worksPageMax {
+		limit = worksPageDefault
+	}
+	cursor, err := parseListCursor(r)
+	if err != nil {
+		return err
+	}
+	offset := queryInt(r, "offset", 0)
+	if offset < 0 {
+		offset = 0
+	}
+	var total int
+	if err := s.db.QueryRow(r.Context(), `SELECT count(*) FROM work w`+where, args...).Scan(&total); err != nil {
 		return err
 	}
 	sql := `SELECT w.id, w.title, w.tags, w.status, w.content_format, w.source_work_id, sw.title,
@@ -493,22 +534,22 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 		LEFT JOIN LATERAL (SELECT coalesce(sum(char_length(content_md)),0) AS char_count, count(*) AS section_count
 			FROM work_section WHERE work_id=w.id AND deleted_at IS NULL) sections ON true
 		LEFT JOIN LATERAL (SELECT count(*) FILTER (WHERE coalesce((e->>'done')::boolean,false)) AS done,
-			jsonb_array_length(w.post_push_todos) AS total FROM jsonb_array_elements(w.post_push_todos) e) todos ON true
-		WHERE w.account_id=$1 AND w.deleted_at IS NULL`
-	args := []any{a.ID}
-	if st := r.URL.Query().Get("status"); st != "" {
-		args = append(args, strings.Split(st, ","))
-		sql += fmt.Sprintf(` AND w.status = ANY($%d)`, len(args))
+			jsonb_array_length(w.post_push_todos) AS total FROM jsonb_array_elements(w.post_push_todos) e) todos ON true`
+	pageWhere := where
+	pageArgs := append([]any(nil), args...)
+	if cursor != nil {
+		pageArgs = append(pageArgs, cursor.CreatedAt, cursor.ID)
+		pageWhere += fmt.Sprintf(` AND (w.updated_at, w.id) < ($%d, $%d)`, len(pageArgs)-1, len(pageArgs))
+	} else if offset > 0 {
+		pageArgs = append(pageArgs, offset)
 	}
-	if as := r.URL.Query().Get("assignee"); as == "me" {
-		args = append(args, ident(r.Context()).UserID)
-		sql += fmt.Sprintf(` AND w.assignee_id = $%d`, len(args))
+	sql += pageWhere + ` ORDER BY w.updated_at DESC, w.id DESC`
+	if cursor == nil && offset > 0 {
+		sql += fmt.Sprintf(` OFFSET $%d`, len(pageArgs))
 	}
-	if q := queryText(r, "q"); q != "" {
-		args = append(args, "%"+q+"%")
-		sql += fmt.Sprintf(` AND w.title ILIKE $%d`, len(args))
-	}
-	rows, err := s.db.Query(r.Context(), sql+` ORDER BY w.updated_at DESC LIMIT 300`, args...)
+	pageArgs = append(pageArgs, limit+1)
+	sql += fmt.Sprintf(` LIMIT $%d`, len(pageArgs))
+	rows, err := s.db.Query(r.Context(), sql, pageArgs...)
 	if err != nil {
 		return err
 	}
@@ -522,6 +563,16 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 		}
 		list = append(list, x)
 	}
+	hasMore := len(list) > limit
+	if hasMore {
+		list = list[:limit]
+		last := list[len(list)-1]
+		w.Header().Set("X-Next-Cursor", encodeListCursor(last.UpdatedAt, last.ID))
+	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
+	w.Header().Set("X-Limit", strconv.Itoa(limit))
+	w.Header().Set("X-Offset", strconv.Itoa(offset))
+	w.Header().Set("X-Has-More", strconv.FormatBool(hasMore))
 	return ok(w, list)
 }
 

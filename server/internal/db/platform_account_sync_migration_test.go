@@ -21,7 +21,7 @@ func TestPlatformAccountSyncMigrationPreservesDataAndGuardsRollback(t *testing.T
 	if err := Migrate(freshURL); err != nil {
 		t.Fatalf("migrate fresh database: %v", err)
 	}
-	if version, err := goose.GetDBVersion(freshDB); err != nil || version != 58 {
+	if version, err := goose.GetDBVersion(freshDB); err != nil || version != 59 {
 		t.Fatalf("fresh migration version: got %d, err=%v", version, err)
 	}
 	assertPlatformAccountSyncMigrationColumns(t, freshDB)
@@ -40,7 +40,7 @@ func TestPlatformAccountSyncMigrationPreservesDataAndGuardsRollback(t *testing.T
 	if err := Migrate(databaseURL); err != nil {
 		t.Fatalf("upgrade to platform account sync schema: %v", err)
 	}
-	if version, err := goose.GetDBVersion(database); err != nil || version != 58 {
+	if version, err := goose.GetDBVersion(database); err != nil || version != 59 {
 		t.Fatalf("migration version: got %d, err=%v", version, err)
 	}
 	assertLegacyPlatformData(t, database, legacy)

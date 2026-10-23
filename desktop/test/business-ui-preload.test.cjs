@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const Module = require('node:module');
 const test = require('node:test');
 
-test('exposes only one-way settings, platform intent subscriptions', () => {
+test('exposes only one-way settings, platform intent and client health subscriptions', () => {
   const exposed = {};
   const handlers = new Map();
   const contextBridge = {
@@ -31,6 +31,7 @@ test('exposes only one-way settings, platform intent subscriptions', () => {
 
   assert.deepEqual(Object.keys(exposed), ['opsDesktopUI']);
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).sort(), [
+    'onClientHealth',
     'onLocalSettingsState',
     'onOpenSettings',
     'onPlatformIntentResult'
@@ -96,6 +97,17 @@ test('exposes only one-way settings, platform intent subscriptions', () => {
   emit(handlers, channel, { kind: 'platform-account-sync', requestId, accountId, status: 'queued' });
   assert.equal(results.length, 5);
 
+  const healthResults = [];
+  const unsubscribeHealth = exposed.opsDesktopUI.onClientHealth((health) => healthResults.push(health));
+  const health = {
+    channelState: 'ready', channelMessage: '连接正常',
+    collection: { status: 'idle', message: '暂未运行', updatedAt: null },
+    presence: { status: 'online', message: '在线', updatedAt: 1 },
+  };
+  emit(handlers, 'desktop-ui:client-health', health);
+  emit(handlers, 'desktop-ui:client-health', { ...health, channelState: 'unexpected' });
+  assert.deepEqual(healthResults, [health]);
+  unsubscribeHealth();
 });
 
 function emit(handlers, channel, payload) {

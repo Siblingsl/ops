@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +53,52 @@ func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
+// searchCursor 是 XC-01 的游标：按「分数降序 + 类型 + ID」这个稳定全序定位，避免截断。
+type searchCursor struct {
+	Score float64
+	Type  string
+	ID    uuid.UUID
+}
+
+func parseSearchCursor(raw string) (*searchCursor, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, validation("分页游标无效")
+	}
+	parts := strings.Split(string(b), "|")
+	if len(parts) != 3 {
+		return nil, validation("分页游标无效")
+	}
+	score, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return nil, validation("分页游标无效")
+	}
+	itemID, err := uuid.Parse(parts[2])
+	if err != nil {
+		return nil, validation("分页游标无效")
+	}
+	return &searchCursor{Score: score, Type: parts[1], ID: itemID}, nil
+}
+
+func encodeSearchCursor(h SearchHit) string {
+	raw := strconv.FormatFloat(h.Score, 'g', -1, 64) + "|" + h.Type + "|" + h.ID.String()
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// searchAfter 判断 h 是否严格排在游标之后（分数降序，同分按类型、ID 升序）。
+func searchAfter(h SearchHit, c *searchCursor) bool {
+	if h.Score != c.Score {
+		return h.Score < c.Score
+	}
+	if h.Type != c.Type {
+		return h.Type > c.Type
+	}
+	return h.ID.String() > c.ID.String()
+}
+
 // snippetAround returns ~80 runes around the first occurrence of any matched term.
 func snippetAround(text string, matched []string, q string) string {
 	text = strings.Join(strings.Fields(text), " ")
@@ -89,6 +137,11 @@ func (s *Server) globalSearch(w http.ResponseWriter, r *http.Request) error {
 	limit := queryInt(r, "limit", 20)
 	if limit <= 0 || limit > 100 {
 		limit = 20
+	}
+	// XC-01：游标分页。limit 之外多取一条，用来判断"还有更多"。
+	cursor, err := parseSearchCursor(qv.Get("cursor"))
+	if err != nil {
+		return err
 	}
 	types := map[string]bool{"work": true, "topic": true, "material": true, "style_sample": true}
 	if t := qv.Get("types"); t != "" {
@@ -236,11 +289,32 @@ func (s *Server) globalSearch(w http.ResponseWriter, r *http.Request) error {
 		c.hit.Snippet = snippetAround(c.body, c.matched, q)
 		out = append(out, c.hit)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		if out[i].Type != out[j].Type {
+			return out[i].Type < out[j].Type
+		}
+		return out[i].ID.String() < out[j].ID.String()
+	})
+	// XC-01：先按游标跳过已返回的部分，再多取一条判断是否还有下一页。
+	var nextCursor *string
+	if cursor != nil {
+		filtered := out[:0]
+		for _, h := range out {
+			if searchAfter(h, cursor) {
+				filtered = append(filtered, h)
+			}
+		}
+		out = filtered
+	}
 	if len(out) > limit {
 		out = out[:limit]
+		last := encodeSearchCursor(out[len(out)-1])
+		nextCursor = &last
 	}
-	return ok(w, map[string]any{"items": out})
+	return ok(w, map[string]any{"items": out, "next_cursor": nextCursor})
 }
 
 func (s *Server) starredSet(ctx context.Context) map[string]bool {

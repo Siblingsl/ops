@@ -332,7 +332,7 @@ var sourceLabel = map[string]string{"base": "通用词库", "custom": "自定义
 // checkWords is the word list used by both the formal check and /lint, so their results agree (EX-E-09).
 func (s *Server) checkWords(ctx context.Context, accountID uuid.UUID) ([]checkWord, error) {
 	var words []checkWord
-	rows, err := s.db.Query(ctx, `SELECT word, source FROM sensitive_word WHERE workspace_id=$1`, ident(ctx).WorkspaceID)
+	rows, err := s.db.Query(ctx, `SELECT word, source FROM sensitive_word WHERE workspace_id=$1 AND deleted_at IS NULL`, ident(ctx).WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -784,6 +784,58 @@ func (s *Server) latestCheck(w http.ResponseWriter, r *http.Request) error {
 	return s.writeLatestCheck(w, r, m.ID)
 }
 
+// CK-04: retryFactCheck 单独重跑一次事实核查，不重建整轮检查。
+// 用户卡在「需人工」时，可以先只重试事实核查；其它检查项与已确认结果不受影响。
+func (s *Server) retryFactCheck(w http.ResponseWriter, r *http.Request) error {
+	m, err := s.workMetaFromPath(r)
+	if err != nil {
+		return err
+	}
+	if err := m.editable(); err != nil {
+		return err
+	}
+	ctx := r.Context()
+	var runID uuid.UUID
+	var factStatus string
+	var runRevision int
+	if err := s.db.QueryRow(ctx, `SELECT id, fact_status, revision FROM check_run WHERE work_id=$1
+		ORDER BY revision DESC, created_at DESC LIMIT 1`, m.ID).Scan(&runID, &factStatus, &runRevision); err != nil {
+		if err == pgx.ErrNoRows {
+			return stateInvalid("这篇作品还没有检查记录，请先开始检查")
+		}
+		return err
+	}
+	wk, err := s.loadWork(ctx, m.ID)
+	if err != nil {
+		return err
+	}
+	if runRevision != wk.Revision {
+		return stateInvalid("作品内容已改动，这次检查结果已过期，请重新检查")
+	}
+	if factStatus == "pending" {
+		return stateInvalid("事实核查正在进行中，请稍候")
+	}
+	// 重试前先清掉上一轮事实核查留下的条目，避免旧结论和新结论同时出现。
+	if err := s.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM check_item WHERE check_run_id=$1 AND category='fact'`, runID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `UPDATE check_run SET fact_status='pending' WHERE id=$1`, runID)
+		return err
+	}); err != nil {
+		return err
+	}
+	if _, err := s.startBackgroundJob(ctx, jobSpec{TaskType: "fact_flag", Label: "事实核查" + titleOr(wk.Title),
+		Link: "/works/" + m.ID.String() + "/check", AccountID: &m.Account.ID, WorkID: &m.ID}, func(jctx context.Context) (any, error) {
+		s.runFactCheck(jctx, wk, m.Account, runID)
+		return map[string]any{"run_id": runID}, nil
+	}); err != nil {
+		return err
+	}
+	s.audit(ctx, "fact_check_retry", "work", m.ID.String(), "ok", map[string]any{})
+	return s.writeLatestCheck(w, r, m.ID)
+}
+
 // resolveCheckItem sets one item at a time; there is no bulk endpoint (H-04, HC-04).
 func (s *Server) resolveCheckItem(w http.ResponseWriter, r *http.Request) error {
 	id, err := pathID(r, "id")
@@ -949,6 +1001,104 @@ func (s *Server) approveReview(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	s.audit(ctx, "review_approve", "work", m.ID.String(), "ok", map[string]any{"checkpoint": "H-09"})
+	return s.writeWork(w, r, m.ID)
+}
+
+// CK-03: returnReview allows the owner or designated reviewer to return a work from reviewing back to drafting with a note.
+// It reuses the comment table and touches content to bump revision and rollback status to drafting.
+func (s *Server) returnReview(w http.ResponseWriter, r *http.Request) error {
+	m, err := s.workMetaFromPath(r)
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	id := ident(ctx)
+	var in struct {
+		Note      string      `json:"note"`
+		SectionID *uuid.UUID  `json:"section_id,omitempty"`
+		Mentions  []uuid.UUID `json:"mentions,omitempty"`
+	}
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	in.Note = strings.TrimSpace(in.Note)
+	if in.Note == "" {
+		return validation("请填写退回原因")
+	}
+	if runeLen(in.Note) > 2000 {
+		return validation("退回原因最多 2000 字")
+	}
+	var commentID uuid.UUID
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		var status string
+		var reviewer, assignee *uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT status, reviewer_id, assignee_id FROM work WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, m.ID).
+			Scan(&status, &reviewer, &assignee); err != nil {
+			return err
+		}
+		if status != "reviewing" {
+			return stateInvalid("这篇作品不在待审阅状态")
+		}
+		isReviewer := reviewer != nil && *reviewer == id.UserID && (assignee == nil || *assignee != id.UserID)
+		if id.Role != "owner" && !isReviewer && !(id.SystemAdmin && id.AdminOverride) {
+			return apiErr(403, "forbidden", "只有工作区所有者或指定的审阅人可以退回（负责人不能退回自己负责的作品）")
+		}
+		if err := s.checkLatestMaterialBasis(ctx, tx, m.ID); err != nil {
+			return err
+		}
+		if in.SectionID != nil {
+			var x uuid.UUID
+			if err := tx.QueryRow(ctx, `SELECT id FROM work_section WHERE id=$1 AND work_id=$2`, *in.SectionID, m.ID).Scan(&x); err != nil {
+				return validation("段落不存在")
+			}
+		}
+		mentions := s.resolveMentions(ctx, in.Note, in.Mentions)
+		if err := tx.QueryRow(ctx, `INSERT INTO comment (work_id, section_id, anchor_text, body, author_id, mentions) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+			m.ID, in.SectionID, "", in.Note, id.UserID, mentions).Scan(&commentID); err != nil {
+			return err
+		}
+		return s.touchContent(ctx, tx, m.ID)
+	})
+	if err != nil {
+		return err
+	}
+	s.audit(ctx, "review_return", "work", m.ID.String(), "ok", map[string]any{})
+	// Notify assignee if any, otherwise notify workspace owners
+	// XC-03：退回原因写在批注里，通知要带 ?comment=<id>，作者点开直接落到那条批注上。
+	returnLink := "/works/" + m.ID.String() + "?comment=" + commentID.String()
+	var assignee *uuid.UUID
+	if err := s.db.QueryRow(ctx, `SELECT assignee_id FROM work WHERE id=$1`, m.ID).Scan(&assignee); err != nil {
+		slog.Error("获取负责人失败", "err", err)
+	} else if assignee != nil && *assignee != id.UserID {
+		s.notify(ctx, id.WorkspaceID, *assignee, "review_returned", titleOr(m.Title)+"被退回修改", "审阅人要求你修改后重新提交检查", returnLink, "")
+	} else {
+		s.notifyWorkspace(ctx, id.WorkspaceID, []string{"owner"}, "review_returned", titleOr(m.Title)+"被退回修改", "请通知作者修改后重新提交检查", returnLink, "")
+	}
+	return ok(w, map[string]any{"work": m.ID, "comment_id": commentID.String()})
+}
+
+// CK-06: exitCheck allows exiting the checking state and returning to drafting.
+func (s *Server) exitCheck(w http.ResponseWriter, r *http.Request) error {
+	m, err := s.workMetaFromPath(r)
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status FROM work WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, m.ID).Scan(&status); err != nil {
+			return err
+		}
+		if status != "checking" {
+			return stateInvalid("这篇作品不在检查中，无法退出")
+		}
+		_, err := tx.Exec(ctx, `UPDATE work SET status='drafting', updated_at=now() WHERE id=$1 AND status='checking'`, m.ID)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	s.audit(ctx, "check_exit", "work", m.ID.String(), "ok", map[string]any{})
 	return s.writeWork(w, r, m.ID)
 }
 

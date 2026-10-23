@@ -1,5 +1,5 @@
 const path = require('node:path');
-const { app, BrowserWindow, Menu, dialog, session } = require('electron');
+const { app, BrowserWindow, Menu, dialog, session, webContents } = require('electron');
 
 const origin = process.env.OPS_DESKTOP_ACCOUNT_CLEAR_TEST_ORIGIN;
 
@@ -20,6 +20,12 @@ function waitFor(check, description, timeoutMs = 15_000) {
     };
     void poll();
   });
+}
+
+function accountDeviceSettingsContents() {
+  return webContents.getAllWebContents().find((contents) =>
+    contents.getURL().startsWith('ops-desktop://settings/embedded/account-device')
+  );
 }
 
 dialog.showMessageBox = async (...args) => {
@@ -46,10 +52,8 @@ app.whenReady().then(async () => {
     if (!settingsItem?.click) throw new Error('Could not find the native AI settings menu item.');
     settingsItem.click();
 
-    const settingsWindow = await waitFor(() => BrowserWindow.getAllWindows().find((window) =>
-      window.webContents.getURL().startsWith('ops-desktop://settings/')
-    ), 'the local settings window');
-    await waitFor(async () => await settingsWindow.webContents.executeJavaScript(
+    const settingsContents = await waitFor(accountDeviceSettingsContents, 'the embedded account and device settings view');
+    await waitFor(async () => await settingsContents.executeJavaScript(
       '!document.getElementById("clear-account-data").disabled'
     ), 'the enabled account cleanup control');
     await waitFor(() => {
@@ -62,11 +66,11 @@ app.whenReady().then(async () => {
       url: origin,
       name: 'ops_session'
     });
-    await settingsWindow.webContents.executeJavaScript(
+    await settingsContents.executeJavaScript(
       'document.getElementById("clear-account-data").click()'
     );
     await waitFor(() => businessWindow.webContents.getURL().endsWith('/login'), 'the login page after cleanup');
-    await waitFor(() => settingsWindow.webContents.getURL().startsWith('ops-desktop://settings/'), 'the refreshed settings window');
+    await waitFor(accountDeviceSettingsContents, 'the refreshed embedded account and device settings view');
 
     const cookiesAfter = await session.fromPartition('persist:ops-business-development').cookies.get({
       url: origin,
@@ -86,14 +90,12 @@ app.whenReady().then(async () => {
     });
     app.quit();
   } catch (error) {
-    const settingsWindow = BrowserWindow.getAllWindows().find((window) =>
-      window.webContents.getURL().startsWith('ops-desktop://settings/')
-    );
-    const clientInfo = settingsWindow && !settingsWindow.isDestroyed()
-      ? await settingsWindow.webContents.executeJavaScript('window.opsDesktopSettings.getInfo().catch((error) => String(error))').catch(String)
+    const settingsContents = accountDeviceSettingsContents();
+    const clientInfo = settingsContents && !settingsContents.isDestroyed()
+      ? await settingsContents.executeJavaScript('window.opsDesktopSettings.getInfo().catch((error) => String(error))').catch(String)
       : null;
-    const pageState = settingsWindow && !settingsWindow.isDestroyed()
-      ? await settingsWindow.webContents.executeJavaScript('({ ready: document.readyState, hasBridge: Boolean(window.opsDesktopSettings), button: document.getElementById("clear-account-data")?.disabled, status: document.getElementById("action-status")?.textContent })').catch(String)
+    const pageState = settingsContents && !settingsContents.isDestroyed()
+      ? await settingsContents.executeJavaScript('({ ready: document.readyState, hasBridge: Boolean(window.opsDesktopSettings), button: document.getElementById("clear-account-data")?.disabled, status: document.getElementById("action-status")?.textContent })').catch(String)
       : null;
     const cookies = await session.fromPartition('persist:ops-business-development').cookies.get({ url: origin }).catch(() => []);
     send({

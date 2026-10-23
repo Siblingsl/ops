@@ -310,9 +310,11 @@ func (s *Server) getNextActions(w http.ResponseWriter, r *http.Request) error {
 			p := time.Date(planned.Year(), planned.Month(), planned.Day(), 0, 0, 0, 0, s.loc)
 			x.PlannedDate = &p
 		}
+		// PB-08：pushed/packed 没有真实发布时间，改用 OutAt 表达「进入草稿箱/发布包的时间」，
+		// 不再污染 PublishedAt。这样后续任何按发布时间计算的排序或提醒都不会把草稿当成已发布。
 		if x.PublishedAt == nil && x.PushedOrPacked {
 			t := x.UpdatedAt
-			x.PublishedAt = &t
+			x.OutAt = &t
 		}
 		in.Works = append(in.Works, x)
 	}
@@ -431,6 +433,7 @@ func hintIf(c bool, s string) string {
 }
 
 // accountRhythm is the 本周节奏 card: published / planned this week vs the past 4 weeks' average (EX-B-03).
+// DB-04: 同时返回周一到周日每天的真实发布/计划数，前端按真实日期点亮圆点，而不是按数量顺序点亮。
 func (s *Server) accountRhythm(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.accountFromPath(r)
 	if err != nil {
@@ -448,8 +451,49 @@ func (s *Server) accountRhythm(w http.ResponseWriter, r *http.Request) error {
 	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL
 		AND coalesce(published_at, CASE WHEN status IN ('pushed','packed') THEN updated_at END) BETWEEN $2 AND $3`,
 		a.ID, weekStart.AddDate(0, 0, -28), weekStart).Scan(&past)
+	days := make([]map[string]any, 7)
+	for i := range days {
+		days[i] = map[string]any{"date": weekStart.AddDate(0, 0, i).Format("2006-01-02"), "published": 0, "planned": 0}
+	}
+	// 真实发布日：只认 published_at；pushed/packed 没有真实发布日时按 updated_at 归到当天（与上面的统计口径一致）。
+	pubRows, err := s.db.Query(ctx, `SELECT to_char(coalesce(published_at, CASE WHEN status IN ('pushed','packed') THEN updated_at END) AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD') AS d, count(*)
+		FROM work WHERE account_id=$1 AND deleted_at IS NULL
+		AND coalesce(published_at, CASE WHEN status IN ('pushed','packed') THEN updated_at END) >= $2
+		AND coalesce(published_at, CASE WHEN status IN ('pushed','packed') THEN updated_at END) < $3
+		GROUP BY d`, a.ID, weekStart, weekStart.AddDate(0, 0, 7))
+	if err == nil {
+		for pubRows.Next() {
+			var day string
+			var count int
+			if scanErr := pubRows.Scan(&day, &count); scanErr == nil {
+				for i := range days {
+					if days[i]["date"] == day {
+						days[i]["published"] = count
+					}
+				}
+			}
+		}
+		pubRows.Close()
+	}
+	planRows, err := s.db.Query(ctx, `SELECT to_char(planned_date,'YYYY-MM-DD') AS d, count(*) FROM work
+		WHERE account_id=$1 AND deleted_at IS NULL AND planned_date BETWEEN $2::date AND ($2::date + 6) GROUP BY d`,
+		a.ID, weekStart.Format("2006-01-02"))
+	if err == nil {
+		for planRows.Next() {
+			var day string
+			var count int
+			if scanErr := planRows.Scan(&day, &count); scanErr == nil {
+				for i := range days {
+					if days[i]["date"] == day {
+						days[i]["planned"] = count
+					}
+				}
+			}
+		}
+		planRows.Close()
+	}
 	return ok(w, map[string]any{"week_start": weekStart.Format("2006-01-02"), "published": published, "planned": planned,
-		"past_avg": float64(past) / 4})
+		"past_avg": float64(past) / 4, "days": days})
 }
 
 type PublishLinkInfo struct {

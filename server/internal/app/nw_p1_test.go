@@ -80,6 +80,26 @@ func TestNWE2_CreateAuditRecordsSource(t *testing.T) {
 	}
 }
 
+func TestNWE2_LongTitleRejectedInsteadOfTruncated(t *testing.T) {
+	f := env.accounts(t)
+	accountID := f.wechat.ID.String()
+	var before int
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL`, f.wechat.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	ae := env.expectErr(t, "POST", "/api/v1/accounts/"+accountID+"/works", map[string]string{"title": strings.Repeat("界", 65)}, "validation_failed")
+	if !strings.Contains(ae.Error.Message, "作品标题最多64字") {
+		t.Fatalf("long title error = %q", ae.Error.Message)
+	}
+	var after int
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL`, f.wechat.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("overlong title created a work: count %d -> %d", before, after)
+	}
+}
+
 func TestNWA9_AgentCreateAllowsEmptyTitle(t *testing.T) {
 	f := env.accounts(t)
 	// 智能体与 HTTP 使用同一个契约：空标题也能创建。
@@ -89,7 +109,6 @@ func TestNWA9_AgentCreateAllowsEmptyTitle(t *testing.T) {
 		t.Fatal("empty title create should succeed")
 	}
 }
-
 
 func TestNWD3_BlankWorkCheckHasSectionsDeepLink(t *testing.T) {
 	f := env.accounts(t)

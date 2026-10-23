@@ -22,7 +22,7 @@ var settingsEditableTasks = []string{
 }
 
 // settingsTrashTypes 是回收站接口实际接受的类型（settings.go 的 trashTables）。
-var settingsTrashTypes = []string{"work", "topic", "material", "style_sample", "character_card", "reference"}
+var settingsTrashTypes = []string{"work", "topic", "material", "style_sample", "character_card", "reference", "sensitive_word"}
 
 var agentToolsSettings = []AgentTool{
 	{
@@ -197,13 +197,13 @@ var agentToolsSettings = []AgentTool{
 	},
 	{
 		Name: "words__delete", Domain: "settings", Kind: toolX, Method: "DELETE", Path: "/sensitive-words/{id}",
-		Description: "删除一个自定义敏感词。基础词库只读、不能删除；此操作无法撤销，需要用户输入该词确认。",
+		Description: "删除一个自定义敏感词。基础词库只读、不能删除；删除后可在回收站恢复。",
 		Params: []ToolParam{
 			pPath("id"),
 		},
 		MinRole:       roleEditor,
-		SecondConfirm: secondConfirmPlain(),
 		Target:        target("sensitive_word", "id"),
+		SecondConfirm: secondConfirmPlain(),
 	},
 	{
 		Name: "prompts__list", Domain: "settings", Kind: toolR, Method: "GET", Path: "/prompt-templates",

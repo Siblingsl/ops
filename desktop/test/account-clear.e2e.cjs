@@ -42,6 +42,22 @@ test('Electron account cleanup removes only that account and clears business ses
       response.end(JSON.stringify({ global_enabled: false, policy: { enabled: false, allow_member_endpoints: false } }));
       return;
     }
+    if (url.pathname === '/api/v1/desktop/capabilities' && request.method === 'GET') {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        protocol_version: 1,
+        platform_collection: {
+          protocol_version: 1,
+          enabled: false,
+          platforms: ['wechat_mp', 'xhs'],
+          purpose: 'platform_collection',
+          operations: [],
+          limits: {},
+          protocol_versions: [1]
+        }
+      }));
+      return;
+    }
     if (url.pathname === '/api/v1/desktop/devices') {
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ devices: [], reauth_ok: true, csrf_token: 'account-clear-e2e-csrf' }));
@@ -62,7 +78,7 @@ test('Electron account cleanup removes only that account and clears business ses
         'Content-Type': 'text/html; charset=utf-8',
         'Set-Cookie': 'ops_session=account-clear-e2e; Path=/; HttpOnly; SameSite=Lax'
       });
-      response.end('<!doctype html><meta charset="utf-8"><script>if (location.pathname === "/") localStorage.setItem("ops-account-clear-e2e", "present")</script>');
+      response.end('<!doctype html><html><head><meta charset="utf-8"><title>Account cleanup test</title></head><body><main>Account cleanup acceptance test</main><script>window.opsDesktopUI.onOpenSettings(() => window.open("ops-desktop://ui/settings/account-device", "_blank", "noopener,noreferrer")); if (location.pathname === "/") localStorage.setItem("ops-account-clear-e2e", "present")</script></body></html>');
       return;
     }
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });

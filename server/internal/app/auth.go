@@ -529,7 +529,7 @@ func (s *Server) blockViewerWrites(next http.Handler) http.Handler {
 
 func viewerMutateAllowed(path string) bool {
 	switch path {
-	case "/api/v1/auth/logout", "/api/v1/auth/reauth", "/api/v1/auth/password",
+	case "/api/v1/auth/logout", "/api/v1/auth/reauth", "/api/v1/auth/renew", "/api/v1/auth/password",
 		"/api/v1/workspaces", "/api/v1/workspaces/join", "/api/v1/workspaces/current/leave",
 		"/api/v1/notifications/read-all", "/api/v1/me/preferences", "/api/v1/stars", "/api/v1/ux-events", "/api/v1/client-errors":
 		return true
@@ -637,6 +637,40 @@ func (s *Server) authReauth(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return ok(w, map[string]any{"ok": true, "valid_seconds": int(reauthWindow.Seconds())})
+}
+
+// authRenewSession renews the current authenticated session only after an explicit password check.
+// It keeps the session token and CSRF binding stable while resetting the fixed lifetime to seven days.
+func (s *Server) authRenewSession(w http.ResponseWriter, r *http.Request) error {
+	var in struct{ Password string }
+	if err := decode(r, &in); err != nil {
+		return err
+	}
+	id := ident(r.Context())
+	if err := s.checkPassword(r.Context(), id.UserID, in.Password); err != nil {
+		s.audit(r.Context(), "session_renewal", "user", id.UserID.String(), "failed", nil)
+		return err
+	}
+	cookie, err := r.Cookie(sessionCookie)
+	if err != nil || cookie.Value == "" {
+		return errUnauthenticated
+	}
+	now := s.now()
+	expires := now.Add(sessionTTL)
+	result, err := s.db.Exec(r.Context(), `UPDATE session SET expires_at=$2, reauth_until=$3, last_seen_at=$4 WHERE id=$1`,
+		id.SessionID, expires, now.Add(reauthWindow), now)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return errUnauthenticated
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: cookie.Value, Path: "/", Expires: expires,
+		HttpOnly: true, Secure: s.cfg.CookieSecure, SameSite: http.SameSiteLaxMode,
+	})
+	s.audit(r.Context(), "session_renewal", "user", id.UserID.String(), "ok", map[string]any{"expires_at": expires})
+	return ok(w, map[string]any{"ok": true, "session_expires_at": expires})
 }
 
 func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) error {

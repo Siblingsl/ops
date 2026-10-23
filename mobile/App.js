@@ -64,7 +64,7 @@ export default function App() {
       <ScrollView contentContainerStyle={styles.pad}>
         <Text style={styles.h1}>OPS 分享伴侣</Text>
         <Text style={styles.sub}>
-          从主站发布包复制深链打开本 App，或粘贴标题/正文后点「系统分享」。不会代发。
+          移动分享伴侣仅支持小红书文案整理与系统分享，不会代发或回写发布记录；公众号和头条请在主站使用复制/分享功能。
         </Text>
         {fromLink ? <Text style={styles.badge}>已从深链填入</Text> : null}
         <Text style={styles.label}>标题</Text>

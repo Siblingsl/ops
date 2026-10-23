@@ -23,6 +23,14 @@ export type PlatformIntentResult = {
   message?: string
 }
 
+export type DesktopClientHealth = {
+  channelState: 'disconnected' | 'connecting' | 'ready' | 'error'
+  channelMessage: string
+  collection: { status: 'idle' | 'running' | 'partial' | 'failed'; message: string; updatedAt: number | null }
+  presence: { status: 'unknown' | 'online' | 'offline' | 'error'; message: string; updatedAt: number | null }
+}
+
+export const CLIENT_HEALTH_CHANNEL = 'desktop-ui:client-health'
 export const PLATFORM_INTENT_RESULT_CHANNEL = 'desktop-ui:platform-intent-result'
 
 const UUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'

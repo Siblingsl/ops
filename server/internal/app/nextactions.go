@@ -25,7 +25,10 @@ type naWork struct {
 	Title             string
 	Status            string
 	UpdatedAt         time.Time
+	// PB-08: PublishedAt 只表示真实发布时间（work.published_at），绝不拿 updated_at 顶替。
+	// 进入草稿箱/发布包的时间另有 OutAt，避免「刚生成发布包」被读成「刚发布」。
 	PublishedAt       *time.Time
+	OutAt             *time.Time
 	PlannedDate       *time.Time
 	OutlineConfirmed  bool
 	Viewpoint         bool

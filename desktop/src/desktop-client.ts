@@ -20,6 +20,7 @@ import {
   type DesktopMode,
   type DesktopRouteSelection
 } from './request-context';
+import { channelReconnectDelayMs } from './reconnect-policy';
 import { createPinnedDirectHttpsAgent, createPinnedHttpsProxyAgent, normalizeProxyUrl, parseSystemProxyResolution, type ProxyRoute } from './proxy';
 import {
   PlatformCollectionUnsupportedError,
@@ -296,6 +297,9 @@ export class DesktopClient {
   private connectedWorkspaceId: string | null = null;
   private connectingAbort: AbortController | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempt = 0;
+  private reconnectSuppressed = false;
   private lastHeartbeatAck = 0;
   private generation = 0;
   private requestRouting: RequestRoutingState = { mode: 'server', requestContext: {} };
@@ -781,8 +785,11 @@ export class DesktopClient {
     return workspace.models.map((item) => this.toPublicModel(item));
   }
 
-  async connect(): Promise<void> {
-    this.disconnect();
+  async connect(automaticRetry = false): Promise<void> {
+    this.reconnectSuppressed = false;
+    this.clearReconnectTimer();
+    if (!automaticRetry) this.reconnectAttempt = 0;
+    this.teardownConnection();
     const connectingAbort = new AbortController();
     this.connectingAbort = connectingAbort;
     const ensureCurrentAttempt = () => {
@@ -831,6 +838,7 @@ export class DesktopClient {
       await this.openChannel(ticket.ticket, ticket.generation, ticket.route_revision, configs);
       ensureCurrentAttempt();
       this.connectingAbort = null;
+      this.reconnectAttempt = 0;
       this.connectedUserId = auth.user_id;
       this.connectedWorkspaceId = auth.workspace.id;
       this.appliedRouteRevision = ticket.route_revision;
@@ -845,15 +853,33 @@ export class DesktopClient {
       };
     } catch (error) {
       if (this.connectingAbort === connectingAbort) {
-        this.disconnect();
+        this.teardownConnection();
         this.channelState = 'error';
         this.channelMessage = safeError(error);
+        this.scheduleReconnect();
       }
       throw error;
     }
   }
 
+  // A suspend event calls disconnect(); on resume, reconnect only if desktop AI mode was applied.
+  async reconnectAfterResume(): Promise<void> {
+    if (this.requestRouting.mode !== 'desktop') return;
+    await this.connect();
+  }
+
+  getChannelHealth(): { state: PublicState['channelState']; message: string } {
+    return { state: this.channelState, message: this.channelMessage };
+  }
+
   disconnect(): void {
+    this.reconnectSuppressed = true;
+    this.reconnectAttempt = 0;
+    this.clearReconnectTimer();
+    this.teardownConnection();
+  }
+
+  private teardownConnection(): void {
     this.connectingAbort?.abort(new Error('桌面通道连接已取消。'));
     this.connectingAbort = null;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
@@ -885,6 +911,32 @@ export class DesktopClient {
     }
     this.channelState = 'disconnected';
     this.channelMessage = '通道尚未连接';
+  }
+
+  private clearReconnectTimer(): void {
+    if (!this.reconnectTimer) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectSuppressed || this.reconnectTimer) return;
+    const delay = channelReconnectDelayMs(this.reconnectAttempt);
+    if (delay === null) {
+      this.channelState = 'error';
+      this.channelMessage = '桌面通道已断开，自动重连失败，请在客户端菜单里重新连接。';
+      return;
+    }
+    this.reconnectAttempt += 1;
+    this.channelState = 'connecting';
+    this.channelMessage = `桌面通道已断开，正在自动重连（第 ${this.reconnectAttempt} 次）。`;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect(true).then(() => {
+        this.reconnectAttempt = 0;
+      }).catch(() => this.scheduleReconnect());
+    }, delay);
+    this.reconnectTimer.unref();
   }
 
   private async openChannel(
@@ -964,9 +1016,10 @@ export class DesktopClient {
         if (this.socket !== socket) return;
         this.socket = null;
         this.stopWorkerRequests();
-        if (this.channelState === 'ready' || this.channelState === 'connecting') {
+        if (!this.reconnectSuppressed && this.channelState !== 'disconnected') {
           this.channelState = 'error';
-          this.channelMessage = '桌面通道已断开，请检查网络并手动重连。';
+          this.channelMessage = '桌面通道已断开，正在尝试自动重连。';
+          this.scheduleReconnect();
         }
       });
     });

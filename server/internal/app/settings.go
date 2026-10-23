@@ -258,7 +258,7 @@ func (s *Server) loadSMTPPublic(ctx context.Context) (smtpConfig, error) {
 // ---------- 敏感词库（P-17） ----------
 
 func (s *Server) listWords(w http.ResponseWriter, r *http.Request) error {
-	rows, err := s.db.Query(r.Context(), `SELECT id, word, category, source, created_at FROM sensitive_word WHERE workspace_id=$1 ORDER BY source, created_at DESC`, ident(r.Context()).WorkspaceID)
+	rows, err := s.db.Query(r.Context(), `SELECT id, word, category, source, created_at FROM sensitive_word WHERE workspace_id=$1 AND deleted_at IS NULL ORDER BY source, created_at DESC`, ident(r.Context()).WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -298,7 +298,7 @@ func (s *Server) createWord(w http.ResponseWriter, r *http.Request) error {
 		if runeLen(wd) > 50 {
 			return validation("单个敏感词不超过 50 字")
 		}
-		tag, err := s.db.Exec(r.Context(), `INSERT INTO sensitive_word (workspace_id, word, category, source) VALUES ($1,$2,$3,'custom') ON CONFLICT DO NOTHING`,
+		tag, err := s.db.Exec(r.Context(), `INSERT INTO sensitive_word (workspace_id, word, category, source) VALUES ($1,$2,$3,'custom') ON CONFLICT (workspace_id, word) DO UPDATE SET deleted_at=NULL WHERE sensitive_word.deleted_at IS NOT NULL AND sensitive_word.source='custom'`,
 			ident(r.Context()).WorkspaceID, wd, strings.TrimSpace(in.Category))
 		if err != nil {
 			return err
@@ -313,12 +313,23 @@ func (s *Server) deleteWord(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	tag, err := s.db.Exec(r.Context(), `DELETE FROM sensitive_word WHERE id=$1 AND workspace_id=$2 AND source='custom'`, id, ident(r.Context()).WorkspaceID)
+	tag, err := s.db.Exec(r.Context(), `UPDATE sensitive_word SET deleted_at=now() WHERE id=$1 AND workspace_id=$2 AND source='custom' AND deleted_at IS NULL`, id, ident(r.Context()).WorkspaceID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return validation("基础词库只读，不能删除")
+		var source string
+		err := s.db.QueryRow(r.Context(), `SELECT source FROM sensitive_word WHERE id=$1 AND workspace_id=$2`, id, ident(r.Context()).WorkspaceID).Scan(&source)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if source != "custom" {
+			return validation("基础词库只读，不能删除")
+		}
+		return errNotFound
 	}
 	return ok(w, map[string]any{"ok": true})
 }
@@ -388,6 +399,7 @@ var trashTables = map[string]struct{ table, title, account string }{
 	"style_sample":   {"style_sample", "t.title", "t.account_id"},
 	"character_card": {"character_card", "t.name", "t.account_id"},
 	"reference":      {"reference_item", "t.title", "t.account_id"},
+	"sensitive_word": {"sensitive_word", "t.word", "NULL::uuid"},
 }
 
 func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) error {
@@ -404,7 +416,7 @@ func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) error {
 	}
 	list := []Item{}
 	ws := ident(r.Context()).WorkspaceID
-	types := []string{"work", "topic", "material", "style_sample", "character_card", "reference"}
+	types := []string{"work", "topic", "material", "style_sample", "character_card", "reference", "sensitive_word"}
 	if t := r.URL.Query().Get("type"); t != "" {
 		if _, okT := trashTables[t]; !okT {
 			return validation("未知的类型")
@@ -414,11 +426,13 @@ func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) error {
 	for _, typ := range types {
 		def := trashTables[typ]
 		scope := `a.workspace_id=$1`
-		if typ == "material" {
+		if typ == "material" || typ == "sensitive_word" {
 			scope = `t.workspace_id=$1`
 		}
 		format := `a.content_format`
-		if typ == "work" {
+		if typ == "sensitive_word" {
+			format = `NULL::text`
+		} else if typ == "work" {
 			format = `t.content_format`
 		} else if typ == "topic" {
 			format = `nullif(t.format,'')`
@@ -456,6 +470,8 @@ func (s *Server) trashTarget(r *http.Request) (string, uuid.UUID, error) {
 	q := `SELECT t.id FROM ` + def.table + ` t JOIN platform_account a ON a.id=t.account_id WHERE t.id=$1 AND a.workspace_id=$2 AND t.deleted_at IS NOT NULL`
 	if typ == "material" {
 		q = `SELECT id FROM material t WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NOT NULL`
+	} else if typ == "sensitive_word" {
+		q = `SELECT id FROM sensitive_word WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NOT NULL`
 	}
 	if err := s.db.QueryRow(r.Context(), q, id, ident(r.Context()).WorkspaceID).Scan(&x); err != nil {
 		return "", uuid.Nil, err

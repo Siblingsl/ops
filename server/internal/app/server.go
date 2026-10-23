@@ -167,6 +167,7 @@ func (s *Server) buildRouter() http.Handler {
 			r.Get("/auth/me", s.h(s.authMe))
 			r.Post("/auth/logout", s.h(s.authLogout))
 			r.Post("/auth/reauth", s.h(s.authReauth))
+			r.Post("/auth/renew", s.h(s.authRenewSession))
 			r.Put("/auth/password", s.h(s.authChangePassword))
 			r.Get("/system/info", s.h(s.systemInfo))
 
@@ -507,6 +508,11 @@ func (s *Server) v3Routes(r chi.Router) {
 	// 检查 v2、审阅与发布衔接
 	r.Post("/check-items/{id}/fix-suggest", s.h(s.fixSuggest))
 	r.Post("/works/{id}/review/approve", s.h(s.approveReview))
+	// CK-04：事实核查失败时可以只重试事实核查，不必重建整轮检查。
+	r.Post("/works/{id}/checks/fact-retry", s.h(s.retryFactCheck))
+	// CK-03 / CK-06：审阅退回与退出检查，让作品能回到「创作中」重新改。
+	r.Post("/works/{id}/review/return", s.h(s.returnReview))
+	r.Post("/works/{id}/check/exit", s.h(s.exitCheck))
 	r.Get("/works/{id}/checks/report", s.h(s.checkReport))
 	r.Post("/publish-link/parse", s.h(s.parsePublishLinkHandler))
 

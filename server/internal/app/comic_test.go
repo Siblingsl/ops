@@ -254,7 +254,7 @@ func TestDeriveComicCrossPlatform(t *testing.T) {
 	for i := range wk.Panels {
 		a := env.upload(t, wk.ID.String(), testPNG(80, 80))
 		env.mustJSON(t, "PATCH", "/api/v1/panels/"+wk.Panels[i].ID.String(), map[string]any{
-			"asset_id": a.ID, "narration": "源旁白"+string(rune('甲'+i)), "dialogue": "源对白",
+			"asset_id": a.ID, "narration": "源旁白" + string(rune('甲'+i)), "dialogue": "源对白",
 		}, &wk)
 	}
 	env.mustJSON(t, "GET", "/api/v1/works/"+wk.ID.String(), nil, &wk)
@@ -266,6 +266,13 @@ func TestDeriveComicCrossPlatform(t *testing.T) {
 	env.mustJSON(t, "POST", "/api/v1/works/"+wk.ID.String()+"/derive", map[string]string{"target_account_id": dst.ID.String()}, &derived)
 	if derived.Source == nil || derived.ContentFormat != "comic" || derived.OutlineConfirmedAt == nil {
 		t.Fatalf("derived meta: %+v", derived)
+	}
+	var deriveCreateMeta []byte
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT detail FROM audit_log WHERE action='work_create' AND target_id=$1 ORDER BY created_at DESC LIMIT 1`, derived.ID.String()).Scan(&deriveCreateMeta); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(deriveCreateMeta), `"source": "comic"`) {
+		t.Fatalf("comic derived create audit does not record the shared source: %s", deriveCreateMeta)
 	}
 	if len(derived.Panels) != 3 {
 		t.Fatalf("derived panels: %d", len(derived.Panels))

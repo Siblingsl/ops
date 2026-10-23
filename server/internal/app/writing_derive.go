@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 import (
 	"context"
@@ -164,26 +164,26 @@ func (s *Server) deriveWork(w http.ResponseWriter, r *http.Request) error {
 	}
 	var newID uuid.UUID
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		p, err := s.loadProfile(ctx, dst.ID)
-		if err != nil {
-			return err
-		}
-		wf, _ := json.Marshal(p.WechatDefaults)
 		topics := []string{}
 		if dst.Platform == "xhs" || dst.Platform == "toutiao" {
 			topics = cleanList(plan.Topics)
 		}
-		title := plan.Title
-		if dst.Platform != "toutiao" {
-			title = truncateRunes(title, 64)
-		}
-		var outline []OutlineItem
-		if err := tx.QueryRow(ctx, `INSERT INTO work (account_id, topic_id, source_work_id, source_revision, content_format, title, viewpoint,
-			outline_confirmed_at, theme, wechat_fields, topics)
-			SELECT $1, topic_id, id, revision, $2, $3, viewpoint, now(), $4, $5, $6 FROM work WHERE id=$7 RETURNING id`,
-			dst.ID, targetFormat, title, p.DefaultTheme, wf, topics, m.ID).Scan(&newID); err != nil {
+		var sourceTopic *uuid.UUID
+		var sourceRevision int
+		var sourceViewpoint string
+		if err := tx.QueryRow(ctx, `SELECT topic_id, revision, viewpoint FROM work WHERE id=$1`, m.ID).Scan(&sourceTopic, &sourceRevision, &sourceViewpoint); err != nil {
 			return err
 		}
+		// NW-E1：派生作品复用统一创建路径，确保账号门禁、默认设置与来源审计一致。
+		newID, err = s.insertWorkTx(ctx, tx, &dstForWork, sourceTopic, plan.Title, targetFormat, "", "", "derive")
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE work SET source_work_id=$2, source_revision=$3, viewpoint=$4, outline_confirmed_at=now(), topics=$5 WHERE id=$1`,
+			newID, m.ID, sourceRevision, sourceViewpoint, topics); err != nil {
+			return err
+		}
+		var outline []OutlineItem
 		for i, ps := range plan.Sections {
 			ids := []uuid.UUID{}
 			atMs, err := s.dbNowMillis(ctx, tx)

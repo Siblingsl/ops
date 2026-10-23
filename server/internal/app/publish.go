@@ -101,11 +101,15 @@ func (s *Server) backendURL() string {
 var htmlPolicy = func() *bluemonday.Policy {
 	p := bluemonday.UGCPolicy()
 	p.AllowAttrs("style").Globally()
+	// 这份 CSS 属性清单与前端 `web/src/lib/render-policy.ts` 的 allowedStyleProps 保持一致（ED-08）：
+	// 前端合并主题样式时会先丢掉服务端不认的属性，避免「预览有样式、推送被洗掉」。
 	p.AllowStyles("color", "background-color", "font-size", "font-weight", "font-style", "line-height", "letter-spacing",
 		"text-align", "text-decoration", "margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
 		"padding", "padding-top", "padding-bottom", "padding-left", "padding-right", "border", "border-left", "border-bottom",
 		"border-top", "border-radius", "display", "width", "max-width", "height", "word-break", "white-space", "font-family",
-		"box-sizing", "overflow-wrap", "list-style-type", "background").Globally()
+		"box-sizing", "overflow-wrap", "list-style-type", "background",
+		// 表格/代码块渲染（ED-06）需要这几个属性，否则预览里的表格会丢合并边框
+		"border-collapse", "caption-side", "overflow-x").Globally()
 	p.AllowElements("section", "span")
 	p.AllowAttrs("src", "alt", "data-asset").OnElements("img")
 	p.AllowURLSchemes("http", "https")

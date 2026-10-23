@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"testing"
 	"time"
@@ -274,6 +275,53 @@ func TestOPT12ListIndexesAndActivityP95(t *testing.T) {
 	for i := 1; i < len(list); i++ {
 		if list[i].UpdatedAt.After(list[i-1].UpdatedAt) {
 			t.Fatal("作品更新时间排序改变")
+		}
+	}
+	pagePath := "/api/v1/accounts/" + account.ID.String() + "/works?limit=50"
+	firstPageResponse := env.request(http.MethodGet, pagePath, nil, "")
+	if firstPageResponse.StatusCode != http.StatusOK {
+		firstPageResponse.Body.Close()
+		t.Fatalf("作品游标第一页：%d", firstPageResponse.StatusCode)
+	}
+	var firstPage []WorkListItem
+	if err := json.NewDecoder(firstPageResponse.Body).Decode(&firstPage); err != nil {
+		firstPageResponse.Body.Close()
+		t.Fatal(err)
+	}
+	cursor := firstPageResponse.Header.Get("X-Next-Cursor")
+	if err := firstPageResponse.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage) != 50 || cursor == "" || firstPageResponse.Header.Get("X-Has-More") != "true" || firstPageResponse.Header.Get("X-Total-Count") != "9001" {
+		t.Fatalf("作品分页元信息错误：条目=%d cursor=%t has_more=%q total=%q", len(firstPage), cursor != "", firstPageResponse.Header.Get("X-Has-More"), firstPageResponse.Header.Get("X-Total-Count"))
+	}
+	secondPageResponse := env.request(http.MethodGet, pagePath+"&cursor="+url.QueryEscape(cursor), nil, "")
+	if secondPageResponse.StatusCode != http.StatusOK {
+		secondPageResponse.Body.Close()
+		t.Fatalf("作品游标第二页：%d", secondPageResponse.StatusCode)
+	}
+	var secondPage []WorkListItem
+	if err := json.NewDecoder(secondPageResponse.Body).Decode(&secondPage); err != nil {
+		secondPageResponse.Body.Close()
+		t.Fatal(err)
+	}
+	if err := secondPageResponse.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage) != 50 {
+		t.Fatalf("作品游标第二页数量错误：%d", len(secondPage))
+	}
+	lastFirst, firstSecond := firstPage[len(firstPage)-1], secondPage[0]
+	if lastFirst.UpdatedAt.Before(firstSecond.UpdatedAt) || (lastFirst.UpdatedAt.Equal(firstSecond.UpdatedAt) && lastFirst.ID.String() < firstSecond.ID.String()) {
+		t.Fatal("作品游标页边界排序不稳定")
+	}
+	seen := make(map[uuid.UUID]struct{}, len(firstPage))
+	for _, item := range firstPage {
+		seen[item.ID] = struct{}{}
+	}
+	for _, item := range secondPage {
+		if _, exists := seen[item.ID]; exists {
+			t.Fatalf("作品游标分页出现重复项：%s", item.ID)
 		}
 	}
 	var topics []Topic

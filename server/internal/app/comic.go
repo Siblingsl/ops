@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 import (
 	"context"
@@ -445,7 +445,7 @@ func (s *Server) generateStoryboard(w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return err
 	}
-	if m.ContentFormat != "comic" {  // D-048：按作品形态快照闸门，历史作品不受账号当前类型影响
+	if m.ContentFormat != "comic" { // D-048：按作品形态快照闸门，历史作品不受账号当前类型影响
 		return validation("只有漫画作品可以生成分镜")
 	}
 	if strings.TrimSpace(m.Viewpoint) == "" {
@@ -553,7 +553,7 @@ func (s *Server) saveStoryboard(w http.ResponseWriter, r *http.Request) error {
 	if err := m.editable(); err != nil {
 		return err
 	}
-	if m.ContentFormat != "comic" {  // D-048：按作品形态快照闸门，历史作品不受账号当前类型影响
+	if m.ContentFormat != "comic" { // D-048：按作品形态快照闸门，历史作品不受账号当前类型影响
 		return validation("只有漫画作品可以保存分镜")
 	}
 	var in struct {
@@ -652,7 +652,7 @@ func (s *Server) generatePanelText(w http.ResponseWriter, r *http.Request) error
 	if err := m.editable(); err != nil {
 		return err
 	}
-	if m.ContentFormat != "comic" {  // D-048：按作品形态快照闸门，历史作品不受账号当前类型影响
+	if m.ContentFormat != "comic" { // D-048：按作品形态快照闸门，历史作品不受账号当前类型影响
 		return validation("只有漫画作品可以生成逐格文案")
 	}
 	if m.OutlineConfirmedAt == nil {
@@ -855,22 +855,25 @@ func (s *Server) deriveComicWork(w http.ResponseWriter, r *http.Request, m *work
 			Dialogue:  truncateRunes(strings.TrimSpace(p.Dialogue), comicDialogueMax*2),
 		}
 	}
-	newTitle := truncateRunes(strings.TrimSpace(plan.Title), 64)
+	newTitle := strings.TrimSpace(plan.Title)
 	if newTitle == "" {
-		newTitle = truncateRunes(title, 64)
+		newTitle = strings.TrimSpace(title)
 	}
 	var newID uuid.UUID
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		p, err := s.loadProfile(ctx, dst.ID)
+		var sourceTopic *uuid.UUID
+		var sourceRevision int
+		var sourceViewpoint string
+		if err := tx.QueryRow(ctx, `SELECT topic_id, revision, viewpoint FROM work WHERE id=$1`, m.ID).Scan(&sourceTopic, &sourceRevision, &sourceViewpoint); err != nil {
+			return err
+		}
+		// NW-E1：漫画派生复用统一创建路径，确保账号门禁、默认设置与来源审计一致。
+		newID, err = s.insertWorkTx(ctx, tx, dst, sourceTopic, newTitle, "comic", "", "", "comic")
 		if err != nil {
 			return err
 		}
-		wf, _ := json.Marshal(p.WechatDefaults)
-		topics := []string{}
-		if err := tx.QueryRow(ctx, `INSERT INTO work (account_id, topic_id, source_work_id, source_revision, content_format, title, viewpoint,
-			outline_confirmed_at, theme, wechat_fields, topics)
-			SELECT $1, topic_id, id, revision, 'comic', $2, viewpoint, now(), $3, $4, $5 FROM work WHERE id=$6 RETURNING id`,
-			dst.ID, newTitle, p.DefaultTheme, wf, topics, m.ID).Scan(&newID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE work SET source_work_id=$2, source_revision=$3, viewpoint=$4, outline_confirmed_at=now() WHERE id=$1`,
+			newID, m.ID, sourceRevision, sourceViewpoint); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO work_material (work_id, material_id) SELECT $1, wm.material_id FROM work_material wm

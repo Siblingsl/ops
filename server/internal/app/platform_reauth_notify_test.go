@@ -18,18 +18,18 @@ import (
 // 用户看不到"登录失效了"，连接就静默停在 login_required 上。
 
 // pendingReauthNotifications 读该用户收到的平台重连通知。
-func pendingReauthNotifications(t *testing.T, userID uuid.UUID) []struct{ Title, Body, Dedupe string } {
+func pendingReauthNotifications(t *testing.T, userID uuid.UUID) []struct{ Title, Body, Dedupe, Link string } {
 	t.Helper()
-	rows, err := env.srv.db.Query(context.Background(), `SELECT title, body, coalesce(dedupe_key,'')
+	rows, err := env.srv.db.Query(context.Background(), `SELECT title, body, coalesce(dedupe_key,''), coalesce(link,'')
 		FROM notification WHERE user_id=$1 AND kind='platform_reauth' ORDER BY created_at`, userID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	var out []struct{ Title, Body, Dedupe string }
+	var out []struct{ Title, Body, Dedupe, Link string }
 	for rows.Next() {
-		var item struct{ Title, Body, Dedupe string }
-		if err := rows.Scan(&item.Title, &item.Body, &item.Dedupe); err != nil {
+		var item struct{ Title, Body, Dedupe, Link string }
+		if err := rows.Scan(&item.Title, &item.Body, &item.Dedupe, &item.Link); err != nil {
 			t.Fatal(err)
 		}
 		out = append(out, item)
@@ -76,6 +76,9 @@ func TestPlatformLoginRequiredNotifiesHolder(t *testing.T) {
 	}
 	if !strings.Contains(items[0].Body, "保管人") {
 		t.Fatalf("通知正文应说明需要谁扫码，实际 %q", items[0].Body)
+	}
+	if !strings.HasPrefix(items[0].Link, "/settings/accounts?id=") {
+		t.Fatalf("通知链接应指向账号设置，实际 %q", items[0].Link)
 	}
 }
 
