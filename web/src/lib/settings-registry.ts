@@ -32,6 +32,7 @@ export const settingsEntries: SettingsEntry[] = [
   { path: '/settings/models', label: '模型配置', desktopLabel: '服务器模型', group: '工作区设置', scope: '工作区', icon: Cpu, keywords: '供应商 API 路由 采样' },
   { path: '/settings/agent', label: '智能体设置', group: '工作区设置', scope: '工作区', icon: Bot, keywords: 'AI 权限 观察者' },
   { path: '/settings/desktop-ai', label: '桌面 AI 策略', group: '工作区设置', scope: '工作区', icon: Bot, keywords: '本机 AI 客户端 端点 owner 所有者', webHidden: true },
+  { path: '/settings/budget', label: 'AI 用量与成本', group: '工作区设置', scope: '工作区', icon: Gauge, keywords: '每日 token 上限 调用 费用', webHidden: true },
   { path: '/settings/usage', label: 'AI 用量与成本', desktopLabel: '完整用量报表', group: '数据与工具', scope: '工作区', icon: Gauge, keywords: 'token 每日 上限 费用', tool: true },
   { path: '/settings/quality', label: 'AI 质量看板', group: '数据与工具', scope: '工作区', icon: Activity, keywords: '独立工具', tool: true },
   { path: '/settings/words', label: '敏感词库', group: '工作区设置', scope: '工作区', icon: ShieldAlert, keywords: '自定义词 通用词' },
@@ -59,6 +60,20 @@ export const webSettingsEntries = settingsEntries.filter((entry) => !entry.webHi
 /** 桌面设置窗使用的显示名：有别名用别名，否则用 web 名。 */
 export function desktopSettingsLabel(entry: SettingsEntry) {
   return entry.desktopLabel ?? entry.label
+}
+
+/** 桌面设置窗导航的五类分组。 */
+export type SettingsGroupName = '个人' | '当前账号' | '工作区' | '数据与工具' | '本机与系统'
+
+/**
+ * 分组只由 scope/group 推导（GL-02）：设置窗渲染与验收脚本共用这一处，
+ * 不要再各自维护「设置名 → 分组」的映射表。
+ */
+export function settingsGroupOf(entry: SettingsEntry): SettingsGroupName {
+  if (entry.scope === '个人') return '个人'
+  if (entry.scope === '当前账号') return '当前账号'
+  if (entry.scope === '此电脑') return '本机与系统'
+  return entry.group === '工作区设置' ? '工作区' : '数据与工具'
 }
 
 export function settingsEntryFor(pathname: string): SettingsEntry | undefined {

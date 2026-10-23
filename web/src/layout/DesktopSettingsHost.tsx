@@ -5,7 +5,7 @@ import { Routes, useLocation, useNavigate, type Location } from 'react-router-do
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
 import { ErrorBoundary } from '@/components/error-boundary'
-import { currentAccountSettingsPath, DESKTOP_ACCOUNT_CREATE_READY, DESKTOP_ACCOUNT_CREATE_REQUEST, DESKTOP_ACCOUNT_SWITCHER_FROM_SETTINGS_REQUEST, DESKTOP_ACCOUNT_SWITCHER_READY, DESKTOP_ACCOUNT_SWITCHER_REQUEST, DESKTOP_LEAVE_GUARD_RELEASE, DESKTOP_LEAVE_GUARD_REQUEST, DESKTOP_LOCAL_SETTINGS_REQUEST, DesktopSettingsContext, desktopSettingsEntries, desktopSettingsEntryLabel, desktopSettingsPanel, requestDesktopLeaveGuard } from '@/lib/desktop-settings'
+import { currentAccountSettingsPath, DESKTOP_ACCOUNT_CREATE_READY, DESKTOP_ACCOUNT_CREATE_REQUEST, DESKTOP_ACCOUNT_SWITCHER_FROM_SETTINGS_REQUEST, DESKTOP_ACCOUNT_SWITCHER_READY, DESKTOP_ACCOUNT_SWITCHER_REQUEST, DESKTOP_LEAVE_GUARD_RELEASE, DESKTOP_LEAVE_GUARD_REQUEST, DESKTOP_LOCAL_SETTINGS_REQUEST, DesktopSettingsContext, desktopSettingsEntries, desktopSettingsEntryLabel, desktopSettingsPanel, requestDesktopLeaveGuard, settingsGroupOf, type SettingsGroupName } from '@/lib/desktop-settings'
 import { isElectronDesktop } from '@/lib/desktop-presentation.js'
 import { rememberAccount, useCurrentAccountSelection, useMe } from '@/lib/session'
 import type { Platform } from '@/lib/types'
@@ -278,6 +278,10 @@ export default function DesktopSettingsHost({ children, backdrop }: { children: 
   </>
 }
 
+function desktopSettingsGroup(item: (typeof desktopSettingsEntries)[number]) {
+  return settingsGroupOf(item)
+}
+
 function SettingsWindow({ path, onClose, dirty, children }: { path: string; onClose: () => void; dirty: boolean; children: ReactNode }) {
   const { data: me } = useMe()
   const { account } = useCurrentAccountSelection()
@@ -287,10 +291,10 @@ function SettingsWindow({ path, onClose, dirty, children }: { path: string; onCl
   const closeRef = useRef(onClose)
   closeRef.current = onClose
   const entry = desktopSettingsPanel(path)!
-  const visible = desktopSettingsEntries.filter((item) => (!item.adminOnly || me?.is_system_admin) && `${desktopSettingsEntryLabel(item)} ${item.group} ${item.scope} ${item.keywords ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()))
-  const groups = [...new Set(visible.map((item) => item.group))]
-  const currentGroup = entry.group
-  const [expandedGroup, setExpandedGroup] = useState(currentGroup)
+  const visible = desktopSettingsEntries.filter((item) => (!item.adminOnly || me?.is_system_admin) && `${desktopSettingsEntryLabel(item)} ${desktopSettingsGroup(item)} ${item.group} ${item.scope} ${item.tool ? '独立工具' : ''} ${item.keywords ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()))
+  const groups = [...new Set(visible.map(desktopSettingsGroup))]
+  const currentGroup = desktopSettingsGroup(entry)
+  const [expandedGroup, setExpandedGroup] = useState<SettingsGroupName | ''>(currentGroup)
   const searching = query.trim().length > 0
 
   useEffect(() => { setExpandedGroup(currentGroup) }, [path, currentGroup])
@@ -333,7 +337,7 @@ function SettingsWindow({ path, onClose, dirty, children }: { path: string; onCl
             <button type="button" className="desktop-settings-group-label" aria-expanded={expanded} aria-controls={groupId} onClick={() => setExpandedGroup(expandedGroup === group ? '' : group)}>
               <span>{group}</span>{expanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
             </button>
-            <div id={groupId} className="desktop-settings-group-items" hidden={!expanded}>{visible.filter((item) => item.group === group).map((item) => <button key={item.path} type="button" aria-current={path === item.path ? 'page' : undefined} aria-description={item.tool ? '在主窗口打开' : undefined} onClick={() => navigate(item.path)} title={item.tool ? `${desktopSettingsEntryLabel(item)} · 在主窗口打开` : desktopSettingsEntryLabel(item)}><span>{desktopSettingsEntryLabel(item)}</span>{item.tool && <ArrowUpRight aria-hidden="true" />}</button>)}</div>
+            <div id={groupId} className="desktop-settings-group-items" hidden={!expanded}>{visible.filter((item) => desktopSettingsGroup(item) === group).map((item) => <button key={item.path} type="button" aria-current={path === item.path ? 'page' : undefined} aria-description={item.tool ? '在主窗口打开' : undefined} onClick={() => navigate(item.path)} title={item.tool ? `${desktopSettingsEntryLabel(item)} · 在主窗口打开` : desktopSettingsEntryLabel(item)}><span>{desktopSettingsEntryLabel(item)}</span>{item.tool && <ArrowUpRight aria-hidden="true" />}</button>)}</div>
           </div>
         })}{!visible.length && <p className="desktop-settings-empty">没有匹配的设置项</p>}</nav>
       </aside>

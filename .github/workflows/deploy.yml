@@ -12,7 +12,7 @@ on:
         default: deploy
 
 concurrency:
-  group: deploy-production
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'diagnose' && 'diagnose-production' || 'deploy-production' }}
   cancel-in-progress: false
 
 jobs:
@@ -75,7 +75,24 @@ jobs:
               systemctl is-active nginx || true
               nginx -t 2>&1 || true
               echo "=== HTTP listeners ==="
-              ss -ltn '( sport = :80 or sport = :443 )'
+              ss -ltnp '( sport = :80 or sport = :443 )'
+              echo "=== installed proxy ==="
+              for binary in /usr/sbin/nginx /www/server/nginx/sbin/nginx /usr/local/nginx/sbin/nginx; do
+                if [[ -x "$binary" ]]; then
+                  echo "$binary"
+                  "$binary" -t 2>&1 || true
+                fi
+              done
+              echo "=== documented site paths ==="
+              for site in /etc/nginx/conf.d/ops.conf /www/server/panel/vhost/nginx/ops.88813888.xyz.conf /usr/local/nginx/conf/conf.d/ops.conf; do
+                if [[ -f "$site" ]]; then
+                  echo "$site"
+                  awk '/^[[:space:]]*(listen|server_name|ssl_certificate|ssl_certificate_key|proxy_pass|root)[[:space:]]/ {print}' "$site"
+                fi
+              done
+              echo "=== certificate tooling ==="
+              command -v certbot || true
+              if [[ -x /root/.acme.sh/acme.sh ]]; then echo "acme.sh installed"; fi
               echo "=== public certificate ==="
               if [[ -f /etc/letsencrypt/live/ops.88813888.xyz/fullchain.pem ]]; then
                 openssl x509 -in /etc/letsencrypt/live/ops.88813888.xyz/fullchain.pem -noout -dates -subject -issuer

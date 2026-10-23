@@ -1,14 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useId } from 'react'
-import { desktopSettingsLabel, settingsEntries, settingsEntryFor, type SettingsEntry } from './settings-registry'
+import { desktopSettingsLabel, settingsEntries, settingsEntryFor, settingsGroupOf, type SettingsEntry } from './settings-registry'
 
 export { currentAccountSettingsPath } from './settings-registry'
-export type { SettingsEntry, SettingsScope } from './settings-registry'
+export type { SettingsEntry, SettingsGroupName, SettingsScope } from './settings-registry'
+export { settingsGroupOf }
 
 /** 桌面设置窗的条目清单 = 同一事实源（GL-02），仅此处按桌面呈现取别名。 */
 export { settingsEntries as desktopSettingsEntries }
 
 export function desktopSettingsPanel(pathname: string) {
-  return settingsEntryFor(pathname)
+  const entry = settingsEntryFor(pathname)
+  return entry?.tool ? undefined : entry
 }
 
 /** 设置窗里显示的当前项名称（含桌面别名）。 */

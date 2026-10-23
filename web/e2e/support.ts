@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import type { ElectronApplication } from '@playwright/test'
+import { desktopSettingsLabel, settingsEntries, settingsGroupOf } from '../src/lib/settings-registry'
 
 export async function electronLocalSettingsEvaluate<T>(app: ElectronApplication, source: string): Promise<T> {
   return await app.evaluate(async ({ webContents }, script) => {
@@ -30,24 +31,22 @@ export async function api(page: Page, method: string, path: string, data?: unkno
   return response.json()
 }
 
-const desktopSettingGroups: Record<string, string> = {
-  '偏好设置': '个人', '登录与安全': '个人',
-  '平台账号与凭证': '当前账号',
-  '成员与邀请': '工作区', '服务器模型': '工作区', '桌面 AI 策略': '工作区', '智能体设置': '工作区', 'AI 用量与成本': '工作区',
-  '敏感词库': '工作区', '热点来源': '工作区', '每日推荐设置': '工作区', '邀请邮件': '工作区',
-  '数据导出': '数据与工具', '完整用量报表': '数据与工具', 'AI 质量看板': '数据与工具',
-  '提示词模板与测试集': '数据与工具', '操作日志': '数据与工具', '回收站': '数据与工具',
-  '系统管理': '数据与工具', '热点采集与日志': '数据与工具',
-  '客户端连接': '本机与系统', '本机 AI 配置': '本机与系统', '账号与设备': '本机与系统', '诊断与关于': '本机与系统',
+/**
+ * GL-02：设置分组只在 `src/lib/settings-registry.ts` 维护一份事实源。
+ * 这里按设置窗的显示名反查条目，再用与 `DesktopSettingsHost` 相同的规则推导分组，
+ * 不再维护第四份「设置名 → 分组」映射。
+ */
+export function desktopSettingGroup(name: string) {
+  const entry = settingsEntries.find((item) => desktopSettingsLabel(item) === name)
+  if (!entry) throw new Error(`缺少设置项：${name}`)
+  return settingsGroupOf(entry)
 }
 
 export async function selectDesktopSetting(page: Page, name: string) {
   const nav = page.getByTestId('desktop-settings-window').getByRole('navigation', { name: '设置分类' })
   const item = nav.getByRole('button', { name, exact: true })
   if (!(await item.isVisible())) {
-    const groupName = desktopSettingGroups[name]
-    if (!groupName) throw new Error(`缺少设置分类映射：${name}`)
-    const group = nav.getByRole('button', { name: groupName, exact: true })
+    const group = nav.getByRole('button', { name: desktopSettingGroup(name), exact: true })
     if (await group.getAttribute('aria-expanded') !== 'true') await group.click()
   }
   await item.click()
