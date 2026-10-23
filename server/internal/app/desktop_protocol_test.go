@@ -283,9 +283,16 @@ func TestDesktopAIClientUsesRequestModelDeadline(t *testing.T) {
 	request := desktopRequest{ModelDeadline: now.Add(25 * time.Second)}
 	ctx := withDesktopRequest(context.Background(), request)
 	route := &route{Desktop: &desktopExecution{Deadline: now.Add(5 * time.Minute)}}
-	_, client := server.aiClientForRoute(ctx, route)
-	if client.Timeout != 25*time.Second {
-		t.Fatalf("desktop model client timeout=%s, want 25s", client.Timeout)
+	before := time.Now()
+	clientCtx, client := server.aiClientForRoute(ctx, route)
+	after := time.Now()
+	execution := clientCtx.Value(desktopExecutionContextKey{}).(desktopExecution)
+	if !execution.Deadline.Equal(request.ModelDeadline) {
+		t.Fatalf("desktop model deadline=%s, want %s", execution.Deadline, request.ModelDeadline)
+	}
+	minTimeout, maxTimeout := request.ModelDeadline.Sub(after), request.ModelDeadline.Sub(before)
+	if client.Timeout < minTimeout || client.Timeout > maxTimeout {
+		t.Fatalf("desktop model client timeout=%s, want [%s, %s]", client.Timeout, minTimeout, maxTimeout)
 	}
 }
 

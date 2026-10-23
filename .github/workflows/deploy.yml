@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      action:
+        description: '部署或只读访问诊断'
+        type: choice
+        options: [deploy, diagnose]
+        default: deploy
 
 concurrency:
   group: deploy-production
@@ -62,4 +68,28 @@ jobs:
           script: |
             set -euo pipefail
             cd "${{ secrets.DEPLOY_PATH }}"
-            bash deploy/update.sh
+            if [[ "${{ inputs.action == 'diagnose' }}" == "true" ]]; then
+              echo "=== containers ==="
+              docker compose -f deploy/docker-compose.prod.yml ps
+              echo "=== nginx ==="
+              systemctl is-active nginx || true
+              nginx -t 2>&1 || true
+              echo "=== HTTP listeners ==="
+              ss -ltn '( sport = :80 or sport = :443 )'
+              echo "=== public certificate ==="
+              if [[ -f /etc/letsencrypt/live/ops.88813888.xyz/fullchain.pem ]]; then
+                openssl x509 -in /etc/letsencrypt/live/ops.88813888.xyz/fullchain.pem -noout -dates -subject -issuer
+              else
+                echo "No certificate at documented path."
+              fi
+              for endpoint in http://127.0.0.1:44537/healthz http://ops.88813888.xyz/healthz https://ops.88813888.xyz/healthz; do
+                echo "=== $endpoint ==="
+                curl --noproxy '*' --max-time 10 -sS -o /dev/null -w 'status=%{http_code} remote=%{remote_ip}\n' "$endpoint" || true
+              done
+              echo "=== local nginx HTTP ==="
+              curl --noproxy '*' --max-time 10 --resolve ops.88813888.xyz:80:127.0.0.1 -sS -o /dev/null -w 'status=%{http_code}\n' http://ops.88813888.xyz/healthz || true
+              echo "=== local nginx HTTPS ==="
+              curl --noproxy '*' --max-time 10 --resolve ops.88813888.xyz:443:127.0.0.1 -sS -o /dev/null -w 'status=%{http_code}\n' https://ops.88813888.xyz/healthz || true
+            else
+              bash deploy/update.sh
+            fi

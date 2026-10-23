@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test, expect } from '@playwright/test'
-import { _electron } from 'playwright'
+import { _electron } from '@playwright/test'
 
 test('Windows 原生输入可以拖动 Electron 标题栏业务窗口', async () => {
   test.skip(process.platform !== 'win32', '仅在 Windows 客户端验收环境运行。')

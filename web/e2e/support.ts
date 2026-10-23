@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import type { ElectronApplication } from 'playwright'
+import type { ElectronApplication } from '@playwright/test'
 
 export async function electronLocalSettingsEvaluate<T>(app: ElectronApplication, source: string): Promise<T> {
   return await app.evaluate(async ({ webContents }, script) => {

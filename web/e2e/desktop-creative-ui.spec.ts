@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
-import { _electron } from 'playwright'
+import { _electron } from '@playwright/test'
 import { api, createOutline, electronLocalSettingsClick, electronLocalSettingsEvaluate, electronLocalSettingsReadStatus, electronLocalSettingsSetValue, registerAccount, selectDesktopSetting } from './support'
 
 async function enableElectronPresentation(page: Page) {

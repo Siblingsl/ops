@@ -275,8 +275,12 @@ func TestToutiaoPackReadOnlyNoWechatRecordsAndTemporaryCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	temp := t.TempDir()
+	t.Setenv("TMPDIR", temp)
 	t.Setenv("TMP", temp)
 	t.Setenv("TEMP", temp)
+	if os.TempDir() != temp {
+		t.Fatalf("temporary directory=%q, want %q", os.TempDir(), temp)
+	}
 	env.mustJSON(t, "GET", path+"?basis_revision="+strconv.Itoa(work.Revision), nil, nil)
 	response := env.request("GET", path+".zip?basis_revision="+strconv.Itoa(work.Revision), nil, "")
 	files := readToutiaoZip(t, response.Body)
@@ -309,8 +313,12 @@ func TestToutiaoPackReadOnlyNoWechatRecordsAndTemporaryCleanup(t *testing.T) {
 	if err := os.WriteFile(blocked, []byte("fixture"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("TMPDIR", blocked)
 	t.Setenv("TMP", blocked)
 	t.Setenv("TEMP", blocked)
+	if os.TempDir() != blocked {
+		t.Fatalf("blocked temporary directory=%q, want %q", os.TempDir(), blocked)
+	}
 	response = env.request("GET", path+".zip?basis_revision="+strconv.Itoa(work.Revision), nil, "")
 	body, _ := io.ReadAll(response.Body)
 	response.Body.Close()
