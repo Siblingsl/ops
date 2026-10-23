@@ -76,8 +76,16 @@ jobs:
               nginx -t 2>&1 || true
               echo "=== HTTP listeners ==="
               ss -ltnp '( sport = :80 or sport = :443 )'
+              echo "=== proxy process ==="
+              for proxy_pid in $(ss -ltnp 'sport = :80' | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -n 1); do
+                readlink "/proc/$proxy_pid/exe" || true
+                readlink "/proc/$proxy_pid/cwd" || true
+                tr '\0' '\n' < "/proc/$proxy_pid/cmdline" || true
+              done
+              echo "=== proxy containers ==="
+              docker ps --format '{{.Names}} {{.Image}} {{.Ports}}' | grep -Ei 'nginx|openresty|:80->|:443->' || true
               echo "=== installed proxy ==="
-              for binary in /usr/sbin/nginx /www/server/nginx/sbin/nginx /usr/local/nginx/sbin/nginx; do
+              for binary in /usr/sbin/nginx /www/server/nginx/sbin/nginx /usr/local/nginx/sbin/nginx /usr/local/openresty/nginx/sbin/nginx; do
                 if [[ -x "$binary" ]]; then
                   echo "$binary"
                   "$binary" -t 2>&1 || true

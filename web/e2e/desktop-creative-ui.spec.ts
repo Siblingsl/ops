@@ -13,6 +13,29 @@ async function enableElectronPresentation(page: Page) {
   })
 }
 
+async function expectDesktopAddAccountEntry(page: Page, allowed: boolean) {
+  const trigger = page.getByRole('button', { name: '切换工作区与账号', exact: true })
+  await trigger.click()
+  const menu = page.getByTestId('desktop-context-menu')
+  await expect(menu).toBeVisible()
+  const entry = menu.getByRole('button', { name: '添加账号', exact: true })
+  if (allowed) await expect(entry).toBeVisible()
+  else await expect(entry).toHaveCount(0)
+  await trigger.click()
+  await expect(menu).toHaveCount(0)
+}
+
+async function expectDesktopAccountEditable(page: Page, editable: boolean) {
+  const settings = page.getByTestId('desktop-settings-window')
+  await expect(settings.getByRole('heading', { name: '平台账号与凭证', exact: true })).toBeVisible()
+  const name = settings.getByLabel('账号名称', { exact: true })
+  if (editable) await expect(name).toBeEnabled()
+  else {
+    await expect(name).toBeDisabled()
+    await expect(settings.getByText('编辑者可查看账号，修改由所有者操作。', { exact: true })).toBeVisible()
+  }
+}
+
 test('Electron 专属创作空间的标题栏、主题、动效、工作台与 AI 双栏布局', async ({ page }) => {
   const account = await registerAccount(page)
   await page.addInitScript(() => {
@@ -114,7 +137,7 @@ test('Electron 专属创作空间的标题栏、主题、动效、工作台与 A
   await expect(firstValueGuide).toBeVisible()
   await expect(firstValueGuide).toHaveJSProperty('open', false)
   await firstValueGuide.locator('summary').click()
-  await expect(firstValueGuide.getByRole('heading', { name: '先看到第一条推荐' })).toBeVisible()
+  await expect(firstValueGuide.getByRole('heading', { name: '从第一篇作品开始' })).toBeVisible()
   await expect(firstValueGuide.getByRole('link').first()).toBeVisible()
   await firstValueGuide.locator('summary').click()
 
@@ -404,7 +427,7 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     await expect(firstValueGuide).toBeVisible()
     await expect(firstValueGuide).toHaveJSProperty('open', false)
     await firstValueGuide.locator('summary').click()
-    await expect(firstValueGuide.getByRole('heading', { name: '先看到第一条推荐' })).toBeVisible()
+    await expect(firstValueGuide.getByRole('heading', { name: '从第一篇作品开始' })).toBeVisible()
     await firstValueGuide.locator('summary').click()
     await homeExtras.locator('summary').first().click()
     await business.locator('main').evaluate((element) => element.scrollTo(0, 0))
@@ -697,9 +720,9 @@ test('Electron 呈现分支逐页直达功能路由并通过常用屏幕尺寸�
 
   // owner 不具备系统管理员权限时，系统管理路由必须回到账号设置。
   await page.goto('/settings/admin')
-  await expect(page).toHaveURL(/\/settings\/accounts$/)
+  await expect(page).toHaveURL(/\/settings\/accounts(?:\?id=[^&#]+)?$/)
   await page.goto('/settings/crawl')
-  await expect(page).toHaveURL(/\/settings\/accounts$/)
+  await expect(page).toHaveURL(/\/settings\/accounts(?:\?id=[^&#]+)?$/)
   await page.goto('/settings')
   await expect(page.getByTestId('desktop-settings-window').getByRole('heading', { name: '偏好设置', exact: true })).toBeVisible()
 
@@ -727,7 +750,11 @@ test('Electron 呈现分支逐页直达功能路由并通过常用屏幕尺寸�
     for (const path of responsiveRoutes) {
       await page.goto(path, { waitUntil: 'domcontentloaded' })
       await expect(root).toHaveAttribute('data-presentation', 'ops-creative-desktop')
-      await expect(page.getByTestId('desktop-statusbar')).toBeVisible()
+      if (path.startsWith('/settings/')) {
+        await expect(page.getByTestId('desktop-settings-window')).toBeVisible()
+      } else {
+        await expect(page.getByTestId('desktop-statusbar')).toBeVisible()
+      }
       const sizing = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth }))
       expect(sizing.scrollWidth, `${path} 在 ${width}×${height} 出现页面横向溢出`).toBeLessThanOrEqual(sizing.width + 1)
       if (width === 1440 && visualRoutes.has(path)) {
@@ -765,8 +792,9 @@ test('Electron 呈现分支保留 owner、editor 与 viewer 的页面操作权�
   await page.goto(`/a/${account.id}`)
   await expect(page.locator('html')).toHaveAttribute('data-presentation', 'ops-creative-desktop')
   await expect(page.getByRole('button', { name: '新建作品', exact: true }).first()).toBeVisible()
+  await expectDesktopAddAccountEntry(page, true)
   await page.goto('/settings/accounts')
-  await expect(page.getByRole('button', { name: '添加账号', exact: true }).first()).toBeVisible()
+  await expectDesktopAccountEditable(page, true)
 
   const viewerInvite = await api(page, 'POST', '/workspaces/current/invites', { role: 'viewer', max_uses: 1 })
   const editorInvite = await api(page, 'POST', '/workspaces/current/invites', { role: 'editor', max_uses: 1 })
@@ -795,18 +823,18 @@ test('Electron 呈现分支保留 owner、editor 与 viewer 的页面操作权�
     await expect(viewer.locator('html')).toHaveAttribute('data-presentation', 'ops-creative-desktop')
     expect((await api(viewer, 'GET', '/auth/me')).role).toBe('viewer')
     await expect(viewer.getByRole('button', { name: '新建作品', exact: true })).toHaveCount(0)
+    await expectDesktopAddAccountEntry(viewer, false)
     await viewer.goto('/settings/accounts')
-    await expect(viewer.getByRole('heading', { name: '平台账号与凭证' })).toBeVisible()
-    await expect(viewer.getByRole('button', { name: '添加账号', exact: true })).toHaveCount(0)
+    await expectDesktopAccountEditable(viewer, false)
 
     const editor = await editorContext.newPage()
     await editor.goto(`/a/${account.id}`)
     await expect(editor.locator('html')).toHaveAttribute('data-presentation', 'ops-creative-desktop')
     expect((await api(editor, 'GET', '/auth/me')).role).toBe('editor')
     await expect(editor.getByRole('button', { name: '新建作品', exact: true }).first()).toBeVisible()
+    await expectDesktopAddAccountEntry(editor, false)
     await editor.goto('/settings/accounts')
-    await expect(editor.getByRole('heading', { name: '平台账号与凭证' })).toBeVisible()
-    await expect(editor.getByRole('button', { name: '添加账号', exact: true })).toHaveCount(0)
+    await expectDesktopAccountEditable(editor, false)
   } finally {
     await Promise.all(memberContexts.map((context) => context.close()))
   }
