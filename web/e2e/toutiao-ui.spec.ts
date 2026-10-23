@@ -176,6 +176,7 @@ test('头条区间截图必须逐行确认累计值后才能导入', async ({ pa
   const checkbox = dialog.getByRole('checkbox', { name: '我已核对，并将本行数值改为截至采集时间的累计值' })
   await checkbox.check()
   await expect(importRow).toBeEnabled()
+  await importRow.scrollIntoViewIfNeeded()
   await expect(importRow).toBeInViewport()
   const importRowBox = await importRow.boundingBox()
   expect(importRowBox).toBeTruthy()

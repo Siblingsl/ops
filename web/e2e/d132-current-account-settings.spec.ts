@@ -148,7 +148,7 @@ test('D-132 类型迁移影响读取失败可重试，迁移前作品仍保留�
   await expect(settings.getByText('漫画', { exact: true }).first()).toBeVisible()
   expect((await api(page, 'GET', `/accounts/${account.id}/works`)).find((work: { id: string }) => work.id === workId).content_format).toBe('image_note')
   expect((await api(page, 'GET', '/accounts')).find((item: { id: string }) => item.id === account.id).content_format).toBe('comic')
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(account.name)
+  await expect(settings.locator('.desktop-settings-heading')).toContainText(account.name)
 
   await settings.getByRole('button', { name: '修改类型', exact: true }).click()
   const reverse = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '修改账号类型', exact: true }) })
@@ -207,7 +207,7 @@ test('D-132 头条默认形态切换只影响新作品且当前账号不变', as
   await migration.getByRole('radio', { name: /微头条/ }).check()
   await migration.getByRole('button', { name: '确认修改', exact: true }).click()
   await expect(settings.getByText('微头条', { exact: true }).first()).toBeVisible()
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(account.name)
+  await expect(settings.locator('.desktop-settings-heading')).toContainText(account.name)
 
   const newWork = await api(page, 'POST', `/accounts/${account.id}/works`, { title: '迁移后的微头条' })
   expect(newWork.content_format).toBe('micro_post')

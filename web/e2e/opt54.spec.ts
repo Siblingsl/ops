@@ -35,7 +35,7 @@ test('OPT54 第七段与侧栏刷新恢复，提示可关闭、锚点优先且�
   const another = await api(page, 'POST', `/accounts/${account.id}/works`, { title: '另一篇独立作品' })
   await page.goto(`/works/${another.id}`)
   await expect(page.getByText(/已回到上次编辑的第/)).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '素材', exact: true })).toHaveClass(/bg-ink-50/)
+  await expect(page.getByRole('button', { name: '副驾驶', exact: true })).toHaveClass(/bg-ink-50/)
   await page.goto(`/works/${work.id}`)
   await expect(page.getByText('已回到上次编辑的第 7 段', { exact: true })).toBeVisible()
   await expect(seventh).toBeInViewport()

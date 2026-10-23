@@ -4,13 +4,14 @@ import { defineConfig, devices } from '@playwright/test'
 const production = process.env.OPS_E2E_PROD === '1'
 
 export default defineConfig({
+  outputDir: '../.playwright-results/web',
   testDir: './e2e',
   timeout: 90_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  reporter: [['list'], ['html', { open: 'never' }]],
+  reporter: [['list'], ['html', { open: 'never', outputFolder: '../.playwright-results/report' }]],
   use: { baseURL: production ? 'http://127.0.0.1:44538' : 'http://127.0.0.1:5179', trace: 'retain-on-failure', screenshot: 'only-on-failure' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } } }],
   webServer: production ? undefined : [

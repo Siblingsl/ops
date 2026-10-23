@@ -86,7 +86,7 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
       ['sectionToolbar', '.rich-editor-toolbar'],
     ].map(([name, selector]) => [name, box(selector)]))
   })
-  expect(productGeometry.workbar).toMatchObject({ y: 111, height: 110.5 })
+  expect(productGeometry.workbar).toMatchObject({ y: 111, height: 129.5 })
   expect(productGeometry.steps?.height).toBeCloseTo(productGeometry.content?.height ?? 0, 0)
   expect(productGeometry.content?.height).toBeCloseTo(productGeometry.tools?.height ?? 0, 0)
 

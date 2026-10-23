@@ -151,12 +151,17 @@ test('D-123-UI-1 账号类型入口与修改弹窗：多视口无错位', async 
     await expect(entry).toBeVisible()
 
     const row = entry.locator('xpath=..')
-    const badge = row.locator('xpath=./span').first()
     const field = entry.locator('xpath=ancestor::div[contains(@class,"block")][1]')
-    const rowBox = (await row.boundingBox())!
-    const badgeBox = (await badge.boundingBox())!
-    const btnBox = (await entry.boundingBox())!
-    const fieldBox = (await field.boundingBox())!
+    // 响应式换行时在同一次布局读取中取样，避免把 resize 前后的两个矩形拼成重叠。
+    const { rowBox, badgeBox, btnBox, fieldBox } = await entry.evaluate((button) => {
+      const row = button.parentElement!
+      const badge = row.querySelector(':scope > span')!
+      const field = button.closest('div.block')!
+      return {
+        rowBox: row.getBoundingClientRect().toJSON(), badgeBox: badge.getBoundingClientRect().toJSON(),
+        btnBox: button.getBoundingClientRect().toJSON(), fieldBox: field.getBoundingClientRect().toJSON(),
+      }
+    })
 
     expect(rowBox.height, `[${vp.tag}] 入口行高异常`).toBeGreaterThanOrEqual(30)
     expect(badgeBox.x, `[${vp.tag}] 类型徽标越出容器左缘`).toBeGreaterThanOrEqual(rowBox.x - 0.5)

@@ -4,7 +4,7 @@ import { api, createOutline, registerAccount } from './support'
 test('OPT15 真实错误短 ID 可复制并对应响应与服务端日志', async ({ page, context }) => {
   await registerAccount(page)
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
-  const id = '00000000-0000-0000-0000-000000000000'
+  const id = '11111111-1111-4111-8111-111111111111'
   const responses: { id: string; bodyId: string }[] = []
   page.on('response', async response => {
     if (new URL(response.url()).pathname !== `/api/v1/works/${id}`) return

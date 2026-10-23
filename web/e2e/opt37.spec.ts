@@ -4,6 +4,7 @@ import { api, registerAccount } from './support'
 test('OPT37 扫码预览公开展示与当前公众号主题相同的只读排版', async ({ page }) => {
   const account = await registerAccount(page, '长图文', 'wechat_mp')
   const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: 'OPT37 手机预览验收' })
+  await api(page, 'PATCH', `/works/${work.id}`, { viewpoint: '这是本人输入的核心观点：清楚说明每一步，读者才能重复执行。', base_revision: work.revision })
   await api(page, 'PUT', `/works/${work.id}/outline`, {
     items: [{ heading: '手机预览标题', key_point: '确认阅读体验', material_ids: [] }], confirm: true,
   })

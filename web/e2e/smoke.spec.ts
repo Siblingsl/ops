@@ -413,6 +413,8 @@ test('首次价值路径：旧文建档、方案启用、生成推荐并逐条�
   await wizard.getByRole('button', { name: /生成|分析/ }).first().click()
   await expect(wizard.getByRole('button', { name: /应用|保存|确认/ }).last()).toBeEnabled()
   await wizard.getByRole('button', { name: /应用|保存|确认/ }).last().click()
+  await page.goto(`/a/${account.id}`)
+  await createOutline(page)
   await page.goto(`/a/${account.id}/ops`)
   await page.getByLabel('想做的领域').fill('互联网运营')
   await page.getByLabel('真实经历与资源').fill('在电商公司做了五年用户增长，带过三人小团队')

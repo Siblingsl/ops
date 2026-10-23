@@ -4,7 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-test('真实 Electron 三平台键盘循环、上下文隔离与头条窄视口布局', async ({}, testInfo) => {
+test('真实 Electron 三平台键盘循环、上下文隔离与头条窄视口布局', async ({ baseURL }, testInfo) => {
+  test.skip(process.platform !== 'win32', '该用例使用 Windows Electron 与原生输入，需在 Windows 客户端环境验收。')
   test.setTimeout(120_000)
   const prefix = join(tmpdir(), 'ops-toutiao-acceptance-')
   const profile = await mkdtemp(prefix)
@@ -13,11 +14,11 @@ test('真实 Electron 三平台键盘循环、上下文隔离与头条窄视口�
     app = await _electron.launch({
       executablePath: resolve('../desktop/node_modules/electron/dist/electron.exe'),
       args: [`--user-data-dir=${profile}`, resolve('../desktop/.build/main.js')],
-      env: { ...process.env, OPS_DESKTOP_DEV_URL: 'http://127.0.0.1:5179' },
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL },
       timeout: 60_000,
     })
     const page = await app.firstWindow()
-    await page.goto('http://127.0.0.1:5179/register')
+    await page.goto(`${baseURL}/register`)
     await page.getByLabel('用户名', { exact: true }).fill(`tt-electron-${Date.now()}`)
     await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
     await page.getByRole('button', { name: '创建账号', exact: true }).click()
@@ -29,7 +30,7 @@ test('真实 Electron 三平台键盘循环、上下文隔离与头条窄视口�
     const created = page.waitForResponse((r) => r.url().endsWith('/api/v1/accounts') && r.request().method() === 'POST')
     await add.getByRole('button', { name: '添加账号', exact: true }).click()
     const account = await (await created).json()
-    const accountURL = `http://127.0.0.1:5179/a/${account.id}`
+    const accountURL = `${baseURL}/a/${account.id}`
     await page.goto(accountURL)
     const trigger = page.getByRole('button', { name: '切换工作区与账号', exact: true })
     await trigger.click()

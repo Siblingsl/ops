@@ -27,7 +27,7 @@ test('Electron 作品页按原型分层并保留逐项筛选与导入操作', as
   expect(searchBox).not.toBeNull()
   await page.screenshot({ path: resolve(process.cwd(), '../output/playwright/desktop-creative/qa-2026-10-17/screenshots/works-layout-after.png') })
   expect(searchBox!.y, '搜索与筛选应位于状态切换下方的独立一行').toBeGreaterThan(tabBox!.y + tabBox!.height + 16)
-  await expect(page.getByRole('tab')).toHaveCount(7)
+  await expect(page.getByRole('tablist').filter({ has: statusTab }).getByRole('tab')).toHaveCount(7)
   await expect(page.locator('.desktop-work-header')).toHaveCSS('background-color', 'rgb(255, 255, 255)')
   await expect(page.locator('.desktop-work-title-cell svg')).toHaveCSS('width', '17px')
 

@@ -24,6 +24,28 @@ export function electronLocalSettingsReadStatus(app: ElectronApplication) {
   return electronLocalSettingsEvaluate<string>(app, `document.querySelector('#action-status')?.textContent ?? ''`)
 }
 
+/**
+ * 本机设置是 WebContentsView，切换面板时主进程才异步 loadURL
+ * （desktop/src/settings-view.ts 的 show()：`if (panelChanged) await view.webContents.loadURL(...)`）。
+ * 点完设置项立刻读 DOM 会读到上一个面板，所以先等这个面板的 webContents 真的出现。
+ */
+export async function electronLocalSettingsWaitPanel(app: ElectronApplication, panel: string) {
+  await expect.poll(() => app.evaluate(({ webContents }) => webContents.getAllWebContents().map((item) => item.getURL())))
+    .toContain(`ops-desktop://settings/embedded/${panel}`)
+}
+
+/**
+ * 本机设置的「忙」状态会挡住切换面板：业务窗收到 busy 时，离开面板前会弹
+ * 「正在保存设置，请稍候再离开」并把 URL 退回去（web/src/layout/DesktopSettingsHost.tsx 的 askBeforeLeaving）。
+ * settings.js 里 busy 由 `activeOperations > 0 || externalBusy` 决定，两个都是脚本顶层变量，
+ * 可以直接在面板里读到。切面板前等它空闲，避免把「产品正确地拦住」当成失败。
+ */
+export async function electronLocalSettingsWaitIdle(app: ElectronApplication) {
+  await expect.poll(() => electronLocalSettingsEvaluate<{ operations: number; external: boolean }>(app,
+    `({operations:activeOperations,external:externalBusy})`))
+    .toEqual({ operations: 0, external: false })
+}
+
 export async function api(page: Page, method: string, path: string, data?: unknown) {
   const me = await (await page.request.get('/api/v1/auth/me')).json()
   const response = await page.request.fetch('/api/v1' + path, { method, data, headers: { 'X-CSRF-Token': me.csrf_token } })

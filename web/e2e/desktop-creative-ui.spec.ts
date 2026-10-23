@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 import { _electron } from '@playwright/test'
-import { api, createOutline, electronLocalSettingsClick, electronLocalSettingsEvaluate, electronLocalSettingsReadStatus, electronLocalSettingsSetValue, registerAccount, selectDesktopSetting } from './support'
+import { api, createOutline, electronLocalSettingsClick, electronLocalSettingsEvaluate, electronLocalSettingsReadStatus, electronLocalSettingsSetValue, electronLocalSettingsWaitIdle, electronLocalSettingsWaitPanel, registerAccount, selectDesktopSetting } from './support'
 
 async function enableElectronPresentation(page: Page) {
   await page.addInitScript(() => {
@@ -13,6 +13,12 @@ async function enableElectronPresentation(page: Page) {
   })
 }
 
+/**
+ * 桌面形态的「添加账号」入口在顶栏账号下拉里（web/src/layout/Shell.tsx:766-775 的 title="添加账号" 图标按钮），
+ * 而 /settings/accounts 的桌面分支只渲染当前账号详情卡片（web/src/pages/settings/Accounts.tsx:459-512），
+ * 页面内没有「添加账号」按钮。因此按角色断言这个真实入口，而不是在设置页里找按钮。
+ * 注意：设置窗打开时遮罩层（z-index 45）会盖住顶栏，必须先在下拉可点用的页面上调用。
+ */
 async function expectDesktopAddAccountEntry(page: Page, allowed: boolean) {
   const trigger = page.getByRole('button', { name: '切换工作区与账号', exact: true })
   await trigger.click()
@@ -21,18 +27,28 @@ async function expectDesktopAddAccountEntry(page: Page, allowed: boolean) {
   const entry = menu.getByRole('button', { name: '添加账号', exact: true })
   if (allowed) await expect(entry).toBeVisible()
   else await expect(entry).toHaveCount(0)
+  // 再点一次触发器收起菜单：Escape 会被设置窗的按键处理接走并关掉整个设置窗。
   await trigger.click()
   await expect(menu).toHaveCount(0)
 }
 
+/**
+ * 桌面设置窗内的账号详情：只有所有者可以编辑，非所有者看到只读提示。
+ * 依据 web/src/pages/settings/Accounts.tsx:251（CardHeader desc）与 :265-266（账号名称 Input disabled）。
+ */
 async function expectDesktopAccountEditable(page: Page, editable: boolean) {
-  const settings = page.getByTestId('desktop-settings-window')
-  await expect(settings.getByRole('heading', { name: '平台账号与凭证', exact: true })).toBeVisible()
-  const name = settings.getByLabel('账号名称', { exact: true })
-  if (editable) await expect(name).toBeEnabled()
-  else {
-    await expect(name).toBeDisabled()
-    await expect(settings.getByText('编辑者可查看账号，修改由所有者操作。', { exact: true })).toBeVisible()
+  const settingsWindow = page.getByTestId('desktop-settings-window')
+  await expect(settingsWindow.getByRole('heading', { name: '平台账号与凭证', exact: true })).toBeVisible()
+  const nameInput = settingsWindow.getByLabel('账号名称', { exact: true })
+  const readOnlyNotice = settingsWindow.getByText('编辑者可查看账号，修改由所有者操作。', { exact: true })
+  if (editable) {
+    await expect(nameInput).toBeEnabled()
+    await expect(readOnlyNotice).toHaveCount(0)
+  } else {
+    await expect(nameInput).toBeDisabled()
+    await expect(readOnlyNotice).toBeVisible()
+    // ST-05：禁用控件统一带悬停说明。
+    await expect(nameInput).toHaveAttribute('title', '只有工作区所有者可以修改')
   }
 }
 
@@ -124,7 +140,9 @@ test('Electron 专属创作空间的标题栏、主题、动效、工作台与 A
   )
   expect(rightOrder).toEqual(['today-panel', 'assistant-invite', 'creative-usage'])
   await expect(page.getByRole('heading', { name: '最近打开' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '今天的安排' })).toBeVisible()
+  // DB-05：右栏摘要与主线列表统一成「今天的主线」；页面里另有一处同名的 MainLine 卡片标题，
+  // 因此限定在 .today-panel 内断言，避免 strict mode 命中两个 heading。
+  await expect(page.locator('.today-panel').getByRole('heading', { name: '今天的主线' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '一个想法，也可以聊聊' })).toBeVisible()
   expect(await page.locator('#main-navigation .desktop-nav-group-label').allTextContents()).toEqual(['创作', '资源', '运营'])
   await expect(page.locator('.desktop-rail-brand')).toBeVisible()
@@ -137,6 +155,7 @@ test('Electron 专属创作空间的标题栏、主题、动效、工作台与 A
   await expect(firstValueGuide).toBeVisible()
   await expect(firstValueGuide).toHaveJSProperty('open', false)
   await firstValueGuide.locator('summary').click()
+  // 实现文案是 CardHeader 的「从第一篇作品开始」（web/src/components/first-value-guide.tsx:35）。
   await expect(firstValueGuide.getByRole('heading', { name: '从第一篇作品开始' })).toBeVisible()
   await expect(firstValueGuide.getByRole('link').first()).toBeVisible()
   await firstValueGuide.locator('summary').click()
@@ -427,6 +446,7 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     await expect(firstValueGuide).toBeVisible()
     await expect(firstValueGuide).toHaveJSProperty('open', false)
     await firstValueGuide.locator('summary').click()
+    // 实现文案是 CardHeader 的「从第一篇作品开始」（web/src/components/first-value-guide.tsx:35）。
     await expect(firstValueGuide.getByRole('heading', { name: '从第一篇作品开始' })).toBeVisible()
     await firstValueGuide.locator('summary').click()
     await homeExtras.locator('summary').first().click()
@@ -485,6 +505,9 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     await selectDesktopSetting(business, '客户端连接')
     await expect(settings.getByRole('heading', { name: '客户端连接', exact: true })).toBeVisible()
     expect(await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1)
+    // 本机设置视图是 WebContentsView，切换面板时主进程才异步 loadURL（desktop/src/settings-view.ts 的 show()）。
+    // 先等这个 webContents 出现，否则 electronLocalSettingsEvaluate 会报「找不到统一设置中的本机面板」。
+    await electronLocalSettingsWaitPanel(electronApp!, 'connection')
     const settingsTheme = () => electronLocalSettingsEvaluate<string>(electronApp!, 'document.documentElement.dataset.theme')
     await expect.poll(settingsTheme).toBe('dark')
     const connectionPanel = await electronLocalSettingsEvaluate<{ panel: string; visiblePanels: string[]; localBridge: boolean }>(electronApp,
@@ -492,7 +515,10 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     expect(connectionPanel).toEqual({ panel: 'connection', visiblePanels: ['connection'], localBridge: true })
     expect(await business.evaluate(() => typeof (window as any).opsDesktopSettings)).toBe('undefined')
 
+    // 切面板前必须等本机设置空闲：忙的时候离开面板会被拦住（「正在保存设置，请稍候再离开」）。
+    await electronLocalSettingsWaitIdle(electronApp!)
     await selectDesktopSetting(business, '本机 AI 配置')
+    await electronLocalSettingsWaitPanel(electronApp!, 'ai')
     const aiPanel = await electronLocalSettingsEvaluate<{ panel: string; visiblePanels: string[] }>(electronApp,
       `({panel:document.body.dataset.embeddedPanel,visiblePanels:Array.from(document.querySelectorAll('[data-settings-panel]')).filter((item)=>!item.hidden).map((item)=>item.dataset.settingsPanel)})`)
     expect(aiPanel).toEqual({ panel: 'ai', visiblePanels: ['models', 'selftest', 'routes'] })
@@ -504,7 +530,9 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     await expect.poll(() => electronLocalSettingsReadStatus(electronApp!)).toBe('请先选择本机模型。')
     await electronLocalSettingsClick(electronApp, '#refresh-routes')
 
+    await electronLocalSettingsWaitIdle(electronApp!)
     await selectDesktopSetting(business, '账号与设备')
+    await electronLocalSettingsWaitPanel(electronApp!, 'account-device')
     const accountPanel = await electronLocalSettingsEvaluate<{ panel: string; visiblePanels: string[] }>(electronApp,
       `({panel:document.body.dataset.embeddedPanel,visiblePanels:Array.from(document.querySelectorAll('[data-settings-panel]')).filter((item)=>!item.hidden).map((item)=>item.dataset.settingsPanel)})`)
     expect(accountPanel).toEqual({ panel: 'account-device', visiblePanels: ['account'] })
@@ -512,7 +540,10 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     await electronLocalSettingsClick(electronApp, '#reauth')
     await expect.poll(() => electronLocalSettingsReadStatus(electronApp!)).toBe('账号已重新认证，有效期 5 分钟。')
 
+    // reauth 的状态文案先到，activeOperations 还要再跑几百毫秒才归零；此时切面板会被离开保护拦住。
+    await electronLocalSettingsWaitIdle(electronApp!)
     await selectDesktopSetting(business, '本机 AI 配置')
+    await electronLocalSettingsWaitPanel(electronApp!, 'ai')
     await electronLocalSettingsSetValue(electronApp, '#model-name', 'Electron 验收本机模型')
     await electronLocalSettingsSetValue(electronApp, '#base-url', 'http://127.0.0.1:1234/v1/')
     expect(await electronLocalSettingsEvaluate<boolean>(electronApp, `document.querySelector('#model-proxy-mode').disabled`)).toBe(true)
@@ -538,49 +569,77 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     const testModelValue = (await electronLocalSettingsEvaluate<string[]>(electronApp,
       `Array.from(document.querySelector('#test-model').options).map((option)=>option.value).filter(Boolean)`))[0]
     await electronLocalSettingsSetValue(electronApp, '#test-model', testModelValue)
-    await electronLocalSettingsEvaluate(electronApp, `Object.defineProperty(window,'confirm',{configurable:true,value:()=>false})`)
+    // 脚本的完成值会被 IPC 结构化克隆：Object.defineProperty 返回 window，克隆会抛
+    // 「An object could not be cloned」，所以包一层 IIFE 显式返回 true。
+    await electronLocalSettingsEvaluate(electronApp, `(()=>{Object.defineProperty(window,'confirm',{configurable:true,value:()=>false});return true})()`)
     await electronLocalSettingsClick(electronApp, '#start-model-test')
     expect(await electronLocalSettingsEvaluate<string>(electronApp, `document.querySelector('#test-result').textContent`)).toBe('')
     await electronLocalSettingsClick(electronApp, '#save-routes')
     await expect.poll(() => electronLocalSettingsReadStatus(electronApp!)).toContain('本机映射草稿已保存')
 
+    await electronLocalSettingsWaitIdle(electronApp!)
     await selectDesktopSetting(business, '账号与设备')
+    await electronLocalSettingsWaitPanel(electronApp!, 'account-device')
     await electronLocalSettingsClick(electronApp, '#refresh-devices')
     await expect.poll(() => electronLocalSettingsEvaluate<boolean>(electronApp, `!!document.querySelector('#device-list .device-item')`)).toBe(true)
-    await electronLocalSettingsEvaluate(electronApp, `Object.defineProperty(window,'confirm',{configurable:true,value:()=>false})`)
+    await electronLocalSettingsEvaluate(electronApp, `(()=>{Object.defineProperty(window,'confirm',{configurable:true,value:()=>false});return true})()`)
     await electronLocalSettingsClick(electronApp, '#device-list .device-item button')
     await expect.poll(() => electronLocalSettingsEvaluate<number>(electronApp, `document.querySelectorAll('#device-list .device-item').length`)).toBe(1)
     await electronLocalSettingsClick(electronApp, '#clear-account-data')
     await expect.poll(() => electronLocalSettingsReadStatus(electronApp!)).toBe('已取消清理。')
 
+    await electronLocalSettingsWaitIdle(electronApp!)
     await selectDesktopSetting(business, '诊断与关于')
+    await electronLocalSettingsWaitPanel(electronApp!, 'diagnostics')
     const diagnosticsPanel = await electronLocalSettingsEvaluate<{ panel: string; visiblePanels: string[]; about: string }>(electronApp,
       `({panel:document.body.dataset.embeddedPanel,visiblePanels:Array.from(document.querySelectorAll('[data-settings-panel]')).filter((item)=>!item.hidden).map((item)=>item.dataset.settingsPanel),about:document.querySelector('#about-title').textContent})`)
     expect(diagnosticsPanel).toEqual({ panel: 'diagnostics', visiblePanels: ['diagnostics'], about: '关于 OPS' })
     await electronLocalSettingsClick(electronApp, '#export-diagnostics')
     await expect.poll(() => electronLocalSettingsReadStatus(electronApp!)).toBe('已取消导出。')
 
+    await electronLocalSettingsWaitIdle(electronApp!)
     await selectDesktopSetting(business, '客户端连接')
+    await electronLocalSettingsWaitPanel(electronApp!, 'connection')
     await electronLocalSettingsClick(electronApp, '#connect-ai')
     await expect.poll(() => electronLocalSettingsReadStatus(electronApp!)).toBe('WSS 通道已连接；尚未发起模型自检或启用业务路由。')
     await expect.poll(() => electronLocalSettingsEvaluate<string>(electronApp, `document.querySelector('#channel-state').textContent`)).toContain('WSS 通道已连接')
     await electronLocalSettingsClick(electronApp, '#disconnect-ai')
     await expect.poll(() => electronLocalSettingsReadStatus(electronApp!)).toBe('客户端 AI 通道已断开。')
+    // apply-mode 的「已取消。」只存在一瞬：settings.js 的处理器紧接着 await loadInfo()，
+    // 而 loadInfo() 收尾会用 setStatus('') 清空 #action-status。所以先挂 MutationObserver 记录状态流，
+    // 再点按钮，最后在记录里断言，而不是赌轮询时机。
+    await electronLocalSettingsEvaluate(electronApp,
+      `(()=>{window.__statusLog=[];const node=document.querySelector('#action-status');new MutationObserver(()=>window.__statusLog.push(node.textContent)).observe(node,{childList:true,characterData:true,subtree:true});return true})()`)
     await electronLocalSettingsClick(electronApp, '#apply-mode')
-    await expect.poll(() => electronLocalSettingsReadStatus(electronApp!)).toBe('已取消。')
+    await expect.poll(() => electronLocalSettingsEvaluate<string[]>(electronApp, `window.__statusLog`)).toContain('已取消。')
+    // 取消后执行模式不变：仍然是可读的「当前模式：…」，且下拉仍可用。
+    await expect.poll(() => electronLocalSettingsEvaluate<string>(electronApp, `document.querySelector('#current-mode').textContent`)).toContain('当前模式：')
+    await expect.poll(() => electronLocalSettingsEvaluate<boolean>(electronApp, `document.querySelector('#apply-mode').disabled`)).toBe(false)
 
+    // 设置窗的遮罩（web/src/styles/desktop-settings.css 的 .desktop-settings-overlay，z-index 45）
+    // 盖住业务窗顶栏，指针点不到主题按钮。先关闭设置窗，用真实点击切浅深主题，
+    // 再重开设置窗验证本机设置视图跟随客户端主题。
+    await settings.getByRole('button', { name: '关闭设置' }).click()
+    await expect(settings).toBeHidden()
     await business.getByRole('button', { name: '切换到浅色主题' }).click()
-    await expect.poll(settingsTheme).toBe('light')
+    await expect(businessTheme).toHaveAttribute('data-theme', 'light')
     await business.getByRole('button', { name: '切换到深色主题' }).click()
+    await expect(businessTheme).toHaveAttribute('data-theme', 'dark')
+    await expect.poll(() => electronApp!.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe('dark')
+    // 动效按钮在底部状态栏，标签随状态切换（web/src/layout/DesktopStatusBar.tsx）。
+    await business.getByRole('button', { name: '减少动态效果', exact: true }).click()
+    await expect(businessTheme).toHaveAttribute('data-reduced-motion', 'true')
+    await business.getByRole('button', { name: '关闭手动减少动态效果', exact: true }).click()
+    await expect(businessTheme).toHaveAttribute('data-reduced-motion', 'false')
+    await business.getByRole('button', { name: /用户菜单/ }).click()
+    await business.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await expect(settings).toBeVisible()
+    await selectDesktopSetting(business, '客户端连接')
+    await electronLocalSettingsWaitPanel(electronApp!, 'connection')
     await expect.poll(settingsTheme).toBe('dark')
-    await business.getByRole('button', { name: '减少动态效果', exact: true }).click()
-    await expect.poll(() => electronLocalSettingsEvaluate<string>(electronApp!, 'document.documentElement.dataset.reducedMotion')).toBe('true')
-    await business.getByRole('button', { name: '减少动态效果', exact: true }).click()
-    await expect.poll(() => electronLocalSettingsEvaluate<string>(electronApp!, 'document.documentElement.dataset.reducedMotion')).toBe('false')
     await business.screenshot({ path: join(screenshotDir, '14-electron-client-settings-dark.png') })
     await settings.getByRole('button', { name: '关闭设置' }).click()
     await expect(settings).toBeHidden()
-    await expect.poll(() => electronApp!.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe('dark')
     await business.setViewportSize({ width: 960, height: 640 })
     await business.getByRole('complementary', { name: '主导航' }).getByRole('link', { name: 'AI 对话' }).click()
     await expect(business.getByTestId('desktop-agent-list')).toBeVisible()
@@ -719,18 +778,25 @@ test('Electron 呈现分支逐页直达功能路由并通过常用屏幕尺寸�
   }
 
   // owner 不具备系统管理员权限时，系统管理路由必须回到账号设置。
+  // 桌面形态下 DesktopSettingsHost 会把 /settings/accounts 补成当前账号的深链
+  // （/settings/accounts?id={accountId}，见 web/src/layout/DesktopSettingsHost.tsx:146-150），
+  // 因此这里允许可选的 ?id= 查询参数。
+  const accountsSettingsURL = /\/settings\/accounts(?:\?id=[^&#]+)?$/
   await page.goto('/settings/admin')
-  await expect(page).toHaveURL(/\/settings\/accounts(?:\?id=[^&#]+)?$/)
+  await expect(page).toHaveURL(accountsSettingsURL)
   await page.goto('/settings/crawl')
-  await expect(page).toHaveURL(/\/settings\/accounts(?:\?id=[^&#]+)?$/)
+  await expect(page).toHaveURL(accountsSettingsURL)
   await page.goto('/settings')
   await expect(page.getByTestId('desktop-settings-window').getByRole('heading', { name: '偏好设置', exact: true })).toBeVisible()
 
   const responsiveRoutes = [
     `/a/${account.id}`, `/a/${account.id}/topics`, `/a/${account.id}/calendar`, `/a/${account.id}/works`,
     `/a/${account.id}/materials`, `/a/${account.id}/ops`, `/a/${account.id}/review`, `/a/${account.id}/profile`, `/works/${workId}`, `/works/${workId}/check`,
-    '/settings/accounts', '/settings/models', '/agent', '/images',
+    '/agent', '/images',
   ]
+  // 设置路由在桌面形态下以设置窗呈现（web/src/layout/DesktopSettingsHost.tsx:272 用 backdrop 顶替
+  // 背景路由），Shell 与状态栏都不渲染，因此这些路径断言设置窗而不是状态栏。
+  const responsiveSettingsRoutes = ['/settings/accounts', '/settings/models']
   const viewports = [
     [960, 640], [1024, 768], [1280, 800], [1440, 900], [1920, 1080],
   ] as const
@@ -757,6 +823,21 @@ test('Electron 呈现分支逐页直达功能路由并通过常用屏幕尺寸�
       }
       const sizing = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth }))
       expect(sizing.scrollWidth, `${path} 在 ${width}×${height} 出现页面横向溢出`).toBeLessThanOrEqual(sizing.width + 1)
+      if (width === 1440 && visualRoutes.has(path)) {
+        await page.waitForTimeout(250)
+        await page.screenshot({ path: resolve(process.cwd(), '../output/playwright/desktop-creative', visualRoutes.get(path)!), animations: 'disabled' })
+      }
+    }
+    for (const path of responsiveSettingsRoutes) {
+      await page.goto(path, { waitUntil: 'domcontentloaded' })
+      await expect(root).toHaveAttribute('data-presentation', 'ops-creative-desktop')
+      const settingsWindow = page.getByTestId('desktop-settings-window')
+      await expect(settingsWindow).toBeVisible()
+      const sizing = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth }))
+      expect(sizing.scrollWidth, `${path} 在 ${width}×${height} 出现页面横向溢出`).toBeLessThanOrEqual(sizing.width + 1)
+      const bounds = await settingsWindow.boundingBox()
+      expect(bounds, `${path} 在 ${width}×${height} 没有可见的设置窗`).toBeTruthy()
+      expect(bounds!.x + bounds!.width, `${path} 在 ${width}×${height} 超出视口`).toBeLessThanOrEqual(width + 1)
       if (width === 1440 && visualRoutes.has(path)) {
         await page.waitForTimeout(250)
         await page.screenshot({ path: resolve(process.cwd(), '../output/playwright/desktop-creative', visualRoutes.get(path)!), animations: 'disabled' })
@@ -792,6 +873,7 @@ test('Electron 呈现分支保留 owner、editor 与 viewer 的页面操作权�
   await page.goto(`/a/${account.id}`)
   await expect(page.locator('html')).toHaveAttribute('data-presentation', 'ops-creative-desktop')
   await expect(page.getByRole('button', { name: '新建作品', exact: true }).first()).toBeVisible()
+  // 顶栏下拉里的「添加账号」只在非设置页可点（设置窗遮罩 z-index 45 盖住顶栏 z-30）。
   await expectDesktopAddAccountEntry(page, true)
   await page.goto('/settings/accounts')
   await expectDesktopAccountEditable(page, true)

@@ -53,7 +53,7 @@ test('Electron 工作台对齐原型并逐项点击主要入口', async ({ page 
   await page.getByTestId('desktop-home-extras').locator('summary').first().click()
   await expect(page.getByTestId('desktop-first-value-disclosure')).toBeVisible()
   await page.getByTestId('desktop-first-value-disclosure').locator('summary').click()
-  await expect(page.getByRole('heading', { name: '先看到第一条推荐' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '从第一篇作品开始' })).toBeVisible()
   await page.getByTestId('desktop-first-value-disclosure').locator('summary').click()
 
   await prototype.close()
@@ -126,7 +126,7 @@ test('Electron 选题池对齐原型并逐项点击筛选入口', async ({ page 
     }
   }
 
-  const search = page.getByRole('textbox', { name: '搜索当前页选题' })
+  const search = page.getByRole('textbox', { name: '搜索选题' })
   await search.fill('空白时间')
   await expect(page.getByRole('button', { name: '把空白时间留给自己' })).toBeVisible()
   await page.getByRole('button', { name: '把空白时间留给自己' }).click()

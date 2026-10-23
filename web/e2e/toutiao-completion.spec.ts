@@ -138,7 +138,9 @@ test('TT04/14/15/20/28 真实剪贴板、多短段、话题去重、图片排序
   expect(instructions).toMatch(/原创/)
   expect(instructions).toMatch(/首发/)
   await expect(page.getByText('按实际情况处理 AI 内容声明，核实原创资格；首发默认不选。', { exact: true })).toBeVisible()
-  await expect(page.getByText('这是系统当前内容的交付包，不代表头条已收到、审核通过或发布。遇到审核中或状态不明时，请先核实平台状态，再填写实际发布时间。', { exact: true })).toBeVisible()
+  // PB-06：交付包说明尾部追加了「分享伴侣仅用于小红书」的边界说明，这里按稳定前缀 + 边界句分别断言。
+  await expect(page.getByText(/这是系统当前内容的交付包，不代表头条已收到、审核通过或发布。/)).toBeVisible()
+  await expect(page.getByText(/OPS 分享伴侣仅用于小红书，头条和公众号请在对应平台后台手动发布。/)).toBeVisible()
   await context.route('https://mp.toutiao.com/**', (route) => route.fulfill({ status: 200, body: '<p>隔离验收：审核中</p>' }))
   const popup = page.waitForEvent('popup')
   await page.getByRole('button', { name: '打开头条号后台', exact: true }).click()
@@ -379,9 +381,11 @@ test('TT54 工作台、日历、命令搜索、搜索页、回收站及导出平
   await expect(todo).toContainText('微头条')
   await expect(todo).toHaveAttribute('href', `/works/${work.id}/pack`)
   await page.goto(`/a/${account.id}/calendar`)
-  const calendar = page.getByTestId('desktop-calendar-month-grid').locator(`a[href="/works/${work.id}"]`).filter({ hasText: work.title }).first()
+  // OP-02：日历项直达「当前步骤」，packed 状态落到回填锚点，因此按作品 ID 前缀定位。
+  const calendar = page.getByTestId('desktop-calendar-month-grid').locator(`a[href^="/works/${work.id}"]`).filter({ hasText: work.title }).first()
   await expect(calendar).toContainText('微头条')
-  await expect(calendar).toHaveAttribute('href', `/works/${work.id}`)
+  await expect(calendar).toHaveAttribute('href', `/works/${work.id}/pack#backfill`)
+  await expect(calendar).toContainText('下一步：去回填')
   await page.goto(`/works/${work.id}`)
   const palette = page.getByRole('dialog', { name: '命令面板', exact: true })
   await page.getByRole('button', { name: /搜索 Ctrl K/ }).click()
@@ -418,7 +422,8 @@ test('TT54 工作台、日历、命令搜索、搜索页、回收站及导出平
   await screenshot(page, 'export-platform-range')
 })
 
-test('TT53/55 真实Electron头条设置草稿保护、账号工作区缓存隔离及中文输入法', async ({ page, context }) => {
+test('TT53/55 真实Electron头条设置草稿保护、账号工作区缓存隔离及中文输入法', async ({ page, context, baseURL }) => {
+  test.skip(process.platform !== 'win32', '该用例使用 Windows Electron 与原生输入，需在 Windows 客户端环境验收。')
   test.setTimeout(150_000)
   const username = `e2e-electron-${Date.now()}-${test.info().workerIndex}`
   const account = await registerAccount(page, '微头条', 'toutiao', username)
@@ -430,17 +435,26 @@ test('TT53/55 真实Electron头条设置草稿保护、账号工作区缓存隔�
   const profile = await mkdtemp(prefix)
   let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
   try {
-    app = await _electron.launch({ executablePath: resolve('../desktop/node_modules/electron/dist/electron.exe'), args: [`--user-data-dir=${profile}`, resolve('../desktop/.build/main.js')], env: { ...process.env, OPS_DESKTOP_DEV_URL: 'http://127.0.0.1:5179' } })
+    app = await _electron.launch({ executablePath: resolve('../desktop/node_modules/electron/dist/electron.exe'), args: [`--user-data-dir=${profile}`, resolve('../desktop/.build/main.js')], env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL } })
     await app.context().addCookies(await context.cookies())
     const native = await app.firstWindow()
-    await native.goto('http://127.0.0.1:5179/login')
+    await native.goto(`${baseURL}/login`)
     await native.getByLabel('用户名', { exact: true }).fill(username)
     await native.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
     await native.getByRole('button', { name: '登录', exact: true }).click()
     await expect(native.getByRole('button', { name: '切换工作区与账号', exact: true })).toBeVisible()
+    // 桌面形态不再回退到首个 active 账号（1c46e53），全新 profile 里必须先选一次账号。
+    // 本用例验证的是设置草稿保护与工作区缓存隔离，因此直接把当前账号偏好写进这个 profile。
+    await native.evaluate(async (accountId) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountId)
+    }, account.id)
+    await native.goto(`${baseURL}/a/${account.id}`)
     await native.getByRole('link', { name: '作品', exact: true }).click()
     await expect(native).toHaveURL(new RegExp(`/a/${account.id}/works$`))
-    await expect(native.getByText(firstWork.title, { exact: true }).first()).toBeVisible()
+    // 必须等作品页真正渲染完再点用户菜单：侧栏「最近作品」也有同名文本，
+    // 只断言 getByText(title) 会在路由切换完成前就通过，随后 pathname 变化会关掉刚打开的菜单。
+    await expect(native.getByTestId('work-row-link').filter({ hasText: firstWork.title }).first()).toBeVisible()
     await native.getByRole('button', { name: /^用户菜单/ }).click()
     await native.getByRole('menuitem', { name: '设置…', exact: true }).click()
     const settings = native.getByTestId('desktop-settings-window')
@@ -488,7 +502,11 @@ test('TT53/55 真实Electron头条设置草稿保护、账号工作区缓存隔�
     await menu.getByRole('button', { name: '头条缓存隔离工作区', exact: true }).click()
     await expect(trigger).toContainText('头条缓存隔离工作区')
     await expect(native.getByText(secondWork.title, { exact: true })).toHaveCount(0)
-    await expect(native.getByRole('heading', { name: '添加平台账号', exact: true })).toBeVisible()
+    // 桌面形态不再回退到首个 active 账号（1c46e53），切到没有账号的工作区后落在设置窗的
+    // 空态卡片上（web/src/pages/settings/Accounts.tsx:474-482），不会自动弹「添加平台账号」。
+    const emptySettings = native.getByTestId('desktop-settings-window')
+    await expect(emptySettings.getByText('当前工作区还没有平台账号', { exact: true })).toBeVisible()
+    await expect(emptySettings.getByRole('button', { name: '打开顶部账号入口', exact: true })).toBeVisible()
     await screenshot(native, 'electron-ime-workspace-isolation')
   } finally {
     if (app) {

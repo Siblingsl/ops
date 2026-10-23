@@ -4,6 +4,7 @@ import { api, registerAccount } from './support'
 test('OPT39 图片库替代文字保存后用于公众号排版和手机预览', async ({ page }) => {
   const account = await registerAccount(page, '长图文', 'wechat_mp')
   const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: 'OPT39 图片库验收' })
+  await api(page, 'PATCH', `/works/${work.id}`, { viewpoint: '这是本人输入的核心观点：清楚说明每一步，读者才能重复执行。', base_revision: work.revision })
   await api(page, 'PUT', `/works/${work.id}/outline`, {
     items: [{ heading: '图片说明', key_point: '保存替代文字', material_ids: [] }], confirm: true,
   })

@@ -4,6 +4,7 @@ import { api, registerAccount } from './support'
 test('OPT38 单篇 Markdown 导出保留标题、段落与图片顺序', async ({ page }) => {
   const account = await registerAccount(page, '长图文', 'wechat_mp')
   const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: 'Markdown 导出验收' })
+  await api(page, 'PATCH', `/works/${work.id}`, { viewpoint: '这是本人输入的核心观点：清楚说明每一步，读者才能重复执行。', base_revision: work.revision })
   await api(page, 'PUT', `/works/${work.id}/outline`, {
     items: [
       { heading: '第一段', key_point: '先确认顺序', material_ids: [] },
