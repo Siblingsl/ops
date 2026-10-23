@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const Module = require('node:module');
 const test = require('node:test');
 
-test('exposes only one-way settings subscriptions and replays early events once', () => {
+test('exposes only one-way settings, platform intent subscriptions', () => {
   const exposed = {};
   const handlers = new Map();
   const contextBridge = {
@@ -30,7 +30,12 @@ test('exposes only one-way settings subscriptions and replays early events once'
   }
 
   assert.deepEqual(Object.keys(exposed), ['opsDesktopUI']);
-  assert.deepEqual(Object.keys(exposed.opsDesktopUI).sort(), ['onLocalSettingsState', 'onOpenSettings']);
+  assert.deepEqual(Object.keys(exposed.opsDesktopUI).sort(), [
+    'onLocalSettingsState',
+    'onOpenSettings',
+    'onPlatformIntentResult'
+  ]);
+  assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')), []);
 
   emit(handlers, 'desktop-ui:open-settings');
   let firstOpen = 0;
@@ -57,6 +62,40 @@ test('exposes only one-way settings subscriptions and replays early events once'
   unsubscribeState();
   emit(handlers, 'desktop-ui:local-settings-state', { dirty: false, busy: false });
   assert.equal(states.length, 2);
+
+  const results = [];
+  const unsubscribeResult = exposed.opsDesktopUI.onPlatformIntentResult((result) => results.push(result));
+  const requestId = '00000004-1111-4111-8111-111111111111';
+  const accountId = '00000003-1111-4111-8111-111111111111';
+  const operationId = '00000007-1111-4111-8111-111111111111';
+  const channel = 'desktop-ui:platform-intent-result';
+  emit(handlers, channel, { kind: 'platform-account-sync', requestId, accountId, status: 'queued' });
+  emit(handlers, channel, { kind: 'platform-metrics-refresh', requestId, accountId, status: 'existing', operationId });
+  emit(handlers, channel, { kind: 'platform-metrics-refresh', requestId, accountId, status: 'failed', message: '指标刷新服务未就绪。' });
+  emit(handlers, channel, { kind: 'platform-sync-resume', requestId, accountId, status: 'queued', operationId });
+
+  // Only the resume result requires an operation ID and only queued/failed are valid.
+  emit(handlers, channel, { kind: 'platform-sync-resume', requestId, accountId, status: 'queued' });
+  emit(handlers, channel, { kind: 'platform-sync-resume', requestId, accountId, status: 'existing', operationId });
+  emit(handlers, channel, { kind: 'platform-sync-resume', requestId, accountId, status: 'queued', operationId: 'not-a-uuid' });
+  emit(handlers, channel, { kind: 'platform-metrics-refresh', requestId, accountId, status: 'queued', operationId: 'not-a-uuid' });
+  emit(handlers, channel, { kind: 'platform-account-sync', requestId: 'not-a-uuid', accountId, status: 'failed' });
+  emit(handlers, channel, { kind: 'unknown', requestId, accountId, status: 'queued' });
+  emit(handlers, channel, { kind: 'platform-account-sync', requestId, accountId, status: 'running' });
+  emit(handlers, channel, { kind: 'platform-account-sync', requestId, accountId, status: 'failed', message: 'x'.repeat(201) });
+  emit(handlers, channel, { kind: 'platform-account-sync', requestId, accountId, status: 'failed', message: '同步服务未就绪。' });
+
+  assert.deepEqual(results, [
+    { kind: 'platform-account-sync', requestId, accountId, status: 'queued' },
+    { kind: 'platform-metrics-refresh', requestId, accountId, status: 'existing', operationId },
+    { kind: 'platform-metrics-refresh', requestId, accountId, status: 'failed', message: '指标刷新服务未就绪。' },
+    { kind: 'platform-sync-resume', requestId, accountId, status: 'queued', operationId },
+    { kind: 'platform-account-sync', requestId, accountId, status: 'failed', message: '同步服务未就绪。' },
+  ]);
+  unsubscribeResult();
+  emit(handlers, channel, { kind: 'platform-account-sync', requestId, accountId, status: 'queued' });
+  assert.equal(results.length, 5);
+
 });
 
 function emit(handlers, channel, payload) {

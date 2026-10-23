@@ -59,6 +59,38 @@ export interface PlatformConnection {
   }
 }
 
+export interface PlatformSyncCoverageStage {
+  state?: string
+  reason?: string | null
+  incomplete_reason?: string | null
+  pages_read?: number
+  has_more?: boolean
+  retryable?: boolean
+  total_count?: number | null
+  discovered?: number
+  succeeded?: number
+  failed?: number
+  pending?: number
+  consistency?: string
+  [key: string]: unknown
+}
+
+export interface PlatformSyncCoverage {
+  state?: string
+  reason?: string | null
+  pages_read?: number
+  has_more?: boolean
+  incomplete_reason?: string | null
+  retryable?: boolean
+  total_count?: number | null
+  discovered?: number
+  succeeded?: number
+  failed?: number
+  pending?: number
+  consistency?: string
+  [stage: string]: PlatformSyncCoverageStage | number | boolean | string | null | undefined
+}
+
 export interface PlatformSyncOperation {
   id: string
   kind: 'account_sync' | 'metrics_refresh'
@@ -73,10 +105,21 @@ export interface PlatformSyncOperation {
   expires_at: string | null
   next_allowed_at: string | null
   pause_reason: string | null
-  coverage: Record<string, { state?: string; reason?: string | null; total_count?: number; discovered?: number; pending?: number }>
+  coverage: PlatformSyncCoverage
   counters: Record<string, number>
   last_error: { code: string } | null
   available_actions: Array<'pause' | 'resume' | 'cancel'>
+}
+
+export interface PlatformSyncOperationItem {
+  platform_work_id: string
+  external_id: string
+  title: string
+  content_state: string
+  initial_metrics_state?: string
+  error_code: string | null
+  last_seen_at: string
+  content_observed_at: string | null
 }
 
 export interface PlatformWorkMirrorListItem {

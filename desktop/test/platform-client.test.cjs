@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { buildFailedBatch, PlatformClient, PLATFORM_PROTOCOL_VERSION, PLATFORM_PROTOCOL_V2 } = require('../.build/platform-client.js');
+const { buildFailedBatch, buildPlatformCatalogCompletion, PlatformClient, PLATFORM_PROTOCOL_VERSION, PLATFORM_PROTOCOL_V2 } = require('../.build/platform-client.js');
 const { PLATFORM_REGISTER_PURPOSE, parsePlatformCollectionCapability } = require('../.build/platform-capability.js');
 
 const capability = parsePlatformCollectionCapability({
@@ -264,4 +264,89 @@ test('v2 拒绝超过类型批次上限或未公布的结果类型，且不发�
   restrictedClient.adopt(v2Run);
   await assert.rejects(() => restrictedClient.submitV2('account_snapshot', {}), /未公布此 v2 结果类型/);
   assert.equal(calls.length, 0);
+});
+
+test('v2 目录页预算结束保留检查点，结构或发布时间不明才终止完整性核对', () => {
+  const input = { enumerationComplete: false, uncertainBoundary: false, incompleteReason: 'page_budget',
+    hasMore: true, nextPage: 3, partition: 'notes', totalCount: 100, observedAt: '2026-10-23T10:00:00Z' };
+  const continuation = buildPlatformCatalogCompletion(input);
+  assert.equal(continuation.outcome.status, 'partial');
+  assert.equal(continuation.data.reason, 'page_budget');
+  assert.equal(continuation.data.next_page, 3);
+  for (const change of [{ uncertainBoundary: true }, { incompleteReason: 'page_repeated' }, { hasMore: false }]) {
+    const result = buildPlatformCatalogCompletion({ ...input, ...change });
+    assert.equal(result.data.reason, 'catalog_inconsistent');
+    assert.equal(result.data.next_page, undefined);
+  }
+  const complete = buildPlatformCatalogCompletion({ ...input, enumerationComplete: true, hasMore: false, incompleteReason: null });
+  assert.equal(complete.outcome.status, 'succeeded');
+  assert.equal(complete.data.enumeration_complete, true);
+  assert.equal(complete.data.total_count, 100);
+});
+
+test('v2 已提交但响应丢失时查询同批回执，后续批次继续递增且不重复入库', async () => {
+  const saved = { batch_seq: 0, receipt_id: 'saved-v2', accepted: 1, rejected: 0, run_status: 'running' };
+  const { sign, calls } = fakeSigner([new Error('response lost'), saved,
+    { batch_seq: 1, receipt_id: 'terminal-v2', accepted: 0, rejected: 0, run_status: 'succeeded' }]);
+  const client = new PlatformClient(v2Capability, sign);
+  client.adopt(v2Run);
+  assert.equal((await client.submitV2('account_snapshot', { display_name: '合成测试账号' })).receipt_id, saved.receipt_id);
+  await client.submitV2('control', { state: 'complete' }, { status: 'succeeded' });
+  assert.equal(calls[1].operation, 'platform.run.receipt');
+  assert.match(calls[1].path, /\/receipts\/0$/);
+  assert.equal(calls[2].body.batch_seq, 1);
+  assert.equal(calls.filter(c => c.operation === 'platform.run.result').length, 2);
+});
+
+test('v2 响应与回执均不可取得时保留原错误和批次号，不伪造提交成功', async () => {
+  const { sign, calls } = fakeSigner([new Error('result offline'), new Error('receipt offline'),
+    { batch_seq: 0, receipt_id: 'retry-v2', accepted: 0, rejected: 0, run_status: 'succeeded' }]);
+  const client = new PlatformClient(v2Capability, sign);
+  client.adopt(v2Run);
+  await assert.rejects(() => client.submitV2('control', { state: 'complete' }, { status: 'succeeded' }), /result offline/);
+  await client.submitV2('control', { state: 'complete' }, { status: 'succeeded' });
+  assert.equal(calls.at(-1).body.batch_seq, 0);
+});
+
+test('续租开始前已取消时不打开平台页面', async () => {
+  const { sign } = fakeSigner([{ canceled: true }]);
+  const client = new PlatformClient(v2Capability, sign);
+  client.adopt(v2Run);
+  let opened = false;
+  const result = await client.withHeartbeat(async () => { opened = true; });
+  assert.equal(opened, false);
+  assert.deepEqual(result, { value: null, canceled: true });
+});
+
+test('平台页面打开失败后释放续租定时器', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const { sign, calls } = fakeSigner([{ canceled: false }]);
+  const client = new PlatformClient(v2Capability, sign);
+  client.adopt(v2Run);
+  await assert.rejects(() => client.withHeartbeat(async () => { throw new Error('page failed'); }), /page failed/);
+  t.mock.timers.tick(60_000);
+  assert.equal(calls.length, 1);
+});
+
+test('慢续租不并发，页面打开后仍等待在途续租并报告失败', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let beats = 0;
+  let rejectHeartbeat;
+  let finishPage;
+  const client = new PlatformClient(v2Capability, async () => {
+    if (++beats === 1) return { canceled: false };
+    return new Promise((resolve, reject) => { rejectHeartbeat = reject; });
+  });
+  client.adopt(v2Run);
+  const pending = client.withHeartbeat(() => new Promise(resolve => { finishPage = resolve; }));
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(20_000);
+  t.mock.timers.tick(60_000);
+  assert.equal(beats, 2);
+  const failed = assert.rejects(pending, /lease unavailable/);
+  finishPage('opened');
+  rejectHeartbeat(new Error('lease unavailable'));
+  await failed;
+  t.mock.timers.tick(60_000);
+  assert.equal(beats, 2);
 });

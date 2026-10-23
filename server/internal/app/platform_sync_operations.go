@@ -82,18 +82,21 @@ func (s *Server) recoverStalePlatformOperations(ctx context.Context, now time.Ti
 					WHERE active.operation_id=o.id AND active.status IN ('queued','leased','running')))`, now, operationID); err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `UPDATE platform_sync_operation o SET
-			status=CASE WHEN coalesce((SELECT max(r.attempt) FROM platform_sync_run r WHERE r.operation_id=o.id),0)>=$2 THEN 'failed' ELSE 'queued' END,
-			stage=CASE WHEN coalesce((SELECT max(r.attempt) FROM platform_sync_run r WHERE r.operation_id=o.id),0)>=$2 THEN 'complete' ELSE o.stage END,
-			next_allowed_at=CASE WHEN coalesce((SELECT max(r.attempt) FROM platform_sync_run r WHERE r.operation_id=o.id),0)>=$2 THEN o.next_allowed_at ELSE NULL END,
-			last_error_code=CASE WHEN coalesce((SELECT max(r.attempt) FROM platform_sync_run r WHERE r.operation_id=o.id),0)>=$2 THEN 'platform_run_expired' ELSE NULL END,pause_reason=NULL,
-			revision=revision+1,finished_at=CASE WHEN coalesce((SELECT max(r.attempt) FROM platform_sync_run r WHERE r.operation_id=o.id),0)>=$2 THEN $1::timestamptz ELSE NULL END,
-			updated_at=$1
-			WHERE o.status='running'
+		tag, err := tx.Exec(ctx, `WITH stalled AS (
+			SELECT o.id,coalesce((SELECT r.status='expired' AND r.attempt>=$2 FROM platform_sync_run r
+				WHERE r.operation_id=o.id AND r.operation_stage=o.stage ORDER BY r.created_at DESC,r.id DESC LIMIT 1),false) AS exhausted
+			FROM platform_sync_operation o WHERE o.status='running'
 			AND NOT EXISTS (SELECT 1 FROM platform_sync_run active WHERE active.operation_id=o.id AND active.status IN ('queued','leased','running'))
 			AND NOT EXISTS (SELECT 1 FROM platform_sync_run orphan WHERE orphan.operation_id IS NULL
 				AND orphan.query_scope->>'operation_id'=o.id::text AND orphan.status IN ('queued','leased','running'))
-			AND ($3::uuid IS NULL OR o.id=$3)`, now, platformRunMaxAttempts, operationID)
+			AND ($3::uuid IS NULL OR o.id=$3))
+			UPDATE platform_sync_operation o SET
+			status=CASE WHEN stalled.exhausted THEN 'failed' ELSE 'queued' END,
+			stage=CASE WHEN stalled.exhausted THEN 'complete' ELSE o.stage END,
+			next_allowed_at=CASE WHEN stalled.exhausted THEN o.next_allowed_at ELSE NULL END,
+			last_error_code=CASE WHEN stalled.exhausted THEN 'platform_run_expired' ELSE NULL END,pause_reason=NULL,
+			revision=revision+1,finished_at=CASE WHEN stalled.exhausted THEN $1::timestamptz ELSE NULL END,updated_at=$1
+			FROM stalled WHERE o.id=stalled.id AND o.status='running'`, now, platformRunMaxAttempts, operationID)
 		recovered = tag.RowsAffected()
 		return err
 	}); err != nil {
@@ -244,7 +247,9 @@ func (s *Server) schedulePlatformOperation(ctx context.Context, candidate queued
 		// 冻结目标约束可访问作品；仅在 worker 实际请求详情/指标前扣作品级预算。
 		_ = workAttempts
 		var attempt int
-		if err := tx.QueryRow(ctx, `SELECT coalesce(max(attempt),0)+1 FROM platform_sync_run WHERE operation_id=$1 AND operation_stage=$2`, candidate.ID, stage).Scan(&attempt); err != nil {
+		// 成功保存的页级检查点不消耗重试次数；只延续同阶段最近一次过期的次数。
+		if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT CASE WHEN status='expired' THEN attempt+1 ELSE 1 END
+			FROM platform_sync_run WHERE operation_id=$1 AND operation_stage=$2 ORDER BY created_at DESC,id DESC LIMIT 1),1)`, candidate.ID, stage).Scan(&attempt); err != nil {
 			return err
 		}
 		var runID uuid.UUID

@@ -96,26 +96,38 @@ test('头条可打开官方登录页，但不读取连接与采集接口', async
   assert.match(connection, /isToutiao \? '打开头条官方登录页' : '在本机扫码登录'/);
 });
 
-test('连接卡片调用的是固定端点，没有任意 URL 拼接', async () => {
+test('连接卡片通过共享封装调用固定平台意图，没有任意 URL 拼接', async () => {
   const source = await readSource('components/platform-connection.tsx');
+  const intentHelper = await readSource('lib/desktop-platform-intent.ts');
   for (const endpoint of [
     /`\/accounts\/\$\{accountId\}\/platform-connection`/,
     /`\/accounts\/\$\{accountId\}\/metrics\/observations`/,
     /`\/accounts\/\$\{accountId\}\/platform-sync-operations\?limit=20`/,
     /`\/metrics\/observations\/\$\{observationId\}\/confirm`/,
   ]) assert.match(source, endpoint);
-  assert.match(source, /invokeDesktop\('request-account-sync'/);
-  assert.match(source, /invokeDesktop\('request-metrics-refresh'/);
+  assert.match(source, /requestDesktopPlatformIntent\(\{\s*type: 'platform-account-sync'/);
+  assert.match(source, /requestDesktopPlatformIntent\(\{\s*type: 'platform-metrics-refresh'/);
+  assert.match(source, /requestDesktopPlatformIntent\(\{\s*type: 'platform-sync-resume'/);
+  assert.match(intentHelper, /ops-desktop:\/\/ui\/platform-account-sync/);
+  assert.match(intentHelper, /ops-desktop:\/\/ui\/platform-metrics-refresh/);
+  assert.match(intentHelper, /ops-desktop:\/\/ui\/platform-sync-resume/);
+  assert.match(intentHelper, /result\.kind !== request\.type \|\| result\.accountId !== request\.accountId \|\| result\.requestId !== requestId/);
+  assert.match(intentHelper, /result\.operationId !== request\.operationId/);
   assert.match(source, /window\.open\(`ops-desktop:\/\/ui\/platform-login\/\$\{accountId\}\/\$\{platform\}`/);
+  assert.equal(/opsDesktopSettings/.test(source), false, '业务窗口不应引用 opsDesktopSettings');
   assert.equal(/\bfetch\(|\beval\(/.test(source), false);
 });
 
 test('平台作品详情只按明确选中的镜像 ID 请求单篇指标刷新', async () => {
   const source = await readSource('pages/platform-works.tsx');
   const desktopClient = await fs.readFile(path.join(repoRoot, '..', 'desktop', 'src', 'desktop-client.ts'), 'utf8');
+  const intents = await fs.readFile(path.join(repoRoot, '..', 'desktop', 'src', 'ui-intents.ts'), 'utf8');
   assert.match(source, /刷新此篇指标/);
-  assert.match(source, /platformWorkIds: \[mirrorID\]/);
-  assert.match(source, /cmd: 'request-metrics-refresh'/);
+  assert.match(source, /platformWorkId: mirrorID/);
+  assert.equal(/opsDesktopSettings/.test(source), false, '业务窗口不应引用 opsDesktopSettings');
+  // 单篇 work ID 只进入固定的单个可选深链段，并转为 explicit 目标。
+  assert.match(intents, /platformWorkId\?: string/);
+  assert.match(intents, /\(\?:\(\$\{UUID\}\)\/\)\?/);
   assert.match(desktopClient, /platformWorkIds\?: string\[\]/);
   assert.match(desktopClient, /target_scope: input\.platformWorkIds\?\.length \? 'explicit' : 'due_and_recent'/);
 });

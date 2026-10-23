@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"ops/internal/app"
@@ -25,11 +27,23 @@ func main() {
 }
 
 func run() error {
-	// 固定独立库，不接受生产或 Go API 测试库，也不执行 DROP。
+	// All databases remain fixed test-only names; custom listeners are loopback-only.
 	desktopAIEnabled := os.Getenv("OPS_E2E_DESKTOP_AI_ENABLED") == "1"
+	platformEnabled := os.Getenv("OPS_E2E_PLATFORM_ENABLED") == "1"
 	databaseName := "ops_e2e"
 	if desktopAIEnabled {
-		databaseName = "ops_e2e_desktop_ui"
+		databaseName += "_desktop_ui"
+	}
+	if platformEnabled {
+		databaseName += "_platform"
+	}
+	listenAddr, err := localListenAddr("OPS_E2E_LISTEN", "127.0.0.1:8180")
+	if err != nil {
+		return err
+	}
+	mockListenAddr, err := localListenAddr("OPS_E2E_MOCK_LISTEN", "127.0.0.1:8191")
+	if err != nil {
+		return err
 	}
 	adminURL := os.Getenv("OPS_E2E_ADMIN_URL")
 	if adminURL == "" {
@@ -58,10 +72,10 @@ func run() error {
 	}
 	u.Path = "/" + databaseName
 	// 显式配置所有出站服务为本地 mock，避免继承真实凭证或地址。
-	cfg := &config.Config{Dev: true, Listen: "127.0.0.1:8180", DatabaseURL: u.String(),
-		DataDir: filepath.Join(os.TempDir(), "ops-e2e-assets"), MockListen: "127.0.0.1:8191",
-		WechatBase: "http://127.0.0.1:8191", MasterKey: make([]byte, 32), CrawlMode: "off", AIWorkers: 3,
-		DesktopAIEnabled: desktopAIEnabled}
+	cfg := &config.Config{Dev: true, Listen: listenAddr, DatabaseURL: u.String(),
+		DataDir: filepath.Join(os.TempDir(), databaseName+"-assets"), MockListen: mockListenAddr,
+		WechatBase: "http://" + mockListenAddr, MasterKey: make([]byte, 32), CrawlMode: "off", AIWorkers: 3,
+		DesktopAIEnabled: desktopAIEnabled, DesktopPlatformEnabled: platformEnabled}
 	if err := db.Migrate(cfg.DatabaseURL); err != nil {
 		return err
 	}
@@ -91,5 +105,28 @@ func run() error {
 	}
 	defer mockServer.Close()
 	go mockServer.Serve(listener)
-	return srv.HTTPServer(cfg.Listen).ListenAndServe()
+	httpServer := srv.HTTPServer(cfg.Listen)
+	if platformEnabled {
+		mux := http.NewServeMux()
+		mux.Handle("/__e2e/platform/seed", platformFixtureHandler(pool))
+		mux.Handle("/", httpServer.Handler)
+		httpServer.Handler = mux
+	}
+	return httpServer.ListenAndServe()
+}
+
+func localListenAddr(name, fallback string) (string, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	host, port, err := net.SplitHostPort(value)
+	if err != nil || host != "127.0.0.1" {
+		return "", fmt.Errorf("%s must be a 127.0.0.1 host:port", name)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1024 || portNumber > 65535 {
+		return "", fmt.Errorf("%s must use a port from 1024 through 65535", name)
+	}
+	return net.JoinHostPort(host, strconv.Itoa(portNumber)), nil
 }

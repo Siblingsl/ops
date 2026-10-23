@@ -86,6 +86,16 @@ export async function registerAccount(page: Page, type = '图文笔记', platfor
   return account
 }
 
+/**
+ * 桌面端设置窗口会用 `?id=` 与「本机记住的当前账号」比对，不一致就只显示提示卡片。
+ * 验收脚本里直接把偏好写到目标账号，避免依赖上一页 React 副作用写入的时机。
+ */
+export async function preferDesktopAccount(page: Page, accountId: string) {
+  const me = await api(page, 'GET', '/auth/me')
+  const key = `ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`
+  await page.evaluate(({ key: storageKey, id }) => localStorage.setItem(storageKey, id), { key, id: accountId })
+}
+
 export async function createOutline(page: Page) {
   await page.getByRole('button', { name: '新建作品', exact: true }).first().click()
   // NW-A1：所有入口都先打开同一个创建面板；标题可留空，直接开始创作。

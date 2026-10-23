@@ -52,8 +52,14 @@ import {
 import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace, orphanConnections } from './platform-profile';
 import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, normalizeXhsNoteTime, XHS_API, XhsAdapterError } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation, normalizeWechatSentAt, WECHAT_MP_API, WechatAdapterError } from './platforms/wechat-mp';
-import { PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun, type PlatformV2ResultType } from './platform-client';
-import { parseDesktopUiIntent, type DesktopUiIntent } from './ui-intents';
+import { buildPlatformCatalogCompletion, PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun, type PlatformV2ResultType } from './platform-client';
+import {
+  isBusinessWindowOnlyIntent,
+  parseDesktopUiIntent,
+  PLATFORM_INTENT_RESULT_CHANNEL,
+  type DesktopUiIntent,
+  type PlatformIntentResult
+} from './ui-intents';
 import {
   createLocalSettingsViewController,
   EmbeddedSettingsSenderRegistry,
@@ -1129,7 +1135,8 @@ async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<un
     case 'request-account-sync': {
       if (!desktopClient) throw new Error('客户端设置尚未初始化。');
       const payload = envelope.payload as { accountId: string; mode: 'incremental' | 'full_reconcile'; connectionRevision: number };
-      return desktopClient.requestPlatformAccountSync({ ...payload, idempotencyKey: randomUUID() });
+      const requestIdIsUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(envelope.id);
+      return desktopClient.requestPlatformAccountSync({ ...payload, idempotencyKey: requestIdIsUuid ? envelope.id : randomUUID() });
     }
     case 'request-metrics-refresh': {
       if (!desktopClient) throw new Error('客户端设置尚未初始化。');
@@ -1793,33 +1800,18 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
           partition: platform === 'xhs' ? 'notes' : 'articles', consistency: 'best_effort'
         };
         if (totalCount !== null) data.total_count = totalCount;
-        await client.submitV2('work_catalog', data);
-        accepted += Math.min(25, items.length - offset);
-      }
-      const nextPage = startPage + pagesRead;
-      const catalogComplete = enumerationComplete && !uncertainBoundary;
-      let terminalStatus: 'succeeded' | 'partial' = 'succeeded';
-      let terminalReason: string | null = null;
-      if (catalogComplete) {
-        const receipt = await client.submitV2('control', {
-          state: 'complete', enumeration_complete: true, total_count: totalCount ?? undefined,
-          partition, consistency: 'best_effort', observed_at: observedAt
-        }, { status: 'succeeded' });
-        accepted += receipt.accepted;
-      } else {
-        const reason = uncertainBoundary || !enumerationComplete ? 'catalog_inconsistent' : incompleteReason ?? 'page_budget';
-        const canContinue = reason === 'page_budget' && hasMore;
-        const receipt = await client.submitV2('control', {
-          state: 'partial', reason,
-          ...(canContinue ? { next_page: nextPage } : {}),
-          partition, consistency: 'best_effort', observed_at: observedAt
-        }, { status: 'partial', stopReason: reason });
+        const receipt = await client.submitV2('work_catalog', data);
         accepted += receipt.accepted;
         rejected += receipt.rejected;
-        terminalStatus = 'partial';
-        terminalReason = reason;
       }
-      return { performed: true, runId: run.id, runStatus: terminalStatus, accepted, rejected, stopReason: terminalReason, errorCode: null, adoptErrors: 0, adoptReason: null };
+      const nextPage = startPage + pagesRead;
+      const completion = buildPlatformCatalogCompletion({ enumerationComplete, uncertainBoundary, incompleteReason,
+        hasMore, nextPage, partition, totalCount, observedAt });
+      const receipt = await client.submitV2('control', completion.data, completion.outcome);
+      accepted += receipt.accepted;
+      rejected += receipt.rejected;
+      return { performed: true, runId: run.id, runStatus: receipt.run_status, accepted, rejected,
+        stopReason: completion.outcome.stopReason, errorCode: null, adoptErrors: 0, adoptReason: null };
     }
     if (run.task_kind === 'account_sync' && stage === 'content') {
       return submitV2Control(client, run, {
@@ -2579,6 +2571,7 @@ function showLocalSettingsView(window: BrowserWindow, panel: LocalSettingsPanel)
         });
         view.webContents.setWindowOpenHandler(({ url }) => {
           const intent = parseDesktopUiIntent(url);
+          if (intent && isBusinessWindowOnlyIntent(intent)) return { action: 'deny' };
           if (intent?.type === 'settings-close') requestCloseLocalSettingsFromView(window);
           else if (intent) applyDesktopUiIntent(window, intent);
           return { action: 'deny' };
@@ -2587,6 +2580,7 @@ function showLocalSettingsView(window: BrowserWindow, panel: LocalSettingsPanel)
           if (parseEmbeddedSettingsPanel(url)) return;
           event.preventDefault();
           const intent = parseDesktopUiIntent(url);
+          if (intent && isBusinessWindowOnlyIntent(intent)) return;
           if (intent?.type === 'settings-close') requestCloseLocalSettingsFromView(window);
           else if (intent) applyDesktopUiIntent(window, intent);
         });
@@ -2691,6 +2685,7 @@ function createLocalWindow(title: string, url: string): BrowserWindow {
   });
   window.webContents.setWindowOpenHandler(({ url }) => {
     const intent = parseDesktopUiIntent(url);
+    if (intent && isBusinessWindowOnlyIntent(intent)) return { action: 'deny' };
     if (intent) applyDesktopUiIntent(window, intent);
     return { action: 'deny' };
   });
@@ -2698,7 +2693,7 @@ function createLocalWindow(title: string, url: string): BrowserWindow {
     const intent = parseDesktopUiIntent(nextUrl);
     if (intent) {
       event.preventDefault();
-      applyDesktopUiIntent(window, intent);
+      if (!isBusinessWindowOnlyIntent(intent)) applyDesktopUiIntent(window, intent);
       return;
     }
     if (!nextUrl.startsWith(`${SETTINGS_PROTOCOL_ORIGIN}/`)) event.preventDefault();
@@ -2735,7 +2730,192 @@ function closeFailureWindow(): void {
   if (failureWindow && !failureWindow.isDestroyed()) failureWindow.close();
 }
 
+async function runBusinessPlatformAccountSyncIntent(
+  window: BrowserWindow,
+  intent: Extract<DesktopUiIntent, { type: 'platform-account-sync' }>
+): Promise<void> {
+  const canRespond = () => window === businessWindow && !window.isDestroyed() && !window.webContents.isDestroyed()
+    && isBusinessUrl(window.webContents.mainFrame.url) && isBusinessUrl(window.webContents.getURL());
+  if (!canRespond()) return;
+  const sendResult = (status: PlatformIntentResult['status'], message?: string) => {
+    if (!canRespond()) return;
+    window.webContents.send(PLATFORM_INTENT_RESULT_CHANNEL, {
+      kind: intent.type,
+      requestId: intent.requestId,
+      accountId: intent.accountId,
+      status,
+      ...(message ? { message: message.slice(0, 200) } : {})
+    } satisfies PlatformIntentResult);
+  };
+
+  if (accountDataClearInProgress) {
+    sendResult('failed', '账号本机数据正在清理，请稍后重试。');
+    return;
+  }
+
+  const response = await runPlatformCommand({
+    v: 1,
+    id: intent.requestId,
+    cmd: 'request-account-sync',
+    payload: {
+      accountId: intent.accountId,
+      mode: intent.mode,
+      connectionRevision: intent.connectionRevision
+    }
+  });
+  if (!response.ok) {
+    sendResult('failed', response.error.message);
+    return;
+  }
+
+  const data = response.data;
+  const status = typeof data === 'object' && data !== null && !Array.isArray(data)
+    ? (data as Record<string, unknown>).status
+    : null;
+  if (status === 'queued' || status === 'existing' || status === 'no_targets') {
+    sendResult(status);
+    return;
+  }
+  sendResult('failed', '同步服务返回结果无效，请刷新进度后重试。');
+}
+
+// 业务窗口发起的本机平台动作统一走这里：先确认回执能安全投递，再把结果原样转成
+// 四态回执（queued/existing/no_targets/failed），不把服务端错误结构直接暴露给渲染进程。
+function businessIntentResponder(window: BrowserWindow, requestId: string) {
+  const canRespond = () => window === businessWindow && !window.isDestroyed() && !window.webContents.isDestroyed()
+    && isBusinessUrl(window.webContents.mainFrame.url) && isBusinessUrl(window.webContents.getURL());
+  return {
+    canRespond,
+    send<T extends { requestId: string }>(channel: string, payload: Omit<T, 'requestId'>): void {
+      if (!canRespond()) return;
+      window.webContents.send(channel, { requestId, ...payload });
+    }
+  };
+}
+
+async function runBusinessPlatformMetricsRefreshIntent(
+  window: BrowserWindow,
+  intent: Extract<DesktopUiIntent, { type: 'platform-metrics-refresh' }>
+): Promise<void> {
+  const responder = businessIntentResponder(window, intent.requestId);
+  if (!responder.canRespond()) return;
+  const sendResult = (status: PlatformIntentResult['status'], message?: string, operationId?: string) => {
+    responder.send<PlatformIntentResult>(PLATFORM_INTENT_RESULT_CHANNEL, {
+      kind: intent.type,
+      accountId: intent.accountId,
+      status,
+      ...(operationId ? { operationId } : {}),
+      ...(message ? { message: message.slice(0, 200) } : {})
+    });
+  };
+
+  if (accountDataClearInProgress) {
+    sendResult('failed', '账号本机数据正在清理，请稍后重试。');
+    return;
+  }
+
+  const response = await runPlatformCommand({
+    v: 1,
+    id: intent.requestId,
+    cmd: 'request-metrics-refresh',
+    payload: {
+      accountId: intent.accountId,
+      connectionRevision: intent.connectionRevision,
+      ...(intent.platformWorkId ? { platformWorkIds: [intent.platformWorkId] } : {})
+    }
+  });
+  if (!response.ok) {
+    sendResult('failed', response.error.message);
+    return;
+  }
+
+  const data = typeof response.data === 'object' && response.data !== null && !Array.isArray(response.data)
+    ? response.data as Record<string, unknown>
+    : null;
+  const status = data?.status;
+  const operation = typeof data?.operation === 'object' && data.operation !== null && !Array.isArray(data.operation)
+    ? data.operation as Record<string, unknown>
+    : null;
+  const operationId = typeof operation?.id === 'string'
+    && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(operation.id)
+    ? operation.id
+    : undefined;
+  if (status === 'queued' || status === 'existing' || status === 'no_targets') {
+    if (!operationId) {
+      sendResult('failed', '指标刷新服务未返回有效的操作编号，请刷新进度后重试。');
+      return;
+    }
+    sendResult(status, undefined, operationId);
+    return;
+  }
+  sendResult('failed', '指标刷新服务返回结果无效，请刷新进度后重试。');
+}
+
+async function runBusinessPlatformSyncResumeIntent(
+  window: BrowserWindow,
+  intent: Extract<DesktopUiIntent, { type: 'platform-sync-resume' }>
+): Promise<void> {
+  const responder = businessIntentResponder(window, intent.requestId);
+  if (!responder.canRespond()) return;
+  const sendResult = (status: PlatformIntentResult['status'], message?: string) => {
+    responder.send<PlatformIntentResult>(PLATFORM_INTENT_RESULT_CHANNEL, {
+      kind: intent.type,
+      accountId: intent.accountId,
+      operationId: intent.operationId,
+      status,
+      ...(message ? { message: message.slice(0, 200) } : {})
+    });
+  };
+
+  if (accountDataClearInProgress) {
+    sendResult('failed', '账号本机数据正在清理，请稍后重试。');
+    return;
+  }
+
+  const response = await runPlatformCommand({
+    v: 1,
+    id: intent.requestId,
+    cmd: 'resume-platform-sync',
+    payload: {
+      accountId: intent.accountId,
+      operationId: intent.operationId,
+      expectedOperationRevision: intent.expectedOperationRevision
+    }
+  });
+  if (!response.ok) {
+    sendResult('failed', response.error.message);
+    return;
+  }
+
+  const data = typeof response.data === 'object' && response.data !== null && !Array.isArray(response.data)
+    ? response.data as Record<string, unknown>
+    : null;
+  const operation = typeof data?.operation === 'object' && data.operation !== null && !Array.isArray(data.operation)
+    ? data.operation as Record<string, unknown>
+    : null;
+  if (!operation || operation.id !== intent.operationId) {
+    sendResult('failed', '继续同步服务返回结果无效，请刷新进度后重试。');
+    return;
+  }
+  sendResult('queued');
+}
+
 function applyDesktopUiIntent(window: BrowserWindow, intent: DesktopUiIntent): void {
+  if (intent.type === 'platform-account-sync') {
+    if (window === businessWindow) void runBusinessPlatformAccountSyncIntent(window, intent);
+    return;
+  }
+
+  if (intent.type === 'platform-metrics-refresh') {
+    if (window === businessWindow) void runBusinessPlatformMetricsRefreshIntent(window, intent);
+    return;
+  }
+
+  if (intent.type === 'platform-sync-resume') {
+    if (window === businessWindow) void runBusinessPlatformSyncResumeIntent(window, intent);
+    return;
+  }
+
   if (intent.type === 'settings') {
     openNativeSettings();
     return;

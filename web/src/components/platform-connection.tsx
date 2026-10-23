@@ -3,11 +3,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { Link } from 'react-router-dom'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
-import type { PlatformAccountSnapshot, PlatformAvailability, PlatformConnection, PlatformObservation, PlatformSyncOperation, WorkspaceRole } from '@/lib/types'
+import { platformErrorCopy } from '@/lib/platform-errors'
+import type { PlatformAccountSnapshot, PlatformAvailability, PlatformConnection, PlatformObservation, PlatformSyncCoverage, PlatformSyncCoverageStage, PlatformSyncOperation, WorkspaceRole } from '@/lib/types'
 import { useMe } from '@/lib/session'
 import { DESKTOP_LOCAL_SETTINGS_REQUEST, useSettingsDraft } from '@/lib/desktop-settings'
+import { requestDesktopPlatformIntent } from '@/lib/desktop-platform-intent'
+import { PlatformSyncDetails } from './platform-sync-details'
 import { Badge, Button, Card, CardHeader, cn, Field, MoreMenu, platformLabel } from './ui'
 
 // 平台数据连接（D-129 / 20 文档 §14）。页面只展示服务端返回的真实状态：
@@ -52,6 +56,74 @@ export function autoAdoptDisabledReason(): string {
   return '待每平台 10 篇以上逐字段正式验收完成后开放'
 }
 
+const coverageStageLabel: Record<string, string> = {
+  profile: '账号资料',
+  catalog: '作品列表',
+  content: '作品详情',
+  metrics: '作品指标',
+}
+
+const coverageStateLabel: Record<string, string> = {
+  not_started: '未开始',
+  complete: '完整',
+  partial: '部分完成',
+  denied: '无权限',
+  unsupported: '不支持',
+  unknown: '未知',
+}
+
+const coverageReasonLabel: Record<string, string> = {
+  page_budget: '达到本次读取页数上限，仍有后续页面',
+  page_repeated: '平台重复返回同一页，无法确认列表是否读完',
+  catalog_inconsistent: '作品列表边界发生变化，无法确认覆盖完整',
+  target_not_in_bounded_window: '目标作品不在本次可读取范围内',
+  content_capability_unverified: '作品详情读取能力尚未核验',
+  metrics_capability_unverified: '作品指标读取能力尚未核验',
+  profile_capability_unverified: '账号资料读取能力尚未核验',
+  access_denied: '平台拒绝访问，请核对登录状态和权限',
+  temporarily_unavailable: '平台暂时不可用',
+  author_identity_unverified: '尚未确认平台账号身份',
+  content_size_exceeded: '作品内容超过可读取大小限制',
+  unsupported_type: '平台作品类型暂不支持',
+  network_unavailable: '平台网络暂不可用',
+  no_accessible_works: '当前没有可读取的平台作品',
+  platform_risk: '平台要求先完成安全验证',
+}
+
+const rootCoverageKeys = new Set([
+  'state', 'reason', 'pages_read', 'has_more', 'incomplete_reason', 'retryable',
+  'total_count', 'discovered', 'succeeded', 'failed', 'pending', 'consistency',
+])
+
+function isCoverageStage(value: unknown): value is PlatformSyncCoverageStage {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function operationCoverageRows(coverage: PlatformSyncCoverage | null | undefined): Array<[string, PlatformSyncCoverageStage]> {
+  if (!coverage) return []
+  const rows = Object.entries(coverage).flatMap(([stage, value]): Array<[string, PlatformSyncCoverageStage]> =>
+    !rootCoverageKeys.has(stage) && isCoverageStage(value) ? [[stage, value]] : [])
+  const rootCoverage: PlatformSyncCoverageStage = {}
+  for (const key of rootCoverageKeys) {
+    const value = coverage[key]
+    if (value !== undefined) rootCoverage[key] = value
+  }
+  if (Object.keys(rootCoverage).length > 0) {
+    const catalogIndex = rows.findIndex(([stage]) => stage === 'catalog')
+    if (catalogIndex === -1) rows.unshift(['catalog', rootCoverage])
+    else rows[catalogIndex] = ['catalog', { ...rootCoverage, ...rows[catalogIndex][1] }]
+  }
+  return rows
+}
+
+function coverageReasonText(reason: string): string {
+  return coverageReasonLabel[reason] ?? reason.replace(/_/g, ' ')
+}
+
+function coverageStateText(state: string): string {
+  return coverageStateLabel[state] ?? state.replace(/_/g, ' ')
+}
+
 export function PlatformConnectionCard({ accountId, platform, canManage, role = 'viewer', adminOverride = false, accountStatus = 'active', actionsTarget }: {
   accountId: string
   platform: string
@@ -77,8 +149,11 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
   const [connectionError, setConnectionError] = useState('')
   const [observationError, setObservationError] = useState('')
   const [now, setNow] = useState(() => Date.now())
+  const [detailsOperation, setDetailsOperation] = useState<{ accountId: string; id: string } | null>(null)
   const generation = useRef(0)
   const controller = useRef<AbortController | null>(null)
+  const activeAccountId = useRef(accountId)
+  const pendingPlatformIntent = useRef(false)
   useSettingsDraft(false, busy !== '')
 
   const operationsQuery = useQuery({
@@ -99,6 +174,14 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
     enabled: desktopPresentation && !!connection && platform !== 'toutiao',
     staleTime: 30_000,
   })
+  const operationsRefetch = useRef(operationsQuery.refetch)
+  operationsRefetch.current = operationsQuery.refetch
+  const snapshotRefetch = useRef(snapshotQuery.refetch)
+  snapshotRefetch.current = snapshotQuery.refetch
+  const latestSync = operationsQuery.data?.items.find((item) => item.kind === 'account_sync')
+  useEffect(() => {
+    if (latestSync) void snapshotRefetch.current()
+  }, [accountId, latestSync?.id, latestSync?.revision, latestSync?.status])
 
   const load = useCallback(async () => {
     if (platform === 'toutiao') {
@@ -146,6 +229,13 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
     return () => { generation.current++; controller.current?.abort() }
   }, [load])
   useEffect(() => {
+    if (activeAccountId.current === accountId) return
+    activeAccountId.current = accountId
+    setBusy('')
+    setDetailsOperation(null)
+  }, [accountId])
+
+  useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30_000)
     return () => clearInterval(timer)
   }, [])
@@ -163,68 +253,98 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
     }
   }
 
-  const invokeDesktop = async (cmd: string, payload: Record<string, unknown>) => {
-    if (!desktopPresentation || !window.opsDesktopSettings?.platformCommand) throw new Error('请在 OPS 桌面客户端执行此操作。')
-    const response = await window.opsDesktopSettings.platformCommand({ v: 1, id: crypto.randomUUID(), cmd, payload }) as {
-      ok?: boolean
-      data?: unknown
-      error?: { message?: string }
-    }
-    if (response.ok !== true) throw new Error(response.error?.message || '本机操作失败，请稍后重试。')
-    return response.data
-  }
-
   const requestAccountSync = async (mode: 'incremental' | 'full_reconcile' = 'incremental') => {
-    if (!connection) return
+    if (!connection || pendingPlatformIntent.current) return
+    if (accountSyncReason) {
+      toast.error(accountSyncReason)
+      return
+    }
+
+    const requestAccountId = accountId
+    pendingPlatformIntent.current = true
     setBusy('account-sync')
     try {
-      await invokeDesktop('request-account-sync', {
+      const result = await requestDesktopPlatformIntent({
+        type: 'platform-account-sync',
         accountId,
         mode,
         connectionRevision: connection.authorization_revision,
       })
-      toast.success(mode === 'full_reconcile' ? '已建立历史核对操作' : '已建立平台账号同步操作')
-      await operationsQuery.refetch()
-    } catch (e) {
-      toast.error(errorMessage(e))
+      if (result.status === 'existing') toast.info('已有同步操作，正在刷新进度。')
+      else if (result.status === 'no_targets') toast.info('当前没有可同步的平台作品。')
+      else toast.success(mode === 'full_reconcile' ? '已建立历史核对操作' : '已建立平台账号同步操作')
+      void operationsRefetch.current()
+    } catch (error) {
+      toast.error(errorMessage(error))
     } finally {
-      setBusy('')
+      pendingPlatformIntent.current = false
+      if (activeAccountId.current === requestAccountId) setBusy('')
     }
   }
 
   const requestMetricsRefresh = async () => {
-    if (!connection) return
+    if (!connection || pendingPlatformIntent.current) return
+    if (metricsRefreshReason) {
+      toast.error(metricsRefreshReason)
+      return
+    }
+
+    const requestAccountId = accountId
+    pendingPlatformIntent.current = true
     setBusy('metrics-refresh')
     try {
-      await invokeDesktop('request-metrics-refresh', {
+      const result = await requestDesktopPlatformIntent({
+        type: 'platform-metrics-refresh',
         accountId,
         connectionRevision: connection.authorization_revision,
       })
-      toast.success('已建立作品指标刷新操作')
-      await operationsQuery.refetch()
-    } catch (e) {
-      toast.error(errorMessage(e))
+      if (result.status === 'existing') toast.info('已有同目标的指标刷新操作，正在刷新进度。')
+      else if (result.status === 'no_targets') toast.info('当前没有可刷新指标的作品。')
+      else toast.success('已建立作品指标刷新操作')
+      void operationsRefetch.current()
+    } catch (error) {
+      toast.error(errorMessage(error))
     } finally {
-      setBusy('')
+      pendingPlatformIntent.current = false
+      if (activeAccountId.current === requestAccountId) setBusy('')
+    }
+  }
+
+  const resumeSyncOperation = async (operation: PlatformSyncOperation) => {
+    if (pendingPlatformIntent.current) return
+    const requestAccountId = accountId
+    pendingPlatformIntent.current = true
+    setBusy('operation-resume')
+    try {
+      await requestDesktopPlatformIntent({
+        type: 'platform-sync-resume',
+        accountId,
+        operationId: operation.id,
+        expectedOperationRevision: operation.revision,
+      })
+      toast.success('同步已继续')
+      await operationsQuery.refetch()
+    } catch (error) {
+      toast.error(errorMessage(error))
+      await operationsQuery.refetch()
+    } finally {
+      pendingPlatformIntent.current = false
+      if (activeAccountId.current === requestAccountId) setBusy('')
     }
   }
 
   const actOnOperation = async (operation: PlatformSyncOperation, action: 'pause' | 'resume' | 'cancel') => {
+    if (action === 'resume') {
+      await resumeSyncOperation(operation)
+      return
+    }
     setBusy(`operation-${action}`)
     try {
-      if (action === 'resume') {
-        await invokeDesktop('resume-platform-sync', {
-          accountId,
-          operationId: operation.id,
-          expectedOperationRevision: operation.revision,
-        })
-      } else {
-        await post(`/accounts/${accountId}/platform-sync-operations/${operation.id}/actions`, {
-          action,
-          expected_operation_revision: operation.revision,
-        })
-      }
-      toast.success(action === 'pause' ? '同步已暂停' : action === 'cancel' ? '同步已取消' : '同步已继续')
+      await post(`/accounts/${accountId}/platform-sync-operations/${operation.id}/actions`, {
+        action,
+        expected_operation_revision: operation.revision,
+      })
+      toast.success(action === 'pause' ? '同步已暂停' : '同步已取消')
       await operationsQuery.refetch()
     } catch (e) {
       toast.error(errorMessage(e))
@@ -321,6 +441,9 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
   const availability = availabilityLabel[connection.availability]
   const syncReason = (kind: 'account_sync' | 'metrics_refresh'): string | null => {
     if (!desktopPresentation) return '请在 OPS 桌面客户端发起本机平台读取。'
+    if (!window.opsDesktopUI?.onPlatformIntentResult) return kind === 'account_sync'
+      ? '当前 OPS 桌面客户端不支持账号同步，请重启客户端后重试。'
+      : '当前 OPS 桌面客户端不支持指标刷新，请重启客户端后重试。'
     if (adminOverride) return '系统管理员代入工作区时只能查看，不能发起平台读取。'
     if (role === 'viewer') return '当前角色为只读，不能发起平台读取。'
     if (accountStatus !== 'active') return '此账号已停用，不能发起新的平台读取。'
@@ -347,7 +470,9 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
   const operations = operationsQuery.data?.items ?? []
   const activeStatuses = ['queued', 'running', 'paused', 'waiting_budget', 'waiting_device', 'waiting_login']
   const progressOperation = operations.find((item) => activeStatuses.includes(item.status)) ?? operations[0]
-  const stageLabel: Record<string, string> = { profile: '账号资料', catalog: '作品列表', content: '作品详情', metrics: '作品指标', complete: '已结束', queued: '排队中' }
+  const selectedDetails = detailsOperation?.accountId === accountId
+    ? operations.find((item) => item.id === detailsOperation.id) : undefined
+  const stageLabel: Record<string, string> = { ...coverageStageLabel, complete: '已结束', queued: '排队中' }
   const operationStatusLabel: Record<string, string> = {
     queued: '排队中', running: '进行中', paused: '已暂停', waiting_budget: '等待读取窗口', waiting_device: '等待本机客户端',
     waiting_login: '等待重新登录', succeeded: '已完成', partial: '部分完成', failed: '失败', canceled: '已取消'
@@ -362,6 +487,18 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
     ].filter(Boolean)
     return parts.join(' · ') || '等待本机执行器回报阶段结果'
   }
+  const coverageRows = progressOperation ? operationCoverageRows(progressOperation.coverage) : []
+  const hasPartialCoverage = !!progressOperation && (
+    progressOperation.status === 'partial' || coverageRows.some(([, coverage]) =>
+      coverage.state === 'partial' || coverage.has_more === true || !!coverage.incomplete_reason || !!coverage.reason)
+  )
+  const hasQueuedContinuation = !!progressOperation && ['queued', 'running'].includes(progressOperation.status) && coverageRows.some(([, coverage]) =>
+    coverage.has_more === true || coverage.reason === 'page_budget' || coverage.incomplete_reason === 'page_budget')
+  const resumeWithCoverage = hasPartialCoverage && !!progressOperation?.available_actions.includes('resume')
+  const displayedOperationStatus = progressOperation
+    ? (progressOperation.status === 'succeeded' && hasPartialCoverage ? 'partial' : progressOperation.status)
+    : ''
+  const terminalIncompleteAccountSync = progressOperation?.kind === 'account_sync' && ['succeeded', 'partial'].includes(progressOperation.status) && hasPartialCoverage
   const platformAccountField = <Field label="平台账号" plain className={desktopPresentation ? 'desktop-platform-field' : undefined}>
     <div className="flex flex-wrap items-center gap-2 text-[13.5px] text-mist-700">
       <Badge tone="ink">{connection.external_account_key}</Badge>
@@ -374,6 +511,7 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
   </Field>
   const platformProfileField = <Field label="平台资料" plain className={desktopPresentation ? 'desktop-platform-field' : undefined}>
     <div className="text-[13px] text-mist-600">
+      {snapshotQuery.isError && <p role="alert" className="text-danger">平台资料读取失败：{errorMessage(snapshotQuery.error)} <button className="underline" onClick={() => void snapshotQuery.refetch()}>重试资料</button></p>}
       {snapshotQuery.data?.snapshot ? <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span>{snapshotQuery.data.snapshot.display_name || '平台未提供昵称'}</span>
@@ -389,7 +527,7 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
           未取得字段：{Object.entries(snapshotQuery.data.snapshot.field_states).filter(([, state]) => state !== 'present').map(([key, state]) => `${key}（${state}）`).join('、')}
         </p>}
         {snapshotQuery.data.snapshot.observed_at && <p className="text-[12px] text-mist-400">资料核对于 {fmtTime(snapshotQuery.data.snapshot.observed_at)}</p>}
-      </div> : '尚未同步或平台未提供'}
+      </div> : snapshotQuery.isLoading ? '正在读取平台资料…' : snapshotQuery.isError ? null : '尚未同步或平台未提供'}
     </div>
   </Field>
   const consentField = <Field label="数据读取同意" plain className={desktopPresentation ? 'desktop-platform-field' : undefined}>
@@ -445,7 +583,7 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
     {actionsTarget !== undefined ? '同步' : '同步平台账号'}
   </Button>
   const refreshAction = <Button size="sm" variant="ghost" icon={actionsTarget !== undefined ? <BarChart3 className="size-3.5" /> : <RefreshCw className="size-3.5" />} disabled={busy !== '' || !!metricsRefreshReason}
-    loading={busy === 'metrics-refresh'} onClick={() => void requestMetricsRefresh()} aria-label="刷新作品指标"
+    loading={busy === 'metrics-refresh'} onClick={requestMetricsRefresh} aria-label="刷新作品指标"
     title={metricsRefreshReason ?? '刷新作品指标'} className={actionsTarget !== undefined ? '!px-2 !text-[12px]' : undefined}>
     {actionsTarget !== undefined ? '指标' : '刷新作品指标'}
   </Button>
@@ -472,6 +610,9 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
         ) : undefined}
       />
       {renderedActions}
+      {desktopPresentation && operationsQuery.isError && <div role="alert" className="border-b border-line/60 px-5 py-3 text-[13px] text-danger">
+        同步进度读取失败：{errorMessage(operationsQuery.error)} <button className="underline" onClick={() => void operationsQuery.refetch()}>重试进度</button>
+      </div>}
       {(accountSyncReason || metricsRefreshReason) && <div className={cn('border-b border-line/60 text-[12px] text-mist-600', desktopPresentation ? 'desktop-platform-connection-notices px-5 py-3.5' : 'space-y-1 bg-mist-50/50 px-5 py-3')}>
         {accountSyncReason && <p>账号同步：{accountSyncReason}</p>}
         {metricsRefreshReason && <p>指标刷新：{metricsRefreshReason}</p>}
@@ -479,21 +620,79 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
       {desktopPresentation && progressOperation && <div className="desktop-platform-connection-progress border-b border-line/60 px-5 py-4" aria-live="polite">
         <div className="flex flex-wrap items-center gap-2 text-[13px] font-semibold text-mist-800">
           <span>{progressOperation.kind === 'account_sync' ? '账号同步进度' : '指标刷新进度'}</span>
-          <Badge tone={['succeeded', 'partial'].includes(progressOperation.status) ? 'ink' : progressOperation.status === 'failed' ? 'red' : 'gamboge'}>
-            {operationStatusLabel[progressOperation.status] ?? progressOperation.status}
+          <Badge tone={displayedOperationStatus === 'succeeded' ? 'ink' : displayedOperationStatus === 'failed' ? 'red' : 'gamboge'}>
+            {operationStatusLabel[displayedOperationStatus] ?? displayedOperationStatus}
           </Badge>
           <span className="font-normal text-mist-500">{stageLabel[progressOperation.stage] ?? progressOperation.stage}</span>
           {progressOperation.next_allowed_at && <span className="font-normal text-mist-500">下次可继续 {fmtTime(progressOperation.next_allowed_at)}</span>}
         </div>
         <p className="mt-1 text-[12.5px] text-mist-600">{progressText(progressOperation)}</p>
-        {progressOperation.last_error?.code && <p className="mt-1 text-[12px] text-gamboge-700">最近状态：{progressOperation.last_error.code}</p>}
+        {/* PB-10：内部错误码要翻成用户能看懂的话，并说清下一步该做什么。 */}
+        {progressOperation.last_error?.code && (() => {
+          const copy = platformErrorCopy(progressOperation.last_error.code)
+          if (!copy) return null
+          return (
+            <div className="mt-1 text-[12px] text-gamboge-700" data-testid="platform-operation-error">
+              <span className="font-medium">最近状态：{copy.title}</span>
+              <span className="ml-1 text-mist-600">{copy.hint}</span>
+              {canOpenPlatform && (progressOperation.last_error.code === 'platform_login_required'
+                || progressOperation.last_error.code === 'platform_challenge_required'
+                || progressOperation.last_error.code === 'platform_session_expired') ? (
+                  <button type="button" className="ml-1 text-ink-700 underline" onClick={openPlatformLogin}>重新核对平台登录</button>
+                ) : null}
+            </div>
+          )
+        })()}
         <div className="mt-2 flex flex-wrap gap-2">
+          {progressOperation.kind === 'account_sync' && <Button size="sm" variant="secondary" onClick={() => setDetailsOperation({ accountId, id: progressOperation.id })}>查看作品同步明细</Button>}
           {progressOperation.available_actions.includes('pause') && <Button size="sm" variant="ghost" disabled={busy !== ''} onClick={() => void actOnOperation(progressOperation, 'pause')}>暂停</Button>}
-          {progressOperation.available_actions.includes('resume') && <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void actOnOperation(progressOperation, 'resume')}>继续同步</Button>}
+          {progressOperation.available_actions.includes('resume') && !resumeWithCoverage && <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void actOnOperation(progressOperation, 'resume')}>继续同步</Button>}
           {progressOperation.available_actions.includes('cancel') && <Button size="sm" variant="ghost" disabled={busy !== ''} onClick={() => void actOnOperation(progressOperation, 'cancel')}>取消</Button>}
           {operationsQuery.isFetching && <span className="self-center text-[11px] text-mist-400">正在更新项目进度</span>}
         </div>
       </div>}
+      {desktopPresentation && progressOperation?.kind === 'account_sync' && (coverageRows.length > 0 || progressOperation.status === 'partial') && <section className="desktop-platform-connection-coverage border-b border-line/60 px-5 py-4" aria-label="账号同步采集覆盖" data-testid="platform-sync-coverage">
+        <div className="mb-2 text-[13px] font-semibold text-mist-800">本次采集覆盖</div>
+        {coverageRows.length === 0 ? <p className="text-[12.5px] text-mist-500">服务端没有返回阶段覆盖明细。</p> : <ul className="space-y-2">
+          {coverageRows.map(([stage, coverage]) => {
+            const reasons = [...new Set([coverage.incomplete_reason, coverage.reason].filter((reason): reason is string => typeof reason === 'string' && reason.trim() !== ''))]
+            const details = [
+              typeof coverage.pages_read === 'number' && Number.isFinite(coverage.pages_read) ? `已读取 ${coverage.pages_read} 页` : '',
+              typeof coverage.has_more === 'boolean' ? (coverage.has_more ? '还有后续页面' : '没有后续页面') : '',
+              typeof coverage.total_count === 'number' && Number.isFinite(coverage.total_count) ? `平台作品 ${coverage.total_count} 篇` : '',
+              typeof coverage.discovered === 'number' && Number.isFinite(coverage.discovered) ? `发现 ${coverage.discovered} 篇` : '',
+              typeof coverage.succeeded === 'number' && Number.isFinite(coverage.succeeded) ? `完成 ${coverage.succeeded} 项` : '',
+              typeof coverage.failed === 'number' && Number.isFinite(coverage.failed) && coverage.failed > 0 ? `失败 ${coverage.failed} 项` : '',
+              typeof coverage.pending === 'number' && Number.isFinite(coverage.pending) && coverage.pending > 0 ? `待处理 ${coverage.pending} 项` : '',
+              typeof coverage.retryable === 'boolean' ? (coverage.retryable ? '可重试' : '不可直接重试') : '',
+              coverage.consistency ? `一致性：${coverage.consistency === 'best_effort' ? '尽力读取' : coverage.consistency.replace(/_/g, ' ')}` : '',
+            ].filter(Boolean)
+            return <li key={stage} className="rounded-lg border border-mist-200 bg-white/70 px-3 py-2.5 text-[12px] text-mist-600">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-mist-800">{coverageStageLabel[stage] ?? stage.replace(/_/g, ' ')}</span>
+                {coverage.state && <Badge tone={coverage.state === 'complete' ? 'ink' : coverage.state === 'partial' ? 'gamboge' : 'gray'}>{coverageStateText(coverage.state)}</Badge>}
+              </div>
+              {details.length > 0 && <p className="mt-1">{details.join(' · ')}</p>}
+              {reasons.map((reason) => <p key={reason} className="mt-1 text-gamboge-700">未完整原因：{coverageReasonText(reason)}</p>)}
+              {coverage.state === 'partial' && reasons.length === 0 && <p className="mt-1 text-gamboge-700">此阶段未完成，服务端未提供具体原因。</p>}
+            </li>
+          })}
+        </ul>}
+        {hasPartialCoverage && <div className="mt-3 rounded-lg bg-gamboge-50 px-3 py-3 text-[12.5px] text-mist-700">
+          <p>{hasQueuedContinuation
+            ? '后续页面已排队，系统会从保存的进度继续读取；请等待本次操作完成。'
+            : resumeWithCoverage
+              ? '当前操作可从保存的进度继续，不会重新开始已完成阶段。'
+              : terminalIncompleteAccountSync
+                ? '本次操作已结束。你可以查看已采集的平台作品，或手动重新核对历史作品；自动采用保持关闭。'
+                : '本次覆盖仍有未完成阶段。你可以先查看已采集的平台作品，再根据原因处理。'}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Link to={`/a/${accountId}/works?source=platform`} className="text-ink-700 underline underline-offset-2">查看已采集的平台作品</Link>
+            {resumeWithCoverage && progressOperation && <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void actOnOperation(progressOperation, 'resume')}>继续同步</Button>}
+            {terminalIncompleteAccountSync && <Button size="sm" variant="secondary" disabled={busy !== '' || !!accountSyncReason} loading={busy === 'account-sync'} title={accountSyncReason ?? undefined} onClick={() => void requestAccountSync('full_reconcile')}>重新核对历史作品</Button>}
+          </div>
+        </div>}
+      </section>}
       {desktopPresentation ? (
         <div className="desktop-platform-details">
           <section className="desktop-platform-information-grid" aria-label="连接信息">
@@ -508,6 +707,7 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
         {platformAccountField}{platformProfileField}{consentField}{autoCollectField}{autoAdoptField}{lastVerifiedField}{nextDueField}{failureField}
       </div>}
 
+      {selectedDetails && <PlatformSyncDetails key={`${accountId}:${selectedDetails.id}`} accountId={accountId} operation={selectedDetails} onClose={() => setDetailsOperation(null)} />}
       <div className={cn('border-t border-line/60', desktopPresentation ? 'desktop-platform-observations px-5 py-4' : 'px-5 py-4')}>
         <div className="mb-2 text-[13px] font-semibold text-mist-700">最近观测</div>
         {observations.length === 0 ? (

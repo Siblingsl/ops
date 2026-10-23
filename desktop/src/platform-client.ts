@@ -283,7 +283,15 @@ export class PlatformClient {
     if (this.submittedContentBytes + contentBytes > maxContentRunBytes) {
       throw new Error('本次正文同步已达 run 字节上限，请以 partial 结束并保存游标。');
     }
-    const receipt = await this.sendBatch(run, body);
+    let receipt: PlatformReceipt;
+    try {
+      receipt = await this.sendBatch(run, body);
+    } catch (error) {
+      // 服务端可能已提交事务而回包丢失；先查同一批次，不用不同内容占用原序号。
+      const saved = await this.receipt(this.nextBatchSeq);
+      if (!saved) throw error;
+      receipt = saved;
+    }
     this.nextBatchSeq += 1;
     this.acceptedRows += receipt.accepted;
     this.submittedContentBytes += contentBytes;
@@ -352,6 +360,30 @@ export class PlatformClient {
     if (!this.currentRun) throw new Error('当前没有已领取的平台采集任务。');
     return this.currentRun;
   }
+}
+
+export function buildPlatformCatalogCompletion(input: {
+  enumerationComplete: boolean;
+  uncertainBoundary: boolean;
+  incompleteReason: string | null;
+  hasMore: boolean;
+  nextPage: number;
+  partition: string;
+  totalCount: number | null;
+  observedAt: string;
+}): { data: Record<string, unknown>; outcome: { status: 'succeeded' | 'partial'; stopReason: string | null } } {
+  const data: Record<string, unknown> = {
+    partition: input.partition, consistency: 'best_effort', observed_at: input.observedAt
+  };
+  if (input.enumerationComplete && !input.uncertainBoundary) {
+    return { data: { ...data, state: 'complete', enumeration_complete: true,
+      ...(input.totalCount !== null ? { total_count: input.totalCount } : {}) },
+      outcome: { status: 'succeeded', stopReason: null } };
+  }
+  const canContinue = !input.uncertainBoundary && input.incompleteReason === 'page_budget' && input.hasMore;
+  const reason = canContinue ? 'page_budget' : 'catalog_inconsistent';
+  return { data: { ...data, state: 'partial', reason, ...(canContinue ? { next_page: input.nextPage } : {}) },
+    outcome: { status: 'partial', stopReason: reason } };
 }
 
 // buildFailedBatch 是失败终批的固定形状：可以带 0 条观测，服务端据此把 run 置终态。

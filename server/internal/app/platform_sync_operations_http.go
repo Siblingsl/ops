@@ -404,34 +404,45 @@ func (s *Server) listPlatformSyncOperationItems(w http.ResponseWriter, r *http.R
 		return err
 	}
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
-	if state != "" && !validMirrorState(state) {
+	stage := strings.TrimSpace(r.URL.Query().Get("stage"))
+	if stage == "" {
+		stage = "content"
+	}
+	if stage != "content" && stage != "metrics" {
+		return validation("stage 必须是 content 或 metrics")
+	}
+	validState := validMirrorState(state)
+	if stage == "metrics" {
+		validState = state == "not_started" || state == "complete" || state == "partial" || state == "unsupported" || state == "denied" || state == "failed"
+	}
+	if state != "" && !validState {
 		return validation("state 筛选值无效")
 	}
 	rows, err := s.db.Query(r.Context(), `SELECT id,external_id,remote_content_type,remote_status,title,content_state,
-		content_error_code,last_seen_at,content_observed_at,source_run_id,created_at
+		content_error_code,last_seen_at,content_observed_at,source_run_id,created_at,initial_metrics_state
 		FROM platform_work_mirror WHERE workspace_id=$1 AND account_id=$2 AND last_sync_operation_id=$3
-		AND ($4='' OR content_state=$4)
+		AND ($4='' OR CASE WHEN $8='metrics' THEN initial_metrics_state ELSE content_state END=$4)
 		AND ($5::timestamptz IS NULL OR (created_at,id)<($5,$6))
 		ORDER BY created_at DESC,id DESC LIMIT $7`, ident(r.Context()).WorkspaceID, accountID, operationID,
-		state, cursorTime(cursor), cursorID(cursor), limit+1)
+		state, cursorTime(cursor), cursorID(cursor), limit+1, stage)
 	if err != nil {
 		return err
 	}
 	items := []map[string]any{}
 	for rows.Next() {
 		var id uuid.UUID
-		var externalID, contentType, remoteStatus, title, contentState string
+		var externalID, contentType, remoteStatus, title, contentState, metricsState string
 		var errorCode *string
 		var lastSeen time.Time
 		var observedAt *time.Time
 		var sourceRunID *uuid.UUID
 		var createdAt time.Time
-		if err := rows.Scan(&id, &externalID, &contentType, &remoteStatus, &title, &contentState, &errorCode, &lastSeen, &observedAt, &sourceRunID, &createdAt); err != nil {
+		if err := rows.Scan(&id, &externalID, &contentType, &remoteStatus, &title, &contentState, &errorCode, &lastSeen, &observedAt, &sourceRunID, &createdAt, &metricsState); err != nil {
 			rows.Close()
 			return err
 		}
 		items = append(items, map[string]any{"platform_work_id": id, "external_id": externalID, "remote_content_type": contentType,
-			"remote_status": remoteStatus, "title": title, "content_state": contentState, "error_code": errorCode,
+			"remote_status": remoteStatus, "title": title, "content_state": contentState, "initial_metrics_state": metricsState, "error_code": errorCode,
 			"last_seen_at": lastSeen, "content_observed_at": observedAt, "source_run_id": sourceRunID, "created_at": createdAt.UTC().Format(time.RFC3339Nano)})
 	}
 	rows.Close()

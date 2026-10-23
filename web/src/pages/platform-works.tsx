@@ -6,6 +6,7 @@ import { Dialog } from '@/components/dialog'
 import { Button, Empty, Input, PageLoading } from '@/components/ui'
 import { errorMessage, get, post, put } from '@/lib/api'
 import { relTime } from '@/lib/format'
+import { requestDesktopPlatformIntent } from '@/lib/desktop-platform-intent'
 import { useMe } from '@/lib/session'
 import type { Account, PlatformConnection, PlatformSyncOperation, PlatformWorkMirror, PlatformWorkMirrorListItem, PlatformWorkMirrorPage, Work, WorkListItem } from '@/lib/types'
 
@@ -295,6 +296,7 @@ export function PlatformWorksView({ account, canWrite }: { account: Account; can
     Number.isFinite(accountSync.counters.failed) && accountSync.counters.failed > 0 ? `未完成 ${accountSync.counters.failed} 项` : '',
   ].filter(Boolean).join(' · ')
   const metricRefreshReason = !desktopPresentation ? '请在 OPS 桌面客户端刷新平台指标。'
+    : !window.opsDesktopUI?.onPlatformIntentResult ? '当前 OPS 桌面客户端不支持指标刷新，请重启客户端后重试。'
     : me?.admin_override ? '系统管理员代入工作区时只能查看，不能读取平台数据。'
       : !canWrite ? '当前角色为只读，不能发起平台指标刷新。'
         : account.status !== 'active' ? '此账号已停用，不能刷新平台指标。'
@@ -311,15 +313,17 @@ export function PlatformWorksView({ account, canWrite }: { account: Account; can
 
   const refreshSingleWorkMetrics = async (mirrorID: string): Promise<string> => {
     if (metricRefreshReason || !connection) throw new Error(metricRefreshReason || '平台连接不可用。')
-    const response = await window.opsDesktopSettings?.platformCommand({
-      v: 1, id: crypto.randomUUID(), cmd: 'request-metrics-refresh',
-      payload: { accountId: account.id, connectionRevision: connection.authorization_revision, platformWorkIds: [mirrorID] },
-    }) as { ok?: boolean; data?: { operation?: { id?: string } }; error?: { message?: string } } | undefined
-    if (!response?.ok) throw new Error(response?.error?.message || '本机未能建立指标刷新操作。')
-    const operationID = response.data?.operation?.id
-    if (!operationID) throw new Error('服务端没有返回指标刷新操作编号。')
-    toast.success('已建立这篇作品的指标刷新操作')
-    return operationID
+    const result = await requestDesktopPlatformIntent({
+      type: 'platform-metrics-refresh',
+      accountId: account.id,
+      connectionRevision: connection.authorization_revision,
+      platformWorkId: mirrorID,
+    })
+    if (result.status === 'no_targets') throw new Error('当前没有可刷新指标的作品。')
+    if (!result.operationId) throw new Error('服务端没有返回指标刷新操作编号。')
+    if (result.status === 'existing') toast.info('已有同目标的指标刷新操作，正在刷新进度。')
+    else toast.success('已建立这篇作品的指标刷新操作')
+    return result.operationId
   }
   const works = useInfiniteQuery({
     queryKey: ['platform-work-mirrors', account.id, search],

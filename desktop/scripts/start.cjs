@@ -96,6 +96,7 @@ async function main() {
     const port = await findAvailableVitePort();
     localOrigin = `http://localhost:${port}`;
     const apiTarget = process.env.OPS_API_TARGET || defaultApiTarget;
+    console.log(`[OPS Desktop] API: ${new URL(apiTarget).origin}; frontend: ${localOrigin}`);
     const apiHost = new URL(apiTarget).hostname.toLowerCase();
     const localApi = ['localhost', '127.0.0.1', '[::1]'].includes(apiHost);
     const apiProxy = process.env.OPS_API_PROXY || (localApi ? '' : resolveSystemApiProxy(apiTarget));
