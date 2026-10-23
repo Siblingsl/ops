@@ -1,5 +1,5 @@
-﻿import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { CalendarDays, ChevronLeft, ChevronRight, FileText, Info, Lightbulb } from 'lucide-react'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { CalendarDays, ChevronLeft, ChevronRight, FileText, Info, Lightbulb, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -26,6 +26,20 @@ const phaseClass: Record<Phase, string> = {
   writing: 'bg-gamboge-50 text-gamboge-700',
   ready: 'bg-ink-50 text-ink-800',
   published: 'bg-success/10 text-success',
+}
+
+// OP-02：日历作品按状态直达当前步骤；计划日期只是提醒，不触发自动发布。
+function nextWorkAction(it: CalendarItem): { to: string; label: string } {
+  if (it.date_kind === 'published' || it.status === 'published') {
+    return { to: `/a/${it.account_id}/review?work=${it.id}`, label: '去复盘' }
+  }
+  if (it.status === 'pushed') return { to: `/works/${it.id}/push#backfill`, label: '去回填' }
+  if (it.status === 'packed') return { to: `/works/${it.id}/pack#backfill`, label: '去回填' }
+  if (it.status === 'ready') return it.platform === 'wechat_mp'
+    ? { to: `/works/${it.id}/push`, label: '写入草稿' }
+    : { to: `/works/${it.id}/pack`, label: '准备发布包' }
+  if (it.status === 'checking' || it.status === 'reviewing') return { to: `/works/${it.id}/check`, label: '继续检查' }
+  return { to: `/works/${it.id}`, label: '继续创作' }
 }
 
 /** Calendar (EX-B-02): 计划发布日 only. Dates are reminders for people; nothing is ever pushed or published on a date (HC-16). */
@@ -163,7 +177,7 @@ export default function CalendarPage() {
                     role={desktopPresentation ? 'button' : undefined}
                     tabIndex={desktopPresentation ? 0 : undefined}
                     onClick={(e) => {
-                      if (!desktopPresentation || (e.target as HTMLElement).closest('a')) return
+                      if (!desktopPresentation || (e.target as HTMLElement).closest('a,button')) return
                       setScheduleDate(k)
                       setSide('works')
                       setScheduleSelection(unplanned[0]?.id ?? '')
@@ -180,18 +194,32 @@ export default function CalendarPage() {
                     )}
                     {view === 'week' && k === today && <div className="mb-1 h-0.5 rounded bg-ink-500" />}
                     <div className="space-y-1">
-                      {items.slice(0, perCell).map((it) => (
-                        <Link key={it.kind + it.id} to={it.kind === 'work' ? `/works/${it.id}` : `/a/${it.account_id}/topics?focus=${it.id}`}
-                          draggable={canWrite && it.date_kind === 'planned'} onDragStart={dragStart(it.kind, it.id)}
-                          title={`${platformLabel[it.platform]} · ${it.content_format ? platformFormatLabel(it.platform,it.content_format) : '选题'} · ${it.account_name} · ${it.title || '未命名'}${it.date_kind === 'published' ? '（已发布）' : '（计划）'}`}
-                          style={scope === 'all' ? { borderLeft: `3px solid ${colorOf(it.account_id)}` } : undefined}
-                          className={cn('flex items-center gap-1 rounded px-1 py-0.5 leading-tight', view === 'week' ? 'text-[12px]' : 'truncate text-[11.5px]',
-                            it.kind === 'topic' ? 'border border-dashed border-gamboge-300 text-gamboge-700' : phaseClass[phaseOf(it)])}>
-                          {scope === 'all' && <PlatformMark platform={it.platform} size="sm" />}
-                          {it.kind === 'topic' && <Lightbulb className="size-3 shrink-0" />}
-                          <span className={view === 'week' ? 'min-w-0 line-clamp-2' : 'min-w-0 truncate'}>{it.platform === 'toutiao' && it.content_format ? `今日头条 · ${platformFormatLabel(it.platform,it.content_format)} · ` : ''}{it.title || '未命名'}</span>
-                        </Link>
-                      ))}
+                      {items.slice(0, perCell).map((it) => {
+                        const action = it.kind === 'work'
+                          ? nextWorkAction(it)
+                          : { to: `/a/${it.account_id}/topics?focus=${it.id}`, label: '查看选题' }
+                        const itemTitle = `${platformLabel[it.platform]} · ${it.content_format ? platformFormatLabel(it.platform,it.content_format) : '选题'} · ${it.account_name} · ${it.title || '未命名'}${it.date_kind === 'published' ? '（已发布）' : '（计划）'} · 下一步：${action.label}`
+                        return <div key={it.kind + it.id} className="flex min-w-0 items-center gap-0.5">
+                          <Link to={action.to} draggable={canWrite && it.date_kind === 'planned'} onDragStart={dragStart(it.kind, it.id)}
+                            title={itemTitle} aria-label={`${it.title || '未命名'}；下一步：${action.label}`}
+                            style={scope === 'all' ? { borderLeft: `3px solid ${colorOf(it.account_id)}` } : undefined}
+                            className={cn('flex min-w-0 flex-1 flex-col gap-0.5 rounded px-1 py-0.5 leading-tight', view === 'week' ? 'text-[12px]' : 'text-[11.5px]',
+                              it.kind === 'topic' ? 'border border-dashed border-gamboge-300 text-gamboge-700' : phaseClass[phaseOf(it)])}>
+                            <span className="flex min-w-0 items-center gap-1">
+                              {scope === 'all' && <PlatformMark platform={it.platform} size="sm" />}
+                              {it.kind === 'topic' && <Lightbulb className="size-3 shrink-0" />}
+                              <span className={view === 'week' ? 'min-w-0 line-clamp-2' : 'min-w-0 truncate'}>{it.platform === 'toutiao' && it.content_format ? `今日头条 · ${platformFormatLabel(it.platform,it.content_format)} · ` : ''}{it.title || '未命名'}</span>
+                            </span>
+                            <span className="truncate pl-1 text-[10px] opacity-75">下一步：{action.label}</span>
+                          </Link>
+                          {canWrite && it.date_kind === 'planned' && <button type="button"
+                            aria-label={`清除《${it.title || '未命名作品'}》的计划发布日`} title="清除计划发布日"
+                            onClick={(e) => { e.stopPropagation(); void setDate(it.kind, it.id, '') }}
+                            className="shrink-0 rounded p-0.5 text-mist-400 hover:bg-white hover:text-danger">
+                            <X className="size-3" />
+                          </button>}
+                        </div>
+                      })}
                       {items.length > perCell && <div className="px-1 text-[11px] text-mist-400">还有 {items.length - perCell} 项</div>}
                     </div>
                   </div>

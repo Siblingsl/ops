@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { AccountCreateForm, credTone, CredentialPanel } from '@/components/account-forms'
 import { confirm, Dialog } from '@/components/dialog'
 import { PlatformConnectionCard } from '@/components/platform-connection'
-import { Badge, Button, Card, CardHeader, cn, Empty, Field, Input, PageHeader, PageLoading, PlatformMark, platformFormatLabel, platformLabel, platformFormats, Switch, Textarea } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, cn, Empty, Field, Input, Notice, PageHeader, PageLoading, PlatformMark, platformFormatLabel, platformLabel, platformFormats, roleReadOnlyHint, Switch, Textarea } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { isElectronDesktop } from '@/lib/desktop-presentation.js'
@@ -263,7 +263,7 @@ function AccountDetail({ account, onStatusChange, canManage, desktop = false, co
       />
       <div className={cn('grid gap-4', desktop ? 'desktop-basic-information-grid gap-x-6 gap-y-4 p-5 @[640px]:grid-cols-2' : 'p-5 sm:grid-cols-2')}>
         <Field label="账号名称">
-          <Input value={name} disabled={!canManage || saving} onChange={(e) => { setName(e.target.value); setFormError('') }} onBlur={() => !desktop && canManage && name.trim() && name !== account.name && save({ name: name.trim() })} />
+          <Input value={name} disabled={!canManage || saving} disabledHint={roleReadOnlyHint.owner} onChange={(e) => { setName(e.target.value); setFormError('') }} onBlur={() => !desktop && canManage && name.trim() && name !== account.name && save({ name: name.trim() })} />
         </Field>
         <Field label={account.platform === 'toutiao' ? '默认创作形态' : '账号类型'} hint={account.platform === 'toutiao' ? '每篇可选文章或微头条；修改默认值不影响已有内容' : '同平台内可以更换类型；跨平台请新建账号'} plain>
           {/* 窄列（如 1024 视口下详情卡只有约 370px、字段列 157px）时徽标＋按钮合计 162px 会撑破字段列，
@@ -281,7 +281,7 @@ function AccountDetail({ account, onStatusChange, canManage, desktop = false, co
           </div>
         </Field>
         <Field className={desktop ? '@[640px]:col-span-2' : undefined} label="类型补充说明" hint="只帮助 AI 理解定位，不改变创作流程；最多 200 字">
-          <Textarea rows={2} value={typeNote} maxLength={200} disabled={!canManage || account.status === 'disabled'}
+          <Textarea rows={2} value={typeNote} maxLength={200} disabled={!canManage || account.status === 'disabled'} disabledHint={roleReadOnlyHint.owner}
             onChange={(e) => { setTypeNote(e.target.value); setFormError('') }}
             onBlur={() => !desktop && canManage && typeNote !== (account.type_note ?? '') && save({ type_note: typeNote })} />
         </Field>
@@ -290,6 +290,7 @@ function AccountDetail({ account, onStatusChange, canManage, desktop = false, co
             <Input
               type="number" min={1} max={20} value={limit}
               disabled={!canManage || account.status === 'disabled' || saving}
+              disabledHint={roleReadOnlyHint.owner}
               onChange={(e) => { setLimit(e.target.value); setFormError('') }}
               onBlur={() => !desktop && canManage && Number(limit) !== account.daily_push_limit && save({ daily_push_limit: Number(limit) })}
             />
@@ -306,7 +307,7 @@ function AccountDetail({ account, onStatusChange, canManage, desktop = false, co
             ? '每天 10:00 后在后台只读同步一次最近 7 天群发的文章数据；连续 3 天失败或没有权限时会自动关闭并通知你。'
             : account.datacube_state === 'no_permission' ? '当前公众号没有数据统计接口权限（通常需要微信认证），不会同步。' : '凭证测试通过、确认有数据接口权限后才会同步。'}>
             <div className="flex min-h-9 flex-wrap items-center gap-3 text-[13px] text-mist-600">
-              <Switch label="数据接口每日同步" checked={account.metrics_wechat_auto.enabled} disabled={!canManage || account.status === 'disabled'}
+              <Switch label="数据接口每日同步" checked={account.metrics_wechat_auto.enabled} disabled={!canManage || account.status === 'disabled'} disabledHint={roleReadOnlyHint.owner}
                 onChange={(v) => save({ metrics_wechat_auto: v })} />
               <span>{account.metrics_wechat_auto.enabled ? '已开启' : '已关闭'}</span>
               {account.metrics_wechat_auto.last_at && <span className="text-mist-400">上次同步 {fmtTime(account.metrics_wechat_auto.last_at)}</span>}
@@ -318,8 +319,8 @@ function AccountDetail({ account, onStatusChange, canManage, desktop = false, co
       {desktop && canManage && <div className="desktop-basic-information-footer flex flex-wrap items-center justify-between gap-3 px-5 py-3">
         <p className="min-w-0 flex-1 text-[12.5px] text-danger" role={formError ? 'alert' : undefined}>{formError}</p>
         <div className="flex shrink-0 gap-2">
-          <Button variant="ghost" disabled={!dirty || saving} onClick={cancelInformation}>取消修改</Button>
-          <Button variant="primary" disabled={!dirty || saving} onClick={() => void saveInformation()}>{saving ? '保存中…' : '保存信息'}</Button>
+          <Button variant="ghost" disabled={!dirty || saving} disabledHint="没有未保存的修改" onClick={cancelInformation}>取消修改</Button>
+          <Button variant="primary" disabled={!dirty || saving} disabledHint={saving ? '正在保存…' : '没有未保存的修改'} onClick={() => void saveInformation()}>{saving ? '保存中…' : '保存信息'}</Button>
         </div>
       </div>}
     </Card>
@@ -369,7 +370,7 @@ function AccountDetail({ account, onStatusChange, canManage, desktop = false, co
             ? '每天 10:00 后只读同步最近 7 天群发文章数据。后台扫码会话不代替数据接口权限。'
             : account.datacube_state === 'no_permission' ? '当前公众号没有数据统计接口权限，不会同步；仍可使用人工回填。' : '凭证检测与统计权限确认后才会同步。'}>
             <div className="flex min-h-9 flex-wrap items-center gap-3 text-[13px] text-mist-600">
-              <Switch label="公众号数据接口每日同步" checked={account.metrics_wechat_auto.enabled} disabled={!canManage || account.status === 'disabled' || saving}
+              <Switch label="公众号数据接口每日同步" checked={account.metrics_wechat_auto.enabled} disabled={!canManage || account.status === 'disabled' || saving} disabledHint={roleReadOnlyHint.owner}
                 onChange={(v) => void save({ metrics_wechat_auto: v })} />
               <span>{account.metrics_wechat_auto.enabled ? '已开启' : '已关闭'}</span>
               {account.metrics_wechat_auto.last_at && <span className="text-mist-400">上次同步 {fmtTime(account.metrics_wechat_auto.last_at)}</span>}
@@ -627,6 +628,16 @@ export default function SettingsAccounts() {
       )}
 
       <Dialog open={creating && !!canManage} onClose={() => setParams({})} title="添加平台账号" width="max-w-lg">
+        {/* ST-01：注册/首次安装会直接落到这个弹窗，光填平台和名称看不出后面还有几步。 */}
+        {list.length === 0 && <div className="mb-4" data-testid="account-create-path"><Notice tone="ink">
+          <p className="font-medium">第一次使用，整体是这四步：</p>
+          <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-[12.5px]">
+            <li>添加平台账号 —— 本弹窗</li>
+            <li>填平台凭证 —— 仅公众号需要；小红书与今日头条可手动发布，可跳过</li>
+            <li>写定位档案与风格样本 —— 账号「档案」页，可稍后补</li>
+            <li>配置模型 —— 设置 → 模型配置，配好后 AI 按钮才可用</li>
+          </ol>
+        </Notice></div>}
         <AccountCreateForm
           key={createPlatform ?? 'any'}
           defaultPlatform={createPlatform}

@@ -180,14 +180,30 @@ export default function Compare() {
   const titleLabel = internalName ? '内部名称' : toutiao ? '发布标题' : '标题'
   const bodyReady = work.sections.length > 0 && work.sections.every(section => section.content_md.trim() !== '')
   const total = runeLen(work.sections.map((s) => s.content_md).join(''))
+  // ED-02：标题/话题原来只在 blur 保存，"去检查"可能读到旧值。改为 blur 保存 + 跳转前显式 flush。
   const saveField = async (body: Record<string, unknown>, base = work.revision) => {
     try {
       setWork(await patch<Work>(`/works/${work.id}`, { ...body, base_revision: base }))
       setFieldConflict(null)
+      return true
     } catch (e) {
       if (e instanceof ApiError && e.code === 'version_conflict') setFieldConflict({ server: (e.detail as { server: Work }).server, body })
       else toast.error(errorMessage(e))
+      return false
     }
+  }
+  // ED-02：把尚未落库的标题/话题先写回服务端，全部成功才允许离开本页。
+  const flushFields = async (): Promise<boolean> => {
+    const body: Record<string, unknown> = {}
+    if (title !== work.title) body.title = title
+    const topicList = parseTopics(topics)
+    if (topicList.join(' ') !== work.topics.join(' ')) body.topics = topicList
+    if (Object.keys(body).length === 0) return true
+    return saveField(body)
+  }
+  const goCheck = async () => {
+    if (!(await flushFields())) { toast.error('标题/话题还有未保存的修改，请先处理冲突再继续'); return }
+    nav(bodyReady ? `/works/${work.id}/check` : xhs ? `/works/${work.id}#step-images` : `/works/${work.id}`)
   }
   return (
     <div className="mx-auto w-full max-w-[1480px] px-6 py-6 2xl:max-w-[1680px]">
@@ -196,7 +212,7 @@ export default function Compare() {
         if (keepMine) void saveField(fieldConflict.body, fieldConflict.server.revision)
         else { setWork(fieldConflict.server); setFieldConflict(null) }
       }} />
-      <div className="mb-4 grid grid-cols-2 gap-6">
+      <div className="mb-4 grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="flex items-center gap-2 text-[13px] text-mist-500">
           {srcWork && <PlatformMark platform={srcWork.platform} size="sm" />}
           <span className="font-medium text-mist-700">源作品（只读）</span>
@@ -206,18 +222,19 @@ export default function Compare() {
           <PlatformMark platform={work.platform} size="sm" />
           <span className="font-medium text-mist-700">衍生作品（可编辑）</span>
           <span className="truncate">{work.account_name} · {platformLabel[work.platform]} · {platformFormatLabel(work.platform, work.content_format)}</span>
-          <Button size="sm" variant="primary" className="ml-auto" onClick={() => nav(bodyReady ? `/works/${work.id}/check` : xhs ? `/works/${work.id}#step-images` : `/works/${work.id}`)}>
+          <Button size="sm" variant="primary" className="ml-auto" onClick={goCheck}>
             {bodyReady ? '去检查' : '继续编辑'}<ArrowRight className="size-3.5" />
           </Button>
         </div>
       </div>
       {!srcWork && <Notice tone="gamboge" className="mb-4">源作品已删除，只能查看和编辑衍生作品。</Notice>}
-      <div className="mb-4 grid grid-cols-2 gap-6">
+      {/* ED-01：窄屏两栏各占一半正文不可读，改单栏纵向堆叠；宽屏仍并排对照。 */}
+      <div className="mb-4 grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="bg-mist-50/60 p-4"><div className="text-xs text-mist-400">源稿标题</div><div className="mt-1 font-display text-[16px] font-bold text-mist-800">{srcWork?.title}</div></Card>
         <Card className="p-4">
           <Field label={titleLabel} counter={!toutiao ? { value: runeLen(title), max: xhs ? 20 : 32 } : undefined}
             hint={internalName ? '仅供系统识别，不会写入微头条发布正文。' : toutiao ? '发布标题上限待实测（V-025）。' : undefined}>
-            <Input value={title} disabled={work.locked} onChange={(e) => setTitle(e.target.value)} onBlur={() => title !== work.title && saveField({ title })} className="font-display font-semibold" />
+            <Input value={title} disabled={work.locked} onChange={(e) => setTitle(e.target.value)} onBlur={() => title !== work.title && void saveField({ title })} className="font-display font-semibold" />
           </Field>
         </Card>
       </div>
@@ -226,7 +243,7 @@ export default function Compare() {
           const sources = s.source_section_ids.map((id) => srcById.get(id)).filter(Boolean) as Section[]
           const on = active === s.id
           return (
-            <div key={s.id} className="grid grid-cols-2 items-start gap-6">
+            <div key={s.id} className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
               <div onClick={() => setActive(s.id)}
                 className={cn('cursor-pointer rounded-xl border p-4 transition', on || sources.some((x) => activeSrc.has(x.id)) ? 'border-gamboge-300 bg-gamboge-50/50' : 'border-transparent bg-mist-50/70 hover:bg-mist-100/70')}>
                 {sources.length === 0 ? <p className="text-[13px] text-mist-400">（对应的源段落已删除）</p> : sources.map((x) => (
@@ -251,7 +268,7 @@ export default function Compare() {
               <Input value={topics} disabled={work.locked} onChange={(e) => setTopics(e.target.value)} placeholder="#话题1 #话题2"
                 onBlur={() => {
                   const list = parseTopics(topics)
-                  if (list.join(' ') !== work.topics.join(' ')) saveField({ topics: list })
+                  if (list.join(' ') !== work.topics.join(' ')) void saveField({ topics: list })
                 }} />
               <TagSuggest workId={work.id} current={parseTopics(topics)} disabled={work.locked} onAdd={(t) => {
                 const list = [...parseTopics(topics), t]

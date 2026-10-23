@@ -1,4 +1,4 @@
-﻿import { DailyStatsCard } from './ops/DailyStats'
+import { DailyStatsCard } from './ops/DailyStats'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart3, Brain, Check, ClipboardPaste, Lightbulb, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -23,6 +23,30 @@ const metricSourceLabel: Record<MetricSource, string> = {
 }
 
 const nodeLabel = (m: Pick<Metric, 'day_offset'>) => (m.day_offset == null ? '发布时间未知' : `发布后第 ${m.day_offset} 天`)
+
+// OP-04：`pushed/packed` 是没回填发布链接，`published` 才是已发布但没录数据，两者不能都写成“尚未录入”。
+type RecordState = { kind: 'missing_link' | 'missing_data' | 'recorded'; label: string; to?: string }
+
+const recordStateOf = (r: BoardRow): RecordState => {
+  if (r.d7) return { kind: 'recorded', label: metricSourceLabel[r.d7.source] ?? r.d7.source }
+  if (r.status === 'pushed') return { kind: 'missing_link', label: '待回填链接', to: `/works/${r.id}/push#backfill` }
+  if (r.status === 'packed') return { kind: 'missing_link', label: '待回填链接', to: `/works/${r.id}/pack#backfill` }
+  return { kind: 'missing_data', label: r.published_at ? '已回填，未录数据' : '未回填，未录数据' }
+}
+
+function RecordCell({ row, onRecord }: { row: BoardRow; onRecord: () => void }) {
+  const state = recordStateOf(row)
+  return (
+    <div className="desktop-review-source-cell">
+      <Badge tone={state.kind === 'recorded' ? 'ink' : 'gamboge'}>{state.label}</Badge>
+      {unitHint(row.d7) && <span className="text-[11.5px] text-mist-400">{unitHint(row.d7)}</span>}
+      {state.to
+        ? <Link to={state.to} className="text-[12px] text-ink-700 underline underline-offset-2">去回填链接</Link>
+        : <IconButton label={`录入${row.title || '作品'}数据`} onClick={onRecord}><Plus className="size-3.5" /></IconButton>}
+    </div>
+  )
+}
+
 
 function NodeDots({ nodes }: { nodes: number[] }) {
   return (
@@ -420,11 +444,13 @@ function UnmatchedCard({ accountId, works, onDone }: { accountId: string; works:
   )
 }
 
-function ReportCard({ report, onAdopted }: { report: ReviewReport; onAdopted: () => void }) {
+function ReportCard({ report, accountId, onAdopted }: { report: ReviewReport; accountId: string; onAdopted: () => void }) {
   const [busy, setBusy] = useState<number | null>(null)
   const [remembering, setRemembering] = useState<number | null>(null)
   const [remembered, setRemembered] = useState<number[]>(report.remembered ?? [])
   const [ignored, setIgnored] = useState<number[]>(report.ignored ?? [])
+  // OP-05：采纳后要能直接到刚生成的选题，而不是让用户回选题池自己找。
+  const [adoptedTopic, setAdoptedTopic] = useState<Record<number, string>>({})
   const insights = report.content.writing_insights ?? []
   const ignore = async (i: number) => {
     setIgnored((x) => [...x, i])
@@ -450,9 +476,10 @@ function ReportCard({ report, onAdopted }: { report: ReviewReport; onAdopted: ()
   const adopt = async (i: number) => {
     setBusy(i)
     try {
-      await post(`/review-reports/${report.id}/suggestions/${i}/adopt`)
+      const r = await post<{ topic_id?: string }>(`/review-reports/${report.id}/suggestions/${i}/adopt`)
       toast.success('已加入选题池')
       onAdopted()
+      if (r?.topic_id) setAdoptedTopic((x) => ({ ...x, [i]: r.topic_id as string }))
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
@@ -504,7 +531,13 @@ function ReportCard({ report, onAdopted }: { report: ReviewReport; onAdopted: ()
                     <div className="mt-1 text-[13px] text-mist-600"><span className="text-mist-400">角度 · </span>{s.angle}</div>
                     <div className="text-[13px] text-mist-500"><span className="text-mist-400">依据 · </span>{s.reason}</div>
                   </div>
-                  {adopted ? <Badge tone="ink"><Check className="size-3" />已采纳</Badge>
+                  {adopted ? <span className="flex shrink-0 items-center gap-1.5">
+                    <Badge tone="ink"><Check className="size-3" />已采纳</Badge>
+                    <Link to={adoptedTopic[i] ? `/a/${accountId}/topics?focus=${adoptedTopic[i]}` : `/a/${accountId}/topics`}
+                      className="whitespace-nowrap text-[12.5px] text-ink-700 underline underline-offset-2">
+                      {adoptedTopic[i] ? '去创作这条选题' : '去选题池查看'}
+                    </Link>
+                  </span>
                     : <Button size="sm" variant="outline" loading={busy === i} onClick={() => adopt(i)} icon={<Plus className="size-3.5" />}>采纳</Button>}
                 </div>
               )
@@ -660,7 +693,7 @@ export default function Review() {
                     {acc.platform === 'toutiao' && <><td className="text-right tabular-nums">{metricDisplay(r.d7, 'impressions')}</td><td className="text-right tabular-nums">{ctrLabel(r.d7?.ctr)}</td></>}
                     <td className="text-right tabular-nums">{fmtNum(r.d7?.favorites)}</td>
                     <td className="text-right tabular-nums">{fmtNum(r.d7?.shares)}</td>
-                    <td><div className="desktop-review-source-cell"><Badge>{r.d7 ? metricSourceLabel[r.d7.source] ?? r.d7.source : '尚未录入'}</Badge>{unitHint(r.d7) && <span className="text-[11.5px] text-mist-400">{unitHint(r.d7)}</span>}<IconButton label={`录入${r.title || '作品'}数据`} onClick={() => setParams({ work: r.id })}><Plus className="size-3.5" /></IconButton></div></td>
+                    <td><RecordCell row={r} onRecord={() => setParams({ work: r.id })} /></td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -692,7 +725,9 @@ export default function Review() {
                     {fields.map((f) => <td key={f.key} className="py-3 text-right tabular-nums text-mist-700">{metricDisplay(r.d7, f.key)}</td>)}
                     {acc.platform === 'toutiao' && <td className="py-3 text-right tabular-nums text-mist-700">{ctrLabel(r.d7?.ctr)}</td>}
                     <td className="py-3 pr-5 text-right">
-                      <Button size="sm" variant={r.points ? 'ghost' : 'outline'} onClick={() => setParams({ work: r.id })}>{r.points ? `${r.points} 次 · 录入` : '录入数据'}</Button>
+                      {recordStateOf(r).to
+                        ? <Link to={recordStateOf(r).to as string}><Button size="sm" variant="outline">去回填链接</Button></Link>
+                        : <Button size="sm" variant={r.points ? 'ghost' : 'outline'} onClick={() => setParams({ work: r.id })}>{r.points ? `${r.points} 次 · 录入` : '录入数据'}</Button>}
                     </td>
                   </tr>
                 ))}
@@ -747,7 +782,7 @@ export default function Review() {
           {desktopPresentation && <div className="desktop-review-import-actions"><ImportMetrics accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} /></div>}
         </Card>
         <div id="desktop-review-report-list" className="space-y-4 scroll-mt-24">
-          {reports.data?.length ? reports.data.map((r) => <ReportCard key={r.id} report={r} onAdopted={() => { reports.refetch(); inv(['topics', acc.id]) }} />)
+          {reports.data?.length ? reports.data.map((r) => <ReportCard key={r.id} report={r} accountId={acc.id} onAdopted={() => { reports.refetch(); inv(['topics', acc.id]) }} />)
             : <Card><Empty icon={<Lightbulb className="size-5" />} title="还没有复盘报告" desc="录入几篇作品的数据后，生成第一份复盘报告。"
               action={<Button variant="primary" icon={<Sparkles className="size-4" />} loading={running} onClick={runReview}>生成复盘报告</Button>} /></Card>}
         </div>

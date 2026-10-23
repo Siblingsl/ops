@@ -17,7 +17,7 @@ interface TitleResp { titles: TitleCand[]; refs: AIRefs; ai_call_id: string; max
 
 // ---------- 标题与摘要 ----------
 
-export function TitleCard({ work, setWork, readOnly, desktopPresentation = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; desktopPresentation?: boolean }) {
+export function TitleCard({ work, setWork, readOnly, desktopPresentation = false, hidden = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; desktopPresentation?: boolean; hidden?: boolean }) {
   const [propertiesOpen, setPropertiesOpen] = useState(false)
   const [conflict, setConflict] = useState<{ server: Work; body: Record<string, unknown> } | null>(null)
   const wx = work.platform === 'wechat_mp'
@@ -73,25 +73,51 @@ export function TitleCard({ work, setWork, readOnly, desktopPresentation = false
     }
   }
   useEffect(() => { setTitle(work.title); setSummary(work.summary); setTopics(work.topics.map((t) => '#' + t).join(' ')) }, [work.title, work.summary, work.topics])
-  const save = async (body: Record<string, unknown>, base = work.revision) => {
+  const save = async (body: Record<string, unknown>, base = work.revision): Promise<boolean> => {
     try {
       setWork(await patch<Work>(`/works/${work.id}`, { ...body, base_revision: base }))
       setConflict(null)
+      return true
     } catch (e) {
       if (e instanceof ApiError && e.code === 'version_conflict') setConflict({ server: (e.detail as { server: Work }).server, body })
       else toast.error(errorMessage(e))
+      return false
     }
   }
-  // NW-C4：标题只在 blur 保存；去检查/生成大纲/保存版本前，把本地未提交的标题补一次。
+  // NW-C4：标题、摘要和话题只在 blur 保存；跨步骤动作前一并提交，避免并行请求争用 revision。
   const titleRef = useRef(title)
   titleRef.current = title
+  const summaryRef = useRef(summary)
+  summaryRef.current = summary
+  const topicsRef = useRef(topics)
+  topicsRef.current = topics
   const saveRef = useRef(save)
   saveRef.current = save
   const flush = useCallback(async () => {
-    const next = titleRef.current
-    if (next === work.title || (wx && runeLen(next) > 32)) return
-    await saveRef.current({ title: next })
-  }, [work.title, wx])
+    const body: Record<string, unknown> = {}
+    const nextTitle = titleRef.current
+    if (nextTitle !== work.title) {
+      if (wx && runeLen(nextTitle) > 32) {
+        toast.error('公众号标题不能超过 32 字，请先调整标题再继续')
+        throw new Error('公众号标题超过 32 字')
+      }
+      body.title = nextTitle
+    }
+    const nextSummary = summaryRef.current
+    if (wx && nextSummary !== work.summary) {
+      if (runeLen(nextSummary) > 120) {
+        toast.error('摘要不能超过 120 字，请先调整摘要再继续')
+        throw new Error('摘要超过 120 字')
+      }
+      body.summary = nextSummary
+    }
+    if (!wx) {
+      const nextTopics = parseTopics(topicsRef.current)
+      if (nextTopics.join(' ') !== work.topics.join(' ')) body.topics = nextTopics
+    }
+    if (Object.keys(body).length === 0) return
+    if (!(await saveRef.current(body))) throw new Error('标题、摘要或话题未能保存，请处理冲突后重试')
+  }, [work.title, work.summary, work.topics, wx])
   useRegisterFlush('title', flush)
   const genTitles = async () => {
     setBusy('t')
@@ -230,7 +256,7 @@ export function TitleCard({ work, setWork, readOnly, desktopPresentation = false
     )}
   </>
   return (
-    <Card id="step-title" className="scroll-mt-24 p-5">
+    <Card id="step-title" className={cn('scroll-mt-24 p-5', hidden && 'hidden')}>
       <h2 className="mb-4 font-display text-[17px] font-bold text-mist-900">{internalName ? '内部名称与话题' : wx ? '标题与摘要' : '标题与话题'}</h2>
       <div className="space-y-4">
         <Field className={desktopPresentation ? 'desktop-title-main' : undefined} label={internalName ? '内部名称（仅系统内使用）' : '标题'} counter={titleMax > 0 ? { value: runeLen(title), max: titleMax } : undefined}

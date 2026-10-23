@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Button, Card, CardHeader, Notice, PageState, Switch } from '@/components/ui'
+import { Button, Card, CardHeader, Notice, PageState, roleReadOnlyHint, Switch } from '@/components/ui'
 import { errorMessage, get, put } from '@/lib/api'
 import { useSettingsDraft } from '@/lib/desktop-settings'
 import { useMe } from '@/lib/session'
@@ -68,11 +68,11 @@ export default function DesktopPolicy() {
       <div className="space-y-4 p-5">
           <div className="flex items-center justify-between gap-4">
             <span className="text-sm font-medium text-mist-800">允许此工作区使用桌面 AI</span>
-            <Switch label="允许此工作区使用桌面 AI" checked={draft.enabled} disabled={!owner || !query.data.global_enabled || busy} onChange={(enabled) => setDraft({ ...draft, enabled, allow_member_endpoints: enabled && draft.allow_member_endpoints })} />
+            <Switch label="允许此工作区使用桌面 AI" checked={draft.enabled} disabled={!owner || !query.data.global_enabled || busy} disabledHint={!owner ? roleReadOnlyHint.owner : query.data.global_enabled ? undefined : '服务端尚未全局启用桌面 AI'} onChange={(enabled) => setDraft({ ...draft, enabled, allow_member_endpoints: enabled && draft.allow_member_endpoints })} />
           </div>
           <div className="flex items-center justify-between gap-4">
             <span className="text-sm font-medium text-mist-800">允许 editor 使用各自的桌面 AI 端点</span>
-            <Switch label="允许 editor 使用各自的桌面 AI 端点" checked={draft.allow_member_endpoints} disabled={!owner || !query.data.global_enabled || !draft.enabled || busy} onChange={(allow_member_endpoints) => setDraft({ ...draft, allow_member_endpoints })} />
+            <Switch label="允许 editor 使用各自的桌面 AI 端点" checked={draft.allow_member_endpoints} disabled={!owner || !query.data.global_enabled || !draft.enabled || busy} disabledHint={!owner ? roleReadOnlyHint.owner : !query.data.global_enabled ? '服务端尚未全局启用桌面 AI' : !draft.enabled ? '需先允许此工作区使用桌面 AI' : undefined} onChange={(allow_member_endpoints) => setDraft({ ...draft, allow_member_endpoints })} />
           </div>
         <p className="text-xs leading-relaxed text-mist-500">允许成员端点后，业务上下文可能发送到成员本人配置的 AI 服务；回环地址也不代表数据不会离开本机。保存操作按服务端要求重新认证。</p>
         {owner && <Button variant="primary" loading={busy} disabled={!dirty || !query.data.global_enabled} onClick={() => void save()}>保存工作区策略</Button>}

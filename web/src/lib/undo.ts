@@ -1,9 +1,9 @@
 import { toast } from 'sonner'
 import { del, errorMessage, post } from './api'
 
-type TrashType = 'work' | 'topic' | 'material'
+type TrashType = 'work' | 'topic' | 'material' | 'sensitive_word'
 
-const paths: Record<TrashType, string> = { work: '/works/', topic: '/topics/', material: '/materials/' }
+const paths: Record<TrashType, string> = { work: '/works/', topic: '/topics/', material: '/materials/', sensitive_word: '/sensitive-words/' }
 
 /** deleteWithUndo moves an item to the trash without a confirm dialog and offers a 10-second undo (10 文档 4.3). */
 export async function deleteWithUndo(type: TrashType, id: string, label: string, onChange: () => void, note?: string) {

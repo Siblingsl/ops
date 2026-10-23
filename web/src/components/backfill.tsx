@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { ApiError, del, errorMessage, get, post, put } from '@/lib/api'
 import { fmtTime, toLocalInput } from '@/lib/format'
 import type { PostPushTodo, Work } from '@/lib/types'
-import { Badge, Button, Card, cn, Field, HumanGate, Input, platformLabel, Select, Textarea } from './ui'
+import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, platformLabel, roleReadOnlyHint, Select, Textarea } from './ui'
 
 interface PublishCorrectionPreview {
   mode: 'correction'
@@ -60,6 +60,8 @@ export function BackfillForm({ work, setWork }: { work: Work; setWork: (w: Work)
   const [reason, setReason] = useState('')
   const [preview, setPreview] = useState<PublishCorrectionPreview | null>(null)
   const [previewKey, setPreviewKey] = useState('')
+  // PB-05：回填成功后引导去复盘。
+  const [justPublished, setJustPublished] = useState(false)
   const correctionBody = () => {
     const body: Record<string, unknown> = {
       mode: 'correction',
@@ -191,6 +193,8 @@ export function BackfillForm({ work, setWork }: { work: Work; setWork: (w: Work)
       setUrl(updated.published_url ?? '')
       setAt(updated.published_at ? toLocalInput(updated.published_at) : '')
       setDateBaseline(updated.published_at ? toLocalInput(updated.published_at) : '')
+      // PB-05：回填成功后引导去复盘，避免用户回填完就断线。
+      setJustPublished(true)
       toast.success('已标记为已发布，作品已锁定为只读')
     } catch (e) {
       toast.error(errorMessage(e))
@@ -202,6 +206,12 @@ export function BackfillForm({ work, setWork }: { work: Work; setWork: (w: Work)
     <Card className="@container p-5">
       <h3 className="mb-1 font-display text-[16px] font-bold text-mist-900">回填已发布</h3>
       <p className="mb-4 text-[13px] text-mist-500">在平台上正式发表后回到这里回填。系统不会自动判断是否已发布。</p>
+      {justPublished && (
+        <Notice tone="ink" className="mb-4">
+          已回填发布记录。接下来到复盘页录入这篇的数据，24/48 小时后再补一次指标，报告才有依据。
+          <Link to={`/a/${work.account_id}/review?work=${work.id}`} className="ml-2 font-medium underline">去复盘</Link>
+        </Notice>
+      )}
       <div className="grid gap-3 @[640px]:grid-cols-[minmax(0,1fr)_120px_200px]">
         <Field label="作品链接（可选）" hint={hint || '粘贴链接后会识别平台和发布时间，不会访问这个链接'}>
           <Input value={url} onChange={(e) => setUrl(e.target.value)} onBlur={(e) => void parse(e.target.value)} onPaste={(e) => void parse(e.clipboardData.getData('text'))} placeholder="https://" />
@@ -301,10 +311,10 @@ export function PlatformBinding({ work, setWork, canManage }: { work: Work; setW
             label="平台作品编号"
             hint={work.platform === 'xhs' ? '24 位十六进制编号' : '格式 <appmsgid>_<itemidx>，例如 2247480001_1'}
           >
-            <Input value={externalID} disabled={!canManage} onChange={(e) => setExternalID(e.target.value)} placeholder={work.platform === 'xhs' ? '6f0000000000000000000001' : '2247480001_1'} />
+            <Input value={externalID} disabled={!canManage} disabledHint={roleReadOnlyHint.writer} onChange={(e) => setExternalID(e.target.value)} placeholder={work.platform === 'xhs' ? '6f0000000000000000000001' : '2247480001_1'} />
           </Field>
           <div className="flex items-end">
-            <Button variant="primary" disabled={!canManage} loading={busy} onClick={bind}>确认绑定</Button>
+            <Button variant="primary" disabled={!canManage} disabledHint={roleReadOnlyHint.writer} loading={busy} onClick={bind}>确认绑定</Button>
           </div>
         </div>
       )}

@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, Field, Input, Notice, PageHeader, PageLoading, Tabs, Textarea } from '@/components/ui'
-import { del, errorMessage, get, post } from '@/lib/api'
+import { errorMessage, get, post } from '@/lib/api'
+import { deleteWithUndo } from '@/lib/undo'
 import { useCanWrite } from '@/lib/session'
 
 interface Word { id: string; word: string; category: string; source: 'base' | 'custom'; created_at: string }
@@ -35,10 +36,7 @@ export default function Words() {
       setBusy(false)
     }
   }
-  const remove = async (w: Word) => {
-    await del(`/sensitive-words/${w.id}`).catch((e) => toast.error(errorMessage(e)))
-    refetch()
-  }
+  const remove = (w: Word) => deleteWithUndo('sensitive_word', w.id, `自定义敏感词「${w.word}」`, () => refetch())
   return (
     <div className="animate-fade-in">
       <PageHeader title="敏感词库" desc="发布前检查会逐条标出命中的词，由你决定修改还是保留。账号专属的禁用词在「账号档案」中维护。" />

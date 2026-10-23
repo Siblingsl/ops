@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, ArrowRight, Crop, ImagePlus, Images, Loader2, Sparkles, Star, Trash2 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { AssetCropDialog, CoverCropDialog, CropPreview, defaultCrops } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
@@ -10,10 +10,11 @@ import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
 import type { Asset, CropBox, LibraryAsset, Work } from '@/lib/types'
 import { waitJob } from '@/lib/v3'
+import { useRegisterFlush } from './work-save'
 
 // ---------- 配图与封面 ----------
 
-export function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; upload: (f: File) => Promise<Asset | null> }) {
+export function ImagesCard({ work, setWork, readOnly, upload, hidden = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; upload: (f: File) => Promise<Asset | null>; hidden?: boolean }) {
   const wx = work.platform === 'wechat_mp'
   const xhs = work.platform === 'xhs'
   const toutiao = work.platform === 'toutiao'
@@ -23,14 +24,62 @@ export function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; se
   const [aiPrompt, setAiPrompt] = useState('')
   const [aiBusy, setAiBusy] = useState(false)
   const input = useRef<HTMLInputElement>(null)
+  const pendingUploads = useRef(new Set<Promise<void>>())
+  // MT-04：批量上传失败要能说清是哪几张，并且可以单独重试；不再只是循环里 toast 一下就丢。
+  const [failedUploads, setFailedUploads] = useState<{ name: string; file: File; message: string }[]>([])
+  const [retrying, setRetrying] = useState(false)
+  const flushUploads = useCallback(async () => {
+    while (pendingUploads.current.size > 0) {
+      const results = await Promise.allSettled([...pendingUploads.current])
+      const failed = results.find((result) => result.status === 'rejected')
+      if (failed?.status === 'rejected') throw failed.reason
+    }
+  }, [])
+  useRegisterFlush('images', flushUploads)
   const cover = work.assets.find((a) => a.id === work.cover_asset_id)
   const handleFiles = async (files: FileList | null) => {
-    if (!files) return
+    if (!files?.length) return
     const list = Array.from(files)
-    setUploading(list.length)
-    for (const f of list) {
-      await upload(f)
-      setUploading((n) => n - 1)
+    setUploading((n) => n + list.length)
+    const task = (async () => {
+      for (const f of list) {
+        try {
+          const asset = await upload(f)
+          // upload 内部失败返回 null（同时已 toast）；这里只记录失败项，不再中断后续文件。
+          if (!asset) setFailedUploads((prev) => [...prev, { name: f.name, file: f, message: '上传失败' }])
+          else setFailedUploads((prev) => prev.filter((x) => x.file !== f))
+        } catch (e) {
+          setFailedUploads((prev) => [...prev.filter((x) => x.file !== f), { name: f.name, file: f, message: errorMessage(e) }])
+        } finally {
+          setUploading((n) => Math.max(0, n - 1))
+        }
+      }
+    })()
+    pendingUploads.current.add(task)
+    try {
+      await task
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      pendingUploads.current.delete(task)
+    }
+  }
+  const retryFailed = async () => {
+    const items = failedUploads
+    if (!items.length || retrying) return
+    setRetrying(true)
+    setFailedUploads([])
+    try {
+      for (const item of items) {
+        try {
+          const asset = await upload(item.file)
+          if (!asset) setFailedUploads((prev) => [...prev, { ...item, message: '仍然失败' }])
+        } catch (e) {
+          setFailedUploads((prev) => [...prev, { ...item, message: errorMessage(e) }])
+        }
+      }
+    } finally {
+      setRetrying(false)
     }
   }
   const move = async (a: Asset, d: number) => {
@@ -95,7 +144,7 @@ export function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; se
     }
   }
   return (
-    <Card id="step-images" className="scroll-mt-24 p-5">
+    <Card id="step-images" className={cn('scroll-mt-24 p-5', hidden && 'hidden')}>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <h2 className="font-display text-[17px] font-bold text-mist-900">{wx ? '配图与封面' : toutiao ? '头条配图' : '笔记图片'}</h2>
         <span className="text-xs text-mist-400">{wx ? '正文图片会自动压缩到 1MB 以内' : toutiao ? `${work.assets.length} 张；配图可选，按此顺序导出，平台上限待实测` : `已选 ${work.assets.length} 张（最多 18 张），按顺序发布；第一张作为封面`}</span>
@@ -190,6 +239,19 @@ export function ImagesCard({ work, setWork, readOnly, upload }: { work: Work; se
         </div>
       )}
       <input ref={input} type="file" accept="image/*" multiple hidden onChange={(e) => { handleFiles(e.target.files); e.target.value = '' }} />
+      {/* MT-04：上传结束后给出失败清单，失败项可以单独重试，不用逐张核对。 */}
+      {failedUploads.length > 0 && (
+        <div className="mt-3 rounded-lg border border-danger/20 bg-danger/5 p-3 text-[12.5px] text-danger" data-testid="upload-failures">
+          <div className="flex flex-wrap items-center gap-2">
+            <strong>{failedUploads.length} 张图片没有上传成功</strong>
+            <Button size="sm" variant="secondary" className="ml-auto" loading={retrying} onClick={() => void retryFailed()}>重试这 {failedUploads.length} 张</Button>
+            <Button size="sm" variant="ghost" disabled={retrying} onClick={() => setFailedUploads([])}>忽略</Button>
+          </div>
+          <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
+            {failedUploads.map((item) => <li key={item.name + item.message} className="truncate" title={item.name}>{item.name}：{item.message}</li>)}
+          </ul>
+        </div>
+      )}
       {cropFor && (
         <CoverCropDialog open onClose={() => setCropFor(null)} src={cropFor.url} width={cropFor.width} height={cropFor.height}
           initial={coverInit ?? defaultCrops(cropFor.width, cropFor.height)} onSave={saveCrop} />

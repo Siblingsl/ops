@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Card, CardHeader, Notice, PageHeader, PageState, Switch } from '@/components/ui'
+import { Card, CardHeader, Notice, PageHeader, PageState, roleReadOnlyHint, Switch } from '@/components/ui'
 import { errorMessage, get, put } from '@/lib/api'
 import { useMe } from '@/lib/session'
 import { useSettingsDraft } from '@/lib/desktop-settings'
@@ -46,7 +46,7 @@ export default function Agent() {
                 <div className="text-[13.5px] font-medium text-mist-800">{option.title}</div>
                 <p className="mt-0.5 text-[12.5px] leading-relaxed text-mist-500">{option.desc}</p>
               </div>
-              <Switch label={option.title} checked={settings[option.key]} disabled={!owner || save.isPending} onChange={(value) => save.mutate({ [option.key]: value })} />
+              <Switch label={option.title} checked={settings[option.key]} disabled={!owner || save.isPending} disabledHint={roleReadOnlyHint.owner} onChange={(value) => save.mutate({ [option.key]: value })} />
             </div>)}
           </div>
         </Card>

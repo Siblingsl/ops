@@ -77,7 +77,7 @@ export function WorkImportDialog({ accountId, onClose, onImported }: { accountId
         </>}
       </>}>
       <div className="space-y-4">
-        <Field label="作品标题" required>
+        <Field label="作品标题" required hint="最多64字；导入前请先删减超长标题。">
           <Input aria-label="作品标题" value={title} maxLength={64} onChange={e => setTitle(e.target.value)} placeholder="输入原文标题" />
         </Field>
         <Field label="发布日期" hint="可留空；填写后用于数据回填">

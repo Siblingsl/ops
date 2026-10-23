@@ -262,7 +262,7 @@ export function ToutiaoPack({ work, setWork, refresh }: { work: Work; setWork: (
           <Button variant="primary" loading={zipBusy} onClick={() => void download()} icon={<Download className="size-4" />}>下载完整发布包</Button>
         </div>
       </div>
-      <Notice tone="ink" className="mb-5">这是系统当前内容的交付包，不代表头条已收到、审核通过或发布。遇到审核中或状态不明时，请先核实平台状态，再填写实际发布时间。</Notice>
+      <Notice tone="ink" className="mb-5">这是系统当前内容的交付包，不代表头条已收到、审核通过或发布。遇到审核中或状态不明时，请先核实平台状态，再填写实际发布时间。OPS 分享伴侣仅用于小红书，头条和公众号请在对应平台后台手动发布。</Notice>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         <section className="min-w-0 space-y-4">
           {article && pack.publish_title && <CopyField label="发布标题" value={pack.publish_title} validate={validateCopy} />}
@@ -316,7 +316,13 @@ export function ToutiaoPack({ work, setWork, refresh }: { work: Work; setWork: (
             </ol>
           </Card>
           {work.post_push_todos?.length ? <Card className="p-4"><PostPushTodos work={work} setWork={setWork} /></Card> : null}
+          {/* PB-06：与小红书发布包对齐——公共区块顺序统一为「回填 → 平台绑定/说明」，平台专属区块保留原样。 */}
           <div id="backfill" className="scroll-mt-20"><BackfillForm work={work} setWork={setWork} /></div>
+          {work.status !== 'published' && (
+            <Notice tone={work.status === 'packed' ? 'gamboge' : 'gray'}>
+              先在头条号发布并回填发布记录，再进复盘录入数据；没有回填的日期不会被算进复盘看板。
+            </Notice>
+          )}
         </aside>
       </div>
       {work.status === 'packed' && <div className="sticky bottom-16 z-20 mt-6 sm:hidden"><Button variant="primary" size="lg" className="w-full shadow-pop" onClick={() => document.getElementById('backfill')?.scrollIntoView({ behavior: 'smooth' })}>我已在头条发布，去回填</Button></div>}

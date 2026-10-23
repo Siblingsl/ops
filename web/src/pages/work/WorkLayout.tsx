@@ -10,6 +10,7 @@ import { Badge, Button, cn, Field, Input, MoreMenu, Notice, PageLoading, platfor
 import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { currentWorkQueryKey, rememberAccount, useCanWrite, useMe } from '@/lib/session'
+import { DESKTOP_LEAVE_GUARD_REQUEST } from '@/lib/desktop-settings'
 import type { Platform, PlatformWorkMirror, StarItem, Work, WorkspaceMember, WorkStatus } from '@/lib/types'
 import { rememberRecent, useCustomTheme, usePrefs, useWorkCmd } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
@@ -371,6 +372,27 @@ export default function WorkLayout() {
     setFocusState(v)
     window.dispatchEvent(new CustomEvent('ops:focus', { detail: v }))
   }, [])
+  // GL-08：桌面退出与页面离开共用作品保存协调器，任一保存失败都阻止离开。
+  useEffect(() => {
+    const onLeaveGuard = (event: Event) => {
+      if (!workId) return
+      const detail = (event as CustomEvent<{ register?: (check: () => Promise<boolean> | boolean) => void }>).detail
+      if (typeof detail?.register !== 'function') return
+      detail.register(async () => {
+        const pending: Promise<unknown>[] = []
+        emitEditor({ type: 'flush', wait: pending })
+        try {
+          await Promise.all([...pending, flushWork(workId)])
+          return true
+        } catch (error) {
+          toast.error(`保存未完成，已取消离开：${errorMessage(error)}`)
+          return false
+        }
+      })
+    }
+    window.addEventListener(DESKTOP_LEAVE_GUARD_REQUEST, onLeaveGuard)
+    return () => window.removeEventListener(DESKTOP_LEAVE_GUARD_REQUEST, onLeaveGuard)
+  }, [workId])
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('ops:focus', { detail: focus }))
     return () => { window.dispatchEvent(new CustomEvent('ops:focus', { detail: false })) }
@@ -429,7 +451,7 @@ export default function WorkLayout() {
     // NW-A3：只有 404 才是"不存在或已删除"；网络/5xx 给重试，不误导用户重建。
     const notFound = q.error instanceof ApiError && q.error.status === 404
     return <div className="p-10"><Notice tone="red">
-      {notFound ? '作品不存在或已删除' : q.error instanceof ApiError ? q.error.message : '作品加载失败，请检查网络后重试'}
+      {q.error ? errorMessage(q.error) : '作品加载失败，请检查网络后重试'}
       {!notFound && <Button size="sm" className="ml-3" onClick={() => void q.refetch()}>重试</Button>}
     </Notice></div>
   }
@@ -468,12 +490,12 @@ export default function WorkLayout() {
   const ctx: WorkCtx = { work, setWork, patchWork, refresh, focus, setFocus, presence, reportSection, reportEditing }
   const saveTitle = async () => {
     const next = titleDraft.trim()
-    setRenaming(false)
-    if (next === work.title) return
+    if (next === work.title) { setRenaming(false); return }
     try {
       setWork(await patch<Work>(`/works/${work.id}`, { title: next, base_revision: work.revision }))
       void qc.invalidateQueries({ queryKey: ['works', work.account_id] })
       toast.success(next ? '标题已更新' : '已清空标题')
+      setRenaming(false)
     } catch (e) {
       toast.error(errorMessage(e))
     }

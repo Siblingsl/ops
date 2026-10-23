@@ -394,7 +394,8 @@ function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focus
           <div className="ml-auto flex items-center gap-2">
             {canWrite && t.status === 'pending' && <>
               <Button size="sm" variant="primary" loading={busy} onClick={start}>采用并开始写</Button>
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setStatus('adopted')} icon={<Check className="size-3.5" />}>采用</Button>
+              {/* TP-07：两个动作结果不同，按钮文案必须自己说清楚：一个只标记，一个建作品。 */}
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setStatus('adopted')} icon={<Check className="size-3.5" />} title="只把选题标记为已采用，稍后可以再点「开始创作」">采用，稍后写</Button>
             </>}
             {t.status === 'adopted' && (t.work_id
               ? <Link to={`/works/${t.work_id}`}><Button size="sm" variant="ghost">打开作品<ArrowRight className="size-3.5" /></Button></Link>
@@ -715,7 +716,7 @@ export default function Topics() {
             <div className="desktop-topic-detail-footer">
               {canWrite && selectedTopic.status === 'pending' && <>
                 <Button size="sm" variant="primary" loading={detailBusy} onClick={() => void detailStart(selectedTopic)}>采用并开始写</Button>
-                <Button size="sm" variant="ghost" disabled={detailBusy} onClick={() => void detailStatus(selectedTopic, 'adopted')} icon={<Check className="size-3.5" />}>采用</Button>
+                <Button size="sm" variant="ghost" disabled={detailBusy} onClick={() => void detailStatus(selectedTopic, 'adopted')} icon={<Check className="size-3.5" />} title="只把选题标记为已采用，稍后可以再点「开始创作」">采用，稍后写</Button>
               </>}
               {selectedTopic.status === 'adopted' && (selectedTopic.work_id
                 ? <Link to={`/works/${selectedTopic.work_id}`}><Button size="sm" variant="ghost">打开作品<ArrowRight className="size-3.5" /></Button></Link>

@@ -11,9 +11,9 @@ import { del, errorMessage, get, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { useInvalidate } from '@/lib/session'
 
-interface Item { type: 'work' | 'topic' | 'material' | 'style_sample' | 'character_card' | 'reference'; id: string; title: string; account_name: string | null; account_id: string | null; platform: Platform | null; content_format: ContentFormat | null; deleted_at: string; days_left: number }
+interface Item { type: 'work' | 'topic' | 'material' | 'style_sample' | 'character_card' | 'reference' | 'sensitive_word'; id: string; title: string; account_name: string | null; account_id: string | null; platform: Platform | null; content_format: ContentFormat | null; deleted_at: string; days_left: number }
 
-const typeLabel: Record<Item['type'], string> = { work: '作品', topic: '选题', material: '素材', style_sample: '风格样本', character_card: '角色卡', reference: '对标参考' }
+const typeLabel: Record<Item['type'], string> = { work: '作品', topic: '选题', material: '素材', style_sample: '风格样本', character_card: '角色卡', reference: '对标参考', sensitive_word: '敏感词' }
 
 export default function Trash() {
   const { data, isLoading, refetch } = useQuery({ queryKey: ['trash'], queryFn: () => get<Item[]>('/trash') })
@@ -28,7 +28,7 @@ export default function Trash() {
       await post(`/trash/${i.type}/${i.id}/restore`)
       toast.success(`已恢复${typeLabel[i.type]}`)
       refetch()
-      inv(['works'], ['topics'], ['materials'], ['samples'], ['characters'])
+      inv(['works'], ['topics'], ['materials'], ['samples'], ['characters'], ['words'])
       if (open && i.type === 'work') navigate(`/works/${i.id}`)
     } catch (e) {
       toast.error(errorMessage(e))
@@ -55,6 +55,7 @@ export default function Trash() {
         { value: 'style_sample', label: '风格样本', count: count('style_sample') },
         { value: 'character_card', label: '角色卡', count: count('character_card') },
  { value: 'reference', label: '对标参考', count: count('reference') },
+         { value: 'sensitive_word', label: '敏感词', count: count('sensitive_word') },
       ]} />
       <Card>
         {list.length === 0 ? <Empty icon={<Trash2 className="size-5" />} title="回收站是空的" /> : (

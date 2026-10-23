@@ -1,4 +1,4 @@
-﻿import { Check, CheckCircle2, Copy, Download, LayoutTemplate, Package, Smartphone, Sparkles } from 'lucide-react'
+import { Check, CheckCircle2, Copy, Download, LayoutTemplate, Package, Smartphone, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -247,7 +247,7 @@ export default function Pack() {
         </div>
       </div>
       <Notice tone="ink" className="mb-5">
-        小红书官方分享 SDK 需独立移动 App 与开放平台资质（FR-M10-08）。当前提供 Web 系统分享、伴侣深链（<code className="rounded bg-mist-100 px-1">ops-xhs://</code>）与发布包；Expo 工程见 <code className="rounded bg-mist-100 px-1">mobile/</code>。
+        OPS 分享伴侣只用于小红书文案整理与系统分享，不会代发或回写发布记录；公众号和头条请在主站复制内容或使用系统分享。当前页面提供 Web 系统分享、伴侣深链（<code className="rounded bg-mist-100 px-1">ops-xhs://</code>）与发布包；Expo 工程见 <code className="rounded bg-mist-100 px-1">mobile/</code>。
       </Notice>
       <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
         <div className="space-y-4">
@@ -312,10 +312,16 @@ export default function Pack() {
             </ol>
           </Card>
           <Notice tone="gamboge">AI 声明：内容使用了 AI 辅助时，按平台规则必须声明。漏标可能导致限流或处罚。</Notice>
-          {(work.status === 'packed' || work.status === 'published') && (work.post_push_todos ?? []).length > 0 && <Card className="p-4"><PostPushTodos work={work} setWork={setWork} /></Card>}
+          {work.post_push_todos?.length ? <Card className="p-4"><PostPushTodos work={work} setWork={setWork} /></Card> : null}
+          {/* PB-06：与头条发布包对齐——公共区块顺序统一为「回填 → 平台绑定」，平台专属区块放在其后。 */}
           <div id="backfill" className="scroll-mt-20"><BackfillForm work={work} setWork={setWork} /></div>
           {(work.status === 'published' || work.status === 'packed') && (
             <PlatformBinding work={work} setWork={setWork} canManage={canManage} />
+          )}
+          {work.status !== 'published' && (
+            <Notice tone={work.status === 'packed' ? 'gamboge' : 'gray'}>
+              先在平台发布并回填发布记录，再进复盘录入数据；没有回填的日期不会被算进复盘看板。
+            </Notice>
           )}
         </aside>
       </div>

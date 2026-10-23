@@ -55,7 +55,7 @@ function SeriesStrip({ sc }: { sc: SeriesContext }) {
   )
 }
 
-function ViewpointCard({ work, setWork, readOnly, loadMaterials = false, desktopPresentation = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; loadMaterials?: boolean; desktopPresentation?: boolean }) {
+function ViewpointCard({ work, setWork, readOnly, loadMaterials = false, desktopPresentation = false, hidden = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; loadMaterials?: boolean; desktopPresentation?: boolean; hidden?: boolean }) {
   const [text, setText] = useState(work.viewpoint)
   const [picking, setPicking] = useState(false)
   const [inbox, setInbox] = useState(false)
@@ -206,7 +206,7 @@ function ViewpointCard({ work, setWork, readOnly, loadMaterials = false, desktop
     )}
   </>
   return (
-    <Card id="step-viewpoint" className="scroll-mt-24 p-5">
+    <Card id="step-viewpoint" className={cn('scroll-mt-24 p-5', hidden && 'hidden')}>
       <div className="mb-3 flex items-center gap-2">
         <h2 className="font-display text-[17px] font-bold text-mist-900">核心观点</h2>
         <Badge tone="gamboge">H-02 必须由你来写</Badge>
@@ -476,11 +476,11 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
     if (position.tab) return position.tab
     return work.sections.length > 0 ? 'materials' : 'copilot'
   })
-  const sideTabPicked = useRef(false)
+  const [sideTabPicked, setSideTabPicked] = useState(false)
   const [materialsOpened, setMaterialsOpened] = useState(false)
   const selectSideTab = (tab: SidebarTab) => {
     setSideTab(tab)
-    sideTabPicked.current = true
+    setSideTabPicked(true)
     if (tab === 'materials') setMaterialsOpened(true)
   }
   const lintCounts = useRef<Record<string, number>>({})
@@ -505,9 +505,9 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
   }, [])
   useEffect(() => {
     // 只有用户真正切过 tab 才记住选择；默认值（首屏提示）不落库。
-    if (!sideTabPicked.current) return
+    if (!sideTabPicked) return
     try { localStorage.setItem(positionKey, JSON.stringify({ sectionId: activeId ?? position.sectionId, tab: sideTab })) } catch {}
-  }, [positionKey, activeId, sideTab, position.sectionId])
+  }, [positionKey, activeId, sideTab, position.sectionId, sideTabPicked])
   useEffect(() => {
     setResumedSection(null)
     if (route.hash) {
@@ -692,7 +692,7 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
         if (wide ? showSidebar && sideTab === 'copilot' : narrowSidebar && sideTab === 'copilot') toggleSidebar(false)
         else {
           setSideTab('copilot')
-          sideTabPicked.current = true
+          setSideTabPicked(true)
           toggleSidebar(true)
         }
         return
@@ -863,9 +863,9 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
           <span>{work.account_name}</span><span>/</span><span>{work.tags[0] ?? '创作正文'}</span>
           <Badge tone="ink">{work.sections.some((section) => section.content_md.trim()) ? 'AI 草稿 · 可编辑' : '创作中 · 可编辑'}</Badge>
         </div>}
-        {!focus && desktopPresentation && <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} desktopPresentation />}
-        {!focus && <ViewpointCard work={work} setWork={setWorkStable} readOnly={readOnly} desktopPresentation={desktopPresentation} loadMaterials={materialsOpened && showSidebar && sideTab === 'materials'} />}
-        {!focus && !desktopPresentation && <OutlineCard work={work} setWork={setWorkStable} readOnly={readOnly} onConfirmed={onOutlineConfirmed} />}
+        {desktopPresentation && <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} desktopPresentation hidden={focus} />}
+        <ViewpointCard work={work} setWork={setWorkStable} readOnly={readOnly} desktopPresentation={desktopPresentation} loadMaterials={materialsOpened && showSidebar && sideTab === 'materials'} hidden={focus} />
+        {!desktopPresentation && <OutlineCard work={work} setWork={setWorkStable} readOnly={readOnly} onConfirmed={onOutlineConfirmed} hidden={focus} />}
         <section id="step-sections" className="scroll-mt-24 space-y-4">
           <div className="flex flex-wrap items-center gap-2 pt-2">
             <h2 className="font-display text-[17px] font-bold text-mist-900">正文</h2>
@@ -903,8 +903,8 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
             </>
           )}
         </section>
-        {!focus && !desktopPresentation && <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} />}
-        {!focus && <ImagesCard work={work} setWork={setWorkStable} readOnly={readOnly} upload={upload} />}
+        {!desktopPresentation && <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} hidden={focus} />}
+        <ImagesCard work={work} setWork={setWorkStable} readOnly={readOnly} upload={upload} hidden={focus} />
         </article>
         {work.locked && <Notice tone="gray">作品已发布，当前为只读模式。</Notice>}
       </div>

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { sendFeedback } from '@/components/refs'
+import { Dialog } from '@/components/dialog'
 import { aiError } from '@/lib/ai-error'
 import { Badge, Button, Card, cn, HumanGate, Notice, PageLoading, platformLabel, Textarea } from '@/components/ui'
 import { ApiError, errorMessage, get, patch, post } from '@/lib/api'
@@ -310,6 +311,12 @@ export default function Check() {
   const [completing, setCompleting] = useState(false)
   const [resolving, setResolving] = useState<string[]>([])
   const [approving, setApproving] = useState(false)
+  // CK-03：退回修改需要填写原因；CK-06：退出检查需要一个明确的确认动作。
+  const [returnOpen, setReturnOpen] = useState(false)
+  const [returnNote, setReturnNote] = useState('')
+  const [returning, setReturning] = useState(false)
+  const [exiting, setExiting] = useState(false)
+  const [factRetrying, setFactRetrying] = useState(false)
   const [editSignal, setEditSignal] = useState<{ sectionId: string; text: string; n: number } | null>(null)
   // CK-01：窄屏定位到正文后，提供一个明确的"回到检查项"出口。
   const [returnTo, setReturnTo] = useState<string | null>(null)
@@ -401,6 +408,54 @@ export default function Check() {
       setApproving(false)
     }
   }
+  // CK-03：审阅人发现问题时能「退回修改」并说明原因，作品回到创作中，作者收到通知。
+  const returnReview = async () => {
+    const note = returnNote.trim()
+    if (!note) {
+      toast.error('请填写退回原因，作者要知道改什么')
+      return
+    }
+    setReturning(true)
+    try {
+      const r = await post<{ work: string; comment_id: string }>(`/works/${work.id}/review/return`, { note })
+      setReturnOpen(false)
+      setReturnNote('')
+      await refresh()
+      q.refetch()
+      toast.success('已退回修改，退回原因已作为评论留在作品里')
+      if (r.comment_id) nav(`/works/${work.id}`)
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setReturning(false)
+    }
+  }
+  // CK-04：事实核查失败时能单独重试，不用重建整轮检查。
+  const retryFact = async () => {
+    setFactRetrying(true)
+    try {
+      await post(`/works/${work.id}/checks/fact-retry`)
+      await q.refetch()
+      toast.success('已重新发起事实核查，完成后会分别显示有素材支撑和待核实的句子')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setFactRetrying(false)
+    }
+  }
+  // CK-06：检查中可以直接退出回「创作中」，这次检查记录留档，便于以后对照修改。
+  const exitCheck = async () => {
+    setExiting(true)
+    try {
+      setWork(await post<Work>(`/works/${work.id}/check/exit`))
+      q.refetch()
+      toast.success('已退出检查，作品回到创作中；这次检查结果保留为历史记录')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setExiting(false)
+    }
+  }
   // 逐项 AI 修复（EX-H-02）：只替换命中的一句，随后重新检查，该项需要重新确认（HC-18）。
   const applyFix = async (fix: FixResp, i: number) => {
     const fresh = await get<Work>(`/works/${work.id}`)
@@ -441,6 +496,17 @@ export default function Check() {
     document.getElementById(`item-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
 
+  // XC-03：通知带 ?item=<检查项 id> 时，进页面就定位到那一条并高亮，不用用户自己找。
+  const focusItem = params.get('item')
+  const focused = useRef(false)
+  useEffect(() => {
+    if (!focusItem || focused.current || !run) return
+    if (!run.items.some((i) => i.id === focusItem)) return
+    focused.current = true
+    pick(focusItem)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusItem, run])
+
   if (q.isLoading) return <PageLoading />
   const groups = (['format', 'sensitive', 'fact', 'stale', 'ai_disclosure', 'similarity', 'ad_law'] as const)
     .map((c) => ({ c, items: (run?.items ?? []).filter((i) => i.category === c) }))
@@ -448,9 +514,18 @@ export default function Check() {
   const formatFailed = run?.items.filter((i) => i.category === 'format' && !i.passed) ?? []
   const factPending = run?.fact_status === 'pending'
   const canComplete = !!run && !run.stale && !run.material_basis_stale && !factPending && run.blocking === 0 && run.confirmed === run.total
+  // CK-07：按钮为什么是灰的，就地写清楚，不用用户自己数。
+  const completeBlockedReason = !run ? ''
+    : run.stale || run.material_basis_stale ? '作品内容已改动，检查结果已过期，请先「重新检查」。'
+      : factPending ? 'AI 事实核查还在进行，完成后才能确认。'
+        : run.blocking > 0 ? `还有 ${run.blocking} 项格式问题没改完。`
+          : run.confirmed < run.total ? `还有 ${run.total - run.confirmed} 项没有逐条确认。`
+            : ''
   const isDone = !!run?.completed_at && !run.stale && !run.material_basis_stale && ['ready', 'pushed', 'packed', 'published'].includes(work.status)
   const reviewing = work.status === 'reviewing'
   const canApprove = reviewing && (me?.role === 'owner' || (!!me?.user_id && me.user_id === work.reviewer_id && me.user_id !== work.assignee_id))
+  // CK-06：只有检查中、且还能写的人才需要「退出检查」；审阅中应走退回。
+  const canExitCheck = work.status === 'checking' && editable
   const wx = work.platform === 'wechat_mp'
   const comic = work.content_format === 'comic'
   const sectionItems = (sid: string) => (run?.items ?? []).filter((i) => i.location.section_id === sid && (i.category !== 'format' || !i.passed))
@@ -466,13 +541,18 @@ export default function Check() {
     <div className="mx-auto w-full max-w-[1400px] px-6 py-6 pb-28 md:pb-6 2xl:max-w-[1600px]">
       {(wx || (!run && !starting && editable) || !!run) && <WorkHeaderAction>
         <div className="flex items-center gap-2">
-          {wx && <Link to={`/works/${work.id}/preview`} className="inline-flex items-center rounded-lg border border-mist-200 px-3 py-2 text-xs font-medium text-mist-700 hover:bg-mist-50">看排版</Link>}
-          {!run && !starting && editable && <Button size="sm" variant="primary" onClick={start} icon={<ShieldCheck className="size-4" />}>开始检查</Button>}
+          {wx && <Link to={`/works/${work.id}/preview`} className="check-preview-action inline-flex items-center rounded-lg border border-mist-200 px-3 py-2 text-xs font-medium text-mist-700 hover:bg-mist-50">看排版</Link>}
+          {!run && !starting && editable && <Button className="check-main-action" size="sm" variant="primary" onClick={start} icon={<ShieldCheck className="size-4" />}>开始检查</Button>}
           {run && (reviewing && run.completed_at && !run.stale && !run.material_basis_stale
-            ? canApprove ? <Button size="sm" variant="human" loading={approving} onClick={approve} icon={<UserCheck className="size-4" />}>审阅通过</Button> : null
+            ? canApprove ? <Button className="check-main-action" size="sm" variant="human" loading={approving} onClick={approve} icon={<UserCheck className="size-4" />}>审阅通过</Button> : null
             : isDone
-              ? <Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/${wx ? 'push' : 'pack'}`)}>{wx ? '去写入草稿箱' : '生成发布包'}<ArrowRight className="size-4" /></Button>
-              : <Button size="sm" variant="human" disabled={!canComplete || !editable || resolving.length > 0} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>确认完成检查</Button>)}
+              ? <Button className="check-main-action" size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/${wx ? 'push' : 'pack'}`)}>{wx ? '去写入草稿箱' : '生成发布包'}<ArrowRight className="size-4" /></Button>
+              : <Button className="check-main-action" size="sm" variant="human" disabled={!canComplete || !editable || resolving.length > 0} loading={completing} onClick={complete} icon={<ShieldCheck className="size-4" />}>确认完成检查</Button>)}
+          {/* CK-06：检查中给一个显式出口，避免误点检查后作品一直卡在「检查中」。 */}
+          {canExitCheck && <Button size="sm" variant="ghost" loading={exiting} onClick={() => void exitCheck()}>退出检查</Button>}
+          {/* CK-03：审阅人能退回并说明原因，不再只有「通过」一条路。 */}
+          {reviewing && run?.completed_at && !run.stale && !run.material_basis_stale && canApprove
+            && <Button size="sm" variant="ghost" onClick={() => setReturnOpen(true)}>退回修改</Button>}
         </div>
       </WorkHeaderAction>}
       <div className="mb-5 flex flex-wrap items-center gap-4">
@@ -484,8 +564,9 @@ export default function Check() {
         <Link to={`/works/${work.id}`} className="inline-flex items-center gap-1 text-[13px] text-ink-700 hover:underline">
           <ArrowLeft className="size-3.5" />返回创作
         </Link>
+        {/* CK-05：窄屏把检查统计与辅助操作换行，主操作继续留在顶部操作区。 */}
         {run && (
-          <div className="ml-auto flex items-center gap-5">
+          <div className="min-w-0 w-full flex flex-wrap items-center gap-x-3 gap-y-2 sm:ml-auto sm:w-auto sm:flex-nowrap sm:gap-5">
             <Stat label="已确认" value={`${run.confirmed} / ${run.total}`} ok={run.confirmed === run.total} />
             <Stat label="格式问题" value={String(run.blocking)} ok={run.blocking === 0} />
             <Stat label="事实核查" value={factPending ? '进行中' : run.fact_status === 'done' ? '已完成' : run.fact_status === 'failed' ? '需人工' : '—'} ok={run.fact_status === 'done'} />
@@ -540,6 +621,15 @@ export default function Check() {
             {factPending && (
               <Notice tone="ink" icon={<Loader2 className="size-4 animate-spin" />}>AI 正在区分有素材支撑和待核实的事实句子，完成后会分别显示。</Notice>
             )}
+            {/* CK-04：事实核查失败时给出修复路径，并说明为什么「确认完成检查」还是灰的。 */}
+            {run.fact_status === 'failed' && !factPending && (
+              <Notice tone="red" icon={<AlertTriangle className="size-4" />}>
+                事实核查没跑完（模型不可用或已超时），下面这些句子还没被 AI 标出来。你可以只重试事实核查，或人工通读后逐条确认。
+                <div className="mt-2">
+                  <Button size="sm" variant="secondary" loading={factRetrying} onClick={() => void retryFact()}>重试事实核查</Button>
+                </div>
+              </Notice>
+            )}
             {groups.map((g) => (
               <div key={g.c}>
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-mist-500">
@@ -569,7 +659,13 @@ export default function Check() {
                 <>
                   <Notice tone="gamboge" icon={<UserCheck className="size-4" />}>检查已完成，这篇作品需要审阅。审阅通过前不能写入草稿或生成发布包。</Notice>
                   {canApprove ? (
-                    <HumanGate code="H-09">请通读正文和上面的检查记录，再在页头点击“审阅通过”。</HumanGate>
+                    <>
+                      <HumanGate code="H-09">请通读正文和上面的检查记录，再在页头点击“审阅通过”；需要作者修改就点“退回修改”并写明原因。</HumanGate>
+                      <div className="flex justify-center gap-2">
+                        <Button variant="human" loading={approving} onClick={() => void approve()}>审阅通过</Button>
+                        <Button variant="ghost" onClick={() => setReturnOpen(true)}>退回修改</Button>
+                      </div>
+                    </>
                   ) : <p className="text-center text-[12.5px] text-mist-500">已通知工作区所有者{work.reviewer_id ? '和指定的审阅人' : ''}审阅。</p>}
                 </>
               ) : isDone ? (
@@ -586,6 +682,16 @@ export default function Check() {
                 <>
                   {formatFailed.length > 0 && <Notice tone="red">还有 {formatFailed.length} 项格式问题，修改后重新检查。</Notice>}
                   <HumanGate code="H-04">每一条敏感词和事实都需要你单独确认，没有「全部确认」。</HumanGate>
+                  {/* CK-07：禁用时就地说明还差什么，避免用户以为按钮坏了。 */}
+                  {completeBlockedReason && (
+                    <p className="text-center text-[12.5px] text-gamboge-700" data-testid="check-complete-blocked-reason">{completeBlockedReason}</p>
+                  )}
+                  {canExitCheck && (
+                    <div className="text-center">
+                      <Button variant="ghost" size="sm" loading={exiting} onClick={() => void exitCheck()}>先不检查了，退出回创作中</Button>
+                      <p className="mt-1 text-[11.5px] text-mist-500">退出只是离开检查状态，这次检查结果会留档；再次检查需要重新逐项确认。</p>
+                    </div>
+                  )}
                 </>
               )}
               </div>
@@ -593,6 +699,20 @@ export default function Check() {
           </div>
         </div>
       )}
+      {/* CK-03：退回原因必须自己写，说明作者要改什么；退回后作品回到创作中。 */}
+      <Dialog open={returnOpen} onClose={() => setReturnOpen(false)} title="退回修改"
+        desc="退回后作品回到「创作中」，作者会收到通知，退回原因会作为评论留在作品里。"
+        footer={<>
+          <Button variant="ghost" onClick={() => setReturnOpen(false)}>取消</Button>
+          <Button variant="human" loading={returning} disabled={!returnNote.trim()} onClick={() => void returnReview()}>确认退回</Button>
+        </>}>
+        <label className="block text-[13px] font-medium text-mist-700" htmlFor="ck-return-note">要作者改什么</label>
+        <Textarea id="ck-return-note" autoFocus value={returnNote} maxLength={2000}
+          onChange={(e) => setReturnNote(e.target.value)}
+          placeholder="例如：第三段的数据来源需要补充；标题里“最好”属于绝对化用语，请改掉。"
+          className="mt-1.5" rows={4} />
+        <p className="mt-1 text-[11.5px] text-mist-500">{returnNote.length} / 2000 字</p>
+      </Dialog>
       {/* CK-01：窄屏下定位到正文后，浮动按钮把用户带回刚看的检查项。 */}
       {returnTo && (
         <button type="button" onClick={() => {

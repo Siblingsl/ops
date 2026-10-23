@@ -65,7 +65,7 @@ function TemplateManager({ open, onClose, list }: { open: boolean; onClose: () =
   )
 }
 
-export function OutlineCard({ work, setWork, readOnly, onConfirmed }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; onConfirmed?: () => void }) {
+export function OutlineCard({ work, setWork, readOnly, onConfirmed, hidden = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; onConfirmed?: () => void; hidden?: boolean }) {
   const [conflict, setConflict] = useState<{ server: Work; confirm: boolean } | null>(null)
   const flushAll = useFlushAll()
   const confirmed = !!work.outline_confirmed_at
@@ -144,7 +144,7 @@ export function OutlineCard({ work, setWork, readOnly, onConfirmed }: { work: Wo
     setItems(next)
   }
   return (
-    <Card id="step-outline" className="scroll-mt-24 p-5">
+    <Card id="step-outline" className={cn('scroll-mt-24 p-5', hidden && 'hidden')}>
       <div className="mb-3 flex items-center gap-2">
         <h2 className="font-display text-[17px] font-bold text-mist-900">大纲</h2>
         {confirmed ? <Badge tone="green"><Check className="size-3" />已确认</Badge> : <Badge tone="gamboge">H-03 确认后才能起稿</Badge>}

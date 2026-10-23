@@ -254,7 +254,15 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
       for (const r of recentItems().slice(0, 5)) out.push({ id: 'r-' + r.link, group: '最近', label: r.title, hint: typeLabel[r.type], icon: Clock, run: () => go(r.link, r.title, r.type) })
       for (const s of (stars.data ?? []).slice(0, 6)) out.push({ id: 'st-' + s.object_id, group: '收藏', label: s.title, hint: typeLabel[s.object_type], icon: Star, run: () => go(s.link, s.title, s.object_type) })
       const workCmds = commands.filter((c) => c.group === '本作品' && !c.id.startsWith('w-sec-'))
-      return [...out, ...workCmds, ...commands.filter((c) => c.group === '操作' || c.group === '页面')]
+      // GL-03：空查询时也要给出「操作」与「设置」，否则用户以为面板不支持新建/改设置。
+      // 新建作品/新建选题排最前，设置限制条数避免首屏被设置项占满。
+      const actions = commands.filter((c) => c.group === '操作')
+      const orderedActions = [
+        ...actions.filter((c) => c.id === 'a-new' || c.id === 'a-topic'),
+        ...actions.filter((c) => c.id !== 'a-new' && c.id !== 'a-topic'),
+      ]
+      const settings = commands.filter((c) => c.group === '设置').slice(0, 6)
+      return [...out, ...workCmds, ...orderedActions, ...settings, ...commands.filter((c) => c.group === '页面')]
     }
     const matched = commands.filter((c) => fuzzyMatch(c.label + ' ' + (c.keywords ?? ''), query))
     const order = ['本作品', '操作']

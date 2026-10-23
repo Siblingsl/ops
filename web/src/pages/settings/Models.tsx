@@ -9,7 +9,7 @@ import { ApiError, del, errorMessage, get, patch, post, put } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useInvalidate, useMe } from '@/lib/session'
-import type { AILimit, ModelRoute, Provider } from '@/lib/types'
+import type { AILimit, ModelCapability, ModelRoute, Provider } from '@/lib/types'
 import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
 
 // DEV-U101（12 文档）：供应商能力自检结果。
@@ -49,6 +49,26 @@ function CapabilityTag({ label, ok }: { label: string; ok?: boolean | null }) {
   const state = ok === true ? '通过' : ok === false ? '未通过' : '未测试'
   const cls = ok === true ? 'bg-ink-50 text-ink-700' : ok === false ? 'bg-mist-100 text-danger' : 'bg-mist-100 text-mist-400'
   return <span className={`rounded px-1 text-[10.5px] ${cls}`} title={`${label}：${state}`}>{label}·{state}</span>
+}
+
+// ST-04：把能力标签翻译成「这个模型能干什么」的结论行。
+// 用户不必自己解读「工具调用·未测试」，直接看到智能体不可用的原因。
+function usableSummary(cap: ModelCapability | undefined, providerOK: boolean | null) {
+  if (!providerOK) return { text: '还不能用于：写作、智能体、看图（供应商测试未通过）', warn: true }
+  if (!cap) return { text: '还没有自检结果，先点「自检」确认能不能用', warn: true }
+  const writing = cap.tools_ok !== null || cap.vision_ok !== null
+  const parts: string[] = []
+  if (writing) parts.push('写作')
+  if (cap.tools_ok === true) parts.push('智能体')
+  if (cap.vision_ok === true) parts.push('看图')
+  if (parts.length === 0) return { text: '还不能用：自检未通过任何一项', warn: true }
+  const missing: string[] = []
+  if (cap.tools_ok !== true) missing.push('智能体')
+  if (cap.vision_ok === false) missing.push('看图')
+  return {
+    text: `可用于：${parts.join(' / ')}${missing.length ? `；不可用于：${missing.join(' / ')}` : ''}`,
+    warn: cap.tools_ok !== true,
+  }
 }
 
 function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClose: () => void }) {
@@ -555,11 +575,14 @@ export default function Models() {
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {p.models.map((m) => {
                   const cap = p.capabilities?.find((c) => c.model === m)
+                  const usable = usableSummary(cap, p.last_test_ok)
                   return (
                     <span key={m} className="inline-flex items-center gap-1.5 rounded border border-mist-200 bg-white px-1.5 py-0.5">
                       <span className="font-mono text-[11.5px] text-mist-700">{m}</span>
                       <CapabilityTag label="工具调用" ok={cap?.tools_ok} />
                       <CapabilityTag label="看图" ok={cap?.vision_ok} />
+                      {/* ST-04：直接给结论，不用用户自己解读标签。 */}
+                      <span data-testid="model-usable" className={usable.warn ? 'text-[10.5px] text-gamboge-700' : 'text-[10.5px] text-ink-600'}>{usable.text}</span>
                     </span>
                   )
                 })}

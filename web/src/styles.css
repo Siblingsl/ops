@@ -186,5 +186,11 @@ mark.hl.hl-active { background: var(--color-gamboge-300); box-shadow: 0 0 0 2px 
   .work-topbar .workspace-account-compact { width: min(10rem, calc(100vw - 14.375rem)); }
   .work-header > div:first-child { height: auto; min-height: 3.5rem; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0.75rem; }
   .work-header > div:first-child > .desktop-work-title { flex: 1 1 6rem; }
-  .work-header-actions { flex: 1 0 100%; justify-content: flex-end; margin-left: 0; }
+  .work-header-actions { flex: 1 0 100%; justify-content: flex-start; margin-left: 0; flex-wrap: wrap; }
+  .work-header-actions > #work-header-action-target { flex: 1 0 100%; min-width: 0; margin-right: 0; }
+  #work-header-action-target > div { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 0.5rem; }
+  #work-header-action-target .check-main-action { order: 0; }
+  #work-header-action-target .check-preview-action { order: 1; }
+  #work-header-action-target > div > button,
+  #work-header-action-target > div > a { max-width: 100%; }
 }

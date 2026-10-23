@@ -495,6 +495,11 @@ html[data-presentation='ops-creative-desktop'] .agent-markdown h4 { color: var(-
 .desktop-statusbar-separator { color: var(--ops-border); }
 .desktop-statusbar-action { height: 24px; border: 0; border-radius: 7px; padding: 0 7px; background: transparent; color: var(--ops-muted); cursor: pointer; font: inherit; }
 .desktop-statusbar-action:hover, .desktop-statusbar-action[aria-pressed='true'] { background: var(--ops-accent-soft); color: var(--ops-accent); }
+.desktop-statusbar-health-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--ops-muted); }
+.desktop-statusbar-health[data-status='ready'] .desktop-statusbar-health-dot, .desktop-statusbar-health[data-status='online'] .desktop-statusbar-health-dot { background: var(--ops-success); box-shadow: 0 0 0 3px var(--ops-success-soft); }
+.desktop-statusbar-health[data-status='connecting'] .desktop-statusbar-health-dot, .desktop-statusbar-health[data-status='running'] .desktop-statusbar-health-dot { background: var(--ops-accent); }
+.desktop-statusbar-health[data-status='partial'] .desktop-statusbar-health-dot, .desktop-statusbar-health[data-status='offline'] .desktop-statusbar-health-dot { background: #d97706; }
+.desktop-statusbar-health[data-status='error'] .desktop-statusbar-health-dot, .desktop-statusbar-health[data-status='failed'] .desktop-statusbar-health-dot { background: var(--ops-danger); }
 .desktop-statusbar-action svg, .desktop-statusbar-save svg { width: 13px; height: 13px; flex: 0 0 auto; }
 .desktop-statusbar-spacer { min-width: 0; flex: 1; }
 .desktop-statusbar-save { overflow: hidden; text-overflow: ellipsis; }

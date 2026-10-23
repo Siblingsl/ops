@@ -274,6 +274,13 @@ function ActionCard({ action, locked, running, busy, progress, secret, onDismiss
     </fieldset>}
     {live && action.gate && <label className="flex items-start gap-2 text-sm text-mist-700"><input type="checkbox" className="mt-1" checked={ack} disabled={locked || preparing} onChange={(event) => setAck(event.target.checked)} />{gateLabel(action)}</label>}
     {action.result_summary && <p className="whitespace-pre-wrap text-sm text-ink-700">{action.result_summary}</p>}
+    {/* AG-02：执行成功后给出「打开目标」主按钮，不用回列表自己找。 */}
+    {action.status === 'succeeded' && safeLink && <div className="flex flex-wrap items-center gap-2" data-testid="action-open-target">
+      <Link to={safeLink} className="inline-flex">
+        <Button type="button" variant="primary" size="sm">打开{action.target.name ? `《${action.target.name}》` : '目标对象'}</Button>
+      </Link>
+      <span className="text-xs text-mist-500">也可以继续在对话里让智能体接着改。</span>
+    </div>}
     {(message(action.error) || message(action.last_error) || error) && <Notice tone="red">{error || message(action.error) || message(action.last_error)}</Notice>}
     {progress && <p role="status" className="text-sm text-mist-500">{progress}</p>}
     {secret && <Notice tone="gamboge"><p>以下信息仅在本次执行后显示，请立即保存。</p><pre className="mt-2 whitespace-pre-wrap break-all select-all">{JSON.stringify(secret, null, 2)}</pre><Button type="button" size="sm" variant="ghost" onClick={onDismissSecret}>我已保存，关闭</Button></Notice>}

@@ -128,6 +128,39 @@ export const put = <T>(p: string, b?: unknown) => api<T>('PUT', p, b ?? {})
 export const patch = <T>(p: string, b?: unknown) => api<T>('PATCH', p, b ?? {})
 export const del = <T>(p: string, b?: unknown) => api<T>('DELETE', p, b)
 
+/** 分页列表的响应头约定（WL-02）：服务端返回数组，游标和总数在响应头里。 */
+export interface PageMeta {
+  total: number
+  hasMore: boolean
+  limit: number
+  offset: number
+  nextCursor: string | null
+}
+
+/** getPage 读列表接口，同时取回分页元信息；缺失响应头时按「只有一页」处理。 */
+export async function getPage<T>(p: string, init?: RequestInit): Promise<{ items: T[]; meta: PageMeta }> {
+  const res = await rawRequest('GET', p, undefined, init)
+  const text = await res.text()
+  const items = (text ? JSON.parse(text) : []) as T[]
+  const num = (name: string, def: number) => {
+    const raw = res.headers.get(name)
+    const parsed = raw === null ? Number.NaN : Number.parseInt(raw, 10)
+    return Number.isFinite(parsed) ? parsed : def
+  }
+  const offset = num('X-Offset', 0)
+  const limit = num('X-Limit', items.length)
+  return {
+    items,
+    meta: {
+      total: num('X-Total-Count', offset + items.length),
+      hasMore: res.headers.get('X-Has-More') === 'true',
+      limit,
+      offset,
+      nextCursor: res.headers.get('X-Next-Cursor'),
+    },
+  }
+}
+
 export interface SSEHandlers {
   onDelta?: (text: string) => void
   onEvent?: (name: string, data: any) => void

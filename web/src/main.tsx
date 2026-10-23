@@ -90,7 +90,7 @@ function DesktopThemeToaster() {
     return () => window.removeEventListener('ops:desktop-theme', update)
   }, [])
   const desktop = document.documentElement.dataset.presentation === 'ops-creative-desktop'
-  return <Toaster theme={desktop ? theme : 'system'} position="bottom-center" offset={{ bottom: desktop ? 34 : 24 }} mobileOffset={{ bottom: 'calc(72px + env(safe-area-inset-bottom))' }} richColors closeButton duration={8000} style={{ zIndex: 30 }} toastOptions={{ style: { fontFamily: 'var(--font-sans)' } }} />
+  return <Toaster theme={desktop ? theme : 'system'} position="bottom-center" offset={{ bottom: desktop ? 34 : 24 }} mobileOffset={{ bottom: 'calc(72px + env(safe-area-inset-bottom))' }} richColors closeButton duration={8000} style={{ zIndex: desktop ? 60 : 30 }} toastOptions={{ style: { fontFamily: 'var(--font-sans)' } }} />
 }
 
 function DesktopThemeSync() {

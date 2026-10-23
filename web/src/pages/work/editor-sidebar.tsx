@@ -464,10 +464,19 @@ function CommentsTab({ work, active, selection, list, refetch, hasMore, loadingM
   useEffect(() => {
     if (active && !sectionId) setSectionId(active.id)
   }, [active]) // eslint-disable-line react-hooks/exhaustive-deps
+  // XC-03：通知里带 ?comment=<id> 时，除了滚到对应段落，还要把那条批注本身高亮出来，
+  // 否则用户滚到段落后仍要在几十条批注里再找一遍。
   useEffect(() => {
     const id = new URLSearchParams(location.search).get('comment')
     const c = id && list.find((x) => x.id === id)
-    if (c && c.section_id) scrollToSection(c.section_id)
+    if (!c) return
+    if (c.section_id) scrollToSection(c.section_id)
+    const el = document.getElementById(`comment-${c.id}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.remove('flash')
+    void el.offsetWidth
+    el.classList.add('flash')
   }, [list.length]) // eslint-disable-line react-hooks/exhaustive-deps
   const send = async () => {
     if (!body.trim()) return
@@ -524,7 +533,7 @@ function CommentsTab({ work, active, selection, list, refetch, hasMore, loadingM
       {shown.length === 0 ? <Hint>还没有批注。</Hint> : (
         <ul className="space-y-2">
           {shown.map((c) => (
-            <li key={c.id} className={cn('rounded-lg border p-2.5 text-[12px]', c.resolved_at ? 'border-mist-100 opacity-60' : 'border-mist-200')}>
+            <li key={c.id} id={`comment-${c.id}`} className={cn('scroll-mt-24 rounded-lg border p-2.5 text-[12px]', c.resolved_at ? 'border-mist-100 opacity-60' : 'border-mist-200')}>
               <div className="flex items-center gap-1.5 text-[11.5px] text-mist-400">
                 <span className="font-medium text-mist-700">{c.author_name}</span>{fmtTime(c.created_at)}
                 <button type="button" onClick={() => c.section_id && scrollToSection(c.section_id)} className="ml-auto cursor-pointer truncate hover:text-ink-700">{secName(c.section_id)}</button>

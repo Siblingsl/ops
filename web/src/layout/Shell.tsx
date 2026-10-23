@@ -1,8 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  Activity, BarChart3, Bell, BookOpen, Bot, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, Clock, Eye, FileText, Images, Inbox, KeyRound,
-  LayoutDashboard, Lightbulb, LogOut, PanelLeft, Pencil, Plus, Power, Search, Send, Settings2, Sparkles, Trash2,
-  UserCircle2, UserPlus,
+  Activity, BarChart3, BookOpen, Bot, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, Clock, Eye, FileText, Images, Inbox, KeyRound,
+  LayoutDashboard, Lightbulb, LogOut, Menu, PanelLeft, Pencil, Plus, Power, Search, Send, Settings2, Sparkles, Trash2,
+  UserCircle2, UserPlus, X,
 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -21,7 +21,8 @@ import { del, errorMessage, post } from '@/lib/api'
 import { isElectronDesktop } from '@/lib/desktop-presentation.js'
 import { currentAccountSettingsPath, DESKTOP_ACCOUNT_CREATE_READY, DESKTOP_ACCOUNT_CREATE_REQUEST, DESKTOP_ACCOUNT_SWITCHER_READY, DESKTOP_ACCOUNT_SWITCHER_REQUEST, releaseDesktopLeaveGuard, requestDesktopLeaveGuard } from '@/lib/desktop-settings'
 import { commonSettingsPaths, settingsEntries } from '@/lib/settings-registry'
-import { fmtTime } from '@/lib/format'
+import { SessionExpiryBanner } from './session-expiry-banner'
+import { flushWork } from '@/pages/work/work-save'
 import { TodayUsage, useChromeMeta } from './today-usage'
 import DesktopStatusBar from './DesktopStatusBar'
 import { rememberAccount, useAccounts, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
@@ -46,11 +47,39 @@ const desktopNavGroups = [
   { label: '运营', items: [nav[2], nav[6], nav[7]] },
 ]
 
+// GL-01：移动端底部导航只放 4 个主入口，其余一级页收进「更多」抽屉。
+// 过去底部导航只有 4 项 + 通知，手机用户到不了素材库/复盘/运营/日历/图片库/设置。
 const mobileNav: { path: string; icon: typeof LayoutDashboard; label: string }[] = [
   { path: '', icon: LayoutDashboard, label: '工作台' },
   { path: '/topics?tab=inbox', icon: Inbox, label: '收件箱' },
   { path: '/works', icon: FileText, label: '作品' },
-  { path: '/works?status=ready', icon: Send, label: '发布' },
+  { path: '/works?status=ready', icon: Send, label: '待发布' },
+]
+
+// GL-07：「发布」原本落到筛选列表且行点击进编辑器；改称「待发布」，并在 ready 行提供「去发布」直达推送/发布包。
+
+type MobileMoreItem = { path: string; icon: typeof LayoutDashboard; label: string; scoped?: boolean }
+const mobileMoreGroups: { label: string; items: MobileMoreItem[] }[] = [
+  {
+    label: '创作', items: [
+      { path: '/topics', icon: Lightbulb, label: '选题池', scoped: true },
+      { path: '/calendar', icon: CalendarDays, label: '内容日历', scoped: true },
+      { path: '/agent', icon: Bot, label: 'AI 对话' },
+    ],
+  },
+  {
+    label: '资源', items: [
+      { path: '/materials', icon: BookOpen, label: '素材库', scoped: true },
+      { path: '/images', icon: Images, label: '图片库' },
+      { path: '/profile', icon: UserCircle2, label: '账号档案', scoped: true },
+    ],
+  },
+  {
+    label: '运营', items: [
+      { path: '/ops', icon: Activity, label: '运营', scoped: true },
+      { path: '/review', icon: BarChart3, label: '复盘', scoped: true },
+    ],
+  },
 ]
 
 // GL-02：用户菜单只列 Web 可见项；桌面端点击"设置…"打开设置窗，不走这里的分组。
@@ -408,20 +437,54 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   const switchAccount = async (id: string, sub = '') => {
     const identity = identityRef.current
     if (!identity) return
-    if (desktop && !(await requestDesktopLeaveGuard(true))) return
+    if (desktop && !(await requestDesktopLeaveGuard(true))) {
+      releaseDesktopLeaveGuard()
+      return
+    }
     if (identityRef.current?.userId !== identity.userId || identityRef.current?.workspaceId !== identity.workspaceId) {
+      if (desktop) releaseDesktopLeaveGuard()
       toast.info('登录用户或工作区已变化，请重新选择账号。')
       return
     }
     if (!accounts?.some((account) => account.id === id && account.status === 'active')) {
+      if (desktop) releaseDesktopLeaveGuard()
       toast.info('该账号当前不可用，请从顶部重新选择。')
       return
     }
     setOpen(false)
-    if (loc.pathname.startsWith('/works/') || loc.pathname.startsWith('/settings/')) {
-      navigate(`/a/${id}${sub}`)
+    const onWork = loc.pathname.startsWith('/works/')
+    if (onWork) {
+      const goList = await confirm({
+        title: '切换账号？',
+        desc: '当前作品属于原账号。切换后可以回到新账号的作品列表；也可以取消切换，继续编辑当前作品。',
+        confirmText: '切换并回到作品列表',
+        cancelText: '不切换，继续当前作品',
+      })
+      if (!goList) {
+        if (desktop) releaseDesktopLeaveGuard()
+        toast.info('账号未切换；当前作品仍属于原账号。')
+        return
+      }
+      try {
+        const workId = loc.pathname.match(/^\/works\/([^/?#]+)/)?.[1]
+        if (workId) await flushWork(workId)
+      } catch (e) {
+        if (desktop) releaseDesktopLeaveGuard()
+        toast.error(`保存当前作品失败，账号未切换：${errorMessage(e)}`)
+        return
+      }
+      rememberAccount(id, identity.userId, identity.workspaceId)
+      navigate(`/a/${id}/works`)
       return
     }
+    // 设置页不依赖账号路由；更新记忆的账号即可保留当前设置子页。
+    if (loc.pathname.startsWith('/settings/')) {
+      rememberAccount(id, identity.userId, identity.workspaceId)
+      if (desktop) releaseDesktopLeaveGuard()
+      toast.success(`已切换到${accounts.find((account) => account.id === id)?.name ?? '所选账号'}，保留当前设置页。`)
+      return
+    }
+    rememberAccount(id, identity.userId, identity.workspaceId)
     const m = loc.pathname.match(/^\/a\/[^/]+(\/[^/]+)?/)
     navigate(`/a/${id}${sub || m?.[1] || ''}`)
   }
@@ -429,16 +492,37 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   const switchWorkspace = async (id: string) => {
     if (id === me.workspace.id || busy) return
     setBusy(true)
-    if (desktop && !(await requestDesktopLeaveGuard(true))) { setBusy(false); return }
-    if (identityRef.current?.workspaceId !== me.workspace.id) { setBusy(false); return }
+    if (desktop && !(await requestDesktopLeaveGuard(true))) {
+      releaseDesktopLeaveGuard()
+      setBusy(false)
+      return
+    }
+    if (identityRef.current?.workspaceId !== me.workspace.id) {
+      if (desktop) releaseDesktopLeaveGuard()
+      setBusy(false)
+      return
+    }
+    // GL-04：Web 端过去直接 window.location.reload()，会整页闪白并丢掉页面位置、
+    // 筛选与未提交字段。现在先 flush 编辑器缓冲，再 qc.clear() + 路由跳转（SPA 内切换）。
+    const workMatch = loc.pathname.match(/^\/works\/([^/?#]+)/)
+    if (workMatch) {
+      try {
+        await flushWork(workMatch[1])
+      } catch (e) {
+        if (desktop) releaseDesktopLeaveGuard()
+        toast.error(`切换前保存失败：${errorMessage(e)}`)
+        setBusy(false)
+        return
+      }
+    }
     try {
       await post(`/workspaces/${id}/switch`, {})
       qc.clear()
       setOpen(false)
       navigate('/', { replace: true })
-      window.location.reload()
-    } catch {
+    } catch (e) {
       if (desktop) releaseDesktopLeaveGuard()
+      toast.error(`切换工作区失败：${errorMessage(e)}`)
       setBusy(false)
     }
   }
@@ -501,8 +585,16 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       confirmText: '创建并切换',
     }))) return
     setBusy(true)
-    if (desktop && !(await requestDesktopLeaveGuard(true))) { setBusy(false); return }
-    if (identityRef.current?.workspaceId !== me.workspace.id) { setBusy(false); return }
+    if (desktop && !(await requestDesktopLeaveGuard(true))) {
+      releaseDesktopLeaveGuard()
+      setBusy(false)
+      return
+    }
+    if (identityRef.current?.workspaceId !== me.workspace.id) {
+      if (desktop) releaseDesktopLeaveGuard()
+      setBusy(false)
+      return
+    }
     try {
       await post('/workspaces', { name: '新工作区', switch: true })
       qc.clear()
@@ -840,7 +932,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
           })
           void inv(['accounts'])
           rememberAccount(account.id, target.userId, target.workspaceId)
-          toast.success(account.platform === 'wechat_mp' ? '账号已添加，先建档；公众号凭证可稍后配置' : '账号已添加，先来建档')
+          toast.success(account.platform === 'wechat_mp' ? '账号已添加，先建档；公众号凭证可稍后配置' : '账号已添加，先来建档', { id: 'account-create-success' })
           navigate(`/a/${account.id}/profile?wizard=1`)
         }}
       />}
@@ -856,7 +948,10 @@ function TopBar({ username, onLogout, dense, showAgent, agentMode, homeTo, deskt
 
   return (
     <header className={cn(
-      'desktop-global-header sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b border-mist-200/80 bg-white/90 px-3 backdrop-blur sm:gap-3 sm:px-5 xl:px-7', dense && 'work-topbar',
+      // GL-05：顶栏自带账号/工作区下拉，必须高于页面级粘性头（作品页 .work-header 同为 z-20，
+      // 且 DOM 更靠后，会把下拉整段压住导致账号点不到）。desktop-creative.css 的侧边栏注释
+      // 也按「顶栏为 30」对齐，这里补上缺的 10。
+      'desktop-global-header sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-mist-200/80 bg-white/90 px-3 backdrop-blur sm:gap-3 sm:px-5 xl:px-7', dense && 'work-topbar',
     )}>
       {document.documentElement.dataset.presentation === 'ops-creative-desktop' && (
         <>
@@ -925,6 +1020,14 @@ export default function Shell() {
   const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const [desktopNavExpanded, setDesktopNavExpanded] = useState(() => desktopPresentation && localStorage.getItem('ops-desktop-nav') === 'expanded')
   const [timeNow, setTimeNow] = useState(() => Date.now())
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
+  // GL-01：更多菜单既覆盖账号页，也覆盖全局页；全局入口不能错误拼到 /a/:id 下。
+  const mobileMoreActive = mobileMoreGroups.some((group) => group.items.some((item) => {
+    if (item.path === '/agent' && !showAgent) return false
+    const href = item.scoped ? `${base}${item.path}` : item.path
+    return loc.pathname === href
+  })) || loc.pathname.startsWith('/settings/')
+
   useEffect(() => {
     const timer = window.setInterval(() => setTimeNow(Date.now()), 60_000)
     return () => window.clearInterval(timer)
@@ -943,7 +1046,10 @@ export default function Shell() {
   }, [agentMode])
   const focus = focusMode && fullBleed
   const logout = async () => {
-    if (desktopPresentation && !(await requestDesktopLeaveGuard(true))) return
+    if (desktopPresentation && !(await requestDesktopLeaveGuard(true))) {
+      releaseDesktopLeaveGuard()
+      return
+    }
     await post('/auth/logout').catch(() => undefined)
     qc.clear()
     location.href = '/login'
@@ -991,9 +1097,17 @@ export default function Shell() {
           return next
         })} />}
         {me?.session_expires_at && Date.parse(me.session_expires_at) > timeNow && Date.parse(me.session_expires_at) - timeNow < 24 * 60 * 60 * 1000 && (
-          <div role="status" className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12.5px] text-gamboge-800">
-            会话将于 {fmtTime(me.session_expires_at, true)} 到期，请先保存后重新登录以续期。
-          </div>
+          <SessionExpiryBanner
+            expiresAt={me.session_expires_at}
+            onRenewed={() => qc.invalidateQueries({ queryKey: ['me'] })}
+            onBeforeLogout={async () => {
+              if (!desktopPresentation) return true
+              const allowed = await requestDesktopLeaveGuard(true)
+              if (!allowed) releaseDesktopLeaveGuard()
+              return allowed
+            }}
+            onLogoutFailure={() => { if (desktopPresentation) releaseDesktopLeaveGuard() }}
+          />
         )}
         {me?.admin_override && (
           <div className="flex items-center justify-center gap-3 border-b border-danger/30 bg-danger/10 px-5 py-2 text-[12.5px] text-danger">
@@ -1040,7 +1154,12 @@ export default function Shell() {
         <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-mist-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden" aria-label="底部导航">
           {mobileNav.map((n) => {
             const [path, query] = n.path.split('?')
-            const active = loc.pathname === `${base}${path}` && (!query || loc.search.includes(query))
+            const workRoute = n.path === '/works' && loc.pathname.startsWith('/works/')
+            const active = workRoute || (
+              loc.pathname === `${base}${path}`
+              && (!query || loc.search.includes(query))
+              && !(n.path === '/works' && loc.search.includes('status=ready'))
+            )
             return (
               <Link key={n.path || 'home'} to={`${base}${n.path}`}
                 className={cn('flex flex-col items-center gap-0.5 py-2 text-[10.5px]', active ? 'font-semibold text-ink-700' : 'text-mist-500')}>
@@ -1049,12 +1168,55 @@ export default function Shell() {
               </Link>
             )
           })}
-          <button type="button" onClick={() => window.dispatchEvent(new Event('ops:notifications'))}
-            className="flex cursor-pointer flex-col items-center gap-0.5 py-2 text-[10.5px] text-mist-500">
-            <Bell className="size-5" strokeWidth={1.8} />
-            通知
+          <button type="button" onClick={() => setMobileMoreOpen(true)} aria-label="更多导航"
+            className={cn('flex cursor-pointer flex-col items-center gap-0.5 py-2 text-[10.5px]', mobileMoreActive ? 'font-semibold text-ink-700' : 'text-mist-500')}>
+            <Menu className="size-5" strokeWidth={1.8} />
+            更多
           </button>
         </nav>
+      )}
+      {mobileMoreOpen && acc && (
+        <div className="fixed inset-0 z-40 flex items-end md:hidden" role="dialog" aria-label="更多导航" aria-modal="true">
+          <div className="absolute inset-0 bg-mist-900/30" onClick={() => setMobileMoreOpen(false)} />
+          <div className="scrollbar-thin relative max-h-[76vh] w-full overflow-y-auto rounded-t-2xl border-t border-mist-200 bg-white pb-[calc(16px+env(safe-area-inset-bottom))]">
+            <div className="flex items-center justify-between border-b border-mist-100 px-5 py-3">
+              <h2 className="font-display text-[15px] font-bold text-mist-900">全部页面</h2>
+              <button type="button" onClick={() => setMobileMoreOpen(false)} className="cursor-pointer rounded-md p-1.5 text-mist-400 hover:bg-mist-100" aria-label="关闭">
+                <X className="size-4" />
+              </button>
+            </div>
+            {mobileMoreGroups.map((group) => (
+              <div key={group.label} className="px-5 pt-3">
+                <div className="mb-1.5 text-[11px] font-semibold tracking-[0.16em] text-mist-400">{group.label}</div>
+                <div className="grid grid-cols-4 gap-2">
+                  {group.items.filter((item) => item.path !== '/agent' || showAgent).map((item) => {
+                    const href = item.scoped ? `${base}${item.path}` : item.path
+                    const active = loc.pathname === href
+                    return (
+                      <Link key={item.path} to={href} onClick={() => setMobileMoreOpen(false)}
+                        className={cn('flex flex-col items-center gap-1 rounded-xl px-1 py-2.5 text-[11px]', active ? 'bg-ink-50 font-semibold text-ink-700' : 'text-mist-600')}>
+                        <item.icon className="size-5" strokeWidth={1.8} />
+                        <span className="truncate">{item.label}</span>
+                      </Link>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+            <div className="mt-3 border-t border-mist-100 px-5 pt-3">
+              <div className="mb-1.5 text-[11px] font-semibold tracking-[0.16em] text-mist-400">设置</div>
+              <div className="grid grid-cols-4 gap-2">
+                {settingsItems.filter((item) => !item.adminOnly || me?.is_system_admin).map((item) => (
+                  <Link key={item.to} to={item.to} onClick={() => setMobileMoreOpen(false)}
+                    className={cn('flex flex-col items-center gap-1 rounded-xl px-1 py-2.5 text-[11px]', loc.pathname === item.to ? 'bg-ink-50 font-semibold text-ink-700' : 'text-mist-600')}>
+                    {item.icon}
+                    <span className="truncate">{item.label}</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
       <CommandPaletteHost />
       <CreateWorkPanel />

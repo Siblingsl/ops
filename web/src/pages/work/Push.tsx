@@ -10,6 +10,7 @@ import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, PageState, Switch } from '@/components/ui'
 import { ApiError, errorMessage, get, post, stream } from '@/lib/api'
 import { runeLen } from '@/lib/format'
+import { HTML_BYTE_LIMIT, HTML_CHAR_LIMIT } from '@/lib/render'
 import { useCanWrite } from '@/lib/session'
 import type { CredState, CropBox, WechatDefaults, Work } from '@/lib/types'
 import { useWechatHtml } from '@/lib/wechat-html'
@@ -60,7 +61,8 @@ export default function Push() {
   // D-048：图文卡片与漫画一样写入图片消息草稿。
   const comic = work.content_format === 'comic' || work.content_format === 'card_post'
   const pv = useQuery({ queryKey: ['push-preview', work.id, work.status, work.revision], queryFn: () => get<PushPreview>(`/works/${work.id}/wechat/push-preview`), enabled: work.platform === 'wechat_mp' })
-  const { html, chars } = useWechatHtml(work)
+  const { html, chars, bytes } = useWechatHtml(work)
+  const htmlTooLarge = !comic && (chars >= HTML_CHAR_LIMIT || bytes >= HTML_BYTE_LIMIT)
   const [fields, setFields] = useState<WechatDefaults | null>(null)
   const [steps, setSteps] = useState<Record<string, StepState>>({})
   const [running, setRunning] = useState(false)
@@ -90,6 +92,15 @@ export default function Push() {
   const setF = (patch: Partial<WechatDefaults>) => setFields({ ...f, ...patch })
   const cover = work.assets.find((a) => a.id === p.cover_asset)
   const credOk = p.credential?.state === 'ok' || p.credential?.state === 'unchecked'
+  // PB-03：按钮禁用时必须能就地看到原因，不能只靠 disabled 猜。
+  const blockers: string[] = []
+  if (!canWrite) blockers.push('观察者只读，不能写入草稿')
+  if (!credOk) blockers.push('公众号凭证不可用，需要先在「设置 → 平台账号」重新授权')
+  if (htmlTooLarge) blockers.push('排版后正文超出公众号体积上限，需要缩短正文或减少排版')
+  if (runeLen(f.author) > 16) blockers.push(`作者名 ${runeLen(f.author)} 字，超过 16 字上限`)
+  if (!comic && !cover) blockers.push('还没有设置封面')
+  if (comic && !(p.panel_images && p.panel_images > 0)) blockers.push('图片消息还没有任何图片')
+  const canPushNow = blockers.length === 0
 
   const push = async (overwrite: '' | 'overwrite' | 'new' = '', confirmOver = false): Promise<void> => {
     setRunning(true)
@@ -171,12 +182,22 @@ export default function Push() {
           <Link to={`/works/${work.id}/preview`} className="inline-flex items-center rounded-lg border border-mist-200 px-3 py-2 text-xs font-medium text-mist-700 hover:bg-mist-50">看排版</Link>
           {!result && work.status !== 'published' ? (
             <Button size="sm" variant="human" loading={running}
-              disabled={!canWrite || !credOk || runeLen(f.author) > 16 || (!comic && !cover) || (comic && !(p.panel_images && p.panel_images > 0))}
+              disabled={!canPushNow}
               onClick={() => push()} icon={<Send className="size-4" />}>
               {p.mode === 'overwrite' ? '更新草稿' : comic ? '写入图片消息草稿' : '写入草稿箱'}
             </Button>
           ) : result && work.status !== 'published' ? (
-            <Button size="sm" variant="primary" onClick={() => { setResult(null); setSteps({}) }}>再次写入（更新草稿）</Button>
+            <Button size="sm" variant="primary" disabled={htmlTooLarge} onClick={async () => {
+              // PB-07：再次写入会覆盖平台原草稿，点击前先说清覆盖范围。
+              if (!(await confirm({
+                title: '覆盖公众号里的原草稿？',
+                desc: '会用当前正文、标题、封面和文章设置覆盖作品关联的那篇草稿；草稿箱里的其它草稿不受影响。如果你想保留原草稿，请到公众号后台另存。',
+                confirmText: '覆盖原草稿',
+                danger: true,
+              }))) return
+              setResult(null)
+              setSteps({})
+            }}>再次写入（覆盖原草稿）</Button>
           ) : null}
         </div>
       </WorkHeaderAction>
@@ -228,6 +249,31 @@ export default function Push() {
                 今日已写入 {p.today_count} / {p.daily_limit}
               </span>
             </div>
+            {htmlTooLarge && <Notice tone="red" className="mb-4">
+              排版后的正文超出公众号限制：{chars.toLocaleString()} / {HTML_CHAR_LIMIT.toLocaleString()} 字符，{bytes.toLocaleString()} / {HTML_BYTE_LIMIT.toLocaleString()} 字节（1 MiB）。请缩短正文或减少排版内容后重试。<Link to={`/works/${work.id}/preview`} className="ml-1 underline">查看排版</Link>
+            </Notice>}
+            {/* PB-03：写入按钮禁用时就地列出全部原因，并给出对应出口。 */}
+            {blockers.length > 0 && (
+              <Notice tone="gamboge" className="mb-4">
+                <div className="font-medium">还不能写入草稿，先处理这几项：</div>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                  {blockers.map((b) => <li key={b}>{b}</li>)}
+                </ul>
+                <div className="mt-2 flex flex-wrap gap-3 text-[12.5px]">
+                  {!credOk && <Link to="/settings/accounts" className="underline">去重新授权公众号</Link>}
+                  {!comic && !cover && <Link to={`/works/${work.id}#step-images`} className="underline">去设置封面</Link>}
+                  {htmlTooLarge && <Link to={`/works/${work.id}/preview`} className="underline">查看排版体积</Link>}
+                </div>
+              </Notice>
+            )}
+            {/* PB-04：已写入/已发布后作品默认只读，这里直接给"改错了"的出口。 */}
+            {work.locked && (
+              <Notice tone="gray" className="mb-4">
+                这篇作品已在平台上发表，作品页默认只读。需要修改时先解锁编辑，再重新检查、写入草稿；
+                <span className="font-medium">解锁后修改不会同步到平台上已发表的内容。</span>
+                <Link to={`/works/${work.id}`} className="ml-1 underline">去作品页解锁编辑</Link>
+              </Notice>
+            )}
             <div className="flex gap-5">
               {comic ? (
                 <div className="w-56 shrink-0">
@@ -260,7 +306,7 @@ export default function Push() {
                 {!comic && <Row label="摘要">{p.summary || <span className="text-mist-400">（留空，微信自动抓取正文前 54 字）</span>}</Row>}
                 <Row label="正文">{comic
                   ? <>图片消息 · {p.panel_images ?? 0} 张图 · 纯文本旁白/对白</>
-                  : <>{work.sections.length} 段 · {p.asset_count} 张图片 · HTML {chars.toLocaleString()} 字符</>}</Row>
+                  : <>{work.sections.length} 段 · {p.asset_count} 张图片 · HTML {chars.toLocaleString()} 字符 / {bytes.toLocaleString()} 字节</>}</Row>
                 <Row label="凭证">{credOk ? <span className="text-ink-700">AppID {p.credential?.app_id}</span> : <span className="text-danger">凭证不可用，<Link to="/settings/accounts" className="underline">去设置</Link></span>}</Row>
               </dl>
             </div>

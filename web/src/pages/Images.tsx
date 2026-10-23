@@ -43,6 +43,28 @@ export default function ImagesPage() {
   const visibleList = desktopPresentation && imageQuery.trim()
     ? list.filter((asset) => `${asset.alt_text} ${asset.work_title} ${asset.account_name}`.toLocaleLowerCase().includes(imageQuery.trim().toLocaleLowerCase()))
     : list
+  // MT-03：图库本身要能直接复用，不必记住图片再切回编辑器找一遍。
+  // 带 ?work= 进来时（作品筛选或编辑器「从图片库选择」），详情里就能把这张图加进那篇作品。
+  const targetWorkId = workId && open && open.work_id !== workId ? workId : ''
+  const targetWorkTitle = works.find(([id]) => id === targetWorkId)?.[1] ?? ''
+  const [reusing, setReusing] = useState(false)
+  const reuseInto = async () => {
+    if (!open || !targetWorkId) return
+    setReusing(true)
+    try {
+      await post(`/works/${targetWorkId}/assets/reuse`, { asset_id: open.id })
+      void qc.invalidateQueries({ queryKey: ['library', 'page'] })
+      void qc.invalidateQueries({ queryKey: ['work', targetWorkId] })
+      toast.success(`已加入《${targetWorkTitle || '未命名'}》的图片`)
+    } catch (e) { toast.error(errorMessage(e)) } finally { setReusing(false) }
+  }
+  const copyURL = async () => {
+    if (!open) return
+    try {
+      await navigator.clipboard.writeText(open.url)
+      toast.success('已复制图片链接')
+    } catch { toast.error('浏览器不允许自动复制，请右键图片选择「复制图片地址」。') }
+  }
 
   return (
     <div className={cn('animate-fade-in', desktopPresentation ? 'desktop-image-page' : 'mx-auto max-w-6xl')}>
@@ -113,9 +135,20 @@ export default function ImagesPage() {
                   finally { setSavingAlt(false) }
                 }}>保存替代文字</Button>
             </div>}
-            <Link to={`/works/${open.work_id}`}><Button variant={canWrite ? 'secondary' : 'primary'} icon={<ExternalLink className="size-3.5" />}>打开所在作品</Button></Link>
+            <div className="flex flex-wrap items-center gap-2">
+              {canWrite && targetWorkId && (
+                <Button variant="primary" loading={reusing} disabled={reusing} data-testid="image-reuse-into-work" onClick={() => void reuseInto()}>加入《{targetWorkTitle || '当前作品'}》</Button>
+              )}
+              <Button variant="ghost" onClick={() => void copyURL()}>复制图片链接</Button>
+              <Link to={`/works/${open.work_id}`}><Button variant="secondary" icon={<ExternalLink className="size-3.5" />}>打开所在作品</Button></Link>
+            </div>
           </div>}>
           <img src={open.url} alt={open.alt_text || ''} className="max-h-[55vh] w-full rounded-lg object-contain" />
+          <p className="mt-2 text-[12px] text-mist-500" data-testid="image-source">
+            来自《{open.work_title || '未命名'}》{open.account_name ? ` · ${open.account_name}` : ''}。{targetWorkId
+              ? `可以直接加入《${targetWorkTitle || '当前作品'}》，同一张图不会重复占用上传额度。`
+              : '要在别的作品里复用，先在作品编辑器里点「从图片库选择」。'}
+          </p>
           <div className="mt-4 space-y-2">
             <label htmlFor="image-alt-text" className="text-[13px] font-medium text-mist-700">替代文字</label>
             {canWrite

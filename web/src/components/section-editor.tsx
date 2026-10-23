@@ -91,7 +91,8 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
     replaceSelection: (text) => {
       if (!editor) return
       const { from, to } = editor.state.selection
-      if (from === to) editor.commands.setContent(text)
+      // ED-09：没有选区时是「插入」，绝不能 setContent——那会把整段正文换成一句 AI 建议。
+      if (from === to) editor.chain().focus().insertContentAt(from, text).run()
       else editor.chain().focus().insertContentAt({ from, to }, text).run()
       onChangeRef.current((editor.storage as any).markdown.getMarkdown())
     },
@@ -184,7 +185,8 @@ export const PlainEditor = forwardRef<EditorHandle, Props>(function PlainEditor(
       const el = ta.current
       if (!el) return
       const [a, b] = sel.current
-      el.value = a === b ? text : el.value.slice(0, a) + text + el.value.slice(b)
+      // ED-09：没有选区时是「插入」，不能把整段正文替换成一句 AI 建议。
+      el.value = el.value.slice(0, a) + text + el.value.slice(b)
       onChange(el.value)
       grow()
     },

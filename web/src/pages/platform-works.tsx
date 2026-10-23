@@ -6,6 +6,7 @@ import { Dialog } from '@/components/dialog'
 import { Button, Empty, Input, PageLoading } from '@/components/ui'
 import { errorMessage, get, post, put } from '@/lib/api'
 import { relTime } from '@/lib/format'
+import { contentStateLabel, fieldNameLabel, fieldStateLabel, platformErrorCopy } from '@/lib/platform-errors'
 import { requestDesktopPlatformIntent } from '@/lib/desktop-platform-intent'
 import { useMe } from '@/lib/session'
 import type { Account, PlatformConnection, PlatformSyncOperation, PlatformWorkMirror, PlatformWorkMirrorListItem, PlatformWorkMirrorPage, Work, WorkListItem } from '@/lib/types'
@@ -51,6 +52,19 @@ export function mirrorDraftBlockReason(mirror: PlatformWorkMirror, account: Acco
     return '当前小红书账号类型不支持该作品体裁。'
   }
   return null
+}
+
+// WL-04：被阻止的转换按原因给出修复出口，避免只显示灰色说明。
+function mirrorDraftRepair(mirror: PlatformWorkMirror): { to?: string; href?: string; label: string } {
+  const linked = mirror.bindings[0]
+  if (mirror.is_bound || linked) return linked
+    ? { to: `/works/${linked.work_id}`, label: '打开关联作品' }
+    : { to: '/works', label: '查看关联作品' }
+  if (mirror.remote_status !== 'published') return mirror.canonical_url
+    ? { href: mirror.canonical_url, label: '在平台核对发布状态' }
+    : { to: '/settings/accounts', label: '检查平台账号' }
+  if (mirror.content_state !== 'complete' || !mirror.body_text.trim()) return { to: '/settings/accounts', label: '检查账号连接并重试同步' }
+  return { to: '/works?create=1', label: '新建作品并手动整理正文' }
 }
 
 function PlatformMirrorLinkDialog({ account, mirror, onClose, onLinked }: {
@@ -168,6 +182,7 @@ function MirrorDetail({ account, mirrorID, canWrite, onClose, onLink, onCreateDr
   }, [metricOperation.data?.operation.status])
   const mirror = query.data
   const draftBlockReason = mirror ? mirrorDraftBlockReason(mirror, account) : null
+  const draftRepair = mirror && draftBlockReason ? mirrorDraftRepair(mirror) : null
   const latestMetric = mirror?.metric_observations[0]
   return (
     <Dialog open onClose={onClose} title={mirror?.title || '平台作品详情'} desc="此处展示同步到当前工作区的镜像；正文与统计不会自动进入本地发布状态。" width="max-w-4xl">
@@ -188,16 +203,26 @@ function MirrorDetail({ account, mirrorID, canWrite, onClose, onLink, onCreateDr
           <div><dt className="text-mist-500">统计截止时间</dt><dd className="mt-1">{dateText(latestMetric?.as_of_at)}</dd></div>
           <div><dt className="text-mist-500">统计读取时间</dt><dd className="mt-1">{dateText(latestMetric?.observed_at)}</dd></div>
         </dl>
-        {mirror.content_error_code && <p className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-orange-800">正文同步原因：{mirror.content_error_code}</p>}
+        {/* PB-13：字段状态与错误码走中文映射，让用户能判断是平台不给、解析失败还是权限问题。 */}
+        {mirror.content_error_code && <p className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-orange-800" data-testid="mirror-content-error">
+          正文同步原因：{platformErrorCopy(mirror.content_error_code)?.title ?? '同步遇到未预期的问题'}
+          {platformErrorCopy(mirror.content_error_code)?.hint ? ` — ${platformErrorCopy(mirror.content_error_code)!.hint}` : ''}
+        </p>}
         <section>
           <h3 className="mb-2 font-semibold text-mist-900">字段完整性</h3>
-          <div className="flex flex-wrap gap-2">{Object.entries(mirror.field_coverage).map(([field, state]) =>
-            <span key={field} className="rounded border border-mist-200 px-2 py-1 text-xs">{field}：{state}</span>)}</div>
+          <div className="flex flex-wrap gap-2" data-testid="mirror-field-coverage">{Object.entries(mirror.field_coverage).map(([field, state]) =>
+            <span key={field} className="rounded border border-mist-200 px-2 py-1 text-xs" title={`${field}：${state}`}>
+              {fieldNameLabel(field)}：{fieldStateLabel(state)}
+            </span>)}</div>
         </section>
         <section>
           <h3 className="mb-2 font-semibold text-mist-900">正文</h3>
           {mirror.body_text ? <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-mist-200 bg-white p-4 font-sans leading-7">{mirror.body_text}</pre>
-            : <p className="rounded-lg bg-mist-50 p-4 text-mist-500">平台没有提供可显示的完整正文；摘要不会替代正文。</p>}
+            : <div className="rounded-lg bg-mist-50 p-4 text-mist-500">
+              <p>{contentStateLabel(mirror.content_state)}；摘要不会替代正文。</p>
+              {/* PB-13：平台不给正文时给出补录入口，而不是只留一句「没有正文」。 */}
+              {mirror.content_state !== 'complete' && <p className="mt-1">可以在平台上复制正文后，回到本地作品里手动粘贴补录。</p>}
+            </div>}
         </section>
         {(mirror.topics.length > 0 || mirror.tags.length > 0) && <section>
           <h3 className="mb-2 font-semibold text-mist-900">话题与标签</h3>
@@ -241,7 +266,10 @@ function MirrorDetail({ account, mirrorID, canWrite, onClose, onLink, onCreateDr
           {canWrite && !mirror.bindings.length && !mirror.is_bound && <Button variant="secondary" onClick={() => onLink(mirror)}>关联现有作品</Button>}
           {canWrite && !mirror.is_bound && !mirror.bindings.length && <div className="text-right">
             <Button variant="primary" disabled={!!draftBlockReason} onClick={() => onCreateDraft(mirror)}>基于此作品创建草稿</Button>
-            {draftBlockReason && <p className="mt-1 max-w-sm text-xs text-mist-500">{draftBlockReason}</p>}
+            {draftBlockReason && <p className="mt-1 max-w-sm text-xs text-mist-500">{draftBlockReason}{draftRepair && <>
+              {' '}{draftRepair.to ? <Link to={draftRepair.to} onClick={onClose} className="font-medium text-ink-700 underline">{draftRepair.label}</Link>
+                : <a href={draftRepair.href} target="_blank" rel="noopener noreferrer" className="font-medium text-ink-700 underline">{draftRepair.label}</a>}
+            </>}</p>}
           </div>}
         </div>
       </div> : null}
@@ -376,11 +404,12 @@ export function PlatformWorksView({ account, canWrite }: { account: Account; can
             <div className="flex flex-wrap items-center gap-2"><strong className="truncate font-display text-[15px] text-mist-900">{item.title || '未命名作品'}</strong>
               <span className="rounded-full bg-ink-50 px-2 py-0.5 text-xs text-ink-700">{contentTypeName[item.remote_content_type] ?? item.remote_content_type}</span>
               <span className="rounded-full bg-mist-100 px-2 py-0.5 text-xs text-mist-600">{remoteStatusName[item.remote_status] ?? item.remote_status}</span>
-              <span className="rounded-full bg-mist-100 px-2 py-0.5 text-xs text-mist-600">{contentStateName[item.content_state] ?? item.content_state}</span>
+              <span className="rounded-full bg-mist-100 px-2 py-0.5 text-xs text-mist-600">{contentStateName[item.content_state] ?? contentStateLabel(item.content_state)}</span>
               {item.is_bound && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">已关联</span>}
             </div>
             {item.summary && <p className="mt-1 line-clamp-2 text-[13px] text-mist-600">{item.summary}</p>}
-            {item.content_error_code && <p className="mt-1 text-xs text-orange-700">同步原因：{item.content_error_code}</p>}
+            {/* PB-13：列表里也不显示裸错误码。 */}
+            {item.content_error_code && <p className="mt-1 text-xs text-orange-700">同步原因：{platformErrorCopy(item.content_error_code)?.title ?? '同步遇到未预期的问题'}</p>}
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-mist-500 sm:justify-end">
             <span>发布：{dateText(item.published_at)}</span>

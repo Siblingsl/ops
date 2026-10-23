@@ -12,7 +12,7 @@ import { useMe } from '@/lib/session'
 import { DESKTOP_LOCAL_SETTINGS_REQUEST, useSettingsDraft } from '@/lib/desktop-settings'
 import { requestDesktopPlatformIntent } from '@/lib/desktop-platform-intent'
 import { PlatformSyncDetails } from './platform-sync-details'
-import { Badge, Button, Card, CardHeader, cn, Field, MoreMenu, platformLabel } from './ui'
+import { Badge, Button, Card, CardHeader, cn, Field, MoreMenu, platformLabel, roleReadOnlyHint } from './ui'
 
 // 平台数据连接（D-129 / 20 文档 §14）。页面只展示服务端返回的真实状态：
 // 不推断“已同步”，不把未知显示成 0，也不提供任何批量操作入口。
@@ -543,6 +543,7 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
         className="accent-ink-600"
         checked={connection.auto_collect}
         disabled={!canManage || busy !== '' || accountStatus !== 'active'}
+        title={!canManage ? roleReadOnlyHint.writer : accountStatus !== 'active' ? '账号未启用，暂不能自动采集' : busy !== '' ? '正在处理，请稍候' : undefined}
         onChange={(e) => void patchConnection({
           auto_collect: e.target.checked,
           authorization_revision: connection.authorization_revision,
@@ -553,7 +554,7 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
   </Field>
   const autoAdoptField = <Field label="自动采用（写入正式指标）" hint={autoAdoptDisabledReason()} className={desktopPresentation ? 'desktop-platform-field' : undefined}>
     <label className="flex items-center gap-2 text-[13.5px] text-mist-400">
-      <input type="checkbox" className="accent-ink-600" checked={connection.auto_adopt} disabled readOnly />
+      <input type="checkbox" className="accent-ink-600" checked={connection.auto_adopt} disabled readOnly title={autoAdoptDisabledReason()} />
       {connection.auto_adopt ? '已开启' : '未开启'}
     </label>
   </Field>

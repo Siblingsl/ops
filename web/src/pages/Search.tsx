@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, FileText, Lightbulb, PenTool, Search as SearchIcon, Star } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
@@ -32,26 +32,43 @@ function Highlight({ text, terms }: { text: string; terms: string[] }) {
 /** Search (第 4.2 节): workspace-wide full-text search over works, topics, materials and style samples. */
 export default function SearchPage() {
   const [params, setParams] = useSearchParams()
-  const [q, setQ] = useState(params.get('q') ?? '')
-  const [type, setType] = useState<string>(params.get('type') ?? 'all')
-  const [account, setAccount] = useState('')
-  const [status, setStatus] = useState('')
-  const [days, setDays] = useState('')
+  const query = params.get('q') ?? ''
+  const [q, setQ] = useState(query)
+  // XC-02：筛选条件全部来自 URL，刷新/复制链接都能还原同一组结果。
+  const type = params.get('type') ?? 'all'
+  const account = params.get('account') ?? ''
+  const status = params.get('status') ?? ''
+  const days = params.get('days') ?? ''
   const { data: accounts } = useAccounts()
   const qc = useQueryClient()
-  const query = params.get('q') ?? ''
   const statuses = statusOptions[type] ?? []
-  useEffect(() => setStatus(''), [type])
+  const update = (patch: Record<string, string>) => setParams((prev) => {
+    const next = new URLSearchParams(prev)
+    for (const [key, value] of Object.entries(patch)) {
+      if (value) next.set(key, value)
+      else next.delete(key)
+    }
+    return next
+  }, { replace: true })
+  // 切换类型时清空状态筛选：作品的状态值和选题不通用，留着会查出空列表。
+  const setType = (value: string) => update({ type: value === 'all' ? '' : value, status: '' })
+  const setAccount = (value: string) => update({ account: value })
+  const setStatus = (value: string) => update({ status: value })
+  const setDays = (value: string) => update({ days: value })
   const filters = [type !== 'all' && `types=${type}`, account && `account_id=${account}`, status && `status=${status}`, days && `days=${days}`].filter(Boolean).join('&')
   useEffect(() => {
     const t = window.setTimeout(() => {
-      if (q !== query) setParams((p) => { const n = new URLSearchParams(p); if (q) n.set('q', q); else n.delete('q'); return n }, { replace: true })
+      if (q !== query) update({ q })
     }, 300)
     return () => window.clearTimeout(t)
-  }, [q, query, setParams])
-  const res = useQuery({
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, query])
+  // XC-01：游标分页，每页 40 条；「加载更多」按 next_cursor 继续，不再静默截断。
+  const searchPage = useInfiniteQuery({
     queryKey: ['search-page', query, filters],
-    queryFn: () => get<{ items: SearchHit[] }>(`/search?q=${encodeURIComponent(query)}&limit=60${filters ? `&${filters}` : ''}`),
+    queryFn: ({ pageParam }) => get<{ items: SearchHit[]; next_cursor: string | null }>(`/search?q=${encodeURIComponent(query)}${filters ? `&${filters}` : ''}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}&limit=40`),
+    initialPageParam: '' as string,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled: query.trim().length > 0,
   })
   const stars = useQuery({ queryKey: ['stars'], queryFn: () => get<StarItem[]>('/stars') })
@@ -59,13 +76,13 @@ export default function SearchPage() {
     try {
       if (h.starred) await del(`/stars/${h.type}/${h.id}`)
       else await post('/stars', { object_type: h.type, object_id: h.id })
-      void res.refetch()
+      void searchPage.refetch()
       void qc.invalidateQueries({ queryKey: ['stars'] })
     } catch (e) {
       toast.error(errorMessage(e))
     }
   }
-  const items = res.data?.items ?? []
+  const items = searchPage.data?.pages.flatMap((p) => p.items) ?? []
   return (
     <div className="animate-fade-in">
       <PageHeader title="搜索" desc="在当前工作区的作品、选题、素材和风格样本里查找。按 Ctrl+K 可随时打开快速搜索。" />
@@ -114,7 +131,7 @@ export default function SearchPage() {
             </ul>
           )}
         </Card>
-      ) : res.isLoading ? <div className="flex justify-center py-16"><Spinner /></div> : items.length === 0 ? (
+      ) : searchPage.isLoading ? <div className="flex justify-center py-16"><Spinner /></div> : items.length === 0 ? (
         <Empty icon={<SearchIcon className="size-5" />} title="没有找到相关内容" desc={filters ? '换个说法试试，或放宽筛选条件。' : '换个说法试试，或减少关键词。'}
           action={filters ? <Button onClick={() => { setType('all'); setAccount(''); setStatus(''); setDays('') }}>清除筛选</Button> : <Button onClick={() => setQ('')}>清空关键词</Button>} />
       ) : (
@@ -147,6 +164,13 @@ export default function SearchPage() {
             )
           })}
         </Card>
+      )}
+      {/* XC-01：加载更多按钮 */}
+      {searchPage.isFetchingNextPage && <div className="flex justify-center py-4"><Spinner /></div>}
+      {!searchPage.isFetchingNextPage && searchPage.hasNextPage && (
+        <div className="flex justify-center py-4">
+          <Button variant="outline" onClick={() => void searchPage.fetchNextPage()}>加载更多结果</Button>
+        </div>
       )}
     </div>
   )

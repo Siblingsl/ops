@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom' // AG-01: Added useNavigate for navigation to settings pages
 import { toast } from 'sonner'
 import { AIFeedback } from '@/components/refs'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
@@ -21,6 +21,7 @@ import {
 } from '@/lib/agent'
 import { AgentMarkdown } from '@/lib/agent-markdown'
 import { AgentActionCards } from '@/pages/agent/ActionCards'
+import { browserStore, clearPartial, type PartialStream, readPartial, savePartial } from '@/pages/agent/partial-stream'
 
 const pageSize = 30
 
@@ -253,6 +254,8 @@ export default function Agent() {
   const [runID, setRunID] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedAccount, setSelectedAccount] = useState('')
+  // AG-03：对话创建时绑定的账号。切换后历史仍属于原账号，必须明确提示，不能默默换上下文。
+  const [historyAccount, setHistoryAccount] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [privacyOpen, setPrivacyOpen] = useState(false)
   const [editMessage, setEditMessage] = useState<AgentMessage | null>(null)
@@ -266,6 +269,10 @@ export default function Agent() {
   const [dragging, setDragging] = useState(false)
   const [completedNotice, setCompletedNotice] = useState('')
   const [actionExecuting, setActionExecuting] = useState(false)
+  // AG-04：断流/切页后恢复已生成的部分内容（草稿只放 sessionStorage）。
+  const [recovered, setRecovered] = useState<PartialStream | null>(null)
+  const partialStore = useRef<Storage | null>(null)
+  const partialSavedAt = useRef(0)
 
   const bootstrapData = bootstrap.data
   const canRead = !!bootstrapData && (bootstrapData.can_use || bootstrapData.reason === 'no_model' || bootstrapData.reason === 'not_tested')
@@ -303,6 +310,7 @@ export default function Agent() {
     }
     setSelectedModel(modelKey(conversation.model_provider_id, conversation.model))
     setSelectedAccount(conversation.account_id ?? '')
+    setHistoryAccount(conversation.account_id ?? '')
   }, [conversation?.id, conversation?.model_provider_id, conversation?.model, conversation?.account_id, bootstrapData?.default_model?.provider_id, bootstrapData?.default_model?.model, currentAccount?.id])
 
   useEffect(() => {
@@ -320,6 +328,32 @@ export default function Agent() {
     setFiles([])
     setEditMessage(null)
   }, [conversationId])
+
+  // AG-04：进入对话时先看本地有没有中断前的草稿；服务端整轮结束才落库，
+  // 没有这份草稿，用户切回来只能看到空白等整轮跑完。
+  useEffect(() => {
+    if (partialStore.current === null) partialStore.current = browserStore()
+    if (!conversationId) { setRecovered(null); return }
+    setRecovered(readPartial(partialStore.current, conversationId))
+  }, [conversationId])
+
+  // AG-04：把正在生成的片段写进 sessionStorage；节流到 1 秒，避免每个 delta 都序列化。
+  useEffect(() => {
+    if (!conversationId || !streamText) return
+    const now = Date.now()
+    if (now - partialSavedAt.current < 1000) return
+    partialSavedAt.current = now
+    savePartial(partialStore.current, { conversationId, runId: runID, text: streamText, stage: streamStage, updatedAt: now })
+  }, [conversationId, streamText, streamStage, runID])
+
+  // 服务端已落库出这条助手消息，草稿就不再需要；否则恢复的气泡会与正式消息重复。
+  useEffect(() => {
+    if (!recovered) return
+    const done = baseMessages.some((message) => message.role === 'assistant' && message.run_id && message.run_id === recovered.runId)
+    if (!done && activeRun) return
+    clearPartial(partialStore.current, recovered.conversationId)
+    setRecovered(null)
+  }, [recovered, baseMessages, activeRun])
 
   useEffect(() => {
     if (!streaming) return
@@ -499,10 +533,14 @@ export default function Agent() {
   const accountList = (accounts.data ?? []).filter((account) => account.status === 'active')
   const selectedAccountName = accountList.find((account) => account.id === selectedAccount)?.name || '不指定账号'
   const selectedModelName = selectedModelOption?.model || '选择模型'
+  // AG-03：选了别的账号而历史仍属于原账号时，界面必须说清楚，否则用户以为上下文也跟着换了。
+  const accountSwitched = !!conversationId && !!historyAccount && selectedAccount !== historyAccount
+  const historyAccountName = accountList.find((account) => account.id === historyAccount)?.name || '原账号'
 
   if (bootstrap.isLoading) return <div className="flex h-full items-center justify-center text-sm text-mist-400"><LoaderCircle className="mr-2 size-4 animate-spin" />正在准备智能体…</div>
   if (bootstrap.isError || !bootstrapData) return <div className="m-auto max-w-xl p-6 text-center"><p className="text-sm text-danger">{errorMessage(bootstrap.error)}</p><Button className="mt-3" onClick={() => void bootstrap.refetch()}>重试</Button></div>
-  if (!bootstrapData.can_use && bootstrapData.reason !== 'no_model' && bootstrapData.reason !== 'not_tested') return <Unavailable bootstrap={bootstrapData} />
+  // AG-01: Navigate for unavailability page
+  if (!bootstrapData.can_use && bootstrapData.reason !== 'no_model' && bootstrapData.reason !== 'not_tested') return <Unavailable bootstrap={bootstrapData} navigate={navigate} />
 
   const sidebarSlot = document.getElementById('agent-sidebar-slot')
   const titleSlot = document.getElementById('agent-title-slot')
@@ -579,6 +617,16 @@ export default function Agent() {
                 /></div>}
               </div>})}
               {streamText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card"><AgentMarkdown text={streamText} /></div></div>}
+              {/* AG-04：离开页面时没写完的回复。服务端整轮结束后才落库，这里先把已生成的部分显示出来，
+                  并说明「服务端仍在继续」，避免用户以为内容丢了而重新发一遍。 */}
+              {!streamText && recovered && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card">
+                <AgentMarkdown text={recovered.text} />
+                <div className="mt-2 border-t border-mist-200 pt-2 text-[12px] text-mist-500" data-testid="agent-partial-note">
+                  {busy || activeRun
+                    ? '这是上次离开页面时已生成的部分，服务端仍在继续，完成后会补全这条回复。'
+                    : '这是上次中断时已生成的部分。这一轮没有正常结束，可以点下方「继续」让智能体接着做。'}
+                </div>
+              </div></div>}
             </div>
             <div ref={bottomRef} />
           </div>
@@ -647,6 +695,11 @@ export default function Agent() {
               {accountList.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
             </Select>
           </label>
+          {/* AG-03：历史消息按创建时的账号保存，切换账号不会改写已发生的对话。 */}
+          {accountSwitched && <div data-testid="agent-account-switched"><Notice tone="gamboge">
+            新消息将使用「{selectedAccountName}」，当前对话的历史仍属于「{historyAccountName}」。想从干净的上下文开始，请新建对话。
+            <div className="mt-2"><Button type="button" size="sm" variant="outline" onClick={() => { setSettingsOpen(false); newConversation() }}>新建对话</Button></div>
+          </Notice></div>}
         </div>
       </Dialog>
       <Dialog open={privacyOpen} onClose={() => { setPrivacyOpen(false); savePrefs.mutate({ agent_privacy_notice_seen: true }) }} title="智能体隐私说明" desc="对话仅你本人可见。工作区所有者和系统管理员也无法查看你的对话；卡片执行会照常写入操作日志，并标记为来自智能体。" footer={<Button variant="primary" onClick={() => { setPrivacyOpen(false); savePrefs.mutate({ agent_privacy_notice_seen: true }) }}>我知道了</Button>}>
@@ -667,9 +720,61 @@ function Welcome({ onPrompt, noModel }: { onPrompt: (value: string) => void; noM
   </div>
 }
 
-function Unavailable({ bootstrap }: { bootstrap: AgentBootstrap }) {
-  const message = bootstrap.reason === 'admin_override' ? '代访问期间不能使用智能体'
-    : bootstrap.reason === 'viewer_disabled' ? '所有者已关闭观察者使用智能体' : '所有者已关闭智能体'
-  return <div className="flex h-full items-center justify-center p-6"><div className="max-w-md rounded-2xl border border-mist-200 bg-white p-8 text-center shadow-card"><Bot className="mx-auto size-8 text-mist-300" /><h1 className="mt-3 text-lg font-semibold text-mist-800">{message}</h1><p className="mt-2 text-sm text-mist-500">如需使用，请联系工作区所有者。</p></div></div>
+function Unavailable({ bootstrap, navigate }: { bootstrap: AgentBootstrap; navigate: ReturnType<typeof useNavigate> }) {
+  // AG-01 & AG-05：智能体不可用时给出「去开启/去配置」出口，按原因和角色分别给按钮直达对应设置页
+  const reason = bootstrap.reason
+  const isOwner = bootstrap.role === 'owner'
+  const goToAgentSettings = () => navigate('/settings/agent')
+  const goToModelSettings = () => navigate('/settings/models')
+
+  let title = ''
+  let subtitle = ''
+  let actionButton = null
+
+  if (reason === 'admin_override') {
+    title = '代访问期间不能使用智能体'
+    subtitle = '切换回原身份后可正常使用。'
+  } else if (reason === 'viewer_disabled') {
+    title = '所有者已关闭观察者使用智能体'
+    subtitle = isOwner
+      ? '作为所有者，你可以到设置页自行开启。'
+      : '请联系工作区所有者开启观察者权限。'
+    actionButton = isOwner && (
+      <button type="button" onClick={goToAgentSettings} className="inline-flex mt-3 cursor-pointer items-center gap-1 rounded-md bg-ink-600 px-3 py-2 text-[13px] text-white shadow hover:bg-ink-700">
+        去智能体设置
+      </button>
+    )
+  } else if (reason === 'disabled') {
+    title = '所有者已关闭智能体'
+    subtitle = isOwner
+      ? '作为所有者，你可以到设置页自行开启。'
+      : '请联系工作区所有者开启。'
+    actionButton = isOwner && (
+      <button type="button" onClick={goToAgentSettings} className="inline-flex mt-3 cursor-pointer items-center gap-1 rounded-md bg-ink-600 px-3 py-2 text-[13px] text-white shadow hover:bg-ink-700">
+        去智能体设置
+      </button>
+    )
+  } else if (reason === 'no_model') {
+    title = '还没有配置可用于对话的模型'
+    subtitle = '请先配置支持工具调用的模型。历史对话仍可查看。'
+    actionButton = (
+      <button type="button" onClick={goToModelSettings} className="inline-flex mt-3 cursor-pointer items-center gap-1 rounded-md bg-ink-600 px-3 py-2 text-[13px] text-white shadow hover:bg-ink-700">
+        去模型配置
+      </button>
+    )
+  } else if (reason === 'not_tested') {
+    title = '模型已经配置好了，但还没有完成能力自检'
+    subtitle = '完成一次自检后就能开始对话。历史对话仍可查看。'
+    actionButton = (
+      <button type="button" onClick={goToModelSettings} className="inline-flex mt-3 cursor-pointer items-center gap-1 rounded-md bg-ink-600 px-3 py-2 text-[13px] text-white shadow hover:bg-ink-700">
+        去模型配置并自检
+      </button>
+    )
+  } else {
+    title = '智能体暂时不可用'
+    subtitle = '请稍后重试或联系管理员。'
+  }
+
+  return <div className="flex h-full items-center justify-center p-6"><div className="max-w-md rounded-2xl border border-mist-200 bg-white p-8 text-center shadow-card"><Bot className="mx-auto size-8 text-mist-300" /><h1 className="mt-3 text-lg font-semibold text-mist-800">{title}</h1><p className="mt-2 text-sm text-mist-500">{subtitle}</p>{actionButton}</div></div>
 }
 

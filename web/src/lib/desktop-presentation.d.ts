@@ -8,6 +8,13 @@ export type DesktopPlatformIntentResult = {
   message?: string
 }
 
+export type DesktopClientHealth = {
+  channelState: 'disconnected' | 'connecting' | 'ready' | 'error'
+  channelMessage: string
+  collection: { status: 'idle' | 'running' | 'partial' | 'failed'; message: string; updatedAt: number | null }
+  presence: { status: 'unknown' | 'online' | 'offline' | 'error'; message: string; updatedAt: number | null }
+}
+
 export type DesktopTheme = 'light' | 'dark'
 
 export interface DesktopDocument {
@@ -46,6 +53,7 @@ declare global {
       onOpenSettings(listener: () => void): () => void
       onLocalSettingsState(listener: (state: { dirty: boolean; busy: boolean }) => void): () => void
       onPlatformIntentResult(listener: (result: DesktopPlatformIntentResult) => void): () => void
+      onClientHealth(listener: (health: DesktopClientHealth) => void): () => void
     }
   }
 }

@@ -431,7 +431,28 @@ export default function Materials() {
   const untagged = (data ?? []).filter((m) => m.tags.length === 0).length
   const list = (data ?? []).filter((m) => (!kind || m.kind === kind) && (tag === null || (tag === '' ? m.tags.length === 0 : m.tags.includes(tag))))
   const selectedMaterial = list.find((m) => m.id === selectedMaterialId) ?? list[0] ?? null
-  const remove = (m: Pick<Material, 'id'>) => deleteWithUndo('material', m.id, '这条素材', () => inv(['materials']), '已引用它的作品不受影响。')
+  // MT-01：删除前先说明这条素材被哪些作品引用。素材进回收站后引用关系还在，但正文里的事实依据会变成不可见，
+  // 所以有引用时必须先让用户看到影响面再决定，而不是一句「已引用它的作品不受影响」。
+  const remove = async (m: Pick<Material, 'id' | 'usage_count'>) => {
+    let note = '已引用它的作品不受影响。'
+    if ((m.usage_count ?? 0) > 0) {
+      let used: { work_id: string; title: string; status: string; at: string }[] = []
+      try {
+        used = await get<{ work_id: string; title: string; status: string; at: string }[]>(`/materials/${m.id}/usage`)
+      } catch { /* 取不到引用清单时仍然让用户知道数量，不阻断删除 */ }
+      const names = used.slice(0, 5).map((u) => `《${u.title || '未命名作品'}》`).join('、')
+      const more = used.length > 5 ? ` 等 ${used.length} 篇` : ''
+      const okToDelete = await confirm({
+        title: `这条素材正被 ${m.usage_count} 篇作品引用`,
+        desc: `${names ? `涉及 ${names}${more}。` : ''}删除后素材进入回收站，作品里的引用会显示为不可见；需要保留事实依据的话，建议先改完正文再删。`,
+        confirmText: '仍然删除',
+        danger: true,
+      })
+      if (!okToDelete) return
+      note = `有 ${m.usage_count} 篇作品引用了它，请核对正文。`
+    }
+    await deleteWithUndo('material', m.id, '这条素材', () => inv(['materials']), note)
+  }
   const read = async (id: string, edit = false) => {
     setReading(true)
     try {
@@ -470,7 +491,7 @@ export default function Materials() {
           <option value="used">已被引用</option>
           <option value="expired">已过有效期</option>
         </Select>}
-        {desktopPresentation && canWrite && (
+        {canWrite && (
           <Button size="sm" variant={selecting ? 'secondary' : 'ghost'} onClick={() => { setSelecting(!selecting); setPicked([]) }}>{selecting ? '退出多选' : '多选'}</Button>
         )}
         <div className={cn('relative w-full sm:ml-auto sm:w-72', desktopPresentation && 'desktop-materials-search')}>

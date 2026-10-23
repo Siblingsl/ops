@@ -19,6 +19,9 @@ import type { Account, AILimit, ContentFormat, DailyResult, HealthItem, NextActi
 import { usePrefetchWork, useRecentWorks } from '@/lib/v3'
 
 interface Todo { work_id: string; title: string; status: WorkStatus; kind: string; hint: string; at: string; node?: number; content_format?: ContentFormat }
+// DB-04：真实发布/计划日期按星期返回，前端不再按数量顺序点亮圆点。
+interface RhythmDay { date: string; published: number; planned: number }
+interface Rhythm { week_start?: string; published: number; planned: number; past_avg?: number; days?: RhythmDay[] }
 interface Dash {
   account: Account
   counts: Partial<Record<WorkStatus, number>>
@@ -128,13 +131,18 @@ function BriefCard({ accountId }: { accountId: string }) {
 }
 
 // DEV-UX02（D-052 第 2 条）：首屏只有一条按规则排好序的主线，每一项直接打开对应的下一步；不调用模型，不批量处理。
-function MainLine({ accountId, hideSetup }: { accountId: string; hideSetup: boolean }) {
+// DB-05：右栏摘要与主线列表共用同一个数据源和排序，避免两套「今天做什么」。
+function useMainLine(accountId: string, hideSetup: boolean) {
   const { data: all, isLoading } = useQuery({ queryKey: ['next-actions', accountId, 'main'], queryFn: () => get<NextAction[]>(`/accounts/${accountId}/next-actions?limit=8`), staleTime: 30_000 })
-  const data = (all ?? []).filter((a) => !(hideSetup && a.kind === 'setup'))
+  return { items: (all ?? []).filter((a) => !(hideSetup && a.kind === 'setup')), isLoading }
+}
+
+function MainLine({ accountId, hideSetup, panelID }: { accountId: string; hideSetup: boolean; panelID?: string }) {
+  const { items: data, isLoading } = useMainLine(accountId, hideSetup)
   if (isLoading) return null
   const [first, ...rest] = data
   return (
-    <Card className="mb-6 overflow-hidden border-ink-100">
+    <Card id={panelID} className="mb-6 overflow-hidden border-ink-100">
       <div className="flex items-center gap-2 border-b border-ink-100 bg-ink-50/50 px-5 py-3">
         <Compass className="size-4 text-ink-600" />
         <h3 className="text-[14px] font-semibold text-mist-900">今天的主线</h3>
@@ -284,7 +292,8 @@ function DesktopDashboard({
   const agent = useAgentBootstrap()
   const recent = useRecentWorks(3)
   const extrasRef = useRef<HTMLDetailsElement>(null)
-  const rhythm = useQuery({ queryKey: ['rhythm', account.id], queryFn: () => get<{ published: number; planned: number }>(`/accounts/${account.id}/rhythm`), staleTime: 60_000 })
+  const { items: mainLine } = useMainLine(account.id, hideSetup)
+  const rhythm = useQuery({ queryKey: ['rhythm', account.id], queryFn: () => get<Rhythm>(`/accounts/${account.id}/rhythm`), staleTime: 60_000 })
   const activeWork = data.todos.find((todo) => todo.kind === 'write' || todo.kind === 'check') ?? data.todos[0]
   const checking = data.todos.find((todo) => todo.kind === 'check')
   // 待回填单独拎出来：它藏在「今天的安排」前 3 条里容易被挤掉，而复盘数据全靠它。
@@ -298,6 +307,9 @@ function DesktopDashboard({
   const publishedThisWeek = rhythm.data?.published ?? 0
   const plannedThisWeek = rhythm.data?.planned ?? 0
   const weeklyTarget = Math.max(publishedThisWeek, plannedThisWeek)
+  // DB-04：把接口返回的真实日期映射成周一到周日；缺失时退化为文字说明。
+  const weekLabels = ['一', '二', '三', '四', '五', '六', '日']
+  const weekDays = (rhythm.data?.days ?? []).map((day, index) => ({ ...day, label: weekLabels[index] ?? '·' }))
   const openExtra = (target: string) => {
     if (!extrasRef.current) return
     extrasRef.current.open = true
@@ -379,10 +391,19 @@ function DesktopDashboard({
           </div>
         </div>
         <aside className="creative-right" aria-label="今日安排与创作入口">
-          <section className="today-panel">
-            <div className="section-heading"><h2>今天的安排</h2><span className="day-date">{data.todos.length} 件小事</span></div>
-            {data.todos.length ? data.todos.slice(0, 3).map((todo) => <Link className="creative-todo" key={todo.work_id + todo.kind} to={todoLink(todo, account.id, account.platform)}><span className="todo-indicator" /><span><strong>{todo.title || todo.kind}</strong><small>{todo.hint}</small></span></Link>) : <div className="creative-todo"><span className="todo-indicator" /><span><strong>今天，从一个小想法开始</strong><small>去选题池挑一个想继续的方向</small></span></div>}
-            <div className="week-progress"><div className="meta"><strong>本周节奏</strong><span>{publishedThisWeek} / {weeklyTarget} 篇已完成</span></div><div className="week-dots">{'一二三四五六日'.split('').map((day, index) => <span key={day} className={index < publishedThisWeek ? 'done' : index < publishedThisWeek + plannedThisWeek ? 'planned' : ''}><i>{index < publishedThisWeek ? '✓' : ''}</i>{day}</span>)}</div></div>
+          <section className="today-panel" aria-labelledby="today-panel-title">
+            <div className="section-heading"><h2 id="today-panel-title">今天的主线</h2><span className="day-date">{mainLine.length} 件小事</span></div>
+            {/* DB-05：工作台只保留一套带序号的待办。右栏只做摘要（第 1 项 + 剩余数量），
+                完整列表统一由 MainLine 呈现，避免两套「今天做什么」排序和截断都不同。 */}
+            {mainLine.length ? <Link className="creative-todo" to={mainLine[0].link}>
+              <span className="todo-indicator" /><span><strong>1. {mainLine[0].text}</strong><small>{mainLine[0].action}{mainLine.length > 1 ? ` · 还有 ${mainLine.length - 1} 项` : ''}</small></span>
+            </Link> : <div className="creative-todo"><span className="todo-indicator" /><span><strong>今天，从一个小想法开始</strong><small>去选题池挑一个想继续的方向</small></span></div>}
+            {mainLine.length > 1 && <button type="button" className="text-button" onClick={() => openExtra('desktop-main-line')}>查看全部 {mainLine.length} 项 <ArrowRight aria-hidden="true" /></button>}
+            <div className="week-progress"><div className="meta"><strong>本周节奏</strong><span>{publishedThisWeek} / {weeklyTarget} 篇已完成</span></div>
+              {/* DB-04：按真实 published_at / planned_date 点亮对应星期；没有日期数据时退化成「本周 N 篇」，不假装进度。 */}
+              {weekDays.length ? <div className="week-dots" data-testid="week-dots">{weekDays.map((day) => <span key={day.date} title={`${day.date}：发布 ${day.published} 篇，计划 ${day.planned} 篇`}
+                className={day.published > 0 ? 'done' : day.planned > 0 ? 'planned' : ''}><i>{day.published > 0 ? '✓' : ''}</i>{day.label}</span>)}</div>
+                : <p className="text-xs text-mist-500">本周 {publishedThisWeek} 篇已发布{plannedThisWeek > 0 ? `，${plannedThisWeek} 篇待发布` : ''}。</p>}</div>
           </section>
           <section className="assistant-invite"><span className="assistant-icon"><Bot aria-hidden="true" /></span><span className="spark-decoration" aria-hidden="true">✦</span><h3>一个想法，也可以聊聊</h3><p>让 AI 帮你梳理方向、查找素材。<br />每一次写入，仍然由你决定。</p><Link className="text-button" to={canOpenAgent ? '/agent' : '/settings/agent'}>{canOpenAgent ? '打开 AI 对话' : '配置 AI 对话'} <ArrowRight aria-hidden="true" /></Link></section>
           <div className="creative-usage"><span>今日 AI 用量 <strong>{fmtNum(data.tokens_today)}</strong></span><Link className="text-button" to="/settings/usage">查看用量 <ArrowRight aria-hidden="true" /></Link></div>
@@ -394,7 +415,7 @@ function DesktopDashboard({
         <summary>更多工作台信息 <ChevronDown aria-hidden="true" /></summary>
         <div className="desktop-home-extra-content">
           <div className="desktop-home-extra-actions"><Link to={`/a/${account.id}/topics?suggest=1`}><Button icon={<Sparkles className="size-4" />}>AI 选题建议</Button></Link><Button variant="primary" icon={<PenLine className="size-4" />} onClick={create}>新建作品</Button></div>
-          <MainLine accountId={account.id} hideSetup={hideSetup} />
+          <MainLine accountId={account.id} hideSetup={hideSetup} panelID="desktop-main-line" />
           <div id="desktop-daily-recommendations"><DailyPanel key={`daily-${account.id}`} accountId={account.id} compact /></div>
           <BriefCard accountId={account.id} />
           <div className="desktop-dashboard-panels"><HotPanel key={`hot-${account.id}`} account={account} compact /></div>

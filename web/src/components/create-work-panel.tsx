@@ -1,4 +1,4 @@
-﻿import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Lightbulb, PenLine } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -117,7 +117,7 @@ export function CreateWorkPanel() {
         <Button variant="primary" loading={busy} onClick={() => void create()} icon={<PenLine className="size-4" />}>开始创作</Button>
       </>}>
       <div className="space-y-4">
-        <Field label="作品标题" hint="可留空，作品会先显示为「未命名作品」；也可以到第 4 步再定。">
+        <Field label="作品标题" hint="最多64字；可留空，作品会先显示为「未命名作品」，也可以到第 4 步再定。">
           <Input autoFocus value={title} maxLength={64} placeholder="未命名作品" onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) void create() }} />
         </Field>

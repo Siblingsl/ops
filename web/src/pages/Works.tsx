@@ -1,12 +1,12 @@
-import { useQuery } from '@tanstack/react-query'
-import { Bookmark, CalendarDays, Copy, FileText, GitBranch, ImageIcon, Lightbulb, PenLine, Search, Star, Tag, Trash2, UserRound, X } from 'lucide-react'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { Bookmark, CalendarDays, Copy, FileText, GitBranch, ImageIcon, Lightbulb, PenLine, Search, Send, Star, Tag, Trash2, UserRound, X } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
 import { Dialog } from '@/components/dialog'
 import { Button, Card, cn, Empty, IconButton, Input, MoreMenu, PageHeader, PageLoading, PageState, StatusBadge, Tabs } from '@/components/ui'
-import { del, errorMessage, get, patch, post } from '@/lib/api'
+import { del, errorMessage, get, getPage, patch, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { deleteWithUndo } from '@/lib/undo'
@@ -163,7 +163,16 @@ export default function Works() {
   const [importOpen, setImportOpen] = useState(false)
   const inv = useInvalidate()
   const create = useCreateWork(acc?.id, acc?.platform)
-  const { data, isLoading, isError, error, refetch } = useQuery({ queryKey: ['works', acc?.id, q], queryFn: () => get<WorkListItem[]>(`/accounts/${acc!.id}/works?q=${encodeURIComponent(q)}`), enabled: !!acc })
+  // WL-02：列表用 updated_at + id 稳定游标翻页，避免大 offset 漏项；服务端数组契约保持不变。
+  const { data, isLoading, isError, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
+    queryKey: ['works', acc?.id, q],
+    queryFn: ({ pageParam }) => getPage<WorkListItem>(`/accounts/${acc!.id}/works?q=${encodeURIComponent(q)}&limit=50${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`),
+    initialPageParam: '' as string,
+    getNextPageParam: (last) => (last.meta.hasMore ? last.meta.nextCursor ?? undefined : undefined),
+    enabled: !!acc,
+  })
+  const rows = data?.pages.flatMap((page) => page.items) ?? []
+  const totalCount = data?.pages[0]?.meta.total ?? rows.length
   const stars = useQuery({ queryKey: ['stars'], queryFn: () => get<StarItem[]>('/stars'), staleTime: 60_000 })
   if (!acc) return <PageLoading />
   const starSet = new Set((stars.data ?? []).filter((s) => s.object_type === 'work').map((s) => s.object_id))
@@ -177,9 +186,9 @@ export default function Works() {
     }
   }
   const [weekStart, weekEnd] = currentWeek()
-  const list = (data ?? []).filter((w) => (!tag || (w.tags ?? []).includes(tag)) && (!assignee || w.assignee_id === assignee) && (!onlyStar || starSet.has(w.id)) && (!onlyMine || (!!me?.user_id && w.assignee_id === me.user_id))
+  const list = rows.filter((w) => (!tag || (w.tags ?? []).includes(tag)) && (!assignee || w.assignee_id === assignee) && (!onlyStar || starSet.has(w.id)) && (!onlyMine || (!!me?.user_id && w.assignee_id === me.user_id))
     && (!thisWeek || (!!w.planned_date && w.planned_date.slice(0, 10) >= weekStart && w.planned_date.slice(0, 10) <= weekEnd)))
-  const tagOptions = [...new Set([...(data ?? []).flatMap((w) => w.tags ?? []), ...(tag ? [tag] : [])])].sort()
+  const tagOptions = [...new Set([...rows.flatMap((w) => w.tags ?? []), ...(tag ? [tag] : [])])].sort()
   const shown = list.filter((w) => !filterStatus[filter] || filterStatus[filter]!.includes(w.status))
   const count = (f: Filter) => list.filter((w) => !filterStatus[f] || filterStatus[f]!.includes(w.status)).length
   const savedViews = <SavedViews current={params.toString()} onApply={(query) => setParams(new URLSearchParams(query), { replace: true })} className={desktopPresentation ? 'desktop-works-saved-views' : undefined} />
@@ -302,6 +311,9 @@ export default function Works() {
               <span role="cell" className="desktop-work-date-cell">{w.planned_date ? `${w.planned_date.slice(5, 7)} 月 ${w.planned_date.slice(8, 10)} 日` : '未安排'}</span>
               <span role="cell" className="desktop-work-updated-cell">{relTime(w.updated_at)}</span>
               <span role="cell" className="desktop-work-actions">
+                {/* GL-07：ready 行的行点击落到推送/发布包页，但用户找的是"发布"这个动作，
+                    给一个显式次按钮，避免只能猜"点标题就行"。 */}
+                {w.status === 'ready' && <IconButton label="去发布" onClick={() => nav(workLink(w, acc?.platform))}><Send className="size-4" /></IconButton>}
                 {canWrite && <IconButton label="编辑作品标签" onClick={() => setTagEditing(w)}><Tag className="size-4" /></IconButton>}
                 {canWrite && <IconButton label="派生到其他平台" onClick={() => setDerive(w)}><GitBranch className="size-4" /></IconButton>}
                 {canWrite && <MoreMenu items={[{ label: '复制为新草稿', icon: <Copy />, disabled: !!copying, loading: copying === w.id, onClick: () => void duplicate(w.id) }]} />}
@@ -333,6 +345,8 @@ export default function Works() {
                     </div>
                   </div>
                 </Link>
+                {/* GL-07：ready 行给显式「去发布」次按钮，承诺与入口名称一致。 */}
+                {w.status === 'ready' && <Button variant="ghost" size="sm" icon={<Send className="size-3.5" />} onClick={() => nav(workLink(w, acc?.platform))}>去发布</Button>}
                 {canWrite && <IconButton label="编辑作品标签" onClick={() => setTagEditing(w)} className="text-mist-400 hover:text-ink-700"><Tag className="size-4" /></IconButton>}
                 <IconButton label={starSet.has(w.id) ? '取消收藏' : '收藏'} onClick={() => toggleStar(w)}
                   className={cn(starSet.has(w.id) ? 'text-gamboge-500' : 'opacity-0 transition group-hover:opacity-100')}>
@@ -349,6 +363,18 @@ export default function Works() {
             )
           })}
         </Card>
+      )}
+      {!isLoading && hasNextPage && (
+        <div className="mt-4 flex flex-col items-center gap-1.5">
+          <Button variant="secondary" loading={isFetchingNextPage} onClick={() => void fetchNextPage()}>
+            加载更多作品
+          </Button>
+          {/* WL-02：明确告知「看到的是其中一部分」，避免用户以为列表只有这些。 */}
+          <span className="text-[11.5px] text-mist-500">已显示 {shown.length} / {totalCount} 篇，还有更多未加载</span>
+        </div>
+      )}
+      {!isLoading && !hasNextPage && totalCount > shown.length && (
+        <p className="mt-4 text-center text-[11.5px] text-mist-500">共 {totalCount} 篇，当前筛选显示 {shown.length} 篇</p>
       )}
       {!isLoading && <p className="mt-[14px] text-[11px] text-mist-500">计划发布日只用于提醒；公众号草稿、小红书与头条发布包仍需你在对应平台完成发布。</p>}
       {derive && canWrite && <DeriveDialog open onClose={() => setDerive(null)} workId={derive.id} platform={acc.platform} format={derive.content_format} />}

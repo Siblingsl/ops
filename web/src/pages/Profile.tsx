@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { Brain, Check, FileText, Palette, Pencil, Plus, Sparkles, Trash2, Wand2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { AIFeedback } from '@/components/refs'
 import { aiError } from '@/lib/ai-error'
-import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, IconButton, Input, PageHeader, PageLoading, PageState, PlatformMark, Select, Switch, Tabs, Textarea } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, IconButton, Input, Notice, PageHeader, PageLoading, PageState, PlatformMark, Select, Switch, Tabs, Textarea } from '@/components/ui'
 import { HealthRing } from '@/components/health-ring'
 import { del, errorMessage, get, patch, post, put, rawRequest, stream } from '@/lib/api'
 import { relTime, runeLen } from '@/lib/format'
@@ -56,6 +56,35 @@ export function splitPasted(text: string): { title: string; content: string }[] 
   }
   push()
   return out.slice(0, 10)
+}
+
+/** ST-02：建档向导结束后常被推后的两件事——公众号凭证与模型。
+ *  这里按当前账号的真实状态列出「还差什么」，每项给一个直达按钮，不用回工作台碰运气。 */
+function NextStepAfterProfile({ account }: { account: Account }) {
+  const wx = account.platform === 'wechat_mp'
+  const credDone = account.credential?.state === 'ok'
+  const [dismissed, setDismissed] = useState(false)
+  const models = useQuery({ queryKey: ['providers'], queryFn: () => get<{ models?: string[]; status?: string }[]>('/model-providers').catch(() => []) })
+  const modelCount = models.data?.reduce((n, p) => n + (p.models?.length ?? 0), 0) ?? 0
+  const missing = [
+    ...(wx && !credDone ? [{ key: 'cred', text: '公众号凭证还没接通', desc: '填 AppID / AppSecret 并加入 IP 白名单后才能写入草稿箱。', to: `/settings/accounts?id=${account.id}` }] : []),
+    ...(modelCount === 0 ? [{ key: 'model', text: '还没有可用模型', desc: '配好模型并完成自检，AI 生成按钮才可用。', to: '/settings/models' }] : []),
+  ]
+  if (dismissed || missing.length === 0 || models.isLoading) return null
+  return (
+    <div className="px-5 pt-4" data-testid="profile-next-steps">
+      <Notice tone="gamboge">
+        <p className="font-medium">建档完成，还差 {missing.length} 项才能完整跑通：</p>
+        <ul className="mt-1.5 space-y-1 text-[12.5px]">
+          {missing.map((m) => <li key={m.key} className="flex flex-wrap items-center gap-2">
+            <span>{m.text} —— {m.desc}</span>
+            <Link to={m.to}><Button type="button" size="sm" variant="outline">去处理</Button></Link>
+          </li>)}
+        </ul>
+        <button type="button" className="mt-2 cursor-pointer text-xs text-ink-600 underline" onClick={() => setDismissed(true)}>先不管，稍后再说</button>
+      </Notice>
+    </div>
+  )
 }
 
 /** BootstrapWizard (EX-A-01): paste a few past works, get a draft profile with evidence, edit it, and only "确认建档" saves. */
@@ -451,6 +480,13 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
   }
   const [params, setParams] = useSearchParams()
   const [wizard, setWizard] = useState(params.get('wizard') === '1')
+  // D-132: Profile may stay mounted while the active account changes, so honor the new wizard deep link.
+  useEffect(() => {
+    if (params.get('wizard') === '1') {
+      toast.dismiss('account-create-success')
+      setWizard(true)
+    }
+  }, [params])
   const closeWizard = () => {
     setWizard(false)
     if (params.has('wizard')) setParams((p) => { const n = new URLSearchParams(p); n.delete('wizard'); return n }, { replace: true })
@@ -485,6 +521,7 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
       <CardHeader title="定位档案" desc="AI 每次生成都会带上这份档案。"
         action={<Button size="sm" icon={<Wand2 className="size-3.5" />} onClick={() => setWizard(true)}>从过往作品生成</Button>} />
       {wizard && <BootstrapWizard account={account} onClose={closeWizard} onApply={apply} />}
+      <NextStepAfterProfile account={account} />
       <div className="grid gap-5 p-5 md:grid-cols-2">
         <Field label="账号类型" hint="如需更换请到设置 → 账号的「修改类型」；已有作品保持原类型。业务定位（标签、读者、人设等）可随时调整" plain>
           <div className="flex h-9 items-center gap-2 rounded-lg bg-mist-50 px-3 text-sm text-mist-700"><PlatformMark platform={account.platform} size="sm" />{formatLabel[account.content_format]}</div>

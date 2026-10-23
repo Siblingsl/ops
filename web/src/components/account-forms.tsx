@@ -155,6 +155,26 @@ export function credTone(c?: CredState) {
   }
 }
 
+// ST-03：凭证检测失败时的可执行动作。按错误码分流，避免用户只看到一个 40164 不知道下一步。
+function CredentialFailureActions({ message }: { message: string }) {
+  const { data } = useSystemInfo()
+  const ipWhitelist = /40164|ip/i.test(message) && /白名单|whitelist|not in whitelist/i.test(message)
+  const invalidSecret = /40001|40125|invalid appsecret|不合法的/i.test(message)
+  return (
+    <div className="mt-2 space-y-2 text-xs">
+      <p className="text-ink-700/80">
+        {ipWhitelist ? '通常是出口 IP 不在白名单：把下面这个 IP 加到公众号后台「设置与开发 → 基本配置 → IP 白名单」后重新检测。'
+          : invalidSecret ? '通常是 AppSecret 不正确：到公众号后台「设置与开发 → 基本配置」重置并重新粘贴。'
+            : '按提示修正后点「重新检测」；改完凭证记得再点一次「保存并检测」。'}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        {ipWhitelist && data?.egress_ip && <Button type="button" size="sm" variant="outline" icon={<Copy className="size-3.5" />} onClick={() => { void copyText(data.egress_ip).then(() => toast.success('已复制出口 IP')) }}>复制出口 IP（{data.egress_ip}）</Button>}
+        <a href="https://mp.weixin.qq.com/" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-ink-600 underline"><Globe2 className="size-3.5" />打开公众号后台</a>
+      </div>
+    </div>
+  )
+}
+
 export function EgressIP() {
   const { data } = useSystemInfo()
   return (
@@ -249,6 +269,8 @@ export function CredentialPanel({ account, onChanged, desktop = false }: { accou
       {(result || c?.last_result) && (
         <Notice tone={(result?.ok ?? c?.state === 'ok') ? 'ink' : 'red'} icon={(result?.ok ?? c?.state === 'ok') ? <CheckCircle2 className="size-4" /> : <CircleAlert className="size-4" />}>
           {result?.message ?? c?.last_result}
+          {/* ST-03：检测失败时不能只给一行错误码，要给出「复制出口 IP / 去公众号后台」这类可执行动作。 */}
+          {!(result?.ok ?? c?.state === 'ok') && <CredentialFailureActions message={result?.message ?? c?.last_result ?? ''} />}
         </Notice>
       )}
       <p className="text-xs leading-relaxed text-mist-400">AppSecret 使用 AES-256-GCM 加密后保存在数据库，不会出现在日志和页面中。修改凭证需要再次输入登录密码，并记录在操作日志里。</p>

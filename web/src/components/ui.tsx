@@ -31,15 +31,18 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   size?: Size
   loading?: boolean
   icon?: React.ReactNode
+  /** 禁用原因（ST-05）：只在 disabled/loading 时作为悬停 title。 */
+  disabledHint?: string
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { variant = 'secondary', size = 'md', loading, icon, className, children, disabled, ...rest },
+  { variant = 'secondary', size = 'md', loading, icon, className, children, disabled, disabledHint, title, ...rest },
   ref,
 ) {
   return (
     <button
       ref={ref}
+      title={disabledTitle(disabled || loading, disabledHint, title)}
       className={cn(
         'inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors duration-150 select-none',
         'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink-400',
@@ -142,21 +145,36 @@ const fieldBase =
   'w-full rounded-lg border border-mist-200 bg-white px-3 text-sm text-mist-800 placeholder:text-mist-400 transition-colors ' +
   'focus:border-ink-400 focus:outline-none focus:ring-3 focus:ring-ink-100 disabled:bg-mist-50 disabled:text-mist-500'
 
-export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }>(
-  function Input({ className, invalid, ...rest }, ref) {
-    return <input ref={ref} className={cn(fieldBase, 'h-9', invalid && 'border-orange-400 focus:ring-orange-100', className)} {...rest} />
+/**
+ * 角色只读时的统一悬停说明（ST-05）：页面级 Notice 说明"为什么不能改"，
+ * 控件 title 说明"谁可以改"，两者文案保持一致，不再逐页另写一套说法。
+ */
+export const roleReadOnlyHint = {
+  owner: '只有工作区所有者可以修改',
+  writer: '观察者只能查看，需要编辑者或所有者修改',
+} as const
+
+/** 只在禁用时挂 title：可编辑时不出现误导性的"只有所有者可以修改"。 */
+function disabledTitle(disabled: boolean | undefined, hint: string | undefined, title: string | undefined) {
+  return disabled && hint ? hint : title
+}
+
+export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean; disabledHint?: string }>(
+  function Input({ className, invalid, disabledHint, title, ...rest }, ref) {
+    return <input ref={ref} title={disabledTitle(rest.disabled, disabledHint, title)} className={cn(fieldBase, 'h-9', invalid && 'border-orange-400 focus:ring-orange-100', className)} {...rest} />
   },
 )
 
-export const Textarea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean }>(
-  function Textarea({ className, invalid, ...rest }, ref) {
-    return <textarea ref={ref} className={cn(fieldBase, 'py-2 leading-relaxed', invalid && 'border-orange-400', className)} {...rest} />
+export const Textarea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean; disabledHint?: string }>(
+  function Textarea({ className, invalid, disabledHint, title, ...rest }, ref) {
+    return <textarea ref={ref} title={disabledTitle(rest.disabled, disabledHint, title)} className={cn(fieldBase, 'py-2 leading-relaxed', invalid && 'border-orange-400', className)} {...rest} />
   },
 )
 
-export function Select({ className, children, ...rest }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+export function Select({ className, children, disabledHint, title, ...rest }: React.SelectHTMLAttributes<HTMLSelectElement> & { disabledHint?: string }) {
   return (
     <select className={cn(fieldBase, 'h-9 pr-8 appearance-none bg-[length:16px] bg-[right_8px_center] bg-no-repeat', className)}
+      title={disabledTitle(rest.disabled, disabledHint, title)}
       style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236f7881' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")" }}
       {...rest}>
       {children}
@@ -370,13 +388,22 @@ export function PageState({ loading, error, retrying, onRetry, emptyTitle = '暂
   return <Empty title={emptyTitle} action={action} />
 }
 
-export function Switch({ checked, onChange, disabled, label }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; label?: string }) {
+export function Switch({ checked, onChange, disabled, label, disabledHint, title }: {
+  checked: boolean
+  onChange: (v: boolean) => void
+  disabled?: boolean
+  label?: string
+  /** 禁用原因（ST-05）：只在 disabled 时作为悬停 title，避免可编辑时误报。 */
+  disabledHint?: string
+  title?: string
+}) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      title={disabledTitle(disabled, disabledHint, title)}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn('relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors disabled:opacity-50',

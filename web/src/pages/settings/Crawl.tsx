@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Badge, Button, Card, CardHeader, Empty, Field, Input, Notice, PageHeader, Select, Spinner, Textarea } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, Empty, Field, Input, Notice, PageHeader, roleReadOnlyHint, Select, Spinner, Textarea } from '@/components/ui'
 import { BackToSettings } from '@/components/back-to-settings'
 import { errorMessage, get, post, put } from '@/lib/api'
 import { useInvalidate, useMe } from '@/lib/session'
@@ -98,7 +98,7 @@ function SearchSourceForm({refresh,disabled}:{refresh:()=>void;disabled:boolean}
  const embedded=useEmbeddedSettings()
  useSettingsDraft(!disabled && !!(provider || model || query.trim()),busy)
  const current=providers.data?.find(p=>p.id===provider)
- return <div className="space-y-3 pt-4 border-t border-mist-100"><h3 className="font-semibold">联网搜索来源（默认关闭）</h3><Notice>复用支持百炼 DashScope / 方舟 Responses 原生联网搜索的供应商；只有返回搜索来源标题与链接时才入库，不使用模型回答代替新闻。配置后再勾选来源开启；受全站采集预算和工作区 AI 用量上限约束。</Notice><Field label="模型供应商"><Select disabled={disabled} value={provider} onChange={e=>{setProvider(e.target.value);setModel('')}}><option value="">选择已配置的供应商</option>{providers.data?.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field><Field label="模型（如 qwen-plus，或已开通搜索的豆包模型）"><Select disabled={disabled} value={model} onChange={e=>setModel(e.target.value)}><option value="">选择模型</option>{current?.models.map(m=><option key={m} value={m}>{m}</option>)}</Select></Field><Field label="搜索关键词"><Input disabled={disabled} maxLength={200} value={query} onChange={e=>setQuery(e.target.value)} /></Field><Button loading={busy} disabled={disabled||!provider||!model||!query.trim()} onClick={async()=>{setBusy(true);try{await post('/hot-sources/search',{provider_id:provider,model,query});if(embedded){setProvider('');setModel('');setQuery('')}refresh();toast.success('已配置，请勾选联网搜索来源后保存')}catch(e){toast.error(errorMessage(e))}finally{setBusy(false)}}}>保存搜索配置</Button></div>
+ return <div className="space-y-3 pt-4 border-t border-mist-100"><h3 className="font-semibold">联网搜索来源（默认关闭）</h3><Notice>复用支持百炼 DashScope / 方舟 Responses 原生联网搜索的供应商；只有返回搜索来源标题与链接时才入库，不使用模型回答代替新闻。配置后再勾选来源开启；受全站采集预算和工作区 AI 用量上限约束。</Notice><Field label="模型供应商"><Select disabled={disabled} disabledHint={roleReadOnlyHint.owner} value={provider} onChange={e=>{setProvider(e.target.value);setModel('')}}><option value="">选择已配置的供应商</option>{providers.data?.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field><Field label="模型（如 qwen-plus，或已开通搜索的豆包模型）"><Select disabled={disabled} disabledHint={roleReadOnlyHint.owner} value={model} onChange={e=>setModel(e.target.value)}><option value="">选择模型</option>{current?.models.map(m=><option key={m} value={m}>{m}</option>)}</Select></Field><Field label="搜索关键词"><Input disabled={disabled} disabledHint={roleReadOnlyHint.owner} maxLength={200} value={query} onChange={e=>setQuery(e.target.value)} /></Field><Button loading={busy} disabled={disabled||!provider||!model||!query.trim()} disabledHint={disabled ? roleReadOnlyHint.owner : '请先选择供应商、模型并填写关键词'} onClick={async()=>{setBusy(true);try{await post('/hot-sources/search',{provider_id:provider,model,query});if(embedded){setProvider('');setModel('');setQuery('')}refresh();toast.success('已配置，请勾选联网搜索来源后保存')}catch(e){toast.error(errorMessage(e))}finally{setBusy(false)}}}>保存搜索配置</Button></div>
 }
 
 export function HotSources() {
@@ -119,10 +119,10 @@ export function HotSources() {
   return <div className="max-w-3xl animate-fade-in space-y-5"><PageHeader title="工作区热点来源" desc="只使用全站已启用的来源和本工作区的 RSS。" />
     {query.isError ? <Notice tone="red">{errorMessage(query.error)}</Notice> : query.isPending ? <Spinner /> : <Card><div className="space-y-4 p-5">
       {!query.data.enabled && <Notice>热点采集未开启；来源配置会保存，当前不发出采集请求。</Notice>}
-      {query.data.sources.map((s) => <label key={s.key} className="flex items-center gap-2 text-sm"><input type="checkbox" disabled={!owner || busy} checked={selected.includes(s.key)} onChange={(e) => setSelected((v) => e.target.checked ? [...v, s.key] : v.filter((key) => key !== s.key))} />{s.name}</label>)}
+      {query.data.sources.map((s) => <label key={s.key} className="flex items-center gap-2 text-sm"><input type="checkbox" title={!owner ? roleReadOnlyHint.owner : busy ? '正在保存…' : undefined} disabled={!owner || busy} checked={selected.includes(s.key)} onChange={(e) => setSelected((v) => e.target.checked ? [...v, s.key] : v.filter((key) => key !== s.key))} />{s.name}</label>)}
       {!query.data.sources.length && <Notice>暂无可选全站来源，可添加行业 RSS。</Notice>}
       <h3 className="font-semibold">自定义 RSS</h3>
-      {rss.map((r, i) => <div key={i} className="space-y-2 rounded-lg border border-mist-200 p-3"><Field label="名称"><Input disabled={!owner || busy} value={r.name} onChange={(e) => setRSS((v) => v.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} /></Field><Field label="订阅地址"><Textarea rows={1} disabled={!owner || busy} value={r.url} onChange={(e) => setRSS((v) => v.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} /></Field></div>)}
+      {rss.map((r, i) => <div key={i} className="space-y-2 rounded-lg border border-mist-200 p-3"><Field label="名称"><Input disabled={!owner || busy} disabledHint={!owner ? roleReadOnlyHint.owner : '正在保存…'} value={r.name} onChange={(e) => setRSS((v) => v.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} /></Field><Field label="订阅地址"><Textarea rows={1} disabled={!owner || busy} disabledHint={!owner ? roleReadOnlyHint.owner : '正在保存…'} value={r.url} onChange={(e) => setRSS((v) => v.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} /></Field></div>)}
       <SearchSourceForm disabled={!owner} refresh={()=>inv(['hot-sources'])}/>
  {owner && <div className="flex gap-2"><Button disabled={busy || rss.length >= 10} onClick={() => setRSS((r) => [...r, { key: '', name: '', url: '' }])}>添加 RSS</Button><Button variant="primary" loading={busy} onClick={save}>保存来源</Button></div>}
     </div></Card>}
