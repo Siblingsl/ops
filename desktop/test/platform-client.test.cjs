@@ -182,6 +182,29 @@ test('heartbeat 的取消状态与回执查询路径正确', async () => {
   await assert.rejects(() => client.receipt(-1), /序号无效/);
 });
 
+test('平台页面长时间打开期间持续续租，并传回取消状态', async () => {
+  const calls = [];
+  let heartbeatCount = 0;
+  const client = new PlatformClient(v2Capability, async (operation, method, path, body) => {
+    calls.push({ operation, method, path, body });
+    if (operation === 'platform.run.heartbeat') {
+      heartbeatCount += 1;
+      return { canceled: heartbeatCount >= 2, lease_expires_at: '2026-10-20T10:06:00Z' };
+    }
+    return {};
+  });
+  client.adopt(v2Run);
+
+  const result = await client.withHeartbeat(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    return 'page-ready';
+  }, 5);
+
+  assert.equal(result.value, 'page-ready');
+  assert.equal(result.canceled, true);
+  assert.ok(calls.filter((call) => call.operation === 'platform.run.heartbeat').length >= 2);
+});
+
 test('失败终批可以带 0 条观测，并携带停止原因与错误码', () => {
   const batch = buildFailedBatch(4, 7, 2, {
     status: 'failed', stopReason: 'challenge_required', errorCode: 'platform_challenge_required'

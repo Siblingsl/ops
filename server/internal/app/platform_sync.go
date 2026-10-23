@@ -322,7 +322,7 @@ func (s *Server) expirePlatformRuns(ctx context.Context, now time.Time) {
 	}
 	rows, err := s.db.Query(ctx, `SELECT id, connection_id, workspace_id, account_id, attempt, trigger, task_kind,
 		query_scope, authorization_revision, workspace_authorization_revision, adapter_version,
-		mapping_version, browser_version, binding_snapshot, deadline_at
+		mapping_version, browser_version, binding_snapshot, deadline_at, operation_id, wire_protocol_version, operation_stage
 		FROM platform_sync_run
 		WHERE status IN ('leased','running') AND lease_expires_at IS NOT NULL AND lease_expires_at < $1`, now)
 	if err != nil {
@@ -345,13 +345,16 @@ func (s *Server) expirePlatformRuns(ctx context.Context, now time.Time) {
 		Browser      string
 		Snapshot     []byte
 		DeadlineAt   *time.Time
+		OperationID  *uuid.UUID
+		Protocol     int
+		Stage        string
 	}
 	var list []expired
 	for rows.Next() {
 		var e expired
 		if err := rows.Scan(&e.ID, &e.ConnectionID, &e.WorkspaceID, &e.AccountID, &e.Attempt, &e.Trigger,
 			&e.TaskKind, &e.QueryScope, &e.AuthRev, &e.WorkspaceRev, &e.Adapter, &e.Mapping, &e.Browser,
-			&e.Snapshot, &e.DeadlineAt); err != nil {
+			&e.Snapshot, &e.DeadlineAt, &e.OperationID, &e.Protocol, &e.Stage); err != nil {
 			slog.Error("平台采集调度：读取过期租约失败", "err", err)
 			rows.Close()
 			return
@@ -366,7 +369,7 @@ func (s *Server) expirePlatformRuns(ctx context.Context, now time.Time) {
 	for _, e := range list {
 		if err := s.reassignExpiredRun(ctx, e.ID, e.ConnectionID, e.WorkspaceID, e.AccountID, e.Attempt,
 			e.Trigger, e.TaskKind, e.QueryScope, e.AuthRev, e.WorkspaceRev, e.Adapter, e.Mapping, e.Browser,
-			e.Snapshot, e.DeadlineAt, now); err != nil {
+			e.Snapshot, e.DeadlineAt, e.OperationID, e.Protocol, e.Stage, now); err != nil {
 			slog.Error("平台采集调度：过期任务重派失败", "run_id", e.ID, "err", err)
 		}
 	}
@@ -376,7 +379,8 @@ func (s *Server) expirePlatformRuns(ctx context.Context, now time.Time) {
 // 因此部分唯一索引（只看 queued/leased/running）不会冲突。
 func (s *Server) reassignExpiredRun(ctx context.Context, runID, connectionID, workspaceID, accountID uuid.UUID,
 	attempt int, trigger, taskKind string, queryScope []byte, authRev, workspaceRev int64,
-	adapter string, mapping int, browser string, snapshot []byte, deadlineAt *time.Time, now time.Time) error {
+	adapter string, mapping int, browser string, snapshot []byte, deadlineAt *time.Time,
+	operationID *uuid.UUID, protocol int, operationStage string, now time.Time) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE platform_sync_run SET status='expired', finished_at=now()
 			WHERE id=$1 AND status IN ('leased','running')`, runID)
@@ -385,6 +389,24 @@ func (s *Server) reassignExpiredRun(ctx context.Context, runID, connectionID, wo
 		}
 		if tag.RowsAffected() == 0 {
 			return nil
+		}
+		if operationID != nil && protocol == 2 {
+			if attempt >= platformRunMaxAttempts {
+				if _, err := tx.Exec(ctx, `UPDATE platform_connection SET failure_count=failure_count+1,updated_at=$2 WHERE id=$1`, connectionID, now); err != nil {
+					return err
+				}
+				_, err = tx.Exec(ctx, `UPDATE platform_sync_operation SET status='failed',stage='complete',last_error_code='platform_run_expired',
+					revision=revision+1,finished_at=$2,updated_at=$2 WHERE id=$1 AND status='running'`, *operationID, now)
+				return err
+			}
+			// 清理旧版本重试留下的孤立 v1 run；其 query_scope 仍保留原操作编号。
+			if _, err := tx.Exec(ctx, `UPDATE platform_sync_run SET status='canceled',cancel_requested_at=$2,finished_at=$2
+				WHERE operation_id IS NULL AND query_scope->>'operation_id'=$1::text AND status IN ('queued','leased','running')`, *operationID, now); err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `UPDATE platform_sync_operation SET status='queued',stage=coalesce(nullif($2,''),stage),
+				next_allowed_at=NULL,pause_reason=NULL,revision=revision+1,updated_at=$3 WHERE id=$1 AND status='running'`, *operationID, operationStage, now)
+			return err
 		}
 		if attempt >= platformRunMaxAttempts {
 			// 达到重派上限：连接记一次失败，等下个窗口或用户处理，不无限重领。

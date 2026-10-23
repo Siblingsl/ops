@@ -1700,10 +1700,11 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
   let accepted = 0;
   let rejected = 0;
   try {
-    const page = await openLoginPage(session);
+    const opened = await client.withHeartbeat(() => openLoginPage(session));
+    if (opened.canceled) return { performed: true, runId: run.id, runStatus: 'canceled', accepted: 0, rejected: 0, stopReason: 'canceled', errorCode: null, adoptErrors: 0, adoptReason: null };
+    const page = opened.value;
+    if (!page) throw new PlatformBrowserError('platform_navigation_failed', '平台页面未能打开');
     if (!isLoggedInLanding(platform, page.url)) return submitV2ControlFailure(client, run, 'platform_login_required', 'platform_login_required');
-    const heartbeat = await client.heartbeat();
-    if (heartbeat.canceled) return { performed: true, runId: run.id, runStatus: 'canceled', accepted: 0, rejected: 0, stopReason: 'canceled', errorCode: null, adoptErrors: 0, adoptReason: null };
 
     const source = pacedPlatformSource(createPageResponseSource(session));
     const externalAccountKey = await resolveRunAccountKey(run);

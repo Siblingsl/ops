@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,7 @@ func (s *Server) schedulePlatformOperations(ctx context.Context, now time.Time) 
 	if !s.platformCollectionGloballyEnabled(ctx) {
 		return
 	}
+	s.recoverStalePlatformOperations(ctx, now, nil)
 	rows, err := s.db.Query(ctx, `SELECT o.id,o.workspace_id,o.account_id,o.connection_id,o.requested_by,o.device_id,o.platform,c.external_account_key,
 		o.kind,o.status,o.stage,o.requested_mode,o.frozen_scope,o.authorization_revision,
 		o.workspace_authorization_revision,o.platform_consent_version
@@ -65,6 +67,61 @@ func (s *Server) schedulePlatformOperations(ctx context.Context, now time.Time) 
 		if err := s.schedulePlatformOperation(ctx, op, now); err != nil {
 			continue
 		}
+	}
+}
+
+func (s *Server) recoverStalePlatformOperations(ctx context.Context, now time.Time, operationID *uuid.UUID) int64 {
+	var recovered int64
+	if err := s.withTx(ctx, func(tx pgx.Tx) error {
+		// A previous v2 retry bug could leave an active v1 run whose query scope still
+		// identifies the operation. It cannot advance the v2 checkpoint, so retire it.
+		if _, err := tx.Exec(ctx, `UPDATE platform_sync_run r SET status='canceled',cancel_requested_at=$1,finished_at=$1
+			WHERE r.operation_id IS NULL AND r.status IN ('queued','leased','running')
+			AND EXISTS (SELECT 1 FROM platform_sync_operation o WHERE o.id::text=r.query_scope->>'operation_id'
+				AND o.status='running' AND ($2::uuid IS NULL OR o.id=$2) AND NOT EXISTS (SELECT 1 FROM platform_sync_run active
+					WHERE active.operation_id=o.id AND active.status IN ('queued','leased','running')))`, now, operationID); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE platform_sync_operation o SET
+			status=CASE WHEN coalesce((SELECT max(r.attempt) FROM platform_sync_run r WHERE r.operation_id=o.id),0)>=$2 THEN 'failed' ELSE 'queued' END,
+			stage=CASE WHEN coalesce((SELECT max(r.attempt) FROM platform_sync_run r WHERE r.operation_id=o.id),0)>=$2 THEN 'complete' ELSE o.stage END,
+			next_allowed_at=CASE WHEN coalesce((SELECT max(r.attempt) FROM platform_sync_run r WHERE r.operation_id=o.id),0)>=$2 THEN o.next_allowed_at ELSE NULL END,
+			last_error_code=CASE WHEN coalesce((SELECT max(r.attempt) FROM platform_sync_run r WHERE r.operation_id=o.id),0)>=$2 THEN 'platform_run_expired' ELSE NULL END,pause_reason=NULL,
+			revision=revision+1,finished_at=CASE WHEN coalesce((SELECT max(r.attempt) FROM platform_sync_run r WHERE r.operation_id=o.id),0)>=$2 THEN $1::timestamptz ELSE NULL END,
+			updated_at=$1
+			WHERE o.status='running'
+			AND NOT EXISTS (SELECT 1 FROM platform_sync_run active WHERE active.operation_id=o.id AND active.status IN ('queued','leased','running'))
+			AND NOT EXISTS (SELECT 1 FROM platform_sync_run orphan WHERE orphan.operation_id IS NULL
+				AND orphan.query_scope->>'operation_id'=o.id::text AND orphan.status IN ('queued','leased','running'))
+			AND ($3::uuid IS NULL OR o.id=$3)`, now, platformRunMaxAttempts, operationID)
+		recovered = tag.RowsAffected()
+		return err
+	}); err != nil {
+		slog.Error("平台同步操作：恢复过期运行失败", "err", err)
+		return 0
+	}
+	return recovered
+}
+
+func (s *Server) schedulePlatformOperationByID(ctx context.Context, operationID uuid.UUID, now time.Time) {
+	var op queuedPlatformOperation
+	err := s.db.QueryRow(ctx, `SELECT o.id,o.workspace_id,o.account_id,o.connection_id,o.requested_by,o.device_id,o.platform,c.external_account_key,
+		o.kind,o.status,o.stage,o.requested_mode,o.frozen_scope,o.authorization_revision,
+		o.workspace_authorization_revision,o.platform_consent_version
+		FROM platform_sync_operation o JOIN platform_connection c ON c.id=o.connection_id WHERE o.id=$1`, operationID).Scan(
+		&op.ID, &op.WorkspaceID, &op.AccountID, &op.ConnectionID, &op.RequestedBy, &op.DeviceID, &op.Platform, &op.ExternalKey,
+		&op.Kind, &op.Status, &op.Stage, &op.RequestedMode, &op.FrozenScope, &op.AuthorizationRevision,
+		&op.WorkspaceAuthorizationRevision, &op.ConsentVersion)
+	if err != nil {
+		slog.Error("平台同步操作：读取手动调度目标失败", "operation_id", operationID, "err", err)
+		return
+	}
+	if !s.platformSyncFeatureEnabled(ctx, op.Kind, op.Platform) {
+		s.cancelPlatformSyncOperation(ctx, op.ID, "capability_changed", now)
+		return
+	}
+	if err := s.schedulePlatformOperation(ctx, op, now); err != nil {
+		slog.Error("平台同步操作：手动调度失败", "operation_id", operationID, "err", err)
 	}
 }
 
@@ -186,14 +243,18 @@ func (s *Server) schedulePlatformOperation(ctx context.Context, candidate queued
 		}
 		// 冻结目标约束可访问作品；仅在 worker 实际请求详情/指标前扣作品级预算。
 		_ = workAttempts
+		var attempt int
+		if err := tx.QueryRow(ctx, `SELECT coalesce(max(attempt),0)+1 FROM platform_sync_run WHERE operation_id=$1 AND operation_stage=$2`, candidate.ID, stage).Scan(&attempt); err != nil {
+			return err
+		}
 		var runID uuid.UUID
 		if err := tx.QueryRow(ctx, `INSERT INTO platform_sync_run
 			(connection_id,workspace_id,account_id,requested_by,trigger,task_kind,status,query_scope,
 			authorization_revision,workspace_authorization_revision,adapter_version,mapping_version,browser_version,
-			binding_snapshot,deadline_at,operation_id,wire_protocol_version,operation_stage,budget_query_count,budget_work_attempts)
-			VALUES($1,$2,$3,$4,'manual',$5,'queued',$6,$7,$8,$9,$10,$11,$12,$13,$14,2,$15,0,$16) RETURNING id`,
+			binding_snapshot,deadline_at,operation_id,wire_protocol_version,operation_stage,budget_query_count,budget_work_attempts,attempt)
+			VALUES($1,$2,$3,$4,'manual',$5,'queued',$6,$7,$8,$9,$10,$11,$12,$13,$14,2,$15,0,$16,$17) RETURNING id`,
 			candidate.ConnectionID, candidate.WorkspaceID, candidate.AccountID, connectionUser, taskKind, queryScope, connectionRevision,
-			workspaceRevision, adapter, mapping, browser, binding, now.Add(platformRunMaxDuration), candidate.ID, stage, 0).Scan(&runID); err != nil {
+			workspaceRevision, adapter, mapping, browser, binding, now.Add(platformRunMaxDuration), candidate.ID, stage, 0, attempt).Scan(&runID); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `UPDATE platform_sync_operation SET status='queued',stage=$2,next_allowed_at=NULL,pause_reason=NULL,

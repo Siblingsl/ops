@@ -373,6 +373,27 @@ func (s *Server) createPlatformSyncOperation(ctx context.Context, accountID uuid
 	if err != nil {
 		return nil, 0, err
 	}
+	if response["status"] == "existing" {
+		operation, ok := response["operation"].(map[string]any)
+		if !ok {
+			return response, responseStatus, nil
+		}
+		if operationStatus, ok := operation["status"].(string); ok && operationActive(operationStatus) {
+			var operationID uuid.UUID
+			switch value := operation["id"].(type) {
+			case uuid.UUID:
+				operationID = value
+			case string:
+				operationID, _ = uuid.Parse(value)
+			}
+			if operationID != uuid.Nil {
+				dispatchAt := s.now()
+				if s.recoverStalePlatformOperations(ctx, dispatchAt, &operationID) > 0 {
+					s.schedulePlatformOperationByID(ctx, operationID, dispatchAt)
+				}
+			}
+		}
+	}
 	return response, responseStatus, nil
 }
 

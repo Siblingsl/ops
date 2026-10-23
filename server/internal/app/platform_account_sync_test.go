@@ -116,6 +116,136 @@ func TestPlatformAccountSyncIdempotencyAndActiveOperationReuse(t *testing.T) {
 	}
 }
 
+func TestPlatformAccountSyncExpiredV2RunRetriesSameStage(t *testing.T) {
+	f := newPlatformRunFixture(t, "xhs", "xhs_user_id:fixture-expired-sync")
+	withPlatformSyncFeatureEnabled(t, "account_sync", "xhs", true)
+	preparePlatformSyncConnection(t, f)
+	if _, err := env.srv.db.Exec(context.Background(), `UPDATE platform_connection SET
+		capabilities=$2,auto_collect=false WHERE id=$1`, f.Connection,
+		[]byte(`{"adapterVersion":"fixture-1","mappingVersion":1,"browserVersion":"155.0.0.0","workList":"supported"}`)); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/accounts/" + f.Account.ID.String() + "/platform-account-sync"
+	status, response := f.signedSyncRequest(t, "platform.account.sync.request", path,
+		platformAccountSyncBody(t, f.Connection, "incremental"), uuid.NewString())
+	if status != http.StatusAccepted {
+		t.Fatalf("account sync request: %d %s", status, response)
+	}
+	ctx := context.Background()
+	env.srv.schedulePlatformRuns(ctx)
+	first := claimPlatformV2Run(t, f, "account_sync", "fixture-1")
+	if first.Stage != "profile" {
+		t.Fatalf("first account sync stage = %q, want profile", first.Stage)
+	}
+	if _, err := env.srv.db.Exec(ctx, `UPDATE platform_sync_run SET lease_expires_at=now()-interval '1 minute' WHERE id=$1`, first.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	env.srv.schedulePlatformRuns(ctx)
+
+	var operationStatus string
+	var operationStage string
+	if err := env.srv.db.QueryRow(ctx, `SELECT status,stage FROM platform_sync_operation
+		WHERE account_id=$1 AND kind='account_sync' ORDER BY created_at DESC LIMIT 1`, f.Account.ID).
+		Scan(&operationStatus, &operationStage); err != nil {
+		t.Fatal(err)
+	}
+	if operationStatus != "queued" || operationStage != first.Stage {
+		t.Fatalf("expired v2 work must requeue its same operation stage: status=%s stage=%s", operationStatus, operationStage)
+	}
+	var retry struct {
+		ID         uuid.UUID
+		Attempt    int
+		Protocol   int
+		Stage      string
+		DeadlineAt time.Time
+	}
+	if err := env.srv.db.QueryRow(ctx, `SELECT id,attempt,wire_protocol_version,operation_stage,deadline_at
+		FROM platform_sync_run WHERE operation_id=(SELECT id FROM platform_sync_operation WHERE account_id=$1 AND kind='account_sync' ORDER BY created_at DESC LIMIT 1)
+		AND status='queued'`, f.Account.ID).Scan(&retry.ID, &retry.Attempt, &retry.Protocol, &retry.Stage, &retry.DeadlineAt); err != nil {
+		t.Fatalf("v2 retry should be queued: %v", err)
+	}
+	if retry.ID == first.ID || retry.Attempt != 2 || retry.Protocol != 2 || retry.Stage != first.Stage || !retry.DeadlineAt.After(env.srv.now()) {
+		t.Fatalf("retry must preserve operation protocol/stage and receive a fresh deadline: %+v", retry)
+	}
+	second := claimPlatformV2Run(t, f, "account_sync", "fixture-1")
+	if _, err := env.srv.db.Exec(ctx, `UPDATE platform_sync_run SET lease_expires_at=now()-interval '1 minute' WHERE id=$1`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	env.srv.schedulePlatformRuns(ctx)
+	var exhaustedStatus, exhaustedStage string
+	if err := env.srv.db.QueryRow(ctx, `SELECT status,stage FROM platform_sync_operation
+		WHERE account_id=$1 AND kind='account_sync' ORDER BY created_at DESC LIMIT 1`, f.Account.ID).
+		Scan(&exhaustedStatus, &exhaustedStage); err != nil {
+		t.Fatal(err)
+	}
+	if exhaustedStatus != "failed" || exhaustedStage != "complete" {
+		t.Fatalf("retry exhaustion must terminate instead of leaving a stuck operation: status=%s stage=%s", exhaustedStatus, exhaustedStage)
+	}
+}
+
+func TestPlatformAccountSyncRecoversLegacyOrphanRetry(t *testing.T) {
+	f := newPlatformRunFixture(t, "xhs", "xhs_user_id:fixture-legacy-sync")
+	withPlatformSyncFeatureEnabled(t, "account_sync", "xhs", true)
+	preparePlatformSyncConnection(t, f)
+	if _, err := env.srv.db.Exec(context.Background(), `UPDATE platform_connection SET
+		capabilities=$2,auto_collect=false WHERE id=$1`, f.Connection,
+		[]byte(`{"adapterVersion":"fixture-1","mappingVersion":1,"browserVersion":"155.0.0.0","workList":"supported"}`)); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/accounts/" + f.Account.ID.String() + "/platform-account-sync"
+	status, response := f.signedSyncRequest(t, "platform.account.sync.request", path,
+		platformAccountSyncBody(t, f.Connection, "incremental"), uuid.NewString())
+	if status != http.StatusAccepted {
+		t.Fatalf("account sync request: %d %s", status, response)
+	}
+	ctx := context.Background()
+	env.srv.schedulePlatformRuns(ctx)
+	first := claimPlatformV2Run(t, f, "account_sync", "fixture-1")
+	if _, err := env.srv.db.Exec(ctx, `UPDATE platform_sync_run SET status='expired',finished_at=now() WHERE id=$1`, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the persisted shape from the broken retry path: an expired v1 run
+	// with the operation id only inside query_scope, while the operation stays running.
+	if _, err := env.srv.db.Exec(ctx, `INSERT INTO platform_sync_run
+		(connection_id,workspace_id,account_id,trigger,task_kind,status,query_scope,authorization_revision,
+		workspace_authorization_revision,adapter_version,mapping_version,browser_version,binding_snapshot,deadline_at,
+		attempt,wire_protocol_version,operation_stage)
+		SELECT connection_id,workspace_id,account_id,trigger,task_kind,'expired',query_scope,authorization_revision,
+		workspace_authorization_revision,adapter_version,mapping_version,browser_version,binding_snapshot,now()-interval '5 minutes',
+		2,1,'' FROM platform_sync_run WHERE id=$1`, first.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	status, response = f.signedSyncRequest(t, "platform.account.sync.request", path,
+		platformAccountSyncBody(t, f.Connection, "incremental"), uuid.NewString())
+	if status != http.StatusOK {
+		t.Fatalf("retry request for existing sync: %d %s", status, response)
+	}
+
+	var recoveredStatus, recoveredStage string
+	if err := env.srv.db.QueryRow(ctx, `SELECT status,stage FROM platform_sync_operation WHERE account_id=$1 AND kind='account_sync' ORDER BY created_at DESC LIMIT 1`, f.Account.ID).Scan(&recoveredStatus, &recoveredStage); err != nil {
+		t.Fatal(err)
+	}
+	if recoveredStatus != "queued" || recoveredStage != first.Stage {
+		t.Fatalf("legacy stuck operation should resume from the saved stage: status=%s stage=%s", recoveredStatus, recoveredStage)
+	}
+	var retry struct {
+		ID       uuid.UUID
+		Attempt  int
+		Protocol int
+		Stage    string
+	}
+	if err := env.srv.db.QueryRow(ctx, `SELECT id,attempt,wire_protocol_version,operation_stage
+		FROM platform_sync_run WHERE operation_id=(SELECT id FROM platform_sync_operation WHERE account_id=$1 AND kind='account_sync' ORDER BY created_at DESC LIMIT 1)
+		AND status='queued'`, f.Account.ID).Scan(&retry.ID, &retry.Attempt, &retry.Protocol, &retry.Stage); err != nil {
+		t.Fatalf("legacy stuck operation should be recovered into a v2 retry: %v", err)
+	}
+	if retry.ID == first.ID || retry.Attempt != 2 || retry.Protocol != 2 || retry.Stage != first.Stage {
+		t.Fatalf("legacy orphan recovery must restore the same v2 stage: %+v", retry)
+	}
+}
+
 func TestPlatformMetricsRefreshNoTargetsDoesNotQueueRun(t *testing.T) {
 	f := newPlatformRunFixture(t, "xhs", "xhs_user_id:fixture-sync-self")
 	withPlatformSyncFeatureEnabled(t, "metrics_refresh", "xhs", true)

@@ -318,6 +318,36 @@ export class PlatformClient {
     }
   }
 
+  async withHeartbeat<T>(task: () => Promise<T>, intervalMs = 20_000): Promise<{ value: T | null; canceled: boolean }> {
+    if ((await this.heartbeat()).canceled) return { value: null, canceled: true };
+
+    let canceled = false;
+    let heartbeatError: unknown = null;
+    let inFlight: Promise<void> | null = null;
+    const beat = () => {
+      if (inFlight) return;
+      inFlight = this.heartbeat().then(({ canceled: wasCanceled }) => {
+        canceled ||= wasCanceled;
+        heartbeatError = null;
+      }).catch((error: unknown) => {
+        heartbeatError = error;
+      }).finally(() => {
+        inFlight = null;
+      });
+    };
+    const timer = setInterval(beat, intervalMs);
+    try {
+      const value = await task();
+      clearInterval(timer);
+      if (inFlight) await inFlight;
+      if (heartbeatError) throw heartbeatError;
+      return { value, canceled };
+    } finally {
+      clearInterval(timer);
+      if (inFlight) await inFlight;
+    }
+  }
+
   private requireRun(): PlatformClaimedRun {
     if (!this.currentRun) throw new Error('当前没有已领取的平台采集任务。');
     return this.currentRun;
