@@ -30,7 +30,8 @@ Thumbs.db
 
 Reference_Projects/
 output/
-docs/
+docs/*
+!docs/23-技能系统设计.md
 # 工具目录（工作记忆等）
 .workbuddy-ai/
 .dsh-notes/
