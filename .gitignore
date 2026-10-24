@@ -31,6 +31,9 @@ Thumbs.db
 Reference_Projects/
 output/
 docs/*
+!docs/17-Electron客户端改造方案.md
+!docs/18-账号类型迁移与创作模板设计.md
+!docs/19-今日头条平台接入设计.md
 !docs/23-技能系统设计.md
 # 工具目录（工作记忆等）
 .workbuddy-ai/
