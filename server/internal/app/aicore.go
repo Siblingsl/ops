@@ -296,12 +296,47 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 			return nil, apiErr(409, "desktop_ai_capability_unsupported", "所选本机模型尚未通过图片识别自检")
 		}
 	}
+	// DEV-SK2 / 23 文档第 6.1 节第 1 项：停用账号的真实生成入口返回 account_disabled，
+	// 不降级成“不用技能但继续生成”。
+	if t.Account != nil && t.Account.Status != "active" {
+		return nil, apiErr(409, "account_disabled", "平台账号已停用，请先启用账号再生成")
+	}
+	// DEV-SK2 / 6.3 节：技能快照在最外层 AI 执行上下文内建立并复用；
+	// 执行主体由服务端身份决定（UserID 为空即系统执行，只读公共分区）。
+	var snap *SkillSnapshot
+	if t.Account != nil && !t.Bare {
+		in := SkillResolveInput{
+			WorkspaceID: ident(ctx).WorkspaceID,
+			Account:     t.Account,
+			ActorKind:   "user",
+			ActorUserID: func() *uuid.UUID { id := ident(ctx).UserID; if id == uuid.Nil { return nil }; return &id }(),
+			Surface:     "task",
+			TaskType:    t.Type,
+			WorkID:      t.WorkID,
+			Bare:        t.Bare,
+		}
+		if in.ActorUserID == nil {
+			in.ActorKind = "system"
+		}
+		ctx, snap, err = s.skillSnapshotFor(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+	}
 	pack, err := s.buildContext(ctx, t)
 	if err != nil {
 		return nil, err
 	}
-	s.lastPacks.Store(ident(ctx).WorkspaceID.String()+"/"+t.Type, evalSnapshot{System: pack.System, UserRest: pack.UserRest, JSON: t.JSON, Temperature: pack.Temperature})
+	// DEV-SK2 / 7.2 节：含个人技能的调用禁止进入共享 lastPacks；缓存标记不可共享且不保存文本。
+	if snap != nil && snap.PersonalUsed > 0 {
+		s.lastPacks.Store(ident(ctx).WorkspaceID.String()+"/"+t.Type, evalSnapshot{Private: true})
+	} else {
+		s.lastPacks.Store(ident(ctx).WorkspaceID.String()+"/"+t.Type, evalSnapshot{System: pack.System, UserRest: pack.UserRest, JSON: t.JSON, Temperature: pack.Temperature})
+	}
 	refs := pack.refs()
+	if snap != nil {
+		refs["skills"] = skillSharedRefs(snap)
+	}
 	for k, v := range t.Refs {
 		refs[k] = v
 	}
@@ -323,6 +358,13 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 	}
 	streamed := false
 	for i, cur := range attempts {
+		// DEV-SK2 / 6.3 节：每次真正发送前复核快照（主模型与备用模型都复核），
+		// 变化返回 skill_context_changed，不转备用模型绕过。
+		if snap != nil {
+			if err := s.verifySkillSnapshot(ctx, snap); err != nil {
+				return nil, err
+			}
+		}
 		if cur != rt {
 			refs["fallback_used"] = true
 			refs["fallback_model"] = cur.ProviderName + " / " + cur.Model
@@ -338,11 +380,25 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 			}
 		}
 		refsJSON, _ := json.Marshal(refs)
+		// DEV-SK2 / 10.3 节：私有元数据在持久化前与共享引用拆分；
+		// context_owner_user_id 只在含个人技能时写入真实触发用户。
+		privateJSON := []byte("{}")
+		var ownerID *uuid.UUID
+		if snap != nil && snap.PersonalUsed > 0 {
+			b, mErr := json.Marshal(map[string]any{"items": snap.PrivateItems})
+			if mErr != nil {
+				return nil, mErr
+			}
+			privateJSON = b
+			if id := ident(ctx); id != nil && id.UserID != uuid.Nil {
+				ownerID = &id.UserID
+			}
+		}
 		var callID uuid.UUID
 		if err := s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO ai_call (workspace_id, account_id, work_id, task_type, provider, model, template_version, context_refs,
-			prompt_tokens, completion_tokens, latency_ms, status, error) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+			prompt_tokens, completion_tokens, latency_ms, status, error, context_owner_user_id, private_context_refs) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
 			ident(ctx).WorkspaceID, accountID, t.WorkID, t.Type, cur.ProviderName, cur.Model, tplVersion, refsJSON, usage.PromptTokens, usage.CompletionTokens,
-			time.Since(start).Milliseconds(), status, truncate(errText, 500)).Scan(&callID); err != nil {
+			time.Since(start).Milliseconds(), status, truncate(errText, 500), ownerID, privateJSON).Scan(&callID); err != nil {
 			return nil, err
 		}
 		if callErr == nil {
@@ -387,6 +443,8 @@ func (s *Server) afterAISuccess(ctx context.Context, t aiTask, p *ContextPack) {
 // runAIJSON runs a structured task, validating the JSON and retrying once (06 文档第 5.8 节).
 func (s *Server) runAIJSON(ctx context.Context, t aiTask, out any, validate func() error) (*aiResult, error) {
 	t.JSON = true
+	// DEV-SK2 / 6.3 节：JSON 格式纠错的两次尝试共用同一技能快照。
+	ctx = withSkillSnapshotHolder(ctx)
 	var last error
 	for attempt := 0; attempt < 2; attempt++ {
 		res, err := s.runAI(ctx, t, nil)
@@ -479,6 +537,7 @@ func (s *Server) streamAIEphemeral(w http.ResponseWriter, r *http.Request, t aiT
 	if _, err := s.resolveRouteTier(ctx, t.Type, t.Tier); err != nil {
 		return err
 	}
+	ctx = withSkillSnapshotHolder(ctx)
 	sse := newSSE(w)
 	release, err := s.waitAIWorker(ctx, func() {
 		sse.send("stage", map[string]string{"stage": "queued"})
@@ -552,6 +611,7 @@ func (s *Server) streamAIJob(w http.ResponseWriter, r *http.Request, t aiTask, m
 	}
 	var gone atomic.Bool
 	jctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	jctx = withSkillSnapshotHolder(jctx)
 	s.registerJobCancel(jobID, cancel)
 	go func() {
 		defer close(events)

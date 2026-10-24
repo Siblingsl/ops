@@ -526,4 +526,5 @@ func (s *Server) skillRoutes(r chi.Router) {
 	r.Get("/accounts/{accountId}/skill-bindings", s.h(s.getSkillBindings))
 	r.Put("/accounts/{accountId}/skill-bindings/{audience}/{skillId}", s.h(s.putSkillBinding))
 	r.Get("/accounts/{accountId}/skill-context", s.h(s.getSkillContext))
+	r.Get("/ai-calls/{id}/skill-context", s.h(s.getAICallSkillContext))
 }

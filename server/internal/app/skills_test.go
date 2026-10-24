@@ -367,6 +367,13 @@ func TestSkillBindingCASAndPartitions(t *testing.T) {
 		map[string]any{"enabled": false, "base_revision": bind.Mine.BaseRevision}, "stale")
 
 	// 甲（owner）的绑定操作不删除乙（editor）的绑定，也不共占个人额度。
+	var bindBefore struct {
+		Mine struct {
+			Count int `json:"count"`
+		} `json:"mine"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/accounts/"+accID.String()+"/skill-bindings", nil, &bindBefore)
+	ownerMineBefore := bindBefore.Mine.Count
 	ownerBind := skillPersonalCreate(t, "甲绑定-"+suffix)
 	env.mustJSON(t, "GET", "/api/v1/accounts/"+accID.String()+"/skill-bindings", nil, &bind)
 	env.mustJSON(t, "PUT", "/api/v1/accounts/"+accID.String()+"/skill-bindings/personal/"+skillIDOf(t, ownerBind).String(),
@@ -388,10 +395,10 @@ func TestSkillBindingCASAndPartitions(t *testing.T) {
 	if !found || bind2.Mine.Count != 1 {
 		t.Fatalf("editor partition must be intact: %+v", bind2.Mine)
 	}
-	// 本人绑定分区计数独立（owner 1 条 + editor 1 条互不占额）。
+	// 本人绑定分区计数独立（owner 只新增自己这 1 条，与 editor 互不占额）。
 	env.mustJSON(t, "GET", "/api/v1/accounts/"+accID.String()+"/skill-bindings", nil, &bind)
-	if bind.Mine.Count != 1 {
-		t.Fatalf("owner mine count: %d", bind.Mine.Count)
+	if bind.Mine.Count != ownerMineBefore+1 {
+		t.Fatalf("owner mine count: %d (before %d)", bind.Mine.Count, ownerMineBefore)
 	}
 
 	// 取消启用 → item=null；不存在的合法取消为无变化成功。

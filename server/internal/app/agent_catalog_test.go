@@ -120,6 +120,7 @@ func agentClassifiedRouteList() map[string]string {
 		"GET /api/v1/accounts/{accountId}/skill-bindings",
 		"PUT /api/v1/accounts/{accountId}/skill-bindings/{audience}/{skillId}",
 		"GET /api/v1/accounts/{accountId}/skill-context",
+		"GET /api/v1/ai-calls/{id}/skill-context",
 	} {
 		out[r] = "附录 B.1：只给链接"
 	}

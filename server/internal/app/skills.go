@@ -181,6 +181,17 @@ type SkillResolveResult struct {
 // resolveSkillSet 是唯一生效集解析器（6.1 节）。数据库读取失败明确失败，
 // 不静默当作“无绑定”；无账号、Bare、不支持技能的任务不注入也不查询技能表。
 func (s *Server) resolveSkillSet(ctx context.Context, in SkillResolveInput) (*SkillResolveResult, error) {
+	return s.resolveSkillSetQ(ctx, s.db, in)
+}
+
+// skillQuerier 是解析器可用的最小查询接口：统一解析、快照与复核共用，
+// 使快照能整体在 REPEATABLE READ 事务内读取（6.3 节）。
+type skillQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func (s *Server) resolveSkillSetQ(ctx context.Context, q skillQuerier, in SkillResolveInput) (*SkillResolveResult, error) {
 	res := &SkillResolveResult{Items: []SkillResolvedItem{}, Selected: []SkillResolvedItem{}}
 	if in.Account == nil || in.Bare {
 		return res, nil
@@ -220,7 +231,7 @@ func (s *Server) resolveSkillSet(ctx context.Context, in SkillResolveInput) (*Sk
 	} else {
 		sql += ` AND b.audience_user_id IS NULL`
 	}
-	rows, err := s.db.Query(ctx, sql, args...)
+	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}

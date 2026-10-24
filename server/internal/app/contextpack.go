@@ -22,10 +22,13 @@ var slotLabels = map[string]string{
 }
 
 type SlotItem struct {
-	ID    string `json:"id,omitempty"`
-	Label string `json:"label"`
-	Chars int    `json:"chars"`
-	Used  bool   `json:"used"`
+	ID          string `json:"id,omitempty"`
+	Label       string `json:"label"`
+	Chars       int    `json:"chars"`
+	Used        bool   `json:"used"`
+	Revision    int64  `json:"revision,omitempty"`
+	ContentHash string `json:"content_hash,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 type Slot struct {
@@ -179,6 +182,25 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 				sys.WriteString("\n## 作者确认过的写作偏好（必须遵守）\n" + mb.String())
 			}
 			p.add(sl)
+		}
+
+		// DEV-SK2 / 23 文档第 7.1 节：技能槽（3600 字含包装），逻辑顺序
+		// 规则→账号档案→运营方案→已确认记忆→技能→读者偏好→表现样本→风格。
+		// 正文完整装入不截断；无实际使用时不输出空标题（提示词逐字节不变）。
+		if snap := skillSnapshotFromCtx(ctx); snap != nil && snap.Assembled && snap.SlotText != "" {
+			sys.WriteString("\n\n" + snap.SlotText)
+			sl := Slot{Name: "skills", Budget: skillSlotBudget, Chars: snap.SlotChars}
+			for _, it := range snap.Items {
+				if it.Scope == "personal" {
+					// 个人技能在共享 Slot 记录里只显示匿名状态，不携带可定位元数据（10.3 节）。
+					sl.Items = append(sl.Items, SlotItem{Label: "个人技能", Chars: it.Chars, Used: it.Used, Reason: reasonOrEmpty(it.Reason)})
+					continue
+				}
+				sl.Items = append(sl.Items, SlotItem{ID: it.ID.String(), Label: it.Name, Chars: it.Chars,
+					Used: it.Used, Revision: it.Revision, ContentHash: it.ContentHash, Reason: reasonOrEmpty(it.Reason)})
+			}
+			p.add(sl)
+			p.Legacy["skills_personal_used"] = snap.PersonalUsed
 		}
 
 		// DEV-A103：读者数据偏好（来自本账号数据归因的规则结论）只注入指定任务。
@@ -361,6 +383,24 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 	p.UserRest = p.User[restStart:]
 	p.Temperature = s.taskTemperature(ctx, t.Type, t.JSON)
 	return p, nil
+}
+
+// skillSnapshotFromCtx 读取本次动作的技能快照（若存在）。
+func skillSnapshotFromCtx(ctx context.Context) *SkillSnapshot {
+	h, _ := ctx.Value(skillSnapshotCtxKey{}).(*skillSnapshotHolder)
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.snap
+}
+
+func reasonOrEmpty(r *string) string {
+	if r == nil {
+		return ""
+	}
+	return *r
 }
 
 func instructionBlock(instr string) string {

@@ -30,6 +30,28 @@ type LLM struct {
 
 	mu       sync.Mutex
 	requests []string // full request bodies received, for HC-30 assertions
+
+	replyMu    sync.Mutex
+	replyQueue []string // DEV-SK2 测试旋钮：按顺序弹出固定回复，空则走常规推导
+}
+
+// PushReplies 设置按顺序返回的固定回复（各弹出一个，用完恢复常规行为）。
+func (l *LLM) PushReplies(replies ...string) {
+	l.replyMu.Lock()
+	defer l.replyMu.Unlock()
+	l.replyQueue = append(l.replyQueue, replies...)
+}
+
+// popReply 弹出一个排队回复；没有排队时返回 false。
+func (l *LLM) popReply() (string, bool) {
+	l.replyMu.Lock()
+	defer l.replyMu.Unlock()
+	if len(l.replyQueue) == 0 {
+		return "", false
+	}
+	r := l.replyQueue[0]
+	l.replyQueue = l.replyQueue[1:]
+	return r, true
 }
 
 // Requests returns a copy of the request bodies received so far (16 文档第 13.4 节第 5 项).
@@ -222,35 +244,39 @@ func (l *LLM) Handler() http.Handler {
 
 		var reply string
 		var calls []mockToolCall
-		switch {
-		case strings.Contains(user, "图片是什么颜色"):
-			// 看图自检探测：内置红色图片（16 文档第 13.4 节第 3 项）。
-			if noVision {
-				reply = "无法识别图片内容"
-			} else {
-				reply = "红色"
+		if queued, ok := l.popReply(); ok {
+			reply = queued
+		} else {
+			switch {
+			case strings.Contains(user, "图片是什么颜色"):
+				// 看图自检探测：内置红色图片（16 文档第 13.4 节第 3 项）。
+				if noVision {
+					reply = "无法识别图片内容"
+				} else {
+					reply = "红色"
+				}
+			case lastRole != "tool" && hasTool(req, "ops_probe_echo"):
+				if noTools {
+					reply = "本模型不支持工具调用"
+				} else {
+					calls = []mockToolCall{{Name: "ops_probe_echo", Arguments: `{"value":"ok"}`}}
+				}
+			case task == "agent_summary":
+				reply = "对话历史摘要：用户正在整理账号内容，之前的结论与待办保持不变。"
+			case task == "agent_chat":
+				reply, calls = l.agentChat(user, lastRole, lastContent, toolsSent, historyCalls, handledCalls, noTools)
+			case strings.Contains(user, "任务：metric_screenshot"):
+				if images == 0 {
+					w.WriteHeader(400)
+					_, _ = w.Write([]byte(`{"error":{"message":"this task needs image input"}}`))
+					return
+				}
+				reply = l.metricScreenshot(user, images)
+			case lastRole == "tool":
+				reply = "已读取：" + short(strings.TrimSpace(lastContent), 60)
+			default:
+				reply = l.respond(user)
 			}
-		case lastRole != "tool" && hasTool(req, "ops_probe_echo"):
-			if noTools {
-				reply = "本模型不支持工具调用"
-			} else {
-				calls = []mockToolCall{{Name: "ops_probe_echo", Arguments: `{"value":"ok"}`}}
-			}
-		case task == "agent_summary":
-			reply = "对话历史摘要：用户正在整理账号内容，之前的结论与待办保持不变。"
-		case task == "agent_chat":
-			reply, calls = l.agentChat(user, lastRole, lastContent, toolsSent, historyCalls, handledCalls, noTools)
-		case strings.Contains(user, "任务：metric_screenshot"):
-			if images == 0 {
-				w.WriteHeader(400)
-				_, _ = w.Write([]byte(`{"error":{"message":"this task needs image input"}}`))
-				return
-			}
-			reply = l.metricScreenshot(user, images)
-		case lastRole == "tool":
-			reply = "已读取：" + short(strings.TrimSpace(lastContent), 60)
-		default:
-			reply = l.respond(user)
 		}
 		// 单轮输出上限：max_tokens 已设置且输出超过上限时截断，并以 finish_reason=length 结束
 		// （16 文档第 6.5 节）。token 估算口径与下方 usage 一致（runes*2/3）。

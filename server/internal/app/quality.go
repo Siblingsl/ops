@@ -208,6 +208,9 @@ type evalSnapshot struct {
 	System      string   `json:"system"`
 	UserRest    string   `json:"user_rest"`
 	JSON        bool     `json:"json"`
+	// Private 标记最近一次调用含个人技能上下文：该记录不可共享，
+	// 不保存提示词文本，保存为回归用例返回 private_context_not_shareable（7.2 节）。
+	Private bool `json:"private,omitempty"`
 }
 
 type EvalCase struct {
@@ -266,7 +269,11 @@ func (s *Server) createEvalCase(w http.ResponseWriter, r *http.Request) error {
 	if !found {
 		return validation("还没有这个任务最近一次的调用记录：先在编辑器里运行一次该任务，再保存为测试用例")
 	}
-	snap, _ := json.Marshal(v.(evalSnapshot))
+	es := v.(evalSnapshot)
+	if es.Private {
+		return apiErr(409, "private_context_not_shareable", "最近一次调用包含你的个人技能，不能保存为共享回归用例")
+	}
+	snap, _ := json.Marshal(es)
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		name = taskLabel(in.TaskType) + " " + s.now().In(s.loc).Format("01-02 15:04")
