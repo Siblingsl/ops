@@ -341,13 +341,22 @@ func (s *Server) auditLogs(w http.ResponseWriter, r *http.Request) error {
 	args := []any{}
 	where := "l.workspace_id=$1"
 	if r.URL.Path == "/api/v1/admin/audit-logs" {
-		where = "1=1"
+		// DEV-SK1 / 23 文档第 10.3 节：默认工作区与超管查询都必须排除私有审计。
+		where = "l.visibility='workspace'"
 	} else {
 		id := ident(r.Context())
 		if id == nil {
 			return errUnauthenticated
 		}
-		args = append(args, id.WorkspaceID)
+		// 私有视图：仅当前 actor 的个人技能审计，可跨本人历史工作区；禁止指定其他 actor。
+		if q.Get("visibility") == "personal" {
+			where = "l.visibility='personal' AND l.actor_id=$1"
+			args = append(args, id.UserID)
+			q.Del("visibility")
+		} else {
+			where = "l.workspace_id=$1 AND l.visibility='workspace'"
+			args = append(args, id.WorkspaceID)
+		}
 	}
 	if a := q.Get("action"); a != "" {
 		args = append(args, a+"%")

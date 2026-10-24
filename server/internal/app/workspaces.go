@@ -207,12 +207,26 @@ func (s *Server) patchMember(w http.ResponseWriter, r *http.Request) error {
 		if err := s.ensureNotLastOwner(r.Context(), ws, targetID); err != nil {
 			return err
 		}
-		tag, err := s.db.Exec(r.Context(), `DELETE FROM workspace_member WHERE workspace_id=$1 AND user_id=$2`, ws, targetID)
+		// DEV-SK1 / 23 文档第 5.3 节：成员退出 / 被移出在成员变更事务中删除其本人绑定；
+		// 个人定义保留，重加入不自动恢复。
+		err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+			if _, err := tx.Exec(r.Context(), `SELECT id FROM workspace_member WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE`, ws, targetID); err != nil {
+				return err
+			}
+			if err := s.deleteMemberSkillBindings(r.Context(), tx, ws, targetID); err != nil {
+				return err
+			}
+			tag, err := tx.Exec(r.Context(), `DELETE FROM workspace_member WHERE workspace_id=$1 AND user_id=$2`, ws, targetID)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return errNotFound
+			}
+			return nil
+		})
 		if err != nil {
 			return err
-		}
-		if tag.RowsAffected() == 0 {
-			return errNotFound
 		}
 		s.audit(r.Context(), "member_remove", "user", targetID.String(), "ok", nil)
 		return ok(w, map[string]any{"ok": true})
@@ -315,8 +329,19 @@ func (s *Server) leaveWorkspace(w http.ResponseWriter, r *http.Request) error {
 	if err := s.ensureNotLastOwner(r.Context(), id.WorkspaceID, id.UserID); err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(r.Context(), `DELETE FROM workspace_member WHERE workspace_id=$1 AND user_id=$2`,
-		id.WorkspaceID, id.UserID); err != nil {
+	// DEV-SK1 / 23 文档第 5.3 节：退出工作区在同一事务删除本人绑定；个人定义保留。
+	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+		if _, err := tx.Exec(r.Context(), `SELECT id FROM workspace_member WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE`,
+			id.WorkspaceID, id.UserID); err != nil {
+			return err
+		}
+		if err := s.deleteMemberSkillBindings(r.Context(), tx, id.WorkspaceID, id.UserID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(r.Context(), `DELETE FROM workspace_member WHERE workspace_id=$1 AND user_id=$2`,
+			id.WorkspaceID, id.UserID)
+		return err
+	}); err != nil {
 		return err
 	}
 	next, err := s.pickWorkspace(r.Context(), id.UserID)
@@ -354,6 +379,14 @@ func (s *Server) ensureNotLastOwner(ctx context.Context, ws, userID uuid.UUID) e
 		return validation("工作区至少保留一名所有者")
 	}
 	return nil
+}
+
+// deleteMemberSkillBindings 删除该用户在该工作区全部账号上的本人绑定（23 文档第 5.3 节）。
+// 在持有 membership 排他锁的成员变更事务中调用。
+func (s *Server) deleteMemberSkillBindings(ctx context.Context, tx pgx.Tx, ws, userID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `DELETE FROM skill_binding b USING platform_account a
+		WHERE b.account_id = a.id AND a.workspace_id = $1 AND b.audience_user_id = $2`, ws, userID)
+	return err
 }
 
 type inviteDTO struct {

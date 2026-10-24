@@ -76,6 +76,10 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "assets"), 0o755); err != nil {
 		return nil, err
 	}
+	// DEV-SK1 / 23 文档第 5.1 节第 4 项：内置注册表启动自检，失败拒绝启动。
+	if err := checkBuiltinRegistry(); err != nil {
+		return nil, err
+	}
 	desktopFirstContentTimeout, err := desktopFirstContentTimeoutFromEnv()
 	if err != nil {
 		return nil, err
@@ -414,6 +418,7 @@ func (s *Server) buildRouter() http.Handler {
 			s.v3Routes(r)
 			s.v4Routes(r)
 			s.agentRoutes(r)
+			s.skillRoutes(r)
 			r.Put("/admin/crawl/platforms/{platform}", s.h(s.adminPutPlatform))
 		})
 	})
@@ -685,4 +690,72 @@ func (s *Server) auditTx(ctx context.Context, tx pgx.Tx, action, targetType, tar
 func (s *Server) today() time.Time {
 	n := s.now().In(s.loc)
 	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, s.loc)
+}
+
+// ---------- 审计可见性（DEV-SK1 / 23 文档第 10.4 节） ----------
+
+const (
+	auditVisWorkspace = "workspace"
+	auditVisPersonal  = "personal"
+)
+
+// auditVisForScope：个人技能事件整体私有，其余为工作区可见。
+func auditVisForScope(scope string) string {
+	if scope == "personal" {
+		return auditVisPersonal
+	}
+	return auditVisWorkspace
+}
+
+func auditDetail(ctx context.Context, detail map[string]any) (actor *uuid.UUID, workspace *uuid.UUID, payload []byte) {
+	if id := ident(ctx); id != nil {
+		if id.UserID != uuid.Nil {
+			actor = &id.UserID
+		}
+		if id.WorkspaceID != uuid.Nil {
+			workspace = &id.WorkspaceID
+		}
+	}
+	if detail == nil {
+		detail = map[string]any{}
+	} else {
+		cp := make(map[string]any, len(detail)+3)
+		for k, v := range detail {
+			cp[k] = v
+		}
+		detail = cp
+	}
+	if actor == nil {
+		detail["actor_type"] = "system"
+	}
+	if p := agentPrincipalOf(ctx); p != nil {
+		detail["via_agent"] = true
+		if p.ActionID != uuid.Nil {
+			detail["agent_action_id"] = p.ActionID.String()
+		}
+		if p.ConversationID != uuid.Nil {
+			detail["agent_conversation_id"] = p.ConversationID.String()
+		}
+	}
+	b, _ := json.Marshal(detail)
+	return actor, workspace, b
+}
+
+// auditVis 写入带可见性的操作日志；失败不阻断调用方（与 audit 一致），除非在事务内使用 auditTxVis。
+func (s *Server) auditVis(ctx context.Context, action, targetType, targetID, result string, detail map[string]any, visibility string) {
+	actor, workspace, payload := auditDetail(ctx, detail)
+	if _, err := s.db.Exec(context.WithoutCancel(ctx),
+		`INSERT INTO audit_log (actor_id, workspace_id, action, target_type, target_id, result, detail, visibility) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		actor, workspace, action, targetType, targetID, result, payload, visibility); err != nil {
+		slog.Error("写操作日志失败", "err", err)
+	}
+}
+
+// auditTxVis 在事务内写入带可见性的操作日志；日志失败应回滚业务写入（5.2 节）。
+func (s *Server) auditTxVis(ctx context.Context, tx pgx.Tx, action, targetType, targetID, result string, detail map[string]any, visibility string) error {
+	actor, workspace, payload := auditDetail(ctx, detail)
+	_, err := tx.Exec(ctx,
+		`INSERT INTO audit_log (actor_id, workspace_id, action, target_type, target_id, result, detail, visibility) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		actor, workspace, action, targetType, targetID, result, payload, visibility)
+	return err
 }

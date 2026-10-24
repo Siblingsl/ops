@@ -566,6 +566,31 @@ func viewerMutateAllowed(path string) bool {
 	if strings.HasPrefix(path, "/api/v1/agent/actions/") && strings.HasSuffix(path, "/reject") {
 		return true
 	}
+	// DEV-SK1 / 23 文档第 10.2 节：viewer 精确豁免，仅把请求送入服务层，
+	// 由 handler 再校验“仅本人 personal”；技能草拟（/skills/draft）不豁免。
+	if path == "/api/v1/skills/parse" || path == "/api/v1/skills" {
+		return true
+	}
+	if rest, ok := strings.CutPrefix(path, "/api/v1/skills/"); ok && !strings.Contains(rest, "/") {
+		// PUT/DELETE /skills/{uuid}：uuid 段后无更多路径；export/impact 为 GET 不经此处。
+		if _, err := uuid.Parse(rest); err == nil {
+			return true
+		}
+	}
+	if rest, ok := strings.CutPrefix(path, "/api/v1/accounts/"); ok {
+		// PUT /accounts/{uuid}/skill-bindings/{audience}/{skillUuid}
+		if i := strings.Index(rest, "/skill-bindings/"); i > 0 {
+			tail := rest[i+len("/skill-bindings/"):]
+			parts := strings.Split(tail, "/")
+			if len(parts) == 2 {
+				if _, err := uuid.Parse(rest[:i]); err == nil {
+					if _, err := uuid.Parse(parts[1]); err == nil {
+						return true
+					}
+				}
+			}
+		}
+	}
 	return false
 }
 

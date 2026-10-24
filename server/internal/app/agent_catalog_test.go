@@ -107,6 +107,19 @@ func agentClassifiedRouteList() map[string]string {
 		"GET /api/v1/assets/{id}/file",
 		"GET /api/v1/works/{id}/xhs/pack.zip",
 		"GET /api/v1/works/{id}/toutiao/pack.zip",
+		// DEV-SK1 / 23 文档第 11 节：技能库与绑定配置页面入口；
+		// DEV-SK3 将把 skills__* 管理工具列入附录 A（8.3 节），草拟接口随之登记。
+		"GET /api/v1/skills",
+		"POST /api/v1/skills",
+		"POST /api/v1/skills/parse",
+		"GET /api/v1/skills/{id}",
+		"PUT /api/v1/skills/{id}",
+		"DELETE /api/v1/skills/{id}",
+		"GET /api/v1/skills/{id}/impact",
+		"GET /api/v1/skills/{id}/export",
+		"GET /api/v1/accounts/{accountId}/skill-bindings",
+		"PUT /api/v1/accounts/{accountId}/skill-bindings/{audience}/{skillId}",
+		"GET /api/v1/accounts/{accountId}/skill-context",
 	} {
 		out[r] = "附录 B.1：只给链接"
 	}

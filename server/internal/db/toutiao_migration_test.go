@@ -149,7 +149,7 @@ func TestToutiaoMigrationUpgradeAndDataPreservingRollback(t *testing.T) {
 	if err := Migrate(freshURL); err != nil {
 		t.Fatalf("migrate fresh database: %v", err)
 	}
-	if version, err := goose.GetDBVersion(freshDB); err != nil || version != 59 {
+	if version, err := goose.GetDBVersion(freshDB); err != nil || version != 60 {
 		t.Fatalf("fresh migration version: got %d, err=%v", version, err)
 	}
 	assertToutiaoAccountFormat(t, freshDB, "long_article")
@@ -166,7 +166,7 @@ func TestToutiaoMigrationUpgradeAndDataPreservingRollback(t *testing.T) {
 	if err := Migrate(upgradeURL); err != nil {
 		t.Fatalf("upgrade existing two-platform database: %v", err)
 	}
-	if version, err := goose.GetDBVersion(upgradeDB); err != nil || version != 59 {
+	if version, err := goose.GetDBVersion(upgradeDB); err != nil || version != 60 {
 		t.Fatalf("upgraded migration version: got %d, err=%v", version, err)
 	}
 	assertLegacyPlatformData(t, upgradeDB, legacy)
