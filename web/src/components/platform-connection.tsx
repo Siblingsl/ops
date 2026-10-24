@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Link } from 'react-router-dom'
-import { del, errorMessage, get, patch, post } from '@/lib/api'
+import { del, errorMessage, get, patch, post, put } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { platformErrorCopy } from '@/lib/platform-errors'
 import type { PlatformAccountSnapshot, PlatformAvailability, PlatformConnection, PlatformObservation, PlatformSyncCoverage, PlatformSyncCoverageStage, PlatformSyncOperation, WorkspaceRole } from '@/lib/types'
@@ -12,7 +12,7 @@ import { useMe } from '@/lib/session'
 import { DESKTOP_LOCAL_SETTINGS_REQUEST, useSettingsDraft } from '@/lib/desktop-settings'
 import { requestDesktopPlatformIntent } from '@/lib/desktop-platform-intent'
 import { PlatformSyncDetails } from './platform-sync-details'
-import { Badge, Button, Card, CardHeader, cn, Field, MoreMenu, platformLabel, roleReadOnlyHint } from './ui'
+import { Badge, Button, Card, CardHeader, cn, Field, MoreMenu, platformLabel, roleReadOnlyHint, Switch } from './ui'
 
 // 平台数据连接（D-129 / 20 文档 §14）。页面只展示服务端返回的真实状态：
 // 不推断“已同步”，不把未知显示成 0，也不提供任何批量操作入口。
@@ -137,8 +137,8 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
   const { data: me } = useMe()
   const policyQuery = useQuery({
     queryKey: ['platform-collection-policy', me?.workspace.id ?? ''],
-    queryFn: () => get<{ global_enabled: boolean; account_sync_platforms?: string[]; metrics_refresh_platforms?: string[]; policy: { enabled: boolean; allow_member_connections: boolean } }>('/platform-collection/policy'),
-    enabled: desktopPresentation && platform !== 'toutiao' && !!me?.workspace.id,
+    queryFn: () => get<{ global_enabled: boolean; account_sync_platforms?: string[]; metrics_refresh_platforms?: string[]; policy: { enabled: boolean; allow_member_connections: boolean; authorization_revision: number } }>('/platform-collection/policy'),
+    enabled: platform !== 'toutiao' && !!me?.workspace.id,
     staleTime: 60_000,
     retry: false,
   })
@@ -249,6 +249,27 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
+      setBusy('')
+    }
+  }
+
+  // 工作区平台数据读取策略（20 文档 §17.2）：登录前的设备登记就要求开启，
+  // 因此 owner 的开关在“尚未连接”与“已连接”两个分支都要可操作。
+  const saveWorkspacePolicy = async (enabled: boolean) => {
+    const policy = policyQuery.data?.policy
+    if (!policy || busy !== '') return
+    setBusy('workspace-policy')
+    try {
+      await put('/platform-collection/policy', {
+        enabled,
+        allow_member_connections: policy.allow_member_connections,
+        authorization_revision: policy.authorization_revision,
+      })
+      toast.success(enabled ? '已启用本工作区的平台数据读取' : '已关闭本工作区的平台数据读取')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      await policyQuery.refetch()
       setBusy('')
     }
   }
@@ -423,6 +444,13 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
             ? '头条稳定身份与数据读取能力尚未验证。登录后不会自动同步作品，作品仍通过发布包手动发布。'
             : '尚未连接。登录平台账号后需要本人核对稳定身份；登录不会自动同步历史作品。'} </p>
           <p className="text-mist-400">服务端不会代你登录，也不会保存平台 Cookie 或密码。</p>
+          {!isToutiao && canManage && !adminOverride && policyQuery.data && (
+            <div className="flex flex-wrap items-center gap-3 border-t border-mist-100 pt-3">
+              <Switch label="启用本工作区平台数据读取" checked={policyQuery.data.policy.enabled} disabled={busy !== ''}
+                onChange={(v) => void saveWorkspacePolicy(v)} />
+              <span className="text-[13px] text-mist-600">{policyQuery.data.policy.enabled ? '已启用：可登录平台账号并发起同步' : '未启用：登录平台账号前需要先开启'}</span>
+            </div>
+          )}
           {actionsTarget === undefined ? actions : actionsTarget ? createPortal(actions, actionsTarget) : null}
           {!desktopPresentation && <p className="text-[12px] text-mist-500">请在 OPS 桌面客户端登录平台账号。</p>}
           <p className="text-[12px] text-mist-500">同步入口会在连接、作品列表能力和服务端验收开关均满足后开放。</p>
@@ -556,6 +584,13 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
     <label className="flex items-center gap-2 text-[13.5px] text-mist-400">
       <input type="checkbox" className="accent-ink-600" checked={connection.auto_adopt} disabled readOnly title={autoAdoptDisabledReason()} />
       {connection.auto_adopt ? '已开启' : '未开启'}
+    </label>
+  </Field>
+  const workspacePolicyField = !isToutiao && canManage && !adminOverride && policyQuery.data && <Field label="工作区平台数据读取" hint="关闭后本工作区不能登录平台账号或发起新的读取" plain className={desktopPresentation ? 'desktop-platform-field' : undefined}>
+    <label className="flex items-center gap-2 text-[13.5px] text-mist-700">
+      <input type="checkbox" className="accent-ink-600" checked={policyQuery.data.policy.enabled} disabled={busy !== ''}
+        onChange={(e) => void saveWorkspacePolicy(e.target.checked)} />
+      {policyQuery.data.policy.enabled ? '已启用' : '已关闭'}
     </label>
   </Field>
   const lastVerifiedField = <Field label="最近验证" plain className={desktopPresentation ? 'desktop-platform-field' : undefined}>
@@ -700,12 +735,12 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
             {platformAccountField}{platformProfileField}{consentField}{lastVerifiedField}
           </section>
           <section className="desktop-platform-collection" aria-label="采集设置">
-            <div className="desktop-platform-collection-grid">{autoCollectField}{autoAdoptField}</div>
+            <div className="desktop-platform-collection-grid">{autoCollectField}{autoAdoptField}{workspacePolicyField}</div>
             <div className={cn('desktop-platform-schedule-grid', connection.failure_count === 0 && 'desktop-platform-schedule-single')}>{nextDueField}{failureField}</div>
           </section>
         </div>
       ) : <div className="grid gap-4 p-5 sm:grid-cols-2">
-        {platformAccountField}{platformProfileField}{consentField}{autoCollectField}{autoAdoptField}{lastVerifiedField}{nextDueField}{failureField}
+        {platformAccountField}{platformProfileField}{consentField}{autoCollectField}{autoAdoptField}{workspacePolicyField}{lastVerifiedField}{nextDueField}{failureField}
       </div>}
 
       {selectedDetails && <PlatformSyncDetails key={`${accountId}:${selectedDetails.id}`} accountId={accountId} operation={selectedDetails} onClose={() => setDetailsOperation(null)} />}

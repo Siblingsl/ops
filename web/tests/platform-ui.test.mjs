@@ -164,3 +164,28 @@ test('熔断卡片：明确告知恢复后不会自动重开自动采集', async
   assert.match(source, /error_code/);
   assert.match(source, /affected_connections/);
 });
+
+// DEV-AS15：同步启用条件的收口（20 文档 §17.2、§21.15）。
+// 每平台同步能力此前只能由 fixture 直写 system_setting；工作区策略只有 PUT 接口
+// 没有 UI。这里锁定两处新入口的契约：逐项开关、无批量语义、带版本号提交。
+test('工作区平台数据读取开关：owner 逐工作区提交并带授权版本', async () => {
+  const source = await readSource('components/platform-connection.tsx');
+  // owner 的开关在“尚未连接”分支也必须出现（设备登记要求策略先开启）。
+  assert.match(source, /启用本工作区平台数据读取/);
+  // PUT 必须带当前 authorization_revision 做版本比较，不得盲写。
+  assert.match(source, /authorization_revision:\s*policy\.authorization_revision/);
+  // 禁止出现一次改多个策略键的批量调用。
+  assert.equal(/platform-collection\/policy['"`]\s*,\s*\{[^}]*allow_member_connections:\s*true[^}]*enabled:\s*true/.test(source), false);
+});
+
+test('超管平台同步能力开关：按功能×平台逐项提交', async () => {
+  const source = await readSource('pages/settings/Admin.tsx');
+  assert.match(source, /platform_feature:\s*\{\s*feature,\s*platform,\s*enabled/);
+  // 只允许两个 feature 与两个平台的固定组合，一次一项。
+  assert.match(source, /'account_sync', 'metrics_refresh'/);
+  assert.match(source, /'xhs', 'wechat_mp'/);
+  // 红线：不得出现“全部开启/一键开启”入口。
+  for (const pattern of [/<Button[^>]*>[^<]*全部开启/, /<Button[^>]*>[^<]*一键开启/, /enableAllPlatforms/]) {
+    assert.equal(pattern.test(source), false, `不应出现 ${pattern}`);
+  }
+});

@@ -715,6 +715,11 @@ export interface SystemSettings {
   maintenance_mode: boolean
   /** 平台采集总开关（20 文档 §17.3）：与部署配置任一关闭即停。 */
   platform_kill_switch: boolean
+  /** 每平台同步能力开关（20 文档 §21.15）：默认关闭，验收通过后由超管按平台打开。 */
+  platform_features: {
+    account_sync: Record<'xhs' | 'wechat_mp', boolean>
+    metrics_refresh: Record<'xhs' | 'wechat_mp', boolean>
+  }
 }
 
 export interface WorkspaceInvite {

@@ -183,6 +183,19 @@ export default function SettingsAdmin() {
     }
   }
 
+  const savePlatformFeature = async (feature: 'account_sync' | 'metrics_refresh', platform: 'xhs' | 'wechat_mp', enabled: boolean) => {
+    setBusy(true)
+    try {
+      await put('/admin/system-settings', { platform_feature: { feature, platform, enabled } })
+      toast.success('已保存')
+      await inv(['admin-settings'])
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="animate-fade-in space-y-8">
       <PageHeader
@@ -228,6 +241,35 @@ export default function SettingsAdmin() {
                   />
                 </div>
               </Field>
+            </>
+          )}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="平台同步能力"
+          desc="按平台逐项开启「账号同步」与「指标刷新」。关闭总开关、部署配置任一未开或平台未通过真实账号验收前，保持默认关闭；开关不代替验收。"
+        />
+        <div className="space-y-4 px-5 pb-5">
+          {!settings.data ? <PageLoading /> : (
+            <>
+              {(['account_sync', 'metrics_refresh'] as const).map((feature) => (
+                <Field key={feature} label={feature === 'account_sync' ? '账号同步（同步平台作品与资料）' : '指标刷新（刷新已同步作品的数据）'}>
+                  <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+                    {(['xhs', 'wechat_mp'] as const).map((platform) => (
+                      <label key={platform} className="flex items-center gap-2 text-[13px] text-mist-700">
+                        <Switch
+                          checked={settings.data.platform_features[feature][platform]}
+                          disabled={busy}
+                          onChange={(v) => savePlatformFeature(feature, platform, v)}
+                        />
+                        {platform === 'xhs' ? '小红书' : '微信公众号'}
+                      </label>
+                    ))}
+                  </div>
+                </Field>
+              ))}
             </>
           )}
         </div>

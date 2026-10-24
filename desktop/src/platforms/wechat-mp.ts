@@ -291,6 +291,15 @@ export function parsePublishPage(payload: unknown): {
   return { articles, page: pageNo, hasMore, totalCount: total, publishRecordCount: list.length, invalidRows };
 }
 
+// probePublishedListReadable 仅核验首页发表记录结构，不分页、不保存作品；
+// 接口必须带后台页面 URL 里的 token（fetchJSON 对公众号自动补），失败时按
+// platform_login_required / platform_schema_changed 抛出，不假装可读。
+export async function probePublishedListReadable(source: ReadOnlyResponseSource): Promise<boolean> {
+  const payload = await source.fetchJSON(`${WECHAT_MP_API.publishedList}?sub=list&begin=0&count=10&lang=zh_CN&f=json&ajax=1`);
+  parsePublishPage(payload);
+  return true;
+}
+
 // collectPublishedArticles 跨页收集并按稳定编号去重；页数上限 3 与 §10.1 一致。
 export async function collectPublishedArticles(
   source: ReadOnlyResponseSource,

@@ -7,7 +7,7 @@ import { selectLoginBrowser, trustedLoginBrowsers, type LoginBrowserFamily } fro
 import { createCDPClient, launchPlatformBrowser, PLATFORM_BROWSER_NAMES, PlatformBrowserError, isAllowedPlatformUrl } from './platform-worker';
 import { installLoginNavigationPolicy } from './platform-login-policy';
 import { parseIdentity as parseXhsIdentity, probeCapabilities as xhsCapabilities, probePostedNotesReadable } from './platforms/xhs';
-import { parseIdentity as parseWechatIdentity, probeCapabilities as wechatCapabilities } from './platforms/wechat-mp';
+import { parseIdentity as parseWechatIdentity, probeCapabilities as wechatCapabilities, probePublishedListReadable } from './platforms/wechat-mp';
 import type { LoginHandle, LoginIdentity } from './platform-login-flow';
 import type { DesktopClient } from './desktop-client';
 
@@ -36,6 +36,27 @@ export async function probeXhsLoginIdentity(session: PlatformLoginSession, expec
       workList: postedNotesReadable ? 'supported' : 'unknown',
       perNoteMetrics: 'unknown',
       followerTotal: 'unknown',
+      browserVersion
+    }
+  };
+}
+
+export async function probeWechatLoginIdentity(session: PlatformLoginSession, identityPayload: unknown, currentUserName: string | undefined, browserVersion: string, now: string): Promise<LoginIdentity> {
+  const identity = parseWechatIdentity(identityPayload, currentUserName);
+  // 与小红书一致：登录核验时实测一页发表记录是否可读，可读才把目录与单篇指标
+  // 能力标为 supported；失败保持 unknown，不虚构能力（同步入口按能力放行）。
+  let listReadable = false;
+  try {
+    await probePublishedListReadable(createPageResponseSource(session));
+    listReadable = true;
+  } catch {
+    // 身份可以先人工核对；目录能力未核验时同步入口保持关闭。
+  }
+  return {
+    externalAccountKey: identity.externalAccountKey,
+    displayName: identity.originalID,
+    capabilities: {
+      ...wechatCapabilities({ backendLoggedIn: true, identity, listReadable, now }),
       browserVersion
     }
   };
@@ -116,8 +137,13 @@ export async function startPlatformLogin(client: DesktopClient, userData: string
           if (!wechatPayload) return null;
           // 只接受官方页面明确暴露且符合原始ID格式的当前主体；不存在时多账号拒绝猜测。
           const current = await cdp.request('Runtime.evaluate', { expression: `(() => { const id = globalThis.wx?.data?.user_name; return typeof id === 'string' && /^gh_[0-9a-zA-Z]+$/.test(id) ? id : null; })()`, returnByValue: true }) as { result?: { value?: unknown } };
-          const identity = parseWechatIdentity(wechatPayload, typeof current.result?.value === 'string' ? current.result.value : undefined);
-          return { externalAccountKey: identity.externalAccountKey, displayName: identity.originalID, capabilities: { ...wechatCapabilities({ backendLoggedIn: true, identity, listReadable: false, now }), publishedList: 'unknown', perArticleMetrics: 'unknown', browserVersion } };
+          return probeWechatLoginIdentity(
+            { platform: 'wechat_mp', profileDir: stored.profileDir, browser, cdp },
+            wechatPayload,
+            typeof current.result?.value === 'string' ? current.result.value : undefined,
+            browserVersion,
+            now
+          );
         }
         const session: PlatformLoginSession = { platform: 'xhs', profileDir: stored.profileDir, browser, cdp };
         return probeXhsLoginIdentity(session, expectedKey, browserVersion, now);

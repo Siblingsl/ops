@@ -466,10 +466,38 @@ func (s *Server) adminGetSystemSettings(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		return err
 	}
+	features, err := s.adminPlatformFeatureFlags(r.Context())
+	if err != nil {
+		return err
+	}
 	return ok(w, map[string]any{
 		"registration_open": reg, "maintenance_mode": maint,
 		"platform_kill_switch": killed,
+		"platform_features":    features,
 	})
+}
+
+// platformFeatureKey 是每平台同步能力开关的 system_setting 键，与
+// platformSyncFeaturePlatforms 的读取键一致：服务端未开启的平台在
+// 准入与调度两处都会按“尚未通过验收并启用”拒绝。
+func platformFeatureKey(feature, platform string) string {
+	return "platform_" + feature + "." + platform + ".enabled"
+}
+
+func (s *Server) adminPlatformFeatureFlags(ctx context.Context) (map[string]map[string]bool, error) {
+	flags := map[string]map[string]bool{}
+	for _, feature := range []string{"account_sync", "metrics_refresh"} {
+		perPlatform := map[string]bool{}
+		for _, platform := range []string{"xhs", "wechat_mp"} {
+			enabled, err := s.systemBool(ctx, platformFeatureKey(feature, platform), false)
+			if err != nil {
+				return nil, err
+			}
+			perPlatform[platform] = enabled
+		}
+		flags[feature] = perPlatform
+	}
+	return flags, nil
 }
 
 func (s *Server) adminPutSystemSettings(w http.ResponseWriter, r *http.Request) error {
@@ -480,12 +508,33 @@ func (s *Server) adminPutSystemSettings(w http.ResponseWriter, r *http.Request) 
 		RegistrationOpen   *bool `json:"registration_open"`
 		MaintenanceMode    *bool `json:"maintenance_mode"`
 		PlatformKillSwitch *bool `json:"platform_kill_switch"`
+		PlatformFeature    *struct {
+			Feature  string `json:"feature"`
+			Platform string `json:"platform"`
+			Enabled  bool   `json:"enabled"`
+		} `json:"platform_feature"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
-	if in.RegistrationOpen == nil && in.MaintenanceMode == nil && in.PlatformKillSwitch == nil {
+	if in.RegistrationOpen == nil && in.MaintenanceMode == nil && in.PlatformKillSwitch == nil && in.PlatformFeature == nil {
 		return validation("请指定要修改的开关")
+	}
+	if in.PlatformFeature != nil {
+		// 每平台同步能力开关（20 文档 §21.15）：一次只改一个 feature×platform，
+		// 避免出现“一键全开”这类批量入口。开关不代替真实账号验收。
+		feature, platform := in.PlatformFeature.Feature, in.PlatformFeature.Platform
+		if feature != "account_sync" && feature != "metrics_refresh" {
+			return validation("平台能力只能是 account_sync 或 metrics_refresh")
+		}
+		if platform != "xhs" && platform != "wechat_mp" {
+			return validation("平台只能是 xhs 或 wechat_mp")
+		}
+		if err := s.putSystemBool(r.Context(), platformFeatureKey(feature, platform), in.PlatformFeature.Enabled); err != nil {
+			return err
+		}
+		s.audit(r.Context(), "platform_feature_switch", "system_setting", platformFeatureKey(feature, platform), "ok",
+			map[string]any{"feature": feature, "platform": platform, "enabled": in.PlatformFeature.Enabled})
 	}
 	if in.PlatformKillSwitch != nil {
 		// 平台采集总开关（§17.3）：关闭后立即停止领取与提交，不需要重启进程。
@@ -507,6 +556,7 @@ func (s *Server) adminPutSystemSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	s.audit(r.Context(), "admin_system_settings", "system", "", "ok", map[string]any{
 		"registration_open": in.RegistrationOpen, "maintenance_mode": in.MaintenanceMode,
+		"platform_feature": in.PlatformFeature,
 	})
 	return s.adminGetSystemSettings(w, r)
 }
