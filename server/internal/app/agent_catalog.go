@@ -69,6 +69,23 @@ var agentMetaTools = []AgentTool{
 		Target: target("search", ""),
 	},
 	{
+		// DEV-SK3 / 23 文档第 8.2 节：本地 R 元工具，不计普通 30 次读取；
+		// 有独立的 3600 字输入预算，正文只进服务端可信指令区，回执不含正文。
+		Name: "load_skill", Kind: toolR, MinRole: roleViewer,
+		Description: "加载一个已配置技能的完整正文到本次运行的可信技能指令区，返回加载回执（不含正文）",
+		Params: []ToolParam{
+			pBodyF("skill_ref", strMax(8), true),
+			pBodyF("catalog_id", schemaUUID, true),
+			pBodyF("work_id", schemaUUID, false),
+		},
+		Notes: "本地元工具；skill_ref / catalog_id 必须来自同一目录；重复加载幂等",
+	},
+	{
+		Name: "get_skill_context", Kind: toolR, MinRole: roleViewer,
+		Description: "返回当前技能上下文摘要：catalog_id、work_id、已加载引用号、字符数与预算",
+		Notes:       "本地元工具",
+	},
+	{
 		Name: "make_link", Kind: toolR, MinRole: roleViewer,
 		Description: "按页面表生成站内链接，不访问服务器数据",
 		Params: []ToolParam{
@@ -103,6 +120,7 @@ func buildAgentCatalog() []AgentTool {
 	out = append(out, agentToolsWorkspace...)
 	out = append(out, agentToolsAccounts...)
 	out = append(out, agentToolsProfile...)
+	out = append(out, agentToolsSkills...)
 	out = append(out, agentToolsMaterials...)
 	out = append(out, agentToolsTopics...)
 	out = append(out, agentToolsOps...)

@@ -263,8 +263,8 @@ func TestAG04CatalogShape(t *testing.T) {
 		}
 	}
 	// 附录 A 共 280 条，加第 3.3 节的 4 个元工具。
-	if len(agentCatalog()) != 284 {
-		t.Fatalf("目录条目数 %d，期望 284（附录 A 280 条 + 元工具 4 条）", len(agentCatalog()))
+	if len(agentCatalog()) != 293 {
+		t.Fatalf("目录条目数 %d，期望 293（附录 A 287 条 + 元工具 6 条）", len(agentCatalog()))
 	}
 	for _, d := range agentDomains {
 		if counts[d.Name] == 0 {

@@ -391,7 +391,7 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	human, err := agentHumanArgs(t, req)
+	human, err := agentHumanArgs(t, req, act.Params)
 	if err != nil {
 		return err
 	}
@@ -553,7 +553,7 @@ func agentFinalArgs(act *agentActionRow, t *AgentTool, edits map[string]any, pay
 }
 
 // agentHumanArgs 从执行请求里取出 human 字段（第 3.2 节：只来自执行请求，模型给不出）。
-func agentHumanArgs(t *AgentTool, req agentExecuteRequest) (map[string]any, error) {
+func agentHumanArgs(t *AgentTool, req agentExecuteRequest, frozen map[string]any) (map[string]any, error) {
 	out := map[string]any{}
 	for _, h := range t.Human {
 		switch h.Name {
@@ -571,6 +571,13 @@ func agentHumanArgs(t *AgentTool, req agentExecuteRequest) (map[string]any, erro
 			if req.Choice != nil {
 				out[h.Name] = req.Choice.ConfirmOverLimit
 			}
+		case "publish_confirmation":
+			// DEV-SK3 / 23 文档第 8.4 节：公开确认由用户执行请求填入。digest 来自卡片提出时
+			// 冻结的 publish_digest 守卫值，执行时由服务端按最终内容复核；
+			// 个人范围没有该守卫（钩子已删除），不组装确认对象。
+			if digest, ok := frozen["publish_digest"].(string); ok && digest != "" {
+				out[h.Name] = map[string]any{"confirmed": req.Confirm, "digest": digest}
+			}
 		default:
 			if strings.TrimSpace(req.ConfirmText) != "" && h.Name == "confirm" {
 				out[h.Name] = true
@@ -579,7 +586,7 @@ func agentHumanArgs(t *AgentTool, req agentExecuteRequest) (map[string]any, erro
 	}
 	// 开关类 human 字段在卡片确认时统一置真（H-07 的 confirm_published 等）。
 	for _, h := range t.Human {
-		if h.Name == "overwrite_choice" || h.Name == "confirm_over_limit" {
+		if h.Name == "overwrite_choice" || h.Name == "confirm_over_limit" || h.Name == "publish_confirmation" {
 			continue
 		}
 		if _, ok := out[h.Name]; !ok {

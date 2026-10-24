@@ -55,7 +55,7 @@ func (s *Server) agentPropose(ctx context.Context, st *agentRunState, id *identi
 		}
 		args = agentWholeReplaceMerge(t, args, before)
 	}
-	targetType, targetKey, targetID, workID := s.agentActionTarget(ctx, t, args)
+	targetType, targetKey, targetID, workID := s.agentActionTarget(ctx, st, t, args)
 
 	// 第 5.5 节：同一用户、同一目标、同一工具最多一张未结束卡片。
 	if clash, why := s.agentOpenCard(ctx, st, t, targetKey, workID); clash != uuid.Nil {
@@ -179,7 +179,7 @@ func (s *Server) agentCardClash(ctx context.Context, st *agentRunState, call ai.
 
 // agentActionTarget 计算卡片的目标（第 5.5 节唯一性键）。
 // target_key = 目标类型 + ":" + 目标 ID；正文类卡片同时解析 work_id 以应用作品级唯一规则。
-func (s *Server) agentActionTarget(ctx context.Context, t *AgentTool, args map[string]any) (typ, key, targetID string, workID *uuid.UUID) {
+func (s *Server) agentActionTarget(ctx context.Context, st *agentRunState, t *AgentTool, args map[string]any) (typ, key, targetID string, workID *uuid.UUID) {
 	typ = t.Target.Type
 	if typ == "" {
 		typ = "tool"
@@ -203,6 +203,22 @@ func (s *Server) agentActionTarget(ctx context.Context, t *AgentTool, args map[s
 		default:
 			workID = s.agentWorkIDOf(ctx, u)
 		}
+	}
+	// DEV-SK3 / 23 文档第 8.4 节：技能卡片的复合 target_key，不同目标不误合并。
+	if t.Name == "skills__create" {
+		nameKey := strings.ToLower(strings.TrimSpace(agentArgStr(args, "name")))
+		payload := map[string]any{
+			"scope": agentArgStr(args, "scope"), "workspace_id": st.WorkspaceID,
+			"account_id": nilIfEmptyStr(agentArgStr(args, "account_id")), "user_id": st.UserID, "name_key": nameKey,
+		}
+		sum := sha256.Sum256([]byte(skillCreateTargetCanon(payload)))
+		key = "skill_create:" + hex.EncodeToString(sum[:])
+		return typ, key, targetID, workID
+	}
+	if t.Name == "skills__set_binding" {
+		key = "skill_binding:" + agentArgStr(args, "accountId") + ":" + agentArgStr(args, "audience") +
+			":" + agentArgStr(args, "skillId")
+		return typ, key, targetID, workID
 	}
 	if t.Name == "topics__create" {
 		accountID := agentArgStr(args, "accountId")
@@ -403,4 +419,21 @@ func (s *Server) agentStartRun(ctx context.Context, trigger string, c *agentConv
 		st.Domains = st.Domains[len(st.Domains)-agentMaxDomains:]
 	}
 	return st, nil
+}
+
+// skillCreateTargetCanon 以规范编码序列化 create 目标键的输入（8.4 节 name_key 取 lower(name) 口径）。
+func skillCreateTargetCanon(payload map[string]any) string {
+	b, err := canonJSON(payload)
+	if err != nil {
+		raw, _ := json.Marshal(payload)
+		return string(raw)
+	}
+	return b
+}
+
+func nilIfEmptyStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

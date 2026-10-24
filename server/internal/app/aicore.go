@@ -328,9 +328,13 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 		return nil, err
 	}
 	// DEV-SK2 / 7.2 节：含个人技能的调用禁止进入共享 lastPacks；缓存标记不可共享且不保存文本。
-	if snap != nil && snap.PersonalUsed > 0 {
+	// DEV-SK3 / 23 文档第 4.3 节：skill_draft 不写共享 lastPacks。
+	switch {
+	case t.Type == "skill_draft":
+		// 草拟任务不进入任何共享缓存。
+	case snap != nil && snap.PersonalUsed > 0:
 		s.lastPacks.Store(ident(ctx).WorkspaceID.String()+"/"+t.Type, evalSnapshot{Private: true})
-	} else {
+	default:
 		s.lastPacks.Store(ident(ctx).WorkspaceID.String()+"/"+t.Type, evalSnapshot{System: pack.System, UserRest: pack.UserRest, JSON: t.JSON, Temperature: pack.Temperature})
 	}
 	refs := pack.refs()

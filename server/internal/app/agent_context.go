@@ -41,6 +41,11 @@ func (s *Server) agentBuildMessages(ctx context.Context, st *agentRunState, id *
 		return nil, err
 	}
 	out = append(out, ai.Message{Role: "system", Content: env})
+	// DEV-SK3 / 23 文档第 8.2 节：服务端把获准的技能正文放入专门的「用户已配置技能」system
+	// 补充区；每轮完整重建，历史窗口淘汰回执不丢失正文。普通工具结果、目录、附件仍仅作资料。
+	if zone, chars := agentSkillLoadedText(agentSkillActive(st.RunID)); chars > 0 {
+		out = append(out, ai.Message{Role: "system", Content: zone})
+	}
 	if strings.TrimSpace(st.Summary) != "" {
 		out = append(out, ai.Message{Role: "system", Content: "对话摘要（更早的历史，仅供参考）：\n" + truncate(st.Summary, agentSummaryChars)})
 	}

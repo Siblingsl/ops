@@ -437,7 +437,7 @@ func TestAG06ContractSecondConfirmTypeName(t *testing.T) {
 
 func TestAG09PushHumanFieldsAllowInitialExecutionAndNeedsInputChoices(t *testing.T) {
 	tool := agentTool("wechat__push")
-	initial, err := agentHumanArgs(tool, agentExecuteRequest{})
+	initial, err := agentHumanArgs(tool, agentExecuteRequest{}, map[string]any{})
 	if err != nil {
 		t.Fatalf("首次推送不应要求 needs_input choice：%v", err)
 	}
@@ -452,7 +452,7 @@ func TestAG09PushHumanFieldsAllowInitialExecutionAndNeedsInputChoices(t *testing
 		OverwriteChoice  string `json:"overwrite_choice"`
 		ConfirmOverLimit bool   `json:"confirm_over_limit"`
 	}{OverwriteChoice: "overwrite", ConfirmOverLimit: true}
-	selected, err := agentHumanArgs(tool, agentExecuteRequest{Choice: choice})
+	selected, err := agentHumanArgs(tool, agentExecuteRequest{Choice: choice}, map[string]any{})
 	if err != nil {
 		t.Fatalf("已作出的需要选择应传给分发器：%v", err)
 	}
@@ -485,21 +485,21 @@ func TestAG06TopicCreateTargetKeyUsesCandidateIdentity(t *testing.T) {
 	tool := agentTool("topics__create")
 	accountID := uuid.NewString()
 	args := map[string]any{"accountId": accountID, "title": "标题 A", "angle": "从实践拆解"}
-	typ, firstKey, targetID, workID := server.agentActionTarget(context.Background(), tool, args)
+	typ, firstKey, targetID, workID := server.agentActionTarget(context.Background(), &agentRunState{}, tool, args)
 	if typ != "topic" || targetID != "" || workID != nil {
 		t.Fatalf("新选题卡应保留无已创建目标的语义：type=%q target=%q work=%v", typ, targetID, workID)
 	}
-	_, secondKey, _, _ := server.agentActionTarget(context.Background(), tool,
+	_, secondKey, _, _ := server.agentActionTarget(context.Background(), &agentRunState{}, tool,
 		map[string]any{"accountId": accountID, "title": "标题 B", "angle": "从实践拆解"})
 	if firstKey == secondKey {
 		t.Fatalf("同一账号的不同选题候选不应冲突：%q", firstKey)
 	}
-	_, duplicateKey, _, _ := server.agentActionTarget(context.Background(), tool,
+	_, duplicateKey, _, _ := server.agentActionTarget(context.Background(), &agentRunState{}, tool,
 		map[string]any{"accountId": accountID, "title": " 标题 A ", "angle": "从实践拆解"})
 	if firstKey != duplicateKey {
 		t.Fatalf("相同选题候选应得到稳定唯一键：%q != %q", firstKey, duplicateKey)
 	}
-	_, otherAccountKey, _, _ := server.agentActionTarget(context.Background(), tool,
+	_, otherAccountKey, _, _ := server.agentActionTarget(context.Background(), &agentRunState{}, tool,
 		map[string]any{"accountId": uuid.NewString(), "title": "标题 A", "angle": "从实践拆解"})
 	if firstKey == otherAccountKey {
 		t.Fatalf("不同账号的选题候选不应冲突：%q", firstKey)

@@ -501,6 +501,14 @@ func (s *Server) agentRound(ctx context.Context, st *agentRunState, rt *route, i
 	if send != nil {
 		send("stage", map[string]string{"stage": "thinking"})
 	}
+	// DEV-SK3 / 8.2 节：每轮复核当前活动技能区；失效返回 skill_context_changed 停止运行。
+	if st.AccountID != nil {
+		if acc, accErr := s.account(ctx, *st.AccountID); accErr == nil {
+			if err := s.agentSkillVerifyActive(ctx, st, acc); err != nil {
+				return agentRoundResult{}, err
+			}
+		}
+	}
 	msgs, err := s.agentBuildMessages(ctx, st, id)
 	if err != nil {
 		return agentRoundResult{}, err
@@ -708,7 +716,13 @@ func (s *Server) agentHandleToolCall(ctx context.Context, st *agentRunState, id 
 // agentToolLimit 返回限额类工具错误（不计入连续无效，第 6.6 节）。
 func (s *Server) agentToolLimit(ctx context.Context, st *agentRunState, call ai.ToolCall, msg string,
 	send func(string, any)) error {
-	payload, _ := json.Marshal(map[string]any{"ok": false, "error": map[string]any{"code": "agent_limit_reached", "message": msg}})
+	return s.agentToolLimitWithCode(ctx, st, call, "agent_limit_reached", msg, send)
+}
+
+// agentToolLimitWithCode 返回带自定义错误码的限额类工具错误（不计入连续无效）。
+func (s *Server) agentToolLimitWithCode(ctx context.Context, st *agentRunState, call ai.ToolCall, code, msg string,
+	send func(string, any)) error {
+	payload, _ := json.Marshal(map[string]any{"ok": false, "error": map[string]any{"code": code, "message": msg}})
 	return s.agentToolOutcome(ctx, st, call, agentToolRecord{Model: payload, Raw: payload, Summary: msg}, false, send)
 }
 
@@ -738,16 +752,31 @@ func (s *Server) agentToolDispatch(ctx context.Context, st *agentRunState, t *Ag
 	}
 	rec.Raw = agentRawResultForStorage(res.Status, res.Raw, secrets)
 	// 第 4.4 节第 6 项：G 类结果回写来源 ai_call_id，执行阶段据此为段落注入 applied。
-	s.agentTagSourceCall(ctx, st, t.Name, call.ID, started)
-	return s.agentToolOutcome(ctx, st, call, rec, true, send)
+	// 标签必须在消息落库之后回写：先落库再打标，否则 UPDATE 匹配不到行。
+	tagErr := s.agentToolOutcome(ctx, st, call, rec, true, send)
+	s.agentTagSourceCall(ctx, st, t.Name, call.ID, started, res.Done)
+	return tagErr
 }
 
 // agentTagSourceCall 把来源 AI 调用写回该工具结果消息（第 4.4 节第 6 项）。
-func (s *Server) agentTagSourceCall(ctx context.Context, st *agentRunState, toolName, callID string, from time.Time) {
+func (s *Server) agentTagSourceCall(ctx context.Context, st *agentRunState, toolName, callID string, from time.Time, done json.RawMessage) {
 	if agentToolSourceKind(toolName) != agentSrcG {
 		return
 	}
-	source := s.agentLinkAICall(ctx, st.WorkspaceID, from, time.Now().Add(time.Second))
+	source := uuid.Nil
+	if agentSkillDefSourceTools[toolName] && len(done) > 0 {
+		var d struct {
+			AICallID string `json:"ai_call_id"`
+		}
+		if json.Unmarshal(done, &d) == nil {
+			if id, err := uuid.Parse(d.AICallID); err == nil {
+				source = id
+			}
+		}
+	}
+	if source == uuid.Nil {
+		source = s.agentLinkAICall(ctx, st.WorkspaceID, from, time.Now().Add(time.Second))
+	}
 	if source == uuid.Nil {
 		return
 	}
@@ -780,6 +809,7 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 			st.ConversationID, st.Domains)
 	}
 	s.unregisterAgentRun(st.RunID)
+	agentReleaseSkillState(st.RunID)
 	s.maybeSummarize(ctx, st)
 	if send != nil {
 		stage := "waiting_confirmation"

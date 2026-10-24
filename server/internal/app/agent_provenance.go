@@ -22,7 +22,28 @@ const (
 	agentSrcAttachment = "attachment"
 	agentSrcG          = "G"
 	agentSrcO          = "O"
+
+	// DEV-SK3 / 23 文档第 8.3.2 节：来源按目的分类。
+	// skills__draft / skills__get 只产生 skill_definition 来源（供技能文字字段）；
+	// 其他 G/O 不可给技能文字字段供源，技能来源也不可给观点 / 正文 / 素材供源。
+	agentPurposeBusiness = "business"
+	agentPurposeSkill    = "skill_definition"
 )
+
+// agentSkillDefTextFields 是技能定义的四个文字字段（8.3.2 节白名单）。
+var agentSkillDefTextFields = map[string]bool{
+	"name": true, "summary": true, "triggers": true, "instructions": true,
+}
+
+// agentSkillDefSourceTools 是产生 skill_definition 来源的工具。
+var agentSkillDefSourceTools = map[string]bool{
+	"skills__get": true, "skills__draft": true,
+}
+
+// agentSkillExcludedSourceTools 的全部结果与技能回执不进入任何内容来源集合（8.3.2 节）。
+var agentSkillExcludedSourceTools = map[string]bool{
+	"load_skill": true, "skills__list": true, "get_context": true, "get_skill_context": true,
+}
 
 // agentMinProvenanceChars 是第 4.4 节第 3 项的短值豁免：不足 4 个字符视为 F。
 const agentMinProvenanceChars = 4
@@ -31,6 +52,8 @@ const agentMinProvenanceChars = 4
 // G 类结果中的每个文本字段都是一个候选），第 4.4 节第 4 项要求多段落全部来自同一个来源。
 type agentSource struct {
 	Kind     string
+	Purpose  string // business | skill_definition（8.3.2 节）
+	Tool     string
 	Text     string // 归一化前的原文，用于错误信息
 	AICallID uuid.UUID
 	// Norms 是该来源下的全部候选归一化文本。
@@ -57,7 +80,8 @@ func (s *Server) agentCollectSources(ctx context.Context, convID uuid.UUID) (*ag
 		if strings.TrimSpace(text) == "" {
 			return
 		}
-		set.sources = append(set.sources, agentSource{Kind: kind, Text: text, AICallID: callID, Norms: []string{agentNormalize(text)}})
+		set.sources = append(set.sources, agentSource{Kind: kind, Purpose: agentPurposeBusiness,
+			Text: text, AICallID: callID, Norms: []string{agentNormalize(text)}})
 	}
 
 	rows, err := s.db.Query(ctx, `SELECT content FROM agent_message
@@ -105,6 +129,11 @@ func (s *Server) agentCollectSources(ctx context.Context, convID uuid.UUID) (*ag
 		if err := rows.Scan(&name, &body, &callID); err != nil {
 			return nil, err
 		}
+		// DEV-SK3 / 8.3.2 节：load_skill、skills__list、get_context 的全部结果以及技能回执
+		// 不进入任何内容来源集合，不能通过嵌套字符串再次被递归收集。
+		if agentSkillExcludedSourceTools[name] {
+			continue
+		}
 		kind := agentToolSourceKind(name)
 		if kind == "" {
 			continue
@@ -113,15 +142,53 @@ func (s *Server) agentCollectSources(ctx context.Context, convID uuid.UUID) (*ag
 		if callID != nil {
 			id = *callID
 		}
-		texts := agentResultTexts(body)
+		var texts []string
+		purpose := agentPurposeBusiness
+		if agentSkillDefSourceTools[name] {
+			// 技能结果仅白名单提取四个定义文字字段，不采集错误、警告、元数据或原始 JSON 全文。
+			purpose = agentPurposeSkill
+			texts = agentSkillDefTexts(body)
+		} else {
+			texts = agentResultTexts(body)
+		}
 		if len(texts) == 0 {
 			continue
 		}
 		// 同一个工具结果是一个来源，其内部每个文本字段是一个候选（第 4.4 节第 2 项）。
-		set.sources = append(set.sources, agentSource{Kind: kind, Text: body, AICallID: id,
-			Norms: agentNormalizeAll(texts)})
+		set.sources = append(set.sources, agentSource{Kind: kind, Purpose: purpose, Tool: name,
+			Text: body, AICallID: id, Norms: agentNormalizeAll(texts)})
 	}
 	return set, rows.Err()
+}
+
+// agentSkillDefTexts 从技能定义结果 JSON 中白名单提取四个文字字段值。
+func agentSkillDefTexts(body string) []string {
+	var v any
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		return nil
+	}
+	var out []string
+	var walk func(x any)
+	walk = func(x any) {
+		switch t := x.(type) {
+		case map[string]any:
+			for k, e := range t {
+				if agentSkillDefTextFields[k] {
+					if s, ok := e.(string); ok && strings.TrimSpace(s) != "" {
+						out = append(out, s)
+					}
+					continue
+				}
+				walk(e)
+			}
+		case []any:
+			for _, e := range t {
+				walk(e)
+			}
+		}
+	}
+	walk(v)
+	return out
 }
 
 // agentToolSourceKind 按第 4.2 节判定工具结果的类别：G 类工具与带 AI 的 W 工具 → G；
@@ -251,8 +318,30 @@ func agentDigitsOnly(s string) string {
 	return b.String()
 }
 
+// agentSourceAllowed 判断一个来源能否供某类字段（8.3.2 节）：技能文字字段只收 U 与
+// skill_definition；业务字段不接受 skill_definition。
+func agentSourceAllowed(src agentSource, kinds []string, purpose string) bool {
+	if !agentKindAllowed(kinds, src.Kind) {
+		return false
+	}
+	if purpose == agentPurposeSkill {
+		return src.Purpose == agentPurposeSkill || src.Kind == agentSrcUser || src.Kind == agentSrcAttachment
+	}
+	return src.Purpose != agentPurposeSkill
+}
+
+// agentFieldPurpose 判定参数的供源目的：技能写工具的四个文字字段为 skill_definition。
+func agentFieldPurpose(t *AgentTool, p ToolParam) string {
+	if agentSkillDefSourceTools[t.Name] || t.Name == "skills__create" || t.Name == "skills__update" {
+		if agentSkillDefTextFields[p.Name] {
+			return agentPurposeSkill
+		}
+	}
+	return agentPurposeBusiness
+}
+
 // agentProvenanceField 对一个字段值执行来源校验，返回命中来源；未命中返回零值。
-func (set *agentSourceSet) match(kinds []string, value string) (agentProvenanceHit, bool) {
+func (set *agentSourceSet) match(kinds []string, purpose, value string) (agentProvenanceHit, bool) {
 	if utf8.RuneCountInString(agentNormalize(value)) < agentMinProvenanceChars {
 		// 第 4.4 节第 3 项：长度不足 4 个字符视为 F，允许任意短文字。
 		return agentProvenanceHit{Kind: "F"}, true
@@ -270,7 +359,7 @@ func (set *agentSourceSet) match(kinds []string, value string) (agentProvenanceH
 		if utf8.RuneCountInString(pn) < agentMinProvenanceChars {
 			continue
 		}
-		hits := set.matchParagraphIndexes(kinds, pn)
+		hits := set.matchParagraphIndexes(kinds, purpose, pn)
 		if len(hits) == 0 {
 			return agentProvenanceHit{}, false
 		}
@@ -305,10 +394,10 @@ func (set *agentSourceSet) match(kinds []string, value string) (agentProvenanceH
 
 // matchParagraphIndexes 返回包含该归一化段落的全部来源下标（第 4.4 节第 3 项：
 // 必须是某一个候选文本的连续子串；同一来源命中多个候选只计一次）。
-func (set *agentSourceSet) matchParagraphIndexes(kinds []string, norm string) map[int]bool {
+func (set *agentSourceSet) matchParagraphIndexes(kinds []string, purpose, norm string) map[int]bool {
 	out := map[int]bool{}
 	for i, src := range set.sources {
-		if !agentKindAllowed(kinds, src.Kind) {
+		if !agentSourceAllowed(src, kinds, purpose) {
 			continue
 		}
 		for _, cand := range src.Norms {
@@ -432,12 +521,13 @@ func (s *Server) agentLinkAICall(ctx context.Context, workspaceID uuid.UUID, fro
 // agentCheckParamValue 校验一个参数值的来源，返回未通过来源校验的文本片段。
 // 数组按元素展开；元素为对象时把该对象的全部文字作为一个整体（第 4.4 节第 4 项的
 // “同一段落组”口径）判定，避免把标题与正文拆成两个来源。
-func agentCheckParamValue(set *agentSourceSet, p ToolParam, v any) (ok bool, hit agentProvenanceHit, bad []string) {
+func agentCheckParamValue(set *agentSourceSet, tool *AgentTool, p ToolParam, v any) (ok bool, hit agentProvenanceHit, bad []string) {
 	kinds := agentKindsOf(p.Source)
+	purpose := agentFieldPurpose(tool, p)
 	switch t := v.(type) {
 	case []any:
 		for _, e := range t {
-			eok, ehit, ebad := agentCheckParamValue(set, p, e)
+			eok, ehit, ebad := agentCheckParamValue(set, tool, p, e)
 			if !eok {
 				bad = append(bad, ebad...)
 			}
@@ -451,7 +541,7 @@ func agentCheckParamValue(set *agentSourceSet, p ToolParam, v any) (ok bool, hit
 		for _, e := range t {
 			texts = append(texts, agentParamValueTexts(e)...)
 		}
-		one, matched := set.match(kinds, strings.Join(texts, "\n\n"))
+		one, matched := set.match(kinds, purpose, strings.Join(texts, "\n\n"))
 		if !matched {
 			return false, hit, []string{truncate(strings.Join(texts, " "), 60)}
 		}
@@ -466,7 +556,7 @@ func agentCheckParamValue(set *agentSourceSet, p ToolParam, v any) (ok bool, hit
 			}
 			return false, hit, []string{t}
 		}
-		one, matched := set.match(kinds, t)
+		one, matched := set.match(kinds, purpose, t)
 		if !matched {
 			return false, hit, []string{truncate(t, 60)}
 		}
@@ -527,7 +617,7 @@ func (s *Server) agentProvenanceBlanked(ctx context.Context, st *agentRunState, 
 		if err := ensure(); err != nil {
 			return nil, nil, nil, err
 		}
-		good, hit, bad := agentCheckParamValue(set, p, v)
+		good, hit, bad := agentCheckParamValue(set, t, p, v)
 		if hit.Kind != "" {
 			hits[p.Name] = hit
 		}

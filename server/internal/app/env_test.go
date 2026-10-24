@@ -108,7 +108,8 @@ func runWithEnv(m *testing.M) (int, error) {
 	key := bytes.Repeat([]byte{7}, 32)
 	cfg := &config.Config{Dev: true, DatabaseURL: dbURL, DataDir: dataDir, MasterKey: key,
 		WechatBase: mockSrv.URL, MockListen: strings.TrimPrefix(mockSrv.URL, "http://"),
-		SystemAdminUser: "skyeder", SystemAdminPassword: testAdminPassword}
+		SystemAdminUser: "skyeder", SystemAdminPassword: testAdminPassword,
+		AIWorkers: 3}
 	srv, err := New(cfg, pool)
 	if err != nil {
 		return 0, err

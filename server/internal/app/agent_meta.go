@@ -29,6 +29,41 @@ func (s *Server) agentMetaTool(ctx context.Context, st *agentRunState, t *AgentT
 		}
 	case "load_tool_domain":
 		payload, summary, err = s.agentMetaLoadDomain(ctx, st, args)
+	case "load_skill":
+		// DEV-SK3 / 23 文档第 8.2 节：只回执；正文由 agentBuildMessages 放入可信指令区。
+		var account *Account
+		if st.AccountID != nil {
+			account, err = s.account(ctx, *st.AccountID)
+			if err != nil {
+				return s.agentToolError(ctx, st, call, "unknown_skill_ref", "当前对话没有可用的账号上下文", send)
+			}
+		} else {
+			return s.agentToolError(ctx, st, call, "unknown_skill_ref", "当前对话没有可用的账号上下文", send)
+		}
+		var receipt map[string]any
+		receipt, err = s.agentSkillLoad(ctx, st, account, args)
+		if err != nil {
+			var ae *APIError
+			if errors.As(err, &ae) {
+				if ae.Code == "skill_budget_exceeded" {
+					// 预算拒绝保留原加载状态，不计入连续无效（11.5 节）。
+					return s.agentToolLimitWithCode(ctx, st, call, ae.Code, ae.Message, send)
+				}
+				return s.agentToolError(ctx, st, call, ae.Code, ae.Message, send)
+			}
+			return s.agentToolError(ctx, st, call, "internal", truncate(err.Error(), 200), send)
+		}
+		payload, err = json.Marshal(receipt)
+		summary = "已加载技能 " + receipt["name"].(string)
+	case "get_skill_context":
+		// 8.2 节：get_context 同时给出当前技能上下文和已加载集合（核心摘要）。
+		if lc := agentSkillsGetContextSummary(st.RunID); lc != nil {
+			payload, err = json.Marshal(map[string]any{"ok": true, "skill_context": lc})
+			summary = "技能上下文"
+		} else {
+			payload, err = json.Marshal(map[string]any{"ok": true, "skill_context": nil})
+			summary = "暂无技能上下文"
+		}
 	case "make_link":
 		payload, summary, err = s.agentMetaMakeLink(args)
 	default:

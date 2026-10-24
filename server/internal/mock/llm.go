@@ -261,6 +261,8 @@ func (l *LLM) Handler() http.Handler {
 				} else {
 					calls = []mockToolCall{{Name: "ops_probe_echo", Arguments: `{"value":"ok"}`}}
 				}
+			case task == "skill_draft":
+				reply = l.skillDraft(user)
 			case task == "agent_summary":
 				reply = "对话历史摘要：用户正在整理账号内容，之前的结论与待办保持不变。"
 			case task == "agent_chat":
@@ -1127,4 +1129,45 @@ func (l *LLM) metricScreenshot(prompt string, images int) string {
 		})
 	}
 	return js(map[string]any{"rows": rows})
+}
+
+// skillDraft 按真实任务返回一个合法的 DraftFields JSON（23 文档 4.3 节：
+// mock 必须按 skill_draft 任务返回合法 DraftFields）。
+// 条件与开关从提示词给定的值回显，保证与“服务端确定值不一致视为格式错误”的契约一致。
+func (l *LLM) skillDraft(user string) string {
+	arr := func(key string) string {
+		re := regexp.MustCompile(key + `=\[([^\]]*)\]`)
+		m := re.FindStringSubmatch(user)
+		if m == nil {
+			return "[]"
+		}
+		inner := strings.TrimSpace(m[1])
+		if inner == "" {
+			return "[]"
+		}
+		parts := strings.Split(inner, ",")
+		out := make([]string, 0, len(parts))
+		for _, p := range parts {
+			out = append(out, `"`+strings.TrimSpace(p)+`"`)
+		}
+		return "[" + strings.Join(out, ",") + "]"
+	}
+	val := func(key string) string {
+		re := regexp.MustCompile(key + `=(true|false)`)
+		m := re.FindStringSubmatch(user)
+		if m == nil {
+			return "true"
+		}
+		return m[1]
+	}
+	return `{` +
+		`"name":"起草的写作技能",` +
+		`"summary":"按用户需求起草的可复用写作方法",` +
+		`"triggers":"符合用户需求描述的场景时使用",` +
+		`"instructions":"先确认本次要解决的问题，再按步骤给出可复用的写作方法。只用用户提供的素材，不编造事实、数据或引语；缺少依据时明确标注待补充内容。",` +
+		`"platforms":` + arr("platforms") + `,` +
+		`"content_formats":` + arr("content_formats") + `,` +
+		`"task_types":` + arr("task_types") + `,` +
+		`"task_enabled":` + val("task_enabled") + `,` +
+		`"agent_enabled":` + val("agent_enabled") + `}`
 }

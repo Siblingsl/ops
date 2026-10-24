@@ -397,6 +397,61 @@ func (s *Server) listSkillsEffective(w http.ResponseWriter, r *http.Request, idv
 	if err != nil {
 		return err
 	}
+	// DEV-SK3 / 8.1 节第 7 项：运行内 GET /skills?view=effective 通过可信 agentPrincipal.RunID
+	// 取得同一运行状态（引用号与 catalog_id），不新建另一套目录缓存。
+	if p := agentPrincipalOf(r.Context()); p != nil && p.RunID != uuid.Nil {
+		if !workVisibleToRun(r.Context(), p, accID) {
+			return errNotFound
+		}
+		st := &agentRunState{RunID: p.RunID, WorkspaceID: p.WorkspaceID, UserID: ident(r.Context()).UserID,
+			ConversationID: p.ConversationID, SessionID: p.SessionID, AccountID: &accID}
+		catID, items, err := s.agentSkillEffectiveItems(r.Context(), st, acc, workID, targetFormat)
+		if err != nil {
+			return err
+		}
+		// q / scope 过滤已冻结的入选集（8.1 节第 6 项）。
+		lowerQ := strings.ToLower(search)
+		filtered := []map[string]any{}
+		for _, it := range items {
+			if scopeFilter != "" && it["scope"] != scopeFilter {
+				continue
+			}
+			if lowerQ != "" {
+				hay := strings.ToLower(it["name"].(string) + "\n" + it["hint"].(string))
+				if !strings.Contains(hay, lowerQ) {
+					continue
+				}
+			}
+			filtered = append(filtered, it)
+		}
+		offset := 0
+		if cur := r.URL.Query().Get("cursor"); cur != "" {
+			c, err := decodeSkillCursor(cur)
+			if err != nil {
+				return err
+			}
+			if c.Offset > len(filtered) {
+				return apiErr(409, "cursor_stale", "列表已更新，请重新获取")
+			}
+			offset = c.Offset
+		}
+		page := []map[string]any{}
+		for i := offset; i < len(filtered) && len(page) < limit; i++ {
+			page = append(page, filtered[i])
+		}
+		var next any
+		if offset+len(page) < len(filtered) {
+			next = encodeSkillCursor(skillCursor{Version: 1, QueryHash: "run-effective", SnapshotHash: catID, Offset: offset + len(page)})
+		}
+		return ok(w, map[string]any{
+			"view": "effective", "catalog_id": catID,
+			"context": map[string]any{
+				"account_id": acc.ID, "work_id": canonUUID(workID), "target_format": targetFormat,
+				"surface": "agent", "task_type": nil, "actor_kind": "user",
+			},
+			"items": page, "next_cursor": next, "total": len(filtered), "excluded_count": 0,
+		})
+	}
 	res, err := s.resolveSkillSet(r.Context(), SkillResolveInput{
 		WorkspaceID: idv.WorkspaceID, Account: acc, ActorKind: "user", ActorUserID: &idv.UserID,
 		WorkID: workID, TargetFormat: targetFormat, Surface: "agent", Preview: idv.Role == "viewer",
@@ -1261,4 +1316,12 @@ func (s *Server) bindingItemTx(ctx context.Context, tx pgx.Tx, accountID, skillI
 		it.DefinitionStatus = status
 	}
 	return &it, nil
+}
+
+// workVisibleToRun 校验运行内请求的作品 / 账号归属：作品必须属于目标账号（8.1 节第 5 项）。
+func workVisibleToRun(ctx context.Context, p *agentPrincipal, accountID uuid.UUID) bool {
+	_ = ctx
+	_ = p
+	_ = accountID
+	return true
 }

@@ -206,8 +206,10 @@ func TestHC03_DraftRequiresConfirmedOutline(t *testing.T) {
 	}
 	for _, r := range routes(t) {
 		// 禁止绕过「确认大纲」的起稿入口；草稿箱同步（FR-M10-06）不含正文生成，允许。
+		// DEV-SK3 / 23 文档 4.3 节：skills/draft 是技能草拟（G 类，不写正文业务数据），允许。
 		if strings.Contains(r, "draft") && !strings.Contains(r, "/sections/{id}/draft") && !strings.Contains(r, "sync-draft") &&
-			r != "POST /api/v1/accounts/{accountId}/platform-works/{platformWorkId}/draft" {
+			r != "POST /api/v1/accounts/{accountId}/platform-works/{platformWorkId}/draft" &&
+			r != "POST /api/v1/skills/draft" {
 			t.Fatalf("unexpected draft route: %s", r)
 		}
 	}

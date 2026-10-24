@@ -518,6 +518,7 @@ func (s *Server) skillRoutes(r chi.Router) {
 	r.Get("/skills", s.h(s.listSkills))
 	r.Post("/skills", s.h(s.createSkill))
 	r.Post("/skills/parse", s.h(s.parseSkill))
+	r.Post("/skills/draft", s.h(s.draftSkill))
 	r.Get("/skills/{id}", s.h(s.getSkill))
 	r.Put("/skills/{id}", s.h(s.putSkill))
 	r.Delete("/skills/{id}", s.h(s.deleteSkill))

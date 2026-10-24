@@ -495,6 +495,7 @@ var taskTypes = []struct{ Type, Label string }{
 	{"weekly_digest", "周报"},
 	{"metric_screenshot", "数据截图识别（需选支持图片输入的模型）"},
 	{"layout_suggest", "排版建议"},
+	{"skill_draft", "技能草拟"},
 	{"agent_chat", "智能体对话"},
 	{"agent_summary", "智能体摘要"},
 	{"embedding", "向量检索（embedding）"},
