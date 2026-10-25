@@ -18,7 +18,8 @@ test('Electron 工作台对齐原型并逐项点击主要入口', async ({ page 
   await prototype.setViewportSize({ width: 1440, height: 900 })
   await prototype.goto(pathToFileURL(resolve(process.cwd(), '../docs/design/desktop-creative/prototype/index.html')).href)
   await expect(prototype.locator('.creative-welcome')).toBeVisible()
-  await prototype.locator('.page').evaluate(async (element) => {
+  // 入场动画在父容器 #view 上，等待 .page 的后代不会等待这段位移。
+  await prototype.locator('#view').evaluate(async (element) => {
     await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished))
   })
 
@@ -80,7 +81,7 @@ test('Electron 选题池对齐原型并逐项点击筛选入口', async ({ page 
   await prototype.goto(pathToFileURL(resolve(process.cwd(), '../docs/design/desktop-creative/prototype/index.html')).href)
   await prototype.locator('.sidebar-main [data-nav="topics"]').click()
   await expect(prototype.locator('.page-top')).toBeVisible()
-  await prototype.locator('.page').evaluate(async (element) => {
+  await prototype.locator('#view').evaluate(async (element) => {
     await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished))
   })
 
@@ -168,7 +169,7 @@ test('Electron 日历按原型铺满主区并逐项点击日历控件', async ({
   await prototype.goto(pathToFileURL(resolve(process.cwd(), '../docs/design/desktop-creative/prototype/index.html')).href)
   await prototype.locator('.sidebar-main [data-nav="calendar"]').click()
   await expect(prototype.locator('.calendar-toolbar')).toBeVisible()
-  await prototype.locator('.page').evaluate(async (element) => {
+  await prototype.locator('#view').evaluate(async (element) => {
     await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished))
   })
   const productSelectors = [

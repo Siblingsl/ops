@@ -41,7 +41,7 @@ test('Electron 账号运营按原型布局并逐项点击功能页签', async ({
   await prototype.goto(pathToFileURL(resolve(process.cwd(), '../docs/design/desktop-creative/prototype/index.html')).href)
   await prototype.locator('.sidebar-main [data-nav="ops"]').click()
   await expect(prototype.locator('.page-top')).toBeVisible()
-  await prototype.locator('.page').evaluate(async (element) => {
+  await prototype.locator('#view').evaluate(async (element) => {
     await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished))
   })
 

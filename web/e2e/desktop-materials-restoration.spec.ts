@@ -30,7 +30,7 @@ test('Electron 素材库按原型布局并逐项点击整理操作', async ({ pa
   await prototype.goto(pathToFileURL(resolve(process.cwd(), '../docs/design/desktop-creative/prototype/index.html')).href)
   await prototype.locator('.sidebar-main [data-nav="materials"]').click()
   await expect(prototype.locator('#material-list')).toBeVisible()
-  await prototype.locator('.page').evaluate(async (element) => {
+  await prototype.locator('#view').evaluate(async (element) => {
     await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished))
   })
 
