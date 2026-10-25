@@ -140,3 +140,58 @@ test('Electron 素材库按原型布局并逐项点击整理操作', async ({ pa
   await expect(page.getByTestId('desktop-material-list')).toContainText(addedContent)
   await prototype.close()
 })
+
+test('桌面素材空态隐藏长文提炼，Web 保留原入口', async ({ page }) => {
+  const account = await registerAccount(page)
+  await page.goto(`/a/${account.id}/materials`)
+  await expect(page.getByText('素材库还是空的', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '相似素材', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '从长文提炼', exact: true })).toHaveCount(2)
+
+  await page.addInitScript(() => {
+    const userAgent = navigator.userAgent
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => `${userAgent} Electron/44.8.0` })
+  })
+  await page.reload()
+  await expect(page.getByTestId('desktop-materials-layout')).toBeVisible()
+  await expect(page.getByText('素材库还是空的', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '相似素材', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '从长文提炼', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: '添加第一条素材', exact: true }).click()
+  await expect(page.getByRole('dialog').getByRole('heading', { name: '添加素材', exact: true })).toBeVisible()
+})
+
+test('桌面观察者只能查看素材全文，不能进入编辑表单', async ({ page, browser }) => {
+  const account = await registerAccount(page)
+  const content = `观察者可读取的素材全文。${'这是一段超过列表摘要长度的真实经历记录。'.repeat(12)}全文结束。`
+  const material = await api(page, 'POST', '/materials', { account_id: account.id, kind: 'experience', content, tags: [] })
+  const invite = await api(page, 'POST', '/workspaces/current/invites', { role: 'viewer', max_uses: 1 })
+  const context = await browser.newContext({ baseURL: new URL(page.url()).origin })
+  try {
+    await context.addInitScript(() => {
+      const userAgent = navigator.userAgent
+      Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => `${userAgent} Electron/44.8.0` })
+    })
+    const registered = await context.request.post('/api/v1/auth/register', {
+      data: { username: `materials-viewer-${Date.now()}`, password: 'local-e2e-password-123', invite_code: invite.code },
+    })
+    expect(registered.ok()).toBeTruthy()
+    const viewer = await context.newPage()
+    await viewer.goto(`/a/${account.id}/materials`)
+    await expect(viewer.getByTestId('desktop-material-list')).toContainText('观察者可读取的素材全文')
+    await expect(viewer.getByRole('button', { name: /^(添加素材|多选|编辑这条素材|删除这条素材)$/ })).toHaveCount(0)
+    await viewer.getByTestId('desktop-material-list').getByRole('button', { name: /^查看/ }).click()
+    await expect(viewer.getByRole('heading', { name: '素材全文', exact: true })).toBeVisible()
+    await expect(viewer.locator('.desktop-drawer-overlay')).toContainText(content)
+    await expect(viewer.getByRole('button', { name: '保存', exact: true })).toHaveCount(0)
+    await expect(viewer.getByRole('textbox')).toHaveCount(1)
+    const me = await api(viewer, 'GET', '/auth/me')
+    const denied = await context.request.patch(`/api/v1/materials/${material.id}`, {
+      data: { content: '观察者不应写入' }, headers: { 'X-CSRF-Token': me.csrf_token },
+    })
+    expect(denied.status()).toBe(403)
+    expect((await api(page, 'GET', `/materials/${material.id}`)).content).toBe(content)
+  } finally {
+    await context.close()
+  }
+})

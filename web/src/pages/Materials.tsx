@@ -457,7 +457,7 @@ export default function Materials() {
     setReading(true)
     try {
       const full = await get<Material>(`/materials/${id}`)
-      if (edit) setDialog({ editing: full })
+      if (edit && canWrite) setDialog({ editing: full })
       else setDetail(full)
     } catch (e) { toast.error(errorMessage(e)) } finally { setReading(false) }
   }
@@ -534,8 +534,8 @@ export default function Materials() {
         <section className="desktop-material-list" data-testid="desktop-material-list" aria-label="素材列表">
           {isLoading ? <PageLoading /> : list.length === 0 ? (
             <Empty className="desktop-material-empty" icon={<Library className="size-5" />} title={q || kind || usage || tag !== null ? '没有符合条件的素材' : '素材库还是空的'}
-              desc="把你的经历、观点、案例和数据存进来。也可以粘贴过去写的长文，让 AI 拆成一条条素材。"
-              action={!q && canWrite && <div className="flex gap-2"><Button icon={<Scissors className="size-4" />} onClick={() => setExtract(true)}>从长文提炼</Button><Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加第一条素材</Button></div>} />
+              desc="把你的经历、观点、案例和数据存进来。"
+              action={!q && canWrite && <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加第一条素材</Button>} />
           ) : <>
             {list.slice(0, visibleCount).map((m) => {
               const headline = materialHeadline(m.content)
@@ -560,7 +560,7 @@ export default function Materials() {
                   <span>{m.source || '未记录来源'}</span>
                   {!desktopPresentation && <span>{m.usage_count ?? 0} 次引用</span>}
                   <span className="desktop-material-row-actions">
-                    <button type="button" onClick={() => void read(m.id, true)} disabled={reading}>{desktopPresentation ? '查看与编辑' : '查看全文'}</button>
+                    <button type="button" onClick={() => void read(m.id, true)} disabled={reading}>{canWrite ? '查看与编辑' : '查看全文'}</button>
                     {canWrite && !desktopPresentation && <IconButton label="编辑" disabled={reading} onClick={() => void read(m.id, true)}><Pencil className="size-3.5" /></IconButton>}
                     {canWrite && !desktopPresentation && <IconButton label="删除" className="hover:text-danger" onClick={() => remove(m)}><Trash2 className="size-3.5" /></IconButton>}
                   </span>
