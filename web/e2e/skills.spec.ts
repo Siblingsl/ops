@@ -48,7 +48,7 @@ test('SK2 导入 .md 往返：parse 预览告警可见，保存后字段保留�
   await expect(dialog.getByLabel(/^名称/)).toHaveValue('E2E 导入技能')
   await expect(dialog.getByLabel(/^完整指令正文/)).toContainText('正文里的水平线之后。')
   // 仅智能体：task_enabled=false 保留。
-  await expect(dialog.getByRole('switch', { name: /用于普通 AI 生成任务/ })).toHaveAttribute('aria-checked', 'false')
+  await expect(dialog.getByRole('radio', { name: '仅智能体', exact: true })).toBeChecked()
   // 预览后修改字段（4.2 节第 5 项）：保存必须以编辑后的表单为准，不回退原始文件。
   await dialog.getByLabel(/^名称/).fill('E2E 导入技能（已改）')
   await dialog.getByRole('button', { name: '创建技能' }).click()
@@ -149,7 +149,7 @@ test('SK5 删除技能有影响预览与二次确认', async ({ page }) => {
   })
   await openSkills(page)
   await page.locator('div.flex.items-start.gap-3.px-5', { hasText: 'E2E 待删除技能' }).getByTitle('删除').click()
-  const dialog = page.getByRole('dialog', { name: '删除技能' })
+  const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '删除技能', exact: true }) })
   await expect(dialog).toContainText('此操作不可撤销')
   await dialog.getByRole('button', { name: '确认删除' }).click()
   await expect(page.getByText('技能已删除')).toBeVisible()

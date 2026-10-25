@@ -90,6 +90,7 @@ export function useSectionSave(options: SaveOptions) {
   }
   useEffect(() => {
     const request = (event: Event) => {
+      if ((event as CustomEvent<{ draftOnly?: boolean }>).detail?.draftOnly) return
       const register = (event as CustomEvent<{ register?: (check: () => Promise<boolean> | boolean) => void }>).detail?.register
       register?.(async () => {
         const saved = await flush()

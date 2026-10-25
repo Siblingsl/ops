@@ -437,7 +437,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   const switchAccount = async (id: string, sub = '') => {
     const identity = identityRef.current
     if (!identity) return
-    if (desktop && !(await requestDesktopLeaveGuard(true))) {
+    if (!(await requestDesktopLeaveGuard(true, !desktop))) {
       releaseDesktopLeaveGuard()
       return
     }
@@ -492,7 +492,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   const switchWorkspace = async (id: string) => {
     if (id === me.workspace.id || busy) return
     setBusy(true)
-    if (desktop && !(await requestDesktopLeaveGuard(true))) {
+    if (!(await requestDesktopLeaveGuard(true, !desktop))) {
       releaseDesktopLeaveGuard()
       setBusy(false)
       return
@@ -585,7 +585,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       confirmText: '创建并切换',
     }))) return
     setBusy(true)
-    if (desktop && !(await requestDesktopLeaveGuard(true))) {
+    if (!(await requestDesktopLeaveGuard(true, !desktop))) {
       releaseDesktopLeaveGuard()
       setBusy(false)
       return
@@ -1046,7 +1046,7 @@ export default function Shell() {
   }, [agentMode])
   const focus = focusMode && fullBleed
   const logout = async () => {
-    if (desktopPresentation && !(await requestDesktopLeaveGuard(true))) {
+    if (!(await requestDesktopLeaveGuard(true, !desktopPresentation))) {
       releaseDesktopLeaveGuard()
       return
     }
@@ -1101,12 +1101,11 @@ export default function Shell() {
             expiresAt={me.session_expires_at}
             onRenewed={() => qc.invalidateQueries({ queryKey: ['me'] })}
             onBeforeLogout={async () => {
-              if (!desktopPresentation) return true
-              const allowed = await requestDesktopLeaveGuard(true)
+              const allowed = await requestDesktopLeaveGuard(true, !desktopPresentation)
               if (!allowed) releaseDesktopLeaveGuard()
               return allowed
             }}
-            onLogoutFailure={() => { if (desktopPresentation) releaseDesktopLeaveGuard() }}
+            onLogoutFailure={() => releaseDesktopLeaveGuard()}
           />
         )}
         {me?.admin_override && (

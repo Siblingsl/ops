@@ -375,6 +375,7 @@ export default function WorkLayout() {
   // GL-08：桌面退出与页面离开共用作品保存协调器，任一保存失败都阻止离开。
   useEffect(() => {
     const onLeaveGuard = (event: Event) => {
+      if ((event as CustomEvent<{ draftOnly?: boolean }>).detail?.draftOnly) return
       if (!workId) return
       const detail = (event as CustomEvent<{ register?: (check: () => Promise<boolean> | boolean) => void }>).detail
       if (typeof detail?.register !== 'function') return

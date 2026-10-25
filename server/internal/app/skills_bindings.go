@@ -49,7 +49,7 @@ func (s *Server) loadSkillPartition(ctx context.Context, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }, accountID uuid.UUID, audience *uuid.UUID) ([]skillPartRow, string, error) {
 	sql := `SELECT b.id, b.priority, b.created_at, b.audience_user_id, b.builtin_key,
-		sk.id, sk.workspace_id, sk.user_id, sk.account_id, sk.name, sk.status
+		sk.id, sk.workspace_id, sk.user_id, sk.account_id, COALESCE(sk.name,''), COALESCE(sk.status,'')
 		FROM skill_binding b LEFT JOIN skill sk ON sk.id = b.skill_id
 		WHERE b.account_id = $1`
 	args := []any{accountID}
@@ -68,12 +68,12 @@ func (s *Server) loadSkillPartition(ctx context.Context, q interface {
 	fingers := []skillBindingFinger{}
 	for rows.Next() {
 		var (
-			bindingID uuid.UUID
-			priority  int
-			createdAt time.Time
-			aud       *uuid.UUID
-			builtin   string
-			skID      *uuid.UUID
+			bindingID           uuid.UUID
+			priority            int
+			createdAt           time.Time
+			aud                 *uuid.UUID
+			builtin             string
+			skID                *uuid.UUID
 			wsID, userID, accID *uuid.UUID
 			name, status        string
 		)
@@ -90,7 +90,8 @@ func (s *Server) loadSkillPartition(ctx context.Context, q interface {
 			row.Binding.Name = builtin
 			row.Binding.DefinitionStatus = "disabled"
 			row.Layer = 3
-			if skillBuiltinByKey(builtin) != nil {
+			if def := skillBuiltinByKey(builtin); def != nil {
+				row.Binding.Name = def.Fields.Name
 				row.Binding.DefinitionStatus = "active"
 			}
 		} else {
@@ -472,11 +473,16 @@ func (s *Server) getSkillContext(w http.ResponseWriter, r *http.Request) error {
 	var assembled any
 	if surface == "agent" {
 		// 智能体预览不模拟模型选择（11.2 节）：入选项 selected=true、used=false、reason=not_loaded。
-		for _, it := range res.Selected {
+		for _, it := range res.Items {
+			selected := it.Reason == ""
+			reason := it.Reason
+			if selected {
+				reason = skillReasonNotLoaded
+			}
 			items = append(items, map[string]any{
 				"id": it.Def.ID, "name": it.Def.Fields.Name, "scope": it.Def.Scope,
 				"revision": it.Def.Revision, "content_hash": it.Def.contentHash(),
-				"selected": true, "used": false, "reason": skillReasonNotLoaded, "chars": 0,
+				"selected": selected, "used": false, "reason": reason, "chars": 0,
 			})
 		}
 	} else {

@@ -3,8 +3,9 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { errorMessage, patch, post } from '@/lib/api'
 import { type AIRefs, describeRefs } from '@/lib/format'
-import { skillReasonText } from '@/pages/settings/Skills'
+import { skillReasonText } from '@/lib/skills'
 import { cn } from './ui'
+import SkillReceipt from './skill-receipt'
 
 const reasonTags = ['太夸张', '太长', '太短', '跑题', '语气不对', '编造内容', '其他'] as const
 
@@ -96,7 +97,7 @@ export function RefsNote({ refs, className, callId, onRetry, sampleText }: { ref
       {open && (
         <div className="mt-1.5 space-y-1.5 rounded-md border border-mist-100 bg-white p-2 text-mist-500">
           {refs?.user_instruction && <div>临时指令：「{refs.user_instruction}」</div>}
-          {slots.map((s) => (
+          {slots.filter(s => !callId || s.name !== 'skills').map((s) => (
             <div key={s.name}>
               <div className="flex items-center gap-2">
                 <span className="font-medium text-mist-600">{s.label || s.name}</span>
@@ -127,6 +128,7 @@ export function RefsNote({ refs, className, callId, onRetry, sampleText }: { ref
               )}
             </div>
           ))}
+          {callId && <SkillReceipt callId={callId} />}
         </div>
       )}
     </div>

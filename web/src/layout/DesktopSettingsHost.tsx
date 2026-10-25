@@ -14,7 +14,7 @@ import DesktopSettingsContent from './DesktopSettingsContent'
 
 const locationPath = (location: Location) => location.pathname + location.search + location.hash
 
-/** 只拥有客户端设置的呈现与离开保护，业务表单/权限仍由既有页面和 API 拥有。 */
+/** 拥有路由离开保护与客户端设置呈现，业务表单/权限仍由既有页面和 API 拥有。 */
 export default function DesktopSettingsHost({ children, backdrop }: { children: ReactNode; backdrop: ReactNode }) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -205,8 +205,17 @@ export default function DesktopSettingsHost({ children, backdrop }: { children: 
   }, [desktop, panel, accountSelection.account?.id, accountSelection.userId, accountSelection.workspaceId, location.pathname])
 
   useEffect(() => {
-    if (!desktop || locationPath(location) === locationPath(shown)) return
+    if (locationPath(location) === locationPath(shown)) return
     let cancelled = false
+    if (!desktop) {
+      // 在确认结束前继续渲染 shown，浏览器后退也不能先卸载未保存表单。
+      void requestDesktopLeaveGuard(false, true).then(allowed => {
+        if (cancelled) return
+        if (allowed) setShown(location)
+        else navigate(locationPath(shown), { replace: true, state: shown.state })
+      })
+      return () => { cancelled = true }
+    }
     const nextPanel = desktopSettingsPanel(location.pathname)
     const accept = async () => {
       const requestedAccountId = (location.state as { opsAccountSwitchId?: unknown } | null)?.opsAccountSwitchId
@@ -267,7 +276,7 @@ export default function DesktopSettingsHost({ children, backdrop }: { children: 
     return () => window.removeEventListener('beforeunload', beforeUnload)
   }, [panel, accountSelection.userId, accountSelection.workspaceId])
 
-  if (!desktop) return <Routes>{children}</Routes>
+  if (!desktop) return <Routes location={shown}>{children}</Routes>
   return <>
     {panel && !background.current ? backdrop : <Routes location={panel ? background.current! : shown}>{children}</Routes>}
     {panel && <DesktopSettingsContext.Provider value={context}>

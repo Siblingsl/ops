@@ -15,6 +15,7 @@ import { setCustomTheme } from '@/lib/custom-theme-state'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { Account, CharacterCard, CustomTheme, Memory, Profile, StyleSample } from '@/lib/types'
 import SkillsTab from './ProfileSkills'
+import { isElectronDesktop } from '@/lib/desktop-presentation.js'
 import { memoryKindLabel, memoryScopeLabel, memorySourceLabel, useCustomTheme } from '@/lib/v3'
 
 const splitList = (s: string) => s.split(/[,，、\s]+/).map((x) => x.trim()).filter(Boolean)
@@ -803,7 +804,7 @@ export default function ProfilePage() {
     { value: 'positioning' as const, label: '定位' },
     { value: 'samples' as const, label: '风格样本' },
     { value: 'memory' as const, label: 'AI 记忆' },
-    { value: 'skills' as const, label: '写作技能' },
+    ...(!isElectronDesktop(navigator.userAgent) ? [{ value: 'skills' as const, label: '写作技能' }] : []),
     ...(comic ? [{ value: 'characters' as const, label: '角色卡' }] : []),
     ...(wx ? [{ value: 'layout' as const, label: '排版' }] : []),
   ]

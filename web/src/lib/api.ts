@@ -194,7 +194,10 @@ export async function stream<T = any>(path: string, body: unknown, h: SSEHandler
       queuedToast = undefined
     }
     if (name === 'delta') h.onDelta?.(parsed.text)
-    else if (name === 'error') failure = new ApiError(500, parsed.code || 'internal', parsed.message || '生成失败', parsed.detail, res.headers.get('X-Request-ID') || parsed.request_id)
+    else if (name === 'error') {
+      const error = parsed.error ?? parsed
+      failure = new ApiError(500, error.code || 'internal', error.message || '生成失败', error.detail, res.headers.get('X-Request-ID') || error.request_id, error.fields)
+    }
     else if (name === 'done') done = parsed
     h.onEvent?.(name, parsed)
   }
@@ -211,7 +214,8 @@ export async function stream<T = any>(path: string, body: unknown, h: SSEHandler
     }
     if (buf.trim()) handle(buf)
     if (failure) throw failure
-    return done as T
+    if (done === undefined) throw new ApiError(502, 'incomplete_stream', '未取得完整生成结果，当前输入已保留，请重试')
+    return done
   } finally {
     if (queuedToast !== undefined) toast.dismiss(queuedToast)
   }

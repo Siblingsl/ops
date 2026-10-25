@@ -10,7 +10,7 @@ export const desktopSettingsEntries = settingsEntries.filter((entry) => !entry.d
 
 export function desktopSettingsPanel(pathname: string) {
   const entry = settingsEntryFor(pathname)
-  return entry?.tool ? undefined : entry
+  return entry?.tool || entry?.desktopHidden ? undefined : entry
 }
 
 /** 设置窗里显示的当前项名称（含桌面别名）。 */
@@ -27,12 +27,13 @@ export const DESKTOP_LEAVE_GUARD_REQUEST = 'ops:desktop-leave-guard-request'
 export const DESKTOP_LEAVE_GUARD_RELEASE = 'ops:desktop-leave-guard-release'
 export const DESKTOP_LOCAL_SETTINGS_REQUEST = 'ops:desktop-local-settings-request'
 
-export function requestDesktopLeaveGuard(reserveNavigation = false) {
+export function requestDesktopLeaveGuard(reserveNavigation = false, draftOnly = false) {
   const checks: Array<() => Promise<boolean>> = []
   const grants: Array<() => void> = []
   window.dispatchEvent(new CustomEvent(DESKTOP_LEAVE_GUARD_REQUEST, {
     detail: {
       reserveNavigation,
+      draftOnly,
       register: (check: () => Promise<boolean> | boolean) => checks.push(async () => check()),
       grant: (onAllow: () => void) => grants.push(onAllow),
     },

@@ -99,7 +99,7 @@ var builtinSkills = []builtinSkill{
 
 // skillBuiltinUUID 按第 13.1 节从完整 key 推导确定性 UUID（全实例一致）。
 func skillBuiltinUUID(key string) uuid.UUID {
-	return uuid.NewMD5(skillBuiltinNamespace, []byte(key))
+	return uuid.NewSHA1(skillBuiltinNamespace, []byte(key))
 }
 
 func (b builtinSkill) UUID() uuid.UUID { return skillBuiltinUUID(b.Key) }

@@ -11,6 +11,7 @@ import './styles/desktop-creative.css'
 import './styles/desktop-settings.css'
 import { initializeDesktopPresentation, type DesktopTheme } from './lib/desktop-presentation.js'
 import DesktopTitlebar from './layout/DesktopTitlebar'
+import { releaseDesktopLeaveGuard, requestDesktopLeaveGuard } from './lib/desktop-settings'
 
 const initialDesktopTheme = initializeDesktopPresentation(
   document,
@@ -31,11 +32,15 @@ const queryClient = new QueryClient({
   },
 })
 
+let unauthenticatedRedirect: Promise<void> | null = null
 registerUnauthenticated(() => {
-  queryClient.setQueryData(['me'], null)
-  if (!location.pathname.startsWith('/login') && !location.pathname.startsWith('/setup')) {
+  if (location.pathname.startsWith('/login') || location.pathname.startsWith('/setup')) return
+  // 先保护页面内存中的编辑，再清会话；顺序相反会先卸载表单而丢稿。
+  unauthenticatedRedirect ??= requestDesktopLeaveGuard(true, true).then(allowed => {
+    if (!allowed) { releaseDesktopLeaveGuard(); return }
+    queryClient.setQueryData(['me'], null)
     location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search)
-  }
+  }).finally(() => { unauthenticatedRedirect = null })
 })
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

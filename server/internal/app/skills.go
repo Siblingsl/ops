@@ -17,20 +17,20 @@ import (
 // contextpack、智能体目录、加载元工具与页面预览都调用这里，不各写一套。
 
 const (
-	skillInstructionLimit  = 1200 // 单技能正文字数上限（4.1）
-	skillSlotBudget        = 3600 // 技能槽总预算（7.1 / 16.4 二次裁决）
-	skillEffectiveLimit    = 20   // 入选集上限（6.1）
-	skillCatalogRenderMax  = 8    // 智能体环境块目录渲染上限（8.1）
-	skillHintLimit         = 40   // 目录 hint 字数（8.1）
-	skillWorkspaceLimit    = 50   // 每工作区定义上限（3.1）
-	skillAccountLimit      = 30   // 每账号定义上限
-	skillPersonalLimit     = 50   // 每人个人定义上限
-	skillBindingLimit      = 20   // 公共 / 本人绑定每分区上限（3.2）
-	skillNameMax           = 30
-	skillSummaryMax        = 60
-	skillTriggerMax        = 120
-	skillImportMaxBytes    = 64 << 10 // .md 原始文件上限（4.2）
-	skillJSONMaxBytes      = 128 << 10
+	skillInstructionLimit = 1200 // 单技能正文字数上限（4.1）
+	skillSlotBudget       = 3600 // 技能槽总预算（7.1 / 16.4 二次裁决）
+	skillEffectiveLimit   = 20   // 入选集上限（6.1）
+	skillCatalogRenderMax = 8    // 智能体环境块目录渲染上限（8.1）
+	skillHintLimit        = 40   // 目录 hint 字数（8.1）
+	skillWorkspaceLimit   = 50   // 每工作区定义上限（3.1）
+	skillAccountLimit     = 30   // 每账号定义上限
+	skillPersonalLimit    = 50   // 每人个人定义上限
+	skillBindingLimit     = 20   // 公共 / 本人绑定每分区上限（3.2）
+	skillNameMax          = 30
+	skillSummaryMax       = 60
+	skillTriggerMax       = 120
+	skillImportMaxBytes   = 64 << 10 // .md 原始文件上限（4.2）
+	skillJSONMaxBytes     = 128 << 10
 )
 
 // skillTaskC0 是默认创作集合（6.2 节，16.4 二次裁决 18 项）：空 task_types 时生效。
@@ -218,10 +218,11 @@ func (s *Server) resolveSkillSetQ(ctx context.Context, q skillQuerier, in SkillR
 		def       *skillDef
 	}
 
+	// 内置绑定没有 skill 行；LEFT JOIN 的占位列不参与内置定义解析，真实字段从注册表读取。
 	sql := `SELECT b.id, b.priority, b.created_at, b.audience_user_id, b.builtin_key,
-		sk.id, sk.workspace_id, sk.user_id, sk.account_id, sk.name, sk.summary, sk.triggers,
-		sk.instructions, sk.platforms, sk.content_formats, sk.task_types,
-		sk.task_enabled, sk.agent_enabled, sk.status, sk.revision, sk.origin, sk.source_key
+		sk.id, sk.workspace_id, sk.user_id, sk.account_id, COALESCE(sk.name,''), COALESCE(sk.summary,''), COALESCE(sk.triggers,''),
+		COALESCE(sk.instructions,''), sk.platforms, sk.content_formats, sk.task_types,
+		COALESCE(sk.task_enabled,false), COALESCE(sk.agent_enabled,false), COALESCE(sk.status,''), COALESCE(sk.revision,0), COALESCE(sk.origin,''), COALESCE(sk.source_key,'')
 		FROM skill_binding b LEFT JOIN skill sk ON sk.id = b.skill_id
 		WHERE b.account_id = $1`
 	args := []any{in.Account.ID}
@@ -240,13 +241,13 @@ func (s *Server) resolveSkillSetQ(ctx context.Context, q skillQuerier, in SkillR
 	for rows.Next() {
 		var r row
 		var (
-			id, wsID, userID, accID *uuid.UUID
+			id, wsID, userID, accID               *uuid.UUID
 			name, summary, triggers, instructions string
-			platforms, formats, taskTypes []string
-			taskOn, agentOn               bool
-			status                        string
-			revision                      int64
-			origin, sourceKey             string
+			platforms, formats, taskTypes         []string
+			taskOn, agentOn                       bool
+			status                                string
+			revision                              int64
+			origin, sourceKey                     string
 		)
 		if err := rows.Scan(&r.bindingID, &r.priority, &r.createdAt, &r.audience, &r.builtin,
 			&id, &wsID, &userID, &accID, &name, &summary, &triggers, &instructions,
@@ -258,7 +259,7 @@ func (s *Server) resolveSkillSetQ(ctx context.Context, q skillQuerier, in SkillR
 			def := skillBuiltinByKey(r.builtin)
 			if def == nil {
 				def = &skillDef{Builtin: true, BuiltinKey: r.builtin, Scope: "builtin",
-					Fields: SkillFields{Name: r.builtin, Status: "active", TaskEnabled: true, AgentEnabled: true},
+					Fields:   SkillFields{Name: r.builtin, Status: "active", TaskEnabled: true, AgentEnabled: true},
 					Revision: 0, Origin: "builtin", SourceKey: r.builtin}
 				r.def = def
 				r.def.ContentHash = ""
@@ -599,7 +600,7 @@ func (s *Server) skillResolveTargetFormat(ctx context.Context, account *Account,
 // skillSlotItem 是装配后的逐项留痕（7.2 节 Slot 语义的技能扩展）。
 type skillSlotItem struct {
 	Def    *skillDef
-	Chars  int    // 该项实际加入指令区的增量字符数（未使用为 0）
+	Chars  int // 该项实际加入指令区的增量字符数（未使用为 0）
 	Used   bool
 	Reason string // 预算阶段 budget_exceeded；装配前已排除的沿用解析原因
 }

@@ -93,10 +93,11 @@ function definitionCanon(f: DefinitionFields): CanonValue {
  * CRLF/CR → LF；name/summary/triggers 去首尾 Unicode 空白；三个数组去重并按字节序升序。 */
 export function normalizeDefinitionFields(f: DefinitionFields): DefinitionFields {
   const lf = (s: string) => s.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const trim = (s: string) => s.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '')
   return {
-    name: lf(f.name).trim(),
-    summary: lf(f.summary).trim(),
-    triggers: lf(f.triggers).trim(),
+    name: trim(lf(f.name)),
+    summary: trim(lf(f.summary)),
+    triggers: trim(lf(f.triggers)),
     instructions: lf(f.instructions),
     platforms: normArr(f.platforms),
     content_formats: normArr(f.content_formats),
