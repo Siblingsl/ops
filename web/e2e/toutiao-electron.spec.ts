@@ -22,14 +22,20 @@ test('真实 Electron 三平台键盘循环、上下文隔离与头条窄视口�
     await page.getByLabel('用户名', { exact: true }).fill(`tt-electron-${Date.now()}`)
     await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
     await page.getByRole('button', { name: '创建账号', exact: true }).click()
-    const add = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '添加平台账号', exact: true }) })
-    await expect(add).toBeVisible()
-    await add.getByRole('button', { name: /今日头条/ }).click()
-    await add.getByLabel('账号名称').fill('真实头条窗口验收号')
-    await add.getByRole('radio', { name: /^文章/ }).check()
-    const created = page.waitForResponse((r) => r.url().endsWith('/api/v1/accounts') && r.request().method() === 'POST')
-    await add.getByRole('button', { name: '添加账号', exact: true }).click()
-    const account = await (await created).json()
+    // Electron 中注册后 /settings/accounts?new=1 被 DesktopSettingsHost 拦截到
+    // 设置 WebContentsView，主窗口不渲染弹窗（与 d126-settings-electron 同因）；
+    // 走 API 创建头条账号后直接进入账号页。
+    await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    const me = await page.evaluate(async () => await (await fetch('/api/v1/auth/me')).json())
+    const account = await page.evaluate(async (csrf) => {
+      const response = await fetch('/api/v1/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+        body: JSON.stringify({ platform: 'toutiao', name: '真实头条窗口验收号', content_format: 'long_article' }),
+      })
+      if (!response.ok) throw new Error(`创建头条账号失败：${response.status}`)
+      return response.json()
+    }, me.csrf_token)
     const accountURL = `${baseURL}/a/${account.id}`
     await page.goto(accountURL)
     const trigger = page.getByRole('button', { name: '切换工作区与账号', exact: true })

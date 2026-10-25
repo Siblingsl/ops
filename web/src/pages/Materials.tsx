@@ -468,8 +468,6 @@ export default function Materials() {
       <PageHeader title="素材库" desc={desktopPresentation ? '保留事实与真实经历，让表达有自己的来处。' : 'AI 只把这里的内容当作事实来源。素材越具体，初稿越像你自己写的。'}
         action={canWrite ? desktopPresentation ? <>
           <Button className="desktop-material-action" icon={<Inbox className="size-4" />} onClick={() => setInboxOpen(true)}>收件箱整理</Button>
-          <Button className="desktop-material-action" icon={<Copy className="size-4" />} onClick={() => setDups(true)}>相似素材</Button>
-          <Button className="desktop-material-action" icon={<Scissors className="size-4" />} onClick={() => setExtract(true)}>从长文提炼</Button>
           <Button className="desktop-material-action" variant="primary" icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>添加素材</Button>
         </> : <>
           <Button icon={<Copy className="size-4" />} onClick={() => setDups(true)}>相似素材</Button>

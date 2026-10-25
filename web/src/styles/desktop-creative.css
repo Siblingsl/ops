@@ -1116,6 +1116,7 @@ html[data-presentation='ops-creative-desktop'] .desktop-works-table {
 .desktop-material-type-tabs > button { height: auto; border-radius: 8px; padding: 7px 14px; background: transparent; color: var(--ops-muted); font-size: 11px; box-shadow: none; }
 .desktop-material-type-tabs > button.bg-white { background: var(--ops-surface); color: var(--ops-accent); box-shadow: 0 2px 7px rgb(87 64 131 / 0.09); }
 .desktop-materials-filterbar { gap: 11px; padding: 17px 0 20px; margin-bottom: 0; }
+.desktop-materials-filterbar > button { min-height: 31px; padding: 5px 10px; font-size: 12px; border-radius: 8px; border-width: 1px; }
 .desktop-materials-filterbar > .desktop-materials-search { width: 240px; flex: 0 0 240px; margin-left: 0; }
 .desktop-materials-search input { width: 240px; height: 38px; min-height: 38px; border-radius: 10px; font-size: 12px; }
 .desktop-materials-filterbar > .desktop-material-scope { width: 155px !important; min-width: 155px; height: 38px; min-height: 38px; border-radius: 10px; font-size: 12px; }
