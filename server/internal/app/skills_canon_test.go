@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -249,5 +250,27 @@ func TestSkillBuiltinRegistry(t *testing.T) {
 	}
 	if got := skillBuiltinByKey("builtin:xhs_note_voice").Fields.Platforms; strings.Join(got, ",") != "xhs" {
 		t.Fatalf("xhs_note_voice platforms: %v", got)
+	}
+	// 内置不入 skill 表（第 13 节）：确定性 UUID 在数据库中不存在任何定义行。
+	for _, b := range builtinSkills {
+		var n int
+		if err := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM skill WHERE id=$1`, b.UUID()).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("builtin %s must not exist in the skill table: %d %v", b.Key, n, err)
+		}
+	}
+	// 默认不绑定（第 13 节）：全新工作区没有任何内置绑定行。
+	var bn int
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM skill_binding WHERE builtin_key <> ''`).Scan(&bn); err != nil || bn != 0 {
+		t.Fatalf("builtins must not be bound by default: %d %v", bn, err)
+	}
+	// 快照测试只按实际文档修订更新（T-SK-39）：内置正文必须与注册表逐字一致（自一致基线）。
+	for _, b := range builtinSkills {
+		def := skillBuiltinByKey(b.Key)
+		if def.Fields.Instructions != b.Fields.Instructions {
+			t.Fatalf("builtin %s body drifted from the registry", b.Key)
+		}
+		if runeLen(b.Fields.Instructions) > skillInstructionLimit {
+			t.Fatalf("builtin %s body exceeds 1200 chars", b.Key)
+		}
 	}
 }

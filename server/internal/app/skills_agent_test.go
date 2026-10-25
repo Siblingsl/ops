@@ -39,9 +39,19 @@ func skillAgentBind(t *testing.T, accID uuid.UUID, n int, personal bool) []uuid.
 		}
 		if _, err := env.srv.db.Exec(context.Background(),
 			`INSERT INTO skill_binding (account_id, audience_user_id, skill_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
-			accID, func() any { if personal { return any(&uid) }; return nil }(), id); err != nil {
+			accID, func() any {
+				if personal {
+					return any(&uid)
+				}
+				return nil
+			}(), id); err != nil {
 			t.Fatal(err)
 		}
+		// 清理定义（级联清理绑定），避免击穿共享配额。
+		skillID := id
+		t.Cleanup(func() {
+			_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM skill WHERE id=$1`, skillID)
+		})
 		ids = append(ids, id)
 	}
 	return ids
@@ -212,6 +222,9 @@ func TestSkillAgentLoadSkill(t *testing.T) {
 		ownerUserID(t), long).Scan(&longID); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM skill WHERE id=$1`, longID)
+	})
 	skillAgentBindPersonal(t, acc.ID, longID)
 	// 当前已加载 2 条（约 200 字）；再装 2 条 1400 字的 → 第二条应超预算。
 	for i := 0; i < 2; i++ {
@@ -260,6 +273,9 @@ func skillAgentBindPersonal(t *testing.T, accID, skillID uuid.UUID) {
 		accID, &uid, skillID); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM skill_binding WHERE account_id=$1 AND skill_id=$2`, accID, skillID)
+	})
 }
 
 // T-SK-30：原 s1=A / s2=B，解绑 A 后旧 s1 绝不加载 B；目录失效返回 skill_context_changed。
@@ -346,8 +362,7 @@ func TestSkillAgentEffectiveInRun(t *testing.T) {
 	c := env.agentRunConversation(t, pid)
 	defer deleteConversations(t, c.ID)
 
-	evs := env.sse(t, agentRunPath(c, "messages"), map[string]any{"text":
-		agentLoadDomain("profile") + "\n#tool skills__list {\"view\":\"effective\",\"account_id\":\"" + acc.wechat.ID.String() + "\"}"})
+	evs := env.sse(t, agentRunPath(c, "messages"), map[string]any{"text": agentLoadDomain("profile") + "\n#tool skills__list {\"view\":\"effective\",\"account_id\":\"" + acc.wechat.ID.String() + "\"}"})
 	toolOK := false
 	for _, ev := range evs {
 		if ev.Name == "tool" {
@@ -369,8 +384,7 @@ func TestSkillAgentEffectiveInRun(t *testing.T) {
 	}
 
 	// 未知 catalog 的 load_skill：unknown_skill_ref 并计入连续无效（工具错误事件，运行继续）。
-	evs = env.sse(t, agentRunPath(c, "messages"), map[string]any{"text":
-		"#tool load_skill {\"skill_ref\":\"s1\",\"catalog_id\":\"" + uuid.NewString() + "\"}"})
+	evs = env.sse(t, agentRunPath(c, "messages"), map[string]any{"text": "#tool load_skill {\"skill_ref\":\"s1\",\"catalog_id\":\"" + uuid.NewString() + "\"}"})
 	errSeen := false
 	for _, ev := range evs {
 		if ev.Name == "tool" {

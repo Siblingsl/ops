@@ -64,6 +64,11 @@ func skillCreateSkill(t *testing.T, in map[string]any) map[string]any {
 		Skill map[string]any `json:"skill"`
 	}
 	env.mustJSON(t, "POST", "/api/v1/skills", in, &out)
+	// 共享测试库的配额（个人定义 50 / 账号绑定 20）会被跨测试累计击穿：测试结束清理本条定义。
+	t.Cleanup(func() {
+		id, _ := uuid.Parse(out.Skill["id"].(string))
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM skill WHERE id=$1`, id)
+	})
 	return out.Skill
 }
 

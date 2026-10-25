@@ -37,6 +37,9 @@ func skillBindPersonal(t *testing.T, accID, skillID uuid.UUID) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM skill_binding WHERE account_id=$1 AND skill_id=$2`, accID, skillID)
+	})
 }
 
 func skillBindPublic(t *testing.T, accID, skillID uuid.UUID) {
@@ -47,6 +50,9 @@ func skillBindPublic(t *testing.T, accID, skillID uuid.UUID) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM skill_binding WHERE account_id=$1 AND skill_id=$2`, accID, skillID)
+	})
 }
 
 // skillAIIn 把四层技能各建一个并绑定到账号，返回按层命名的技能 ID。
@@ -164,8 +170,8 @@ func TestSkillAISlotAssembly(t *testing.T) {
 	}
 	var refs struct {
 		Skills *struct {
-			Items []SkillUseItem `json:"items"`
-			PersonalUsed int    `json:"personal_used_count"`
+			Items        []SkillUseItem `json:"items"`
+			PersonalUsed int            `json:"personal_used_count"`
 		} `json:"skills"`
 	}
 	if err := json.Unmarshal(refsRaw, &refs); err != nil || refs.Skills == nil {

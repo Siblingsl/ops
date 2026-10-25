@@ -1277,3 +1277,7 @@ React 草稿状态与本机布尔状态共同决定是否可离开：busy 时拒
 #### 实施与验收
 
 DEV-DC12 分为决策同步、Electron 本机子视图、React 统一宿主与权限归属、嵌入模式与真实 Electron 验收四个阶段。测试覆盖精确 URL/sender、固定 bounds、事件早到缓存与订阅清理、未登录菜单、dirty/busy、owner/editor/viewer、平台固定目标、无额外顶层窗口、同身份清理、Web 原行为、typecheck/build 和 HC-01～HC-31 保留。只有实际执行的窗口尺寸、DPI、权限和平台场景记录为通过；真实平台与未运行的 Windows 缩放场景标为待验。
+
+## 技能（Skill）系统跨端边界（D-151 / 23 文档第 12 节，DEV-SK5 登记）
+
+桌面首版不提供技能库 / 账号技能区块管理入口：`settings-registry.ts` 中写作技能条目标记 `desktopHidden`，桌面设置窗导航不显示（Web 用户菜单与命令面板正常）；桌面端的 AI 生成与智能体对话走服务端同一解析 / 注入 / 目录规则，行为与 Web 完全一致，无需客户端增量。已授权的智能体单张技能管理卡片（skills__* 工具）在桌面聊天中沿用；用户需直接填写或导入 `.md` 时，打开 Web 的 `/settings/skills` 页面完成。
