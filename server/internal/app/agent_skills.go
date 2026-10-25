@@ -129,12 +129,46 @@ func agentSkillLoadedText(c *agentSkillContext) (string, int) {
 	var b strings.Builder
 	b.WriteString(agentSkillZoneHeader())
 	chars := runeLen(b.String())
+	loaded := make(map[uuid.UUID]bool, len(c.Loaded))
 	for _, it := range c.Loaded {
+		loaded[it.Def.ID] = true
+	}
+	// 目录顺序来自统一解析器；模型加载的先后不能改变技能冲突优先级。
+	for _, it := range c.Items {
+		if !loaded[it.Def.ID] {
+			continue
+		}
 		text := skillSlotItemText(it.Def.Fields)
 		b.WriteString(text)
 		chars += runeLen(text)
 	}
-	return b.String(), chars
+	b.WriteString(skillSlotFooter())
+	return b.String(), chars + runeLen(skillSlotFooter())
+}
+
+// agentSkillCallSnapshot 只冻结当轮已加载集合的使用情况，不按当前绑定重建历史。
+func agentSkillCallSnapshot(st *agentRunState) *SkillSnapshot {
+	c := agentSkillActive(st.RunID)
+	if c == nil {
+		return nil
+	}
+	_, chars := agentSkillLoadedText(c)
+	snap := &SkillSnapshot{Input: SkillResolveInput{WorkspaceID: st.WorkspaceID, Account: &Account{ID: c.AccountID}, WorkID: c.WorkID, Surface: "agent", ActorKind: "user", ActorUserID: &st.UserID}, TargetFormat: c.TargetFormat, AllowedSetVersion: skillAllowedSetVersion, SlotChars: chars, Assembled: chars > 0}
+	loaded := make(map[uuid.UUID]bool, len(c.Loaded))
+	for _, item := range c.Loaded {
+		loaded[item.Def.ID] = true
+	}
+	for seq, item := range c.Items {
+		used := loaded[item.Def.ID]
+		reason := skillReasonNotLoaded
+		itemChars := 0
+		if used {
+			reason = ""
+			itemChars = runeLen(skillSlotItemText(item.Def.Fields))
+		}
+		snap.addUseItem(SkillUseItem{ID: item.Def.ID, Name: item.Def.Fields.Name, Scope: item.Def.Scope, Revision: item.Def.Revision, ContentHash: item.Def.contentHash(), Selected: true, Used: used, Reason: nilIfEmpty(reason), Chars: itemChars, Seq: seq})
+	}
+	return snap
 }
 
 // agentSkillLoad 实现元工具 load_skill（8.2 节）：只回执，正文进可信指令区。
@@ -223,7 +257,7 @@ func (s *Server) agentSkillLoad(ctx context.Context, st *agentRunState, account 
 	text := skillSlotItemText(item.Def.Fields)
 	add := runeLen(text)
 	if len(target.Loaded) == 0 {
-		add += runeLen(agentSkillZoneHeader())
+		add += runeLen(agentSkillZoneHeader()) + runeLen(skillSlotFooter())
 	}
 	if target.LoadedChars+add > skillSlotBudget {
 		return nil, apiErr(422, "skill_budget_exceeded", "已加载技能的指令区已满，无法再装入这一条")

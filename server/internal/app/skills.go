@@ -607,10 +607,11 @@ type skillSlotItem struct {
 
 // skillSlotDeclaration 是代码固定生成的技能声明（7.1 节）：只指导方法，低于权限、
 // 系统规则、输出契约、模板结构及账号硬约束；本次明确写法要求优先于技能。
-const skillSlotDeclaration = "以下「写作技能」来自账号配置，只指导写作方法：优先级低于系统规则、任务输出要求、模板结构与账号硬约束；作者本次明确提出的写法要求优先于技能内容。"
+const skillSlotDeclaration = "以下「写作技能」来自账号配置，只指导写作方法：优先级低于系统规则、任务输出要求、模板结构与账号硬约束；作者本次明确提出的写法要求优先于技能内容。技能按个人→账号→工作区→内置及同层优先级依次列出，软写法冲突时排在前面的技能优先，后项不得覆盖前项。产生多个候选时，每个候选都遵守同一优先关系，不以候选多样性为由忽略适用技能。"
 
 // skillSlotHeader / skillSlotItemPrefix 构成槽位包装；预算以最终字符串 rune 数为准。
 func skillSlotHeader() string { return "## 写作技能\n" + skillSlotDeclaration + "\n" }
+func skillSlotFooter() string { return "\n以上技能指令结束。" + skillSlotDeclaration + "\n" }
 
 func skillSlotItemText(f SkillFields) string {
 	return "### " + f.Name + "\n" + f.Instructions + "\n\n"
@@ -626,7 +627,7 @@ func assembleSkillSlot(items []SkillResolvedItem) (string, []skillSlotItem, int)
 	header := skillSlotHeader()
 	var b strings.Builder
 	b.WriteString(header)
-	total := runeLen(header)
+	total := runeLen(header) + runeLen(skillSlotFooter())
 	trace := make([]skillSlotItem, 0, len(items))
 	usedAny := false
 	for _, it := range items {
@@ -649,5 +650,6 @@ func assembleSkillSlot(items []SkillResolvedItem) (string, []skillSlotItem, int)
 		// 无实际使用技能时不输出空标题或声明（7.1 节第 3 项）。
 		return "", trace, 0
 	}
+	b.WriteString(skillSlotFooter())
 	return b.String(), trace, total
 }

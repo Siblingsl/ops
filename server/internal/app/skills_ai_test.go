@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -212,17 +213,26 @@ func TestSkillAINoBindingByteIdentical(t *testing.T) {
 	// fx.wechat 此刻可能已带早期测试的绑定；用全新账号确保零绑定。
 	var fresh Account
 	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{"platform": "wechat_mp", "name": "无绑定账号", "content_format": "long_article"}, &fresh)
+	// 无技能快照的原装配分支作为基线；实际调用必须逐字节保持相同消息。
+	baseCtx := context.WithValue(context.Background(), ctxMember, ident(ctx))
+	task := aiTask{Type: "title", Account: &fresh, User: "标题任务：中文🙂\n保留换行。"}
+	baseline, err := env.srv.buildContext(baseCtx, task)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	env.llm.ResetRequests()
-	if _, err := env.srv.runAI(ctx, aiTask{Type: "title", Account: &fresh, User: "标题任务"}, nil); err != nil {
+	if _, err := env.srv.runAI(ctx, task, nil); err != nil {
 		t.Fatal(err)
 	}
 	sys := systemOf(t, env.llm.Requests()[len(env.llm.Requests())-1])
+	usr := userOf(t, env.llm.Requests()[len(env.llm.Requests())-1])
+	if !bytes.Equal([]byte(sys), []byte(baseline.System)) || !bytes.Equal([]byte(usr), []byte(baseline.User)) {
+		t.Fatal("无绑定的实际 system/user 消息与无技能快照基线不逐字节一致")
+	}
 	if strings.Contains(sys, "写作技能") || strings.Contains(sys, skillSlotDeclaration) {
 		t.Fatal("no-binding prompt must not contain the skills slot")
 	}
-	// 基线：同一账号在技能路径关闭（Bare 之外的条件不变）时生成的槽位之外部分一致。
-	// 直接断言槽位之外内容 = 既有规则+档案+…+任务，即包含系统规则且不含技能声明。
 	if !strings.Contains(sys, "你是一位帮助内容创作者写作的助手") {
 		t.Fatal("system rules missing")
 	}
@@ -235,10 +245,18 @@ func TestSkillAINoBindingByteIdentical(t *testing.T) {
 	sk := skillCreateSkill(t, in)
 	skillBindPersonal(t, fresh.ID, skillIDOf(t, sk))
 	env.llm.ResetRequests()
-	if _, err := env.srv.runAI(ctx, aiTask{Type: "title", Account: &fresh, User: "标题任务"}, nil); err != nil {
+	filteredCtx := withSkillSnapshotHolder(baseCtx)
+	if _, err := env.srv.runAI(filteredCtx, task, nil); err != nil {
 		t.Fatal(err)
 	}
 	sys2 := systemOf(t, env.llm.Requests()[len(env.llm.Requests())-1])
+	usr2 := userOf(t, env.llm.Requests()[len(env.llm.Requests())-1])
+	if !bytes.Equal([]byte(sys2), []byte(baseline.System)) || !bytes.Equal([]byte(usr2), []byte(baseline.User)) {
+		t.Fatal("全部被过滤时的实际消息与无技能快照基线不逐字节一致")
+	}
+	if snap := skillSnapshotFromCtx(filteredCtx); snap == nil || len(snap.Items) != 1 || snap.Items[0].Reason == nil || *snap.Items[0].Reason != skillReasonPlatform {
+		t.Fatal("第二次动作必须实际解析新绑定并按平台排除，不能复用前次空快照")
+	}
 	if strings.Contains(sys2, "写作技能") {
 		t.Fatal("all-filtered prompt must not emit an empty skills header")
 	}

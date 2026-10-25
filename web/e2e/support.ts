@@ -32,6 +32,11 @@ export function electronLocalSettingsReadStatus(app: ElectronApplication) {
 export async function electronLocalSettingsWaitPanel(app: ElectronApplication, panel: string) {
   await expect.poll(() => app.evaluate(({ webContents }) => webContents.getAllWebContents().map((item) => item.getURL())))
     .toContain(`ops-desktop://settings/embedded/${panel}`)
+  // URL 与初始 DOM 先出现；初始 IPC 读取完成后页面才解除 inert。
+  // executeJavaScript 的 .click() 会绕过用户点击的 inert 限制，不能提前操作。
+  await expect.poll(() => electronLocalSettingsEvaluate<boolean>(app,
+    `document.body.dataset.embeddedPanel === ${JSON.stringify(panel)} && document.querySelector('#settings-content')?.inert === false`))
+    .toBe(true)
 }
 
 /**

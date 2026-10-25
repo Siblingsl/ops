@@ -90,7 +90,7 @@ func (s *Server) agentMessageWindow(ctx context.Context, st *agentRunState, id *
 	}
 
 	budget := agentWindowChars
-	kept := []agentRawMessage{}
+	first := len(groups)
 	for i := len(groups) - 1; i >= 0; i-- {
 		need := 0
 		for _, m := range groups[i] {
@@ -100,11 +100,12 @@ func (s *Server) agentMessageWindow(ctx context.Context, st *agentRunState, id *
 			break
 		}
 		budget -= need
-		kept = append(kept, groups[i]...)
+		first = i
 	}
-	// kept 是逆序，翻回来。
-	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
-		kept[i], kept[j] = kept[j], kept[i]
+	// 按组保留原时间顺序；不能反转组内 assistant 调用和对应 tool 结果。
+	kept := []agentRawMessage{}
+	for _, group := range groups[first:] {
+		kept = append(kept, group...)
 	}
 
 	out := []ai.Message{}

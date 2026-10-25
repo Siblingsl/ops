@@ -383,14 +383,22 @@ func (s *Server) writeAgentAICall(ctx context.Context, st *agentRunState, rt *ro
 		refs["fallback_used"] = true
 		refs["fallback_model"] = rt.ProviderName + " / " + rt.Model
 	}
+	snap := agentSkillCallSnapshot(st)
+	if snap != nil {
+		refs["skills"] = skillSharedRefs(snap)
+	}
+	private, ownerID, err := snap.privateRefs()
+	if err != nil {
+		return uuid.Nil, err
+	}
 	raw, _ := json.Marshal(refs)
 	var id uuid.UUID
-	err := s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO ai_call
+	err = s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO ai_call
 		(workspace_id, account_id, work_id, task_type, provider, model, template_version, context_refs,
-		 prompt_tokens, completion_tokens, status, error)
-		VALUES ($1,$2,$3,'agent_chat',$4,$5,1,$6,$7,$8,$9,$10) RETURNING id`,
+		 prompt_tokens, completion_tokens, status, error, context_owner_user_id, private_context_refs)
+		VALUES ($1,$2,$3,'agent_chat',$4,$5,1,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
 		st.WorkspaceID, st.AccountID, nil, rt.ProviderName, rt.Model, raw,
-		usage.PromptTokens, usage.CompletionTokens, status, truncate(errText, 500)).Scan(&id)
+		usage.PromptTokens, usage.CompletionTokens, status, truncate(errText, 500), ownerID, private).Scan(&id)
 	return id, err
 }
 

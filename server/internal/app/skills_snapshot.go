@@ -80,35 +80,50 @@ func (s *Server) loadSkillSnapshot(ctx context.Context, in SkillResolveInput) (*
 	snap := &SkillSnapshot{Input: in, TargetFormat: format, AllowedSetVersion: skillAllowedSetVersion, Selected: res.Selected}
 	_, trace, total := assembleSkillSlot(res.Selected)
 	snap.SlotText, snap.SlotChars, snap.Assembled = assembleTraceText(trace), total, total > 0
-	usedByID := map[uuid.UUID]bool{}
+	traceByID := map[uuid.UUID]skillSlotItem{}
 	for _, tr := range trace {
-		if tr.Used {
-			usedByID[tr.Def.ID] = true
-		}
+		traceByID[tr.Def.ID] = tr
 	}
 
 	seq := 0
 	for _, it := range res.Items {
 		reason := it.Reason
+		tr, assembled := traceByID[it.Def.ID]
+		if assembled {
+			reason = tr.Reason
+		}
 		u := SkillUseItem{
 			ID: it.Def.ID, Name: it.Def.Fields.Name, Scope: it.Def.Scope,
 			Revision: it.Def.Revision, ContentHash: it.Def.contentHash(),
 			Selected: it.Reason == "" || it.Reason == skillReasonBudget,
-			Used:     usedByID[it.Def.ID],
-			Reason:   nilIfEmpty(reason), Seq: seq,
+			Used:     tr.Used, Chars: tr.Chars,
+			Reason: nilIfEmpty(reason), Seq: seq,
 		}
 		seq++
-		if it.Def.Scope == "personal" {
-			if u.Used {
-				snap.PersonalUsed++
-			}
-			snap.PrivateItems = append(snap.PrivateItems, u)
-		} else {
-			snap.PublicItems = append(snap.PublicItems, u)
-		}
-		snap.Items = append(snap.Items, u)
+		snap.addUseItem(u)
 	}
 	return snap, nil
+}
+
+// 两入口共用同一处隐私拆分；未使用的私人候选元数据也只能由本人读。
+func (snap *SkillSnapshot) addUseItem(item SkillUseItem) {
+	if item.Scope == "personal" {
+		if item.Used {
+			snap.PersonalUsed++
+		}
+		snap.PrivateItems = append(snap.PrivateItems, item)
+	} else {
+		snap.PublicItems = append(snap.PublicItems, item)
+	}
+	snap.Items = append(snap.Items, item)
+}
+
+func (snap *SkillSnapshot) privateRefs() (json.RawMessage, *uuid.UUID, error) {
+	if snap == nil || len(snap.PrivateItems) == 0 {
+		return json.RawMessage("{}"), nil, nil
+	}
+	raw, err := json.Marshal(map[string]any{"items": snap.PrivateItems})
+	return raw, snap.Input.ActorUserID, err
 }
 
 // assembleTraceText 从装配留痕重建槽位文本（与 assembleSkillSlot 输出一致）。
@@ -128,6 +143,7 @@ func assembleTraceText(trace []skillSlotItem) string {
 	if !any {
 		return ""
 	}
+	b.WriteString(skillSlotFooter())
 	return b.String()
 }
 
@@ -242,12 +258,12 @@ func (s *Server) verifySkillSnapshot(ctx context.Context, snap *SkillSnapshot) e
 	}
 	// 入选技能：绑定身份与 priority、定义修订 / 状态 / 入口资格。
 	type liveRow struct {
-		bindingID            uuid.UUID
-		priority             int
-		revision             int64
-		status               string
-		taskOn, agentOn      bool
-		platforms, formats   []string
+		bindingID          uuid.UUID
+		priority           int
+		revision           int64
+		status             string
+		taskOn, agentOn    bool
+		platforms, formats []string
 	}
 	rows, err := s.db.Query(ctx, `SELECT b.id, b.priority, sk.revision, sk.status, sk.task_enabled, sk.agent_enabled,
 		sk.platforms, sk.content_formats, sk.id FROM skill_binding b JOIN skill sk ON sk.id=b.skill_id
@@ -302,11 +318,11 @@ func skillSharedRefs(snap *SkillSnapshot) map[string]any {
 			"task_type":     strOrNil(snap.Input.TaskType),
 			"actor_kind":    snap.Input.ActorKind,
 		},
-		"budget":                skillSlotBudget,
-		"assembled_chars":       nullableInt(snap.SlotChars, snap.Assembled),
-		"items":                 items,
-		"personal_used_count":   snap.PersonalUsed,
-		"allowed_set_version":   snap.AllowedSetVersion,
+		"budget":              skillSlotBudget,
+		"assembled_chars":     nullableInt(snap.SlotChars, snap.Assembled),
+		"items":               items,
+		"personal_used_count": snap.PersonalUsed,
+		"allowed_set_version": snap.AllowedSetVersion,
 	}
 }
 
@@ -345,12 +361,12 @@ func (s *Server) getAICallSkillContext(w http.ResponseWriter, r *http.Request) e
 	}
 	var shared struct {
 		Skills *struct {
-			Context         map[string]any `json:"context"`
-			Budget          int            `json:"budget"`
-			AssembledChars  *int           `json:"assembled_chars"`
-			Items           []SkillUseItem `json:"items"`
-			PersonalUsed    int            `json:"personal_used_count"`
-			AllowedSetVer   string         `json:"allowed_set_version"`
+			Context        map[string]any `json:"context"`
+			Budget         int            `json:"budget"`
+			AssembledChars *int           `json:"assembled_chars"`
+			Items          []SkillUseItem `json:"items"`
+			PersonalUsed   int            `json:"personal_used_count"`
+			AllowedSetVer  string         `json:"allowed_set_version"`
 		} `json:"skills"`
 	}
 	if len(refs) > 0 {

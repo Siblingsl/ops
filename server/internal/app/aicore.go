@@ -310,11 +310,17 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 			WorkspaceID: idv.WorkspaceID,
 			Account:     t.Account,
 			ActorKind:   "user",
-			ActorUserID: func() *uuid.UUID { id := idv.UserID; if id == uuid.Nil { return nil }; return &id }(),
-			Surface:     "task",
-			TaskType:    t.Type,
-			WorkID:      t.WorkID,
-			Bare:        t.Bare,
+			ActorUserID: func() *uuid.UUID {
+				id := idv.UserID
+				if id == uuid.Nil {
+					return nil
+				}
+				return &id
+			}(),
+			Surface:  "task",
+			TaskType: t.Type,
+			WorkID:   t.WorkID,
+			Bare:     t.Bare,
 		}
 		// 23 文档 6.1 节：AdminOverride 不构成用户执行的成员资格——代访会话
 		// 按公共分区口径解析（同系统主体），否则成员资格复核会让代访下的全部
@@ -390,18 +396,10 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 		}
 		refsJSON, _ := json.Marshal(refs)
 		// DEV-SK2 / 10.3 节：私有元数据在持久化前与共享引用拆分；
-		// context_owner_user_id 只在含个人技能时写入真实触发用户。
-		privateJSON := []byte("{}")
-		var ownerID *uuid.UUID
-		if snap != nil && snap.PersonalUsed > 0 {
-			b, mErr := json.Marshal(map[string]any{"items": snap.PrivateItems})
-			if mErr != nil {
-				return nil, mErr
-			}
-			privateJSON = b
-			if id := ident(ctx); id != nil && id.UserID != uuid.Nil {
-				ownerID = &id.UserID
-			}
+		// 未使用的个人候选也保留本人可见的排除原因，不进入共享引用。
+		privateJSON, ownerID, privateErr := snap.privateRefs()
+		if privateErr != nil {
+			return nil, privateErr
 		}
 		var callID uuid.UUID
 		if err := s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO ai_call (workspace_id, account_id, work_id, task_type, provider, model, template_version, context_refs,
