@@ -5,8 +5,8 @@ export { currentAccountSettingsPath } from './settings-registry'
 export type { SettingsEntry, SettingsGroupName, SettingsScope } from './settings-registry'
 export { settingsGroupOf }
 
-/** 桌面设置窗的条目清单 = 同一事实源（GL-02），仅此处按桌面呈现取别名。 */
-export { settingsEntries as desktopSettingsEntries }
+/** 桌面设置窗的条目清单 = 同一事实源（GL-02），仅此处按桌面呈现取别名并隐藏 Web 专属页。 */
+export const desktopSettingsEntries = settingsEntries.filter((entry) => !entry.desktopHidden)
 
 export function desktopSettingsPanel(pathname: string) {
   const entry = settingsEntryFor(pathname)

@@ -17,6 +17,8 @@ export interface SettingsEntry {
   localPanel?: 'connection' | 'ai' | 'account-device' | 'diagnostics'
   /** 桌面端专属，Web 用户菜单/命令面板不显示。 */
   webHidden?: boolean
+  /** Web 专属，桌面设置窗不显示（23 文档第 12 节的跨端可见性边界）。 */
+  desktopHidden?: boolean
 }
 
 /**
@@ -31,6 +33,9 @@ export const settingsEntries: SettingsEntry[] = [
   { path: '/settings/members', label: '成员与邀请', group: '工作区设置', scope: '工作区', icon: Users, keywords: '协作 邀请码 工作区名称' },
   { path: '/settings/models', label: '模型配置', desktopLabel: '服务器模型', group: '工作区设置', scope: '工作区', icon: Cpu, keywords: '供应商 API 路由 采样' },
   { path: '/settings/agent', label: '智能体设置', group: '工作区设置', scope: '工作区', icon: Bot, keywords: 'AI 权限 观察者' },
+  // DEV-SK4 / 23 文档第 12 节：桌面首版不提供技能库管理入口（desktopHidden）；
+  // 桌面生成与聊天仍使用服务端同一技能规则，需直接填写 / 导入时打开 Web 对应页面。
+  { path: '/settings/skills', label: '写作技能', group: '工作区设置', scope: '工作区', icon: ScrollText, keywords: '技能 写作方法 指令包 导入 导出 AI 起草', desktopHidden: true },
   { path: '/settings/desktop-ai', label: '桌面 AI 策略', group: '工作区设置', scope: '工作区', icon: Bot, keywords: '本机 AI 客户端 端点 owner 所有者', webHidden: true },
   { path: '/settings/budget', label: 'AI 用量与成本', group: '工作区设置', scope: '工作区', icon: Gauge, keywords: '每日 token 上限 调用 费用', webHidden: true },
   { path: '/settings/usage', label: 'AI 用量与成本', desktopLabel: '完整用量报表', group: '数据与工具', scope: '工作区', icon: Gauge, keywords: 'token 每日 上限 费用', tool: true },

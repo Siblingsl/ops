@@ -39,6 +39,7 @@ const CrawlSettings = lazy(() => import('./pages/settings/Crawl'))
 const HotSources = lazy(() => import('./pages/settings/Crawl').then((m) => ({ default: m.HotSources })))
 const Quality = lazy(() => import('./pages/settings/Quality'))
 const Preferences = lazy(() => import('./pages/settings/Preferences'))
+const Skills = lazy(() => import('./pages/settings/Skills'))
 const WorkLayout = lazy(() => import('./pages/work/WorkLayout'))
 const Editor = lazy(() => import('./pages/work/Editor'))
 const Compare = lazy(() => import('./pages/work/Compare'))
@@ -155,6 +156,7 @@ function Authed() {
           <Route path="hot-sources" element={<S><HotSources /></S>} />
  <Route path="daily" element={<S><DailySettings /></S>} />
           <Route path="agent" element={<S><AgentSettings /></S>} />
+          <Route path="skills" element={<S><Skills /></S>} />
           <Route path="desktop-ai" element={<S><DesktopPolicy /></S>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

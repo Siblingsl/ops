@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { errorMessage, patch, post } from '@/lib/api'
 import { type AIRefs, describeRefs } from '@/lib/format'
+import { skillReasonText } from '@/pages/settings/Skills'
 import { cn } from './ui'
 
 const reasonTags = ['太夸张', '太长', '太短', '跑题', '语气不对', '编造内容', '其他'] as const
@@ -107,7 +108,13 @@ export function RefsNote({ refs, className, callId, onRetry, sampleText }: { ref
                   {s.items.map((it, i) => (
                     <li key={it.id ?? i} className={cn('group/item', !it.used && 'text-mist-300 line-through')}>
                       {it.label}
-                      {!it.used && '（因长度限制未使用）'}
+                      {/* DEV-SK2 / 23 文档 7.2 节：技能槽逐项展示使用字符与未使用原因；不展示被截短正文。 */}
+                      {!it.used && (s.name === 'skills'
+                        ? `（${skillReasonText((it as { reason?: string | null }).reason) || '未使用'}）`
+                        : '（因长度限制未使用）')}
+                      {s.name === 'skills' && it.used && (it as { chars?: number }).chars != null && (it as { chars?: number }).chars! > 0 && (
+                        <span className="ml-1 text-[11px] text-mist-300">{(it as { chars?: number }).chars} 字</span>
+                      )}
                       {s.name === 'memory' && it.used && it.id && (
                         <button type="button" onClick={() => disableMemory(it.id!)}
                           className="ml-1.5 cursor-pointer text-[11px] text-mist-400 underline-offset-2 hover:text-orange-600 hover:underline">

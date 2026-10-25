@@ -14,6 +14,7 @@ import { CUSTOM_THEME_ID, customTheme, renderWechat, themes } from '@/lib/render
 import { setCustomTheme } from '@/lib/custom-theme-state'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { Account, CharacterCard, CustomTheme, Memory, Profile, StyleSample } from '@/lib/types'
+import SkillsTab from './ProfileSkills'
 import { memoryKindLabel, memoryScopeLabel, memorySourceLabel, useCustomTheme } from '@/lib/v3'
 
 const splitList = (s: string) => s.split(/[,，、\s]+/).map((x) => x.trim()).filter(Boolean)
@@ -791,7 +792,7 @@ function LayoutTab({ account, profile, onSaved }: { account: Account; profile: P
 export default function ProfilePage() {
   const acc = useCurrentAccount()
   const [params, setParams] = useSearchParams()
-  const tab = (params.get('tab') as 'positioning' | 'samples' | 'memory' | 'characters' | 'layout') || 'positioning'
+  const tab = (params.get('tab') as 'positioning' | 'samples' | 'memory' | 'characters' | 'layout' | 'skills') || 'positioning'
   const { data, isLoading, error, failureReason, isFetching, refetch } = useQuery({ queryKey: ['profile', acc?.id], queryFn: () => get<Profile>(`/accounts/${acc!.id}/profile`), enabled: !!acc })
   const [profile, setProfile] = useState<Profile | null>(null)
   useEffect(() => setProfile(data ?? null), [data])
@@ -802,6 +803,7 @@ export default function ProfilePage() {
     { value: 'positioning' as const, label: '定位' },
     { value: 'samples' as const, label: '风格样本' },
     { value: 'memory' as const, label: 'AI 记忆' },
+    { value: 'skills' as const, label: '写作技能' },
     ...(comic ? [{ value: 'characters' as const, label: '角色卡' }] : []),
     ...(wx ? [{ value: 'layout' as const, label: '排版' }] : []),
   ]
@@ -813,6 +815,7 @@ export default function ProfilePage() {
       {tab === 'positioning' && <PositioningTab key={acc.id} account={acc} profile={profile} onSaved={(p) => { setProfile(p); refetch() }} />}
       {tab === 'samples' && <SamplesTab account={acc} />}
       {tab === 'memory' && <MemoryTab account={acc} />}
+      {tab === 'skills' && <SkillsTab key={acc.id} accountId={acc.id} />}
       {tab === 'characters' && comic && <CharactersTab account={acc} />}
       {tab === 'layout' && wx && <LayoutTab key={acc.id} account={acc} profile={profile} onSaved={(p) => { setProfile(p); refetch() }} />}
     </div>
