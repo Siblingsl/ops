@@ -129,3 +129,30 @@ export async function publishDigest(op: PublishTarget, fields: DefinitionFields)
   })
   return 'sp1:' + h
 }
+
+/**
+ * serializeSkillMarkdown：把（可能经预览编辑的）表单字段序列化为 4.2 节格式的
+ * .md（与服务端 exportSkillMarkdown 同一契约）。标量用 JSON 双引号编码——JSON
+ * 字符串是合法 YAML 标量，服务端 yaml 解析后与服务端导出口径等值；正文原样追加
+ * 在关闭分隔行之后。保存导入时用最终表单重新生成 import_content，用户在预览中
+ * 的修改不会丢失（4.2 节第 5 项）。
+ */
+export function serializeSkillMarkdown(fields: DefinitionFields): string {
+  const q = (s: string) => JSON.stringify(s)
+  const arr = (a: string[]) => (a.length ? '[' + a.map(q).join(',') + ']' : '[]')
+  const n = normalizeDefinitionFields(fields)
+  return [
+    '---',
+    'format_version: 1',
+    `name: ${q(n.name)}`,
+    `summary: ${q(n.summary)}`,
+    `triggers: ${q(n.triggers)}`,
+    `platforms: ${arr(n.platforms)}`,
+    `formats: ${arr(n.content_formats)}`,
+    `tasks: ${arr(n.task_types)}`,
+    `task_enabled: ${n.task_enabled}`,
+    `agent_enabled: ${n.agent_enabled}`,
+    '---',
+    n.instructions,
+  ].join('\n')
+}

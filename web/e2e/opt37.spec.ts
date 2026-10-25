@@ -20,6 +20,8 @@ test('OPT37 扫码预览公开展示与当前公众号主题相同的只读排�
   await api(page, 'PATCH', `/works/${work.id}`, { theme: 'custom', base_revision: current.revision })
 
   await page.goto(`/works/${work.id}/preview`)
+  // 自定义主题档案异步加载：等真实内容渲染完成再取样，避免抓到加载中的空帧。
+  await expect(page.getByTestId('wechat-rendered-html')).toContainText('手机预览标题')
   const sourceHtml = await page.getByTestId('wechat-rendered-html').innerHTML()
   const normalizeHtml = (html: string) => page.evaluate((value) => {
     const template = document.createElement('template')

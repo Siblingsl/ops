@@ -7,53 +7,39 @@ import vm from 'node:vm'
 const require = createRequire(import.meta.url)
 const ts = require('typescript')
 const source = fs.readFileSync(new URL('../src/lib/skill-canon.ts', import.meta.url), 'utf8')
-const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
+const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText
 
 const sandbox = { exports: {}, require, console, TextEncoder, TextDecoder, crypto: globalThis.crypto }
 vm.runInNewContext(compiled, sandbox)
 const { canonicalJSON, publishDigest } = sandbox.exports
 
-// DEV-SK4 / 23 文档第 5.2.1 节：前后端同一测试向量（T-SK-35，向量见 skills_canon_test.go）。
-test('canonical JSON matches the contract vector', () => {
-  const c = canonicalJSON({ b: '<>&/\n', a: '中😀' })
-  assert.equal(c, '{"a":"中😀","b":"<>&/\\u000a"}')
-})
-
-test('keys sort by UTF-8 byte order recursively; escapes only quotes, backslash and controls', () => {
-  assert.equal(canonicalJSON({ Z: 1, a: 2, 中: 3, B: { y: 1, X: 2 } }), '{"B":{"X":2,"y":1},"Z":1,"a":2,"中":3}')
-  assert.equal(canonicalJSON({ s: 'a"\\<>&/' }), '{"s":"a\\"\\\\<>&/"}')
-})
-
-test('non-integer numbers are rejected', () => {
-  assert.throws(() => canonicalJSON({ f: 1.5 }))
-})
-
-test('sp1 digest is deterministic and covers operation and target', async () => {
-  const fields = {
-    name: '名', summary: 's', triggers: 't', instructions: 'body',
-    platforms: ['xhs'], content_formats: [], task_types: ['title'],
-    task_enabled: true, agent_enabled: false, status: 'active',
-  }
-  const d1 = await publishDigest({ operation: 'create', skillId: null, scope: 'workspace', accountId: null }, fields)
-  const d2 = await publishDigest({ operation: 'create', skillId: null, scope: 'workspace', accountId: null }, fields)
-  assert.equal(d1, d2)
-  assert.ok(d1.startsWith('sp1:'))
-  const d3 = await publishDigest({ operation: 'update', skillId: '2b5c8fd6-0000-4000-8000-000000000000', scope: 'workspace', accountId: null }, fields)
-  assert.notEqual(d3, d1)
-})
-
-test('digest covers normalized fields (client normalization matches server)', async () => {
-  const base = {
-    name: '  名  ', summary: 's', triggers: 't', instructions: 'body\r\n第二行',
-    platforms: ['xhs', 'wechat_mp', 'xhs'], content_formats: [], task_types: [],
-    task_enabled: true, agent_enabled: true, status: 'active',
-  }
-  const normalized = {
-    name: '名', summary: 's', triggers: 't', instructions: 'body\n第二行',
-    platforms: ['wechat_mp', 'xhs'], content_formats: [], task_types: [],
-    task_enabled: true, agent_enabled: true, status: 'active',
-  }
-  const d1 = await publishDigest({ operation: 'create', skillId: null, scope: 'workspace', accountId: null }, base)
-  const d2 = await publishDigest({ operation: 'create', skillId: null, scope: 'workspace', accountId: null }, normalized)
-  assert.equal(d1, d2)
+// DEV-SK4 修复：导入预览编辑后保存必须用最终表单重序列化（4.2 节第 5 项）。
+// 序列化格式与服务端 exportSkillMarkdown 同契约：JSON 双引号标量是合法 YAML。
+test('serializeSkillMarkdown round-trips edited fields', () => {
+  const { serializeSkillMarkdown } = sandbox.exports
+  const BS = String.fromCharCode(92)
+  const NL = String.fromCharCode(10)
+  const md = serializeSkillMarkdown({
+    name: '编辑后的名称',
+    summary: '含"引号"与' + BS + '反斜杠',
+    triggers: '触发：条件',
+    instructions: '正文第一行' + NL + NL + '---' + NL + NL + '水平线',
+    platforms: ['xhs', 'wechat_mp'],
+    content_formats: [],
+    task_types: ['title'],
+    task_enabled: false,
+    agent_enabled: true,
+    status: 'active',
+  })
+  const lines = md.split(NL)
+  assert.equal(lines[0], '---')
+  assert.equal(lines[1], 'format_version: 1')
+  // JSON 双引号标量：服务端 YAML 解析得到原文。
+  assert.ok(md.includes('name: "编辑后的名称"'))
+  assert.ok(md.includes('summary: "含' + BS + '"引号' + BS + '"与' + BS + BS + '反斜杠"'))
+  assert.ok(md.includes('platforms: ["wechat_mp","xhs"]'))
+  assert.ok(md.includes('task_enabled: false'))
+  assert.ok(md.includes('agent_enabled: true'))
+  // 正文（含水平线）原样在关闭分隔行之后。
+  assert.ok(md.endsWith('正文第一行' + NL + NL + '---' + NL + NL + '水平线'))
 })

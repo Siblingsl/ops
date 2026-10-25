@@ -19,7 +19,7 @@ test('OPT56 单条采用并开始写一次点击进编辑器，单独采用不�
   expect(topics.find((t: { id: string }) => t.id === first.id).status).toBe('adopted')
   expect(topics.find((t: { id: string }) => t.id === second.id).status).toBe('pending')
   await page.goto(`/a/${account.id}/topics`)
-  await page.getByRole('button', { name: '采用', exact: true }).click()
+  await page.getByRole('button', { name: '采用，稍后写' }).click()
   await expect.poll(async () => {
     topics = await api(page, 'GET', `/accounts/${account.id}/topics`)
     return topics.find((t: { id: string }) => t.id === second.id).status

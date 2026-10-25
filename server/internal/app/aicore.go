@@ -305,18 +305,23 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 	// 执行主体由服务端身份决定（UserID 为空即系统执行，只读公共分区）。
 	var snap *SkillSnapshot
 	if t.Account != nil && !t.Bare {
+		idv := ident(ctx)
 		in := SkillResolveInput{
-			WorkspaceID: ident(ctx).WorkspaceID,
+			WorkspaceID: idv.WorkspaceID,
 			Account:     t.Account,
 			ActorKind:   "user",
-			ActorUserID: func() *uuid.UUID { id := ident(ctx).UserID; if id == uuid.Nil { return nil }; return &id }(),
+			ActorUserID: func() *uuid.UUID { id := idv.UserID; if id == uuid.Nil { return nil }; return &id }(),
 			Surface:     "task",
 			TaskType:    t.Type,
 			WorkID:      t.WorkID,
 			Bare:        t.Bare,
 		}
-		if in.ActorUserID == nil {
+		// 23 文档 6.1 节：AdminOverride 不构成用户执行的成员资格——代访会话
+		// 按公共分区口径解析（同系统主体），否则成员资格复核会让代访下的全部
+		// 账号任务返回 skill_context_changed。
+		if in.ActorUserID == nil || (idv != nil && idv.AdminOverride) {
 			in.ActorKind = "system"
+			in.ActorUserID = nil
 		}
 		ctx, snap, err = s.skillSnapshotFor(ctx, in)
 		if err != nil {

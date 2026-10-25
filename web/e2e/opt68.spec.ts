@@ -13,7 +13,7 @@ test('OPT68 选题状态使用接口响应更新缓存，不重新请求列表',
     if (request.method() === 'GET' && url.pathname === `/api/v1/accounts/${account.id}/topics`) listRequests++
   })
   const updated = page.waitForResponse(response => response.url().endsWith(`/api/v1/topics/${topic.id}`) && response.request().method() === 'PATCH')
-  await page.getByRole('button', { name: '采用', exact: true }).click()
+  await page.getByRole('button', { name: '采用，稍后写' }).click()
   expect((await updated).ok()).toBeTruthy()
   await page.getByRole('button', { name: '已采用' }).click()
   await expect(page.getByText(topic.title, { exact: true })).toBeVisible()

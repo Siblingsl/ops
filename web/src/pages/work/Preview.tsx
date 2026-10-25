@@ -39,6 +39,12 @@ export function PhoneFrame({ title, account, children }: { title: string; accoun
 export function useWechatHtml(work: Work, themeId?: string) {
   const ct = useCustomTheme(work.account_id).data
   return useMemo(() => {
+    // 作品选了自定义主题但账号档案尚未加载完成时，不渲染回退内置主题：
+    // 错主题闪一帧既误导用户，也让「编辑器预览 vs 公开预览」比对抓到错误帧
+    // （opt37 组合必现的根源）。等 ct 就绪再出 HTML。
+    if ((themeId ?? work.theme) === CUSTOM_THEME_ID && !ct) {
+      return { html: '', ...htmlStats('') }
+    }
     setCustomTheme(ct ?? null)
     const html = renderWechat(work.sections, themeId ?? work.theme, work.assets)
     return { html, ...htmlStats(html) }

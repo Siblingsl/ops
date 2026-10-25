@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Download, FileUp, Pencil, Plus, Search, Sparkles, Trash2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, Empty, Field, Input, Notice, PageHeader, PageLoading, Select, Switch, Tabs, Textarea } from '@/components/ui'
 import { api, errorMessage, get, post, stream } from '@/lib/api'
-import { publishDigest as canonPublishDigest } from '@/lib/skill-canon'
+import { publishDigest as canonPublishDigest, serializeSkillMarkdown } from '@/lib/skill-canon'
 import { useMe } from '@/lib/session'
 
 // DEV-SK4 / 23 文档第 12 节：技能库页。个人默认；公开目标必须单独确认；
@@ -250,7 +250,7 @@ function SkillEditor({ me, def, initial, warnings, importMode, onClose, onImport
   const [impactToken, setImpactToken] = useState('')
   const [impact, setImpact] = useState<null | { affected_bindings: number; accounts: { name: string }[] }>(null)
   const [stale, setStale] = useState(false)
-  const draftBrief = useRef('')
+  const [draftBrief, setDraftBrief] = useState('')
   const set = (patch: Partial<ReturnType<typeof emptyForm>>) => {
     setForm((f) => ({ ...f, ...patch }))
     // 更改公开内容或目标会取消已勾选的公开确认（12.2 节）。
@@ -277,11 +277,11 @@ function SkillEditor({ me, def, initial, warnings, importMode, onClose, onImport
 
   // AI 草拟：保留表单；成功显示完整可编辑草稿；失败保留原表单（12.1 节第 4 项）。
   const draft = async () => {
-    if (!draftBrief.current.trim()) { toast.error('请先填写你的需求（brief）'); return }
+    if (!draftBrief.trim()) { toast.error('请先填写你的需求（brief）'); return }
     setDrafting(true)
     try {
       const done = await stream<{ draft: SkillDef; ai_call_id: string }>('/skills/draft', {
-        brief: draftBrief.current,
+        brief: draftBrief,
         ...(form.scope === 'account' && form.account_id ? {} : {}),
       })
       // 只采纳四个文字字段；条件与开关由服务端按请求确定。
@@ -309,7 +309,10 @@ function SkillEditor({ me, def, initial, warnings, importMode, onClose, onImport
     setBusy(true)
     try {
       if (importMode && importContent.trim()) {
-        const body: Record<string, unknown> = { scope: form.scope, import_content: importContent }
+        // 预览后用户可能修改字段：按最终表单重新序列化，不能把原始文件原文
+        // 直接提交而丢弃编辑（4.2 节第 5 项）。
+        const finalMd = serializeSkillMarkdown(form)
+        const body: Record<string, unknown> = { scope: form.scope, import_content: finalMd }
         if (form.scope === 'account') {
           body.account_id = form.account_id
           body.publish_confirmation = { confirmed: true, digest: await publishDigest('create', null, form) }
@@ -469,7 +472,7 @@ function SkillEditor({ me, def, initial, warnings, importMode, onClose, onImport
         {!isEdit && !importMode && (
           <div className="rounded-md border border-mist-200 p-3">
             <div className="mb-2 flex items-center gap-2 text-[13px] font-medium text-mist-700"><Sparkles className="size-4" />AI 辅助起草（可选）</div>
-            <Textarea rows={2} placeholder="描述你想要的技能，例如：起草小红书笔记开头的方法" value={draftBrief.current} onChange={(e) => { draftBrief.current = e.target.value }} />
+            <Textarea rows={2} placeholder="描述你想要的技能，例如：起草小红书笔记开头的方法" value={draftBrief} onChange={(e) => setDraftBrief(e.target.value)} />
             <div className="mt-2 flex justify-end">
               <Button variant="ghost" loading={drafting} onClick={draft}>生成草稿</Button>
             </div>

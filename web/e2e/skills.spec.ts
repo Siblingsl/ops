@@ -49,11 +49,15 @@ test('SK2 导入 .md 往返：parse 预览告警可见，保存后字段保留�
   await expect(dialog.getByLabel(/^完整指令正文/)).toContainText('正文里的水平线之后。')
   // 仅智能体：task_enabled=false 保留。
   await expect(dialog.getByRole('switch', { name: /用于普通 AI 生成任务/ })).toHaveAttribute('aria-checked', 'false')
+  // 预览后修改字段（4.2 节第 5 项）：保存必须以编辑后的表单为准，不回退原始文件。
+  await dialog.getByLabel(/^名称/).fill('E2E 导入技能（已改）')
   await dialog.getByRole('button', { name: '创建技能' }).click()
-  await expect(page.getByText('E2E 导入技能')).toBeVisible()
-  // export → 后端 parse：行为字段保留。
+  await expect(page.getByText('E2E 导入技能（已改）')).toBeVisible()
+  // export → 后端 parse：行为字段保留（含预览后编辑的名称）。
   const skills = await api(page, 'GET', '/skills?view=library&scope=personal&q=E2E%20%E5%AF%BC%E5%85%A5')
   expect(skills.total).toBe(1)
+  expect(skills.items[0].name).toBe('E2E 导入技能（已改）')
+  expect(skills.items[0].origin).toBe('imported')
   expect(skills.items[0].task_enabled).toBe(false)
   expect(skills.items[0].agent_enabled).toBe(true)
   const exported = await page.request.get(`/api/v1/skills/${skills.items[0].id}/export`)

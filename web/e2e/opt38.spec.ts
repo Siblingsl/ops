@@ -43,7 +43,8 @@ test('OPT38 单篇 Markdown 导出保留标题、段落与图片顺序', async (
   })
 
   await page.goto(`/works/${work.id}`)
-  await page.getByRole('button', { name: '更多', exact: true }).click()
+  // 页面上有作品级 + 每段一个「更多」菜单；导出入口在作品级（desktop-work-more）。
+  await page.locator('.desktop-work-more').getByRole('button').click()
   const downloaded = page.waitForEvent('download')
   await page.getByRole('menuitem', { name: '导出 Markdown', exact: true }).click()
   const file = await downloaded

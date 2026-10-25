@@ -353,25 +353,28 @@ func (s *Server) putSkillBinding(w http.ResponseWriter, r *http.Request) error {
 				}
 			}
 		}
+		// 绑定变更与审计同事务（5.2 节）：日志失败回滚业务写入；
+		// 无变化请求不重复审计（11.3 节）。
+		if resp.changed {
+			detail := map[string]any{"audience": audience, "enabled": in.Enabled, "partition_count": resp.count}
+			if in.Priority != nil {
+				detail["priority"] = *in.Priority
+			}
+			if !isBuiltin {
+				detail["skill_id"] = def.ID.String()
+			}
+			vis := auditVisWorkspace
+			if audience == "personal" {
+				vis = auditVisPersonal
+			}
+			if err := s.auditTxVis(r.Context(), tx, "skill_binding_update", "platform_account", acc.ID.String(), "ok", detail, vis); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return err
-	}
-	// 有效修订下的无变化请求不重复审计（11.3 节）。
-	if resp.changed {
-		detail := map[string]any{"audience": audience, "enabled": in.Enabled, "partition_count": resp.count}
-		if in.Priority != nil {
-			detail["priority"] = *in.Priority
-		}
-		if !isBuiltin {
-			detail["skill_id"] = def.ID.String()
-		}
-		vis := auditVisWorkspace
-		if audience == "personal" {
-			vis = auditVisPersonal
-		}
-		s.auditVis(r.Context(), "skill_binding_update", "platform_account", acc.ID.String(), "ok", detail, vis)
 	}
 	// 审计在响应写入前完成即可；读回最终 item。
 	if resp.item == nil && in.Enabled {

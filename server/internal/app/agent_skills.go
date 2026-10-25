@@ -217,18 +217,20 @@ func (s *Server) agentSkillLoad(ctx context.Context, st *agentRunState, account 
 			return agentSkillReceipt(target, item, "loaded", 0), nil
 		}
 	}
+	// 预算按最终装配口径：首条装入时「用户已配置技能」区头部计入 LoadedChars，
+	// 否则后续装入的累计检查会漏掉头部、实际装配可超出 3600；get_context 的
+	// chars 同时与 agentSkillLoadedText 的实际输出长度一致。
 	text := skillSlotItemText(item.Def.Fields)
-	headerChars := 0
+	add := runeLen(text)
 	if len(target.Loaded) == 0 {
-		headerChars = runeLen(agentSkillZoneHeader())
+		add += runeLen(agentSkillZoneHeader())
 	}
-	if target.LoadedChars+headerChars+runeLen(text) > skillSlotBudget {
+	if target.LoadedChars+add > skillSlotBudget {
 		return nil, apiErr(422, "skill_budget_exceeded", "已加载技能的指令区已满，无法再装入这一条")
 	}
-	// 成功后原子切换活动上下文并清空旧集合（8.2 节上下文切换行）：
-	// 切换到另一上下文时新上下文的已加载集合本来独立；同一上下文内只追加。
+	// 成功后原子切换活动上下文（8.2 节上下文切换行）；同一上下文内只追加。
 	target.Loaded = append(target.Loaded, item)
-	target.LoadedChars += runeLen(text)
+	target.LoadedChars += add
 	rs.Active = target
 	return agentSkillReceipt(target, item, "loaded", runeLen(text)), nil
 }
