@@ -291,6 +291,79 @@ test('DEV-AW04 Electron 工作台可搜索并预览真实上下文', async ({ pa
   await page.screenshot({ path: resolve(screenshotDir, 'agent-workbench-aw04-electron-context.png') })
 })
 
+async function prepareAW05(page: import('@playwright/test').Page, desktop: boolean) {
+  const account = await registerAccount(page, '长图文', 'wechat_mp')
+  const provider = await api(page, 'POST', '/model-providers', {
+    name: 'AW05 产物验收模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+  })
+  await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
+  await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
+  const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: 'AW05 产物预览来源作品' })
+  await api(page, 'PATCH', `/works/${work.id}`, { viewpoint: '小步持续改进' })
+  if (desktop) {
+    await page.addInitScript(() => {
+      const userAgent = navigator.userAgent
+      Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => `${userAgent} Electron/44.8.0` })
+    })
+  }
+  await page.goto('/agent')
+  const privacy = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
+  await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
+  const instruction = [
+    '生成标题候选，并提出一张等待我单独审阅的标题卡片。',
+    `#tool load_tool_domain {"domain":"works"}`,
+    `#tool works__list {"accountId":"${account.id}"}`,
+    `#tool load_tool_domain {"domain":"writing"}`,
+    `#tool works__titles {"id":"${work.id}"}`,
+    `#tool works__update {"id":"${work.id}","title":"小步持续改进"}`,
+  ].join('\n')
+  const composer = desktop ? page.getByRole('textbox', { name: '发送消息' }) : page.getByPlaceholder(/发送消息/)
+  await composer.fill(instruction)
+  const response = page.waitForResponse((item) => /\/agent\/conversations\/[^/]+\/messages$/.test(new URL(item.url()).pathname) && item.request().method() === 'POST')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  expect((await response).ok()).toBeTruthy()
+  await page.waitForURL(/\/agent\/c\/[a-f0-9-]+$/)
+  const conversationID = page.url().split('/').pop()!
+  await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).active_run).toBeNull()
+  const detail = await api(page, 'GET', `/agent/conversations/${conversationID}`)
+  expect(detail.actions).toHaveLength(1)
+  return { work, conversationID, action: detail.actions[0] }
+}
+
+test('DEV-AW05 Web 原抽屉预览受控生成产物并保留唯一操作卡片', async ({ page, baseURL }) => {
+  test.setTimeout(30_000)
+  expect(baseURL).toBe('http://127.0.0.1:5179')
+  const { work, action } = await prepareAW05(page, false)
+  await page.getByRole('button', { name: '查看产物', exact: true }).click()
+  const drawer = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '本对话产物', exact: true }) })
+  await expect(drawer).toBeVisible()
+  await expect(drawer.getByRole('button', { name: /标题候选/ })).toBeVisible()
+  await expect(drawer.getByText('小步持续改进', { exact: true })).toBeVisible()
+  await expect(drawer.getByRole('link', { name: '打开来源作品', exact: true })).toHaveAttribute('href', `/works/${work.id}`)
+  await expect(page.locator(`#agent-action-${action.id}`)).toHaveCount(1)
+  mkdirSync(resolve(process.cwd(), '../.playwright-results'), { recursive: true })
+  await page.screenshot({ path: resolve(process.cwd(), '../.playwright-results/agent-workbench-aw05-web-artifact.png') })
+})
+
+test('DEV-AW05 桌面侧栏预览产物并定位到唯一卡片表单', async ({ page, baseURL }) => {
+  test.setTimeout(30_000)
+  expect(baseURL).toBe('http://127.0.0.1:5179')
+  const { work, action } = await prepareAW05(page, true)
+  await page.getByRole('button', { name: '任务面板', exact: true }).click()
+  const panel = page.getByTestId('desktop-agent-side-panel')
+  await expect(panel).toBeVisible()
+  const card = page.locator(`#agent-action-${action.id}`)
+  await expect(card).toHaveCount(1)
+  await panel.getByRole('button', { name: '定位操作卡片', exact: true }).click()
+  await expect(card).toBeFocused()
+  await panel.getByRole('tab', { name: '产物', exact: true }).click()
+  await expect(panel.getByRole('button', { name: /标题候选/ })).toBeVisible()
+  await expect(panel.getByText('小步持续改进', { exact: true })).toBeVisible()
+  await expect(panel.getByRole('link', { name: '打开来源作品', exact: true })).toHaveAttribute('href', `/works/${work.id}`)
+  mkdirSync(resolve(process.cwd(), '../.playwright-results'), { recursive: true })
+  await page.screenshot({ path: resolve(process.cwd(), '../.playwright-results/agent-workbench-aw05-desktop-artifact.png') })
+})
+
 test('DEV-AW02 真实 Electron 浅深主题与桌面窗口宽度', async ({ baseURL }) => {
   test.skip(process.platform !== 'win32', '真实客户端验收需要 Windows Electron')
   test.skip(process.env.OPS_E2E_PROD === '1', '真实客户端验收仅连接本地 mock 服务')

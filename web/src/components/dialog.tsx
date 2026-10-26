@@ -143,14 +143,15 @@ export function Drawer({ open, onClose, title, desc, children, footer, width = '
   width?: string
 }) {
   const { present, exiting } = usePresence(open, 180)
+  const titleID = React.useId()
   useEsc(open, onClose)
   if (!present) return null
   return createPortal(
     <div className={cn('desktop-drawer-overlay fixed inset-0 z-40 flex justify-end bg-mist-900/25', exiting ? 'animate-dialog-backdrop-out' : 'animate-dialog-backdrop-in')} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={cn('flex h-full max-w-full flex-col bg-white shadow-pop', exiting ? 'animate-drawer-panel-out' : 'animate-drawer-panel-in', width)}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleID} className={cn('flex h-full max-w-full flex-col bg-white shadow-pop', exiting ? 'animate-drawer-panel-out' : 'animate-drawer-panel-in', width)}>
         <div className="flex items-start justify-between gap-4 border-b border-mist-100 px-6 py-4">
           <div>
-            <h2 className="desktop-dialog-title font-display text-lg font-bold text-mist-900">{title}</h2>
+            <h2 id={titleID} className="desktop-dialog-title font-display text-lg font-bold text-mist-900">{title}</h2>
             {desc && <p className="mt-1 text-[13px] text-mist-500">{desc}</p>}
           </div>
           <button onClick={onClose} className="-mr-2 rounded-md p-1.5 text-mist-400 hover:bg-mist-100 hover:text-mist-700 cursor-pointer" aria-label="关闭">

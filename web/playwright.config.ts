@@ -17,7 +17,7 @@ export default defineConfig({
   webServer: production ? undefined : [
     {
       command: 'go run ./cmd/ops-e2e', cwd: '../server', url: 'http://127.0.0.1:8180/healthz',
-      env: { OPS_AGENT_WORKBENCH_FEATURES: 'workbench_ui,conversation_organize,context_refs,skill_requests' },
+      env: { OPS_AGENT_WORKBENCH_FEATURES: 'workbench_ui,conversation_organize,context_refs,skill_requests,artifacts' },
       reuseExistingServer: !process.env.CI, timeout: 120_000,
     },
     { command: 'pnpm dev --host 127.0.0.1 --port 5179 --strictPort', url: 'http://127.0.0.1:5179', env: { OPS_API_TARGET: 'http://127.0.0.1:8180' }, reuseExistingServer: !process.env.CI, timeout: 120_000 },

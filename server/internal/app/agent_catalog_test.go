@@ -152,9 +152,11 @@ func agentClassifiedRouteList() map[string]string {
 		"DELETE /api/v1/agent/conversation-groups/{id}",
 		"POST /api/v1/agent/conversations/{id}/read",
 		"GET /api/v1/agent/conversations/{id}/search",
-		// DEV-AW04 引用候选与预览由本人工作台调用，不进入模型工具目录。
+		// DEV-AW04/AW05 引用与产物接口由本人工作台调用，不进入模型工具目录。
 		"GET /api/v1/agent/context-candidates",
 		"POST /api/v1/agent/context-preview",
+		"GET /api/v1/agent/conversations/{id}/artifacts",
+		"GET /api/v1/agent/artifacts/{id}",
 		"GET /api/v1/auth/me",
 		"POST /api/v1/auth/renew",
 		"GET /api/v1/notifications/stream",

@@ -242,7 +242,7 @@ function ActionCard({ action, locked, running, busy, progress, secret, onDismiss
     finally { setPreparing(false) }
   }
 
-  return <Card className={cn('space-y-4 border p-4', action.kind === 'X' ? 'border-red-300 bg-red-50/30' : action.kind === 'H' ? 'border-gamboge-300 bg-gamboge-50/30' : 'border-mist-200', desktopPresentation && 'desktop-agent-action-card')}>
+  return <Card id={`agent-action-${action.id}`} tabIndex={-1} className={cn('space-y-4 border p-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink-500', action.kind === 'X' ? 'border-red-300 bg-red-50/30' : action.kind === 'H' ? 'border-gamboge-300 bg-gamboge-50/30' : 'border-mist-200', desktopPresentation && 'desktop-agent-action-card')}>
     <div className={cn('flex flex-wrap items-center gap-2', desktopPresentation && 'desktop-agent-action-header')}>
       <h3 className="min-w-0 flex-1 font-semibold text-mist-900">{action.title}</h3>
       <Badge tone={action.kind === 'X' ? 'red' : action.kind === 'H' ? 'gamboge' : 'gray'}>{action.kind === 'X' ? '不可撤销' : action.kind === 'H' ? `人工确认 ${action.gate}` : '普通写入'}</Badge>

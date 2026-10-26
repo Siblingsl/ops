@@ -173,6 +173,42 @@ export interface AgentConversationDetail {
   has_more: boolean
 }
 
+export interface AgentArtifactSummary {
+  id: string
+  kind: string
+  title: string
+  current_version: number
+  source_kind?: string
+  source_run_id?: string
+  updated_at: string
+}
+
+export interface AgentArtifactPage {
+  items: AgentArtifactSummary[]
+  next_cursor: string | null
+}
+
+export interface AgentArtifactVersion {
+  id: string
+  version: number
+  source_kind: string
+  content: unknown
+  hash: string
+  status: string
+  created_at: string
+  available: boolean
+  open_url?: string
+  image_url?: string
+  object_revision?: string
+}
+
+export interface AgentArtifactDetail {
+  artifact: { id: string; conversation_id: string; kind: string; title: string; updated_at: string }
+  current_version: AgentArtifactVersion | null
+  versions: AgentArtifactVersion[]
+  next_cursor: string | null
+}
+
 export interface AgentConversationPage {
   items: AgentConversationListItem[]
   next_cursor: string | null

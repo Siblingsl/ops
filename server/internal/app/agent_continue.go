@@ -331,6 +331,9 @@ func (s *Server) agentInsertUserMessageWithContext(ctx context.Context, convID u
 		convID, seq, content, attachments, refsJSON, skillsJSON).Scan(&view.ID, &view.CreatedAt); err != nil {
 		return nil, false, err
 	}
+	if err := s.agentProjectUploadedImagesTx(ctx, tx, convID, view.ID, attachments); err != nil {
+		return nil, false, err
+	}
 	if requestID != uuid.Nil {
 		if err := completeAgentRequest(ctx, tx, ident(ctx).WorkspaceID, ident(ctx).UserID,
 			"conversation.message:"+convID.String(), requestID, view.ID); err != nil {

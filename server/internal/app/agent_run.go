@@ -763,6 +763,11 @@ func (s *Server) agentToolDispatch(ctx context.Context, st *agentRunState, t *Ag
 	// 标签必须在消息落库之后回写：先落库再打标，否则 UPDATE 匹配不到行。
 	tagErr := s.agentToolOutcome(ctx, st, call, rec, true, send)
 	s.agentTagSourceCall(ctx, st, t.Name, call.ID, started, res.Done)
+	if tagErr == nil && t.Kind == toolG {
+		if err := s.agentProjectGArtifact(ctx, st, t.Name, call.ID, args, rec.Raw); err != nil {
+			slog.Error("agent artifact projection failed", "tool_name", t.Name, "error", err)
+		}
+	}
 	return tagErr
 }
 

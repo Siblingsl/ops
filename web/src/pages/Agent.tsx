@@ -21,6 +21,7 @@ import {
 } from '@/lib/agent'
 import { AgentMarkdown } from '@/lib/agent-markdown'
 import { AgentActionCards } from '@/pages/agent/ActionCards'
+import { ArtifactPanel } from '@/pages/agent/ArtifactPanel'
 import { browserStore, clearPartial, type PartialStream, readPartial, savePartial } from '@/pages/agent/partial-stream'
 import { ContextPickerDialog, SkillPickerDialog, type AgentContextSelection, type AgentSkillSelection } from '@/pages/agent/ContextPickers'
 
@@ -397,12 +398,12 @@ function RunStatus({ activeRun, streamStage, pendingActions, error, completedNot
 
 function WorkbenchSidePanel({
   tab, setTab, close, conversation, activeRun, busy, pendingActions, actionCount, selectedAccountName, selectedModelName, attachmentCount,
-  contextRefs, skillRequests, latestSkillUsage, artifactsEnabled,
+  contextRefs, skillRequests, latestSkillUsage, artifactsEnabled, actions,
 }: {
   tab: 'task' | 'context' | 'artifact'; setTab: (tab: 'task' | 'context' | 'artifact') => void; close: () => void
   conversation?: AgentConversation; activeRun?: AgentConversationDetail['active_run']; busy: boolean; pendingActions: number; actionCount: number
   selectedAccountName: string; selectedModelName: string; attachmentCount: number
-  contextRefs: AgentContextSelection[]; skillRequests: AgentSkillSelection[]; latestSkillUsage: AgentMessage['skill_usage']; artifactsEnabled: boolean
+  contextRefs: AgentContextSelection[]; skillRequests: AgentSkillSelection[]; latestSkillUsage: AgentMessage['skill_usage']; artifactsEnabled: boolean; actions: AgentConversationDetail['actions']
 }) {
   const tabs = [
     { id: 'task' as const, label: '任务' },
@@ -424,6 +425,11 @@ function WorkbenchSidePanel({
         {activeRun && <p className="desktop-agent-side-detail">运行状态：{activeRun.status === 'queued' ? '排队中' : '执行中'}</p>}
         {conversation && <p className="desktop-agent-side-detail">本对话操作卡片：{actionCount} 项</p>}
         {pendingActions > 0 && <p className="desktop-agent-side-note">请在对应消息下逐张审阅操作卡片。</p>}
+        {actions.length > 0 && <div className="mt-3"><Button type="button" size="sm" variant="secondary" onClick={() => {
+          const card = document.getElementById(`agent-action-${actions[0].id}`)
+          card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          card?.focus({ preventScroll: true })
+        }}>定位操作卡片</Button><p className="mt-2 text-xs text-mist-500">审阅和执行入口仅在消息中的这张卡片出现。</p></div>}
       </section>}
       {tab === 'context' && <section aria-labelledby="workbench-context-heading">
         <h3 id="workbench-context-heading">本对话设置</h3>
@@ -438,7 +444,7 @@ function WorkbenchSidePanel({
         {!!latestSkillUsage?.length && <section className="mt-4"><h4 className="text-xs font-semibold text-mist-600">本轮技能状态</h4><ul className="mt-1 space-y-1 text-xs text-mist-600">{latestSkillUsage.map((item) => <li key={item.id}>{item.loaded ? '已加载到模型上下文；实际使用未验证' : '已请求，未加载'} · {item.name}</li>)}</ul></section>}
         <p className="desktop-agent-side-note">选择、启用和加载是不同状态。只有 load_skill 成功回执才显示已加载；当前无法从模型调用回执确认是否遵循了技能指令。</p>
       </section>}
-      {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading"><h3 id="workbench-artifact-heading">产物</h3><p className="desktop-agent-side-note">本对话还没有可预览的产物。</p></section>}
+      {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading"><h3 id="workbench-artifact-heading">产物</h3><ArtifactPanel conversationID={conversation?.id} updatedAt={conversation?.updated_at} compact /></section>}
     </div>
   </aside>
 }
@@ -459,6 +465,7 @@ export default function Agent() {
   const [workbenchListCollapsed, setWorkbenchListCollapsed] = useState(false)
   const [workbenchPanelOpen, setWorkbenchPanelOpen] = useState(false)
   const [workbenchPanelTab, setWorkbenchPanelTab] = useState<'task' | 'context' | 'artifact'>('task')
+  const [artifactsOpen, setArtifactsOpen] = useState(false)
   const [workbenchLayoutLoadedKey, setWorkbenchLayoutLoadedKey] = useState('')
   const [text, setText] = useState('')
   const [files, setFiles] = useState<DraftAttachment[]>([])
@@ -1033,7 +1040,10 @@ export default function Agent() {
       )}
       {titleSlot && createPortal(<div className="flex min-w-0 items-center gap-2">{renderTitle()}</div>, titleSlot)}
       {toolbarSlot && !desktopPresentation && createPortal(
-        <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>,
+        <>
+          {bootstrapData.features.artifacts === true && conversation && <IconButton label="查看产物" onClick={() => setArtifactsOpen(true)}><FileText className="size-4" /></IconButton>}
+          <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>
+        </>,
         toolbarSlot,
       )}
       <div className={`relative flex h-full min-h-0 overflow-hidden bg-[#f7f8f6] ${desktopPresentation ? 'desktop-agent-workspace' : ''} ${workbenchUI ? 'desktop-agent-workbench' : ''}`} data-list-collapsed={workbenchListCollapsed} data-panel-open={workbenchPanelOpen}>
@@ -1189,7 +1199,12 @@ export default function Agent() {
         skillRequests={skillRequests}
         latestSkillUsage={latestSkillUsage}
         artifactsEnabled={bootstrapData.features.artifacts === true}
+        actions={actions}
       />}
+
+      {bootstrapData.features.artifacts === true && !desktopPresentation && <Drawer open={artifactsOpen} onClose={() => setArtifactsOpen(false)} title="本对话产物" width="w-[min(92vw,920px)]">
+        <ArtifactPanel conversationID={conversation?.id} updatedAt={conversation?.updated_at} />
+      </Drawer>}
 
       <Drawer open={mobileListOpen} onClose={() => setMobileListOpen(false)} title="对话" width="w-[min(88vw,360px)]">
         <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} onClose={() => setMobileListOpen(false)} organizeEnabled={organizeEnabled} />

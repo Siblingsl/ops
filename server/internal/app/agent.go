@@ -1421,6 +1421,8 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Delete("/agent/conversation-groups/{id}", s.h(s.deleteAgentConversationGroup))
 		r.Post("/agent/conversations/{id}/read", s.h(s.markAgentConversationRead))
 		r.Get("/agent/conversations/{id}/search", s.h(s.searchAgentConversationMessages))
+		r.Get("/agent/conversations/{id}/artifacts", s.h(s.listAgentArtifacts))
+		r.Get("/agent/artifacts/{id}", s.h(s.getAgentArtifact))
 		r.Get("/agent/context-candidates", s.h(s.getAgentContextCandidates))
 		r.Post("/agent/context-preview", s.h(s.postAgentContextPreview))
 		r.Get("/agent/settings", s.h(s.getAgentSettings))
