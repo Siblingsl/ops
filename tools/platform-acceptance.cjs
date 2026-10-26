@@ -167,6 +167,31 @@ function dirSize(dir) {
   return total;
 }
 
+// pacedSource 给只读响应源加节奏：串行，且相邻请求至少间隔 5 秒。
+// 与客户端 main.ts 的 pacedPlatformSource 同一口径（docs/20 §13.1）。滚动续读会
+// 在一次采集里连发多次列表请求，没有这层包装就会在 1 秒内打三个签名接口。
+const PLATFORM_PACING_MS = 5_000;
+
+function pacedSource(source) {
+  let lastRequestAt = 0;
+  const paced = async (read) => {
+    const wait = PLATFORM_PACING_MS - (Date.now() - lastRequestAt);
+    if (lastRequestAt > 0 && wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    const result = await read();
+    lastRequestAt = Date.now();
+    return result;
+  };
+  return {
+    ...source,
+    fetchJSON: (path) => paced(() => source.fetchJSON(path)),
+    fetchSigned: (path) => paced(() => source.fetchSigned(path)),
+    ...(typeof source.fetchSignedNextPage === 'function'
+      ? { fetchSignedNextPage: (path) => paced(() => source.fetchSignedNextPage(path)) }
+      : {}),
+    observeResponse: (path, trigger, timeout) => paced(() => source.observeResponse(path, trigger, timeout))
+  };
+}
+
 // readPlatform 用真实登录态读一次平台数据，返回 { notes/articles } 的统一结构。
 async function readPlatform(platform, accountId) {
   const profileDir = profileDirFor(platform, accountId);
@@ -181,8 +206,9 @@ async function readPlatform(platform, accountId) {
     const adapter = platform === 'xhs' ? xhsAdapter : wxAdapter;
     const page = await login.openLoginPage(session);
     const landed = page.url;
+    const source = pacedSource(login.createPageResponseSource(session));
     if (platform === 'xhs') {
-      const discovery = await adapter.collectPostedNotes(login.createPageResponseSource(session), { maxPages: 3 });
+      const discovery = await adapter.collectPostedNotes(source, { maxPages: 3 });
       return {
         landed,
         items: discovery.notes.map((n) => ({
@@ -202,7 +228,7 @@ async function readPlatform(platform, accountId) {
         coverage: discovery.coverage
       };
     }
-    const discovery = await adapter.collectPublishedArticles(login.createPageResponseSource(session), { maxPages: 3 });
+    const discovery = await adapter.collectPublishedArticles(source, { maxPages: 3 });
     return {
       landed,
       items: discovery.articles.map((a) => ({

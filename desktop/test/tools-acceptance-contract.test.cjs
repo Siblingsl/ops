@@ -90,7 +90,8 @@ test('每字段对照必须按作品去重，不能按观测条数', () => {
 // 正则照样匹配，测试却仍然通过（本文件早先已踩过这个坑）。
 
 // extractFunction 从工具源码里取出一个具名函数声明并求值，返回真正的函数对象。
-function extractFunction(name) {
+// prelude 用于补齐函数依赖的模块级常量——只补常量，不替函数做任何判断。
+function extractFunction(name, prelude = '') {
   const start = src.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `应能在工具源码里找到 function ${name}`);
   // 从函数头开始按花括号配平，取到函数结束。
@@ -103,11 +104,18 @@ function extractFunction(name) {
       depth -= 1;
       if (depth === 0) {
         // eslint-disable-next-line no-new-func
-        return new Function(`return (${src.slice(start, i + 1)})`)();
+        return new Function(`${prelude}\nreturn (${src.slice(start, i + 1)})`)();
       }
     }
   }
   throw new Error(`未能配平 ${name} 的花括号`);
+}
+
+// extractConst 取出 `const NAME = <字面量>;` 的原始声明，供 prelude 使用。
+function extractConst(name) {
+  const match = src.match(new RegExp(`^const ${name} = [^;]+;`, 'm'));
+  assert.ok(match, `应能在工具源码里找到 const ${name}`);
+  return match[0];
 }
 
 test('parseDbTimestamp 必须认得 psql 的 +00 偏移', () => {
@@ -166,5 +174,51 @@ test('不一致仍计入不一致：提示只是解释，不能把差值洗成�
     'mismatch 必须计入 mismatched，不能被 grew 分支截走');
   assert.match(src, /process\.exit\(result\.mismatched > 0 \? 1 : 0\)/,
     '退出码必须仍由 mismatched 决定');
+});
+
+// extractFunction 只能取到 `function name(` 形式；pacedSource 是同一形态，可直接复用。
+
+test('验收工具读平台时必须串行且相邻请求间隔不少于 5 秒', async () => {
+  // 滚动续读会让一次采集连发 3 次列表请求。没有节奏包装时它们会在一秒内打完，
+  // 违反 docs/20 §13.1「请求串行且相邻请求至少间隔 5 秒」，也容易被平台判定异常。
+  const pacedSource = extractFunction('pacedSource', extractConst('PLATFORM_PACING_MS'));
+  const calls = [];
+  const source = {
+    fetchJSON: async (p) => { calls.push(p); return { kind: 'json' }; },
+    fetchSigned: async (p) => { calls.push(p); return { kind: 'signed' }; },
+    fetchSignedNextPage: async (p) => { calls.push(p); return { kind: 'next' }; },
+    observeResponse: async (p) => { calls.push(p); return { kind: 'observe' }; }
+  };
+  const paced = pacedSource(source);
+  const startedAt = Date.now();
+  await paced.fetchSigned('/a');
+  await paced.fetchSignedNextPage('/b');
+  const elapsed = Date.now() - startedAt;
+  assert.deepEqual(calls, ['/a', '/b'], '两次请求都要真正发出');
+  assert.ok(elapsed >= 4_900, `相邻两次请求至少间隔 5 秒，实际 ${elapsed}ms`);
+  assert.equal(paced.fetchJSON !== source.fetchJSON, true, 'fetchJSON 也要被节奏包装');
+  assert.equal(paced.observeResponse !== source.observeResponse, true, 'observeResponse 也要被节奏包装');
+});
+
+test('响应源没有滚动续读能力时，节奏包装不能凭空造出该能力', () => {
+  // collectPostedNotes 靠 `typeof source.fetchSignedNextPage === 'function'` 判断
+  // 能否滚动续读。包装层如果无条件挂一个函数，就会把不支持滚动的情形也变成"支持"。
+  const pacedSource = extractFunction('pacedSource', extractConst('PLATFORM_PACING_MS'));
+  const plain = pacedSource({
+    fetchJSON: async () => null,
+    fetchSigned: async () => null,
+    observeResponse: async () => null
+  });
+  assert.equal('fetchSignedNextPage' in plain, false,
+    '原始响应源没有 fetchSignedNextPage 时，包装后也不能有');
+});
+
+test('readPlatform 必须用包装后的响应源，不能用裸响应源', () => {
+  assert.match(src, /const source = pacedSource\(login\.createPageResponseSource\(session\)\);/,
+    'readPlatform 必须先包装再采集');
+  assert.equal(/collectPostedNotes\(login\.createPageResponseSource/.test(src), false,
+    '不能再出现绕过节奏包装的裸响应源调用');
+  assert.equal(/collectPublishedArticles\(login\.createPageResponseSource/.test(src), false,
+    '公众号分支同样不能绕过节奏包装');
 });
 
