@@ -1746,25 +1746,34 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
   if (run.platform !== 'xhs' && run.platform !== 'wechat_mp') {
     return submitV2ControlFailure(client, run, 'platform_browser_unsupported', 'platform_browser_unsupported');
   }
-  if (activeLogin || platformLoginFlow.active) throw new PlatformBrowserError('platform_profile_busy', '另一个平台登录正在进行，请先完成或关闭它');
-  const platform = run.platform as PlatformLoginPlatform;
-  const auth = await desktopClient.getAuthContext();
-  // 与 v1 采集同理：登录态落在账号 slot 里，采集必须读同一个目录，
-  // 不能用设备命名空间（那里可能是另一个账号的历史登录态）。
-  const stored = await readAccountProfile(app.getPath('userData'), {
-    ...auth, origin: businessOrigin, accountId, platform
-  });
-  const profileDir = stored.profileDir;
-  if (!stored.meta || stored.meta.platform !== platform) {
-    return submitV2ControlFailure(client, run, 'platform_login_required', 'platform_login_required');
+  if (activeLogin || platformLoginFlow.active) {
+    return submitV2ControlFailure(client, run, 'platform_profile_busy', 'platform_profile_busy');
   }
-  const candidate = selectLoginBrowser(await trustedLoginBrowsers(), stored.meta.browserFamily);
-  const browser = await launchPlatformBrowser({ executablePath: candidate.executablePath, profileDir });
-  const cdp = createCDPClient(browser, 20_000);
-  const session = { platform, profileDir, browser, cdp };
+  const platform = run.platform as PlatformLoginPlatform;
   let accepted = 0;
   let rejected = 0;
+  let cdp: ReturnType<typeof createCDPClient> | null = null;
+  // try 必须覆盖到浏览器启动之前：否则「profile 目录读不到」「浏览器起不来」
+  // 这类错误会让函数在没有任何终批的情况下抛出，run 只能等 60 秒租约过期，
+  // 再被 expirePlatformRuns 判成 expired——服务端永远收不到失败原因。
+  // 2026-10-26 实测：三条 account_sync run 全部 expired、counters={}，
+  // 就是因为异常抛在了原来的 try 之外。
   try {
+    const auth = await desktopClient.getAuthContext();
+    // 与 v1 采集同理：登录态落在账号 slot 里，采集必须读同一个目录，
+    // 不能用设备命名空间（那里可能是另一个账号的历史登录态）。
+    const stored = await readAccountProfile(app.getPath('userData'), {
+      ...auth, origin: businessOrigin, accountId, platform
+    });
+    const profileDir = stored.profileDir;
+    if (!stored.meta || stored.meta.platform !== platform) {
+      return submitV2ControlFailure(client, run, 'platform_login_required', 'platform_login_required');
+    }
+    const candidate = selectLoginBrowser(await trustedLoginBrowsers(), stored.meta.browserFamily);
+    const browser = await launchPlatformBrowser({ executablePath: candidate.executablePath, profileDir });
+    const cdpClient = createCDPClient(browser, 20_000);
+    cdp = cdpClient;
+    const session = { platform, profileDir, browser, cdp: cdpClient };
     const opened = await client.withHeartbeat(() => openLoginPage(session));
     if (opened.canceled) return { performed: true, runId: run.id, runStatus: 'canceled', accepted: 0, rejected: 0, stopReason: 'canceled', errorCode: null, adoptErrors: 0, adoptReason: null };
     const page = opened.value;
@@ -1926,9 +1935,9 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
   } catch (error) {
     const code = platformCollectErrorCode(error);
     console.error('[collect-v2] failed', code, describeError(error));
-    return submitV2ControlFailure(client, run, v2ControlReason(code), code);
+    return submitV2ControlFailure(client, run, code, code);
   } finally {
-    await cdp.close();
+    if (cdp) await cdp.close();
   }
 }
 
@@ -1937,6 +1946,35 @@ function platformCollectErrorCode(error: unknown): string {
     return error.code;
   }
   return 'platform_network_unavailable';
+}
+
+// 服务端只接受 20 文档 §12 固定目录里的 error_code，整批遇到目录外的码会直接 422，
+// run 于是卡到租约过期、用户看不到任何原因。这里把本机内部码收敛到目录里的等价码，
+// 保证失败原因总能落库；真正的内部码仍留在客户端日志里。
+function platformReportableErrorCode(code: string): string {
+  switch (code) {
+    case 'platform_navigation_failed':
+    case 'platform_timeout':
+      return 'platform_network_unavailable';
+    case 'platform_browser_mismatch':
+      return 'platform_browser_unsupported';
+    case 'platform_profile_quota':
+      return 'platform_storage_quota_exceeded';
+    case 'platform_account_unavailable':
+    case 'platform_login_cancelled':
+    case 'platform_login_context_changed':
+      return 'platform_login_required';
+    case 'platform_cleanup_pending':
+      return 'platform_profile_busy';
+    case 'platform_connection_conflict':
+      return 'platform_result_conflict';
+    case 'platform_connection_unconfirmed':
+      return 'platform_authorization_changed';
+    case 'platform_risk_paused':
+      return 'platform_account_restricted';
+    default:
+      return code;
+  }
 }
 
 function v2ControlReason(errorCode: string): string {
@@ -1954,10 +1992,11 @@ async function submitV2Control(client: PlatformClient, run: PlatformClaimedRun, 
 }
 
 async function submitV2ControlFailure(client: PlatformClient, run: PlatformClaimedRun, errorCode: string, reasonCode: string): Promise<PlatformCollectOutcome> {
+  const reportable = platformReportableErrorCode(errorCode);
   const data = { state: 'unknown', reason: v2ControlReason(reasonCode), observed_at: new Date().toISOString() };
-  const receipt = await client.submitV2('control', data, { status: 'failed', stopReason: data.reason, errorCode });
+  const receipt = await client.submitV2('control', data, { status: 'failed', stopReason: data.reason, errorCode: reportable });
   return { performed: true, runId: run.id, runStatus: receipt.run_status, accepted: receipt.accepted, rejected: receipt.rejected,
-    stopReason: data.reason, errorCode, adoptErrors: receipt.adopt_errors ?? 0, adoptReason: receipt.adopt_reason ?? null };
+    stopReason: data.reason, errorCode: reportable, adoptErrors: receipt.adopt_errors ?? 0, adoptReason: receipt.adopt_reason ?? null };
 }
 
 // ---------- 撤销连接与本机清理（DEV-PS23 / 20 文档 §5.4） ----------

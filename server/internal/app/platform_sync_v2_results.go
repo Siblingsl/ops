@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -609,15 +610,52 @@ func checkPlatformJSONDepth(raw []byte, maxDepth int) error {
 	return depth(value, 0)
 }
 
+// platformResultErrorCodes 是 20 文档 §12 固定错误目录里允许随终批上报的码。
+//
+// 缺陷背景（2026-10-26）：这张表原来只有 12 个码，而设计文档的目录里还有
+// platform_browser_launch_failed（浏览器起不来）、platform_profile_busy（会话被占用）、
+// platform_capability_denied（该账号无此数据权限）等正式错误码。桌面端上报这些码时
+// 整批被判 422「error_code 不在固定错误目录中」，run 不结束、只能等租约过期，
+// 于是界面上永远看不到「为什么没采到」。
+//
+// 文档 §12 末段要求「实施时用一张服务端表固化」，这里就是那张表。
+var platformResultErrorCodes = map[string]bool{
+	// 请求/设备/连接层
+	"platform_client_required":            true,
+	"platform_protocol_unsupported":       true,
+	"platform_collection_disabled":        true,
+	"platform_consent_required":           true,
+	"platform_not_holder":                 true,
+	"platform_device_revoked":             true,
+	"platform_login_required":             true,
+	"platform_challenge_required":         true,
+	"platform_identity_mismatch":          true,
+	"platform_capability_denied":          true,
+	"platform_schema_changed":             true,
+	"platform_network_unavailable":        true,
+	"platform_profile_busy":               true,
+	"platform_storage_quota_exceeded":     true,
+	"platform_duplicate_local_connection": true,
+	"platform_budget_exhausted":           true,
+	"platform_lease_stale":                true,
+	"platform_authorization_changed":      true,
+	"platform_result_conflict":            true,
+	"platform_value_out_of_range":         true,
+	"platform_historical_unavailable":     true,
+	"platform_account_restricted":         true,
+	"platform_proxy_intercepted":          true,
+	"platform_browser_unsupported":        true,
+	"platform_browser_launch_failed":      true,
+	"platform_mapping_unsupported":        true,
+	"platform_not_supported":              true,
+	"platform_presence_stale":             true,
+	// 批次/运行层
+	"platform_rate_limited": true,
+	"platform_timeout":      true,
+}
+
 func validPlatformResultError(code string) bool {
-	switch code {
-	case "platform_login_required", "platform_challenge_required", "platform_identity_mismatch", "platform_account_restricted",
-		"platform_consent_required", "platform_schema_changed", "platform_network_unavailable", "platform_rate_limited",
-		"platform_budget_exhausted", "platform_browser_unsupported", "platform_timeout", "platform_result_conflict":
-		return true
-	default:
-		return false
-	}
+	return platformResultErrorCodes[code]
 }
 
 func validatePlatformV2Control(data platformV2ControlResult) error {
@@ -1387,8 +1425,28 @@ func (s *Server) finishPlatformV2OperationFailureTx(ctx context.Context, tx pgx.
 
 func (s *Server) finishPlatformV2RunTx(ctx context.Context, tx pgx.Tx, write platformV2WriteContext, batch platformResultBatch) error {
 	nextStatus := batch.RunStatus
-	if _, err := tx.Exec(ctx, `UPDATE platform_sync_run SET status=$2,stop_reason=$3,error_code=$4,finished_at=now()
-		WHERE id=$1`, write.RunID, nextStatus, batch.StopReason, batch.ErrorCode); err != nil {
+	// stop_reason 必须先过枚举校验，理由与 v1 终批（platform_sync.go 的
+	// "stop_reason 必须先过枚举校验" 注释）完全相同：v2 客户端发上来的是
+	// platformSafeReasons 里的词（network_unavailable、access_denied、
+	// profile_capability_unverified、page_budget…），一个都不在
+	// platform_sync_run_stop_reason_check 允许的七个值里。原样写库会抛 23514，
+	// 整个终批事务回滚——观测与 catalog 全丢、run 卡在 running 直到租约过期。
+	// 2026-10-26 实测：三条 account_sync run 全部 expired、counters={}、
+	// budget_result_rows=0，就是这么来的。
+	rawStopReason := ""
+	if batch.StopReason != nil {
+		rawStopReason = *batch.StopReason
+	}
+	stopReason := platformStopReason(batch.StopReason)
+	if rawStopReason != "" && stopReason == nil {
+		slog.Warn("平台采集 v2：客户端上报的停止原因不在登记枚举内，按空值存库",
+			"run_id", write.RunID, "stop_reason", rawStopReason)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE platform_sync_run SET status=$2,stop_reason=$3,error_code=$4,
+		counters=CASE WHEN $5::text='' THEN counters
+			ELSE counters || jsonb_build_object('stop_reason_raw',$5::text) END,
+		finished_at=now()
+		WHERE id=$1`, write.RunID, nextStatus, stopReason, batch.ErrorCode, rawStopReason); err != nil {
 		return err
 	}
 	if nextStatus == platformRunStatusSuccess || nextStatus == platformRunStatusPartial {

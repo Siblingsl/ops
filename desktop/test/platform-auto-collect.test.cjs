@@ -59,3 +59,40 @@ test('登录成功后两个平台都要写账号 slot 的归属 meta', () => {
   // meta 必须带 accountId，否则采集侧无法核对归属。
   assert.match(mainSrc, /accountId: input\.accountId/);
 });
+
+// DEV-PS99 静态校验：v2 终批是 run 唯一的终态出口，缺一条就等于"采集失败了但没人知道"。
+// 2026-10-26 实测：三条 account_sync run 全部 expired、counters={}、预算字段全 0，
+// 原因就是下面两条：异常抛在 try 之外不交终批；error_code 不在服务端目录里被整批拒绝。
+
+test('v2 采集的 try 必须覆盖浏览器启动之前，否则异常不交终批只能等租约过期', () => {
+  // 原来的写法把 getAuthContext/readAccountProfile/launchPlatformBrowser/createCDPClient
+  // 放在 try 之前：这些步骤抛错时函数直接返回，run 停在 running 直到 60 秒租约过期。
+  const v2Start = mainSrc.indexOf('async function runPlatformV2Collect');
+  assert.ok(v2Start > 0, '必须能找到 runPlatformV2Collect');
+  const v2Body = mainSrc.slice(v2Start, mainSrc.indexOf('\nfunction platformCollectErrorCode'));
+  const tryIndex = v2Body.indexOf('try {');
+  const launchIndex = v2Body.indexOf('launchPlatformBrowser(');
+  assert.ok(tryIndex > 0 && launchIndex > 0, 'v2 采集应同时有 try 与 launchPlatformBrowser');
+  assert.ok(tryIndex < launchIndex, 'launchPlatformBrowser 必须写在 try 之内');
+  // profile 目录读取同理，它比浏览器启动更早失败。
+  assert.ok(tryIndex < v2Body.indexOf('readAccountProfile('), 'readAccountProfile 必须写在 try 之内');
+});
+
+test('v2 终批上报的 error_code 必须收敛到服务端固定目录内', () => {
+  // 服务端 validPlatformResultError 只认 20 文档 §12 的目录，目录外的码会让整批 422，
+  // 于是失败原因永远落不了库。本机内部码必须先映射再上报。
+  assert.match(mainSrc, /function platformReportableErrorCode/);
+  assert.match(mainSrc, /const reportable = platformReportableErrorCode\(errorCode\)/);
+  assert.match(mainSrc, /errorCode: reportable/);
+  // 映射表至少覆盖这几个实测会撞目录的码。
+  for (const code of ['platform_navigation_failed', 'platform_browser_mismatch', 'platform_account_unavailable']) {
+    assert.ok(mainSrc.includes(`case '${code}'`), `${code} 必须有映射`);
+  }
+});
+
+test('v2 采集失败时 errorCode 与 reasonCode 不能传反', () => {
+  // 缺陷：曾写成 submitV2ControlFailure(client, run, v2ControlReason(code), code)，
+  // 参数顺序反了，导致 error_code 被替换成 reason 词、真实错误码丢失。
+  assert.match(mainSrc, /submitV2ControlFailure\(client, run, code, code\)/);
+  assert.doesNotMatch(mainSrc, /submitV2ControlFailure\(client, run, v2ControlReason\(code\), code\)/);
+});
