@@ -145,6 +145,13 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/attachments",
 		"GET /api/v1/agent/attachments/{id}/file",
 		"DELETE /api/v1/agent/attachments/{id}",
+		// DEV-AW03 私有会话组织、阅读标记与正文检索由工作台本人页面调用，不进入模型工具目录。
+		"GET /api/v1/agent/conversation-groups",
+		"POST /api/v1/agent/conversation-groups",
+		"PATCH /api/v1/agent/conversation-groups/{id}",
+		"DELETE /api/v1/agent/conversation-groups/{id}",
+		"POST /api/v1/agent/conversations/{id}/read",
+		"GET /api/v1/agent/conversations/{id}/search",
 		"GET /api/v1/auth/me",
 		"POST /api/v1/auth/renew",
 		"GET /api/v1/notifications/stream",

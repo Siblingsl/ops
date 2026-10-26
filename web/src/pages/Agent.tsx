@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Bot, Check, ChevronDown, ChevronLeft, Clipboard, FileText, LoaderCircle, Menu,
+  Archive, ArchiveRestore, Bot, Check, ChevronDown, ChevronLeft, Clipboard, FileText, FolderPlus, LoaderCircle, Menu,
   MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Search, Send, Settings2, Square, Trash2, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -17,7 +17,7 @@ import { useSavePrefs } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
 import {
   type AgentAttachment, type AgentBootstrap, type AgentConversation, type AgentConversationDetail, type AgentConversationListItem,
-  type AgentConversationPage, type AgentMessage, useAgentBootstrap,
+  type AgentConversationGroup, type AgentConversationPage, type AgentMessage, useAgentBootstrap,
 } from '@/lib/agent'
 import { AgentMarkdown } from '@/lib/agent-markdown'
 import { AgentActionCards } from '@/pages/agent/ActionCards'
@@ -45,16 +45,44 @@ function messageTime(value: string) {
 }
 
 function AgentConversationList({
-  currentID, search, setSearch, onSelect, onNew, onClose, sidebarTitle, desktopPresentation = false,
+  currentID, search, setSearch, onSelect, onNew, onClose, sidebarTitle, desktopPresentation = false, organizeEnabled = false,
 }: {
   currentID?: string; search: string; setSearch: (v: string) => void
-  onSelect: (id: string) => void; onNew: () => void; onClose?: () => void
+  onSelect: (id: string, matchedSeq?: number) => void; onNew: () => void; onClose?: () => void
   sidebarTitle?: string
   desktopPresentation?: boolean
+  organizeEnabled?: boolean
 }) {
+  const qc = useQueryClient()
+  const accounts = useAccounts()
+  const [debouncedSearch, setDebouncedSearch] = useState(search)
+  const [archived, setArchived] = useState(false)
+  const [accountID, setAccountID] = useState('')
+  const [groupID, setGroupID] = useState('')
+  const [stateFilter, setStateFilter] = useState('')
+  const [groupDialog, setGroupDialog] = useState<{ id?: string; name: string } | null>(null)
+  const [groupManageOpen, setGroupManageOpen] = useState(false)
+  const [groupBusy, setGroupBusy] = useState(false)
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300)
+    return () => window.clearTimeout(timer)
+  }, [search])
+  const groupQuery = useQuery({
+    queryKey: ['agent-conversation-groups'],
+    queryFn: () => get<AgentConversationGroup[]>('/agent/conversation-groups'),
+    enabled: organizeEnabled,
+  })
+  const queryParams = new URLSearchParams({ limit: String(pageSize) })
+  if (debouncedSearch) queryParams.set('q', debouncedSearch)
+  if (organizeEnabled) {
+    if (archived) queryParams.set('archived', 'true')
+    if (accountID) queryParams.set('account_id', accountID)
+    if (groupID) queryParams.set('group_id', groupID)
+    if (stateFilter) queryParams.set('state', stateFilter)
+  }
   const list = useInfiniteQuery({
-    queryKey: ['agent-conversations', search],
-    queryFn: ({ pageParam }) => get<AgentConversationPage>(`/agent/conversations?limit=${pageSize}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}${search.trim() ? `&q=${encodeURIComponent(search.trim())}` : ''}`),
+    queryKey: ['agent-conversations', debouncedSearch, archived, accountID, groupID, stateFilter, organizeEnabled],
+    queryFn: ({ pageParam }) => get<AgentConversationPage>(`/agent/conversations?${queryParams.toString()}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`),
     initialPageParam: '' as string,
     getNextPageParam: (page) => page.next_cursor ?? undefined,
   })
@@ -70,12 +98,46 @@ function AgentConversationList({
   }, [list.hasNextPage, list.isFetchingNextPage, list.fetchNextPage])
 
   const items = list.data?.pages.flatMap((page) => page.items) ?? []
-  const pinned = items.filter((item) => item.pinned_at)
+  const pinned = archived ? [] : items.filter((item) => item.pinned_at)
   const rest = items.filter((item) => !item.pinned_at)
   const groups = ['今天', '昨天', '7 天内', '更早'].map((label) => ({ label, items: rest.filter((item) => splitDate(item.last_message_at) === label) }))
+  const namedGroups = groupQuery.data ?? []
+  const groupedRows = organizeEnabled && !groupID
+    ? namedGroups.flatMap((group) => {
+      const members = rest.filter((item) => item.group_id === group.id)
+      return members.length ? [{ label: group.name, groupID: group.id, items: members }] : []
+    })
+    : []
+  const ungrouped = organizeEnabled && !groupID ? rest.filter((item) => !item.group_id) : rest
+  const dateGroups = ['今天', '昨天', '7 天内', '更早'].map((label) => ({ label, items: ungrouped.filter((item) => splitDate(item.last_message_at) === label) }))
+  const invalidateOrganize = async () => {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ['agent-conversations'] }),
+      qc.invalidateQueries({ queryKey: ['agent-conversation-groups'] }),
+    ])
+  }
+  const saveGroup = async () => {
+    if (!groupDialog || !groupDialog.name.trim() || groupBusy) return
+    setGroupBusy(true)
+    try {
+      if (groupDialog.id) await patch(`/agent/conversation-groups/${groupDialog.id}`, { name: groupDialog.name.trim() })
+      else await post('/agent/conversation-groups', { name: groupDialog.name.trim() })
+      setGroupDialog(null)
+      await invalidateOrganize()
+    } catch (error) { toast.error(errorMessage(error)) }
+    finally { setGroupBusy(false) }
+  }
+  const removeGroup = async (group: AgentConversationGroup) => {
+    if (!(await confirm({ title: `删除分组「${group.name}」？`, desc: '其中的对话会保留，并变为未分组。', confirmText: '删除分组', danger: true }))) return
+    try {
+      await del(`/agent/conversation-groups/${group.id}`)
+      if (groupID === group.id) setGroupID('')
+      await invalidateOrganize()
+    } catch (error) { toast.error(errorMessage(error)) }
+  }
 
   const row = (item: AgentConversationListItem) => (
-    <ConversationRow key={item.id} item={item} selected={item.id === currentID} desktopPresentation={desktopPresentation} onSelect={() => { onSelect(item.id); onClose?.() }} />
+    <ConversationRow key={item.id} item={item} groups={namedGroups} organizeEnabled={organizeEnabled} selected={item.id === currentID} desktopPresentation={desktopPresentation} onChanged={invalidateOrganize} onSelect={() => { onSelect(item.id, item.matched_message_seq ?? undefined); onClose?.() }} />
   )
 
   return (
@@ -89,51 +151,120 @@ function AgentConversationList({
         {!desktopPresentation && <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-mist-400" />}
         <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={desktopPresentation ? '搜索最近的对话' : '搜索对话'} className={desktopPresentation ? '' : 'pl-9'} aria-label="搜索对话" />
       </label>
+      {organizeEnabled && <div className="mx-3 mb-3 grid grid-cols-2 gap-1.5">
+        <Select aria-label="筛选归档状态" value={archived ? 'archived' : 'active'} onChange={(event) => setArchived(event.target.value === 'archived')}>
+          <option value="active">当前对话</option><option value="archived">已归档</option>
+        </Select>
+        <Select aria-label="筛选对话状态" value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}>
+          <option value="">全部状态</option><option value="active">进行中</option><option value="needs_action">待我处理</option><option value="unread">未读</option>
+        </Select>
+        <Select aria-label="按账号筛选" value={accountID} onChange={(event) => setAccountID(event.target.value)}>
+          <option value="">全部账号</option>{(accounts.data ?? []).map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+        </Select>
+        <Select aria-label="按分组筛选" value={groupID} onChange={(event) => setGroupID(event.target.value)}>
+          <option value="">全部分组</option><option value="none">未分组</option>{namedGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+        </Select>
+        <Button className="col-span-2" variant="ghost" size="sm" icon={<FolderPlus className="size-4" />} disabled={(namedGroups.length >= 20)} onClick={() => setGroupDialog({ name: '' })}>{namedGroups.length >= 20 ? '分组已达 20 个上限' : '新建分组'}</Button>
+        <Button className="col-span-2" variant="ghost" size="sm" onClick={() => setGroupManageOpen(true)}>管理分组（{namedGroups.length}）</Button>
+      </div>}
+      {organizeEnabled && groupQuery.isError && <p role="alert" className="mx-4 mb-2 text-xs text-danger">分组加载失败。<button type="button" className="ml-1 underline" onClick={() => void groupQuery.refetch()}>重试</button></p>}
       {list.isLoading ? <div className="px-4 py-3 text-sm text-mist-400">正在加载对话…</div> : list.isError ? (
         <div className="px-4 py-3 text-sm text-danger">{errorMessage(list.error)} <button type="button" className="ml-1 underline" onClick={() => void list.refetch()}>重试</button></div>
       ) : (
         <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {pinned.length > 0 && <ConversationGroup label="置顶" icon={<Pin className="size-3" />}>{pinned.map(row)}</ConversationGroup>}
-          {groups.map(({ label, items: grouped }) => grouped.length > 0 && <ConversationGroup key={label} label={label}>{grouped.map(row)}</ConversationGroup>)}
-          {!items.length && <div className="px-3 py-8 text-center text-[13px] text-mist-400">{search ? '没有匹配的对话' : '还没有对话'}</div>}
+          {groupedRows.map(({ label, groupID: id, items: grouped }) => <ConversationGroup key={id} label={label} actions={<>
+            <IconButton label={`重命名分组 ${label}`} className="size-6" onClick={() => setGroupDialog({ id, name: label })}><Pencil className="size-3" /></IconButton>
+            <IconButton label={`删除分组 ${label}`} className="size-6" onClick={() => { const group = namedGroups.find((item) => item.id === id); if (group) void removeGroup(group) }}><Trash2 className="size-3" /></IconButton>
+          </>}>{grouped.map(row)}</ConversationGroup>)}
+          {(organizeEnabled ? dateGroups : groups).map(({ label, items: grouped }) => grouped.length > 0 && <ConversationGroup key={label} label={label}>{grouped.map(row)}</ConversationGroup>)}
+          {!items.length && <div className="px-3 py-8 text-center text-[13px] text-mist-400">{search ? '没有匹配的对话' : archived ? '没有已归档的对话' : '还没有对话'}</div>}
           <div ref={sentinel} className="h-1" />
           {list.isFetchingNextPage && <div className="py-3 text-center text-xs text-mist-400">加载更多…</div>}
         </div>
       )}
       {desktopPresentation && <div className="desktop-agent-privacy-note">你的对话仅本人可见。操作卡片执行后，仍保留原操作日志。</div>}
+      {groupDialog && <Dialog open onClose={() => setGroupDialog(null)} title={groupDialog.id ? '重命名分组' : '新建私有分组'} footer={<><Button variant="ghost" onClick={() => setGroupDialog(null)}>取消</Button><Button variant="primary" onClick={() => void saveGroup()} disabled={!groupDialog.name.trim() || groupBusy}>保存</Button></>}>
+        <Input autoFocus aria-label="分组名称" value={groupDialog.name} maxLength={30} onChange={(event) => setGroupDialog({ ...groupDialog, name: event.target.value })} onKeyDown={(event) => isEnterWithoutComposition(event.nativeEvent) && void saveGroup()} />
+      </Dialog>}
+      {groupManageOpen && <Dialog open onClose={() => setGroupManageOpen(false)} title="管理私有分组" desc="删除分组只会解除会话归类，不会删除对话。">
+        {groupQuery.isLoading ? <p className="py-4 text-sm text-mist-500">正在加载分组…</p> : !namedGroups.length ? <p className="py-4 text-sm text-mist-500">还没有分组。</p> : <ul className="max-h-80 space-y-1 overflow-y-auto">
+          {namedGroups.map((group) => <li key={group.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-mist-700">
+            <span className="min-w-0 flex-1 truncate">{group.name}</span>
+            <IconButton label={`重命名分组 ${group.name}`} onClick={() => { setGroupManageOpen(false); setGroupDialog({ id: group.id, name: group.name }) }}><Pencil className="size-4" /></IconButton>
+            <IconButton label={`删除分组 ${group.name}`} onClick={() => { setGroupManageOpen(false); void removeGroup(group) }}><Trash2 className="size-4" /></IconButton>
+          </li>)}
+        </ul>}
+      </Dialog>}
     </div>
   )
 }
 
-function ConversationGroup({ label, icon, children }: { label: string; icon?: React.ReactNode; children: React.ReactNode }) {
-  return <section className="mb-3"><div className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold tracking-wide text-mist-400">{icon}{label}</div><div className="space-y-0.5">{children}</div></section>
+function ConversationGroup({ label, icon, actions, children }: { label: string; icon?: React.ReactNode; actions?: React.ReactNode; children: React.ReactNode }) {
+  return <section className="mb-3"><div className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold tracking-wide text-mist-400">{icon}{label}<span className="ml-auto flex items-center">{actions}</span></div><div className="space-y-0.5">{children}</div></section>
 }
 
-function ConversationRow({ item, selected, onSelect, desktopPresentation = false }: { item: AgentConversationListItem; selected: boolean; onSelect: () => void; desktopPresentation?: boolean }) {
+function ConversationRow({ item, groups, organizeEnabled, selected, onSelect, onChanged, desktopPresentation = false }: {
+  item: AgentConversationListItem; groups: AgentConversationGroup[]; organizeEnabled: boolean; selected: boolean
+  onSelect: () => void; onChanged: () => Promise<void>; desktopPresentation?: boolean
+}) {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [renameOpen, setRenameOpen] = useState(false)
   const [title, setTitle] = useState(item.title)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [groupOpen, setGroupOpen] = useState(false)
+  const [groupID, setGroupID] = useState(item.group_id ?? '')
+  const refresh = async () => {
+    await onChanged()
+    if (selected) await qc.invalidateQueries({ queryKey: ['agent-conversation', item.id] })
+  }
   const changePin = async () => {
     await patch(`/agent/conversations/${item.id}`, { expected_revision: item.revision, pinned: !item.pinned_at })
-    await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+    await refresh()
   }
   const saveTitle = async () => {
     try {
       await patch(`/agent/conversations/${item.id}`, { expected_revision: item.revision, title: title.trim() })
       setRenameOpen(false)
-      await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+      await refresh()
       if (selected) await qc.invalidateQueries({ queryKey: ['agent-conversation', item.id] })
     } catch (error) { toast.error(errorMessage(error)) }
   }
   const remove = async () => {
-    if (!(await confirm({ title: '删除这段对话？', desc: '对话、消息和附件会一并删除，无法恢复。', confirmText: '删除', danger: true }))) return
+    if (!(await confirm({ title: '删除这段对话？', desc: '对话、消息和附件会一并删除；已完成的业务操作不会回滚。', confirmText: '删除', danger: true }))) return
     try {
       await del(`/agent/conversations/${item.id}?confirm=true`)
-      await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+      await refresh()
       await qc.removeQueries({ queryKey: ['agent-conversation', item.id] })
       if (selected) navigate('/agent')
+    } catch (error) { toast.error(errorMessage(error)) }
+  }
+  const moveToGroup = async () => {
+    try {
+      await patch(`/agent/conversations/${item.id}`, { expected_revision: item.revision, group_id: groupID || null })
+      setGroupOpen(false)
+      await refresh()
+    } catch (error) { toast.error(errorMessage(error)) }
+  }
+  const toggleArchive = async () => {
+    const restoring = !!item.archived_at
+    if (!restoring && item.pending_actions > 0 && !(await confirm({
+      title: '归档这段对话？', desc: `仍有 ${item.pending_actions} 张待处理操作卡片。确认后会保留卡片并按原时限过期。`, confirmText: '确认归档', danger: true,
+    }))) return
+    try {
+      await patch(`/agent/conversations/${item.id}`, {
+        expected_revision: item.revision, archived: restoring ? false : true,
+        ...(!restoring && item.pending_actions > 0 ? { confirm_pending_actions: true } : {}),
+      })
+      await refresh()
+    } catch (error) { toast.error(errorMessage(error)) }
+  }
+  const markUnread = async () => {
+    try {
+      await post(`/agent/conversations/${item.id}/read`, { unread: true })
+      if (selected) window.dispatchEvent(new CustomEvent('ops:agent-manual-unread', { detail: { id: item.id } }))
+      await refresh()
     } catch (error) { toast.error(errorMessage(error)) }
   }
   const pending = item.pending_actions
@@ -143,10 +274,11 @@ function ConversationRow({ item, selected, onSelect, desktopPresentation = false
       <button type="button" onClick={onSelect} className={`min-w-0 flex-1 cursor-pointer px-2.5 py-2 text-left ${selected ? 'text-ink-800' : 'text-mist-700'}`}>
         <span className="flex items-center gap-1.5">
           {busy && <LoaderCircle className="size-3.5 shrink-0 animate-spin text-ink-500" />}
+          {item.has_unread && <span aria-label="未读" title="未读" className="size-2 shrink-0 rounded-full bg-ink-500" />}
           <span className="truncate text-[13px] font-medium">{item.title || '新对话'}</span>
           {pending > 0 && <span className="rounded-full bg-gamboge-100 px-1.5 text-[10px] text-gamboge-800">{pending}</span>}
         </span>
-        <span className="mt-0.5 block truncate text-[11px] text-mist-400" title={desktopPresentation ? item.model || '尚未选择模型' : undefined}>{desktopPresentation ? pending > 0 ? `${pending} 张待确认卡片` : splitDate(item.last_message_at) : item.model || '尚未选择模型'}</span>
+        <span className="mt-0.5 block truncate text-[11px] text-mist-400" title={desktopPresentation ? item.model || '尚未选择模型' : undefined}>{item.matched_message_snippet || (item.archived_at ? '已归档' : desktopPresentation ? pending > 0 ? `${pending} 张待确认卡片` : splitDate(item.last_message_at) : item.model || '尚未选择模型')}</span>
       </button>
       <div className="relative mr-1">
         <IconButton label="对话操作" className="size-7 opacity-0 group-hover:opacity-100 focus:opacity-100" onClick={() => setMenuOpen((value) => !value)}><MoreHorizontal className="size-4" /></IconButton>
@@ -155,12 +287,20 @@ function ConversationRow({ item, selected, onSelect, desktopPresentation = false
           <div role="menu" className="absolute right-0 top-8 z-30 min-w-36 rounded-lg border border-mist-200 bg-white p-1 shadow-pop">
             <MenuButton icon={<Pencil />} label="重命名" onClick={() => { setTitle(item.title); setRenameOpen(true); setMenuOpen(false) }} />
             <MenuButton icon={item.pinned_at ? <PinOff /> : <Pin />} label={item.pinned_at ? '取消置顶' : '置顶'} onClick={() => { setMenuOpen(false); void changePin().catch((e) => toast.error(errorMessage(e))) }} />
+            {organizeEnabled && <>
+              <MenuButton icon={<FolderPlus />} label="移动到分组" onClick={() => { setGroupID(item.group_id ?? ''); setGroupOpen(true); setMenuOpen(false) }} />
+              {!item.archived_at && <MenuButton icon={<span aria-hidden="true">•</span>} label="标为未读" onClick={() => { setMenuOpen(false); void markUnread() }} />}
+              <MenuButton icon={item.archived_at ? <ArchiveRestore /> : <Archive />} label={item.archived_at ? '恢复归档' : '归档'} onClick={() => { setMenuOpen(false); void toggleArchive() }} />
+            </>}
             <MenuButton icon={<Trash2 />} label="删除" danger onClick={() => { setMenuOpen(false); void remove() }} />
           </div>
         </>}
       </div>
       {renameOpen && <Dialog open onClose={() => setRenameOpen(false)} title="重命名对话" footer={<><Button variant="ghost" onClick={() => setRenameOpen(false)}>取消</Button><Button variant="primary" onClick={() => void saveTitle()} disabled={!title.trim()}>保存</Button></>}>
         <Input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} maxLength={60} onKeyDown={(event) => isEnterWithoutComposition(event.nativeEvent) && void saveTitle()} />
+      </Dialog>}
+      {groupOpen && <Dialog open onClose={() => setGroupOpen(false)} title="移动到分组" footer={<><Button variant="ghost" onClick={() => setGroupOpen(false)}>取消</Button><Button variant="primary" onClick={() => void moveToGroup()}>保存</Button></>}>
+        <Select aria-label="选择分组" value={groupID} onChange={(event) => setGroupID(event.target.value)}><option value="">未分组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</Select>
       </Dialog>}
     </div>
   )
@@ -312,6 +452,10 @@ export default function Agent() {
   const [localSearchError, setLocalSearchError] = useState('')
   const [editMessage, setEditMessage] = useState<AgentMessage | null>(null)
   const [olderMessages, setOlderMessages] = useState<AgentMessage[]>([])
+  const [pendingJump, setPendingJump] = useState<{ conversationID: string; seq: number } | null>(null)
+  const [manualUnreadSuppressedID, setManualUnreadSuppressedID] = useState('')
+  const olderLoadingRef = useRef(false)
+  const manualScrollRef = useRef(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const localSearchInputRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -328,9 +472,25 @@ export default function Agent() {
   const partialSavedAt = useRef(0)
   const conversationIDRef = useRef(conversationId)
   conversationIDRef.current = conversationId
+  const lastConversationIDRef = useRef(conversationId)
 
   const bootstrapData = bootstrap.data
   const workbenchUI = desktopPresentation && bootstrapData?.features?.workbench_ui === true
+  const organizeEnabled = bootstrapData?.features?.conversation_organize === true
+  useEffect(() => {
+    const onManualUnread = (event: Event) => {
+      const id = (event as CustomEvent<{ id: string }>).detail?.id
+      if (id && id === conversationIDRef.current) setManualUnreadSuppressedID(id)
+    }
+    window.addEventListener('ops:agent-manual-unread', onManualUnread)
+    return () => window.removeEventListener('ops:agent-manual-unread', onManualUnread)
+  }, [])
+  useEffect(() => {
+    if (lastConversationIDRef.current !== conversationId) {
+      lastConversationIDRef.current = conversationId
+      setManualUnreadSuppressedID('')
+    }
+  }, [conversationId])
   const layoutPreferenceKey = me.data?.user_id && me.data.workspace.id
     ? `ops.agent-workbench-layout.v1:${me.data.user_id}:${me.data.workspace.id}`
     : ''
@@ -424,7 +584,9 @@ export default function Agent() {
   }, [bootstrapData?.privacy_notice_seen, bootstrap.isLoading])
 
   useEffect(() => {
-    if (!conversationId) setOlderMessages([])
+    setOlderMessages([])
+    setLocalSearchResults([])
+    setLocalSearchError('')
   }, [conversationId])
 
   useEffect(() => {
@@ -472,7 +634,10 @@ export default function Agent() {
     ])
   }, [qc, conversationId])
 
-  const openConversation = (id: string) => navigate(`/agent/c/${id}`)
+  const openConversation = (id: string, matchedSeq?: number) => {
+    setPendingJump(matchedSeq ? { conversationID: id, seq: matchedSeq } : null)
+    navigate(`/agent/c/${id}`)
+  }
   const newConversation = () => {
     setText('')
     setFiles([])
@@ -579,13 +744,58 @@ export default function Agent() {
   }
 
   const loadOlder = async () => {
-    if (!conversationId || !messages.length || !detail?.has_more) return
+    if (!conversationId || !messages.length || !detail?.has_more || olderLoadingRef.current) return
+    olderLoadingRef.current = true
     try {
       const page = await get<AgentConversationDetail>(`/agent/conversations/${conversationId}?before_seq=${messages[0].seq}`)
       setOlderMessages((old) => [...page.messages, ...old])
       qc.setQueryData<AgentConversationDetail>(['agent-conversation', conversationId], (current) => current ? { ...current, has_more: page.has_more } : current)
     } catch (error) { toast.error(errorMessage(error)) }
+    finally { olderLoadingRef.current = false }
   }
+
+  useEffect(() => {
+    if (!pendingJump || pendingJump.conversationID !== conversationId || detailQuery.isLoading || !detail) return
+    const target = messages.find((message) => message.seq === pendingJump.seq)
+    if (target) {
+      setPendingJump(null)
+      window.requestAnimationFrame(() => document.querySelector(`[data-message-seq="${target.seq}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+    } else if (detail.has_more && messages.length) {
+      void loadOlder()
+    } else if (!detail.has_more) {
+      setPendingJump(null)
+      toast.error('搜索命中的消息已不可用')
+    }
+  }, [pendingJump, conversationId, detailQuery.isLoading, detail, messages, loadOlder])
+
+  useEffect(() => {
+    if (!organizeEnabled || !conversationId || !conversation || !messages.length || !pageVisible || manualUnreadSuppressedID === conversationId) return
+    const readSeq = conversation.read_upto_message_seq ?? 0
+    const latestSeq = messages[messages.length - 1].seq
+    const hasUnread = conversation.force_unread || messages.some((message) => message.seq > readSeq && message.role !== 'user')
+    if (!hasUnread || latestSeq <= readSeq && !conversation.force_unread || !bottomRef.current) return
+    const node = bottomRef.current
+    let timer = 0
+    const observer = new IntersectionObserver((entries) => {
+      window.clearTimeout(timer)
+      if (entries.some((entry) => entry.isIntersecting) && document.visibilityState === 'visible') {
+        timer = window.setTimeout(() => {
+          if (conversationIDRef.current !== conversationId || document.visibilityState !== 'visible') return
+          void post<{ read_upto_message_seq: number; force_unread: boolean; revision: number }>(`/agent/conversations/${conversationId}/read`, { upto_message_seq: latestSeq })
+            .then((result) => {
+              qc.setQueryData<AgentConversationDetail>(['agent-conversation', conversationId], (current) => current ? {
+                ...current,
+                conversation: { ...current.conversation, read_upto_message_seq: result.read_upto_message_seq, force_unread: result.force_unread, revision: result.revision },
+              } : current)
+              return qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+            })
+            .catch((error) => toast.error(errorMessage(error)))
+        }, 1000)
+      }
+    }, { threshold: 1 })
+    observer.observe(node)
+    return () => { window.clearTimeout(timer); observer.disconnect() }
+  }, [organizeEnabled, conversationId, conversation, messages, pageVisible, qc, manualUnreadSuppressedID])
 
   const searchSavedMessages = async () => {
     const query = localSearchText.trim().toLocaleLowerCase()
@@ -706,7 +916,7 @@ export default function Agent() {
     <>
       {sidebarSlot && !desktopPresentation && createPortal(
         <div className="absolute inset-0 flex min-h-0 flex-col">
-          <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle={conversation?.title || '对话'} />
+          <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle={conversation?.title || '对话'} organizeEnabled={organizeEnabled} />
         </div>,
         sidebarSlot,
       )}
@@ -717,7 +927,7 @@ export default function Agent() {
       )}
       <div className={`relative flex h-full min-h-0 overflow-hidden bg-[#f7f8f6] ${desktopPresentation ? 'desktop-agent-workspace' : ''} ${workbenchUI ? 'desktop-agent-workbench' : ''}`} data-list-collapsed={workbenchListCollapsed} data-panel-open={workbenchPanelOpen}>
       {desktopPresentation && <aside className="desktop-agent-list" aria-label="AI 对话列表" data-testid="desktop-agent-list">
-        <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle="AI 对话" desktopPresentation />
+        <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle="AI 对话" desktopPresentation organizeEnabled={organizeEnabled} />
       </aside>}
       <section className={`flex min-w-0 flex-1 flex-col ${workbenchUI ? 'desktop-agent-workbench-main' : ''}`}>
         <header className={`flex min-h-14 shrink-0 items-center gap-2 border-b border-mist-200 bg-white px-3 sm:px-5 ${desktopPresentation ? 'desktop-agent-chat-header' : 'lg:hidden'}`}>
@@ -739,7 +949,14 @@ export default function Agent() {
 
         <div className="relative flex min-h-0 flex-1 flex-col">
           {dragging && <div className="absolute inset-3 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-ink-400 bg-white/90 text-ink-700">松开以上传图片或文本</div>}
-          <div className={`scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-5 sm:px-6 ${desktopPresentation ? 'desktop-agent-chat-stream' : ''}`} onDragEnter={(event) => { event.preventDefault(); if (canWrite && !busy && !uploading) { dragDepth.current++; setDragging(true) } }} onDragLeave={(event) => { event.preventDefault(); dragDepth.current--; if (dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false) } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void addFiles(event.dataTransfer.files) }}>
+          <div className={`scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-5 sm:px-6 ${desktopPresentation ? 'desktop-agent-chat-stream' : ''}`} onWheel={() => { manualScrollRef.current = true }} onTouchStart={() => { manualScrollRef.current = true }} onPointerDown={() => { manualScrollRef.current = true }} onKeyDown={(event) => { if (['End', 'PageDown', 'ArrowDown'].includes(event.key)) manualScrollRef.current = true }} onScroll={(event) => {
+            if (!manualScrollRef.current || manualUnreadSuppressedID !== conversationId) return
+            const node = event.currentTarget
+            if (node.scrollHeight - node.scrollTop - node.clientHeight <= 8) {
+              manualScrollRef.current = false
+              setManualUnreadSuppressedID('')
+            }
+          }} onDragEnter={(event) => { event.preventDefault(); if (canWrite && !busy && !uploading) { dragDepth.current++; setDragging(true) } }} onDragLeave={(event) => { event.preventDefault(); dragDepth.current--; if (dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false) } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void addFiles(event.dataTransfer.files) }}>
             {detailQuery.isLoading && conversationId && <div className="mx-auto max-w-3xl py-12 text-center text-sm text-mist-400"><LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />正在加载对话…</div>}
             {detailQuery.isError && <Notice tone="red" className="mx-auto max-w-3xl">{errorMessage(detailQuery.error)} <button type="button" className="ml-2 underline" onClick={() => void detailQuery.refetch()}>重试</button></Notice>}
             {!conversationId && !messages.length && <Welcome onPrompt={(value) => setText(value)} noModel={!bootstrapData.can_use} desktopWorkbench={workbenchUI} />}
@@ -774,7 +991,7 @@ export default function Agent() {
                 </div>
               </div></div>}
             </div>
-            <div ref={bottomRef} />
+            <div ref={bottomRef} className="h-px" />
           </div>
 
           <div className={`shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4 ${desktopPresentation ? 'desktop-agent-compose-area' : ''} ${workbenchUI ? 'desktop-agent-workbench-compose-area' : ''}`}>
@@ -837,7 +1054,7 @@ export default function Agent() {
       />}
 
       <Drawer open={mobileListOpen} onClose={() => setMobileListOpen(false)} title="对话" width="w-[min(88vw,360px)]">
-        <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} onClose={() => setMobileListOpen(false)} />
+        <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} onClose={() => setMobileListOpen(false)} organizeEnabled={organizeEnabled} />
       </Drawer>
       <Dialog open={localSearchOpen} onClose={() => setLocalSearchOpen(false)} title="查找当前对话" desc="搜索当前对话中所有已保存的用户与助手消息。">
         <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void searchSavedMessages() }}>

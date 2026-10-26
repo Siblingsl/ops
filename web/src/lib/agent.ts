@@ -47,11 +47,25 @@ export interface AgentConversation {
   created_at: string
   updated_at: string
   revision: number
+  archived_at?: string | null
+  group_id?: string | null
+  read_upto_message_seq?: number
+  force_unread?: boolean
 }
 
 export type AgentConversationListItem = AgentConversation & {
   pending_actions: number
   has_active_run: boolean
+  has_unread?: boolean
+  matched_message_id?: string
+  matched_message_seq?: number
+  matched_message_snippet?: string
+}
+
+export interface AgentConversationGroup {
+  id: string
+  name: string
+  created_at: string
 }
 
 export interface AgentConversationUsage {

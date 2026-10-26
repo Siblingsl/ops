@@ -16,6 +16,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // 系统智能体（D-117 / 16 文档第 9、10、11 节）。本文件实现数据表对应的对话类接口、
@@ -288,32 +290,42 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) error {
 // ---------- 对话 ----------
 
 type agentConversation struct {
-	ID              uuid.UUID  `json:"id"`
-	Title           string     `json:"title"`
-	TitleSource     string     `json:"title_source"`
-	PinnedAt        *time.Time `json:"pinned_at"`
-	ModelProviderID *uuid.UUID `json:"model_provider_id"`
-	Model           string     `json:"model"`
-	AccountID       *uuid.UUID `json:"account_id"`
-	LastMessageAt   time.Time  `json:"last_message_at"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	Revision        int64      `json:"revision"`
+	ID                 uuid.UUID  `json:"id"`
+	Title              string     `json:"title"`
+	TitleSource        string     `json:"title_source"`
+	PinnedAt           *time.Time `json:"pinned_at"`
+	ModelProviderID    *uuid.UUID `json:"model_provider_id"`
+	Model              string     `json:"model"`
+	AccountID          *uuid.UUID `json:"account_id"`
+	LastMessageAt      time.Time  `json:"last_message_at"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	Revision           int64      `json:"revision"`
+	ArchivedAt         *time.Time `json:"archived_at"`
+	GroupID            *uuid.UUID `json:"group_id"`
+	ReadUptoMessageSeq int64      `json:"read_upto_message_seq"`
+	ForceUnread        bool       `json:"force_unread"`
 }
 
 type agentConversationListItem struct {
 	agentConversation
-	PendingActions int  `json:"pending_actions"`
-	HasActiveRun   bool `json:"has_active_run"`
+	PendingActions        int        `json:"pending_actions"`
+	HasActiveRun          bool       `json:"has_active_run"`
+	HasUnread             bool       `json:"has_unread"`
+	MatchedMessageID      *uuid.UUID `json:"matched_message_id,omitempty"`
+	MatchedMessageSeq     *int64     `json:"matched_message_seq,omitempty"`
+	MatchedMessageSnippet string     `json:"matched_message_snippet,omitempty"`
 }
 
 const agentConversationCols = `c.id, c.title, c.title_source, c.pinned_at, c.model_provider_id, c.model,
-	c.account_id, c.last_message_at, c.created_at, c.updated_at, c.revision`
+	c.account_id, c.last_message_at, c.created_at, c.updated_at, c.revision,
+	c.archived_at, c.group_id, c.read_upto_message_seq, c.force_unread`
 
 func scanAgentConversation(row pgx.Row) (*agentConversation, error) {
 	var c agentConversation
 	if err := row.Scan(&c.ID, &c.Title, &c.TitleSource, &c.PinnedAt, &c.ModelProviderID, &c.Model,
-		&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision); err != nil {
+		&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision,
+		&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -396,12 +408,82 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 		limit = listPageSize
 	}
 	args := []any{id.WorkspaceID, id.UserID}
-	where := ""
-	if q := queryText(r, "q"); q != "" {
-		args = append(args, truncateRunes(q, 100))
+	where := ` AND c.archived_at IS NULL`
+	q := truncateRunes(queryText(r, "q"), 100)
+	join := ""
+	matchedIDSQL, matchedSeqSQL, matchedSnippetSQL := `NULL::uuid`, `NULL::bigint`, `''::text`
+	if q != "" {
+		args = append(args, q)
 		n := len(args)
-		where += fmt.Sprintf(` AND (c.title ILIKE '%%'||$%d||'%%' OR EXISTS (SELECT 1 FROM agent_message m
-			WHERE m.conversation_id=c.id AND m.role='user' AND m.content ILIKE '%%'||$%d||'%%'))`, n, n)
+		join = fmt.Sprintf(` LEFT JOIN LATERAL (
+			SELECT m.id, m.seq, m.content FROM agent_message m
+			WHERE m.conversation_id=c.id AND m.role IN ('user','assistant','action_result','system_note')
+				AND m.content ILIKE '%%'||$%d||'%%'
+			ORDER BY m.seq DESC LIMIT 1
+		) matched ON true`, n)
+		matchedIDSQL, matchedSeqSQL = `matched.id`, `matched.seq`
+		matchedSnippetSQL = fmt.Sprintf(`CASE WHEN matched.id IS NULL THEN '' ELSE
+			substring(matched.content FROM greatest(1, strpos(lower(matched.content), lower($%d))-60) FOR 140) END`, n)
+		where += fmt.Sprintf(` AND (c.title ILIKE '%%'||$%d||'%%' OR matched.id IS NOT NULL)`, n)
+	}
+	archiveFilter := strings.TrimSpace(r.URL.Query().Get("archived"))
+	switch archiveFilter {
+	case "", "false":
+	case "true":
+		if err := requireAgentFeature("conversation_organize"); err != nil {
+			return err
+		}
+		where = strings.Replace(where, ` AND c.archived_at IS NULL`, ` AND c.archived_at IS NOT NULL`, 1)
+	case "all":
+		if err := requireAgentFeature("conversation_organize"); err != nil {
+			return err
+		}
+		where = strings.Replace(where, ` AND c.archived_at IS NULL`, "", 1)
+	default:
+		return validation("归档筛选无效")
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("account_id")); raw != "" {
+		if err := requireAgentFeature("conversation_organize"); err != nil {
+			return err
+		}
+		accountID, err := uuid.Parse(raw)
+		if err != nil {
+			return validation("账号筛选无效")
+		}
+		args = append(args, accountID)
+		where += fmt.Sprintf(` AND c.account_id=$%d`, len(args))
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("group_id")); raw != "" {
+		if err := requireAgentFeature("conversation_organize"); err != nil {
+			return err
+		}
+		if raw == "none" {
+			where += ` AND c.group_id IS NULL`
+		} else {
+			groupID, err := uuid.Parse(raw)
+			if err != nil {
+				return validation("分组筛选无效")
+			}
+			args = append(args, groupID)
+			where += fmt.Sprintf(` AND c.group_id=$%d`, len(args))
+		}
+	}
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	if state != "" {
+		if err := requireAgentFeature("conversation_organize"); err != nil {
+			return err
+		}
+		switch state {
+		case "active":
+			where += ` AND EXISTS (SELECT 1 FROM agent_run r WHERE r.conversation_id=c.id AND r.status IN ('queued','running'))`
+		case "needs_action":
+			where += ` AND EXISTS (SELECT 1 FROM agent_action a WHERE a.conversation_id=c.id AND a.status IN ('pending','needs_input'))`
+		case "unread":
+			where += ` AND (c.force_unread OR EXISTS (SELECT 1 FROM agent_message um WHERE um.conversation_id=c.id
+				AND um.role IN ('assistant','action_result','system_note') AND um.seq>c.read_upto_message_seq))`
+		default:
+			return validation("对话状态筛选无效")
+		}
 	}
 	if cursor != nil {
 		if cursor.Pinned {
@@ -419,8 +501,11 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 	args = append(args, limit+1)
 	rows, err := s.db.Query(ctx, `SELECT `+agentConversationCols+`,
 		(SELECT count(*) FROM agent_action a WHERE a.conversation_id=c.id AND a.status IN ('pending','needs_input')),
-		EXISTS (SELECT 1 FROM agent_run r WHERE r.conversation_id=c.id AND r.status IN ('queued','running'))
-		FROM agent_conversation c
+		EXISTS (SELECT 1 FROM agent_run r WHERE r.conversation_id=c.id AND r.status IN ('queued','running')),
+		(c.force_unread OR EXISTS (SELECT 1 FROM agent_message um WHERE um.conversation_id=c.id
+			AND um.role IN ('assistant','action_result','system_note') AND um.seq>c.read_upto_message_seq)),
+		`+matchedIDSQL+`, `+matchedSeqSQL+`, `+matchedSnippetSQL+`
+		FROM agent_conversation c`+join+`
 		WHERE c.workspace_id=$1 AND c.user_id=$2`+where+fmt.Sprintf(`
 		ORDER BY (c.pinned_at IS NULL), c.pinned_at DESC, c.last_message_at DESC, c.id DESC LIMIT $%d`, len(args)), args...)
 	if err != nil {
@@ -431,9 +516,22 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 	for rows.Next() {
 		var c agentConversation
 		var summary agentConversationListItem
+		var matchedID pgtype.UUID
+		var matchedSeq pgtype.Int8
 		if err := rows.Scan(&c.ID, &c.Title, &c.TitleSource, &c.PinnedAt, &c.ModelProviderID, &c.Model,
-			&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision, &summary.PendingActions, &summary.HasActiveRun); err != nil {
+			&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision,
+			&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread,
+			&summary.PendingActions, &summary.HasActiveRun, &summary.HasUnread,
+			&matchedID, &matchedSeq, &summary.MatchedMessageSnippet); err != nil {
 			return err
+		}
+		if matchedID.Valid {
+			matchUUID := uuid.UUID(matchedID.Bytes)
+			summary.MatchedMessageID = &matchUUID
+		}
+		if matchedSeq.Valid {
+			seq := matchedSeq.Int64
+			summary.MatchedMessageSeq = &seq
 		}
 		summary.agentConversation = c
 		list = append(list, summary)
@@ -533,7 +631,8 @@ func (s *Server) createAgentConversation(w http.ResponseWriter, r *http.Request)
 	c, err := scanAgentConversation(tx.QueryRow(ctx, `INSERT INTO agent_conversation
 		(workspace_id, user_id, title, title_source, account_id, model_provider_id, model)
 		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, title, title_source, pinned_at, model_provider_id, model,
-		account_id, last_message_at, created_at, updated_at, revision`,
+		account_id, last_message_at, created_at, updated_at, revision, archived_at, group_id,
+		read_upto_message_seq, force_unread`,
 		id.WorkspaceID, id.UserID, title, source, accountID, providerID, model))
 	if err != nil {
 		return err
@@ -560,17 +659,29 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		return err
 	}
 	var in struct {
-		ExpectedRevision *int64         `json:"expected_revision"`
-		Title            *string        `json:"title"`
-		Pinned           *bool          `json:"pinned"`
-		AccountID        *string        `json:"account_id"`
-		Model            *agentModelRef `json:"model"`
+		ExpectedRevision      *int64          `json:"expected_revision"`
+		Title                 *string         `json:"title"`
+		Pinned                *bool           `json:"pinned"`
+		AccountID             *string         `json:"account_id"`
+		Model                 *agentModelRef  `json:"model"`
+		GroupID               json.RawMessage `json:"group_id"`
+		Archived              *bool           `json:"archived"`
+		ConfirmPendingActions *bool           `json:"confirm_pending_actions"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
 	if in.ExpectedRevision != nil && *in.ExpectedRevision < 1 {
 		return validation("对话修订号无效")
+	}
+	organizeChange := in.Archived != nil || in.GroupID != nil
+	if organizeChange {
+		if err := requireAgentFeature("conversation_organize"); err != nil {
+			return err
+		}
+		if in.ExpectedRevision == nil {
+			return validation("会话组织修改需要 expected_revision")
+		}
 	}
 	sets := []string{}
 	args := []any{cid}
@@ -615,8 +726,68 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		args = append(args, ref.ProviderID, ref.Model)
 		sets = append(sets, fmt.Sprintf("model_provider_id=$%d", len(args)-1), fmt.Sprintf("model=$%d", len(args)))
 	}
+	var groupID *uuid.UUID
+	if in.GroupID != nil {
+		groupID, err = groupIDFromJSON(in.GroupID)
+		if err != nil {
+			return err
+		}
+		args = append(args, groupID)
+		sets = append(sets, fmt.Sprintf("group_id=$%d", len(args)))
+	}
+	if in.Archived != nil {
+		args = append(args, *in.Archived)
+		sets = append(sets, fmt.Sprintf("archived_at=CASE WHEN $%d THEN COALESCE(archived_at,now()) ELSE NULL END", len(args)))
+	}
 	if len(sets) == 0 {
 		return validation("没有需要修改的字段")
+	}
+	var tx pgx.Tx
+	if organizeChange {
+		tx, err = s.db.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		current, err := scanAgentConversation(tx.QueryRow(ctx, `SELECT `+agentConversationCols+`
+			FROM agent_conversation c WHERE c.id=$1 AND c.workspace_id=$2 AND c.user_id=$3 FOR UPDATE`,
+			cid, id.WorkspaceID, id.UserID))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if current.Revision != *in.ExpectedRevision {
+			return apiErr(409, "agent_revision_conflict", "对话已被其他操作更新，请刷新后重试")
+		}
+		if groupID != nil {
+			var allowed bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_conversation_group
+				WHERE id=$1 AND workspace_id=$2 AND user_id=$3)`, *groupID, id.WorkspaceID, id.UserID).Scan(&allowed); err != nil {
+				return err
+			}
+			if !allowed {
+				return errNotFound
+			}
+		}
+		if in.Archived != nil && *in.Archived && current.ArchivedAt == nil {
+			var active, executing bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_run WHERE conversation_id=$1 AND status IN ('queued','running')),
+				EXISTS (SELECT 1 FROM agent_action WHERE conversation_id=$1 AND status='executing')`, cid).Scan(&active, &executing); err != nil {
+				return err
+			}
+			if active || executing {
+				return apiErr(409, "agent_run_busy", "有运行或操作卡片正在执行，请等它结束后再归档")
+			}
+			var pending int
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM agent_action WHERE conversation_id=$1 AND status IN ('pending','needs_input')`, cid).Scan(&pending); err != nil {
+				return err
+			}
+			if pending > 0 && (in.ConfirmPendingActions == nil || !*in.ConfirmPendingActions) {
+				return apiErr(409, "agent_archive_confirmation_required", "仍有待处理操作卡片；确认归档后卡片会保留并按原时限过期")
+			}
+		}
 	}
 	sets = append(sets, "revision=revision+1", "updated_at=now()")
 	args = append(args, id.WorkspaceID, id.UserID)
@@ -627,8 +798,12 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 	}
 	sql := `UPDATE agent_conversation SET ` + strings.Join(sets, ", ") + where +
 		` RETURNING id, title, title_source, pinned_at, model_provider_id, model, account_id,
-		last_message_at, created_at, updated_at, revision`
-	c, err := scanAgentConversation(s.db.QueryRow(ctx, sql, args...))
+		last_message_at, created_at, updated_at, revision, archived_at, group_id, read_upto_message_seq, force_unread`
+	query := s.db.QueryRow
+	if tx != nil {
+		query = tx.QueryRow
+	}
+	c, err := scanAgentConversation(query(ctx, sql, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		if in.ExpectedRevision != nil {
 			return apiErr(409, "agent_revision_conflict", "对话已被其他操作更新，请刷新后重试")
@@ -636,7 +811,16 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		return errNotFound
 	}
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if organizeChange && errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return errNotFound
+		}
 		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
 	}
 	return ok(w, c)
 }
@@ -655,20 +839,37 @@ func (s *Server) deleteAgentConversation(w http.ResponseWriter, r *http.Request)
 	if r.URL.Query().Get("confirm") != "true" {
 		return validation("删除对话需要确认")
 	}
-	var executing bool
-	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_action WHERE conversation_id=$1 AND status='executing')`, c.ID).Scan(&executing); err != nil {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
 		return err
 	}
-	if executing {
-		return apiErr(409, "agent_run_busy", "有卡片正在执行，请等它结束后再删除对话")
+	defer tx.Rollback(ctx)
+	var lockedConversationID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM agent_conversation WHERE id=$1 AND workspace_id=$2 AND user_id=$3 FOR UPDATE`,
+		c.ID, id.WorkspaceID, id.UserID).Scan(&lockedConversationID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errNotFound
+		}
+		return err
+	}
+	var active, executing bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_run WHERE conversation_id=$1 AND status IN ('queued','running')),
+		EXISTS (SELECT 1 FROM agent_action WHERE conversation_id=$1 AND status='executing')`, c.ID).Scan(&active, &executing); err != nil {
+		return err
+	}
+	if active || executing {
+		return apiErr(409, "agent_run_busy", "有运行或操作卡片正在执行，请等它结束后再删除对话")
 	}
 	// 附件文件由应用代码在事务提交后删除，数据库级联只删记录（第 10 节说明 3）。
 	paths, err := s.agentAttachmentPathsOf(ctx, c.ID)
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(ctx, `DELETE FROM agent_conversation WHERE id=$1 AND workspace_id=$2 AND user_id=$3`,
+	if _, err := tx.Exec(ctx, `DELETE FROM agent_conversation WHERE id=$1 AND workspace_id=$2 AND user_id=$3`,
 		c.ID, id.WorkspaceID, id.UserID); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	s.removeAgentFiles(paths)
@@ -1116,6 +1317,12 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Get("/agent/conversations/{id}", s.h(s.getAgentConversationDetail))
 		r.Patch("/agent/conversations/{id}", s.h(s.patchAgentConversation))
 		r.Delete("/agent/conversations/{id}", s.h(s.deleteAgentConversation))
+		r.Get("/agent/conversation-groups", s.h(s.listAgentConversationGroups))
+		r.Post("/agent/conversation-groups", s.h(s.createAgentConversationGroup))
+		r.Patch("/agent/conversation-groups/{id}", s.h(s.patchAgentConversationGroup))
+		r.Delete("/agent/conversation-groups/{id}", s.h(s.deleteAgentConversationGroup))
+		r.Post("/agent/conversations/{id}/read", s.h(s.markAgentConversationRead))
+		r.Get("/agent/conversations/{id}/search", s.h(s.searchAgentConversationMessages))
 		r.Get("/agent/settings", s.h(s.getAgentSettings))
 		r.Put("/agent/settings", s.h(s.putAgentSettings))
 		r.Post("/agent/conversations/{id}/messages", s.h(s.postAgentMessages))

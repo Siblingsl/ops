@@ -5,6 +5,76 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { api, registerAccount } from './support'
 
+test('DEV-AW03 分组、未读、搜索、归档与恢复可从会话列表完成', async ({ page, baseURL }) => {
+  expect(baseURL).toBe('http://127.0.0.1:5179')
+  await registerAccount(page)
+  const conversation = await api(page, 'POST', '/agent/conversations', {})
+  const title = 'AW03 会话组织与归档验收'
+  await api(page, 'PATCH', `/agent/conversations/${conversation.id}`, { expected_revision: conversation.revision, title })
+  await page.goto('/agent')
+  const privacy = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
+  await expect(privacy).toBeVisible()
+  await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
+
+  await expect(page.getByRole('button', { name: '新建分组', exact: true })).toBeVisible()
+  const groupResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/conversation-groups' && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '新建分组', exact: true }).click()
+  const groupDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '新建私有分组', exact: true }) })
+  await groupDialog.getByRole('textbox', { name: '分组名称' }).fill('本周选题')
+  await groupDialog.getByRole('button', { name: '保存', exact: true }).click()
+  const group = await (await groupResponse).json()
+
+  const rowButton = page.getByRole('button', { name: new RegExp(title) })
+  await expect(rowButton).toBeVisible()
+  const row = rowButton.locator('xpath=..')
+  await row.getByRole('button', { name: '对话操作' }).click()
+  await page.getByRole('menuitem', { name: '移动到分组', exact: true }).click()
+  const moveDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '移动到分组', exact: true }) })
+  await moveDialog.getByRole('combobox', { name: '选择分组' }).selectOption(group.id)
+  await moveDialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversation.id}`)).conversation.group_id).toBe(group.id)
+
+  const updatedRow = page.getByRole('button', { name: new RegExp(title) }).locator('xpath=..')
+  await updatedRow.getByRole('button', { name: '对话操作' }).click()
+  await page.getByRole('menuitem', { name: '标为未读', exact: true }).click()
+  await page.getByRole('combobox', { name: '筛选对话状态' }).selectOption('unread')
+  await expect(page.getByRole('button', { name: new RegExp(title) })).toBeVisible()
+  const searchBox = page.getByRole('textbox', { name: '搜索对话' })
+  const noMatchSearch = page.waitForResponse((response) => {
+    const url = new URL(response.url())
+    return url.pathname === '/api/v1/agent/conversations' && url.searchParams.get('q') === 'AW03-明确无匹配-xyz'
+  })
+  await searchBox.fill('AW03-明确无匹配-xyz')
+  await noMatchSearch
+  await expect(page.getByRole('button', { name: new RegExp(title) })).toHaveCount(0)
+  const matchingSearch = page.waitForResponse((response) => {
+    const url = new URL(response.url())
+    return url.pathname === '/api/v1/agent/conversations' && url.searchParams.get('q') === 'AW03 会话组织'
+  })
+  await searchBox.fill('AW03 会话组织')
+  await matchingSearch
+  await expect(page.getByRole('button', { name: new RegExp(title) })).toBeVisible()
+
+  await page.getByRole('combobox', { name: '筛选归档状态' }).selectOption('archived')
+  await expect(page.getByRole('button', { name: new RegExp(title) })).toHaveCount(0)
+  await page.getByRole('combobox', { name: '筛选归档状态' }).selectOption('active')
+  const activeRow = page.getByRole('button', { name: new RegExp(title) }).locator('xpath=..')
+  await activeRow.getByRole('button', { name: '对话操作' }).click()
+  await page.getByRole('menuitem', { name: '归档', exact: true }).click()
+  await page.getByRole('combobox', { name: '筛选归档状态' }).selectOption('archived')
+  const archivedRow = page.getByRole('button', { name: new RegExp(title) }).locator('xpath=..')
+  await expect(archivedRow).toBeVisible()
+  await archivedRow.getByRole('button', { name: '对话操作' }).click()
+  await page.getByRole('menuitem', { name: '恢复归档', exact: true }).click()
+  await expect.poll(async () => !!(await api(page, 'GET', `/agent/conversations/${conversation.id}`)).conversation.archived_at).toBe(false)
+
+  await page.getByRole('button', { name: /管理分组/ }).click()
+  const manageDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '管理私有分组', exact: true }) })
+  await manageDialog.getByRole('button', { name: `删除分组 ${group.name}`, exact: true }).click()
+  await page.getByRole('button', { name: '删除分组', exact: true }).click()
+  await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversation.id}`)).conversation.group_id).toBe(null)
+})
+
 test('DEV-AW02 Electron 工作台布局、响应式、键盘与主题保持输入状态', async ({ page, baseURL }) => {
   expect(baseURL).toBe('http://127.0.0.1:5179')
   await registerAccount(page)

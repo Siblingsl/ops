@@ -405,14 +405,34 @@ func (s *Server) agentStartRun(ctx context.Context, trigger string, c *agentConv
 		BatchID:        uuid.New(),
 		Deadline:       time.Now().Add(agentRunSeconds * time.Second),
 	}
-	if err := s.db.QueryRow(ctx, `INSERT INTO agent_run
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var archivedAt *time.Time
+	if err := tx.QueryRow(ctx, `SELECT archived_at FROM agent_conversation
+		WHERE id=$1 AND workspace_id=$2 AND user_id=$3 FOR UPDATE`,
+		c.ID, st.WorkspaceID, st.UserID).Scan(&archivedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errNotFound
+		}
+		return nil, err
+	}
+	if archivedAt != nil {
+		return nil, apiErr(409, "agent_conversation_archived", "对话已归档，请先恢复后再开始运行")
+	}
+	if err := tx.QueryRow(ctx, `INSERT INTO agent_run
 		(conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model_provider_id, model)
 		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7) RETURNING id`,
 		c.ID, st.WorkspaceID, st.UserID, st.SessionID, trigger, model.ProviderID, model.Model).Scan(&st.RunID); err != nil {
 		return nil, err
 	}
-	if err := s.db.QueryRow(ctx, `SELECT loaded_domains, summary FROM agent_conversation WHERE id=$1`, c.ID).
+	if err := tx.QueryRow(ctx, `SELECT loaded_domains, summary FROM agent_conversation WHERE id=$1`, c.ID).
 		Scan(&st.Domains, &st.Summary); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	if len(st.Domains) > agentMaxDomains {

@@ -55,6 +55,9 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
+	if err := agentCheckConversationWritable(conv); err != nil {
+		return err
+	}
 	var req agentRunRequest
 	if err := agentDecodeBody(r, &req); err != nil {
 		return err
@@ -358,6 +361,9 @@ func (s *Server) postAgentContinue(w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
+	if err := agentCheckConversationWritable(conv); err != nil {
+		return err
+	}
 	if err := s.agentCheckRunLimits(ctx, conv); err != nil {
 		return err
 	}
@@ -459,6 +465,9 @@ func (s *Server) postAgentRegenerate(w http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return err
 	}
+	if err := agentCheckConversationWritable(conv); err != nil {
+		return err
+	}
 	last, err := s.agentLastUserMessage(ctx, conv.ID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -487,6 +496,9 @@ func (s *Server) postAgentMessageEdit(w http.ResponseWriter, r *http.Request) er
 	}
 	conv, err := s.agentConversationFor(ctx, convID)
 	if err != nil {
+		return err
+	}
+	if err := agentCheckConversationWritable(conv); err != nil {
 		return err
 	}
 	messageID, err := uuid.Parse(chi.URLParam(r, "messageId"))
