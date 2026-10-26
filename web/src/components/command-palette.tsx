@@ -32,6 +32,11 @@ const typeLabel: Record<string, string> = { work: '作品', topic: '选题', mat
 
 export const shortcutList: { keys: string[]; label: string; group: string }[] = [
   { group: '全局', keys: ['Ctrl', 'K'], label: '打开命令面板 / 搜索' },
+  { group: 'AI 对话', keys: ['Ctrl', 'Shift', 'O'], label: '新建对话' },
+  { group: 'AI 对话', keys: ['Ctrl', 'Shift', 'F'], label: '搜索本人对话' },
+  { group: 'AI 对话', keys: ['Ctrl', 'Shift', 'B'], label: '收起 / 恢复会话栏' },
+  { group: 'AI 对话', keys: ['Ctrl', 'Shift', 'J'], label: '打开 / 收起辅助面板' },
+  { group: 'AI 对话', keys: ['Ctrl', 'F'], label: '查找当前对话的已保存消息' },
   { group: '全局', keys: ['Ctrl', 'Shift', 'I'], label: '记一条灵感' },
   { group: '全局', keys: ['Ctrl', 'Shift', 'M'], label: '存为素材（可先选中文字）' },
   { group: '全局', keys: ['?'], label: '查看快捷键' },

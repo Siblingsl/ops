@@ -39,8 +39,23 @@ export function CommandPaletteHost() {
         })
         return
       }
+      const workbench = document.querySelector('.desktop-agent-workbench')
+      if (workbench && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey) {
+        const shortcut = e.key.toLowerCase()
+        const actions: Record<string, string> = { o: 'new', f: 'search-conversations', b: 'toggle-list', j: 'toggle-panel' }
+        if (actions[shortcut]) {
+          e.preventDefault()
+          window.dispatchEvent(new CustomEvent('ops:agent-workbench-shortcut', { detail: actions[shortcut] }))
+          return
+        }
+      }
       const target = e.target as HTMLElement | null
       const isTyping = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)
+      if (workbench && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f' && !isTyping && window.location.pathname.startsWith('/agent/c/')) {
+        e.preventDefault()
+        window.dispatchEvent(new CustomEvent('ops:agent-workbench-shortcut', { detail: 'find-message' }))
+        return
+      }
       if (isTyping || e.ctrlKey || e.metaKey || e.altKey) return
       if (e.key === '?') {
         e.preventDefault()

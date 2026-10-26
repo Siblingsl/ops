@@ -12,7 +12,7 @@ import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Button, cn, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post, rawRequest, stream } from '@/lib/api'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
-import { useAccounts, useCurrentAccount } from '@/lib/session'
+import { useAccounts, useCurrentAccount, useMe } from '@/lib/session'
 import { useSavePrefs } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
 import {
@@ -232,6 +232,48 @@ function RunStatus({ activeRun, streamStage, pendingActions, error, completedNot
   return text ? <div role="status" className="mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg bg-ink-50 px-3 py-2 text-[12.5px] text-ink-700">{activeRun || streamStage ? <LoaderCircle className="size-3.5 animate-spin" /> : <span className="size-1.5 rounded-full bg-ink-500" />}{text}</div> : null
 }
 
+function WorkbenchSidePanel({
+  tab, setTab, close, conversation, activeRun, busy, pendingActions, actionCount, selectedAccountName, selectedModelName, attachmentCount, artifactsEnabled,
+}: {
+  tab: 'task' | 'context' | 'artifact'; setTab: (tab: 'task' | 'context' | 'artifact') => void; close: () => void
+  conversation?: AgentConversation; activeRun?: AgentConversationDetail['active_run']; busy: boolean; pendingActions: number; actionCount: number
+  selectedAccountName: string; selectedModelName: string; attachmentCount: number; artifactsEnabled: boolean
+}) {
+  const tabs = [
+    { id: 'task' as const, label: '任务' },
+    { id: 'context' as const, label: '上下文' },
+    ...(artifactsEnabled ? [{ id: 'artifact' as const, label: '产物' }] : []),
+  ]
+  const taskStatus = busy ? '正在运行' : pendingActions ? `等待你逐张处理 ${pendingActions} 项` : conversation ? '当前没有运行中的任务' : '发送第一条消息后，这里会显示对话任务状态'
+  return <aside className="desktop-agent-side-panel" data-testid="desktop-agent-side-panel" aria-label="辅助面板">
+    <header className="desktop-agent-side-panel-heading">
+      <div><h2>辅助面板</h2><IconButton label="关闭任务面板" onClick={close}><X className="size-4" /></IconButton></div>
+      <div role="tablist" aria-label="辅助面板视图" className="desktop-agent-side-tabs">
+        {tabs.map((item) => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)}>{item.label}</button>)}
+      </div>
+    </header>
+    <div role="tabpanel" className="desktop-agent-side-content">
+      {tab === 'task' && <section aria-labelledby="workbench-task-heading">
+        <h3 id="workbench-task-heading">当前任务</h3>
+        <p className="desktop-agent-side-status" role="status">{busy && <LoaderCircle className="size-4 animate-spin" />}{taskStatus}</p>
+        {activeRun && <p className="desktop-agent-side-detail">运行状态：{activeRun.status === 'queued' ? '排队中' : '执行中'}</p>}
+        {conversation && <p className="desktop-agent-side-detail">本对话操作卡片：{actionCount} 项</p>}
+        {pendingActions > 0 && <p className="desktop-agent-side-note">请在对应消息下逐张审阅操作卡片。</p>}
+      </section>}
+      {tab === 'context' && <section aria-labelledby="workbench-context-heading">
+        <h3 id="workbench-context-heading">本对话设置</h3>
+        <dl className="desktop-agent-context-list">
+          <div><dt>操作账号</dt><dd>{selectedAccountName}</dd></div>
+          <div><dt>模型</dt><dd>{selectedModelName}</dd></div>
+          <div><dt>已发送附件</dt><dd>{attachmentCount} 个</dd></div>
+        </dl>
+        <p className="desktop-agent-side-note">附件只会随对应消息提交；本轮实际读取内容会在上下文契约接入后逐项展示。</p>
+      </section>}
+      {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading"><h3 id="workbench-artifact-heading">产物</h3><p className="desktop-agent-side-note">本对话还没有可预览的产物。</p></section>}
+    </div>
+  </aside>
+}
+
 export default function Agent() {
   const { conversationId } = useParams()
   const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
@@ -240,10 +282,15 @@ export default function Agent() {
   const bootstrap = useAgentBootstrap()
   const accounts = useAccounts()
   const currentAccount = useCurrentAccount()
+  const me = useMe()
   const savePrefs = useSavePrefs()
   const pageVisible = usePageVisible()
   const [search, setSearch] = useState('')
   const [mobileListOpen, setMobileListOpen] = useState(false)
+  const [workbenchListCollapsed, setWorkbenchListCollapsed] = useState(false)
+  const [workbenchPanelOpen, setWorkbenchPanelOpen] = useState(false)
+  const [workbenchPanelTab, setWorkbenchPanelTab] = useState<'task' | 'context' | 'artifact'>('task')
+  const [workbenchLayoutLoadedKey, setWorkbenchLayoutLoadedKey] = useState('')
   const [text, setText] = useState('')
   const [files, setFiles] = useState<AgentAttachment[]>([])
   const [uploading, setUploading] = useState(false)
@@ -258,9 +305,15 @@ export default function Agent() {
   const [historyAccount, setHistoryAccount] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [privacyOpen, setPrivacyOpen] = useState(false)
+  const [localSearchOpen, setLocalSearchOpen] = useState(false)
+  const [localSearchText, setLocalSearchText] = useState('')
+  const [localSearchBusy, setLocalSearchBusy] = useState(false)
+  const [localSearchResults, setLocalSearchResults] = useState<AgentMessage[]>([])
+  const [localSearchError, setLocalSearchError] = useState('')
   const [editMessage, setEditMessage] = useState<AgentMessage | null>(null)
   const [olderMessages, setOlderMessages] = useState<AgentMessage[]>([])
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const localSearchInputRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const uploadingRef = useRef(false)
   const uploadGeneration = useRef(0)
@@ -273,8 +326,14 @@ export default function Agent() {
   const [recovered, setRecovered] = useState<PartialStream | null>(null)
   const partialStore = useRef<Storage | null>(null)
   const partialSavedAt = useRef(0)
+  const conversationIDRef = useRef(conversationId)
+  conversationIDRef.current = conversationId
 
   const bootstrapData = bootstrap.data
+  const workbenchUI = desktopPresentation && bootstrapData?.features?.workbench_ui === true
+  const layoutPreferenceKey = me.data?.user_id && me.data.workspace.id
+    ? `ops.agent-workbench-layout.v1:${me.data.user_id}:${me.data.workspace.id}`
+    : ''
   const canRead = !!bootstrapData && (bootstrapData.can_use || bootstrapData.reason === 'no_model' || bootstrapData.reason === 'not_tested')
   const canWrite = bootstrapData?.can_use === true
   const detailQuery = useQuery({
@@ -301,6 +360,52 @@ export default function Agent() {
     return latest
   }, [messages, actionRunIDs])
   const busy = streaming || !!activeRun
+
+  useEffect(() => {
+    if (!workbenchUI || !layoutPreferenceKey) return
+    setWorkbenchLayoutLoadedKey('')
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(layoutPreferenceKey) || '{}') as { listCollapsed?: boolean; panelOpen?: boolean }
+      setWorkbenchListCollapsed(saved.listCollapsed === true)
+      setWorkbenchPanelOpen(saved.panelOpen === true)
+    } catch {
+      setWorkbenchListCollapsed(false)
+      setWorkbenchPanelOpen(false)
+    } finally {
+      setWorkbenchLayoutLoadedKey(layoutPreferenceKey)
+    }
+  }, [workbenchUI, layoutPreferenceKey])
+
+  useEffect(() => {
+    if (!workbenchUI) return
+    const onShortcut = (event: Event) => {
+      const action = (event as CustomEvent<string>).detail
+      if (action === 'new') newConversation()
+      if (action === 'toggle-list') setWorkbenchListCollapsed((value) => !value)
+      if (action === 'toggle-panel') {
+        setMobileListOpen(false)
+        setWorkbenchPanelOpen((value) => !value)
+      }
+      if (action === 'search-conversations') {
+        setWorkbenchListCollapsed(false)
+        window.setTimeout(() => document.querySelector<HTMLInputElement>('[data-testid="desktop-agent-list"] [aria-label="搜索对话"]')?.focus(), 0)
+      }
+      if (action === 'find-message') {
+        setLocalSearchText('')
+        setLocalSearchResults([])
+        setLocalSearchError('')
+        setLocalSearchOpen(true)
+        window.setTimeout(() => localSearchInputRef.current?.focus(), 0)
+      }
+    }
+    window.addEventListener('ops:agent-workbench-shortcut', onShortcut)
+    return () => window.removeEventListener('ops:agent-workbench-shortcut', onShortcut)
+  }, [workbenchUI])
+
+  useEffect(() => {
+    if (!workbenchUI || !layoutPreferenceKey || workbenchLayoutLoadedKey !== layoutPreferenceKey) return
+    window.localStorage.setItem(layoutPreferenceKey, JSON.stringify({ listCollapsed: workbenchListCollapsed, panelOpen: workbenchPanelOpen }))
+  }, [workbenchUI, layoutPreferenceKey, workbenchLayoutLoadedKey, workbenchListCollapsed, workbenchPanelOpen])
 
   useEffect(() => {
     if (!conversation) {
@@ -482,6 +587,40 @@ export default function Agent() {
     } catch (error) { toast.error(errorMessage(error)) }
   }
 
+  const searchSavedMessages = async () => {
+    const query = localSearchText.trim().toLocaleLowerCase()
+    if (!conversationId || !query || localSearchBusy) return
+    const searchConversationID = conversationId
+    setLocalSearchBusy(true)
+    setLocalSearchError('')
+    try {
+      let allMessages = [...messages]
+      let cursor = allMessages[0]?.seq ?? 0
+      let hasMore = detail?.has_more === true
+      while (hasMore && cursor > 0) {
+        const page = await get<AgentConversationDetail>(`/agent/conversations/${searchConversationID}?before_seq=${cursor}`)
+        if (!page.messages.length || page.messages[0].seq >= cursor) break
+        allMessages = [...page.messages, ...allMessages]
+        cursor = page.messages[0].seq
+        hasMore = page.has_more
+      }
+      if (conversationIDRef.current !== searchConversationID) return
+      setOlderMessages(allMessages.slice(0, Math.max(0, allMessages.length - baseMessages.length)))
+      setLocalSearchResults(allMessages.filter((message) => ['user', 'assistant'].includes(message.role) && message.content.toLocaleLowerCase().includes(query)))
+    } catch (error) {
+      if (conversationIDRef.current === searchConversationID) setLocalSearchError(errorMessage(error))
+    } finally {
+      if (conversationIDRef.current === searchConversationID) setLocalSearchBusy(false)
+    }
+  }
+
+  const jumpToSearchResult = (message: AgentMessage) => {
+    setLocalSearchOpen(false)
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      document.querySelector(`[data-message-seq="${message.seq}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }))
+  }
+
   const addFiles = async (incoming: FileList | File[]) => {
     if (!canWrite || busy || uploadingRef.current) return
     const filesToUpload = Array.from(incoming)
@@ -536,6 +675,8 @@ export default function Agent() {
   // AG-03：选了别的账号而历史仍属于原账号时，界面必须说清楚，否则用户以为上下文也跟着换了。
   const accountSwitched = !!conversationId && !!historyAccount && selectedAccount !== historyAccount
   const historyAccountName = accountList.find((account) => account.id === historyAccount)?.name || '原账号'
+  const attachmentCount = messages.reduce((total, message) => total + message.attachments.length, 0)
+  const workbenchStatus = busy ? '运行中' : pendingActions ? `待处理 ${pendingActions}` : conversation ? '已就绪' : '待开始'
 
   if (bootstrap.isLoading) return <div className="flex h-full items-center justify-center text-sm text-mist-400"><LoaderCircle className="mr-2 size-4 animate-spin" />正在准备智能体…</div>
   if (bootstrap.isError || !bootstrapData) return <div className="m-auto max-w-xl p-6 text-center"><p className="text-sm text-danger">{errorMessage(bootstrap.error)}</p><Button className="mt-3" onClick={() => void bootstrap.refetch()}>重试</Button></div>
@@ -574,18 +715,23 @@ export default function Agent() {
         <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>,
         toolbarSlot,
       )}
-      <div className={`relative flex h-full min-h-0 overflow-hidden bg-[#f7f8f6] ${desktopPresentation ? 'desktop-agent-workspace' : ''}`}>
+      <div className={`relative flex h-full min-h-0 overflow-hidden bg-[#f7f8f6] ${desktopPresentation ? 'desktop-agent-workspace' : ''} ${workbenchUI ? 'desktop-agent-workbench' : ''}`} data-list-collapsed={workbenchListCollapsed} data-panel-open={workbenchPanelOpen}>
       {desktopPresentation && <aside className="desktop-agent-list" aria-label="AI 对话列表" data-testid="desktop-agent-list">
         <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle="AI 对话" desktopPresentation />
       </aside>}
-      <section className="flex min-w-0 flex-1 flex-col">
+      <section className={`flex min-w-0 flex-1 flex-col ${workbenchUI ? 'desktop-agent-workbench-main' : ''}`}>
         <header className={`flex min-h-14 shrink-0 items-center gap-2 border-b border-mist-200 bg-white px-3 sm:px-5 ${desktopPresentation ? 'desktop-agent-chat-header' : 'lg:hidden'}`}>
-          <IconButton label="打开对话列表" className="md:hidden" onClick={() => setMobileListOpen(true)}><Menu className="size-4" /></IconButton>
+          <IconButton label={workbenchUI && !workbenchListCollapsed && (document.querySelector('.desktop-agent-workbench')?.clientWidth ?? 0) >= 1320 ? '收起会话列表' : '打开对话列表'} className={`md:hidden ${workbenchUI ? 'desktop-agent-workbench-list-button' : ''}`} onClick={() => {
+            if (workbenchUI && (document.querySelector('.desktop-agent-workbench')?.clientWidth ?? 0) >= 1320) setWorkbenchListCollapsed((value) => !value)
+            else { setWorkbenchPanelOpen(false); setMobileListOpen(true) }
+          }}><Menu className="size-4" /></IconButton>
           <div className={`flex min-w-0 items-center gap-2 ${desktopPresentation ? 'desktop-agent-chat-heading' : 'flex-1'}`}>
-            {desktopPresentation ? <>{renderConversationTitle()}<span className="desktop-agent-private-tag">仅本人可见</span></> : renderTitle()}
+            {desktopPresentation ? <>{renderConversationTitle()}<span className="desktop-agent-private-tag">仅本人可见</span>{workbenchUI && <span className="desktop-agent-workbench-meta">{selectedAccountName} · {workbenchStatus}</span>}</> : renderTitle()}
           </div>
           {desktopPresentation
-            ? <button type="button" className="desktop-agent-chat-settings" aria-label="对话设置" onClick={() => setSettingsOpen(true)}>对话设置 <Settings2 /></button>
+            ? workbenchUI
+              ? <button type="button" className="desktop-agent-chat-settings desktop-agent-workbench-panel-button" aria-label="任务面板" aria-expanded={workbenchPanelOpen} onClick={() => { setMobileListOpen(false); setWorkbenchPanelOpen((value) => !value) }}>任务面板 <Settings2 /></button>
+              : <button type="button" className="desktop-agent-chat-settings" aria-label="对话设置" onClick={() => setSettingsOpen(true)}>对话设置 <Settings2 /></button>
             : <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>}
         </header>
 
@@ -596,13 +742,13 @@ export default function Agent() {
           <div className={`scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-5 sm:px-6 ${desktopPresentation ? 'desktop-agent-chat-stream' : ''}`} onDragEnter={(event) => { event.preventDefault(); if (canWrite && !busy && !uploading) { dragDepth.current++; setDragging(true) } }} onDragLeave={(event) => { event.preventDefault(); dragDepth.current--; if (dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false) } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void addFiles(event.dataTransfer.files) }}>
             {detailQuery.isLoading && conversationId && <div className="mx-auto max-w-3xl py-12 text-center text-sm text-mist-400"><LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />正在加载对话…</div>}
             {detailQuery.isError && <Notice tone="red" className="mx-auto max-w-3xl">{errorMessage(detailQuery.error)} <button type="button" className="ml-2 underline" onClick={() => void detailQuery.refetch()}>重试</button></Notice>}
-            {!conversationId && !messages.length && <Welcome onPrompt={(value) => setText(value)} noModel={!bootstrapData.can_use} />}
+            {!conversationId && !messages.length && <Welcome onPrompt={(value) => setText(value)} noModel={!bootstrapData.can_use} desktopWorkbench={workbenchUI} />}
             {detail?.has_more && <div className="mx-auto mb-4 max-w-3xl text-center"><Button size="sm" variant="ghost" onClick={() => void loadOlder()}>加载更早的消息</Button></div>}
             <div className={`mx-auto flex max-w-3xl flex-col gap-4 ${desktopPresentation ? 'desktop-agent-message-column' : ''}`}>
               {messages.map((message, index) => {
                 const previous = messages[index - 1]
                 const startsDay = desktopPresentation && (!previous || splitDate(previous.created_at) !== splitDate(message.created_at))
-                return <div key={message.id}>
+                return <div key={message.id} data-message-seq={message.seq}>
                 {startsDay && <div className="desktop-agent-day">{splitDate(message.created_at)} · {messageTime(message.created_at)}</div>}
                 <MessageView message={message} lastAssistant={message.id === lastAssistant?.id} canSeeImages={selectedModelOption?.vision === true} desktopPresentation={desktopPresentation}
                   onEdit={message.id === lastUser?.id && !busy && canWrite && !message.attachments.length ? () => { setEditMessage(message); setText(message.content); setFiles([]); inputRef.current?.focus() } : undefined}
@@ -631,8 +777,8 @@ export default function Agent() {
             <div ref={bottomRef} />
           </div>
 
-          <div className={`shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4 ${desktopPresentation ? 'desktop-agent-compose-area' : ''}`}>
-            {(!desktopPresentation || !!streamError) && <RunStatus activeRun={activeRun} streamStage={streamStage} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
+          <div className={`shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4 ${desktopPresentation ? 'desktop-agent-compose-area' : ''} ${workbenchUI ? 'desktop-agent-workbench-compose-area' : ''}`}>
+            {(!desktopPresentation || workbenchUI || !!streamError) && <RunStatus activeRun={activeRun} streamStage={streamStage} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
             {!bootstrapData.can_use && (bootstrapData.reason === 'no_model' || bootstrapData.reason === 'not_tested') && <Notice tone="gamboge" className="mx-auto mb-2 max-w-3xl">{bootstrapData.reason === 'not_tested' ? '模型已经配置好了，但还没有完成能力自检。完成一次自检后就能开始对话。' : '还没有配置可用于对话的模型，请到模型配置页添加支持工具调用的模型。'}历史对话仍可查看。 <a href="/settings/models" className="underline">去模型配置</a></Notice>}
             {pendingActions > 0 && !desktopPresentation && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">等待你逐张处理 {pendingActions} 项后，智能体会继续。卡片操作入口显示在对应消息下方。</div>}
             {detail?.can_continue && !busy && !actionExecuting && pendingActions === 0 && <div className="mx-auto mb-2 max-w-3xl text-right"><Button size="sm" variant="ghost" onClick={continueRun}>继续</Button></div>}
@@ -648,8 +794,8 @@ export default function Agent() {
             </div>}
             <input ref={fileRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,.txt,.md" className="hidden" onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = '' }} />
             {desktopPresentation ? <>
-              <div className="desktop-agent-compose">
-                <Textarea ref={inputRef} rows={1} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px` }} onKeyDown={onInputKeyDown}
+              <div className={`desktop-agent-compose ${workbenchUI ? 'desktop-agent-workbench-compose' : ''}`}>
+                <Textarea ref={inputRef} rows={workbenchUI ? 3 : 1} aria-label={workbenchUI ? '发送消息' : undefined} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, workbenchUI ? 176 : 192)}px` }} onKeyDown={onInputKeyDown}
                   placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '说说你想写什么，或继续调整上面的方向…'} className="desktop-agent-compose-input" />
                 <div className="desktop-agent-compose-toolbar">
                   <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()}><Paperclip className="size-4" /></IconButton>
@@ -675,9 +821,43 @@ export default function Agent() {
         </div>
       </section>
 
+      {workbenchUI && workbenchPanelOpen && <WorkbenchSidePanel
+        tab={workbenchPanelTab}
+        setTab={setWorkbenchPanelTab}
+        close={() => setWorkbenchPanelOpen(false)}
+        conversation={conversation}
+        activeRun={activeRun}
+        busy={busy}
+        pendingActions={pendingActions}
+        actionCount={actions.length}
+        selectedAccountName={selectedAccountName}
+        selectedModelName={selectedModelName}
+        attachmentCount={attachmentCount}
+        artifactsEnabled={bootstrapData.features.artifacts === true}
+      />}
+
       <Drawer open={mobileListOpen} onClose={() => setMobileListOpen(false)} title="对话" width="w-[min(88vw,360px)]">
         <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} onClose={() => setMobileListOpen(false)} />
       </Drawer>
+      <Dialog open={localSearchOpen} onClose={() => setLocalSearchOpen(false)} title="查找当前对话" desc="搜索当前对话中所有已保存的用户与助手消息。">
+        <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void searchSavedMessages() }}>
+          <div className="flex gap-2">
+            <Input ref={localSearchInputRef} aria-label="搜索当前对话" value={localSearchText} onChange={(event) => setLocalSearchText(event.target.value)} placeholder="输入要查找的文字" disabled={localSearchBusy} />
+            <Button type="submit" variant="primary" disabled={!localSearchText.trim() || localSearchBusy}>{localSearchBusy ? '搜索中…' : '查找'}</Button>
+          </div>
+        </form>
+        {localSearchBusy && <p role="status" className="mt-3 text-[13px] text-mist-500">正在搜索已保存的消息…</p>}
+        {localSearchError && <p role="alert" className="mt-3 text-[13px] text-danger">{localSearchError}</p>}
+        {!localSearchBusy && !localSearchError && localSearchText.trim() && <p role="status" className="mt-3 text-[12px] text-mist-500">找到 {localSearchResults.length} 条消息</p>}
+        <div className="mt-3 max-h-80 space-y-1 overflow-y-auto">
+          {localSearchResults.map((message) => <button key={message.id} type="button" className="block w-full rounded-lg border border-mist-200 p-3 text-left hover:border-ink-300 hover:bg-ink-50 focus-visible:outline-2 focus-visible:outline-ink-500" onClick={() => jumpToSearchResult(message)}>
+            <span className="text-[11px] font-medium text-mist-500">{message.role === 'user' ? '你' : '助手'} · 第 {message.seq} 条</span>
+            <span className="mt-1 block whitespace-pre-wrap break-words text-[13px] leading-5 text-mist-800">{message.content.slice(0, 220)}</span>
+          </button>)}
+          {!localSearchText.trim() && <p className="py-5 text-center text-[13px] text-mist-500">输入关键词，搜索此对话的完整历史。</p>}
+          {!localSearchBusy && !localSearchError && localSearchText.trim() && !localSearchResults.length && <p className="py-5 text-center text-[13px] text-mist-500">没有匹配的消息</p>}
+        </div>
+      </Dialog>
       <Dialog open={settingsOpen} onClose={() => setSettingsOpen(false)} title="对话设置" desc="选择本对话使用的模型与操作账号。">
         <div className="space-y-4">
           <label className="block space-y-1.5 text-[13px] font-medium text-mist-700">模型
@@ -710,13 +890,13 @@ export default function Agent() {
   )
 }
 
-function Welcome({ onPrompt, noModel }: { onPrompt: (value: string) => void; noModel: boolean }) {
+function Welcome({ onPrompt, noModel, desktopWorkbench = false }: { onPrompt: (value: string) => void; noModel: boolean; desktopWorkbench?: boolean }) {
   const examples = ['这周有哪些作品还没做发布前检查？', '帮我从这段笔记里提炼素材', '给《我的文章》起 5 个标题']
-  return <div className="mx-auto flex min-h-[50%] max-w-2xl flex-col items-center justify-center py-12 text-center">
+  return <div className={`mx-auto flex min-h-[50%] max-w-2xl flex-col items-center justify-center py-12 text-center ${desktopWorkbench ? 'desktop-agent-workbench-welcome' : ''}`}>
     <div className="flex size-14 items-center justify-center rounded-2xl bg-ink-50 text-ink-600"><Bot className="size-7" /></div>
-    <h1 className="mt-4 font-display text-xl font-bold text-mist-900">有什么可以帮你？</h1>
+    <h1 className="mt-4 font-display text-xl font-bold text-mist-900">{desktopWorkbench ? '从一件具体的运营任务开始' : '有什么可以帮你？'}</h1>
     <p className="mt-2 max-w-lg text-[13px] leading-relaxed text-mist-500">可以读取工作区信息并生成建议。任何写入操作都会先列出单张卡片，由你逐张确认执行。</p>
-    {!noModel && <div className="mt-6 flex flex-wrap justify-center gap-2">{examples.map((example) => <button key={example} type="button" onClick={() => onPrompt(example)} className="cursor-pointer rounded-full border border-mist-200 bg-white px-3 py-2 text-[12px] text-mist-600 shadow-card hover:border-ink-300 hover:text-ink-700">{example}</button>)}</div>}
+    {!noModel && <div className={`mt-6 flex flex-wrap justify-center gap-2 ${desktopWorkbench ? 'desktop-agent-workbench-prompts' : ''}`}>{examples.map((example) => <button key={example} type="button" onClick={() => onPrompt(example)} className={`cursor-pointer rounded-full border border-mist-200 bg-white px-3 py-2 text-[12px] text-mist-600 shadow-card hover:border-ink-300 hover:text-ink-700 ${desktopWorkbench ? 'desktop-agent-workbench-prompt' : ''}`}>{example}</button>)}</div>}
   </div>
 }
 

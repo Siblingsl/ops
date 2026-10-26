@@ -555,6 +555,98 @@ html[data-presentation='ops-creative-desktop'] #root > div > div > main:has(.des
 html[data-presentation='ops-creative-desktop'] #root > div > div > main { padding-bottom: 30px; }
 html[data-presentation='ops-creative-desktop'] #root nav[aria-label='底部导航'] { display: none; }
 
+/* D-152 AW02：新工作台由服务端 workbench_ui 能力门控；旧桌面布局与 Web 样式保持原样。 */
+.desktop-agent-workbench {
+  container: agent-workbench / inline-size;
+  margin-inline: 23px;
+  border: 1px solid var(--ops-border);
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
+  background: var(--ops-canvas);
+  color: var(--ops-text);
+}
+.desktop-agent-workbench .desktop-agent-list { width: 248px; min-width: 248px; flex: 0 0 248px; border-color: var(--ops-border); background: var(--ops-surface); }
+.desktop-agent-workbench[data-list-collapsed='true'] .desktop-agent-list { display: none; }
+.desktop-agent-workbench .desktop-agent-list-title { margin: 0 20px 14px !important; padding-top: 20px !important; font-size: 14px !important; }
+.desktop-agent-workbench .desktop-agent-list-search { margin: 12px 13px 14px !important; }
+.desktop-agent-workbench .desktop-agent-list-search input { height: 38px; font-size: 12px; }
+.desktop-agent-workbench .desktop-agent-chat-header { height: 56px; min-height: 56px; flex-basis: 56px; border-color: var(--ops-border); padding-inline: 18px; background: var(--ops-surface); }
+.desktop-agent-workbench .desktop-agent-chat-heading { min-width: 0; gap: 10px; }
+.desktop-agent-workbench .desktop-agent-chat-heading [aria-label='对话标题'] { max-width: min(440px, 40cqw); color: var(--ops-text); font-size: 18px; line-height: 26px; }
+.desktop-agent-workbench .desktop-agent-chat-heading > span:first-of-type { font-size: 14px; }
+.desktop-agent-workbench .desktop-agent-private-tag { border: 1px solid var(--ops-border); background: var(--ops-subtle); color: var(--ops-muted); font-size: 12px; line-height: 18px; }
+.desktop-agent-workbench-meta { overflow: hidden; color: var(--ops-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-agent-workbench .desktop-agent-chat-settings { min-height: 32px; border: 1px solid var(--ops-border); padding-inline: 9px; color: var(--ops-text); font-size: 12px; }
+.desktop-agent-workbench .desktop-agent-chat-settings:hover,
+.desktop-agent-workbench .desktop-agent-chat-settings[aria-expanded='true'] { border-color: var(--ops-accent); background: var(--ops-accent-soft); color: var(--ops-accent); }
+.desktop-agent-workbench .desktop-agent-chat-stream { display: flex; flex-direction: column; background: var(--ops-canvas); padding: 22px 24px 18px !important; }
+.desktop-agent-workbench .desktop-agent-message-column { width: 100%; max-width: 880px; padding: 12px 0 20px; }
+.desktop-agent-workbench .desktop-agent-message { margin-bottom: 24px; }
+.desktop-agent-workbench .desktop-agent-message-bubble { color: var(--ops-text); font-size: 14px !important; line-height: 24px !important; }
+.desktop-agent-workbench .desktop-agent-user-content { max-width: 84%; padding: 12px 16px; font-size: 14px !important; line-height: 24px !important; }
+.desktop-agent-workbench .desktop-agent-message-footer { color: var(--ops-muted); }
+.desktop-agent-workbench-compose-area { border-color: var(--ops-border); padding: 12px 24px 16px; background: var(--ops-canvas); }
+.desktop-agent-workbench .desktop-agent-compose { max-width: 880px; border-color: var(--ops-border); border-radius: 16px; padding: 12px 14px; background: var(--ops-surface); box-shadow: none; }
+.desktop-agent-workbench .desktop-agent-compose-input { height: 66px !important; min-height: 66px !important; max-height: 176px; overflow-y: auto; padding: 3px 2px !important; color: var(--ops-text); font-size: 14px; line-height: 22px; }
+.desktop-agent-workbench .desktop-agent-compose-input::placeholder { color: var(--ops-muted); opacity: 1; }
+.desktop-agent-workbench .desktop-agent-compose-toolbar { min-height: 36px; margin-top: 6px; }
+.desktop-agent-workbench .desktop-agent-compose-choice { min-height: 32px; padding-inline: 9px; color: var(--ops-muted); font-size: 12px; }
+.desktop-agent-workbench .desktop-agent-compose-note { margin-top: 7px; color: var(--ops-muted); font-size: 12px; }
+.desktop-agent-workbench .desktop-agent-workbench-list-button { display: inline-flex; min-width: 32px; min-height: 32px; align-items: center; justify-content: center; }
+.desktop-agent-workbench .desktop-agent-workbench-compose-area [role='status'] { max-width: 880px; border: 1px solid var(--ops-border); background: var(--ops-surface); color: var(--ops-text); }
+.desktop-agent-workbench .desktop-agent-side-panel { display: flex; width: 360px; min-width: 320px; max-width: 480px; flex: 0 0 360px; flex-direction: column; border-left: 1px solid var(--ops-border); background: var(--ops-surface); color: var(--ops-text); }
+.desktop-agent-side-panel-heading { flex: 0 0 auto; border-bottom: 1px solid var(--ops-border); padding: 14px 16px 0; }
+.desktop-agent-side-panel-heading > div:first-child { display: flex; min-height: 32px; align-items: center; justify-content: space-between; }
+.desktop-agent-side-panel-heading h2 { margin: 0; color: var(--ops-text); font-size: 14px; font-weight: 650; }
+.desktop-agent-side-tabs { display: flex; gap: 20px; margin-top: 9px; }
+.desktop-agent-side-tabs button { min-height: 36px; border: 0; border-bottom: 2px solid transparent; padding: 0 2px; background: transparent; color: var(--ops-muted); cursor: pointer; font: inherit; font-size: 13px; }
+.desktop-agent-side-tabs button[aria-selected='true'] { border-bottom-color: var(--ops-accent); color: var(--ops-accent); font-weight: 600; }
+.desktop-agent-side-content { min-height: 0; flex: 1; overflow-y: auto; padding: 20px 16px; }
+.desktop-agent-side-content h3 { margin: 0 0 12px; color: var(--ops-text); font-size: 13px; font-weight: 650; }
+.desktop-agent-side-status { display: flex; align-items: center; gap: 8px; border-radius: 10px; padding: 11px 12px; background: var(--ops-subtle); color: var(--ops-text); font-size: 13px; line-height: 20px; }
+.desktop-agent-side-detail, .desktop-agent-side-note { color: var(--ops-muted); font-size: 12px; line-height: 19px; }
+.desktop-agent-side-note { margin-top: 12px; border-left: 2px solid var(--ops-border); padding-left: 10px; }
+.desktop-agent-context-list { margin: 0; }
+.desktop-agent-context-list > div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; border-bottom: 1px solid var(--ops-border); padding: 11px 0; font-size: 12px; line-height: 18px; }
+.desktop-agent-context-list dt { color: var(--ops-muted); }
+.desktop-agent-context-list dd { overflow-wrap: anywhere; margin: 0; color: var(--ops-text); }
+.desktop-agent-workbench-prompt { min-height: 44px; border-color: var(--ops-border) !important; border-radius: 12px !important; background: var(--ops-surface) !important; color: var(--ops-text) !important; font-size: 13px !important; line-height: 20px; text-align: left; }
+.desktop-agent-workbench .desktop-agent-workbench-welcome { width: 100%; max-width: 880px; min-height: 0; align-items: flex-start; justify-content: flex-start; margin: auto auto 14px; padding: 12px 0 0; text-align: left; }
+.desktop-agent-workbench-welcome > div:first-child { width: 40px; height: 40px; border-radius: 12px; }
+.desktop-agent-workbench-welcome h1 { margin-top: 0; color: var(--ops-text); font-family: var(--font-sans); font-size: 20px; line-height: 28px; }
+.desktop-agent-workbench-welcome p { max-width: 650px; color: var(--ops-muted); font-size: 13px; line-height: 20px; }
+.desktop-agent-workbench-welcome .desktop-agent-workbench-prompts { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); justify-content: stretch; gap: 9px; margin-top: 14px; }
+.desktop-agent-workbench .desktop-agent-workbench-prompt:focus-visible,
+.desktop-agent-workbench .desktop-agent-compose-input:focus-visible,
+.desktop-agent-workbench .desktop-agent-chat-settings:focus-visible,
+.desktop-agent-workbench .desktop-agent-side-tabs button:focus-visible { outline: 2px solid var(--ops-accent); outline-offset: 2px; }
+.desktop-agent-workbench .desktop-agent-message-column:empty { display: none; }
+@container agent-workbench (min-width: 1000px) and (max-width: 1319px) {
+  .desktop-agent-workbench[data-panel-open='true'] .desktop-agent-list { display: none; }
+  .desktop-agent-workbench .desktop-agent-side-panel { width: 320px; min-width: 320px; flex-basis: 320px; }
+}
+@container agent-workbench (max-width: 999px) {
+  .desktop-agent-workbench .desktop-agent-list { display: none; }
+  .desktop-agent-workbench .desktop-agent-workbench-list-button { display: inline-flex; }
+  .desktop-agent-workbench .desktop-agent-side-panel { position: absolute; z-index: 25; inset-block: 0; right: 0; width: min(440px, calc(100cqw - 48px)); min-width: min(320px, calc(100cqw - 24px)); max-width: 440px; box-shadow: var(--ops-soft-shadow); }
+  .desktop-agent-workbench[data-panel-open='true'] .desktop-agent-chat-stream { pointer-events: none; }
+}
+@container agent-workbench (max-width: 719px) {
+  .desktop-agent-workbench { margin-inline: 0; border-right: 0; border-left: 0; border-radius: 0; }
+  .desktop-agent-workbench .desktop-agent-chat-header { gap: 8px; padding-inline: 10px; }
+  .desktop-agent-workbench .desktop-agent-chat-heading [aria-label='对话标题'] { max-width: 42cqw; font-size: 16px; }
+  .desktop-agent-workbench-meta { display: none; }
+  .desktop-agent-workbench .desktop-agent-chat-stream { padding: 12px 12px 10px !important; }
+  .desktop-agent-workbench .desktop-agent-message-column { padding-top: 6px; }
+  .desktop-agent-workbench-compose-area { padding: 8px 10px calc(env(safe-area-inset-bottom) + 12px); }
+  .desktop-agent-workbench .desktop-agent-workbench-welcome { padding-top: 12px; }
+  .desktop-agent-workbench-welcome .desktop-agent-workbench-prompts { grid-template-columns: 1fr; }
+  .desktop-agent-workbench .desktop-agent-side-panel { inset: 0; width: 100%; min-width: 0; max-width: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .desktop-agent-workbench *, .desktop-agent-workbench *::before, .desktop-agent-workbench *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+}
+
 @media (max-width: 1200px) {
   .desktop-home-grid { grid-template-columns: minmax(0, 1fr) 250px; gap: 16px; }
   .desktop-creation-feature { grid-template-columns: minmax(0, 1fr) 155px; padding: 21px; }
