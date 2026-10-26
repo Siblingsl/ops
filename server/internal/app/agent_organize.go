@@ -183,16 +183,28 @@ func (s *Server) markAgentConversationRead(w http.ResponseWriter, r *http.Reques
 	id := ident(r.Context())
 	var in struct {
 		UptoMessageSeq *int64 `json:"upto_message_seq"`
+		UptoEventSeq   *int64 `json:"upto_event_seq"`
 		Unread         *bool  `json:"unread"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
-	if (in.UptoMessageSeq == nil) == (in.Unread == nil) || (in.Unread != nil && !*in.Unread) {
-		return validation("标读需提供 upto_message_seq 或 unread:true")
+	markers := 0
+	for _, provided := range []bool{in.UptoMessageSeq != nil, in.UptoEventSeq != nil, in.Unread != nil} {
+		if provided {
+			markers++
+		}
 	}
-	if in.UptoMessageSeq != nil && *in.UptoMessageSeq < 0 {
+	if markers != 1 || (in.Unread != nil && !*in.Unread) {
+		return validation("标读需提供一个序号或 unread:true")
+	}
+	if in.UptoMessageSeq != nil && *in.UptoMessageSeq < 0 || in.UptoEventSeq != nil && *in.UptoEventSeq < 0 {
 		return validation("消息序号无效")
+	}
+	if in.UptoEventSeq != nil {
+		if err := requireAgentFeature("event_resume"); err != nil {
+			return err
+		}
 	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
@@ -207,7 +219,18 @@ func (s *Server) markAgentConversationRead(w http.ResponseWriter, r *http.Reques
 		}
 		return err
 	}
-	if in.UptoMessageSeq != nil {
+	if in.UptoEventSeq != nil {
+		var maximum int64
+		if err := tx.QueryRow(r.Context(), `SELECT next_event_seq FROM agent_conversation WHERE id=$1`, cid).Scan(&maximum); err != nil {
+			return err
+		}
+		if *in.UptoEventSeq > maximum {
+			return apiErr(422, "validation_failed", "不能标读尚未保存的事件")
+		}
+		_, err = tx.Exec(r.Context(), `UPDATE agent_conversation SET read_upto_event_seq=greatest(read_upto_event_seq,$4),
+			force_unread=false,revision=revision+1,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND user_id=$3`,
+			cid, id.WorkspaceID, id.UserID, *in.UptoEventSeq)
+	} else if in.UptoMessageSeq != nil {
 		var maximum int64
 		if err := tx.QueryRow(r.Context(), `SELECT coalesce(max(seq),0) FROM agent_message WHERE conversation_id=$1`, cid).Scan(&maximum); err != nil {
 			return err
@@ -216,6 +239,9 @@ func (s *Server) markAgentConversationRead(w http.ResponseWriter, r *http.Reques
 			return validation("不能标读尚未保存的消息")
 		}
 		_, err = tx.Exec(r.Context(), `UPDATE agent_conversation SET read_upto_message_seq=greatest(read_upto_message_seq,$4),
+			read_upto_event_seq=greatest(read_upto_event_seq,coalesce((SELECT max(e.event_seq) FROM agent_event e
+				WHERE e.conversation_id=agent_conversation.id AND e.type='message.saved'
+				AND (e.payload->>'seq')::bigint<=$4),read_upto_event_seq)),
 			force_unread=false,revision=revision+1,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND user_id=$3`,
 			cid, id.WorkspaceID, id.UserID, *in.UptoMessageSeq)
 	} else {
@@ -233,13 +259,21 @@ func (s *Server) markAgentConversationRead(w http.ResponseWriter, r *http.Reques
 		return err
 	}
 	var unread bool
-	if err := s.db.QueryRow(r.Context(), `SELECT c.force_unread OR EXISTS (SELECT 1 FROM agent_message m
+	readEventMode := agentWorkbenchFeatures()["event_resume"]
+	query := `SELECT c.force_unread OR EXISTS (SELECT 1 FROM agent_message m
 		WHERE m.conversation_id=c.id AND m.role IN ('assistant','action_result','system_note') AND m.seq>c.read_upto_message_seq)
-		FROM agent_conversation c WHERE c.id=$1 AND c.workspace_id=$2 AND c.user_id=$3`, cid, id.WorkspaceID, id.UserID).Scan(&unread); err != nil {
+		FROM agent_conversation c WHERE c.id=$1 AND c.workspace_id=$2 AND c.user_id=$3`
+	if readEventMode {
+		query = `SELECT c.force_unread OR EXISTS (SELECT 1 FROM agent_event e WHERE e.conversation_id=c.id
+			AND e.type='message.saved' AND e.payload->>'role' IN ('assistant','action_result','system_note')
+			AND e.event_seq>c.read_upto_event_seq) FROM agent_conversation c
+			WHERE c.id=$1 AND c.workspace_id=$2 AND c.user_id=$3`
+	}
+	if err := s.db.QueryRow(r.Context(), query, cid, id.WorkspaceID, id.UserID).Scan(&unread); err != nil {
 		return err
 	}
 	return ok(w, map[string]any{"conversation_id": cid, "read_upto_message_seq": c.ReadUptoMessageSeq,
-		"force_unread": c.ForceUnread, "has_unread": unread, "revision": c.Revision})
+		"read_upto_event_seq": in.UptoEventSeq, "force_unread": c.ForceUnread, "has_unread": unread, "revision": c.Revision})
 }
 
 type agentMessageSearchCursor struct {

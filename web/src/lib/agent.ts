@@ -1,5 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { get } from './api'
+import type { AgentRunEnd } from './agent-events'
+export { streamAgentEvents } from './agent-events'
+export type { AgentRunAcceptance, AgentRunEnd, AgentEventEnvelope } from './agent-events'
 
 export interface AgentModel {
   provider_id: string
@@ -117,6 +120,7 @@ export interface AgentSkillUsage {
 export interface AgentMessage {
   id: string
   seq: number
+  message_key?: string
   role: 'user' | 'assistant' | 'system'
   content: string
   tool_calls: AgentToolCall[]
@@ -169,8 +173,13 @@ export interface AgentConversationDetail {
   messages: AgentMessage[]
   actions: AgentAction[]
   active_run: AgentActiveRun | null
+  last_run?: (AgentActiveRun & AgentRunEnd) | null
   can_continue: boolean
   has_more: boolean
+  last_event_seq?: number
+  read_upto_event_seq?: number
+  has_unread?: boolean
+  partial_output?: { run_id: string; message_key: string; text: string; chunk_index: number; complete: false } | null
 }
 
 export interface AgentArtifactSummary {

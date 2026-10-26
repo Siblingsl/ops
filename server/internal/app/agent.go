@@ -409,6 +409,13 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 	}
 	args := []any{id.WorkspaceID, id.UserID}
 	where := ` AND c.archived_at IS NULL`
+	unreadSQL := `(c.force_unread OR EXISTS (SELECT 1 FROM agent_message um WHERE um.conversation_id=c.id
+		AND um.role IN ('assistant','action_result','system_note') AND um.seq>c.read_upto_message_seq))`
+	if agentWorkbenchFeatures()["event_resume"] {
+		unreadSQL = `(c.force_unread OR EXISTS (SELECT 1 FROM agent_event ue WHERE ue.conversation_id=c.id
+			AND ue.type='message.saved' AND ue.payload->>'role' IN ('assistant','action_result','system_note')
+			AND ue.event_seq>c.read_upto_event_seq))`
+	}
 	q := truncateRunes(queryText(r, "q"), 100)
 	join := ""
 	matchedIDSQL, matchedSeqSQL, matchedSnippetSQL := `NULL::uuid`, `NULL::bigint`, `''::text`
@@ -479,8 +486,7 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 		case "needs_action":
 			where += ` AND EXISTS (SELECT 1 FROM agent_action a WHERE a.conversation_id=c.id AND a.status IN ('pending','needs_input'))`
 		case "unread":
-			where += ` AND (c.force_unread OR EXISTS (SELECT 1 FROM agent_message um WHERE um.conversation_id=c.id
-				AND um.role IN ('assistant','action_result','system_note') AND um.seq>c.read_upto_message_seq))`
+			where += ` AND ` + unreadSQL
 		default:
 			return validation("对话状态筛选无效")
 		}
@@ -502,8 +508,7 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 	rows, err := s.db.Query(ctx, `SELECT `+agentConversationCols+`,
 		(SELECT count(*) FROM agent_action a WHERE a.conversation_id=c.id AND a.status IN ('pending','needs_input')),
 		EXISTS (SELECT 1 FROM agent_run r WHERE r.conversation_id=c.id AND r.status IN ('queued','running')),
-		(c.force_unread OR EXISTS (SELECT 1 FROM agent_message um WHERE um.conversation_id=c.id
-			AND um.role IN ('assistant','action_result','system_note') AND um.seq>c.read_upto_message_seq)),
+		`+unreadSQL+`,
 		`+matchedIDSQL+`, `+matchedSeqSQL+`, `+matchedSnippetSQL+`
 		FROM agent_conversation c`+join+`
 		WHERE c.workspace_id=$1 AND c.user_id=$2`+where+fmt.Sprintf(`
@@ -635,6 +640,13 @@ func (s *Server) createAgentConversation(w http.ResponseWriter, r *http.Request)
 		read_upto_message_seq, force_unread`,
 		id.WorkspaceID, id.UserID, title, source, accountID, providerID, model))
 	if err != nil {
+		return err
+	}
+	baselineSeq, err := appendAgentEventTx(ctx, tx, c.ID, nil, "conversation.updated", map[string]any{"snapshot_baseline": true}, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_conversation SET read_upto_event_seq=$2 WHERE id=$1`, c.ID, baselineSeq); err != nil {
 		return err
 	}
 	if requestID != uuid.Nil {
@@ -934,6 +946,7 @@ type agentSkillUsageView struct {
 type agentMessageView struct {
 	ID            uuid.UUID               `json:"id"`
 	Seq           int                     `json:"seq"`
+	MessageKey    string                  `json:"message_key,omitempty"`
 	Role          string                  `json:"role"`
 	Content       string                  `json:"content"`
 	AICallID      *uuid.UUID              `json:"ai_call_id"`
@@ -1005,6 +1018,8 @@ type agentActiveRun struct {
 	ModelProviderID *uuid.UUID `json:"model_provider_id"`
 	Model           string     `json:"model"`
 	StartedAt       time.Time  `json:"started_at"`
+	Reason          string     `json:"reason,omitempty"`
+	ErrorCode       string     `json:"error_code,omitempty"`
 }
 
 func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Request) error {
@@ -1017,49 +1032,105 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return err
 	}
-	// 读取时的惰性过期判断（第 5.9 节第 2 项）。
+	// 惰性过期先提交，再以同一个只读快照读取消息、partial、卡片和事件水位。
 	if _, err := s.db.Exec(ctx, `UPDATE agent_action SET status='expired'
 		WHERE conversation_id=$1 AND status IN ('pending','needs_input') AND expires_at < now()`, c.ID); err != nil {
 		return err
 	}
-	messages, hasMore, err := s.agentMessages(ctx, c.ID, queryInt(r, "before_seq", 0))
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return err
 	}
-	actions, err := s.agentActions(ctx, c.ID)
+	defer tx.Rollback(ctx)
+	c, err = scanAgentConversation(tx.QueryRow(ctx, `SELECT `+agentConversationCols+` FROM agent_conversation c
+		WHERE c.id=$1 AND c.workspace_id=$2 AND c.user_id=$3`, cid, ident(ctx).WorkspaceID, ident(ctx).UserID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errNotFound
+	}
 	if err != nil {
 		return err
 	}
-	active, err := s.agentActiveRunOf(ctx, c.ID)
+	var lastEventSeq, readUptoEventSeq int64
+	var partial map[string]any
+	var partialRunID *uuid.UUID
+	var partialMessageKey *string
+	var partialOutput *string
+	var partialChunkIndex *int
+	var partialUpdatedAt *time.Time
+	if err := tx.QueryRow(ctx, `SELECT c.next_event_seq,c.read_upto_event_seq,r.id,r.partial_message_key,r.partial_output,
+		r.partial_chunk_index,r.partial_updated_at FROM agent_conversation c LEFT JOIN LATERAL (
+			SELECT * FROM agent_run WHERE conversation_id=c.id ORDER BY started_at DESC,id DESC LIMIT 1
+		) r ON true
+		WHERE c.id=$1 AND c.workspace_id=$2 AND c.user_id=$3`, c.ID,
+		ident(ctx).WorkspaceID, ident(ctx).UserID).Scan(&lastEventSeq, &readUptoEventSeq, &partialRunID,
+		&partialMessageKey, &partialOutput, &partialChunkIndex, &partialUpdatedAt); err != nil {
+		return err
+	}
+	if partialRunID != nil && partialMessageKey != nil && partialOutput != nil && *partialOutput != "" {
+		partial = map[string]any{"run_id": partialRunID, "message_key": *partialMessageKey,
+			"text": *partialOutput, "chunk_index": partialChunkIndex, "updated_at": partialUpdatedAt,
+			"complete": false}
+	}
+	var hasUnread bool
+	unreadQuery := `SELECT c.force_unread OR EXISTS (SELECT 1 FROM agent_message m WHERE m.conversation_id=c.id
+		AND m.role IN ('assistant','action_result','system_note') AND m.seq>c.read_upto_message_seq)
+		FROM agent_conversation c WHERE c.id=$1 AND c.workspace_id=$2 AND c.user_id=$3`
+	if agentWorkbenchFeatures()["event_resume"] {
+		unreadQuery = `SELECT c.force_unread OR EXISTS (SELECT 1 FROM agent_event e WHERE e.conversation_id=c.id
+			AND e.type='message.saved' AND e.payload->>'role' IN ('assistant','action_result','system_note')
+			AND e.event_seq>c.read_upto_event_seq) FROM agent_conversation c
+			WHERE c.id=$1 AND c.workspace_id=$2 AND c.user_id=$3`
+	}
+	if err := tx.QueryRow(ctx, unreadQuery, c.ID, ident(ctx).WorkspaceID, ident(ctx).UserID).Scan(&hasUnread); err != nil {
+		return err
+	}
+	messages, hasMore, err := s.agentMessages(ctx, tx, c.ID, queryInt(r, "before_seq", 0))
 	if err != nil {
 		return err
+	}
+	actions, err := s.agentActions(ctx, tx, c.ID)
+	if err != nil {
+		return err
+	}
+	latest, err := s.agentLatestRunOf(ctx, tx, c.ID)
+	if err != nil {
+		return err
+	}
+	active := latest
+	if active != nil && active.Status != "queued" && active.Status != "running" {
+		active = nil
 	}
 	var usage struct {
 		PromptTokens     int64 `json:"prompt_tokens"`
 		CompletionTokens int64 `json:"completion_tokens"`
 	}
-	if err := s.db.QueryRow(ctx, `SELECT coalesce(sum(prompt_tokens),0), coalesce(sum(completion_tokens),0)
+	if err := tx.QueryRow(ctx, `SELECT coalesce(sum(prompt_tokens),0), coalesce(sum(completion_tokens),0)
 		FROM agent_run WHERE conversation_id=$1`, c.ID).Scan(&usage.PromptTokens, &usage.CompletionTokens); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	return ok(w, map[string]any{
 		"conversation": c, "messages": messages, "actions": actions, "usage": usage,
-		"active_run": active, "has_more": hasMore,
-		"can_continue": s.agentConversationCanContinue(ctx, c),
+		"active_run": active, "last_run": latest, "has_more": hasMore,
+		"can_continue":   s.agentConversationCanContinue(ctx, c),
+		"last_event_seq": lastEventSeq, "read_upto_event_seq": readUptoEventSeq,
+		"partial_output": partial, "has_unread": hasUnread,
 	})
 }
 
 // agentMessages 返回窗口内的消息；role=tool 不单独列出，而是折叠为助手消息的工具调用摘要（第 11.2 节）。
-func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int) ([]agentMessageView, bool, error) {
+func (s *Server) agentMessages(ctx context.Context, tx pgx.Tx, convID uuid.UUID, before int) ([]agentMessageView, bool, error) {
 	args := []any{convID}
-	sql := `SELECT id, seq, role, content, ai_call_id, tool_calls, tool_call_id, attachment_ids, context_refs, skill_requests, run_id, created_at
+	sql := `SELECT id, seq, message_key, role, content, ai_call_id, tool_calls, tool_call_id, attachment_ids, context_refs, skill_requests, run_id, created_at
 		FROM agent_message WHERE conversation_id=$1`
 	if before > 0 {
 		args = append(args, before)
 		sql += ` AND seq < $2`
 	}
 	args = append(args, agentMessagePage+1)
-	rows, err := s.db.Query(ctx, sql+fmt.Sprintf(` ORDER BY seq DESC LIMIT $%d`, len(args)), args...)
+	rows, err := tx.Query(ctx, sql+fmt.Sprintf(` ORDER BY seq DESC LIMIT $%d`, len(args)), args...)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1077,7 +1148,7 @@ func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int
 	for rows.Next() {
 		var m rawMessage
 		var toolCalls []byte
-		if err := rows.Scan(&m.view.ID, &m.view.Seq, &m.view.Role, &m.view.Content, &m.view.AICallID, &toolCalls,
+		if err := rows.Scan(&m.view.ID, &m.view.Seq, &m.view.MessageKey, &m.view.Role, &m.view.Content, &m.view.AICallID, &toolCalls,
 			&m.toolID, &m.ids, &m.contextRefs, &m.skillRequests, &m.view.RunID, &m.view.CreatedAt); err != nil {
 			rows.Close()
 			return nil, false, err
@@ -1108,7 +1179,7 @@ func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int
 	if hasMore {
 		raw = raw[:agentMessagePage]
 	}
-	attachments, err := s.agentAttachments(ctx, attachmentIDs)
+	attachments, err := s.agentAttachments(ctx, tx, attachmentIDs)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1121,7 +1192,7 @@ func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int
 		m.view.ToolCalls = agentToolCallsOf(m.raw, toolResults)
 		m.view.Attachments = []agentAttachmentView{}
 		if m.view.AICallID != nil {
-			m.view.SkillUsage, err = s.agentAICallSkillUsage(ctx, *m.view.AICallID)
+			m.view.SkillUsage, err = s.agentAICallSkillUsage(ctx, tx, *m.view.AICallID)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1162,10 +1233,10 @@ func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int
 	return list, hasMore, nil
 }
 
-func (s *Server) agentAICallSkillUsage(ctx context.Context, callID uuid.UUID) ([]agentSkillUsageView, error) {
+func (s *Server) agentAICallSkillUsage(ctx context.Context, tx pgx.Tx, callID uuid.UUID) ([]agentSkillUsageView, error) {
 	var sharedRaw, privateRaw []byte
 	var ownerID *uuid.UUID
-	if err := s.db.QueryRow(ctx, `SELECT context_refs,private_context_refs,context_owner_user_id
+	if err := tx.QueryRow(ctx, `SELECT context_refs,private_context_refs,context_owner_user_id
 		FROM ai_call WHERE id=$1`, callID).Scan(&sharedRaw, &privateRaw, &ownerID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return []agentSkillUsageView{}, nil
@@ -1235,12 +1306,12 @@ func firstLine(s string) string {
 	return s
 }
 
-func (s *Server) agentAttachments(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]agentAttachmentView, error) {
+func (s *Server) agentAttachments(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) (map[uuid.UUID]agentAttachmentView, error) {
 	out := map[uuid.UUID]agentAttachmentView{}
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := s.db.Query(ctx, `SELECT id, kind, name, mime, bytes, width, height FROM agent_attachment
+	rows, err := tx.Query(ctx, `SELECT id, kind, name, mime, bytes, width, height FROM agent_attachment
 		WHERE id = ANY($1) AND user_id=$2`, ids, ident(ctx).UserID)
 	if err != nil {
 		return nil, err
@@ -1257,8 +1328,8 @@ func (s *Server) agentAttachments(ctx context.Context, ids []uuid.UUID) (map[uui
 	return out, rows.Err()
 }
 
-func (s *Server) agentActions(ctx context.Context, convID uuid.UUID) ([]agentActionView, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, run_id, tool_name, kind, gate, status, target_type, target_id, work_id,
+func (s *Server) agentActions(ctx context.Context, tx pgx.Tx, convID uuid.UUID) ([]agentActionView, error) {
+	rows, err := tx.Query(ctx, `SELECT id, run_id, tool_name, kind, gate, status, target_type, target_id, work_id,
 		preview, editable_fields, blank_fields, need, result, error, last_error, expires_at, batch_id, created_at
 		FROM agent_action WHERE conversation_id=$1 ORDER BY created_at, id`, convID)
 	if err != nil {
@@ -1347,12 +1418,12 @@ func jsonOrNil(raw []byte) any {
 	return v
 }
 
-func (s *Server) agentActiveRunOf(ctx context.Context, convID uuid.UUID) (*agentActiveRun, error) {
+func (s *Server) agentLatestRunOf(ctx context.Context, tx pgx.Tx, convID uuid.UUID) (*agentActiveRun, error) {
 	var run agentActiveRun
-	err := s.db.QueryRow(ctx, `SELECT id, status, stage, trigger, model_provider_id, model, started_at
-		FROM agent_run WHERE conversation_id=$1 AND status IN ('queued','running')
+	err := tx.QueryRow(ctx, `SELECT id, status, stage, trigger, model_provider_id, model, started_at,reason,error_code
+		FROM agent_run WHERE conversation_id=$1
 		ORDER BY started_at DESC LIMIT 1`, convID).Scan(&run.ID, &run.Status, &run.Stage, &run.Trigger,
-		&run.ModelProviderID, &run.Model, &run.StartedAt)
+		&run.ModelProviderID, &run.Model, &run.StartedAt, &run.Reason, &run.ErrorCode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -1423,6 +1494,7 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Get("/agent/conversations/{id}/search", s.h(s.searchAgentConversationMessages))
 		r.Get("/agent/conversations/{id}/artifacts", s.h(s.listAgentArtifacts))
 		r.Get("/agent/artifacts/{id}", s.h(s.getAgentArtifact))
+		r.Get("/agent/conversations/{id}/events", s.h(s.getAgentConversationEvents))
 		r.Get("/agent/context-candidates", s.h(s.getAgentContextCandidates))
 		r.Post("/agent/context-preview", s.h(s.postAgentContextPreview))
 		r.Get("/agent/settings", s.h(s.getAgentSettings))

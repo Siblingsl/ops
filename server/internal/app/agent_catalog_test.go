@@ -157,6 +157,8 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/context-preview",
 		"GET /api/v1/agent/conversations/{id}/artifacts",
 		"GET /api/v1/agent/artifacts/{id}",
+		// DEV-AW06 本人页面只读事件回放，不作为模型工具。
+		"GET /api/v1/agent/conversations/{id}/events",
 		"GET /api/v1/auth/me",
 		"POST /api/v1/auth/renew",
 		"GET /api/v1/notifications/stream",

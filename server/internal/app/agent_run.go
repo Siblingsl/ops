@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -21,16 +22,17 @@ import (
 
 // agentRunState 是一次运行在内存中的状态（第 6.1 节）。
 type agentRunState struct {
-	RunID          uuid.UUID
-	ConversationID uuid.UUID
-	WorkspaceID    uuid.UUID
-	UserID         uuid.UUID
-	SessionID      uuid.UUID
-	Trigger        string // message | continue | regenerate | edit
-	AccountID      *uuid.UUID
-	Model          agentModelRef
-	ProviderName   string
-	Vision         bool
+	RunID           uuid.UUID
+	ConversationID  uuid.UUID
+	WorkspaceID     uuid.UUID
+	UserID          uuid.UUID
+	SessionID       uuid.UUID
+	Trigger         string // message | continue | regenerate | edit
+	ProtocolVersion int
+	AccountID       *uuid.UUID
+	Model           agentModelRef
+	ProviderName    string
+	Vision          bool
 
 	// 第 6.5 节的运行内计数。
 	Rounds           int
@@ -55,6 +57,13 @@ type agentRunState struct {
 	// ErrCode、ErrMsg 是运行失败时写入 agent_run 的错误（第 11.6 节）。
 	ErrCode string
 	ErrMsg  string
+
+	MessageKey        string
+	PartialOutput     string
+	PartialChunkIndex int
+	DeltaEventCount   int
+	StartEventSeq     int64
+	LastSnapshotAt    time.Time
 }
 
 // agentModelPayload 是一轮模型调用的输入（不含系统规则，由 agent_context.go 组装）。
@@ -356,6 +365,9 @@ func (s *Server) streamAgentRound(ctx context.Context, st *agentRunState, rt *ro
 			send("delta", map[string]string{"text": d})
 		}
 	})
+	if send != nil {
+		send("delta_flush", nil)
+	}
 	var timeoutErr error
 	if desktopTimeout != nil {
 		timeoutErr = desktopTimeout.Error()
@@ -506,6 +518,9 @@ func (s *Server) agentRunError(st *agentRunState, err error) {
 func (s *Server) agentRound(ctx context.Context, st *agentRunState, rt *route, id *identity,
 	send func(string, any)) (agentRoundResult, error) {
 	st.Rounds++
+	st.MessageKey = st.RunID.String() + ":" + strconv.Itoa(st.Rounds)
+	st.PartialOutput = ""
+	st.PartialChunkIndex = 0
 	if send != nil {
 		send("stage", map[string]string{"stage": "thinking"})
 	}
@@ -546,6 +561,9 @@ func (s *Server) agentRound(ctx context.Context, st *agentRunState, rt *route, i
 // 本次把它计入轮次（消耗模型输出），已在 90 文档登记。
 func (s *Server) agentExplanationRound(ctx context.Context, st *agentRunState, rt *route,
 	send func(string, any)) (string, error) {
+	st.MessageKey = st.RunID.String() + ":explanation:" + strconv.Itoa(st.Rounds)
+	st.PartialOutput = ""
+	st.PartialChunkIndex = 0
 	msgs, err := s.agentBuildMessages(ctx, st, ident(ctx))
 	if err != nil {
 		return "", err
@@ -567,18 +585,44 @@ func (s *Server) agentInsertMessage(ctx context.Context, st *agentRunState, role
 	if attachments == nil {
 		attachments = []uuid.UUID{}
 	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
 	var seq int
-	if err := s.db.QueryRow(ctx, `UPDATE agent_conversation
+	if err := tx.QueryRow(ctx, `UPDATE agent_conversation
 		SET next_seq = next_seq + 1, last_message_at = now(), updated_at = now()
 		WHERE id=$1 RETURNING next_seq`, st.ConversationID).Scan(&seq); err != nil {
 		return nil, err
 	}
-	view := agentMessageView{Seq: seq, Role: role, Content: content, AICallID: callID, RunID: &st.RunID}
-	if err := s.db.QueryRow(ctx, `INSERT INTO agent_message
-		(conversation_id, seq, run_id, role, content, tool_calls, tool_call_id, tool_name, attachment_ids, ai_call_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, created_at`,
-		st.ConversationID, seq, st.RunID, role, content, toolCalls, toolCallID, toolName, attachments, callID).
+	messageKey := ""
+	if role == "assistant" {
+		messageKey = st.MessageKey
+	}
+	view := agentMessageView{Seq: seq, Role: role, Content: content, AICallID: callID, RunID: &st.RunID,
+		MessageKey: messageKey}
+	if err := tx.QueryRow(ctx, `INSERT INTO agent_message
+		(conversation_id, seq, run_id, role, content, tool_calls, tool_call_id, tool_name, attachment_ids, ai_call_id, message_key)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id, created_at`,
+		st.ConversationID, seq, st.RunID, role, content, toolCalls, toolCallID, toolName, attachments, callID, messageKey).
 		Scan(&view.ID, &view.CreatedAt); err != nil {
+		return nil, err
+	}
+	if role == "assistant" || role == "action_result" || role == "system_note" || role == "user" {
+		if _, err := appendAgentEventTx(ctx, tx, st.ConversationID, &st.RunID, "message.saved", map[string]any{
+			"message_id": view.ID, "seq": view.Seq, "role": role, "content": content, "message_key": messageKey,
+		}, nil); err != nil {
+			return nil, err
+		}
+	}
+	if role == "assistant" {
+		if _, err := tx.Exec(ctx, `UPDATE agent_run SET partial_message_key='',partial_output='',partial_chunk_index=0,
+			partial_updated_at=NULL WHERE id=$1`, st.RunID); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	view.Attachments = []agentAttachmentView{}
@@ -811,12 +855,28 @@ func agentToolSummary(model []byte) string {
 // finishAgentRun 更新 agent_run 的终态、写回 loaded_domains，并在有客户端时发送 done。
 func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, reason string, send func(string, any)) {
 	finished := time.Now()
-	_ = s.db.QueryRow(context.WithoutCancel(ctx), `UPDATE agent_run SET status=$2, stage=$3, reason=$4,
+	finishCtx := context.WithoutCancel(ctx)
+	tx, txErr := s.db.Begin(finishCtx)
+	if txErr == nil {
+		defer tx.Rollback(finishCtx)
+		txErr = tx.QueryRow(finishCtx, `UPDATE agent_run SET status=$2, stage=$3, reason=$4,
 		rounds=$5, read_calls=$6, generate_calls=$7, actions_proposed=$8, prompt_tokens=$9,
 		completion_tokens=$10, external_read=$11, error_code=$12, error_message=$13, finished_at=$14
 		WHERE id=$1 RETURNING finished_at`, st.RunID, status, status, reason,
-		st.Rounds, st.ReadCalls, st.GenerateCalls, st.ActionsProposed, st.PromptTokens, st.CompletionTokens,
-		st.ExternalRead, st.ErrCode, st.ErrMsg, finished).Scan(&finished)
+			st.Rounds, st.ReadCalls, st.GenerateCalls, st.ActionsProposed, st.PromptTokens, st.CompletionTokens,
+			st.ExternalRead, st.ErrCode, st.ErrMsg, finished).Scan(&finished)
+		if txErr == nil {
+			_, txErr = appendAgentEventTx(finishCtx, tx, st.ConversationID, &st.RunID, "run.ended", map[string]any{
+				"status": status, "reason": reason, "error_code": st.ErrCode,
+			}, nil)
+		}
+		if txErr == nil {
+			txErr = tx.Commit(finishCtx)
+		}
+	}
+	if txErr != nil {
+		slog.ErrorContext(finishCtx, "智能体运行终态或事件保存失败", "run_id", st.RunID.String(), "err", txErr)
+	}
 	if len(st.Domains) > 0 {
 		_, _ = s.db.Exec(context.WithoutCancel(ctx), `UPDATE agent_conversation SET loaded_domains=$2, updated_at=now() WHERE id=$1`,
 			st.ConversationID, st.Domains)
@@ -893,16 +953,68 @@ func (s *Server) agentCancelRun(id uuid.UUID) bool {
 
 // recoverAgentRuns 在服务启动时把 queued/running 的运行改为 interrupted（第 6.8 节第 2 项）。
 func (s *Server) recoverAgentRuns(ctx context.Context) error {
-	if _, err := s.db.Exec(ctx, `UPDATE agent_run SET status='failed', error_code='interrupted',
-		error_message='服务重启，本次运行已中断', finished_at=now()
-		WHERE status IN ('queued','running')`); err != nil {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
 		return err
 	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `UPDATE agent_run SET status='failed',stage='failed', error_code='interrupted',
+		error_message='服务重启，本次运行已中断', finished_at=now()
+		WHERE status IN ('queued','running') RETURNING id,conversation_id`)
+	if err != nil {
+		return err
+	}
+	type recoveredResource struct{ id, conversationID, runID uuid.UUID }
+	runs := []recoveredResource{}
+	for rows.Next() {
+		var run recoveredResource
+		if err := rows.Scan(&run.id, &run.conversationID); err != nil {
+			rows.Close()
+			return err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, run := range runs {
+		if _, err := appendAgentEventTx(ctx, tx, run.conversationID, &run.id, "run.ended", map[string]any{
+			"status": "failed", "error_code": "interrupted", "reason": "interrupted",
+		}, nil); err != nil {
+			return err
+		}
+	}
 	// 第 5.1 节第 4 条：重启时 executing 的卡片改为 failed(result_unknown)。
-	_, err := s.db.Exec(ctx, `UPDATE agent_action SET status='failed',
+	rows, err = tx.Query(ctx, `UPDATE agent_action SET status='failed',
 		error=jsonb_build_object('code','result_unknown','message','服务重启时正在执行，结果未知，请到对应页面核对')
-		WHERE status='executing'`)
-	return err
+		WHERE status='executing' RETURNING id,conversation_id,run_id`)
+	if err != nil {
+		return err
+	}
+	actions := []recoveredResource{}
+	for rows.Next() {
+		var action recoveredResource
+		if err := rows.Scan(&action.id, &action.conversationID, &action.runID); err != nil {
+			rows.Close()
+			return err
+		}
+		actions = append(actions, action)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, action := range actions {
+		if _, err := appendAgentEventTx(ctx, tx, action.conversationID, &action.runID, "action.updated", map[string]any{
+			"action_id": action.id, "status": "failed", "error_code": "result_unknown",
+		}, nil); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // RecoverAgentRunsOnBoot 供服务启动流程调用（第 6.8 节第 2 项）。

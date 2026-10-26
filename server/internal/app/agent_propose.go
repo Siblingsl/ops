@@ -392,22 +392,33 @@ func mustJSON(v any) []byte {
 
 // agentStartRun 创建一次运行（第 6.1 节第 1 项）并返回其内存状态。
 func (s *Server) agentStartRun(ctx context.Context, trigger string, c *agentConversation,
-	model agentModelRef) (*agentRunState, error) {
+	model agentModelRef, requestID uuid.UUID, requestPayload any) (*agentRunState, bool, error) {
+	protocolVersion := 1
+	requestHash := ""
+	if requestID != uuid.Nil {
+		protocolVersion = 2
+		var err error
+		requestHash, err = agentRequestPayloadHash(requestPayload)
+		if err != nil {
+			return nil, false, err
+		}
+	}
 	st := &agentRunState{
-		RunID:          uuid.New(),
-		ConversationID: c.ID,
-		WorkspaceID:    ident(ctx).WorkspaceID,
-		UserID:         ident(ctx).UserID,
-		SessionID:      ident(ctx).SessionID,
-		Trigger:        trigger,
-		AccountID:      c.AccountID,
-		Model:          model,
-		BatchID:        uuid.New(),
-		Deadline:       time.Now().Add(agentRunSeconds * time.Second),
+		RunID:           uuid.New(),
+		ConversationID:  c.ID,
+		WorkspaceID:     ident(ctx).WorkspaceID,
+		UserID:          ident(ctx).UserID,
+		SessionID:       ident(ctx).SessionID,
+		Trigger:         trigger,
+		ProtocolVersion: protocolVersion,
+		AccountID:       c.AccountID,
+		Model:           model,
+		BatchID:         uuid.New(),
+		Deadline:        time.Now().Add(agentRunSeconds * time.Second),
 	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer tx.Rollback(ctx)
 	var archivedAt *time.Time
@@ -415,30 +426,66 @@ func (s *Server) agentStartRun(ctx context.Context, trigger string, c *agentConv
 		WHERE id=$1 AND workspace_id=$2 AND user_id=$3 FOR UPDATE`,
 		c.ID, st.WorkspaceID, st.UserID).Scan(&archivedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errNotFound
+			return nil, false, errNotFound
 		}
-		return nil, err
+		return nil, false, err
 	}
 	if archivedAt != nil {
-		return nil, apiErr(409, "agent_conversation_archived", "对话已归档，请先恢复后再开始运行")
+		return nil, false, apiErr(409, "agent_conversation_archived", "对话已归档，请先恢复后再开始运行")
+	}
+	if requestID != uuid.Nil {
+		var existingID uuid.UUID
+		var existingHash string
+		err := tx.QueryRow(ctx, `SELECT id,request_hash FROM agent_run
+			WHERE conversation_id=$1 AND trigger=$2 AND request_id=$3`, c.ID, trigger, requestID).
+			Scan(&existingID, &existingHash)
+		if err == nil {
+			if strings.TrimSpace(existingHash) != requestHash {
+				return nil, false, apiErr(409, "agent_request_conflict", "请求编号已用于不同内容，请刷新后重新操作")
+			}
+			st.RunID = existingID
+			if err := tx.QueryRow(ctx, `SELECT coalesce(min(event_seq),0) FROM agent_event
+				WHERE conversation_id=$1 AND run_id=$2 AND type='run.started'`, c.ID, existingID).Scan(&st.StartEventSeq); err != nil {
+				return nil, false, err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, false, err
+			}
+			return st, true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, false, err
+		}
+	}
+	var requestIDArg any
+	if requestID != uuid.Nil {
+		requestIDArg = requestID
 	}
 	if err := tx.QueryRow(ctx, `INSERT INTO agent_run
-		(conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model_provider_id, model)
-		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7) RETURNING id`,
-		c.ID, st.WorkspaceID, st.UserID, st.SessionID, trigger, model.ProviderID, model.Model).Scan(&st.RunID); err != nil {
-		return nil, err
+		(conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model_provider_id, model,
+		 protocol_version, request_id, request_hash)
+		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7,$8,$9,$10) RETURNING id`,
+		c.ID, st.WorkspaceID, st.UserID, st.SessionID, trigger, model.ProviderID, model.Model,
+		protocolVersion, requestIDArg, requestHash).Scan(&st.RunID); err != nil {
+		return nil, false, err
 	}
 	if err := tx.QueryRow(ctx, `SELECT loaded_domains, summary FROM agent_conversation WHERE id=$1`, c.ID).
 		Scan(&st.Domains, &st.Summary); err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	st.StartEventSeq, err = appendAgentEventTx(ctx, tx, c.ID, &st.RunID, "run.started", map[string]any{
+		"run_id": st.RunID, "status": "queued", "trigger": trigger,
+	}, nil)
+	if err != nil {
+		return nil, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(st.Domains) > agentMaxDomains {
 		st.Domains = st.Domains[len(st.Domains)-agentMaxDomains:]
 	}
-	return st, nil
+	return st, false, nil
 }
 
 // skillCreateTargetCanon 以规范编码序列化 create 目标键的输入（8.4 节 name_key 取 lower(name) 口径）。

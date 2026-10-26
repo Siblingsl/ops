@@ -66,6 +66,7 @@ func TestAW05ArtifactsAreFeatureGatedAndPrivate(t *testing.T) {
 	}
 
 	other := env.registerClient(t, "aw05-private-"+uuid.NewString()[:8], testPassword)
+	defer other.restore(env)
 	var me meInfo
 	other.mustJSON(t, http.MethodGet, "/api/v1/auth/me", nil, &me)
 	other.csrf = me.CSRF

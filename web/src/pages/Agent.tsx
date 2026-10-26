@@ -17,7 +17,8 @@ import { useSavePrefs } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
 import {
   type AgentAttachment, type AgentBootstrap, type AgentConversation, type AgentConversationDetail, type AgentConversationListItem,
-  type AgentConversationGroup, type AgentConversationPage, type AgentMessage, useAgentBootstrap,
+  type AgentConversationGroup, type AgentConversationPage, type AgentEventEnvelope, type AgentMessage, type AgentRunAcceptance,
+  streamAgentEvents, useAgentBootstrap,
 } from '@/lib/agent'
 import { AgentMarkdown } from '@/lib/agent-markdown'
 import { AgentActionCards } from '@/pages/agent/ActionCards'
@@ -387,9 +388,11 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
   )
 }
 
-function RunStatus({ activeRun, streamStage, pendingActions, error, completedNotice }: { activeRun: AgentConversationDetail['active_run'] | undefined; streamStage: string; pendingActions: number; error: string; completedNotice: string }) {
+function RunStatus({ activeRun, streamStage, connection, pendingActions, error, completedNotice }: { activeRun: AgentConversationDetail['active_run'] | undefined; streamStage: string; connection: string; pendingActions: number; error: string; completedNotice: string }) {
   if (error) return <div role="alert" className="mx-auto mb-3 max-w-3xl rounded-lg bg-danger/5 px-3 py-2 text-[12.5px] text-danger">{error}</div>
-  const text = streamStage === 'queued' || activeRun?.status === 'queued' ? '排队中'
+  const text = connection === 'reconnecting' ? '连接中断，任务可能仍在运行，正在恢复…'
+    : connection === 'paused' ? '实时连接已暂停，任务可能仍在运行'
+    : streamStage === 'queued' || activeRun?.status === 'queued' ? '排队中'
     : streamStage.startsWith('tool:') ? `正在读取：${streamStage.slice(5)}`
       : streamStage === 'waiting_confirmation' ? `等待你确认 ${pendingActions} 项`
         : activeRun || streamStage ? '思考中' : pendingActions ? `等待你确认 ${pendingActions} 项` : completedNotice
@@ -478,6 +481,7 @@ export default function Agent() {
   const [streamText, setStreamText] = useState('')
   const [streamStage, setStreamStage] = useState('')
   const [streamError, setStreamError] = useState('')
+  const [streamConnection, setStreamConnection] = useState('')
   const [runID, setRunID] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedAccount, setSelectedAccount] = useState('')
@@ -512,6 +516,12 @@ export default function Agent() {
   const [recovered, setRecovered] = useState<PartialStream | null>(null)
   const partialStore = useRef<Storage | null>(null)
   const partialSavedAt = useRef(0)
+  const eventController = useRef<AbortController | null>(null)
+  const eventConversationID = useRef('')
+  const streamPartialRef = useRef<{ messageKey: string; chunkIndex: number }>({ messageKey: '', chunkIndex: 0 })
+  const lastEventSeqRef = useRef(0)
+  const resumeAfterSnapshotRef = useRef(false)
+  const [eventResumeGeneration, setEventResumeGeneration] = useState(0)
   const conversationIDRef = useRef(conversationId)
   conversationIDRef.current = conversationId
   const lastConversationIDRef = useRef(conversationId)
@@ -521,6 +531,7 @@ export default function Agent() {
   const bootstrapData = bootstrap.data
   const workbenchUI = desktopPresentation && bootstrapData?.features?.workbench_ui === true
   const organizeEnabled = bootstrapData?.features?.conversation_organize === true
+  const eventResumeEnabled = bootstrapData?.features?.event_resume === true
   useEffect(() => {
     const onManualUnread = (event: Event) => {
       const id = (event as CustomEvent<{ id: string }>).detail?.id
@@ -544,7 +555,7 @@ export default function Agent() {
     queryKey: ['agent-conversation', conversationId],
     queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${conversationId}`),
     enabled: !!conversationId && canRead,
-    refetchInterval: (query) => query.state.data?.active_run && pageVisible ? 2000 : false,
+    refetchInterval: (query) => !eventResumeEnabled && query.state.data?.active_run && pageVisible ? 2000 : false,
     refetchIntervalInBackground: false,
   })
   const detail = detailQuery.data
@@ -553,6 +564,8 @@ export default function Agent() {
   const actions = detail?.actions ?? []
   const pendingActions = actions.filter((action) => ['pending', 'needs_input'].includes(action.status)).length
   const baseMessages = detail?.messages ?? []
+  const persistedPartial = eventResumeEnabled && detail?.partial_output && !baseMessages.some((message) => message.message_key === detail.partial_output?.message_key) ? detail.partial_output : null
+  const recoveryText = eventResumeEnabled ? persistedPartial?.text : recovered?.text
   const messages = useMemo(() => [...olderMessages, ...baseMessages], [olderMessages, baseMessages])
   const lastUser = [...messages].reverse().find((message) => message.role === 'user')
   const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -656,18 +669,18 @@ export default function Agent() {
   // 没有这份草稿，用户切回来只能看到空白等整轮跑完。
   useEffect(() => {
     if (partialStore.current === null) partialStore.current = browserStore()
-    if (!conversationId) { setRecovered(null); return }
+    if (!conversationId || eventResumeEnabled) { setRecovered(null); return }
     setRecovered(readPartial(partialStore.current, conversationId))
-  }, [conversationId])
+  }, [conversationId, eventResumeEnabled])
 
   // AG-04：把正在生成的片段写进 sessionStorage；节流到 1 秒，避免每个 delta 都序列化。
   useEffect(() => {
-    if (!conversationId || !streamText) return
+    if (!conversationId || !streamText || eventResumeEnabled) return
     const now = Date.now()
     if (now - partialSavedAt.current < 1000) return
     partialSavedAt.current = now
     savePartial(partialStore.current, { conversationId, runId: runID, text: streamText, stage: streamStage, updatedAt: now })
-  }, [conversationId, streamText, streamStage, runID])
+  }, [conversationId, streamText, streamStage, runID, eventResumeEnabled])
 
   // 服务端已落库出这条助手消息，草稿就不再需要；否则恢复的气泡会与正式消息重复。
   useEffect(() => {
@@ -677,6 +690,13 @@ export default function Agent() {
     clearPartial(partialStore.current, recovered.conversationId)
     setRecovered(null)
   }, [recovered, baseMessages, activeRun])
+
+  useEffect(() => {
+    const key = streamPartialRef.current.messageKey
+    if (eventResumeEnabled && key && baseMessages.some((message) => message.message_key === key)) {
+      setStreamText('')
+    }
+  }, [baseMessages, eventResumeEnabled])
 
   useEffect(() => {
     if (!streaming) return
@@ -689,6 +709,62 @@ export default function Agent() {
       conversationId ? qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] }) : Promise.resolve(),
     ])
   }, [qc, conversationId])
+
+  const applyPersistentEvent = useCallback((id: string, type: string, event: AgentEventEnvelope) => {
+    lastEventSeqRef.current = Math.max(lastEventSeqRef.current, event.event_seq)
+    const data = event.data ?? {}
+    if (type === 'run.started') {
+      setRunID(event.run_id ?? '')
+      setStreamStage(data.status === 'queued' ? 'queued' : 'thinking')
+    } else if (type === 'run.stage') {
+      setStreamStage(data.stage || 'thinking')
+    } else if (type === 'message.delta' || type === 'message.snapshot') {
+      const messageKey = String(data.message_key ?? '')
+      const chunkIndex = Number(data.chunk_index ?? 0)
+      if (!messageKey || chunkIndex <= 0) return
+      if (qc.getQueryData<AgentConversationDetail>(['agent-conversation', id])?.messages.some((message) => message.message_key === messageKey)) return
+      const current = streamPartialRef.current
+      if (type === 'message.snapshot') {
+        if (current.messageKey === messageKey && chunkIndex <= current.chunkIndex) return
+        streamPartialRef.current = { messageKey, chunkIndex }
+        setStreamText(String(data.text ?? ''))
+      } else {
+        if (current.messageKey === messageKey && chunkIndex <= current.chunkIndex) return
+        streamPartialRef.current = { messageKey, chunkIndex }
+        setStreamText((old) => current.messageKey === messageKey ? old + String(data.text ?? '') : String(data.text ?? ''))
+      }
+    } else if (type === 'tool.ended' || type === 'action.updated' || type === 'message.saved' || type === 'conversation.updated') {
+      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
+      void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+    } else if (type === 'run.ended') {
+      setStreamStage(data.status === 'awaiting_confirmation' ? 'waiting_confirmation' : data.status || '')
+    }
+  }, [qc])
+
+  const resumeEventSnapshot = useCallback(async (id: string, runID: string) => {
+    const snapshot = await qc.fetchQuery({ queryKey: ['agent-conversation', id], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${id}`), staleTime: 0 })
+    if (snapshot.last_run?.id !== runID) return { after: lastEventSeqRef.current }
+    const partial = snapshot.partial_output
+    streamPartialRef.current = { messageKey: partial?.message_key ?? '', chunkIndex: partial?.chunk_index ?? 0 }
+    setStreamText(partial?.text ?? '')
+    lastEventSeqRef.current = snapshot.last_event_seq ?? lastEventSeqRef.current
+    return { after: lastEventSeqRef.current, ...(!snapshot.active_run ? { ended: snapshot.last_run } : {}) }
+  }, [qc])
+
+  useEffect(() => {
+    if (eventController.current && eventConversationID.current === conversationId) return
+    eventController.current?.abort()
+    eventController.current = null
+    lastEventSeqRef.current = 0
+    streamPartialRef.current = { messageKey: '', chunkIndex: 0 }
+    setStreaming(false)
+    setRunID('')
+    setStreamText('')
+    setStreamStage('')
+    setStreamConnection('')
+  }, [conversationId])
+
+  useEffect(() => () => eventController.current?.abort(), [])
 
   const openConversation = (id: string, matchedSeq?: number) => {
     setPendingJump(matchedSeq ? { conversationID: id, seq: matchedSeq } : null)
@@ -711,25 +787,48 @@ export default function Agent() {
   })
 
   const consumeRun = useCallback(async (id: string, endpoint: string, body: Record<string, unknown>) => {
+    const controller = new AbortController()
+    eventController.current?.abort()
+    eventController.current = controller
+    eventConversationID.current = id
+    let acceptedRequest = false
     setStreaming(true)
     setStreamText('')
     setStreamStage('thinking')
     setStreamError('')
     setRunID('')
+    setStreamConnection('')
     try {
-      const result = await stream<{ status?: string; reason?: string }>(endpoint, body, {
-        onDelta: (delta) => setStreamText((old) => old + delta),
-        onEvent: (name, data) => {
-          if (name === 'run') setRunID(data.run_id ?? '')
-          if (name === 'stage') setStreamStage(data.stage === 'tool' ? `tool:${data.label || data.tool_name || '工具'}` : data.stage || 'thinking')
-          if (name === 'action' || name === 'message' || name === 'tool') {
-            void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
-            void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
-          }
-          if (name === 'error') setStreamError(data.message || '运行失败，请重试')
-          if (name === 'done') setStreamStage(data.reason === 'waiting_confirmation' ? 'waiting_confirmation' : '')
-        },
-      })
+      const requestID = typeof body.request_id === 'string' && body.request_id ? body.request_id : crypto.randomUUID()
+      const result = bootstrapData?.features?.event_resume === true
+        ? await (async () => {
+          const accepted = await post<AgentRunAcceptance>(endpoint, { ...body, request_id: requestID, protocol_version: 2 }, controller.signal)
+          acceptedRequest = true
+          setRunID(accepted.run_id)
+          lastEventSeqRef.current = accepted.last_event_seq
+          streamPartialRef.current = { messageKey: '', chunkIndex: 0 }
+          return streamAgentEvents(accepted.events_url, accepted.last_event_seq, {
+            signal: controller.signal,
+            runID: accepted.run_id,
+            onEvent: (type, event) => applyPersistentEvent(id, type, event),
+            onConnectionState: setStreamConnection,
+            onResume: () => resumeEventSnapshot(id, accepted.run_id),
+          })
+        })()
+        : await stream<{ status?: string; reason?: string }>(endpoint, body, {
+          signal: controller.signal,
+          onDelta: (delta) => setStreamText((old) => old + delta),
+          onEvent: (name, data) => {
+            if (name === 'run') setRunID(data.run_id ?? '')
+            if (name === 'stage') setStreamStage(data.stage === 'tool' ? `tool:${data.label || data.tool_name || '工具'}` : data.stage || 'thinking')
+            if (name === 'action' || name === 'message' || name === 'tool') {
+              void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
+              void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+            }
+            if (name === 'error') setStreamError(data.message || '运行失败，请重试')
+            if (name === 'done') setStreamStage(data.reason === 'waiting_confirmation' ? 'waiting_confirmation' : '')
+          },
+        })
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['agent-conversation', id] }),
         qc.invalidateQueries({ queryKey: ['agent-conversations'] }),
@@ -737,17 +836,100 @@ export default function Agent() {
       setCompletedNotice(result?.status === 'stopped' ? '已停止'
         : result?.reason === 'round_limit' || result?.reason === 'deadline' ? '已达到单次运行上限'
           : result?.status === 'awaiting_confirmation' ? '等待你逐张确认操作卡片' : '')
+      if (result?.status === 'failed') setStreamError('本次运行已中断，请查看已保存的结果后再继续。')
+      return true
     } catch (error) {
-      // A closed tab or lost SSE connection does not stop server-side work. The detail poll recovers it.
+      if (controller.signal.aborted) return acceptedRequest
       await qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
-      if (!(error instanceof ApiError) || error.code !== 'internal') setStreamError(errorMessage(error))
+      if (error instanceof ApiError && error.code === 'agent_event_cursor_expired') {
+        resumeAfterSnapshotRef.current = true
+        await qc.fetchQuery({ queryKey: ['agent-conversation', id], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${id}`) })
+      } else {
+        setStreamError(errorMessage(error))
+      }
+      return acceptedRequest
     } finally {
+      if (eventController.current === controller) {
+        eventController.current = null
+        if (resumeAfterSnapshotRef.current) {
+          resumeAfterSnapshotRef.current = false
+          setEventResumeGeneration((generation) => generation + 1)
+        }
+        setStreaming(false)
+        setRunID('')
+        setStreamText('')
+        setStreamStage('')
+        setStreamConnection('')
+        if (bootstrapData?.features?.event_resume === true) setEventResumeGeneration((generation) => generation + 1)
+      }
+    }
+  }, [qc, bootstrapData?.features?.event_resume, applyPersistentEvent, resumeEventSnapshot])
+
+  useEffect(() => {
+    if (bootstrapData?.features?.event_resume !== true || !conversationId || !activeRun || eventController.current) return
+    const controller = new AbortController()
+    eventController.current = controller
+    eventConversationID.current = conversationId
+    const lastEventSeq = Math.max(lastEventSeqRef.current, detail?.last_event_seq ?? 0)
+    lastEventSeqRef.current = lastEventSeq
+    const partial = detail?.partial_output
+    if (partial?.text) {
+      streamPartialRef.current = { messageKey: partial.message_key, chunkIndex: partial.chunk_index }
+      setStreamText(partial.text)
+    } else {
+      streamPartialRef.current = { messageKey: '', chunkIndex: 0 }
+      setStreamText('')
+    }
+    setRunID(activeRun.id)
+    setStreamStage(activeRun.stage || 'thinking')
+    setStreaming(true)
+    void streamAgentEvents(`/api/v1/agent/conversations/${conversationId}/events`, lastEventSeq, {
+      signal: controller.signal,
+      runID: activeRun.id,
+      onEvent: (type, event) => applyPersistentEvent(conversationId, type, event),
+      onConnectionState: setStreamConnection,
+      onResume: () => resumeEventSnapshot(conversationId, activeRun.id),
+    }).then(async (result) => {
+      await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] })
+      await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+      if (conversationIDRef.current !== conversationId) return
+      setCompletedNotice(result.status === 'stopped' ? '已停止'
+        : result.reason === 'round_limit' || result.reason === 'deadline' ? '已达到单次运行上限'
+          : result.status === 'awaiting_confirmation' ? '等待你逐张确认操作卡片' : '')
+      if (result.status === 'failed') setStreamError('本次运行已中断，请查看已保存的结果后再继续。')
+    }).catch(async (error) => {
+      if (controller.signal.aborted) return
+      if (error instanceof ApiError && error.code === 'agent_event_cursor_expired') {
+        resumeAfterSnapshotRef.current = true
+        await qc.fetchQuery({ queryKey: ['agent-conversation', conversationId], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${conversationId}`) })
+      } else {
+        setStreamError(errorMessage(error))
+      }
+    }).finally(() => {
+      if (eventController.current !== controller) return
+      eventController.current = null
       setStreaming(false)
       setRunID('')
       setStreamText('')
       setStreamStage('')
+      setStreamConnection('')
+      if (resumeAfterSnapshotRef.current) {
+        resumeAfterSnapshotRef.current = false
+        setEventResumeGeneration((generation) => generation + 1)
+      }
+    })
+    return () => {
+      if (eventController.current === controller) {
+        controller.abort()
+        eventController.current = null
+        setStreaming(false)
+        setRunID('')
+        setStreamStage('')
+        setStreamConnection('')
+      }
     }
-  }, [qc])
+  }, [bootstrapData?.features?.event_resume, conversationId, activeRun?.id, eventResumeGeneration,
+    qc, applyPersistentEvent, resumeEventSnapshot])
 
   const sendMessage = async (edit?: AgentMessage) => {
   const value = text.trim()
@@ -780,9 +962,10 @@ export default function Agent() {
         ...(modelRef ? { model: modelRef } : {}),
         ...(requestID ? { request_id: requestID } : {}),
       }
-      await consumeRun(conv.id, edit
+      const accepted = await consumeRun(conv.id, edit
         ? `/agent/conversations/${conv.id}/messages/${edit.id}/edit`
         : `/agent/conversations/${conv.id}/messages`, payload)
+      if (!accepted || conversationIDRef.current !== conv.id) return
       setText('')
       setFiles([])
       sendDestinationConversationID.current = ''
@@ -859,9 +1042,12 @@ export default function Agent() {
 
   useEffect(() => {
     if (!organizeEnabled || !conversationId || !conversation || !messages.length || !pageVisible || manualUnreadSuppressedID === conversationId) return
-    const readSeq = conversation.read_upto_message_seq ?? 0
-    const latestSeq = messages[messages.length - 1].seq
-    const hasUnread = conversation.force_unread || messages.some((message) => message.seq > readSeq && message.role !== 'user')
+    const eventMode = bootstrapData?.features?.event_resume === true
+    const readSeq = eventMode ? detail?.read_upto_event_seq ?? 0 : conversation.read_upto_message_seq ?? 0
+    const latestSeq = eventMode ? detail?.last_event_seq ?? 0 : messages[messages.length - 1].seq
+    const hasUnread = eventMode
+      ? detail?.has_unread === true
+      : conversation.force_unread || messages.some((message) => message.seq > readSeq && message.role !== 'user')
     if (!hasUnread || latestSeq <= readSeq && !conversation.force_unread || !bottomRef.current) return
     const node = bottomRef.current
     let timer = 0
@@ -870,11 +1056,13 @@ export default function Agent() {
       if (entries.some((entry) => entry.isIntersecting) && document.visibilityState === 'visible') {
         timer = window.setTimeout(() => {
           if (conversationIDRef.current !== conversationId || document.visibilityState !== 'visible') return
-          void post<{ read_upto_message_seq: number; force_unread: boolean; revision: number }>(`/agent/conversations/${conversationId}/read`, { upto_message_seq: latestSeq })
+          void post<{ read_upto_message_seq: number; read_upto_event_seq?: number; force_unread: boolean; revision: number }>(
+            `/agent/conversations/${conversationId}/read`, eventMode ? { upto_event_seq: latestSeq } : { upto_message_seq: latestSeq })
             .then((result) => {
               qc.setQueryData<AgentConversationDetail>(['agent-conversation', conversationId], (current) => current ? {
                 ...current,
                 conversation: { ...current.conversation, read_upto_message_seq: result.read_upto_message_seq, force_unread: result.force_unread, revision: result.revision },
+                ...(eventMode ? { read_upto_event_seq: result.read_upto_event_seq, has_unread: false } : {}),
               } : current)
               return qc.invalidateQueries({ queryKey: ['agent-conversations'] })
             })
@@ -884,7 +1072,8 @@ export default function Agent() {
     }, { threshold: 1 })
     observer.observe(node)
     return () => { window.clearTimeout(timer); observer.disconnect() }
-  }, [organizeEnabled, conversationId, conversation, messages, pageVisible, qc, manualUnreadSuppressedID])
+  }, [organizeEnabled, conversationId, conversation, messages, pageVisible, qc, manualUnreadSuppressedID,
+    bootstrapData?.features?.event_resume, detail?.read_upto_event_seq, detail?.last_event_seq, detail?.has_unread])
 
   const searchSavedMessages = async () => {
     const query = localSearchText.trim().toLocaleLowerCase()
@@ -1101,13 +1290,13 @@ export default function Agent() {
                   desktopPresentation={desktopPresentation}
                 /></div>}
               </div>})}
-              {streamText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card"><AgentMarkdown text={streamText} /></div></div>}
+              {streamText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card"><AgentMarkdown text={streamText} /><p className="mt-2 text-[12px] text-mist-500">正在生成，内容尚未完成</p></div></div>}
               {/* AG-04：离开页面时没写完的回复。服务端整轮结束后才落库，这里先把已生成的部分显示出来，
                   并说明「服务端仍在继续」，避免用户以为内容丢了而重新发一遍。 */}
-              {!streamText && recovered && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card">
-                <AgentMarkdown text={recovered.text} />
+              {!streamText && recoveryText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card">
+                <AgentMarkdown text={recoveryText} />
                 <div className="mt-2 border-t border-mist-200 pt-2 text-[12px] text-mist-500" data-testid="agent-partial-note">
-                  {busy || activeRun
+                  {eventResumeEnabled && !activeRun ? '这是服务端保存的未完成内容。你可以发送新消息继续处理。' : busy || activeRun
                     ? '这是上次离开页面时已生成的部分，服务端仍在继续，完成后会补全这条回复。'
                     : '这是上次中断时已生成的部分。这一轮没有正常结束，可以点下方「继续」让智能体接着做。'}
                 </div>
@@ -1117,7 +1306,7 @@ export default function Agent() {
           </div>
 
           <div className={`shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4 ${desktopPresentation ? 'desktop-agent-compose-area' : ''} ${workbenchUI ? 'desktop-agent-workbench-compose-area' : ''}`}>
-            {(!desktopPresentation || workbenchUI || !!streamError) && <RunStatus activeRun={activeRun} streamStage={streamStage} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
+            {(!desktopPresentation || workbenchUI || !!streamError) && <RunStatus activeRun={activeRun} streamStage={streamStage} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
             {!bootstrapData.can_use && (bootstrapData.reason === 'no_model' || bootstrapData.reason === 'not_tested') && <Notice tone="gamboge" className="mx-auto mb-2 max-w-3xl">{bootstrapData.reason === 'not_tested' ? '模型已经配置好了，但还没有完成能力自检。完成一次自检后就能开始对话。' : '还没有配置可用于对话的模型，请到模型配置页添加支持工具调用的模型。'}历史对话仍可查看。 <a href="/settings/models" className="underline">去模型配置</a></Notice>}
             {pendingActions > 0 && !desktopPresentation && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">等待你逐张处理 {pendingActions} 项后，智能体会继续。卡片操作入口显示在对应消息下方。</div>}
             {detail?.can_continue && !busy && !actionExecuting && pendingActions === 0 && <div className="mx-auto mb-2 max-w-3xl text-right"><Button size="sm" variant="ghost" onClick={continueRun}>继续</Button></div>}

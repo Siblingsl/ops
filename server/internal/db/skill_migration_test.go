@@ -20,7 +20,7 @@ func TestSkillMigrationDownGuard(t *testing.T) {
 	if err := Migrate(freshURL); err != nil {
 		t.Fatalf("migrate fresh database: %v", err)
 	}
-	if version, err := goose.GetDBVersion(freshDB); err != nil || version != 62 {
+	if version, err := goose.GetDBVersion(freshDB); err != nil || version != 63 {
 		t.Fatalf("fresh migration version: got %d, err=%v", version, err)
 	}
 	var wsID, userID string

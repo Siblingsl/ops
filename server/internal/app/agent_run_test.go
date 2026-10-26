@@ -56,13 +56,19 @@ func agentRunPath(c agentConversation, suffix string) string {
 // TestAG05RoundLimit：轮次用尽后运行 completed 且 reason=round_limit，事件序列完整。
 func TestAG05RoundLimit(t *testing.T) {
 	pid := env.ensureToolModel(t)
-	acc := env.accounts(t)
-	c := env.agentRunConversation(t, pid)
+	// 使用独立空账号，避免全量测试累积的作品列表挤出#repeat指令。
+	var account Account
+	env.mustJSON(t, http.MethodPost, "/api/v1/accounts", map[string]string{
+		"platform": "wechat_mp", "name": "轮次上限专用账号", "content_format": "long_article",
+	}, &account)
+	defer env.srv.db.Exec(t.Context(), `DELETE FROM platform_account WHERE id=$1`, account.ID)
+	c := env.createConversation(t, map[string]any{"account_id": account.ID.String(),
+		"model": map[string]any{"provider_id": pid, "model": "mock-writer"}})
 	defer deleteConversations(t, c.ID)
 
 	// 每轮都重新下达同样两个指令（#repeat：持续返回直到轮次用尽）。
 	text := "#repeat load_tool_domain {\"domain\":\"works\"}\n" +
-		"#repeat works__list {\"accountId\":\"" + acc.wechat.ID.String() + "\"}"
+		"#repeat works__list {\"accountId\":\"" + account.ID.String() + "\"}"
 	evs := env.sse(t, agentRunPath(c, "messages"), map[string]any{"text": text})
 	if len(evs) == 0 {
 		t.Fatal("没有收到 SSE 事件")

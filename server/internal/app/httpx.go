@@ -215,6 +215,17 @@ func (s *sseWriter) send(event string, data any) {
 	s.flush()
 }
 
+func (s *sseWriter) sendID(id int64, event string, data any) {
+	if event == "error" {
+		if ae, ok := data.(*APIError); ok {
+			data = errorRequestID(ae, s.w.Header().Get("X-Request-ID"))
+		}
+	}
+	b, _ := json.Marshal(data)
+	fmt.Fprintf(s.w, "id: %d\nevent: %s\ndata: %s\n\n", id, event, b)
+	s.flush()
+}
+
 func (s *sseWriter) fail(err error) {
 	var ae *APIError
 	if !errors.As(err, &ae) {
