@@ -19,6 +19,7 @@ export interface AgentBootstrap {
   default_model: { provider_id: string; model: string } | null
   default_model_unsupported: boolean
   allow_model_pick: boolean
+  features: Record<string, boolean>
   limits: {
     max_rounds: number
     max_reads: number
@@ -45,6 +46,7 @@ export interface AgentConversation {
   last_message_at: string
   created_at: string
   updated_at: string
+  revision: number
 }
 
 export type AgentConversationListItem = AgentConversation & {

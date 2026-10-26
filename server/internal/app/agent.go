@@ -279,6 +279,7 @@ func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) error {
 		"default_model":             def,
 		"default_model_unsupported": unsupported,
 		"allow_model_pick":          st.AllowModelPick,
+		"features":                  agentWorkbenchFeatures(),
 		"limits":                    agentLimitsPayload(),
 		"privacy_notice_seen":       s.userPrefs(ctx).AgentPrivacyNoticeSeen,
 	})
@@ -297,6 +298,7 @@ type agentConversation struct {
 	LastMessageAt   time.Time  `json:"last_message_at"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
+	Revision        int64      `json:"revision"`
 }
 
 type agentConversationListItem struct {
@@ -306,12 +308,12 @@ type agentConversationListItem struct {
 }
 
 const agentConversationCols = `c.id, c.title, c.title_source, c.pinned_at, c.model_provider_id, c.model,
-	c.account_id, c.last_message_at, c.created_at, c.updated_at`
+	c.account_id, c.last_message_at, c.created_at, c.updated_at, c.revision`
 
 func scanAgentConversation(row pgx.Row) (*agentConversation, error) {
 	var c agentConversation
 	if err := row.Scan(&c.ID, &c.Title, &c.TitleSource, &c.PinnedAt, &c.ModelProviderID, &c.Model,
-		&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -430,7 +432,7 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 		var c agentConversation
 		var summary agentConversationListItem
 		if err := rows.Scan(&c.ID, &c.Title, &c.TitleSource, &c.PinnedAt, &c.ModelProviderID, &c.Model,
-			&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &summary.PendingActions, &summary.HasActiveRun); err != nil {
+			&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision, &summary.PendingActions, &summary.HasActiveRun); err != nil {
 			return err
 		}
 		summary.agentConversation = c
@@ -458,6 +460,7 @@ func (s *Server) createAgentConversation(w http.ResponseWriter, r *http.Request)
 		Title     string         `json:"title"`
 		AccountID string         `json:"account_id"`
 		Model     *agentModelRef `json:"model"`
+		RequestID string         `json:"request_id"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -492,12 +495,55 @@ func (s *Server) createAgentConversation(w http.ResponseWriter, r *http.Request)
 		}
 		providerID, model = &ref.ProviderID, ref.Model
 	}
-	c, err := scanAgentConversation(s.db.QueryRow(ctx, `INSERT INTO agent_conversation
+	var requestID uuid.UUID
+	if strings.TrimSpace(in.RequestID) != "" {
+		parsed, err := uuid.Parse(strings.TrimSpace(in.RequestID))
+		if err != nil {
+			return validation("请求编号无效")
+		}
+		requestID = parsed
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if requestID != uuid.Nil {
+		payload := struct {
+			Title      string
+			AccountID  *uuid.UUID
+			ProviderID *uuid.UUID
+			Model      string
+		}{title, accountID, providerID, model}
+		replayID, err := claimAgentRequest(ctx, tx, id.WorkspaceID, id.UserID, "conversation.create", requestID, payload)
+		if err != nil {
+			return err
+		}
+		if replayID != nil {
+			if err := tx.Commit(ctx); err != nil {
+				return err
+			}
+			c, err := s.agentConversationFor(ctx, *replayID)
+			if err != nil {
+				return err
+			}
+			return ok(w, c)
+		}
+	}
+	c, err := scanAgentConversation(tx.QueryRow(ctx, `INSERT INTO agent_conversation
 		(workspace_id, user_id, title, title_source, account_id, model_provider_id, model)
 		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, title, title_source, pinned_at, model_provider_id, model,
-		account_id, last_message_at, created_at, updated_at`,
+		account_id, last_message_at, created_at, updated_at, revision`,
 		id.WorkspaceID, id.UserID, title, source, accountID, providerID, model))
 	if err != nil {
+		return err
+	}
+	if requestID != uuid.Nil {
+		if err := completeAgentRequest(ctx, tx, id.WorkspaceID, id.UserID, "conversation.create", requestID, c.ID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	return ok(w, c)
@@ -514,13 +560,17 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		return err
 	}
 	var in struct {
-		Title     *string        `json:"title"`
-		Pinned    *bool          `json:"pinned"`
-		AccountID *string        `json:"account_id"`
-		Model     *agentModelRef `json:"model"`
+		ExpectedRevision *int64         `json:"expected_revision"`
+		Title            *string        `json:"title"`
+		Pinned           *bool          `json:"pinned"`
+		AccountID        *string        `json:"account_id"`
+		Model            *agentModelRef `json:"model"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
+	}
+	if in.ExpectedRevision != nil && *in.ExpectedRevision < 1 {
+		return validation("对话修订号无效")
 	}
 	sets := []string{}
 	args := []any{cid}
@@ -568,14 +618,21 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 	if len(sets) == 0 {
 		return validation("没有需要修改的字段")
 	}
-	sets = append(sets, "updated_at=now()")
+	sets = append(sets, "revision=revision+1", "updated_at=now()")
 	args = append(args, id.WorkspaceID, id.UserID)
-	sql := `UPDATE agent_conversation SET ` + strings.Join(sets, ", ") +
-		fmt.Sprintf(` WHERE id=$1 AND workspace_id=$%d AND user_id=$%d
-		RETURNING id, title, title_source, pinned_at, model_provider_id, model, account_id,
-		last_message_at, created_at, updated_at`, len(args)-1, len(args))
+	where := fmt.Sprintf(` WHERE id=$%d AND workspace_id=$%d AND user_id=$%d`, 1, len(args)-1, len(args))
+	if in.ExpectedRevision != nil {
+		args = append(args, *in.ExpectedRevision)
+		where += fmt.Sprintf(` AND revision=$%d`, len(args))
+	}
+	sql := `UPDATE agent_conversation SET ` + strings.Join(sets, ", ") + where +
+		` RETURNING id, title, title_source, pinned_at, model_provider_id, model, account_id,
+		last_message_at, created_at, updated_at, revision`
 	c, err := scanAgentConversation(s.db.QueryRow(ctx, sql, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
+		if in.ExpectedRevision != nil {
+			return apiErr(409, "agent_revision_conflict", "对话已被其他操作更新，请刷新后重试")
+		}
 		return errNotFound
 	}
 	if err != nil {

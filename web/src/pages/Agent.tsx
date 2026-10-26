@@ -116,12 +116,12 @@ function ConversationRow({ item, selected, onSelect, desktopPresentation = false
   const [title, setTitle] = useState(item.title)
   const [menuOpen, setMenuOpen] = useState(false)
   const changePin = async () => {
-    await patch(`/agent/conversations/${item.id}`, { pinned: !item.pinned_at })
+    await patch(`/agent/conversations/${item.id}`, { expected_revision: item.revision, pinned: !item.pinned_at })
     await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
   }
   const saveTitle = async () => {
     try {
-      await patch(`/agent/conversations/${item.id}`, { title: title.trim() })
+      await patch(`/agent/conversations/${item.id}`, { expected_revision: item.revision, title: title.trim() })
       setRenameOpen(false)
       await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
       if (selected) await qc.invalidateQueries({ queryKey: ['agent-conversation', item.id] })
@@ -465,8 +465,8 @@ export default function Agent() {
     if (!conversationId) return
     try {
       const payload = kind === 'model'
-        ? { model: value ? { provider_id: value.split('::')[0], model: value.slice(value.indexOf('::') + 2) } : null }
-        : { account_id: value }
+        ? { expected_revision: conversation?.revision, model: value ? { provider_id: value.split('::')[0], model: value.slice(value.indexOf('::') + 2) } : null }
+        : { expected_revision: conversation?.revision, account_id: value }
       await patch(`/agent/conversations/${conversationId}`, payload)
       await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] })
       await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
@@ -552,7 +552,7 @@ export default function Agent() {
             style={{ width: `${Math.min(440, Math.max(42, Array.from(conversation.title).length * 12))}px` }}
             onBlur={(event) => {
               const title = event.target.value.trim()
-              if (title && title !== conversation.title) void patch(`/agent/conversations/${conversation.id}`, { title }).then(() => invalidate()).catch((error) => toast.error(errorMessage(error)))
+              if (title && title !== conversation.title) void patch(`/agent/conversations/${conversation.id}`, { expected_revision: conversation.revision, title }).then(() => invalidate()).catch((error) => toast.error(errorMessage(error)))
             }} className="min-w-0 max-w-[320px] truncate border-0 bg-transparent text-[13px] font-semibold text-mist-800 outline-none" />
         : <span className="text-[13px] font-semibold text-mist-800">AI 对话</span>}
       {conversation && !desktopPresentation && <span className="hidden text-[10.5px] text-mist-400 xl:inline">本对话 {detail?.usage.prompt_tokens ?? 0} 输入 / {detail?.usage.completion_tokens ?? 0} 输出 token</span>}
