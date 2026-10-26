@@ -288,6 +288,77 @@ func TestPlatformV2ContentRejectsRowWithoutState(t *testing.T) {
 	submitPlatformV2Batch(t, f, content.ID, platformV2ControlBatch(content, 1, "complete", nil, "succeeded"))
 }
 
+// TestPlatformV2CatalogSkipsRowPublishedAfterScopeBound 验证：发布时间晚于操作
+// 冻结的 `scope_upper_bound` 的目录行按「超出本次范围」跳过，而不是当作脏数据拒绝。
+//
+// 这条行为此前没有测试。它决定「点同步之后平台又发了新笔记」会怎么算：
+// 如果被算成 rejected，覆盖率里的 failed 会平白涨；如果被算成 accepted，
+// 就会把本次操作声明范围之外的作品写进镜像。
+func TestPlatformV2CatalogSkipsRowPublishedAfterScopeBound(t *testing.T) {
+	f, catalog := startCatalogStageFixture(t, `{"adapterVersion":"fixture-1","mappingVersion":1,`+
+		`"browserVersion":"155.0.0.0","workList":"supported","perNoteMetrics":"unknown","noteContent":"unsupported"}`)
+	key := f.ExternalKey()
+
+	// 冻结范围的上界来自建操作时的 scope_upper_bound；比它晚一小时的作品在范围外。
+	var upperRaw string
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT o.frozen_scope->>'scope_upper_bound' FROM platform_sync_operation o
+		 JOIN platform_sync_run r ON r.operation_id=o.id WHERE r.id=$1`,
+		catalog.ID).Scan(&upperRaw); err != nil {
+		t.Fatal(err)
+	}
+	upper, err := time.Parse(time.RFC3339Nano, upperRaw)
+	if err != nil {
+		t.Fatalf("scope_upper_bound 不是合法时间：%q", upperRaw)
+	}
+
+	inScope := "6a7c6caf00000000008133" + uuid.NewString()[:2]
+	outOfScope := "6a7c6caf00000000008233" + uuid.NewString()[:2]
+	inside := catalogItem(key, inScope, "published")
+	inside["published_at"] = upper.Add(-1 * time.Hour).Truncate(time.Second)
+	outside := catalogItem(key, outOfScope, "published")
+	outside["published_at"] = upper.Add(1 * time.Hour).Truncate(time.Second)
+
+	status, receipt := submitV2BatchRaw(t, f, catalog.ID, map[string]any{
+		"protocol_version": 2, "lease_generation": catalog.LeaseGeneration,
+		"authorization_revision": catalog.AuthorizationRevision, "batch_seq": 0, "final_batch": false,
+		"run_status": "succeeded", "result_type": "work_catalog",
+		"data": map[string]any{"items": []any{inside, outside}},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("超出范围的行不该让整批失败：%d %s", status, receipt)
+	}
+	var out struct {
+		MirrorsCreated int              `json:"mirrors_created"`
+		Rejected       int              `json:"rejected"`
+		Rows           []map[string]any `json:"rows"`
+	}
+	if err := json.Unmarshal(receipt, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.MirrorsCreated != 1 {
+		t.Fatalf("只有范围内那一篇该写进镜像，实际 %d（rows=%v）", out.MirrorsCreated, out.Rows)
+	}
+	if len(out.Rows) != 2 || out.Rows[1]["state"] != "skipped" {
+		t.Fatalf("范围外的行必须以 skipped 回报：%v", out.Rows)
+	}
+	if code, _ := out.Rows[1]["error_code"].(string); code != "out_of_scope_or_unpublished" {
+		t.Fatalf("范围外的行错误码必须是 out_of_scope_or_unpublished，实际 %q", code)
+	}
+	var mirrors int
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT count(*) FROM platform_work_mirror WHERE account_id=$1`, f.Account.ID).Scan(&mirrors); err != nil {
+		t.Fatal(err)
+	}
+	if mirrors != 1 {
+		t.Fatalf("镜像表只该有范围内那一篇，实际 %d 行", mirrors)
+	}
+	// 收尾：别把 run 留在 running 状态。
+	submitPlatformV2Batch(t, f, catalog.ID, platformV2ControlBatch(catalog, 1, "complete", map[string]any{
+		"enumeration_complete": true, "total_count": 1, "partition": "notes", "consistency": "best_effort",
+	}, "succeeded"))
+}
+
 // TestPlatformV2ContentDeniedStateDoesNotBecomeComplete 验证：正文状态是 denied 时
 // 只更新 content_state 与字段覆盖，绝不把该篇标成 complete。
 func TestPlatformV2ContentDeniedStateDoesNotBecomeComplete(t *testing.T) {
