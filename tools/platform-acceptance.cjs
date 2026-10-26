@@ -47,6 +47,20 @@ function assertAccountId(value) {
   return value;
 }
 
+// parseDbTimestamp 解析 psql -t -A 输出的 timestamptz（如 2026-10-26 03:22:55.343+00）。
+// psql 默认输出 +00 这种两位偏移，而 JS 的 Date 只认 +00:00 / +0000，直接传会得到
+// Invalid Date，报告就变成"观测时间未知"——所以偏移必须先补成合法形态。
+// 解析不了就返回 null——宁可报告里写"时间未知"，也不要造一个时间出来。
+function parseDbTimestamp(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  let normalized = text.includes('T') ? text : text.replace(' ', 'T');
+  normalized = normalized.replace(/([+-]\d{2})$/, '$1:00').replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+  if (!/[zZ]$|[+-]\d{2}:\d{2}$/.test(normalized)) normalized = `${normalized}Z`;
+  const d = new Date(normalized);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 // loadObservations 取该平台最近一批观测（按 external_id 取最新一条）。
 // accountId 有值时只取该账号的观测：同平台多个账号时，别把另一个账号的读数
 // 算进本次对照，也不要让"缺观测"被别的账号的数据掩盖。
@@ -54,6 +68,7 @@ function loadObservations(platform, accountId) {
   const source = platform === 'xhs' ? 'xhs_browser' : 'wechat_browser';
   const scope = accountId ? ` AND o.account_id='${accountId}'` : '';
   const rows = query(`SELECT DISTINCT ON (external_id) external_id, values, quality_state,
+      observed_at,
       (SELECT count(*) FROM platform_metric_observation o2
        WHERE o2.external_id=o.external_id AND o2.source=o.source) AS total_rows
     FROM platform_metric_observation o
@@ -61,10 +76,18 @@ function loadObservations(platform, accountId) {
     ORDER BY external_id, created_at DESC`);
   const out = new Map();
   for (const row of rows) {
-    const [externalId, values, quality, totalRows] = row;
+    const [externalId, values, quality, observedAt, totalRows] = row;
     let parsed = {};
     try { parsed = JSON.parse(values); } catch { parsed = {}; }
-    out.set(externalId, { values: parsed, quality, totalRows: Number(totalRows) || 1 });
+    // observed_at 必须带出来：平台读数是会涨的，拿几小时前的观测和此刻的页面比，
+    // 差 1~2 就是"采集之后又涨了"，不是"采集错了"。不带时间的话两种结论长得一样。
+    const at = observedAt ? parseDbTimestamp(observedAt) : null;
+    out.set(externalId, {
+      values: parsed,
+      quality,
+      totalRows: Number(totalRows) || 1,
+      observedAt: at
+    });
   }
   return out;
 }
@@ -248,11 +271,39 @@ function freshnessOf(published) {
   };
 }
 
-function compare(platform, platformItems, observations) {
+// loadGrowthHistory 取某篇作品某字段的历史观测值（按时间升序，最近 6 条）。
+// 只有一个用途：当"平台读数 > 观测"时，用历史判断这到底是"采集后涨了"还是"我们记错了"。
+// 计数器只会单调不减；如果历史是一路涨上来的，那这次差值就是继续涨，不是记错。
+// 如果历史里出现过下降，说明这个字段不是单调计数器，那就不能拿"会涨"来解释。
+function loadGrowthHistory(platform, accountId, externalId, key) {
+  if (!/^[0-9A-Za-z_-]{1,64}$/.test(externalId)) return null;
+  if (!/^[a-z_]{1,32}$/.test(key)) return null;
+  const source = platform === 'xhs' ? 'xhs_browser' : 'wechat_browser';
+  const scope = accountId ? ` AND account_id='${accountId}'` : '';
+  const rows = query(`SELECT values->'${key}'->>'value'
+    FROM platform_metric_observation
+    WHERE source='${source}' AND external_id='${externalId}'${scope}
+    ORDER BY observed_at DESC LIMIT 6`);
+  const values = rows
+    .map((r) => Number(r[0]))
+    .filter((n) => Number.isFinite(n))
+    .reverse();
+  if (values.length < 2) return null;
+  const monotonic = values.every((v, i) => i === 0 || v >= values[i - 1]);
+  return { values, monotonic };
+}
+
+function compare(platform, platformItems, observations, accountId) {
   const rows = [];
   let matched = 0;
   let mismatched = 0;
   let missingObservation = 0;
+  // grewCount：不一致里"平台读数比观测大"的条数。平台的计数只会涨，
+  // 观测又是几小时前采的，所以这类差值可能是"采集之后涨的"，不是"采错了"。
+  // 注意：这里**不因此判定为一致**——判定的唯一办法是重新采集后再对照，
+  // 工具只负责把可解释性标出来，不负责把不一致改成一致。
+  let grewCount = 0;
+  const now = Date.now();
   for (const item of platformItems) {
     const obs = observations.get(item.externalId);
     if (!obs) {
@@ -260,6 +311,8 @@ function compare(platform, platformItems, observations) {
       rows.push({ externalId: item.externalId, status: item.status, fields: [], note: '无观测' });
       continue;
     }
+    const observedAt = obs.observedAt || null;
+    const ageMinutes = observedAt ? Math.max(0, Math.round((now - observedAt.getTime()) / 60_000)) : null;
     const fields = [];
     for (const [key, platformValue] of Object.entries(item.metrics)) {
       const obsField = obs.values[key];
@@ -278,13 +331,23 @@ function compare(platform, platformItems, observations) {
       }
       if (verdict === 'match' || verdict === 'both_missing') matched += 1;
       else mismatched += 1;
+      const grew = verdict === 'mismatch'
+        && typeof platformValue === 'number'
+        && typeof obsValue === 'number'
+        && platformValue > obsValue;
+      if (grew) grewCount += 1;
+      // 只有"平台更大"的差值才去查历史：平台更小不可能是增长，
+      // 那要么是我们记多了，要么平台回调了，都必须当问题看。
+      const history = grew ? loadGrowthHistory(platform, accountId, item.externalId, key) : null;
       fields.push({
-        key, label: FIELD_LABELS[key] || key, platformValue, obsValue, unit, precision, verdict
+        key, label: FIELD_LABELS[key] || key, platformValue, obsValue, unit, precision, verdict, grew, history
       });
     }
-    rows.push({ externalId: item.externalId, status: item.status, fields, note: '' });
+    rows.push({
+      externalId: item.externalId, status: item.status, fields, note: '', observedAt, ageMinutes
+    });
   }
-  return { rows, matched, mismatched, missingObservation };
+  return { rows, matched, mismatched, missingObservation, grewCount };
 }
 
 // ---------- 输出 ----------
@@ -296,8 +359,24 @@ function maskAccount(key) {
   return `${kind}:${value.slice(0, 8)}…`;
 }
 
+// growthHint 把一个"平台读数更大"的差值翻译成人话，并给出复核动作。
+// 只解释、不判分：报告里这条仍然算不一致，验收仍然不通过。
+// 三种情况分开写，是因为处置方式不同：
+//   - 历史单调递增 → 这个字段本来就是计数器，先重采再对照；
+//   - 历史出现过下降 → 不是单调计数器，不能拿"会涨"解释，要当记错查；
+//   - 历史不足两条 → 没有依据，只能重采。
+function growthHint(field) {
+  if (!field.grew) return '';
+  const history = field.history;
+  if (!history) return ' ← 平台读数更大，且历史不足两条，无法判断；需重采后再对照';
+  if (!history.monotonic) {
+    return ` ← 平台读数更大，但历史出现过下降（${history.values.join(' → ')}），不能用"增长"解释，需按记错排查`;
+  }
+  return ` ← 平台读数更大；历史单调递增（${history.values.join(' → ')}），像是采集后增长，需重采后再对照`;
+}
+
 function printReport(platform, reading, obsResult, bound, options) {
-  const { rows, matched, mismatched, missingObservation } = obsResult;
+  const { rows, matched, mismatched, missingObservation, grewCount } = obsResult;
   const published = reading.items.filter((i) => i.status === 'published');
   const deleted = reading.items.filter((i) => i.status === 'deleted');
   const fieldsTotal = rows.reduce((sum, r) => sum + r.fields.length, 0);
@@ -311,7 +390,7 @@ function printReport(platform, reading, obsResult, bound, options) {
     console.log(JSON.stringify({
       platform, landed: reading.landed, coverage: reading.coverage,
       bound, publishedCount: published.length, deletedCount: deleted.length,
-      matched, mismatched, missingObservation, fieldsTotal, freshness: fresh,
+      matched, mismatched, missingObservation, grewCount, fieldsTotal, freshness: fresh,
       freshnessWaived, rows
     }, null, 2));
     return { matched, mismatched };
@@ -325,6 +404,10 @@ function printReport(platform, reading, obsResult, bound, options) {
   console.log(`平台作品    ${reading.items.length} 条（已发布 ${published.length}、已删除 ${deleted.length}）`);
   console.log(`已绑定作品  ${bound.works} 篇，跨 ${bound.publishDays} 个发布日`);
   console.log(`对照结果    一致 ${matched}、不一致 ${mismatched}、缺观测 ${missingObservation}`);
+  if (grewCount > 0) {
+    // 这一行不是"洗白"，是提示复核顺序：先重新采一次再对照，差值消失就是增长。
+    console.log(`            其中 ${grewCount} 项是"平台读数大于观测"——平台计数会涨，需先重采再判定`);
+  }
   console.log(`覆盖        ${JSON.stringify(reading.coverage)}`);
   if (fresh.newestDays === null) {
     console.log(`新作        无法从平台解析发布时间（${fresh.dated}/${published.length} 篇有日期）✗`);
@@ -353,10 +436,15 @@ function printReport(platform, reading, obsResult, bound, options) {
       console.log(`  ${r.externalId}  无观测：该作品还没有采集结果`);
     }
     for (const r of bad) {
-      console.log(`  ${r.externalId}`);
+      // 观测时间必须打出来：没有它，"平台=645 观测=644"这种差值无法判断是
+      // "采错了"还是"采集之后涨了 1"，而这两者的处置完全不同。
+      const stamp = r.observedAt
+        ? `（观测于 ${r.observedAt.toISOString().slice(0, 16).replace('T', ' ')}Z，${r.ageMinutes} 分钟前）`
+        : '（观测时间未知）';
+      console.log(`  ${r.externalId}${stamp}`);
       for (const f of r.fields) {
         if (f.verdict === 'mismatch' || f.verdict === 'obs_missing') {
-          console.log(`    ${f.label}: 平台=${f.platformValue} 观测=${f.obsValue} (${f.verdict}, unit=${f.unit})`);
+          console.log(`    ${f.label}: 平台=${f.platformValue} 观测=${f.obsValue} (${f.verdict}, unit=${f.unit})${growthHint(f)}`);
         }
       }
     }
@@ -433,7 +521,7 @@ async function main() {
     console.error(`读取平台失败：${error.code || ''} ${error.message}`);
     process.exit(1);
   }
-  const result = compare(platform, reading.items, observations);
+  const result = compare(platform, reading.items, observations, options.accountId);
   printReport(platform, reading, result, bound, options);
   // 只有**字段不一致**才算验收失败。
   // "缺观测"不是问题：已删除的文章本就不该生成观测（§6.3），

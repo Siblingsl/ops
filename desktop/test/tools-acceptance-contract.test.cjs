@@ -79,3 +79,92 @@ test('每字段对照必须按作品去重，不能按观测条数', () => {
   assert.match(src, /for \(const r of rows\)[\s\S]{0,200}perField\.set/,
     '每字段计数应遍历去重后的作品行');
 });
+
+// DEV-PS101：报告必须能区分"采集之后读数涨了"与"采集记错了"。
+//
+// 缺陷背景：2026-10-26 的实跑报告有 2 条不一致（平台=645 观测=644、平台=28 观测=27），
+// 看起来像采集错误，实际观测是 2 小时前采的，平台计数在这段时间自然涨了 1。
+// 旧报告不带观测时间，也没有任何提示，两种完全不同的处置被压成同一句话。
+//
+// 这里的测试都是**真跑函数**，不是文本匹配——把提示改成常量字符串后，
+// 正则照样匹配，测试却仍然通过（本文件早先已踩过这个坑）。
+
+// extractFunction 从工具源码里取出一个具名函数声明并求值，返回真正的函数对象。
+function extractFunction(name) {
+  const start = src.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `应能在工具源码里找到 function ${name}`);
+  // 从函数头开始按花括号配平，取到函数结束。
+  const open = src.indexOf('{', start);
+  assert.ok(open > start, `${name} 应有函数体`);
+  let depth = 0;
+  for (let i = open; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1;
+    else if (src[i] === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        // eslint-disable-next-line no-new-func
+        return new Function(`return (${src.slice(start, i + 1)})`)();
+      }
+    }
+  }
+  throw new Error(`未能配平 ${name} 的花括号`);
+}
+
+test('parseDbTimestamp 必须认得 psql 的 +00 偏移', () => {
+  // psql -t -A 输出的 timestamptz 是 `2026-10-26 03:22:55.343+00`，
+  // 而 JS 的 Date 只认 +00:00，直接传会得到 Invalid Date，
+  // 报告就退回"观测时间未知"——那正是本次要修的问题。
+  const parseDbTimestamp = extractFunction('parseDbTimestamp');
+  const d = parseDbTimestamp('2026-10-26 03:22:55.343+00');
+  assert.ok(d instanceof Date && !Number.isNaN(d.getTime()),
+    'psql 的 +00 偏移必须能解析成有效时间');
+  assert.equal(d.toISOString(), '2026-10-26T03:22:55.343Z');
+  assert.equal(parseDbTimestamp('2026-10-26 03:22:55.343+00:00').toISOString(), '2026-10-26T03:22:55.343Z');
+  assert.equal(parseDbTimestamp('2026-10-26T03:22:55Z').toISOString(), '2026-10-26T03:22:55.000Z');
+});
+
+test('parseDbTimestamp 解析不了时必须返回 null，不能编一个时间', () => {
+  const parseDbTimestamp = extractFunction('parseDbTimestamp');
+  for (const bad of ['', '   ', 'garbage', null, undefined]) {
+    assert.equal(parseDbTimestamp(bad), null, `${JSON.stringify(bad)} 应返回 null`);
+  }
+});
+
+test('平台读数更大时，历史单调递增才提示"像采集后增长"', () => {
+  const growthHint = extractFunction('growthHint');
+  const grew = growthHint({ grew: true, history: { values: [400, 400, 416], monotonic: true } });
+  assert.match(grew, /采集后增长/, '单调递增应提示像采集后增长');
+  assert.match(grew, /需重采后再对照/, '必须给出复核动作，不能只说"可能没问题"');
+});
+
+test('历史里出现过下降时，不能用"增长"解释', () => {
+  // 计数器不会降。历史降过说明这个字段不是单调计数器，
+  // 拿"会涨"糊过去就是掩盖一个真实缺陷。
+  const growthHint = extractFunction('growthHint');
+  const hint = growthHint({ grew: true, history: { values: [30, 28, 29], monotonic: false } });
+  assert.match(hint, /按记错排查/, '非单调时必须按记错排查');
+  assert.equal(/采集后增长/.test(hint), false, '非单调时不应说成增长');
+});
+
+test('没有历史时不能给出"增长"结论', () => {
+  const growthHint = extractFunction('growthHint');
+  const hint = growthHint({ grew: true, history: null });
+  assert.match(hint, /无法判断/, '没有历史只能写无法判断');
+  assert.equal(/采集后增长/.test(hint), false, '没有历史时不应说成增长');
+});
+
+test('平台读数更小时不产生任何增长提示', () => {
+  const growthHint = extractFunction('growthHint');
+  assert.equal(growthHint({ grew: false, history: null }), '');
+});
+
+test('不一致仍计入不一致：提示只是解释，不能把差值洗成一致', () => {
+  // 这是本改动的红线：报告可以解释差值，但 `mismatched` 的计数与
+  // 退出码都必须照旧由真实差值决定。
+  assert.match(src, /let grewCount = 0;/);
+  assert.match(src, /if \(verdict === 'match' \|\| verdict === 'both_missing'\) matched \+= 1;\s*\n\s*else mismatched \+= 1;/,
+    'mismatch 必须计入 mismatched，不能被 grew 分支截走');
+  assert.match(src, /process\.exit\(result\.mismatched > 0 \? 1 : 0\)/,
+    '退出码必须仍由 mismatched 决定');
+});
+
