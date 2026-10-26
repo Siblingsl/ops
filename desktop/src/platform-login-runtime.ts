@@ -6,7 +6,7 @@ import { accountProfileSlot, buildProfileMeta, checkQuota, readAccountProfile, s
 import { selectLoginBrowser, trustedLoginBrowsers, type LoginBrowserFamily } from './platform-browser-trust';
 import { createCDPClient, launchPlatformBrowser, PLATFORM_BROWSER_NAMES, PlatformBrowserError, isAllowedPlatformUrl } from './platform-worker';
 import { installLoginNavigationPolicy } from './platform-login-policy';
-import { parseIdentity as parseXhsIdentity, probeCapabilities as xhsCapabilities, probePostedNotesReadable } from './platforms/xhs';
+import { parseIdentity as parseXhsIdentity, probeCapabilities as xhsCapabilities, probePostedNotesCapabilities } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as wechatCapabilities, probePublishedListReadable } from './platforms/wechat-mp';
 import type { LoginHandle, LoginIdentity } from './platform-login-flow';
 import type { DesktopClient } from './desktop-client';
@@ -18,12 +18,15 @@ export async function probeXhsLoginIdentity(session: PlatformLoginSession, expec
   const result = await probeIdentity(session);
   if (!result.loggedIn || !result.payload) return null;
   const identity = parseXhsIdentity(JSON.parse(result.payload));
-  let postedNotesReadable = false;
+  let listReadable = false;
+  let perNoteMetricsReadable = false;
   // A recheck must never read the works of an account different from the existing connection.
   if (!expectedKey || expectedKey === identity.externalAccountKey) {
     try {
-      await probePostedNotesReadable(createPageResponseSource(session));
-      postedNotesReadable = true;
+      // 一次签名请求同时核验目录与单篇指标：指标本来就随列表返回，分两次会连发签名 GET。
+      const probe = await probePostedNotesCapabilities(createPageResponseSource(session));
+      listReadable = probe.listReadable;
+      perNoteMetricsReadable = probe.perNoteMetricsReadable;
     } catch {
       // Identity can still be reviewed while an unverified catalog remains closed.
     }
@@ -32,9 +35,11 @@ export async function probeXhsLoginIdentity(session: PlatformLoginSession, expec
     externalAccountKey: identity.externalAccountKey,
     displayName: identity.redId || identity.externalAccountKey,
     capabilities: {
-      ...xhsCapabilities({ mainSiteLoggedIn: true, identity, postedNotesReadable, followerInfoReadable: false, now }),
-      workList: postedNotesReadable ? 'supported' : 'unknown',
-      perNoteMetrics: 'unknown',
+      ...xhsCapabilities({ mainSiteLoggedIn: true, identity, postedNotesReadable: listReadable, followerInfoReadable: false, now }),
+      workList: listReadable ? 'supported' : 'unknown',
+      // 只有真正在列表响应里读到过计数才声称可读；读不到就保持 unknown，
+      // 否则 v2 同步会在 catalog 之后跳过整个 metrics 阶段（metrics_capability_unverified）。
+      perNoteMetrics: listReadable && perNoteMetricsReadable ? 'supported' : 'unknown',
       followerTotal: 'unknown',
       browserVersion
     }

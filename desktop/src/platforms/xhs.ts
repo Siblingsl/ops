@@ -46,6 +46,12 @@ export interface XhsIdentity {
   redId: string;
 }
 
+// 一次签名列表请求能核验出的两项能力。分开报告，便于只提升确实核验过的那一项。
+export interface XhsListCapabilities {
+  listReadable: boolean;
+  perNoteMetricsReadable: boolean;
+}
+
 // 一条笔记的规范化事实。字段是否出现用 present 标记，绝不把“没有”当成 0（§9.2）。
 export interface XhsNoteFact {
   noteId: string;
@@ -303,6 +309,21 @@ export function parsePostedNotesPage(payload: unknown): {
 // probePostedNotesReadable 仅核验首页目录结构，不分页、不保存作品；
 // 必须走创作中心自己发起的签名 GET，不能退回客户端构造请求。
 export async function probePostedNotesReadable(source: ReadOnlyResponseSource): Promise<boolean> {
+  const probe = await probePostedNotesCapabilities(source);
+  return probe.listReadable;
+}
+
+// probePostedNotesCapabilities 用**同一次**签名列表请求同时核验两件事：目录可读、单篇指标可读。
+//
+// 为什么合并：单篇指标（观看/点赞/收藏/评论/分享）本来就随列表响应一起返回
+// （见 normalizeNote 与 noteToObservation），不需要额外接口。分两次请求会连发两个
+// 签名 GET，违反 §13.1「相邻请求至少间隔 5 秒」；合成一次既满足节奏要求，
+// 又避免"只核验了列表就顺带声称指标可读"或反过来漏掉指标核验。
+//
+// 单篇指标可读的判定：至少一篇**已发布**作品带出至少一个可解释的计数。
+// 草稿/审核中没有指标；整页都没有计数说明该账号或接口未给出指标，此时保持未核验，
+// 不虚报 supported（§6.2）。
+export async function probePostedNotesCapabilities(source: ReadOnlyResponseSource): Promise<XhsListCapabilities> {
   if (!source.fetchSigned) {
     throw new XhsAdapterError('platform_capability_denied', '作品列表核验需要创作中心签名请求');
   }
@@ -313,7 +334,9 @@ export async function probePostedNotesReadable(source: ReadOnlyResponseSource): 
   if (!data || (!Array.isArray(data.notes) && !Array.isArray(data.items)) || parsed.invalidRows > 0) {
     throw new XhsAdapterError('platform_schema_changed', '作品列表结构尚未通过核验');
   }
-  return true;
+  const perNoteMetricsReadable = parsed.notes.some((note) => note.status === 'published'
+    && [note.viewTimes, note.likes, note.favorites, note.comments, note.shares].some((value) => value !== null));
+  return { listReadable: true, perNoteMetricsReadable };
 }
 
 // collectPostedNotes 跨页收集并按 note_id 去重；到达页数上限或没有下一页时停止，

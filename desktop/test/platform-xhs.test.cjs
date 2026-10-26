@@ -12,6 +12,7 @@ const {
   parseIdentity,
   parsePostedNotesPage,
   probeCapabilities,
+  probePostedNotesCapabilities,
   probePostedNotesReadable,
   resolveShareLink,
   stripSessionParams,
@@ -82,6 +83,31 @@ test('作品列表能力只在签名列表响应结构完整时通过核验', as
 
   assert.equal(await probePostedNotesReadable(source), true);
   assert.deepEqual(requested, ['/api/galaxy/v2/creator/note/user/posted?page=0&page_size=20']);
+});
+
+test('一次签名请求同时核验目录与单篇指标可读，不额外发请求', async () => {
+  const requested = [];
+  const source = {
+    fetchJSON: async () => { throw new Error('签名列表不得回退到普通 GET'); },
+    fetchSigned: async (path) => { requested.push(path); return page([noteA]); }
+  };
+  const probe = await probePostedNotesCapabilities(source);
+  assert.equal(probe.listReadable, true);
+  // noteA 已发布且带 view/like/collect/comment/share，指标确实可读。
+  assert.equal(probe.perNoteMetricsReadable, true);
+  assert.equal(requested.length, 1, '目录与指标必须在同一次签名请求里核验');
+});
+
+test('整页都没有可解释计数时不声称单篇指标可读', async () => {
+  const noCounts = { ...noteA, view_count: null, likes: null, collected_count: null, comments_count: null, shared_count: null };
+  const probe = await probePostedNotesCapabilities({ fetchSigned: async () => page([noCounts]) });
+  assert.equal(probe.listReadable, true, '列表结构完好，目录仍算可读');
+  assert.equal(probe.perNoteMetricsReadable, false, '没有计数就不能声称指标可读');
+
+  // 草稿没有指标，不能拿它当指标可读的证据。
+  const draftOnly = { ...noteA, tab_status: 'draft' };
+  const draftProbe = await probePostedNotesCapabilities({ fetchSigned: async () => page([draftOnly]) });
+  assert.equal(draftProbe.perNoteMetricsReadable, false);
 });
 
 test('合法空列表可以证明接口可读，缺列表或包含无效行不能通过能力核验', async () => {
