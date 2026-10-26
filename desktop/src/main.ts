@@ -1521,7 +1521,9 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
       };
     }
 
-    const source = createPageResponseSource(session);
+    // 旧版单阶段采集同样要走节奏包装：滚动续读会在一次采集里连发多次列表请求，
+    // §13.1 要求串行且相邻请求至少间隔 5 秒。
+    const source = pacedPlatformSource(createPageResponseSource(session));
     // 观测必须带真实的外部账号键，否则服务端无法把作品归到正确连接。
     // 优先用 run 冻结的绑定快照，其次回读连接摘要。
     const externalAccountKey = await resolveRunAccountKey(run);
