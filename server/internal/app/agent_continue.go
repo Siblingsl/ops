@@ -103,9 +103,17 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	if text != "" && agentContainsSecret(text, s.agentSecretValues(ctx, ident(ctx).WorkspaceID)) {
 		return apiErr(422, "validation_failed", "消息中疑似包含密钥或密码，请到设置页填写，不要发给智能体")
 	}
-	attIDs, err := s.agentCheckMessageAttachments(ctx, conv.ID, req.AttachmentIDs)
+	attIDs, err := parseAgentAttachmentIDs(req.AttachmentIDs)
 	if err != nil {
 		return err
+	}
+	if _, err := parseAgentRunProtocolRequest(req, nil); err != nil {
+		return err
+	}
+	if replay, err := s.agentMessageReplay(ctx, conv.ID, requestID, req, attIDs); err != nil {
+		return err
+	} else if replay != nil {
+		return writeAgentPreparedReplay(w, conv.ID, replay)
 	}
 	contextAccountID := conv.AccountID
 	if raw := strings.TrimSpace(req.AccountID); raw != "" {
@@ -139,14 +147,7 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	if text == "" && len(attIDs) == 0 && len(contextRefs) == 0 && len(req.SkillRequests) == 0 {
 		return validation("请输入内容，或添加要处理的资料")
 	}
-	requestPayload := struct {
-		Text          string
-		AttachmentIDs []uuid.UUID
-		ContextRefs   []agentContextReference
-		SkillRequests []agentSkillRequest
-		AccountID     string
-		Model         *agentModelRef
-	}{text, attIDs, contextRefs, req.SkillRequests, strings.TrimSpace(req.AccountID), req.Model}
+	requestPayload := agentMessageRequestPayload{text, attIDs, contextRefs, req.SkillRequests, strings.TrimSpace(req.AccountID), req.Model}
 	protocol, err := parseAgentRunProtocolRequest(req, requestPayload)
 	if err != nil {
 		return err
@@ -165,33 +166,42 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 			return nil
 		}
 	}
-	// 第 6.4 节第 5 项：先写入未报告的卡片结果，再写入用户消息。
-	if err := s.agentReportCardResults(ctx, conv.ID); err != nil {
+	selected := *conv
+	if err := s.agentSelectConversationOverride(ctx, &selected, req); err != nil {
 		return err
 	}
-	if err := s.agentApplyConversationOverride(ctx, conv, req); err != nil {
-		return err
-	}
-	message, replay, err := s.agentInsertUserMessageWithContext(ctx, conv.ID, text, attIDs, contextRefs,
-		req.SkillRequests, requestID, requestPayload)
+	prepared, err := s.agentPrepareRun(ctx, conv, &selected, "message", protocol, func(tx pgx.Tx, c *agentConversation) (*uuid.UUID, bool, error) {
+		if err := s.agentReportCardResultsTx(ctx, tx, c.ID); err != nil {
+			return nil, false, err
+		}
+		message, replay, err := s.agentInsertUserMessageWithContextTx(ctx, tx, c.ID, text, attIDs, contextRefs,
+			req.SkillRequests, requestID, requestPayload)
+		if err != nil {
+			return nil, false, err
+		}
+		if !replay {
+			title := truncate(strings.Join(strings.Fields(text), " "), agentTitleChars)
+			if title == "" {
+				title = "新对话"
+			}
+			if _, err := tx.Exec(ctx, `UPDATE agent_conversation SET auto_continue_count=0,
+				title=CASE WHEN title_source='auto' THEN $2 ELSE title END,updated_at=now() WHERE id=$1`, c.ID, title); err != nil {
+				return nil, false, err
+			}
+		}
+		return &message.ID, replay, nil
+	})
 	if err != nil {
 		return err
 	}
-	if replay && protocol == nil {
-		return ok(w, map[string]any{"status": "replayed", "message_id": message.ID})
+	if prepared.Replayed {
+		return writeAgentPreparedReplay(w, conv.ID, prepared)
 	}
-	if !replay {
-		s.agentAutoTitle(ctx, conv, text)
-		if _, err := s.db.Exec(ctx, `UPDATE agent_conversation SET auto_continue_count=0, updated_at=now() WHERE id=$1`,
-			conv.ID); err != nil {
-			return err
-		}
-	}
-	return s.agentStreamRun(w, r, conv, "message", protocol, &message.ID)
+	return s.agentStreamPreparedRun(w, r, conv, protocol, prepared)
 }
 
-// agentApplyConversationOverride 应用请求中的账号与模型覆盖并保存到对话（第 11.2 节）。
-func (s *Server) agentApplyConversationOverride(ctx context.Context, conv *agentConversation,
+// agentSelectConversationOverride 校验请求中的账号与模型覆盖，实际保存由受理事务负责（第 11.2 节）。
+func (s *Server) agentSelectConversationOverride(ctx context.Context, conv *agentConversation,
 	req agentRunRequest) error {
 	accountID := conv.AccountID
 	if aid := strings.TrimSpace(req.AccountID); aid != "" {
@@ -214,59 +224,33 @@ func (s *Server) agentApplyConversationOverride(ctx context.Context, conv *agent
 	} else if conv.ModelProviderID != nil {
 		providerID = conv.ModelProviderID
 	}
-	if accountID == conv.AccountID && providerID == conv.ModelProviderID && model == conv.Model {
-		return nil
-	}
-	_, err := s.db.Exec(ctx, `UPDATE agent_conversation
-		SET account_id=$2, model_provider_id=$3, model=$4, updated_at=now() WHERE id=$1`,
-		conv.ID, accountID, providerID, model)
-	if err != nil {
-		return err
-	}
 	conv.AccountID, conv.ModelProviderID, conv.Model = accountID, providerID, model
 	return nil
-}
-
-// agentCheckMessageAttachments 校验附件条数、归属与未引用状态（第 6.5 节末两行）。
-func (s *Server) agentCheckMessageAttachments(ctx context.Context, convID uuid.UUID,
-	ids []string) ([]uuid.UUID, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	if len(ids) > agentAttachmentsPerMessage {
-		return nil, apiErr(422, "agent_attachment_invalid", "每条消息最多 6 个附件")
-	}
-	out := []uuid.UUID{}
-	for _, raw := range ids {
-		id, err := uuid.Parse(strings.TrimSpace(raw))
-		if err != nil {
-			return nil, apiErr(422, "agent_attachment_invalid", "附件不存在或已被删除")
-		}
-		var n int
-		if err := s.db.QueryRow(ctx, `SELECT count(*) FROM agent_attachment
-			WHERE id=$1 AND user_id=$2 AND referenced=false AND (conversation_id IS NULL OR conversation_id=$3)`,
-			id, ident(ctx).UserID, convID).Scan(&n); err != nil {
-			return nil, err
-		}
-		if n == 0 {
-			return nil, apiErr(422, "agent_attachment_invalid", "附件不存在、已被使用或不属于本人")
-		}
-		out = append(out, id)
-	}
-	return out, nil
 }
 
 // agentInsertRow 写入一条消息；runID 可为空（用户消息、action_result）。
 func (s *Server) agentInsertRow(ctx context.Context, convID uuid.UUID, runID *uuid.UUID, role, content string,
 	toolCalls any, toolCallID, toolName string, attachments []uuid.UUID) (*agentMessageView, error) {
-	if attachments == nil {
-		attachments = []uuid.UUID{}
-	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+	view, err := s.agentInsertRowTx(ctx, tx, convID, runID, role, content, toolCalls, toolCallID, toolName, attachments)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return view, nil
+}
+
+func (s *Server) agentInsertRowTx(ctx context.Context, tx pgx.Tx, convID uuid.UUID, runID *uuid.UUID,
+	role, content string, toolCalls any, toolCallID, toolName string, attachments []uuid.UUID) (*agentMessageView, error) {
+	if attachments == nil {
+		attachments = []uuid.UUID{}
+	}
 	var seq int
 	if err := tx.QueryRow(ctx, `UPDATE agent_conversation
 		SET next_seq = next_seq + 1, last_message_at = now(), updated_at = now()
@@ -288,15 +272,12 @@ func (s *Server) agentInsertRow(ctx context.Context, convID uuid.UUID, runID *uu
 			return nil, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
 	view.Attachments = []agentAttachmentView{}
 	return &view, nil
 }
 
 // agentInsertUserMessageWithContext 保存消息、引用和附件状态，并将会话级引用固定到对话中。
-func (s *Server) agentInsertUserMessageWithContext(ctx context.Context, convID uuid.UUID, content string,
+func (s *Server) agentInsertUserMessageWithContextTx(ctx context.Context, tx pgx.Tx, convID uuid.UUID, content string,
 	attachments []uuid.UUID, refs []agentContextReference, skills []agentSkillRequest,
 	requestID uuid.UUID, requestPayload any) (*agentMessageView, bool, error) {
 	if attachments == nil {
@@ -316,11 +297,6 @@ func (s *Server) agentInsertUserMessageWithContext(ctx context.Context, convID u
 	if err != nil {
 		return nil, false, err
 	}
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	defer tx.Rollback(ctx)
 	if requestID != uuid.Nil {
 		resourceID, err := claimAgentRequest(ctx, tx, ident(ctx).WorkspaceID, ident(ctx).UserID,
 			"conversation.message:"+convID.String(), requestID, requestPayload)
@@ -328,9 +304,6 @@ func (s *Server) agentInsertUserMessageWithContext(ctx context.Context, convID u
 			return nil, false, err
 		}
 		if resourceID != nil {
-			if err := tx.Commit(ctx); err != nil {
-				return nil, false, err
-			}
 			return &agentMessageView{ID: *resourceID}, true, nil
 		}
 	}
@@ -373,7 +346,8 @@ func (s *Server) agentInsertUserMessageWithContext(ctx context.Context, convID u
 	}
 	if len(attachments) > 0 {
 		tag, err := tx.Exec(ctx, `UPDATE agent_attachment SET referenced=true,conversation_id=COALESCE(conversation_id,$2)
-			WHERE id=ANY($1) AND user_id=$3 AND referenced=false`, attachments, convID, ident(ctx).UserID)
+			WHERE id=ANY($1) AND user_id=$3 AND workspace_id=$4 AND referenced=false AND (conversation_id IS NULL OR conversation_id=$2)`,
+			attachments, convID, ident(ctx).UserID, ident(ctx).WorkspaceID)
 		if err != nil {
 			return nil, false, err
 		}
@@ -403,9 +377,6 @@ func (s *Server) agentInsertUserMessageWithContext(ctx context.Context, convID u
 			return nil, false, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, false, err
-	}
 	return &view, false, nil
 }
 
@@ -413,8 +384,8 @@ func (s *Server) agentInsertUserMessageWithContext(ctx context.Context, convID u
 
 // agentReportCardResults 把“已结束但未报告”的卡片结果合并为一条 action_result 消息，
 // 写入后一次性设置 reported_at。
-func (s *Server) agentReportCardResults(ctx context.Context, convID uuid.UUID) error {
-	rows, err := s.db.Query(ctx, `UPDATE agent_action
+func (s *Server) agentReportCardResultsTx(ctx context.Context, tx pgx.Tx, convID uuid.UUID) error {
+	rows, err := tx.Query(ctx, `UPDATE agent_action
 		SET reported_at = now()
 		WHERE id IN (SELECT id FROM agent_action
 			WHERE conversation_id=$1 AND reported_at IS NULL
@@ -436,7 +407,6 @@ func (s *Server) agentReportCardResults(ctx context.Context, convID uuid.UUID) e
 		Error  any `json:"error,omitempty"`
 	}
 	items := []item{}
-	ids := []uuid.UUID{}
 	for rows.Next() {
 		var (
 			it                   item
@@ -454,7 +424,6 @@ func (s *Server) agentReportCardResults(ctx context.Context, convID uuid.UUID) e
 			_ = json.Unmarshal(errRaw, &it.Error)
 		}
 		items = append(items, it)
-		ids = append(ids, it.ID)
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -467,33 +436,11 @@ func (s *Server) agentReportCardResults(ctx context.Context, convID uuid.UUID) e
 		return err
 	}
 	content := agentActionResultHead + "\n" + agentDataBlock("操作结果", string(body))
-	_, err = s.agentInsertRow(ctx, convID, nil, "action_result", content, nil, "", "", nil)
+	_, err = s.agentInsertRowTx(ctx, tx, convID, nil, "action_result", content, nil, "", "", nil)
 	return err
 }
 
 // ---------- 运行流编排（第 11.4 节运行流） ----------
-
-// agentCheckRunLimits 校验并发上限：每对话 1 个运行（409），每用户 2 个运行（429）。
-func (s *Server) agentCheckRunLimits(ctx context.Context, conv *agentConversation) error {
-	var n int
-	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM agent_run
-		WHERE conversation_id=$1 AND status IN ('queued','running')`, conv.ID).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return apiErr(409, "agent_run_busy", "这个对话正在运行中，请等待本次运行结束")
-	}
-	var m int
-	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM agent_run
-		WHERE workspace_id=$1 AND user_id=$2 AND status IN ('queued','running')`,
-		ident(ctx).WorkspaceID, ident(ctx).UserID).Scan(&m); err != nil {
-		return err
-	}
-	if m >= agentMaxRunsPerUser {
-		return apiErr(429, "agent_limit_reached", "同时运行的任务太多，请等待其中一次结束")
-	}
-	return nil
-}
 
 // agentRunModel 取对话已选模型；未选时取默认模型（第 7.4 节第 2、3 项）。
 func (s *Server) agentRunModel(ctx context.Context, conv *agentConversation) (agentModelRef, error) {
@@ -510,55 +457,15 @@ func (s *Server) agentRunModel(ctx context.Context, conv *agentConversation) (ag
 	return s.resolveAgentModel(ctx, *def)
 }
 
-// agentStreamRun 走完整 SSE 流程执行一次运行。客户端断开后服务端继续运行到结束（第 6.8 节第 1 项）。
-func (s *Server) agentStreamRun(w http.ResponseWriter, r *http.Request, conv *agentConversation,
-	trigger string, protocol *agentRunProtocolRequest, messageID *uuid.UUID) error {
+// agentStreamPreparedRun 执行已受理的运行；旧 SSE 与 v2 共用同一个循环。
+func (s *Server) agentStreamPreparedRun(w http.ResponseWriter, r *http.Request, conv *agentConversation,
+	protocol *agentRunProtocolRequest, prepared *agentPreparedRun) error {
 	ctx := r.Context()
-	if protocol != nil {
-		runID, after, found, err := s.existingAgentRunRequest(ctx, conv.ID, trigger, protocol)
-		if err != nil {
-			return err
-		}
-		if found {
-			writeAgentRunAccepted(w, conv.ID, runID, messageID, after)
-			return nil
-		}
-	}
-	if err := s.agentCheckRunLimits(ctx, conv); err != nil {
-		return err
-	}
-	model, err := s.agentRunModel(ctx, conv)
+	st, messageID := prepared.State, prepared.MessageID
+	runBase := context.WithoutCancel(ctx)
+	rt, err := s.agentResolveModel(runBase, st)
 	if err != nil {
-		return err
-	}
-	requestID, requestPayload := uuid.Nil, any(nil)
-	if protocol != nil {
-		requestID, requestPayload = protocol.RequestID, protocol.Payload
-	}
-	st, replay, err := s.agentStartRun(ctx, trigger, conv, model, requestID, requestPayload)
-	if err != nil {
-		return err
-	}
-	if replay {
-		after := st.StartEventSeq
-		if after > 0 {
-			after--
-		}
-		writeAgentRunAccepted(w, conv.ID, st.RunID, messageID, after)
-		return nil
-	}
-	// 第 6.2 节第 4 项、第 8.3 节第 1 项：把触发本次运行的最后一条用户消息关联到本次运行；
-	// 图片附件据此只在触发它的运行中以多模态发送，之后的运行替换为文字占位。
-	if trigger != "continue" {
-		if _, err := s.db.Exec(ctx, `UPDATE agent_message SET run_id=$1 WHERE conversation_id=$2 AND seq=(
-			SELECT max(seq) FROM agent_message WHERE conversation_id=$2 AND role='user')`,
-			st.RunID, conv.ID); err != nil {
-			return err
-		}
-	}
-	rt, err := s.agentResolveModel(ctx, st)
-	if err != nil {
-		s.finishAgentRun(ctx, st, "failed", "", nil)
+		s.finishAgentRun(runBase, st, "failed", "", nil)
 		return err
 	}
 	var sse *sseWriter
@@ -567,7 +474,7 @@ func (s *Server) agentStreamRun(w http.ResponseWriter, r *http.Request, conv *ag
 	}
 	// 第 6.8 节第 1 项：运行与客户端连接解耦，浏览器断开后服务端继续运行到结束；
 	// 取消只来自用户点击停止（agentCancelRun）。
-	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	runCtx, cancel := context.WithCancel(runBase)
 	s.registerAgentRun(st.RunID, cancel)
 	var pendingDelta strings.Builder
 	lastDeltaFlush := time.Now()
@@ -682,25 +589,27 @@ func (s *Server) postAgentContinue(w http.ResponseWriter, r *http.Request) error
 			return nil
 		}
 	}
-	if err := s.agentCheckRunLimits(ctx, conv); err != nil {
+	prepared, err := s.agentPrepareRun(ctx, conv, conv, "continue", protocol, func(tx pgx.Tx, c *agentConversation) (*uuid.UUID, bool, error) {
+		var count int
+		if err := tx.QueryRow(ctx, `SELECT auto_continue_count FROM agent_conversation WHERE id=$1`, c.ID).Scan(&count); err != nil {
+			return nil, false, err
+		}
+		if count >= agentMaxContinuations {
+			return nil, false, apiErr(429, "agent_limit_reached", "连续自动续跑次数已达上限，请发送消息继续")
+		}
+		if err := s.agentReportCardResultsTx(ctx, tx, c.ID); err != nil {
+			return nil, false, err
+		}
+		_, err := tx.Exec(ctx, `UPDATE agent_conversation SET auto_continue_count=auto_continue_count+1,updated_at=now() WHERE id=$1`, c.ID)
+		return nil, false, err
+	})
+	if err != nil {
 		return err
 	}
-	var count int
-	if err := s.db.QueryRow(ctx, `SELECT auto_continue_count FROM agent_conversation WHERE id=$1`,
-		conv.ID).Scan(&count); err != nil {
-		return err
+	if prepared.Replayed {
+		return writeAgentPreparedReplay(w, conv.ID, prepared)
 	}
-	if count >= agentMaxContinuations {
-		return apiErr(429, "agent_limit_reached", "连续自动续跑次数已达上限，请发送消息继续")
-	}
-	if err := s.agentReportCardResults(ctx, conv.ID); err != nil {
-		return err
-	}
-	if _, err := s.db.Exec(ctx, `UPDATE agent_conversation
-		SET auto_continue_count = auto_continue_count + 1, updated_at=now() WHERE id=$1`, conv.ID); err != nil {
-		return err
-	}
-	return s.agentStreamRun(w, r, conv, "continue", protocol, nil)
+	return s.agentStreamPreparedRun(w, r, conv, protocol, prepared)
 }
 
 // agentConversationCanContinue 暴露刷新后仍可恢复的续跑状态（第 6.4 节第 3 项）。
@@ -730,47 +639,45 @@ type agentLastUserMessage struct {
 }
 
 // agentLastUserMessage 取最后一条用户消息。
-func (s *Server) agentLastUserMessage(ctx context.Context, convID uuid.UUID) (*agentLastUserMessage, error) {
+func agentLastUserMessageWith(ctx context.Context, reader agentRequestReader, convID uuid.UUID) (*agentLastUserMessage, error) {
 	var m agentLastUserMessage
-	err := s.db.QueryRow(ctx, `SELECT id, seq, content, attachment_ids, created_at
-		FROM agent_message WHERE conversation_id=$1 AND role='user' ORDER BY seq DESC LIMIT 1`, convID).
+	err := reader.QueryRow(ctx, `SELECT id,seq,content,attachment_ids,created_at FROM agent_message
+		WHERE conversation_id=$1 AND role='user' ORDER BY seq DESC LIMIT 1`, convID).
 		Scan(&m.ID, &m.Seq, &m.Content, &m.AttachmentIDs, &m.CreatedAt)
+	return &m, err
+}
+
+// agentRewriteTailTx 在同一受理事务内检查最后一条消息及已执行卡片，随后替代未执行卡片。
+func agentRewriteTailTx(ctx context.Context, tx pgx.Tx, convID, messageID uuid.UUID) (*agentLastUserMessage, error) {
+	last, err := agentLastUserMessageWith(ctx, tx, convID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, errNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
-	return &m, nil
-}
-
-// agentCheckRewriteAllowed 校验重新生成 / 编辑的前提（第 6.7 节第 3 项）：
-// 没有运行中的 run，且该用户消息之后没有 succeeded / executing / needs_input 的卡片。
-func (s *Server) agentCheckRewriteAllowed(ctx context.Context, conv *agentConversation,
-	m *agentLastUserMessage) error {
-	if err := s.agentCheckRunLimits(ctx, conv); err != nil {
-		return err
+	if last.ID != messageID {
+		return nil, apiErr(409, "agent_action_state_invalid", "对话已有新消息，请刷新后重新操作")
 	}
-	var n int
-	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM agent_action
-		WHERE conversation_id=$1 AND created_at >= $2 AND status IN ('succeeded','executing','needs_input')`,
-		conv.ID, m.CreatedAt).Scan(&n); err != nil {
-		return err
+	var blocked bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_action WHERE conversation_id=$1
+		AND created_at >= $2 AND status IN ('succeeded','executing','needs_input'))`, convID, last.CreatedAt).Scan(&blocked); err != nil {
+		return nil, err
 	}
-	if n > 0 {
-		return apiErr(409, "agent_action_state_invalid", "已有操作执行过，不能重写这段对话，请发送新消息")
+	if blocked {
+		return nil, apiErr(409, "agent_action_state_invalid", "已有操作执行过，不能重写这段对话，请发送新消息")
 	}
-	return nil
-}
-
-// agentRewriteTail 删除指定序号之后的全部消息，并把该时间点之后的未结束卡片改为 superseded
-// （第 6.7 节第 1 项）。替代卡片不在这里设置 reported_at，由下一次运行的 action_result 合并报告。
-func (s *Server) agentRewriteTail(ctx context.Context, convID uuid.UUID, seq int, since time.Time) error {
-	if _, err := s.db.Exec(ctx, `DELETE FROM agent_message WHERE conversation_id=$1 AND seq > $2`,
-		convID, seq); err != nil {
-		return err
+	if _, err := tx.Exec(ctx, `DELETE FROM agent_message WHERE conversation_id=$1 AND seq>$2`, convID, last.Seq); err != nil {
+		return nil, err
 	}
-	_, err := s.agentMutateActions(ctx, convID, `UPDATE agent_action SET status='superseded'
-		WHERE conversation_id=$1 AND created_at >= $2 AND status IN ('pending','executing','needs_input')`,
-		convID, since)
-	return err
+	if _, err := mutateAgentActionsTx(ctx, tx, `UPDATE agent_action SET status='superseded'
+		WHERE conversation_id=$1 AND created_at >= $2 AND status='pending'`, convID, last.CreatedAt); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_conversation SET auto_continue_count=0,updated_at=now() WHERE id=$1`, convID); err != nil {
+		return nil, err
+	}
+	return last, nil
 }
 
 func (s *Server) postAgentRegenerate(w http.ResponseWriter, r *http.Request) error {
@@ -786,18 +693,31 @@ func (s *Server) postAgentRegenerate(w http.ResponseWriter, r *http.Request) err
 	if err := agentCheckConversationWritable(conv); err != nil {
 		return err
 	}
-	last, err := s.agentLastUserMessage(ctx, conv.ID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return apiErr(409, "agent_action_state_invalid", "这个对话还没有可重新生成的运行")
-		}
-		return err
-	}
 	var req agentRunRequest
 	if err := decodeOptional(r, &req); err != nil {
 		return err
 	}
-	protocol, err := parseAgentRunProtocolRequest(req, struct {
+	protocol, err := parseAgentRunProtocolRequest(req, nil)
+	if err != nil {
+		return err
+	}
+	if protocol != nil {
+		prepared, err := s.agentRegenerateReplay(ctx, conv.ID, protocol.RequestID)
+		if err != nil {
+			return err
+		}
+		if prepared != nil {
+			return writeAgentPreparedReplay(w, conv.ID, prepared)
+		}
+	}
+	last, err := agentLastUserMessageWith(ctx, s.db, conv.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return apiErr(409, "agent_action_state_invalid", "这个对话还没有可重新生成的运行")
+	}
+	if err != nil {
+		return err
+	}
+	protocol, err = parseAgentRunProtocolRequest(req, struct {
 		ConversationID uuid.UUID
 		MessageID      uuid.UUID
 		Seq            int
@@ -815,17 +735,17 @@ func (s *Server) postAgentRegenerate(w http.ResponseWriter, r *http.Request) err
 			return nil
 		}
 	}
-	if err := s.agentCheckRewriteAllowed(ctx, conv, last); err != nil {
+	prepared, err := s.agentPrepareRun(ctx, conv, conv, "regenerate", protocol, func(tx pgx.Tx, c *agentConversation) (*uuid.UUID, bool, error) {
+		_, err := agentRewriteTailTx(ctx, tx, c.ID, last.ID)
+		return &last.ID, false, err
+	})
+	if err != nil {
 		return err
 	}
-	if err := s.agentRewriteTail(ctx, conv.ID, last.Seq, last.CreatedAt); err != nil {
-		return err
+	if prepared.Replayed {
+		return writeAgentPreparedReplay(w, conv.ID, prepared)
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE agent_conversation SET auto_continue_count=0, updated_at=now() WHERE id=$1`,
-		conv.ID); err != nil {
-		return err
-	}
-	return s.agentStreamRun(w, r, conv, "regenerate", protocol, &last.ID)
+	return s.agentStreamPreparedRun(w, r, conv, protocol, prepared)
 }
 
 func (s *Server) postAgentMessageEdit(w http.ResponseWriter, r *http.Request) error {
@@ -845,16 +765,6 @@ func (s *Server) postAgentMessageEdit(w http.ResponseWriter, r *http.Request) er
 	if err != nil {
 		return errNotFound
 	}
-	last, err := s.agentLastUserMessage(ctx, conv.ID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return errNotFound
-		}
-		return err
-	}
-	if last.ID != messageID {
-		return apiErr(409, "agent_action_state_invalid", "只能编辑最后一条用户消息")
-	}
 	var req agentRunRequest
 	if err := agentDecodeBody(r, &req); err != nil {
 		return err
@@ -870,7 +780,7 @@ func (s *Server) postAgentMessageEdit(w http.ResponseWriter, r *http.Request) er
 	if agentContainsSecret(text, s.agentSecretValues(ctx, ident(ctx).WorkspaceID)) {
 		return apiErr(422, "validation_failed", "消息中疑似包含密钥或密码，请到设置页填写，不要发给智能体")
 	}
-	attIDs, err := s.agentCheckMessageAttachments(ctx, conv.ID, req.AttachmentIDs)
+	attIDs, err := parseAgentAttachmentIDs(req.AttachmentIDs)
 	if err != nil {
 		return err
 	}
@@ -893,25 +803,56 @@ func (s *Server) postAgentMessageEdit(w http.ResponseWriter, r *http.Request) er
 			return nil
 		}
 	}
-	if err := s.agentCheckRewriteAllowed(ctx, conv, last); err != nil {
+	prepared, err := s.agentPrepareRun(ctx, conv, conv, "edit", protocol, func(tx pgx.Tx, c *agentConversation) (*uuid.UUID, bool, error) {
+		last, err := agentRewriteTailTx(ctx, tx, c.ID, messageID)
+		if err != nil {
+			return nil, false, err
+		}
+		// 允许保留本消息原有附件；新附件必须仍未引用且属于本人、本会话。
+		if len(attIDs) > 0 {
+			tag, err := tx.Exec(ctx, `UPDATE agent_attachment SET referenced=true,conversation_id=$2 WHERE id=ANY($1)
+				AND user_id=$3 AND workspace_id=$5 AND (conversation_id IS NULL OR conversation_id=$2)
+				AND (referenced=false OR id=ANY($4))`, attIDs, c.ID, ident(ctx).UserID, last.AttachmentIDs, ident(ctx).WorkspaceID)
+			if err != nil {
+				return nil, false, err
+			}
+			if int(tag.RowsAffected()) != len(attIDs) {
+				return nil, false, apiErr(422, "agent_attachment_invalid", "附件已失效或已被发送，请重新选择")
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE agent_message SET content=$2,attachment_ids=$3 WHERE id=$1`, messageID, text, append([]uuid.UUID{}, attIDs...)); err != nil {
+			return nil, false, err
+		}
+		newAttachments := []uuid.UUID{}
+		for _, id := range attIDs {
+			found := false
+			for _, old := range last.AttachmentIDs {
+				if old == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				newAttachments = append(newAttachments, id)
+			}
+		}
+		if err := s.agentProjectUploadedImagesTx(ctx, tx, c.ID, messageID, newAttachments); err != nil {
+			return nil, false, err
+		}
+		if _, err := appendAgentEventTx(ctx, tx, c.ID, nil, "message.saved", map[string]any{
+			"message_id": messageID, "seq": last.Seq, "role": "user", "content": text, "replaced": true,
+		}, nil); err != nil {
+			return nil, false, err
+		}
+		return &messageID, false, nil
+	})
+	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE agent_message SET content=$2, attachment_ids=$3 WHERE id=$1`,
-		messageID, text, attIDs); err != nil {
-		return err
+	if prepared.Replayed {
+		return writeAgentPreparedReplay(w, conv.ID, prepared)
 	}
-	// 第 8.2 节第 4 项：编辑后引用的附件标记为已引用并绑定对话。
-	if err := s.agentMarkAttachmentsReferenced(ctx, conv.ID, attIDs); err != nil {
-		return err
-	}
-	if err := s.agentRewriteTail(ctx, conv.ID, last.Seq, last.CreatedAt); err != nil {
-		return err
-	}
-	if _, err := s.db.Exec(ctx, `UPDATE agent_conversation SET auto_continue_count=0, updated_at=now() WHERE id=$1`,
-		conv.ID); err != nil {
-		return err
-	}
-	return s.agentStreamRun(w, r, conv, "edit", protocol, &messageID)
+	return s.agentStreamPreparedRun(w, r, conv, protocol, prepared)
 }
 
 // ---------- 停止运行（第 6.7 节第 4 项） ----------
@@ -937,24 +878,6 @@ func (s *Server) postAgentRunCancel(w http.ResponseWriter, r *http.Request) erro
 		return ok(w, map[string]any{"ok": true})
 	}
 	return apiErr(409, "agent_run_busy", "这次运行已经结束，无需停止")
-}
-
-// ---------- 标题（第 6.8 节第 4 项） ----------
-
-// agentAutoTitle 取第一条用户消息的前 30 个字符作为自动标题；用户改名后不再变化。
-func (s *Server) agentAutoTitle(ctx context.Context, conv *agentConversation, text string) {
-	if conv.TitleSource != "auto" {
-		return
-	}
-	title := strings.Join(strings.Fields(strings.ReplaceAll(text, "\n", " ")), " ")
-	title = truncate(title, agentTitleChars)
-	if title == "" {
-		title = "新对话"
-	}
-	if _, err := s.db.Exec(ctx, `UPDATE agent_conversation SET title=$2, updated_at=now() WHERE id=$1 AND title_source='auto'`,
-		conv.ID, title); err != nil {
-		slog.Warn("自动设置对话标题失败", "conversation_id", conv.ID.String(), "err", err)
-	}
 }
 
 // ---------- 摘要压缩（第 6.8 节第 3 项） ----------

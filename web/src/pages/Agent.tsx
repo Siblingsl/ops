@@ -478,6 +478,7 @@ export default function Agent() {
   const [skillPickerOpen, setSkillPickerOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [streaming, setStreaming] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const [streamText, setStreamText] = useState('')
   const [streamStage, setStreamStage] = useState('')
   const [streamError, setStreamError] = useState('')
@@ -507,6 +508,8 @@ export default function Agent() {
   const uploadGeneration = useRef(0)
   const cancelledUploads = useRef(new Set<string>())
   const messageRequest = useRef<{ key: string; id: string } | null>(null)
+  const conversationRequest = useRef<{ key: string; id: string } | null>(null)
+  const sendInFlight = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
@@ -576,7 +579,7 @@ export default function Agent() {
     for (const message of messages) if (message.role === 'assistant' && message.run_id && actionRunIDs.has(message.run_id)) latest[message.run_id] = message.id
     return latest
   }, [messages, actionRunIDs])
-  const busy = streaming || !!activeRun
+  const busy = submitting || streaming || !!activeRun
   const readyFiles = files.filter((file) => file.status === 'ready' && file.attachment)
   const failedFiles = files.filter((file) => file.status === 'failed')
 
@@ -778,6 +781,7 @@ export default function Agent() {
     navigate(`/agent/c/${id}`)
   }
   const newConversation = () => {
+    conversationRequest.current = null
     setText('')
     clearDraftAttachments()
     setContextRefs([])
@@ -789,9 +793,12 @@ export default function Agent() {
   }
 
   const modelRef = selectedModelOption ? { provider_id: selectedModelOption.provider_id, model: selectedModelOption.model } : undefined
-  const createConversation = async () => post<AgentConversation>('/agent/conversations', {
-    ...(selectedAccount ? { account_id: selectedAccount } : {}), ...(modelRef ? { model: modelRef } : {}),
-  })
+  const createConversation = async () => {
+    const body = { ...(selectedAccount ? { account_id: selectedAccount } : {}), ...(modelRef ? { model: modelRef } : {}) }
+    const key = JSON.stringify(body)
+    if (conversationRequest.current?.key !== key) conversationRequest.current = { key, id: crypto.randomUUID() }
+    return post<AgentConversation>('/agent/conversations', { ...body, request_id: conversationRequest.current.id })
+  }
 
   const consumeRun = useCallback(async (id: string, endpoint: string, body: Record<string, unknown>) => {
     const controller = new AbortController()
@@ -940,8 +947,10 @@ export default function Agent() {
     qc, applyPersistentEvent, resumeEventSnapshot])
 
   const sendMessage = async (edit?: AgentMessage) => {
-  const value = text.trim()
-    if ((!value && readyFiles.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || !canWrite || busy || uploading || failedFiles.length > 0) return
+    const value = text.trim()
+    if ((!value && readyFiles.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || !canWrite || busy || sendInFlight.current || uploading || failedFiles.length > 0) return
+    sendInFlight.current = true
+    setSubmitting(true)
     setStreamError('')
     setCompletedNotice('')
     try {
@@ -952,12 +961,13 @@ export default function Agent() {
         navigate(`/agent/c/${conv.id}`, { replace: true })
       }
       const messageKey = JSON.stringify({
+        edit_message_id: edit?.id ?? '',
         conversation_id: conv.id, text: value, attachment_ids: edit ? [] : readyFiles.map((file) => file.attachment!.id),
         context_refs: !edit ? contextRefs.map(({ type, id, revision, reference_scope }) => ({ type, id, revision, scope: reference_scope })) : [],
         skill_requests: !edit ? skillRequests.map(({ skill_id, work_id }) => ({ skill_id, ...(work_id ? { work_id } : {}) })) : [],
         account_id: selectedAccount || '', model: modelRef || null,
       })
-      const requestID = edit ? undefined : messageRequest.current?.key === messageKey
+      const requestID = messageRequest.current?.key === messageKey
         ? messageRequest.current.id
         : crypto.randomUUID()
       if (requestID) messageRequest.current = { key: messageKey, id: requestID }
@@ -984,6 +994,7 @@ export default function Agent() {
       }
       setEditMessage(null)
     } catch (error) { toast.error(errorMessage(error)) }
+    finally { sendInFlight.current = false; setSubmitting(false) }
   }
 
   const continueRun = () => { if (conversationId) void consumeRun(conversationId, `/agent/conversations/${conversationId}/continue`, {}) }

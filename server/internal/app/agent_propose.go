@@ -405,8 +405,8 @@ func mustJSON(v any) []byte {
 }
 
 // agentStartRun 创建一次运行（第 6.1 节第 1 项）并返回其内存状态。
-func (s *Server) agentStartRun(ctx context.Context, trigger string, c *agentConversation,
-	model agentModelRef, requestID uuid.UUID, requestPayload any) (*agentRunState, bool, error) {
+func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string, c *agentConversation,
+	model agentModelRef, requestID uuid.UUID, requestPayload any, messageID *uuid.UUID) (*agentRunState, error) {
 	protocolVersion := 1
 	requestHash := ""
 	if requestID != uuid.Nil {
@@ -414,7 +414,7 @@ func (s *Server) agentStartRun(ctx context.Context, trigger string, c *agentConv
 		var err error
 		requestHash, err = agentRequestPayloadHash(requestPayload)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 	}
 	st := &agentRunState{
@@ -430,47 +430,6 @@ func (s *Server) agentStartRun(ctx context.Context, trigger string, c *agentConv
 		BatchID:         uuid.New(),
 		Deadline:        time.Now().Add(agentRunSeconds * time.Second),
 	}
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	defer tx.Rollback(ctx)
-	var archivedAt *time.Time
-	if err := tx.QueryRow(ctx, `SELECT archived_at FROM agent_conversation
-		WHERE id=$1 AND workspace_id=$2 AND user_id=$3 FOR UPDATE`,
-		c.ID, st.WorkspaceID, st.UserID).Scan(&archivedAt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, false, errNotFound
-		}
-		return nil, false, err
-	}
-	if archivedAt != nil {
-		return nil, false, apiErr(409, "agent_conversation_archived", "对话已归档，请先恢复后再开始运行")
-	}
-	if requestID != uuid.Nil {
-		var existingID uuid.UUID
-		var existingHash string
-		err := tx.QueryRow(ctx, `SELECT id,request_hash FROM agent_run
-			WHERE conversation_id=$1 AND trigger=$2 AND request_id=$3`, c.ID, trigger, requestID).
-			Scan(&existingID, &existingHash)
-		if err == nil {
-			if strings.TrimSpace(existingHash) != requestHash {
-				return nil, false, apiErr(409, "agent_request_conflict", "请求编号已用于不同内容，请刷新后重新操作")
-			}
-			st.RunID = existingID
-			if err := tx.QueryRow(ctx, `SELECT coalesce(min(event_seq),0) FROM agent_event
-				WHERE conversation_id=$1 AND run_id=$2 AND type='run.started'`, c.ID, existingID).Scan(&st.StartEventSeq); err != nil {
-				return nil, false, err
-			}
-			if err := tx.Commit(ctx); err != nil {
-				return nil, false, err
-			}
-			return st, true, nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return nil, false, err
-		}
-	}
 	var requestIDArg any
 	if requestID != uuid.Nil {
 		requestIDArg = requestID
@@ -481,25 +440,29 @@ func (s *Server) agentStartRun(ctx context.Context, trigger string, c *agentConv
 		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7,$8,$9,$10) RETURNING id`,
 		c.ID, st.WorkspaceID, st.UserID, st.SessionID, trigger, model.ProviderID, model.Model,
 		protocolVersion, requestIDArg, requestHash).Scan(&st.RunID); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if err := tx.QueryRow(ctx, `SELECT loaded_domains, summary FROM agent_conversation WHERE id=$1`, c.ID).
 		Scan(&st.Domains, &st.Summary); err != nil {
-		return nil, false, err
+		return nil, err
 	}
+	var err error
 	st.StartEventSeq, err = appendAgentEventTx(ctx, tx, c.ID, &st.RunID, "run.started", map[string]any{
-		"run_id": st.RunID, "status": "queued", "trigger": trigger,
+		"run_id": st.RunID, "status": "queued", "trigger": trigger, "message_id": messageID,
 	}, nil)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, false, err
+	if messageID != nil {
+		if _, err := tx.Exec(ctx, `UPDATE agent_message SET run_id=$1 WHERE conversation_id=$2 AND id=$3 AND role='user'`,
+			st.RunID, c.ID, *messageID); err != nil {
+			return nil, err
+		}
 	}
 	if len(st.Domains) > agentMaxDomains {
 		st.Domains = st.Domains[len(st.Domains)-agentMaxDomains:]
 	}
-	return st, false, nil
+	return st, nil
 }
 
 // skillCreateTargetCanon 以规范编码序列化 create 目标键的输入（8.4 节 name_key 取 lower(name) 口径）。

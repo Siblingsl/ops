@@ -755,7 +755,7 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		return validation("没有需要修改的字段")
 	}
 	var tx pgx.Tx
-	if organizeChange {
+	if organizeChange || in.AccountID != nil || in.Model != nil {
 		tx, err = s.db.Begin(ctx)
 		if err != nil {
 			return err
@@ -770,8 +770,31 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			return err
 		}
-		if current.Revision != *in.ExpectedRevision {
+		if in.ExpectedRevision != nil && current.Revision != *in.ExpectedRevision {
 			return apiErr(409, "agent_revision_conflict", "对话已被其他操作更新，请刷新后重试")
+		}
+		if in.AccountID != nil || in.Model != nil {
+			var active, executing, pending bool
+			if err := tx.QueryRow(ctx, `SELECT
+				EXISTS (SELECT 1 FROM agent_run WHERE conversation_id=$1 AND status IN ('queued','running')),
+				EXISTS (SELECT 1 FROM agent_action WHERE conversation_id=$1 AND status='executing'),
+				EXISTS (SELECT 1 FROM agent_action WHERE conversation_id=$1 AND status IN ('pending','needs_input'))`, cid).
+				Scan(&active, &executing, &pending); err != nil {
+				return err
+			}
+			if active || executing {
+				return apiErr(409, "agent_run_busy", "运行或卡片执行期间不能修改对话账号和模型")
+			}
+			if in.AccountID != nil && pending {
+				var next *uuid.UUID
+				if raw := strings.TrimSpace(*in.AccountID); raw != "" {
+					parsed, _ := uuid.Parse(raw)
+					next = &parsed
+				}
+				if !agentSameUUID(next, current.AccountID) {
+					return apiErr(409, "agent_action_state_invalid", "请先处理操作卡片，或新建对话后切换账号")
+				}
+			}
 		}
 		if groupID != nil {
 			var allowed bool

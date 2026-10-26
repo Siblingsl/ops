@@ -362,20 +362,6 @@ func (s *Server) deleteAgentAttachment(w http.ResponseWriter, r *http.Request) e
 	return ok(w, map[string]any{"ok": true})
 }
 
-// ---------- 生命周期（第 8.2 节第 4 项） ----------
-
-// agentMarkAttachmentsReferenced 把消息引用的附件标记为已引用并绑定对话，
-// 使其不再可复用、也不会被 24 小时清理任务删除。
-func (s *Server) agentMarkAttachmentsReferenced(ctx context.Context, convID uuid.UUID, ids []uuid.UUID) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	_, err := s.db.Exec(ctx, `UPDATE agent_attachment
-		SET referenced=true, conversation_id=COALESCE(conversation_id,$2)
-		WHERE id=ANY($1) AND user_id=$3`, ids, convID, ident(ctx).UserID)
-	return err
-}
-
 // ---------- 工具装载（第 8.4 节） ----------
 
 // agentAttachmentUploadFiles 把条目中 multipart 参数的值（附件 ID，第 8.4 节）装载为分发用的文件。

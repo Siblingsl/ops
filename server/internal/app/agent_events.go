@@ -167,6 +167,11 @@ func (s *Server) persistAgentStreamEvent(ctx context.Context, st *agentRunState,
 
 func (s *Server) existingAgentRunRequest(ctx context.Context, conversationID uuid.UUID, trigger string,
 	request *agentRunProtocolRequest) (uuid.UUID, int64, bool, error) {
+	return existingAgentRunRequestWith(ctx, s.db, conversationID, trigger, request)
+}
+
+func existingAgentRunRequestWith(ctx context.Context, reader agentRequestReader, conversationID uuid.UUID, trigger string,
+	request *agentRunProtocolRequest) (uuid.UUID, int64, bool, error) {
 	if request == nil {
 		return uuid.Nil, 0, false, nil
 	}
@@ -177,7 +182,7 @@ func (s *Server) existingAgentRunRequest(ctx context.Context, conversationID uui
 	var runID uuid.UUID
 	var gotHash string
 	var startSeq int64
-	err = s.db.QueryRow(ctx, `SELECT r.id,r.request_hash,
+	err = reader.QueryRow(ctx, `SELECT r.id,r.request_hash,
 		coalesce((SELECT min(e.event_seq) FROM agent_event e WHERE e.conversation_id=r.conversation_id
 			AND e.run_id=r.id AND e.type='run.started'),0)
 		FROM agent_run r WHERE r.conversation_id=$1 AND r.trigger=$2 AND r.request_id=$3`,

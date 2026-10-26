@@ -81,6 +81,35 @@ test('DEV-AW06 Web v2断线和刷新恢复同一运行且不重发消息', async
   await refreshAndRecover(page, baseURL!, 'agent-workbench-aw06-web-recovery')
 })
 
+test('DEV-AW06 新会话受理回执丢失后重试复用同一会话', async ({ page, baseURL }) => {
+  await prepare(page, baseURL!)
+  const requests: string[] = []
+  await page.route('**/api/v1/agent/conversations', async (route) => {
+    if (route.request().method() !== 'POST') { await route.continue(); return }
+    requests.push(route.request().postDataJSON().request_id)
+    if (requests.length === 1) {
+      const response = await route.fetch()
+      expect(response.ok()).toBeTruthy()
+      await route.abort('connectionreset')
+    } else await route.continue()
+  })
+  const text = '新会话丢失回执后只运行一次'
+  await page.locator('textarea').fill('#text ' + text)
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect.poll(() => requests.length).toBe(1)
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled()
+  const { response, id } = await send(page, text)
+  expect(response.status()).toBe(202)
+  expect(requests).toHaveLength(2)
+  expect(requests[0]).toMatch(/^[0-9a-f-]{36}$/)
+  expect(requests[1]).toBe(requests[0])
+  await expect(page.locator('article').getByText(text, { exact: true })).toBeVisible()
+  const conversations = await call(page, 'GET', '/agent/conversations')
+  expect(conversations.items).toHaveLength(1)
+  const detail = await call(page, 'GET', `/agent/conversations/${id}`)
+  expect(detail.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(1)
+})
+
 test('DEV-AW06 停止后刷新仍展示服务端未完成文本', async ({ page, baseURL }) => {
   await prepare(page, baseURL!)
   const { response, id } = await send(page, '停止后保留未完成部分。'.repeat(120))
