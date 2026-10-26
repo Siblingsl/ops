@@ -1658,6 +1658,8 @@ function pacedPlatformSource(source: ReturnType<typeof createPageResponseSource>
     ...source,
     fetchJSON: (path) => paced(() => source.fetchJSON(path)),
     fetchSigned: (path) => paced(() => source.fetchSigned(path)),
+    // 滚动续读同样要串行 + 相邻请求至少 5 秒（docs/21 §安全修复：串行并至少间隔 5 秒）。
+    fetchSignedNextPage: (path) => paced(() => source.fetchSignedNextPage(path)),
     observeResponse: (path, trigger, timeout) => paced(() => source.observeResponse(path, trigger, timeout))
   };
 }

@@ -6,7 +6,9 @@ const {
   buildReadOnlyFetchScript,
   createPageResponseSource,
   parseRawEnvelope,
-  READ_ONLY_PATH_PREFIXES
+  READ_ONLY_PATH_PREFIXES,
+  SCROLL_LIST_TO_END_SCRIPT,
+  SIGNED_PATH_TRIGGERS
 } = require('../.build/platform-login.js');
 const { PlatformBrowserError } = require('../.build/platform-worker.js');
 
@@ -116,4 +118,47 @@ test('响应包装解析：非 JSON body 与缺字段都返回 null', () => {
     parseRawEnvelope({ result: { value: JSON.stringify({ ok: true, status: 200, body: '{"a":1}' }) } }),
     { ok: true, status: 200, body: { a: 1 } }
   );
+});
+
+test('PS-T38：滚动续读先注册监听再滚动，滚到底返回“没有更多”而不是网络错误', async () => {
+  // 滚动脚本必须只读：只改 scrollTop，不发请求、不读凭据。
+  for (const forbidden of ['fetch(', 'XMLHttpRequest', 'document.cookie', 'localStorage', 'sessionStorage', 'click(', 'POST', 'PUT', 'DELETE']) {
+    assert.ok(!SCROLL_LIST_TO_END_SCRIPT.includes(forbidden), `滚动脚本不应包含 ${forbidden}`);
+  }
+  assert.match(SCROLL_LIST_TO_END_SCRIPT, /scrollTop = target\.scrollHeight/);
+  // 只有已现场确认过滚动加载的接口才登记 scroll，其它接口必须交回逐页导航。
+  assert.equal(SIGNED_PATH_TRIGGERS['/api/galaxy/v2/creator/note/user/posted'].scroll, true);
+  assert.equal(SIGNED_PATH_TRIGGERS['/cgi-bin/switchacct'].scroll, undefined);
+
+  const order = [];
+  const responses = [{ success: true, data: { notes: [], page: 2 } }, null, null];
+  let index = 0;
+  const session = {
+    platform: 'xhs',
+    profileDir: 'C:\\profiles\\xhs',
+    browser: { child: {}, send: () => {}, onMessage: () => {}, failure: () => null, close: async () => {} },
+    cdp: {
+      request: async (method) => {
+        order.push(method);
+        return { result: { type: 'object', value: { top: 2018, height: 2018, client: 592 } } };
+      },
+      collectResponses: async () => {
+        order.push('collectResponses');
+        return responses[index++];
+      }
+    }
+  };
+  const source = createPageResponseSource(session);
+  const next = await source.fetchSignedNextPage('/api/galaxy/v2/creator/note/user/posted?page=1&page_size=20');
+  assert.deepEqual(next, { success: true, data: { notes: [], page: 2 } });
+  assert.deepEqual(order, ['collectResponses', 'Runtime.evaluate'], '监听先于滚动');
+
+  // 滚到底时页面不再发请求：重试一次后按“没有更多”返回 null，不抛网络错误。
+  const empty = await source.fetchSignedNextPage('/api/galaxy/v2/creator/note/user/posted?page=2&page_size=20');
+  assert.equal(empty, null);
+
+  // 未登记滚动加载的接口不能滚动，交回调用方走逐页导航。
+  const before = order.length;
+  assert.equal(await source.fetchSignedNextPage('/cgi-bin/switchacct?action=switch_acct'), null);
+  assert.equal(order.length, before, '未登记滚动的接口不应触发任何浏览器调用');
 });

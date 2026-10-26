@@ -239,6 +239,7 @@ export function buildReadOnlyFetchScript(path: string): string {
 export function createPageResponseSource(session: PlatformLoginSession): {
   fetchJSON: (path: string) => Promise<unknown>;
   fetchSigned: (path: string) => Promise<unknown>;
+  fetchSignedNextPage: (path: string) => Promise<unknown | null>;
   observeResponse: (pathPrefix: string, trigger: () => Promise<void>, timeoutMs?: number) => Promise<unknown>;
 } {
   const observe = async (pathPrefix: string, trigger: () => Promise<void>, timeoutMs = 30_000) => {
@@ -301,18 +302,80 @@ export function createPageResponseSource(session: PlatformLoginSession): {
       });
     },
 
-    observeResponse: observe
+    observeResponse: observe,
+
+    // fetchSignedNextPage：在**同一个**列表页里加载下一批，用于签名列表的分页。
+    //
+    // 为什么不能继续用 fetchSigned：它每次都重新导航到列表页，平台会把页码重置回
+    // 第一页。2026-10-26 实测——导航只给第一页 10 条，之后无论请求 page=1/2/3 都
+    // 返回同一批（服务端记录为 page_repeated）；而把列表容器滚到底部，页面自己会
+    // 依次发出 page=1/2/3，读到 39 条，与平台自报的笔记总数一致。
+    //
+    // 这里仍然只监听页面自己发出的请求：不构造签名、不复制请求头、不改写 URL，
+    // 只是用只读的 DOM 滚动把列表翻到底，让页面自己去取下一页。
+    // 返回 null 表示该接口没有登记滚动触发方式，调用方应退回逐页导航。
+    fetchSignedNextPage: async (path: string) => {
+      const trigger = SIGNED_PATH_TRIGGERS[path.split('?')[0]];
+      if (!trigger || !trigger.scroll) return null;
+      if (!isAllowedPlatformUrl(trigger.url, session.platform)) {
+        throw new PlatformBrowserError('platform_network_unavailable', '触发页面不在允许的官方域名内');
+      }
+      // 没捕获到响应有两种可能：列表真的到底了，或者这一次滚动没触发出来。
+      // 只看被动监听分不清这两者，所以最多重试一次再判定“到底”，
+      // 避免把偶发的漏触发当成枚举完成（那会让覆盖被高估）。
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          return await observe(trigger.observe, async () => {
+            const result = await session.cdp.request('Runtime.evaluate', {
+              expression: SCROLL_LIST_TO_END_SCRIPT,
+              returnByValue: true
+            }, 15_000).catch(() => null);
+            if (!result) {
+              throw new PlatformBrowserError('platform_network_unavailable', '页面滚动没有返回结果');
+            }
+          }, trigger.scrollTimeoutMs ?? 12_000);
+        } catch (error) {
+          if (!(error instanceof PlatformBrowserError) || error.code !== 'platform_network_unavailable') throw error;
+          // 第二次仍然没有响应：按“没有更多”交给调用方收口，不当作网络故障，
+          // 否则每读到最后一页都会失败一次。
+          if (attempt === 1) return null;
+        }
+      }
+      return null;
+    }
   };
 }
 
+// SCROLL_LIST_TO_END_SCRIPT 把页面里“真正可滚动的那个列表容器”滚到底部。
+// 只读：只改 scrollTop，不发请求、不读数据。
+// 实测小红书创作中心的滚动容器是 `div.content`（2018/592），而 document.body 的
+// scrollHeight 与 window.innerHeight 相等，滚 window 完全不生效（2026-10-26 实测
+// 滚 window 得到 0 条新数据）。这里按“可滚动距离最大”挑选容器，避免写死类名。
+export const SCROLL_LIST_TO_END_SCRIPT = `(() => {
+  const doc = document;
+  const best = { el: null, distance: 0 };
+  for (const el of doc.querySelectorAll('div, main, section, ul, ol')) {
+    const distance = el.scrollHeight - el.clientHeight;
+    if (distance > 40 && distance > best.distance) { best.el = el; best.distance = distance; }
+  }
+  const target = best.el || doc.scrollingElement || doc.documentElement;
+  if (!target) return null;
+  target.scrollTop = target.scrollHeight;
+  return { top: target.scrollTop, height: target.scrollHeight, client: target.clientHeight };
+})()`;
+
 // SIGNED_PATH_TRIGGERS 登记“签名接口 → 会自然触发它的官方页面”。
 // 只登记已确认的页面，不猜路径；新增接口必须随适配器版本一起加。
-export const SIGNED_PATH_TRIGGERS: Readonly<Record<string, { url: string; observe: string; resetViaBlank?: boolean }>> = Object.freeze({
+// scroll=true 表示该接口支持“在同一页面滚动加载下一批”，供 fetchSignedNextPage 使用。
+export const SIGNED_PATH_TRIGGERS: Readonly<Record<string, { url: string; observe: string; resetViaBlank?: boolean; scroll?: boolean; scrollTimeoutMs?: number }>> = Object.freeze({
   '/api/galaxy/v2/creator/note/user/posted': {
     url: 'https://creator.xiaohongshu.com/new/note-manager',
     observe: '/api/galaxy/v2/creator/note/user/posted',
     // 小红书同一 URL 的 Page.navigate 不会重新发请求，需要先离开再回来。
-    resetViaBlank: true
+    resetViaBlank: true,
+    // 滚动列表容器到底会触发下一批；末页不再发请求时按“没有更多”处理。
+    scroll: true,
+    scrollTimeoutMs: 12_000
   },
   // 公众号账号列表：`switchacct` 由页面自身在进入后台时发起，参数含时效性签名，
   // 构造不出来（直接请求恒回 `{"ret":200009,"err_msg":"not found"}`，2026-10-21 实测）。

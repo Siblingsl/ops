@@ -238,6 +238,81 @@ test('PS-T32 加固：平台恒回同一页时按内容重复收口，不空转�
   assert.equal(result.coverage.incomplete_reason, 'page_repeated');
 });
 
+test('PS-T38：有滚动续读能力时第一页导航、后续页滚动，不重复导航回第一页', async () => {
+  // 2026-10-26 实测：重新导航只会拿到第一页，滚动列表容器才能拿到后续页。
+  const pages = [
+    page([noteA, noteB], { page: 1 }),
+    page([{ ...noteB, id: '6f0000000000000000000003' }], { page: 2 }),
+    page([{ ...noteB, id: '6f0000000000000000000004' }], { page: -1 })
+  ];
+  const calls = [];
+  let index = 0;
+  const source = {
+    fetchSigned: async (path) => {
+      calls.push(['nav', path]);
+      return pages[index++];
+    },
+    fetchSignedNextPage: async (path) => {
+      calls.push(['scroll', path]);
+      return pages[index++];
+    }
+  };
+  const result = await collectPostedNotes(source, { maxPages: 3 });
+  assert.deepEqual(calls.map(([kind]) => kind), ['nav', 'scroll', 'scroll'], '只有第一页走导航');
+  assert.equal(result.pagesRead, 3);
+  assert.equal(result.notes.length, 4);
+  assert.equal(result.duplicates, 0, '滚动续读不应该拿到重复页');
+  assert.equal(result.hasMore, false);
+  assert.equal(result.coverage.incomplete_reason, null);
+  assert.equal(result.enumerationComplete, true);
+});
+
+test('PS-T38：滚动到底不再有响应时按“没有更多”收口，不虚增页数', async () => {
+  const pages = [page([noteA, noteB], { page: 1 })];
+  let index = 0;
+  const source = {
+    fetchSigned: async () => pages[index++],
+    // 列表到底后页面不再发请求，响应源返回 null。
+    fetchSignedNextPage: async () => null
+  };
+  const result = await collectPostedNotes(source, { maxPages: 3 });
+  assert.equal(result.pagesRead, 1, 'null 响应不计入 pages_read');
+  assert.equal(result.notes.length, 2);
+  assert.equal(result.hasMore, false);
+  assert.equal(result.coverage.incomplete_reason, null);
+});
+
+test('PS-T38：滚动续读到页数上限时如实报告 page_budget 与下一页', async () => {
+  const source = {
+    fetchSigned: async () => page([noteA, noteB], { page: 1 }),
+    fetchSignedNextPage: async () => page([{ ...noteB, id: '6f0000000000000000000003' }], { page: 2 })
+  };
+  const result = await collectPostedNotes(source, { maxPages: 2 });
+  assert.equal(result.pagesRead, 2);
+  assert.equal(result.hasMore, true);
+  assert.equal(result.coverage.incomplete_reason, 'page_budget');
+  assert.equal(result.enumerationComplete, false);
+});
+
+test('PS-T38：断点续采跳过起始页之前的数据，不把它们重复计入覆盖', async () => {
+  // 服务端把 checkpoint.next_page 传回 startPage，续跑的 run 必须滚过前几页再开始收。
+  const pages = [
+    page([noteA, noteB], { page: 1 }),
+    page([{ ...noteB, id: '6f0000000000000000000003' }], { page: 2 }),
+    page([{ ...noteB, id: '6f0000000000000000000004' }], { page: -1 })
+  ];
+  let index = 0;
+  const source = {
+    fetchSigned: async () => pages[index++],
+    fetchSignedNextPage: async () => pages[index++]
+  };
+  const result = await collectPostedNotes(source, { maxPages: 1, startPage: 2 });
+  assert.equal(result.pagesRead, 1, '只统计断点之后的页');
+  assert.deepEqual(result.notes.map((note) => note.noteId), ['6f0000000000000000000004']);
+  assert.equal(result.coverage.skipped_pages, 2);
+  assert.equal(result.coverage.has_more, false);
+});
+
 test('分享文本：可取短链或完整链接，跳出允许域名与私网一律拒绝', () => {
   const short = extractShareURL('57 虚构标题 http://xhslink.com/a/AbCd 复制本条信息，打开【小红书】App查看精彩内容！');
   assert.ok(short);

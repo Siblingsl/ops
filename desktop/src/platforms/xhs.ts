@@ -68,7 +68,7 @@ export interface XhsDiscoveryResult {
   hasMore: boolean;
   nextCursor: string | null;
   // 覆盖说明：读了几页、是否因预算或结构不完整提前结束。
-  coverage: { pages_read: number; has_more: boolean; incomplete_reason: string | null };
+  coverage: { pages_read: number; has_more: boolean; incomplete_reason: string | null; skipped_pages?: number };
   duplicates: number;
   invalidRows: number;
   enumerationComplete: boolean;
@@ -81,6 +81,15 @@ export interface ReadOnlyResponseSource {
   // fetchSigned 用于需要平台签名的接口（如笔记列表）：由实现方让页面自己发起请求
   // 并监听响应，适配器仍然只关心“拿到 JSON”。不提供时回退到 fetchJSON。
   fetchSigned?(path: string): Promise<unknown>;
+  // fetchSignedNextPage 取签名列表的**下一批**：同一个列表页里让页面自己加载下一页
+  // （滚动列表到底），仍然只监听页面自己发出的请求，不构造签名、不重新导航。
+  //
+  // 为什么需要它：小红书的 posted 接口只认页面自己发的请求，且分页参数由页面掌握。
+  // 2026-10-26 实测——只导航一次只能拿到第一页 10 条，滚动列表容器会依次发出
+  // page=1/2/3，读到 39 条（与平台自报一致）。没有这个能力位时适配器退回逐页导航，
+  // 平台忽略页码就会得到 page_repeated。
+  // 返回 null 表示“平台没有再给出下一批”（列表已到底）。
+  fetchSignedNextPage?(path: string): Promise<unknown | null>;
 }
 
 export class XhsAdapterError extends Error {
@@ -321,10 +330,14 @@ export async function collectPostedNotes(
   const maxPages = Math.max(1, Math.min(options.maxPages ?? 3, 3));
   const buildPath = options.buildPath ?? ((s: { page: number; cursor: string | null }) =>
     s.cursor ? `${XHS_API.postedNotes}?cursor=${encodeURIComponent(s.cursor)}` : `${XHS_API.postedNotes}?page=${s.page}&page_size=20`);
+  const startPage = Math.max(0, Math.floor(options.startPage ?? 0));
+  // 有滚动加载能力时，后续页靠“让列表自己加载下一批”推进；没有则退回逐页导航。
+  const canScroll = typeof source.fetchSignedNextPage === 'function';
   const seen = new Map<string, XhsNoteFact>();
   let duplicates = 0;
   let pagesRead = 0;
-  let page = Math.max(0, Math.floor(options.startPage ?? 0));
+  let skippedPages = 0;
+  let page = startPage;
   let cursor: string | null = null;
   let previousCursor: string | null = null;
   let hasMore = false;
@@ -332,21 +345,47 @@ export async function collectPostedNotes(
   let totalCount: number | null = null;
   let invalidRows = 0;
   let incompleteReason: string | null = null;
-  for (;;) {
+  // 断点续采要把列表滚过 startPage 页才开始计数，这里给总循环一个硬上限，
+  // 避免 checkpoint 里出现异常大的 next_page 时无限滚动。
+  const maxIterations = maxPages + startPage + 1;
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
     if (pagesRead >= maxPages) {
       incompleteReason = 'page_budget';
       break;
     }
-    // 笔记列表接口需要平台签名；有 fetchSigned 时走“页面自发请求 + 响应监听”。
     const path = buildPath({ page, cursor });
-    const payload = source.fetchSigned
-      ? await source.fetchSigned(path)
-      : await source.fetchJSON(path);
+    // 第一页用导航触发；之后的页必须交给 fetchSignedNextPage。
+    // 重新导航会让平台回到第一页，这正是 `page_repeated` 的来源（2026-10-26 实测：
+    // 导航只给第一页 10 条，滚动列表容器依次给出 page=1/2/3，读到 39 条）。
+    const useScroll = canScroll && pagesRead + skippedPages > 0;
+    const payload = useScroll
+      ? await source.fetchSignedNextPage!(path)
+      : source.fetchSigned
+        ? await source.fetchSigned(path)
+        : await source.fetchJSON(path);
+    // 滚动到底时页面不再发请求，fetchSignedNextPage 返回 null：这就是“没有更多”，
+    // 不是错误，也不该算作读过一页（否则 coverage.pages_read 会虚高）。
+    if (payload === null) {
+      hasMore = false;
+      break;
+    }
     const parsed = parsePostedNotesPage(payload);
-    pagesRead += 1;
-    invalidRows += parsed.invalidRows;
     paginationVerified ||= parsed.paginationVerified;
     if (parsed.totalCount !== null) totalCount = parsed.totalCount;
+    hasMore = parsed.hasMore;
+    cursor = parsed.cursor;
+    // 断点续采：滚动形态下起始页之前的页只用来把列表滚到断点位置，不计入本次覆盖、
+    // 不收作品；否则续跑的 run 会把前几页重复计入，next_page 永远推不动。
+    // 逐页导航形态不需要跳过——它本来就按 page=startPage 直接请求那一页。
+    if (canScroll && skippedPages < startPage) {
+      skippedPages += 1;
+      previousCursor = parsed.cursor;
+      if (!hasMore) break;
+      if (cursor === null) page += 1;
+      continue;
+    }
+    pagesRead += 1;
+    invalidRows += parsed.invalidRows;
     // 上一页已有的编号在本页再次出现时计数；整页全是重复则说明平台没有推进。
     let pageNew = 0;
     for (const note of parsed.notes) {
@@ -359,15 +398,11 @@ export async function collectPostedNotes(
     }
     if (parsed.invalidRows > 0) {
       incompleteReason = 'catalog_inconsistent';
-      hasMore = parsed.hasMore;
-      cursor = parsed.cursor;
       break;
     }
-    hasMore = parsed.hasMore;
     // 游标与上一页完全相同说明平台没有推进：停止并如实标记，避免无限循环。
     if (parsed.hasMore && parsed.cursor !== null && parsed.cursor === previousCursor) {
       incompleteReason = 'cursor_stalled';
-      cursor = parsed.cursor;
       break;
     }
     // 页形态兜底：这一页非空但没有任何新编号，说明平台恒回同一页（page 参数被忽略）。
@@ -378,7 +413,6 @@ export async function collectPostedNotes(
       break;
     }
     previousCursor = parsed.cursor;
-    cursor = parsed.cursor;
     if (!hasMore) break;
     if (cursor === null) {
       page += 1;
@@ -389,7 +423,12 @@ export async function collectPostedNotes(
     pagesRead,
     hasMore,
     nextCursor: hasMore ? cursor : null,
-    coverage: { pages_read: pagesRead, has_more: hasMore, incomplete_reason: incompleteReason },
+    coverage: {
+      pages_read: pagesRead,
+      has_more: hasMore,
+      incomplete_reason: incompleteReason,
+      ...(skippedPages > 0 ? { skipped_pages: skippedPages } : {})
+    },
     duplicates,
     invalidRows,
     enumerationComplete: invalidRows === 0 && !hasMore && incompleteReason === null && paginationVerified,
