@@ -10,71 +10,8 @@
 // 不是文本匹配，也不是复制一份逻辑。
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
-const ts = require('typescript');
-
-const ROOT = path.join(__dirname, '..');
-
-// extractFunction 按花括号配平，从源码里取出一个函数声明（含 TS 类型标注）。
-// 必须带上 `async` 前缀：只截 `function name(...)` 会丢掉 async，
-// 函数体里的 await 就成了语法错误，转译后整个函数消失。
-function extractFunction(source, name) {
-  let start = source.indexOf(`async function ${name}(`);
-  if (start >= 0) {
-    // 前面还有导出修饰时必须一起带上。
-    const exported = source.lastIndexOf('export ', start);
-    if (exported >= 0 && source.slice(exported, start).trim() === 'export') start = exported;
-  } else {
-    start = source.indexOf(`function ${name}(`);
-  }
-  assert.ok(start >= 0, `源码里找不到 function ${name}`);
-  // 不能直接找第一个 `{`：参数里的类型标注（例如
-  // `options: { maxMs?: number }`）也含花括号，会把函数体截断。
-  // 先按圆括号配平跳过参数表，再取参数表之后的第一个 `{`。
-  const paramsOpen = source.indexOf('(', start);
-  assert.ok(paramsOpen > start, `function ${name} 缺少参数表`);
-  let parens = 0;
-  let paramsClose = -1;
-  for (let index = paramsOpen; index < source.length; index += 1) {
-    const char = source[index];
-    if (char === '(') parens += 1;
-    else if (char === ')') {
-      parens -= 1;
-      if (parens === 0) {
-        paramsClose = index;
-        break;
-      }
-    }
-  }
-  assert.ok(paramsClose > paramsOpen, `function ${name} 的参数表没有配平`);
-  const open = source.indexOf('{', paramsClose);
-  assert.ok(open > paramsClose, `function ${name} 缺少函数体`);
-  let depth = 0;
-  for (let index = open; index < source.length; index += 1) {
-    const char = source[index];
-    if (char === '{') depth += 1;
-    else if (char === '}') {
-      depth -= 1;
-      if (depth === 0) return source.slice(start, index + 1);
-    }
-  }
-  throw new Error(`function ${name} 的花括号没有配平`);
-}
-
-// loadFunction 用 TypeScript 转译后求值，返回真实的函数对象。
-// prelude 用来补齐被依赖的模块内函数（例如 delay）。
-function loadFunction(file, name, prelude = []) {
-  const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
-  const parts = prelude.map((dep) => extractFunction(source, dep));
-  parts.push(extractFunction(source, name));
-  const js = ts.transpileModule(parts.join('\n\n'), {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }
-  }).outputText;
-  // eslint-disable-next-line no-new-func
-  return new Function(`${js}\nreturn ${name};`)();
-}
+const { extractFunction, loadFunction, readSource } = require('./support/source-function.cjs');
 
 // sessionWithHrefs 造一个只回 location.href 的假 CDP 会话。
 // hrefs 用完之后一直重复最后一个值。
@@ -148,7 +85,7 @@ test('PS-T40：落点判定必须把两个平台的登录页判成未登录', ()
 });
 
 test('PS-T40：登录落点判定只按域名与路径，不做内容嗅探', () => {
-  const source = fs.readFileSync(path.join(ROOT, 'src/main.ts'), 'utf8');
+  const source = readSource('src/main.ts');
   const body = extractFunction(source, 'isLoggedInLanding');
   for (const forbidden of ['document.cookie', 'fetch(', 'innerText', 'querySelector', 'localStorage']) {
     assert.ok(!body.includes(forbidden), `落点判定不应包含 ${forbidden}`);
