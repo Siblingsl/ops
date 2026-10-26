@@ -1263,6 +1263,9 @@ func (s *Server) finishPlatformV2StageTx(ctx context.Context, tx pgx.Tx, write p
 			if err != nil {
 				return err
 			}
+			// 覆盖率是给用户解释"为什么这次没完"的唯一入口，pending 必须和 state 一起写，
+			// 否则界面会显示"部分完成但待采 0 篇"。
+			stageCoverage["pending"] = len(local) + len(mirrors)
 			pendingTargets = len(local)+len(mirrors) > 0
 			if pendingTargets {
 				coverageState = "partial"
