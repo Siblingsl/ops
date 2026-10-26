@@ -34,6 +34,14 @@ cd web; pnpm install; pnpm dev                          # 前端 :5173，代理 
 
 本地默认使用模拟微信服务器和模拟模型（`OPS_DEV=1`），不需要任何真实密钥。
 
+要联调桌面端自动采集，API 必须显式开启平台开关，否则客户端会跳过 presence 心跳，调度永远不派单且**没有任何报错**：
+
+```powershell
+cd server; $env:OPS_DESKTOP_PLATFORM_ENABLED='1'; go run ./cmd/ops serve
+```
+
+该开关只在进程启动时读取，改了必须重启 API。自动采用闸门是另一个变量 `OPS_DESKTOP_PLATFORM_AUTO_ADOPT`，默认关闭，验收通过前不要打开。详见 `docs/21-平台采集技术债处理记录.md` 十七点四十四第 1 节。
+
 ## 不可越过的红线
 
 - 不添加"全部起草""全部确认""全部入库"之类的按钮或接口；智能体不添加"全部执行"或批量执行卡片的按钮或接口，写入只能由用户逐张执行（D-117）；
