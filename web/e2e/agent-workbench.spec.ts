@@ -173,6 +173,124 @@ test('DEV-AW02 Web 即使服务端开放桌面工作台功能仍保留原页面'
   await expect(page.getByPlaceholder(/发送消息/)).toBeVisible()
 })
 
+test('DEV-AW04 @资料、有效技能请求与混合附件队列走真实接口', async ({ page, baseURL }) => {
+  expect(baseURL).toBe('http://127.0.0.1:5179')
+  const account = await registerAccount(page)
+  const provider = await api(page, 'POST', '/model-providers', {
+    name: 'AW04 工作台验收模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+  })
+  await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
+  await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
+
+  const materialText = `AW04-真实引用-${Date.now()}：本轮上下文必须读到这段正文。`
+  await api(page, 'POST', '/materials', { account_id: account.id, kind: 'experience', content: materialText, source: 'AW04 验收' })
+  const skillName = `AW04-有效技能-${Date.now()}`
+  const skill = (await api(page, 'POST', '/skills', {
+    scope: 'personal', name: skillName, summary: '区分请求、加载与使用', triggers: '运营对话验收',
+    instructions: '只在模型实际加载后使用。', platforms: [], content_formats: [], task_types: [],
+    task_enabled: true, agent_enabled: true, status: 'active',
+  })).skill
+  const bindings = await api(page, 'GET', `/accounts/${account.id}/skill-bindings`)
+  await api(page, 'PUT', `/accounts/${account.id}/skill-bindings/personal/${skill.id}`, {
+    enabled: true, base_revision: bindings.mine.base_revision,
+  })
+
+  await page.goto('/agent')
+  const privacy = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
+  await expect(privacy).toBeVisible()
+  await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
+
+  await page.getByRole('button', { name: '引用资料（@）' }).click()
+  const contextDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '引用工作区资料', exact: true }) })
+  await contextDialog.getByRole('textbox', { name: '搜索资料' }).fill(materialText)
+  const materialCandidate = contextDialog.getByRole('button', { name: new RegExp(materialText) })
+  await expect(materialCandidate).toBeVisible()
+  await materialCandidate.click()
+  await contextDialog.getByRole('button', { name: '预览并校验', exact: true }).click()
+  await expect(contextDialog.locator('pre')).toContainText(materialText)
+  await contextDialog.getByRole('button', { name: '添加引用', exact: true }).click()
+
+  await page.getByRole('button', { name: '请求技能（$）' }).click()
+  const skillDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '请求使用技能', exact: true }) })
+  const skillRow = skillDialog.getByText(skillName, { exact: true }).locator('..').locator('..')
+  await expect(skillRow).toBeVisible()
+  await skillRow.getByRole('button', { name: '请求使用', exact: true }).click()
+
+  await page.locator('input[type="file"]').setInputFiles([
+    { name: 'aw04-good.txt', mimeType: 'text/plain', buffer: Buffer.from('附件成功项保留。') },
+    { name: 'aw04-unsupported.csv', mimeType: 'text/csv', buffer: Buffer.from('不支持的格式') },
+  ])
+  await expect(page.getByLabel('aw04-good.txt ready')).toBeVisible()
+  await expect(page.getByLabel('aw04-unsupported.csv failed')).toBeVisible()
+  const send = page.getByRole('button', { name: '发送', exact: true })
+  await expect(send).toBeDisabled()
+  await page.getByRole('button', { name: '移除 aw04-unsupported.csv' }).click()
+  await expect(send).toBeEnabled()
+
+  const messageText = '#text AW04 请求技能不代表已加载或已使用'
+  await page.getByPlaceholder(/发送消息/).fill(messageText)
+  const sendRequest = page.waitForRequest((request) => /\/api\/v1\/agent\/conversations\/[^/]+\/messages$/.test(new URL(request.url()).pathname) && request.method() === 'POST')
+  const sendResponse = page.waitForResponse((response) => /\/api\/v1\/agent\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+  await send.click()
+  const request = await sendRequest
+  const payload = request.postDataJSON()
+  expect(payload.request_id).toMatch(/^[0-9a-f-]{36}$/i)
+  expect(payload.context_refs).toEqual([expect.objectContaining({ type: 'material', scope: 'turn' })])
+  expect(payload.skill_requests).toEqual([expect.objectContaining({ skill_id: skill.id })])
+  expect(payload.attachment_ids).toHaveLength(1)
+  expect((await sendResponse).ok()).toBeTruthy()
+  await expect(page.getByText(`技能已请求 · ${skillName}`, { exact: true })).toBeVisible()
+  await expect(page.getByText(materialText, { exact: true })).toBeVisible()
+  await expect(page.getByText('本轮引用', { exact: true })).toBeVisible()
+  await expect(page.getByText(`已请求，未加载 · ${skillName}`, { exact: true })).toBeVisible()
+
+  const screenshotDir = resolve(process.cwd(), '../.playwright-results')
+  mkdirSync(screenshotDir, { recursive: true })
+  await page.screenshot({ path: resolve(screenshotDir, 'agent-workbench-aw04-context-skills-attachments.png') })
+})
+
+test('DEV-AW04 Electron 工作台可搜索并预览真实上下文', async ({ page, baseURL }) => {
+  expect(baseURL).toBe('http://127.0.0.1:5179')
+  const account = await registerAccount(page)
+  const provider = await api(page, 'POST', '/model-providers', {
+    name: 'AW04 Electron 工作台验收模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+  })
+  await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
+  await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
+  await page.addInitScript(() => {
+    const userAgent = navigator.userAgent
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => `${userAgent} Electron/44.8.0` })
+  })
+  const materialText = `AW04-桌面上下文-${Date.now()}：桌面工作台预览真实资料。`
+  await api(page, 'POST', '/materials', { account_id: account.id, kind: 'experience', content: materialText, source: 'AW04 桌面验收' })
+  await page.goto('/agent')
+  const privacy = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
+  await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
+
+  const workbench = page.locator('.desktop-agent-workbench')
+  await expect(workbench).toBeVisible()
+  await page.getByRole('button', { name: '选择操作账号' }).click()
+  const settings = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '对话设置', exact: true }) })
+  await settings.getByRole('combobox', { name: '选择账号' }).selectOption(account.id)
+  await settings.getByRole('button', { name: '关闭' }).click()
+  await page.getByRole('button', { name: '引用资料（@）' }).click()
+  const contextDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '引用工作区资料', exact: true }) })
+  await contextDialog.getByRole('textbox', { name: '搜索资料' }).fill(materialText)
+  const materialCandidate = contextDialog.getByRole('button', { name: new RegExp(materialText) })
+  await expect(materialCandidate).toBeVisible()
+  await materialCandidate.click()
+  await contextDialog.getByRole('button', { name: '预览并校验', exact: true }).click()
+  await expect(contextDialog.locator('pre')).toContainText(materialText)
+  await contextDialog.getByRole('button', { name: '添加引用', exact: true }).click()
+  await expect(contextDialog).toBeHidden()
+  await expect(page.getByRole('button', { name: `移除引用 ${materialText}`, exact: true })).toBeVisible()
+  await expect(page.getByText('本轮引用', { exact: true })).toBeVisible()
+
+  const screenshotDir = resolve(process.cwd(), '../.playwright-results')
+  mkdirSync(screenshotDir, { recursive: true })
+  await page.screenshot({ path: resolve(screenshotDir, 'agent-workbench-aw04-electron-context.png') })
+})
+
 test('DEV-AW02 真实 Electron 浅深主题与桌面窗口宽度', async ({ baseURL }) => {
   test.skip(process.platform !== 'win32', '真实客户端验收需要 Windows Electron')
   test.skip(process.env.OPS_E2E_PROD === '1', '真实客户端验收仅连接本地 mock 服务')

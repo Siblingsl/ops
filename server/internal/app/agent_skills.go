@@ -99,6 +99,53 @@ func (s *Server) agentSkillEnsureContext(ctx context.Context, st *agentRunState,
 	return c, nil
 }
 
+func (s *Server) agentRequestedSkillReferences(ctx context.Context, st *agentRunState,
+	account *Account) ([]map[string]any, error) {
+	var raw []byte
+	if err := s.db.QueryRow(ctx, `SELECT coalesce((SELECT skill_requests FROM agent_message
+		WHERE conversation_id=$1 AND run_id=$2 AND role='user' ORDER BY seq DESC LIMIT 1),'[]'::jsonb)`,
+		st.ConversationID, st.RunID).Scan(&raw); err != nil {
+		return nil, err
+	}
+	requests := []agentSkillRequest{}
+	if err := json.Unmarshal(raw, &requests); err != nil {
+		return nil, err
+	}
+	items := make([]map[string]any, 0, len(requests))
+	for _, request := range requests {
+		format := account.ContentFormat
+		if request.WorkID != nil {
+			if err := s.db.QueryRow(ctx, `SELECT content_format FROM work
+				WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL`, *request.WorkID, account.ID).Scan(&format); err != nil {
+				return nil, apiErr(422, "agent_skill_unavailable", "技能请求对应的作品已失效")
+			}
+		}
+		catalog, err := s.agentSkillEnsureContext(ctx, st, account, request.WorkID, format)
+		if err != nil {
+			return nil, err
+		}
+		var selected *agentSkillCatalogItem
+		for i := range catalog.Items {
+			if catalog.Items[i].Def.ID == request.SkillID {
+				selected = &catalog.Items[i]
+				break
+			}
+		}
+		if selected == nil {
+			return nil, apiErr(422, "agent_skill_unavailable", "本轮请求的技能已不在有效技能集中，已停止运行")
+		}
+		var workID any
+		if request.WorkID != nil {
+			workID = *request.WorkID
+		}
+		items = append(items, map[string]any{
+			"skill_id": request.SkillID, "name": selected.Def.Fields.Name,
+			"skill_ref": selected.Ref, "catalog_id": catalog.CatalogID, "work_id": workID,
+		})
+	}
+	return items, nil
+}
+
 // agentSkillActive 返回当前活动上下文（可能为 nil：无账号或尚未发现）。
 func agentSkillActive(runID uuid.UUID) *agentSkillContext {
 	rs := agentSkillStateOf(runID)

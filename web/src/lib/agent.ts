@@ -91,6 +91,29 @@ export interface AgentToolCall {
   result_preview: string
 }
 
+export interface AgentContextReference {
+  type: string
+  id: string
+  revision?: string
+  scope: 'turn' | 'conversation' | string
+  name?: string
+}
+
+export interface AgentSkillRequest {
+  skill_id: string
+  work_id?: string
+  name?: string
+}
+
+export interface AgentSkillUsage {
+  id: string
+  name: string
+  scope: string
+  loaded: boolean
+  used?: boolean
+  reason?: string
+}
+
 export interface AgentMessage {
   id: string
   seq: number
@@ -98,6 +121,9 @@ export interface AgentMessage {
   content: string
   tool_calls: AgentToolCall[]
   attachments: AgentAttachment[]
+  context_refs?: AgentContextReference[]
+  skill_requests?: AgentSkillRequest[]
+  skill_usage?: AgentSkillUsage[]
   run_id: string | null
   ai_call_id?: string | null
   created_at: string

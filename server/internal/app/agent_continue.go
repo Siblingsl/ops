@@ -23,10 +23,13 @@ import (
 
 // agentRunRequest 是发送消息与编辑消息的请求体（第 11.2 节）。
 type agentRunRequest struct {
-	Text          string         `json:"text"`
-	AttachmentIDs []string       `json:"attachment_ids"`
-	AccountID     string         `json:"account_id"`
-	Model         *agentModelRef `json:"model"`
+	Text          string                  `json:"text"`
+	AttachmentIDs []string                `json:"attachment_ids"`
+	ContextRefs   []agentContextReference `json:"context_refs"`
+	SkillRequests []agentSkillRequest     `json:"skill_requests"`
+	RequestID     string                  `json:"request_id"`
+	AccountID     string                  `json:"account_id"`
+	Model         *agentModelRef          `json:"model"`
 }
 
 // agentDecodeBody 解码 JSON 对象请求体；数组与非对象返回 400（第 11.2 节末段）。
@@ -62,20 +65,56 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	if err := agentDecodeBody(r, &req); err != nil {
 		return err
 	}
-	text := strings.TrimSpace(req.Text)
-	if text == "" {
-		return validation("请输入内容")
+	var requestID uuid.UUID
+	if strings.TrimSpace(req.RequestID) != "" {
+		requestID, err = uuid.Parse(strings.TrimSpace(req.RequestID))
+		if err != nil {
+			return validation("请求编号无效")
+		}
 	}
+	text := strings.TrimSpace(req.Text)
 	if runeLen(text) > agentMessageChars {
 		return validation("消息最长 8000 字")
 	}
 	// 第 9.5 节、E-28：疑似包含密钥或密码的消息拒绝发送，内容不保存。
-	if agentContainsSecret(text, s.agentSecretValues(ctx, ident(ctx).WorkspaceID)) {
+	if text != "" && agentContainsSecret(text, s.agentSecretValues(ctx, ident(ctx).WorkspaceID)) {
 		return apiErr(422, "validation_failed", "消息中疑似包含密钥或密码，请到设置页填写，不要发给智能体")
 	}
 	attIDs, err := s.agentCheckMessageAttachments(ctx, conv.ID, req.AttachmentIDs)
 	if err != nil {
 		return err
+	}
+	contextAccountID := conv.AccountID
+	if raw := strings.TrimSpace(req.AccountID); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			return errNotFound
+		}
+		if err := s.checkAgentAccount(ctx, id); err != nil {
+			return err
+		}
+		contextAccountID = &id
+	}
+	contextRefs := req.ContextRefs
+	if len(contextRefs) > 0 {
+		if err := requireAgentFeature("context_refs"); err != nil {
+			return err
+		}
+		contextRefs, err = s.agentValidateContextReferences(ctx, contextRefs, contextAccountID)
+		if err != nil {
+			return err
+		}
+	}
+	if len(req.SkillRequests) > 0 {
+		if err := requireAgentFeature("skill_requests"); err != nil {
+			return err
+		}
+		if err := s.agentValidateSkillRequests(ctx, contextAccountID, req.SkillRequests); err != nil {
+			return err
+		}
+	}
+	if text == "" && len(attIDs) == 0 && len(contextRefs) == 0 && len(req.SkillRequests) == 0 {
+		return validation("请输入内容，或添加要处理的资料")
 	}
 	// 第 6.4 节第 5 项：先写入未报告的卡片结果，再写入用户消息。
 	if err := s.agentReportCardResults(ctx, conv.ID); err != nil {
@@ -84,12 +123,21 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	if err := s.agentApplyConversationOverride(ctx, conv, req); err != nil {
 		return err
 	}
-	if _, err := s.agentInsertRow(ctx, conv.ID, nil, "user", text, nil, "", "", attIDs); err != nil {
+	requestPayload := struct {
+		Text          string
+		AttachmentIDs []uuid.UUID
+		ContextRefs   []agentContextReference
+		SkillRequests []agentSkillRequest
+		AccountID     string
+		Model         *agentModelRef
+	}{text, attIDs, contextRefs, req.SkillRequests, strings.TrimSpace(req.AccountID), req.Model}
+	message, replay, err := s.agentInsertUserMessageWithContext(ctx, conv.ID, text, attIDs, contextRefs,
+		req.SkillRequests, requestID, requestPayload)
+	if err != nil {
 		return err
 	}
-	// 第 8.2 节第 4 项：消息引用的附件标记为已引用并绑定对话。
-	if err := s.agentMarkAttachmentsReferenced(ctx, conv.ID, attIDs); err != nil {
-		return err
+	if replay {
+		return ok(w, map[string]any{"status": "replayed", "message_id": message.ID})
 	}
 	s.agentAutoTitle(ctx, conv, text)
 	if _, err := s.db.Exec(ctx, `UPDATE agent_conversation SET auto_continue_count=0, updated_at=now() WHERE id=$1`,
@@ -187,6 +235,112 @@ func (s *Server) agentInsertRow(ctx context.Context, convID uuid.UUID, runID *uu
 	}
 	view.Attachments = []agentAttachmentView{}
 	return &view, nil
+}
+
+// agentInsertUserMessageWithContext 保存消息、引用和附件状态，并将会话级引用固定到对话中。
+func (s *Server) agentInsertUserMessageWithContext(ctx context.Context, convID uuid.UUID, content string,
+	attachments []uuid.UUID, refs []agentContextReference, skills []agentSkillRequest,
+	requestID uuid.UUID, requestPayload any) (*agentMessageView, bool, error) {
+	if attachments == nil {
+		attachments = []uuid.UUID{}
+	}
+	if refs == nil {
+		refs = []agentContextReference{}
+	}
+	if skills == nil {
+		skills = []agentSkillRequest{}
+	}
+	refsJSON, err := json.Marshal(refs)
+	if err != nil {
+		return nil, false, err
+	}
+	skillsJSON, err := json.Marshal(skills)
+	if err != nil {
+		return nil, false, err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback(ctx)
+	if requestID != uuid.Nil {
+		resourceID, err := claimAgentRequest(ctx, tx, ident(ctx).WorkspaceID, ident(ctx).UserID,
+			"conversation.message:"+convID.String(), requestID, requestPayload)
+		if err != nil {
+			return nil, false, err
+		}
+		if resourceID != nil {
+			if err := tx.Commit(ctx); err != nil {
+				return nil, false, err
+			}
+			return &agentMessageView{ID: *resourceID}, true, nil
+		}
+	}
+	var fixedRaw []byte
+	if err := tx.QueryRow(ctx, `SELECT fixed_context_refs FROM agent_conversation WHERE id=$1 FOR UPDATE`, convID).Scan(&fixedRaw); err != nil {
+		return nil, false, err
+	}
+	fixed := []agentContextReference{}
+	if err := json.Unmarshal(fixedRaw, &fixed); err != nil {
+		return nil, false, err
+	}
+	fixedByKey := map[string]int{}
+	for i, ref := range fixed {
+		fixedByKey[ref.Type+":"+ref.ID.String()] = i
+	}
+	for _, ref := range refs {
+		if ref.Scope != "conversation" {
+			continue
+		}
+		key := ref.Type + ":" + ref.ID.String()
+		if i, exists := fixedByKey[key]; exists {
+			fixed[i] = ref
+		} else {
+			fixedByKey[key] = len(fixed)
+			fixed = append(fixed, ref)
+		}
+	}
+	if len(fixed) > 12 {
+		return nil, false, validation("对话固定引用最多 12 项")
+	}
+	fixedJSON, err := json.Marshal(fixed)
+	if err != nil {
+		return nil, false, err
+	}
+	var seq int
+	if err := tx.QueryRow(ctx, `UPDATE agent_conversation
+		SET next_seq=next_seq+1,last_message_at=now(),updated_at=now(),fixed_context_refs=$2
+		WHERE id=$1 RETURNING next_seq`, convID, fixedJSON).Scan(&seq); err != nil {
+		return nil, false, err
+	}
+	if len(attachments) > 0 {
+		tag, err := tx.Exec(ctx, `UPDATE agent_attachment SET referenced=true,conversation_id=COALESCE(conversation_id,$2)
+			WHERE id=ANY($1) AND user_id=$3 AND referenced=false`, attachments, convID, ident(ctx).UserID)
+		if err != nil {
+			return nil, false, err
+		}
+		if int(tag.RowsAffected()) != len(attachments) {
+			return nil, false, apiErr(422, "agent_attachment_invalid", "附件已失效或已被发送，请重新选择")
+		}
+	}
+	view := agentMessageView{Seq: seq, Role: "user", Content: content, Attachments: []agentAttachmentView{},
+		ContextRefs: refs, SkillRequests: skills}
+	if err := tx.QueryRow(ctx, `INSERT INTO agent_message
+		(conversation_id,seq,role,content,attachment_ids,context_refs,skill_requests)
+		VALUES ($1,$2,'user',$3,$4,$5,$6) RETURNING id,created_at`,
+		convID, seq, content, attachments, refsJSON, skillsJSON).Scan(&view.ID, &view.CreatedAt); err != nil {
+		return nil, false, err
+	}
+	if requestID != uuid.Nil {
+		if err := completeAgentRequest(ctx, tx, ident(ctx).WorkspaceID, ident(ctx).UserID,
+			"conversation.message:"+convID.String(), requestID, view.ID); err != nil {
+			return nil, false, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return &view, false, nil
 }
 
 // ---------- 未报告卡片结果（第 6.4 节第 4 项、第 6.3 节第 4 条） ----------

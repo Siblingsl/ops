@@ -30,6 +30,7 @@ type agentRawMessage struct {
 	ToolName    string
 	Attachments []uuid.UUID
 	RunID       *uuid.UUID
+	ContextRefs []agentResolvedContext
 }
 
 // agentBuildMessages 按第 6.2 节的顺序组装发送给模型的消息列表。
@@ -49,7 +50,12 @@ func (s *Server) agentBuildMessages(ctx context.Context, st *agentRunState, id *
 	if strings.TrimSpace(st.Summary) != "" {
 		out = append(out, ai.Message{Role: "system", Content: "对话摘要（更早的历史，仅供参考）：\n" + truncate(st.Summary, agentSummaryChars)})
 	}
-	window, err := s.agentMessageWindow(ctx, st, id)
+	fixed, fixedChars, err := s.agentFixedContextMessages(ctx, st)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, fixed...)
+	window, err := s.agentMessageWindow(ctx, st, id, agentWindowChars-fixedChars)
 	if err != nil {
 		return nil, err
 	}
@@ -58,8 +64,12 @@ func (s *Server) agentBuildMessages(ctx context.Context, st *agentRunState, id *
 
 // agentMessageWindow 从最新消息向前装入完整消息，直到预算用尽（第 6.2 节第 4 项）。
 // 助手消息与其全部工具结果成组：要么一起装入，要么一起不装入（第 6.2 节第 3 项）。
-func (s *Server) agentMessageWindow(ctx context.Context, st *agentRunState, id *identity) ([]ai.Message, error) {
-	rows, err := s.db.Query(ctx, `SELECT seq, role, content, tool_calls, tool_call_id, tool_name, attachment_ids, run_id
+func (s *Server) agentMessageWindow(ctx context.Context, st *agentRunState, id *identity, budgets ...int) ([]ai.Message, error) {
+	budget := agentWindowChars
+	if len(budgets) > 0 {
+		budget = budgets[0]
+	}
+	rows, err := s.db.Query(ctx, `SELECT seq, role, content, tool_calls, tool_call_id, tool_name, attachment_ids, run_id, context_refs
 		FROM agent_message WHERE conversation_id=$1 ORDER BY seq ASC`, st.ConversationID)
 	if err != nil {
 		return nil, err
@@ -69,10 +79,28 @@ func (s *Server) agentMessageWindow(ctx context.Context, st *agentRunState, id *
 	for rows.Next() {
 		var m agentRawMessage
 		var runID *uuid.UUID
-		if err := rows.Scan(&m.Seq, &m.Role, &m.Content, &m.ToolCalls, &m.ToolCallID, &m.ToolName, &m.Attachments, &runID); err != nil {
+		var refsRaw []byte
+		if err := rows.Scan(&m.Seq, &m.Role, &m.Content, &m.ToolCalls, &m.ToolCallID, &m.ToolName, &m.Attachments, &runID, &refsRaw); err != nil {
 			return nil, err
 		}
 		m.RunID = runID
+		if m.Role == "user" && runID != nil && *runID == st.RunID {
+			var refs []agentContextReference
+			if err := json.Unmarshal(refsRaw, &refs); err != nil {
+				return nil, err
+			}
+			for _, ref := range refs {
+				if ref.Scope != "turn" {
+					continue
+				}
+				item, err := s.agentResolveContextReference(ctx, ref, st.AccountID)
+				if err != nil {
+					return nil, err
+				}
+				item.Scope = "turn"
+				m.ContextRefs = append(m.ContextRefs, *item)
+			}
+		}
 		all = append(all, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -89,7 +117,6 @@ func (s *Server) agentMessageWindow(ctx context.Context, st *agentRunState, id *
 		groups = append(groups, []agentRawMessage{m})
 	}
 
-	budget := agentWindowChars
 	first := len(groups)
 	for i := len(groups) - 1; i >= 0; i-- {
 		need := 0
@@ -97,6 +124,11 @@ func (s *Server) agentMessageWindow(ctx context.Context, st *agentRunState, id *
 			need += agentMessageCost(m)
 		}
 		if need > budget {
+			for _, m := range groups[i] {
+				if m.RunID != nil && *m.RunID == st.RunID && len(m.ContextRefs) > 0 {
+					return nil, apiErr(422, "context_budget_exceeded", "本轮显式引用与对话内容超过上下文容量，请减少引用或整理对话")
+				}
+			}
 			break
 		}
 		budget -= need
@@ -126,7 +158,11 @@ func agentMessageCost(m agentRawMessage) int {
 	if m.Role == "tool" {
 		return runeLen(truncate(m.Content, agentProjectionChars))
 	}
-	return runeLen(m.Content)
+	cost := runeLen(m.Content)
+	for _, ref := range m.ContextRefs {
+		cost += runeLen(ref.Content)
+	}
+	return cost
 }
 
 // agentMessageForModel 把一条已保存的消息转成发给模型的 ai.Message。
@@ -136,6 +172,9 @@ func (s *Server) agentMessageForModel(ctx context.Context, st *agentRunState, id
 	case "user":
 		msg := ai.Message{Role: "user", Content: m.Content}
 		if err := s.agentAttachToMessage(ctx, st, &msg, m); err != nil {
+			return nil, err
+		}
+		if err := s.agentAppendResolvedContext(ctx, st, &msg, m.ContextRefs); err != nil {
 			return nil, err
 		}
 		return &msg, nil
@@ -176,6 +215,80 @@ func agentDataBlock(kind, body string) string {
 		return externalBlock(kind, kind, json.RawMessage(strings.TrimSpace(body)))
 	}
 	return externalBlock(kind, kind, body)
+}
+
+func (s *Server) agentFixedContextMessages(ctx context.Context, st *agentRunState) ([]ai.Message, int, error) {
+	var raw []byte
+	if err := s.db.QueryRow(ctx, `SELECT fixed_context_refs FROM agent_conversation WHERE id=$1`, st.ConversationID).Scan(&raw); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	refs := []agentContextReference{}
+	if err := json.Unmarshal(raw, &refs); err != nil {
+		return nil, 0, err
+	}
+	if len(refs) == 0 {
+		return nil, 0, nil
+	}
+	if len(refs) > 12 {
+		return nil, 0, apiErr(422, "agent_context_unavailable", "对话固定引用超过允许数量，请先移除多余引用")
+	}
+	resolved := make([]agentResolvedContext, 0, len(refs))
+	chars := 0
+	for _, ref := range refs {
+		item, err := s.agentResolveContextReference(ctx, ref, st.AccountID)
+		if err != nil {
+			return nil, 0, err
+		}
+		item.Scope = "conversation"
+		chars += runeLen(item.Content)
+		resolved = append(resolved, *item)
+	}
+	if chars > agentWindowChars {
+		return nil, 0, apiErr(422, "context_budget_exceeded", "对话固定引用超过上下文容量，请减少引用后重试")
+	}
+	msg := ai.Message{Role: "user"}
+	if err := s.agentAppendResolvedContext(ctx, st, &msg, resolved); err != nil {
+		return nil, 0, err
+	}
+	return []ai.Message{msg}, chars, nil
+}
+
+func (s *Server) agentAppendResolvedContext(ctx context.Context, st *agentRunState, msg *ai.Message,
+	refs []agentResolvedContext) error {
+	blocks := []string{}
+	for _, ref := range refs {
+		source := ref.Type + " " + ref.ID.String() + " · " + ref.Name + " · " + ref.Scope
+		if ref.Type == "image" {
+			if st.Vision && len(msg.Images) < agentMaxImagesToModel {
+				a, err := s.assetRow(ctx, ref.ID)
+				if err != nil {
+					return apiErr(422, "agent_context_unavailable", "所选图片已失效，请重新选择")
+				}
+				data, err := s.assetBytes(a)
+				if err != nil {
+					return apiErr(422, "agent_context_unavailable", "所选图片文件不可读取，请重新选择")
+				}
+				msg.Images = append(msg.Images, "data:"+a.Mime+";base64,"+base64.StdEncoding.EncodeToString(data))
+				blocks = append(blocks, "图片来源："+source)
+			} else if !st.Vision {
+				blocks = append(blocks, "图片来源："+source+"（当前模型不能分析图片内容）")
+			} else {
+				blocks = append(blocks, "图片来源："+source+"（本条消息图片数已达上限）")
+			}
+			continue
+		}
+		blocks = append(blocks, "来源："+source+"\n"+ref.Content)
+	}
+	if len(blocks) > 0 {
+		if strings.TrimSpace(msg.Content) != "" {
+			msg.Content += "\n\n"
+		}
+		msg.Content += agentDataBlock("引用资料", strings.Join(blocks, "\n\n"))
+	}
+	return nil
 }
 
 // agentAttachToMessage 把附件附到用户消息上（第 6.2 节第 4、5 项）。

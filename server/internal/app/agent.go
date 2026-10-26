@@ -922,16 +922,28 @@ type agentToolCallView struct {
 	ResultPreview string `json:"result_preview"`
 }
 
+type agentSkillUsageView struct {
+	ID     uuid.UUID `json:"id"`
+	Name   string    `json:"name"`
+	Scope  string    `json:"scope"`
+	Loaded bool      `json:"loaded"`
+	Used   *bool     `json:"used,omitempty"`
+	Reason string    `json:"reason,omitempty"`
+}
+
 type agentMessageView struct {
-	ID          uuid.UUID             `json:"id"`
-	Seq         int                   `json:"seq"`
-	Role        string                `json:"role"`
-	Content     string                `json:"content"`
-	AICallID    *uuid.UUID            `json:"ai_call_id"`
-	ToolCalls   []agentToolCallView   `json:"tool_calls"`
-	Attachments []agentAttachmentView `json:"attachments"`
-	RunID       *uuid.UUID            `json:"run_id"`
-	CreatedAt   time.Time             `json:"created_at"`
+	ID            uuid.UUID               `json:"id"`
+	Seq           int                     `json:"seq"`
+	Role          string                  `json:"role"`
+	Content       string                  `json:"content"`
+	AICallID      *uuid.UUID              `json:"ai_call_id"`
+	ToolCalls     []agentToolCallView     `json:"tool_calls"`
+	Attachments   []agentAttachmentView   `json:"attachments"`
+	ContextRefs   []agentContextReference `json:"context_refs"`
+	SkillRequests []agentSkillRequest     `json:"skill_requests"`
+	SkillUsage    []agentSkillUsageView   `json:"skill_usage"`
+	RunID         *uuid.UUID              `json:"run_id"`
+	CreatedAt     time.Time               `json:"created_at"`
 }
 
 type agentTargetView struct {
@@ -1040,7 +1052,7 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 // agentMessages 返回窗口内的消息；role=tool 不单独列出，而是折叠为助手消息的工具调用摘要（第 11.2 节）。
 func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int) ([]agentMessageView, bool, error) {
 	args := []any{convID}
-	sql := `SELECT id, seq, role, content, ai_call_id, tool_calls, tool_call_id, attachment_ids, run_id, created_at
+	sql := `SELECT id, seq, role, content, ai_call_id, tool_calls, tool_call_id, attachment_ids, context_refs, skill_requests, run_id, created_at
 		FROM agent_message WHERE conversation_id=$1`
 	if before > 0 {
 		args = append(args, before)
@@ -1052,10 +1064,12 @@ func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int
 		return nil, false, err
 	}
 	type rawMessage struct {
-		view   agentMessageView
-		raw    []byte
-		toolID string
-		ids    []uuid.UUID
+		view          agentMessageView
+		raw           []byte
+		toolID        string
+		ids           []uuid.UUID
+		contextRefs   []byte
+		skillRequests []byte
 	}
 	raw := []rawMessage{}
 	toolResults := map[string]string{}
@@ -1064,11 +1078,22 @@ func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int
 		var m rawMessage
 		var toolCalls []byte
 		if err := rows.Scan(&m.view.ID, &m.view.Seq, &m.view.Role, &m.view.Content, &m.view.AICallID, &toolCalls,
-			&m.toolID, &m.ids, &m.view.RunID, &m.view.CreatedAt); err != nil {
+			&m.toolID, &m.ids, &m.contextRefs, &m.skillRequests, &m.view.RunID, &m.view.CreatedAt); err != nil {
 			rows.Close()
 			return nil, false, err
 		}
 		m.raw = toolCalls
+		m.view.ContextRefs = []agentContextReference{}
+		m.view.SkillRequests = []agentSkillRequest{}
+		m.view.SkillUsage = []agentSkillUsageView{}
+		if err := json.Unmarshal(m.contextRefs, &m.view.ContextRefs); err != nil {
+			rows.Close()
+			return nil, false, err
+		}
+		if err := json.Unmarshal(m.skillRequests, &m.view.SkillRequests); err != nil {
+			rows.Close()
+			return nil, false, err
+		}
 		if m.view.Role == "tool" {
 			toolResults[m.toolID] = m.view.Content
 		}
@@ -1095,6 +1120,12 @@ func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int
 		}
 		m.view.ToolCalls = agentToolCallsOf(m.raw, toolResults)
 		m.view.Attachments = []agentAttachmentView{}
+		if m.view.AICallID != nil {
+			m.view.SkillUsage, err = s.agentAICallSkillUsage(ctx, *m.view.AICallID)
+			if err != nil {
+				return nil, false, err
+			}
+		}
 		for _, aid := range m.ids {
 			if a, found := attachments[aid]; found {
 				m.view.Attachments = append(m.view.Attachments, a)
@@ -1102,7 +1133,74 @@ func (s *Server) agentMessages(ctx context.Context, convID uuid.UUID, before int
 		}
 		list = append(list, m.view)
 	}
+	requestedByRun := map[uuid.UUID][]agentSkillRequest{}
+	for i := range list {
+		message := &list[i]
+		if message.Role == "user" && message.RunID != nil {
+			requestedByRun[*message.RunID] = message.SkillRequests
+			continue
+		}
+		if message.Role != "assistant" || message.RunID == nil {
+			continue
+		}
+		requests := requestedByRun[*message.RunID]
+		if len(requests) == 0 {
+			continue
+		}
+		seen := make(map[uuid.UUID]bool, len(message.SkillUsage))
+		for _, usage := range message.SkillUsage {
+			seen[usage.ID] = true
+		}
+		for _, request := range requests {
+			if !seen[request.SkillID] {
+				message.SkillUsage = append(message.SkillUsage, agentSkillUsageView{
+					ID: request.SkillID, Name: request.Name, Loaded: false,
+				})
+			}
+		}
+	}
 	return list, hasMore, nil
+}
+
+func (s *Server) agentAICallSkillUsage(ctx context.Context, callID uuid.UUID) ([]agentSkillUsageView, error) {
+	var sharedRaw, privateRaw []byte
+	var ownerID *uuid.UUID
+	if err := s.db.QueryRow(ctx, `SELECT context_refs,private_context_refs,context_owner_user_id
+		FROM ai_call WHERE id=$1`, callID).Scan(&sharedRaw, &privateRaw, &ownerID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return []agentSkillUsageView{}, nil
+		}
+		return nil, err
+	}
+	var shared struct {
+		Skills struct {
+			Items []SkillUseItem `json:"items"`
+		} `json:"skills"`
+	}
+	if len(sharedRaw) > 0 {
+		if err := json.Unmarshal(sharedRaw, &shared); err != nil {
+			return nil, err
+		}
+	}
+	items := append([]SkillUseItem{}, shared.Skills.Items...)
+	if ownerID != nil && *ownerID == ident(ctx).UserID && len(privateRaw) > 0 {
+		var private struct {
+			Items []SkillUseItem `json:"items"`
+		}
+		if err := json.Unmarshal(privateRaw, &private); err != nil {
+			return nil, err
+		}
+		items = append(items, private.Items...)
+	}
+	out := make([]agentSkillUsageView, 0, len(items))
+	for _, item := range items {
+		usage := agentSkillUsageView{ID: item.ID, Name: item.Name, Scope: item.Scope, Loaded: item.Used}
+		if item.Reason != nil {
+			usage.Reason = *item.Reason
+		}
+		out = append(out, usage)
+	}
+	return out, nil
 }
 
 // agentToolCallsOf 把 assistant 消息的 tool_calls 与紧随其后的 tool 结果合并成前端展示用的折叠行。
@@ -1323,6 +1421,8 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Delete("/agent/conversation-groups/{id}", s.h(s.deleteAgentConversationGroup))
 		r.Post("/agent/conversations/{id}/read", s.h(s.markAgentConversationRead))
 		r.Get("/agent/conversations/{id}/search", s.h(s.searchAgentConversationMessages))
+		r.Get("/agent/context-candidates", s.h(s.getAgentContextCandidates))
+		r.Post("/agent/context-preview", s.h(s.postAgentContextPreview))
 		r.Get("/agent/settings", s.h(s.getAgentSettings))
 		r.Put("/agent/settings", s.h(s.putAgentSettings))
 		r.Post("/agent/conversations/{id}/messages", s.h(s.postAgentMessages))

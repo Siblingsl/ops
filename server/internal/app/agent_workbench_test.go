@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -95,5 +96,50 @@ func TestAW01ConversationCreateRequestIDIsIdempotent(t *testing.T) {
 	}
 	if status != http.StatusConflict || failure.Error.Code != "agent_request_conflict" {
 		t.Fatalf("conflicting request id = %d %s, want 409 agent_request_conflict", status, raw)
+	}
+}
+
+func TestAW04MessageRequestIDIsIdempotent(t *testing.T) {
+	providerID := env.ensureToolModel(t)
+	conversation := env.agentRunConversation(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conversation.ID) })
+	requestID := uuid.New()
+	operation := "conversation.message:" + conversation.ID.String()
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM agent_request WHERE request_id=$1 AND operation=$2`, requestID, operation)
+	})
+	env.llm.ResetRequests()
+	path := "/api/v1/agent/conversations/" + conversation.ID.String() + "/messages"
+	input := map[string]any{"request_id": requestID, "text": "AW04 同一请求只运行一次"}
+	if status, body := env.do(http.MethodPost, path, input); status != http.StatusOK {
+		t.Fatalf("first message request = %d %s", status, body)
+	}
+	modelCalls := len(env.llm.Requests())
+	if modelCalls == 0 {
+		t.Fatal("first message request did not reach the model")
+	}
+	status, body := env.do(http.MethodPost, path, input)
+	var replay struct {
+		Status    string    `json:"status"`
+		MessageID uuid.UUID `json:"message_id"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &replay) != nil || replay.Status != "replayed" || replay.MessageID == uuid.Nil {
+		t.Fatalf("replayed request = %d %s", status, body)
+	}
+	if calls := len(env.llm.Requests()); calls != modelCalls {
+		t.Fatalf("replay called model again: first=%d after_replay=%d", modelCalls, calls)
+	}
+	var messages int
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM agent_message
+		WHERE conversation_id=$1 AND role='user' AND content=$2`, conversation.ID, input["text"]).Scan(&messages); err != nil {
+		t.Fatal(err)
+	}
+	if messages != 1 {
+		t.Fatalf("replay created %d user messages, want one", messages)
+	}
+	conflict := map[string]any{"request_id": requestID, "text": "AW04 同一请求编号不能改载荷"}
+	status, body = env.do(http.MethodPost, path, conflict)
+	if status != http.StatusConflict || agentErrCodeOf(t, body) != "agent_request_conflict" {
+		t.Fatalf("same request ID with a different payload = %d %s", status, body)
 	}
 }
