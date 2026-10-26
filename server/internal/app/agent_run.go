@@ -64,6 +64,7 @@ type agentRunState struct {
 	DeltaEventCount   int
 	StartEventSeq     int64
 	LastSnapshotAt    time.Time
+	ToolStartedAt     time.Time
 }
 
 // agentModelPayload 是一轮模型调用的输入（不含系统规则，由 agent_context.go 组装）。
@@ -473,6 +474,10 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 			}
 			return
 		}
+		if ctx.Err() != nil {
+			status = "stopped"
+			return
+		}
 		if len(res.Calls) == 0 {
 			// 第 6.1 节第 2.7 项：没有工具调用，运行完成。
 			return
@@ -549,10 +554,8 @@ func (s *Server) agentRound(ctx context.Context, st *agentRunState, rt *route, i
 		return agentRoundResult{}, err
 	}
 	st.CardsThisRound = 0
-	for _, c := range res.Calls {
-		if err := s.agentHandleToolCall(ctx, st, id, c, send); err != nil {
-			return agentRoundResult{}, err
-		}
+	if err := s.agentHandleToolGroup(ctx, st, id, res.Calls, send); err != nil {
+		return agentRoundResult{}, err
 	}
 	return res, nil
 }
@@ -582,14 +585,26 @@ func (s *Server) agentExplanationRound(ctx context.Context, st *agentRunState, r
 // agentInsertMessage 写入一条消息并推进对话的 seq 与 last_message_at（第 10 节）。
 func (s *Server) agentInsertMessage(ctx context.Context, st *agentRunState, role, content string,
 	toolCalls any, toolCallID, toolName string, attachments []uuid.UUID, callID *uuid.UUID) (*agentMessageView, error) {
-	if attachments == nil {
-		attachments = []uuid.UUID{}
-	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+	view, err := s.agentInsertMessageTx(ctx, tx, st, role, content, toolCalls, toolCallID, toolName, attachments, callID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return view, nil
+}
+
+func (s *Server) agentInsertMessageTx(ctx context.Context, tx pgx.Tx, st *agentRunState, role, content string,
+	toolCalls any, toolCallID, toolName string, attachments []uuid.UUID, callID *uuid.UUID) (*agentMessageView, error) {
+	if attachments == nil {
+		attachments = []uuid.UUID{}
+	}
 	var seq int
 	if err := tx.QueryRow(ctx, `UPDATE agent_conversation
 		SET next_seq = next_seq + 1, last_message_at = now(), updated_at = now()
@@ -622,9 +637,6 @@ func (s *Server) agentInsertMessage(ctx context.Context, st *agentRunState, role
 			return nil, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
 	view.Attachments = []agentAttachmentView{}
 	return &view, nil
 }
@@ -656,29 +668,14 @@ type agentToolRecord struct {
 	Summary string
 }
 
-// agentSaveToolResult 写一条 role=tool 消息，保证每个 tool_call_id 都有对应结果（第 6.1 节第 2.8 项）。
-func (s *Server) agentSaveToolResult(ctx context.Context, st *agentRunState, call ai.ToolCall, rec agentToolRecord) error {
-	_, err := s.agentInsertMessage(ctx, st, "tool", string(rec.Raw), nil, call.ID, call.Function.Name, nil, nil)
-	return err
-}
-
-// agentToolOutcome 落库工具结果并向客户端发送 tool 事件。
+// agentToolOutcome 在同一短事务内提交脱敏工具结果与tool.ended，提交后才投影旧SSE。
 func (s *Server) agentToolOutcome(ctx context.Context, st *agentRunState, call ai.ToolCall, rec agentToolRecord,
 	ok bool, send func(string, any)) error {
-	if err := s.agentSaveToolResult(ctx, st, call, rec); err != nil {
-		return err
+	status := "done"
+	if !ok {
+		status = "error"
 	}
-	if send != nil {
-		status := "done"
-		if !ok {
-			status = "error"
-		}
-		send("tool", map[string]any{
-			"tool_call_id": call.ID, "name": call.Function.Name, "status": status,
-			"summary": truncate(rec.Summary, 120),
-		})
-	}
-	return nil
+	return s.agentCommitToolOutcome(ctx, st, call, rec, status, send)
 }
 
 // agentToolError 返回一种工具级错误，并计入连续无效调用（第 6.6 节）。
@@ -700,6 +697,17 @@ func (s *Server) agentToolError(ctx context.Context, st *agentRunState, call ai.
 // agentHandleToolCall 按返回顺序处理一个工具调用。
 func (s *Server) agentHandleToolCall(ctx context.Context, st *agentRunState, id *identity,
 	call ai.ToolCall, send func(string, any)) error {
+	st.ToolStartedAt = time.Now()
+	if err := s.agentToolStarted(context.WithoutCancel(ctx), st, call, send); err != nil {
+		if errors.Is(err, context.Canceled) {
+			st.ToolStartedAt = time.Time{}
+			return s.agentCancelledTool(ctx, st, call, send)
+		}
+		return err
+	}
+	if ctx.Err() != nil {
+		return s.agentCancelledTool(ctx, st, call, send)
+	}
 	name := call.Function.Name
 	raw := strings.TrimSpace(call.Function.Arguments)
 	if raw == "" {
@@ -781,14 +789,22 @@ func (s *Server) agentToolLimitWithCode(ctx context.Context, st *agentRunState, 
 // agentToolDispatch 经分发器执行一次 R / G 工具调用。
 func (s *Server) agentToolDispatch(ctx context.Context, st *agentRunState, t *AgentTool, call ai.ToolCall,
 	args map[string]any, send func(string, any)) error {
+	if ctx.Err() != nil {
+		return s.agentCancelledTool(ctx, st, call, send)
+	}
+	ctx = context.WithoutCancel(ctx)
 	secrets := s.agentSecretValues(ctx, st.WorkspaceID)
 	started := time.Now()
+	timeout := agentReadTimeout
+	if t.Kind == toolG {
+		timeout = agentGenerateTimeout
+	}
 	res, err := s.dispatchAgentTool(ctx, agentDispatchRequest{
 		Principal: agentPrincipal{SessionID: st.SessionID, WorkspaceID: st.WorkspaceID,
 			ConversationID: st.ConversationID, RunID: st.RunID},
 		Tool:    t,
 		Args:    args,
-		Timeout: t.ExecTimeout,
+		Timeout: timeout,
 	})
 	if err != nil {
 		payload, _ := json.Marshal(map[string]any{"ok": false, "error": map[string]any{"code": "timeout", "message": "工具调用超时或失败：" + truncate(err.Error(), 200)}})
@@ -859,12 +875,23 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 	tx, txErr := s.db.Begin(finishCtx)
 	if txErr == nil {
 		defer tx.Rollback(finishCtx)
-		txErr = tx.QueryRow(finishCtx, `UPDATE agent_run SET status=$2, stage=$3, reason=$4,
+		_, txErr = tx.Exec(finishCtx, `SELECT id FROM agent_conversation WHERE id=$1 FOR UPDATE`, st.ConversationID)
+		var stage string
+		if txErr == nil {
+			txErr = tx.QueryRow(finishCtx, `SELECT stage FROM agent_run WHERE id=$1`, st.RunID).Scan(&stage)
+		}
+		if stage == "stopping" {
+			status, reason = "stopped", ""
+			st.ErrCode, st.ErrMsg = "", ""
+		}
+		if txErr == nil {
+			txErr = tx.QueryRow(finishCtx, `UPDATE agent_run SET status=$2, stage=$3, reason=$4,
 		rounds=$5, read_calls=$6, generate_calls=$7, actions_proposed=$8, prompt_tokens=$9,
 		completion_tokens=$10, external_read=$11, error_code=$12, error_message=$13, finished_at=$14
-		WHERE id=$1 RETURNING finished_at`, st.RunID, status, status, reason,
-			st.Rounds, st.ReadCalls, st.GenerateCalls, st.ActionsProposed, st.PromptTokens, st.CompletionTokens,
-			st.ExternalRead, st.ErrCode, st.ErrMsg, finished).Scan(&finished)
+		WHERE id=$1 AND status IN ('queued','running') RETURNING finished_at`, st.RunID, status, status, reason,
+				st.Rounds, st.ReadCalls, st.GenerateCalls, st.ActionsProposed, st.PromptTokens, st.CompletionTokens,
+				st.ExternalRead, st.ErrCode, st.ErrMsg, finished).Scan(&finished)
+		}
 		if txErr == nil {
 			_, txErr = appendAgentEventTx(finishCtx, tx, st.ConversationID, &st.RunID, "run.ended", map[string]any{
 				"status": status, "reason": reason, "error_code": st.ErrCode,
@@ -885,6 +912,10 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 	agentReleaseSkillState(st.RunID)
 	s.maybeSummarize(ctx, st)
 	if send != nil {
+		if txErr != nil {
+			send("error", map[string]any{"code": "internal", "message": "运行状态保存失败，请刷新核对；不要直接重复已执行操作"})
+			return
+		}
 		stage := "waiting_confirmation"
 		if status != "awaiting_confirmation" {
 			stage = status

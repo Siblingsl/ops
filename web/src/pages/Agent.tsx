@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Archive, ArchiveRestore, AtSign, Bot, Check, ChevronDown, ChevronLeft, Clipboard, FileText, FolderPlus, LoaderCircle, Menu, RotateCcw,
+  Archive, ArchiveRestore, AtSign, Bot, ChevronDown, ChevronLeft, Clipboard, FileText, FolderPlus, LoaderCircle, Menu, RotateCcw,
   MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Search, Send, Settings2, Sparkles, Square, Trash2, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -334,7 +334,7 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
       {desktopPresentation && <div className="desktop-agent-message-speaker">
         {user ? <span className="desktop-agent-user-avatar">林</span> : <span className="desktop-agent-bot-avatar"><Bot /></span>}
         <strong>{user ? '你' : 'OPS'}</strong>
-        <small>{user ? time : message.tool_calls?.length ? '已完成参考资料读取' : time}</small>
+        <small>{user ? time : message.tool_calls?.length ? '工具活动' : time}</small>
       </div>}
       <div className={`min-w-0 max-w-[92%] rounded-2xl px-4 py-3 sm:max-w-[82%] ${desktopPresentation ? 'desktop-agent-message-bubble' : ''} ${user ? 'bg-ink-600 text-white' : message.role === 'system' ? 'border border-gamboge-200 bg-gamboge-50 text-gamboge-900' : 'bg-white shadow-card'}`}>
         {message.attachments?.length > 0 && <div className="mb-2 flex flex-wrap gap-2">
@@ -360,14 +360,19 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
         </div>}
         {message.tool_calls?.length > 0 && <div className={`mt-2 border-t pt-2 ${user ? 'border-white/20' : 'border-mist-100'}`}>
           <button type="button" aria-expanded={toolsOpen} aria-controls={toolsId} onClick={() => setToolsOpen((value) => !value)} className={`inline-flex cursor-pointer items-center gap-1 text-[12px] ${desktopPresentation ? 'desktop-agent-tool-summary' : ''} ${user ? 'text-white/75' : 'text-mist-500 hover:text-mist-700'}`}>
-            {desktopPresentation ? <Check className="size-3.5" /> : <ChevronDown className={`size-3.5 transition-transform ${toolsOpen ? '' : '-rotate-90'}`} />}
-            已读取 {message.tool_calls.length} 项
+            {message.tool_calls.some((call) => call.status === 'running') ? <LoaderCircle className="size-3.5 animate-spin" /> : <ChevronDown className={`size-3.5 transition-transform ${toolsOpen ? '' : '-rotate-90'}`} />}
+            工具活动 {message.tool_calls.length} 项
           </button>
           <div id={toolsId} aria-hidden={!toolsOpen} className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${toolsOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
             <div className="min-h-0 overflow-hidden">
               <div className={`mt-2 space-y-2 text-xs ${user ? 'text-white/80' : 'text-mist-500'}`}>
                 {message.tool_calls.map((call) => <details key={call.id} className="rounded-lg border border-current/10 px-2.5 py-2">
-                  <summary tabIndex={toolsOpen ? undefined : -1} className="cursor-pointer">{call.summary || call.name}</summary>
+                  <summary tabIndex={toolsOpen ? undefined : -1} className="cursor-pointer">
+                    {call.summary || call.name}
+                    {call.status && <span className="ml-2">{call.status === 'running' ? '处理中' : call.status === 'done' ? '已完成' : call.status === 'cancelled' ? '已取消，未执行' : call.status === 'interrupted' ? '结果未确认' : '失败'}</span>}
+                    {call.duration_ms !== undefined && call.status !== 'running' && <span className="ml-2">{(call.duration_ms / 1000).toFixed(1)} 秒</span>}
+                  </summary>
+                  {call.error && <p className="mt-2 text-danger">{call.error.message}（{call.error.code}）{call.error.request_id && ` · ${call.error.request_id}`}</p>}
                   {call.result_preview && <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-sans">{call.result_preview}</pre>}
                 </details>)}
               </div>
@@ -388,12 +393,14 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
   )
 }
 
-function RunStatus({ activeRun, streamStage, connection, pendingActions, error, completedNotice }: { activeRun: AgentConversationDetail['active_run'] | undefined; streamStage: string; connection: string; pendingActions: number; error: string; completedNotice: string }) {
+function RunStatus({ activeRun, streamStage, toolName, connection, pendingActions, error, completedNotice }: { activeRun: AgentConversationDetail['active_run'] | undefined; streamStage: string; toolName?: string; connection: string; pendingActions: number; error: string; completedNotice: string }) {
   if (error) return <div role="alert" className="mx-auto mb-3 max-w-3xl rounded-lg bg-danger/5 px-3 py-2 text-[12.5px] text-danger">{error}</div>
   const text = connection === 'reconnecting' ? '连接中断，任务可能仍在运行，正在恢复…'
     : connection === 'paused' ? '实时连接已暂停，任务可能仍在运行'
+    : streamStage === 'stopping' || activeRun?.stage === 'stopping' ? '正在停止，等待在途工具结束…'
     : streamStage === 'queued' || activeRun?.status === 'queued' ? '排队中'
-    : streamStage.startsWith('tool:') ? `正在读取：${streamStage.slice(5)}`
+    : streamStage.startsWith('tool:') ? `正在处理工具：${streamStage.slice(5)}`
+    : toolName && activeRun?.stage === 'tool' ? `正在处理工具：${toolName}`
       : streamStage === 'waiting_confirmation' ? `等待你确认 ${pendingActions} 项`
         : activeRun || streamStage ? '思考中' : pendingActions ? `等待你确认 ${pendingActions} 项` : completedNotice
   return text ? <div role="status" className="mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg bg-ink-50 px-3 py-2 text-[12.5px] text-ink-700">{activeRun || streamStage ? <LoaderCircle className="size-3.5 animate-spin" /> : <span className="size-1.5 rounded-full bg-ink-500" />}{text}</div> : null
@@ -738,7 +745,8 @@ export default function Agent() {
         streamPartialRef.current = { messageKey, chunkIndex }
         setStreamText((old) => current.messageKey === messageKey ? old + String(data.text ?? '') : String(data.text ?? ''))
       }
-    } else if (type === 'tool.ended' || type === 'action.updated' || type === 'message.saved' || type === 'conversation.updated') {
+    } else if (type === 'tool.started' || type === 'tool.ended' || type === 'action.updated' || type === 'message.saved' || type === 'conversation.updated') {
+      if (type === 'tool.started') setStreamStage(`tool:${data.name || '工具'}`)
       void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
       void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
     } else if (type === 'run.ended') {
@@ -1004,7 +1012,7 @@ export default function Agent() {
     if (!id) return
     try {
       await post(`/agent/runs/${id}/cancel`, {})
-      setStreamStage('已停止')
+      setStreamStage('stopping')
       await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] })
     } catch (error) { toast.error(errorMessage(error)) }
   }
@@ -1325,7 +1333,7 @@ export default function Agent() {
           </div>
 
           <div className={`shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4 ${desktopPresentation ? 'desktop-agent-compose-area' : ''} ${workbenchUI ? 'desktop-agent-workbench-compose-area' : ''}`}>
-            {(!desktopPresentation || workbenchUI || !!streamError) && <RunStatus activeRun={activeRun} streamStage={streamStage} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
+            {(!desktopPresentation || workbenchUI || !!streamError) && <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === activeRun?.id).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
             {!bootstrapData.can_use && (bootstrapData.reason === 'no_model' || bootstrapData.reason === 'not_tested') && <Notice tone="gamboge" className="mx-auto mb-2 max-w-3xl">{bootstrapData.reason === 'not_tested' ? '模型已经配置好了，但还没有完成能力自检。完成一次自检后就能开始对话。' : '还没有配置可用于对话的模型，请到模型配置页添加支持工具调用的模型。'}历史对话仍可查看。 <a href="/settings/models" className="underline">去模型配置</a></Notice>}
             {pendingActions > 0 && !desktopPresentation && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">等待你逐张处理 {pendingActions} 项后，智能体会继续。卡片操作入口显示在对应消息下方。</div>}
             {detail?.can_continue && !busy && !actionExecuting && pendingActions === 0 && <div className="mx-auto mb-2 max-w-3xl text-right"><Button size="sm" variant="ghost" onClick={continueRun}>继续</Button></div>}

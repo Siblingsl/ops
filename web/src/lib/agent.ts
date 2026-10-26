@@ -92,6 +92,9 @@ export interface AgentToolCall {
   name: string
   summary: string
   result_preview: string
+  status?: 'running' | 'done' | 'error' | 'cancelled' | 'interrupted' | string
+  duration_ms?: number
+  error?: { code: string; message: string; request_id?: string }
 }
 
 export interface AgentContextReference {

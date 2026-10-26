@@ -863,21 +863,45 @@ func (s *Server) postAgentRunCancel(w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return errNotFound
 	}
-	var owner uuid.UUID
-	if err := s.db.QueryRow(ctx, `SELECT user_id FROM agent_run WHERE id=$1 AND workspace_id=$2`, runID,
-		ident(ctx).WorkspaceID).Scan(&owner); err != nil {
+	var conversationID uuid.UUID
+	if err := s.db.QueryRow(ctx, `SELECT conversation_id FROM agent_run WHERE id=$1 AND workspace_id=$2 AND user_id=$3`, runID,
+		ident(ctx).WorkspaceID, ident(ctx).UserID).Scan(&conversationID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errNotFound
 		}
 		return err
 	}
-	if owner != ident(ctx).UserID {
-		return errNotFound
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
 	}
-	if s.agentCancelRun(runID) {
-		return ok(w, map[string]any{"ok": true})
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT id FROM agent_conversation WHERE id=$1 FOR UPDATE`, conversationID); err != nil {
+		return err
 	}
-	return apiErr(409, "agent_run_busy", "这次运行已经结束，无需停止")
+	var status, stage string
+	if err := tx.QueryRow(ctx, `SELECT status,stage FROM agent_run WHERE id=$1`, runID).Scan(&status, &stage); err != nil {
+		return err
+	}
+	if status != "queued" && status != "running" {
+		return apiErr(409, "agent_run_busy", "这次运行已经结束，无需停止")
+	}
+	if stage != "stopping" {
+		if _, err := tx.Exec(ctx, `UPDATE agent_run SET stage='stopping' WHERE id=$1`, runID); err != nil {
+			return err
+		}
+		if _, err := appendAgentEventTx(ctx, tx, conversationID, &runID, "run.stage", map[string]any{"stage": "stopping"}, nil); err != nil {
+			return err
+		}
+	}
+	// 在释放会话锁前设置内存取消标记；工具/终态发布必须先等待本事务。
+	if !s.agentCancelRun(runID) {
+		return apiErr(409, "agent_run_busy", "这次运行已结束或正在恢复，请刷新后核对")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return ok(w, map[string]any{"ok": true})
 }
 
 // ---------- 摘要压缩（第 6.8 节第 3 项） ----------

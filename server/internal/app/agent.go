@@ -951,10 +951,13 @@ type agentAttachmentView struct {
 }
 
 type agentToolCallView struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Summary       string `json:"summary"`
-	ResultPreview string `json:"result_preview"`
+	ID            string               `json:"id"`
+	Name          string               `json:"name"`
+	Summary       string               `json:"summary"`
+	ResultPreview string               `json:"result_preview"`
+	Status        string               `json:"status,omitempty"`
+	DurationMS    *int64               `json:"duration_ms,omitempty"`
+	Error         *agentToolEventError `json:"error,omitempty"`
 }
 
 type agentSkillUsageView struct {
@@ -1167,7 +1170,7 @@ func (s *Server) agentMessages(ctx context.Context, tx pgx.Tx, convID uuid.UUID,
 		skillRequests []byte
 	}
 	raw := []rawMessage{}
-	toolResults := map[string]string{}
+	toolResults := map[uuid.UUID]map[string]string{}
 	attachmentIDs := []uuid.UUID{}
 	for rows.Next() {
 		var m rawMessage
@@ -1190,7 +1193,14 @@ func (s *Server) agentMessages(ctx context.Context, tx pgx.Tx, convID uuid.UUID,
 			return nil, false, err
 		}
 		if m.view.Role == "tool" {
-			toolResults[m.toolID] = m.view.Content
+			runID := uuid.Nil
+			if m.view.RunID != nil {
+				runID = *m.view.RunID
+			}
+			if toolResults[runID] == nil {
+				toolResults[runID] = map[string]string{}
+			}
+			toolResults[runID][m.toolID] = m.view.Content
 		}
 		attachmentIDs = append(attachmentIDs, m.ids...)
 		raw = append(raw, m)
@@ -1213,7 +1223,11 @@ func (s *Server) agentMessages(ctx context.Context, tx pgx.Tx, convID uuid.UUID,
 		if m.view.Role == "tool" {
 			continue
 		}
-		m.view.ToolCalls = agentToolCallsOf(m.raw, toolResults)
+		runID := uuid.Nil
+		if m.view.RunID != nil {
+			runID = *m.view.RunID
+		}
+		m.view.ToolCalls = agentToolCallsOf(m.raw, toolResults[runID])
 		m.view.Attachments = []agentAttachmentView{}
 		if m.view.AICallID != nil {
 			m.view.SkillUsage, err = s.agentAICallSkillUsage(ctx, tx, *m.view.AICallID)
@@ -1227,6 +1241,9 @@ func (s *Server) agentMessages(ctx context.Context, tx pgx.Tx, convID uuid.UUID,
 			}
 		}
 		list = append(list, m.view)
+	}
+	if err := agentLoadToolActivity(ctx, tx, convID, list); err != nil {
+		return nil, false, err
 	}
 	requestedByRun := map[uuid.UUID][]agentSkillRequest{}
 	for i := range list {

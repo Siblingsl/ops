@@ -110,6 +110,38 @@ test('DEV-AW06 新会话受理回执丢失后重试复用同一会话', async ({
   expect(detail.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(1)
 })
 
+async function checkToolActivity(page: Page, screenshotName: string) {
+  await page.locator('textarea').fill('#tool get_context {}\n#tool unknown_aw06 {}')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  const summary = page.getByRole('button', { name: '工具活动 2 项', exact: true }).last()
+  await expect(summary).toBeVisible()
+  await summary.click()
+  const activity = page.locator(`[id="${await summary.getAttribute('aria-controls')}"]`)
+  await expect(activity.getByText('已完成', { exact: true })).toBeVisible()
+  await expect(activity.getByText('失败', { exact: true })).toBeVisible()
+  const failed = activity.locator('details').filter({ hasText: 'unknown_tool' })
+  await failed.locator('summary').click()
+  await expect(failed.locator('p')).toBeVisible()
+  await expect(failed.locator('p')).toContainText('unknown_tool')
+  await expect(activity.getByText(/\d+\.\d 秒/).first()).toBeVisible()
+  await expect.poll(async () => (await call(page, 'GET', `/agent/conversations/${page.url().split('/').pop()!}`)).active_run).toBeNull()
+  await page.reload()
+  const recoveredSummary = page.getByRole('button', { name: '工具活动 2 项', exact: true }).last()
+  await recoveredSummary.click()
+  const recoveredActivity = page.locator(`[id="${await recoveredSummary.getAttribute('aria-controls')}"]`)
+  await expect(recoveredActivity).toHaveCSS('opacity', '1')
+  const recoveredFailure = recoveredActivity.locator('details').filter({ hasText: 'unknown_tool' })
+  await recoveredFailure.locator('summary').click()
+  await expect(recoveredFailure.locator('p')).toBeVisible()
+  mkdirSync(resolve(process.cwd(), '../.playwright-results'), { recursive: true })
+  await page.screenshot({ path: resolve(process.cwd(), `../.playwright-results/${screenshotName}.png`) })
+}
+
+test('DEV-AW06 Web工具活动展示持久状态、耗时和受控错误', async ({ page, baseURL }) => {
+  await prepare(page, baseURL!)
+  await checkToolActivity(page, 'agent-workbench-aw06-web-tools')
+})
+
 test('DEV-AW06 停止后刷新仍展示服务端未完成文本', async ({ page, baseURL }) => {
   await prepare(page, baseURL!)
   const { response, id } = await send(page, '停止后保留未完成部分。'.repeat(120))
@@ -211,6 +243,7 @@ test('DEV-AW06 真实Electron刷新恢复持久事件运行', async ({ baseURL }
       args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../desktop/.build/main.js')],
       env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
     await refreshAndRecover(await app.firstWindow(), baseURL!, 'agent-workbench-aw06-electron-recovery')
+    await checkToolActivity(await app.firstWindow(), 'agent-workbench-aw06-electron-tools')
   } finally {
     // 此用例只验证恢复；沿用真实平台Electron测试的专用进程清理方式。
     await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)

@@ -122,34 +122,29 @@ func (s *Server) persistAgentStreamEvent(ctx context.Context, st *agentRunState,
 		if raw, err := json.Marshal(data); err == nil {
 			_ = json.Unmarshal(raw, &stage)
 		}
+		if stage.Name == "tool" {
+			return
+		} // tool.started已在同一事务保存运行stage。
 		eventType = "run.stage"
 		payload = map[string]any{"stage": stage.Name}
-	case "tool":
-		var in struct {
-			CallID  string `json:"tool_call_id"`
-			Name    string `json:"name"`
-			Status  string `json:"status"`
-			Summary string `json:"summary"`
-		}
-		if raw, err := json.Marshal(data); err == nil {
-			_ = json.Unmarshal(raw, &in)
-		}
-		eventType = "tool.ended"
-		payload = map[string]any{"tool_call_id": in.CallID, "name": in.Name, "status": in.Status,
-			"summary": truncate(in.Summary, 120)}
 	default:
 		return
 	}
 	tx, err := s.db.Begin(ctx)
 	if err == nil {
 		defer tx.Rollback(ctx)
-		if eventType == "run.stage" {
+		_, err = tx.Exec(ctx, `SELECT id FROM agent_conversation WHERE id=$1 FOR UPDATE`, st.ConversationID)
+		if err == nil && eventType == "run.stage" {
 			status := "running"
 			if payload["stage"] == "queued" {
 				status = "queued"
 			}
-			_, err = tx.Exec(ctx, `UPDATE agent_run SET status=$2,stage=$3 WHERE id=$1
-				AND status IN ('queued','running')`, st.RunID, status, payload["stage"])
+			tag, updateErr := tx.Exec(ctx, `UPDATE agent_run SET status=$2,stage=$3 WHERE id=$1
+				AND status IN ('queued','running') AND stage<>'stopping'`, st.RunID, status, payload["stage"])
+			err = updateErr
+			if err == nil && tag.RowsAffected() == 0 {
+				return
+			}
 		}
 		if err == nil {
 			_, err = appendAgentEventTx(ctx, tx, st.ConversationID, &st.RunID, eventType, payload, nil)

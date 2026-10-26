@@ -3,7 +3,14 @@ import { pathToFileURL } from 'node:url'
 import { expect, test } from '@playwright/test'
 import { api, registerAccount } from './support'
 
-test('Electron 智能体按原型布局并逐项点击会话与聊天操作', async ({ page }) => {
+test('关闭workbench_ui时Electron保留原型布局与会话聊天操作', async ({ page }) => {
+  // 本用例验证D-119旧布局回退；D-152新布局由agent-workbench.spec.ts验收。
+  await page.route('**/agent/bootstrap', async (route) => {
+    const response = await route.fetch()
+    const bootstrap = await response.json()
+    bootstrap.features.workbench_ui = false
+    await route.fulfill({ response, json: bootstrap })
+  })
   const account = await registerAccount(page)
   await page.addInitScript(() => {
     const userAgent = navigator.userAgent
@@ -61,7 +68,7 @@ test('Electron 智能体按原型布局并逐项点击会话与聊天操作', as
   await expect(card).toBeAttached()
   await expect(card.getByRole('button', { name: /执行|入库|保存/ }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: '全部执行', exact: true })).toHaveCount(0)
-  const toolSummary = page.getByRole('button', { name: '已读取 2 项', exact: true })
+  const toolSummary = page.getByRole('button', { name: '工具活动 2 项', exact: true })
   await toolSummary.click()
   await expect(toolSummary).toHaveAttribute('aria-expanded', 'true')
   const toolDetails = page.locator(`[id="${await toolSummary.getAttribute('aria-controls')}"]`)
