@@ -18,6 +18,7 @@ import (
 
 // agentExecuteRequest 是执行卡片的请求体（第 11.3 节）。
 type agentExecuteRequest struct {
+	RequestID     string         `json:"request_id,omitempty"`
 	Confirm       bool           `json:"confirm"`
 	GateAck       bool           `json:"gate_ack"`
 	SecondConfirm bool           `json:"second_confirm"`
@@ -311,6 +312,30 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		return err
 	}
+	requestID := uuid.Nil
+	payload := req
+	payload.RequestID = ""
+	if req.RequestID != "" {
+		requestID, err = uuid.Parse(strings.TrimSpace(req.RequestID))
+		if err != nil || requestID == uuid.Nil {
+			return validation("请求编号无效")
+		}
+		hash, err := agentRequestPayloadHash(payload)
+		if err != nil {
+			return err
+		}
+		resource, err := lookupAgentRequest(ctx, s.db, ident(ctx).WorkspaceID, ident(ctx).UserID,
+			agentActionExecuteOperation(act.ID), requestID, hash)
+		if err != nil {
+			return err
+		}
+		if resource != nil {
+			if *resource != act.ID {
+				return apiErr(409, "agent_request_conflict", "请求编号对应的卡片不一致")
+			}
+			return s.replayAgentActionExecution(w, r, act)
+		}
+	}
 	if err := s.agentExpireLazy(ctx, act.ConversationID); err != nil {
 		return err
 	}
@@ -403,16 +428,12 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		return err
 	}
-	changed, err := s.agentMutateActions(ctx, act.ConversationID, `UPDATE agent_action a SET status='executing', decided_by=$2, executed_at=now()
-		WHERE id=$1 AND revision=$3 AND status IN ('pending','needs_input') AND expires_at > now()
-		AND NOT EXISTS (SELECT 1 FROM agent_run r WHERE r.conversation_id=a.conversation_id AND r.status IN ('queued','running'))
-		AND NOT EXISTS (SELECT 1 FROM agent_action x WHERE x.conversation_id=a.conversation_id AND x.status='executing')`,
-		act.ID, ident(ctx).UserID, act.Revision)
+	replay, err := s.claimAgentActionExecution(ctx, act, requestID, payload)
 	if err != nil {
 		return err
 	}
-	if len(changed) == 0 {
-		return apiErr(409, "agent_action_state_invalid", "卡片或对话状态已变化，请刷新后核对")
+	if replay {
+		return s.replayAgentActionExecution(w, r, act)
 	}
 	sse := newSSE(w)
 	res, derr := s.dispatchAgentTool(ctx, agentDispatchRequest{
@@ -434,7 +455,7 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 		if err := s.agentRetryOutcome(ctx, act, "timeout", "执行超时，未产生写入，可以再次点击"); err != nil {
 			return err
 		}
-		return s.agentEmitDone(ctx, sse, act, "执行超时，未产生写入，可以再次点击", res)
+		return s.agentEmitDone(ctx, sse, act, "执行超时，未产生写入，可以再次点击", res, false)
 	}
 
 	// 第 4.4 节第 6 项：命中 G 来源时为段落注入 applied（在落库前修正最终请求体）。
@@ -454,7 +475,7 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		return err
 	}
-	return s.agentEmitDone(ctx, sse, act, agentDoneSummary(res), res)
+	return s.agentEmitDone(ctx, sse, act, agentDoneSummary(res), res, false)
 }
 
 // agentCheckChoice 校验 choice 只在 needs_input 下有效且匹配 need.kind（第 11.3 节第 4 项）。
@@ -714,16 +735,19 @@ func jsonOrEmpty(b []byte) []byte {
 // agentEmitDone 发送卡片执行流的 done 事件（第 11.4 节）：
 // 批次是否全部结束、能否续跑（第 6.4 节），一次性密钥值只在本次返回。
 func (s *Server) agentEmitDone(ctx context.Context, sse *sseWriter, act *agentActionRow,
-	summary string, res *agentDispatchResult) error {
+	summary string, res *agentDispatchResult, replayed bool) error {
 	view, err := s.agentActionByID(ctx, act.ID)
 	if err != nil {
 		return err
 	}
 	payload := map[string]any{
 		"action": view, "result_summary": truncate(summary, 200),
-		"batch_resolved": s.agentBatchResolved(ctx, act), "can_continue": s.agentCanContinue(ctx, act),
+		"batch_resolved": s.agentBatchResolved(ctx, act), "can_continue": !replayed && s.agentCanContinue(ctx, act),
 		"target": map[string]any{"type": view.Target.Type, "id": view.Target.ID,
 			"account_id": act.AccountID, "work_id": nil},
+	}
+	if replayed {
+		payload["replayed"] = true
 	}
 	if res != nil && len(res.Secrets) > 0 {
 		// 第 9.5 节第 4 项：一次性值只经本次 SSE 返回，不落库、不进模型上下文。

@@ -112,13 +112,7 @@ test('DEV-AW06 关闭新协议时仍使用原Web POST SSE', async ({ page, baseU
   await expect(page.locator('article').getByText('旧客户端SSE兼容验收。', { exact: true })).toBeVisible()
 })
 
-test('DEV-AW06 空闲会话通过持久事件同步另一端的单卡状态', async ({ page, baseURL }) => {
-  await prepare(page, baseURL!)
-  const cursors: number[] = []
-  page.on('request', (request) => {
-    const url = new URL(request.url())
-    if (/\/agent\/conversations\/[^/]+\/events$/.test(url.pathname)) cursors.push(Number(url.searchParams.get('after_event_seq')))
-  })
+async function createInviteCard(page: Page) {
   await page.locator('textarea').fill('#tool load_tool_domain {"domain":"workspace"}\n#tool workspace__create_invite {"role":"editor"}')
   const accepted = page.waitForResponse((response) => /\/agent\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
   await page.getByRole('button', { name: '发送', exact: true }).click()
@@ -131,6 +125,17 @@ test('DEV-AW06 空闲会话通过持久事件同步另一端的单卡状态', as
   const action = detail.actions[0]
   const card = page.locator(`#agent-action-${action.id}`)
   await expect(card.getByRole('button', { name: '拒绝', exact: true })).toBeVisible()
+  return { id, detail, action, card }
+}
+
+test('DEV-AW06 空闲会话通过持久事件同步另一端的单卡状态', async ({ page, baseURL }) => {
+  await prepare(page, baseURL!)
+  const cursors: number[] = []
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (/\/agent\/conversations\/[^/]+\/events$/.test(url.pathname)) cursors.push(Number(url.searchParams.get('after_event_seq')))
+  })
+  const { id, detail, action, card } = await createInviteCard(page)
   await expect.poll(() => cursors.some((cursor) => cursor >= detail.last_event_seq)).toBeTruthy()
   // 直接从另一个请求端改变单卡状态，当前页面没有本地mutation回调或轮询。
   await call(page, 'POST', `/agent/actions/${action.id}/reject`, { reason: '另一端已单独拒绝' })
@@ -138,6 +143,33 @@ test('DEV-AW06 空闲会话通过持久事件同步另一端的单卡状态', as
   const changed = await call(page, 'GET', `/agent/conversations/${id}`)
   expect(changed.actions[0].revision).toBe(action.revision + 1)
   expect(changed.last_run.id).toBe(detail.last_run.id)
+})
+
+test('DEV-AW06 单卡响应丢失后查询状态，同request_id重放不重复返回一次性值', async ({ page, baseURL }) => {
+  await prepare(page, baseURL!)
+  const { action, card } = await createInviteCard(page)
+  let requests = 0
+  let payload: Record<string, unknown> = {}
+  const path = `/api/v1/agent/actions/${action.id}/execute`
+  await page.route(`**${path}`, async (route) => {
+    requests++
+    payload = route.request().postDataJSON()
+    const response = await route.fetch()
+    expect(response.ok()).toBeTruthy()
+    await response.body()
+    await route.abort('connectionreset')
+  })
+  await card.getByRole('button', { name: '执行', exact: true }).click()
+  await expect(card).toContainText('已完成')
+  expect(requests).toBe(1)
+  expect(payload.request_id).toMatch(/^[0-9a-f-]{36}$/i)
+  await page.unroute(`**${path}`)
+  const me = await call(page, 'GET', '/auth/me')
+  const replay = await page.request.post(path, { data: payload, headers: { 'X-CSRF-Token': me.csrf_token } })
+  expect(replay.ok()).toBeTruthy()
+  const body = await replay.text()
+  expect(body).toContain('event: done')
+  expect(body).not.toContain('secret_once')
 })
 
 test('DEV-AW06 真实Electron刷新恢复持久事件运行', async ({ baseURL }) => {

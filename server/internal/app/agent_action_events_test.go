@@ -179,7 +179,8 @@ func TestAW06SecretOnceIsAbsentFromSnapshotAndEventReplay(t *testing.T) {
 	if action == nil {
 		t.Fatal("应提出创建邀请卡片")
 	}
-	out := env.sse(t, agentActionPath(action.ID, "execute"), map[string]any{"confirm": true})
+	request := map[string]any{"confirm": true, "request_id": uuid.NewString()}
+	out := env.sse(t, agentActionPath(action.ID, "execute"), request)
 	var result struct {
 		SecretOnce map[string]string `json:"secret_once"`
 	}
@@ -203,4 +204,91 @@ func TestAW06SecretOnceIsAbsentFromSnapshotAndEventReplay(t *testing.T) {
 		}
 	}
 	aw06ActionEvents(t, conversation.ID, action.ID)
+	repeated := env.sse(t, agentActionPath(action.ID, "execute"), request)
+	var repeatedResult struct {
+		SecretOnce map[string]string `json:"secret_once"`
+	}
+	if err := json.Unmarshal(lastEvent(t, repeated).Data, &repeatedResult); err != nil || len(repeatedResult.SecretOnce) != 0 {
+		t.Fatalf("相同请求只能返回已保存状态，不能重放一次性值：%v", err)
+	}
+}
+
+func TestAW06ExecuteRequestReplayIsIdempotentAndPayloadBound(t *testing.T) {
+	conversation, action, note := aw06MemoryCard(t)
+	for _, invalid := range []string{"invalid", uuid.Nil.String()} {
+		env.expectErr(t, http.MethodPost, agentActionPath(action.ID, "execute"),
+			map[string]any{"confirm": true, "request_id": invalid}, "validation_failed")
+	}
+	requestID := uuid.NewString()
+	request := map[string]any{"confirm": true, "request_id": requestID}
+	env.sse(t, agentActionPath(action.ID, "execute"), request)
+	repeated := env.sse(t, agentActionPath(action.ID, "execute"), request)
+	if lastEvent(t, repeated).Name != "done" {
+		t.Fatal("重复请求应返回原卡片的已保存状态")
+	}
+	var restored struct {
+		Replayed    bool `json:"replayed"`
+		CanContinue bool `json:"can_continue"`
+	}
+	if err := json.Unmarshal(lastEvent(t, repeated).Data, &restored); err != nil || !restored.Replayed || restored.CanContinue {
+		t.Fatal("请求重放必须标记为恢复结果，不能再次触发自动续跑计费")
+	}
+	env.expectErr(t, http.MethodPost, agentActionPath(action.ID, "execute"),
+		map[string]any{"confirm": false, "request_id": requestID}, "agent_request_conflict")
+	var written int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM account_memory WHERE text=$1`, note).Scan(&written); err != nil || written != 1 {
+		t.Fatalf("请求重放不应再次写入：count=%d err=%v", written, err)
+	}
+	if events := aw06ActionEvents(t, conversation.ID, action.ID); len(events) != 3 {
+		t.Fatalf("请求重放不得再次抢占卡片或产生事件：%+v", events)
+	}
+}
+
+func TestAW06ExecuteRequestInProgressCannotRedispatch(t *testing.T) {
+	_, action, note := aw06MemoryCard(t)
+	tx, err := env.srv.db.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first sync.WaitGroup
+	defer func() { tx.Rollback(context.Background()); first.Wait() }()
+	if _, err := tx.Exec(t.Context(), `LOCK TABLE account_memory IN SHARE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	requestID := uuid.NewString()
+	payload := map[string]any{"confirm": true, "request_id": requestID}
+	firstStatus := 0
+	first.Add(1)
+	go func() {
+		defer first.Done()
+		firstStatus, _ = env.do(http.MethodPost, agentActionPath(action.ID, "execute"), payload)
+	}()
+	status := ""
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := env.srv.db.QueryRow(t.Context(), `SELECT status FROM agent_action WHERE id=$1`, action.ID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status == "executing" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if status != "executing" {
+		t.Fatal("执行受理事实应先提交，不能随业务调用持有长事务")
+	}
+	env.expectErr(t, http.MethodPost, agentActionPath(action.ID, "execute"), payload, "agent_action_state_invalid")
+	env.expectErr(t, http.MethodPost, agentActionPath(action.ID, "execute"),
+		map[string]any{"confirm": false, "request_id": requestID}, "agent_request_conflict")
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	first.Wait()
+	if firstStatus != http.StatusOK {
+		t.Fatalf("首次执行应正常结束：%d", firstStatus)
+	}
+	var written int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM account_memory WHERE text=$1`, note).Scan(&written); err != nil || written != 1 {
+		t.Fatalf("在途请求只能分发一次：count=%d err=%v", written, err)
+	}
 }

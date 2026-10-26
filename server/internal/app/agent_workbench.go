@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -84,13 +85,30 @@ func claimAgentRequest(ctx context.Context, tx pgx.Tx, workspaceID, userID uuid.
 	if tag.RowsAffected() == 1 {
 		return nil, nil
 	}
+	resource, err := lookupAgentRequest(ctx, tx, workspaceID, userID, operation, requestID, hash)
+	if err == nil && resource == nil {
+		return nil, fmt.Errorf("agent request reservation disappeared")
+	}
+	return resource, err
+}
+
+type agentRequestReader interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func lookupAgentRequest(ctx context.Context, reader agentRequestReader, workspaceID, userID uuid.UUID,
+	operation string, requestID uuid.UUID, payloadHash string) (*uuid.UUID, error) {
 	var existingHash, resourceID string
-	if err := tx.QueryRow(ctx, `SELECT payload_hash,COALESCE(resource_id::text,'') FROM agent_request
-		WHERE workspace_id=$1 AND user_id=$2 AND operation=$3 AND request_id=$4`,
-		key...).Scan(&existingHash, &resourceID); err != nil {
+	err := reader.QueryRow(ctx, `SELECT payload_hash,COALESCE(resource_id::text,'') FROM agent_request
+		WHERE workspace_id=$1 AND user_id=$2 AND operation=$3 AND request_id=$4 AND expires_at>now()`,
+		workspaceID, userID, operation, requestID).Scan(&existingHash, &resourceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
-	if existingHash != hash {
+	if existingHash != payloadHash {
 		return nil, apiErr(409, "agent_request_conflict", "请求编号已用于不同内容，请刷新后重新操作")
 	}
 	if resourceID == "" {

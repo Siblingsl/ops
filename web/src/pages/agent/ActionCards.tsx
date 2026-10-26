@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Dialog } from '@/components/dialog'
 import { Badge, Button, Card, cn, Input, Notice, Textarea } from '@/components/ui'
-import type { AgentAction } from '@/lib/agent'
+import { type AgentAction, useAgentBootstrap } from '@/lib/agent'
 import { invalidateAgentAction, type AgentMutationTarget } from '@/lib/agent-invalidate'
 import { errorMessage, post, stream } from '@/lib/api'
 import { agentWechatPayload } from '@/lib/wechat-html'
@@ -24,6 +24,7 @@ interface ActionDone {
   target?: AgentMutationTarget
   result_summary?: string
   secret_once?: Record<string, unknown>
+  replayed?: boolean
 }
 
 const resolutions: Record<string, { value: string; label: string }[]> = {
@@ -110,6 +111,8 @@ function missingPreview(action: AgentAction) {
 export function AgentActionCards({ actions, running, onRefresh, onContinue, onExecutingChange, desktopPresentation = false }: AgentActionCardsProps) {
   const [busy, setBusy] = useState<string | null>(null)
   const busyRef = useRef(false)
+  const executionRequests = useRef<Record<string, { key: string; id: string }>>({})
+  const requestIDsEnabled = useAgentBootstrap().data?.features?.event_resume === true
   const mounted = useRef(true)
   const [updated, setUpdated] = useState<Record<string, AgentAction>>({})
   const [continueReady, setContinueReady] = useState(false)
@@ -129,6 +132,13 @@ export function AgentActionCards({ actions, running, onRefresh, onContinue, onEx
     try {
       if (request) {
         if (action.tool_name === 'wechat__push' || action.tool_name === 'checks__start') request.client_payload = await agentWechatPayload(action.tool_name, action.target.id)
+        if (requestIDsEnabled) {
+          const key = JSON.stringify({ revision: action.revision, request })
+          const previous = executionRequests.current[action.id]
+          const requestID = previous?.key === key ? previous.id : crypto.randomUUID()
+          executionRequests.current[action.id] = { key, id: requestID }
+          request.request_id = requestID
+        }
         const done = await stream<ActionDone>(`/agent/actions/${action.id}/execute`, request, {
           onEvent: (event, data: unknown) => {
             if (event === 'done') return
@@ -138,9 +148,10 @@ export function AgentActionCards({ actions, running, onRefresh, onContinue, onEx
           },
         })
         if (!done?.action) throw new Error('执行流已断开，尚未收到最终结果，请刷新后核对卡片状态。')
+        delete executionRequests.current[action.id]
         setUpdated((old) => ({ ...old, [action.id]: done.action }))
         if (done.secret_once) setSecrets((old) => ({ ...old, [action.id]: done.secret_once! }))
-        canContinue = done.can_continue
+        canContinue = done.can_continue && done.replayed !== true
         if (done.action.status === 'succeeded') {
           try { await invalidateAgentAction(client, action.tool_name, done.target) }
           catch (e) { setError(errorMessage(e)) }
