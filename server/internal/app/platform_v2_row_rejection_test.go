@@ -214,3 +214,122 @@ func TestPlatformV2MetricsRejectsRowWithoutExternalID(t *testing.T) {
 		t.Fatalf("only the valid metric row may be written: observations=%d", observations)
 	}
 }
+
+// contentItem 造一条正文行。state 与 field_states 决定它落在哪条分支。
+//
+// content_revision 必须是 0：领单时冻结的 revision 取自镜像当前值，而镜像刚由
+// catalog 阶段建出来，此时还是 0。写别的值会被 `platformV2RequireFrozenMirrorTarget`
+// 判成"内容修订与冻结目标不一致"（409），那就测不到行级分支了。
+func contentItem(externalKey, externalID, state string) map[string]any {
+	title := "正文样本"
+	body := "正文内容"
+	return map[string]any{
+		"external_id": externalID, "author_external_account_key": externalKey,
+		"content_revision": 0, "state": state, "title": title, "body_text": body,
+		"topics": []string{}, "tags": []string{}, "media_refs": []any{},
+		"observed_at":  time.Now().UTC().Truncate(time.Second),
+		"field_states": map[string]string{"title": "present", "body_text": "present"},
+	}
+}
+
+// TestPlatformV2ContentRejectsRowWithoutState 验证：正文批次里 state 非法的行被
+// 单独拒绝，同批合法行照常写入镜像。
+//
+// work_content 是 v2 里唯一「写正文」的批次，它此前没有任何行级测试。
+func TestPlatformV2ContentRejectsRowWithoutState(t *testing.T) {
+	f := startMetricsStageFixture(t, `{"adapterVersion":"fixture-1","mappingVersion":1,`+
+		`"browserVersion":"155.0.0.0","workList":"supported","perNoteMetrics":"unknown","noteContent":"supported"}`)
+	first, second := completePlatformV2CatalogStage(t, f)
+
+	env.srv.schedulePlatformRuns(context.Background())
+	content := claimPlatformV2Run(t, f, "account_sync", "fixture-1")
+	if content.Stage != "content" {
+		t.Fatalf("noteContent=supported must schedule content stage, got %q", content.Stage)
+	}
+	key := f.ExternalKey()
+	status, receipt := submitV2BatchRaw(t, f, content.ID, map[string]any{
+		"protocol_version": 2, "lease_generation": content.LeaseGeneration,
+		"authorization_revision": content.AuthorizationRevision, "batch_seq": 0, "final_batch": false,
+		"run_status": "succeeded", "result_type": "work_content",
+		"data": map[string]any{"items": []any{
+			contentItem(key, first, "complete"),
+			contentItem(key, second, "not-a-real-state"),
+		}},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("one invalid content row must not fail the batch: %d %s", status, receipt)
+	}
+	var out struct {
+		ContentReceived int              `json:"content_received"`
+		Rejected        int              `json:"rejected"`
+		Rows            []map[string]any `json:"rows"`
+	}
+	if err := json.Unmarshal(receipt, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ContentReceived != 1 || out.Rejected != 1 {
+		t.Fatalf("invalid content row must be isolated: received=%d rejected=%d rows=%v",
+			out.ContentReceived, out.Rejected, out.Rows)
+	}
+	if len(out.Rows) != 2 || out.Rows[1]["state"] != "rejected" {
+		t.Fatalf("invalid content row must be reported in place: %v", out.Rows)
+	}
+	var complete, other int
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT
+		(SELECT count(*) FROM platform_work_mirror WHERE account_id=$1 AND external_id=$2 AND content_state='complete'),
+		(SELECT count(*) FROM platform_work_mirror WHERE account_id=$1 AND external_id=$3 AND content_state<>'complete')`,
+		f.Account.ID, first, second).Scan(&complete, &other); err != nil {
+		t.Fatal(err)
+	}
+	if complete != 1 || other != 1 {
+		t.Fatalf("only the valid content row may become complete: complete=%d other=%d", complete, other)
+	}
+	// 收尾：把这次 run 结束掉，否则它会以 running 状态留给后续用例与清理逻辑。
+	submitPlatformV2Batch(t, f, content.ID, platformV2ControlBatch(content, 1, "complete", nil, "succeeded"))
+}
+
+// TestPlatformV2ContentDeniedStateDoesNotBecomeComplete 验证：正文状态是 denied 时
+// 只更新 content_state 与字段覆盖，绝不把该篇标成 complete。
+func TestPlatformV2ContentDeniedStateDoesNotBecomeComplete(t *testing.T) {
+	f := startMetricsStageFixture(t, `{"adapterVersion":"fixture-1","mappingVersion":1,`+
+		`"browserVersion":"155.0.0.0","workList":"supported","perNoteMetrics":"unknown","noteContent":"supported"}`)
+	first, second := completePlatformV2CatalogStage(t, f)
+
+	env.srv.schedulePlatformRuns(context.Background())
+	content := claimPlatformV2Run(t, f, "account_sync", "fixture-1")
+	if content.Stage != "content" {
+		t.Fatalf("expected content stage, got %q", content.Stage)
+	}
+	key := f.ExternalKey()
+	denied := contentItem(key, second, "denied")
+	denied["field_states"] = map[string]string{"body_text": "denied", "title": "denied"}
+	submitPlatformV2Batch(t, f, content.ID, map[string]any{
+		"protocol_version": 2, "lease_generation": content.LeaseGeneration,
+		"authorization_revision": content.AuthorizationRevision, "batch_seq": 0, "final_batch": false,
+		"run_status": "succeeded", "result_type": "work_content",
+		"data": map[string]any{"items": []any{contentItem(key, first, "complete"), denied}},
+	})
+
+	var complete, deniedState int
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT
+		(SELECT count(*) FROM platform_work_mirror WHERE account_id=$1 AND external_id=$2 AND content_state='complete'),
+		(SELECT count(*) FROM platform_work_mirror WHERE account_id=$1 AND external_id=$3 AND content_state='denied')`,
+		f.Account.ID, first, second).Scan(&complete, &deniedState); err != nil {
+		t.Fatal(err)
+	}
+	if complete != 1 || deniedState != 1 {
+		t.Fatalf("denied content must not be reported as complete: complete=%d denied=%d", complete, deniedState)
+	}
+	var errorCode *string
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT content_error_code FROM platform_work_mirror
+		WHERE account_id=$1 AND external_id=$2`, f.Account.ID, second).Scan(&errorCode); err != nil {
+		t.Fatal(err)
+	}
+	if errorCode == nil || *errorCode == "" {
+		t.Fatalf("denied content must carry an error code, got %v", errorCode)
+	}
+	// 收尾：同上，别把 run 留在 running 状态。
+	submitPlatformV2Batch(t, f, content.ID, platformV2ControlBatch(content, 1, "partial", map[string]any{
+		"reason": "content_capability_unverified",
+	}, "partial"))
+}
