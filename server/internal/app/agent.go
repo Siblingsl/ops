@@ -988,6 +988,7 @@ type agentCardPreview struct {
 
 type agentActionView struct {
 	ID             uuid.UUID       `json:"id"`
+	Revision       int64           `json:"revision"`
 	RunID          uuid.UUID       `json:"run_id"`
 	ToolName       string          `json:"tool_name"`
 	Title          string          `json:"title"`
@@ -1033,7 +1034,7 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 		return err
 	}
 	// 惰性过期先提交，再以同一个只读快照读取消息、partial、卡片和事件水位。
-	if _, err := s.db.Exec(ctx, `UPDATE agent_action SET status='expired'
+	if _, err := s.agentMutateActions(ctx, c.ID, `UPDATE agent_action SET status='expired'
 		WHERE conversation_id=$1 AND status IN ('pending','needs_input') AND expires_at < now()`, c.ID); err != nil {
 		return err
 	}
@@ -1329,8 +1330,7 @@ func (s *Server) agentAttachments(ctx context.Context, tx pgx.Tx, ids []uuid.UUI
 }
 
 func (s *Server) agentActions(ctx context.Context, tx pgx.Tx, convID uuid.UUID) ([]agentActionView, error) {
-	rows, err := tx.Query(ctx, `SELECT id, run_id, tool_name, kind, gate, status, target_type, target_id, work_id,
-		preview, editable_fields, blank_fields, need, result, error, last_error, expires_at, batch_id, created_at
+	rows, err := tx.Query(ctx, `SELECT `+agentActionCols+`
 		FROM agent_action WHERE conversation_id=$1 ORDER BY created_at, id`, convID)
 	if err != nil {
 		return nil, err
@@ -1348,7 +1348,7 @@ func (s *Server) agentActions(ctx context.Context, tx pgx.Tx, convID uuid.UUID) 
 }
 
 const agentActionCols = `id, run_id, tool_name, kind, gate, status, target_type, target_id, work_id,
-	preview, editable_fields, blank_fields, need, result, error, last_error, expires_at, batch_id, created_at`
+	preview, editable_fields, blank_fields, need, result, error, last_error, expires_at, batch_id, created_at,revision`
 
 // agentActionViewFrom 扫描一行 agent_action 并组装成前端 / SSE 用的卡片视图（第 11.2 节）。
 func agentActionViewFrom(row pgx.Row) (*agentActionView, error) {
@@ -1364,7 +1364,7 @@ func agentActionViewFrom(row pgx.Row) (*agentActionView, error) {
 	)
 	if err := row.Scan(&a.ID, &a.RunID, &a.ToolName, &a.Kind, &a.Gate, &a.Status, &targetType, &targetID, &workID,
 		&preview, &a.EditableFields, &a.BlankFields, &need, &res, &errJSON, &lastErr,
-		&a.ExpiresAt, &a.BatchID, &a.CreatedAt); err != nil {
+		&a.ExpiresAt, &a.BatchID, &a.CreatedAt, &a.Revision); err != nil {
 		return nil, err
 	}
 	var pv agentCardPreview

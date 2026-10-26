@@ -47,7 +47,7 @@ func (s *Server) runAgentCleanup(ctx context.Context) {
 func (s *Server) purgeAgentData(ctx context.Context) (agentCleanupStats, error) {
 	stats := agentCleanupStats{}
 	// 1. pending / needs_input 卡片超过 24 小时改为 expired（第 5.9 节第 2 项）。
-	n, err := s.execAgentBatch(ctx, agentExpireActions)
+	n, err := s.purgeExpiredAgentActions(ctx)
 	if err != nil {
 		return stats, err
 	}
@@ -139,21 +139,6 @@ func (s *Server) purgeExpiredAgentDeltaEvents(ctx context.Context) (int, error) 
 	}
 }
 
-// execAgentBatch 反复执行一条「每批最多 5000 行、返回删除/更新行数」的语句，直到没有命中行。
-func (s *Server) execAgentBatch(ctx context.Context, query string) (int, error) {
-	total := 0
-	for {
-		var n int
-		if err := s.db.QueryRow(ctx, query).Scan(&n); err != nil {
-			return total, err
-		}
-		if n == 0 {
-			return total, nil
-		}
-		total += n
-	}
-}
-
 func (s *Server) purgeAgentAttachments(ctx context.Context) (int, error) {
 	total := 0
 	for {
@@ -189,16 +174,6 @@ func (s *Server) deleteAgentConversations(ctx context.Context, query string, cut
 		}
 	}
 }
-
-const agentExpireActions = `
-WITH batch AS MATERIALIZED (
-	SELECT id FROM agent_action
-	WHERE status IN ('pending','needs_input') AND expires_at < now()
-	ORDER BY expires_at, id LIMIT 5000 FOR UPDATE SKIP LOCKED
-), updated AS (
-	UPDATE agent_action a SET status='expired' FROM batch b WHERE a.id=b.id RETURNING 1
-)
-SELECT count(*) FROM updated`
 
 const agentDeleteOrphanAttachments = `
 WITH batch AS MATERIALIZED (

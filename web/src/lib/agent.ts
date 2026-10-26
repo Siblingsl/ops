@@ -135,6 +135,7 @@ export interface AgentMessage {
 
 export interface AgentAction {
   id: string
+  revision?: number
   run_id: string
   tool_name: string
   title: string

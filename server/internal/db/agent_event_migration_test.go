@@ -78,4 +78,28 @@ func TestAgentEventMigrationPreservesUnreadAndGuardsNewData(t *testing.T) {
 	if err := database.QueryRow(`SELECT count(*) FROM agent_event WHERE type='message.delta'`).Scan(&deltas); err != nil || deltas != 1 {
 		t.Fatalf("失败的回退必须保留事件：%d %v", deltas, err)
 	}
+	if err := goose.UpTo(database, "migrations", 64); err != nil {
+		t.Fatal(err)
+	}
+	var runID, actionID string
+	if err := database.QueryRow(`INSERT INTO agent_run (conversation_id,workspace_id,user_id,session_id,trigger,status)
+		VALUES ($1,$2,$3,gen_random_uuid(),'message','completed') RETURNING id`, conversations[0], workspaceID, userID).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`INSERT INTO agent_action (conversation_id,run_id,batch_id,workspace_id,user_id,tool_call_id,
+		tool_name,kind,target_type,target_id,target_key,params,expires_at)
+		VALUES ($1,$2,gen_random_uuid(),$3,$4,'migration-call','memory__create','W','memory','new','new','{}',now()+interval '1 day') RETURNING id`,
+		conversations[0], runID, workspaceID, userID).Scan(&actionID); err != nil {
+		t.Fatal(err)
+	}
+	var revision int64
+	if err := database.QueryRow(`SELECT revision FROM agent_action WHERE id=$1`, actionID).Scan(&revision); err != nil || revision != 1 {
+		t.Fatalf("历史卡片应以修订1兼容：%d %v", revision, err)
+	}
+	if _, err := database.Exec(`UPDATE agent_action SET revision=2 WHERE id=$1`, actionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.DownTo(database, "migrations", 63); err == nil || !strings.Contains(err.Error(), "拒绝回滚") {
+		t.Fatalf("已有卡片修订不得删除版本字段：%v", err)
+	}
 }

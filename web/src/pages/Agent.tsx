@@ -710,12 +710,14 @@ export default function Agent() {
     ])
   }, [qc, conversationId])
 
-  const applyPersistentEvent = useCallback((id: string, type: string, event: AgentEventEnvelope) => {
+  const applyPersistentEvent = useCallback((id: string, type: string, event: AgentEventEnvelope, targetRunID = '') => {
     lastEventSeqRef.current = Math.max(lastEventSeqRef.current, event.event_seq)
     const data = event.data ?? {}
     if (type === 'run.started') {
       setRunID(event.run_id ?? '')
+      setStreaming(true)
       setStreamStage(data.status === 'queued' ? 'queued' : 'thinking')
+      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
     } else if (type === 'run.stage') {
       setStreamStage(data.stage || 'thinking')
     } else if (type === 'message.delta' || type === 'message.snapshot') {
@@ -737,18 +739,23 @@ export default function Agent() {
       void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
       void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
     } else if (type === 'run.ended') {
-      setStreamStage(data.status === 'awaiting_confirmation' ? 'waiting_confirmation' : data.status || '')
+      if (!targetRunID) setStreaming(false)
+      setRunID('')
+      setStreamText('')
+      setStreamStage('')
+      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
+      void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
     }
   }, [qc])
 
   const resumeEventSnapshot = useCallback(async (id: string, runID: string) => {
     const snapshot = await qc.fetchQuery({ queryKey: ['agent-conversation', id], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${id}`), staleTime: 0 })
-    if (snapshot.last_run?.id !== runID) return { after: lastEventSeqRef.current }
+    if (runID && snapshot.last_run?.id !== runID) return { after: lastEventSeqRef.current }
     const partial = snapshot.partial_output
     streamPartialRef.current = { messageKey: partial?.message_key ?? '', chunkIndex: partial?.chunk_index ?? 0 }
-    setStreamText(partial?.text ?? '')
+    setStreamText(snapshot.active_run ? partial?.text ?? '' : '')
     lastEventSeqRef.current = snapshot.last_event_seq ?? lastEventSeqRef.current
-    return { after: lastEventSeqRef.current, ...(!snapshot.active_run ? { ended: snapshot.last_run } : {}) }
+    return { after: lastEventSeqRef.current, ...(runID && !snapshot.active_run ? { ended: snapshot.last_run ?? undefined } : {}) }
   }, [qc])
 
   useEffect(() => {
@@ -810,7 +817,7 @@ export default function Agent() {
           return streamAgentEvents(accepted.events_url, accepted.last_event_seq, {
             signal: controller.signal,
             runID: accepted.run_id,
-            onEvent: (type, event) => applyPersistentEvent(id, type, event),
+            onEvent: (type, event) => applyPersistentEvent(id, type, event, accepted.run_id),
             onConnectionState: setStreamConnection,
             onResume: () => resumeEventSnapshot(id, accepted.run_id),
           })
@@ -866,13 +873,13 @@ export default function Agent() {
   }, [qc, bootstrapData?.features?.event_resume, applyPersistentEvent, resumeEventSnapshot])
 
   useEffect(() => {
-    if (bootstrapData?.features?.event_resume !== true || !conversationId || !activeRun || eventController.current) return
+    if (bootstrapData?.features?.event_resume !== true || !conversationId || detail?.conversation.id !== conversationId || eventController.current) return
     const controller = new AbortController()
     eventController.current = controller
     eventConversationID.current = conversationId
     const lastEventSeq = Math.max(lastEventSeqRef.current, detail?.last_event_seq ?? 0)
     lastEventSeqRef.current = lastEventSeq
-    const partial = detail?.partial_output
+    const partial = activeRun ? detail?.partial_output : null
     if (partial?.text) {
       streamPartialRef.current = { messageKey: partial.message_key, chunkIndex: partial.chunk_index }
       setStreamText(partial.text)
@@ -880,15 +887,16 @@ export default function Agent() {
       streamPartialRef.current = { messageKey: '', chunkIndex: 0 }
       setStreamText('')
     }
-    setRunID(activeRun.id)
-    setStreamStage(activeRun.stage || 'thinking')
-    setStreaming(true)
+    const targetRunID = activeRun?.id ?? ''
+    setRunID(targetRunID)
+    setStreamStage(activeRun?.stage || '')
+    setStreaming(!!activeRun)
     void streamAgentEvents(`/api/v1/agent/conversations/${conversationId}/events`, lastEventSeq, {
       signal: controller.signal,
-      runID: activeRun.id,
-      onEvent: (type, event) => applyPersistentEvent(conversationId, type, event),
+      runID: targetRunID,
+      onEvent: (type, event) => applyPersistentEvent(conversationId, type, event, targetRunID),
       onConnectionState: setStreamConnection,
-      onResume: () => resumeEventSnapshot(conversationId, activeRun.id),
+      onResume: () => resumeEventSnapshot(conversationId, targetRunID),
     }).then(async (result) => {
       await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] })
       await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
@@ -928,7 +936,7 @@ export default function Agent() {
         setStreamConnection('')
       }
     }
-  }, [bootstrapData?.features?.event_resume, conversationId, activeRun?.id, eventResumeGeneration,
+  }, [bootstrapData?.features?.event_resume, conversationId, detail?.conversation.id, activeRun?.id, eventResumeGeneration,
     qc, applyPersistentEvent, resumeEventSnapshot])
 
   const sendMessage = async (edit?: AgentMessage) => {

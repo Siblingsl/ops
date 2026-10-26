@@ -105,7 +105,15 @@ func (s *Server) agentPropose(ctx context.Context, st *agentRunState, id *identi
 	editable := agentEditableFields(t)
 	blank := append([]string{}, prov.Blanked...)
 	var actionID uuid.UUID
-	err = s.db.QueryRow(ctx, `INSERT INTO agent_action
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT id FROM agent_conversation WHERE id=$1 FOR UPDATE`, st.ConversationID); err != nil {
+		return err
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO agent_action
 		(conversation_id, run_id, batch_id, workspace_id, user_id, tool_call_id, tool_name, kind, gate,
 		 body_class, target_type, target_id, target_key, work_id, status, params, preview, fingerprint,
 		 editable_fields, blank_fields, expires_at)
@@ -115,6 +123,12 @@ func (s *Server) agentPropose(ctx context.Context, st *agentRunState, id *identi
 		t.BodyClass, targetType, targetID, targetKey, workID, mustJSON(frozen), previewJSON, fingerprint,
 		editable, blank).Scan(&actionID)
 	if err != nil {
+		return err
+	}
+	if err := appendAgentActionEventTx(ctx, tx, actionID, false); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	st.ActionsProposed++

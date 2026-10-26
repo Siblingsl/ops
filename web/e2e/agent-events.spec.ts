@@ -112,6 +112,34 @@ test('DEV-AW06 关闭新协议时仍使用原Web POST SSE', async ({ page, baseU
   await expect(page.locator('article').getByText('旧客户端SSE兼容验收。', { exact: true })).toBeVisible()
 })
 
+test('DEV-AW06 空闲会话通过持久事件同步另一端的单卡状态', async ({ page, baseURL }) => {
+  await prepare(page, baseURL!)
+  const cursors: number[] = []
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (/\/agent\/conversations\/[^/]+\/events$/.test(url.pathname)) cursors.push(Number(url.searchParams.get('after_event_seq')))
+  })
+  await page.locator('textarea').fill('#tool load_tool_domain {"domain":"workspace"}\n#tool workspace__create_invite {"role":"editor"}')
+  const accepted = page.waitForResponse((response) => /\/agent\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  expect((await accepted).status()).toBe(202)
+  await page.waitForURL(/\/agent\/c\/[a-f0-9-]+$/)
+  const id = page.url().split('/').pop()!
+  await expect.poll(async () => (await call(page, 'GET', `/agent/conversations/${id}`)).active_run).toBeNull()
+  const detail = await call(page, 'GET', `/agent/conversations/${id}`)
+  expect(detail.actions).toHaveLength(1)
+  const action = detail.actions[0]
+  const card = page.locator(`#agent-action-${action.id}`)
+  await expect(card.getByRole('button', { name: '拒绝', exact: true })).toBeVisible()
+  await expect.poll(() => cursors.some((cursor) => cursor >= detail.last_event_seq)).toBeTruthy()
+  // 直接从另一个请求端改变单卡状态，当前页面没有本地mutation回调或轮询。
+  await call(page, 'POST', `/agent/actions/${action.id}/reject`, { reason: '另一端已单独拒绝' })
+  await expect(card).toContainText('已拒绝')
+  const changed = await call(page, 'GET', `/agent/conversations/${id}`)
+  expect(changed.actions[0].revision).toBe(action.revision + 1)
+  expect(changed.last_run.id).toBe(detail.last_run.id)
+})
+
 test('DEV-AW06 真实Electron刷新恢复持久事件运行', async ({ baseURL }) => {
   test.skip(process.platform !== 'win32', '真实Electron验收需要Windows')
   test.setTimeout(120_000)

@@ -137,16 +137,6 @@ func (s *Server) persistAgentStreamEvent(ctx context.Context, st *agentRunState,
 		eventType = "tool.ended"
 		payload = map[string]any{"tool_call_id": in.CallID, "name": in.Name, "status": in.Status,
 			"summary": truncate(in.Summary, 120)}
-	case "action":
-		var in struct {
-			ID     uuid.UUID `json:"id"`
-			Status string    `json:"status"`
-		}
-		if raw, err := json.Marshal(data); err == nil {
-			_ = json.Unmarshal(raw, &in)
-		}
-		eventType = "action.updated"
-		payload = map[string]any{"action_id": in.ID, "status": in.Status}
 	default:
 		return
 	}

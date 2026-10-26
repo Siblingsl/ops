@@ -964,7 +964,7 @@ func (s *Server) recoverAgentRuns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	type recoveredResource struct{ id, conversationID, runID uuid.UUID }
+	type recoveredResource struct{ id, conversationID uuid.UUID }
 	runs := []recoveredResource{}
 	for rows.Next() {
 		var run recoveredResource
@@ -987,32 +987,11 @@ func (s *Server) recoverAgentRuns(ctx context.Context) error {
 		}
 	}
 	// 第 5.1 节第 4 条：重启时 executing 的卡片改为 failed(result_unknown)。
-	rows, err = tx.Query(ctx, `UPDATE agent_action SET status='failed',
+	_, err = mutateAgentActionsTx(ctx, tx, `UPDATE agent_action SET status='failed',
 		error=jsonb_build_object('code','result_unknown','message','服务重启时正在执行，结果未知，请到对应页面核对')
-		WHERE status='executing' RETURNING id,conversation_id,run_id`)
+		WHERE status='executing'`)
 	if err != nil {
 		return err
-	}
-	actions := []recoveredResource{}
-	for rows.Next() {
-		var action recoveredResource
-		if err := rows.Scan(&action.id, &action.conversationID, &action.runID); err != nil {
-			rows.Close()
-			return err
-		}
-		actions = append(actions, action)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-	for _, action := range actions {
-		if _, err := appendAgentEventTx(ctx, tx, action.conversationID, &action.runID, "action.updated", map[string]any{
-			"action_id": action.id, "status": "failed", "error_code": "result_unknown",
-		}, nil); err != nil {
-			return err
-		}
 	}
 	return tx.Commit(ctx)
 }

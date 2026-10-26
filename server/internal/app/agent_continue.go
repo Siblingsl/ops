@@ -767,7 +767,7 @@ func (s *Server) agentRewriteTail(ctx context.Context, convID uuid.UUID, seq int
 		convID, seq); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(ctx, `UPDATE agent_action SET status='superseded'
+	_, err := s.agentMutateActions(ctx, convID, `UPDATE agent_action SET status='superseded'
 		WHERE conversation_id=$1 AND created_at >= $2 AND status IN ('pending','executing','needs_input')`,
 		convID, since)
 	return err

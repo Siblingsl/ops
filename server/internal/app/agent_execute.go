@@ -36,6 +36,7 @@ type agentExecuteRequest struct {
 // agentActionRow 是执行阶段需要的卡片与归属信息。
 type agentActionRow struct {
 	ID             uuid.UUID
+	Revision       int64
 	ConversationID uuid.UUID
 	WorkspaceID    uuid.UUID
 	UserID         uuid.UUID
@@ -59,7 +60,7 @@ type agentActionRow struct {
 // agentActionQuery 读取一张卡片及其归属；他人或他工作区的卡片按 404 处理（第 9.2 节隔离）。
 const agentActionQuery = `SELECT a.id, a.conversation_id, a.workspace_id, a.user_id, a.run_id, a.batch_id,
 	a.tool_name, a.kind, a.gate, a.body_class, a.status, a.params, a.preview, a.fingerprint,
-	a.editable_fields, a.blank_fields, a.expires_at, a.need, c.account_id
+	a.editable_fields, a.blank_fields, a.expires_at, a.need, c.account_id, a.revision
 	FROM agent_action a JOIN agent_conversation c ON c.id = a.conversation_id
 	WHERE a.id=$1 AND a.user_id=$2 AND c.workspace_id=$3`
 
@@ -77,7 +78,7 @@ func (s *Server) agentLoadAction(ctx context.Context, id uuid.UUID) (*agentActio
 	err := s.db.QueryRow(ctx, agentActionQuery, id, ident.UserID, ident.WorkspaceID).Scan(
 		&a.ID, &a.ConversationID, &a.WorkspaceID, &a.UserID, &a.RunID, &a.BatchID, &a.ToolName,
 		&a.Kind, &a.Gate, &a.BodyClass, &a.Status, &params, &preview, &a.Fingerprint,
-		&editable, &blankFields, &a.ExpiresAt, &need, &a.AccountID)
+		&editable, &blankFields, &a.ExpiresAt, &need, &a.AccountID, &a.Revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errNotFound
 	}
@@ -99,9 +100,12 @@ func (s *Server) agentLoadAction(ctx context.Context, id uuid.UUID) (*agentActio
 // agentExpireLazy 惰性过期：读取时把超过 24 小时的未结束卡片改为 expired（第 5.9 节第 2 项），
 // 并为它们补写 action_result 记录（第 5.9 节第 4 项），供续跑时告知模型。
 func (s *Server) agentExpireLazy(ctx context.Context, convID uuid.UUID) error {
-	rows, err := s.db.Query(ctx, `UPDATE agent_action SET status='expired'
-		WHERE conversation_id=$1 AND status IN ('pending','needs_input') AND expires_at <= now()
-		RETURNING id, tool_name, target_type, target_id`, convID)
+	ids, err := s.agentMutateActions(ctx, convID, `UPDATE agent_action SET status='expired'
+		WHERE conversation_id=$1 AND status IN ('pending','needs_input') AND expires_at <= now()`, convID)
+	if err != nil {
+		return err
+	}
+	rows, err := s.db.Query(ctx, `SELECT id,tool_name,target_type,target_id FROM agent_action WHERE id=ANY($1)`, ids)
 	if err != nil {
 		return err
 	}
@@ -399,10 +403,16 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE agent_action SET status='executing', decided_by=$2, executed_at=now()
-		WHERE id=$1 AND status IN ('pending','needs_input') AND expires_at > now()`,
-		act.ID, ident(ctx).UserID); err != nil {
+	changed, err := s.agentMutateActions(ctx, act.ConversationID, `UPDATE agent_action a SET status='executing', decided_by=$2, executed_at=now()
+		WHERE id=$1 AND revision=$3 AND status IN ('pending','needs_input') AND expires_at > now()
+		AND NOT EXISTS (SELECT 1 FROM agent_run r WHERE r.conversation_id=a.conversation_id AND r.status IN ('queued','running'))
+		AND NOT EXISTS (SELECT 1 FROM agent_action x WHERE x.conversation_id=a.conversation_id AND x.status='executing')`,
+		act.ID, ident(ctx).UserID, act.Revision)
+	if err != nil {
 		return err
+	}
+	if len(changed) == 0 {
+		return apiErr(409, "agent_action_state_invalid", "卡片或对话状态已变化，请刷新后核对")
 	}
 	sse := newSSE(w)
 	res, derr := s.dispatchAgentTool(ctx, agentDispatchRequest{
@@ -647,7 +657,7 @@ func agentDoneSummary(res *agentDispatchResult) string {
 
 // agentSucceed 记录成功：result 保存脱敏后的投影（第 5.3 节第 8 项第 1 条）。
 func (s *Server) agentSucceed(ctx context.Context, act *agentActionRow, res *agentDispatchResult) error {
-	_, err := s.db.Exec(ctx, `UPDATE agent_action SET status='succeeded',
+	_, err := s.agentMutateActions(ctx, act.ConversationID, `UPDATE agent_action SET status='succeeded',
 		result=$2, error=NULL, last_error=NULL, finished_at=now()
 		WHERE id=$1`, act.ID, jsonOrEmpty(res.Model))
 	return err
@@ -660,7 +670,7 @@ func (s *Server) agentNeedInput(ctx context.Context, act *agentActionRow, kind s
 	}
 	need["kind"] = kind
 	b, _ := json.Marshal(need)
-	_, err := s.db.Exec(ctx, `UPDATE agent_action SET status='needs_input', need=$2, finished_at=NULL
+	_, err := s.agentMutateActions(ctx, act.ConversationID, `UPDATE agent_action SET status='needs_input', need=$2, finished_at=NULL
 		WHERE id=$1`, act.ID, b)
 	return err
 }
@@ -668,7 +678,7 @@ func (s *Server) agentNeedInput(ctx context.Context, act *agentActionRow, kind s
 // agentRetryOutcome 记录可重试错误：卡片回到 pending 并保存 last_error（第 5.1 节第 2 项）。
 func (s *Server) agentRetryOutcome(ctx context.Context, act *agentActionRow, code, msg string) error {
 	b, _ := json.Marshal(map[string]any{"code": code, "message": msg})
-	_, err := s.db.Exec(ctx, `UPDATE agent_action SET status='pending', last_error=$2, finished_at=NULL
+	_, err := s.agentMutateActions(ctx, act.ConversationID, `UPDATE agent_action SET status='pending', last_error=$2, finished_at=NULL
 		WHERE id=$1`, act.ID, b)
 	return err
 }
@@ -679,7 +689,7 @@ func (s *Server) agentFail(ctx context.Context, act *agentActionRow, res *agentD
 	if !json.Valid(b) || agentErrorCode(b) == "" {
 		b, _ = json.Marshal(agentErrorEnvelope(res.Status, res.Raw))
 	}
-	_, err := s.db.Exec(ctx, `UPDATE agent_action SET status='failed', error=$2, finished_at=now()
+	_, err := s.agentMutateActions(ctx, act.ConversationID, `UPDATE agent_action SET status='failed', error=$2, finished_at=now()
 		WHERE id=$1`, act.ID, b)
 	return err
 }
@@ -688,7 +698,7 @@ func (s *Server) agentFail(ctx context.Context, act *agentActionRow, res *agentD
 func (s *Server) agentFailStale(ctx context.Context, act *agentActionRow) error {
 	b, _ := json.Marshal(map[string]any{"code": "stale",
 		"message": "对象在卡片提出后已被修改，请让智能体重新读取"})
-	_, err := s.db.Exec(ctx, `UPDATE agent_action SET status='failed', error=$2, finished_at=now()
+	_, err := s.agentMutateActions(ctx, act.ConversationID, `UPDATE agent_action SET status='failed', error=$2, finished_at=now()
 		WHERE id=$1`, act.ID, b)
 	return err
 }
@@ -821,20 +831,14 @@ func (s *Server) postAgentActionReject(w http.ResponseWriter, r *http.Request) e
 	if runeLen(reason) > 200 {
 		return validation("原因最长 200 字")
 	}
-	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE agent_action
+	changed, err := s.agentMutateActions(ctx, act.ConversationID, `UPDATE agent_action
 			SET status='rejected', reject_reason=$2, decided_by=$3, finished_at=now()
-			WHERE id=$1 AND status IN ('pending','needs_input')`, id, reason, ident(ctx).UserID)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() == 0 {
-			return apiErr(409, "agent_action_state_invalid", "这张卡片已经处理过了")
-		}
-		return nil
-	})
+			WHERE id=$1 AND revision=$4 AND status IN ('pending','needs_input')`, id, reason, ident(ctx).UserID, act.Revision)
 	if err != nil {
 		return err
+	}
+	if len(changed) == 0 {
+		return apiErr(409, "agent_action_state_invalid", "这张卡片已经处理过了")
 	}
 	// 第 5.9 节第 4 项：拒绝也写一条 action_result，供续跑时告知模型。
 	if err := s.agentWriteActionResults(ctx, act.ConversationID, []map[string]any{{
