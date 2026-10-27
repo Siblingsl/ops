@@ -36,10 +36,47 @@ jobs:
         with:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
+      - name: Start bounded document parser workers
+        run: |
+          set -euo pipefail
+          image_dir="$RUNNER_TEMP/ops-parser-image"
+          mkdir -p "$image_dir"
+          CGO_ENABLED=0 go build -trimpath -o "$image_dir/ops" ./cmd/ops
+          printf 'FROM scratch\nCOPY ops /app/ops\nENTRYPOINT ["/app/ops", "parse-service"]\n' > "$image_dir/Dockerfile"
+          docker build --tag ops-parser:ci "$image_dir"
+          for lane in server-a server-b; do
+            socket_dir="$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${lane}"
+            container_name="ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${lane}"
+            mkdir -p "$socket_dir"
+            docker run --detach \
+              --name "$container_name" \
+              --network none --read-only --memory 256m --memory-swap 256m --cpus 0.5 \
+              --pids-limit 32 --cap-drop ALL --security-opt no-new-privileges:true \
+              --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,noexec,nosuid,size=4m \
+              --env OPS_DOCUMENT_PARSER_SOCKET=/run/ops-parser/parser.sock \
+              --volume "$socket_dir:/run/ops-parser" ops-parser:ci
+            for attempt in $(seq 1 30); do
+              test -S "$socket_dir/parser.sock" && break
+              sleep 1
+            done
+            if ! test -S "$socket_dir/parser.sock"; then
+              docker logs "$container_name"
+              exit 1
+            fi
+            limits=$(docker inspect --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.NetworkMode}} {{.HostConfig.ReadonlyRootfs}}' "$container_name")
+            test "$limits" = "268435456 268435456 none true"
+          done
+          echo "OPS_DOCUMENT_PARSER_SOCKETS=$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-a/parser.sock,$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-b/parser.sock" >> "$GITHUB_ENV"
       - name: Test
         env:
           OPS_TEST_ADMIN_URL: postgres://ops:ops_ci@localhost:5432/postgres?sslmode=disable
         run: go test ./...
+      - name: Stop bounded document parser workers
+        if: always()
+        run: |
+          docker rm --force \
+            "ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-a" \
+            "ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-b" || true
 
   web:
     runs-on: ubuntu-latest
@@ -103,6 +140,38 @@ jobs:
         with:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
+      - name: Start bounded document parser workers
+        working-directory: server
+        run: |
+          set -euo pipefail
+          image_dir="$RUNNER_TEMP/ops-parser-image"
+          mkdir -p "$image_dir"
+          CGO_ENABLED=0 go build -trimpath -o "$image_dir/ops" ./cmd/ops
+          printf 'FROM scratch\nCOPY ops /app/ops\nENTRYPOINT ["/app/ops", "parse-service"]\n' > "$image_dir/Dockerfile"
+          docker build --tag ops-parser:ci "$image_dir"
+          for lane in a b; do
+            socket_dir="$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-e2e-${{ matrix.shard }}-${lane}"
+            container_name="ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-e2e-${{ matrix.shard }}-${lane}"
+            mkdir -p "$socket_dir"
+            docker run --detach \
+              --name "$container_name" \
+              --network none --read-only --memory 256m --memory-swap 256m --cpus 0.5 \
+              --pids-limit 32 --cap-drop ALL --security-opt no-new-privileges:true \
+              --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,noexec,nosuid,size=4m \
+              --env OPS_DOCUMENT_PARSER_SOCKET=/run/ops-parser/parser.sock \
+              --volume "$socket_dir:/run/ops-parser" ops-parser:ci
+            for attempt in $(seq 1 30); do
+              test -S "$socket_dir/parser.sock" && break
+              sleep 1
+            done
+            if ! test -S "$socket_dir/parser.sock"; then
+              docker logs "$container_name"
+              exit 1
+            fi
+            limits=$(docker inspect --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.NetworkMode}} {{.HostConfig.ReadonlyRootfs}}' "$container_name")
+            test "$limits" = "268435456 268435456 none true"
+          done
+          echo "OPS_DOCUMENT_PARSER_SOCKETS=$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-e2e-${{ matrix.shard }}-a/parser.sock,$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-e2e-${{ matrix.shard }}-b/parser.sock" >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@v4
         with:
           version: 10.14.0
@@ -123,3 +192,9 @@ jobs:
           path: |
             web/test-results/
             web/playwright-report/
+      - name: Stop bounded document parser workers
+        if: always()
+        run: |
+          docker rm --force \
+            "ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-e2e-${{ matrix.shard }}-a" \
+            "ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-e2e-${{ matrix.shard }}-b" || true

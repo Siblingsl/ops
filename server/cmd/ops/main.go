@@ -43,6 +43,10 @@ func main() {
 		fmt.Println(app.Version)
 	case "check-formats":
 		err = checkFormats()
+	case "parse-service":
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		err = documentparse.ServeParser(ctx)
 	case "__agent_document_parser":
 		err = documentparse.RunWorker()
 	default:

@@ -58,8 +58,8 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
-// Parse starts a dedicated, networkless WASI parser worker. The document is sent through
-// stdin; neither the parent nor the worker exposes a host path to the parser module.
+// Parse starts the platform-specific isolated WASI parser. Neither the parent nor the
+// parser exposes a host path or network access to the WASI module.
 func Parse(ctx context.Context, name string, data []byte) (Result, error) {
 	if len(data) == 0 || len(data) > maxBytes {
 		return Result{}, errors.New("document size outside parser limit")
@@ -79,16 +79,29 @@ func Parse(ctx context.Context, name string, data []byte) (Result, error) {
 	if err != nil {
 		return Result{}, errors.New("document parser request could not be encoded")
 	}
+	var output []byte
+	if runtime.GOOS == "linux" {
+		output, err = parseWithLinuxService(ctx, payload)
+	} else {
+		output, err = parseWithWindowsWorker(ctx, payload)
+	}
+	if err != nil {
+		return Result{}, err
+	}
+	return parseReceipt(output)
+}
+
+func parseWithWindowsWorker(ctx context.Context, payload []byte) ([]byte, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return Result{}, errors.New("document parser worker is unavailable")
+		return nil, errors.New("document parser worker is unavailable")
 	}
 	cmd := exec.CommandContext(ctx, exe, workerArg)
 	cmd.Env = []string{}
 	configureParserCommand(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return Result{}, errors.New("document parser worker is unavailable")
+		return nil, errors.New("document parser worker is unavailable")
 	}
 	var stdout limitedBuffer
 	var stderr limitedBuffer
@@ -97,33 +110,37 @@ func Parse(ctx context.Context, name string, data []byte) (Result, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
-		return Result{}, errors.New("document parser worker is unavailable")
+		return nil, errors.New("document parser worker is unavailable")
 	}
 	limit, err := limitParserProcess(cmd.Process)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return Result{}, errors.New("document parser resource limit could not be enforced")
+		return nil, errors.New("document parser resource limit could not be enforced")
 	}
 	defer limit.Close()
 	if _, err := stdin.Write(payload); err != nil {
 		_ = stdin.Close()
 		_ = cmd.Wait()
-		return Result{}, errors.New("document parser worker did not accept the file")
+		return nil, errors.New("document parser worker did not accept the file")
 	}
 	if err := stdin.Close(); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return Result{}, errors.New("document parser worker did not accept the file")
+		return nil, errors.New("document parser worker did not accept the file")
 	}
 	if err := cmd.Wait(); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return Result{}, errors.New("document parser exceeded its 30 second limit")
+			return nil, errors.New("document parser exceeded its 30 second limit")
 		}
-		return Result{}, fmt.Errorf("document parser worker failed: %s", strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("document parser worker failed: %s", strings.TrimSpace(stderr.String()))
 	}
+	return stdout.Bytes(), nil
+}
+
+func parseReceipt(output []byte) (Result, error) {
 	var result Result
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+	if err := json.Unmarshal(output, &result); err != nil {
 		return Result{}, errors.New("document parser returned an invalid receipt")
 	}
 	if result.ErrorCode != "" {
@@ -132,8 +149,8 @@ func Parse(ctx context.Context, name string, data []byte) (Result, error) {
 	return result, nil
 }
 
-// RunWorker is the hidden ops subcommand. The WASI guest gets only stdin/stdout and
-// clock/random syscalls: no preopened filesystem and no socket-importing host module.
+// RunWorker is the hidden Windows subprocess entry. Linux refuses this path and runs
+// the WASI guest directly inside its memory-limited parser container.
 func RunWorker() error {
 	input, err := io.ReadAll(io.LimitReader(os.Stdin, maxBytes*2))
 	if err != nil || len(input) == 0 || len(input) > maxBytes*2 {
@@ -151,12 +168,16 @@ func RunWorker() error {
 }
 
 func runWASI(input []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return runWASIContext(ctx, input)
+}
+
+func runWASIContext(ctx context.Context, input []byte) ([]byte, error) {
 	module, err := wasmFS.ReadFile("parser.wasm")
 	if err != nil {
 		return nil, errors.New("parser module unavailable")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	config := wazero.NewRuntimeConfig().WithMemoryLimitPages(4096).WithCloseOnContextDone(true)
 	runtime := wazero.NewRuntimeWithConfig(ctx, config)
 	defer runtime.Close(ctx)

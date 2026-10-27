@@ -25,7 +25,7 @@ async function prepare(page: Page, baseURL: string) {
   await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
   await api(page, 'POST', '/accounts', { platform: 'xhs', name: 'AW12 窗口验收号', content_format: 'image_note', type_note: '' })
   const provider = await api(page, 'POST', '/model-providers', {
-    name: 'AW12 本地 mock', base_url: 'http://127.0.0.1:8292/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+    name: 'AW12 本地 mock', base_url: process.env.OPS_E2E_MOCK_BASE_URL ?? 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested'],
   })
   await api(page, 'POST', '/model-providers/' + provider.id + '/selftest', {})
   await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])

@@ -34,13 +34,20 @@ services:
       OPS_AI_WORKERS: ${OPS_AI_WORKERS:-3}
       OPS_DB_MAX_CONNS: ${OPS_DB_MAX_CONNS:-20}
       OPS_DATABASE_URL: postgres://ops:${POSTGRES_PASSWORD}@postgres:5432/ops?sslmode=disable
+      OPS_DOCUMENT_PARSER_SOCKETS: /run/ops-parser-a/parser.sock,/run/ops-parser-b/parser.sock
     ports:
       # 宿主机映射端口可改；容器内仍监听 8080
       - "127.0.0.1:44537:8080"
     volumes:
       - app_data:/data
+      - parser_a_socket:/run/ops-parser-a
+      - parser_b_socket:/run/ops-parser-b
     depends_on:
       postgres:
+        condition: service_healthy
+      parser_a:
+        condition: service_healthy
+      parser_b:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
@@ -48,6 +55,56 @@ services:
       timeout: 3s
       start_period: 30s
       retries: 5
+
+  parser_a:
+    image: ${OPS_IMAGE:-ops-app:local}
+    command: ["/app/ops", "parse-service"]
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    pids_limit: 32
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=4m
+    environment:
+      OPS_DOCUMENT_PARSER_SOCKET: /run/ops-parser/parser.sock
+    volumes:
+      - parser_a_socket:/run/ops-parser
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--unix-socket", "/run/ops-parser/parser.sock", "http://localhost/healthz"]
+      interval: 5s
+      timeout: 2s
+      start_period: 5s
+      retries: 10
+
+  parser_b:
+    image: ${OPS_IMAGE:-ops-app:local}
+    command: ["/app/ops", "parse-service"]
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    pids_limit: 32
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=4m
+    environment:
+      OPS_DOCUMENT_PARSER_SOCKET: /run/ops-parser/parser.sock
+    volumes:
+      - parser_b_socket:/run/ops-parser
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--unix-socket", "/run/ops-parser/parser.sock", "http://localhost/healthz"]
+      interval: 5s
+      timeout: 2s
+      start_period: 5s
+      retries: 10
 
   postgres:
     image: postgres:16-alpine
@@ -74,3 +131,5 @@ services:
 volumes:
   pg_data:
   app_data:
+  parser_a_socket:
+  parser_b_socket:

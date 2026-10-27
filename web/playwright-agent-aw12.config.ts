@@ -1,6 +1,8 @@
 import { defineConfig } from '@playwright/test'
 import base from './playwright.config'
 
+process.env.OPS_E2E_MOCK_BASE_URL = 'http://127.0.0.1:8292/v1'
+
 const servers = Array.isArray(base.webServer) ? base.webServer : []
 if (servers.length !== 2) throw new Error('AW12 仅使用仓库本地隔离测试服务')
 
