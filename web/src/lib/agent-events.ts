@@ -56,6 +56,7 @@ export async function streamAgentEvents(path: string, initialAfter: number, opti
 }): Promise<AgentRunEnd> {
   let after = initialAfter
   let failures = 0
+  let needsSnapshot = !!options.runID
   while (!options.signal.aborted) {
     if (document.visibilityState !== 'visible' || !navigator.onLine) {
       options.onConnectionState?.('paused')
@@ -63,6 +64,7 @@ export async function streamAgentEvents(path: string, initialAfter: number, opti
       const snapshot = await options.onResume()
       if (snapshot.ended) return snapshot.ended
       after = Math.max(after, snapshot.after)
+      needsSnapshot = false
     }
     const connection = new AbortController()
     const abortConnection = () => {
@@ -71,6 +73,13 @@ export async function streamAgentEvents(path: string, initialAfter: number, opti
     document.addEventListener('visibilitychange', abortConnection)
     window.addEventListener('offline', abortConnection)
     try {
+      // A recovered view can retain an active run while its cursor already includes run.ended.
+      if (needsSnapshot) {
+        const snapshot = await options.onResume()
+        if (snapshot.ended) return snapshot.ended
+        after = Math.max(after, snapshot.after)
+        needsSnapshot = false
+      }
       const response = await rawRequest('GET', eventRequestPath(path, after), undefined,
         { signal: AbortSignal.any([options.signal, connection.signal]) }, true)
       options.onConnectionState?.('live')

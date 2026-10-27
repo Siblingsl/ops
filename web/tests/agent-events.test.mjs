@@ -38,6 +38,7 @@ function response(text) {
 test('AW06 reconnect replays only newer events and only the requested run can end the subscription', async () => {
   const requests = []
   const seen = []
+  let snapshots = 0
   const bodies = [event(1, 'run.started') + event(2, 'message.delta', { text: '中文' })
     + event(2, 'message.delta', { text: '重复' }) + event(1, 'message.delta', { text: '乱序' })
     + event(3, 'future.event') + event(4, 'run.ended', { status: 'completed' }, 'other'),
@@ -49,11 +50,12 @@ test('AW06 reconnect replays only newer events and only the requested run can en
   })
   const result = await stream('/api/v1/agent/conversations/private/events', 0, {
     signal: AbortSignal.timeout(2000), runID: 'wanted', onEvent: (_, value) => seen.push(value),
-    onResume: async () => { throw new Error('正常断线不需要可见性快照') },
+    onResume: async () => { snapshots++; return { after: 0 } },
   })
   assert.equal(result.status, 'completed')
   assert.deepEqual(seen.map((item) => item.event_seq), [1, 2, 3, 4, 5])
   assert.equal(seen[1].data.text, '中文')
+  assert.equal(snapshots, 1, '开始订阅时读取一次快照，正常断线只重放新事件')
   assert.deepEqual(requests, ['/agent/conversations/private/events?after_event_seq=0', '/agent/conversations/private/events?after_event_seq=4'])
 })
 
@@ -64,6 +66,37 @@ test('AW06 expired cursor is surfaced without retrying or posting', async () => 
     signal: AbortSignal.timeout(2000), runID: 'wanted', onEvent() {}, onResume: async () => ({ after: 0 }),
   }), (error) => error.code === 'agent_event_cursor_expired')
   assert.equal(requests, 1)
+})
+
+test('AW06 a terminal snapshot closes a run subscription whose cursor already passed its end event', async () => {
+  let requests = 0
+  const { stream } = load(async () => {
+    requests++
+    throw new ApiError(422, 'unexpected_stream', '终态快照之后不应再等待事件')
+  })
+  const result = await stream('/agent/conversations/private/events', 14, {
+    signal: AbortSignal.timeout(2000), runID: 'wanted', onEvent() {},
+    onResume: async () => ({ after: 14, ended: { status: 'awaiting_confirmation' } }),
+  })
+  assert.equal(result.status, 'awaiting_confirmation')
+  assert.equal(requests, 0)
+})
+
+test('AW06 a transient initial snapshot failure retries before opening the event stream', async () => {
+  let snapshots = 0
+  const requests = []
+  const { stream } = load(async (_, path) => { requests.push(path); return response(event(15, 'run.ended', { status: 'completed' })) })
+  const result = await stream('/agent/conversations/private/events', 12, {
+    signal: AbortSignal.timeout(2000), runID: 'wanted', onEvent() {},
+    onResume: async () => {
+      snapshots++
+      if (snapshots === 1) throw new ApiError(503, 'unavailable', '临时不可用')
+      return { after: 14 }
+    },
+  })
+  assert.equal(result.status, 'completed')
+  assert.equal(snapshots, 2)
+  assert.deepEqual(requests, ['/agent/conversations/private/events?after_event_seq=14'])
 })
 
 test('AW06 returning to a hidden page reads a snapshot before reconnecting and can discover a completed run', async () => {
