@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='10' fill='%23755AC8'/%3E%3Cpath d='m16 5 3 8 8 3-8 3-3 8-3-8-8-3 8-3Z' fill='white'/%3E%3C/svg%3E">
+  <title>OPS 灵感空间 · 方案 B</title>
+  <link rel="stylesheet" href="creative.css">
+</head>
+<body>
+  <div class="studio" id="studio">
+    <header class="titlebar">
+      <div class="app-mark">✦</div><span class="app-name">OPS <b>灵感空间</b></span>
+      <nav class="app-menu" aria-label="应用菜单"><button data-menu="client">客户端</button><button data-menu="edit">编辑</button><button data-menu="view">视图</button></nav>
+      <span class="titlebar-context">知行内容工作区 <span class="separator">/</span> <span id="window-page">工作台</span></span>
+      <span class="preview-label">方案 B · 设计预览</span>
+      <button class="icon-button" id="theme-toggle" aria-label="切换到深色主题" title="切换浅色 / 深色"></button>
+      <div class="window-controls"><button data-window="最小化" aria-label="最小化窗口（示意）">—</button><button data-window="最大化" aria-label="最大化窗口（示意）">□</button><button class="window-close" data-window="关闭" aria-label="关闭窗口（示意）">×</button></div>
+    </header>
+    <aside class="sidebar" id="sidebar" aria-label="主导航">
+      <button class="rail-create" data-action="new-work" aria-label="新建作品" title="新建作品">＋</button>
+      <div class="sidebar-main" id="sidebar-main"></div>
+      <div class="sidebar-bottom" id="sidebar-bottom"></div>
+    </aside>
+    <div class="body-area">
+      <header class="toolbar">
+        <button class="icon-button" id="collapse-nav" aria-label="展开导航文字" title="展开导航文字"></button>
+        <button class="icon-button" id="go-back" aria-label="返回上一视图" title="返回"></button>
+        <button class="workspace-switch" id="workspace-switch"><span class="workspace-avatar">知</span><span class="nav-text"><strong>知行内容工作区</strong><small>个人创作与运营</small></span><span class="chevrons">⌄</span></button>
+        <div class="context-divider"></div>
+        <button class="account-switch" id="account-switch"><span class="platform wx">公</span><span class="nav-text"><strong id="account-name">知行笔记</strong><small id="account-type">公众号 · 长图文</small></span><span>⌄</span></button>
+        <div class="breadcrumb"><span id="breadcrumb-group">创作</span><span>/</span><strong id="breadcrumb-page">工作台</strong></div>
+        <div class="toolbar-spacer"></div>
+        <button class="search-trigger" id="search-trigger"><span id="search-icon"></span><span>搜索灵感、内容…</span><kbd>Ctrl K</kbd></button>
+        <button class="icon-button notification-trigger" data-action="notifications" aria-label="通知"><span id="bell-icon"></span><i></i></button>
+        <button class="user-avatar" data-action="workspace-settings" aria-label="工作区设置">林</button>
+      </header>
+      <main id="view" tabindex="-1"></main>
+    </div>
+    <footer class="statusbar">
+      <button data-action="status"><span class="status-dot" id="service-dot"></span><span id="service-label">工作区在线</span></button>
+      <span class="status-divider"></span><button data-action="desktop-settings"><span id="ai-status">服务器 AI</span><span class="status-sub">⌄</span></button>
+      <span class="status-divider"></span><button data-action="motion" id="motion-toggle">轻快动效</button>
+      <span class="status-spacer"></span><span class="status-sub" id="save-status" role="status">方案 B · 示例数据 · 不连接业务</span>
+      <button data-action="preview-states" title="演示加载、失败、冲突等界面状态">状态示例 ⌄</button>
+    </footer>
+  </div>
+  <dialog id="modal" aria-labelledby="modal-title"><div id="modal-content"></div></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script src="prototype.js"></script>
+</body>
+</html>

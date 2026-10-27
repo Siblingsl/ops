@@ -35,6 +35,17 @@ docs/*
 !docs/18-账号类型迁移与创作模板设计.md
 !docs/19-今日头条平台接入设计.md
 !docs/23-技能系统设计.md
+# 桌面端回归测试直接加载的原型夹具；其余设计资料继续忽略。
+!docs/design/
+docs/design/*
+!docs/design/desktop-creative/
+docs/design/desktop-creative/*
+!docs/design/desktop-creative/prototype/
+docs/design/desktop-creative/prototype/*
+!docs/design/desktop-creative/prototype/index.html
+!docs/design/desktop-creative/prototype/creative.css
+!docs/design/desktop-creative/prototype/components.css
+!docs/design/desktop-creative/prototype/prototype.js
 # 工具目录（工作记忆等）
 .workbuddy-ai/
 .dsh-notes/
