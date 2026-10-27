@@ -218,13 +218,13 @@ test('DEV-AW04 @资料、有效技能请求与混合附件队列走真实接口'
 
   await page.locator('input[type="file"]').setInputFiles([
     { name: 'aw04-good.txt', mimeType: 'text/plain', buffer: Buffer.from('附件成功项保留。') },
-    { name: 'aw04-unsupported.csv', mimeType: 'text/csv', buffer: Buffer.from('不支持的格式') },
+    { name: 'aw04-unsupported.bin', mimeType: 'application/octet-stream', buffer: Buffer.from('不支持的格式') },
   ])
   await expect(page.getByLabel('aw04-good.txt ready')).toBeVisible()
-  await expect(page.getByLabel('aw04-unsupported.csv failed')).toBeVisible()
+  await expect(page.getByLabel('aw04-unsupported.bin failed')).toBeVisible()
   const send = page.getByRole('button', { name: '发送', exact: true })
   await expect(send).toBeDisabled()
-  await page.getByRole('button', { name: '移除 aw04-unsupported.csv' }).click()
+  await page.getByRole('button', { name: '移除 aw04-unsupported.bin' }).click()
   await expect(send).toBeEnabled()
 
   const messageText = '#text AW04 请求技能不代表已加载或已使用'
