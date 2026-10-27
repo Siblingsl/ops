@@ -87,6 +87,10 @@ func (s *Server) persistAgentDelta(ctx context.Context, st *agentRunState, text 
 		return err
 	}
 	defer tx.Rollback(ctx)
+	// 与停止和收尾统一为先锁会话、再锁运行；反序会让流式增量与停止事务互相等待。
+	if _, err := tx.Exec(ctx, `SELECT id FROM agent_conversation WHERE id=$1 FOR UPDATE`, st.ConversationID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE agent_run SET partial_message_key=$2,partial_output=$3,
 		partial_chunk_index=$4,partial_updated_at=now() WHERE id=$1`, st.RunID, st.MessageKey,
 		st.PartialOutput, st.PartialChunkIndex); err != nil {

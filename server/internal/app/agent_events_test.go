@@ -81,6 +81,44 @@ func TestAW06PartialSnapshotAndBootRecoveryArePersistent(t *testing.T) {
 	}
 }
 
+func TestAW06PersistedDeltaRacesStopWithoutDeadlock(t *testing.T) {
+	_, st := aw06ToolRun(t)
+	env.srv.registerAgentRun(st.RunID, func() {})
+	defer env.srv.unregisterAgentRun(st.RunID)
+	path := "/api/v1/agent/runs/" + st.RunID.String() + "/cancel"
+	for i := 0; i < 12; i++ {
+		start := make(chan struct{})
+		deltaDone := make(chan error, 1)
+		stopDone := make(chan int, 1)
+		go func() {
+			<-start
+			deltaDone <- env.srv.persistAgentDelta(context.Background(), st, fmt.Sprintf("增量-%d", i))
+		}()
+		go func() {
+			<-start
+			status, _ := env.do(http.MethodPost, path, map[string]any{})
+			stopDone <- status
+		}()
+		close(start)
+		select {
+		case err := <-deltaDone:
+			if err != nil {
+				t.Fatalf("第%d轮持久化流式增量失败：%v", i, err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("第%d轮流式增量与停止发生死锁", i)
+		}
+		select {
+		case status := <-stopDone:
+			if status != http.StatusOK {
+				t.Fatalf("第%d轮停止失败：%d", i, status)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("第%d轮停止未完成", i)
+		}
+	}
+}
+
 func TestAW06SnapshotReaderDoesNotCrossEventBoundary(t *testing.T) {
 	conversation := env.createConversation(t, map[string]any{})
 	defer deleteConversations(t, conversation.ID)
