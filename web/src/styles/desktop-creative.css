@@ -792,7 +792,7 @@ html[data-presentation='ops-creative-desktop'] .desktop-topic-tabs .tabular-nums
 .desktop-topic-search { position: relative; width: min(240px, 100%); }
 .desktop-topic-search > svg { position: absolute; z-index: 1; top: 10px; left: 10px; width: 15px; height: 15px; color: var(--ops-muted); }
 html[data-presentation='ops-creative-desktop'] .desktop-topic-search input { width: 100%; min-height: 38px; padding-left: 32px; font-size: 12px; }
-.desktop-topic-filterbar > select { width: 92px !important; min-width: 92px; height: 38px; min-height: 38px; flex: 0 0 92px; font-size: 12px; }
+.desktop-topic-filterbar > select { width: 92px !important; min-width: 92px; height: 36px; min-height: 36px; flex: 0 0 92px; font-size: 12px; }
 .desktop-topic-scorectl { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: auto; }
 .desktop-topic-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; gap: 22px; }
 .desktop-topic-list, .desktop-topic-details { min-width: 0; border: 1px solid var(--ops-border); border-radius: 16px; background: var(--ops-surface); box-shadow: var(--shadow-card); }
@@ -1295,12 +1295,12 @@ html[data-presentation='ops-creative-desktop'] .desktop-works-table {
 .desktop-review-page > div:first-child p { margin-top: 8px; font-size: 12px; line-height: 1.8; }
 .desktop-review-page > div:first-child > div:last-child { gap: 8px; }
 .desktop-review-page > div:first-child > div:last-child button { min-height: 35px; border-radius: 10px; padding: 8px 14px; font-size: 12px; }
-.desktop-review-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 25.3px 0 22px; border: 0; border-radius: 17px; padding: 20.75px 24px; background: var(--ops-surface); box-shadow: var(--shadow-card); }
+.desktop-review-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 25.3px 0 22px; border: 0; border-radius: 17px; padding: 20px 24px; background: var(--ops-surface); box-shadow: var(--shadow-card); }
 .desktop-review-stat { display: grid; gap: 6px; border-right: 1px solid var(--ops-border); padding: 0 20px; }
 .desktop-review-stat:first-child { padding-left: 0; }
 .desktop-review-stat:last-child { border-right: 0; }
 .desktop-review-stat small { color: var(--ops-muted); font-size: 11px; }
-.desktop-review-stat strong { color: var(--ops-text); font-size: 23px; font-weight: 600; letter-spacing: -.025em; font-variant-numeric: tabular-nums; }
+.desktop-review-stat strong { color: var(--ops-text); font-size: 23px; font-weight: 600; letter-spacing: -.025em; line-height: 1.4; font-variant-numeric: tabular-nums; }
 .desktop-review-board-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
 .desktop-review-board-heading h2 { color: var(--ops-text); font-size: 15px; font-weight: 650; letter-spacing: -.2px; }
 .desktop-review-board-heading > div { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
@@ -1329,7 +1329,7 @@ html[data-presentation='ops-creative-desktop'] .desktop-works-table {
 .desktop-image-page > div:first-child h1 { font-size: 28px; font-weight: 650; letter-spacing: -.03em; line-height: 1.5; }
 .desktop-image-page > div:first-child p { margin-top: 8px; font-size: 12px; line-height: 1.8; }
 html[data-presentation='ops-creative-desktop'] .desktop-image-toolbar { align-items: center; gap: 11px; min-height: 75px; margin: 0 !important; border: 0 !important; border-radius: 0 !important; padding: 17px 0 20px !important; background: transparent !important; box-shadow: none !important; }
-.desktop-image-work-select { width: 92px !important; min-width: 92px !important; height: 38px !important; min-height: 38px !important; flex: 0 0 auto; }
+.desktop-image-work-select { width: 92px !important; min-width: 92px !important; height: 36px !important; min-height: 36px !important; flex: 0 0 auto; }
 .desktop-image-search { position: relative; display: block; width: min(240px, 100%); color: var(--ops-muted); }
 .desktop-image-search svg { position: absolute; z-index: 1; top: 12px; left: 10px; width: 14px; height: 14px; pointer-events: none; }
 .desktop-image-search input { min-width: 0; width: 100%; height: 38px; padding-left: 32px; font-size: 12px; }

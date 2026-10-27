@@ -185,8 +185,17 @@ test('Electron 专属创作空间的标题栏、主题、动效、工作台与 A
   await expect(agentNavigation).toHaveText('AI 对话')
   await expect(page.getByRole('navigation', { name: '底部导航' })).toBeHidden()
   await agentNavigation.click()
-  await expect(page.getByTestId('desktop-agent-list')).toBeVisible()
-  await expect(page.getByRole('textbox', { name: '搜索对话' })).toBeVisible()
+  const privacyNotice = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
+  await expect(privacyNotice).toBeVisible()
+  await privacyNotice.getByRole('button', { name: '我知道了', exact: true }).click()
+  await expect(page.getByTestId('desktop-agent-list')).toBeHidden()
+  const openConversationList = page.getByRole('button', { name: '打开对话列表', exact: true })
+  await expect(openConversationList).toBeVisible()
+  await openConversationList.click()
+  await expect(page.getByRole('heading', { name: '对话', exact: true })).toBeVisible()
+  await expect(page.getByRole('textbox', { name: '搜索对话' }).last()).toBeVisible()
+  await page.getByRole('button', { name: '关闭对话列表', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '对话', exact: true })).toHaveCount(0)
   const widths = await page.evaluate(() => ({
     viewport: innerWidth,
     document: document.documentElement.scrollWidth,
@@ -196,7 +205,6 @@ test('Electron 专属创作空间的标题栏、主题、动效、工作台与 A
     }).filter((element) => element.right > innerWidth + 1).sort((a, b) => b.right - a.right).slice(0, 10),
   }))
   expect(widths.document, JSON.stringify(widths.offenders)).toBeLessThanOrEqual(widths.viewport)
-  expect(await page.getByTestId('desktop-agent-list').evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(220)
   await page.setViewportSize({ width: 740, height: 640 })
   await expect(accountNav).toBeVisible()
   await expect(page.getByRole('navigation', { name: '底部导航' })).toBeHidden()

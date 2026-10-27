@@ -98,6 +98,9 @@ test('关闭workbench_ui时Electron保留原型布局与会话聊天操作', asy
     prototype.locator('.chat-header .meta strong'), prototype.locator('.chat-header .meta .tag'), prototype.locator('.chat-header > button[data-action="agent-options"]'),
   ]
   const selectors = ['会话列表', '智能体页面框架', '会话搜索框', '聊天区', '消息滚动区', '消息内容列', '消息输入框容器', '消息输入框', '对话标题', '私密标记', '对话设置入口']
+  const attachmentLimitNote = page.getByText('PDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。', { exact: true })
+  await expect(attachmentLimitNote).toBeVisible()
+  const attachmentLimitNoteHeight = await attachmentLimitNote.evaluate((element) => element.getBoundingClientRect().height)
   const metrics = await Promise.all(selectors.map(async (selector, index) => {
     const rect = (element: Element) => {
       const { x, y, width, height } = element.getBoundingClientRect()
@@ -109,10 +112,12 @@ test('关闭workbench_ui时Electron保留原型布局与会话聊天操作', asy
   for (const index of [0, 1, 2, 3, 4, 6, 7, 8, 9]) {
     const { selector, actual, expected } = metrics[index]
     const tolerance = index === 4 ? 3 : 2
+    // AW11 的附件限制提示占用消息区高度；静态原型不包含该新增提示。
+    const expectedHeight = index === 4 ? expected.height - attachmentLimitNoteHeight : expected.height
     expect(Math.abs(actual.x - expected.x), `${selector} 水平位置`).toBeLessThanOrEqual(tolerance)
     expect(Math.abs(actual.y - expected.y), `${selector} 垂直位置`).toBeLessThanOrEqual(tolerance)
     expect(Math.abs(actual.width - expected.width), `${selector} 宽度`).toBeLessThanOrEqual(tolerance)
-    expect(Math.abs(actual.height - expected.height), `${selector} 高度`).toBeLessThanOrEqual(tolerance)
+    expect(Math.abs(actual.height - expectedHeight), `${selector} 高度`).toBeLessThanOrEqual(tolerance)
   }
   await page.screenshot({ path: resolve(process.cwd(), '../output/playwright/desktop-creative/qa-2026-10-17/screenshots/agent-layout-after.png') })
   await prototype.screenshot({ path: resolve(process.cwd(), '../output/playwright/desktop-creative/qa-2026-10-17/screenshots/agent-layout-prototype.png') })
