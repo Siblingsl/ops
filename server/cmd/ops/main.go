@@ -18,6 +18,7 @@ import (
 	"ops/internal/app"
 	"ops/internal/config"
 	"ops/internal/db"
+	"ops/internal/documentparse"
 	"ops/internal/mock"
 )
 
@@ -42,6 +43,8 @@ func main() {
 		fmt.Println(app.Version)
 	case "check-formats":
 		err = checkFormats()
+	case "__agent_document_parser":
+		err = documentparse.RunWorker()
 	default:
 		fmt.Fprintf(os.Stderr, "用法：ops [serve|migrate|reset-password <username>|grant-admin <username>|revoke-admin <username>|check-formats|version]\n")
 		os.Exit(2)

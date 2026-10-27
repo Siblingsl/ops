@@ -79,6 +79,7 @@ type agentRunState struct {
 	StartEventSeq     int64
 	LastSnapshotAt    time.Time
 	ToolStartedAt     time.Time
+	documentLoads     map[uuid.UUID]int
 }
 
 // agentModelPayload 是一轮模型调用的输入（不含系统规则，由 agent_context.go 组装）。

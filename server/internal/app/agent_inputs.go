@@ -102,7 +102,8 @@ func agentLoadInputs(ctx context.Context, tx pgx.Tx, conversationID uuid.UUID) (
 		if len(inputs[i].AttachmentIDs) == 0 {
 			continue
 		}
-		attachments, err := tx.Query(ctx, `SELECT a.id,a.kind,a.name,a.mime,a.bytes,a.width,a.height
+		attachments, err := tx.Query(ctx, `SELECT a.id,a.kind,a.name,a.mime,a.bytes,a.width,a.height,a.parse_status,a.quarantine_code,
+			a.page_count,a.page_basis,a.row_count,a.extracted_chars,a.injected_chars,a.truncated_from,a.truncated_to,a.parser_version
 			FROM agent_attachment a WHERE a.id=ANY($1) AND a.workspace_id=$2 AND a.user_id=$3
 			AND EXISTS(SELECT 1 FROM agent_input source WHERE source.id=$4 AND source.conversation_id=$5
 				AND source.workspace_id=$2 AND source.user_id=$3 AND a.id=ANY(source.attachment_ids))`,
@@ -112,11 +113,14 @@ func agentLoadInputs(ctx context.Context, tx pgx.Tx, conversationID uuid.UUID) (
 		}
 		for attachments.Next() {
 			var item agentAttachmentView
-			if err := attachments.Scan(&item.ID, &item.Kind, &item.Name, &item.Mime, &item.Bytes, &item.Width, &item.Height); err != nil {
+			if err := attachments.Scan(&item.ID, &item.Kind, &item.Name, &item.Mime, &item.Bytes, &item.Width, &item.Height,
+				&item.ParseStatus, &item.QuarantineCode, &item.PageCount, &item.PageBasis, &item.RowCount, &item.ExtractedChars, &item.InjectedChars, &item.TruncatedFrom, &item.TruncatedTo, &item.ParserVersion); err != nil {
 				attachments.Close()
 				return nil, err
 			}
-			item.URL = "/api/v1/agent/attachments/" + item.ID.String() + "/file?conversation_id=" + conversationID.String()
+			if item.ParseStatus == "ready" {
+				item.URL = "/api/v1/agent/attachments/" + item.ID.String() + "/file?conversation_id=" + conversationID.String()
+			}
 			inputs[i].Attachments = append(inputs[i].Attachments, item)
 		}
 		if err := attachments.Err(); err != nil {
@@ -139,6 +143,9 @@ func (s *Server) agentValidateInput(ctx context.Context, c *agentConversation, t
 	}
 	attachments, err := parseAgentAttachmentIDs(ids)
 	if err != nil {
+		return "", nil, nil, nil, err
+	}
+	if err := s.agentValidateAttachmentBudget(ctx, s.db, runeLen(text), attachments); err != nil {
 		return "", nil, nil, nil, err
 	}
 	if len(refs) > 0 {
@@ -173,7 +180,7 @@ func (s *Server) reserveAgentInputAttachmentsTx(ctx context.Context, tx pgx.Tx, 
 		err := tx.QueryRow(ctx, `SELECT a.storage_path,a.referenced,a.conversation_id,
 			EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=a.id AND r.conversation_id=$4)
 			OR EXISTS(SELECT 1 FROM agent_input i WHERE i.conversation_id=$4 AND i.status='pending' AND a.id=ANY(i.attachment_ids))
-			FROM agent_attachment a WHERE a.id=$1 AND a.workspace_id=$2 AND a.user_id=$3 FOR UPDATE`,
+			FROM agent_attachment a WHERE a.id=$1 AND a.workspace_id=$2 AND a.user_id=$3 AND a.parse_status='ready' FOR UPDATE`,
 			id, ident(ctx).WorkspaceID, ident(ctx).UserID, c.ID).Scan(&path, &referenced, &ownerConversation, &hasRef)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return apiErr(422, "agent_attachment_invalid", "附件已失效，请重新选择")

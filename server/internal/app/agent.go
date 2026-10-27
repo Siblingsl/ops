@@ -1004,14 +1004,25 @@ func (s *Server) resolveAgentModel(ctx context.Context, ref agentModelRef) (agen
 // ---------- 对话详情 ----------
 
 type agentAttachmentView struct {
-	ID     uuid.UUID `json:"id"`
-	Kind   string    `json:"kind"`
-	Name   string    `json:"name"`
-	Mime   string    `json:"mime"`
-	Bytes  int       `json:"bytes"`
-	Width  *int      `json:"width"`
-	Height *int      `json:"height"`
-	URL    string    `json:"url"`
+	ID             uuid.UUID `json:"id"`
+	Kind           string    `json:"kind"`
+	Name           string    `json:"name"`
+	Mime           string    `json:"mime"`
+	Bytes          int       `json:"bytes"`
+	Width          *int      `json:"width"`
+	Height         *int      `json:"height"`
+	URL            string    `json:"url"`
+	ParseStatus    string    `json:"parse_status,omitempty"`
+	QuarantineCode string    `json:"quarantine_code,omitempty"`
+	PageCount      *int      `json:"page_count,omitempty"`
+	PageBasis      string    `json:"page_basis,omitempty"`
+	RowCount       *int      `json:"row_count,omitempty"`
+	ExtractedChars *int      `json:"extracted_chars,omitempty"`
+	InjectedChars  *int      `json:"injected_chars,omitempty"`
+	TruncatedFrom  *int      `json:"truncated_from,omitempty"`
+	TruncatedTo    *int      `json:"truncated_to,omitempty"`
+	LoadedChars    *int      `json:"loaded_chars,omitempty"`
+	ParserVersion  string    `json:"parser_version,omitempty"`
 }
 
 type agentToolCallView struct {
@@ -1453,7 +1464,11 @@ func (s *Server) agentAttachments(ctx context.Context, tx pgx.Tx, ids []uuid.UUI
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := tx.Query(ctx, `SELECT id, kind, name, mime, bytes, width, height FROM agent_attachment
+	rows, err := tx.Query(ctx, `SELECT id, kind, name, mime, bytes, width, height, parse_status,quarantine_code,
+		page_count,page_basis,row_count,extracted_chars,injected_chars,truncated_from,truncated_to,
+		(SELECT max(l.chars) FROM agent_attachment_load l JOIN agent_run ar ON ar.id=l.run_id
+			WHERE l.attachment_id=agent_attachment.id AND ar.conversation_id=$4),parser_version
+		FROM agent_attachment
 		WHERE id = ANY($1) AND workspace_id=$2 AND user_id=$3
 		AND EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=agent_attachment.id AND r.conversation_id=$4)`,
 		ids, ident(ctx).WorkspaceID, ident(ctx).UserID, conversationID)
@@ -1463,10 +1478,13 @@ func (s *Server) agentAttachments(ctx context.Context, tx pgx.Tx, ids []uuid.UUI
 	defer rows.Close()
 	for rows.Next() {
 		var a agentAttachmentView
-		if err := rows.Scan(&a.ID, &a.Kind, &a.Name, &a.Mime, &a.Bytes, &a.Width, &a.Height); err != nil {
+		if err := rows.Scan(&a.ID, &a.Kind, &a.Name, &a.Mime, &a.Bytes, &a.Width, &a.Height,
+			&a.ParseStatus, &a.QuarantineCode, &a.PageCount, &a.PageBasis, &a.RowCount, &a.ExtractedChars, &a.InjectedChars, &a.TruncatedFrom, &a.TruncatedTo, &a.LoadedChars, &a.ParserVersion); err != nil {
 			return nil, err
 		}
-		a.URL = "/api/v1/agent/attachments/" + a.ID.String() + "/file?conversation_id=" + conversationID.String()
+		if a.ParseStatus == "ready" {
+			a.URL = "/api/v1/agent/attachments/" + a.ID.String() + "/file?conversation_id=" + conversationID.String()
+		}
 		out[a.ID] = a
 	}
 	return out, rows.Err()
@@ -1627,6 +1645,7 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/conversations/{id}/fork", s.h(s.postAgentConversationFork))
 		r.Get("/agent/conversations/{id}/artifacts", s.h(s.listAgentArtifacts))
 		r.Get("/agent/artifacts/{id}", s.h(s.getAgentArtifact))
+		r.Get("/agent/artifacts/{id}/file", s.h(s.getAgentArtifactFile))
 		r.Post("/agent/artifacts/{id}/versions", s.h(s.postAgentArtifactVersion))
 		r.Get("/agent/conversations/{id}/events", s.h(s.getAgentConversationEvents))
 		r.Get("/agent/context-candidates", s.h(s.getAgentContextCandidates))

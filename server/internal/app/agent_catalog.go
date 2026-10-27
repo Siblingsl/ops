@@ -136,7 +136,7 @@ var agentMetaTools = []AgentTool{
 			pBodyF("source_ref", `{"type":"object","properties":{"type":{"type":"string","enum":["work","material","topic","report"]},"id":{"type":"string","format":"uuid"},"revision":{"type":"string","maxLength":100}},"required":["type","id"],"additionalProperties":false}`, false),
 			pBodyF("chat_content", strMinMax(1, 20000), false),
 		},
-		Notes: "首次present_artifact为私有展示产物；source_ref须重新鉴权；chat_content限20,000字且source_kind固定为chat",
+		Notes: "首次present_artifact为私有展示产物；source_ref须重新鉴权；chat_content限20,000字且source_kind固定为chat；table正文须为列数一致的CSV，第一行为列名",
 	},
 	{
 		Name: "report_goal_progress", Kind: toolR, MinRole: roleEditor,

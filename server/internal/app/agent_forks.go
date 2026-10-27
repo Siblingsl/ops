@@ -136,7 +136,7 @@ func (s *Server) agentReferenceForkAttachmentTx(ctx context.Context, tx pgx.Tx, 
 	workspaceID, userID uuid.UUID) error {
 	var storagePath string
 	var referenced bool
-	if err := tx.QueryRow(ctx, `SELECT storage_path,referenced FROM agent_attachment WHERE id=$1 AND workspace_id=$2 AND user_id=$3 FOR UPDATE`,
+	if err := tx.QueryRow(ctx, `SELECT storage_path,referenced FROM agent_attachment WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND parse_status='ready' FOR UPDATE`,
 		attachmentID, workspaceID, userID).Scan(&storagePath, &referenced); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return apiErr(422, "agent_attachment_invalid", "分支附件已失效，请从来源会话重新上传")

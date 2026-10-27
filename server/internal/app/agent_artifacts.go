@@ -330,11 +330,6 @@ func (s *Server) postAgentArtifactVersion(w http.ResponseWriter, r *http.Request
 	identity := ident(r.Context())
 	operation := "artifact.version:" + artifactID.String()
 	payload := map[string]any{"expected_version": req.ExpectedVersion, "content": text}
-	content, err := json.Marshal(map[string]any{"format": "text", "text": text})
-	if err != nil {
-		return err
-	}
-	hash := sha256.Sum256(content)
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
 		return err
@@ -361,6 +356,11 @@ func (s *Server) postAgentArtifactVersion(w http.ResponseWriter, r *http.Request
 		artifactID, conversationID).Scan(&currentVersionID, &kind); err != nil {
 		return errNotFound
 	}
+	content, err := agentArtifactTextContent(kind, text)
+	if err != nil {
+		return err
+	}
+	hash := sha256.Sum256(content)
 	resource, err := claimAgentRequest(r.Context(), tx, identity.WorkspaceID, identity.UserID, operation, requestID, payload)
 	if err != nil {
 		return err
@@ -523,7 +523,7 @@ func (s *Server) agentMetaPresentArtifact(ctx context.Context, st *agentRunState
 			return nil, "", validation("引用内容疑似包含密钥或密码，不能保存到产物")
 		}
 	}
-	content, err := json.Marshal(map[string]any{"format": "text", "text": chatContent})
+	content, err := agentArtifactTextContent(kind, chatContent)
 	if err != nil {
 		return nil, "", err
 	}

@@ -16,10 +16,17 @@ import (
 	"ops/internal/app"
 	"ops/internal/config"
 	"ops/internal/db"
+	"ops/internal/documentparse"
 	"ops/internal/mock"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "__agent_document_parser" {
+		if documentparse.RunWorker() != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

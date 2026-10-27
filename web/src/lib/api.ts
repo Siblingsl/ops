@@ -118,6 +118,43 @@ export async function rawRequest(method: string, path: string, body?: unknown, i
   }
 }
 
+/** Uploads use a stable caller request_id and expose the browser's real upload boundary. */
+export function uploadFormData(path: string, body: FormData, progress: (loaded: number, total: number, complete: boolean) => void, signal?: AbortSignal): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    const abort = () => xhr.abort()
+    const cleanup = () => signal?.removeEventListener('abort', abort)
+    const fail = (error: unknown) => { cleanup(); reject(error) }
+    xhr.open('POST', apiUrl(path))
+    xhr.withCredentials = true
+    xhr.timeout = 120_000
+    xhr.setRequestHeader('X-CSRF-Token', csrf)
+    xhr.upload.onprogress = (event) => progress(event.loaded, event.lengthComputable ? event.total : 0, false)
+    xhr.upload.onload = () => progress(0, 0, true)
+    xhr.onerror = () => fail(new ApiError(0, 'network', '上传连接中断，可用相同请求重试'))
+    xhr.ontimeout = () => fail(new ApiError(504, 'timeout', '上传或处理超时，可用相同请求重试'))
+    xhr.onabort = () => fail(new DOMException('Upload cancelled', 'AbortError'))
+    xhr.onload = () => {
+      cleanup()
+      if (!xhr.status) { reject(new ApiError(0, 'network', '上传连接中断')); return }
+      const headers = new Headers()
+      for (const line of xhr.getAllResponseHeaders().trim().split(/[\r\n]+/)) {
+        const at = line.indexOf(':')
+        if (at > 0) headers.append(line.slice(0, at).trim(), line.slice(at + 1).trim())
+      }
+      const response = new Response(xhr.responseText, { status: xhr.status, headers })
+      if (response.ok) { resolve(response); return }
+      void parseError(response).then((error) => {
+        if (error.code === 'unauthenticated') onUnauthenticated?.()
+        reject(error)
+      })
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) { cleanup(); reject(new DOMException('Upload cancelled', 'AbortError')); return }
+    xhr.send(body)
+  })
+}
+
 export async function api<T = unknown>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
   const res = await rawRequest(method, path, body, init)
   const text = await res.text()

@@ -24,6 +24,7 @@ import (
 
 	"ops/internal/config"
 	"ops/internal/db"
+	"ops/internal/documentparse"
 	"ops/internal/mock"
 )
 
@@ -46,6 +47,12 @@ const testAdminPassword = "test-admin-pass-456"
 var env *testEnv
 
 func TestMain(m *testing.M) {
+	if len(os.Args) == 2 && os.Args[1] == "__agent_document_parser" {
+		if err := documentparse.RunWorker(); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	code, err := runWithEnv(m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "测试环境准备失败：", err)

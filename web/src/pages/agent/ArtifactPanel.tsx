@@ -1,11 +1,12 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
-import { FileText, GitCompare, Image, LoaderCircle, MessageSquareQuote, RotateCcw } from 'lucide-react'
+import { Copy, Download, FileText, GitCompare, Image, LoaderCircle, MessageSquareQuote, RotateCcw } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button, Card, Notice, Select, Textarea } from '@/components/ui'
 import type { AgentArtifactDetail, AgentArtifactPage, AgentArtifactSummary, AgentArtifactVersion } from '@/lib/agent'
-import { errorMessage, get, post } from '@/lib/api'
+import { errorMessage, get, post, rawRequest } from '@/lib/api'
+import { assetUrl } from '@/lib/api-base'
 import type { AgentContextSelection } from '@/pages/agent/ContextPickers'
 
 function record(value: unknown): Record<string, unknown> {
@@ -22,6 +23,9 @@ function versionText(version: AgentArtifactVersion | null | undefined) {
 }
 
 function ArtifactPreview({ item, version, onQuote }: { item: AgentArtifactDetail; version: AgentArtifactVersion; onQuote: (ref: AgentContextSelection, prompt: string) => void }) {
+  const [downloading, setDownloading] = useState<string | null>(null)
+  const [visibleRows, setVisibleRows] = useState(50)
+  useEffect(() => setVisibleRows(50), [version.id])
   if (!version.available) return <Notice tone="gamboge">来源已不可用，保留的产物记录仍可查看。</Notice>
   const content = record(version.content)
   const data = record(content.data)
@@ -30,8 +34,35 @@ function ArtifactPreview({ item, version, onQuote }: { item: AgentArtifactDetail
     : []
   const summary = typeof data.summary === 'string' ? data.summary : ''
   const text = versionText(version)
-  const imageURL = internalURL(version.image_url)
+  const imageURL = internalURL(version.image_url) ? assetUrl(version.image_url!) : ''
   const openURL = internalURL(version.open_url)
+  const table = record(content.table)
+  const columns = Array.isArray(table.columns) ? table.columns.filter((cell): cell is string => typeof cell === 'string') : []
+  const rows = Array.isArray(table.rows) ? table.rows.filter((row): row is string[] => Array.isArray(row) && row.length === columns.length && row.every((cell) => typeof cell === 'string')) : []
+  const canText = !!text || candidates.length > 0 || !!summary
+  const formats: ('md' | 'txt' | 'csv' | 'original')[] = imageURL ? ['original'] : canText ? ['md', 'txt', ...(columns.length ? ['csv' as const] : [])] : []
+  const save = async (format: 'md' | 'txt' | 'csv' | 'original') => {
+    setDownloading(format)
+    try {
+      const response = await rawRequest('GET', '/agent/artifacts/' + item.artifact.id + '/file?version=' + version.version + '&format=' + format)
+      const blob = await response.blob()
+      const extension = format === 'original' ? response.headers.get('Content-Type') === 'image/jpeg' ? 'jpg' : 'png' : format
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'ops-artifact-v' + version.version + '.' + extension
+      document.body.append(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      toast.success('已发起下载')
+    } catch (error) { toast.error(errorMessage(error)) }
+    finally { setDownloading(null) }
+  }
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text || candidates.join('\n') || summary); toast.success('已复制产物内容') }
+    catch { toast.error('复制失败，请手动选择内容复制') }
+  }
   const quoteSelection = async () => {
     const root = document.querySelector<HTMLElement>('[data-testid="artifact-text-content"]')
     const selection = window.getSelection()
@@ -66,7 +97,17 @@ function ArtifactPreview({ item, version, onQuote }: { item: AgentArtifactDetail
       <span>v{version.version}</span><span>·</span><span>{version.source_kind === 'g_tool' ? '受控工具结果' : version.source_kind === 'attachment' ? '本人上传图片' : version.source_kind}</span>
       <span>·</span><span>{new Date(version.created_at).toLocaleString('zh-CN')}</span>
     </div>
-    {text
+    {!!formats.length && <div className="flex flex-wrap gap-2">
+      {formats.map((format) => <Button key={format} type="button" size="sm" variant="outline" icon={<Download className="size-3.5" />} loading={downloading === format} disabled={downloading !== null} onClick={() => void save(format)}>{{ md: '保存 Markdown', txt: '保存文本', csv: '保存 CSV', original: '保存原图' }[format]}</Button>)}
+      {canText && <Button type="button" size="sm" variant="ghost" icon={<Copy className="size-3.5" />} onClick={() => void copy()}>复制内容</Button>}
+    </div>}
+    {columns.length > 0
+      ? <div className="space-y-2"><div className="max-h-96 overflow-auto rounded-lg border border-mist-200"><table className="min-w-full text-left text-xs"><thead className="bg-mist-50"><tr>{columns.map((cell, index) => <th key={index} className="max-w-64 whitespace-pre-wrap break-all border-b border-mist-200 px-3 py-2 font-medium">{cell}</th>)}</tr></thead><tbody>{rows.slice(0, visibleRows).map((row, index) => <tr key={index}>{row.map((cell, column) => <td key={column} className="max-w-64 whitespace-pre-wrap break-all border-b border-mist-100 px-3 py-2">{cell}</td>)}</tr>)}</tbody></table></div>
+        <p className="text-xs text-mist-500">显示 {Math.min(rows.length, visibleRows)} / {rows.length} 行；CSV 导出对公式样式的单元格加“文本：”前缀，原产物不变。</p>
+        {rows.length > visibleRows && <Button size="sm" variant="ghost" onClick={() => setVisibleRows((count) => count + 50)}>显示更多行</Button>}
+        <details><summary className="cursor-pointer text-xs text-ink-700">CSV 原文与选段反馈</summary><pre data-testid="artifact-text-content" className="mt-2 max-h-56 select-text overflow-auto whitespace-pre-wrap break-words rounded-lg bg-mist-50 p-3 text-sm">{text}</pre><Button className="mt-2" size="sm" variant="outline" icon={<MessageSquareQuote className="size-3.5" />} onClick={() => void quoteSelection()}>引用选段追问</Button></details>
+      </div>
+      : text
       ? <div><pre data-testid="artifact-text-content" className="max-h-96 select-text overflow-auto whitespace-pre-wrap break-words rounded-lg bg-mist-50 p-3 text-sm leading-6 text-mist-700">{text}</pre><div className="mt-2 flex justify-end"><Button type="button" size="sm" variant="outline" icon={<MessageSquareQuote className="size-3.5" />} onClick={() => void quoteSelection()}>引用选段追问</Button></div></div>
       : candidates.length > 0
         ? <div><h4 className="mb-2 text-xs font-semibold text-mist-600">标题候选</h4><ol className="space-y-2">{candidates.map((title, index) => <li key={`${index}:${title}`} className="rounded-lg border border-mist-200 bg-white px-3 py-2 text-sm leading-6 text-mist-800">{title}</li>)}</ol></div>

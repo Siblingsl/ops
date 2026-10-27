@@ -561,8 +561,8 @@ func (s *Server) agentPreviewAttachments(ctx context.Context, convID *uuid.UUID,
 		ids = append(ids, id)
 	}
 	rows, err := s.db.Query(ctx, `SELECT id,kind,name,mime,bytes,coalesce(text_content,''),sha256
-		FROM agent_attachment WHERE id=ANY($1) AND user_id=$2 AND referenced=false
-		AND (conversation_id IS NULL OR conversation_id=$3)`, ids, ident(ctx).UserID, convID)
+		FROM agent_attachment WHERE id=ANY($1) AND user_id=$2 AND referenced=false AND parse_status='ready'
+		AND (conversation_id IS NULL OR conversation_id=$3) AND workspace_id=$4`, ids, ident(ctx).UserID, convID, ident(ctx).WorkspaceID)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -591,6 +591,12 @@ func (s *Server) agentPreviewAttachments(ctx context.Context, convID *uuid.UUID,
 	chars := 0
 	for _, id := range ids {
 		a := byID[id]
+		if a.kind == "document" && agentContainsSecret(a.content, s.agentSecretValues(ctx, ident(ctx).WorkspaceID)) {
+			if err := s.agentQuarantineDocument(ctx, a.id); err != nil {
+				return nil, nil, 0, err
+			}
+			return nil, nil, 0, apiErr(422, "agent_attachment_parse_failed", "文档疑似含敏感凭据，已隔离，请删除并重新上传已清理的文件")
+		}
 		item := agentResolvedContext{agentContextCandidate: agentContextCandidate{
 			ID: a.id, Type: "attachment", Name: a.name, Summary: a.mime, Scope: "turn", Revision: a.sha,
 		}, Status: "available", Content: a.content}

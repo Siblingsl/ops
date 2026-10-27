@@ -28,7 +28,7 @@ func agentAttachmentPath(id uuid.UUID) string {
 }
 
 // agentUploadAttachment 以 multipart 上传附件（本人）；convID 为空表示不带对话。
-func agentUploadAttachment(t *testing.T, name string, data []byte, convID string) (int, agentAttachmentView, []byte) {
+func agentUploadAttachment(t *testing.T, name string, data []byte, convID string, requestIDs ...string) (int, agentAttachmentView, []byte) {
 	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -36,6 +36,9 @@ func agentUploadAttachment(t *testing.T, name string, data []byte, convID string
 	_, _ = fw.Write(data)
 	if convID != "" {
 		_ = mw.WriteField("conversation_id", convID)
+	}
+	if len(requestIDs) > 0 {
+		_ = mw.WriteField("request_id", requestIDs[0])
 	}
 	_ = mw.Close()
 	resp := env.request("POST", "/api/v1/agent/attachments", &buf, mw.FormDataContentType())

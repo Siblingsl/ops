@@ -33,6 +33,13 @@ export interface AgentBootstrap {
     max_continuations: number
     message_chars: number
     attachments_per_message: number
+    document_bytes?: number
+    document_pages?: number
+    document_chars?: number
+    csv_rows?: number
+    csv_columns?: number
+    document_parse_seconds?: number
+    document_parse_memory_mb?: number
     image_bytes: number
     text_bytes: number
   }
@@ -123,6 +130,17 @@ export interface AgentAttachment {
   width: number | null
   height: number | null
   url: string
+  parse_status?: 'ready' | 'quarantined'
+  parser_version?: string
+  quarantine_code?: string
+  page_count?: number
+  page_basis?: string
+  row_count?: number
+  extracted_chars?: number
+  injected_chars?: number
+  loaded_chars?: number
+  truncated_from?: number
+  truncated_to?: number
 }
 
 export interface AgentToolCall {

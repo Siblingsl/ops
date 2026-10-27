@@ -14,6 +14,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	mimepkg "mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,6 +26,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"ops/internal/documentparse"
 )
 
 // 图片变体的长边上限（第 8.2 节第 2 项）。
@@ -53,6 +56,15 @@ func agentAttachmentAllPaths(storagePath string) []string {
 
 func (s *Server) agentReferenceMessageAttachmentsTx(ctx context.Context, tx pgx.Tx, conversationID, messageID uuid.UUID,
 	attachmentIDs []uuid.UUID) error {
+	if len(attachmentIDs) > 0 {
+		var messageChars int
+		if err := tx.QueryRow(ctx, "SELECT char_length(content) FROM agent_message WHERE id=$1 AND conversation_id=$2", messageID, conversationID).Scan(&messageChars); err != nil {
+			return err
+		}
+		if err := s.agentValidateAttachmentBudget(ctx, tx, messageChars, attachmentIDs); err != nil {
+			return err
+		}
+	}
 	for _, attachmentID := range attachmentIDs {
 		var referenced, currentRef, inheritedRef bool
 		var ownerConversation *uuid.UUID
@@ -60,7 +72,7 @@ func (s *Server) agentReferenceMessageAttachmentsTx(ctx context.Context, tx pgx.
 			EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=a.id AND r.conversation_id=$4),
 			EXISTS(SELECT 1 FROM agent_attachment_ref r JOIN agent_message m ON m.id=r.message_id
 				WHERE r.attachment_id=a.id AND r.conversation_id=$4 AND m.source_message_id IS NOT NULL)
-			FROM agent_attachment a WHERE a.id=$1 AND a.workspace_id=$2 AND a.user_id=$3 FOR UPDATE`,
+			FROM agent_attachment a WHERE a.id=$1 AND a.workspace_id=$2 AND a.user_id=$3 AND a.parse_status='ready' FOR UPDATE`,
 			attachmentID, ident(ctx).WorkspaceID, ident(ctx).UserID, conversationID).
 			Scan(&referenced, &ownerConversation, &currentRef, &inheritedRef)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -96,10 +108,95 @@ func (s *Server) agentReferenceMessageAttachmentsTx(ctx context.Context, tx pgx.
 	return nil
 }
 
+func (s *Server) agentValidateAttachmentBudget(ctx context.Context, reader agentRequestReader, textChars int, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var chars int
+	if err := reader.QueryRow(ctx, `SELECT coalesce(sum(least(char_length(coalesce(text_content,'')),20000)),0)::integer FROM agent_attachment
+		WHERE id=ANY($1) AND workspace_id=$2 AND user_id=$3 AND parse_status='ready'`,
+		ids, ident(ctx).WorkspaceID, ident(ctx).UserID).Scan(&chars); err != nil {
+		return err
+	}
+	if textChars+chars > agentWindowChars {
+		return apiErr(422, "context_budget_exceeded", "附件正文与消息超过 40000 字上下文容量，请减少附件")
+	}
+	return nil
+}
+
 // agentTextAttachmentName 按扩展名判定文本附件（第 8.1 节：.txt、.md）。
 func agentTextAttachmentName(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	return ext == ".txt" || ext == ".md"
+}
+
+func agentDocumentAttachmentName(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".pdf", ".docx", ".csv":
+		return true
+	default:
+		return false
+	}
+}
+
+func agentDocumentParseError(code string) error {
+	message := "文档处理失败或超出 30 秒 / 256MB 解析限制，请提供较小文件或纯文本"
+	switch code {
+	case "pdf_scanned_unsupported", "pdf_no_text_layer":
+		message = "不支持扫描件或无文本层 PDF 识别，可提供图片或文本；未启用 OCR"
+	case "pdf_encrypted", "pdf_invalid_or_encrypted":
+		message = "PDF 已加密或格式损坏，请重新导出为未加密 PDF"
+	case "document_page_limit":
+		message = "文档超过 100 页，请拆分后上传"
+	case "docx_page_count_unverifiable":
+		message = "无法验证 DOCX 的保存分页信息，请转成 PDF 后上传"
+	case "docx_embedded_content_unsupported", "docx_external_link_unsupported", "docx_macro_unsupported":
+		message = "DOCX 含宏、嵌入对象或外链资源，请移除后重新上传，或转成 PDF"
+	case "csv_utf8_required":
+		message = "CSV 必须为 UTF-8 编码，请转换后重新上传"
+	case "csv_limit_exceeded":
+		message = "CSV 最多 10000 行、100 列，请拆分后上传"
+	case "csv_invalid", "csv_empty":
+		message = "CSV 为空或格式损坏，请检查引号与分隔符后重新上传"
+	case "docx_invalid", "docx_encoding_invalid", "docx_expanded_size_limit", "docx_encrypted":
+		message = "DOCX 已加密、损坏或解压内容超限，请重新导出或转成 PDF"
+	}
+	return apiErr(422, "agent_attachment_parse_failed", message)
+}
+
+func (s *Server) agentQuarantineDocument(ctx context.Context, attachmentID uuid.UUID) error {
+	_, err := s.db.Exec(ctx, `UPDATE agent_attachment SET parse_status='quarantined',quarantine_code='suspected_secret',
+		text_content=NULL,injected_chars=0 WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND kind='document'`,
+		attachmentID, ident(ctx).WorkspaceID, ident(ctx).UserID)
+	return err
+}
+
+func (s *Server) agentReplayAttachmentUpload(ctx context.Context, requestID uuid.UUID, payloadHash string) (*agentAttachmentView, error) {
+	var view agentAttachmentView
+	var storedHash string
+	var conversationID *uuid.UUID
+	err := s.db.QueryRow(ctx, `SELECT id,kind,name,mime,bytes,width,height,parse_status,quarantine_code,
+		page_count,page_basis,row_count,extracted_chars,injected_chars,truncated_from,truncated_to,upload_payload_hash,conversation_id,parser_version
+		FROM agent_attachment WHERE workspace_id=$1 AND user_id=$2 AND upload_request_id=$3`,
+		ident(ctx).WorkspaceID, ident(ctx).UserID, requestID).Scan(&view.ID, &view.Kind, &view.Name, &view.Mime, &view.Bytes, &view.Width, &view.Height,
+		&view.ParseStatus, &view.QuarantineCode, &view.PageCount, &view.PageBasis, &view.RowCount, &view.ExtractedChars, &view.InjectedChars,
+		&view.TruncatedFrom, &view.TruncatedTo, &storedHash, &conversationID, &view.ParserVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if storedHash != payloadHash {
+		return nil, apiErr(409, "agent_request_conflict", "上传请求编号已用于不同文件，请重新选择文件")
+	}
+	if view.ParseStatus == "ready" {
+		view.URL = "/api/v1/agent/attachments/" + view.ID.String() + "/file"
+		if conversationID != nil {
+			view.URL += "?conversation_id=" + conversationID.String()
+		}
+	}
+	return &view, nil
 }
 
 // agentCleanAttachmentText 校验 UTF-8 并去除 Unicode 控制字符（保留换行与制表符，D-081）。
@@ -236,17 +333,67 @@ func (s *Server) postAgentAttachment(w http.ResponseWriter, r *http.Request) err
 		}
 		convID = &parsed
 	}
+	var uploadRequestID any
+	var uploadPayloadHash any
+	var requestID uuid.UUID
+	if value := strings.TrimSpace(r.FormValue("request_id")); value != "" {
+		requestID, err = uuid.Parse(value)
+		if err != nil || requestID == uuid.Nil {
+			return validation("上传 request_id 必须为 UUID")
+		}
+		rawHash := sha256.Sum256(raw)
+		payloadHash, err := agentRequestPayloadHash(map[string]any{"sha256": hex.EncodeToString(rawHash[:]), "name": name, "conversation_id": convID})
+		if err != nil {
+			return err
+		}
+		uploadRequestID, uploadPayloadHash = requestID, payloadHash
+		replay, err := s.agentReplayAttachmentUpload(ctx, requestID, payloadHash)
+		if err != nil {
+			return err
+		}
+		if replay != nil {
+			return ok(w, replay)
+		}
+	}
 
 	// 判定类型并处理内容。
 	var (
-		kind        string
-		stored      []byte
-		mime        string
-		width       int
-		height      int
-		textContent string
+		kind           string
+		stored         []byte
+		mime           string
+		width          int
+		height         int
+		textContent    string
+		parseStatus    = "ready"
+		quarantineCode string
+		document       *documentparse.Result
 	)
-	if agentTextAttachmentName(name) {
+	if agentDocumentAttachmentName(name) {
+		if err := requireAgentFeature("document_parse"); err != nil {
+			return err
+		}
+		if len(raw) > agentImageBytes {
+			return apiErr(422, "agent_attachment_invalid", "文档超过 20MB")
+		}
+		parsed, err := documentparse.Parse(ctx, name, raw)
+		if err != nil {
+			return agentDocumentParseError(parsed.ErrorCode)
+		}
+		document = &parsed
+		kind, stored, textContent = "document", raw, parsed.Text
+		switch strings.ToLower(filepath.Ext(name)) {
+		case ".pdf":
+			mime = "application/pdf"
+		case ".docx":
+			mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+		case ".csv":
+			mime = "text/csv; charset=utf-8"
+		}
+		if agentContainsSecret(textContent, s.agentSecretValues(ctx, id.WorkspaceID)) {
+			parseStatus, quarantineCode, textContent = "quarantined", "suspected_secret", ""
+			document.InjectedChars = 0
+		}
+	} else if agentTextAttachmentName(name) {
 		if len(raw) > agentTextBytes {
 			return apiErr(422, "agent_attachment_invalid", "文本附件超过 1MB")
 		}
@@ -311,27 +458,55 @@ func (s *Server) postAgentAttachment(w http.ResponseWriter, r *http.Request) err
 	var widthArg, heightArg, textArg any
 	if kind == "image" {
 		widthArg, heightArg = width, height
-	} else {
+	} else if parseStatus == "ready" {
 		textArg = textContent
 	}
+	var pageCount, rowCount, extractedChars, injectedChars, truncatedFrom, truncatedTo *int
+	pageBasis := ""
+	parserVersion := ""
+	if document != nil {
+		pageCount, rowCount, extractedChars, injectedChars = document.Pages, document.Rows, &document.ExtractedChars, &document.InjectedChars
+		pageBasis, truncatedFrom, truncatedTo = document.PageBasis, document.TruncatedFrom, document.TruncatedTo
+		parserVersion = document.ParserVersion
+	}
 	var createdAt time.Time
-	if err := s.db.QueryRow(ctx, `INSERT INTO agent_attachment
-		(workspace_id, user_id, conversation_id, kind, name, mime, bytes, width, height, sha256, storage_path, text_content)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id, created_at`,
+	err = s.db.QueryRow(ctx, `INSERT INTO agent_attachment
+		(workspace_id, user_id, conversation_id, kind, name, mime, bytes, width, height, sha256, storage_path, text_content,
+		parse_status,quarantine_code,page_count,page_basis,row_count,extracted_chars,injected_chars,truncated_from,truncated_to,
+		upload_request_id,upload_payload_hash,parser_version)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+		ON CONFLICT(workspace_id,user_id,upload_request_id) WHERE upload_request_id IS NOT NULL DO NOTHING RETURNING id, created_at`,
 		id.WorkspaceID, id.UserID, convID, kind, name, mime, len(stored),
-		widthArg, heightArg, hex.EncodeToString(sum[:]), rel, textArg).Scan(&attID, &createdAt); err != nil {
+		widthArg, heightArg, hex.EncodeToString(sum[:]), rel, textArg,
+		parseStatus, quarantineCode, pageCount, pageBasis, rowCount, extractedChars, injectedChars, truncatedFrom, truncatedTo,
+		uploadRequestID, uploadPayloadHash, parserVersion).Scan(&attID, &createdAt)
+	if err != nil {
 		s.removeAgentFiles(agentAttachmentAllPaths(rel))
+		if errors.Is(err, pgx.ErrNoRows) && requestID != uuid.Nil {
+			replay, replayErr := s.agentReplayAttachmentUpload(ctx, requestID, uploadPayloadHash.(string))
+			if replayErr != nil {
+				return replayErr
+			}
+			if replay != nil {
+				return ok(w, replay)
+			}
+		}
 		return err
 	}
 
 	view := agentAttachmentView{ID: attID, Kind: kind, Name: name, Mime: mime, Bytes: len(stored),
-		URL: "/api/v1/agent/attachments/" + attID.String() + "/file"}
+		URL:         "/api/v1/agent/attachments/" + attID.String() + "/file",
+		ParseStatus: parseStatus, QuarantineCode: quarantineCode, PageCount: pageCount, PageBasis: pageBasis, RowCount: rowCount,
+		ExtractedChars: extractedChars, InjectedChars: injectedChars, TruncatedFrom: truncatedFrom, TruncatedTo: truncatedTo, ParserVersion: parserVersion}
 	if convID != nil {
 		view.URL += "?conversation_id=" + convID.String()
 	}
 	if kind == "image" {
 		w, h := width, height
 		view.Width, view.Height = &w, &h
+	}
+	if parseStatus != "ready" {
+		view.URL = ""
 	}
 	return ok(w, view)
 }
@@ -356,6 +531,7 @@ func (s *Server) getAgentAttachmentFile(w http.ResponseWriter, r *http.Request) 
 		kind        string
 		mime        string
 		storagePath string
+		name        string
 	)
 	requestedConversation := uuid.Nil
 	if raw := strings.TrimSpace(r.URL.Query().Get("conversation_id")); raw != "" {
@@ -369,12 +545,12 @@ func (s *Server) getAgentAttachmentFile(w http.ResponseWriter, r *http.Request) 
 		conversationArg = requestedConversation
 	}
 	// 已发送附件必须经本人当前对话引用访问；未引用上传仍可供本人的输入台预览。
-	if err := s.db.QueryRow(ctx, `SELECT kind, mime, storage_path FROM agent_attachment
-		WHERE id=$1 AND workspace_id=$2 AND user_id=$3
+	if err := s.db.QueryRow(ctx, `SELECT kind, mime, storage_path,name FROM agent_attachment
+		WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND parse_status='ready'
 		AND ((referenced=false AND ($4::uuid IS NULL OR conversation_id IS NULL OR conversation_id=$4))
 			OR ($4::uuid IS NOT NULL AND EXISTS(SELECT 1 FROM agent_attachment_ref r
 				WHERE r.attachment_id=agent_attachment.id AND r.conversation_id=$4)))`,
-		id, ident(ctx).WorkspaceID, ident(ctx).UserID, conversationArg).Scan(&kind, &mime, &storagePath); err != nil {
+		id, ident(ctx).WorkspaceID, ident(ctx).UserID, conversationArg).Scan(&kind, &mime, &storagePath, &name); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errNotFound
 		}
@@ -391,6 +567,10 @@ func (s *Server) getAgentAttachmentFile(w http.ResponseWriter, r *http.Request) 
 		mime = "image/jpeg"
 	}
 	w.Header().Set("Content-Type", mime)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if kind == "document" {
+		w.Header().Set("Content-Disposition", mimepkg.FormatMediaType("attachment", map[string]string{"filename": name}))
+	}
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	_, _ = w.Write(data)
 	return nil
@@ -409,7 +589,7 @@ func (s *Server) deleteAgentAttachment(w http.ResponseWriter, r *http.Request) e
 		storagePath string
 	)
 	if err := s.db.QueryRow(ctx, `SELECT referenced, storage_path FROM agent_attachment
-		WHERE id=$1 AND user_id=$2`, id, ident(ctx).UserID).Scan(&referenced, &storagePath); err != nil {
+		WHERE id=$1 AND user_id=$2 AND workspace_id=$3`, id, ident(ctx).UserID, ident(ctx).WorkspaceID).Scan(&referenced, &storagePath); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errNotFound
 		}
@@ -456,7 +636,7 @@ func (s *Server) agentAttachmentUploadFiles(ctx context.Context, t *AgentTool, a
 				storagePath string
 			)
 			if err := s.db.QueryRow(ctx, `SELECT kind, name, storage_path FROM agent_attachment
-				WHERE id=$1 AND workspace_id=$2 AND user_id=$3
+				WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND parse_status='ready'
 				AND ((referenced=false AND (conversation_id IS NULL OR conversation_id=$4)) OR EXISTS(
 					SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=agent_attachment.id AND r.conversation_id=$4))`,
 				attID, ident(ctx).WorkspaceID, ident(ctx).UserID, convID).Scan(&kind, &name, &storagePath); err != nil {

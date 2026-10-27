@@ -99,8 +99,11 @@ func (s *Server) agentCollectSources(ctx context.Context, convID uuid.UUID) (*ag
 	}
 	rows.Close()
 
-	rows, err = s.db.Query(ctx, `SELECT text_content FROM agent_attachment
-		WHERE conversation_id=$1 AND kind='text' AND coalesce(text_content,'') <> ''`, convID)
+	rows, err = s.db.Query(ctx, `SELECT a.text_content FROM agent_attachment a JOIN agent_conversation c ON c.id=$1
+		WHERE a.kind IN ('text','document') AND a.parse_status='ready' AND coalesce(a.text_content,'') <> ''
+		AND a.workspace_id=c.workspace_id AND a.user_id=c.user_id
+		AND (a.conversation_id=c.id OR EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=a.id AND r.conversation_id=c.id))`,
+		convID)
 	if err != nil {
 		return nil, err
 	}

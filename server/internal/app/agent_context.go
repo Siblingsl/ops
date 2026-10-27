@@ -22,15 +22,16 @@ const (
 )
 
 type agentRawMessage struct {
-	Seq         int
-	Role        string
-	Content     string
-	ToolCalls   []byte
-	ToolCallID  string
-	ToolName    string
-	Attachments []uuid.UUID
-	RunID       *uuid.UUID
-	ContextRefs []agentResolvedContext
+	Seq             int
+	Role            string
+	Content         string
+	ToolCalls       []byte
+	ToolCallID      string
+	ToolName        string
+	Attachments     []uuid.UUID
+	RunID           *uuid.UUID
+	ContextRefs     []agentResolvedContext
+	AttachmentChars int
 }
 
 func nullableRunFilter(st *agentRunState) any {
@@ -42,6 +43,7 @@ func nullableRunFilter(st *agentRunState) any {
 
 // agentBuildMessages 按第 6.2 节的顺序组装发送给模型的消息列表。
 func (s *Server) agentBuildMessages(ctx context.Context, st *agentRunState, id *identity) ([]ai.Message, error) {
+	st.documentLoads = make(map[uuid.UUID]int)
 	out := []ai.Message{}
 	out = append(out, ai.Message{Role: "system", Content: agentSystemRules})
 	mode := agentEffectiveMode(st.Mode, id.Role)
@@ -95,6 +97,9 @@ func (s *Server) agentBuildMessages(ctx context.Context, st *agentRunState, id *
 	if err != nil {
 		return nil, err
 	}
+	if err := s.agentRecordDocumentLoads(ctx, st); err != nil {
+		return nil, err
+	}
 	return append(out, window...), nil
 }
 
@@ -105,9 +110,12 @@ func (s *Server) agentMessageWindow(ctx context.Context, st *agentRunState, id *
 	if len(budgets) > 0 {
 		budget = budgets[0]
 	}
-	rows, err := s.db.Query(ctx, `SELECT seq, role, content, tool_calls, tool_call_id, tool_name, attachment_ids, run_id, context_refs
+	rows, err := s.db.Query(ctx, `SELECT seq, role, content, tool_calls, tool_call_id, tool_name, attachment_ids, run_id, context_refs,
+		coalesce((SELECT sum(least(char_length(coalesce(a.text_content,'')),20000)) FROM agent_attachment a
+			WHERE a.id=ANY(agent_message.attachment_ids) AND a.parse_status='ready'
+			AND a.workspace_id=$3 AND a.user_id=$4),0)::integer
 		FROM agent_message WHERE conversation_id=$1 AND ($2::uuid IS NULL OR run_id=$2) ORDER BY seq ASC`,
-		st.ConversationID, nullableRunFilter(st))
+		st.ConversationID, nullableRunFilter(st), st.WorkspaceID, st.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +125,7 @@ func (s *Server) agentMessageWindow(ctx context.Context, st *agentRunState, id *
 		var m agentRawMessage
 		var runID *uuid.UUID
 		var refsRaw []byte
-		if err := rows.Scan(&m.Seq, &m.Role, &m.Content, &m.ToolCalls, &m.ToolCallID, &m.ToolName, &m.Attachments, &runID, &refsRaw); err != nil {
+		if err := rows.Scan(&m.Seq, &m.Role, &m.Content, &m.ToolCalls, &m.ToolCallID, &m.ToolName, &m.Attachments, &runID, &refsRaw, &m.AttachmentChars); err != nil {
 			return nil, err
 		}
 		m.RunID = runID
@@ -162,8 +170,8 @@ func (s *Server) agentMessageWindow(ctx context.Context, st *agentRunState, id *
 		}
 		if need > budget {
 			for _, m := range groups[i] {
-				if m.RunID != nil && *m.RunID == st.RunID && len(m.ContextRefs) > 0 {
-					return nil, apiErr(422, "context_budget_exceeded", "本轮显式引用与对话内容超过上下文容量，请减少引用或整理对话")
+				if m.RunID != nil && *m.RunID == st.RunID && (len(m.ContextRefs) > 0 || len(m.Attachments) > 0) {
+					return nil, apiErr(422, "context_budget_exceeded", "本轮显式资料与对话内容超过上下文容量，请减少附件/引用或整理对话")
 				}
 			}
 			break
@@ -195,7 +203,7 @@ func agentMessageCost(m agentRawMessage) int {
 	if m.Role == "tool" {
 		return runeLen(truncate(m.Content, agentProjectionChars))
 	}
-	cost := runeLen(m.Content)
+	cost := runeLen(m.Content) + m.AttachmentChars
 	for _, ref := range m.ContextRefs {
 		cost += runeLen(ref.Content)
 	}
@@ -344,6 +352,10 @@ func (s *Server) agentAttachToMessage(ctx context.Context, st *agentRunState, ms
 			return err
 		}
 		if a == nil {
+			if own {
+				return apiErr(422, "agent_attachment_invalid", "本轮附件已失效，请重新上传")
+			}
+			texts = append(texts, "[历史附件已失效，不提供内容]")
 			continue
 		}
 		switch a.Kind {
@@ -355,19 +367,42 @@ func (s *Server) agentAttachToMessage(ctx context.Context, st *agentRunState, ms
 				}
 			}
 			texts = append(texts, "[图片 "+a.ID.String()+"，已在先前发送]")
-		case "text":
+		case "text", "document":
 			// 第 6.2 节第 5 项：单个附件最多 20000 字，超出截断并注明。
 			content := a.TextContent
 			if runeLen(content) > agentAttachmentChars {
 				content = truncate(content, agentAttachmentChars) + "\n（文本附件过长，已截断；全文仍可用于来源校验与工具输入）"
 			}
 			texts = append(texts, "文本附件 "+a.Name+"：\n"+content)
+			if a.Kind == "document" && st.documentLoads != nil {
+				st.documentLoads[a.ID] = runeLen(content)
+			}
 		}
 	}
 	if len(texts) > 0 {
 		msg.Content += "\n\n" + agentDataBlock("附件", strings.Join(texts, "\n\n"))
 	}
 	return nil
+}
+
+func (s *Server) agentRecordDocumentLoads(ctx context.Context, st *agentRunState) error {
+	if len(st.documentLoads) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(st.documentLoads))
+	chars := make([]int, 0, len(st.documentLoads))
+	for id, count := range st.documentLoads {
+		ids = append(ids, id)
+		chars = append(chars, count)
+	}
+	_, err := s.db.Exec(ctx, `INSERT INTO agent_attachment_load(run_id,attachment_id,chars)
+		SELECT r.id,a.id,input.chars FROM unnest($2::uuid[],$3::integer[]) input(id,chars)
+		JOIN agent_run r ON r.id=$1 JOIN agent_attachment a ON a.id=input.id
+		WHERE r.workspace_id=$4 AND r.user_id=$5 AND a.workspace_id=r.workspace_id AND a.user_id=r.user_id
+		AND a.kind='document' AND a.parse_status='ready'
+		ON CONFLICT(run_id,attachment_id) DO UPDATE SET chars=greatest(agent_attachment_load.chars,excluded.chars)`,
+		st.RunID, ids, chars, st.WorkspaceID, st.UserID)
+	return err
 }
 
 // agentAttachmentRow 是上下文组装需要的附件字段。
@@ -384,7 +419,7 @@ type agentAttachmentRow struct {
 func (s *Server) agentAttachmentOf(ctx context.Context, id, conversationID uuid.UUID) (*agentAttachmentRow, error) {
 	var a agentAttachmentRow
 	err := s.db.QueryRow(ctx, `SELECT id, kind, name, mime, storage_path, coalesce(text_content,'')
-		FROM agent_attachment WHERE id=$1 AND workspace_id=$2 AND user_id=$3
+		FROM agent_attachment WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND parse_status='ready'
 		AND EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=agent_attachment.id AND r.conversation_id=$4)`,
 		id, ident(ctx).WorkspaceID, ident(ctx).UserID, conversationID).
 		Scan(&a.ID, &a.Kind, &a.Name, &a.Mime, &a.StoragePath, &a.TextContent)
@@ -393,6 +428,12 @@ func (s *Server) agentAttachmentOf(ctx context.Context, id, conversationID uuid.
 			return nil, nil
 		}
 		return nil, err
+	}
+	if a.Kind == "document" && agentContainsSecret(a.TextContent, s.agentSecretValues(ctx, ident(ctx).WorkspaceID)) {
+		if err := s.agentQuarantineDocument(ctx, a.ID); err != nil {
+			return nil, err
+		}
+		return nil, apiErr(422, "agent_attachment_parse_failed", "文档疑似含敏感凭据，已隔离，请删除并重新上传已清理的文件")
 	}
 	return &a, nil
 }

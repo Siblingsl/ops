@@ -385,7 +385,8 @@ func TestAG03BootstrapShape(t *testing.T) {
 		t.Fatal("默认模型应通过工具调用自检")
 	}
 	want := agentLimits{MaxRounds: 12, MaxReads: 30, MaxGenerates: 3, MaxCards: 5, RunSeconds: 300,
-		MaxContinuations: 10, MessageChars: 8000, AttachmentsPerMessage: 6, ImageBytes: 20971520, TextBytes: 1048576}
+		MaxContinuations: 10, MessageChars: 8000, AttachmentsPerMessage: 6, ImageBytes: 20971520, TextBytes: 1048576,
+		DocumentBytes: 20971520, DocumentPages: 100, DocumentChars: 20000, CSVRows: 10000, CSVColumns: 100, DocumentParseSeconds: 30, DocumentParseMemoryMB: 256}
 	if b.Limits != want {
 		t.Fatalf("限额错误：%+v", b.Limits)
 	}

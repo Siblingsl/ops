@@ -10,7 +10,7 @@ import { toast } from 'sonner'
 import { AIFeedback } from '@/components/refs'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Button, cn, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
-import { ApiError, del, errorMessage, get, patch, post, rawRequest, stream } from '@/lib/api'
+import { ApiError, del, errorMessage, get, patch, post, stream, uploadFormData } from '@/lib/api'
 import { assetUrl } from '@/lib/api-base'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useAccounts, useCurrentAccount, useMe } from '@/lib/session'
@@ -30,13 +30,16 @@ import { ContextPickerDialog, SkillPickerDialog, type AgentContextSelection, typ
 import { AgentPlanCard, AgentQuestionCard } from '@/pages/agent/PlansQuestions'
 import { GoalPanel } from '@/pages/agent/GoalPanel'
 import { RoutinePanel } from '@/pages/agent/RoutinePanel'
+import { AttachmentReceipt } from '@/pages/agent/AttachmentReceipt'
 
 const pageSize = 30
 
 type DraftAttachment = {
   clientID: string
   file: File
-  status: 'uploading' | 'ready' | 'failed'
+  status: 'waiting' | 'uploading' | 'processing' | 'ready' | 'failed'
+  progress?: number
+  retryable?: boolean
   attachment?: AgentAttachment
   error?: string
 }
@@ -362,7 +365,7 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
         {message.attachments?.length > 0 && <div className="mb-2 flex flex-wrap gap-2">
           {message.attachments.map((attachment) => attachment.kind === 'image'
             ? <a key={attachment.id} href={attachmentVariantURL(attachment.url, 'original')} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg"><img src={attachmentVariantURL(attachment.url, 'thumb')} alt={attachment.name} className="size-24 object-cover" /></a>
-            : <span key={attachment.id} className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs ${user ? 'bg-white/15' : 'bg-mist-100 text-mist-600'}`}><FileText className="size-3.5" />{attachment.name}</span>)}
+            : <div key={attachment.id} className={`rounded-lg px-2 py-1 text-xs ${user ? 'bg-white/15' : 'bg-mist-100 text-mist-600'}`}><span className="inline-flex items-center gap-1"><FileText className="size-3.5" />{attachment.url ? <a href={assetUrl(attachment.url)} download className="underline">{attachment.name}</a> : attachment.name}</span><AttachmentReceipt attachment={attachment} sent /></div>)}
         </div>}
         {user && !canSeeImages && message.attachments?.some((attachment) => attachment.kind === 'image') && <Notice tone="gamboge" className="mb-2">当前模型不能看图，图片只能用于保存或数据截图识别。</Notice>}
         {user && !!message.context_refs?.length && <div className="mb-2 flex flex-wrap gap-1.5">
@@ -570,6 +573,12 @@ export default function Agent() {
   const uploadingRef = useRef(false)
   const uploadGeneration = useRef(0)
   const cancelledUploads = useRef(new Set<string>())
+  const uploadControllers = useRef(new Map<string, AbortController>())
+  useEffect(() => () => {
+    uploadGeneration.current++
+    for (const controller of uploadControllers.current.values()) controller.abort()
+    uploadControllers.current.clear()
+  }, [])
   const messageRequest = useRef<{ key: string; id: string } | null>(null)
   const inputRequest = useRef<{ key: string; id: string } | null>(null)
   const resumeInputRequest = useRef<string | null>(null)
@@ -737,6 +746,7 @@ export default function Agent() {
     uploadGeneration.current++
     setText('')
     for (const item of files) {
+      uploadControllers.current.get(item.clientID)?.abort()
       if (item.attachment) void del(`/agent/attachments/${item.attachment.id}`).catch(() => undefined)
       else cancelledUploads.current.add(item.clientID)
     }
@@ -1399,43 +1409,52 @@ export default function Agent() {
     const filesToAdd = Array.from(incoming)
     if (!filesToAdd.length) return
     const maxFiles = bootstrapData?.limits.attachments_per_message ?? 6
-    const available = Math.max(0, maxFiles - readyAttachmentIDs.length)
+    const available = Math.max(0, maxFiles - files.length - restoredAttachments.length)
     if (filesToAdd.length > available) toast.error(`一条消息最多添加 ${maxFiles} 个附件`)
     const filesToAccept = filesToAdd.slice(0, available)
     const queue = filesToAccept.map((file): DraftAttachment => {
       const image = /^image\/(jpeg|png|webp|gif)$/i.test(file.type)
       const textFile = /\.(txt|md)$/i.test(file.name)
-      const max = image ? (bootstrapData?.limits.image_bytes ?? 20 * 1024 * 1024) : (bootstrapData?.limits.text_bytes ?? 1024 * 1024)
-      const error = !image && !textFile ? '仅支持 JPEG、PNG、WebP、GIF 图片和 txt、md 文本' : file.size > max ? '文件超过大小限制' : undefined
-      return { clientID: crypto.randomUUID(), file, status: error ? 'failed' : 'uploading', error }
+      const documentFile = !!bootstrapData?.features.document_parse && /\.(pdf|docx|csv)$/i.test(file.name)
+      const max = image || documentFile ? (bootstrapData?.limits.document_bytes ?? 20 * 1024 * 1024) : (bootstrapData?.limits.text_bytes ?? 1024 * 1024)
+      const error = !image && !textFile && !documentFile ? '文件类型暂不支持，请选择允许的图片、文本或文档' : file.size > max ? '文件超过大小限制' : undefined
+      return { clientID: crypto.randomUUID(), file, status: error ? 'failed' : 'waiting', error, retryable: !error }
     })
     setFiles((old) => [...old, ...queue])
-    for (const item of queue) if (item.status === 'uploading') await uploadFile(item)
+    for (const item of queue) if (item.status === 'waiting') await uploadFile(item)
   }
 
   const uploadFile = async (item: DraftAttachment) => {
     if (uploadingRef.current) return
+    if (cancelledUploads.current.delete(item.clientID)) return
     const generation = uploadGeneration.current
     uploadingRef.current = true
     setUploading(true)
+    const controller = new AbortController()
+    uploadControllers.current.set(item.clientID, controller)
     setFiles((old) => old.map((file) => file.clientID === item.clientID ? { ...file, status: 'uploading', error: undefined } : file))
     try {
       const form = new FormData()
       form.append('file', item.file)
+      form.append('request_id', item.clientID)
       if (conversationId) form.append('conversation_id', conversationId)
-      const response = await rawRequest('POST', '/agent/attachments', form)
+      const response = await uploadFormData('/agent/attachments', form, (loaded, total, complete) => {
+        setFiles((old) => old.map((file) => file.clientID === item.clientID ? { ...file, status: complete ? 'processing' : 'uploading', progress: total ? Math.round(loaded / total * 100) : undefined } : file))
+      }, controller.signal)
       const attachment = await response.json() as AgentAttachment
       if (generation !== uploadGeneration.current || cancelledUploads.current.delete(item.clientID)) {
         await del(`/agent/attachments/${attachment.id}`).catch(() => undefined)
         return
       }
-      setFiles((old) => old.map((file) => file.clientID === item.clientID ? { ...file, status: 'ready', attachment } : file))
+      const quarantined = attachment.parse_status === 'quarantined'
+      setFiles((old) => old.map((file) => file.clientID === item.clientID ? { ...file, status: quarantined ? 'failed' : 'ready', attachment, retryable: !quarantined, error: quarantined ? '疑似含敏感凭据，已隔离，请移除并重新上传已清理文件' : undefined } : file))
     } catch (error) {
       if (generation === uploadGeneration.current && !cancelledUploads.current.delete(item.clientID)) {
-        setFiles((old) => old.map((file) => file.clientID === item.clientID ? { ...file, status: 'failed', error: errorMessage(error) } : file))
+        setFiles((old) => old.map((file) => file.clientID === item.clientID ? { ...file, status: 'failed', error: errorMessage(error), retryable: true } : file))
       }
     } finally {
       uploadingRef.current = false
+      uploadControllers.current.delete(item.clientID)
       setUploading(false)
     }
   }
@@ -1444,7 +1463,8 @@ export default function Agent() {
 
   const clearDraftAttachments = () => {
     for (const item of files) {
-      if (item.status === 'uploading') cancelledUploads.current.add(item.clientID)
+      if (item.status !== 'ready' && item.status !== 'failed') cancelledUploads.current.add(item.clientID)
+      uploadControllers.current.get(item.clientID)?.abort()
       if (item.attachment) void del(`/agent/attachments/${item.attachment.id}`).catch(() => undefined)
     }
     setFiles([])
@@ -1452,7 +1472,8 @@ export default function Agent() {
   }
 
   const removeFile = async (item: DraftAttachment) => {
-    if (item.status === 'uploading') cancelledUploads.current.add(item.clientID)
+    if (item.status !== 'ready' && item.status !== 'failed') cancelledUploads.current.add(item.clientID)
+    uploadControllers.current.get(item.clientID)?.abort()
     setFiles((old) => old.filter((file) => file.clientID !== item.clientID))
     if (item.attachment) await del(`/agent/attachments/${item.attachment.id}`).catch(() => undefined)
   }
@@ -1611,19 +1632,21 @@ export default function Agent() {
               <div className="flex flex-wrap gap-2">
               {files.map((file) => <div key={file.clientID} aria-label={`${file.file.name} ${file.status}`} className={`flex items-center gap-2 rounded-lg border p-1.5 text-xs ${file.status === 'failed' ? 'border-danger/30 bg-danger/5 text-danger' : 'border-mist-200 bg-mist-50 text-mist-600'}`}>
                 {file.attachment?.kind === 'image' ? <img src={attachmentVariantURL(file.attachment.url, 'thumb')} alt={file.file.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
-                <span className="max-w-40 truncate">{file.file.name}</span>
-                {file.status === 'uploading' && <span role="status">上传中</span>}
+                <div><span className="block max-w-52 truncate">{file.file.name}</span>{file.attachment && file.status === 'ready' && <AttachmentReceipt attachment={file.attachment} />}{file.status === 'failed' && <p className="mt-1 max-w-72 whitespace-normal">{file.error}</p>}</div>
+                {file.status === 'waiting' && <span role="status">等待上传</span>}
+                {file.status === 'uploading' && <span role="status">上传中{file.progress === undefined ? '' : ' ' + file.progress + '%'}</span>}
+                {file.status === 'processing' && <span role="status">处理中</span>}
                 {file.status === 'ready' && <span>已就绪</span>}
-                {file.status === 'failed' && <><span title={file.error}>上传失败</span><Button size="sm" variant="ghost" icon={<RotateCcw className="size-3" />} onClick={() => retryFile(file)}>重试</Button></>}
+                {file.status === 'failed' && <><span>上传失败</span>{file.retryable && <Button size="sm" variant="ghost" icon={<RotateCcw className="size-3" />} onClick={() => retryFile(file)}>重试</Button>}</>}
                 <IconButton label={`移除 ${file.file.name}`} className="size-6" onClick={() => void removeFile(file)}><X className="size-3" /></IconButton>
               </div>)}
               {restoredAttachments.map((attachment) => <div key={attachment.id} className="flex items-center gap-2 rounded-lg border border-mist-200 bg-mist-50 p-1.5 text-xs text-mist-600">
                 {attachment.kind === 'image' ? <img src={attachmentVariantURL(attachment.url, 'thumb')} alt={attachment.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
-                <span className="max-w-40 truncate">{attachment.name}</span><span>从待复核输入恢复</span>
+                <div><span className="block max-w-40 truncate">{attachment.name}</span><AttachmentReceipt attachment={attachment} /></div><span>从待复核输入恢复</span>
                 <IconButton label={`移除 ${attachment.name}`} className="size-6" onClick={() => setRestoredAttachments((old) => old.filter((item) => item.id !== attachment.id))}><X className="size-3" /></IconButton>
               </div>)}
               </div>
-              {failedFiles.length > 0 && <p className="mt-1 text-xs text-danger" role="alert">有 {failedFiles.length} 个附件未成功上传，请重试或移除后再发送。</p>}
+              {failedFiles.length > 0 && <p className="mt-1 text-xs text-danger" role="alert">有 {failedFiles.length} 个附件未就绪，请处理失败项或移除后再发送。</p>}
             </div>}
             {contextRefs.length > 0 && <div className="mx-auto mb-2 flex max-w-3xl flex-wrap gap-2">
               {contextRefs.map((ref) => <div key={`${ref.type}:${ref.id}`} className="flex items-center gap-2 rounded-lg border border-ink-200 bg-ink-50 px-2 py-1.5 text-xs text-ink-700">
@@ -1637,13 +1660,14 @@ export default function Agent() {
                 <IconButton label={`移除技能请求 ${skill.name}`} className="size-6" onClick={() => setSkillRequests((old) => old.filter((item) => item.skill_id !== skill.skill_id || item.work_id !== skill.work_id))}><X className="size-3" /></IconButton>
               </div>)}
             </div>}
-            <input ref={fileRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,.txt,.md" className="hidden" onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = '' }} />
+            {bootstrapData.features.document_parse && <p className="mx-auto mb-1 max-w-3xl text-xs text-mist-500">PDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。</p>}
+            <input ref={fileRef} type="file" multiple accept={'image/jpeg,image/png,image/webp,image/gif,.txt,.md' + (bootstrapData.features.document_parse ? ',.pdf,.docx,.csv' : '')} className="hidden" onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = '' }} />
             {desktopPresentation ? <>
               <div className={`desktop-agent-compose ${workbenchUI ? 'desktop-agent-workbench-compose' : ''}`}>
                 <Textarea ref={inputRef} rows={workbenchUI ? 3 : 1} aria-label={workbenchUI ? '发送消息' : undefined} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, workbenchUI ? 176 : 192)}px` }} onKeyDown={onInputKeyDown}
                   placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '说说你想写什么，或继续调整上面的方向…'} className="desktop-agent-compose-input" />
                 <div className="desktop-agent-compose-toolbar">
-                  <IconButton label="添加附件" disabled={!canWrite || busy && !runInputsEnabled || uploading || readyAttachmentIDs.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()}><Paperclip className="size-4" /></IconButton>
+                  <IconButton label="添加附件" disabled={!canWrite || busy && !runInputsEnabled || uploading || files.length + restoredAttachments.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()}><Paperclip className="size-4" /></IconButton>
                   {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy && !runInputsEnabled || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)}><AtSign className="size-4" /></IconButton>}
                   {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy && !runInputsEnabled || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)}><Sparkles className="size-4" /></IconButton>}
                   {goalsEnabled && conversationId && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel}><Bot className="size-4" /></IconButton>}
@@ -1664,7 +1688,7 @@ export default function Agent() {
             </> : <>
               {bootstrapData.features.plans && <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 text-xs text-mist-500"><AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} /><span>{selectedMode === 'execute' ? '写入仍需逐张卡片确认' : '只读取与形成建议'}</span></div>}
               <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-mist-200 bg-white p-2 shadow-card focus-within:border-ink-300">
-                <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()} className="mb-0.5"><Paperclip className="size-4" /></IconButton>
+                <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length + restoredAttachments.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()} className="mb-0.5"><Paperclip className="size-4" /></IconButton>
                 {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)} className="mb-0.5"><AtSign className="size-4" /></IconButton>}
                 {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)} className="mb-0.5"><Sparkles className="size-4" /></IconButton>}
                 {goalsEnabled && conversationId && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel} className="mb-0.5"><Bot className="size-4" /></IconButton>}

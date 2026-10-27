@@ -59,6 +59,13 @@ type agentLimits struct {
 	AttachmentsPerMessage int   `json:"attachments_per_message"`
 	ImageBytes            int64 `json:"image_bytes"`
 	TextBytes             int64 `json:"text_bytes"`
+	DocumentBytes         int64 `json:"document_bytes"`
+	DocumentPages         int   `json:"document_pages"`
+	DocumentChars         int   `json:"document_chars"`
+	CSVRows               int   `json:"csv_rows"`
+	CSVColumns            int   `json:"csv_columns"`
+	DocumentParseSeconds  int   `json:"document_parse_seconds"`
+	DocumentParseMemoryMB int   `json:"document_parse_memory_mb"`
 }
 
 func agentLimitsPayload() agentLimits {
@@ -73,5 +80,12 @@ func agentLimitsPayload() agentLimits {
 		AttachmentsPerMessage: agentAttachmentsPerMessage,
 		ImageBytes:            agentImageBytes,
 		TextBytes:             agentTextBytes,
+		DocumentBytes:         agentImageBytes,
+		DocumentPages:         100,
+		DocumentChars:         agentAttachmentChars,
+		CSVRows:               10000,
+		CSVColumns:            100,
+		DocumentParseSeconds:  30,
+		DocumentParseMemoryMB: 256,
 	}
 }
