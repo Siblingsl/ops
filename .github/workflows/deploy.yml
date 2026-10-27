@@ -32,10 +32,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CI_SHA: ${{ github.sha }}
-        timeout-minutes: 35
+        timeout-minutes: 50
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 120); do
+          for attempt in $(seq 1 180); do
             state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${CI_SHA}&per_page=100" \
               --jq '.workflow_runs | map(select(.head_sha == env.CI_SHA and .name == "CI")) | sort_by(.updated_at) | last | if . == null then "missing" else [.status, (.conclusion // "")] | @tsv end')"
             case "$state" in
