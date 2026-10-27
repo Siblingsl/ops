@@ -43,7 +43,10 @@ func agentRunToolAllowed(st *agentRunState, tool *AgentTool, id *identity) bool 
 	if !agentToolVisible(tool, id) {
 		return false
 	}
-	if st.ExecutionOrigin != "" && st.ExecutionOrigin != "interactive" {
+	if st.ExecutionOrigin != "" && st.ExecutionOrigin != "interactive" && st.ExecutionOrigin != "goal" {
+		return false
+	}
+	if st.ExecutionOrigin == "goal" && st.GoalID == nil {
 		return false
 	}
 	mode := agentEffectiveMode(st.Mode, id.Role)

@@ -78,7 +78,7 @@ func agentValidatePlanSteps(steps []agentPlanStepDefinition) error {
 
 func (s *Server) agentMetaPresentPlan(ctx context.Context, st *agentRunState, call ai.ToolCall,
 	args map[string]any) ([]byte, string, error) {
-	if agentEffectiveMode(st.Mode, ident(ctx).Role) != "plan" || st.ExecutionOrigin != "interactive" {
+	if agentEffectiveMode(st.Mode, ident(ctx).Role) != "plan" || (st.ExecutionOrigin != "interactive" && st.ExecutionOrigin != "goal") {
 		return nil, "", apiErr(403, "forbidden", "当前模式或运行来源不能创建计划")
 	}
 	summary, _ := args["summary"].(string)

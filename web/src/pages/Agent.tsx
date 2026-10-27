@@ -28,6 +28,7 @@ import { ArtifactPanel } from '@/pages/agent/ArtifactPanel'
 import { browserStore, clearPartial, type PartialStream, readPartial, savePartial } from '@/pages/agent/partial-stream'
 import { ContextPickerDialog, SkillPickerDialog, type AgentContextSelection, type AgentSkillSelection } from '@/pages/agent/ContextPickers'
 import { AgentPlanCard, AgentQuestionCard } from '@/pages/agent/PlansQuestions'
+import { GoalPanel } from '@/pages/agent/GoalPanel'
 
 const pageSize = 30
 
@@ -66,13 +67,14 @@ function messageTime(value: string) {
 }
 
 function AgentConversationList({
-  currentID, search, setSearch, onSelect, onNew, onClose, sidebarTitle, desktopPresentation = false, organizeEnabled = false,
+  currentID, search, setSearch, onSelect, onNew, onClose, sidebarTitle, desktopPresentation = false, organizeEnabled = false, goalsEnabled = false,
 }: {
   currentID?: string; search: string; setSearch: (v: string) => void
   onSelect: (id: string, matchedSeq?: number) => void; onNew: () => void; onClose?: () => void
   sidebarTitle?: string
   desktopPresentation?: boolean
   organizeEnabled?: boolean
+  goalsEnabled?: boolean
 }) {
   const qc = useQueryClient()
   const accounts = useAccounts()
@@ -95,14 +97,15 @@ function AgentConversationList({
   })
   const queryParams = new URLSearchParams({ limit: String(pageSize) })
   if (debouncedSearch) queryParams.set('q', debouncedSearch)
-  if (organizeEnabled) {
-    if (archived) queryParams.set('archived', 'true')
+  if (organizeEnabled || goalsEnabled) {
+    if (stateFilter === 'task' && goalsEnabled) queryParams.set('archived', 'all')
+    else if (organizeEnabled && archived) queryParams.set('archived', 'true')
     if (accountID) queryParams.set('account_id', accountID)
     if (groupID) queryParams.set('group_id', groupID)
     if (stateFilter) queryParams.set('state', stateFilter)
   }
   const list = useInfiniteQuery({
-    queryKey: ['agent-conversations', debouncedSearch, archived, accountID, groupID, stateFilter, organizeEnabled],
+    queryKey: ['agent-conversations', debouncedSearch, archived, accountID, groupID, stateFilter, organizeEnabled, goalsEnabled],
     queryFn: ({ pageParam }) => get<AgentConversationPage>(`/agent/conversations?${queryParams.toString()}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`),
     initialPageParam: '' as string,
     getNextPageParam: (page) => page.next_cursor ?? undefined,
@@ -173,11 +176,11 @@ function AgentConversationList({
         <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={desktopPresentation ? '搜索最近的对话' : '搜索对话'} className={desktopPresentation ? '' : 'pl-9'} aria-label="搜索对话" />
       </label>
       {organizeEnabled && <div className="mx-3 mb-3 grid grid-cols-2 gap-1.5">
-        <Select aria-label="筛选归档状态" value={archived ? 'archived' : 'active'} onChange={(event) => setArchived(event.target.value === 'archived')}>
+        {stateFilter !== 'task' && <Select aria-label="筛选归档状态" value={archived ? 'archived' : 'active'} onChange={(event) => setArchived(event.target.value === 'archived')}>
           <option value="active">当前对话</option><option value="archived">已归档</option>
-        </Select>
+        </Select>}
         <Select aria-label="筛选对话状态" value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}>
-          <option value="">全部状态</option><option value="active">进行中</option><option value="needs_action">待我处理</option><option value="unread">未读</option>
+          <option value="">全部状态</option><option value="active">进行中</option><option value="needs_action">待我处理</option><option value="unread">未读</option>{goalsEnabled && <option value="task">我的任务</option>}
         </Select>
         <Select aria-label="按账号筛选" value={accountID} onChange={(event) => setAccountID(event.target.value)}>
           <option value="">全部账号</option>{(accounts.data ?? []).map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
@@ -188,6 +191,8 @@ function AgentConversationList({
         <Button className="col-span-2" variant="ghost" size="sm" icon={<FolderPlus className="size-4" />} disabled={(namedGroups.length >= 20)} onClick={() => setGroupDialog({ name: '' })}>{namedGroups.length >= 20 ? '分组已达 20 个上限' : '新建分组'}</Button>
         <Button className="col-span-2" variant="ghost" size="sm" onClick={() => setGroupManageOpen(true)}>管理分组（{namedGroups.length}）</Button>
       </div>}
+      {!organizeEnabled && goalsEnabled && <label className="mx-3 mb-3 block"><Select aria-label="筛选对话状态" value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}><option value="">全部对话</option><option value="task">我的任务（含已归档）</option></Select></label>}
+      {goalsEnabled && stateFilter === 'task' && <p className="mx-4 -mt-2 mb-2 text-[11px] text-mist-400">跨会话显示任务，包含已归档对话。</p>}
       {organizeEnabled && groupQuery.isError && <p role="alert" className="mx-4 mb-2 text-xs text-danger">分组加载失败。<button type="button" className="ml-1 underline" onClick={() => void groupQuery.refetch()}>重试</button></p>}
       {list.isLoading ? <div className="px-4 py-3 text-sm text-mist-400">正在加载对话…</div> : list.isError ? (
         <div className="px-4 py-3 text-sm text-danger">{errorMessage(list.error)} <button type="button" className="ml-1 underline" onClick={() => void list.refetch()}>重试</button></div>
@@ -299,7 +304,7 @@ function ConversationRow({ item, groups, organizeEnabled, selected, onSelect, on
           <span className="truncate text-[13px] font-medium">{item.title || '新对话'}</span>
           {pending > 0 && <span className="rounded-full bg-gamboge-100 px-1.5 text-[10px] text-gamboge-800">{pending}</span>}
         </span>
-        <span className="mt-0.5 block truncate text-[11px] text-mist-400" title={desktopPresentation ? item.model || '尚未选择模型' : undefined}>{item.matched_message_snippet || (item.archived_at ? '已归档' : desktopPresentation ? pending > 0 ? `${pending} 张待确认卡片` : splitDate(item.last_message_at) : item.model || '尚未选择模型')}</span>
+        <span className="mt-0.5 block truncate text-[11px] text-mist-400" title={desktopPresentation ? item.model || '尚未选择模型' : undefined}>{item.matched_message_snippet || (item.goal ? `任务 · ${{ active: '进行中', paused: '已暂停', waiting_user: '等待处理', completed: '已完成', blocked: '已阻塞', budget_limited: '预算已用尽', cancelled: '已结束' }[item.goal.status] ?? item.goal.status}` : item.archived_at ? '已归档' : desktopPresentation ? pending > 0 ? `${pending} 张待确认卡片` : splitDate(item.last_message_at) : item.model || '尚未选择模型')}</span>
       </button>
       <div className="relative mr-1">
         <IconButton label="对话操作" className="size-7 opacity-0 group-hover:opacity-100 focus:opacity-100" onClick={() => setMenuOpen((value) => !value)}><MoreHorizontal className="size-4" /></IconButton>
@@ -426,12 +431,14 @@ function RunStatus({ activeRun, streamStage, toolName, connection, pendingAction
 
 function WorkbenchSidePanel({
   tab, setTab, close, conversation, activeRun, busy, pendingActions, actionCount, selectedAccountName, selectedModelName, attachmentCount,
-  contextRefs, skillRequests, latestSkillUsage, artifactsEnabled, actions, inputs, inputQueuePaused, onUpdateInput, onCancelInput, onRestoreInput, onResumeInputs, onQuoteArtifact,
+  contextRefs, skillRequests, latestSkillUsage, artifactsEnabled, goalsEnabled, compactEnabled, canManageGoals, models, goal, onCompact, actions, inputs, inputQueuePaused, onUpdateInput, onCancelInput, onRestoreInput, onResumeInputs, onQuoteArtifact,
 }: {
   tab: 'task' | 'context' | 'artifact'; setTab: (tab: 'task' | 'context' | 'artifact') => void; close: () => void
   conversation?: AgentConversation; activeRun?: AgentConversationDetail['active_run']; busy: boolean; pendingActions: number; actionCount: number
   selectedAccountName: string; selectedModelName: string; attachmentCount: number
-  contextRefs: AgentContextSelection[]; skillRequests: AgentSkillSelection[]; latestSkillUsage: AgentMessage['skill_usage']; artifactsEnabled: boolean; actions: AgentConversationDetail['actions']
+  contextRefs: AgentContextSelection[]; skillRequests: AgentSkillSelection[]; latestSkillUsage: AgentMessage['skill_usage']; artifactsEnabled: boolean
+  goalsEnabled: boolean; compactEnabled: boolean; canManageGoals: boolean; models: AgentBootstrap['models']; goal?: AgentConversationDetail['goal']; onCompact: () => Promise<unknown>
+  actions: AgentConversationDetail['actions']
   inputs: AgentInput[]; inputQueuePaused: boolean
   onUpdateInput: (input: AgentInput, text: string) => Promise<void>; onCancelInput: (input: AgentInput) => Promise<void>
   onRestoreInput: (input: AgentInput) => Promise<void>; onResumeInputs: () => Promise<void>
@@ -459,6 +466,7 @@ function WorkbenchSidePanel({
         <p className="desktop-agent-side-status" role="status">{busy && <LoaderCircle className="size-4 animate-spin" />}{taskStatus}</p>
         {activeRun && <p className="desktop-agent-side-detail">运行状态：{activeRun.status === 'queued' ? '排队中' : '执行中'}</p>}
         {conversation && <p className="desktop-agent-side-detail">本对话操作卡片：{actionCount} 项</p>}
+        <GoalPanel conversationID={conversation?.id} conversation={conversation} goal={goal} models={models} goalsEnabled={goalsEnabled} compactEnabled={compactEnabled} canManage={canManageGoals} busy={busy} onCompact={onCompact} />
         {pendingActions > 0 && <p className="desktop-agent-side-note">请在对应消息下逐张审阅操作卡片。</p>}
         {(inputs.some((input) => ['pending', 'needs_review'].includes(input.status)) || inputQueuePaused) && <section className="mt-4 space-y-2" aria-labelledby="workbench-inputs-heading">
           <div className="flex items-center justify-between gap-2"><h4 id="workbench-inputs-heading" className="text-xs font-semibold text-mist-700">补充与排队</h4>{inputQueuePaused && <Button type="button" size="sm" variant="outline" onClick={() => void onResumeInputs()}>恢复队列</Button>}</div>
@@ -517,6 +525,7 @@ export default function Agent() {
   const [workbenchListCollapsed, setWorkbenchListCollapsed] = useState(false)
   const [workbenchPanelOpen, setWorkbenchPanelOpen] = useState(false)
   const [workbenchPanelTab, setWorkbenchPanelTab] = useState<'task' | 'context' | 'artifact'>('task')
+  const [goalPanelOpen, setGoalPanelOpen] = useState(false)
   const [artifactsOpen, setArtifactsOpen] = useState(false)
   const [workbenchLayoutLoadedKey, setWorkbenchLayoutLoadedKey] = useState('')
   const [text, setText] = useState('')
@@ -588,6 +597,8 @@ export default function Agent() {
   const bootstrapData = bootstrap.data
   const workbenchUI = desktopPresentation && bootstrapData?.features?.workbench_ui === true
   const organizeEnabled = bootstrapData?.features?.conversation_organize === true
+  const goalsEnabled = bootstrapData?.features?.goals === true
+  const canManageGoals = !!bootstrapData && bootstrapData.role !== 'viewer' && bootstrapData.reason !== 'admin_override'
   const eventResumeEnabled = bootstrapData?.features?.event_resume === true
   useEffect(() => {
     const onManualUnread = (event: Event) => {
@@ -1230,6 +1241,15 @@ export default function Agent() {
   }
 
   const continueRun = () => { if (conversationId) void consumeRun(conversationId, `/agent/conversations/${conversationId}/continue`, {}) }
+  const compactRun = () => conversationId
+    ? consumeRun(conversationId, `/agent/conversations/${conversationId}/compact`, { request_id: crypto.randomUUID() })
+    : Promise.resolve(false)
+  const openGoalPanel = () => {
+    if (workbenchUI) {
+      setWorkbenchPanelTab('task')
+      setWorkbenchPanelOpen(true)
+    } else setGoalPanelOpen(true)
+  }
   const changeMode = async (mode: AgentMode) => {
     if (busy || bootstrapData?.read_only) return
     const previous = selectedMode
@@ -1486,7 +1506,7 @@ export default function Agent() {
     <>
       {sidebarSlot && !desktopPresentation && createPortal(
         <div className="absolute inset-0 flex min-h-0 flex-col">
-          <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle={conversation?.title || '对话'} organizeEnabled={organizeEnabled} />
+          <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle={conversation?.title || '对话'} organizeEnabled={organizeEnabled} goalsEnabled={goalsEnabled} />
         </div>,
         sidebarSlot,
       )}
@@ -1494,13 +1514,14 @@ export default function Agent() {
       {toolbarSlot && !desktopPresentation && createPortal(
         <>
           {bootstrapData.features.artifacts === true && conversation && <IconButton label="查看产物" onClick={() => setArtifactsOpen(true)}><FileText className="size-4" /></IconButton>}
+          {goalsEnabled && conversation && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel}><Bot className="size-4" /></IconButton>}
           <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>
         </>,
         toolbarSlot,
       )}
       <div className={`relative flex h-full min-h-0 overflow-hidden bg-[#f7f8f6] ${desktopPresentation ? 'desktop-agent-workspace' : ''} ${workbenchUI ? 'desktop-agent-workbench' : ''}`} data-list-collapsed={workbenchListCollapsed} data-panel-open={workbenchPanelOpen}>
       {desktopPresentation && <aside className="desktop-agent-list" aria-label="AI 对话列表" data-testid="desktop-agent-list">
-        <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle="AI 对话" desktopPresentation organizeEnabled={organizeEnabled} />
+        <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle="AI 对话" desktopPresentation organizeEnabled={organizeEnabled} goalsEnabled={goalsEnabled} />
       </aside>}
       <section className={`flex min-w-0 flex-1 flex-col ${workbenchUI ? 'desktop-agent-workbench-main' : ''}`}>
         <header className={`flex min-h-14 shrink-0 items-center gap-2 border-b border-mist-200 bg-white px-3 sm:px-5 ${desktopPresentation ? 'desktop-agent-chat-header' : 'lg:hidden'}`}>
@@ -1620,6 +1641,7 @@ export default function Agent() {
                   <IconButton label="添加附件" disabled={!canWrite || busy && !runInputsEnabled || uploading || readyAttachmentIDs.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()}><Paperclip className="size-4" /></IconButton>
                   {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy && !runInputsEnabled || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)}><AtSign className="size-4" /></IconButton>}
                   {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy && !runInputsEnabled || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)}><Sparkles className="size-4" /></IconButton>}
+                  {goalsEnabled && conversationId && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel}><Bot className="size-4" /></IconButton>}
                   {bootstrapData.features.plans && workbenchUI && <AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />}
                   <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择操作账号">{selectedAccountName} <ChevronDown /></button>
                   <span className="desktop-agent-compose-spacer" />
@@ -1639,6 +1661,7 @@ export default function Agent() {
                 <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()} className="mb-0.5"><Paperclip className="size-4" /></IconButton>
                 {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)} className="mb-0.5"><AtSign className="size-4" /></IconButton>}
                 {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)} className="mb-0.5"><Sparkles className="size-4" /></IconButton>}
+                {goalsEnabled && conversationId && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel} className="mb-0.5"><Bot className="size-4" /></IconButton>}
                 <Textarea ref={inputRef} rows={1} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px` }} onKeyDown={onInputKeyDown}
                   placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '发送消息…（Enter 发送，Shift+Enter 换行）'} className="max-h-48 min-h-10 resize-none border-0 bg-transparent px-2 py-2 shadow-none focus:border-transparent focus:ring-0 disabled:bg-transparent" />
                 {busy ? <Button variant="ghost" className="mb-0.5 shrink-0" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
@@ -1666,6 +1689,12 @@ export default function Agent() {
         skillRequests={skillRequests}
         latestSkillUsage={latestSkillUsage}
         artifactsEnabled={bootstrapData.features.artifacts === true}
+        goalsEnabled={goalsEnabled}
+        compactEnabled={eventResumeEnabled}
+        canManageGoals={canManageGoals}
+        models={bootstrapData.models}
+        goal={detail?.goal}
+        onCompact={compactRun}
         actions={actions}
         inputs={inputs}
         inputQueuePaused={inputQueuePaused}
@@ -1676,12 +1705,16 @@ export default function Agent() {
         onQuoteArtifact={quoteArtifact}
       />}
 
+      {!workbenchUI && <Dialog open={goalPanelOpen} onClose={() => setGoalPanelOpen(false)} title="任务目标与上下文整理" desc="目标推进仍受账号权限、运行预算和逐张操作卡片确认约束。" width="max-w-2xl">
+        <GoalPanel conversationID={conversation?.id} conversation={conversation} goal={detail?.goal} models={bootstrapData.models} goalsEnabled={goalsEnabled} compactEnabled={eventResumeEnabled} canManage={canManageGoals} busy={busy} onCompact={compactRun} />
+      </Dialog>}
+
       {bootstrapData.features.artifacts === true && !desktopPresentation && <Drawer open={artifactsOpen} onClose={() => setArtifactsOpen(false)} title="本对话产物" width="w-[min(92vw,920px)]">
         <ArtifactPanel conversationID={conversation?.id} onQuote={quoteArtifact} />
       </Drawer>}
 
       <Drawer open={mobileListOpen} onClose={() => setMobileListOpen(false)} title="对话" width="w-[min(88vw,360px)]">
-        <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} onClose={() => setMobileListOpen(false)} organizeEnabled={organizeEnabled} />
+        <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} onClose={() => setMobileListOpen(false)} organizeEnabled={organizeEnabled} goalsEnabled={goalsEnabled} />
       </Drawer>
       <Dialog open={localSearchOpen} onClose={() => setLocalSearchOpen(false)} title="查找当前对话" desc="搜索当前对话中所有已保存的用户与助手消息。">
         <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void searchSavedMessages() }}>

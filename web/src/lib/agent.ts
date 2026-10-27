@@ -59,10 +59,44 @@ export interface AgentConversation {
   force_unread?: boolean
 }
 
+export interface AgentGoalCriterion {
+  id: string
+  text: string
+  requires_confirmation: boolean
+  status: 'unverified' | 'verified' | 'needs_confirmation' | 'confirmed' | 'unverifiable' | string
+  evidence_refs: { kind: string; id: string }[]
+  confirmed_at?: string | null
+}
+
+export interface AgentGoal {
+  id: string
+  conversation_id: string
+  revision: number
+  objective: string
+  criteria: AgentGoalCriterion[]
+  constraints: string
+  account_id?: string | null
+  model_provider_id?: string | null
+  model: string
+  allow_background: boolean
+  status: 'active' | 'paused' | 'waiting_user' | 'completed' | 'blocked' | 'budget_limited' | 'cancelled' | string
+  run_budget: number
+  seconds_budget: number
+  token_budget?: number | null
+  used_runs: number
+  used_seconds: number
+  used_tokens: number
+  no_progress_runs: number
+  blocker?: string
+  created_at: string
+  updated_at: string
+}
+
 export type AgentConversationListItem = AgentConversation & {
   pending_actions: number
   has_active_run: boolean
   has_unread?: boolean
+  goal?: AgentGoal | null
   matched_message_id?: string
   matched_message_seq?: number
   matched_message_snippet?: string
@@ -233,6 +267,7 @@ export interface AgentActiveRun {
 
 export interface AgentConversationDetail {
   conversation: AgentConversation
+  goal?: AgentGoal | null
   usage: AgentConversationUsage
   messages: AgentMessage[]
   actions: AgentAction[]

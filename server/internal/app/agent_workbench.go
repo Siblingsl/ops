@@ -36,7 +36,11 @@ func agentFeaturesFromList(raw string) map[string]bool {
 }
 
 func agentWorkbenchFeatures() map[string]bool {
-	return agentFeaturesFromList(os.Getenv(agentWorkbenchFeatureEnv))
+	features := agentFeaturesFromList(os.Getenv(agentWorkbenchFeatureEnv))
+	if features["goals"] && (!features["event_resume"] || !features["run_control"] || !features["plans"]) {
+		features["goals"] = false
+	}
+	return features
 }
 
 func requireAgentFeature(name string) error {

@@ -169,6 +169,13 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/conversations/{id}/inputs/resume",
 		"PATCH /api/v1/agent/inputs/{id}",
 		"DELETE /api/v1/agent/inputs/{id}",
+		// DEV-AW09 本人任务目标管理与摘要整理，不属于模型业务工具。
+		"POST /api/v1/agent/conversations/{id}/goal",
+		"PATCH /api/v1/agent/conversations/{id}/goal",
+		"POST /api/v1/agent/goals/{id}/control",
+		"POST /api/v1/agent/goals/{id}/confirm-criterion",
+		"GET /api/v1/agent/conversations/{id}/compact-preview",
+		"POST /api/v1/agent/conversations/{id}/compact",
 		"GET /api/v1/auth/me",
 		"POST /api/v1/auth/renew",
 		"GET /api/v1/notifications/stream",
@@ -286,9 +293,9 @@ func TestAG04CatalogShape(t *testing.T) {
 			t.Errorf("条目 %s 缺少执行超时", tool.Name)
 		}
 	}
-	// 附录 A 共287条，加既有元工具及DEV-AW07/AW08编排元工具10条。
-	if len(agentCatalog()) != 297 {
-		t.Fatalf("目录条目数 %d，期望 297（附录 A 287 条 + 元工具 10 条）", len(agentCatalog()))
+	// 附录 A 共287条，加既有元工具及DEV-AW07/AW08/AW09编排元工具11条。
+	if len(agentCatalog()) != 298 {
+		t.Fatalf("目录条目数 %d，期望 298（附录 A 287 条 + 元工具 11 条）", len(agentCatalog()))
 	}
 	for _, d := range agentDomains {
 		if counts[d.Name] == 0 {

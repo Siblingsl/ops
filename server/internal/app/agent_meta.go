@@ -87,6 +87,8 @@ func (s *Server) agentMetaTool(ctx context.Context, st *agentRunState, t *AgentT
 		return nil
 	case "present_artifact":
 		payload, summary, err = s.agentMetaPresentArtifact(ctx, st, args)
+	case "report_goal_progress":
+		payload, summary, err = s.agentMetaReportGoalProgress(ctx, st, call, args)
 	default:
 		err = errAgentUnknownTool
 	}

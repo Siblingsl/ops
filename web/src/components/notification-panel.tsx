@@ -33,6 +33,11 @@ export default function NotificationPanel({
   hasNextPage,
   isFetchingNextPage,
   onLoadMore,
+  nativeSupported,
+  nativePermission,
+  nativeEnabled,
+  onEnableNative,
+  onDisableNative,
 }: {
   tab: 'noti' | 'jobs'
   onTabChange: (tab: 'noti' | 'jobs') => void
@@ -48,6 +53,11 @@ export default function NotificationPanel({
   hasNextPage: boolean
   isFetchingNextPage: boolean
   onLoadMore: () => void
+  nativeSupported: boolean
+  nativePermission: NotificationPermission | 'unsupported'
+  nativeEnabled: boolean
+  onEnableNative: () => void
+  onDisableNative: () => void
 }) {
   return (
     <div className="absolute right-0 top-[calc(100%+8px)] z-40 w-[360px] max-w-[92vw] animate-fade-in rounded-xl border border-mist-200 bg-white shadow-pop">
@@ -59,6 +69,9 @@ export default function NotificationPanel({
             <CheckCheck className="size-3.5" />全部标为已读
           </button>
         )}
+        {tab === 'noti' && nativeSupported && <button type="button" className="ml-2 cursor-pointer text-[11px] text-mist-500 hover:text-ink-700" onClick={nativeEnabled ? onDisableNative : onEnableNative}>
+          {nativeEnabled ? '关闭桌面提示' : nativePermission === 'denied' ? '系统通知已阻止' : '开启桌面提示'}
+        </button>}
       </div>
       <div className="scrollbar-thin max-h-[60vh] overflow-y-auto p-1.5">
         {tab === 'noti' ? (

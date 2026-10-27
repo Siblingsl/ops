@@ -470,7 +470,7 @@ func (s *Server) agentInsertArtifactTx(ctx context.Context, tx pgx.Tx, conversat
 }
 
 func (s *Server) agentMetaPresentArtifact(ctx context.Context, st *agentRunState, args map[string]any) ([]byte, string, error) {
-	if !agentWorkbenchFeatures()["artifacts"] || st.ExecutionOrigin != "interactive" || st.Trigger == "routine" {
+	if !agentWorkbenchFeatures()["artifacts"] || (st.ExecutionOrigin != "interactive" && st.ExecutionOrigin != "goal") || st.Trigger == "routine" {
 		return nil, "", apiErr(403, "forbidden", "当前运行不能创建对话产物")
 	}
 	title, _ := args["title"].(string)

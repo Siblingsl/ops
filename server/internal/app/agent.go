@@ -313,12 +313,13 @@ type agentConversation struct {
 
 type agentConversationListItem struct {
 	agentConversation
-	PendingActions        int        `json:"pending_actions"`
-	HasActiveRun          bool       `json:"has_active_run"`
-	HasUnread             bool       `json:"has_unread"`
-	MatchedMessageID      *uuid.UUID `json:"matched_message_id,omitempty"`
-	MatchedMessageSeq     *int64     `json:"matched_message_seq,omitempty"`
-	MatchedMessageSnippet string     `json:"matched_message_snippet,omitempty"`
+	PendingActions        int            `json:"pending_actions"`
+	HasActiveRun          bool           `json:"has_active_run"`
+	HasUnread             bool           `json:"has_unread"`
+	Goal                  *agentGoalView `json:"goal,omitempty"`
+	MatchedMessageID      *uuid.UUID     `json:"matched_message_id,omitempty"`
+	MatchedMessageSeq     *int64         `json:"matched_message_seq,omitempty"`
+	MatchedMessageSnippet string         `json:"matched_message_snippet,omitempty"`
 }
 
 const agentConversationCols = `c.id, c.title, c.title_source, c.pinned_at, c.model_provider_id, c.model,
@@ -439,6 +440,7 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 		where += fmt.Sprintf(` AND (c.title ILIKE '%%'||$%d||'%%' OR matched.id IS NOT NULL)`, n)
 	}
 	archiveFilter := strings.TrimSpace(r.URL.Query().Get("archived"))
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
 	switch archiveFilter {
 	case "", "false":
 	case "true":
@@ -447,8 +449,10 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 		}
 		where = strings.Replace(where, ` AND c.archived_at IS NULL`, ` AND c.archived_at IS NOT NULL`, 1)
 	case "all":
-		if err := requireAgentFeature("conversation_organize"); err != nil {
-			return err
+		if state != "task" || !agentWorkbenchFeatures()["goals"] {
+			if err := requireAgentFeature("conversation_organize"); err != nil {
+				return err
+			}
 		}
 		where = strings.Replace(where, ` AND c.archived_at IS NULL`, "", 1)
 	default:
@@ -480,9 +484,12 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 			where += fmt.Sprintf(` AND c.group_id=$%d`, len(args))
 		}
 	}
-	state := strings.TrimSpace(r.URL.Query().Get("state"))
 	if state != "" {
-		if err := requireAgentFeature("conversation_organize"); err != nil {
+		if state == "goal" || state == "task" {
+			if err := requireAgentFeature("goals"); err != nil {
+				return err
+			}
+		} else if err := requireAgentFeature("conversation_organize"); err != nil {
 			return err
 		}
 		switch state {
@@ -492,6 +499,13 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 			where += ` AND EXISTS (SELECT 1 FROM agent_action a WHERE a.conversation_id=c.id AND a.status IN ('pending','needs_input'))`
 		case "unread":
 			where += ` AND ` + unreadSQL
+		case "goal":
+			where += ` AND EXISTS (SELECT 1 FROM agent_goal g WHERE g.conversation_id=c.id
+				AND g.status NOT IN ('completed','cancelled'))`
+		case "task":
+			where += ` AND (EXISTS (SELECT 1 FROM agent_run r WHERE r.conversation_id=c.id AND r.status IN ('queued','running'))
+				OR EXISTS (SELECT 1 FROM agent_action a WHERE a.conversation_id=c.id AND a.status IN ('pending','needs_input'))
+				OR EXISTS (SELECT 1 FROM agent_goal g WHERE g.conversation_id=c.id AND g.status NOT IN ('completed','cancelled')))`
 		default:
 			return validation("对话状态筛选无效")
 		}
@@ -559,6 +573,19 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 	if hasMore {
 		v := encodeAgentCursor(&list[len(list)-1].agentConversation)
 		nextCursor = &v
+	}
+	if agentWorkbenchFeatures()["goals"] && len(list) > 0 {
+		conversationIDs := make([]uuid.UUID, 0, len(list))
+		for _, item := range list {
+			conversationIDs = append(conversationIDs, item.ID)
+		}
+		goals, err := s.getAgentGoalList(ctx, id.UserID, id.WorkspaceID, conversationIDs)
+		if err != nil {
+			return err
+		}
+		for i := range list {
+			list[i].Goal = goals[list[i].ID]
+		}
 	}
 	return ok(w, map[string]any{"items": list, "next_cursor": nextCursor})
 }
@@ -1166,6 +1193,13 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return err
 	}
+	var goal *agentGoalView
+	if agentWorkbenchFeatures()["goals"] {
+		goal, err = s.agentGoalForConversation(ctx, tx, c.ID)
+		if err != nil {
+			return err
+		}
+	}
 	var inputQueuePaused bool
 	if err := tx.QueryRow(ctx, `SELECT input_queue_paused FROM agent_conversation WHERE id=$1`, c.ID).Scan(&inputQueuePaused); err != nil {
 		return err
@@ -1197,7 +1231,7 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 		return err
 	}
 	return ok(w, map[string]any{
-		"conversation": c, "messages": messages, "actions": actions, "plans": plans, "current_plan": currentPlan, "questions": questions, "inputs": inputs, "input_queue_paused": inputQueuePaused, "usage": usage,
+		"conversation": c, "messages": messages, "actions": actions, "plans": plans, "current_plan": currentPlan, "questions": questions, "inputs": inputs, "input_queue_paused": inputQueuePaused, "usage": usage, "goal": goal,
 		"active_run": active, "last_run": latest, "has_more": hasMore,
 		"can_continue":   s.agentConversationCanContinue(ctx, c),
 		"last_event_seq": lastEventSeq, "read_upto_event_seq": readUptoEventSeq,
@@ -1591,6 +1625,12 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Get("/agent/settings", s.h(s.getAgentSettings))
 		r.Put("/agent/settings", s.h(s.putAgentSettings))
 		r.Post("/agent/conversations/{id}/messages", s.h(s.postAgentMessages))
+		r.Get("/agent/conversations/{id}/compact-preview", s.h(s.getAgentCompactPreview))
+		r.Post("/agent/conversations/{id}/compact", s.h(s.postAgentCompact))
+		r.Post("/agent/conversations/{id}/goal", s.h(s.postAgentGoal))
+		r.Patch("/agent/conversations/{id}/goal", s.h(s.patchAgentGoal))
+		r.Post("/agent/goals/{id}/control", s.h(s.postAgentGoalControl))
+		r.Post("/agent/goals/{id}/confirm-criterion", s.h(s.postAgentGoalConfirmCriterion))
 		r.Post("/agent/conversations/{id}/inputs", s.h(s.postAgentInput))
 		r.Post("/agent/conversations/{id}/inputs/resume", s.h(s.resumeAgentInputs))
 		r.Patch("/agent/inputs/{id}", s.h(s.patchAgentInput))

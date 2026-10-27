@@ -156,9 +156,17 @@ func TestAW07ModeFiltersDefinitionLookupAndDirectProposal(t *testing.T) {
 	if len(agentToolsFor(st, ident(ctx))) != 0 {
 		t.Fatal("未实现的后台来源必须拒绝调用")
 	}
+	st.ExecutionOrigin, st.GoalID = "goal", nil
+	if len(agentToolsFor(st, ident(ctx))) != 0 {
+		t.Fatal("缺少目标ID的goal来源必须拒绝调用")
+	}
+	goalID := uuid.New()
+	st.GoalID = &goalID
+	if !agentRunToolAllowed(st, agentTool("works__get"), ident(ctx)) {
+		t.Fatal("带目标ID的goal运行应复用当前角色的读取权限")
+	}
 	viewer := &identity{Role: "viewer"}
 	st.Mode = "execute"
-	st.ExecutionOrigin = "interactive"
 	if agentRunToolAllowed(st, agentTool("memory__create"), viewer) {
 		t.Fatal("viewer不能靠execute扩大权限")
 	}

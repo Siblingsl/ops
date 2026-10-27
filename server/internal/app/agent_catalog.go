@@ -138,6 +138,17 @@ var agentMetaTools = []AgentTool{
 		},
 		Notes: "首次present_artifact为私有展示产物；source_ref须重新鉴权；chat_content限20,000字且source_kind固定为chat",
 	},
+	{
+		Name: "report_goal_progress", Kind: toolR, MinRole: roleEditor,
+		Description: "报告当前任务目标的完成情况；服务端核验完成证据，主观条件仍等待用户确认",
+		Params: []ToolParam{
+			pBodyF("goal_id", schemaUUID, true),
+			pBodyF("expected_revision", intRange(1, 1000000), true),
+			pBodyF("criteria", arrOf(`{"type":"object","properties":{"id":{"type":"string","format":"uuid"},"result":{"type":"string","enum":["met","unmet","unverifiable"]},"evidence_refs":{"type":"array","maxItems":10,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["artifact_version","action","read_result"]},"id":{"type":"string","format":"uuid"}},"required":["kind","id"],"additionalProperties":false}}},"required":["id","result","evidence_refs"],"additionalProperties":false}`, 1, 5), true),
+			pBodyF("blocker", strMax(500), false),
+		},
+		Notes: "仅当前活动目标可用；每项完成必须引用同一对话中经服务端核验的证据；不可确认主观质量",
+	},
 }
 
 func agentDomainNames() []string {

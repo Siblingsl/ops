@@ -73,7 +73,7 @@ func agentValidateQuestionItems(items []agentQuestionItem) error {
 
 func (s *Server) agentMetaRequestInput(ctx context.Context, st *agentRunState, call ai.ToolCall,
 	args map[string]any, send func(string, any)) error {
-	if st.ExecutionOrigin != "interactive" {
+	if st.ExecutionOrigin != "interactive" && st.ExecutionOrigin != "goal" {
 		return apiErr(403, "forbidden", "后台运行不能向用户发起澄清")
 	}
 	if err := s.agentExpireQuestions(ctx, st.ConversationID); err != nil {

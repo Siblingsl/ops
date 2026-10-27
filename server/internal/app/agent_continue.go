@@ -978,8 +978,9 @@ func (s *Server) postAgentRunCancel(w http.ResponseWriter, r *http.Request) erro
 		return errNotFound
 	}
 	var conversationID uuid.UUID
-	if err := s.db.QueryRow(ctx, `SELECT conversation_id FROM agent_run WHERE id=$1 AND workspace_id=$2 AND user_id=$3`, runID,
-		ident(ctx).WorkspaceID, ident(ctx).UserID).Scan(&conversationID); err != nil {
+	var goalID *uuid.UUID
+	if err := s.db.QueryRow(ctx, `SELECT conversation_id,goal_id FROM agent_run WHERE id=$1 AND workspace_id=$2 AND user_id=$3`, runID,
+		ident(ctx).WorkspaceID, ident(ctx).UserID).Scan(&conversationID, &goalID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errNotFound
 		}
@@ -990,6 +991,9 @@ func (s *Server) postAgentRunCancel(w http.ResponseWriter, r *http.Request) erro
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT id FROM app_user WHERE id=$1 FOR NO KEY UPDATE`, ident(ctx).UserID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `SELECT id FROM agent_conversation WHERE id=$1 FOR UPDATE`, conversationID); err != nil {
 		return err
 	}
@@ -1001,6 +1005,22 @@ func (s *Server) postAgentRunCancel(w http.ResponseWriter, r *http.Request) erro
 		return apiErr(409, "agent_run_busy", "这次运行已经结束，无需停止")
 	}
 	if stage != "stopping" {
+		if goalID != nil {
+			var revision int64
+			var goalStatus string
+			err := tx.QueryRow(ctx, `UPDATE agent_goal SET status='paused',revision=revision+1,updated_at=now()
+				WHERE id=$1 AND status='active' RETURNING revision,status`, *goalID).Scan(&revision, &goalStatus)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if err == nil {
+				if _, err := appendAgentEventTx(ctx, tx, conversationID, nil, "goal.updated", map[string]any{
+					"goal_id": *goalID, "revision": revision, "status": goalStatus,
+				}, nil); err != nil {
+					return err
+				}
+			}
+		}
 		if _, err := tx.Exec(ctx, `UPDATE agent_run SET stage='stopping' WHERE id=$1`, runID); err != nil {
 			return err
 		}

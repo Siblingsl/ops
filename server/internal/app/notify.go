@@ -128,8 +128,12 @@ func (s *Server) readNotification(w http.ResponseWriter, r *http.Request) error 
 		return err
 	}
 	id := ident(r.Context())
-	if _, err := s.db.Exec(r.Context(), `UPDATE notification SET read_at=coalesce(read_at, now()) WHERE id=$1 AND user_id=$2`, nid, id.UserID); err != nil {
+	tag, err := s.db.Exec(r.Context(), `UPDATE notification SET read_at=coalesce(read_at, now()) WHERE id=$1 AND user_id=$2 AND workspace_id=$3`, nid, id.UserID, id.WorkspaceID)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errNotFound
 	}
 	return ok(w, map[string]any{"ok": true})
 }

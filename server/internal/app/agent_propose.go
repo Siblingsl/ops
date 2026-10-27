@@ -435,6 +435,52 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 		BatchID:         uuid.New(),
 		Deadline:        time.Now().Add(agentRunSeconds * time.Second),
 	}
+	var goalID any
+	if trigger != "compact" && trigger != "routine" && agentWorkbenchFeatures()["goals"] {
+		var goal agentGoalView
+		var tokenBudget *int
+		err := tx.QueryRow(ctx, `SELECT id,account_id,model_provider_id,model,allow_background,status,run_budget,
+			seconds_budget,token_budget,used_runs,used_seconds,used_tokens FROM agent_goal
+			WHERE conversation_id=$1 AND status IN ('active','waiting_user') FOR UPDATE`, c.ID).Scan(
+			&goal.ID, &goal.AccountID, &goal.ModelProviderID, &goal.Model, &goal.AllowBackground, &goal.Status,
+			&goal.RunBudget, &goal.SecondsBudget, &tokenBudget, &goal.UsedRuns, &goal.UsedSeconds, &goal.UsedTokens)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+		if err == nil {
+			if !agentSameUUID(c.AccountID, goal.AccountID) || !agentSameUUID(&model.ProviderID, goal.ModelProviderID) || model.Model != goal.Model {
+				return nil, apiErr(409, "agent_goal_target_changed", "对话账号或模型与任务目标快照不一致，请先编辑目标")
+			}
+			if goal.Status == "waiting_user" {
+				var pending bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_action WHERE conversation_id=$1 AND status IN ('pending','needs_input','executing'))
+					OR EXISTS(SELECT 1 FROM agent_question WHERE conversation_id=$1 AND status='pending' AND expires_at>now())
+					OR EXISTS(SELECT 1 FROM agent_input WHERE conversation_id=$1 AND status IN ('pending','needs_review'))`, c.ID).Scan(&pending); err != nil {
+					return nil, err
+				}
+				if pending {
+					return nil, apiErr(409, "agent_goal_waiting_user", "请先处理任务中的待办卡片、问题或排队输入")
+				}
+			}
+			if goal.UsedRuns >= goal.RunBudget || goal.UsedSeconds >= goal.SecondsBudget || tokenBudget != nil && goal.UsedTokens >= *tokenBudget {
+				return nil, apiErr(429, "agent_goal_budget_reached", "任务目标预算已达到，请编辑目标预算后再继续")
+			}
+			st.GoalID = &goal.ID
+			st.GoalUsedSeconds, st.GoalUsedTokens, st.GoalSecondsBudget, st.GoalTokenBudget = goal.UsedSeconds, goal.UsedTokens, goal.SecondsBudget, tokenBudget
+			st.ExecutionOrigin = "goal"
+			goalID = goal.ID
+			newStatus := "active"
+			if _, err := tx.Exec(ctx, `UPDATE agent_goal SET status=$2,used_runs=used_runs+1,
+				revision=revision+1,progress_run_id=NULL,blocker='',updated_at=now() WHERE id=$1`, goal.ID, newStatus); err != nil {
+				return nil, err
+			}
+			if _, err := appendAgentEventTx(ctx, tx, c.ID, nil, "goal.updated", map[string]any{
+				"goal_id": goal.ID, "status": newStatus, "used_runs": goal.UsedRuns + 1,
+			}, nil); err != nil {
+				return nil, err
+			}
+		}
+	}
 	var requestIDArg any
 	if requestID != uuid.Nil {
 		requestIDArg = requestID
@@ -449,10 +495,10 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 	}
 	if err := tx.QueryRow(ctx, `INSERT INTO agent_run
 		(conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model_provider_id, model,
-		 protocol_version, request_id, request_hash,mode,execution_origin,config_snapshot)
-		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+		 protocol_version, request_id, request_hash,mode,execution_origin,config_snapshot,goal_id)
+		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
 		c.ID, st.WorkspaceID, st.UserID, st.SessionID, trigger, model.ProviderID, model.Model,
-		protocolVersion, requestIDArg, requestHash, st.Mode, st.ExecutionOrigin, snapshotJSON).Scan(&st.RunID); err != nil {
+		protocolVersion, requestIDArg, requestHash, st.Mode, st.ExecutionOrigin, snapshotJSON, goalID).Scan(&st.RunID); err != nil {
 		return nil, err
 	}
 	if err := tx.QueryRow(ctx, `SELECT loaded_domains, summary FROM agent_conversation WHERE id=$1`, c.ID).
