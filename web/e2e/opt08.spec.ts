@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { api, registerAccount } from './support'
 
-test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交小于16ms', async ({ page }) => {
+test('OPT08 二十段选区与自动保存仅更新当前段，Profiler 提交小于16ms', { tag: '@ci-isolated' }, async ({ page }) => {
   await page.addInitScript(() => {
     const state = { record: false, commits: [] as { sections: string[]; sectionDurations: { id: string; duration: number }[]; duration: number; owners: { name: string; duration: number }[] }[] }
     ;(window as any).__opt08 = state

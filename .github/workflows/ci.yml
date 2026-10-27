@@ -188,15 +188,18 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
+      - name: OPT08 Profiler budget
+        if: matrix.shard == 2
+        run: pnpm exec playwright test e2e/opt08.spec.ts --grep @ci-isolated
       - name: Playwright
-        run: pnpm exec playwright test --shard=${{ matrix.shard }}/3
+        run: pnpm exec playwright test --shard=${{ matrix.shard }}/3 --grep-invert @ci-isolated
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-failure-${{ matrix.shard }}
           path: |
-            web/test-results/
-            web/playwright-report/
+            .playwright-results/web/
+            .playwright-results/report/
       - name: Stop bounded document parser workers
         if: always()
         run: |
