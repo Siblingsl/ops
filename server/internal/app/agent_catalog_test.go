@@ -156,12 +156,19 @@ func agentClassifiedRouteList() map[string]string {
 		"GET /api/v1/agent/context-candidates",
 		"POST /api/v1/agent/context-preview",
 		"GET /api/v1/agent/conversations/{id}/artifacts",
+		"POST /api/v1/agent/conversations/{id}/fork",
 		"GET /api/v1/agent/artifacts/{id}",
+		"POST /api/v1/agent/artifacts/{id}/versions",
 		// DEV-AW06 本人页面只读事件回放，不作为模型工具。
 		"GET /api/v1/agent/conversations/{id}/events",
 		// DEV-AW07 本人页面接受计划与提交整组问题答案，仍通过v2事件协议启动run。
 		"POST /api/v1/agent/questions/{id}/answer",
 		"POST /api/v1/agent/plans/{id}/accept",
+		// DEV-AW08 本人待处理输入，不提供给模型。
+		"POST /api/v1/agent/conversations/{id}/inputs",
+		"POST /api/v1/agent/conversations/{id}/inputs/resume",
+		"PATCH /api/v1/agent/inputs/{id}",
+		"DELETE /api/v1/agent/inputs/{id}",
 		"GET /api/v1/auth/me",
 		"POST /api/v1/auth/renew",
 		"GET /api/v1/notifications/stream",
@@ -279,9 +286,9 @@ func TestAG04CatalogShape(t *testing.T) {
 			t.Errorf("条目 %s 缺少执行超时", tool.Name)
 		}
 	}
-	// 附录 A 共287条，加原有元工具及DEV-AW07计划/问题元工具9条。
-	if len(agentCatalog()) != 296 {
-		t.Fatalf("目录条目数 %d，期望 296（附录 A 287 条 + 元工具 9 条）", len(agentCatalog()))
+	// 附录 A 共287条，加既有元工具及DEV-AW07/AW08编排元工具10条。
+	if len(agentCatalog()) != 297 {
+		t.Fatalf("目录条目数 %d，期望 297（附录 A 287 条 + 元工具 10 条）", len(agentCatalog()))
 	}
 	for _, d := range agentDomains {
 		if counts[d.Name] == 0 {

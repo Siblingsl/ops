@@ -97,7 +97,7 @@ func (s *Server) agentMessageWindow(ctx context.Context, st *agentRunState, id *
 				if ref.Scope != "turn" {
 					continue
 				}
-				item, err := s.agentResolveContextReference(ctx, ref, st.AccountID)
+				item, err := s.agentResolveContextReferenceInConversation(ctx, ref, st.AccountID, &st.ConversationID)
 				if err != nil {
 					return nil, err
 				}
@@ -242,7 +242,7 @@ func (s *Server) agentFixedContextMessages(ctx context.Context, st *agentRunStat
 	resolved := make([]agentResolvedContext, 0, len(refs))
 	chars := 0
 	for _, ref := range refs {
-		item, err := s.agentResolveContextReference(ctx, ref, st.AccountID)
+		item, err := s.agentResolveContextReferenceInConversation(ctx, ref, st.AccountID, &st.ConversationID)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -306,7 +306,7 @@ func (s *Server) agentAttachToMessage(ctx context.Context, st *agentRunState, ms
 	own := m.RunID != nil && *m.RunID == st.RunID
 	texts := []string{}
 	for _, id := range m.Attachments {
-		a, err := s.agentAttachmentOf(ctx, id)
+		a, err := s.agentAttachmentOf(ctx, id, st.ConversationID)
 		if err != nil {
 			return err
 		}
@@ -348,10 +348,12 @@ type agentAttachmentRow struct {
 }
 
 // agentAttachmentOf 读取一个属于本人的附件；不属于本人时返回 nil。
-func (s *Server) agentAttachmentOf(ctx context.Context, id uuid.UUID) (*agentAttachmentRow, error) {
+func (s *Server) agentAttachmentOf(ctx context.Context, id, conversationID uuid.UUID) (*agentAttachmentRow, error) {
 	var a agentAttachmentRow
 	err := s.db.QueryRow(ctx, `SELECT id, kind, name, mime, storage_path, coalesce(text_content,'')
-		FROM agent_attachment WHERE id=$1 AND user_id=$2`, id, ident(ctx).UserID).
+		FROM agent_attachment WHERE id=$1 AND workspace_id=$2 AND user_id=$3
+		AND EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=agent_attachment.id AND r.conversation_id=$4)`,
+		id, ident(ctx).WorkspaceID, ident(ctx).UserID, conversationID).
 		Scan(&a.ID, &a.Kind, &a.Name, &a.Mime, &a.StoragePath, &a.TextContent)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

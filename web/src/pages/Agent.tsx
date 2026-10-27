@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Archive, ArchiveRestore, AtSign, Bot, ChevronDown, ChevronLeft, Clipboard, FileText, FolderPlus, LoaderCircle, Menu, RotateCcw,
+  Archive, ArchiveRestore, AtSign, Bot, ChevronDown, ChevronLeft, Clipboard, FileText, FolderPlus, GitBranch, LoaderCircle, Menu, RotateCcw,
   MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Search, Send, Settings2, Sparkles, Square, Trash2, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -16,7 +16,7 @@ import { useAccounts, useCurrentAccount, useMe } from '@/lib/session'
 import { useSavePrefs } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
 import {
-  type AgentAttachment, type AgentBootstrap, type AgentConversation, type AgentConversationDetail, type AgentConversationListItem,
+  type AgentAttachment, type AgentBootstrap, type AgentConversation, type AgentConversationDetail, type AgentConversationListItem, type AgentInput,
   type AgentConversationGroup, type AgentConversationPage, type AgentEventEnvelope, type AgentMessage, type AgentRunAcceptance, type AgentMode,
   type AgentPlan, type AgentQuestion,
   streamAgentEvents, useAgentBootstrap,
@@ -36,6 +36,13 @@ type DraftAttachment = {
   status: 'uploading' | 'ready' | 'failed'
   attachment?: AgentAttachment
   error?: string
+}
+
+function attachmentVariantURL(value: string, variant: 'thumb' | 'original') {
+  // D-153：附件 URL 由后端返回相对路径，跨源部署（前端在 CF、后端在云服务器）时必须先补上 API 基址。
+  const url = new URL(value, window.location.origin)
+  url.searchParams.set('variant', variant)
+  return url.href
 }
 
 function modelKey(providerID: string | null | undefined, model: string | null | undefined) {
@@ -329,8 +336,8 @@ function AgentModeSelect({ value, disabled, readOnly, onChange }: { value: Agent
   </Select></span>
 }
 
-function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerate, skillRequests = [], desktopPresentation = false }: {
-  message: AgentMessage; lastAssistant: boolean; canSeeImages: boolean; onEdit?: () => void; onRegenerate?: () => void
+function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerate, onFork, skillRequests = [], desktopPresentation = false }: {
+  message: AgentMessage; lastAssistant: boolean; canSeeImages: boolean; onEdit?: () => void; onRegenerate?: () => void; onFork?: () => void
   skillRequests?: AgentMessage['skill_requests']; desktopPresentation?: boolean
 }) {
   const [toolsOpen, setToolsOpen] = useState(false)
@@ -390,8 +397,10 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
         <div className={`mt-1.5 flex items-center gap-1 text-[10.5px] ${desktopPresentation ? 'desktop-agent-message-footer' : ''} ${user ? 'text-white/60' : 'text-mist-400'}`}>
           <time>{time}</time>
           {user && onEdit && <button type="button" onClick={onEdit} className="ml-2 cursor-pointer opacity-0 underline group-hover:opacity-100 focus:opacity-100">编辑</button>}
+          {user && onFork && <button type="button" title="从这里继续" aria-label={`从第 ${message.seq} 条消息创建分支`} onClick={onFork} className="ml-2 inline-flex cursor-pointer items-center gap-1 opacity-0 underline group-hover:opacity-100 focus:opacity-100"><GitBranch className="size-3.5" />从这里继续</button>}
           {!user && message.role === 'assistant' && <div className="ml-auto flex items-center gap-1 opacity-70 group-hover:opacity-100">
             <button type="button" title="复制" onClick={() => void navigator.clipboard.writeText(message.content).then(() => toast.success('已复制')).catch(() => toast.error('复制失败'))} className="cursor-pointer rounded p-1 hover:bg-mist-100"><Clipboard className="size-3.5" /></button>
+            {onFork && <button type="button" title="从这里继续" aria-label={`从第 ${message.seq} 条消息创建分支`} onClick={onFork} className="cursor-pointer rounded p-1 hover:bg-mist-100"><GitBranch className="size-3.5" /></button>}
             <AIFeedback callId={message.ai_call_id} />
             {lastAssistant && onRegenerate && <button type="button" title="重新生成" onClick={onRegenerate} className="cursor-pointer rounded p-1 hover:bg-mist-100"><ChevronLeft className="size-3.5" /></button>}
           </div>}
@@ -416,13 +425,20 @@ function RunStatus({ activeRun, streamStage, toolName, connection, pendingAction
 
 function WorkbenchSidePanel({
   tab, setTab, close, conversation, activeRun, busy, pendingActions, actionCount, selectedAccountName, selectedModelName, attachmentCount,
-  contextRefs, skillRequests, latestSkillUsage, artifactsEnabled, actions,
+  contextRefs, skillRequests, latestSkillUsage, artifactsEnabled, actions, inputs, inputQueuePaused, onUpdateInput, onCancelInput, onRestoreInput, onResumeInputs, onQuoteArtifact,
 }: {
   tab: 'task' | 'context' | 'artifact'; setTab: (tab: 'task' | 'context' | 'artifact') => void; close: () => void
   conversation?: AgentConversation; activeRun?: AgentConversationDetail['active_run']; busy: boolean; pendingActions: number; actionCount: number
   selectedAccountName: string; selectedModelName: string; attachmentCount: number
   contextRefs: AgentContextSelection[]; skillRequests: AgentSkillSelection[]; latestSkillUsage: AgentMessage['skill_usage']; artifactsEnabled: boolean; actions: AgentConversationDetail['actions']
+  inputs: AgentInput[]; inputQueuePaused: boolean
+  onUpdateInput: (input: AgentInput, text: string) => Promise<void>; onCancelInput: (input: AgentInput) => Promise<void>
+  onRestoreInput: (input: AgentInput) => Promise<void>; onResumeInputs: () => Promise<void>
+  onQuoteArtifact: (ref: AgentContextSelection, prompt: string) => void
 }) {
+  const [editingInputID, setEditingInputID] = useState('')
+  const [editingInputText, setEditingInputText] = useState('')
+  const [inputBusyID, setInputBusyID] = useState('')
   const tabs = [
     { id: 'task' as const, label: '任务' },
     { id: 'context' as const, label: '上下文' },
@@ -443,6 +459,23 @@ function WorkbenchSidePanel({
         {activeRun && <p className="desktop-agent-side-detail">运行状态：{activeRun.status === 'queued' ? '排队中' : '执行中'}</p>}
         {conversation && <p className="desktop-agent-side-detail">本对话操作卡片：{actionCount} 项</p>}
         {pendingActions > 0 && <p className="desktop-agent-side-note">请在对应消息下逐张审阅操作卡片。</p>}
+        {(inputs.some((input) => ['pending', 'needs_review'].includes(input.status)) || inputQueuePaused) && <section className="mt-4 space-y-2" aria-labelledby="workbench-inputs-heading">
+          <div className="flex items-center justify-between gap-2"><h4 id="workbench-inputs-heading" className="text-xs font-semibold text-mist-700">补充与排队</h4>{inputQueuePaused && <Button type="button" size="sm" variant="outline" onClick={() => void onResumeInputs()}>恢复队列</Button>}</div>
+          {inputQueuePaused && <p className="text-xs text-gamboge-700" role="status">队列已暂停。恢复后仍会逐条检查权限与待审阅卡片。</p>}
+          <ul className="space-y-2">
+            {inputs.filter((input) => ['pending', 'needs_review'].includes(input.status)).map((input) => <li key={input.id} className="rounded-lg border border-mist-200 bg-white p-2.5 text-xs" aria-busy={inputBusyID === input.id}>
+              <div className="flex items-start justify-between gap-2"><div><strong className="text-mist-700">{input.status === 'needs_review' ? '本次已结束，待你复核' : input.kind === 'steer' ? '补充当前任务' : '排到下一条'}</strong><p className="mt-0.5 text-mist-500">修订 {input.revision}{input.error_code ? ` · ${input.error_code}` : ''}</p></div>
+                {input.status === 'pending' && editingInputID !== input.id && <Button type="button" size="sm" variant="ghost" onClick={() => { setEditingInputID(input.id); setEditingInputText(input.text) }}>编辑</Button>}</div>
+              {editingInputID === input.id
+                ? <div className="mt-2 space-y-2"><Textarea aria-label="编辑排队输入" rows={3} value={editingInputText} onChange={(event) => setEditingInputText(event.target.value)} />
+                    <div className="flex justify-end gap-2"><Button type="button" size="sm" variant="ghost" onClick={() => setEditingInputID('')}>取消</Button><Button type="button" size="sm" loading={inputBusyID === input.id} onClick={() => { setInputBusyID(input.id); void onUpdateInput(input, editingInputText).then(() => setEditingInputID('')).catch((error) => toast.error(errorMessage(error))).finally(() => setInputBusyID('')) }}>保存修改</Button></div></div>
+                : <p className="mt-2 whitespace-pre-wrap break-words text-mist-700">{input.text || '仅包含附件或引用'}</p>}
+              {(input.attachments.length > 0 || input.context_refs.length > 0 || input.skill_requests.length > 0) && <p className="mt-1 text-mist-500">{input.attachments.length ? `附件 ${input.attachments.map((item) => item.name).join('、')}` : ''}{input.context_refs.length ? ` · 引用 ${input.context_refs.length} 项` : ''}{input.skill_requests.length ? ` · 技能请求 ${input.skill_requests.length} 项` : ''}</p>}
+              {input.status === 'needs_review' && <div className="mt-2 flex flex-wrap gap-2"><Button type="button" size="sm" onClick={() => { setInputBusyID(input.id); void onRestoreInput(input).finally(() => setInputBusyID('')) }}>移回输入框</Button><Button type="button" size="sm" variant="outline" disabled={inputBusyID === input.id} onClick={() => { setInputBusyID(input.id); void onCancelInput(input).catch((error) => toast.error(errorMessage(error))).finally(() => setInputBusyID('')) }}>丢弃</Button></div>}
+              {input.status === 'pending' && editingInputID !== input.id && <div className="mt-2 flex justify-end"><Button type="button" size="sm" variant="ghost" disabled={inputBusyID === input.id} onClick={() => { setInputBusyID(input.id); void onCancelInput(input).catch((error) => toast.error(errorMessage(error))).finally(() => setInputBusyID('')) }}>撤回</Button></div>}
+            </li>)}
+          </ul>
+        </section>}
         {actions.length > 0 && <div className="mt-3"><Button type="button" size="sm" variant="secondary" onClick={() => {
           const card = document.getElementById(`agent-action-${actions[0].id}`)
           card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -462,7 +495,7 @@ function WorkbenchSidePanel({
         {!!latestSkillUsage?.length && <section className="mt-4"><h4 className="text-xs font-semibold text-mist-600">本轮技能状态</h4><ul className="mt-1 space-y-1 text-xs text-mist-600">{latestSkillUsage.map((item) => <li key={item.id}>{item.loaded ? '已加载到模型上下文；实际使用未验证' : '已请求，未加载'} · {item.name}</li>)}</ul></section>}
         <p className="desktop-agent-side-note">选择、启用和加载是不同状态。只有 load_skill 成功回执才显示已加载；当前无法从模型调用回执确认是否遵循了技能指令。</p>
       </section>}
-      {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading"><h3 id="workbench-artifact-heading">产物</h3><ArtifactPanel conversationID={conversation?.id} updatedAt={conversation?.updated_at} compact /></section>}
+      {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading"><h3 id="workbench-artifact-heading">产物</h3><ArtifactPanel conversationID={conversation?.id} compact onQuote={onQuoteArtifact} /></section>}
     </div>
   </aside>
 }
@@ -487,6 +520,7 @@ export default function Agent() {
   const [workbenchLayoutLoadedKey, setWorkbenchLayoutLoadedKey] = useState('')
   const [text, setText] = useState('')
   const [files, setFiles] = useState<DraftAttachment[]>([])
+  const [restoredAttachments, setRestoredAttachments] = useState<AgentAttachment[]>([])
   const [contextRefs, setContextRefs] = useState<AgentContextSelection[]>([])
   const [skillRequests, setSkillRequests] = useState<AgentSkillSelection[]>([])
   const [contextPickerOpen, setContextPickerOpen] = useState(false)
@@ -494,6 +528,7 @@ export default function Agent() {
   const [uploading, setUploading] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [inputSubmitting, setInputSubmitting] = useState(false)
   const [selectedMode, setSelectedMode] = useState<AgentMode>('execute')
   const [streamText, setStreamText] = useState('')
   const [streamStage, setStreamStage] = useState('')
@@ -524,6 +559,8 @@ export default function Agent() {
   const uploadGeneration = useRef(0)
   const cancelledUploads = useRef(new Set<string>())
   const messageRequest = useRef<{ key: string; id: string } | null>(null)
+  const inputRequest = useRef<{ key: string; id: string } | null>(null)
+  const resumeInputRequest = useRef<string | null>(null)
   const conversationRequest = useRef<{ key: string; id: string } | null>(null)
   const sendInFlight = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -581,6 +618,8 @@ export default function Agent() {
   const conversation = detail?.conversation
   const activeRun = detail?.active_run
   const actions = detail?.actions ?? []
+  const inputs = detail?.inputs ?? []
+  const inputQueuePaused = detail?.input_queue_paused === true
   const plans = detail?.plans ?? []
   const questions = detail?.questions ?? []
   const pendingQuestion = questions.find((question) => question.status === 'pending' && Date.now() < new Date(question.expires_at).getTime())
@@ -600,7 +639,9 @@ export default function Agent() {
   }, [messages, actionRunIDs])
   const busy = submitting || streaming || !!activeRun
   const readyFiles = files.filter((file) => file.status === 'ready' && file.attachment)
+  const readyAttachmentIDs = [...readyFiles.map((file) => file.attachment!.id), ...restoredAttachments.map((file) => file.id)]
   const failedFiles = files.filter((file) => file.status === 'failed')
+  const runInputsEnabled = workbenchUI && bootstrapData?.features?.run_control === true
 
   useEffect(() => {
     if (!workbenchUI || !layoutPreferenceKey) return
@@ -684,6 +725,7 @@ export default function Agent() {
       else cancelledUploads.current.add(item.clientID)
     }
     setFiles([])
+    setRestoredAttachments([])
     setContextRefs([])
     setSkillRequests([])
     setEditMessage(null)
@@ -759,10 +801,14 @@ export default function Agent() {
         streamPartialRef.current = { messageKey, chunkIndex }
         setStreamText((old) => current.messageKey === messageKey ? old + String(data.text ?? '') : String(data.text ?? ''))
       }
-    } else if (type === 'tool.started' || type === 'tool.ended' || type === 'action.updated' || type === 'message.saved' || type === 'conversation.updated' || type === 'context.updated' || type === 'plan.updated' || type === 'question.created' || type === 'question.resolved') {
+    } else if (type === 'tool.started' || type === 'tool.ended' || type === 'action.updated' || type === 'message.saved' || type === 'conversation.updated' || type === 'context.updated' || type === 'plan.updated' || type === 'question.created' || type === 'question.resolved' || type.startsWith('input.')) {
       if (type === 'tool.started') setStreamStage(`tool:${data.name || '工具'}`)
       void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
       void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+    } else if (type === 'artifact.created') {
+      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
+      void qc.invalidateQueries({ queryKey: ['agent-artifacts'] })
+      void qc.invalidateQueries({ queryKey: ['agent-artifact'] })
     } else if (type === 'run.ended') {
       if (!targetRunID) setStreaming(false)
       setRunID('')
@@ -1000,7 +1046,7 @@ export default function Agent() {
 
   const sendMessage = async (edit?: AgentMessage) => {
     const value = text.trim()
-    if ((!value && readyFiles.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || !canWrite || busy || sendInFlight.current || uploading || failedFiles.length > 0) return
+    if ((!value && readyAttachmentIDs.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || !canWrite || busy || sendInFlight.current || uploading || failedFiles.length > 0) return
     sendInFlight.current = true
     setSubmitting(true)
     setStreamError('')
@@ -1029,8 +1075,8 @@ export default function Agent() {
       const messageKey = JSON.stringify({
         edit_message_id: edit?.id ?? '',
         mode: bootstrapData?.features.plans ? selectedMode : undefined,
-        conversation_id: conv.id, text: value, attachment_ids: edit ? [] : readyFiles.map((file) => file.attachment!.id),
-        context_refs: !edit ? contextRefs.map(({ type, id, revision, reference_scope }) => ({ type, id, revision, scope: reference_scope })) : [],
+        conversation_id: conv.id, text: value, attachment_ids: edit ? [] : readyAttachmentIDs,
+        context_refs: !edit ? contextRefs.map(({ type, id, revision, reference_scope, anchor }) => ({ type, id, revision, scope: reference_scope, ...(anchor ? { anchor } : {}) })) : [],
         skill_requests: !edit ? skillRequests.map(({ skill_id, work_id }) => ({ skill_id, ...(work_id ? { work_id } : {}) })) : [],
         account_id: selectedAccount || '', model: modelRef || null,
       })
@@ -1041,8 +1087,8 @@ export default function Agent() {
       const payload = {
         text: value,
         ...(!edit && bootstrapData?.features.plans ? { mode: selectedMode } : {}),
-        attachment_ids: edit ? [] : readyFiles.map((file) => file.attachment!.id),
-        ...(!edit && contextRefs.length ? { context_refs: contextRefs.map(({ type, id, revision, reference_scope }) => ({ type, id, revision, scope: reference_scope })) } : {}),
+        attachment_ids: edit ? [] : readyAttachmentIDs,
+        ...(!edit && contextRefs.length ? { context_refs: contextRefs.map(({ type, id, revision, reference_scope, anchor }) => ({ type, id, revision, scope: reference_scope, ...(anchor ? { anchor } : {}) })) } : {}),
         ...(!edit && skillRequests.length ? { skill_requests: skillRequests.map(({ skill_id, work_id }) => ({ skill_id, ...(work_id ? { work_id } : {}) })) } : {}),
         ...(selectedAccount ? { account_id: selectedAccount } : { account_id: '' }),
         ...(modelRef ? { model: modelRef } : {}),
@@ -1055,6 +1101,7 @@ export default function Agent() {
       if (!accepted || conversationIDRef.current !== conv.id) return
       setText('')
       setFiles([])
+      setRestoredAttachments([])
       sendDestinationConversationID.current = ''
       messageRequest.current = null
       if (!edit) {
@@ -1064,6 +1111,121 @@ export default function Agent() {
       setEditMessage(null)
     } catch (error) { toast.error(errorMessage(error)) }
     finally { sendInFlight.current = false; setSubmitting(false) }
+  }
+
+  const postWorkbenchInput = async (kind: 'steer' | 'queue') => {
+    if (!runInputsEnabled || !conversationId || !conversation || !canWrite || inputSubmitting || uploading || failedFiles.length > 0) return
+    const value = text.trim()
+    if ((!value && readyAttachmentIDs.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || Array.from(value).length > bootstrapData.limits.message_chars) return
+    const targetRunID = activeRun?.id || runID
+    if (kind === 'steer' && !targetRunID) return
+    const payload = {
+      kind,
+      ...(targetRunID ? { run_id: targetRunID } : {}),
+      text: value,
+      attachment_ids: readyAttachmentIDs,
+      context_refs: contextRefs.map(({ type, id, revision, reference_scope, anchor }) => ({ type, id, revision, scope: reference_scope, ...(anchor ? { anchor } : {}) })),
+      skill_requests: skillRequests.map(({ skill_id, work_id }) => ({ skill_id, ...(work_id ? { work_id } : {}) })),
+    }
+    const key = JSON.stringify({ conversation_id: conversation.id, ...payload })
+    const requestID = inputRequest.current?.key === key ? inputRequest.current.id : crypto.randomUUID()
+    inputRequest.current = { key, id: requestID }
+    setInputSubmitting(true)
+    setStreamError('')
+    try {
+      const accepted = await post<AgentInput>(`/agent/conversations/${conversation.id}/inputs`, { ...payload, request_id: requestID })
+      if (conversationIDRef.current !== conversation.id) return
+      setText('')
+      setFiles([])
+      setRestoredAttachments([])
+      setContextRefs([])
+      setSkillRequests([])
+      setEditMessage(null)
+      inputRequest.current = null
+      await invalidate()
+      toast.success(accepted.status === 'consumed' ? '补充已接收并开始处理' : kind === 'steer' ? '补充已保存，将在安全边界接收' : '已排到下一条')
+    } catch (error) {
+      toast.error(errorMessage(error))
+    } finally {
+      setInputSubmitting(false)
+    }
+  }
+
+  const updateQueuedInput = async (input: AgentInput, value: string) => {
+    await patch(`/agent/inputs/${input.id}`, { expected_revision: input.revision, text: value })
+    await invalidate()
+  }
+
+  const cancelQueuedInput = async (input: AgentInput) => {
+    await del(`/agent/inputs/${input.id}`, { expected_revision: input.revision })
+    await invalidate()
+  }
+
+  const restoreNeedsReviewInput = async (input: AgentInput) => {
+    if (input.attachments.length !== input.attachment_ids.length) {
+      toast.error('输入中的附件已失效或不可访问；原输入仍保留，请先刷新后再处理。')
+      await detailQuery.refetch()
+      return
+    }
+    if (readyAttachmentIDs.length + input.attachments.length > (bootstrapData?.limits.attachments_per_message ?? 6)
+      || contextRefs.length + input.context_refs.length > 12 || skillRequests.length + input.skill_requests.length > 3) {
+      toast.error('当前草稿与待复核输入合并后会超过附件、引用或技能配额；请先整理当前草稿。')
+      return
+    }
+    try {
+      await cancelQueuedInput(input)
+      setText((old) => old ? `${old}\n${input.text}` : input.text)
+      setRestoredAttachments((old) => [...old, ...input.attachments.filter((item) => !old.some((existing) => existing.id === item.id))])
+      setContextRefs((old) => {
+        const restored = input.context_refs.map((ref): AgentContextSelection => ({
+          id: ref.id, type: ref.type, name: ref.name || ref.type, summary: '', scope: ref.scope,
+          account_id: null, revision: ref.revision || '', updated_at: '', reference_scope: ref.scope === 'conversation' ? 'conversation' : 'turn',
+          ...(ref.anchor ? { anchor: ref.anchor } : {}),
+        }))
+        return [...old, ...restored.filter((ref) => !old.some((item) => item.id === ref.id && item.type === ref.type))].slice(0, 12)
+      })
+      setSkillRequests((old) => [...old, ...input.skill_requests.map((item): AgentSkillSelection => ({
+        skill_id: item.skill_id, work_id: item.work_id, name: item.name || item.skill_id, hint: '', scope: '',
+      })).filter((item) => !old.some((existing) => existing.skill_id === item.skill_id && existing.work_id === item.work_id))].slice(0, 3))
+      setWorkbenchPanelOpen(false)
+      window.setTimeout(() => inputRef.current?.focus(), 0)
+      toast.success('已移回输入框；确认内容后再发送')
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
+  const resumeInputQueue = async () => {
+    if (!conversationId || !inputQueuePaused) return
+    const requestID = resumeInputRequest.current || crypto.randomUUID()
+    resumeInputRequest.current = requestID
+    try {
+      await post(`/agent/conversations/${conversationId}/inputs/resume`, { request_id: requestID })
+      resumeInputRequest.current = null
+      await invalidate()
+    } catch (error) { toast.error(errorMessage(error)) }
+  }
+
+  const forkFromMessage = async (message: AgentMessage) => {
+    if (!conversationId || !organizeEnabled) return
+    try {
+      const result = await post<{ conversation: AgentConversation; actual_through_seq: number; replayed?: boolean }>(
+        `/agent/conversations/${conversationId}/fork`,
+        { through_message_id: message.id, request_id: crypto.randomUUID() },
+      )
+      if (result.actual_through_seq < message.seq) toast.message(`截点位于工具调用组内，分支已规范到第 ${result.actual_through_seq} 条消息之后`)
+      navigate(`/agent/c/${result.conversation.id}`)
+    } catch (error) { toast.error(errorMessage(error)) }
+  }
+
+  const quoteArtifact = (reference: AgentContextSelection, prompt: string) => {
+    setContextRefs((old) => old.some((item) => item.type === reference.type && item.id === reference.id)
+      ? old : old.length < 12 ? [...old, reference] : old)
+    setText((old) => old ? `${old}\n${prompt}` : prompt)
+    setEditMessage(null)
+    setWorkbenchPanelTab('context')
+    setArtifactsOpen(false)
+    window.setTimeout(() => inputRef.current?.focus(), 0)
   }
 
   const continueRun = () => { if (conversationId) void consumeRun(conversationId, `/agent/conversations/${conversationId}/continue`, {}) }
@@ -1208,11 +1370,11 @@ export default function Agent() {
   }
 
   const addFiles = async (incoming: FileList | File[]) => {
-    if (!canWrite || busy || uploadingRef.current) return
+    if (!canWrite || busy && !runInputsEnabled || uploadingRef.current) return
     const filesToAdd = Array.from(incoming)
     if (!filesToAdd.length) return
     const maxFiles = bootstrapData?.limits.attachments_per_message ?? 6
-    const available = Math.max(0, maxFiles - files.length)
+    const available = Math.max(0, maxFiles - readyAttachmentIDs.length)
     if (filesToAdd.length > available) toast.error(`一条消息最多添加 ${maxFiles} 个附件`)
     const filesToAccept = filesToAdd.slice(0, available)
     const queue = filesToAccept.map((file): DraftAttachment => {
@@ -1261,6 +1423,7 @@ export default function Agent() {
       if (item.attachment) void del(`/agent/attachments/${item.attachment.id}`).catch(() => undefined)
     }
     setFiles([])
+    setRestoredAttachments([])
   }
 
   const removeFile = async (item: DraftAttachment) => {
@@ -1273,11 +1436,12 @@ export default function Agent() {
     if (isEnterWithoutComposition(event.nativeEvent) && !event.shiftKey) {
       event.preventDefault()
       if (editMessage) void sendMessage(editMessage)
+      else if (busy && runInputsEnabled) void postWorkbenchInput('steer')
       else void sendMessage()
     }
   }
 
-  const inputDisabled = !canWrite || busy || uploading
+  const inputDisabled = !canWrite || busy && !runInputsEnabled || uploading || inputSubmitting
   const accountList = (accounts.data ?? []).filter((account) => account.status === 'active')
   const selectedAccountName = accountList.find((account) => account.id === selectedAccount)?.name || '不指定账号'
   const selectedModelName = selectedModelOption?.model || '选择模型'
@@ -1286,7 +1450,7 @@ export default function Agent() {
   const historyAccountName = accountList.find((account) => account.id === historyAccount)?.name || '原账号'
   const attachmentCount = messages.reduce((total, message) => total + message.attachments.length, 0)
   const workbenchStatus = busy ? '运行中' : pendingActions ? `待处理 ${pendingActions}` : conversation ? '已就绪' : '待开始'
-  const canSendContent = !!text.trim() || readyFiles.length > 0 || contextRefs.length > 0 || skillRequests.length > 0
+  const canSendContent = !!text.trim() || readyAttachmentIDs.length > 0 || contextRefs.length > 0 || skillRequests.length > 0
   const selectedWorkOptions = contextRefs.filter((ref) => ref.type === 'work').map((ref) => ({ id: ref.id, name: ref.name }))
   const latestSkillUsage = lastAssistant && lastUser && lastAssistant.run_id === lastUser.run_id
     ? (lastUser.skill_requests ?? []).map((request) => lastAssistant.skill_usage?.find((skill) => skill.id === request.skill_id)
@@ -1364,7 +1528,7 @@ export default function Agent() {
               manualScrollRef.current = false
               setManualUnreadSuppressedID('')
             }
-          }} onDragEnter={(event) => { event.preventDefault(); if (canWrite && !busy && !uploading) { dragDepth.current++; setDragging(true) } }} onDragLeave={(event) => { event.preventDefault(); dragDepth.current--; if (dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false) } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void addFiles(event.dataTransfer.files) }}>
+          }} onDragEnter={(event) => { event.preventDefault(); if (canWrite && (!busy || runInputsEnabled) && !uploading) { dragDepth.current++; setDragging(true) } }} onDragLeave={(event) => { event.preventDefault(); dragDepth.current--; if (dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false) } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void addFiles(event.dataTransfer.files) }}>
             {detailQuery.isLoading && conversationId && <div className="mx-auto max-w-3xl py-12 text-center text-sm text-mist-400"><LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />正在加载对话…</div>}
             {detailQuery.isError && <Notice tone="red" className="mx-auto max-w-3xl">{errorMessage(detailQuery.error)} <button type="button" className="ml-2 underline" onClick={() => void detailQuery.refetch()}>重试</button></Notice>}
             {!conversationId && !messages.length && <Welcome onPrompt={(value) => setText(value)} noModel={!bootstrapData.can_use} desktopWorkbench={workbenchUI} />}
@@ -1377,6 +1541,7 @@ export default function Agent() {
                 {startsDay && <div className="desktop-agent-day">{splitDate(message.created_at)} · {messageTime(message.created_at)}</div>}
                 <MessageView message={message} lastAssistant={message.id === lastAssistant?.id} canSeeImages={selectedModelOption?.vision === true} desktopPresentation={desktopPresentation}
                   skillRequests={messages.find((candidate) => candidate.role === 'user' && candidate.run_id === message.run_id)?.skill_requests ?? []}
+                  onFork={organizeEnabled && message.role !== 'system' ? () => void forkFromMessage(message) : undefined}
                   onEdit={message.id === lastUser?.id && !busy && !pendingQuestion && canWrite && !message.attachments.length && !message.context_refs?.length && !message.skill_requests?.length ? () => { setEditMessage(message); setText(message.content); clearDraftAttachments(); setContextRefs([]); setSkillRequests([]); inputRef.current?.focus() } : undefined}
                   onRegenerate={message.id === lastAssistant?.id && !busy && canWrite ? regenerate : undefined} />
                 {message.role === 'assistant' && message.run_id && actionMessageByRun[message.run_id] === message.id && <div className={desktopPresentation ? 'desktop-agent-action-wrapper' : ''}><AgentActionCards
@@ -1415,7 +1580,7 @@ export default function Agent() {
             {conversation && !activeRun && detail?.actions.some((action) => action.status === 'executing') && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">有操作卡片正在执行，请稍候。</div>}
             {detail?.messages.length === 0 && bootstrapData.default_model_unsupported && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-gamboge-700">默认模型未通过工具调用自检，请先选择其他模型。</div>}
             {editMessage && <div className="mx-auto mb-2 flex max-w-3xl items-center justify-between rounded-lg bg-mist-50 px-3 py-1.5 text-xs text-mist-600"><span>编辑最后一条消息并重新运行</span><button type="button" className="cursor-pointer underline" onClick={() => { setEditMessage(null); setText('') }}>取消</button></div>}
-            {files.length > 0 && <div className="mx-auto mb-2 max-w-3xl">
+            {(files.length > 0 || restoredAttachments.length > 0) && <div className="mx-auto mb-2 max-w-3xl">
               <div className="flex flex-wrap gap-2">
               {files.map((file) => <div key={file.clientID} aria-label={`${file.file.name} ${file.status}`} className={`flex items-center gap-2 rounded-lg border p-1.5 text-xs ${file.status === 'failed' ? 'border-danger/30 bg-danger/5 text-danger' : 'border-mist-200 bg-mist-50 text-mist-600'}`}>
                 {file.attachment?.kind === 'image' ? <img src={`${file.attachment.url}?variant=thumb`} alt={file.file.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
@@ -1424,6 +1589,11 @@ export default function Agent() {
                 {file.status === 'ready' && <span>已就绪</span>}
                 {file.status === 'failed' && <><span title={file.error}>上传失败</span><Button size="sm" variant="ghost" icon={<RotateCcw className="size-3" />} onClick={() => retryFile(file)}>重试</Button></>}
                 <IconButton label={`移除 ${file.file.name}`} className="size-6" onClick={() => void removeFile(file)}><X className="size-3" /></IconButton>
+              </div>)}
+              {restoredAttachments.map((attachment) => <div key={attachment.id} className="flex items-center gap-2 rounded-lg border border-mist-200 bg-mist-50 p-1.5 text-xs text-mist-600">
+                {attachment.kind === 'image' ? <img src={`${attachment.url}?variant=thumb`} alt={attachment.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
+                <span className="max-w-40 truncate">{attachment.name}</span><span>从待复核输入恢复</span>
+                <IconButton label={`移除 ${attachment.name}`} className="size-6" onClick={() => setRestoredAttachments((old) => old.filter((item) => item.id !== attachment.id))}><X className="size-3" /></IconButton>
               </div>)}
               </div>
               {failedFiles.length > 0 && <p className="mt-1 text-xs text-danger" role="alert">有 {failedFiles.length} 个附件未成功上传，请重试或移除后再发送。</p>}
@@ -1446,18 +1616,22 @@ export default function Agent() {
                 <Textarea ref={inputRef} rows={workbenchUI ? 3 : 1} aria-label={workbenchUI ? '发送消息' : undefined} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, workbenchUI ? 176 : 192)}px` }} onKeyDown={onInputKeyDown}
                   placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '说说你想写什么，或继续调整上面的方向…'} className="desktop-agent-compose-input" />
                 <div className="desktop-agent-compose-toolbar">
-                  <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()}><Paperclip className="size-4" /></IconButton>
-                  {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)}><AtSign className="size-4" /></IconButton>}
-                  {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)}><Sparkles className="size-4" /></IconButton>}
+                  <IconButton label="添加附件" disabled={!canWrite || busy && !runInputsEnabled || uploading || readyAttachmentIDs.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()}><Paperclip className="size-4" /></IconButton>
+                  {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy && !runInputsEnabled || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)}><AtSign className="size-4" /></IconButton>}
+                  {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy && !runInputsEnabled || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)}><Sparkles className="size-4" /></IconButton>}
                   {bootstrapData.features.plans && workbenchUI && <AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />}
                   <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择操作账号">{selectedAccountName} <ChevronDown /></button>
                   <span className="desktop-agent-compose-spacer" />
                   <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择模型">{selectedModelName} <ChevronDown /></button>
-                  {busy ? <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
+                  {busy && runInputsEnabled ? <div className="flex items-center gap-1.5">
+                    <Button variant="secondary" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0} onClick={() => void postWorkbenchInput('steer')}>补充当前任务</Button>
+                    <Button variant="outline" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0} onClick={() => void postWorkbenchInput('queue')}>排到下一条</Button>
+                    <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
+                  </div> : busy ? <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
                     : <Button variant="primary" icon={<Send className="size-4" />} disabled={!canWrite || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>}
                 </div>
               </div>
-              <div className="desktop-agent-compose-note">{pendingActions > 0 ? `等待你逐张确认 ${pendingActions} 项 · AI 输出请自行核实` : busy ? '正在生成，可随时停止 · Enter 发送 · Shift+Enter 换行' : completedNotice || 'Enter 发送 · Shift+Enter 换行 · AI 输出请自行核实，写入操作需逐张确认'}</div>
+              <div className="desktop-agent-compose-note">{pendingActions > 0 ? `等待你逐张确认 ${pendingActions} 项 · AI 输出请自行核实` : busy && runInputsEnabled ? '运行中按 Enter 补充当前任务 · 也可排到下一条 · Shift+Enter 换行' : busy ? '正在生成，可随时停止' : completedNotice || 'Enter 发送 · Shift+Enter 换行 · AI 输出请自行核实，写入操作需逐张确认'}</div>
             </> : <>
               {bootstrapData.features.plans && <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 text-xs text-mist-500"><AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} /><span>{selectedMode === 'execute' ? '写入仍需逐张卡片确认' : '只读取与形成建议'}</span></div>}
               <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-mist-200 bg-white p-2 shadow-card focus-within:border-ink-300">
@@ -1469,7 +1643,7 @@ export default function Agent() {
                 {busy ? <Button variant="ghost" className="mb-0.5 shrink-0" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
                   : <Button variant="primary" className="mb-0.5 shrink-0" icon={<Send className="size-4" />} disabled={!canWrite || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>}
               </div>
-              <div className="mx-auto mt-1 flex max-w-3xl justify-between px-2 text-[10.5px] text-mist-400"><span>{files.length ? `已添加 ${files.length} 个附件` : '附件支持图片、txt 与 md'}</span><span>{Array.from(text).length} / {bootstrapData.limits.message_chars}</span></div>
+              <div className="mx-auto mt-1 flex max-w-3xl justify-between px-2 text-[10.5px] text-mist-400"><span>{readyAttachmentIDs.length ? `已添加 ${readyAttachmentIDs.length} 个附件` : '附件支持图片、txt 与 md'}</span><span>{Array.from(text).length} / {bootstrapData.limits.message_chars}</span></div>
             </>}
           </div>
         </div>
@@ -1492,10 +1666,17 @@ export default function Agent() {
         latestSkillUsage={latestSkillUsage}
         artifactsEnabled={bootstrapData.features.artifacts === true}
         actions={actions}
+        inputs={inputs}
+        inputQueuePaused={inputQueuePaused}
+        onUpdateInput={updateQueuedInput}
+        onCancelInput={cancelQueuedInput}
+        onRestoreInput={restoreNeedsReviewInput}
+        onResumeInputs={resumeInputQueue}
+        onQuoteArtifact={quoteArtifact}
       />}
 
       {bootstrapData.features.artifacts === true && !desktopPresentation && <Drawer open={artifactsOpen} onClose={() => setArtifactsOpen(false)} title="本对话产物" width="w-[min(92vw,920px)]">
-        <ArtifactPanel conversationID={conversation?.id} updatedAt={conversation?.updated_at} />
+        <ArtifactPanel conversationID={conversation?.id} onQuote={quoteArtifact} />
       </Drawer>}
 
       <Drawer open={mobileListOpen} onClose={() => setMobileListOpen(false)} title="对话" width="w-[min(88vw,360px)]">
@@ -1636,4 +1817,3 @@ function Unavailable({ bootstrap, navigate }: { bootstrap: AgentBootstrap; navig
 
   return <div className="flex h-full items-center justify-center p-6"><div className="max-w-md rounded-2xl border border-mist-200 bg-white p-8 text-center shadow-card"><Bot className="mx-auto size-8 text-mist-300" /><h1 className="mt-3 text-lg font-semibold text-mist-800">{title}</h1><p className="mt-2 text-sm text-mist-500">{subtitle}</p>{actionButton}</div></div>
 }
-

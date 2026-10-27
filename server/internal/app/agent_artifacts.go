@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var errAgentArtifactLimit = errors.New("agent artifact limit reached")
@@ -168,6 +169,51 @@ func (s *Server) getAgentArtifact(w http.ResponseWriter, r *http.Request) error 
 	response.Artifact.CurrentVersionID = currentID
 	response.Versions = []agentArtifactVersionView{}
 	requestedVersion := strings.TrimSpace(r.URL.Query().Get("version"))
+	limit := queryInt(r, "limit", 20)
+	if limit < 1 || limit > 20 {
+		return validation("每页产物版本最多 20 项")
+	}
+	beforeVersion := 0
+	if cursor := strings.TrimSpace(r.URL.Query().Get("cursor")); cursor != "" {
+		beforeVersion, err = strconv.Atoi(cursor)
+		if err != nil || beforeVersion < 2 {
+			return validation("产物版本游标无效")
+		}
+	}
+	var versionsRows pgx.Rows
+	if beforeVersion > 0 {
+		versionsRows, err = s.db.Query(r.Context(), `SELECT id,version,source_run_id,source_message_id,source_ai_call_id,
+			source_kind,hash,status,created_at FROM agent_artifact_version
+			WHERE artifact_id=$1 AND version<$2 ORDER BY version DESC LIMIT $3`, artifactID, beforeVersion, limit+1)
+	} else {
+		versionsRows, err = s.db.Query(r.Context(), `SELECT id,version,source_run_id,source_message_id,source_ai_call_id,
+			source_kind,hash,status,created_at FROM agent_artifact_version
+			WHERE artifact_id=$1 ORDER BY version DESC LIMIT $2`, artifactID, limit+1)
+	}
+	if err != nil {
+		return err
+	}
+	for versionsRows.Next() {
+		var meta agentArtifactVersionView
+		if err := versionsRows.Scan(&meta.ID, &meta.Version, &meta.SourceRunID, &meta.SourceMessage,
+			&meta.SourceAICallID, &meta.SourceKind, &meta.Hash, &meta.Status, &meta.CreatedAt); err != nil {
+			versionsRows.Close()
+			return err
+		}
+		meta.Content = json.RawMessage(`{}`)
+		meta.Available = true
+		response.Versions = append(response.Versions, meta)
+	}
+	if err := versionsRows.Err(); err != nil {
+		versionsRows.Close()
+		return err
+	}
+	versionsRows.Close()
+	if len(response.Versions) > limit {
+		response.Versions = response.Versions[:limit]
+		token := strconv.Itoa(response.Versions[len(response.Versions)-1].Version)
+		response.NextCursor = &token
+	}
 	if requestedVersion == "" && currentID == nil {
 		return ok(w, response)
 	}
@@ -216,8 +262,11 @@ func (s *Server) getAgentArtifact(w http.ResponseWriter, r *http.Request) error 
 		} else {
 			var storagePath string
 			if err := s.db.QueryRow(r.Context(), `SELECT storage_path FROM agent_attachment
-				WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND conversation_id=$4 AND kind='image' AND referenced=true`,
-				attachmentID, ident(r.Context()).WorkspaceID, ident(r.Context()).UserID, response.Artifact.ConversationID).Scan(&storagePath); err != nil {
+				WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND kind='image' AND referenced=true
+				AND EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=agent_attachment.id
+					AND r.conversation_id=$4 AND (r.artifact_version_id=$5 OR r.message_id=$6))`,
+				attachmentID, ident(r.Context()).WorkspaceID, ident(r.Context()).UserID, response.Artifact.ConversationID,
+				version.ID, version.SourceMessage).Scan(&storagePath); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					version.Available = false
 				} else {
@@ -226,7 +275,7 @@ func (s *Server) getAgentArtifact(w http.ResponseWriter, r *http.Request) error 
 			} else if _, err := os.Stat(s.agentAttachmentFile(agentAttachmentVariantPath(storagePath, "thumb"))); err != nil {
 				version.Available = false
 			} else {
-				version.ImageURL = "/api/v1/agent/attachments/" + attachmentID.String() + "/file?variant=thumb"
+				version.ImageURL = "/api/v1/agent/attachments/" + attachmentID.String() + "/file?variant=thumb&conversation_id=" + response.Artifact.ConversationID.String()
 			}
 		}
 	}
@@ -248,8 +297,130 @@ func (s *Server) getAgentArtifact(w http.ResponseWriter, r *http.Request) error 
 		version.Status = "source_unavailable"
 	}
 	response.CurrentVersion = &version
-	response.Versions = append(response.Versions, version)
 	return ok(w, response)
+}
+
+func (s *Server) postAgentArtifactVersion(w http.ResponseWriter, r *http.Request) error {
+	if err := requireAgentFeature("artifacts"); err != nil {
+		return err
+	}
+	artifactID, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	var req struct {
+		RequestID       string `json:"request_id"`
+		ExpectedVersion int    `json:"expected_version"`
+		Content         string `json:"content"`
+	}
+	if err := agentDecodeBody(r, &req); err != nil {
+		return err
+	}
+	requestID, err := uuid.Parse(strings.TrimSpace(req.RequestID))
+	if err != nil || requestID == uuid.Nil || req.ExpectedVersion < 1 {
+		return validation("保存版本需要有效的 request_id 和 expected_version")
+	}
+	text := strings.TrimSpace(req.Content)
+	if text == "" || runeLen(text) > 20000 {
+		return validation("产物内容必须为1～20000字")
+	}
+	if agentContainsSecret(text, s.agentSecretValues(r.Context(), ident(r.Context()).WorkspaceID)) {
+		return validation("产物疑似包含密钥或密码，不能保存")
+	}
+	identity := ident(r.Context())
+	operation := "artifact.version:" + artifactID.String()
+	payload := map[string]any{"expected_version": req.ExpectedVersion, "content": text}
+	content, err := json.Marshal(map[string]any{"format": "text", "text": text})
+	if err != nil {
+		return err
+	}
+	hash := sha256.Sum256(content)
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(r.Context())
+	if _, err := tx.Exec(r.Context(), `SELECT id FROM app_user WHERE id=$1 FOR NO KEY UPDATE`, identity.UserID); err != nil {
+		return err
+	}
+	var conversationID, locked uuid.UUID
+	if err := tx.QueryRow(r.Context(), `SELECT c.id FROM agent_artifact a JOIN agent_conversation c ON c.id=a.conversation_id
+		WHERE a.id=$1 AND c.workspace_id=$2 AND c.user_id=$3`, artifactID, identity.WorkspaceID, identity.UserID).Scan(&conversationID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errNotFound
+		}
+		return err
+	}
+	if err := tx.QueryRow(r.Context(), `SELECT id FROM agent_conversation WHERE id=$1 AND workspace_id=$2 AND user_id=$3 FOR UPDATE`,
+		conversationID, identity.WorkspaceID, identity.UserID).Scan(&locked); err != nil {
+		return err
+	}
+	var currentVersionID *uuid.UUID
+	var kind string
+	if err := tx.QueryRow(r.Context(), `SELECT current_version_id,kind FROM agent_artifact WHERE id=$1 AND conversation_id=$2 FOR UPDATE`,
+		artifactID, conversationID).Scan(&currentVersionID, &kind); err != nil {
+		return errNotFound
+	}
+	resource, err := claimAgentRequest(r.Context(), tx, identity.WorkspaceID, identity.UserID, operation, requestID, payload)
+	if err != nil {
+		return err
+	}
+	if resource != nil {
+		var version int
+		if err := tx.QueryRow(r.Context(), `SELECT version FROM agent_artifact_version WHERE id=$1 AND artifact_id=$2`, *resource, artifactID).Scan(&version); err != nil {
+			return err
+		}
+		if err := tx.Commit(r.Context()); err != nil {
+			return err
+		}
+		return ok(w, map[string]any{"artifact_id": artifactID, "version_id": *resource, "version": version, "replayed": true})
+	}
+	currentNumber := 0
+	if currentVersionID != nil {
+		if err := tx.QueryRow(r.Context(), `SELECT version FROM agent_artifact_version WHERE id=$1 AND artifact_id=$2`, *currentVersionID, artifactID).Scan(&currentNumber); err != nil {
+			return err
+		}
+	}
+	if currentNumber != req.ExpectedVersion {
+		return apiErr(409, "agent_revision_conflict", "产物版本已变化，请刷新后再保存")
+	}
+	var count int
+	if err := tx.QueryRow(r.Context(), `SELECT count(*) FROM agent_artifact_version v JOIN agent_artifact a ON a.id=v.artifact_id WHERE a.conversation_id=$1`, conversationID).Scan(&count); err != nil {
+		return err
+	}
+	if count >= 100 {
+		return apiErr(429, "agent_input_limit_reached", "本对话产物版本已达100项上限")
+	}
+	version := currentNumber + 1
+	var versionID uuid.UUID
+	if err := tx.QueryRow(r.Context(), `INSERT INTO agent_artifact_version(artifact_id,version,source_kind,content_ref,hash,status)
+		VALUES($1,$2,'chat',$3,$4,'draft') RETURNING id`, artifactID, version, content, hex.EncodeToString(hash[:])).Scan(&versionID); err != nil {
+		return err
+	}
+	var tag pgconn.CommandTag
+	if currentVersionID == nil {
+		tag, err = tx.Exec(r.Context(), `UPDATE agent_artifact SET current_version_id=$2,updated_at=now() WHERE id=$1 AND current_version_id IS NULL`, artifactID, versionID)
+	} else {
+		tag, err = tx.Exec(r.Context(), `UPDATE agent_artifact SET current_version_id=$2,updated_at=now() WHERE id=$1 AND current_version_id=$3`, artifactID, versionID, *currentVersionID)
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return apiErr(409, "agent_revision_conflict", "产物版本已变化，请刷新后再保存")
+	}
+	if _, err := appendAgentEventTx(r.Context(), tx, conversationID, nil, "artifact.created", map[string]any{
+		"artifact_id": artifactID, "version_id": versionID, "version": version, "source_kind": "chat",
+	}, nil); err != nil {
+		return err
+	}
+	if err := completeAgentRequest(r.Context(), tx, identity.WorkspaceID, identity.UserID, operation, requestID, versionID); err != nil {
+		return err
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		return err
+	}
+	return ok(w, map[string]any{"artifact_id": artifactID, "version_id": versionID, "version": version, "kind": kind})
 }
 
 func (s *Server) agentInsertArtifactTx(ctx context.Context, tx pgx.Tx, conversationID uuid.UUID, kind, title, sourceKind string,
@@ -298,6 +469,97 @@ func (s *Server) agentInsertArtifactTx(ctx context.Context, tx pgx.Tx, conversat
 	return artifactID, nil
 }
 
+func (s *Server) agentMetaPresentArtifact(ctx context.Context, st *agentRunState, args map[string]any) ([]byte, string, error) {
+	if !agentWorkbenchFeatures()["artifacts"] || st.ExecutionOrigin != "interactive" || st.Trigger == "routine" {
+		return nil, "", apiErr(403, "forbidden", "当前运行不能创建对话产物")
+	}
+	title, _ := args["title"].(string)
+	title = strings.TrimSpace(title)
+	kind, _ := args["kind"].(string)
+	chatContent, hasChat := args["chat_content"].(string)
+	_, hasSource := args["source_ref"]
+	if title == "" || runeLen(title) > 200 || (kind != "markdown" && kind != "title" && kind != "table") || hasChat == hasSource {
+		return nil, "", apiErr(422, "invalid_arguments", "请提供标题、有效类型，并在资料引用或聊天草稿中选择一项来源")
+	}
+	chatContent = strings.TrimSpace(chatContent)
+	if hasChat && (chatContent == "" || runeLen(chatContent) > 20000) {
+		return nil, "", apiErr(422, "invalid_arguments", "聊天草稿必须为1～20000字")
+	}
+	if hasChat && agentContainsSecret(chatContent, s.agentSecretValues(ctx, st.WorkspaceID)) {
+		return nil, "", validation("草稿疑似包含密钥或密码，不能保存到产物")
+	}
+	contextRefs := []agentContextReference{}
+	if hasSource {
+		if err := requireAgentFeature("context_refs"); err != nil {
+			return nil, "", err
+		}
+		var ref agentContextReference
+		if err := agentDecodeToolArgument(args, "source_ref", &ref); err != nil {
+			return nil, "", err
+		}
+		ref.Scope = "turn"
+		var err error
+		contextRefs, err = s.agentValidateContextReferences(ctx, []agentContextReference{ref}, st.AccountID, st.ConversationID)
+		if err != nil {
+			return nil, "", err
+		}
+		resolved, err := s.agentResolveContextReferenceInConversation(ctx, contextRefs[0], st.AccountID, &st.ConversationID)
+		if err != nil {
+			return nil, "", err
+		}
+		chatContent = strings.TrimSpace(resolved.Name + "\n\n" + resolved.Content)
+		if runeLen(chatContent) > 20000 {
+			chatContent = truncate(chatContent, 20000)
+		}
+		if agentContainsSecret(chatContent, s.agentSecretValues(ctx, st.WorkspaceID)) {
+			return nil, "", validation("引用内容疑似包含密钥或密码，不能保存到产物")
+		}
+	}
+	content, err := json.Marshal(map[string]any{"format": "text", "text": chatContent})
+	if err != nil {
+		return nil, "", err
+	}
+	hash := sha256.Sum256(content)
+	refsJSON, err := json.Marshal(contextRefs)
+	if err != nil {
+		return nil, "", err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	defer tx.Rollback(ctx)
+	artifactID, err := s.agentInsertArtifactTx(ctx, tx, st.ConversationID, kind, title, "chat", content,
+		hex.EncodeToString(hash[:]), &st.RunID, nil, nil)
+	if err != nil {
+		if errors.Is(err, errAgentArtifactLimit) {
+			return nil, "", apiErr(429, "agent_input_limit_reached", "本次运行或对话的产物版本已达上限")
+		}
+		return nil, "", err
+	}
+	var versionID uuid.UUID
+	var version int
+	if err := tx.QueryRow(ctx, `SELECT current_version_id FROM agent_artifact WHERE id=$1`, artifactID).Scan(&versionID); err != nil {
+		return nil, "", err
+	}
+	if err := tx.QueryRow(ctx, `SELECT version FROM agent_artifact_version WHERE id=$1`, versionID).Scan(&version); err != nil {
+		return nil, "", err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_artifact_version SET context_refs=$2 WHERE id=$1`, versionID, refsJSON); err != nil {
+		return nil, "", err
+	}
+	if _, err := appendAgentEventTx(ctx, tx, st.ConversationID, &st.RunID, "artifact.created", map[string]any{
+		"artifact_id": artifactID, "version_id": versionID, "version": version, "source_kind": "chat",
+	}, nil); err != nil {
+		return nil, "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, "", err
+	}
+	payload, err := json.Marshal(map[string]any{"ok": true, "artifact_id": artifactID, "version_id": versionID, "version": version})
+	return payload, "已保存对话草稿产物：" + title, err
+}
+
 func (s *Server) agentProjectUploadedImagesTx(ctx context.Context, tx pgx.Tx, conversationID, messageID uuid.UUID,
 	attachmentIDs []uuid.UUID) error {
 	if !agentWorkbenchFeatures()["artifacts"] || len(attachmentIDs) == 0 {
@@ -308,8 +570,10 @@ func (s *Server) agentProjectUploadedImagesTx(ctx context.Context, tx pgx.Tx, co
 		var bytes int
 		var width, height *int
 		err := tx.QueryRow(ctx, `SELECT name,mime,bytes,width,height,sha256 FROM agent_attachment
-			WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND conversation_id=$4 AND kind='image' AND referenced=true`,
-			attachmentID, ident(ctx).WorkspaceID, ident(ctx).UserID, conversationID).Scan(&name, &mime, &bytes, &width, &height, &sha)
+			WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND kind='image' AND referenced=true
+			AND EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=agent_attachment.id
+				AND r.conversation_id=$4 AND r.message_id=$5)`,
+			attachmentID, ident(ctx).WorkspaceID, ident(ctx).UserID, conversationID, messageID).Scan(&name, &mime, &bytes, &width, &height, &sha)
 		if errors.Is(err, pgx.ErrNoRows) {
 			continue
 		}
@@ -321,8 +585,21 @@ func (s *Server) agentProjectUploadedImagesTx(ctx context.Context, tx pgx.Tx, co
 		if err != nil {
 			return err
 		}
-		if _, err := s.agentInsertArtifactTx(ctx, tx, conversationID, "image", name, "attachment", content, sha,
-			nil, &messageID, nil); err != nil && !errors.Is(err, errAgentArtifactLimit) {
+		artifactID, err := s.agentInsertArtifactTx(ctx, tx, conversationID, "image", name, "attachment", content, sha,
+			nil, &messageID, nil)
+		if errors.Is(err, errAgentArtifactLimit) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var versionID uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT current_version_id FROM agent_artifact WHERE id=$1`, artifactID).Scan(&versionID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_attachment_ref(attachment_id,conversation_id,workspace_id,user_id,artifact_version_id)
+			VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, attachmentID, conversationID, ident(ctx).WorkspaceID,
+			ident(ctx).UserID, versionID); err != nil {
 			return err
 		}
 	}

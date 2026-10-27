@@ -306,6 +306,9 @@ type agentConversation struct {
 	ReadUptoMessageSeq int64      `json:"read_upto_message_seq"`
 	ForceUnread        bool       `json:"force_unread"`
 	Mode               string     `json:"mode"`
+	ReasoningEffort    *string    `json:"reasoning_effort,omitempty"`
+	ParentID           *uuid.UUID `json:"parent_id,omitempty"`
+	ForkUptoSeq        *int       `json:"fork_upto_seq,omitempty"`
 }
 
 type agentConversationListItem struct {
@@ -320,13 +323,13 @@ type agentConversationListItem struct {
 
 const agentConversationCols = `c.id, c.title, c.title_source, c.pinned_at, c.model_provider_id, c.model,
 	c.account_id, c.last_message_at, c.created_at, c.updated_at, c.revision,
-	c.archived_at, c.group_id, c.read_upto_message_seq, c.force_unread, c.mode`
+	c.archived_at, c.group_id, c.read_upto_message_seq, c.force_unread, c.mode, c.reasoning_effort, c.parent_id, c.fork_upto_seq`
 
 func scanAgentConversation(row pgx.Row) (*agentConversation, error) {
 	var c agentConversation
 	if err := row.Scan(&c.ID, &c.Title, &c.TitleSource, &c.PinnedAt, &c.ModelProviderID, &c.Model,
 		&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision,
-		&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread, &c.Mode); err != nil {
+		&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread, &c.Mode, &c.ReasoningEffort, &c.ParentID, &c.ForkUptoSeq); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -527,7 +530,8 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 		var matchedSeq pgtype.Int8
 		if err := rows.Scan(&c.ID, &c.Title, &c.TitleSource, &c.PinnedAt, &c.ModelProviderID, &c.Model,
 			&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision,
-			&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread, &c.Mode,
+			&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread, &c.Mode, &c.ReasoningEffort,
+			&c.ParentID, &c.ForkUptoSeq,
 			&summary.PendingActions, &summary.HasActiveRun, &summary.HasUnread,
 			&matchedID, &matchedSeq, &summary.MatchedMessageSnippet); err != nil {
 			return err
@@ -640,7 +644,7 @@ func (s *Server) createAgentConversation(w http.ResponseWriter, r *http.Request)
 		(workspace_id, user_id, title, title_source, account_id, model_provider_id, model)
 		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, title, title_source, pinned_at, model_provider_id, model,
 		account_id, last_message_at, created_at, updated_at, revision, archived_at, group_id,
-		read_upto_message_seq, force_unread, mode`,
+		read_upto_message_seq, force_unread, mode, reasoning_effort, parent_id, fork_upto_seq`,
 		id.WorkspaceID, id.UserID, title, source, accountID, providerID, model))
 	if err != nil {
 		return err
@@ -852,7 +856,8 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 	}
 	sql := `UPDATE agent_conversation SET ` + strings.Join(sets, ", ") + where +
 		` RETURNING id, title, title_source, pinned_at, model_provider_id, model, account_id,
-		last_message_at, created_at, updated_at, revision, archived_at, group_id, read_upto_message_seq, force_unread, mode`
+		last_message_at, created_at, updated_at, revision, archived_at, group_id, read_upto_message_seq, force_unread, mode,
+		reasoning_effort, parent_id, fork_upto_seq`
 	query := s.db.QueryRow
 	if tx != nil {
 		query = tx.QueryRow
@@ -915,13 +920,16 @@ func (s *Server) deleteAgentConversation(w http.ResponseWriter, r *http.Request)
 	if active || executing {
 		return apiErr(409, "agent_run_busy", "有运行或操作卡片正在执行，请等它结束后再删除对话")
 	}
-	// 附件文件由应用代码在事务提交后删除，数据库级联只删记录（第 10 节说明 3）。
-	paths, err := s.agentAttachmentPathsOf(ctx, c.ID)
+	attachmentIDs, err := agentConversationAttachmentIDsTx(ctx, tx, []uuid.UUID{c.ID})
 	if err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM agent_conversation WHERE id=$1 AND workspace_id=$2 AND user_id=$3`,
 		c.ID, id.WorkspaceID, id.UserID); err != nil {
+		return err
+	}
+	paths, err := agentDeleteUnreferencedAttachmentsTx(ctx, tx, attachmentIDs)
+	if err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -990,19 +998,20 @@ type agentSkillUsageView struct {
 }
 
 type agentMessageView struct {
-	ID            uuid.UUID               `json:"id"`
-	Seq           int                     `json:"seq"`
-	MessageKey    string                  `json:"message_key,omitempty"`
-	Role          string                  `json:"role"`
-	Content       string                  `json:"content"`
-	AICallID      *uuid.UUID              `json:"ai_call_id"`
-	ToolCalls     []agentToolCallView     `json:"tool_calls"`
-	Attachments   []agentAttachmentView   `json:"attachments"`
-	ContextRefs   []agentContextReference `json:"context_refs"`
-	SkillRequests []agentSkillRequest     `json:"skill_requests"`
-	SkillUsage    []agentSkillUsageView   `json:"skill_usage"`
-	RunID         *uuid.UUID              `json:"run_id"`
-	CreatedAt     time.Time               `json:"created_at"`
+	ID              uuid.UUID               `json:"id"`
+	Seq             int                     `json:"seq"`
+	MessageKey      string                  `json:"message_key,omitempty"`
+	Role            string                  `json:"role"`
+	Content         string                  `json:"content"`
+	AICallID        *uuid.UUID              `json:"ai_call_id"`
+	ToolCalls       []agentToolCallView     `json:"tool_calls"`
+	Attachments     []agentAttachmentView   `json:"attachments"`
+	ContextRefs     []agentContextReference `json:"context_refs"`
+	SkillRequests   []agentSkillRequest     `json:"skill_requests"`
+	SkillUsage      []agentSkillUsageView   `json:"skill_usage"`
+	RunID           *uuid.UUID              `json:"run_id"`
+	SourceMessageID *uuid.UUID              `json:"source_message_id,omitempty"`
+	CreatedAt       time.Time               `json:"created_at"`
 }
 
 type agentTargetView struct {
@@ -1153,6 +1162,14 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return err
 	}
+	inputs, err := agentLoadInputs(ctx, tx, c.ID)
+	if err != nil {
+		return err
+	}
+	var inputQueuePaused bool
+	if err := tx.QueryRow(ctx, `SELECT input_queue_paused FROM agent_conversation WHERE id=$1`, c.ID).Scan(&inputQueuePaused); err != nil {
+		return err
+	}
 	var currentPlan *agentPlanView
 	for i := range plans {
 		if plans[i].Status == "current" {
@@ -1180,7 +1197,7 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 		return err
 	}
 	return ok(w, map[string]any{
-		"conversation": c, "messages": messages, "actions": actions, "plans": plans, "current_plan": currentPlan, "questions": questions, "usage": usage,
+		"conversation": c, "messages": messages, "actions": actions, "plans": plans, "current_plan": currentPlan, "questions": questions, "inputs": inputs, "input_queue_paused": inputQueuePaused, "usage": usage,
 		"active_run": active, "last_run": latest, "has_more": hasMore,
 		"can_continue":   s.agentConversationCanContinue(ctx, c),
 		"last_event_seq": lastEventSeq, "read_upto_event_seq": readUptoEventSeq,
@@ -1191,7 +1208,7 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 // agentMessages 返回窗口内的消息；role=tool 不单独列出，而是折叠为助手消息的工具调用摘要（第 11.2 节）。
 func (s *Server) agentMessages(ctx context.Context, tx pgx.Tx, convID uuid.UUID, before int) ([]agentMessageView, bool, error) {
 	args := []any{convID}
-	sql := `SELECT id, seq, message_key, role, content, ai_call_id, tool_calls, tool_call_id, attachment_ids, context_refs, skill_requests, run_id, created_at
+	sql := `SELECT id, seq, message_key, role, content, ai_call_id, tool_calls, tool_call_id, attachment_ids, context_refs, skill_requests, run_id, created_at, source_message_id
 		FROM agent_message WHERE conversation_id=$1`
 	if before > 0 {
 		args = append(args, before)
@@ -1217,7 +1234,7 @@ func (s *Server) agentMessages(ctx context.Context, tx pgx.Tx, convID uuid.UUID,
 		var m rawMessage
 		var toolCalls []byte
 		if err := rows.Scan(&m.view.ID, &m.view.Seq, &m.view.MessageKey, &m.view.Role, &m.view.Content, &m.view.AICallID, &toolCalls,
-			&m.toolID, &m.ids, &m.contextRefs, &m.skillRequests, &m.view.RunID, &m.view.CreatedAt); err != nil {
+			&m.toolID, &m.ids, &m.contextRefs, &m.skillRequests, &m.view.RunID, &m.view.CreatedAt, &m.view.SourceMessageID); err != nil {
 			rows.Close()
 			return nil, false, err
 		}
@@ -1254,7 +1271,7 @@ func (s *Server) agentMessages(ctx context.Context, tx pgx.Tx, convID uuid.UUID,
 	if hasMore {
 		raw = raw[:agentMessagePage]
 	}
-	attachments, err := s.agentAttachments(ctx, tx, attachmentIDs)
+	attachments, err := s.agentAttachments(ctx, tx, attachmentIDs, convID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1388,13 +1405,15 @@ func firstLine(s string) string {
 	return s
 }
 
-func (s *Server) agentAttachments(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) (map[uuid.UUID]agentAttachmentView, error) {
+func (s *Server) agentAttachments(ctx context.Context, tx pgx.Tx, ids []uuid.UUID, conversationID uuid.UUID) (map[uuid.UUID]agentAttachmentView, error) {
 	out := map[uuid.UUID]agentAttachmentView{}
 	if len(ids) == 0 {
 		return out, nil
 	}
 	rows, err := tx.Query(ctx, `SELECT id, kind, name, mime, bytes, width, height FROM agent_attachment
-		WHERE id = ANY($1) AND user_id=$2`, ids, ident(ctx).UserID)
+		WHERE id = ANY($1) AND workspace_id=$2 AND user_id=$3
+		AND EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=agent_attachment.id AND r.conversation_id=$4)`,
+		ids, ident(ctx).WorkspaceID, ident(ctx).UserID, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1404,7 +1423,7 @@ func (s *Server) agentAttachments(ctx context.Context, tx pgx.Tx, ids []uuid.UUI
 		if err := rows.Scan(&a.ID, &a.Kind, &a.Name, &a.Mime, &a.Bytes, &a.Width, &a.Height); err != nil {
 			return nil, err
 		}
-		a.URL = "/api/v1/agent/attachments/" + a.ID.String() + "/file"
+		a.URL = "/api/v1/agent/attachments/" + a.ID.String() + "/file?conversation_id=" + conversationID.String()
 		out[a.ID] = a
 	}
 	return out, rows.Err()
@@ -1544,23 +1563,6 @@ func (s *Server) removeAgentFiles(paths []string) {
 	}
 }
 
-func (s *Server) agentAttachmentPathsOf(ctx context.Context, convID uuid.UUID) ([]string, error) {
-	rows, err := s.db.Query(ctx, `SELECT storage_path FROM agent_attachment WHERE conversation_id=$1`, convID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	paths := []string{}
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			return nil, err
-		}
-		paths = append(paths, p)
-	}
-	return paths, rows.Err()
-}
-
 // ---------- 路由 ----------
 
 // agentRoutes registers the D-117 endpoints (16 文档第 11.1 节)。
@@ -1579,14 +1581,20 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Delete("/agent/conversation-groups/{id}", s.h(s.deleteAgentConversationGroup))
 		r.Post("/agent/conversations/{id}/read", s.h(s.markAgentConversationRead))
 		r.Get("/agent/conversations/{id}/search", s.h(s.searchAgentConversationMessages))
+		r.Post("/agent/conversations/{id}/fork", s.h(s.postAgentConversationFork))
 		r.Get("/agent/conversations/{id}/artifacts", s.h(s.listAgentArtifacts))
 		r.Get("/agent/artifacts/{id}", s.h(s.getAgentArtifact))
+		r.Post("/agent/artifacts/{id}/versions", s.h(s.postAgentArtifactVersion))
 		r.Get("/agent/conversations/{id}/events", s.h(s.getAgentConversationEvents))
 		r.Get("/agent/context-candidates", s.h(s.getAgentContextCandidates))
 		r.Post("/agent/context-preview", s.h(s.postAgentContextPreview))
 		r.Get("/agent/settings", s.h(s.getAgentSettings))
 		r.Put("/agent/settings", s.h(s.putAgentSettings))
 		r.Post("/agent/conversations/{id}/messages", s.h(s.postAgentMessages))
+		r.Post("/agent/conversations/{id}/inputs", s.h(s.postAgentInput))
+		r.Post("/agent/conversations/{id}/inputs/resume", s.h(s.resumeAgentInputs))
+		r.Patch("/agent/inputs/{id}", s.h(s.patchAgentInput))
+		r.Delete("/agent/inputs/{id}", s.h(s.deleteAgentInput))
 		r.Post("/agent/conversations/{id}/continue", s.h(s.postAgentContinue))
 		r.Post("/agent/conversations/{id}/regenerate", s.h(s.postAgentRegenerate))
 		r.Post("/agent/conversations/{id}/messages/{messageId}/edit", s.h(s.postAgentMessageEdit))

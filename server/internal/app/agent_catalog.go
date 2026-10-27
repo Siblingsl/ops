@@ -127,6 +127,17 @@ var agentMetaTools = []AgentTool{
 		},
 		Notes: "仅交互运行；同组答案一次性提交，可选题允许跳过",
 	},
+	{
+		Name: "present_artifact", Kind: toolR, MinRole: roleEditor,
+		Description: "把当前对话草稿保存为只读产物，或引用已授权资料；不会获得业务写入资格",
+		Params: []ToolParam{
+			pBodyF("title", strMinMax(1, 200), true),
+			pBodyF("kind", enumOf("markdown", "title", "table"), true),
+			pBodyF("source_ref", `{"type":"object","properties":{"type":{"type":"string","enum":["work","material","topic","report"]},"id":{"type":"string","format":"uuid"},"revision":{"type":"string","maxLength":100}},"required":["type","id"],"additionalProperties":false}`, false),
+			pBodyF("chat_content", strMinMax(1, 20000), false),
+		},
+		Notes: "首次present_artifact为私有展示产物；source_ref须重新鉴权；chat_content限20,000字且source_kind固定为chat",
+	},
 }
 
 func agentDomainNames() []string {

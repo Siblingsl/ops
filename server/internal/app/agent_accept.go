@@ -184,6 +184,27 @@ func (s *Server) agentPrepareRun(ctx context.Context, original, selected *agentC
 	if err := agentCheckRunLimitsWith(ctx, tx, c.ID, owner); err != nil {
 		return nil, err
 	}
+	questionResolution := trigger == "answer"
+	if trigger == "message" && protocol != nil {
+		if payload, err := json.Marshal(protocol.Payload); err == nil {
+			var request struct {
+				SupersedeQuestionID string `json:"SupersedeQuestionID"`
+			}
+			if json.Unmarshal(payload, &request) == nil && request.SupersedeQuestionID != "" {
+				questionResolution = true
+			}
+		}
+	}
+	if !questionResolution {
+		var queued bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_input WHERE conversation_id=$1 AND kind='queue'
+			AND status IN ('pending','needs_review'))`, c.ID).Scan(&queued); err != nil {
+			return nil, err
+		}
+		if queued {
+			return nil, apiErr(409, "agent_input_queue_pending", "已有排队输入，请等待队列，或先将该输入移回草稿")
+		}
+	}
 	if trigger != "message" && trigger != "plan_accept" && trigger != "answer" {
 		var pendingQuestion bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_question WHERE conversation_id=$1

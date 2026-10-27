@@ -38,15 +38,15 @@ type agentRunState struct {
 	Vision          bool
 
 	// 第 6.5 节的运行内计数。
-	Rounds           int
-	ReadCalls        int
-	GenerateCalls    int
-	ActionsProposed  int
-	InvalidCalls     int
-	PromptTokens     int
-	CompletionTokens int
-	ExternalRead     bool
-	CardsThisRound   int
+	Rounds             int
+	ReadCalls          int
+	GenerateCalls      int
+	ActionsProposed    int
+	InvalidCalls       int
+	PromptTokens       int
+	CompletionTokens   int
+	ExternalRead       bool
+	CardsThisRound     int
 	OrchestrationCalls int
 	AwaitingInput      bool
 
@@ -154,6 +154,9 @@ func agentToolsFor(st *agentRunState, id *identity) []ai.Tool {
 	catalog := agentCatalog()
 	for i := range catalog {
 		t := &catalog[i]
+		if !agentMetaFeatureAllowed(t) {
+			continue
+		}
 		if t.Domain != "" && !loaded[t.Domain] {
 			continue
 		}
@@ -176,7 +179,7 @@ func (st *agentRunState) loadedTool(id *identity, name string) *AgentTool {
 	}
 	if t.Domain == "" {
 		// 元工具始终可用，仍受角色可见性约束。
-		if agentRunToolAllowed(st, t, id) {
+		if agentMetaFeatureAllowed(t) && agentRunToolAllowed(st, t, id) {
 			return t
 		}
 		return nil
@@ -187,6 +190,16 @@ func (st *agentRunState) loadedTool(id *identity, name string) *AgentTool {
 		}
 	}
 	return nil
+}
+
+func agentMetaFeatureAllowed(t *AgentTool) bool {
+	if t == nil {
+		return false
+	}
+	if t.Name == "present_artifact" {
+		return agentWorkbenchFeatures()["artifacts"]
+	}
+	return true
 }
 
 // ---------- 模型解析与调用（第 7.4、6.1 节） ----------
@@ -456,6 +469,17 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 		if on, err := s.systemBool(ctx, "maintenance_mode", false); err == nil && on && !id.SystemAdmin {
 			status = "stopped"
 			return
+		}
+		if agentWorkbenchFeatures()["run_control"] {
+			if err := s.agentConsumeSteers(ctx, st); err != nil {
+				if ctx.Err() != nil {
+					status = "stopped"
+				} else {
+					status = "failed"
+					s.agentRunError(st, err)
+				}
+				return
+			}
 		}
 		release, err := s.waitAIWorker(ctx, func() {
 			if send != nil {
@@ -912,6 +936,12 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 				st.ExternalRead, st.ErrCode, st.ErrMsg, finished).Scan(&finished)
 		}
 		if txErr == nil {
+			txErr = agentMarkRunSteersForReviewTx(finishCtx, tx, st.ConversationID, st.RunID)
+		}
+		if txErr == nil && status == "stopped" && agentWorkbenchFeatures()["run_control"] {
+			_, txErr = tx.Exec(finishCtx, `UPDATE agent_conversation SET input_queue_paused=true WHERE id=$1`, st.ConversationID)
+		}
+		if txErr == nil {
 			_, txErr = appendAgentEventTx(finishCtx, tx, st.ConversationID, &st.RunID, "run.ended", map[string]any{
 				"status": status, "reason": reason, "error_code": st.ErrCode,
 			}, nil)
@@ -930,6 +960,18 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 	s.unregisterAgentRun(st.RunID)
 	agentReleaseSkillState(st.RunID)
 	s.maybeSummarize(ctx, st)
+	if txErr == nil && agentWorkbenchFeatures()["run_control"] {
+		queueIdentity := &identity{UserID: st.UserID, WorkspaceID: st.WorkspaceID, SessionID: st.SessionID}
+		if current := ident(finishCtx); current != nil {
+			copy := *current
+			copy.UserID, copy.WorkspaceID, copy.SessionID = st.UserID, st.WorkspaceID, st.SessionID
+			queueIdentity = &copy
+		}
+		queueCtx := context.WithValue(finishCtx, ctxMember, queueIdentity)
+		if err := s.agentStartNextQueuedInput(queueCtx, st.ConversationID); err != nil {
+			slog.WarnContext(finishCtx, "启动排队输入失败", "conversation_id", st.ConversationID.String(), "err", err)
+		}
+	}
 	if send != nil {
 		if txErr != nil {
 			send("error", map[string]any{"code": "internal", "message": "运行状态保存失败，请刷新核对；不要直接重复已执行操作"})

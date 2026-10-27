@@ -161,7 +161,7 @@ func TestAG07UploadImageAndVariants(t *testing.T) {
 	if view.Bytes <= 0 {
 		t.Fatalf("bytes 应为正数：%+v", view)
 	}
-	if want := "/api/v1/agent/attachments/" + view.ID.String() + "/file"; view.URL != want {
+	if want := "/api/v1/agent/attachments/" + view.ID.String() + "/file?conversation_id=" + conv.ID.String(); view.URL != want {
 		t.Fatalf("URL 错误：%s != %s", view.URL, want)
 	}
 

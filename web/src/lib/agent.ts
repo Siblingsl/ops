@@ -106,6 +106,24 @@ export interface AgentContextReference {
   revision?: string
   scope: 'turn' | 'conversation' | string
   name?: string
+  anchor?: { start: number; end: number; quote_hash: string; quote: string }
+}
+
+export interface AgentInput {
+  id: string
+  conversation_id: string
+  run_id: string | null
+  kind: 'steer' | 'queue' | string
+  status: 'pending' | 'consumed' | 'cancelled' | 'needs_review' | 'expired' | string
+  error_code?: string
+  revision: number
+  text: string
+  attachment_ids: string[]
+  attachments: AgentAttachment[]
+  context_refs: AgentContextReference[]
+  skill_requests: AgentSkillRequest[]
+  consumed_message_id?: string | null
+  created_at: string
 }
 
 export interface AgentSkillRequest {
@@ -221,6 +239,8 @@ export interface AgentConversationDetail {
   plans?: AgentPlan[]
   current_plan?: AgentPlan | null
   questions?: AgentQuestion[]
+  inputs?: AgentInput[]
+  input_queue_paused?: boolean
   active_run: AgentActiveRun | null
   last_run?: (AgentActiveRun & AgentRunEnd) | null
   can_continue: boolean

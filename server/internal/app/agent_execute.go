@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -754,6 +755,15 @@ func (s *Server) agentEmitDone(ctx context.Context, sse *sseWriter, act *agentAc
 		payload["secret_once"] = res.Secrets
 	}
 	sse.send("done", payload)
+	if !replayed && agentWorkbenchFeatures()["run_control"] {
+		var queued bool
+		if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_input WHERE conversation_id=$1 AND kind='queue'
+			AND status IN ('pending','needs_review'))`, act.ConversationID).Scan(&queued); err == nil && queued {
+			if err := s.agentStartNextQueuedInput(context.WithoutCancel(ctx), act.ConversationID); err != nil {
+				slog.WarnContext(ctx, "卡片处理后启动排队输入失败", "conversation_id", act.ConversationID.String(), "err", err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -771,6 +781,11 @@ func (s *Server) agentBatchResolved(ctx context.Context, act *agentActionRow) bo
 // 且未超过连续自动续跑上限。
 func (s *Server) agentCanContinue(ctx context.Context, act *agentActionRow) bool {
 	if !s.agentBatchResolved(ctx, act) {
+		return false
+	}
+	var queued bool
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_input WHERE conversation_id=$1 AND kind='queue'
+		AND status IN ('pending','needs_review'))`, act.ConversationID).Scan(&queued); err != nil || queued {
 		return false
 	}
 	var running, count int
@@ -871,6 +886,11 @@ func (s *Server) postAgentActionReject(w http.ResponseWriter, r *http.Request) e
 		"reject_reason": reason,
 	}}); err != nil {
 		return err
+	}
+	if agentWorkbenchFeatures()["run_control"] {
+		if err := s.agentStartNextQueuedInput(context.WithoutCancel(ctx), act.ConversationID); err != nil {
+			return err
+		}
 	}
 	// 第 6.4 节：拒绝后由前端据批次与续跑状态决定是否继续。
 	return ok(w, map[string]any{"ok": true,

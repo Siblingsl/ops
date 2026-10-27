@@ -85,6 +85,8 @@ func (s *Server) agentMetaTool(ctx context.Context, st *agentRunState, t *AgentT
 			return s.agentToolError(ctx, st, call, "internal", truncate(err.Error(), 200), send)
 		}
 		return nil
+	case "present_artifact":
+		payload, summary, err = s.agentMetaPresentArtifact(ctx, st, args)
 	default:
 		err = errAgentUnknownTool
 	}

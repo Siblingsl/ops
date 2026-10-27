@@ -144,7 +144,7 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 		if err := requireAgentFeature("context_refs"); err != nil {
 			return err
 		}
-		contextRefs, err = s.agentValidateContextReferences(ctx, contextRefs, contextAccountID)
+		contextRefs, err = s.agentValidateContextReferences(ctx, contextRefs, contextAccountID, convID)
 		if err != nil {
 			return err
 		}
@@ -340,7 +340,11 @@ func (s *Server) agentInsertRowTx(ctx context.Context, tx pgx.Tx, convID uuid.UU
 // agentInsertUserMessageWithContext 保存消息、引用和附件状态，并将会话级引用固定到对话中。
 func (s *Server) agentInsertUserMessageWithContextTx(ctx context.Context, tx pgx.Tx, convID uuid.UUID, content string,
 	attachments []uuid.UUID, refs []agentContextReference, skills []agentSkillRequest,
-	requestID uuid.UUID, requestPayload any) (*agentMessageView, bool, error) {
+	requestID uuid.UUID, requestPayload any, runIDs ...*uuid.UUID) (*agentMessageView, bool, error) {
+	var runID *uuid.UUID
+	if len(runIDs) > 0 {
+		runID = runIDs[0]
+	}
 	if attachments == nil {
 		attachments = []uuid.UUID{}
 	}
@@ -405,29 +409,21 @@ func (s *Server) agentInsertUserMessageWithContextTx(ctx context.Context, tx pgx
 		WHERE id=$1 RETURNING next_seq`, convID, fixedJSON).Scan(&seq); err != nil {
 		return nil, false, err
 	}
-	if len(attachments) > 0 {
-		tag, err := tx.Exec(ctx, `UPDATE agent_attachment SET referenced=true,conversation_id=COALESCE(conversation_id,$2)
-			WHERE id=ANY($1) AND user_id=$3 AND workspace_id=$4 AND referenced=false AND (conversation_id IS NULL OR conversation_id=$2)`,
-			attachments, convID, ident(ctx).UserID, ident(ctx).WorkspaceID)
-		if err != nil {
-			return nil, false, err
-		}
-		if int(tag.RowsAffected()) != len(attachments) {
-			return nil, false, apiErr(422, "agent_attachment_invalid", "附件已失效或已被发送，请重新选择")
-		}
-	}
-	view := agentMessageView{Seq: seq, Role: "user", Content: content, Attachments: []agentAttachmentView{},
+	view := agentMessageView{Seq: seq, Role: "user", Content: content, RunID: runID, Attachments: []agentAttachmentView{},
 		ContextRefs: refs, SkillRequests: skills}
 	if err := tx.QueryRow(ctx, `INSERT INTO agent_message
-		(conversation_id,seq,role,content,attachment_ids,context_refs,skill_requests)
-		VALUES ($1,$2,'user',$3,$4,$5,$6) RETURNING id,created_at`,
-		convID, seq, content, attachments, refsJSON, skillsJSON).Scan(&view.ID, &view.CreatedAt); err != nil {
+		(conversation_id,seq,role,content,attachment_ids,context_refs,skill_requests,run_id)
+		VALUES ($1,$2,'user',$3,$4,$5,$6,$7) RETURNING id,created_at`,
+		convID, seq, content, attachments, refsJSON, skillsJSON, runID).Scan(&view.ID, &view.CreatedAt); err != nil {
+		return nil, false, err
+	}
+	if err := s.agentReferenceMessageAttachmentsTx(ctx, tx, convID, view.ID, attachments); err != nil {
 		return nil, false, err
 	}
 	if err := s.agentProjectUploadedImagesTx(ctx, tx, convID, view.ID, attachments); err != nil {
 		return nil, false, err
 	}
-	if _, err := appendAgentEventTx(ctx, tx, convID, nil, "message.saved", map[string]any{
+	if _, err := appendAgentEventTx(ctx, tx, convID, runID, "message.saved", map[string]any{
 		"message_id": view.ID, "seq": view.Seq, "role": view.Role, "content": view.Content,
 	}, nil); err != nil {
 		return nil, false, err
@@ -516,6 +512,60 @@ func (s *Server) agentRunModel(ctx context.Context, conv *agentConversation) (ag
 		return agentModelRef{}, apiErr(422, "agent_model_unsupported", "还没有可用的模型，请先到模型配置中为智能体对话选择模型")
 	}
 	return s.resolveAgentModel(ctx, *def)
+}
+
+// startAgentRunBackground dispatches a persisted queued input through the existing run loop.
+func (s *Server) startAgentRunBackground(ctx context.Context, st *agentRunState) error {
+	runBase := context.WithoutCancel(ctx)
+	rt, err := s.agentResolveModel(runBase, st)
+	if err == nil {
+		err = s.agentRecordRuntimeConfig(runBase, st, rt)
+	}
+	if err != nil {
+		s.finishAgentRun(runBase, st, "failed", "", nil)
+		return err
+	}
+	runCtx, cancel := context.WithCancel(runBase)
+	s.registerAgentRun(st.RunID, cancel)
+	go func() {
+		defer cancel()
+		var pending strings.Builder
+		flush := func() {
+			if pending.Len() == 0 {
+				return
+			}
+			text := pending.String()
+			pending.Reset()
+			if err := s.persistAgentDelta(context.WithoutCancel(runCtx), st, text); err != nil {
+				slog.WarnContext(runCtx, "智能体增量事件写入失败", "run_id", st.RunID.String(), "err", err)
+			}
+		}
+		send := func(event string, data any) {
+			if event == "delta_flush" {
+				flush()
+				return
+			}
+			if event == "delta" {
+				var delta struct {
+					Text string `json:"text"`
+				}
+				if raw, err := json.Marshal(data); err == nil {
+					_ = json.Unmarshal(raw, &delta)
+				}
+				pending.WriteString(delta.Text)
+				if pending.Len() >= 2048 {
+					flush()
+				}
+				return
+			}
+			flush()
+			if event != "run" && event != "done" {
+				s.persistAgentStreamEvent(context.WithoutCancel(runCtx), st, event, data)
+			}
+		}
+		s.agentRun(runCtx, st, rt, send)
+	}()
+	return nil
 }
 
 // agentStreamPreparedRun 执行已受理的运行；旧 SSE 与 v2 共用同一个循环。
@@ -953,6 +1003,11 @@ func (s *Server) postAgentRunCancel(w http.ResponseWriter, r *http.Request) erro
 	if stage != "stopping" {
 		if _, err := tx.Exec(ctx, `UPDATE agent_run SET stage='stopping' WHERE id=$1`, runID); err != nil {
 			return err
+		}
+		if agentWorkbenchFeatures()["run_control"] {
+			if _, err := tx.Exec(ctx, `UPDATE agent_conversation SET input_queue_paused=true WHERE id=$1`, conversationID); err != nil {
+				return err
+			}
 		}
 		if _, err := appendAgentEventTx(ctx, tx, conversationID, &runID, "run.stage", map[string]any{"stage": "stopping"}, nil); err != nil {
 			return err

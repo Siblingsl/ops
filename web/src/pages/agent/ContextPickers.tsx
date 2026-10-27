@@ -20,6 +20,7 @@ export interface AgentContextCandidate {
 
 export interface AgentContextSelection extends AgentContextCandidate {
   reference_scope: 'turn' | 'conversation'
+  anchor?: { start: number; end: number; quote_hash: string; quote: string }
 }
 
 export interface AgentSkillSelection {

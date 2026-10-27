@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/text/unicode/norm"
 )
 
 type agentContextCandidate struct {
@@ -26,17 +29,42 @@ type agentContextCandidate struct {
 }
 
 type agentContextReference struct {
-	Type     string    `json:"type"`
-	ID       uuid.UUID `json:"id"`
-	Revision string    `json:"revision,omitempty"`
-	Scope    string    `json:"scope"`
-	Name     string    `json:"name,omitempty"`
+	Type     string               `json:"type"`
+	ID       uuid.UUID            `json:"id"`
+	Revision string               `json:"revision,omitempty"`
+	Scope    string               `json:"scope"`
+	Name     string               `json:"name,omitempty"`
+	Anchor   *agentArtifactAnchor `json:"anchor,omitempty"`
+}
+
+func agentValidateArtifactAnchor(content string, anchor *agentArtifactAnchor) error {
+	if anchor == nil || anchor.Start < 0 || anchor.End <= anchor.Start || runeLen(anchor.Quote) == 0 || runeLen(anchor.Quote) > 2000 {
+		return apiErr(422, "agent_context_unavailable", "选段已变化，请重新选择")
+	}
+	normalized := []rune(norm.NFC.String(content))
+	quote := []rune(norm.NFC.String(anchor.Quote))
+	if anchor.End > len(normalized) || anchor.End-anchor.Start != len(quote) || string(normalized[anchor.Start:anchor.End]) != string(quote) {
+		return apiErr(422, "agent_context_unavailable", "选段已变化，请重新选择")
+	}
+	hash := sha256.Sum256([]byte(string(quote)))
+	if !strings.EqualFold(anchor.QuoteHash, hex.EncodeToString(hash[:])) {
+		return apiErr(422, "agent_context_unavailable", "选段校验已失效，请重新选择")
+	}
+	return nil
+}
+
+type agentArtifactAnchor struct {
+	Start     int    `json:"start"`
+	End       int    `json:"end"`
+	QuoteHash string `json:"quote_hash"`
+	Quote     string `json:"quote"`
 }
 
 type agentResolvedContext struct {
 	agentContextCandidate
-	Status  string `json:"status"`
-	Content string `json:"content"`
+	Status  string               `json:"status"`
+	Content string               `json:"content"`
+	Anchor  *agentArtifactAnchor `json:"anchor,omitempty"`
 }
 
 type agentSkillRequest struct {
@@ -188,8 +216,14 @@ func (s *Server) getAgentContextCandidates(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) agentResolveContextReference(ctx context.Context, ref agentContextReference, accountID *uuid.UUID) (*agentResolvedContext, error) {
+	return s.agentResolveContextReferenceInConversation(ctx, ref, accountID, nil)
+}
+
+func (s *Server) agentResolveContextReferenceInConversation(ctx context.Context, ref agentContextReference,
+	accountID *uuid.UUID, conversationID *uuid.UUID) (*agentResolvedContext, error) {
 	var item agentResolvedContext
 	item.ID, item.Type = ref.ID, ref.Type
+	item.Anchor = ref.Anchor
 	var err error
 	switch ref.Type {
 	case "work":
@@ -238,6 +272,32 @@ func (s *Server) agentResolveContextReference(ctx context.Context, ref agentCont
 			Scan(&item.Name, &item.Summary, &item.AccountID, &item.Revision, &content)
 		item.Content = string(content)
 		item.Scope = "account"
+	case "artifact_version":
+		if conversationID == nil {
+			return nil, apiErr(422, "agent_context_unavailable", "产物版本引用必须绑定到当前对话")
+		}
+		var content []byte
+		err = s.db.QueryRow(ctx, `SELECT a.title||' · v'||v.version,'对话产物版本',NULL::uuid,
+			v.hash,v.content_ref
+			FROM agent_artifact_version v JOIN agent_artifact a ON a.id=v.artifact_id
+			JOIN agent_conversation c ON c.id=a.conversation_id
+			WHERE v.id=$1 AND c.id=$2 AND c.workspace_id=$3 AND c.user_id=$4`,
+			ref.ID, *conversationID, ident(ctx).WorkspaceID, ident(ctx).UserID).
+			Scan(&item.Name, &item.Summary, &item.AccountID, &item.Revision, &content)
+		if err == nil {
+			var body struct {
+				Text string `json:"text"`
+			}
+			_ = json.Unmarshal(content, &body)
+			item.Content = body.Text
+			item.Scope = "turn"
+			if ref.Anchor != nil {
+				if err := agentValidateArtifactAnchor(body.Text, ref.Anchor); err != nil {
+					return nil, err
+				}
+				item.Content = "选段引用：\n" + ref.Anchor.Quote
+			}
+		}
 	default:
 		return nil, apiErr(422, "agent_context_unavailable", "所选资料类型不可用")
 	}
@@ -255,7 +315,7 @@ func (s *Server) agentResolveContextReference(ctx context.Context, ref agentCont
 }
 
 func (s *Server) agentValidateContextReferences(ctx context.Context, refs []agentContextReference,
-	accountID *uuid.UUID) ([]agentContextReference, error) {
+	accountID *uuid.UUID, conversationIDs ...uuid.UUID) ([]agentContextReference, error) {
 	if len(refs) > 12 {
 		return nil, validation("每轮最多引用 12 项资料")
 	}
@@ -276,7 +336,11 @@ func (s *Server) agentValidateContextReferences(ctx context.Context, refs []agen
 			return nil, validation("同一资料不能重复引用")
 		}
 		seen[key] = true
-		resolved, err := s.agentResolveContextReference(ctx, ref, accountID)
+		var conversationID *uuid.UUID
+		if len(conversationIDs) > 0 {
+			conversationID = &conversationIDs[0]
+		}
+		resolved, err := s.agentResolveContextReferenceInConversation(ctx, ref, accountID, conversationID)
 		if err != nil {
 			return nil, err
 		}
@@ -424,7 +488,7 @@ func (s *Server) postAgentContextPreview(w http.ResponseWriter, r *http.Request)
 			return validation("同一资料不能重复引用")
 		}
 		seen[key] = true
-		item, err := s.agentResolveContextReference(r.Context(), ref, accountID)
+		item, err := s.agentResolveContextReferenceInConversation(r.Context(), ref, accountID, convID)
 		if err != nil {
 			return err
 		}
@@ -440,7 +504,7 @@ func (s *Server) postAgentContextPreview(w http.ResponseWriter, r *http.Request)
 		if ref.Scope == "" {
 			ref.Scope = "turn"
 		}
-		resolved, err := s.agentResolveContextReference(r.Context(), ref, accountID)
+		resolved, err := s.agentResolveContextReferenceInConversation(r.Context(), ref, accountID, convID)
 		if err != nil {
 			return err
 		}

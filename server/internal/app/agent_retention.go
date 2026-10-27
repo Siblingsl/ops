@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // 智能体数据的保留与清理（16 文档第 9.7 节）。挂入 jobs.go 的每日循环，每批最多 5000 行（D-111）。
@@ -67,14 +68,14 @@ func (s *Server) purgeAgentData(ctx context.Context) (agentCleanupStats, error) 
 	}
 
 	// 4. last_message_at 超过 365 天的对话删除（级联删除消息、运行、卡片与附件记录）。
-	n, err = s.deleteAgentConversations(ctx, agentDeleteOldConversations, s.now().AddDate(0, 0, -365))
+	n, err = s.deleteAgentConversations(ctx, false, s.now().AddDate(0, 0, -365))
 	if err != nil {
 		return stats, err
 	}
 	stats.OldConversations = n
 
 	// 5. 用户已不是该工作区成员超过 30 天的对话删除。成员移除不记录时间戳，用对话的最后消息时间代理。
-	n, err = s.deleteAgentConversations(ctx, agentDeleteAbandonedConversations, s.now().AddDate(0, 0, -30))
+	n, err = s.deleteAgentConversations(ctx, true, s.now().AddDate(0, 0, -30))
 	if err != nil {
 		return stats, err
 	}
@@ -157,56 +158,140 @@ func (s *Server) purgeAgentAttachments(ctx context.Context) (int, error) {
 	}
 }
 
-func (s *Server) deleteAgentConversations(ctx context.Context, query string, cutoff time.Time) (int, error) {
+func (s *Server) deleteAgentConversations(ctx context.Context, abandoned bool, cutoff time.Time) (int, error) {
 	total := 0
 	for {
-		var (
-			n     int
-			paths []string
-		)
-		if err := s.db.QueryRow(ctx, query, cutoff).Scan(&n, &paths); err != nil {
+		tx, err := s.db.Begin(ctx)
+		if err != nil {
+			return total, err
+		}
+		query := `SELECT c.id FROM agent_conversation c WHERE c.last_message_at<$1
+			AND NOT EXISTS(SELECT 1 FROM agent_run r WHERE r.conversation_id=c.id AND r.status IN ('queued','running'))
+			AND NOT EXISTS(SELECT 1 FROM agent_action a WHERE a.conversation_id=c.id AND a.status='executing')`
+		if abandoned {
+			query += ` AND NOT EXISTS(SELECT 1 FROM workspace_member m
+				WHERE m.workspace_id=c.workspace_id AND m.user_id=c.user_id AND m.status='active')`
+		}
+		query += ` ORDER BY c.last_message_at,c.id LIMIT 5000 FOR UPDATE OF c SKIP LOCKED`
+		rows, err := tx.Query(ctx, query, cutoff)
+		if err != nil {
+			tx.Rollback(ctx)
+			return total, err
+		}
+		conversationIDs := []uuid.UUID{}
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				tx.Rollback(ctx)
+				return total, err
+			}
+			conversationIDs = append(conversationIDs, id)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			tx.Rollback(ctx)
+			return total, err
+		}
+		rows.Close()
+		if len(conversationIDs) == 0 {
+			if err := tx.Commit(ctx); err != nil {
+				return total, err
+			}
+			return total, nil
+		}
+		attachmentIDs, err := agentConversationAttachmentIDsTx(ctx, tx, conversationIDs)
+		if err != nil {
+			tx.Rollback(ctx)
+			return total, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM agent_conversation WHERE id=ANY($1)`, conversationIDs); err != nil {
+			tx.Rollback(ctx)
+			return total, err
+		}
+		paths, err := agentDeleteUnreferencedAttachmentsTx(ctx, tx, attachmentIDs)
+		if err != nil {
+			tx.Rollback(ctx)
+			return total, err
+		}
+		if err := tx.Commit(ctx); err != nil {
 			return total, err
 		}
 		s.removeAgentFiles(paths)
-		total += n
-		if n == 0 {
+		total += len(conversationIDs)
+		if len(conversationIDs) < 5000 {
 			return total, nil
 		}
+		continue
 	}
+}
+
+// agentConversationAttachmentIDsTx 在删除会话前锁定并收集其附件；调用方先锁会话。
+func agentConversationAttachmentIDsTx(ctx context.Context, tx pgx.Tx, conversationIDs []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `SELECT a.id FROM agent_attachment a
+		WHERE a.conversation_id=ANY($1)
+			OR EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=a.id AND r.conversation_id=ANY($1))
+			OR EXISTS(SELECT 1 FROM agent_input i WHERE i.conversation_id=ANY($1) AND a.id=ANY(i.attachment_ids))
+		ORDER BY a.id FOR UPDATE OF a`, conversationIDs)
+	if err != nil {
+		return nil, err
+	}
+	ids := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		return ids, nil
+	}
+	return ids, nil
+}
+
+// agentDeleteUnreferencedAttachmentsTx 在对话级引用已级联删除后回收真正无引用的文件。
+func agentDeleteUnreferencedAttachmentsTx(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) ([]string, error) {
+	if len(ids) == 0 {
+		return []string{}, nil
+	}
+	deleted, err := tx.Query(ctx, `DELETE FROM agent_attachment a WHERE a.id=ANY($1)
+		AND NOT EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=a.id)
+		AND NOT EXISTS(SELECT 1 FROM agent_input i WHERE a.id=ANY(i.attachment_ids))
+		RETURNING a.storage_path`, ids)
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{}
+	for deleted.Next() {
+		var path string
+		if err := deleted.Scan(&path); err != nil {
+			deleted.Close()
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	if err := deleted.Err(); err != nil {
+		deleted.Close()
+		return nil, err
+	}
+	deleted.Close()
+	return paths, nil
 }
 
 const agentDeleteOrphanAttachments = `
 WITH batch AS MATERIALIZED (
 	SELECT id FROM agent_attachment
 	WHERE referenced = false AND created_at < now() - interval '24 hours'
+	  AND NOT EXISTS(SELECT 1 FROM agent_input i WHERE i.status IN ('pending','needs_review') AND agent_attachment.id=ANY(i.attachment_ids))
 	ORDER BY created_at, id LIMIT 5000 FOR UPDATE SKIP LOCKED
 ), deleted AS (
 	DELETE FROM agent_attachment a USING batch b WHERE a.id=b.id RETURNING a.storage_path
 )
 SELECT count(*), coalesce(array_agg(storage_path), '{}') FROM deleted`
-
-const agentDeleteOldConversations = `
-WITH batch AS MATERIALIZED (
-	SELECT id FROM agent_conversation
-	WHERE last_message_at < $1
-	ORDER BY last_message_at, id LIMIT 5000 FOR UPDATE SKIP LOCKED
-), files AS MATERIALIZED (
-	SELECT a.storage_path FROM agent_attachment a WHERE a.conversation_id IN (SELECT id FROM batch)
-), deleted AS (
-	DELETE FROM agent_conversation c USING batch b WHERE c.id=b.id AND (SELECT count(*) FROM files) >= 0 RETURNING 1
-)
-SELECT (SELECT count(*) FROM deleted), coalesce((SELECT array_agg(storage_path) FROM files), '{}')`
-
-const agentDeleteAbandonedConversations = `
-WITH batch AS MATERIALIZED (
-	SELECT c.id FROM agent_conversation c
-	WHERE c.last_message_at < $1 AND NOT EXISTS (
-		SELECT 1 FROM workspace_member m
-		WHERE m.workspace_id = c.workspace_id AND m.user_id = c.user_id AND m.status = 'active')
-	ORDER BY c.last_message_at, c.id LIMIT 5000 FOR UPDATE OF c SKIP LOCKED
-), files AS MATERIALIZED (
-	SELECT a.storage_path FROM agent_attachment a WHERE a.conversation_id IN (SELECT id FROM batch)
-), deleted AS (
-	DELETE FROM agent_conversation c USING batch b WHERE c.id=b.id AND (SELECT count(*) FROM files) >= 0 RETURNING 1
-)
-SELECT (SELECT count(*) FROM deleted), coalesce((SELECT array_agg(storage_path) FROM files), '{}')`

@@ -51,6 +51,51 @@ func agentAttachmentAllPaths(storagePath string) []string {
 		agentAttachmentVariantPath(storagePath, "thumb")}
 }
 
+func (s *Server) agentReferenceMessageAttachmentsTx(ctx context.Context, tx pgx.Tx, conversationID, messageID uuid.UUID,
+	attachmentIDs []uuid.UUID) error {
+	for _, attachmentID := range attachmentIDs {
+		var referenced, currentRef, inheritedRef bool
+		var ownerConversation *uuid.UUID
+		err := tx.QueryRow(ctx, `SELECT a.referenced,a.conversation_id,
+			EXISTS(SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=a.id AND r.conversation_id=$4),
+			EXISTS(SELECT 1 FROM agent_attachment_ref r JOIN agent_message m ON m.id=r.message_id
+				WHERE r.attachment_id=a.id AND r.conversation_id=$4 AND m.source_message_id IS NOT NULL)
+			FROM agent_attachment a WHERE a.id=$1 AND a.workspace_id=$2 AND a.user_id=$3 FOR UPDATE`,
+			attachmentID, ident(ctx).WorkspaceID, ident(ctx).UserID, conversationID).
+			Scan(&referenced, &ownerConversation, &currentRef, &inheritedRef)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return apiErr(422, "agent_attachment_invalid", "附件已失效或已被发送，请重新选择")
+		}
+		if err != nil {
+			return err
+		}
+		if currentRef {
+			if inheritedRef {
+				continue
+			}
+			return apiErr(422, "agent_attachment_invalid", "附件已失效或已被发送，请重新选择")
+		}
+		if ownerConversation != nil && *ownerConversation != conversationID {
+			return apiErr(422, "agent_attachment_invalid", "附件不属于当前对话")
+		}
+		if referenced && (ownerConversation == nil || *ownerConversation != conversationID) {
+			return apiErr(422, "agent_attachment_invalid", "附件不属于当前对话")
+		}
+		if _, err := tx.Exec(ctx, `UPDATE agent_attachment SET referenced=true,conversation_id=coalesce(conversation_id,$2) WHERE id=$1`,
+			attachmentID, conversationID); err != nil {
+			return err
+		}
+	}
+	for _, attachmentID := range attachmentIDs {
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_attachment_ref(attachment_id,conversation_id,workspace_id,user_id,message_id)
+			VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+			attachmentID, conversationID, ident(ctx).WorkspaceID, ident(ctx).UserID, messageID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // agentTextAttachmentName 按扩展名判定文本附件（第 8.1 节：.txt、.md）。
 func agentTextAttachmentName(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
@@ -281,6 +326,9 @@ func (s *Server) postAgentAttachment(w http.ResponseWriter, r *http.Request) err
 
 	view := agentAttachmentView{ID: attID, Kind: kind, Name: name, Mime: mime, Bytes: len(stored),
 		URL: "/api/v1/agent/attachments/" + attID.String() + "/file"}
+	if convID != nil {
+		view.URL += "?conversation_id=" + convID.String()
+	}
 	if kind == "image" {
 		w, h := width, height
 		view.Width, view.Height = &w, &h
@@ -309,9 +357,24 @@ func (s *Server) getAgentAttachmentFile(w http.ResponseWriter, r *http.Request) 
 		mime        string
 		storagePath string
 	)
-	// 只允许上传者本人访问，其他人 404（第 8.2 节第 5 项）。
+	requestedConversation := uuid.Nil
+	if raw := strings.TrimSpace(r.URL.Query().Get("conversation_id")); raw != "" {
+		requestedConversation, err = uuid.Parse(raw)
+		if err != nil || requestedConversation == uuid.Nil {
+			return errNotFound
+		}
+	}
+	var conversationArg any
+	if requestedConversation != uuid.Nil {
+		conversationArg = requestedConversation
+	}
+	// 已发送附件必须经本人当前对话引用访问；未引用上传仍可供本人的输入台预览。
 	if err := s.db.QueryRow(ctx, `SELECT kind, mime, storage_path FROM agent_attachment
-		WHERE id=$1 AND user_id=$2`, id, ident(ctx).UserID).Scan(&kind, &mime, &storagePath); err != nil {
+		WHERE id=$1 AND workspace_id=$2 AND user_id=$3
+		AND ((referenced=false AND ($4::uuid IS NULL OR conversation_id IS NULL OR conversation_id=$4))
+			OR ($4::uuid IS NOT NULL AND EXISTS(SELECT 1 FROM agent_attachment_ref r
+				WHERE r.attachment_id=agent_attachment.id AND r.conversation_id=$4)))`,
+		id, ident(ctx).WorkspaceID, ident(ctx).UserID, conversationArg).Scan(&kind, &mime, &storagePath); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errNotFound
 		}
@@ -393,8 +456,10 @@ func (s *Server) agentAttachmentUploadFiles(ctx context.Context, t *AgentTool, a
 				storagePath string
 			)
 			if err := s.db.QueryRow(ctx, `SELECT kind, name, storage_path FROM agent_attachment
-				WHERE id=$1 AND user_id=$2 AND (conversation_id IS NULL OR conversation_id=$3)`,
-				attID, ident(ctx).UserID, convID).Scan(&kind, &name, &storagePath); err != nil {
+				WHERE id=$1 AND workspace_id=$2 AND user_id=$3
+				AND ((referenced=false AND (conversation_id IS NULL OR conversation_id=$4)) OR EXISTS(
+					SELECT 1 FROM agent_attachment_ref r WHERE r.attachment_id=agent_attachment.id AND r.conversation_id=$4))`,
+				attID, ident(ctx).WorkspaceID, ident(ctx).UserID, convID).Scan(&kind, &name, &storagePath); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return nil, apiErr(422, "agent_attachment_invalid", "附件不存在或不属于本对话")
 				}
