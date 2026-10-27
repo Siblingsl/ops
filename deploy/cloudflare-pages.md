@@ -20,25 +20,29 @@
 - **桌面端**：完全不变，仍然加载后端自托管的 `https://ops.88813888.xyz`（`desktop/src/business-origin.ts` 的 `PRODUCTION_ORIGIN` 没动），所以 `OPS_STATIC_DIR=/app/static` 必须保留。
 - **后端**：新增 CORS 白名单（`OPS_CORS_ORIGINS`）。不填 = 不启用 CORS = 只能同源访问，也就是改造前的行为。
 
+本文默认沿用仓库现有生产地址：Web `web.88813888.xyz`、API `ops.88813888.xyz`、Pages 项目 `ops-web`。如果你现在用的域名或服务器不同，按实际地址替换，并让 `OPS_API_BASE` 与 `OPS_CORS_ORIGINS` 使用同一组地址。
+
 ## 0. 为什么不用 Pages Functions 反代 /api
 
-三个原因，都是硬约束：
-
-1. `_redirects` 不支持代理到外部域名（官方原文："Proxying will only support relative URLs on your site. You cannot proxy external domains."），所以反代只能写 Functions。
-2. Pages Functions 免费额度是每天 10 万次请求，前端一次页面加载就是几十个 API 请求，很容易打满；纯静态项目的静态请求不计费、不限量。
-3. Functions 转发 SSE（`/api/v1/notifications/stream`、智能体事件流）会引入额外缓冲与超时风险，聊天式界面会变成"卡住不动"。
-
-所以走"浏览器直连后端 + 后端 CORS"这条路。前端域名与 `ops.88813888.xyz` 同属 `88813888.xyz`（same-site），会话 Cookie 保持 `SameSite=Lax` 就能随跨源请求发送，不需要 `SameSite=None`。
+本项目使用 Pages 纯静态托管，浏览器直接请求 API 域名，由 Go 后端 CORS 白名单放行。这样 SSE 与 WebSocket 不经过 Pages 转发。前端域名与 `ops.88813888.xyz` 同属 `88813888.xyz`（same-site），会话 Cookie 保持 `SameSite=Lax` 即可，不需要 `SameSite=None`。
 
 ## 1. 前端域名与备案（先看这一段）
 
-云服务器在**阿里云青岛（中国大陆）**，域名 `88813888.xyz` **未备案**。这意味着：
+按当前仓库的生产记录，云服务器在**阿里云青岛（中国大陆）**，域名 `88813888.xyz` **未备案**。如果你实际的服务器地域或域名状态已经不同，请以云厂商和域名管理后台的当前状态为准。此处架构上的影响是：
 
 - 直接解析到 `120.27.20.115` 的域名走 80/443，会被阿里云按备案要求拦截（`ops.88813888.xyz` 目前能用，说明它已经在走某种可用路径，具体以你的实际情况为准）。
-- **Cloudflare Pages 的前端域名不受此限制**：页面由 CF 全球边缘节点提供，不回源到大陆服务器，所以 `web.88813888.xyz`（CNAME 到 `xxx.pages.dev`，**必须开橙云代理**）可以正常访问。
+- **Cloudflare Pages 托管的是前端静态页面**：给 Pages 项目绑定 `web.88813888.xyz` 后，页面由 Cloudflare 提供，不回源到这台服务器。大陆访问情况还取决于域名和网络环境。
 - 但**前端能打开 ≠ 后端能调通**。浏览器随后会去请求 `https://ops.88813888.xyz/api/v1/...`，这条链路仍然是"用户 → 阿里云青岛"，如果它现在在你的网络环境下能用，改造后也照旧能用；如果它在某些网络下不可用，Cloudflare Pages 帮不了它——那是另一件事（把后端域名也挂到 CF 橙云代理上，或用境外中转，会牵扯 SSE/WS 缓冲与回源延迟，不在本次改造范围内）。
 
 结论：**前端上 CF 解决的是"前端页面在大陆可访问且不消耗服务器带宽"，不解决后端域名本身的备案问题。** 如果目标是"国内任何网络都能稳定调通后端"，那需要给后端域名做备案，或者把后端也搬到境外——那是另一个决策。
+
+## 建议迁移顺序
+
+1. 创建 Pages Direct Upload 项目，拿到 Account ID、API Token，并先把 Cloudflare 与服务器 SSH 凭据配进 GitHub。
+2. 在服务器 `.env` 加入 Web 来源白名单并确认 HTTPS Cookie 配置。
+3. 把本次仓库改动推到 `main`，等待 GitHub 的 `CI`、`Deploy`、`Pages` 工作流结束；Pages 此时先发布到 `*.pages.dev`。
+4. 确认服务器 `Deploy` 成功、API CORS 预检返回 204 后，再给 Pages 绑定正式 Web 域名。这样正式入口不会早于后端白名单生效。
+5. 按第 5 节完成 Web 登录和桌面端回归。
 
 ## 2. Cloudflare 侧操作
 
@@ -60,13 +64,14 @@
 
 ### 2.3 绑定自定义域名
 
-1. Pages 项目 → **Custom domains** → **Set up a custom domain**。
-2. 填 `web.88813888.xyz`（或你最终定的子域名；定了之后要同步改两处：本文件、服务器 `.env` 里的 `OPS_CORS_ORIGINS`）。
-3. 因为 `88813888.xyz` 的 NS 已经在 Cloudflare（`daphne.ns.cloudflare.com` / `rudy.ns.cloudflare.com`），CF 会自动加 CNAME 记录，点确认即可。
-4. **确保这条 CNAME 是橙云（Proxied）**。灰云会让浏览器直连 `pages.dev` 的 IP，虽然也能用，但失去 CF 的 CDN/证书托管，且部分网络下 `pages.dev` 访问不稳定。
-5. 等状态变成 **Active**（通常 1-5 分钟，证书签发偶尔要十几分钟）。
+首次迁移时等服务器的 `Deploy` 工作流成功、API CORS 预检通过后再执行本节；此之前 Pages 可先用 `*.pages.dev` 验证静态资源。
 
-> 注意：不要在 `ops.88813888.xyz` 上重复做这一步。后端域名保持现状（目前是 A 记录直连阿里云、灰云）。若以后要给后端也套 CF，记得 `/api/v1/desktop/channel` 的 WebSocket 与 SSE 需要 `proxy_buffering off`，并且 CF 免费版对 SSE 有 100 秒空闲断连的限制。
+1. Pages 项目 → **Custom domains** → **Set up a custom domain**。先在 Pages 项目里绑定域名，再配置 DNS；不要只手动添加 CNAME，否则可能出现 522。
+2. 填 `web.88813888.xyz`（或你最终定的子域名；定了之后要同步改两处：本文件、服务器 `.env` 里的 `OPS_CORS_ORIGINS`）。
+3. 如果域名 DNS 在这个 Cloudflare Zone，确认自动创建的 CNAME；如果 DNS 在别的服务商，手动添加 CNAME：名称为 `web`，目标为 `ops-web.pages.dev`（以 Pages 项目显示的 `*.pages.dev` 地址为准）。不要自行修改 Pages 自动创建的 DNS 代理状态。
+4. 等 Pages 自定义域名状态变成 **Active**，并确认 HTTPS 证书有效。
+
+> 注意：不要在 `ops.88813888.xyz` 上重复做这一步。后端域名保持现状（目前是 A 记录直连阿里云、DNS only）。若以后把后端也改为经 Cloudflare 代理，需单独验证 SSE 与 `/api/v1/desktop/channel` WebSocket 的行为；本方案不把 API 流量经过 Pages。
 
 ### 2.4 记下 project name
 
@@ -81,7 +86,14 @@
 | `CLOUDFLARE_API_TOKEN` | 2.2 生成的 Token |
 | `CLOUDFLARE_ACCOUNT_ID` | 2.2 拿到的 Account ID |
 
-原有的 `DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_PATH` / `DEPLOY_SSH_KEY` 保持不变，后端部署照旧走 SSH。
+如果尚未配置服务器 SSH 部署，再添加这些 Secrets：
+
+| 名称 | 值 |
+| --- | --- |
+| `DEPLOY_HOST` | 服务器 SSH 地址或 IP |
+| `DEPLOY_USER` | 用于部署的 SSH 用户 |
+| `DEPLOY_PATH` | 服务器上的仓库目录，例如 `/opt/ops` |
+| `DEPLOY_SSH_KEY` 或 `DEPLOY_SSH_KEY_B64` | 对应公钥已放入服务器 `authorized_keys` 的私钥；二选一 |
 
 ### 3.2 Variables（同页面的 Variables 标签，可选）
 
@@ -94,14 +106,15 @@
 
 ### 3.3 workflow 行为
 
-`.github/workflows/pages.yml`：
+`.github/workflows/ci.yml`、`pages.yml` 与 `deploy.yml`：
 
-- 触发：push 到 `main` 且改动涉及 `web/**` 或该 workflow 文件；也支持手动 `workflow_dispatch`。
-- 构建：`pnpm install --frozen-lockfile` → `OPS_API_BASE=... pnpm run build` → `web/dist`。
-- 部署：`wrangler pages deploy web/dist --project-name=<项目> --branch=main`。
-- 首次运行会自动尝试 `wrangler pages project create`，失败（项目已存在）则继续部署。
+- Pages 只在 push 到 `main` 且改动涉及 `web/**` 或 `pages.yml` 时部署；手动 `workflow_dispatch` 只能选择 `main`。
+- Pages 部署和服务器部署都会等待同一提交的 `CI` 工作流成功；失败、取消或 20 分钟仍未完成时停止部署。
+- Pages 构建：`pnpm install --frozen-lockfile` → `OPS_API_BASE=... pnpm run build` → 上传 `web/dist`。发布只使用这次 CI 对应的提交。
+- 服务器部署：CI 成功后经 SSH 调用 `deploy/update.sh <提交SHA>`，脚本校验提交仍属于 `origin/main`，再构建并重启后端容器。
+- 第一次 Pages 工作流会尝试创建 Direct Upload 项目；项目已存在时继续部署。`CF_PAGES_PROJECT` 必须与创建时的项目名一致。
 
-后端部署（`deploy.yml` → `deploy/update.sh`）不受影响，两条流水线互不阻塞。
+这样 CI 失败时两个生产环境都不会更新。后端仍会在 Docker 镜像中构建并保留一份静态页面，供桌面端使用。
 
 ## 4. 服务器侧操作
 
@@ -117,15 +130,19 @@ cp .env .env.bak
 ```ini
 # 允许 Cloudflare Pages 上的前端跨源调用 API；域名定了就换成实际值
 OPS_CORS_ORIGINS=https://web.88813888.xyz
+# 服务器已启用 HTTPS 时设为 1
+OPS_COOKIE_SECURE=1
 # 同站不同源，保持 lax 即可
 OPS_COOKIE_SAMESITE=lax
 ```
+
+如果当前服务器仓库还没有 `.env`，先按 `deploy/.env.example` 创建并填写现有生产密钥；不要把 `.env` 提交到 GitHub。确认 API 域名的 HTTPS 证书正常，云厂商安全组允许公网 TCP 443（如使用 ACME HTTP 验证还需 TCP 80），SSH 端口只开放给你的管理来源。不要把应用回环端口 `44537` 或 PostgreSQL `5432` 暴露到公网。
 
 注意：
 
 - 值必须是**完整来源**（`scheme://host[:port]`），**不能带路径、不能带尾斜杠**；写错会被配置校验拒绝并拒绝启动，错误信息形如 `OPS_CORS_ORIGINS 中没有合法的来源（应形如 https://web.88813888.xyz）`。
 - 多个来源用英文逗号分隔：`https://web.88813888.xyz,https://staging-web.88813888.xyz`。
-- 如果之前按 `deploy/https-setup.md` 上了 HTTPS，`OPS_COOKIE_SECURE` 已经是 `1`，保持即可。
+- 服务器使用 HTTPS 时，`OPS_COOKIE_SECURE=1`；`SameSite=Lax` 可在同站不同源的 Pages/API 间随 `credentials: include` 请求发送。
 - `OPS_STATIC_DIR=/app/static` **不要删**——桌面端和 `ops.88813888.xyz` 直连访问都靠它。
 
 ### 4.2 应用
@@ -135,7 +152,9 @@ cd /path/to/OPS
 bash deploy/update.sh
 ```
 
-脚本会 `git reset --hard origin/main` → 备份数据库 → `docker compose up -d --build`。改 `.env` 后必须重建容器（`environment` 段的值在容器创建时固化）。
+改完 `.env` 后手动执行上面的命令可立即重建并应用配置；常规代码发布由 GitHub Actions 在 CI 成功后 SSH 执行脚本并传入已验证的提交 SHA。
+
+脚本会先拉取代码并备份，再构建镜像、重建容器。自动发布传入 CI 已验证的提交 SHA；手动执行则部署 `origin/main`。改 `.env` 后必须重建容器（Compose `environment` 的值在容器创建时固化）。
 
 ### 4.3 Nginx 不用改
 

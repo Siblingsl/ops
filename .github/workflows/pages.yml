@@ -22,11 +22,38 @@ env:
 jobs:
   pages:
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
     permissions:
+      actions: read
       contents: read
       deployments: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Wait for CI on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_SHA: ${{ github.sha }}
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${CI_SHA}&per_page=100" \
+              --jq '.workflow_runs | map(select(.head_sha == env.CI_SHA and .name == "CI")) | sort_by(.updated_at) | last | if . == null then "missing" else [.status, (.conclusion // "")] | @tsv end')"
+            case "$state" in
+              $'completed\tsuccess')
+                echo "CI passed for ${CI_SHA}."
+                exit 0
+                ;;
+              $'completed\t'*)
+                echo "::error::CI for ${CI_SHA} completed with: ${state#*$'\t'}; Pages deployment stopped."
+                exit 1
+                ;;
+            esac
+            sleep 15
+          done
+          echo "::error::Timed out waiting for CI for ${CI_SHA}; Pages deployment stopped."
+          exit 1
 
       - uses: pnpm/action-setup@v4
         with:
