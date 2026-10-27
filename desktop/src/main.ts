@@ -18,7 +18,14 @@ import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { PRODUCTION_ORIGIN, resolveBusinessOrigin } from './business-origin';
+import {
+  PRODUCTION_API_ORIGIN,
+  PRODUCTION_BUSINESS_UI_ORIGIN,
+  PRODUCTION_SERVICE_NAMESPACE,
+  resolveApiOrigin,
+  resolveBusinessOrigin,
+  resolveServiceNamespace
+} from './business-origin';
 import { DesktopClient, type DesktopRoute, type SaveModelInput } from './desktop-client';
 import { registerDesktopPowerHandlers } from './power-lifecycle';
 import {
@@ -120,7 +127,8 @@ protocol.registerSchemesAsPrivileged([
     privileges: {
       standard: true,
       secure: true,
-      supportFetchAPI: true
+      supportFetchAPI: true,
+      corsEnabled: true
     }
   }
 ]);
@@ -130,7 +138,9 @@ let pendingPlatformLoginTarget: Extract<DesktopUiIntent, { type: 'platform-login
 let failureWindow: BrowserWindow | null = null;
 let businessLoadTimeout: ReturnType<typeof setTimeout> | null = null;
 let businessFailureReason: 'unreachable' | 'icp-block' | 'render-failed' = 'unreachable';
-let businessOrigin = PRODUCTION_ORIGIN;
+let businessOrigin = PRODUCTION_BUSINESS_UI_ORIGIN;
+let apiOrigin = PRODUCTION_API_ORIGIN;
+let serviceNamespace = PRODUCTION_SERVICE_NAMESPACE;
 let businessPartition = 'persist:ops-business-production';
 let businessSession: Session | null = null;
 let localSettingsSession: Session | null = null;
@@ -218,13 +228,15 @@ function startApplication(): void {
       desktopReducedMotion = await restoreDesktopMotion();
       nativeTheme.themeSource = desktopTheme;
       businessOrigin = resolveBusinessOrigin(app.isPackaged, process.env.OPS_DESKTOP_DEV_URL);
-      businessPartition = businessOrigin === PRODUCTION_ORIGIN
+      apiOrigin = resolveApiOrigin(app.isPackaged, businessOrigin);
+      serviceNamespace = resolveServiceNamespace(app.isPackaged, businessOrigin);
+      businessPartition = app.isPackaged
         ? 'persist:ops-business-production'
         : 'persist:ops-business-development';
 
       businessSession = session.fromPartition(businessPartition);
       localSettingsSession = session.fromPartition('ops-settings');
-      desktopClient = new DesktopClient(businessSession, businessOrigin);
+      desktopClient = new DesktopClient(businessSession, apiOrigin, serviceNamespace);
       startClientHealthBroadcast();
       registerDesktopPowerHandlers(
         powerMonitor,
@@ -240,7 +252,7 @@ function startApplication(): void {
         }
       );
       installBusinessPermissions(businessSession);
-      installDesktopRequestContext(businessSession);
+      installDesktopRequestContext(businessSession, apiOrigin);
       installDownloadHandling(businessSession);
       await registerLocalProtocol(businessSession);
       await registerLocalProtocol(localSettingsSession);
@@ -477,13 +489,13 @@ function installBusinessPermissions(businessSession: Session): void {
   });
 }
 
-function installDesktopRequestContext(businessSession: Session): void {
+function installDesktopRequestContext(businessSession: Session, apiOrigin: string): void {
   const filter = { urls: ['<all_urls>'] };
   businessSession.webRequest.onBeforeRequest(filter, (details, callback) => {
     const requestWindow = businessWindow;
     const isBusinessWindow = Boolean(requestWindow && !requestWindow.isDestroyed()
       && details.webContentsId === requestWindow.webContents.id);
-    if (!isBusinessApiUrl(details.url, businessOrigin)) {
+    if (!isBusinessApiUrl(details.url, apiOrigin)) {
       callback({});
       return;
     }
@@ -505,7 +517,7 @@ function installDesktopRequestContext(businessSession: Session): void {
     if (shouldBlockDesktopApiRequest({
       requestUrl: details.url,
       method: details.method,
-      businessOrigin,
+      businessOrigin: apiOrigin,
       isBusinessWindow: true,
       trustedBusinessMainFrame: trusted && previousProvenance !== 'redirected',
       requestContextReady: ready,
@@ -536,7 +548,7 @@ function installDesktopRequestContext(businessSession: Session): void {
     const routing = desktopClient?.getRequestRoutingState();
     const requestHeaders = buildDesktopRequestHeaders({
       requestUrl: details.url,
-      businessOrigin,
+      businessOrigin: apiOrigin,
       trustedBusinessMainFrame: isManagementRequest ? false : trusted,
       mode: isManagementRequest ? 'server' : isBusinessWindow ? routing?.mode ?? 'server' : 'server',
       requestContext: isManagementRequest || !isBusinessWindow ? {} : routing?.requestContext ?? {},
@@ -568,7 +580,7 @@ function installDesktopRequestContext(businessSession: Session): void {
   businessSession.webRequest.onErrorOccurred(filter, finishRequest);
 
   businessSession.cookies.on('changed', (_event, cookie) => {
-    const host = new URL(businessOrigin).hostname;
+    const host = new URL(apiOrigin).hostname;
     const cookieDomain = (cookie.domain ?? '').replace(/^\./, '');
     if (cookie.name === 'ops_session' && (host === cookieDomain || host.endsWith(`.${cookieDomain}`))) {
       if (!accountDataClearInProgress) void refreshDesktopRequestContext();
@@ -654,15 +666,20 @@ function installDownloadHandling(businessSession: Session): void {
 async function registerLocalProtocol(targetSession: Session): Promise<void> {
   await targetSession.protocol.handle('ops-desktop', async (request) => {
     let requestedPath: string;
+    let hostname: string;
     try {
       const requestUrl = new URL(request.url);
-      if (requestUrl.hostname !== 'settings' || requestUrl.search || requestUrl.hash) {
+      hostname = requestUrl.hostname;
+      if (requestUrl.username || requestUrl.password || requestUrl.port || requestUrl.hash) {
         return new Response('Not found', { status: 404 });
       }
       requestedPath = decodeURIComponent(requestUrl.pathname);
     } catch {
       return new Response('Bad request', { status: 400 });
     }
+
+    if (hostname === 'business') return serveBusinessUI(requestedPath, request.method);
+    if (hostname !== 'settings' || request.url.includes('?')) return new Response('Not found', { status: 404 });
 
     const asset = LOCAL_PAGES[requestedPath];
     if (!asset) return new Response('Not found', { status: 404 });
@@ -694,6 +711,68 @@ async function registerLocalProtocol(targetSession: Session): Promise<void> {
   });
 }
 
+async function serveBusinessUI(requestedPath: string, method: string): Promise<Response> {
+  if (method !== 'GET' && method !== 'HEAD') return new Response('Method not allowed', { status: 405 });
+
+  const rendererRoot = path.resolve(app.isPackaged
+    ? path.join(process.resourcesPath, 'renderer')
+    : path.join(__dirname, '..', 'renderer'));
+  let assetPath = requestedPath === '/'
+    ? path.join(rendererRoot, 'index.html')
+    : path.resolve(rendererRoot, `.${requestedPath}`);
+  const relativePath = path.relative(rendererRoot, assetPath);
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    return new Response('Not found', { status: 404 });
+  }
+
+  let stat = await fs.stat(assetPath).catch(() => null);
+  if (stat?.isDirectory()) {
+    assetPath = path.join(assetPath, 'index.html');
+    stat = await fs.stat(assetPath).catch(() => null);
+  }
+  if (!stat?.isFile()) {
+    if (path.extname(requestedPath)) return new Response('Not found', { status: 404 });
+    assetPath = path.join(rendererRoot, 'index.html');
+    stat = await fs.stat(assetPath).catch(() => null);
+  }
+  if (!stat?.isFile()) return new Response('Desktop UI unavailable', { status: 503 });
+
+  try {
+    const body = await fs.readFile(assetPath);
+    const contentType = rendererContentType(path.extname(assetPath));
+    return new Response(method === 'HEAD' ? null : body, {
+      status: 200,
+      headers: {
+        'Content-Type': contentType,
+        'Content-Length': String(body.byteLength),
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': assetPath.endsWith('index.html') ? 'no-store' : 'no-cache'
+      }
+    });
+  } catch {
+    return new Response('Desktop UI unavailable', { status: 404 });
+  }
+}
+
+function rendererContentType(extension: string): string {
+  return ({
+    '.css': 'text/css; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+    '.ico': 'image/x-icon',
+    '.jpeg': 'image/jpeg',
+    '.jpg': 'image/jpeg',
+    '.js': 'text/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.png': 'image/png',
+    '.svg': 'image/svg+xml',
+    '.txt': 'text/plain; charset=utf-8',
+    '.webmanifest': 'application/manifest+json',
+    '.webp': 'image/webp',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2'
+  } as Record<string, string>)[extension.toLowerCase()] ?? 'application/octet-stream';
+}
+
 function registerIpcHandlers(): void {
   ipcMain.on('settings:local-state', (event: IpcMainEvent, raw: unknown) => {
     if (!localSettingsViewController?.isTrusted(event)) return;
@@ -715,7 +794,7 @@ function registerIpcHandlers(): void {
     applyNativeClientStatus(clientState);
     return {
       appVersion: app.getVersion(),
-      businessOrigin,
+      apiOrigin,
       connectionState: getConnectionState(),
       failureReason: businessFailureReason,
       systemInfo,
@@ -741,7 +820,7 @@ function registerIpcHandlers(): void {
         platform: os.platform(),
         architecture: os.arch()
       },
-      service: businessOrigin,
+      service: apiOrigin,
       business_connection: getConnectionState(),
       client: {
         signed_in: state.signedIn,
@@ -971,6 +1050,7 @@ function registerIpcHandlers(): void {
       routingRefreshPending = true;
       await desktopClient.clearCurrentAccountData(identity.userId);
       try {
+        await businessSession.clearStorageData({ origin: apiOrigin });
         await businessSession.clearStorageData({ origin: businessOrigin });
         await businessSession.clearCache();
       } catch {
@@ -1179,7 +1259,7 @@ async function executePlatformCommand(envelope: PlatformIPCEnvelope): Promise<un
     case 'login-browsers': {
       const payload = envelope.payload as { accountId: string; platform: string };
       const auth = await desktopClient!.getAuthContext();
-      const stored = await readAccountProfile(app.getPath('userData'), { ...auth, ...payload, origin: businessOrigin });
+      const stored = await readAccountProfile(app.getPath('userData'), { ...auth, ...payload, origin: serviceNamespace });
       return { fixedFamily: stored.meta?.browserFamily ?? null, candidates: (await trustedLoginBrowsers()).map((candidate) => ({ family: candidate.family, name: candidate.family === 'chrome' ? 'Google Chrome' : 'Microsoft Edge' })) };
     }
     case 'request-collect': {
@@ -1243,7 +1323,7 @@ const platformLoginFlow = new PlatformLoginFlow({
   async context() {
     if (!desktopClient) throw new Error('客户端尚未初始化');
     const { userId, workspaceId, deviceId } = await desktopClient.getAuthContext();
-    return { origin: businessOrigin, userId, workspaceId, deviceId };
+    return { origin: serviceNamespace, userId, workspaceId, deviceId };
   },
   async account(accountId, platform) {
     const account = (await desktopClient!.listBusinessAccounts()).find((item) => item.id === accountId && item.platform === platform && item.status === 'active');
@@ -1287,7 +1367,7 @@ async function openPlatformLogin(accountId: string, platform: PlatformLoginPlatf
     });
     await fs.mkdir(path.dirname(profileDir), { recursive: true });
     await fs.writeFile(profileMetaPath(profileDir), JSON.stringify(buildProfileMeta({
-      origin: businessOrigin,
+      origin: serviceNamespace,
       userId: auth.userId,
       workspaceId: auth.workspaceId,
       deviceId: auth.deviceId,
@@ -1379,7 +1459,7 @@ async function openPlatformLogin(accountId: string, platform: PlatformLoginPlatf
           accountId,
           platform,
           externalAccountKey,
-          connectionId: accountProfileSlot({ ...loginAuth, origin: businessOrigin, accountId, platform })
+          connectionId: accountProfileSlot({ ...loginAuth, origin: serviceNamespace, accountId, platform })
         });
       }
       return {
@@ -1471,7 +1551,7 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
   // 采集却读设备命名空间（connectionNamespaceId）时，那个目录里可能还留着
   // 另一个账号的旧登录态，于是整批采集读成了别人的笔记
   // （2026-10-22 实测：验收号只读到 1 篇，正是命名空间里残留账号的作品）。
-  const stored = await readAccountProfile(app.getPath('userData'), { ...auth, origin: businessOrigin, accountId: run.account_id, platform });
+  const stored = await readAccountProfile(app.getPath('userData'), { ...auth, origin: serviceNamespace, accountId: run.account_id, platform });
   const profileDir = stored.profileDir;
   // 归属校验全部由 readAccountProfile 负责（含历史 profile 缺 accountId 的兼容），
   // 这里只判断"有没有可用的归属信息"：meta 为 null 表示该 slot 从未登录过。
@@ -1763,7 +1843,7 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
     // 与 v1 采集同理：登录态落在账号 slot 里，采集必须读同一个目录，
     // 不能用设备命名空间（那里可能是另一个账号的历史登录态）。
     const stored = await readAccountProfile(app.getPath('userData'), {
-      ...auth, origin: businessOrigin, accountId, platform
+      ...auth, origin: serviceNamespace, accountId, platform
     });
     const profileDir = stored.profileDir;
     if (!stored.meta || stored.meta.platform !== platform) {
@@ -2037,7 +2117,7 @@ async function clearPlatformAccountData(accountId: string): Promise<PlatformClea
   const removed = await removeConnectionNamespace(await app.getPath('userData'), {
     userId: auth.userId,
     platform,
-    connectionId: accountProfileSlot({ ...auth, origin: businessOrigin, workspaceId: String(target.workspace_id), accountId, platform })
+    connectionId: accountProfileSlot({ ...auth, origin: serviceNamespace, workspaceId: String(target.workspace_id), accountId, platform })
   });
   console.error('[platform-clear]', JSON.stringify({ revoked: true, removed: removed.removed }));
   return { performed: true, revoked: true, removed: removed.removed, connectionId, errorCode: null };
@@ -2302,7 +2382,7 @@ async function writeAccountProfileMeta(input: {
   });
   await fs.mkdir(path.dirname(profileDir), { recursive: true });
   await fs.writeFile(profileMetaPath(profileDir), JSON.stringify(buildProfileMeta({
-    origin: businessOrigin,
+    origin: serviceNamespace,
     userId: input.auth.userId,
     workspaceId: input.auth.workspaceId,
     deviceId: input.auth.deviceId,
@@ -2364,7 +2444,7 @@ async function finishWechatLogin(accountId: string, payload: unknown): Promise<P
       accountId,
       platform: 'wechat_mp',
       externalAccountKey: identity.externalAccountKey,
-      connectionId: accountProfileSlot({ ...loginAuth, origin: businessOrigin, accountId, platform: 'wechat_mp' })
+      connectionId: accountProfileSlot({ ...loginAuth, origin: serviceNamespace, accountId, platform: 'wechat_mp' })
     });
   }
   return {

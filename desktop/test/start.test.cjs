@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const { defaultApiTarget, findAvailableVitePort } = require('../scripts/start.cjs');
 
 test('desktop debug launcher defaults to the available remote HTTP API', () => {
-  assert.equal(defaultApiTarget, 'http://ops.88813888.xyz');
+  assert.equal(defaultApiTarget, 'https://ops-api.88813888.xyz');
 });
 
 test('desktop launcher chooses a fresh Vite port when 5174 is already occupied', async (t) => {

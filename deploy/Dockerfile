@@ -1,16 +1,5 @@
-# 生产镜像：前端静态资源 + Go 单体（无 libvips，图片处理为纯 Go，见 D-034）
+# 生产镜像：仅 Go API（无 libvips，图片处理为纯 Go，见 D-034）
 # 国内构建默认走镜像源；海外可通过 build-arg 覆盖。
-
-FROM node:22-bookworm-slim AS web
-ARG NPM_REGISTRY=https://registry.npmmirror.com
-WORKDIR /web
-COPY web/package.json web/pnpm-lock.yaml ./
-RUN corepack enable && corepack prepare pnpm@10.14.0 --activate \
-    && pnpm config set registry "${NPM_REGISTRY}" \
-    && pnpm install --frozen-lockfile
-COPY web/ ./
-# 生产镜像内只做打包；tsc 已在本地/开发机验证，小机上 tsc -b 可达 20+ 分钟并触发部署超时
-RUN pnpm exec vite build
 
 FROM golang:1.26-bookworm AS server
 ARG GOPROXY=https://goproxy.cn,direct
@@ -34,11 +23,9 @@ RUN if [ -n "$APT_MIRROR" ]; then \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=server /out/ops /app/ops
-COPY --from=web /web/dist /app/static
 RUN mkdir -p /data
 ENV OPS_DEV=0 \
     OPS_LISTEN=:8080 \
-    OPS_STATIC_DIR=/app/static \
     OPS_DATA_DIR=/data \
     TZ=Asia/Shanghai
 EXPOSE 8080

@@ -4,7 +4,8 @@ module.exports = {
   packagerConfig: {
     asar: true,
     executableName: 'OPS Desktop',
-    ignore: /^\/out(?:-[^/]+)?(?:\/|$)/
+    extraResource: ['renderer'],
+    ignore: /^\/(?:out(?:-[^/]+)?|renderer)(?:\/|$)/
   },
   makers: [
     new MakerSquirrel({

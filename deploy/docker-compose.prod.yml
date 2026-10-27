@@ -20,17 +20,17 @@ services:
     environment:
       OPS_DEV: "0"
       OPS_LISTEN: ":8080"
-      OPS_STATIC_DIR: /app/static
       OPS_DATA_DIR: /data
       OPS_PUBLIC_IP: ${OPS_PUBLIC_IP}
       OPS_MASTER_KEY: ${OPS_MASTER_KEY}
-      # 当前为 HTTP 反代；上 HTTPS 后改为 1 或删掉此行
-      OPS_COOKIE_SECURE: ${OPS_COOKIE_SECURE:-0}
-      # 跨源前端白名单（D-153）：留空 = 只允许同源（本地开发、后端自托管页面、桌面端）。
-      # Cloudflare Pages 上的 web 前端上线后，在这里填它的来源，例如 https://web.88813888.xyz
-      OPS_CORS_ORIGINS: ${OPS_CORS_ORIGINS:-}
-      # 前端与 API 同属 88813888.xyz 时保持 lax 即可；换成别的站点才需要 none
-      OPS_COOKIE_SAMESITE: ${OPS_COOKIE_SAMESITE:-lax}
+      # 桌面包通过 HTTPS API 访问，Secure Cookie 必须开启
+      OPS_COOKIE_SECURE: ${OPS_COOKIE_SECURE:-1}
+      # 只允许 Electron 桌面 UI 的本地安全协议来源
+      OPS_CORS_ORIGINS: ${OPS_CORS_ORIGINS:-ops-desktop://business}
+      # 桌面本地 UI 跨站请求 API，需要 None + Secure Cookie
+      OPS_COOKIE_SAMESITE: ${OPS_COOKIE_SAMESITE:-none}
+      # env_file 可能仍含旧的静态前端路径，生产容器明确禁用静态 Web 服务
+      OPS_STATIC_DIR: ""
       OPS_AI_WORKERS: ${OPS_AI_WORKERS:-3}
       OPS_DB_MAX_CONNS: ${OPS_DB_MAX_CONNS:-20}
       OPS_DATABASE_URL: postgres://ops:${POSTGRES_PASSWORD}@postgres:5432/ops?sslmode=disable

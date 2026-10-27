@@ -1,11 +1,5 @@
-// API 基址（D-153）。web 前端托管到 Cloudflare Pages 后，页面与 API 不再同源，
-// 需要一个可配置的后端地址；但同一份代码还要服务三种同源场景：
-//   1. 本地开发：vite 代理 /api 到 :8080；
-//   2. 后端自己托管的静态页（桌面端 businessOrigin 指向 ops.88813888.xyz）；
-//   3. 云服务器直连。
-// 因此基址默认空串 = 继续用相对路径，只有显式配置 OPS_API_BASE 时才变成绝对地址。
-//
-// 构建期注入（见 vite.config.ts 的 define）：OPS_API_BASE=https://ops.88813888.xyz
+// Web 默认使用相对路径；Electron 桌面构建通过 OPS_API_BASE 直接连接后端 API。
+// 构建期注入（见 vite.config.ts 的 define），不改变普通浏览器 Web 的同源请求行为。
 const RAW_BASE = typeof __OPS_API_BASE__ === 'string' ? __OPS_API_BASE__ : ''
 
 /** apiBase 返回不带结尾斜杠的 API 基址；空串表示同源相对路径。 */

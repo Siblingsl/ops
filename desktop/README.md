@@ -1,9 +1,10 @@
 # OPS Desktop
 
-Windows x64 Electron 客户端。发行版加载线上 Web 页面；未打包开发版可加载仓库内的 Electron 专属 UI，并沿用现有业务 API。桌面端提供隔离设置窗口、本机模型配置、系统加密存储、独立 WSS 通道、模型能力自检、任务映射草稿与应用、AI 模式切换、设备回收和脱敏诊断导出。未登录时不会建立 WSS 连接或声称 AI 已接通。
+Windows x64 Electron 客户端。发行版从安装包本地资源加载桌面专用 UI，不加载普通 Web 部署页面；API 与 WebSocket 连接 `https://ops-api.88813888.xyz`。未打包开发版加载本地 Vite 服务并可代理到开发 API。桌面端提供隔离设置窗口、本机模型配置、系统加密存储、独立 WSS 通道、模型能力自检、任务映射草稿与应用、AI 模式切换、设备回收和脱敏诊断导出。未登录时不会建立 WSS 连接或声称 AI 已接通。
 
 - [用户指南](./USER_GUIDE.md)
 - [灰度发布与回退操作](./RELEASE_RUNBOOK.md)
+- [桌面 UI 本地打包与 API 迁移步骤](../deploy/desktop-api-migration.md)
 
 设置页的“清除此账号本机数据”只删除当前登录账号在本机保存的 AI 配置，并清理当前业务站点的 Cookie、站点存储与缓存后退出登录；不删除线上数据，也不撤销线上设备。多个账号需分别登录清理。Windows 卸载后可能保留用户目录中的应用数据。
 
@@ -20,7 +21,7 @@ pnpm test:e2e
 pnpm start
 ```
 
-`pnpm start` 会读取 Windows 当前系统代理，在可用的回环端口启动一份全新的 Vite 前端，让未打包 Electron 加载当前源码中的客户端 UI，并将业务 API 与 WebSocket 默认代理到 `http://ops.88813888.xyz`。这是当前线上环境仅 HTTP 可用时的本机调试路线，登录数据未经过 TLS 加密，不要在不可信网络中使用；普通 Web 开发仍默认使用 `localhost:5173` 并代理到 `http://localhost:8080`。需要隔离本地数据时，可在启动 Electron 前设置 `OPS_API_TARGET=http://localhost:8080` 并按仓库根目录说明启动本地 API 和数据库。确需使用其他本地前端服务时，可显式设置 `OPS_DESKTOP_DEV_URL`，地址只接受 localhost、127.0.0.1 或 ::1。打包发行版忽略该变量并固定使用 HTTPS 正式站点，生产 HTTPS/WSS 发布门槛不变。已打开的旧客户端不会热切换页面；切换到这套启动方式前需完整退出旧实例，再启动一次。
+`pnpm start` 会读取 Windows 当前系统代理，在可用的回环端口启动一份全新的 Vite 前端，让未打包 Electron 加载当前源码中的桌面 UI，并将业务 API 与 WebSocket 默认代理到 `https://ops-api.88813888.xyz`。普通 Web 开发仍默认使用 `localhost:5173` 并代理到 `http://localhost:8080`。需要隔离本地数据时，可在启动 Electron 前设置 `OPS_API_TARGET=http://localhost:8080` 并按仓库根目录说明启动本地 API 和数据库。确需使用其他本地前端服务时，可显式设置 `OPS_DESKTOP_DEV_URL`，地址只接受 localhost、127.0.0.1 或 ::1。打包发行版忽略该变量并固定使用 HTTPS API。已打开的旧客户端不会热切换页面；切换到这套启动方式前需完整退出旧实例，再启动一次。
 
 部分 Windows 机器上 Chromium 的 GPU 进程会在启动阶段反复崩溃（日志 `GPU process exited unexpectedly: exit_code=-1073741819`，随后 `GPU process isn't usable. Goodbye.`），表现为双击后没有任何窗口。这类环境可用两个启动前生效的环境变量降级：
 

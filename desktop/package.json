@@ -14,11 +14,12 @@
   "scripts": {
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "build": "tsc --project tsconfig.json",
+    "build:renderer": "pnpm --dir ../web run build:desktop",
     "test": "pnpm build && node --test test/*.test.cjs",
     "test:e2e": "pnpm build && node --test --test-concurrency=1 test/*.e2e.cjs",
     "start": "pnpm build && node scripts/start.cjs",
-    "package": "pnpm build && electron-forge package --arch=x64",
-    "make": "pnpm build && electron-forge make --arch=x64"
+    "package": "pnpm build:renderer && pnpm build && electron-forge package --arch=x64",
+    "make": "pnpm build:renderer && pnpm build && electron-forge make --arch=x64"
   },
   "dependencies": {
     "electron-squirrel-startup": "1.0.1",

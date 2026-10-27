@@ -12,6 +12,7 @@ server/tmp/
 # 前端
 web/node_modules/
 web/dist/
+desktop/renderer/
 web/.vite/
 web/*.tsbuildinfo
 web/playwright-report/
@@ -50,3 +51,4 @@ docs/design/desktop-creative/prototype/*
 .workbuddy-ai/
 .dsh-notes/
 .playwright-cli/
+.gocache/

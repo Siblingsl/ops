@@ -46,7 +46,7 @@ test('登录与采集必须共用账号 slot profile，避免读到其他连接�
   // 登录和采集都按 OPS 账号、平台与平台账号 ID 解析同一个专用 profile。
   assert.match(loginRuntimeSrc, /readAccountProfile\(userData, scope\)/);
   assert.match(loginRuntimeSrc, /launchPlatformBrowser\(\{ executablePath: browserCandidate\.executablePath, profileDir: stored\.profileDir \}\)/);
-  assert.match(mainSrc, /readAccountProfile\(app\.getPath\('userData'\), \{ \.\.\.auth, origin: businessOrigin, accountId: run\.account_id, platform \}\)/);
+  assert.match(mainSrc, /readAccountProfile\(app\.getPath\('userData'\), \{ \.\.\.auth, origin: serviceNamespace, accountId: run\.account_id, platform \}\)/);
   assert.match(mainSrc, /const profileDir = stored\.profileDir/);
 });
 

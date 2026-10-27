@@ -12,7 +12,7 @@ concurrency:
 env:
   # 项目名与 API 基址都走仓库变量，换域名时不用改工作流。
   CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT || 'ops-web' }}
-  OPS_API_BASE: ${{ vars.OPS_API_BASE || 'https://ops.88813888.xyz' }}
+  OPS_API_BASE: ${{ vars.OPS_API_BASE || 'https://ops-api.88813888.xyz' }}
 
 jobs:
   pages:
@@ -64,7 +64,7 @@ jobs:
         working-directory: web
         run: pnpm install --frozen-lockfile
 
-      # 跨源构建：页面在 CF 域名上，API 在 ops.88813888.xyz。
+      # 仅手动 Pages 发布时使用：Web Origin 需另外加入 API CORS 白名单。
       # 变量缺失时回落到生产后端域名，保证首次接入不需要额外配置就能跑通。
       - name: Build
         working-directory: web

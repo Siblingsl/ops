@@ -247,7 +247,7 @@ function renderModels(models) {
 async function loadInfo() {
   try {
     const info = await settingsApi.getInfo();
-    origin.textContent = info.businessOrigin;
+    origin.textContent = info.apiOrigin;
     connectionState.textContent = {
       online: '已打开业务页面',
       offline: '线上服务不可达',

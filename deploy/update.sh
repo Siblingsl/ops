@@ -43,4 +43,4 @@ if ! ENV_FILE=.env ./backup.sh; then
 fi
 docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
 docker compose -f docker-compose.prod.yml ps
-echo "更新完成。健康检查：curl -fsS https://ops.88813888.xyz/healthz"
+echo "更新完成。健康检查：curl -fsS https://ops-api.88813888.xyz/healthz"

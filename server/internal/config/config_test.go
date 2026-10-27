@@ -73,6 +73,8 @@ func TestLoadCORSAndSameSite(t *testing.T) {
 func TestNormalizeOrigin(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"https://web.88813888.xyz", "https://web.88813888.xyz"},
+		{"ops-desktop://business", "ops-desktop://business"},
+		{"ops-desktop://attacker", ""},
 		{"  https://web.88813888.xyz/  ", "https://web.88813888.xyz"},
 		{"http://localhost:5173", "http://localhost:5173"},
 		{"https://web.88813888.xyz/path", ""},

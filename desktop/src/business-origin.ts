@@ -1,8 +1,11 @@
-export const PRODUCTION_ORIGIN = 'https://ops.88813888.xyz';
+export const PRODUCTION_API_ORIGIN = 'https://ops-api.88813888.xyz';
+export const PRODUCTION_BUSINESS_UI_ORIGIN = 'ops-desktop://business';
+// 稳定的本机数据命名空间，保留旧发行版中 AI 配置与平台 profile 的归属键；不用于网络请求。
+export const PRODUCTION_SERVICE_NAMESPACE = 'https://ops.88813888.xyz';
 export const DEFAULT_DEVELOPMENT_ORIGIN = 'http://localhost:5174';
 
 export function resolveBusinessOrigin(isPackaged: boolean, developmentUrl?: string): string {
-  if (isPackaged) return PRODUCTION_ORIGIN;
+  if (isPackaged) return PRODUCTION_BUSINESS_UI_ORIGIN;
   if (!developmentUrl) return DEFAULT_DEVELOPMENT_ORIGIN;
 
   let parsed: URL;
@@ -18,4 +21,12 @@ export function resolveBusinessOrigin(isPackaged: boolean, developmentUrl?: stri
   }
 
   return parsed.origin;
+}
+
+export function resolveApiOrigin(isPackaged: boolean, uiOrigin: string): string {
+  return isPackaged ? PRODUCTION_API_ORIGIN : uiOrigin;
+}
+
+export function resolveServiceNamespace(isPackaged: boolean, uiOrigin: string): string {
+  return isPackaged ? PRODUCTION_SERVICE_NAMESPACE : uiOrigin;
 }

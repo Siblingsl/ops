@@ -100,8 +100,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
       - run: pnpm run build
-      # D-153：前端要能部署到 Cloudflare Pages（跨源），确认 OPS_API_BASE 真的被注入到产物里。
-      # 默认构建（上一行）保持相对路径，服务端自托管与桌面端不受影响。
+      # Web 构建可指定跨源 API 基址；默认构建（上一行）仍使用相对路径。
       - name: Build (cross-origin)
         env:
           OPS_API_BASE: https://ops.example.invalid
@@ -110,6 +109,52 @@ jobs:
           # apiUrl() 运行时拼接 `${base}/api/v1${path}`，产物里只需出现 base 本身
           grep -rlq 'ops\.example\.invalid' dist-crossorigin \
             || { echo "::error::OPS_API_BASE 没有被注入构建产物，检查 vite.config.ts 的 define"; exit 1; }
+
+  desktop:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.1"
+          cache: pnpm
+          cache-dependency-path: |
+            desktop/pnpm-lock.yaml
+            web/pnpm-lock.yaml
+      - name: Install Web build dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
+      - name: Desktop unit tests
+        run: pnpm test
+      - name: Build Windows desktop installer
+        run: pnpm make
+      - name: Verify packaged desktop UI and API origin
+        shell: pwsh
+        run: |
+          $appDir = Get-ChildItem "out" -Directory | Where-Object { $_.Name.EndsWith("-win32-x64") } | Select-Object -First 1
+          if (-not $appDir) { throw "Electron Windows x64 应用目录未打包" }
+          $renderer = Join-Path $appDir.FullName "resources/renderer/index.html"
+          if (-not (Test-Path $renderer)) { throw "桌面专用 renderer/index.html 未打入安装包" }
+          $assets = Join-Path $appDir.FullName "resources/renderer/assets/*.js"
+          $apiAsset = Get-ChildItem $assets | Select-String -List -SimpleMatch "https://ops-api.88813888.xyz"
+          if (-not $apiAsset) { throw "桌面 UI 产物未注入 ops-api.88813888.xyz" }
+          $setup = Get-ChildItem "out/make/squirrel.windows/x64/*Setup.exe"
+          if (-not $setup) { throw "未生成 Windows Squirrel 安装程序" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ops-desktop-windows-x64
+          path: desktop/out/make/squirrel.windows/x64/
+          if-no-files-found: error
+          retention-days: 14
 
   e2e:
     strategy:

@@ -1,6 +1,6 @@
 interface DesktopSettingsInfo {
   appVersion: string;
-  businessOrigin: string;
+  apiOrigin: string;
   connectionState: 'online' | 'offline' | 'unknown';
   failureReason: 'unreachable' | 'icp-block' | 'render-failed';
   systemInfo: { version: string; dev: boolean; dataBytes: number } | null | undefined;

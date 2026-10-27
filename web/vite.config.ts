@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url)
 
 export default defineConfig(async ({ mode }) => {
   const env = loadEnv(mode, '.', 'OPS_')
+  const desktopBuild = mode === 'desktop'
   const apiTarget = env.OPS_API_TARGET || 'http://localhost:8080'
   const target = new URL(apiTarget)
   const apiHost = target.hostname.toLowerCase()
@@ -38,16 +39,18 @@ export default defineConfig(async ({ mode }) => {
   return {
     plugins: [react(), tailwindcss()],
     resolve: { alias: { '@': '/src' } },
-    // D-153：OPS_API_BASE 只在跨源部署（Cloudflare Pages）时设置，留空即沿用相对路径。
-    // 用 define 注入而不是 import.meta.env，保证类型声明与默认值集中在一处（src/lib/api-base.ts）。
-    define: { __OPS_API_BASE__: JSON.stringify((env.OPS_API_BASE || '').replace(/\/+$/, '')) },
+    // Web 默认使用同源路径；桌面发行包单独构建并直连后端 API。
+    define: {
+      __OPS_API_BASE__: JSON.stringify((env.OPS_API_BASE || (desktopBuild ? 'https://ops-api.88813888.xyz' : '')).replace(/\/+$/, '')),
+    },
     server: {
       port: 5173,
       host: true,
       proxy: { '/api': { target: apiTarget, changeOrigin: !localApi, ws: true, ...(apiAgent ? { agent: apiAgent } : {}) } },
     },
     build: {
-      outDir: 'dist',
+      outDir: desktopBuild ? '../desktop/renderer' : 'dist',
+      emptyOutDir: desktopBuild,
       chunkSizeWarningLimit: 1500,
       rollupOptions: {
         output: {

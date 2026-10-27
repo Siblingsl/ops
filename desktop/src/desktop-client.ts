@@ -315,9 +315,10 @@ export class DesktopClient {
 
   constructor(
     private readonly businessSession: Session,
-    private readonly businessOrigin: string
+    private readonly apiOrigin: string,
+    private readonly serviceNamespace: string = apiOrigin
   ) {
-    this.managementRequests = new ManagementRequestRegistry(businessOrigin);
+    this.managementRequests = new ManagementRequestRegistry(apiOrigin);
   }
 
   async getPublicState(): Promise<PublicState> {
@@ -532,7 +533,7 @@ export class DesktopClient {
       auth = await this.getAuthInfo();
     } catch {
       const hasSessionCookie = (await this.businessSession.cookies.get({
-        url: this.businessOrigin,
+        url: this.apiOrigin,
         name: 'ops_session'
       })).length > 0;
       if (hasSessionCookie) {
@@ -655,7 +656,7 @@ export class DesktopClient {
     if (auth.user_id !== expectedUserId) throw new Error('当前登录账号已变化，请刷新设置后重试。');
     this.disconnect();
     const config = await this.loadConfig();
-    const accountKey = `${this.businessOrigin}\n${auth.user_id}`;
+    const accountKey = `${this.serviceNamespace}\n${auth.user_id}`;
     const storedAccount = config.accounts[accountKey];
     delete config.accounts[accountKey];
     try {
@@ -945,7 +946,7 @@ export class DesktopClient {
     routeRevision: number,
     configs: Array<{ provider_id: string; config_revision: number }>
   ): Promise<void> {
-    const websocketOrigin = this.businessOrigin.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
+    const websocketOrigin = this.apiOrigin.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
     const channelUrl = new URL(`${API_PREFIX}/desktop/channel`, websocketOrigin).toString();
     const target = new URL(channelUrl);
     const proxyLookupURL = channelUrl.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
@@ -1882,7 +1883,7 @@ export class DesktopClient {
     accountKey: string;
   }> {
     const config = await this.loadConfig();
-    const accountKey = `${this.businessOrigin}\n${auth.user_id}`;
+    const accountKey = `${this.serviceNamespace}\n${auth.user_id}`;
     const account = config.accounts[accountKey] ?? { workspaces: {} };
     account.workspaces[auth.workspace.id] ??= { models: [] };
     config.accounts[accountKey] = account;
@@ -1894,7 +1895,7 @@ export class DesktopClient {
   }
 
   private async request<T>(pathName: string, init: RequestInit = {}): Promise<T> {
-    const url = new URL(`${API_PREFIX}${pathName}`, this.businessOrigin).toString();
+    const url = new URL(`${API_PREFIX}${pathName}`, this.apiOrigin).toString();
     const headers = new Headers(init.headers);
     let hasDesktopProof = false;
     headers.forEach((_value, name) => {

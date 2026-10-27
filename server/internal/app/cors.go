@@ -6,11 +6,10 @@ import (
 	"strings"
 )
 
-// 跨源前端白名单（D-153）。web 前端托管到 Cloudflare Pages 后，页面来源与 API 来源
-// 不同源但同站（同一 eTLD+1 的不同子域），因此：
+// 跨源前端白名单。Electron 桌面业务窗口使用安全自定义协议，跨源访问 HTTPS API，因此：
 //   - 必须回写 Access-Control-Allow-Origin，并带上 Allow-Credentials（会话靠 Cookie）；
 //   - 必须 expose 业务用到的自定义响应头，否则分页与基版本校验在跨域下静默退化；
-//   - Cookie 的 SameSite 仍是 Lax（见 config.CookieSameSite），不需要改成 none。
+//   - 桌面请求的 Cookie 使用 SameSite=None; Secure（见 config.CookieSameSite）。
 const (
 	corsAllowMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 	corsAllowHeaders = "Accept, Content-Type, X-CSRF-Token, X-AI-Prefer, Idempotency-Key"

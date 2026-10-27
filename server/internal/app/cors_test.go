@@ -103,6 +103,24 @@ func TestCORS(t *testing.T) {
 		}
 	})
 
+	t.Run("桌面安全协议来源通过白名单预检", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/me", nil)
+		req.Header.Set("Origin", "ops-desktop://business")
+		req.Header.Set("Access-Control-Request-Method", "GET")
+		req.Header.Set("Access-Control-Request-Headers", "x-csrf-token")
+		newServer("ops-desktop://business").cors(echo).ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("桌面协议预检状态码 = %d，期望 204", rec.Code)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "ops-desktop://business" {
+			t.Fatalf("桌面协议 ACAO = %q", got)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+			t.Fatalf("桌面协议 Allow-Credentials = %q", got)
+		}
+	})
+
 	t.Run("预检：非白名单 403", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodOptions, "/api/v1/works", nil)

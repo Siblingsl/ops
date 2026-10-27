@@ -178,7 +178,7 @@ sequenceDiagram
 
 ### 5.1 原业务会话不另造认证系统
 
-打包版业务窗口固定加载发布配置允许的 HTTPS Origin，当前为 `https://ops.88813888.xyz`；正式发布前须实测。当前部署尚未启用 TLS，因此本地未打包开发运行默认使用 `http://ops.88813888.xyz` 联调；该明文开发例外不得进入打包版或作为正式环境验收结果。HTTP 会明文传输登录会话与桌面通道数据，只能在开发联调环境使用。使用专属持久 Session 分区，例如 `persist:ops-production`，与开发环境、本地设置窗口及普通浏览器隔离。
+打包版业务窗口从 Electron 安装包内的桌面 UI 资源加载，Origin 固定为 `ops-desktop://business`；业务 API 与 WSS 单独连接 `https://ops-api.88813888.xyz`。UI 由 `web/` 中已有的 Electron 桌面呈现分支构建，Electron preload 和运行时继续选中桌面导航、布局和交互；普通 Web 构建仍输出到 `web/dist`，不进入安装包。未打包开发版从 localhost Vite 加载并代理 API。跨源登录使用精确 CORS 白名单 `ops-desktop://business`，会话 Cookie 使用 `SameSite=None; Secure`。桌面端使用专属持久 Session 分区，与开发环境、本机设置窗口及普通浏览器隔离。桌面业务 UI 的页面内容、样式和交互不因本次部署迁移而改变。
 
 登录、退出、重新认证、密码重置与工作区切换继续调用原接口。保留 HttpOnly、SameSite 和 CSRF 校验。主进程如需访问桌面管理接口，使用该业务 Session 的请求能力取得 `/auth/me` 与 CSRF；不能假定 Node `fetch` 自带 Chromium Cookie，也不能把 Cookie/CSRF 转发给 AI API。[Electron Session](https://www.electronjs.org/docs/latest/api/session)、[Cookie API](https://www.electronjs.org/docs/latest/api/cookies)
 
@@ -1287,3 +1287,19 @@ DEV-DC12 分为决策同步、Electron 本机子视图、React 统一宿主与�
 ## 技能（Skill）系统跨端边界（D-151 / 23 文档第 12 节，DEV-SK5 登记）
 
 桌面首版不提供技能库 / 账号技能区块管理入口：`settings-registry.ts` 中写作技能条目标记 `desktopHidden`，桌面设置窗导航不显示（Web 用户菜单与命令面板正常）；桌面端的 AI 生成与智能体对话走服务端同一解析 / 注入 / 目录规则，行为与 Web 完全一致，无需客户端增量。已授权的智能体单张技能管理卡片（skills__* 工具）在桌面聊天中沿用；用户需直接填写或导入 `.md` 时，打开 Web 的 `/settings/skills` 页面完成。
+
+## 10.8 桌面业务 UI 本地打包与 API 分离（D-154）
+
+#### 决策
+
+- Electron 安装包包含由 `web/` 现有 React 桌面呈现分支构建的静态 UI；打包版主窗口不再加载线上 Web 页面。UI 必须通过 Electron preload/运行时选择桌面 UI，不得按普通浏览器的 Web 呈现运行。本次只改资源来源和 API 目标，不改桌面页面的视觉与交互。
+- Web 源码继续留在 `web/` 并与桌面端共同迭代。`pnpm build` 仍输出普通 Web 站点到 `web/dist`；桌面单独运行 `pnpm build:desktop`，输出到 `desktop/renderer`，Electron Forge 将其放入安装包 `resources/renderer`。
+- 打包版页面 Origin 固定为 `ops-desktop://business`，API 与 WSS 固定为 `https://ops-api.88813888.xyz`。开发版仍从 localhost Vite 读取 UI，并通过 Vite 代理访问本地/配置的 API。
+- Go 生产镜像仅包含 API，不再复制 Web 静态文件。生产 Compose 显式把 `OPS_STATIC_DIR` 设为空，以覆盖服务器旧 `.env` 可能仍有的静态目录配置；不得删除数据库卷、业务数据卷或服务器 `.env`。
+- 后端只放行 `ops-desktop://business` 跨源请求；桌面登录 Cookie 为 `SameSite=None; Secure`。桌面通道 WebSocket 仍不携带 `Origin`，不经过 CORS 中间件授权。
+- 手动 Pages 工作流暂留但不自动发布，不能把普通 Web 构建误当桌面 UI。`Deploy` 的 push 自动发布由 `OPS_PRODUCTION_DEPLOY_ENABLED=true` 显式开启；首次迁移先通过 Actions 手动部署，确认新桌面包可登录、API 与 WSS 正常后再考虑开启。
+- 为兼容已存在的本机 AI 配置和平台登录 profile，旧的 `https://ops.88813888.xyz` 字符串只保留为本机 profile 命名空间键；不得再作为 API、页面、Cookie 或 WSS 网络目标。域名可在新客户端验收后从 Cloudflare DNS 删除。
+
+#### 发布验收
+
+Windows CI 必须运行桌面端单元测试，构建 Squirrel 安装包，并确认安装包中有本地 `renderer/index.html` 且 JS 包含新的 API 域名。线上验收至少检查 `/healthz`、桌面协议 Origin 的 CORS 预检与带凭证登录、`ops_session` Secure/HttpOnly/SameSite 属性、桌面 WSS 握手及一轮实际业务页面调用；旧桌面版需要在服务器停用静态 UI 后升级安装新版。

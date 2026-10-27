@@ -4,7 +4,7 @@ const aiStatus = document.getElementById('ai-status');
 const actionStatus = document.getElementById('action-status');
 
 window.opsDesktopSettings.getInfo().then((info) => {
-  origin.textContent = info.businessOrigin;
+  origin.textContent = info.apiOrigin;
   version.textContent = info.appVersion;
   aiStatus.textContent = info.aiStatus;
   if (info.failureReason === 'icp-block') {

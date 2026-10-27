@@ -23,12 +23,10 @@ type Config struct {
 	MockListen   string
 	PublicIP     string
 	CookieSecure bool
-	// CookieSameSite 是会话 Cookie 的 SameSite 策略（D-153）。默认 Lax：
-	// 前端与后端同站（同一 eTLD+1 的不同子域）时 Lax 仍会随跨源请求发送，
-	// 只有把前端放到完全不同的站点时才需要改成 none（同时必须 Secure）。
+	// CookieSameSite 是会话 Cookie 的 SameSite 策略。桌面包从安全的自定义协议
+	// 跨站请求 API，因此生产部署设为 None，并同时开启 Secure。
 	CookieSameSite http.SameSite
-	// CORSOrigins 是允许跨源调用 API 的前端来源白名单（D-153）。为空表示不启用 CORS，
-	// 即只允许同源访问（本地开发、后端自己托管前端、桌面端内嵌页面都走同源）。
+	// CORSOrigins 是允许跨源调用 API 的前端来源白名单。为空表示不启用 CORS。
 	CORSOrigins []string
 	// DesktopAIEnabled is an explicit global kill switch for desktop model routing.
 	DesktopAIEnabled bool
@@ -117,8 +115,7 @@ func Load() (*Config, error) {
 		c.CookieSecure = !c.Dev
 	}
 
-	// D-153：前端托管到 Cloudflare Pages 后，页面来源与 API 来源不同（同站不同源），
-	// 会话 Cookie 仍用 Lax；只有跨站部署才需要 none。
+	// 桌面包使用 ops-desktop://business，访问 HTTPS API 属于跨站请求，生产环境用 None。
 	c.CookieSameSite = http.SameSiteLaxMode
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("OPS_COOKIE_SAMESITE"))); v {
 	case "", "lax":
@@ -134,8 +131,8 @@ func Load() (*Config, error) {
 		return nil, errors.New("OPS_COOKIE_SAMESITE 只能为 lax/strict/none")
 	}
 
-	// D-153：跨源前端来源白名单，逗号分隔，例如 https://web.88813888.xyz。
-	// 留空即不启用 CORS，行为与改造前完全一致。
+	// 跨源页面来源白名单，逗号分隔。桌面发行版使用 ops-desktop://business。
+	// 留空即不启用 CORS。
 	if raw := strings.TrimSpace(os.Getenv("OPS_CORS_ORIGINS")); raw != "" {
 		for _, item := range strings.Split(raw, ",") {
 			origin := normalizeOrigin(item)
@@ -145,7 +142,7 @@ func Load() (*Config, error) {
 			c.CORSOrigins = append(c.CORSOrigins, origin)
 		}
 		if len(c.CORSOrigins) == 0 {
-			return nil, errors.New("OPS_CORS_ORIGINS 中没有合法的来源（应形如 https://web.88813888.xyz）")
+			return nil, errors.New("OPS_CORS_ORIGINS 中没有合法的来源（应形如 https://web.example.com 或 ops-desktop://business）")
 		}
 	}
 
@@ -188,6 +185,9 @@ func normalizeOrigin(raw string) string {
 	v = strings.TrimSuffix(v, "/")
 	if strings.ContainsAny(v, "?#") {
 		return ""
+	}
+	if v == "ops-desktop://business" {
+		return v
 	}
 	scheme, rest, ok := strings.Cut(v, "://")
 	if !ok || (scheme != "http" && scheme != "https") {

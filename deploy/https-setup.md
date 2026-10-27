@@ -1,5 +1,7 @@
 # HTTPS 上线步骤（OPT-01）
 
+> 当前服务器的反向代理是 Docker 容器 `xianyu-nginx-api`。以下配置是**宿主机 Nginx 模板**，不要直接复制到服务器执行；迁移请先按[桌面端 API 迁移步骤](./desktop-api-migration.md)检查容器端口和配置挂载。
+
 本说明只用于仓库外的实际部署，由服务器维护者执行。不要在证书签发前安装 `nginx-ops-https.conf`，否则 Nginx 会因证书文件不存在而无法加载配置。
 以下 Compose 命令在服务器仓库的 `deploy/` 目录执行。
 
@@ -7,13 +9,13 @@
 
 在服务器上备份当前 Nginx 配置和 `deploy/.env`，并确认：
 
-- `ops.88813888.xyz` 的 DNS A 记录指向本机公网 IP；
+- `ops-api.88813888.xyz` 的 DNS A 记录指向本机公网 IP；
 - 云防火墙和主机防火墙允许公网 TCP 80、443；
 - 当前 HTTP 站点可访问，且实际 Nginx 配置为 `/.well-known/acme-challenge/` 配置 `/var/www/certbot` webroot（仓库模板 `nginx-ops.conf` 已包含该 location；线上配置需用 `nginx -T` 核对）；
 - 生产 `.env` 权限为仅维护者可读，不把其中内容贴进工单或日志。
 
 ```bash
-sudo cp -a /etc/nginx/conf.d/ops.conf /etc/nginx/conf.d/ops.conf.before-https
+sudo cp -a /etc/nginx/conf.d/ops-api.conf /etc/nginx/conf.d/ops-api.conf.before-https
 cp -a .env .env.before-https
 sudo mkdir -p /var/www/certbot
 sudo nginx -t
@@ -33,7 +35,7 @@ location ^~ /.well-known/acme-challenge/ {
 安装 Certbot 及其 webroot 支持后执行：
 
 ```bash
-sudo certbot certonly --webroot -w /var/www/certbot -d ops.88813888.xyz
+sudo certbot certonly --webroot -w /var/www/certbot -d ops-api.88813888.xyz
 sudo certbot certificates
 ```
 
@@ -44,7 +46,7 @@ sudo certbot certificates
 将仓库中的 HTTPS 模板安装为实际站点配置。模板将 HTTP 普通请求 301 到固定 HTTPS 域名，仅 ACME challenge 留在 HTTP；HTTPS 反代保留 SSE 透传设置，并为 `/api/v1/desktop/channel` 配置精确匹配的 WebSocket Upgrade 路由，再发送 `Strict-Transport-Security: max-age=300`。
 
 ```bash
-sudo cp -a nginx-ops-https.conf /etc/nginx/conf.d/ops.conf
+sudo cp -a nginx-ops-https.conf /etc/nginx/conf.d/ops-api.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```
@@ -58,12 +60,12 @@ docker compose --env-file .env -f docker-compose.prod.yml up -d --force-recreate
 逐项验证：
 
 ```bash
-curl -sSI http://ops.88813888.xyz/
-curl -fsS https://ops.88813888.xyz/healthz
+curl -sSI http://ops-api.88813888.xyz/
+curl -fsS https://ops-api.88813888.xyz/healthz
 sudo certbot renew --dry-run
 ```
 
-HTTP 应返回指向 HTTPS 的 301；健康检查应返回 `ok`。以已认证桌面客户端完成 WSS 通道握手与一轮心跳/断开重连，不能只用健康检查替代 WebSocket 验收。在浏览器登录响应的 `Set-Cookie` 中确认会话 Cookie 含 `Secure`、`HttpOnly`、`SameSite=Lax`，并确认 HTTPS 页面、登录和作品图片正常。等待短期 HSTS 验证后再做 SSL Labs 检查。
+HTTP 应返回指向 HTTPS 的 301；健康检查应返回 `ok`。以已认证桌面客户端完成 WSS 通道握手与一轮心跳/断开重连，不能只用健康检查替代 WebSocket 验收。当前桌面 UI 通过自定义安全 Origin 跨站请求 API，会话 Cookie 应含 `Secure`、`HttpOnly`、`SameSite=None`。等待短期 HSTS 验证后再做 SSL Labs 检查。
 
 ## 4. 拉长 HSTS
 
@@ -80,7 +82,7 @@ add_header Strict-Transport-Security "max-age=31536000" always;
 如果启用后健康检查或登录异常，恢复备份配置并先检查再 reload；将 `.env` 中的 `OPS_COOKIE_SECURE` 改回 `0` 后，只重建 app 容器：
 
 ```bash
-sudo cp -a /etc/nginx/conf.d/ops.conf.before-https /etc/nginx/conf.d/ops.conf
+sudo cp -a /etc/nginx/conf.d/ops-api.conf.before-https /etc/nginx/conf.d/ops-api.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```
