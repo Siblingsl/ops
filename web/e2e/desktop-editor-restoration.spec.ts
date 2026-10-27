@@ -197,8 +197,19 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
   await expect(page.getByTestId('desktop-editor-tools')).toBeVisible()
 
   const emptyDraft = page.locator('#step-sections > div[id^="sec-"]').nth(3)
-  await emptyDraft.getByRole('button', { name: '起草本段' }).click()
-  await expect(emptyDraft.getByRole('button', { name: '停止生成' })).toBeVisible({ timeout: 10_000 })
+  // 快速 mock 可能在浏览器断言前结束；先保持请求待处理以复核生成中入口。
+  let releaseDraft!: () => void
+  const draftGate = new Promise<void>((resolve) => { releaseDraft = resolve })
+  await page.route(`**/api/v1/sections/${work.sections[3].id}/draft`, async (route) => {
+    await draftGate
+    await route.continue()
+  })
+  try {
+    await emptyDraft.getByRole('button', { name: '起草本段' }).click()
+    await expect(emptyDraft.getByRole('button', { name: '停止生成' })).toBeVisible({ timeout: 10_000 })
+  } finally {
+    releaseDraft()
+  }
   await expect.poll(async () => {
     const fresh = await api(page, 'GET', `/works/${workId}`)
     return fresh.sections[3].content_md.trim().length

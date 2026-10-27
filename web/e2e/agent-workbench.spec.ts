@@ -239,9 +239,9 @@ test('DEV-AW04 @资料、有效技能请求与混合附件队列走真实接口'
   expect(payload.skill_requests).toEqual([expect.objectContaining({ skill_id: skill.id })])
   expect(payload.attachment_ids).toHaveLength(1)
   expect((await sendResponse).ok()).toBeTruthy()
-  await expect(page.getByText(`技能已请求 · ${skillName}`, { exact: true })).toBeVisible()
-  await expect(page.getByText(materialText, { exact: true })).toBeVisible()
-  await expect(page.getByText('本轮引用', { exact: true })).toBeVisible()
+  const sentMessage = page.getByRole('article').filter({ has: page.getByText(messageText, { exact: true }) })
+  await expect(sentMessage.getByText(`技能已请求 · ${skillName}`, { exact: true })).toBeVisible()
+  await expect(sentMessage.getByText(`${materialText} · 本轮引用`, { exact: true })).toBeVisible()
   await expect(page.getByText(`已请求，未加载 · ${skillName}`, { exact: true })).toBeVisible()
 
   const screenshotDir = resolve(process.cwd(), '../.playwright-results')

@@ -1,13 +1,8 @@
 name: Pages
 
 # web 前端发布到 Cloudflare Pages（D-153）。后端仍由 Deploy 工作流推到云服务器。
-# 只有 web 目录或本工作流变化时才构建，避免纯后端提交白白触发一次前端发布。
+# 暂停自动发布；保留手动入口，恢复 Pages 发布前需先复核后端域名与桌面端方案。
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'web/**'
-      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 concurrency:

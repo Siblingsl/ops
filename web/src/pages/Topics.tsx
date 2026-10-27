@@ -585,8 +585,13 @@ export default function Topics() {
   const selectedTopic = desktopShown.find((t) => t.id === selectedTopicId) ?? desktopShown.find((t) => t.id === focus) ?? desktopShown[0]
   const updateDesktopFilter = (key: 'q' | 'source', value: string) => {
     const next = new URLSearchParams(params)
-    if (!value || (key === 'source' && value === 'all')) next.delete(key)
-    else next.set(key, value)
+    // 连续修改时 URL 导航可能尚未提交，用当前控件值合并两项筛选。
+    const query = key === 'q' ? value : topicSearch
+    const source = key === 'source' ? value : sourceFilter
+    if (query) next.set('q', query)
+    else next.delete('q')
+    if (source === 'all') next.delete('source')
+    else next.set('source', source)
     setParams(next, { replace: true })
   }
   const save = async () => {
