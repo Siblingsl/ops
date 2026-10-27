@@ -55,7 +55,7 @@ test('DC12：统一设置中的四个本机嵌入面板各自只启用对应本�
   assert.match(settingsScript, /reportLocalState\(\{ dirty, busy: activeOperations > 0 \|\| externalBusy \}\)/);
   assert.match(settingsScript, /ops-desktop:\/\/ui\/settings\/close/);
   assert.match(settingsCss, /body\.embedded-settings \.settings-content/);
-  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8').replace(/\r\n/g, '\n');
   for (const panel of ['connection', 'ai', 'account-device', 'diagnostics']) {
     assert.match(main, new RegExp(`/embedded/${panel}`));
   }
