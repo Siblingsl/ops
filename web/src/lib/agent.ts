@@ -38,6 +38,8 @@ export interface AgentBootstrap {
   privacy_notice_seen: boolean
 }
 
+export type AgentMode = 'discuss' | 'plan' | 'execute'
+
 export interface AgentConversation {
   id: string
   title: string
@@ -50,6 +52,7 @@ export interface AgentConversation {
   created_at: string
   updated_at: string
   revision: number
+  mode?: AgentMode
   archived_at?: string | null
   group_id?: string | null
   read_upto_message_seq?: number
@@ -161,6 +164,43 @@ export interface AgentAction {
   blank_fields: string[]
 }
 
+export interface AgentPlanStep {
+  id: string
+  title: string
+  target_ref?: string
+  acceptance: string
+}
+
+export interface AgentPlanStepState {
+  step_id: string
+  status: 'pending' | 'in_progress' | 'waiting_user' | 'completed' | 'failed' | 'skipped' | string
+  evidence_refs: { kind: string; id: string }[]
+  revision: number
+}
+
+export interface AgentPlan {
+  id: string
+  version: number
+  source_run_id: string
+  summary: string
+  steps: AgentPlanStep[]
+  step_states: AgentPlanStepState[]
+  status: 'current' | 'superseded' | string
+  accepted_at: string | null
+  created_at: string
+}
+
+export interface AgentQuestion {
+  id: string
+  run_id: string
+  revision: number
+  items: { id: string; title: string; required: boolean; options: { id: string; label: string }[] }[]
+  answers: { question_id: string; choice_id?: string; text?: string; skip?: boolean }[]
+  status: 'pending' | 'answered' | 'skipped' | 'superseded' | 'expired' | string
+  expires_at: string
+  created_at: string
+}
+
 export interface AgentActiveRun {
   id: string
   status: 'queued' | 'running' | string
@@ -169,6 +209,8 @@ export interface AgentActiveRun {
   model_provider_id: string | null
   model: string
   started_at: string
+  mode?: AgentMode
+  config_snapshot?: { version: number; mode: AgentMode; selected_model: { provider_id: string; model: string }; actual_model?: { provider_id: string; provider_name?: string; model: string; channel: 'server' | 'desktop' } }
 }
 
 export interface AgentConversationDetail {
@@ -176,6 +218,9 @@ export interface AgentConversationDetail {
   usage: AgentConversationUsage
   messages: AgentMessage[]
   actions: AgentAction[]
+  plans?: AgentPlan[]
+  current_plan?: AgentPlan | null
+  questions?: AgentQuestion[]
   active_run: AgentActiveRun | null
   last_run?: (AgentActiveRun & AgentRunEnd) | null
   can_continue: boolean

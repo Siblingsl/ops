@@ -20,6 +20,12 @@ func (s *Server) agentMetaTool(ctx context.Context, st *agentRunState, t *AgentT
 	var payload []byte
 	var err error
 	var summary string
+	if agentIsOrchestrationTool(t.Name) {
+		st.OrchestrationCalls++
+		if st.OrchestrationCalls > 20 {
+			return s.agentToolLimitWithCode(ctx, st, call, "agent_orchestration_limit", "本次运行的计划/问题编排调用已达20次上限", send)
+		}
+	}
 	switch t.Name {
 	case "get_context":
 		var block string
@@ -66,6 +72,19 @@ func (s *Server) agentMetaTool(ctx context.Context, st *agentRunState, t *AgentT
 		}
 	case "make_link":
 		payload, summary, err = s.agentMetaMakeLink(args)
+	case "present_plan":
+		payload, summary, err = s.agentMetaPresentPlan(ctx, st, call, args)
+	case "update_plan_step":
+		payload, summary, err = s.agentMetaUpdatePlanStep(ctx, st, call, args)
+	case "request_input":
+		if err := s.agentMetaRequestInput(ctx, st, call, args, send); err != nil {
+			var ae *APIError
+			if errors.As(err, &ae) {
+				return s.agentToolError(ctx, st, call, ae.Code, ae.Message, send)
+			}
+			return s.agentToolError(ctx, st, call, "internal", truncate(err.Error(), 200), send)
+		}
+		return nil
 	default:
 		err = errAgentUnknownTool
 	}
@@ -77,6 +96,15 @@ func (s *Server) agentMetaTool(ctx context.Context, st *agentRunState, t *AgentT
 		return s.agentToolError(ctx, st, call, "internal", truncate(err.Error(), 200), send)
 	}
 	return s.agentToolOutcome(ctx, st, call, agentToolRecord{Model: payload, Raw: payload, Summary: summary}, true, send)
+}
+
+func agentIsOrchestrationTool(name string) bool {
+	switch name {
+	case "present_plan", "update_plan_step", "request_input", "present_artifact", "report_goal_progress":
+		return true
+	default:
+		return false
+	}
 }
 
 // agentMetaLoadDomain 加载一个领域（第 3.3 节第 2 项）：已满 3 个时移除最早加载的一个。
@@ -111,7 +139,7 @@ func (s *Server) agentMetaLoadDomain(ctx context.Context, st *agentRunState, arg
 	tools := []map[string]string{}
 	for i := range catalog {
 		e := &catalog[i]
-		if e.Domain != name || !agentToolVisible(e, id) {
+		if e.Domain != name || !agentRunToolAllowed(st, e, id) {
 			continue
 		}
 		tools = append(tools, map[string]string{"name": e.Name, "description": e.Description})

@@ -17,7 +17,8 @@ import { useSavePrefs } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
 import {
   type AgentAttachment, type AgentBootstrap, type AgentConversation, type AgentConversationDetail, type AgentConversationListItem,
-  type AgentConversationGroup, type AgentConversationPage, type AgentEventEnvelope, type AgentMessage, type AgentRunAcceptance,
+  type AgentConversationGroup, type AgentConversationPage, type AgentEventEnvelope, type AgentMessage, type AgentRunAcceptance, type AgentMode,
+  type AgentPlan, type AgentQuestion,
   streamAgentEvents, useAgentBootstrap,
 } from '@/lib/agent'
 import { AgentMarkdown } from '@/lib/agent-markdown'
@@ -25,6 +26,7 @@ import { AgentActionCards } from '@/pages/agent/ActionCards'
 import { ArtifactPanel } from '@/pages/agent/ArtifactPanel'
 import { browserStore, clearPartial, type PartialStream, readPartial, savePartial } from '@/pages/agent/partial-stream'
 import { ContextPickerDialog, SkillPickerDialog, type AgentContextSelection, type AgentSkillSelection } from '@/pages/agent/ContextPickers'
+import { AgentPlanCard, AgentQuestionCard } from '@/pages/agent/PlansQuestions'
 
 const pageSize = 30
 
@@ -321,6 +323,12 @@ function MenuButton({ icon, label, onClick, danger }: { icon: React.ReactNode; l
   return <button type="button" role="menuitem" onClick={onClick} className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-mist-50 ${danger ? 'text-danger' : 'text-mist-600'}`}><span className="[&>svg]:size-3.5">{icon}</span>{label}</button>
 }
 
+function AgentModeSelect({ value, disabled, readOnly, onChange }: { value: AgentMode; disabled: boolean; readOnly: boolean; onChange: (mode: AgentMode) => void }) {
+  return <span className="inline-flex w-24 shrink-0"><Select aria-label="对话模式" title={disabled ? '运行或操作执行期间模式锁定' : '执行模式允许提出单张卡片，每张仍需亲自确认'} value={readOnly ? 'discuss' : value} disabled={disabled || readOnly} className="h-8 py-1 text-xs" onChange={(event) => onChange(event.target.value as AgentMode)}>
+    <option value="discuss">讨论</option><option value="plan">计划</option><option value="execute">执行</option>
+  </Select></span>
+}
+
 function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerate, skillRequests = [], desktopPresentation = false }: {
   message: AgentMessage; lastAssistant: boolean; canSeeImages: boolean; onEdit?: () => void; onRegenerate?: () => void
   skillRequests?: AgentMessage['skill_requests']; desktopPresentation?: boolean
@@ -486,6 +494,7 @@ export default function Agent() {
   const [uploading, setUploading] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [selectedMode, setSelectedMode] = useState<AgentMode>('execute')
   const [streamText, setStreamText] = useState('')
   const [streamStage, setStreamStage] = useState('')
   const [streamError, setStreamError] = useState('')
@@ -572,6 +581,9 @@ export default function Agent() {
   const conversation = detail?.conversation
   const activeRun = detail?.active_run
   const actions = detail?.actions ?? []
+  const plans = detail?.plans ?? []
+  const questions = detail?.questions ?? []
+  const pendingQuestion = questions.find((question) => question.status === 'pending' && Date.now() < new Date(question.expires_at).getTime())
   const pendingActions = actions.filter((action) => ['pending', 'needs_input'].includes(action.status)).length
   const baseMessages = detail?.messages ?? []
   const persistedPartial = eventResumeEnabled && detail?.partial_output && !baseMessages.some((message) => message.message_key === detail.partial_output?.message_key) ? detail.partial_output : null
@@ -638,6 +650,7 @@ export default function Agent() {
 
   useEffect(() => {
     if (!conversation) {
+      if (bootstrapData?.read_only) setSelectedMode('discuss')
       setSelectedModel((old) => old || modelKey(bootstrapData?.default_model?.provider_id, bootstrapData?.default_model?.model))
       setSelectedAccount((old) => old || currentAccount?.id || '')
       return
@@ -645,7 +658,8 @@ export default function Agent() {
     setSelectedModel(modelKey(conversation.model_provider_id, conversation.model))
     setSelectedAccount(conversation.account_id ?? '')
     setHistoryAccount(conversation.account_id ?? '')
-  }, [conversation?.id, conversation?.model_provider_id, conversation?.model, conversation?.account_id, bootstrapData?.default_model?.provider_id, bootstrapData?.default_model?.model, currentAccount?.id])
+    setSelectedMode(bootstrapData?.read_only ? 'discuss' : conversation.mode ?? 'execute')
+  }, [conversation?.id, conversation?.model_provider_id, conversation?.model, conversation?.account_id, conversation?.mode, bootstrapData?.read_only, bootstrapData?.default_model?.provider_id, bootstrapData?.default_model?.model, currentAccount?.id])
 
   useEffect(() => {
     if (!bootstrapData || bootstrap.isLoading || bootstrapData.privacy_notice_seen || savePrefs.isPending) return
@@ -745,7 +759,7 @@ export default function Agent() {
         streamPartialRef.current = { messageKey, chunkIndex }
         setStreamText((old) => current.messageKey === messageKey ? old + String(data.text ?? '') : String(data.text ?? ''))
       }
-    } else if (type === 'tool.started' || type === 'tool.ended' || type === 'action.updated' || type === 'message.saved' || type === 'conversation.updated') {
+    } else if (type === 'tool.started' || type === 'tool.ended' || type === 'action.updated' || type === 'message.saved' || type === 'conversation.updated' || type === 'context.updated' || type === 'plan.updated' || type === 'question.created' || type === 'question.resolved') {
       if (type === 'tool.started') setStreamStage(`tool:${data.name || '工具'}`)
       void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
       void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
@@ -790,6 +804,7 @@ export default function Agent() {
   }
   const newConversation = () => {
     conversationRequest.current = null
+    setSelectedMode(bootstrapData?.read_only ? 'discuss' : 'execute')
     setText('')
     clearDraftAttachments()
     setContextRefs([])
@@ -801,6 +816,8 @@ export default function Agent() {
   }
 
   const modelRef = selectedModelOption ? { provider_id: selectedModelOption.provider_id, model: selectedModelOption.model } : undefined
+  const actualModel = detail?.last_run?.config_snapshot?.actual_model
+  const runtimeSummary = actualModel ? `最近运行：${detail?.last_run?.mode === 'discuss' ? '讨论' : detail?.last_run?.mode === 'plan' ? '计划' : '执行'} · ${actualModel.channel === 'desktop' ? '客户端模型通道' : '服务器模型通道'} · ${actualModel.provider_name ?? ''} / ${actualModel.model}` : ''
   const createConversation = async () => {
     const body = { ...(selectedAccount ? { account_id: selectedAccount } : {}), ...(modelRef ? { model: modelRef } : {}) }
     const key = JSON.stringify(body)
@@ -887,6 +904,33 @@ export default function Agent() {
     }
   }, [qc, bootstrapData?.features?.event_resume, applyPersistentEvent, resumeEventSnapshot])
 
+  const acceptPlan = async (plan: AgentPlan) => {
+    if (!conversationId || busy || sendInFlight.current) return
+    sendInFlight.current = true
+    setSubmitting(true)
+    try {
+      await consumeRun(conversationId, `/agent/plans/${plan.id}/accept`, {
+        expected_version: plan.version, request_id: crypto.randomUUID(),
+      })
+    } finally {
+      sendInFlight.current = false
+      setSubmitting(false)
+    }
+  }
+  const answerQuestion = async (question: AgentQuestion, answers: { question_id: string; choice_id?: string; text?: string; skip?: boolean }[]) => {
+    if (!conversationId || busy || sendInFlight.current) return
+    sendInFlight.current = true
+    setSubmitting(true)
+    try {
+      await consumeRun(conversationId, `/agent/questions/${question.id}/answer`, {
+        expected_revision: question.revision, request_id: crypto.randomUUID(), answers,
+      })
+    } finally {
+      sendInFlight.current = false
+      setSubmitting(false)
+    }
+  }
+
   useEffect(() => {
     if (bootstrapData?.features?.event_resume !== true || !conversationId || detail?.conversation.id !== conversationId || eventController.current) return
     const controller = new AbortController()
@@ -968,8 +1012,23 @@ export default function Agent() {
         sendDestinationConversationID.current = conv.id
         navigate(`/agent/c/${conv.id}`, { replace: true })
       }
+      let replacedQuestion: AgentQuestion | undefined
+      if (!edit && pendingQuestion) {
+        const replace = await confirm({
+          title: '用这条消息替代待办问题？',
+          desc: '当前澄清问题将标记为已替代，这条消息会作为新的用户请求启动运行。',
+          confirmText: '替代问题并发送',
+        })
+        if (!replace) return
+        replacedQuestion = pendingQuestion
+      }
+      if (edit && pendingQuestion) {
+        toast.error('请先回答待办问题，或发送新消息并明确替代它。')
+        return
+      }
       const messageKey = JSON.stringify({
         edit_message_id: edit?.id ?? '',
+        mode: bootstrapData?.features.plans ? selectedMode : undefined,
         conversation_id: conv.id, text: value, attachment_ids: edit ? [] : readyFiles.map((file) => file.attachment!.id),
         context_refs: !edit ? contextRefs.map(({ type, id, revision, reference_scope }) => ({ type, id, revision, scope: reference_scope })) : [],
         skill_requests: !edit ? skillRequests.map(({ skill_id, work_id }) => ({ skill_id, ...(work_id ? { work_id } : {}) })) : [],
@@ -981,12 +1040,14 @@ export default function Agent() {
       if (requestID) messageRequest.current = { key: messageKey, id: requestID }
       const payload = {
         text: value,
+        ...(!edit && bootstrapData?.features.plans ? { mode: selectedMode } : {}),
         attachment_ids: edit ? [] : readyFiles.map((file) => file.attachment!.id),
         ...(!edit && contextRefs.length ? { context_refs: contextRefs.map(({ type, id, revision, reference_scope }) => ({ type, id, revision, scope: reference_scope })) } : {}),
         ...(!edit && skillRequests.length ? { skill_requests: skillRequests.map(({ skill_id, work_id }) => ({ skill_id, ...(work_id ? { work_id } : {}) })) } : {}),
         ...(selectedAccount ? { account_id: selectedAccount } : { account_id: '' }),
         ...(modelRef ? { model: modelRef } : {}),
         ...(requestID ? { request_id: requestID } : {}),
+        ...(replacedQuestion ? { supersede_question_id: replacedQuestion.id } : {}),
       }
       const accepted = await consumeRun(conv.id, edit
         ? `/agent/conversations/${conv.id}/messages/${edit.id}/edit`
@@ -1006,6 +1067,16 @@ export default function Agent() {
   }
 
   const continueRun = () => { if (conversationId) void consumeRun(conversationId, `/agent/conversations/${conversationId}/continue`, {}) }
+  const changeMode = async (mode: AgentMode) => {
+    if (busy || bootstrapData?.read_only) return
+    const previous = selectedMode
+    setSelectedMode(mode)
+    if (!conversationId) return
+    try {
+      await patch(`/agent/conversations/${conversationId}`, { expected_revision: conversation?.revision, mode })
+      await invalidate()
+    } catch (error) { setSelectedMode(previous); toast.error(errorMessage(error)); void detailQuery.refetch() }
+  }
   const regenerate = () => { if (conversationId) void consumeRun(conversationId, `/agent/conversations/${conversationId}/regenerate`, {}) }
   const stop = async () => {
     const id = runID || activeRun?.id
@@ -1306,7 +1377,7 @@ export default function Agent() {
                 {startsDay && <div className="desktop-agent-day">{splitDate(message.created_at)} · {messageTime(message.created_at)}</div>}
                 <MessageView message={message} lastAssistant={message.id === lastAssistant?.id} canSeeImages={selectedModelOption?.vision === true} desktopPresentation={desktopPresentation}
                   skillRequests={messages.find((candidate) => candidate.role === 'user' && candidate.run_id === message.run_id)?.skill_requests ?? []}
-                  onEdit={message.id === lastUser?.id && !busy && canWrite && !message.attachments.length && !message.context_refs?.length && !message.skill_requests?.length ? () => { setEditMessage(message); setText(message.content); clearDraftAttachments(); setContextRefs([]); setSkillRequests([]); inputRef.current?.focus() } : undefined}
+                  onEdit={message.id === lastUser?.id && !busy && !pendingQuestion && canWrite && !message.attachments.length && !message.context_refs?.length && !message.skill_requests?.length ? () => { setEditMessage(message); setText(message.content); clearDraftAttachments(); setContextRefs([]); setSkillRequests([]); inputRef.current?.focus() } : undefined}
                   onRegenerate={message.id === lastAssistant?.id && !busy && canWrite ? regenerate : undefined} />
                 {message.role === 'assistant' && message.run_id && actionMessageByRun[message.run_id] === message.id && <div className={desktopPresentation ? 'desktop-agent-action-wrapper' : ''}><AgentActionCards
                   actions={actions.filter((action) => action.run_id === message.run_id)}
@@ -1316,6 +1387,8 @@ export default function Agent() {
                   onExecutingChange={setActionExecuting}
                   desktopPresentation={desktopPresentation}
                 /></div>}
+                {message.role === 'assistant' && message.run_id && plans.filter((plan) => plan.source_run_id === message.run_id).map((plan) => <AgentPlanCard key={plan.id} plan={plan} canWrite={canWrite} busy={busy} blocked={!!pendingQuestion} onAccept={(item) => void acceptPlan(item)} />)}
+                {message.role === 'assistant' && message.run_id && questions.filter((question) => question.run_id === message.run_id).map((question) => <AgentQuestionCard key={question.id} question={question} canWrite={canWrite} busy={busy} onAnswer={(item, answers) => void answerQuestion(item, answers)} />)}
               </div>})}
               {streamText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card"><AgentMarkdown text={streamText} /><p className="mt-2 text-[12px] text-mist-500">正在生成，内容尚未完成</p></div></div>}
               {/* AG-04：离开页面时没写完的回复。服务端整轮结束后才落库，这里先把已生成的部分显示出来，
@@ -1334,6 +1407,7 @@ export default function Agent() {
 
           <div className={`shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4 ${desktopPresentation ? 'desktop-agent-compose-area' : ''} ${workbenchUI ? 'desktop-agent-workbench-compose-area' : ''}`}>
             {(!desktopPresentation || workbenchUI || !!streamError) && <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === activeRun?.id).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
+            {bootstrapData.features.plans && (!desktopPresentation || workbenchUI) && runtimeSummary && <p className="mx-auto mb-3 max-w-3xl px-3 text-xs text-mist-500" data-testid="agent-runtime-config">{runtimeSummary}</p>}
             {!bootstrapData.can_use && (bootstrapData.reason === 'no_model' || bootstrapData.reason === 'not_tested') && <Notice tone="gamboge" className="mx-auto mb-2 max-w-3xl">{bootstrapData.reason === 'not_tested' ? '模型已经配置好了，但还没有完成能力自检。完成一次自检后就能开始对话。' : '还没有配置可用于对话的模型，请到模型配置页添加支持工具调用的模型。'}历史对话仍可查看。 <a href="/settings/models" className="underline">去模型配置</a></Notice>}
             {pendingActions > 0 && !desktopPresentation && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">等待你逐张处理 {pendingActions} 项后，智能体会继续。卡片操作入口显示在对应消息下方。</div>}
             {detail?.can_continue && !busy && !actionExecuting && pendingActions === 0 && <div className="mx-auto mb-2 max-w-3xl text-right"><Button size="sm" variant="ghost" onClick={continueRun}>继续</Button></div>}
@@ -1375,6 +1449,7 @@ export default function Agent() {
                   <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()}><Paperclip className="size-4" /></IconButton>
                   {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)}><AtSign className="size-4" /></IconButton>}
                   {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)}><Sparkles className="size-4" /></IconButton>}
+                  {bootstrapData.features.plans && workbenchUI && <AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />}
                   <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择操作账号">{selectedAccountName} <ChevronDown /></button>
                   <span className="desktop-agent-compose-spacer" />
                   <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择模型">{selectedModelName} <ChevronDown /></button>
@@ -1384,6 +1459,7 @@ export default function Agent() {
               </div>
               <div className="desktop-agent-compose-note">{pendingActions > 0 ? `等待你逐张确认 ${pendingActions} 项 · AI 输出请自行核实` : busy ? '正在生成，可随时停止 · Enter 发送 · Shift+Enter 换行' : completedNotice || 'Enter 发送 · Shift+Enter 换行 · AI 输出请自行核实，写入操作需逐张确认'}</div>
             </> : <>
+              {bootstrapData.features.plans && <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 text-xs text-mist-500"><AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} /><span>{selectedMode === 'execute' ? '写入仍需逐张卡片确认' : '只读取与形成建议'}</span></div>}
               <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-mist-200 bg-white p-2 shadow-card focus-within:border-ink-300">
                 <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()} className="mb-0.5"><Paperclip className="size-4" /></IconButton>
                 {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)} className="mb-0.5"><AtSign className="size-4" /></IconButton>}
@@ -1461,6 +1537,7 @@ export default function Agent() {
               {accountList.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
             </Select>
           </label>
+          {bootstrapData.features.plans && desktopPresentation && !workbenchUI && <div className="space-y-2"><span className="block text-[13px] font-medium text-mist-700">模式</span><AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />{runtimeSummary && <p className="text-xs text-mist-500" data-testid="agent-runtime-config">{runtimeSummary}</p>}</div>}
           {/* AG-03：历史消息按创建时的账号保存，切换账号不会改写已发生的对话。 */}
           {accountSwitched && <div data-testid="agent-account-switched"><Notice tone="gamboge">
             新消息将使用「{selectedAccountName}」，当前对话的历史仍属于「{historyAccountName}」。想从干净的上下文开始，请新建对话。

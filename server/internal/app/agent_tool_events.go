@@ -61,6 +61,26 @@ func (s *Server) agentCommitToolOutcome(ctx context.Context, st *agentRunState, 
 	rec agentToolRecord, status string, send func(string, any)) error {
 	// 停止只阻止后续分发；已接收的结果必须在取消后的完整工具组中可恢复。
 	ctx = context.WithoutCancel(ctx)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	event, err := s.agentCommitToolOutcomeTx(ctx, tx, st, call, rec, status)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if send != nil {
+		send("tool", event)
+	}
+	return nil
+}
+
+func (s *Server) agentCommitToolOutcomeTx(ctx context.Context, tx pgx.Tx, st *agentRunState, call ai.ToolCall,
+	rec agentToolRecord, status string) (agentToolEvent, error) {
 	secrets := s.agentSecretValues(ctx, st.WorkspaceID)
 	rec.Raw = agentRedactJSONBytes(rec.Raw, secrets)
 	event := agentToolEvent{CallID: call.ID, Name: truncate(agentRedactText(call.Function.Name, secrets), 100),
@@ -79,24 +99,13 @@ func (s *Server) agentCommitToolOutcome(ctx context.Context, st *agentRunState, 
 			event.Error = result.Error
 		}
 	}
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
 	if _, err := s.agentInsertMessageTx(ctx, tx, st, "tool", string(rec.Raw), nil, call.ID, call.Function.Name, nil, nil); err != nil {
-		return err
+		return agentToolEvent{}, err
 	}
 	if _, err := appendAgentEventTx(ctx, tx, st.ConversationID, &st.RunID, "tool.ended", event, nil); err != nil {
-		return err
+		return agentToolEvent{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	if send != nil {
-		send("tool", event)
-	}
-	return nil
+	return event, nil
 }
 
 func (s *Server) agentCancelledTool(ctx context.Context, st *agentRunState, call ai.ToolCall, send func(string, any)) error {
@@ -116,6 +125,13 @@ func (s *Server) agentHandleToolGroup(ctx context.Context, st *agentRunState, id
 	send func(string, any)) error {
 	var firstErr error
 	for _, call := range calls {
+		if st.AwaitingInput {
+			st.ToolStartedAt = time.Time{}
+			if err := s.agentDeferredTool(ctx, st, call, send); err != nil {
+				return err
+			}
+			continue
+		}
 		if ctx.Err() != nil || firstErr != nil {
 			st.ToolStartedAt = time.Time{}
 			code, message := "cancelled", "运行已停止，此工具未执行"
@@ -132,6 +148,14 @@ func (s *Server) agentHandleToolGroup(ctx context.Context, st *agentRunState, id
 		}
 	}
 	return firstErr
+}
+
+func (s *Server) agentDeferredTool(ctx context.Context, st *agentRunState, call ai.ToolCall, send func(string, any)) error {
+	payload, _ := json.Marshal(map[string]any{"ok": false, "error": agentToolEventError{
+		Code: "deferred", Message: "本轮已等待用户回答，此工具未执行",
+	}})
+	return s.agentCommitToolOutcome(ctx, st, call,
+		agentToolRecord{Raw: payload, Model: payload, Summary: "等待用户回答；此工具未执行"}, "deferred", send)
 }
 
 // 详情仍在原REPEATABLE READ视图内读取；仅查询当前页声明的工具调用与对应run。

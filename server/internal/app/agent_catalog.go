@@ -98,6 +98,35 @@ var agentMetaTools = []AgentTool{
 		},
 		Notes: "本地元工具，页面表见 16 文档附录 B.3",
 	},
+	{
+		Name: "present_plan", Kind: toolR, MinRole: roleEditor,
+		Description: "保存或修订当前对话计划，不执行计划中的业务操作",
+		Params: []ToolParam{
+			pBodyF("summary", strMinMax(1, 2000), true),
+			pBodyF("steps", arrOf(`{"type":"object","properties":{"id":{"type":"string","minLength":1,"maxLength":80},"title":{"type":"string","minLength":1,"maxLength":200},"target_ref":{"type":"string","maxLength":500},"acceptance":{"type":"string","minLength":1,"maxLength":500}},"required":["id","title","acceptance"],"additionalProperties":false}`, 1, 12), true),
+		},
+		Notes: "计划模式专用本地元工具；保存版本与步骤，不代表写入审批",
+	},
+	{
+		Name: "update_plan_step", Kind: toolR, MinRole: roleEditor,
+		Description: "更新当前版本的计划步骤状态并关联可验证的已保存证据",
+		Params: []ToolParam{
+			pBodyF("plan_id", schemaUUID, true),
+			pBodyF("expected_version", intRange(1, 1000000), true),
+			pBodyF("step_id", strMax(80), true),
+			pBodyF("status", enumOf("pending", "in_progress", "waiting_user", "completed", "failed", "skipped"), true),
+			pBodyF("evidence_refs", arrOf(`{"type":"object","properties":{"kind":{"type":"string","enum":["artifact_version","action","read_result"]},"id":{"type":"string","format":"uuid"}},"required":["kind","id"],"additionalProperties":false}`, 0, 10), false),
+		},
+		Notes: "只可更新当前计划版本；completed必须引用同对话保存的产物版本、成功卡片或成功只读结果",
+	},
+	{
+		Name: "request_input", Kind: toolR, MinRole: roleEditor,
+		Description: "向用户提出一组结构化澄清问题并等待整组回答",
+		Params: []ToolParam{
+			pBodyF("questions", arrOf(`{"type":"object","properties":{"id":{"type":"string","minLength":1,"maxLength":80},"title":{"type":"string","minLength":1,"maxLength":200},"required":{"type":"boolean"},"options":{"type":"array","minItems":2,"maxItems":5,"items":{"type":"object","properties":{"id":{"type":"string","minLength":1,"maxLength":80},"label":{"type":"string","minLength":1,"maxLength":200}},"required":["id","label"],"additionalProperties":false}}},"required":["id","title","required","options"],"additionalProperties":false}`, 1, 3), true),
+		},
+		Notes: "仅交互运行；同组答案一次性提交，可选题允许跳过",
+	},
 }
 
 func agentDomainNames() []string {

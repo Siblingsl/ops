@@ -42,6 +42,9 @@ func (s *Server) agentProvenanceCheck(ctx context.Context, st *agentRunState, t 
 // agentPropose 处理一个 W / H / X 工具调用：校验后写 agent_action，不执行任何写入。
 func (s *Server) agentPropose(ctx context.Context, st *agentRunState, id *identity, t *AgentTool,
 	call ai.ToolCall, args map[string]any, send func(string, any)) error {
+	if !agentRunToolAllowed(st, t, id) {
+		return s.agentToolError(ctx, st, call, "unknown_tool", "当前模式或来源不可提出此操作卡片", send)
+	}
 	// 第 5.5 节：单次运行卡片数上限。
 	if st.ActionsProposed >= agentMaxCards {
 		return s.agentToolLimit(ctx, st, call, "本次运行提出的卡片已达上限（"+agentItoa(agentMaxCards)+" 张），请先处理已有卡片", send)
@@ -425,6 +428,8 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 		SessionID:       ident(ctx).SessionID,
 		Trigger:         trigger,
 		ProtocolVersion: protocolVersion,
+		Mode:            agentEffectiveMode(c.Mode, ident(ctx).Role),
+		ExecutionOrigin: "interactive",
 		AccountID:       c.AccountID,
 		Model:           model,
 		BatchID:         uuid.New(),
@@ -434,21 +439,28 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 	if requestID != uuid.Nil {
 		requestIDArg = requestID
 	}
+	snapshot, err := agentInitialRunConfig(ctx, tx, st)
+	if err != nil {
+		return nil, err
+	}
+	snapshotJSON, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, err
+	}
 	if err := tx.QueryRow(ctx, `INSERT INTO agent_run
 		(conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model_provider_id, model,
-		 protocol_version, request_id, request_hash)
-		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7,$8,$9,$10) RETURNING id`,
+		 protocol_version, request_id, request_hash,mode,execution_origin,config_snapshot)
+		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
 		c.ID, st.WorkspaceID, st.UserID, st.SessionID, trigger, model.ProviderID, model.Model,
-		protocolVersion, requestIDArg, requestHash).Scan(&st.RunID); err != nil {
+		protocolVersion, requestIDArg, requestHash, st.Mode, st.ExecutionOrigin, snapshotJSON).Scan(&st.RunID); err != nil {
 		return nil, err
 	}
 	if err := tx.QueryRow(ctx, `SELECT loaded_domains, summary FROM agent_conversation WHERE id=$1`, c.ID).
 		Scan(&st.Domains, &st.Summary); err != nil {
 		return nil, err
 	}
-	var err error
 	st.StartEventSeq, err = appendAgentEventTx(ctx, tx, c.ID, &st.RunID, "run.started", map[string]any{
-		"run_id": st.RunID, "status": "queued", "trigger": trigger, "message_id": messageID,
+		"run_id": st.RunID, "status": "queued", "trigger": trigger, "message_id": messageID, "mode": st.Mode,
 	}, nil)
 	if err != nil {
 		return nil, err

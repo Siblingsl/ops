@@ -305,6 +305,7 @@ type agentConversation struct {
 	GroupID            *uuid.UUID `json:"group_id"`
 	ReadUptoMessageSeq int64      `json:"read_upto_message_seq"`
 	ForceUnread        bool       `json:"force_unread"`
+	Mode               string     `json:"mode"`
 }
 
 type agentConversationListItem struct {
@@ -319,13 +320,13 @@ type agentConversationListItem struct {
 
 const agentConversationCols = `c.id, c.title, c.title_source, c.pinned_at, c.model_provider_id, c.model,
 	c.account_id, c.last_message_at, c.created_at, c.updated_at, c.revision,
-	c.archived_at, c.group_id, c.read_upto_message_seq, c.force_unread`
+	c.archived_at, c.group_id, c.read_upto_message_seq, c.force_unread, c.mode`
 
 func scanAgentConversation(row pgx.Row) (*agentConversation, error) {
 	var c agentConversation
 	if err := row.Scan(&c.ID, &c.Title, &c.TitleSource, &c.PinnedAt, &c.ModelProviderID, &c.Model,
 		&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision,
-		&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread); err != nil {
+		&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread, &c.Mode); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -342,6 +343,7 @@ func (s *Server) agentConversationFor(ctx context.Context, id uuid.UUID) (*agent
 	if err != nil {
 		return nil, err
 	}
+	c.Mode = agentEffectiveMode(c.Mode, ident(ctx).Role)
 	return c, nil
 }
 
@@ -525,7 +527,7 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 		var matchedSeq pgtype.Int8
 		if err := rows.Scan(&c.ID, &c.Title, &c.TitleSource, &c.PinnedAt, &c.ModelProviderID, &c.Model,
 			&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision,
-			&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread,
+			&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread, &c.Mode,
 			&summary.PendingActions, &summary.HasActiveRun, &summary.HasUnread,
 			&matchedID, &matchedSeq, &summary.MatchedMessageSnippet); err != nil {
 			return err
@@ -538,6 +540,7 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 			seq := matchedSeq.Int64
 			summary.MatchedMessageSeq = &seq
 		}
+		c.Mode = agentEffectiveMode(c.Mode, id.Role)
 		summary.agentConversation = c
 		list = append(list, summary)
 	}
@@ -637,11 +640,12 @@ func (s *Server) createAgentConversation(w http.ResponseWriter, r *http.Request)
 		(workspace_id, user_id, title, title_source, account_id, model_provider_id, model)
 		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, title, title_source, pinned_at, model_provider_id, model,
 		account_id, last_message_at, created_at, updated_at, revision, archived_at, group_id,
-		read_upto_message_seq, force_unread`,
+		read_upto_message_seq, force_unread, mode`,
 		id.WorkspaceID, id.UserID, title, source, accountID, providerID, model))
 	if err != nil {
 		return err
 	}
+	c.Mode = agentEffectiveMode(c.Mode, id.Role)
 	baselineSeq, err := appendAgentEventTx(ctx, tx, c.ID, nil, "conversation.updated", map[string]any{"snapshot_baseline": true}, nil)
 	if err != nil {
 		return err
@@ -676,6 +680,8 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		Pinned                *bool           `json:"pinned"`
 		AccountID             *string         `json:"account_id"`
 		Model                 *agentModelRef  `json:"model"`
+		Mode                  *string         `json:"mode"`
+		ReasoningEffort       *string         `json:"reasoning_effort"`
 		GroupID               json.RawMessage `json:"group_id"`
 		Archived              *bool           `json:"archived"`
 		ConfirmPendingActions *bool           `json:"confirm_pending_actions"`
@@ -694,6 +700,15 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		if in.ExpectedRevision == nil {
 			return validation("会话组织修改需要 expected_revision")
 		}
+	}
+	if err := agentValidateModeRequest(ctx, in.Mode); err != nil {
+		return err
+	}
+	if in.ReasoningEffort != nil {
+		return apiErr(422, "agent_model_unsupported", "当前模型适配器未声明可选推理强度")
+	}
+	if in.Mode != nil && in.ExpectedRevision == nil {
+		return validation("修改模式需要 expected_revision")
 	}
 	sets := []string{}
 	args := []any{cid}
@@ -738,6 +753,10 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		args = append(args, ref.ProviderID, ref.Model)
 		sets = append(sets, fmt.Sprintf("model_provider_id=$%d", len(args)-1), fmt.Sprintf("model=$%d", len(args)))
 	}
+	if in.Mode != nil {
+		args = append(args, *in.Mode)
+		sets = append(sets, fmt.Sprintf("mode=$%d", len(args)))
+	}
 	var groupID *uuid.UUID
 	if in.GroupID != nil {
 		groupID, err = groupIDFromJSON(in.GroupID)
@@ -755,7 +774,7 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		return validation("没有需要修改的字段")
 	}
 	var tx pgx.Tx
-	if organizeChange || in.AccountID != nil || in.Model != nil {
+	if organizeChange || in.AccountID != nil || in.Model != nil || in.Mode != nil {
 		tx, err = s.db.Begin(ctx)
 		if err != nil {
 			return err
@@ -773,7 +792,7 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		if in.ExpectedRevision != nil && current.Revision != *in.ExpectedRevision {
 			return apiErr(409, "agent_revision_conflict", "对话已被其他操作更新，请刷新后重试")
 		}
-		if in.AccountID != nil || in.Model != nil {
+		if in.AccountID != nil || in.Model != nil || in.Mode != nil {
 			var active, executing, pending bool
 			if err := tx.QueryRow(ctx, `SELECT
 				EXISTS (SELECT 1 FROM agent_run WHERE conversation_id=$1 AND status IN ('queued','running')),
@@ -783,7 +802,7 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 				return err
 			}
 			if active || executing {
-				return apiErr(409, "agent_run_busy", "运行或卡片执行期间不能修改对话账号和模型")
+				return apiErr(409, "agent_run_busy", "运行或卡片执行期间不能修改对话账号、模型和模式")
 			}
 			if in.AccountID != nil && pending {
 				var next *uuid.UUID
@@ -833,7 +852,7 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 	}
 	sql := `UPDATE agent_conversation SET ` + strings.Join(sets, ", ") + where +
 		` RETURNING id, title, title_source, pinned_at, model_provider_id, model, account_id,
-		last_message_at, created_at, updated_at, revision, archived_at, group_id, read_upto_message_seq, force_unread`
+		last_message_at, created_at, updated_at, revision, archived_at, group_id, read_upto_message_seq, force_unread, mode`
 	query := s.db.QueryRow
 	if tx != nil {
 		query = tx.QueryRow
@@ -857,6 +876,7 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 			return err
 		}
 	}
+	c.Mode = agentEffectiveMode(c.Mode, id.Role)
 	return ok(w, c)
 }
 
@@ -1038,15 +1058,17 @@ type agentActionView struct {
 }
 
 type agentActiveRun struct {
-	ID              uuid.UUID  `json:"id"`
-	Status          string     `json:"status"`
-	Stage           string     `json:"stage"`
-	Trigger         string     `json:"trigger"`
-	ModelProviderID *uuid.UUID `json:"model_provider_id"`
-	Model           string     `json:"model"`
-	StartedAt       time.Time  `json:"started_at"`
-	Reason          string     `json:"reason,omitempty"`
-	ErrorCode       string     `json:"error_code,omitempty"`
+	ID              uuid.UUID               `json:"id"`
+	Status          string                  `json:"status"`
+	Stage           string                  `json:"stage"`
+	Trigger         string                  `json:"trigger"`
+	ModelProviderID *uuid.UUID              `json:"model_provider_id"`
+	Model           string                  `json:"model"`
+	StartedAt       time.Time               `json:"started_at"`
+	Mode            string                  `json:"mode"`
+	ConfigSnapshot  *agentRunConfigSnapshot `json:"config_snapshot,omitempty"`
+	Reason          string                  `json:"reason,omitempty"`
+	ErrorCode       string                  `json:"error_code,omitempty"`
 }
 
 func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Request) error {
@@ -1064,6 +1086,9 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 		WHERE conversation_id=$1 AND status IN ('pending','needs_input') AND expires_at < now()`, c.ID); err != nil {
 		return err
 	}
+	if err := s.agentExpireQuestions(ctx, c.ID); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return err
@@ -1077,6 +1102,7 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return err
 	}
+	c.Mode = agentEffectiveMode(c.Mode, ident(ctx).Role)
 	var lastEventSeq, readUptoEventSeq int64
 	var partial map[string]any
 	var partialRunID *uuid.UUID
@@ -1119,6 +1145,21 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		return err
 	}
+	plans, err := s.agentLoadPlans(ctx, tx, c.ID)
+	if err != nil {
+		return err
+	}
+	questions, err := s.agentLoadQuestions(ctx, tx, c.ID)
+	if err != nil {
+		return err
+	}
+	var currentPlan *agentPlanView
+	for i := range plans {
+		if plans[i].Status == "current" {
+			currentPlan = &plans[i]
+			break
+		}
+	}
 	latest, err := s.agentLatestRunOf(ctx, tx, c.ID)
 	if err != nil {
 		return err
@@ -1139,7 +1180,7 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 		return err
 	}
 	return ok(w, map[string]any{
-		"conversation": c, "messages": messages, "actions": actions, "usage": usage,
+		"conversation": c, "messages": messages, "actions": actions, "plans": plans, "current_plan": currentPlan, "questions": questions, "usage": usage,
 		"active_run": active, "last_run": latest, "has_more": hasMore,
 		"can_continue":   s.agentConversationCanContinue(ctx, c),
 		"last_event_seq": lastEventSeq, "read_upto_event_seq": readUptoEventSeq,
@@ -1460,15 +1501,21 @@ func jsonOrNil(raw []byte) any {
 
 func (s *Server) agentLatestRunOf(ctx context.Context, tx pgx.Tx, convID uuid.UUID) (*agentActiveRun, error) {
 	var run agentActiveRun
-	err := tx.QueryRow(ctx, `SELECT id, status, stage, trigger, model_provider_id, model, started_at,reason,error_code
+	var snapshot []byte
+	err := tx.QueryRow(ctx, `SELECT id, status, stage, trigger, model_provider_id, model, started_at,reason,error_code,mode,config_snapshot
 		FROM agent_run WHERE conversation_id=$1
 		ORDER BY started_at DESC LIMIT 1`, convID).Scan(&run.ID, &run.Status, &run.Stage, &run.Trigger,
-		&run.ModelProviderID, &run.Model, &run.StartedAt, &run.Reason, &run.ErrorCode)
+		&run.ModelProviderID, &run.Model, &run.StartedAt, &run.Reason, &run.ErrorCode, &run.Mode, &snapshot)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if string(snapshot) != "{}" {
+		if err := json.Unmarshal(snapshot, &run.ConfigSnapshot); err != nil {
+			return nil, err
+		}
 	}
 	return &run, nil
 }
@@ -1544,6 +1591,8 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/conversations/{id}/regenerate", s.h(s.postAgentRegenerate))
 		r.Post("/agent/conversations/{id}/messages/{messageId}/edit", s.h(s.postAgentMessageEdit))
 		r.Post("/agent/runs/{id}/cancel", s.h(s.postAgentRunCancel))
+		r.Post("/agent/plans/{id}/accept", s.h(s.postAgentPlanAccept))
+		r.Post("/agent/questions/{id}/answer", s.h(s.postAgentQuestionAnswer))
 		// 第 11.3 节：/agent/actions 下只有 {id}/execute 与 {id}/reject（HC-27 静态检查）。
 		r.Post("/agent/actions/{id}/execute", s.h(s.postAgentActionExecute))
 		r.Post("/agent/actions/{id}/reject", s.h(s.postAgentActionReject))

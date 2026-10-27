@@ -37,6 +37,10 @@ type agentRawMessage struct {
 func (s *Server) agentBuildMessages(ctx context.Context, st *agentRunState, id *identity) ([]ai.Message, error) {
 	out := []ai.Message{}
 	out = append(out, ai.Message{Role: "system", Content: agentSystemRules})
+	mode := agentEffectiveMode(st.Mode, id.Role)
+	if mode != "execute" {
+		out = append(out, ai.Message{Role: "system", Content: "当前模式：" + mode + "。只读取、分析与形成建议；不得执行业务动作或提出写入卡片。"})
+	}
 	env, err := s.agentEnvBlock(ctx, st)
 	if err != nil {
 		return nil, err

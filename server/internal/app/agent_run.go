@@ -29,6 +29,9 @@ type agentRunState struct {
 	SessionID       uuid.UUID
 	Trigger         string // message | continue | regenerate | edit
 	ProtocolVersion int
+	Mode            string
+	ExecutionOrigin string
+	RuntimeModel    *agentRuntimeModel
 	AccountID       *uuid.UUID
 	Model           agentModelRef
 	ProviderName    string
@@ -44,6 +47,8 @@ type agentRunState struct {
 	CompletionTokens int
 	ExternalRead     bool
 	CardsThisRound   int
+	OrchestrationCalls int
+	AwaitingInput      bool
 
 	Domains  []string
 	Deadline time.Time
@@ -152,7 +157,7 @@ func agentToolsFor(st *agentRunState, id *identity) []ai.Tool {
 		if t.Domain != "" && !loaded[t.Domain] {
 			continue
 		}
-		if !agentToolVisible(t, id) {
+		if !agentRunToolAllowed(st, t, id) {
 			continue
 		}
 		out = append(out, ai.Tool{Type: "function", Function: ai.ToolFunction{
@@ -171,13 +176,13 @@ func (st *agentRunState) loadedTool(id *identity, name string) *AgentTool {
 	}
 	if t.Domain == "" {
 		// 元工具始终可用，仍受角色可见性约束。
-		if agentToolVisible(t, id) {
+		if agentRunToolAllowed(st, t, id) {
 			return t
 		}
 		return nil
 	}
 	for _, d := range st.Domains {
-		if d == t.Domain && agentToolVisible(t, id) {
+		if d == t.Domain && agentRunToolAllowed(st, t, id) {
 			return t
 		}
 	}
@@ -280,6 +285,11 @@ func (s *Server) agentCallModel(ctx context.Context, st *agentRunState, rt *rout
 	var lastErr, err error
 	streamed := false
 	for i, cur := range attempts {
+		if st.RuntimeModel != nil && (st.RuntimeModel.ProviderID != cur.ProviderID || st.RuntimeModel.Model != cur.Model) {
+			if err := s.agentRecordRuntimeConfig(context.WithoutCancel(ctx), st, cur); err != nil {
+				return out, err
+			}
+		}
 		var got atomic.Bool
 		out.Text, out.Usage, out.Calls, out.Finish, lastErr = s.streamAgentRound(ctx, st, cur, p, &got, send)
 		status, errText := "ok", ""
@@ -292,11 +302,12 @@ func (s *Server) agentCallModel(ctx context.Context, st *agentRunState, rt *rout
 		if got.Load() {
 			streamed = true
 		}
-		out.CallID, err = s.writeAgentAICall(ctx, st, cur, p, status, errText, out.Usage, i > 0)
+		fallbackUsed := cur.ProviderID != rt.ProviderID || cur.Model != rt.Model
+		out.CallID, err = s.writeAgentAICall(ctx, st, cur, p, status, errText, out.Usage, fallbackUsed)
 		if err != nil {
 			return out, err
 		}
-		out.Fallback = i > 0
+		out.Fallback = fallbackUsed
 		if lastErr == nil {
 			return out, nil
 		}
@@ -391,6 +402,7 @@ func (s *Server) writeAgentAICall(ctx context.Context, st *agentRunState, rt *ro
 	}
 	refs := map[string]any{"agent": map[string]any{
 		"run_id": st.RunID.String(), "round": p.Round, "tools": names,
+		"mode": agentEffectiveMode(st.Mode, ident(ctx).Role), "execution_origin": st.ExecutionOrigin,
 	}}
 	if fallbackUsed {
 		refs["fallback_used"] = true
@@ -472,6 +484,10 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 				status = "failed"
 				s.agentRunError(st, rerr)
 			}
+			return
+		}
+		if st.AwaitingInput {
+			status = "awaiting_input"
 			return
 		}
 		if ctx.Err() != nil {
@@ -789,6 +805,9 @@ func (s *Server) agentToolLimitWithCode(ctx context.Context, st *agentRunState, 
 // agentToolDispatch 经分发器执行一次 R / G 工具调用。
 func (s *Server) agentToolDispatch(ctx context.Context, st *agentRunState, t *AgentTool, call ai.ToolCall,
 	args map[string]any, send func(string, any)) error {
+	if !agentRunToolAllowed(st, t, ident(ctx)) {
+		return s.agentToolError(ctx, st, call, "unknown_tool", "当前模式或来源不可调用此工具", send)
+	}
 	if ctx.Err() != nil {
 		return s.agentCancelledTool(ctx, st, call, send)
 	}

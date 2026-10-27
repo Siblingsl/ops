@@ -23,14 +23,17 @@ import (
 
 // agentRunRequest 是发送消息与编辑消息的请求体（第 11.2 节）。
 type agentRunRequest struct {
-	Text            string                  `json:"text"`
-	AttachmentIDs   []string                `json:"attachment_ids"`
-	ContextRefs     []agentContextReference `json:"context_refs"`
-	SkillRequests   []agentSkillRequest     `json:"skill_requests"`
-	RequestID       string                  `json:"request_id"`
-	ProtocolVersion int                     `json:"protocol_version"`
-	AccountID       string                  `json:"account_id"`
-	Model           *agentModelRef          `json:"model"`
+	Text                string                  `json:"text"`
+	AttachmentIDs       []string                `json:"attachment_ids"`
+	ContextRefs         []agentContextReference `json:"context_refs"`
+	SkillRequests       []agentSkillRequest     `json:"skill_requests"`
+	RequestID           string                  `json:"request_id"`
+	ProtocolVersion     int                     `json:"protocol_version"`
+	AccountID           string                  `json:"account_id"`
+	Model               *agentModelRef          `json:"model"`
+	Mode                *string                 `json:"mode"`
+	ReasoningEffort     *string                 `json:"reasoning_effort"`
+	SupersedeQuestionID string                  `json:"supersede_question_id"`
 }
 
 type agentRunProtocolRequest struct {
@@ -63,6 +66,7 @@ func agentDecodeBody(r *http.Request, v any) error {
 		return apiErr(400, "validation_failed", "请求体必须是单个 JSON 对象，不能是数组")
 	}
 	dec := json.NewDecoder(br)
+	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return requestFormatError(r.Context(), err)
 	}
@@ -84,9 +88,18 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	if err := agentCheckConversationWritable(conv); err != nil {
 		return err
 	}
+	if err := s.agentExpireQuestions(ctx, conv.ID); err != nil {
+		return err
+	}
 	var req agentRunRequest
 	if err := agentDecodeBody(r, &req); err != nil {
 		return err
+	}
+	if err := agentValidateModeRequest(ctx, req.Mode); err != nil {
+		return err
+	}
+	if req.ReasoningEffort != nil {
+		return apiErr(422, "agent_model_unsupported", "当前模型适配器未声明可选推理强度")
 	}
 	var requestID uuid.UUID
 	if strings.TrimSpace(req.RequestID) != "" {
@@ -147,7 +160,7 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	if text == "" && len(attIDs) == 0 && len(contextRefs) == 0 && len(req.SkillRequests) == 0 {
 		return validation("请输入内容，或添加要处理的资料")
 	}
-	requestPayload := agentMessageRequestPayload{text, attIDs, contextRefs, req.SkillRequests, strings.TrimSpace(req.AccountID), req.Model}
+	requestPayload := agentMessageRequestPayload{text, attIDs, contextRefs, req.SkillRequests, strings.TrimSpace(req.AccountID), req.Model, req.Mode, strings.TrimSpace(req.SupersedeQuestionID)}
 	protocol, err := parseAgentRunProtocolRequest(req, requestPayload)
 	if err != nil {
 		return err
@@ -173,6 +186,51 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	prepared, err := s.agentPrepareRun(ctx, conv, &selected, "message", protocol, func(tx pgx.Tx, c *agentConversation) (*uuid.UUID, bool, error) {
 		if err := s.agentReportCardResultsTx(ctx, tx, c.ID); err != nil {
 			return nil, false, err
+		}
+		var pendingQuestion uuid.UUID
+		var pendingQuestionRevision int64
+		var pendingQuestionExpiresAt time.Time
+		questionErr := tx.QueryRow(ctx, `SELECT id,revision,expires_at FROM agent_question
+			WHERE conversation_id=$1 AND status='pending' FOR UPDATE`, c.ID).
+			Scan(&pendingQuestion, &pendingQuestionRevision, &pendingQuestionExpiresAt)
+		if questionErr != nil && !errors.Is(questionErr, pgx.ErrNoRows) {
+			return nil, false, questionErr
+		}
+		replacementID := uuid.Nil
+		if strings.TrimSpace(req.SupersedeQuestionID) != "" {
+			replacementID, err = uuid.Parse(strings.TrimSpace(req.SupersedeQuestionID))
+			if err != nil || replacementID == uuid.Nil {
+				return nil, false, validation("替代的问题编号无效")
+			}
+		}
+		if questionErr == nil && !time.Now().Before(pendingQuestionExpiresAt) {
+			if _, err := tx.Exec(ctx, `UPDATE agent_question SET status='expired',revision=revision+1,resolved_at=now() WHERE id=$1`, pendingQuestion); err != nil {
+				return nil, false, err
+			}
+			if _, err := appendAgentEventTx(ctx, tx, c.ID, nil, "question.resolved", map[string]any{
+				"question_id": pendingQuestion, "revision": pendingQuestionRevision + 1, "status": "expired",
+			}, nil); err != nil {
+				return nil, false, err
+			}
+			questionErr = pgx.ErrNoRows
+		}
+		if questionErr == nil {
+			if replacementID == uuid.Nil {
+				return nil, false, apiErr(409, "agent_question_pending", "请先回答待办问题；或明确使用此消息替代问题")
+			}
+			if replacementID != pendingQuestion {
+				return nil, false, apiErr(409, "agent_revision_conflict", "待办问题已变化，请刷新后重试")
+			}
+			if _, err := tx.Exec(ctx, `UPDATE agent_question SET status='superseded',revision=revision+1,resolved_at=now() WHERE id=$1`, pendingQuestion); err != nil {
+				return nil, false, err
+			}
+			if _, err := appendAgentEventTx(ctx, tx, c.ID, nil, "question.resolved", map[string]any{
+				"question_id": pendingQuestion, "revision": pendingQuestionRevision + 1, "status": "superseded",
+			}, nil); err != nil {
+				return nil, false, err
+			}
+		} else if replacementID != uuid.Nil {
+			return nil, false, apiErr(409, "agent_revision_conflict", "待办问题已变化或已过期，请刷新后重试")
 		}
 		message, replay, err := s.agentInsertUserMessageWithContextTx(ctx, tx, c.ID, text, attIDs, contextRefs,
 			req.SkillRequests, requestID, requestPayload)
@@ -225,6 +283,9 @@ func (s *Server) agentSelectConversationOverride(ctx context.Context, conv *agen
 		providerID = conv.ModelProviderID
 	}
 	conv.AccountID, conv.ModelProviderID, conv.Model = accountID, providerID, model
+	if req.Mode != nil {
+		conv.Mode = *req.Mode
+	}
 	return nil
 }
 
@@ -464,6 +525,9 @@ func (s *Server) agentStreamPreparedRun(w http.ResponseWriter, r *http.Request, 
 	st, messageID := prepared.State, prepared.MessageID
 	runBase := context.WithoutCancel(ctx)
 	rt, err := s.agentResolveModel(runBase, st)
+	if err == nil {
+		err = s.agentRecordRuntimeConfig(runBase, st, rt)
+	}
 	if err != nil {
 		s.finishAgentRun(runBase, st, "failed", "", nil)
 		return err

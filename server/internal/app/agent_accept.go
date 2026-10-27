@@ -12,12 +12,14 @@ import (
 )
 
 type agentMessageRequestPayload struct {
-	Text          string
-	AttachmentIDs []uuid.UUID
-	ContextRefs   []agentContextReference
-	SkillRequests []agentSkillRequest
-	AccountID     string
-	Model         *agentModelRef
+	Text                string
+	AttachmentIDs       []uuid.UUID
+	ContextRefs         []agentContextReference
+	SkillRequests       []agentSkillRequest
+	AccountID           string
+	Model               *agentModelRef
+	Mode                *string `json:",omitempty"`
+	SupersedeQuestionID string  `json:",omitempty"`
 }
 
 func parseAgentAttachmentIDs(ids []string) ([]uuid.UUID, error) {
@@ -85,7 +87,7 @@ func (s *Server) agentMessageReplay(ctx context.Context, conversationID, request
 			}
 		}
 	}
-	payload := agentMessageRequestPayload{strings.TrimSpace(req.Text), attachments, req.ContextRefs, req.SkillRequests, strings.TrimSpace(req.AccountID), req.Model}
+	payload := agentMessageRequestPayload{strings.TrimSpace(req.Text), attachments, req.ContextRefs, req.SkillRequests, strings.TrimSpace(req.AccountID), req.Model, req.Mode, strings.TrimSpace(req.SupersedeQuestionID)}
 	hash, err := agentRequestPayloadHash(payload)
 	if err != nil {
 		return nil, err
@@ -159,6 +161,7 @@ func (s *Server) agentPrepareRun(ctx context.Context, original, selected *agentC
 	if err != nil {
 		return nil, err
 	}
+	c.Mode = agentEffectiveMode(c.Mode, ident(ctx).Role)
 	if err := agentCheckConversationWritable(c); err != nil {
 		return nil, err
 	}
@@ -175,11 +178,21 @@ func (s *Server) agentPrepareRun(ctx context.Context, original, selected *agentC
 			return &agentPreparedRun{State: &agentRunState{RunID: runID, StartEventSeq: after + 1}, MessageID: messageID, Replayed: true}, nil
 		}
 	}
-	if !agentSameUUID(c.AccountID, original.AccountID) || !agentSameUUID(c.ModelProviderID, original.ModelProviderID) || c.Model != original.Model {
+	if !agentSameUUID(c.AccountID, original.AccountID) || !agentSameUUID(c.ModelProviderID, original.ModelProviderID) || c.Model != original.Model || c.Mode != original.Mode {
 		return nil, apiErr(409, "agent_revision_conflict", "对话账号或模型已变化，请刷新后重试")
 	}
 	if err := agentCheckRunLimitsWith(ctx, tx, c.ID, owner); err != nil {
 		return nil, err
+	}
+	if trigger != "message" && trigger != "plan_accept" && trigger != "answer" {
+		var pendingQuestion bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agent_question WHERE conversation_id=$1
+			AND status='pending' AND expires_at>now())`, c.ID).Scan(&pendingQuestion); err != nil {
+			return nil, err
+		}
+		if pendingQuestion {
+			return nil, apiErr(409, "agent_question_pending", "请先回答待办问题，或用新消息明确替代问题")
+		}
 	}
 	if !agentSameUUID(c.AccountID, selected.AccountID) {
 		var pending bool
@@ -192,10 +205,11 @@ func (s *Server) agentPrepareRun(ctx context.Context, original, selected *agentC
 		}
 	}
 	c.AccountID, c.ModelProviderID, c.Model = selected.AccountID, selected.ModelProviderID, selected.Model
+	c.Mode = agentEffectiveMode(selected.Mode, ident(ctx).Role)
 	if _, err := tx.Exec(ctx, `UPDATE agent_conversation SET
-		revision=revision+CASE WHEN account_id IS DISTINCT FROM $2 OR model_provider_id IS DISTINCT FROM $3 OR model IS DISTINCT FROM $4 THEN 1 ELSE 0 END,
-		account_id=$2,model_provider_id=$3,model=$4 WHERE id=$1`,
-		c.ID, c.AccountID, c.ModelProviderID, c.Model); err != nil {
+		revision=revision+CASE WHEN account_id IS DISTINCT FROM $2 OR model_provider_id IS DISTINCT FROM $3 OR model IS DISTINCT FROM $4 OR mode IS DISTINCT FROM $5 THEN 1 ELSE 0 END,
+		account_id=$2,model_provider_id=$3,model=$4,mode=$5 WHERE id=$1`,
+		c.ID, c.AccountID, c.ModelProviderID, c.Model, c.Mode); err != nil {
 		return nil, err
 	}
 	messageID, replay, err := input(tx, c)
