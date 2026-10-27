@@ -42,6 +42,16 @@ type agentSkillRunState struct {
 	ChangedErr error // 目录失效后停止使用的信号（8.1 节第 8 项）
 }
 
+func agentSkillActorForRun(st *agentRunState) (string, *uuid.UUID) {
+	if st != nil && st.ExecutionOrigin == "routine" {
+		return "system", nil
+	}
+	if st == nil {
+		return "system", nil
+	}
+	return "user", &st.UserID
+}
+
 func (rs *agentSkillRunState) contextKey(accountID uuid.UUID, workID *uuid.UUID, format string) string {
 	key := accountID.String() + "|"
 	if workID != nil {
@@ -81,8 +91,9 @@ func (s *Server) agentSkillEnsureContext(ctx context.Context, st *agentRunState,
 	if c, ok := rs.Contexts[key]; ok {
 		return c, nil
 	}
+	actorKind, actorUserID := agentSkillActorForRun(st)
 	in := SkillResolveInput{
-		WorkspaceID: st.WorkspaceID, Account: account, ActorKind: "user", ActorUserID: &st.UserID,
+		WorkspaceID: st.WorkspaceID, Account: account, ActorKind: actorKind, ActorUserID: actorUserID,
 		WorkID: workID, TargetFormat: targetFormat, Surface: "agent",
 	}
 	res, err := s.resolveSkillSet(ctx, in)
@@ -200,7 +211,8 @@ func agentSkillCallSnapshot(st *agentRunState) *SkillSnapshot {
 		return nil
 	}
 	_, chars := agentSkillLoadedText(c)
-	snap := &SkillSnapshot{Input: SkillResolveInput{WorkspaceID: st.WorkspaceID, Account: &Account{ID: c.AccountID}, WorkID: c.WorkID, Surface: "agent", ActorKind: "user", ActorUserID: &st.UserID}, TargetFormat: c.TargetFormat, AllowedSetVersion: skillAllowedSetVersion, SlotChars: chars, Assembled: chars > 0}
+	actorKind, actorUserID := agentSkillActorForRun(st)
+	snap := &SkillSnapshot{Input: SkillResolveInput{WorkspaceID: st.WorkspaceID, Account: &Account{ID: c.AccountID}, WorkID: c.WorkID, Surface: "agent", ActorKind: actorKind, ActorUserID: actorUserID}, TargetFormat: c.TargetFormat, AllowedSetVersion: skillAllowedSetVersion, SlotChars: chars, Assembled: chars > 0}
 	loaded := make(map[uuid.UUID]bool, len(c.Loaded))
 	for _, item := range c.Loaded {
 		loaded[item.Def.ID] = true
@@ -250,6 +262,9 @@ func (s *Server) agentSkillLoad(ctx context.Context, st *agentRunState, account 
 	if item == nil {
 		return nil, apiErr(422, "unknown_skill_ref", "skill_ref 不在这个目录中")
 	}
+	if st.ExecutionOrigin == "routine" && item.Def.Scope == "personal" {
+		return nil, apiErr(403, "forbidden", "例行任务不能加载个人技能")
+	}
 	// WorkID 缺省明确表示账号默认上下文，不能沿用上一次作品。
 	var workID *uuid.UUID
 	if v, _ := args["work_id"].(string); v != "" {
@@ -271,8 +286,9 @@ func (s *Server) agentSkillLoad(ctx context.Context, st *agentRunState, account 
 		}
 	}
 	// 加载前复核目录资格（8.2 节权限行）：统一解析器核验绑定 / 定义 / 入口 / 形态。
+	actorKind, actorUserID := agentSkillActorForRun(st)
 	in := SkillResolveInput{
-		WorkspaceID: st.WorkspaceID, Account: account, ActorKind: "user", ActorUserID: &st.UserID,
+		WorkspaceID: st.WorkspaceID, Account: account, ActorKind: actorKind, ActorUserID: actorUserID,
 		WorkID: target.WorkID, TargetFormat: target.TargetFormat, Surface: "agent",
 	}
 	res, err := s.resolveSkillSet(ctx, in)
@@ -345,8 +361,9 @@ func (s *Server) agentSkillVerifyActive(ctx context.Context, st *agentRunState, 
 	if account == nil || c.AccountID != account.ID {
 		return skillContextChanged()
 	}
+	actorKind, actorUserID := agentSkillActorForRun(st)
 	in := SkillResolveInput{
-		WorkspaceID: st.WorkspaceID, Account: account, ActorKind: "user", ActorUserID: &st.UserID,
+		WorkspaceID: st.WorkspaceID, Account: account, ActorKind: actorKind, ActorUserID: actorUserID,
 		WorkID: c.WorkID, TargetFormat: c.TargetFormat, Surface: "agent",
 	}
 	res, err := s.resolveSkillSet(ctx, in)

@@ -410,6 +410,10 @@ func mustJSON(v any) []byte {
 // agentStartRun 创建一次运行（第 6.1 节第 1 项）并返回其内存状态。
 func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string, c *agentConversation,
 	model agentModelRef, requestID uuid.UUID, requestPayload any, messageID *uuid.UUID) (*agentRunState, error) {
+	identity := ident(ctx)
+	if identity == nil {
+		return nil, errUnauthenticated
+	}
 	protocolVersion := 1
 	requestHash := ""
 	if requestID != uuid.Nil {
@@ -423,9 +427,9 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 	st := &agentRunState{
 		RunID:           uuid.New(),
 		ConversationID:  c.ID,
-		WorkspaceID:     ident(ctx).WorkspaceID,
-		UserID:          ident(ctx).UserID,
-		SessionID:       ident(ctx).SessionID,
+		WorkspaceID:     identity.WorkspaceID,
+		UserID:          identity.UserID,
+		SessionID:       identity.SessionID,
 		Trigger:         trigger,
 		ProtocolVersion: protocolVersion,
 		Mode:            agentEffectiveMode(c.Mode, ident(ctx).Role),
@@ -434,6 +438,20 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 		Model:           model,
 		BatchID:         uuid.New(),
 		Deadline:        time.Now().Add(agentRunSeconds * time.Second),
+	}
+	if trigger == "routine" {
+		execution := agentRoutineExecutionOf(ctx)
+		if execution == nil || execution.LeaseToken == uuid.Nil {
+			return nil, apiErr(403, "forbidden", "例行任务只能由服务端调度器启动")
+		}
+		st.SessionID = uuid.Nil
+		st.Mode = "discuss"
+		st.ExecutionOrigin = "routine"
+		st.RoutineID = &execution.RoutineID
+		st.RoutineOccurrenceID = &execution.OccurrenceID
+		st.Deadline = time.Now().Add(300 * time.Second)
+	} else if agentRoutineExecutionOf(ctx) != nil {
+		return nil, apiErr(403, "forbidden", "例行任务身份不能启动交互运行")
 	}
 	var goalID any
 	if trigger != "compact" && trigger != "routine" && agentWorkbenchFeatures()["goals"] {
@@ -493,13 +511,40 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 	if err != nil {
 		return nil, err
 	}
+	var sessionID any
+	if st.SessionID != uuid.Nil {
+		sessionID = st.SessionID
+	}
+	var routineOccurrenceID any
+	if st.RoutineOccurrenceID != nil {
+		routineOccurrenceID = *st.RoutineOccurrenceID
+	}
 	if err := tx.QueryRow(ctx, `INSERT INTO agent_run
 		(conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model_provider_id, model,
-		 protocol_version, request_id, request_hash,mode,execution_origin,config_snapshot,goal_id)
-		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
-		c.ID, st.WorkspaceID, st.UserID, st.SessionID, trigger, model.ProviderID, model.Model,
-		protocolVersion, requestIDArg, requestHash, st.Mode, st.ExecutionOrigin, snapshotJSON, goalID).Scan(&st.RunID); err != nil {
+		 protocol_version, request_id, request_hash,mode,execution_origin,config_snapshot,goal_id,routine_occurrence_id)
+		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+		c.ID, st.WorkspaceID, st.UserID, sessionID, trigger, model.ProviderID, model.Model,
+		protocolVersion, requestIDArg, requestHash, st.Mode, st.ExecutionOrigin, snapshotJSON, goalID,
+		routineOccurrenceID).Scan(&st.RunID); err != nil {
 		return nil, err
+	}
+	if messageID != nil {
+		if _, err := tx.Exec(ctx, `UPDATE agent_message SET run_id=$1 WHERE conversation_id=$2 AND id=$3 AND role='user'`,
+			st.RunID, c.ID, *messageID); err != nil {
+			return nil, err
+		}
+	}
+	if trigger == "routine" {
+		execution := agentRoutineExecutionOf(ctx)
+		result, err := tx.Exec(ctx, `UPDATE agent_routine_occurrence SET status='running',run_id=$2,started_at=now(),
+			lease_until=now()+interval '5 minutes' WHERE id=$1 AND routine_id=$3 AND status='leased'
+			AND lease_token=$4 AND lease_until>now()`, execution.OccurrenceID, st.RunID, execution.RoutineID, execution.LeaseToken)
+		if err != nil {
+			return nil, err
+		}
+		if result.RowsAffected() != 1 {
+			return nil, apiErr(409, "agent_routine_unavailable", "例行任务租约已失效，请等待下次调度")
+		}
 	}
 	if err := tx.QueryRow(ctx, `SELECT loaded_domains, summary FROM agent_conversation WHERE id=$1`, c.ID).
 		Scan(&st.Domains, &st.Summary); err != nil {
@@ -510,12 +555,6 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 	}, nil)
 	if err != nil {
 		return nil, err
-	}
-	if messageID != nil {
-		if _, err := tx.Exec(ctx, `UPDATE agent_message SET run_id=$1 WHERE conversation_id=$2 AND id=$3 AND role='user'`,
-			st.RunID, c.ID, *messageID); err != nil {
-			return nil, err
-		}
 	}
 	if len(st.Domains) > agentMaxDomains {
 		st.Domains = st.Domains[len(st.Domains)-agentMaxDomains:]

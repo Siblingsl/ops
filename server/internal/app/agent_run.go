@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -22,26 +23,28 @@ import (
 
 // agentRunState 是一次运行在内存中的状态（第 6.1 节）。
 type agentRunState struct {
-	RunID             uuid.UUID
-	ConversationID    uuid.UUID
-	WorkspaceID       uuid.UUID
-	UserID            uuid.UUID
-	SessionID         uuid.UUID
-	Trigger           string // message | continue | regenerate | edit
-	ProtocolVersion   int
-	Mode              string
-	ExecutionOrigin   string
-	GoalID            *uuid.UUID
-	StartedAt         time.Time
-	GoalUsedSeconds   int
-	GoalUsedTokens    int
-	GoalSecondsBudget int
-	GoalTokenBudget   *int
-	RuntimeModel      *agentRuntimeModel
-	AccountID         *uuid.UUID
-	Model             agentModelRef
-	ProviderName      string
-	Vision            bool
+	RunID               uuid.UUID
+	ConversationID      uuid.UUID
+	WorkspaceID         uuid.UUID
+	UserID              uuid.UUID
+	SessionID           uuid.UUID
+	Trigger             string // message | continue | regenerate | edit
+	ProtocolVersion     int
+	Mode                string
+	ExecutionOrigin     string
+	GoalID              *uuid.UUID
+	RoutineID           *uuid.UUID
+	RoutineOccurrenceID *uuid.UUID
+	StartedAt           time.Time
+	GoalUsedSeconds     int
+	GoalUsedTokens      int
+	GoalSecondsBudget   int
+	GoalTokenBudget     *int
+	RuntimeModel        *agentRuntimeModel
+	AccountID           *uuid.UUID
+	Model               agentModelRef
+	ProviderName        string
+	Vision              bool
 
 	// 第 6.5 节的运行内计数。
 	Rounds             int
@@ -160,7 +163,7 @@ func agentToolsFor(st *agentRunState, id *identity) []ai.Tool {
 	catalog := agentCatalog()
 	for i := range catalog {
 		t := &catalog[i]
-		if !agentMetaFeatureAllowed(t) {
+		if !agentMetaFeatureAllowed(st, t) {
 			continue
 		}
 		if t.Domain != "" && !loaded[t.Domain] {
@@ -185,7 +188,7 @@ func (st *agentRunState) loadedTool(id *identity, name string) *AgentTool {
 	}
 	if t.Domain == "" {
 		// 元工具始终可用，仍受角色可见性约束。
-		if agentMetaFeatureAllowed(t) && agentRunToolAllowed(st, t, id) {
+		if agentMetaFeatureAllowed(st, t) && agentRunToolAllowed(st, t, id) {
 			return t
 		}
 		return nil
@@ -198,12 +201,13 @@ func (st *agentRunState) loadedTool(id *identity, name string) *AgentTool {
 	return nil
 }
 
-func agentMetaFeatureAllowed(t *AgentTool) bool {
+func agentMetaFeatureAllowed(st *agentRunState, t *AgentTool) bool {
 	if t == nil {
 		return false
 	}
 	if t.Name == "present_artifact" {
-		return agentWorkbenchFeatures()["artifacts"]
+		features := agentWorkbenchFeatures()
+		return features["artifacts"] && (st == nil || st.ExecutionOrigin != "routine" || features["routines"])
 	}
 	if t.Name == "report_goal_progress" {
 		return agentWorkbenchFeatures()["goals"]
@@ -467,7 +471,11 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 	if send != nil {
 		send("run", map[string]any{"run_id": st.RunID, "status": "running"})
 	}
-	st.Deadline = time.Now().Add(agentRunSeconds * time.Second)
+	runSeconds := agentRunSeconds
+	if st.ExecutionOrigin == "routine" {
+		runSeconds = 300
+	}
+	st.Deadline = time.Now().Add(time.Duration(runSeconds) * time.Second)
 	if st.GoalID != nil {
 		remaining := st.GoalSecondsBudget - st.GoalUsedSeconds
 		if remaining <= 0 {
@@ -492,6 +500,20 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 	for st.Rounds < agentMaxRounds {
 		// 第 6.1 节第 2.1 项：取消标记、截止时间；第 9.3 节第 2 项：维护模式。
 		if ctx.Err() != nil {
+			status = "stopped"
+			return
+		}
+		var persistedStage string
+		if err := s.db.QueryRow(ctx, `SELECT stage FROM agent_run WHERE id=$1 AND status IN ('queued','running')`, st.RunID).Scan(&persistedStage); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				status = "stopped"
+			} else {
+				status = "failed"
+				s.agentRunError(st, err)
+			}
+			return
+		}
+		if persistedStage == "stopping" {
 			status = "stopped"
 			return
 		}
@@ -820,6 +842,9 @@ func (s *Server) agentHandleToolCall(ctx context.Context, st *agentRunState, id 
 
 	// 本地元工具不经分发器（第 3.3 节第 3 项）。
 	if t.Path == "" {
+		if st.ExecutionOrigin == "routine" && !agentRoutineToolAllowed(t, clean) {
+			return s.agentToolError(ctx, st, call, "unknown_tool", "例行任务不能调用此元工具或参数", send)
+		}
 		return s.agentMetaTool(ctx, st, t, call, clean, send)
 	}
 
@@ -869,8 +894,17 @@ func (s *Server) agentToolLimitWithCode(ctx context.Context, st *agentRunState, 
 // agentToolDispatch 经分发器执行一次 R / G 工具调用。
 func (s *Server) agentToolDispatch(ctx context.Context, st *agentRunState, t *AgentTool, call ai.ToolCall,
 	args map[string]any, send func(string, any)) error {
-	if !agentRunToolAllowed(st, t, ident(ctx)) {
+	if !agentRunToolAllowed(st, t, ident(ctx)) || st.ExecutionOrigin == "routine" && !agentRoutineToolAllowed(t, args) {
 		return s.agentToolError(ctx, st, call, "unknown_tool", "当前模式或来源不可调用此工具", send)
+	}
+	if st.ExecutionOrigin == "routine" {
+		if err := s.validateAgentRoutineToolArgs(ctx, st, t, args); err != nil {
+			var apiError *APIError
+			if errors.As(err, &apiError) {
+				return s.agentToolError(ctx, st, call, apiError.Code, apiError.Message, send)
+			}
+			return err
+		}
 	}
 	if ctx.Err() != nil {
 		return s.agentCancelledTool(ctx, st, call, send)
@@ -886,8 +920,9 @@ func (s *Server) agentToolDispatch(ctx context.Context, st *agentRunState, t *Ag
 		timeout = agentGenerateTimeout
 	}
 	res, err := s.dispatchAgentTool(ctx, agentDispatchRequest{
-		Principal: agentPrincipal{SessionID: st.SessionID, WorkspaceID: st.WorkspaceID,
-			ConversationID: st.ConversationID, RunID: st.RunID},
+		Principal: agentPrincipal{SessionID: st.SessionID, UserID: st.UserID, WorkspaceID: st.WorkspaceID,
+			ConversationID: st.ConversationID, RunID: st.RunID,
+			RoutineID: agentRunRoutineID(st), RoutineOccurrenceID: agentRunRoutineOccurrenceID(st)},
 		Tool:    t,
 		Args:    args,
 		Timeout: timeout,
@@ -902,6 +937,9 @@ func (s *Server) agentToolDispatch(ctx context.Context, st *agentRunState, t *Ag
 		rec.Model = agentErrorEnvelope(res.Status, res.Raw)
 		rec.Raw = agentRawResultForStorage(res.Status, res.Raw, secrets)
 		rec.Summary = summary
+		if st.ExecutionOrigin == "routine" && (res.Status == http.StatusUnauthorized || res.Status == http.StatusForbidden) {
+			s.pauseAgentRoutineForRevocation(ctx, st)
+		}
 		return s.agentToolOutcome(ctx, st, call, rec, false, send)
 	}
 	rec.Raw = agentRawResultForStorage(res.Status, res.Raw, secrets)
@@ -978,12 +1016,16 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 				st.Rounds, st.ReadCalls, st.GenerateCalls, st.ActionsProposed, st.PromptTokens, st.CompletionTokens,
 				st.ExternalRead, st.ErrCode, st.ErrMsg, finished).Scan(&finished)
 		}
-		if txErr == nil {
+		if txErr == nil && st.ExecutionOrigin != "routine" {
 			txErr = agentMarkRunSteersForReviewTx(finishCtx, tx, st.ConversationID, st.RunID)
 		}
 		var goalNotice string
-		if txErr == nil && st.GoalID != nil {
+		if txErr == nil && st.GoalID != nil && st.ExecutionOrigin != "routine" {
 			goalNotice, txErr = s.finishAgentGoalTx(finishCtx, tx, st, status, reason)
+		}
+		var routineNotice *agentRoutineNotice
+		if txErr == nil && st.ExecutionOrigin == "routine" {
+			routineNotice, txErr = s.finishAgentRoutineTx(finishCtx, tx, st, status, reason)
 		}
 		if txErr == nil && status == "stopped" && agentWorkbenchFeatures()["run_control"] {
 			_, txErr = tx.Exec(finishCtx, `UPDATE agent_conversation SET input_queue_paused=true WHERE id=$1`, st.ConversationID)
@@ -999,6 +1041,10 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 		if txErr == nil && goalNotice != "" {
 			s.notify(finishCtx, st.WorkspaceID, st.UserID, "agent_goal", "AI 对话有结果", "AI 对话有结果或需要处理", "/agent/c/"+st.ConversationID.String(), "agent_goal:"+st.RunID.String()+":"+goalNotice)
 		}
+		if txErr == nil && routineNotice != nil {
+			s.notify(finishCtx, routineNotice.WorkspaceID, routineNotice.UserID, "agent_routine", routineNotice.Title,
+				routineNotice.Body, "/agent?panel=task&item="+st.RoutineID.String(), routineNotice.Key)
+		}
 	}
 	if txErr != nil {
 		slog.ErrorContext(finishCtx, "智能体运行终态或事件保存失败", "run_id", st.RunID.String(), "err", txErr)
@@ -1009,8 +1055,10 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 	}
 	s.unregisterAgentRun(st.RunID)
 	agentReleaseSkillState(st.RunID)
-	s.maybeSummarize(ctx, st)
-	if txErr == nil && agentWorkbenchFeatures()["run_control"] {
+	if st.ExecutionOrigin != "routine" {
+		s.maybeSummarize(ctx, st)
+	}
+	if txErr == nil && st.ExecutionOrigin != "routine" && agentWorkbenchFeatures()["run_control"] {
 		queueIdentity := &identity{UserID: st.UserID, WorkspaceID: st.WorkspaceID, SessionID: st.SessionID}
 		if current := ident(finishCtx); current != nil {
 			copy := *current
@@ -1022,7 +1070,7 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 			slog.WarnContext(finishCtx, "启动排队输入失败", "conversation_id", st.ConversationID.String(), "err", err)
 		}
 	}
-	if txErr == nil && st.GoalID != nil {
+	if txErr == nil && st.GoalID != nil && st.ExecutionOrigin != "routine" {
 		if err := s.agentContinueGoalBackground(finishCtx, st.ConversationID, *st.GoalID); err != nil && !errors.Is(err, errAgentGoalNoContinuation) {
 			slog.WarnContext(finishCtx, "目标自动续跑未启动", "goal_id", st.GoalID.String(), "err", err)
 		}

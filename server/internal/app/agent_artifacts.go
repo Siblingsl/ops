@@ -470,8 +470,13 @@ func (s *Server) agentInsertArtifactTx(ctx context.Context, tx pgx.Tx, conversat
 }
 
 func (s *Server) agentMetaPresentArtifact(ctx context.Context, st *agentRunState, args map[string]any) ([]byte, string, error) {
-	if !agentWorkbenchFeatures()["artifacts"] || (st.ExecutionOrigin != "interactive" && st.ExecutionOrigin != "goal") || st.Trigger == "routine" {
+	routine := st.ExecutionOrigin == "routine" && st.Trigger == "routine"
+	if !agentWorkbenchFeatures()["artifacts"] || (st.ExecutionOrigin != "interactive" && st.ExecutionOrigin != "goal" && !routine) ||
+		st.Trigger == "routine" && !routine {
 		return nil, "", apiErr(403, "forbidden", "当前运行不能创建对话产物")
+	}
+	if routine && !agentRoutineArgsAllowed("present_artifact", args) {
+		return nil, "", apiErr(403, "forbidden", "例行任务仅能保存本次聊天生成的报告")
 	}
 	title, _ := args["title"].(string)
 	title = strings.TrimSpace(title)
@@ -480,6 +485,9 @@ func (s *Server) agentMetaPresentArtifact(ctx context.Context, st *agentRunState
 	_, hasSource := args["source_ref"]
 	if title == "" || runeLen(title) > 200 || (kind != "markdown" && kind != "title" && kind != "table") || hasChat == hasSource {
 		return nil, "", apiErr(422, "invalid_arguments", "请提供标题、有效类型，并在资料引用或聊天草稿中选择一项来源")
+	}
+	if routine && kind != "markdown" {
+		return nil, "", apiErr(422, "invalid_arguments", "例行任务报告只支持 Markdown 文本")
 	}
 	chatContent = strings.TrimSpace(chatContent)
 	if hasChat && (chatContent == "" || runeLen(chatContent) > 20000) {
@@ -529,6 +537,15 @@ func (s *Server) agentMetaPresentArtifact(ctx context.Context, st *agentRunState
 		return nil, "", err
 	}
 	defer tx.Rollback(ctx)
+	if routine {
+		var count int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM agent_artifact_version WHERE source_run_id=$1`, st.RunID).Scan(&count); err != nil {
+			return nil, "", err
+		}
+		if count >= 1 {
+			return nil, "", apiErr(409, "agent_routine_unavailable", "本次例行任务已经保存过报告")
+		}
+	}
 	artifactID, err := s.agentInsertArtifactTx(ctx, tx, st.ConversationID, kind, title, "chat", content,
 		hex.EncodeToString(hash[:]), &st.RunID, nil, nil)
 	if err != nil {

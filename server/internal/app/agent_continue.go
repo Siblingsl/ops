@@ -517,6 +517,16 @@ func (s *Server) agentRunModel(ctx context.Context, conv *agentConversation) (ag
 // startAgentRunBackground dispatches a persisted queued input through the existing run loop.
 func (s *Server) startAgentRunBackground(ctx context.Context, st *agentRunState) error {
 	runBase := context.WithoutCancel(ctx)
+	if st.ExecutionOrigin == "routine" {
+		principal := &agentPrincipal{UserID: st.UserID, WorkspaceID: st.WorkspaceID, ConversationID: st.ConversationID,
+			RunID: st.RunID, RoutineID: agentRunRoutineID(st), RoutineOccurrenceID: agentRunRoutineOccurrenceID(st)}
+		id, err := s.loadAgentRoutinePrincipal(runBase, principal)
+		if err != nil {
+			s.finishAgentRun(runBase, st, "failed", "routine_authorization_revoked", nil)
+			return err
+		}
+		runBase = context.WithValue(runBase, ctxMember, id)
+	}
 	rt, err := s.agentResolveModel(runBase, st)
 	if err == nil {
 		err = s.agentRecordRuntimeConfig(runBase, st, rt)

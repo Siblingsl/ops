@@ -42,9 +42,10 @@ const contextTypes = [
   { id: 'image', label: '图片' }, { id: 'report', label: '报告' },
 ]
 
-export function ContextPickerDialog({ open, onClose, accountID, conversationID, selected, onAdd }: {
+export function ContextPickerDialog({ open, onClose, accountID, conversationID, selected, onAdd, turnOnly = false, description }: {
   open: boolean; onClose: () => void; accountID: string; conversationID?: string
   selected: AgentContextSelection[]; onAdd: (item: AgentContextSelection) => void
+  turnOnly?: boolean; description?: string
 }) {
   const [type, setType] = useState('material')
   const [search, setSearch] = useState('')
@@ -99,19 +100,19 @@ export function ContextPickerDialog({ open, onClose, accountID, conversationID, 
     setSearch('')
     onClose()
   }
-  return <Dialog open={open} onClose={onClose} title="引用工作区资料" desc="引用会按本对话账号重新鉴权；固定到对话也不会冻结权限。" width="max-w-2xl" footer={<>
+  return <Dialog open={open} onClose={onClose} title="引用工作区资料" desc={description ?? '引用会按本对话账号重新鉴权；固定到对话也不会冻结权限。'} width="max-w-2xl" footer={<>
     <Button variant="ghost" onClick={onClose}>取消</Button>
     <Button variant="outline" loading={previewBusy} disabled={!candidate || !!duplicate} onClick={() => void previewCandidate()}>预览并校验</Button>
     <Button variant="primary" disabled={!preview || !!duplicate} onClick={add}>添加引用</Button>
   </>}>
     <div className="space-y-3">
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
+      <div className={turnOnly ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2'}>
         <Select aria-label="引用类型" value={type} onChange={(event) => { setType(event.target.value); setCandidate(null); setPreview(null); setFailure('') }}>
           {contextTypes.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
         </Select>
-        <Select aria-label="引用范围" value={referenceScope} onChange={(event) => { setReferenceScope(event.target.value as 'turn' | 'conversation'); setPreview(null) }}>
+        {!turnOnly && <Select aria-label="引用范围" value={referenceScope} onChange={(event) => { setReferenceScope(event.target.value as 'turn' | 'conversation'); setPreview(null) }}>
           <option value="turn">本轮引用</option><option value="conversation">固定到本对话</option>
-        </Select>
+        </Select>}
       </div>
       {accountRequired && !accountID && <Notice tone="gamboge">此类资料需要先选择操作账号。</Notice>}
       <label className="relative block">

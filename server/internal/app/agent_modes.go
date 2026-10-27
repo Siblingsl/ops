@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
@@ -43,6 +44,12 @@ func agentRunToolAllowed(st *agentRunState, tool *AgentTool, id *identity) bool 
 	if !agentToolVisible(tool, id) {
 		return false
 	}
+	if st.ExecutionOrigin == "routine" {
+		if st.RoutineID == nil || st.RoutineOccurrenceID == nil {
+			return false
+		}
+		return agentRoutineToolAllowed(tool, nil)
+	}
 	if st.ExecutionOrigin != "" && st.ExecutionOrigin != "interactive" && st.ExecutionOrigin != "goal" {
 		return false
 	}
@@ -64,6 +71,50 @@ func agentRunToolAllowed(st *agentRunState, tool *AgentTool, id *identity) bool 
 		return (mode == "discuss" || mode == "plan") && tool.Kind == toolR
 	}
 	return true
+}
+
+var agentRoutineReadTools = map[string]bool{
+	"works__list": true, "works__get": true, "works__read_sections": true,
+	"review__dashboard": true, "review__top_works": true, "review__digests": true,
+	"metrics__list": true, "metrics__unmatched": true, "followers__list": true,
+	"reviews__list": true, "checks__latest": true, "checks__report": true,
+}
+
+func agentRoutineToolAllowed(tool *AgentTool, args map[string]any) bool {
+	if tool == nil {
+		return false
+	}
+	switch tool.Name {
+	case "get_context", "load_tool_domain", "make_link", "load_skill":
+		return tool.Path == ""
+	case "present_artifact":
+		return tool.Path == "" && agentRoutineArgsAllowed(tool.Name, args)
+	case "skills__list":
+		return tool.Kind == toolR && tool.Method == http.MethodGet && agentRoutineArgsAllowed(tool.Name, args)
+	default:
+		return agentRoutineReadTools[tool.Name] && tool.Kind == toolR && tool.Method == http.MethodGet
+	}
+}
+
+func agentRoutineArgsAllowed(name string, args map[string]any) bool {
+	switch name {
+	case "skills__list":
+		if args == nil {
+			return false
+		}
+		view, _ := args["view"].(string)
+		scope, _ := args["scope"].(string)
+		return view == "effective" && (scope == "" || scope == "builtin" || scope == "workspace" || scope == "account")
+	case "present_artifact":
+		if args == nil {
+			return false
+		}
+		_, hasChat := args["chat_content"]
+		_, hasSource := args["source_ref"]
+		return hasChat && !hasSource
+	default:
+		return true
+	}
 }
 
 type agentRuntimeModel struct {
@@ -91,6 +142,20 @@ func agentInitialRunConfig(ctx context.Context, tx pgx.Tx, st *agentRunState) (*
 	snapshot := &agentRunConfigSnapshot{Version: 1, UserID: st.UserID, WorkspaceID: st.WorkspaceID, Role: ident(ctx).Role,
 		AccountID: st.AccountID, Mode: st.Mode, ExecutionOrigin: st.ExecutionOrigin, SelectedModel: st.Model,
 		ContextRefs: []agentContextReference{}, SkillRequests: []agentSkillRequest{}}
+	if st.ExecutionOrigin == "routine" {
+		var refs []byte
+		if err := tx.QueryRow(ctx, `SELECT public_context_refs FROM agent_routine WHERE id=$1 AND user_id=$2 AND workspace_id=$3`,
+			*st.RoutineID, st.UserID, st.WorkspaceID).Scan(&refs); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(refs, &snapshot.ContextRefs); err != nil {
+			return nil, err
+		}
+		for i := range snapshot.ContextRefs {
+			snapshot.ContextRefs[i].Name = ""
+		}
+		return snapshot, nil
+	}
 	var fixed, refs, skills []byte
 	if err := tx.QueryRow(ctx, `SELECT fixed_context_refs FROM agent_conversation WHERE id=$1`, st.ConversationID).Scan(&fixed); err != nil {
 		return nil, err

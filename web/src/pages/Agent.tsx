@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Archive, ArchiveRestore, AtSign, Bot, ChevronDown, ChevronLeft, Clipboard, FileText, FolderPlus, GitBranch, LoaderCircle, Menu, RotateCcw,
+  Archive, ArchiveRestore, AtSign, Bot, CalendarClock, ChevronDown, ChevronLeft, Clipboard, FileText, FolderPlus, GitBranch, LoaderCircle, Menu, RotateCcw,
   MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Search, Send, Settings2, Sparkles, Square, Trash2, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -29,6 +29,7 @@ import { browserStore, clearPartial, type PartialStream, readPartial, savePartia
 import { ContextPickerDialog, SkillPickerDialog, type AgentContextSelection, type AgentSkillSelection } from '@/pages/agent/ContextPickers'
 import { AgentPlanCard, AgentQuestionCard } from '@/pages/agent/PlansQuestions'
 import { GoalPanel } from '@/pages/agent/GoalPanel'
+import { RoutinePanel } from '@/pages/agent/RoutinePanel'
 
 const pageSize = 30
 
@@ -526,6 +527,7 @@ export default function Agent() {
   const [workbenchPanelOpen, setWorkbenchPanelOpen] = useState(false)
   const [workbenchPanelTab, setWorkbenchPanelTab] = useState<'task' | 'context' | 'artifact'>('task')
   const [goalPanelOpen, setGoalPanelOpen] = useState(false)
+  const [routinePanelOpen, setRoutinePanelOpen] = useState(false)
   const [artifactsOpen, setArtifactsOpen] = useState(false)
   const [workbenchLayoutLoadedKey, setWorkbenchLayoutLoadedKey] = useState('')
   const [text, setText] = useState('')
@@ -598,7 +600,9 @@ export default function Agent() {
   const workbenchUI = desktopPresentation && bootstrapData?.features?.workbench_ui === true
   const organizeEnabled = bootstrapData?.features?.conversation_organize === true
   const goalsEnabled = bootstrapData?.features?.goals === true
+  const routinesEnabled = bootstrapData?.features?.routines === true
   const canManageGoals = !!bootstrapData && bootstrapData.role !== 'viewer' && bootstrapData.reason !== 'admin_override'
+  const canManageRoutines = canManageGoals
   const eventResumeEnabled = bootstrapData?.features?.event_resume === true
   useEffect(() => {
     const onManualUnread = (event: Event) => {
@@ -1515,6 +1519,7 @@ export default function Agent() {
         <>
           {bootstrapData.features.artifacts === true && conversation && <IconButton label="查看产物" onClick={() => setArtifactsOpen(true)}><FileText className="size-4" /></IconButton>}
           {goalsEnabled && conversation && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel}><Bot className="size-4" /></IconButton>}
+          {routinesEnabled && <IconButton label="例行任务" onClick={() => setRoutinePanelOpen(true)}><CalendarClock className="size-4" /></IconButton>}
           <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>
         </>,
         toolbarSlot,
@@ -1642,6 +1647,7 @@ export default function Agent() {
                   {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy && !runInputsEnabled || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)}><AtSign className="size-4" /></IconButton>}
                   {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy && !runInputsEnabled || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)}><Sparkles className="size-4" /></IconButton>}
                   {goalsEnabled && conversationId && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel}><Bot className="size-4" /></IconButton>}
+                  {routinesEnabled && <IconButton label="例行任务" onClick={() => setRoutinePanelOpen(true)}><CalendarClock className="size-4" /></IconButton>}
                   {bootstrapData.features.plans && workbenchUI && <AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />}
                   <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择操作账号">{selectedAccountName} <ChevronDown /></button>
                   <span className="desktop-agent-compose-spacer" />
@@ -1662,6 +1668,7 @@ export default function Agent() {
                 {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)} className="mb-0.5"><AtSign className="size-4" /></IconButton>}
                 {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)} className="mb-0.5"><Sparkles className="size-4" /></IconButton>}
                 {goalsEnabled && conversationId && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel} className="mb-0.5"><Bot className="size-4" /></IconButton>}
+                {routinesEnabled && <IconButton label="例行任务" onClick={() => setRoutinePanelOpen(true)} className="mb-0.5"><CalendarClock className="size-4" /></IconButton>}
                 <Textarea ref={inputRef} rows={1} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px` }} onKeyDown={onInputKeyDown}
                   placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '发送消息…（Enter 发送，Shift+Enter 换行）'} className="max-h-48 min-h-10 resize-none border-0 bg-transparent px-2 py-2 shadow-none focus:border-transparent focus:ring-0 disabled:bg-transparent" />
                 {busy ? <Button variant="ghost" className="mb-0.5 shrink-0" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
@@ -1707,6 +1714,10 @@ export default function Agent() {
 
       {!workbenchUI && <Dialog open={goalPanelOpen} onClose={() => setGoalPanelOpen(false)} title="任务目标与上下文整理" desc="目标推进仍受账号权限、运行预算和逐张操作卡片确认约束。" width="max-w-2xl">
         <GoalPanel conversationID={conversation?.id} conversation={conversation} goal={detail?.goal} models={bootstrapData.models} goalsEnabled={goalsEnabled} compactEnabled={eventResumeEnabled} canManage={canManageGoals} busy={busy} onCompact={compactRun} />
+      </Dialog>}
+
+      {routinesEnabled && <Dialog open={routinePanelOpen} onClose={() => setRoutinePanelOpen(false)} title="受限例行任务" desc="按计划只读查询运营数据，逐次生成私有报告；权限在执行时重新检查。" width="max-w-3xl">
+        <RoutinePanel open={routinePanelOpen} canManage={canManageRoutines} models={bootstrapData.models} conversation={conversation} />
       </Dialog>}
 
       {bootstrapData.features.artifacts === true && !desktopPresentation && <Drawer open={artifactsOpen} onClose={() => setArtifactsOpen(false)} title="本对话产物" width="w-[min(92vw,920px)]">

@@ -161,11 +161,12 @@ type agentModelRef struct {
 }
 
 type agentModelOption struct {
-	ProviderID   uuid.UUID `json:"provider_id"`
-	ProviderName string    `json:"provider_name"`
-	Model        string    `json:"model"`
-	Vision       bool      `json:"vision"`
-	IsDefault    bool      `json:"is_default"`
+	ProviderID        uuid.UUID `json:"provider_id"`
+	ProviderName      string    `json:"provider_name"`
+	Model             string    `json:"model"`
+	ExecutionLocation string    `json:"execution_location"`
+	Vision            bool      `json:"vision"`
+	IsDefault         bool      `json:"is_default"`
 }
 
 // agentModels 返回可选模型（tools_ok=true）、默认模型，以及“默认模型未通过工具调用自检”标记（第 7.4 节）。
@@ -183,11 +184,11 @@ func (s *Server) agentModels(ctx context.Context) ([]agentModelOption, *agentMod
 		def := &agentModelRef{ProviderID: rt.ProviderID, Model: rt.Model}
 		if rt.ToolsOK {
 			list = append(list, agentModelOption{ProviderID: rt.ProviderID, ProviderName: rt.ProviderName,
-				Model: rt.Model, Vision: rt.VisionOK, IsDefault: true})
+				Model: rt.Model, ExecutionLocation: agentModelExecutionLocation(rt), Vision: rt.VisionOK, IsDefault: true})
 		}
 		if rt.Fallback != nil && rt.Fallback.ToolsOK {
 			list = append(list, agentModelOption{ProviderID: rt.Fallback.ProviderID, ProviderName: rt.Fallback.ProviderName,
-				Model: rt.Fallback.Model, Vision: rt.Fallback.VisionOK})
+				Model: rt.Fallback.Model, ExecutionLocation: agentModelExecutionLocation(rt.Fallback), Vision: rt.Fallback.VisionOK})
 		}
 		if len(list) == 0 {
 			return list, nil, true, nil
@@ -209,6 +210,7 @@ func (s *Server) agentModels(ctx context.Context) ([]agentModelOption, *agentMod
 		if err := rows.Scan(&m.ProviderID, &m.ProviderName, &m.Model, &m.Vision); err != nil {
 			return nil, nil, false, err
 		}
+		m.ExecutionLocation = "server"
 		list = append(list, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -240,6 +242,13 @@ func (s *Server) agentModels(ctx context.Context) ([]agentModelOption, *agentMod
 		}
 	}
 	return list, def, unsupported, nil
+}
+
+func agentModelExecutionLocation(value *route) string {
+	if value != nil && value.Desktop != nil {
+		return "desktop"
+	}
+	return "server"
 }
 
 func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) error {
@@ -1631,6 +1640,13 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Patch("/agent/conversations/{id}/goal", s.h(s.patchAgentGoal))
 		r.Post("/agent/goals/{id}/control", s.h(s.postAgentGoalControl))
 		r.Post("/agent/goals/{id}/confirm-criterion", s.h(s.postAgentGoalConfirmCriterion))
+		r.Get("/agent/routines", s.h(s.getAgentRoutineList))
+		r.Post("/agent/routines", s.h(s.postAgentRoutine))
+		r.Get("/agent/routines/{id}", s.h(s.getAgentRoutine))
+		r.Patch("/agent/routines/{id}", s.h(s.patchAgentRoutine))
+		r.Delete("/agent/routines/{id}", s.h(s.deleteAgentRoutine))
+		r.Post("/agent/routines/{id}/control", s.h(s.postAgentRoutineControl))
+		r.Get("/agent/routines/{id}/occurrences", s.h(s.getAgentRoutineOccurrences))
 		r.Post("/agent/conversations/{id}/inputs", s.h(s.postAgentInput))
 		r.Post("/agent/conversations/{id}/inputs/resume", s.h(s.resumeAgentInputs))
 		r.Patch("/agent/inputs/{id}", s.h(s.patchAgentInput))

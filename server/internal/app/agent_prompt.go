@@ -148,8 +148,15 @@ func (s *Server) agentEnvPayload(ctx context.Context, st *agentRunState) (agentE
 		return p, err
 	}
 
-	rows, err := s.db.Query(ctx, `SELECT id, name, platform, content_format, status FROM platform_account
-		WHERE workspace_id=$1 ORDER BY created_at LIMIT 20`, id.WorkspaceID)
+	accountQuery := `SELECT id, name, platform, content_format, status FROM platform_account
+		WHERE workspace_id=$1 ORDER BY created_at LIMIT 20`
+	accountArgs := []any{id.WorkspaceID}
+	if st.ExecutionOrigin == "routine" {
+		accountQuery = `SELECT id, name, platform, content_format, status FROM platform_account
+			WHERE workspace_id=$1 AND id=$2 ORDER BY created_at LIMIT 1`
+		accountArgs = append(accountArgs, st.AccountID)
+	}
+	rows, err := s.db.Query(ctx, accountQuery, accountArgs...)
 	if err != nil {
 		return p, err
 	}
@@ -181,25 +188,27 @@ func (s *Server) agentEnvPayload(ctx context.Context, st *agentRunState) (agentE
 		p.AllDomains = append(p.AllDomains, map[string]any{"name": d.Name, "desc": d.Desc})
 	}
 
-	cards, err := s.db.Query(ctx, `SELECT id, tool_name, target_key, status FROM agent_action
-		WHERE conversation_id=$1 AND status IN ('pending','executing','needs_input')
-		ORDER BY created_at DESC LIMIT 10`, st.ConversationID)
-	if err != nil {
-		return p, err
-	}
-	defer cards.Close()
-	for cards.Next() {
-		var aid uuid.UUID
-		var tool, target, status string
-		if err := cards.Scan(&aid, &tool, &target, &status); err != nil {
+	if st.ExecutionOrigin != "routine" {
+		cards, err := s.db.Query(ctx, `SELECT id, tool_name, target_key, status FROM agent_action
+			WHERE conversation_id=$1 AND status IN ('pending','executing','needs_input')
+			ORDER BY created_at DESC LIMIT 10`, st.ConversationID)
+		if err != nil {
 			return p, err
 		}
-		p.OpenCards = append(p.OpenCards, map[string]any{
-			"action_id": aid.String(), "tool": tool, "target": target, "status": status,
-		})
-	}
-	if err := cards.Err(); err != nil {
-		return p, err
+		defer cards.Close()
+		for cards.Next() {
+			var aid uuid.UUID
+			var tool, target, status string
+			if err := cards.Scan(&aid, &tool, &target, &status); err != nil {
+				return p, err
+			}
+			p.OpenCards = append(p.OpenCards, map[string]any{
+				"action_id": aid.String(), "tool": tool, "target": target, "status": status,
+			})
+		}
+		if err := cards.Err(); err != nil {
+			return p, err
+		}
 	}
 
 	if id.Role == "viewer" {

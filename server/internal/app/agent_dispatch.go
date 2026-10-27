@@ -26,11 +26,14 @@ type agentPrincipalKey struct{}
 
 // agentPrincipal 标识一次工具调用来自哪条会话、哪个工作区、哪次运行、哪张卡片。
 type agentPrincipal struct {
-	SessionID      uuid.UUID
-	WorkspaceID    uuid.UUID
-	ConversationID uuid.UUID
-	RunID          uuid.UUID
-	ActionID       uuid.UUID
+	SessionID           uuid.UUID
+	UserID              uuid.UUID
+	WorkspaceID         uuid.UUID
+	ConversationID      uuid.UUID
+	RunID               uuid.UUID
+	ActionID            uuid.UUID
+	RoutineID           uuid.UUID
+	RoutineOccurrenceID uuid.UUID
 }
 
 func withAgentPrincipal(ctx context.Context, p agentPrincipal) context.Context {

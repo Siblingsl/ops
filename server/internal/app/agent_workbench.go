@@ -40,6 +40,9 @@ func agentWorkbenchFeatures() map[string]bool {
 	if features["goals"] && (!features["event_resume"] || !features["run_control"] || !features["plans"]) {
 		features["goals"] = false
 	}
+	if features["routines"] && (!features["event_resume"] || !features["run_control"] || !features["plans"] || !features["goals"] || !features["artifacts"]) {
+		features["routines"] = false
+	}
 	return features
 }
 

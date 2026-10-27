@@ -280,6 +280,18 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 进程内分发器：不读 Cookie，改用 loadIdentityBySession（16 文档第 2.3 节「身份」第 3 项）。
 		if p := agentPrincipalOf(r.Context()); p != nil {
+			if p.RoutineID != uuid.Nil {
+				id, err := s.loadAgentRoutinePrincipal(r.Context(), p)
+				if err != nil {
+					writeError(w, r, errUnauthenticated)
+					return
+				}
+				if trace, ok := r.Context().Value(requestTraceKey{}).(*requestTrace); ok {
+					trace.WorkspaceID = id.WorkspaceID
+				}
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxMember, id)))
+				return
+			}
 			id, err := s.loadIdentityBySession(r.Context(), p.SessionID)
 			if err != nil {
 				writeError(w, r, errUnauthenticated)

@@ -23,6 +23,7 @@ func (s *Server) RunJobs(ctx context.Context) {
 		case <-t.C:
 			s.runJobsOnce(ctx)
 		case <-ct.C:
+			s.runAgentRoutines(ctx)
 			s.collectHot(ctx)
 			s.collectReferences(ctx)
 			s.dailyBackground(ctx)
@@ -32,6 +33,7 @@ func (s *Server) RunJobs(ctx context.Context) {
 }
 
 func (s *Server) runJobsOnce(ctx context.Context) {
+	s.runAgentRoutines(ctx)
 	if _, err := s.db.Exec(ctx, `DELETE FROM session WHERE expires_at < now()`); err != nil {
 		slog.Error("清理过期会话失败", "err", err)
 	}

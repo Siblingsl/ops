@@ -8,6 +8,7 @@ export interface AgentModel {
   provider_id: string
   provider_name: string
   model: string
+  execution_location?: 'server' | 'desktop' | string
   vision: boolean
   is_default: boolean
 }
