@@ -72,7 +72,8 @@ jobs:
       - name: Test
         env:
           OPS_TEST_ADMIN_URL: postgres://ops:ops_ci@localhost:5432/postgres?sslmode=disable
-        run: go test ./...
+        # OPT-02 validates p95 degradation; parallel package load makes its 20% threshold nondeterministic.
+        run: go test -p 1 ./...
       - name: Stop bounded document parser workers
         if: always()
         run: |
