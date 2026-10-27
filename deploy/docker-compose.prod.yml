@@ -71,6 +71,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=4m
     environment:
+      GOMEMLIMIT: "192MiB"
       OPS_DOCUMENT_PARSER_SOCKET: /run/ops-parser/parser.sock
     volumes:
       - parser_a_socket:/run/ops-parser
@@ -96,6 +97,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=4m
     environment:
+      GOMEMLIMIT: "192MiB"
       OPS_DOCUMENT_PARSER_SOCKET: /run/ops-parser/parser.sock
     volumes:
       - parser_b_socket:/run/ops-parser

@@ -53,6 +53,7 @@ jobs:
               --network none --read-only --memory 256m --memory-swap 256m --cpus 0.5 \
               --pids-limit 32 --cap-drop ALL --security-opt no-new-privileges:true \
               --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,noexec,nosuid,size=4m \
+              --env GOMEMLIMIT=192MiB \
               --env OPS_DOCUMENT_PARSER_SOCKET=/run/ops-parser/parser.sock \
               --volume "$socket_dir:/run/ops-parser" ops-parser:ci
             for attempt in $(seq 1 30); do
@@ -65,6 +66,7 @@ jobs:
             fi
             limits=$(docker inspect --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.NetworkMode}} {{.HostConfig.ReadonlyRootfs}}' "$container_name")
             test "$limits" = "268435456 268435456 none true"
+            docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container_name" | grep -qx 'GOMEMLIMIT=192MiB'
           done
           echo "OPS_DOCUMENT_PARSER_SOCKETS=$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-a/parser.sock,$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-b/parser.sock" >> "$GITHUB_ENV"
       - name: Test
@@ -158,6 +160,7 @@ jobs:
               --network none --read-only --memory 256m --memory-swap 256m --cpus 0.5 \
               --pids-limit 32 --cap-drop ALL --security-opt no-new-privileges:true \
               --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,noexec,nosuid,size=4m \
+              --env GOMEMLIMIT=192MiB \
               --env OPS_DOCUMENT_PARSER_SOCKET=/run/ops-parser/parser.sock \
               --volume "$socket_dir:/run/ops-parser" ops-parser:ci
             for attempt in $(seq 1 30); do
@@ -170,6 +173,7 @@ jobs:
             fi
             limits=$(docker inspect --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.NetworkMode}} {{.HostConfig.ReadonlyRootfs}}' "$container_name")
             test "$limits" = "268435456 268435456 none true"
+            docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container_name" | grep -qx 'GOMEMLIMIT=192MiB'
           done
           echo "OPS_DOCUMENT_PARSER_SOCKETS=$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-e2e-${{ matrix.shard }}-a/parser.sock,$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-e2e-${{ matrix.shard }}-b/parser.sock" >> "$GITHUB_ENV"
       - uses: pnpm/action-setup@v4
