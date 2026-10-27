@@ -7,6 +7,7 @@ import { confirm } from '@/components/dialog'
 import { BackfillForm, PostPushTodos } from '@/components/backfill'
 import { Button, Card, Empty, HumanGate, Notice, PageLoading, Textarea } from '@/components/ui'
 import { ApiError, errorMessage, get, post, rawRequest } from '@/lib/api'
+import { assetUrl } from '@/lib/api-base'
 import { copyText, fmtTime } from '@/lib/format'
 import type { Work } from '@/lib/types'
 import { useCanWrite } from '@/lib/session'
@@ -281,7 +282,7 @@ export function ToutiaoPack({ work, setWork, refresh }: { work: Work; setWork: (
             </div>
             {pack.images.length > 0 ? <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
               {pack.images.map((image, index) => <div key={image.asset_id} className="min-w-0 overflow-hidden rounded-lg border border-mist-200">
-                <img src={image.url} alt={image.uses?.[0]?.alt || image.alt_text || ''} loading="lazy" className="aspect-[4/3] w-full bg-mist-50 object-contain" />
+                <img src={assetUrl(image.url)} alt={image.uses?.[0]?.alt || image.alt_text || ''} loading="lazy" className="aspect-[4/3] w-full bg-mist-50 object-contain" />
                 <div className="space-y-1 p-2"><p className="truncate text-xs font-semibold text-mist-700">{String(index + 1).padStart(2, '0')} · {image.file.split('/').pop()}</p><p className="break-words text-[11px] leading-relaxed text-mist-500">{imageLocation(image)}</p>{image.ai_generated && <p className="text-[11px] text-gamboge-700">保留 AI 生成标识，请发布前核对</p>}</div>
               </div>)}
             </div> : <p className="text-[13px] text-mist-500">当前作品没有需要导出的图片。</p>}

@@ -10,6 +10,7 @@ import { type EditorHandle, PlainEditor, RichEditor } from '@/components/section
 import { Badge, Button, Card, cn, Field, Input, Notice, PageLoading, platformFormatLabel, platformLabel, PlatformMark } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, get, patch, stream } from '@/lib/api'
+import { assetHtml } from '@/lib/api-base'
 import { type AIRefs, parseTopics, runeLen } from '@/lib/format'
 import type { Section, Work } from '@/lib/types'
 import { TagSuggest } from './editor-tools'
@@ -249,7 +250,7 @@ export default function Compare() {
                 {sources.length === 0 ? <p className="text-[13px] text-mist-400">（对应的源段落已删除）</p> : sources.map((x) => (
                   <div key={x.id}>
                     {x.heading && <div className="mb-1.5 text-[13.5px] font-semibold text-mist-700">{x.heading}</div>}
-                    <div className="md text-[14px] leading-[1.85] text-mist-600" dangerouslySetInnerHTML={{ __html: marked.parse(x.content_md, { async: false }) as string }} />
+                    <div className="md text-[14px] leading-[1.85] text-mist-600" dangerouslySetInnerHTML={{ __html: assetHtml(marked.parse(x.content_md, { async: false }) as string) }} />
                   </div>
                 ))}
                 {diffBy.get(s.id)?.changed && <SourceDiffNote item={diffBy.get(s.id)!} />}

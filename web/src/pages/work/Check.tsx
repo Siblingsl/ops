@@ -9,6 +9,7 @@ import { Dialog } from '@/components/dialog'
 import { aiError } from '@/lib/ai-error'
 import { Badge, Button, Card, cn, HumanGate, Notice, PageLoading, platformLabel, Textarea } from '@/components/ui'
 import { ApiError, errorMessage, get, patch, post } from '@/lib/api'
+import { assetHtml } from '@/lib/api-base'
 import { htmlStats, renderWechat } from '@/lib/render'
 import { useCanWrite, useMe } from '@/lib/session'
 import type { CheckItem, CheckRun, ComicPanel, Section, Variant, Work } from '@/lib/types'
@@ -160,7 +161,7 @@ function SectionView({ section, index, items, active, onPick, onSaved, editable,
     }, 50)
   }, [editSignal?.n]) // eslint-disable-line react-hooks/exhaustive-deps
   const marks = items.filter((i) => i.matched_text).map((i) => ({ text: i.matched_text, id: i.id, tone: i.category === 'fact' ? 'blue' : i.category === 'format' ? 'red' : 'gamboge' }))
-  const html = useMemo(() => highlight(marked.parse(section.content_md, { async: false }) as string, marks, active), [section.content_md, marks, active])
+  const html = useMemo(() => assetHtml(highlight(marked.parse(section.content_md, { async: false }) as string, marks, active)), [section.content_md, marks, active])
   const save = async () => {
     setSaving(true)
     try {

@@ -4,6 +4,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { errorMessage, get, post } from '@/lib/api'
+import { apiUrl } from '@/lib/api-base'
 import type { AIJob, AppNotification } from '@/lib/types'
 import { usePageVisible } from '@/lib/visibility'
 import { cn } from './ui'
@@ -24,7 +25,8 @@ function useNotificationStream(visible: boolean) {
     let retriedImmediately = false
     const open = () => {
       if (!alive || document.hidden) return
-      const source = new EventSource('/api/v1/notifications/stream')
+      // EventSource 不能带自定义头，跨源部署时只能靠 withCredentials 携带会话 Cookie（D-153）。
+      const source = new EventSource(apiUrl('/notifications/stream'), { withCredentials: true })
       es = source
       source.onopen = () => {
         if (!alive || document.hidden || es !== source) return

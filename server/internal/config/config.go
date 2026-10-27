@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,6 +23,13 @@ type Config struct {
 	MockListen   string
 	PublicIP     string
 	CookieSecure bool
+	// CookieSameSite 是会话 Cookie 的 SameSite 策略（D-153）。默认 Lax：
+	// 前端与后端同站（同一 eTLD+1 的不同子域）时 Lax 仍会随跨源请求发送，
+	// 只有把前端放到完全不同的站点时才需要改成 none（同时必须 Secure）。
+	CookieSameSite http.SameSite
+	// CORSOrigins 是允许跨源调用 API 的前端来源白名单（D-153）。为空表示不启用 CORS，
+	// 即只允许同源访问（本地开发、后端自己托管前端、桌面端内嵌页面都走同源）。
+	CORSOrigins []string
 	// DesktopAIEnabled is an explicit global kill switch for desktop model routing.
 	DesktopAIEnabled bool
 	// DesktopPlatformEnabled is an explicit global kill switch for platform collection
@@ -109,6 +117,38 @@ func Load() (*Config, error) {
 		c.CookieSecure = !c.Dev
 	}
 
+	// D-153：前端托管到 Cloudflare Pages 后，页面来源与 API 来源不同（同站不同源），
+	// 会话 Cookie 仍用 Lax；只有跨站部署才需要 none。
+	c.CookieSameSite = http.SameSiteLaxMode
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("OPS_COOKIE_SAMESITE"))); v {
+	case "", "lax":
+		c.CookieSameSite = http.SameSiteLaxMode
+	case "strict":
+		c.CookieSameSite = http.SameSiteStrictMode
+	case "none":
+		if !c.CookieSecure {
+			return nil, errors.New("OPS_COOKIE_SAMESITE=none 必须同时设置 OPS_COOKIE_SECURE=1")
+		}
+		c.CookieSameSite = http.SameSiteNoneMode
+	default:
+		return nil, errors.New("OPS_COOKIE_SAMESITE 只能为 lax/strict/none")
+	}
+
+	// D-153：跨源前端来源白名单，逗号分隔，例如 https://web.88813888.xyz。
+	// 留空即不启用 CORS，行为与改造前完全一致。
+	if raw := strings.TrimSpace(os.Getenv("OPS_CORS_ORIGINS")); raw != "" {
+		for _, item := range strings.Split(raw, ",") {
+			origin := normalizeOrigin(item)
+			if origin == "" {
+				continue
+			}
+			c.CORSOrigins = append(c.CORSOrigins, origin)
+		}
+		if len(c.CORSOrigins) == 0 {
+			return nil, errors.New("OPS_CORS_ORIGINS 中没有合法的来源（应形如 https://web.88813888.xyz）")
+		}
+	}
+
 	if raw := os.Getenv("OPS_MASTER_KEY"); raw != "" {
 		key, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil || len(key) != 32 {
@@ -136,4 +176,25 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// normalizeOrigin 把配置里的一项整理成 scheme://host[:port] 形式：
+// 去掉首尾空白与末尾的斜杠，丢掉带路径或查询串的非法项。
+func normalizeOrigin(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return ""
+	}
+	v = strings.TrimSuffix(v, "/")
+	if strings.ContainsAny(v, "?#") {
+		return ""
+	}
+	scheme, rest, ok := strings.Cut(v, "://")
+	if !ok || (scheme != "http" && scheme != "https") {
+		return ""
+	}
+	if rest == "" || strings.Contains(rest, "/") {
+		return ""
+	}
+	return scheme + "://" + rest
 }

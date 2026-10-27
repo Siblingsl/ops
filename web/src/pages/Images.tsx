@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
 import { Button, Card, cn, Empty, Input, PageHeader, Select, Spinner, Textarea } from '@/components/ui'
 import { errorMessage, get, patch, post } from '@/lib/api'
+import { assetUrl } from '@/lib/api-base'
 import { fmtNum, relTime } from '@/lib/format'
 import { useAccounts, useCanWrite } from '@/lib/session'
 import type { LibraryAsset } from '@/lib/types'
@@ -61,7 +62,7 @@ export default function ImagesPage() {
   const copyURL = async () => {
     if (!open) return
     try {
-      await navigator.clipboard.writeText(open.url)
+      await navigator.clipboard.writeText(assetUrl(open.url))
       toast.success('已复制图片链接')
     } catch { toast.error('浏览器不允许自动复制，请右键图片选择「复制图片地址」。') }
   }
@@ -99,7 +100,7 @@ export default function ImagesPage() {
           {visibleList.map((a) => (
             <button key={a.id} type="button" onClick={() => { setAltText(a.alt_text ?? ''); setOpen(a) }}
               className="group relative cursor-pointer overflow-hidden rounded-xl border border-mist-200 bg-mist-50 text-left transition hover:border-ink-400">
-              <img src={`${a.url}?variant=256`} alt={a.alt_text || ''} loading="lazy" className="aspect-square w-full object-cover" />
+              <img src={`${assetUrl(a.url)}?variant=256`} alt={a.alt_text || ''} loading="lazy" className="aspect-square w-full object-cover" />
               {a.ai_generated && <span className="absolute left-1.5 top-1.5 rounded bg-mist-900/70 px-1.5 text-[10.5px] text-white">AI</span>}
               <div className="bg-white px-2 py-1.5">
                 <div className="truncate text-[12.5px] font-medium text-mist-800">{a.work_title || '未命名'}</div>
@@ -143,7 +144,7 @@ export default function ImagesPage() {
               <Link to={`/works/${open.work_id}`}><Button variant="secondary" icon={<ExternalLink className="size-3.5" />}>打开所在作品</Button></Link>
             </div>
           </div>}>
-          <img src={open.url} alt={open.alt_text || ''} className="max-h-[55vh] w-full rounded-lg object-contain" />
+          <img src={assetUrl(open.url)} alt={open.alt_text || ''} className="max-h-[55vh] w-full rounded-lg object-contain" />
           <p className="mt-2 text-[12px] text-mist-500" data-testid="image-source">
             来自《{open.work_title || '未命名'}》{open.account_name ? ` · ${open.account_name}` : ''}。{targetWorkId
               ? `可以直接加入《${targetWorkTitle || '当前作品'}》，同一张图不会重复占用上传额度。`

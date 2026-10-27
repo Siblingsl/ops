@@ -9,6 +9,7 @@ import { CropPreview } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, PageState, Switch } from '@/components/ui'
 import { ApiError, errorMessage, get, post, stream } from '@/lib/api'
+import { assetHtml, assetUrl } from '@/lib/api-base'
 import { runeLen } from '@/lib/format'
 import { HTML_BYTE_LIMIT, HTML_CHAR_LIMIT } from '@/lib/render'
 import { useCanWrite } from '@/lib/session'
@@ -139,7 +140,8 @@ export default function Push() {
   }
 
   const copyHTML = async () => {
-    await navigator.clipboard.writeText(html)
+    // 只改剪贴板内容，不改发往后端的 html（后端按相对路径解析资产）。
+    await navigator.clipboard.writeText(assetHtml(html))
     toast.success('已复制 HTML，可以粘贴到公众号编辑器')
   }
 
@@ -280,7 +282,7 @@ export default function Push() {
                   <div className="grid grid-cols-3 gap-1 rounded-lg border border-mist-200 p-1.5">
                     {work.panels.slice(0, 6).map((panel) => {
                       const a = work.assets.find((x) => x.id === panel.asset_id)
-                      return a ? <img key={panel.id} src={a.url} alt="" className="aspect-square rounded object-cover" /> : (
+                      return a ? <img key={panel.id} src={assetUrl(a.url)} alt="" className="aspect-square rounded object-cover" /> : (
                         <div key={panel.id} className="aspect-square rounded bg-mist-100" />
                       )
                     })}
@@ -290,12 +292,12 @@ export default function Push() {
               ) : cover && p.cover_crops ? (
                 <div className="w-56 shrink-0 space-y-2">
                   <div className="overflow-hidden rounded-lg border border-mist-200">
-                    <CropPreview src={cover.url} box={p.cover_crops['2.35_1']} aspect={2.35} />
+                    <CropPreview src={assetUrl(cover.url)} box={p.cover_crops['2.35_1']} aspect={2.35} />
                     <div className="line-clamp-2 px-2.5 py-2 text-[13px] font-semibold leading-snug text-mist-800">{p.title}</div>
                   </div>
                   <div className="flex items-center gap-2 rounded-lg border border-mist-200 p-2">
                     <div className="line-clamp-2 flex-1 text-[11.5px] text-mist-600">{p.title}</div>
-                    <CropPreview src={cover.url} box={p.cover_crops['1_1']} aspect={1} className="w-10 rounded" />
+                    <CropPreview src={assetUrl(cover.url)} box={p.cover_crops['1_1']} aspect={1} className="w-10 rounded" />
                   </div>
                 </div>
               ) : (

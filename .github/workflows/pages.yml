@@ -1,0 +1,68 @@
+name: Pages
+
+# web 前端发布到 Cloudflare Pages（D-153）。后端仍由 Deploy 工作流推到云服务器。
+# 只有 web 目录或本工作流变化时才构建，避免纯后端提交白白触发一次前端发布。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: pages-production
+  cancel-in-progress: false
+
+env:
+  # 项目名与 API 基址都走仓库变量，换域名时不用改工作流。
+  CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT || 'ops-web' }}
+  OPS_API_BASE: ${{ vars.OPS_API_BASE || 'https://ops.88813888.xyz' }}
+
+jobs:
+  pages:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      # 跨源构建：页面在 CF 域名上，API 在 ops.88813888.xyz。
+      # 变量缺失时回落到生产后端域名，保证首次接入不需要额外配置就能跑通。
+      - name: Build
+        working-directory: web
+        run: |
+          echo "OPS_API_BASE=$OPS_API_BASE"
+          pnpm run build
+
+      # 首次部署时项目可能还不存在；已存在会返回错误，这里只做尽力而为的创建。
+      - name: Ensure Pages project
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@4 pages project create "$CF_PAGES_PROJECT" --production-branch=main || \
+            echo "项目已存在或创建失败，继续尝试直接部署"
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy web/dist --project-name=${{ env.CF_PAGES_PROJECT }} --branch=main
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}

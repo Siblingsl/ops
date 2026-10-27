@@ -8,6 +8,7 @@ import { Button, Card, cn, Input, Select, Spinner } from '@/components/ui'
 import { XhsCardMaker } from '@/components/xhs-cards'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
+import { assetUrl } from '@/lib/api-base'
 import type { Asset, CropBox, LibraryAsset, Work } from '@/lib/types'
 import { waitJob } from '@/lib/v3'
 import { useRegisterFlush } from './work-save'
@@ -170,7 +171,7 @@ export function ImagesCard({ work, setWork, readOnly, upload, hidden = false }: 
               <div className="grid grid-cols-3 gap-3">
                 {coverCands.map((a) => (
                   <div key={a.id} className="overflow-hidden rounded-lg border border-mist-200">
-                    <img src={a.url} alt="封面候选" className="h-28 w-full object-cover" />
+                    <img src={assetUrl(a.url)} alt="封面候选" className="h-28 w-full object-cover" />
                     <div className="p-2"><Button size="sm" variant="secondary" className="w-full" onClick={() => { setCoverCands(null); void setCover(a) }}>设为封面</Button></div>
                   </div>
                 ))}
@@ -197,8 +198,8 @@ export function ImagesCard({ work, setWork, readOnly, upload, hidden = false }: 
         <div className="mb-4 flex items-center gap-4 rounded-xl bg-mist-50 p-3">
           {cover && work.cover_crops ? (
             <>
-              <CropPreview src={cover.url} box={work.cover_crops['2.35_1']} aspect={2.35} className="w-40 rounded-md" />
-              <CropPreview src={cover.url} box={work.cover_crops['1_1']} aspect={1} className="w-[68px] rounded-md" />
+              <CropPreview src={assetUrl(cover.url)} box={work.cover_crops['2.35_1']} aspect={2.35} className="w-40 rounded-md" />
+              <CropPreview src={assetUrl(cover.url)} box={work.cover_crops['1_1']} aspect={1} className="w-[68px] rounded-md" />
               <div className="text-[13px] text-mist-600">已设置封面<div className="text-xs text-mist-400">左：消息列表大图，右：转发卡片小图</div></div>
               {!readOnly && <Button size="sm" variant="ghost" className="ml-auto" icon={<Crop className="size-3.5" />} onClick={() => void setCover(cover)}>调整裁剪</Button>}
             </>
@@ -217,7 +218,7 @@ export function ImagesCard({ work, setWork, readOnly, upload, hidden = false }: 
         <div className="grid grid-cols-3 gap-3 md:grid-cols-4" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files) }}>
           {work.assets.map((a, i) => (
             <div key={a.id} className="group relative overflow-hidden rounded-lg border border-mist-200 bg-mist-50">
-              <img src={a.url} alt="" className={cn('w-full object-cover', wx ? 'aspect-[4/3]' : xhs ? 'aspect-[3/4]' : 'aspect-square')} />
+              <img src={assetUrl(a.url)} alt="" className={cn('w-full object-cover', wx ? 'aspect-[4/3]' : xhs ? 'aspect-[3/4]' : 'aspect-square')} />
               <span className="absolute left-1.5 top-1.5 rounded bg-mist-900/60 px-1.5 text-[11px] font-medium text-white">{String(i + 1).padStart(2, '0')}</span>
               {a.id === work.cover_asset_id && <span className="absolute right-1.5 top-1.5 rounded bg-gamboge-400 px-1.5 text-[11px] font-bold text-mist-900">封面</span>}
               {a.ai_generated && <span className="absolute left-1.5 bottom-8 rounded bg-mist-900/70 px-1.5 text-[10px] text-white">AI</span>}
@@ -253,13 +254,13 @@ export function ImagesCard({ work, setWork, readOnly, upload, hidden = false }: 
         </div>
       )}
       {cropFor && (
-        <CoverCropDialog open onClose={() => setCropFor(null)} src={cropFor.url} width={cropFor.width} height={cropFor.height}
+        <CoverCropDialog open onClose={() => setCropFor(null)} src={assetUrl(cropFor.url)} width={cropFor.width} height={cropFor.height}
           initial={coverInit ?? defaultCrops(cropFor.width, cropFor.height)} onSave={saveCrop} />
       )}
       {library && <LibraryDialog work={work} onClose={() => setLibrary(false)} onPicked={(a) => setWork({ ...work, assets: [...work.assets, a] })} />}
       {xhs && <XhsCardMaker workId={work.id} open={cardMaker} onClose={() => setCardMaker(false)} onAdded={(a) => setWork({ ...work, assets: [...work.assets, a] })} />}
       {ratioCrop && (
-        <AssetCropDialog open onClose={() => setRatioCrop(null)} src={ratioCrop.url} width={ratioCrop.width} height={ratioCrop.height}
+        <AssetCropDialog open onClose={() => setRatioCrop(null)} src={assetUrl(ratioCrop.url)} width={ratioCrop.width} height={ratioCrop.height}
           onSave={async (box) => {
             try {
               const a = await post<Asset>(`/assets/${ratioCrop.id}/crop`, { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, aspect: box.aspect })
@@ -314,7 +315,7 @@ function LibraryDialog({ work, onClose, onPicked }: { work: Work; onClose: () =>
           {list.map((a) => (
             <button key={a.id} type="button" disabled={!!busy} onClick={() => reuse(a)} title={`《${a.work_title || '未命名'}》 · ${a.account_name}`}
               className="group relative cursor-pointer overflow-hidden rounded-lg border border-mist-200 bg-mist-50 transition hover:border-ink-400">
-              <img src={a.url} alt="" loading="lazy" className="aspect-square w-full object-cover" />
+              <img src={assetUrl(a.url)} alt="" loading="lazy" className="aspect-square w-full object-cover" />
               {a.ai_generated && <span className="absolute left-1 top-1 rounded bg-mist-900/70 px-1 text-[10px] text-white">AI</span>}
               <span className="absolute inset-x-0 bottom-0 truncate bg-mist-900/60 px-1.5 py-0.5 text-[10.5px] text-white">{a.work_title || '未命名'}</span>
               {busy === a.id && <span className="absolute inset-0 flex items-center justify-center bg-white/60"><Loader2 className="size-5 animate-spin text-ink-600" /></span>}

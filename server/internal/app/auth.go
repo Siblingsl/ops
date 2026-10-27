@@ -271,7 +271,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, userID, wo
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: token, Path: "/", Expires: expires,
-		HttpOnly: true, Secure: s.cfg.CookieSecure, SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: s.cfg.CookieSecure, SameSite: s.cookieSameSite(),
 	})
 	return nil
 }
@@ -414,6 +414,15 @@ func (s *Server) scanIdentity(ctx context.Context, column string, arg any, allow
 
 func (s *Server) csrfToken(sessionID uuid.UUID) string {
 	return s.box.HMAC("csrf:" + sessionID.String())
+}
+
+// cookieSameSite 返回会话 Cookie 的 SameSite（D-153）。配置零值（测试直接构造
+// config.Config）时回落到 Lax，与改造前一致。
+func (s *Server) cookieSameSite() http.SameSite {
+	if s.cfg.CookieSameSite == 0 {
+		return http.SameSiteLaxMode
+	}
+	return s.cfg.CookieSameSite
 }
 
 func (s *Server) requireCSRF(next http.Handler) http.Handler {
@@ -692,7 +701,7 @@ func (s *Server) authRenewSession(w http.ResponseWriter, r *http.Request) error 
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: cookie.Value, Path: "/", Expires: expires,
-		HttpOnly: true, Secure: s.cfg.CookieSecure, SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: s.cfg.CookieSecure, SameSite: s.cookieSameSite(),
 	})
 	s.audit(r.Context(), "session_renewal", "user", id.UserID.String(), "ok", map[string]any{"expires_at": expires})
 	return ok(w, map[string]any{"ok": true, "session_expires_at": expires})

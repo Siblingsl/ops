@@ -8,6 +8,7 @@ import { DeriveDialog } from '@/components/derive'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Badge, Button, cn, Field, Input, MoreMenu, Notice, PageLoading, platformFormatLabel, platformLabel, PlatformMark, Select, StatusBadge, Switch } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
+import { apiBase } from '@/lib/api-base'
 import { fmtTime } from '@/lib/format'
 import { currentWorkQueryKey, rememberAccount, useCanWrite, useMe } from '@/lib/session'
 import { DESKTOP_LEAVE_GUARD_REQUEST } from '@/lib/desktop-settings'
@@ -478,7 +479,9 @@ export default function WorkLayout() {
       emitEditor({ type: 'flush', wait })
       await Promise.all([Promise.all(wait), flushWork(work.id)])
       const current = await get<Work>(`/works/${work.id}`)
-      const url = URL.createObjectURL(new Blob([markdownForWork(current, window.location.origin)], { type: 'text/markdown;charset=utf-8' }))
+      // D-153：跨源部署时图片要指向 API 域名，而不是前端页面域名。
+      const assetOrigin = apiBase() || window.location.origin
+      const url = URL.createObjectURL(new Blob([markdownForWork(current, assetOrigin)], { type: 'text/markdown;charset=utf-8' }))
       const link = document.createElement('a')
       const filename = (current.title.trim() || '未命名作品').replace(/[\\/:*?"<>|]/g, '_').replace(/[. ]+$/, '') || '未命名作品'
       link.href = url

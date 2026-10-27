@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { ApiError, get } from '@/lib/api'
+import { assetHtml, assetUrl } from '@/lib/api-base'
 import { CUSTOM_THEME_ID, customTheme, renderWechat, themeById } from '@/lib/render'
 import type { CustomTheme } from '@/lib/types'
 
@@ -44,9 +45,10 @@ export default function PublicPreview() {
     const theme = data.theme === CUSTOM_THEME_ID && data.custom_theme
       ? customTheme(data.custom_theme)
       : themeById(data.theme)
+    // D-153：公开预览的图片仍由后端提供，跨源部署时要指到 API 域名。
     return renderWechat(data.sections, theme, data.assets).replace(
       /\/api\/v1\/assets\/([0-9a-f-]{36})\/file/g,
-      `/api/v1/public-previews/${token}/assets/$1`,
+      assetUrl(`/api/v1/public-previews/${token}/assets/$1`),
     )
   }, [data, token])
 
@@ -59,9 +61,9 @@ export default function PublicPreview() {
             <p className="mb-5 text-sm text-[#666]">{data.account_name} · 内容预览，不代表平台已发布</p>
             {data.content_format === 'micro_post'
               ? <div className="whitespace-pre-wrap text-[16px] leading-[1.8]" data-testid="toutiao-preview-body">{data.body_text}</div>
-              : <div className="text-[16px] leading-[1.8] [&_h1]:mb-5 [&_h1]:text-2xl [&_h1]:font-bold [&_h2]:my-4 [&_h2]:text-xl [&_h2]:font-bold [&_p]:my-3 [&_img]:max-w-full [&_img]:h-auto [&_a]:text-[#315c62] [&_a]:underline" data-testid="toutiao-preview-body" dangerouslySetInnerHTML={{ __html: data.article_html ?? '' }} />}
+              : <div className="text-[16px] leading-[1.8] [&_h1]:mb-5 [&_h1]:text-2xl [&_h1]:font-bold [&_h2]:my-4 [&_h2]:text-xl [&_h2]:font-bold [&_p]:my-3 [&_img]:max-w-full [&_img]:h-auto [&_a]:text-[#315c62] [&_a]:underline" data-testid="toutiao-preview-body" dangerouslySetInnerHTML={{ __html: assetHtml(data.article_html ?? '') }} />}
             {!!data.topics?.length && <p className="my-5 flex flex-wrap gap-2 text-sm text-[#315c62]">{data.topics.map(topic => <span key={topic}>#{topic.replace(/^#/, '')}</span>)}</p>}
-            {data.content_format === 'micro_post' && <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">{data.images?.map(image => <figure key={image.url}><img src={image.url} alt={image.alt_text} className="h-auto max-w-full rounded-lg" />{image.ai_generated && <figcaption className="mt-1 text-xs text-[#666]">AI 生成配图</figcaption>}</figure>)}</div>}
+            {data.content_format === 'micro_post' && <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">{data.images?.map(image => <figure key={image.url}><img src={assetUrl(image.url)} alt={image.alt_text} className="h-auto max-w-full rounded-lg" />{image.ai_generated && <figcaption className="mt-1 text-xs text-[#666]">AI 生成配图</figcaption>}</figure>)}</div>}
             {data.content_format === 'long_article' && data.images?.some(image => image.ai_generated) && <p className="mt-4 text-xs text-[#666]">配图含 AI 生成内容；实际发布时请核对平台声明。</p>}
           </article> : <article className="mx-auto max-w-[680px]">
             <h1 className="mb-3 text-[24px] font-bold leading-snug">{data.title || '（未填写标题）'}</h1>

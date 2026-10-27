@@ -6,7 +6,31 @@ import StarterKit from '@tiptap/starter-kit'
 import { Bold, Heading3, ImagePlus, Italic, Link2, List, ListOrdered, Quote, Redo2, Undo2 } from 'lucide-react'
 import React, { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import { Markdown } from 'tiptap-markdown'
+import { apiBase, assetUrl } from '@/lib/api-base'
 import { cn } from './ui'
+
+// D-153：正文里存的图片地址是相对路径 /api/v1/assets/...（后端推送公众号时按这个格式解析，
+// 存储值不能改）。前端部署在 Cloudflare、后端在云服务器时，相对路径会指向前端域名而 404，
+// 所以只在渲染时补上 API 基址，解析回文档时再剥掉——文档模型里始终是相对路径，
+// getMarkdown() 输出不变，后端推送链路不受影响。
+function relativeAssetUrl(value: string | null): string | null {
+  if (!value) return value
+  const base = apiBase()
+  return base && value.startsWith(`${base}/`) ? value.slice(base.length) : value
+}
+
+const AssetImage = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      src: {
+        default: null,
+        parseHTML: (el: HTMLElement) => relativeAssetUrl(el.getAttribute('src')),
+        renderHTML: (attrs: Record<string, unknown>) => (attrs.src ? { src: assetUrl(String(attrs.src)) } : {}),
+      },
+    }
+  },
+})
 
 export interface EditorHandle {
   selectedText: () => string
@@ -54,7 +78,7 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
     extensions: [
       StarterKit.configure({ heading: { levels: [3] }, codeBlock: false, code: false, horizontalRule: false }),
       Link.configure({ openOnClick: false, autolink: true }),
-      Image,
+      AssetImage,
       Placeholder.configure({ placeholder: placeholder ?? '' }),
       Markdown.configure({ html: false, transformPastedText: true, breaks: false }),
     ],

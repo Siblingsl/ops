@@ -38,6 +38,9 @@ export default defineConfig(async ({ mode }) => {
   return {
     plugins: [react(), tailwindcss()],
     resolve: { alias: { '@': '/src' } },
+    // D-153：OPS_API_BASE 只在跨源部署（Cloudflare Pages）时设置，留空即沿用相对路径。
+    // 用 define 注入而不是 import.meta.env，保证类型声明与默认值集中在一处（src/lib/api-base.ts）。
+    define: { __OPS_API_BASE__: JSON.stringify((env.OPS_API_BASE || '').replace(/\/+$/, '')) },
     server: {
       port: 5173,
       host: true,

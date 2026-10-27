@@ -11,6 +11,7 @@ import { AIFeedback } from '@/components/refs'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Button, cn, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post, rawRequest, stream } from '@/lib/api'
+import { assetUrl } from '@/lib/api-base'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useAccounts, useCurrentAccount, useMe } from '@/lib/session'
 import { useSavePrefs } from '@/lib/v3'
@@ -40,7 +41,7 @@ type DraftAttachment = {
 
 function attachmentVariantURL(value: string, variant: 'thumb' | 'original') {
   // D-153：附件 URL 由后端返回相对路径，跨源部署（前端在 CF、后端在云服务器）时必须先补上 API 基址。
-  const url = new URL(value, window.location.origin)
+  const url = new URL(assetUrl(value), window.location.origin)
   url.searchParams.set('variant', variant)
   return url.href
 }
@@ -354,7 +355,7 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
       <div className={`min-w-0 max-w-[92%] rounded-2xl px-4 py-3 sm:max-w-[82%] ${desktopPresentation ? 'desktop-agent-message-bubble' : ''} ${user ? 'bg-ink-600 text-white' : message.role === 'system' ? 'border border-gamboge-200 bg-gamboge-50 text-gamboge-900' : 'bg-white shadow-card'}`}>
         {message.attachments?.length > 0 && <div className="mb-2 flex flex-wrap gap-2">
           {message.attachments.map((attachment) => attachment.kind === 'image'
-            ? <a key={attachment.id} href={`${attachment.url}?variant=original`} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg"><img src={`${attachment.url}?variant=thumb`} alt={attachment.name} className="size-24 object-cover" /></a>
+            ? <a key={attachment.id} href={attachmentVariantURL(attachment.url, 'original')} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg"><img src={attachmentVariantURL(attachment.url, 'thumb')} alt={attachment.name} className="size-24 object-cover" /></a>
             : <span key={attachment.id} className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs ${user ? 'bg-white/15' : 'bg-mist-100 text-mist-600'}`}><FileText className="size-3.5" />{attachment.name}</span>)}
         </div>}
         {user && !canSeeImages && message.attachments?.some((attachment) => attachment.kind === 'image') && <Notice tone="gamboge" className="mb-2">当前模型不能看图，图片只能用于保存或数据截图识别。</Notice>}
@@ -1583,7 +1584,7 @@ export default function Agent() {
             {(files.length > 0 || restoredAttachments.length > 0) && <div className="mx-auto mb-2 max-w-3xl">
               <div className="flex flex-wrap gap-2">
               {files.map((file) => <div key={file.clientID} aria-label={`${file.file.name} ${file.status}`} className={`flex items-center gap-2 rounded-lg border p-1.5 text-xs ${file.status === 'failed' ? 'border-danger/30 bg-danger/5 text-danger' : 'border-mist-200 bg-mist-50 text-mist-600'}`}>
-                {file.attachment?.kind === 'image' ? <img src={`${file.attachment.url}?variant=thumb`} alt={file.file.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
+                {file.attachment?.kind === 'image' ? <img src={attachmentVariantURL(file.attachment.url, 'thumb')} alt={file.file.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
                 <span className="max-w-40 truncate">{file.file.name}</span>
                 {file.status === 'uploading' && <span role="status">上传中</span>}
                 {file.status === 'ready' && <span>已就绪</span>}
@@ -1591,7 +1592,7 @@ export default function Agent() {
                 <IconButton label={`移除 ${file.file.name}`} className="size-6" onClick={() => void removeFile(file)}><X className="size-3" /></IconButton>
               </div>)}
               {restoredAttachments.map((attachment) => <div key={attachment.id} className="flex items-center gap-2 rounded-lg border border-mist-200 bg-mist-50 p-1.5 text-xs text-mist-600">
-                {attachment.kind === 'image' ? <img src={`${attachment.url}?variant=thumb`} alt={attachment.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
+                {attachment.kind === 'image' ? <img src={attachmentVariantURL(attachment.url, 'thumb')} alt={attachment.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
                 <span className="max-w-40 truncate">{attachment.name}</span><span>从待复核输入恢复</span>
                 <IconButton label={`移除 ${attachment.name}`} className="size-6" onClick={() => setRestoredAttachments((old) => old.filter((item) => item.id !== attachment.id))}><X className="size-3" /></IconButton>
               </div>)}
@@ -1817,3 +1818,4 @@ function Unavailable({ bootstrap, navigate }: { bootstrap: AgentBootstrap; navig
 
   return <div className="flex h-full items-center justify-center p-6"><div className="max-w-md rounded-2xl border border-mist-200 bg-white p-8 text-center shadow-card"><Bot className="mx-auto size-8 text-mist-300" /><h1 className="mt-3 text-lg font-semibold text-mist-800">{title}</h1><p className="mt-2 text-sm text-mist-500">{subtitle}</p>{actionButton}</div></div>
 }
+

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button, Input, Notice, Select } from '@/components/ui'
 import { Dialog } from '@/components/dialog'
 import { errorMessage, get, post } from '@/lib/api'
+import { assetUrl } from '@/lib/api-base'
 
 export interface AgentContextCandidate {
   id: string
@@ -133,7 +134,7 @@ export function ContextPickerDialog({ open, onClose, accountID, conversationID, 
       </div>}
       {candidate && <div className="rounded-lg border border-mist-200 bg-mist-50 p-3">
         <div className="text-xs font-semibold text-mist-600">资料预览</div>
-        {preview?.url && <img src={preview.url} alt={preview.name} className="mt-2 max-h-48 max-w-full rounded object-contain" />}
+        {preview?.url && <img src={assetUrl(preview.url)} alt={preview.name} className="mt-2 max-h-48 max-w-full rounded object-contain" />}
         <p className="mt-2 text-xs text-mist-500">{candidate.name} · {candidate.summary}</p>
         {previewBusy && <p role="status" className="mt-2 flex items-center gap-2 text-xs text-mist-500"><LoaderCircle className="size-3.5 animate-spin" />正在重新鉴权并读取资料…</p>}
         {preview && <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-mist-700">{preview.content || (preview.type === 'image' ? '图片已授权。发送时将按当前模型看图能力读取。' : '资料可用。')}</pre>}

@@ -7,6 +7,7 @@ import { AIFeedback } from '@/components/refs'
 import { Button, Card, cn, Notice } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { errorMessage, get, patch, post } from '@/lib/api'
+import { assetHtml } from '@/lib/api-base'
 import { fmtBytes } from '@/lib/format'
 import { CUSTOM_THEME_ID, customTheme, HTML_BYTE_LIMIT, HTML_CHAR_LIMIT, htmlStats, renderWechat, themeById, themes } from '@/lib/render'
 import { setCustomTheme } from '@/lib/custom-theme-state'
@@ -180,7 +181,7 @@ function WechatPreview() {
   }
   const copy = async () => {
     try {
-      await copyRich(html)
+      await copyRich(assetHtml(html))
       toast.success('已复制排版后的 HTML，可以粘贴到公众号编辑器。正文图片需要在后台重新上传。')
     } catch {
       toast.error('浏览器不允许访问剪贴板')
@@ -254,7 +255,7 @@ function WechatPreview() {
       </aside>
       <div className="flex flex-1 justify-center">
         <PhoneFrame title={work.title} account={work.account_name}>
-          <div data-testid="wechat-rendered-html" dangerouslySetInnerHTML={{ __html: html }} />
+          <div data-testid="wechat-rendered-html" dangerouslySetInnerHTML={{ __html: assetHtml(html) }} />
         </PhoneFrame>
       </div>
     </div>

@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
 import { SkillWebBoundary } from '@/components/skill-web-boundary'
 import { Badge, Button, Card, CardHeader, Empty, Input, PageHeader, PageState, Tabs } from '@/components/ui'
-import { api, errorMessage, get } from '@/lib/api'
+import { api, errorMessage, get, rawRequest } from '@/lib/api'
 import { emptySkillForm, skillFields, skillScopeLabel, type SkillDefinition, type SkillForm, type SkillImpact, type SkillList } from '@/lib/skills'
 import { useAccounts, useMe } from '@/lib/session'
 import { isElectronDesktop } from '@/lib/desktop-presentation.js'
@@ -14,6 +14,26 @@ import SkillEditor from './SkillEditor'
 
 export default function Skills() {
   return isElectronDesktop(navigator.userAgent) ? <SkillWebBoundary /> : <SkillsLibrary />
+}
+
+/**
+ * exportSkill 走 rawRequest 取 blob 再触发下载（D-153）。
+ * 直接给 <a href download> 在跨源部署时既不会带会话 Cookie，也读不到 Content-Disposition，
+ * 因此统一改走带凭据的请求。
+ */
+async function exportSkill(id: string) {
+  try {
+    const res = await rawRequest('GET', `/skills/${id}/export`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = '写作技能.md'
+    link.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 4000)
+  } catch (e) {
+    toast.error(errorMessage(e))
+  }
 }
 
 function SkillsLibrary() {
@@ -72,7 +92,7 @@ function SkillsLibrary() {
               <div className="flex shrink-0 flex-wrap items-center gap-1">
                 <Button variant="ghost" size="sm" onClick={() => setSelected({ id: skill.id, mode: 'view' })}>查看详情</Button>
                 <Button variant="ghost" size="sm" onClick={() => setSelected({ id: skill.id, mode: 'copy' })}>另存副本</Button>
-                <a href={`/api/v1/skills/${skill.id}/export`} download="写作技能.md" title="导出 .md" className="rounded p-1.5 text-mist-400 hover:bg-mist-100"><Download className="size-4" /></a>
+                <button type="button" title="导出 .md" onClick={() => void exportSkill(skill.id)} className="rounded p-1.5 text-mist-400 hover:bg-mist-100"><Download className="size-4" /></button>
                 {canEdit(skill) && <button type="button" title="编辑" onClick={() => setSelected({ id: skill.id, mode: 'edit' })} className="rounded p-1.5 text-mist-400 hover:bg-mist-100"><Pencil className="size-4" /></button>}
                 {canEdit(skill) && <DeleteSkillButton skill={skill} onDeleted={() => void refresh()} />}
               </div>

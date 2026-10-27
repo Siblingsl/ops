@@ -7,6 +7,7 @@ import { XhsCardMaker } from '@/components/xhs-cards'
 import { Button, Card, cn, HumanGate, Notice } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, post, rawRequest } from '@/lib/api'
+import { assetUrl } from '@/lib/api-base'
 import { copyText, runeLen } from '@/lib/format'
 import type { Work } from '@/lib/types'
 import { useMe } from '@/lib/session'
@@ -46,7 +47,7 @@ function CopyBlock({ label, meta, text, multiline }: { label: string; meta?: str
 async function saveImages(urls: string[], downloadZip: () => Promise<void>) {
   try {
     const files = await Promise.all(urls.map(async (u, i) => {
-      const b = await (await fetch(u)).blob()
+      const b = await (await fetch(assetUrl(u), { credentials: 'include' })).blob()
       return new File([b], `${String(i + 1).padStart(2, '0')}.${b.type.split('/')[1] || 'jpg'}`, { type: b.type })
     }))
     if (navigator.canShare?.({ files })) {
@@ -290,8 +291,8 @@ export default function Pack() {
             </div>
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
               {images.map((a, i) => a && (
-                <a key={a.id} href={a.url} target="_blank" rel="noreferrer" className="relative overflow-hidden rounded-lg border border-mist-200">
-                  <img src={a.url} alt="" className="aspect-[3/4] w-full object-cover" />
+                <a key={a.id} href={assetUrl(a.url)} target="_blank" rel="noreferrer" className="relative overflow-hidden rounded-lg border border-mist-200">
+                  <img src={assetUrl(a.url)} alt="" className="aspect-[3/4] w-full object-cover" />
                   <span className="absolute left-1.5 top-1.5 rounded bg-mist-900/60 px-1.5 text-[11px] font-medium text-white">{String(i + 1).padStart(2, '0')}</span>
                 </a>
               ))}

@@ -60,6 +60,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
       - run: pnpm run build
+      # D-153：前端要能部署到 Cloudflare Pages（跨源），确认 OPS_API_BASE 真的被注入到产物里。
+      # 默认构建（上一行）保持相对路径，服务端自托管与桌面端不受影响。
+      - name: Build (cross-origin)
+        env:
+          OPS_API_BASE: https://ops.example.invalid
+        run: |
+          pnpm exec vite build --outDir dist-crossorigin
+          # apiUrl() 运行时拼接 `${base}/api/v1${path}`，产物里只需出现 base 本身
+          grep -rlq 'ops\.example\.invalid' dist-crossorigin \
+            || { echo "::error::OPS_API_BASE 没有被注入构建产物，检查 vite.config.ts 的 define"; exit 1; }
 
   e2e:
     strategy:

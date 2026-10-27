@@ -9,6 +9,7 @@ import { aiError } from '@/lib/ai-error'
 import { Badge, Button, Card, CardHeader, cn, Empty, Field, formatLabel, IconButton, Input, Notice, PageHeader, PageLoading, PageState, PlatformMark, Select, Switch, Tabs, Textarea } from '@/components/ui'
 import { HealthRing } from '@/components/health-ring'
 import { del, errorMessage, get, patch, post, put, rawRequest, stream } from '@/lib/api'
+import { assetUrl } from '@/lib/api-base'
 import { relTime, runeLen } from '@/lib/format'
 import { CUSTOM_THEME_ID, customTheme, renderWechat, themes } from '@/lib/render'
 import { setCustomTheme } from '@/lib/custom-theme-state'
@@ -675,7 +676,7 @@ function CharacterDialog({ accountId, editing, onClose }: { accountId: string; e
         <Field label="参考图" hint="用于跨格外貌一致；出图时会写入提示词约束">
           <div className="flex items-start gap-3">
             {preview ? (
-              <img src={preview} alt="" className="size-20 rounded-lg border border-mist-200 object-cover" />
+              <img src={assetUrl(preview)} alt="" className="size-20 rounded-lg border border-mist-200 object-cover" />
             ) : (
               <div className="flex size-20 items-center justify-center rounded-lg border border-dashed border-mist-200 text-[11px] text-mist-400">无图</div>
             )}
@@ -722,7 +723,7 @@ function CharactersTab({ account }: { account: Account }) {
           {list.map((c) => (
             <li key={c.id} className="group flex items-start gap-3 px-5 py-3.5">
               {(c.ref_url || c.ref_asset_id) ? (
-                <img src={c.ref_url || `/api/v1/assets/${c.ref_asset_id}/file`} alt="" className="size-11 shrink-0 rounded-lg object-cover" />
+                <img src={assetUrl(c.ref_url || `/api/v1/assets/${c.ref_asset_id}/file`)} alt="" className="size-11 shrink-0 rounded-lg object-cover" />
               ) : null}
               <div className="min-w-0 flex-1">
                 <div className="text-[14px] font-medium text-mist-800">{c.name}</div>

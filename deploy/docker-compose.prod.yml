@@ -26,6 +26,11 @@ services:
       OPS_MASTER_KEY: ${OPS_MASTER_KEY}
       # 当前为 HTTP 反代；上 HTTPS 后改为 1 或删掉此行
       OPS_COOKIE_SECURE: ${OPS_COOKIE_SECURE:-0}
+      # 跨源前端白名单（D-153）：留空 = 只允许同源（本地开发、后端自托管页面、桌面端）。
+      # Cloudflare Pages 上的 web 前端上线后，在这里填它的来源，例如 https://web.88813888.xyz
+      OPS_CORS_ORIGINS: ${OPS_CORS_ORIGINS:-}
+      # 前端与 API 同属 88813888.xyz 时保持 lax 即可；换成别的站点才需要 none
+      OPS_COOKIE_SAMESITE: ${OPS_COOKIE_SAMESITE:-lax}
       OPS_AI_WORKERS: ${OPS_AI_WORKERS:-3}
       OPS_DB_MAX_CONNS: ${OPS_DB_MAX_CONNS:-20}
       OPS_DATABASE_URL: postgres://ops:${POSTGRES_PASSWORD}@postgres:5432/ops?sslmode=disable

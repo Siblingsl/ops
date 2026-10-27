@@ -115,6 +115,23 @@ jobs:
               curl --noproxy '*' --max-time 10 --resolve ops.88813888.xyz:80:127.0.0.1 -sS -o /dev/null -w 'status=%{http_code}\n' http://ops.88813888.xyz/healthz || true
               echo "=== local nginx HTTPS ==="
               curl --noproxy '*' --max-time 10 --resolve ops.88813888.xyz:443:127.0.0.1 -sS -o /dev/null -w 'status=%{http_code}\n' https://ops.88813888.xyz/healthz || true
+              echo "=== CORS 白名单（D-153） ==="
+              # 只读：把容器里生效的 OPS_CORS_ORIGINS / OPS_COOKIE_SAMESITE 打出来
+              docker compose -f deploy/docker-compose.prod.yml exec -T app sh -lc \
+                'echo "OPS_CORS_ORIGINS=[${OPS_CORS_ORIGINS:-}]"; echo "OPS_COOKIE_SAMESITE=[${OPS_COOKIE_SAMESITE:-}]"; echo "OPS_COOKIE_SECURE=[${OPS_COOKIE_SECURE:-}]"; echo "OPS_STATIC_DIR=[${OPS_STATIC_DIR:-}]"' || true
+              # 预检：白名单来源应 204 且带 ACAO；非白名单来源应 403 且无 ACAO
+              for origin in "${OPS_CORS_PROBE_ORIGIN:-https://web.88813888.xyz}" https://cors-probe.invalid; do
+                echo "--- preflight Origin: $origin ---"
+                curl --noproxy '*' --max-time 10 -sS -D - -o /dev/null -X OPTIONS \
+                  -H "Origin: $origin" \
+                  -H 'Access-Control-Request-Method: GET' \
+                  -H 'Access-Control-Request-Headers: x-csrf-token' \
+                  https://ops.88813888.xyz/api/v1/healthz 2>&1 | grep -Ei '^(HTTP/|access-control-|vary:)' || true
+              done
+              echo "--- 桌面通道不得回 CORS 头 ---"
+              curl --noproxy '*' --max-time 10 -sS -D - -o /dev/null \
+                -H 'Origin: https://web.88813888.xyz' \
+                https://ops.88813888.xyz/api/v1/desktop/channel 2>&1 | grep -Ei '^(HTTP/|access-control-)' || true
             else
               bash deploy/update.sh
             fi

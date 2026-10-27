@@ -132,6 +132,8 @@ func (s *Server) buildRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(middleware.RequestID)
+	// D-153：跨源前端白名单必须在身份与业务中间件之前，预检才能直接应答。
+	r.Use(s.cors)
 	r.Use(requestReadDeadline(r))
 	r.Use(stripNulQuery)
 	r.Use(requestLog)

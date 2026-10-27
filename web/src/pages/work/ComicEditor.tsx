@@ -10,6 +10,7 @@ import { RefsNote } from '@/components/refs'
 import { aiError } from '@/lib/ai-error'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, Select, Textarea } from '@/components/ui'
 import { ApiError, errorMessage, get, patch, post, put, rawRequest } from '@/lib/api'
+import { assetUrl } from '@/lib/api-base'
 import { type AIRefs, copyText, fmtTime, runeLen } from '@/lib/format'
 import type { Asset, CharacterCard, ComicBubble, ComicPanel, Work } from '@/lib/types'
 import { WorkConflictDialog } from './section-save-dialogs'
@@ -249,7 +250,7 @@ export default function ComicEditor() {
                     className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-left transition',
                       on ? 'border-ink-400 bg-ink-50/50' : 'border-mist-200 hover:border-mist-300')}>
                     {(c.ref_url || c.ref_asset_id) ? (
-                      <img src={c.ref_url || `/api/v1/assets/${c.ref_asset_id}/file`} alt="" className="size-10 shrink-0 rounded-md object-cover" />
+                      <img src={assetUrl(c.ref_url || `/api/v1/assets/${c.ref_asset_id}/file`)} alt="" className="size-10 shrink-0 rounded-md object-cover" />
                     ) : (
                       <Users className={cn('mt-0.5 size-4', on ? 'text-ink-600' : 'text-mist-400')} />
                     )}
@@ -388,7 +389,7 @@ export default function ComicEditor() {
                       {asset ? (
                         <div className="overflow-hidden rounded-lg border border-mist-200">
                           <div className="relative">
-                            <img src={asset.url} alt="" className="aspect-square w-full object-cover" />
+                            <img src={assetUrl(asset.url)} alt="" className="aspect-square w-full object-cover" />
                             <PanelBubbles
                               panelId={panel.id}
                               bubbles={panel.bubbles ?? []}

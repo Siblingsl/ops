@@ -1,5 +1,7 @@
 import { toast } from 'sonner'
 
+import { apiUrl } from './api-base'
+
 export class ApiError extends Error {
   status: number
   code: string
@@ -75,7 +77,7 @@ async function fetchResponse(method: string, path: string, payload: BodyInit | u
   try {
     for (let attempt = 0; ; attempt++) {
       requestId = ''
-      let res = await fetch('/api/v1' + path, { ...init, method, headers: mergedHeaders, body: payload, credentials: 'same-origin', signal })
+      let res = await fetch(apiUrl(path), { ...init, method, headers: mergedHeaders, body: payload, credentials: 'include', signal })
       requestId = res.headers.get('X-Request-ID') || ''
       if (streaming && res.ok && res.headers.get('Content-Type')?.startsWith('text/event-stream')) return res
       if (res.body) res = new Response(await res.arrayBuffer(), { status: res.status, statusText: res.statusText, headers: res.headers })
