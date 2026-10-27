@@ -85,7 +85,7 @@ test('D-123/DC12：账号内容类型只在统一的当前账号设置中呈现'
 
 test('D-123：preload 与主进程为内容类型迁移暴露 IPC，且带信任来源校验', () => {
   const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload.ts'), 'utf8');
-  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8').replace(/\r\n/g, '\n');
   const client = fs.readFileSync(path.join(__dirname, '..', 'src', 'desktop-client.ts'), 'utf8');
   assert.match(preload, /changeAccountType/);
   assert.match(main, /ipcHandle\('settings:change-account-type'/);
