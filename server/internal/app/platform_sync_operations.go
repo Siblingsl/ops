@@ -307,6 +307,19 @@ func (s *Server) platformOperationRunSnapshot(ctx context.Context, tx pgx.Tx, op
 		taskKind = "account_sync"
 		binding["scope"] = scope
 		switch stage {
+		case "catalog":
+			// 目录阶段顺带取得的 inline_metrics 也会写成观测，而观测要能被用户确认成正式指标，
+			// 就必须在冻结快照里找到本地绑定（platformV2LocalBindingForExternalID 只认这个数组）。
+			// 以前 catalog 阶段两个数组都是空的，于是每次账号同步采到的读数全部 match_state=unmatched，
+			// 用户在作品库里看到的每条都是"尚未匹配到已绑定作品"、点确认只会 409
+			// （2026-10-27 实测：39 条观测全部无法确认）。
+			// 这里冻结与 v1 同一份"已精确绑定的已发布作品"，未绑定的平台作品照旧不冻结——
+			// 文档 §2208 的口径不变：未绑定镜像的观测不生成正式指标。
+			local, err := s.platformTargetsSnapshot(ctx, tx, op.AccountID, platform, now)
+			if err != nil {
+				return nil, "", "", nil, 0, err
+			}
+			binding["local_bindings"] = local
 		case "content":
 			mirrors, err := pendingPlatformMirrorTargets(ctx, tx, op, platform, externalKey, "content")
 			if err != nil {

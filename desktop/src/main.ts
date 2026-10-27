@@ -1837,7 +1837,9 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
         for (const note of discovered.notes) {
           if (note.status !== 'published') continue;
           const publishedAt = normalizeXhsNoteTime(note.recordedAt);
-          const metrics = noteToObservation(note, { externalAccountKey, observedAt });
+          const frozen = targets.local.get(note.noteId);
+          const metrics = noteToObservation(note, { externalAccountKey, observedAt,
+            bindingRevision: frozen?.bindingRevision, publishRevision: frozen?.publishRevision });
           const contentType = note.contentType === 'image' ? 'image_note' : note.contentType === 'video' ? 'video_note' : 'unknown';
           const result = platformV2CatalogItem({ externalID: note.noteId, accountKey: externalAccountKey, contentType,
             title: note.title, authorDisplay: displayName || externalAccountKey, publishedAt, metrics, upperBound });
@@ -1854,7 +1856,9 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
         for (const article of discovered.articles) {
           if (article.status !== 'published') continue;
           const publishedAt = normalizeWechatSentAt(article.sentAt);
-          const metrics = articleToObservation(article, { externalAccountKey, observedAt });
+          const frozen = targets.local.get(article.externalID);
+          const metrics = articleToObservation(article, { externalAccountKey, observedAt,
+            bindingRevision: frozen?.bindingRevision, publishRevision: frozen?.publishRevision });
           const result = platformV2CatalogItem({ externalID: article.externalID, accountKey: externalAccountKey, contentType: 'wechat_article',
             title: article.title, authorDisplay: displayName || externalAccountKey, publishedAt, metrics, upperBound });
           uncertainBoundary ||= result.missingPublishedAt;
