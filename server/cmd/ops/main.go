@@ -244,3 +244,4 @@ func setAdmin(grant bool) error {
 	}
 	return nil
 }
+// CI trigger smoke check; this comment does not change runtime behavior.
