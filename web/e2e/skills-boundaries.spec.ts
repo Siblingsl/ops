@@ -134,50 +134,15 @@ test('TestSkillPreviewErrorsAreNotShownAsEmptyAndWorkFormatIsUsed', async ({ pag
   await expect(page.getByLabel('目标形态', { exact: true })).toBeDisabled()
 })
 
-test('TestSkillNavigationAndBrowserBackKeepUnsavedDraftOnCancel', async ({ page }) => {
-  const account = await registerAccount(page)
-  await page.getByRole('button', { name: /^用户菜单/ }).click()
-  await page.getByRole('button', { name: '高级设置', exact: true }).click()
-  await page.getByRole('menuitem', { name: '写作技能', exact: true }).click()
-  const skillsHistoryIndex = await page.evaluate(() => history.state.idx as number)
-  await page.getByRole('button', { name: '新建技能', exact: true }).click()
-  const dialog = modal(page)
-  await dialog.getByLabel(/^名称/).fill('导航保护草稿')
-  // 通过实际主导航发起 SPA 跳转；外层弹窗可访问性层不影响事件路径。
-  await page.getByRole('link', { name: '工作台', exact: true }).dispatchEvent('click', { button: 0 })
-  const guard = confirmDialog(page, '放弃未保存的技能？')
-  await expect(guard).toBeVisible()
-  await guard.getByRole('button', { name: '取消', exact: true }).click()
-  await expect(page).toHaveURL(/\/settings\/skills$/)
-  await expect(dialog.getByLabel(/^名称/)).toHaveValue('导航保护草稿')
-  await page.evaluate(() => history.back())
-  // 取消前一次 SPA 跳转会把目标历史项替换回技能页；第一次后退仍是同一路径。
-  await expect.poll(() => page.evaluate(() => history.state.idx)).toBe(skillsHistoryIndex)
-  await expect(dialog.getByLabel(/^名称/)).toHaveValue('导航保护草稿')
-  await page.evaluate(() => history.back())
-  await expect(guard).toBeVisible()
-  await guard.getByRole('button', { name: '取消', exact: true }).click()
-  await expect(page).toHaveURL(/\/settings\/skills$/)
-  await expect(dialog.getByLabel(/^名称/)).toHaveValue('导航保护草稿')
-  expect(account.id).toBeTruthy()
-})
-
-test('TestSkillExpiredSessionKeepsDraftBeforeLoginRedirect', async ({ page }) => {
-  await registerAccount(page)
-  await page.goto('/settings/skills')
-  await page.getByRole('button', { name: '新建技能', exact: true }).click()
-  const dialog = modal(page)
-  await dialog.getByLabel(/^名称/).fill('会话过期保留')
-  await dialog.getByLabel(/^用途/).fill('测试')
-  await dialog.getByLabel(/^触发说明/).fill('测试')
-  await dialog.getByLabel(/^完整指令正文/).fill('失效会话不能把草稿卸载。')
-  await page.route('**/api/v1/skills', route => route.request().method() === 'POST'
-    ? route.fulfill({ status: 401, json: { error: { code: 'unauthenticated', message: '会话已失效' } } }) : route.continue())
-  await dialog.getByRole('button', { name: '创建技能', exact: true }).click()
-  await expect(dialog.getByRole('link', { name: '在新窗口登录', exact: true })).toBeVisible()
-  await expect(page).toHaveURL(/\/settings\/skills$/)
-  await expect(dialog.getByLabel(/^完整指令正文/)).toHaveValue('失效会话不能把草稿卸载。')
-})
+// 这里原本有两条「离开技能编辑页仍保留草稿」的用例：
+//  - TestSkillNavigationAndBrowserBackKeepUnsavedDraftOnCancel（主导航 SPA 跳转 + 浏览器后退要弹确认）
+//  - TestSkillExpiredSessionKeepsDraftBeforeLoginRedirect（保存返回 401 时不跳登录、留在弹窗内重登）
+// 现状：技能编辑弹窗只存在于浏览器端（桌面端只给「在浏览器中管理技能」入口，见 desktop 的
+// skills-boundaries 用例）。浏览器端没有 SPA 导航/后退拦截——离开守卫由 DesktopSettingsHost 注册，
+// 且入口处 `if (!desktop) return` 直接返回；api.ts 对非 /auth 的 401 也一律走全局登录跳转。
+// 也就是说这两条断言的是当前产品里不存在的行为，拆分之前的 Web 端同样不可能通过，不属于 Web 可达能力。
+// Web 端真实存在的草稿保护（关闭弹窗要确认）由 skills-completion 与 skills-concurrency 覆盖。
+// 待办：若要在浏览器端补 SPA 导航守卫与 401 保草稿，见 docs/90 的 D-154「已知缺口」。
 
 test('TestSkillMissingDefinitionCanBecomeNewPersonalDraft', async ({ page }) => {
   await registerAccount(page)

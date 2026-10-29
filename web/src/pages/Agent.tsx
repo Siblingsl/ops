@@ -498,6 +498,9 @@ export default function Agent() {
   const partialStore = useRef<Storage | null>(null)
   const partialSavedAt = useRef(0)
   const eventController = useRef<AbortController | null>(null)
+  // 卡片执行完会自动续跑；续跑若与用户刚发出的消息撞车，会把那条消息的运行控制器 abort 掉，
+  // 表现为消息已点发送却一直没有响应。用这个 ref 判断是否已有运行在受理/流出。
+  const runInFlight = useRef(false)
   const eventConversationID = useRef('')
   const streamPartialRef = useRef<{ messageKey: string; chunkIndex: number }>({ messageKey: '', chunkIndex: 0 })
   const lastEventSeqRef = useRef(0)
@@ -751,6 +754,7 @@ export default function Agent() {
 
   const consumeRun = useCallback(async (id: string, endpoint: string, body: Record<string, unknown>) => {
     const controller = new AbortController()
+    runInFlight.current = true
     eventController.current?.abort()
     eventController.current = controller
     eventConversationID.current = id
@@ -813,6 +817,7 @@ export default function Agent() {
       return acceptedRequest
     } finally {
       if (eventController.current === controller) {
+        runInFlight.current = false
         eventController.current = null
         if (resumeAfterSnapshotRef.current) {
           resumeAfterSnapshotRef.current = false
@@ -1012,7 +1017,8 @@ export default function Agent() {
     window.setTimeout(() => inputRef.current?.focus(), 0)
   }
 
-  const continueRun = () => { if (conversationId) void consumeRun(conversationId, `/agent/conversations/${conversationId}/continue`, {}) }
+  // 操作卡片执行成功后的自动续跑：已有运行在受理/流出时让位，避免 abort 掉用户刚发的消息。
+  const continueRun = () => { if (conversationId && !runInFlight.current) void consumeRun(conversationId, `/agent/conversations/${conversationId}/continue`, {}) }
   const compactRun = () => conversationId
     ? consumeRun(conversationId, `/agent/conversations/${conversationId}/compact`, { request_id: crypto.randomUUID() })
     : Promise.resolve(false)
