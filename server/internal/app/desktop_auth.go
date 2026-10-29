@@ -112,7 +112,7 @@ func (s *Server) requireDesktopAccountSession(next http.Handler) http.Handler {
 		}
 		id, err := s.loadDesktopAccountIdentity(r.Context(), cookie.Value)
 		if err != nil {
-			writeError(w, r, errUnauthenticated)
+			writeError(w, r, err)
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Header.Get("X-CSRF-Token") != s.csrfToken(id.SessionID) {
@@ -138,7 +138,13 @@ func (s *Server) loadDesktopAccountIdentity(ctx context.Context, token string) (
 		FROM session s JOIN app_user u ON u.id=s.user_id WHERE s.token_hash=$1`,
 		secure.SHA256([]byte(token))).Scan(&id.SessionID, &expires, &reauthUntil, &lastSeen,
 		&override, &id.UserID, &id.Username, &systemAdmin, &disabledAt, &currentWorkspace)
-	if err != nil || !expires.After(s.now()) || disabledAt != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, errUnauthenticated
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !expires.After(s.now()) || disabledAt != nil {
 		return nil, errUnauthenticated
 	}
 	id.sessionExpiresAt = expires

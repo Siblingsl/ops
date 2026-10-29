@@ -316,7 +316,7 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		}
 		id, err := s.loadIdentity(r.Context(), c.Value)
 		if err != nil {
-			writeError(w, r, errUnauthenticated)
+			writeError(w, r, err)
 			return
 		}
 		if s.now().Sub(id.lastSeen) > time.Minute {
@@ -364,13 +364,13 @@ func (s *Server) scanIdentity(ctx context.Context, column string, arg any, allow
 		&id.SessionID, &expires, &reauthUntil, &lastSeen, &override,
 		&id.UserID, &id.Username, &sysAdmin, &disabledAt,
 		&id.WorkspaceID, &role)
-	if err != nil || expires.Before(s.now()) {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errUnauthenticated
-		}
-		if err != nil {
-			return nil, errUnauthenticated
-		}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, errUnauthenticated
+	}
+	if err != nil {
+		return nil, err
+	}
+	if expires.Before(s.now()) {
 		return nil, errUnauthenticated
 	}
 	if disabledAt != nil {
@@ -385,7 +385,10 @@ func (s *Server) scanIdentity(ctx context.Context, column string, arg any, allow
 	if id.AdminOverride {
 		// Super admin visiting a workspace without membership — act as owner.
 		var exists bool
-		if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workspace WHERE id=$1)`, id.WorkspaceID).Scan(&exists); err != nil || !exists {
+		if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workspace WHERE id=$1)`, id.WorkspaceID).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
 			return nil, errUnauthenticated
 		}
 		id.Role = "owner"
@@ -408,7 +411,11 @@ func (s *Server) scanIdentity(ctx context.Context, column string, arg any, allow
 	}
 	wsID, err3 := s.pickWorkspace(ctx, id.UserID)
 	if err3 != nil {
-		return nil, errUnauthenticated
+		var apiError *APIError
+		if errors.As(err3, &apiError) && apiError.Code == "state_invalid" {
+			return nil, errUnauthenticated
+		}
+		return nil, err3
 	}
 	if _, err := s.db.Exec(ctx, `UPDATE session SET current_workspace_id=$2 WHERE id=$1`, id.SessionID, wsID); err != nil {
 		return nil, err
@@ -416,7 +423,10 @@ func (s *Server) scanIdentity(ctx context.Context, column string, arg any, allow
 	var memberRole string
 	if err := s.db.QueryRow(ctx, `SELECT role FROM workspace_member WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
 		wsID, id.UserID).Scan(&memberRole); err != nil {
-		return nil, errUnauthenticated
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errUnauthenticated
+		}
+		return nil, err
 	}
 	id.WorkspaceID = wsID
 	id.Role = memberRole
