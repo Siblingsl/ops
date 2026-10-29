@@ -1,0 +1,21 @@
+# Cloudflare Tunnel 旁路大陆公网 80/443（规避未备案拦截页）。
+# 用法（在 deploy/ 目录）：
+#   docker compose -f docker-compose.prod.yml -f docker-compose.tunnel.yml --env-file .env up -d cloudflared
+#
+# 需要 .env 中 CLOUDFLARE_TUNNEL_TOKEN=...（Zero Trust 创建隧道后复制）
+# 公网主机名在 CF 控制台指到 http://127.0.0.1:44537（见 cloudflare-tunnel.md）
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ops-cloudflared
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -41,6 +41,14 @@ if ! ENV_FILE=.env ./backup.sh; then
   echo "更新前备份失败，已中止更新。" >&2
   exit 1
 fi
-docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
-docker compose -f docker-compose.prod.yml ps
+
+COMPOSE_FILES=(-f docker-compose.prod.yml)
+# 若已配置 Cloudflare Tunnel，更新时一并拉起 cloudflared，避免只更新 app 后漏掉隧道
+if [[ -f docker-compose.tunnel.yml ]] && grep -qE '^CLOUDFLARE_TUNNEL_TOKEN=.+' .env; then
+  COMPOSE_FILES+=(-f docker-compose.tunnel.yml)
+  echo "检测到 CLOUDFLARE_TUNNEL_TOKEN，将同时确保 ops-cloudflared 运行。"
+fi
+
+docker compose "${COMPOSE_FILES[@]}" --env-file .env up -d --build --remove-orphans
+docker compose "${COMPOSE_FILES[@]}" --env-file .env ps
 echo "更新完成。健康检查：curl -fsS https://ops-api.88813888.xyz/healthz"

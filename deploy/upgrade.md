@@ -9,13 +9,15 @@
 cd /opt/ops/deploy
 ./update.sh
 curl -fsS http://127.0.0.1:44537/healthz   # 返回 ok 再放流量
+# 若已配置隧道，update.sh 会自动带上 docker-compose.tunnel.yml（见 cloudflare-tunnel.md）
 ```
 
 手动流程（等价步骤）：
 
 1. `./backup.sh` — 备份数据库与数据卷
 2. `git fetch origin && git reset --hard origin/main`
-3. `docker compose --env-file .env -f docker-compose.prod.yml up -d --build`
+3. `docker compose --env-file .env -f docker-compose.prod.yml up -d --build`  
+   （有隧道时再加 `-f docker-compose.tunnel.yml`）
 4. `curl -fsS http://127.0.0.1:44537/healthz`
 
 ## 回滚
