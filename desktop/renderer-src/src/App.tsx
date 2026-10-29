@@ -3,7 +3,7 @@ import { lazy, Suspense } from 'react'
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { PageSkeleton } from './components/error-boundary'
 import { Button, Card, PageLoading, Spinner } from './components/ui'
-import { get } from './lib/api'
+import { ApiError, errorMessage, get } from './lib/api'
 import { DESKTOP_ACCOUNT_SWITCHER_REQUEST } from './lib/desktop-settings'
 import { isElectronDesktop } from './lib/desktop-presentation.js'
 import { rememberedAccount, useAccounts, useCurrentAccountSelection, useMe } from './lib/session'
@@ -108,7 +108,9 @@ function Authed() {
     return <div className="flex h-full items-center justify-center paper"><Spinner /></div>
   }
   if (status.data?.needs_setup) return <Navigate to="/setup" replace />
-  if (me.isError || !me.data) return <Navigate to={'/login?next=' + encodeURIComponent(location.pathname + location.search)} replace />
+  if (me.error instanceof ApiError && me.error.status === 401) return <Navigate to={'/login?next=' + encodeURIComponent(location.pathname + location.search)} replace />
+  if (me.isError && !me.data) return <div className="flex h-full items-center justify-center paper"><Card className="space-y-3 p-6" role="alert"><p>无法确认登录状态</p><p>{errorMessage(me.error)}</p><Button onClick={() => void me.refetch()}>重试</Button></Card></div>
+  if (!me.data) return <Navigate to={'/login?next=' + encodeURIComponent(location.pathname + location.search)} replace />
   return (
     <Routes>
       <Route path="works/:workId/check/report" element={<S><CheckReport /></S>} />

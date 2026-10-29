@@ -13,6 +13,7 @@ delete process.env.ELECTRON_RUN_AS_NODE
 process.env.OPS_E2E_MOCK_BASE_URL = 'http://127.0.0.1:8297/v1'
 
 const desktopOnly = [
+  'session-failure.spec.ts',
   'desktop-images-restoration.spec.ts',
   'desktop-creative-ui.spec.ts',
   'desktop-editor-restoration.spec.ts',
