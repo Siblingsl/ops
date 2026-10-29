@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: '部署或只读访问诊断'
+        description: '部署、开启桌面 AI 或只读访问诊断'
         type: choice
-        options: [deploy, diagnose]
+        options: [deploy, diagnose, enable-desktop-ai]
         default: deploy
 
 concurrency:
@@ -165,6 +165,40 @@ jobs:
               echo "--- 桌面通道不得回 CORS 头 ---"
               curl --noproxy '*' --max-time 10 -sS -D - -o /dev/null \
                 https://ops-api.88813888.xyz/api/v1/desktop/channel 2>&1 | grep -Ei '^(HTTP/|access-control-)' || true
+            elif [[ "${{ inputs.action == 'enable-desktop-ai' }}" == "true" ]]; then
+              ENV_FILE=deploy/.env
+              if [[ ! -f "$ENV_FILE" ]]; then
+                echo "缺少 $ENV_FILE；拒绝修改服务器配置。" >&2
+                exit 1
+              fi
+              BACKUP_FILE="$ENV_FILE.bak.desktop-ai-$(date -u +%Y%m%dT%H%M%SZ)-${{ github.run_id }}"
+              cp -p "$ENV_FILE" "$BACKUP_FILE"
+              TMP_FILE="$(mktemp "$ENV_FILE.XXXXXX")"
+              awk '!/^OPS_DESKTOP_AI_ENABLED=/' "$ENV_FILE" > "$TMP_FILE"
+              if [[ -s "$TMP_FILE" ]] && [[ "$(tail -c 1 "$TMP_FILE" | wc -l)" -eq 0 ]]; then
+                printf '\n' >> "$TMP_FILE"
+              fi
+              printf 'OPS_DESKTOP_AI_ENABLED=1\n' >> "$TMP_FILE"
+              chmod --reference="$ENV_FILE" "$TMP_FILE"
+              mv "$TMP_FILE" "$ENV_FILE"
+              if ! docker compose -f deploy/docker-compose.prod.yml config --quiet; then
+                cp -p "$BACKUP_FILE" "$ENV_FILE"
+                echo "生产 Compose 配置校验失败；已恢复原 .env。" >&2
+                exit 1
+              fi
+              docker compose -f deploy/docker-compose.prod.yml up -d --no-deps --force-recreate app
+              for attempt in $(seq 1 30); do
+                if curl --noproxy '*' --max-time 5 --fail --silent -o /dev/null http://127.0.0.1:44537/healthz; then
+                  break
+                fi
+                if [[ "$attempt" -eq 30 ]]; then
+                  echo "API 容器重建后健康检查未通过；备份保留在 $BACKUP_FILE。" >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+              docker compose -f deploy/docker-compose.prod.yml exec -T app sh -ec 'test "${OPS_DESKTOP_AI_ENABLED:-}" = "1"'
+              echo "桌面 AI 全局开关已启用；原配置备份于 $BACKUP_FILE。"
             else
               DEPLOY_SHA='${{ github.sha }}'
               if [[ ! -f deploy/.env ]]; then
