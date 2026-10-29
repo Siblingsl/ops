@@ -666,6 +666,12 @@ export default function Agent() {
     return latest
   }, [messages, actionRunIDs])
   const busy = submitting || streaming || !!activeRun
+  // 有待办澄清问题时，服务端已把这次运行挂起（active_run 为 null），但客户端的事件流可能还没收尾，
+  // busy 会一直是真。这种状态下必须允许用户发新消息替代问题，否则只能先回答或先停止。
+  // 判据用 active_run + 在途提交，而不是等整轮流收尾：流什么时候关闭取决于服务端挂起策略，
+  // 要求 submitting 归零会让发送键白等十几秒。
+  const supersedeReady = !!pendingQuestion && !activeRun && !sendInFlight.current
+  const composerBusy = busy && !supersedeReady
   const readyFiles = files.filter((file) => file.status === 'ready' && file.attachment)
   const readyAttachmentIDs = [...readyFiles.map((file) => file.attachment!.id), ...restoredAttachments.map((file) => file.id)]
   const failedFiles = files.filter((file) => file.status === 'failed')
@@ -1077,7 +1083,7 @@ export default function Agent() {
 
   const sendMessage = async (edit?: AgentMessage) => {
     const value = text.trim()
-    if ((!value && readyAttachmentIDs.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || !canWrite || busy || sendInFlight.current || uploading || failedFiles.length > 0) return
+    if ((!value && readyAttachmentIDs.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || !canWrite || composerBusy || sendInFlight.current || uploading || failedFiles.length > 0) return
     sendInFlight.current = true
     setSubmitting(true)
     setStreamError('')
@@ -1130,14 +1136,17 @@ export default function Agent() {
         ? `/agent/conversations/${conv.id}/messages/${edit.id}/edit`
         : `/agent/conversations/${conv.id}/messages`, payload)
       if (!accepted || conversationIDRef.current !== conv.id) return
-      setText('')
-      setFiles([])
-      setRestoredAttachments([])
+      // 这一轮跑完才清输入框，而用户在运行期间可能已经接着输入下一条（桌面工作台允许，
+      // 待办问题挂起时也允许）。只清仍然是本次发送内容的那一份，否则会把用户新打字的
+      // 内容一起抹掉——表现为「刚打完字，输入框自己空了」。
+      setText((current) => (current === text ? '' : current))
+      setFiles((current) => (current === files ? [] : current))
+      setRestoredAttachments((current) => (current === restoredAttachments ? [] : current))
       sendDestinationConversationID.current = ''
       messageRequest.current = null
       if (!edit) {
-        setContextRefs([])
-        setSkillRequests([])
+        setContextRefs((current) => (current === contextRefs ? [] : current))
+        setSkillRequests((current) => (current === skillRequests ? [] : current))
       }
       setEditMessage(null)
     } catch (error) { toast.error(errorMessage(error)) }
@@ -1488,12 +1497,12 @@ export default function Agent() {
     if (isEnterWithoutComposition(event.nativeEvent) && !event.shiftKey) {
       event.preventDefault()
       if (editMessage) void sendMessage(editMessage)
-      else if (busy && runInputsEnabled) void postWorkbenchInput('steer')
+      else if (composerBusy && runInputsEnabled) void postWorkbenchInput('steer')
       else void sendMessage()
     }
   }
 
-  const inputDisabled = !canWrite || busy && !runInputsEnabled || uploading || inputSubmitting
+  const inputDisabled = !canWrite || composerBusy && !runInputsEnabled || uploading || inputSubmitting
   const accountList = (accounts.data ?? []).filter((account) => account.status === 'active')
   const selectedAccountName = accountList.find((account) => account.id === selectedAccount)?.name || '不指定账号'
   const selectedModelName = selectedModelOption?.model || '选择模型'
@@ -1682,15 +1691,18 @@ export default function Agent() {
                   <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择操作账号">{selectedAccountName} <ChevronDown /></button>
                   <span className="desktop-agent-compose-spacer" />
                   <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择模型">{selectedModelName} <ChevronDown /></button>
-                  {busy && runInputsEnabled ? <div className="flex items-center gap-1.5">
+                  {composerBusy && runInputsEnabled ? <div className="flex items-center gap-1.5">
                     <Button variant="secondary" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0} onClick={() => void postWorkbenchInput('steer')}>补充当前任务</Button>
                     <Button variant="outline" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0} onClick={() => void postWorkbenchInput('queue')}>排到下一条</Button>
                     <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
-                  </div> : busy ? <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
-                    : <Button variant="primary" icon={<Send className="size-4" />} disabled={!canWrite || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>}
+                  </div> : composerBusy ? <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
+                    : <>
+                      <Button variant="primary" icon={<Send className="size-4" />} disabled={!canWrite || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>
+                      {busy && <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>}
+                    </>}
                 </div>
               </div>
-              <div className="desktop-agent-compose-note">{pendingActions > 0 ? `等待你逐张确认 ${pendingActions} 项 · AI 输出请自行核实` : busy && runInputsEnabled ? '运行中按 Enter 补充当前任务 · 也可排到下一条 · Shift+Enter 换行' : busy ? '正在生成，可随时停止' : completedNotice || 'Enter 发送 · Shift+Enter 换行 · AI 输出请自行核实，写入操作需逐张确认'}</div>
+              <div className="desktop-agent-compose-note">{pendingActions > 0 ? `等待你逐张确认 ${pendingActions} 项 · AI 输出请自行核实` : pendingQuestion ? '用新消息替代待办问题 · 也可先回答上面的问题卡片' : composerBusy && runInputsEnabled ? '运行中按 Enter 补充当前任务 · 也可排到下一条 · Shift+Enter 换行' : composerBusy ? '正在生成，可随时停止' : completedNotice || 'Enter 发送 · Shift+Enter 换行 · AI 输出请自行核实，写入操作需逐张确认'}</div>
             </> : <>
               {bootstrapData.features.plans && <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 text-xs text-mist-500"><AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} /><span>{selectedMode === 'execute' ? '写入仍需逐张卡片确认' : '只读取与形成建议'}</span></div>}
               <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-mist-200 bg-white p-2 shadow-card focus-within:border-ink-300">

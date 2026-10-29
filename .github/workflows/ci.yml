@@ -235,6 +235,9 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
+      - name: E2E 同名用例守卫
+        working-directory: .
+        run: node scripts/check-e2e-pairs.mjs
       - name: Install desktop renderer for UI tests
         if: matrix.shard == 1
         run: pnpm --dir ../desktop/renderer-src install --frozen-lockfile
@@ -253,7 +256,7 @@ jobs:
           name: playwright-failure-${{ matrix.shard }}
           path: |
             .playwright-results/web/
-            .playwright-results/report/
+            .playwright-results/web-report/
             .playwright-results/desktop-renderer/
             .playwright-results/desktop-renderer-report/
       - name: Stop bounded document parser workers

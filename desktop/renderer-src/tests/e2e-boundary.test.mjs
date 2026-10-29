@@ -85,3 +85,28 @@ test('桌面 e2e 目录保留完整用例集与独立辅助文件', () => {
   assert.match(helper, /from '\.\/support'|from '\.\/support\.ts'|export async function createOutline/, '桌面 e2e 必须有独立的 support.ts')
   assert.equal(/web\/e2e\/support/.test(helper), false)
 })
+
+// 产物目录按端分树：仓库根 output/ 的根层文件属于 Web，桌面只写 output/ 下的子树
+// （目前是 output/playwright/）。这样两端同时跑也不会互相覆盖截图。
+test('桌面 e2e 只写 output/ 下自己的子树', () => {
+  const offenders = []
+  for (const file of files(e2eDir)) {
+    const text = stripComments(readFileSync(file, 'utf8'))
+    for (const match of text.matchAll(/'\.\.\/\.\.\/output\/([^']*)'/g)) {
+      const rest = match[1]
+      if (rest === '' || !rest.includes('/')) {
+        offenders.push(`${relative(root, file)}: output/${rest} 落在 Web 的根层`)
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `桌面 e2e 写到了 Web 的 output 根层：\n${offenders.join('\n')}`)
+})
+
+test('桌面 e2e 不写入 Web 的报告目录', () => {
+  const offenders = []
+  for (const file of files(e2eDir)) {
+    const text = stripComments(readFileSync(file, 'utf8'))
+    if (/\.playwright-results\/(?:web|web-report|report)\b/.test(text)) offenders.push(relative(root, file))
+  }
+  assert.deepEqual(offenders, [], `桌面 e2e 写到 Web 的 .playwright-results 目录：\n${offenders.join('\n')}`)
+})

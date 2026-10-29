@@ -16,7 +16,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  reporter: [['list'], ['html', { open: 'never', outputFolder: '../.playwright-results/report' }]],
+  reporter: [['list'], ['html', { open: 'never', outputFolder: '../.playwright-results/web-report' }]],
   use: { baseURL: production ? 'http://127.0.0.1:44538' : 'http://127.0.0.1:5179', trace: 'retain-on-failure', screenshot: 'only-on-failure' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } } }],
   webServer: production ? undefined : [

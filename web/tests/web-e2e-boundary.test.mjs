@@ -76,6 +76,31 @@ test('Web e2e 从 support 导入的符号必须真实导出', () => {
   assert.deepEqual(offenders, [], `Web e2e 导入了 support.ts 未导出的符号：\n${offenders.join('\n')}`)
 })
 
+// 产物目录按端分树，两端各写各的：仓库根 output/ 的根层文件属于 Web，output/playwright/ 属于桌面；
+// .playwright-results/ 下 web（含 web-report）属于 Web，desktop-renderer* 属于桌面。
+// 这条守卫保证 Web 用例不会因为某个帮手函数写成 ../output/playwright 而覆盖桌面截图。
+const DESKTOP_ARTIFACT = [
+  { pattern: /output\/playwright/, name: 'output/playwright 是桌面产物目录' },
+  { pattern: /\.playwright-results\/(?:desktop-renderer|report)/, name: '.playwright-results 下的桌面目录' },
+]
+
+test('Web e2e 不写入桌面产物目录', () => {
+  const offenders = []
+  for (const file of files(e2eDir)) {
+    const text = stripComments(readFileSync(file, 'utf8'))
+    for (const rule of DESKTOP_ARTIFACT) {
+      if (rule.pattern.test(text)) offenders.push(`${relative(root, file)}: ${rule.name}`)
+    }
+  }
+  assert.deepEqual(offenders, [], `Web 用例写到了桌面产物目录：\n${offenders.join('\n')}`)
+})
+
+test('Web Playwright 产物只落在自己的子目录', () => {
+  const config = stripComments(readFileSync(join(root, 'playwright.config.ts'), 'utf8'))
+  assert.match(config, /outputDir:\s*'\.\.\/\.playwright-results\/web',/)
+  assert.match(config, /outputFolder:\s*'\.\.\/\.playwright-results\/web-report'/)
+})
+
 // 桌面 testid 只允许出现在「应不存在」的反向断言里；用它定位并 toBeVisible 属于桌面行为。
 const DESKTOP_TESTIDS = [
   'desktop-agent-workbench',

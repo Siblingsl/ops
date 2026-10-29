@@ -564,6 +564,12 @@ export default function Agent() {
     return latest
   }, [messages, actionRunIDs])
   const busy = submitting || streaming || !!activeRun
+  // 有待办澄清问题时，服务端已把这次运行挂起（active_run 为 null），但客户端的事件流可能还没收尾，
+  // busy 会一直是真。这种状态下必须允许用户发新消息替代问题，否则只能先回答或先停止。
+  // 判据用 active_run + 在途提交，而不是等整轮流收尾：流什么时候关闭取决于服务端挂起策略，
+  // 要求 submitting 归零会让发送键白等十几秒。
+  const supersedeReady = !!pendingQuestion && !activeRun && !sendInFlight.current
+  const composerBusy = busy && !supersedeReady
   const readyFiles = files.filter((file) => file.status === 'ready' && file.attachment)
   const readyAttachmentIDs = [...readyFiles.map((file) => file.attachment!.id), ...restoredAttachments.map((file) => file.id)]
   const failedFiles = files.filter((file) => file.status === 'failed')
@@ -929,7 +935,7 @@ export default function Agent() {
 
   const sendMessage = async (edit?: AgentMessage) => {
     const value = text.trim()
-    if ((!value && readyAttachmentIDs.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || !canWrite || busy || sendInFlight.current || uploading || failedFiles.length > 0) return
+    if ((!value && readyAttachmentIDs.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || !canWrite || composerBusy || sendInFlight.current || uploading || failedFiles.length > 0) return
     sendInFlight.current = true
     setSubmitting(true)
     setStreamError('')
@@ -982,14 +988,16 @@ export default function Agent() {
         ? `/agent/conversations/${conv.id}/messages/${edit.id}/edit`
         : `/agent/conversations/${conv.id}/messages`, payload)
       if (!accepted || conversationIDRef.current !== conv.id) return
-      setText('')
-      setFiles([])
-      setRestoredAttachments([])
+      // 这一轮跑完才清输入框，而用户在运行期间可能已经接着输入下一条（待办问题挂起时也允许）。
+      // 只清仍然是本次发送内容的那一份，否则会把用户新打字的内容一起抹掉。
+      setText((current) => (current === text ? '' : current))
+      setFiles((current) => (current === files ? [] : current))
+      setRestoredAttachments((current) => (current === restoredAttachments ? [] : current))
       sendDestinationConversationID.current = ''
       messageRequest.current = null
       if (!edit) {
-        setContextRefs([])
-        setSkillRequests([])
+        setContextRefs((current) => (current === contextRefs ? [] : current))
+        setSkillRequests((current) => (current === skillRequests ? [] : current))
       }
       setEditMessage(null)
     } catch (error) { toast.error(errorMessage(error)) }
@@ -1244,7 +1252,7 @@ export default function Agent() {
     else void sendMessage()
   }
 
-  const inputDisabled = !canWrite || busy || uploading
+  const inputDisabled = !canWrite || composerBusy || uploading
   const accountList = (accounts.data ?? []).filter((account) => account.status === 'active')
   const selectedAccountName = accountList.find((account) => account.id === selectedAccount)?.name || '不指定账号'
   // AG-03：选了别的账号而历史仍属于原账号时，界面必须说清楚，否则用户以为上下文也跟着换了。
@@ -1403,8 +1411,11 @@ export default function Agent() {
                 {routinesEnabled && <IconButton label="例行任务" onClick={() => setRoutinePanelOpen(true)} className="mb-0.5"><CalendarClock className="size-4" /></IconButton>}
                 <Textarea ref={inputRef} rows={1} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px` }} onKeyDown={onInputKeyDown}
                   placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '发送消息…（Enter 发送，Shift+Enter 换行）'} className="max-h-48 min-h-10 resize-none border-0 bg-transparent px-2 py-2 shadow-none focus:border-transparent focus:ring-0 disabled:bg-transparent" />
-                {busy ? <Button variant="ghost" className="mb-0.5 shrink-0" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
-                  : <Button variant="primary" className="mb-0.5 shrink-0" icon={<Send className="size-4" />} disabled={!canWrite || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>}
+                {composerBusy ? <Button variant="ghost" className="mb-0.5 shrink-0" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
+                  : <>
+                    <Button variant="primary" className="mb-0.5 shrink-0" icon={<Send className="size-4" />} disabled={!canWrite || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>
+                    {busy && <Button variant="ghost" className="mb-0.5 shrink-0" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>}
+                  </>}
               </div>
               <div className="mx-auto mt-1 flex max-w-3xl justify-between px-2 text-[10.5px] text-mist-400"><span>{readyAttachmentIDs.length ? `已添加 ${readyAttachmentIDs.length} 个附件` : '附件支持图片、txt 与 md'}</span><span>{Array.from(text).length} / {bootstrapData.limits.message_chars}</span></div>
             </>

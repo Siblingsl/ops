@@ -15,7 +15,7 @@ async function api(page: Page, method: string, path: string, body?: unknown) {
   }, { method, path, body })
 }
 
-async function plansQuestionsJourney(page: Page, baseURL: string, screenshot: string, replacePending = true) {
+async function plansQuestionsJourney(page: Page, baseURL: string, screenshot: string) {
   await page.goto(`${baseURL}/register`)
   await page.getByLabel('用户名', { exact: true }).fill(`aw07-flow-${Date.now()}`)
   await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
@@ -89,6 +89,7 @@ async function plansQuestionsJourney(page: Page, baseURL: string, screenshot: st
   // 但发送键仍是禁用态。不先等 enabled 就直接 click，会卡在 actionability 上直到用例超时。
   const send = async (value: string) => {
     await composer.fill(value)
+    await expect(composer).toHaveValue(value)
     await expect(sendButton).toBeEnabled({ timeout: 60_000 })
     await sendButton.click()
   }
@@ -96,10 +97,10 @@ async function plansQuestionsJourney(page: Page, baseURL: string, screenshot: st
   await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).questions.length).toBe(2)
   await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).active_run).toBeNull()
   const pending = (await api(page, 'GET', `/agent/conversations/${conversationID}`)).questions.find((item: { status: string }) => item.status === 'pending')
-  if (!replacePending) return
-  const replaceResponse = page.waitForResponse((response) => response.url().endsWith(`/agent/conversations/${conversationID}/messages`) && response.request().method() === 'POST')
   await send('改为检查另一条选题')
-  await page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '用这条消息替代待办问题？' }) }).getByRole('button', { name: '替代问题并发送' }).click()
+  const supersedeDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '用这条消息替代待办问题？' }) })
+  const replaceResponse = page.waitForResponse((response) => response.url().endsWith(`/agent/conversations/${conversationID}/messages`) && response.request().method() === 'POST', { timeout: 60_000 })
+  await supersedeDialog.getByRole('button', { name: '替代问题并发送' }).click()
   const replaced = await replaceResponse
   expect(replaced.status()).toBe(202)
   expect(replaced.request().postDataJSON().supersede_question_id).toBe(pending.id)
@@ -108,41 +109,19 @@ async function plansQuestionsJourney(page: Page, baseURL: string, screenshot: st
 
 test('DEV-AW07 真实Electron计划与问题恢复', async ({ baseURL }) => {
   test.skip(process.platform !== 'win32', '需要Windows Electron')
-  // 一次跑完 计划 → 结构化澄清 → 接受计划 → 再次澄清；替代待办问题单独登记在下面的 fixme。
-  test.setTimeout(180_000)
+  // 一次跑完 计划 → 结构化澄清 → 接受计划 → 再次澄清 → 用新消息替代待办问题。
+  test.setTimeout(240_000)
   const userData = await mkdtemp(join(tmpdir(), 'ops-agent-aw07-plans-'))
   let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
   try {
     app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
       args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../.build/main.js')],
       env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
-    await plansQuestionsJourney(await app.firstWindow(), baseURL!, 'agent-workbench-aw07-plans-electron', false)
+    await plansQuestionsJourney(await app.firstWindow(), baseURL!, 'agent-workbench-aw07-plans-electron')
   } finally {
     await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
     await app?.close()
     if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-aw07-plans-')) throw new Error('拒绝清理测试目录之外路径')
-    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-  }
-})
-
-// 已知缺口（2026-10-29 复核）：桌面工作台 presentation 下有待办澄清问题时，composer 一直停在
-// 「补充当前任务 / 排到下一条 / 停止」形态，发送键不出现，用户没法用「新消息替代待办问题」，
-// 只能先回答或先停。浏览器端 composer 会回到可发送态，同一条路径在 web/e2e 里是通过的。
-// 这是桌面工作台自身的交互缺口，不是本轮拆分引入，也不能靠放宽像素/超时掩盖，先登记不跑。
-test.fixme('DEV-AW07 桌面工作台替代待办问题（缺口登记）', async ({ baseURL }) => {
-  test.skip(process.platform !== 'win32', '需要Windows Electron')
-  test.setTimeout(180_000)
-  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-aw07-replace-'))
-  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
-  try {
-    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
-      args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../.build/main.js')],
-      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
-    await plansQuestionsJourney(await app.firstWindow(), baseURL!, 'agent-workbench-aw07-plans-electron-replace', true)
-  } finally {
-    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
-    await app?.close()
-    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-aw07-replace-')) throw new Error('拒绝清理测试目录之外路径')
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })

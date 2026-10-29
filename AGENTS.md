@@ -45,7 +45,13 @@ cd desktop; pnpm test:e2e:renderer  # 桌面：5287 / 8287 / 8297
 
 `web/e2e/` 不允许出现 `_electron`、`Electron/` UA、`ops-creative-desktop`、5287 端口；`desktop/renderer-src/e2e/` 不允许引用 `web/` 或 5179 端口。两条约束由 `web/tests/web-e2e-boundary.test.mjs` 与 `desktop/renderer-src/tests/e2e-boundary.test.mjs` 在 `test:unit` 中强制。
 
-两端截图与报告统一落在仓库根 `.playwright-results/`（CI 按该路径上传）。桌面 runner 的 `process.cwd()` 是 `desktop/renderer-src`，所以桌面用例写产物必须用 `../../.playwright-results/` 和 `../../output/`；写成 `../` 会落到 `desktop/` 下，桌面边界测试会拦截。
+两端截图与报告统一落在仓库根 `.playwright-results/`（CI 按该路径上传）。该目录按端分树，互不覆盖：`web/` 与 `web-report/` 属于 Web，`desktop-renderer/` 与 `desktop-renderer-report/` 属于桌面。桌面 runner 的 `process.cwd()` 是 `desktop/renderer-src`，所以桌面用例写产物必须用 `../../.playwright-results/` 和 `../../output/`；写成 `../` 会落到 `desktop/` 下，桌面边界测试会拦截。
+
+仓库根 `output/` 同样按端分树：根层文件（如 `output/toutiao-*.png`）属于 Web，`output/playwright/` 属于桌面。两端的边界测试会分别拦截"Web 写 `output/playwright/`"和"桌面写 `output/` 根层"，因此两端可以同时跑。
+
+`server/` 是**刻意共用**的后端，不属于两端任一侧的私有目录：`server/cmd/ops-e2e` 同时为两套 E2E 提供 API 与模拟模型，差异只由 `OPS_AGENT_WORKBENCH_FEATURES` 等环境变量控制。拆前端时不要把它复制成两份。
+
+`web/e2e/` 与 `desktop/renderer-src/e2e/` 有 14 个同名 spec：它们覆盖同一段旅程的两种形态（浏览器 / 桌面工作台），必须各写一份，不能共用文件。同名清单与"每对至少 15 行差异"由根目录 `scripts/check-e2e-pairs.mjs` 在 CI 的 `e2e` job 中校验；新增同名要显式登记，直接复制一端到另一端会被拦下。
 
 ## 本地开发
 
