@@ -63,3 +63,12 @@ test('NW-B7 图片计数不再像目标；空主题不能生成封面', async ({
   await page.getByRole('button', { name: 'AI 封面候选', exact: true }).click()
   await expect(page.getByText('先写下标题或核心观点，再让 AI 生成封面')).toBeVisible()
 })
+
+test('专注模式下仍可打开大纲确认', async ({ page }) => {
+  const account = await registerAccount(page)
+  const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: '专注模式大纲' })
+  await page.goto(`/works/${work.id}`)
+  await page.getByRole('button', { name: '专注模式（F11）' }).click()
+  await page.getByRole('button', { name: '确认大纲后起草' }).click()
+  await expect(page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '生成与确认大纲', exact: true }) })).toBeVisible()
+})

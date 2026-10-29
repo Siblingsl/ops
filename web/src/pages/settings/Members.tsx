@@ -8,7 +8,6 @@ import { errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { useInvalidate, useMe } from '@/lib/session'
 import type { WorkspaceInvite, WorkspaceMember, WorkspaceRole } from '@/lib/types'
-import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
 
 const ROLE_LABEL: Record<WorkspaceRole, string> = {
   owner: '所有者',
@@ -20,7 +19,6 @@ export default function SettingsMembers() {
   const { data: me } = useMe()
   const inv = useInvalidate()
   const isOwner = me?.role === 'owner'
-  const embedded = useEmbeddedSettings()
   const members = useQuery({ queryKey: ['members'], queryFn: () => get<WorkspaceMember[]>('/workspaces/current/members') })
   const invites = useQuery({
     queryKey: ['invites'],
@@ -32,7 +30,6 @@ export default function SettingsMembers() {
   const [inviteRole, setInviteRole] = useState<'editor' | 'viewer'>('editor')
   const [busy, setBusy] = useState(false)
   const [emailFor, setEmailFor] = useState<Record<string, string>>({})
-  const clearDraft = useSettingsDraft(!!(joinCode.trim() || newWsName.trim()) || Object.values(emailFor).some((email) => email.trim()), busy)
 
   const createWorkspace = async () => {
     const name = newWsName.trim() || '新工作区'
@@ -45,7 +42,6 @@ export default function SettingsMembers() {
     try {
       await post('/workspaces', { name, switch: true })
       toast.success('已创建并切换')
-      clearDraft()
       window.location.assign('/')
     } catch (e) {
       toast.error(errorMessage(e))
@@ -74,7 +70,6 @@ export default function SettingsMembers() {
       toast.success('已加入工作区')
       setJoinCode('')
       await inv(['me'], ['accounts'], ['members'])
-      clearDraft()
       window.location.assign('/')
     } catch (e) {
       toast.error(errorMessage(e))
@@ -120,7 +115,7 @@ export default function SettingsMembers() {
 
   return (
     <div className="max-w-3xl animate-fade-in space-y-6">
-      {!embedded && <PageHeader title="成员与邀请" desc={`当前工作区：${me.workspace.name}`} />}
+      <PageHeader title="成员与邀请" desc={`当前工作区：${me.workspace.name}`} />
 
       <div className="grid gap-6 xl:grid-cols-2">
         <Card className="space-y-3 p-5">
@@ -249,7 +244,7 @@ export default function SettingsMembers() {
               </Select>
             </div>
           </div>
-          <Notice tone="ink">可邀请编辑者或观察者；7 天有效，最多 10 次。也可填写邮箱直接发送（需在「{embedded ? '邀请邮件' : '登录与安全'}」配置 SMTP）。</Notice>
+          <Notice tone="ink">可邀请编辑者或观察者；7 天有效，最多 10 次。也可填写邮箱直接发送（需在「登录与安全」配置 SMTP）。</Notice>
           {(invites.data ?? []).length === 0 ? <Empty title="还没有有效邀请码" desc="生成一个邀请码发给同事，对方注册时填写即可加入这个工作区。"
             action={<Button variant="primary" loading={busy} icon={<Plus className="size-4" />} onClick={createInvite}>生成邀请码</Button>} /> : (
             <ul className="space-y-3">
@@ -307,7 +302,7 @@ export default function SettingsMembers() {
             : '只有工作区所有者可以生成邀请码、管理成员与模型/凭证。'}
         </Notice>
       )}
-      {!embedded && <Notice tone="ink">角色差异：所有者管理成员与凭证；编辑者可创作、导出与发布，不能改凭证；观察者只读。</Notice>}
+      <Notice tone="ink">角色差异：所有者管理成员与凭证；编辑者可创作、导出与发布，不能改凭证；观察者只读。</Notice>
 
     </div>
   )
@@ -316,7 +311,6 @@ export default function SettingsMembers() {
 function RenameWorkspace({ name, id, onDone }: { name: string; id: string; onDone: () => void }) {
   const [v, setV] = useState(name)
   const [busy, setBusy] = useState(false)
-  useSettingsDraft(v.trim() !== name, busy)
   return (
     <div className="flex flex-wrap gap-2">
       <Field label="名称" className="min-w-[220px] flex-1">

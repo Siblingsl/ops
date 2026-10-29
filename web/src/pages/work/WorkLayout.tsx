@@ -11,7 +11,6 @@ import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
 import { apiBase } from '@/lib/api-base'
 import { fmtTime } from '@/lib/format'
 import { currentWorkQueryKey, rememberAccount, useCanWrite, useMe } from '@/lib/session'
-import { DESKTOP_LEAVE_GUARD_REQUEST } from '@/lib/desktop-settings'
 import type { Platform, PlatformWorkMirror, StarItem, Work, WorkspaceMember, WorkStatus } from '@/lib/types'
 import { rememberRecent, useCustomTheme, usePrefs, useWorkCmd } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
@@ -101,7 +100,7 @@ function PlanPopover({ work, onSaved }: { work: Work; onSaved: (w: Work) => void
   }
   const assignee = members.data?.find((m) => m.user_id === work.assignee_id)
   return (
-    <div ref={ref} className="desktop-work-plan relative">
+    <div ref={ref} className="work-plan relative">
       <Button size="sm" variant="ghost" icon={<CalendarDays className="size-4" />} onClick={() => setOpen((v) => !v)}>
         <span className="hidden xl:inline">{work.planned_date ? `计划 ${work.planned_date.slice(5)}` : '计划'}</span>
       </Button>
@@ -317,7 +316,6 @@ function Versions({ work, open, onClose, onRestored }: { work: Work; open: boole
 export default function WorkLayout() {
   const location = useLocation()
   const nav = useNavigate()
-  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const [copying, setCopying] = useState(false)
   const [exporting, setExporting] = useState(false)
   // NW-B6：页头重命名（空标题也可直接命名）。
@@ -373,28 +371,6 @@ export default function WorkLayout() {
     setFocusState(v)
     window.dispatchEvent(new CustomEvent('ops:focus', { detail: v }))
   }, [])
-  // GL-08：桌面退出与页面离开共用作品保存协调器，任一保存失败都阻止离开。
-  useEffect(() => {
-    const onLeaveGuard = (event: Event) => {
-      if ((event as CustomEvent<{ draftOnly?: boolean }>).detail?.draftOnly) return
-      if (!workId) return
-      const detail = (event as CustomEvent<{ register?: (check: () => Promise<boolean> | boolean) => void }>).detail
-      if (typeof detail?.register !== 'function') return
-      detail.register(async () => {
-        const pending: Promise<unknown>[] = []
-        emitEditor({ type: 'flush', wait: pending })
-        try {
-          await Promise.all([...pending, flushWork(workId)])
-          return true
-        } catch (error) {
-          toast.error(`保存未完成，已取消离开：${errorMessage(error)}`)
-          return false
-        }
-      })
-    }
-    window.addEventListener(DESKTOP_LEAVE_GUARD_REQUEST, onLeaveGuard)
-    return () => window.removeEventListener(DESKTOP_LEAVE_GUARD_REQUEST, onLeaveGuard)
-  }, [workId])
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('ops:focus', { detail: focus }))
     return () => { window.dispatchEvent(new CustomEvent('ops:focus', { detail: false })) }
@@ -548,14 +524,14 @@ export default function WorkLayout() {
     }
   }
   return (
-    <div className={cn('flex min-h-full flex-col', desktopPresentation && 'desktop-work-layout')} data-testid={desktopPresentation ? 'desktop-work-layout' : undefined}>
-      <header className={cn('work-header sticky top-0 z-20 border-b border-mist-200/80 bg-white/90 backdrop-blur', desktopPresentation && 'desktop-workbar')}>
+    <div className="flex min-h-full flex-col">
+      <header className="work-header sticky top-0 z-20 border-b border-mist-200/80 bg-white/90 backdrop-blur">
         <div className="flex h-14 items-center gap-3 px-5">
           <Link to={`/a/${work.account_id}/works`} className="rounded-md p-1.5 text-mist-400 hover:bg-mist-100 hover:text-mist-700" title="返回作品列表">
             <ArrowLeft className="size-4" />
           </Link>
           <PlatformMark platform={work.platform} size="sm" />
-          <div className="desktop-work-title min-w-0">
+          <div className="work-title min-w-0">
             {/* NW-B6：页头标题可直接改名；空标题给"点击命名"。 */}
             {renaming ? (
               <input autoFocus value={titleDraft} maxLength={64} aria-label="作品标题"
@@ -601,11 +577,11 @@ export default function WorkLayout() {
             </div>
           )}
           <div className={cn('work-header-actions ml-auto flex shrink-0 items-center gap-1', !focus && 'lg:ml-0')}>
-            <div id="work-header-action-target" data-testid="work-next-action" className="desktop-work-next mr-1 flex shrink-0 items-center" />
+            <div id="work-header-action-target" data-testid="work-next-action" className="work-next mr-1 flex shrink-0 items-center" />
             <PlanPopover work={work} onSaved={setWork} />
-            <Button className="desktop-work-history" size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
-            {canWrite && <Button className="desktop-work-derive" size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}><span className="hidden xl:inline">派生</span></Button>}
-            {canWrite && <MoreMenu className="desktop-work-more" items={[
+            <Button className="work-history" size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
+            {canWrite && <Button className="work-derive" size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}><span className="hidden xl:inline">派生</span></Button>}
+            {canWrite && <MoreMenu className="work-more" items={[
               ...(location.pathname === `/works/${work.id}` ? [{ label: '口述 / 要点扩写', icon: <Wand2 />, onClick: () => window.dispatchEvent(new Event('ops:organize-notes')) }] : []),
               ...(location.pathname === `/works/${work.id}` ? [
                 { label: '生成标题候选', icon: <Wand2 />, onClick: () => window.dispatchEvent(new Event('ops:generate-titles')) },
@@ -613,13 +589,13 @@ export default function WorkLayout() {
               { label: '复制为新草稿', icon: <Copy />, loading: copying, onClick: () => void duplicate() },
               ...(location.pathname === `/works/${work.id}` ? [{ label: '导出 Markdown', icon: <Download />, loading: exporting, onClick: () => void exportMarkdown() }] : []),
             ]} />}
-            <Button className="desktop-work-focus" size="sm" variant="ghost" title="专注模式（F11）" icon={focus ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />} onClick={() => setFocus(!focus)} />
+            <Button className="work-focus" size="sm" variant="ghost" title="专注模式（F11）" icon={focus ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />} onClick={() => setFocus(!focus)} />
           </div>
         </div>
-        {!focus && <div className="desktop-workbar-flow">
+        {!focus && <div className="workbar-flow">
           {/* ED-05：这是「发布进度」，只随状态机推进；内容进度看左栏「创作步骤」。
               第一项（创作）的完成条件与左栏同一判定（contentReady），两套进度不会互相矛盾。 */}
-          <div className="desktop-workbar-flow-label">发布进度：内容写完后按状态推进</div>
+          <div className="workbar-flow-label">发布进度：内容写完后按状态推进</div>
           <nav aria-label="发布进度">
             {steps.map((s, i) => (
               <NavLink key={s.to} to={s.to} end={s.end}
@@ -679,7 +655,7 @@ export default function WorkLayout() {
           </div>
         )}
       </header>
-      <div key={location.pathname} className={cn('min-h-0 flex-1 animate-fade-in', desktopPresentation && location.pathname.endsWith('/pack') && 'desktop-work-pack-outlet')}>
+      <div key={location.pathname} className="min-h-0 flex-1 animate-fade-in">
         <Outlet context={ctx} />
       </div>
       <Versions work={work} open={versions} onClose={() => setVersions(false)} onRestored={setWork} />

@@ -3,9 +3,9 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { test } = require('node:test');
 
-const webRoot = path.resolve(__dirname, '../../web');
-const viteEntry = path.join(webRoot, 'node_modules', 'vite', 'dist', 'node', 'index.js');
-const configFile = path.join(webRoot, 'vite.config.ts');
+const rendererRoot = path.resolve(__dirname, '../renderer-src');
+const viteEntry = path.join(rendererRoot, 'node_modules', 'vite', 'dist', 'node', 'index.js');
+const configFile = path.join(rendererRoot, 'vite.config.ts');
 
 test('desktop Vite sends remote API and WebSocket requests through a pinned system proxy agent', async () => {
   const priorTarget = process.env.OPS_API_TARGET;
@@ -15,7 +15,7 @@ test('desktop Vite sends remote API and WebSocket requests through a pinned syst
 
   try {
     const { loadConfigFromFile } = await import(pathToFileURL(viteEntry).href);
-    const loaded = await loadConfigFromFile({ command: 'serve', mode: 'development' }, configFile, webRoot);
+    const loaded = await loadConfigFromFile({ command: 'serve', mode: 'development' }, configFile, rendererRoot);
     const apiProxy = loaded.config.server.proxy['/api'];
     try {
       assert.equal(apiProxy.target, 'https://192.0.2.1');
@@ -41,7 +41,7 @@ test('desktop Vite sends remote HTTP API and WebSocket requests through the syst
 
   try {
     const { loadConfigFromFile } = await import(pathToFileURL(viteEntry).href);
-    const loaded = await loadConfigFromFile({ command: 'serve', mode: 'development' }, configFile, webRoot);
+    const loaded = await loadConfigFromFile({ command: 'serve', mode: 'development' }, configFile, rendererRoot);
     const apiProxy = loaded.config.server.proxy['/api'];
     try {
       assert.equal(apiProxy.target, 'http://ops.88813888.xyz');

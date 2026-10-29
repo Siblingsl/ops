@@ -1,4 +1,4 @@
-import { _electron, expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
@@ -102,19 +102,4 @@ test('DEV-AW07 Web计划、结构化澄清、替代消息与逐卡边界', async
   await plansQuestionsJourney(page, baseURL!, 'agent-workbench-aw07-plans-web')
 })
 
-test('DEV-AW07 真实Electron计划与问题恢复', async ({ baseURL }) => {
-  test.skip(process.platform !== 'win32', '需要Windows Electron')
-  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-aw07-plans-'))
-  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
-  try {
-    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../desktop/node_modules/electron/dist/electron.exe'),
-      args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../desktop/.build/main.js')],
-      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
-    await plansQuestionsJourney(await app.firstWindow(), baseURL!, 'agent-workbench-aw07-plans-electron')
-  } finally {
-    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
-    await app?.close()
-    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-aw07-plans-')) throw new Error('拒绝清理测试目录之外路径')
-    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-  }
-})
+

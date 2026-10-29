@@ -3,7 +3,6 @@ import { toast } from 'sonner'
 import { Card, CardHeader, Notice, PageHeader, PageState, roleReadOnlyHint, Switch } from '@/components/ui'
 import { errorMessage, get, put } from '@/lib/api'
 import { useMe } from '@/lib/session'
-import { useSettingsDraft } from '@/lib/desktop-settings'
 
 interface AgentSettings {
   enabled: boolean
@@ -32,7 +31,6 @@ export default function Agent() {
     onError: (e) => toast.error(errorMessage(e)),
   })
   const settings = q.data
-  useSettingsDraft(false, save.isPending)
   return (
     <div className="max-w-3xl animate-fade-in space-y-5">
       <PageHeader title="智能体设置" desc="影响当前工作区的所有成员，仅所有者可修改。" />

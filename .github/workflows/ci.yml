@@ -128,11 +128,13 @@ jobs:
           cache: pnpm
           cache-dependency-path: |
             desktop/pnpm-lock.yaml
-            web/pnpm-lock.yaml
-      - name: Install Web build dependencies
-        working-directory: web
+            desktop/renderer-src/pnpm-lock.yaml
+      - name: Install desktop renderer dependencies
+        working-directory: desktop/renderer-src
         run: pnpm install --frozen-lockfile
       - run: pnpm install --frozen-lockfile
+      - name: Desktop renderer typecheck
+        run: pnpm --dir renderer-src run typecheck
       - name: Desktop unit tests
         run: pnpm test
       - name: Build Windows desktop installer
@@ -233,6 +235,13 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
+      - name: Install desktop renderer for UI tests
+        if: matrix.shard == 1
+        run: pnpm --dir ../desktop/renderer-src install --frozen-lockfile
+      - name: Desktop renderer UI tests
+        if: matrix.shard == 1
+        working-directory: desktop
+        run: pnpm test:e2e:renderer
       - name: OPT08 Profiler budget
         if: matrix.shard == 2
         run: pnpm exec playwright test e2e/opt08.spec.ts --grep @ci-isolated
@@ -245,6 +254,8 @@ jobs:
           path: |
             .playwright-results/web/
             .playwright-results/report/
+            .playwright-results/desktop-renderer/
+            .playwright-results/desktop-renderer-report/
       - name: Stop bounded document parser workers
         if: always()
         run: |

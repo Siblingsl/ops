@@ -197,17 +197,6 @@ test('TestSkillMissingDefinitionCanBecomeNewPersonalDraft', async ({ page }) => 
   expect((await api(page, 'GET', '/skills?view=library&scope=personal')).total).toBe(2)
 })
 
-test('TestSkillDesktopDirectRoutesExposeWebLinkWithoutManagement', async ({ page }) => {
-  const account = await registerAccount(page)
-  await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => 'OPS Electron/44.8.0' }))
-  await page.goto('/settings/skills')
-  await expect(page.getByRole('link', { name: '在浏览器中管理技能', exact: true })).toHaveAttribute('href', /\/settings\/skills$/)
-  await expect(page.getByRole('button', { name: '新建技能', exact: true })).toHaveCount(0)
-  await page.goto(`/a/${account.id}/profile?tab=skills`)
-  await expect(page.getByRole('link', { name: '在浏览器中管理技能', exact: true })).toHaveAttribute('href', new RegExp(`/a/${account.id}/profile\\?tab=skills$`))
-  await expect(page.getByLabel('选择个人技能')).toHaveCount(0)
-})
-
 test('TestSkillBindingQuotaStillAllowsSingleCancellationAndReenable', async ({ page }) => {
   const account = await registerAccount(page)
   let revision = (await api(page, 'GET', `/accounts/${account.id}/skill-bindings`)).mine.base_revision
@@ -259,3 +248,4 @@ test('TestSkillAccountSwitchRejectsLatePreviewFromPreviousAccount', async ({ pag
     await expect(page.getByText('当前账号正确技能').first()).toBeVisible()
   } finally { release() }
 })
+

@@ -1,8 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { get, setCsrf } from './api'
-import { isElectronDesktop } from './desktop-presentation.js'
 import type { Account, Me, SystemInfo, Work } from './types'
 
 export function useMe() {
@@ -41,45 +40,20 @@ export function useSystemInfo() {
 }
 
 const LEGACY_KEY = 'ops.currentAccount'
-const ACCOUNT_CHANGED = 'ops:current-account-changed'
 
 export function currentWorkQueryKey(workId: string, userId: string, workspaceId: string) {
   return ['work', workId, userId, workspaceId] as const
 }
 
-export function currentAccountPreferenceKey(userId: string, workspaceId: string) {
-  return `ops.currentAccount.v2:${userId}:${workspaceId}`
-}
-
-export function rememberAccount(id: string, userId?: string, workspaceId?: string) {
-  if (isElectronDesktop(navigator.userAgent)) {
-    if (userId && workspaceId) {
-      localStorage.setItem(currentAccountPreferenceKey(userId, workspaceId), id)
-      window.dispatchEvent(new Event(ACCOUNT_CHANGED))
-    }
-    return
-  }
+export function rememberAccount(id: string, _userId?: string, _workspaceId?: string) {
   localStorage.setItem(LEGACY_KEY, id)
 }
 
-export function forgetAccount(id: string, userId?: string, workspaceId?: string) {
-  if (isElectronDesktop(navigator.userAgent)) {
-    if (userId && workspaceId) {
-      const key = currentAccountPreferenceKey(userId, workspaceId)
-      if (localStorage.getItem(key) === id) localStorage.removeItem(key)
-      window.dispatchEvent(new Event(ACCOUNT_CHANGED))
-    }
-    return
-  }
+export function forgetAccount(id: string, _userId?: string, _workspaceId?: string) {
   if (localStorage.getItem(LEGACY_KEY) === id) localStorage.removeItem(LEGACY_KEY)
 }
 
-export function rememberedAccount(userId?: string, workspaceId?: string) {
-  if (isElectronDesktop(navigator.userAgent)) {
-    return userId && workspaceId
-      ? localStorage.getItem(currentAccountPreferenceKey(userId, workspaceId))
-      : null
-  }
+export function rememberedAccount(_userId?: string, _workspaceId?: string) {
   return localStorage.getItem(LEGACY_KEY)
 }
 
@@ -87,7 +61,6 @@ export function useCurrentAccountSelection() {
   const location = useLocation()
   const me = useMe()
   const accounts = useAccounts()
-  const desktop = isElectronDesktop(navigator.userAgent)
   const accountMatch = location.pathname.match(/^\/a\/([^/]+)/)
   const workMatch = location.pathname.match(/^\/works\/([^/]+)/)
   const work = useQuery<Work>({
@@ -96,28 +69,19 @@ export function useCurrentAccountSelection() {
     enabled: !!workMatch && !!me.data?.workspace.id,
     staleTime: 30_000,
   })
-  const [, setRevision] = useState(0)
   const userId = me.data ? me.data.user_id ?? me.data.username : undefined
   const workspaceId = me.data?.workspace.id
 
-  useEffect(() => {
-    const refresh = () => setRevision((value) => value + 1)
-    window.addEventListener(ACCOUNT_CHANGED, refresh)
-    return () => {
-      window.removeEventListener(ACCOUNT_CHANGED, refresh)
-    }
-  }, [])
-
   const routeId = workMatch ? work.data?.account_id : accountMatch?.[1]
-  const preferredId = desktop ? rememberedAccount(userId, workspaceId) : rememberedAccount()
+  const preferredId = rememberedAccount()
   const selectedId = workMatch ? routeId : routeId ?? preferredId
   const account = accounts.data?.find((item) => item.id === selectedId)
-    ?? (!desktop && !routeId ? accounts.data?.find((item) => item.status === 'active') : undefined)
+    ?? (!routeId ? accounts.data?.find((item) => item.status === 'active') : undefined)
 
   useEffect(() => {
-    if (!account || desktop) return
+    if (!account) return
     rememberAccount(account.id, userId, workspaceId)
-  }, [account?.id, desktop, userId, workspaceId])
+  }, [account?.id, userId, workspaceId])
 
   return {
     account,
@@ -130,7 +94,7 @@ export function useCurrentAccountSelection() {
   }
 }
 
-/** 桌面端以账号路由或用户/工作区偏好为准；普通 Web 延续历史默认账号行为。 */
+/** Resolve the account from the current route, falling back to the last active Web account. */
 export function useCurrentAccount(): Account | undefined {
   return useCurrentAccountSelection().account
 }

@@ -8,18 +8,25 @@ Windows x64 Electron 客户端。发行版从安装包本地资源加载桌面�
 
 设置页的“清除此账号本机数据”只删除当前登录账号在本机保存的 AI 配置，并清理当前业务站点的 Cookie、站点存储与缓存后退出登录；不删除线上数据，也不撤销线上设备。多个账号需分别登录清理。Windows 卸载后可能保留用户目录中的应用数据。
 
+桌面业务界面源码与依赖位于 `renderer-src/`，独立于仓库的 `web/`；共用功能的修改需要分别维护。
+
 ## 开发
 
 要求 Node.js `22.22.1`、pnpm `10.14.0`。首次安装后可运行：
 
 ```powershell
 pnpm install --frozen-lockfile
+pnpm --dir renderer-src install --frozen-lockfile
 pnpm typecheck
 pnpm build
 pnpm test
 pnpm test:e2e
+pnpm test:renderer
+pnpm test:e2e:renderer
 pnpm start
 ```
+
+renderer 单测位于 `renderer-src/tests/`，Playwright 配置与用例分别位于 `renderer-src/playwright.config.ts` 与 `renderer-src/e2e/`。桌面用例使用 5287 / 8287 / 8297 三组端口，不读取 `web/e2e/`，也不依赖 Web 的测试依赖；运行前只需安装 renderer 自身依赖（见上）。`web/` 侧另有独立的 Web 浏览器用例集，两端分别维护。
 
 `pnpm start` 会读取 Windows 当前系统代理，在可用的回环端口启动一份全新的 Vite 前端，让未打包 Electron 加载当前源码中的桌面 UI，并将业务 API 与 WebSocket 默认代理到 `https://ops-api.88813888.xyz`。普通 Web 开发仍默认使用 `localhost:5173` 并代理到 `http://localhost:8080`。需要隔离本地数据时，可在启动 Electron 前设置 `OPS_API_TARGET=http://localhost:8080` 并按仓库根目录说明启动本地 API 和数据库。确需使用其他本地前端服务时，可显式设置 `OPS_DESKTOP_DEV_URL`，地址只接受 localhost、127.0.0.1 或 ::1。打包发行版忽略该变量并固定使用 HTTPS API。已打开的旧客户端不会热切换页面；切换到这套启动方式前需完整退出旧实例，再启动一次。
 

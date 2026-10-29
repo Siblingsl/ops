@@ -1,4 +1,4 @@
-import { _electron, expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
@@ -46,10 +46,7 @@ async function goalJourney(page: Page, baseURL: string, screenshot: string) {
   await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).active_run).toBeNull()
 
   await page.getByRole('button', { name: '任务目标与上下文整理' }).last().click()
-  const desktop = page.locator('.desktop-agent-workbench')
-  const panel = await desktop.count() > 0
-    ? page.getByTestId('desktop-agent-side-panel')
-    : page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '任务目标与上下文整理', exact: true }) })
+  const panel = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '任务目标与上下文整理', exact: true }) })
   await panel.getByRole('button', { name: '设为任务', exact: true }).click()
   await panel.getByLabel('目标（最多 500 字）').fill('核对本周运营数据并给出一条可审阅建议')
   await panel.getByLabel('完成条件 1').fill('指出一个需要关注的运营变化')
@@ -130,21 +127,4 @@ test('DEV-AW09 Web任务目标、跨会话筛选与上下文整理预览', async
   await goalJourney(page, baseURL!, 'agent-workbench-aw09-web')
 })
 
-test('DEV-AW09 Windows Electron任务目标与整理入口', async ({ baseURL }) => {
-  test.skip(process.platform !== 'win32', '需要Windows Electron')
-  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-aw09-'))
-  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
-  try {
-    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../desktop/node_modules/electron/dist/electron.exe'),
-      args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../desktop/.build/main.js')],
-      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
-    const page = await app.firstWindow()
-    const conversationID = await goalJourney(page, baseURL!, 'agent-workbench-aw09-electron')
-    await assertHiddenGoalNotification(page, conversationID)
-  } finally {
-    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
-    await app?.close()
-    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-aw09-')) throw new Error('拒绝清理测试目录之外路径')
-    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-  }
-})
+

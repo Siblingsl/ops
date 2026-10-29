@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, BookOpenCheck, CheckCircle2, Circle, Layers, PanelRightOpen, PenLine, Plus, Stethoscope, Wand2, X } from 'lucide-react'
+import { BookOpenCheck, CheckCircle2, Circle, Layers, PanelRightOpen, PenLine, Plus, Stethoscope, Wand2, X } from 'lucide-react'
 import { isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -55,7 +55,7 @@ function SeriesStrip({ sc }: { sc: SeriesContext }) {
   )
 }
 
-function ViewpointCard({ work, setWork, readOnly, loadMaterials = false, desktopPresentation = false, hidden = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; loadMaterials?: boolean; desktopPresentation?: boolean; hidden?: boolean }) {
+function ViewpointCard({ work, setWork, readOnly, loadMaterials = false, hidden = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; loadMaterials?: boolean; hidden?: boolean }) {
   const [text, setText] = useState(work.viewpoint)
   const [picking, setPicking] = useState(false)
   const [inbox, setInbox] = useState(false)
@@ -164,13 +164,7 @@ function ViewpointCard({ work, setWork, readOnly, loadMaterials = false, desktop
     }
   }
   const [ids, setIds] = useState(work.material_ids)
-  const [propertiesOpen, setPropertiesOpen] = useState(false)
   useEffect(() => setIds(work.material_ids), [work.material_ids])
-  useEffect(() => {
-    const toggle = () => setPropertiesOpen((open) => !open)
-    window.addEventListener('ops:viewpoint-properties', toggle)
-    return () => window.removeEventListener('ops:viewpoint-properties', toggle)
-  }, [])
   const toggle = async (id: string) => {
     const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]
     setIds(next)
@@ -211,22 +205,6 @@ function ViewpointCard({ work, setWork, readOnly, loadMaterials = false, desktop
         <h2 className="font-display text-[17px] font-bold text-mist-900">核心观点</h2>
         <Badge tone="gamboge">H-02 必须由你来写</Badge>
       </div>
-      {desktopPresentation ? (
-        <div className="desktop-viewpoint-line">
-          <div className="desktop-viewpoint-intro">
-            <span>核心观点：</span>
-            <Textarea rows={1} value={text} disabled={readOnly} onChange={(e) => { setText(e.target.value); textRef.current = e.target.value; dirty.current = true }} onBlur={saveWithToast}
-              placeholder={work.topic_angle
-                ? `选题角度：${work.topic_angle}\n——这只是提示，请用你自己的话写下观点。`
-                : '用一两句话写下你自己的观点。AI 会围绕它组织大纲，不会替你决定立场。'}
-              className="font-display text-[16px] leading-relaxed" />
-          </div>
-          <details className="desktop-viewpoint-extra" open={propertiesOpen} onToggle={(e) => setPropertiesOpen(e.currentTarget.open)}>
-            <summary>作品属性与关系</summary>
-            <div>{seriesCtx.data && <SeriesStrip sc={seriesCtx.data} />}{referenceControls}</div>
-          </details>
-        </div>
-      ) : (
         <>
           <div>
             <Textarea rows={3} value={text} disabled={readOnly} onChange={(e) => { setText(e.target.value); textRef.current = e.target.value; dirty.current = true }} onBlur={saveWithToast}
@@ -241,7 +219,6 @@ function ViewpointCard({ work, setWork, readOnly, loadMaterials = false, desktop
             <div className="mt-3">{referenceControls}</div>
           </details>
         </>
-      )}
       <Dialog open={picking} onClose={() => setPicking(false)} title="选择参考素材" desc="只列出本账号和共享的素材。点芯片可快速取消。" width="max-w-xl"
         footer={<Button variant="primary" onClick={() => setPicking(false)}>完成{ids.length ? `（已选 ${ids.length}）` : ''}</Button>}>
         <Input value={matQ} onChange={(e) => setMatQ(e.target.value)} placeholder="搜索素材内容、来源或类型…" className="mb-3" />
@@ -285,19 +262,13 @@ function ViewpointCard({ work, setWork, readOnly, loadMaterials = false, desktop
 
 // ---------- 口述 / 要点扩写 ----------
 
-function OrganizeNotesCard({ work, setWork, readOnly, desktopPresentation = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; desktopPresentation?: boolean }) {
+function OrganizeNotesCard({ work, setWork, readOnly }: { work: Work; setWork: (w: Work) => void; readOnly: boolean }) {
   const [open, setOpen] = useState(false)
   const [notes, setNotes] = useState('')
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [applying, setApplying] = useState(false)
   const abort = useRef<AbortController | null>(null)
-  useEffect(() => {
-    if (!desktopPresentation) return
-    const open = () => setOpen(true)
-    window.addEventListener('ops:organize-notes', open)
-    return () => window.removeEventListener('ops:organize-notes', open)
-  }, [desktopPresentation])
   const run = async () => {
     if (!notes.trim()) return
     setBusy(true)
@@ -348,7 +319,6 @@ function OrganizeNotesCard({ work, setWork, readOnly, desktopPresentation = fals
       {text && !busy && <Button size="sm" variant="ghost" onClick={() => { setText('') }}>重新生成</Button>}
     </div>
   </Dialog>
-  if (desktopPresentation) return dialog
   return (
     <>
       <Card className="flex items-center gap-3 p-4">
@@ -750,22 +720,19 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
   const activeIdx = work.sections.findIndex((s) => s.id === activeId)
   const active = activeIdx >= 0 ? work.sections[activeIdx] : null
   const showSidebar = sidebar && !focus
-  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
 
   return (
     <WorkSaveProvider value={coordinator}>
     <div
-      className={cn('mx-auto flex w-full gap-6 px-4 py-6 sm:px-6 sm:py-8 xl:gap-8', focus ? 'max-w-[860px]' : showSidebar ? 'max-w-[1600px]' : 'max-w-[1280px] 2xl:max-w-[1480px]', desktopPresentation && 'desktop-editor-layout', desktopPresentation && focus && 'desktop-editor-focus')}
-      data-testid={desktopPresentation ? 'desktop-editor-layout' : undefined}
+      className={cn('mx-auto flex w-full gap-6 px-4 py-6 sm:px-6 sm:py-8 xl:gap-8', focus ? 'max-w-[860px]' : showSidebar ? 'max-w-[1600px]' : 'max-w-[1280px] 2xl:max-w-[1480px]')}
     >
       {!readOnly && <WorkHeaderAction>
-        <Button className="desktop-work-check" size="sm" variant="primary" onClick={toCheck} disabled={drafted === 0} icon={desktopPresentation ? <ArrowRight className="size-4" /> : <PenLine className="size-4" />}>
-          {desktopPresentation ? '去检查' : work.platform === 'wechat_mp' ? '排版并检查' : '提交检查'}
+        <Button size="sm" variant="primary" onClick={toCheck} disabled={drafted === 0} icon={<PenLine className="size-4" />}>
+          {work.platform === 'wechat_mp' ? '排版并检查' : '提交检查'}
         </Button>
       </WorkHeaderAction>}
       {!focus && (
-        <aside className={cn('sticky top-24 hidden h-fit w-52 shrink-0 lg:block', desktopPresentation && 'desktop-editor-steps')}
-          data-testid={desktopPresentation ? 'desktop-editor-steps' : undefined}>
+        <aside className="sticky top-24 hidden h-fit w-52 shrink-0 lg:block">
           <div className="mb-3 flex items-baseline gap-2 text-[11px] font-semibold tracking-wider text-mist-400">
             <span>创作步骤</span>
             {/* ED-05：明确这是「内容进度」，与页头流程条的「发布进度」区分。 */}
@@ -777,7 +744,7 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
           <ol className="space-y-0.5">
             {steps.map((s) => (
               <li key={s.id}>
-                <a href={`#${s.id}`} onClick={(e) => { e.preventDefault(); if (desktopPresentation && s.id === 'step-outline') setOutlineOpen(true); else scrollTo(s.id) }}
+                <a href={`#${s.id}`} onClick={(e) => { e.preventDefault(); scrollTo(s.id) }}
                   className={cn(
                     'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13.5px] transition',
                     s.id === activeStep ? 'bg-ink-50 font-medium text-ink-800' : 'text-mist-600 hover:bg-mist-100 hover:text-mist-900',
@@ -803,10 +770,6 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
               ))}
             </ol>
           </>}
-          <div className="desktop-editor-properties-nav">
-            <button type="button" onClick={() => window.dispatchEvent(new Event('ops:viewpoint-properties'))}>作品属性与关系</button>
-            <button type="button" onClick={() => window.dispatchEvent(new Event('ops:title-properties'))}>标题、摘要与配图</button>
-          </div>
           <div className="mt-4 border-t border-mist-100 pt-3 text-[11.5px] text-mist-500">
             <div className="flex items-baseline justify-between">
               <span>{totalChars} 字{target ? ` / 目标 ${target}` : ''}</span>
@@ -840,8 +803,7 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
         </aside>
       )}
 
-      <div className={cn('min-w-0 flex-1 space-y-5', desktopPresentation && 'desktop-editor-content')}
-        data-testid={desktopPresentation ? 'desktop-editor-content' : undefined}>
+      <div className="min-w-0 flex-1 space-y-5">
         {resumedSection !== null && <Notice tone="ink" className="fixed bottom-6 left-1/2 z-40 -translate-x-1/2 shadow-pop"><div className="flex items-center gap-3">
           <span>已回到上次编辑的第 {resumedSection} 段</span>
           <Button size="sm" variant="ghost" className="ml-auto" aria-label="关闭位置提示" onClick={() => setResumedSection(null)} icon={<X className="size-3.5" />} />
@@ -856,16 +818,10 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
             {target > 0 && <div className="h-1 w-32 overflow-hidden rounded-full bg-mist-100"><div className="h-full bg-ink-500" style={{ width: `${Math.min(100, (totalChars / target) * 100)}%` }} /></div>}
           </div>
         )}
-        {!focus && !desktopPresentation && <OrganizeNotesCard work={work} setWork={setWorkStable} readOnly={readOnly} />}
-        {!focus && desktopPresentation && <OrganizeNotesCard work={work} setWork={setWorkStable} readOnly={readOnly} desktopPresentation />}
-        <article className={desktopPresentation ? 'desktop-editor-paper space-y-5' : 'contents'}>
-        {!focus && desktopPresentation && <div className="desktop-editor-document-meta">
-          <span>{work.account_name}</span><span>/</span><span>{work.tags[0] ?? '创作正文'}</span>
-          <Badge tone="ink">{work.sections.some((section) => section.content_md.trim()) ? 'AI 草稿 · 可编辑' : '创作中 · 可编辑'}</Badge>
-        </div>}
-        {desktopPresentation && <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} desktopPresentation hidden={focus} />}
-        <ViewpointCard work={work} setWork={setWorkStable} readOnly={readOnly} desktopPresentation={desktopPresentation} loadMaterials={materialsOpened && showSidebar && sideTab === 'materials'} hidden={focus} />
-        {!desktopPresentation && <OutlineCard work={work} setWork={setWorkStable} readOnly={readOnly} onConfirmed={onOutlineConfirmed} hidden={focus} />}
+        {!focus && <OrganizeNotesCard work={work} setWork={setWorkStable} readOnly={readOnly} />}
+        <article className="contents">
+        <ViewpointCard work={work} setWork={setWorkStable} readOnly={readOnly} loadMaterials={materialsOpened && showSidebar && sideTab === 'materials'} hidden={focus} />
+        <OutlineCard work={work} setWork={setWorkStable} readOnly={readOnly} onConfirmed={onOutlineConfirmed} hidden={focus} />
         <section id="step-sections" className="scroll-mt-24 space-y-4">
           <div className="flex flex-wrap items-center gap-2 pt-2">
             <h2 className="font-display text-[17px] font-bold text-mist-900">正文</h2>
@@ -878,7 +834,7 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
             )}
           </div>
           {!work.outline_confirmed_at ? (
-            <HumanGate code="H-03" action={!readOnly ? <Button size="sm" variant="human" onClick={() => desktopPresentation ? setOutlineOpen(true) : scrollTo('step-outline')}>{work.outline.length ? '去确认大纲' : '去写大纲'}</Button> : undefined}>
+            <HumanGate code="H-03" action={!readOnly ? <Button size="sm" variant="human" onClick={() => scrollTo('step-outline')}>{work.outline.length ? '去确认大纲' : '去写大纲'}</Button> : undefined}>
               确认大纲后，这里会按大纲生成段落块，然后你可以逐段起草和修改。
             </HumanGate>
           ) : (
@@ -887,8 +843,6 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
                 <LazyMount key={s.id} id={s.id} enabled={work.sections.length > 30 && i > 3} preview={s.content_md}>
                 <SectionBlock key={s.id} section={s} index={i} total={work.sections.length} work={sectionWork} prefs={prefs} patchWork={patchWork} setWork={setWorkStable}
                   refresh={refresh} readOnly={readOnly} dim={focus && activeIdx >= 0 && Math.abs(i - activeIdx) > 1}
-                  desktopPresentation={desktopPresentation}
-                  active={desktopPresentation && (activeId === s.id || (!activeId && i === 0))}
                   othersHere={members.get(s.id)?.here}
                   othersEditing={members.get(s.id)?.editing} onEditing={reportEditing}
                   onSave={onSave} onMove={moveSection} onRemove={removeSection} onUploadImage={upload} onDrafted={onDrafted}
@@ -903,24 +857,18 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
             </>
           )}
         </section>
-        {!desktopPresentation && <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} hidden={focus} />}
+        <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} hidden={focus} />
         <ImagesCard work={work} setWork={setWorkStable} readOnly={readOnly} upload={upload} hidden={focus} />
         </article>
         {work.locked && <Notice tone="gray">作品已发布，当前为只读模式。</Notice>}
       </div>
 
       {showSidebar && (
-        <aside className={cn('sticky top-20 hidden h-[calc(100vh-6.5rem)] w-[320px] shrink-0 overflow-hidden rounded-xl border border-mist-200 bg-white shadow-card xl:block 2xl:w-[360px]', desktopPresentation && 'desktop-editor-tools')}
-          data-testid={desktopPresentation ? 'desktop-editor-tools' : undefined}>
+        <aside className="sticky top-20 hidden h-[calc(100vh-6.5rem)] w-[320px] shrink-0 overflow-hidden rounded-xl border border-mist-200 bg-white shadow-card xl:block 2xl:w-[360px]">
           <SelectedSidebar work={work} setWork={setWorkStable} active={active} selectionRef={selection} tab={sideTab} onTab={selectSideTab} onClose={() => toggleSidebar(false)} />
         </aside>
       )}
-      {desktopPresentation && <footer className="desktop-editor-bottom" data-testid="desktop-editor-bottom">
-        <span>{totalChars} 字 · {work.sections.length} 个段落</span>
-        <button type="button" onClick={() => toggleSidebar(!sidebar)}>作品工具</button>
-        <span>自动保存 · 冲突时逐项处理</span>
-      </footer>}
-      {desktopPresentation && <Dialog open={outlineOpen} onClose={() => setOutlineOpen(false)} title={work.outline_confirmed_at ? '已确认大纲' : '生成与确认大纲'} desc={work.outline_confirmed_at ? '大纲由你确认；修改后，段落内容仍逐项编辑。' : '先生成或手动编写大纲，确认后才能逐段起稿。'} width="max-w-3xl">
+      {focus && <Dialog open={outlineOpen} onClose={() => setOutlineOpen(false)} title={work.outline_confirmed_at ? '已确认大纲' : '生成与确认大纲'} desc={work.outline_confirmed_at ? '大纲由你确认；修改后，段落内容仍逐项编辑。' : '先生成或手动编写大纲，确认后才能逐段起稿。'} width="max-w-3xl">
         <OutlineCard work={work} setWork={setWorkStable} readOnly={readOnly} onConfirmed={() => setOutlineOpen(false)} />
       </Dialog>}
       {!focus && !showSidebar && (

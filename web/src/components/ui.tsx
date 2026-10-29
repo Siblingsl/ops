@@ -4,7 +4,6 @@ import React, { forwardRef } from 'react'
 import { createPortal } from 'react-dom'
 import type { ContentFormat, Platform, WorkStatus } from '@/lib/types'
 import { errorMessage } from '@/lib/api'
-import { useEmbeddedSettings } from '@/lib/desktop-settings'
 
 export const cn = clsx
 
@@ -473,12 +472,11 @@ export function Kbd({ children }: { children: React.ReactNode }) {
 }
 
 export function PageHeader({ title, desc, action, eyebrow }: { title: React.ReactNode; desc?: React.ReactNode; action?: React.ReactNode; eyebrow?: React.ReactNode }) {
-  const embedded = useEmbeddedSettings()
   return (
-    <div className={cn('mb-6 flex flex-wrap items-end justify-between gap-4', embedded && 'settings-embedded-page-header')}>
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div className="min-w-0">
         {eyebrow && <div className="mb-1 text-xs font-medium tracking-wide text-ink-600">{eyebrow}</div>}
-        {!embedded && <h1 className="page-header-title font-display text-[26px] font-bold leading-tight text-mist-900">{title}</h1>}
+        <h1 className="page-header-title font-display text-[26px] font-bold leading-tight text-mist-900">{title}</h1>
         {desc && <p className="mt-1.5 text-sm text-mist-500">{desc}</p>}
       </div>
       {action && <div className="flex items-center gap-2">{action}</div>}

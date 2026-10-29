@@ -6,7 +6,6 @@ import { ApiError, errorMessage, post, put } from '@/lib/api'
 import { copyText, fmtTime } from '@/lib/format'
 import { useSystemInfo } from '@/lib/session'
 import type { Account, ContentFormat, CredState, Platform } from '@/lib/types'
-import { useSettingsDraft } from '@/lib/desktop-settings'
 
 // D-048 首批预设类型（与 ui.tsx platformFormats、后端 formatMatrix 一致）。每个类型都有真实工作流。
 const matrix: Record<Platform, { value: ContentFormat; label: string; desc: string }[]> = {
@@ -55,7 +54,6 @@ export function AccountCreateForm({
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; platform?: string; content_format?: string }>({})
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
-  const clearDraft = useSettingsDraft(!!(name || typeNote) || platform !== defaultPlatform || format !== matrix[defaultPlatform][0].value, busy)
   const pick = (p: Platform) => {
     setPlatform(p)
     setFormat(matrix[p][0].value)
@@ -70,7 +68,6 @@ export function AccountCreateForm({
       if (beforeSubmit && !(await beforeSubmit())) return
       const a = await post<Account>('/accounts', { platform, name, content_format: format, type_note: typeNote.trim() })
       onSubmitFinished?.(true)
-      clearDraft()
       setName('')
       setTypeNote('')
       setPlatform(defaultPlatform)
@@ -193,13 +190,12 @@ export function EgressIP() {
   )
 }
 
-export function CredentialPanel({ account, onChanged, desktop = false }: { account: Account; onChanged?: () => void; desktop?: boolean }) {
+export function CredentialPanel({ account, onChanged }: { account: Account; onChanged?: () => void }) {
   const c = account.credential
   const [appId, setAppId] = useState(c?.app_id ?? '')
   const [secret, setSecret] = useState('')
   const [busy, setBusy] = useState<'save' | 'test' | 'link' | null>(null)
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
-  useSettingsDraft(appId !== (c?.app_id ?? '') || !!secret, busy !== null)
   const save = async () => {
     setBusy('save')
     try {
@@ -245,13 +241,13 @@ export function CredentialPanel({ account, onChanged, desktop = false }: { accou
   }
   const tone = credTone(c)
   return (
-    <div className={cn('space-y-4', desktop && '@container')}>
+    <div className="space-y-4">
       <div className="flex items-center gap-2 text-[13px] text-mist-600">
         凭证状态 <Badge tone={tone.tone}>{tone.label}</Badge>
         {c?.last_check_at && <span className="text-xs text-mist-400">最近检测 {fmtTime(c.last_check_at)}</span>}
       </div>
       <EgressIP />
-      <div className={cn('grid gap-4', desktop ? '@[640px]:grid-cols-2' : 'sm:grid-cols-2')}>
+      <div className="grid gap-4 sm:grid-cols-2">
         <Field label="AppID">
           <Input value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="wx 开头" className="font-mono" />
         </Field>

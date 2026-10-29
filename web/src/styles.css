@@ -180,12 +180,12 @@ mark.hl.hl-active { background: var(--color-gamboge-300); box-shadow: 0 0 0 2px 
 }
 
 /* ED-05：页头流程条标注为「发布进度」，与编辑器左栏「创作步骤」区分开。 */
-.desktop-workbar-flow-label { margin-bottom: 4px; font-size: 11px; font-weight: 500; color: #8b8f96; }
+.workbar-flow-label { margin-bottom: 4px; font-size: 11px; font-weight: 500; color: #8b8f96; }
 
 @media (max-width: 639px) {
   .work-topbar .workspace-account-compact { width: min(10rem, calc(100vw - 14.375rem)); }
   .work-header > div:first-child { height: auto; min-height: 3.5rem; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0.75rem; }
-  .work-header > div:first-child > .desktop-work-title { flex: 1 1 6rem; }
+  .work-header > div:first-child > .work-title { flex: 1 1 6rem; }
   .work-header-actions { flex: 1 0 100%; justify-content: flex-start; margin-left: 0; flex-wrap: wrap; }
   .work-header-actions > #work-header-action-target { flex: 1 0 100%; min-width: 0; margin-right: 0; }
   #work-header-action-target > div { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 0.5rem; }

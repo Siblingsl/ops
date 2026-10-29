@@ -1,82 +1,18 @@
 import { test, expect, type Page } from '@playwright/test'
-import type { ElectronApplication } from '@playwright/test'
-import { desktopSettingsLabel, settingsEntries, settingsGroupOf } from '../src/lib/settings-registry'
-
-export async function electronLocalSettingsEvaluate<T>(app: ElectronApplication, source: string): Promise<T> {
-  return await app.evaluate(async ({ webContents }, script) => {
-    const view = webContents.getAllWebContents().find((candidate) => candidate.getURL().startsWith('ops-desktop://settings/embedded/'))
-    if (!view) throw new Error('找不到统一设置中的本机面板')
-    return view.executeJavaScript(script)
-  }, source) as T
-}
-
-export function electronLocalSettingsClick(app: ElectronApplication, selector: string) {
-  return electronLocalSettingsEvaluate<boolean>(app,
-    `(()=>{const element=document.querySelector(${JSON.stringify(selector)});if(!element)throw new Error('缺少本机设置控件：'+${JSON.stringify(selector)});element.click();return true})()`)
-}
-
-export function electronLocalSettingsSetValue(app: ElectronApplication, selector: string, value: string) {
-  return electronLocalSettingsEvaluate<boolean>(app,
-    `(()=>{const element=document.querySelector(${JSON.stringify(selector)});if(!element)throw new Error('缺少本机设置控件：'+${JSON.stringify(selector)});element.value=${JSON.stringify(value)};element.dispatchEvent(new Event(element instanceof HTMLSelectElement?'change':'input',{bubbles:true}));return true})()`)
-}
-
-export function electronLocalSettingsReadStatus(app: ElectronApplication) {
-  return electronLocalSettingsEvaluate<string>(app, `document.querySelector('#action-status')?.textContent ?? ''`)
-}
 
 /**
- * 本机设置是 WebContentsView，切换面板时主进程才异步 loadURL
- * （desktop/src/settings-view.ts 的 show()：`if (panelChanged) await view.webContents.loadURL(...)`）。
- * 点完设置项立刻读 DOM 会读到上一个面板，所以先等这个面板的 webContents 真的出现。
+ * Web 端 E2E 辅助（纯浏览器形态）。
+ *
+ * 桌面形态的辅助在本文件里没有副本，统一放在 `desktop/renderer-src/e2e/support.ts`。
+ * 本文件不允许出现 Electron 类型、UA 注入、`data-presentation` 判断，
+ * 由 `tests/web-boundary.test.mjs` 静态约束。
  */
-export async function electronLocalSettingsWaitPanel(app: ElectronApplication, panel: string) {
-  await expect.poll(() => app.evaluate(({ webContents }) => webContents.getAllWebContents().map((item) => item.getURL())))
-    .toContain(`ops-desktop://settings/embedded/${panel}`)
-  // URL 与初始 DOM 先出现；初始 IPC 读取完成后页面才解除 inert。
-  // executeJavaScript 的 .click() 会绕过用户点击的 inert 限制，不能提前操作。
-  await expect.poll(() => electronLocalSettingsEvaluate<boolean>(app,
-    `document.body.dataset.embeddedPanel === ${JSON.stringify(panel)} && document.querySelector('#settings-content')?.inert === false`))
-    .toBe(true)
-}
-
-/**
- * 本机设置的「忙」状态会挡住切换面板：业务窗收到 busy 时，离开面板前会弹
- * 「正在保存设置，请稍候再离开」并把 URL 退回去（web/src/layout/DesktopSettingsHost.tsx 的 askBeforeLeaving）。
- * settings.js 里 busy 由 `activeOperations > 0 || externalBusy` 决定，两个都是脚本顶层变量，
- * 可以直接在面板里读到。切面板前等它空闲，避免把「产品正确地拦住」当成失败。
- */
-export async function electronLocalSettingsWaitIdle(app: ElectronApplication) {
-  await expect.poll(() => electronLocalSettingsEvaluate<{ operations: number; external: boolean }>(app,
-    `({operations:activeOperations,external:externalBusy})`))
-    .toEqual({ operations: 0, external: false })
-}
 
 export async function api(page: Page, method: string, path: string, data?: unknown) {
   const me = await (await page.request.get('/api/v1/auth/me')).json()
   const response = await page.request.fetch('/api/v1' + path, { method, data, headers: { 'X-CSRF-Token': me.csrf_token } })
   expect(response.ok(), `${method} ${path}: ${await response.text()}`).toBeTruthy()
   return response.json()
-}
-
-/**
- * GL-02：设置分组只在 `src/lib/settings-registry.ts` 维护一份事实源。
- * 这里按设置窗的显示名反查条目，再用与 `DesktopSettingsHost` 相同的规则推导分组，
- * 不再维护第四份「设置名 → 分组」映射。
- */
-export function desktopSettingGroup(name: string) {
-  const entry = settingsEntries.find((item) => desktopSettingsLabel(item) === name)
-  if (!entry) throw new Error(`缺少设置项：${name}`)
-  return settingsGroupOf(entry)
-}
-
-export async function selectDesktopSetting(page: Page, name: string) {
-  const nav = page.getByTestId('desktop-settings-window').getByRole('navigation', { name: '设置分类' })
-  const item = nav.getByRole('button', { name, exact: true })
-  if (!(await item.isVisible())) {
-    const group = nav.getByRole('button', { name: desktopSettingGroup(name), exact: true })
-    if (await group.getAttribute('aria-expanded') !== 'true') await group.click()
-  }
-  await item.click()
 }
 
 export async function registerAccount(page: Page, type = '图文笔记', platform: 'xhs' | 'wechat_mp' | 'toutiao' = 'xhs', username = `e2e-${Date.now()}-${test.info().workerIndex}`) {
@@ -113,15 +49,9 @@ export async function registerAccount(page: Page, type = '图文笔记', platfor
 }
 
 /**
- * 桌面端设置窗口会用 `?id=` 与「本机记住的当前账号」比对，不一致就只显示提示卡片。
- * 验收脚本里直接把偏好写到目标账号，避免依赖上一页 React 副作用写入的时机。
+ * Web 形态：大纲直接嵌在编辑页步骤流里，没有桌面侧栏步骤导航，也没有大纲对话框。
+ * 桌面形态的对应实现见 `desktop/renderer-src/e2e/support.ts`。
  */
-export async function preferDesktopAccount(page: Page, accountId: string) {
-  const me = await api(page, 'GET', '/auth/me')
-  const key = `ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`
-  await page.evaluate(({ key: storageKey, id }) => localStorage.setItem(storageKey, id), { key, id: accountId })
-}
-
 export async function createOutline(page: Page) {
   await page.getByRole('button', { name: '新建作品', exact: true }).first().click()
   // NW-A1：所有入口都先打开同一个创建面板；标题可留空，直接开始创作。
@@ -130,25 +60,15 @@ export async function createOutline(page: Page) {
   await panel.getByRole('button', { name: '开始创作', exact: true }).click()
   await page.waitForURL(/\/works\/[a-f0-9-]+$/)
   const id = page.url().split('/').pop()!
-  const desktopPresentation = await page.locator('html').getAttribute('data-presentation') === 'ops-creative-desktop'
-  if (desktopPresentation) await page.getByTestId('desktop-editor-steps').getByRole('link', { name: '大纲', exact: true }).click()
-  const outlineDialog = desktopPresentation
-    ? page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '生成与确认大纲', exact: true }) })
-    : page.locator('body')
-  if (desktopPresentation) await expect(outlineDialog).toBeVisible()
+  const outline = page.locator('body')
   const viewpoint = page.locator('#step-viewpoint textarea').first()
-  await expect(outlineDialog.getByRole('button', { name: 'AI 生成大纲', exact: true })).toBeDisabled()
+  await expect(outline.getByRole('button', { name: 'AI 生成大纲', exact: true })).toBeDisabled()
   await viewpoint.fill('少而精的步骤更容易长期坚持，这是我的经验判断。')
   await viewpoint.blur()
-  await outlineDialog.getByRole('button', { name: 'AI 生成大纲', exact: true }).click()
-  await expect(outlineDialog.getByRole('button', { name: '确认大纲', exact: true })).toBeVisible()
-  if (desktopPresentation) {
-    const panel = await outlineDialog.boundingBox()
-    expect(panel!.y).toBeGreaterThan(40)
-    expect(panel!.y + panel!.height).toBeLessThanOrEqual(await page.evaluate(() => innerHeight))
-  }
+  await outline.getByRole('button', { name: 'AI 生成大纲', exact: true }).click()
+  await expect(outline.getByRole('button', { name: '确认大纲', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '起草本段', exact: true })).toHaveCount(0)
-  await outlineDialog.getByRole('button', { name: '确认大纲', exact: true }).click()
+  await outline.getByRole('button', { name: '确认大纲', exact: true }).click()
   await expect(page.getByText('已确认', { exact: true }).first()).toBeVisible()
   return id
 }

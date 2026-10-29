@@ -3,3 +3,7 @@ node_modules/
 out/
 out-verification/
 *.log
+
+renderer-src/node_modules/
+renderer-src/dist/
+renderer-src/*.tsbuildinfo

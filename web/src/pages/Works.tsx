@@ -12,7 +12,7 @@ import { relTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { deleteWithUndo } from '@/lib/undo'
 import { useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
-import type { Account, StarItem, Work, WorkListItem, WorkStatus, WorkspaceMember } from '@/lib/types'
+import type { Account, StarItem, Work, WorkListItem, WorkStatus } from '@/lib/types'
 import { usePrefetchWork, usePrefs, useSavePrefs } from '@/lib/v3'
 import { useCreateWork } from './Dashboard'
 import { openCreateWork } from '@/components/create-work-panel'
@@ -123,14 +123,12 @@ function WorkTagsDialog({ work, onClose, onSave }: { work: WorkListItem; onClose
 }
 
 export default function Works() {
-  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const nav = useNavigate()
   const [copying, setCopying] = useState<string | null>(null)
   const prefetch = usePrefetchWork()
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
   const { data: me } = useMe()
-  const members = useQuery({ queryKey: ['members'], queryFn: () => get<WorkspaceMember[]>('/workspaces/current/members'), staleTime: 300_000 })
   const [params, setParams] = useSearchParams()
   const filter = (params.get('status') as Filter) || 'all'
   const q = params.get('q') ?? ''
@@ -192,10 +190,10 @@ export default function Works() {
   const tagOptions = [...new Set([...rows.flatMap((w) => w.tags ?? []), ...(tag ? [tag] : [])])].sort()
   const shown = list.filter((w) => !filterStatus[filter] || filterStatus[filter]!.includes(w.status))
   const count = (f: Filter) => list.filter((w) => !filterStatus[f] || filterStatus[f]!.includes(w.status)).length
-  const savedViews = <SavedViews current={params.toString()} onApply={(query) => setParams(new URLSearchParams(query), { replace: true })} className={desktopPresentation ? 'desktop-works-saved-views' : undefined} />
+  const savedViews = <SavedViews current={params.toString()} onApply={(query) => setParams(new URLSearchParams(query), { replace: true })} />
   const searchField = <div className="relative ml-auto w-full sm:w-64">
     <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mist-400" />
-    <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={desktopPresentation ? '搜索作品名称或标签' : '搜索标题'} className="pl-9" />
+    <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索标题" className="pl-9" />
   </div>
   const quickFilters = <div className="flex items-center gap-1.5">
     <button onClick={() => setParam('star', onlyStar ? '' : '1')}
@@ -237,8 +235,8 @@ export default function Works() {
     } catch (e) { toast.error(errorMessage(e)) }
   }
   return (
-    <div className={cn('animate-fade-in', desktopPresentation && 'desktop-works-page')}>
-      <PageHeader title="作品" desc={desktopPresentation ? '每一篇内容，都有自己的生长节奏。' : `${acc.name} 的全部作品`} action={sourceView === 'local' && canWrite ? <div className="flex gap-2">
+    <div className="animate-fade-in">
+      <PageHeader title="作品" desc={`${acc.name} 的全部作品`} action={sourceView === 'local' && canWrite ? <div className="flex gap-2">
         {acc.platform === 'wechat_mp' && acc.content_format === 'long_article' && <Button variant="secondary" onClick={() => setImportOpen(true)}>导入旧文</Button>}
         <Button variant="primary" icon={<PenLine className="size-4" />} onClick={() => create()}>新建作品</Button>
       </div> : undefined} />
@@ -249,7 +247,7 @@ export default function Works() {
         ]} />
       </div>
       {sourceView === 'platform' ? <PlatformWorksView account={acc} canWrite={canWrite} /> : <>
-      <div className={desktopPresentation ? 'desktop-works-status-row' : 'mb-5 flex flex-wrap items-center gap-3'}>
+      <div className="mb-5 flex flex-wrap items-center gap-3">
         <Tabs role="tablist" ariaLabel="作品状态" value={filter} onChange={setFilter} items={[
           { value: 'all', label: '全部', count: count('all') },
           { value: 'drafting', label: '创作中', count: count('drafting') },
@@ -260,69 +258,24 @@ export default function Works() {
           { value: 'published', label: '已发布', count: count('published') },
         ]} />
       </div>
-      <div className={cn('mb-5 flex flex-wrap items-center gap-3', desktopPresentation && 'desktop-works-filter-row')}>
-        {desktopPresentation && searchField}
+      <div className="mb-5 flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-1.5">
-          {!desktopPresentation && quickFilters}
+          {quickFilters}
           <select aria-label="按标签筛选" value={tag} onChange={(e) => setParam('tag', e.target.value)}
             className="h-8 rounded-full border border-mist-200 bg-white px-2.5 text-[12.5px] text-mist-600 outline-none focus:border-ink-300">
             <option value="">全部标签</option>
             {tagOptions.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
-          {desktopPresentation && <select aria-label="负责人" value={assignee} onChange={(e) => setParam('assignee', e.target.value)}
-            className="h-8 rounded-full border border-mist-200 bg-white px-2.5 text-[12.5px] text-mist-600 outline-none focus:border-ink-300">
-            <option value="">全部负责人</option>
-            {(members.data ?? []).filter((member) => member.status === 'active').map((member) => <option key={member.user_id} value={member.user_id}>{member.username}</option>)}
-          </select>}
-          {desktopPresentation && quickFilters}
         </div>
-        {!desktopPresentation && searchField}
-        {desktopPresentation && savedViews}
+        {searchField}
       </div>
-      {!desktopPresentation && savedViews}
+      {savedViews}
       {/* XC-04：请求失败要说"加载失败"并可重试，不能显示成"这里还没有作品"。 */}
       {isError ? <PageState loading={false} error={error} onRetry={() => void refetch()} />
         : isLoading ? <PageLoading /> : shown.length === 0 ? (
-        desktopPresentation ? <section className="desktop-works-table" data-testid="desktop-works-table"><div className="desktop-works-empty"><Empty icon={<FileText className="size-5" />} title="这里还没有作品" desc={canWrite ? '从选题池开始，或者直接新建一篇。' : '当前为观察者，只能浏览已有作品。'} action={canWrite ? <EmptyCreateActions create={create} onTopics={() => nav(`/a/${acc.id}/topics`)} /> : undefined} /></div></section>
-          : <Card><Empty icon={<FileText className="size-5" />} title="这里还没有作品" desc={canWrite ? '从选题池开始，或者直接新建一篇。' : '当前为观察者，只能浏览已有作品。'} action={canWrite ? <EmptyCreateActions create={create} onTopics={() => nav(`/a/${acc.id}/topics`)} /> : undefined} /></Card>
+        <Card><Empty icon={<FileText className="size-5" />} title="这里还没有作品" desc={canWrite ? '从选题池开始，或者直接新建一篇。' : '当前为观察者，只能浏览已有作品。'} action={canWrite ? <EmptyCreateActions create={create} onTopics={() => nav(`/a/${acc.id}/topics`)} /> : undefined} /></Card>
       ) : (
-        desktopPresentation ? <section className="desktop-works-table" data-testid="desktop-works-table" role="table" aria-label="作品列表">
-          <div className="desktop-work-row desktop-work-header" role="row">
-            <span role="columnheader" aria-label="收藏" />
-            <span role="columnheader">作品名称</span>
-            <span role="columnheader">状态</span>
-            <span role="columnheader">计划发布</span>
-            <span role="columnheader">最近修改</span>
-            <span role="columnheader" aria-label="操作" />
-          </div>
-          {shown.map((w) => (
-            <div key={w.id} className="desktop-work-row" role="row" data-testid="desktop-work-row">
-              <span role="cell" className="desktop-work-star-cell">
-                <IconButton label={starSet.has(w.id) ? '取消收藏' : '收藏'} onClick={() => toggleStar(w)} className={starSet.has(w.id) ? 'text-gamboge-500' : 'text-mist-400'}>
-                  <Star className={cn('size-4', starSet.has(w.id) && 'fill-current')} />
-                </IconButton>
-              </span>
-              <span role="cell" className="desktop-work-title-cell">
-                <Link to={workLink(w, acc?.platform)} {...prefetch.hover(w.id)} data-testid="work-row-link">
-                  <FileText aria-hidden="true" />
-                  <span><strong>{w.title || '未命名作品'}</strong><small>{(w.tags ?? []).join(' · ') || `${w.section_count} 段 · ${w.char_count.toLocaleString()} 字`}{w.source_title !== null && w.source_work_id ? ` · 派生自《${w.source_title || '未命名'}》` : ''}</small></span>
-                </Link>
-              </span>
-              <span role="cell"><StatusBadge status={w.status} /></span>
-              <span role="cell" className="desktop-work-date-cell">{w.planned_date ? `${w.planned_date.slice(5, 7)} 月 ${w.planned_date.slice(8, 10)} 日` : '未安排'}</span>
-              <span role="cell" className="desktop-work-updated-cell">{relTime(w.updated_at)}</span>
-              <span role="cell" className="desktop-work-actions">
-                {/* GL-07：ready 行的行点击落到推送/发布包页，但用户找的是"发布"这个动作，
-                    给一个显式次按钮，避免只能猜"点标题就行"。 */}
-                {w.status === 'ready' && <IconButton label="去发布" onClick={() => nav(workLink(w, acc?.platform))}><Send className="size-4" /></IconButton>}
-                {canWrite && <IconButton label="编辑作品标签" onClick={() => setTagEditing(w)}><Tag className="size-4" /></IconButton>}
-                {canWrite && <IconButton label="派生到其他平台" onClick={() => setDerive(w)}><GitBranch className="size-4" /></IconButton>}
-                {canWrite && <MoreMenu items={[{ label: '复制为新草稿', icon: <Copy />, disabled: !!copying, loading: copying === w.id, onClick: () => void duplicate(w.id) }]} />}
-                {canWrite && <IconButton label="删除" onClick={() => void remove(w)} className="hover:text-danger"><Trash2 className="size-4" /></IconButton>}
-              </span>
-            </div>
-          ))}
-        </section> : <Card className="divide-y divide-mist-100">
+        <Card className="divide-y divide-mist-100">
           {shown.map((w) => {
             const thumb = w.cover_asset_id ?? w.first_asset_id
             return (

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ApiError, errorMessage, patch } from '@/lib/api'
 import { clearDraft, enqueueSync, readDraft, writeDraft } from '@/lib/local-draft'
-import { DESKTOP_LEAVE_GUARD_REQUEST } from '@/lib/desktop-settings'
 import type { Section, Work } from '@/lib/types'
 import { createSectionSaveQueue, type SectionSnapshot } from './section-save-queue'
 
@@ -88,19 +87,6 @@ export function useSectionSave(options: SaveOptions) {
     } while (dirty.current)
     return true
   }
-  useEffect(() => {
-    const request = (event: Event) => {
-      if ((event as CustomEvent<{ draftOnly?: boolean }>).detail?.draftOnly) return
-      const register = (event as CustomEvent<{ register?: (check: () => Promise<boolean> | boolean) => void }>).detail?.register
-      register?.(async () => {
-        const saved = await flush()
-        if (!saved) toast.info('作品草稿尚未保存成功，请处理保存冲突或网络问题后再离开。')
-        return saved
-      })
-    }
-    window.addEventListener(DESKTOP_LEAVE_GUARD_REQUEST, request)
-    return () => window.removeEventListener(DESKTOP_LEAVE_GUARD_REQUEST, request)
-  }, [])
   const load = (value: Section) => {
     revision.current = value.revision
     content.current = value.content_md

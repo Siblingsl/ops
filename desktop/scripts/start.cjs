@@ -4,9 +4,8 @@ const net = require('node:net');
 const { spawn, spawnSync } = require('node:child_process');
 
 const desktopRoot = path.resolve(__dirname, '..');
-const projectRoot = path.resolve(desktopRoot, '..');
-const webRoot = path.join(projectRoot, 'web');
-const viteCli = path.join(webRoot, 'node_modules', 'vite', 'bin', 'vite.js');
+const rendererRoot = path.join(desktopRoot, 'renderer-src');
+const viteCli = path.join(rendererRoot, 'node_modules', 'vite', 'bin', 'vite.js');
 const forgeStartCli = path.join(desktopRoot, 'node_modules', '@electron-forge', 'cli', 'dist', 'electron-forge-start.js');
 let localOrigin = 'http://localhost:5174';
 const defaultApiTarget = 'https://ops-api.88813888.xyz';
@@ -91,7 +90,7 @@ process.on('SIGTERM', stop);
 
 async function main() {
   if (!process.env.OPS_DESKTOP_DEV_URL) {
-    if (!fs.existsSync(viteCli)) throw new Error('未找到 web/node_modules/vite，请先按项目说明安装前端依赖。');
+    if (!fs.existsSync(viteCli)) throw new Error('未找到 desktop/renderer-src/node_modules/vite，请先按项目说明安装前端依赖。');
 
     const port = await findAvailableVitePort();
     localOrigin = `http://localhost:${port}`;
@@ -101,7 +100,7 @@ async function main() {
     const localApi = ['localhost', '127.0.0.1', '[::1]'].includes(apiHost);
     const apiProxy = process.env.OPS_API_PROXY || (localApi ? '' : resolveSystemApiProxy(apiTarget));
     viteProcess = spawn(process.execPath, [viteCli, '--host', 'localhost', '--port', String(port), '--strictPort'], {
-      cwd: webRoot,
+      cwd: rendererRoot,
       env: { ...process.env, BROWSER: 'none', OPS_API_TARGET: apiTarget, OPS_API_PROXY: apiProxy },
       stdio: 'inherit',
       windowsHide: true

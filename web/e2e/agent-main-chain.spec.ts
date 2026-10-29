@@ -104,6 +104,8 @@ async function executeCard(page: Page, conversationId: string, action: AgentActi
 }
 
 test('E2E-24 公众号主链路经智能体逐张确认到回填已发布', async ({ page }) => {
+  // 四个连续 agent 回合（观点 → 生成大纲 → 保存大纲 → 确认大纲），默认 90s 不够稳定。
+  test.setTimeout(240_000)
   const { work } = await prepareAgent(page)
   const viewpoint = '先把目标拆成今天能完成的一小步，再用持续记录代替一味追求复杂方法。'
 

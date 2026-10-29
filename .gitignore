@@ -12,6 +12,7 @@ server/tmp/
 # 前端
 web/node_modules/
 web/dist/
+web/dist-crossorigin/
 desktop/renderer/
 web/.vite/
 web/*.tsbuildinfo
@@ -48,7 +49,13 @@ docs/design/desktop-creative/prototype/*
 !docs/design/desktop-creative/prototype/components.css
 !docs/design/desktop-creative/prototype/prototype.js
 # 工具目录（工作记忆等）
+.workbuddy/
 .workbuddy-ai/
 .dsh-notes/
 .playwright-cli/
 .gocache/
+
+# 并行验收的临时构建/截图现场，不属于产品源码
+d155-verification-20261028/
+# E2E 运行时生成的临时校验目录
+tmpverify/

@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
@@ -7,9 +7,7 @@ import { Button, Empty, Input, PageLoading } from '@/components/ui'
 import { errorMessage, get, post, put } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import { contentStateLabel, fieldNameLabel, fieldStateLabel, platformErrorCopy } from '@/lib/platform-errors'
-import { requestDesktopPlatformIntent } from '@/lib/desktop-platform-intent'
-import { useMe } from '@/lib/session'
-import type { Account, PlatformConnection, PlatformSyncOperation, PlatformWorkMirror, PlatformWorkMirrorListItem, PlatformWorkMirrorPage, Work, WorkListItem } from '@/lib/types'
+import type { Account, PlatformWorkMirror, PlatformWorkMirrorListItem, PlatformWorkMirrorPage, Work, WorkListItem } from '@/lib/types'
 
 const contentTypeName: Record<string, string> = {
   image_note: '图文笔记', video_note: '视频笔记', wechat_article: '公众号文章',
@@ -22,19 +20,6 @@ const contentStateName: Record<string, string> = {
   complete: '正文完整', partial: '正文部分可用', unsupported: '平台暂不支持读取正文', denied: '平台拒绝读取正文',
   not_requested: '尚未请求正文', failed: '正文读取失败', unknown: '完整性未知',
 }
-const syncStatusName: Record<PlatformSyncOperation['status'], string> = {
-  queued: '等待本机开始同步', running: '正在同步', paused: '同步已暂停', waiting_budget: '等待可用读取额度',
-  waiting_device: '等待保存登录态的客户端', waiting_login: '等待重新核对平台登录', succeeded: '同步完成',
-  partial: '同步部分完成', failed: '同步失败', canceled: '同步已取消',
-}
-const syncStageName: Record<string, string> = {
-  profile: '账号资料', catalog: '作品目录', content: '作品内容', metrics: '作品统计', complete: '结果整理',
-}
-const activeSyncStatuses = new Set<PlatformSyncOperation['status']>([
-  'queued', 'running', 'paused', 'waiting_budget', 'waiting_device', 'waiting_login',
-])
-const terminalSyncStatuses = new Set<PlatformSyncOperation['status']>(['succeeded', 'partial', 'failed', 'canceled'])
-
 function dateText(value: string | null | undefined) {
   return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '平台未提供'
 }
@@ -148,38 +133,18 @@ function PlatformMirrorLinkDialog({ account, mirror, onClose, onLinked }: {
   )
 }
 
-function MirrorDetail({ account, mirrorID, canWrite, onClose, onLink, onCreateDraft, metricRefreshReason, onRefreshMetrics }: {
+function MirrorDetail({ account, mirrorID, canWrite, onClose, onLink, onCreateDraft }: {
   account: Account
   mirrorID: string
   canWrite: boolean
   onClose: () => void
   onLink: (mirror: PlatformWorkMirror) => void
   onCreateDraft: (mirror: PlatformWorkMirror) => void
-  metricRefreshReason: string | null
-  onRefreshMetrics: (mirrorID: string) => Promise<string>
 }) {
-  const [metricOperationID, setMetricOperationID] = useState('')
   const query = useQuery({
     queryKey: ['platform-work-mirror', account.id, mirrorID],
     queryFn: async () => (await get<{ work: PlatformWorkMirror }>(`/accounts/${account.id}/platform-works/${mirrorID}`)).work,
   })
-  const metricOperation = useQuery({
-    queryKey: ['platform-sync-operation', account.id, metricOperationID],
-    queryFn: () => get<{ operation: PlatformSyncOperation }>(`/accounts/${account.id}/platform-sync-operations/${metricOperationID}`),
-    enabled: !!metricOperationID,
-    refetchInterval: (state) => {
-      const status = state.state.data?.operation.status
-      return status && ['succeeded', 'partial', 'failed', 'canceled'].includes(status)
-        ? false : document.visibilityState === 'visible' ? 5_000 : 30_000
-    },
-  })
-  useEffect(() => {
-    const status = metricOperation.data?.operation.status
-    if (status && ['succeeded', 'partial', 'failed', 'canceled'].includes(status)) {
-      void query.refetch()
-      setMetricOperationID('')
-    }
-  }, [metricOperation.data?.operation.status])
   const mirror = query.data
   const draftBlockReason = mirror ? mirrorDraftBlockReason(mirror, account) : null
   const draftRepair = mirror && draftBlockReason ? mirrorDraftRepair(mirror) : null
@@ -253,15 +218,9 @@ function MirrorDetail({ account, mirrorID, canWrite, onClose, onLink, onCreateDr
         </section>}
         {mirror.canonical_url && <a href={mirror.canonical_url} target="_blank" rel="noopener noreferrer" className="inline-block text-ink-700 underline">在平台打开原作品</a>}
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-mist-100 pt-4">
-          {metricOperationID && <span className="mr-auto text-xs text-mist-500">
-            {metricOperation.data?.operation.status === 'running' ? '正在刷新这篇作品的指标…' : '已排入这篇作品的指标刷新；进度可在账号设置查看。'}
-          </span>}
           <div className="text-right">
-            <Button variant="ghost" disabled={!!metricRefreshReason || !!metricOperationID || !mirror} onClick={() => {
-              if (!mirror) return
-              void onRefreshMetrics(mirror.id).then(setMetricOperationID).catch((error) => toast.error(errorMessage(error)))
-            }}>刷新此篇指标</Button>
-            {metricRefreshReason && <p className="mt-1 max-w-xs text-xs text-mist-500">{metricRefreshReason}</p>}
+            <Button variant="ghost" disabled>刷新此篇指标</Button>
+            <p className="mt-1 max-w-xs text-xs text-mist-500">请在 OPS 桌面客户端刷新平台指标。</p>
           </div>
           {canWrite && !mirror.bindings.length && !mirror.is_bound && <Button variant="secondary" onClick={() => onLink(mirror)}>关联现有作品</Button>}
           {canWrite && !mirror.is_bound && !mirror.bindings.length && <div className="text-right">
@@ -282,91 +241,13 @@ export function PlatformWorksView({ account, canWrite }: { account: Account; can
   const [selectedID, setSelectedID] = useState('')
   const [linkingMirror, setLinkingMirror] = useState<PlatformWorkMirror | null>(null)
   const client = useQueryClient()
-  const completedSyncRefresh = useRef(new Set<string>())
   const navigate = useNavigate()
-  const { data: me } = useMe()
-  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
-  const connectionQuery = useQuery({
-    queryKey: ['platform-connection', account.id],
-    queryFn: () => get<{ connection: PlatformConnection | null }>(`/accounts/${account.id}/platform-connection`),
-    enabled: desktopPresentation && account.platform !== 'toutiao',
-    staleTime: 15_000,
-  })
-  const policyQuery = useQuery({
-    queryKey: ['platform-collection-policy', me?.workspace.id ?? ''],
-    queryFn: () => get<{ global_enabled: boolean; metrics_refresh_platforms?: string[]; policy: { enabled: boolean } }>('/platform-collection/policy'),
-    enabled: desktopPresentation && account.platform !== 'toutiao' && !!me?.workspace.id,
-    staleTime: 60_000,
-    retry: false,
-  })
-  const connection = connectionQuery.data?.connection ?? null
-  const syncOperations = useQuery({
-    queryKey: ['platform-sync-operations', account.id],
-    queryFn: () => get<{ items: PlatformSyncOperation[] }>(`/accounts/${account.id}/platform-sync-operations?limit=20`),
-    enabled: desktopPresentation && account.platform !== 'toutiao',
-    staleTime: 5_000,
-    refetchInterval: (query) => {
-      const hasActiveSync = (query.state.data?.items ?? []).some((operation) =>
-        operation.kind === 'account_sync' && activeSyncStatuses.has(operation.status))
-      if (!hasActiveSync) return false
-      return document.visibilityState === 'visible' ? 5_000 : 30_000
-    },
-  })
-  const accountSync = syncOperations.data?.items.find((operation) => operation.kind === 'account_sync')
-  const activeAccountSync = syncOperations.data?.items.find((operation) =>
-    operation.kind === 'account_sync' && activeSyncStatuses.has(operation.status))
-  const accountSyncText = accountSync && [
-    syncStatusName[accountSync.status],
-    syncStageName[accountSync.stage] ?? accountSync.stage,
-    Number.isFinite(accountSync.counters.discovered) ? `发现 ${accountSync.counters.discovered} 篇` : '',
-    Number.isFinite(accountSync.counters.content_received) ? `详情完成 ${accountSync.counters.content_received} 篇` : '',
-    Number.isFinite(accountSync.counters.metrics_observed) ? `统计读取 ${accountSync.counters.metrics_observed} 篇` : '',
-    Number.isFinite(accountSync.counters.failed) && accountSync.counters.failed > 0 ? `未完成 ${accountSync.counters.failed} 项` : '',
-  ].filter(Boolean).join(' · ')
-  const metricRefreshReason = !desktopPresentation ? '请在 OPS 桌面客户端刷新平台指标。'
-    : !window.opsDesktopUI?.onPlatformIntentResult ? '当前 OPS 桌面客户端不支持指标刷新，请重启客户端后重试。'
-    : me?.admin_override ? '系统管理员代入工作区时只能查看，不能读取平台数据。'
-      : !canWrite ? '当前角色为只读，不能发起平台指标刷新。'
-        : account.status !== 'active' ? '此账号已停用，不能刷新平台指标。'
-          : connectionQuery.isLoading ? '正在核实本机平台连接…'
-            : connectionQuery.isError ? '无法核实本机平台连接，请重试账号状态。'
-              : !connection ? '请先在账号设置中登录并核对平台身份。'
-                : !connection.is_holder ? '请由连接保管人在保存登录态的主设备上刷新。'
-                  : connection.state !== 'active' || connection.availability !== 'ready' ? '平台连接当前不可读取，请先重新核对登录。'
-                    : !policyQuery.data || policyQuery.isError ? '无法核实服务端能力与工作区策略。'
-                      : !policyQuery.data.global_enabled || !policyQuery.data.policy.enabled ? '服务端或工作区尚未启用平台数据读取。'
-                        : !policyQuery.data.metrics_refresh_platforms?.includes(account.platform) ? '该平台的指标刷新能力尚未通过验收并启用。'
-                          : connection.sync_capabilities?.metrics !== 'supported' ? '平台作品指标读取能力尚未核验。'
-                            : null
-
-  const refreshSingleWorkMetrics = async (mirrorID: string): Promise<string> => {
-    if (metricRefreshReason || !connection) throw new Error(metricRefreshReason || '平台连接不可用。')
-    const result = await requestDesktopPlatformIntent({
-      type: 'platform-metrics-refresh',
-      accountId: account.id,
-      connectionRevision: connection.authorization_revision,
-      platformWorkId: mirrorID,
-    })
-    if (result.status === 'no_targets') throw new Error('当前没有可刷新指标的作品。')
-    if (!result.operationId) throw new Error('服务端没有返回指标刷新操作编号。')
-    if (result.status === 'existing') toast.info('已有同目标的指标刷新操作，正在刷新进度。')
-    else toast.success('已建立这篇作品的指标刷新操作')
-    return result.operationId
-  }
   const works = useInfiniteQuery({
     queryKey: ['platform-work-mirrors', account.id, search],
     queryFn: ({ pageParam }) => get<PlatformWorkMirrorPage>(`/accounts/${account.id}/platform-works?limit=20${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}${search.trim() ? `&q=${encodeURIComponent(search.trim())}` : ''}`),
     initialPageParam: '' as string,
     getNextPageParam: (page) => page.next_cursor ?? undefined,
-    refetchInterval: activeAccountSync && ['queued', 'running'].includes(activeAccountSync.status)
-      ? (document.visibilityState === 'visible' ? 15_000 : 30_000)
-      : false,
   })
-  useEffect(() => {
-    if (!accountSync || !terminalSyncStatuses.has(accountSync.status) || completedSyncRefresh.current.has(accountSync.id)) return
-    completedSyncRefresh.current.add(accountSync.id)
-    void works.refetch()
-  }, [accountSync?.id, accountSync?.status, works.refetch])
   const items = works.data?.pages.flatMap((page) => page.items) ?? []
   const createDraft = async (mirror: PlatformWorkMirror) => {
     try {
@@ -387,17 +268,10 @@ export function PlatformWorksView({ account, canWrite }: { account: Account; can
       <Input className="max-w-sm" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索平台作品标题" aria-label="搜索平台作品" />
       <p className="text-xs text-mist-500">镜像只读展示，不计入本地创作和发布数量。</p>
     </div>
-    {accountSyncText && <p className="rounded-lg border border-ink-100 bg-white px-3 py-2 text-xs text-mist-600" role="status" aria-live="polite">
-      {accountSyncText}{activeAccountSync && <span className="ml-2 text-mist-500">新发现的作品会自动显示。</span>}
-    </p>}
     {works.isLoading ? <PageLoading /> : works.isError ? <div className="rounded-xl border border-danger/20 bg-danger/5 p-5 text-sm text-danger">{errorMessage(works.error)} <button className="ml-1 underline" onClick={() => void works.refetch()}>重试</button></div>
       : items.length === 0 ? <div className="rounded-xl border border-mist-200 bg-white p-5"><Empty
-        title={activeAccountSync ? '正在同步平台作品' : accountSync?.status === 'failed' ? '上次同步失败' : accountSync?.status === 'partial' ? '上次同步部分完成' : accountSync?.status === 'succeeded' ? '同步完成，暂无可显示作品' : '还没有同步的平台作品'}
-        desc={activeAccountSync ? '已保存到项目的作品会自动显示在这里；目录同步期间列表会定时刷新。'
-          : accountSync?.status === 'failed' ? '请到账号设置查看同步失败原因后重试。'
-            : accountSync?.status === 'partial' ? '请到账号设置查看未完成范围；已保存的作品会显示在这里。'
-              : accountSync?.status === 'succeeded' ? '本次同步没有返回可显示的已发布作品，请到账号设置查看目录覆盖情况。'
-                : '请先在账号设置中发起平台账号同步。平台能力尚未核验时，同步入口会显示具体限制。'} /></div>
+        title="还没有同步的平台作品"
+        desc="请先在账号设置中发起平台账号同步。平台能力尚未核验时，同步入口会显示具体限制。" /></div>
         : <div className="space-y-2">{items.map((item: PlatformWorkMirrorListItem) => <button key={item.id} type="button" onClick={() => setSelectedID(item.id)}
           className="grid w-full cursor-pointer gap-3 rounded-xl border border-mist-200 bg-white p-4 text-left transition hover:border-ink-300 sm:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0">
@@ -420,7 +294,6 @@ export function PlatformWorksView({ account, canWrite }: { account: Account; can
         </button>)}</div>}
     {works.hasNextPage && <div className="flex justify-center"><Button variant="secondary" loading={works.isFetchingNextPage} onClick={() => void works.fetchNextPage()}>加载更多平台作品</Button></div>}
     {selectedID && <MirrorDetail key={selectedID} account={account} mirrorID={selectedID} canWrite={canWrite} onClose={() => setSelectedID('')}
-      metricRefreshReason={metricRefreshReason} onRefreshMetrics={refreshSingleWorkMetrics}
       onLink={(mirror) => setLinkingMirror(mirror)} onCreateDraft={(mirror) => void createDraft(mirror)} />}
     {linkingMirror && <PlatformMirrorLinkDialog account={account} mirror={linkingMirror} onClose={() => setLinkingMirror(null)}
       onLinked={() => { setLinkingMirror(null); setSelectedID('') }} />}

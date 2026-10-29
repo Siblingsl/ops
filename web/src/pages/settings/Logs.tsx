@@ -3,7 +3,6 @@ import { ScrollText } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge, Button, Card, Empty, PageHeader, PageLoading, Select } from '@/components/ui'
-import { BackToSettings } from '@/components/back-to-settings'
 import { get } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 
@@ -54,7 +53,7 @@ export default function Logs() {
   return (
     <div className="animate-fade-in">
       <PageHeader title="操作日志" desc="登录、凭证、推送、检查确认等关键操作都会记录。日志中不包含密钥和正文。"
-        action={<><BackToSettings /><Select value={action} onChange={(e) => setAction(e.target.value)} className="w-40">{filters.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}</Select></>} />
+        action={<Select value={action} onChange={(e) => setAction(e.target.value)} className="w-40">{filters.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}</Select>} />
       <Card>
         {list.length === 0 ? <Empty icon={<ScrollText className="size-5" />} title="没有日志" /> : (
           <ul className="divide-y divide-mist-100">

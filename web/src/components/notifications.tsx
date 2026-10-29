@@ -1,12 +1,10 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, Loader2 } from 'lucide-react'
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { errorMessage, get, post } from '@/lib/api'
 import { apiUrl } from '@/lib/api-base'
-import { isElectronDesktop } from '@/lib/desktop-presentation.js'
-import { useMe } from '@/lib/session'
 import type { AIJob, AppNotification } from '@/lib/types'
 import { usePageVisible } from '@/lib/visibility'
 import { cn } from './ui'
@@ -95,23 +93,14 @@ export function NotificationBell() {
   const [tab, setTab] = useState<'noti' | 'jobs'>('noti')
   const ref = useRef<HTMLDivElement>(null)
   const nav = useNavigate()
-  const location = useLocation()
   const qc = useQueryClient()
-  const me = useMe()
-  const nativeSupported = isElectronDesktop(navigator.userAgent) && typeof window !== 'undefined' && 'Notification' in window
-  const notificationKey = me.data?.user_id && me.data.workspace.id
-    ? `ops.agent-native-notifications.v1:${me.data.user_id}:${me.data.workspace.id}` : ''
-  const [nativeEnabled, setNativeEnabled] = useState(false)
-  useEffect(() => {
-    setNativeEnabled(!!notificationKey && localStorage.getItem(notificationKey) === '1')
-  }, [notificationKey])
-  const live = useNotificationStream(visible || nativeEnabled, nativeEnabled)
+  const live = useNotificationStream(visible, false)
   const noti = useInfiniteQuery({
     queryKey: ['notifications'],
     queryFn: ({ pageParam }) => get<NotiList>(`/notifications${pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : ''}`),
     initialPageParam: '' as string,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
-    enabled: visible || nativeEnabled,
+    enabled: visible,
     staleTime: 0,
     refetchInterval: visible ? (live ? 120_000 : 30_000) : false,
   })
@@ -151,29 +140,6 @@ export function NotificationBell() {
     }
   }, [])
   const notificationItems = noti.data?.pages.flatMap((page) => page.items) ?? []
-  const newestNotifications = useMemo(() => noti.data?.pages[0]?.items ?? [], [noti.data?.pages[0]?.items])
-  const nativeSeen = useRef<{ key: string; ids: Set<string> } | null>(null)
-  useEffect(() => {
-    if (!noti.isSuccess) return
-    const ids = newestNotifications.map((item) => item.id)
-    if (nativeSeen.current === null || nativeSeen.current.key !== notificationKey) {
-      nativeSeen.current = { key: notificationKey, ids: new Set(ids) }
-      return
-    }
-    const previous = nativeSeen.current.ids
-    for (const item of newestNotifications) {
-      if (previous.has(item.id)) continue
-      previous.add(item.id)
-      if (!nativeEnabled || !nativeSupported || Notification.permission !== 'granted' || item.kind !== 'agent_goal') continue
-      if (document.hasFocus() && location.pathname === item.link) continue
-      const notice = new Notification('AI 对话有结果', { body: 'AI 对话有结果或需要处理' })
-      notice.onclick = () => {
-        window.focus()
-        if (item.link) nav(item.link)
-        notice.close()
-      }
-    }
-  }, [location.pathname, nav, nativeEnabled, nativeSupported, newestNotifications, noti.isSuccess, notificationKey, visible])
   const unread = noti.data?.pages[0]?.unread ?? 0
   const active = noti.data?.pages[0]?.active_jobs ?? 0
   const go = async (n: AppNotification) => {
@@ -181,20 +147,6 @@ export function NotificationBell() {
     void qc.invalidateQueries({ queryKey: ['notifications'] })
     setOpen(false)
     if (n.link) nav(n.link)
-  }
-  const enableNativeNotifications = async () => {
-    if (!nativeSupported || !notificationKey) return
-    const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission
-    if (permission !== 'granted') {
-      toast.info(permission === 'denied' ? '系统已阻止通知，请到应用权限设置中开启。' : '未开启桌面提示。')
-      return
-    }
-    localStorage.setItem(notificationKey, '1')
-    setNativeEnabled(true)
-  }
-  const disableNativeNotifications = () => {
-    if (notificationKey) localStorage.removeItem(notificationKey)
-    setNativeEnabled(false)
   }
   const cancel = async (j: AIJob) => {
     try {
@@ -237,11 +189,6 @@ export function NotificationBell() {
             hasNextPage={noti.hasNextPage}
             isFetchingNextPage={noti.isFetchingNextPage}
             onLoadMore={() => { void noti.fetchNextPage() }}
-            nativeSupported={nativeSupported}
-            nativePermission={nativeSupported ? Notification.permission : 'unsupported'}
-            nativeEnabled={nativeEnabled}
-            onEnableNative={() => void enableNativeNotifications()}
-            onDisableNative={disableNativeNotifications}
           />
         </Suspense>
       )}

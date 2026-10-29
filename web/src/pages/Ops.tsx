@@ -386,7 +386,7 @@ function StrategyEditor({
   )
 }
 
-function StrategyPanel({ account, desktopView, onDesktopViewChange }: { account: Account; desktopView?: 'current' | 'history'; onDesktopViewChange?: (view: 'current' | 'history') => void }) {
+function StrategyPanel({ account }: { account: Account }) {
   const canWrite = useCanWrite()
   const inv = useInvalidate()
   const query = useQuery({ queryKey: ['strategy', account.id], queryFn: () => get<StrategyResult>(`/accounts/${account.id}/strategy`) })
@@ -406,17 +406,12 @@ function StrategyPanel({ account, desktopView, onDesktopViewChange }: { account:
   const [busy, setBusy] = useState(false)
   const [streamText, setStreamText] = useState('')
   const [history, setHistory] = useState(false)
-  const [desktopDetail, setDesktopDetail] = useState<string | null>(null)
-  const [desktopAdjust, setDesktopAdjust] = useState(false)
   const [selectedVersion, setSelectedVersion] = useState<Strategy | null>(null)
   const [note, setNote] = useState('')
   const [revision, setRevision] = useState<StrategyRevision | null>(null)
   const [decisions, setDecisions] = useState<Record<number, 'accept' | 'ignore'>>({})
   const abort = useRef<AbortController | null>(null)
   useEffect(() => () => abort.current?.abort(), [])
-  useEffect(() => {
-    if (desktopView) setHistory(desktopView === 'history')
-  }, [desktopView])
   const active = query.data?.active
   const generate = async () => {
     setBusy(true)
@@ -482,34 +477,13 @@ function StrategyPanel({ account, desktopView, onDesktopViewChange }: { account:
     setChoice(undefined)
     setRevision(null)
   }
-  const desktopRows = active ? [
-    {
-      key: 'positioning',
-      title: `定位：${active.niche}，面向${active.audience}。`,
-      summary: active.differentiation,
-      details: <><p>人设与语气：{active.persona || '未填写'}</p><p>目标读者：{active.audience || '未填写'}</p></>,
-    },
-    {
-      key: 'pillars',
-      title: `内容支柱：${active.pillars.map((pillar) => `${pillar.name} ${pillar.ratio}%`).join(' / ')}。`,
-      summary: active.pillars.map((pillar) => pillar.desc).filter(Boolean).join(' '),
-      details: <div className="space-y-2">{active.pillars.map((pillar) => <p key={pillar.name}><strong>{pillar.name} · {pillar.ratio}%</strong><br />{pillar.desc}<br /><span>示例：{(pillar.examples ?? []).join('；') || '未填写'}</span></p>)}</div>,
-    },
-    {
-      key: 'cadence',
-      title: `每周${active.cadence.per_week}篇，优先讲清一件具体的小事。`,
-      summary: `${platformFormatLabel(account.platform, active.cadence.format)} · ${active.cadence.days.map((day) => weekdays[day - 1]).join(' / ')}`,
-      details: <><p>发布阶段：{stages[active.stage]}</p><p>每周计划 {active.cadence.per_week} 篇，建议发布日：{active.cadence.days.map((day) => weekdays[day - 1]).join('、') || '未设置'}。</p></>,
-    },
-  ] : []
   return (
-    <Card className={desktopView === 'current' && active ? 'desktop-ops-strategy-card' : undefined}>
+    <Card>
       <CardHeader
-        className={desktopView === 'current' && active ? 'desktop-ops-strategy-head' : undefined}
-        title={desktopView === 'current' && active ? `当前方案 · 第 ${active.version} 版` : '运营方案'}
-        desc={desktopView === 'current' && active ? undefined : '先确定真实定位与内容节奏，再逐条选择要写的内容。'}
+        title="运营方案"
+        desc="先确定真实定位与内容节奏，再逐条选择要写的内容。"
         action={
-          desktopView === 'current' && active ? <Badge tone="blue">{account.name}</Badge> : active && !editor && !desktopView ? (
+          active && !editor ? (
             <Tabs
               value={history ? 'history' : 'current'}
               onChange={(v) => setHistory(v === 'history')}
@@ -521,7 +495,7 @@ function StrategyPanel({ account, desktopView, onDesktopViewChange }: { account:
           ) : undefined
         }
       />
-      <div className={desktopView === 'current' && active ? 'desktop-ops-strategy-body' : 'p-5'}>
+      <div className="p-5">
         {query.isPending ? (
           <Spinner />
         ) : query.isError ? (
@@ -544,40 +518,7 @@ function StrategyPanel({ account, desktopView, onDesktopViewChange }: { account:
             }}
             onCancel={() => setEditor(null)}
           />
-        ) : active ? desktopView === 'current' ? (
-          <div className="desktop-strategy-summary">
-            <div className="desktop-strategy-rows">
-              {desktopRows.map((row) => (
-                <div className="desktop-strategy-row" key={row.key}>
-                  <div>
-                    <strong>{row.title}</strong>
-                    <small>{row.summary}</small>
-                    {desktopDetail === row.key && <div className="desktop-strategy-detail">{row.details}</div>}
-                  </div>
-                  <Button size="sm" variant="ghost" aria-expanded={desktopDetail === row.key} onClick={() => setDesktopDetail((current) => current === row.key ? null : row.key)}>
-                    {desktopDetail === row.key ? '收起' : '查看'}
-                  </Button>
-                </div>
-              ))}
-            </div>
-            {desktopAdjust && canWrite && (
-              <div className="desktop-strategy-adjust">
-                <Field label="调整意见（可选）">
-                  <Textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="结合你的实际反馈，说明想调整什么" />
-                </Field>
-                <div className="flex gap-2">
-                  <Button loading={busy} onClick={revise}>生成调整建议</Button>
-                  <Button variant="ghost" onClick={() => { setDesktopAdjust(false); setRevision(null) }}>取消</Button>
-                </div>
-                {revision && <Notice>已生成 {revision.changes.length} 条调整建议，请继续逐条查看和确认。</Notice>}
-              </div>
-            )}
-            <div className="desktop-strategy-actions">
-              {canWrite && <Button variant="primary" onClick={() => setDesktopAdjust((shown) => !shown)}>调整当前方案</Button>}
-              <Button variant="secondary" onClick={() => { setHistory(true); onDesktopViewChange?.('history') }}>查看启用与历史</Button>
-            </div>
-          </div>
-        ) : (
+        ) : active ? (
           <div className="space-y-4">
             {history ? (
               <>
@@ -952,60 +893,18 @@ function PlanPanel({ account }: { account: Account }) {
 }
 
 export default function Ops() {
-  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const account = useCurrentAccount()
-  const [desktopTab, setDesktopTab] = useState('strategy')
-  const [desktopStrategyView, setDesktopStrategyView] = useState<'current' | 'history'>('current')
-  const strategy = useQuery({ queryKey: ['strategy', account?.id], queryFn: () => get<StrategyResult>(`/accounts/${account!.id}/strategy`), enabled: !!account })
-  const plan = useQuery({ queryKey: ['plan', account?.id], queryFn: () => get<AccountPlan>(`/accounts/${account!.id}/plan`), enabled: !!account })
   if (!account) return <Empty title="请选择账号" />
-  const cadence = strategy.data?.active?.cadence
-  const nextPlanDate = plan.data?.slots.filter((slot) => slot.date >= plan.data!.today).sort((a, b) => a.date.localeCompare(b.date))[0]?.date
-  const rhythmDays = cadence?.days.map((day) => weekdays[day - 1]).join('、')
-  // OP-01：桌面 tab 与网页长滚动共用同一顺序，桌面只改呈现不改信息架构。
-  const desktopTabs = [
-    ['strategy', '运营方案'], ['plan', '内容大纲'], ['hot', '热点参考'],
-    ['references', '对标参考'], ['daily', '每日推荐'], ['stats', '推荐统计'],
-  ]
   return (
-    <div className={`animate-fade-in ${desktopPresentation ? 'desktop-ops-page' : 'space-y-6'}`}>
-      <PageHeader title="账号运营" desc="让定位、内容节奏与每天的创作连接起来。" action={desktopPresentation && <>
-        <Button variant="secondary" onClick={() => { setDesktopTab('strategy'); setDesktopStrategyView('current') }}>起号问卷</Button>
-        <Button variant="secondary" onClick={() => { setDesktopTab('strategy'); setDesktopStrategyView('history') }}>版本历史</Button>
-      </>} />
-      {desktopPresentation ? <>
-        <div className="desktop-ops-tabs" role="tablist" aria-label="账号运营功能">
-          {desktopTabs.map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={desktopTab === value}
-            className={desktopTab === value ? 'active' : ''} onClick={() => setDesktopTab(value)}>{label}</button>)}
-        </div>
-        <div className="desktop-ops-layout">
-          <section className="desktop-ops-main" data-testid="desktop-ops-main" role="tabpanel">
-            {desktopTab === 'strategy' && <div id="strategy"><StrategyPanel key={`strategy-${account.id}`} account={account} desktopView={desktopPresentation ? desktopStrategyView : undefined} onDesktopViewChange={setDesktopStrategyView} /></div>}
-            {desktopTab === 'plan' && <PlanPanel key={`plan-${account.id}`} account={account} />}
-            {desktopTab === 'hot' && <HotPanel key={`hot-${account.id}`} account={account} />}
-            {desktopTab === 'references' && <References key={`refs-${account.id}`} accountId={account.id} />}
-            {desktopTab === 'daily' && <DailyPanel key={`daily-${account.id}`} accountId={account.id} />}
-            {desktopTab === 'stats' && <DailyStatsCard key={`stats-${account.id}`} accountId={account.id} />}
-          </section>
-          <aside className="desktop-ops-aside" aria-label="创作节奏">
-            <Card className="desktop-ops-rhythm">
-              <h2>内容节奏</h2>
-              <p>本周计划 {cadence?.per_week ?? '—'} 篇<br />{cadence ? `${platformFormatLabel(account.platform, cadence.format)} · ${rhythmDays}` : '启用方案后显示计划节奏'}<br />下一篇：{nextPlanDate ? new Date(`${nextPlanDate}T00:00:00`).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }) : '尚未安排'}</p>
-              <Notice tone="gamboge">生成建议与采用分开；采用后也不会自动确认观点、大纲或批量起稿。</Notice>
-              <Link to={`/a/${account.id}/calendar`}><Button size="sm" variant="secondary">查看内容日历</Button></Link>
-              <DailyStatsCard key={`warnings-${account.id}`} accountId={account.id} warningsOnly />
-            </Card>
-          </aside>
-        </div>
-      </> : <>
-        <div id="strategy" className="scroll-mt-24"><StrategyPanel key={`strategy-${account.id}`} account={account} /></div>
-        <DailyStatsCard key={`warnings-${account.id}`} accountId={account.id} warningsOnly />
-        <PlanPanel key={`plan-${account.id}`} account={account} />
-        <HotPanel key={`hot-${account.id}`} account={account} />
-        <References key={`refs-${account.id}`} accountId={account.id} />
-        <DailyPanel key={`daily-${account.id}`} accountId={account.id} />
-        <div id="stats" className="scroll-mt-24"><DailyStatsCard key={`stats-${account.id}`} accountId={account.id} /></div>
-      </>}
+    <div className="animate-fade-in space-y-6">
+      <PageHeader title="账号运营" desc="让定位、内容节奏与每天的创作连接起来。" />
+      <div id="strategy" className="scroll-mt-24"><StrategyPanel key={`strategy-${account.id}`} account={account} /></div>
+      <DailyStatsCard key={`warnings-${account.id}`} accountId={account.id} warningsOnly />
+      <PlanPanel key={`plan-${account.id}`} account={account} />
+      <HotPanel key={`hot-${account.id}`} account={account} />
+      <References key={`refs-${account.id}`} accountId={account.id} />
+      <DailyPanel key={`daily-${account.id}`} accountId={account.id} />
+      <div id="stats" className="scroll-mt-24"><DailyStatsCard key={`stats-${account.id}`} accountId={account.id} /></div>
     </div>
   )
 }

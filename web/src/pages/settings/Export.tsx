@@ -3,14 +3,12 @@ import { toast } from 'sonner'
 import { Button, Card, CardHeader, PageHeader, Select, platformLabel } from '@/components/ui'
 import { errorMessage, rawRequest } from '@/lib/api'
 import { useAccounts } from '@/lib/session'
-import { useSettingsDraft } from '@/lib/desktop-settings'
 
 export default function ExportPage() {
   const { data: accounts } = useAccounts()
   const [kind, setKind] = useState('works')
   const [accountId, setAccountId] = useState('')
   const [busy, setBusy] = useState(false)
-  useSettingsDraft(false, busy)
   const run = async () => {
     setBusy(true)
     try {

@@ -1,5 +1,5 @@
 import {
-  ArrowDown, ArrowUp, BookmarkPlus, Check, History, ImagePlus, Loader2, MessageSquare, Minimize2, Mic, Quote, Repeat2, Sparkles, Square, Trash2, Wand2,
+  ArrowDown, ArrowUp, BookmarkPlus, Check, History, ImagePlus, Loader2, MessageSquare, Minimize2, Quote, Repeat2, Sparkles, Square, Trash2, Wand2,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -7,7 +7,7 @@ import { confirm, Dialog } from '@/components/dialog'
 import { RefsNote, sendFeedback } from '@/components/refs'
 import { type EditorHandle, PlainEditor, RichEditor } from '@/components/section-editor'
 import { Badge, Button, cn, IconButton, MoreMenu, Notice } from '@/components/ui'
-import { VoiceButton, voiceSupported } from '@/components/voice'
+import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, get, post, put, stream } from '@/lib/api'
 import { type AIRefs, copyText, runeLen } from '@/lib/format'
@@ -75,13 +75,11 @@ export interface SectionBlockProps {
   onLint?: (sectionId: string, n: number) => void
   /** id of a drafting job for this section that was started before the page loaded */
   resumeJob?: string
-  desktopPresentation?: boolean
-  active?: boolean
 }
 
 export const SectionBlock = memo(function SectionBlock({
   section, index, total, work, prefs, patchWork, setWork, refresh, readOnly, dim, othersHere, othersEditing, onEditing, onSave, onMove, onRemove, onUploadImage, onDrafted,
-  onActive, onLint, resumeJob, desktopPresentation = false, active = false,
+  onActive, onLint, resumeJob,
 }: SectionBlockProps) {
   const warnedConflict = useRef(false)
   const xhs = work.platform === 'xhs'
@@ -564,9 +562,9 @@ export const SectionBlock = memo(function SectionBlock({
 
   return (
     <div id={`sec-${section.id}`} onFocus={reportActive} onMouseUp={reportActive} onKeyUp={reportActive}
-      className={cn('group/sec relative scroll-mt-24 rounded-xl border border-mist-200/80 bg-white shadow-card transition focus-within:border-ink-200 focus-within:shadow-pop', dim && 'focus-dim', readOnly && 'read-only', desktopPresentation && active && 'desktop-active')}>
+      className={cn('group/sec relative scroll-mt-24 rounded-xl border border-mist-200/80 bg-white shadow-card transition focus-within:border-ink-200 focus-within:shadow-pop', dim && 'focus-dim', readOnly && 'read-only')}>
       <div className={cn('absolute bottom-3 left-0 top-3 w-[3px] rounded-r', origin === 'ai' ? 'bg-ink-300' : origin === 'mixed' ? 'bg-sky-300' : 'bg-mist-200')} />
-      <div className="desktop-section-heading flex items-center gap-2 border-b border-mist-100 px-4 py-2.5 sm:px-5">
+      <div className="flex items-center gap-2 border-b border-mist-100 px-4 py-2.5 sm:px-5">
         <span className="font-mono text-xs text-mist-400">{String(index + 1).padStart(2, '0')}</span>
         {xhs ? (
           <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-mist-600">{section.key_point || `第 ${index + 1} 段`}</span>
@@ -581,9 +579,8 @@ export const SectionBlock = memo(function SectionBlock({
         {othersEditing && othersEditing.length > 0 ? (
           <span className="shrink-0 rounded-full bg-danger/10 px-2 py-0.5 text-[11px] text-danger" title="仍可编辑，但同时修改可能产生冲突">{othersEditing.join('、')} 正在编辑</span>
         ) : othersHere && othersHere.length > 0 && <span className="shrink-0 rounded-full bg-gamboge-100 px-2 py-0.5 text-[11px] text-gamboge-800">{othersHere.join('、')} 正在看这段</span>}
-        <div className="desktop-section-header-tools flex items-center gap-2">
-          <SectionMaterials work={work} section={section} readOnly={readOnly} onWork={setWork}
-            triggerEvent={desktopPresentation ? `ops:section-materials:${section.id}` : undefined} />
+        <div className="flex items-center gap-2">
+          <SectionMaterials work={work} section={section} readOnly={readOnly} onWork={setWork} />
           <IconButton label="段落历史" onClick={async () => { if (await flush()) setRevOpen(true) }}><History className="size-3.5" /></IconButton>
           <Badge tone={originMeta[origin].tone}>{originMeta[origin].label}</Badge>
           {!readOnly && (
@@ -681,7 +678,7 @@ export const SectionBlock = memo(function SectionBlock({
               try { await variants.rerun!() } catch (e) { aiError(e, variants.title) } finally { setMoreBusy(false) }
             } : undefined} />
         )}
-        {!desktopPresentation && !streaming && (refs || callId) && (
+        {!streaming && (refs || callId) && (
           <div className="mt-2 rounded-lg border border-mist-100 bg-mist-50/80 px-2.5 py-1.5">
             <RefsNote refs={refs} callId={callId} onRetry={readOnly || !lastRun.current ? undefined : lastRun.current} />
           </div>
@@ -707,9 +704,9 @@ export const SectionBlock = memo(function SectionBlock({
         )}
       </div>
       {!readOnly && (
-        <div className="desktop-section-footer space-y-2 border-t border-mist-100 px-3 py-2">
+        <div className="space-y-2 border-t border-mist-100 px-3 py-2">
           {!busy && (
-            <div className="desktop-section-instruction space-y-1.5">
+            <div className="space-y-1.5">
               <div className="flex gap-1.5">
                 <input
                   value={instruction}
@@ -738,7 +735,7 @@ export const SectionBlock = memo(function SectionBlock({
               </div>}
             </div>
           )}
-          <div className="desktop-section-actions flex flex-wrap items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1">
             {canUndoAI && <Button size="sm" variant="ghost" disabled={busy} onClick={restoreBefore}>恢复改写前</Button>}
             {busy ? (
               <Button size="sm" variant="ghost" icon={<Square className="size-3.5" />} onClick={stop}>停止生成</Button>
@@ -749,41 +746,22 @@ export const SectionBlock = memo(function SectionBlock({
                     disabled={!work.outline_confirmed_at} title="Ctrl/⌘+Enter">起草本段</Button>
                 ) : (
                   <>
-                    <Button className="desktop-section-rewrite" size="sm" variant="ghost" icon={<Repeat2 className="size-3.5" />} onClick={() => edit('rewrite')}>{selection ? '改写选中' : '改写本段'}</Button>
-                    <Button className="desktop-section-expand" size="sm" variant="ghost" icon={<Wand2 className="size-3.5" />} onClick={() => edit('expand')}>扩写</Button>
-                    <Button className="desktop-section-shorten" size="sm" variant="ghost" icon={<Minimize2 className="size-3.5" />} onClick={() => edit('shorten')}>缩写</Button>
-                    <Button className="desktop-section-redraft" size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={draft} ref={draftButton}
+                    <Button size="sm" variant="ghost" icon={<Repeat2 className="size-3.5" />} onClick={() => edit('rewrite')}>{selection ? '改写选中' : '改写本段'}</Button>
+                    <Button size="sm" variant="ghost" icon={<Wand2 className="size-3.5" />} onClick={() => edit('expand')}>扩写</Button>
+                    <Button size="sm" variant="ghost" icon={<Minimize2 className="size-3.5" />} onClick={() => edit('shorten')}>缩写</Button>
+                    <Button size="sm" variant="ghost" icon={<Sparkles className="size-3.5" />} onClick={draft} ref={draftButton}
                       disabled={!work.outline_confirmed_at} title="按大纲重写这一段（Ctrl/⌘+Enter）">重新起草</Button>
-                    {desktopPresentation && <>
-                      <Button size="sm" variant="ghost" onClick={() => { editor.current?.focus(); void requestGhost() }}>续写</Button>
-                      <Button size="sm" variant="ghost" onClick={() => void hooks(index === 0 ? 'opening' : index === total - 1 ? 'ending' : 'quote')}>查看候选</Button>
-                    </>}
                   </>
                 )}
-                <MoreMenu className="desktop-section-more" items={[
+                <MoreMenu items={[
                   ...(index === 0 ? [{ label: '开头候选', loading: hookBusy === 'opening', onClick: () => void hooks('opening') }] : []),
                   ...(index === total - 1 && total > 1 ? [{ label: '结尾候选', loading: hookBusy === 'ending', onClick: () => void hooks('ending') }] : []),
                   ...(xhs && selection ? [{ label: '提炼金句', icon: <Quote />, loading: hookBusy === 'quote', onClick: () => void hooks('quote') }] : []),
                   ...(!isEmpty ? [{ label: '配图建议', icon: <ImagePlus />, loading: imgBusy, onClick: () => void suggestImages() }] : []),
                   ...(!xhs ? [{ label: '插入图片', icon: <ImagePlus />, onClick: pickImage }] : []),
-                  ...(desktopPresentation ? [
-                    ...(!isEmpty ? [
-                      { label: '扩写本段', icon: <Wand2 />, onClick: () => void edit('expand') },
-                      { label: '缩写本段', icon: <Minimize2 />, onClick: () => void edit('shorten') },
-                      { label: '重新起草这一段', icon: <Sparkles />, onClick: () => void draft() },
-                    ] : []),
-                    { label: '本段素材', icon: <BookmarkPlus />, onClick: () => window.dispatchEvent(new Event(`ops:section-materials:${section.id}`)) },
-                    ...(!isEmpty ? [{ label: '整段存入素材库', icon: <BookmarkPlus />, onClick: () => setToMaterial(content.current) }] : []),
-                    { label: '段落历史', icon: <History />, onClick: async () => { if (await flush()) setRevOpen(true) } },
-                    { label: '上移段落', icon: <ArrowUp />, disabled: index === 0, onClick: () => onMove(section.id, -1) },
-                    { label: '下移段落', icon: <ArrowDown />, disabled: index === total - 1, onClick: () => onMove(section.id, 1) },
-                    { label: '删除段落', icon: <Trash2 />, onClick: () => onRemove(section.id) },
-                    ...(voiceSupported() ? [{ label: '语音输入', icon: <Mic />, onClick: () => window.dispatchEvent(new Event(`ops:section-voice:${section.id}`)) }] : []),
-                  ] : []),
                 ]} />
-                <div className="desktop-section-voice">
-                  <VoiceButton onText={(t) => editor.current?.insertAtCursor(t)}
-                    triggerEvent={desktopPresentation ? `ops:section-voice:${section.id}` : undefined} />
+                <div>
+                  <VoiceButton onText={(t) => editor.current?.insertAtCursor(t)} />
                 </div>
               </>
             )}
@@ -794,11 +772,6 @@ export const SectionBlock = memo(function SectionBlock({
               <span>{runeLen(content.current)} 字</span>
             </div>
           </div>
-        </div>
-      )}
-      {desktopPresentation && !streaming && (refs || callId) && (
-        <div className="desktop-section-reference">
-          <RefsNote refs={refs} callId={callId} onRetry={readOnly || !lastRun.current ? undefined : lastRun.current} />
         </div>
       )}
       <input ref={fileInput} type="file" accept="image/*" hidden onChange={async (e) => {
@@ -875,4 +848,4 @@ export const SectionBlock = memo(function SectionBlock({
   && previous.othersEditing === next.othersEditing && previous.onEditing === next.onEditing && previous.onSave === next.onSave
   && previous.onMove === next.onMove && previous.onRemove === next.onRemove && previous.onUploadImage === next.onUploadImage
   && previous.onDrafted === next.onDrafted && previous.onActive === next.onActive && previous.onLint === next.onLint
-  && previous.resumeJob === next.resumeJob && previous.desktopPresentation === next.desktopPresentation && previous.active === next.active)
+  && previous.resumeJob === next.resumeJob)

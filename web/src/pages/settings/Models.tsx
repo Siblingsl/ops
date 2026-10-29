@@ -3,14 +3,12 @@ import { Activity, CheckCircle2, CircleAlert, Cpu, MinusCircle, Pencil, Plug, Pl
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
-import { isElectronDesktop } from '@/lib/desktop-presentation.js'
 import { Badge, Button, Card, CardHeader, Empty, Field, IconButton, Input, Notice, PageHeader, PageLoading, Select, Switch } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post, put } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useInvalidate, useMe } from '@/lib/session'
 import type { AILimit, ModelCapability, ModelRoute, Provider } from '@/lib/types'
-import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
 
 // DEV-U101（12 文档）：供应商能力自检结果。
 interface SelfTestProbe { key: string; label: string; ok: boolean; skipped: boolean; latency_ms: number; detail: string }
@@ -83,7 +81,6 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
   const [pc, setPc] = useState(editing?.price_per_1k_completion?.toString() ?? '')
   const [busy, setBusy] = useState(false)
   const [discovering, setDiscovering] = useState(false)
-  useSettingsDraft(name !== (editing?.name ?? '') || base !== (editing?.base_url ?? '') || !!key || JSON.stringify(models) !== JSON.stringify(editing?.models ?? []) || pp !== (editing?.price_per_1k_prompt?.toString() ?? '') || pc !== (editing?.price_per_1k_completion?.toString() ?? ''), busy || discovering)
   const inv = useInvalidate()
   const price = (v: string) => (v.trim() === '' ? -1 : Number(v))
   // 选中顺序即数组顺序：第一个用于连通测试，界面上标「主」。
@@ -224,7 +221,6 @@ function QuickSetupDialog({ onClose }: { onClose: () => void }) {
   const [discovered, setDiscovered] = useState<string[]>([])
   const [discovering, setDiscovering] = useState(false)
   const [busy, setBusy] = useState(false)
-  useSettingsDraft(!!key || name !== templates[0].name || base !== templates[0].base || JSON.stringify(roles) !== JSON.stringify({ default: '', tier_economy: '', tier_quality: '', metric_screenshot: '', ...templates[0].models }), busy || discovering)
   const inv = useInvalidate()
   const choose = (id: string) => {
     const t = templates.find((x) => x.id === id) ?? templates[0]
@@ -314,7 +310,6 @@ function RoutesCard({ providers }: { providers: Provider[] }) {
   const [showAll, setShowAll] = useState(false)
   const inv = useInvalidate()
   useEffect(() => setRoutes(data ?? []), [data])
-  useSettingsDraft(JSON.stringify(routes) !== JSON.stringify(data ?? []), busy)
   const custom = routes.filter((r) => !keyRoutes.includes(r.task_type) && r.provider_id).length
   const set = (i: number, p: Partial<ModelRoute>) => setRoutes(routes.map((r, j) => (j === i ? { ...r, ...p } : r)))
   const save = async () => {
@@ -388,7 +383,6 @@ function SamplingCard() {
   const [fixed, setFixed] = useState(false)
   const [value, setValue] = useState('0.7')
   const [busy, setBusy] = useState(false)
-  useSettingsDraft(!!data && (fixed !== (data.ai_sampling.temperature !== null) || fixed && Number(value) !== data.ai_sampling.temperature), busy)
   useEffect(() => {
     if (!data) return
     setFixed(data.ai_sampling.temperature !== null)
@@ -453,7 +447,6 @@ function LimitCard() {
 function WeeklyDraftCard() {
   const { data, refetch } = useQuery({ queryKey: ['settings'], queryFn: () => get<{ review_weekly_draft?: 'on' | 'off' }>('/settings') })
   const [busy, setBusy] = useState(false)
-  useSettingsDraft(false, busy)
   if (!data) return null
   const on = data.review_weekly_draft === 'on'
   const save = async (v: boolean) => {
@@ -484,8 +477,6 @@ function WeeklyDraftCard() {
 export default function Models() {
   const { data: me } = useMe()
   const isOwner = me?.role === 'owner'
-  const desktop = isElectronDesktop(navigator.userAgent)
-  const embedded = useEmbeddedSettings()
   const { data, isLoading, refetch } = useQuery({ queryKey: ['providers'], queryFn: () => get<Provider[]>('/model-providers'), refetchInterval: 5000 })
   const [dialog, setDialog] = useState<{ editing: Provider | null } | null>(null)
   const [quick, setQuick] = useState(false)
@@ -493,7 +484,6 @@ export default function Models() {
   const [selfTesting, setSelfTesting] = useState<string | null>(null)
   const [selfTest, setSelfTest] = useState<{ providerName: string; result: SelfTestResult } | null>(null)
   const inv = useInvalidate()
-  useSettingsDraft(false, testing !== null || selfTesting !== null)
   if (isLoading) return <PageLoading />
   const list = data ?? []
   const test = async (p: Provider) => {
@@ -539,7 +529,6 @@ export default function Models() {
     <div className="animate-fade-in space-y-6">
       <PageHeader title="模型配置" desc="接入工作区自己的大模型 API。密钥加密保存，仅所有者可修改。"
         action={<>
-          {desktop && !embedded && <Button variant="ghost" onClick={() => window.open('ops-desktop://ui/settings', '_blank', 'noopener,noreferrer')}>客户端设置 ↗</Button>}
           {isOwner && <>
             <Button icon={<Plus className="size-4" />} onClick={() => setDialog({ editing: null })}>手动添加</Button>
             <Button variant="primary" icon={<Zap className="size-4" />} onClick={() => setQuick(true)}>快速配置</Button>
@@ -608,7 +597,7 @@ export default function Models() {
       )}
       {isOwner && list.length > 0 && <RoutesCard providers={list} />}
       {isOwner && <SamplingCard />}
-      {isOwner && !embedded && <LimitCard />}
+      {isOwner && <LimitCard />}
       {isOwner && <WeeklyDraftCard />}
       {isOwner && dialog && <ProviderDialog editing={dialog.editing} onClose={() => setDialog(null)} />}
       {isOwner && quick && <QuickSetupDialog onClose={() => setQuick(false)} />}

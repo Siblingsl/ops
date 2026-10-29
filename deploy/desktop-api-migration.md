@@ -2,7 +2,7 @@
 
 目标：后端继续运行在现有云服务器；Electron 安装包本地加载桌面专用 UI；桌面 API 和 WSS 使用 `https://ops-api.88813888.xyz`；普通 Web 源码继续保存在仓库，但本次不发布到 Cloudflare Pages。
 
-桌面 UI 从 `web/` 现有的 Electron 呈现分支构建，不是普通浏览器 Web 呈现。安装包与 Web 仍共用源码，分别构建；本次不改桌面页面的外观或交互。
+桌面 UI 现从 `desktop/renderer-src/` 构建，Web 源码位于 `web/`；两端的共用功能需要分别维护。本迁移不改变桌面页面的外观或交互。
 
 ## 迁移顺序
 

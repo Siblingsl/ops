@@ -1,5 +1,5 @@
-// Web 默认使用相对路径；Electron 桌面构建通过 OPS_API_BASE 直接连接后端 API。
-// 构建期注入（见 vite.config.ts 的 define），不改变普通浏览器 Web 的同源请求行为。
+// Web 默认使用相对路径；跨源部署可通过 OPS_API_BASE 指定后端 API 地址。
+// 构建期注入（见 vite.config.ts 的 define），空值时保持同源请求。
 const RAW_BASE = typeof __OPS_API_BASE__ === 'string' ? __OPS_API_BASE__ : ''
 
 /** apiBase 返回不带结尾斜杠的 API 基址；空串表示同源相对路径。 */

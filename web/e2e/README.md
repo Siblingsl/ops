@@ -38,3 +38,5 @@ docker compose -p ops-prod-e2e -f deploy/docker-compose.prod.yml -f deploy/docke
 此模式固定连接 `127.0.0.1:44538`，API 使用 `OPS_DEV=0`、生产静态资源与独立 `ops-prod-e2e` 数据卷；内部 mock 容器提供模型/微信测试接口，不对外暴露。覆盖文件清除生产 `.env` 依赖并覆盖测试密钥/数据库口令/接口地址，不能用作真实部署。Compose 可能提示原文件变量未设置，合并后的值均由测试覆盖文件提供。每次测试新注册用户、显式配置 mock 模型，并在浏览器退出后重新密码登录；不跳过人工创作门槛。默认本地 Vite 模式保持不变。
 
 升级/回滚演练可用 `OPS_E2E_IMAGE` 在本地旧测试镜像与 `ops-app:prod-e2e` 间切换。切换前保存数据库与 assets；回滚需配套恢复该镜像对应备份，不用 Down 强行收紧已有新类型约束。测试结束只停止此项目，保留卷供排查；不会删除日常开发数据库或操作线上部署。
+
+桌面 renderer 的 Playwright 用例位于 `desktop/renderer-src/e2e/`，使用独立配置 `desktop/renderer-src/playwright.config.ts`，在 `desktop/` 目录运行 `pnpm test:e2e:renderer`（端口 5287、8287、8297）。本目录只保留 Web 浏览器场景：不出现 Electron 启动器、`Electron/` UA 注入、`ops-creative-desktop` 呈现标记或 5287 端口，也不被桌面配置读取。该边界由 `web/tests/web-e2e-boundary.test.mjs` 随 `pnpm test:unit` 强制。

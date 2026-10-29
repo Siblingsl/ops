@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import {
   Activity, BarChart3, BookOpen, Bot, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, Clock, Eye, FileText, Images, Inbox, KeyRound,
-  LayoutDashboard, Lightbulb, LogOut, Menu, PanelLeft, Pencil, Plus, Power, Search, Send, Settings2, Sparkles, Trash2,
+  LayoutDashboard, Lightbulb, LogOut, Menu, Pencil, Plus, Power, Search, Send, Settings2, Trash2,
   UserCircle2, UserPlus, X,
 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -9,22 +9,17 @@ import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
-import AccountCreateHost from './AccountCreateHost'
 import { CommandPaletteHost } from '@/components/command-palette-host'
 import { CreateWorkPanel } from '@/components/create-work-panel'
 import { ErrorBoundary } from '@/components/error-boundary'
 import { NotificationBell } from '@/components/notifications'
 import { QuickCollect } from '@/components/quick-collect'
-import { ThemeToggle } from '@/components/theme-toggle'
 import { cn, Kbd, PlatformMark, platformLabel } from '@/components/ui'
 import { del, errorMessage, post } from '@/lib/api'
-import { isElectronDesktop } from '@/lib/desktop-presentation.js'
-import { currentAccountSettingsPath, DESKTOP_ACCOUNT_CREATE_READY, DESKTOP_ACCOUNT_CREATE_REQUEST, DESKTOP_ACCOUNT_SWITCHER_READY, DESKTOP_ACCOUNT_SWITCHER_REQUEST, releaseDesktopLeaveGuard, requestDesktopLeaveGuard } from '@/lib/desktop-settings'
 import { commonSettingsPaths, settingsEntries } from '@/lib/settings-registry'
 import { SessionExpiryBanner } from './session-expiry-banner'
 import { flushWork } from '@/pages/work/work-save'
 import { TodayUsage, useChromeMeta } from './today-usage'
-import DesktopStatusBar from './DesktopStatusBar'
 import { rememberAccount, useAccounts, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
 import type { Account, Platform } from '@/lib/types'
 import { setUXEnabled, usePrefs, useRecentWorks } from '@/lib/v3'
@@ -39,12 +34,6 @@ const nav: { end?: boolean; path: string; icon: typeof LayoutDashboard; label: s
   { path: '/materials', icon: BookOpen, label: '素材库', mobile: '素材' },
   { path: '/review', icon: BarChart3, label: '复盘' },
   { path: '/profile', icon: UserCircle2, label: '账号档案' },
-]
-
-const desktopNavGroups = [
-  { label: '创作', items: [nav[0], nav[4], nav[1], nav[3]] },
-  { label: '资源', items: [nav[5], { to: '/images', icon: Images, label: '图片库' }] },
-  { label: '运营', items: [nav[2], nav[6], nav[7]] },
 ]
 
 // GL-01：移动端底部导航只放 4 个主入口，其余一级页收进「更多」抽屉。
@@ -82,25 +71,12 @@ const mobileMoreGroups: { label: string; items: MobileMoreItem[] }[] = [
   },
 ]
 
-// GL-02：用户菜单只列 Web 可见项；桌面端点击"设置…"打开设置窗，不走这里的分组。
+// GL-02：用户菜单只列 Web 可见项。
 const settingsItems = settingsEntries
-  .filter((entry) => !entry.webHidden)
   .map((entry) => ({ to: entry.path, icon: <entry.icon />, label: entry.label, adminOnly: entry.adminOnly }))
 const commonSettings = commonSettingsPaths
 
-function Brand({ desktop }: { desktop: boolean }) {
-  if (desktop) {
-    // 品牌从标题栏下移到侧栏顶部：折叠态竖排（图标 + 文字），展开态横排，两态共用同一槽位居中。
-    return (
-      <div className="desktop-rail-brand">
-        <span className="desktop-rail-brand-mark"><Sparkles aria-hidden="true" /></span>
-        <span className="desktop-rail-brand-text">
-          <span className="desktop-rail-brand-ops">OPS</span>
-          <span className="desktop-rail-brand-name">灵感空间</span>
-        </span>
-      </div>
-    )
-  }
+function Brand() {
   return (
     <div className="flex h-14 shrink-0 items-center px-5">
       <div className="flex items-center gap-3">
@@ -172,7 +148,6 @@ function UserMenu({ username, onLogout }: { username?: string; onLogout: () => v
   const { data: me } = useMe()
   const ref = useRef<HTMLDivElement>(null)
   const inSettings = loc.pathname.startsWith('/settings/')
-  const desktop = isElectronDesktop(navigator.userAgent)
   const items = settingsItems.filter((item) => !item.adminOnly || me?.is_system_admin)
   const common = items.filter((item) => commonSettings.has(item.to))
   const advanced = items.filter((item) => !commonSettings.has(item.to))
@@ -183,7 +158,7 @@ function UserMenu({ username, onLogout }: { username?: string; onLogout: () => v
   }, [])
   useEffect(() => { setOpen(false) }, [loc.pathname])
   return (
-    <div ref={ref} className="desktop-user-menu relative">
+    <div ref={ref} className="relative">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -191,7 +166,7 @@ function UserMenu({ username, onLogout }: { username?: string; onLogout: () => v
         aria-expanded={open}
         aria-haspopup="menu"
         className={cn(
-          'desktop-user-trigger flex h-9 cursor-pointer items-center gap-2 rounded-full border bg-white pl-1 pr-2.5 text-left transition',
+          'flex h-9 cursor-pointer items-center gap-2 rounded-full border bg-white pl-1 pr-2.5 text-left transition',
           open || inSettings ? 'border-ink-300 shadow-card' : 'border-mist-200 hover:border-mist-300',
         )}
       >
@@ -203,7 +178,6 @@ function UserMenu({ username, onLogout }: { username?: string; onLogout: () => v
       </button>
       {open && (
         <div role="menu" className="absolute right-0 top-[calc(100%+8px)] z-40 w-[260px] animate-fade-in rounded-xl border border-mist-200 bg-white p-1.5 shadow-pop">
-          {desktop ? <button type="button" role="menuitem" onClick={() => { setOpen(false); navigate('/settings/preferences') }} className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13.5px] text-mist-700 hover:bg-mist-50"><Settings2 className="size-4" /> 设置…</button> : <>
           <div className="px-2.5 pb-1.5 pt-1.5 text-[11px] font-semibold tracking-wider text-mist-400">工作区设置</div>
           {common.map((item) => (
             <button
@@ -248,7 +222,6 @@ function UserMenu({ username, onLogout }: { username?: string; onLogout: () => v
               {item.label}
             </button>
           ))}
-          </>}
           <div className="my-1 border-t border-mist-100" />
           <button
             type="button"
@@ -362,27 +335,10 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   const lastPathname = useRef(loc.pathname)
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(loadPlatformExpanded)
-  const [platform, setPlatform] = useState<Platform>('wechat_mp')
   const [busy, setBusy] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
-  const [createPlatform, setCreatePlatform] = useState<Platform | null>(null)
-  const createContext = useRef<{ userId: string; workspaceId: string } | null>(null)
   const identityRef = useRef<{ userId: string; workspaceId: string } | null>(null)
   identityRef.current = me?.workspace ? { userId: me.user_id ?? me.username, workspaceId: me.workspace.id } : null
-  const desktop = document.documentElement.dataset.presentation === 'ops-creative-desktop'
-
-  const openAccountCreate = async (target: Platform) => {
-    setOpen(false)
-    if (!canManage || !identityRef.current) return
-    const context = identityRef.current
-    if (identityRef.current?.userId !== context.userId || identityRef.current?.workspaceId !== context.workspaceId) {
-      toast.info('工作区已变化，请重新打开账号创建窗口')
-      return
-    }
-    createContext.current = context
-    setPlatform(target)
-    setCreatePlatform(target)
-  }
 
   useEffect(() => {
     const h = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false)
@@ -404,50 +360,16 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
     lastPathname.current = loc.pathname
     setOpen(false)
   }, [loc.pathname])
-  useEffect(() => {
-    const openSwitcher = () => {
-      setPlatform(current?.platform ?? 'wechat_mp')
-      setOpen(true)
-      requestAnimationFrame(() => ref.current?.querySelector('button')?.focus())
-    }
-    const openCreate = (event: Event) => {
-      const requested = (event as CustomEvent<{ platform?: Platform }>).detail?.platform
-      void openAccountCreate(PLATFORMS.includes(requested as Platform) ? requested as Platform : current?.platform ?? platform)
-    }
-    window.addEventListener(DESKTOP_ACCOUNT_SWITCHER_REQUEST, openSwitcher)
-    window.addEventListener(DESKTOP_ACCOUNT_CREATE_REQUEST, openCreate)
-    if (desktop) {
-      document.documentElement.dataset.desktopAccountSwitcherReady = 'true'
-      window.dispatchEvent(new Event(DESKTOP_ACCOUNT_SWITCHER_READY))
-    }
-    if (canManage && identityRef.current) {
-      document.documentElement.dataset.desktopAccountCreateReady = 'true'
-      window.dispatchEvent(new Event(DESKTOP_ACCOUNT_CREATE_READY))
-    }
-    return () => {
-      if (desktop) delete document.documentElement.dataset.desktopAccountSwitcherReady
-      delete document.documentElement.dataset.desktopAccountCreateReady
-      window.removeEventListener(DESKTOP_ACCOUNT_SWITCHER_REQUEST, openSwitcher)
-      window.removeEventListener(DESKTOP_ACCOUNT_CREATE_REQUEST, openCreate)
-    }
-  }, [current?.platform, platform, canManage, desktop, me?.user_id, me?.username, me?.workspace.id])
-
   if (!me?.workspace) return null
 
   const switchAccount = async (id: string, sub = '') => {
     const identity = identityRef.current
     if (!identity) return
-    if (!(await requestDesktopLeaveGuard(true, !desktop))) {
-      releaseDesktopLeaveGuard()
-      return
-    }
     if (identityRef.current?.userId !== identity.userId || identityRef.current?.workspaceId !== identity.workspaceId) {
-      if (desktop) releaseDesktopLeaveGuard()
       toast.info('登录用户或工作区已变化，请重新选择账号。')
       return
     }
     if (!accounts?.some((account) => account.id === id && account.status === 'active')) {
-      if (desktop) releaseDesktopLeaveGuard()
       toast.info('该账号当前不可用，请从顶部重新选择。')
       return
     }
@@ -461,7 +383,6 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
         cancelText: '不切换，继续当前作品',
       })
       if (!goList) {
-        if (desktop) releaseDesktopLeaveGuard()
         toast.info('账号未切换；当前作品仍属于原账号。')
         return
       }
@@ -469,7 +390,6 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
         const workId = loc.pathname.match(/^\/works\/([^/?#]+)/)?.[1]
         if (workId) await flushWork(workId)
       } catch (e) {
-        if (desktop) releaseDesktopLeaveGuard()
         toast.error(`保存当前作品失败，账号未切换：${errorMessage(e)}`)
         return
       }
@@ -480,7 +400,6 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
     // 设置页不依赖账号路由；更新记忆的账号即可保留当前设置子页。
     if (loc.pathname.startsWith('/settings/')) {
       rememberAccount(id, identity.userId, identity.workspaceId)
-      if (desktop) releaseDesktopLeaveGuard()
       toast.success(`已切换到${accounts.find((account) => account.id === id)?.name ?? '所选账号'}，保留当前设置页。`)
       return
     }
@@ -492,13 +411,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   const switchWorkspace = async (id: string) => {
     if (id === me.workspace.id || busy) return
     setBusy(true)
-    if (!(await requestDesktopLeaveGuard(true, !desktop))) {
-      releaseDesktopLeaveGuard()
-      setBusy(false)
-      return
-    }
     if (identityRef.current?.workspaceId !== me.workspace.id) {
-      if (desktop) releaseDesktopLeaveGuard()
       setBusy(false)
       return
     }
@@ -509,7 +422,6 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       try {
         await flushWork(workMatch[1])
       } catch (e) {
-        if (desktop) releaseDesktopLeaveGuard()
         toast.error(`切换前保存失败：${errorMessage(e)}`)
         setBusy(false)
         return
@@ -521,7 +433,6 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       setOpen(false)
       navigate('/', { replace: true })
     } catch (e) {
-      if (desktop) releaseDesktopLeaveGuard()
       toast.error(`切换工作区失败：${errorMessage(e)}`)
       setBusy(false)
     }
@@ -585,13 +496,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       confirmText: '创建并切换',
     }))) return
     setBusy(true)
-    if (!(await requestDesktopLeaveGuard(true, !desktop))) {
-      releaseDesktopLeaveGuard()
-      setBusy(false)
-      return
-    }
     if (identityRef.current?.workspaceId !== me.workspace.id) {
-      if (desktop) releaseDesktopLeaveGuard()
       setBusy(false)
       return
     }
@@ -600,18 +505,17 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       qc.clear()
       window.location.assign('/')
     } catch (e) {
-      if (desktop) releaseDesktopLeaveGuard()
       toast.error(errorMessage(e))
       setBusy(false)
     }
   }
 
   const workspaceMenu = (): MenuItem[] => [
-    ...(!desktop ? [{
+    {
       label: '成员与邀请',
       icon: <UserPlus />,
       onClick: () => { setOpen(false); navigate('/settings/members') },
-    }] : []),
+    },
     {
       label: '创建工作区',
       icon: <Plus />,
@@ -621,13 +525,13 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       label: '添加账号',
       icon: <Plus />,
       disabled: !canManage,
-      onClick: () => { if (desktop) void openAccountCreate(platform); else { setOpen(false); navigate('/settings/accounts?new=1') } },
+      onClick: () => { setOpen(false); navigate('/settings/accounts?new=1') },
     },
-    ...(!desktop ? [{
+    {
       label: '管理平台账号',
       icon: <Settings2 />,
       onClick: () => { setOpen(false); navigate('/settings/accounts') },
-    }] : []),
+    },
     ...(otherWorkspaces.length
       ? [
           { separator: true, label: '' } as MenuItem,
@@ -641,19 +545,19 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   ]
 
   const platformMenu = (p: Platform): MenuItem[] => [
-    ...(!desktop ? [{
+    {
       label: expanded[p] ? '收起' : '展开',
       icon: expanded[p] ? <ChevronDown /> : <ChevronRight />,
       onClick: () => togglePlatform(p),
     },
-    { separator: true, label: '' } as MenuItem] : []),
+    { separator: true, label: '' },
     {
       label: '添加账号',
       icon: <Plus />,
       disabled: !canManage,
-      onClick: () => { if (desktop) void openAccountCreate(p); else { setOpen(false); navigate(`/settings/accounts?new=1&platform=${p}`) } },
+      onClick: () => { setOpen(false); navigate(`/settings/accounts?new=1&platform=${p}`) },
     },
-    ...(!desktop ? [{
+    {
       label: '查看全部',
       icon: <Eye />,
       onClick: () => { setOpen(false); navigate('/settings/accounts') },
@@ -668,7 +572,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       label: '邀请成员',
       icon: <UserPlus />,
       onClick: () => { setOpen(false); navigate('/settings/members') },
-    }] : []),
+    },
   ]
 
   const accountMenu = (a: Account): MenuItem[] => [
@@ -677,7 +581,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       icon: <Check />,
       onClick: () => switchAccount(a.id),
     },
-    ...(!desktop ? [{
+    {
       label: '查看资料',
       icon: <Eye />,
       onClick: () => { setOpen(false); navigate(`/settings/accounts?id=${a.id}`) },
@@ -687,22 +591,14 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       icon: <Pencil />,
       disabled: !canManage,
       onClick: () => { setOpen(false); navigate(`/settings/accounts?id=${a.id}`) },
-    }] : []),
+    },
     {
       label: '添加同平台账号',
       icon: <Plus />,
       disabled: !canManage,
-      onClick: () => { if (desktop) void openAccountCreate(a.platform); else { setOpen(false); navigate(`/settings/accounts?new=1&platform=${a.platform}`) } },
+      onClick: () => { setOpen(false); navigate(`/settings/accounts?new=1&platform=${a.platform}`) },
     },
-    ...(desktop ? [{
-      label: '管理此账号',
-      icon: <Settings2 />,
-      onClick: () => {
-        setOpen(false)
-        navigate(currentAccountSettingsPath(a.id), { state: { opsAccountSwitchId: a.id } })
-      },
-    }] : []),
-    ...(!desktop ? [{
+    {
       label: '停用账号',
       icon: <Power />,
       danger: true,
@@ -731,16 +627,12 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       label: a.platform === 'wechat_mp' ? '管理凭证' : '管理账号',
       icon: a.platform === 'wechat_mp' ? <KeyRound /> : <Settings2 />,
       onClick: () => { setOpen(false); navigate(`/settings/accounts?id=${a.id}`) },
-    }] : []),
+    },
   ]
 
   return (
-    <div ref={ref} className={cn('relative', desktop ? 'shrink-0' : 'min-w-0')}>
-      {desktop ? <button type="button" className="desktop-context-trigger" aria-label="切换工作区与账号" aria-expanded={open} aria-controls="topbar-context-menu" title={`${me.workspace.name} / ${current?.name ?? '选择账号'}`} onClick={() => { setPlatform(current?.platform ?? 'wechat_mp'); setOpen((v) => !v) }} onContextMenu={(e) => openMenu(e, workspaceMenu())}>
-          {current ? <PlatformMark platform={current.platform} size="sm" /> : <span className="size-5 rounded bg-mist-100" />}
-          <span className="desktop-context-copy"><strong>{me.workspace.name}</strong><small>{current ? `${platformLabel[current.platform]} · ${current.name}` : '选择账号'}</small></span>
-          <ChevronsUpDown className="size-3.5 shrink-0 text-mist-400" />
-      </button> : <button
+    <div ref={ref} className="relative min-w-0">
+      <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         onContextMenu={(e) => openMenu(e, workspaceMenu())}
@@ -757,17 +649,17 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
           <span className="text-mist-500">{current?.name ?? '选择账号'}</span>
         </span>
         <ChevronsUpDown className="size-3.5 shrink-0 text-mist-400" />
-      </button>}
+      </button>
 
       {open && (
-        <div id="topbar-context-menu" data-testid={desktop ? 'desktop-context-menu' : 'workspace-account-menu'} className={cn('absolute left-0 top-[calc(100%+8px)] z-40 animate-fade-in rounded-xl border border-mist-200 bg-white p-1.5 shadow-pop', desktop ? 'w-[320px] max-w-[calc(100vw-24px)] max-h-[calc(100vh-152px)] overflow-y-auto' : 'w-[300px]')}>
+        <div id="topbar-context-menu" data-testid="workspace-account-menu" className="absolute left-0 top-[calc(100%+8px)] z-40 w-[300px] animate-fade-in rounded-xl border border-mist-200 bg-white p-1.5 shadow-pop">
           <div className="flex items-center gap-1 px-2 pb-1 pt-1.5">
             <span className="min-w-0 flex-1 truncate text-[11px] font-semibold tracking-wider text-mist-400">{me.workspace.name}</span>
             {canManage && (
               <button
                 type="button"
                 title="添加账号"
-                onClick={() => { if (desktop) void openAccountCreate(platform); else { setOpen(false); navigate('/settings/accounts?new=1') } }}
+                onClick={() => { setOpen(false); navigate('/settings/accounts?new=1') }}
                 className="inline-flex size-5 cursor-pointer items-center justify-center rounded text-mist-400 hover:bg-mist-100 hover:text-mist-700"
               >
                 <Plus className="size-3.5" />
@@ -775,58 +667,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
             )}
           </div>
 
-          {desktop ? <>
-            <div role="tablist" aria-label="账号平台" className="desktop-platform-tabs">
-              {PLATFORMS.map((p) => (
-                <button key={p} type="button" role="tab" id={`topbar-platform-${p}`} aria-selected={platform === p} aria-controls={`topbar-accounts-${p}`} tabIndex={platform === p ? 0 : -1} onClick={() => setPlatform(p)} onContextMenu={(e) => openMenu(e, platformMenu(p))} onKeyDown={(e) => {
-                  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
-                  e.preventDefault()
-                  const index = PLATFORMS.indexOf(p)
-                  const next = e.key === 'Home' ? PLATFORMS[0] : e.key === 'End' ? PLATFORMS[PLATFORMS.length - 1] : PLATFORMS[(index + (e.key === 'ArrowRight' ? 1 : -1) + PLATFORMS.length) % PLATFORMS.length]
-                  setPlatform(next)
-                  document.getElementById(`topbar-platform-${next}`)?.focus()
-                }}>
-                  <PlatformMark platform={p} size="sm" />
-                  <span>{platformLabel[p]}</span>
-                  <span className="tabular-nums">{(accounts ?? []).filter((a) => a.platform === p && a.status === 'active').length}</span>
-                </button>
-              ))}
-            </div>
-            <div role="tabpanel" id={`topbar-accounts-${platform}`} aria-labelledby={`topbar-platform-${platform}`} className="space-y-0.5 py-1">
-              {(accounts ?? []).filter((a) => a.platform === platform && a.status === 'active').map((a) => (
-                <button key={a.id} type="button" onClick={() => switchAccount(a.id)} onContextMenu={(e) => openMenu(e, accountMenu(a))} className={cn('flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left text-[13px] transition', a.id === current?.id ? 'bg-ink-50 font-semibold text-ink-800' : 'text-mist-600 hover:bg-mist-50 hover:text-mist-900')}>
-                  <span className={cn('size-1.5 shrink-0 rounded-full', a.id === current?.id ? 'bg-ink-600' : 'bg-mist-300')} />
-                  <span className="min-w-0 flex-1 truncate" title={a.name}>{a.name}</span>
-                  {a.id === current?.id && <Check className="size-3.5 shrink-0 text-ink-600" />}
-                </button>
-              ))}
-              {!(accounts ?? []).some((a) => a.platform === platform && a.status === 'active') && (
-                <div className="px-2 py-3 text-center text-[12.5px] text-mist-400">
-                  暂无{platformLabel[platform]}账号
-                  {canManage && <button type="button" onClick={() => { if (desktop) void openAccountCreate(platform); else { setOpen(false); navigate(`/settings/accounts?new=1&platform=${platform}`) } }} className="mt-2 block w-full cursor-pointer text-ink-600 hover:text-ink-800">添加{platformLabel[platform]}账号</button>}
-                </div>
-              )}
-              {(accounts ?? []).some((a) => a.platform === platform && a.status === 'disabled') && (
-                <details className="mt-1 border-t border-mist-100 pt-1.5">
-                  <summary className="cursor-pointer rounded-lg px-2 py-1.5 text-[12px] text-mist-500 hover:bg-mist-50">
-                    已停用 {(accounts ?? []).filter((a) => a.platform === platform && a.status === 'disabled').length}
-                  </summary>
-                  <div className="space-y-0.5 py-1">
-                    {(accounts ?? []).filter((a) => a.platform === platform && a.status === 'disabled').map((a) => (
-                      <button key={a.id} type="button" onClick={() => {
-                        setOpen(false)
-                        navigate(currentAccountSettingsPath(a.id), { state: { opsAccountSwitchId: a.id } })
-                      }} className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left text-[12.5px] text-mist-500 hover:bg-mist-50 hover:text-mist-800">
-                        <span className="size-1.5 shrink-0 rounded-full bg-mist-300" />
-                        <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                        <span className="shrink-0 text-[11px]">已停用</span>
-                      </button>
-                    ))}
-                  </div>
-                </details>
-              )}
-            </div>
-          </> : <div className="space-y-0.5">
+          <div className="space-y-0.5">
             {PLATFORMS.map((p) => {
               const list = (accounts ?? []).filter((a) => a.platform === p && a.status === 'active')
               const platformOpen = expanded[p]
@@ -848,7 +689,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
                       {list.length === 0 ? (
                         <button
                           type="button"
-                          onClick={() => { if (canManage) { if (desktop) void openAccountCreate(p); else { setOpen(false); navigate(`/settings/accounts?new=1&platform=${p}`) } } }}
+                          onClick={() => { if (canManage) { setOpen(false); navigate(`/settings/accounts?new=1&platform=${p}`) } }}
                           onContextMenu={(e) => openMenu(e, platformMenu(p))}
                           className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-mist-400 hover:bg-mist-50 hover:text-mist-600"
                         >
@@ -880,7 +721,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
                 </div>
               )
             })}
-          </div>}
+          </div>
 
           {otherWorkspaces.length > 0 && (
             <div className="mt-1 space-y-0.5 border-t border-mist-100 pt-1">
@@ -900,77 +741,35 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
             </div>
           )}
 
-          {desktop ? (
-            <div className="mt-1 border-t border-mist-100 pt-1">
-              <button type="button" disabled={busy} onClick={() => { setOpen(false); void createAndSwitchWorkspace() }} className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-mist-600 hover:bg-mist-50 disabled:opacity-50"><Plus className="size-3.5" /> 创建工作区</button>
-            </div>
-          ) : (
-            <div className="mt-1 border-t border-mist-100 pt-1">
-              <button type="button" onClick={() => { setOpen(false); navigate('/settings/members') }} className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-mist-600 hover:bg-mist-50"><UserPlus className="size-3.5" /> 成员与邀请</button>
-            </div>
-          )}
+          <div className="mt-1 border-t border-mist-100 pt-1">
+            <button type="button" disabled={busy} onClick={() => { setOpen(false); void createAndSwitchWorkspace() }} className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-mist-600 hover:bg-mist-50 disabled:opacity-50"><Plus className="size-3.5" /> 创建工作区</button>
+          </div>
         </div>
       )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
-      {desktop && <AccountCreateHost
-        platform={createPlatform}
-        expectedContext={createContext.current}
-        onClose={() => { createContext.current = null; setCreatePlatform(null) }}
-        onCreated={(account) => {
-          const target = createContext.current
-          createContext.current = null
-          setCreatePlatform(null)
-          if (!target || identityRef.current?.userId !== target.userId || identityRef.current?.workspaceId !== target.workspaceId) {
-            void inv(['accounts'])
-            toast.warning('账号已创建，但当前工作区已变化；请在原工作区重新选择账号。')
-            return
-          }
-          qc.setQueryData<Account[]>(['accounts', target.userId, target.workspaceId], (previous = []) => {
-            const index = previous.findIndex((item) => item.id === account.id)
-            if (index < 0) return [...previous, account]
-            return previous.map((item, i) => i === index ? account : item)
-          })
-          void inv(['accounts'])
-          rememberAccount(account.id, target.userId, target.workspaceId)
-          toast.success(account.platform === 'wechat_mp' ? '账号已添加，先建档；公众号凭证可稍后配置' : '账号已添加，先来建档', { id: 'account-create-success' })
-          navigate(`/a/${account.id}/profile?wizard=1`)
-        }}
-      />}
     </div>
   )
 }
 
-function TopBar({ username, onLogout, dense, showAgent, agentMode, homeTo, desktopNavExpanded, onToggleDesktopNav }: { username?: string; onLogout: () => void; dense?: boolean; showAgent?: boolean; agentMode?: boolean; homeTo: string; desktopNavExpanded: boolean; onToggleDesktopNav: () => void }) {
+function TopBar({ username, onLogout, dense, showAgent, agentMode, homeTo }: { username?: string; onLogout: () => void; dense?: boolean; showAgent?: boolean; agentMode?: boolean; homeTo: string }) {
   const meta = useChromeMeta()
   const acc = useCurrentAccount()
-  const navigate = useNavigate()
-  const desktopPresentation = isElectronDesktop(navigator.userAgent)
 
   return (
     <header className={cn(
-      // GL-05：顶栏自带账号/工作区下拉，必须高于页面级粘性头（作品页 .work-header 同为 z-20，
-      // 且 DOM 更靠后，会把下拉整段压住导致账号点不到）。desktop-creative.css 的侧边栏注释
-      // 也按「顶栏为 30」对齐，这里补上缺的 10。
-      'desktop-global-header sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-mist-200/80 bg-white/90 px-3 backdrop-blur sm:gap-3 sm:px-5 xl:px-7', dense && 'work-topbar',
+      // GL-05：顶栏账号下拉必须高于页面级粘性头。
+      'sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-mist-200/80 bg-white/90 px-3 backdrop-blur sm:gap-3 sm:px-5 xl:px-7', dense && 'work-topbar',
     )}>
-      {document.documentElement.dataset.presentation === 'ops-creative-desktop' && (
-        <>
-          <button type="button" className="desktop-nav-toggle" aria-label={desktopNavExpanded ? '收起导航文字' : '展开导航文字'} title={desktopNavExpanded ? '收起导航文字' : '展开导航文字'} aria-expanded={desktopNavExpanded} aria-controls="main-navigation" onClick={onToggleDesktopNav}>
-            <PanelLeft aria-hidden="true" />
-          </button>
-          <button type="button" className="desktop-nav-back" aria-label="返回上一视图" title="返回" onClick={() => navigate(-1)}><ChevronLeft aria-hidden="true" /></button>
-        </>
-      )}
       <WorkspaceAccountTree compact={dense} />
       <div className="hidden h-4 w-px bg-mist-200 lg:block" />
-      <nav className={cn('hidden min-w-0 flex-1 items-center gap-2 text-[13px] lg:flex', desktopPresentation && 'desktop-breadcrumb')} aria-label="当前位置">
+      <nav className="hidden min-w-0 flex-1 items-center gap-2 text-[13px] lg:flex" aria-label="当前位置">
         <span className="truncate text-mist-400">{meta.crumb}</span>
         <span className="text-mist-300">/</span>
         {agentMode
           ? <div id="agent-title-slot" className="min-w-0 flex-1 truncate font-semibold text-mist-800" />
           : <span className="truncate font-semibold text-mist-800">{meta.title}</span>}
       </nav>
-      <div className="desktop-toolbar-actions ml-auto flex shrink-0 items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         {agentMode && <div id="agent-toolbar-slot" className="hidden shrink-0 items-center lg:flex" />}
         {agentMode
           ? <Link to={homeTo} aria-label="返回工作台" title="返回工作台" className={cn('flex size-9 items-center justify-center rounded-full text-mist-500 hover:bg-mist-100 hover:text-ink-700', showAgent && 'md:hidden', !showAgent && 'md:w-auto md:gap-2 md:px-2.5')}><ChevronLeft className="size-4" /><span className={cn('hidden text-xs', !showAgent && 'md:inline')}>返回工作台</span></Link>
@@ -979,22 +778,16 @@ function TopBar({ username, onLogout, dense, showAgent, agentMode, homeTo, deskt
           type="button"
           onClick={() => window.dispatchEvent(new Event('ops:palette'))}
           title="搜索与命令（Ctrl+K）"
-          aria-label={desktopPresentation ? '搜索与命令（Ctrl+K）' : undefined}
           className={cn(
-            'desktop-command-search flex h-9 cursor-pointer items-center rounded-full border border-mist-200 bg-white transition hover:border-mist-300',
-            desktopPresentation
-              ? 'size-9 justify-center text-mist-600 hover:text-mist-900'
-              : 'gap-2 px-2.5 text-[12.5px] text-mist-500 hover:text-mist-800 sm:px-3',
+            'flex h-9 cursor-pointer items-center rounded-full border border-mist-200 bg-white transition hover:border-mist-300',
+            'gap-2 px-2.5 text-[12.5px] text-mist-500 hover:text-mist-800 sm:px-3',
           )}
         >
-          <Search className={desktopPresentation ? 'size-4' : 'size-3.5'} />
-          {!desktopPresentation && <>
-            <span className="hidden md:inline">搜索</span>
-            <span className="hidden md:inline"><Kbd>Ctrl K</Kbd></span>
-          </>}
+          <Search className="size-3.5" />
+          <span className="hidden md:inline">搜索</span>
+          <span className="hidden md:inline"><Kbd>Ctrl K</Kbd></span>
         </button>
-        {desktopPresentation && <ThemeToggle />}
-        {!dense && !desktopPresentation && <TodayUsage enabled={!!acc} />}
+        {!dense && <TodayUsage enabled={!!acc} />}
         <NotificationBell />
         <UserMenu username={username} onLogout={onLogout} />
       </div>
@@ -1017,8 +810,6 @@ export default function Shell() {
   const prefs = usePrefs()
   useEffect(() => setUXEnabled(prefs.ux_events), [prefs.ux_events])
   const [focusMode, setFocusMode] = useState(false)
-  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
-  const [desktopNavExpanded, setDesktopNavExpanded] = useState(() => desktopPresentation && localStorage.getItem('ops-desktop-nav') === 'expanded')
   const [timeNow, setTimeNow] = useState(() => Date.now())
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   // GL-01：更多菜单既覆盖账号页，也覆盖全局页；全局入口不能错误拼到 /a/:id 下。
@@ -1046,66 +837,43 @@ export default function Shell() {
   }, [agentMode])
   const focus = focusMode && fullBleed
   const logout = async () => {
-    if (!(await requestDesktopLeaveGuard(true, !desktopPresentation))) {
-      releaseDesktopLeaveGuard()
-      return
-    }
     await post('/auth/logout').catch(() => undefined)
     qc.clear()
     location.href = '/login'
   }
   return (
     <div className="flex h-full">
-      <aside id="main-navigation" aria-label="主导航" className={cn('hidden w-[248px] shrink-0 flex-col border-r border-mist-200 bg-mist-50', desktopPresentation && focus && !agentMode && 'desktop-focus-nav-hidden', desktopNavExpanded && 'desktop-nav-expanded', (!focus || agentMode) && 'md:flex')}>
-        <Brand desktop={desktopPresentation} />
+      <aside id="main-navigation" aria-label="主导航" className={cn('hidden w-[248px] shrink-0 flex-col border-r border-mist-200 bg-mist-50', (!focus || agentMode) && 'md:flex')}>
+        <Brand />
         <div className="relative min-h-0 flex-1 overflow-hidden">
-          <nav aria-hidden={agentMode && !desktopPresentation} className={cn('scrollbar-thin absolute inset-0 space-y-1 overflow-y-auto px-3 pb-4 pt-3', agentMode && !desktopPresentation && 'hidden')}>
-            {desktopPresentation ? desktopNavGroups.map((group) => (
-              <div key={group.label} className="desktop-nav-group">
-                <div className="desktop-nav-group-label">{group.label}</div>
-                {group.items.map((item) => <NavItem key={'to' in item ? item.to : item.path || 'home'} to={'to' in item ? item.to : acc ? `${base}${item.path}` : '/settings/accounts'} end={'end' in item ? item.end : undefined} icon={item.icon}>{item.label}</NavItem>)}
-              </div>
-            )) : <>
+          <nav aria-hidden={agentMode} className={cn('scrollbar-thin absolute inset-0 space-y-1 overflow-y-auto px-3 pb-4 pt-3', agentMode && 'hidden')}>
               <div className="mb-1.5 px-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400">创作</div>
               {nav.map((item) => <NavItem key={item.path || 'home'} to={acc ? `${base}${item.path}` : '/settings/accounts'} end={item.end} icon={item.icon}>{item.label}</NavItem>)}
               <div className="mb-1.5 px-3 pt-4 text-[11px] font-semibold tracking-[0.16em] text-mist-400">工作区</div>
               <NavItem to="/images" icon={Images}>图片库</NavItem>
               <RecentWorks />
-            </>}
           </nav>
-          <div id="agent-sidebar-slot" aria-hidden={!agentMode || desktopPresentation} className={cn('absolute inset-0 flex flex-col overflow-hidden', (!agentMode || desktopPresentation) && 'hidden')}>
-            {agentMode && !desktopPresentation && agentBootstrap.isLoading && <div className="px-4 py-3 text-sm text-mist-400">正在打开 AI 对话…</div>}
+          <div id="agent-sidebar-slot" aria-hidden={!agentMode} className={cn('absolute inset-0 flex flex-col overflow-hidden', !agentMode && 'hidden')}>
+            {agentMode && agentBootstrap.isLoading && <div className="px-4 py-3 text-sm text-mist-400">正在打开 AI 对话…</div>}
           </div>
         </div>
-        <div className={cn('shrink-0 space-y-2 px-3 pb-4', desktopPresentation && 'desktop-sidebar-bottom')}>
+        <div className="shrink-0 space-y-2 px-3 pb-4">
           {me?.dev && (
-            <div className="desktop-dev-note rounded-2xl border border-gamboge-200/80 bg-gamboge-50/70 px-3 py-2.5 text-[11.5px] leading-relaxed text-gamboge-700">
+            <div className="rounded-2xl border border-gamboge-200/80 bg-gamboge-50/70 px-3 py-2.5 text-[11.5px] leading-relaxed text-gamboge-700">
               本地开发 · 模拟接口
             </div>
           )}
-          {desktopPresentation
-            ? <NavItem to="/agent" icon={Bot}>AI 对话</NavItem>
-            : agentMode
-              ? <Link to={base} className="group flex items-center gap-3 rounded-2xl px-3 py-2.5 text-[14.5px] font-medium text-mist-600 transition-all hover:bg-mist-100/90 hover:text-mist-900"><ChevronLeft className="size-[18px] shrink-0 text-mist-400 group-hover:text-mist-600" strokeWidth={1.8} />返回工作台</Link>
-              : showAgent && <NavItem to="/agent" icon={Bot}>AI 对话</NavItem>}
+          {agentMode
+            ? <Link to={base} className="group flex items-center gap-3 rounded-2xl px-3 py-2.5 text-[14.5px] font-medium text-mist-600 transition-all hover:bg-mist-100/90 hover:text-mist-900"><ChevronLeft className="size-[18px] shrink-0 text-mist-400 group-hover:text-mist-600" strokeWidth={1.8} />返回工作台</Link>
+            : showAgent && <NavItem to="/agent" icon={Bot}>AI 对话</NavItem>}
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        {!focus && <TopBar username={me?.username} onLogout={logout} dense={loc.pathname.startsWith('/works/')} showAgent={showAgent} agentMode={agentMode} homeTo={base} desktopNavExpanded={desktopNavExpanded} onToggleDesktopNav={() => setDesktopNavExpanded((expanded) => {
-          const next = !expanded
-          if (desktopPresentation) localStorage.setItem('ops-desktop-nav', next ? 'expanded' : 'collapsed')
-          return next
-        })} />}
+        {!focus && <TopBar username={me?.username} onLogout={logout} dense={loc.pathname.startsWith('/works/')} showAgent={showAgent} agentMode={agentMode} homeTo={base} />}
         {me?.session_expires_at && Date.parse(me.session_expires_at) > timeNow && Date.parse(me.session_expires_at) - timeNow < 24 * 60 * 60 * 1000 && (
           <SessionExpiryBanner
             expiresAt={me.session_expires_at}
             onRenewed={() => qc.invalidateQueries({ queryKey: ['me'] })}
-            onBeforeLogout={async () => {
-              const allowed = await requestDesktopLeaveGuard(true, !desktopPresentation)
-              if (!allowed) releaseDesktopLeaveGuard()
-              return allowed
-            }}
-            onLogoutFailure={() => releaseDesktopLeaveGuard()}
           />
         )}
         {me?.admin_override && (
@@ -1133,7 +901,7 @@ export default function Shell() {
             当前为观察者：可浏览内容，不能创建、编辑或推送。
           </div>
         )}
-        <main className={cn('scrollbar-thin min-w-0 flex-1 overflow-y-auto pb-16 md:pb-0', contentSlide && 'overflow-x-hidden', !fullBleed && 'px-4 py-5 sm:px-8 sm:py-7 md:px-10 xl:px-12 2xl:px-14 md:pb-7', desktopPresentation && !fullBleed && 'desktop-workspace-main')}>
+        <main className={cn('scrollbar-thin min-w-0 flex-1 overflow-y-auto pb-16 md:pb-0', contentSlide && 'overflow-x-hidden', !fullBleed && 'px-4 py-5 sm:px-8 sm:py-7 md:px-10 xl:px-12 2xl:px-14 md:pb-7')}>
           <ErrorBoundary resetKey={loc.pathname}>
             <div
               key={agentMode ? 'agent' : 'workspace'}
@@ -1143,12 +911,11 @@ export default function Shell() {
                 contentSlide === 'from-left' && 'shell-content-slide-from-left',
               )}
             >
-              {fullBleed ? <Outlet /> : <div data-testid={desktopPresentation ? 'desktop-page-frame' : undefined} className={cn('mx-auto w-full max-w-[1400px] 2xl:max-w-[1680px]', desktopPresentation && 'desktop-page-frame')}><Outlet /></div>}
+              {fullBleed ? <Outlet /> : <div className="mx-auto w-full max-w-[1400px] 2xl:max-w-[1680px]"><Outlet /></div>}
             </div>
           </ErrorBoundary>
         </main>
       </div>
-      {desktopPresentation && <DesktopStatusBar workspaceName={me?.workspace?.name} accountName={acc?.name} />}
       {acc && !focus && (
         <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-mist-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden" aria-label="底部导航">
           {mobileNav.map((n) => {

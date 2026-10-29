@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Search, X } from 'lucide-react'
 import { useState } from 'react'
-import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, Field, Input, Notice, PageHeader, PageLoading, Tabs, Textarea } from '@/components/ui'
 import { errorMessage, get, post } from '@/lib/api'
@@ -17,9 +16,7 @@ export default function Words() {
   const [category, setCategory] = useState('')
   const [q, setQ] = useState('')
   const [busy, setBusy] = useState(false)
-  const embedded = useEmbeddedSettings()
   const canWrite = useCanWrite()
-  useSettingsDraft(!!(text.trim() || category.trim()), busy)
   if (isLoading) return <PageLoading />
   const list = (data ?? []).filter((w) => w.source === tab && (!q || w.word.includes(q)))
   const add = async () => {
@@ -28,7 +25,7 @@ export default function Words() {
       const r = await post<{ added: number; skipped: number }>('/sensitive-words', { words: text.split(/[\n,，、\s]+/).filter(Boolean), category })
       toast.success(`已添加 ${r.added} 个${r.skipped ? `，${r.skipped} 个已存在` : ''}`)
       setText('')
-      if (embedded) setCategory('')
+      setCategory('')
       refetch()
     } catch (e) {
       toast.error(errorMessage(e))

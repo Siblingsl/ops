@@ -1,10 +1,9 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { CalendarDays, ChevronLeft, ChevronRight, FileText, Info, Lightbulb, X } from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight, Info, Lightbulb, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Dialog } from '@/components/dialog'
-import { Button, Card, cn, Notice, PageHeader, PageLoading, PageState, PlatformMark, Select, StatusBadge, Tabs, platformLabel, platformFormatLabel } from '@/components/ui'
+import { Button, Card, cn, Notice, PageHeader, PageLoading, PageState, PlatformMark, StatusBadge, Tabs, platformLabel, platformFormatLabel } from '@/components/ui'
 import { errorMessage, get, patch } from '@/lib/api'
 import { useAccounts, useCanWrite, useCurrentAccount } from '@/lib/session'
 import type { CalendarItem, TopicPage, WorkListItem, WorkStatus } from '@/lib/types'
@@ -44,7 +43,6 @@ function nextWorkAction(it: CalendarItem): { to: string; label: string } {
 
 /** Calendar (EX-B-02): 计划发布日 only. Dates are reminders for people; nothing is ever pushed or published on a date (HC-16). */
 export default function CalendarPage() {
-  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
   const { data: accounts } = useAccounts()
@@ -52,9 +50,6 @@ export default function CalendarPage() {
   const [anchor, setAnchor] = useState(() => new Date())
   const [scope, setScope] = useState<'account' | 'all'>('account')
   const [side, setSide] = useState<'works' | 'topics'>('works')
-  const [scheduleOpen, setScheduleOpen] = useState(false)
-  const [scheduleSelection, setScheduleSelection] = useState('')
-  const [scheduleDate, setScheduleDate] = useState(iso(new Date()))
   const [dragOver, setDragOver] = useState('')
   const month = new Date(anchor.getFullYear(), anchor.getMonth(), 1)
   const grid = useMemo(() => {
@@ -97,9 +92,6 @@ export default function CalendarPage() {
   const unplanned = (works.data ?? []).filter((w) => !w.planned_date && ['drafting', 'checking', 'reviewing', 'ready'].includes(w.status))
   const topicList = topics.data?.pages.flatMap((page) => page.items) ?? []
   const unplannedTopics = topicList.filter((t) => !t.planned_date && !t.work_id && t.status !== 'dropped')
-  const scheduleOptions = side === 'works'
-    ? unplanned.map((w) => ({ id: w.id, title: w.title || '未命名作品' }))
-    : unplannedTopics.map((t) => ({ id: t.id, title: t.title }))
   const today = iso(new Date())
   const shownAccounts = [...new Map((cal.data?.items ?? []).map((it) => [it.account_id, it.account_name])).entries()]
 
@@ -114,16 +106,6 @@ export default function CalendarPage() {
       toast.error(errorMessage(e))
       return false
     }
-  }
-  const openSchedule = () => {
-    setScheduleSelection(scheduleOptions[0]?.id ?? '')
-    setScheduleDate(iso(new Date()))
-    setScheduleOpen(true)
-  }
-  const saveSchedule = async () => {
-    if (!scheduleSelection || !scheduleDate) return
-    const saved = await setDate(side === 'works' ? 'work' : 'topic', scheduleSelection, scheduleDate)
-    if (saved) setScheduleOpen(false)
   }
   const onDrop = (date: string, e: React.DragEvent) => {
     e.preventDefault()
@@ -143,30 +125,28 @@ export default function CalendarPage() {
   const perCell = view === 'week' ? 30 : 4
 
   return (
-    <div className="animate-fade-in desktop-calendar-page">
-      <PageHeader title="内容日历" desc={desktopPresentation ? '计划是提醒，发布仍由你在平台完成。' : '把作品和选题拖到某一天，设为「计划发布日」。到日子只会提醒你，发布永远由你在平台后台完成。'}
-        action={desktopPresentation
-          ? <Select aria-label="日历账号范围" className="desktop-calendar-scope" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)}><option value="account">当前账号</option><option value="all">全部账号</option></Select>
-          : <Tabs value={scope} onChange={setScope} items={[{ value: 'account', label: '当前账号' }, { value: 'all', label: '全部账号' }]} />} />
-      <div className="grid gap-5 xl:grid-cols-[1fr_280px] desktop-calendar-layout" data-testid="desktop-calendar-layout">
-        <div className="desktop-calendar-main">
-          <div className="flex flex-wrap items-center justify-between gap-2 desktop-calendar-toolbar" data-testid="desktop-calendar-toolbar">
+    <div className="animate-fade-in">
+      <PageHeader title="内容日历" desc="把作品和选题拖到某一天，设为「计划发布日」。到日子只会提醒你，发布永远由你在平台后台完成。"
+        action={<Tabs value={scope} onChange={setScope} items={[{ value: 'account', label: '当前账号' }, { value: 'all', label: '全部账号' }]} />} />
+      <div className="grid gap-5 xl:grid-cols-[1fr_280px]">
+        <div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-1">
-              <Button size="sm" variant="ghost" className="desktop-calendar-nav-button" aria-label="上一页" icon={<ChevronLeft className="size-4" />} onClick={() => shift(-1)} />
+              <Button size="sm" variant="ghost" aria-label="上一页" icon={<ChevronLeft className="size-4" />} onClick={() => shift(-1)} />
               <span className="font-display text-[16px] font-semibold text-mist-900">{label}</span>
-              <Button size="sm" variant="ghost" className="desktop-calendar-nav-button" aria-label="下一页" icon={<ChevronRight className="size-4" />} onClick={() => shift(1)} />
+              <Button size="sm" variant="ghost" aria-label="下一页" icon={<ChevronRight className="size-4" />} onClick={() => shift(1)} />
             </div>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="ghost" onClick={() => setAnchor(new Date())}>{view === 'week' ? '回到本周' : '回到本月'}</Button>
-              <Tabs value={view} onChange={setView} className="desktop-calendar-view-tabs" items={[{ value: 'month', label: '月' }, { value: 'week', label: '周' }]} />
+              <Tabs value={view} onChange={setView} items={[{ value: 'month', label: '月' }, { value: 'week', label: '周' }]} />
             </div>
           </div>
-          <Card className="overflow-hidden desktop-calendar-card" data-testid="desktop-calendar-card">
-          <div key={view} className="animate-fade-in desktop-calendar-days" data-testid="desktop-calendar-days">
-            <div className="grid grid-cols-7 bg-mist-50/60 text-center text-[11.5px] text-mist-400 desktop-calendar-weekdays" data-testid="desktop-calendar-weekdays">
+          <Card className="overflow-hidden">
+          <div key={view} className="animate-fade-in">
+            <div className="grid grid-cols-7 bg-mist-50/60 text-center text-[11.5px] text-mist-400">
               {WEEK.map((w, i) => <div key={w} className="py-1.5">周{w}{view === 'week' && ` · ${grid[i].getDate()}`}</div>)}
             </div>
-            <div className="grid grid-cols-7 desktop-calendar-month-grid" data-testid="desktop-calendar-month-grid">
+            <div className="grid grid-cols-7" data-testid="calendar-month-grid">
               {grid.map((d) => {
                 const k = iso(d)
                 const items = byDate.get(k) ?? []
@@ -174,15 +154,6 @@ export default function CalendarPage() {
                 return (
                   <div key={k}
                     data-date={k}
-                    role={desktopPresentation ? 'button' : undefined}
-                    tabIndex={desktopPresentation ? 0 : undefined}
-                    onClick={(e) => {
-                      if (!desktopPresentation || (e.target as HTMLElement).closest('a,button')) return
-                      setScheduleDate(k)
-                      setSide('works')
-                      setScheduleSelection(unplanned[0]?.id ?? '')
-                      setScheduleOpen(true)
-                    }}
                     onDragOver={(e) => { if (canWrite) { e.preventDefault(); setDragOver(k) } }}
                     onDragLeave={() => setDragOver((v) => (v === k ? '' : v))}
                     onDrop={(e) => onDrop(k, e)}
@@ -230,31 +201,7 @@ export default function CalendarPage() {
           </Card>
         </div>
         <div className="space-y-4">
-          <Card className="desktop-calendar-unplanned p-4" data-testid="desktop-calendar-unplanned">
-            {desktopPresentation ? (
-              <>
-                <div className="desktop-calendar-unplanned-heading">
-                  <h2>未排期的作品与选题</h2>
-                  <Button size="sm" variant="ghost" onClick={openSchedule}>选择日期排期</Button>
-                </div>
-                {unplanned[0] ? (
-                  <div className="desktop-calendar-unplanned-meta" draggable={canWrite} onDragStart={dragStart('work', unplanned[0].id)}>
-                    <FileText className="size-4 shrink-0" />
-                    <Link to={`/works/${unplanned[0].id}`} className="desktop-calendar-unplanned-title">{unplanned[0].title || '未命名作品'}</Link>
-                    <StatusBadge status={unplanned[0].status as WorkStatus} />
-                    <span>可拖动到日期；也可用日期输入完成同一操作。</span>
-                  </div>
-                ) : unplannedTopics[0] ? (
-                  <div className="desktop-calendar-unplanned-meta" draggable={canWrite} onDragStart={dragStart('topic', unplannedTopics[0].id)}>
-                    <Lightbulb className="size-4 shrink-0" />
-                    <Link to={`/a/${acc.id}/topics?focus=${unplannedTopics[0].id}`} className="desktop-calendar-unplanned-title">{unplannedTopics[0].title}</Link>
-                    <span>{unplannedTopics[0].status === 'adopted' ? '已采用' : '待定'}</span>
-                    <span>可拖动到日期；也可用日期输入完成同一操作。</span>
-                  </div>
-                ) : <p className="desktop-calendar-unplanned-empty">没有待排期的作品或选题</p>}
-              </>
-            ) : (
-              <>
+          <Card className="p-4">
                 <div className="mb-2 flex items-center gap-2 text-[13.5px] font-semibold text-mist-900"><CalendarDays className="size-4 text-ink-600" />未排期</div>
                 <Tabs value={side} onChange={setSide} className="mb-2" items={[{ value: 'works', label: `作品 ${unplanned.length}` }, { value: 'topics', label: `选题 ${unplannedTopics.length}` }]} />
                 <p className="mb-3 text-[12px] text-mist-500">拖到日历上的某一天，或直接选日期。</p>
@@ -293,19 +240,17 @@ export default function CalendarPage() {
                     </ul>
                   )}
                 </div>
-              </>
-            )}
           </Card>
-          {!desktopPresentation && <Notice icon={<Info className="size-4" />}>
+          <Notice icon={<Info className="size-4" />}>
             <b>计划发布日</b>只是给人看的提醒：到日子会出现在工作台「现在最值得做的」里。系统不会在这一天自动写入草稿、推送或发布。
-          </Notice>}
-          {!desktopPresentation && <div className="flex flex-wrap gap-3 px-1 text-[11.5px] text-mist-500">
+          </Notice>
+          <div className="flex flex-wrap gap-3 px-1 text-[11.5px] text-mist-500">
             <span className="flex items-center gap-1"><span className="size-2.5 rounded bg-gamboge-100" />创作中</span>
             <span className="flex items-center gap-1"><span className="size-2.5 rounded bg-ink-100" />可发布</span>
             <span className="flex items-center gap-1"><span className="size-2.5 rounded bg-success/20" />已发布</span>
             <span className="flex items-center gap-1"><span className="size-2.5 rounded border border-dashed border-gamboge-400" />计划中的选题</span>
-          </div>}
-          {!desktopPresentation && scope === 'all' && shownAccounts.length > 0 && (
+          </div>
+          {scope === 'all' && shownAccounts.length > 0 && (
             <div className="flex flex-wrap gap-3 px-1 text-[11.5px] text-mist-500">
               {shownAccounts.map(([id, name]) => (
                 <span key={id} className="flex items-center gap-1"><span className="size-2.5 rounded-full" style={{ background: colorOf(id) }} />{name}</span>
@@ -314,30 +259,6 @@ export default function CalendarPage() {
           )}
         </div>
       </div>
-      {desktopPresentation && (
-        <Dialog open={scheduleOpen} onClose={() => setScheduleOpen(false)} title="计划发布日" desc="日期只用于提醒，不自动推送或发布。" width="max-w-md"
-          footer={<><Button variant="ghost" onClick={() => setScheduleOpen(false)}>取消</Button><Button variant="primary" onClick={() => void saveSchedule()} disabled={!scheduleSelection || !scheduleDate}>保存排期</Button></>}>
-          <div className="space-y-4">
-            <Tabs value={side} onChange={(next) => {
-              setSide(next)
-              const options = next === 'works' ? unplanned : unplannedTopics
-              setScheduleSelection(options[0]?.id ?? '')
-            }} items={[{ value: 'works', label: `作品 ${unplanned.length}` }, { value: 'topics', label: `选题 ${unplannedTopics.length}` }]} />
-            {scheduleOptions.length > 0 ? (
-              <label className="block space-y-1.5 text-[12px] text-mist-600">
-                <span>选择{side === 'works' ? '作品' : '选题'}</span>
-                <Select aria-label={`选择${side === 'works' ? '作品' : '选题'}`} value={scheduleSelection} onChange={(e) => setScheduleSelection(e.target.value)}>
-                  {scheduleOptions.map((option) => <option key={option.id} value={option.id}>{option.title}</option>)}
-                </Select>
-              </label>
-            ) : <p className="text-[12px] text-mist-500">没有待排期的{side === 'works' ? '作品' : '选题'}</p>}
-            <label className="block space-y-1.5 text-[12px] text-mist-600">
-              <span>选择日期</span>
-              <input type="date" aria-label="计划发布日" value={scheduleDate} onChange={(e) => setScheduleDate(e.target.value)} className="w-full rounded-lg border border-mist-200 px-3 py-2 text-[13px] text-mist-800" />
-            </label>
-          </div>
-        </Dialog>
-      )}
     </div>
   )
 }

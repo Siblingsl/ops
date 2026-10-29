@@ -1,4 +1,4 @@
-import { _electron, expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { mkdirSync } from 'node:fs'
 import { basename, join, resolve, sep } from 'node:path'
@@ -90,19 +90,4 @@ test('DEV-AW07 Web模式持久化、写工具硬过滤及运行快照', async ({
   await modesJourney(page, baseURL!, 'agent-workbench-aw07-web-modes')
 })
 
-test('DEV-AW07 真实Electron模式切换仍逐卡确认', async ({ baseURL }) => {
-  test.skip(process.platform !== 'win32', '需要Windows Electron')
-  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-aw07-'))
-  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
-  try {
-    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../desktop/node_modules/electron/dist/electron.exe'),
-      args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../desktop/.build/main.js')],
-      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
-    await modesJourney(await app.firstWindow(), baseURL!, 'agent-workbench-aw07-electron-modes')
-  } finally {
-    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
-    await app?.close()
-    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-aw07-')) throw new Error('拒绝清理测试目录之外路径')
-    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-  }
-})
+

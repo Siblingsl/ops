@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#2F5D62" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232F5D62'/%3E%3Cpath d='M9 22V10h6.5a4.5 4.5 0 010 9H12' stroke='%23fff' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='22.5' cy='21.5' r='2.5' fill='%23E0A526'/%3E%3C/svg%3E" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>AI 内容运营助手</title>
+  </head>
+  <body>
+    <div id="root">
+      <!-- 首屏兜底：JS 包下载/解析完成前先显示静态骨架，避免慢网速下 2 秒以上白屏。
+           React 挂载到 #root 时会自动清空这段内容，不需要额外移除逻辑。 -->
+      <div class="boot-splash" aria-hidden="true">
+        <div class="boot-badge">OPS</div>
+        <div class="boot-line boot-line-lg"></div>
+        <div class="boot-line boot-line-sm"></div>
+        <p class="boot-hint">正在加载…</p>
+      </div>
+      <style>
+        .boot-splash { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: #f7f5fb; font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+        .boot-badge { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 6px; border-radius: 14px; background: #7558be; color: #fff; font-size: 12px; font-weight: 700; letter-spacing: .06em; }
+        .boot-line { height: 10px; border-radius: 6px; background: #e7e2f2; }
+        .boot-line-lg { width: 220px; }
+        .boot-line-sm { width: 148px; }
+        .boot-hint { margin: 4px 0 0; font-size: 12px; color: #8d84a3; }
+        @media (prefers-color-scheme: dark) {
+          .boot-splash { background: #201d2b; }
+          .boot-line { background: #332e45; }
+        }
+      </style>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

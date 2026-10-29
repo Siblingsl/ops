@@ -7,7 +7,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:desktop": "vite build --mode desktop",
     "typecheck": "tsc -b --noEmit",
     "test:unit": "node --test tests/*.test.mjs",
     "check:ime-enter": "node scripts/check-ime-enter.mjs",
@@ -39,7 +38,6 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
-    "http-proxy-agent": "7.0.2",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.6.3",
     "vite": "^6.0.0"

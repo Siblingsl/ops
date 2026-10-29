@@ -1,10 +1,10 @@
-﻿import { test, expect, _electron, type Page } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { readFile, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { inflateRawSync } from 'node:zlib'
-import { api, registerAccount, selectDesktopSetting } from './support'
+import { api, registerAccount } from './support'
 
 const output = resolve('../output')
 const paragraph = ['第一步先选今天能完成的小事。#日常记录', '第二步记录过程，保持自己的节奏。', '第三步回顾结果，再决定下一步。']
@@ -216,7 +216,7 @@ test('TT40 阅读大于展现及累计下降仅提示，保存保留用户原数
   await api(page, 'POST', `/works/${work.id}/metrics`, { captured_at: '2026-10-11T04:00:00Z', impressions: 1000, reads: 400 })
   await page.goto(`/a/${account.id}/review?work=${work.id}`)
   await page.getByRole('combobox', { name: '复盘内容形态' }).selectOption('micro_post')
-  const drawer = page.locator('.desktop-drawer-overlay')
+  const drawer = page.locator('.drawer-overlay')
   await expect(drawer).toBeVisible()
   await expect(drawer.getByText('CTR 40%', { exact: true })).toBeVisible()
   await drawer.getByRole('button', { name: '录入一次数据', exact: true }).click()
@@ -382,7 +382,7 @@ test('TT54 工作台、日历、命令搜索、搜索页、回收站及导出平
   await expect(todo).toHaveAttribute('href', `/works/${work.id}/pack`)
   await page.goto(`/a/${account.id}/calendar`)
   // OP-02：日历项直达「当前步骤」，packed 状态落到回填锚点，因此按作品 ID 前缀定位。
-  const calendar = page.getByTestId('desktop-calendar-month-grid').locator(`a[href^="/works/${work.id}"]`).filter({ hasText: work.title }).first()
+  const calendar = page.getByTestId('calendar-month-grid').locator(`a[href^="/works/${work.id}"]`).filter({ hasText: work.title }).first()
   await expect(calendar).toContainText('微头条')
   await expect(calendar).toHaveAttribute('href', `/works/${work.id}/pack#backfill`)
   await expect(calendar).toContainText('下一步：去回填')
@@ -422,98 +422,4 @@ test('TT54 工作台、日历、命令搜索、搜索页、回收站及导出平
   await screenshot(page, 'export-platform-range')
 })
 
-test('TT53/55 真实Electron头条设置草稿保护、账号工作区缓存隔离及中文输入法', async ({ page, context, baseURL }) => {
-  test.skip(process.platform !== 'win32', '该用例使用 Windows Electron 与原生输入，需在 Windows 客户端环境验收。')
-  test.setTimeout(150_000)
-  const username = `e2e-electron-${Date.now()}-${test.info().workerIndex}`
-  const account = await registerAccount(page, '微头条', 'toutiao', username)
-  const firstWork = await seed(page, account.id, 'micro_post', '第一个账号专属微头条')
-  const second = await api(page, 'POST', '/accounts', { name: '第二个头条账号', platform: 'toutiao', content_format: 'long_article' })
-  const secondWork = await seed(page, second.id, 'long_article', '第二个账号专属文章')
-  await api(page, 'POST', '/workspaces', { name: '头条缓存隔离工作区', switch: false })
-  const prefix = join(tmpdir(), 'ops-toutiao-completion-')
-  const profile = await mkdtemp(prefix)
-  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
-  try {
-    app = await _electron.launch({ executablePath: resolve('../desktop/node_modules/electron/dist/electron.exe'), args: [`--user-data-dir=${profile}`, resolve('../desktop/.build/main.js')], env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL } })
-    await app.context().addCookies(await context.cookies())
-    const native = await app.firstWindow()
-    await native.goto(`${baseURL}/login`)
-    await native.getByLabel('用户名', { exact: true }).fill(username)
-    await native.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
-    await native.getByRole('button', { name: '登录', exact: true }).click()
-    await expect(native.getByRole('button', { name: '切换工作区与账号', exact: true })).toBeVisible()
-    // 桌面形态不再回退到首个 active 账号（1c46e53），全新 profile 里必须先选一次账号。
-    // 本用例验证的是设置草稿保护与工作区缓存隔离，因此直接把当前账号偏好写进这个 profile。
-    await native.evaluate(async (accountId) => {
-      const me = await (await fetch('/api/v1/auth/me')).json()
-      localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountId)
-    }, account.id)
-    await native.goto(`${baseURL}/a/${account.id}`)
-    await native.getByRole('link', { name: '作品', exact: true }).click()
-    await expect(native).toHaveURL(new RegExp(`/a/${account.id}/works$`))
-    // 必须等作品页真正渲染完再点用户菜单：侧栏「最近作品」也有同名文本，
-    // 只断言 getByText(title) 会在路由切换完成前就通过，随后 pathname 变化会关掉刚打开的菜单。
-    await expect(native.getByTestId('work-row-link').filter({ hasText: firstWork.title }).first()).toBeVisible()
-    await native.getByRole('button', { name: /^用户菜单/ }).click()
-    await native.getByRole('menuitem', { name: '设置…', exact: true }).click()
-    const settings = native.getByTestId('desktop-settings-window')
-    await expect(settings).toBeVisible()
-    await selectDesktopSetting(native, '每日推荐设置')
-    await expect(settings.getByRole('heading', { name: '每日推荐设置', exact: true })).toBeVisible()
-    const dailySettings = await api(page, 'GET', '/daily-settings')
-    const unsavedHour = (dailySettings.hour + 1) % 24
-    const hour = settings.getByLabel('后台生成小时（北京时间）')
-    await hour.fill(String(unsavedHour))
-    await native.keyboard.press('Escape')
-    const discard = native.getByRole('dialog').filter({ has: native.getByRole('heading', { name: '放弃未保存的设置？', exact: true }) })
-    await expect(discard).toBeVisible()
-    await discard.getByRole('button', { name: '取消', exact: true }).click()
-    await expect(discard).toHaveCount(0)
-    await expect(hour).toHaveValue(String(unsavedHour))
-    await native.keyboard.press('Escape')
-    await expect(discard).toBeVisible()
-    await discard.getByRole('button', { name: '放弃修改', exact: true }).click()
-    await expect(settings).toBeHidden()
-    await expect(native).toHaveURL(new RegExp(`/a/${account.id}/works$`))
-    expect((await api(page, 'GET', '/daily-settings')).hour).toBe(dailySettings.hour)
-    await native.keyboard.press('Control+k')
-    const palette = native.getByRole('dialog', { name: '命令面板', exact: true })
-    const input = palette.getByRole('textbox')
-    await input.focus()
-    const cdp = await app.context().newCDPSession(native)
-    await cdp.send('Input.imeSetComposition', { text: '头条输入法', selectionStart: 5, selectionEnd: 5 })
-    await expect(input).toHaveValue('头条输入法')
-    await native.keyboard.press('Enter')
-    await expect(palette).toBeVisible()
-    await cdp.send('Input.insertText', { text: '头条输入法' })
-    await expect(palette).toBeVisible()
-    await expect(input).toHaveValue('头条输入法')
-    await native.keyboard.press('Escape')
-    await expect(palette).toHaveCount(0)
-    const trigger = native.getByRole('button', { name: '切换工作区与账号', exact: true })
-    await trigger.click()
-    const menu = native.getByTestId('desktop-context-menu')
-    await menu.getByRole('button', { name: '第二个头条账号', exact: true }).click()
-    await expect(native).toHaveURL(new RegExp(`/a/${second.id}/works$`))
-    await expect(native.getByText(secondWork.title, { exact: true }).first()).toBeVisible()
-    await expect(native.getByText(firstWork.title, { exact: true })).toHaveCount(0)
-    await trigger.click()
-    await menu.getByRole('button', { name: '头条缓存隔离工作区', exact: true }).click()
-    await expect(trigger).toContainText('头条缓存隔离工作区')
-    await expect(native.getByText(secondWork.title, { exact: true })).toHaveCount(0)
-    // 桌面形态不再回退到首个 active 账号（1c46e53），切到没有账号的工作区后落在设置窗的
-    // 空态卡片上（web/src/pages/settings/Accounts.tsx:474-482），不会自动弹「添加平台账号」。
-    const emptySettings = native.getByTestId('desktop-settings-window')
-    await expect(emptySettings.getByText('当前工作区还没有平台账号', { exact: true })).toBeVisible()
-    await expect(emptySettings.getByRole('button', { name: '打开顶部账号入口', exact: true })).toBeVisible()
-    await screenshot(native, 'electron-ime-workspace-isolation')
-  } finally {
-    if (app) {
-      try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 仅清理本测试创建的Electron。 */ }
-      await Promise.race([app.close().catch(() => undefined), new Promise((done) => setTimeout(done, 2000))])
-    }
-    expect(profile.startsWith(prefix)).toBe(true)
-    await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-  }
-})
+

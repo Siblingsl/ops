@@ -4,7 +4,6 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, cn, Empty, Field, PageHeader, PageState, Select, Tabs, Textarea } from '@/components/ui'
-import { BackToSettings } from '@/components/back-to-settings'
 import { confirm } from '@/components/dialog'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { relTime } from '@/lib/format'
@@ -366,7 +365,7 @@ export default function Quality() {
   return (
     <div className="animate-fade-in">
       <PageHeader title="AI 质量看板" desc="看看 AI 在哪些任务上帮得好、在哪些任务上总被重来，再有针对性地调整提示词或模型。"
-        action={<><BackToSettings /><Tabs value={tab} onChange={(v) => setParams(v === 'eval' ? { tab: 'eval' } : {}, { replace: true })} items={[{ value: 'board', label: '效果统计' }, { value: 'eval', label: '提示词回归' }]} /></>} />
+        action={<Tabs value={tab} onChange={(v) => setParams(v === 'eval' ? { tab: 'eval' } : {}, { replace: true })} items={[{ value: 'board', label: '效果统计' }, { value: 'eval', label: '提示词回归' }]} />} />
       {tab === 'board' ? <QualityBoard /> : <PromptEval initialTask={params.get('task') ?? ''} />}
     </div>
   )

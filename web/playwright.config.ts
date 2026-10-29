@@ -2,6 +2,10 @@ import { defineConfig, devices } from '@playwright/test'
 
 // 生产打包验收只允许专用本地 Compose；不连接真实部署或复用日常服务。
 const production = process.env.OPS_E2E_PROD === '1'
+// 本机若设置了 HTTP_PROXY 而未排除回环地址，webServer 健康检查会被代理接管并返回 404，
+// 表现为「服务已起但 Playwright 一直等到超时」。这里显式放行回环。
+if (!process.env.NO_PROXY) process.env.NO_PROXY = '127.0.0.1,localhost,::1'
+if (!process.env.no_proxy) process.env.no_proxy = process.env.NO_PROXY
 process.env.OPS_E2E_MOCK_BASE_URL ??= 'http://127.0.0.1:8191/v1'
 
 export default defineConfig({

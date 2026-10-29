@@ -7,19 +7,6 @@ import { Toaster } from 'sonner'
 import App from './App'
 import { ApiError, post, registerReauthPrompt, registerUnauthenticated } from './lib/api'
 import './styles.css'
-import './styles/desktop-creative.css'
-import './styles/desktop-settings.css'
-import { initializeDesktopPresentation, type DesktopTheme } from './lib/desktop-presentation.js'
-import DesktopTitlebar from './layout/DesktopTitlebar'
-import { releaseDesktopLeaveGuard, requestDesktopLeaveGuard } from './lib/desktop-settings'
-
-const initialDesktopTheme = initializeDesktopPresentation(
-  document,
-  window.localStorage,
-  navigator.userAgent,
-  window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false,
-  window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
-)
 
 const queryClient = new QueryClient({
   queryCache: new QueryCache(),
@@ -32,15 +19,10 @@ const queryClient = new QueryClient({
   },
 })
 
-let unauthenticatedRedirect: Promise<void> | null = null
 registerUnauthenticated(() => {
   if (location.pathname.startsWith('/login') || location.pathname.startsWith('/setup')) return
-  // 先保护页面内存中的编辑，再清会话；顺序相反会先卸载表单而丢稿。
-  unauthenticatedRedirect ??= requestDesktopLeaveGuard(true, true).then(allowed => {
-    if (!allowed) { releaseDesktopLeaveGuard(); return }
-    queryClient.setQueryData(['me'], null)
-    location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search)
-  }).finally(() => { unauthenticatedRedirect = null })
+  queryClient.setQueryData(['me'], null)
+  location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search)
 })
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
@@ -78,41 +60,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <DesktopTitlebar />
-        <DesktopThemeSync />
         <App />
       </BrowserRouter>
-      <DesktopThemeToaster />
+      <Toaster theme="system" position="bottom-center" offset={{ bottom: 24 }} mobileOffset={{ bottom: 'calc(72px + env(safe-area-inset-bottom))' }} richColors closeButton duration={8000} style={{ zIndex: 30 }} toastOptions={{ style: { fontFamily: 'var(--font-sans)' } }} />
     </QueryClientProvider>
   </React.StrictMode>,
 )
-
-function DesktopThemeToaster() {
-  const [theme, setTheme] = React.useState<DesktopTheme>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
-  React.useEffect(() => {
-    const update = (event: Event) => setTheme((event as CustomEvent<DesktopTheme>).detail)
-    window.addEventListener('ops:desktop-theme', update)
-    return () => window.removeEventListener('ops:desktop-theme', update)
-  }, [])
-  const desktop = document.documentElement.dataset.presentation === 'ops-creative-desktop'
-  return <Toaster theme={desktop ? theme : 'system'} position="bottom-center" offset={{ bottom: desktop ? 34 : 24 }} mobileOffset={{ bottom: 'calc(72px + env(safe-area-inset-bottom))' }} richColors closeButton duration={8000} style={{ zIndex: desktop ? 60 : 30 }} toastOptions={{ style: { fontFamily: 'var(--font-sans)' } }} />
-}
-
-function DesktopThemeSync() {
-  React.useEffect(() => {
-    if (document.documentElement.dataset.presentation !== 'ops-creative-desktop') return
-    const scheme = window.matchMedia('(prefers-color-scheme: dark)')
-    const update = () => {
-      const next: DesktopTheme = scheme.matches ? 'dark' : 'light'
-      if (document.documentElement.dataset.theme === next) return
-      document.documentElement.dataset.theme = next
-      window.localStorage.setItem('ops-desktop-theme', next)
-      window.dispatchEvent(new CustomEvent('ops:desktop-theme', { detail: next }))
-    }
-    scheme.addEventListener('change', update)
-    return () => scheme.removeEventListener('change', update)
-  }, [])
-  return null
-}
-
-if (initialDesktopTheme) window.open(`ops-desktop://ui/theme/${initialDesktopTheme}`, '_blank', 'noopener,noreferrer')

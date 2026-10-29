@@ -17,8 +17,7 @@ interface TitleResp { titles: TitleCand[]; refs: AIRefs; ai_call_id: string; max
 
 // ---------- 标题与摘要 ----------
 
-export function TitleCard({ work, setWork, readOnly, desktopPresentation = false, hidden = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; desktopPresentation?: boolean; hidden?: boolean }) {
-  const [propertiesOpen, setPropertiesOpen] = useState(false)
+export function TitleCard({ work, setWork, readOnly, hidden = false }: { work: Work; setWork: (w: Work) => void; readOnly: boolean; hidden?: boolean }) {
   const [conflict, setConflict] = useState<{ server: Work; body: Record<string, unknown> } | null>(null)
   const wx = work.platform === 'wechat_mp'
   const toutiao = work.platform === 'toutiao'
@@ -127,7 +126,6 @@ export function TitleCard({ work, setWork, readOnly, desktopPresentation = false
       setTitleRefs(r.refs)
       setTitleCall(r.ai_call_id)
       setStrong(r.strong_features ?? [])
-      setPropertiesOpen(true)
     } catch (e) {
       aiError(e, '生成标题', genTitles)
     } finally {
@@ -136,12 +134,9 @@ export function TitleCard({ work, setWork, readOnly, desktopPresentation = false
   }
   useEffect(() => {
     const generate = () => { void genTitles() }
-    const toggleProperties = () => setPropertiesOpen((open) => !open)
     window.addEventListener('ops:generate-titles', generate)
-    window.addEventListener('ops:title-properties', toggleProperties)
     return () => {
       window.removeEventListener('ops:generate-titles', generate)
-      window.removeEventListener('ops:title-properties', toggleProperties)
     }
   })
   useWorkCmd((c) => {
@@ -259,22 +254,17 @@ export function TitleCard({ work, setWork, readOnly, desktopPresentation = false
     <Card id="step-title" className={cn('scroll-mt-24 p-5', hidden && 'hidden')}>
       <h2 className="mb-4 font-display text-[17px] font-bold text-mist-900">{internalName ? '内部名称与话题' : wx ? '标题与摘要' : '标题与话题'}</h2>
       <div className="space-y-4">
-        <Field className={desktopPresentation ? 'desktop-title-main' : undefined} label={internalName ? '内部名称（仅系统内使用）' : '标题'} counter={titleMax > 0 ? { value: runeLen(title), max: titleMax } : undefined}
+        <Field label={internalName ? '内部名称（仅系统内使用）' : '标题'} counter={titleMax > 0 ? { value: runeLen(title), max: titleMax } : undefined}
           hint={internalName ? '用于系统识别、检索和数据匹配，不会作为微头条发布标题或导出正文。' : toutiao ? '今日头条文章发布标题；平台字数上限待实测（V-025）。' : wx ? '公众号标题不超过 32 字' : '小红书标题字数上限待核实（V-012），暂按 20 字提示'}>
           <div className="flex gap-2">
             <Input value={title} disabled={readOnly} onChange={(e) => setTitle(e.target.value)} invalid={wx && runeLen(title) > 32}
               placeholder={internalName ? '未命名微头条 · 仅系统内使用' : '未命名作品 · 标题可以最后再定'}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.blur() } }}
               onBlur={() => { if (title !== work.title && !(wx && runeLen(title) > 32)) { titleEdited(title); void save({ title }) } }} className="font-display text-[15px] font-semibold" />
-            {!readOnly && <Button className="desktop-title-generate" icon={<Sparkles className="size-4" />} loading={busy === 't'} onClick={genTitles}>候选</Button>}
+            {!readOnly && <Button icon={<Sparkles className="size-4" />} loading={busy === 't'} onClick={genTitles}>候选</Button>}
           </div>
         </Field>
-        {desktopPresentation ? (
-          <details className="desktop-title-extras" open={propertiesOpen} onToggle={(e) => setPropertiesOpen(e.currentTarget.open)}>
-            <summary>标题与摘要设置</summary>
-            <div className="space-y-4">{extras}</div>
-          </details>
-        ) : extras}
+        {extras}
       </div>
       <WorkConflictDialog server={conflict?.server ?? null} mine={{ ...work, title, summary }} onClose={() => setConflict(null)} onResolve={keepMine => {
         if (!conflict) return

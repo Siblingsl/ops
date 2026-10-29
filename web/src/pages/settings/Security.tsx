@@ -7,7 +7,6 @@ import { errorMessage, get, put } from '@/lib/api'
 import { fmtBytes, fmtTime, runeLen } from '@/lib/format'
 import { useInvalidate, useMe, useSystemInfo } from '@/lib/session'
 import type { AILimit, SMTPSettings } from '@/lib/types'
-import { useSettingsDraft } from '@/lib/desktop-settings'
 
 export default function Security({ section = 'all' }: { section?: 'all' | 'password' | 'smtp' }) {
   const { data: me } = useMe()
@@ -23,9 +22,6 @@ export default function Security({ section = 'all' }: { section?: 'all' | 'passw
   const [pw2, setPw2] = useState('')
   const [busy, setBusy] = useState(false)
   const [smtp, setSmtp] = useState({ host: '', port: '587', username: '', from: '', password: '' })
-  const savedSMTP = settings.data?.smtp
-  const smtpDirty = !!smtp.password || !!savedSMTP && (smtp.host !== (savedSMTP.host || '') || smtp.port !== String(savedSMTP.port || 587) || smtp.username !== (savedSMTP.username || '') || smtp.from !== (savedSMTP.from || ''))
-  useSettingsDraft(section === 'smtp' ? smtpDirty : !!(old || pw || pw2), busy)
   useEffect(() => {
     const s = settings.data?.smtp
     if (!s) return

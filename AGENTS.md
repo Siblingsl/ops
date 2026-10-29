@@ -18,11 +18,34 @@
 ## 目录
 
 ```
-server/   Go 后端（cmd/ops 为入口；internal/ 为业务模块）
-web/      React + TypeScript + Vite 前端
-deploy/   Docker Compose（dev 为本地数据库）
-docs/     设计文档
+server/                Go 后端（cmd/ops 为入口；internal/ 为业务模块）
+web/                   React + TypeScript + Vite 网页端
+  e2e/                 Web 浏览器场景 Playwright 用例
+  tests/               Web 单测与源码边界守卫
+desktop/               Electron 桌面端
+  src/                 Electron 主进程与本机客户端能力
+  renderer-src/        独立 React + TypeScript + Vite 桌面业务界面源码
+    e2e/               桌面形态 Playwright 用例（含 Electron 真实窗口）
+    tests/             桌面渲染器单测与边界守卫
+  renderer/            桌面安装包使用的构建产物
+deploy/                Docker Compose 与部署配置
+docs/                  设计文档
 ```
+
+`web/` 与 `desktop/renderer-src/` 是独立的前端项目，分别维护入口、依赖锁文件、构建配置、界面源码与 E2E 用例；共享业务功能需要在两处分别实现。`desktop/renderer/` 是生成目录，不直接编辑。
+
+两套 E2E 各自独立运行，互不读取对方目录：
+
+```powershell
+cd web; pnpm e2e                    # Web：5179 / 8180 / 8191
+cd desktop; pnpm test:e2e:renderer  # 桌面：5287 / 8287 / 8297
+```
+
+本机若设置了 `HTTP_PROXY` 而 `NO_PROXY` 未包含回环地址，Playwright 的 webServer 健康检查会被代理接管并一直超时（日志表现为服务已启动但持续 404）。两端配置已显式 `NO_PROXY=127.0.0.1,localhost,::1`；手工启动服务时也需自行排除。
+
+`web/e2e/` 不允许出现 `_electron`、`Electron/` UA、`ops-creative-desktop`、5287 端口；`desktop/renderer-src/e2e/` 不允许引用 `web/` 或 5179 端口。两条约束由 `web/tests/web-e2e-boundary.test.mjs` 与 `desktop/renderer-src/tests/e2e-boundary.test.mjs` 在 `test:unit` 中强制。
+
+两端截图与报告统一落在仓库根 `.playwright-results/`（CI 按该路径上传）。桌面 runner 的 `process.cwd()` 是 `desktop/renderer-src`，所以桌面用例写产物必须用 `../../.playwright-results/` 和 `../../output/`；写成 `../` 会落到 `desktop/` 下，桌面边界测试会拦截。
 
 ## 本地开发
 
@@ -30,6 +53,15 @@ docs/     设计文档
 docker compose -f deploy/docker-compose.dev.yml up -d   # PostgreSQL，端口 5440
 cd server; go run ./cmd/ops serve                       # API :8080，模拟微信与模拟模型 :8091
 cd web; pnpm install; pnpm dev                          # 前端 :5173，代理 /api 到 :8080
+```
+
+桌面端开发与构建：
+
+```powershell
+cd desktop; pnpm install --frozen-lockfile
+pnpm --dir renderer-src install --frozen-lockfile
+pnpm build:renderer
+pnpm start
 ```
 
 本地默认使用模拟微信服务器和模拟模型（`OPS_DEV=1`），不需要任何真实密钥。

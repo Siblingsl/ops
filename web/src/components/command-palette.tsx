@@ -203,7 +203,7 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
     }
     // GL-02：设置项与用户菜单同源；管理员项由 settings-registry 统一标记。
     const settings = commandPaletteSettings()
-    if (me?.is_system_admin) settings.push(...settingsEntries.filter((entry) => entry.adminOnly && !entry.webHidden).map((entry) => ({ to: entry.path, label: entry.label })))
+    if (me?.is_system_admin) settings.push(...settingsEntries.filter((entry) => entry.adminOnly).map((entry) => ({ to: entry.path, label: entry.label })))
     for (const { to, label } of settings) list.push({ id: 's' + to, group: '设置', label, icon: Settings2, run: () => go(to, label) })
     list.push({ id: 'a-search', group: '操作', label: '打开搜索页', icon: Search, keywords: 'search', run: () => go('/search' + (q ? `?q=${encodeURIComponent(q)}` : ''), '搜索') })
     list.push({ id: 'a-keys', group: '操作', label: '查看快捷键', icon: Keyboard, keywords: 'shortcut help', run: () => { onOpenChange(false); onHelpChange(true) } })

@@ -193,7 +193,7 @@ test('D-123-UI-1 账号类型入口与修改弹窗：多视口无错位', async 
 
     // —— 修改类型弹窗 ——
     await entry.click()
-    const panel = page.locator('.desktop-dialog-panel')
+    const panel = page.locator('.dialog-panel')
     await expect(panel).toBeVisible()
     await page.waitForTimeout(120)
     const panelBox = (await panel.boundingBox())!
@@ -272,7 +272,7 @@ test('D-123-UI-1 账号类型入口与修改弹窗：多视口无错位', async 
   // —— 提交路径：类型改完徽标文案会变长（清单合集笔记 6 字 > 图文笔记 4 字），入口行几何仍需成立 ——
   await page.setViewportSize({ width: 1024, height: 900 })
   await entry.click()
-  const panel = page.locator('.desktop-dialog-panel')
+  const panel = page.locator('.dialog-panel')
   await expect(panel).toBeVisible()
   await panel.getByRole('button', { name: '确认修改' }).click()
   await expect(panel).toBeHidden()
@@ -314,25 +314,4 @@ test('D-123-UI-2 看板混合类型标注（Web 形态）：多视口无错位',
   }
 })
 
-test('D-123-UI-3 看板混合类型标注（客户端工作台形态）', async ({ page }) => {
-  const account = await seedMixedFormats(page)
-  await page.addInitScript(() => {
-    const ua = navigator.userAgent
-    Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => `${ua} Electron/44.8.0` })
-  })
-  await page.setViewportSize({ width: 1440, height: 900 })
-  await page.goto(`/a/${account.id}`)
-  await expect(page.locator('html')).toHaveAttribute('data-presentation', 'ops-creative-desktop')
 
-  // 只看直接子级 summary：desktop-home-extras 内还嵌着 desktop-first-value-disclosure 的 summary
-  const extras = page.getByTestId('desktop-home-extras')
-  await extras.locator('> summary').click()
-  await expect(extras).toHaveAttribute('open', '')
-  const chips = page.locator(CHIP)
-  await expect(chips).toHaveCount(2)
-  await chips.first().scrollIntoViewIfNeeded()
-  await assertChipsClean(page, 'desktop-1440')
-  await page.waitForTimeout(150)
-  await page.screenshot({ path: `${SHOTS}/web-04-dashboard-desktop.png` })
-  await chips.first().locator('xpath=ancestor::li[1]').screenshot({ path: `${SHOTS}/web-04-row-desktop.png` })
-})

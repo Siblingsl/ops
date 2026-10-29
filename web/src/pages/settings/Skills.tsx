@@ -4,16 +4,14 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
-import { SkillWebBoundary } from '@/components/skill-web-boundary'
 import { Badge, Button, Card, CardHeader, Empty, Input, PageHeader, PageState, Tabs } from '@/components/ui'
 import { api, errorMessage, get, rawRequest } from '@/lib/api'
 import { emptySkillForm, skillFields, skillScopeLabel, type SkillDefinition, type SkillForm, type SkillImpact, type SkillList } from '@/lib/skills'
 import { useAccounts, useMe } from '@/lib/session'
-import { isElectronDesktop } from '@/lib/desktop-presentation.js'
 import SkillEditor from './SkillEditor'
 
 export default function Skills() {
-  return isElectronDesktop(navigator.userAgent) ? <SkillWebBoundary /> : <SkillsLibrary />
+  return <SkillsLibrary />
 }
 
 /**

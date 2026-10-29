@@ -1,11 +1,9 @@
 import { Eye, EyeOff, X } from 'lucide-react'
-import React, { useContext, useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { Button, cn, Input } from './ui'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
-import { DesktopSettingsContext } from '@/lib/desktop-settings'
-import { toast } from 'sonner'
 
 function useEsc(open: boolean, onClose: () => void) {
   useEffect(() => {
@@ -56,11 +54,7 @@ export function Dialog({ open, onClose, title, desc, children, footer, width = '
 }) {
   const { present, exiting } = usePresence(open, 180, onExited)
   const dialogRef = useRef<HTMLDivElement>(null)
-  const settings = useContext(DesktopSettingsContext)
-  const close = () => {
-    if (settings?.isBusy()) { toast.info('正在保存设置，请稍候再离开'); return }
-    onClose()
-  }
+  const close = onClose
   useEsc(open, () => {
     const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]')
     if (dialogs[dialogs.length - 1] === dialogRef.current) close()
@@ -113,11 +107,11 @@ export function Dialog({ open, onClose, title, desc, children, footer, width = '
   if (!present) return null
   return createPortal(
     <div className={cn('fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-mist-900/35 p-4 pt-[8vh] backdrop-blur-[2px]', exiting ? 'animate-dialog-backdrop-out' : 'animate-dialog-backdrop-in')} onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div ref={dialogRef} tabIndex={-1} className={cn('desktop-dialog-panel flex max-h-[calc(92vh-16px)] w-full flex-col overflow-hidden rounded-2xl bg-white shadow-pop', exiting ? 'animate-dialog-panel-out' : 'animate-dialog-panel-in', width, className)} role="dialog" aria-modal="true" aria-label={ariaLabel}>
+      <div ref={dialogRef} tabIndex={-1} className={cn('dialog-panel flex max-h-[calc(92vh-16px)] w-full flex-col overflow-hidden rounded-2xl bg-white shadow-pop', exiting ? 'animate-dialog-panel-out' : 'animate-dialog-panel-in', width, className)} role="dialog" aria-modal="true" aria-label={ariaLabel}>
         {title && (
           <div className="flex items-start justify-between gap-4 px-6 pb-2 pt-5">
             <div>
-              <h2 className="desktop-dialog-title font-display text-lg font-bold text-mist-900">{title}</h2>
+              <h2 className="dialog-title font-display text-lg font-bold text-mist-900">{title}</h2>
               {desc && <p className="mt-1 text-[13px] leading-relaxed text-mist-500">{desc}</p>}
             </div>
             <button onClick={close} className="-mr-2 rounded-md p-1.5 text-mist-400 hover:bg-mist-100 hover:text-mist-700 cursor-pointer" aria-label="关闭">
@@ -125,7 +119,7 @@ export function Dialog({ open, onClose, title, desc, children, footer, width = '
             </button>
           </div>
         )}
-        <div className="desktop-dialog-body min-h-0 overflow-y-auto px-6 py-4">{children}</div>
+        <div className="dialog-body min-h-0 overflow-y-auto px-6 py-4">{children}</div>
         {footer && <div className="flex items-center justify-end gap-2 rounded-b-2xl border-t border-mist-100 bg-mist-50/60 px-6 py-3.5">{footer}</div>}
       </div>
     </div>,
@@ -147,11 +141,11 @@ export function Drawer({ open, onClose, title, desc, children, footer, width = '
   useEsc(open, onClose)
   if (!present) return null
   return createPortal(
-    <div className={cn('desktop-drawer-overlay fixed inset-0 z-40 flex justify-end bg-mist-900/25', exiting ? 'animate-dialog-backdrop-out' : 'animate-dialog-backdrop-in')} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className={cn('drawer-overlay fixed inset-0 z-40 flex justify-end bg-mist-900/25', exiting ? 'animate-dialog-backdrop-out' : 'animate-dialog-backdrop-in')} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div role="dialog" aria-modal="true" aria-labelledby={titleID} className={cn('flex h-full max-w-full flex-col bg-white shadow-pop', exiting ? 'animate-drawer-panel-out' : 'animate-drawer-panel-in', width)}>
         <div className="flex items-start justify-between gap-4 border-b border-mist-100 px-6 py-4">
           <div>
-            <h2 id={titleID} className="desktop-dialog-title font-display text-lg font-bold text-mist-900">{title}</h2>
+            <h2 id={titleID} className="dialog-title font-display text-lg font-bold text-mist-900">{title}</h2>
             {desc && <p className="mt-1 text-[13px] text-mist-500">{desc}</p>}
           </div>
           <button onClick={onClose} className="-mr-2 rounded-md p-1.5 text-mist-400 hover:bg-mist-100 hover:text-mist-700 cursor-pointer" aria-label="关闭">

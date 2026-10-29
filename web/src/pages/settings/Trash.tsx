@@ -5,7 +5,6 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
 import { Badge, Button, Card, cn, Empty, PageHeader, PageLoading, Tabs, platformLabel, platformFormatLabel } from '@/components/ui'
-import { BackToSettings } from '@/components/back-to-settings'
 import type { Platform, ContentFormat } from '@/lib/types'
 import { del, errorMessage, get, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
@@ -46,7 +45,7 @@ export default function Trash() {
   const count = (t: Item['type']) => all.filter((i) => i.type === t).length
   return (
     <div className="animate-fade-in">
-      <PageHeader title="回收站" desc="删除的内容保留 30 天，到期后自动彻底删除。" action={<BackToSettings />} />
+      <PageHeader title="回收站" desc="删除的内容保留 30 天，到期后自动彻底删除。" />
       <Tabs value={tab} onChange={setTab} className="mb-5" items={[
         { value: 'all', label: '全部', count: all.length },
         { value: 'work', label: '作品', count: count('work') },

@@ -1,4 +1,4 @@
-import { _electron, expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -233,22 +233,4 @@ test('DEV-AW06 单卡响应丢失后查询状态，同request_id重放不重复�
   expect(body).not.toContain('secret_once')
 })
 
-test('DEV-AW06 真实Electron刷新恢复持久事件运行', async ({ baseURL }) => {
-  test.skip(process.platform !== 'win32', '真实Electron验收需要Windows')
-  test.setTimeout(120_000)
-  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-aw06-'))
-  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
-  try {
-    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../desktop/node_modules/electron/dist/electron.exe'),
-      args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../desktop/.build/main.js')],
-      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
-    await refreshAndRecover(await app.firstWindow(), baseURL!, 'agent-workbench-aw06-electron-recovery')
-    await checkToolActivity(await app.firstWindow(), 'agent-workbench-aw06-electron-tools')
-  } finally {
-    // 此用例只验证恢复；沿用真实平台Electron测试的专用进程清理方式。
-    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
-    await app?.close()
-    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-aw06-')) throw new Error('拒绝清理测试目录之外的路径')
-    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-  }
-})
+

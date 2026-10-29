@@ -1,8 +1,7 @@
-import { _electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { basename, join, resolve, sep } from 'node:path'
-import { tmpdir } from 'node:os'
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 
 async function api(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(async ({ method, path, body }) => {
@@ -87,9 +86,7 @@ async function prepare(page: Page, baseURL: string) {
   expect((await api(page, 'GET', '/agent/bootstrap')).features.document_parse).toBe(true)
 }
 
-type DownloadRecord = { filename: string; state?: string; options: { title?: string; defaultPath?: string } }
-
-async function journey(page: Page, baseURL: string, desktop?: ElectronApplication, downloadDir?: string) {
+async function journey(page: Page, baseURL: string) {
   await prepare(page, baseURL)
   const uploadResults: { name: string; parse_status: string }[] = []
   page.on('response', (response) => {
@@ -119,8 +116,7 @@ async function journey(page: Page, baseURL: string, desktop?: ElectronApplicatio
   await page.getByRole('button', { name: '移除 bad.csv', exact: true }).click()
   await page.getByRole('button', { name: '移除 private.csv', exact: true }).click()
   mkdirSync(resolve(process.cwd(), '../.playwright-results'), { recursive: true })
-  const prefix = desktop ? 'electron' : 'web'
-  await page.screenshot({ path: resolve(process.cwd(), '../.playwright-results/agent-workbench-aw11-' + prefix + '-upload.png') })
+  await page.screenshot({ path: resolve(process.cwd(), '../.playwright-results/agent-workbench-aw11-web-upload.png') })
   const tableText = 'item,value\n<script>window.__aw11Injected=1</script>,plain\n=SUM(A1),+cmd\n'
   const title = 'AW11 文件产物 ' + Date.now()
   const composer = page.getByRole('textbox', { name: '发送消息' }).or(page.getByPlaceholder(/发送消息/))
@@ -134,49 +130,20 @@ async function journey(page: Page, baseURL: string, desktop?: ElectronApplicatio
   expect(attachments).toHaveLength(3)
   for (const attachment of attachments) expect(attachment.loaded_chars).toBe(attachment.injected_chars)
   await expect(page.getByText(/已装入请求/).first()).toBeVisible()
-  let panel
-  if (desktop) {
-    const toggle = page.getByRole('button', { name: '任务面板', exact: true })
-    if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
-    panel = page.getByTestId('desktop-agent-side-panel')
-    await panel.getByRole('tab', { name: '产物', exact: true }).click()
-  } else {
-    await page.getByRole('button', { name: '查看产物', exact: true }).click()
-    panel = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '本对话产物', exact: true }) })
-  }
+  await page.getByRole('button', { name: '查看产物', exact: true }).click()
+  const panel = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '本对话产物', exact: true }) })
   await panel.getByRole('button', { name: new RegExp(title) }).click()
   await expect(panel.getByRole('cell', { name: '<script>window.__aw11Injected=1</script>', exact: true })).toBeVisible()
   expect(await page.evaluate(() => (window as unknown as { __aw11Injected?: number }).__aw11Injected)).toBeUndefined()
-  if (!desktop) await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await panel.getByRole('button', { name: '复制内容', exact: true }).click()
-  await expect.poll(() => desktop
-    ? desktop.evaluate(({ clipboard }) => clipboard.readText().then((value) => value.replace(/\r\n/g, '\n')))
-    : page.evaluate(() => navigator.clipboard.readText().then((value) => value.replace(/\r\n/g, '\n')))).toBe(tableText)
-  if (desktop) {
-    await desktop.evaluate(({ session }, directory) => {
-      const downloads: DownloadRecord[] = []
-      ;(globalThis as unknown as { __aw11Downloads: DownloadRecord[] }).__aw11Downloads = downloads
-      session.fromPartition('persist:ops-business-development').on('will-download', (_event, item) => {
-        const record = { filename: item.getFilename(), options: item.getSaveDialogOptions() } as DownloadRecord
-        downloads.push(record)
-        item.setSavePath(directory + '/' + item.getFilename())
-        item.once('done', (_done, state) => { record.state = state })
-      })
-    }, downloadDir!)
-    await panel.getByRole('button', { name: '保存 CSV', exact: true }).click()
-    await expect.poll(() => desktop.evaluate(() => (globalThis as unknown as { __aw11Downloads: DownloadRecord[] }).__aw11Downloads[0]?.state)).toBe('completed')
-    const download = await desktop.evaluate(() => (globalThis as unknown as { __aw11Downloads: DownloadRecord[] }).__aw11Downloads[0])
-    expect(download.options.title).toBe('保存下载文件')
-    expect(download.options.defaultPath).toBe('ops-artifact-v1.csv')
-    expect(await readFile(join(downloadDir!, download.filename), 'utf8')).toContain("文本：=SUM(A1),文本：+cmd")
-  } else {
-    const downloading = page.waitForEvent('download')
-    await panel.getByRole('button', { name: '保存 CSV', exact: true }).click()
-    const download = await downloading
-    expect(download.suggestedFilename()).toBe('ops-artifact-v1.csv')
-    expect(await readFile((await download.path())!, 'utf8')).toContain("文本：=SUM(A1),文本：+cmd")
-  }
-  await page.screenshot({ path: resolve(process.cwd(), '../.playwright-results/agent-workbench-aw11-' + prefix + '-artifact.png') })
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText().then((value) => value.replace(/\r\n/g, '\n')))).toBe(tableText)
+  const downloading = page.waitForEvent('download')
+  await panel.getByRole('button', { name: '保存 CSV', exact: true }).click()
+  const download = await downloading
+  expect(download.suggestedFilename()).toBe('ops-artifact-v1.csv')
+  expect(await readFile((await download.path())!, 'utf8')).toContain("文本：=SUM(A1),文本：+cmd")
+  await page.screenshot({ path: resolve(process.cwd(), '../.playwright-results/agent-workbench-aw11-web-artifact.png') })
 }
 
 test('DEV-AW11 Web文档上传、严格解析回执、隔离失败与安全产物保存', async ({ page, baseURL }) => {
@@ -184,21 +151,4 @@ test('DEV-AW11 Web文档上传、严格解析回执、隔离失败与安全产�
   await expect(page.locator('.desktop-agent-workbench')).toHaveCount(0)
 })
 
-test('DEV-AW11 Windows Electron固定选择文件、文档回执与原生保存链路', async ({ baseURL }) => {
-  test.skip(process.platform !== 'win32', '需要Windows Electron')
-  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-aw11-'))
-  let app: ElectronApplication | undefined
-  try {
-    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../desktop/node_modules/electron/dist/electron.exe'),
-      args: ['--user-data-dir=' + userData, resolve(process.cwd(), '../desktop/.build/main.js')],
-      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
-    const downloadDir = join(userData, 'downloads')
-    mkdirSync(downloadDir)
-    await journey(await app.firstWindow(), baseURL!, app, downloadDir)
-  } finally {
-    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
-    await app?.close()
-    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-aw11-')) throw new Error('拒绝清理测试目录之外路径')
-    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-  }
-})
+
