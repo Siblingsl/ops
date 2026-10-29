@@ -1311,3 +1311,7 @@ Windows CI 必须运行桌面端单元测试，构建 Squirrel 安装包，并�
 桌面渲染器的源码、依赖锁文件、Vite 与 Playwright 构建/测试配置及 renderer 单元测试均归入 `desktop/renderer-src/`。普通 Web 继续使用 `web/`，其入口不再检查 Electron User-Agent，不含桌面呈现开关、本机意图桥、桌面设置宿主或原生通知逻辑。桌面安装包只加载 `desktop/renderer/` 构建产物，API、Origin 和用户操作契约不变。
 
 Web 和桌面 E2E 完全独立：Web 用例在 `web/e2e/`，桌面用例在 `desktop/renderer-src/e2e/`，各自拥有 `playwright.config.ts` 与 `support.ts`。两端都不再维护跨端黑名单或标题过滤（Web 侧原 `testIgnore` 25 项与 `grepInvert` 已删除），任一端的套件只收集本目录用例。桌面 runner 从 `desktop/renderer-src/` 启动，端口为 5287/8287/8297；Web 为 5179/8180/8191。仓库根的 `.playwright-results/` 是两端共用的产物落盘目录，桌面用例须用 `../../` 上溯，`desktop/renderer-src/tests/e2e-boundary.test.mjs` 会拦截按 Web 目录深度写死的路径。实现与目录约定见根目录 `AGENTS.md`，变更记录见 `docs/90` 的 D-154。
+
+桌面端不做 PWA：`desktop/renderer-src` 不注册 Service Worker，也不携带 `manifest.json`、`icon.svg`、`_headers`（原 `public/` 目录已整体移除，`vite build --mode desktop` 的产物只有 `index.html` + `assets/`）。理由不是"用不上"而是有实际风险：`ops-desktop` 协议以 `standard + secure` 注册，属于安全上下文，`navigator.serviceWorker` 可用，注册会真的成功并接管渲染进程的全部请求；一旦 worker 缓存住旧的 `index.html`，升级后新包里的 asset 哈希已经变了，就会出现"更新完还是旧界面"甚至白屏。离线兜底改由主进程的 `offline.html` 承担。
+
+由此，本文中 **E-DC13**、"Service Worker 与应用壳缓存"、"DC01 验证含 Service Worker 的 Header 来源"、**DC-R01** 以及第 12 节"生产 Worker 存在、Electron 行为待实测"等条目，只适用于旧的"桌面壳直接加载远端 Web UI"架构，已不再描述当前实现：安装包加载的是 `ops-desktop://business`，内容来自本地 `desktop/renderer/`，与 Web 的 `/sw.js` 无关；Web 侧的 `/sw.js` 与 `web/public/` 保持原样。

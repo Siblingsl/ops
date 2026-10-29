@@ -43,9 +43,9 @@ registerUnauthenticated(() => {
   }).finally(() => { unauthenticatedRedirect = null })
 })
 
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => undefined))
-}
+// 桌面端不注册 Service Worker：ops-desktop:// 是 secure+standard 的自定义协议，SW 会真的注册成功并
+// 接管渲染进程的请求；一旦缓存住旧的 index.html，应用升级后新包里的 asset 哈希已经变了，就会出现
+// 「更新后白屏 / 一直是旧界面」。离线兜底由主进程的 offline.html 负责，不走 SW。
 
 registerReauthPrompt(
   () =>
