@@ -30,3 +30,23 @@ export function resolveApiOrigin(isPackaged: boolean, uiOrigin: string): string 
 export function resolveServiceNamespace(isPackaged: boolean, uiOrigin: string): string {
   return isPackaged ? PRODUCTION_SERVICE_NAMESPACE : uiOrigin;
 }
+
+export function isBusinessOriginUrl(value: string, businessOrigin: string): boolean {
+  let url: URL;
+  let expectedOrigin: URL;
+  try {
+    url = new URL(value);
+    expectedOrigin = new URL(businessOrigin);
+  } catch {
+    return false;
+  }
+
+  if (expectedOrigin.origin === 'null') {
+    return url.origin === 'null'
+      && url.protocol === expectedOrigin.protocol
+      && url.host === expectedOrigin.host
+      && !url.username
+      && !url.password;
+  }
+  return url.origin === expectedOrigin.origin;
+}

@@ -22,6 +22,7 @@ import {
   PRODUCTION_API_ORIGIN,
   PRODUCTION_BUSINESS_UI_ORIGIN,
   PRODUCTION_SERVICE_NAMESPACE,
+  isBusinessOriginUrl,
   resolveApiOrigin,
   resolveBusinessOrigin,
   resolveServiceNamespace
@@ -3245,11 +3246,7 @@ function getConnectionState(): 'online' | 'offline' | 'unknown' {
 }
 
 function isBusinessUrl(value: string): boolean {
-  try {
-    return new URL(value).origin === businessOrigin;
-  } catch {
-    return false;
-  }
+  return isBusinessOriginUrl(value, businessOrigin);
 }
 
 function isIcpBlockingPage(title: string, text: string): boolean {

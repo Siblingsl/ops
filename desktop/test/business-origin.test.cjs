@@ -5,6 +5,7 @@ const {
   PRODUCTION_API_ORIGIN,
   PRODUCTION_BUSINESS_UI_ORIGIN,
   PRODUCTION_SERVICE_NAMESPACE,
+  isBusinessOriginUrl,
   resolveApiOrigin,
   resolveBusinessOrigin,
   resolveServiceNamespace
@@ -32,4 +33,17 @@ test('unpackaged client keeps an explicitly configured loopback origin', () => {
 test('unpackaged client rejects invalid or non-loopback development URLs', () => {
   assert.throws(() => resolveBusinessOrigin(false, 'not a URL'), /有效的本地开发 URL/);
   assert.throws(() => resolveBusinessOrigin(false, 'https://example.com'), /只允许 localhost/);
+});
+
+test('business URL validation accepts the configured custom scheme and rejects lookalikes', () => {
+  assert.equal(isBusinessOriginUrl('ops-desktop://business/', 'ops-desktop://business'), true);
+  assert.equal(isBusinessOriginUrl('ops-desktop://business/login', 'ops-desktop://business'), true);
+  assert.equal(isBusinessOriginUrl('ops-desktop-preview://business/login', 'ops-desktop://business'), false);
+  assert.equal(isBusinessOriginUrl('ops-desktop://business.attacker/login', 'ops-desktop://business'), false);
+  assert.equal(isBusinessOriginUrl('ops-desktop://user@business/login', 'ops-desktop://business'), false);
+});
+
+test('business URL validation keeps development HTTP origins exact', () => {
+  assert.equal(isBusinessOriginUrl('http://localhost:5174/login', 'http://localhost:5174'), true);
+  assert.equal(isBusinessOriginUrl('http://localhost:5175/login', 'http://localhost:5174'), false);
 });
