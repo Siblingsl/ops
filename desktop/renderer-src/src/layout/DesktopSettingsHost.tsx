@@ -163,7 +163,7 @@ export default function DesktopSettingsHost({ children, backdrop }: { children: 
     }
     const requestedPlatform = params.get('platform')
     const isPlatform = requestedPlatform === 'wechat_mp' || requestedPlatform === 'xhs' || requestedPlatform === 'toutiao'
-    if (requestedPlatform && !isPlatform) toast.error('历史账号创建链接中的平台参数无效，请从顶部选择平台后添加。')
+    if (requestedPlatform && !isPlatform) toast.error('历史账号创建链接中的平台参数无效，请从头像菜单选择平台后添加。')
     if (!isPlatform && !selectedAccountId) {
       if (!background.current || ['/login', '/register', '/setup'].includes(background.current.pathname)) {
         background.current = { ...shown, pathname: '/images', search: '', hash: '' }

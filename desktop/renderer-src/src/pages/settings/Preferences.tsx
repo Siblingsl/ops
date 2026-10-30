@@ -1,10 +1,12 @@
 import { Keyboard } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button, Card, CardHeader, cn, PageHeader, Switch } from '@/components/ui'
 import { errorMessage } from '@/lib/api'
 import type { UserPrefs } from '@/lib/types'
 import { ghostKeys, usePrefs, useSavePrefs } from '@/lib/v3'
 import { useSettingsDraft } from '@/lib/desktop-settings'
+import { isElectronDesktop, setDesktopMotion, type DesktopClientHealth } from '@/lib/desktop-presentation.js'
 
 function Row({ title, desc, children }: { title: string; desc?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -35,12 +37,37 @@ function Choice<T extends string | number>({ value, options, onChange }: { value
 export default function Preferences() {
   const prefs = usePrefs()
   const save = useSavePrefs()
+  const desktop = isElectronDesktop(navigator.userAgent)
+  const [reducedMotion, setReducedMotion] = useState(() => document.documentElement.dataset.reducedMotion === 'true')
+  const [health, setHealth] = useState<DesktopClientHealth | null>(null)
+  useEffect(() => {
+    if (!desktop) return
+    const unsubscribe = window.opsDesktopUI?.onClientHealth(setHealth)
+    const syncMotion = (event: Event) => setReducedMotion(Boolean((event as CustomEvent<boolean>).detail))
+    window.addEventListener('ops:desktop-motion', syncMotion)
+    return () => { unsubscribe?.(); window.removeEventListener('ops:desktop-motion', syncMotion) }
+  }, [desktop])
   useSettingsDraft(false, save.isPending)
   const set = (p: Partial<UserPrefs>) => save.mutate(p, { onError: (e) => toast.error(errorMessage(e)), onSuccess: () => toast.success('已保存', { duration: 1200 }) })
   return (
     <div className="max-w-3xl animate-fade-in">
       <PageHeader title="偏好设置" desc="只影响你自己，不影响同一工作区的其他成员。"
         action={<Button icon={<Keyboard className="size-4" />} onClick={() => window.dispatchEvent(new Event('ops:shortcuts'))}>查看快捷键</Button>} />
+      {desktop && <Card className="mb-5">
+        <CardHeader title="此电脑" desc="以下设置和状态只针对当前客户端。" />
+        <div className="divide-y divide-mist-100">
+          <Row title="减少动态效果" desc="减少界面动画，设置立即生效。">
+            <Switch label="减少动态效果" checked={reducedMotion} onChange={(value) => {
+              if (setDesktopMotion(document, window.localStorage, value) === null) return
+              setReducedMotion(value)
+              window.open(`ops-desktop://ui/motion/${value ? 'reduce' : 'soft'}`, '_blank', 'noopener,noreferrer')
+            }} />
+          </Row>
+          <Row title="平台采集状态" desc={[health?.presence.message, health?.collection.message].filter(Boolean).join('；') || '等待客户端状态'}>
+            <span className="text-sm text-mist-500">{health?.collection.status === 'partial' || health?.collection.status === 'failed' ? '采集需处理' : health?.collection.status === 'running' ? '正在采集' : health?.presence.status === 'online' ? '平台在线' : health?.presence.status === 'error' ? '平台异常' : health?.presence.status === 'offline' ? '采集未启用' : '读取中'}</span>
+          </Row>
+        </div>
+      </Card>}
       <Card className="mb-5">
         <CardHeader title="写作" desc="段落起草、续写与检查的默认行为" />
         <div className="divide-y divide-mist-100">

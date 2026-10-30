@@ -1,3 +1,4 @@
+import { openDesktopAccountSwitcher } from './support'
 import { expect, test } from '@playwright/test'
 import { registerAccount } from './support'
 
@@ -17,7 +18,7 @@ test('D-131 仅桌面版账号详情显示头条登录入口，并定位到所�
     window.open = (url) => { (window as Window & { __opsLoginIntents: string[] }).__opsLoginIntents.push(String(url)); return null }
   })
   await page.goto(`/a/${account.id}`)
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(account.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(account.name)
   await page.goto(`/settings/accounts?id=${account.id}`)
   await expect(page.getByRole('heading', { name: '平台登录与同步', exact: true })).toBeVisible()
   const loginButton = page.getByRole('button', { name: '打开头条官方登录页', exact: true })

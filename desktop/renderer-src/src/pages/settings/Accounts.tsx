@@ -467,7 +467,7 @@ export default function SettingsAccounts() {
     const assertedId = params.get('id')
     if (assertedId && assertedId !== selection.selectedId) return <Card className="space-y-3 p-5">
       <div className="font-semibold text-mist-900">当前账号与此链接不一致</div>
-      <p className="text-[13px] text-mist-600">请从顶部选择目标账号后再打开设置。此页面不会显示链接中其他账号的信息。</p>
+      <p className="text-[13px] text-mist-600">请从头像菜单选择目标账号后再打开设置。此页面不会显示链接中其他账号的信息。</p>
       <Button variant="primary" onClick={requestDesktopAccountSwitcher}>返回并选择账号</Button>
     </Card>
 
@@ -475,9 +475,9 @@ export default function SettingsAccounts() {
     if (!current || deletedCurrent === current.id) {
       const noAccounts = selection.accounts?.length === 0
       return <Card className="space-y-3 p-5">
-        <div className="font-semibold text-mist-900">{noAccounts ? '当前工作区还没有平台账号' : '请先在顶部选择账号'}</div>
+        <div className="font-semibold text-mist-900">{noAccounts ? '当前工作区还没有平台账号' : '请先在头像菜单选择账号'}</div>
         <p className="text-[13px] text-mist-600">平台账号设置只显示已选择且已验证的当前账号。</p>
-        <Button variant="primary" onClick={requestDesktopAccountSwitcher}>{noAccounts ? '打开顶部账号入口' : '返回并选择账号'}</Button>
+        <Button variant="primary" onClick={requestDesktopAccountSwitcher}>{noAccounts ? '打开账号入口' : '返回并选择账号'}</Button>
       </Card>
     }
 

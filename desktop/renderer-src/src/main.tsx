@@ -13,12 +13,23 @@ import { initializeDesktopPresentation, type DesktopTheme } from './lib/desktop-
 import DesktopTitlebar from './layout/DesktopTitlebar'
 import { releaseDesktopLeaveGuard, requestDesktopLeaveGuard } from './lib/desktop-settings'
 
+// 用户在上次会话里明确选过的主题必须优先于系统配色：否则刷新/重启时
+// matchMedia 的临时值会覆盖 localStorage 并把偏好改写回浅色（BUG-04）。
+// 首次启动没有存储值时才回落到系统配色。
+function storedOrSystemTheme(): DesktopTheme {
+  try {
+    const stored = window.localStorage.getItem('ops-desktop-theme')
+    if (stored === 'dark' || stored === 'light') return stored
+  } catch { /* 存储不可用时按无偏好处理 */ }
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
 const initialDesktopTheme = initializeDesktopPresentation(
   document,
   window.localStorage,
   navigator.userAgent,
   window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false,
-  window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+  storedOrSystemTheme(),
 )
 
 const queryClient = new QueryClient({

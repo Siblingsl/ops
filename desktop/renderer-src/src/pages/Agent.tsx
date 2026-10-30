@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Archive, ArchiveRestore, AtSign, Bot, CalendarClock, ChevronDown, ChevronLeft, Clipboard, FileText, FolderPlus, GitBranch, LoaderCircle, Menu, RotateCcw,
+  Archive, ArchiveRestore, AtSign, Bot, CalendarClock, Check, ChevronDown, ChevronLeft, Clipboard, FileText, FolderPlus, GitBranch, LoaderCircle, Menu, RotateCcw,
   MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Search, Send, Settings2, Sparkles, Square, Trash2, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -127,7 +127,8 @@ function AgentConversationList({
 
   const items = list.data?.pages.flatMap((page) => page.items) ?? []
   const pinned = archived ? [] : items.filter((item) => item.pinned_at)
-  const rest = items.filter((item) => !item.pinned_at)
+  // 归档视图是平铺的恢复列表：pinned_at 不再把会话排除掉，否则“置顶后归档”的会话在 UI 里不可达。
+  const rest = archived ? items : items.filter((item) => !item.pinned_at)
   const groups = ['今天', '昨天', '7 天内', '更早'].map((label) => ({ label, items: rest.filter((item) => splitDate(item.last_message_at) === label) }))
   const namedGroups = groupQuery.data ?? []
   const groupedRows = organizeEnabled && !groupID
@@ -551,10 +552,14 @@ export default function Agent() {
   const [streamConnection, setStreamConnection] = useState('')
   const [runID, setRunID] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
-  const [selectedAccount, setSelectedAccount] = useState('')
+  const [conversationAccount, setSelectedAccount] = useState('')
+  const selectedAccount = desktopPresentation ? currentAccount?.id ?? '' : conversationAccount
   // AG-03：对话创建时绑定的账号。切换后历史仍属于原账号，必须明确提示，不能默默换上下文。
   const [historyAccount, setHistoryAccount] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const modelMenuRef = useRef<HTMLDivElement>(null)
+  const previousDesktopAccount = useRef<string | undefined>(undefined)
   const [privacyOpen, setPrivacyOpen] = useState(false)
   const [localSearchOpen, setLocalSearchOpen] = useState(false)
   const [localSearchText, setLocalSearchText] = useState('')
@@ -644,6 +649,7 @@ export default function Agent() {
   })
   const detail = detailQuery.data
   const conversation = detail?.conversation
+  const accountMismatch = desktopPresentation && !!conversation?.account_id && conversation.account_id !== selectedAccount
   const activeRun = detail?.active_run
   const actions = detail?.actions ?? []
   const inputs = detail?.inputs ?? []
@@ -675,7 +681,7 @@ export default function Agent() {
   const readyFiles = files.filter((file) => file.status === 'ready' && file.attachment)
   const readyAttachmentIDs = [...readyFiles.map((file) => file.attachment!.id), ...restoredAttachments.map((file) => file.id)]
   const failedFiles = files.filter((file) => file.status === 'failed')
-  const runInputsEnabled = workbenchUI && bootstrapData?.features?.run_control === true
+  const runInputsEnabled = workbenchUI && bootstrapData?.features?.run_control === true && !accountMismatch
 
   useEffect(() => {
     if (!workbenchUI || !layoutPreferenceKey) return
@@ -724,6 +730,24 @@ export default function Agent() {
   }, [workbenchUI, layoutPreferenceKey, workbenchLayoutLoadedKey, workbenchListCollapsed, workbenchPanelOpen])
 
   useEffect(() => {
+    if (!modelMenuOpen) return
+    const closeOutside = (event: MouseEvent) => { if (!modelMenuRef.current?.contains(event.target as Node)) setModelMenuOpen(false) }
+    const closeEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setModelMenuOpen(false) }
+    document.addEventListener('mousedown', closeOutside)
+    document.addEventListener('keydown', closeEscape)
+    return () => { document.removeEventListener('mousedown', closeOutside); document.removeEventListener('keydown', closeEscape) }
+  }, [modelMenuOpen])
+
+  useEffect(() => {
+    if (!desktopPresentation || !currentAccount?.id) return
+    if (previousDesktopAccount.current && previousDesktopAccount.current !== currentAccount.id) {
+      setContextRefs((refs) => refs.filter((ref) => ref.account_id === null))
+      setSkillRequests([])
+    }
+    previousDesktopAccount.current = currentAccount.id
+  }, [desktopPresentation, currentAccount?.id])
+
+  useEffect(() => {
     if (!conversation) {
       if (bootstrapData?.read_only) setSelectedMode('discuss')
       setSelectedModel((old) => old || modelKey(bootstrapData?.default_model?.provider_id, bootstrapData?.default_model?.model))
@@ -731,7 +755,7 @@ export default function Agent() {
       return
     }
     setSelectedModel(modelKey(conversation.model_provider_id, conversation.model))
-    setSelectedAccount(conversation.account_id ?? '')
+    if (!desktopPresentation) setSelectedAccount(conversation.account_id ?? '')
     setHistoryAccount(conversation.account_id ?? '')
     setSelectedMode(bootstrapData?.read_only ? 'discuss' : conversation.mode ?? 'execute')
   }, [conversation?.id, conversation?.model_provider_id, conversation?.model, conversation?.account_id, conversation?.mode, bootstrapData?.read_only, bootstrapData?.default_model?.provider_id, bootstrapData?.default_model?.model, currentAccount?.id])
@@ -1083,7 +1107,7 @@ export default function Agent() {
 
   const sendMessage = async (edit?: AgentMessage) => {
     const value = text.trim()
-    if ((!value && readyAttachmentIDs.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || !canWrite || composerBusy || sendInFlight.current || uploading || failedFiles.length > 0) return
+    if ((!value && readyAttachmentIDs.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || !canWrite || accountMismatch || composerBusy || sendInFlight.current || uploading || failedFiles.length > 0) return
     sendInFlight.current = true
     setSubmitting(true)
     setStreamError('')
@@ -1502,7 +1526,7 @@ export default function Agent() {
     }
   }
 
-  const inputDisabled = !canWrite || composerBusy && !runInputsEnabled || uploading || inputSubmitting
+  const inputDisabled = !canWrite || accountMismatch || composerBusy && !runInputsEnabled || uploading || inputSubmitting
   const accountList = (accounts.data ?? []).filter((account) => account.status === 'active')
   const selectedAccountName = accountList.find((account) => account.id === selectedAccount)?.name || '不指定账号'
   const selectedModelName = selectedModelOption?.model || '选择模型'
@@ -1576,11 +1600,12 @@ export default function Agent() {
           {desktopPresentation
             ? workbenchUI
               ? <button type="button" className="desktop-agent-chat-settings desktop-agent-workbench-panel-button" aria-label="任务面板" aria-expanded={workbenchPanelOpen} onClick={() => { setMobileListOpen(false); setWorkbenchPanelOpen((value) => !value) }}>任务面板 <Settings2 /></button>
-              : <button type="button" className="desktop-agent-chat-settings" aria-label="对话设置" onClick={() => setSettingsOpen(true)}>对话设置 <Settings2 /></button>
+              : null
             : <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>}
         </header>
 
         {bootstrapData.read_only && <div className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12px] text-gamboge-800">当前为观察者：智能体只能查询，不能修改。</div>}
+        {accountMismatch && <div className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12px] text-gamboge-800" data-testid="agent-account-switched">此对话属于「{historyAccountName}」，当前账号为「{selectedAccountName}」。<button type="button" className="ml-2 underline" onClick={newConversation}>为当前账号新建对话</button></div>}
 
         <div className="relative flex min-h-0 flex-1 flex-col">
           {dragging && <div className="absolute inset-3 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-ink-400 bg-white/90 text-ink-700">松开以上传图片或文本</div>}
@@ -1688,16 +1713,28 @@ export default function Agent() {
                   {goalsEnabled && conversationId && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel}><Bot className="size-4" /></IconButton>}
                   {routinesEnabled && <IconButton label="例行任务" onClick={() => setRoutinePanelOpen(true)}><CalendarClock className="size-4" /></IconButton>}
                   {bootstrapData.features.plans && workbenchUI && <AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />}
-                  <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择操作账号">{selectedAccountName} <ChevronDown /></button>
                   <span className="desktop-agent-compose-spacer" />
-                  <button type="button" className="desktop-agent-compose-choice" onClick={() => setSettingsOpen(true)} aria-label="选择模型">{selectedModelName} <ChevronDown /></button>
+                  <div className="desktop-agent-model-picker" ref={modelMenuRef}>
+                    <button type="button" className="desktop-agent-compose-choice" aria-label="选择模型" aria-haspopup="menu" aria-expanded={modelMenuOpen} disabled={!canWrite || !bootstrapData.allow_model_pick || busy} onClick={() => setModelMenuOpen((value) => !value)}>{selectedModelName} <ChevronDown /></button>
+                    {modelMenuOpen && <div className="desktop-agent-model-menu" role="menu" aria-label="选择模型">
+                      <div className="desktop-agent-model-menu-title">选择模型</div>
+                      {bootstrapData.models.length === 0 && <div className="desktop-agent-model-menu-empty">暂无可用模型，请先完成模型能力自检。</div>}
+                      {bootstrapData.models.map((model) => {
+                        const key = modelKey(model.provider_id, model.model)
+                        return <button type="button" role="menuitemradio" aria-checked={key === selectedModel} key={key} onClick={() => { setModelMenuOpen(false); void updateSelection('model', key) }}>
+                          <span><span>{model.model}</span><small>{model.provider_name}{model.vision ? ' · 看图' : ''}{model.is_default ? ' · 默认' : ''}</small></span>
+                          {key === selectedModel && <Check aria-hidden="true" />}
+                        </button>
+                      })}
+                    </div>}
+                  </div>
                   {composerBusy && runInputsEnabled ? <div className="flex items-center gap-1.5">
                     <Button variant="secondary" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0} onClick={() => void postWorkbenchInput('steer')}>补充当前任务</Button>
                     <Button variant="outline" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0} onClick={() => void postWorkbenchInput('queue')}>排到下一条</Button>
                     <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
                   </div> : composerBusy ? <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
                     : <>
-                      <Button variant="primary" icon={<Send className="size-4" />} disabled={!canWrite || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>
+                      <Button variant="primary" icon={<Send className="size-4" />} disabled={!canWrite || accountMismatch || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>
                       {busy && <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>}
                     </>}
                 </div>
@@ -1788,7 +1825,7 @@ export default function Agent() {
           {!localSearchBusy && !localSearchError && localSearchText.trim() && !localSearchResults.length && <p className="py-5 text-center text-[13px] text-mist-500">没有匹配的消息</p>}
         </div>
       </Dialog>
-      <Dialog open={settingsOpen} onClose={() => setSettingsOpen(false)} title="对话设置" desc="选择本对话使用的模型与操作账号。">
+      <Dialog open={!desktopPresentation && settingsOpen} onClose={() => setSettingsOpen(false)} title="对话设置" desc="选择本对话使用的模型与操作账号。">
         <div className="space-y-4">
           <label className="block space-y-1.5 text-[13px] font-medium text-mist-700">模型
             <Select aria-label="选择模型" value={selectedModel} disabled={!canWrite || !bootstrapData.allow_model_pick || busy} onChange={(event) => void updateSelection('model', event.target.value)}>

@@ -2,6 +2,16 @@ import { test, expect, type Page } from '@playwright/test'
 import type { ElectronApplication } from '@playwright/test'
 import { desktopSettingsLabel, settingsEntries, settingsGroupOf } from '../src/lib/settings-registry'
 
+export async function openDesktopAccountSwitcher(page: Page) {
+  await page.getByRole('button', { name: /用户菜单/ }).click()
+  await page.getByRole('menuitem', { name: '切换工作区与账号' }).click()
+}
+
+export async function toggleDesktopTheme(page: Page, theme: '深色' | '浅色') {
+  await page.getByRole('button', { name: /用户菜单/ }).click()
+  await page.getByRole('menuitem', { name: `切换到${theme}主题` }).click()
+}
+
 /**
  * 桌面 renderer 专属 E2E 辅助。
  *

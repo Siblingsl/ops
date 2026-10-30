@@ -80,9 +80,9 @@ function DesktopAccountStatusGate() {
   if (!selection.account) return (
     <Card className="mx-auto mt-8 max-w-xl space-y-3 p-6" role="status">
       <h1 className="text-lg font-semibold text-mist-900">当前账号不可用</h1>
-      <p className="text-[13px] leading-relaxed text-mist-600">此账号不属于当前工作区或已无法访问，未显示其他账号内容。请从顶部选择有效账号。</p>
+      <p className="text-[13px] leading-relaxed text-mist-600">此账号不属于当前工作区或已无法访问，未显示其他账号内容。请从头像菜单选择有效账号。</p>
       <div>
-        <Button variant="primary" onClick={() => window.dispatchEvent(new Event(DESKTOP_ACCOUNT_SWITCHER_REQUEST))}>打开顶部账号选择器</Button>
+        <Button variant="primary" onClick={() => window.dispatchEvent(new Event(DESKTOP_ACCOUNT_SWITCHER_REQUEST))}>打开账号选择器</Button>
       </div>
     </Card>
   )
@@ -91,9 +91,9 @@ function DesktopAccountStatusGate() {
   return (
     <Card className="mx-auto mt-8 max-w-xl space-y-3 p-6" role="status">
       <h1 className="text-lg font-semibold text-mist-900">当前账号已停用</h1>
-      <p className="text-[13px] leading-relaxed text-mist-600">“{account.name}”已停用，不能创作、读取作品或回填数据。请从顶部选择其他账号，或在已停用列表中重新启用。</p>
+      <p className="text-[13px] leading-relaxed text-mist-600">“{account.name}”已停用，不能创作、读取作品或回填数据。请从头像菜单选择其他账号，或在已停用列表中重新启用。</p>
       <div>
-        <Button variant="primary" onClick={() => window.dispatchEvent(new Event(DESKTOP_ACCOUNT_SWITCHER_REQUEST))}>打开顶部账号选择器</Button>
+        <Button variant="primary" onClick={() => window.dispatchEvent(new Event(DESKTOP_ACCOUNT_SWITCHER_REQUEST))}>打开账号选择器</Button>
       </div>
     </Card>
   )

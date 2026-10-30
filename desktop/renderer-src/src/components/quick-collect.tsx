@@ -1,5 +1,5 @@
 import { BookmarkPlus } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button, Field, Select, Tabs, Textarea } from '@/components/ui'
@@ -7,6 +7,7 @@ import { Dialog } from '@/components/dialog'
 import { VoiceButton } from '@/components/voice'
 import { errorMessage, post } from '@/lib/api'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
+import { isElectronDesktop } from '@/lib/desktop-presentation.js'
 import { useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { MaterialKind } from '@/lib/types'
 
@@ -28,6 +29,44 @@ export function QuickCollect() {
   const [busy, setBusy] = useState(false)
   const [readPage, setReadPage] = useState(false)
   const [source, setSource] = useState<string | undefined>()
+  const desktop = isElectronDesktop(navigator.userAgent)
+  const [position, setPosition] = useState(() => Math.max(48, window.innerHeight - 100))
+  const [dragging, setDragging] = useState(false)
+  const drag = useRef<{ pointerId: number; offset: number; active: boolean; timer: number } | null>(null)
+  const suppressClick = useRef(false)
+  const clampPosition = (value: number) => Math.max(42, Math.min(value, window.innerHeight - 82))
+
+  useEffect(() => {
+    if (!desktop) return
+    const resize = () => setPosition((value) => clampPosition(value))
+    window.addEventListener('resize', resize)
+    return () => {
+      window.removeEventListener('resize', resize)
+      if (drag.current) window.clearTimeout(drag.current.timer)
+    }
+  }, [desktop])
+
+  const startDrag = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!desktop || event.button !== 0 || event.pointerType !== 'mouse') return
+    suppressClick.current = false
+    setDragging(true)
+    const pointerId = event.pointerId
+    event.currentTarget.setPointerCapture(pointerId)
+    const state = { pointerId, offset: event.clientY - event.currentTarget.getBoundingClientRect().top, active: false, timer: 0 }
+    state.timer = window.setTimeout(() => { state.active = true; suppressClick.current = true }, 250)
+    drag.current = state
+  }
+  const moveDrag = (event: PointerEvent<HTMLButtonElement>) => {
+    const state = drag.current
+    if (state?.pointerId === event.pointerId && state.active) setPosition(clampPosition(event.clientY - state.offset))
+  }
+  const endDrag = (event: PointerEvent<HTMLButtonElement>) => {
+    const state = drag.current
+    if (!state || state.pointerId !== event.pointerId) return
+    window.clearTimeout(state.timer)
+    drag.current = null
+    setDragging(false)
+  }
   useEffect(() => {
     const show = (m: Mode, preset?: string, from?: string) => {
       const sel = preset || window.getSelection()?.toString().trim()
@@ -85,9 +124,11 @@ export function QuickCollect() {
   }
   return (
     <>
-      <button type="button" title="记一条灵感（Ctrl+Shift+I）/ 存素材（Ctrl+Shift+M）"
-        onClick={() => { const sel = window.getSelection()?.toString().trim(); if (sel) setText(sel); setReadPage(false); setOpen(true) }}
-        className="fixed bottom-20 right-4 z-30 flex size-11 cursor-pointer items-center justify-center rounded-full border border-mist-200 bg-white text-ink-700 shadow-md hover:bg-mist-50 md:bottom-5 md:right-5">
+      <button type="button" title="记一条灵感（Ctrl+Shift+I）/ 存素材（Ctrl+Shift+M）" aria-label="记一条灵感或存素材"
+        onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag}
+        onClick={() => { if (suppressClick.current) { suppressClick.current = false; return }; const sel = window.getSelection()?.toString().trim(); if (sel) setText(sel); setReadPage(false); setOpen(true) }}
+        data-dragging={dragging || undefined} data-open={open || undefined} style={desktop ? { top: position } : undefined}
+        className={desktop ? 'desktop-quick-collect' : 'fixed bottom-20 right-4 z-30 flex size-11 cursor-pointer items-center justify-center rounded-full border border-mist-200 bg-white text-ink-700 shadow-md hover:bg-mist-50 md:bottom-5 md:right-5'}>
         <BookmarkPlus className="size-5" />
       </button>
       <Dialog open={open} onClose={() => setOpen(false)} title="随手记"

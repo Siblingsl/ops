@@ -1,3 +1,4 @@
+import { openDesktopAccountSwitcher } from './support'
 import { test, expect, type Page } from '@playwright/test'
 import { api, createOutline, registerAccount, selectDesktopSetting } from './support'
 
@@ -239,7 +240,7 @@ test('D-126 保留编辑器挂载、输入与返回路径，子弹窗 Escape 只
   await expect(windowFor(page).getByRole('button', { name: '添加账号', exact: true })).toHaveCount(0)
   await windowFor(page).getByRole('button', { name: '关闭设置' }).click()
   await expect(windowFor(page)).toHaveCount(0)
-  await page.getByRole('button', { name: '切换工作区与账号' }).click()
+  await openDesktopAccountSwitcher(page)
   await page.getByTestId('desktop-context-menu').getByTitle('添加账号').click()
   const add = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '添加平台账号', exact: true }) })
   await expect(add).toBeVisible()
@@ -269,7 +270,7 @@ test('D-126 添加账号深链初次挂载时 Escape 只关闭子窗', async ({ 
   const current = await registerAccount(page)
   await electronPresentation(page)
   await page.goto(`/a/${current.id}`)
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(current.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(current.name)
   await page.goto('/settings/accounts?new=1&platform=xhs')
   const add = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '添加平台账号', exact: true }) })
   await expect(add).toBeVisible()
@@ -330,7 +331,7 @@ test('D-126 各类配置实际保存、顶部账号子窗保存保护与原下�
   const originalAccount = await registerAccount(page)
   await electronPresentation(page)
   await page.goto(`/a/${originalAccount.id}`)
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(originalAccount.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(originalAccount.name)
   await openSettings(page)
   const settings = windowFor(page)
   await settings.getByRole('button', { name: '3 个', exact: true }).click()
@@ -379,7 +380,7 @@ test('D-126 各类配置实际保存、顶部账号子窗保存保护与原下�
   expect((await download).suggestedFilename()).toBe('works.csv')
   await settings.getByRole('button', { name: '关闭设置' }).click()
   await expect(settings).toHaveCount(0)
-  await page.getByRole('button', { name: '切换工作区与账号' }).click()
+  await openDesktopAccountSwitcher(page)
   await page.getByTestId('desktop-context-menu').getByTitle('添加账号').click()
   const add = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '添加平台账号', exact: true }) })
   await add.getByLabel('账号名称').fill('D126新增号')

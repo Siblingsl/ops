@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  Activity, BarChart3, BookOpen, Bot, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, Clock, Eye, FileText, Images, Inbox, KeyRound,
-  LayoutDashboard, Lightbulb, LogOut, Menu, PanelLeft, Pencil, Plus, Power, Search, Send, Settings2, Sparkles, Trash2,
+  Activity, BarChart3, Bell, BookOpen, Bot, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, Clock, Eye, FileText, Images, Inbox, KeyRound,
+  LayoutDashboard, Lightbulb, LogOut, Menu, Pencil, Plus, Power, Search, Send, Settings2, Sparkles, Trash2,
   UserCircle2, UserPlus, X,
 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -92,7 +92,7 @@ function Brand({ desktop }: { desktop: boolean }) {
   if (desktop) {
     // 品牌从标题栏下移到侧栏顶部：折叠态竖排（图标 + 文字），展开态横排，两态共用同一槽位居中。
     return (
-      <div className="desktop-rail-brand">
+      <div className="desktop-rail-brand" title="OPS 灵感空间">
         <span className="desktop-rail-brand-mark"><Sparkles aria-hidden="true" /></span>
         <span className="desktop-rail-brand-text">
           <span className="desktop-rail-brand-ops">OPS</span>
@@ -120,11 +120,26 @@ function Brand({ desktop }: { desktop: boolean }) {
 }
 
 function NavItem({ to, icon: Icon, children, end }: { to: string; icon: typeof LayoutDashboard; children: React.ReactNode; end?: boolean }) {
+  const desktop = isElectronDesktop(navigator.userAgent)
+  const label = typeof children === 'string' ? children : undefined
+  const [hint, setHint] = useState<{ x: number; y: number } | null>(null)
+  const showHint = (element: HTMLElement) => {
+    if (!desktop || !label) return
+    const rect = element.getBoundingClientRect()
+    setHint({ x: rect.right + 10, y: rect.top + rect.height / 2 })
+  }
   return (
+    <>
     <NavLink
       to={to}
       end={end}
-      title={typeof children === 'string' ? children : undefined}
+      title={desktop ? undefined : label}
+      aria-label={label}
+      onMouseEnter={(event) => showHint(event.currentTarget)}
+      onMouseLeave={(event) => { if (document.activeElement !== event.currentTarget) setHint(null) }}
+      onFocus={(event) => showHint(event.currentTarget)}
+      onBlur={(event) => { if (!event.currentTarget.matches(':hover')) setHint(null) }}
+      onClick={() => setHint(null)}
       className={({ isActive }) =>
         cn(
           'group flex items-center gap-3 rounded-2xl px-3 py-2.5 text-[14.5px] transition-all',
@@ -144,6 +159,8 @@ function NavItem({ to, icon: Icon, children, end }: { to: string; icon: typeof L
         </>
       )}
     </NavLink>
+    {hint && createPortal(<span className="desktop-rail-tooltip" aria-hidden="true" style={{ left: hint.x, top: hint.y }}>{label}</span>, document.body)}
+    </>
   )
 }
 
@@ -164,12 +181,13 @@ function RecentWorks() {
   )
 }
 
-function UserMenu({ username, onLogout }: { username?: string; onLogout: () => void }) {
+function UserMenu({ username, onLogout, unread = 0 }: { username?: string; onLogout: () => void; unread?: number }) {
   const [open, setOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(() => localStorage.getItem('ops-settings-advanced-open') === '1')
   const navigate = useNavigate()
   const loc = useLocation()
   const { data: me } = useMe()
+  const current = useCurrentAccount()
   const ref = useRef<HTMLDivElement>(null)
   const inSettings = loc.pathname.startsWith('/settings/')
   const desktop = isElectronDesktop(navigator.userAgent)
@@ -178,16 +196,23 @@ function UserMenu({ username, onLogout }: { username?: string; onLogout: () => v
   const advanced = items.filter((item) => !commonSettings.has(item.to))
   useEffect(() => {
     const h = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false)
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !open) return
+      setOpen(false)
+      ref.current?.querySelector<HTMLButtonElement>('.desktop-user-trigger')?.focus()
+    }
     document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [])
+    document.addEventListener('keydown', key)
+    return () => { document.removeEventListener('mousedown', h); document.removeEventListener('keydown', key) }
+  }, [open])
   useEffect(() => { setOpen(false) }, [loc.pathname])
   return (
     <div ref={ref} className="desktop-user-menu relative">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen((v) => { if (!v && desktop) window.dispatchEvent(new CustomEvent('ops:overlay', { detail: 'user-menu' })); return !v })}
         aria-label={`用户菜单：${username || '用户'}`}
+        aria-description={desktop && unread > 0 ? `${unread} 条未读通知` : undefined}
         aria-expanded={open}
         aria-haspopup="menu"
         className={cn(
@@ -201,9 +226,16 @@ function UserMenu({ username, onLogout }: { username?: string; onLogout: () => v
         <span className="hidden max-w-[6.5rem] truncate text-[13px] font-medium text-mist-800 sm:block">{username || '用户'}</span>
         <Settings2 className={cn('size-3.5 shrink-0 text-mist-400', (open || inSettings) && 'text-ink-600')} />
       </button>
+      {desktop && unread > 0 && <span data-testid="desktop-user-unread" aria-label={`${unread} 条未读通知`} className="pointer-events-none absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-xhs px-1 text-[10px] font-bold text-white">{unread > 99 ? '99+' : unread}</span>}
       {open && (
-        <div role="menu" className="absolute right-0 top-[calc(100%+8px)] z-40 w-[260px] animate-fade-in rounded-xl border border-mist-200 bg-white p-1.5 shadow-pop">
-          {desktop ? <button type="button" role="menuitem" onClick={() => { setOpen(false); navigate('/settings/preferences') }} className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13.5px] text-mist-700 hover:bg-mist-50"><Settings2 className="size-4" /> 设置…</button> : <>
+        <div role="menu" className={cn('absolute z-40 w-[260px] animate-fade-in rounded-xl border border-mist-200 bg-white p-1.5 shadow-pop', desktop ? 'desktop-user-popup' : 'right-0 top-[calc(100%+8px)]')}>
+          {desktop ? <>
+          <button type="button" role="menuitem" aria-label="切换工作区与账号" title={`${me?.workspace?.name ?? ''} / ${current ? `${platformLabel[current.platform]} · ${current.name}` : '选择账号'}`} onClick={() => { setOpen(false); window.dispatchEvent(new Event(DESKTOP_ACCOUNT_SWITCHER_REQUEST)) }} className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13.5px] text-mist-700 hover:bg-mist-50"><UserCircle2 className="size-4" /> 切换工作区与账号</button>
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); window.dispatchEvent(new Event('ops:notifications')) }} className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13.5px] text-mist-700 hover:bg-mist-50"><Bell className="size-4" />通知与 AI 任务 {unread > 0 && <span className="ml-auto text-xs text-xhs">{unread > 99 ? '99+' : unread}</span>}</button>
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); window.dispatchEvent(new Event('ops:palette')) }} className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13.5px] text-mist-700 hover:bg-mist-50"><Search className="size-4" />搜索与命令 <span className="ml-auto text-xs text-mist-400">Ctrl+K</span></button>
+          <ThemeToggle onToggle={() => { setOpen(false); ref.current?.querySelector<HTMLButtonElement>('.desktop-user-trigger')?.focus() }} />
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); navigate('/settings/preferences') }} className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13.5px] text-mist-700 hover:bg-mist-50"><Settings2 className="size-4" /> 设置…</button>
+          </> : <>
           <div className="px-2.5 pb-1.5 pt-1.5 text-[11px] font-semibold tracking-wider text-mist-400">工作区设置</div>
           {common.map((item) => (
             <button
@@ -261,6 +293,7 @@ function UserMenu({ username, onLogout }: { username?: string; onLogout: () => v
           </button>
         </div>
       )}
+      {desktop && <WorkspaceAccountTree />}
     </div>
   )
 }
@@ -348,7 +381,7 @@ function loadPlatformExpanded(): Record<Platform, boolean> {
   return { wechat_mp: true, xhs: true, toutiao: true }
 }
 
-/** 顶栏统一入口：客户端按平台 Tab 切换账号，Web 保留展开式账号树 */
+/** 客户端侧栏和浏览器顶栏各保留一个统一账号入口。 */
 function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   const current = useCurrentAccount()
   const { data: accounts } = useAccounts()
@@ -390,7 +423,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       if (e.key !== 'Escape') return
       const restoreFocus = !!ref.current?.querySelector('#topbar-context-menu')
       setOpen(false)
-      if (restoreFocus) ref.current?.querySelector('button')?.focus()
+      if (restoreFocus) (desktop ? document.querySelector<HTMLButtonElement>('.desktop-user-trigger') : ref.current?.querySelector('button'))?.focus()
     }
     document.addEventListener('mousedown', h)
     document.addEventListener('keydown', onKey)
@@ -448,7 +481,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
     }
     if (!accounts?.some((account) => account.id === id && account.status === 'active')) {
       if (desktop) releaseDesktopLeaveGuard()
-      toast.info('该账号当前不可用，请从顶部重新选择。')
+      toast.info(desktop ? '该账号当前不可用，请从头像菜单重新选择。' : '该账号当前不可用，请从顶部重新选择。')
       return
     }
     setOpen(false)
@@ -735,12 +768,8 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   ]
 
   return (
-    <div ref={ref} className={cn('relative', desktop ? 'shrink-0' : 'min-w-0')}>
-      {desktop ? <button type="button" className="desktop-context-trigger" aria-label="切换工作区与账号" aria-expanded={open} aria-controls="topbar-context-menu" title={`${me.workspace.name} / ${current?.name ?? '选择账号'}`} onClick={() => { setPlatform(current?.platform ?? 'wechat_mp'); setOpen((v) => !v) }} onContextMenu={(e) => openMenu(e, workspaceMenu())}>
-          {current ? <PlatformMark platform={current.platform} size="sm" /> : <span className="size-5 rounded bg-mist-100" />}
-          <span className="desktop-context-copy"><strong>{me.workspace.name}</strong><small>{current ? `${platformLabel[current.platform]} · ${current.name}` : '选择账号'}</small></span>
-          <ChevronsUpDown className="size-3.5 shrink-0 text-mist-400" />
-      </button> : <button
+    <div ref={ref} className={cn(desktop ? 'desktop-context-switcher' : 'relative min-w-0')}>
+      {!desktop && <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         onContextMenu={(e) => openMenu(e, workspaceMenu())}
@@ -760,9 +789,9 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       </button>}
 
       {open && (
-        <div id="topbar-context-menu" data-testid={desktop ? 'desktop-context-menu' : 'workspace-account-menu'} className={cn('absolute left-0 top-[calc(100%+8px)] z-40 animate-fade-in rounded-xl border border-mist-200 bg-white p-1.5 shadow-pop', desktop ? 'w-[320px] max-w-[calc(100vw-24px)] max-h-[calc(100vh-152px)] overflow-y-auto' : 'w-[300px]')}>
+        <div id="topbar-context-menu" data-testid={desktop ? 'desktop-context-menu' : 'workspace-account-menu'} className={cn('absolute z-40 animate-fade-in rounded-xl border border-mist-200 bg-white p-1.5 shadow-pop', desktop ? 'desktop-context-menu w-[320px] max-h-[calc(100vh-152px)] overflow-y-auto' : 'left-0 top-[calc(100%+8px)] w-[300px]')}>
           <div className="flex items-center gap-1 px-2 pb-1 pt-1.5">
-            <span className="min-w-0 flex-1 truncate text-[11px] font-semibold tracking-wider text-mist-400">{me.workspace.name}</span>
+            <span className={cn('min-w-0 flex-1 text-[11px] font-semibold tracking-wider text-mist-400', desktop ? 'break-words' : 'truncate')}>{me.workspace.name}</span>
             {canManage && (
               <button
                 type="button"
@@ -796,7 +825,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
               {(accounts ?? []).filter((a) => a.platform === platform && a.status === 'active').map((a) => (
                 <button key={a.id} type="button" onClick={() => switchAccount(a.id)} onContextMenu={(e) => openMenu(e, accountMenu(a))} className={cn('flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left text-[13px] transition', a.id === current?.id ? 'bg-ink-50 font-semibold text-ink-800' : 'text-mist-600 hover:bg-mist-50 hover:text-mist-900')}>
                   <span className={cn('size-1.5 shrink-0 rounded-full', a.id === current?.id ? 'bg-ink-600' : 'bg-mist-300')} />
-                  <span className="min-w-0 flex-1 truncate" title={a.name}>{a.name}</span>
+                  <span className="min-w-0 flex-1 break-words" title={a.name}>{a.name}</span>
                   {a.id === current?.id && <Check className="size-3.5 shrink-0 text-ink-600" />}
                 </button>
               ))}
@@ -894,7 +923,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
                   className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-mist-500 hover:bg-mist-50 hover:text-mist-800 disabled:opacity-50"
                 >
                   <ChevronRight className="size-3.5 shrink-0 text-mist-300" />
-                  <span className="min-w-0 flex-1 truncate">{w.name}</span>
+                  <span className={cn('min-w-0 flex-1', desktop ? 'break-words' : 'truncate')}>{w.name}</span>
                 </button>
               ))}
             </div>
@@ -940,10 +969,9 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   )
 }
 
-function TopBar({ username, onLogout, dense, showAgent, agentMode, homeTo, desktopNavExpanded, onToggleDesktopNav }: { username?: string; onLogout: () => void; dense?: boolean; showAgent?: boolean; agentMode?: boolean; homeTo: string; desktopNavExpanded: boolean; onToggleDesktopNav: () => void }) {
+function TopBar({ username, onLogout, dense, showAgent, agentMode, homeTo }: { username?: string; onLogout: () => void; dense?: boolean; showAgent?: boolean; agentMode?: boolean; homeTo: string }) {
   const meta = useChromeMeta()
   const acc = useCurrentAccount()
-  const navigate = useNavigate()
   const desktopPresentation = isElectronDesktop(navigator.userAgent)
 
   return (
@@ -953,15 +981,7 @@ function TopBar({ username, onLogout, dense, showAgent, agentMode, homeTo, deskt
       // 也按「顶栏为 30」对齐，这里补上缺的 10。
       'desktop-global-header sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-mist-200/80 bg-white/90 px-3 backdrop-blur sm:gap-3 sm:px-5 xl:px-7', dense && 'work-topbar',
     )}>
-      {document.documentElement.dataset.presentation === 'ops-creative-desktop' && (
-        <>
-          <button type="button" className="desktop-nav-toggle" aria-label={desktopNavExpanded ? '收起导航文字' : '展开导航文字'} title={desktopNavExpanded ? '收起导航文字' : '展开导航文字'} aria-expanded={desktopNavExpanded} aria-controls="main-navigation" onClick={onToggleDesktopNav}>
-            <PanelLeft aria-hidden="true" />
-          </button>
-          <button type="button" className="desktop-nav-back" aria-label="返回上一视图" title="返回" onClick={() => navigate(-1)}><ChevronLeft aria-hidden="true" /></button>
-        </>
-      )}
-      <WorkspaceAccountTree compact={dense} />
+      {!desktopPresentation && <WorkspaceAccountTree compact={dense} />}
       <div className="hidden h-4 w-px bg-mist-200 lg:block" />
       <nav className={cn('hidden min-w-0 flex-1 items-center gap-2 text-[13px] lg:flex', desktopPresentation && 'desktop-breadcrumb')} aria-label="当前位置">
         <span className="truncate text-mist-400">{meta.crumb}</span>
@@ -975,28 +995,19 @@ function TopBar({ username, onLogout, dense, showAgent, agentMode, homeTo, deskt
         {agentMode
           ? <Link to={homeTo} aria-label="返回工作台" title="返回工作台" className={cn('flex size-9 items-center justify-center rounded-full text-mist-500 hover:bg-mist-100 hover:text-ink-700', showAgent && 'md:hidden', !showAgent && 'md:w-auto md:gap-2 md:px-2.5')}><ChevronLeft className="size-4" /><span className={cn('hidden text-xs', !showAgent && 'md:inline')}>返回工作台</span></Link>
           : showAgent && <Link to="/agent" aria-label="打开 AI 对话" title="打开 AI 对话" className="flex size-9 items-center justify-center rounded-full text-mist-500 hover:bg-mist-100 hover:text-ink-700 md:hidden"><Bot className="size-4" /></Link>}
-        <button
+        {!desktopPresentation && <button
           type="button"
           onClick={() => window.dispatchEvent(new Event('ops:palette'))}
           title="搜索与命令（Ctrl+K）"
-          aria-label={desktopPresentation ? '搜索与命令（Ctrl+K）' : undefined}
-          className={cn(
-            'desktop-command-search flex h-9 cursor-pointer items-center rounded-full border border-mist-200 bg-white transition hover:border-mist-300',
-            desktopPresentation
-              ? 'size-9 justify-center text-mist-600 hover:text-mist-900'
-              : 'gap-2 px-2.5 text-[12.5px] text-mist-500 hover:text-mist-800 sm:px-3',
-          )}
+          className="desktop-command-search flex h-9 cursor-pointer items-center gap-2 rounded-full border border-mist-200 bg-white px-2.5 text-[12.5px] text-mist-500 transition hover:border-mist-300 hover:text-mist-800 sm:px-3"
         >
-          <Search className={desktopPresentation ? 'size-4' : 'size-3.5'} />
-          {!desktopPresentation && <>
-            <span className="hidden md:inline">搜索</span>
-            <span className="hidden md:inline"><Kbd>Ctrl K</Kbd></span>
-          </>}
-        </button>
-        {desktopPresentation && <ThemeToggle />}
+          <Search className="size-3.5" />
+          <span className="hidden md:inline">搜索</span>
+          <span className="hidden md:inline"><Kbd>Ctrl K</Kbd></span>
+        </button>}
         {!dense && !desktopPresentation && <TodayUsage enabled={!!acc} />}
-        <NotificationBell />
-        <UserMenu username={username} onLogout={onLogout} />
+        {!desktopPresentation && <NotificationBell />}
+        {!desktopPresentation && <UserMenu username={username} onLogout={onLogout} />}
       </div>
     </header>
   )
@@ -1018,7 +1029,6 @@ export default function Shell() {
   useEffect(() => setUXEnabled(prefs.ux_events), [prefs.ux_events])
   const [focusMode, setFocusMode] = useState(false)
   const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
-  const [desktopNavExpanded, setDesktopNavExpanded] = useState(() => desktopPresentation && localStorage.getItem('ops-desktop-nav') === 'expanded')
   const [timeNow, setTimeNow] = useState(() => Date.now())
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   // GL-01：更多菜单既覆盖账号页，也覆盖全局页；全局入口不能错误拼到 /a/:id 下。
@@ -1056,9 +1066,9 @@ export default function Shell() {
   }
   return (
     <div className="flex h-full">
-      <aside id="main-navigation" aria-label="主导航" className={cn('hidden w-[248px] shrink-0 flex-col border-r border-mist-200 bg-mist-50', desktopPresentation && focus && !agentMode && 'desktop-focus-nav-hidden', desktopNavExpanded && 'desktop-nav-expanded', (!focus || agentMode) && 'md:flex')}>
+      <aside id="main-navigation" aria-label="主导航" className={cn('hidden w-[248px] shrink-0 flex-col border-r border-mist-200 bg-mist-50', desktopPresentation && focus && !agentMode && 'desktop-focus-nav-hidden', (!focus || agentMode) && 'md:flex')}>
         <Brand desktop={desktopPresentation} />
-        <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div className="desktop-nav-content relative min-h-0 flex-1 overflow-hidden">
           <nav aria-hidden={agentMode && !desktopPresentation} className={cn('scrollbar-thin absolute inset-0 space-y-1 overflow-y-auto px-3 pb-4 pt-3', agentMode && !desktopPresentation && 'hidden')}>
             {desktopPresentation ? desktopNavGroups.map((group) => (
               <div key={group.label} className="desktop-nav-group">
@@ -1088,14 +1098,11 @@ export default function Shell() {
             : agentMode
               ? <Link to={base} className="group flex items-center gap-3 rounded-2xl px-3 py-2.5 text-[14.5px] font-medium text-mist-600 transition-all hover:bg-mist-100/90 hover:text-mist-900"><ChevronLeft className="size-[18px] shrink-0 text-mist-400 group-hover:text-mist-600" strokeWidth={1.8} />返回工作台</Link>
               : showAgent && <NavItem to="/agent" icon={Bot}>AI 对话</NavItem>}
+          {desktopPresentation && <NotificationBell sidebar>{(unread) => <UserMenu username={me?.username} onLogout={logout} unread={unread} />}</NotificationBell>}
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        {!focus && <TopBar username={me?.username} onLogout={logout} dense={loc.pathname.startsWith('/works/')} showAgent={showAgent} agentMode={agentMode} homeTo={base} desktopNavExpanded={desktopNavExpanded} onToggleDesktopNav={() => setDesktopNavExpanded((expanded) => {
-          const next = !expanded
-          if (desktopPresentation) localStorage.setItem('ops-desktop-nav', next ? 'expanded' : 'collapsed')
-          return next
-        })} />}
+        {!focus && !desktopPresentation && <TopBar username={me?.username} onLogout={logout} dense={loc.pathname.startsWith('/works/')} showAgent={showAgent} agentMode={agentMode} homeTo={base} />}
         {me?.session_expires_at && Date.parse(me.session_expires_at) > timeNow && Date.parse(me.session_expires_at) - timeNow < 24 * 60 * 60 * 1000 && (
           <SessionExpiryBanner
             expiresAt={me.session_expires_at}

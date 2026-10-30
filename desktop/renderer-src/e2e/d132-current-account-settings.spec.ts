@@ -1,3 +1,4 @@
+import { openDesktopAccountSwitcher } from './support'
 import { expect, test, type Page } from '@playwright/test'
 import { api, createOutline, registerAccount } from './support'
 
@@ -11,7 +12,7 @@ async function desktopMode(page: Page) {
 
 async function openCurrentSettings(page: Page, accountId: string, accountName: string) {
   await page.goto(`/a/${accountId}`)
-  const switcher = page.getByRole('button', { name: '切换工作区与账号' })
+  const switcher = page.locator('.desktop-statusbar-context')
   await expect(switcher).toBeVisible()
   await expect(switcher).toContainText(accountName)
   await page.goto(`/settings/accounts?id=${accountId}`)
@@ -242,7 +243,7 @@ test('D-132 设置链接不切换账号；顶部平台 Tab 只浏览，明确选
   await expect(page).toHaveURL(oldUrl)
   await picker.getByRole('tabpanel').getByRole('button', { name: other.name, exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/a/${other.id}$`))
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(other.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(other.name)
 
   await page.goto(`/settings/accounts?id=${other.id}`)
   await expect(settings.getByText(other.name, { exact: true })).toBeVisible()
@@ -313,8 +314,7 @@ test('D-132 切换账号前保护当前资料草稿', async ({ page }) => {
   await expect(settings).toHaveCount(0)
   await expect(page).toHaveURL(new RegExp(`/a/${current.id}$`))
 
-  const switcher = page.getByRole('button', { name: '切换工作区与账号' })
-  await switcher.click()
+  await openDesktopAccountSwitcher(page)
   const picker = page.getByTestId('desktop-context-menu')
   await picker.getByRole('tab', { name: /今日头条/ }).click()
   await picker.getByRole('tabpanel').getByRole('button', { name: other.name, exact: true }).click()
@@ -332,14 +332,14 @@ test('D-132 同平台多账号只能通过顶部明确选择切换', async ({ pa
 
   const settings = page.getByTestId('desktop-settings-window')
   await settings.getByRole('button', { name: '关闭设置', exact: true }).click()
-  await page.getByRole('button', { name: '切换工作区与账号' }).click()
+  await openDesktopAccountSwitcher(page)
   const picker = page.getByTestId('desktop-context-menu')
   await expect(picker.getByRole('tab', { name: /小红书 2/ })).toBeVisible()
   await expect(picker.getByRole('tabpanel').getByRole('button', { name: other.name, exact: true })).toBeVisible()
   await picker.getByRole('tabpanel').getByRole('button', { name: other.name, exact: true }).click()
 
   await expect(page).toHaveURL(new RegExp(`/a/${other.id}$`))
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(other.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(other.name)
   await page.goto(`/settings/accounts?id=${other.id}`)
   await expect(settings.getByText(other.name, { exact: true })).toBeVisible()
   await expect(settings.getByText(current.name, { exact: true })).toHaveCount(0)
@@ -353,7 +353,7 @@ test('D-132 只有停用账号时仍可从顶部找到并恢复', async ({ page 
   await page.goto('/settings/accounts')
 
   const settings = page.getByTestId('desktop-settings-window')
-  await expect(settings.getByText('请先在顶部选择账号', { exact: true })).toBeVisible()
+  await expect(settings.getByText('请先在头像菜单选择账号', { exact: true })).toBeVisible()
   await expect(settings.getByRole('textbox', { name: '账号名称', exact: true })).toHaveCount(0)
   await settings.getByRole('button', { name: '返回并选择账号', exact: true }).click()
   const picker = page.getByTestId('desktop-context-menu')
@@ -367,7 +367,7 @@ test('D-132 只有停用账号时仍可从顶部找到并恢复', async ({ page 
   await settings.getByRole('button', { name: '重新启用', exact: true }).click()
   expect((await enabled).ok()).toBeTruthy()
   await expect(settings.getByText('使用中', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(account.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(account.name)
 })
 
 test('D-132 删除最后一个账号后显示无账号中性态', async ({ page }) => {
@@ -383,7 +383,7 @@ test('D-132 删除最后一个账号后显示无账号中性态', async ({ page 
 
   await expect(settings.getByText('当前工作区还没有平台账号', { exact: true })).toBeVisible()
   await expect(settings.getByRole('textbox', { name: '账号名称', exact: true })).toHaveCount(0)
-  await expect(settings.getByRole('button', { name: '打开顶部账号入口', exact: true })).toBeVisible()
+  await expect(settings.getByRole('button', { name: '打开账号入口', exact: true })).toBeVisible()
   expect(await api(page, 'GET', '/accounts')).toHaveLength(0)
 })
 
@@ -394,7 +394,7 @@ test('D-132 创建网络失败保留表单，重试只创建一个账号', async
   expect(response.ok()).toBeTruthy()
   await desktopMode(page)
   await page.goto('/settings/accounts')
-  await page.getByRole('button', { name: '打开顶部账号入口', exact: true }).click()
+  await page.getByRole('button', { name: '打开账号入口', exact: true }).click()
   const picker = page.getByTestId('desktop-context-menu')
   await picker.getByRole('tab', { name: /今日头条/ }).click()
   await picker.getByRole('button', { name: '添加今日头条账号', exact: true }).click()
@@ -435,12 +435,12 @@ test('D-132 创建响应返回前上下文变化时不切换当前账号或保�
   const me = await (await page.request.get('/api/v1/auth/me')).json()
   const userId = me.user_id ?? me.username
   const preferenceKey = `ops.currentAccount.v2:${userId}:${me.workspace.id}`
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(current.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(current.name)
   await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), preferenceKey)).toBe(current.id)
   const selectedBefore = await page.evaluate((key) => localStorage.getItem(key), preferenceKey)
   const routeBefore = new URL(page.url()).pathname
 
-  await page.getByRole('button', { name: '切换工作区与账号' }).click()
+  await openDesktopAccountSwitcher(page)
   const picker = page.getByTestId('desktop-context-menu')
   await picker.getByTitle('添加账号').click()
   const add = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '添加平台账号', exact: true }) })
@@ -494,7 +494,7 @@ test('D-132 创建成功后账号列表刷新失败仍采用创建回执且不�
   expect(response.ok()).toBeTruthy()
   await desktopMode(page)
   await page.goto('/settings/accounts')
-  await page.getByRole('button', { name: '打开顶部账号入口', exact: true }).click()
+  await page.getByRole('button', { name: '打开账号入口', exact: true }).click()
   const picker = page.getByTestId('desktop-context-menu')
   await picker.getByRole('tab', { name: /小红书/ }).click()
   await picker.getByTitle('添加账号').click()
@@ -520,7 +520,7 @@ test('D-132 创建成功后账号列表刷新失败仍采用创建回执且不�
   await add.getByRole('button', { name: '添加账号', exact: true }).click()
   const created = await (await createdResponse).json() as { id: string; name: string }
   await expect(page).toHaveURL(new RegExp(`/a/${created.id}/profile\\?wizard=1$`))
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText('刷新失败仍采用回执')
+  await expect(page.locator('.desktop-statusbar-context')).toContainText('刷新失败仍采用回执')
   expect(accountReads).toBeGreaterThan(0)
   expect(posts).toBe(1)
   expect((await api(page, 'GET', '/accounts')).filter((item: { name: string }) => item.name === created.name)).toHaveLength(1)
@@ -537,7 +537,7 @@ test('D-132 无账号工作区显示中性态，所有者可从顶部创建首�
   const settings = page.getByTestId('desktop-settings-window')
   await expect(settings.getByText('当前工作区还没有平台账号', { exact: true })).toBeVisible()
   await expect(settings.getByRole('textbox', { name: '账号名称', exact: true })).toHaveCount(0)
-  await settings.getByRole('button', { name: '打开顶部账号入口', exact: true }).click()
+  await settings.getByRole('button', { name: '打开账号入口', exact: true }).click()
   const picker = page.getByTestId('desktop-context-menu')
   await expect(picker).toBeVisible()
   await picker.getByRole('tab', { name: /今日头条/ }).click()
@@ -554,7 +554,7 @@ test('D-132 无账号工作区显示中性态，所有者可从顶部创建首�
   await expect(add).toHaveCount(0)
   expect(await api(page, 'GET', '/accounts')).toHaveLength(0)
 
-  await page.getByRole('button', { name: '切换工作区与账号' }).click()
+  await openDesktopAccountSwitcher(page)
   const reopenedPicker = page.getByTestId('desktop-context-menu')
   await reopenedPicker.getByRole('tab', { name: /今日头条/ }).click()
   await reopenedPicker.getByRole('button', { name: '添加今日头条账号', exact: true }).click()
@@ -582,7 +582,7 @@ test('D-132 无当前账号时关闭平台设置进入中性页面', async ({ pa
   await page.goto('/settings/accounts')
 
   const settings = page.getByTestId('desktop-settings-window')
-  await expect(settings.getByText('请先在顶部选择账号', { exact: true })).toBeVisible()
+  await expect(settings.getByText('请先在头像菜单选择账号', { exact: true })).toBeVisible()
   await settings.getByRole('button', { name: '关闭设置', exact: true }).click()
   await expect(settings).toHaveCount(0)
   await expect(page).toHaveURL(/\/images$/)
@@ -601,7 +601,7 @@ test('D-132 删除当前账号后不自动显示其他账号', async ({ page }) 
   await expect(confirm).toBeVisible()
   await confirm.getByRole('button', { name: '确认删除', exact: true }).click()
 
-  await expect(settings.getByText('请先在顶部选择账号', { exact: true })).toBeVisible()
+  await expect(settings.getByText('请先在头像菜单选择账号', { exact: true })).toBeVisible()
   await expect(settings.getByText(other.name, { exact: true })).toHaveCount(0)
   await expect(settings.getByRole('textbox', { name: '账号名称', exact: true })).toHaveCount(0)
   const accounts = await api(page, 'GET', '/accounts')
@@ -624,7 +624,7 @@ test('D-132 观察者只能查看当前账号，账号操作接口仍拒绝写�
     const member = await context.newPage()
     await desktopMode(member)
     await member.goto(`/a/${account.id}`)
-    await expect(member.getByRole('button', { name: '切换工作区与账号' })).toContainText(account.name)
+    await expect(member.locator('.desktop-statusbar-context')).toContainText(account.name)
     await member.goto(`/settings/accounts?id=${account.id}`)
 
     const settings = member.getByTestId('desktop-settings-window')
@@ -635,8 +635,7 @@ test('D-132 观察者只能查看当前账号，账号操作接口仍拒绝写�
     await expect(settings.getByRole('button', { name: '删除当前账号', exact: true })).toHaveCount(0)
 
     await settings.getByRole('button', { name: '关闭设置', exact: true }).click()
-    const pickerButton = member.getByRole('button', { name: '切换工作区与账号' })
-    await pickerButton.click()
+    await openDesktopAccountSwitcher(member)
     const picker = member.getByTestId('desktop-context-menu')
     await expect(picker.getByTitle('添加账号')).toHaveCount(0)
     const me = await api(member, 'GET', '/auth/me')
@@ -674,7 +673,7 @@ test('D-132 连接读取失败显示错误；头条不请求尚未支持的连�
   page.on('request', (request) => {
     if (request.url().includes(`/api/v1/accounts/${toutiao.id}/platform-connection`) || request.url().includes(`/api/v1/accounts/${toutiao.id}/metrics/observations`)) unsupportedCalls++
   })
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(toutiao.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(toutiao.name)
   await page.goto(`/settings/accounts?id=${toutiao.id}`)
   await expect(page.getByRole('heading', { name: '平台登录与同步', exact: true })).toBeVisible()
   await expect(page.getByText(/尚未验证/)).toBeVisible()
@@ -759,8 +758,7 @@ test('D-132 停用当前账号不切到其他账号，可从顶部恢复原账�
   await settings.getByRole('button', { name: '关闭设置', exact: true }).click()
   await expect(settings).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '当前账号已停用', exact: true })).toBeVisible()
-  const switcher = page.getByRole('button', { name: '切换工作区与账号' })
-  await switcher.click()
+  await openDesktopAccountSwitcher(page)
   const picker = page.getByTestId('desktop-context-menu')
   const disabledAccounts = picker.getByText('已停用 1', { exact: true })
   await expect(disabledAccounts).toBeVisible()
@@ -778,12 +776,11 @@ test('D-132 顶部按平台创建同平台账号及三平台账号，成功后�
   const initial = await registerAccount(page)
   await desktopMode(page)
   await page.goto(`/a/${initial.id}`)
-  const switcher = page.getByRole('button', { name: '切换工作区与账号' })
   const picker = page.getByTestId('desktop-context-menu')
 
   const addFromTab = async (platform: '小红书' | '公众号' | '今日头条', name: string, useWorkspaceAdd = false) => {
     if (await picker.isVisible()) await page.keyboard.press('Escape')
-    await switcher.click()
+    await openDesktopAccountSwitcher(page)
     await expect(picker).toBeVisible()
     await picker.getByRole('tab', { name: new RegExp(platform) }).click()
     if (useWorkspaceAdd) await picker.getByTitle('添加账号').click()
@@ -800,7 +797,7 @@ test('D-132 顶部按平台创建同平台账号及三平台账号，成功后�
     const account = await response.json() as { id: string; platform: string; content_format: string }
     expect(account.platform).toBe(platform === '小红书' ? 'xhs' : platform === '公众号' ? 'wechat_mp' : 'toutiao')
     await expect(page).toHaveURL(new RegExp(`/a/${account.id}/profile\\?wizard=1$`))
-    await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(name)
+    await expect(page.locator('.desktop-statusbar-context')).toContainText(name)
     const wizard = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '从过往作品生成档案', exact: true }) })
     await expect(wizard).toBeVisible()
     await wizard.getByRole('button', { name: '跳过，手动填写', exact: true }).click()
@@ -845,7 +842,7 @@ test('D-132 作品深链加载期间不回退到历史账号，归属校验只�
 
   await page.goto(`/works/${work.id}`)
   await workStarted
-  const switcher = page.getByRole('button', { name: '切换工作区与账号' })
+  const switcher = page.locator('.desktop-statusbar-context')
   await expect(switcher).toBeVisible()
   await expect(switcher).not.toContainText(previous.name)
   await expect(page.getByRole('button', { name: '在本机扫码登录' })).toHaveCount(0)
@@ -862,7 +859,7 @@ test('D-132 切换当前账号后迟到的平台连接响应不会写入新账�
   const target = await api(page, 'POST', '/accounts', { platform: 'xhs', name: '迟到响应目标账号', content_format: 'image_note', type_note: '' })
   await desktopMode(page)
   await page.goto(`/a/${previous.id}`)
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(previous.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(previous.name)
 
   let releaseConnection!: () => void
   let connectionRequestStarted = false
@@ -885,11 +882,11 @@ test('D-132 切换当前账号后迟到的平台连接响应不会写入新账�
   await expect.poll(() => connectionRequestStarted, { timeout: 15_000 }).toBe(true)
   const settings = page.getByTestId('desktop-settings-window')
   await settings.getByRole('button', { name: '关闭设置', exact: true }).click()
-  await page.getByRole('button', { name: '切换工作区与账号' }).click()
+  await openDesktopAccountSwitcher(page)
   const picker = page.getByTestId('desktop-context-menu')
   await picker.getByRole('tabpanel').getByRole('button', { name: target.name, exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/a/${target.id}$`))
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(target.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(target.name)
   await page.goto(`/settings/accounts?id=${target.id}`)
   await expect(settings.getByText('尚未连接。登录平台账号后需要本人核对稳定身份；登录不会自动同步历史作品。')).toBeVisible()
   releaseConnection()
@@ -908,7 +905,7 @@ test('D-132 编辑者的账号设置只读且账号写接口拒绝直接调用',
     const member = await context.newPage()
     await desktopMode(member)
     await member.goto(`/a/${account.id}`)
-    await expect(member.getByRole('button', { name: '切换工作区与账号' })).toContainText(account.name)
+    await expect(member.locator('.desktop-statusbar-context')).toContainText(account.name)
     await member.goto(`/settings/accounts?id=${account.id}`)
 
     const settings = member.getByTestId('desktop-settings-window')
@@ -989,7 +986,7 @@ test('D-132 连接读取启动后稳定，不产生重复观测或自动采集�
   })
 
   await page.goto(`/a/${account.id}`)
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(account.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(account.name)
   await page.goto(`/settings/accounts?id=${account.id}`)
   const settings = page.getByTestId('desktop-settings-window')
   await expect(settings.getByRole('heading', { name: '平台登录与同步', exact: true })).toBeVisible()
@@ -1020,7 +1017,7 @@ test('D-132 当前账号的数据回填与作品入口跳转到同一账号', as
   })
   await settings.getByRole('button', { name: '打开当前账号复盘与数据回填', exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/a/${account.id}/review$`))
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(account.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(account.name)
   await expect(page.getByText(other.name, { exact: true })).toHaveCount(0)
 
   await page.goto(`/settings/accounts?id=${account.id}`)
@@ -1041,6 +1038,6 @@ test('D-132 当前账号的数据回填与作品入口跳转到同一账号', as
   await expect(name).toHaveValue(account.name)
   await settings.getByRole('button', { name: '打开当前账号作品', exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/a/${account.id}/works$`))
-  await expect(page.getByRole('button', { name: '切换工作区与账号' })).toContainText(account.name)
+  await expect(page.locator('.desktop-statusbar-context')).toContainText(account.name)
   expect(openedPaths.some((url) => url.includes(`/api/v1/accounts/${other.id}/`))).toBe(false)
 })

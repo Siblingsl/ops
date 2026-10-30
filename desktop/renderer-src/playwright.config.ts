@@ -16,6 +16,8 @@ const desktopOnly = [
   'session-failure.spec.ts',
   'desktop-images-restoration.spec.ts',
   'desktop-creative-ui.spec.ts',
+  'desktop-quick-collect.spec.ts',
+  'desktop-agent-account-model.spec.ts',
   'desktop-editor-restoration.spec.ts',
   'desktop-dashboard-restoration.spec.ts',
   'desktop-ops-restoration.spec.ts',

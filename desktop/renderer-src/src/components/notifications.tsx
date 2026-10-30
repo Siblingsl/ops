@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, Loader2 } from 'lucide-react'
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { errorMessage, get, post } from '@/lib/api'
@@ -89,7 +89,7 @@ function useNotificationStream(active: boolean, keepInBackground: boolean) {
   return live
 }
 
-export function NotificationBell() {
+export function NotificationBell({ sidebar = false, children }: { sidebar?: boolean; children?: (unread: number) => ReactNode }) {
   const visible = usePageVisible()
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<'noti' | 'jobs'>('noti')
@@ -209,8 +209,8 @@ export function NotificationBell() {
     void noti.refetch()
   }
   return (
-    <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen((v) => { if (!v) window.dispatchEvent(new CustomEvent('ops:overlay', { detail: 'notifications' })); return !v })} title="通知与 AI 任务"
+    <div ref={ref} className={cn('relative', sidebar && 'desktop-sidebar-notifications')}>
+      {children ? children(unread) : <button type="button" onClick={() => setOpen((v) => { if (!v) window.dispatchEvent(new CustomEvent('ops:overlay', { detail: 'notifications' })); return !v })} title="通知与 AI 任务" aria-label="通知与 AI 任务" aria-expanded={open}
         className={cn('relative flex size-9 cursor-pointer items-center justify-center rounded-full border bg-white text-mist-600 transition hover:text-mist-900',
           open ? 'border-ink-300 shadow-card' : 'border-mist-200 hover:border-mist-300')}>
         {active > 0 ? <Loader2 className="size-4 animate-spin text-ink-600" /> : <Bell className="size-4" />}
@@ -219,7 +219,7 @@ export function NotificationBell() {
             {unread > 99 ? '99+' : unread}
           </span>
         )}
-      </button>
+      </button>}
       {open && (
         <Suspense fallback={null}>
           <NotificationPanel

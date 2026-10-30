@@ -1,4 +1,5 @@
-﻿import { test, expect, _electron, type Page } from '@playwright/test'
+import { openDesktopAccountSwitcher } from './support'
+import { test, expect, _electron, type Page } from '@playwright/test'
 import { readFile, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -110,7 +111,7 @@ test('TT53/55 真实Electron头条设置草稿保护、账号工作区缓存隔�
     await native.getByLabel('用户名', { exact: true }).fill(username)
     await native.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
     await native.getByRole('button', { name: '登录', exact: true }).click()
-    await expect(native.getByRole('button', { name: '切换工作区与账号', exact: true })).toBeVisible()
+    await expect(native.locator('.desktop-statusbar-context')).toBeVisible()
     // 桌面形态不再回退到首个 active 账号（1c46e53），全新 profile 里必须先选一次账号。
     // 本用例验证的是设置草稿保护与工作区缓存隔离，因此直接把当前账号偏好写进这个 profile。
     await native.evaluate(async (accountId) => {
@@ -159,14 +160,14 @@ test('TT53/55 真实Electron头条设置草稿保护、账号工作区缓存隔�
     await expect(input).toHaveValue('头条输入法')
     await native.keyboard.press('Escape')
     await expect(palette).toHaveCount(0)
-    const trigger = native.getByRole('button', { name: '切换工作区与账号', exact: true })
-    await trigger.click()
+    const trigger = native.locator('.desktop-statusbar-context')
+    await openDesktopAccountSwitcher(native)
     const menu = native.getByTestId('desktop-context-menu')
     await menu.getByRole('button', { name: '第二个头条账号', exact: true }).click()
     await expect(native).toHaveURL(new RegExp(`/a/${second.id}/works$`))
     await expect(native.getByText(secondWork.title, { exact: true }).first()).toBeVisible()
     await expect(native.getByText(firstWork.title, { exact: true })).toHaveCount(0)
-    await trigger.click()
+    await openDesktopAccountSwitcher(native)
     await menu.getByRole('button', { name: '头条缓存隔离工作区', exact: true }).click()
     await expect(trigger).toContainText('头条缓存隔离工作区')
     await expect(native.getByText(secondWork.title, { exact: true })).toHaveCount(0)
@@ -174,7 +175,7 @@ test('TT53/55 真实Electron头条设置草稿保护、账号工作区缓存隔�
     // 空态卡片上（renderer-src/src/pages/settings/Accounts.tsx:474-482），不会自动弹「添加平台账号」。
     const emptySettings = native.getByTestId('desktop-settings-window')
     await expect(emptySettings.getByText('当前工作区还没有平台账号', { exact: true })).toBeVisible()
-    await expect(emptySettings.getByRole('button', { name: '打开顶部账号入口', exact: true })).toBeVisible()
+    await expect(emptySettings.getByRole('button', { name: '打开账号入口', exact: true })).toBeVisible()
     await screenshot(native, 'electron-ime-workspace-isolation')
   } finally {
     if (app) {

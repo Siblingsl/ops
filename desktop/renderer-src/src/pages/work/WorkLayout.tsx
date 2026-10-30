@@ -679,7 +679,7 @@ export default function WorkLayout() {
           </div>
         )}
       </header>
-      <div key={location.pathname} className={cn('min-h-0 flex-1 animate-fade-in', desktopPresentation && location.pathname.endsWith('/pack') && 'desktop-work-pack-outlet')}>
+      <div key={location.pathname} className={cn('min-h-0 flex-1 animate-fade-in', desktopPresentation && ['pack', 'preview'].some((tab) => location.pathname.endsWith('/' + tab)) && 'desktop-work-tab-outlet')}>
         <Outlet context={ctx} />
       </div>
       <Versions work={work} open={versions} onClose={() => setVersions(false)} onRestored={setWork} />

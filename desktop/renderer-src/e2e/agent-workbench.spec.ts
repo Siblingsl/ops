@@ -4,7 +4,7 @@ import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { api, registerAccount } from './support'
+import { api, registerAccount, toggleDesktopTheme } from './support'
 
 test('DEV-AW02 Electron 工作台布局、响应式、键盘与主题保持输入状态', async ({ page, baseURL }) => {
   expect(baseURL).toBe('http://127.0.0.1:5287')
@@ -53,11 +53,11 @@ test('DEV-AW02 Electron 工作台布局、响应式、键盘与主题保持输�
   await expect(panel).toBeVisible()
 
   const composerHandle = await composer.elementHandle()
-  await page.getByRole('button', { name: '切换到深色主题', exact: true }).click()
+  await toggleDesktopTheme(page, '深色')
   await expect.poll(() => workspace.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe('rgb(255, 255, 255)')
   expect(await composerHandle?.evaluate((element) => element === document.querySelector('[aria-label="发送消息"]'))).toBeTruthy()
   await expect(composer).toHaveValue(example)
-  await page.getByRole('button', { name: '切换到浅色主题', exact: true }).click()
+  await toggleDesktopTheme(page, '浅色')
   await expect(composer).toHaveValue(example)
   mkdirSync(resolve(process.cwd(), '../../.playwright-results'), { recursive: true })
   await page.screenshot({ path: resolve(process.cwd(), '../../.playwright-results/agent-workbench-aw02.png') })
@@ -105,16 +105,18 @@ test('DEV-AW04 Electron 工作台可搜索并预览真实上下文', async ({ pa
   })
   const materialText = `AW04-桌面上下文-${Date.now()}：桌面工作台预览真实资料。`
   await api(page, 'POST', '/materials', { account_id: account.id, kind: 'experience', content: materialText, source: 'AW04 桌面验收' })
-  await page.goto('/agent')
+  await page.goto(`/a/${account.id}`)
+  await page.getByRole('button', { name: /用户菜单/ }).click()
+  await page.getByRole('menuitem', { name: '切换工作区与账号' }).click()
+  await page.getByTestId('desktop-context-menu').getByRole('tab', { name: /小红书/ }).click()
+  await page.getByTestId('desktop-context-menu').getByRole('button', { name: '浏览器验收号', exact: true }).click()
+  await page.getByRole('link', { name: 'AI 对话', exact: true }).click()
   const privacy = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
   await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
 
   const workbench = page.locator('.desktop-agent-workbench')
   await expect(workbench).toBeVisible()
-  await page.getByRole('button', { name: '选择操作账号' }).click()
-  const settings = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '对话设置', exact: true }) })
-  await settings.getByRole('combobox', { name: '选择账号' }).selectOption(account.id)
-  await settings.getByRole('button', { name: '关闭' }).click()
+  await expect(page.getByRole('button', { name: '选择操作账号' })).toHaveCount(0)
   await page.getByRole('button', { name: '引用资料（@）' }).click()
   const contextDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '引用工作区资料', exact: true }) })
   await contextDialog.getByRole('textbox', { name: '搜索资料' }).fill(materialText)
@@ -242,11 +244,11 @@ test('DEV-AW02 真实 Electron 浅深主题与桌面窗口宽度', async ({ base
       if (width === 1440) await page.screenshot({ path: resolve(screenshotDir, 'agent-workbench-aw02-electron-light.png') })
     }
     const composerHandle = await composer.elementHandle()
-    await page.getByRole('button', { name: '切换到深色主题', exact: true }).click()
+    await toggleDesktopTheme(page, '深色')
     await expect.poll(() => workspace.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe('rgb(255, 255, 255)')
     expect(await composerHandle?.evaluate((element) => element === document.querySelector('[aria-label="发送消息"]'))).toBeTruthy()
     await page.screenshot({ path: resolve(screenshotDir, 'agent-workbench-aw02-electron-dark.png') })
-    await page.getByRole('button', { name: '切换到浅色主题', exact: true }).click()
+    await toggleDesktopTheme(page, '浅色')
   } finally {
     // 跳过或断言失败时也要能收尾：app.close() 在本机会话里可能一直等不到窗口销毁，
     // 把一次 skip 拖成 120s 用例超时 + 90s teardown 超时。

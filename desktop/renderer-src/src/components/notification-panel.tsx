@@ -60,7 +60,7 @@ export default function NotificationPanel({
   onDisableNative: () => void
 }) {
   return (
-    <div className="absolute right-0 top-[calc(100%+8px)] z-40 w-[360px] max-w-[92vw] animate-fade-in rounded-xl border border-mist-200 bg-white shadow-pop">
+    <div className="notification-panel absolute right-0 top-[calc(100%+8px)] z-40 w-[360px] max-w-[92vw] animate-fade-in rounded-xl border border-mist-200 bg-white shadow-pop">
       <div className="flex items-center justify-between border-b border-mist-100 px-3 py-2">
         <Tabs value={tab} onChange={onTabChange} items={[{ value: 'noti', label: '通知', count: unread || undefined }, { value: 'jobs', label: 'AI 任务', count: active || undefined }]} />
         {tab === 'noti' && unread > 0 && (

@@ -1,3 +1,4 @@
+import { openDesktopAccountSwitcher } from './support'
 import { _electron, expect, test } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -38,8 +39,8 @@ test('真实 Electron 三平台键盘循环、上下文隔离与头条窄视口�
     }, me.csrf_token)
     const accountURL = `${baseURL}/a/${account.id}`
     await page.goto(accountURL)
-    const trigger = page.getByRole('button', { name: '切换工作区与账号', exact: true })
-    await trigger.click()
+    const trigger = page.locator('.desktop-statusbar-context')
+    await openDesktopAccountSwitcher(page)
     const menu = page.getByTestId('desktop-context-menu')
     const tabs = menu.getByRole('tablist', { name: '账号平台' })
     await expect(tabs.getByRole('tab')).toHaveCount(3)
@@ -48,7 +49,7 @@ test('真实 Electron 三平台键盘循环、上下文隔离与头条窄视口�
       await expect(tab).toHaveAttribute('aria-selected', 'true')
       await expect(tab).toBeFocused()
       await expect(page).toHaveURL(accountURL)
-      await expect(trigger).toContainText('今日头条 · 真实头条窗口验收号')
+      await expect(trigger).toContainText('真实头条窗口验收号')
       return tab
     }
     const toutiao = tabs.locator('#topbar-platform-toutiao')
@@ -88,7 +89,7 @@ test('真实 Electron 三平台键盘循环、上下文隔离与头条窄视口�
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
     await page.keyboard.press('Escape')
     await expect(menu).toHaveCount(0)
-    await expect(trigger).toBeFocused()
+    await expect(page.getByRole('button', { name: /用户菜单/ })).toBeFocused()
   } finally {
     if (app) {
       try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }) } catch { /* 只结束本测试创建的 Electron。 */ }
