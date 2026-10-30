@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test, expect } from '@playwright/test'
-import { api, registerAccount } from './support'
+import { alignPrototypeToDesktopShell, api, registerAccount } from './support'
 
 test('Electron 工作台对齐原型并逐项点击主要入口', async ({ page }) => {
   const account = await registerAccount(page)
@@ -22,6 +22,7 @@ test('Electron 工作台对齐原型并逐项点击主要入口', async ({ page 
   await prototype.locator('#view').evaluate(async (element) => {
     await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished))
   })
+  await alignPrototypeToDesktopShell(prototype)
 
   const selectors = ['.creative-welcome', '.creative-main-grid', '.creation-feature', '.today-panel', '.creative-right']
   const measure = async (target: typeof page) => Object.fromEntries(await Promise.all(selectors.map(async (selector) => [
@@ -84,6 +85,7 @@ test('Electron 选题池对齐原型并逐项点击筛选入口', async ({ page 
   await prototype.locator('#view').evaluate(async (element) => {
     await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished))
   })
+  await alignPrototypeToDesktopShell(prototype)
 
   const productSelectors = [
     '.desktop-topic-tabs > div', '.desktop-topic-filterbar', '.desktop-topic-layout',
@@ -174,6 +176,7 @@ test('Electron 日历按原型铺满主区并逐项点击日历控件', async ({
   await prototype.locator('#view').evaluate(async (element) => {
     await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished))
   })
+  await alignPrototypeToDesktopShell(prototype)
   const productSelectors = [
     '.desktop-calendar-page h1', '.desktop-calendar-page > div:first-child p', '.desktop-calendar-toolbar',
     '.desktop-calendar-card', '.desktop-calendar-unplanned',

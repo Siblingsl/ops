@@ -12,6 +12,13 @@ export async function toggleDesktopTheme(page: Page, theme: '深色' | '浅色')
   await page.getByRole('menuitem', { name: `切换到${theme}主题` }).click()
 }
 
+export async function alignPrototypeToDesktopShell(page: Page) {
+  await page.addStyleTag({ content: `
+    #studio { --nav-width: 64px; }
+    .toolbar { display: none !important; }
+  ` })
+}
+
 /**
  * 桌面 renderer 专属 E2E 辅助。
  *

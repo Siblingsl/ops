@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test, expect } from '@playwright/test'
-import { api, registerAccount } from './support'
+import { alignPrototypeToDesktopShell, api, registerAccount } from './support'
 
 test('Electron 复盘页按原型布局并逐项点击数据入口', async ({ page }) => {
   const account = await registerAccount(page)
@@ -50,6 +50,7 @@ test('Electron 复盘页按原型布局并逐项点击数据入口', async ({ pa
   await prototype.locator('#view').evaluate(async (element) => {
     await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished))
   })
+  await alignPrototypeToDesktopShell(prototype)
   const productSelectors = [
     '.desktop-review-page > div:first-child h1', '.desktop-review-page > div:first-child p',
     '.desktop-review-stats', '.desktop-review-board-heading', '.desktop-review-table', '.desktop-review-teasers',

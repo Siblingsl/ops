@@ -13,6 +13,7 @@ async function electronPresentation(page: Page) {
     Object.defineProperty(window, 'opsDesktopUI', { configurable: true, value: {
       onOpenSettings(listener: () => void) { openListeners.add(listener); return () => openListeners.delete(listener) },
       onLocalSettingsState(listener: (state: { dirty: boolean; busy: boolean }) => void) { stateListeners.add(listener); return () => stateListeners.delete(listener) },
+      onClientHealth() { return () => {} },
     } })
     Object.defineProperty(window, '__emitNativeOpenSettings', { value: () => openListeners.forEach((listener) => listener()) })
     Object.defineProperty(window, '__emitNativeSettingsState', { value: (state: { dirty: boolean; busy: boolean }) => stateListeners.forEach((listener) => listener(state)) })

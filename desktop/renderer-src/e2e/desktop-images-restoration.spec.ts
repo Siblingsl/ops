@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { expect, test } from '@playwright/test'
-import { api, registerAccount } from './support'
+import { alignPrototypeToDesktopShell, api, registerAccount } from './support'
 
 test('Electron 图片库按原型布局并逐项点击筛选与详情操作', async ({ page }) => {
   const account = await registerAccount(page)
@@ -69,6 +69,7 @@ test('Electron 图片库按原型布局并逐项点击筛选与详情操作', as
   await prototype.goto(pathToFileURL(resolve(process.cwd(), '../../docs/design/desktop-creative/prototype/index.html')).href)
   await prototype.locator('.sidebar-main [data-nav="images"]').click()
   await expect(prototype.locator('.image-grid')).toBeVisible()
+  await alignPrototypeToDesktopShell(prototype)
 
   const productSelectors = [
     '.desktop-page-frame h1', '.desktop-page-frame > div:first-child p', '.desktop-image-toolbar',

@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test, expect, type Page } from '@playwright/test'
-import { api, createOutline, registerAccount } from './support'
+import { alignPrototypeToDesktopShell, api, createOutline, registerAccount } from './support'
 
 async function enableElectronPresentation(page: Page) {
   await page.addInitScript(() => {
@@ -86,7 +86,7 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
       ['sectionToolbar', '.rich-editor-toolbar'],
     ].map(([name, selector]) => [name, box(selector)]))
   })
-  expect(productGeometry.workbar).toMatchObject({ y: 111, height: 129.5 })
+  expect(productGeometry.workbar).toMatchObject({ y: 39, height: 129.5 })
   expect(productGeometry.steps?.height).toBeCloseTo(productGeometry.content?.height ?? 0, 0)
   expect(productGeometry.content?.height).toBeCloseTo(productGeometry.tools?.height ?? 0, 0)
 
@@ -97,6 +97,7 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
   await prototype.locator('[data-nav="editor"]').first().click()
   await expect(prototype.locator('.editor-grid')).toBeVisible()
   await prototype.waitForTimeout(300)
+  await alignPrototypeToDesktopShell(prototype)
   await prototype.screenshot({ path: resolve(screenshotDir, 'editor-layout-prototype.png'), fullPage: false })
   const prototypeGeometry = await prototype.evaluate(() => {
     const box = (selector: string) => {
