@@ -10,6 +10,7 @@ import { Badge, Button, cn, Field, Input, MoreMenu, Notice, PageLoading, platfor
 import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
 import { apiBase } from '@/lib/api-base'
 import { fmtTime } from '@/lib/format'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { currentWorkQueryKey, rememberAccount, useCanWrite, useMe } from '@/lib/session'
 import { DESKTOP_LEAVE_GUARD_REQUEST } from '@/lib/desktop-settings'
 import type { Platform, PlatformWorkMirror, StarItem, Work, WorkspaceMember, WorkStatus } from '@/lib/types'
@@ -562,7 +563,7 @@ export default function WorkLayout() {
                 onChange={(e) => setTitleDraft(e.target.value)}
                 onBlur={() => void saveTitle()}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void saveTitle() }
+                  if (isEnterWithoutComposition(e.nativeEvent)) { e.preventDefault(); void saveTitle() }
                   if (e.key === 'Escape') { setRenaming(false); setTitleDraft(work.title) }
                 }}
                 className="w-full rounded border border-ink-300 px-1.5 py-0.5 text-[14.5px] font-semibold text-mist-900 outline-none" />

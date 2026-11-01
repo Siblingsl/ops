@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
 import { Button, cn, Field, Input, Select } from '@/components/ui'
 import { api, errorMessage, get } from '@/lib/api'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { currentWorkQueryKey, useCurrentAccount, useMe } from '@/lib/session'
 import type { ContentFormat, CreationTemplate, Topic, Work } from '@/lib/types'
 import { platformFormatLabel } from '@/components/ui'
@@ -119,7 +120,7 @@ export function CreateWorkPanel() {
       <div className="space-y-4">
         <Field label="作品标题" hint="最多64字；可留空，作品会先显示为「未命名作品」，也可以到第 4 步再定。">
           <Input autoFocus value={title} maxLength={64} placeholder="未命名作品" onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) void create() }} />
+            onKeyDown={(e) => { if (isEnterWithoutComposition(e.nativeEvent)) void create() }} />
         </Field>
 
         {toutiao && (

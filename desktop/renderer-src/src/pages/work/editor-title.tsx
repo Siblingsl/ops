@@ -7,6 +7,7 @@ import { Badge, Button, Card, cn, Field, Input, Notice, Textarea } from '@/compo
 import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, get, patch, post, put } from '@/lib/api'
 import { type AIRefs, parseTopics, runeLen } from '@/lib/format'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import type { Profile, Work } from '@/lib/types'
 import { useWorkCmd } from '@/lib/v3'
 import { scoreTitleRules, type TitleRuleResult } from './editor-title-diagnosis'
@@ -362,7 +363,7 @@ export function TitleCard({ work, setWork, readOnly, desktopPresentation = false
           <div className="flex gap-2">
             <Input value={title} disabled={readOnly} onChange={(e) => { setTitle(e.target.value); setDiagnosisUndo(null) }} invalid={wx && runeLen(title) > 32}
               placeholder={internalName ? '未命名微头条 · 仅系统内使用' : '未命名作品 · 标题可以最后再定'}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); e.currentTarget.blur() } }}
+              onKeyDown={(e) => { if (isEnterWithoutComposition(e.nativeEvent)) { e.preventDefault(); e.currentTarget.blur() } }}
               onBlur={() => {
                 window.clearTimeout(titleBlurTimer.current)
                 titleBlurTimer.current = window.setTimeout(() => {

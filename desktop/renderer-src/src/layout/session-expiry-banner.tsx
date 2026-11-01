@@ -5,6 +5,7 @@ import { Button, Input, cn } from '@/components/ui'
 import { Dialog } from '@/components/dialog'
 import { post, errorMessage } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
+import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { flushWork } from '@/pages/work/work-save'
 
 /**
@@ -82,7 +83,7 @@ export function SessionExpiryBanner({
             <Button variant="primary" loading={busy} onClick={() => void renew()} disabled={!password}>续期 7 天</Button>
           </>}>
           <p className="mb-3 text-[13px] leading-relaxed text-mist-500">输入登录密码后，会话有效期将从现在起延长 7 天。此操作也会确认你本人身份。</p>
-          <Input type="password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !busy && password) void renew() }} placeholder="登录密码" invalid={!!error} />
+          <Input type="password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => { if (isEnterWithoutComposition(e.nativeEvent) && !busy && password) void renew() }} placeholder="登录密码" invalid={!!error} />
           {error && <p role="alert" className="mt-2 text-xs text-danger">{error}</p>}
         </Dialog>
       )}

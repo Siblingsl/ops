@@ -230,6 +230,10 @@ test('D-126 保留编辑器挂载、输入与返回路径，子弹窗 Escape 只
   const editable = editor.locator('#step-title input').first()
   await editable.fill('设置窗保留的作品标题')
   const content = page.getByTestId('desktop-editor-content')
+  // 标题非空后会异步渲染「本地规则预览」（D-157 标题诊断，docs/90 已登记）。
+  // 它插入在标题下方，浏览器 scroll anchoring 会把 scrollTop 顶高同等高度，
+  // 因此必须等这块渲染完成再记录滚动位置，否则记录到的是插入前的值。
+  await expect(page.getByTestId('title-rule-preview')).toBeVisible()
   await content.evaluate((element) => { element.scrollTop = 200 })
   const scroll = await content.evaluate((element) => element.scrollTop)
   expect(scroll).toBeGreaterThan(0)
