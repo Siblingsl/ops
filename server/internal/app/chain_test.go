@@ -45,11 +45,15 @@ func TestMainChain(t *testing.T) {
 	id := wk.ID.String()
 	env.mustJSON(t, "PATCH", "/api/v1/works/"+id, map[string]any{"viewpoint": "加班时长不能证明努力，产出才能", "material_ids": []any{mat["id"]}}, nil)
 	var outline struct {
-		Items []OutlineItem `json:"items"`
+		Items   []OutlineItem  `json:"items"`
+		CXBasis cxBasisReceipt `json:"cx_basis"`
 	}
 	env.mustJSON(t, "POST", "/api/v1/works/"+id+"/outline/generate", nil, &outline)
 	if len(outline.Items) < 3 {
 		t.Fatalf("outline items: %d", len(outline.Items))
+	}
+	if outline.CXBasis.SchemaVersion != 1 || outline.CXBasis.ProfileHash == "" || outline.CXBasis.InputHash == "" || !cxBasisHasSource(outline.CXBasis, "material") {
+		t.Fatalf("outline should return traceable profile/material basis: %+v", outline.CXBasis)
 	}
 	env.mustJSON(t, "PUT", "/api/v1/works/"+id+"/outline", map[string]any{"items": outline.Items, "confirm": true}, &wk)
 	if wk.OutlineConfirmedAt == nil || len(wk.Sections) != len(outline.Items) {
@@ -65,6 +69,19 @@ func TestMainChain(t *testing.T) {
 		}
 		if ev := lastEvent(t, evs); ev.Name != "done" || deltas < 2 {
 			t.Fatalf("draft stream: %s deltas=%d", ev.Name, deltas)
+		} else {
+			var result struct {
+				CXBasis cxBasisReceipt `json:"cx_basis"`
+				Refs    struct {
+					CXBasis cxBasisReceipt `json:"cx_basis"`
+				} `json:"refs"`
+			}
+			if err := json.Unmarshal(ev.Data, &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.CXBasis.InputHash == "" || result.Refs.CXBasis.InputHash != result.CXBasis.InputHash || !cxBasisHasSource(result.CXBasis, "work_section") {
+				t.Fatalf("section draft should return current work-section basis: %+v", result)
+			}
 		}
 	}
 	// 删掉未起草的段落，手动编辑一段
@@ -87,13 +104,17 @@ func TestMainChain(t *testing.T) {
 		t.Fatalf("edit: %s %s", ev.Name, ev.Data)
 	}
 	var titles struct {
-		Titles []struct {
+		CXBasis cxBasisReceipt `json:"cx_basis"`
+		Titles  []struct {
 			Text string `json:"text"`
 		} `json:"titles"`
 	}
 	env.mustJSON(t, "POST", "/api/v1/works/"+id+"/titles", nil, &titles)
 	if len(titles.Titles) < 5 {
 		t.Fatalf("titles: %v", titles.Titles)
+	}
+	if titles.CXBasis.InputHash == "" || !cxBasisHasSource(titles.CXBasis, "work_section") {
+		t.Fatalf("title generation should include work-section basis: %+v", titles.CXBasis)
 	}
 	var sum struct {
 		Summary string `json:"summary"`

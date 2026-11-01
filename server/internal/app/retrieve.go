@@ -309,6 +309,8 @@ func (s *Server) rankMaterials(ctx context.Context, ids []uuid.UUID, query strin
 type historyHit struct {
 	ID, Title, Heading, Excerpt string
 	WorkID                      uuid.UUID
+	Revision                    int64
+	UpdatedAt                   time.Time
 	Score                       float64
 	Matched                     []string
 }
@@ -319,7 +321,7 @@ func (s *Server) retrieveHistory(ctx context.Context, a *Account, query string, 
 	if excludeWork != nil {
 		ex = *excludeWork
 	}
-	rows, err := s.db.Query(ctx, `SELECT s.id, w.id, w.title, s.heading, s.content_md FROM work_section s JOIN work w ON w.id=s.work_id
+	rows, err := s.db.Query(ctx, `SELECT s.id, w.id, w.title, s.heading, s.content_md, s.revision, s.updated_at FROM work_section s JOIN work w ON w.id=s.work_id
 		WHERE w.account_id=$1 AND w.id<>$2 AND w.deleted_at IS NULL AND s.deleted_at IS NULL AND length(s.content_md) > 20
 		ORDER BY w.updated_at DESC LIMIT 600`, a.ID, ex)
 	if err != nil {
@@ -335,7 +337,7 @@ func (s *Server) retrieveHistory(ctx context.Context, a *Account, query string, 
 	for rows.Next() {
 		c := &cand{}
 		var id uuid.UUID
-		if err := rows.Scan(&id, &c.h.WorkID, &c.h.Title, &c.h.Heading, &c.c); err != nil {
+		if err := rows.Scan(&id, &c.h.WorkID, &c.h.Title, &c.h.Heading, &c.c, &c.h.Revision, &c.h.UpdatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}

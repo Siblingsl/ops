@@ -477,3 +477,69 @@ func TestMaxTokensTruncation(t *testing.T) {
 		t.Fatalf("非流式截断时 finish_reason 应为 length：%q", nonStream.Finish)
 	}
 }
+
+func TestAccountAnalysisMockMatchesStructuredContract(t *testing.T) {
+	response := chat(t, (&LLM{}).Handler(), map[string]any{
+		"model": "mock-writer", "stream": false,
+		"messages": []any{userMsg("任务：cx_account_analyze\n请按任务契约输出 JSON")},
+	})
+	var output struct {
+		Overview string   `json:"overview"`
+		Pillars  []string `json:"pillars"`
+		Findings []any    `json:"findings"`
+		Actions  []struct {
+			Proposal   string   `json:"proposal"`
+			Refs       []string `json:"source_refs"`
+			Hypothesis bool     `json:"hypothesis"`
+		} `json:"actions"`
+		Unknowns []any `json:"unknowns"`
+	}
+	if err := json.Unmarshal([]byte(response.Content), &output); err != nil {
+		t.Fatalf("账号分析 mock 应返回 JSON：%q: %v", response.Content, err)
+	}
+	if output.Overview == "" || len(output.Pillars) == 0 || output.Findings == nil || len(output.Actions) != 1 || output.Actions[0].Proposal == "" || output.Actions[0].Refs == nil || !output.Actions[0].Hypothesis || output.Unknowns == nil {
+		t.Fatalf("mock 账号分析不符合结构化契约：%+v", output)
+	}
+}
+
+func TestTitleDiagnosisMockMatchesStructuredContract(t *testing.T) {
+	response := chat(t, (&LLM{}).Handler(), map[string]any{
+		"model": "mock-writer", "stream": false,
+		"messages": []any{userMsg("任务：cx_title_diagnose\n请按任务契约输出 JSON")},
+	})
+	var output struct {
+		Dimensions []struct {
+			Key      string `json:"key"`
+			Score    int    `json:"score"`
+			Evidence string `json:"evidence"`
+		} `json:"dimensions"`
+		Findings   []any    `json:"findings"`
+		Candidates []string `json:"candidates"`
+	}
+	if err := json.Unmarshal([]byte(response.Content), &output); err != nil {
+		t.Fatalf("标题诊断 mock 应返回 JSON：%q: %v", response.Content, err)
+	}
+	if len(output.Dimensions) != 4 || output.Dimensions[0].Key != "promise" || output.Findings == nil || len(output.Candidates) != 1 {
+		t.Fatalf("标题诊断 mock 不符合结构化契约：%+v", output)
+	}
+}
+
+func TestProfileSimulationMockMatchesStructuredContract(t *testing.T) {
+	response := chat(t, (&LLM{}).Handler(), map[string]any{
+		"model": "mock-writer", "stream": true,
+		"messages": []any{userMsg("任务：cx_profile_simulate\n请按任务契约输出 JSON")},
+	})
+	var output struct {
+		Status     string   `json:"status"`
+		Reaction   string   `json:"reaction"`
+		Understood string   `json:"understood"`
+		Value      string   `json:"value"`
+		Unclear    []string `json:"unclear"`
+	}
+	if err := json.Unmarshal([]byte(response.Content), &output); err != nil {
+		t.Fatalf("主页模拟 mock 应返回 JSON：%q: %v", response.Content, err)
+	}
+	if output.Status != "pass" || output.Reaction == "" || output.Understood == "" || output.Value == "" || output.Unclear == nil {
+		t.Fatalf("主页模拟 mock 不符合结构化契约：%+v", output)
+	}
+}

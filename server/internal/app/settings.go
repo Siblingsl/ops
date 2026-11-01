@@ -517,6 +517,11 @@ func (s *Server) purgeTrash(w http.ResponseWriter, r *http.Request) error {
 
 // purge removes a soft-deleted row and, for works, its image files.
 func (s *Server) purge(ctx context.Context, typ string, id uuid.UUID) error {
+	if typ == "work" {
+		if err := s.purgeCXBuildsForWork(ctx, id); err != nil {
+			return err
+		}
+	}
 	var dir string
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		switch typ {

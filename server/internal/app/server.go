@@ -43,6 +43,7 @@ type Server struct {
 	jobMu      sync.Mutex
 	jobCancels map[uuid.UUID]context.CancelFunc
 	jobSems    map[uuid.UUID]chan struct{}
+	cxAnalyses map[string]struct{}
 	desktop    *desktopRuntime
 
 	// 智能体运行的取消句柄（16 文档第 6.7 节第 4 项）。
@@ -99,6 +100,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 		providerCircuits:           map[uuid.UUID]*providerCircuit{},
 		jobCancels:                 map[uuid.UUID]context.CancelFunc{},
 		jobSems:                    map[uuid.UUID]chan struct{}{},
+		cxAnalyses:                 map[string]struct{}{},
 		desktop:                    newDesktopRuntime(),
 		agentRunCancels:            map[uuid.UUID]context.CancelFunc{},
 		notifySubs:                 map[uuid.UUID][]chan struct{}{},
@@ -261,6 +263,8 @@ func (s *Server) buildRouter() http.Handler {
 
 			r.Get("/accounts/{accountId}/profile", s.h(s.getProfile))
 			r.Put("/accounts/{accountId}/profile", s.h(s.putProfile))
+			r.Get("/accounts/{accountId}/profile-check", s.h(s.getAccountProfileCheck))
+			r.Post("/accounts/{accountId}/profile-check", s.h(s.saveAccountProfileCheck))
 			r.Get("/accounts/{accountId}/style-samples", s.h(s.listStyleSamples))
 			r.Post("/accounts/{accountId}/style-samples", s.h(s.createStyleSample))
 			r.Patch("/style-samples/{id}", s.h(s.updateStyleSample))
@@ -294,6 +298,8 @@ func (s *Server) buildRouter() http.Handler {
 			r.Post("/accounts/{accountId}/topics", s.h(s.createTopic))
 			r.Post("/accounts/{accountId}/topics/suggest", s.h(s.suggestTopics))
 			r.Post("/accounts/{accountId}/topics/hot-suggest", s.h(s.suggestHotTopics))
+			r.Post("/topics/{id}/diagnose", s.h(s.diagnoseTopic))
+			r.Get("/topics/{id}/diagnoses", s.h(s.listTopicDiagnoses))
 			r.Patch("/topics/{id}", s.h(s.updateTopic))
 			r.Delete("/topics/{id}", s.h(s.deleteTopic))
 			r.Post("/topics/{id}/works", s.h(s.startWorkFromTopic))
@@ -303,6 +309,17 @@ func (s *Server) buildRouter() http.Handler {
 			r.Post("/accounts/{accountId}/works", s.h(s.createWork))
 			r.Post("/accounts/{accountId}/works/import", s.h(s.importPastedWork))
 			r.Get("/works/{id}", s.h(s.getWork))
+			r.Post("/works/{id}/render-check", s.h(s.renderCheck))
+			r.Post("/works/{id}/builds", s.h(s.createCXBuild))
+			r.Get("/works/{id}/builds", s.h(s.listCXBuilds))
+			r.Get("/builds/{id}", s.h(s.getCXBuild))
+			r.Post("/builds/{id}/artifacts", s.h(s.uploadCXBuildArtifact))
+			r.Get("/builds/{id}/artifacts/{artifactID}", s.h(s.downloadCXBuildArtifact))
+			r.Get("/builds/{id}/manifest.json", s.h(s.downloadCXBuildManifest))
+			r.Get("/builds/{id}/evidence.csv", s.h(s.downloadCXBuildEvidenceCSV))
+			r.Post("/builds/{id}/privacy-ack", s.h(s.ackCXBuildPrivacy))
+			r.Post("/builds/{id}/complete", s.h(s.completeCXBuild))
+			r.Post("/builds/{id}/cancel", s.h(s.cancelCXBuild))
 			r.Post("/works/{id}/preview-link", s.h(s.createPreviewLink))
 			r.Patch("/works/{id}", s.h(s.updateWork))
 			r.Put("/works/{id}/post-push-todos", s.h(s.setPostPushTodos))
@@ -362,6 +379,8 @@ func (s *Server) buildRouter() http.Handler {
 			r.Get("/works/{id}/toutiao/pack", s.h(s.toutiaoPackGet))
 			r.Get("/works/{id}/toutiao/pack.zip", s.h(s.toutiaoPackZip))
 			r.Post("/works/{id}/published", s.h(s.markPublished))
+			r.Get("/works/{id}/publish-state", s.h(s.getPublishState))
+			r.Post("/works/{id}/publish-state/transition", s.h(s.transitionPublishState))
 			// 平台作品绑定逐篇确认（20 文档 §7.2）：没有批量接口，每次只处理一篇。
 			r.Put("/works/{id}/platform-binding", s.h(s.putPlatformBinding))
 			r.Delete("/works/{id}/platform-binding", s.h(s.deletePlatformBinding))
@@ -384,11 +403,19 @@ func (s *Server) buildRouter() http.Handler {
 			r.Get("/accounts/{accountId}/platform-works/{platformWorkId}", s.h(s.getPlatformWorkMirror))
 			r.Post("/accounts/{accountId}/platform-works/{platformWorkId}/draft", s.h(s.createDraftFromPlatformMirror))
 			r.Get("/works/{id}/metrics", s.h(s.listMetrics))
+			r.Get("/works/{id}/metrics/windows", s.h(s.getCXReviewMetricWindows))
 			r.Post("/works/{id}/metrics", s.h(s.createMetric))
 			r.Patch("/metrics/{id}", s.h(s.updateMetric))
 			r.Delete("/metrics/{id}", s.h(s.deleteMetric))
 			r.Post("/accounts/{accountId}/reviews", s.h(s.createReview))
 			r.Get("/accounts/{accountId}/reviews", s.h(s.listReviews))
+			r.Patch("/review-reports/{id}/content", s.h(s.editCXReviewReport))
+			r.Get("/accounts/{accountId}/metrics/compare", s.h(s.listCXReviewMetricCompare))
+			r.Get("/accounts/{accountId}/experiments", s.h(s.listCXReviewExperiments))
+			r.Post("/accounts/{accountId}/experiments", s.h(s.createCXReviewExperiment))
+			r.Get("/experiments/{id}", s.h(s.getCXReviewExperiment))
+			r.Post("/experiments/{id}/conclude", s.h(s.concludeCXReviewExperiment))
+			r.Post("/experiments/{id}/abandon", s.h(s.abandonCXReviewExperiment))
 			r.Post("/review-reports/{id}/suggestions/{index}/adopt", s.h(s.adoptSuggestion))
 			r.Get("/accounts/{accountId}/dashboard", s.h(s.dashboard))
 
@@ -526,6 +553,45 @@ func (s *Server) v3Routes(r chi.Router) {
 	// 排版与图片
 	r.Get("/accounts/{accountId}/custom-theme", s.h(s.getCustomTheme))
 	r.Put("/accounts/{accountId}/custom-theme", s.h(s.putCustomTheme))
+	r.Get("/accounts/{accountId}/visual-dna", s.h(s.getCXVisualDNA))
+	r.Get("/accounts/{accountId}/visual-dna/versions", s.h(s.listCXVisualDNAVersions))
+	r.Get("/accounts/{accountId}/visual-dna/versions/{version}", s.h(s.getCXVisualDNAVersion))
+	r.Put("/accounts/{accountId}/visual-dna", s.h(s.putCXVisualDNA))
+	r.Post("/accounts/{accountId}/visual-dna/rollback", s.h(s.rollbackCXVisualDNA))
+	// DEV-CX12 / FR-CX-18 对标账号库与笔记拆解库
+	r.Get("/accounts/{accountId}/benchmarks", s.h(s.listBenchmarks))
+	r.Post("/accounts/{accountId}/benchmarks", s.h(s.createBenchmark))
+	r.Get("/benchmarks/{benchmarkId}", s.h(s.getBenchmark))
+	r.Patch("/benchmarks/{benchmarkId}", s.h(s.updateBenchmark))
+	r.Get("/benchmarks/{benchmarkId}/notes", s.h(s.listBenchmarkNotes))
+	r.Post("/benchmarks/{benchmarkId}/notes", s.h(s.createBenchmarkNote))
+	r.Get("/benchmark-notes/{noteId}", s.h(s.getBenchmarkNote))
+	// DEV-CX12 / FR-CX-14 结构拆解：临时参考正文只在本请求内存中处理，不落库。
+	r.Post("/accounts/{accountId}/structure-extract", s.h(s.extractStructure))
+	// DEV-CX12 / FR-CX-15 改写度检查：临时参考正文只在本请求内存中处理。
+	r.Post("/works/{id}/rewrite-check", s.h(s.rewriteCheck))
+	// DEV-CX13-E / FR-CX-22 评论处理台账。
+	// 9.8 原文的 /comments/{id} 与既有作品批注 PATCH /comments/{id}（collab.go）同形冲突；
+	// 按最小改动登记路径偏离：单条操作改用 /comment-inbox/{id}，列表/单条创建保留原文路径。
+	r.Get("/accounts/{accountId}/comments", s.h(s.listCommentInbox))
+	r.Post("/comments", s.h(s.createCommentInbox))
+	r.Get("/comment-inbox/{commentId}", s.h(s.getCommentInbox))
+	r.Patch("/comment-inbox/{commentId}", s.h(s.patchCommentInbox))
+	r.Delete("/comment-inbox/{commentId}", s.h(s.deleteCommentInbox))
+	r.Post("/comment-inbox/{commentId}/reply-suggest", s.h(s.draftCommentReply))
+	r.Post("/comment-inbox/{commentId}/copy-reply", s.h(s.copyCommentReply))
+	r.Post("/comment-inbox/{commentId}/confirm-sent", s.h(s.confirmSentComment))
+	r.Get("/comment-inbox/{commentId}/topic-preview", s.h(s.commentTopicPreview))
+	r.Post("/comment-inbox/{commentId}/convert-topic", s.h(s.convertCommentToTopic))
+	// DEV-CX13-F / FR-CX-23 运营标准：effective 字面路由先于 {version} 变量路由。
+	r.Get("/accounts/{accountId}/standards/effective", s.h(s.effectiveStandard))
+	r.Get("/accounts/{accountId}/standards", s.h(s.listStandards))
+	// DEV-CX12 / FR-CX-14：骨架引用选择列表（同账号未归档拆解笔记，只给受限摘要）。
+	r.Get("/accounts/{accountId}/skeleton-notes", s.h(s.listSkeletonNotes))
+	r.Post("/accounts/{accountId}/standards", s.h(s.createStandard))
+	r.Get("/accounts/{accountId}/standards/{version}", s.h(s.getStandard))
+	r.Post("/accounts/{accountId}/standards/{version}/archive", s.h(s.archiveStandard))
+	r.Patch("/benchmark-notes/{noteId}", s.h(s.updateBenchmarkNote))
 	r.Get("/assets/{id}/smart-crop", s.h(s.smartCrop))
 	r.Get("/assets", s.h(s.listLibrary))
 	r.Post("/works/{id}/assets/reuse", s.h(s.reuseAsset))
@@ -584,6 +650,17 @@ func (s *Server) v4Routes(r chi.Router) {
 	r.Post("/accounts/{accountId}/strategy", s.h(s.v4Object(s.activateStrategy)))
 	r.Post("/accounts/{accountId}/strategy/versions/{v}/restore", s.h(s.v4Object(s.restoreStrategy)))
 	r.Post("/accounts/{accountId}/strategy/revise", s.h(s.v4Object(s.reviseStrategy)))
+	r.Post("/accounts/{accountId}/account-analysis", s.h(s.createAccountAnalysis))
+	r.Get("/accounts/{accountId}/account-analysis/basis", s.h(s.previewAccountAnalysisBasis))
+	r.Get("/accounts/{accountId}/analyses", s.h(s.listAccountAnalyses))
+	r.Get("/diagnoses/{id}", s.h(s.getDiagnosis))
+	r.Get("/diagnoses", s.h(s.listTopicDiagnoses))
+	r.Patch("/diagnoses/{id}/account-analysis", s.h(s.patchAccountAnalysisDiagnosis))
+	r.Patch("/diagnoses/{id}/visual-plan", s.h(s.patchCXVisualPlanDiagnosis))
+	r.Post("/works/{id}/diagnose-title", s.h(s.diagnoseTitle))
+	r.Get("/works/{id}/diagnoses", s.h(s.listCXTitleDiagnoses))
+	r.Post("/works/{id}/cards/suggest", s.h(s.suggestCXVisualPlan))
+	r.Post("/works/{id}/cards/preview", s.h(s.previewCXCards))
 	r.Get("/accounts/{accountId}/plan", s.h(s.getPlan))
 	r.Post("/accounts/{accountId}/plan/suggest", s.h(s.v4Object(s.suggestPlan)))
 	r.Post("/plan-slots/{id}/adopt", s.h(s.v4Object(s.adoptSlot)))

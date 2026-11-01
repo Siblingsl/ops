@@ -39,7 +39,7 @@ func (s *Server) suggestHooks(w http.ResponseWriter, r *http.Request) error {
 	if in.Kind == "quote" && strings.TrimSpace(in.Selection) == "" {
 		return validation("请先选中要提炼的文字")
 	}
-	work, neighbors, err := s.sectionContext(ctx, m, sec)
+	work, neighbors, _, err := s.sectionContext(ctx, m, sec)
 	if err != nil {
 		return err
 	}

@@ -111,6 +111,9 @@ func (s *Server) upsertMetricWithAudit(ctx context.Context, tx pgx.Tx, in metric
 		return Metric{}, false, err
 	}
 	if exists && reflect.DeepEqual(metricAuditValues(before), metricAuditValues(after)) {
+		if err := invalidateRegisteredPublishMetric(ctx, tx, after.ID, publishActorID(ctx), false); err != nil {
+			return Metric{}, false, err
+		}
 		return after, merged, nil
 	}
 	action := "metric_create"
@@ -121,7 +124,13 @@ func (s *Server) upsertMetricWithAudit(ctx context.Context, tx pgx.Tx, in metric
 	if exists {
 		previous = &before
 	}
-	return after, merged, s.auditMetricMutation(ctx, tx, action, previous, &after, merged)
+	if err := s.auditMetricMutation(ctx, tx, action, previous, &after, merged); err != nil {
+		return Metric{}, false, err
+	}
+	if err := invalidateRegisteredPublishMetric(ctx, tx, after.ID, publishActorID(ctx), false); err != nil {
+		return Metric{}, false, err
+	}
+	return after, merged, nil
 }
 
 func metricAuditValues(m Metric) map[string]any {

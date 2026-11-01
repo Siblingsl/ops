@@ -16,6 +16,7 @@ import (
 type publishInput struct {
 	URL                 *string    `json:"url"`
 	PublishedAt         *time.Time `json:"published_at"`
+	EarlyPublicReason   string     `json:"early_public_reason"`
 	Mode                string     `json:"mode"`
 	BasePublishRevision *int       `json:"base_publish_revision"`
 	Reason              string     `json:"reason"`
@@ -149,6 +150,9 @@ func (s *Server) handlePublished(w http.ResponseWriter, r *http.Request, workID 
 		return validation("回填模式不正确")
 	}
 	if in.Mode == "correction" {
+		if strings.TrimSpace(in.EarlyPublicReason) != "" {
+			return validation("early_public_reason 仅适用于首次提前回填")
+		}
 		if r.URL.Query().Get("preview") == "true" {
 			return s.previewPublishCorrection(w, r, workID, in)
 		}
@@ -186,6 +190,9 @@ func (s *Server) markInitialOrLegacyReplay(w http.ResponseWriter, r *http.Reques
 			return err
 		}
 		if current.Status == "published" {
+			if strings.TrimSpace(in.EarlyPublicReason) != "" {
+				return validation("early_public_reason 仅适用于首次提前回填")
+			}
 			// Old clients may repeat the values they saw. Missing values are not interpreted as
 			// a request to clear a link or replace an unknown date with the current time.
 			nextURL, nextAt := current.URL, current.PublishedAt
@@ -207,6 +214,10 @@ func (s *Server) markInitialOrLegacyReplay(w http.ResponseWriter, r *http.Reques
 		if in.PublishedAt != nil {
 			at = *in.PublishedAt
 		}
+		earlyReason, err := s.validateEarlyPublicReason(r.Context(), tx, workID, at, in.EarlyPublicReason)
+		if err != nil {
+			return err
+		}
 		if err := s.setWorkPublished(r.Context(), tx, workID, urlText, &at); err != nil {
 			return err
 		}
@@ -223,6 +234,14 @@ func (s *Server) markInitialOrLegacyReplay(w http.ResponseWriter, r *http.Reques
 		}
 		var publishRevision int
 		if err := tx.QueryRow(r.Context(), `SELECT publish_revision FROM work WHERE id=$1`, workID).Scan(&publishRevision); err != nil {
+			return err
+		}
+		actor := ident(r.Context())
+		var actorID *uuid.UUID
+		if actor != nil {
+			actorID = &actor.UserID
+		}
+		if err := s.syncPublishStatePublic(r.Context(), tx, workID, publishRevision, earlyReason, actorID); err != nil {
 			return err
 		}
 		return s.auditTx(r.Context(), tx, "mark_published", "work", workID.String(), "ok", map[string]any{
@@ -319,6 +338,14 @@ func (s *Server) commitPublishCorrection(w http.ResponseWriter, r *http.Request,
 		}
 		var publishRevision int
 		if err := tx.QueryRow(r.Context(), `SELECT publish_revision FROM work WHERE id=$1`, workID).Scan(&publishRevision); err != nil {
+			return err
+		}
+		actor := ident(r.Context())
+		var actorID *uuid.UUID
+		if actor != nil {
+			actorID = &actor.UserID
+		}
+		if err := s.syncPublishStateCorrection(r.Context(), tx, workID, current.PublishRevision, publishRevision, reason, actorID); err != nil {
 			return err
 		}
 		return s.auditTx(r.Context(), tx, "publish_metadata_corrected", "work", workID.String(), "ok", map[string]any{

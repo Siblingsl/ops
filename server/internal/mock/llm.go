@@ -789,6 +789,9 @@ func (l *LLM) respond(prompt string) string {
 		}
 		return "## " + short(key, 20) + "\n\n" + strings.TrimSpace(b.String()) + "\n\n这里展开说说背后的原因和具体做法。"
 	case "review_analysis":
+		if strings.Contains(prompt, "cx-review-v2-1") {
+			return cxReviewV2(prompt)
+		}
 		return js(map[string]any{
 			"writing_insights": []string{"标题里写出具体数字的作品阅读更高", "开头先讲一个具体场景的作品读完率更好"},
 			"conclusions":      []string{"带有亲身经历的文章阅读完成度更高", "标题中给出明确对象（如「写给新手」）的作品分享更多", "发布时间集中在晚上 8 点后的作品互动更好"},
@@ -797,6 +800,52 @@ func (l *LLM) respond(prompt string) string {
 				{"title": "我做错过的三个决定", "angle": "真实经历复盘", "reason": "经历类完成度高"},
 				{"title": "被问最多的五个问题", "angle": "问答体", "reason": "评论区高频问题"},
 			},
+		})
+	case "cx_account_analyze":
+		return js(map[string]any{
+			"overview": "本次分析仅基于已提供的账号资料，结论仍需结合你的实际受众判断。",
+			"pillars":  []string{"围绕具体问题持续提供清晰解释"},
+			"findings": []map[string]any{},
+			"actions":  []map[string]any{{"priority": "medium", "proposal": "检查主页介绍是否清楚表达内容方向", "source_refs": []string{}, "hypothesis": true}},
+			"unknowns": []map[string]string{},
+		})
+	case "cx_title_diagnose":
+		return js(map[string]any{
+			"dimensions": []map[string]any{
+				{"key": "promise", "score": 12, "evidence": "标题提出清楚的结果"},
+				{"key": "audience", "score": 8, "evidence": "主题适合希望快速理解的读者"},
+				{"key": "uniqueness", "score": 8, "evidence": "表达直接"},
+				{"key": "risk", "score": 4, "evidence": "未见明显的额外承诺"},
+			},
+			"findings":   []map[string]any{},
+			"candidates": []string{"先说明核心，再展开步骤"},
+		})
+	case "cx_visual_plan":
+		return cxVisualPlan(prompt)
+	case "cx_topic_diagnose":
+		return js(map[string]any{
+			"dimensions": []map[string]any{
+				{"key": "specificity", "score": 20, "evidence": "题目提出明确的内容对象", "message": "可进一步说明具体场景"},
+				{"key": "curiosity", "score": 15, "evidence": "角度留下了一个可回答的问题", "message": "模拟读者可能想了解后续"},
+			},
+			"alternatives": []map[string]string{
+				{"key": "question", "angle": "从读者最常遇到的问题切入"},
+				{"key": "result", "angle": "先呈现读者可以得到的具体结果"},
+			},
+		})
+	case "cx_comment_reply":
+		return js(map[string]any{"category": "question", "reply": "感谢反馈，这篇里第 2 步可以再展开说明，我补一篇详细版。"})
+	case "cx_rewrite_compare":
+		return cxRewriteCompare(prompt)
+	case "cx_structure_extract":
+		return cxStructureExtract(prompt)
+	case "cx_profile_simulate":
+		return js(map[string]any{
+			"status":     "pass",
+			"reaction":   "模拟读者可能较快理解账号分享的主题；这只是文字输入形成的假设。",
+			"understood": "可能关注账号所写的主题",
+			"value":      "可能获得与简介和定位相符的经验说明",
+			"unclear":    []string{},
 		})
 	case "style_summary":
 		return "语气：亲切、克制，常用第一人称讲经历。\n句式：短句为主，段落短，常用设问引出观点。\n结构：先结论后展开，结尾给出可执行建议。"
@@ -1099,6 +1148,243 @@ func (l *LLM) respond(prompt string) string {
 	default:
 		return "好的。"
 	}
+}
+
+func cxReviewV2(prompt string) string {
+	inputAt := strings.LastIndex(prompt, "本次输入：")
+	input := prompt
+	if inputAt >= 0 {
+		input = prompt[inputAt:]
+	}
+	references := regexp.MustCompile(`"((?:work|metric|followers):[^"\s]+)"`).FindAllStringSubmatch(input, -1)
+	refs := []string{}
+	seen := map[string]bool{}
+	for _, match := range references {
+		if len(match) > 1 && !seen[match[1]] {
+			seen[match[1]] = true
+			refs = append(refs, match[1])
+		}
+	}
+	observations := []map[string]any{}
+	hypotheses := []map[string]any{}
+	experiments := []map[string]any{}
+	if len(refs) > 0 {
+		factRef := refs[0]
+		for _, ref := range refs {
+			if strings.HasPrefix(ref, "metric:") {
+				factRef = ref
+				break
+			}
+		}
+		observations = append(observations, map[string]any{"finding": "本次输入包含可核对的已保存来源记录。", "source_refs": []string{factRef}})
+		hypotheses = append(hypotheses, map[string]any{"explanation": "后续可检验具体表达与收藏表现是否同时变化。", "source_refs": []string{refs[0]}, "counterevidence": []string{"当前样本不足以区分其他原因。"}, "confounders": []string{"发布时间和受众构成可能不同。"}})
+		experiments = append(experiments, map[string]any{"hypothesis": "更具体的标题可能提高收藏率。", "variable": "title", "metric_key": "favorite_rate", "window": "T7", "selection_proposal": "后续按同形态、同单位连续记录，逐项比较。"})
+	}
+	return js(map[string]any{
+		"conclusions": []string{},
+		"topic_suggestions": []map[string]string{
+			{"title": "围绕读者常见问题做一次拆解", "angle": "用一个具体问题组织内容", "reason": "作为待验证的内容探索方向，不代表已观察到效果。"},
+			{"title": "把一个流程写成逐步说明", "angle": "展示关键步骤和边界", "reason": "作为待验证的内容探索方向，不代表已观察到效果。"},
+			{"title": "复盘一次选择过程", "angle": "呈现条件、取舍与结果", "reason": "作为待验证的内容探索方向，不代表已观察到效果。"},
+		},
+		"writing_insights": []string{},
+		"analysis_v2": map[string]any{"schema_version": 1, "observations": observations, "hypotheses": hypotheses,
+			"experiments": experiments, "limitations": []map[string]string{}},
+	})
+}
+
+// cxRewriteCompare fakes a three-dimension rewrite comparison: evidence is picked from the
+// work text (verbatim excerpts the server can verify), viewpoint is paraphrased.
+func cxRewriteCompare(prompt string) string {
+	const workStart = "【作品正文】\n"
+	const refStart = "\n【参考正文】\n"
+	workText, refText := "", ""
+	if at := strings.Index(prompt, workStart); at >= 0 {
+		rest := prompt[at+len(workStart):]
+		if end := strings.Index(rest, refStart); end >= 0 {
+			workText, refText = rest[:end], rest[end+len(refStart):]
+		}
+	}
+	// 作品侧证据逐字取作品文本中的一个短句（服务端会验证存在）。
+	excerpt := "作品侧证据"
+	for _, sep := range []string{"。", "\n"} {
+		parts := strings.Split(workText, sep)
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				runes := []rune(trimmed)
+				if len(runes) > 20 {
+					runes = runes[:20]
+				}
+				excerpt = string(runes)
+				break
+			}
+		}
+		if excerpt != "作品侧证据" {
+			break
+		}
+	}
+	// 用字符 3-gram 重合近似"是否同源"：mock 不装真模型，但同源参考下
+	// 证据/观点维返回 same，保证"完全相同→fail"链路可被端到端验证。
+	workRunes := []rune(workText)
+	refRunes := []rune(refText)
+	grams := func(text []rune) map[string]struct{} {
+		set := map[string]struct{}{}
+		for i := 0; i+3 <= len(text); i++ {
+			set[string(text[i:i+3])] = struct{}{}
+		}
+		return set
+	}
+	wg, rg := grams(workRunes), grams(refRunes)
+	overlap := 0
+	for gram := range wg {
+		if _, hit := rg[gram]; hit {
+			overlap++
+		}
+	}
+	ratio := 0.0
+	if len(wg) > 0 {
+		ratio = float64(overlap) / float64(len(wg))
+	}
+	evidenceState := "different"
+	viewpointState := "different"
+	if ratio > 0.30 {
+		evidenceState = "same"
+		viewpointState = "same"
+	}
+	dim := func(state, evidence string) map[string]any {
+		d := map[string]any{"state": state}
+		if evidence != "" {
+			d["evidence"] = evidence
+		}
+		return d
+	}
+	// 表达维由服务端确定性覆盖；证据/观点维按同源近似返回。
+	return js(map[string]any{
+		"expression": dim("different", excerpt),
+		"evidence":   dim(evidenceState, excerpt),
+		"viewpoint":  dim(viewpointState, excerpt),
+		"notes":      []string{"模拟结论：按文本重合近似判定"},
+	})
+}
+
+// cxStructureExtract fakes a structure teardown: roles and short gists derived from the
+// reference headings so the no-copy validator sees paraphrase-shaped output, not source sentences.
+// 正文首行含 #copy-echo 测试指令时直接抄原句，用于驱动服务端反复制 422 的界面旅程。
+func cxStructureExtract(prompt string) string {
+	const start = "参考正文：\n"
+	reference := ""
+	if at := strings.Index(prompt, start); at >= 0 {
+		reference = prompt[at+len(start):]
+	}
+	echoCopy := false
+	lines := []string{}
+	for i, line := range strings.Split(reference, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			if i == 0 && trimmed == "#copy-echo" {
+				echoCopy = true
+				continue
+			}
+			lines = append(lines, trimmed)
+		}
+	}
+	paraphrase := func(text string, n int) string {
+		// 每隔一个字取一个字做骨架式概括，确保不与原文形成 ≥12 码点连续相同片段，
+		// 且 4-gram 重合率远低于 0.20。
+		runes := []rune(text)
+		picked := make([]rune, 0, len(runes)/2+1)
+		for i := 0; i < len(runes); i += 2 {
+			picked = append(picked, runes[i])
+		}
+		if len(picked) > n-6 {
+			picked = picked[:n-6]
+		}
+		if len(picked) < 1 {
+			picked = []rune("该段给出方法步骤")
+		}
+		if echoCopy {
+			// 对抗夹具：gist 原样抄首段（截到 n-6 码点内），让验证闭包必然命中连续相同片段。
+			copyRunes := []rune(text)
+			if len(copyRunes) > n-6 {
+				copyRunes = copyRunes[:n-6]
+			}
+			return string(copyRunes)
+		}
+		return "结构要点：" + string(picked)
+	}
+	sections := []map[string]any{}
+	roles := []string{"problem", "method", "case", "checklist", "conclusion"}
+	for i, line := range lines {
+		if len(sections) >= 12 {
+			break
+		}
+		sections = append(sections, map[string]any{
+			"role": roles[i%len(roles)],
+			"gist": paraphrase(line, 30),
+		})
+	}
+	if len(sections) == 0 {
+		sections = append(sections, map[string]any{"role": "method", "gist": "结构要点：按步骤说明做法"})
+	}
+	return js(map[string]any{
+		"hook_type": "question",
+		"hook_gist": "结构要点：以提问开场引出方法",
+		"sections":  sections,
+		"cta_type":  "follow",
+		"rhythm":    map[string]any{"paragraphs": len(sections) + 1, "avg_chars": 120},
+		"borrowable":     []string{"结构要点：先立冲突再给步骤的做法"},
+		"not_borrowable": []string{"结构要点：未验证的数据引用方式"},
+	})
+}
+
+func cxVisualPlan(prompt string) string {
+	const start = "<<<用户选中的作品数据 JSON>>\n"
+	const end = "\n<<<结束>>"
+	content := prompt
+	if at := strings.Index(content, start); at >= 0 {
+		content = content[at+len(start):]
+	}
+	if at := strings.Index(content, end); at >= 0 {
+		content = content[:at]
+	}
+	var input struct {
+		Sections []struct {
+			ID        string `json:"id"`
+			SourceRef string `json:"source_ref"`
+			Heading   string `json:"heading"`
+			KeyPoint  string `json:"key_point"`
+			Content   string `json:"content_md"`
+		} `json:"sections"`
+	}
+	if json.Unmarshal([]byte(content), &input) != nil || len(input.Sections) == 0 {
+		return js(map[string]any{"cards": []any{}, "uncovered_sections": []string{}, "missing_assets": []string{}, "warnings": []string{}})
+	}
+	card := func(kind, id, ref, headline, body string) map[string]any {
+		if strings.TrimSpace(headline) == "" {
+			headline = "所选段落"
+		}
+		if strings.TrimSpace(body) == "" {
+			body = "围绕所选段落展开"
+		}
+		return map[string]any{"type": kind, "section_ids": []string{id}, "headline": short(headline, 60), "body": short(body, 300),
+			"asset_ids": []string{}, "source_refs": []string{ref}}
+	}
+	first, last := input.Sections[0], input.Sections[len(input.Sections)-1]
+	cards := []map[string]any{card("cover", first.ID, first.SourceRef, first.Heading, first.KeyPoint)}
+	for _, section := range input.Sections {
+		headline := section.Heading
+		if headline == "" {
+			headline = "段落要点"
+		}
+		body := section.KeyPoint
+		if strings.TrimSpace(body) == "" {
+			body = short(strings.TrimSpace(section.Content), 120)
+		}
+		cards = append(cards, card("point", section.ID, section.SourceRef, headline, body))
+	}
+	cards = append(cards, card("end", last.ID, last.SourceRef, "接下来", last.KeyPoint))
+	return js(map[string]any{"cards": cards, "uncovered_sections": []string{}, "missing_assets": []string{}, "warnings": []string{}})
 }
 
 var shotWorkRe = regexp.MustCompile(`(?m)^- 《(.+?)》 work_id=([0-9a-f-]+)，形态=([a-z_]+)`)

@@ -136,7 +136,7 @@ func TestCL08InvisibleMaterialIsNotIncludedInFactContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text, slot, _, err := env.srv.materialsSlot(memberCtx, &account.ID, []uuid.UUID{material.ID})
+	text, slot, _, err := env.srv.materialsSlot(memberCtx, &account.ID, []uuid.UUID{material.ID}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

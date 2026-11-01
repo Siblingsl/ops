@@ -98,27 +98,30 @@ func TestPerfContextInjectsTopSamples(t *testing.T) {
 
 // 样本不足 3 篇时不注入，避免用一两条数据误导模型。
 func TestPerfContextSkipsWhenTooFewSamples(t *testing.T) {
-	f := env.accounts(t)
 	ctx := context.Background()
+	var account Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{
+		"platform": "xhs", "name": "少样本复盘上下文测试", "content_format": "image_note",
+	}, &account)
 
 	var wid uuid.UUID
 	if err := env.srv.db.QueryRow(ctx, `INSERT INTO work (account_id, title, content_format, status, published_at)
-		VALUES ($1,'唯一一篇有数据的作品','long_article','published',now()) RETURNING id`, f.xhs.ID).Scan(&wid); err != nil {
+		VALUES ($1,'唯一一篇有数据的作品','image_note','published',now()) RETURNING id`, account.ID).Scan(&wid); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := env.srv.db.Exec(ctx, `INSERT INTO metric_snapshot (work_id, captured_at, reads, likes) VALUES ($1, now(), 500, 3)`, wid); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		env.srv.db.Exec(context.Background(), `DELETE FROM work WHERE account_id=$1 AND title='唯一一篇有数据的作品'`, f.xhs.ID)
+		env.srv.db.Exec(context.Background(), `DELETE FROM work WHERE id=$1`, wid)
 	})
 
 	var ws uuid.UUID
-	if err := env.srv.db.QueryRow(ctx, `SELECT workspace_id FROM platform_account WHERE id=$1`, f.xhs.ID).Scan(&ws); err != nil {
+	if err := env.srv.db.QueryRow(ctx, `SELECT workspace_id FROM platform_account WHERE id=$1`, account.ID).Scan(&ws); err != nil {
 		t.Fatal(err)
 	}
 	jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: ws})
-	a, err := env.srv.account(jctx, f.xhs.ID)
+	a, err := env.srv.account(jctx, account.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -268,6 +268,9 @@ func (s *Server) holdAutoAndWriteManual(ctx context.Context, tx pgx.Tx, workID u
 		WHERE id=$1 AND quality_state<>'held'`, before.ID); err != nil {
 		return Metric{}, err
 	}
+	if err := invalidateRegisteredPublishMetric(ctx, tx, before.ID, publishActorID(ctx), false); err != nil {
+		return Metric{}, err
+	}
 	// 2) 同节点写 manual。captured_at 沿用原行，确保落在同一 day_offset。
 	dayOffset := before.DayOffset
 	manual, _, err := s.upsertMetricWithAudit(ctx, tx, metricWrite{
@@ -372,6 +375,9 @@ func (s *Server) updateMetric(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return err
 		}
+		if err := invalidateRegisteredPublishMetric(r.Context(), tx, x.ID, publishActorID(r.Context()), false); err != nil {
+			return err
+		}
 		return s.auditMetricMutation(r.Context(), tx, "metric_update", &before, &x, false)
 	})
 	if err != nil {
@@ -407,6 +413,9 @@ func (s *Server) deleteMetric(w http.ResponseWriter, r *http.Request) error {
 		if before.Revision != baseRevision {
 			return stateInvalid("这条数据已被其他成员修改，请刷新后重试")
 		}
+		if err := invalidateRegisteredPublishMetric(r.Context(), tx, before.ID, publishActorID(r.Context()), true); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(r.Context(), `DELETE FROM metric_snapshot WHERE id=$1`, id); err != nil {
 			return err
 		}
@@ -435,25 +444,30 @@ func (s *Server) deleteMetric(w http.ResponseWriter, r *http.Request) error {
 }
 
 type ReviewContent struct {
-	ContentFormat    string   `json:"content_format,omitempty"`
-	Conclusions      []string `json:"conclusions"`
-	TopicSuggestions []struct {
-		Title  string `json:"title"`
-		Angle  string `json:"angle"`
-		Reason string `json:"reason"`
-	} `json:"topic_suggestions"`
-	WritingInsights []string `json:"writing_insights"`
+	ContentFormat    string                  `json:"content_format,omitempty"`
+	Conclusions      []string                `json:"conclusions"`
+	TopicSuggestions []ReviewTopicSuggestion `json:"topic_suggestions"`
+	WritingInsights  []string                `json:"writing_insights"`
+	CXBasis          json.RawMessage         `json:"cx_basis,omitempty"`
+	AnalysisV2       *CXReviewAnalysisV2     `json:"analysis_v2,omitempty"`
+}
+
+type ReviewTopicSuggestion struct {
+	Title  string `json:"title"`
+	Angle  string `json:"angle"`
+	Reason string `json:"reason"`
 }
 
 type ReviewReport struct {
-	ID         uuid.UUID     `json:"id"`
-	WorkIDs    []uuid.UUID   `json:"work_ids"`
-	Content    ReviewContent `json:"content"`
-	Adopted    []int32       `json:"adopted"`
-	Remembered []int32       `json:"remembered"`
-	Ignored    []int32       `json:"ignored"`
-	Origin     string        `json:"origin"` // manual | weekly_draft
-	CreatedAt  time.Time     `json:"created_at"`
+	ID              uuid.UUID     `json:"id"`
+	WorkIDs         []uuid.UUID   `json:"work_ids"`
+	Content         ReviewContent `json:"content"`
+	ContentRevision string        `json:"content_revision"`
+	Adopted         []int32       `json:"adopted"`
+	Remembered      []int32       `json:"remembered"`
+	Ignored         []int32       `json:"ignored"`
+	Origin          string        `json:"origin"` // manual | weekly_draft
+	CreatedAt       time.Time     `json:"created_at"`
 }
 
 // createReview only produces suggestions; nothing is written to the topic pool (H-08, HC-08).
@@ -463,10 +477,11 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		WorkIDs       []uuid.UUID `json:"work_ids"`
-		Recent        int         `json:"recent"`
-		ContentFormat string      `json:"content_format"`
-		Background    bool        `json:"background"`
+		WorkIDs         []uuid.UUID `json:"work_ids"`
+		Recent          int         `json:"recent"`
+		ContentFormat   string      `json:"content_format"`
+		Background      bool        `json:"background"`
+		AnalysisVersion int         `json:"analysis_version"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -478,10 +493,19 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) error {
 	if a.Platform != "toutiao" && in.ContentFormat != "" && in.ContentFormat != a.ContentFormat {
 		return validation("该账号不支持所选复盘形态")
 	}
+	if in.AnalysisVersion != 0 && in.AnalysisVersion != 2 {
+		return validation("复盘版本只支持原版或 analysis_version=2")
+	}
+	buildReview := func(ctx context.Context) (*ReviewReport, error) {
+		if in.AnalysisVersion == 2 {
+			return s.buildReviewV2(ctx, a, in.WorkIDs, in.Recent, in.ContentFormat, "manual", "")
+		}
+		return s.buildReviewAsFormat(ctx, a, in.WorkIDs, in.Recent, in.ContentFormat, "manual", "")
+	}
 	if in.Background {
 		jobID, err := s.startBackgroundJob(ctx, jobSpec{TaskType: "review_analysis", Label: "AI 复盘 · " + a.Name, AccountID: &a.ID,
 			Link: "/a/" + a.ID.String() + "/review"}, func(jctx context.Context) (any, error) {
-			rep, err := s.buildReviewAsFormat(jctx, a, in.WorkIDs, in.Recent, in.ContentFormat, "manual", "")
+			rep, err := buildReview(jctx)
 			if err != nil {
 				return nil, err
 			}
@@ -492,7 +516,7 @@ func (s *Server) createReview(w http.ResponseWriter, r *http.Request) error {
 		}
 		return ok(w, map[string]any{"job_id": jobID})
 	}
-	rep, err := s.buildReviewAsFormat(ctx, a, in.WorkIDs, in.Recent, in.ContentFormat, "manual", "")
+	rep, err := buildReview(ctx)
 	if err != nil {
 		return err
 	}
@@ -606,10 +630,17 @@ func (s *Server) buildReviewAsFormat(ctx context.Context, a *Account, workIDs []
 		return nil, err
 	}
 	rep.Origin = origin
+	if out.Conclusions == nil {
+		out.Conclusions = []string{}
+	}
+	if out.TopicSuggestions == nil {
+		out.TopicSuggestions = []ReviewTopicSuggestion{}
+	}
 	if out.WritingInsights == nil {
 		out.WritingInsights = []string{}
 	}
 	rep.WorkIDs, rep.Content, rep.Adopted, rep.Remembered, rep.Ignored = used, out, []int32{}, []int32{}, []int32{}
+	rep.ContentRevision = cxReviewContentRevision(rep.Content)
 	return &rep, nil
 }
 
@@ -739,9 +770,16 @@ func (s *Server) listReviews(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		_ = json.Unmarshal(content, &rep.Content)
+		if rep.Content.Conclusions == nil {
+			rep.Content.Conclusions = []string{}
+		}
+		if rep.Content.TopicSuggestions == nil {
+			rep.Content.TopicSuggestions = []ReviewTopicSuggestion{}
+		}
 		if rep.Content.WritingInsights == nil {
 			rep.Content.WritingInsights = []string{}
 		}
+		rep.ContentRevision = cxReviewContentRevision(rep.Content)
 		list = append(list, rep)
 	}
 	return ok(w, list)

@@ -25,6 +25,7 @@ type Topic struct {
 	Status          string     `json:"status"`
 	WorkID          *uuid.UUID `json:"work_id"`
 	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 	Audience        string     `json:"audience"`
 	Hook            string     `json:"hook"`
 	NeededMaterials []string   `json:"needed_materials"`
@@ -44,13 +45,13 @@ type Topic struct {
 const topicCols = `t.id, t.account_id, t.title, t.angle, t.source, t.status,
 	(SELECT id FROM work WHERE topic_id=t.id AND deleted_at IS NULL ORDER BY created_at LIMIT 1), t.created_at,
 	t.audience, t.hook, t.needed_materials, t.format, to_char(t.planned_date,'YYYY-MM-DD'), t.series_id, t.score_fit, t.score_reason, t.pinned_at IS NOT NULL,
-	t.strategy_pillar, t.hot_item_id, t.pinned_at`
+	t.strategy_pillar, t.hot_item_id, t.pinned_at, t.updated_at`
 
 func scanTopic(row interface{ Scan(...any) error }) (Topic, error) {
 	var t Topic
 	err := row.Scan(&t.ID, &t.AccountID, &t.Title, &t.Angle, &t.Source, &t.Status, &t.WorkID, &t.CreatedAt,
 		&t.Audience, &t.Hook, &t.NeededMaterials, &t.Format, &t.PlannedDate, &t.SeriesID, &t.ScoreFit, &t.ScoreReason, &t.Pinned,
-		&t.StrategyPillar, &t.HotItemID, &t.pinnedAt)
+		&t.StrategyPillar, &t.HotItemID, &t.pinnedAt, &t.UpdatedAt)
 	if t.NeededMaterials == nil {
 		t.NeededMaterials = []string{}
 	}

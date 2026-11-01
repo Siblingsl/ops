@@ -27,13 +27,14 @@ type Memory struct {
 	LastUsedAt  *time.Time      `json:"last_used_at"`
 	ConfirmedAt *time.Time      `json:"confirmed_at"`
 	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"-"`
 }
 
-const memoryCols = `id, account_id, kind, scope, text, status, source, evidence, use_count, last_used_at, confirmed_at, created_at`
+const memoryCols = `id, account_id, kind, scope, text, status, source, evidence, use_count, last_used_at, confirmed_at, created_at, updated_at`
 
 func scanMemory(row interface{ Scan(...any) error }) (Memory, error) {
 	var m Memory
-	err := row.Scan(&m.ID, &m.AccountID, &m.Kind, &m.Scope, &m.Text, &m.Status, &m.Source, &m.Evidence, &m.UseCount, &m.LastUsedAt, &m.ConfirmedAt, &m.CreatedAt)
+	err := row.Scan(&m.ID, &m.AccountID, &m.Kind, &m.Scope, &m.Text, &m.Status, &m.Source, &m.Evidence, &m.UseCount, &m.LastUsedAt, &m.ConfirmedAt, &m.CreatedAt, &m.UpdatedAt)
 	return m, err
 }
 

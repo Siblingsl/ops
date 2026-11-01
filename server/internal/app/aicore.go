@@ -36,8 +36,11 @@ var formatNames = map[string]string{
 }
 
 type aiTask struct {
-	Type             string
-	Account          *Account
+	Type    string
+	Account *Account
+	// Route pins a server-selected model route for structured CX request deduplication.
+	Route            *route
+	TaskPrompt       *taskPromptSnapshot
 	WorkID           *uuid.UUID
 	User             string
 	JSON             bool
@@ -57,6 +60,16 @@ type aiTask struct {
 	Images []string
 	// Bare keeps the account on ai_call but leaves profile, strategy, memories and style out of the prompt.
 	Bare bool
+	// CXBasisEnabled opts existing writing journeys into the additive CX provenance receipt.
+	CXBasisEnabled       bool
+	CXExpectedWorkRev    *int64
+	CXSectionSources     []cxBasisSource
+	CXUnrepresentedItems []cxBasisOmission
+}
+
+type taskPromptSnapshot struct {
+	Content string
+	Version int
 }
 
 type aiResult struct {
@@ -64,6 +77,7 @@ type aiResult struct {
 	Usage        ai.Usage
 	CallID       uuid.UUID
 	Refs         map[string]any
+	CXBasis      *cxBasisReceipt
 	FallbackUsed bool
 }
 
@@ -73,12 +87,14 @@ type route struct {
 	BaseURL      string
 	APIKey       string
 	Model        string
-	Fallback     *route
-	Desktop      *desktopExecution
-	JSONOK       bool
-	ToolsOK      bool
-	VisionOK     bool
-	ImageGenOK   bool
+	// ContextWindowTokens 为用户按厂商文档登记的上下文窗口；nil 表示未登记、不做发送前预算检查。
+	ContextWindowTokens *int
+	Fallback            *route
+	Desktop             *desktopExecution
+	JSONOK              bool
+	ToolsOK             bool
+	VisionOK            bool
+	ImageGenOK          bool
 }
 
 var costTiers = map[string]bool{"economy": true, "quality": true}
@@ -108,10 +124,10 @@ func (s *Server) resolveServerRouteTier(ctx context.Context, taskType, tier stri
 	var enc []byte
 	var fbProvider *uuid.UUID
 	var fbModel, picked string
-	err := s.db.QueryRow(ctx, `SELECT r.task_type, p.id, p.name, p.base_url, p.api_key_enc, r.model, r.fallback_provider_id, r.fallback_model FROM model_route r
+	err := s.db.QueryRow(ctx, `SELECT r.task_type, p.id, p.name, p.base_url, p.api_key_enc, r.model, p.context_window_tokens, r.fallback_provider_id, r.fallback_model FROM model_route r
 		JOIN model_provider p ON p.id=r.provider_id
 		WHERE r.workspace_id=$1 AND p.workspace_id=$1 AND p.execution_location='server' AND r.task_type = ANY($2) AND p.status='active'
-		ORDER BY array_position($2::text[], r.task_type) LIMIT 1`, ws, keys).Scan(&picked, &rt.ProviderID, &rt.ProviderName, &rt.BaseURL, &enc, &rt.Model, &fbProvider, &fbModel)
+		ORDER BY array_position($2::text[], r.task_type) LIMIT 1`, ws, keys).Scan(&picked, &rt.ProviderID, &rt.ProviderName, &rt.BaseURL, &enc, &rt.Model, &rt.ContextWindowTokens, &fbProvider, &fbModel)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if taskType == "image_alt" {
 			return nil, apiErr(503, "ai_not_configured", "请先在模型配置中设置支持图片输入的“图片识别”模型")
@@ -127,8 +143,8 @@ func (s *Server) resolveServerRouteTier(ctx context.Context, taskType, tier stri
 	if fbProvider != nil && strings.TrimSpace(fbModel) != "" {
 		fb := route{ProviderID: *fbProvider}
 		var fenc []byte
-		if err := s.db.QueryRow(ctx, `SELECT name, base_url, api_key_enc FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server' AND status='active'`,
-			*fbProvider, ws).Scan(&fb.ProviderName, &fb.BaseURL, &fenc); err == nil {
+		if err := s.db.QueryRow(ctx, `SELECT name, base_url, api_key_enc, context_window_tokens FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server' AND status='active'`,
+			*fbProvider, ws).Scan(&fb.ProviderName, &fb.BaseURL, &fenc, &fb.ContextWindowTokens); err == nil {
 			if fb.APIKey, err = s.box.Decrypt(fenc); err == nil {
 				fb.Model = strings.TrimSpace(fbModel)
 				rt.Fallback = &fb
@@ -217,6 +233,15 @@ func authFailure(err error) bool {
 	return errors.As(err, &ue) && (ue.Status == 401 || ue.Status == 403)
 }
 
+func modelContextLimitError(err error) bool {
+	var upstream *ai.UpstreamError
+	if !errors.As(err, &upstream) {
+		return false
+	}
+	return upstream.Status == http.StatusRequestEntityTooLarge ||
+		upstream.Status == http.StatusBadRequest && strings.Contains(strings.ToLower(upstream.Body), "context_length_exceeded")
+}
+
 var errFirstToken = errors.New("模型超过 15 秒没有返回内容")
 var errDesktopFirstToken = errors.New("本机模型等待首个有效内容超时")
 
@@ -278,9 +303,13 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 	if err := s.checkLimit(ctx); err != nil {
 		return nil, err
 	}
-	rt, err := s.resolveRouteTier(ctx, t.Type, t.Tier)
-	if err != nil {
-		return nil, err
+	var err error
+	rt := t.Route
+	if rt == nil {
+		rt, err = s.resolveRouteTier(ctx, t.Type, t.Tier)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if t.Type == "image_alt" {
 		rt.Fallback = nil
@@ -338,11 +367,30 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 	if err != nil {
 		return nil, err
 	}
+	// 24 §4.10.2：模型上下文长度在发送前由服务端检查（估算口径与 usage 一致：runes*2/3），
+	// 保留约 1/4 窗口给输出；未登记窗口元数据不检查，不猜测厂商容量；超限引导缩小范围，
+	// 不悄悄删除系统真实性规则或截断技能。
+	if rt.ContextWindowTokens != nil && *rt.ContextWindowTokens > 0 {
+		estimate := (len([]rune(pack.System)) + len([]rune(pack.User))) * 2 / 3
+		if limit := *rt.ContextWindowTokens * 3 / 4; estimate > limit {
+			return nil, apiErr(409, "context_budget_exceeded",
+				"本次输入按模型上下文窗口估算已接近上限，请缩小选择范围（减少作品数或段落）后重试").
+				With(map[string]any{"context_window_tokens": *rt.ContextWindowTokens, "estimated_input_tokens": estimate})
+		}
+	}
+	basis, err := s.cxWritingBasis(ctx, t, pack)
+	if err != nil {
+		return nil, err
+	}
 	// DEV-SK2 / 7.2 节：含个人技能的调用禁止进入共享 lastPacks；缓存标记不可共享且不保存文本。
 	// DEV-SK3 / 23 文档第 4.3 节：skill_draft 不写共享 lastPacks。
 	switch {
 	case t.Type == "skill_draft":
 		// 草拟任务不进入任何共享缓存。
+	case strings.HasPrefix(t.Type, "cx_"):
+		// CX 请求可能包含本人作品或临时参考。只保留禁止共享的标记，
+		// 不让提示词回归快照持有正文，也清除同任务的旧缓存值。
+		s.lastPacks.Store(ident(ctx).WorkspaceID.String()+"/"+t.Type, evalSnapshot{Private: true})
 	case snap != nil && snap.PersonalUsed > 0:
 		s.lastPacks.Store(ident(ctx).WorkspaceID.String()+"/"+t.Type, evalSnapshot{Private: true})
 	default:
@@ -354,6 +402,9 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 	}
 	for k, v := range t.Refs {
 		refs[k] = v
+	}
+	if basis != nil {
+		refs["cx_basis"] = basis
 	}
 	attempts := []*route{rt}
 	if rt.Fallback != nil {
@@ -380,13 +431,28 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 				return nil, err
 			}
 		}
+		if basis != nil {
+			if err := s.verifyCXWritingBasis(ctx, *t.WorkID, basis); err != nil {
+				return nil, err
+			}
+		}
 		if cur != rt {
 			refs["fallback_used"] = true
 			refs["fallback_model"] = cur.ProviderName + " / " + cur.Model
 			refs["primary_model"] = rt.ProviderName + " / " + rt.Model
 		}
+		refs["task_type"] = t.Type
+		refs["model"] = cur.ProviderName + " / " + cur.Model
+		refs["prompt_version"] = tplVersion
 		start := time.Now()
 		text, usage, callErr := s.callModel(ctx, cur, pack, t.JSON, onDelta, &streamed)
+		var basisErr error
+		if callErr == nil && basis != nil {
+			basisErr = s.verifyCXWritingBasis(ctx, *t.WorkID, basis)
+			if basisErr != nil {
+				callErr = basisErr
+			}
+		}
 		status, errText := "ok", ""
 		if callErr != nil {
 			status, errText = "failed", callErr.Error()
@@ -394,6 +460,7 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 				status = "cancelled"
 			}
 		}
+		refs["status"] = status
 		refsJSON, _ := json.Marshal(refs)
 		// DEV-SK2 / 10.3 节：私有元数据在持久化前与共享引用拆分；
 		// 未使用的个人候选也保留本人可见的排除原因，不进入共享引用。
@@ -408,11 +475,17 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 			time.Since(start).Milliseconds(), status, truncate(errText, 500), ownerID, privateJSON).Scan(&callID); err != nil {
 			return nil, err
 		}
+		if basisErr != nil {
+			if candidateErr := s.cxDraftConflictAfterBasisChange(ctx, t, basis, text, callID, refs); candidateErr != nil {
+				return nil, candidateErr
+			}
+			return nil, basisErr
+		}
 		if callErr == nil {
 			refs["latency_ms"] = time.Since(start).Milliseconds()
 			refs["tokens"] = usage.PromptTokens + usage.CompletionTokens
 			s.afterAISuccess(context.WithoutCancel(ctx), t, pack)
-			return &aiResult{Text: text, Usage: usage, CallID: callID, Refs: refs, FallbackUsed: cur != rt}, nil
+			return &aiResult{Text: text, Usage: usage, CallID: callID, Refs: refs, CXBasis: basis, FallbackUsed: cur != rt}, nil
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -420,10 +493,18 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 		if authFailure(callErr) {
 			return nil, apiErr(502, "ai_key_invalid", "模型密钥失效或没有权限（"+cur.ProviderName+"），请到「设置 → 模型配置」更新密钥。原有内容没有被改动。").With(failDetail)
 		}
-		var tooLong *ai.UpstreamError
-		if len(t.Materials) > 0 && errors.As(callErr, &tooLong) && (tooLong.Status == http.StatusRequestEntityTooLarge ||
-			tooLong.Status == http.StatusBadRequest && strings.Contains(tooLong.Body, "context_length_exceeded")) {
-			return nil, apiErr(422, "ai_context_too_long", "选中素材过长，请减少").With(failDetail)
+		if (len(t.Materials) > 0 || t.Type == "cx_account_analyze" || t.Type == "cx_title_diagnose" || t.Type == "cx_topic_diagnose" || t.Type == "cx_visual_plan") && modelContextLimitError(callErr) {
+			message := "选中素材过长，请减少"
+			if t.Type == "cx_account_analyze" {
+				message = "账号分析上下文超过当前模型限制，请减少所选作品，或取消部分指标和粉丝数据后重试"
+			} else if t.Type == "cx_title_diagnose" {
+				message = "标题诊断上下文超过当前模型限制，请精简作品正文后重试"
+			} else if t.Type == "cx_topic_diagnose" {
+				message = "选题体检上下文超过当前模型限制，请精简选题角度后重试"
+			} else if t.Type == "cx_visual_plan" {
+				message = "组图计划上下文超过当前模型限制，请减少所选段落或图片后重试"
+			}
+			return nil, apiErr(422, "ai_context_too_long", message).With(failDetail)
 		}
 		if i+1 < len(attempts) && retryable(callErr) && !streamed {
 			slog.Warn("主模型不可用，切换备用模型", "task", t.Type, "err", callErr)
@@ -567,7 +648,7 @@ func (s *Server) streamAIEphemeral(w http.ResponseWriter, r *http.Request, t aiT
 			return nil
 		}
 	}
-	sse.send("done", map[string]any{"text": res.Text, "ai_call_id": res.CallID, "usage": res.Usage, "refs": res.Refs, "result": extra,
+	sse.send("done", map[string]any{"text": res.Text, "ai_call_id": res.CallID, "usage": res.Usage, "refs": res.Refs, "result": extra, "cx_basis": res.CXBasis,
 		"fallback_used": res.FallbackUsed})
 	return nil
 }
@@ -668,13 +749,13 @@ func (s *Server) streamAIJob(w http.ResponseWriter, r *http.Request, t aiTask, m
 				return
 			}
 		}
-		s.finishJob(jobID, "done", map[string]any{"ai_call_id": res.CallID, "chars": runeLen(res.Text), "text": res.Text, "refs": res.Refs,
+		s.finishJob(jobID, "done", map[string]any{"ai_call_id": res.CallID, "chars": runeLen(res.Text), "text": res.Text, "refs": res.Refs, "cx_basis": res.CXBasis,
 			"fallback_used": res.FallbackUsed}, "", &res.CallID)
 		if gone.Load() {
 			s.notifyJobDone(jctx, spec, true, "")
 		}
 		push(sseMsg{"done", map[string]any{"text": res.Text, "ai_call_id": res.CallID, "usage": res.Usage, "refs": res.Refs,
-			"result": extra, "job_id": jobID, "fallback_used": res.FallbackUsed}})
+			"result": extra, "job_id": jobID, "cx_basis": res.CXBasis, "fallback_used": res.FallbackUsed}})
 	}()
 	for {
 		select {

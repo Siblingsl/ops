@@ -216,8 +216,8 @@ func TestSkillBuiltinImmutableAndCopy(t *testing.T) {
 		Items []map[string]any `json:"items"`
 	}
 	env.mustJSON(t, "GET", "/api/v1/skills?view=library&scope=builtin&limit=12", nil, &list)
-	if len(list.Items) != 8 {
-		t.Fatalf("want 8 builtins in library, got %d", len(list.Items))
+	if len(list.Items) != 12 {
+		t.Fatalf("want 12 builtins in library, got %d", len(list.Items))
 	}
 	env.mustJSON(t, "GET", "/api/v1/skills/"+id.String(), nil, nil)
 

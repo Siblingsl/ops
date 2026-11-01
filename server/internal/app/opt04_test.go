@@ -83,6 +83,7 @@ func TestOPT04ConcurrentDraftsQueueAndBoundModelRequests(t *testing.T) {
 		"platform": "wechat_mp", "name": "流式并发验证", "content_format": "long_article",
 	}, &a)
 	work := outlinedWork(t, a, "一次只做好一件事，这是我的经验判断")
+	secondWork := outlinedWork(t, a, "另一篇作品按自己的依据逐段完成")
 	oldWorkers := env.srv.cfg.AIWorkers
 	env.srv.cfg.AIWorkers = 1
 	defer func() { env.srv.cfg.AIWorkers = oldWorkers }()
@@ -122,7 +123,7 @@ func TestOPT04ConcurrentDraftsQueueAndBoundModelRequests(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("first model request did not start")
 	}
-	second := opt04Stream(ctx, "/api/v1/sections/"+work.Sections[1].ID.String()+"/draft", env.csrf)
+	second := opt04Stream(ctx, "/api/v1/sections/"+secondWork.Sections[0].ID.String()+"/draft", env.csrf)
 	jobEvent := opt04Wait(t, second, "job", "")
 	var job struct{ ID uuid.UUID }
 	if err := json.Unmarshal(jobEvent.Data, &job); err != nil {
@@ -151,10 +152,13 @@ func TestOPT04ConcurrentDraftsQueueAndBoundModelRequests(t *testing.T) {
 	}
 	var saved Work
 	env.mustJSON(t, "GET", "/api/v1/works/"+work.ID.String(), nil, &saved)
-	for _, section := range saved.Sections {
-		if strings.TrimSpace(section.ContentMD) == "" {
-			t.Fatalf("section %s was not saved", section.ID)
-		}
+	if strings.TrimSpace(saved.Sections[0].ContentMD) == "" {
+		t.Fatalf("first section %s was not saved", saved.Sections[0].ID)
+	}
+	var savedSecond Work
+	env.mustJSON(t, "GET", "/api/v1/works/"+secondWork.ID.String(), nil, &savedSecond)
+	if strings.TrimSpace(savedSecond.Sections[0].ContentMD) == "" {
+		t.Fatalf("queued section %s in independent work was not saved", savedSecond.Sections[0].ID)
 	}
 	t.Logf("AIWorkers=1; peak in-flight model requests=%d; both sections saved", peak.Load())
 }

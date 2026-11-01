@@ -42,6 +42,11 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	} else if n > 0 {
 		slog.Info("回收站到期清理", "count", n)
 	}
+	if n, err := s.cleanupCXBuilds(ctx); err != nil {
+		slog.Error("清理内容构建产物失败", "err", err)
+	} else if n > 0 {
+		slog.Info("清理内容构建产物", "builds", n)
+	}
 	s.refreshTokens(ctx)
 	// FR-M10-06：约每 2 小时扫一次（本调度为 10 分钟一次，用分钟位粗控）
 	if s.now().Minute() < 10 && s.now().Hour()%2 == 0 {

@@ -159,9 +159,57 @@ type LibraryAsset struct {
 	WorkTitle   string     `json:"work_title"`
 }
 
+type AccountLibraryAsset struct {
+	ID        uuid.UUID `json:"id"`
+	Mime      string    `json:"mime"`
+	Width     int       `json:"width"`
+	Height    int       `json:"height"`
+	Bytes     int       `json:"bytes"`
+	AltText   string    `json:"alt_text"`
+	URL       string    `json:"url"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 func (s *Server) listLibrary(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	q := r.URL.Query()
+	if q.Get("scope") == "account" {
+		accountID, err := uuid.Parse(q.Get("account_id"))
+		if err != nil {
+			return validation("账号素材查询需要有效的 account_id")
+		}
+		if q.Get("work_id") != "" {
+			return validation("账号级素材查询不能同时指定 work_id")
+		}
+		var accountFound bool
+		if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM platform_account WHERE id=$1 AND workspace_id=$2)`, accountID, ident(ctx).WorkspaceID).Scan(&accountFound); err != nil {
+			return err
+		}
+		if !accountFound {
+			return errNotFound
+		}
+		rows, err := s.db.Query(ctx, `SELECT x.id,x.mime,x.width,x.height,x.bytes,x.alt_text,x.created_at
+			FROM asset x WHERE x.workspace_id=$1 AND x.account_id=$2 AND x.work_id IS NULL
+			AND x.origin_asset_id IS NULL AND x.mime LIKE 'image/%'
+			ORDER BY x.created_at DESC,x.id DESC LIMIT 300`, ident(ctx).WorkspaceID, accountID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		list := []AccountLibraryAsset{}
+		for rows.Next() {
+			var x AccountLibraryAsset
+			if err := rows.Scan(&x.ID, &x.Mime, &x.Width, &x.Height, &x.Bytes, &x.AltText, &x.CreatedAt); err != nil {
+				return err
+			}
+			x.URL = "/api/v1/assets/" + x.ID.String() + "/file"
+			list = append(list, x)
+		}
+		return ok(w, list)
+	}
+	if q.Get("scope") != "" {
+		return validation("不支持的图片库范围")
+	}
 	sql := `SELECT x.id, x.work_id, x.mime, x.width, x.height, x.bytes, x.position, x.alt_text, coalesce(x.ai_generated,false), x.created_at,
 		x.account_id, coalesce(a.name,''), coalesce(w.title,'')
 		FROM asset x LEFT JOIN work w ON w.id=x.work_id LEFT JOIN platform_account a ON a.id=x.account_id

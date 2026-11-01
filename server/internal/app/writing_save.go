@@ -451,7 +451,7 @@ func (s *Server) draftSection(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
-	work, neighbors, err := s.sectionContext(ctx, m, sec)
+	work, neighbors, contextSections, err := s.sectionContext(ctx, m, sec)
 	if err != nil {
 		return err
 	}
@@ -490,7 +490,8 @@ func (s *Server) draftSection(w http.ResponseWriter, r *http.Request) error {
 ## 输出格式
 直接输出 Markdown 正文。`, sec.Heading, sec.KeyPoint, length, typeRule)
 	t := aiTask{Type: "section_draft", Account: m.Account, WorkID: &m.ID, User: user, Materials: mids, Work: work, Neighbors: neighbors,
-		History: sec.Heading + " " + sec.KeyPoint, Instruction: in.Instruction, Tier: s.pickTier(ctx, in.Tier), Refs: map[string]any{"section_id": sec.ID}}
+		History: sec.Heading + " " + sec.KeyPoint, Instruction: in.Instruction, Tier: s.pickTier(ctx, in.Tier), Refs: map[string]any{"section_id": sec.ID},
+		CXBasisEnabled: true, CXExpectedWorkRev: cxExpectedWorkRevision(m.Revision), CXSectionSources: cxDraftSectionSources(contextSections, sec.ID)}
 	label := "起草「" + truncate(nz(sec.Heading, sec.KeyPoint), 16) + "」"
 	return s.streamAIJob(w, r, t, jobMeta{SectionID: &sec.ID, Label: label, Link: "/works/" + m.ID.String() + "#section-" + sec.ID.String()},
 		func(text string, res *aiResult) (any, error) {

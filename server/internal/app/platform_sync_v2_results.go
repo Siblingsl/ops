@@ -130,9 +130,15 @@ type platformV2ControlResult struct {
 	ObservedAt          time.Time `json:"observed_at"`
 }
 
+// DEV-CX 同步任务（24 文档 14.4）：本人资料可得字段按实际可采集范围登记。
+// background_image_ref 与置顶字段来自主页可得内容；粉丝数在 account_metric_daily（DEV-DR09），
+// 不进 safe_fields 以免与日表双真源。
 var platformSafeAccountFields = map[string]bool{
-	"account_category": true,
-	"creator_level":    true,
+	"account_category":     true,
+	"creator_level":        true,
+	"background_image_ref": true,
+	"pinned_title":         true,
+	"pinned_note":          true,
 }
 
 var platformSafeURLQueryKey = regexp.MustCompile(`(?i)(token|sign|auth|ticket|secret|cookie|session|credential|key)`)
@@ -1575,6 +1581,8 @@ func platformFieldLimit(field string) int {
 	switch field {
 	case "bio":
 		return 4096
+	case "pinned_note":
+		return 2048
 	case "public_account_id":
 		return 512
 	default:

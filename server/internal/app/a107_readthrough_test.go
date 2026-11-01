@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -22,18 +23,32 @@ func TestA107ReadThrough(t *testing.T) {
 	env.expectErr(t, "POST", "/api/v1/works/"+wid+"/read-through", nil, "validation_failed")
 
 	var outline struct {
-		Items []OutlineItem `json:"items"`
+		Items   []OutlineItem  `json:"items"`
+		CXBasis cxBasisReceipt `json:"cx_basis"`
 	}
 	env.mustJSON(t, "POST", "/api/v1/works/"+wid+"/outline/generate", nil, &outline)
+	if outline.CXBasis.SchemaVersion != 1 || outline.CXBasis.ProfileHash == "" || outline.CXBasis.InputHash == "" || !cxBasisHasSource(outline.CXBasis, "profile") {
+		t.Fatalf("outline should include a profile source receipt: %+v", outline.CXBasis)
+	}
 	env.mustJSON(t, "PUT", "/api/v1/works/"+wid+"/outline", map[string]any{"items": outline.Items[:2], "confirm": true}, &wk)
 	for _, sec := range wk.Sections {
 		ev := lastEvent(t, env.sse(t, "/api/v1/sections/"+sec.ID.String()+"/draft", nil))
 		if ev.Name != "done" {
 			t.Fatalf("draft: %s %s", ev.Name, ev.Data)
 		}
+		var result struct {
+			CXBasis cxBasisReceipt `json:"cx_basis"`
+		}
+		if err := json.Unmarshal(ev.Data, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.CXBasis.InputHash == "" || !cxBasisHasSource(result.CXBasis, "work_section") {
+			t.Fatalf("draft should include section basis: %+v", result.CXBasis)
+		}
 	}
 
 	var out struct {
+		CXBasis     cxBasisReceipt `json:"cx_basis"`
 		Suggestions []struct {
 			SectionID string `json:"section_id"`
 			Action    string `json:"action"`
@@ -42,6 +57,9 @@ func TestA107ReadThrough(t *testing.T) {
 		} `json:"suggestions"`
 	}
 	env.mustJSON(t, "POST", "/api/v1/works/"+wid+"/read-through", nil, &out)
+	if out.CXBasis.InputHash == "" || !cxBasisHasSource(out.CXBasis, "work_section") {
+		t.Fatalf("read-through should include work-section basis: %+v", out.CXBasis)
+	}
 	if len(out.Suggestions) == 0 || len(out.Suggestions) > 2 {
 		t.Fatalf("suggestions: %+v", out.Suggestions)
 	}

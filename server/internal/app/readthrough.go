@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // DEV-A107（13 文档）：整篇通读建议。AI 通读全文与核心观点，按段落输出结构化建议
@@ -62,10 +64,15 @@ func (s *Server) readThrough(w http.ResponseWriter, r *http.Request) error {
 		} `json:"suggestions"`
 	}
 	valid := map[string]bool{}
+	sectionIDs := []uuid.UUID{}
 	for _, x := range secs {
 		valid[x.ID.String()] = true
+		if strings.TrimSpace(x.ContentMD) != "" {
+			sectionIDs = append(sectionIDs, x.ID)
+		}
 	}
-	res, err := s.runAIJSON(ctx, aiTask{Type: "read_through", Account: m.Account, WorkID: &m.ID, User: user, Materials: mids, Work: work, SkipStyle: true, Refs: map[string]any{"sections": len(secs)}}, &out, func() error {
+	res, err := s.runAIJSON(ctx, aiTask{Type: "read_through", Account: m.Account, WorkID: &m.ID, User: user, Materials: mids, Work: work, SkipStyle: true, Refs: map[string]any{"sections": len(secs)},
+		CXBasisEnabled: true, CXExpectedWorkRev: cxExpectedWorkRevision(m.Revision), CXSectionSources: cxWritingSectionSources(secs, sectionIDs...)}, &out, func() error {
 		if len(out.Suggestions) > 5 {
 			return fmt.Errorf("建议最多 5 条")
 		}
@@ -87,5 +94,5 @@ func (s *Server) readThrough(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"suggestions": out.Suggestions, "refs": res.Refs, "ai_call_id": res.CallID})
+	return ok(w, map[string]any{"suggestions": out.Suggestions, "refs": res.Refs, "ai_call_id": res.CallID, "cx_basis": res.CXBasis})
 }

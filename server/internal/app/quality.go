@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -635,12 +637,30 @@ type CustomTheme struct {
 
 var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
+func customThemePrimaryContrastRatio(color string) float64 {
+	channels := [3]float64{}
+	for i, offset := range []int{1, 3, 5} {
+		value, _ := strconv.ParseUint(color[offset:offset+2], 16, 8)
+		channel := float64(value) / 255
+		if channel <= 0.04045 {
+			channels[i] = channel / 12.92
+		} else {
+			channels[i] = math.Pow((channel+0.055)/1.055, 2.4)
+		}
+	}
+	luminance := channels[0]*0.2126 + channels[1]*0.7152 + channels[2]*0.0722
+	return 1.05 / (luminance + 0.05)
+}
+
 func (t *CustomTheme) validate() error {
 	if t.Base == "" {
 		t.Base = "ink"
 	}
 	if !hexColor.MatchString(t.PrimaryColor) {
 		return validation("主色需要是 #RRGGBB 格式")
+	}
+	if customThemePrimaryContrastRatio(t.PrimaryColor) < 4.5 {
+		return validation("主色与白色背景的文字对比度不足 4.5:1")
 	}
 	if t.FontSize < 14 || t.FontSize > 17 {
 		return validation("正文字号需在 14–17px 之间")

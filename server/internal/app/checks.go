@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -35,9 +36,11 @@ type CheckRun struct {
 	Revision                 int         `json:"revision"`
 	TargetPlatform           string      `json:"target_platform"`
 	FactStatus               string      `json:"fact_status"`
-	CompletedAt              *time.Time  `json:"completed_at"`
-	CreatedAt                time.Time   `json:"created_at"`
-	Stale                    bool        `json:"stale"`
+	CompletedAt              *time.Time      `json:"completed_at"`
+	CreatedAt                time.Time       `json:"created_at"`
+	OpsStandardBasis         json.RawMessage `json:"ops_standard_basis,omitempty"`
+	StandardChanged           bool            `json:"standard_changed"`
+	Stale                    bool            `json:"stale"`
 	MaterialBasisStale       bool        `json:"material_basis_stale"`
 	MaterialBasisUnavailable int         `json:"material_basis_unavailable"`
 	Items                    []CheckItem `json:"items"`
@@ -53,6 +56,7 @@ var allowedResolutions = map[string][]string{
 	"similarity":    {"acknowledged", "modified"},
 	"ad_law":        {"acknowledged", "modified"},
 	"stale":         {"verified", "modified"},
+	"rewrite":       {"acknowledged", "modified"},
 }
 
 var pendingMarker = regexp.MustCompile(`【待核实[^】]*】`)
@@ -464,8 +468,13 @@ func (s *Server) startCheck(w http.ResponseWriter, r *http.Request) error {
 		if err := s.addVersion(ctx, tx, m.ID, "check"); err != nil {
 			return err
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO check_run (work_id, revision, target_platform, fact_status, material_basis_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-			m.ID, wk.Revision, wk.Platform, factStatus, basisHash).Scan(&runID); err != nil {
+		// DEV-CX13-F：冻结当前生效的运营标准快照（无标准为 NULL，不阻断）。
+		standardBasis, err := s.freezeStandardBasis(ctx, tx, m.Account.ID)
+		if err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `INSERT INTO check_run (work_id, revision, target_platform, fact_status, material_basis_hash, ops_standard_basis) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+			m.ID, wk.Revision, wk.Platform, factStatus, basisHash, standardBasis).Scan(&runID); err != nil {
 			return err
 		}
 		if err := s.insertItems(ctx, tx, m.ID, runID, items); err != nil {
@@ -668,8 +677,8 @@ func (s *Server) loadLatestCheck(ctx context.Context, workID uuid.UUID) (*CheckR
 	// 修订号优先取「最新检查」：数据库时钟回拨时（WSL2/Docker 容器时钟漂移）
 	// created_at 可能倒挂，按修订号排序可稳定取到新修订的运行（同修订号运行内容相同，次序无观测差异）。
 	var savedBasis string
-	err := s.db.QueryRow(ctx, `SELECT id, revision, target_platform, fact_status, completed_at, created_at, material_basis_hash FROM check_run WHERE work_id=$1 ORDER BY revision DESC, created_at DESC LIMIT 1`, workID).
-		Scan(&run.ID, &run.Revision, &run.TargetPlatform, &run.FactStatus, &run.CompletedAt, &run.CreatedAt, &savedBasis)
+	err := s.db.QueryRow(ctx, `SELECT id, revision, target_platform, fact_status, completed_at, created_at, material_basis_hash, ops_standard_basis FROM check_run WHERE work_id=$1 ORDER BY revision DESC, created_at DESC LIMIT 1`, workID).
+		Scan(&run.ID, &run.Revision, &run.TargetPlatform, &run.FactStatus, &run.CompletedAt, &run.CreatedAt, &savedBasis, &run.OpsStandardBasis)
 	if err != nil {
 		return nil, err
 	}
@@ -683,6 +692,9 @@ func (s *Server) loadLatestCheck(ctx context.Context, workID uuid.UUID) (*CheckR
 		return nil, err
 	}
 	run.MaterialBasisStale = savedBasis == "" || savedBasis != currentBasis
+	// DEV-CX13-F：冻结的标准快照与当前生效标准对比；不一致只提示"新标准可用"，
+	// 不自动迁移历史结论、不清除人工确认。
+	run.StandardChanged = s.standardChangedSinceRun(ctx, workID, run.OpsStandardBasis)
 	run.MaterialBasisUnavailable, err = materialBasisUnavailableCount(ctx, s.db, workID)
 	if err != nil {
 		return nil, err
@@ -865,6 +877,7 @@ func (s *Server) resolveCheckItem(w http.ResponseWriter, r *http.Request) error 
 	}
 	var in struct {
 		Resolution *string `json:"resolution"`
+		Reason     *string `json:"reason"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -879,17 +892,26 @@ func (s *Server) resolveCheckItem(w http.ResponseWriter, r *http.Request) error 
 		if !allowed {
 			return validation("这一项不能这样处理（格式问题必须修改后重新检查）")
 		}
+		if err := validateRewriteReason(category, *in.Resolution, in.Reason); err != nil {
+			return err
+		}
 	}
 	var resolvedAt *time.Time
 	if in.Resolution != nil {
 		t := s.now()
 		resolvedAt = &t
 	}
+	// rewrite 的 acknowledged 理由（20..500 码点）落 resolution_note；其余类别 reason 忽略。
+	var note *string
+	if category == "rewrite" && in.Reason != nil {
+		trimmed := strings.TrimSpace(*in.Reason)
+		note = &trimmed
+	}
 	var resolver *uuid.UUID
 	if resolvedAt != nil {
 		resolver = &ident(ctx).UserID
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE check_item SET resolution=$2, resolved_at=$3, resolved_by=$4 WHERE id=$1`, id, in.Resolution, resolvedAt, resolver); err != nil {
+	if _, err := s.db.Exec(ctx, `UPDATE check_item SET resolution=$2, resolved_at=$3, resolved_by=$4, resolution_note=coalesce($5,resolution_note) WHERE id=$1`, id, in.Resolution, resolvedAt, resolver, note); err != nil {
 		return err
 	}
 	s.audit(ctx, "check_resolve", "check_item", id.String(), "ok", map[string]any{"work_id": m.ID.String(), "resolution": in.Resolution})
@@ -1174,4 +1196,35 @@ func (s *Server) fixSuggest(w http.ResponseWriter, r *http.Request) error {
 	}
 	return ok(w, map[string]any{"item_id": id, "sentence": sentence, "section_id": loc["section_id"], "variants": out.Variants,
 		"ai_call_id": res.CallID, "refs": res.Refs})
+}
+
+// standardChangedSinceRun 对比 check_run 冻结的标准快照与当前生效标准：
+// 快照缺失（无标准时启动的检查）不提示；当前无生效标准也不提示；
+// version 或 content_hash 任一不同即提示。
+func (s *Server) standardChangedSinceRun(ctx context.Context, workID uuid.UUID, basis json.RawMessage) bool {
+	if len(basis) == 0 {
+		return false
+	}
+	var frozen struct {
+		Version     int    `json:"version"`
+		ContentHash string `json:"content_hash"`
+	}
+	if json.Unmarshal(basis, &frozen) != nil || frozen.Version < 1 {
+		return false
+	}
+	var currentVersion int
+	var currentHash string
+	err := s.db.QueryRow(ctx, `SELECT os.version, os.content_hash
+		FROM ops_standard os
+		JOIN work w ON w.account_id = os.account_id
+		WHERE w.id = $1 AND os.effective_from <= (now() AT TIME ZONE 'Asia/Shanghai')::date
+		ORDER BY os.effective_from DESC, os.version DESC LIMIT 1`, workID).
+		Scan(&currentVersion, &currentHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false
+	}
+	if err != nil {
+		return false
+	}
+	return currentVersion != frozen.Version || currentHash != frozen.ContentHash
 }

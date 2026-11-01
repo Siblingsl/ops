@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -22,13 +23,17 @@ var slotLabels = map[string]string{
 }
 
 type SlotItem struct {
-	ID          string `json:"id,omitempty"`
-	Label       string `json:"label"`
-	Chars       int    `json:"chars"`
-	Used        bool   `json:"used"`
-	Revision    int64  `json:"revision,omitempty"`
-	ContentHash string `json:"content_hash,omitempty"`
-	Reason      string `json:"reason,omitempty"`
+	ID          string     `json:"id,omitempty"`
+	Label       string     `json:"label"`
+	Chars       int        `json:"chars"`
+	Used        bool       `json:"used"`
+	Revision    int64      `json:"revision,omitempty"`
+	ContentHash string     `json:"content_hash,omitempty"`
+	Reason      string     `json:"reason,omitempty"`
+	SourceKind  string     `json:"source_kind,omitempty"`
+	AsOfAt      *time.Time `json:"as_of_at,omitempty"`
+	State       string     `json:"state,omitempty"`
+	Purpose     string     `json:"purpose,omitempty"`
 }
 
 type Slot struct {
@@ -120,6 +125,7 @@ func (s *Server) profileText(ctx context.Context, a *Account, p *Profile, workID
 // buildContext fills the slots in priority order, trimming the trimmable ones to budget.
 func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, error) {
 	p := &ContextPack{Legacy: map[string]any{}, Images: t.Images}
+	includeCXBasis := t.CXBasisEnabled && cxExistingWritingTasks[t.Type]
 	var sys, usr strings.Builder
 
 	rules := systemRules
@@ -142,7 +148,22 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 		}
 		pt := s.profileText(ctx, t.Account, prof, t.WorkID)
 		sys.WriteString("\n\n## 账号定位档案\n" + pt)
-		p.add(Slot{Name: "profile", Chars: runeLen(pt)})
+		profileItem := SlotItem{ID: t.Account.ID.String(), Label: "定位与表达档案", Chars: runeLen(pt), Used: true}
+		if includeCXBasis {
+			profileHash, err := cxJSONHash(struct {
+				Tags     []string `json:"tags"`
+				Audience string   `json:"audience"`
+				Tone     string   `json:"tone"`
+				Banned   []string `json:"banned"`
+				Style    string   `json:"style"`
+			}{prof.PositioningTags, prof.TargetAudience, prof.PersonaTone, prof.BannedWords, prof.StyleSummary})
+			if err != nil {
+				return nil, err
+			}
+			profileItem.ContentHash = profileHash
+			profileItem.SourceKind, profileItem.AsOfAt, profileItem.State, profileItem.Purpose = "profile", &prof.UpdatedAt, "unconfirmed", "创作定位"
+		}
+		p.add(Slot{Name: "profile", Chars: runeLen(pt), Items: []SlotItem{profileItem}})
 		p.Legacy["profile"] = true
 		strategy, err := s.activeStrategy(ctx, t.Account.ID)
 		if err != nil {
@@ -152,7 +173,12 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 			brief := strategyBrief(strategy) + "差异化：" + strategy.Differentiation + "\n人设：" + strategy.Persona + "\n屏蔽词：" + strings.Join(strategy.BlockedWords, "、")
 			text := truncateRunes(brief, slotBudgets["strategy"])
 			sys.WriteString("\n\n## 当前运营方案\n" + text)
-			p.add(Slot{Name: "strategy", Chars: runeLen(text), Truncated: runeLen(brief) > runeLen(text), Items: []SlotItem{{ID: strategy.ID.String(), Label: fmt.Sprintf("运营方案第 %d 版", strategy.Version), Chars: runeLen(text), Used: true}}})
+			strategyItem := SlotItem{ID: strategy.ID.String(), Label: fmt.Sprintf("运营方案第 %d 版", strategy.Version), Chars: runeLen(text), Used: true}
+			if includeCXBasis {
+				strategyItem.Revision = int64(strategy.Version)
+				strategyItem.SourceKind, strategyItem.AsOfAt, strategyItem.State, strategyItem.Purpose = "strategy", &strategy.CreatedAt, "unconfirmed", "运营方案"
+			}
+			p.add(Slot{Name: "strategy", Chars: runeLen(text), Truncated: runeLen(brief) > runeLen(text), Items: []SlotItem{strategyItem}})
 		}
 
 		scope := t.MemoryScope
@@ -176,7 +202,11 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 				} else {
 					sl.Truncated = true
 				}
-				sl.Items = append(sl.Items, SlotItem{ID: m.ID.String(), Label: truncate(m.Text, 40), Chars: runeLen(m.Text), Used: used})
+				item := SlotItem{ID: m.ID.String(), Label: truncate(m.Text, 40), Chars: runeLen(m.Text), Used: used}
+				if includeCXBasis {
+					item.SourceKind, item.AsOfAt, item.State, item.Purpose = "confirmed_memory", &m.UpdatedAt, "unconfirmed", "作者确认的写作记忆"
+				}
+				sl.Items = append(sl.Items, item)
 			}
 			if mb.Len() > 0 {
 				sys.WriteString("\n## 作者确认过的写作偏好（必须遵守）\n" + mb.String())
@@ -285,7 +315,14 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 		}
 	}
 	restStart := 0
-	if instr, ver := s.loadTaskInstruction(ctx, t.Type); instr != "" {
+	var taskInstruction string
+	var taskInstructionVersion int
+	if t.TaskPrompt != nil {
+		taskInstruction, taskInstructionVersion = t.TaskPrompt.Content, t.TaskPrompt.Version
+	} else {
+		taskInstruction, taskInstructionVersion = s.loadTaskInstruction(ctx, t.Type)
+	}
+	if instr, ver := taskInstruction, taskInstructionVersion; instr != "" {
 		used := []rune(instr)
 		sl := Slot{Name: "task_instruction", Chars: len(used)}
 		usr.WriteString(instructionBlock(instr))
@@ -301,7 +338,7 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 		if t.Account != nil {
 			accountID = &t.Account.ID
 		}
-		text, sl, names, err := s.materialsSlot(ctx, accountID, t.Materials)
+		text, sl, names, err := s.materialsSlot(ctx, accountID, t.Materials, includeCXBasis)
 		if err != nil {
 			return nil, err
 		}
@@ -326,7 +363,12 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 				} else {
 					sl.Truncated = true
 				}
-				sl.Items = append(sl.Items, SlotItem{ID: h.ID, Label: "《" + h.Title + "》" + h.Heading, Chars: runeLen(h.Excerpt), Used: used})
+				item := SlotItem{ID: h.ID, Label: "《" + h.Title + "》" + h.Heading, Chars: runeLen(h.Excerpt), Used: used}
+				if includeCXBasis {
+					item.Revision = h.Revision
+					item.SourceKind, item.AsOfAt, item.State, item.Purpose = "work_section", &h.UpdatedAt, "unconfirmed", "历史段落写法参考"
+				}
+				sl.Items = append(sl.Items, item)
 			}
 			if hb.Len() > 0 {
 				usr.WriteString("## 本账号以前写过的相似段落（只参考结构和语气，不复用其中的事实）\n" + hb.String())
@@ -452,19 +494,22 @@ func (s *Server) styleSlot(ctx context.Context, accountID uuid.UUID, summary str
 var materialKindNames = map[string]string{"experience": "经历", "opinion": "观点", "case": "案例", "data": "数据"}
 
 // materialsSlot preserves every selected material in the caller's order.
-func (s *Server) materialsSlot(ctx context.Context, accountID *uuid.UUID, ids []uuid.UUID) (string, Slot, []string, error) {
+func (s *Server) materialsSlot(ctx context.Context, accountID *uuid.UUID, ids []uuid.UUID, includeCXBasis bool) (string, Slot, []string, error) {
 	sl := Slot{Name: "materials"}
-	rows, err := s.db.Query(ctx, `SELECT id, kind, content, source FROM material WHERE id = ANY($1) AND workspace_id=$2 AND deleted_at IS NULL
+	rows, err := s.db.Query(ctx, `SELECT id, kind, content, source, updated_at FROM material WHERE id = ANY($1) AND workspace_id=$2 AND deleted_at IS NULL
 		AND (account_id IS NULL OR account_id=$3)`, ids, ident(ctx).WorkspaceID, accountID)
 	if err != nil {
 		return "", sl, nil, err
 	}
-	type mat struct{ kind, content, source string }
+	type mat struct {
+		kind, content, source string
+		updatedAt             time.Time
+	}
 	found := map[uuid.UUID]mat{}
 	for rows.Next() {
 		var id uuid.UUID
 		var m mat
-		if err := rows.Scan(&id, &m.kind, &m.content, &m.source); err != nil {
+		if err := rows.Scan(&id, &m.kind, &m.content, &m.source, &m.updatedAt); err != nil {
 			rows.Close()
 			return "", sl, nil, err
 		}
@@ -487,7 +532,11 @@ func (s *Server) materialsSlot(ctx context.Context, accountID *uuid.UUID, ids []
 		b.WriteString(line)
 		sl.Chars += runeLen(line)
 		names = append(names, truncate(m.content, 16))
-		sl.Items = append(sl.Items, SlotItem{ID: id.String(), Label: truncate(m.content, 40), Chars: runeLen(m.content), Used: true})
+		item := SlotItem{ID: id.String(), Label: truncate(m.content, 40), Chars: runeLen(m.content), Used: true}
+		if includeCXBasis {
+			item.SourceKind, item.AsOfAt, item.State, item.Purpose = "material", &m.updatedAt, "unconfirmed", "创作素材"
+		}
+		sl.Items = append(sl.Items, item)
 	}
 	if b.Len() == 0 {
 		return "", sl, names, nil

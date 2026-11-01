@@ -244,3 +244,47 @@ func TestPlatformV2AccountSnapshotRejectsStaleRun(t *testing.T) {
 		t.Fatalf("结束后的提交不能改动快照，实际 %d 行", count)
 	}
 }
+
+// DEV-CX 同步任务（24 文档 14.4）：背景/置顶等本人资料可得字段进 safe_fields；
+// 未登记字段仍拒；safe_fields 文本超上限拒绝。
+func TestPlatformV2AccountSnapshotAcceptsNewSyncFieldsAndStillRejectsUnknown(t *testing.T) {
+	f, profile := startProfileStageFixture(t)
+
+	// 新字段随 safe_fields 写入。
+	data := snapshotData(f.ExternalKey(), time.Now().UTC())
+	data["safe_fields"] = map[string]string{
+		"account_category":     "生活记录",
+		"creator_level":        "Lv3",
+		"background_image_ref": "https://cdn.example.example/bg.jpg",
+		"pinned_title":         "置顶的那篇开始教程",
+		"pinned_note":          "置顶笔记摘要：三步完成第一次记录",
+	}
+	submitPlatformV2Batch(t, f, profile.ID, accountSnapshotBatch(profile, 0, data))
+	submitPlatformV2Batch(t, f, profile.ID, platformV2ControlBatch(profile, 1, "complete", nil, "succeeded"))
+	var safe map[string]string
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT safe_fields FROM platform_account_snapshot WHERE account_id=$1`, f.Account.ID).Scan(&safe); err != nil {
+		t.Fatal(err)
+	}
+	if safe["pinned_title"] != "置顶的那篇开始教程" || safe["background_image_ref"] == "" {
+		t.Fatalf("new sync fields must persist: %#v", safe)
+	}
+
+	// 未登记字段仍拒绝。
+	f2, profile2 := startProfileStageFixture(t)
+	bad := snapshotData(f2.ExternalKey(), time.Now().UTC())
+	bad["safe_fields"] = map[string]string{"invented_field": "x"}
+	status, response := submitV2BatchRaw(t, f2, profile2.ID, accountSnapshotBatch(profile2, 0, bad))
+	if status != http.StatusUnprocessableEntity || apiCode(response) != "validation_failed" {
+		t.Fatalf("unknown safe field must be rejected: %d %s", status, response)
+	}
+
+	// 置顶摘要超上限拒绝。
+	f3, profile3 := startProfileStageFixture(t)
+	over := snapshotData(f3.ExternalKey(), time.Now().UTC())
+	over["safe_fields"] = map[string]string{"pinned_note": strings.Repeat("长", 2049)}
+	status, response = submitV2BatchRaw(t, f3, profile3.ID, accountSnapshotBatch(profile3, 0, over))
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("over-limit pinned_note must be rejected: %d %s", status, response)
+	}
+}

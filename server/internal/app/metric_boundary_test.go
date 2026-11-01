@@ -19,6 +19,7 @@ import (
 // metricStorageFiles 是指标存储、投影、质量状态与导出层——它们**必须**直查底层表。
 var metricStorageFiles = map[string]string{
 	"metric_projection.go":  "统一投影入口与来源排序的实现处",
+	"metric_review_projection.go": "DEV-CX13-B 精确小时窗口、正式快照查询与同口径基准的投影层",
 	"metric_quality.go":     "质量状态机（held/approved/superseded）的 upsert 与 CAS",
 	"review.go":             "指标录入/更正/删除的写入与回读（含 FOR UPDATE）",
 	"publish_correction.go": "发布更正时按作品回读全部指标",
@@ -40,7 +41,9 @@ var metricD7LegacyConsumers = map[string]string{}
 
 // metricReadAllowlist 是额外的已审核例外：文件 → 理由。
 // 新增条目必须在这里写明为什么不能走 metric_node_public。
-var metricReadAllowlist = map[string]string{}
+var metricReadAllowlist = map[string]string{
+	"publish_state.go": "DEV-CX13-A 登记/失效事务按用户选择的精确 metric ID 与 revision 校验质量和单位；metric_node_public 只返回每来源最新快照且不含 revision，不能验证任意已登记快照的 CAS。",
+}
 
 // TestMetricReadsStayInsideStorageLayer 检查指标底层表只被存储/投影层与已登记旧消费点直查。
 //

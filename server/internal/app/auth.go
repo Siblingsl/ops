@@ -569,6 +569,13 @@ func viewerMutateAllowed(path string) bool {
 	if strings.HasPrefix(path, "/api/v1/workspaces/") && strings.HasSuffix(path, "/switch") {
 		return true
 	}
+	// FR-CX-01: render-check is a versioned read-only POST; it creates no report or work state.
+	if rest, ok := strings.CutPrefix(path, "/api/v1/works/"); ok && strings.HasSuffix(rest, "/render-check") {
+		idText := strings.TrimSuffix(rest, "/render-check")
+		if id, err := uuid.Parse(idText); err == nil && id.String() == strings.ToLower(idText) {
+			return true
+		}
+	}
 	// 个人状态：通知已读、星标、在线状态
 	if strings.HasPrefix(path, "/api/v1/notifications/") && strings.HasSuffix(path, "/read") {
 		return true

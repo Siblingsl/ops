@@ -358,6 +358,9 @@ func replaceAutoMetric(ctx context.Context, tx pgx.Tx, proj metricProjection) (M
 			existingID, proj.CapturedAt, proj.Reads, proj.ReadUnit, proj.Likes, proj.Wows, proj.Favorites,
 			proj.Comments, proj.Shares, proj.ShareUnit, proj.Impressions, proj.ObservedAt, proj.AsOfAt,
 			proj.ExternalID, meta))
+		if err == nil {
+			err = invalidateRegisteredPublishMetric(ctx, tx, m.ID, publishActorID(ctx), false)
+		}
 		return m, err
 	case errors.Is(err, pgx.ErrNoRows):
 		var m Metric
@@ -442,6 +445,53 @@ func (s *Server) metricNodePublic(ctx context.Context, workID uuid.UUID, node *i
 		if err != nil {
 			return nil, err
 		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// cxAccountFormalMetrics uses the approved public metric projection and only
+// links a mirror through a confirmed local binding. It returns a single
+// retained snapshot per selected mirror, not a comparison window or ranking.
+func cxAccountFormalMetrics(ctx context.Context, q cxBasisQueryer, workspaceID, accountID uuid.UUID, mirrors []cxAccountWorkInput) ([]cxAccountMetricInput, error) {
+	out := []cxAccountMetricInput{}
+	if len(mirrors) == 0 {
+		return out, nil
+	}
+	var platform string
+	if err := q.QueryRow(ctx, `SELECT platform FROM platform_account WHERE id=$1 AND workspace_id=$2`, accountID, workspaceID).Scan(&platform); err != nil {
+		return nil, err
+	}
+	column := platformExternalIDColumn(platform)
+	if column == "" {
+		return out, nil
+	}
+	ids := make([]uuid.UUID, 0, len(mirrors))
+	for _, mirror := range mirrors {
+		ids = append(ids, mirror.ID)
+	}
+	query := `SELECT DISTINCT ON (mirror.id) mirror.id,w.id,w.publish_revision,w.metric_binding_revision,
+		p.metric_id,raw.revision,p.source,p.captured_at,p.as_of_at,p.reads,p.read_unit,p.likes,p.favorites,p.comments,p.shares,p.share_unit,p.follows_gained,p.impressions
+		FROM platform_work_mirror mirror
+		JOIN work w ON w.account_id=mirror.account_id AND w.` + column + `=mirror.external_id
+		  AND w.deleted_at IS NULL AND w.status='published' AND w.published_at IS NOT NULL
+		  AND w.platform_binding_source IN ('user_link','user_confirm','official_exact')
+		JOIN LATERAL metric_node_public(w.id,NULL) p ON TRUE
+		JOIN metric_snapshot raw ON raw.id=p.metric_id AND raw.work_id=w.id
+		WHERE mirror.workspace_id=$1 AND mirror.account_id=$2 AND mirror.id=ANY($3::uuid[])
+		  AND p.captured_at<=now() AND (p.as_of_at IS NULL OR p.as_of_at<=now())
+		ORDER BY mirror.id,p.captured_at DESC,metric_source_rank(p.source),p.metric_id`
+	rows, err := q.Query(ctx, query, workspaceID, accountID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m cxAccountMetricInput
+		if err := rows.Scan(&m.MirrorID, &m.WorkID, &m.PublishRevision, &m.BindingRevision, &m.MetricID, &m.Revision, &m.Source, &m.CapturedAt, &m.AsOfAt, &m.Reads, &m.ReadUnit, &m.Likes, &m.Favorites, &m.Comments, &m.Shares, &m.ShareUnit, &m.FollowsGained, &m.Impressions); err != nil {
+			return nil, err
+		}
+		m.QualityState = "approved" // metric_node_public only returns approved records.
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -587,6 +637,9 @@ func (s *Server) confirmObservationTx(ctx context.Context, tx pgx.Tx, observatio
 		}
 		if _, err := tx.Exec(ctx, `UPDATE metric_snapshot SET observation_id=$2 WHERE id=$1`,
 			m.ID, observationID); err != nil {
+			return err
+		}
+		if err := invalidateRegisteredPublishMetric(ctx, tx, m.ID, publishActorID(ctx), false); err != nil {
 			return err
 		}
 		if err := s.auditTx(ctx, tx, "metric_observation_confirm", "platform_metric_observation",

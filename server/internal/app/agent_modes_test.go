@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -169,5 +170,46 @@ func TestAW07ModeFiltersDefinitionLookupAndDirectProposal(t *testing.T) {
 	st.Mode = "execute"
 	if agentRunToolAllowed(st, agentTool("memory__create"), viewer) {
 		t.Fatal("viewer不能靠execute扩大权限")
+	}
+}
+
+// DEV-CX11 回归修复：cx_basis/refs 并入工具结果后 2000 码点截断会产生不可解析 JSON。
+// agentJSONSafePreview 须保证截断预览仍可 JSON.parse，且靠前字段（如标题）不被挤出。
+func TestAgentJSONSafePreviewStaysParseable(t *testing.T) {
+	// cx_basis/refs 回执使工具结果膨胀且 map 序列化按字母序把回执排前；
+	// agentReceiptsLast 把回执移到尾部后，2000 码点截断窗口内仍能看到 titles 等业务字段，
+	// 且 agentJSONSafePreview 保证截断后的 JSON 仍可解析。
+	big := `{"titles":[{"text":"小步持续改进","style":"直述"}],"refs":{"cx_basis":"` + strings.Repeat("x", 3000) + `"},"ai_call_id":"abc"}`
+	preview := agentJSONSafePreview(agentReceiptsLast(big), 2000)
+	if !json.Valid([]byte(preview)) {
+		t.Fatal("preview must stay valid JSON after truncation")
+	}
+	if !strings.Contains(preview, "小步持续改进") {
+		t.Fatal("business field must survive truncation after receipts-last reorder")
+	}
+	ok := `{"a":1}`
+	if agentJSONSafePreview(agentReceiptsLast(ok), 2000) != ok {
+		t.Fatal("short valid json must pass through unchanged")
+	}
+	plain := strings.Repeat("字", 3000)
+	if got := agentJSONSafePreview(plain, 100); got != strings.Repeat("字", 100) {
+		t.Fatal("plain text must truncate as-is")
+	}
+	// 悬空键：截断停在键名中间（"s），直接闭合非法，回退后仍要可解析且保留 items。
+	dangling := fmt.Sprintf(`{"items":[%s],"memories":0,"model":"m","prompt_version":1,"s`,
+		strings.TrimSuffix(strings.Repeat(`{"heading":"先说结论","key_point":"围绕目标展开论述","material_ids":[]},`, 12), ","))
+	var out struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(agentJSONSafePreview(dangling, 2000)), &out); err != nil || len(out.Items) != 12 {
+		t.Fatalf("dangling key must be dropped and items kept: %v %d", err, len(out.Items))
+	}
+	if agentReceiptsLast("[1,2]") != "[1,2]" {
+		t.Fatal("non-object must pass through")
+	}
+	small := `{"b":1,"ai_call_id":"x","a":2}`
+	var roundTrip map[string]any
+	if err := json.Unmarshal([]byte(agentReceiptsLast(small)), &roundTrip); err != nil || len(roundTrip) != 3 {
+		t.Fatalf("receipts-last must round-trip object semantics: %v", err)
 	}
 }

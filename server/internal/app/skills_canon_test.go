@@ -208,10 +208,10 @@ func mustSkillTime(t *testing.T, s string) time.Time {
 	return tm
 }
 
-// T-SK-39（SK1 前置）：内置注册表 8 项、key/UUID 唯一、确定性 UUID 全实例一致。
+// T-SK-39（SK1 前置）：内置注册表 12 项、key/UUID 唯一、确定性 UUID 全实例一致。
 func TestSkillBuiltinRegistry(t *testing.T) {
-	if len(builtinSkills) != 8 {
-		t.Fatalf("want 8 builtins, got %d", len(builtinSkills))
+	if len(builtinSkills) != 12 {
+		t.Fatalf("want 12 registered builtins, got %d", len(builtinSkills))
 	}
 	seen := map[uuid.UUID]bool{}
 	for _, b := range builtinSkills {
@@ -250,6 +250,12 @@ func TestSkillBuiltinRegistry(t *testing.T) {
 	}
 	if got := skillBuiltinByKey("builtin:xhs_note_voice").Fields.Platforms; strings.Join(got, ",") != "xhs" {
 		t.Fatalf("xhs_note_voice platforms: %v", got)
+	}
+	if got := skillBuiltinByKey("builtin:structure_borrowing").Fields.TaskTypes; strings.Join(got, ",") != "outline" {
+		t.Fatalf("structure_borrowing tasks: %v", got)
+	}
+	if got := skillBuiltinByKey("builtin:cover_copy").Fields.ContentFormats; strings.Join(got, ",") != "card_post,image_note" {
+		t.Fatalf("cover_copy formats: %v", got)
 	}
 	// 内置不入 skill 表（第 13 节）：确定性 UUID 在数据库中不存在任何定义行。
 	for _, b := range builtinSkills {

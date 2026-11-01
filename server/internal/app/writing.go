@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -80,12 +81,59 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 		return humanStep("H-02", "请先写下你自己的核心观点，再生成大纲")
 	}
 	var in struct {
-		Template string `json:"template"`
+		Template         string   `json:"template"`
+		SkeletonNoteIDs []string `json:"skeleton_note_ids"`
 	}
 	if err := decodeOptional(r, &in); err != nil {
 		return err
 	}
 	ctx := r.Context()
+	// DEV-CX12 / FR-CX-14：用户显式选择的拆解骨架，按目的受限来源加入大纲上下文——
+	// 只注入 hook_type/sections.role/rhythm 结构字段，gist 仅供人读；不把骨架当完整参考正文。
+	skeletonBrief := ""
+	if len(in.SkeletonNoteIDs) > 0 {
+		if len(in.SkeletonNoteIDs) > 5 {
+			return validation("骨架引用最多选择 5 条")
+		}
+		var sb strings.Builder
+		for _, rawID := range in.SkeletonNoteIDs {
+			noteID, err := uuid.Parse(strings.TrimSpace(rawID))
+			if err != nil {
+				return validation("骨架引用标识格式不正确")
+			}
+			var structureBytes []byte
+			var targetAccount uuid.UUID
+			if err := s.db.QueryRow(ctx, `SELECT bn.structure, bt.account_id FROM benchmark_note bn
+				JOIN benchmark_target bt ON bt.id=bn.target_id
+				WHERE bn.id=$1 AND bt.account_id=$2 AND bn.archived_at IS NULL`,
+				noteID, m.Account.ID).Scan(&structureBytes, &targetAccount); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return validation("骨架引用不在当前账号范围内")
+				}
+				return err
+			}
+			var skel struct {
+				HookType string `json:"hook_type"`
+				Sections []struct {
+					Role string `json:"role"`
+				} `json:"sections"`
+				Rhythm struct {
+					Paragraphs int `json:"paragraphs"`
+					AvgChars   int `json:"avg_chars"`
+				} `json:"rhythm"`
+			}
+			if err := json.Unmarshal(structureBytes, &skel); err != nil {
+				return validation("骨架引用的结构不是合格拆解结果")
+			}
+			roles := make([]string, 0, len(skel.Sections))
+			for _, section := range skel.Sections {
+				roles = append(roles, section.Role)
+			}
+			fmt.Fprintf(&sb, "- 钩子类型 %s；段落角色顺序 %s；节奏约 %d 段、每段约 %d 字。\n",
+				skel.HookType, strings.Join(roles, "→"), skel.Rhythm.Paragraphs, skel.Rhythm.AvgChars)
+		}
+		skeletonBrief = "\n## 用户选择的对标结构骨架（只参考结构，不复制任何原文）\n" + sb.String()
+	}
 	mids, err := s.workMaterialIDs(ctx, m.ID)
 	if err != nil {
 		return err
@@ -118,7 +166,11 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 			refs["format_brief"] = m.ContentFormat
 		}
 	}
-	outlineRange := "4 到 8 个段落"
+		if skeletonBrief != "" {
+		structure += skeletonBrief
+		refs["benchmark_skeletons"] = in.SkeletonNoteIDs
+	}
+outlineRange := "4 到 8 个段落"
 	if m.Account.Platform == "toutiao" && m.ContentFormat == "micro_post" {
 		outlineRange = "建议 1 到 3 个短要点；这是起草建议，作者可以按需要调整数量"
 		if structure == "" {
@@ -134,7 +186,15 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 	var out struct {
 		Items []OutlineItem `json:"items"`
 	}
-	res, err := s.runAIJSON(ctx, aiTask{Type: "outline", Account: m.Account, WorkID: &m.ID, User: user, Materials: mids, Work: work, Refs: refs}, &out, func() error {
+	workRevision := cxExpectedWorkRevision(m.Revision)
+	var skeletonOmissions []cxBasisOmission
+	if skeletonBrief != "" {
+		skeletonOmissions = append(skeletonOmissions, cxBasisOmission{Ref: "benchmark_skeleton",
+			Reason: "用户选择的拆解骨架已按受限字段（hook_type/sections.role/rhythm）注入结构要求；cx_basis v1 未定义该来源类型，详情见 refs.benchmark_skeletons"})
+	}
+	res, err := s.runAIJSON(ctx, aiTask{Type: "outline", Account: m.Account, WorkID: &m.ID, User: user, Materials: mids, Work: work, Refs: refs,
+		CXUnrepresentedItems: skeletonOmissions,
+		CXBasisEnabled: true, CXExpectedWorkRev: workRevision}, &out, func() error {
 		if len(out.Items) < 2 {
 			return fmt.Errorf("大纲项太少")
 		}
@@ -162,7 +222,7 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 	if len(out.Items) > 8 {
 		out.Items = out.Items[:8]
 	}
-	return ok(w, map[string]any{"items": out.Items, "refs": res.Refs, "ai_call_id": res.CallID})
+	return ok(w, map[string]any{"items": out.Items, "refs": res.Refs, "ai_call_id": res.CallID, "cx_basis": res.CXBasis})
 }
 
 // workBrief is the work slot: title, topic fields, viewpoint, confirmed outline and series neighbours.
@@ -223,14 +283,14 @@ func (s *Server) workBriefForSection(ctx context.Context, m *workMeta, sectionID
 }
 
 // sectionContext returns the work slot and the neighbour paragraphs (trimmed first when over budget).
-func (s *Server) sectionContext(ctx context.Context, m *workMeta, sec *Section) (string, string, error) {
+func (s *Server) sectionContext(ctx context.Context, m *workMeta, sec *Section) (string, string, []Section, error) {
 	work, err := s.workBriefForSection(ctx, m, &sec.ID)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	secs, err := s.loadSections(ctx, nil, m.ID)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	var prev, next string
 	for i, x := range secs {
@@ -243,7 +303,7 @@ func (s *Server) sectionContext(ctx context.Context, m *workMeta, sec *Section) 
 			}
 		}
 	}
-	return work, fmt.Sprintf("## 相邻段落\n上一段：%s\n下一段：%s\n", nz(prev, "（无）"), nz(next, "（无）")), nil
+	return work, fmt.Sprintf("## 相邻段落\n上一段：%s\n下一段：%s\n", nz(prev, "（无）"), nz(next, "（无）")), secs, nil
 }
 
 // sectionMaterialIDs uses the section's bound materials, falling back to the work's (EX-E-05),
@@ -543,7 +603,23 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 			Style string `json:"style"`
 		} `json:"titles"`
 	}
-	res, err := s.runAIJSON(ctx, aiTask{Type: "title", Account: m.Account, WorkID: &m.ID, User: user, StyleSummaryOnly: true}, &out, func() error {
+	var unrepresented []cxBasisOmission
+	if len(recent) > 0 {
+		unrepresented = append(unrepresented, cxBasisOmission{Ref: "recent_titles", Reason: "近期本地作品标题已参与生成；cx_basis v1 未定义作品标题来源类型，输入摘要已纳入 input_hash"})
+	}
+	if len(strongList) > 0 {
+		unrepresented = append(unrepresented, cxBasisOmission{Ref: "title_performance", Reason: "本号标题表现特征已参与生成；cx_basis v1 未定义该汇总来源类型"})
+	}
+	if len(samples) > 0 {
+		unrepresented = append(unrepresented, cxBasisOmission{Ref: "ai_feedback", Reason: "历史标题反馈示例已参与生成；cx_basis v1 未定义该来源类型"})
+	}
+	workRevision := cxExpectedWorkRevision(m.Revision)
+	sectionIDs := make([]uuid.UUID, 0, len(secs))
+	for _, section := range secs {
+		sectionIDs = append(sectionIDs, section.ID)
+	}
+	res, err := s.runAIJSON(ctx, aiTask{Type: "title", Account: m.Account, WorkID: &m.ID, User: user, StyleSummaryOnly: true,
+		CXBasisEnabled: true, CXExpectedWorkRev: workRevision, CXSectionSources: cxWritingSectionSources(secs, sectionIDs...), CXUnrepresentedItems: unrepresented}, &out, func() error {
 		kept := out.Titles[:0]
 		long, banned, empty := 0, 0, 0
 		for _, title := range out.Titles {
@@ -603,7 +679,7 @@ func (s *Server) generateTitles(w http.ResponseWriter, r *http.Request) error {
 		}
 		list = append(list, c)
 	}
-	return ok(w, map[string]any{"titles": list, "refs": res.Refs, "ai_call_id": res.CallID, "max_chars": maxLen, "strong_features": strongList})
+	return ok(w, map[string]any{"titles": list, "refs": res.Refs, "ai_call_id": res.CallID, "max_chars": maxLen, "strong_features": strongList, "cx_basis": res.CXBasis})
 }
 
 // titleFeatures are explainable traits only — never a predicted popularity number (EX-E-14).

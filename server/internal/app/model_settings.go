@@ -36,6 +36,8 @@ type Provider struct {
 	LastTestResult string     `json:"last_test_result"`
 	PricePrompt    *float64   `json:"price_per_1k_prompt"`
 	PriceComplete  *float64   `json:"price_per_1k_completion"`
+	// ContextWindowTokens 由用户按厂商文档显式登记；NULL 表示未登记、不做发送前预算检查。
+	ContextWindowTokens *int        `json:"context_window_tokens"`
 	CircuitState   string     `json:"circuit_state"`
 	RetryAfter     int        `json:"retry_after_seconds"`
 	// Capabilities lists the per-model tool-calling / vision self-test results.
@@ -43,13 +45,13 @@ type Provider struct {
 }
 
 const providerCols = `id, name, base_url, api_key_enc, models, status, last_test_at, last_test_ok, last_test_result,
-	price_per_1k_prompt::float8, price_per_1k_completion::float8`
+	price_per_1k_prompt::float8, price_per_1k_completion::float8, context_window_tokens`
 
 func (s *Server) scanProvider(row pgx.Row) (*Provider, error) {
 	var p Provider
 	var enc []byte
 	if err := row.Scan(&p.ID, &p.Name, &p.BaseURL, &enc, &p.Models, &p.Status, &p.LastTestAt, &p.LastTestOK, &p.LastTestResult,
-		&p.PricePrompt, &p.PriceComplete); err != nil {
+		&p.PricePrompt, &p.PriceComplete, &p.ContextWindowTokens); err != nil {
 		return nil, err
 	}
 	if key, err := s.box.Decrypt(enc); err == nil {
@@ -125,6 +127,8 @@ type providerInput struct {
 	// Prices are optional; a negative value clears the price.
 	PricePrompt   *float64 `json:"price_per_1k_prompt"`
 	PriceComplete *float64 `json:"price_per_1k_completion"`
+	// ContextWindowTokens 登记模型上下文窗口（token）；未提供则保持原值，不做发送前预算检查。
+	ContextWindowTokens *int `json:"context_window_tokens"`
 	// Assign maps a quick-setup role (route task type) to one of Models; only empty routes are written (DEV-UX01).
 	Assign map[string]string `json:"assign"`
 }
@@ -133,6 +137,14 @@ type providerInput struct {
 var quickRoles = map[string]string{"default": "主力模型", "tier_economy": "经济档", "tier_quality": "质量档", "metric_screenshot": "图片识别"}
 
 func priceArg(p *float64) any {
+	if p == nil || *p < 0 {
+		return nil
+	}
+	return *p
+}
+
+// contextWindowArg：负值或 0 视为清除登记；有效下限 1024 由列 CHECK 兜底。
+func contextWindowArg(p *int) any {
 	if p == nil || *p < 0 {
 		return nil
 	}
@@ -208,8 +220,8 @@ func (s *Server) createProvider(w http.ResponseWriter, r *http.Request) error {
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		p, err = s.scanProvider(tx.QueryRow(ctx, `INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models,
-			price_per_1k_prompt, price_per_1k_completion) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+providerCols,
-			ws, strings.TrimSpace(*in.Name), *in.BaseURL, enc, s.box.Version, cleanList(in.Models), priceArg(in.PricePrompt), priceArg(in.PriceComplete)))
+			price_per_1k_prompt, price_per_1k_completion, context_window_tokens) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING `+providerCols,
+			ws, strings.TrimSpace(*in.Name), *in.BaseURL, enc, s.box.Version, cleanList(in.Models), priceArg(in.PricePrompt), priceArg(in.PriceComplete), contextWindowArg(in.ContextWindowTokens)))
 		if err != nil {
 			return err
 		}
@@ -359,6 +371,11 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 				return err
 			}
 		}
+		if in.ContextWindowTokens != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET context_window_tokens=$2 WHERE id=$1 AND workspace_id=$3 AND execution_location='server'`, id, contextWindowArg(in.ContextWindowTokens), ws); err != nil {
+				return err
+			}
+		}
 		_, err := tx.Exec(ctx, `UPDATE model_provider SET updated_at=now() WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, id, ws)
 		return err
 	})
@@ -482,6 +499,14 @@ var taskTypes = []struct{ Type, Label string }{
 	{"account_positioning", "账号运营方案"},
 	{"strategy_revise", "运营方案调整"},
 	{"strategy_outline", "内容大纲建议"},
+	{"cx_account_analyze", "账号内容分析"},
+	{"cx_topic_diagnose", "选题体检"},
+	{"cx_title_diagnose", "标题与正文诊断"},
+	{"cx_visual_plan", "社交组图计划"},
+	{"cx_profile_simulate", "主页三秒印象模拟"},
+	{"cx_structure_extract", "结构拆解"},
+	{"cx_rewrite_compare", "改写度比对"},
+	{"cx_comment_reply", "评论回复拟稿"},
 	{"hot_relevance", "热点相关度"},
 	{"daily_recommend", "每日推荐"},
 	{"reference_analyze", "参考方法提炼"},

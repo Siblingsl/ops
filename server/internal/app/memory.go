@@ -26,14 +26,15 @@ type Profile struct {
 	StyleSummary    string         `json:"style_summary"`
 	DefaultTheme    string         `json:"default_theme"`
 	WechatDefaults  WechatDefaults `json:"wechat_defaults"`
+	UpdatedAt       time.Time      `json:"-"`
 }
 
 func (s *Server) loadProfile(ctx context.Context, accountID uuid.UUID) (*Profile, error) {
 	p := Profile{AccountID: accountID}
 	var wd []byte
-	err := s.db.QueryRow(ctx, `SELECT positioning_tags, target_audience, persona_tone, banned_words, style_summary, default_theme, wechat_defaults
+	err := s.db.QueryRow(ctx, `SELECT positioning_tags, target_audience, persona_tone, banned_words, style_summary, default_theme, wechat_defaults, updated_at
 		FROM account_profile WHERE account_id=$1`, accountID).Scan(&p.PositioningTags, &p.TargetAudience, &p.PersonaTone,
-		&p.BannedWords, &p.StyleSummary, &p.DefaultTheme, &wd)
+		&p.BannedWords, &p.StyleSummary, &p.DefaultTheme, &wd, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

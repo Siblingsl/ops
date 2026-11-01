@@ -62,8 +62,81 @@ func TestSkillBuiltinRegistryMatchesDocument(t *testing.T) {
 			t.Fatalf("%s version/UUID differs from v0.3", cols[1])
 		}
 	}
-	if len(names) != 8 || len(seen) != 8 || len(seen) != len(builtinSkills) {
+	if len(names) != 12 || len(seen) != 12 || len(seen) != len(builtinSkills) {
 		t.Fatalf("document/registry count: %d/%d", len(seen), len(builtinSkills))
+	}
+	for _, key := range []string{"builtin:topic_screening", "builtin:title_diagnosis", "builtin:structure_borrowing", "builtin:cover_copy"} {
+		if !seen[key] {
+			t.Errorf("D-156 builtin %s missing from the skill contract", key)
+		}
+	}
+}
+
+func TestD156BuiltinSkillsApplyOnlyToTheirDeclaredTasks(t *testing.T) {
+	var library struct {
+		Items []struct {
+			ID        uuid.UUID `json:"id"`
+			Scope     string    `json:"scope"`
+			SourceKey string    `json:"source_key"`
+		} `json:"items"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/skills?scope=builtin&limit=12", nil, &library)
+	if len(library.Items) != 12 {
+		t.Fatalf("builtin library should expose all 12 registered entries, got %d", len(library.Items))
+	}
+	listed := make(map[string]bool, len(library.Items))
+	for _, item := range library.Items {
+		if item.Scope != "builtin" || item.ID == uuid.Nil || item.SourceKey == "" || listed[item.SourceKey] {
+			t.Fatalf("invalid builtin library item: %+v", item)
+		}
+		listed[item.SourceKey] = true
+	}
+	for _, key := range []string{"builtin:structure_borrowing", "builtin:cover_copy"} {
+		if !listed[key] {
+			t.Errorf("GET /skills did not expose %s", key)
+		}
+	}
+
+	for _, tc := range []struct {
+		key, task, wrongTask, platform string
+	}{
+		{"builtin:structure_borrowing", "outline", "title", "wechat"},
+		{"builtin:cover_copy", "image_suggest", "title", "xhs"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			for _, request := range []struct {
+				task string
+				want bool
+			}{{tc.task, true}, {tc.wrongTask, false}} {
+				ctx, accounts := skillAIEnv(t)
+				account := &accounts.wechat
+				if tc.platform == "xhs" {
+					account = &accounts.xhs
+				}
+				definition := skillBuiltinByKey(tc.key)
+				if definition == nil {
+					t.Fatalf("missing builtin %s", tc.key)
+				}
+				if _, err := env.srv.db.Exec(context.Background(), `INSERT INTO skill_binding (account_id, builtin_key, priority) VALUES ($1,$2,100) ON CONFLICT DO NOTHING`, account.ID, definition.BuiltinKey); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM skill_binding WHERE account_id=$1 AND builtin_key=$2`, account.ID, definition.BuiltinKey)
+				})
+				env.llm.ResetRequests()
+				if _, err := env.srv.runAI(ctx, aiTask{Type: request.task, Account: account, User: "检查 D-156 内置技能任务范围"}, nil); err != nil {
+					t.Fatalf("run %s: %v", request.task, err)
+				}
+				requests := env.llm.Requests()
+				if len(requests) == 0 {
+					t.Fatal("AI request was not recorded")
+				}
+				included := strings.Contains(systemOf(t, requests[len(requests)-1]), definition.Fields.Instructions)
+				if included != request.want {
+					t.Fatalf("skill %s inclusion for task %s = %v, want %v", tc.key, request.task, included, request.want)
+				}
+			}
+		})
 	}
 }
 

@@ -1045,20 +1045,23 @@ type agentSkillUsageView struct {
 }
 
 type agentMessageView struct {
-	ID              uuid.UUID               `json:"id"`
-	Seq             int                     `json:"seq"`
-	MessageKey      string                  `json:"message_key,omitempty"`
-	Role            string                  `json:"role"`
-	Content         string                  `json:"content"`
-	AICallID        *uuid.UUID              `json:"ai_call_id"`
-	ToolCalls       []agentToolCallView     `json:"tool_calls"`
-	Attachments     []agentAttachmentView   `json:"attachments"`
-	ContextRefs     []agentContextReference `json:"context_refs"`
-	SkillRequests   []agentSkillRequest     `json:"skill_requests"`
-	SkillUsage      []agentSkillUsageView   `json:"skill_usage"`
+	ID          uuid.UUID               `json:"id"`
+	Seq         int                     `json:"seq"`
+	MessageKey  string                  `json:"message_key,omitempty"`
+	Role        string                  `json:"role"`
+	Content     string                  `json:"content"`
+	AICallID    *uuid.UUID              `json:"ai_call_id"`
+	ToolCalls   []agentToolCallView     `json:"tool_calls"`
+	Attachments []agentAttachmentView   `json:"attachments"`
+	ContextRefs []agentContextReference `json:"context_refs"`
+	SkillRequests []agentSkillRequest   `json:"skill_requests"`
+	SkillUsage    []agentSkillUsageView `json:"skill_usage"`
 	RunID           *uuid.UUID              `json:"run_id"`
 	SourceMessageID *uuid.UUID              `json:"source_message_id,omitempty"`
-	CreatedAt       time.Time               `json:"created_at"`
+	// tool 消息的调用关联：完整结果在 Content（落库上限 64KB），result_preview 只是 UI 截断预览。
+	ToolCallID string    `json:"tool_call_id,omitempty"`
+	ToolName   string    `json:"tool_name,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type agentTargetView struct {
@@ -1262,7 +1265,7 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 // agentMessages 返回窗口内的消息；role=tool 不单独列出，而是折叠为助手消息的工具调用摘要（第 11.2 节）。
 func (s *Server) agentMessages(ctx context.Context, tx pgx.Tx, convID uuid.UUID, before int) ([]agentMessageView, bool, error) {
 	args := []any{convID}
-	sql := `SELECT id, seq, message_key, role, content, ai_call_id, tool_calls, tool_call_id, attachment_ids, context_refs, skill_requests, run_id, created_at, source_message_id
+	sql := `SELECT id, seq, message_key, role, content, ai_call_id, tool_calls, tool_call_id, tool_name, attachment_ids, context_refs, skill_requests, run_id, created_at, source_message_id
 		FROM agent_message WHERE conversation_id=$1`
 	if before > 0 {
 		args = append(args, before)
@@ -1288,10 +1291,11 @@ func (s *Server) agentMessages(ctx context.Context, tx pgx.Tx, convID uuid.UUID,
 		var m rawMessage
 		var toolCalls []byte
 		if err := rows.Scan(&m.view.ID, &m.view.Seq, &m.view.MessageKey, &m.view.Role, &m.view.Content, &m.view.AICallID, &toolCalls,
-			&m.toolID, &m.ids, &m.contextRefs, &m.skillRequests, &m.view.RunID, &m.view.CreatedAt, &m.view.SourceMessageID); err != nil {
+			&m.toolID, &m.view.ToolName, &m.ids, &m.contextRefs, &m.skillRequests, &m.view.RunID, &m.view.CreatedAt, &m.view.SourceMessageID); err != nil {
 			rows.Close()
 			return nil, false, err
 		}
+		m.view.ToolCallID = m.toolID
 		m.raw = toolCalls
 		m.view.ContextRefs = []agentContextReference{}
 		m.view.SkillRequests = []agentSkillRequest{}
@@ -1446,10 +1450,157 @@ func agentToolCallsOf(rawToolCalls []byte, results map[string]string) []agentToo
 			ID:            c.ID,
 			Name:          c.Name,
 			Summary:       truncateRunes(firstLine(content), 120),
-			ResultPreview: truncateRunes(content, 2000),
+			ResultPreview: agentJSONSafePreview(agentReceiptsLast(content), 2000),
 		})
 	}
 	return out
+}
+
+// agentReceiptKeys 是工具结果里的调用回执键：对预览而言是噪声，重排到对象尾部，
+// 避免把 titles/items 等业务数据挤出 2000 码点截断窗口（cx_basis 联动引入的膨胀）。
+var agentReceiptKeys = map[string]bool{
+	"ai_call_id": true, "cx_basis": true, "refs": true, "skills": true, "slots": true,
+	"memories": true, "profile": true, "prompt_version": true, "model": true, "latency_ms": true,
+}
+
+// agentReceiptsLast 把 JSON 对象顶层的回执键移到输出尾部，其余键保持原相对顺序；非对象或解析失败原样返回。
+func agentReceiptsLast(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "{") {
+		return content
+	}
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	dec.UseNumber()
+	tok, err := dec.Token()
+	if err != nil {
+		return content
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return content
+	}
+	head := []byte{'{'}
+	tailKeys := []json.RawMessage{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return content
+		}
+		key, _ := keyTok.(string)
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return content
+		}
+		entry, err := agentJSONKeyEntry(trimmed, key, value)
+		if err != nil {
+			return content
+		}
+		if agentReceiptKeys[key] {
+			tailKeys = append(tailKeys, entry)
+		} else {
+			if len(head) > 1 {
+				head = append(head, ',')
+			}
+			head = append(head, entry...)
+		}
+	}
+	for _, entry := range tailKeys {
+		if len(head) > 1 {
+			head = append(head, ',')
+		}
+		head = append(head, entry...)
+	}
+	head = append(head, '}')
+	if _, err := dec.Token(); err != nil {
+		return content
+	}
+	return string(head)
+}
+
+// agentJSONKeyEntry 用原始片段还原 "key":value（保留键序与原文，不做重编码）。
+func agentJSONKeyEntry(source string, key string, value json.RawMessage) ([]byte, error) {
+	needle := `"` + key + `"`
+	keyAt := strings.Index(source, needle)
+	if keyAt < 0 {
+		return nil, fmt.Errorf("key %s not found", key)
+	}
+	colon := strings.Index(source[keyAt:], ":")
+	if colon < 0 {
+		return nil, fmt.Errorf("colon missing for %s", key)
+	}
+	valueAt := keyAt + colon + 1
+	for valueAt < len(source) && (source[valueAt] == ' ' || source[valueAt] == '\t') {
+		valueAt++
+	}
+	end := valueAt + len(value)
+	if end > len(source) || !strings.EqualFold(strings.TrimSpace(source[valueAt:end]), string(value)) {
+		// 原文与解码值不一致（转义差异等）时退回重编码，仍保证语义正确。
+		encoded, err := json.Marshal(map[string]json.RawMessage{key: value})
+		if err != nil {
+			return nil, err
+		}
+		return encoded[1 : len(encoded)-1], nil
+	}
+	return []byte(source[keyAt:end]), nil
+}
+
+// agentJSONSafePreview 生成 UI 预览：超限时截断，但闭合未终止的结构保证 JSON 可解析
+// （cx_basis/refs 并入工具结果后，titles/items 等靠前业务字段不应因中部截断而不可解析）。
+// 闭合失败时逐字符回退到上一个结构边界重试（悬空键如 `"s` 闭合后仍非法），全部失败才返回原样截断。
+func agentJSONSafePreview(content string, limit int) string {
+	preview := truncateRunes(content, limit)
+	if json.Valid([]byte(preview)) {
+		return preview
+	}
+	r := []rune(preview)
+	for i := len(r); i > 0; i-- {
+		candidate := agentCloseJSON(string(r[:i]))
+		if candidate != "" && json.Valid([]byte(candidate)) {
+			return candidate
+		}
+	}
+	return preview
+}
+
+// agentCloseJSON 扫描截断文本，闭合未终止的字符串并按打开顺序补右括号；含未闭合转义时返回空。
+func agentCloseJSON(text string) string {
+	stack := []rune{}
+	inString := false
+	escaped := false
+	for _, r := range text {
+		if inString {
+			if escaped {
+				escaped = false
+			} else if r == '\\' {
+				escaped = true
+			} else if r == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch r {
+		case '"':
+			inString = true
+		case '{':
+			stack = append(stack, '}')
+		case '[':
+			stack = append(stack, ']')
+		case '}', ']':
+			if len(stack) == 0 || stack[len(stack)-1] != r {
+				return ""
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+	if escaped {
+		text = text[:len(text)-1]
+	}
+	if inString {
+		text += `"`
+	}
+	for i := len(stack) - 1; i >= 0; i-- {
+		text += string(stack[i])
+	}
+	return text
 }
 
 func firstLine(s string) string {

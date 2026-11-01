@@ -79,7 +79,8 @@ func TestMetricReminderQueryOnlyCountsApproved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(src)
+	// Git 在 Windows 工作树可能使用 CRLF；只归一化换行，保留原始断言。
+	text := strings.ReplaceAll(string(src), "\r\n", "\n")
 	// 提醒查询里“已填节点”的判定必须限定 approved（锚定 ARRAY(SELECT DISTINCT ...) 那段）。
 	if !strings.Contains(text, "ARRAY(SELECT DISTINCT metric_node(m.day_offset) FROM metric_snapshot m\n"+
 		"\t\t\tWHERE m.work_id=w.id AND metric_node(m.day_offset) IS NOT NULL AND m.quality_state='approved')") {
