@@ -75,7 +75,8 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
       ['workbar', '.desktop-workbar'], ['layout', '.desktop-editor-layout'], ['steps', '.desktop-editor-steps'],
       ['content', '.desktop-editor-content'], ['paper', '.desktop-editor-paper'], ['tools', '.desktop-editor-tools'],
       ['title', '#step-title input'], ['titleCard', '#step-title'], ['titleInner', '#step-title > .space-y-4'], ['titleField', '#step-title .desktop-title-main'],
-      ['titleDetails', '#step-title details'], ['viewpointCard', '#step-viewpoint'], ['viewpoint', '.desktop-viewpoint-line'],
+      ['titleDetails', '#step-title details'], ['rulePreview', '#step-title [data-testid="title-rule-preview"]'],
+      ['viewpointCard', '#step-viewpoint'], ['viewpoint', '.desktop-viewpoint-line'],
       ['sectionList', '#step-sections > div[id^="sec-"]:nth-child(2)'], ['sectionGroup', '.desktop-editor-paper .group\\/sec'],
       ['sectionHeading', '.desktop-editor-paper .group\\/sec input'], ['sectionHeader', '.desktop-editor-paper .group\\/sec > div:nth-child(2)'],
       ['sectionContent', '.desktop-editor-paper .group\\/sec > div:nth-child(4)'],
@@ -118,12 +119,50 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
   console.log('Editor geometry product/prototype:', JSON.stringify({ productGeometry, prototypeGeometry }))
   await prototype.close()
 
+  // 原型夹具（docs/design/desktop-creative/prototype）停在 2026-10-16 的扁平纸面：
+  // 文档信息 → h1 → 核心观点 → 各段落，中间没有分组标题。
+  // 产品此后按登记项加了两块内容：
+  //   1) 标题卡内的「本地规则预览」（docs/90:2343，桌面与 Web 各自实现）；
+  //   2) 正文区的分组标题（#step-sections 的「正文」+ 语法检查）。
+  // 两块都会把下方元素整体下推，所以直接比绝对 y 会把已登记新增判成回归，
+  // 并且第一处失败就会中断后续所有对照。改成按结构锚点比相对偏移：
+  //   title 仍比绝对 y（它上方两侧同构）；
+  //   viewpoint 以标题底边为锚，并扣掉「本地规则预览」的实测外高；
+  //   段落内元素以各自 section 顶边为锚（两侧结构完全同构）。
+  const productTitleBottom = productGeometry.title.y + productGeometry.title.height
+  const prototypeTitleBottom = prototypeGeometry.title.y + prototypeGeometry.title.height
+  // 外高 = 该块自身高度 + 它与标题字段之间的间距。间距由 space-y-4 落在兄弟节点上，
+  // 不在块自身的 margin 里（实测 marginTop/marginBlockStart 都是 0），
+  // 所以直接从「标题字段底边」量到「该块底边」，得到它在标题卡里实际占掉的竖向空间。
+  const registeredBlockOuter = productGeometry.rulePreview
+    ? productGeometry.rulePreview.y - (productGeometry.titleField.y + productGeometry.titleField.height) + productGeometry.rulePreview.height
+    : 0
+  // 但必须锁住它的体量：它是一行提示，一旦长成多行或塞进别的内容，
+  // 下面的扣除就会失真，得在这里先失败，而不是让对照悄悄变宽松。
+  expect(registeredBlockOuter, '本地规则预览块外高').toBeGreaterThan(0)
+  expect(registeredBlockOuter, '本地规则预览块外高').toBeLessThanOrEqual(60)
+
+  // 纸面起点仍按绝对坐标核对，保证上面的相对比较不是建在错位的容器里。
+  for (const [actualKey, expectedKey] of [['paper', 'paper'], ['title', 'title']] as const) {
+    expect(Math.abs(productGeometry[actualKey].y - prototypeGeometry[expectedKey].y), `${actualKey} top alignment`).toBeLessThanOrEqual(1)
+    expect(Math.abs(productGeometry[actualKey].x - prototypeGeometry[expectedKey].x), `${actualKey} left alignment`).toBeLessThanOrEqual(1)
+  }
+  expect(
+    Math.abs((productGeometry.viewpoint.y - productTitleBottom) - (prototypeGeometry.viewpoint.y - prototypeTitleBottom) - registeredBlockOuter),
+    'viewpoint top alignment（已扣除本地规则预览块）',
+  ).toBeLessThanOrEqual(1)
+  expect(Math.abs(productGeometry.viewpoint.x - prototypeGeometry.viewpoint.x), 'viewpoint left alignment').toBeLessThanOrEqual(1)
+
   for (const [actualKey, expectedKey] of [
-    ['title', 'title'], ['viewpoint', 'viewpoint'], ['sectionHeader', 'sectionHeading'], ['sectionToolbar', 'sectionToolbar'], ['paragraph', 'paragraph'],
+    ['sectionHeader', 'sectionHeading'], ['sectionToolbar', 'sectionToolbar'], ['paragraph', 'paragraph'],
+    ['sectionActions', 'sectionActions'], ['sectionReference', 'sectionReference'],
   ] as const) {
     const actual = productGeometry[actualKey]
     const expected = prototypeGeometry[expectedKey]
-    expect(Math.abs(actual.y - expected.y), `${actualKey} top alignment`).toBeLessThanOrEqual(1)
+    // 两侧 section 顶边与首个元素顶边重合（实测均为 0），故直接用 section 作锚。
+    const actualOffset = actual.y - productGeometry.sectionGroup.y
+    const expectedOffset = expected.y - prototypeGeometry.section.y
+    expect(Math.abs(actualOffset - expectedOffset), `${actualKey} top alignment`).toBeLessThanOrEqual(1)
     expect(Math.abs(actual.x - expected.x), `${actualKey} left alignment`).toBeLessThanOrEqual(1)
   }
   for (const [actualKey, expectedKey] of [
@@ -131,7 +170,6 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
   ] as const) {
     const actual = productGeometry[actualKey]
     const expected = prototypeGeometry[expectedKey]
-    expect(Math.abs(actual.y - expected.y), `${actualKey} top alignment`).toBeLessThanOrEqual(1)
     expect(Math.abs(actual.height - expected.height), `${actualKey} height alignment`).toBeLessThanOrEqual(1)
   }
   await expect(page.locator('.desktop-editor-paper .group\\/sec').first()).toHaveClass(/desktop-active/)
