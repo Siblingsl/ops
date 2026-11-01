@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 )
 
 func TestCXReviewWindowsSelectExactSnapshotsAndSameUnitBaseline(t *testing.T) {
@@ -105,11 +104,4 @@ func TestCXReviewWindowResponseUsesExactRatioAndNullsForInvalidDenominator(t *te
 	if len(encoded) == 0 {
 		t.Fatal("response should remain JSON serializable")
 	}
-}
-
-func cxReviewCreateAccount(t *testing.T, platform, contentFormat string) Account {
-	t.Helper()
-	var account Account
-	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{"platform": platform, "name": "CX21复盘测试" + uuid.NewString()[:8], "content_format": contentFormat}, &account)
-	return account
 }

@@ -42,3 +42,10 @@ func cxReviewInsertMetric(t *testing.T, workID uuid.UUID, capturedAt time.Time, 
 	}
 	return metric
 }
+
+func cxReviewCreateAccount(t *testing.T, platform, contentFormat string) Account {
+	t.Helper()
+	var account Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{"platform": platform, "name": "CX21复盘测试" + uuid.NewString()[:8], "content_format": contentFormat}, &account)
+	return account
+}
