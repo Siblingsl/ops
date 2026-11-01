@@ -9,14 +9,24 @@ services:
       OPS_DATABASE_URL: postgres://ops:local_e2e_password@postgres:5432/ops?sslmode=disable
       OPS_PUBLIC_IP: 127.0.0.1
       OPS_COOKIE_SECURE: "0"
+      OPS_COOKIE_SAMESITE: lax
+      OPS_STATIC_DIR: /app/static
+      OPS_AGENT_WORKBENCH_FEATURES: workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines,document_parse
       OPS_WECHAT_BASE: http://mock:8191
       OPS_CRAWL_MODE: "off"
     ports: !override ["127.0.0.1:44538:8080"]
+    volumes:
+      - ../web/dist:/app/static:ro
   postgres:
     environment:
       POSTGRES_PASSWORD: local_e2e_password
+  parser_a:
+    image: ${OPS_E2E_IMAGE:-ops-app:prod-e2e}
+  parser_b:
+    image: ${OPS_E2E_IMAGE:-ops-app:prod-e2e}
   mock:
     image: ${OPS_E2E_IMAGE:-ops-app:prod-e2e}
+    ports: !override ["127.0.0.1:44539:8191"]
     environment:
       OPS_DEV: "1"
       OPS_LISTEN: ":8181"
