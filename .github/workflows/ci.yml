@@ -73,8 +73,7 @@ jobs:
         run: |
           ls internal/app/ | grep -c _test.go
           head -c 40 internal/app/cx_review_windows_test.go | od -c | head -3
-          go list -f '{{.XTestGoFiles}}' ./internal/app | tr ' ' '
-' | grep -c windows_test || true
+          go list -f '{{.XTestGoFiles}}' ./internal/app | tr ' ' '\n' | grep -c windows_test || true
           ls internal/app/ | grep windows_test | od -c | head -4
           git ls-files internal/app/ | grep -c windows_test
           git check-ignore -v internal/app/cx_review_windows_test.go || echo not-ignored
