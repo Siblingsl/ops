@@ -2,9 +2,10 @@ const assert = require('node:assert/strict');
 const Module = require('node:module');
 const test = require('node:test');
 
-test('exposes only one-way settings, platform intent and client health subscriptions', () => {
+test('exposes one-shot long-image capture intent with a build ID and read-only subscriptions', async () => {
   const exposed = {};
   const handlers = new Map();
+  const invokes = [];
   const contextBridge = {
     exposeInMainWorld(name, value) { exposed[name] = value; },
   };
@@ -15,6 +16,10 @@ test('exposes only one-way settings, platform intent and client health subscript
       handlers.set(channel, listeners);
     },
     removeListener(channel, handler) { handlers.get(channel)?.delete(handler); },
+    invoke(channel, payload) {
+      invokes.push({ channel, payload });
+      return Promise.resolve({ ok: false, code: 'render_not_ready', message: '页面未就绪。' });
+    },
   };
   const preloadPath = require.resolve('../.build/business-ui-preload.js');
   const originalLoad = Module._load;
@@ -31,12 +36,22 @@ test('exposes only one-way settings, platform intent and client health subscript
 
   assert.deepEqual(Object.keys(exposed), ['opsDesktopUI']);
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).sort(), [
+    'captureLongImage',
     'onClientHealth',
     'onLocalSettingsState',
     'onOpenSettings',
     'onPlatformIntentResult'
   ]);
-  assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')), []);
+  assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')), ['captureLongImage']);
+  const buildId = '00000008-1111-4111-8111-111111111111';
+  assert.deepEqual(await exposed.opsDesktopUI.captureLongImage(buildId), {
+    ok: false, code: 'render_not_ready', message: '页面未就绪。'
+  });
+  assert.deepEqual(invokes, [{ channel: 'cx-long-image:capture', payload: { buildId } }]);
+  assert.deepEqual(await exposed.opsDesktopUI.captureLongImage('not-an-id'), {
+    ok: false, code: 'invalid_input', message: '长图构建参数无效。'
+  });
+  assert.equal(invokes.length, 1);
 
   emit(handlers, 'desktop-ui:open-settings');
   let firstOpen = 0;

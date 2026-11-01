@@ -1,7 +1,10 @@
-import { marked } from 'marked'
+import { Marked } from 'marked'
 import { getCustomTheme } from './custom-theme-state'
 import { allowedAttrs, allowedTags, fallbackStyles, mergeStyle, normalizeBodyHeadings, stripMarkdownPlaceholders } from './render-policy'
 import type { Asset, CustomTheme, Section } from './types'
+
+// Only Markdown task-list tokens receive these non-interactive text markers.
+const wechatMarkdown = new Marked({ renderer: { checkbox: ({ checked }) => checked ? '☑' : '☐' } })
 
 /**
  * 公众号 HTML 渲染模块（FR-M6-01、D-015）。预览、检查统计和推送都使用这里的输出，保证所见即所得。
@@ -90,15 +93,15 @@ export const themes: Theme[] = [
     root: base + 'color:#3d3a35;padding:0 4px;',
     sectionHeading: 'font-size:19px;font-weight:bold;color:#3d3a35;margin:40px 0 18px;text-align:center;line-height:1.5;padding:4px 0;border-bottom:3px solid #E0A526;',
     tags: {
-      h3: 'font-size:17px;font-weight:bold;color:#B7791F;margin:24px 0 12px;',
+      h3: 'font-size:17px;font-weight:bold;color:#855300;margin:24px 0 12px;',
       p: 'margin:0 0 18px;',
       blockquote: 'margin:0 0 18px;padding:12px 16px;background-color:#fdf6e3;border-radius:6px;color:#6b5a3a;font-size:15px;',
       ul: 'margin:0 0 18px;padding-left:22px;',
       ol: 'margin:0 0 18px;padding-left:22px;',
       li: 'margin:0 0 6px;',
-      strong: 'font-weight:bold;color:#B7791F;',
+      strong: 'font-weight:bold;color:#855300;',
       em: 'font-style:italic;',
-      a: 'color:#B7791F;text-decoration:underline;',
+      a: 'color:#855300;text-decoration:underline;',
       img: 'display:block;max-width:100%;margin:20px auto;border-radius:8px;',
       hr: 'border:none;border-top:1px solid #f0dfb5;margin:28px 0;',
     },
@@ -124,6 +127,26 @@ export const themes: Theme[] = [
       hr: 'border:none;text-align:center;margin:36px auto;width:40px;border-top:1px solid #1a1a1a;',
     },
   },
+  ...([
+    ['olive', '橄榄手记', '自然沉静，适合日常与随笔', '#435628', '#f3f6ec'],
+    ['sage', '教程浅绿', '清新柔和，适合教程与知识分享', '#285c4d', '#eef7f2'],
+    ['redwhite', '红白观点', '清晰醒目，适合观点表达', '#9b2525', '#fff1f1'],
+    ['graphite', '石墨科技', '冷静克制，适合科技与分析', '#334b62', '#eff3f7'],
+  ] as const).map(([id, name, desc, accent, background]): Theme => ({
+    id, name, desc, swatch: [accent, background, '#333333'],
+    root: 'font-size:16px;color:#333333;line-height:1.8;letter-spacing:0.5px;padding:0 4px;',
+    sectionHeading: `font-size:19px;font-weight:bold;color:${accent};margin:40px 0 18px;padding-left:10px;border-left:4px solid ${accent};line-height:1.5;`,
+    tags: {
+      h3: `font-size:17px;font-weight:bold;color:${accent};margin:24px 0 12px;`,
+      p: 'margin:0 0 18px;',
+      blockquote: `margin:0 0 18px;padding:12px 16px;background-color:${background};border-left:3px solid ${accent};color:#333333;font-size:15px;`,
+      ul: 'margin:0 0 18px;padding-left:22px;', ol: 'margin:0 0 18px;padding-left:22px;',
+      li: 'margin:0 0 6px;', strong: `font-weight:bold;color:${accent};`, em: 'font-style:italic;',
+      a: `color:${accent};text-decoration:underline;`,
+      img: 'display:block;max-width:100%;margin:20px auto;',
+      hr: `border:none;border-top:1px solid ${accent};margin:28px 0;`,
+    },
+  })),
 ]
 
 export const defaultThemeId = 'ink'
@@ -143,7 +166,7 @@ export function customTheme(ct: CustomTheme): Theme {
   const quote = {
     bar: `margin:0 0 ${gap};padding:10px 14px;border-left:3px solid ${c};color:#666;font-size:${ct.font_size - 1}px;`,
     box: `margin:0 0 ${gap};padding:12px 16px;border:1px solid ${c};border-radius:6px;color:#555;font-size:${ct.font_size - 1}px;`,
-    italic: `margin:0 0 ${gap};padding:4px 16px;font-style:italic;color:#777;font-size:${ct.font_size - 1}px;`,
+    italic: `margin:0 0 ${gap};padding:4px 16px;font-style:italic;color:#767676;font-size:${ct.font_size - 1}px;`,
   }[ct.quote_style]
   return {
     ...b,
@@ -234,7 +257,7 @@ export function renderWechat(sections: Pick<Section, 'heading' | 'content_md'>[]
     // ED-12: section.heading 始终为 h2（段落标题），正文内 heading 由 marked 生成后统一调整
     const heading = s.heading.trim() ? `<h2>${escapeHTML(s.heading.trim())}</h2>` : ''
     // ED-11: 编辑器序列化残留的 [markdownHTMLNode] 占位符不能出现在成稿里
-    const body = marked.parse(stripMarkdownPlaceholders(s.content_md), { async: false, gfm: true, breaks: false }) as string
+    const body = wechatMarkdown.parse(stripMarkdownPlaceholders(s.content_md), { async: false, gfm: true, breaks: false })
     // ED-10/ED-12: 正文字段内 heading 标准化：h1/h2 -> h3，h4+ -> 强文本包裹
     return heading + normalizeBodyHeadings(body)
   })
@@ -251,9 +274,94 @@ export function renderWechat(sections: Pick<Section, 'heading' | 'content_md'>[]
   }
 
   // ED-12: 段落小标题固定样式（h2）
-  for (const h2 of Array.from(root.querySelectorAll('h2'))) h2.setAttribute('style', theme.sectionHeading)
+  for (const h2 of Array.from(root.querySelectorAll('h2'))) h2.setAttribute('style', mergeStyle(theme.sectionHeading, h2.getAttribute('style')))
   root.setAttribute('style', theme.root)
   return root.outerHTML
+}
+
+export interface RenderedWechatSection {
+  section_id: string
+  html: string
+  image_occurrences: string[]
+}
+
+export interface RenderedWechatBuild {
+  html: string
+  sections: RenderedWechatSection[]
+}
+
+export interface FrozenWechatImage {
+  id: string
+  mime: string
+  bytes: Uint8Array
+}
+
+/**
+ * Build-only rendering envelope. Each section carries its immutable source ID
+ * so the server can independently compare section order, text, and image use.
+ */
+export function renderWechatSections(
+  sections: Pick<Section, 'id' | 'heading' | 'content_md'>[],
+  themeOrId: string | Theme,
+  assets: Pick<Asset, 'id' | 'alt_text'>[] = [],
+): RenderedWechatBuild {
+  const theme = typeof themeOrId === 'string' ? themeById(themeOrId) : themeOrId
+  const doc = new DOMParser().parseFromString('<section></section>', 'text/html')
+  const root = doc.body.firstElementChild!
+  root.setAttribute('style', theme.root)
+  const renderedSections: RenderedWechatSection[] = []
+
+  for (const section of sections) {
+    const rendered = new DOMParser().parseFromString(renderWechat([section], theme, assets), 'text/html')
+    const renderedRoot = rendered.body.firstElementChild
+    if (!renderedRoot) throw new Error('公众号段落渲染未生成根节点')
+    const wrapper = doc.createElement('div')
+    wrapper.setAttribute('data-section-id', section.id)
+    while (renderedRoot.firstChild) {
+      const child = renderedRoot.firstChild
+      wrapper.appendChild(doc.importNode(child, true))
+      renderedRoot.removeChild(child)
+    }
+    const imageOccurrences: string[] = []
+    for (const img of Array.from(wrapper.querySelectorAll('img'))) {
+      const assetID = /\/api\/v1\/assets\/([0-9a-f-]{36})\/file(?:[?#]|$)/i.exec(img.getAttribute('src') ?? '')?.[1]?.toLowerCase()
+      if (assetID) {
+        img.setAttribute('data-asset', assetID)
+        imageOccurrences.push(assetID)
+      }
+    }
+    root.appendChild(wrapper)
+    renderedSections.push({ section_id: section.id, html: wrapper.outerHTML, image_occurrences: imageOccurrences })
+  }
+
+  return { html: root.outerHTML, sections: renderedSections }
+}
+
+/** Build the offline archive form without changing or re-encoding image bytes. */
+export function createStableWechatHTML(html: string, title: string, revision: number, images: FrozenWechatImage[]): string {
+  if (!Number.isInteger(revision) || revision < 1) throw new Error('稳定版必须绑定有效作品版本')
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const roots = Array.from(doc.body.children)
+  if (roots.length !== 1 || roots[0]?.tagName.toLowerCase() !== 'section') throw new Error('公众号 HTML 根节点无效')
+  const imageByID = new Map(images.map((image) => [image.id.toLowerCase(), image]))
+  for (const img of Array.from(roots[0]!.querySelectorAll('img'))) {
+    const assetID = img.getAttribute('data-asset')?.toLowerCase()
+    const frozen = assetID ? imageByID.get(assetID) : undefined
+    if (!assetID || !frozen) throw new Error('稳定版图片缺少冻结素材字节')
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(frozen.mime)) throw new Error('稳定版只支持 JPEG、PNG 和 WebP 素材')
+    img.setAttribute('src', `data:${frozen.mime};base64,${base64Bytes(frozen.bytes)}`)
+  }
+  const output = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHTML(title)}</title></head><body>${roots[0]!.outerHTML}</body></html>`
+  if (new TextEncoder().encode(output).byteLength > 8 * 1024 * 1024) throw new Error('稳定版 HTML 超过 8 MiB')
+  return output
+}
+
+function base64Bytes(bytes: Uint8Array): string {
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return btoa(binary)
 }
 
 export function htmlStats(html: string) {

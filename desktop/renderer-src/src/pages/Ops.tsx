@@ -291,64 +291,86 @@ function StrategyEditor({
       ))}
       <div className="space-y-2">
         <h4 className="text-sm font-semibold">对标（启用方案后，单篇链接进入参考队列）</h4>
-        <p className="text-xs text-mist-500">小红书和公众号目前受 robots 限制，请在对标参考中手动粘贴正文提炼；每次最多添加 20 个单篇链接。</p>
+        {choiceIndex === undefined ? (
+          <p className="text-xs text-mist-500" data-testid="legacy-benchmarks-readonly">
+            旧方案对标在这里只读展示；四问评估、笔记拆解与后续编辑请到账号档案页的「对标库」，两边不同时编辑。
+          </p>
+        ) : (
+          <p className="text-xs text-mist-500">小红书和公众号目前受 robots 限制，请在对标参考中手动粘贴正文提炼；每次最多添加 20 个单篇链接。</p>
+        )}
         {(value.benchmarks ?? []).map((b, i) => (
           <div key={i} className="space-y-2 rounded-lg border border-mist-200 p-3">
-            <Field label="名称">
-              <Input
-                value={b.name}
-                onChange={(e) =>
-                  set(
-                    'benchmarks',
-                    value.benchmarks.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)),
-                  )
-                }
-              />
-            </Field>
-            <Field label="我欣赏它什么">
-              <Textarea
-                value={b.note}
-                onChange={(e) =>
-                  set(
-                    'benchmarks',
-                    value.benchmarks.map((x, j) => (j === i ? { ...x, note: e.target.value } : x)),
-                  )
-                }
-              />
-            </Field>
-            <Field label="代表作链接（每行一个，最多 5 条）">
-              <Textarea
-                value={(b.links ?? []).join('\n')}
-                onChange={(e) =>
-                  set(
-                    'benchmarks',
-                    value.benchmarks.map((x, j) => (j === i ? { ...x, links: e.target.value.split('\n') } : x)),
-                  )
-                }
-              />
-            </Field>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={saving}
-              onClick={() =>
-                set(
-                  'benchmarks',
-                  value.benchmarks.filter((_, j) => j !== i),
-                )
-              }
-            >
-              移除对标
-            </Button>
+            {choiceIndex === undefined ? (
+              <>
+                <p className="text-sm font-medium">{b.name || '（未命名对标账号）'}</p>
+                {b.note && <p className="whitespace-pre-wrap text-xs text-mist-600">{b.note}</p>}
+                {(b.links ?? []).map((url) => (
+                  <p key={url} className="break-all text-xs text-mist-500">
+                    {url}
+                  </p>
+                ))}
+              </>
+            ) : (
+              <>
+                <Field label="名称">
+                  <Input
+                    value={b.name}
+                    onChange={(e) =>
+                      set(
+                        'benchmarks',
+                        value.benchmarks.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)),
+                      )
+                    }
+                  />
+                </Field>
+                <Field label="我欣赏它什么">
+                  <Textarea
+                    value={b.note}
+                    onChange={(e) =>
+                      set(
+                        'benchmarks',
+                        value.benchmarks.map((x, j) => (j === i ? { ...x, note: e.target.value } : x)),
+                      )
+                    }
+                  />
+                </Field>
+                <Field label="代表作链接（每行一个，最多 5 条）">
+                  <Textarea
+                    value={(b.links ?? []).join('\n')}
+                    onChange={(e) =>
+                      set(
+                        'benchmarks',
+                        value.benchmarks.map((x, j) => (j === i ? { ...x, links: e.target.value.split('\n') } : x)),
+                      )
+                    }
+                  />
+                </Field>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={saving}
+                  onClick={() =>
+                    set(
+                      'benchmarks',
+                      value.benchmarks.filter((_, j) => j !== i),
+                    )
+                  }
+                >
+                  移除对标
+                </Button>
+              </>
+            )}
           </div>
         ))}
-        <Button
-          size="sm"
-          disabled={saving || (value.benchmarks ?? []).length >= 10}
-          onClick={() => set('benchmarks', [...(value.benchmarks ?? []), { name: '', note: '', links: [] }])}
-        >
-          添加对标
-        </Button>
+        {choiceIndex !== undefined && (
+          <Button
+            size="sm"
+            disabled={saving || (value.benchmarks ?? []).length >= 10}
+            onClick={() => set('benchmarks', [...(value.benchmarks ?? []), { name: '', note: '', links: [] }])}
+          >
+            添加对标
+          </Button>
+        )}
       </div>
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={value.hot_enabled} onChange={(e) => set('hot_enabled', e.target.checked)} />

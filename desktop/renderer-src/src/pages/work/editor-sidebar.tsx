@@ -6,11 +6,11 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
-import { AIFeedback } from '@/components/refs'
+import { AIFeedback, RefsNote } from '@/components/refs'
 import { Badge, Button, cn, Select, Spinner, Textarea } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post, put, stream } from '@/lib/api'
-import { fmtTime } from '@/lib/format'
+import { type AIRefs, fmtTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useCanWrite, useMe } from '@/lib/session'
 import type { ActivityItem, Comment, Material, PolishIssue, RetrieveHit, Section, Work, WorkspaceMember } from '@/lib/types'
@@ -579,14 +579,18 @@ interface ReadThroughSuggestion { section_id: string; action: 'rewrite' | 'appen
 function ReadThroughTab({ work, active }: { work: Work; active: Section | null }) {
   const canWrite = useCanWrite()
   const [sugs, setSugs] = useState<ReadThroughSuggestion[] | null>(null)
+  const [refs, setRefs] = useState<AIRefs | null>(null)
+  const [callId, setCallId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const noViewpoint = !work.viewpoint.trim()
   const drafted = work.sections.some((s) => s.content_md.trim())
   const run = async () => {
     setBusy(true)
     try {
-      const r = await post<{ suggestions: ReadThroughSuggestion[] }>(`/works/${work.id}/read-through`, {})
+      const r = await post<{ suggestions: ReadThroughSuggestion[]; refs: AIRefs; ai_call_id: string }>(`/works/${work.id}/read-through`, {})
       setSugs(r.suggestions)
+      setRefs(r.refs)
+      setCallId(r.ai_call_id)
     } catch (e) {
       aiError(e, '整篇通读')
     } finally {
@@ -607,6 +611,7 @@ function ReadThroughTab({ work, active }: { work: Work; active: Section | null }
           {sugs != null && sugs.length === 0 && (
             <p className="rounded-lg border border-dashed border-mist-200 px-3 py-4 text-center text-[12.5px] text-mist-400">通读完成：这一稿结构完整，没有值得硬改的地方。</p>
           )}
+          {refs && <RefsNote refs={refs} callId={callId} className="mt-2" />}
           {sugs != null && sugs.length > 0 && canWrite && sugs.map((su, i) => {
             const sec = secById.get(su.section_id)
             const target = active?.id ?? su.section_id

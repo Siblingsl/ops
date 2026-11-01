@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { QRCodeSVG } from 'qrcode.react'
 import { confirm } from '@/components/dialog'
 import { BackfillForm, PostPushTodos } from '@/components/backfill'
+import { PublishStatePanel } from '@/components/publish-state'
 import { Button, Card, Empty, HumanGate, Notice, PageLoading, Textarea } from '@/components/ui'
 import { ApiError, errorMessage, get, post, rawRequest } from '@/lib/api'
 import { assetUrl } from '@/lib/api-base'
@@ -319,6 +320,7 @@ export function ToutiaoPack({ work, setWork, refresh }: { work: Work; setWork: (
           {work.post_push_todos?.length ? <Card className="p-4"><PostPushTodos work={work} setWork={setWork} /></Card> : null}
           {/* PB-06：与小红书发布包对齐——公共区块顺序统一为「回填 → 平台绑定/说明」，平台专属区块保留原样。 */}
           <div id="backfill" className="scroll-mt-20"><BackfillForm work={work} setWork={setWork} /></div>
+          <PublishStatePanel work={work} canManage={canWrite} />
           {work.status !== 'published' && (
             <Notice tone={work.status === 'packed' ? 'gamboge' : 'gray'}>
               先在头条号发布并回填发布记录，再进复盘录入数据；没有回填的日期不会被算进复盘看板。

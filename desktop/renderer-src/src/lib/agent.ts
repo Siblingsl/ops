@@ -198,9 +198,11 @@ export interface AgentMessage {
   id: string
   seq: number
   message_key?: string
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   tool_calls: AgentToolCall[]
+  tool_call_id?: string
+  tool_name?: string
   attachments: AgentAttachment[]
   context_refs?: AgentContextReference[]
   skill_requests?: AgentSkillRequest[]

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BackfillForm, PlatformBinding, PostPushTodos } from '@/components/backfill'
+import { PublishStatePanel } from '@/components/publish-state'
 import { useMe } from '@/lib/session'
 import { CropPreview } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
@@ -357,7 +358,7 @@ export default function Push() {
         {!result && (work.status === 'pushed' || work.status === 'published') && (work.post_push_todos ?? []).length > 0 && (
           <Card className="p-5"><PostPushTodos work={work} setWork={setWork} /></Card>
         )}
-        {(work.status === 'pushed' || work.status === 'published') && (<div id="backfill" className="space-y-4"><BackfillForm work={work} setWork={setWork} /><PlatformBinding work={work} setWork={setWork} canManage={canManage} /></div>)}
+        {(work.status === 'pushed' || work.status === 'published') && (<div id="backfill" className="space-y-4"><BackfillForm work={work} setWork={setWork} /><PublishStatePanel work={work} canManage={canManage} /><PlatformBinding work={work} setWork={setWork} canManage={canManage} /></div>)}
         {work.status === 'pushed' && work.wechat_draft_media_id && (
           <Card className="flex items-center gap-3 p-4">
             <div className="min-w-0 flex-1 text-[13px] text-mist-600">同步草稿箱状态：检查这篇草稿是否仍在公众号草稿箱（不会自动改作品状态）。</div>

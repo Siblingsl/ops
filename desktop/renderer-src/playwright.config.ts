@@ -13,6 +13,17 @@ delete process.env.ELECTRON_RUN_AS_NODE
 process.env.OPS_E2E_MOCK_BASE_URL = 'http://127.0.0.1:8297/v1'
 
 const desktopOnly = [
+  'cx01-task-list-desktop.spec.ts',
+  'cx13-comment-inbox.spec.ts',
+  'cx13-standards.spec.ts',
+  'cx12-skeleton-reference.spec.ts',
+  'cx18-benchmark.spec.ts',
+  'cx11-writing-basis.spec.ts',
+  'cx07-author-heading.spec.ts',
+  'cx07-desktop-theme.spec.ts',
+  'cx08-visual-dna.spec.ts',
+  'cx03-section-evidence-desktop.spec.ts',
+  'cx02-desktop-build-panel.spec.ts',
   'session-failure.spec.ts',
   'desktop-images-restoration.spec.ts',
   'desktop-creative-ui.spec.ts',
@@ -86,6 +97,14 @@ export default defineConfig({
       testMatch: [
         'desktop-window-drag.spec.ts', 'platform-intents-real-electron.local.spec.ts',
         'skills-electron.spec.ts', 'toutiao-electron.spec.ts',
+        'cx13-account-analysis-electron.spec.ts', 'cx01-render-check.spec.ts', 'cx01-shared-fixtures.spec.ts',
+        'cx02-rendering-experiment-electron.spec.ts',
+        'cx11-title-diagnosis.spec.ts',
+        'cx11-topic-diagnosis.spec.ts',
+        'cx09-visual-plan-desktop.spec.ts',
+        'cx13-publish-ledger.spec.ts',
+        'cx13-review-multitime.spec.ts',
+        'cx18-benchmark-electron.spec.ts',
       ],
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } },
     },

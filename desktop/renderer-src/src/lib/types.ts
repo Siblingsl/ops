@@ -387,6 +387,7 @@ export interface Topic {
   status: 'pending' | 'adopted' | 'dropped'
   work_id?: string | null
   created_at: string
+  updated_at: string
   audience?: string
   hook?: string
   needed_materials?: string[]
@@ -549,13 +550,14 @@ export interface WorkListItem {
 
 export interface CheckItem {
   id: string
-  category: 'format' | 'sensitive' | 'fact' | 'ai_disclosure' | 'similarity' | 'ad_law' | 'stale'
+  category: 'format' | 'sensitive' | 'fact' | 'ai_disclosure' | 'similarity' | 'ad_law' | 'stale' | 'rewrite'
   passed: boolean
   matched_text: string
   location: { field?: string; label?: string; section_id?: string; found?: boolean; material_support?: { material_id: string; quote: string } }
   message: string
   detail: string
   resolution: string | null
+  resolution_note: string
   resolved_at: string | null
 }
 
@@ -564,6 +566,7 @@ export interface CheckRun {
   revision: number
   target_platform: Platform
   fact_status: 'pending' | 'done' | 'failed' | 'skipped'
+  standard_changed: boolean
   completed_at: string | null
   created_at: string
   stale: boolean
@@ -623,12 +626,84 @@ export interface BoardRow {
 export interface ReviewReport {
   id: string
   work_ids: string[]
-  content: { content_format?: ContentFormat; conclusions: string[]; topic_suggestions: { title: string; angle: string; reason: string }[]; writing_insights?: string[] }
+  content_revision: string
+  content: {
+    content_format?: ContentFormat
+    conclusions: string[]
+    topic_suggestions: { title: string; angle: string; reason: string }[]
+    writing_insights?: string[]
+    cx_basis?: CXReviewBasis
+    analysis_v2?: CXReviewAnalysisV2
+  }
   adopted: number[]
   remembered?: number[]
   ignored?: number[]
   origin?: 'manual' | 'weekly_draft'
   created_at: string
+}
+
+export interface CXReviewRatio {
+  value: number | null
+  missing_reasons: string[]
+}
+
+export interface CXReviewMetricRef {
+  metric_id: string
+  revision: number
+  source: string
+  captured_at: string
+  quality: string
+  read_unit: string
+  share_unit: string
+}
+
+export interface CXReviewBaseline {
+  median: number | null
+  sample_size: number
+  excluded_count: number
+  read_unit?: string
+  share_unit?: string
+  samples: { work_id: string; work_revision: number; publish_revision: number; published_at: string; metric_ref: CXReviewMetricRef | null; value: number }[]
+}
+
+export interface CXReviewWindow {
+  window: 'T1' | 'T3' | 'T7' | 'T30'
+  target_at: string | null
+  range: { from: string; to: string } | null
+  metric_ref: CXReviewMetricRef | null
+  ratios: { favorite_rate: CXReviewRatio; follow_rate: CXReviewRatio; interaction_rate: CXReviewRatio }
+  missing_reasons: string[]
+  baseline: Record<string, CXReviewBaseline>
+  coverage: { retained_snapshots: number; formal_snapshots: number }
+}
+
+export interface CXReviewAnalysisV2 {
+  schema_version: number
+  observations: { finding: string; source_refs: string[] }[]
+  hypotheses: { explanation: string; source_refs: string[]; counterevidence: string[]; confounders: string[] }[]
+  experiments: { hypothesis: string; variable: 'title' | 'cover' | 'topic' | 'format' | 'posting_time'; metric_key: 'favorite_rate' | 'interaction_rate' | 'follow_rate'; window: 'T1' | 'T3' | 'T7' | 'T30'; selection_proposal: string }[]
+  limitations: { code: 'low_sample' | 'missing_metric' | 'unit_unknown' | 'partial_content' | 'other'; message: string }[]
+}
+
+export interface CXReviewBasis {
+  schema_version: number
+  analysis_version: number
+  prompt_version: string
+  task_type: string
+  assembled_at: string
+  context_hash: string
+  sampling: string
+  platform: string
+  content_format: string
+  selection: Record<string, unknown>
+  work_ids: string[]
+  source_refs: string[]
+  sources: { source_ref: string; kind: string; work_id?: string; metric_id?: string; revision?: number; captured_at?: string; fields: Record<string, unknown> }[]
+  missing: { code: string; message: string }[]
+  followers?: { source_ref: string; date: string; source: string; cumulate: number; unit: string }
+  ai_call_id?: string
+  model?: string
+  prompt_template_version?: number
 }
 
 export interface Provider {
@@ -645,6 +720,7 @@ export interface Provider {
   last_test_result: string
   price_per_1k_prompt?: number | null
   price_per_1k_completion?: number | null
+  context_window_tokens?: number | null
   capabilities?: ModelCapability[]
 }
 
@@ -946,6 +1022,43 @@ export interface WeeklyDigest {
 export interface AttrFeature { feature: string; label: string; groups: { value: string; n: number; avg_reads: number; avg_interactions: number }[] }
 
 export interface LibraryAsset extends Asset { account_id: string | null; account_name: string; work_title: string }
+
+export interface AccountLibraryAsset {
+  id: string
+  mime: string
+  width: number
+  height: number
+  bytes: number
+  alt_text: string
+  url: string
+  created_at: string
+}
+
+export interface CXVisualDNATokens {
+  schema: 'ops.visual-dna/v1'
+  palette: { primary: string; secondary: string; background: string; text: string; muted: string }
+  font_stack: 'system-sans' | 'system-serif' | 'system-rounded' | 'system-mono'
+  radius: number
+  spacing_scale: string
+  logo_asset_id: string | null
+  watermark: { text: string; position: 'bottom-left' | 'bottom-right'; opacity: string }
+  card_template_default: 'editorial' | 'swiss'
+  card_ratio_default: '1:1' | '3:4' | '9:16'
+  end_copy: string
+}
+
+export interface CXVisualDNAVersion {
+  version: number
+  tokens: CXVisualDNATokens | null
+  tokens_hash: string | null
+  created_at?: string
+  created_by?: string | null
+}
+
+export interface CXVisualDNAHistoryPage {
+  items: CXVisualDNAVersion[]
+  next_cursor: string | null
+}
 
 export interface EvalCase { id: string; task_type: string; name: string; chars: number; created_at: string }
 

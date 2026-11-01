@@ -86,6 +86,7 @@ import {
   isManagementRequestMarker,
   shouldBlockDesktopApiRequest
 } from './request-context';
+import { captureCXLongImageFromBuild, cxLongImageFailure, CXLongImageError } from './cx-long-image';
 
 const squirrelStartup = require('electron-squirrel-startup') as boolean;
 
@@ -157,6 +158,7 @@ const localWindows = new Set<number>();
 const localSettingsSenderRegistry = new EmbeddedSettingsSenderRegistry();
 const requestProvenance = new Map<number, 'trusted' | 'untrusted' | 'redirected'>();
 const contextMutationRequests = new Set<number>();
+const activeCXLongImageCaptures = new Set<string>();
 let routingRefreshPending = false;
 let routingRefresh: Promise<void> | null = null;
 let accountDataClearInProgress = false;
@@ -775,6 +777,33 @@ function rendererContentType(extension: string): string {
 }
 
 function registerIpcHandlers(): void {
+  ipcHandle('cx-long-image:capture', async (event, raw) => {
+    const senderFrame = event.senderFrame;
+    if (!businessWindow || businessWindow.isDestroyed() || event.sender !== businessWindow.webContents
+      || !senderFrame || senderFrame !== event.sender.mainFrame || !isBusinessUrl(senderFrame.url)
+      || !isBusinessUrl(event.sender.getURL())) {
+      throw new Error('不允许此窗口发起长图构建。');
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || Object.keys(raw).join(',') !== 'buildId'
+      || typeof (raw as { buildId?: unknown }).buildId !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test((raw as { buildId: string }).buildId)) {
+      return cxLongImageFailure(new CXLongImageError('invalid_input', '长图构建参数无效。'));
+    }
+    const buildId = (raw as { buildId: string }).buildId.toLowerCase();
+    if (activeCXLongImageCaptures.size > 0) {
+      return cxLongImageFailure(new CXLongImageError('capture_busy', '当前已有长图正在生成，请稍后重试。'));
+    }
+    activeCXLongImageCaptures.add(buildId);
+    try {
+      return await captureCXLongImageFromBuild(businessWindow, buildId);
+    } catch (error) {
+      return cxLongImageFailure(error);
+    } finally {
+      activeCXLongImageCaptures.delete(buildId);
+    }
+  });
+
   ipcMain.on('settings:local-state', (event: IpcMainEvent, raw: unknown) => {
     if (!localSettingsViewController?.isTrusted(event)) return;
     if (!raw || typeof raw !== 'object' || Object.keys(raw).sort().join(',') !== 'busy,dirty') return;

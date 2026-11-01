@@ -25,6 +25,7 @@ const catMeta: Record<CheckItem['category'], { label: string; tone: 'gray' | 're
   similarity: { label: '同质化', tone: 'ink' },
   ad_law: { label: '广告法', tone: 'ink' },
   stale: { label: '数据过期', tone: 'gamboge' },
+  rewrite: { label: '改写度', tone: 'gamboge' },
 }
 
 const options: Record<string, { value: string; label: string }[]> = {
@@ -34,6 +35,61 @@ const options: Record<string, { value: string; label: string }[]> = {
   similarity: [{ value: 'acknowledged', label: '已知悉' }, { value: 'modified', label: '已修改' }],
   ad_law: [{ value: 'acknowledged', label: '已知悉' }, { value: 'modified', label: '已修改' }],
   stale: [{ value: 'verified', label: '已核实仍准确' }, { value: 'modified', label: '已换用新数据' }],
+  rewrite: [{ value: 'acknowledged', label: '已知悉风险' }, { value: 'modified', label: '已修改后重查' }],
+}
+
+// DEV-CX12 / FR-CX-15：改写度检查项的三维明细与带理由的确认。
+function RewriteDetail({ detail }: { detail: string }) {
+  let dims: { dimension: string; state: string }[] = []
+  let skeleton = false
+  try {
+    const parsed = JSON.parse(detail) as { dimensions?: { dimension: string; state: string }[]; skeleton_only?: boolean }
+    dims = parsed.dimensions ?? []
+    skeleton = !!parsed.skeleton_only
+  } catch { /* detail 非法时按普通文本展示 */ }
+  if (!dims.length) return <p className="mt-1 text-[12.5px] leading-relaxed text-mist-500">{detail}</p>
+  const stateLabel: Record<string, string> = { same: '同源', different: '不同', unavailable: '无法判定' }
+  const dimLabel: Record<string, string> = { expression: '表达', evidence: '案例证据', viewpoint: '核心观点' }
+  return (
+    <p className="mt-1 text-[12.5px] leading-relaxed text-mist-500">
+      {dims.map((d) => `${dimLabel[d.dimension] ?? d.dimension}：${stateLabel[d.state] ?? d.state}`).join(' · ')}
+      {skeleton && ' · 仅参考骨架，需完整正文复核'}
+      <span className="ml-1 text-mist-400">（风险提示，不构成原创或侵权证明；重跑需重新粘贴参考）</span>
+    </p>
+  )
+}
+
+function RewriteResolve({ item, disabled, onResolve }: {
+  item: CheckItem
+  disabled: boolean
+  onResolve: (v: string | null, reason?: string) => void
+}) {
+  // 本地选中态：已知悉需要理由，提交时才发 PATCH；已修改直接提交（服务端要求编辑后重跑）。
+  const [picked, setPicked] = useState<string | null>(item.resolution)
+  const [reason, setReason] = useState(item.resolution_note || '')
+  return (
+    <div className="mt-2.5 space-y-1.5" onClick={(e) => e.stopPropagation()}>
+      <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+        {[{ value: 'acknowledged', label: '已知悉风险' }, { value: 'modified', label: '已修改后重查' }].map((o) => (
+          <label key={o.value} className={cn('flex cursor-pointer items-center gap-1.5 text-[13px]', item.resolution === o.value ? 'font-medium text-ink-700' : 'text-mist-600')}>
+            <input type="radio" name={item.id} disabled={disabled} className="accent-ink-600" checked={picked === o.value}
+              onChange={() => {
+                setPicked(o.value)
+                if (o.value === 'modified') onResolve('modified')
+              }} />
+            {o.label}
+          </label>
+        ))}
+      </div>
+      {picked === 'acknowledged' && <>
+        <Textarea rows={2} value={reason} disabled={disabled} maxLength={500}
+          placeholder="说明原因（20..500 字），例如：该参考来自本人早前发布内容"
+          onChange={(e) => setReason(e.target.value)} />
+        <Button size="sm" variant="secondary" disabled={disabled || Array.from(reason.trim()).length < 20}
+          onClick={() => onResolve('acknowledged', reason.trim())}>提交确认</Button>
+      </>}
+    </div>
+  )
 }
 
 function escapeRe(s: string) {
@@ -244,7 +300,7 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
             <Badge tone={meta.tone}>{meta.label}</Badge>
             {item.message !== meta.label && <span className="text-[13.5px] font-medium text-mist-800">{item.message}</span>}
           </div>
-          {item.detail && <p className="mt-1 text-[12.5px] leading-relaxed text-mist-500">{item.detail}</p>}
+          {item.detail && item.category === 'rewrite' ? <RewriteDetail detail={item.detail} /> : item.detail && <p className="mt-1 text-[12.5px] leading-relaxed text-mist-500">{item.detail}</p>}
           {item.matched_text && item.category === 'fact' && <p className="mt-1.5 rounded bg-sky-50 px-2 py-1 text-[12.5px] text-sky-800">「{item.matched_text}」</p>}
           {item.location.material_support && <p className="mt-1.5 rounded bg-ink-50 px-2 py-1 text-[12px] text-ink-700">关联素材引句：「{item.location.material_support.quote}」</p>}
           {item.location.label && <p className="mt-1 text-[11.5px] text-mist-400">位置：{item.location.label}{item.location.found === false && '（未在正文中定位到原文）'}</p>}
@@ -284,7 +340,7 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
             </div>
           </div>
         )}
-        {!isFormat && (
+        {!isFormat && item.category !== 'rewrite' && (
           <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5" onClick={(e) => e.stopPropagation()}>
             {options[item.category]?.map((o) => (
               <label key={o.value} className={cn('flex cursor-pointer items-center gap-1.5 text-[13px]', item.resolution === o.value ? 'font-medium text-ink-700' : 'text-mist-600')}>
@@ -296,6 +352,7 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
             ))}
           </div>
         )}
+        {!isFormat && item.category === 'rewrite' && <RewriteResolve item={item} disabled={disabled} onResolve={onResolve} />}
       </div>
     </div>
   )
@@ -364,13 +421,13 @@ export default function Check() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q.isLoading, canWrite])
 
-  const resolve = async (item: CheckItem, v: string | null) => {
+  const resolve = async (item: CheckItem, v: string | null, reason?: string) => {
     setResolving((ids) => [...ids, item.id])
     qc.setQueryData<{ run: CheckRun | null }>(key, (old) => old?.run
       ? { run: { ...old.run, items: old.run.items.map((i) => (i.id === item.id ? { ...i, resolution: v } : i)) } }
       : old)
     try {
-      const r = await patch<{ run: CheckRun }>(`/check-items/${item.id}`, { resolution: v })
+      const r = await patch<{ run: CheckRun }>(`/check-items/${item.id}`, { resolution: v, reason })
       const saved = r.run.items.find((i) => i.id === item.id)
       if (saved) qc.setQueryData<{ run: CheckRun | null }>(key, (old) => {
         if (!old?.run || old.run.id !== r.run.id) return old
@@ -509,12 +566,14 @@ export default function Check() {
   }, [focusItem, run])
 
   if (q.isLoading) return <PageLoading />
-  const groups = (['format', 'sensitive', 'fact', 'stale', 'ai_disclosure', 'similarity', 'ad_law'] as const)
+  const groups = (['format', 'sensitive', 'fact', 'stale', 'ai_disclosure', 'similarity', 'ad_law', 'rewrite'] as const)
     .map((c) => ({ c, items: (run?.items ?? []).filter((i) => i.category === c) }))
     .filter((g) => g.items.length)
   const formatFailed = run?.items.filter((i) => i.category === 'format' && !i.passed) ?? []
   const factPending = run?.fact_status === 'pending'
   const canComplete = !!run && !run.stale && !run.material_basis_stale && !factPending && run.blocking === 0 && run.confirmed === run.total
+  // DEV-CX13-F：新标准可用提示——只提示不阻断、不清除人工确认、不自动迁移历史结论。
+  const standardChanged = !!run?.standard_changed && !run.stale && !run.material_basis_stale
   // CK-07：按钮为什么是灰的，就地写清楚，不用用户自己数。
   const completeBlockedReason = !run ? ''
     : run.stale || run.material_basis_stale ? '作品内容已改动，检查结果已过期，请先「重新检查」。'
@@ -532,7 +591,7 @@ export default function Check() {
   const sectionItems = (sid: string) => (run?.items ?? []).filter((i) => i.location.section_id === sid && (i.category !== 'format' || !i.passed))
   const renderItem = (it: CheckItem) => (
       <div key={it.id} id={`item-${it.id}`}>
-      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v) => resolve(it, v)} disabled={!editable || run!.stale || run!.material_basis_stale || resolving.includes(it.id)} workId={work.id}
+      <ItemCard item={it} active={active === it.id} onPick={() => pick(it.id)} onResolve={(v: string | null, r?: string) => { void resolve(it, v, r) }} disabled={!editable || run!.stale || run!.material_basis_stale || resolving.includes(it.id)} workId={work.id}
         onEditInPlace={!comic && it.location.section_id ? () => setEditSignal({ sectionId: it.location.section_id!, text: it.matched_text, n: Date.now() }) : undefined}
         onApplyFix={comic ? undefined : applyFix} />
     </div>
@@ -686,6 +745,11 @@ export default function Check() {
                   {/* CK-07：禁用时就地说明还差什么，避免用户以为按钮坏了。 */}
                   {completeBlockedReason && (
                     <p className="text-center text-[12.5px] text-gamboge-700" data-testid="check-complete-blocked-reason">{completeBlockedReason}</p>
+                  )}
+                  {standardChanged && (
+                    <p className="text-center text-[12px] text-mist-500" data-testid="standard-changed-hint">
+                      运营标准已有新版本可用；本次检查结论按启动时的标准冻结留档，不会被改写。
+                    </p>
                   )}
                   {canExitCheck && (
                     <div className="text-center">

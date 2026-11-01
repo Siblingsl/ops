@@ -54,6 +54,28 @@ declare global {
       onLocalSettingsState(listener: (state: { dirty: boolean; busy: boolean }) => void): () => void
       onPlatformIntentResult(listener: (result: DesktopPlatformIntentResult) => void): () => void
       onClientHealth(listener: (health: DesktopClientHealth) => void): () => void
+      captureLongImage(buildId: string): Promise<CXLongImageCaptureResult>
     }
   }
 }
+
+export type CXLongImageCaptureResult =
+  | { ok: false; code: string; message: string }
+  | {
+    ok: true
+    buildId: string
+    sourceHash: string
+    png: Uint8Array
+    width: number
+    height: number
+    heightCss: number
+    dpr: number
+    viewportWidth: number
+    viewportHeight: number
+    segments: number
+    captureEngine: 'chromium-cdp'
+    captureEngineVersion: string
+    captureCheckScope: string
+    capturedAt: string
+    fontFamily: string
+  }

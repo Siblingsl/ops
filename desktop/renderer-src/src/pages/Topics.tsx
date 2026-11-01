@@ -11,6 +11,7 @@ import { AIFeedback, RefsNote, sendFeedback } from '@/components/refs'
 import { StarButton } from '@/components/star-button'
 import { Badge, Button, Card, cn, Empty, Field, platformFormatLabel, HumanGate, IconButton, Input, Notice, PageHeader, PageLoading, PageState, Select, Switch, Tabs, Textarea } from '@/components/ui'
 import { InboxPanel } from '@/components/inbox-panel'
+import { TopicDiagnosisPanel } from './topic-diagnosis'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
@@ -205,10 +206,10 @@ function HotSuggestDrawer({ open, onClose, accountId, platform, accountFormat }:
   )
 }
 
-function TopicEditDialog({ t, accountFormat, accountPlatform, series, onClose }: { t: Topic; accountFormat: string; accountPlatform: Platform; series: Series[]; onClose: () => void }) {
+function TopicEditDialog({ t, accountFormat, accountPlatform, series, initialAngle, onClose }: { t: Topic; accountFormat: string; accountPlatform: Platform; series: Series[]; initialAngle?: string; onClose: () => void }) {
   const inv = useInvalidate()
   const [f, setF] = useState({
-    title: t.title, angle: t.angle, audience: t.audience ?? '', hook: t.hook ?? '', needed: (t.needed_materials ?? []).join('、'),
+    title: t.title, angle: initialAngle ?? t.angle, audience: t.audience ?? '', hook: t.hook ?? '', needed: (t.needed_materials ?? []).join('、'),
     format: t.format ?? '', planned_date: t.planned_date ?? '', series_id: t.series_id ?? '',
   })
   const [busy, setBusy] = useState(false)
@@ -528,6 +529,7 @@ export default function Topics() {
   const [topicSearch, setTopicSearch] = useState(params.get('q') ?? '')
   const [sourceFilter, setSourceFilter] = useState(params.get('source') ?? 'all')
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null)
+  const [diagnosisEdit, setDiagnosisEdit] = useState<{ topic: Topic; angle: string } | null>(null)
   const startId = params.get('start')
   const focus = params.get('focus') || startId
   const inv = useInvalidate()
@@ -717,6 +719,7 @@ export default function Topics() {
               {selectedTopic.series_id && <div><dt>所属系列</dt><dd>{series.data?.find((s) => s.id === selectedTopic.series_id)?.name ?? '系列'}</dd></div>}
             </dl>
             {selectedTopic.status === 'pending' && (selectedTopic.score_fit != null || selectedTopic.score_material != null) && <div className="desktop-topic-detail-scores"><ScoreBar label="契合度" value={selectedTopic.score_fit} tip={selectedTopic.score_reason} /><ScoreBar label="素材充足" value={selectedTopic.score_material} tip="素材库里能支撑这个选题的素材多少" /><ScoreBar label="新颖度" value={selectedTopic.score_novelty} tip="与本账号写过的标题越不像，分越高" /></div>}
+            <TopicDiagnosisPanel key={selectedTopic.id} topic={selectedTopic} canWrite={canWrite} onAdoptAngle={(angle) => setDiagnosisEdit({ topic: selectedTopic, angle })} />
             <p className="desktop-topic-detail-hint">采用不会自动确认观点、大纲或起草正文。</p>
             <div className="desktop-topic-detail-footer">
               {canWrite && selectedTopic.status === 'pending' && <>
@@ -742,6 +745,7 @@ export default function Topics() {
       {!desktopPresentation && tab !== 'inbox' && topicQuery.hasNextPage && <div className="mt-5 flex justify-center"><Button variant="outline" loading={topicQuery.isFetchingNextPage} onClick={() => void topicQuery.fetchNextPage()}>加载更多选题</Button></div>}
       <SuggestDrawer open={suggest} onClose={() => setSuggest(false)} accountId={acc.id} platform={acc.platform} accountFormat={acc.content_format} />
       <HotSuggestDrawer open={hotSuggest} onClose={() => setHotSuggest(false)} accountId={acc.id} platform={acc.platform} accountFormat={acc.content_format} />
+      {diagnosisEdit && <TopicEditDialog t={{ ...diagnosisEdit.topic, account_id: diagnosisEdit.topic.account_id ?? acc.id }} accountFormat={acc.content_format} accountPlatform={acc.platform} series={series.data ?? []} initialAngle={diagnosisEdit.angle} onClose={() => setDiagnosisEdit(null)} />}
       <Dialog open={adding} onClose={() => setAdding(false)} title="添加选题"
         footer={<><Button variant="ghost" onClick={() => setAdding(false)}>{similar.length ? '完成' : '取消'}</Button><Button variant="primary" onClick={save} disabled={!title.trim()}>加入选题池</Button></>}>
         <div className="space-y-4">
