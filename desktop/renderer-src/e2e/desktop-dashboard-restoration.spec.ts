@@ -176,6 +176,18 @@ test('Electron 日历按原型铺满主区并逐项点击日历控件', async ({
     await page.getByRole('button', { name: '上一页', exact: true }).click()
   }
   await expect(anchorLabel).toContainText('2026 年 10 月')
+  // 翻月要点击「上一页」，Playwright 点击前会把元素滚入视口，页面因此被整体下滚一段；
+  // 下面用 getBoundingClientRect 取的是视口坐标，滚动量会等量平移结果（实测 74px）。
+  // 测量前把所有祖先滚动容器归零，否则比的是滚动位置而不是布局。
+  await page.locator('.desktop-calendar-page').evaluate((element) => {
+    (element as HTMLElement).scrollTop = 0
+    let node = element.parentElement
+    while (node) {
+      node.scrollTop = 0
+      node = node.parentElement
+    }
+    window.scrollTo(0, 0)
+  })
 
   const prototype = await page.context().newPage()
   await prototype.setViewportSize({ width: 1440, height: 900 })
