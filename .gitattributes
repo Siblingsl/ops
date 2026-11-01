@@ -1,0 +1,27 @@
+# 行尾统一为 LF。
+#
+# 背景：Windows 下 core.autocrlf=true 会把源码检出成 CRLF，桌面测试两次因行尾失败
+# （D-154：9e231ae 修复 Windows 行尾导致的桌面测试失败、a855138 规范化桌面测试源码换行）。
+# 索引里一直是 LF，这里把检出规则也钉死，避免第三次。
+* text=auto eol=lf
+
+# Windows 专用脚本保留 CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制，禁止任何行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.exe binary
+*.dll binary
