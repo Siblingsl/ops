@@ -71,10 +71,9 @@ jobs:
           echo "OPS_DOCUMENT_PARSER_SOCKETS=$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-a/parser.sock,$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-b/parser.sock" >> "$GITHUB_ENV"
       - name: Diagnose checkout (temporary, DEV-CX review compile failure)
         run: |
-          ls -la internal/app/cx_review_windows_test.go internal/app/cx_review_ai_test.go
-          wc -l internal/app/cx_review_windows_test.go
-          grep -n "func cxReviewCreateAccount" internal/app/cx_review_windows_test.go
-          git status --porcelain internal/app/ | head
+          ls -la internal/app/cx_review_windows_test.go
+          tail -c 120 internal/app/cx_review_windows_test.go | od -c | tail -5
+          go vet ./internal/app 2>&1 | head -30
       - name: Test
         env:
           OPS_TEST_ADMIN_URL: postgres://ops:ops_ci@localhost:5432/postgres?sslmode=disable
