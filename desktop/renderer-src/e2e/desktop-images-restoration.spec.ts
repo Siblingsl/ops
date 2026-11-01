@@ -94,11 +94,15 @@ test('Electron 图片库按原型布局并逐项点击筛选与详情操作', as
   expect(toolbarStyle).toEqual({ background: 'rgba(0, 0, 0, 0)', border: '0px', radius: '0px', shadow: 'none' })
   await page.screenshot({ path: resolve(process.cwd(), '../../output/playwright/desktop-creative/qa-2026-10-17/screenshots/images-layout-after.png') })
   await prototype.screenshot({ path: resolve(process.cwd(), '../../output/playwright/desktop-creative/qa-2026-10-17/screenshots/images-layout-prototype.png') })
+  // 容差 2px 是给两套渲染的亚像素差异留的余量。但 getBoundingClientRect 的返回值
+  // 本身是 1/64px 精度的浮点数，差值会落在 2.0000152 这种刚好越界的位置上，把余量吃光。
+  // 比较前把差值收敛到 0.01px：容差意图不变，也不再受浮点噪声影响。
+  const deviation = (actual: number, expected: number) => Math.round(Math.abs(actual - expected) * 100) / 100
   for (const { selector, actual, expected } of metrics) {
-    expect(Math.abs(actual.x - expected.x), `${selector} horizontal position`).toBeLessThanOrEqual(2)
-    expect(Math.abs(actual.y - expected.y), `${selector} vertical position`).toBeLessThanOrEqual(2)
-    expect(Math.abs(actual.width - expected.width), `${selector} width`).toBeLessThanOrEqual(2)
-    expect(Math.abs(actual.height - expected.height), `${selector} height`).toBeLessThanOrEqual(2)
+    expect(deviation(actual.x, expected.x), `${selector} horizontal position`).toBeLessThanOrEqual(2)
+    expect(deviation(actual.y, expected.y), `${selector} vertical position`).toBeLessThanOrEqual(2)
+    expect(deviation(actual.width, expected.width), `${selector} width`).toBeLessThanOrEqual(2)
+    expect(deviation(actual.height, expected.height), `${selector} height`).toBeLessThanOrEqual(2)
   }
   await expect(page.locator('.desktop-image-grid > button')).toHaveCount(8)
   await expect(page.getByLabel('按账号筛选')).toHaveCount(0)
