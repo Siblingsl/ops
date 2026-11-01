@@ -99,6 +99,10 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
+      # 输入法回车保护：此前只有脚本、没有 CI 步骤，导致 4 处不合规长期无人发现。
+      - run: pnpm run check:ime-enter
+      # AGENTS.md 声明 Web/桌面边界守卫由 test:unit 强制，此前 CI 未执行该脚本。
+      - run: pnpm run test:unit
       - run: pnpm run build
       # Web 构建可指定跨源 API 基址；默认构建（上一行）仍使用相对路径。
       - name: Build (cross-origin)
@@ -137,6 +141,9 @@ jobs:
         run: pnpm --dir renderer-src run typecheck
       - name: Desktop unit tests
         run: pnpm test
+      # 渲染器单测（含 E2E 边界守卫）此前只在本地执行，CI 未覆盖。
+      - name: Desktop renderer unit tests
+        run: pnpm --dir renderer-src run test:unit
       - name: Build Windows desktop installer
         run: pnpm make
       - name: Verify packaged desktop UI and API origin
