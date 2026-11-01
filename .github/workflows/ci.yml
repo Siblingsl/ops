@@ -73,6 +73,7 @@ jobs:
         run: |
           ls -la internal/app/cx_review_windows_test.go
           tail -c 120 internal/app/cx_review_windows_test.go | od -c | tail -5
+          go list -f '{{len .TestGoFiles}} test files' ./internal/app
           go list -f '{{.TestGoFiles}}' ./internal/app | tr ' ' '
 ' | grep -c windows_test || true
           go build -o /dev/null ./internal/app
