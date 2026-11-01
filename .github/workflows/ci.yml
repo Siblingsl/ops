@@ -73,7 +73,11 @@ jobs:
         run: |
           ls -la internal/app/cx_review_windows_test.go
           tail -c 120 internal/app/cx_review_windows_test.go | od -c | tail -5
+          go list -f '{{.TestGoFiles}}' ./internal/app | tr ' ' '
+' | grep -c windows_test || true
+          go build -o /dev/null ./internal/app
           go vet ./internal/app 2>&1 | head -30
+          go test -c -o /dev/null ./internal/app 2>&1 | head -40
       - name: Test
         env:
           OPS_TEST_ADMIN_URL: postgres://ops:ops_ci@localhost:5432/postgres?sslmode=disable
