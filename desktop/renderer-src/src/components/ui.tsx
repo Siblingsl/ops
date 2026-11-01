@@ -94,11 +94,17 @@ export function MoreMenu({ items, label = '更多', className }: { items: MoreMe
     const closeOnResize = () => setOpen(false)
     document.addEventListener('mousedown', close)
     document.addEventListener('keydown', close)
-    document.addEventListener('scroll', closeOnScroll, true)
+    // 「滚动即关闭」要晚一帧再挂：打开菜单的那一帧里，往往还有一次滚动事件在途
+    // （浏览器按帧派发 scroll，触发按钮被滚进视口、焦点落到菜单项都会引起滚动）。
+    // 立即监听就会把刚渲染出来的菜单当场关掉——实测点击后 56ms 内菜单即消失，
+    // 桌面 E2E 里表现为「段落历史」菜单永远等不到（约 43% 概率复现）。
+    // 推迟一帧后既保留滚动关闭行为，又不会误杀刚打开的菜单。
+    const raf = requestAnimationFrame(() => document.addEventListener('scroll', closeOnScroll, true))
     window.addEventListener('resize', closeOnResize)
     return () => {
       document.removeEventListener('mousedown', close)
       document.removeEventListener('keydown', close)
+      cancelAnimationFrame(raf)
       document.removeEventListener('scroll', closeOnScroll, true)
       window.removeEventListener('resize', closeOnResize)
     }
