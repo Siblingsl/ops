@@ -69,6 +69,12 @@ jobs:
             docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container_name" | grep -qx 'GOMEMLIMIT=192MiB'
           done
           echo "OPS_DOCUMENT_PARSER_SOCKETS=$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-a/parser.sock,$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-b/parser.sock" >> "$GITHUB_ENV"
+      - name: Diagnose checkout (temporary, DEV-CX review compile failure)
+        run: |
+          ls -la internal/app/cx_review_windows_test.go internal/app/cx_review_ai_test.go
+          wc -l internal/app/cx_review_windows_test.go
+          grep -n "func cxReviewCreateAccount" internal/app/cx_review_windows_test.go
+          git status --porcelain internal/app/ | head
       - name: Test
         env:
           OPS_TEST_ADMIN_URL: postgres://ops:ops_ci@localhost:5432/postgres?sslmode=disable
