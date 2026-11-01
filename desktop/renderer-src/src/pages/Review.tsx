@@ -827,9 +827,6 @@ export default function Review() {
       </Card>
         {acc.platform === 'wechat_mp' && <div id="desktop-review-unmatched"><UnmatchedCard accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']); inv(['data-preferences', acc.id]) }} /></div>}
 
-      <ReviewCX21 accountId={acc.id} platform={acc.platform} contentFormat={acc.platform === 'toutiao' ? toutiaoFormat : acc.content_format} works={rows}
-        proposal={experimentProposal} onProposalUsed={() => setExperimentProposal(null)} />
-
       {desktopPresentation && <div className="desktop-review-teasers" data-testid="desktop-review-teasers">
         <Card className="desktop-review-teaser">
           <h3>本周复盘草稿</h3>
@@ -845,6 +842,9 @@ export default function Review() {
           <div className="desktop-review-teaser-actions"><Button variant="secondary" onClick={() => revealAdvanced('desktop-review-insights')}>查看趋势</Button></div>
         </Card>
       </div>}
+      <ReviewCX21 accountId={acc.id} platform={acc.platform} contentFormat={acc.platform === 'toutiao' ? toutiaoFormat : acc.content_format} works={rows}
+        proposal={experimentProposal} onProposalUsed={() => setExperimentProposal(null)} />
+
       {(!desktopPresentation || showAdvanced) && <div id="desktop-review-advanced" className="grid gap-6 lg:grid-cols-[340px_1fr] 2xl:grid-cols-[380px_1fr] scroll-mt-24">
         <Card className="h-fit p-5">
           <h3 className="mb-1 font-display text-[16px] font-bold text-mist-900">AI 复盘</h3>

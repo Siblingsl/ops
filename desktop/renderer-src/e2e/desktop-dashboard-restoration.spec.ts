@@ -167,6 +167,15 @@ test('Electron 日历按原型铺满主区并逐项点击日历控件', async ({
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`/a/${account.id}/calendar`)
   await expect(page.getByTestId('desktop-calendar-layout')).toBeVisible()
+  // 原型日历硬编码 2026 年 10 月；产品锚定真实今天。回退到原型同月，
+  // 保证两侧月网格行数一致（跨月运行时高度差 110px/行不是布局回归）。
+  const anchorLabel = page.locator('.desktop-calendar-toolbar .font-display').first()
+  for (let i = 0; i < 24; i += 1) {
+    const anchorText = await anchorLabel.textContent()
+    if (anchorText && anchorText.includes('2026 年 10 月')) break
+    await page.getByRole('button', { name: '上一页', exact: true }).click()
+  }
+  await expect(anchorLabel).toContainText('2026 年 10 月')
 
   const prototype = await page.context().newPage()
   await prototype.setViewportSize({ width: 1440, height: 900 })
