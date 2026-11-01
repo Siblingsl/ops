@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { mockModelBaseUrl } from './support'
 
 async function api(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(async ({ method, path, body }) => {
@@ -25,7 +26,7 @@ async function prepareRoutine(page: Page, baseURL: string) {
   await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
   const account = await api(page, 'POST', '/accounts', { platform: 'xhs', name: 'AW10 例行任务验收号', content_format: 'image_note', type_note: '' })
   const provider = await api(page, 'POST', '/model-providers', {
-    name: 'AW10 工作台 mock 模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+    name: 'AW10 工作台 mock 模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-agent-tested'],
   })
   await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])

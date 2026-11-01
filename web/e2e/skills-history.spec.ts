@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { publishDigest } from '../src/lib/skill-canon'
 import { api, registerAccount } from './support'
 
 test('TestSkillBoundGenerationOwnerAndCollaboratorHistoryReceipts', async ({ page, browser }) => {
@@ -6,10 +7,7 @@ test('TestSkillBoundGenerationOwnerAndCollaboratorHistoryReceipts', async ({ pag
   const fields = { name: '私有写法名称', summary: '仅本人可见', triggers: '标题时使用', instructions: '保持简洁，不引入输入外的事实。', platforms: [], content_formats: [], task_types: ['title'], task_enabled: true, agent_enabled: true, status: 'active' }
   const personal = (await api(page, 'POST', '/skills', { scope: 'personal', ...fields })).skill
   const publicFields = { ...fields, name: '公共写法名称', summary: '工作区可见' }
-  const digest = await page.evaluate(async fields => {
-    const { publishDigest } = await import('/src/lib/skill-canon.ts')
-    return publishDigest({ operation: 'create', skillId: null, scope: 'workspace', accountId: null }, fields)
-  }, publicFields)
+  const digest = await publishDigest({ operation: 'create', skillId: null, scope: 'workspace', accountId: null }, publicFields)
   const shared = (await api(page, 'POST', '/skills', { scope: 'workspace', ...publicFields, publish_confirmation: { confirmed: true, digest } })).skill
   await page.goto(`/a/${account.id}/profile?tab=skills`)
   await page.getByLabel('选择个人技能', { exact: true }).selectOption(personal.id)

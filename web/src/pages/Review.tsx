@@ -1,6 +1,6 @@
 import { DailyStatsCard } from './ops/DailyStats'
 import { useQuery } from '@tanstack/react-query'
-import { BarChart3, Brain, Check, ClipboardPaste, Lightbulb, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
+import { BarChart3, ClipboardPaste, Lightbulb, Pencil, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -16,6 +16,8 @@ import type { BoardRow, Metric, MetricSource, Platform, ReviewReport } from '@/l
 import { FollowersCard } from './review-followers'
 import { AttributionCard, DigestsCard, TopWorksCard } from './review-insights'
 import { metricFields, type MetricKey, ScreenshotImport } from './review-screenshots'
+import { ReportCard, type ReviewExperimentProposal } from './review-report'
+import { ReviewCX21 } from './review-cx21'
 
 const metricSourceLabel: Record<MetricSource, string> = {
   manual: '手动录入', paste: '粘贴回填', file: '表格导入', wechat_api: '公众号接口', screenshot: '截图识别',
@@ -421,111 +423,6 @@ function UnmatchedCard({ accountId, works, onDone }: { accountId: string; works:
   )
 }
 
-function ReportCard({ report, accountId, onAdopted }: { report: ReviewReport; accountId: string; onAdopted: () => void }) {
-  const [busy, setBusy] = useState<number | null>(null)
-  const [remembering, setRemembering] = useState<number | null>(null)
-  const [remembered, setRemembered] = useState<number[]>(report.remembered ?? [])
-  const [ignored, setIgnored] = useState<number[]>(report.ignored ?? [])
-  // OP-05：采纳后要能直接到刚生成的选题，而不是让用户回选题池自己找。
-  const [adoptedTopic, setAdoptedTopic] = useState<Record<number, string>>({})
-  const insights = report.content.writing_insights ?? []
-  const ignore = async (i: number) => {
-    setIgnored((x) => [...x, i])
-    try {
-      await post(`/review-reports/${report.id}/insights/${i}/ignore`)
-    } catch (e) {
-      setIgnored((x) => x.filter((k) => k !== i))
-      toast.error(errorMessage(e))
-    }
-  }
-  const remember = async (i: number) => {
-    setRemembering(i)
-    try {
-      await post(`/review-reports/${report.id}/insights/${i}/remember`)
-      setRemembered((r) => [...r, i])
-      toast.success('已记住，之后生成标题和正文时会参考')
-    } catch (e) {
-      toast.error(errorMessage(e))
-    } finally {
-      setRemembering(null)
-    }
-  }
-  const adopt = async (i: number) => {
-    setBusy(i)
-    try {
-      const r = await post<{ topic_id?: string }>(`/review-reports/${report.id}/suggestions/${i}/adopt`)
-      toast.success('已加入选题池')
-      onAdopted()
-      if (r?.topic_id) setAdoptedTopic((x) => ({ ...x, [i]: r.topic_id as string }))
-    } catch (e) {
-      toast.error(errorMessage(e))
-    } finally {
-      setBusy(null)
-    }
-  }
-  return (
-    <Card>
-      <CardHeader title={`${report.origin === 'weekly_draft' ? '每周复盘草稿' : '复盘报告'}${report.content.content_format ? ` · ${contentFormatName(report.content.content_format)}` : ''} · ${fmtTime(report.created_at)}`}
-        desc={report.origin === 'weekly_draft'
-          ? `后台按第 7 天数据自动生成，覆盖 ${report.work_ids.length} 篇作品；建议要你逐条采纳，不采纳不影响任何东西`
-          : `覆盖 ${report.work_ids.length} 篇作品`} />
-      <div className="space-y-5 p-5">
-        <div>
-          <div className="mb-2 text-[13px] font-semibold text-mist-700">结论</div>
-          <ul className="space-y-1.5">
-            {report.content.conclusions.map((c, i) => (
-              <li key={i} className="flex gap-2 text-[14px] leading-relaxed text-mist-700"><span className="mt-2 size-1.5 shrink-0 rounded-full bg-ink-500" />{c}</li>
-            ))}
-          </ul>
-        </div>
-        {insights.length > 0 && (
-          <div>
-            <div className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-mist-700"><Brain className="size-4" />写作层面的结论</div>
-            <ul className="space-y-1.5">
-              {insights.map((t, i) => ignored.includes(i) ? null : (
-                <li key={i} className={cn('flex items-start gap-2 rounded-lg border p-2.5 text-[13.5px]', remembered.includes(i) ? 'border-ink-200 bg-ink-50/40' : 'border-mist-200')}>
-                  <span className="flex-1 leading-relaxed text-mist-700">{t}</span>
-                  {remembered.includes(i) ? <Badge tone="ink"><Check className="size-3" />已记住</Badge> : (
-                    <>
-                      <Button size="sm" variant="outline" loading={remembering === i} onClick={() => remember(i)}>记住</Button>
-                      <Button size="sm" variant="ghost" onClick={() => ignore(i)}>忽略</Button>
-                    </>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        <div>
-          <div className="mb-2 text-[13px] font-semibold text-mist-700">选题建议</div>
-          <div className="space-y-2">
-            {report.content.topic_suggestions.map((s, i) => {
-              const adopted = report.adopted.includes(i)
-              return (
-                <div key={i} className={cn('flex items-start gap-3 rounded-lg border p-3', adopted ? 'border-ink-200 bg-ink-50/40' : 'border-mist-200')}>
-                  <div className="min-w-0 flex-1">
-                    <div className="font-display text-[15px] font-semibold text-mist-900">{s.title}</div>
-                    <div className="mt-1 text-[13px] text-mist-600"><span className="text-mist-400">角度 · </span>{s.angle}</div>
-                    <div className="text-[13px] text-mist-500"><span className="text-mist-400">依据 · </span>{s.reason}</div>
-                  </div>
-                  {adopted ? <span className="flex shrink-0 items-center gap-1.5">
-                    <Badge tone="ink"><Check className="size-3" />已采纳</Badge>
-                    <Link to={adoptedTopic[i] ? `/a/${accountId}/topics?focus=${adoptedTopic[i]}` : `/a/${accountId}/topics`}
-                      className="whitespace-nowrap text-[12.5px] text-ink-700 underline underline-offset-2">
-                      {adoptedTopic[i] ? '去创作这条选题' : '去选题池查看'}
-                    </Link>
-                  </span>
-                    : <Button size="sm" variant="outline" loading={busy === i} onClick={() => adopt(i)} icon={<Plus className="size-3.5" />}>采纳</Button>}
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      </div>
-    </Card>
-  )
-}
-
 export default function Review() {
   const acc = useCurrentAccount()
   const [params, setParams] = useSearchParams()
@@ -534,6 +431,8 @@ export default function Review() {
   const [recent, setRecent] = useState('10')
   const [running, setRunning] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [analysisV2, setAnalysisV2] = useState(true)
+  const [experimentProposal, setExperimentProposal] = useState<ReviewExperimentProposal | null>(null)
   const inv = useInvalidate()
   useEffect(() => {
     if (acc?.platform === 'toutiao') setToutiaoFormat(acc.content_format)
@@ -560,7 +459,7 @@ export default function Review() {
   const runReview = async () => {
     setRunning(true)
     try {
-      const { job_id } = await post<{ job_id: string }>(`/accounts/${acc.id}/reviews`, { ...(selected.length ? { work_ids: selected } : { recent: Number(recent) }), ...(acc.platform === 'toutiao' ? { content_format: toutiaoFormat } : {}), background: true })
+      const { job_id } = await post<{ job_id: string }>(`/accounts/${acc.id}/reviews`, { ...(selected.length ? { work_ids: selected } : { recent: Number(recent) }), ...(acc.platform === 'toutiao' ? { content_format: toutiaoFormat } : {}), ...(analysisV2 ? { analysis_version: 2 } : {}), background: true })
       toast.message('AI 正在复盘，可以先去做别的，完成后会通知你')
       await waitJob(job_id)
       void reports.refetch()
@@ -662,6 +561,9 @@ export default function Review() {
       </Card>
         {acc.platform === 'wechat_mp' && <div id="review-unmatched"><UnmatchedCard accountId={acc.id} works={rows} onDone={() => { board.refetch(); inv(['board']); inv(['data-preferences', acc.id]) }} /></div>}
 
+      <ReviewCX21 accountId={acc.id} platform={acc.platform} contentFormat={acc.platform === 'toutiao' ? toutiaoFormat : acc.content_format} works={rows}
+        proposal={experimentProposal} onProposalUsed={() => setExperimentProposal(null)} />
+
       <div id="review-advanced" className="grid gap-6 lg:grid-cols-[340px_1fr] 2xl:grid-cols-[380px_1fr] scroll-mt-24">
         <Card className="h-fit p-5">
           <h3 className="mb-1 font-display text-[16px] font-bold text-mist-900">AI 复盘</h3>
@@ -675,11 +577,12 @@ export default function Review() {
               </Select>
             </Field>
           )}
+          <label className="mb-3 flex items-start gap-2 text-xs text-mist-600"><input type="checkbox" checked={analysisV2} onChange={(event) => setAnalysisV2(event.target.checked)} />使用增强复盘：包含窗口、来源、可能解释和实验草案；可切回原版</label>
           <Button variant="primary" className="w-full" loading={running} onClick={runReview} icon={<Sparkles className="size-4" />}>生成复盘报告</Button>
           <HumanGate code="H-08" className="mt-4">AI 的选题建议不会自动进入选题池，需要你逐条采纳。</HumanGate>
         </Card>
         <div id="review-report-list" className="space-y-4 scroll-mt-24">
-          {reports.data?.length ? reports.data.map((r) => <ReportCard key={r.id} report={r} accountId={acc.id} onAdopted={() => { reports.refetch(); inv(['topics', acc.id]) }} />)
+          {reports.data?.length ? reports.data.map((r) => <ReportCard key={r.id} report={r} accountId={acc.id} onAdopted={() => { reports.refetch(); inv(['topics', acc.id]) }} onUseExperiment={setExperimentProposal} />)
             : <Card><Empty icon={<Lightbulb className="size-5" />} title="还没有复盘报告" desc="录入几篇作品的数据后，生成第一份复盘报告。"
               action={<Button variant="primary" icon={<Sparkles className="size-4" />} loading={running} onClick={runReview}>生成复盘报告</Button>} /></Card>}
         </div>

@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BackfillForm, PlatformBinding, PostPushTodos } from '@/components/backfill'
+import { PublishStatePanel } from '@/components/publish-state'
 import { XhsCardMaker } from '@/components/xhs-cards'
 import { Button, Card, cn, HumanGate, Notice } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
@@ -315,7 +316,7 @@ export default function Pack() {
           <Notice tone="gamboge">AI 声明：内容使用了 AI 辅助时，按平台规则必须声明。漏标可能导致限流或处罚。</Notice>
           {work.post_push_todos?.length ? <Card className="p-4"><PostPushTodos work={work} setWork={setWork} /></Card> : null}
           {/* PB-06：与头条发布包对齐——公共区块顺序统一为「回填 → 平台绑定」，平台专属区块放在其后。 */}
-          <div id="backfill" className="scroll-mt-20"><BackfillForm work={work} setWork={setWork} /></div>
+          <div id="backfill" className="scroll-mt-20 space-y-4"><BackfillForm work={work} setWork={setWork} />{packed && <PublishStatePanel work={work} canManage={canManage} />}</div>
           {(work.status === 'published' || work.status === 'packed') && (
             <PlatformBinding work={work} setWork={setWork} canManage={canManage} />
           )}

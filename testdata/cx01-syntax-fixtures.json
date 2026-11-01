@@ -1,0 +1,36 @@
+[
+  {
+    "name": "supported-and-converted",
+    "markdown": "# 一级标题\n\n## 二级标题\n\n### 三级标题\n\n#### 转为强调\n\n- [ ] 未完成\n- [x] 已完成\n\n`[^1] $100`\n\n\\[^escaped] and \\[[TOC]]\n\n```text\n[^1] $x^2$ Mermaid\n```\n\n<dl><dt>术语</dt><dd style=\"color:#123456\">说明</dd></dl>\n\n| 列 | 值 |\n| --- | --- |\n| A | B |",
+    "issues": [],
+    "converted": ["h1_to_h3", "h2_to_h3", "h4_to_strong", "task_list_to_marker"],
+    "warnings": [],
+    "truncated": false,
+    "dom": {"headingTags": ["h2", "h3", "h3", "h3"], "strongParagraphs": ["转为强调"], "keptTags": ["dl", "dt", "dd", "table", "td"], "text": ["☐ 未完成", "☑ 已完成", "说明"]}
+  },
+  {
+    "name": "unsupported-markdown-syntax",
+    "markdown": "引用[^a]。\n\n[^a]: 来源\n\n术语\n: 定义\n\n[文档][ref]\n\n[ref]: https://example.com\n\n公式 $x^2$\n\n$$\ny = x + 1\n$$\n\n[[TOC]]\n\n```mermaid\ngraph TD\n```\n\n- 一级\n  - 二级\n    - 三级\n      - 四级",
+    "issues": ["footnote", "definition_list", "reference_link", "math", "toc", "mermaid", "list_too_deep"],
+    "converted": [],
+    "warnings": [],
+    "truncated": false
+  },
+  {
+    "name": "unsafe-and-fallback-html",
+    "markdown": "<script>alert(1)</script>\n\n<link rel=\"stylesheet\" href=\"https://cdn.example.com/theme.css\">\n\n<p onclick=\"run()\">unsafe</p>\n\n<a href=\"javascript:alert(1)\">link</a>\n\n<custom-card>保留子内容</custom-card>",
+    "issues": ["dangerous_html", "unsafe_url"],
+    "converted": ["html_tag_fallback"],
+    "warnings": [],
+    "truncated": false,
+    "dom": {"absentTags": ["script", "link"], "absentAttrs": ["onclick"], "text": ["unsafe", "link", "保留子内容"]}
+  },
+  {
+    "name": "errors-survive-report-truncation",
+    "markdown": "# 标题 1\n# 标题 2\n# 标题 3\n# 标题 4\n# 标题 5\n# 标题 6\n# 标题 7\n# 标题 8\n# 标题 9\n# 标题 10\n# 标题 11\n# 标题 12\n# 标题 13\n# 标题 14\n# 标题 15\n# 标题 16\n# 标题 17\n# 标题 18\n# 标题 19\n# 标题 20\n# 标题 21\n# 标题 22\n# 标题 23\n# 标题 24\n# 标题 25\n# 标题 26\n# 标题 27\n# 标题 28\n# 标题 29\n# 标题 30\n# 标题 31\n# 标题 32\n# 标题 33\n# 标题 34\n# 标题 35\n# 标题 36\n# 标题 37\n# 标题 38\n# 标题 39\n# 标题 40\n# 标题 41\n# 标题 42\n# 标题 43\n# 标题 44\n# 标题 45\n# 标题 46\n# 标题 47\n# 标题 48\n# 标题 49\n# 标题 50\n# 标题 51\n引用[^x]\n[^x]: 来源",
+    "issues": ["footnote"],
+    "converted": ["h1_to_h3"],
+    "warnings": [],
+    "truncated": true
+  }
+]

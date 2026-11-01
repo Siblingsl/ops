@@ -126,7 +126,8 @@ function AgentConversationList({
 
   const items = list.data?.pages.flatMap((page) => page.items) ?? []
   const pinned = archived ? [] : items.filter((item) => item.pinned_at)
-  const rest = items.filter((item) => !item.pinned_at)
+  // 归档视图是平铺的恢复列表：pinned_at 不再把会话排除掉，否则“置顶后归档”的会话在 UI 里不可达。
+  const rest = archived ? items : items.filter((item) => !item.pinned_at)
   const groups = ['今天', '昨天', '7 天内', '更早'].map((label) => ({ label, items: rest.filter((item) => splitDate(item.last_message_at) === label) }))
   const namedGroups = groupQuery.data ?? []
   const groupedRows = organizeEnabled && !groupID

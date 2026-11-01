@@ -78,6 +78,9 @@ export function OutlineCard({ work, setWork, readOnly, onConfirmed, hidden = fal
   const [managing, setManaging] = useState(false)
   const [review, setReview] = useState<{ issues: { items: number[]; problem: string; suggestion: string }[]; overall: string; ai_call_id: string } | null>(null)
   const templates = useQuery({ queryKey: ['outline-templates'], queryFn: () => get<OutlineTemplate[]>('/outline-templates'), staleTime: 300_000, enabled: !readOnly })
+  // DEV-CX12 / FR-CX-14：用户显式选择拆解骨架供大纲参考（只注入结构字段，不复制原文）。
+  const skeletonList = useQuery({ queryKey: ['skeleton-notes', work.account_id], queryFn: () => get<SkeletonNoteRef[]>(`/accounts/${work.account_id}/skeleton-notes`), enabled: !readOnly })
+  const [skeletonIDs, setSkeletonIDs] = useState<string[]>([])
   useEffect(() => {
     setItems(work.outline)
     setEditing(!work.outline_confirmed_at)
@@ -92,7 +95,8 @@ export function OutlineCard({ work, setWork, readOnly, onConfirmed, hidden = fal
     try {
       // NW-C3：观点可能还在 800ms 防抖里，先落库再让服务端读取。
       await flushAll()
-      const r = await post<{ items: OutlineItem[]; refs: AIRefs; ai_call_id: string }>(`/works/${work.id}/outline/generate`, template ? { template } : {})
+      const r = await post<{ items: OutlineItem[]; refs: AIRefs; ai_call_id: string }>(`/works/${work.id}/outline/generate`,
+        { ...(template ? { template } : {}), ...(skeletonIDs.length ? { skeleton_note_ids: skeletonIDs } : {}) })
       setItems(r.items)
       setRefs(r.refs)
       setCallId(r.ai_call_id)
@@ -154,6 +158,25 @@ export function OutlineCard({ work, setWork, readOnly, onConfirmed, hidden = fal
               <option value="">不用结构模板</option>
               {(templates.data ?? []).map((t) => <option key={t.id} value={t.id} title={t.structure}>{t.name}</option>)}
             </Select>
+          )}
+          {!readOnly && editing && (skeletonList.data?.length ?? 0) > 0 && (
+            <Select className="h-8 w-40 text-[12.5px]" value="" title="选择对标结构骨架（只参考结构）"
+              onChange={(e) => { if (e.target.value && !skeletonIDs.includes(e.target.value)) setSkeletonIDs((ids) => [...ids, e.target.value]) }}>
+              <option value="">不用对标骨架</option>
+              {(skeletonList.data ?? []).filter((s) => !skeletonIDs.includes(s.id)).map((s) => (
+                <option key={s.id} value={s.id}>{s.target}·{s.hook_type}·{s.roles.length}段</option>
+              ))}
+            </Select>
+          )}
+          {!readOnly && editing && skeletonIDs.length > 0 && (
+            <span className="flex flex-wrap items-center gap-1">
+              {skeletonIDs.map((id) => (
+                <button key={id} type="button" className="rounded-full bg-ink-50 px-2 py-0.5 text-[11px] text-ink-700"
+                  onClick={() => setSkeletonIDs((ids) => ids.filter((x) => x !== id))}>
+                  {(skeletonList.data ?? []).find((s) => s.id === id)?.target ?? id.slice(0, 8)} ×
+                </button>
+              ))}
+            </span>
           )}
           {!readOnly && editing && <Button size="sm" variant="ghost" onClick={() => setManaging(true)}>管理模板</Button>}
           {!readOnly && <Button size="sm" variant={items.length ? 'ghost' : 'primary'} icon={<Sparkles className="size-3.5" />} loading={busy === 'gen'} disabled={noViewpoint} onClick={generate}
@@ -240,4 +263,16 @@ export function OutlineCard({ work, setWork, readOnly, onConfirmed, hidden = fal
       }} />
     </Card>
   )
+}
+
+// DEV-CX12 / FR-CX-14：账号下可引用的拆解骨架（只含受限结构字段）。
+interface SkeletonNoteRef {
+  id: string
+  target: string
+  title: string
+  hook_type: string
+  roles: string[]
+  paragraphs: number
+  avg_chars: number
+  updated_at: string
 }

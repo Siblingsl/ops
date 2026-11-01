@@ -1,0 +1,18 @@
+[
+  {
+    "name": "appendix-e-1",
+    "input_json": "{\"title\":\"中文🙂\",\"summary\":\"a\\r\\nb\",\"topics\":[],\"cover\":null}",
+    "canonical": "{\"cover\":null,\"summary\":\"a\\nb\",\"title\":\"中文🙂\",\"topics\":[]}",
+    "sha256": "53224efe8219de0cc4e23c4f8a48ed7f5c11291f8bc67c09ad45f360b13e9b02"
+  },
+  {
+    "name": "unicode-code-point-key-order",
+    "input_json": "{\"𐀀\":\"supplementary\",\"\":\"bmp\"}",
+    "canonical": "{\"\":\"bmp\",\"𐀀\":\"supplementary\"}"
+  },
+  {
+    "name": "fixed-decimal-string",
+    "input_json": "{\"ratio\":\"0.80\",\"empty\":\"\",\"cover\":null}",
+    "canonical": "{\"cover\":null,\"empty\":\"\",\"ratio\":\"0.80\"}"
+  }
+]

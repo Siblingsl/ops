@@ -6,7 +6,7 @@ export type Flush = () => Promise<void> | void
 
 export interface WorkSaveCoordinator {
   register: (key: string, flush: Flush) => () => void
-  flushAll: () => Promise<void>
+  flushAll: (excludeKeys?: readonly string[]) => Promise<void>
 }
 
 const fallback: WorkSaveCoordinator = { register: () => () => {}, flushAll: async () => {} }
@@ -22,9 +22,10 @@ export function useSaveCoordinator(): WorkSaveCoordinator {
       if (flushers.current.get(key) === flush) flushers.current.delete(key)
     }
   }, [])
-  const flushAll = useCallback(async () => {
+  const flushAll = useCallback(async (excludeKeys: readonly string[] = []) => {
     while (inFlight.current) await inFlight.current
-    const run = runFlushers([...flushers.current.values()])
+    const excluded = new Set(excludeKeys)
+    const run = runFlushers([...flushers.current].filter(([key]) => !excluded.has(key)).map(([, flush]) => flush))
     inFlight.current = run
     try {
       await run

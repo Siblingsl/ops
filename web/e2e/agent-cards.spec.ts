@@ -1,6 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { AgentAction } from '../src/lib/agent'
 
+test.beforeEach(() => {
+  test.skip(process.env.OPS_E2E_PROD === '1', '组件夹具依赖 Vite 源码入口，生产静态包不提供该入口')
+})
+
 const previewFields: Record<string, string[]> = {
   wechat__push: ['title', 'summary', 'cover', 'images', 'today', 'draft'],
   checks__complete: ['passed', 'total'],

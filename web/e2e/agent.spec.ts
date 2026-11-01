@@ -1,15 +1,14 @@
 import { expect, test, type Page } from '@playwright/test'
-import { api, registerAccount } from './support'
+import { api, expectedWebBaseUrl, mockModelBaseUrl, registerAccount } from './support'
 
-// 本组只运行 ops-e2e 启动的本地 mock；拒绝生产形态或其他 baseURL。
+// 本组只运行专用 E2E Compose 启动的本地 mock。
 test.beforeEach(async ({ baseURL }) => {
-  expect(process.env.OPS_E2E_PROD).not.toBe('1')
-  expect(baseURL).toBe('http://127.0.0.1:5179')
+  expect(baseURL).toBe(expectedWebBaseUrl())
 })
 
 async function prepareModel(page: Page) {
   const provider = await api(page, 'POST', '/model-providers', {
-    name: '智能体验收模拟模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested', 'mock-agent-untested'],
+    name: '智能体验收模拟模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-agent-tested', 'mock-agent-untested'],
   })
   await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
   return provider
@@ -143,7 +142,7 @@ test('E2E-27 所有者关闭观察者使用后，观察者入口消失且直达�
 async function prepareSlowAgent(page: Page) {
   const account = await registerAccount(page)
   const provider = await api(page, 'POST', '/model-providers', {
-    name: '智能体慢速模拟模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-slow'],
+    name: '智能体慢速模拟模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-slow'],
   })
   await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-slow' }])

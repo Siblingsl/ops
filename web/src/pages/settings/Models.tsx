@@ -79,10 +79,13 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
   const [manual, setManual] = useState('')
   const [pp, setPp] = useState(editing?.price_per_1k_prompt?.toString() ?? '')
   const [pc, setPc] = useState(editing?.price_per_1k_completion?.toString() ?? '')
+  const [cw, setCw] = useState(editing?.context_window_tokens?.toString() ?? '')
   const [busy, setBusy] = useState(false)
   const [discovering, setDiscovering] = useState(false)
   const inv = useInvalidate()
   const price = (v: string) => (v.trim() === '' ? -1 : Number(v))
+  // 窗口登记为空表示清除；服务端只在登记后才做发送前预算检查。
+  const contextWindow = (v: string) => (v.trim() === '' ? -1 : Number(v))
   // 选中顺序即数组顺序：第一个用于连通测试，界面上标「主」。
   const toggleModel = (m: string) => setModels((prev) => prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m])
   const addManual = () => {
@@ -116,7 +119,7 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
     const list = models
     try {
       if (editing) {
-        const body: Record<string, unknown> = { name, models: list, price_per_1k_prompt: price(pp), price_per_1k_completion: price(pc) }
+        const body: Record<string, unknown> = { name, models: list, price_per_1k_prompt: price(pp), price_per_1k_completion: price(pc), context_window_tokens: contextWindow(cw) }
         if (base !== editing.base_url) body.base_url = base
         if (key.trim()) body.api_key = key
         await patch(`/model-providers/${editing.id}`, body)
@@ -124,6 +127,7 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
         const p = await post<Provider>('/model-providers', {
           name, base_url: base, api_key: key, models: list,
           price_per_1k_prompt: pp.trim() ? Number(pp) : null, price_per_1k_completion: pc.trim() ? Number(pc) : null,
+          context_window_tokens: cw.trim() ? Number(cw) : null,
         })
         const t = await post<{ ok: boolean; result: string }>(`/model-providers/${p.id}/test`)
         t.ok ? toast.success(t.result) : toast.error(t.result)
@@ -185,6 +189,9 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
           <Field label="输入单价（元 / 千 token）" hint="选填，用于估算费用"><Input type="number" min={0} step={0.0001} value={pp} onChange={(e) => setPp(e.target.value)} /></Field>
           <Field label="输出单价（元 / 千 token）" hint="不填则按输入单价"><Input type="number" min={0} step={0.0001} value={pc} onChange={(e) => setPc(e.target.value)} /></Field>
         </div>
+        <Field label="上下文窗口（token）" hint="选填，按厂商文档登记；登记后服务端在发送前检查输入规模，超限提示缩小范围">
+          <Input type="number" min={1024} step={1} value={cw} onChange={(e) => setCw(e.target.value)} />
+        </Field>
         <Notice tone="gamboge">请只使用服务条款明确「API 数据不用于训练」的供应商。</Notice>
       </div>
     </Dialog>

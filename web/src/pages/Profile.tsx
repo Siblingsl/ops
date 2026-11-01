@@ -12,10 +12,17 @@ import { del, errorMessage, get, patch, post, put, rawRequest, stream } from '@/
 import { assetUrl } from '@/lib/api-base'
 import { relTime, runeLen } from '@/lib/format'
 import { CUSTOM_THEME_ID, customTheme, renderWechat, themes } from '@/lib/render'
+import { customThemeContrastError } from '@/lib/theme-contrast'
 import { setCustomTheme } from '@/lib/custom-theme-state'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { Account, CharacterCard, CustomTheme, Memory, Profile, StyleSample } from '@/lib/types'
 import SkillsTab from './ProfileSkills'
+import AccountAnalysisTab from './account-analysis-tab'
+import ProfileCheckTab from './profile-check-tab'
+import VisualDNATab from './visual-dna-tab'
+import BenchmarkTab from './benchmark-tab'
+import CommentInboxTab from './comment-inbox-tab'
+import StandardsTab from './standards-tab'
 import { memoryKindLabel, memoryScopeLabel, memorySourceLabel, useCustomTheme } from '@/lib/v3'
 
 const splitList = (s: string) => s.split(/[,，、\s]+/).map((x) => x.trim()).filter(Boolean)
@@ -377,7 +384,9 @@ function CustomThemeCard({ account, profile, onSaved }: { account: Account; prof
   const [ct, setCt] = useState<CustomTheme>(defaultCustom)
   const [busy, setBusy] = useState(false)
   useEffect(() => { if (q.data) setCt(q.data) }, [q.data])
+  const contrastError = customThemeContrastError(ct.primary_color)
   const save = async (makeDefault: boolean) => {
+    if (contrastError) { toast.error(contrastError); return }
     setBusy(true)
     try {
       await put(`/accounts/${account.id}/custom-theme`, ct)
@@ -410,6 +419,7 @@ function CustomThemeCard({ account, profile, onSaved }: { account: Account; prof
               </div>
             </Field>
           </div>
+          {contrastError && <p role="alert" className="text-sm text-red-700">{contrastError}</p>}
           <Field label={`正文字号：${ct.font_size}px`}><input type="range" min={14} max={17} value={ct.font_size} onChange={(e) => setCt({ ...ct, font_size: +e.target.value })} className="w-full accent-ink-600" /></Field>
           <Field label={`行距：${ct.line_height.toFixed(1)}`}><input type="range" min={1.4} max={2.2} step={0.1} value={ct.line_height} onChange={(e) => setCt({ ...ct, line_height: +e.target.value })} className="w-full accent-ink-600" /></Field>
           <Field label={`段间距：${ct.paragraph_gap}px`}><input type="range" min={8} max={32} value={ct.paragraph_gap} onChange={(e) => setCt({ ...ct, paragraph_gap: +e.target.value })} className="w-full accent-ink-600" /></Field>
@@ -793,7 +803,7 @@ function LayoutTab({ account, profile, onSaved }: { account: Account; profile: P
 export default function ProfilePage() {
   const acc = useCurrentAccount()
   const [params, setParams] = useSearchParams()
-  const tab = (params.get('tab') as 'positioning' | 'samples' | 'memory' | 'characters' | 'layout' | 'skills') || 'positioning'
+  const tab = (params.get('tab') as 'positioning' | 'samples' | 'memory' | 'characters' | 'layout' | 'visual-dna' | 'skills' | 'analysis' | 'profile-check' | 'benchmarks' | 'comments' | 'standards') || 'positioning'
   const { data, isLoading, error, failureReason, isFetching, refetch } = useQuery({ queryKey: ['profile', acc?.id], queryFn: () => get<Profile>(`/accounts/${acc!.id}/profile`), enabled: !!acc })
   const [profile, setProfile] = useState<Profile | null>(null)
   useEffect(() => setProfile(data ?? null), [data])
@@ -804,6 +814,12 @@ export default function ProfilePage() {
     { value: 'positioning' as const, label: '定位' },
     { value: 'samples' as const, label: '风格样本' },
     { value: 'memory' as const, label: 'AI 记忆' },
+    { value: 'analysis' as const, label: '账号分析' },
+    { value: 'profile-check' as const, label: '主页自检' },
+    { value: 'visual-dna' as const, label: '视觉 DNA' },
+    { value: 'benchmarks' as const, label: '对标库' },
+    { value: 'comments' as const, label: '评论台账' },
+    { value: 'standards' as const, label: '回复标准' },
     { value: 'skills' as const, label: '写作技能' },
     ...(comic ? [{ value: 'characters' as const, label: '角色卡' }] : []),
     ...(wx ? [{ value: 'layout' as const, label: '排版' }] : []),
@@ -816,9 +832,15 @@ export default function ProfilePage() {
       {tab === 'positioning' && <PositioningTab key={acc.id} account={acc} profile={profile} onSaved={(p) => { setProfile(p); refetch() }} />}
       {tab === 'samples' && <SamplesTab account={acc} />}
       {tab === 'memory' && <MemoryTab account={acc} />}
+      {tab === 'analysis' && <AccountAnalysisTab key={acc.id} accountId={acc.id} />}
+      {tab === 'profile-check' && <ProfileCheckTab key={acc.id} accountId={acc.id} />}
       {tab === 'skills' && <SkillsTab key={acc.id} accountId={acc.id} />}
       {tab === 'characters' && comic && <CharactersTab account={acc} />}
       {tab === 'layout' && wx && <LayoutTab key={acc.id} account={acc} profile={profile} onSaved={(p) => { setProfile(p); refetch() }} />}
+      {tab === 'visual-dna' && <VisualDNATab key={acc.id} account={acc} />}
+      {tab === 'benchmarks' && <BenchmarkTab key={acc.id} account={acc} />}
+      {tab === 'comments' && <CommentInboxTab key={acc.id} account={acc} />}
+      {tab === 'standards' && <StandardsTab key={acc.id} account={acc} />}
     </div>
   )
 }

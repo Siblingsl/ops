@@ -1,10 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { AgentAction, AgentAttachment, AgentConversationDetail } from '../src/lib/agent'
-import { api, finishChecks, registerAccount } from './support'
+import { api, expectedWebBaseUrl, finishChecks, mockControlBaseUrl, mockModelBaseUrl, registerAccount } from './support'
 
 test.beforeEach(async ({ baseURL }) => {
-  expect(process.env.OPS_E2E_PROD).not.toBe('1')
-  expect(baseURL).toBe('http://127.0.0.1:5179')
+  expect(baseURL).toBe(expectedWebBaseUrl())
 })
 
 const instruction = (name: string, args: Record<string, unknown>) => `#tool ${name} ${JSON.stringify(args)}`
@@ -12,7 +11,7 @@ const instruction = (name: string, args: Record<string, unknown>) => `#tool ${na
 async function prepareAccount(page: Page) {
   const account = await registerAccount(page, '长图文', 'wechat_mp')
   const provider = await api(page, 'POST', '/model-providers', {
-    name: '推送与附件验收模拟模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-publish'],
+    name: '推送与附件验收模拟模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-agent-publish'],
   })
   await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await api(page, 'PUT', '/model-routes', [
@@ -110,7 +109,7 @@ test('E2E-26 后台修改草稿后分别覆盖与另存，超限必须再次确�
   }
   for (const choice of ['overwrite', 'new'] as const) {
     const oldMediaId = work.wechat_draft_media_id
-    const touched = await page.request.post(`http://127.0.0.1:8191/mock/drafts/${oldMediaId}/touch`)
+    const touched = await page.request.post(`${mockControlBaseUrl()}/mock/drafts/${oldMediaId}/touch`)
     expect(touched.ok()).toBeTruthy()
     const { id, action } = await propose()
     const first = await executePush(page, action)

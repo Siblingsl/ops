@@ -25,6 +25,8 @@ CI 固定 pnpm 10.14.0 并通过 `pnpm install --frozen-lockfile` 使用唯一�
 生产打包验收（DEV-U103）在仓库根目录运行：
 
 ```powershell
+cd web; pnpm build
+cd ..
 docker compose -p ops-prod-e2e -f deploy/docker-compose.prod.yml -f deploy/docker-compose.e2e.yml config --quiet
 docker compose -p ops-prod-e2e -f deploy/docker-compose.prod.yml -f deploy/docker-compose.e2e.yml up -d --build --wait
 cd web

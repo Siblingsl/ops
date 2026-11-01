@@ -1,16 +1,15 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { AgentAction, AgentConversationDetail } from '../src/lib/agent'
-import { api, registerAccount } from './support'
+import { api, expectedWebBaseUrl, mockModelBaseUrl, registerAccount } from './support'
 
 test.beforeEach(async ({ baseURL }) => {
-  expect(process.env.OPS_E2E_PROD).not.toBe('1')
-  expect(baseURL).toBe('http://127.0.0.1:5179')
+  expect(baseURL).toBe(expectedWebBaseUrl())
 })
 
 async function prepareAgent(page: Page) {
   const account = await registerAccount(page, '长图文', 'wechat_mp')
   const provider = await api(page, 'POST', '/model-providers', {
-    name: '写入卡片浏览器模拟模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-writing'],
+    name: '写入卡片浏览器模拟模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-agent-writing'],
   })
   await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await api(page, 'PUT', '/model-routes', [
@@ -67,6 +66,7 @@ test('E2E-23 生成标题作为卡片来源，用户修改后逐张写入，作�
   expect(calls.some((call) => call.name === 'works__list')).toBeTruthy()
   const generated = calls.find((call) => call.name === 'works__titles')
   expect(generated).toBeTruthy()
+  // cx_basis 回执并入工具结果后预览仍保持可解析 JSON（agentJSONSafePreview），标题在截断后仍可断言。
   expect(generated!.result_preview).toContain(generatedTitle)
   expect((await api(page, 'GET', `/works/${work.id}`)).title).toBe(originalTitle)
   const card = actionCard(page, action)

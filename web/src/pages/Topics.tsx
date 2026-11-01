@@ -11,6 +11,7 @@ import { AIFeedback, RefsNote, sendFeedback } from '@/components/refs'
 import { StarButton } from '@/components/star-button'
 import { Badge, Button, Card, cn, Empty, Field, platformFormatLabel, HumanGate, IconButton, Input, Notice, PageHeader, PageLoading, PageState, Select, Switch, Tabs, Textarea } from '@/components/ui'
 import { InboxPanel } from '@/components/inbox-panel'
+import { TopicDiagnosisPanel } from './topic-diagnosis'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
@@ -205,10 +206,10 @@ function HotSuggestDrawer({ open, onClose, accountId, platform, accountFormat }:
   )
 }
 
-function TopicEditDialog({ t, accountFormat, accountPlatform, series, onClose }: { t: Topic; accountFormat: string; accountPlatform: Platform; series: Series[]; onClose: () => void }) {
+function TopicEditDialog({ t, accountFormat, accountPlatform, series, initialAngle, onClose }: { t: Topic; accountFormat: string; accountPlatform: Platform; series: Series[]; initialAngle?: string; onClose: () => void }) {
   const inv = useInvalidate()
   const [f, setF] = useState({
-    title: t.title, angle: t.angle, audience: t.audience ?? '', hook: t.hook ?? '', needed: (t.needed_materials ?? []).join('、'),
+    title: t.title, angle: initialAngle ?? t.angle, audience: t.audience ?? '', hook: t.hook ?? '', needed: (t.needed_materials ?? []).join('、'),
     format: t.format ?? '', planned_date: t.planned_date ?? '', series_id: t.series_id ?? '',
   })
   const [busy, setBusy] = useState(false)
@@ -274,6 +275,7 @@ function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focus
   const ref = useRef<HTMLDivElement>(null)
   const [menu, setMenu] = useState(false)
   const [edit, setEdit] = useState(false)
+  const [editAngle, setEditAngle] = useState<string>()
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     if (focused) ref.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
@@ -361,7 +363,7 @@ function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focus
               <IconButton label="更多" onClick={() => setMenu(!menu)} className="opacity-60 group-hover:opacity-100"><MoreHorizontal className="size-4" /></IconButton>
               {menu && (
                 <div className="absolute right-0 top-full z-10 mt-1 w-36 animate-fade-in rounded-lg border border-mist-200 bg-white p-1 shadow-pop" onMouseLeave={() => setMenu(false)}>
-                  <button onClick={() => { setMenu(false); setEdit(true) }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><Pencil className="size-3.5" />编辑选题卡</button>
+                  <button onClick={() => { setMenu(false); setEditAngle(undefined); setEdit(true) }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><Pencil className="size-3.5" />编辑选题卡</button>
                   <button onClick={togglePin} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50">{t.pinned ? <><PinOff className="size-3.5" />取消置顶</> : <><Pin className="size-3.5" />置顶</>}</button>
                   {t.status !== 'pending' && <button onClick={() => { setMenu(false); setStatus('pending') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><RotateCcw className="size-3.5" />放回待定</button>}
                   {t.status !== 'dropped' && <button onClick={drop} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><X className="size-3.5" />放弃</button>}
@@ -388,6 +390,7 @@ function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focus
             {t.score_reason && <p className="pt-0.5 text-[11px] leading-snug text-mist-400">{t.score_reason}</p>}
           </div>
         )}
+        <TopicDiagnosisPanel topic={t} canWrite={canWrite} onAdoptAngle={(angle) => { setEditAngle(angle); setEdit(true) }} />
         <div className={cn('mt-3 flex items-center gap-2')}>
           <Badge tone={sourceLabel[t.source]?.tone ?? 'gray'}>{sourceLabel[t.source]?.label ?? t.source}</Badge>
           <span className="text-xs text-mist-400">{relTime(t.created_at)}</span>
@@ -404,7 +407,7 @@ function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focus
         </div>
         {primed && !t.work_id && canWrite && <p className="mt-2 text-[12px] text-ink-700">这是最早采用、还没开始写的选题，点「开始创作」进入编辑器。</p>}
       </Card>
-      {edit && <TopicEditDialog t={{ ...t, account_id: t.account_id ?? accountId }} accountFormat={accountFormat} accountPlatform={accountPlatform} series={series} onClose={() => setEdit(false)} />}
+      {edit && <TopicEditDialog t={{ ...t, account_id: t.account_id ?? accountId }} accountFormat={accountFormat} accountPlatform={accountPlatform} series={series} initialAngle={editAngle} onClose={() => setEdit(false)} />}
     </div>
   )
 }

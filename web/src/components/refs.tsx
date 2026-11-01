@@ -2,7 +2,7 @@ import { BookOpenCheck, ChevronDown, ChevronRight, RotateCcw, ThumbsDown, Thumbs
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { errorMessage, patch, post } from '@/lib/api'
-import { type AIRefs, describeRefs } from '@/lib/format'
+import { type AIRefs, describeRefs, fmtTime } from '@/lib/format'
 import { skillReasonText } from '@/lib/skills'
 import { cn } from './ui'
 import SkillReceipt from './skill-receipt'
@@ -96,6 +96,7 @@ export function RefsNote({ refs, className, callId, onRetry, sampleText }: { ref
       </div>
       {open && (
         <div className="mt-1.5 space-y-1.5 rounded-md border border-mist-100 bg-white p-2 text-mist-500">
+          {refs?.task_type && <div>任务：{refs.task_type} · 模型：{refs.model || '未知'} · 提示词版本：{refs.prompt_version ?? '未知'} · 状态：{refs.status || '未知'}</div>}
           {refs?.user_instruction && <div>临时指令：「{refs.user_instruction}」</div>}
           {slots.filter(s => !callId || s.name !== 'skills').map((s) => (
             <div key={s.name}>
@@ -128,6 +129,36 @@ export function RefsNote({ refs, className, callId, onRetry, sampleText }: { ref
               )}
             </div>
           ))}
+          {refs?.cx_basis && (
+            <section className="border-t border-mist-100 pt-1.5">
+              <div className="flex flex-wrap items-center gap-2 font-medium text-mist-600">
+                <span>创作依据</span>
+                <span className="rounded bg-mist-50 px-1.5 py-0.5">{refs.cx_basis.coverage === 'ready' ? '完整' : refs.cx_basis.coverage === 'partial' ? '部分缺失' : '不可用'}</span>
+                <span>组装于 {fmtTime(refs.cx_basis.assembled_at, true)}</span>
+              </div>
+              {refs.cx_basis.sources.length > 0 && (
+                <ul className="ml-3 mt-1 space-y-0.5">
+                  {refs.cx_basis.sources.map((source) => (
+                    <li key={source.ref}>
+                      {source.purpose || source.kind} · {source.kind} · {source.id}
+                      {source.revision != null ? ` · 第 ${source.revision} 版` : ''}
+                      {source.as_of_at ? ` · ${fmtTime(source.as_of_at, true)}` : ''}
+                      {source.state === 'observed' ? ' · 平台观测' : source.state === 'verified_fact' ? ' · 已核验' : ' · 未核实内容'}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {refs.cx_basis.omitted.length > 0 && (
+                <div className="mt-1.5">
+                  <div className="font-medium text-gamboge-700">缺项与范围限制</div>
+                  <ul className="ml-3 list-disc space-y-0.5">
+                    {refs.cx_basis.omitted.map((item) => <li key={`${item.ref}:${item.reason}`}>{item.ref}：{item.reason}</li>)}
+                  </ul>
+                </div>
+              )}
+              <p className="mt-1 text-[10px] text-mist-400">输入版本 {refs.cx_basis.input_hash.slice(0, 16)}…</p>
+            </section>
+          )}
           {callId && <SkillReceipt callId={callId} />}
         </div>
       )}

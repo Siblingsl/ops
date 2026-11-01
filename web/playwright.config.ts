@@ -6,7 +6,7 @@ const production = process.env.OPS_E2E_PROD === '1'
 // 表现为「服务已起但 Playwright 一直等到超时」。这里显式放行回环。
 if (!process.env.NO_PROXY) process.env.NO_PROXY = '127.0.0.1,localhost,::1'
 if (!process.env.no_proxy) process.env.no_proxy = process.env.NO_PROXY
-process.env.OPS_E2E_MOCK_BASE_URL ??= 'http://127.0.0.1:8191/v1'
+process.env.OPS_E2E_MOCK_BASE_URL ??= production ? 'http://mock:8191/v1' : 'http://127.0.0.1:8191/v1'
 
 export default defineConfig({
   outputDir: '../.playwright-results/web',

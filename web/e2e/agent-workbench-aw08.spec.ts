@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { mockModelBaseUrl } from './support'
 
 async function localApi(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(async ({ method, path, body }) => {
@@ -38,7 +39,7 @@ async function registerWorkbenchUser(page: Page, baseURL: string) {
 async function prepareWorkbench(page: Page, baseURL: string, slow = false) {
   await registerWorkbenchUser(page, baseURL)
   const provider = await localApi(page, 'POST', '/model-providers', {
-    name: `AW08 ${slow ? '慢速输入' : '产物版本'}模型`, base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key',
+    name: `AW08 ${slow ? '慢速输入' : '产物版本'}模型`, base_url: mockModelBaseUrl(), api_key: 'local-e2e-key',
     models: [slow ? 'mock-slow' : 'mock-agent-tested'],
   })
   await localApi(page, 'POST', `/model-providers/${provider.id}/selftest`, {})

@@ -1,5 +1,17 @@
 import { test, expect, type Page } from '@playwright/test'
 
+export function mockModelBaseUrl() {
+  return process.env.OPS_E2E_MOCK_BASE_URL ?? 'http://127.0.0.1:8191/v1'
+}
+
+export function mockControlBaseUrl() {
+  return process.env.OPS_E2E_PROD === '1' ? 'http://127.0.0.1:44539' : 'http://127.0.0.1:8191'
+}
+
+export function expectedWebBaseUrl() {
+  return process.env.OPS_E2E_PROD === '1' ? 'http://127.0.0.1:44538' : 'http://127.0.0.1:5179'
+}
+
 /**
  * Web 端 E2E 辅助（纯浏览器形态）。
  *

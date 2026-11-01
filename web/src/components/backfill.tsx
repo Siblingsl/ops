@@ -1,5 +1,5 @@
 import { BadgeCheck } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ApiError, del, errorMessage, get, post, put } from '@/lib/api'
@@ -62,6 +62,30 @@ export function BackfillForm({ work, setWork }: { work: Work; setWork: (w: Work)
   const [previewKey, setPreviewKey] = useState('')
   // PB-05：回填成功后引导去复盘。
   const [justPublished, setJustPublished] = useState(false)
+  const [scheduledAt, setScheduledAt] = useState<string | null>(null)
+  const [earlyPublicReason, setEarlyPublicReason] = useState('')
+  useEffect(() => {
+    let active = true
+    if (work.status === 'published') {
+      setScheduledAt(null)
+      return () => { active = false }
+    }
+    get<{ scheduled_at: string | null }>(`/works/${work.id}/publish-state`).then((state) => {
+      if (active) setScheduledAt(state.scheduled_at)
+    }).catch(() => {
+      if (active) setScheduledAt(null)
+    })
+    const onPublishStateChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ workId?: string; scheduledAt?: string | null }>).detail
+      if (detail?.workId === work.id) setScheduledAt(detail.scheduledAt ?? null)
+    }
+    window.addEventListener('ops:publish-state-changed', onPublishStateChanged)
+    return () => {
+      active = false
+      window.removeEventListener('ops:publish-state-changed', onPublishStateChanged)
+    }
+  }, [work.id, work.status])
+  const needsEarlyReason = !!scheduledAt && !!at && new Date(at).getTime() < new Date(scheduledAt).getTime()
   const correctionBody = () => {
     const body: Record<string, unknown> = {
       mode: 'correction',
@@ -126,6 +150,7 @@ export function BackfillForm({ work, setWork }: { work: Work; setWork: (w: Work)
       try {
         const updated = await post<Work>(`/works/${work.id}/published`, { ...correctionBody(), confirm_published: true })
         setWork(updated)
+        window.dispatchEvent(new CustomEvent('ops:published', { detail: { workId: work.id } }))
         setUrl(updated.published_url ?? '')
         setAt(updated.published_at ? toLocalInput(updated.published_at) : '')
         setDateBaseline(updated.published_at ? toLocalInput(updated.published_at) : '')
@@ -186,13 +211,19 @@ export function BackfillForm({ work, setWork }: { work: Work; setWork: (w: Work)
   }
   const submit = async () => {
     if (platform !== work.platform) return toast.error(`本作品发布在${platformLabel[work.platform]}，请确认链接没有贴错，或把平台改回来`)
+    if (needsEarlyReason && !earlyPublicReason.trim()) return toast.error('预约时间尚未到达，请填写提前公开说明')
     setBusy(true)
     try {
-      const updated = await post<Work>(`/works/${work.id}/published`, { url: url.trim(), published_at: new Date(at).toISOString() })
+      const updated = await post<Work>(`/works/${work.id}/published`, {
+        url: url.trim(), published_at: new Date(at).toISOString(),
+        ...(needsEarlyReason ? { early_public_reason: earlyPublicReason.trim() } : {}),
+      })
       setWork(updated)
+      window.dispatchEvent(new CustomEvent('ops:published', { detail: { workId: work.id } }))
       setUrl(updated.published_url ?? '')
       setAt(updated.published_at ? toLocalInput(updated.published_at) : '')
       setDateBaseline(updated.published_at ? toLocalInput(updated.published_at) : '')
+      setEarlyPublicReason('')
       // PB-05：回填成功后引导去复盘，避免用户回填完就断线。
       setJustPublished(true)
       toast.success('已标记为已发布，作品已锁定为只读')
@@ -225,8 +256,11 @@ export function BackfillForm({ work, setWork }: { work: Work; setWork: (w: Work)
         </Field>
         <Field label="发布时间"><Input type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} /></Field>
       </div>
+      {needsEarlyReason && <Field label="提前公开说明" className="mt-3" hint={`预约时间为 ${fmtTime(scheduledAt)}；实际公开早于预约时，需要说明原因。`}>
+        <Textarea value={earlyPublicReason} onChange={(e) => setEarlyPublicReason(e.target.value)} rows={2} maxLength={500} placeholder="例如：平台审核提前完成，已核实作品实际公开时间" />
+      </Field>}
       <HumanGate code="H-07" className="mt-4">只有你确认已在平台发表后才能标记。标记后作品锁定为只读。</HumanGate>
-      <Button variant="human" className="mt-4" loading={busy} onClick={submit} icon={<BadgeCheck className="size-4" />}>标记为已发布</Button>
+      <Button variant="human" className="mt-4" loading={busy} onClick={submit} disabled={needsEarlyReason && !earlyPublicReason.trim()} icon={<BadgeCheck className="size-4" />}>标记为已发布</Button>
     </Card>
   )
 }

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { mkdirSync } from 'node:fs'
 import { basename, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { expectedWebBaseUrl, mockModelBaseUrl } from './support'
 
 async function api(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(async ({ method, path, body }) => {
@@ -16,7 +17,7 @@ async function api(page: Page, method: string, path: string, body?: unknown) {
 }
 
 async function modesJourney(page: Page, baseURL: string, screenshot: string) {
-  expect(baseURL).toBe('http://127.0.0.1:5179')
+  expect(baseURL).toBe(expectedWebBaseUrl())
   await page.goto(`${baseURL}/register`)
   await page.getByLabel('用户名', { exact: true }).fill(`aw07-${Date.now()}`)
   await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
@@ -27,7 +28,7 @@ async function modesJourney(page: Page, baseURL: string, screenshot: string) {
   await page.goto(`${baseURL}/a/${account.id}`)
   await expect(page.getByRole('main')).toContainText('模式验收号')
   const provider = await api(page, 'POST', '/model-providers', {
-    name: 'AW07 模式验证模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+    name: 'AW07 模式验证模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-agent-tested'],
   })
   await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])

@@ -18,6 +18,7 @@ import { createSaveStatus, SaveStatus, SelectedSidebar } from './editor-state'
 import { usePendingSections } from './editor-pending'
 import { emitEditor, type EditorEvent, scrollToSection, type SidebarTab, useEditorEvents } from './editor-tools'
 import { SectionBlock } from './section-block'
+import { VisualPlanPanel } from './VisualPlanPanel'
 import { OutlineCard } from './editor-outline'
 import { TitleCard } from './editor-title'
 import { ImagesCard } from './editor-images'
@@ -27,6 +28,89 @@ import { activeCreationStep, creationSteps, creationProgress } from './work-prog
 import { useWork, WorkHeaderAction } from './WorkLayout'
 
 const kindLabel: Record<MaterialKind, string> = { experience: '经历', opinion: '观点', case: '案例', data: '数据' }
+
+type RenderFinding = { section_id: string; section_heading: string; line: number; column: number; syntax: string; severity: string; excerpt: string; reason: string; suggestion: string }
+type RenderReport = { basis_revision: number; input_hash: string; rules_version: string; issues: RenderFinding[]; converted: RenderFinding[]; warnings: RenderFinding[]; total: number; truncated: boolean }
+
+function isRenderReport(value: unknown): value is RenderReport {
+  if (!value || typeof value !== 'object') return false
+  const report = value as Partial<RenderReport>
+  return Number.isInteger(report.basis_revision) && typeof report.input_hash === 'string' && typeof report.rules_version === 'string' &&
+    Array.isArray(report.issues) && Array.isArray(report.converted) && Array.isArray(report.warnings) &&
+    Number.isInteger(report.total) && typeof report.truncated === 'boolean'
+}
+
+function RenderSyntaxCheck({ work, setWork, coordinator }: { work: Work; setWork: (work: Work) => void; coordinator: WorkSaveCoordinator }) {
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const [report, setReport] = useState<RenderReport | null>(null)
+  const [error, setError] = useState('')
+  const run = async () => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    setError('')
+    setReport(null)
+    try {
+      await coordinator.flushAll()
+      const current = await get<Work>(`/works/${work.id}`)
+      setWork(current)
+      const result = await post<RenderReport>(`/works/${work.id}/render-check`, { basis_revision: current.revision })
+      if (!isRenderReport(result)) throw new Error('语法报告格式无效，请刷新后重试。')
+      setReport(result)
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'render_unsupported_syntax' && isRenderReport(e.detail)) {
+        setReport(e.detail as RenderReport)
+      } else {
+        setError(e instanceof ApiError && e.code === 'version_conflict' ? '作品在检查期间已修改，请刷新后重新检查。' : errorMessage(e))
+      }
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+  const jump = (finding: RenderFinding) => {
+    const index = work.sections.findIndex(section => section.id === finding.section_id)
+    if (index < 0) return
+    scrollToSection(finding.section_id)
+    window.setTimeout(() => emitEditor({ type: 'focus', sectionId: finding.section_id }), 250)
+  }
+  const findingList = (items: RenderFinding[], title: string) => items.length > 0 && (
+    <div className="space-y-2">
+      <h3 className="text-xs font-semibold text-mist-700">{title}（{items.length}）</h3>
+      {items.map((finding, index) => {
+        const sectionIndex = work.sections.findIndex(section => section.id === finding.section_id)
+        return <div key={`${finding.section_id}:${finding.line}:${finding.column}:${finding.syntax}:${index}`} className="rounded-lg border border-mist-200 bg-white p-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium text-mist-800">{finding.section_heading || `第 ${sectionIndex + 1} 段`}</span>
+            <span className="text-mist-500">第 {finding.line} 行，第 {finding.column} 列</span>
+            {sectionIndex >= 0 && <Button size="sm" variant="ghost" onClick={() => jump(finding)}>定位到第 {sectionIndex + 1} 段</Button>}
+          </div>
+          <p className="mt-1 text-mist-600">{finding.reason}</p>
+          <p className="mt-1 font-mono text-mist-500">{finding.excerpt}</p>
+          <p className="mt-1 text-mist-500">建议：{finding.suggestion}</p>
+        </div>
+      })}
+    </div>
+  )
+  return <div className="w-full rounded-xl border border-mist-200 bg-mist-50/60 p-3">
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="secondary" loading={busy} disabled={busy} onClick={() => void run()}>检查排版语法</Button>
+      <span className="text-xs text-mist-500">检查已保存的公众号正文；不会修改作品。</span>
+    </div>
+    {error && <Notice tone="red" className="mt-3">{error}</Notice>}
+    {report && <div className="mt-3 space-y-3">
+      {report.basis_revision !== work.revision && <Notice tone="gamboge">报告基于第 {report.basis_revision} 版，当前作品为第 {work.revision} 版；请重新检查。</Notice>}
+      {report.issues.length > 0
+        ? <Notice tone="red"><span>发现不能可靠排版的语法</span>（共 {report.total} 项）{report.truncated ? '，列表仅显示前 50 项。' : ''}</Notice>
+        : <Notice tone="ink">未发现阻断语法（共 {report.total} 项转换或提醒）。</Notice>}
+      {findingList(report.issues, '需要修正')}
+      {findingList(report.converted, '渲染时会转换')}
+      {findingList(report.warnings, '需要核对')}
+      <p className="text-[11px] text-mist-400">规则 {report.rules_version} · 输入版本 {report.basis_revision} · {report.input_hash.slice(0, 12)}</p>
+    </div>}
+  </div>
+}
 
 // ---------- 核心观点（H-02） ----------
 
@@ -833,6 +917,7 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
               <Button size="sm" variant="ghost" className="ml-auto" icon={<BookOpenCheck className="size-3.5" />} onClick={() => emitEditor({ type: 'sidebar', tab: 'readthrough' })}>全文已起草，去通读</Button>
             )}
           </div>
+          {work.platform === 'wechat_mp' && <RenderSyntaxCheck work={work} setWork={setWorkStable} coordinator={coordinator} />}
           {!work.outline_confirmed_at ? (
             <HumanGate code="H-03" action={!readOnly ? <Button size="sm" variant="human" onClick={() => scrollTo('step-outline')}>{work.outline.length ? '去确认大纲' : '去写大纲'}</Button> : undefined}>
               确认大纲后，这里会按大纲生成段落块，然后你可以逐段起草和修改。
@@ -859,6 +944,7 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
         </section>
         <TitleCard work={work} setWork={setWorkStable} readOnly={readOnly} hidden={focus} />
         <ImagesCard work={work} setWork={setWorkStable} readOnly={readOnly} upload={upload} hidden={focus} />
+        {work.platform === 'xhs' && <VisualPlanPanel work={work} canWrite={!readOnly} />}
         </article>
         {work.locked && <Notice tone="gray">作品已发布，当前为只读模式。</Notice>}
       </div>

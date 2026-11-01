@@ -1,10 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { AgentAction, AgentConversationDetail } from '../src/lib/agent'
-import { api, registerAccount } from './support'
+import { api, expectedWebBaseUrl, mockModelBaseUrl, registerAccount } from './support'
 
 test.beforeEach(async ({ baseURL }) => {
-  expect(process.env.OPS_E2E_PROD).not.toBe('1')
-  expect(baseURL).toBe('http://127.0.0.1:5179')
+  expect(baseURL).toBe(expectedWebBaseUrl())
 })
 
 const tool = (name: string, args: Record<string, unknown>) => `#tool ${name} ${JSON.stringify(args)}`
@@ -16,7 +15,7 @@ async function prepareAgent(page: Page) {
   await api(page, 'POST', `/accounts/${account.id}/wechat-credential/test`)
 
   const provider = await api(page, 'POST', '/model-providers', {
-    name: '公众号主链路验收模拟模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-main-chain'],
+    name: '公众号主链路验收模拟模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-agent-main-chain'],
   })
   await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await api(page, 'PUT', '/model-routes', [
@@ -132,6 +131,8 @@ test('E2E-24 公众号主链路经智能体逐张确认到回填已发布', asyn
   const generatedDetail = await api(page, 'GET', `/agent/conversations/${generateId}`) as AgentConversationDetail
   const generatedCall = generatedDetail.messages.flatMap((message) => message.tool_calls).find((call) => call.name === 'outline__generate')
   expect(generatedCall).toBeTruthy()
+  // cx_basis 回执并入后截断预览仍保持可解析 JSON（agentJSONSafePreview）。
+  // cx_basis 回执重排到尾部 + 截断闭合修复后，items 应保留在可解析预览内。
   const generated = JSON.parse(generatedCall!.result_preview) as { items: { heading: string; key_point: string; material_ids: string[] }[] }
   expect(generated.items.length).toBeGreaterThanOrEqual(2)
 

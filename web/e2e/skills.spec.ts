@@ -157,14 +157,16 @@ test('SK5 删除技能有影响预览与二次确认', async ({ page }) => {
   expect(list.items.find((s: { id: string }) => s.id === skill.id)).toBeUndefined()
 })
 
-test('SK6 Web 设置路由注册写作技能管理页', async ({ page }) => {
+test('SK6 Web 可直接访问写作技能管理页', async ({ page }) => {
   await registerAccount(page)
   await page.goto('/settings/skills')
   await expect(page.getByRole('heading', { name: '写作技能' })).toBeVisible()
-  const registry = await page.evaluate(async () => {
-    const mod = await import('/src/lib/settings-registry.ts')
-    return mod.settingsEntries.find((e: { path: string }) => e.path === '/settings/skills')
-  })
-  expect(registry?.path).toBe('/settings/skills')
-  expect('desktopHidden' in registry!).toBe(false)
+  if (process.env.OPS_E2E_PROD !== '1') {
+    const registry = await page.evaluate(async () => {
+      const mod = await import('/src/lib/settings-registry.ts')
+      return mod.settingsEntries.find((e: { path: string }) => e.path === '/settings/skills')
+    })
+    expect(registry?.path).toBe('/settings/skills')
+    expect('desktopHidden' in registry!).toBe(false)
+  }
 })

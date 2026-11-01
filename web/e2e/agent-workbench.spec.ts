@@ -3,10 +3,10 @@ import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { api, registerAccount } from './support'
+import { api, expectedWebBaseUrl, mockModelBaseUrl, registerAccount } from './support'
 
 test('DEV-AW03 分组、未读、搜索、归档与恢复可从会话列表完成', async ({ page, baseURL }) => {
-  expect(baseURL).toBe('http://127.0.0.1:5179')
+  expect(baseURL).toBe(expectedWebBaseUrl())
   await registerAccount(page)
   const conversation = await api(page, 'POST', '/agent/conversations', {})
   const title = 'AW03 会话组织与归档验收'
@@ -76,10 +76,10 @@ test('DEV-AW03 分组、未读、搜索、归档与恢复可从会话列表完�
 })
 
 test('DEV-AW02 Web 即使服务端开放桌面工作台功能仍保留原页面', async ({ page, baseURL }) => {
-  expect(baseURL).toBe('http://127.0.0.1:5179')
+  expect(baseURL).toBe(expectedWebBaseUrl())
   await registerAccount(page)
   const provider = await api(page, 'POST', '/model-providers', {
-    name: 'Web 工作台兼容模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+    name: 'Web 工作台兼容模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-agent-tested'],
   })
   await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
@@ -89,10 +89,10 @@ test('DEV-AW02 Web 即使服务端开放桌面工作台功能仍保留原页面'
 })
 
 test('DEV-AW04 @资料、有效技能请求与混合附件队列走真实接口', async ({ page, baseURL }) => {
-  expect(baseURL).toBe('http://127.0.0.1:5179')
+  expect(baseURL).toBe(expectedWebBaseUrl())
   const account = await registerAccount(page)
   const provider = await api(page, 'POST', '/model-providers', {
-    name: 'AW04 工作台验收模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+    name: 'AW04 工作台验收模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-agent-tested'],
   })
   await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
@@ -167,7 +167,7 @@ test('DEV-AW04 @资料、有效技能请求与混合附件队列走真实接口'
 async function prepareAW05(page: import('@playwright/test').Page) {
   const account = await registerAccount(page, '长图文', 'wechat_mp')
   const provider = await api(page, 'POST', '/model-providers', {
-    name: 'AW05 产物验收模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+    name: 'AW05 产物验收模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-agent-tested'],
   })
   await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
@@ -199,7 +199,7 @@ async function prepareAW05(page: import('@playwright/test').Page) {
 
 test('DEV-AW05 Web 原抽屉预览受控生成产物并保留唯一操作卡片', async ({ page, baseURL }) => {
   test.setTimeout(30_000)
-  expect(baseURL).toBe('http://127.0.0.1:5179')
+  expect(baseURL).toBe(expectedWebBaseUrl())
   const { work, action } = await prepareAW05(page)
   await page.getByRole('button', { name: '查看产物', exact: true }).click()
   const drawer = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '本对话产物', exact: true }) })

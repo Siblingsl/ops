@@ -59,7 +59,36 @@ export interface RefSlot {
   items: { id?: string; label: string; chars: number; used: boolean }[] | null
 }
 
+export interface CXBasisSource {
+  ref: string
+  kind: string
+  id: string
+  revision: number | null
+  as_of_at: string | null
+  state: 'verified_fact' | 'observed' | 'unconfirmed' | string
+  purpose: string
+}
+
+export interface CXBasis {
+  schema_version: number
+  account_id: string
+  work_revision: number | null
+  profile_hash: string
+  strategy_ref: string | null
+  standard_ref: string | null
+  dna_ref: string | null
+  sources: CXBasisSource[]
+  omitted: { ref: string; reason: string }[]
+  coverage: 'ready' | 'partial' | 'unavailable' | string
+  assembled_at: string
+  input_hash: string
+}
+
 export interface AIRefs {
+  task_type?: string
+  model?: string
+  prompt_version?: number
+  status?: string
   profile?: boolean
   style_samples?: number
   style_summary?: boolean
@@ -72,6 +101,7 @@ export interface AIRefs {
   fallback_model?: string
   primary_model?: string
   outline_template?: string
+  cx_basis?: CXBasis
   latency_ms?: number
   tokens?: number
 }
@@ -87,6 +117,7 @@ export function describeRefs(r?: AIRefs | null): string {
   if (r.works) parts.push(`作品数据 ${r.works} 篇`)
   if (r.memories) parts.push(`AI 记忆 ${r.memories} 条`)
   if (r.outline_template) parts.push(`大纲模板「${r.outline_template}」`)
+  if (r.cx_basis) parts.push(`创作依据 ${r.cx_basis.sources.length} 项${r.cx_basis.coverage === 'partial' ? '（有缺项）' : ''}`)
   return parts.length ? `本次参考：${parts.join('、')}` : ''
 }
 

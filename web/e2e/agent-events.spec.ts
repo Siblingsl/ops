@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
+import { expectedWebBaseUrl, mockModelBaseUrl } from './support'
 
 async function call(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(async ({ method, path, body }) => {
@@ -16,14 +17,14 @@ async function call(page: Page, method: string, path: string, body?: unknown) {
 }
 
 async function prepare(page: Page, baseURL: string) {
-  expect(baseURL).toBe('http://127.0.0.1:5179')
+  expect(baseURL).toBe(expectedWebBaseUrl())
   await page.goto(`${baseURL}/register`)
   await page.getByLabel('用户名', { exact: true }).fill(`aw06-${Date.now()}`)
   await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
   await page.getByRole('button', { name: '创建账号', exact: true }).click()
   await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
   const provider = await call(page, 'POST', '/model-providers', {
-    name: 'AW06 本地慢速模型', base_url: 'http://127.0.0.1:8191/v1', api_key: 'local-e2e-key', models: ['mock-slow'],
+    name: 'AW06 本地慢速模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-slow'],
   })
   await call(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await call(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-slow' }])
