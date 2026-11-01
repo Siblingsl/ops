@@ -69,21 +69,6 @@ jobs:
             docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container_name" | grep -qx 'GOMEMLIMIT=192MiB'
           done
           echo "OPS_DOCUMENT_PARSER_SOCKETS=$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-a/parser.sock,$RUNNER_TEMP/ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-b/parser.sock" >> "$GITHUB_ENV"
-      - name: Diagnose checkout (temporary, DEV-CX review compile failure)
-        run: |
-          ls internal/app/ | grep -c _test.go
-          head -c 40 internal/app/cx_review_windows_test.go | od -c | head -3
-          go list -f '{{.XTestGoFiles}}' ./internal/app | tr ' ' '\n' | grep -c windows_test || true
-          ls internal/app/ | grep windows_test | od -c | head -4
-          git ls-files internal/app/ | grep -c windows_test
-          git check-ignore -v internal/app/cx_review_windows_test.go || echo not-ignored
-          git ls-files -o -i --exclude-standard -- internal/app/ | head -5
-          tail -c 120 internal/app/cx_review_windows_test.go | od -c | tail -5
-          go list -f '{{len .TestGoFiles}} test files' ./internal/app
-          go list -f '{{.TestGoFiles}}' ./internal/app | tr ' ' '\n' | grep -c windows_test || true
-          go build -o /dev/null ./internal/app
-          go vet ./internal/app 2>&1 | head -30
-          go test -c -o /dev/null ./internal/app 2>&1 | head -40
       - name: Test
         env:
           OPS_TEST_ADMIN_URL: postgres://ops:ops_ci@localhost:5432/postgres?sslmode=disable
