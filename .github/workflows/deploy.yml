@@ -33,7 +33,8 @@ jobs:
         (inputs.action == 'diagnose' || github.ref == 'refs/heads/main')) ||
       (github.event_name == 'push' && vars.OPS_PRODUCTION_DEPLOY_ENABLED == 'true')
     steps:
-      - name: Wait for CI on this commit
+      # 生产镜像主要由 server 构建；桌面/Web e2e 仍在 CI 跑，但不挡上线（方案 1）。
+      - name: Wait for CI server job on this commit
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.action == 'deploy')
         env:
           GH_TOKEN: ${{ github.token }}
@@ -42,21 +43,30 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in $(seq 1 180); do
-            state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${CI_SHA}&per_page=100" \
-              --jq '.workflow_runs | map(select(.head_sha == env.CI_SHA and .name == "CI")) | sort_by(.updated_at) | last | if . == null then "missing" else [.status, (.conclusion // "")] | @tsv end')"
+            run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${CI_SHA}&per_page=100" \
+              --jq '[.workflow_runs[] | select(.head_sha == env.CI_SHA and .name == "CI")] | sort_by(.updated_at) | last | .id // empty')"
+            if [[ -z "$run_id" ]]; then
+              sleep 15
+              continue
+            fi
+            state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name == "server")] | first | if . == null then "missing" else [.status, (.conclusion // "")] | @tsv end')"
             case "$state" in
               $'completed\tsuccess')
-                echo "CI passed for ${CI_SHA}."
+                echo "CI server job passed for ${CI_SHA} (run ${run_id})."
                 exit 0
                 ;;
               $'completed\t'*)
-                echo "::error::CI for ${CI_SHA} completed with: ${state#*$'\t'}; deployment stopped."
+                echo "::error::CI server job for ${CI_SHA} completed with: ${state#*$'\t'}; deployment stopped."
                 exit 1
+                ;;
+              missing)
+                # CI 已起但 server job 尚未入列时继续等
                 ;;
             esac
             sleep 15
           done
-          echo "::error::Timed out waiting for CI for ${CI_SHA}; deployment stopped."
+          echo "::error::Timed out waiting for CI server job for ${CI_SHA}; deployment stopped."
           exit 1
 
       - name: Prepare SSH key
