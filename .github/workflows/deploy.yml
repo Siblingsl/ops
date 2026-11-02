@@ -3,6 +3,12 @@ name: Deploy
 on:
   push:
     branches: [main]
+    # 纯文档改动不重建生产：部署要备份数据库并重启 app/parser 容器，对只改文档的
+    # 提交是纯浪费。paths-ignore 只在「本次改动的文件全部命中」时跳过；同时改了代码、
+    # 部署脚本或工作流，仍会正常部署。
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
     inputs:
       action:
