@@ -4,6 +4,8 @@
 FROM golang:1.26-bookworm AS server
 ARG GOPROXY=https://goproxy.cn,direct
 ENV GOPROXY=${GOPROXY}
+# 限制编译并行与内存，避免 1–2G 机器在 swap 里卡死整小时
+ENV GOMAXPROCS=1 GOMEMLIMIT=768MiB
 WORKDIR /src
 COPY server/go.mod server/go.sum ./
 RUN go mod download

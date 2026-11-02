@@ -104,7 +104,8 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key_path: ${{ steps.prep.outputs.key_file }}
           port: 22
-          command_timeout: 60m
+          # 小 VPS 上 docker go build 可能超过 1 小时；超时后远端进程常残留并占满内存。
+          command_timeout: 120m
           script: |
             set -euo pipefail
             cd "${{ secrets.DEPLOY_PATH }}"

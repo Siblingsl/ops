@@ -49,6 +49,26 @@ if [[ -f docker-compose.tunnel.yml ]] && grep -qE '^CLOUDFLARE_TUNNEL_TOKEN=.+' 
   echo "检测到 CLOUDFLARE_TUNNEL_TOKEN，将同时确保 ops-cloudflared 运行。"
 fi
 
-docker compose "${COMPOSE_FILES[@]}" --env-file .env up -d --build --remove-orphans
+# 小内存机器上，并行跑着的 app/parser + docker go build 容易把编译拖进交换区直至 SSH 超时。
+# 先停业务容器腾出内存；构建失败时再尽力用旧镜像拉回服务。
+echo "构建前停止 app/parser，降低 go build 内存压力…"
+docker compose "${COMPOSE_FILES[@]}" --env-file .env stop app parser_a parser_b || true
+# 上次 SSH 超时可能留下仍在跑的 build 容器 / go 进程
+docker ps -aq --filter status=running | while read -r cid; do
+  image="$(docker inspect -f '{{.Config.Image}}' "$cid" 2>/dev/null || true)"
+  case "$image" in
+    golang:*|*golang*bookworm*)
+      echo "终止遗留构建容器 $cid ($image)"
+      docker kill "$cid" >/dev/null 2>&1 || true
+      ;;
+  esac
+done
+pkill -f 'go build -trimpath' >/dev/null 2>&1 || true
+
+if ! docker compose "${COMPOSE_FILES[@]}" --env-file .env up -d --build --remove-orphans; then
+  echo "构建或启动失败；尝试用现有镜像恢复 app/parser…" >&2
+  docker compose "${COMPOSE_FILES[@]}" --env-file .env up -d --no-build --remove-orphans || true
+  exit 1
+fi
 docker compose "${COMPOSE_FILES[@]}" --env-file .env ps
 echo "更新完成。健康检查：curl -fsS https://ops-api.88813888.xyz/healthz"
