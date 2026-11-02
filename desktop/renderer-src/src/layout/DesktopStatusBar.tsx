@@ -17,10 +17,13 @@ export default function DesktopStatusBar({ workspaceName, accountName }: { works
         {accountName && <><span className="desktop-statusbar-separator" aria-hidden="true">·</span><span>{accountName}</span></>}
       </span>
       <span className="desktop-statusbar-spacer" />
-      <span className="desktop-statusbar-save" aria-live="polite">
-        <Activity aria-hidden="true" />
-        {editorRoute ? '作品保存状态见编辑器' : '操作状态由当前页面反馈'}
-      </span>
+      {/* 编辑器里字数和保存状态都在编辑器自己的底部条与左栏，这里再写一遍只是重复。 */}
+      {!editorRoute && (
+        <span className="desktop-statusbar-save" aria-live="polite">
+          <Activity aria-hidden="true" />
+          操作状态由当前页面反馈
+        </span>
+      )}
     </footer>
   )
 }

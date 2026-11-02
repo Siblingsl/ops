@@ -87,7 +87,9 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
       ['sectionToolbar', '.rich-editor-toolbar'],
     ].map(([name, selector]) => [name, box(selector)]))
   })
-  expect(productGeometry.workbar).toMatchObject({ y: 39, height: 129.5 })
+  // 2026-11-02 布局整理（D-160 登记）：顶部工具区 129.5 → 92（发布进度标签与步骤条同排、内边距收紧）。
+  // 这是有意的设计变更，不是漂移；高度仍按绝对值钉死，改动必须同步改这里。
+  expect(productGeometry.workbar).toMatchObject({ y: 39, height: 92 })
   expect(productGeometry.steps?.height).toBeCloseTo(productGeometry.content?.height ?? 0, 0)
   expect(productGeometry.content?.height).toBeCloseTo(productGeometry.tools?.height ?? 0, 0)
 
@@ -143,10 +145,24 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
   expect(registeredBlockOuter, '本地规则预览块外高').toBeLessThanOrEqual(60)
 
   // 纸面起点仍按绝对坐标核对，保证上面的相对比较不是建在错位的容器里。
+  // 2026-11-02 布局整理（D-160）：正文列去掉「画布 + 白卡」双层容器，纸面自身的边框/投影/大内边距被收掉，
+  // 因此两处竖向偏差是登记过的：正文列上内边距 25 → 18（-7），纸面上内边距 38 → 6（-32）。
+  // 偏差单独写在这里并逐个限定 1px，任何额外漂移都会失败，而不是被相对比较吸收掉。
+  const REGISTERED_CONTENT_INSET = -7
+  const REGISTERED_PAPER_PADDING = -32
+  const productWorkbarBottom = productGeometry.workbar.y + productGeometry.workbar.height
+  const prototypeWorkbarBottom = prototypeGeometry.workbar.y + prototypeGeometry.workbar.height
   for (const [actualKey, expectedKey] of [['paper', 'paper'], ['title', 'title']] as const) {
-    expect(Math.abs(productGeometry[actualKey].y - prototypeGeometry[expectedKey].y), `${actualKey} top alignment`).toBeLessThanOrEqual(1)
     expect(Math.abs(productGeometry[actualKey].x - prototypeGeometry[expectedKey].x), `${actualKey} left alignment`).toBeLessThanOrEqual(1)
   }
+  expect(
+    Math.abs((productGeometry.paper.y - productWorkbarBottom) - (prototypeGeometry.paper.y - prototypeWorkbarBottom) - REGISTERED_CONTENT_INSET),
+    'paper top inset（已扣除登记的内边距收紧）',
+  ).toBeLessThanOrEqual(1)
+  expect(
+    Math.abs((productGeometry.title.y - productGeometry.paper.y) - (prototypeGeometry.title.y - prototypeGeometry.paper.y) - REGISTERED_PAPER_PADDING),
+    'title top offset（已扣除登记的纸面内边距收紧）',
+  ).toBeLessThanOrEqual(1)
   expect(
     Math.abs((productGeometry.viewpoint.y - productTitleBottom) - (prototypeGeometry.viewpoint.y - prototypeTitleBottom) - registeredBlockOuter),
     'viewpoint top alignment（已扣除本地规则预览块）',
@@ -204,8 +220,9 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
   await expect.poll(async () => (await api(page, 'GET', `/works/${workId}`)).title).toBe('把重要的时间留给自己')
 
   const tools = page.getByTestId('desktop-editor-tools')
+  // 2026-11-02 布局整理（D-160）：右栏入口拆成一级/二级两排 tablist，语义从 button 改为 tab（配对 tabpanel）。
   for (const label of ['副驾驶', '待核实', '通读', '体检', '批注', '动态', '素材']) {
-    const tab = tools.getByRole('button', { name: new RegExp(label) }).first()
+    const tab = tools.getByRole('tab', { name: new RegExp(label) }).first()
     await tab.click()
     await expect(tab).toHaveClass(/bg-ink-50/)
   }

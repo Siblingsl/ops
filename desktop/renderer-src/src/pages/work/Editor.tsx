@@ -840,7 +840,7 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
   return (
     <WorkSaveProvider value={coordinator}>
     <div
-      className={cn('mx-auto flex w-full gap-6 px-4 py-6 sm:px-6 sm:py-8 xl:gap-8', focus ? 'max-w-[860px]' : showSidebar ? 'max-w-[1600px]' : 'max-w-[1280px] 2xl:max-w-[1480px]', desktopPresentation && 'desktop-editor-layout', desktopPresentation && focus && 'desktop-editor-focus')}
+      className={cn('mx-auto flex w-full gap-6 px-4 py-6 sm:px-6 sm:py-8 xl:gap-8', focus ? 'max-w-[860px]' : showSidebar ? 'max-w-[1600px]' : 'max-w-[1280px] 2xl:max-w-[1480px]', desktopPresentation && 'desktop-editor-layout', desktopPresentation && !showSidebar && 'desktop-editor-no-tools', desktopPresentation && focus && 'desktop-editor-focus')}
       data-testid={desktopPresentation ? 'desktop-editor-layout' : undefined}
     >
       {!readOnly && <WorkHeaderAction>
@@ -851,23 +851,22 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
       {!focus && (
         <aside className={cn('sticky top-24 hidden h-fit w-52 shrink-0 lg:block', desktopPresentation && 'desktop-editor-steps')}
           data-testid={desktopPresentation ? 'desktop-editor-steps' : undefined}>
-          <div className="mb-3 flex items-baseline gap-2 text-[11px] font-semibold tracking-wider text-mist-400">
+          <div className="desktop-steps-heading" title="这是内容进度；内容写完后，页头流程条会接着显示发布进度">
             <span>创作步骤</span>
-            {/* ED-05：明确这是「内容进度」，与页头流程条的「发布进度」区分。 */}
-            <span className="font-mono text-[10px] font-normal text-mist-300" data-testid="creation-progress">
+            <span className="desktop-steps-count" data-testid="creation-progress">
               {creationProgress(steps).done}/{creationProgress(steps).total}
             </span>
           </div>
-          <div className="mb-2 text-[10px] font-normal tracking-normal text-mist-300" title="内容写完后，页头流程条会接着显示发布进度">内容进度</div>
           <ol className="space-y-0.5">
             {steps.map((s) => (
               <li key={s.id}>
                 <a href={`#${s.id}`} onClick={(e) => { e.preventDefault(); if (desktopPresentation && s.id === 'step-outline') setOutlineOpen(true); else scrollTo(s.id) }}
+                  data-done={s.done ? '1' : undefined} data-active={s.id === activeStep ? '1' : undefined}
                   className={cn(
-                    'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13.5px] transition',
+                    'desktop-step-item flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13.5px] transition',
                     s.id === activeStep ? 'bg-ink-50 font-medium text-ink-800' : 'text-mist-600 hover:bg-mist-100 hover:text-mist-900',
                   )}>
-                  {s.done ? <CheckCircle2 className="size-4 text-ink-500" /> : <Circle className={cn('size-4', s.id === activeStep ? 'text-ink-400' : 'text-mist-300')} />}
+                  {s.done ? <CheckCircle2 className="size-4 text-ink-500" /> : <Circle className={cn('size-4', s.id === activeStep ? 'text-ink-400' : 'text-mist-400')} />}
                   <span className="flex-1">{s.label}</span>
                   {s.extra && <span className="font-mono text-xs text-mist-400">{s.extra}</span>}
                 </a>
@@ -875,7 +874,7 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
             ))}
           </ol>
           {work.sections.length > 0 && <>
-            <div className="mt-4 border-t border-mist-100 pt-3 text-[11px] font-medium tracking-wider text-mist-400">文稿目录</div>
+            <div className="desktop-steps-group text-[11px] font-semibold tracking-wider text-mist-400">文稿目录</div>
             <ol className="mt-1 space-y-0.5">
               {work.sections.map((section, index) => (
                 <li key={section.id}>
@@ -892,10 +891,11 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
             <button type="button" onClick={() => window.dispatchEvent(new Event('ops:viewpoint-properties'))}>作品属性与关系</button>
             <button type="button" onClick={() => window.dispatchEvent(new Event('ops:title-properties'))}>标题、摘要与配图</button>
           </div>
-          <div className="mt-4 border-t border-mist-100 pt-3 text-[11.5px] text-mist-500">
-            <div className="flex items-baseline justify-between">
-              <span>{totalChars} 字{target ? ` / 目标 ${target}` : ''}</span>
+          <div className="desktop-steps-group text-[11.5px] text-mist-500">
+            {/* 字数已经在编辑器底部条常驻显示，这里不再重复；左栏只说「读完要多久」和「离目标还差多少」。 */}
+            <div className="flex items-baseline justify-between gap-2">
               <span>约 {Math.max(1, Math.ceil(totalChars / 400))} 分钟读完</span>
+              {target > 0 && <span>{totalChars} / 目标 {target} 字</span>}
             </div>
             {target > 0 && (
               <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-mist-100">
@@ -904,15 +904,15 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
             )}
           </div>
           {remainHints.length > 0 && (
-            <ul className="mt-3 space-y-1 border-t border-mist-100 pt-3 text-[11.5px] leading-relaxed text-mist-500">
+            <ul className="desktop-steps-group space-y-1 text-[11.5px] leading-relaxed text-mist-500">
               {remainHints.map((h) => <li key={h}>· {h}</li>)}
             </ul>
           )}
           {!readOnly && emptySections.length > 0 && work.outline_confirmed_at && (
-            <Button size="sm" variant="secondary" className="mt-3 w-full" onClick={() => jumpNextEmpty()}>下一段空稿</Button>
+            <Button size="sm" variant="secondary" className="mt-2.5 w-full" onClick={() => jumpNextEmpty()}>下一段空稿</Button>
           )}
           {allDrafted && (
-            <div className="mt-3 rounded-lg border border-ink-100 bg-ink-50/60 p-2.5 text-[12px] text-ink-800">
+            <div className="mt-2.5 rounded-lg border border-ink-100 bg-ink-50/60 p-2.5 text-[12px] text-ink-800">
               <div className="font-medium">全文已起草，进入修改阶段</div>
               <div className="mt-0.5 text-mist-500">先通读看衔接，再体检挑表达问题。</div>
               <div className="mt-2 flex gap-1.5">
@@ -920,9 +920,7 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
                 <Button size="sm" variant="ghost" className="flex-1" icon={<Stethoscope className="size-3.5" />} onClick={() => emitEditor({ type: 'sidebar', tab: 'polish' })}>表达体检</Button>
               </div>
             </div>
-          )}
-          <SaveStatus store={saveStatus} />
-        </aside>
+          )}        </aside>
       )}
 
       <div className={cn('min-w-0 flex-1 space-y-5', desktopPresentation && 'desktop-editor-content')}
@@ -1005,8 +1003,10 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
       )}
       {desktopPresentation && <footer className="desktop-editor-bottom" data-testid="desktop-editor-bottom">
         <span>{totalChars} 字 · {work.sections.length} 个段落</span>
-        <button type="button" onClick={() => toggleSidebar(!sidebar)}>作品工具</button>
-        <span>自动保存 · 冲突时逐项处理</span>
+        <span className="desktop-editor-bottom-meta">
+          <SaveStatus store={saveStatus} compact />
+          <button type="button" onClick={() => toggleSidebar(!sidebar)}>作品工具</button>
+        </span>
       </footer>}
       {desktopPresentation && <Dialog open={outlineOpen} onClose={() => setOutlineOpen(false)} title={work.outline_confirmed_at ? '已确认大纲' : '生成与确认大纲'} desc={work.outline_confirmed_at ? '大纲由你确认；修改后，段落内容仍逐项编辑。' : '先生成或手动编写大纲，确认后才能逐段起稿。'} width="max-w-3xl">
         <OutlineCard work={work} setWork={setWorkStable} readOnly={readOnly} onConfirmed={() => setOutlineOpen(false)} />

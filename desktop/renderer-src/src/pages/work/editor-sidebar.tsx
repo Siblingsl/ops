@@ -48,6 +48,12 @@ const tabGroups: { label: string; tabs: TabDef[] }[] = [
   ] },
 ]
 
+// 一级 = 写作时的常驻工具；二级 = 修改与协作。两排各自单行，不随面板宽度随意折行。
+const primaryTabs = tabGroups[0].tabs
+const secondaryTabs = [...tabGroups[1].tabs, ...tabGroups[2].tabs]
+// 副驾驶是「对话 + 底部输入」结构，自己管理滚动；其它页签整页滚动。
+const stillTabs: SidebarTab[] = ['copilot']
+
 export function EditorSidebar({ work, setWork, active, selection, tab, onTab: setTab, onClose }: Props) {
   const visible = usePageVisible()
   const pendingCount = usePendingSections(work.sections).length
@@ -71,28 +77,27 @@ export function EditorSidebar({ work, setWork, active, selection, tab, onTab: se
   }, [commentTarget, commentList.length, comments.hasNextPage, comments.isFetchingNextPage, comments.fetchNextPage])
   const openComments = comments.data?.pages[0]?.open_count ?? commentList.filter((c) => !c.resolved_at).length
   const pendingMemories = usePendingMemories(work.account_id)
+  const tabButton = (t: TabDef) => {
+    const n = t.id === 'pending' ? pendingCount : t.id === 'comments' ? openComments : 0
+    const active = tab === t.id
+    return (
+      <button key={t.id} type="button" role="tab" id={`sidebar-tab-${t.id}`} aria-selected={active} onClick={() => setTab(t.id)} title={t.label}
+        className={cn('desktop-sidebar-tab', active ? 'bg-ink-50 font-medium text-ink-800' : 'text-mist-500 hover:bg-mist-100')}>
+        {t.icon}{t.label}{n > 0 && <span className="rounded-full bg-gamboge-400 px-1 text-[10px] font-bold text-mist-900">{n}</span>}
+      </button>
+    )
+  }
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-start gap-0.5 border-b border-mist-200 px-1.5 py-1.5">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-y-0.5">
-          {tabGroups.map((g, gi) => (
-            <div key={g.label} role="group" aria-label={g.label} title={g.label}
-              className={cn('flex shrink-0 items-center gap-0.5', gi > 0 && 'ml-1 border-l border-mist-200 pl-1')}>
-              {g.tabs.map((t) => {
-                const n = t.id === 'pending' ? pendingCount : t.id === 'comments' ? openComments : 0
-                return (
-                  <button key={t.id} type="button" onClick={() => setTab(t.id)} title={`${g.label} · ${t.label}`}
-                    className={cn('flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-[12px] transition', tab === t.id ? 'bg-ink-50 font-medium text-ink-800' : 'text-mist-500 hover:bg-mist-100')}>
-                    {t.icon}{t.label}{n > 0 && <span className="rounded-full bg-gamboge-400 px-1 text-[10px] font-bold text-mist-900">{n}</span>}
-                  </button>
-                )
-              })}
-            </div>
-          ))}
+      <div className="desktop-sidebar-tabs">
+        <div className="desktop-sidebar-tabs-main">
+          <div className="desktop-sidebar-primary" role="tablist" aria-label="写作">{primaryTabs.map(tabButton)}</div>
+          <div className="desktop-sidebar-secondary" role="tablist" aria-label="修改与协作">{secondaryTabs.map(tabButton)}</div>
         </div>
-        <button type="button" onClick={onClose} title="收起侧栏" className="mt-0.5 shrink-0 cursor-pointer rounded p-1 text-mist-400 hover:bg-mist-100"><ChevronsRight className="size-4" /></button>
+        <button type="button" onClick={onClose} title="收起侧栏" aria-label="收起侧栏" className="desktop-sidebar-collapse"><ChevronsRight className="size-4" /></button>
       </div>
-      <div key={tab} className="scrollbar-thin min-h-0 flex-1 animate-fade-in overflow-y-auto p-3">
+      <div key={tab} role="tabpanel" aria-labelledby={`sidebar-tab-${tab}`}
+        className={cn('desktop-sidebar-body animate-fade-in', stillTabs.includes(tab) ? 'desktop-sidebar-body-still' : 'desktop-sidebar-body-scroll scrollbar-thin')}>
         {tab === 'materials' && <MaterialsTab work={work} setWork={setWork} active={active} />}
         {tab === 'copilot' && <CopilotTab work={work} active={active} selection={selection} />}
         {tab === 'polish' && <PolishTab work={work} />}
@@ -265,18 +270,21 @@ function CopilotTab({ work, active, selection }: { work: Work; active: Section |
   }
   const ctxLabel = scope === 'work' ? '整篇' : scope === 'selection' ? '选中的文字' : active ? `「${active.heading || active.key_point || '当前段落'}」` : '作品概况'
   return (
-    <div className="flex h-full flex-col gap-3">
-      <div className="flex items-center gap-2 text-[12px] text-mist-500">
-        当前上下文：
-        <Select className="h-7 flex-1 text-[12px]" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)}>
-          <option value="section">当前段落</option>
-          {selection && <option value="selection">选中的文字</option>}
-          <option value="work">整篇</option>
-        </Select>
-        {(list.data ?? []).length > 0 && <button type="button" title="清空对话" onClick={clear} className="cursor-pointer text-mist-400 hover:text-danger"><Trash2 className="size-3.5" /></button>}
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div className="shrink-0">
+        <div className="flex items-center gap-2 text-[12px] text-mist-500">
+          当前上下文：
+          <Select className="h-7 flex-1 text-[12px]" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)}>
+            <option value="section">当前段落</option>
+            {selection && <option value="selection">选中的文字</option>}
+            <option value="work">整篇</option>
+          </Select>
+          {(list.data ?? []).length > 0 && <button type="button" title="清空对话" aria-label="清空对话" onClick={clear} className="cursor-pointer text-mist-400 hover:text-danger"><Trash2 className="size-3.5" /></button>}
+        </div>
+        <p className="mt-1 truncate text-[11px] text-mist-400" title={ctxLabel}>{ctxLabel}</p>
       </div>
-      <p className="-mt-1.5 truncate text-[11.5px] text-mist-400">{ctxLabel}</p>
-      <div className="space-y-3">
+      {/* 对话历史独立滚动：输入框固定在面板底部，不被消息数量推到中间或撑出面板。 */}
+      <div className="desktop-copilot-log scrollbar-thin min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5">
         {(list.data ?? []).length === 0 && !pending && <Hint>像问同事一样提问。副驾驶只给分析和单处修改建议，不会写整篇。</Hint>}
         {(list.data ?? []).map((m) => <CopilotBubble key={m.id} m={m} canApply={canWrite && !work.locked} />)}
         {pending && (
@@ -287,17 +295,19 @@ function CopilotTab({ work, active, selection }: { work: Work; active: Section |
         )}
         <div ref={bottom} />
       </div>
-      <div className="flex flex-wrap gap-1">
-        {quickAsks.map((q) => (
-          <button key={q} type="button" disabled={!!pending} onClick={() => ask(q)}
-            className="cursor-pointer rounded-full border border-mist-200 px-2 py-0.5 text-[11.5px] text-mist-600 hover:border-ink-200 hover:bg-ink-50 disabled:opacity-50">{q}</button>
-        ))}
-      </div>
-      <div className="flex items-end gap-1.5">
-        <Textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="问点什么…（Ctrl+Enter 发送）" className="text-[12.5px]"
-          onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && isEnterWithoutComposition(e.nativeEvent)) { e.preventDefault(); void ask(text) } }} />
-        {pending ? <Button size="sm" variant="ghost" icon={<Square className="size-3.5" />} onClick={() => abort.current?.abort()} />
-          : <Button size="sm" variant="primary" icon={<Send className="size-3.5" />} disabled={!text.trim()} onClick={() => ask(text)} />}
+      <div className="shrink-0 space-y-1.5">
+        <div className="flex flex-wrap gap-1">
+          {quickAsks.map((q) => (
+            <button key={q} type="button" disabled={!!pending} onClick={() => ask(q)}
+              className="cursor-pointer rounded-full border border-mist-200 px-2 py-0.5 text-[11px] text-mist-600 hover:border-ink-200 hover:bg-ink-50 disabled:opacity-50">{q}</button>
+          ))}
+        </div>
+        <div className="flex items-end gap-1.5">
+          <Textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="问点什么…（Ctrl+Enter 发送）" className="text-[12.5px]"
+            onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && isEnterWithoutComposition(e.nativeEvent)) { e.preventDefault(); void ask(text) } }} />
+          {pending ? <Button size="sm" variant="ghost" icon={<Square className="size-3.5" />} onClick={() => abort.current?.abort()} aria-label="停止生成" />
+            : <Button size="sm" variant="primary" icon={<Send className="size-3.5" />} disabled={!text.trim()} onClick={() => ask(text)} aria-label="发送" />}
+        </div>
       </div>
     </div>
   )

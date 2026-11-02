@@ -569,8 +569,8 @@ export default function WorkLayout() {
                 className="w-full rounded border border-ink-300 px-1.5 py-0.5 text-[14.5px] font-semibold text-mist-900 outline-none" />
             ) : (
               <button type="button" disabled={!canWrite || work.locked} onClick={() => { setTitleDraft(work.title); setRenaming(true) }}
-                title={canWrite && !work.locked ? '点击修改标题' : undefined}
-                className={cn('block w-full truncate text-left text-[14.5px] font-semibold text-mist-900', canWrite && !work.locked && 'cursor-pointer rounded px-1 -mx-1 hover:bg-mist-100')}>
+                title={work.title ? `${work.title}${canWrite && !work.locked ? '（点击修改标题）' : ''}` : undefined}
+                className={cn('block max-w-full truncate text-left text-[14.5px] font-semibold text-mist-900', canWrite && !work.locked && 'cursor-pointer rounded px-1 hover:bg-mist-100')}>
                 {work.title || <span className="text-mist-400">未命名作品 · 点击命名</span>}
               </button>
             )}

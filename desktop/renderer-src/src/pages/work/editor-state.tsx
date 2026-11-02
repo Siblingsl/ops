@@ -17,14 +17,19 @@ export function createSaveStatus() {
   }
 }
 
-export function SaveStatus({ store }: { store: ReturnType<typeof createSaveStatus> }) {
+/**
+ * compact 用于编辑器底部状态条：只输出一行状态，不带分隔线和外边距，
+ * 让「保存状态」始终固定在可见位置，而不是随左栏一起被滚走。
+ */
+export function SaveStatus({ store, compact = false }: { store: ReturnType<typeof createSaveStatus>; compact?: boolean }) {
   const save = useSyncExternalStore(store.subscribe, store.snapshot)
-  return <div className="mt-6 border-t border-mist-200 pt-4 text-xs text-mist-500">
-    {save.offline ? <span className="flex items-center gap-1.5 text-danger"><CloudOff className="size-3.5" />离线，未保存（恢复后自动同步）</span>
-      : save.pending > 0 ? <span className="flex items-center gap-1.5"><Loader2 className="size-3.5 animate-spin" />保存中…</span>
-      : save.last ? <span className="flex items-center gap-1.5"><Check className="size-3.5 text-ink-500" />已保存 {fmtTime(save.last)}</span>
-      : <span>自动保存已开启</span>}
-  </div>
+  const body = save.offline ? <span className="flex items-center gap-1.5 text-danger"><CloudOff className="size-3.5" />离线，未保存（恢复后自动同步）</span>
+    : save.pending > 0 ? <span className="flex items-center gap-1.5"><Loader2 className="size-3.5 animate-spin" />保存中…</span>
+    : save.last ? <span className="flex items-center gap-1.5"><Check className="size-3.5 text-ink-500" />已保存 {fmtTime(save.last)}</span>
+    : <span>自动保存已开启</span>
+  return compact
+    ? <span className="desktop-save-status" data-testid="desktop-save-status">{body}</span>
+    : <div className="mt-6 border-t border-mist-200 pt-4 text-xs text-mist-500">{body}</div>
 }
 
 export function SelectedSidebar({ selectionRef, ...props }: Omit<ComponentProps<typeof EditorSidebar>, 'selection'> & { selectionRef: MutableRefObject<string> }) {
