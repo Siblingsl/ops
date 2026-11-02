@@ -87,9 +87,9 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
       ['sectionToolbar', '.rich-editor-toolbar'],
     ].map(([name, selector]) => [name, box(selector)]))
   })
-  // 2026-11-02 布局整理（D-160 登记）：顶部工具区 129.5 → 92（发布进度标签与步骤条同排、内边距收紧）。
-  // 这是有意的设计变更，不是漂移；高度仍按绝对值钉死，改动必须同步改这里。
-  expect(productGeometry.workbar).toMatchObject({ y: 39, height: 92 })
+  // 2026-11-02 布局整理：顶部工具区 129.5 → 92；同日工作区四边外边框上下各留 8px，
+  // workbar 顶边 39 → 47（标题栏 38 + 上边距 8 + 描边约 1）。高度仍按绝对值钉死。
+  expect(productGeometry.workbar).toMatchObject({ y: 47, height: 92 })
   expect(productGeometry.steps?.height).toBeCloseTo(productGeometry.content?.height ?? 0, 0)
   expect(productGeometry.content?.height).toBeCloseTo(productGeometry.tools?.height ?? 0, 0)
 

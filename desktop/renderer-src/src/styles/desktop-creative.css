@@ -571,8 +571,8 @@ html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .d
 .desktop-agent-compose-note { margin-top: 9px; color: var(--ops-muted); font-size: 10px; text-align: center; }
 html[data-presentation='ops-creative-desktop'] #root > div > div > main:has(.desktop-agent-workspace) { padding-top: 12px; padding-bottom: 38px; }
 html[data-presentation='ops-creative-desktop'] #root > div > div > main { padding-bottom: 30px; }
-/* 编辑器是贴底的工作区：底部只让出固定状态栏的 26px，多留 4px 就会在状态栏上方出现一条空白。 */
-html[data-presentation='ops-creative-desktop'] #root > div > div > main:has(.desktop-work-layout) { padding-bottom: 26px; }
+/* 编辑器工作区底部：26px 状态栏 + 8px 外边框空隙。 */
+html[data-presentation='ops-creative-desktop'] #root > div > div > main:has(.desktop-work-layout) { padding-bottom: 34px; }
 html[data-presentation='ops-creative-desktop'] #root nav[aria-label='底部导航'] { display: none; }
 
 /* D-152 AW02：新工作台由服务端 workbench_ui 能力门控；旧桌面布局与 Web 样式保持原样。 */
@@ -897,17 +897,19 @@ html[data-presentation='ops-creative-desktop'] .desktop-calendar-layout { grid-t
   .desktop-topic-details { position: static; }
 }
 
-/* 工作区高度必须由外壳的 flex 链决定：Shell 的 main 是 flex-1，包裹层是 h-full，
-   这里再写死 calc(100dvh - 137px) 会在底部留出 70+px 空白，也会随标题栏/状态栏变化而错位。 */
+/* 工作区高度必须由外壳的 flex 链决定：Shell 的 main 是 flex-1，包裹层是 h-full。
+   上下各留 8px 外边距时，不能再写 height:100%——总高度会多出 16px，底边被裁进状态栏。
+   用 calc 扣掉上下边距，四边描边才能同时露出来。 */
 html[data-presentation='ops-creative-desktop'] .desktop-work-layout {
-  height: 100%;
+  box-sizing: border-box;
+  height: calc(100% - 16px);
+  max-height: calc(100% - 16px);
   min-height: 0;
   flex: 1 1 auto;
-  margin: 0 24px;
+  margin: 8px 24px;
   overflow: clip;
-  border: 1px solid var(--ops-border);
-  border-bottom: 0;
-  border-radius: 20px 20px 0 0;
+  border: 1px solid color-mix(in srgb, var(--ops-muted) 26%, var(--ops-border));
+  border-radius: 16px;
   background: var(--ops-surface);
   box-shadow: var(--shadow-card);
 }
