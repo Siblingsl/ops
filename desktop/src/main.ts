@@ -18,6 +18,21 @@ import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { installBrokenPipeGuard, safeConsoleError } from './stdio-guard';
+
+// 必须尽早安装：平台 presence/claim 定时器会 console.error，父进程关管道时否则每 30s 弹一次 EPIPE。
+installBrokenPipeGuard((error) => {
+  const text = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  const show = () => {
+    try {
+      dialog.showErrorBox('A JavaScript error occurred in the main process', text);
+    } catch {
+      // 对话框也不可用时放弃；避免二次异常。
+    }
+  };
+  if (app.isReady()) show();
+  else void app.whenReady().then(show);
+});
 import {
   PRODUCTION_API_ORIGIN,
   PRODUCTION_BUSINESS_UI_ORIGIN,
@@ -2283,7 +2298,7 @@ function startPlatformPresence(): void {
       setPresenceHealth('online', '平台采集服务在线。');
       if (presenceLastError) {
         // 从失败恢复时记一条，便于排查"为什么之前一直离线"。
-        console.error('[platform-presence] 已恢复上报');
+        safeConsoleError('[platform-presence] 已恢复上报');
         presenceLastError = null;
       }
     } catch (error) {
@@ -2291,7 +2306,7 @@ function startPlatformPresence(): void {
       const code = error instanceof PlatformBrowserError ? error.code : 'presence_failed';
       if (presenceLastError !== code) {
         presenceLastError = code;
-        console.error('[platform-presence] 上报失败', code, describeError(error));
+        safeConsoleError('[platform-presence] 上报失败', code, describeError(error));
       }
       setPresenceHealth('error', '平台连接状态暂不可用，请检查账号登录情况。');
     } finally {
@@ -2347,9 +2362,9 @@ function startPlatformClaimLoop(): void {
         return;
       }
       setCollectionHealth('running', '正在采集平台作品。');
-      console.error('[platform-auto] 领到任务', JSON.stringify({ platform: run.platform, taskKind: run.task_kind }));
+      safeConsoleError('[platform-auto] 领到任务', JSON.stringify({ platform: run.platform, taskKind: run.task_kind }));
       const outcome = await runPlatformCollect(run.account_id, run);
-      console.error('[platform-auto] 完成', JSON.stringify({
+      safeConsoleError('[platform-auto] 完成', JSON.stringify({
         runStatus: outcome.runStatus, accepted: outcome.accepted,
         rejected: outcome.rejected, errorCode: outcome.errorCode,
         // 投影失败时把原因一并记下。不记的话，日志里只有"完成"，而数据其实没进正式指标。
@@ -2366,14 +2381,14 @@ function startPlatformClaimLoop(): void {
       // 自动采用失败要单独告警：这是"采集成功但数据没进正式指标"的静默失败，
       // 靠一行 JSON 容易被忽略，所以再打一条明确的中文提示。
       if (outcome.adoptErrors > 0) {
-        console.error(
+        safeConsoleError(
           `[platform-auto] 有 ${outcome.adoptErrors} 条观测已采集但未写入正式指标，原因：${outcome.adoptReason ?? '未知'}。` +
           '请在平台连接卡片里逐条确认。'
         );
       }
     } catch (error) {
       // PB-09：自动采集循环失败时显示概括原因，不把内部错误码暴露给用户。
-      console.error('[platform-auto] 循环异常', describeError(error));
+      safeConsoleError('[platform-auto] 循环异常', describeError(error));
       setCollectionHealth('failed', '自动采集最近失败，请检查网络和平台连接设置后重试。');
     } finally {
       collectInFlight = false;
