@@ -130,9 +130,7 @@ func TestDesktopChannelWithRealElectron(t *testing.T) {
 		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM app_user WHERE id=$1`, userID)
 	})
 
-	oldEnabled := env.srv.cfg.DesktopAIEnabled
-	env.srv.cfg.DesktopAIEnabled = true
-	t.Cleanup(func() { env.srv.cfg.DesktopAIEnabled = oldEnabled })
+	withDesktopAIEnabled(t, true)
 
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -408,9 +406,7 @@ func TestDesktopChannelAuthenticatesTicketAndRunsControlHandshake(t *testing.T) 
 		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM app_user WHERE id=$1`, userID)
 	})
 
-	oldEnabled := env.srv.cfg.DesktopAIEnabled
-	env.srv.cfg.DesktopAIEnabled = true
-	t.Cleanup(func() { env.srv.cfg.DesktopAIEnabled = oldEnabled })
+	withDesktopAIEnabled(t, true)
 
 	rawTicket := make([]byte, 32)
 	if _, err := rand.Read(rawTicket); err != nil {

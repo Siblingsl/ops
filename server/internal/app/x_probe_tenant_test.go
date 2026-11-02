@@ -902,9 +902,7 @@ func TestXProbeCrossTenant(t *testing.T) {
 // update / delete / test。若处理器只校验签名而不校验资源归属，这些请求会成功。
 func xpDesktopCrossTenant(t *testing.T, u, marker string, guest *guestClient, guestPassword string) {
 	t.Helper()
-	oldEnabled := env.srv.cfg.DesktopAIEnabled
-	env.srv.cfg.DesktopAIEnabled = true
-	t.Cleanup(func() { env.srv.cfg.DesktopAIEnabled = oldEnabled })
+	withDesktopAIEnabled(t, true)
 
 	register := func(deviceID uuid.UUID, pub ed25519.PublicKey, priv ed25519.PrivateKey) {
 		body, _ := json.Marshal(desktopDeviceInput{

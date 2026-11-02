@@ -45,9 +45,7 @@ func TestDesktopModelProviderStoresNoServerCredentials(t *testing.T) {
 		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM app_user WHERE id=$1`, userID)
 	})
 
-	oldEnabled := env.srv.cfg.DesktopAIEnabled
-	env.srv.cfg.DesktopAIEnabled = true
-	t.Cleanup(func() { env.srv.cfg.DesktopAIEnabled = oldEnabled })
+	withDesktopAIEnabled(t, true)
 
 	body, err := json.Marshal(desktopModelInput{
 		Name: "本机模型", Models: []string{"local-chat"}, EndpointKind: "loopback", Status: "active",
@@ -137,9 +135,7 @@ func TestDesktopConnectionRechecksCurrentAuthorizationScope(t *testing.T) {
 		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM app_user WHERE id IN ($1,$2)`, userID, otherUserID)
 	})
 
-	oldEnabled := env.srv.cfg.DesktopAIEnabled
-	env.srv.cfg.DesktopAIEnabled = true
-	t.Cleanup(func() { env.srv.cfg.DesktopAIEnabled = oldEnabled })
+	withDesktopAIEnabled(t, true)
 	runtimeKey := desktopGenerationKey(userID, workspaceID, deviceID)
 	env.srv.desktop.mu.Lock()
 	env.srv.desktop.generations[runtimeKey] = 1
