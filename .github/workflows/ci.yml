@@ -165,6 +165,39 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # desktop/test/*.e2e.cjs 此前没有任何 CI 步骤执行：desktop job 只跑 test/*.test.cjs，
+  # e2e job 只跑 renderer 的 Playwright 用例。这套真实 Electron 端到端用例（主进程、
+  # utility process、生产 Service Worker、下载、退出确认）因此长期只有本地能覆盖。
+  desktop-e2e:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.1"
+          cache: pnpm
+          cache-dependency-path: |
+            desktop/pnpm-lock.yaml
+            web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # test/production-service-worker.e2e.cjs:11 直接读 web/dist，而 `pnpm test:e2e`
+      # 只执行 `pnpm build`（tsc 编译主进程），不会构建 web，必须先产出生产包。
+      - name: Build web production bundle
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+      - name: Desktop Electron E2E
+        run: pnpm test:e2e
+
   e2e:
     strategy:
       fail-fast: false
