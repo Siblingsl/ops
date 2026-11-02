@@ -1,3 +1,5 @@
+// stdio-guard 必须排在 electron 之前：模块加载时即 patch write，避免 EPIPE 弹窗。
+import { installBrokenPipeGuard, safeConsoleError } from './stdio-guard';
 import {
   app,
   BrowserWindow,
@@ -18,9 +20,8 @@ import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { installBrokenPipeGuard, safeConsoleError } from './stdio-guard';
 
-// 必须尽早安装：平台 presence/claim 定时器会 console.error，父进程关管道时否则每 30s 弹一次 EPIPE。
+// 补上非 EPIPE 未捕获异常的展示（防护本身已在 import 时装好）。
 installBrokenPipeGuard((error) => {
   const text = error instanceof Error ? (error.stack ?? error.message) : String(error);
   const show = () => {

@@ -5,7 +5,7 @@
   "description": "OPS 线上业务桌面壳",
   "author": "OPS",
   "private": true,
-  "main": ".build/main.js",
+  "main": ".build/bootstrap.js",
   "packageManager": "pnpm@10.14.0",
   "engines": {
     "node": ">=22.12.0 <25",
