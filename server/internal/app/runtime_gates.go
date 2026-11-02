@@ -64,8 +64,8 @@ func (s *Server) systemSettingExists(ctx context.Context, key string) (bool, err
 	return n > 0, nil
 }
 
-// seedAgentFeaturesFromEnv 仅在对应键尚不存在时把 env 逗号列表写入 DB（一次性种子）。
-func (s *Server) seedAgentFeaturesFromEnv(ctx context.Context) {
+// SeedAgentFeaturesFromEnv 仅在对应键尚不存在时把 env 逗号列表写入 DB（一次性种子，启动时调用）。
+func (s *Server) SeedAgentFeaturesFromEnv(ctx context.Context) {
 	if agentEnvEmergencyOff() {
 		return
 	}
@@ -110,7 +110,11 @@ func (s *Server) agentWorkbenchFeatures(ctx context.Context) map[string]bool {
 	if agentEnvEmergencyOff() {
 		return applyAgentFeatureDeps(features)
 	}
-	s.seedAgentFeaturesFromEnv(ctx)
+	// 非空逗号列表：进程内以 env 为准（兼容既有单测 Setenv；生产应留空，改走超管 DB）。
+	// 不在读路径写库，避免污染共享测试库；一次性种子只在 Serve 启动时执行。
+	if raw := strings.TrimSpace(os.Getenv(agentWorkbenchFeatureEnv)); raw != "" {
+		return applyAgentFeatureDeps(agentFeaturesFromList(raw))
+	}
 	for _, name := range agentWorkbenchFeatureNames {
 		on, err := s.systemBool(ctx, agentFeatureKey(name), false)
 		if err != nil {

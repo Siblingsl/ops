@@ -65,23 +65,35 @@ func TestD160AgentFeaturesDBAndEnvSeedAndEmergency(t *testing.T) {
 		t.Fatal("无 env、无 DB 时应全关")
 	}
 
-	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,context_refs")
-	feats = env.srv.agentWorkbenchFeatures(ctx)
-	if !feats["workbench_ui"] || !feats["context_refs"] || feats["artifacts"] {
-		t.Fatalf("env 列表应种子缺失键：%#v", feats)
+	if err := env.srv.putSystemBool(ctx, agentFeatureKey("workbench_ui"), true); err != nil {
+		t.Fatal(err)
 	}
-	// 超管关闭后 env 不得再次顶开（键已存在）。
-	if err := env.srv.putSystemBool(ctx, agentFeatureKey("workbench_ui"), false); err != nil {
+	if err := env.srv.putSystemBool(ctx, agentFeatureKey("context_refs"), true); err != nil {
 		t.Fatal(err)
 	}
 	feats = env.srv.agentWorkbenchFeatures(ctx)
-	if feats["workbench_ui"] || !feats["context_refs"] {
-		t.Fatalf("已有 DB 行不被 env 覆盖：%#v", feats)
+	if !feats["workbench_ui"] || !feats["context_refs"] {
+		t.Fatalf("env 空时应听 DB：%#v", feats)
+	}
+
+	// 启动种子：只补缺失键，不覆盖已有 false。
+	if err := env.srv.putSystemBool(ctx, agentFeatureKey("workbench_ui"), false); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,artifacts")
+	env.srv.SeedAgentFeaturesFromEnv(ctx)
+	t.Setenv(agentWorkbenchFeatureEnv, "")
+	feats = env.srv.agentWorkbenchFeatures(ctx)
+	if feats["workbench_ui"] {
+		t.Fatal("种子不得覆盖已有 DB=false")
+	}
+	if !feats["artifacts"] || !feats["context_refs"] {
+		t.Fatalf("种子应写入缺失键且保留其它 DB：%#v", feats)
 	}
 
 	t.Setenv(agentWorkbenchFeatureEnv, "off")
 	feats = env.srv.agentWorkbenchFeatures(ctx)
-	if feats["context_refs"] {
+	if feats["context_refs"] || feats["artifacts"] {
 		t.Fatal("env 紧急全关必须压过 DB")
 	}
 }
