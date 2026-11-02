@@ -9,10 +9,15 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
+
+// runtimeGatesServer 让既有 agentWorkbenchFeatures()/requireAgentFeature() 调用点
+// 在 D-160 后仍读 DB（由 Server 绑定）；未绑定时回退到仅 env（单测依赖关系）。
+var runtimeGatesServer atomic.Pointer[Server]
 
 const agentWorkbenchFeatureEnv = "OPS_AGENT_WORKBENCH_FEATURES"
 
@@ -35,19 +40,29 @@ func agentFeaturesFromList(raw string) map[string]bool {
 	return features
 }
 
+func (s *Server) bindRuntimeGates() {
+	runtimeGatesServer.Store(s)
+}
+
 func agentWorkbenchFeatures() map[string]bool {
-	features := agentFeaturesFromList(os.Getenv(agentWorkbenchFeatureEnv))
-	if features["goals"] && (!features["event_resume"] || !features["run_control"] || !features["plans"]) {
-		features["goals"] = false
+	if s := runtimeGatesServer.Load(); s != nil {
+		return s.agentWorkbenchFeatures(context.Background())
 	}
-	if features["routines"] && (!features["event_resume"] || !features["run_control"] || !features["plans"] || !features["goals"] || !features["artifacts"]) {
-		features["routines"] = false
-	}
-	return features
+	return applyAgentFeatureDeps(agentFeaturesFromList(os.Getenv(agentWorkbenchFeatureEnv)))
 }
 
 func requireAgentFeature(name string) error {
+	if s := runtimeGatesServer.Load(); s != nil {
+		return s.requireAgentFeature(context.Background(), name)
+	}
 	if agentWorkbenchFeatures()[name] {
+		return nil
+	}
+	return apiErr(409, "agent_feature_unavailable", "该工作台功能尚未开放")
+}
+
+func (s *Server) requireAgentFeature(ctx context.Context, name string) error {
+	if s.agentWorkbenchFeatures(ctx)[name] {
 		return nil
 	}
 	return apiErr(409, "agent_feature_unavailable", "该工作台功能尚未开放")

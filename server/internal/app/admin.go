@@ -454,26 +454,43 @@ func (s *Server) adminGetSystemSettings(w http.ResponseWriter, r *http.Request) 
 	if err := s.requireSystemAdmin(r.Context()); err != nil {
 		return err
 	}
-	reg, err := s.systemBool(r.Context(), "registration_open", true)
+	ctx := r.Context()
+	reg, err := s.systemBool(ctx, "registration_open", true)
 	if err != nil {
 		return err
 	}
-	maint, err := s.systemBool(r.Context(), "maintenance_mode", false)
+	maint, err := s.systemBool(ctx, "maintenance_mode", false)
 	if err != nil {
 		return err
 	}
-	killed, err := s.systemBool(r.Context(), platformKillSwitchKey, false)
+	killed, err := s.systemBool(ctx, platformKillSwitchKey, false)
 	if err != nil {
 		return err
 	}
-	features, err := s.adminPlatformFeatureFlags(r.Context())
+	features, err := s.adminPlatformFeatureFlags(ctx)
 	if err != nil {
 		return err
 	}
+	desktopAI, err := s.systemBool(ctx, desktopAIEnabledKey, false)
+	if err != nil {
+		return err
+	}
+	autoAdopt, err := s.systemBool(ctx, desktopPlatformAutoAdoptKey, false)
+	if err != nil {
+		return err
+	}
+	agentFeatures := s.agentWorkbenchFeatures(ctx)
 	return ok(w, map[string]any{
 		"registration_open": reg, "maintenance_mode": maint,
 		"platform_kill_switch": killed,
 		"platform_features":    features,
+		"desktop_ai_enabled":   desktopAI,
+		"desktop_ai_env_blocked": envExplicitFalse("OPS_DESKTOP_AI_ENABLED"),
+		"desktop_platform_auto_adopt": autoAdopt,
+		"desktop_platform_auto_adopt_env_blocked": envExplicitFalse("OPS_DESKTOP_PLATFORM_AUTO_ADOPT"),
+		"platform_process_env_blocked":            envExplicitFalse("OPS_DESKTOP_PLATFORM_ENABLED"),
+		"agent_features":                          agentFeatures,
+		"agent_features_env_blocked":              agentEnvEmergencyOff(),
 	})
 }
 
@@ -505,19 +522,26 @@ func (s *Server) adminPutSystemSettings(w http.ResponseWriter, r *http.Request) 
 		return err
 	}
 	var in struct {
-		RegistrationOpen   *bool `json:"registration_open"`
-		MaintenanceMode    *bool `json:"maintenance_mode"`
-		PlatformKillSwitch *bool `json:"platform_kill_switch"`
-		PlatformFeature    *struct {
+		RegistrationOpen         *bool `json:"registration_open"`
+		MaintenanceMode          *bool `json:"maintenance_mode"`
+		PlatformKillSwitch       *bool `json:"platform_kill_switch"`
+		DesktopAIEnabled         *bool `json:"desktop_ai_enabled"`
+		DesktopPlatformAutoAdopt *bool `json:"desktop_platform_auto_adopt"`
+		PlatformFeature          *struct {
 			Feature  string `json:"feature"`
 			Platform string `json:"platform"`
 			Enabled  bool   `json:"enabled"`
 		} `json:"platform_feature"`
+		AgentFeature *struct {
+			Name    string `json:"name"`
+			Enabled bool   `json:"enabled"`
+		} `json:"agent_feature"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
-	if in.RegistrationOpen == nil && in.MaintenanceMode == nil && in.PlatformKillSwitch == nil && in.PlatformFeature == nil {
+	if in.RegistrationOpen == nil && in.MaintenanceMode == nil && in.PlatformKillSwitch == nil && in.PlatformFeature == nil &&
+		in.DesktopAIEnabled == nil && in.DesktopPlatformAutoAdopt == nil && in.AgentFeature == nil {
 		return validation("请指定要修改的开关")
 	}
 	if in.PlatformFeature != nil {
@@ -536,6 +560,24 @@ func (s *Server) adminPutSystemSettings(w http.ResponseWriter, r *http.Request) 
 		s.audit(r.Context(), "platform_feature_switch", "system_setting", platformFeatureKey(feature, platform), "ok",
 			map[string]any{"feature": feature, "platform": platform, "enabled": in.PlatformFeature.Enabled})
 	}
+	if in.AgentFeature != nil {
+		name := strings.TrimSpace(in.AgentFeature.Name)
+		known := false
+		for _, n := range agentWorkbenchFeatureNames {
+			if n == name {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return validation("未知的智能体工作台特性")
+		}
+		if err := s.putSystemBool(r.Context(), agentFeatureKey(name), in.AgentFeature.Enabled); err != nil {
+			return err
+		}
+		s.audit(r.Context(), "agent_feature_switch", "system_setting", agentFeatureKey(name), "ok",
+			map[string]any{"feature": name, "enabled": in.AgentFeature.Enabled})
+	}
 	if in.PlatformKillSwitch != nil {
 		// 平台采集总开关（§17.3）：关闭后立即停止领取与提交，不需要重启进程。
 		if err := s.putSystemBool(r.Context(), platformKillSwitchKey, *in.PlatformKillSwitch); err != nil {
@@ -543,6 +585,20 @@ func (s *Server) adminPutSystemSettings(w http.ResponseWriter, r *http.Request) 
 		}
 		s.audit(r.Context(), "platform_kill_switch", "system_setting", platformKillSwitchKey, "ok",
 			map[string]any{"kill_switch": *in.PlatformKillSwitch})
+	}
+	if in.DesktopAIEnabled != nil {
+		if err := s.putSystemBool(r.Context(), desktopAIEnabledKey, *in.DesktopAIEnabled); err != nil {
+			return err
+		}
+		s.audit(r.Context(), "desktop_ai_switch", "system_setting", desktopAIEnabledKey, "ok",
+			map[string]any{"enabled": *in.DesktopAIEnabled})
+	}
+	if in.DesktopPlatformAutoAdopt != nil {
+		if err := s.putSystemBool(r.Context(), desktopPlatformAutoAdoptKey, *in.DesktopPlatformAutoAdopt); err != nil {
+			return err
+		}
+		s.audit(r.Context(), "desktop_platform_auto_adopt_switch", "system_setting", desktopPlatformAutoAdoptKey, "ok",
+			map[string]any{"enabled": *in.DesktopPlatformAutoAdopt})
 	}
 	if in.RegistrationOpen != nil {
 		if err := s.putSystemBool(r.Context(), "registration_open", *in.RegistrationOpen); err != nil {
@@ -556,7 +612,8 @@ func (s *Server) adminPutSystemSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	s.audit(r.Context(), "admin_system_settings", "system", "", "ok", map[string]any{
 		"registration_open": in.RegistrationOpen, "maintenance_mode": in.MaintenanceMode,
-		"platform_feature": in.PlatformFeature,
+		"platform_feature": in.PlatformFeature, "agent_feature": in.AgentFeature,
+		"desktop_ai_enabled": in.DesktopAIEnabled, "desktop_platform_auto_adopt": in.DesktopPlatformAutoAdopt,
 	})
 	return s.adminGetSystemSettings(w, r)
 }

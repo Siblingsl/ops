@@ -1,0 +1,123 @@
+package app
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	"strings"
+)
+
+// D-160 运行时闸门：system_setting 为日常真源，env 显式关闭为紧急全关。
+
+const (
+	desktopAIEnabledKey          = "desktop.ai_enabled"
+	desktopPlatformAutoAdoptKey  = "desktop.platform_auto_adopt"
+)
+
+func envExplicitFalse(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return v == "0" || v == "false"
+}
+
+func agentEnvEmergencyOff() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(agentWorkbenchFeatureEnv)))
+	return v == "0" || v == "false" || v == "off"
+}
+
+func agentFeatureKey(name string) string {
+	return "agent.feature." + name
+}
+
+func (s *Server) desktopAIEnabled(ctx context.Context) bool {
+	if envExplicitFalse("OPS_DESKTOP_AI_ENABLED") {
+		return false
+	}
+	on, err := s.systemBool(ctx, desktopAIEnabledKey, false)
+	if err != nil {
+		slog.Error("读取桌面 AI 开关失败，按关闭处理", "err", err)
+		return false
+	}
+	return on
+}
+
+func (s *Server) desktopPlatformAutoAdoptEnabled(ctx context.Context) bool {
+	if envExplicitFalse("OPS_DESKTOP_PLATFORM_AUTO_ADOPT") {
+		return false
+	}
+	on, err := s.systemBool(ctx, desktopPlatformAutoAdoptKey, false)
+	if err != nil {
+		slog.Error("读取平台自动采用开关失败，按关闭处理", "err", err)
+		return false
+	}
+	return on
+}
+
+func (s *Server) systemSettingExists(ctx context.Context, key string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `SELECT count(*) FROM system_setting WHERE key=$1`, key).Scan(&n)
+	if err != nil {
+		if strings.Contains(err.Error(), "system_setting") {
+			return false, nil
+		}
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// seedAgentFeaturesFromEnv 仅在对应键尚不存在时把 env 逗号列表写入 DB（一次性种子）。
+func (s *Server) seedAgentFeaturesFromEnv(ctx context.Context) {
+	if agentEnvEmergencyOff() {
+		return
+	}
+	raw := strings.TrimSpace(os.Getenv(agentWorkbenchFeatureEnv))
+	if raw == "" {
+		return
+	}
+	known := make(map[string]bool, len(agentWorkbenchFeatureNames))
+	for _, name := range agentWorkbenchFeatureNames {
+		known[name] = true
+	}
+	for _, name := range strings.Split(raw, ",") {
+		name = strings.TrimSpace(name)
+		if !known[name] {
+			continue
+		}
+		exists, err := s.systemSettingExists(ctx, agentFeatureKey(name))
+		if err != nil || exists {
+			continue
+		}
+		if err := s.putSystemBool(ctx, agentFeatureKey(name), true); err != nil {
+			slog.Error("种子写入智能体特性失败", "feature", name, "err", err)
+		}
+	}
+}
+
+func applyAgentFeatureDeps(features map[string]bool) map[string]bool {
+	if features["goals"] && (!features["event_resume"] || !features["run_control"] || !features["plans"]) {
+		features["goals"] = false
+	}
+	if features["routines"] && (!features["event_resume"] || !features["run_control"] || !features["plans"] || !features["goals"] || !features["artifacts"]) {
+		features["routines"] = false
+	}
+	return features
+}
+
+func (s *Server) agentWorkbenchFeatures(ctx context.Context) map[string]bool {
+	features := make(map[string]bool, len(agentWorkbenchFeatureNames))
+	for _, name := range agentWorkbenchFeatureNames {
+		features[name] = false
+	}
+	if agentEnvEmergencyOff() {
+		return applyAgentFeatureDeps(features)
+	}
+	s.seedAgentFeaturesFromEnv(ctx)
+	for _, name := range agentWorkbenchFeatureNames {
+		on, err := s.systemBool(ctx, agentFeatureKey(name), false)
+		if err != nil {
+			slog.Error("读取智能体特性失败，按关闭处理", "feature", name, "err", err)
+			continue
+		}
+		features[name] = on
+	}
+	return applyAgentFeatureDeps(features)
+}

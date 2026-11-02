@@ -399,7 +399,7 @@ func (s *Server) desktopRequireWorkspaceAccess(ctx context.Context, deviceID uui
 	if id == nil || id.AdminOverride {
 		return apiErr(403, "desktop_ai_forbidden", "当前身份不能使用桌面 AI")
 	}
-	if !s.cfg.DesktopAIEnabled {
+	if !s.desktopAIEnabled(ctx) {
 		return apiErr(503, "desktop_ai_forbidden", "服务端尚未启用桌面 AI")
 	}
 	policy, err := s.desktopPolicy(ctx, id.WorkspaceID)

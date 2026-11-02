@@ -51,7 +51,8 @@ export function createPinnedDirectHttpsAgent(addresses: Array<{ address: string;
       else callback(null, first.address, first.family);
     }
   };
-  return new https.Agent({ lookup, keepAlive: false, maxSockets: 1 });
+  // Shared with desktop channel WebSocket; maxSockets:1 starved all /api HTTP.
+  return new https.Agent({ lookup, keepAlive: false, maxSockets: 16 });
 }
 
 export function createPinnedHttpsProxyAgent(
@@ -71,7 +72,7 @@ export function createPinnedHttpsProxyAgent(
     throw new Error('远程 HTTP 代理不能安全传输代理凭证；请使用 HTTPS 代理或不带认证的代理。');
   }
 
-  const agent = new https.Agent({ keepAlive: false, maxSockets: 1 });
+  const agent = new https.Agent({ keepAlive: false, maxSockets: 16 });
   agent.createConnection = (_options, callback) => {
     let finished = false;
     const finish = (error: Error | null, socket?: TLSSocket) => {

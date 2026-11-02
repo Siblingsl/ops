@@ -9,6 +9,7 @@ import (
 )
 
 func TestAW10RoutineFeatureRequiresCompletedRunDependencies(t *testing.T) {
+	clearAgentFeatureSettings(t)
 	t.Setenv(agentWorkbenchFeatureEnv, "routines")
 	if agentWorkbenchFeatures()["routines"] {
 		t.Fatal("routines must stay unavailable without the persistent run dependencies")

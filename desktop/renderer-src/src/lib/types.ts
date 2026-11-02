@@ -786,16 +786,36 @@ export interface AdminWorkspace {
   account_count: number
 }
 
+export type AgentWorkbenchFeatureName =
+  | 'workbench_ui'
+  | 'conversation_organize'
+  | 'context_refs'
+  | 'skill_requests'
+  | 'artifacts'
+  | 'run_control'
+  | 'event_resume'
+  | 'plans'
+  | 'goals'
+  | 'routines'
+  | 'document_parse'
+
 export interface SystemSettings {
   registration_open: boolean
   maintenance_mode: boolean
-  /** 平台采集总开关（20 文档 §17.3）：与部署配置任一关闭即停。 */
+  /** 平台采集总开关（20 文档 §17.3 / D-160）：日常听 DB；env 显式 0 为紧急关。 */
   platform_kill_switch: boolean
+  platform_process_env_blocked?: boolean
   /** 每平台同步能力开关（20 文档 §21.15）：默认关闭，验收通过后由超管按平台打开。 */
   platform_features: {
     account_sync: Record<'xhs' | 'wechat_mp', boolean>
     metrics_refresh: Record<'xhs' | 'wechat_mp', boolean>
   }
+  desktop_ai_enabled?: boolean
+  desktop_ai_env_blocked?: boolean
+  desktop_platform_auto_adopt?: boolean
+  desktop_platform_auto_adopt_env_blocked?: boolean
+  agent_features?: Partial<Record<AgentWorkbenchFeatureName, boolean>>
+  agent_features_env_blocked?: boolean
 }
 
 export interface WorkspaceInvite {

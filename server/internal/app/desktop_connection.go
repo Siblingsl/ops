@@ -156,7 +156,7 @@ func (s *Server) desktopCreateConnectionTicket(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) desktopChannel(w http.ResponseWriter, r *http.Request) {
-	if !s.cfg.DesktopAIEnabled || r.URL.RawQuery != "" || r.Header.Get("Origin") != "" {
+	if !s.desktopAIEnabled(r.Context()) || r.URL.RawQuery != "" || r.Header.Get("Origin") != "" {
 		writeError(w, r, apiErr(403, "desktop_ai_forbidden", "桌面通道请求无效或服务未启用"))
 		return
 	}

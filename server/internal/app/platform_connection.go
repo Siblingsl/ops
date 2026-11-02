@@ -306,11 +306,9 @@ func (s *Server) patchPlatformConnection(w http.ResponseWriter, r *http.Request)
 		return validation("该接口只支持暂停，恢复请重新验证身份")
 	}
 	if in.AutoAdopt != nil && *in.AutoAdopt {
-		// D-129：正式验收（每平台 10 篇以上逐字段对照）完成前不开启自动采用。
-		// 闸门是进程配置 `OPS_DESKTOP_PLATFORM_AUTO_ADOPT`（DEV-PS62），默认关闭：
-		// 验收结论进决策记录后由部署显式打开，回滚只需改环境变量。
-		if s.cfg == nil || !s.cfg.DesktopPlatformAutoAdopt {
-			return apiErr(409, "platform_consent_required", "自动采用需先完成正式验收，当前版本不支持开启")
+		// D-160：自动采用日常听超管 DB；env 显式 0/false 为紧急关（UI 顶不开）。
+		if !s.desktopPlatformAutoAdoptEnabled(r.Context()) {
+			return apiErr(409, "platform_consent_required", "自动采用尚未由超级管理员开启，或已被部署紧急关闭")
 		}
 	}
 	if in.AutoAdopt != nil {

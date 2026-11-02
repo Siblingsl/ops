@@ -237,7 +237,7 @@ func (s *Server) desktopGetPolicy(w http.ResponseWriter, r *http.Request) error 
 	}
 	policy.WorkspaceID = id.WorkspaceID
 	w.Header().Set("Cache-Control", "no-store")
-	return ok(w, map[string]any{"global_enabled": s.cfg.DesktopAIEnabled, "policy": policy})
+	return ok(w, map[string]any{"global_enabled": s.desktopAIEnabled(r.Context()), "policy": policy})
 }
 
 func (s *Server) desktopPutPolicy(w http.ResponseWriter, r *http.Request) error {

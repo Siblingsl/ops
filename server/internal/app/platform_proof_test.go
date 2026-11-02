@@ -104,6 +104,12 @@ func (p *platformAccount) setAIEnabled(enabled bool) {
 
 func withDesktopPlatformEnabled(t *testing.T, enabled bool) {
 	t.Helper()
+	// D-160：关闭=紧急 env；开启=清除紧急 env（日常听 kill_switch）。
+	if enabled {
+		t.Setenv("OPS_DESKTOP_PLATFORM_ENABLED", "1")
+	} else {
+		t.Setenv("OPS_DESKTOP_PLATFORM_ENABLED", "0")
+	}
 	old := env.srv.cfg.DesktopPlatformEnabled
 	env.srv.cfg.DesktopPlatformEnabled = enabled
 	t.Cleanup(func() { env.srv.cfg.DesktopPlatformEnabled = old })
@@ -111,9 +117,18 @@ func withDesktopPlatformEnabled(t *testing.T, enabled bool) {
 
 func withDesktopAIEnabled(t *testing.T, enabled bool) {
 	t.Helper()
+	if enabled {
+		t.Setenv("OPS_DESKTOP_AI_ENABLED", "1")
+		_ = env.srv.putSystemBool(context.Background(), desktopAIEnabledKey, true)
+	} else {
+		t.Setenv("OPS_DESKTOP_AI_ENABLED", "0")
+	}
 	old := env.srv.cfg.DesktopAIEnabled
 	env.srv.cfg.DesktopAIEnabled = enabled
-	t.Cleanup(func() { env.srv.cfg.DesktopAIEnabled = old })
+	t.Cleanup(func() {
+		env.srv.cfg.DesktopAIEnabled = old
+		_ = env.srv.putSystemBool(context.Background(), desktopAIEnabledKey, false)
+	})
 }
 
 // challengeRequest 以合成身份调用真实的挑战处理器，等价于一次 /desktop/challenges 请求。

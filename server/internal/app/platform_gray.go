@@ -10,8 +10,8 @@ import (
 
 // 灰度、kill switch 与运营诊断（20 文档 §14、§17.3）。
 //
-// 全局 kill switch 是系统配置（system_setting），不由工作区策略覆盖；它与进程配置
-// OPS_DESKTOP_PLATFORM_ENABLED 叠加：任一关闭即停，避免部署时漏改一处而误开。
+// 全局 kill switch 是系统配置（system_setting），不由工作区策略覆盖（D-160 方案 C）：
+// 日常听 kill_switch；仅当 OPS_DESKTOP_PLATFORM_ENABLED 显式为 0/false 时紧急全关。
 
 const (
 	platformKillSwitchKey = "platform_collection.kill_switch"
@@ -23,9 +23,9 @@ const (
 	platformDiagnosticsWindowDays = 7
 )
 
-// platformCollectionGloballyEnabled 是准入判断的唯一入口：进程配置与 DB 开关都必须开启。
+// platformCollectionGloballyEnabled 是准入判断的唯一入口（D-160）。
 func (s *Server) platformCollectionGloballyEnabled(ctx context.Context) bool {
-	if s.cfg == nil || !s.cfg.DesktopPlatformEnabled {
+	if envExplicitFalse("OPS_DESKTOP_PLATFORM_ENABLED") {
 		return false
 	}
 	killed, err := s.systemBool(ctx, platformKillSwitchKey, false)
@@ -167,7 +167,7 @@ func (d *platformDiagnostics) decorate() {
 // enforcePlatformGrayThresholds 由调度器每轮调用：超阈值时把该工作区所有连接的
 // auto_adopt 关掉（只降级为“只写观测”，不停自动采集），并写审计。
 func (s *Server) enforcePlatformGrayThresholds(ctx context.Context) {
-	if s.cfg == nil || !s.cfg.DesktopPlatformEnabled {
+	if !s.platformCollectionGloballyEnabled(ctx) {
 		return
 	}
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT workspace_id FROM platform_connection WHERE state='active'`)
@@ -230,7 +230,7 @@ func (s *Server) platformGrayStatus(ctx context.Context) map[string]any {
 	killed, _ := s.systemBool(ctx, platformKillSwitchKey, false)
 	enabled := s.platformCollectionGloballyEnabled(ctx)
 	return map[string]any{
-		"process_enabled": s.cfg != nil && s.cfg.DesktopPlatformEnabled,
+		"process_enabled": !envExplicitFalse("OPS_DESKTOP_PLATFORM_ENABLED"),
 		"kill_switch":     killed,
 		"effective":       enabled,
 	}

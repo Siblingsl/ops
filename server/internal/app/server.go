@@ -85,7 +85,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{
+	s := &Server{
 		cfg:    cfg,
 		db:     pool,
 		box:    box,
@@ -105,7 +105,9 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 		agentRunCancels:            map[uuid.UUID]context.CancelFunc{},
 		notifySubs:                 map[uuid.UUID][]chan struct{}{},
 		presence:                   map[uuid.UUID]map[uuid.UUID]presenceEntry{},
-	}, nil
+	}
+	s.bindRuntimeGates()
+	return s, nil
 }
 
 // healthz is the liveness/readiness probe (DEV-U105): 503 when the database is unreachable,

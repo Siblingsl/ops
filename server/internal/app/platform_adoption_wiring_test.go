@@ -16,9 +16,19 @@ import (
 
 func withPlatformAutoAdopt(t *testing.T, enabled bool) {
 	t.Helper()
+	if enabled {
+		t.Setenv("OPS_DESKTOP_PLATFORM_AUTO_ADOPT", "1")
+		_ = env.srv.putSystemBool(context.Background(), desktopPlatformAutoAdoptKey, true)
+	} else {
+		t.Setenv("OPS_DESKTOP_PLATFORM_AUTO_ADOPT", "0")
+		_ = env.srv.putSystemBool(context.Background(), desktopPlatformAutoAdoptKey, false)
+	}
 	old := env.srv.cfg.DesktopPlatformAutoAdopt
 	env.srv.cfg.DesktopPlatformAutoAdopt = enabled
-	t.Cleanup(func() { env.srv.cfg.DesktopPlatformAutoAdopt = old })
+	t.Cleanup(func() {
+		env.srv.cfg.DesktopPlatformAutoAdopt = old
+		_ = env.srv.putSystemBool(context.Background(), desktopPlatformAutoAdoptKey, false)
+	})
 }
 
 func connectionAdoptionRevision(t *testing.T, connectionID uuid.UUID) int64 {
@@ -33,6 +43,7 @@ func connectionAdoptionRevision(t *testing.T, connectionID uuid.UUID) int64 {
 
 // 闸门关闭时（默认），开启自动采用仍然是 409；关掉已经开启的采用则不该被闸门拦。
 func TestPlatformAutoAdoptGateDefaultsClosed(t *testing.T) {
+	withPlatformAutoAdopt(t, false)
 	f := newPlatformRunFixture(t, "xhs", "xhs_user_id:fixture-self")
 	path := "/api/v1/accounts/" + f.Account.ID.String() + "/platform-connection"
 	ctx := context.Background()

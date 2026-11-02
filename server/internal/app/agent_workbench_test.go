@@ -10,6 +10,7 @@ import (
 )
 
 func TestAW01BootstrapFeatureSwitchesDefaultClosed(t *testing.T) {
+	clearAgentFeatureSettings(t)
 	t.Setenv("OPS_AGENT_WORKBENCH_FEATURES", "")
 	env.ensureToolModel(t)
 	var body struct {
@@ -34,6 +35,7 @@ func TestAW01BootstrapFeatureSwitchesDefaultClosed(t *testing.T) {
 }
 
 func TestAW09GoalFeatureRequiresRunAndPlanDependencies(t *testing.T) {
+	clearAgentFeatureSettings(t)
 	t.Setenv(agentWorkbenchFeatureEnv, "goals")
 	if agentWorkbenchFeatures()["goals"] {
 		t.Fatal("goals must remain unavailable without event resume, run control, and plans")
