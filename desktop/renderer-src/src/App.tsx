@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { PageSkeleton } from './components/error-boundary'
 import { Button, Card, PageLoading, Spinner } from './components/ui'
 import { ApiError, errorMessage, get } from './lib/api'
 import { DESKTOP_ACCOUNT_SWITCHER_REQUEST } from './lib/desktop-settings'
 import { isElectronDesktop } from './lib/desktop-presentation.js'
+import { setRecentOwner } from './lib/recent'
 import { rememberedAccount, useAccounts, useCurrentAccountSelection, useMe } from './lib/session'
 import DesktopSettingsHost from './layout/DesktopSettingsHost'
 
@@ -104,6 +105,10 @@ const S = ({ children }: { children: React.ReactNode }) => <Suspense fallback={<
 function Authed() {
   const status = useQuery({ queryKey: ['auth-status'], queryFn: () => get<{ needs_setup: boolean }>('/auth/status') })
   const me = useMe()
+  // A-26-1：登录身份确认后才允许读/写本机「最近打开」，避免共用浏览器时串到上一个用户的数据。
+  useEffect(() => {
+    setRecentOwner(me.data ? me.data.user_id ?? me.data.username : undefined)
+  }, [me.data?.user_id, me.data?.username])
   if (status.isLoading || (me.isLoading && !status.data?.needs_setup)) {
     return <div className="flex h-full items-center justify-center paper"><Spinner /></div>
   }

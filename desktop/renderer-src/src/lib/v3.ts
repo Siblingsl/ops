@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { get, post, put } from './api'
 import { setCustomTheme } from './custom-theme-state'
+import { recentItems, type RecentItem } from './recent'
 import type { AIJob, CustomTheme, Memory, UserPrefs, Work } from './types'
 
 /** waitJob polls a background AI job (ai_job) until it finishes; rejects on failure or cancellation. */
@@ -67,23 +68,8 @@ export function fuzzyMatch(text: string, q: string): boolean {
 
 // ---------- 最近访问（EX-M-04，仅存本机） ----------
 
-export interface RecentItem { link: string; title: string; type: string; at: number }
-const RECENT_KEY = 'ops.recent'
-
-export function recentItems(): RecentItem[] {
-  try {
-    return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]') as RecentItem[]
-  } catch {
-    return []
-  }
-}
-
-export function rememberRecent(item: Omit<RecentItem, 'at'>) {
-  const list = recentItems().filter((x) => x.link !== item.link)
-  list.unshift({ ...item, at: Date.now() })
-  localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 20)))
-  window.dispatchEvent(new Event('ops:recent'))
-}
+// 实现移到 ./recent：按登录用户隔离存储（A-26-1），这里保留原导出面并加 React 侧的订阅 hook。
+export { recentItems, rememberRecent, setRecentOwner, type RecentItem } from './recent'
 
 export function useRecentWorks(limit = 5): RecentItem[] {
   const [list, setList] = useState(() => recentItems())

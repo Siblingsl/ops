@@ -308,7 +308,7 @@ export function TitleCard({ work, setWork, readOnly, desktopPresentation = false
     {favs.length > 0 && (
       <div>
         <div className="mb-1.5 text-[12px] font-medium text-mist-600">收藏的候选</div>
-        <div className="grid gap-2 sm:grid-cols-2">{favs.map(titleRow)}</div>
+        <div className="grid gap-2">{favs.map(titleRow)}</div>
       </div>
     )}
     {titles.length > 0 && (
@@ -321,7 +321,8 @@ export function TitleCard({ work, setWork, readOnly, desktopPresentation = false
         {groups.map((g) => (
           <div key={g}>
             <div className="mb-1 text-[11.5px] font-medium text-mist-500">{g}</div>
-            <div className="grid gap-2 sm:grid-cols-2">{titles.filter((t) => t.style.replace('（改写自候选）', '') === g).map(titleRow)}</div>
+            {/* 候选标题要整句可读：三栏布局下 1280 主流视口的中栏只有约 400px，两列会把 20 字候选挤成每行 4 字（Web 2F-3 修复同理），固定单列。 */}
+            <div className="grid gap-2">{titles.filter((t) => t.style.replace('（改写自候选）', '') === g).map(titleRow)}</div>
           </div>
         ))}
         <RefsNote refs={titleRefs} callId={titleCall} sampleText={titles.map((t) => t.text).join('\n')} onRetry={readOnly ? undefined : genTitles} />
