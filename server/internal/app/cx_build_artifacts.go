@@ -286,14 +286,12 @@ func cxBuildArtifactKind(kind string) bool {
 }
 
 func cxBuildArtifactMatchesTarget(kind string, targets []string) bool {
-	accepted := map[string]string{"stable_html": "stable_html", "png": "long_image", "zip": "xhs_cards"}
-	if target, ok := accepted[kind]; ok {
-		for _, selected := range targets {
-			if selected == target {
-				return true
-			}
+	// 产物形态到目标的映射：zip 同时服务组图与封面交付包。
+	accepted := map[string][]string{"stable_html": {"stable_html"}, "png": {"long_image"}, "zip": {"xhs_cards", "cover_images"}}
+	for _, target := range accepted[kind] {
+		if cxHasCXBuildTarget(targets, target) {
+			return true
 		}
-		return false
 	}
 	if kind == "html" {
 		return cxHasCXBuildTarget(targets, "wechat_html") || cxHasCXBuildTarget(targets, "stable_html") || cxHasCXBuildTarget(targets, "long_image")

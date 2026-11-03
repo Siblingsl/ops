@@ -11,6 +11,7 @@ import { del, errorMessage, get, patch, post } from '@/lib/api'
 import { assetUrl } from '@/lib/api-base'
 import type { Asset, CropBox, LibraryAsset, Work } from '@/lib/types'
 import { waitJob } from '@/lib/v3'
+import { CoverBuildPanel } from './CoverBuildPanel'
 import { useRegisterFlush } from './work-save'
 
 // ---------- 配图与封面 ----------
@@ -208,6 +209,7 @@ export function ImagesCard({ work, setWork, readOnly, upload, hidden = false }: 
           )}
         </div>
       )}
+      {cover && !toutiao && <CoverBuildPanel work={work} canWrite={!readOnly} />}
       {work.assets.length === 0 ? (
         <button disabled={readOnly} onClick={() => input.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files) }}
           className="flex w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-mist-200 py-10 text-mist-400 transition hover:border-ink-300 hover:text-ink-600">

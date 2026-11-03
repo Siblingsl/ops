@@ -118,10 +118,20 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 		return err
 	}
 	var cardsOptions cxBuildCardsOptions
+	var coverOptions cxBuildCoverOptions
 	if cxHasCXBuildTarget(targets, "xhs_cards") {
 		cardsOptions, err = cxBuildCardsOptionsFromParams(paramsJSON)
 		if err != nil {
 			return cxFailAndCommit(ctx, tx, buildID, apiErr(http.StatusConflict, "build_input_mismatch", "冻结的组图构建参数无法解析"))
+		}
+	}
+	if cxHasCXBuildTarget(targets, "cover_images") {
+		coverOptions, err = cxBuildCoverOptionsFromParams(paramsJSON)
+		if err != nil {
+			return cxFailAndCommit(ctx, tx, buildID, apiErr(http.StatusConflict, "build_input_mismatch", "冻结的封面构建参数无法解析"))
+		}
+		if _, err := cxCoverPresetsCanonical(coverOptions.Presets); err != nil {
+			return cxFailAndCommit(ctx, tx, buildID, apiErr(http.StatusConflict, "build_input_mismatch", "冻结的封面预设集合无效"))
 		}
 	}
 	currentSnapshot, revision, _, _, err := cxBuildSourceSnapshot(ctx, tx, workspaceID, workID, 0, true, cardsOptions.DNAVersion)
@@ -134,6 +144,8 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 	expectedContract := cxrendercontract.WechatHTMLV1
 	if cxHasCXBuildTarget(targets, "xhs_cards") {
 		expectedContract = cxCardsTemplateVersion
+	} else if cxHasCXBuildTarget(targets, "cover_images") {
+		expectedContract = cxCoverTemplateVersion
 	}
 	if input.SourceHash != sourceHash || input.ParamsHash != paramsHash || input.RendererReceipt.RendererContractVersion != expectedContract {
 		return cxFailAndCommit(ctx, tx, buildID, apiErr(http.StatusConflict, "build_input_mismatch", "完成请求与已冻结的构建输入不一致"))
@@ -239,6 +251,20 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 		validation["cards"] = map[string]any{
 			"template": cardsOptions.Template, "ratio": cardsOptions.Ratio, "template_version": cardsOptions.TemplateVersion,
 			"count": len(entries), "entries": entries,
+		}
+	}
+	if cxTargetSelected(targets, "cover_images") {
+		zips := cxArtifactsOfKind(artifacts, "zip")
+		if len(zips) != 1 {
+			return cxFailAndCommit(ctx, tx, buildID, apiErr(http.StatusUnprocessableEntity, "build_artifacts_missing", "封面构建缺少唯一的 ZIP 交付包"))
+		}
+		entries, err := cxValidateCoverZIP(zips[0].Data, coverOptions)
+		if err != nil {
+			return cxFailAndCommit(ctx, tx, buildID, err)
+		}
+		// 逐预设像素与文件名（平台+像素）写入 validation，manifest 引用同一份摘要。
+		validation["covers"] = map[string]any{
+			"template_version": cxCoverTemplateVersion, "count": len(entries), "entries": entries,
 		}
 	}
 	if needHTML {
@@ -367,7 +393,7 @@ func cxSelectBuildOutputs(targets []string, artifacts []cxBuildArtifact, submitt
 		case "xhs_cards":
 			expectedKinds = append(expectedKinds, "zip")
 		case "cover_images":
-			return nil, apiErr(http.StatusConflict, "build_target_not_ready", "封面产物尚未达到构建校验条件")
+			expectedKinds = append(expectedKinds, "zip")
 		default:
 			return nil, apiErr(http.StatusUnprocessableEntity, "target_not_allowed", "构建目标无效")
 		}

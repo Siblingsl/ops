@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -87,51 +88,73 @@ func normalizeCXBuildTargets(input []string) ([]string, error) {
 	return ordered, nil
 }
 
-func decodeCXBuildOptions(raw json.RawMessage, targets []string) (map[string]any, cxBuildCardsOptions, error) {
+func decodeCXBuildOptions(raw json.RawMessage, targets []string) (map[string]any, cxBuildCardsOptions, cxBuildCoverOptions, error) {
 	var cardsOptions cxBuildCardsOptions
-	hasCards := false
+	var coverOptions cxBuildCoverOptions
+	hasCards, hasCover := false, false
 	for _, target := range targets {
 		if target == "xhs_cards" {
 			hasCards = true
 		}
+		if target == "cover_images" {
+			hasCover = true
+		}
 	}
-	if !hasCards {
+	if !hasCards && !hasCover {
 		if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-			return map[string]any{}, cardsOptions, nil
+			return map[string]any{}, cardsOptions, coverOptions, nil
 		}
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.UseNumber()
 		var options map[string]any
 		if err := dec.Decode(&options); err != nil || options == nil {
-			return nil, cardsOptions, validation("构建 options 必须为对象")
+			return nil, cardsOptions, coverOptions, validation("构建 options 必须为对象")
 		}
 		var extra any
 		if err := dec.Decode(&extra); err != io.EOF {
-			return nil, cardsOptions, validation("构建 options 格式不正确")
+			return nil, cardsOptions, coverOptions, validation("构建 options 格式不正确")
 		}
 		if len(options) != 0 {
-			return nil, cardsOptions, validation("当前阶段不接受尚未登记的构建 options")
+			return nil, cardsOptions, coverOptions, validation("当前阶段不接受尚未登记的构建 options")
 		}
-		return options, cardsOptions, nil
+		return options, cardsOptions, coverOptions, nil
 	}
-	// xhs_cards 只接受已登记的组图 options；wechat 目标不能与组图目标混在一次构建里。
+	// 专用目标只接受各自已登记的 options，且不能与其他产物目标混在一次构建里：
+	// options 的语义按目标分派，混合会让同一字段在两个目标下含义不同。
 	if len(targets) != 1 {
-		return nil, cardsOptions, validation("小红书组图构建不能与其他产物目标混合")
+		if hasCards {
+			return nil, cardsOptions, coverOptions, validation("组图构建不能与其他产物目标混合")
+		}
+		return nil, cardsOptions, coverOptions, validation("封面构建不能与其他产物目标混合")
 	}
+	if hasCards {
+		if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return nil, cardsOptions, coverOptions, validationFields("组图构建必须提交已确认的卡片计划", map[string]string{"options": "required"})
+		}
+		if err := json.Unmarshal(raw, &cardsOptions); err != nil {
+			return nil, cardsOptions, coverOptions, validation("组图构建 options 字段无效或包含未登记字段")
+		}
+		if err := cxValidateCardsBuildOptions(cardsOptions); err != nil {
+			return nil, cardsOptions, coverOptions, err
+		}
+		value, err := cxCardsBuildOptionValue(cardsOptions)
+		if err != nil {
+			return nil, cardsOptions, coverOptions, err
+		}
+		return value, cardsOptions, coverOptions, nil
+	}
+	// cover_images：presets 以平台+像素标识，服务端固定为设计顺序后再进冻结参数。
 	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil, cardsOptions, validationFields("组图构建必须提交已确认的卡片计划", map[string]string{"options": "required"})
+		return nil, cardsOptions, coverOptions, validationFields("封面构建必须提交 cover_presets 预设集合", map[string]string{"options": "required"})
 	}
-	if err := json.Unmarshal(raw, &cardsOptions); err != nil {
-		return nil, cardsOptions, validation("组图构建 options 字段无效或包含未登记字段")
+	if err := json.Unmarshal(raw, &coverOptions); err != nil {
+		return nil, cardsOptions, coverOptions, validation("封面构建 options 字段无效或包含未登记字段")
 	}
-	if err := cxValidateCardsBuildOptions(cardsOptions); err != nil {
-		return nil, cardsOptions, err
-	}
-	value, err := cxCardsBuildOptionValue(cardsOptions)
+	value, err := cxCoverBuildOptionValue(coverOptions)
 	if err != nil {
-		return nil, cardsOptions, err
+		return nil, cardsOptions, coverOptions, err
 	}
-	return value, cardsOptions, nil
+	return value, cardsOptions, coverOptions, nil
 }
 
 func cxTargetAllowed(platform, contentFormat, target string) bool {
@@ -169,15 +192,19 @@ func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	// 排版契约按产物类型分别登记：公众号 HTML 走 wechat-html/v1，组图走 ops.xhs-cards/v1。
+	// 排版契约按产物类型分别登记：公众号 HTML 走 wechat-html/v1，组图走 ops.xhs-cards/v1，封面走 ops.cover-images/v1。
 	if cxHasCXBuildTarget(targets, "xhs_cards") {
 		if in.RendererContractVersion != cxCardsTemplateVersion {
 			return apiErr(http.StatusConflict, "renderer_version_mismatch", "当前服务端未登记此组图模板版本")
 		}
+	} else if cxHasCXBuildTarget(targets, "cover_images") {
+		if in.RendererContractVersion != cxCoverTemplateVersion {
+			return apiErr(http.StatusConflict, "renderer_version_mismatch", "当前服务端未登记此封面契约版本")
+		}
 	} else if !cxrendercontract.SupportsWechatHTML(in.RendererContractVersion) {
 		return apiErr(http.StatusConflict, "renderer_version_mismatch", "当前服务端未登记此排版契约版本")
 	}
-	options, cardsOptions, err := decodeCXBuildOptions(in.Options, targets)
+	options, cardsOptions, coverOptions, err := decodeCXBuildOptions(in.Options, targets)
 	if err != nil {
 		return err
 	}
@@ -222,11 +249,9 @@ func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
 		if !cxTargetAllowed(platform, contentFormat, target) {
 			return apiErr(http.StatusUnprocessableEntity, "target_not_allowed", "所选产物不适用于此平台或作品形态")
 		}
-		if target == "cover_images" {
-			return apiErr(http.StatusConflict, "build_target_not_ready", "该产物的视觉与隐私校验依赖尚未完成，暂不能创建构建")
-		}
 	}
-	// 语法预检只服务公众号 HTML 排版；组图卡片是纯文本，不因公众号语法规则阻断。
+	// 语法预检只服务公众号 HTML 排版；组图卡片是纯文本、封面是既有图片的裁剪输出，
+	// 都不因公众号语法规则阻断。
 	if cxHasCXBuildTarget(targets, "xhs_cards") {
 		if platform != "xhs" {
 			return apiErr(http.StatusUnprocessableEntity, "target_not_allowed", "组图构建仅适用于小红书作品")
@@ -251,6 +276,11 @@ func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
 			if inputHash != ref.InputHash || resultRevision != ref.ResultRevision {
 				return apiErr(http.StatusConflict, "visual_plan_stale", "组图计划在预览后已变化，请重新预览构建参数")
 			}
+		}
+	} else if cxHasCXBuildTarget(targets, "cover_images") {
+		// 封面构建前提以冻结快照复核：预设只允许当前平台合法项，且作品已选定封面。
+		if err := cxValidateCoverBuildAgainstSnapshot(coverOptions, platform, snapshot); err != nil {
+			return err
 		}
 	} else if report := cxBuildSyntaxReport(snapshot, revision); report.HasErrors {
 		return apiErr(http.StatusUnprocessableEntity, "render_unsupported_syntax", "当前稿件包含不能可靠排版的语法").With(report)
@@ -380,6 +410,10 @@ func cxBuildSourceSnapshot(ctx context.Context, tx pgx.Tx, workspaceID, workID u
 	}
 	coverCrops, err := cxBuildParseOptionalJSON(coverRaw)
 	if err != nil {
+		return nil, 0, "", "", err
+	}
+	// 裁剪坐标是 0..1 的小数，必须按快照契约转成定点字符串后才能进 canonical JSON。
+	if coverCrops, err = cxFixedPointDecimals(coverCrops); err != nil {
 		return nil, 0, "", "", err
 	}
 	assets, err := cxBuildReadAssets(ctx, tx, workspaceID, accountID, workID, coverID)
@@ -649,6 +683,47 @@ func cxBuildParseOptionalJSON(raw []byte) (any, error) {
 		return nil, err
 	}
 	return value, nil
+}
+
+// cxFixedPointDecimals 把快照里的 JSON 小数转成定点字符串（24 §4.6：小数必须以
+// 定点字符串进入快照与参数哈希）。整数拼写保留为数字；小数保留原拼写，指数形式
+// （json.Marshal 对极小值可能输出 1e-06）按最短定点表示归一，保证同库数据同哈希。
+// 没有 cover_crops 的旧构建不受影响；带裁剪坐标的构建此前会在 Marshal 处 500。
+func cxFixedPointDecimals(value any) (any, error) {
+	switch value := value.(type) {
+	case json.Number:
+		spelling := string(value)
+		if !strings.ContainsAny(spelling, ".eE") {
+			return value, nil
+		}
+		parsed, err := strconv.ParseFloat(spelling, 64)
+		if err != nil {
+			return nil, fmt.Errorf("canonical JSON decimals must be fixed-point strings: %q", spelling)
+		}
+		return strconv.FormatFloat(parsed, 'f', -1, 64), nil
+	case map[string]any:
+		out := make(map[string]any, len(value))
+		for key, item := range value {
+			converted, err := cxFixedPointDecimals(item)
+			if err != nil {
+				return nil, err
+			}
+			out[key] = converted
+		}
+		return out, nil
+	case []any:
+		out := make([]any, len(value))
+		for index, item := range value {
+			converted, err := cxFixedPointDecimals(item)
+			if err != nil {
+				return nil, err
+			}
+			out[index] = converted
+		}
+		return out, nil
+	default:
+		return value, nil
+	}
 }
 
 func cxBuildSyntaxReport(snapshot map[string]any, revision int) markdownsyntax.Report {

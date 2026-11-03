@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"image/png"
-	"io"
 	"net/http"
 	"path"
 	"strconv"
@@ -279,50 +277,7 @@ func cxValidateCardsZIP(data []byte, options cxBuildCardsOptions) ([]cxCardsZIPE
 }
 
 func cxInspectCardsPNG(file *zip.File, name string, width, height int) (cxCardsZIPEntry, *APIError) {
-	stream, err := file.Open()
-	if err != nil {
-		return cxCardsZIPEntry{}, apiErr(http.StatusUnprocessableEntity, "cards_zip_invalid", "组图交付包条目无法读取")
-	}
-	defer stream.Close()
-	data, err := io.ReadAll(io.LimitReader(stream, cxCardsZipMaxEntryBytes+1))
-	if err != nil || int64(len(data)) > cxCardsZipMaxEntryBytes {
-		return cxCardsZIPEntry{}, apiErr(http.StatusUnprocessableEntity, "cards_zip_invalid", "组图交付包条目无法完整读取")
-	}
-	if !strings.HasSuffix(strings.ToLower(name), ".png") || len(data) < 8 || !bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")) {
-		return cxCardsZIPEntry{}, apiErr(http.StatusUnprocessableEntity, "cards_image_invalid", "组图交付包只接受 PNG 条目")
-	}
-	config, err := png.DecodeConfig(bytes.NewReader(data))
-	if err != nil || config.Width != width || config.Height != height {
-		return cxCardsZIPEntry{}, apiErr(http.StatusUnprocessableEntity, "cards_image_invalid", "组图卡片像素与所选比例不一致").With(map[string]any{
-			"expected_width": width, "expected_height": height,
-		})
-	}
-	decoded, err := png.Decode(bytes.NewReader(data))
-	if err != nil {
-		return cxCardsZIPEntry{}, apiErr(http.StatusUnprocessableEntity, "cards_image_invalid", "组图卡片 PNG 无法完整解码")
-	}
-	bounds := decoded.Bounds()
-	first := decoded.At(bounds.Min.X, bounds.Min.Y)
-	firstR, firstG, firstB, firstA := first.RGBA()
-	varies, visible := false, false
-	for y := bounds.Min.Y; y < bounds.Max.Y && (!varies || !visible); y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, a := decoded.At(x, y).RGBA()
-			if r != firstR || g != firstG || b != firstB || a != firstA {
-				varies = true
-			}
-			if a > 0 {
-				visible = true
-			}
-			if varies && visible {
-				break
-			}
-		}
-	}
-	if !visible || !varies {
-		return cxCardsZIPEntry{}, apiErr(http.StatusUnprocessableEntity, "cards_image_invalid", "组图卡片没有可辨识的图像内容")
-	}
-	return cxCardsZIPEntry{Name: name, Width: config.Width, Height: config.Height, Bytes: int64(len(data)), SHA256: cxSHA256(data)}, nil
+	return cxInspectZIPEntryPNG(file, name, width, height, cxCardsPNGCodes, "组图卡片")
 }
 
 // cxValidateCardsZIPSafety 是上传阶段的基础检查：不信任扩展名，先挡穿越路径与解压炸弹。
