@@ -7,7 +7,8 @@ import { join, resolve } from 'node:path'
  * DEV-CX10 / FR-CX-11：真实 Electron 客户端里粘贴图片入库（单图）。
  *
  * 与浏览器端同一契约，但这里跑的是桌面 presentation（步骤流 + 桌面工具条），
- * 用来证明桌面工作台没有绕开"同作品 sha256 去重 / 锚点保护 / 多图与图文混排提示"。
+ * 用来证明桌面工作台没有绕开"同作品 sha256 去重 / 锚点保护 / 多图进本地队列逐张确认
+ * （Q-CX-05，90 D-165）/ 图文混排提示"。
  */
 
 async function api(page: Page, origin: string, method: string, path: string, data?: unknown) {
@@ -202,21 +203,57 @@ test('DEV-CX10 桌面粘贴图片的锚点保护与多图、图文混排提示',
     expect((await api(page, origin, 'GET', `/works/${work.id}`) as { assets: unknown[] }).assets).toHaveLength(1)
     await page.unroute(dedupeUpload)
 
-    // 2) 多图一次粘贴：明确提示，逐张来。
+    // 2) 多图一次粘贴：进入本地待处理队列，逐张确认后才入库（Q-CX-05，90 D-165）。
     let uploads = 0
     page.on('request', (r) => { if (r.method() === 'POST' && dedupeUpload.test(r.url())) uploads++ })
     expect(await paste(page, selector, { count: 3 })).toBeTruthy()
-    await expect(page.getByText(/一次只能粘贴一张图片（本次 3 张）/)).toBeVisible()
+    await expect(page.getByText(/已加入待处理队列（3 张）/)).toBeVisible()
+    const queue = page.getByTestId('paste-image-queue')
+    await expect(queue).toBeVisible()
+    await expect(queue.getByTestId('paste-queue-item')).toHaveCount(3)
     await page.waitForTimeout(600)
     expect(uploads).toBe(0)
 
-    // 3) 图文混排：只粘文字，图片不静默丢弃，也不上传。
+    // 移除一项：不入库，队列变 2；逐张确认后同字节复用同一图片位。
+    const items = queue.getByTestId('paste-queue-item')
+    await items.nth(0).getByRole('button', { name: '移除该图片' }).click()
+    await expect(items).toHaveCount(2)
+    await items.nth(0).getByRole('button', { name: '确认入库' }).click()
+    await expect(items.nth(0).getByText('已入库')).toBeVisible()
+    await expect(editor.locator('img')).toHaveCount(1)
+    await items.nth(1).getByRole('button', { name: '确认入库' }).click()
+    await expect(items.nth(1).getByText('已入库')).toBeVisible()
+    await expect(editor.locator('img')).toHaveCount(2)
+    expect(uploads).toBe(2)
+
+    // 失败可单项重试：第一次上传被中断 → 队列项标失败 → 重试成功入库。
+    let attempts = 0
+    await page.route(dedupeUpload, async (route) => {
+      if (route.request().method() !== 'POST') return route.continue()
+      attempts += 1
+      if (attempts === 1) return route.abort()
+      return route.continue()
+    })
+    expect(await paste(page, selector, { count: 2 })).toBeTruthy()
+    await expect(queue.getByTestId('paste-queue-item')).toHaveCount(4)
+    const retryItem = items.nth(2)
+    await retryItem.getByRole('button', { name: '确认入库' }).click()
+    await expect(retryItem.getByText('入库失败')).toBeVisible()
+    await expect(editor.locator('img')).toHaveCount(2)
+    await retryItem.getByRole('button', { name: '重试' }).click()
+    await expect(retryItem.getByText('已入库')).toBeVisible()
+    await expect(editor.locator('img')).toHaveCount(3)
+    // 前 2 张成功 + 失败重试各发一次（被中断的那次也计入请求数）。
+    expect(uploads).toBe(4)
+    await page.unroute(dedupeUpload)
+
+    // 3) 图文混排：只粘文字，图片不静默丢弃，也不上传（正文维持前面队列已插入的 3 张）。
     expect(await paste(page, selector, { text: '只粘这段文字' })).toBeTruthy()
     await expect(page.getByText(/剪贴板里同时有文字和图片/)).toBeVisible()
     await expect(editor).toContainText('只粘这段文字')
-    await expect(editor.locator('img')).toHaveCount(0)
+    await expect(editor.locator('img')).toHaveCount(3)
     await page.waitForTimeout(600)
-    expect(uploads).toBe(0)
+    expect(uploads).toBe(4)
     expect((await api(page, origin, 'GET', `/works/${work.id}`) as { assets: unknown[] }).assets).toHaveLength(1)
   } finally {
     await shutdown(app, page)

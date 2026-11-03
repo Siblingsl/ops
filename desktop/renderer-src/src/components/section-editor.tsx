@@ -4,8 +4,8 @@ import Placeholder from '@tiptap/extension-placeholder'
 import { BubbleMenu, EditorContent, useEditor } from '@tiptap/react'
 import type { EditorView } from '@tiptap/pm/view'
 import StarterKit from '@tiptap/starter-kit'
-import { Bold, Heading3, ImagePlus, Italic, Link2, List, ListOrdered, Quote, Redo2, Undo2 } from 'lucide-react'
-import React, { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
+import { Bold, Check, Heading3, ImagePlus, Italic, Link2, List, ListOrdered, Quote, Redo2, RotateCcw, Trash2, Undo2 } from 'lucide-react'
+import React, { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { Markdown } from 'tiptap-markdown'
 import { apiBase, assetUrl } from '@/lib/api-base'
 import { cn } from './ui'
@@ -63,6 +63,15 @@ interface Props {
   onPasteNotice?: (message: string) => void
 }
 
+/** Q-CX-05（90 D-165）：多图粘贴/拖入的本地待处理队列——每图独立确认后才逐张入库。 */
+type PasteQueueItem = {
+  id: string
+  file: File
+  preview: string
+  status: 'pending' | 'uploading' | 'inserted' | 'failed'
+}
+const pasteQueueLimit = 10
+
 function ToolBtn({ active, onClick, label, children }: { active?: boolean; onClick: () => void; label: string; children: React.ReactNode }) {
   return (
     <button type="button" title={label} aria-label={label} onMouseDown={(e) => e.preventDefault()} onClick={onClick}
@@ -85,20 +94,70 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
   pasteNoticeRef.current = onPasteNotice
   // 文档版本：粘贴锚点只在版本未变时有效，避免上传完成后把图片插到错误位置。
   const tokenRef = useRef(0)
-
-  // FR-CX-11：先记锚点再上传；文档在等待期间被修改（撤销、删段、重排）则放弃自动插入。
-  const insertPasted = async (view: EditorView, file: File, pos: number, token: number) => {
-    const url = await pasteImageRef.current?.(file)
-    if (!url) return
-    if (view.isDestroyed) return
-    if (tokenRef.current !== token) {
-      pasteNoticeRef.current?.('内容已变化，图片已入库但没有自动插入；可用工具栏「插入图片」放到想要的位置。')
+  // Q-CX-05：多图粘贴的本地待处理队列。单图粘贴仍走原直入库路径，不改既有行为。
+  const [pasteQueue, setPasteQueue] = useState<PasteQueueItem[]>([])
+  const queueRef = useRef<PasteQueueItem[]>([])
+  const queueSeqRef = useRef(0)
+  const setQueue = (next: PasteQueueItem[]) => {
+    queueRef.current = next
+    setPasteQueue(next)
+  }
+  const enqueuePasted = (files: File[]) => {
+    const current = queueRef.current
+    const room = Math.max(0, pasteQueueLimit - current.length)
+    if (room === 0) {
+      pasteNoticeRef.current?.(`待处理队列已满（${pasteQueueLimit} 张），请先逐张确认入库。`)
       return
     }
-    const node = view.state.schema.nodes.image?.create({ src: url })
-    if (!node) return
-    view.dispatch(view.state.tr.insert(Math.min(pos, view.state.doc.content.size), node))
+    if (files.length > room) pasteNoticeRef.current?.(`待处理队列最多保留 ${pasteQueueLimit} 张，本次已收前 ${room} 张。`)
+    else pasteNoticeRef.current?.(`已加入待处理队列（${files.length} 张），请逐张确认入库。`)
+    const items = files.slice(0, room).map((file) => {
+      queueSeqRef.current += 1
+      return { id: `pq-${queueSeqRef.current}`, file, preview: URL.createObjectURL(file), status: 'pending' as const }
+    })
+    setQueue([...current, ...items])
   }
+
+  // FR-CX-11：先记锚点再上传；文档在等待期间被修改（撤销、删段、重排）则放弃自动插入。
+  // 返回值供队列使用：true = 已入库（无论是否自动插入），false = 入库失败可重试。
+  const insertPasted = async (view: EditorView, file: File, pos: number, token: number): Promise<boolean> => {
+    const url = await pasteImageRef.current?.(file)
+    if (!url) return false
+    if (view.isDestroyed) return true
+    if (tokenRef.current !== token) {
+      pasteNoticeRef.current?.('内容已变化，图片已入库但没有自动插入；可用工具栏「插入图片」放到想要的位置。')
+      return true
+    }
+    const node = view.state.schema.nodes.image?.create({ src: url })
+    if (!node) return false
+    view.dispatch(view.state.tr.insert(Math.min(pos, view.state.doc.content.size), node))
+    return true
+  }
+
+  const confirmQueued = async (item: PasteQueueItem) => {
+    if (!editor || editor.isDestroyed || !editor.isEditable) return
+    if (item.status !== 'pending' && item.status !== 'failed') return
+    setQueue(queueRef.current.map((x) => (x.id === item.id ? { ...x, status: 'uploading' as const } : x)))
+    const view = editor.view
+    // 锚点取「确认时刻」的光标：用户可以先移动到想插图的位置，再逐张确认。
+    const ok = await insertPasted(view, item.file, view.state.selection.from, tokenRef.current)
+    setQueue(queueRef.current.map((x) => (x.id === item.id ? { ...x, status: ok ? 'inserted' as const : 'failed' as const } : x)))
+  }
+
+  const removeQueued = (item: PasteQueueItem) => {
+    URL.revokeObjectURL(item.preview)
+    setQueue(queueRef.current.filter((x) => x.id !== item.id))
+  }
+
+  useEffect(() => {
+    // 切换段落（resetKey 变化）时，队列属于上一段的操作上下文：放弃全部待处理项并释放预览。
+    if (queueRef.current.length === 0) return
+    for (const item of queueRef.current) URL.revokeObjectURL(item.preview)
+    setQueue([])
+  }, [resetKey])
+  useEffect(() => () => {
+    for (const item of queueRef.current) URL.revokeObjectURL(item.preview)
+  }, [])
 
   const handlePasteFiles = (view: EditorView, event: ClipboardEvent) => {
     const data = event.clipboardData
@@ -116,7 +175,8 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
       return true
     }
     if (files.length > 1) {
-      pasteNoticeRef.current?.(`一次只能粘贴一张图片（本次 ${files.length} 张），请逐张粘贴。`)
+      // Q-CX-05 拍板（90 D-165）：多图进本地待处理队列，逐张确认入库；单图直传路径不变。
+      enqueuePasted(files)
       return true
     }
     void insertPasted(view, files[0], view.state.selection.from, tokenRef.current)
@@ -130,7 +190,7 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
     event.preventDefault()
     if (!view.editable || !pasteImageRef.current) return true
     if (files.length > 1) {
-      pasteNoticeRef.current?.(`一次只能拖入一张图片（本次 ${files.length} 张），请逐张拖入。`)
+      enqueuePasted(files)
       return true
     }
     const at = view.posAtCoords({ left: event.clientX, top: event.clientY })
@@ -246,6 +306,34 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
           </BubbleMenu>
         )}
       </div>
+      {pasteQueue.length > 0 && (
+        <div data-testid="paste-image-queue" className="mt-2 rounded-lg border border-mist-200 bg-mist-50/60 p-2 text-xs">
+          <p className="mb-1.5 font-medium text-mist-700">粘贴图片待处理（逐张确认后才入库）</p>
+          <ul className="space-y-1.5">
+            {pasteQueue.map((item) => (
+              <li key={item.id} data-testid="paste-queue-item" className="flex items-center gap-2 rounded-md bg-white p-1.5">
+                <img src={item.preview} alt="" className="size-10 rounded object-cover" />
+                <span className="min-w-0 flex-1 truncate text-mist-700">{item.file.name} · {Math.max(1, Math.round(item.file.size / 1024))} KB</span>
+                {item.status === 'pending' && <>
+                  <button type="button" className="cursor-pointer rounded-md border border-mist-200 px-2 py-0.5 text-mist-700 transition hover:bg-mist-100"
+                    onClick={() => void confirmQueued(item)}>确认入库</button>
+                  <button type="button" className="cursor-pointer rounded-md px-1.5 py-0.5 text-mist-500 transition hover:bg-mist-100" title="移除该图片"
+                    onClick={() => removeQueued(item)}><Trash2 className="size-3.5" /></button>
+                </>}
+                {item.status === 'uploading' && <span className="text-mist-500">入库中…</span>}
+                {item.status === 'inserted' && <span className="flex items-center gap-1 text-ink-700"><Check className="size-3.5" />已入库</span>}
+                {item.status === 'failed' && <>
+                  <span className="text-danger">入库失败</span>
+                  <button type="button" className="flex cursor-pointer items-center gap-1 rounded-md border border-mist-200 px-2 py-0.5 text-mist-700 transition hover:bg-mist-100"
+                    onClick={() => void confirmQueued(item)}><RotateCcw className="size-3.5" />重试</button>
+                  <button type="button" className="cursor-pointer rounded-md px-1.5 py-0.5 text-mist-500 transition hover:bg-mist-100" title="移除该图片"
+                    onClick={() => removeQueued(item)}><Trash2 className="size-3.5" /></button>
+                </>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }))
