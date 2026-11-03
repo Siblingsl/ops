@@ -2,6 +2,8 @@ module ops
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/giraffesyo/pdf v0.7.0
@@ -11,13 +13,13 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/tetratelabs/wazero v1.9.0
-	github.com/yuin/goldmark v1.7.8
-	golang.org/x/crypto v0.57.0
+	github.com/yuin/goldmark v1.7.17
+	golang.org/x/crypto v0.58.0
 	golang.org/x/image v0.46.0
-	golang.org/x/net v0.58.0
-	golang.org/x/sys v0.48.0
-	golang.org/x/term v0.46.0
-	golang.org/x/text v0.42.0
+	golang.org/x/net v0.62.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/term v0.47.0
+	golang.org/x/text v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -32,5 +34,5 @@ require (
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/sethvargo/go-retry v0.4.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
 )
