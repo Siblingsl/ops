@@ -71,6 +71,8 @@ test('Electron 选题池对齐原型并逐项点击筛选入口', async ({ page 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`/a/${account.id}/topics`)
   await expect(page.getByTestId('desktop-topics-layout')).toBeVisible()
+  const waterline = page.getByTestId('topic-stock-waterline')
+  await expect(waterline).toBeVisible()
   await page.locator('.desktop-topics-page').evaluate(async (element) => {
     await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished))
   })
@@ -92,6 +94,15 @@ test('Electron 选题池对齐原型并逐项点击筛选入口', async ({ page 
     '.desktop-topic-list', '.desktop-topic-details', '.desktop-topic-search', '.desktop-topic-filterbar > select',
   ]
   const prototypeSelectors = ['.tabs', '.filters', '.split-page', '#topic-list', '.details-panel', '.filters .input-wrap', '.filters select']
+  const waterlineSpace = await waterline.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    return rect.height + parseFloat(getComputedStyle(element).marginBottom)
+  })
+  const waterlineBounds = await waterline.boundingBox()
+  const layoutBounds = await page.getByTestId('desktop-topics-layout').boundingBox()
+  expect(waterlineBounds).not.toBeNull()
+  expect(layoutBounds).not.toBeNull()
+  expect(layoutBounds!.y - (waterlineBounds!.y + waterlineBounds!.height)).toBeCloseTo(16, 0)
   const layoutDiffs: Array<{ selector: string; dx: number; dy: number; dw: number; dh: number }> = []
   for (let index = 0; index < productSelectors.length; index++) {
     const actual = await page.locator(productSelectors[index]).evaluate((element) => {
@@ -102,7 +113,8 @@ test('Electron 选题池对齐原型并逐项点击筛选入口', async ({ page 
       const rect = element.getBoundingClientRect()
       return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
     })
-    layoutDiffs.push({ selector: productSelectors[index], dx: actual.x - expected.x, dy: actual.y - expected.y, dw: actual.width - expected.width, dh: actual.height - expected.height })
+    const belowWaterline = ['.desktop-topic-layout', '.desktop-topic-list', '.desktop-topic-details'].includes(productSelectors[index])
+    layoutDiffs.push({ selector: productSelectors[index], dx: actual.x - expected.x, dy: actual.y - expected.y - (belowWaterline ? waterlineSpace : 0), dw: actual.width - expected.width, dh: actual.height - expected.height })
   }
   const headerMetrics = await Promise.all([
     page.locator('.desktop-topics-page > div:first-child').evaluate((element) => ({ heading: element.querySelector('h1')!.getBoundingClientRect().toJSON(), description: element.querySelector('p')!.getBoundingClientRect().toJSON() })),

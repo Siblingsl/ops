@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { api, registerAccount } from './support'
 
-test('OPT60 放弃无需确认，九秒撤销恢复待定或已采用，失败不显示成功撤销', async ({ page }) => {
+test('OPT60 待定选题放弃后九秒内撤销，已采用不可放弃，失败不显示成功撤销', async ({ page }) => {
   const account = await registerAccount(page)
   const topics: { id: string; title: string; status: string }[] = []
   for (const status of ['pending', 'adopted']) {
@@ -14,6 +14,10 @@ test('OPT60 放弃无需确认，九秒撤销恢复待定或已采用，失败�
     await page.goto(`/a/${account.id}/topics?tab=${topic.status}`)
     const card = page.getByText(topic.title, { exact: true }).locator('..').locator('..').locator('..')
     await card.getByRole('button', { name: '更多', exact: true }).click()
+    if (topic.status === 'adopted') {
+      await expect(page.getByRole('button', { name: '放弃', exact: true })).toHaveCount(0)
+      continue
+    }
     await page.getByRole('button', { name: '放弃', exact: true }).click()
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect.poll(async () => (await api(page, 'GET', `/accounts/${account.id}/topics`)).find((t: { id: string }) => t.id === topic.id).status).toBe('dropped')
