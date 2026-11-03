@@ -46,7 +46,8 @@ test('E2E-22 模型能力自检与对话新建、改名、置顶、搜索、删�
   const capabilities = (await api(page, 'GET', '/model-providers')).find((p: { id: string }) => p.id === provider.id).capabilities
   expect(capabilities).toEqual(expect.arrayContaining([expect.objectContaining({ model: 'mock-agent-tested', tools_ok: true, vision_ok: true })]))
   await selftest.getByRole('button', { name: '关闭', exact: true }).click()
-  const tested = card.locator('span.inline-flex').filter({ has: page.getByText('mock-agent-tested', { exact: true }) })
+  // 模型条目已改为 data-testid="model-usable-row" 的行卡片（模型名 + 能力标签一行，可用性结论单独一行）。
+  const tested = card.locator('[data-testid="model-usable-row"]').filter({ has: page.getByText('mock-agent-tested', { exact: true }) })
   await expect(tested.getByText('工具调用·通过', { exact: true })).toBeVisible()
   await expect(tested.getByText('看图·通过', { exact: true })).toBeVisible()
   await page.getByRole('link', { name: 'AI 对话', exact: true }).first().click()

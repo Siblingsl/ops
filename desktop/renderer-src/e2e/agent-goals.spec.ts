@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { openDesktopAccountSwitcher } from './support'
 
 async function api(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(async ({ method, path, body }) => {
@@ -31,12 +32,13 @@ async function goalJourney(page: Page, baseURL: string, screenshot: string) {
   const privacy = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
   await expect(privacy).toBeVisible()
   await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
-  const accountButton = page.getByRole('button', { name: '选择操作账号', exact: true })
-  if (await accountButton.count()) await accountButton.click()
-  else await page.getByRole('button', { name: '对话设置', exact: true }).click()
-  const settings = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '对话设置', exact: true }) })
-  await settings.getByRole('combobox', { name: '选择账号', exact: true }).selectOption(account.id)
-  await settings.getByRole('button', { name: '关闭', exact: true }).click()
+  // DEV-AW12 后桌面对话跟随当前账号，没有「对话设置」对话框：经顶部账号切换器切换。
+  await openDesktopAccountSwitcher(page)
+  const picker = page.getByTestId('desktop-context-menu')
+  await picker.getByRole('tab', { name: /小红书/ }).click()
+  await picker.getByRole('button', { name: 'AW09 目标验收号', exact: true }).click()
+  await page.goto(`${baseURL}/agent`)
+  await expect(page.locator('.desktop-agent-workbench-meta')).toContainText('AW09 目标验收号')
   const sent = page.waitForResponse((response) => /\/agent\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
   await page.locator('textarea').last().fill('先简单核对近期运营表现。')
   await page.getByRole('button', { name: '发送', exact: true }).click()
@@ -45,8 +47,14 @@ async function goalJourney(page: Page, baseURL: string, screenshot: string) {
   const conversationID = page.url().split('/').pop()!
   await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).active_run).toBeNull()
 
-  await page.getByRole('button', { name: '任务目标与上下文整理' }).last().click()
   const desktop = page.locator('.desktop-agent-workbench')
+  if (await desktop.count() > 0) {
+    // 桌面形态：目标面板常驻「任务面板」侧栏，不再有独立的「任务目标与上下文整理」按钮。
+    const panelButton = page.getByRole('button', { name: '任务面板', exact: true })
+    if (await panelButton.getAttribute('aria-expanded') !== 'true') await panelButton.click()
+  } else {
+    await page.getByRole('button', { name: '任务目标与上下文整理' }).last().click()
+  }
   const panel = await desktop.count() > 0
     ? page.getByTestId('desktop-agent-side-panel')
     : page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '任务目标与上下文整理', exact: true }) })

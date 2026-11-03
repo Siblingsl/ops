@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { toggleDesktopTheme } from './support'
 
 async function api(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(async ({ method, path, body }) => {
@@ -61,10 +62,10 @@ test('DEV-AW12 Electron 主题、窗口宽度及缩放场景', async ({ baseURL 
         window.webContents.setZoomFactor(zoom)
       }, scenario)
       await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeGreaterThan(600)
-      const themeButton = page.getByRole('button', { name: /^切换到(深色|浅色)主题$/ })
+      // 主题切换入口在用户菜单内（DEV-AW12 后桌面顶栏不再直接露出主题按钮）。
       const theme = await page.locator('html').getAttribute('data-theme')
       if (theme !== scenario.theme) {
-        await themeButton.click()
+        await toggleDesktopTheme(page, scenario.theme === 'dark' ? '深色' : '浅色')
         await expect.poll(() => page.locator('html').getAttribute('data-theme')).toBe(scenario.theme)
       }
       const panel = page.getByRole('button', { name: '任务面板', exact: true })

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { mkdirSync } from 'node:fs'
 import { basename, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { openDesktopAccountSwitcher } from './support'
 
 async function api(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(async ({ method, path, body }) => {
@@ -33,12 +34,13 @@ async function modesJourney(page: Page, baseURL: string, screenshot: string) {
   await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
   await page.goto(`${baseURL}/agent`)
   await page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '智能体隐私说明', exact: true }) }).getByRole('button', { name: '我知道了', exact: true }).click()
-  const accountButton = page.getByRole('button', { name: '选择操作账号', exact: true })
-  if (await accountButton.count()) await accountButton.click()
-  else await page.getByRole('button', { name: '对话设置', exact: true }).click()
-  const settings = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '对话设置', exact: true }) })
-  await settings.getByRole('combobox', { name: '选择账号', exact: true }).selectOption(account.id)
-  await settings.getByRole('button', { name: '关闭', exact: true }).click()
+  // DEV-AW12 后桌面对话跟随当前账号，没有「对话设置」对话框：经顶部账号切换器切换。
+  await openDesktopAccountSwitcher(page)
+  const picker = page.getByTestId('desktop-context-menu')
+  await picker.getByRole('tab', { name: /小红书/ }).click()
+  await picker.getByRole('button', { name: '模式验收号', exact: true }).click()
+  await page.goto(`${baseURL}/agent`)
+  await expect(page.locator('.desktop-agent-workbench-meta')).toContainText('模式验收号')
   const selector = page.getByRole('combobox', { name: '对话模式', exact: true })
   await expect(selector).toHaveValue('execute')
   expect((await selector.boundingBox())!.width).toBeLessThanOrEqual(130)

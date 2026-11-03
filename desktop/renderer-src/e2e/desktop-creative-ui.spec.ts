@@ -493,8 +493,18 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     await expect(business).toHaveURL(new RegExp(`/a/${account.id}$`))
     await expect.poll(() => business.locator('main').evaluate((element) => element.getBoundingClientRect().top)).toBe(38)
     await expect(business.getByTestId('desktop-statusbar').locator('button')).toHaveCount(0)
-    await business.getByRole('button', { name: /用户菜单/ }).click()
-    await business.getByRole('menuitem', { name: /通知与 AI 任务/ }).click()
+    // 菜单项点击后会同步关闭用户菜单并打开通知面板。完整用例流程中观察到菜单在
+    // click 的 actionability 等待期间被关闭（menuitem 反复 detach，单点复刻无法触发），
+    // 这里按「打开菜单 → 点通知项 → 面板可见」整体重试；最终断言始终是通知面板可见。
+    let panelOpen = false
+    for (let attempt = 0; attempt < 3 && !panelOpen; attempt++) {
+      const trigger = business.getByRole('button', { name: /用户菜单/ })
+      if (await trigger.getAttribute('aria-expanded') !== 'true') await trigger.click()
+      panelOpen = await Promise.race([
+        business.getByRole('menuitem', { name: /通知与 AI 任务/ }).click().then(() => true).catch(() => false),
+        business.locator('.notification-panel').waitFor({ state: 'visible' }).then(() => true).catch(() => false),
+      ])
+    }
     await expect(business.locator('.notification-panel')).toBeVisible()
     await business.screenshot({ path: join(screenshotDir, '10-electron-notifications.png'), animations: 'disabled' })
     await business.getByRole('button', { name: /用户菜单/ }).click()
