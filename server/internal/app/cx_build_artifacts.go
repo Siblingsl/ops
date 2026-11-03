@@ -371,6 +371,10 @@ func cxInspectBuildArtifact(kind, name string, data []byte) (string, int, int, e
 		if extension != ".zip" || len(data) < 4 || !bytes.Equal(data[:4], []byte("PK\x03\x04")) {
 			return "", 0, 0, apiErr(http.StatusUnprocessableEntity, "artifact_invalid", "ZIP 产物格式无效")
 		}
+		// 上传阶段先挡穿越路径、重复条目与解压炸弹；像素与卡片对应关系由 complete 按冻结 options 复核。
+		if err := cxValidateCardsZIPSafety(data); err != nil {
+			return "", 0, 0, err
+		}
 		return "application/zip", 0, 0, nil
 	}
 	if kind == "json" {

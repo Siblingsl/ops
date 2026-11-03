@@ -5,6 +5,7 @@ import { errorMessage, get, patch, post } from '@/lib/api'
 import type { Asset, CXVisualDNAVersion, Section, Work } from '@/lib/types'
 import { ManualVisualCards } from './ManualVisualCards'
 import { VisualCardsPreview } from './VisualCardsPreview'
+import { CardsBuildPanel } from './CardsBuildPanel'
 
 type CompareBody = { left: string; right: string }
 type CardBody = string | CompareBody
@@ -68,6 +69,8 @@ interface VisualPlanBuildPreview {
   dna_version: number | null
   template_version: string
   cards: Array<Omit<VisualPlanCard, 'confirmed' | 'edited'>>
+  // AI 计划预览会回传所采用报告的冻结引用；创建构建时原样回传，params_hash 才能与预览对齐。
+  visual_plan?: { diagnosis_id: string; input_hash: string; result_revision: number } | null
   warnings: string[]
 }
 
@@ -429,6 +432,7 @@ export function VisualPlanPanel({ work, canWrite }: { work: Work; canWrite: bool
             <p className="break-all text-[10px] text-mist-400">source {buildPreview.source_hash} · params {buildPreview.params_hash}</p>
             <Notice tone="gamboge">这是只读构建输入预览；未创建构建任务或文件。组图渲染与隐私门禁通过前，仍不能导出 ZIP。</Notice>
             <VisualCardsPreview preview={buildPreview} work={work} />
+            <CardsBuildPanel preview={buildPreview} work={work} canWrite={canWrite} />
           </div>}
         </div>}
       </Card>

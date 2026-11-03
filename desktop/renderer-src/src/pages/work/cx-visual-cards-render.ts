@@ -284,7 +284,11 @@ export async function renderCXVisualCards(preview: CXVisualCardPreview, work: Wo
         if (fits) break
       }
 
-      const dataUrl = await toPng(surface.root, { width, height, pixelRatio: 1, backgroundColor: tokens.palette.background, cacheBust: false })
+      // html-to-image 会把节点计算样式整体内联进 SVG foreignObject，离屏定位（left:-12000px，
+      // 计算样式展开为 inset-inline）会让克隆体落在画布之外，产出"尺寸正确但只有背景色"的空白图。
+      // 捕获时把克隆根节点的逻辑 inset 归零（克隆体不挂载文档，不影响页面布局）。
+      const dataUrl = await toPng(surface.root, { width, height, pixelRatio: 1, backgroundColor: tokens.palette.background,
+        cacheBust: false, style: { position: 'relative', insetInline: '0', insetBlock: '0' } })
       checkDeadline()
       await pngDecoded(dataUrl, width, height)
       rendered.push({ name: surface.filename, dataUrl, width, height, overflow: fits ? [] : ['缩小三档字号后仍有文字超出卡片区域'] })

@@ -99,10 +99,6 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 		return err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
-	currentSnapshot, revision, _, _, err := cxBuildSourceSnapshot(ctx, tx, workspaceID, workID, 0, true)
-	if err != nil {
-		return err
-	}
 	var accountStatus string
 	if err := tx.QueryRow(ctx, `SELECT a.status FROM work w JOIN platform_account a ON a.id=w.account_id WHERE w.id=$1 AND a.workspace_id=$2`, workID, workspaceID).Scan(&accountStatus); err != nil {
 		return err
@@ -114,17 +110,32 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 	var deadline time.Time
 	var targets []string
 	var sourceHash, paramsHash string
-	var sourceJSON []byte
-	err = tx.QueryRow(ctx, `SELECT status,deadline_at,targets,source_hash,params_hash,source_snapshot
+	var sourceJSON, paramsJSON []byte
+	err = tx.QueryRow(ctx, `SELECT status,deadline_at,targets,source_hash,params_hash,source_snapshot,params
 		FROM work_build WHERE id=$1 AND workspace_id=$2 AND work_id=$3 FOR UPDATE`, buildID, workspaceID, workID).
-		Scan(&status, &deadline, &targets, &sourceHash, &paramsHash, &sourceJSON)
+		Scan(&status, &deadline, &targets, &sourceHash, &paramsHash, &sourceJSON, &paramsJSON)
+	if err != nil {
+		return err
+	}
+	var cardsOptions cxBuildCardsOptions
+	if cxHasCXBuildTarget(targets, "xhs_cards") {
+		cardsOptions, err = cxBuildCardsOptionsFromParams(paramsJSON)
+		if err != nil {
+			return cxFailAndCommit(ctx, tx, buildID, apiErr(http.StatusConflict, "build_input_mismatch", "冻结的组图构建参数无法解析"))
+		}
+	}
+	currentSnapshot, revision, _, _, err := cxBuildSourceSnapshot(ctx, tx, workspaceID, workID, 0, true, cardsOptions.DNAVersion)
 	if err != nil {
 		return err
 	}
 	if status != "running" {
 		return apiErr(http.StatusConflict, "build_not_running", "构建已结束、已取消或已超时")
 	}
-	if input.SourceHash != sourceHash || input.ParamsHash != paramsHash || input.RendererReceipt.RendererContractVersion != cxrendercontract.WechatHTMLV1 {
+	expectedContract := cxrendercontract.WechatHTMLV1
+	if cxHasCXBuildTarget(targets, "xhs_cards") {
+		expectedContract = cxCardsTemplateVersion
+	}
+	if input.SourceHash != sourceHash || input.ParamsHash != paramsHash || input.RendererReceipt.RendererContractVersion != expectedContract {
 		return cxFailAndCommit(ctx, tx, buildID, apiErr(http.StatusConflict, "build_input_mismatch", "完成请求与已冻结的构建输入不一致"))
 	}
 	hasLongImage := cxHasCXBuildTarget(targets, "long_image")
@@ -216,6 +227,20 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 	}
 	validation := map[string]any{"validator_version": cxbuildvalidate.ValidatorVersion, "image_evidence": []any{}, "unused_asset_ids": []string{}}
 	imageEvidence := []cxbuildvalidate.ImageEvidence{}
+	if cxTargetSelected(targets, "xhs_cards") {
+		zips := cxArtifactsOfKind(artifacts, "zip")
+		if len(zips) != 1 {
+			return cxFailAndCommit(ctx, tx, buildID, apiErr(http.StatusUnprocessableEntity, "build_artifacts_missing", "组图构建缺少唯一的 ZIP 交付包"))
+		}
+		entries, err := cxValidateCardsZIP(zips[0].Data, cardsOptions)
+		if err != nil {
+			return cxFailAndCommit(ctx, tx, buildID, err)
+		}
+		validation["cards"] = map[string]any{
+			"template": cardsOptions.Template, "ratio": cardsOptions.Ratio, "template_version": cardsOptions.TemplateVersion,
+			"count": len(entries), "entries": entries,
+		}
+	}
 	if needHTML {
 		report, validationErr := cxbuildvalidate.ValidateWechatHTML(base.Data, sections, allAssets, false)
 		if validationErr != nil {

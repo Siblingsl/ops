@@ -66,7 +66,10 @@ type cxCardsPreviewResponse struct {
 	DNAVersion      *int64               `json:"dna_version"`
 	TemplateVersion string               `json:"template_version"`
 	Cards           []cxCardsBuildOption `json:"cards"`
-	Warnings        []string             `json:"warnings"`
+	// VisualPlan 是 AI 计划预览采用报告的冻结引用；创建构建时必须原样回传，
+	// 否则 params_hash 会与用户看到的预览不一致，构建产物不可追溯。
+	VisualPlan map[string]any `json:"visual_plan,omitempty"`
+	Warnings   []string       `json:"warnings"`
 }
 
 func decodeCXCardsPreviewInput(r *http.Request) (cxCardsPreviewInput, error) {
@@ -258,7 +261,7 @@ func (s *Server) previewCXCards(w http.ResponseWriter, r *http.Request) error {
 		cards = append(cards, cxCardsBuildOption{CardID: card.CardID, Type: card.Type, SectionIDs: card.SectionIDs, Headline: card.Headline,
 			Body: card.Body, AssetIDs: card.AssetIDs, SourceRefs: card.SourceRefs})
 	}
-	snapshot, revision, platform, contentFormat, err := cxBuildSourceSnapshot(r.Context(), tx, actor.WorkspaceID, workID, input.BasisRevision, false)
+	snapshot, revision, platform, contentFormat, err := cxBuildSourceSnapshot(r.Context(), tx, actor.WorkspaceID, workID, input.BasisRevision, false, nil)
 	if err != nil {
 		return err
 	}
@@ -298,7 +301,8 @@ func (s *Server) previewCXCards(w http.ResponseWriter, r *http.Request) error {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	return ok(w, cxCardsPreviewResponse{SourceHash: sourceHash, ParamsHash: paramsHash, BasisRevision: revision, Template: input.Template,
-		Ratio: input.Ratio, DNAVersion: basis.DNAVersion, TemplateVersion: cxCardsTemplateVersion, Cards: cards, Warnings: warnings})
+		Ratio: input.Ratio, DNAVersion: basis.DNAVersion, TemplateVersion: cxCardsTemplateVersion, Cards: cards,
+		VisualPlan: planRef, Warnings: warnings})
 }
 
 func cxCardsPreviewSourceIDs(cards []cxCardsBuildOption) ([]uuid.UUID, []uuid.UUID) {

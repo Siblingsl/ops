@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -86,24 +87,51 @@ func normalizeCXBuildTargets(input []string) ([]string, error) {
 	return ordered, nil
 }
 
-func decodeCXBuildOptions(raw json.RawMessage) (map[string]any, error) {
+func decodeCXBuildOptions(raw json.RawMessage, targets []string) (map[string]any, cxBuildCardsOptions, error) {
+	var cardsOptions cxBuildCardsOptions
+	hasCards := false
+	for _, target := range targets {
+		if target == "xhs_cards" {
+			hasCards = true
+		}
+	}
+	if !hasCards {
+		if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return map[string]any{}, cardsOptions, nil
+		}
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		var options map[string]any
+		if err := dec.Decode(&options); err != nil || options == nil {
+			return nil, cardsOptions, validation("构建 options 必须为对象")
+		}
+		var extra any
+		if err := dec.Decode(&extra); err != io.EOF {
+			return nil, cardsOptions, validation("构建 options 格式不正确")
+		}
+		if len(options) != 0 {
+			return nil, cardsOptions, validation("当前阶段不接受尚未登记的构建 options")
+		}
+		return options, cardsOptions, nil
+	}
+	// xhs_cards 只接受已登记的组图 options；wechat 目标不能与组图目标混在一次构建里。
+	if len(targets) != 1 {
+		return nil, cardsOptions, validation("小红书组图构建不能与其他产物目标混合")
+	}
 	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return map[string]any{}, nil
+		return nil, cardsOptions, validationFields("组图构建必须提交已确认的卡片计划", map[string]string{"options": "required"})
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var options map[string]any
-	if err := dec.Decode(&options); err != nil || options == nil {
-		return nil, validation("构建 options 必须为对象")
+	if err := json.Unmarshal(raw, &cardsOptions); err != nil {
+		return nil, cardsOptions, validation("组图构建 options 字段无效或包含未登记字段")
 	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		return nil, validation("构建 options 格式不正确")
+	if err := cxValidateCardsBuildOptions(cardsOptions); err != nil {
+		return nil, cardsOptions, err
 	}
-	if len(options) != 0 {
-		return nil, validation("当前阶段不接受尚未登记的构建 options")
+	value, err := cxCardsBuildOptionValue(cardsOptions)
+	if err != nil {
+		return nil, cardsOptions, err
 	}
-	return options, nil
+	return value, cardsOptions, nil
 }
 
 func cxTargetAllowed(platform, contentFormat, target string) bool {
@@ -137,14 +165,19 @@ func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
 	if in.Client != "web" && in.Client != "desktop" {
 		return validationFields("构建客户端标识无效", map[string]string{"client": "仅支持 web 或 desktop"})
 	}
-	if !cxrendercontract.SupportsWechatHTML(in.RendererContractVersion) {
-		return apiErr(http.StatusConflict, "renderer_version_mismatch", "当前服务端未登记此排版契约版本")
-	}
 	targets, err := normalizeCXBuildTargets(in.Targets)
 	if err != nil {
 		return err
 	}
-	options, err := decodeCXBuildOptions(in.Options)
+	// 排版契约按产物类型分别登记：公众号 HTML 走 wechat-html/v1，组图走 ops.xhs-cards/v1。
+	if cxHasCXBuildTarget(targets, "xhs_cards") {
+		if in.RendererContractVersion != cxCardsTemplateVersion {
+			return apiErr(http.StatusConflict, "renderer_version_mismatch", "当前服务端未登记此组图模板版本")
+		}
+	} else if !cxrendercontract.SupportsWechatHTML(in.RendererContractVersion) {
+		return apiErr(http.StatusConflict, "renderer_version_mismatch", "当前服务端未登记此排版契约版本")
+	}
+	options, cardsOptions, err := decodeCXBuildOptions(in.Options, targets)
 	if err != nil {
 		return err
 	}
@@ -174,7 +207,7 @@ func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
-	snapshot, revision, platform, contentFormat, err := cxBuildSourceSnapshot(ctx, tx, workspaceID, workID, in.BasisRevision, true)
+	snapshot, revision, platform, contentFormat, err := cxBuildSourceSnapshot(ctx, tx, workspaceID, workID, in.BasisRevision, true, cardsOptions.DNAVersion)
 	if err != nil {
 		return err
 	}
@@ -189,11 +222,37 @@ func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
 		if !cxTargetAllowed(platform, contentFormat, target) {
 			return apiErr(http.StatusUnprocessableEntity, "target_not_allowed", "所选产物不适用于此平台或作品形态")
 		}
-		if target == "xhs_cards" || target == "cover_images" {
+		if target == "cover_images" {
 			return apiErr(http.StatusConflict, "build_target_not_ready", "该产物的视觉与隐私校验依赖尚未完成，暂不能创建构建")
 		}
 	}
-	if report := cxBuildSyntaxReport(snapshot, revision); report.HasErrors {
+	// 语法预检只服务公众号 HTML 排版；组图卡片是纯文本，不因公众号语法规则阻断。
+	if cxHasCXBuildTarget(targets, "xhs_cards") {
+		if platform != "xhs" {
+			return apiErr(http.StatusUnprocessableEntity, "target_not_allowed", "组图构建仅适用于小红书作品")
+		}
+		if err := cxValidateCardsBuildAgainstSnapshot(cardsOptions.Cards, snapshot); err != nil {
+			return err
+		}
+		// 计划引用必须指向本作品真实存在的报告，且摘要与版本未在预览后变化。
+		if ref, ok, err := parseCXCardsPlanRef(cardsOptions.VisualPlan); err != nil {
+			return err
+		} else if ok {
+			var inputHash string
+			var resultRevision int
+			err := tx.QueryRow(ctx, `SELECT input_hash,result_revision FROM content_diagnosis
+				WHERE id=$1 AND workspace_id=$2 AND work_id=$3 AND kind='visual_plan'`, ref.DiagnosisID, workspaceID, workID).Scan(&inputHash, &resultRevision)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return apiErr(http.StatusConflict, "visual_plan_unavailable", "计划报告不存在或不属于当前作品，请重新生成组图计划")
+			}
+			if err != nil {
+				return err
+			}
+			if inputHash != ref.InputHash || resultRevision != ref.ResultRevision {
+				return apiErr(http.StatusConflict, "visual_plan_stale", "组图计划在预览后已变化，请重新预览构建参数")
+			}
+		}
+	} else if report := cxBuildSyntaxReport(snapshot, revision); report.HasErrors {
 		return apiErr(http.StatusUnprocessableEntity, "render_unsupported_syntax", "当前稿件包含不能可靠排版的语法").With(report)
 	}
 	sourceBytes, err := cxcanonicaljson.Marshal(snapshot)
@@ -281,7 +340,7 @@ func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func cxBuildSourceSnapshot(ctx context.Context, tx pgx.Tx, workspaceID, workID uuid.UUID, expectedRevision int, lockWork bool) (map[string]any, int, string, string, error) {
+func cxBuildSourceSnapshot(ctx context.Context, tx pgx.Tx, workspaceID, workID uuid.UUID, expectedRevision int, lockWork bool, dnaVersion *int64) (map[string]any, int, string, string, error) {
 	var (
 		accountID  uuid.UUID
 		platform   string
@@ -346,6 +405,21 @@ func cxBuildSourceSnapshot(ctx context.Context, tx pgx.Tx, workspaceID, workID u
 	if err != nil {
 		return nil, 0, "", "", err
 	}
+	// 组图构建必须把所选 DNA 版本冻结进来源快照，才能与 cards/preview 的 source_hash 对齐，
+	// 并保证完成后复核的是同一份令牌。公众号构建保持 visual_dna=null。
+	var visualDNA any
+	if dnaVersion != nil {
+		snapshotValue, err := cxLoadVisualDNAForBuild(ctx, tx, accountID, *dnaVersion)
+		if err != nil {
+			return nil, 0, "", "", err
+		}
+		// 与 cards/preview 使用同一规范化路径（时间与令牌都转成 canonical JSON 值）。
+		canonical, err := cxCardsCanonicalValue(snapshotValue)
+		if err != nil {
+			return nil, 0, "", "", err
+		}
+		visualDNA = canonical
+	}
 	snapshot := map[string]any{
 		"schema": "ops.build-source/v1",
 		"work": map[string]any{
@@ -357,11 +431,35 @@ func cxBuildSourceSnapshot(ctx context.Context, tx pgx.Tx, workspaceID, workID u
 		"assets":               assets,
 		"theme":                theme,
 		"account_custom_theme": accountCustomTheme,
-		"visual_dna":           nil,
+		"visual_dna":           visualDNA,
 		"template":             template,
 		"rules_version":        markdownsyntax.RulesVersion,
 	}
 	return snapshot, revision, platform, format, nil
+}
+
+// cxLoadVisualDNAForBuild 读取并复核指定 DNA 版本；令牌摘要不符时拒绝构建，不用近似版本代替。
+func cxLoadVisualDNAForBuild(ctx context.Context, q pgx.Tx, accountID uuid.UUID, version int64) (any, error) {
+	var raw []byte
+	var tokensHash string
+	var createdAt time.Time
+	err := q.QueryRow(ctx, `SELECT tokens,tokens_hash,created_at FROM account_visual_dna WHERE account_id=$1 AND version=$2`, accountID, version).
+		Scan(&raw, &tokensHash, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apiErr(http.StatusConflict, "visual_dna_unavailable", "所选视觉 DNA 版本不存在，请刷新账号视觉 DNA 后重试")
+	}
+	if err != nil {
+		return nil, err
+	}
+	tokens, err := decodeCXDNATokens(raw)
+	if err != nil {
+		return nil, apiErr(http.StatusInternalServerError, "visual_dna_invalid_history", "所选视觉 DNA 历史版本无法验证")
+	}
+	verifiedHash, err := cxVisualDNATokensHash(tokens)
+	if err != nil || verifiedHash != tokensHash {
+		return nil, apiErr(http.StatusInternalServerError, "visual_dna_invalid_history", "所选视觉 DNA 历史摘要无法验证")
+	}
+	return cxVisualPlanDNASnapshot{Version: version, TokensHash: tokensHash, Tokens: tokens, CreatedAt: createdAt.UTC()}, nil
 }
 
 func cxBuildReadSections(ctx context.Context, tx pgx.Tx, workID uuid.UUID) ([]any, error) {
@@ -578,13 +676,13 @@ func cxBuildSyntaxReport(snapshot map[string]any, revision int) markdownsyntax.R
 	return markdownsyntax.Scan(input, revision, managed)
 }
 
-func (s *Server) cxCurrentBuildSourceHash(ctx context.Context, workspaceID, workID uuid.UUID) (string, int, error) {
+func (s *Server) cxCurrentBuildSourceHash(ctx context.Context, workspaceID, workID uuid.UUID, dnaVersion *int64) (string, int, error) {
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return "", 0, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
-	snapshot, revision, _, _, err := cxBuildSourceSnapshot(ctx, tx, workspaceID, workID, 0, false)
+	snapshot, revision, _, _, err := cxBuildSourceSnapshot(ctx, tx, workspaceID, workID, 0, false, dnaVersion)
 	if err != nil {
 		return "", 0, err
 	}
@@ -680,15 +778,33 @@ func (s *Server) listCXBuilds(w http.ResponseWriter, r *http.Request) error {
 		}
 		cursorAt, cursorID = &at, &id
 	}
-	currentHash, _, currentErr := s.cxCurrentBuildSourceHash(r.Context(), ident(r.Context()).WorkspaceID, m.ID)
+	currentHash, _, currentErr := s.cxCurrentBuildSourceHash(r.Context(), ident(r.Context()).WorkspaceID, m.ID, nil)
 	if currentErr != nil {
 		return currentErr
 	}
-	query := `SELECT id,targets,basis_revision,source_hash,params_hash,status,error_code,created_at,finished_at,expires_at
+	// 组图构建把 DNA 版本冻结进来源快照，判断"是否仍对应当前作品"必须用同一版本重算。
+	cardsHashes := map[string]string{}
+	currentHashForCards := func(rawParams []byte) (string, error) {
+		options, err := cxBuildCardsOptionsFromParams(rawParams)
+		if err != nil || options.DNAVersion == nil {
+			return currentHash, nil
+		}
+		key := strconv.FormatInt(*options.DNAVersion, 10)
+		if hash, ok := cardsHashes[key]; ok {
+			return hash, nil
+		}
+		hash, _, err := s.cxCurrentBuildSourceHash(r.Context(), ident(r.Context()).WorkspaceID, m.ID, options.DNAVersion)
+		if err != nil {
+			return "", err
+		}
+		cardsHashes[key] = hash
+		return hash, nil
+	}
+	query := `SELECT id,targets,basis_revision,source_hash,params_hash,params,status,error_code,created_at,finished_at,expires_at
 		FROM work_build WHERE work_id=$1 AND workspace_id=$2 ORDER BY created_at DESC,id DESC LIMIT $3`
 	args := []any{m.ID, ident(r.Context()).WorkspaceID, limit + 1}
 	if cursorAt != nil {
-		query = `SELECT id,targets,basis_revision,source_hash,params_hash,status,error_code,created_at,finished_at,expires_at
+		query = `SELECT id,targets,basis_revision,source_hash,params_hash,params,status,error_code,created_at,finished_at,expires_at
 			FROM work_build WHERE work_id=$1 AND workspace_id=$2 AND (created_at,id)<($3,$4) ORDER BY created_at DESC,id DESC LIMIT $5`
 		args = []any{m.ID, ident(r.Context()).WorkspaceID, *cursorAt, *cursorID, limit + 1}
 	}
@@ -713,11 +829,19 @@ func (s *Server) listCXBuilds(w http.ResponseWriter, r *http.Request) error {
 	items := make([]item, 0, limit)
 	for rows.Next() {
 		var v item
-		if err := rows.Scan(&v.ID, &v.Targets, &v.BasisRevision, &v.SourceHash, &v.ParamsHash, &v.Status, &v.ErrorCode, &v.CreatedAt, &v.FinishedAt, &v.ExpiresAt); err != nil {
+		var rawParams []byte
+		if err := rows.Scan(&v.ID, &v.Targets, &v.BasisRevision, &v.SourceHash, &v.ParamsHash, &rawParams, &v.Status, &v.ErrorCode, &v.CreatedAt, &v.FinishedAt, &v.ExpiresAt); err != nil {
 			return err
 		}
 		if len(items) < limit {
-			v.IsCurrent = v.SourceHash == currentHash
+			hash := currentHash
+			if cxHasCXBuildTarget(v.Targets, "xhs_cards") {
+				hash, err = currentHashForCards(rawParams)
+				if err != nil {
+					return err
+				}
+			}
+			v.IsCurrent = v.SourceHash == hash
 			items = append(items, v)
 		} else {
 			items = append(items, v)
@@ -795,7 +919,13 @@ func (s *Server) getCXBuild(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	rows.Close()
-	currentHash, _, currentErr := s.cxCurrentBuildSourceHash(r.Context(), workspaceID, response.WorkID)
+	var cardsDNA *int64
+	if cxHasCXBuildTarget(response.Targets, "xhs_cards") {
+		if options, err := cxBuildCardsOptionsFromParams(response.Params); err == nil {
+			cardsDNA = options.DNAVersion
+		}
+	}
+	currentHash, _, currentErr := s.cxCurrentBuildSourceHash(r.Context(), workspaceID, response.WorkID, cardsDNA)
 	response.IsCurrent = currentErr == nil && currentHash == response.SourceHash
 	response.DownloadGate = cxBuildDownloadGate(response.Status, response.ExpiresAt, response.Manifest, response.ManifestSHA256, response.Validation, acknowledgements, ident(r.Context()).UserID, ident(r.Context()).Role, s.now())
 	return ok(w, response)
