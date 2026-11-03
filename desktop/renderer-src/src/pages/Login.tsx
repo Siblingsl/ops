@@ -60,7 +60,11 @@ export default function Login() {
         invite_code: invite.trim() || undefined,
       })
       await qc.invalidateQueries()
-      nav(params.get('next') || '/', { replace: true })
+      // 登录回跳只接受站内绝对路径：拒绝协议相对（//）、反斜杠开头等外链形态，
+      // 在应用层堵住 react-router <7.18 开放重定向（CVE-2025-68470 bypass）的可达路径。
+      const rawNext = params.get('next') || '/'
+      const next = rawNext.startsWith('/') && !rawNext.startsWith('//') && !rawNext.startsWith('\\') ? rawNext : '/'
+      nav(next, { replace: true })
     } catch (err) {
       setError(err as ApiError)
     } finally {
