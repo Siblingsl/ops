@@ -14,7 +14,7 @@ import { relTime, runeLen } from '@/lib/format'
 import { CUSTOM_THEME_ID, customTheme, renderWechat, themes } from '@/lib/render'
 import { customThemeContrastError } from '@/lib/theme-contrast'
 import { setCustomTheme } from '@/lib/custom-theme-state'
-import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
+import { useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
 import type { Account, CharacterCard, CustomTheme, Memory, Profile, StyleSample } from '@/lib/types'
 import SkillsTab from './ProfileSkills'
 import AccountAnalysisTab from './account-analysis-tab'
@@ -451,6 +451,19 @@ function CustomThemeCard({ account, profile, onSaved }: { account: Account; prof
 
 function PositioningTab({ account, profile, onSaved }: { account: Account; profile: Profile; onSaved: (p: Profile) => void }) {
   const inv = useInvalidate()
+  const { data: me } = useMe()
+  const [stockTarget, setStockTarget] = useState(String(profile.topic_stock_policy?.target_ready ?? 12))
+  const [stockWarn, setStockWarn] = useState(String(profile.topic_stock_policy?.warn_ready ?? 6))
+  const [stockEdited, setStockEdited] = useState(false)
+  useEffect(() => {
+    if (!stockEdited) {
+      setStockTarget(String(profile.topic_stock_policy?.target_ready ?? 12))
+      setStockWarn(String(profile.topic_stock_policy?.warn_ready ?? 6))
+    }
+  }, [profile.topic_stock_policy?.target_ready, profile.topic_stock_policy?.warn_ready, stockEdited])
+  const targetNumber = Number(stockTarget)
+  const warnNumber = Number(stockWarn)
+  const stockValid = /^\d+$/.test(stockTarget) && /^\d+$/.test(stockWarn) && warnNumber >= 1 && warnNumber <= targetNumber && targetNumber <= 100
   const [tags, setTags] = useState(profile.positioning_tags.join(' '))
   const [audience, setAudience] = useState(profile.target_audience)
   const [tone, setTone] = useState(profile.persona_tone)
@@ -462,10 +475,13 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
   const save = async () => {
     setBusy(true)
     try {
+      const { topic_stock_policy: _stockPolicy, ...profileFields } = profile
       onSaved(await put<Profile>(`/accounts/${account.id}/profile`, {
-        ...profile, positioning_tags: splitList(tags), target_audience: audience, persona_tone: tone, banned_words: splitList(banned), style_summary: summary,
+        ...profileFields, positioning_tags: splitList(tags), target_audience: audience, persona_tone: tone, banned_words: splitList(banned), style_summary: summary,
+        ...(me?.role === 'owner' && stockEdited ? { topic_stock_policy: { target_ready: targetNumber, warn_ready: warnNumber } } : {}),
       }))
-      inv(['health', account.id], ['dashboard', account.id])
+      setStockEdited(false)
+      inv(['health', account.id], ['dashboard', account.id], ['topic-stock', account.id])
       toast.success('定位档案已保存，之后的 AI 生成都会使用新档案')
     } catch (e) {
       toast.error(errorMessage(e))
@@ -538,6 +554,10 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
         <Field label="账号类型" hint="如需更换请到设置 → 账号的「修改类型」；已有作品保持原类型。业务定位（标签、读者、人设等）可随时调整" plain>
           <div className="flex h-9 items-center gap-2 rounded-lg bg-mist-50 px-3 text-sm text-mist-700"><PlatformMark platform={account.platform} size="sm" />{formatLabel[account.content_format]}</div>
         </Field>
+        {me?.role === 'owner' && <>
+          <Field label="目标库存" hint="可排期选题目标，1–100 条"><Input aria-label="目标库存" type="number" min={1} max={100} step={1} value={stockTarget} onChange={(e) => { setStockTarget(e.target.value); setStockEdited(true) }} invalid={!stockValid} /></Field>
+          <Field label="补给警戒" hint="低于该数量时提示补给，不得超过目标库存"><Input aria-label="补给警戒" type="number" min={1} max={100} step={1} value={stockWarn} onChange={(e) => { setStockWarn(e.target.value); setStockEdited(true) }} invalid={!stockValid} /></Field>
+        </>}
         <Field label="定位标签" hint="空格或逗号分隔"><Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="职场 效率 新人成长" /></Field>
         <Field label="目标读者"><Textarea rows={2} value={audience} onChange={(e) => setAudience(e.target.value)} /></Field>
         <Field label="人设与语气"><Textarea rows={2} value={tone} onChange={(e) => setTone(e.target.value)} /></Field>
@@ -551,7 +571,7 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
           </div>
         </Field>
       </div>
-      <div className="flex justify-end border-t border-mist-100 px-5 py-3"><Button variant="primary" loading={busy} onClick={save} disabled={genBusy}>保存档案</Button></div>
+      <div className="flex justify-end border-t border-mist-100 px-5 py-3"><Button variant="primary" loading={busy} onClick={save} disabled={genBusy || (me?.role === 'owner' && !stockValid)}>保存档案</Button></div>
     </Card>
   )
 }

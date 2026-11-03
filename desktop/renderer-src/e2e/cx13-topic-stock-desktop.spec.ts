@@ -111,6 +111,30 @@ test('DEV-CX13-C 桌面选题库存：待核验标注、核验进排期、水位
     expect(restoredTopic?.status).toBe('pending')
     // 恢复是显式动作：不继承任何核验记录（不伪造历史核验）。
     expect(restoredTopic?.verified_at).toBeFalsy()
+
+    await page.goto(`${origin}/a/${account.id}/profile`)
+    const target = page.getByLabel('目标库存', { exact: true })
+    const warn = page.getByLabel('补给警戒', { exact: true })
+    await expect(target).toHaveValue('12')
+    await expect(warn).toHaveValue('6')
+    await warn.fill('13')
+    await expect(page.getByRole('button', { name: '保存档案', exact: true })).toBeDisabled()
+    await target.fill('18')
+    await warn.fill('7')
+    await page.getByRole('button', { name: '保存档案', exact: true }).click()
+    await expect.poll(async () => (await api(page, origin, 'GET', `/accounts/${account.id}/topic-stock`) as { warn: number }).warn).toBe(7)
+    await page.goto(topicsUrl)
+    await expect(page.getByTestId('stock-effective')).toContainText('0/18')
+    // 桌面以编辑者身份呈现时不提供配置入口；服务端仍独立校验权限。
+    await page.route('**/api/v1/auth/me', async (route) => {
+      const response = await route.fetch()
+      const me = await response.json()
+      await route.fulfill({ response, json: { ...me, role: 'editor' } })
+    })
+    await page.goto(`${origin}/a/${account.id}/profile`)
+    await expect(page.getByRole('button', { name: '保存档案', exact: true })).toBeVisible()
+    await expect(page.getByLabel('目标库存', { exact: true })).toHaveCount(0)
+    await expect(page.getByLabel('补给警戒', { exact: true })).toHaveCount(0)
   } finally {
     if (app) {
       try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }) } catch { /* 只结束本测试创建的 Electron。 */ }

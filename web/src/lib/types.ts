@@ -235,6 +235,7 @@ export interface Profile {
   style_summary: string
   default_theme: string
   wechat_defaults: WechatDefaults
+  topic_stock_policy?: { target_ready: number; warn_ready: number }
 }
 
 export interface StyleSample {

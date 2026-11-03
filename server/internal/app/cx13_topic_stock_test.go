@@ -175,6 +175,50 @@ func TestCX13TopicStockLegacyCreateWorkPath(t *testing.T) {
 	}
 }
 
+func TestCX13TopicStockConcurrentCreateWorkPaths(t *testing.T) {
+	account := env.accounts(t).xhs
+	tp := cx13CreateTopic(t, account.ID, "并发采用选题")
+	type result struct {
+		status int
+		body   []byte
+	}
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		st, body := env.do("POST", "/api/v1/topics/"+tp.ID.String()+"/works", nil)
+		results <- result{st, body}
+	}()
+	go func() {
+		<-start
+		st, body := env.do("POST", "/api/v1/accounts/"+account.ID.String()+"/works", map[string]any{"topic_id": tp.ID})
+		results <- result{st, body}
+	}()
+	close(start)
+	var ids []uuid.UUID
+	for range 2 {
+		got := <-results
+		if got.status != 200 {
+			t.Fatalf("并发建稿失败: %d %s", got.status, got.body)
+		}
+		var work Work
+		if err := json.Unmarshal(got.body, &work); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, work.ID)
+	}
+	if ids[0] != ids[1] {
+		t.Fatalf("并发建稿返回不同作品: %v", ids)
+	}
+	var count int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM work WHERE topic_id=$1 AND deleted_at IS NULL`, tp.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("并发后作品数应为 1，实际 %d", count)
+	}
+}
+
 func TestCX13TopicStockExcludesUndatedHistoricalDrop(t *testing.T) {
 	var acc Account
 	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{"platform": "xhs", "name": "CX13历史放弃", "content_format": "image_note"}, &acc)
