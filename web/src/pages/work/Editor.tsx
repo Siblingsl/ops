@@ -18,6 +18,7 @@ import { createSaveStatus, SaveStatus, SelectedSidebar } from './editor-state'
 import { usePendingSections } from './editor-pending'
 import { emitEditor, type EditorEvent, scrollToSection, type SidebarTab, useEditorEvents } from './editor-tools'
 import { SectionBlock } from './section-block'
+import { BuildPanel } from './BuildPanel'
 import { VisualPlanPanel } from './VisualPlanPanel'
 import { OutlineCard } from './editor-outline'
 import { TitleCard } from './editor-title'
@@ -947,6 +948,7 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
         <ImagesCard work={work} setWork={setWorkStable} readOnly={readOnly} upload={upload} hidden={focus} />
         {work.platform === 'xhs' && <VisualPlanPanel work={work} canWrite={!readOnly} />}
         </article>
+        {work.platform === 'wechat_mp' && <BuildPanel work={work} coordinator={coordinator} setWork={setWorkStable} canWrite={!readOnly} />}
         {work.locked && <Notice tone="gray">作品已发布，当前为只读模式。</Notice>}
       </div>
 

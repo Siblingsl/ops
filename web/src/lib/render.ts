@@ -279,6 +279,91 @@ export function renderWechat(sections: Pick<Section, 'heading' | 'content_md'>[]
   return root.outerHTML
 }
 
+export interface RenderedWechatSection {
+  section_id: string
+  html: string
+  image_occurrences: string[]
+}
+
+export interface RenderedWechatBuild {
+  html: string
+  sections: RenderedWechatSection[]
+}
+
+export interface FrozenWechatImage {
+  id: string
+  mime: string
+  bytes: Uint8Array
+}
+
+/**
+ * Build-only rendering envelope. Each section carries its immutable source ID
+ * so the server can independently compare section order, text, and image use.
+ */
+export function renderWechatSections(
+  sections: Pick<Section, 'id' | 'heading' | 'content_md'>[],
+  themeOrId: string | Theme,
+  assets: Pick<Asset, 'id' | 'alt_text'>[] = [],
+): RenderedWechatBuild {
+  const theme = typeof themeOrId === 'string' ? themeById(themeOrId) : themeOrId
+  const doc = new DOMParser().parseFromString('<section></section>', 'text/html')
+  const root = doc.body.firstElementChild!
+  root.setAttribute('style', theme.root)
+  const renderedSections: RenderedWechatSection[] = []
+
+  for (const section of sections) {
+    const rendered = new DOMParser().parseFromString(renderWechat([section], theme, assets), 'text/html')
+    const renderedRoot = rendered.body.firstElementChild
+    if (!renderedRoot) throw new Error('公众号段落渲染未生成根节点')
+    const wrapper = doc.createElement('div')
+    wrapper.setAttribute('data-section-id', section.id)
+    while (renderedRoot.firstChild) {
+      const child = renderedRoot.firstChild
+      wrapper.appendChild(doc.importNode(child, true))
+      renderedRoot.removeChild(child)
+    }
+    const imageOccurrences: string[] = []
+    for (const img of Array.from(wrapper.querySelectorAll('img'))) {
+      const assetID = /\/api\/v1\/assets\/([0-9a-f-]{36})\/file(?:[?#]|$)/i.exec(img.getAttribute('src') ?? '')?.[1]?.toLowerCase()
+      if (assetID) {
+        img.setAttribute('data-asset', assetID)
+        imageOccurrences.push(assetID)
+      }
+    }
+    root.appendChild(wrapper)
+    renderedSections.push({ section_id: section.id, html: wrapper.outerHTML, image_occurrences: imageOccurrences })
+  }
+
+  return { html: root.outerHTML, sections: renderedSections }
+}
+
+/** Build the offline archive form without changing or re-encoding image bytes. */
+export function createStableWechatHTML(html: string, title: string, revision: number, images: FrozenWechatImage[]): string {
+  if (!Number.isInteger(revision) || revision < 1) throw new Error('稳定版必须绑定有效作品版本')
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const roots = Array.from(doc.body.children)
+  if (roots.length !== 1 || roots[0]?.tagName.toLowerCase() !== 'section') throw new Error('公众号 HTML 根节点无效')
+  const imageByID = new Map(images.map((image) => [image.id.toLowerCase(), image]))
+  for (const img of Array.from(roots[0]!.querySelectorAll('img'))) {
+    const assetID = img.getAttribute('data-asset')?.toLowerCase()
+    const frozen = assetID ? imageByID.get(assetID) : undefined
+    if (!assetID || !frozen) throw new Error('稳定版图片缺少冻结素材字节')
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(frozen.mime)) throw new Error('稳定版只支持 JPEG、PNG 和 WebP 素材')
+    img.setAttribute('src', `data:${frozen.mime};base64,${base64Bytes(frozen.bytes)}`)
+  }
+  const output = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHTML(title)}</title></head><body>${roots[0]!.outerHTML}</body></html>`
+  if (new TextEncoder().encode(output).byteLength > 8 * 1024 * 1024) throw new Error('稳定版 HTML 超过 8 MiB')
+  return output
+}
+
+function base64Bytes(bytes: Uint8Array): string {
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return btoa(binary)
+}
+
 export function htmlStats(html: string) {
   return { chars: Array.from(html).length, bytes: new TextEncoder().encode(html).length }
 }
