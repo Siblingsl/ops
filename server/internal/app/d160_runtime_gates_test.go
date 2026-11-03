@@ -56,6 +56,49 @@ func TestD160DesktopAIAndAutoAdoptFollowDBUnlessEnvEmergency(t *testing.T) {
 	}
 }
 
+func TestD160SeedDesktopAIFromConfigOnlyFillsMissingKey(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("OPS_DESKTOP_AI_ENABLED", "")
+	t.Cleanup(func() {
+		_ = env.srv.putSystemBool(ctx, desktopAIEnabledKey, false)
+	})
+
+	// config 未开（默认）：种子不写任何键。
+	env.srv.cfg.DesktopAIEnabled = false
+	_ = env.srv.putSystemBool(ctx, desktopAIEnabledKey, false)
+	env.srv.SeedDesktopAIFromConfig(ctx)
+	if env.srv.desktopAIEnabled(ctx) {
+		t.Fatal("config 关闭时种子不得打开开关")
+	}
+
+	// config 打开且键为 false：只补缺失键，不得覆盖已有 false。
+	env.srv.cfg.DesktopAIEnabled = true
+	env.srv.SeedDesktopAIFromConfig(ctx)
+	if env.srv.desktopAIEnabled(ctx) {
+		t.Fatal("种子不得覆盖已有 DB=false")
+	}
+
+	// 键缺失时种入 true，运行时闸门随之放行。
+	if _, err := env.srv.db.Exec(ctx,
+		`DELETE FROM system_setting WHERE key=$1`, desktopAIEnabledKey); err != nil {
+		t.Fatal(err)
+	}
+	env.srv.SeedDesktopAIFromConfig(ctx)
+	if !env.srv.desktopAIEnabled(ctx) {
+		t.Fatal("config=true 且键缺失时，种子应写入 true")
+	}
+
+	// env 显式 0 是紧急全关：种子短路，闸门强制关。
+	t.Setenv("OPS_DESKTOP_AI_ENABLED", "0")
+	if err := env.srv.putSystemBool(ctx, desktopAIEnabledKey, true); err != nil {
+		t.Fatal(err)
+	}
+	env.srv.SeedDesktopAIFromConfig(ctx)
+	if env.srv.desktopAIEnabled(ctx) {
+		t.Fatal("env 显式 0 必须紧急全关")
+	}
+}
+
 func TestD160AgentFeaturesDBAndEnvSeedAndEmergency(t *testing.T) {
 	ctx := context.Background()
 	clearAgentFeatureSettings(t)

@@ -8,9 +8,25 @@ import { Badge, Button, Card, CardHeader, Empty, Field, PageHeader, PageLoading,
 import { errorMessage, get, patch, post, put } from '@/lib/api'
 import { fmtNum, fmtTime } from '@/lib/format'
 import { useInvalidate, useMe } from '@/lib/session'
-import type { AdminUser, AdminWorkspace, SystemSettings } from '@/lib/types'
+import type { AdminUser, AdminWorkspace, AgentWorkbenchFeatureName, SystemSettings } from '@/lib/types'
 
 interface UsageRow { key: string; calls: number; prompt_tokens: number; completion_tokens: number; failed: number }
+
+// D-160：智能体工作台特性逐项开关，标签与桌面端「系统管理」保持一致。
+const AGENT_FEATURE_LABELS: { name: AgentWorkbenchFeatureName; label: string; hint: string }[] = [
+  { name: 'workbench_ui', label: '工作台 UI', hint: '智能体对话新工作台界面' },
+  { name: 'conversation_organize', label: '对话整理', hint: '分组、归档与整理能力' },
+  { name: 'context_refs', label: '上下文引用', hint: '作品/素材等引用' },
+  { name: 'skill_requests', label: '技能请求', hint: '对话内技能调用' },
+  { name: 'artifacts', label: '产物', hint: '对话产物面板' },
+  { name: 'run_control', label: '运行控制', hint: '暂停/继续/转向' },
+  { name: 'event_resume', label: '事件续跑', hint: '断点续跑与压缩' },
+  { name: 'plans', label: '计划', hint: '多步计划卡片' },
+  { name: 'goals', label: '目标', hint: '需同时具备事件续跑、运行控制与计划' },
+  { name: 'routines', label: '例行任务', hint: '需目标与产物等前置特性' },
+  { name: 'document_parse', label: '文档解析', hint: '附件文档解析入口' },
+]
+
 interface UsageResp { group_by: string; from: string; to: string; rows: UsageRow[]; total: UsageRow }
 interface Log { id: string; action: string; target_type: string; target_id: string; result: string; created_at: string; actor: string | null }
 // 适配器版本熔断（20 文档 §12）：恢复必须发布更高 mapping_version 并重新实测。
@@ -195,6 +211,19 @@ export default function SettingsAdmin() {
     }
   }
 
+  const saveAgentFeature = async (name: AgentWorkbenchFeatureName, enabled: boolean) => {
+    setBusy(true)
+    try {
+      await put('/admin/system-settings', { agent_feature: { name, enabled } })
+      toast.success('已保存')
+      await inv(['admin-settings'], ['agent-bootstrap'])
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="animate-fade-in space-y-8">
       <PageHeader
@@ -211,6 +240,7 @@ export default function SettingsAdmin() {
                 <div className="flex items-center justify-between gap-4">
                   <p className="text-[13px] text-mist-500">关闭后新用户无法自助注册（空库首次 setup 不受影响）。</p>
                   <Switch
+                    label="开放注册"
                     checked={settings.data.registration_open}
                     disabled={busy}
                     onChange={(v) => saveSettings({ registration_open: v })}
@@ -221,6 +251,7 @@ export default function SettingsAdmin() {
                 <div className="flex items-center justify-between gap-4">
                   <p className="text-[13px] text-mist-500">开启后普通用户无法使用业务功能；超级管理员仍可登录并关闭维护。</p>
                   <Switch
+                    label="维护模式"
                     checked={settings.data.maintenance_mode}
                     disabled={busy}
                     onChange={(v) => saveSettings({ maintenance_mode: v })}
@@ -233,6 +264,7 @@ export default function SettingsAdmin() {
                     关闭后立即停止领取新任务并拒绝提交，已领任务按取消处理；与部署配置 <code>OPS_DESKTOP_PLATFORM_ENABLED</code> 任一关闭即停。
                   </p>
                   <Switch
+                    label="平台数据采集总开关"
                     checked={!settings.data.platform_kill_switch}
                     disabled={busy}
                     onChange={(v) => saveSettings({ platform_kill_switch: !v })}
@@ -241,6 +273,67 @@ export default function SettingsAdmin() {
               </Field>
             </>
           )}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader title="桌面能力" desc="默认关闭。日常由超管开启；部署环境变量显式为 0/false 时紧急全关且不可在此顶开。" />
+        <div className="space-y-4 px-5 pb-5">
+          {!settings.data ? <PageLoading /> : (
+            <>
+              <Field label="桌面本机 AI">
+                <div className="flex items-center justify-between gap-4">
+                  <p className="text-[13px] text-mist-500">
+                    {settings.data.desktop_ai_env_blocked ? '部署已紧急关闭桌面 AI。' : '允许工作区在策略开启后使用本机桌面 AI 通道。'}
+                  </p>
+                  <Switch
+                    label="桌面本机 AI"
+                    checked={!!settings.data.desktop_ai_enabled && !settings.data.desktop_ai_env_blocked}
+                    disabled={busy || !!settings.data.desktop_ai_env_blocked}
+                    onChange={(v) => saveSettings({ desktop_ai_enabled: v })}
+                  />
+                </div>
+              </Field>
+              <Field label="平台自动采用">
+                <div className="flex items-center justify-between gap-4">
+                  <p className="text-[13px] text-mist-500">
+                    {settings.data.desktop_platform_auto_adopt_env_blocked
+                      ? '部署已紧急关闭自动采用。'
+                      : '允许连接在验收后开启「自动采用写入正式指标」（仍需连接级开关）。'}
+                  </p>
+                  <Switch
+                    label="平台自动采用"
+                    checked={!!settings.data.desktop_platform_auto_adopt && !settings.data.desktop_platform_auto_adopt_env_blocked}
+                    disabled={busy || !!settings.data.desktop_platform_auto_adopt_env_blocked}
+                    onChange={(v) => saveSettings({ desktop_platform_auto_adopt: v })}
+                  />
+                </div>
+              </Field>
+            </>
+          )}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="智能体工作台特性"
+          desc={settings.data?.agent_features_env_blocked
+            ? '部署已将 OPS_AGENT_WORKBENCH_FEATURES 设为紧急全关，下列开关只读。'
+            : '逐项开启；目标/例行任务仍受服务端依赖降级约束。不提供一键全开。'}
+        />
+        <div className="space-y-3 px-5 pb-5">
+          {!settings.data ? <PageLoading /> : AGENT_FEATURE_LABELS.map((item) => (
+            <Field key={item.name} label={item.label} hint={item.hint}>
+              <div className="flex justify-end">
+                <Switch
+                  label={`${item.label} 开关`}
+                  checked={!!settings.data.agent_features?.[item.name] && !settings.data.agent_features_env_blocked}
+                  disabled={busy || !!settings.data.agent_features_env_blocked}
+                  onChange={(v) => void saveAgentFeature(item.name, v)}
+                />
+              </div>
+            </Field>
+          ))}
         </div>
       </Card>
 
@@ -258,6 +351,7 @@ export default function SettingsAdmin() {
                     {(['xhs', 'wechat_mp'] as const).map((platform) => (
                       <label key={platform} className="flex items-center gap-2 text-[13px] text-mist-700">
                         <Switch
+                          label={`${feature === 'account_sync' ? '账号同步' : '指标刷新'}：${platform === 'xhs' ? '小红书' : '微信公众号'}`}
                           checked={settings.data.platform_features[feature][platform]}
                           disabled={busy}
                           onChange={(v) => savePlatformFeature(feature, platform, v)}

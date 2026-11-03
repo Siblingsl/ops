@@ -119,6 +119,8 @@ func serve() error {
 	}
 	// D-160：OPS_AGENT_WORKBENCH_FEATURES 逗号列表仅作缺失键种子，之后以超管 DB 为准。
 	srv.SeedAgentFeaturesFromEnv(ctx)
+	// D-160：OPS_DESKTOP_AI_ENABLED=true 同样只作缺失键种子；之后以超管 DB 为准。
+	srv.SeedDesktopAIFromConfig(ctx)
 	// 16 文档第 3.7 节：工具目录自检失败时服务拒绝启动。
 	if err := srv.VerifyAgentCatalog(); err != nil {
 		return err

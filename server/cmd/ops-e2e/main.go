@@ -95,6 +95,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// D-160：OPS_E2E_DESKTOP_AI_ENABLED=1 通过一次性种子写入 desktop.ai_enabled；
+	// 运行时闸门只读 DB，仅传 config 字段不会生效。
+	srv.SeedDesktopAIFromConfig(ctx)
 	if err := srv.SeedDevModel(ctx); err != nil {
 		return err
 	}

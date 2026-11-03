@@ -805,6 +805,20 @@ export interface SystemSettings {
   agent_features_env_blocked?: boolean
 }
 
+/** 智能体工作台特性名（16 文档；D-160 超管可逐项开关）。与桌面端 types 保持一致。 */
+export type AgentWorkbenchFeatureName =
+  | 'workbench_ui'
+  | 'conversation_organize'
+  | 'context_refs'
+  | 'skill_requests'
+  | 'artifacts'
+  | 'run_control'
+  | 'event_resume'
+  | 'plans'
+  | 'goals'
+  | 'routines'
+  | 'document_parse'
+
 export interface WorkspaceInvite {
   id: string
   code: string

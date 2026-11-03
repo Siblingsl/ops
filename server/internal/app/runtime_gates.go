@@ -64,6 +64,23 @@ func (s *Server) systemSettingExists(ctx context.Context, key string) (bool, err
 	return n > 0, nil
 }
 
+// SeedDesktopAIFromConfig 仅在 desktop.ai_enabled 键尚不存在时，把启动配置
+// OPS_DESKTOP_AI_ENABLED=true 写入 DB（一次性种子，启动时调用；之后以超管 DB 为准，
+// env 显式 0/false 仍是紧急全关）。D-160 闸门化后 config 字段不再被读路径消费，
+// 缺这个种子会让 OPS_DESKTOP_AI_ENABLED=1 / OPS_E2E_DESKTOP_AI_ENABLED=1 静默失效。
+func (s *Server) SeedDesktopAIFromConfig(ctx context.Context) {
+	if envExplicitFalse("OPS_DESKTOP_AI_ENABLED") || !s.cfg.DesktopAIEnabled {
+		return
+	}
+	exists, err := s.systemSettingExists(ctx, desktopAIEnabledKey)
+	if err != nil || exists {
+		return
+	}
+	if err := s.putSystemBool(ctx, desktopAIEnabledKey, true); err != nil {
+		slog.Error("种子写入桌面 AI 开关失败", "err", err)
+	}
+}
+
 // SeedAgentFeaturesFromEnv 仅在对应键尚不存在时把 env 逗号列表写入 DB（一次性种子，启动时调用）。
 func (s *Server) SeedAgentFeaturesFromEnv(ctx context.Context) {
 	if agentEnvEmergencyOff() {
