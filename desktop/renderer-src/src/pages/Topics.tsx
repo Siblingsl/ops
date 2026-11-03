@@ -674,7 +674,7 @@ export default function Topics() {
         ]} />
         {tab === 'pending' && !desktopPresentation && (
           <div className="ml-auto flex items-center gap-3">
-            <label className="flex items-center gap-2 text-[12.5px] text-mist-600"><Switch checked={byScore} onChange={setByScore} />按评分排序</label>
+            <label className="flex items-center gap-2 text-[12.5px] text-mist-600"><Switch label="按评分排序" checked={byScore} onChange={setByScore} />按评分排序</label>
             {canWrite && <Button size="sm" icon={<Gauge className="size-3.5" />} loading={scoring} onClick={score}>AI 评估契合度</Button>}
           </div>
         )}
@@ -685,7 +685,7 @@ export default function Topics() {
           <option value="all">全部来源</option><option value="manual">手动</option><option value="ai">AI 建议</option><option value="hot">热点</option><option value="review">复盘</option><option value="daily">每日推荐</option>
         </Select>
         {tab === 'pending' && <div className="desktop-topic-scorectl">
-          <label className="flex items-center gap-2 text-[12.5px] text-mist-600"><Switch checked={byScore} onChange={setByScore} />按评分排序</label>
+          <label className="flex items-center gap-2 text-[12.5px] text-mist-600"><Switch label="按评分排序" checked={byScore} onChange={setByScore} />按评分排序</label>
           {canWrite && <Button size="sm" icon={<Gauge className="size-3.5" />} loading={scoring} onClick={score}>AI 评估契合度</Button>}
         </div>}
       </div>}

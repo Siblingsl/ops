@@ -194,7 +194,7 @@ export default function SkillEditor({ def: initialDef, copyFrom, initial, fixedA
         {(quotaFull || bindingsFull) && <Notice tone="gamboge">{quotaFull ? '该范围定义额度已满' : '账号公共绑定额度已满'}。请先单项管理已有技能。<a className="underline" href={bindingsFull ? `/a/${form.account_id}/profile?tab=skills` : '/settings/skills'}>管理已有技能</a></Notice>}
         {(quota.error || bindings.error) && <Notice tone="gamboge">额度读取失败，保存已暂停。<Button onClick={() => { void quota.refetch(); if (form.scope === 'account') void bindings.refetch() }}>重试额度检查</Button></Notice>}
       </div>}
-      {publicScope && <label className="flex items-start gap-2 rounded border border-mist-200 bg-mist-50 p-3 text-sm"><Switch checked={confirmPublic} disabled={locked} onChange={setConfirmPublic} />
+      {publicScope && <label className="flex items-start gap-2 rounded border border-mist-200 bg-mist-50 p-3 text-sm"><Switch label="确认公开这个技能" checked={confirmPublic} disabled={locked} onChange={setConfirmPublic} />
         <span>我确认将以上技能内容公开给{form.scope === 'workspace' ? '当前工作区全体成员' : '该账号所在工作区全体成员（含观察者）'}。{copyFrom?.scope === 'personal' && '原个人定义保留，公开副本独立。'}</span></label>}
       {publicScope && !confirmPublic && <p className="text-xs text-gamboge-700">公开保存前需勾选确认；未确认不会写入。</p>}
       {importMode && <Notice tone="gamboge">{warnings.length ? `解析告警 ${warnings.length} 条：${warnings.map(w => `${w.field}：${w.message}`).join('；')}` : '导入内容已解析，确认字段后保存。'}</Notice>}

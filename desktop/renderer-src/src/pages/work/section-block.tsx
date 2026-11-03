@@ -718,7 +718,7 @@ export const SectionBlock = memo(function SectionBlock({
                   placeholder="本段临时指令（可选），起草/改写/扩写/缩写都会带上"
                   className="h-8 min-w-0 flex-1 rounded-md border border-mist-200 bg-white px-2.5 text-[12.5px] text-mist-800 outline-none placeholder:text-mist-400 focus:border-ink-300"
                 />
-                <select value={tier} onChange={(e) => setTier(e.target.value as typeof tier)} title="只对这一段的下一次生成生效；默认跟随偏好设置"
+                <select aria-label="本段模型档位" value={tier} onChange={(e) => setTier(e.target.value as typeof tier)} title="只对这一段的下一次生成生效；默认跟随偏好设置"
                   className="h-8 shrink-0 cursor-pointer rounded-md border border-mist-200 bg-white px-1.5 text-[12px] text-mist-600 outline-none focus:border-ink-300">
                   <option value="">档位：跟随偏好</option>
                   <option value="economy">经济</option>

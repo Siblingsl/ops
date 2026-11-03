@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { Check } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -35,11 +36,15 @@ export function FirstValueGuide({ accountId, modelReady, profileReady, hasWork }
     <CardHeader title="从第一篇作品开始" desc="按依赖走五步，预计约 11 分钟。风格样本和素材可以之后补充。" />
     <div className="space-y-3 p-5">
       {strategy.isError && <Notice tone="red">{errorMessage(strategy.error)}<Button size="sm" onClick={() => strategy.refetch()}>重试</Button></Notice>}
-      {strategy.isPending ? <Spinner /> : <ol className="space-y-3">{steps.map((s, i) => <li key={s.title} className="flex flex-wrap items-center gap-3 rounded-lg border border-mist-100 p-3">
-        <Badge tone={s.done ? 'green' : i === active ? 'ink' : 'gray'}>{s.done ? '已完成' : `第 ${i + 1} 步`}</Badge>
-        <div className="flex-1"><p className="text-sm font-medium">{s.title}</p><p className="text-xs text-mist-500">{s.time}</p></div>
-        {i === active && (s.to ? <Link to={s.to}><Button size="sm">{s.action}</Button></Link> : <Button size="sm" variant="primary" loading={busy} disabled={daily.data?.preparing} onClick={generate}>{daily.data?.preparing ? '正在准备推荐' : s.action}</Button>)}
-        {i === 1 && i === active && <Button size="sm" variant="ghost" onClick={() => setSkipped(true)}>跳过建档</Button>}
+      {strategy.isPending ? <Spinner /> : <ol className="space-y-3">{steps.map((s, i) => <li key={s.title} aria-current={i === active ? 'step' : undefined} className="flex flex-wrap items-center gap-3 rounded-lg border border-mist-100 p-3">
+        {/* 步骤号始终显示，完成态用图标和次要文案表达，避免出现「已完成 → 第 2 步 → 已完成」的断号。 */}
+        <Badge tone={s.done ? 'green' : i === active ? 'ink' : 'gray'}>{s.done && <Check className="size-3" aria-hidden />}第 {i + 1} 步</Badge>
+        {/* basis 保证窄屏下按钮整组换行，而不是把标题挤成一字一行。 */}
+        <div className="min-w-0 flex-1 basis-[11rem]"><p className="text-sm font-medium">{s.title}{s.done && <span className="ml-2 text-xs font-normal text-ink-600">已完成</span>}</p><p className="text-xs text-mist-500">{s.time}</p></div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {i === active && (s.to ? <Link to={s.to}><Button size="sm">{s.action}</Button></Link> : <Button size="sm" variant="primary" loading={busy} disabled={daily.data?.preparing} onClick={generate}>{daily.data?.preparing ? '正在准备推荐' : s.action}</Button>)}
+          {i === 1 && i === active && <Button size="sm" variant="ghost" onClick={() => setSkipped(true)}>跳过建档</Button>}
+        </div>
       </li>)}</ol>}
     </div>
   </Card></section>

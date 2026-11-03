@@ -153,7 +153,12 @@ export default function Pack() {
       <>
         <WorkHeaderAction><Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/check`)}>去检查</Button></WorkHeaderAction>
         <div className="mx-auto max-w-2xl px-6 py-12">
-          <HumanGate code="H-04">发布前检查还没有全部确认，不能生成发布包。</HumanGate>
+          <HumanGate code="H-04" action={<Button size="sm" variant="human" onClick={() => nav(`/works/${work.id}/check`)}>去检查</Button>}>
+            发布前检查还没有全部确认，不能生成发布包。检查确认后回到这里生成发布包。
+          </HumanGate>
+          <div className="mt-4">
+            <Button size="sm" variant="ghost" onClick={() => nav(`/works/${work.id}`)}>返回创作</Button>
+          </div>
         </div>
       </>
     )

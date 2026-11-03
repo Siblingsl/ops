@@ -161,7 +161,15 @@ export default function Compare() {
   const [topics, setTopics] = useState(work.topics.map((t) => '#' + t).join(' '))
   const [title, setTitle] = useState(work.title)
   const [fieldConflict, setFieldConflict] = useState<{ server: Work; body: Record<string, unknown> } | null>(null)
-  if (!work.source) return <div className="p-10"><Notice>这篇作品不是派生作品。</Notice></div>
+  if (!work.source) return (
+    <div className="mx-auto max-w-2xl p-10">
+      <Notice>这篇作品不是派生作品，没有可对照的原稿。从已有作品派生新版本后，这里会逐段显示与原稿的差异。</Notice>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}`)}>返回创作</Button>
+        <Button size="sm" variant="ghost" onClick={() => nav(`/a/${work.account_id}/works`)}>去作品列表</Button>
+      </div>
+    </div>
+  )
   if (work.content_format === 'comic') {
     return (
       <div className="p-10">

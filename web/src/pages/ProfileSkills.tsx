@@ -123,7 +123,7 @@ function BindingPartition({ accountId, audience, part, onSaved }: { accountId: s
       {canWrite && <><input type="number" min={0} max={999} value={drafts[item.skill_id] ?? item.priority} disabled={busy} aria-label={`${item.name} 的优先级`}
         onChange={e => setDrafts(prev => ({ ...prev, [item.skill_id]: Number(e.target.value) }))}
         onBlur={() => { const value = drafts[item.skill_id]; if (value !== undefined && value !== item.priority) void save(item.skill_id, true, value) }} className="h-7 w-16 rounded border border-mist-200 px-1.5 text-xs" />
-        <Switch checked disabled={busy} onChange={value => void save(item.skill_id, value)} /></>}
+        <Switch label={`${item.name} 启用状态`} checked disabled={busy} onChange={value => void save(item.skill_id, value)} /></>}
     </div>)}</div>
     {canWrite && <div className="space-y-2 border-t border-mist-100 p-5">
       <div className="flex gap-2"><Select aria-label={personal ? '选择个人技能' : '选择公共技能'} value={choice} disabled={busy || part.count >= part.limit || !!candidates.error} onChange={e => setChoice(e.target.value)}>

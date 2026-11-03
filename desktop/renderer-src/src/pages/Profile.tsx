@@ -790,8 +790,8 @@ function LayoutTab({ account, profile, onSaved }: { account: Account; profile: P
           <Field label="阅读原文链接"><Input value={d.source_url} onChange={(e) => setD({ ...d, source_url: e.target.value })} placeholder="可选" /></Field>
         </div>
         <div className="flex gap-6 text-[13.5px] text-mist-700">
-          <label className="flex items-center gap-2"><Switch checked={d.open_comment} onChange={(v) => setD({ ...d, open_comment: v, fans_only_comment: v && d.fans_only_comment })} />开启评论</label>
-          <label className={cn('flex items-center gap-2', !d.open_comment && 'opacity-50')}><Switch checked={d.fans_only_comment} disabled={!d.open_comment} onChange={(v) => setD({ ...d, fans_only_comment: v })} />仅粉丝可评论</label>
+          <label className="flex items-center gap-2"><Switch label="开启评论" checked={d.open_comment} onChange={(v) => setD({ ...d, open_comment: v, fans_only_comment: v && d.fans_only_comment })} />开启评论</label>
+          <label className={cn('flex items-center gap-2', !d.open_comment && 'opacity-50')}><Switch label="仅粉丝可评论" checked={d.fans_only_comment} disabled={!d.open_comment} onChange={(v) => setD({ ...d, fans_only_comment: v })} />仅粉丝可评论</label>
         </div>
       </div>
       <div className="flex justify-end border-t border-mist-100 px-5 py-3"><Button variant="primary" loading={busy} onClick={save} disabled={runeLen(d.author) > 16}>保存</Button></div>

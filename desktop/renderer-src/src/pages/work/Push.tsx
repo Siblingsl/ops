@@ -80,10 +80,19 @@ export default function Push() {
       <>
         <WorkHeaderAction><Button size="sm" variant="primary" onClick={() => nav(`/works/${work.id}/pack`)}>去发布包</Button></WorkHeaderAction>
         <div className="mx-auto max-w-2xl px-6 py-12">
-          <Notice tone="gray">
-            这是{work.platform === 'xhs' ? '小红书' : '当前平台'}作品，不能写入公众号草稿。
-            请到「发布包」导出图文，按顺序手动发布；发布后可以回来回填链接。
-          </Notice>
+          <Card className="p-6">
+            <h2 className="font-display text-[18px] font-bold text-mist-900">{work.platform === 'xhs' ? '小红书' : '当前平台'}作品按发布包手动发布</h2>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-mist-500">这个平台没有可写入的草稿接口，OPS 不会代发。按下面三步完成：</p>
+            <ol className="mt-4 space-y-2.5 text-[13px] text-mist-700">
+              <li className="flex gap-2.5"><span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-ink-50 text-[11px] font-semibold text-ink-700">1</span>生成发布包：标题、正文、话题和按顺序编号的图片。</li>
+              <li className="flex gap-2.5"><span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-ink-50 text-[11px] font-semibold text-ink-700">2</span>在{work.platform === 'xhs' ? '小红书 App 或创作服务平台' : '平台'}按顺序发布。</li>
+              <li className="flex gap-2.5"><span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-ink-50 text-[11px] font-semibold text-ink-700">3</span>回到复盘页回填链接，这篇才会进入数据复盘。</li>
+            </ol>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Button variant="primary" onClick={() => nav(`/works/${work.id}/pack`)}>去发布包</Button>
+              {work.status === 'packed' && <Button variant="secondary" onClick={() => nav(`/a/${work.account_id}/review?work=${work.id}`)}>我已发布，去回填</Button>}
+            </div>
+          </Card>
         </div>
       </>
     )
@@ -320,8 +329,8 @@ export default function Push() {
                 <Field label="阅读原文链接"><Input value={f.source_url} onChange={(e) => setF({ source_url: e.target.value })} placeholder="可选" /></Field>
               </div>
               <div className="mt-4 flex flex-wrap gap-6 text-[13.5px] text-mist-700">
-                <label className="flex items-center gap-2"><Switch checked={f.open_comment} onChange={(v) => setF({ open_comment: v, fans_only_comment: v && f.fans_only_comment })} />开启评论</label>
-                <label className={cn('flex items-center gap-2', !f.open_comment && 'opacity-50')}><Switch checked={f.fans_only_comment} disabled={!f.open_comment} onChange={(v) => setF({ fans_only_comment: v })} />仅粉丝可评论</label>
+                <label className="flex items-center gap-2"><Switch label="开启评论" checked={f.open_comment} onChange={(v) => setF({ open_comment: v, fans_only_comment: v && f.fans_only_comment })} />开启评论</label>
+                <label className={cn('flex items-center gap-2', !f.open_comment && 'opacity-50')}><Switch label="仅粉丝可评论" checked={f.fans_only_comment} disabled={!f.open_comment} onChange={(v) => setF({ fans_only_comment: v })} />仅粉丝可评论</label>
               </div>
             </div>
           </Card>

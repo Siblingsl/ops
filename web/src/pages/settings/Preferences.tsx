@@ -46,13 +46,13 @@ export default function Preferences() {
             <Choice value={prefs.default_variants} onChange={(v) => set({ default_variants: v })} options={[{ value: 1, label: '1 个' }, { value: 3, label: '3 个' }]} />
           </Row>
           <Row title="起草时参考我的历史作品" desc="从本账号过去的作品里找相似段落作为参考，引用会在「本次参考」里列出。">
-            <Switch checked={prefs.use_history} onChange={(v) => set({ use_history: v })} />
+            <Switch label="起草时参考我的历史作品" checked={prefs.use_history} onChange={(v) => set({ use_history: v })} />
           </Row>
           <Row title="边写边提示敏感词与广告法用语" desc="只做本地规则提示，不会自动修改正文；正式检查仍需在「检查」页逐条确认。">
-            <Switch checked={prefs.live_lint} onChange={(v) => set({ live_lint: v })} />
+            <Switch label="边写边提示敏感词与广告法用语" checked={prefs.live_lint} onChange={(v) => set({ live_lint: v })} />
           </Row>
           <Row title="续写建议（灰字）" desc={<>按 <b>{prefs.ghost_key}</b> 获取一小段续写建议，Tab 采纳，Esc 放弃。不会自动出现。</>}>
-            <Switch checked={prefs.ghost_text} onChange={(v) => set({ ghost_text: v })} />
+            <Switch label="续写建议（灰字）" checked={prefs.ghost_text} onChange={(v) => set({ ghost_text: v })} />
           </Row>
           {prefs.ghost_text && (
             <Row title="续写快捷键" desc="和输入法或系统快捷键冲突时换一个。">
@@ -60,13 +60,13 @@ export default function Preferences() {
             </Row>
           )}
           <Row title="起草完自动跳到下一个空段落">
-            <Switch checked={prefs.auto_jump_next_empty} onChange={(v) => set({ auto_jump_next_empty: v })} />
+            <Switch label="起草完自动跳到下一个空段落" checked={prefs.auto_jump_next_empty} onChange={(v) => set({ auto_jump_next_empty: v })} />
           </Row>
           <Row title="打开作品时默认进入专注模式" desc="隐藏侧栏，只留正文。随时可按 Ctrl+Shift+F 切换。">
-            <Switch checked={prefs.focus_default} onChange={(v) => set({ focus_default: v })} />
+            <Switch label="打开作品时默认进入专注模式" checked={prefs.focus_default} onChange={(v) => set({ focus_default: v })} />
           </Row>
           <Row title="先写结尾" desc="「现在最值得做的」会优先提示你先写结尾段，适合先定落点再写过程的习惯。">
-            <Switch checked={prefs.write_ending_first} onChange={(v) => set({ write_ending_first: v })} />
+            <Switch label="先写结尾" checked={prefs.write_ending_first} onChange={(v) => set({ write_ending_first: v })} />
           </Row>
         </div>
       </Card>
@@ -84,7 +84,7 @@ export default function Preferences() {
       <Card>
         <CardHeader title="帮助我们改进" />
         <Row title="匿名记录使用体验事件" desc="只记录「打开了哪个功能、点了哪个按钮」这类事件名，不记录任何正文、标题或素材内容。默认关闭。">
-          <Switch checked={prefs.ux_events} onChange={(v) => set({ ux_events: v })} />
+          <Switch label="匿名记录使用体验事件" checked={prefs.ux_events} onChange={(v) => set({ ux_events: v })} />
         </Row>
       </Card>
     </div>

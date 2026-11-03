@@ -46,7 +46,7 @@ function SelfTestDialog({ result, onClose }: { result: SelfTestResult; onClose: 
 function CapabilityTag({ label, ok }: { label: string; ok?: boolean | null }) {
   const state = ok === true ? '通过' : ok === false ? '未通过' : '未测试'
   const cls = ok === true ? 'bg-ink-50 text-ink-700' : ok === false ? 'bg-mist-100 text-danger' : 'bg-mist-100 text-mist-400'
-  return <span className={`rounded px-1 text-[10.5px] ${cls}`} title={`${label}：${state}`}>{label}·{state}</span>
+  return <span className={`whitespace-nowrap rounded px-1 text-[10.5px] ${cls}`} title={`${label}：${state}`}>{label}·{state}</span>
 }
 
 // ST-04：把能力标签翻译成「这个模型能干什么」的结论行。
@@ -351,25 +351,25 @@ function RoutesCard({ providers }: { providers: Provider[] }) {
           return (
             <div key={r.task_type} className="grid grid-cols-2 items-center gap-3 px-5 py-2.5 lg:grid-cols-[160px_1fr_1fr_1fr_1fr]">
               <div className="text-[13.5px] font-medium text-mist-800">{r.label}{r.task_type === 'default' && <Badge tone="ink" className="ml-1.5">必填</Badge>}</div>
-              <Select value={r.provider_id ?? ''} onChange={(e) => {
+              <Select aria-label={`${r.label} 供应商`} value={r.provider_id ?? ''} onChange={(e) => {
                 const p = providers.find((x) => x.id === e.target.value)
                 set(i, { provider_id: e.target.value || null, model: p?.models[0] ?? '' })
               }}>
                 <option value="">{r.task_type === 'default' ? '未配置' : '使用默认模型'}</option>
                 {active.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </Select>
-              <Select value={r.model} disabled={!prov} onChange={(e) => set(i, { model: e.target.value })}>
+              <Select aria-label={`${r.label} 模型`} value={r.model} disabled={!prov} onChange={(e) => set(i, { model: e.target.value })}>
                 {!prov && <option value="">—</option>}
                 {prov?.models.map((m) => <option key={m} value={m}>{m}</option>)}
               </Select>
-              <Select value={r.fallback_provider_id ?? ''} disabled={!prov} onChange={(e) => {
+              <Select aria-label={`${r.label} 备用供应商`} value={r.fallback_provider_id ?? ''} disabled={!prov} onChange={(e) => {
                 const p = providers.find((x) => x.id === e.target.value)
                 set(i, { fallback_provider_id: e.target.value || null, fallback_model: p?.models[0] ?? '' })
               }}>
                 <option value="">不设备用</option>
                 {active.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </Select>
-              <Select value={r.fallback_model ?? ''} disabled={!fb} onChange={(e) => set(i, { fallback_model: e.target.value })}>
+              <Select aria-label={`${r.label} 备用模型`} value={r.fallback_model ?? ''} disabled={!fb} onChange={(e) => set(i, { fallback_model: e.target.value })}>
                 {!fb && <option value="">—</option>}
                 {fb?.models.map((m) => <option key={m} value={m}>{m}</option>)}
               </Select>
@@ -568,18 +568,21 @@ export default function Models() {
                 )}
               </div>
               {p.status === 'active' && p.circuit_state === 'open' && <p className="mt-2 text-xs text-danger">供应商暂不可用，约 {p.retry_after_seconds} 秒后恢复</p>}
-              <div className="mt-3 flex flex-wrap gap-1.5">
+              <div className="mt-3 space-y-1.5">
                 {p.models.map((m) => {
                   const cap = p.capabilities?.find((c) => c.model === m)
                   const usable = usableSummary(cap, p.last_test_ok)
                   return (
-                    <span key={m} className="inline-flex items-center gap-1.5 rounded border border-mist-200 bg-white px-1.5 py-0.5">
-                      <span className="font-mono text-[11.5px] text-mist-700">{m}</span>
-                      <CapabilityTag label="工具调用" ok={cap?.tools_ok} />
-                      <CapabilityTag label="看图" ok={cap?.vision_ok} />
+                    // 结论行单独占一行：窄卡片里把长句塞进能力标签同一行会把「未测试」拆成两行。
+                    <div key={m} data-testid="model-usable-row" className="rounded border border-mist-200 bg-white px-2 py-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-mono text-[11.5px] text-mist-700">{m}</span>
+                        <CapabilityTag label="工具调用" ok={cap?.tools_ok} />
+                        <CapabilityTag label="看图" ok={cap?.vision_ok} />
+                      </div>
                       {/* ST-04：直接给结论，不用用户自己解读标签。 */}
-                      <span data-testid="model-usable" className={usable.warn ? 'text-[10.5px] text-gamboge-700' : 'text-[10.5px] text-ink-600'}>{usable.text}</span>
-                    </span>
+                      <div data-testid="model-usable" className={`mt-1 text-[11px] leading-snug ${usable.warn ? 'text-gamboge-700' : 'text-ink-600'}`}>{usable.text}</div>
+                    </div>
                   )
                 })}
               </div>

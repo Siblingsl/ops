@@ -624,7 +624,7 @@ export default function Topics() {
         ]} />
         {tab === 'pending' && (
           <div className="ml-auto flex items-center gap-3">
-            <label className="flex items-center gap-2 text-[12.5px] text-mist-600"><Switch checked={byScore} onChange={setByScore} />按评分排序</label>
+            <label className="flex items-center gap-2 text-[12.5px] text-mist-600"><Switch label="按评分排序" checked={byScore} onChange={setByScore} />按评分排序</label>
             {canWrite && <Button size="sm" icon={<Gauge className="size-3.5" />} loading={scoring} onClick={score}>AI 评估契合度</Button>}
           </div>
         )}

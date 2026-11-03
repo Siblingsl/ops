@@ -300,7 +300,7 @@ function ItemCard({ item, active, onPick, onResolve, disabled, workId, onEditInP
             <Badge tone={meta.tone}>{meta.label}</Badge>
             {item.message !== meta.label && <span className="text-[13.5px] font-medium text-mist-800">{item.message}</span>}
           </div>
-          {item.detail && item.category === 'rewrite' ? <RewriteDetail detail={item.detail} /> : item.detail && <p className="mt-1 text-[12.5px] leading-relaxed text-mist-500">{item.detail}</p>}
+          {item.detail && item.category === 'rewrite' ? <RewriteDetail detail={item.detail} /> : item.detail && <p className="mt-1 text-[12.5px] leading-relaxed text-mist-500">{isFormat && item.passed ? `规则：${item.detail}` : item.detail}</p>}
           {item.matched_text && item.category === 'fact' && <p className="mt-1.5 rounded bg-sky-50 px-2 py-1 text-[12.5px] text-sky-800">「{item.matched_text}」</p>}
           {item.location.material_support && <p className="mt-1.5 rounded bg-ink-50 px-2 py-1 text-[12px] text-ink-700">关联素材引句：「{item.location.material_support.quote}」</p>}
           {item.location.label && <p className="mt-1 text-[11.5px] text-mist-400">位置：{item.location.label}{item.location.found === false && '（未在正文中定位到原文）'}</p>}
@@ -654,8 +654,21 @@ export default function Check() {
           {editable ? <>请在<Link to={`/works/${work.id}`} className="font-medium underline">编辑器</Link>更正引用后重新检查。</> : '请联系有编辑权限的成员更正引用。'}
         </Notice>
       )}
-      {!run && !starting && editable && <Card className="p-10 text-center text-mist-500">还没有检查记录。</Card>}
-      {!run && !starting && !canWrite && <Card className="p-10 text-center text-mist-500">还没有检查记录。</Card>}
+      {/* 空态给出检查范围与入口：原来只有一句「还没有检查记录」，用户不知道要检查什么、该点哪里。 */}
+      {!run && !starting && (
+        <Card className="p-8">
+          <div className="mx-auto flex max-w-md flex-col items-center text-center">
+            <div className="mb-3 flex size-11 items-center justify-center rounded-xl bg-ink-50 text-ink-600"><ShieldCheck className="size-5" /></div>
+            <h2 className="font-display text-[17px] font-bold text-mist-900">还没有检查记录</h2>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-mist-500">
+              检查会逐条列出格式、事实与 AI 声明三类问题。格式问题必须改完；事实、敏感词和 AI 声明需要你逐条确认，没有「全部确认」。
+            </p>
+            {editable
+              ? <p className="mt-3 text-[12.5px] text-mist-400">准备好后点右上角「开始检查」。</p>
+              : <p className="mt-3 text-[12.5px] text-mist-400">{canWrite ? '当前状态不能发起检查。' : '观察者只读：请联系有编辑权限的成员发起检查。'}</p>}
+          </div>
+        </Card>
+      )}
       {starting && !run && <Card className="flex items-center justify-center gap-2 p-10 text-mist-500"><Loader2 className="size-4 animate-spin" />正在检查…</Card>}
 
       {run && (

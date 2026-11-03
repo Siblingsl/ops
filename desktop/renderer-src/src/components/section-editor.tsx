@@ -243,6 +243,7 @@ export const PlainEditor = forwardRef<EditorHandle, Props>(function PlainEditor(
       ref={ta}
       defaultValue={value}
       readOnly={!editable}
+      aria-label="段落正文"
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       onSelect={track}

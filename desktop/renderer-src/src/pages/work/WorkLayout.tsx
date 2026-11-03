@@ -123,7 +123,7 @@ function PlanPopover({ work, onSaved }: { work: Work; onSaved: (w: Work) => void
             </Select>
           </Field>
           <label className="flex items-start gap-2 text-[13px] text-mist-700">
-            <Switch checked={!!work.review_required} disabled={!canWrite} onChange={(v) => save({ review_required: v })} />
+            <Switch label="发布前需要审阅" checked={!!work.review_required} disabled={!canWrite} onChange={(v) => save({ review_required: v })} />
             <span>发布前需要审阅<span className="block text-[11.5px] text-mist-400">检查确认后进入「待审阅」，由所有者或指定的审阅人审阅通过后才能写入草稿或生成发布包（H-09）。</span></span>
           </label>
           {work.review_required && (
@@ -681,6 +681,8 @@ export default function WorkLayout() {
         )}
       </header>
       <div key={location.pathname} className={cn('min-h-0 flex-1 animate-fade-in', desktopPresentation && ['pack', 'preview'].some((tab) => location.pathname.endsWith('/' + tab)) && 'desktop-work-tab-outlet')}>
+        {/* 作品页没有可见 h1（标题在可编辑控件里），补一个只给读屏用的页面标题。 */}
+        <h1 className="sr-only">{work.title || '未命名作品'} · {platformLabel[work.platform]} · {platformFormatLabel(work.platform, work.content_format)}</h1>
         <Outlet context={ctx} />
       </div>
       <Versions work={work} open={versions} onClose={() => setVersions(false)} onRestored={setWork} />
