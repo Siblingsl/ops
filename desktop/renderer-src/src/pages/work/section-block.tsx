@@ -70,6 +70,8 @@ export interface SectionBlockProps {
   onMove: (id: string, d: number) => void
   onRemove: (id: string) => void
   onUploadImage: (f: File) => Promise<Asset | null>
+  /** FR-CX-11：粘贴/拖拽入库走同作品 sha256 去重，不重复占用图片位。 */
+  onPasteImage: (f: File) => Promise<Asset | null>
   onDrafted?: (sectionId: string) => void
   onActive?: (sectionId: string, selection: string) => void
   onLint?: (sectionId: string, n: number) => void
@@ -80,7 +82,7 @@ export interface SectionBlockProps {
 }
 
 export const SectionBlock = memo(function SectionBlock({
-  section, index, total, work, prefs, patchWork, setWork, refresh, readOnly, dim, othersHere, othersEditing, onEditing, onSave, onMove, onRemove, onUploadImage, onDrafted,
+  section, index, total, work, prefs, patchWork, setWork, refresh, readOnly, dim, othersHere, othersEditing, onEditing, onSave, onMove, onRemove, onUploadImage, onPasteImage, onDrafted,
   onActive, onLint, resumeJob, desktopPresentation = false, active = false,
 }: SectionBlockProps) {
   const warnedConflict = useRef(false)
@@ -626,7 +628,9 @@ export const SectionBlock = memo(function SectionBlock({
           <div onMouseMove={onEditorHover} onMouseLeave={() => setHoverHit(null)} onClick={onEditorClick}>
             <Editor ref={editor} value={content.current} resetKey={resetKey} onChange={onRichChange} editable={!readOnly && !busy}
               placeholder={isEmpty ? '点「起草本段」让 AI 写初稿，或者直接自己写。' : ''} onSelection={onRichSelection}
-              bubble={xhs ? undefined : bubble} onPickImage={xhs ? undefined : onRichPickImage} />
+              bubble={xhs ? undefined : bubble} onPickImage={xhs ? undefined : onRichPickImage}
+              onPasteImage={xhs ? undefined : async (file) => (await onPasteImage(file))?.url ?? null}
+              onPasteNotice={(message) => toast.info(message)} />
           </div>
         )}
         {hoverHit && (
@@ -874,5 +878,6 @@ export const SectionBlock = memo(function SectionBlock({
   && previous.readOnly === next.readOnly && previous.dim === next.dim && previous.othersHere === next.othersHere
   && previous.othersEditing === next.othersEditing && previous.onEditing === next.onEditing && previous.onSave === next.onSave
   && previous.onMove === next.onMove && previous.onRemove === next.onRemove && previous.onUploadImage === next.onUploadImage
+  && previous.onPasteImage === next.onPasteImage
   && previous.onDrafted === next.onDrafted && previous.onActive === next.onActive && previous.onLint === next.onLint
   && previous.resumeJob === next.resumeJob && previous.desktopPresentation === next.desktopPresentation && previous.active === next.active)

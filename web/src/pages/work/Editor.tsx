@@ -608,6 +608,20 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
       return null
     }
   }, [work.id, patchWork])
+  // FR-CX-11：粘贴/拖拽入库按本作品 sha256 去重；复用时不重复加入图片列表。
+  const uploadPasted = useCallback(async (f: File): Promise<Asset | null> => {
+    const fd = new FormData()
+    fd.append('file', f)
+    try {
+      const res = await rawRequest('POST', `/works/${work.id}/assets?dedupe=sha256`, fd)
+      const a = (await res.json()) as Asset
+      patchWork((w) => (w.assets.some((item) => item.id === a.id) ? {} : { assets: [...w.assets, a] }))
+      return a
+    } catch (e) {
+      toast.error(`${f.name}：${errorMessage(e)}`)
+      return null
+    }
+  }, [work.id, patchWork])
   const addSection = async () => {
     try {
       setWork(await post<Work>(`/works/${work.id}/sections`, { heading: '' }))
@@ -932,7 +946,7 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
                   refresh={refresh} readOnly={readOnly} dim={focus && activeIdx >= 0 && Math.abs(i - activeIdx) > 1}
                   othersHere={members.get(s.id)?.here}
                   othersEditing={members.get(s.id)?.editing} onEditing={reportEditing}
-                  onSave={onSave} onMove={moveSection} onRemove={removeSection} onUploadImage={upload} onDrafted={onDrafted}
+                  onSave={onSave} onMove={moveSection} onRemove={removeSection} onUploadImage={upload} onPasteImage={uploadPasted} onDrafted={onDrafted}
                   onActive={onActive} onLint={onLint} resumeJob={resumeJobs.data?.[s.id]} />
                 </LazyMount>
               ))}

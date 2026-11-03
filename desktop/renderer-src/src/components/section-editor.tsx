@@ -2,6 +2,7 @@ import Image from '@tiptap/extension-image'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import { BubbleMenu, EditorContent, useEditor } from '@tiptap/react'
+import type { EditorView } from '@tiptap/pm/view'
 import StarterKit from '@tiptap/starter-kit'
 import { Bold, Heading3, ImagePlus, Italic, Link2, List, ListOrdered, Quote, Redo2, Undo2 } from 'lucide-react'
 import React, { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
@@ -56,6 +57,10 @@ interface Props {
   onSelection?: (text: string) => void
   bubble?: React.ReactNode
   onPickImage?: () => void
+  /** FR-CX-11：粘贴/拖拽图片入库，返回图片地址；null 表示失败（调用方已提示）。 */
+  onPasteImage?: (file: File) => Promise<string | null>
+  /** FR-CX-11：粘贴相关的可见提示（多图、图文混排、内容已变化未自动插入等）。 */
+  onPasteNotice?: (message: string) => void
 }
 
 function ToolBtn({ active, onClick, label, children }: { active?: boolean; onClick: () => void; label: string; children: React.ReactNode }) {
@@ -69,11 +74,70 @@ function ToolBtn({ active, onClick, label, children }: { active?: boolean; onCli
 }
 
 /** RichEditor edits one section as WYSIWYG while storing Markdown (D-022). */
-export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function RichEditor({ value, resetKey, onChange, editable, placeholder, onSelection, bubble, onPickImage }, ref) {
+export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function RichEditor({ value, resetKey, onChange, editable, placeholder, onSelection, bubble, onPickImage, onPasteImage, onPasteNotice }, ref) {
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
   const onSelRef = useRef(onSelection)
   onSelRef.current = onSelection
+  const pasteImageRef = useRef(onPasteImage)
+  pasteImageRef.current = onPasteImage
+  const pasteNoticeRef = useRef(onPasteNotice)
+  pasteNoticeRef.current = onPasteNotice
+  // 文档版本：粘贴锚点只在版本未变时有效，避免上传完成后把图片插到错误位置。
+  const tokenRef = useRef(0)
+
+  // FR-CX-11：先记锚点再上传；文档在等待期间被修改（撤销、删段、重排）则放弃自动插入。
+  const insertPasted = async (view: EditorView, file: File, pos: number, token: number) => {
+    const url = await pasteImageRef.current?.(file)
+    if (!url) return
+    if (view.isDestroyed) return
+    if (tokenRef.current !== token) {
+      pasteNoticeRef.current?.('内容已变化，图片已入库但没有自动插入；可用工具栏「插入图片」放到想要的位置。')
+      return
+    }
+    const node = view.state.schema.nodes.image?.create({ src: url })
+    if (!node) return
+    view.dispatch(view.state.tr.insert(Math.min(pos, view.state.doc.content.size), node))
+  }
+
+  const handlePasteFiles = (view: EditorView, event: ClipboardEvent) => {
+    const data = event.clipboardData
+    if (!data) return false
+    const files = Array.from(data.files ?? []).filter((file) => file.type.startsWith('image/'))
+    if (files.length === 0) return false
+    if (!view.editable || !pasteImageRef.current) return false
+    event.preventDefault()
+    const text = (data.getData('text/plain') || '').trim()
+    if (text) {
+      // 图文混排不静默丢文本：只粘文字，并明确告知图片没有插入。
+      pasteNoticeRef.current?.('剪贴板里同时有文字和图片，本次只粘贴了文字；图片请单独粘贴。')
+      if (typeof view.pasteText === 'function') view.pasteText(text)
+      else view.dispatch(view.state.tr.insertText(text, view.state.selection.from, view.state.selection.to))
+      return true
+    }
+    if (files.length > 1) {
+      pasteNoticeRef.current?.(`一次只能粘贴一张图片（本次 ${files.length} 张），请逐张粘贴。`)
+      return true
+    }
+    void insertPasted(view, files[0], view.state.selection.from, tokenRef.current)
+    return true
+  }
+
+  const handleDropFiles = (view: EditorView, event: DragEvent) => {
+    const files = Array.from(event.dataTransfer?.files ?? []).filter((file) => file.type.startsWith('image/'))
+    if (files.length === 0) return false
+    // 无论是否可编辑都要阻止默认行为，否则浏览器会把图片当成导航目标打开。
+    event.preventDefault()
+    if (!view.editable || !pasteImageRef.current) return true
+    if (files.length > 1) {
+      pasteNoticeRef.current?.(`一次只能拖入一张图片（本次 ${files.length} 张），请逐张拖入。`)
+      return true
+    }
+    const at = view.posAtCoords({ left: event.clientX, top: event.clientY })
+    void insertPasted(view, files[0], at?.pos ?? view.state.selection.from, tokenRef.current)
+    return true
+  }
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ heading: { levels: [3] }, codeBlock: false, code: false, horizontalRule: false }),
@@ -84,8 +148,13 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
     ],
     content: value,
     editable,
-    editorProps: { attributes: { class: 'prose-editor min-h-[3.5em]' } },
+    editorProps: {
+      attributes: { class: 'prose-editor min-h-[3.5em]' },
+      handlePaste: (view, event) => handlePasteFiles(view, event),
+      handleDrop: (view, event) => handleDropFiles(view, event),
+    },
     onUpdate: ({ editor }) => {
+      tokenRef.current += 1
       if (editor.isEditable) onChangeRef.current((editor.storage as any).markdown.getMarkdown())
     },
     onSelectionUpdate: ({ editor }) => {
@@ -94,7 +163,10 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
     },
   })
   useEffect(() => {
-    if (editor && !editor.isDestroyed) editor.commands.setContent(value, false)
+    if (editor && !editor.isDestroyed) {
+      tokenRef.current += 1
+      editor.commands.setContent(value, false)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey, editor])
   useEffect(() => {
@@ -121,6 +193,7 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
       onChangeRef.current((editor.storage as any).markdown.getMarkdown())
     },
     setMarkdown: (md) => {
+      tokenRef.current += 1
       editor?.commands.setContent(md)
       if (editor) onChangeRef.current((editor.storage as any).markdown.getMarkdown())
     },

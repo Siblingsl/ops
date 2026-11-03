@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"image"
 	"image/draw"
@@ -45,6 +46,13 @@ const (
 	maxDimension   = 2560
 	maxImagePixels = 16_000_000
 )
+
+// assetUpload 是上传接口的响应：reused=true 表示命中本作品已有资产，
+// 没有新建 asset 行、没有写文件、也没有推进作品修订。
+type assetUpload struct {
+	Asset
+	Reused bool `json:"reused"`
+}
 
 func (s *Server) loadAssets(ctx context.Context, workID uuid.UUID) ([]Asset, error) {
 	rows, err := s.db.Query(ctx, `SELECT id, work_id, mime, width, height, bytes, position, alt_text, coalesce(ai_generated,false), created_at FROM asset WHERE work_id=$1 ORDER BY position, created_at`, workID)
@@ -273,6 +281,12 @@ func (s *Server) uploadAsset(w http.ResponseWriter, r *http.Request) error {
 	if err := m.editable(); err != nil {
 		return err
 	}
+	// FR-CX-11：dedupe=sha256 时按本作品已存资产的服务器实算 sha256 命中复用。
+	// 只在同一作品内查重，不按工作区全局 hash 返回他作资产，也不泄露他作信息。
+	dedupe := r.URL.Query().Get("dedupe")
+	if dedupe != "" && dedupe != "sha256" {
+		return validationFields("去重方式无效", map[string]string{"dedupe": "仅支持 sha256"})
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+1<<20)
 	file, _, err := r.FormFile("file")
 	if err != nil {
@@ -291,6 +305,26 @@ func (s *Server) uploadAsset(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
+	// 去重比较的是"转码后存储字节"的哈希，与 asset.sha256 同口径；
+	// 不与原始上传字节的哈希混比（24 §FR-CX-11）。
+	digest := secure.SHA256Hex(data)
+	if dedupe == "sha256" {
+		var existingID uuid.UUID
+		err := s.db.QueryRow(ctx, `SELECT id FROM asset WHERE work_id=$1 AND sha256=$2 ORDER BY position,created_at LIMIT 1`, m.ID, digest).Scan(&existingID)
+		if err == nil {
+			list, err := s.loadAssets(ctx, m.ID)
+			if err != nil {
+				return err
+			}
+			for _, a := range list {
+				if a.ID == existingID {
+					return ok(w, assetUpload{Asset: a, Reused: true})
+				}
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+	}
 	id := uuid.New()
 	ext := ".jpg"
 	if mime == "image/png" {
@@ -303,7 +337,7 @@ func (s *Server) uploadAsset(w http.ResponseWriter, r *http.Request) error {
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `INSERT INTO asset (id, workspace_id, account_id, work_id, storage_path, mime, width, height, bytes, sha256, position)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT coalesce(max(position),-1)+1 FROM asset WHERE work_id=$4))`,
-			id, ident(ctx).WorkspaceID, m.Account.ID, m.ID, filepath.ToSlash(rel), mime, width, height, len(data), secure.SHA256Hex(data)); err != nil {
+			id, ident(ctx).WorkspaceID, m.Account.ID, m.ID, filepath.ToSlash(rel), mime, width, height, len(data), digest); err != nil {
 			return err
 		}
 		return s.touchContent(ctx, tx, m.ID)
@@ -318,7 +352,7 @@ func (s *Server) uploadAsset(w http.ResponseWriter, r *http.Request) error {
 	}
 	for _, a := range list {
 		if a.ID == id {
-			return ok(w, a)
+			return ok(w, assetUpload{Asset: a, Reused: false})
 		}
 	}
 	return errNotFound
