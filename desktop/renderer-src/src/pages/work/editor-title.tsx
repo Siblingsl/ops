@@ -355,7 +355,7 @@ export function TitleCard({ work, setWork, readOnly, desktopPresentation = false
     )}
   </>
   return (
-    <Card id="step-title" className={cn('scroll-mt-24 p-5', hidden && 'hidden')}>
+    <Card id="step-title" className={cn('scroll-mt-32 p-5', hidden && 'hidden')}>
       <h2 className="mb-4 font-display text-[17px] font-bold text-mist-900">{internalName ? '内部名称与话题' : wx ? '标题与摘要' : '标题与话题'}</h2>
       <div className="space-y-4">
         <Field className={desktopPresentation ? 'desktop-title-main' : undefined} label={internalName ? '内部名称（仅系统内使用）' : '标题'} counter={titleMax > 0 ? { value: runeLen(title), max: titleMax } : undefined}

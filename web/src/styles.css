@@ -179,8 +179,10 @@ mark.hl.hl-active { background: var(--color-gamboge-300); box-shadow: 0 0 0 2px 
   .inbox-panel-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* ED-05：页头流程条标注为「发布进度」，与编辑器左栏「创作步骤」区分开。 */
-.workbar-flow-label { margin-bottom: 4px; font-size: 11px; font-weight: 500; color: #8b8f96; }
+/* ED-05：页头流程条标注为「发布进度」，与编辑器左栏「创作步骤」区分开。
+   流程条整体水平排列：竖排三条会占掉约 90px 头部高度，把创作区往下挤。 */
+.workbar-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.75rem; }
+.workbar-flow-label { font-size: 11px; font-weight: 500; color: #8b8f96; }
 
 @media (max-width: 639px) {
   .work-topbar .workspace-account-compact { width: min(10rem, calc(100vw - 14.375rem)); }

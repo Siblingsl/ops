@@ -834,7 +834,8 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
                     s.id === activeStep ? 'bg-ink-50 font-medium text-ink-800' : 'text-mist-600 hover:bg-mist-100 hover:text-mist-900',
                   )}>
                   {s.done ? <CheckCircle2 className="size-4 text-ink-500" /> : <Circle className={cn('size-4', s.id === activeStep ? 'text-ink-400' : 'text-mist-300')} />}
-                  <span className="flex-1">{s.label}</span>
+                  {/* 中文没有断行点，flex 收缩会把两字标题压成竖排；nowrap 让 label 保持整词宽度。 */}
+                  <span className="flex-1 whitespace-nowrap">{s.label}</span>
                   {s.extra && <span className="font-mono text-xs text-mist-400">{s.extra}</span>}
                 </a>
               </li>

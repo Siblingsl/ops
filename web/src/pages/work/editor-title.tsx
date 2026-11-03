@@ -291,7 +291,7 @@ export function TitleCard({ work, setWork, readOnly, hidden = false }: { work: W
     {favs.length > 0 && (
       <div>
         <div className="mb-1.5 text-[12px] font-medium text-mist-600">收藏的候选</div>
-        <div className="grid gap-2 sm:grid-cols-2">{favs.map(titleRow)}</div>
+        <div className="grid gap-2 lg:grid-cols-2">{favs.map(titleRow)}</div>
       </div>
     )}
     {titles.length > 0 && (
@@ -304,7 +304,8 @@ export function TitleCard({ work, setWork, readOnly, hidden = false }: { work: W
         {groups.map((g) => (
           <div key={g}>
             <div className="mb-1 text-[11.5px] font-medium text-mist-500">{g}</div>
-            <div className="grid gap-2 sm:grid-cols-2">{titles.filter((t) => t.style.replace('（改写自候选）', '') === g).map(titleRow)}</div>
+            {/* 候选标题要整句可读：编辑器中栏在窄视口下两列会把 14 字候选挤成每行 4 字，宽屏才分两列。 */}
+            <div className="grid gap-2 lg:grid-cols-2">{titles.filter((t) => t.style.replace('（改写自候选）', '') === g).map(titleRow)}</div>
           </div>
         ))}
         <RefsNote refs={titleRefs} callId={titleCall} sampleText={titles.map((t) => t.text).join('\n')} onRetry={readOnly ? undefined : genTitles} />
@@ -338,7 +339,7 @@ export function TitleCard({ work, setWork, readOnly, hidden = false }: { work: W
     )}
   </>
   return (
-    <Card id="step-title" className={cn('scroll-mt-24 p-5', hidden && 'hidden')}>
+    <Card id="step-title" className={cn('scroll-mt-32 p-5', hidden && 'hidden')}>
       <h2 className="mb-4 font-display text-[17px] font-bold text-mist-900">{internalName ? '内部名称与话题' : wx ? '标题与摘要' : '标题与话题'}</h2>
       <div className="space-y-4">
         <Field label={internalName ? '内部名称（仅系统内使用）' : '标题'} counter={titleMax > 0 ? { value: runeLen(title), max: titleMax } : undefined}
