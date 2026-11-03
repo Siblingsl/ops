@@ -411,6 +411,11 @@ func (s *Server) saveWechatCredential(w http.ResponseWriter, r *http.Request) er
 	if err := s.requireOwner(r.Context()); err != nil {
 		return err
 	}
+	// 17 §10.6.5：连接域操作禁止超管代访问（与 platform_connection 同一边界）；
+	// 代访问不替被访问工作区建立或改写平台凭证。
+	if id := ident(r.Context()); id.AdminOverride {
+		return apiErr(403, "forbidden", "系统管理员代访问工作区不能修改公众号凭证")
+	}
 	if err := s.requireReauth(r.Context()); err != nil {
 		return err
 	}
@@ -458,6 +463,10 @@ func (s *Server) saveWechatCredential(w http.ResponseWriter, r *http.Request) er
 func (s *Server) wechatLinkCheck(w http.ResponseWriter, r *http.Request) error {
 	if err := s.requireOwner(r.Context()); err != nil {
 		return err
+	}
+	// 17 §10.6.5：连接域操作禁止超管代访问（本接口会以工作区凭证调用微信 API）。
+	if id := ident(r.Context()); id.AdminOverride {
+		return apiErr(403, "forbidden", "系统管理员代访问工作区不能执行发布链路预检")
 	}
 	a, err := s.accountFromPath(r)
 	if err != nil {
@@ -530,6 +539,10 @@ func (s *Server) egressHint() string {
 func (s *Server) testWechatCredential(w http.ResponseWriter, r *http.Request) error {
 	if err := s.requireOwner(r.Context()); err != nil {
 		return err
+	}
+	// 17 §10.6.5：连接域操作禁止超管代访问（本接口会以工作区凭证调用微信 API）。
+	if id := ident(r.Context()); id.AdminOverride {
+		return apiErr(403, "forbidden", "系统管理员代访问工作区不能检测公众号凭证")
 	}
 	a, err := s.accountFromPath(r)
 	if err != nil {
