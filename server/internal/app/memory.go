@@ -17,28 +17,39 @@ type WechatDefaults struct {
 	SourceURL       string `json:"source_url"`
 }
 
+type TopicStockPolicy struct {
+	TargetReady int `json:"target_ready"`
+	WarnReady   int `json:"warn_ready"`
+}
+
 type Profile struct {
-	AccountID       uuid.UUID      `json:"account_id"`
-	PositioningTags []string       `json:"positioning_tags"`
-	TargetAudience  string         `json:"target_audience"`
-	PersonaTone     string         `json:"persona_tone"`
-	BannedWords     []string       `json:"banned_words"`
-	StyleSummary    string         `json:"style_summary"`
-	DefaultTheme    string         `json:"default_theme"`
-	WechatDefaults  WechatDefaults `json:"wechat_defaults"`
-	UpdatedAt       time.Time      `json:"-"`
+	AccountID        uuid.UUID         `json:"account_id"`
+	PositioningTags  []string          `json:"positioning_tags"`
+	TargetAudience   string            `json:"target_audience"`
+	PersonaTone      string            `json:"persona_tone"`
+	BannedWords      []string          `json:"banned_words"`
+	StyleSummary     string            `json:"style_summary"`
+	DefaultTheme     string            `json:"default_theme"`
+	WechatDefaults   WechatDefaults    `json:"wechat_defaults"`
+	TopicStockPolicy *TopicStockPolicy `json:"topic_stock_policy,omitempty"`
+	UpdatedAt        time.Time         `json:"-"`
 }
 
 func (s *Server) loadProfile(ctx context.Context, accountID uuid.UUID) (*Profile, error) {
 	p := Profile{AccountID: accountID}
-	var wd []byte
-	err := s.db.QueryRow(ctx, `SELECT positioning_tags, target_audience, persona_tone, banned_words, style_summary, default_theme, wechat_defaults, updated_at
+	var wd, policy []byte
+	err := s.db.QueryRow(ctx, `SELECT positioning_tags, target_audience, persona_tone, banned_words, style_summary, default_theme, wechat_defaults, topic_stock_policy, updated_at
 		FROM account_profile WHERE account_id=$1`, accountID).Scan(&p.PositioningTags, &p.TargetAudience, &p.PersonaTone,
-		&p.BannedWords, &p.StyleSummary, &p.DefaultTheme, &wd, &p.UpdatedAt)
+		&p.BannedWords, &p.StyleSummary, &p.DefaultTheme, &wd, &policy, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(wd, &p.WechatDefaults)
+	// FR-CX-19：旧档案缺配置时读取补默认但 GET 不写库；缺省由服务端水位计算回退。
+	var stored TopicStockPolicy
+	if err := json.Unmarshal(policy, &stored); err == nil && stored.TargetReady > 0 {
+		p.TopicStockPolicy = &stored
+	}
 	return &p, nil
 }
 
@@ -85,12 +96,40 @@ func (s *Server) putProfile(w http.ResponseWriter, r *http.Request) error {
 	if in.DefaultTheme == "" {
 		in.DefaultTheme = "ink"
 	}
+	// FR-CX-19：库存水位配置只有 owner 能写（24 §8.9）；校验 1≤warn≤target≤100。
+	if in.TopicStockPolicy != nil {
+		if id := ident(r.Context()); id == nil || id.Role != "owner" {
+			current, err := s.loadProfile(r.Context(), a.ID)
+			if err != nil {
+				return err
+			}
+			if current.TopicStockPolicy == nil || *current.TopicStockPolicy != *in.TopicStockPolicy {
+				return apiErr(http.StatusForbidden, "forbidden", "只有工作区 owner 可以修改选题库存水位配置")
+			}
+			// 旧客户端会原样回传整个档案；非 owner 不写配置列，避免覆盖并发的 owner 修改。
+			in.TopicStockPolicy = nil
+		}
+		policy := in.TopicStockPolicy
+		if policy != nil && (policy.WarnReady < 1 || policy.WarnReady > policy.TargetReady || policy.TargetReady > 100) {
+			return validation("库存水位需要 1 ≤ 补给警戒 ≤ 目标库存 ≤ 100")
+		}
+	}
 	wd, _ := json.Marshal(in.WechatDefaults)
-	if _, err := s.db.Exec(r.Context(), `UPDATE account_profile SET positioning_tags=$2, target_audience=$3, persona_tone=$4,
-		banned_words=$5, style_summary=$6, default_theme=$7, wechat_defaults=$8, updated_at=now() WHERE account_id=$1`,
-		a.ID, cleanList(in.PositioningTags), strings.TrimSpace(in.TargetAudience), strings.TrimSpace(in.PersonaTone),
-		cleanList(in.BannedWords), strings.TrimSpace(in.StyleSummary), in.DefaultTheme, wd); err != nil {
-		return err
+	if in.TopicStockPolicy != nil {
+		pb, _ := json.Marshal(in.TopicStockPolicy)
+		if _, err := s.db.Exec(r.Context(), `UPDATE account_profile SET positioning_tags=$2, target_audience=$3, persona_tone=$4,
+			banned_words=$5, style_summary=$6, default_theme=$7, wechat_defaults=$8, topic_stock_policy=$9::jsonb, updated_at=now() WHERE account_id=$1`,
+			a.ID, cleanList(in.PositioningTags), strings.TrimSpace(in.TargetAudience), strings.TrimSpace(in.PersonaTone),
+			cleanList(in.BannedWords), strings.TrimSpace(in.StyleSummary), in.DefaultTheme, wd, string(pb)); err != nil {
+			return err
+		}
+	} else {
+		if _, err := s.db.Exec(r.Context(), `UPDATE account_profile SET positioning_tags=$2, target_audience=$3, persona_tone=$4,
+			banned_words=$5, style_summary=$6, default_theme=$7, wechat_defaults=$8, updated_at=now() WHERE account_id=$1`,
+			a.ID, cleanList(in.PositioningTags), strings.TrimSpace(in.TargetAudience), strings.TrimSpace(in.PersonaTone),
+			cleanList(in.BannedWords), strings.TrimSpace(in.StyleSummary), in.DefaultTheme, wd); err != nil {
+			return err
+		}
 	}
 	p, err := s.loadProfile(r.Context(), a.ID)
 	if err != nil {

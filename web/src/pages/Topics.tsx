@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import {
-  ArrowRight, BookOpen, CalendarDays, Check, Gauge, Inbox, Layers, Lightbulb, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Sparkles, Trash2, X,
+  ArrowRight, BookOpen, CalendarDays, Check, Gauge, Inbox, Layers, Lightbulb, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, ShieldCheck, Sparkles, Trash2, X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -19,7 +19,7 @@ import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { type AIRefs, relTime, runeLen } from '@/lib/format'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import { deleteWithUndo } from '@/lib/undo'
-import type { ContentFormat, InboxPage, Platform, Series, Topic, TopicPage, Work } from '@/lib/types'
+import type { ContentFormat, InboxPage, Platform, Series, Topic, TopicPage, TopicStock, Work } from '@/lib/types'
 
 interface Suggestion {
 	hot_item_id?: string | null
@@ -256,8 +256,95 @@ function TopicEditDialog({ t, accountFormat, accountPlatform, series, initialAng
   )
 }
 
-function ScoreBar({ label, value, tip }: { label: string; value: number | null | undefined; tip?: string }) {
-  if (value == null) return null
+// FR-CX-19：库存状态徽标。used 由「已采用」语义覆盖；dropped 与「已放弃」重复，都不重复标。
+// 存量 unknown（idea 且无核验时间）是 Q-CX-06 的「待核验」——逐题核验后才进新排期。
+// Badge 组件不透传 props，testid 由 contents 包裹层携带（不参与 flex 布局）。
+function StockBadge({ t }: { t: Topic }) {
+  const s = t.stock_status
+  if (!s || s === 'used' || s === 'dropped') return null
+  const wrapped = (testid: string, node: React.ReactNode) => <span data-testid={testid} className="contents">{node}</span>
+  if (s === 'idea') {
+    if (!t.verified_at) return wrapped('stock-unknown', <Badge tone="gamboge">待核验</Badge>)
+    return wrapped('stock-verified', <Badge tone="ink"><ShieldCheck className="size-3" />已核验</Badge>)
+  }
+  if (s === 'verified') {
+    const stale = t.verified_at ? Date.now() - Date.parse(t.verified_at) > 60 * 86400_000 : true
+    return wrapped('stock-verified', <Badge tone={stale ? 'gamboge' : 'ink'}><ShieldCheck className="size-3" />{stale ? '核验已过期' : '已核验'}</Badge>)
+  }
+  return wrapped('stock-ready', <Badge tone="ink">库存·可排期</Badge>)
+}
+
+// 库存动作对话框：核验（note 20..500 码点）、进新排期（计划日期必填）、退回想法（原因必填）。
+// 转换都走 PATCH stock_transition 单一路径，不与 status 直改混用（服务端同校验）。
+function StockActionDialog({ t, mode, onClose }: { t: Topic; mode: 'verify' | 'ready' | 'idea'; onClose: () => void }) {
+  const inv = useInvalidate()
+  const [note, setNote] = useState('')
+  const [plannedDate, setPlannedDate] = useState(t.planned_date ?? '')
+  const [busy, setBusy] = useState(false)
+  const meta = {
+    verify: { title: '核验选题', desc: '核验表示这条选题仍然值得写：角度成立、素材可获得。核验 60 天后需要重新确认。', cta: '确认核验' },
+    ready: { title: '进入可排期', desc: '可排期选题计入库存水位；必须先选定计划发布日。', cta: '进入可排期' },
+    idea: { title: '退回想法', desc: '退回会清除本次核验记录，选题回到普通想法状态。', cta: '退回想法' },
+  }[mode]
+  const noteLen = runeLen(note)
+  const canSubmit = mode === 'verify' ? noteLen >= 20 && noteLen <= 500 : mode === 'ready' ? !!plannedDate : note.trim().length > 0
+  const save = async () => {
+    setBusy(true)
+    try {
+      if (mode === 'verify') await post<{ ok: boolean }>(`/topics/${t.id}/verify`, { note, basis_updated_at: t.updated_at })
+      else await patch(`/topics/${t.id}`, mode === 'ready' ? { stock_transition: 'ready', planned_date: plannedDate, basis_updated_at: t.updated_at } : { stock_transition: 'idea', reason: note.trim(), basis_updated_at: t.updated_at })
+      inv(['topics', t.account_id ?? ''], ['topics'], ['topic-stock', t.account_id ?? ''])
+      toast.success(mode === 'verify' ? '已核验，60 天内可直接进入可排期' : mode === 'ready' ? '已进入可排期，计入库存水位' : '已退回想法')
+      onClose()
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog open onClose={onClose} title={meta.title} width="max-w-lg"
+      footer={<><Button variant="ghost" onClick={onClose}>取消</Button><Button variant="primary" loading={busy} disabled={!canSubmit} onClick={save}>{meta.cta}</Button></>}>
+      <div className="space-y-4">
+        <p className="text-[13px] leading-relaxed text-mist-600">{meta.desc}</p>
+        <div className="rounded-lg bg-mist-50 px-3 py-2 text-[13px] font-medium text-mist-800">{t.title}</div>
+        {mode === 'ready' ? (
+          <Field label="计划发布日" hint="可排期必须有计划日期"><Input type="date" value={plannedDate} onChange={(e) => setPlannedDate(e.target.value)} /></Field>
+        ) : (
+          <Field label={mode === 'verify' ? '核验说明' : '退回原因'}
+            counter={mode === 'verify' ? { value: noteLen, max: 500 } : undefined}
+            hint={mode === 'verify' ? '20–500 字：说明这条选题为什么值得写' : undefined}>
+            <Textarea autoFocus rows={4} value={note} onChange={(e) => setNote(e.target.value)} placeholder={mode === 'verify' ? '例如：读者常问这个问题，素材库有对应案例，本月热点也相关。' : '例如：素材暂时拿不到，先回到想法池。'} />
+          </Field>
+        )}
+      </div>
+    </Dialog>
+  )
+}
+
+// 库存水位条（24 §FR-CX-19）：可排期/目标、过期核验、需补给、周转与采用率。
+// 空分母（周转/采用率）由服务端返回 null，不冒充 0。
+function StockWaterline({ accountId }: { accountId: string }) {
+  const q = useQuery({ queryKey: ['topic-stock', accountId], queryFn: () => get<TopicStock>(`/accounts/${accountId}/topic-stock`) })
+  const s = q.data
+  if (!s) return null
+  const low = s.effective_ready < s.warn
+  return (
+    <Card className="mb-4 p-3" data-testid="topic-stock-waterline">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-mist-600">
+        <span className="font-medium text-mist-800">选题库存</span>
+        <span data-testid="stock-effective">可排期 <b className={cn('tabular-nums', low ? 'text-gamboge-700' : 'text-mist-900')}>{s.effective_ready}</b>/{s.target}</span>
+        {s.stale_ready > 0 && <span className="text-gamboge-700">过期核验 {s.stale_ready}</span>}
+        <span>需补给 <b className="tabular-nums text-mist-900">{s.need_refill}</b></span>
+        {s.turnover_days != null && <span>平均周转 {Math.round(s.turnover_days)} 天</span>}
+        {s.adoption_rate != null && <span>本月采用率 {Math.round(s.adoption_rate * 100)}%</span>}
+        {low && <Badge tone="gamboge">库存偏低，先补几条想法并核验</Badge>}
+      </div>
+    </Card>
+  )
+}
+
+function ScoreBar({ label, value, tip }: { label: string; value: number | null | undefined; tip?: string }) {  if (value == null) return null
   return (
     <div className="flex items-center gap-1.5 text-[11px] text-mist-500" title={tip}>
       <span className="w-12 shrink-0">{label}</span>
@@ -276,12 +363,16 @@ function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focus
   const [menu, setMenu] = useState(false)
   const [edit, setEdit] = useState(false)
   const [editAngle, setEditAngle] = useState<string>()
+  const [stockAction, setStockAction] = useState<null | 'verify' | 'ready' | 'idea'>(null)
   const [busy, setBusy] = useState(false)
+  // FR-CX-19：库存维度（服务端保证与 status 同步；旧数据缺字段时按 status 推导）。
+  const stock = t.stock_status ?? (t.status === 'dropped' ? 'dropped' : 'idea')
+  const stockKnown = stock !== 'used' && stock !== 'dropped'
   useEffect(() => {
     if (focused) ref.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [focused])
   const setStatus = async (status: Topic['status']) => {
-    let saved = false
+    let saved: Topic | null = null
     const key = ['topics', accountId]
     const before = qc.getQueriesData<InfiniteData<TopicPage, string>>({ queryKey: key })
     const update = (data: InfiniteData<TopicPage, string> | undefined, next: Topic, adjustCounts: boolean) => data && ({
@@ -300,7 +391,8 @@ function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focus
     try {
       const result = await patch<{ topic: Topic }>(`/topics/${t.id}`, { status })
       qc.setQueriesData<InfiniteData<TopicPage, string>>({ queryKey: key }, (data) => update(data, result.topic, false))
-      saved = true
+      saved = result.topic
+      inv(['topic-stock', accountId])
     } catch (e) {
       for (const [k, v] of before) qc.setQueryData(k, v)
       toast.error(errorMessage(e))
@@ -309,11 +401,32 @@ function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focus
   }
   const drop = async () => {
     setMenu(false)
-    const previous = t.status
-    if (await setStatus('dropped')) toast(`已放弃选题「${t.title}」`, {
+    const dropped = await setStatus('dropped')
+    if (dropped) toast(`已放弃选题「${t.title}」`, {
       duration: 10_000,
-      action: { label: '撤销', onClick: () => void setStatus(previous) },
+      // 放弃走的是库存维度（dropped），撤销必须用显式恢复；status 直改 pending 会被拒绝。
+      action: { label: '撤销', onClick: () => void patch(`/topics/${t.id}`, { stock_transition: 'idea', basis_updated_at: dropped.updated_at }).then(() => inv(['topics', accountId], ['topic-stock', accountId])).catch((e) => toast.error(errorMessage(e))) },
     })
+  }
+  const stockTransition = async (target: 'verified', reason?: string) => {
+    setMenu(false)
+    try {
+      await patch(`/topics/${t.id}`, { stock_transition: target, basis_updated_at: t.updated_at, ...(reason ? { reason } : {}) })
+      inv(['topics', accountId], ['topic-stock', accountId])
+      toast.success('已取消排期，核验记录保留')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
+  const restoreIdea = async () => {
+    setMenu(false)
+    try {
+      await patch(`/topics/${t.id}`, { stock_transition: 'idea', basis_updated_at: t.updated_at })
+      inv(['topics', accountId], ['topic-stock', accountId])
+      toast.success('已恢复为想法')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
   }
   const togglePin = async () => {
     setMenu(false)
@@ -365,16 +478,23 @@ function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focus
                 <div className="absolute right-0 top-full z-10 mt-1 w-36 animate-fade-in rounded-lg border border-mist-200 bg-white p-1 shadow-pop" onMouseLeave={() => setMenu(false)}>
                   <button onClick={() => { setMenu(false); setEditAngle(undefined); setEdit(true) }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><Pencil className="size-3.5" />编辑选题卡</button>
                   <button onClick={togglePin} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50">{t.pinned ? <><PinOff className="size-3.5" />取消置顶</> : <><Pin className="size-3.5" />置顶</>}</button>
-                  {t.status !== 'pending' && <button onClick={() => { setMenu(false); setStatus('pending') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><RotateCcw className="size-3.5" />放回待定</button>}
-                  {t.status !== 'dropped' && <button onClick={drop} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><X className="size-3.5" />放弃</button>}
+                  {/* FR-CX-19 库存动作：每个动作单步化。used 是采用事实（无出边），
+                      dropped 的恢复是显式动作；核验只对 idea 开放（verified 用重核入口）。 */}
+                  {stock === 'dropped' && <button onClick={restoreIdea} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><RotateCcw className="size-3.5" />恢复为想法</button>}
+                  {t.status === 'pending' && stock !== 'dropped' && stock !== 'used' && <button onClick={drop} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><X className="size-3.5" />放弃</button>}
+                  {stock === 'idea' && <button onClick={() => { setMenu(false); setStockAction('verify') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><ShieldCheck className="size-3.5" />核验选题</button>}
+                  {t.status === 'pending' && stock === 'verified' && <button onClick={() => { setMenu(false); setStockAction('ready') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><CalendarDays className="size-3.5" />进入可排期</button>}
+                  {t.status === 'pending' && stock === 'verified' && <button onClick={() => { setMenu(false); setStockAction('idea') }} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><RotateCcw className="size-3.5" />退回想法</button>}
+                  {stock === 'ready' && <button onClick={() => void stockTransition('verified')} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-mist-50"><RotateCcw className="size-3.5" />取消排期</button>}
                   <button onClick={remove} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-danger hover:bg-orange-50"><Trash2 className="size-3.5" />删除</button>
                 </div>
               )}
             </div>
           )}
         </div>
-        {((t.needed_materials?.length ?? 0) > 0 || t.format || t.planned_date || sr) && (
+        {((t.needed_materials?.length ?? 0) > 0 || t.format || t.planned_date || sr || stockKnown) && (
           <div className={cn('mt-2 flex flex-wrap gap-1')}>
+            <StockBadge t={t} />
             {t.format && <Badge tone="ink">{platformFormatLabel(accountPlatform, t.format)}</Badge>}
             {accountPlatform !== 'toutiao' && t.format && accountFormat && t.format !== accountFormat && <Badge tone="red">形态与账号类型不匹配</Badge>}
             {t.planned_date && <Badge tone="gamboge"><CalendarDays className="size-3" />计划 {t.planned_date.slice(5)}</Badge>}
@@ -408,6 +528,7 @@ function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focus
         {primed && !t.work_id && canWrite && <p className="mt-2 text-[12px] text-ink-700">这是最早采用、还没开始写的选题，点「开始创作」进入编辑器。</p>}
       </Card>
       {edit && <TopicEditDialog t={{ ...t, account_id: t.account_id ?? accountId }} accountFormat={accountFormat} accountPlatform={accountPlatform} series={series} initialAngle={editAngle} onClose={() => setEdit(false)} />}
+      {stockAction && <StockActionDialog t={t} mode={stockAction} onClose={() => setStockAction(null)} />}
     </div>
   )
 }
@@ -629,6 +750,7 @@ export default function Topics() {
           </div>
         )}
       </div>
+      {tab === 'pending' && <StockWaterline accountId={acc.id} />}
       {tab === 'inbox' ? <InboxPanel accountId={acc.id} /> : tab === 'series' ? <SeriesPanel platform={acc.platform} accountId={acc.id} series={series.data ?? []} topics={list} /> : shown.length === 0 ? (
         <Card><Empty icon={<Lightbulb className="size-5" />} title={tab === 'pending' ? '还没有待定的选题' : tab === 'adopted' ? '还没有采用的选题' : '没有放弃的选题'}
           desc={tab === 'pending' ? '手动记下一个想法，或者让 AI 根据账号定位给些建议。' : undefined}

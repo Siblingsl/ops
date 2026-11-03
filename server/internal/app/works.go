@@ -419,10 +419,10 @@ func (s *Server) createWorkFromTopic(w http.ResponseWriter, r *http.Request, a *
 	var workID uuid.UUID
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		var existing *uuid.UUID
-		var topicTitle, angle, tformat string
+		var topicTitle, angle, tformat, stockStatus string
 		// 锁住选题行：并发的两个"开始创作"只有一个能建作品。
-		if err := tx.QueryRow(ctx, `SELECT title, angle, coalesce(format,'') FROM topic
-			WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL FOR UPDATE`, topicID, a.ID).Scan(&topicTitle, &angle, &tformat); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT title, angle, coalesce(format,''), stock_status FROM topic
+			WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL FOR UPDATE`, topicID, a.ID).Scan(&topicTitle, &angle, &tformat, &stockStatus); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return errNotFound
 			}
@@ -434,6 +434,9 @@ func (s *Server) createWorkFromTopic(w http.ResponseWriter, r *http.Request, a *
 		if existing != nil {
 			workID = *existing
 			return nil
+		}
+		if stockStatus == topicStockDropped {
+			return validation("已放弃的选题需要先恢复为想法，再从它建作品")
 		}
 		if strings.TrimSpace(title) == "" {
 			title = topicTitle
@@ -447,7 +450,10 @@ func (s *Server) createWorkFromTopic(w http.ResponseWriter, r *http.Request, a *
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE topic SET status='adopted', updated_at=now() WHERE id=$1`, topicID); err != nil {
+		if err := markTopicStockUsed(ctx, tx, topicID); err != nil {
+			return err
+		}
+		if err := syncTopicStatusStock(ctx, tx, topicID, "adopted"); err != nil {
 			return err
 		}
 		workID = id

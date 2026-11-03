@@ -399,12 +399,33 @@ export interface Topic {
   score_material?: number
   score_novelty?: number
   pinned?: boolean
+  // FR-CX-19：库存五态维度（idea/verified/ready/used/dropped），与 status 同步维护。
+  // verified_at=NULL 的 idea 是 Q-CX-06 的存量 unknown——逐题核验后才进新排期。
+  stock_status?: 'idea' | 'verified' | 'ready' | 'used' | 'dropped'
+  verified_at?: string | null
+  used_at?: string | null
+  verify_note?: string
+  stock_reason?: string
 }
 
 export interface TopicPage {
   items: Topic[]
   status_counts: { pending: number; adopted: number; dropped: number }
   next_cursor: string | null
+}
+
+// FR-CX-19：选题库存水位（GET /accounts/{id}/topic-stock）。
+export interface TopicStock {
+  counts: Record<string, number>
+  effective_ready: number
+  stale_ready: number
+  target: number
+  warn: number
+  need_refill: number
+  turnover_days: number | null
+  adoption_rate: number | null
+  sample_count: number
+  excluded_count: number
 }
 
 export interface OutlineItem {

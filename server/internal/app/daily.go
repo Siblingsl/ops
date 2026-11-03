@@ -462,9 +462,19 @@ func (s *Server) dailyAction(w http.ResponseWriter, r *http.Request) error {
 		}
 		if action == "start" {
 			storedAction = "started"
+			stock, err := loadTopicStockRow(ctx, tx, *tid)
+			if err != nil {
+				return err
+			}
+			if stock.StockStatus == topicStockDropped {
+				return validation("已放弃的选题需要先恢复为想法，再从它建作品")
+			}
 			// NW-E1：日推建作品也走 insertWorkTx——停用账号被拒、审计与负责人一致。
 			work, e := s.insertWorkTx(ctx, tx, a, tid, item.Title, item.Format, item.Format, "", "daily")
 			if e != nil {
+				return e
+			}
+			if e = markTopicStockUsed(ctx, tx, *tid); e != nil {
 				return e
 			}
 			wid = &work

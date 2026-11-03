@@ -195,6 +195,10 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/accounts/{accountId}/standards/{version}/archive",
 		// DEV-CX12 / FR-CX-14：骨架引用选择列表只由大纲生成界面读取。
 		"GET /api/v1/accounts/{accountId}/skeleton-notes",
+		// DEV-CX13-C / FR-CX-19：核验是人工判断「这条选题值得写」的门禁动作，
+		// 库存水位是给页面的补给节奏读数；都不作为智能体工具（智能体不代行人工核验）。
+		"POST /api/v1/topics/{id}/verify",
+		"GET /api/v1/accounts/{accountId}/topic-stock",
 		// DEV-CX02：产物构建/下载与本人隐私回执只由工作区用户页面调用。
 		"POST /api/v1/works/{id}/builds",
 		"GET /api/v1/works/{id}/builds",

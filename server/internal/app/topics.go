@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type Topic struct {
@@ -39,19 +40,28 @@ type Topic struct {
 	Pinned          bool       `json:"pinned"`
 	StrategyPillar  *string    `json:"strategy_pillar"`
 	HotItemID       *uuid.UUID `json:"hot_item_id"`
-	pinnedAt        *time.Time
+	// FR-CX-19：库存维度与核验事实。verified_at=NULL 的 idea 即 Q-CX-06 的
+	// 「存量 unknown」——逐题核验后才进新排期。
+	StockStatus string     `json:"stock_status"`
+	VerifiedAt  *time.Time `json:"verified_at"`
+	UsedAt      *time.Time `json:"used_at"`
+	VerifyNote  string     `json:"verify_note"`
+	StockReason string     `json:"stock_reason"`
+	pinnedAt    *time.Time
 }
 
 const topicCols = `t.id, t.account_id, t.title, t.angle, t.source, t.status,
 	(SELECT id FROM work WHERE topic_id=t.id AND deleted_at IS NULL ORDER BY created_at LIMIT 1), t.created_at,
 	t.audience, t.hook, t.needed_materials, t.format, to_char(t.planned_date,'YYYY-MM-DD'), t.series_id, t.score_fit, t.score_reason, t.pinned_at IS NOT NULL,
-	t.strategy_pillar, t.hot_item_id, t.pinned_at, t.updated_at`
+	t.strategy_pillar, t.hot_item_id, t.pinned_at, t.updated_at,
+	t.stock_status, t.verified_at, t.used_at, t.verify_note, t.stock_reason`
 
 func scanTopic(row interface{ Scan(...any) error }) (Topic, error) {
 	var t Topic
 	err := row.Scan(&t.ID, &t.AccountID, &t.Title, &t.Angle, &t.Source, &t.Status, &t.WorkID, &t.CreatedAt,
 		&t.Audience, &t.Hook, &t.NeededMaterials, &t.Format, &t.PlannedDate, &t.SeriesID, &t.ScoreFit, &t.ScoreReason, &t.Pinned,
-		&t.StrategyPillar, &t.HotItemID, &t.pinnedAt, &t.UpdatedAt)
+		&t.StrategyPillar, &t.HotItemID, &t.pinnedAt, &t.UpdatedAt,
+		&t.StockStatus, &t.VerifiedAt, &t.UsedAt, &t.VerifyNote, &t.StockReason)
 	if t.NeededMaterials == nil {
 		t.NeededMaterials = []string{}
 	}
@@ -403,7 +413,16 @@ func (f *topicFields) validate() error {
 	return nil
 }
 
+type topicFieldQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
 func (s *Server) applyTopicFields(ctx context.Context, id, accountID uuid.UUID, f topicFields) error {
+	return applyTopicFieldsWith(ctx, s.db, id, accountID, f)
+}
+
+func applyTopicFieldsWith(ctx context.Context, q topicFieldQuerier, id, accountID uuid.UUID, f topicFields) error {
 	var planned any = nil
 	setPlanned := f.PlannedDate != nil
 	if setPlanned && *f.PlannedDate != "" {
@@ -424,7 +443,7 @@ func (s *Server) applyTopicFields(ctx context.Context, id, accountID uuid.UUID, 
 			return validation("系列不存在")
 		}
 		var x uuid.UUID
-		if err := s.db.QueryRow(ctx, `SELECT id FROM topic_series WHERE id=$1 AND account_id=$2`, sid, accountID).Scan(&x); err != nil {
+		if err := q.QueryRow(ctx, `SELECT id FROM topic_series WHERE id=$1 AND account_id=$2`, sid, accountID).Scan(&x); err != nil {
 			return validation("系列不存在")
 		}
 		series = sid
@@ -436,7 +455,7 @@ func (s *Server) applyTopicFields(ctx context.Context, id, accountID uuid.UUID, 
 		v := truncateRunes(strings.TrimSpace(*p), n)
 		return &v
 	}
-	_, err := s.db.Exec(ctx, `UPDATE topic SET audience=coalesce($2,audience), hook=coalesce($3,hook), needed_materials=coalesce($4,needed_materials),
+	_, err := q.Exec(ctx, `UPDATE topic SET audience=coalesce($2,audience), hook=coalesce($3,hook), needed_materials=coalesce($4,needed_materials),
 		format=coalesce($5,format), planned_date=CASE WHEN $6 THEN $7::date ELSE planned_date END,
 		series_id=CASE WHEN $8 THEN $9::uuid ELSE series_id END,
 		score_fit=coalesce($10,score_fit), score_reason=CASE WHEN $10::int IS NULL THEN score_reason ELSE '手动调整' END,
@@ -736,6 +755,11 @@ func (s *Server) updateTopic(w http.ResponseWriter, r *http.Request) error {
 		Title  *string `json:"title"`
 		Angle  *string `json:"angle"`
 		Status *string `json:"status"`
+		// FR-CX-19：库存转换（reason 对应 stock_reason）。verified 由专用核验端点、
+		// used 由「从选题建作品」事务触发，都不经由 PATCH。
+		StockTransition *string    `json:"stock_transition"`
+		StockReason     *string    `json:"reason"`
+		BasisUpdatedAt  *time.Time `json:"basis_updated_at"`
 		topicFields
 	}
 	if err := decode(r, &in); err != nil {
@@ -743,6 +767,9 @@ func (s *Server) updateTopic(w http.ResponseWriter, r *http.Request) error {
 	}
 	if in.Status != nil && *in.Status != "pending" && *in.Status != "adopted" && *in.Status != "dropped" {
 		return validation("状态只能是待定、已采用或已放弃")
+	}
+	if in.StockTransition != nil && in.Status != nil {
+		return validation("库存转换与状态直改是两条路径，不能在同一次请求里混用")
 	}
 	if err := in.topicFields.validate(); err != nil {
 		return err
@@ -762,12 +789,77 @@ func (s *Server) updateTopic(w http.ResponseWriter, r *http.Request) error {
 			return validation(fmt.Sprintf("这个账号的类型是%s，选题预计形态只能是账号类型或留空", formatNames[a.ContentFormat]))
 		}
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE topic SET title=coalesce($2,title), angle=coalesce($3,angle), status=coalesce($4,status), updated_at=now() WHERE id=$1`,
-		id, in.Title, in.Angle, in.Status); err != nil {
+	reason := ""
+	if in.StockReason != nil {
+		reason = *in.StockReason
+	}
+	planned := ""
+	if in.topicFields.PlannedDate != nil {
+		planned = *in.topicFields.PlannedDate
+	}
+	if in.StockTransition != nil {
+		transition := *in.StockTransition
+		if transition != topicStockIdea && transition != topicStockVerified && transition != topicStockReady && transition != topicStockDropped {
+			return validation("库存转换目标无效")
+		}
+	}
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		current, err := loadTopicStockRow(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if in.StockTransition != nil {
+			if err := checkTopicStockBasis(current, in.BasisUpdatedAt); err != nil {
+				return err
+			}
+			if err := applyTopicStockTransition(ctx, tx, id, current, *in.StockTransition, reason, planned); err != nil {
+				return err
+			}
+		} else if in.Status != nil && current.Status != *in.Status {
+			if current.Status == "adopted" {
+				return validation("已采用的选题不能退回待定或放弃")
+			}
+			switch *in.Status {
+			case "adopted":
+				if current.StockStatus == topicStockDropped {
+					return validation("已放弃的选题需要先恢复为想法，再决定是否采用")
+				}
+				if current.StockStatus != topicStockUsed {
+					if err := markTopicStockUsed(ctx, tx, id); err != nil {
+						return err
+					}
+				}
+				if err := syncTopicStatusStock(ctx, tx, id, "adopted"); err != nil {
+					return err
+				}
+			case "dropped":
+				if current.StockStatus == topicStockUsed {
+					return validation("已采用的选题是既成事实，不能直接标记为放弃")
+				}
+				if current.StockStatus != topicStockDropped {
+					if err := applyTopicStockTransition(ctx, tx, id, current, topicStockDropped, reason, ""); err != nil {
+						return err
+					}
+				}
+			case "pending":
+				if current.StockStatus == topicStockUsed {
+					return validation("已采用的选题不能退回待定；采用是既成事实")
+				}
+				if current.StockStatus == topicStockDropped {
+					return validation("已放弃的选题请用库存恢复动作显式恢复为想法")
+				}
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE topic SET title=coalesce($2,title), angle=coalesce($3,angle), updated_at=now() WHERE id=$1`, id, in.Title, in.Angle); err != nil {
+			return err
+		}
+		return applyTopicFieldsWith(ctx, tx, id, accountID, in.topicFields)
+	})
+	if err != nil {
 		return err
 	}
-	if err := s.applyTopicFields(ctx, id, accountID, in.topicFields); err != nil {
-		return err
+	if in.StockTransition != nil {
+		s.audit(ctx, "cx_topic_stock_transition", "topic", id.String(), "ok", map[string]any{"target": *in.StockTransition})
 	}
 	t, err := scanTopic(s.db.QueryRow(ctx, `SELECT `+topicCols+` FROM topic t WHERE t.id=$1`, id))
 	if err != nil {
@@ -823,11 +915,12 @@ func (s *Server) startWorkFromTopic(w http.ResponseWriter, r *http.Request) erro
 	var title, angle string
 	var needed []string
 	var planned *string
+	var stockStatus string
 	// NW-A7：采纳选题与建作品同一事务；已建过则直接返回那一篇，不再重复创建。
 	var workID uuid.UUID
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT title, angle, needed_materials, to_char(planned_date,'YYYY-MM-DD') FROM topic WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`,
-			id).Scan(&title, &angle, &needed, &planned); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT title, angle, needed_materials, to_char(planned_date,'YYYY-MM-DD'), stock_status
+			FROM topic WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, id).Scan(&title, &angle, &needed, &planned, &stockStatus); err != nil {
 			return err
 		}
 		var existing *uuid.UUID
@@ -838,11 +931,19 @@ func (s *Server) startWorkFromTopic(w http.ResponseWriter, r *http.Request) erro
 			workID = *existing
 			return nil
 		}
+		// FR-CX-19：已放弃的选题不能直接采用（used 是事实终态，恢复是显式动作）；
+		// 过渡期里未核验的存量 idea 仍可直接采用（Q-CX-06：旧采用路径保持原行为）。
+		if stockStatus == topicStockDropped {
+			return validation("已放弃的选题需要先恢复为想法，再从它建作品")
+		}
 		id2, err := s.insertWorkTx(ctx, tx, a, &id, title, format, tformat, "", "topic")
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE topic SET status='adopted', updated_at=now() WHERE id=$1`, id); err != nil {
+		if err := markTopicStockUsed(ctx, tx, id); err != nil {
+			return err
+		}
+		if err := syncTopicStatusStock(ctx, tx, id, "adopted"); err != nil {
 			return err
 		}
 		if planned != nil {

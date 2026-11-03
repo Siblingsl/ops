@@ -305,6 +305,8 @@ func (s *Server) buildRouter() http.Handler {
 			r.Patch("/topics/{id}", s.h(s.updateTopic))
 			r.Delete("/topics/{id}", s.h(s.deleteTopic))
 			r.Post("/topics/{id}/works", s.h(s.startWorkFromTopic))
+			r.Post("/topics/{id}/verify", s.h(s.verifyTopicStock))
+			r.Get("/accounts/{accountId}/topic-stock", s.h(s.topicStock))
 
 			r.Post("/accounts/{accountId}/wechat/link-check", s.h(s.wechatLinkCheck))
 			r.Get("/accounts/{accountId}/works", s.h(s.listWorks))

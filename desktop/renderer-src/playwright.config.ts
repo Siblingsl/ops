@@ -101,6 +101,7 @@ export default defineConfig({
         'cx02-rendering-experiment-electron.spec.ts',
         'cx11-title-diagnosis.spec.ts',
         'cx11-topic-diagnosis.spec.ts',
+        'cx13-topic-stock-desktop.spec.ts',
         'cx09-visual-plan-desktop.spec.ts',
         'cx09-cards-build-desktop.spec.ts',
         'cx11-paste-image-desktop.spec.ts',

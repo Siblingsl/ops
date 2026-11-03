@@ -105,10 +105,23 @@ func TestE2E19DailyRecommend(t *testing.T) {
 	if source != "daily" || audience == "" {
 		t.Fatal("incomplete adopted topic")
 	}
+	if st, body := cx13Verify(t, adopted.TopicID, cx13VerifyNote(20)); st != 200 {
+		t.Fatalf("日推核验: %d %s", st, body)
+	}
+	if st, body, _ := cx13PatchTopic(t, adopted.TopicID, map[string]any{"stock_transition": "ready", "planned_date": "2030-01-02"}); st != 422 {
+		t.Fatalf("已采用的日推不可重新进入可排期库存: %d %s", st, body)
+	}
+	if st, body, _ := cx13PatchTopic(t, adopted.TopicID, map[string]any{"stock_transition": "dropped"}); st != 422 {
+		t.Fatalf("已采用的日推不可通过放弃重入: %d %s", st, body)
+	}
 	var started struct {
 		WorkID uuid.UUID `json:"work_id"`
 	}
 	env.mustJSON(t, "POST", fmt.Sprintf("/api/v1/daily/%s/items/0/start", d.ID), nil, &started)
+	stock, usedAt, verifiedAt := cx13ReadStock(t, adopted.TopicID)
+	if stock != "used" || usedAt == nil || verifiedAt == nil {
+		t.Fatalf("日推开始创作应同步库存并保留核验: %s %v %v", stock, usedAt, verifiedAt)
+	}
 	var viewpoint string
 	_ = env.srv.db.QueryRow(ctx, `SELECT viewpoint FROM work WHERE id=$1`, started.WorkID).Scan(&viewpoint)
 	if viewpoint != "" {
