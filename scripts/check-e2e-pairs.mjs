@@ -31,6 +31,7 @@ const ALLOWLIST = new Map([
   ['cx13-review-multitime.spec.ts', '多时点复盘、实验与 v2 逐项回流：浏览器 vs 真实 Electron'],
   ['cx13-comment-inbox.spec.ts', '评论台账逐条录入与 AI 拟稿：浏览器 vs 桌面工作台'],
   ['cx13-standards.spec.ts', '回复标准版本与归档语义：浏览器 vs 桌面工作台'],
+  ['cx13-account-analysis.spec.ts', '账号分析与主页自检：浏览器 vs 真实 Electron'],
   ['cx12-skeleton-reference.spec.ts', '拆解骨架供大纲引用：浏览器 vs 桌面工作台'],
   ['agent-documents.spec.ts', '文档上传与解析：浏览器 vs 桌面工作台'],
   ['agent-events.spec.ts', '运行事件恢复：浏览器 SSE vs 桌面 event_resume'],

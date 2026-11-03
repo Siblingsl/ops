@@ -284,12 +284,38 @@ func (s *Server) draftCommentReply(w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
+	// DEV-CX13-F / FR-CX-23 软提示联动：拟稿时读取该账号当前生效的回复标准，把定位
+	// 与文字规则注入提示；无标准照常拟稿，标准不阻断也不落进评论数据（audit 记版本）。
+	standardHint := ""
+	standardVersion := 0
+	std, stdErr := scanOpsStandard(s.db.QueryRow(ctx, `SELECT `+opsStandardCols+` FROM ops_standard
+		WHERE account_id=$1 AND effective_from<=(now() AT TIME ZONE 'Asia/Shanghai')::date
+		ORDER BY effective_from DESC, version DESC LIMIT 1`, item.AccountID))
+	if stdErr == nil {
+		rules := make([]string, 0, len(std.TextRules))
+		for _, rule := range std.TextRules {
+			if t := strings.TrimSpace(rule.Text); t != "" {
+				rules = append(rules, "- "+t)
+			}
+		}
+		if strings.TrimSpace(std.Positioning) != "" || len(rules) > 0 {
+			standardHint = "\n\n账号回复标准（软提示：语气与措辞尽量贴合，冲突时以合规与事实为准，不因追求贴合而编造）：\n定位：" +
+				strings.TrimSpace(std.Positioning)
+			if len(rules) > 0 {
+				standardHint += "\n文字规则：\n" + strings.Join(rules, "\n")
+			}
+			standardVersion = std.Version
+		}
+	} else if !errors.Is(stdErr, pgx.ErrNoRows) {
+		return stdErr
+	}
 	output := struct {
 		Category string `json:"category"`
 		Reply    string `json:"reply"`
 	}{}
 	userPrompt := "给以下读者评论分类并拟一条回复草稿。只输出 JSON：{\"category\":\"question|objection|praise|negative|spam\",\"reply\":\"≤80字的回复草稿\"}。" +
-		"reply 要具体、可由作者直接使用；不得包含链接、承诺或敏感数据；不得复述评论中的个人信息。\n\n评论内容：\n" + item.Content
+		"reply 要具体、可由作者直接使用；不得包含链接、承诺或敏感数据；不得复述评论中的个人信息。" +
+		standardHint + "\n\n评论内容：\n" + item.Content
 	aiResult, aiErr := s.runAIJSON(ctx, aiTask{Type: "cx_comment_reply", Account: account, User: userPrompt, Bare: true, SkipStyle: true},
 		&output, func() error {
 			if !commentCategories[output.Category] {
@@ -316,7 +342,8 @@ func (s *Server) draftCommentReply(w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
-	s.audit(ctx, "comment_reply_draft", "comment_inbox", item.ID.String(), "ok", map[string]any{"reply_revision": updated.ReplyRevision})
+	s.audit(ctx, "comment_reply_draft", "comment_inbox", item.ID.String(), "ok", map[string]any{
+		"reply_revision": updated.ReplyRevision, "standard_version": standardVersion})
 	return ok(w, updated)
 }
 

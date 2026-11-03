@@ -97,7 +97,7 @@ export default defineConfig({
       testMatch: [
         'desktop-window-drag.spec.ts', 'platform-intents-real-electron.local.spec.ts',
         'skills-electron.spec.ts', 'toutiao-electron.spec.ts',
-        'cx13-account-analysis-electron.spec.ts', 'cx01-render-check.spec.ts', 'cx01-shared-fixtures.spec.ts',
+        'cx13-account-analysis.spec.ts', 'cx01-render-check.spec.ts', 'cx01-shared-fixtures.spec.ts',
         'cx02-rendering-experiment-electron.spec.ts',
         'cx11-title-diagnosis.spec.ts',
         'cx11-topic-diagnosis.spec.ts',

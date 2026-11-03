@@ -212,3 +212,78 @@ func TestCXCommentInboxTopicConversionIdempotentAndListFilter(t *testing.T) {
 		t.Fatal("response must not expose an author_raw field")
 	}
 }
+
+// DEV-CX13-F / FR-CX-23 软提示联动：拟稿时读取账号当前生效的回复标准——
+// 有标准时 audit 记 standard_version；无标准照常拟稿（version 0）。标准不阻断、不进评论数据。
+func TestCXCommentReplySuggestReadsEffectiveStandard(t *testing.T) {
+	ensureCommentReplyRoute(t)
+	// 独立账号：本用例会创建生效标准，不得污染共享 fixture（同 D-160 批次对
+	// TestCXStandardChangedFlag 的处理），否则 TestCXOpsStandardVersionsAndEffectiveQuery
+	// 的 v1 创建会撞 409 version_conflict。
+	var fresh Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{"platform": "xhs", "name": "拟稿标准联动专用号", "content_format": "image_note"}, &fresh)
+	account := fresh
+
+	post := func(content string) commentInboxItem {
+		var item commentInboxItem
+		status, body := env.do("POST", "/api/v1/comments", map[string]any{"account_id": account.ID, "content": content})
+		if status != 201 {
+			t.Fatalf("create comment: %d %s", status, body)
+		}
+		_ = json.Unmarshal(body, &item)
+		return item
+	}
+	draft := func(item commentInboxItem) {
+		t.Helper()
+		status, body := env.do("POST", "/api/v1/comment-inbox/"+item.ID+"/reply-suggest", map[string]any{"base_revision": item.Revision})
+		if status != 200 {
+			t.Fatalf("reply-suggest: %d %s", status, body)
+		}
+	}
+	lastAuditVersion := func(itemID string) int {
+		t.Helper()
+		var detail []byte
+		if err := env.srv.db.QueryRow(context.Background(), `SELECT detail FROM audit_log WHERE action='comment_reply_draft' AND target_id=$1 ORDER BY created_at DESC LIMIT 1`, itemID).Scan(&detail); err != nil {
+			t.Fatal(err)
+		}
+		var d struct {
+			StandardVersion int `json:"standard_version"`
+		}
+		if err := json.Unmarshal(detail, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d.StandardVersion
+	}
+
+	// 无标准：拟稿照常，audit standard_version=0。
+	noStd := post("这篇的排版思路对我很有帮助，请问图片模板可以分享吗？")
+	draft(noStd)
+	if v := lastAuditVersion(noStd.ID); v != 0 {
+		t.Fatalf("no standard must record version 0: %d", v)
+	}
+
+	// 建当前生效标准（owner；effective_from=今天，账号时区）。
+	today := time.Now().In(time.FixedZone("Asia/Shanghai", 8*3600)).Format("2006-01-02")
+	status, body := env.do("POST", "/api/v1/accounts/"+account.ID.String()+"/standards", map[string]any{
+		"base_version": 0, "positioning": "面向个人记录型作者的陪伴式分享，语气平实、直接",
+		"text_rules":   []map[string]any{{"text": "回复不超过三句话，先回应问题再给一步行动"}}, 
+		"effective_from": today,
+	})
+	if status != 201 {
+		t.Fatalf("create standard: %d %s", status, body)
+	}
+
+	// 有标准：拟稿照常成功，audit standard_version=1；标准文本不进评论数据。
+	withStd := post("评论区总问我用什么工具，能列一个清单吗？")
+	draft(withStd)
+	if v := lastAuditVersion(withStd.ID); v != 1 {
+		t.Fatalf("effective standard must be recorded: %d", v)
+	}
+	var stored string
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT content FROM comment_inbox WHERE id=$1`, withStd.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stored, "陪伴式分享") {
+		t.Fatal("standard text must not leak into comment_inbox")
+	}
+}
