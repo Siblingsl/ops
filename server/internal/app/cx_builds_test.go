@@ -328,7 +328,7 @@ func TestCX02BuildArtifactUploadIsPrivateIdempotentAndConflictFailsBuild(t *test
 	}
 }
 
-func TestCX03CompleteChecksFrozenDOMAndKeepsPrivacyGateClosed(t *testing.T) {
+func TestCX03CompleteChecksFrozenDOMAndBuildsCleanArtifacts(t *testing.T) {
 	account := env.accounts(t).wechat
 	var work Work
 	env.mustJSON(t, "POST", "/api/v1/accounts/"+account.ID.String()+"/works", map[string]string{"title": "服务端完整性校验"}, &work)
@@ -350,28 +350,36 @@ func TestCX03CompleteChecksFrozenDOMAndKeepsPrivacyGateClosed(t *testing.T) {
 	if status, body := cxBuildUploadForTest(t, build.BuildID.String(), "html", "article.html", validHTML, ""); status != 200 {
 		t.Fatalf("upload base html: status=%d body=%s", status, body)
 	}
-	status, body := env.do("POST", "/api/v1/builds/"+build.BuildID.String()+"/complete", cxBuildCompletionForTest(t, build.BuildID.String()))
-	if status != 503 || !bytes.Contains(body, []byte(`"scanner_unverified"`)) || !bytes.Contains(body, []byte(`"Q-CX-03"`)) {
-		t.Fatalf("valid HTML must reach the unresolved privacy policy gate: status=%d body=%s", status, body)
+	completion := cxBuildCompletionForTest(t, build.BuildID.String())
+	// 桌面端在 Windows 显示缩放下 devicePixelRatio 可为 1.25：小数必须仍能 canonical 入 manifest。
+	completion["renderer_receipt"].(map[string]any)["device_scale_factor"] = 1.25
+	status, body := env.do("POST", "/api/v1/builds/"+build.BuildID.String()+"/complete", completion)
+	// Q-CX-03 拍板后（90 D-165）：纯净产物无 ERROR/WARN，complete 直接置 built。
+	if status != 200 || !bytes.Contains(body, []byte(`"status":"built"`)) {
+		t.Fatalf("clean artifacts must complete and build: status=%d body=%s", status, body)
 	}
 	if bytes.Contains(body, []byte("固定快照中的正文")) {
 		t.Fatalf("privacy response must not echo exported source text: %s", body)
 	}
-	var state, errorCode string
-	var detail []byte
-	if err := env.srv.db.QueryRow(t.Context(), `SELECT status,error_code,error_detail FROM work_build WHERE id=$1`, build.BuildID).Scan(&state, &errorCode, &detail); err != nil {
+	// 后续场景要在同一冻结来源上重新走构建链路，先解除复用索引，避免 create 复用本构建。
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE work_build SET reusable=false WHERE id=$1`, build.BuildID); err != nil {
 		t.Fatal(err)
 	}
-	if state != "failed" || errorCode != "scanner_unverified" || !bytes.Contains(detail, []byte("cx-html-1")) {
-		t.Fatalf("verified structural report must be retained without falsely building: status=%s error=%s detail=%s", state, errorCode, detail)
+	var state, errorCode string
+	var detail []byte
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT status,COALESCE(error_code,''),error_detail FROM work_build WHERE id=$1`, build.BuildID).Scan(&state, &errorCode, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if state != "built" || errorCode != "" {
+		t.Fatalf("clean build must be built without error: status=%s error=%s detail=%s", state, errorCode, detail)
 	}
 	var buildDetail struct {
 		Validation   json.RawMessage `json:"validation"`
 		DownloadGate map[string]any  `json:"download_gate"`
 	}
 	env.mustJSON(t, "GET", "/api/v1/builds/"+build.BuildID.String(), nil, &buildDetail)
-	if !bytes.Contains(buildDetail.Validation, []byte("report_hash")) || buildDetail.DownloadGate["reason"] != "build_not_complete" {
-		t.Fatalf("build detail should expose the safe validation report and closed download state: %+v", buildDetail)
+	if !bytes.Contains(buildDetail.Validation, []byte("report_hash")) || buildDetail.DownloadGate["reason"] != "clear" {
+		t.Fatalf("clean built build should expose the validation report and an open download state: %+v", buildDetail)
 	}
 
 	_, tampered := cxBuildCreateForTest(t, work.ID.String(), work.Revision, []string{"wechat_html"})
@@ -404,8 +412,8 @@ func TestCX03CompleteChecksFrozenDOMAndKeepsPrivacyGateClosed(t *testing.T) {
 		t.Fatalf("stable HTML name must be generated from frozen title and revision: %q", stableName)
 	}
 	status, body = env.do("POST", "/api/v1/builds/"+stableBuild.BuildID.String()+"/complete", cxBuildCompletionForTest(t, stableBuild.BuildID.String()))
-	if status != 503 || !bytes.Contains(body, []byte(`"scanner_unverified"`)) {
-		t.Fatalf("stable HTML should pass DOM/source checks then stop at unresolved privacy policy: status=%d body=%s", status, body)
+	if status != 200 || !bytes.Contains(body, []byte(`"status":"built"`)) {
+		t.Fatalf("stable HTML should pass DOM/source checks and build under resolved privacy policy: status=%d body=%s", status, body)
 	}
 }
 

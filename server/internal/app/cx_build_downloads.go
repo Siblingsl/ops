@@ -122,9 +122,10 @@ func cxPrivacyAckExists(raw []byte, userID uuid.UUID, reportHash string, warning
 }
 
 func (s *Server) ackCXBuildPrivacy(w http.ResponseWriter, r *http.Request) error {
-	if err := s.requireEditor(r.Context()); err != nil {
-		return err
-	}
+	// Q-CX-04 拍板（90 D-165，2026-11-03）：owner/editor/viewer 都可以写**本人**知悉回执。
+	// 鉴权依赖会话中间件（ident 已限定当前工作区）；回执只绑定当前 report_hash 并
+	// 记录到构建的 acknowledgements，不改变构建状态、不赋任何业务写权限；
+	// 构建 built 与否仍由 complete 链路决定。
 	buildID, err := pathID(r, "id")
 	if err != nil {
 		return err

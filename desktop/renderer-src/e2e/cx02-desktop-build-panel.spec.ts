@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { api, registerAccount } from './support'
 
-test('DEV-CX02 桌面稳定版提交冻结产物并保留隐私阻断', async ({ page }) => {
+test('DEV-CX02 桌面稳定版提交冻结产物并覆盖 WARN 知悉放行', async ({ page }) => {
   const account = await registerAccount(page, '长图文', 'wechat_mp')
   const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: '桌面冻结快照构建验收' }) as { id: string; revision: number }
   const current = await api(page, 'GET', `/works/${work.id}`) as { revision: number }
@@ -52,19 +52,56 @@ test('DEV-CX02 桌面稳定版提交冻结产物并保留隐私阻断', async ({
   await panel.getByRole('button', { name: '生成校验报告', exact: true }).click()
   const completion = await complete
   const completionBody = await completion.text()
-  expect(completion.status(), completionBody).toBe(503)
-  expect(completionBody).toContain('scanner_unverified')
-  await expect(panel.getByText(/未发布的规则决策：Q-CX-03/)).toBeVisible()
-  await expect(panel.getByText('下载门禁：build_not_complete')).toBeVisible()
+  // Q-CX-03 拍板后（90 D-165）：纯净产物无 ERROR/WARN，complete 直接置 built。
+  expect(completion.status(), completionBody).toBe(200)
+  expect(completionBody).toContain('"status":"built"')
+  await expect(panel.getByText(/隐私扫描：pass · ERROR 0 · WARN 0/)).toBeVisible()
+  await expect(panel.getByText(/未发布的规则决策/)).toHaveCount(0)
 
-  const list = await api(page, 'GET', `/works/${work.id}/builds?limit=8`) as { items: Array<{ id: string; status: string; error_code: string }> }
-  expect(list.items[0]).toMatchObject({ status: 'failed', error_code: 'scanner_unverified' })
+  const list = await api(page, 'GET', `/works/${work.id}/builds?limit=8`) as { items: Array<{ id: string; status: string; error_code: string | null }> }
+  expect(list.items[0]).toMatchObject({ status: 'built', error_code: null })
   const build = await api(page, 'GET', `/builds/${list.items[0].id}`) as { artifacts: Array<{ kind: string; downloadable: boolean }>; download_gate: { allowed: boolean; reason: string } }
   expect(build.artifacts.map(item => item.kind).sort()).toEqual(['html', 'png', 'stable_html'])
-  expect(build.artifacts.every(item => !item.downloadable)).toBe(true)
-  expect(build.download_gate).toMatchObject({ allowed: false, reason: 'build_not_complete' })
+  expect(build.artifacts.every(item => item.downloadable)).toBe(true)
+  expect(build.download_gate).toMatchObject({ allowed: true, reason: 'clear' })
+  const detailPanel = page.getByTestId('build-detail')
+  await expect(detailPanel.getByRole('button', { name: '下载 manifest.json' })).toBeVisible()
+  await expect(detailPanel.getByRole('button', { name: '下载图片证据 CSV' })).toBeVisible()
   const unchanged = await api(page, 'GET', `/works/${work.id}`) as { sections: Array<{ content_md: string }> }
   expect(unchanged.sections[0].content_md).toBe('这段正文用于验证桌面构建。')
+
+  // WARN 旅程：正文引入邮箱候选（WARN）→ 构建仍 built，下载门禁要求本人逐项知悉回执。
+  const currentWork = await api(page, 'GET', `/works/${work.id}`) as { sections: Array<{ id: string; revision: number; content_md: string }> }
+  await api(page, 'PATCH', `/sections/${section.id}`, {
+    content_md: '这段正文包含 ops-fixture@example.com 作为知悉确认验收样本。',
+    base_revision: currentWork.sections[0].revision,
+  })
+  const warnComplete = page.waitForResponse(response => response.url().includes('/complete') && response.request().method() === 'POST')
+  await panel.getByRole('button', { name: '生成校验报告', exact: true }).click()
+  const warnCompletion = await warnComplete
+  const warnBody = await warnCompletion.text()
+  expect(warnCompletion.status(), warnBody).toBe(200)
+  expect(warnBody).toContain('"status":"built"')
+  // 同一正文渲染进 html 与 stable_html，两个 DOM 各报一条 email 候选 → WARN 2。
+  await expect(detailPanel.getByText(/隐私扫描：warn · ERROR 0 · WARN [1-9]/)).toBeVisible()
+  await expect(detailPanel.getByText('下载门禁：privacy_ack_required')).toBeVisible()
+  const warnList = await api(page, 'GET', `/works/${work.id}/builds?limit=8`) as { items: Array<{ id: string; status: string; error_code: string | null }> }
+  expect(warnList.items[0]).toMatchObject({ status: 'built', error_code: null })
+  const warnBuildID = warnList.items[0].id
+  const ackGate = await api(page, 'GET', `/builds/${warnBuildID}`) as { download_gate: { allowed: boolean; reason: string }; validation?: { privacy?: { warnings: number } } }
+  expect(ackGate.download_gate).toMatchObject({ allowed: false, reason: 'privacy_ack_required' })
+  expect(ackGate.validation?.privacy?.warnings).toBeGreaterThan(0)
+
+  // 逐项勾选全部 WARN 发现并提交本人知悉回执 → 门禁转 acknowledged，下载开放。
+  const warnBoxes = detailPanel.locator('input[type="checkbox"]')
+  const boxCount = await warnBoxes.count()
+  expect(boxCount).toBeGreaterThan(0)
+  for (let index = 0; index < boxCount; index += 1) await warnBoxes.nth(index).check()
+  await detailPanel.getByRole('button', { name: '提交本人逐项知悉回执' }).click()
+  await expect(detailPanel.getByText('下载门禁：privacy_ack_required')).toHaveCount(0)
+  await expect(detailPanel.getByRole('button', { name: '下载 manifest.json' })).toBeVisible()
+  const acknowledgedGate = await api(page, 'GET', `/builds/${warnBuildID}`) as { download_gate: { allowed: boolean; reason: string } }
+  expect(acknowledgedGate.download_gate).toMatchObject({ allowed: true, reason: 'acknowledged' })
 })
 
 // DEV-CX03 / T-CX05 桌面旅程：上传产物被服务端 422 拒绝的界面呈现、渲染期间改稿的

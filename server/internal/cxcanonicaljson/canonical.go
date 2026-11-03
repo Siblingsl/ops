@@ -136,7 +136,20 @@ func appendValue(out *strings.Builder, value any) error {
 		}
 		out.WriteByte('}')
 	default:
-		return fmt.Errorf("unsupported canonical JSON value %T", value)
+		// Named slices, structs, and other JSON-serializable Go values are
+		// encoded through encoding/json first and re-canonicalized, so the
+		// byte format stays exactly the restricted JSON above. Values that
+		// encoding/json cannot represent fail closed. Decimal numbers keep
+		// being rejected by appendInteger after the round trip.
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return fmt.Errorf("unsupported canonical JSON value %T: %w", value, err)
+		}
+		decoded, err := Parse(encoded)
+		if err != nil {
+			return fmt.Errorf("unsupported canonical JSON value %T: %w", value, err)
+		}
+		return appendValue(out, decoded)
 	}
 	return nil
 }

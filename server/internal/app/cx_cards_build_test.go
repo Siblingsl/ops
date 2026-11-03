@@ -14,7 +14,7 @@ import (
 )
 
 // DEV-CX09：用户确认计划 → options.cards 采用映射 → xhs_cards 构建 → 服务端 ZIP 校验链。
-// 这些用例只证明本地契约；Q-CX-03/04 未决时 complete 仍必须停在 scanner_unverified，built 与下载都不开放。
+// 这些用例只证明本地契约；Q-CX-03/04 已拍板（90 D-165）：纯净产物 complete 直接置 built，下载按 WARN 知悉确认门禁放行。
 
 func cxTestCardsPNG(t *testing.T, width, height int) []byte {
 	t.Helper()
@@ -160,7 +160,7 @@ func TestCX09CardsBuildUsesPreviewHashesAndValidatesZIP(t *testing.T) {
 		t.Fatalf("mismatched zip must fail the build: code=%s err=%v", failedCode, err)
 	}
 
-	// 正确的三张卡片：complete 通过结构/像素校验后仍被 Q-CX-03 策略阻断。
+	// 正确的三张卡片：结构/像素校验通过后，Q-CX-03 拍板（90 D-165）纯净产物直接置 built。
 	second := cxTestCreateCardsBuild(t, work, preview, preview.Cards)
 	names := []string{"01-cover.png", "02-point-1.png", "03-end.png"}
 	goodZIP := cxTestCardsZIP(t, names, [][]byte{cxTestCardsPNG(t, 1080, 1440), cxTestCardsPNG(t, 1080, 1440), cxTestCardsPNG(t, 1080, 1440)})
@@ -169,25 +169,20 @@ func TestCX09CardsBuildUsesPreviewHashesAndValidatesZIP(t *testing.T) {
 	}
 	validID, validName := cxTestBuildArtifact(t, second.BuildID.String())
 	status, body := cxTestCompleteCardsBuild(t, second.BuildID.String(), validID, validName, second.SourceHash, second.ParamsHash)
-	if status != 503 || !bytes.Contains(body, []byte("scanner_unverified")) {
-		t.Fatalf("complete must stay blocked by privacy policy: status=%d body=%s", status, body)
+	if status != 200 || !bytes.Contains(body, []byte(`"status":"built"`)) {
+		t.Fatalf("valid cards build must complete: status=%d body=%s", status, body)
 	}
 	var buildStatus, errorCode string
-	if err := env.srv.db.QueryRow(t.Context(), `SELECT status,error_code FROM work_build WHERE id=$1`, second.BuildID).Scan(&buildStatus, &errorCode); err != nil || buildStatus != "failed" || errorCode != "scanner_unverified" {
-		t.Fatalf("cards build must not reach built: status=%s code=%s err=%v", buildStatus, errorCode, err)
-	}
-	var allowed bool
-	var reason string
-	if err := env.srv.db.QueryRow(t.Context(), `SELECT status FROM work_build WHERE id=$1`, second.BuildID).Scan(&buildStatus); err != nil {
-		t.Fatal(err)
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT status,COALESCE(error_code,'') FROM work_build WHERE id=$1`, second.BuildID).Scan(&buildStatus, &errorCode); err != nil || buildStatus != "built" || errorCode != "" {
+		t.Fatalf("cards build must be built without error: status=%s code=%s err=%v", buildStatus, errorCode, err)
 	}
 	var detail map[string]any
 	env.mustJSON(t, "GET", "/api/v1/builds/"+second.BuildID.String(), nil, &detail)
 	gate, _ := detail["download_gate"].(map[string]any)
-	allowed, _ = gate["allowed"].(bool)
-	reason, _ = gate["reason"].(string)
-	if allowed || reason == "" {
-		t.Fatalf("download gate must stay closed: %+v", gate)
+	allowed, _ := gate["allowed"].(bool)
+	reason, _ := gate["reason"].(string)
+	if !allowed || reason != "clear" {
+		t.Fatalf("clean built cards build must allow download without acknowledgement: %+v", gate)
 	}
 }
 

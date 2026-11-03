@@ -36,7 +36,7 @@ var (
 	cxPrivacyPhonePattern   = regexp.MustCompile(`\b1[3-9][0-9]{9}\b`)
 	cxPrivacyIPv4Pattern    = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`)
 	cxPrivacyInternalHost   = regexp.MustCompile(`(?i)\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.(?:local|lan|internal|localhost)\b`)
-	cxPrivacyPolicyResolved = false // Q-CX-03: email/mobile severity remains a product decision.
+	cxPrivacyPolicyResolved = true // Q-CX-03 拍板（90 D-165，2026-11-03）：邮箱/手机号 WARN + 本人知悉确认；ERROR 规则仍一律阻断。
 	cxPrivacyStartupHealthy = cxPrivacyRunCanaries()
 )
 

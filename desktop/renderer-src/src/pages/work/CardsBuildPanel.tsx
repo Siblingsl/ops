@@ -14,7 +14,7 @@ export type CardsBuildPreview = CXVisualCardPreview & {
 }
 
 // DEV-CX09：用户确认计划 → 采用为 xhs_cards 构建输入 → 本机渲染 PNG → ZIP → 服务端逐张校验。
-// 边界：一次点击只创建一个构建；Q-CX-03/04 未决时服务端仍停在 scanner_unverified，不置 built、不开放下载。
+// 边界：一次点击只创建一个构建；Q-CX-03/04 已拍板（90 D-165）后纯净组图构建直接置 built，下载按门禁四态开放。
 type CardsBuildDetail = {
   id: string
   status: 'running' | 'built' | 'failed'
@@ -99,7 +99,7 @@ export function CardsBuildPanel({ preview, work, canWrite }: { preview: CardsBui
         setNotice('组图交付包已通过结构与像素校验。')
       } catch (reason) {
         if (!(reason instanceof ApiError) || reason.code !== 'scanner_unverified') throw reason
-        setNotice('结构与逐张像素校验已完成；隐私扫描发布规则仍待确认，服务端已阻止交付。')
+        setNotice('结构与逐张像素校验已完成；产物包含阻断级隐私发现，服务端已阻止交付。')
       }
       setDetail(await get<CardsBuildDetail>(`/builds/${created.build_id}`))
     } catch (reason) {

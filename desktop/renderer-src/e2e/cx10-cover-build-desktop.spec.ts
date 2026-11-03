@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
  * DEV-CX10 / FR-CX-09：真实 Electron 客户端里生成多比例封面交付包。
  *
  * 与浏览器端同一契约，但跑的是桌面工作台：面板只给当前平台合法预设、低分辨率必须确认、
- * complete 仍停在 scanner_unverified，不置 built、不开放下载，也不新建派生图片。
+ * complete 直接置 built（Q-CX-03/04 已拍板，90 D-165），下载按门禁四态开放，也不新建派生图片。
  */
 
 async function api(page: Page, origin: string, method: string, path: string, data?: unknown) {
@@ -116,23 +116,23 @@ test('DEV-CX10 桌面多比例封面交付构建逐预设校验与隐私门禁',
     await panel.getByRole('button', { name: '生成交付包', exact: true }).click()
     expect((await created).status()).toBe(201)
     const completionResponse = await completion
-    expect(completionResponse.status()).toBe(503)
-    expect(await completionResponse.text()).toContain('scanner_unverified')
+    // Q-CX-03 拍板后（90 D-165）：纯净封面构建 complete 直接置 built，下载门禁 clear。
+    expect(completionResponse.status()).toBe(200)
+    expect(await completionResponse.text()).toContain('"status":"built"')
     await expect(panel.getByTestId('cover-build-detail')).toContainText('cover-wechat_235-900x383.png 900×383')
     await expect(panel.getByTestId('cover-build-detail')).toContainText('cover-wechat_square-383x383.png 383×383')
-    await expect(panel.getByTestId('cover-build-detail')).toContainText('scanner_unverified')
-    await expect(panel.getByTestId('cover-build-detail')).toContainText('下载门禁：build_not_complete')
+    await expect(panel.getByTestId('cover-build-detail')).toContainText('下载门禁：已开放')
 
-    const builds = await api(page, origin, 'GET', `/works/${outlined.id}/builds`) as { items: Array<{ id: string; status: string; error_code: string; is_current: boolean; targets: string[] }> }
-    expect(builds.items[0]).toMatchObject({ status: 'failed', error_code: 'scanner_unverified', is_current: true, targets: ['cover_images'] })
+    const builds = await api(page, origin, 'GET', `/works/${outlined.id}/builds`) as { items: Array<{ id: string; status: string; error_code: string | null; is_current: boolean; targets: string[] }> }
+    expect(builds.items[0]).toMatchObject({ status: 'built', error_code: null, is_current: true, targets: ['cover_images'] })
     const detail = await api(page, origin, 'GET', `/builds/${builds.items[0].id}`) as {
       artifacts: Array<{ kind: string; downloadable: boolean }>
       validation: { covers: { count: number; entries: Array<{ name: string; width: number; height: number }> } }
       download_gate: { allowed: boolean; reason: string }
     }
     expect(detail.artifacts.map((item) => item.kind)).toEqual(['zip'])
-    expect(detail.artifacts.every((item) => !item.downloadable)).toBe(true)
-    expect(detail.download_gate).toMatchObject({ allowed: false, reason: 'build_not_complete' })
+    expect(detail.artifacts.every((item) => item.downloadable)).toBe(true)
+    expect(detail.download_gate).toMatchObject({ allowed: true, reason: 'clear' })
     expect(detail.validation.covers.count).toBe(2)
     expect(detail.validation.covers.entries.map((entry) => entry.name)).toEqual(['cover-wechat_235-900x383.png', 'cover-wechat_square-383x383.png'])
     expect(((await api(page, origin, 'GET', `/works/${outlined.id}`)) as { assets: unknown[] }).assets).toHaveLength(2)

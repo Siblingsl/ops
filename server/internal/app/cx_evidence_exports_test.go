@@ -104,10 +104,10 @@ func TestCX03EvidenceCSVEndToEndAndManifestBinding(t *testing.T) {
 	if status, body := cxBuildUploadForTest(t, build.BuildID.String(), "html", "article.html", []byte(dom.String()), ""); status != 200 {
 		t.Fatalf("upload evidence html: status=%d body=%s", status, body)
 	}
-	// complete 会被 Q-CX-03 门禁拦下（scanner_unverified），但结构校验报告已留存于 error_detail.validation。
+	// Q-CX-03 拍板后（90 D-165）：纯净产物 complete 直接置 built，validation 留存于 error_detail。
 	status, completeBody := env.do("POST", "/api/v1/builds/"+build.BuildID.String()+"/complete", cxBuildCompletionForTest(t, build.BuildID.String()))
-	if status != 503 || !bytes.Contains(completeBody, []byte("scanner_unverified")) {
-		t.Fatalf("complete must stop at privacy gate: status=%d body=%s", status, completeBody)
+	if status != 200 || !bytes.Contains(completeBody, []byte(`"status":"built"`)) {
+		t.Fatalf("clean build must complete: status=%d body=%s", status, completeBody)
 	}
 	var detail struct {
 		Validation json.RawMessage `json:"validation"`
@@ -361,33 +361,33 @@ func TestCX03EvidenceMatrixCoverSwapExternalAndCountMismatch(t *testing.T) {
 	cover, assetA, assetB, assetC := assets[0], assets[1], assets[2], assets[3]
 
 	// 场景一：封面资产不出现在正文 DOM 也不算 unused（IsCover 豁免）；正文 A/B/C 逐段出现 →
-	// 序列与内容校验通过，失败只会发生在隐私扫描（scanner_unverified 503），证明正文校验已通过。
+	// 序列与内容校验通过，Q-CX-03 拍板后纯净产物 complete 直接 built（90 D-165）。
 	_, buildOK := cxBuildCreateForTest(t, work.ID.String(), current.Revision, []string{"wechat_html"})
 	htmlOK := cxEvidenceMatrixHTML(current.Sections, [][]uuid.UUID{{assetA, assetB}, {assetC}}, "")
 	if status, body := cxBuildUploadForTest(t, buildOK.BuildID.String(), "html", "article.html", []byte(htmlOK), ""); status != 200 {
 		t.Fatalf("upload ok matrix: %d %s", status, body)
 	}
 	statusOK, bodyOK := env.do("POST", "/api/v1/builds/"+buildOK.BuildID.String()+"/complete", cxBuildCompletionForTest(t, buildOK.BuildID.String()))
-	if statusOK != 503 || !strings.Contains(string(bodyOK), "scanner_unverified") {
-		t.Fatalf("matching matrix must pass evidence checks and stop at scanner: %d %s", statusOK, bodyOK)
+	if statusOK != 200 || !strings.Contains(string(bodyOK), `"status":"built"`) {
+		t.Fatalf("matching matrix must pass evidence checks and build: %d %s", statusOK, bodyOK)
+	}
+	// 场景二/三要在同一冻结来源上新建构建重新校验，先解除场景一构建的复用索引。
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE work_build SET reusable=false WHERE id=$1`, buildOK.BuildID); err != nil {
+		t.Fatal(err)
 	}
 	var detailOK struct {
-		Error struct {
-			Detail struct {
-				Validation struct {
-					ImageEvidence []map[string]any `json:"image_evidence"`
-					UnusedAssets  []string         `json:"unused_asset_ids"`
-				} `json:"validation"`
-			} `json:"detail"`
-		} `json:"error"`
+		Manifest struct {
+			ImageEvidence []map[string]any `json:"image_evidence"`
+			UnusedAssets  []string         `json:"unused_asset_ids"`
+		} `json:"manifest"`
 	}
 	if err := json.Unmarshal(bodyOK, &detailOK); err != nil {
-		t.Fatalf("decode 503 detail: %v", err)
+		t.Fatalf("decode built manifest: %v", err)
 	}
-	if len(detailOK.Error.Detail.Validation.ImageEvidence) != 3 {
-		t.Fatalf("cover/logo must not enter body evidence count: %d", len(detailOK.Error.Detail.Validation.ImageEvidence))
+	if len(detailOK.Manifest.ImageEvidence) != 3 {
+		t.Fatalf("cover/logo must not enter body evidence count: %d", len(detailOK.Manifest.ImageEvidence))
 	}
-	for _, unused := range detailOK.Error.Detail.Validation.UnusedAssets {
+	for _, unused := range detailOK.Manifest.UnusedAssets {
 		if unused == cover.String() {
 			t.Fatal("cover asset must not be listed as unused")
 		}

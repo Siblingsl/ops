@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { api, registerAccount } from './support'
 
 // DEV-CX09 交付构建：用户确认的组图计划 → options.cards 采用 → 浏览器渲染 PNG → ZIP → 服务端逐张校验。
-// 边界：Q-CX-03/04 未决，complete 必须停在 scanner_unverified；构建不置 built、下载不开放。
+// Q-CX-03/04 已拍板（90 D-165）：纯净组图构建 complete 直接置 built；下载按门禁四态开放。
 // 只使用本地模拟 API 与模拟模型。
 test('DEV-CX09 Web 组图交付构建逐张校验与隐私门禁', async ({ page }) => {
   test.skip(process.env.OPS_E2E_PROD === '1', '该场景使用本地模拟模型')
@@ -80,15 +80,15 @@ test('DEV-CX09 Web 组图交付构建逐张校验与隐私门禁', async ({ page
   expect(createdBody.params_hash).toBe(previewBody.params_hash)
   const completionResponse = await completion
   const completionText = await completionResponse.text()
-  expect(completionResponse.status(), completionText).toBe(503)
-  expect(completionText).toContain('scanner_unverified')
-  await expect(report).toContainText('结构与逐张像素校验已完成')
-  await expect(report.getByTestId('cards-build-detail')).toContainText('scanner_unverified')
-  await expect(report.getByTestId('cards-build-detail')).toContainText('下载门禁：build_not_complete')
+  // Q-CX-03 拍板后（90 D-165）：纯净组图构建 complete 直接置 built，下载门禁 clear。
+  expect(completionResponse.status(), completionText).toBe(200)
+  expect(completionText).toContain('"status":"built"')
+  await expect(report).toContainText('组图交付包已通过结构与像素校验')
+  await expect(report.getByTestId('cards-build-detail')).toContainText('下载门禁：已开放')
 
-  // 服务端状态：failed，不置 built；ZIP 是唯一产物且不可下载；逐张条目已记录。
-  const builds = await api(page, 'GET', `/works/${work.id}/builds`) as { items: Array<{ id: string; status: string; error_code: string }> }
-  expect(builds.items[0]).toMatchObject({ status: 'failed', error_code: 'scanner_unverified' })
+  // 服务端状态：built；ZIP 是唯一产物且可下载；逐张条目已记录。
+  const builds = await api(page, 'GET', `/works/${work.id}/builds`) as { items: Array<{ id: string; status: string; error_code: string | null }> }
+  expect(builds.items[0]).toMatchObject({ status: 'built', error_code: null })
   const detail = await api(page, 'GET', `/builds/${builds.items[0].id}`) as {
     targets: string[]
     artifacts: Array<{ kind: string; downloadable: boolean }>
@@ -97,8 +97,8 @@ test('DEV-CX09 Web 组图交付构建逐张校验与隐私门禁', async ({ page
   }
   expect(detail.targets).toEqual(['xhs_cards'])
   expect(detail.artifacts.map((item) => item.kind)).toEqual(['zip'])
-  expect(detail.artifacts.every((item) => !item.downloadable)).toBe(true)
-  expect(detail.download_gate).toMatchObject({ allowed: false, reason: 'build_not_complete' })
+  expect(detail.artifacts.every((item) => item.downloadable)).toBe(true)
+  expect(detail.download_gate).toMatchObject({ allowed: true, reason: 'clear' })
   expect(detail.validation.cards.count).toBe(previewBody.cards.length)
   expect(detail.validation.cards.ratio).toBe('3:4')
   const entryNames = detail.validation.cards.entries.map((entry) => entry.name)

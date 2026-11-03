@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -303,11 +304,14 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 		}
 		return apiErr(http.StatusServiceUnavailable, "scanner_unverified", "隐私扫描器尚未达到文档规定的发布条件，构建未完成").With(detail)
 	}
+	// Q-CX-03/04 拍板（90 D-165）后 manifest 走 canonical JSON（24 §4.6）：小数必须由
+	// 调用方写成定点字符串。桌面端在 Windows 显示缩放下 devicePixelRatio 常为 1.25，
+	// 这里统一格式化为字符串，保证 manifest 哈希在 web/desktop 两端都可复现。
 	rendererReceipt := map[string]any{"source": "client_reported", "client": input.RendererReceipt.Client,
 		"application_version": input.RendererReceipt.ApplicationVersion, "renderer_contract_version": input.RendererReceipt.RendererContractVersion,
 		"chromium_version": input.RendererReceipt.ChromiumVersion, "font_family": input.RendererReceipt.FontFamily,
-		"device_scale_factor": input.RendererReceipt.DeviceScaleFactor, "viewport_width": input.RendererReceipt.ViewportWidth,
-		"viewport_height": input.RendererReceipt.ViewportHeight}
+		"device_scale_factor": strconv.FormatFloat(input.RendererReceipt.DeviceScaleFactor, 'f', -1, 64),
+		"viewport_width":      input.RendererReceipt.ViewportWidth, "viewport_height": input.RendererReceipt.ViewportHeight}
 	if input.RendererReceipt.LongImage != nil {
 		rendererReceipt["long_image"] = input.RendererReceipt.LongImage
 	}

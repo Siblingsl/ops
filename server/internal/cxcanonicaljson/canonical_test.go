@@ -91,3 +91,58 @@ func TestMarshalUsesShortEscapesAndDoesNotEscapePrintableUnicode(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+type canonicalFixtureEntry struct {
+	Index int    `json:"index"`
+	Role  string `json:"role"`
+	Bytes int64  `json:"bytes"`
+}
+
+func TestMarshalEncodesNamedSlicesAndStructs(t *testing.T) {
+	got, err := Marshal(map[string]any{
+		"targets": []string{"wechat_html", "stable_html"},
+		"evidence": []canonicalFixtureEntry{
+			{Index: 1, Role: "cover", Bytes: 3200},
+			{Index: 2, Role: "body", Bytes: 7},
+		},
+		"empty_evidence": []canonicalFixtureEntry{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"empty_evidence":[],"evidence":[{"bytes":3200,"index":1,"role":"cover"},{"bytes":7,"index":2,"role":"body"}],` +
+		`"targets":["wechat_html","stable_html"]}`
+	if string(got) != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+	// The same logical value must hash identically whether built from Go
+	// structs or parsed back from plain JSON.
+	plain, err := Parse([]byte(want))
+	if err != nil {
+		t.Fatal(err)
+	}
+	round, err := Marshal(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(round) != want {
+		t.Fatalf("round trip = %s, want %s", round, want)
+	}
+}
+
+func TestMarshalStillRejectsDecimalsHiddenInStructs(t *testing.T) {
+	if _, err := Marshal(map[string]any{"ratio": 1.25}); err == nil {
+		t.Fatalf("expected bare float64 rejection")
+	}
+	if _, err := Marshal(map[string]any{"entry": struct {
+		Ratio float64 `json:"ratio"`
+	}{Ratio: 0.8}}); err == nil {
+		t.Fatalf("expected decimal field rejection inside struct")
+	}
+}
+
+func TestMarshalRejectsUnserializableValues(t *testing.T) {
+	if _, err := Marshal(map[string]any{"ch": make(chan int)}); err == nil {
+		t.Fatalf("expected channel rejection")
+	}
+}

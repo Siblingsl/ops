@@ -9,7 +9,8 @@ import type { WorkSaveCoordinator } from './work-save'
 
 // Web 独立实现（DEV-CX02）。与桌面 BuildPanel 的契约相同：渲染冻结快照 → 上传产物 → 服务端校验。
 // 差异只在能力边界：长图依赖桌面隔离 Electron 窗口（780px 固定 DPR2 分段捕获），Web 不提供该目标，
-// 也不伪造回执。Q-CX-03/04 未决时服务端保持 scanner_unverified，built 与下载均不开放。
+// 也不伪造回执。Q-CX-03/04 已拍板（90 D-165）：ERROR 仍阻断构建；WARN 构建可 built，
+// 下载需本人逐项知悉回执（privacy_ack_required → acknowledged）后开放。
 type BuildTarget = 'wechat_html' | 'stable_html'
 type BuildSummary = {
   id: string
@@ -224,7 +225,7 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
       setNotice('构建校验已完成。')
     } catch (e) {
       if (!(e instanceof ApiError) || e.code !== 'scanner_unverified') throw e
-      setNotice('结构、正文和图片校验已完成；隐私扫描发布规则仍待确认，服务端已阻止交付。')
+      setNotice('结构、正文和图片校验已完成；产物包含阻断级隐私发现，服务端已阻止交付。')
     }
     await refreshHistory(buildID)
   }
@@ -260,7 +261,7 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
       }
       await renderAndComplete(created.build_id, created, targets)
     } catch (e) {
-      setError(e instanceof ApiError && e.code === 'scanner_unverified' ? '隐私扫描规则尚未获准，构建保持阻断。' : errorMessage(e))
+      setError(e instanceof ApiError && e.code === 'scanner_unverified' ? '产物包含阻断级隐私发现，构建保持阻断。' : errorMessage(e))
       await refreshHistory().catch(() => undefined)
     } finally {
       active.current = false
@@ -287,7 +288,7 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h2 className="flex items-center gap-2 text-sm font-semibold text-mist-800"><FileText className="size-4" />交付构建</h2>
-        <p className="mt-1 text-xs text-mist-500">校验冻结版本并保存检查报告；隐私策略决策未完成前不会开放下载。不会修改原稿或替你发布。</p>
+        <p className="mt-1 text-xs text-mist-500">校验冻结版本并保存检查报告；产物包含阻断级隐私发现时不开放下载。不会修改原稿或替你发布。</p>
       </div>
       <Button size="sm" variant="secondary" disabled={busy} icon={<RefreshCw className="size-3.5" />} onClick={() => void refreshHistory()}>刷新历史</Button>
     </div>
@@ -321,7 +322,7 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
         <span className="text-mist-500">输入版本 {detail.basis_revision} · SHA256 {detail.source_hash.slice(0, 12)}</span>
         {!detail.is_current && <span className="text-gamboge-700">这是历史快照，不代表当前作品</span>}
       </div>
-      {detail.error_code === 'scanner_unverified' && <Notice tone="gamboge">校验报告已保存。Q-CX-03 的邮箱/手机号严重度仍待产品确认，服务端保持下载关闭。</Notice>}
+      {detail.error_code === 'scanner_unverified' && <Notice tone="gamboge">校验报告已保存。产物包含阻断级隐私发现（ERROR），构建未完成，请修改内容后重新构建。</Notice>}
       {privacy && <div className="rounded-lg border border-mist-200 bg-mist-50/60 p-3 text-xs">
         <div className="flex items-center gap-2 font-medium"><AlertTriangle className="size-3.5" />隐私扫描：{privacy.level} · ERROR {privacy.errors} · WARN {privacy.warnings}</div>
         {!privacy.policy_ready && <p className="mt-1 text-mist-600">未发布的规则决策：{privacy.blocked_by.join('、') || '扫描策略未就绪'}。未扫描图片二进制、EXIF 和图像内可见文字。</p>}

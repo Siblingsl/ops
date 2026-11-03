@@ -8,7 +8,7 @@ import (
 
 // DEV-CX10：cover_images 构建（24 §5.2 FR-CX-09）。
 // 预设以平台+像素标识，两种 1:1 各自独立；沿用原图与 cover_crops，不建派生 asset。
-// Q-CX-03/04 未决：complete 仍停在 scanner_unverified，built 与下载不开放。
+// Q-CX-03/04 已拍板（90 D-165）：纯净封面构建 complete 直接置 built，下载无需确认。
 
 func cxTestCreateCoverBuild(t *testing.T, work Work, presets []string) cxBuildCreateResponse {
 	t.Helper()
@@ -86,12 +86,13 @@ func TestCX10CoverBuildPresetsPixelsAndPrivacyGate(t *testing.T) {
 	}
 	artifactID, artifactName := cxTestBuildArtifact(t, created.BuildID.String())
 	status, body := cxTestCompleteCoverBuild(t, created.BuildID.String(), artifactID, artifactName, created.SourceHash, created.ParamsHash)
-	if status != 503 || !bytes.Contains(body, []byte("scanner_unverified")) {
-		t.Fatalf("complete must stay blocked by privacy policy: status=%d body=%s", status, body)
+	// Q-CX-03 拍板后（90 D-165）：纯净封面构建 complete 直接置 built，下载无需确认。
+	if status != 200 || !bytes.Contains(body, []byte(`"status":"built"`)) {
+		t.Fatalf("valid cover build must complete: status=%d body=%s", status, body)
 	}
 	var buildStatus, errorCode string
-	if err := env.srv.db.QueryRow(t.Context(), `SELECT status,error_code FROM work_build WHERE id=$1`, created.BuildID).Scan(&buildStatus, &errorCode); err != nil || buildStatus != "failed" || errorCode != "scanner_unverified" {
-		t.Fatalf("cover build must not reach built: status=%s code=%s err=%v", buildStatus, errorCode, err)
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT status,COALESCE(error_code,'') FROM work_build WHERE id=$1`, created.BuildID).Scan(&buildStatus, &errorCode); err != nil || buildStatus != "built" || errorCode != "" {
+		t.Fatalf("cover build must be built without error: status=%s code=%s err=%v", buildStatus, errorCode, err)
 	}
 	env.mustJSON(t, "GET", "/api/v1/builds/"+created.BuildID.String(), nil, &detail)
 	validation, _ := detail["validation"].(map[string]any)
@@ -114,8 +115,12 @@ func TestCX10CoverBuildPresetsPixelsAndPrivacyGate(t *testing.T) {
 		}
 	}
 	gate, _ := detail["download_gate"].(map[string]any)
-	if allowed, _ := gate["allowed"].(bool); allowed {
-		t.Fatalf("download gate must stay closed: %+v", gate)
+	if allowed, _ := gate["allowed"].(bool); !allowed {
+		t.Fatalf("clean built cover build must allow download: %+v", gate)
+	}
+	// 后续像素不符场景要在同一冻结来源上新建构建，先解除本构建的复用索引。
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE work_build SET reusable=false WHERE id=$1`, created.BuildID); err != nil {
+		t.Fatal(err)
 	}
 
 	// 像素与预设不一致：complete 拒绝并失败整个构建（任何输出失败全组不可下载）。
@@ -240,7 +245,7 @@ func TestCX10CoverBuildRejectsInvalidPresetsAndMissingCover(t *testing.T) {
 		t.Fatalf("upload xhs covers: status=%d body=%s", status, body)
 	}
 	artifactID, artifactName := cxTestBuildArtifact(t, created.BuildID.String())
-	if status, body := cxTestCompleteCoverBuild(t, created.BuildID.String(), artifactID, artifactName, created.SourceHash, created.ParamsHash); status != 503 || !bytes.Contains(body, []byte("scanner_unverified")) {
+	if status, body := cxTestCompleteCoverBuild(t, created.BuildID.String(), artifactID, artifactName, created.SourceHash, created.ParamsHash); status != 200 || !bytes.Contains(body, []byte(`"status":"built"`)) {
 		t.Fatalf("xhs cover complete: status=%d body=%s", status, body)
 	}
 	var detail map[string]any

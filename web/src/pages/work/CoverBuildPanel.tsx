@@ -9,7 +9,7 @@ import { dataURLBytes, zipStore } from '@/lib/zip'
 // DEV-CX10 / FR-CX-09：多比例封面交付构建（cover_images）。
 // 一次只读构建：沿用原图与 cover_crops，不覆盖 asset 字节、不新建派生 asset、不改裁剪；
 // 公众号推送继续传 cover_crops。低分辨率必须用户确认后才允许放大。
-// Q-CX-03/04 未决：complete 仍停在 scanner_unverified，不置 built、不开放下载。
+// Q-CX-03/04 已拍板（90 D-165）：纯净封面构建 complete 直接置 built，下载按门禁四态开放。
 
 type CoverBuildDetail = {
   id: string
@@ -103,7 +103,7 @@ export function CoverBuildPanel({ work, canWrite, client = 'web' }: { work: Work
         setNotice('逐预设像素校验已完成。')
       } catch (reason) {
         if (!(reason instanceof ApiError) || reason.code !== 'scanner_unverified') throw reason
-        setNotice('结构与逐预设像素校验已完成；隐私扫描发布规则仍待确认，服务端已阻止交付。')
+        setNotice('结构与逐预设像素校验已完成；产物包含阻断级隐私发现，服务端已阻止交付。')
       }
       setDetail(await get<CoverBuildDetail>(`/builds/${created.build_id}`))
     } catch (reason) {
