@@ -238,3 +238,146 @@ func TestCXRewriteCheckShortReferenceRejected(t *testing.T) {
 		t.Fatalf("short explicit reference must 422: %d %s", status, body)
 	}
 }
+
+// DEV-CX12 / FR-CX-15 显式骨架引用路径：仅 benchmark_note 骨架（无完整正文）→
+// undetermined + reference_text_required 并生成 rewrite 待处理项；正文与骨架互斥；
+// 骨架必须属于作品账号且未归档；同一 run 内后续正文检查替换骨架结论。
+func TestCXRewriteCheckSkeletonReferenceExplicitPath(t *testing.T) {
+	ensureRewriteRoute(t)
+	acc := env.accounts(t)
+	wk := env.readyWork(t, acc.xhs, "改写度骨架引用")
+	defer agentDropWork(wk.ID)
+	base := "/api/v1/works/" + wk.ID.String()
+
+	// 建一条对标骨架笔记（归当前账号）。
+	var created benchmarkTargetResponse
+	if status, body := env.do("POST", benchmarkPath(acc.xhs.ID.String()), map[string]any{"platform": "xhs", "name": "骨架引用目标"}); status != 201 {
+		t.Fatalf("create target: status=%d body=%s", status, body)
+	} else {
+		_ = json.Unmarshal(body, &created)
+	}
+	structure := map[string]any{"hook_type": "question", "hook_gist": "为什么坚持不下来", "sections": []any{}, "cta_type": "none", "rhythm": map[string]any{"paragraphs": 5, "avg_chars": 80}}
+	var note map[string]any
+	if status, body := env.do("POST", "/api/v1/benchmarks/"+created.ID+"/notes", map[string]any{
+		"title": "骨架引用拆解", "structure": structure,
+	}); status != 201 {
+		t.Fatalf("create note: status=%d body=%s", status, body)
+	} else {
+		_ = json.Unmarshal(body, &note)
+	}
+	noteID := note["id"].(string)
+
+	// 表达维 Jaccard 两侧都要求 ≥200 码点：先把首段扩写，正文检查才能全维可判。
+	var fullBefore Work
+	env.mustJSON(t, "GET", base, nil, &fullBefore)
+	longBody := strings.Repeat("记录生活的关键在于把反馈周期缩短到当天可见，写一句话也能积累素材，坚持三周后自然能看出主题轮廓，这种渐进的积累比一次性长文更容易保持动力，也更容易在回读时发现真正值得展开的线索。", 4)
+	env.mustJSON(t, "PATCH", "/api/v1/sections/"+fullBefore.Sections[0].ID.String(), map[string]any{"content_md": longBody, "base_revision": fullBefore.Sections[0].Revision}, nil)
+
+	var run struct {
+		Run CheckRun `json:"run"`
+	}
+	env.mustJSON(t, "POST", base+"/checks", map[string]int{"html_chars": 3000, "html_bytes": 9000}, &run)
+	revision := run.Run.Revision
+	checkRunID := run.Run.ID.String()
+
+	// 1) 骨架路径：无正文 + 骨架 ids → undetermined + reference_text_required，并建 rewrite 待处理项。
+	status, body := env.do("POST", base+"/rewrite-check", map[string]any{
+		"basis_revision": revision, "check_run_id": checkRunID,
+		"reference_text": "", "skeleton_note_ids": []string{noteID},
+	})
+	if status != 200 {
+		t.Fatalf("skeleton reference: %d %s", status, body)
+	}
+	var skelResp struct {
+		Result                string `json:"result"`
+		ReferenceTextRequired bool   `json:"reference_text_required"`
+		PromptVersion         string `json:"prompt_version"`
+		ReferenceHash         string `json:"reference_hash"`
+	}
+	_ = json.Unmarshal(body, &skelResp)
+	if skelResp.Result != "undetermined" || !skelResp.ReferenceTextRequired || skelResp.PromptVersion != "skeleton_only" {
+		t.Fatalf("skeleton path must be undetermined+required: %+v", skelResp)
+	}
+	var latest struct {
+		Run CheckRun `json:"run"`
+	}
+	env.mustJSON(t, "GET", base+"/checks/latest", nil, &latest)
+	var skelItem *CheckItem
+	for i := range latest.Run.Items {
+		if latest.Run.Items[i].Category == "rewrite" {
+			skelItem = &latest.Run.Items[i]
+		}
+	}
+	if skelItem == nil || skelItem.Passed {
+		t.Fatalf("skeleton reference must produce an unresolved rewrite item: %+v", skelItem)
+	}
+	if !strings.Contains(skelItem.Message, "结构骨架") {
+		t.Fatalf("skeleton item message should mention skeleton: %s", skelItem.Message)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(skelItem.Detail), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail["skeleton_only"] != true || detail["reference_text_required"] != true {
+		t.Fatalf("skeleton item detail must mark skeleton_only and required: %+v", detail)
+	}
+	// 骨架路径不调用 AI：无 ai_call_id。
+	if _, ok := detail["ai_call_id"]; ok && detail["ai_call_id"] != nil {
+		t.Fatalf("skeleton path must not invoke AI: %+v", detail["ai_call_id"])
+	}
+
+	// 2) 互斥：正文与骨架同时提供 → 422。
+	status, body = env.do("POST", base+"/rewrite-check", map[string]any{
+		"basis_revision": revision, "check_run_id": checkRunID,
+		"reference_text": rewriteReferenceText(), "skeleton_note_ids": []string{noteID},
+	})
+	if status != 422 {
+		t.Fatalf("reference text and skeleton must be exclusive: %d %s", status, body)
+	}
+
+	// 3) 骨架不属于该作品账号 / 不存在 → 422。
+	status, body = env.do("POST", base+"/rewrite-check", map[string]any{
+		"basis_revision": revision, "check_run_id": checkRunID,
+		"skeleton_note_ids": []string{"00000000-0000-0000-0000-00000000000e"},
+	})
+	if status != 422 {
+		t.Fatalf("foreign skeleton must 422: %d %s", status, body)
+	}
+
+	// 4) 超过 5 条 → 422。
+	ids := []string{}
+	for i := 0; i < 6; i++ {
+		ids = append(ids, noteID)
+	}
+	status, _ = env.do("POST", base+"/rewrite-check", map[string]any{
+		"basis_revision": revision, "check_run_id": checkRunID, "skeleton_note_ids": ids,
+	})
+	if status != 422 {
+		t.Fatalf("more than 5 skeleton notes must 422: %d", status)
+	}
+
+	// 5) 同一 run 内正文检查替换骨架结论：仍只有一条 rewrite 项。
+	status, body = env.do("POST", base+"/rewrite-check", map[string]any{
+		"basis_revision": revision, "check_run_id": checkRunID, "reference_text": rewriteReferenceText(),
+	})
+	if status != 200 {
+		t.Fatalf("body check after skeleton: %d %s", status, body)
+	}
+	env.mustJSON(t, "GET", base+"/checks/latest", nil, &latest)
+	count := 0
+	var bodyItem *CheckItem
+	for i := range latest.Run.Items {
+		if latest.Run.Items[i].Category == "rewrite" {
+			count++
+			bodyItem = &latest.Run.Items[i]
+		}
+	}
+	if count != 1 || bodyItem == nil || !bodyItem.Passed {
+		t.Fatalf("body check must replace the skeleton item with exactly one passed item: count=%d item=%+v", count, bodyItem)
+	}
+	var bodyDetail map[string]any
+	_ = json.Unmarshal([]byte(bodyItem.Detail), &bodyDetail)
+	if bodyDetail["skeleton_only"] != false || bodyDetail["reference_text_required"] != false {
+		t.Fatalf("body item must not carry skeleton flags: %+v", bodyDetail)
+	}
+}

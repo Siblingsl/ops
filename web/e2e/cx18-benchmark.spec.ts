@@ -198,6 +198,73 @@ test('DEV-CX15 Web 改写度检查：同源 fail、理由确认与原文不落�
   expect(workAfter.viewpoint + workAfter.title).not.toContain(needle)
 })
 
+// DEV-CX12 / FR-CX-15 骨架引用显式路径：仅对标骨架（无完整正文）→ undetermined +
+// reference_text_required 并生成改写度待处理项；正文与骨架互斥；归档后的骨架不再可用。
+// 对标登记/拆解 UI 由前序用例覆盖，这里用 API 建夹具。
+test('DEV-CX12 Web 改写度骨架引用：undetermined、互斥与归档失效', async ({ page }) => {
+  const account = await registerAccount(page, '图文笔记', 'xhs', `cx12-rewrite-skel-${Date.now()}`)
+  // 骨架引用校验按作品账号匹配：对标库挂在 xhs 账号上，这里种一篇 image_note 作品。
+  let work = await api(page, 'POST', `/accounts/${account.id}/works`, { content_format: 'image_note' })
+  work = await api(page, 'PATCH', `/works/${work.id}`, { viewpoint: '骨架引用改写度验收', base_revision: work.revision })
+  work = await api(page, 'PUT', `/works/${work.id}/outline`, {
+    items: rewriteParagraphs.map((_, index) => ({ heading: `骨架段落${index + 1}`, key_point: `要点${index + 1}`, material_ids: [] })),
+    confirm: true, base_revision: work.revision,
+  })
+  for (const [index, section] of work.sections.entries()) {
+    await api(page, 'PATCH', `/sections/${section.id}`, { content_md: rewriteParagraphs[index], base_revision: section.revision })
+  }
+  work = await api(page, 'GET', `/works/${work.id}`)
+  const target = await api(page, 'POST', `/accounts/${account.id}/benchmarks`, { platform: 'xhs', name: '骨架引用对标' }) as { id: string }
+  const structure = { hook_type: 'question', hook_gist: '为什么坚持不下来', sections: [] as unknown[], cta_type: 'none', rhythm: { paragraphs: 5, avg_chars: 80 } }
+  const note = await api(page, 'POST', `/benchmarks/${target.id}/notes`, { title: '骨架引用拆解', structure }) as { id: string; revision: number }
+
+  await page.goto(`/works/${work.id}/check`)
+  await page.getByRole('button', { name: '开始检查', exact: true }).click()
+  await expect.poll(async () => {
+    const latest = await api(page, 'GET', `/works/${work.id}/checks/latest`) as { run?: { id: string; revision: number; stale: boolean; material_basis_stale: boolean; fact_status: string } }
+    return !!latest.run && !latest.run.stale && !latest.run.material_basis_stale && latest.run.fact_status !== 'pending'
+  }, { timeout: 30_000 }).toBeTruthy()
+  const { run } = await api(page, 'GET', `/works/${work.id}/checks/latest`) as { run: { id: string; revision: number } }
+  const body = await api(page, 'GET', `/works/${work.id}`) as { sections: Array<{ content_md: string }> }
+  const workBody = body.sections.map((s) => s.content_md).join('\n\n')
+
+  // 正文与骨架互斥：同时提供 422。
+  await expect(async () => {
+    await api(page, 'POST', `/works/${work.id}/rewrite-check`, {
+      basis_revision: run.revision, check_run_id: run.id, reference_text: workBody, skeleton_note_ids: [note.id],
+    })
+  }).rejects.toThrow(/只能二选一/)
+
+  // 骨架路径：undetermined + reference_text_required。
+  const resp = await api(page, 'POST', `/works/${work.id}/rewrite-check`, {
+    basis_revision: run.revision, check_run_id: run.id, reference_text: '', skeleton_note_ids: [note.id],
+  }) as { result: string; reference_text_required: boolean; prompt_version: string }
+  expect(resp.result).toBe('undetermined')
+  expect(resp.reference_text_required).toBe(true)
+  expect(resp.prompt_version).toBe('skeleton_only')
+
+  // 检查页出现骨架改写度项，确认仍需 20..500 码点理由。
+  await page.reload()
+  const rewriteCard = page.locator('div.rounded-lg', { hasText: '改写度' }).filter({ hasText: '结构骨架' }).first()
+  await expect(rewriteCard).toBeVisible()
+  await expect(rewriteCard).toContainText('仅参考骨架，需完整正文复核')
+  await rewriteCard.getByText('已知悉风险', { exact: true }).click()
+  await rewriteCard.getByPlaceholder(/说明原因/).fill('这是我自己账号的结构拆解，只参考了段落结构，没有复制任何原文，留此说明备查。')
+  await rewriteCard.getByRole('button', { name: '提交确认' }).click()
+  await expect.poll(async () => {
+    const latest = await api(page, 'GET', `/works/${work.id}/checks/latest`) as { run?: { items: Array<{ category: string; resolution: string | null }> } }
+    return latest.run?.items.find((i) => i.category === 'rewrite')?.resolution ?? ''
+  }).toBe('acknowledged')
+
+  // 骨架归档后同一 run 再次骨架检查 → 422（不在账号未归档范围内）。
+  await api(page, 'PATCH', `/benchmark-notes/${note.id}`, { base_revision: note.revision, archived: true })
+  await expect(async () => {
+    await api(page, 'POST', `/works/${work.id}/rewrite-check`, {
+      basis_revision: run.revision, check_run_id: run.id, reference_text: '', skeleton_note_ids: [note.id],
+    })
+  }).rejects.toThrow(/不在当前账号范围内/)
+})
+
 // DEV-CX12 / FR-CX-14 补充旅程：结构拆解的边界呈现——
 // #copy-echo 夹具让 mock 抄原句 → 服务端 422 extraction_copy_risk 的 UI 呈现且不落库；
 // 20000 码点上限在输入层禁用生成按钮；拆解结果无参考维度（undetermined）路径见改写度用例。

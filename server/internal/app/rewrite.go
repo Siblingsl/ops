@@ -37,10 +37,13 @@ type cxRewriteCheckResponse struct {
 	Result        string               `json:"result"` // pass/fail/undetermined
 	Dimensions    []cxRewriteDimension `json:"dimensions"`
 	ReferenceHash string               `json:"reference_hash"`
-	AICallID      *uuid.UUID           `json:"ai_call_id,omitempty"`
-	Model         string               `json:"model,omitempty"`
-	PromptVersion string               `json:"prompt_version"`
-	CreatedAt     time.Time            `json:"created_at"`
+	// ReferenceTextRequired 标记「仅参考了结构骨架」：结论 undetermined，需要粘贴完整
+	// 参考正文复核（FR-CX-15：不把骨架的省略信息当作不同，也不据此给 pass）。
+	ReferenceTextRequired bool       `json:"reference_text_required,omitempty"`
+	AICallID              *uuid.UUID `json:"ai_call_id,omitempty"`
+	Model                 string     `json:"model,omitempty"`
+	PromptVersion         string     `json:"prompt_version"`
+	CreatedAt             time.Time  `json:"created_at"`
 }
 
 // cxJaccardState 按规格实现表达维：NFKC+去标点/空白，4-gram 集合 Jaccard<0.30 different、
@@ -152,9 +155,10 @@ func (s *Server) rewriteCheck(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		BasisRevision int     `json:"basis_revision"`
-		CheckRunID    *string `json:"check_run_id"`
-		ReferenceText string  `json:"reference_text"`
+		BasisRevision   int      `json:"basis_revision"`
+		CheckRunID      *string  `json:"check_run_id"`
+		ReferenceText   string   `json:"reference_text"`
+		SkeletonNoteIDs []string `json:"skeleton_note_ids"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -166,6 +170,10 @@ func (s *Server) rewriteCheck(w http.ResponseWriter, r *http.Request) error {
 	emptyRef := len(reference) == 0
 	if !emptyRef && len(reference) < rewriteMinRefCodePoints {
 		return validation("参考正文不足 200 码点，表达维度无法判断；请粘贴完整参考或留空")
+	}
+	// 完整正文与结构骨架是两种互斥的参考方式：给了正文就按正文计算三维。
+	if !emptyRef && len(in.SkeletonNoteIDs) > 0 {
+		return validation("完整参考正文与结构骨架只能二选一：粘贴正文即按正文计算，选骨架则不要粘贴正文")
 	}
 
 	// 当前 check_run 必须存在且与请求一致（run 已变/不存在 409 check_context_changed）。
@@ -191,6 +199,35 @@ func (s *Server) rewriteCheck(w http.ResponseWriter, r *http.Request) error {
 		return apiErr(409, "check_context_changed", "作品内容在检查后又修改过，请重新检查")
 	}
 	// 骨架引用（仅 benchmark_note 骨架、无完整参考正文）→ undetermined + reference_text_required。
+	// 显式路径：用户选择的对标骨架按账号校验存在且未归档，与大纲侧同一数据边界。
+	skeletonRef := false
+	if emptyRef && len(in.SkeletonNoteIDs) > 0 {
+		if len(in.SkeletonNoteIDs) > 5 {
+			return validation("骨架引用最多选择 5 条")
+		}
+		seen := map[uuid.UUID]bool{}
+		for _, rawID := range in.SkeletonNoteIDs {
+			noteID, err := uuid.Parse(strings.TrimSpace(rawID))
+			if err != nil {
+				return validation("骨架引用标识格式不正确")
+			}
+			if seen[noteID] {
+				continue
+			}
+			seen[noteID] = true
+			var exists bool
+			if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM benchmark_note bn
+				JOIN benchmark_target bt ON bt.id=bn.target_id
+				WHERE bn.id=$1 AND bt.account_id=$2 AND bn.archived_at IS NULL)`,
+				noteID, m.Account.ID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return validation("骨架引用不在当前账号范围内")
+			}
+		}
+		skeletonRef = true
+	}
 	skeletonOnly := emptyRef
 
 	// 作品正文快照（当前 revision）。
@@ -262,7 +299,8 @@ func (s *Server) rewriteCheck(w http.ResponseWriter, r *http.Request) error {
 	referenceHash := benchmarkContentHash([]byte(string(reference)))
 	resp := cxRewriteCheckResponse{
 		Result: result, Dimensions: dims, ReferenceHash: referenceHash,
-		AICallID: aiCallID, Model: modelName, PromptVersion: promptVersion, CreatedAt: time.Now(),
+		ReferenceTextRequired: skeletonRef,
+		AICallID:              aiCallID, Model: modelName, PromptVersion: promptVersion, CreatedAt: time.Now(),
 	}
 	if skeletonOnly {
 		resp.PromptVersion = "skeleton_only"
@@ -270,12 +308,15 @@ func (s *Server) rewriteCheck(w http.ResponseWriter, r *http.Request) error {
 
 	// 结果写为当前 run 的 rewrite 检查项：fail/undetermined 生成待处理项（passed=false）；
 	// pass 也记录来源（passed=true），过期报告不能复用。
-	// 无参考正文（not_applicable）完全不建项，不给普通作品制造必失败项。
-	if skeletonOnly {
+	// 无参考正文且无骨架（not_applicable）完全不建项，不给普通作品制造必失败项；
+	// 显式骨架引用走 undetermined 待处理项（reference_text_required 提示补正文）。
+	if skeletonOnly && !skeletonRef {
 		s.audit(ctx, "rewrite_check", "check_run", runID.String(), "ok", map[string]any{"result": "not_applicable"})
 		return ok(w, resp)
 	}
-	fingerprint := fingerprint("rewrite", "reference", resp.ReferenceHash)
+	// fingerprint 不含参考哈希：同一 run 内骨架结论会被随后的正文结论替换，
+	// 检查页对改写度始终只保留最新一条结论。
+	fingerprint := fingerprint("rewrite", "reference", "")
 	var itemID uuid.UUID
 	passed := result == "pass"
 	message := map[string]string{
@@ -283,8 +324,12 @@ func (s *Server) rewriteCheck(w http.ResponseWriter, r *http.Request) error {
 		"fail":         "改写度：与参考正文明显同源，需要修改后重查",
 		"undetermined": "改写度：无法判定，需要完整参考正文或人工复核",
 	}[result]
+	if skeletonRef {
+		message = "改写度：仅参考结构骨架，无法判定；请粘贴完整参考正文复核"
+	}
 	detailBytes, _ := json.Marshal(map[string]any{"dimensions": dims, "reference_hash": resp.ReferenceHash,
-		"ai_call_id": aiCallID, "model": modelName, "prompt_version": resp.PromptVersion, "skeleton_only": skeletonOnly})
+		"ai_call_id": aiCallID, "model": modelName, "prompt_version": resp.PromptVersion,
+		"skeleton_only": skeletonOnly, "reference_text_required": skeletonRef})
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
 		// 同一 run 内同 fingerprint 幂等：替换旧 rewrite 结论。
 		if err := tx.QueryRow(ctx, `SELECT id FROM check_item WHERE check_run_id=$1 AND category='rewrite' AND fingerprint=$2`,
@@ -303,7 +348,8 @@ func (s *Server) rewriteCheck(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	s.audit(ctx, "rewrite_check", "check_item", itemID.String(), "ok", map[string]any{
-		"work_id": m.ID.String(), "result": result, "reference_hash": resp.ReferenceHash, "skeleton_only": skeletonOnly})
+		"work_id": m.ID.String(), "result": result, "reference_hash": resp.ReferenceHash,
+		"skeleton_only": skeletonOnly, "reference_text_required": skeletonRef})
 	return ok(w, resp)
 }
 
