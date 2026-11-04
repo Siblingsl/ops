@@ -111,6 +111,7 @@ export default defineConfig({
         'cx10-cover-build-desktop.spec.ts',
         'cx13-publish-ledger.spec.ts',
         'cx13-review-multitime.spec.ts',
+        'g6-attribution-sample.spec.ts',
         'g6-review-import-quality.spec.ts',
         'g8-export-electron.spec.ts',
         'cx18-benchmark-electron.spec.ts',
