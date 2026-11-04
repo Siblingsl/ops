@@ -50,7 +50,9 @@ func TestDR06WechatDailySync(t *testing.T) {
 	orig := env.srv.now
 	defer func() { env.srv.now = orig }()
 	base := time.Date(2031, 3, 3, 0, 0, 0, 0, env.srv.loc)
-	at := func(day, hour int) { env.srv.now = func() time.Time { return base.AddDate(0, 0, day).Add(time.Duration(hour) * time.Hour) } }
+	at := func(day, hour int) {
+		env.srv.now = func() time.Time { return base.AddDate(0, 0, day).Add(time.Duration(hour) * time.Hour) }
+	}
 
 	at(0, 9)
 	env.srv.wechatMetricsDaily(ctx)
@@ -119,5 +121,82 @@ func TestDR06WechatDailySync(t *testing.T) {
 	env.mustJSON(t, "PATCH", "/api/v1/accounts/"+a.ID.String(), map[string]any{"metrics_wechat_auto": false}, &acc)
 	if acc.WechatAuto.Enabled {
 		t.Fatal("owner can switch it off")
+	}
+}
+
+func TestRunJobsDispatchesWechatDailySync(t *testing.T) {
+	originalNow := env.srv.now
+	fixedNow := time.Date(2026, time.November, 5, 11, 30, 0, 0, env.srv.loc)
+	env.srv.now = func() time.Time { return fixedNow }
+	env.mockWX.SetDatacubeError(0)
+	env.mockWX.SetUserDatacubeError(0)
+	env.mockWX.SetArticleTotals(map[string][]map[string]any{})
+	t.Cleanup(func() {
+		env.srv.now = originalNow
+		env.mockWX.SetDatacubeError(0)
+		env.mockWX.SetUserDatacubeError(0)
+		env.mockWX.SetArticleTotals(nil)
+	})
+
+	a := drWechatAccount(t, "RunJobs 每日复盘数据调度验收号")
+	base := "/api/v1/accounts/" + a.ID.String()
+	env.mustJSON(t, "POST", base+"/wechat-credential/test", nil, nil)
+	var before Account
+	env.mustJSON(t, "GET", base, nil, &before)
+	if before.DatacubeState != "ok" || before.WechatAuto == nil || !before.WechatAuto.Enabled {
+		t.Fatalf("test setup must enable an authorized daily sync: state=%q auto=%+v", before.DatacubeState, before.WechatAuto)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		env.srv.RunJobs(ctx)
+		close(done)
+	}()
+
+	deadline := time.NewTimer(10 * time.Second)
+	poll := time.NewTicker(20 * time.Millisecond)
+	for {
+		var runs int
+		if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM audit_log WHERE action='metrics_sync_daily' AND target_id=$1`, a.ID.String()).Scan(&runs); err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		if runs > 0 {
+			break
+		}
+		select {
+		case <-deadline.C:
+			cancel()
+			t.Fatal("RunJobs startup pass did not dispatch the WeChat daily metrics sync")
+		case <-poll.C:
+		}
+	}
+	deadline.Stop()
+	poll.Stop()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunJobs did not stop after context cancellation")
+	}
+
+	if n := dailySyncRuns(t, a.ID); n != 1 {
+		t.Fatalf("RunJobs should dispatch one daily sync, got %d audit records", n)
+	}
+	if enabled, fails, last, _ := wechatAutoState(t, a.ID); !enabled || fails != 0 || last == nil {
+		t.Fatalf("daily sync state: enabled=%v fails=%d last=%v", enabled, fails, last)
+	}
+	var followers followerList
+	env.mustJSON(t, "GET", base+"/followers?days=30", nil, &followers)
+	if !followers.API || len(followers.Days) != 7 {
+		t.Fatalf("scheduled follower sync was not persisted: api=%v days=%d", followers.API, len(followers.Days))
+	}
+	var stored int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM account_metric_daily WHERE account_id=$1 AND source='wechat_api'`, a.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 7 {
+		t.Fatalf("want 7 persisted API follower days, got %d", stored)
 	}
 }
