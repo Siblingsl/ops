@@ -1,10 +1,11 @@
 import { _electron, expect, test } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { api, registerAccount } from './support'
 
-test('DEV-QA26 G4-01 真实 Electron 导入旧文后逐项检查作品状态筛选', async ({ page, baseURL }) => {
+test('DEV-QA26 G4-01 Electron 旧文导入、标签筛选与 viewer 只读', async ({ page, baseURL, browser }) => {
   test.skip(process.platform !== 'win32', '需要 Windows Electron')
   test.setTimeout(150_000)
   const username = `qa26-g4-works-${Date.now()}`
@@ -111,6 +112,63 @@ test('DEV-QA26 G4-01 真实 Electron 导入旧文后逐项检查作品状态筛�
     const percentile = (p: number) => sorted[Math.ceil(p * sorted.length) - 1]
     console.log(`G4-01 Electron 状态筛选样本 n=20 失败=0 p50=${percentile(0.5)}ms p95=${percentile(0.95)}ms`)
     console.log(`G4-01 Electron 导入与服务端读回旅程 ${((Date.now() - journeyStartedAt) / 1000).toFixed(1)}s`)
+
+    const invite = await api(page, 'POST', '/workspaces/current/invites', { role: 'viewer', max_uses: 1, days: 1 }) as { code: string }
+    const viewerContext = await browser.newContext({ baseURL: new URL(baseURL!).origin })
+    let viewerApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
+    let viewerProfile = ''
+    try {
+      const viewerUsername = `qa26-g4-viewer-${Date.now()}`
+      const joined = await viewerContext.request.post('/api/v1/auth/register', {
+        data: { username: viewerUsername, password: 'local-e2e-password-123', invite_code: invite.code },
+      })
+      expect(joined.ok(), 'viewer 使用 owner 创建的邀请码加入工作区').toBeTruthy()
+      viewerProfile = await mkdtemp(join(tmpdir(), 'ops-qa26-g4-viewer-'))
+      viewerApp = await _electron.launch({
+        executablePath: resolve('../node_modules/electron/dist/electron.exe'),
+        args: [`--user-data-dir=${viewerProfile}`, resolve('../.build/main.js')],
+        env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000,
+      })
+      const viewer = await viewerApp.firstWindow()
+      await viewer.goto(`${baseURL}/login`)
+      await viewer.getByLabel('用户名', { exact: true }).fill(viewerUsername)
+      await viewer.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+      await viewer.getByLabel('邀请码（可选）').fill(invite.code)
+      await viewer.getByRole('button', { name: '登录', exact: true }).click()
+      await expect.poll(() => viewer.evaluate(async () => (await (await fetch('/api/v1/auth/me')).json()).role)).toBe('viewer')
+      await viewer.evaluate(async (accountID) => {
+        const me = await (await fetch('/api/v1/auth/me')).json()
+        localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountID)
+      }, account.id)
+      await viewer.goto(`${baseURL}/a/${account.id}/works`)
+      const viewerRow = viewer.getByTestId('desktop-work-row').filter({ hasText: 'QA26 真实 Electron 旧文导入' })
+      await expect(viewerRow).toContainText('QA26旧文')
+      await expect(viewer.getByRole('button', { name: '编辑作品标签' })).toHaveCount(0)
+      const denied = await viewer.evaluate(async (id) => {
+        const me = await (await fetch('/api/v1/auth/me')).json()
+        const response = await fetch(`/api/v1/works/${id}`, {
+          method: 'PATCH', credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token },
+          body: JSON.stringify({ tags: ['viewer 不应写入'] }),
+        })
+        return { status: response.status, body: await response.text() }
+      }, workId)
+      expect(denied.status).toBe(403)
+      expect(denied.body).toContain('观察者仅可浏览，不能修改内容')
+      const unchanged = await api(page, 'GET', `/works/${workId}`)
+      expect(unchanged.tags).toEqual(['QA26旧文'])
+      expect(unchanged.revision).toBe(taggedWork.revision)
+    } finally {
+      if (viewerApp) {
+        try { execFileSync('taskkill', ['/PID', String(viewerApp.process().pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }) } catch { /* 只结束本测试创建的 Electron。 */ }
+        await Promise.race([viewerApp.close().catch(() => undefined), new Promise((done) => setTimeout(done, 2_000))])
+      }
+      if (viewerProfile) {
+        if (!resolve(viewerProfile).startsWith(resolve(tmpdir()) + '\\') || !viewerProfile.includes('ops-qa26-g4-viewer-')) throw new Error('拒绝清理测试目录之外路径')
+        await rm(viewerProfile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+      await viewerContext.close()
+    }
   } finally {
     if (app) {
       try { await app.evaluate(({ app: electron }) => electron.exit(0)) } catch { /* 只关闭本用例创建的客户端。 */ }
