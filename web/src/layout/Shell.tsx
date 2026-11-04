@@ -8,7 +8,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { confirm } from '@/components/dialog'
+import { confirm, useModalKeyboardFocus } from '@/components/dialog'
 import { CommandPaletteHost } from '@/components/command-palette-host'
 import { CreateWorkPanel } from '@/components/create-work-panel'
 import { ErrorBoundary } from '@/components/error-boundary'
@@ -815,6 +815,7 @@ export default function Shell() {
   const [focusMode, setFocusMode] = useState(false)
   const [timeNow, setTimeNow] = useState(() => Date.now())
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
+  const mobileMoreDialogRef = useModalKeyboardFocus(mobileMoreOpen && !!acc, () => setMobileMoreOpen(false))
   // GL-01：更多菜单既覆盖账号页，也覆盖全局页；全局入口不能错误拼到 /a/:id 下。
   const mobileMoreActive = mobileMoreGroups.some((group) => group.items.some((item) => {
     if (item.path === '/agent' && !showAgent) return false
@@ -945,7 +946,7 @@ export default function Shell() {
         </nav>
       )}
       {mobileMoreOpen && acc && (
-        <div className="fixed inset-0 z-40 flex items-end md:hidden" role="dialog" aria-label="更多导航" aria-modal="true">
+        <div ref={mobileMoreDialogRef} tabIndex={-1} className="fixed inset-0 z-40 flex items-end md:hidden" role="dialog" aria-label="更多导航" aria-modal="true">
           <div className="absolute inset-0 bg-mist-900/30" onClick={() => setMobileMoreOpen(false)} />
           <div className="scrollbar-thin relative max-h-[76vh] w-full overflow-y-auto rounded-t-2xl border-t border-mist-200 bg-white pb-[calc(16px+env(safe-area-inset-bottom))]">
             <div className="flex items-center justify-between border-b border-mist-100 px-5 py-3">

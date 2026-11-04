@@ -6,7 +6,7 @@ test('OPT67 派生对话框困住键盘焦点，关闭后回到触发按钮', as
   const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: 'OPT67 焦点循环验收' })
   await page.goto(`/works/${work.id}`)
 
-  const trigger = page.getByRole('button', { name: '派生', exact: true })
+  const trigger = page.getByRole('button', { name: '派生作品', exact: true })
   await trigger.click()
   const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '派生到其他平台', exact: true }) })
   await expect(dialog).toBeVisible()

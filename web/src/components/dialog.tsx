@@ -5,13 +5,57 @@ import { createRoot } from 'react-dom/client'
 import { Button, cn, Input } from './ui'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 
-function useEsc(open: boolean, onClose: () => void) {
+export function useModalKeyboardFocus(open: boolean, onClose: () => void) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose }, [onClose])
   useEffect(() => {
     if (!open) return
-    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
-  }, [open, onClose])
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]'))
+      .filter(el => el.tabIndex >= 0 && !el.matches(':disabled') && el.getClientRects().length > 0)
+    const isTopmost = () => Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).at(-1) === dialog
+    if (!dialog.contains(document.activeElement)) {
+      const initial = dialog.querySelector<HTMLElement>('[autofocus]') ?? focusable()[0] ?? dialog
+      initial.focus()
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isTopmost()) return
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onCloseRef.current()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const items = focusable()
+      if (items.length === 0) {
+        e.preventDefault()
+        dialog.focus()
+        return
+      }
+      const first = items[0]
+      const last = items[items.length - 1]
+      const active = document.activeElement
+      if (!dialog.contains(active)) {
+        e.preventDefault()
+        ;(e.shiftKey ? last : first).focus()
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown, true)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true)
+      if (previousFocus?.isConnected) previousFocus.focus()
+    }
+  }, [open])
+  return dialogRef
 }
 
 function usePresence(open: boolean, duration: number, onExited?: () => void) {
@@ -53,57 +97,8 @@ export function Dialog({ open, onClose, title, desc, children, footer, width = '
   ariaLabel?: string
 }) {
   const { present, exiting } = usePresence(open, 180, onExited)
-  const dialogRef = useRef<HTMLDivElement>(null)
+  const dialogRef = useModalKeyboardFocus(open && present, onClose)
   const close = onClose
-  useEsc(open, () => {
-    const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]')
-    if (dialogs[dialogs.length - 1] === dialogRef.current) close()
-  })
-  const previousFocus = useRef<HTMLElement | null>(null)
-  const wasOpen = useRef(false)
-  if (present && !wasOpen.current) {
-    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  }
-  wasOpen.current = present
-  useEffect(() => {
-    if (!open || !present) return
-    const dialog = dialogRef.current
-    if (!dialog) return
-    const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]'))
-      .filter(el => el.tabIndex >= 0 && !el.matches(':disabled') && el.getClientRects().length > 0)
-    if (!dialog.contains(document.activeElement)) {
-      const initial = dialog.querySelector<HTMLElement>('[autofocus]') ?? focusable()[0] ?? dialog
-      initial.focus()
-    }
-    const containTab = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab') return
-      if (Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).at(-1) !== dialog) return
-      const items = focusable()
-      if (items.length === 0) {
-        e.preventDefault()
-        dialog.focus()
-        return
-      }
-      const first = items[0]
-      const last = items[items.length - 1]
-      const active = document.activeElement
-      if (!dialog.contains(active)) {
-        e.preventDefault()
-        ;(e.shiftKey ? last : first).focus()
-      } else if (e.shiftKey && active === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && active === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', containTab, true)
-    return () => {
-      document.removeEventListener('keydown', containTab, true)
-      if (previousFocus.current?.isConnected) previousFocus.current.focus()
-    }
-  }, [open, present])
   if (!present) return null
   return createPortal(
     <div className={cn('fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-mist-900/35 p-4 pt-[8vh] backdrop-blur-[2px]', exiting ? 'animate-dialog-backdrop-out' : 'animate-dialog-backdrop-in')} onMouseDown={(e) => e.target === e.currentTarget && close()}>
@@ -138,11 +133,11 @@ export function Drawer({ open, onClose, title, desc, children, footer, width = '
 }) {
   const { present, exiting } = usePresence(open, 180)
   const titleID = React.useId()
-  useEsc(open, onClose)
+  const dialogRef = useModalKeyboardFocus(open && present, onClose)
   if (!present) return null
   return createPortal(
     <div className={cn('drawer-overlay fixed inset-0 z-40 flex justify-end bg-mist-900/25', exiting ? 'animate-dialog-backdrop-out' : 'animate-dialog-backdrop-in')} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-labelledby={titleID} className={cn('flex h-full max-w-full flex-col bg-white shadow-pop', exiting ? 'animate-drawer-panel-out' : 'animate-drawer-panel-in', width)}>
+      <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={titleID} className={cn('flex h-full max-w-full flex-col bg-white shadow-pop', exiting ? 'animate-drawer-panel-out' : 'animate-drawer-panel-in', width)}>
         <div className="flex items-start justify-between gap-4 border-b border-mist-100 px-6 py-4">
           <div>
             <h2 id={titleID} className="dialog-title font-display text-lg font-bold text-mist-900">{title}</h2>
