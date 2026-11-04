@@ -69,7 +69,7 @@ const dedupeUpload = /\/api\/v1\/works\/[^/]+\/assets\?dedupe=sha256$/
 
 type Launched = { app: Awaited<ReturnType<typeof _electron.launch>>; page: Page; origin: string }
 
-async function launch(baseURL: string | undefined, prefix: string): Promise<Launched> {
+async function launch(baseURL: string | undefined, prefix: string, inviteCode?: string): Promise<Launched> {
   const userData = await mkdtemp(join(tmpdir(), `ops-cx11-${prefix}-`))
   const app = await _electron.launch({
     executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
@@ -83,6 +83,7 @@ async function launch(baseURL: string | undefined, prefix: string): Promise<Laun
   const username = `cx11-paste-electron-${prefix}-${Date.now()}`
   await page.getByLabel('用户名', { exact: true }).fill(username)
   await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
+  if (inviteCode) await page.getByLabel('邀请码（可选）').fill(inviteCode)
   await page.getByRole('button', { name: '创建账号', exact: true }).click()
   await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
   // userData 目录留给 finally 清理：调用方关闭进程后再删。
@@ -256,6 +257,126 @@ test('DEV-CX10 桌面粘贴图片的锚点保护与多图、图文混排提示',
     expect(uploads).toBe(4)
     expect((await api(page, origin, 'GET', `/works/${work.id}`) as { assets: unknown[] }).assets).toHaveLength(1)
   } finally {
+    await shutdown(app, page)
+  }
+})
+
+test('DEV-QA26 G4-06 真实 Electron 自动保存、图片粘贴与手动版本重载（20次样本）', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '真实 Electron 客户端验收需要 Windows')
+  test.skip(process.env.OPS_E2E_PROD === '1', '该场景使用本地模拟模型')
+  test.setTimeout(180_000)
+  const { app, page, origin } = await launch(baseURL, 'g406-save')
+  let viewer: Launched | undefined
+  let editorMember: Launched | undefined
+  try {
+    const account = await api(page, origin, 'POST', '/accounts', {
+      platform: 'wechat_mp', name: 'G4-06 自动保存验收号', content_format: 'long_article',
+    }) as { id: string }
+    const work = await wechatWork(page, origin, account.id, 'G4-06 自动保存与版本', '正文段落')
+    await page.goto(`${origin}/works/${work.id}`)
+    const selector = `#sec-${work.sectionId} .ProseMirror`
+    const editor = page.locator(selector)
+    await expect(editor).toBeVisible()
+
+    const samples: number[] = []
+    for (let i = 1; i <= 20; i++) {
+      const text = `QA26 自动保存样本 ${String(i).padStart(2, '0')}：本次输入已从真实 Electron 编辑器保存。`
+      const started = performance.now()
+      const saved = page.waitForResponse((response) => response.url().endsWith(`/api/v1/sections/${work.sectionId}`) && response.request().method() === 'PATCH')
+      await editor.fill(text)
+      expect((await saved).ok()).toBeTruthy()
+      await expect.poll(async () => {
+        const current = await api(page, origin, 'GET', `/works/${work.id}`) as { sections: Array<{ id: string; content_md: string }> }
+        return current.sections.find((section) => section.id === work.sectionId)?.content_md ?? ''
+      }).toContain(text)
+      samples.push(performance.now() - started)
+    }
+    const sorted = [...samples].sort((a, b) => a - b)
+    const p50 = (sorted[9] + sorted[10]) / 2
+    const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1]
+    console.log(`DEV-QA26 G4-06 Electron autosave ms: n=${samples.length} p50=${p50.toFixed(2)} p95=${p95.toFixed(2)} failures=0`)
+
+    await seedPng(page, await pngBase64(page))
+    await editor.click()
+    await page.keyboard.press('Control+End')
+    const uploaded = page.waitForResponse((response) => dedupeUpload.test(response.url()) && response.request().method() === 'POST')
+    expect(await paste(page, selector)).toBeTruthy()
+    const uploadResponse = await uploaded
+    expect(uploadResponse.ok()).toBeTruthy()
+    const asset = await uploadResponse.json() as { id: string }
+    await expect(editor.locator('img')).toHaveCount(1)
+    const assetPath = `/api/v1/assets/${asset.id}/file`
+    await expect.poll(async () => {
+      const current = await api(page, origin, 'GET', `/works/${work.id}`) as { sections: Array<{ id: string; content_md: string }> }
+      return current.sections.find((section) => section.id === work.sectionId)?.content_md ?? ''
+    }).toContain(assetPath)
+
+    await page.locator('.desktop-work-history').click()
+    await expect(page.getByRole('heading', { name: '版本历史' })).toBeVisible()
+    const versionSaved = page.waitForResponse((response) => response.url().endsWith(`/api/v1/works/${work.id}/versions`) && response.request().method() === 'POST')
+    await page.getByRole('button', { name: '保存当前版本', exact: true }).click()
+    expect((await versionSaved).ok()).toBeTruthy()
+    await expect(page.getByText('手动保存', { exact: true }).first()).toBeVisible()
+    const versions = await api(page, origin, 'GET', `/works/${work.id}/versions`) as Array<{ version_no: number; reason: string }>
+    const manual = versions.find((version) => version.reason === 'manual')
+    expect(manual).toBeTruthy()
+    const detail = await api(page, origin, 'GET', `/works/${work.id}/versions/${manual!.version_no}`) as { snapshot: unknown }
+    expect(JSON.stringify(detail.snapshot)).toContain(assetPath)
+
+    await page.reload()
+    const reloadedEditor = page.locator(selector)
+    await expect(reloadedEditor).toContainText('QA26 自动保存样本 20')
+    await expect(reloadedEditor.locator('img')).toHaveCount(1)
+    const persisted = await api(page, origin, 'GET', `/works/${work.id}`) as { sections: Array<{ id: string; content_md: string }> }
+    expect(persisted.sections.find((section) => section.id === work.sectionId)?.content_md).toContain(assetPath)
+    const persistedVersions = await api(page, origin, 'GET', `/works/${work.id}/versions`) as Array<{ version_no: number; reason: string }>
+    expect(persistedVersions.some((version) => version.version_no === manual!.version_no && version.reason === 'manual')).toBeTruthy()
+
+    const invite = await api(page, origin, 'POST', '/workspaces/current/invites', { role: 'viewer', max_uses: 1 }) as { code: string }
+    viewer = await launch(baseURL, 'g406-viewer', invite.code)
+    const viewerMe = await viewer.page.evaluate(async () => await (await fetch('/api/v1/auth/me')).json()) as { role: string }
+    expect(viewerMe.role).toBe('viewer')
+    await viewer.page.goto(`${origin}/works/${work.id}`)
+    const viewerEditor = viewer.page.locator(selector)
+    await expect(viewerEditor).toBeVisible()
+    await expect(viewerEditor).toHaveAttribute('contenteditable', 'false')
+    await seedPng(viewer.page, await pngBase64(viewer.page))
+    let uiUploadRequests = 0
+    viewer.page.on('request', (request) => {
+      if (request.method() === 'POST' && dedupeUpload.test(request.url())) uiUploadRequests += 1
+    })
+    expect(await paste(viewer.page, selector)).toBeFalsy()
+    await viewer.page.waitForTimeout(600)
+    expect(uiUploadRequests).toBe(0)
+    const forbiddenStatus = await viewer.page.evaluate(async (workId) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      const bytes = ((window as any).__cx11Png as { a: Uint8Array }).a
+      const body = new FormData()
+      body.append('file', new File([bytes], 'viewer-forbidden.png', { type: 'image/png' }))
+      const response = await fetch(`/api/v1/works/${workId}/assets?dedupe=sha256`, {
+        method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': me.csrf_token }, body,
+      })
+      return response.status
+    }, work.id)
+    expect(forbiddenStatus).toBe(403)
+
+    const editorInvite = await api(page, origin, 'POST', '/workspaces/current/invites', { role: 'editor', max_uses: 1 }) as { code: string }
+    editorMember = await launch(baseURL, 'g406-editor', editorInvite.code)
+    const editorMe = await editorMember.page.evaluate(async () => await (await fetch('/api/v1/auth/me')).json()) as { role: string }
+    expect(editorMe.role).toBe('editor')
+    await editorMember.page.goto(`${origin}/works/${work.id}`)
+    const memberEditor = editorMember.page.locator(selector)
+    await expect(memberEditor).toBeVisible()
+    await expect(memberEditor).toHaveAttribute('contenteditable', 'true')
+    const memberText = 'QA26 editor 邀请成员保存后由服务端读回。'
+    const memberSaved = editorMember.page.waitForResponse((response) => response.url().endsWith(`/api/v1/sections/${work.sectionId}`) && response.request().method() === 'PATCH')
+    await memberEditor.fill(memberText)
+    expect((await memberSaved).ok()).toBeTruthy()
+    const memberWork = await api(editorMember.page, origin, 'GET', `/works/${work.id}`) as { sections: Array<{ id: string; content_md: string }> }
+    expect(memberWork.sections.find((section) => section.id === work.sectionId)?.content_md).toContain(memberText)
+  } finally {
+    if (editorMember) await shutdown(editorMember.app, editorMember.page)
+    if (viewer) await shutdown(viewer.app, viewer.page)
     await shutdown(app, page)
   }
 })
