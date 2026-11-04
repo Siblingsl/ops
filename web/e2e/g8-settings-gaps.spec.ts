@@ -137,6 +137,24 @@ test('DEV-QA26 G8 Web 编辑者邀请、角色、撤销与权限边界', async (
   }
 })
 
+test('DEV-QA26 G2-13 Web 回收站读取失败可重试并区分空态', async ({ page }) => {
+  const account = await registerAccount(page)
+  await page.goto('/a/' + account.id)
+  let injectedFailures = 0
+  const matchTrash = (url: URL) => url.pathname === '/api/v1/trash'
+  await page.route(matchTrash, (route) => { injectedFailures++; return route.fulfill({ status: 500, json: { error: { code: 'internal', message: 'qa26 injected failure' } } }) })
+  await openAdvancedSetting(page, '回收站')
+  await expect.poll(() => injectedFailures).toBeGreaterThan(0)
+  await expect(page.getByRole('alert')).toContainText('加载失败')
+  const retry = page.getByRole('button', { name: '重试', exact: true })
+  await expect(retry).toBeEnabled({ timeout: 15_000 })
+  await page.unroute(matchTrash)
+  await retry.click()
+  await expect(page.getByText('回收站是空的', { exact: true })).toBeVisible()
+  await expect(page.getByText('删除的内容保留 30 天，到期后自动彻底删除。', { exact: true })).toBeVisible()
+  expect(await api(page, 'GET', '/trash')).toEqual([])
+})
+
 test('DEV-QA26 G8 Web 回收站彻底删除取消与确认', async ({ page }) => {
   const account = await registerAccount(page)
   await page.goto('/a/' + account.id)
@@ -241,4 +259,142 @@ test('DEV-QA26 G8 Web 回收站 viewer 不能恢复或彻底删除作品', async
   } finally {
     await context.close()
   }
+})
+
+test('DEV-QA26 G2-13 Web 回收站逐项验收选题素材样本角色参考', async ({ page }) => {
+  test.setTimeout(180_000)
+  const account = await registerAccount(page, '漫画')
+  const stamp = Date.now()
+  const topicTitle = `QA26 Web 回收站选题 ${stamp}`
+  const materialContent = `QA26 Web 本地验收素材 ${stamp}`
+  const sampleTitle = `QA26 Web 回收站样本 ${stamp}`
+  const characterName = `QA26 Web 回收站角色 ${stamp}`
+  const sampleBody = `仅用于 DEV-QA26 Web 回收站本地验收的风格样本正文 ${stamp}。`
+  const referenceURL = `https://www.xiaohongshu.com/explore/qa26-trash-web-${stamp}`
+  const trashTypes = [
+    { type: 'topic', tab: '选题', title: topicTitle, route: `/a/${account.id}/topics` },
+    { type: 'material', tab: '素材', title: materialContent, route: `/a/${account.id}/materials` },
+    { type: 'style_sample', tab: '风格样本', title: sampleTitle, route: `/a/${account.id}/profile?tab=samples` },
+    { type: 'character_card', tab: '角色卡', title: characterName, route: `/a/${account.id}/profile?tab=characters` },
+    { type: 'reference', tab: '对标参考', title: referenceURL, sourceTitle: referenceURL, route: `/a/${account.id}/ops` },
+  ]
+  type TrashItem = { id: string; type: string; title: string }
+  const getTrash = async () => await api(page, 'GET', '/trash') as TrashItem[]
+  const findTrash = async (type: string, title: string) => {
+    const found = (await getTrash()).find((item) => item.type === type && item.title === title)
+    expect(found, `${type} ${title} 应在服务端回收站中`).toBeTruthy()
+    return found!
+  }
+  const deleteFromSource = async (item: typeof trashTypes[number]) => {
+    await page.goto(item.route)
+    if (item.type === 'topic') {
+      const row = page.locator('div.group.relative.p-4').filter({ has: page.getByText(item.title, { exact: true }) })
+      await expect(row).toBeVisible()
+      const deleted = page.waitForResponse((response) =>
+        new URL(response.url()).pathname.includes('/api/v1/topics/') && response.request().method() === 'DELETE')
+      await row.getByRole('button', { name: '更多', exact: true }).click()
+      await row.getByRole('button', { name: '删除', exact: true }).click()
+      expect((await deleted).ok()).toBe(true)
+    } else if (item.type === 'material') {
+      const card = page.locator('div.group.mb-4').filter({ has: page.getByText(materialContent, { exact: true }) })
+      await expect(card).toBeVisible()
+      const deleted = page.waitForResponse((response) =>
+        new URL(response.url()).pathname.includes('/api/v1/materials/') && response.request().method() === 'DELETE')
+      await card.getByRole('button', { name: '删除', exact: true }).click()
+      expect((await deleted).ok()).toBe(true)
+    } else if (item.type === 'style_sample' || item.type === 'character_card') {
+      const row = page.locator('li').filter({ hasText: item.title })
+      await expect(row).toBeVisible()
+      const deleted = page.waitForResponse((response) =>
+        new URL(response.url()).pathname.includes(item.type === 'style_sample' ? '/api/v1/style-samples/' : '/api/v1/characters/') && response.request().method() === 'DELETE')
+      await row.getByRole('button', { name: '删除', exact: true }).click()
+      const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: `删除「${item.title}」？`, exact: true }) })
+      await dialog.getByRole('button', { name: '删除', exact: true }).click()
+      expect((await deleted).ok()).toBe(true)
+    } else {
+      const refLink = page.locator(`a[href="${item.sourceTitle || item.title}"]`)
+      await expect(refLink).toBeVisible()
+      const deleted = page.waitForResponse((response) =>
+        new URL(response.url()).pathname.includes('/api/v1/references/') && response.request().method() === 'DELETE')
+      await refLink.locator('xpath=..').getByRole('button', { name: '移入回收站', exact: true }).click()
+      expect((await deleted).ok()).toBe(true)
+    }
+    await expect.poll(async () => (await getTrash()).some((entry) => entry.type === item.type && entry.title === item.title)).toBe(true)
+  }
+  const openTrash = async () => await openAdvancedSetting(page, '回收站')
+  const restoreFromTrash = async (item: TrashItem) => {
+    const tabName = trashTypes.find((candidate) => candidate.type === item.type)!.tab
+    await page.getByRole('button', { name: new RegExp(`^${tabName}`) }).click()
+    const row = page.locator('li').filter({ hasText: item.title })
+    await expect(row).toBeVisible()
+    const restored = page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith(`/trash/${item.type}/${item.id}/restore`) && response.request().method() === 'POST')
+    await row.getByRole('button', { name: '恢复', exact: true }).click()
+    expect((await restored).ok()).toBe(true)
+    await expect.poll(async () => (await getTrash()).some((entry) => entry.id === item.id)).toBe(false)
+  }
+  const purgeWithCancelAndConfirm = async (item: TrashItem) => {
+    const tabName = trashTypes.find((candidate) => candidate.type === item.type)!.tab
+    await page.getByRole('button', { name: new RegExp(`^${tabName}`) }).click()
+    const row = page.locator('li').filter({ hasText: item.title })
+    await expect(row).toBeVisible()
+    await row.getByRole('button', { name: '彻底删除', exact: true }).click()
+    const cancelDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '彻底删除？', exact: true }) })
+    await cancelDialog.getByRole('button', { name: '取消', exact: true }).click()
+    expect((await getTrash()).some((entry) => entry.id === item.id)).toBe(true)
+    await row.getByRole('button', { name: '彻底删除', exact: true }).click()
+    const confirmDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '彻底删除？', exact: true }) })
+    const purged = page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith(`/trash/${item.type}/${item.id}`)
+      && new URL(response.url()).searchParams.get('confirm') === 'true'
+      && response.request().method() === 'DELETE')
+    await confirmDialog.getByRole('button', { name: '彻底删除', exact: true }).click()
+    expect((await purged).ok()).toBe(true)
+    await expect.poll(async () => (await getTrash()).some((entry) => entry.id === item.id)).toBe(false)
+  }
+
+  await api(page, 'POST', `/accounts/${account.id}/topics`, { title: topicTitle, angle: 'DEV-QA26 隔离测试选题' })
+  await api(page, 'POST', '/materials', { account_id: account.id, kind: 'experience', content: materialContent, source: 'DEV-QA26 Web 本地验收', tags: [] })
+  await api(page, 'POST', `/accounts/${account.id}/style-samples`, { title: sampleTitle, content_md: sampleBody })
+  await api(page, 'POST', `/accounts/${account.id}/characters`, { name: characterName, appearance: '测试角色', personality: '仅本地验收', catchphrase: 'DEV-QA26' })
+  await page.goto(`/a/${account.id}/ops`)
+  await page.getByLabel('单篇链接（每行一条，最多 20 条）').fill(referenceURL)
+  const referenceAdded = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith(`/api/v1/accounts/${account.id}/references`) && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '添加参考链接', exact: true }).click()
+  expect((await referenceAdded).ok()).toBe(true)
+  await expect(page.locator(`a[href="${referenceURL}"]`)).toBeVisible()
+
+  for (const item of trashTypes) await deleteFromSource(item)
+  const items = await Promise.all(trashTypes.map((item) => findTrash(item.type, item.title)))
+  await openTrash()
+  const filterSamples: number[] = []
+  for (let i = 0; i < 20; i++) {
+    const item = trashTypes[i % trashTypes.length]
+    const tab = page.getByRole('button', { name: new RegExp(`^${item.tab}`) })
+    const started = Date.now()
+    await tab.click()
+    await expect(tab).toHaveClass(/bg-white/)
+    await expect(page.locator('li').filter({ hasText: item.title })).toBeVisible()
+    filterSamples.push(Date.now() - started)
+  }
+  const sorted = [...filterSamples].sort((a, b) => a - b)
+  const metrics = { environment: 'Web Chromium', samples_ms: filterSamples, p50_ms: sorted[Math.ceil(sorted.length * 0.5) - 1], p95_ms: sorted[Math.ceil(sorted.length * 0.95) - 1], failures: 0 }
+  await test.info().attach('trash-object-type-filter-metrics', { body: Buffer.from(JSON.stringify(metrics)), contentType: 'application/json' })
+  console.log(`DEV-QA26 trash object filters n=20 p50=${metrics.p50_ms}ms p95=${metrics.p95_ms}ms failures=0 environment=Web Chromium`)
+  for (const item of items) await restoreFromTrash(item)
+  await page.reload()
+  for (const item of trashTypes) {
+    await page.getByRole('button', { name: new RegExp(`^${item.tab}`) }).click()
+    await expect(page.getByText('回收站是空的', { exact: true })).toBeVisible()
+  }
+  expect((await getTrash()).some((entry) => items.some((item) => item.id === entry.id))).toBe(false)
+
+  for (const item of trashTypes) await deleteFromSource(item)
+  const secondPass = await Promise.all(trashTypes.map((item) => findTrash(item.type, item.title)))
+  await openTrash()
+  for (const item of secondPass) await purgeWithCancelAndConfirm(item)
+  await page.reload()
+  await expect(page.getByText('回收站是空的', { exact: true })).toBeVisible()
+  expect((await getTrash()).some((entry) => secondPass.some((item) => item.id === entry.id))).toBe(false)
 })

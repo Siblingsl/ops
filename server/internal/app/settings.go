@@ -407,7 +407,7 @@ var trashTables = map[string]struct{ table, title, account string }{
 	"material":       {"material", "left(t.content, 40)", "t.account_id"},
 	"style_sample":   {"style_sample", "t.title", "t.account_id"},
 	"character_card": {"character_card", "t.name", "t.account_id"},
-	"reference":      {"reference_item", "t.title", "t.account_id"},
+	"reference":      {"reference_item", "coalesce(nullif(t.title,''),t.url)", "t.account_id"},
 	"sensitive_word": {"sensitive_word", "t.word", "NULL::uuid"},
 }
 

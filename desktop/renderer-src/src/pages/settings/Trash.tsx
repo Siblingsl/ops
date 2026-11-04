@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
-import { Badge, Button, Card, cn, Empty, PageHeader, PageLoading, Tabs, platformLabel, platformFormatLabel } from '@/components/ui'
+import { Badge, Button, Card, cn, Empty, Notice, PageHeader, PageState, Tabs, platformLabel, platformFormatLabel } from '@/components/ui'
 import { BackToSettings } from '@/components/back-to-settings'
 import type { Platform, ContentFormat } from '@/lib/types'
 import { del, errorMessage, get, post } from '@/lib/api'
@@ -16,12 +16,12 @@ interface Item { type: 'work' | 'topic' | 'material' | 'style_sample' | 'charact
 const typeLabel: Record<Item['type'], string> = { work: '作品', topic: '选题', material: '素材', style_sample: '风格样本', character_card: '角色卡', reference: '对标参考', sensitive_word: '敏感词' }
 
 export default function Trash() {
-  const { data, isLoading, refetch } = useQuery({ queryKey: ['trash'], queryFn: () => get<Item[]>('/trash') })
+  const { data, isLoading, isError, error, failureReason, isFetching, refetch } = useQuery({ queryKey: ['trash'], queryFn: () => get<Item[]>('/trash') })
   const [tab, setTab] = useState<'all' | Item['type']>('all')
   const inv = useInvalidate()
   const canWrite = useCanWrite()
   const navigate = useNavigate()
-  if (isLoading) return <PageLoading />
+  if (isLoading || (isError && !data)) return <PageState loading={isLoading} error={error ?? failureReason} retrying={isFetching} onRetry={() => void refetch()} />
   const all = data ?? []
   const list = all.filter((i) => tab === 'all' || i.type === tab)
   const restore = async (i: Item, open = false) => {
@@ -48,6 +48,7 @@ export default function Trash() {
   return (
     <div className="animate-fade-in">
       <PageHeader title="回收站" desc="删除的内容保留 30 天，到期后自动彻底删除。" action={<BackToSettings />} />
+      {isError && <Notice tone="red" className="mb-4">{errorMessage(error ?? failureReason)} <Button size="sm" variant="ghost" onClick={() => void refetch()}>重试</Button></Notice>}
       <Tabs value={tab} onChange={setTab} className="mb-5" items={[
         { value: 'all', label: '全部', count: all.length },
         { value: 'work', label: '作品', count: count('work') },
