@@ -162,7 +162,7 @@ export function NotificationBell() {
   }
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen((v) => { if (!v) window.dispatchEvent(new CustomEvent('ops:overlay', { detail: 'notifications' })); return !v })} title="通知与 AI 任务"
+      <button type="button" aria-label="通知与 AI 任务" onClick={() => setOpen((v) => { if (!v) window.dispatchEvent(new CustomEvent('ops:overlay', { detail: 'notifications' })); return !v })} title="通知与 AI 任务"
         className={cn('relative flex size-9 cursor-pointer items-center justify-center rounded-full border bg-white text-mist-600 transition hover:text-mist-900',
           open ? 'border-ink-300 shadow-card' : 'border-mist-200 hover:border-mist-300')}>
         {active > 0 ? <Loader2 className="size-4 animate-spin text-ink-600" /> : <Bell className="size-4" />}

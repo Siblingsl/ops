@@ -115,6 +115,7 @@ export default defineConfig({
         'g6-followers-sync.spec.ts',
         'g6-review-import-quality.spec.ts',
         'g8-export-electron.spec.ts',
+        'g8-notifications-electron.spec.ts',
         'g8-settings-gaps.spec.ts',
         'cx18-benchmark-electron.spec.ts',
       ],
