@@ -82,3 +82,51 @@ test('DEV-QA26 G6 Web 粉丝同步、权限提示与手动回退', async ({ page
   expect(persisted.days).toHaveLength(8)
   expect(persisted.days.find((row) => row.date === manualDate)).toMatchObject({ source: 'manual', new_follow: 3 })
 })
+
+test('DEV-QA26 G6 Web 每日同步开关保存重载与20次延迟样本', async ({ page }, testInfo) => {
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API')
+  test.setTimeout(180_000)
+
+  const username = `qa26-g6-daily-toggle-web-${Date.now()}`
+  const account = await registerAccount(page, '长图文', 'wechat_mp', username) as { id: string }
+  const accountPath = `/accounts/${account.id}`
+  await api(page, 'PUT', `${accountPath}/wechat-credential`, { app_id: 'wx1234567890', app_secret: 'local-e2e-wechat-secret' })
+  const capability = await api(page, 'POST', `${accountPath}/wechat-credential/test`) as { ok: boolean; datacube_state: string }
+  expect(capability).toMatchObject({ ok: true, datacube_state: 'ok' })
+  const initial = await api(page, 'GET', accountPath) as { metrics_wechat_auto: { enabled: boolean } }
+  expect(initial.metrics_wechat_auto.enabled).toBe(true)
+
+  await page.goto(`/a/${account.id}/review`)
+  await expect(page.getByRole('heading', { name: '数据复盘', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: /^用户菜单/ }).click()
+  await page.getByRole('menuitem', { name: '平台账号与凭证', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '平台账号与凭证', exact: true })).toBeVisible()
+  const toggle = page.getByRole('switch', { name: '数据接口每日同步', exact: true })
+  await expect(toggle).toBeVisible()
+  await expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+  const latencies: number[] = []
+  for (let i = 0; i < 20; i++) {
+    const expected = i % 2 !== 0
+    const update = page.waitForResponse((response) => response.url().includes(`${accountPath}`) && response.request().method() === 'PATCH')
+    const started = performance.now()
+    await toggle.click()
+    const response = await update
+    expect(response.ok()).toBeTruthy()
+    await expect(toggle).toHaveAttribute('aria-checked', String(expected))
+    latencies.push(performance.now() - started)
+    const persisted = await api(page, 'GET', accountPath) as { metrics_wechat_auto: { enabled: boolean } }
+    expect(persisted.metrics_wechat_auto.enabled).toBe(expected)
+  }
+  const sorted = [...latencies].sort((a, b) => a - b)
+  const p50 = sorted[Math.ceil(sorted.length * 0.5) - 1]
+  const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1]
+  console.log(`DEV-QA26 G6 Web 每日同步开关：样本=${latencies.length} p50=${p50.toFixed(2)}ms p95=${p95.toFixed(2)}ms failures=0`)
+  await testInfo.attach('g6-daily-sync-toggle-latencies', { body: JSON.stringify({ samples: latencies, p50, p95, failures: 0 }), contentType: 'application/json' })
+
+  await page.reload()
+  await expect(page.getByRole('heading', { name: '平台账号与凭证', exact: true })).toBeVisible()
+  await expect(page.getByRole('switch', { name: '数据接口每日同步', exact: true })).toHaveAttribute('aria-checked', 'true')
+  const afterReload = await api(page, 'GET', accountPath) as { metrics_wechat_auto: { enabled: boolean } }
+  expect(afterReload.metrics_wechat_auto.enabled).toBe(true)
+})

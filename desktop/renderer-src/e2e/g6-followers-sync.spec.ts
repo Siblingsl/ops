@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { api, registerAccount } from './support'
+import { api, registerAccount, selectDesktopSetting } from './support'
 
 const password = 'local-e2e-password-123'
 
@@ -124,6 +124,95 @@ test('DEV-QA26 G6 真实 Electron 粉丝同步、权限提示与手动回退', a
       await Promise.race([app.close().catch(() => undefined), new Promise((done) => setTimeout(done, 2_000))])
     }
     if (!resolve(profile).startsWith(resolve(tmpdir()) + '\\') || !profile.includes('ops-qa26-g6-followers-')) {
+      throw new Error('拒绝清理测试目录之外路径')
+    }
+    await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('DEV-QA26 G6 真实 Electron 每日同步开关保存重载与20次延迟样本', async ({ page, baseURL }, testInfo) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API')
+  test.setTimeout(360_000)
+
+  const username = `qa26-g6-daily-toggle-${Date.now()}`
+  const account = await registerAccount(page, '长图文', 'wechat_mp', username) as { id: string }
+  const accountPath = `/accounts/${account.id}`
+  await api(page, 'PUT', `${accountPath}/wechat-credential`, { app_id: 'wx1234567890', app_secret: 'local-e2e-wechat-secret' })
+  const capability = await api(page, 'POST', `${accountPath}/wechat-credential/test`) as { ok: boolean; datacube_state: string }
+  expect(capability).toMatchObject({ ok: true, datacube_state: 'ok' })
+  const initial = await api(page, 'GET', accountPath) as { metrics_wechat_auto: { enabled: boolean; last_at: string | null } }
+  expect(initial.metrics_wechat_auto.enabled).toBe(true)
+
+  const profile = await mkdtemp(join(tmpdir(), 'ops-qa26-g6-daily-toggle-'))
+  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  try {
+    app = await _electron.launch({
+      executablePath: resolve('../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${profile}`, resolve('../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000,
+    })
+    const native = await app.firstWindow()
+    native.setDefaultTimeout(15_000)
+    native.setDefaultNavigationTimeout(30_000)
+    await native.goto(`${baseURL}/login`)
+    await native.getByLabel('用户名', { exact: true }).fill(username)
+    await native.getByLabel('密码', { exact: true }).fill(password)
+    await native.getByRole('button', { name: '登录', exact: true }).click()
+    await expect.poll(() => native.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    const initialSettings = native.getByTestId('desktop-settings-window')
+    await expect(initialSettings.getByRole('button', { name: '返回并选择账号', exact: true })).toBeVisible()
+    await initialSettings.getByRole('button', { name: '返回并选择账号', exact: true }).click()
+    const picker = native.getByTestId('desktop-context-menu')
+    await picker.getByRole('tab', { name: /公众号/ }).click()
+    await picker.getByRole('button', { name: '浏览器验收号', exact: true }).click()
+    await expect(native.locator('.desktop-statusbar-context')).toContainText('浏览器验收号')
+
+    const openAccountSettings = async () => {
+      await native.getByRole('button', { name: /^用户菜单/ }).click()
+      await native.getByRole('menuitem', { name: '设置…', exact: true }).click()
+      const settings = native.getByTestId('desktop-settings-window')
+      await expect(settings).toBeVisible()
+      await selectDesktopSetting(native, '平台账号与凭证')
+      await expect(settings.getByRole('heading', { name: '平台账号与凭证', exact: true })).toBeVisible()
+      return settings
+    }
+
+    let settings = await openAccountSettings()
+    const toggle = settings.getByRole('switch', { name: '公众号数据接口每日同步', exact: true })
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    const latencies: number[] = []
+    for (let i = 0; i < 20; i++) {
+      const expected = i % 2 !== 0
+      const update = native.waitForResponse((response) => response.url().includes(`${accountPath}`) && response.request().method() === 'PATCH')
+      const started = performance.now()
+      await toggle.click()
+      const response = await update
+      expect(response.ok()).toBeTruthy()
+      await expect(toggle).toHaveAttribute('aria-checked', String(expected))
+      latencies.push(performance.now() - started)
+      const persisted = await api(page, 'GET', accountPath) as { metrics_wechat_auto: { enabled: boolean } }
+      expect(persisted.metrics_wechat_auto.enabled).toBe(expected)
+    }
+    const sorted = [...latencies].sort((a, b) => a - b)
+    const p50 = sorted[Math.ceil(sorted.length * 0.5) - 1]
+    const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1]
+    console.log(`DEV-QA26 G6 Electron 每日同步开关：样本=${latencies.length} p50=${p50.toFixed(2)}ms p95=${p95.toFixed(2)}ms failures=0`)
+    await testInfo.attach('g6-daily-sync-toggle-latencies', { body: JSON.stringify({ samples: latencies, p50, p95, failures: 0 }), contentType: 'application/json' })
+
+    await native.reload()
+    await expect.poll(() => native.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    await expect(native.getByRole('heading', { name: '平台账号与凭证', exact: true })).toBeVisible()
+    settings = native.getByTestId('desktop-settings-window')
+    await expect(settings.getByRole('switch', { name: '公众号数据接口每日同步', exact: true })).toHaveAttribute('aria-checked', 'true')
+    const afterReload = await api(page, 'GET', accountPath) as { metrics_wechat_auto: { enabled: boolean } }
+    expect(afterReload.metrics_wechat_auto.enabled).toBe(true)
+  } finally {
+    if (app) {
+      try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }) } catch { /* 只结束本测试创建的 Electron。 */ }
+      await Promise.race([app.close().catch(() => undefined), new Promise((done) => setTimeout(done, 2_000))])
+    }
+    if (!resolve(profile).startsWith(resolve(tmpdir()) + '\\') || !profile.includes('ops-qa26-g6-daily-toggle-')) {
       throw new Error('拒绝清理测试目录之外路径')
     }
     await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })

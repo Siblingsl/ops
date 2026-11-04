@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -198,5 +199,109 @@ func TestRunJobsDispatchesWechatDailySync(t *testing.T) {
 	}
 	if stored != 7 {
 		t.Fatalf("want 7 persisted API follower days, got %d", stored)
+	}
+}
+
+// This opt-in integration test waits for RunJobs' real 10-minute ticker.
+// Keep it out of the normal package suite because it intentionally takes over ten minutes.
+func TestRunJobsDispatchesWechatDailySyncOnTenMinuteTick(t *testing.T) {
+	if os.Getenv("OPS_TEST_WECHAT_REAL_TICK") != "1" {
+		t.Skip("set OPS_TEST_WECHAT_REAL_TICK=1 to wait for the real 10-minute scheduler tick")
+	}
+
+	originalNow := env.srv.now
+	fixedNow := time.Date(2026, time.November, 5, 11, 30, 0, 0, env.srv.loc)
+	env.srv.now = func() time.Time { return fixedNow }
+	env.mockWX.SetDatacubeError(0)
+	env.mockWX.SetUserDatacubeError(0)
+	env.mockWX.SetArticleTotals(map[string][]map[string]any{})
+	t.Cleanup(func() {
+		env.srv.now = originalNow
+		env.mockWX.SetDatacubeError(0)
+		env.mockWX.SetUserDatacubeError(0)
+		env.mockWX.SetArticleTotals(nil)
+	})
+
+	control := drWechatAccount(t, "RunJobs 十分钟调度控制账号")
+	controlPath := "/api/v1/accounts/" + control.ID.String()
+	env.mustJSON(t, "POST", controlPath+"/wechat-credential/test", nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	startedAt := time.Now()
+	go func() {
+		env.srv.RunJobs(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("RunJobs did not stop after context cancellation")
+		}
+	})
+
+	startupDeadline := time.NewTimer(30 * time.Second)
+	startupPoll := time.NewTicker(100 * time.Millisecond)
+	for dailySyncRuns(t, control.ID) == 0 {
+		select {
+		case <-startupDeadline.C:
+			startupPoll.Stop()
+			t.Fatal("RunJobs startup pass did not sync the control account")
+		case <-startupPoll.C:
+		}
+	}
+	startupDeadline.Stop()
+	startupPoll.Stop()
+
+	target := drWechatAccount(t, "RunJobs 十分钟调度目标账号")
+	targetPath := "/api/v1/accounts/" + target.ID.String()
+	env.mustJSON(t, "POST", targetPath+"/wechat-credential/test", nil, nil)
+	if runs := dailySyncRuns(t, target.ID); runs != 0 {
+		t.Fatalf("target account must be created after the startup pass; startup runs=%d", runs)
+	}
+
+	deadline := time.NewTimer(12 * time.Minute)
+	poll := time.NewTicker(time.Second)
+	defer deadline.Stop()
+	defer poll.Stop()
+	for dailySyncRuns(t, target.ID) == 0 {
+		select {
+		case <-deadline.C:
+			t.Fatal("RunJobs did not dispatch the target account on its real 10-minute tick")
+		case <-poll.C:
+		}
+	}
+	if elapsed := time.Since(startedAt); elapsed < 9*time.Minute+45*time.Second {
+		t.Fatalf("target sync arrived too early to prove the 10-minute tick: elapsed=%s", elapsed.Round(time.Second))
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunJobs did not stop after context cancellation")
+	}
+	if runs := dailySyncRuns(t, control.ID); runs != 1 {
+		t.Fatalf("control account should be synced once by startup, got %d runs", runs)
+	}
+	if runs := dailySyncRuns(t, target.ID); runs != 1 {
+		t.Fatalf("target account should be synced once by the 10-minute tick, got %d runs", runs)
+	}
+	if enabled, fails, last, _ := wechatAutoState(t, target.ID); !enabled || fails != 0 || last == nil {
+		t.Fatalf("scheduled target state: enabled=%v fails=%d last=%v", enabled, fails, last)
+	}
+	var followers followerList
+	env.mustJSON(t, "GET", targetPath+"/followers?days=30", nil, &followers)
+	if !followers.API || len(followers.Days) != 7 {
+		t.Fatalf("scheduled target follower sync was not persisted: api=%v days=%d", followers.API, len(followers.Days))
+	}
+	var stored int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM account_metric_daily WHERE account_id=$1 AND source='wechat_api'`, target.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 7 {
+		t.Fatalf("want 7 persisted target API follower days, got %d", stored)
 	}
 }
