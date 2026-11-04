@@ -27,7 +27,7 @@ import { TodayUsage, useChromeMeta } from './today-usage'
 import DesktopStatusBar from './DesktopStatusBar'
 import { rememberAccount, useAccounts, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
 import type { Account, Platform } from '@/lib/types'
-import { setUXEnabled, usePrefs, useRecentWorks } from '@/lib/v3'
+import { setRecentOwner, setUXEnabled, usePrefs, useRecentWorks } from '@/lib/v3'
 import { useAgentBootstrap } from '@/lib/agent'
 
 const nav: { end?: boolean; path: string; icon: typeof LayoutDashboard; label: string; mobile?: string }[] = [
@@ -550,6 +550,8 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
     }
     try {
       await post(`/workspaces/${id}/switch`, {})
+      setRecentOwner(me.user_id ?? me.username, id)
+      setBusy(false)
       qc.clear()
       setOpen(false)
       navigate('/', { replace: true })
@@ -629,7 +631,8 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       return
     }
     try {
-      await post('/workspaces', { name: '新工作区', switch: true })
+      const created = await post<{ id: string }>('/workspaces', { name: '新工作区', switch: true })
+      setRecentOwner(me.user_id ?? me.username, created.id)
       qc.clear()
       window.location.assign('/')
     } catch (e) {

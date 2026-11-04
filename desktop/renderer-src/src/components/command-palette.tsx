@@ -12,7 +12,7 @@ import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useAccounts, useCanWrite, useCurrentAccount, currentWorkQueryKey, useMe } from '@/lib/session'
 import { commandPaletteSettings, settingsEntries } from '@/lib/settings-registry'
 import type { SearchHit, StarItem, Work } from '@/lib/types'
-import { fuzzyMatch, recentItems, rememberRecent, workCmd } from '@/lib/v3'
+import { fuzzyMatch, recentItems, rememberRecent, setRecentOwner, workCmd } from '@/lib/v3'
 import { useAgentBootstrap } from '@/lib/agent'
 import { Dialog } from './dialog'
 import { openQuickCollect } from './quick-collect'
@@ -145,6 +145,7 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
     onOpenChange(false)
     try {
       await post(`/workspaces/${id}/switch`, {})
+      if (me) setRecentOwner(me.user_id ?? me.username, id)
       qc.clear()
       nav('/', { replace: true })
       window.location.reload()

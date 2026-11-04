@@ -16,28 +16,40 @@ globalThis.window = { dispatchEvent() {} }
 const { rememberRecent, recentItems, setRecentOwner } = await import('../src/lib/recent.ts')
 
 test('A-26-1 未确认登录身份时不读也不写最近打开', () => {
-  setRecentOwner(undefined)
+  setRecentOwner(undefined, undefined)
   rememberRecent({ type: 'work', title: '匿名写的', link: '/works/anon' })
   assert.deepEqual(recentItems(), [])
 })
 
 test('A-26-1 两个用户各自隔离：B 看不到 A 的记录，切回 A 记录还在', () => {
-  setRecentOwner('user-a')
+  setRecentOwner('user-a', 'workspace-a')
   rememberRecent({ type: 'work', title: 'A 的作品标题', link: '/works/a1' })
   assert.equal(recentItems().length, 1)
 
-  setRecentOwner('user-b')
+  setRecentOwner('user-b', 'workspace-b')
   assert.deepEqual(recentItems(), [], '用户 B 不得看到用户 A 的最近打开')
   rememberRecent({ type: 'work', title: 'B 的作品标题', link: '/works/b1' })
   assert.deepEqual(recentItems().map((x) => x.title), ['B 的作品标题'])
 
-  setRecentOwner('user-a')
+  setRecentOwner('user-a', 'workspace-a')
   assert.deepEqual(recentItems().map((x) => x.title), ['A 的作品标题'])
   assert.ok(!store.has('ops.recent'), '不得再写旧的全局 key')
 })
 
+test('A-26-2 同一用户的最近打开按工作区隔离', () => {
+  setRecentOwner('user-a', 'workspace-1')
+  rememberRecent({ type: 'work', title: '工作区 1 的作品', link: '/works/work-1' })
+
+  setRecentOwner('user-a', 'workspace-2')
+  assert.deepEqual(recentItems(), [], '工作区 2 不得看到工作区 1 的作品')
+  rememberRecent({ type: 'work', title: '工作区 2 的作品', link: '/works/work-2' })
+
+  setRecentOwner('user-a', 'workspace-1')
+  assert.deepEqual(recentItems().map((item) => item.title), ['工作区 1 的作品'])
+})
+
 test('A-26-1 同一用户去重与 20 条上限', () => {
-  setRecentOwner('user-c')
+  setRecentOwner('user-c', 'workspace-c')
   rememberRecent({ type: 'work', title: '第一篇', link: '/works/1' })
   rememberRecent({ type: 'work', title: '第一篇（重复）', link: '/works/1' })
   assert.equal(recentItems().length, 1)

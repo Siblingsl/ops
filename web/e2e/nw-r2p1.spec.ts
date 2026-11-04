@@ -114,6 +114,11 @@ test('GL-04 切换工作区先保存当前作品，并在 SPA 内跳转', async 
   const second = await api(page, 'POST', '/workspaces', { name: 'GL-04 切换目标工作区', switch: false })
   await page.reload()
   const id = await createOutline(page)
+  const originalWorkspace = (await api(page, 'GET', '/auth/me')).workspace
+  await api(page, 'POST', `/workspaces/${second.id}/switch`, {})
+  const secondAccount = await api(page, 'POST', '/accounts', { platform: 'wechat_mp', name: 'GL-04 目标工作区账号', content_format: 'long_article' })
+  await api(page, 'POST', `/workspaces/${originalWorkspace.id}/switch`, {})
+  await page.reload()
 
   // 整页刷新会丢掉 window 上的标记；SPA 跳转不会。
   await page.evaluate(() => { (window as unknown as { __opsSpa?: number }).__opsSpa = 1 })
@@ -133,6 +138,19 @@ test('GL-04 切换工作区先保存当前作品，并在 SPA 内跳转', async 
   expect(order.indexOf('flush')).toBeLessThan(order.indexOf('switch'))
   expect(await page.evaluate(() => (window as unknown as { __opsSpa?: number }).__opsSpa)).toBe(1)
   await expect(page).not.toHaveURL(new RegExp(`/works/${id}`))
+  await expect(page.locator(`a[href="/works/${id}"]`)).toHaveCount(0)
+
+  const backMenu = await openAccountMenu(page)
+  const returnSwitch = page.waitForResponse((response) => response.url().endsWith(`/api/v1/workspaces/${originalWorkspace.id}/switch`) && response.request().method() === 'POST')
+  const returnButton = backMenu.getByRole('button', { name: originalWorkspace.name, exact: true })
+  await expect(returnButton).toBeEnabled()
+  await returnButton.click()
+  expect((await returnSwitch).status()).toBe(200)
+  await expect.poll(() => api(page, 'GET', '/auth/me').then((me) => me.workspace.id)).toBe(originalWorkspace.id)
+  await expect(page.locator('#main-navigation').getByRole('link', { name: '切换工作区之前必须先保存的标题', exact: true })).toBeVisible()
+  expect((await api(page, 'GET', `/works/${id}`)).title).toBe('切换工作区之前必须先保存的标题')
+  expect((await api(page, 'GET', '/accounts')).map((item) => item.id)).toContain(account.id)
+  expect((await api(page, 'GET', '/accounts')).map((item) => item.id)).not.toContain(secondAccount.id)
 })
 
 /** GL-04：flush 失败时提示并留在原工作区，不发出切换请求。 */

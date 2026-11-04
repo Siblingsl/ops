@@ -105,10 +105,10 @@ const S = ({ children }: { children: React.ReactNode }) => <Suspense fallback={<
 function Authed() {
   const status = useQuery({ queryKey: ['auth-status'], queryFn: () => get<{ needs_setup: boolean }>('/auth/status') })
   const me = useMe()
-  // A-26-1：登录身份确认后才允许读/写本机「最近打开」，避免共用浏览器时串到上一个用户的数据。
+  // A-26-1/A-26-2：登录用户与工作区都确认后才读写本机「最近打开」。
   useEffect(() => {
-    setRecentOwner(me.data ? me.data.user_id ?? me.data.username : undefined)
-  }, [me.data?.user_id, me.data?.username])
+    setRecentOwner(me.data ? me.data.user_id ?? me.data.username : undefined, me.data?.workspace.id)
+  }, [me.data?.user_id, me.data?.username, me.data?.workspace.id])
   if (status.isLoading || (me.isLoading && !status.data?.needs_setup)) {
     return <div className="flex h-full items-center justify-center paper"><Spinner /></div>
   }
