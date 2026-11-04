@@ -208,6 +208,75 @@ test('DEV-QA26 G8 真实 Electron 编辑者邀请、角色、撤销与权限边�
   }
 })
 
+test('DEV-QA26 G8 邮箱邀请无 SMTP 时只记录且拒绝无效地址', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(120_000)
+  const owner = await openOwner(page, baseURL!, 'email-invite')
+  try {
+    await selectDesktopSetting(owner.page, '成员与邀请')
+    const settings = owner.page.getByTestId('desktop-settings-window')
+    const config = await api(page, 'GET', '/settings') as { smtp: { host: string; from: string } }
+    expect(config.smtp.host).toBe('')
+    expect(config.smtp.from).toBe('')
+
+    const inviteResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/workspaces/current/invites') && response.request().method() === 'POST')
+    await settings.getByRole('button', { name: '生成邀请码', exact: true }).first().click()
+    const invite = await (await inviteResponse).json() as { id: string; code: string }
+    const inviteCard = settings.locator('li').filter({ hasText: invite.code })
+    const email = inviteCard.getByPlaceholder('收件邮箱')
+    const send = inviteCard.getByRole('button', { name: '发送邮件', exact: true })
+
+    await send.click()
+    await expect(owner.page.getByText('请填写收件邮箱', { exact: true })).toBeVisible()
+    await email.fill('not-an-email')
+    const invalidToast = expect(owner.page.getByText(/请填写有效邮箱/)).toBeVisible()
+    const invalidResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/invites/' + invite.id + '/send-email') && response.request().method() === 'POST')
+    await send.click()
+    expect((await invalidResponse).status()).toBe(422)
+    await invalidToast
+
+    const samples: number[] = []
+    for (let i = 0; i < 20; i++) {
+      const recipient = `qa26-no-send-${i}@example.invalid`
+      await email.fill(recipient)
+      const successToast = i === 0
+        ? expect(owner.page.getByText('开发模式已记录邀请（未配置 SMTP，未真实发信）', { exact: true })).toBeVisible()
+        : undefined
+      const started = performance.now()
+      const sentResponse = owner.page.waitForResponse((response) =>
+        response.url().endsWith('/invites/' + invite.id + '/send-email') && response.request().method() === 'POST')
+      await send.click()
+      const response = await sentResponse
+      samples.push(performance.now() - started)
+      expect(response.status()).toBe(200)
+      const result = await response.json() as { status: string; message: string }
+      expect(result.status).toBe('dev_logged')
+      expect(result.message).toContain('未真实发信')
+      if (successToast) await successToast
+      await expect(email).toHaveValue('')
+    }
+    const sortedSamples = [...samples].sort((a, b) => a - b)
+    const p50 = sortedSamples[Math.ceil(0.50 * sortedSamples.length) - 1]
+    const p95 = sortedSamples[Math.ceil(0.95 * sortedSamples.length) - 1]
+    console.log('[QA26 email invite click samples] ' + JSON.stringify({ p50_ms: Number(p50.toFixed(2)), p95_ms: Number(p95.toFixed(2)) }))
+
+    const logs = await api(page, 'GET', '/audit-logs?action=invite_email&limit=200') as Array<{ target_id: string; result: string; detail: { to: string; status: string } }>
+    const recorded = logs.filter((entry) => entry.target_id === invite.id)
+    expect(recorded).toHaveLength(20)
+    expect(recorded.every((entry) => entry.result === 'ok' && entry.detail.status === 'dev_logged' && entry.detail.to.endsWith('@example.invalid'))).toBe(true)
+
+    await owner.page.reload()
+    await selectDesktopSetting(owner.page, '成员与邀请')
+    await expect(owner.page.getByText(invite.code, { exact: true })).toBeVisible()
+    await expect(owner.page.getByPlaceholder('收件邮箱')).toHaveValue('')
+    expect((await api(page, 'GET', '/workspaces/current/invites')).some((entry: { id: string }) => entry.id === invite.id)).toBe(true)
+  } finally {
+    await closeElectron(owner.app, owner.profile, 'email-invite')
+  }
+})
+
 test('DEV-QA26 G8 真实 Electron 回收站彻底删除取消与确认', async ({ page, baseURL }) => {
   test.skip(process.platform !== 'win32', '需要 Windows Electron')
   test.setTimeout(150_000)
