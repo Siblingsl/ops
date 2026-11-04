@@ -176,3 +176,69 @@ test('DEV-QA26 G8 Web 回收站彻底删除取消与确认', async ({ page }) =>
   await expect.poll(async () => (await api(page, 'GET', '/trash')).some((item: { id: string }) => item.id === createdWord!.id)).toBe(false)
   expect((await api(page, 'GET', '/sensitive-words')).some((item: { id: string }) => item.id === createdWord!.id)).toBe(false)
 })
+
+test('DEV-QA26 G8 Web 回收站 viewer 不能恢复或彻底删除作品', async ({ page, browser }) => {
+  const account = await registerAccount(page)
+  const title = `QA26 Web 回收站权限作品 ${Date.now()}`
+  const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title }) as { id: string }
+  await page.goto(`/a/${account.id}/works`)
+  const row = page.locator('div.group').filter({ hasText: title })
+  await expect(row).toBeVisible()
+  const softDelete = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith(`/works/${work.id}`) && response.request().method() === 'DELETE')
+  await row.getByRole('button', { name: '删除', exact: true }).click()
+  expect((await softDelete).ok()).toBe(true)
+  expect((await api(page, 'GET', '/trash?type=work') as Array<{ id: string }>).some((item) => item.id === work.id)).toBe(true)
+
+  await openSetting(page, '成员与邀请')
+  await page.getByRole('combobox').last().selectOption('viewer')
+  const inviteResponse = page.waitForResponse((response) =>
+    response.url().endsWith('/api/v1/workspaces/current/invites') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '生成邀请码', exact: true }).first().click()
+  const invite = await (await inviteResponse).json() as { code: string; role: string }
+  expect(invite.role).toBe('viewer')
+
+  const context = await browser.newContext({ baseURL: new URL(page.url()).origin })
+  try {
+    const registered = await context.request.post('/api/v1/auth/register', {
+      data: { username: 'qa26-g8-web-viewer-trash-' + Date.now(), password: 'local-e2e-password-123', invite_code: invite.code },
+    })
+    expect(registered.ok()).toBeTruthy()
+    const viewer = await context.newPage()
+    await viewer.goto('/settings/trash')
+    const me = await (await context.request.get('/api/v1/auth/me')).json() as { csrf_token: string; role: string }
+    expect(me.role).toBe('viewer')
+    const viewerRow = viewer.locator('li').filter({ hasText: title })
+    await expect(viewerRow).toBeVisible()
+    const allTab = viewer.getByRole('button', { name: /^全部/ })
+    const workTab = viewer.getByRole('button', { name: /^作品/ })
+    const tabSamples: number[] = []
+    for (let i = 0; i < 20; i++) {
+      const target = i % 2 === 0 ? workTab : allTab
+      const started = performance.now()
+      await target.click()
+      await expect(target).toHaveClass(/bg-white/)
+      await expect(viewerRow).toBeVisible()
+      tabSamples.push(performance.now() - started)
+    }
+    const sortedTabSamples = [...tabSamples].sort((a, b) => a - b)
+    const tabMetrics = { environment: 'Chromium', samples_ms: tabSamples.map((sample) => Number(sample.toFixed(2))), p50_ms: Number(sortedTabSamples[9].toFixed(2)), p95_ms: Number(sortedTabSamples[18].toFixed(2)), failures: 0 }
+    await test.info().attach('trash-viewer-tab-click-metrics', { body: Buffer.from(JSON.stringify(tabMetrics)), contentType: 'application/json' })
+    console.log(`DEV-QA26 trash viewer tab clicks n=20 p50=${tabMetrics.p50_ms}ms p95=${tabMetrics.p95_ms}ms failures=0 environment=Chromium`)
+    await expect(viewerRow.getByRole('button', { name: '恢复', exact: true })).toHaveCount(0)
+    await expect(viewerRow.getByRole('button', { name: '恢复并查看', exact: true })).toHaveCount(0)
+    await expect(viewerRow.getByRole('button', { name: '彻底删除', exact: true })).toHaveCount(0)
+    const writeStatuses = await viewer.evaluate(async ({ id, csrfToken }) => {
+      const headers = { 'X-CSRF-Token': csrfToken }
+      const [restore, purge] = await Promise.all([
+        fetch(`/api/v1/trash/work/${id}/restore`, { method: 'POST', headers }),
+        fetch(`/api/v1/trash/work/${id}?confirm=true`, { method: 'DELETE', headers }),
+      ])
+      return [restore.status, purge.status]
+    }, { id: work.id, csrfToken: me.csrf_token })
+    expect(writeStatuses).toEqual([403, 403])
+    expect((await api(page, 'GET', '/trash?type=work') as Array<{ id: string }>).some((item) => item.id === work.id)).toBe(true)
+  } finally {
+    await context.close()
+  }
+})

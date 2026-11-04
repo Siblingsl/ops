@@ -256,3 +256,112 @@ test('DEV-QA26 G8 真实 Electron 回收站彻底删除取消与确认', async (
     await closeElectron(owner.app, owner.profile, 'trash')
   }
 })
+
+test('DEV-QA26 G8 回收站 viewer 不能恢复或彻底删除作品', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(210_000)
+  const owner = await openOwner(page, baseURL!, 'trash-role')
+  let viewerApp: ElectronApp | undefined
+  let viewerProfile = ''
+  try {
+    const title = `QA26 回收站权限作品 ${Date.now()}`
+    const work = await api(page, 'POST', `/accounts/${owner.account.id}/works`, { title }) as { id: string }
+    await owner.page.goto(`${baseURL}/a/${owner.account.id}/works`)
+    const ownerRow = owner.page.getByTestId('desktop-work-row').filter({ hasText: title })
+    await expect(ownerRow).toBeVisible()
+    const softDelete = owner.page.waitForResponse((response) =>
+      response.url().endsWith(`/api/v1/works/${work.id}`) && response.request().method() === 'DELETE')
+    await ownerRow.getByRole('button', { name: '删除', exact: true }).click()
+    expect((await softDelete).ok()).toBe(true)
+    expect((await api(page, 'GET', '/trash?type=work') as Array<{ id: string }>).some((item) => item.id === work.id)).toBe(true)
+
+    await owner.page.getByRole('button', { name: /用户菜单/ }).click()
+    await owner.page.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(owner.page, '回收站')
+    const trashRow = owner.page.locator('li').filter({ hasText: title })
+    await expect(trashRow).toBeVisible()
+    const restored = owner.page.waitForResponse((response) =>
+      response.url().endsWith(`/api/v1/trash/work/${work.id}/restore`) && response.request().method() === 'POST')
+    await trashRow.getByRole('button', { name: '恢复', exact: true }).click()
+    expect((await restored).ok()).toBe(true)
+    expect((await api(page, 'GET', `/works/${work.id}`) as { title: string }).title).toBe(title)
+    expect((await api(page, 'GET', '/trash?type=work') as Array<{ id: string }>).some((item) => item.id === work.id)).toBe(false)
+
+    await owner.page.goto(`${baseURL}/a/${owner.account.id}/works`)
+    const restoredRow = owner.page.getByTestId('desktop-work-row').filter({ hasText: title })
+    const softDeleteAgain = owner.page.waitForResponse((response) =>
+      response.url().endsWith(`/api/v1/works/${work.id}`) && response.request().method() === 'DELETE')
+    await restoredRow.getByRole('button', { name: '删除', exact: true }).click()
+    expect((await softDeleteAgain).ok()).toBe(true)
+
+    await owner.page.getByRole('button', { name: /用户菜单/ }).click()
+    await owner.page.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(owner.page, '成员与邀请')
+    const members = owner.page.getByTestId('desktop-settings-window')
+    await members.getByRole('combobox').last().selectOption('viewer')
+    const inviteResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/workspaces/current/invites') && response.request().method() === 'POST')
+    await members.getByRole('button', { name: '生成邀请码', exact: true }).first().click()
+    const invite = await (await inviteResponse).json() as { code: string }
+    const viewerUsername = `qa26-g8-trash-viewer-${Date.now()}`
+    viewerProfile = await mkdtemp(join(tmpdir(), 'ops-qa26-g8-trash-viewer-'))
+    viewerApp = await _electron.launch({
+      executablePath: resolve('../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + viewerProfile, resolve('../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! },
+      timeout: 60_000,
+    })
+    const viewerPage = await viewerApp.firstWindow()
+    await viewerPage.goto(baseURL + '/register')
+    await viewerPage.getByLabel('用户名', { exact: true }).fill(viewerUsername)
+    await viewerPage.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
+    await viewerPage.getByLabel('邀请码（可选）').fill(invite.code)
+    await viewerPage.getByRole('button', { name: '创建账号', exact: true }).click()
+    await expect.poll(() => viewerPage.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    const ownerWorkspace = (await api(page, 'GET', '/auth/me') as { workspace: { id: string } }).workspace
+    const viewerMe = await viewerPage.evaluate(async () => (await (await fetch('/api/v1/auth/me')).json())) as { user_id: string; workspace: { id: string }; role: string; csrf_token: string }
+    expect(viewerMe.workspace.id).toBe(ownerWorkspace.id)
+    expect(viewerMe.role).toBe('viewer')
+    await viewerPage.evaluate(({ userId, workspaceId, accountId }) => {
+      localStorage.setItem(`ops.currentAccount.v2:${userId}:${workspaceId}`, accountId)
+    }, { userId: viewerMe.user_id, workspaceId: viewerMe.workspace.id, accountId: owner.account.id })
+    await viewerPage.goto(`${baseURL}/a/${owner.account.id}`)
+    await viewerPage.getByRole('button', { name: /用户菜单/ }).click()
+    await viewerPage.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(viewerPage, '回收站')
+
+    const viewerTrashRow = viewerPage.locator('li').filter({ hasText: title })
+    await expect(viewerTrashRow).toBeVisible()
+    const allTab = viewerPage.getByRole('button', { name: /^全部/ })
+    const workTab = viewerPage.getByRole('button', { name: /^作品/ })
+    const tabSamples: number[] = []
+    for (let i = 0; i < 20; i++) {
+      const target = i % 2 === 0 ? workTab : allTab
+      const started = performance.now()
+      await target.click()
+      await expect(target).toHaveClass(/bg-white/)
+      await expect(viewerTrashRow).toBeVisible()
+      tabSamples.push(performance.now() - started)
+    }
+    const sortedTabSamples = [...tabSamples].sort((a, b) => a - b)
+    const tabMetrics = { environment: 'Windows Electron', samples_ms: tabSamples.map((sample) => Number(sample.toFixed(2))), p50_ms: Number(sortedTabSamples[9].toFixed(2)), p95_ms: Number(sortedTabSamples[18].toFixed(2)), failures: 0 }
+    await test.info().attach('trash-viewer-tab-click-metrics', { body: Buffer.from(JSON.stringify(tabMetrics)), contentType: 'application/json' })
+    console.log(`DEV-QA26 trash viewer tab clicks n=20 p50=${tabMetrics.p50_ms}ms p95=${tabMetrics.p95_ms}ms failures=0 environment=Windows Electron`)
+    await expect(viewerTrashRow.getByRole('button', { name: '恢复', exact: true })).toHaveCount(0)
+    await expect(viewerTrashRow.getByRole('button', { name: '恢复并查看', exact: true })).toHaveCount(0)
+    await expect(viewerTrashRow.getByRole('button', { name: '彻底删除', exact: true })).toHaveCount(0)
+    const writeStatuses = await viewerPage.evaluate(async ({ id, csrfToken }) => {
+      const headers = { 'X-CSRF-Token': csrfToken }
+      const [restore, purge] = await Promise.all([
+        fetch(`/api/v1/trash/work/${id}/restore`, { method: 'POST', headers }),
+        fetch(`/api/v1/trash/work/${id}?confirm=true`, { method: 'DELETE', headers }),
+      ])
+      return [restore.status, purge.status]
+    }, { id: work.id, csrfToken: viewerMe.csrf_token })
+    expect(writeStatuses).toEqual([403, 403])
+    expect((await api(page, 'GET', '/trash?type=work') as Array<{ id: string }>).some((item) => item.id === work.id)).toBe(true)
+  } finally {
+    if (viewerApp) await closeElectron(viewerApp, viewerProfile, 'trash-viewer')
+    await closeElectron(owner.app, owner.profile, 'trash-role')
+  }
+})

@@ -9,7 +9,7 @@ import { BackToSettings } from '@/components/back-to-settings'
 import type { Platform, ContentFormat } from '@/lib/types'
 import { del, errorMessage, get, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
-import { useInvalidate } from '@/lib/session'
+import { useCanWrite, useInvalidate } from '@/lib/session'
 
 interface Item { type: 'work' | 'topic' | 'material' | 'style_sample' | 'character_card' | 'reference' | 'sensitive_word'; id: string; title: string; account_name: string | null; account_id: string | null; platform: Platform | null; content_format: ContentFormat | null; deleted_at: string; days_left: number }
 
@@ -19,6 +19,7 @@ export default function Trash() {
   const { data, isLoading, refetch } = useQuery({ queryKey: ['trash'], queryFn: () => get<Item[]>('/trash') })
   const [tab, setTab] = useState<'all' | Item['type']>('all')
   const inv = useInvalidate()
+  const canWrite = useCanWrite()
   const navigate = useNavigate()
   if (isLoading) return <PageLoading />
   const all = data ?? []
@@ -68,9 +69,9 @@ export default function Trash() {
                   <div className="text-xs text-mist-400">{i.platform ? `${platformLabel[i.platform]} · ` : ''}{i.content_format && i.platform ? `${platformFormatLabel(i.platform, i.content_format)} · ` : ''}{i.account_name ?? '共享'} · 删除于 {fmtTime(i.deleted_at)}</div>
                 </div>
                 <span className={cn('text-xs tabular-nums', i.days_left <= 3 ? 'font-medium text-danger' : 'text-mist-400')}>{i.days_left} 天后清除</span>
-                <Button size="sm" variant="ghost" icon={<RotateCcw className="size-3.5" />} onClick={() => restore(i)}>恢复</Button>
-                {i.type === 'work' && <Button size="sm" variant="ghost" onClick={() => restore(i, true)}>恢复并查看</Button>}
-                <Button size="sm" variant="ghost" className="text-danger hover:bg-orange-50" onClick={() => purge(i)}>彻底删除</Button>
+                {canWrite && <Button size="sm" variant="ghost" icon={<RotateCcw className="size-3.5" />} onClick={() => restore(i)}>恢复</Button>}
+                {canWrite && i.type === 'work' && <Button size="sm" variant="ghost" onClick={() => restore(i, true)}>恢复并查看</Button>}
+                {canWrite && <Button size="sm" variant="ghost" className="text-danger hover:bg-orange-50" onClick={() => purge(i)}>彻底删除</Button>}
               </li>
             ))}
           </ul>
