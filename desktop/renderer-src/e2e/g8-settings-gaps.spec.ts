@@ -536,3 +536,122 @@ test('DEV-QA26 G2-13 真实 Electron 回收站逐项验收选题素材样本角�
     await closeElectron(owner.app, owner.profile, 'trash-types')
   }
 })
+
+test('DEV-QA26 G2-13 真实 Electron viewer 全类型回收站写权限矩阵', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(240_000)
+  const owner = await openOwner(page, baseURL!, 'trash-matrix', '漫画')
+  let viewerApp: ElectronApp | undefined
+  let viewerProfile = ''
+  try {
+    const stamp = Date.now()
+    const accountId = owner.account.id
+    const workTitle = `QA26 viewer 回收站作品 ${stamp}`
+    const topicTitle = `QA26 viewer 回收站选题 ${stamp}`
+    const materialTitle = `QA26 viewer 回收站素材 ${stamp}`
+    const sampleTitle = `QA26 viewer 回收站样本 ${stamp}`
+    const characterTitle = `QA26 viewer 回收站角色 ${stamp}`
+    const referenceTitle = `https://www.xiaohongshu.com/explore/qa26-trash-viewer-${stamp}`
+    const wordTitle = `qa26-viewer-trash-${stamp}`
+
+    const work = await api(page, 'POST', `/accounts/${accountId}/works`, { title: workTitle }) as { id: string }
+    const topic = await api(page, 'POST', `/accounts/${accountId}/topics`, { title: topicTitle, angle: '隔离的权限矩阵记录' }) as { topic: { id: string } }
+    const material = await api(page, 'POST', '/materials', { account_id: accountId, kind: 'experience', content: materialTitle, source: 'DEV-QA26 本地验收', tags: [] }) as { id: string }
+    const sample = await api(page, 'POST', `/accounts/${accountId}/style-samples`, { title: sampleTitle, content_md: '仅用于 DEV-QA26 viewer 权限验收。' }) as { id: string }
+    const character = await api(page, 'POST', `/accounts/${accountId}/characters`, { name: characterTitle, appearance: '测试角色', personality: '仅用于权限验收', catchphrase: 'DEV-QA26' }) as { id: string }
+    const reference = await api(page, 'POST', `/accounts/${accountId}/references`, { links: [referenceTitle] }) as { ids: string[] }
+    await api(page, 'POST', '/sensitive-words', { words: [wordTitle], category: 'DEV-QA26' })
+    const word = (await api(page, 'GET', '/sensitive-words') as Array<{ id: string; word: string }>).find((item) => item.word === wordTitle)
+    expect(word).toBeTruthy()
+
+    const fixtures = [
+      { type: 'work', id: work.id, title: workTitle, tab: '作品', deletePath: `/works/${work.id}` },
+      { type: 'topic', id: topic.topic.id, title: topicTitle, tab: '选题', deletePath: `/topics/${topic.topic.id}` },
+      { type: 'material', id: material.id, title: materialTitle, tab: '素材', deletePath: `/materials/${material.id}` },
+      { type: 'style_sample', id: sample.id, title: sampleTitle, tab: '风格样本', deletePath: `/style-samples/${sample.id}` },
+      { type: 'character_card', id: character.id, title: characterTitle, tab: '角色卡', deletePath: `/characters/${character.id}` },
+      { type: 'reference', id: reference.ids[0], title: referenceTitle, tab: '对标参考', deletePath: `/references/${reference.ids[0]}` },
+      { type: 'sensitive_word', id: word!.id, title: wordTitle, tab: '敏感词', deletePath: `/sensitive-words/${word!.id}` },
+    ]
+    await Promise.all(fixtures.map((item) => api(page, 'DELETE', item.deletePath)))
+    const seededTrash = await api(page, 'GET', '/trash') as Array<{ id: string; type: string; title: string }>
+    const confirmedFixtures = fixtures.map((item) => {
+      const entry = seededTrash.find((candidate) => candidate.type === item.type && candidate.id === item.id)
+      expect(entry, `${item.type} 应进入回收站`).toBeTruthy()
+      return { ...item, title: entry!.title }
+    })
+
+    await selectDesktopSetting(owner.page, '成员与邀请')
+    const members = owner.page.getByTestId('desktop-settings-window')
+    await members.getByRole('combobox').last().selectOption('viewer')
+    const inviteResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/workspaces/current/invites') && response.request().method() === 'POST')
+    await members.getByRole('button', { name: '生成邀请码', exact: true }).first().click()
+    const invite = await (await inviteResponse).json() as { code: string; role: string }
+    expect(invite.role).toBe('viewer')
+
+    const viewerUsername = `qa26-g8-trash-matrix-${stamp}`
+    viewerProfile = await mkdtemp(join(tmpdir(), 'ops-qa26-g8-trash-matrix-viewer-'))
+    viewerApp = await _electron.launch({
+      executablePath: resolve('../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + viewerProfile, resolve('../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! },
+      timeout: 60_000,
+    })
+    const viewerPage = await viewerApp.firstWindow()
+    await viewerPage.goto(baseURL + '/register')
+    await viewerPage.getByLabel('用户名', { exact: true }).fill(viewerUsername)
+    await viewerPage.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
+    await viewerPage.getByLabel('邀请码（可选）').fill(invite.code)
+    await viewerPage.getByRole('button', { name: '创建账号', exact: true }).click()
+    await expect.poll(() => viewerPage.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    const viewerMe = await viewerPage.evaluate(async () => await (await fetch('/api/v1/auth/me')).json()) as { user_id: string; workspace: { id: string }; role: string; csrf_token: string }
+    expect(viewerMe.role).toBe('viewer')
+    await viewerPage.evaluate(({ userId, workspaceId, accountId: selectedAccount }) => {
+      localStorage.setItem(`ops.currentAccount.v2:${userId}:${workspaceId}`, selectedAccount)
+    }, { userId: viewerMe.user_id, workspaceId: viewerMe.workspace.id, accountId })
+    await viewerPage.goto(`${baseURL}/a/${accountId}`)
+    await viewerPage.getByRole('button', { name: /用户菜单/ }).click()
+    await viewerPage.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(viewerPage, '回收站')
+
+    const filterSamples: number[] = []
+    for (let index = 0; index < 20; index++) {
+      const item = confirmedFixtures[index % confirmedFixtures.length]
+      const tab = viewerPage.getByRole('button', { name: new RegExp(`^${item.tab}`) })
+      const started = performance.now()
+      await tab.click()
+      await expect(tab).toHaveClass(/bg-white/)
+      const row = viewerPage.locator('li').filter({ hasText: item.title })
+      await expect(row).toBeVisible()
+      filterSamples.push(performance.now() - started)
+      if (index < confirmedFixtures.length) {
+        await expect(row.getByRole('button', { name: '恢复', exact: true })).toHaveCount(0)
+        await expect(row.getByRole('button', { name: '恢复并查看', exact: true })).toHaveCount(0)
+        await expect(row.getByRole('button', { name: '彻底删除', exact: true })).toHaveCount(0)
+      }
+    }
+    const sortedFilterSamples = [...filterSamples].sort((a, b) => a - b)
+    const filterMetrics = {
+      environment: 'Windows Electron', samples_ms: filterSamples.map((sample) => Number(sample.toFixed(2))),
+      p50_ms: Number(sortedFilterSamples[9].toFixed(2)), p95_ms: Number(sortedFilterSamples[18].toFixed(2)), failures: 0,
+    }
+    await test.info().attach('trash-viewer-type-filter-metrics', { body: Buffer.from(JSON.stringify(filterMetrics)), contentType: 'application/json' })
+    console.log(`DEV-QA26 trash viewer type filters n=20 p50=${filterMetrics.p50_ms}ms p95=${filterMetrics.p95_ms}ms failures=0 environment=Windows Electron`)
+
+    const writeStatuses = await viewerPage.evaluate(async ({ items, csrfToken }) => await Promise.all(items.map(async (item) => {
+      const headers = { 'X-CSRF-Token': csrfToken }
+      const [restore, purge] = await Promise.all([
+        fetch(`/api/v1/trash/${item.type}/${item.id}/restore`, { method: 'POST', headers }),
+        fetch(`/api/v1/trash/${item.type}/${item.id}?confirm=true`, { method: 'DELETE', headers }),
+      ])
+      return { type: item.type, restore: restore.status, purge: purge.status }
+    })), { items: confirmedFixtures.map(({ type, id }) => ({ type, id })), csrfToken: viewerMe.csrf_token })
+    expect(writeStatuses).toEqual(confirmedFixtures.map(({ type }) => ({ type, restore: 403, purge: 403 })))
+    const ownerTrashAfter = await api(page, 'GET', '/trash') as Array<{ id: string; type: string }>
+    expect(confirmedFixtures.every((item) => ownerTrashAfter.some((entry) => entry.type === item.type && entry.id === item.id))).toBe(true)
+  } finally {
+    if (viewerApp) await closeElectron(viewerApp, viewerProfile, 'trash-matrix-viewer')
+    await closeElectron(owner.app, owner.profile, 'trash-matrix')
+  }
+})
