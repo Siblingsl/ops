@@ -180,3 +180,138 @@ test('DEV-QA26 G2-05 真实 Electron 创建并切换工作区、保存失败保�
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
+
+test('DEV-QA26 G2-05 editor 与 viewer 只能切换已加入的工作区', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '真实 Electron 客户端验收需要 Windows')
+  test.skip(process.env.OPS_E2E_PROD === '1', '该场景使用本地模拟 API')
+  test.setTimeout(180_000)
+
+  const origin = baseURL ?? 'http://127.0.0.1:5287'
+  const ownerProfile = await mkdtemp(join(tmpdir(), 'ops-qa26-g2-role-owner-'))
+  const memberProfile = await mkdtemp(join(tmpdir(), 'ops-qa26-g2-role-member-'))
+  let ownerApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  let memberApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  try {
+    ownerApp = await _electron.launch({
+      executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${ownerProfile}`, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: origin },
+      timeout: 60_000,
+    })
+    const ownerPage = await ownerApp.firstWindow()
+    await ownerPage.goto(`${origin}/register`)
+    await ownerPage.getByLabel('用户名', { exact: true }).fill(`qa26-g2-role-owner-${Date.now()}`)
+    await ownerPage.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
+    await ownerPage.getByRole('button', { name: '创建账号', exact: true }).click()
+    await expect.poll(() => ownerPage.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+
+    const originalMe = await api(ownerPage, 'GET', '/auth/me') as { workspace: { id: string; name: string } }
+    const secondWorkspace = await api(ownerPage, 'POST', '/workspaces', { name: `QA26 editor-viewer 目标 ${Date.now()}`, switch: false }) as { id: string; name: string }
+    const outsiderWorkspace = await api(ownerPage, 'POST', '/workspaces', { name: `QA26 editor-viewer 未授权 ${Date.now()}`, switch: false }) as { id: string; name: string }
+    const originalAccount = await api(ownerPage, 'POST', '/accounts', {
+      platform: 'xhs', name: 'QA26 editor 工作区账号', content_format: 'image_note',
+    }) as { id: string }
+    const originalWork = await api(ownerPage, 'POST', `/accounts/${originalAccount.id}/works`, { title: 'editor 工作区作品' }) as { id: string }
+    const editorInvite = await api(ownerPage, 'POST', '/workspaces/current/invites', { role: 'editor', max_uses: 1, days: 1 }) as { code: string }
+
+    await api(ownerPage, 'POST', `/workspaces/${secondWorkspace.id}/switch`, {})
+    const secondAccount = await api(ownerPage, 'POST', '/accounts', {
+      platform: 'wechat_mp', name: 'QA26 viewer 工作区账号', content_format: 'long_article',
+    }) as { id: string }
+    const secondWork = await api(ownerPage, 'POST', `/accounts/${secondAccount.id}/works`, { title: 'viewer 工作区作品' }) as { id: string }
+    const viewerInvite = await api(ownerPage, 'POST', '/workspaces/current/invites', { role: 'viewer', max_uses: 1, days: 1 }) as { code: string }
+
+    memberApp = await _electron.launch({
+      executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${memberProfile}`, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: origin },
+      timeout: 60_000,
+    })
+    const memberPage = await memberApp.firstWindow()
+    const memberUsername = `qa26-g2-role-member-${Date.now()}`
+    await memberPage.goto(`${origin}/register`)
+    await memberPage.getByLabel('用户名', { exact: true }).fill(memberUsername)
+    await memberPage.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
+    await memberPage.getByLabel('邀请码（可选）').fill(editorInvite.code)
+    await memberPage.getByRole('button', { name: '创建账号', exact: true }).click()
+    await expect.poll(() => memberPage.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    let memberMe = await api(memberPage, 'GET', '/auth/me') as { role: string; workspace: { id: string } }
+    expect(memberMe.workspace.id).toBe(originalMe.workspace.id)
+    expect(memberMe.role).toBe('editor')
+    expect((await api(memberPage, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).toContain(originalAccount.id)
+    expect(await apiStatus(memberPage, `/works/${secondWork.id}`)).toBe(404)
+
+    await memberPage.goto(`${origin}/settings/members`)
+    await memberPage.getByPlaceholder('邀请码', { exact: true }).fill(viewerInvite.code)
+    const joinResponse = memberPage.waitForResponse((response) => response.url().endsWith('/api/v1/workspaces/join') && response.request().method() === 'POST')
+    const joinNavigation = memberPage.waitForNavigation()
+    await memberPage.getByRole('button', { name: '加入并切换', exact: true }).click()
+    const [joined] = await Promise.all([joinResponse, joinNavigation])
+    expect(joined.status()).toBe(200)
+    await expect.poll(async () => (await api(memberPage, 'GET', '/auth/me') as { workspace: { id: string } }).workspace.id).toBe(secondWorkspace.id)
+    memberMe = await api(memberPage, 'GET', '/auth/me') as typeof memberMe
+    expect(memberMe.role).toBe('viewer')
+    expect((await api(memberPage, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).toContain(secondAccount.id)
+    expect(await apiStatus(memberPage, `/works/${originalWork.id}`)).toBe(404)
+    await memberPage.getByRole('button', { name: '关闭设置', exact: true }).click()
+    await expect(memberPage.getByTestId('desktop-settings-window')).toBeHidden()
+
+    await openDesktopAccountSwitcher(memberPage)
+    const viewerMenu = memberPage.getByTestId('desktop-context-menu')
+    await expect(viewerMenu.getByRole('button', { name: originalMe.workspace.name, exact: true })).toBeEnabled()
+    await expect(viewerMenu.getByRole('button', { name: outsiderWorkspace.name, exact: true })).toHaveCount(0)
+    await memberPage.keyboard.press('Escape')
+
+    await memberPage.keyboard.press('Control+k')
+    const palette = memberPage.getByRole('dialog', { name: '命令面板', exact: true })
+    await expect(palette).toBeVisible()
+    const workspaceCommand = `切换工作区：${originalMe.workspace.name}`
+    await palette.getByRole('textbox').fill(workspaceCommand)
+    const paletteSwitch = memberPage.waitForResponse((response) => response.url().endsWith(`/api/v1/workspaces/${originalMe.workspace.id}/switch`) && response.request().method() === 'POST')
+    const paletteNavigation = memberPage.waitForNavigation()
+    await palette.getByRole('button', { name: workspaceCommand, exact: true }).click()
+    const [paletteResponse] = await Promise.all([paletteSwitch, paletteNavigation])
+    expect(paletteResponse.status()).toBe(200)
+    await expect(memberPage.getByTestId('desktop-statusbar').locator('.desktop-statusbar-context')).toContainText(originalMe.workspace.name)
+    await expect(memberPage).toHaveURL(/\/settings\/accounts$/)
+    await expect.poll(async () => (await api(memberPage, 'GET', '/auth/me') as { workspace: { id: string } }).workspace.id).toBe(originalMe.workspace.id)
+    expect((await api(memberPage, 'GET', '/auth/me') as { role: string }).role).toBe('editor')
+    expect((await api(memberPage, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).toContain(originalAccount.id)
+    expect((await api(memberPage, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).not.toContain(secondAccount.id)
+    await memberPage.getByRole('button', { name: '关闭设置', exact: true }).click()
+    await expect(memberPage.getByTestId('desktop-settings-window')).toBeHidden()
+
+    await openDesktopAccountSwitcher(memberPage)
+    const editorMenu = memberPage.getByTestId('desktop-context-menu')
+    await expect(editorMenu.getByRole('button', { name: secondWorkspace.name, exact: true })).toBeEnabled()
+    const topbarSwitch = memberPage.waitForResponse((response) => response.url().endsWith(`/api/v1/workspaces/${secondWorkspace.id}/switch`) && response.request().method() === 'POST')
+    await editorMenu.getByRole('button', { name: secondWorkspace.name, exact: true }).click()
+    expect((await topbarSwitch).status()).toBe(200)
+    await expect(memberPage.getByTestId('desktop-statusbar').locator('.desktop-statusbar-context')).toContainText(secondWorkspace.name)
+    await expect.poll(async () => (await api(memberPage, 'GET', '/auth/me') as { workspace: { id: string } }).workspace.id).toBe(secondWorkspace.id)
+    expect((await api(memberPage, 'GET', '/auth/me') as { role: string }).role).toBe('viewer')
+    expect((await api(memberPage, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).toContain(secondAccount.id)
+    expect((await api(memberPage, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).not.toContain(originalAccount.id)
+
+    const unauthorizedSwitch = await memberPage.evaluate(async (workspaceId) => {
+      const me = await (await fetch('/api/v1/auth/me', { credentials: 'include' })).json()
+      const response = await fetch(`/api/v1/workspaces/${workspaceId}/switch`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: '{}',
+      })
+      return response.status
+    }, outsiderWorkspace.id)
+    expect([403, 404]).toContain(unauthorizedSwitch)
+    expect((await api(memberPage, 'GET', '/auth/me') as { workspace: { id: string } }).workspace.id).toBe(secondWorkspace.id)
+  } finally {
+    await memberApp?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await memberApp?.close().catch(() => undefined)
+    await ownerApp?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await ownerApp?.close().catch(() => undefined)
+    for (const [profile, prefix] of [[ownerProfile, 'ops-qa26-g2-role-owner-'], [memberProfile, 'ops-qa26-g2-role-member-']] as const) {
+      if (!resolve(profile).startsWith(resolve(tmpdir()) + sep) || !basename(profile).startsWith(prefix)) {
+        throw new Error('拒绝清理测试目录之外路径')
+      }
+      await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  }
+})

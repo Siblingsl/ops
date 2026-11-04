@@ -175,6 +175,93 @@ test('GL-04 切换工作区时保存失败就留在原工作区', async ({ page 
   expect(switched).toHaveLength(0)
 })
 
+test('DEV-QA26 G2-05 Web editor 与 viewer 只能切换已加入的工作区', async ({ page, browser }) => {
+  await registerAccount(page)
+  const originalMe = await api(page, 'GET', '/auth/me') as { workspace: { id: string; name: string } }
+  const secondWorkspace = await api(page, 'POST', '/workspaces', { name: `QA26 Web editor-viewer 目标 ${Date.now()}`, switch: false }) as { id: string; name: string }
+  const outsiderWorkspace = await api(page, 'POST', '/workspaces', { name: `QA26 Web editor-viewer 未授权 ${Date.now()}`, switch: false }) as { id: string; name: string }
+  const originalAccount = await api(page, 'POST', '/accounts', {
+    platform: 'xhs', name: 'QA26 Web editor 工作区账号', content_format: 'image_note',
+  }) as { id: string }
+  const originalWork = await api(page, 'POST', `/accounts/${originalAccount.id}/works`, { title: 'Web editor 工作区作品' }) as { id: string }
+  const editorInvite = await api(page, 'POST', '/workspaces/current/invites', { role: 'editor', max_uses: 1, days: 1 }) as { code: string }
+
+  await api(page, 'POST', `/workspaces/${secondWorkspace.id}/switch`, {})
+  const secondAccount = await api(page, 'POST', '/accounts', {
+    platform: 'wechat_mp', name: 'QA26 Web viewer 工作区账号', content_format: 'long_article',
+  }) as { id: string }
+  const secondWork = await api(page, 'POST', `/accounts/${secondAccount.id}/works`, { title: 'Web viewer 工作区作品' }) as { id: string }
+  const viewerInvite = await api(page, 'POST', '/workspaces/current/invites', { role: 'viewer', max_uses: 1, days: 1 }) as { code: string }
+
+  const context = await browser.newContext({ baseURL: new URL(page.url()).origin })
+  try {
+    const member = await context.newPage()
+    await member.goto('/register')
+    await member.getByLabel('用户名', { exact: true }).fill(`qa26-g2-web-role-${Date.now()}`)
+    await member.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
+    await member.getByLabel('邀请码（可选）').fill(editorInvite.code)
+    await member.getByRole('button', { name: '创建账号', exact: true }).click()
+    await member.waitForURL(/\/settings\/accounts\?new=1$/)
+    let memberMe = await api(member, 'GET', '/auth/me') as { role: string; workspace: { id: string } }
+    expect(memberMe.workspace.id).toBe(originalMe.workspace.id)
+    expect(memberMe.role).toBe('editor')
+    expect((await api(member, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).toContain(originalAccount.id)
+    expect((await member.request.get(`/api/v1/works/${secondWork.id}`)).status()).toBe(404)
+
+    await member.goto('/settings/members')
+    await member.getByPlaceholder('邀请码', { exact: true }).fill(viewerInvite.code)
+    const joinResponse = member.waitForResponse((response) => response.url().endsWith('/api/v1/workspaces/join') && response.request().method() === 'POST')
+    const joinNavigation = member.waitForNavigation()
+    await member.getByRole('button', { name: '加入并切换', exact: true }).click()
+    const [joined] = await Promise.all([joinResponse, joinNavigation])
+    expect(joined.status()).toBe(200)
+    await expect.poll(async () => (await api(member, 'GET', '/auth/me') as { workspace: { id: string } }).workspace.id).toBe(secondWorkspace.id)
+    memberMe = await api(member, 'GET', '/auth/me') as typeof memberMe
+    expect(memberMe.role).toBe('viewer')
+    expect((await api(member, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).toContain(secondAccount.id)
+    expect((await member.request.get(`/api/v1/works/${originalWork.id}`)).status()).toBe(404)
+
+    const viewerMenu = await openAccountMenu(member)
+    await expect(viewerMenu.getByRole('button', { name: originalMe.workspace.name, exact: true })).toBeEnabled()
+    await expect(viewerMenu.getByRole('button', { name: outsiderWorkspace.name, exact: true })).toHaveCount(0)
+    await member.keyboard.press('Escape')
+
+    await member.keyboard.press('Control+k')
+    const palette = member.getByRole('dialog', { name: '命令面板', exact: true })
+    await expect(palette).toBeVisible()
+    const workspaceCommand = `切换工作区：${originalMe.workspace.name}`
+    await palette.getByRole('textbox').fill(workspaceCommand)
+    const paletteSwitch = member.waitForResponse((response) => response.url().endsWith(`/api/v1/workspaces/${originalMe.workspace.id}/switch`) && response.request().method() === 'POST')
+    await palette.getByRole('button', { name: workspaceCommand, exact: true }).click()
+    expect((await paletteSwitch).status()).toBe(200)
+    await expect.poll(async () => (await api(member, 'GET', '/auth/me') as { workspace: { id: string } }).workspace.id).toBe(originalMe.workspace.id)
+    memberMe = await api(member, 'GET', '/auth/me') as typeof memberMe
+    expect(memberMe.role).toBe('editor')
+    expect((await api(member, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).toContain(originalAccount.id)
+    expect((await api(member, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).not.toContain(secondAccount.id)
+
+    const editorMenu = await openAccountMenu(member)
+    await expect(editorMenu.getByRole('button', { name: secondWorkspace.name, exact: true })).toBeEnabled()
+    const topbarSwitch = member.waitForResponse((response) => response.url().endsWith(`/api/v1/workspaces/${secondWorkspace.id}/switch`) && response.request().method() === 'POST')
+    await editorMenu.getByRole('button', { name: secondWorkspace.name, exact: true }).click()
+    expect((await topbarSwitch).status()).toBe(200)
+    await expect.poll(async () => (await api(member, 'GET', '/auth/me') as { workspace: { id: string } }).workspace.id).toBe(secondWorkspace.id)
+    memberMe = await api(member, 'GET', '/auth/me') as typeof memberMe
+    expect(memberMe.role).toBe('viewer')
+    expect((await api(member, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).toContain(secondAccount.id)
+    expect((await api(member, 'GET', '/accounts') as Array<{ id: string }>).map((account) => account.id)).not.toContain(originalAccount.id)
+
+    const memberSession = await (await member.request.get('/api/v1/auth/me')).json() as { csrf_token: string }
+    const unauthorizedSwitch = await member.request.post(`/api/v1/workspaces/${outsiderWorkspace.id}/switch`, {
+      data: {}, headers: { 'X-CSRF-Token': memberSession.csrf_token },
+    })
+    expect([403, 404]).toContain(unauthorizedSwitch.status())
+    expect((await api(member, 'GET', '/auth/me') as { workspace: { id: string } }).workspace.id).toBe(secondWorkspace.id)
+  } finally {
+    await context.close()
+  }
+})
+
 /** GL-05：作品页切账号先确认；取消与保存失败都不切换，留在当前作品。 */
 test('GL-05 作品页切账号先确认，取消或保存失败都不切换', async ({ page }) => {
   await registerAccount(page, '长图文', 'wechat_mp')
