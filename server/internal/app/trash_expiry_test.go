@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -64,5 +66,92 @@ func TestPurgeExpiredTrashHonorsThirtyDayBoundary(t *testing.T) {
 	}
 	if !retainedExists || expiredExists {
 		t.Fatalf("boundary item exists=%v, expired item exists=%v; want true/false", retainedExists, expiredExists)
+	}
+}
+
+func TestRunJobsPurgesExpiredWorkAndAssetDirectory(t *testing.T) {
+	originalNow := env.srv.now
+	fixedNow := time.Date(2026, time.November, 5, 2, 30, 0, 0, env.srv.loc)
+	env.srv.now = func() time.Time { return fixedNow }
+	t.Cleanup(func() { env.srv.now = originalNow })
+
+	var account Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{
+		"platform": "xhs", "name": "QA26 回收站调度验收",
+		"content_format": "image_note",
+	}, &account)
+	var work Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+account.ID.String()+"/works", map[string]string{
+		"title": "QA26 到期清理调度作品",
+	}, &work)
+	var topic struct {
+		Topic struct {
+			ID uuid.UUID `json:"id"`
+		} `json:"topic"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+account.ID.String()+"/topics", map[string]string{
+		"title": "QA26 到期清理调度选题", "angle": "调度入口验收",
+	}, &topic)
+
+	env.upload(t, work.ID.String(), testPNG(48, 32))
+	assetDir := filepath.Join(env.srv.cfg.DataDir, "assets", work.ID.String())
+	assets, err := os.ReadDir(assetDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assets) == 0 {
+		t.Fatal("test image upload did not create an asset file")
+	}
+
+	cutoff := fixedNow.AddDate(0, 0, -trashDays)
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE work SET deleted_at=$2 WHERE id=$1`, work.ID, cutoff.Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE topic SET deleted_at=$2 WHERE id=$1`, topic.Topic.ID, cutoff.Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		env.srv.RunJobs(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("RunJobs did not stop after context cancellation")
+		}
+	}()
+
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(20 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		var exists bool
+		if err := env.srv.db.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM work WHERE id=$1) OR EXISTS(SELECT 1 FROM topic WHERE id=$2)`, work.ID, topic.Topic.ID).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("RunJobs did not purge the expired work on its startup pass")
+		case <-poll.C:
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunJobs did not finish its startup pass after cancellation")
+	}
+	if _, err := os.Stat(assetDir); !os.IsNotExist(err) {
+		t.Fatalf("expired work asset directory still exists: err=%v", err)
 	}
 }
