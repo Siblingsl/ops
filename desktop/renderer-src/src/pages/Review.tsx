@@ -11,7 +11,7 @@ import { del, errorMessage, get, patch, post, rawRequest } from '@/lib/api'
 import { waitJob } from '@/lib/v3'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { describeRefs, fmtNum, fmtTime, toLocalInput } from '@/lib/format'
-import { useCurrentAccount, useInvalidate } from '@/lib/session'
+import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { BoardRow, Metric, MetricSource, Platform, ReviewReport } from '@/lib/types'
 import { FollowersCard } from './review-followers'
 import { AttributionCard, DigestsCard, TopWorksCard } from './review-insights'
@@ -174,7 +174,7 @@ function ImportMetrics({ accountId, platform, works, onDone }: { accountId: stri
         </Field>
         <p className="text-xs text-mist-400">数据完全来自你粘贴的内容；解析后逐行确认匹配的作品，不会自动访问任何平台。</p>
       </Dialog>
-      <Dialog open={open} onClose={() => setOpen(false)} title="确认作品匹配" desc="按标题自动匹配（高相似度为模糊匹配，请确认）；未匹配的行请人工指定作品后再导入。" width="max-w-3xl"
+      <Dialog open={open} onClose={() => setOpen(false)} title="确认作品匹配" desc="按唯一标题匹配；同名作品可按发布时间匹配，否则请人工指定。模糊匹配请确认后再导入。" width="max-w-3xl"
         footer={<><Button variant="ghost" onClick={() => setOpen(false)}>取消</Button><Button variant="primary" loading={busy} onClick={confirmImport}>确认导入</Button></>}>
         <div className="scrollbar-thin max-h-[55vh] space-y-2 overflow-y-auto">
           {rows.map((r, i) => (
@@ -190,7 +190,7 @@ function ImportMetrics({ accountId, platform, works, onDone }: { accountId: stri
                 </div>
                 <Select value={r.work_id ?? ''} onChange={(e) => setRows((list) => list.map((x, j) => j === i ? { ...x, work_id: e.target.value || null, matched: !!e.target.value } : x))}>
                   <option value="">跳过此行</option>
-                  {works.map((w) => <option key={w.id} value={w.id}>{w.title || '未命名'}{platform === 'toutiao' ? ` · ${contentFormatName(w.content_format)}` : ''}</option>)}
+                  {works.map((w) => <option key={w.id} value={w.id}>{w.title || '未命名'}{platform === 'toutiao' ? ` · ${contentFormatName(w.content_format)}` : ''} · {w.published_at ? fmtTime(w.published_at) : '发布时间未知'} · {w.id.slice(0, 8)}</option>)}
                 </Select>
               </div>
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-mist-500">
@@ -627,6 +627,7 @@ function ReportCard({ report, accountId, onAdopted, onUseExperiment }: { report:
 
 export default function Review() {
   const acc = useCurrentAccount()
+  const canWrite = useCanWrite()
   const [params, setParams] = useSearchParams()
   const [toutiaoFormat, setToutiaoFormat] = useState('long_article')
   const [selected, setSelected] = useState<string[]>([])
@@ -725,7 +726,7 @@ export default function Review() {
     {acc.platform === 'wechat_mp' && acc.datacube_state !== 'no_permission' && (
       <Button size="sm" variant="secondary" icon={<BarChart3 className="size-3.5" />} loading={syncing} onClick={() => void syncWechat()}>同步公众号数据</Button>
     )}
-    {!desktopPresentation && <ImportMetrics accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />}
+    {!desktopPresentation && canWrite && <ImportMetrics accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />}
   </>
   return (
     <div className={cn('animate-fade-in', desktopPresentation && 'desktop-review-page')}>
@@ -748,7 +749,7 @@ export default function Review() {
             <Button size="sm" variant="secondary" icon={<BarChart3 className="size-3.5" />} loading={syncing} onClick={() => void syncWechat()}>同步公众号数据</Button>
           )}
           <ScreenshotImport accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']); inv(['data-preferences', acc.id]) }} />
-          <ImportMetrics accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />
+          {canWrite && <ImportMetrics accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} />}
         </>} />}
         {acc.platform === 'toutiao' && <div className="flex flex-wrap items-center justify-between gap-3 border-b border-mist-100 px-5 py-3">
           <div><div className="text-[13px] font-medium text-mist-700">复盘形态</div><div className="text-xs text-mist-400">文章与微头条分开比较和取样</div></div>
@@ -861,7 +862,7 @@ export default function Review() {
           <label className="mb-3 flex items-start gap-2 text-xs text-mist-600"><input type="checkbox" checked={analysisV2} onChange={(event) => setAnalysisV2(event.target.checked)} />使用增强复盘：包含窗口、来源、可能解释和实验草案；可切回原版</label>
           <Button variant="primary" className="w-full" loading={running} onClick={runReview} icon={<Sparkles className="size-4" />}>生成复盘报告</Button>
           <HumanGate code="H-08" className="mt-4">AI 的选题建议不会自动进入选题池，需要你逐条采纳。</HumanGate>
-          {desktopPresentation && <div className="desktop-review-import-actions"><ImportMetrics accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} /></div>}
+          {desktopPresentation && canWrite && <div className="desktop-review-import-actions"><ImportMetrics accountId={acc.id} platform={acc.platform} works={rows} onDone={() => { board.refetch(); inv(['board']) }} /></div>}
         </Card>
         <div id="desktop-review-report-list" className="space-y-4 scroll-mt-24">
           {reports.data?.length ? reports.data.map((r) => <ReportCard key={r.id} report={r} accountId={acc.id} onAdopted={() => { reports.refetch(); inv(['topics', acc.id]) }} onUseExperiment={setExperimentProposal} />)

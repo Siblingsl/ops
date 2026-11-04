@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -89,5 +90,59 @@ func TestU106MetricsPasteImport(t *testing.T) {
 	ae := env.expectErr(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/import", bad, "validation_failed")
 	if !strings.Contains(ae.Error.Message, "第 1 行") {
 		t.Fatalf("row number in error: %s", ae.Error.Message)
+	}
+}
+
+func TestU106MetricsImportDuplicateTitleRequiresDisambiguation(t *testing.T) {
+	_ = env.accounts(t)
+	var a Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{"platform": "wechat_mp", "name": "同名回填验收号", "content_format": "long_article"}, &a)
+	var first, second Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/works", map[string]string{"title": "同名作品需要按时间区分"}, &first)
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/works", map[string]string{"title": "同名作品需要按时间区分"}, &second)
+	firstPublishedAt := time.Date(2026, 10, 10, 9, 0, 0, 0, time.UTC)
+	secondPublishedAt := firstPublishedAt.Add(48 * time.Hour)
+	for _, work := range []struct {
+		id uuid.UUID
+		at time.Time
+	}{{first.ID, firstPublishedAt}, {second.ID, secondPublishedAt}} {
+		if _, err := env.srv.db.Exec(t.Context(), `UPDATE work SET published_at=$2 WHERE id=$1`, work.id, work.at); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	type matchRow struct {
+		WorkID  *uuid.UUID `json:"work_id"`
+		Matched bool       `json:"matched"`
+	}
+	var noDate struct {
+		Preview []matchRow `json:"preview"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/import", map[string]string{
+		"text": "标题\t阅读\n同名作品需要按时间区分\t123",
+	}, &noDate)
+	if len(noDate.Preview) != 1 || noDate.Preview[0].WorkID != nil || noDate.Preview[0].Matched {
+		t.Fatalf("同名作品无发布时间应保持未匹配：%+v", noDate.Preview)
+	}
+
+	var dated struct {
+		Preview []matchRow `json:"preview"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/import", map[string]string{
+		"text": "标题\t发布时间\t阅读\n同名作品需要按时间区分\t" + firstPublishedAt.Format(time.RFC3339) + "\t123",
+	}, &dated)
+	if len(dated.Preview) != 1 || dated.Preview[0].WorkID == nil || *dated.Preview[0].WorkID != first.ID || !dated.Preview[0].Matched {
+		t.Fatalf("发布时间应唯一匹配对应作品：%+v", dated.Preview)
+	}
+
+	bad := map[string]any{"rows": []map[string]any{{"title": "同名作品需要按时间区分", "reads": 123}}}
+	if ae := env.expectErr(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/import", bad, "validation_failed"); !strings.Contains(ae.Error.Message, "第 1 行") {
+		t.Fatalf("无作品 ID 时应拒绝有歧义的写入：%s", ae.Error.Message)
+	}
+	for _, workID := range []uuid.UUID{first.ID, second.ID} {
+		var count int
+		if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM metric_snapshot WHERE work_id=$1`, workID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("歧义导入写入了作品 %s 的数据：count=%d err=%v", workID, count, err)
+		}
 	}
 }

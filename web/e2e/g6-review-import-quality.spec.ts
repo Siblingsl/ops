@@ -60,6 +60,180 @@ async function uploadCsv(page: import('@playwright/test').Page, name: string, cs
   await (await chooser).setFiles({ name, mimeType, buffer: Buffer.from(csv, 'utf8') })
 }
 
+async function openSetting(page: import('@playwright/test').Page, label: string) {
+  await page.getByRole('button', { name: /用户菜单/ }).click()
+  await page.getByRole('menuitem', { name: label, exact: true }).click()
+}
+
+async function createPublishedXhsWork(page: import('@playwright/test').Page, accountID: string, title: string, daysAgo: number) {
+  await page.goto(`/a/${accountID}`)
+  const workID = await createOutline(page)
+  const work = await api(page, 'GET', `/works/${workID}`) as { revision: number }
+  await api(page, 'PATCH', `/works/${workID}`, { title, base_revision: work.revision })
+  const imageData = await page.evaluate(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 64
+    canvas.height = 64
+    const context = canvas.getContext('2d')!
+    context.fillStyle = '#d9e8ee'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    return canvas.toDataURL('image/png').split(',')[1]
+  })
+  const me = await api(page, 'GET', '/auth/me') as { csrf_token: string }
+  const uploaded = await page.evaluate(async ({ id, image, csrf }) => {
+    const bytes = Uint8Array.from(atob(image), (character) => character.charCodeAt(0))
+    const form = new FormData()
+    form.append('file', new File([bytes], 'qa26-duplicate.png', { type: 'image/png' }))
+    const response = await fetch(`/api/v1/works/${id}/assets`, {
+      method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': csrf }, body: form,
+    })
+    return { status: response.status, body: await response.text() }
+  }, { id: workID, image: imageData, csrf: me.csrf_token })
+  expect(uploaded.status, uploaded.body).toBe(200)
+  const sections = (await api(page, 'GET', `/works/${workID}`)).sections as Array<{ id: string; revision: number }>
+  for (const [index, section] of sections.entries()) {
+    await api(page, 'PATCH', `/sections/${section.id}`, {
+      content_md: `第 ${index + 1} 段先记录可核对的事实，再说明下一步如何验证。`, base_revision: section.revision,
+    })
+  }
+  await page.goto(`/works/${workID}/check`)
+  await finishChecks(page, workID)
+  await page.goto(`/works/${workID}/pack`)
+  await page.getByRole('button', { name: '生成发布包', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '小红书发布包', exact: true })).toBeVisible()
+  await expect.poll(async () => (await api(page, 'GET', `/works/${workID}`)).status).toBe('packed')
+  const publishedAt = new Date(Date.now() - daysAgo * 24 * 60 * 60_000)
+  const backfill = page.locator('#backfill')
+  await backfill.getByLabel('作品链接（可选）').fill(`https://example.invalid/qa26-local-review-${workID}`)
+  await backfill.getByLabel('发布时间', { exact: true }).fill(localDateInput(publishedAt))
+  const marked = page.waitForResponse((response) => response.url().endsWith(`/api/v1/works/${workID}/published`) && response.request().method() === 'POST')
+  await backfill.getByRole('button', { name: '标记为已发布', exact: true }).click()
+  expect((await marked).ok()).toBeTruthy()
+  return (await api(page, 'GET', `/works/${workID}`)).published_at as string
+}
+
+test('DEV-QA26 G6 Web 同名 CSV 需人工消歧并可按发布时间匹配', async ({ page }) => {
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API 与模型')
+  test.setTimeout(240_000)
+  const account = await registerAccount(page, '图文笔记', 'xhs', `qa26-g6-duplicate-web-${Date.now()}`)
+  await addLocalModel(page)
+  const duplicateTitle = `QA26同名CSV-${Date.now()}`
+  const publishedAt = [
+    await createPublishedXhsWork(page, account.id, duplicateTitle, 20),
+    await createPublishedXhsWork(page, account.id, duplicateTitle, 8),
+  ]
+  const capturedAt = (at: string) => new Date(Date.parse(at) + 7 * 24 * 60 * 60_000).toISOString()
+
+  await page.goto(`/a/${account.id}/review`)
+  const noDateCSV = ['标题,统计时间,阅读', `"${duplicateTitle}",${capturedAt(publishedAt[0])},101`].join('\n')
+  const noDateResponse = page.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+  await uploadCsv(page, 'qa26-review-duplicate-no-date.csv', noDateCSV)
+  const noDatePreview = await (await noDateResponse).json() as { preview: Array<{ work_id: string | null; matched: boolean }> }
+  expect(noDatePreview.preview[0].work_id, '没有发布时间时不能猜测同名作品').toBeNull()
+  const manual = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '确认作品匹配', exact: true }) })
+  const choice = manual.getByRole('combobox').first()
+  const options = await choice.locator('option').allTextContents()
+  const duplicateOptions = options.filter((label) => label.includes(duplicateTitle))
+  expect(duplicateOptions).toHaveLength(2)
+  expect(new Set(duplicateOptions).size).toBe(2)
+  expect(await choice.inputValue()).toBe('')
+  const firstWorkID = (await api(page, 'GET', `/accounts/${account.id}/board`)).find((row: { title: string; published_at: string }) => row.title === duplicateTitle && row.published_at === publishedAt[0]).id
+  await choice.selectOption(firstWorkID)
+  const manualImport = page.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+  await manual.getByRole('button', { name: '确认导入', exact: true }).click()
+  expect((await manualImport).ok()).toBeTruthy()
+  expect(await api(page, 'GET', `/works/${firstWorkID}/metrics`)).toHaveLength(1)
+
+  const secondRow = (await api(page, 'GET', `/accounts/${account.id}/board`)).find((row: { title: string; published_at: string }) => row.title === duplicateTitle && row.published_at === publishedAt[1])
+  const datedCSV = ['标题,发布时间,统计时间,阅读', `"${duplicateTitle}",${publishedAt[1]},${capturedAt(publishedAt[1])},202`].join('\n')
+  const datedResponse = page.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+  await uploadCsv(page, 'qa26-review-duplicate-published-at.csv', datedCSV)
+  const datedPreview = await (await datedResponse).json() as { preview: Array<{ work_id: string | null; matched: boolean }> }
+  expect(datedPreview.preview[0].work_id).toBe(secondRow.id)
+  const dated = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '确认作品匹配', exact: true }) })
+  const datedImport = page.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+  await dated.getByRole('button', { name: '确认导入', exact: true }).click()
+  expect((await datedImport).ok()).toBeTruthy()
+  expect(await api(page, 'GET', `/works/${secondRow.id}/metrics`)).toHaveLength(1)
+})
+
+test('DEV-QA26 G6 Web 编辑者可预览 CSV 且观察者被拒绝', async ({ page, browser }) => {
+  const account = await registerAccount(page, '图文笔记', 'xhs', `qa26-g6-viewer-web-${Date.now()}`)
+  const title = `QA26编辑者导入Web-${Date.now()}`
+  const publishedAt = await createPublishedXhsWork(page, account.id, title, 8)
+  await page.goto(`/a/${account.id}`)
+  await openSetting(page, '成员与邀请')
+  await page.getByRole('combobox').last().selectOption('viewer')
+  const inviteResponse = page.waitForResponse((response) =>
+    response.url().endsWith('/api/v1/workspaces/current/invites') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '生成邀请码', exact: true }).first().click()
+  const invite = await (await inviteResponse).json() as { code: string; role: string }
+  expect(invite.role).toBe('viewer')
+
+  const viewerContext = await browser.newContext({ baseURL: new URL(page.url()).origin })
+  let editorContext: import('@playwright/test').BrowserContext | undefined
+  try {
+    const username = `qa26-g6-viewer-${Date.now()}`
+    const joined = await viewerContext.request.post('/api/v1/auth/register', {
+      data: { username, password, invite_code: invite.code },
+    })
+    expect(joined.ok(), '通过 UI 生成的邀请码注册观察者').toBeTruthy()
+    const viewerPage = await viewerContext.newPage()
+    await viewerPage.goto(`/a/${account.id}/review`)
+    await expect.poll(() => viewerPage.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    await expect.poll(() => viewerPage.evaluate(async () => (await (await fetch('/api/v1/auth/me')).json()).role)).toBe('viewer')
+    await expect(viewerPage.getByRole('button', { name: '导入表格（CSV）', exact: true })).toHaveCount(0)
+    const denied = await viewerPage.evaluate(async (accountID) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      const form = new FormData()
+      form.append('file', new File(['标题,阅读\n无作品,1'], 'viewer-denied.csv', { type: 'text/csv' }))
+      const response = await fetch(`/api/v1/accounts/${accountID}/metrics/import`, {
+        method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': me.csrf_token }, body: form,
+      })
+      return { status: response.status, body: await response.text() }
+    }, account.id)
+    expect(denied.status).toBe(403)
+    expect(denied.body).toContain('观察者仅可浏览，不能修改内容')
+    const work = (await api(page, 'GET', `/accounts/${account.id}/board`)).find((row: { title: string }) => row.title === title)
+    expect(await api(page, 'GET', `/works/${work.id}/metrics`)).toHaveLength(0)
+
+    await page.getByRole('combobox').last().selectOption('editor')
+    const editorInviteResponse = page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/workspaces/current/invites') && response.request().method() === 'POST')
+    await page.getByRole('button', { name: '生成邀请码', exact: true }).first().click()
+    const editorInvite = await (await editorInviteResponse).json() as { code: string; role: string }
+    expect(editorInvite.role).toBe('editor')
+    editorContext = await browser.newContext({ baseURL: new URL(page.url()).origin })
+    const editorJoined = await editorContext.request.post('/api/v1/auth/register', {
+      data: { username: `qa26-g6-editor-${Date.now()}`, password, invite_code: editorInvite.code },
+    })
+    expect(editorJoined.ok(), '通过 Web 设置页生成的邀请码注册编辑者').toBeTruthy()
+    const editorPage = await editorContext.newPage()
+    await editorPage.goto(`/a/${account.id}/review`)
+    await expect.poll(() => editorPage.evaluate(async () => (await (await fetch('/api/v1/auth/me')).json()).role)).toBe('editor')
+    await expect(editorPage.getByRole('button', { name: '导入表格（CSV）', exact: true })).toBeVisible()
+    const editorPreviewResponse = editorPage.waitForResponse((response) =>
+      response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+    const capturedAt = new Date(Date.parse(publishedAt) + 7 * 24 * 60 * 60_000).toISOString()
+    await uploadCsv(editorPage, 'editor-confirm.csv', ['标题,发布时间,统计时间,阅读', `"${title}",${publishedAt},${capturedAt},321`].join('\n'))
+    const editorPreviewResult = await editorPreviewResponse
+    expect(editorPreviewResult.status()).toBe(200)
+    const editorPreview = editorPage.getByRole('dialog').filter({ has: editorPage.getByRole('heading', { name: '确认作品匹配', exact: true }) })
+    await expect(editorPreview).toBeVisible()
+    expect(((await editorPreviewResult.json()) as { preview: Array<{ work_id: string }> }).preview[0].work_id).toBe(work.id)
+    const imported = editorPage.waitForResponse((response) =>
+      response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+    await editorPreview.getByRole('button', { name: '确认导入', exact: true }).click()
+    expect((await imported).ok()).toBeTruthy()
+    expect(await api(page, 'GET', `/works/${work.id}/metrics`)).toMatchObject([
+      { source: 'file', reads: 321, day_offset: 7 },
+    ])
+  } finally {
+    await editorContext?.close()
+    await viewerContext.close()
+  }
+})
+
 test('DEV-QA26 G6 Web CSV 确认与非空复盘质量看板', async ({ page }) => {
   test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API 与模型')
   test.setTimeout(180_000)

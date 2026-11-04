@@ -217,6 +217,30 @@ func (s *Server) matchWorkURL(ctx context.Context, accountID uuid.UUID, rawURL s
 	return &match
 }
 
+func (s *Server) matchWorkPublishedAt(ctx context.Context, accountID uuid.UUID, title, rawPublishedAt string) *uuid.UUID {
+	publishedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(rawPublishedAt))
+	if err != nil {
+		return nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT id FROM work WHERE account_id=$1 AND deleted_at IS NULL AND title=$2 AND published_at=$3 LIMIT 2`, accountID, title, publishedAt)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var match uuid.UUID
+	count := 0
+	for rows.Next() {
+		if err := rows.Scan(&match); err != nil {
+			return nil
+		}
+		count++
+	}
+	if rows.Err() != nil || count != 1 {
+		return nil
+	}
+	return &match
+}
+
 func (s *Server) matchMetricImportRow(ctx context.Context, accountID uuid.UUID, platform string, cells []string, colByKey map[string]int, row *metricPreviewRow) {
 	if rawID := metricCell(cells, colByKey, "work_id"); rawID != "" {
 		id, err := uuid.Parse(rawID)
@@ -237,8 +261,14 @@ func (s *Server) matchMetricImportRow(ctx context.Context, accountID uuid.UUID, 
 			row.MatchType, row.Matched = "exact", true
 		}
 	}
+	if row.WorkID == nil && row.Error == "" && row.Title != "" && row.PublishedAt != "" {
+		row.WorkID = s.matchWorkPublishedAt(ctx, accountID, row.Title, row.PublishedAt)
+		if row.WorkID != nil {
+			row.MatchType, row.Matched = "exact", true
+		}
+	}
 	if row.WorkID == nil && row.Error == "" && row.Title != "" {
-		id, kind, similarity := s.matchWork(ctx, accountID, row.Title, platform == "toutiao")
+		id, kind, similarity := s.matchWork(ctx, accountID, row.Title, true)
 		row.WorkID, row.MatchType, row.Similarity, row.Matched = id, kind, similarity, id != nil
 	}
 	if platform == "toutiao" && row.WorkID != nil && row.ContentFormat != "" {
@@ -429,7 +459,7 @@ func (s *Server) importMetrics(w http.ResponseWriter, r *http.Request) error {
 					return validation(fmt.Sprintf("第 %d 行的作品 ID 格式无效", i+1))
 				}
 				if strings.TrimSpace(row.WorkID) == "" && strings.TrimSpace(row.Title) != "" {
-					matched, kind, _ := s.matchWork(r.Context(), a.ID, strings.TrimSpace(row.Title), a.Platform == "toutiao")
+					matched, kind, _ := s.matchWork(r.Context(), a.ID, strings.TrimSpace(row.Title), true)
 					if matched != nil && kind == "exact" {
 						id, err = *matched, nil
 					}

@@ -1,4 +1,4 @@
-import { _electron, expect, test, type Page } from '@playwright/test'
+import { _electron, expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -6,6 +6,40 @@ import { join, resolve } from 'node:path'
 import { api, createOutline, registerAccount, selectDesktopSetting } from './support'
 
 const password = 'local-e2e-password-123'
+type ElectronApp = Awaited<ReturnType<typeof _electron.launch>>
+
+async function launchG6Electron(baseURL: string, username: string, tag: string, inviteCode?: string) {
+  const profile = await mkdtemp(join(tmpdir(), `ops-qa26-g6-${tag}-`))
+  let app: ElectronApp | undefined
+  try {
+    app = await _electron.launch({
+      executablePath: resolve('../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${profile}`, resolve('../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL }, timeout: 60_000,
+    })
+    const page = await app.firstWindow()
+    await page.goto(`${baseURL}/login`)
+    await page.getByLabel('用户名', { exact: true }).fill(username)
+    await page.getByLabel('密码', { exact: true }).fill(password)
+    if (inviteCode) await page.getByLabel('邀请码（可选）').fill(inviteCode)
+    await page.getByRole('button', { name: '登录', exact: true }).click()
+    await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    return { app, page, profile }
+  } catch (error) {
+    await closeG6Electron(app, profile, tag)
+    throw error
+  }
+}
+
+async function closeG6Electron(app: ElectronApp | undefined, profile: string, tag: string) {
+  if (app) {
+    try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }) } catch { /* 只结束本测试创建的 Electron。 */ }
+    await Promise.race([app.close().catch(() => undefined), new Promise((done) => setTimeout(done, 2_000))])
+  }
+  const resolved = resolve(profile)
+  if (!resolved.startsWith(resolve(tmpdir()) + '\\') || !profile.includes(`ops-qa26-g6-${tag}-`)) throw new Error('拒绝清理测试目录之外路径')
+  await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+}
 
 function localDateInput(value: Date) {
   return new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
@@ -22,8 +56,7 @@ async function addLocalModel(page: Page) {
   })))
 }
 
-async function enterTitleAndBody(native: Page, page: Page, workID: string, origin: string) {
-  const title = `QA26复盘CSV-${Date.now()}`
+async function enterTitleAndBody(native: Page, page: Page, workID: string, origin: string, title = `QA26复盘CSV-${Date.now()}`) {
   const titleInput = native.locator('#step-title input').first()
   await titleInput.fill(title)
   await titleInput.press('Tab')
@@ -63,13 +96,13 @@ async function finishChecksInElectron(native: Page, page: Page, workID: string, 
   await expect.poll(async () => (await api(page, 'GET', `/works/${workID}`)).status).toBe('ready')
 }
 
-async function packAndMarkPublished(native: Page, page: Page, workID: string, origin: string) {
+async function packAndMarkPublished(native: Page, page: Page, workID: string, origin: string, daysAgo = 8) {
   await native.goto(`${origin}/works/${workID}/pack`)
   await native.getByRole('button', { name: '生成当前修订发布包', exact: true }).click()
   await expect(native.getByRole('textbox', { name: '发布正文文本', exact: true })).toBeVisible()
   await expect.poll(async () => (await api(page, 'GET', `/works/${workID}`)).status).toBe('packed')
 
-  const publishedAt = new Date(Date.now() - 8 * 24 * 60 * 60_000)
+  const publishedAt = new Date(Date.now() - daysAgo * 24 * 60 * 60_000)
   const backfill = native.locator('#backfill')
   await backfill.getByLabel('作品链接（可选）').fill('https://example.invalid/qa26-local-review')
   await backfill.getByLabel('发布时间', { exact: true }).fill(localDateInput(publishedAt))
@@ -81,6 +114,275 @@ async function packAndMarkPublished(native: Page, page: Page, workID: string, or
   expect(work.published_url).toBe('https://example.invalid/qa26-local-review')
   return { publishedAt, capturedAt: new Date(publishedAt.getTime() + 7 * 24 * 60 * 60_000) }
 }
+
+async function packXhsAndMarkPublished(native: Page, page: Page, workID: string, origin: string, daysAgo: number) {
+  await native.goto(`${origin}/works/${workID}/pack`)
+  await native.getByRole('button', { name: '生成发布包', exact: true }).click()
+  await expect(native.getByRole('heading', { name: '小红书发布包', exact: true })).toBeVisible()
+  await expect.poll(async () => (await api(page, 'GET', `/works/${workID}`)).status).toBe('packed')
+
+  const publishedAt = new Date(Date.now() - daysAgo * 24 * 60 * 60_000)
+  const publishedURL = `https://example.invalid/qa26-local-review-${workID}`
+  const backfill = native.locator('#backfill')
+  await backfill.getByLabel('作品链接（可选）').fill(publishedURL)
+  await backfill.getByLabel('发布时间', { exact: true }).fill(localDateInput(publishedAt))
+  const marked = native.waitForResponse((response) => response.url().endsWith(`/api/v1/works/${workID}/published`) && response.request().method() === 'POST')
+  await backfill.getByRole('button', { name: '标记为已发布', exact: true }).click()
+  expect((await marked).ok()).toBeTruthy()
+  await expect.poll(async () => (await api(page, 'GET', `/works/${workID}`)).status).toBe('published')
+  return (await api(page, 'GET', `/works/${workID}`)).published_at as string
+}
+
+async function createPublishedXhsWork(native: Page, page: Page, accountID: string, title: string, origin: string) {
+  await native.goto(`${origin}/a/${accountID}`)
+  const workID = await createOutline(native)
+  const work = await api(page, 'GET', `/works/${workID}`) as { revision: number }
+  await api(page, 'PATCH', `/works/${workID}`, { title, base_revision: work.revision })
+  const imageData = await native.evaluate(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 64
+    canvas.height = 64
+    const context = canvas.getContext('2d')!
+    context.fillStyle = '#d9e8ee'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    return canvas.toDataURL('image/png').split(',')[1]
+  })
+  const me = await api(page, 'GET', '/auth/me') as { csrf_token: string }
+  const uploaded = await native.evaluate(async ({ id, image, csrf }) => {
+    const bytes = Uint8Array.from(atob(image), (character) => character.charCodeAt(0))
+    const form = new FormData()
+    form.append('file', new File([bytes], 'qa26-editor-import.png', { type: 'image/png' }))
+    const response = await fetch(`/api/v1/works/${id}/assets`, {
+      method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': csrf }, body: form,
+    })
+    return { status: response.status, body: await response.text() }
+  }, { id: workID, image: imageData, csrf: me.csrf_token })
+  expect(uploaded.status, uploaded.body).toBe(200)
+  const sections = (await api(page, 'GET', `/works/${workID}`)).sections as Array<{ id: string; revision: number }>
+  for (const [index, section] of sections.entries()) {
+    await api(page, 'PATCH', `/sections/${section.id}`, {
+      content_md: `第 ${index + 1} 段先记录可核对的事实，再说明下一步如何验证。`, base_revision: section.revision,
+    })
+  }
+  await finishChecksInElectron(native, page, workID, origin)
+  const publishedAt = await packXhsAndMarkPublished(native, page, workID, origin, 8)
+  return { workID, publishedAt }
+}
+
+test('DEV-QA26 G6 真实 Electron 编辑者可预览 CSV 且观察者被拒绝', async ({ page, browser, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(180_000)
+  const username = `qa26-g6-viewer-${Date.now()}`
+  const account = await registerAccount(page, '图文笔记', 'xhs', `qa26-g6-viewer-owner-${Date.now()}`)
+  const title = `QA26编辑者导入-${Date.now()}`
+  const publishedWork = await createPublishedXhsWork(page, page, account.id, title, baseURL!)
+  const ownerUsername = (await api(page, 'GET', '/auth/me') as { username: string }).username
+  const owner = await launchG6Electron(baseURL!, ownerUsername, 'viewer-owner')
+  let viewerContext: BrowserContext | undefined
+  let viewerApp: ElectronApp | undefined
+  let viewerProfile = ''
+  let editorApp: ElectronApp | undefined
+  let editorProfile = ''
+  try {
+    await owner.page.evaluate(async (accountID) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountID)
+    }, account.id)
+    await owner.page.goto(`${baseURL}/a/${account.id}`)
+    await owner.page.getByRole('button', { name: /用户菜单/ }).click()
+    await owner.page.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(owner.page, '成员与邀请')
+    const settings = owner.page.getByTestId('desktop-settings-window')
+    await settings.getByRole('combobox').last().selectOption('viewer')
+    const inviteResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/workspaces/current/invites') && response.request().method() === 'POST')
+    await settings.getByRole('button', { name: '生成邀请码', exact: true }).first().click()
+    const invite = await (await inviteResponse).json() as { code: string; role: string }
+    expect(invite.role).toBe('viewer')
+
+    viewerContext = await browser.newContext({ baseURL: new URL(baseURL!).origin })
+    const joined = await viewerContext.request.post('/api/v1/auth/register', {
+      data: { username, password, invite_code: invite.code },
+    })
+    expect(joined.ok(), '使用真实 Electron 界面生成的邀请码注册观察者').toBeTruthy()
+    const viewer = await launchG6Electron(baseURL!, username, 'viewer-client', invite.code)
+    viewerApp = viewer.app
+    viewerProfile = viewer.profile
+    await viewer.page.evaluate(async (accountID) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountID)
+    }, account.id)
+    await viewer.page.goto(`${baseURL}/a/${account.id}/review`)
+    await expect.poll(() => viewer.page.evaluate(async () => (await (await fetch('/api/v1/auth/me')).json()).role)).toBe('viewer')
+    await viewer.page.getByRole('button', { name: '查看报告与证据', exact: true }).click()
+    await expect(viewer.page.getByRole('button', { name: '导入表格（CSV）', exact: true })).toHaveCount(0)
+
+    const denied = await viewer.page.evaluate(async (accountID) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      const form = new FormData()
+      form.append('file', new File(['标题,阅读\n无作品,1'], 'viewer-denied.csv', { type: 'text/csv' }))
+      const response = await fetch(`/api/v1/accounts/${accountID}/metrics/import`, {
+        method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': me.csrf_token }, body: form,
+      })
+      return { status: response.status, body: await response.text() }
+    }, account.id)
+    expect(denied.status).toBe(403)
+    expect(denied.body).toContain('观察者仅可浏览，不能修改内容')
+    expect(await api(page, 'GET', `/works/${publishedWork.workID}/metrics`)).toHaveLength(0)
+
+    await settings.getByRole('combobox').last().selectOption('editor')
+    const editorInviteResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/workspaces/current/invites') && response.request().method() === 'POST')
+    await settings.getByRole('button', { name: '生成邀请码', exact: true }).first().click()
+    const editorInvite = await (await editorInviteResponse).json() as { code: string; role: string }
+    expect(editorInvite.role).toBe('editor')
+    const editorUsername = `qa26-g6-editor-${Date.now()}`
+    const editorJoined = await viewerContext.request.post('/api/v1/auth/register', {
+      data: { username: editorUsername, password, invite_code: editorInvite.code },
+    })
+    expect(editorJoined.ok(), '使用真实 Electron 界面生成的邀请码注册编辑者').toBeTruthy()
+    const editor = await launchG6Electron(baseURL!, editorUsername, 'editor-client', editorInvite.code)
+    editorApp = editor.app
+    editorProfile = editor.profile
+    await editor.page.evaluate(async (accountID) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountID)
+    }, account.id)
+    await editor.page.goto(`${baseURL}/a/${account.id}/review`)
+    await expect.poll(() => editor.page.evaluate(async () => (await (await fetch('/api/v1/auth/me')).json()).role)).toBe('editor')
+    await editor.page.getByRole('button', { name: '查看报告与证据', exact: true }).click()
+    await expect(editor.page.getByRole('button', { name: '导入表格（CSV）', exact: true })).toBeVisible()
+    const editorPreviewResponse = editor.page.waitForResponse((response) =>
+      response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+    const capturedAt = new Date(Date.parse(publishedWork.publishedAt) + 7 * 24 * 60 * 60_000).toISOString()
+    await uploadCsv(editor.page, 'editor-confirm.csv', ['标题,发布时间,统计时间,阅读', `"${title}",${publishedWork.publishedAt},${capturedAt},321`].join('\n'))
+    const editorPreviewResult = await editorPreviewResponse
+    expect(editorPreviewResult.status()).toBe(200)
+    const editorPreview = editor.page.getByRole('dialog').filter({ has: editor.page.getByRole('heading', { name: '确认作品匹配', exact: true }) })
+    await expect(editorPreview).toBeVisible()
+    expect(((await editorPreviewResult.json()) as { preview: Array<{ work_id: string }> }).preview[0].work_id).toBe(publishedWork.workID)
+    const saved = editor.page.waitForResponse((response) =>
+      response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+    await editorPreview.getByRole('button', { name: '确认导入', exact: true }).click()
+    expect((await saved).ok()).toBeTruthy()
+    expect(await api(page, 'GET', `/works/${publishedWork.workID}/metrics`)).toMatchObject([
+      { source: 'file', reads: 321, day_offset: 7 },
+    ])
+  } finally {
+    if (editorApp) await closeG6Electron(editorApp, editorProfile, 'editor-client')
+    if (viewerApp) await closeG6Electron(viewerApp, viewerProfile, 'viewer-client')
+    await viewerContext?.close()
+    await closeG6Electron(owner.app, owner.profile, 'viewer-owner')
+  }
+})
+
+test('DEV-QA26 G6 真实 Electron 同名 CSV 需人工消歧并可按发布时间匹配', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API 与模型')
+  test.setTimeout(240_000)
+  const username = `qa26-g6-duplicate-${Date.now()}`
+  const account = await registerAccount(page, '图文笔记', 'xhs', username)
+  await addLocalModel(page)
+  const profile = await mkdtemp(join(tmpdir(), 'ops-qa26-g6-electron-'))
+  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  try {
+    app = await _electron.launch({
+      executablePath: resolve('../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${profile}`, resolve('../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000,
+    })
+    const native = await app.firstWindow()
+    await native.goto(`${baseURL}/login`)
+    await native.getByLabel('用户名', { exact: true }).fill(username)
+    await native.getByLabel('密码', { exact: true }).fill(password)
+    await native.getByRole('button', { name: '登录', exact: true }).click()
+    await expect.poll(() => native.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    await native.evaluate(async (accountID) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountID)
+    }, account.id)
+
+    const duplicateTitle = `QA26同名CSV-${Date.now()}`
+    const imageData = await native.evaluate(() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 64
+      canvas.height = 64
+      const context = canvas.getContext('2d')!
+      context.fillStyle = '#d9e8ee'
+      context.fillRect(0, 0, canvas.width, canvas.height)
+      return canvas.toDataURL('image/png').split(',')[1]
+    })
+    const workIDs: string[] = []
+    for (const daysAgo of [20, 8]) {
+      await native.goto(`${baseURL}/a/${account.id}`)
+      const workID = await createOutline(native)
+      workIDs.push(workID)
+      const editable = await api(page, 'GET', `/works/${workID}`) as { revision: number }
+      await api(page, 'PATCH', `/works/${workID}`, { title: duplicateTitle, base_revision: editable.revision })
+      const me = await api(page, 'GET', '/auth/me') as { csrf_token: string }
+      const uploaded = await page.evaluate(async ({ id, image, csrf }) => {
+        const bytes = Uint8Array.from(atob(image), (character) => character.charCodeAt(0))
+        const form = new FormData()
+        form.append('file', new File([bytes], 'qa26-duplicate.png', { type: 'image/png' }))
+        const response = await fetch(`/api/v1/works/${id}/assets`, {
+          method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': csrf }, body: form,
+        })
+        return { status: response.status, body: await response.text() }
+      }, { id: workID, image: imageData, csrf: me.csrf_token })
+      expect(uploaded.status, uploaded.body).toBe(200)
+      const sections = (await api(page, 'GET', `/works/${workID}`)).sections as Array<{ id: string; revision: number }>
+      for (const [index, section] of sections.entries()) {
+        await api(page, 'PATCH', `/sections/${section.id}`, {
+          content_md: `第 ${index + 1} 段先记录可核对的事实，再说明下一步如何验证。`, base_revision: section.revision,
+        })
+      }
+      await native.goto(`${baseURL}/works/${workID}`)
+      await finishChecksInElectron(native, page, workID, baseURL!)
+      await packXhsAndMarkPublished(native, page, workID, baseURL!, daysAgo)
+    }
+    const savedWorks = await Promise.all(workIDs.map(async (id) => await api(page, 'GET', `/works/${id}`) as { published_at: string }))
+    const capturedAt = (publishedAt: string) => new Date(Date.parse(publishedAt) + 7 * 24 * 60 * 60_000).toISOString()
+
+    await native.goto(`${baseURL}/a/${account.id}/review`)
+    await native.getByRole('button', { name: '查看报告与证据', exact: true }).click()
+    const noDateCSV = ['标题,统计时间,阅读', `"${duplicateTitle}",${capturedAt(savedWorks[0].published_at)},101`].join('\n')
+    const noDateResponse = native.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+    await uploadCsv(native, 'qa26-review-duplicate-no-date.csv', noDateCSV)
+    const noDatePreview = await (await noDateResponse).json() as { preview: Array<{ work_id: string | null; matched: boolean }> }
+    expect(noDatePreview.preview[0].work_id, '没有发布时间时不能猜测同名作品').toBeNull()
+    const manual = native.getByRole('dialog').filter({ has: native.getByRole('heading', { name: '确认作品匹配', exact: true }) })
+    const choice = manual.getByRole('combobox').first()
+    const options = await choice.locator('option').allTextContents()
+    const duplicateOptions = options.filter((label) => label.includes(duplicateTitle))
+    expect(duplicateOptions).toHaveLength(2)
+    expect(new Set(duplicateOptions).size).toBe(2)
+    expect(await choice.inputValue()).toBe('')
+    await choice.selectOption(workIDs[0])
+    const manualImport = native.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+    await manual.getByRole('button', { name: '确认导入', exact: true }).click()
+    expect((await manualImport).ok()).toBeTruthy()
+    expect(await api(page, 'GET', `/works/${workIDs[0]}/metrics`)).toHaveLength(1)
+    expect(await api(page, 'GET', `/works/${workIDs[1]}/metrics`)).toHaveLength(0)
+
+    const datedCSV = ['标题,发布时间,统计时间,阅读', `"${duplicateTitle}",${savedWorks[1].published_at},${capturedAt(savedWorks[1].published_at)},202`].join('\n')
+    const datedResponse = native.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+    await uploadCsv(native, 'qa26-review-duplicate-published-at.csv', datedCSV)
+    const datedPreview = await (await datedResponse).json() as { preview: Array<{ work_id: string | null; matched: boolean }> }
+    expect(datedPreview.preview[0].work_id).toBe(workIDs[1])
+    const dated = native.getByRole('dialog').filter({ has: native.getByRole('heading', { name: '确认作品匹配', exact: true }) })
+    const datedImport = native.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+    await dated.getByRole('button', { name: '确认导入', exact: true }).click()
+    expect((await datedImport).ok()).toBeTruthy()
+    expect(await api(page, 'GET', `/works/${workIDs[1]}/metrics`)).toHaveLength(1)
+  } finally {
+    if (app) {
+      try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }) } catch { /* 只结束本测试创建的 Electron。 */ }
+      await Promise.race([app.close().catch(() => undefined), new Promise((done) => setTimeout(done, 2_000))])
+    }
+    if (!resolve(profile).startsWith(resolve(tmpdir()) + '\\') || !profile.includes('ops-qa26-g6-electron-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
 
 async function uploadCsv(native: Page, name: string, csv: string, mimeType = 'text/csv') {
   const chooser = native.waitForEvent('filechooser')
