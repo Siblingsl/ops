@@ -104,6 +104,59 @@ async function checkToolActivity(page: Page, screenshotName: string) {
   await page.screenshot({ path: resolve(process.cwd(), `../../.playwright-results/${screenshotName}.png`) })
 }
 
+async function stopAndRecover(page: Page, baseURL: string) {
+  await page.goto(`${baseURL}/agent`)
+  const reply = '这一轮在用户停止后应保留已生成部分，并且不重复发送。'.repeat(100)
+  const { response, id } = await send(page, reply)
+  expect(response.status()).toBe(202)
+  const accepted = await response.json()
+  await expect.poll(async () => (await call(page, 'GET', `/agent/conversations/${id}`)).partial_output?.text?.length ?? 0).toBeGreaterThan(0)
+  await expect(page.getByRole('button', { name: '停止', exact: true }).first()).toBeVisible()
+  const beforeStop = await call(page, 'GET', `/agent/conversations/${id}`)
+  expect(beforeStop.partial_output.text.length).toBeLessThan(reply.length)
+
+  const cancelled = page.waitForResponse((response) => /\/agent\/runs\/[^/]+\/cancel$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '停止', exact: true }).first().click()
+  expect((await cancelled).status()).toBe(200)
+  await expect.poll(async () => (await call(page, 'GET', `/agent/conversations/${id}`)).last_run?.status).toBe('stopped')
+
+  await page.reload()
+  await expect(page.getByTestId('agent-partial-note')).toContainText('未完成')
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0)
+  const stopped = await call(page, 'GET', `/agent/conversations/${id}`)
+  expect(stopped.active_run).toBeNull()
+  expect(stopped.last_run.id).toBe(accepted.run_id)
+  expect(stopped.last_run.status).toBe('stopped')
+  expect(stopped.partial_output.text).toBeTruthy()
+  expect(stopped.partial_output.text.length).toBeLessThan(reply.length)
+  expect(stopped.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(1)
+}
+
+async function regenerateAndVerify(page: Page, baseURL: string) {
+  await page.goto(`${baseURL}/agent`)
+  const text = 'DEV-QA26 重生成用的本地模拟回复。'
+  const sent = await send(page, text)
+  expect(sent.response.status()).toBe(202)
+  await expect.poll(async () => (await call(page, 'GET', `/agent/conversations/${sent.id}`)).active_run).toBeNull()
+  const before = await call(page, 'GET', `/agent/conversations/${sent.id}`)
+  expect(before.last_run.status).toBe('completed')
+  expect(before.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(1)
+  const previousAssistant = before.messages.filter((message: { role: string }) => message.role === 'assistant').at(-1)
+  expect(previousAssistant.content).toBe(text)
+
+  const regeneration = page.waitForResponse((response) => /\/agent\/conversations\/[^/]+\/regenerate$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+  await page.getByTitle('重新生成', { exact: true }).click()
+  expect((await regeneration).status()).toBe(202)
+  await expect.poll(async () => (await call(page, 'GET', `/agent/conversations/${sent.id}`)).active_run).toBeNull()
+  await expect.poll(async () => (await call(page, 'GET', `/agent/conversations/${sent.id}`)).last_run?.trigger).toBe('regenerate')
+  const after = await call(page, 'GET', `/agent/conversations/${sent.id}`)
+  const assistants = after.messages.filter((message: { role: string }) => message.role === 'assistant')
+  expect(after.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(1)
+  expect(assistants).toHaveLength(1)
+  expect(assistants[0].content).toBe(text)
+  expect(assistants[0].id).not.toBe(previousAssistant.id)
+}
+
 async function createInviteCard(page: Page) {
   await page.locator('textarea').fill('#tool load_tool_domain {"domain":"workspace"}\n#tool workspace__create_invite {"role":"editor"}')
   const accepted = page.waitForResponse((response) => /\/agent\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
@@ -120,7 +173,7 @@ async function createInviteCard(page: Page) {
   return { id, detail, action, card }
 }
 
-test('DEV-AW06 真实Electron刷新恢复持久事件运行', async ({ baseURL }) => {
+test('DEV-AW06/DEV-QA26 真实Electron运行恢复、停止与重生成', async ({ baseURL }) => {
   test.skip(process.platform !== 'win32', '真实Electron验收需要Windows')
   test.setTimeout(120_000)
   const userData = await mkdtemp(join(tmpdir(), 'ops-agent-aw06-'))
@@ -131,6 +184,8 @@ test('DEV-AW06 真实Electron刷新恢复持久事件运行', async ({ baseURL }
       env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
     await refreshAndRecover(await app.firstWindow(), baseURL!, 'agent-workbench-aw06-electron-recovery')
     await checkToolActivity(await app.firstWindow(), 'agent-workbench-aw06-electron-tools')
+    await stopAndRecover(await app.firstWindow(), baseURL!)
+    await regenerateAndVerify(await app.firstWindow(), baseURL!)
   } finally {
     // 此用例只验证恢复；沿用真实平台Electron测试的专用进程清理方式。
     await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)

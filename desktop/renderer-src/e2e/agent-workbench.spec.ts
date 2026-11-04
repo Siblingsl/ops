@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { api, registerAccount, toggleDesktopTheme } from './support'
 
 test('DEV-AW02 Electron 工作台布局、响应式、键盘与主题保持输入状态', async ({ page, baseURL }) => {
@@ -257,6 +257,96 @@ test('DEV-AW02 真实 Electron 浅深主题与桌面窗口宽度', async ({ base
       await Promise.race([app.close().catch(() => undefined), new Promise((resolveClose) => setTimeout(resolveClose, 2000))])
     }
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => undefined)
+  }
+})
+
+test('DEV-QA26 Windows Electron会话分组、未读、搜索、归档与恢复', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '真实客户端验收需要 Windows Electron')
+  test.setTimeout(120_000)
+  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-qa26-organize-'))
+  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  try {
+    app = await _electron.launch({
+      executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000,
+    })
+    const page = await app.firstWindow()
+    const electronAPI = async (method: string, path: string, body?: unknown) => page.evaluate(async ({ method, path, body }) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      const response = await fetch('/api/v1' + path, {
+        method,
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      })
+      const text = await response.text()
+      if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${text}`)
+      return text ? JSON.parse(text) : null
+    }, { method, path, body })
+    await page.goto(`${baseURL}/register`)
+    await page.getByLabel('用户名', { exact: true }).fill(`qa26-organize-${Date.now()}`)
+    await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
+    await page.getByRole('button', { name: '创建账号', exact: true }).click()
+    await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+
+    const conversation = await electronAPI('POST', '/agent/conversations', {})
+    const title = `DEV-QA26 会话组织验收 ${Date.now()}`
+    await electronAPI('PATCH', `/agent/conversations/${conversation.id}`, { expected_revision: conversation.revision, title })
+    await page.goto(`${baseURL}/agent`)
+    const privacy = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
+    await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
+
+    const groupResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/conversation-groups' && response.request().method() === 'POST')
+    await page.getByRole('button', { name: '新建分组', exact: true }).click()
+    const groupDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '新建私有分组', exact: true }) })
+    await groupDialog.getByRole('textbox', { name: '分组名称' }).fill('本周选题')
+    await groupDialog.getByRole('button', { name: '保存', exact: true }).click()
+    const group = await (await groupResponse).json()
+
+    const rowButton = page.getByRole('button', { name: new RegExp(title) })
+    await expect(rowButton).toBeVisible()
+    await rowButton.locator('xpath=..').getByRole('button', { name: '对话操作' }).click()
+    await page.getByRole('menuitem', { name: '移动到分组', exact: true }).click()
+    const moveDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '移动到分组', exact: true }) })
+    await moveDialog.getByRole('combobox', { name: '选择分组' }).selectOption(group.id)
+    await moveDialog.getByRole('button', { name: '保存', exact: true }).click()
+    await expect.poll(async () => (await electronAPI('GET', `/agent/conversations/${conversation.id}`)).conversation.group_id).toBe(group.id)
+
+    await page.getByRole('button', { name: new RegExp(title) }).locator('xpath=..').getByRole('button', { name: '对话操作' }).click()
+    await page.getByRole('menuitem', { name: '标为未读', exact: true }).click()
+    await page.getByRole('combobox', { name: '筛选对话状态' }).selectOption('unread')
+    await expect(page.getByRole('button', { name: new RegExp(title) })).toBeVisible()
+    const search = page.getByRole('textbox', { name: '搜索对话' })
+    await search.fill('DEV-QA26-无匹配-xyz')
+    await expect(page.getByRole('button', { name: new RegExp(title) })).toHaveCount(0)
+    await search.fill('DEV-QA26 会话组织验收')
+    await expect(page.getByRole('button', { name: new RegExp(title) })).toBeVisible()
+
+    await page.getByRole('combobox', { name: '筛选归档状态' }).selectOption('archived')
+    await expect(page.getByRole('button', { name: new RegExp(title) })).toHaveCount(0)
+    await page.getByRole('combobox', { name: '筛选归档状态' }).selectOption('active')
+    await page.getByRole('button', { name: new RegExp(title) }).locator('xpath=..').getByRole('button', { name: '对话操作' }).click()
+    await page.getByRole('menuitem', { name: '归档', exact: true }).click()
+    await page.getByRole('combobox', { name: '筛选归档状态' }).selectOption('archived')
+    const archivedRow = page.getByRole('button', { name: new RegExp(title) }).locator('xpath=..')
+    await expect(archivedRow).toBeVisible()
+    await archivedRow.getByRole('button', { name: '对话操作' }).click()
+    await page.getByRole('menuitem', { name: '恢复归档', exact: true }).click()
+    await expect.poll(async () => !!(await electronAPI('GET', `/agent/conversations/${conversation.id}`)).conversation.archived_at).toBe(false)
+
+    await page.getByRole('button', { name: /管理分组/ }).click()
+    const manageDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '管理私有分组', exact: true }) })
+    await manageDialog.getByRole('button', { name: `删除分组 ${group.name}`, exact: true }).click()
+    await page.getByRole('button', { name: '删除分组', exact: true }).click()
+    await expect.poll(async () => (await electronAPI('GET', `/agent/conversations/${conversation.id}`)).conversation.group_id).toBe(null)
+  } finally {
+    if (app) {
+      await app.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+      try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore' }) } catch { }
+      await Promise.race([app.close().catch(() => undefined), new Promise((resolveClose) => setTimeout(resolveClose, 2000))])
+    }
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-organize-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   }
 })
 
