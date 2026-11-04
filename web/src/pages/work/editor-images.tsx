@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, ArrowRight, Crop, ImagePlus, Images, Loader2, Sparkles, Star, Trash2 } from 'lucide-react'
 import { useCallback, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AssetCropDialog, CoverCropDialog, CropPreview, defaultCrops } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
@@ -279,6 +280,7 @@ export function ImagesCard({ work, setWork, readOnly, upload, hidden = false }: 
 // ---------- 图片库（EX-G-04） ----------
 
 function LibraryDialog({ work, onClose, onPicked }: { work: Work; onClose: () => void; onPicked: (a: Asset) => void }) {
+  const navigate = useNavigate()
   const [scope, setScope] = useState<'account' | 'all'>('account')
   const [ai, setAi] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -300,7 +302,7 @@ function LibraryDialog({ work, onClose, onPicked }: { work: Work; onClose: () =>
   }
   return (
     <Dialog open onClose={onClose} title="从图片库选择" desc="复用其他作品里的图片，不用重新上传。每次点选加入一张。" width="max-w-3xl"
-      footer={<Button variant="primary" onClick={onClose}>完成</Button>}>
+      footer={<div className="flex w-full justify-between gap-2"><Button variant="secondary" onClick={() => navigate(`/images?target_work=${work.id}`)}>打开完整图片库</Button><Button variant="primary" onClick={onClose}>完成</Button></div>}>
       <div className="mb-3 flex flex-wrap gap-2">
         <Select className="h-8 w-36 text-[12.5px]" value={scope} onChange={(e) => setScope(e.target.value as 'account' | 'all')}>
           <option value="account">本账号</option>

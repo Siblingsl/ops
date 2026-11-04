@@ -16,6 +16,7 @@ export default function ImagesPage() {
   const [params, setParams] = useSearchParams()
   const account = params.get('account') ?? ''
   const workId = params.get('work') ?? ''
+  const targetWorkId = params.get('target_work') ?? ''
   const ai = params.get('ai') ?? ''
   const [open, setOpen] = useState<LibraryAsset | null>(null)
   const [altText, setAltText] = useState('')
@@ -46,7 +47,6 @@ export default function ImagesPage() {
     : list
   // MT-03：图库本身要能直接复用，不必记住图片再切回编辑器找一遍。
   // 带 ?work= 进来时（作品筛选或编辑器「从图片库选择」），详情里就能把这张图加进那篇作品。
-  const targetWorkId = workId && open && open.work_id !== workId ? workId : ''
   const targetWorkTitle = works.find(([id]) => id === targetWorkId)?.[1] ?? ''
   const [reusing, setReusing] = useState(false)
   const reuseInto = async () => {
@@ -137,7 +137,7 @@ export default function ImagesPage() {
                 }}>保存替代文字</Button>
             </div>}
             <div className="flex flex-wrap items-center gap-2">
-              {canWrite && targetWorkId && (
+              {canWrite && targetWorkId && open.work_id !== targetWorkId && (
                 <Button variant="primary" loading={reusing} disabled={reusing} data-testid="image-reuse-into-work" onClick={() => void reuseInto()}>加入《{targetWorkTitle || '当前作品'}》</Button>
               )}
               <Button variant="ghost" onClick={() => void copyURL()}>复制图片链接</Button>
