@@ -32,6 +32,7 @@ const ALLOWLIST = new Map([
   ['g6-attribution-sample.spec.ts', '至少 10 篇第 7 天数据归因与高表现作品拆解：浏览器 vs 真实 Electron'],
   ['g6-followers-sync.spec.ts', '公众号近 7 天粉丝接口同步、权限提示与手动回退：浏览器 vs 真实 Electron'],
   ['g8-settings-gaps.spec.ts', '模型空态、编辑者成员管理权限、回收站永久删除：浏览器 vs 真实 Electron'],
+  ['g8-empty-create.spec.ts', '空作品页空白新建不把点击事件写入标题：浏览器 vs 真实 Electron'],
   ['g6-review-import-quality.spec.ts', 'CSV 逐行确认与非空复盘质量看板：浏览器 vs 真实 Electron'],
   ['cx13-comment-inbox.spec.ts', '评论台账逐条录入与 AI 拟稿：浏览器 vs 桌面工作台'],
   ['cx13-standards.spec.ts', '回复标准版本与归档语义：浏览器 vs 桌面工作台'],

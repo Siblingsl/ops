@@ -604,7 +604,7 @@ export default function WorkLayout() {
           <div className={cn('work-header-actions ml-auto flex shrink-0 items-center gap-1', !focus && 'lg:ml-0')}>
             <div id="work-header-action-target" data-testid="work-next-action" className="desktop-work-next mr-1 flex shrink-0 items-center" />
             <PlanPopover work={work} onSaved={setWork} />
-            <Button className="desktop-work-history" size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
+            <Button className="desktop-work-history" size="sm" variant="ghost" aria-label="打开版本历史" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
             {canWrite && <Button className="desktop-work-derive" size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}><span className="hidden xl:inline">派生</span></Button>}
             {canWrite && <MoreMenu className="desktop-work-more" items={[
               ...(location.pathname === `/works/${work.id}` ? [{ label: '口述 / 要点扩写', icon: <Wand2 />, onClick: () => window.dispatchEvent(new Event('ops:organize-notes')) }] : []),

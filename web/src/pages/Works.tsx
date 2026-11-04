@@ -27,7 +27,7 @@ const filterStatus: Record<Filter, WorkStatus[] | null> = {
 function EmptyCreateActions({ create, onTopics }: { create: () => void; onTopics: () => void }) {
   return (
     <div className="flex flex-wrap justify-center gap-2">
-      <Button variant="primary" onClick={create}>空白新建</Button>
+      <Button variant="primary" onClick={() => create()}>空白新建</Button>
       <Button icon={<Lightbulb className="size-4" />} onClick={onTopics}>从选题开始</Button>
     </div>
   )
