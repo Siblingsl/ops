@@ -111,6 +111,7 @@ export default defineConfig({
         'cx10-cover-build-desktop.spec.ts',
         'cx13-publish-ledger.spec.ts',
         'cx13-review-multitime.spec.ts',
+        'g8-export-electron.spec.ts',
         'cx18-benchmark-electron.spec.ts',
       ],
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } },
