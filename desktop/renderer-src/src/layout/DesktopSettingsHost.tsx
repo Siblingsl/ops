@@ -33,6 +33,8 @@ export default function DesktopSettingsHost({ children, backdrop }: { children: 
   const legacyHandled = useRef<string | null>(null)
   const openSwitcherAfterClose = useRef(false)
   const panel = desktop ? desktopSettingsPanel(shown.pathname) : undefined
+  const activeLocalPanel = useRef(false)
+  activeLocalPanel.current = !!panel?.localPanel
   const selectedAccountId = accountSelection.account?.id
   const updateDraft = useCallback((id: string, dirty: boolean, busy: boolean) => {
     const next = { ...draftRef.current }
@@ -45,11 +47,13 @@ export default function DesktopSettingsHost({ children, backdrop }: { children: 
 
   const askBeforeLeaving = useCallback(async () => {
     const states = Object.values(draftRef.current)
-    if (states.some((state) => state.busy) || localStateRef.current.busy) {
+    const localBusy = activeLocalPanel.current && localStateRef.current.busy
+    const localDirty = activeLocalPanel.current && localStateRef.current.dirty
+    if (states.some((state) => state.busy) || localBusy) {
       toast.info('正在保存设置，请稍候再离开')
       return false
     }
-    if (!states.some((state) => state.dirty) && !localStateRef.current.dirty) return true
+    if (!states.some((state) => state.dirty) && !localDirty) return true
     confirmation.current ??= confirm({ title: '放弃未保存的设置？', desc: '当前输入尚未保存，离开后将丢弃这些修改。', confirmText: '放弃修改', danger: true }).finally(() => { confirmation.current = null })
     return confirmation.current
   }, [])
@@ -265,7 +269,7 @@ export default function DesktopSettingsHost({ children, backdrop }: { children: 
     if (!panel) return
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (leavePermit.current) { leavePermit.current = false; return }
-      const hasLocalChanges = localStateRef.current.dirty || localStateRef.current.busy
+      const hasLocalChanges = !!panel?.localPanel && (localStateRef.current.dirty || localStateRef.current.busy)
       const hasReactChanges = !!accountSelection.userId && !!accountSelection.workspaceId
         && Object.values(draftRef.current).some((draft) => draft.dirty || draft.busy)
       if (!hasLocalChanges && !hasReactChanges) return
@@ -280,7 +284,7 @@ export default function DesktopSettingsHost({ children, backdrop }: { children: 
   return <>
     {panel && !background.current ? backdrop : <Routes location={panel ? background.current! : shown}>{children}</Routes>}
     {panel && <DesktopSettingsContext.Provider value={context}>
-      <SettingsWindow path={panel.path} onClose={() => navigate(background.current ? locationPath(background.current) : selectedAccountId ? '/' : '/images')} dirty={Object.values(drafts).some((draft) => draft.dirty) || localState.dirty}>
+      <SettingsWindow path={panel.path} onClose={() => navigate(background.current ? locationPath(background.current) : selectedAccountId ? '/' : '/images')} dirty={Object.values(drafts).some((draft) => draft.dirty) || (!!panel.localPanel && localState.dirty)}>
         <ErrorBoundary resetKey={shown.pathname}><DesktopSettingsContent location={shown} /></ErrorBoundary>
       </SettingsWindow>
     </DesktopSettingsContext.Provider>}
