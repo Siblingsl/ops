@@ -595,3 +595,121 @@ test('DEV-QA26 G6 真实 Electron CSV 确认、复盘反馈与只读权限', asy
     await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
+
+test('DEV-QA26 G6 真实 Electron 复盘反馈20次量化样本', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API 与模型')
+  test.setTimeout(300_000)
+  const username = `qa26-g6-feedback-samples-${Date.now()}`
+  const account = await registerAccount(page, '微头条', 'toutiao', username)
+  await addLocalModel(page)
+  const { app, page: native, profile } = await launchG6Electron(baseURL!, username, 'feedback-samples')
+  try {
+    await native.evaluate(async (accountID) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountID)
+    }, account.id)
+    await native.goto(`${baseURL}/a/${account.id}`)
+    const workID = await createOutline(native)
+    const title = await enterTitleAndBody(native, page, workID, baseURL!, `DEV-QA26复盘反馈样本-${Date.now()}`)
+    await finishChecksInElectron(native, page, workID, baseURL!)
+    const { capturedAt } = await packAndMarkPublished(native, page, workID, baseURL!)
+    await native.goto(`${baseURL}/a/${account.id}/review`)
+    await native.getByRole('button', { name: '查看报告与证据', exact: true }).click()
+    const review = native.locator('#desktop-review-advanced')
+    await review.getByLabel(/使用增强复盘/).uncheck()
+    const csv = [
+      '标题,统计时间,展现,阅读,点赞,收藏,评论,分享,涨粉',
+      `"${title}",${capturedAt.toISOString()},33000,12000,36,8,2,5,1`,
+    ].join('\n')
+    const previewRequest = native.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+    await uploadCsv(native, 'qa26-review-feedback-samples.csv', csv)
+    expect((await previewRequest).ok()).toBeTruthy()
+    const preview = native.getByRole('dialog').filter({ has: native.getByRole('heading', { name: '确认作品匹配', exact: true }) })
+    const importRequest = native.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+    await preview.getByRole('button', { name: '确认导入', exact: true }).click()
+    expect((await importRequest).ok()).toBeTruthy()
+    expect(await api(page, 'GET', `/works/${workID}/metrics`)).toHaveLength(1)
+
+    const samples: number[] = []
+    const clicked: Array<{ reportID: string; action: 'ignored' | 'adopted'; index: number }> = []
+    const runButton = review.getByRole('button', { name: '生成复盘报告', exact: true }).first()
+    for (let sample = 0; sample < 20; sample += 1) {
+      await expect(runButton).toBeEnabled()
+      const existing = await api(page, 'GET', `/accounts/${account.id}/reviews`) as Array<{ id: string }>
+      const oldIDs = new Set(existing.map((report) => report.id))
+      const generation = native.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/reviews`) && response.request().method() === 'POST')
+      await runButton.click()
+      expect((await generation).ok()).toBeTruthy()
+      await expect.poll(async () => {
+        const reports = await api(page, 'GET', `/accounts/${account.id}/reviews`) as Array<{ id: string }>
+        return reports.some((report) => !oldIDs.has(report.id))
+      }, { timeout: 30_000 }).toBeTruthy()
+      const reports = await api(page, 'GET', `/accounts/${account.id}/reviews`) as Array<{
+        id: string; adopted: number[]; ignored: number[]
+        content: { writing_insights: string[]; topic_suggestions: Array<{ title: string }> }
+      }>
+      const report = reports.find((item) => !oldIDs.has(item.id))!
+      expect(report.content.writing_insights).toHaveLength(2)
+      expect(report.content.topic_suggestions).toHaveLength(3)
+      const card = native.getByTestId(`cx-review-report-${report.id}`)
+      await expect(card).toBeVisible()
+      const isRejected = sample < 8
+      const index = 0
+      let request: Promise<import('@playwright/test').Response>
+      if (isRejected) {
+        const insight = report.content.writing_insights[index]
+        request = native.waitForResponse((response) => response.url().endsWith(`/review-reports/${report.id}/insights/${index}/ignore`) && response.request().method() === 'POST')
+        const startedAt = Date.now()
+        await card.getByText(insight, { exact: true }).locator('..').getByRole('button', { name: '忽略', exact: true }).click()
+        const response = await request
+        samples.push(Date.now() - startedAt)
+        expect(response.ok()).toBeTruthy()
+        await expect.poll(async () => {
+          const current = (await api(page, 'GET', `/accounts/${account.id}/reviews`)).find((item: { id: string }) => item.id === report.id)
+          return current?.ignored?.includes(index) ?? false
+        }).toBeTruthy()
+        clicked.push({ reportID: report.id, action: 'ignored', index })
+      } else {
+        const suggestion = report.content.topic_suggestions[index]
+        const topicsBefore = (await api(page, 'GET', `/accounts/${account.id}/topics`)).filter((item: { source: string; title: string }) => item.source === 'review' && item.title === suggestion.title).length
+        request = native.waitForResponse((response) => response.url().endsWith(`/review-reports/${report.id}/suggestions/${index}/adopt`) && response.request().method() === 'POST')
+        const startedAt = Date.now()
+        await card.getByText(suggestion.title, { exact: true }).locator('..').locator('..').getByRole('button', { name: '采纳', exact: true }).click()
+        const response = await request
+        samples.push(Date.now() - startedAt)
+        expect(response.ok()).toBeTruthy()
+        await expect.poll(async () => {
+          const current = (await api(page, 'GET', `/accounts/${account.id}/reviews`)).find((item: { id: string }) => item.id === report.id)
+          return current?.adopted?.includes(index) ?? false
+        }).toBeTruthy()
+        await expect.poll(async () => (await api(page, 'GET', `/accounts/${account.id}/topics`)).filter((item: { source: string; title: string }) => item.source === 'review' && item.title === suggestion.title).length).toBe(topicsBefore + 1)
+        clicked.push({ reportID: report.id, action: 'adopted', index })
+      }
+    }
+
+    expect(clicked).toHaveLength(20)
+    const calls = await api(page, 'GET', '/quality/calls?task_type=review_analysis') as Array<{ outcome: string }>
+    expect(calls).toHaveLength(20)
+    expect(calls.filter((call) => call.outcome === 'rejected')).toHaveLength(8)
+    expect(calls.filter((call) => call.outcome === 'accepted')).toHaveLength(12)
+    const quality = await api(page, 'GET', '/quality?days=30&task_type=review_analysis')
+    const task = quality.tasks.find((item: { task_type: string }) => item.task_type === 'review_analysis')
+    expect(task).toMatchObject({ calls: 20, with_feedback: 20, adopted: 12 })
+    await native.getByRole('button', { name: /^用户菜单/ }).click()
+    await native.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(native, 'AI 质量看板')
+    await expect(native.getByRole('heading', { name: 'AI 质量看板', exact: true })).toBeVisible()
+    const qualityRow = native.getByRole('row').filter({ hasText: 'AI 复盘' })
+    await expect(qualityRow).toBeVisible()
+    await qualityRow.click()
+    await expect(native.getByRole('heading', { name: '最近调用', exact: true })).toBeVisible()
+    await expect(native.getByText('mock-writer').first()).toBeVisible()
+
+    const sorted = [...samples].sort((a, b) => a - b)
+    const nearestRank = (p: number) => sorted[Math.ceil(p * sorted.length) - 1]
+    console.log(`[DEV-QA26-G6-FEEDBACK] ${JSON.stringify({ environment: 'Windows Electron + 本地 mock', samples: samples.length, failures: 0, p50_ms: nearestRank(0.5), p95_ms: nearestRank(0.95), samples_ms: samples })}`)
+  } finally {
+    await closeG6Electron(app, profile, 'feedback-samples')
+  }
+})

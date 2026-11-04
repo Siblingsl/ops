@@ -367,3 +367,105 @@ test('DEV-QA26 G6 Web CSV 确认、复盘反馈与只读权限', async ({ page, 
   const updatedBoard = await api(page, 'GET', '/quality?days=30&task_type=review_analysis')
   expect(updatedBoard.tasks.find((task: { task_type: string }) => task.task_type === 'review_analysis')?.adopted).toBeGreaterThanOrEqual(1)
 })
+
+test('DEV-QA26 G6 Web 复盘反馈20次量化样本', async ({ page }) => {
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API 与模型')
+  test.setTimeout(300_000)
+  const account = await registerAccount(page, '微头条', 'toutiao', `qa26-g6-feedback-samples-web-${Date.now()}`)
+  await addLocalModel(page)
+  await page.goto(`/a/${account.id}`)
+  const workID = await createOutline(page)
+  const title = await enterTitleAndBody(page, workID)
+  const { capturedAt } = await packAndMarkPublished(page, workID)
+  await page.goto(`/a/${account.id}/review`)
+  await page.getByLabel(/使用增强复盘/).uncheck()
+  const csv = [
+    '标题,统计时间,展现,阅读,点赞,收藏,评论,分享,涨粉',
+    `"${title}",${capturedAt.toISOString()},33000,12000,36,8,2,5,1`,
+  ].join('\n')
+  const previewRequest = page.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+  await uploadCsv(page, 'qa26-review-feedback-samples.csv', csv)
+  expect((await previewRequest).ok()).toBeTruthy()
+  const preview = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '确认作品匹配', exact: true }) })
+  const importRequest = page.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/metrics/import`) && response.request().method() === 'POST')
+  await preview.getByRole('button', { name: '确认导入', exact: true }).click()
+  expect((await importRequest).ok()).toBeTruthy()
+  expect(await api(page, 'GET', `/works/${workID}/metrics`)).toHaveLength(1)
+
+  const samples: number[] = []
+  const clicked: Array<{ reportID: string; action: 'ignored' | 'adopted'; index: number }> = []
+  const runButton = page.getByRole('button', { name: '生成复盘报告', exact: true }).first()
+  for (let sample = 0; sample < 20; sample += 1) {
+    await expect(runButton).toBeEnabled()
+    const existing = await api(page, 'GET', `/accounts/${account.id}/reviews`) as Array<{ id: string }>
+    const oldIDs = new Set(existing.map((report) => report.id))
+    const generation = page.waitForResponse((response) => response.url().endsWith(`/api/v1/accounts/${account.id}/reviews`) && response.request().method() === 'POST')
+    await runButton.click()
+    expect((await generation).ok()).toBeTruthy()
+    await expect.poll(async () => {
+      const reports = await api(page, 'GET', `/accounts/${account.id}/reviews`) as Array<{ id: string }>
+      return reports.some((report) => !oldIDs.has(report.id))
+    }, { timeout: 30_000 }).toBeTruthy()
+    const reports = await api(page, 'GET', `/accounts/${account.id}/reviews`) as Array<{
+      id: string; adopted: number[]; ignored: number[]
+      content: { writing_insights: string[]; topic_suggestions: Array<{ title: string }> }
+    }>
+    const report = reports.find((item) => !oldIDs.has(item.id))!
+    expect(report.content.writing_insights).toHaveLength(2)
+    expect(report.content.topic_suggestions).toHaveLength(3)
+    const card = page.getByTestId(`cx-review-report-${report.id}`)
+    await expect(card).toBeVisible()
+    const isRejected = sample < 8
+    const index = 0
+    let request: Promise<import('@playwright/test').Response>
+    if (isRejected) {
+      const insight = report.content.writing_insights[index]
+      request = page.waitForResponse((response) => response.url().endsWith(`/review-reports/${report.id}/insights/${index}/ignore`) && response.request().method() === 'POST')
+      const startedAt = Date.now()
+      await card.getByText(insight, { exact: true }).locator('..').getByRole('button', { name: '忽略', exact: true }).click()
+      const response = await request
+      samples.push(Date.now() - startedAt)
+      expect(response.ok()).toBeTruthy()
+      await expect.poll(async () => {
+        const current = (await api(page, 'GET', `/accounts/${account.id}/reviews`)).find((item: { id: string }) => item.id === report.id)
+        return current?.ignored?.includes(index) ?? false
+      }).toBeTruthy()
+      clicked.push({ reportID: report.id, action: 'ignored', index })
+    } else {
+      const suggestion = report.content.topic_suggestions[index]
+      const topicsBefore = (await api(page, 'GET', `/accounts/${account.id}/topics`)).filter((item: { source: string; title: string }) => item.source === 'review' && item.title === suggestion.title).length
+      request = page.waitForResponse((response) => response.url().endsWith(`/review-reports/${report.id}/suggestions/${index}/adopt`) && response.request().method() === 'POST')
+      const startedAt = Date.now()
+      await card.getByText(suggestion.title, { exact: true }).locator('..').locator('..').getByRole('button', { name: '采纳', exact: true }).click()
+      const response = await request
+      samples.push(Date.now() - startedAt)
+      expect(response.ok()).toBeTruthy()
+      await expect.poll(async () => {
+        const current = (await api(page, 'GET', `/accounts/${account.id}/reviews`)).find((item: { id: string }) => item.id === report.id)
+        return current?.adopted?.includes(index) ?? false
+      }).toBeTruthy()
+      await expect.poll(async () => (await api(page, 'GET', `/accounts/${account.id}/topics`)).filter((item: { source: string; title: string }) => item.source === 'review' && item.title === suggestion.title).length).toBe(topicsBefore + 1)
+      clicked.push({ reportID: report.id, action: 'adopted', index })
+    }
+  }
+
+  expect(clicked).toHaveLength(20)
+  const calls = await api(page, 'GET', '/quality/calls?task_type=review_analysis') as Array<{ outcome: string }>
+  expect(calls).toHaveLength(20)
+  expect(calls.filter((call) => call.outcome === 'rejected')).toHaveLength(8)
+  expect(calls.filter((call) => call.outcome === 'accepted')).toHaveLength(12)
+  const quality = await api(page, 'GET', '/quality?days=30&task_type=review_analysis')
+  const task = quality.tasks.find((item: { task_type: string }) => item.task_type === 'review_analysis')
+  expect(task).toMatchObject({ calls: 20, with_feedback: 20, adopted: 12 })
+  await page.goto('/settings/quality')
+  await expect(page.getByRole('heading', { name: 'AI 质量看板', exact: true })).toBeVisible()
+  const qualityRow = page.getByRole('row').filter({ hasText: 'AI 复盘' })
+  await expect(qualityRow).toBeVisible()
+  await qualityRow.click()
+  await expect(page.getByRole('heading', { name: '最近调用', exact: true })).toBeVisible()
+  await expect(page.getByText('mock-writer').first()).toBeVisible()
+
+  const sorted = [...samples].sort((a, b) => a - b)
+  const nearestRank = (p: number) => sorted[Math.ceil(p * sorted.length) - 1]
+  console.log(`[DEV-QA26-G6-FEEDBACK] ${JSON.stringify({ environment: 'Chromium + 本地 mock', samples: samples.length, failures: 0, p50_ms: nearestRank(0.5), p95_ms: nearestRank(0.95), samples_ms: samples })}`)
+})
