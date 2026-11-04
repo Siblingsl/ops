@@ -10,7 +10,7 @@ export type ReviewExperimentProposal = NonNullable<ReviewReport['content']['anal
 
 const contentFormatName = (format: string) => format === 'micro_post' ? '微头条' : format === 'long_article' ? '文章' : format
 
-export function ReportCard({ report, accountId, onAdopted, onUseExperiment }: { report: ReviewReport; accountId: string; onAdopted: () => void; onUseExperiment: (proposal: ReviewExperimentProposal) => void }) {
+export function ReportCard({ report, accountId, canWrite, onAdopted, onUseExperiment }: { report: ReviewReport; accountId: string; canWrite: boolean; onAdopted: () => void; onUseExperiment: (proposal: ReviewExperimentProposal) => void }) {
   const [busy, setBusy] = useState<number | null>(null)
   const [remembering, setRemembering] = useState<number | null>(null)
   const [remembered, setRemembered] = useState<number[]>(report.remembered ?? [])
@@ -73,9 +73,9 @@ export function ReportCard({ report, accountId, onAdopted, onUseExperiment }: { 
         desc={report.origin === 'weekly_draft'
           ? `后台按第 7 天数据自动生成，覆盖 ${report.work_ids.length} 篇作品；建议要你逐条采纳，不采纳不影响任何东西`
           : `覆盖 ${report.work_ids.length} 篇作品`}
-        action={editDraft
+        action={canWrite ? editDraft
           ? <div className="flex gap-2"><Button size="sm" variant="ghost" onClick={() => setEditDraft(null)}>取消</Button><Button size="sm" variant="primary" loading={savingEdit} onClick={() => void saveEdit()}>保存修改</Button></div>
-          : <Button size="sm" variant="outline" onClick={() => setEditDraft(JSON.parse(JSON.stringify(report.content)) as ReviewReport['content'])}>编辑报告</Button>} />
+          : <Button size="sm" variant="outline" onClick={() => setEditDraft(JSON.parse(JSON.stringify(report.content)) as ReviewReport['content'])}>编辑报告</Button> : undefined} />
       <div className="space-y-5 p-5">
         {analysis ? <section className="rounded-lg border border-ink-100 bg-ink-50/40 p-3" data-testid="cx-review-v2-evidence">
           <div className="flex flex-wrap items-center gap-2"><Badge tone="ink">增强复盘 v{basis?.analysis_version ?? 2}</Badge>
@@ -112,7 +112,7 @@ export function ReportCard({ report, accountId, onAdopted, onUseExperiment }: { 
                 <Select aria-label={`实验建议 ${i + 1} 窗口`} value={draftItem.window} onChange={(event) => edit((current) => ({ ...current, analysis_v2: current.analysis_v2 && { ...current.analysis_v2, experiments: current.analysis_v2.experiments.map((entry, index) => index === i ? { ...entry, window: event.target.value as typeof entry.window } : entry) } }))}><option value="T1">T1</option><option value="T3">T3</option><option value="T7">T7</option><option value="T30">T30</option></Select>
                 <Input aria-label={`实验建议 ${i + 1} 方案`} className="min-w-56 flex-1" maxLength={300} value={draftItem.selection_proposal} onChange={(event) => edit((current) => ({ ...current, analysis_v2: current.analysis_v2 && { ...current.analysis_v2, experiments: current.analysis_v2.experiments.map((entry, index) => index === i ? { ...entry, selection_proposal: event.target.value } : entry) } }))} />
               </> : <span className="min-w-0 flex-1">{item.hypothesis} · {item.variable} / {item.metric_key} / {item.window} · {item.selection_proposal}</span>}
-              {!editDraft && <Button size="sm" variant="outline" onClick={() => onUseExperiment(item)}>填入实验表单</Button>}
+              {canWrite && !editDraft && <Button size="sm" variant="outline" onClick={() => onUseExperiment(item)}>填入实验表单</Button>}
             </div>
           })}</div><p className="mt-1 text-[11px] text-mist-400">建议不会自动创建实验；仍需逐项检查变量、指标、窗口和日期。</p></div>}
           <details className="mt-3 text-xs"><summary className="cursor-pointer text-ink-700">查看全部来源修订</summary>
@@ -146,12 +146,12 @@ export function ReportCard({ report, accountId, onAdopted, onUseExperiment }: { 
               {insights.map((t, i) => ignored.includes(i) ? null : (
                 <li key={i} className={cn('flex items-start gap-2 rounded-lg border p-2.5 text-[13.5px]', remembered.includes(i) ? 'border-ink-200 bg-ink-50/40' : 'border-mist-200')}>
                   <span className="flex-1 leading-relaxed text-mist-700">{t}</span>
-                  {remembered.includes(i) ? <Badge tone="ink"><Check className="size-3" />已记住</Badge> : (
+                  {remembered.includes(i) ? <Badge tone="ink"><Check className="size-3" />已记住</Badge> : canWrite ? (
                     <>
                       <Button size="sm" variant="outline" loading={remembering === i} onClick={() => remember(i)}>记住</Button>
                       <Button size="sm" variant="ghost" onClick={() => ignore(i)}>忽略</Button>
                     </>
-                  )}
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -176,7 +176,7 @@ export function ReportCard({ report, accountId, onAdopted, onUseExperiment }: { 
                       {adoptedTopic[i] ? '去创作这条选题' : '去选题池查看'}
                     </Link>
                   </span>
-                    : <Button size="sm" variant="outline" loading={busy === i} onClick={() => adopt(i)} icon={<Plus className="size-3.5" />}>采纳</Button>}
+                    : canWrite && <Button size="sm" variant="outline" loading={busy === i} onClick={() => adopt(i)} icon={<Plus className="size-3.5" />}>采纳</Button>}
                 </div>
               )
             })}

@@ -234,7 +234,7 @@ test('DEV-QA26 G6 Web 编辑者可预览 CSV 且观察者被拒绝', async ({ pa
   }
 })
 
-test('DEV-QA26 G6 Web CSV 确认与非空复盘质量看板', async ({ page }) => {
+test('DEV-QA26 G6 Web CSV 确认、复盘反馈与只读权限', async ({ page, browser }) => {
   test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API 与模型')
   test.setTimeout(180_000)
   const account = await registerAccount(page, '微头条', 'toutiao', `qa26-g6-web-${Date.now()}`)
@@ -244,6 +244,7 @@ test('DEV-QA26 G6 Web CSV 确认与非空复盘质量看板', async ({ page }) =
   const { capturedAt } = await packAndMarkPublished(page, workID)
 
   await page.goto(`/a/${account.id}/review`)
+  await page.getByLabel(/使用增强复盘/).uncheck()
   const wrongType = page.waitForResponse((response) => response.url().endsWith('/api/v1/accounts/' + account.id + '/metrics/import') && response.request().method() === 'POST')
   await uploadCsv(page, 'qa26-review-not-csv.txt', '标题,阅读\n123', 'text/plain')
   expect((await wrongType).status()).toBe(422)
@@ -288,7 +289,13 @@ test('DEV-QA26 G6 Web CSV 确认与非空复盘质量看板', async ({ page }) =
   await page.getByRole('button', { name: '生成复盘报告', exact: true }).first().click()
   expect((await reportPost).ok()).toBeTruthy()
   await expect.poll(async () => (await api(page, 'GET', `/accounts/${account.id}/reviews`)).length).toBe(1)
-  expect((await api(page, 'GET', `/accounts/${account.id}/reviews`))[0].work_ids).toContain(workID)
+  const report = (await api(page, 'GET', `/accounts/${account.id}/reviews`))[0] as {
+    id: string; work_ids: string[]; adopted: number[]; ignored: number[]
+    content: { writing_insights: string[]; topic_suggestions: Array<{ title: string }> }
+  }
+  expect(report.work_ids).toContain(workID)
+  expect(report.content.writing_insights.length).toBeGreaterThan(0)
+  expect(report.content.topic_suggestions.length).toBeGreaterThan(0)
 
   await page.goto('/settings/quality')
   await expect(page.getByRole('heading', { name: 'AI 质量看板', exact: true })).toBeVisible()
@@ -305,4 +312,58 @@ test('DEV-QA26 G6 Web CSV 确认与非空复盘质量看板', async ({ page }) =
   expect(calls.some((call: { outcome: string }) => call.outcome === '')).toBeTruthy()
   await page.getByRole('button', { name: '近 90 天', exact: true }).click()
   await expect.poll(async () => (await api(page, 'GET', '/quality?days=90&task_type=review_analysis')).tasks.some((task: { task_type: string }) => task.task_type === 'review_analysis')).toBeTruthy()
+
+  const invite = await api(page, 'POST', '/workspaces/current/invites', { role: 'viewer', max_uses: 1, days: 1 }) as { code: string }
+  const viewerContext = await browser.newContext({ baseURL: new URL(page.url()).origin })
+  try {
+    const joined = await viewerContext.request.post('/api/v1/auth/register', {
+      data: { username: `qa26-g6-review-viewer-${Date.now()}`, password, invite_code: invite.code },
+    })
+    expect(joined.ok(), '观察者通过邀请码加入当前工作区').toBeTruthy()
+    const viewer = await viewerContext.newPage()
+    await viewer.goto(`/a/${account.id}/review`)
+    await expect.poll(() => viewer.evaluate(async () => (await (await fetch('/api/v1/auth/me')).json()).role)).toBe('viewer')
+    const viewerReport = viewer.getByTestId(`cx-review-report-${report.id}`)
+    await expect(viewerReport).toBeVisible()
+    await expect(viewerReport.getByRole('button', { name: '编辑报告', exact: true })).toHaveCount(0)
+    await expect(viewerReport.getByRole('button', { name: '记住', exact: true })).toHaveCount(0)
+    await expect(viewerReport.getByRole('button', { name: '忽略', exact: true })).toHaveCount(0)
+    await expect(viewerReport.getByRole('button', { name: '采纳', exact: true })).toHaveCount(0)
+
+    const denied = await viewer.evaluate(async (reportID) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }
+      const requests = [
+        fetch(`/api/v1/review-reports/${reportID}/content`, { method: 'PATCH', headers, body: '{}' }),
+        fetch(`/api/v1/review-reports/${reportID}/insights/0/remember`, { method: 'POST', headers }),
+        fetch(`/api/v1/review-reports/${reportID}/insights/0/ignore`, { method: 'POST', headers }),
+        fetch(`/api/v1/review-reports/${reportID}/suggestions/0/adopt`, { method: 'POST', headers }),
+      ]
+      return Promise.all(requests.map(async (request) => (await request).status))
+    }, report.id)
+    expect(denied).toEqual([403, 403, 403, 403])
+    const unchanged = (await api(page, 'GET', `/accounts/${account.id}/reviews`))[0]
+    expect(unchanged.adopted).toEqual(report.adopted)
+    expect(unchanged.ignored).toEqual(report.ignored)
+  } finally {
+    await viewerContext.close()
+  }
+
+  await page.goto(`/a/${account.id}/review`)
+  const ownerReport = page.getByTestId(`cx-review-report-${report.id}`)
+  const ignoreResponse = page.waitForResponse((response) => response.url().endsWith(`/review-reports/${report.id}/insights/0/ignore`) && response.request().method() === 'POST')
+  await ownerReport.getByRole('button', { name: '忽略', exact: true }).first().click()
+  expect((await ignoreResponse).ok()).toBeTruthy()
+  await expect.poll(async () => (await api(page, 'GET', `/accounts/${account.id}/reviews`))[0].ignored).toContain(0)
+  let feedback = await api(page, 'GET', '/quality/calls?task_type=review_analysis')
+  expect(feedback[0]).toMatchObject({ outcome: 'rejected', reasons: ['其他'] })
+
+  const adoptResponse = page.waitForResponse((response) => response.url().endsWith(`/review-reports/${report.id}/suggestions/0/adopt`) && response.request().method() === 'POST')
+  await ownerReport.getByRole('button', { name: '采纳', exact: true }).first().click()
+  expect((await adoptResponse).ok()).toBeTruthy()
+  await expect.poll(async () => (await api(page, 'GET', `/accounts/${account.id}/reviews`))[0].adopted).toContain(0)
+  feedback = await api(page, 'GET', '/quality/calls?task_type=review_analysis')
+  expect(feedback.some((call: { outcome: string }) => call.outcome === 'accepted')).toBeTruthy()
+  const updatedBoard = await api(page, 'GET', '/quality?days=30&task_type=review_analysis')
+  expect(updatedBoard.tasks.find((task: { task_type: string }) => task.task_type === 'review_analysis')?.adopted).toBeGreaterThanOrEqual(1)
 })

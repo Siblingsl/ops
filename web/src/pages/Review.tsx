@@ -583,7 +583,7 @@ export default function Review() {
           <HumanGate code="H-08" className="mt-4">AI 的选题建议不会自动进入选题池，需要你逐条采纳。</HumanGate>
         </Card>
         <div id="review-report-list" className="space-y-4 scroll-mt-24">
-          {reports.data?.length ? reports.data.map((r) => <ReportCard key={r.id} report={r} accountId={acc.id} onAdopted={() => { reports.refetch(); inv(['topics', acc.id]) }} onUseExperiment={setExperimentProposal} />)
+          {reports.data?.length ? reports.data.map((r) => <ReportCard key={r.id} report={r} accountId={acc.id} canWrite={canWrite} onAdopted={() => { reports.refetch(); inv(['topics', acc.id]) }} onUseExperiment={setExperimentProposal} />)
             : <Card><Empty icon={<Lightbulb className="size-5" />} title="还没有复盘报告" desc="录入几篇作品的数据后，生成第一份复盘报告。"
               action={<Button variant="primary" icon={<Sparkles className="size-4" />} loading={running} onClick={runReview}>生成复盘报告</Button>} /></Card>}
         </div>
