@@ -602,9 +602,6 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if err := m.editable(); err != nil {
-		return err
-	}
 	var in struct {
 		Title         *string            `json:"title"`
 		ContentFormat json.RawMessage    `json:"content_format"`
@@ -628,6 +625,17 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		PostPushTodos  json.RawMessage `json:"post_push_todos"`
 	}
 	if err := decode(r, &in); err != nil {
+		return err
+	}
+	// D-105/OPT-36: tags are metadata, so they remain editable on a published
+	// work. A locked work accepts only a tags-only patch; title/body changes and
+	// planning fields still require the explicit unlock flow.
+	tagsOnly := in.Tags != nil && in.Title == nil && in.ContentFormat == nil && in.Summary == nil &&
+		in.Viewpoint == nil && in.Theme == nil && in.CoverAssetID == nil && !in.ClearCover &&
+		in.CoverCrops == nil && in.WechatFields == nil && in.Topics == nil && in.MaterialIDs == nil &&
+		in.PlannedDate == nil && in.TargetChars == nil && in.ReviewRequired == nil &&
+		in.AssigneeID == nil && in.ReviewerID == nil && len(in.PostPushTodos) == 0
+	if err := m.editable(); err != nil && !tagsOnly {
 		return err
 	}
 	if in.ContentFormat != nil {

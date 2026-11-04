@@ -118,6 +118,7 @@ export default defineConfig({
         'g8-notifications-electron.spec.ts',
         'g8-settings-gaps.spec.ts',
         'g8-empty-create.spec.ts',
+        'g4-works-list-electron.spec.ts',
         'cx18-benchmark-electron.spec.ts',
       ],
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } },
