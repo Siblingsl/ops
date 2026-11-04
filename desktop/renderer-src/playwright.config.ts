@@ -115,6 +115,7 @@ export default defineConfig({
         'g6-followers-sync.spec.ts',
         'g6-review-import-quality.spec.ts',
         'g8-export-electron.spec.ts',
+        'g8-settings-gaps.spec.ts',
         'cx18-benchmark-electron.spec.ts',
       ],
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } },
