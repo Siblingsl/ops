@@ -178,7 +178,11 @@ export async function createOutline(page: Page) {
     expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(await page.evaluate(() => innerHeight))
     await expect(page.getByRole('button', { name: '起草本段', exact: true })).toHaveCount(0)
     await outlineDialog.getByRole('button', { name: '确认大纲', exact: true }).click()
-    await expect(page.getByText('已确认', { exact: true }).first()).toBeVisible()
+    await expect.poll(async () => page.evaluate(async (workID) => {
+      const response = await fetch(`/api/v1/works/${workID}`)
+      if (!response.ok) return null
+      return (await response.json()).outline_confirmed_at
+    }, id)).toBeTruthy()
     return id
   }
 

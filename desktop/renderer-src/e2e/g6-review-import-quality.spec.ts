@@ -82,10 +82,10 @@ async function packAndMarkPublished(native: Page, page: Page, workID: string, or
   return { publishedAt, capturedAt: new Date(publishedAt.getTime() + 7 * 24 * 60 * 60_000) }
 }
 
-async function uploadCsv(native: Page, name: string, csv: string) {
+async function uploadCsv(native: Page, name: string, csv: string, mimeType = 'text/csv') {
   const chooser = native.waitForEvent('filechooser')
   await native.getByRole('button', { name: '导入表格（CSV）', exact: true }).click()
-  await (await chooser).setFiles({ name, mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
+  await (await chooser).setFiles({ name, mimeType, buffer: Buffer.from(csv, 'utf8') })
 }
 
 test('DEV-QA26 G6 真实 Electron CSV 确认与非空复盘质量看板', async ({ page, baseURL }) => {
@@ -125,6 +125,11 @@ test('DEV-QA26 G6 真实 Electron CSV 确认与非空复盘质量看板', async 
     await native.getByRole('button', { name: '查看报告与证据', exact: true }).click()
     const review = native.locator('#desktop-review-advanced')
     await expect(review.getByRole('heading', { name: 'AI 复盘', exact: true })).toBeVisible()
+    const wrongType = native.waitForResponse((response) => response.url().endsWith('/api/v1/accounts/' + account.id + '/metrics/import') && response.request().method() === 'POST')
+    await uploadCsv(native, 'qa26-review-not-csv.txt', '标题,阅读\n"' + title + '",123', 'text/plain')
+    expect((await wrongType).status()).toBe(422)
+    await expect(native.getByText(/请上传 CSV 文件/)).toBeVisible()
+    expect(await api(page, 'GET', '/works/' + workID + '/metrics')).toHaveLength(0)
     const badCsv = [
       '标题,统计时间,展现,阅读,点赞,收藏,评论,分享,涨粉',
       `"${title}",${capturedAt.toISOString()},33000,12000,36,8,2,5,1`,

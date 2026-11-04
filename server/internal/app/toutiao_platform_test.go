@@ -223,6 +223,38 @@ func TestToutiaoTitlelessPasteAndCSVUseSafeManualMatching(t *testing.T) {
 	}}}, "validation_failed")
 }
 
+func TestMetricsImportRejectsNonCSVFilename(t *testing.T) {
+	account := drAccount(t, "xhs", "CSV文件类型验收号")
+	publishedAt := env.srv.now().AddDate(0, 0, -7)
+	work := drWork(t, account, "CSV文件类型验收作品", "published", &publishedAt)
+
+	var upload bytes.Buffer
+	writer := multipart.NewWriter(&upload)
+	part, err := writer.CreateFormFile("file", "metrics.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(part, "标题,阅读\n"+work.Title+",123\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := env.request("POST", "/api/v1/accounts/"+account.ID.String()+"/metrics/import", &upload, writer.FormDataContentType())
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 422 || !strings.Contains(string(body), "请上传 CSV 文件") {
+		t.Fatalf("non-CSV upload status=%d body=%s", resp.StatusCode, body)
+	}
+	if count := metricCount(t, work.ID); count != 0 {
+		t.Fatalf("non-CSV upload wrote %d metric rows", count)
+	}
+}
+
 func TestToutiaoBoardReviewAndPreferencesStaySeparatedByFormat(t *testing.T) {
 	ctx := context.Background()
 	account := drAccount(t, "toutiao", "头条混合形态复盘")

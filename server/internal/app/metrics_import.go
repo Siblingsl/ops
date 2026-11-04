@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -490,11 +491,14 @@ func (s *Server) importMetrics(w http.ResponseWriter, r *http.Request) error {
 	if err := r.ParseMultipartForm(8 << 20); err != nil {
 		return validation("请上传 CSV 文件")
 	}
-	f, _, err := r.FormFile("file")
+	f, header, err := r.FormFile("file")
 	if err != nil {
 		return validation("请上传 CSV 文件")
 	}
 	defer f.Close()
+	if !strings.EqualFold(filepath.Ext(header.Filename), ".csv") {
+		return validation("请上传 CSV 文件")
+	}
 	rd := csv.NewReader(f)
 	rd.FieldsPerRecord = -1
 	records, err := rd.ReadAll()
