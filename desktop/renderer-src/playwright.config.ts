@@ -106,6 +106,7 @@ export default defineConfig({
         'cx09-cards-build-desktop.spec.ts',
         'cx11-paste-image-desktop.spec.ts',
         'g4-image-upload-desktop.spec.ts',
+        'g7-action-card-desktop.spec.ts',
         'cx10-cover-build-desktop.spec.ts',
         'cx13-publish-ledger.spec.ts',
         'cx13-review-multitime.spec.ts',
