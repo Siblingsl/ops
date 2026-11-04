@@ -1,6 +1,6 @@
 // 两端 E2E 同名用例守卫。
 //
-// Web（web/e2e）与桌面（desktop/renderer-src/e2e）是两套独立套件；当前登记 18 个同名 spec：
+// Web（web/e2e）与桌面（desktop/renderer-src/e2e）是两套独立套件；当前登记 28 个同名 spec：
 // 它们覆盖同一段业务旅程，只是分别在浏览器形态与桌面工作台形态下验收，因此**必须各写一份**，
 // 不能共用文件、也不能靠复制粘贴冒充"两端都测过"。
 //
@@ -29,6 +29,7 @@ const ALLOWLIST = new Map([
   ['cx11-writing-basis.spec.ts', '既有大纲生成的来源回执与缺项：浏览器 vs 桌面工作台'],
   ['cx13-publish-ledger.spec.ts', '发布里程碑、提前公开与正式基线失效：浏览器 vs 真实 Electron'],
   ['cx13-review-multitime.spec.ts', '多时点复盘、实验与 v2 逐项回流：浏览器 vs 真实 Electron'],
+  ['g6-review-import-quality.spec.ts', 'CSV 逐行确认与非空复盘质量看板：浏览器 vs 真实 Electron'],
   ['cx13-comment-inbox.spec.ts', '评论台账逐条录入与 AI 拟稿：浏览器 vs 桌面工作台'],
   ['cx13-standards.spec.ts', '回复标准版本与归档语义：浏览器 vs 桌面工作台'],
   ['cx13-account-analysis.spec.ts', '账号分析与主页自检：浏览器 vs 真实 Electron'],
