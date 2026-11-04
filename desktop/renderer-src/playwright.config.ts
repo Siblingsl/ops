@@ -41,6 +41,7 @@ const desktopOnly = [
   'platform-sync-echo.spec.ts',
   'd126-unified-settings.spec.ts',
   'd126-settings-electron.spec.ts',
+  'g8-system-electron.spec.ts',
   'd131-platform-login-entry.spec.ts',
   'd132-current-account-settings.spec.ts',
   'd133-platform-account-sync-ui.spec.ts',
