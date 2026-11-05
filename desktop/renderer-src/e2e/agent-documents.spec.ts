@@ -573,3 +573,61 @@ test('DEV-QA26 Windows Electron filechooser上传4MiB DOCX并核对解析回执�
   }
 })
 
+test('DEV-QA26 Windows Electron filechooser探测6MiB DOCX解析边界', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(120_000)
+  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-qa26-doc6mib-'))
+  let app: ElectronApplication | undefined
+  try {
+    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + userData, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const page = await app.firstWindow()
+    await prepare(page, baseURL!)
+    let messagePosts = 0
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+    })
+    const chooser = page.waitForEvent('filechooser')
+    const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST', { timeout: 60_000 })
+    const expandedBytes = 6 * 1024 * 1024
+    const file = docxLargeDocumentFixture(expandedBytes)
+    const started = performance.now()
+    await page.getByRole('button', { name: '添加附件', exact: true }).click()
+    await (await chooser).setFiles({ name: 'electron-document-6mib.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: file })
+    const response = await upload
+    const uploadMs = performance.now() - started
+    const result = await response.json() as { id?: string; parse_status?: string; page_count?: number; extracted_chars?: number; injected_chars?: number; truncated_from?: number; truncated_to?: number; error?: { code: string; message: string } }
+    expect([200, 422]).toContain(response.status())
+    if (response.status() === 200) {
+      await expect(page.getByLabel('electron-document-6mib.docx ready', { exact: true })).toBeVisible({ timeout: 60_000 })
+      expect(result).toMatchObject({ parse_status: 'ready', page_count: 1, injected_chars: 20_000, truncated_from: 20_001 })
+      expect(result.extracted_chars).toBeGreaterThan(expandedBytes - 100)
+      expect(result.truncated_to).toBe(result.extracted_chars)
+      const original = await page.evaluate(async (id) => {
+        const response = await fetch('/api/v1/agent/attachments/' + id + '/file')
+        const bytes = new Uint8Array(await response.arrayBuffer())
+        return { status: response.status, bytes: bytes.byteLength, signature: new TextDecoder().decode(bytes.slice(0, 4)) }
+      }, result.id!)
+      expect(original).toMatchObject({ status: 200, signature: 'PK\u0003\u0004' })
+      expect(original.bytes).toBeGreaterThan(0)
+      await page.getByRole('button', { name: '移除 electron-document-6mib.docx', exact: true }).click()
+    } else {
+      expect(result.error).toMatchObject({ code: 'agent_attachment_parse_failed' })
+      expect(result.error?.message).toMatch(/30 秒/)
+      await expect(page.getByLabel('electron-document-6mib.docx failed', { exact: true })).toBeVisible()
+      await expect(page.getByText(/30 秒/).last()).toBeVisible()
+    }
+    console.log(`DEV-QA26_METRIC_DOCX_6MIB_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', expanded_bytes: expandedBytes, uploaded_bytes: file.byteLength, status: response.status(), outcome: result.parse_status ?? result.error?.code, upload_ms: Number(uploadMs.toFixed(2)), failures: 0 })}`)
+    expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+    await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    await expect(page).toHaveURL(/\/agent\/?$/)
+    expect(messagePosts).toBe(0)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-doc6mib-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
