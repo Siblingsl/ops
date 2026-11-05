@@ -37,6 +37,7 @@ type testEnv struct {
 	llm    *mock.LLM
 	client *http.Client
 	csrf   string
+	dbURL  string
 }
 
 const testPassword = "test-password-123"
@@ -49,6 +50,13 @@ var env *testEnv
 func TestMain(m *testing.M) {
 	if len(os.Args) == 2 && os.Args[1] == "__agent_document_parser" {
 		if err := documentparse.RunWorker(); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	if len(os.Args) == 6 && os.Args[1] == "__agent_routine_scheduler_worker" {
+		if err := runAgentRoutineSchedulerWorker(os.Args[2], os.Args[3], os.Args[4], os.Args[5]); err != nil {
+			fmt.Fprintln(os.Stderr, "例行任务调度工作进程失败：", err)
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -127,7 +135,7 @@ func runWithEnv(m *testing.M) (int, error) {
 	hs := httptest.NewServer(srv.Router())
 	defer hs.Close()
 	jar, _ := cookiejar.New(nil)
-	env = &testEnv{srv: srv, http: hs, mockWX: wx, mock: mockSrv, llm: llm, client: &http.Client{Jar: jar, Timeout: time.Minute}}
+	env = &testEnv{srv: srv, http: hs, mockWX: wx, mock: mockSrv, llm: llm, client: &http.Client{Jar: jar, Timeout: time.Minute}, dbURL: dbURL}
 	if st, body := env.do("POST", "/api/v1/auth/setup", map[string]string{"username": "owner", "password": testPassword}); st != 200 {
 		return 0, fmt.Errorf("setup: %d %s", st, body)
 	}
