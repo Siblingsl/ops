@@ -62,13 +62,42 @@ func TestParseFailsClosedWithoutConfiguredService(t *testing.T) {
 }
 
 func TestParseHighCompressionDOCXThroughLinuxParserService(t *testing.T) {
+	startParserServiceForTest(t)
+	compressed, ratio := highCompressionDOCXFixture(t)
+	start := time.Now()
+	result, err := Parse(context.Background(), "high-compression.docx", compressed)
+	elapsed := time.Since(start)
+	if err == nil || !strings.Contains(err.Error(), "docx_expanded_size_limit") {
+		t.Fatalf("Linux parser service must reject high-compression DOCX by its declared size: result %+v, err %v", result, err)
+	}
+	t.Logf("DEV-QA26_METRIC_DOCX_LINUX_SERVICE %s", fmt.Sprintf(`{"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"error":%q}`, len(compressed), ratio, float64(elapsed.Microseconds())/1000, err.Error()))
+}
+
+func TestParseLargeDocumentEntryThroughLinuxParserService(t *testing.T) {
+	const expandedDocumentEntry = 4 << 20
+	startParserServiceForTest(t)
+	compressed, ratio := compressedDocumentEntryDOCXFixture(t, expandedDocumentEntry)
+	start := time.Now()
+	result, err := Parse(context.Background(), "large-document-entry.docx", compressed)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Linux parser service should accept large expanded DOCX document entry: result %+v err %v", result, err)
+	}
+	if result.Pages == nil || *result.Pages != 1 || result.PageBasis != "docx_saved_pagination" || result.InjectedChars != 20000 || result.TruncatedFrom == nil || *result.TruncatedFrom != 20001 || result.TruncatedTo == nil || *result.TruncatedTo != result.ExtractedChars || result.ExtractedChars <= result.InjectedChars || len([]rune(result.Text)) != result.InjectedChars {
+		t.Fatalf("Linux parser service returned an unexpected large-entry receipt: %+v", result)
+	}
+	t.Logf("DEV-QA26_METRIC_DOCX_LINUX_LARGE_ENTRY %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"extracted_chars":%d,"injected_chars":%d}`, expandedDocumentEntry, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ExtractedChars, result.InjectedChars))
+}
+
+func startParserServiceForTest(t *testing.T) {
+	t.Helper()
 	socket := filepath.Join(t.TempDir(), "parser.sock")
 	t.Setenv("OPS_DOCUMENT_PARSER_SOCKET", socket)
 	t.Setenv("OPS_DOCUMENT_PARSER_SOCKETS", socket)
 	ctx, cancel := context.WithCancel(context.Background())
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- ServeParser(ctx) }()
-	defer func() {
+	t.Cleanup(func() {
 		cancel()
 		select {
 		case err := <-serveDone:
@@ -78,7 +107,7 @@ func TestParseHighCompressionDOCXThroughLinuxParserService(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Error("parser service did not stop after cancellation")
 		}
-	}()
+	})
 
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
@@ -103,13 +132,4 @@ func TestParseHighCompressionDOCXThroughLinuxParserService(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-
-	compressed, ratio := highCompressionDOCXFixture(t)
-	start := time.Now()
-	result, err := Parse(context.Background(), "high-compression.docx", compressed)
-	elapsed := time.Since(start)
-	if err == nil || !strings.Contains(err.Error(), "docx_expanded_size_limit") {
-		t.Fatalf("Linux parser service must reject high-compression DOCX by its declared size: result %+v, err %v", result, err)
-	}
-	t.Logf("DEV-QA26_METRIC_DOCX_LINUX_SERVICE %s", fmt.Sprintf(`{"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"error":%q}`, len(compressed), ratio, float64(elapsed.Microseconds())/1000, err.Error()))
 }

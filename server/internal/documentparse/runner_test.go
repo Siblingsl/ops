@@ -112,6 +112,21 @@ func TestParseDOCXRejectsHighCompressionExpandedSizeUnderWASI(t *testing.T) {
 	t.Logf("DEV-QA26_METRIC_DOCX_ZIP_BOMB %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"result":"%s"}`, expandedLimit+1, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ErrorCode))
 }
 
+func TestParseDOCXAcceptsLargeDocumentEntryAndTruncatesText(t *testing.T) {
+	const expandedDocumentEntry = 4 << 20
+	compressed, ratio := compressedDocumentEntryDOCXFixture(t, expandedDocumentEntry)
+	start := time.Now()
+	result, err := parseInWASI("large-document-entry.docx", compressed)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("large compressed DOCX entry should parse: result %+v, err %v", result, err)
+	}
+	if result.Pages == nil || *result.Pages != 1 || result.PageBasis != "docx_saved_pagination" || result.InjectedChars != 20000 || result.TruncatedFrom == nil || *result.TruncatedFrom != 20001 || result.TruncatedTo == nil || *result.TruncatedTo != result.ExtractedChars || result.ExtractedChars <= result.InjectedChars || len([]rune(result.Text)) != result.InjectedChars {
+		t.Fatalf("large DOCX entry should parse with a bounded text receipt: %+v", result)
+	}
+	t.Logf("DEV-QA26_METRIC_DOCX_LARGE_ENTRY %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"extracted_chars":%d,"injected_chars":%d}`, expandedDocumentEntry, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ExtractedChars, result.InjectedChars))
+}
+
 func highCompressionDOCXFixture(t *testing.T) ([]byte, float64) {
 	t.Helper()
 	const expandedLimit = 96 << 20
@@ -152,6 +167,51 @@ func highCompressionDOCXFixture(t *testing.T) ([]byte, float64) {
 		t.Fatal(err)
 	}
 	ratio := float64(expandedLimit+1) / float64(compressed.Len())
+	if ratio < 100 {
+		t.Fatalf("fixture compression ratio unexpectedly low: %.1f:1 (%d compressed bytes)", ratio, compressed.Len())
+	}
+	return compressed.Bytes(), ratio
+}
+
+func compressedDocumentEntryDOCXFixture(t *testing.T, expandedDocumentEntry int) ([]byte, float64) {
+	t.Helper()
+	prefix := []byte(`<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>`)
+	suffix := []byte(`</w:t></w:r></w:p></w:body></w:document>`)
+	var compressed bytes.Buffer
+	archive := zip.NewWriter(&compressed)
+	document, err := archive.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := document.Write(prefix); err != nil {
+		t.Fatal(err)
+	}
+	chunk := bytes.Repeat([]byte("a"), 1<<20)
+	remaining := expandedDocumentEntry - len(prefix) - len(suffix)
+	for remaining > 0 {
+		count := min(remaining, len(chunk))
+		if _, err := document.Write(chunk[:count]); err != nil {
+			t.Fatal(err)
+		}
+		remaining -= count
+	}
+	if _, err := document.Write(suffix); err != nil {
+		t.Fatal(err)
+	}
+	app, err := archive.Create("docProps/app.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Write([]byte("<Properties><Pages>1</Pages></Properties>")); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if compressed.Len() > maxBytes {
+		t.Fatalf("high-compression fixture must fit the compressed file limit: %d", compressed.Len())
+	}
+	ratio := float64(expandedDocumentEntry) / float64(compressed.Len())
 	if ratio < 100 {
 		t.Fatalf("fixture compression ratio unexpectedly low: %.1f:1 (%d compressed bytes)", ratio, compressed.Len())
 	}
