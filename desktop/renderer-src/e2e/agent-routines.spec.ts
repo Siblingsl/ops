@@ -1,5 +1,6 @@
 import { _electron, expect, test, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
+import { createServer } from 'node:http'
 import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
@@ -25,7 +26,7 @@ async function api(page: Page, method: string, path: string, body?: unknown) {
   }, { method, path, body })
 }
 
-async function prepareRoutine(page: Page, baseURL: string) {
+async function prepareRoutine(page: Page, baseURL: string, modelBaseURL = 'http://127.0.0.1:8297/v1') {
   await page.goto(`${baseURL}/register`)
   await page.getByLabel('用户名', { exact: true }).fill(`aw10-${Date.now()}-${Math.random().toString(16).slice(2, 7)}`)
   await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
@@ -33,7 +34,7 @@ async function prepareRoutine(page: Page, baseURL: string) {
   await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
   const account = await api(page, 'POST', '/accounts', { platform: 'xhs', name: 'AW10 例行任务验收号', content_format: 'image_note', type_note: '' })
   const provider = await api(page, 'POST', '/model-providers', {
-    name: 'AW10 工作台 mock 模型', base_url: 'http://127.0.0.1:8297/v1', api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+    name: 'AW10 工作台 mock 模型', base_url: modelBaseURL, api_key: 'local-e2e-key', models: ['mock-agent-tested'],
   })
   await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
@@ -44,6 +45,98 @@ async function prepareRoutine(page: Page, baseURL: string) {
   const bootstrap = await api(page, 'GET', '/agent/bootstrap')
   expect(bootstrap.features.routines).toBe(true)
   return account
+}
+
+async function startHeldRoutineModelProxy() {
+  const mockBaseURL = new URL(process.env.OPS_E2E_MOCK_BASE_URL ?? 'http://127.0.0.1:8297/v1')
+  let holdNextStream = false
+  let wasHeld = false
+  let wasAborted = false
+  let resolveHeld: (() => void) | undefined
+  let resolveAborted: (() => void) | undefined
+  let heldPromise = Promise.resolve()
+  let abortedPromise = Promise.resolve()
+  const server = createServer((incoming, outgoing) => {
+    const chunks: Buffer[] = []
+    incoming.on('data', (chunk: Buffer | Uint8Array) => chunks.push(Buffer.from(chunk)))
+    incoming.on('end', () => {
+      const body = Buffer.concat(chunks)
+      void (async () => {
+        let hold = false
+        if (holdNextStream && incoming.method === 'POST' && incoming.url === '/v1/chat/completions') {
+          try { hold = JSON.parse(body.toString()).stream === true } catch { /* Invalid payload is forwarded for the upstream mock to reject. */ }
+        }
+        if (hold) {
+          holdNextStream = false
+          wasHeld = true
+          resolveHeld?.()
+          const disconnected = await new Promise<boolean>((resolve) => {
+            const timer = setTimeout(() => resolve(false), 15_000)
+            outgoing.once('close', () => {
+              clearTimeout(timer)
+              resolve(!outgoing.writableEnded)
+            })
+          })
+          if (disconnected) {
+            wasAborted = true
+            resolveAborted?.()
+            return
+          }
+        }
+        try {
+          const upstream = await fetch(`${mockBaseURL.origin}${incoming.url ?? '/'}`, {
+            method: incoming.method ?? 'GET',
+            headers: {
+              'content-type': incoming.headers['content-type'] ?? 'application/json',
+              ...(incoming.headers.authorization ? { authorization: incoming.headers.authorization } : {}),
+            },
+            ...(body.length > 0 ? { body } : {}),
+          })
+          const responseBody = Buffer.from(await upstream.arrayBuffer())
+          outgoing.writeHead(upstream.status, {
+            'content-type': upstream.headers.get('content-type') ?? 'application/json',
+            'cache-control': 'no-cache',
+          })
+          outgoing.end(responseBody)
+        } catch (error) {
+          if (!outgoing.destroyed) {
+            outgoing.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+            outgoing.end(error instanceof Error ? error.message : String(error))
+          }
+        }
+      })()
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('无法启动本地例行模型代理')
+  return {
+    baseURL: `http://127.0.0.1:${address.port}/v1`,
+    arm() {
+      holdNextStream = true
+      wasHeld = false
+      wasAborted = false
+      heldPromise = new Promise<void>((resolve) => { resolveHeld = resolve })
+      abortedPromise = new Promise<void>((resolve) => { resolveAborted = resolve })
+    },
+    async waitUntilHeld() {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('mock 模型未收到在途运行请求')), 10_000)
+        void heldPromise.then(() => { clearTimeout(timer); resolve() }, reject)
+      })
+      expect(wasHeld).toBe(true)
+    },
+    async waitUntilAborted() {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('撤权后模型请求未被取消')), 8_000)
+        void abortedPromise.then(() => { clearTimeout(timer); resolve() }, reject)
+      })
+      expect(wasAborted).toBe(true)
+    },
+    close() {
+      return new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    },
+  }
 }
 
 async function routineJourney(page: Page, baseURL: string, screenshotName: string, revokeAccountBeforeRun = false) {
@@ -558,6 +651,150 @@ test('DEV-QA26 Windows Electron系统用户停用后暂停例行任务并逐项�
     if (!resolve(adminData).startsWith(resolve(tmpdir()) + sep) || !basename(adminData).startsWith('ops-qa26-routine-admin-disable-')) throw new Error('拒绝清理测试目录之外路径')
     await rm(adminData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-qa26-routine-user-disable-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('DEV-QA26 Windows Electron系统用户停用在途例行任务后保留中断记录', async ({ baseURL }, testInfo) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(240_000)
+  const startedAt = Date.now()
+  const proxy = await startHeldRoutineModelProxy()
+  const userData = await mkdtemp(join(tmpdir(), 'ops-qa26-routine-inflight-user-'))
+  const adminData = await mkdtemp(join(tmpdir(), 'ops-qa26-routine-inflight-admin-'))
+  let userApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  let adminApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  try {
+    const electronPath = resolve(process.cwd(), '../node_modules/electron/dist/electron.exe')
+    const mainPath = resolve(process.cwd(), '../.build/main.js')
+    userApp = await _electron.launch({ executablePath: electronPath, args: [`--user-data-dir=${userData}`, mainPath],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const userPage = await userApp.firstWindow()
+    await prepareRoutine(userPage, baseURL!, proxy.baseURL)
+    const identity = await api(userPage, 'GET', '/auth/me')
+    const username = identity.username as string
+    const name = `QA26 在途例行任务停止 ${Date.now()}`
+    await userPage.goto(`${baseURL}/agent`)
+    await userPage.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const routineDialog = userPage.getByRole('dialog').filter({ has: userPage.getByRole('heading', { name: '受限例行任务', exact: true }) })
+    await routineDialog.getByLabel('名称', { exact: true }).fill(name)
+    await routineDialog.getByLabel('任务提示（最多 4000 字）', { exact: true }).fill('只读查询账号表现，等待本次运行被系统管理员停止。')
+    const selectors = routineDialog.getByRole('combobox')
+    await selectors.nth(0).selectOption({ index: 1 })
+    await selectors.nth(1).selectOption({ index: 1 })
+    const createdResponse = userPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/routines' && response.request().method() === 'POST')
+    await routineDialog.getByRole('button', { name: '创建并启用', exact: true }).click()
+    expect((await createdResponse).status()).toBe(200)
+    const routine = (await api(userPage, 'GET', '/agent/routines')).items.find((item: { name: string }) => item.name === name)
+    expect(routine.status).toBe('enabled')
+    expect(routine.model.model).toBe('mock-agent-tested')
+
+    adminApp = await _electron.launch({ executablePath: electronPath, args: [`--user-data-dir=${adminData}`, mainPath],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const adminPage = await adminApp.firstWindow()
+    await adminPage.goto(`${baseURL}/login`)
+    await adminPage.getByLabel('用户名', { exact: true }).fill('skyeder')
+    await adminPage.getByLabel('密码', { exact: true }).fill('local-e2e-admin-pass-456')
+    const adminLogin = adminPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/auth/login' && response.request().method() === 'POST')
+    await adminPage.getByRole('button', { name: '登录', exact: true }).click()
+    expect((await adminLogin).status()).toBe(200)
+    await adminPage.goto(`${baseURL}/settings/admin`)
+    const userCard = adminPage.getByRole('heading', { name: '用户', exact: true }).locator('..').locator('..').locator('..')
+    const userRow = userCard.getByRole('listitem').filter({ hasText: username })
+    await expect(userRow).toBeVisible()
+
+    const task = userPage.locator('article').filter({ hasText: name })
+    proxy.arm()
+    const runOnce = userPage.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/routines/${routine.id}/control` && response.request().method() === 'POST')
+    await task.getByRole('button', { name: '立即运行一次', exact: true }).click()
+    expect((await runOnce).status()).toBe(200)
+    await proxy.waitUntilHeld()
+    await expect.poll(async () => {
+      const occurrences = await api(userPage, 'GET', `/agent/routines/${routine.id}/occurrences`)
+      return occurrences.items[0]?.status
+    }).toBe('running')
+
+    const disableButton = userRow.getByRole('button', { name: '禁用', exact: true })
+    const disabledResponse = adminPage.waitForResponse((response) => new URL(response.url()).pathname.startsWith('/api/v1/admin/users/') && response.request().method() === 'PATCH')
+    const revokedSession = userPage.waitForResponse((response) =>
+      new URL(response.url()).pathname === '/api/v1/auth/me' && response.request().method() === 'GET' && response.status() === 401)
+    await disableButton.click()
+    expect((await disabledResponse).status()).toBe(200)
+    await proxy.waitUntilAborted()
+    expect((await revokedSession).status()).toBe(401)
+
+    const enableUser = userRow.getByRole('button', { name: '启用', exact: true })
+    const enabledResponse = adminPage.waitForResponse((response) => new URL(response.url()).pathname.startsWith('/api/v1/admin/users/') && response.request().method() === 'PATCH')
+    await enableUser.click()
+    expect((await enabledResponse).status()).toBe(200)
+    await userPage.goto(`${baseURL}/login`)
+    await userPage.getByLabel('用户名', { exact: true }).fill(username)
+    await userPage.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+    const userLogin = userPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/auth/login' && response.request().method() === 'POST')
+    await userPage.getByRole('button', { name: '登录', exact: true }).click()
+    expect((await userLogin).status()).toBe(200)
+    await userPage.goto(`${baseURL}/agent`)
+    await userPage.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const pausedTask = userPage.locator('article').filter({ hasText: name })
+    await expect(pausedTask.getByText('已暂停', { exact: true })).toBeVisible()
+    await expect(pausedTask.getByText(/系统用户已停用；重新启用用户后，请手动重新启用此任务。/)).toBeVisible()
+    await expect(pausedTask.getByRole('button', { name: '立即运行一次', exact: true })).toHaveCount(0)
+    const pausedRoutine = (await api(userPage, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)
+    expect(pausedRoutine).toMatchObject({ status: 'paused', error_code: 'system_user_disabled' })
+    expect(pausedRoutine.next_due_at).toBeFalsy()
+    expect((await api(userPage, 'GET', '/notifications')).items.some((item: { kind: string; body: string; link: string }) =>
+      item.kind === 'agent_routine' && item.body.includes('系统用户已停用') && item.link.includes(routine.id))).toBe(true)
+    await expect.poll(async () => (await api(userPage, 'GET', `/agent/routines/${routine.id}/occurrences`)).items[0]?.status).toBe('interrupted')
+    const occurrences = await api(userPage, 'GET', `/agent/routines/${routine.id}/occurrences`)
+    expect(occurrences.items[0]).toMatchObject({ status: 'interrupted', error_code: 'stopped' })
+    expect(occurrences.items[0].run_id).toBeTruthy()
+    await pausedTask.getByRole('button', { name: '执行记录', exact: true }).click()
+    const history = pausedTask.getByRole('list', { name: '例行任务执行记录', exact: true })
+    await expect(history).toContainText('中断')
+    await expect(history).toContainText('stopped')
+    await pausedTask.getByRole('button', { name: '收起记录', exact: true }).click()
+
+    const conversations = await api(userPage, 'GET', `/agent/conversations?q=${encodeURIComponent(`例行任务：${name}`)}`)
+    const conversation = conversations.items.find((item: { title: string }) => item.title === `例行任务：${name}`)
+    expect(conversation).toBeTruthy()
+    await expect.poll(async () => (await api(userPage, 'GET', `/agent/conversations/${conversation.id}`)).last_run?.status).toBe('stopped')
+
+    const reenable = pausedTask.getByRole('button', { name: '重新启用', exact: true })
+    const reenableResponse = userPage.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/routines/${routine.id}/control` && response.request().method() === 'POST')
+    await reenable.click()
+    expect((await reenableResponse).status()).toBe(200)
+    expect((await api(userPage, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id).status).toBe('enabled')
+    expect((await api(userPage, 'GET', `/agent/routines/${routine.id}/occurrences`)).items[0].status).toBe('interrupted')
+
+    const samples: number[] = []
+    let failures = 0
+    for (let i = 0; i < 20; i++) {
+      try {
+        const start = performance.now()
+        await pausedTask.getByRole('button', { name: '执行记录', exact: true }).click()
+        await expect(pausedTask.getByRole('list', { name: '例行任务执行记录', exact: true })).toBeVisible()
+        samples.push(performance.now() - start)
+        await pausedTask.getByRole('button', { name: '收起记录', exact: true }).click()
+      } catch (error) {
+        failures++
+        throw error
+      }
+    }
+    const sorted = [...samples].sort((a, b) => a - b)
+    const p50 = sorted[Math.ceil(sorted.length * 0.5) - 1]
+    const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1]
+    const journeyMs = Date.now() - startedAt
+    const metrics = { environment: 'Windows native Electron; local E2E API and delayed loopback mock model', journey_ms: journeyMs,
+      ordinary_interactions: 20, interaction_p50_ms: Number(p50.toFixed(2)), interaction_p95_ms: Number(p95.toFixed(2)), failures }
+    testInfo.attach('system-user-disable-inflight-routine.json', { body: JSON.stringify(metrics, null, 2), contentType: 'application/json' })
+    console.log(`DEV-QA26_ROUTINE_INFLIGHT_DISABLE_ELECTRON ${JSON.stringify(metrics)}`)
+  } finally {
+    await closeQaElectron(adminApp)
+    await closeQaElectron(userApp)
+    await proxy.close()
+    if (!resolve(adminData).startsWith(resolve(tmpdir()) + sep) || !basename(adminData).startsWith('ops-qa26-routine-inflight-admin-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(adminData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-qa26-routine-inflight-user-')) throw new Error('拒绝清理测试目录之外路径')
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })

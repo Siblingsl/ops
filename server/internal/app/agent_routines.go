@@ -1327,6 +1327,7 @@ func (s *Server) finishAgentRoutineTx(ctx context.Context, tx pgx.Tx, st *agentR
 	}
 	authorizationRevoked := reason == "routine_authorization_revoked"
 	workspaceDisabled := routine.Status == "paused" && routine.ErrorCode == "agent_disabled"
+	preservePauseReason := routine.Status == "paused" && routine.ErrorCode != ""
 	occurrenceStatus, errorCode := "completed", ""
 	if authorizationRevoked {
 		occurrenceStatus, errorCode = "interrupted", "authorization_revoked"
@@ -1352,10 +1353,10 @@ func (s *Server) finishAgentRoutineTx(ctx context.Context, tx pgx.Tx, st *agentR
 	newFailureCount := routine.FailureCount
 	newRoutineStatus := routine.Status
 	newErrorCode := errorCode
-	if workspaceDisabled {
+	if preservePauseReason {
 		newRoutineStatus = "paused"
 		newFailureCount = routine.FailureCount
-		newErrorCode = "agent_disabled"
+		newErrorCode = routine.ErrorCode
 	} else if authorizationRevoked {
 		newRoutineStatus = "paused"
 		newFailureCount = routine.FailureCount
