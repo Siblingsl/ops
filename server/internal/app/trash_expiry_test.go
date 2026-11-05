@@ -155,3 +155,114 @@ func TestRunJobsPurgesExpiredWorkAndAssetDirectory(t *testing.T) {
 		t.Fatalf("expired work asset directory still exists: err=%v", err)
 	}
 }
+
+// This opt-in integration test waits for RunJobs' real 10-minute ticker.
+// Keep it out of the normal package suite because it intentionally takes over ten minutes.
+func TestRunJobsPurgesExpiredTrashOnTenMinuteTick(t *testing.T) {
+	if os.Getenv("OPS_TEST_TRASH_REAL_TICK") != "1" {
+		t.Skip("set OPS_TEST_TRASH_REAL_TICK=1 to wait for the real 10-minute trash cleanup tick")
+	}
+
+	originalNow := env.srv.now
+	fixedNow := time.Date(2026, time.November, 5, 2, 30, 0, 0, env.srv.loc)
+	env.srv.now = func() time.Time { return fixedNow }
+	t.Cleanup(func() { env.srv.now = originalNow })
+
+	var account Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{
+		"platform": "xhs", "name": "QA26 回收站十分钟周期验收",
+		"content_format": "image_note",
+	}, &account)
+	type target struct {
+		workID   uuid.UUID
+		topicID  uuid.UUID
+		assetDir string
+	}
+	createTarget := func(prefix string) target {
+		var work Work
+		env.mustJSON(t, "POST", "/api/v1/accounts/"+account.ID.String()+"/works", map[string]string{
+			"title": "QA26 " + prefix + " 到期清理作品",
+		}, &work)
+		var topic struct {
+			Topic struct {
+				ID uuid.UUID `json:"id"`
+			} `json:"topic"`
+		}
+		env.mustJSON(t, "POST", "/api/v1/accounts/"+account.ID.String()+"/topics", map[string]string{
+			"title": "QA26 " + prefix + " 到期清理选题", "angle": "10 分钟调度验收",
+		}, &topic)
+		env.upload(t, work.ID.String(), testPNG(48, 32))
+		return target{workID: work.ID, topicID: topic.Topic.ID, assetDir: filepath.Join(env.srv.cfg.DataDir, "assets", work.ID.String())}
+	}
+	expireTarget := func(item target) {
+		cutoff := fixedNow.AddDate(0, 0, -trashDays).Add(-time.Second)
+		if _, err := env.srv.db.Exec(t.Context(), `UPDATE work SET deleted_at=$2 WHERE id=$1`, item.workID, cutoff); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := env.srv.db.Exec(t.Context(), `UPDATE topic SET deleted_at=$2 WHERE id=$1`, item.topicID, cutoff); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetExists := func(item target) bool {
+		var exists bool
+		if err := env.srv.db.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM work WHERE id=$1) OR EXISTS(SELECT 1 FROM topic WHERE id=$2)`, item.workID, item.topicID).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		return exists
+	}
+	waitPurged := func(item target, timeout time.Duration) {
+		t.Helper()
+		deadline := time.NewTimer(timeout)
+		defer deadline.Stop()
+		poll := time.NewTicker(100 * time.Millisecond)
+		defer poll.Stop()
+		for {
+			if !targetExists(item) {
+				if _, err := os.Stat(item.assetDir); !os.IsNotExist(err) {
+					t.Fatalf("expired work asset directory still exists: %s (err=%v)", item.assetDir, err)
+				}
+				return
+			}
+			select {
+			case <-deadline.C:
+				t.Fatalf("RunJobs did not purge expired work/topic before timeout: work=%s topic=%s", item.workID, item.topicID)
+			case <-poll.C:
+			}
+		}
+	}
+
+	startupTarget := createTarget("启动轮")
+	expireTarget(startupTarget)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	startedAt := time.Now()
+	go func() {
+		env.srv.RunJobs(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("RunJobs did not stop after context cancellation")
+		}
+	})
+
+	waitPurged(startupTarget, 30*time.Second)
+	tickTarget := createTarget("周期轮")
+	expireTarget(tickTarget)
+	if !targetExists(tickTarget) {
+		t.Fatal("periodic target must be created after the startup pass")
+	}
+	waitPurged(tickTarget, 12*time.Minute)
+	if elapsed := time.Since(startedAt); elapsed < 9*time.Minute+45*time.Second {
+		t.Fatalf("periodic purge arrived too early to prove the 10-minute tick: elapsed=%s", elapsed.Round(time.Second))
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunJobs did not finish after context cancellation")
+	}
+}
