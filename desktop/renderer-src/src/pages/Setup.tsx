@@ -31,7 +31,7 @@ function PasswordStep({ onDone }: { onDone: () => void }) {
   return (
     <div className="space-y-4">
       <Field label="用户名"><Input autoFocus value={username} onChange={(e) => setUsername(e.target.value)} /></Field>
-      <Field label="登录密码" error={short ? '密码至少需要 12 位' : undefined} hint="至少 12 位。系统只有你一个用户，忘记密码需要在服务器上执行重置命令。">
+      <Field label="登录密码" error={short ? '密码至少需要 12 位' : undefined} hint="至少 12 位。忘记密码需联系部署管理员在服务器上执行重置命令。">
         <Input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" invalid={short} />
       </Field>
       <Field label="再输入一次" error={mismatch ? '两次输入不一致' : undefined}>

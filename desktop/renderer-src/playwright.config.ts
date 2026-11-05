@@ -109,6 +109,7 @@ export default defineConfig({
         'g4-image-upload-desktop.spec.ts',
         'g2-image-library-electron.spec.ts',
         'g2-workspace-switch-electron.spec.ts',
+        'g1-setup.spec.ts',
         'g7-action-card-desktop.spec.ts',
         'cx10-cover-build-desktop.spec.ts',
         'cx13-publish-ledger.spec.ts',

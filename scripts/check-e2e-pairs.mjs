@@ -35,6 +35,7 @@ const ALLOWLIST = new Map([
   ['opt36-work-tags.spec.ts', '作品自由标签真实保存、筛选与命令面板搜索：浏览器 vs 原生 Electron'],
   ['g4-08-summary.spec.ts', '公众号摘要生成、120 字边界与保存持久化：浏览器 vs 原生 Electron'],
   ['g8-settings-gaps.spec.ts', '模型空态、编辑者成员管理权限、回收站永久删除：浏览器 vs 真实 Electron'],
+  ['g1-setup.spec.ts', '首次部署 setup 创建 owner、服务错误重试与超管权限边界：浏览器 vs 真实 Electron'],
   ['g8-empty-create.spec.ts', '空作品页空白新建不把点击事件写入标题：浏览器 vs 真实 Electron'],
   ['g6-review-import-quality.spec.ts', 'CSV 逐行确认与非空复盘质量看板：浏览器 vs 真实 Electron'],
   ['cx13-comment-inbox.spec.ts', '评论台账逐条录入与 AI 拟稿：浏览器 vs 桌面工作台'],
