@@ -792,21 +792,64 @@ test('DEV-QA26 G2-02 Web 编辑者只能查看平台账号', async ({ page, brow
     await expect(editorPage.getByRole('textbox', { name: '账号名称', exact: true })).toBeDisabled()
     await expect(editorPage.getByRole('button', { name: '修改类型', exact: true })).toHaveCount(0)
     await expect(editorPage.getByRole('button', { name: '停用', exact: true })).toHaveCount(0)
+    await expect(editorPage.getByRole('button', { name: '删除', exact: true })).toHaveCount(0)
     const denied = await editorPage.evaluate(async (accountId) => {
       const me = await (await fetch('/api/v1/auth/me')).json()
       const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }
-      const [edit, disable] = await Promise.all([
+      const [edit, disable, remove] = await Promise.all([
         fetch('/api/v1/accounts/' + accountId, { method: 'PATCH', headers, body: JSON.stringify({ name: '越权账号名' }) }),
         fetch('/api/v1/accounts/' + accountId + '/disable', { method: 'POST', headers }),
+        fetch('/api/v1/accounts/' + accountId + '?confirm=true', { method: 'DELETE', headers }),
       ])
-      return [edit.status, disable.status]
+      return [edit.status, disable.status, remove.status]
     }, account.id)
-    expect(denied).toEqual([403, 403])
+    expect(denied).toEqual([403, 403, 403])
     expect((await api(page, 'GET', '/accounts/' + account.id)).name).toBe(account.name)
     expect((await api(page, 'GET', '/accounts/' + account.id)).status).toBe('active')
   } finally {
     await editorContext.close()
   }
+})
+
+test('DEV-QA26 G2-02 Web 删除账号取消后保留，确认后只删除目标账号数据', async ({ page }) => {
+  const account = await registerAccount(page)
+  const other = await api(page, 'POST', '/accounts', {
+    platform: 'toutiao', name: 'QA26 删除后保留的账号 ' + Date.now(), content_format: 'long_article', type_note: '',
+  }) as { id: string; name: string }
+  const work = await api(page, 'POST', '/accounts/' + account.id + '/works', {
+    title: 'QA26 删除账号级联作品 ' + Date.now(),
+  }) as { id: string }
+  const trigger = page.getByRole('button').filter({ hasText: account.name }).first()
+  const openDeleteMenu = async () => {
+    const switcher = page.getByTestId('workspace-account-menu')
+    if (await switcher.count() === 0) {
+      await trigger.click()
+      await expect(switcher).toBeVisible()
+    }
+    const platform = switcher.getByRole('button').filter({ hasText: '小红书' }).first()
+    if (await switcher.getByRole('button').filter({ hasText: account.name }).count() === 0) await platform.click()
+    await switcher.getByRole('button').filter({ hasText: account.name }).click({ button: 'right' })
+    await page.getByRole('menu').getByRole('menuitem', { name: '删除账号', exact: true }).click()
+    return page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '删除「' + account.name + '」？', exact: true }) })
+  }
+
+  let confirmDialog = await openDeleteMenu()
+  await expect(confirmDialog).toBeVisible()
+  await confirmDialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(confirmDialog).toHaveCount(0)
+  expect((await api(page, 'GET', '/accounts') as Array<{ id: string }>).some((row) => row.id === account.id)).toBe(true)
+  expect((await page.request.get('/api/v1/works/' + work.id)).status()).toBe(200)
+
+  confirmDialog = await openDeleteMenu()
+  const deletion = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith('/api/v1/accounts/' + account.id) && response.request().method() === 'DELETE')
+  await confirmDialog.getByRole('button', { name: '确认删除', exact: true }).click()
+  expect((await deletion).status()).toBe(200)
+  const accounts = await api(page, 'GET', '/accounts') as Array<{ id: string }>
+  expect(accounts.some((row) => row.id === account.id)).toBe(false)
+  expect(accounts.some((row) => row.id === other.id)).toBe(true)
+  expect((await page.request.get('/api/v1/works/' + work.id)).status()).toBe(404)
+  await expect(page.getByText('账号已删除', { exact: true })).toBeVisible()
 })
 
 test('DEV-QA26 G2-13 Web 回收站逐项验收选题素材样本角色参考', async ({ page }) => {

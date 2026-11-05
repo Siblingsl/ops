@@ -1206,16 +1206,18 @@ test('DEV-QA26 G2-02 真实 Electron 编辑者只能查看平台账号', async (
     await expect(editorSettings.getByRole('textbox', { name: '账号名称', exact: true })).toBeDisabled()
     await expect(editorSettings.getByRole('button', { name: '修改类型', exact: true })).toHaveCount(0)
     await expect(editorSettings.getByRole('button', { name: '停用当前账号', exact: true })).toHaveCount(0)
+    await expect(editorSettings.getByRole('button', { name: '删除当前账号', exact: true })).toHaveCount(0)
     const denied = await editorPage.evaluate(async (accountId) => {
       const me = await (await fetch('/api/v1/auth/me')).json()
       const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }
-      const [edit, disable] = await Promise.all([
+      const [edit, disable, remove] = await Promise.all([
         fetch('/api/v1/accounts/' + accountId, { method: 'PATCH', headers, body: JSON.stringify({ name: '越权账号名' }) }),
         fetch('/api/v1/accounts/' + accountId + '/disable', { method: 'POST', headers }),
+        fetch('/api/v1/accounts/' + accountId + '?confirm=true', { method: 'DELETE', headers }),
       ])
-      return [edit.status, disable.status]
+      return [edit.status, disable.status, remove.status]
     }, owner.account.id)
-    expect(denied).toEqual([403, 403])
+    expect(denied).toEqual([403, 403, 403])
     expect((await api(page, 'GET', '/accounts/' + owner.account.id)).name).toBe(owner.account.name)
     expect((await api(page, 'GET', '/accounts/' + owner.account.id)).status).toBe('active')
   } finally {
