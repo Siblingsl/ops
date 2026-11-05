@@ -65,6 +65,84 @@ async function openAdvancedSetting(page: Page, label: string) {
   await menu.getByRole('menuitem', { name: label, exact: true }).click()
 }
 
+test('DEV-QA26 G1-05 修改密码拒绝与会话失效', async ({ page, browser }) => {
+  const username = `qa26-password-change-${Date.now()}-${test.info().workerIndex}`
+  await registerAccount(page, '图文笔记', 'xhs', username)
+  const origin = new URL(page.url()).origin
+  const otherContext = await browser.newContext({ baseURL: origin })
+  try {
+    const otherPage = await otherContext.newPage()
+    await otherPage.goto('/login')
+    await otherPage.getByLabel('用户名', { exact: true }).fill(username)
+    await otherPage.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+    const otherLogin = otherPage.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/auth/login') && response.request().method() === 'POST')
+    await otherPage.getByRole('button', { name: '登录', exact: true }).click()
+    expect((await otherLogin).status()).toBe(200)
+    await expect(otherPage.getByRole('heading', { name: /今天写点什么/ })).toBeVisible()
+
+    await openAdvancedSetting(page, '登录与安全')
+    const oldPassword = page.getByLabel('当前密码')
+    const newPassword = page.getByLabel('新密码')
+    const confirmPassword = page.getByLabel('再输入一次')
+    const submit = page.getByRole('button', { name: '修改密码', exact: true })
+    const nextPassword = 'local-e2e-password-456'
+    await newPassword.fill(nextPassword)
+    await confirmPassword.fill(nextPassword)
+    const wrongPasswordSamples: number[] = []
+    for (let index = 0; index < 20; index += 1) {
+      await oldPassword.fill('local-e2e-wrong-password')
+      const rejected = page.waitForResponse((response) =>
+        response.url().endsWith('/api/v1/auth/password') && response.request().method() === 'PUT')
+      const started = performance.now()
+      await submit.click()
+      const response = await rejected
+      wrongPasswordSamples.push(performance.now() - started)
+      expect(response.status()).toBe(422)
+      await expect(page.getByText(/当前密码不正确/).first()).toBeVisible()
+      await expect(submit).toBeEnabled()
+    }
+    expect((await page.request.get('/api/v1/auth/me')).status()).toBe(200)
+
+    await oldPassword.fill('local-e2e-password-123')
+    const changed = page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/auth/password') && response.request().method() === 'PUT')
+    await submit.click()
+    expect((await changed).status()).toBe(200)
+    await expect(page.getByText('密码已修改，其他设备上的登录已失效', { exact: true })).toBeVisible()
+    await expect(oldPassword).toHaveValue('')
+    await expect(newPassword).toHaveValue('')
+    await expect(confirmPassword).toHaveValue('')
+
+    expect((await page.request.get('/api/v1/auth/me')).status()).toBe(200)
+    expect((await otherContext.request.get(`${origin}/api/v1/auth/me`)).status()).toBe(401)
+    await page.reload()
+    await expect(page.getByLabel('当前密码')).toBeVisible()
+    expect((await page.request.get('/api/v1/auth/me')).status()).toBe(200)
+
+    await otherPage.goto('/login')
+    await otherPage.getByLabel('用户名', { exact: true }).fill(username)
+    await otherPage.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+    const oldLogin = otherPage.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/auth/login') && response.request().method() === 'POST')
+    await otherPage.getByRole('button', { name: '登录', exact: true }).click()
+    expect((await oldLogin).status()).toBe(401)
+    await expect(otherPage.getByText(/用户名或密码不正确/)).toBeVisible()
+
+    await otherPage.getByLabel('密码', { exact: true }).fill(nextPassword)
+    const newLogin = otherPage.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/auth/login') && response.request().method() === 'POST')
+    await otherPage.getByRole('button', { name: '登录', exact: true }).click()
+    expect((await newLogin).status()).toBe(200)
+    await expect(otherPage.getByRole('heading', { name: /今天写点什么/ })).toBeVisible()
+
+    const sorted = [...wrongPasswordSamples].sort((a, b) => a - b)
+    console.log(`G1-05 Web 20 次旧密码拒绝 p50=${sorted[9].toFixed(2)}ms p95=${sorted[18].toFixed(2)}ms; rejected=20`)
+  } finally {
+    await otherContext.close()
+  }
+})
+
 test('DEV-QA26 G8 Web 模型删除取消与空态读回', async ({ page }) => {
   const account = await registerAccount(page)
   await page.goto('/a/' + account.id)

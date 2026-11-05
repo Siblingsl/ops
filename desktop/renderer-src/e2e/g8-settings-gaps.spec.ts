@@ -114,6 +114,99 @@ async function openOwner(page: Page, baseURL: string, tag: string, contentType =
   }
 }
 
+test('DEV-QA26 G1-05 真实 Electron 修改密码拒绝与会话失效', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(180_000)
+  const owner = await openOwner(page, baseURL!, 'password-change')
+  const wrongPasswordSamples: number[] = []
+  const nextPassword = 'local-e2e-password-456'
+  try {
+    await selectDesktopSetting(owner.page, '登录与安全')
+    const settings = owner.page.getByTestId('desktop-settings-window')
+    const oldPassword = settings.getByLabel('当前密码')
+    const newPassword = settings.getByLabel('新密码')
+    const confirmPassword = settings.getByLabel('再输入一次')
+    const submit = settings.getByRole('button', { name: '修改密码', exact: true })
+    await expect(settings.getByRole('heading', { name: '登录与安全', exact: true })).toBeVisible()
+
+    await newPassword.fill(nextPassword)
+    await confirmPassword.fill(nextPassword)
+    for (let index = 0; index < 20; index += 1) {
+      await oldPassword.fill('local-e2e-wrong-password')
+      const rejected = owner.page.waitForResponse((response) =>
+        response.url().endsWith('/api/v1/auth/password') && response.request().method() === 'PUT')
+      const started = performance.now()
+      await submit.click()
+      const response = await rejected
+      wrongPasswordSamples.push(performance.now() - started)
+      expect(response.status()).toBe(422)
+      await expect(owner.page.getByText(/当前密码不正确/).first()).toBeVisible()
+      await expect(submit).toBeEnabled()
+    }
+    expect((await api(page, 'GET', '/auth/me')).username).toBe(owner.username)
+
+    await oldPassword.fill('local-e2e-password-123')
+    const changed = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/auth/password') && response.request().method() === 'PUT')
+    await submit.click()
+    expect((await changed).status()).toBe(200)
+    await expect(owner.page.getByText('密码已修改，其他设备上的登录已失效', { exact: true })).toBeVisible()
+    await expect(oldPassword).toHaveValue('')
+    await expect(newPassword).toHaveValue('')
+    await expect(confirmPassword).toHaveValue('')
+
+    await expect.poll(() => owner.page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    expect((await page.request.get('/api/v1/auth/me')).status()).toBe(401)
+    await owner.page.reload({ waitUntil: 'domcontentloaded' })
+    await expect.poll(() => owner.page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    await owner.page.getByTestId('desktop-settings-window').getByRole('button', { name: '关闭设置', exact: true }).click()
+    await expect(owner.page.getByRole('heading', { name: '今天，给灵感一点空间。', exact: true })).toBeVisible()
+
+    await owner.page.route('**/api/v1/auth/me', async (route) => {
+      const response = await route.fetch()
+      const me = await response.json()
+      me.session_expires_at = new Date(Date.now() + 23 * 60 * 60 * 1000).toISOString()
+      await route.fulfill({ response, body: JSON.stringify(me) })
+    })
+    await owner.page.reload({ waitUntil: 'domcontentloaded' })
+    const expiryBanner = owner.page.getByRole('status').filter({ hasText: '会话将于' })
+    await expect(expiryBanner).toContainText('请先保存内容')
+    await expect(expiryBanner.getByRole('button', { name: '立即续期' })).toBeVisible()
+    await owner.page.unroute('**/api/v1/auth/me')
+    await expiryBanner.getByRole('button', { name: '立即续期' }).click()
+    const renewal = owner.page.getByRole('dialog').filter({ has: owner.page.getByRole('heading', { name: '续期当前会话' }) })
+    await renewal.getByPlaceholder('登录密码').fill(nextPassword)
+    const renewed = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/auth/renew') && response.request().method() === 'POST')
+    await renewal.getByRole('button', { name: '续期 7 天', exact: true }).click()
+    expect((await renewed).status()).toBe(200)
+    await expect(expiryBanner).toHaveCount(0)
+    const session = await owner.page.evaluate(async () => (await fetch('/api/v1/auth/me')).json()) as { session_expires_at: string }
+    expect(new Date(session.session_expires_at).getTime()).toBeGreaterThan(Date.now() + 6 * 24 * 60 * 60 * 1000)
+
+    await page.goto('/login')
+    await page.getByLabel('用户名', { exact: true }).fill(owner.username)
+    await page.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+    const oldLogin = page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/auth/login') && response.request().method() === 'POST')
+    await page.getByRole('button', { name: '登录', exact: true }).click()
+    expect((await oldLogin).status()).toBe(401)
+    await expect(page.getByText(/用户名或密码不正确/)).toBeVisible()
+
+    await page.getByLabel('密码', { exact: true }).fill(nextPassword)
+    const newLogin = page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/auth/login') && response.request().method() === 'POST')
+    await page.getByRole('button', { name: '登录', exact: true }).click()
+    expect((await newLogin).status()).toBe(200)
+    await expect(page.getByRole('heading', { name: /今天写点什么/ })).toBeVisible()
+
+    const sorted = [...wrongPasswordSamples].sort((a, b) => a - b)
+    console.log(`G1-05 Electron 20 次旧密码拒绝 p50=${sorted[9].toFixed(2)}ms p95=${sorted[18].toFixed(2)}ms; rejected=20`)
+  } finally {
+    await closeElectron(owner.app, owner.profile, 'password-change')
+  }
+})
+
 test('DEV-QA26 G8 真实 Electron 模型删除取消与空态读回', async ({ page, baseURL }) => {
   test.skip(process.platform !== 'win32', '需要 Windows Electron')
   test.setTimeout(150_000)
