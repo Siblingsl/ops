@@ -23,7 +23,7 @@ import (
 
 const routineSchedulerWorkerArg = "__agent_routine_scheduler_worker"
 
-func TestAW10RoutineClaimIsUniqueAcrossProcesses(t *testing.T) {
+func TestAW10RoutineSchedulerTickIsUniqueAcrossProcesses(t *testing.T) {
 	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
 	providerID := env.ensureToolModel(t)
 	var account Account
@@ -207,7 +207,7 @@ func runAgentRoutineSchedulerWorker(routineID, barrierURL, databaseURL, mockURL 
 	if response.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("scheduler barrier returned %s", response.Status)
 	}
-	srv.claimAgentRoutineDue(ctx, id)
+	srv.runAgentRoutines(ctx)
 	deadline := time.Now().Add(25 * time.Second)
 	for time.Now().Before(deadline) {
 		var occurrenceStatus string

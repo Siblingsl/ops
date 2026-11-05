@@ -1,7 +1,10 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
@@ -9,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestAW10RoutineFeatureRequiresCompletedRunDependencies(t *testing.T) {
@@ -563,6 +567,82 @@ func TestAW10ExpiredRoutineRunIsMarkedUnknownAndNeverReplayed(t *testing.T) {
 	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE routine_occurrence_id=$1`, occurrenceID).Scan(&runs); err != nil || runs != 1 {
 		t.Fatalf("unknown occurrence must not be retried: runs=%d err=%v", runs, err)
 	}
+}
+
+func TestAW10RoutineSchedulerTickRecoversAbandonedLease(t *testing.T) {
+	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
+	providerID := env.ensureToolModel(t)
+	account := env.accounts(t).wechat
+	var created struct {
+		Routine agentRoutineView `json:"routine"`
+	}
+	env.mustJSON(t, http.MethodPost, "/api/v1/agent/routines", map[string]any{
+		"request_id": uuid.NewString(), "name": "未启动租约恢复", "prompt": "#text 生成一段简短的恢复报告",
+		"public_context_refs": []any{}, "account_id": account.ID.String(), "cadence": "daily", "time_of_day": "09:00",
+		"timezone": "Asia/Shanghai", "destination": "new",
+		"model": map[string]any{"provider_id": providerID, "model": "mock-writer"},
+	}, &created)
+	if created.Routine.ID == uuid.Nil || created.Routine.Status != "enabled" {
+		t.Fatalf("创建租约恢复验收例行任务失败：%+v", created.Routine)
+	}
+	routineID := created.Routine.ID
+	notificationLink := "/agent?panel=task&item=" + routineID.String()
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = env.srv.db.Exec(cleanupCtx, `DELETE FROM notification WHERE link=$1`, notificationLink)
+		rows, err := env.srv.db.Query(cleanupCtx, `SELECT conversation_id FROM agent_run WHERE routine_occurrence_id IN (
+			SELECT id FROM agent_routine_occurrence WHERE routine_id=$1)`, routineID)
+		var conversations []uuid.UUID
+		if err == nil {
+			for rows.Next() {
+				var id uuid.UUID
+				if rows.Scan(&id) == nil {
+					conversations = append(conversations, id)
+				}
+			}
+			rows.Close()
+		}
+		_, _ = env.srv.db.Exec(cleanupCtx, `DELETE FROM agent_routine WHERE id=$1`, routineID)
+		if len(conversations) > 0 {
+			_, _ = env.srv.db.Exec(cleanupCtx, `DELETE FROM agent_conversation WHERE id=ANY($1)`, conversations)
+		}
+	})
+
+	var occurrenceID uuid.UUID
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE agent_routine SET next_due_at=NULL WHERE id=$1`, routineID); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.srv.db.QueryRow(t.Context(), `INSERT INTO agent_routine_occurrence
+		(routine_id,due_at,request_id,kind,status,lease_token,lease_until)
+		VALUES($1,now()-interval '2 minutes',$2,'scheduled','leased',$3,now()-interval '1 minute') RETURNING id`,
+		routineID, uuid.New(), uuid.New()).Scan(&occurrenceID); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	env.srv.runAgentRoutines(t.Context())
+	deadline := time.Now().Add(25 * time.Second)
+	var occurrenceStatus, runStatus string
+	for time.Now().Before(deadline) {
+		err := env.srv.db.QueryRow(t.Context(), `SELECT o.status,COALESCE(run.status,'') FROM agent_routine_occurrence o
+			LEFT JOIN agent_run run ON run.routine_occurrence_id=o.id WHERE o.id=$1`, occurrenceID).Scan(&occurrenceStatus, &runStatus)
+		if err == nil && occurrenceStatus == "completed" && runStatus == "completed" {
+			break
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if occurrenceStatus != "completed" || runStatus != "completed" {
+		t.Fatalf("过期的未启动 lease 应由 scheduler tick 恢复并完成：occurrence=%s run=%s", occurrenceStatus, runStatus)
+	}
+	var runs int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE routine_occurrence_id=$1`, occurrenceID).Scan(&runs); err != nil || runs != 1 {
+		t.Fatalf("恢复同一 occurrence 只应启动一个 run：runs=%d err=%v", runs, err)
+	}
+	t.Logf("DEV-QA26_METRIC_ROUTINE_LEASE_RECOVERY %s", fmt.Sprintf(`{"occurrence":"%s","occurrence_status":"%s","run_status":"%s","runs":%d,"journey_ms":%.2f}`, occurrenceID, occurrenceStatus, runStatus, runs, float64(time.Since(started).Microseconds())/1000))
 }
 
 func TestAW10RoutineCreateControlAndReadOnlyRun(t *testing.T) {
