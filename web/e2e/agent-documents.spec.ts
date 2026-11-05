@@ -16,12 +16,16 @@ async function api(page: Page, method: string, path: string, body?: unknown) {
   }, { method, path, body })
 }
 
-function pdfFixture() {
-  const stream = 'BT /F1 12 Tf 72 720 Td (AW11 PDF source) Tj ET'
+function pdfFixture(options: { pages?: number; withText?: boolean; encrypted?: boolean } = {}) {
+  const pageCount = options.pages ?? 1
+  const fontID = pageCount + 3
+  const contentID = pageCount + 4
+  const stream = options.withText === false ? '' : 'BT /F1 12 Tf 72 720 Td (AW11 PDF source) Tj ET'
+  const pageIDs = Array.from({ length: pageCount }, (_, index) => index + 3)
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    `<< /Type /Pages /Kids [${pageIDs.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageCount} >>`,
+    ...pageIDs.map((id) => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontID} 0 R >> >> /Contents ${contentID} 0 R >>`),
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
     '<< /Length ' + Buffer.byteLength(stream) + ' >>\nstream\n' + stream + '\nendstream',
   ]
@@ -32,16 +36,17 @@ function pdfFixture() {
     return offset
   })
   const xref = Buffer.byteLength(text)
-  text += 'xref\n0 6\n0000000000 65535 f \n'
+  text += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
   for (const offset of offsets) text += String(offset).padStart(10, '0') + ' 00000 n \n'
-  text += 'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF'
+  text += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R${options.encrypted ? ' /Encrypt 0 R' : ''} >>\nstartxref\n` + xref + '\n%%EOF'
   return Buffer.from(text)
 }
 
-function docxFixture() {
+function docxFixture(overrides: Record<string, string> = {}) {
   const files = {
     'word/document.xml': '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>AW11 DOCX 原始资料</w:t></w:r></w:p></w:body></w:document>',
     'docProps/app.xml': '<Properties><Pages>1</Pages></Properties>',
+    ...overrides,
   }
   const local: Buffer[] = [], central: Buffer[] = []
   let offset = 0
@@ -63,8 +68,8 @@ function docxFixture() {
     central.push(entry, name)
     offset += header.length + name.length + data.length
   }
-  const directory = Buffer.concat(central), end = Buffer.alloc(22)
-  end.writeUInt32LE(0x06054b50); end.writeUInt16LE(2, 8); end.writeUInt16LE(2, 10); end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16)
+  const directory = Buffer.concat(central), end = Buffer.alloc(22), entries = Object.keys(files).length
+  end.writeUInt32LE(0x06054b50); end.writeUInt16LE(entries, 8); end.writeUInt16LE(entries, 10); end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16)
   return Buffer.concat([...local, directory, end])
 }
 
@@ -149,6 +154,59 @@ async function journey(page: Page, baseURL: string) {
 test('DEV-AW11 Web文档上传、严格解析回执、隔离失败与安全产物保存', async ({ page, baseURL }) => {
   await journey(page, baseURL!)
   await expect(page.locator('.desktop-agent-workbench')).toHaveCount(0)
+})
+
+test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({ page, baseURL }) => {
+  await prepare(page, baseURL!)
+  const failures: { status: number; code?: string }[] = []
+  let messagePosts = 0
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+  })
+  page.on('response', (response) => {
+    if (new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST') {
+      void response.json().then((body) => failures.push({ status: response.status(), code: body.error?.code })).catch(() => undefined)
+    }
+  })
+  const oversized = Buffer.alloc(20 * 1024 * 1024 + 1)
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await chooser).setFiles([
+    { name: 'oversized.pdf', mimeType: 'application/pdf', buffer: oversized },
+    { name: 'too-many-pages.pdf', mimeType: 'application/pdf', buffer: pdfFixture({ pages: 101 }) },
+    { name: 'scanned.pdf', mimeType: 'application/pdf', buffer: pdfFixture({ withText: false }) },
+    { name: 'encrypted.pdf', mimeType: 'application/pdf', buffer: pdfFixture({ encrypted: true }) },
+    { name: 'external.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ 'word/_rels/document.xml.rels': '<Relationships xmlns="urn:r"><Relationship TargetMode="External" Target="https://example.invalid"/></Relationships>' }) },
+    { name: 'macro.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ '[Content_Types].xml': '<Types><Default ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/></Types>' }) },
+  ])
+  await expect(page.getByLabel('oversized.pdf failed', { exact: true })).toContainText('文件超过大小限制')
+  await expect(page.getByLabel('too-many-pages.pdf failed', { exact: true })).toContainText('超过 100 页')
+  await expect(page.getByLabel('scanned.pdf failed', { exact: true })).toContainText('不支持扫描件')
+  await expect(page.getByLabel('encrypted.pdf failed', { exact: true })).toContainText('已加密或格式损坏')
+  await expect(page.getByLabel('external.docx failed', { exact: true })).toContainText('宏、嵌入对象或外链资源')
+  await expect(page.getByLabel('macro.docx failed', { exact: true })).toContainText('宏、嵌入对象或外链资源')
+  await expect.poll(() => failures.length, { timeout: 40_000 }).toBe(5)
+  expect(failures).toHaveLength(5)
+  expect(failures.every((failure) => failure.status === 422 && failure.code === 'agent_attachment_parse_failed')).toBe(true)
+  await page.getByRole('button', { name: '移除 encrypted.pdf', exact: true }).click()
+  for (const [name, parts] of [
+    ['missing-pages.docx', { 'docProps/app.xml': '<Properties></Properties>' }],
+    ['mismatched-pages.docx', {
+      'word/document.xml': '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>分页不一致</w:t></w:r><w:r><w:br w:type="page"/></w:r></w:p></w:body></w:document>',
+    }],
+  ] as const) {
+    const nextChooser = page.waitForEvent('filechooser')
+    await page.getByRole('button', { name: '添加附件', exact: true }).click()
+    await (await nextChooser).setFiles({ name, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture(parts) })
+    await expect(page.getByLabel(name + ' failed', { exact: true })).toContainText('无法验证 DOCX 的保存分页信息')
+    await expect.poll(() => failures.length, { timeout: 40_000 }).toBe(name === 'missing-pages.docx' ? 6 : 7)
+    await page.getByRole('button', { name: '移除 ' + name, exact: true }).click()
+  }
+  expect(failures).toHaveLength(7)
+  expect(failures.every((failure) => failure.status === 422 && failure.code === 'agent_attachment_parse_failed')).toBe(true)
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+  await expect(page).toHaveURL(/\/agent\/?$/)
+  expect(messagePosts).toBe(0)
 })
 
 
