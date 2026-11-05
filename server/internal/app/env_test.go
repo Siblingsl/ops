@@ -61,6 +61,13 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	if len(os.Args) == 5 && os.Args[1] == "__agent_routine_claim_crash_worker" {
+		if err := runAgentRoutineClaimCrashWorker(os.Args[2], os.Args[3], os.Args[4]); err != nil {
+			fmt.Fprintln(os.Stderr, "例行任务领取崩溃工作进程失败：", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	code, err := runWithEnv(m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "测试环境准备失败：", err)
