@@ -315,3 +315,96 @@ test('DEV-QA26 G2-05 editor 与 viewer 只能切换已加入的工作区', async
     }
   }
 })
+
+test('DEV-QA26 G2-05 真实 Electron 单工作区空列表、创建取消与读取失败重试', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '真实 Electron 客户端验收需要 Windows')
+  test.skip(process.env.OPS_E2E_PROD === '1', '该场景使用本地模拟 API')
+  test.setTimeout(180_000)
+
+  const origin = baseURL ?? 'http://127.0.0.1:5287'
+  const userData = await mkdtemp(join(tmpdir(), 'ops-qa26-g2-workspace-empty-'))
+  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  try {
+    app = await _electron.launch({
+      executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: origin },
+      timeout: 60_000,
+    })
+    const page = await app.firstWindow()
+    await page.goto(`${origin}/register`)
+    await page.getByLabel('用户名', { exact: true }).fill(`qa26-workspace-empty-${Date.now()}`)
+    await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
+    await page.getByRole('button', { name: '创建账号', exact: true }).click()
+    await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+
+    const me = await api(page, 'GET', '/auth/me') as { workspace: { id: string; name: string }; workspaces: Array<{ id: string }> }
+    expect(me.workspaces.map((workspace) => workspace.id)).toEqual([me.workspace.id])
+    const account = await api(page, 'POST', '/accounts', {
+      platform: 'xhs', name: 'QA26 单工作区账号', content_format: 'image_note',
+    }) as { id: string }
+    await page.goto(`${origin}/a/${account.id}`)
+
+    const workspaceWrites: string[] = []
+    const recordWorkspaceWrite = (request: import('@playwright/test').Request) => {
+      const url = new URL(request.url())
+      if (request.method() === 'POST' && url.pathname.startsWith('/api/v1/workspaces')) workspaceWrites.push(url.pathname)
+    }
+    page.on('request', recordWorkspaceWrite)
+
+    const cancelSamples: number[] = []
+    for (let index = 0; index < 20; index += 1) {
+      await openDesktopAccountSwitcher(page)
+      const switcher = page.getByTestId('desktop-context-menu')
+      await expect(switcher.getByText('其他工作区', { exact: true })).toHaveCount(0)
+      await expect(switcher.getByRole('button', { name: /^切换到 / })).toHaveCount(0)
+      const createButton = switcher.getByRole('button', { name: '创建工作区', exact: true })
+      await expect(createButton).toBeEnabled()
+      await createButton.click()
+
+      const dialog = page.getByRole('dialog').filter({
+        has: page.getByRole('heading', { name: '创建新工作区并切换？', exact: true }),
+      })
+      await expect(dialog).toBeVisible()
+      const started = performance.now()
+      await dialog.getByRole('button', { name: '取消', exact: true }).click()
+      await expect(dialog).toBeHidden()
+      cancelSamples.push(performance.now() - started)
+    }
+    page.off('request', recordWorkspaceWrite)
+    expect(workspaceWrites).toEqual([])
+    expect((await api(page, 'GET', '/auth/me') as { workspace: { id: string } }).workspace.id).toBe(me.workspace.id)
+
+    const sorted = [...cancelSamples].sort((a, b) => a - b)
+    const percentile = (p: number) => sorted[Math.ceil(p * sorted.length) - 1]
+    console.log('QA26 G2-05 create workspace cancel', JSON.stringify({
+      count: cancelSamples.length,
+      p50_ms: Number(percentile(0.5).toFixed(2)),
+      p95_ms: Number(percentile(0.95).toFixed(2)),
+      failures: 0,
+      samples_ms: cancelSamples.map((value) => Number(value.toFixed(2))),
+    }))
+
+    const failMe = async (route: import('@playwright/test').Route) => route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'qa26_workspace_list_unavailable', message: 'QA26 注入的工作区清单读取失败' } }),
+    })
+    await page.route('**/api/v1/auth/me', failMe)
+    await page.reload()
+    const authError = page.getByRole('alert')
+    await expect(authError).toContainText('无法确认登录状态')
+    await expect(authError).toContainText('QA26 注入的工作区清单读取失败')
+    await page.unroute('**/api/v1/auth/me', failMe)
+    await page.getByRole('button', { name: '重试', exact: true }).click()
+    await expect(page.getByTestId('desktop-dashboard')).toBeVisible()
+    expect((await api(page, 'GET', '/auth/me') as { workspace: { id: string } }).workspace.id).toBe(me.workspace.id)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close().catch(() => undefined)
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-qa26-g2-workspace-empty-')) {
+      throw new Error('拒绝清理测试目录之外路径')
+    }
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
