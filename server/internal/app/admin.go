@@ -228,12 +228,25 @@ func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request) error {
 			if targetID == ident(r.Context()).UserID {
 				return validation("不能禁用当前登录的超级管理员账号")
 			}
-			if _, err := s.db.Exec(r.Context(), `UPDATE app_user SET disabled_at=now(), updated_at=now() WHERE id=$1`, targetID); err != nil {
+			var paused []agentRoutinePause
+			var stopRuns []uuid.UUID
+			if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+				if _, err := tx.Exec(r.Context(), `UPDATE app_user SET disabled_at=now(), updated_at=now() WHERE id=$1`, targetID); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(r.Context(), `DELETE FROM session WHERE user_id=$1`, targetID); err != nil {
+					return err
+				}
+				var err error
+				paused, stopRuns, err = s.pauseAgentRoutinesForUserTx(r.Context(), tx, targetID)
+				return err
+			}); err != nil {
 				return err
 			}
-			if _, err := s.db.Exec(r.Context(), `DELETE FROM session WHERE user_id=$1`, targetID); err != nil {
-				return err
+			for _, runID := range stopRuns {
+				s.agentCancelRun(runID)
 			}
+			s.notifyAgentRoutineUserPauses(r.Context(), paused, "system_user_disabled")
 		} else {
 			if _, err := s.db.Exec(r.Context(), `UPDATE app_user SET disabled_at=NULL, updated_at=now() WHERE id=$1`, targetID); err != nil {
 				return err

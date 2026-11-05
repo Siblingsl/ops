@@ -82,7 +82,8 @@ func run() error {
 	cfg := &config.Config{Dev: true, Listen: listenAddr, DatabaseURL: u.String(),
 		DataDir: filepath.Join(os.TempDir(), databaseName+"-assets"), MockListen: mockListenAddr,
 		WechatBase: "http://" + mockListenAddr, MasterKey: make([]byte, 32), CrawlMode: "off", AIWorkers: 3,
-		DesktopAIEnabled: desktopAIEnabled, DesktopPlatformEnabled: platformEnabled}
+		DesktopAIEnabled: desktopAIEnabled, DesktopPlatformEnabled: platformEnabled,
+		SystemAdminUser: "skyeder", SystemAdminPassword: "local-e2e-admin-pass-456"}
 	if err := db.Migrate(cfg.DatabaseURL); err != nil {
 		return err
 	}
@@ -93,6 +94,9 @@ func run() error {
 	defer pool.Close()
 	srv, err := app.New(cfg, pool)
 	if err != nil {
+		return err
+	}
+	if err := srv.EnsurePermanentAdmin(ctx); err != nil {
 		return err
 	}
 	// D-160：OPS_E2E_DESKTOP_AI_ENABLED=1 通过一次性种子写入 desktop.ai_enabled；

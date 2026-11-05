@@ -290,6 +290,131 @@ func TestAW10RoutinePausesWhenWorkspaceAgentIsDisabled(t *testing.T) {
 	}
 }
 
+func TestAW10RoutinePausesWhenSystemUserIsDisabled(t *testing.T) {
+	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
+	providerID := env.ensureToolModel(t)
+	account := env.accounts(t).xhs
+	owner := env.me(t)
+	ownerID, workspaceID := uuid.MustParse(owner.UserID), uuid.MustParse(owner.Workspace.ID)
+	memberUsername := "qa26-routine-user-disable-" + uuid.NewString()[:8]
+	memberID := uuid.New()
+	if _, err := env.srv.db.Exec(t.Context(), `INSERT INTO app_user (id,username,password_hash)
+		SELECT $1,$2,password_hash FROM app_user WHERE id=$3`, memberID, memberUsername, ownerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.srv.db.Exec(t.Context(), `INSERT INTO workspace_member (workspace_id,user_id,role,status)
+		VALUES ($1,$2,'editor','active')`, workspaceID, memberID); err != nil {
+		t.Fatal(err)
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := &guestClient{
+		parent: env, client: &http.Client{Jar: jar, Timeout: time.Minute}, savedC: env.client, savedX: env.csrf,
+	}
+	var created struct {
+		Routine agentRoutineView `json:"routine"`
+	}
+	notificationLink := ""
+	t.Cleanup(func() {
+		member.restore(env)
+		if notificationLink != "" {
+			_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM notification WHERE link=$1`, notificationLink)
+		}
+		if created.Routine.ID != uuid.Nil {
+			_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_routine WHERE id=$1`, created.Routine.ID)
+		}
+		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM session WHERE user_id=$1`, memberID)
+		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM app_user WHERE id=$1`, memberID)
+		if status, body := env.do(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": "owner", "password": testPassword}); status != http.StatusOK {
+			t.Errorf("恢复 owner 会话失败：%d %s", status, body)
+		}
+		env.csrf = env.me(t).CSRF
+	})
+	status, body := member.do(http.MethodPost, "/api/v1/auth/login", map[string]string{
+		"username": memberUsername, "password": testPassword,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("登录隔离工作区成员失败：status=%d body=%s", status, body)
+	}
+	var memberMe struct {
+		CSRF string `json:"csrf_token"`
+	}
+	member.mustJSON(t, http.MethodGet, "/api/v1/auth/me", nil, &memberMe)
+	member.csrf = memberMe.CSRF
+	member.mustJSON(t, http.MethodPost, "/api/v1/agent/routines", map[string]any{
+		"request_id": uuid.NewString(), "name": "系统用户停用暂停验收", "prompt": "只读核对",
+		"public_context_refs": []any{}, "account_id": account.ID.String(), "cadence": "daily", "time_of_day": "09:00",
+		"timezone": "Asia/Shanghai", "destination": "new",
+		"model": map[string]any{"provider_id": providerID, "model": "mock-writer"},
+	}, &created)
+	if created.Routine.ID == uuid.Nil || created.Routine.Status != "enabled" {
+		t.Fatalf("成员例行任务创建失败：%+v", created.Routine)
+	}
+	notificationLink = "/agent?panel=task&item=" + created.Routine.ID.String()
+	member.restore(env)
+	status, body = env.do(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": "skyeder", "password": testAdminPassword})
+	if status != http.StatusOK {
+		t.Fatalf("登录系统管理员失败：%d %s", status, body)
+	}
+	var adminMe struct {
+		CSRF string `json:"csrf_token"`
+	}
+	env.mustJSON(t, http.MethodGet, "/api/v1/auth/me", nil, &adminMe)
+	env.csrf = adminMe.CSRF
+	env.mustJSON(t, http.MethodPatch, "/api/v1/admin/users/"+memberID.String(), map[string]bool{"disabled": true}, nil)
+	var routineStatus, reason string
+	var nextDueNull bool
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT status,error_code,next_due_at IS NULL FROM agent_routine WHERE id=$1`, created.Routine.ID).
+		Scan(&routineStatus, &reason, &nextDueNull); err != nil {
+		t.Fatal(err)
+	}
+	if routineStatus != "paused" || reason != "system_user_disabled" || !nextDueNull {
+		t.Fatalf("系统用户停用后必须立即暂停其例行任务：status=%s error_code=%s next_due_at_null=%v", routineStatus, reason, nextDueNull)
+	}
+	var eventCount, notificationCount int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_event WHERE routine_id=$1
+		AND type='paused' AND payload->>'reason'='system_user_disabled'`, created.Routine.ID).Scan(&eventCount); err != nil || eventCount != 1 {
+		t.Fatalf("系统用户停用后必须写入暂停事件：count=%d err=%v", eventCount, err)
+	}
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM notification WHERE workspace_id=$1 AND user_id=$2
+		AND kind='agent_routine' AND title='例行任务已暂停' AND link=$3 AND body LIKE '%系统用户已停用%'`,
+		workspaceID, memberID, notificationLink).Scan(&notificationCount); err != nil || notificationCount != 1 {
+		t.Fatalf("系统用户停用后必须通知任务创建者：count=%d err=%v", notificationCount, err)
+	}
+	if status, body := member.do(http.MethodGet, "/api/v1/auth/me", nil); status != http.StatusUnauthorized {
+		t.Fatalf("停用系统用户后必须使其会话失效：status=%d body=%s", status, body)
+	}
+	member.restore(env)
+	env.csrf = adminMe.CSRF
+	env.mustJSON(t, http.MethodPatch, "/api/v1/admin/users/"+memberID.String(), map[string]bool{"disabled": false}, nil)
+	status, body = member.do(http.MethodPost, "/api/v1/auth/login", map[string]string{
+		"username": memberUsername, "password": testPassword,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("管理员重新启用用户后用户登录失败：status=%d body=%s", status, body)
+	}
+	member.mustJSON(t, http.MethodGet, "/api/v1/auth/me", nil, &memberMe)
+	member.csrf = memberMe.CSRF
+	var paused struct {
+		Items []agentRoutineView `json:"items"`
+	}
+	member.mustJSON(t, http.MethodGet, "/api/v1/agent/routines", nil, &paused)
+	if len(paused.Items) != 1 || paused.Items[0].ID != created.Routine.ID || paused.Items[0].Status != "paused" || paused.Items[0].ErrorCode != "system_user_disabled" {
+		t.Fatalf("重新启用用户不得自动恢复例行任务：%+v", paused.Items)
+	}
+	var enabled struct {
+		Routine agentRoutineView `json:"routine"`
+	}
+	member.mustJSON(t, http.MethodPost, "/api/v1/agent/routines/"+created.Routine.ID.String()+"/control", map[string]any{
+		"expected_revision": paused.Items[0].Revision, "request_id": uuid.NewString(), "action": "enable",
+	}, &enabled)
+	if enabled.Routine.Status != "enabled" || enabled.Routine.ErrorCode != "" {
+		t.Fatalf("用户重新启用任务后状态错误：%+v", enabled.Routine)
+	}
+}
+
 func TestAW10RoutineToolAllowlistCannotReachBusinessWrites(t *testing.T) {
 	allowed := []string{
 		"works__list", "works__get", "works__read_sections", "review__dashboard", "review__top_works",

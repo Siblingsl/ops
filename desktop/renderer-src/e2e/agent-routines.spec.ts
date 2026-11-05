@@ -1,9 +1,16 @@
 import { _electron, expect, test, type Page } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { selectDesktopSetting } from './support'
+
+async function closeQaElectron(app: Awaited<ReturnType<typeof _electron.launch>> | undefined) {
+  if (!app) return
+  try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 只关闭本用例创建的客户端。 */ }
+  await Promise.race([app.close().catch(() => undefined), new Promise((done) => setTimeout(done, 2_000))])
+}
 
 async function api(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(async ({ method, path, body }) => {
@@ -442,6 +449,115 @@ test('DEV-QA26 Windows Electron停用例行任务模型后应立即暂停', asyn
     await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
     await app?.close()
     if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-qa26-routine-model-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('DEV-QA26 Windows Electron系统用户停用后暂停例行任务并逐项恢复', async ({ baseURL }, testInfo) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(240_000)
+  const startedAt = Date.now()
+  const userData = await mkdtemp(join(tmpdir(), 'ops-qa26-routine-user-disable-'))
+  const adminData = await mkdtemp(join(tmpdir(), 'ops-qa26-routine-admin-disable-'))
+  let userApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  let adminApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  try {
+    const electronPath = resolve(process.cwd(), '../node_modules/electron/dist/electron.exe')
+    const mainPath = resolve(process.cwd(), '../.build/main.js')
+    userApp = await _electron.launch({ executablePath: electronPath, args: [`--user-data-dir=${userData}`, mainPath],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const userPage = await userApp.firstWindow()
+    await prepareRoutine(userPage, baseURL!)
+    const identity = await api(userPage, 'GET', '/auth/me')
+    const username = identity.username as string
+    const name = `QA26 系统用户停用 ${Date.now()}`
+    await userPage.goto(`${baseURL}/agent`)
+    await userPage.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const routineDialog = userPage.getByRole('dialog').filter({ has: userPage.getByRole('heading', { name: '受限例行任务', exact: true }) })
+    await routineDialog.getByLabel('名称', { exact: true }).fill(name)
+    await routineDialog.getByLabel('任务提示（最多 4000 字）', { exact: true }).fill('按只读权限核对账号表现并生成报告。')
+    const routineSelectors = routineDialog.getByRole('combobox')
+    await routineSelectors.nth(0).selectOption({ index: 1 })
+    await routineSelectors.nth(1).selectOption({ index: 1 })
+    const createdResponse = userPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/routines' && response.request().method() === 'POST')
+    const createButton = routineDialog.getByRole('button', { name: '创建并启用', exact: true })
+    await expect(createButton).toBeEnabled()
+    await createButton.click()
+    expect((await createdResponse).status()).toBe(200)
+    const routine = (await api(userPage, 'GET', '/agent/routines')).items.find((item: { name: string }) => item.name === name)
+    expect(routine.status).toBe('enabled')
+
+    adminApp = await _electron.launch({ executablePath: electronPath, args: [`--user-data-dir=${adminData}`, mainPath],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const adminPage = await adminApp.firstWindow()
+    await adminPage.goto(`${baseURL}/login`)
+    await adminPage.getByLabel('用户名', { exact: true }).fill('skyeder')
+    await adminPage.getByLabel('密码', { exact: true }).fill('local-e2e-admin-pass-456')
+    const adminLogin = adminPage.waitForResponse((response) =>
+      new URL(response.url()).pathname === '/api/v1/auth/login' && response.request().method() === 'POST')
+    await adminPage.getByRole('button', { name: '登录', exact: true }).click()
+    expect((await adminLogin).status()).toBe(200)
+    await adminPage.goto(`${baseURL}/settings/admin`)
+    await expect(adminPage.getByText('用户', { exact: true })).toBeVisible()
+    const userCard = adminPage.getByRole('heading', { name: '用户', exact: true })
+      .locator('..').locator('..').locator('..')
+    const userRow = userCard.getByRole('listitem').filter({ hasText: username })
+    await expect(userRow).toBeVisible()
+    await expect(userRow.getByText(/会话 1/)).toBeVisible()
+    const disableButton = userRow.getByRole('button', { name: '禁用', exact: true })
+    const disableResponse = adminPage.waitForResponse((response) =>
+      new URL(response.url()).pathname.startsWith('/api/v1/admin/users/') && response.request().method() === 'PATCH')
+    await disableButton.click()
+    expect((await disableResponse).status()).toBe(200)
+    await expect(userRow.getByRole('button', { name: '启用', exact: true })).toBeVisible()
+    await expect(userRow.getByText(/会话 0/)).toBeVisible()
+    expect(await userPage.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(401)
+
+    const enableButton = userRow.getByRole('button', { name: '启用', exact: true })
+    const enableResponse = adminPage.waitForResponse((response) =>
+      new URL(response.url()).pathname.startsWith('/api/v1/admin/users/') && response.request().method() === 'PATCH')
+    await enableButton.click()
+    expect((await enableResponse).status()).toBe(200)
+    await expect(userRow.getByRole('button', { name: '禁用', exact: true })).toBeVisible()
+    await expect(userRow.getByText(/会话 0/)).toBeVisible()
+
+    await userPage.goto(`${baseURL}/login`)
+    await userPage.getByLabel('用户名', { exact: true }).fill(username)
+    await userPage.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+    const userLogin = userPage.waitForResponse((response) =>
+      new URL(response.url()).pathname === '/api/v1/auth/login' && response.request().method() === 'POST')
+    await userPage.getByRole('button', { name: '登录', exact: true }).click()
+    expect((await userLogin).status()).toBe(200)
+    await userPage.goto(`${baseURL}/agent`)
+    await userPage.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const task = userPage.locator('article').filter({ hasText: name })
+    await expect(task.getByText('已暂停', { exact: true })).toBeVisible()
+    await expect(task.getByText(/系统用户已停用；重新启用用户后，请手动重新启用此任务。/)).toBeVisible()
+    await expect(task.getByRole('button', { name: '立即运行一次', exact: true })).toHaveCount(0)
+    await expect(task.getByRole('button', { name: '重新启用', exact: true })).toBeVisible()
+    const paused = (await api(userPage, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)
+    expect(paused.status).toBe('paused')
+    expect(paused.error_code).toBe('system_user_disabled')
+    expect(paused.next_due_at).toBeFalsy()
+    expect((await api(userPage, 'GET', '/notifications')).items.some((item: { kind: string; body: string; link: string }) => item.kind === 'agent_routine' && item.body.includes('系统用户已停用') && item.link.includes(routine.id))).toBe(true)
+    await userPage.reload()
+    await userPage.goto(`${baseURL}/agent`)
+    await userPage.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const restoredTask = userPage.locator('article').filter({ hasText: name })
+    const reenabled = userPage.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/routines/${routine.id}/control` && response.request().method() === 'POST')
+    await restoredTask.getByRole('button', { name: '重新启用', exact: true }).click()
+    expect((await reenabled).status()).toBe(200)
+    expect((await api(userPage, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id).status).toBe('enabled')
+
+    const journeyMs = Date.now() - startedAt
+    testInfo.attach('system-user-disable-journey.json', { body: JSON.stringify({ environment: 'Windows native Electron; local mock API', journey_ms: journeyMs, failed: 0 }, null, 2), contentType: 'application/json' })
+    console.log(`DEV-QA26_SYSTEM_USER_DISABLE_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local mock API', journey_ms: journeyMs, failed: 0 })}`)
+  } finally {
+    await closeQaElectron(adminApp)
+    await closeQaElectron(userApp)
+    if (!resolve(adminData).startsWith(resolve(tmpdir()) + sep) || !basename(adminData).startsWith('ops-qa26-routine-admin-disable-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(adminData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-qa26-routine-user-disable-')) throw new Error('拒绝清理测试目录之外路径')
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })

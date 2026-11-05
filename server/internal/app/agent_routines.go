@@ -1474,8 +1474,8 @@ func (s *Server) agentRoutineEventTx(ctx context.Context, tx pgx.Tx, routineID u
 }
 
 type agentRoutineModelPause struct {
-	id, userID uuid.UUID
-	revision   int64
+	id, userID, workspaceID uuid.UUID
+	revision                int64
 }
 
 type agentRoutinePause = agentRoutineModelPause
@@ -1502,6 +1502,7 @@ func (s *Server) pauseUnavailableAgentRoutinesForProviderTx(ctx context.Context,
 			rows.Close()
 			return nil, err
 		}
+		item.workspaceID = workspaceID
 		paused = append(paused, item)
 	}
 	rows.Close()
@@ -1538,6 +1539,36 @@ func (s *Server) pauseAgentRoutinesForWorkspaceTx(ctx context.Context, tx pgx.Tx
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
 	}
+	for i := range paused {
+		paused[i].workspaceID = workspaceID
+	}
+	return s.interruptAgentRoutinePausesTx(ctx, tx, paused, "agent_disabled")
+}
+
+func (s *Server) pauseAgentRoutinesForUserTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) ([]agentRoutinePause, []uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `UPDATE agent_routine SET status='paused',next_due_at=NULL,revision=revision+1,
+		error_code='system_user_disabled',updated_at=now() WHERE user_id=$1 AND status='enabled'
+		RETURNING id,workspace_id,user_id,revision`, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	paused := []agentRoutinePause{}
+	for rows.Next() {
+		var item agentRoutinePause
+		if err := rows.Scan(&item.id, &item.workspaceID, &item.userID, &item.revision); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		paused = append(paused, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return s.interruptAgentRoutinePausesTx(ctx, tx, paused, "system_user_disabled")
+}
+
+func (s *Server) interruptAgentRoutinePausesTx(ctx context.Context, tx pgx.Tx, paused []agentRoutinePause, reason string) ([]agentRoutinePause, []uuid.UUID, error) {
 	stopRuns := []uuid.UUID{}
 	for _, item := range paused {
 		var runID, occurrenceID, conversationID *uuid.UUID
@@ -1562,13 +1593,13 @@ func (s *Server) pauseAgentRoutinesForWorkspaceTx(ctx context.Context, tx pgx.Tx
 			occurrenceStatus = "stopping"
 		} else if occurrenceID != nil {
 			if _, err := tx.Exec(ctx, `UPDATE agent_routine_occurrence SET status='interrupted',lease_token=NULL,
-				lease_until=NULL,error_code='agent_disabled',finished_at=now() WHERE id=$1 AND status='leased'`, *occurrenceID); err != nil {
+				lease_until=NULL,error_code=$2,finished_at=now() WHERE id=$1 AND status='leased'`, *occurrenceID, reason); err != nil {
 				return nil, nil, err
 			}
 			occurrenceStatus = "interrupted"
 		}
 		pending, err := tx.Exec(ctx, `UPDATE agent_routine_occurrence SET status='interrupted',lease_token=NULL,
-			lease_until=NULL,error_code='agent_disabled',finished_at=now() WHERE routine_id=$1 AND status='pending'`, item.id)
+			lease_until=NULL,error_code=$2,finished_at=now() WHERE routine_id=$1 AND status='pending'`, item.id, reason)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1576,7 +1607,7 @@ func (s *Server) pauseAgentRoutinesForWorkspaceTx(ctx context.Context, tx pgx.Tx
 			occurrenceStatus = "interrupted"
 		}
 		if err := s.agentRoutineEventTx(ctx, tx, item.id, "paused", map[string]any{
-			"reason": "agent_disabled", "revision": item.revision, "occurrence_id": occurrenceID,
+			"reason": reason, "revision": item.revision, "occurrence_id": occurrenceID,
 			"occurrence_status": occurrenceStatus,
 		}); err != nil {
 			return nil, nil, err
@@ -1592,6 +1623,8 @@ func (s *Server) notifyAgentRoutinePauses(ctx context.Context, workspaceID uuid.
 		body = "任务模型不可用：绑定的服务器模型已停用、配置变更或未通过工具能力自检；恢复模型并完成自检后，请手动重新启用此任务。"
 	case "agent_disabled":
 		body = "工作区已关闭智能体；所有者重新开启后，请手动重新启用此任务。"
+	case "system_user_disabled":
+		body = "系统用户已停用；重新启用用户后，请手动重新启用此任务。"
 	default:
 		return
 	}
@@ -1600,6 +1633,16 @@ func (s *Server) notifyAgentRoutinePauses(ctx context.Context, workspaceID uuid.
 			body,
 			"/agent?panel=task&item="+item.id.String(),
 			"agent_routine:blocked:"+item.id.String()+":"+strconv.FormatInt(item.revision, 10))
+	}
+}
+
+func (s *Server) notifyAgentRoutineUserPauses(ctx context.Context, paused []agentRoutinePause, reason string) {
+	byWorkspace := make(map[uuid.UUID][]agentRoutinePause)
+	for _, item := range paused {
+		byWorkspace[item.workspaceID] = append(byWorkspace[item.workspaceID], item)
+	}
+	for workspaceID, items := range byWorkspace {
+		s.notifyAgentRoutinePauses(ctx, workspaceID, items, reason)
 	}
 }
 
