@@ -33,6 +33,7 @@ const ALLOWLIST = new Map([
   ['g6-followers-sync.spec.ts', '公众号近 7 天粉丝接口同步、权限提示与手动回退：浏览器 vs 真实 Electron'],
   ['opt38.spec.ts', '单篇 Markdown 导出内容与图片顺序：浏览器下载流 vs 原生 Electron 文件写入'],
   ['opt36-work-tags.spec.ts', '作品自由标签真实保存、筛选与命令面板搜索：浏览器 vs 原生 Electron'],
+  ['g4-08-summary.spec.ts', '公众号摘要生成、120 字边界与保存持久化：浏览器 vs 原生 Electron'],
   ['g8-settings-gaps.spec.ts', '模型空态、编辑者成员管理权限、回收站永久删除：浏览器 vs 真实 Electron'],
   ['g8-empty-create.spec.ts', '空作品页空白新建不把点击事件写入标题：浏览器 vs 真实 Electron'],
   ['g6-review-import-quality.spec.ts', 'CSV 逐行确认与非空复盘质量看板：浏览器 vs 真实 Electron'],

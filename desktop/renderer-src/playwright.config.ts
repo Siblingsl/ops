@@ -122,6 +122,7 @@ export default defineConfig({
         'g8-settings-gaps.spec.ts',
         'g8-empty-create.spec.ts',
         'g4-works-list-electron.spec.ts',
+        'g4-08-summary.spec.ts',
         'opt36-work-tags.spec.ts',
         'opt38.spec.ts',
         'cx18-benchmark-electron.spec.ts',
