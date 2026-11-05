@@ -127,6 +127,21 @@ func TestParseDOCXAcceptsLargeDocumentEntryAndTruncatesText(t *testing.T) {
 	t.Logf("DEV-QA26_METRIC_DOCX_LARGE_ENTRY %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"extracted_chars":%d,"injected_chars":%d}`, expandedDocumentEntry, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ExtractedChars, result.InjectedChars))
 }
 
+func TestParseDOCXAcceptsEightMiBDocumentEntryAndTruncatesText(t *testing.T) {
+	const expandedDocumentEntry = 8 << 20
+	compressed, ratio := compressedDocumentEntryDOCXFixture(t, expandedDocumentEntry)
+	start := time.Now()
+	result, err := parseInWASI("large-document-entry-8mib.docx", compressed)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("8 MiB compressed DOCX entry should parse: result %+v, err %v", result, err)
+	}
+	if result.Pages == nil || *result.Pages != 1 || result.PageBasis != "docx_saved_pagination" || result.InjectedChars != 20000 || result.TruncatedFrom == nil || *result.TruncatedFrom != 20001 || result.TruncatedTo == nil || *result.TruncatedTo != result.ExtractedChars || result.ExtractedChars <= result.InjectedChars || len([]rune(result.Text)) != result.InjectedChars {
+		t.Fatalf("8 MiB DOCX entry should parse with a bounded text receipt: %+v", result)
+	}
+	t.Logf("DEV-QA26_METRIC_DOCX_8MIB_ENTRY %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"extracted_chars":%d,"injected_chars":%d}`, expandedDocumentEntry, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ExtractedChars, result.InjectedChars))
+}
+
 func highCompressionDOCXFixture(t *testing.T) ([]byte, float64) {
 	t.Helper()
 	const expandedLimit = 96 << 20

@@ -89,6 +89,22 @@ func TestParseLargeDocumentEntryThroughLinuxParserService(t *testing.T) {
 	t.Logf("DEV-QA26_METRIC_DOCX_LINUX_LARGE_ENTRY %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"extracted_chars":%d,"injected_chars":%d}`, expandedDocumentEntry, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ExtractedChars, result.InjectedChars))
 }
 
+func TestParseEightMiBDocumentEntryThroughLinuxParserService(t *testing.T) {
+	const expandedDocumentEntry = 8 << 20
+	startParserServiceForTest(t)
+	compressed, ratio := compressedDocumentEntryDOCXFixture(t, expandedDocumentEntry)
+	start := time.Now()
+	result, err := Parse(context.Background(), "large-document-entry-8mib.docx", compressed)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Linux parser service should accept an 8 MiB expanded DOCX entry: result %+v err %v", result, err)
+	}
+	if result.Pages == nil || *result.Pages != 1 || result.PageBasis != "docx_saved_pagination" || result.InjectedChars != 20000 || result.TruncatedFrom == nil || *result.TruncatedFrom != 20001 || result.TruncatedTo == nil || *result.TruncatedTo != result.ExtractedChars || result.ExtractedChars <= result.InjectedChars || len([]rune(result.Text)) != result.InjectedChars {
+		t.Fatalf("Linux parser service returned an unexpected 8 MiB entry receipt: %+v", result)
+	}
+	t.Logf("DEV-QA26_METRIC_DOCX_LINUX_8MIB_ENTRY %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"extracted_chars":%d,"injected_chars":%d}`, expandedDocumentEntry, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ExtractedChars, result.InjectedChars))
+}
+
 func startParserServiceForTest(t *testing.T) {
 	t.Helper()
 	socket := filepath.Join(t.TempDir(), "parser.sock")

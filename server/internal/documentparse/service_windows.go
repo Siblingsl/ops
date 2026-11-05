@@ -8,5 +8,5 @@ import (
 )
 
 func parseWithLinuxService(context.Context, []byte) ([]byte, error) {
-	return nil, errors.New("Linux document parser service is unavailable on Windows")
+	return nil, errors.New("linux document parser service is unavailable on Windows")
 }
