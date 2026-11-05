@@ -182,6 +182,55 @@ func (s *Server) listMembers(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, list)
 }
 
+type memberRoutinePause struct {
+	id       uuid.UUID
+	revision int64
+}
+
+func (s *Server) pauseMemberRoutinesTx(ctx context.Context, tx pgx.Tx, workspaceID, userID uuid.UUID, reason string) ([]memberRoutinePause, error) {
+	rows, err := tx.Query(ctx, `UPDATE agent_routine SET status='paused',next_due_at=NULL,
+		revision=revision+1,error_code=$3,updated_at=now()
+		WHERE workspace_id=$1 AND user_id=$2 AND status='enabled' RETURNING id,revision`, workspaceID, userID, reason)
+	if err != nil {
+		return nil, err
+	}
+	paused := []memberRoutinePause{}
+	for rows.Next() {
+		var item memberRoutinePause
+		if err := rows.Scan(&item.id, &item.revision); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		paused = append(paused, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, item := range paused {
+		if err := s.agentRoutineEventTx(ctx, tx, item.id, "paused", map[string]any{
+			"reason": reason, "revision": item.revision,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return paused, nil
+}
+
+func (s *Server) notifyMemberRoutinePauses(ctx context.Context, workspaceID, userID uuid.UUID, paused []memberRoutinePause, reason string) {
+	message := "创建者权限已撤销；恢复编辑权限后，请手动重新启用此任务。"
+	if reason == "member_removed" {
+		message = "创建者已移出此工作区；重新加入并恢复编辑权限后，请手动重新启用此任务。"
+	} else if reason == "member_role_revoked" {
+		message = "创建者当前是观察者；恢复编辑权限后，请手动重新启用此任务。"
+	}
+	for _, item := range paused {
+		s.notify(ctx, workspaceID, userID, "agent_routine", "例行任务已暂停", message,
+			"/agent?panel=task&item="+item.id.String(),
+			fmt.Sprintf("agent_routine:blocked:%s:%d", item.id, item.revision))
+	}
+}
+
 func (s *Server) patchMember(w http.ResponseWriter, r *http.Request) error {
 	if err := s.requireOwner(r.Context()); err != nil {
 		return err
@@ -209,11 +258,16 @@ func (s *Server) patchMember(w http.ResponseWriter, r *http.Request) error {
 		}
 		// DEV-SK1 / 23 文档第 5.3 节：成员退出 / 被移出在成员变更事务中删除其本人绑定；
 		// 个人定义保留，重加入不自动恢复。
+		var paused []memberRoutinePause
 		err := s.withTx(r.Context(), func(tx pgx.Tx) error {
 			if _, err := tx.Exec(r.Context(), `SELECT id FROM workspace_member WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE`, ws, targetID); err != nil {
 				return err
 			}
 			if err := s.deleteMemberSkillBindings(r.Context(), tx, ws, targetID); err != nil {
+				return err
+			}
+			paused, err = s.pauseMemberRoutinesTx(r.Context(), tx, ws, targetID, "member_removed")
+			if err != nil {
 				return err
 			}
 			tag, err := tx.Exec(r.Context(), `DELETE FROM workspace_member WHERE workspace_id=$1 AND user_id=$2`, ws, targetID)
@@ -229,6 +283,7 @@ func (s *Server) patchMember(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		s.audit(r.Context(), "member_remove", "user", targetID.String(), "ok", nil)
+		s.notifyMemberRoutinePauses(r.Context(), ws, targetID, paused, "member_removed")
 		return ok(w, map[string]any{"ok": true})
 	}
 	if in.Role != nil {
@@ -256,46 +311,15 @@ func (s *Server) patchMember(w http.ResponseWriter, r *http.Request) error {
 			if tag.RowsAffected() == 0 {
 				return errNotFound
 			}
-			type pausedRoutine struct {
-				id       uuid.UUID
-				revision int64
-			}
-			var paused []pausedRoutine
-			rows, err := tx.Query(r.Context(), `UPDATE agent_routine SET status='paused',next_due_at=NULL,
-				revision=revision+1,error_code='member_role_revoked',updated_at=now()
-				WHERE workspace_id=$1 AND user_id=$2 AND status='enabled' RETURNING id,revision`, ws, targetID)
+			paused, err := s.pauseMemberRoutinesTx(r.Context(), tx, ws, targetID, "member_role_revoked")
 			if err != nil {
 				return err
-			}
-			for rows.Next() {
-				var item pausedRoutine
-				if err := rows.Scan(&item.id, &item.revision); err != nil {
-					rows.Close()
-					return err
-				}
-				paused = append(paused, item)
-			}
-			rows.Close()
-			if err := rows.Err(); err != nil {
-				return err
-			}
-			for _, item := range paused {
-				if err := s.agentRoutineEventTx(r.Context(), tx, item.id, "paused", map[string]any{
-					"reason": "member_role_revoked", "revision": item.revision,
-				}); err != nil {
-					return err
-				}
 			}
 			if err := tx.Commit(r.Context()); err != nil {
 				return err
 			}
 			s.audit(r.Context(), "member_update", "user", targetID.String(), "ok", nil)
-			for _, item := range paused {
-				s.notify(r.Context(), ws, targetID, "agent_routine", "例行任务已暂停",
-					"创建者已降为观察者，例行任务权限已撤销；恢复编辑权限后，请手动重新启用此任务。",
-					"/agent?panel=task&item="+item.id.String(),
-					fmt.Sprintf("agent_routine:blocked:%s:%d", item.id, item.revision))
-			}
+			s.notifyMemberRoutinePauses(r.Context(), ws, targetID, paused, "member_role_revoked")
 			return ok(w, map[string]any{"ok": true})
 		}
 		tag, err := s.db.Exec(r.Context(),

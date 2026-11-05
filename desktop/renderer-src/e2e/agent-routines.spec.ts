@@ -189,7 +189,7 @@ test('DEV-QA26 Windows Electron停用绑定账号后暂停例行任务并逐项�
   }
 })
 
-test('DEV-QA26 Windows Electron创建者降为观察者后暂停例行任务并逐项恢复', async ({ baseURL, browser }) => {
+test('DEV-QA26 Windows Electron创建者降为观察者与移出后暂停例行任务', async ({ baseURL, browser }) => {
   test.skip(process.platform !== 'win32', '需要Windows Electron')
   test.setTimeout(240_000)
   const ownerProfile = await mkdtemp(join(tmpdir(), 'ops-qa26-routine-role-owner-'))
@@ -265,6 +265,48 @@ test('DEV-QA26 Windows Electron创建者降为观察者后暂停例行任务并�
     const enableRoutine = editorPage.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/routines/${routine.id}/control` && response.request().method() === 'POST')
     await restoredTask.getByRole('button', { name: '重新启用', exact: true }).click()
     expect((await enableRoutine).status()).toBe(200)
+    await expect.poll(async () => (await api(editorPage, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('enabled')
+
+    await memberRow.getByRole('button', { name: '移出', exact: true }).click()
+    const cancelRemoval = ownerPage.getByRole('dialog').filter({ has: ownerPage.getByRole('heading', { name: `移出 ${editorUsername}？`, exact: true }) })
+    await cancelRemoval.getByRole('button', { name: '取消', exact: true }).click()
+    await expect(memberRow).toBeVisible()
+    expect((await api(ownerPage, 'GET', '/workspaces/current/members')).some((item: { user_id: string }) => item.user_id === editorMe.user_id)).toBe(true)
+
+    await memberRow.getByRole('button', { name: '移出', exact: true }).click()
+    const confirmRemoval = ownerPage.getByRole('dialog').filter({ has: ownerPage.getByRole('heading', { name: `移出 ${editorUsername}？`, exact: true }) })
+    const removed = ownerPage.waitForResponse((response) => new URL(response.url()).pathname.endsWith(`/workspaces/current/members/${editorMe.user_id}`) && response.request().method() === 'PATCH')
+    await confirmRemoval.getByRole('button', { name: '确定', exact: true }).click()
+    expect((await removed).status()).toBe(200)
+    await expect.poll(async () => (await api(ownerPage, 'GET', '/workspaces/current/members')).some((item: { user_id: string }) => item.user_id === editorMe.user_id)).toBe(false)
+    const removedMemberMe = await editorContext!.request.get(`${baseURL}/api/v1/auth/me`)
+    expect(removedMemberMe.status()).toBe(200)
+    expect(((await removedMemberMe.json()) as { workspace: { id: string } }).workspace.id).not.toBe(ownerMe.workspace.id)
+    const removedMemberRoutines = await editorContext!.request.get(`${baseURL}/api/v1/agent/routines`)
+    expect(removedMemberRoutines.status()).toBe(200)
+    expect(((await removedMemberRoutines.json()) as { items: unknown[] }).items).toHaveLength(0)
+
+    const rejoinInvite = await api(ownerPage, 'POST', '/workspaces/current/invites', { role: 'editor', max_uses: 1, days: 1 })
+    await editorPage.goto(`${baseURL}/settings/members`)
+    await editorPage.getByPlaceholder('邀请码').fill(rejoinInvite.code)
+    const rejoined = editorPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/workspaces/join' && response.request().method() === 'POST')
+    const joinedWorkspaceHome = editorPage.waitForURL((url) => url.pathname === '/')
+    await editorPage.getByRole('button', { name: '加入并切换', exact: true }).click()
+    expect((await rejoined).status()).toBe(200)
+    await joinedWorkspaceHome
+    const rejoinedIdentity = await editorContext!.request.get(`${baseURL}/api/v1/auth/me`)
+    expect(rejoinedIdentity.status()).toBe(200)
+    expect(((await rejoinedIdentity.json()) as { workspace: { id: string } }).workspace.id).toBe(ownerMe.workspace.id)
+    await editorPage.goto(`${baseURL}/agent`)
+    await editorPage.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const afterRejoinTask = editorPage.locator('article').filter({ hasText: name })
+    await expect(afterRejoinTask.getByText('已暂停', { exact: true })).toBeVisible()
+    await expect(afterRejoinTask.getByText(/重新加入并恢复编辑权限后，请手动重新启用此任务/)).toBeVisible()
+    await expect(afterRejoinTask.getByRole('button', { name: '立即运行一次', exact: true })).toHaveCount(0)
+    expect((await api(editorPage, 'GET', '/notifications')).items.some((item: { kind: string; body: string }) => item.kind === 'agent_routine' && item.body.includes('已移出此工作区'))).toBe(true)
+    const reenabled = editorPage.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/routines/${routine.id}/control` && response.request().method() === 'POST')
+    await afterRejoinTask.getByRole('button', { name: '重新启用', exact: true }).click()
+    expect((await reenabled).status()).toBe(200)
     await expect.poll(async () => (await api(editorPage, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('enabled')
   } finally {
     await ownerApp?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)

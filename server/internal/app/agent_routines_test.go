@@ -124,6 +124,25 @@ func TestAW10RoutinePausesWhenCreatorIsDemotedToViewer(t *testing.T) {
 	if enabled.Routine.Status != "enabled" {
 		t.Fatalf("创建者逐项启用例行任务失败：%+v", enabled.Routine)
 	}
+	member.restore(env)
+	env.mustJSON(t, http.MethodPatch, "/api/v1/workspaces/current/members/"+memberID.String(), map[string]bool{"remove": true}, nil)
+	var removedStatus, removedReason string
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT status,error_code FROM agent_routine WHERE id=$1`, created.Routine.ID).
+		Scan(&removedStatus, &removedReason); err != nil {
+		t.Fatal(err)
+	}
+	if removedStatus != "paused" || removedReason != "member_removed" {
+		t.Fatalf("移出创建者后例行任务必须持久化暂停：status=%s error_code=%s", removedStatus, removedReason)
+	}
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_event WHERE routine_id=$1 AND type='paused'
+		AND payload->>'reason'='member_removed'`, created.Routine.ID).Scan(&eventCount); err != nil || eventCount != 1 {
+		t.Fatalf("移出创建者后必须持久化暂停事件：count=%d err=%v", eventCount, err)
+	}
+	var notificationCount int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM notification WHERE workspace_id=$1 AND user_id=$2
+		AND kind='agent_routine' AND title='例行任务已暂停' AND body LIKE '%已移出此工作区%'`, workspaceID, memberID).Scan(&notificationCount); err != nil || notificationCount != 1 {
+		t.Fatalf("移出创建者后必须持久化暂停通知：count=%d err=%v", notificationCount, err)
+	}
 }
 
 func TestAW10RoutineToolAllowlistCannotReachBusinessWrites(t *testing.T) {
