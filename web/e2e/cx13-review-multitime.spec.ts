@@ -3,7 +3,7 @@ import { api, registerAccount } from './support'
 
 const paragraphs = ['先记录一个可核对的具体观察。', '再把事实、解释与可能的反例分开。', '最后留下下一步可以验证的单变量行动。']
 
-async function seedPublishedWork(page: Page, accountId: string) {
+async function seedReviewWork(page: Page, accountId: string) {
   let work = await api(page, 'POST', `/accounts/${accountId}/works`, { content_format: 'micro_post' })
   work = await api(page, 'PATCH', `/works/${work.id}`, { viewpoint: '先核对来源，再写有限结论。', base_revision: work.revision })
   work = await api(page, 'PUT', `/works/${work.id}/outline`, {
@@ -29,31 +29,82 @@ async function seedPublishedWork(page: Page, accountId: string) {
   }
   await page.getByRole('button', { name: '确认完成检查', exact: true }).click()
   await expect.poll(async () => (await api(page, 'GET', `/works/${work.id}`)).status).toBe('ready')
-  work = await api(page, 'GET', `/works/${work.id}`)
-  await api(page, 'POST', `/works/${work.id}/toutiao/pack`, { basis_revision: work.revision })
-
-  const publishedAt = new Date(Date.now() - 8 * 24 * 60 * 60_000)
-  await api(page, 'POST', `/works/${work.id}/published`, { published_at: publishedAt.toISOString() })
-  await api(page, 'POST', `/works/${work.id}/metrics`, {
-    captured_at: new Date(publishedAt.getTime() + 7 * 24 * 60 * 60_000).toISOString(),
-    reads: 1200, favorites: 42, likes: 25, comments: 7, shares: 9, follows_gained: 2,
-  })
   return work as { id: string; title: string }
 }
 
-test('DEV-CX13-B Web 浏览器多窗口复盘、实验与报告逐项反馈', async ({ page }) => {
+function localDateTimeInput(value: Date) {
+  return new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+}
+
+test('DEV-QA26 G6 Web 发布回填、多时点手录、看板与建议采纳', async ({ page, baseURL }) => {
   test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API 与模拟模型')
   test.setTimeout(210_000)
   const username = `cx13-review-web-${Date.now()}-${test.info().workerIndex}`
   const account = await registerAccount(page, '微头条', 'toutiao', username)
-  const work = await seedPublishedWork(page, account.id)
+  const work = await seedReviewWork(page, account.id)
   const provider = await api(page, 'POST', '/model-providers', {
     name: 'CX13-B Web 本地复盘模型',
     base_url: process.env.OPS_E2E_MOCK_BASE_URL ?? 'http://127.0.0.1:8191/v1',
     api_key: 'local-cx13-review-web-e2e-key', models: ['mock-writer'],
   })
   await api(page, 'PUT', '/model-routes', [{ task_type: 'review_analysis', provider_id: provider.id, model: 'mock-writer' }])
+
+  await page.goto(`${baseURL}/works/${work.id}/pack`)
+  const packResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/works/${work.id}/toutiao/pack` && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '生成当前修订发布包', exact: true }).click()
+  expect((await packResponse).ok()).toBeTruthy()
+  await expect.poll(async () => (await api(page, 'GET', `/works/${work.id}`)).status).toBe('packed')
+  const publishedAtInput = new Date(Date.now() - 8 * 24 * 60 * 60_000)
+  const backfill = page.locator('#backfill')
+  const publishedUrl = `https://example.invalid/qa26-g6-full-${work.id}`
+  await backfill.getByLabel('作品链接（可选）').fill(publishedUrl)
+  await backfill.getByLabel('发布时间', { exact: true }).fill(localDateTimeInput(publishedAtInput))
+  const publishResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/works/${work.id}/published` && response.request().method() === 'POST')
+  await backfill.getByRole('button', { name: '标记为已发布', exact: true }).click()
+  expect((await publishResponse).ok()).toBeTruthy()
+  const publishedWork = await api(page, 'GET', `/works/${work.id}`)
+  expect(publishedWork).toMatchObject({ status: 'published', published_url: publishedUrl })
+
   await page.goto(`/a/${account.id}/review`)
+
+  const table = page.locator('table').first()
+  const values = [
+    { day: 1, impressions: 1200, reads: 800, likes: 15, favorites: 4, comments: 1, shares: 3, follows_gained: 1 },
+    { day: 3, impressions: 2400, reads: 1700, likes: 31, favorites: 11, comments: 3, shares: 6, follows_gained: 2 },
+    { day: 7, impressions: 3800, reads: 2500, likes: 48, favorites: 25, comments: 7, shares: 11, follows_gained: 4 },
+  ]
+  const workRow = table.getByRole('row').filter({ hasText: work.title })
+  await workRow.getByRole('button', { name: /录入/ }).click()
+  const recordDrawer = page.getByRole('dialog').filter({ hasText: work.title })
+  await expect(recordDrawer).toBeVisible()
+  for (const sample of values) {
+    if (sample.day === 1) {
+      await expect(recordDrawer.getByLabel(/数据采集时间/)).toBeVisible()
+    } else {
+      await recordDrawer.getByRole('button', { name: '录入一次数据', exact: true }).click()
+    }
+    const drawer = recordDrawer
+    const capturedAt = new Date(new Date(publishedWork.published_at).getTime() + sample.day * 24 * 60 * 60_000)
+    await drawer.getByLabel(/数据采集时间/).fill(localDateTimeInput(capturedAt))
+    for (const [field, amount] of Object.entries(sample)) {
+      if (field === 'day') continue
+      const label = field === 'impressions' ? '展现量' : field === 'reads' ? '阅读' : field === 'favorites' ? '收藏' : field === 'comments' ? '评论' : field === 'shares' ? '转发' : field === 'follows_gained' ? '涨粉' : '点赞'
+      await drawer.getByLabel(label, { exact: true }).fill(String(amount))
+    }
+    const metricResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/works/${work.id}/metrics` && response.request().method() === 'POST')
+    await drawer.getByRole('button', { name: '保存', exact: true }).click()
+    const response = await metricResponse
+    expect(response.ok()).toBeTruthy()
+    expect(await response.json()).toMatchObject({ source: 'manual', day_offset: sample.day })
+    await expect(recordDrawer.getByRole('button', { name: '录入一次数据', exact: true })).toBeVisible()
+  }
+  const savedMetrics = await api(page, 'GET', `/works/${work.id}/metrics`)
+  expect(savedMetrics.map((metric: { source: string; day_offset: number }) => [metric.source, metric.day_offset])).toEqual([['manual', 1], ['manual', 3], ['manual', 7]])
+  expect(savedMetrics[2]).toMatchObject({ impressions: 3800, reads: 2500, likes: 48, favorites: 25, shares: 11 })
+  await recordDrawer.getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(recordDrawer).toBeHidden()
+  await page.reload()
+  await expect(table.getByRole('row').filter({ hasText: work.title })).toContainText('2,500')
 
   const review = page.getByTestId('cx-review-multitime')
   await expect(review).toBeVisible()
