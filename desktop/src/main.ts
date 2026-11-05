@@ -495,15 +495,22 @@ function createBusinessWindow(businessSession: Session): void {
 
 function installBusinessPermissions(businessSession: Session): void {
   businessSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => {
+    if (permission === 'notifications') {
+      return isBusinessOriginUrl(requestingOrigin, businessOrigin) && details.isMainFrame;
+    }
     return permission === 'clipboard-sanitized-write'
       && requestingOrigin === businessOrigin
       && details.isMainFrame;
   });
 
   businessSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-    const allow = permission === 'clipboard-sanitized-write'
+    const allowClipboardWrite = permission === 'clipboard-sanitized-write'
       && details.requestingUrl.startsWith(businessOrigin)
       && details.isMainFrame;
+    const allowNotifications = permission === 'notifications'
+      && isBusinessOriginUrl(details.requestingUrl, businessOrigin)
+      && details.isMainFrame;
+    const allow = allowClipboardWrite || allowNotifications;
     callback(allow);
   });
 }

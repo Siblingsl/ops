@@ -29,7 +29,7 @@ async function openNotificationPanel(page: Page) {
   return panel
 }
 
-async function loginElectron(baseURL: string, username: string) {
+async function loginElectron(baseURL: string, username: string, stubDeniedPermission = true) {
   const profile = await mkdtemp(join(tmpdir(), 'ops-qa26-g8-notifications-'))
   let app: ElectronApp | undefined
   try {
@@ -40,15 +40,17 @@ async function loginElectron(baseURL: string, username: string) {
       timeout: 60_000,
     })
     const page = await app.firstWindow()
-    await page.addInitScript(() => {
-      Object.defineProperty(window, 'Notification', {
-        configurable: true,
-        value: class {
-          static permission = 'denied'
-          static requestPermission = async () => 'denied'
-        },
+    if (stubDeniedPermission) {
+      await page.addInitScript(() => {
+        Object.defineProperty(window, 'Notification', {
+          configurable: true,
+          value: class {
+            static permission = 'denied'
+            static requestPermission = async () => 'denied'
+          },
+        })
       })
-    })
+    }
     await page.goto(`${baseURL}/login`)
     await page.getByLabel('用户名', { exact: true }).fill(username)
     await page.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
@@ -150,6 +152,45 @@ test('DEV-QA26 G8 真实 Electron 非空通知、SSE、逐条/全部已读与系
     await expect.poll(async () => (await api(page, 'GET', '/notifications') as NotificationList).unread).toBe(0)
     stored = await api(page, 'GET', '/notifications') as NotificationList
     expect(stored.items.every((item) => item.read_at !== null)).toBe(true)
+  } finally {
+    await closeElectron(owner.app, owner.profile)
+  }
+})
+
+test('DEV-QA26 G8 真实 Electron 用户可启用并保留桌面通知选择', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地 E2E API')
+  test.setTimeout(120_000)
+
+  const username = `qa26-g8-native-optin-${Date.now()}`
+  const account = await registerAccount(page, '图文笔记', 'xhs', username)
+  const owner = await loginElectron(baseURL!, username, false)
+  try {
+    await owner.page.evaluate(async (accountId) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountId)
+    }, account.id)
+    await owner.page.goto(`${baseURL}/a/${account.id}`)
+    await expect(owner.page.getByRole('heading', { name: '今天，给灵感一点空间。', exact: true })).toBeVisible()
+    await owner.page.getByRole('button', { name: /用户菜单/ }).click()
+    await owner.page.getByRole('menuitem', { name: /通知与 AI 任务/ }).click()
+    const panel = owner.page.locator('.notification-panel')
+    await expect(panel).toBeVisible()
+
+    const permission = await owner.page.evaluate(() => Notification.permission)
+    expect(permission, '新建 Electron profile 不应被主进程无条件拒绝通知权限').not.toBe('denied')
+    await panel.getByRole('button', { name: '开启桌面提示', exact: true }).click()
+    await expect(panel.getByRole('button', { name: '关闭桌面提示', exact: true })).toBeVisible()
+    const setting = await owner.page.evaluate(async () => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      return localStorage.getItem(`ops.agent-native-notifications.v1:${me.user_id ?? me.username}:${me.workspace.id}`)
+    })
+    expect(setting).toBe('1')
+
+    await owner.page.reload()
+    await expect.poll(() => owner.page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    await openNotificationPanel(owner.page)
+    await expect(owner.page.locator('.notification-panel').getByRole('button', { name: '关闭桌面提示', exact: true })).toBeVisible()
   } finally {
     await closeElectron(owner.app, owner.profile)
   }
