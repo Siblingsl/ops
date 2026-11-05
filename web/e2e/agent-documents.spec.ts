@@ -159,6 +159,7 @@ test('DEV-AW11 Web文档上传、严格解析回执、隔离失败与安全产�
 test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({ page, baseURL }) => {
   await prepare(page, baseURL!)
   const failures: { status: number; code?: string }[] = []
+  const accepted: { status: number; id?: string; parse_status?: string; page_count?: number }[] = []
   const attachmentDurations: number[] = []
   let messagePosts = 0
   page.on('request', (request) => {
@@ -166,7 +167,11 @@ test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({
   })
   page.on('response', (response) => {
     if (new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST') {
-      void response.json().then((body) => failures.push({ status: response.status(), code: body.error?.code })).catch(() => undefined)
+      void response.json().then((body) => {
+        const result = { status: response.status(), code: body.error?.code, id: body.id, parse_status: body.parse_status, page_count: body.page_count }
+        if (response.status() === 200) accepted.push(result)
+        else failures.push(result)
+      }).catch(() => undefined)
     }
   })
   page.on('requestfinished', (request) => {
@@ -230,7 +235,23 @@ test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({
   expect(failures).toHaveLength(expectedFailures)
   expect(attachmentDurations).toHaveLength(expectedFailures)
   expect(failures.every((failure) => failure.status === 422 && failure.code === 'agent_attachment_parse_failed')).toBe(true)
-  console.log(`[DEV-QA26] Web attachment rejection request ms: ${JSON.stringify(attachmentDurations)}`)
+  const exactBoundaryChooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await exactBoundaryChooser).setFiles({ name: 'exactly-100-pages.pdf', mimeType: 'application/pdf', buffer: pdfFixture({ pages: 100 }) })
+  await expect(page.getByLabel('exactly-100-pages.pdf ready', { exact: true })).toBeVisible({ timeout: 40_000 })
+  await expect.poll(() => accepted.length, { timeout: 40_000 }).toBe(1)
+  expect(accepted[0]).toMatchObject({ status: 200, parse_status: 'ready', page_count: 100 })
+  const originalFile = await page.evaluate(async (id) => {
+    const response = await fetch('/api/v1/agent/attachments/' + id + '/file')
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    return { status: response.status, bytes: bytes.byteLength, signature: new TextDecoder().decode(bytes.slice(0, 8)) }
+  }, accepted[0].id!)
+  expect(originalFile.status).toBe(200)
+  expect(originalFile.bytes).toBeGreaterThan(0)
+  expect(originalFile.signature).toBe('%PDF-1.4')
+  await expect.poll(() => attachmentDurations.length, { timeout: 10_000 }).toBe(expectedFailures + 1)
+  console.log(`[DEV-QA26] Web exact-100-page upload ms: ${attachmentDurations.at(-1)}`)
+  console.log(`[DEV-QA26] Web attachment rejection request ms: ${JSON.stringify(attachmentDurations.slice(0, expectedFailures))}`)
   expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
   await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
   await expect(page).toHaveURL(/\/agent\/?$/)
