@@ -2,9 +2,10 @@ import { _electron, expect, test, type BrowserContext, type Page } from '@playwr
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:net'
+import { performance } from 'node:perf_hooks'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { api, registerAccount, selectDesktopSetting } from './support'
+import { api, openDesktopAccountSwitcher, registerAccount, selectDesktopSetting } from './support'
 
 type ElectronApp = Awaited<ReturnType<typeof _electron.launch>>
 
@@ -92,6 +93,19 @@ async function closeElectron(app: ElectronApp | undefined, profile: string, tag:
     throw new Error('拒绝清理测试目录之外路径')
   }
   await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+}
+
+async function reloadElectronWindow(app: ElectronApp) {
+  await app.evaluate(({ BrowserWindow }) => new Promise<void>((resolve, reject) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    if (!window) { reject(new Error('Electron 主窗口不存在')); return }
+    const timeout = setTimeout(() => reject(new Error('Electron 主窗口重载超时')), 25_000)
+    window.webContents.once('did-finish-load', () => {
+      clearTimeout(timeout)
+      resolve()
+    })
+    window.webContents.reload()
+  }))
 }
 
 async function openOwner(page: Page, baseURL: string, tag: string, contentType = '图文笔记') {
@@ -1012,5 +1026,200 @@ test('DEV-QA26 G2-13 真实 Electron viewer 全类型回收站写权限矩阵', 
   } finally {
     if (viewerApp) await closeElectron(viewerApp, viewerProfile, 'trash-matrix-viewer')
     await closeElectron(owner.app, owner.profile, 'trash-matrix')
+  }
+})
+
+test('DEV-QA26 G2-02 真实 Electron 账号编辑、迁移、停用与恢复', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(180_000)
+  const owner = await openOwner(page, baseURL!, 'account-management')
+  const oldWork = await api(page, 'POST', '/accounts/' + owner.account.id + '/works', {
+    title: '迁移前作品 ' + Date.now(),
+  }) as { id: string; content_format: string }
+  expect(oldWork.content_format).toBe('image_note')
+  const dialogSamples: number[] = []
+  const journeyStarted = performance.now()
+  try {
+    await selectDesktopSetting(owner.page, '平台账号与凭证')
+    const settings = owner.page.getByTestId('desktop-settings-window')
+    const changeType = settings.getByRole('button', { name: '修改类型', exact: true })
+
+    let failedReadInjected = false
+    await owner.page.route('**/api/v1/accounts/' + owner.account.id + '/works', async (route) => {
+      if (route.request().method() === 'GET' && !failedReadInjected) {
+        failedReadInjected = true
+        await route.fulfill({ status: 500, json: { error: { code: 'internal', message: 'QA26 注入作品读取失败' } } })
+        return
+      }
+      await route.continue()
+    })
+    await changeType.click()
+    let migration = owner.page.getByRole('dialog').filter({ has: owner.page.getByRole('heading', { name: '修改账号类型', exact: true }) })
+    await expect(migration.getByRole('alert')).toContainText('读取修改影响失败')
+    await expect(migration.getByRole('button', { name: '确认修改', exact: true })).toBeDisabled()
+    await migration.getByRole('button', { name: '重新读取修改影响', exact: true }).click()
+    await expect(migration.getByText(/已有 1 篇作品保持原类型/)).toBeVisible()
+    await owner.page.unroute('**/api/v1/accounts/' + owner.account.id + '/works')
+    await migration.getByRole('button', { name: '取消', exact: true }).click()
+    expect((await api(page, 'GET', '/accounts/' + owner.account.id)).content_format).toBe('image_note')
+
+    for (let index = 0; index < 20; index += 1) {
+      const started = performance.now()
+      await changeType.click()
+      migration = owner.page.getByRole('dialog').filter({ has: owner.page.getByRole('heading', { name: '修改账号类型', exact: true }) })
+      await expect(migration.getByText(/已有 1 篇作品保持原类型/)).toBeVisible()
+      dialogSamples.push(performance.now() - started)
+      await migration.getByRole('button', { name: '取消', exact: true }).click()
+      await expect(migration).toHaveCount(0)
+    }
+
+    await changeType.click()
+    migration = owner.page.getByRole('dialog').filter({ has: owner.page.getByRole('heading', { name: '修改账号类型', exact: true }) })
+    await expect(migration.getByText(/已有 1 篇作品保持原类型/)).toBeVisible()
+    await migration.getByRole('radio', { name: /漫画/ }).check()
+    const migratedResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/accounts/' + owner.account.id) && response.request().method() === 'PATCH')
+    await migration.getByRole('button', { name: '确认修改', exact: true }).click()
+    const migrated = await migratedResponse
+    expect(migrated.status()).toBe(200)
+    const migrationBody = await migrated.json() as {
+      account: { content_format: string }
+      type_change: { from: string; to: string; works_kept: number; character_cards_kept: number; stale_plan_slots: number }
+    }
+    expect(migrationBody.account.content_format).toBe('comic')
+    expect(migrationBody.type_change).toMatchObject({ from: 'image_note', to: 'comic', works_kept: 1, character_cards_kept: 0, stale_plan_slots: 0 })
+    expect((await api(page, 'GET', '/works/' + oldWork.id)).content_format).toBe('image_note')
+    const newWork = await api(page, 'POST', '/accounts/' + owner.account.id + '/works', { title: '迁移后新作品 ' + Date.now() }) as { id: string; content_format: string }
+    expect(newWork.content_format).toBe('comic')
+
+    const savedName = 'QA26 账号保存 ' + Date.now()
+    const name = settings.getByRole('textbox', { name: '账号名称', exact: true })
+    await name.fill('QA26 未保存名称')
+    await settings.getByRole('button', { name: '取消修改', exact: true }).click()
+    await expect(name).toHaveValue(owner.account.name)
+    expect((await api(page, 'GET', '/accounts/' + owner.account.id)).name).toBe(owner.account.name)
+    await name.fill(savedName)
+    const saveResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/accounts/' + owner.account.id) && response.request().method() === 'PATCH')
+    await settings.getByRole('button', { name: '保存信息', exact: true }).click()
+    expect((await saveResponse).status()).toBe(200)
+    expect((await api(page, 'GET', '/accounts/' + owner.account.id)).name).toBe(savedName)
+    await settings.getByRole('button', { name: '关闭设置', exact: true }).click()
+    await reloadElectronWindow(owner.app)
+    await owner.page.getByRole('button', { name: /用户菜单/ }).click()
+    await owner.page.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(owner.page, '平台账号与凭证')
+    await expect(owner.page.getByTestId('desktop-settings-window').getByRole('textbox', { name: '账号名称', exact: true })).toHaveValue(savedName)
+    await expect(owner.page.getByTestId('desktop-settings-window').getByText('漫画', { exact: true }).first()).toBeVisible()
+
+    const currentSettings = owner.page.getByTestId('desktop-settings-window')
+    await currentSettings.locator('.desktop-account-actions details > summary').click()
+    await currentSettings.getByRole('button', { name: '停用当前账号', exact: true }).click()
+    let disableDialog = owner.page.getByRole('dialog').filter({ hasText: '停用「小红书 · ' + savedName + '」？' })
+    await expect(disableDialog).toBeVisible()
+    await disableDialog.getByRole('button', { name: '取消', exact: true }).click()
+    expect((await api(page, 'GET', '/accounts/' + owner.account.id)).status).toBe('active')
+
+    await currentSettings.getByRole('button', { name: '停用当前账号', exact: true }).click()
+    disableDialog = owner.page.getByRole('dialog').filter({ hasText: '停用「小红书 · ' + savedName + '」？' })
+    const disabledResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/accounts/' + owner.account.id + '/disable') && response.request().method() === 'POST')
+    await disableDialog.getByRole('button', { name: '停用', exact: true }).click()
+    expect((await disabledResponse).status()).toBe(200)
+    expect((await api(page, 'GET', '/accounts/' + owner.account.id)).status).toBe('disabled')
+    await currentSettings.getByRole('button', { name: '关闭设置', exact: true }).click()
+    await expect(owner.page.getByRole('heading', { name: '当前账号已停用', exact: true })).toBeVisible()
+    await openDesktopAccountSwitcher(owner.page)
+    const picker = owner.page.getByTestId('desktop-context-menu')
+    await picker.getByText('已停用 1', { exact: true }).click()
+    await picker.getByRole('button', { name: new RegExp(savedName + ' 已停用') }).click()
+    await expect(currentSettings).toBeVisible()
+    await currentSettings.locator('.desktop-account-actions details > summary').click()
+    const enabledResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/accounts/' + owner.account.id + '/enable') && response.request().method() === 'POST')
+    await currentSettings.getByRole('button', { name: '重新启用', exact: true }).click()
+    expect((await enabledResponse).status()).toBe(200)
+    expect((await api(page, 'GET', '/accounts/' + owner.account.id)).status).toBe('active')
+
+    await currentSettings.getByRole('button', { name: '关闭设置', exact: true }).click()
+    await reloadElectronWindow(owner.app)
+    await owner.page.getByRole('button', { name: /用户菜单/ }).click()
+    await owner.page.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(owner.page, '平台账号与凭证')
+    const reloadedSettings = owner.page.getByTestId('desktop-settings-window')
+    await expect(reloadedSettings.getByRole('textbox', { name: '账号名称', exact: true })).toHaveValue(savedName)
+    await expect(reloadedSettings.getByText('漫画', { exact: true }).first()).toBeVisible()
+    const sorted = [...dialogSamples].sort((a, b) => a - b)
+    console.log('DEV-QA26 G2-02 Electron modify-type dialog n=20 p50=' +
+      ((sorted[9] + sorted[10]) / 2).toFixed(2) + 'ms p95=' + sorted[18].toFixed(2) +
+      'ms failures=0; journey_ms=' + (performance.now() - journeyStarted).toFixed(2) + ' environment=Windows Electron')
+  } finally {
+    await closeElectron(owner.app, owner.profile, 'account-management')
+  }
+})
+
+test('DEV-QA26 G2-02 真实 Electron 编辑者只能查看平台账号', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(180_000)
+  const owner = await openOwner(page, baseURL!, 'account-role')
+  let editorApp: ElectronApp | undefined
+  let editorProfile = ''
+  try {
+    await selectDesktopSetting(owner.page, '成员与邀请')
+    const settings = owner.page.getByTestId('desktop-settings-window')
+    await settings.getByRole('combobox').last().selectOption('editor')
+    const inviteResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/workspaces/current/invites') && response.request().method() === 'POST')
+    await settings.getByRole('button', { name: '生成邀请码', exact: true }).first().click()
+    const invite = await (await inviteResponse).json() as { code: string; role: string }
+    expect(invite.role).toBe('editor')
+
+    const editorUsername = 'qa26-g2-account-editor-' + Date.now()
+    editorProfile = await mkdtemp(join(tmpdir(), 'ops-qa26-g8-account-role-'))
+    editorApp = await _electron.launch({
+      executablePath: resolve('../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + editorProfile, resolve('../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! },
+      timeout: 60_000,
+    })
+    const editorPage = await editorApp.firstWindow()
+    await editorPage.goto(baseURL + '/register')
+    await editorPage.getByLabel('用户名', { exact: true }).fill(editorUsername)
+    await editorPage.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
+    await editorPage.getByLabel('邀请码（可选）').fill(invite.code)
+    await editorPage.getByRole('button', { name: '创建账号', exact: true }).click()
+    await expect.poll(() => editorPage.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    const ownerWorkspace = (await api(page, 'GET', '/auth/me') as { workspace: { id: string } }).workspace
+    const editorMe = await editorPage.evaluate(async () => await (await fetch('/api/v1/auth/me')).json()) as {
+      workspace: { id: string }; role: string
+    }
+    expect(editorMe.workspace.id).toBe(ownerWorkspace.id)
+    expect(editorMe.role).toBe('editor')
+    expect((await editorPage.evaluate(async () => await (await fetch('/api/v1/accounts')).json()) as Array<{ id: string }>)
+      .some((account) => account.id === owner.account.id)).toBe(true)
+    await editorPage.goto(baseURL + '/a/' + owner.account.id)
+    await editorPage.getByRole('button', { name: /用户菜单/ }).click()
+    await editorPage.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(editorPage, '平台账号与凭证')
+    const editorSettings = editorPage.getByTestId('desktop-settings-window')
+    await expect(editorSettings.getByText('编辑者可查看账号，修改由所有者操作。', { exact: true })).toBeVisible()
+    await expect(editorSettings.getByRole('textbox', { name: '账号名称', exact: true })).toBeDisabled()
+    await expect(editorSettings.getByRole('button', { name: '修改类型', exact: true })).toHaveCount(0)
+    await expect(editorSettings.getByRole('button', { name: '停用当前账号', exact: true })).toHaveCount(0)
+    const denied = await editorPage.evaluate(async (accountId) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }
+      const [edit, disable] = await Promise.all([
+        fetch('/api/v1/accounts/' + accountId, { method: 'PATCH', headers, body: JSON.stringify({ name: '越权账号名' }) }),
+        fetch('/api/v1/accounts/' + accountId + '/disable', { method: 'POST', headers }),
+      ])
+      return [edit.status, disable.status]
+    }, owner.account.id)
+    expect(denied).toEqual([403, 403])
+    expect((await api(page, 'GET', '/accounts/' + owner.account.id)).name).toBe(owner.account.name)
+    expect((await api(page, 'GET', '/accounts/' + owner.account.id)).status).toBe('active')
+  } finally {
+    if (editorApp) await closeElectron(editorApp, editorProfile, 'account-role')
+    await closeElectron(owner.app, owner.profile, 'account-role')
   }
 })
