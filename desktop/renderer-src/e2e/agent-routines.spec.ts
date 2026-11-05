@@ -546,6 +546,130 @@ test('DEV-QA26 Windows Electron停用例行任务模型后应立即暂停', asyn
   }
 })
 
+test('DEV-QA26 Windows Electron修改模型密钥后自检失败暂停例行任务并逐项恢复', async ({ baseURL }, testInfo) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(180_000)
+  const userData = await mkdtemp(join(tmpdir(), 'ops-qa26-routine-model-selftest-'))
+  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  try {
+    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const page = await app.firstWindow()
+    await prepareRoutine(page, baseURL!)
+    await page.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '受限例行任务', exact: true }) })
+    const name = `QA26 模型自检失败 ${Date.now()}`
+    await dialog.getByLabel('名称', { exact: true }).fill(name)
+    await dialog.getByLabel('任务提示（最多 4000 字）', { exact: true }).fill('按只读权限核对账号表现并生成报告。')
+    const createResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/routines' && response.request().method() === 'POST')
+    await dialog.getByRole('button', { name: '创建并启用', exact: true }).click()
+    expect((await createResponse).status()).toBe(200)
+    const routine = (await api(page, 'GET', '/agent/routines')).items.find((item: { name: string }) => item.name === name)
+    expect(routine.status).toBe('enabled')
+    const provider = (await api(page, 'GET', '/model-providers')).find((item: { id: string }) => item.id === routine.model.provider_id)
+    expect(provider).toBeTruthy()
+
+    await page.goto(`${baseURL}/settings/models`)
+    let providerCard = page.locator('div.group').filter({ hasText: provider.name })
+    await providerCard.getByRole('button', { name: '编辑', exact: true }).click()
+    let providerDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '编辑模型供应商', exact: true }) })
+    await providerDialog.getByLabel(/API 密钥/).fill('bad-key')
+    const saveBadKey = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/model-providers/${provider.id}` && response.request().method() === 'PATCH')
+    await providerDialog.getByRole('button', { name: '保存', exact: true }).click()
+    expect((await saveBadKey).status()).toBe(200)
+    let updatedProvider = (await api(page, 'GET', '/model-providers')).find((item: { id: string }) => item.id === provider.id)
+    expect(updatedProvider.last_test_ok).toBeNull()
+    expect(updatedProvider.capabilities).toHaveLength(0)
+    await expect.poll(async () => (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('paused')
+    let paused = (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)
+    expect(paused.error_code).toBe('model_unavailable')
+    expect(paused.next_due_at).toBeFalsy()
+    expect((await api(page, 'GET', '/notifications')).items.some((item: { kind: string; body: string }) => item.kind === 'agent_routine' && item.body.includes('任务模型不可用'))).toBe(true)
+
+    providerCard = page.locator('div.group').filter({ hasText: provider.name })
+    const badSelftestResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/model-providers/${provider.id}/selftest` && response.request().method() === 'POST')
+    await providerCard.getByRole('button', { name: '自检', exact: true }).click()
+    const badSelftest = await badSelftestResponse
+    expect(badSelftest.status()).toBe(200)
+    const failedResult = await badSelftest.json()
+    expect(failedResult.ok).toBe(false)
+    expect(failedResult.results.find((item: { key: string }) => item.key === 'tools')?.ok).toBe(false)
+    const failedDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '供应商能力自检', exact: true }) })
+    await expect(failedDialog).toContainText('自检完成：1/7 项通过')
+    await expect(failedDialog).not.toContainText('bad-key')
+    updatedProvider = (await api(page, 'GET', '/model-providers')).find((item: { id: string }) => item.id === provider.id)
+    expect(updatedProvider.last_test_ok).toBe(false)
+    expect(updatedProvider.capabilities.find((item: { model: string }) => item.model === 'mock-agent-tested')?.tools_ok).toBe(false)
+    paused = (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)
+    expect(paused.status).toBe('paused')
+    expect((await api(page, 'GET', `/agent/routines/${routine.id}/occurrences`)).items).toHaveLength(0)
+    await failedDialog.getByRole('button', { name: '关闭', exact: true }).click()
+
+    providerCard = page.locator('div.group').filter({ hasText: provider.name })
+    await providerCard.getByRole('button', { name: '编辑', exact: true }).click()
+    providerDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '编辑模型供应商', exact: true }) })
+    await providerDialog.getByLabel(/API 密钥/).fill('local-e2e-key')
+    const saveGoodKey = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/model-providers/${provider.id}` && response.request().method() === 'PATCH')
+    await providerDialog.getByRole('button', { name: '保存', exact: true }).click()
+    expect((await saveGoodKey).status()).toBe(200)
+    updatedProvider = (await api(page, 'GET', '/model-providers')).find((item: { id: string }) => item.id === provider.id)
+    expect(updatedProvider.last_test_ok).toBeNull()
+    expect(updatedProvider.capabilities).toHaveLength(0)
+    expect((await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('paused')
+
+    providerCard = page.locator('div.group').filter({ hasText: provider.name })
+    const goodSelftestResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/model-providers/${provider.id}/selftest` && response.request().method() === 'POST')
+    await providerCard.getByRole('button', { name: '自检', exact: true }).click()
+    const goodSelftest = await goodSelftestResponse
+    expect(goodSelftest.status()).toBe(200)
+    const readyResult = await goodSelftest.json()
+    expect(readyResult.ok).toBe(true)
+    expect(readyResult.results.find((item: { key: string }) => item.key === 'tools')?.ok).toBe(true)
+    const readyDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '供应商能力自检', exact: true }) })
+    await expect(readyDialog).toContainText('自检完成：7/7 项通过')
+    await readyDialog.getByRole('button', { name: '关闭', exact: true }).click()
+    expect((await api(page, 'GET', '/model-providers')).find((item: { id: string }) => item.id === provider.id)?.capabilities.find((item: { model: string }) => item.model === 'mock-agent-tested')?.tools_ok).toBe(true)
+    expect((await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('paused')
+
+    const providerSwitch = page.locator('div.group').filter({ hasText: provider.name }).getByRole('switch', { name: '启用', exact: true })
+    const toggleSamples: number[] = []
+    for (let index = 0; index < 20; index++) {
+      const expectedActive = index % 2 === 1
+      const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/model-providers/${provider.id}` && response.request().method() === 'PATCH')
+      const startedAt = Date.now()
+      await providerSwitch.click()
+      const response = await responsePromise
+      expect(response.status()).toBe(200)
+      await expect(providerSwitch).toHaveAttribute('aria-checked', expectedActive ? 'true' : 'false')
+      toggleSamples.push(Date.now() - startedAt)
+    }
+    const sortedSamples = [...toggleSamples].sort((a, b) => a - b)
+    const toggleMetrics = { environment: 'Windows native Electron; local mock API', sample_count: toggleSamples.length,
+      samples_ms: toggleSamples, p50_ms: sortedSamples[9], p95_ms: sortedSamples[18], failed: 0 }
+    console.log(`DEV-QA26_METRIC_ROUTINE_MODEL_CONFIG_ELECTRON ${JSON.stringify(toggleMetrics)}`)
+    await testInfo.attach('routine-model-config-20-samples.json', { body: JSON.stringify(toggleMetrics, null, 2), contentType: 'application/json' })
+    expect((await api(page, 'GET', '/model-providers')).find((item: { id: string }) => item.id === provider.id)?.status).toBe('active')
+
+    await page.goto(`${baseURL}/agent`)
+    await page.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const routineCard = page.locator('article').filter({ hasText: name })
+    await expect(routineCard.getByText('已暂停', { exact: true })).toBeVisible()
+    await expect(routineCard.getByText(/任务模型不可用.*请手动重新启用此任务/)).toBeVisible()
+    await expect(routineCard.getByRole('button', { name: '立即运行一次', exact: true })).toHaveCount(0)
+    const resumeResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/routines/${routine.id}/control` && response.request().method() === 'POST')
+    await routineCard.getByRole('button', { name: '重新启用', exact: true }).click()
+    expect((await resumeResponse).status()).toBe(200)
+    expect((await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('enabled')
+    expect((await api(page, 'GET', `/agent/routines/${routine.id}/occurrences`)).items).toHaveLength(0)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-qa26-routine-model-selftest-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
 test('DEV-QA26 Windows Electron系统用户停用后暂停例行任务并逐项恢复', async ({ baseURL }, testInfo) => {
   test.skip(process.platform !== 'win32', '需要Windows Electron')
   test.setTimeout(240_000)
