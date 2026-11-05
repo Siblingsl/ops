@@ -571,3 +571,95 @@ test('DEV-QA26 Web系统用户停用后暂停例行任务并逐项恢复', async
   }
 })
 
+test('DEV-QA26 Web修改模型接口地址后暂停例行任务并逐项恢复', async ({ page, baseURL }, testInfo) => {
+  test.setTimeout(180_000)
+  const journeyStarted = performance.now()
+  await prepareRoutine(page, baseURL!)
+  await page.getByRole('button', { name: '例行任务', exact: true }).last().click()
+  const createDialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '受限例行任务', exact: true }) })
+  const name = `QA26 模型地址变更 ${Date.now()}`
+  await createDialog.getByLabel('名称', { exact: true }).fill(name)
+  await createDialog.getByLabel('任务提示（最多 4000 字）', { exact: true }).fill('只读核对测试账号并生成报告。')
+  const createResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/routines' && response.request().method() === 'POST')
+  await createDialog.getByRole('button', { name: '创建并启用', exact: true }).click()
+  expect((await createResponse).status()).toBe(200)
+  const routine = (await api(page, 'GET', '/agent/routines')).items.find((item: { name: string }) => item.name === name)
+  expect(routine.status).toBe('enabled')
+  const provider = (await api(page, 'GET', '/model-providers')).find((item: { id: string }) => item.id === routine.model.provider_id)
+  expect(provider).toBeTruthy()
+  const originalBaseURL = provider.base_url as string
+  const alternate = new URL(originalBaseURL)
+  expect(['127.0.0.1', 'localhost', '[::1]']).toContain(alternate.hostname)
+  alternate.port = alternate.port === '8297' ? '8298' : '8297'
+  const alternateBaseURL = alternate.toString().replace(/\/$/, '')
+
+  await page.goto(`${baseURL}/settings/models`)
+  const samples: number[] = []
+  let failures = 0
+  for (let index = 0; index < 20; index++) {
+    try {
+      const nextBaseURL = index % 2 === 0 ? alternateBaseURL : originalBaseURL
+      const card = page.locator('div.group').filter({ hasText: provider.name })
+      await card.getByRole('button', { name: '编辑', exact: true }).click()
+      const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '编辑模型供应商', exact: true }) })
+      await dialog.getByLabel(/接口地址/).fill(nextBaseURL)
+      const started = performance.now()
+      const save = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/model-providers/${provider.id}` && response.request().method() === 'PATCH')
+      await dialog.getByRole('button', { name: '保存', exact: true }).click()
+      expect((await save).status()).toBe(200)
+      const savedProvider = (await api(page, 'GET', '/model-providers')).find((item: { id: string }) => item.id === provider.id)
+      expect(savedProvider.base_url).toBe(nextBaseURL)
+      samples.push(performance.now() - started)
+
+      if (index === 0) {
+        expect(savedProvider.capabilities).toHaveLength(0)
+        await expect.poll(async () => (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('paused')
+        const paused = (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)
+        expect(paused).toMatchObject({ status: 'paused', error_code: 'model_unavailable' })
+        expect(paused.next_due_at).toBeFalsy()
+        expect((await api(page, 'GET', `/agent/routines/${routine.id}/occurrences`)).items).toHaveLength(0)
+        expect((await api(page, 'GET', '/notifications')).items.some((item: { kind: string; body: string; link: string }) =>
+          item.kind === 'agent_routine' && item.body.includes('任务模型不可用') && item.link.includes(routine.id))).toBe(true)
+      }
+    } catch (error) {
+      failures++
+      throw error
+    }
+  }
+  const sorted = [...samples].sort((a, b) => a - b)
+  const metrics = { environment: 'Web Chromium; local E2E API and loopback mock model', sample_count: samples.length,
+    samples_ms: samples.map((value) => Number(value.toFixed(2))), p50_ms: Number(sorted[9].toFixed(2)), p95_ms: Number(sorted[18].toFixed(2)), failed: failures }
+  await testInfo.attach('routine-model-url-20-samples.json', { body: JSON.stringify(metrics, null, 2), contentType: 'application/json' })
+  console.log(`DEV-QA26_METRIC_ROUTINE_MODEL_URL_WEB ${JSON.stringify(metrics)}`)
+
+  await page.reload()
+  const providerCard = page.locator('div.group').filter({ hasText: provider.name })
+  await providerCard.getByRole('button', { name: '编辑', exact: true }).click()
+  let dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '编辑模型供应商', exact: true }) })
+  await expect(dialog.getByLabel(/接口地址/)).toHaveValue(originalBaseURL)
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+
+  const selftest = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/model-providers/${provider.id}/selftest` && response.request().method() === 'POST')
+  await providerCard.getByRole('button', { name: '自检', exact: true }).click()
+  const selftestResponse = await selftest
+  expect(selftestResponse.status()).toBe(200)
+  expect(await selftestResponse.json()).toMatchObject({ ok: true })
+  dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '供应商能力自检', exact: true }) })
+  await expect(dialog).toContainText('自检完成：7/7 项通过')
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  expect((await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)).toMatchObject({ status: 'paused', error_code: 'model_unavailable' })
+
+  await page.goto(`${baseURL}/agent`)
+  await page.getByRole('button', { name: '例行任务', exact: true }).last().click()
+  const task = page.locator('article').filter({ hasText: name })
+  await expect(task.getByText('已暂停', { exact: true })).toBeVisible()
+  await expect(task.getByText(/任务模型不可用.*请手动重新启用此任务/)).toBeVisible()
+  await expect(task.getByRole('button', { name: '立即运行一次', exact: true })).toHaveCount(0)
+  const resume = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/routines/${routine.id}/control` && response.request().method() === 'POST')
+  await task.getByRole('button', { name: '重新启用', exact: true }).click()
+  expect((await resume).status()).toBe(200)
+  expect((await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('enabled')
+  const journeyMs = Number((performance.now() - journeyStarted).toFixed(2))
+  console.log(`DEV-QA26_METRIC_ROUTINE_MODEL_URL_JOURNEY_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and loopback mock model', journey_ms: journeyMs, failed: 0 })}`)
+})
+
