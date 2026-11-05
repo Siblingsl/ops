@@ -118,6 +118,17 @@ function docxExpandedFixture(totalExpandedBytes: number) {
   return zipFixture(files, true)
 }
 
+function docxLargeDocumentFixture(expandedDocumentBytes: number) {
+  const prefix = Buffer.from('<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>')
+  const suffix = Buffer.from('</w:t></w:r></w:p></w:body></w:document>')
+  const textBytes = expandedDocumentBytes - prefix.length - suffix.length
+  if (textBytes < 1) throw new Error('DOCX document entry must contain text')
+  return zipFixture({
+    'word/document.xml': Buffer.concat([prefix, Buffer.alloc(textBytes, 0x61), suffix]),
+    'docProps/app.xml': '<Properties><Pages>1</Pages></Properties>',
+  }, true)
+}
+
 async function prepare(page: Page, baseURL: string) {
   await page.goto(baseURL + '/register')
   await page.getByLabel('用户名', { exact: true }).fill('aw11-' + Date.now() + '-' + Math.random().toString(16).slice(2, 7))
@@ -346,6 +357,40 @@ test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({
   expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
   await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
   await expect(page).toHaveURL(/\/agent\/?$/)
+  expect(messagePosts).toBe(0)
+})
+
+test('DEV-QA26 G7 Web filechooser上传4MiB DOCX并核对解析回执与原件', async ({ page, baseURL }) => {
+  await prepare(page, baseURL!)
+  let messagePosts = 0
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+  })
+  const chooser = page.waitForEvent('filechooser')
+  const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+  const expandedBytes = 4 * 1024 * 1024
+  const file = docxLargeDocumentFixture(expandedBytes)
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await chooser).setFiles({ name: 'web-document-4mib.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: file })
+  const response = await upload
+  expect(response.status()).toBe(200)
+  const receipt = await response.json() as { id: string; parse_status: string; page_count: number; extracted_chars: number; injected_chars: number; truncated_from: number; truncated_to: number }
+  await expect(page.getByLabel('web-document-4mib.docx ready', { exact: true })).toBeVisible({ timeout: 60_000 })
+  expect(receipt).toMatchObject({ parse_status: 'ready', page_count: 1, injected_chars: 20_000, truncated_from: 20_001 })
+  expect(receipt.extracted_chars).toBeGreaterThan(expandedBytes - 100)
+  expect(receipt.truncated_to).toBe(receipt.extracted_chars)
+  const originalFile = await page.evaluate(async (id) => {
+    const response = await fetch('/api/v1/agent/attachments/' + id + '/file')
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    return { status: response.status, bytes: bytes.byteLength, signature: new TextDecoder().decode(bytes.slice(0, 4)) }
+  }, receipt.id)
+  expect(originalFile).toMatchObject({ status: 200, signature: 'PK\u0003\u0004' })
+  expect(originalFile.bytes).toBeGreaterThan(0)
+  const timing = response.request().timing()
+  const uploadMs = timing.responseEnd - timing.requestStart
+  console.log(`DEV-QA26_METRIC_DOCX_4MIB_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and WASI parser', expanded_document_bytes: expandedBytes, uploaded_bytes: file.byteLength, extracted_chars: receipt.extracted_chars, injected_chars: receipt.injected_chars, upload_ms: Number(uploadMs.toFixed(2)), unexpected_failures: 0 })}`)
+  await page.getByRole('button', { name: '移除 web-document-4mib.docx', exact: true }).click()
+  expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
   expect(messagePosts).toBe(0)
 })
 
