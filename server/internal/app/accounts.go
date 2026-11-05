@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -326,10 +327,56 @@ func (s *Server) setAccountStatus(status string) handlerFunc {
 		if err != nil {
 			return err
 		}
-		if _, err := s.db.Exec(r.Context(), `UPDATE platform_account SET status=$2, updated_at=now() WHERE id=$1`, a.ID, status); err != nil {
+		tx, err := s.db.Begin(r.Context())
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(r.Context())
+		if _, err := tx.Exec(r.Context(), `UPDATE platform_account SET status=$2, updated_at=now() WHERE id=$1`, a.ID, status); err != nil {
+			return err
+		}
+		type pausedRoutine struct {
+			id, workspaceID, userID uuid.UUID
+			revision                int64
+		}
+		var paused []pausedRoutine
+		if status == "disabled" {
+			rows, err := tx.Query(r.Context(), `UPDATE agent_routine SET status='paused',next_due_at=NULL,
+				revision=revision+1,error_code='account_disabled',updated_at=now()
+				WHERE account_id=$1 AND status='enabled' RETURNING id,workspace_id,user_id,revision`, a.ID)
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				var item pausedRoutine
+				if err := rows.Scan(&item.id, &item.workspaceID, &item.userID, &item.revision); err != nil {
+					rows.Close()
+					return err
+				}
+				paused = append(paused, item)
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			for _, item := range paused {
+				if err := s.agentRoutineEventTx(r.Context(), tx, item.id, "paused", map[string]any{
+					"reason": "account_disabled", "revision": item.revision,
+				}); err != nil {
+					return err
+				}
+			}
+		}
+		if err := tx.Commit(r.Context()); err != nil {
 			return err
 		}
 		s.audit(r.Context(), "account_"+status, "platform_account", a.ID.String(), "ok", nil)
+		for _, item := range paused {
+			s.notify(r.Context(), item.workspaceID, item.userID, "agent_routine", "例行任务已暂停",
+				"绑定账号已停用；重新启用账号后，请手动重新启用此任务。",
+				"/agent?panel=task&item="+item.id.String(),
+				"agent_routine:blocked:"+item.id.String()+":"+strconv.FormatInt(item.revision, 10))
+		}
 		return ok(w, map[string]any{"ok": true})
 	}
 }

@@ -1,7 +1,9 @@
 package app
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,7 +167,13 @@ func TestAW10ExpiredRoutineRunIsMarkedUnknownAndNeverReplayed(t *testing.T) {
 func TestAW10RoutineCreateControlAndReadOnlyRun(t *testing.T) {
 	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
 	providerID := env.ensureToolModel(t)
-	account := env.accounts(t).wechat
+	var account Account
+	env.mustJSON(t, http.MethodPost, "/api/v1/accounts", map[string]any{
+		"platform": "xhs", "name": "例行撤权集成测试账号", "content_format": "image_note",
+	}, &account)
+	if account.ID == uuid.Nil {
+		t.Fatal("创建例行撤权集成测试账号失败")
+	}
 	var me struct {
 		UserID    string `json:"user_id"`
 		Workspace struct {
@@ -217,6 +225,7 @@ func TestAW10RoutineCreateControlAndReadOnlyRun(t *testing.T) {
 		if len(conversations) > 0 {
 			_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_conversation WHERE id=ANY($1)`, conversations)
 		}
+		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM platform_account WHERE id=$1`, account.ID)
 	})
 	control := "/api/v1/agent/routines/" + routineID.String() + "/control"
 	var paused struct {
@@ -303,6 +312,58 @@ func TestAW10RoutineCreateControlAndReadOnlyRun(t *testing.T) {
 	}
 	if _, err := env.srv.db.Exec(t.Context(), `UPDATE workspace_member SET role='owner' WHERE workspace_id=$1 AND user_id=$2`, workspaceID, userID); err != nil {
 		t.Fatalf("恢复集成测试共享成员角色失败：%v", err)
+	}
+	status, _ := env.do(http.MethodPost, "/api/v1/accounts/"+account.ID.String()+"/disable", map[string]any{})
+	if status != http.StatusOK {
+		t.Fatalf("停用绑定账号失败：status=%d", status)
+	}
+	var afterDisable struct {
+		Items []agentRoutineView `json:"items"`
+	}
+	env.mustJSON(t, http.MethodGet, "/api/v1/agent/routines", nil, &afterDisable)
+	var disabledRoutine *agentRoutineView
+	for i := range afterDisable.Items {
+		if afterDisable.Items[i].ID == routineID {
+			disabledRoutine = &afterDisable.Items[i]
+			break
+		}
+	}
+	if disabledRoutine == nil || disabledRoutine.Status != "paused" || disabledRoutine.ErrorCode != "account_disabled" || disabledRoutine.NextDueAt != nil {
+		t.Fatalf("停用绑定账号必须事务性暂停例行任务并清除计划时间：%+v", disabledRoutine)
+	}
+	var notifications struct {
+		Items []Notification `json:"items"`
+	}
+	env.mustJSON(t, http.MethodGet, "/api/v1/notifications", nil, &notifications)
+	foundPauseNotice := false
+	for _, item := range notifications.Items {
+		if item.Kind == "agent_routine" && item.Title == "例行任务已暂停" && strings.Contains(item.Body, "绑定账号已停用") {
+			foundPauseNotice = true
+		}
+	}
+	if !foundPauseNotice {
+		t.Fatalf("停用账号后必须通知任务所有者：%+v", notifications.Items)
+	}
+	var occurrenceCountBefore int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_occurrence WHERE routine_id=$1`, routineID).Scan(&occurrenceCountBefore); err != nil {
+		t.Fatal(err)
+	}
+	status, raw := env.do(http.MethodPost, control, map[string]any{
+		"expected_revision": disabledRoutine.Revision, "request_id": uuid.NewString(), "action": "enable",
+	})
+	var rejected apiError
+	if err := json.Unmarshal(raw, &rejected); err != nil {
+		t.Fatalf("解析停用账号下的恢复拒绝响应失败：%v body=%s", err, raw)
+	}
+	if status != http.StatusConflict || rejected.Error.Code != "agent_routine_unavailable" || !strings.Contains(rejected.Error.Message, "绑定账号已停用") {
+		t.Fatalf("绑定账号停用时必须拒绝恢复任务：status=%d err=%+v", status, rejected)
+	}
+	var occurrenceCountAfter int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_occurrence WHERE routine_id=$1`, routineID).Scan(&occurrenceCountAfter); err != nil {
+		t.Fatal(err)
+	}
+	if occurrenceCountAfter != occurrenceCountBefore {
+		t.Fatalf("拒绝恢复不得创建执行记录：before=%d after=%d", occurrenceCountBefore, occurrenceCountAfter)
 	}
 }
 

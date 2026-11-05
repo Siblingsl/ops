@@ -61,6 +61,9 @@ const statusLabel: Record<string, string> = {
   failed: '失败', missed: '错过', interrupted: '中断',
 }
 const occurrenceStatusLabel: Record<string, string> = { ...statusLabel, completed: '已完成' }
+const routineErrorLabel: Record<string, string> = {
+  account_disabled: '绑定账号已停用；重新启用账号后，请手动重新启用此任务。',
+}
 
 function modelKey(model?: { provider_id?: string | null; model?: string | null }) {
   return model?.provider_id && model.model ? `${model.provider_id}::${model.model}` : ''
@@ -239,7 +242,7 @@ export function RoutinePanel({ open, canManage, models, conversation }: {
       {list.data?.items.map((routine) => <article key={routine.id} className="space-y-2 rounded-xl border border-mist-200 p-3">
         <div className="flex flex-wrap items-start justify-between gap-2"><div><h4 className="font-semibold text-mist-800">{routine.name}</h4><p className="mt-0.5 text-xs text-mist-500">{routine.cadence === 'once' ? '一次性' : routine.cadence === 'daily' ? '每天' : `每周${['一','二','三','四','五','六','日'][(routine.weekday ?? 1) - 1]}`} · {routine.time_of_day.slice(0, 5)} · 上海时间</p></div><Badge tone={routine.status === 'enabled' ? 'green' : routine.status === 'paused' ? 'gamboge' : 'gray'}>{statusLabel[routine.status] ?? routine.status}</Badge></div>
         <p className="whitespace-pre-wrap break-words text-sm text-mist-700">{routine.prompt}</p>
-        <p className="text-xs text-mist-500">下次：{formatDate(routine.next_due_at)} · 最近：{formatDate(routine.last_run_at)}{routine.failure_count > 0 ? ` · 连续失败 ${routine.failure_count}/3` : ''}{routine.error_code ? ` · ${routine.error_code}` : ''}</p>
+        <p className="text-xs text-mist-500">下次：{formatDate(routine.next_due_at)} · 最近：{formatDate(routine.last_run_at)}{routine.failure_count > 0 ? ` · 连续失败 ${routine.failure_count}/3` : ''}{routine.error_code ? ` · ${routineErrorLabel[routine.error_code] ?? routine.error_code}` : ''}</p>
         <div className="flex flex-wrap gap-2">
           <Button type="button" size="sm" variant="outline" disabled={saving} onClick={() => setHistoryID(historyID === routine.id ? null : routine.id)}>{historyID === routine.id ? '收起记录' : '执行记录'}</Button>
           {canManage && routine.status === 'enabled' && <Button type="button" size="sm" variant="outline" loading={saving} onClick={() => void control(routine, 'pause')}>暂停</Button>}

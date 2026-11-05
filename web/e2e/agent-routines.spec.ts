@@ -39,7 +39,7 @@ async function prepareRoutine(page: Page, baseURL: string) {
   return account
 }
 
-async function routineJourney(page: Page, baseURL: string, screenshotName: string) {
+async function routineJourney(page: Page, baseURL: string, screenshotName: string, revokeAccountBeforeRun = false) {
   const account = await prepareRoutine(page, baseURL)
   const materialName = `AW10 例行公开引用 ${Date.now()}`
   const material = await api(page, 'POST', '/materials', {
@@ -60,7 +60,7 @@ async function routineJourney(page: Page, baseURL: string, screenshotName: strin
   await expect(candidate).toBeVisible()
   await candidate.click()
   await picker.getByRole('button', { name: '预览并校验', exact: true }).click()
-  await expect(picker.getByText(`${materialName}：经授权的公开运营背景资料。`, { exact: true })).toBeVisible()
+  await expect(picker.locator('pre')).toHaveText(`${materialName}：经授权的公开运营背景资料。`)
   await picker.getByRole('button', { name: '添加引用', exact: true }).click()
   await expect(dialog.getByText(materialName, { exact: false })).toBeVisible()
   const createdResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/routines' && response.request().method() === 'POST')
@@ -73,9 +73,54 @@ async function routineJourney(page: Page, baseURL: string, screenshotName: strin
   expect(routine.status).toBe('enabled')
   expect(routine.public_context_refs).toHaveLength(1)
   expect(routine.public_context_refs[0].id).toBe(material.id)
+  const occurrencePath = `/agent/routines/${routine.id}/occurrences`
+
+  if (revokeAccountBeforeRun) {
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+    await expect(dialog).toBeHidden()
+    await page.goto(`${baseURL}/settings/accounts?id=${account.id}`)
+    await page.getByRole('button', { name: '停用', exact: true }).click()
+    const disableDialog = page.getByRole('dialog').filter({ hasText: '停用' })
+    await disableDialog.getByRole('button', { name: '停用', exact: true }).click()
+    await expect.poll(async () => (await api(page, 'GET', '/accounts')).find((item: { id: string }) => item.id === account.id)?.status).toBe('disabled')
+    await expect.poll(async () => (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('paused')
+    const disabledRoutine = (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)
+    expect(disabledRoutine.error_code).toBe('account_disabled')
+    expect(disabledRoutine.next_due_at).toBeFalsy()
+    const notifications = await api(page, 'GET', '/notifications')
+    expect(notifications.items.some((item: { kind: string; title: string; body: string }) => item.kind === 'agent_routine' && item.title === '例行任务已暂停' && item.body.includes('绑定账号已停用'))).toBe(true)
+    await page.reload()
+    await expect(page.getByText('已停用', { exact: true }).first()).toBeVisible()
+
+    await page.goto(`${baseURL}/agent`)
+    await page.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const disabledTask = page.locator('article').filter({ hasText: name })
+    const controlPath = `/api/v1/agent/routines/${routine.id}/control`
+    await expect(disabledTask.getByText('已暂停', { exact: true })).toBeVisible()
+    await expect(disabledTask.getByText(/绑定账号已停用；重新启用账号后，请手动重新启用此任务。/)).toBeVisible()
+    await expect(disabledTask.getByRole('button', { name: '立即运行一次', exact: true })).toHaveCount(0)
+    await expect(disabledTask.getByRole('button', { name: '重新启用', exact: true })).toBeVisible()
+    expect((await api(page, 'GET', occurrencePath)).items).toHaveLength(0)
+
+    await page.goto(`${baseURL}/settings/accounts?id=${account.id}`)
+    const enableAccount = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/accounts/${account.id}/enable` && response.request().method() === 'POST')
+    await page.getByRole('button', { name: '重新启用', exact: true }).first().click()
+    expect((await enableAccount).status()).toBe(200)
+    await expect.poll(async () => (await api(page, 'GET', '/accounts')).find((item: { id: string }) => item.id === account.id)?.status).toBe('active')
+    expect((await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('paused')
+
+    await page.goto(`${baseURL}/agent`)
+    await page.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const restoredTask = page.locator('article').filter({ hasText: name })
+    const enableRoutine = page.waitForResponse((response) => new URL(response.url()).pathname === controlPath && response.request().method() === 'POST')
+    await restoredTask.getByRole('button', { name: '重新启用', exact: true }).click()
+    expect((await enableRoutine).status()).toBe(200)
+    await expect.poll(async () => (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('enabled')
+    return
+  }
+
   const task = dialog.locator('article').filter({ hasText: name })
   await task.getByRole('button', { name: '立即运行一次', exact: true }).click()
-  const occurrencePath = `/agent/routines/${routine.id}/occurrences`
   await expect.poll(async () => {
     const result = await api(page, 'GET', occurrencePath)
     return result.items[0]?.status
@@ -96,6 +141,10 @@ async function routineJourney(page: Page, baseURL: string, screenshotName: strin
 
 test('DEV-AW10 Web配置受限例行任务、手动运行并查看私有报告', async ({ page, baseURL }) => {
   await routineJourney(page, baseURL!, 'agent-workbench-aw10-web')
+})
+
+test('DEV-QA26 Web停用绑定账号后暂停例行任务并逐项恢复', async ({ page, baseURL }) => {
+  await routineJourney(page, baseURL!, 'qa26-routine-revoke-web', true)
 })
 
 
