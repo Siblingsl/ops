@@ -316,6 +316,7 @@ test('DEV-QA26 Windows Electron逐项拒绝文档解析边界且不允许发送'
     const page = await app.firstWindow()
     await prepare(page, baseURL!)
     const failures: { status: number; code?: string }[] = []
+    const attachmentDurations: number[] = []
     let messagePosts = 0
     page.on('request', (request) => {
       if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
@@ -324,6 +325,11 @@ test('DEV-QA26 Windows Electron逐项拒绝文档解析边界且不允许发送'
       if (new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST') {
         void response.json().then((body) => failures.push({ status: response.status(), code: body.error?.code })).catch(() => undefined)
       }
+    })
+    page.on('requestfinished', (request) => {
+      if (new URL(request.url()).pathname !== '/api/v1/agent/attachments' || request.method() !== 'POST') return
+      const timing = request.timing()
+      if (timing.requestStart >= 0 && timing.responseEnd >= timing.requestStart) attachmentDurations.push(timing.responseEnd - timing.requestStart)
     })
     const oversized = Buffer.alloc(20 * 1024 * 1024 + 1)
     const pageBreakDoc = '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>分页不一致</w:t></w:r><w:r><w:br w:type="page"/></w:r></w:p></w:body></w:document>'
@@ -362,6 +368,28 @@ test('DEV-QA26 Windows Electron逐项拒绝文档解析边界且不允许发送'
     }
     expect(failures).toHaveLength(7)
     expect(failures.every((failure) => failure.status === 422 && failure.code === 'agent_attachment_parse_failed')).toBe(true)
+    let expectedFailures = 7
+    const additionalCases = [
+      { name: 'too-many-rows.csv', mimeType: 'text/csv', buffer: Buffer.from('header\n' + 'value\n'.repeat(10_000)), message: 'CSV 最多 10000 行、100 列' },
+      { name: 'too-many-columns.csv', mimeType: 'text/csv', buffer: Buffer.from(Array.from({ length: 101 }, (_, index) => `c${index}`).join(',') + '\n'), message: 'CSV 最多 10000 行、100 列' },
+      { name: 'malformed.csv', mimeType: 'text/csv', buffer: Buffer.from('a,b\n"unfinished'), message: 'CSV 为空或格式损坏' },
+      { name: 'corrupt.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('not a zip package'), message: 'DOCX 已加密、损坏或解压内容超限' },
+      { name: 'embedded.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ 'word/embeddings/oleObject1.bin': 'embedded object' }), message: '宏、嵌入对象或外链资源' },
+    ]
+    for (const item of additionalCases) {
+      const nextChooser = page.waitForEvent('filechooser')
+      await page.getByRole('button', { name: '添加附件', exact: true }).click()
+      await (await nextChooser).setFiles({ name: item.name, mimeType: item.mimeType, buffer: item.buffer })
+      await expect(page.getByLabel(item.name + ' failed', { exact: true })).toContainText(item.message)
+      expectedFailures++
+      await expect.poll(() => failures.length, { timeout: 40_000 }).toBe(expectedFailures)
+      await page.getByRole('button', { name: '移除 ' + item.name, exact: true }).click()
+    }
+    expect(failures).toHaveLength(expectedFailures)
+    expect(attachmentDurations).toHaveLength(expectedFailures)
+    expect(failures.every((failure) => failure.status === 422 && failure.code === 'agent_attachment_parse_failed')).toBe(true)
+    console.log(`[DEV-QA26] Electron attachment rejection request ms: ${JSON.stringify(attachmentDurations)}`)
+    expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
     await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
     await expect(page).toHaveURL(/\/agent\/?$/)
     expect(messagePosts).toBe(0)
