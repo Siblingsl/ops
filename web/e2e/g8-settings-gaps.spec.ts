@@ -1,5 +1,56 @@
 import { expect, test, type Page } from '@playwright/test'
+import { createServer } from 'node:net'
 import { api, registerAccount } from './support'
+
+type LocalSmtpSink = { port: number; messages: string[]; close: () => Promise<void> }
+
+async function startLocalSmtpSink(rejectGreeting = false): Promise<LocalSmtpSink> {
+  const messages: string[] = []
+  const server = createServer((socket) => {
+    socket.setEncoding('utf8')
+    socket.write('220 qa26-local-smtp ESMTP\r\n')
+    let pending = ''
+    let message = ''
+    let readingMessage = false
+    socket.on('error', () => undefined)
+    socket.on('data', (chunk: string) => {
+      pending += chunk
+      for (;;) {
+        const boundary = pending.indexOf('\r\n')
+        if (boundary < 0) break
+        const line = pending.slice(0, boundary)
+        pending = pending.slice(boundary + 2)
+        if (readingMessage) {
+          if (line === '.') {
+            messages.push(message)
+            message = ''
+            readingMessage = false
+            socket.write('250 2.0.0 queued\r\n')
+          } else message += (line.startsWith('..') ? line.slice(1) : line) + '\r\n'
+        } else if (/^(EHLO|HELO)\b/i.test(line)) {
+          socket.write(rejectGreeting ? '550 qa26 injected SMTP failure\r\n' : '250 qa26-local-smtp\r\n')
+        } else if (/^MAIL FROM:/i.test(line) || /^RCPT TO:/i.test(line)) socket.write('250 2.1.0 accepted\r\n')
+        else if (/^DATA$/i.test(line)) { readingMessage = true; socket.write('354 end with .\r\n') }
+        else if (/^QUIT$/i.test(line)) { socket.write('221 2.0.0 bye\r\n'); socket.end() }
+        else socket.write('250 ok\r\n')
+      }
+    })
+  })
+  const port = await new Promise<number>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject)
+      const address = server.address()
+      if (!address || typeof address === 'string') { reject(new Error('SMTP sink did not bind TCP port')); return }
+      resolve(address.port)
+    })
+  })
+  return {
+    port,
+    messages,
+    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+  }
+}
 
 async function openSetting(page: Page, label: string) {
   await page.getByRole('button', { name: /用户菜单/ }).click()
@@ -196,6 +247,114 @@ test('DEV-QA26 G8 Web 邮箱邀请无 SMTP 时只记录且拒绝无效地址', a
   await expect(page.getByText(invite.code, { exact: true })).toBeVisible()
   await expect(page.getByPlaceholder('收件邮箱')).toHaveValue('')
   expect((await api(page, 'GET', '/workspaces/current/invites')).some((entry: { id: string }) => entry.id === invite.id)).toBe(true)
+})
+
+test('DEV-QA26 G2-04 Web 本机 SMTP sink 投递邀请与失败恢复', async ({ page }) => {
+  test.setTimeout(180_000)
+  const sinks: LocalSmtpSink[] = []
+  try {
+    const smtp = await startLocalSmtpSink()
+    sinks.push(smtp)
+    const rejectingSmtp = await startLocalSmtpSink(true)
+    sinks.push(rejectingSmtp)
+    await registerAccount(page)
+
+    await openSetting(page, '成员与邀请')
+    await expect(page.getByText('还没有有效邀请码', { exact: true })).toBeVisible()
+    const emptyConfig = await api(page, 'GET', '/settings') as { smtp: { host: string; from: string; has_password: boolean; password?: string } }
+    expect(emptyConfig.smtp).toMatchObject({ host: '', from: '', has_password: false })
+    expect(emptyConfig.smtp).not.toHaveProperty('password')
+    await page.getByRole('combobox').last().selectOption('editor')
+    const inviteResponse = page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/workspaces/current/invites') && response.request().method() === 'POST')
+    await page.getByRole('button', { name: '生成邀请码', exact: true }).first().click()
+    const invite = await (await inviteResponse).json() as { id: string; code: string; role: string }
+    expect(invite.role).toBe('editor')
+    const inviteCard = page.locator('li').filter({ hasText: invite.code })
+    const email = inviteCard.getByPlaceholder('收件邮箱')
+
+    await openAdvancedSetting(page, '登录与安全')
+    await page.getByLabel('SMTP 主机').fill('127.0.0.1')
+    await page.getByLabel('端口').fill(String(rejectingSmtp.port))
+    await page.getByLabel('发件人 From').fill('qa26-sender@example.invalid')
+    const saveRejectedConfig = page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/settings') && response.request().method() === 'PUT')
+    await page.getByRole('button', { name: '保存 SMTP', exact: true }).click()
+    expect((await saveRejectedConfig).status()).toBe(200)
+    expect((await api(page, 'GET', '/settings')).smtp.port).toBe(rejectingSmtp.port)
+
+    await openSetting(page, '成员与邀请')
+    const failingCard = page.locator('li').filter({ hasText: invite.code })
+    const failingEmail = failingCard.getByPlaceholder('收件邮箱')
+    await failingEmail.fill('qa26-failure@example.invalid')
+    const failedSend = page.waitForResponse((response) =>
+      response.url().endsWith('/invites/' + invite.id + '/send-email') && response.request().method() === 'POST')
+    await failingCard.getByRole('button', { name: '发送邮件', exact: true }).click()
+    expect((await failedSend).status()).toBe(502)
+    await expect(page.getByText(/邮件发送失败/)).toBeVisible()
+    await expect(failingEmail).toHaveValue('qa26-failure@example.invalid')
+    const failedLog = (await api(page, 'GET', '/audit-logs?action=invite_email&limit=200') as Array<{ target_id: string; result: string }>).find((entry) => entry.target_id === invite.id)
+    expect(failedLog?.result).toBe('failed')
+
+    await openAdvancedSetting(page, '登录与安全')
+    await page.getByLabel('SMTP 主机').fill('127.0.0.1')
+    await page.getByLabel('端口').fill(String(smtp.port))
+    await page.getByLabel('发件人 From').fill('qa26-sender@example.invalid')
+    const saveWorkingConfig = page.waitForResponse((response) =>
+      response.url().endsWith('/api/v1/settings') && response.request().method() === 'PUT')
+    await page.getByRole('button', { name: '保存 SMTP', exact: true }).click()
+    expect((await saveWorkingConfig).status()).toBe(200)
+    await page.reload()
+    await expect(page.getByLabel('SMTP 主机')).toHaveValue('127.0.0.1')
+    await expect(page.getByLabel('端口')).toHaveValue(String(smtp.port))
+    await expect(page.getByLabel('发件人 From')).toHaveValue('qa26-sender@example.invalid')
+    const persistedConfig = await api(page, 'GET', '/settings') as { smtp: { host: string; port: number; from: string; has_password: boolean; password?: string } }
+    expect(persistedConfig.smtp).toMatchObject({ host: '127.0.0.1', port: smtp.port, from: 'qa26-sender@example.invalid', has_password: false })
+    expect(persistedConfig.smtp).not.toHaveProperty('password')
+
+    await openSetting(page, '成员与邀请')
+    const messageCard = page.locator('li').filter({ hasText: invite.code })
+    const messageEmail = messageCard.getByPlaceholder('收件邮箱')
+    const clickSamples: number[] = []
+    for (let index = 0; index < 20; index += 1) {
+      const recipient = `qa26-local-${index}@example.invalid`
+      await messageEmail.fill(recipient)
+      const sent = page.waitForResponse((response) =>
+        response.url().endsWith('/invites/' + invite.id + '/send-email') && response.request().method() === 'POST')
+      const started = performance.now()
+      await messageCard.getByRole('button', { name: '发送邮件', exact: true }).click()
+      const response = await sent
+      clickSamples.push(performance.now() - started)
+      expect(response.status()).toBe(200)
+      expect((await response.json()).status).toBe('sent')
+      expect(smtp.messages).toHaveLength(index + 1)
+      await expect(messageEmail).toHaveValue('')
+    }
+    for (const [index, message] of smtp.messages.entries()) {
+      expect(message).toContain(`To: qa26-local-${index}@example.invalid`)
+      expect(message).toContain(`邀请码：${invite.code}`)
+      expect(message).toContain('编辑者')
+    }
+    const sortedSamples = [...clickSamples].sort((a, b) => a - b)
+    const percentile = (p: number) => sortedSamples[Math.ceil(p * sortedSamples.length) - 1]
+    console.log('[QA26 local SMTP Web click samples] ' + JSON.stringify({
+      count: clickSamples.length,
+      p50_ms: Number(percentile(0.5).toFixed(2)),
+      p95_ms: Number(percentile(0.95).toFixed(2)),
+      failures: 0,
+    }))
+    const inviteLogs = (await api(page, 'GET', '/audit-logs?action=invite_email&limit=200') as Array<{ target_id: string; result: string; detail: { status: string } }>).filter((entry) => entry.target_id === invite.id)
+    expect(inviteLogs).toHaveLength(21)
+    expect(inviteLogs.filter((entry) => entry.result === 'ok' && entry.detail.status === 'sent')).toHaveLength(20)
+    expect(inviteLogs.filter((entry) => entry.result === 'failed')).toHaveLength(1)
+
+    await page.reload()
+    await expect(page.getByText(invite.code, { exact: true })).toBeVisible()
+    await expect(page.getByPlaceholder('收件邮箱')).toHaveValue('')
+    expect((await api(page, 'GET', '/workspaces/current/invites')).some((entry: { id: string }) => entry.id === invite.id)).toBe(true)
+  } finally {
+    await Promise.allSettled(sinks.map((sink) => sink.close()))
+  }
 })
 
 test('DEV-QA26 G2-13 Web 回收站读取失败可重试并区分空态', async ({ page }) => {
