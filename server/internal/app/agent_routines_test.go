@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,109 @@ func TestAW10RoutineFeatureRequiresCompletedRunDependencies(t *testing.T) {
 	t.Setenv(agentWorkbenchFeatureEnv, "routines,event_resume,run_control,plans,goals,artifacts")
 	if !agentWorkbenchFeatures()["routines"] {
 		t.Fatal("routines should be available once all prerequisites are enabled")
+	}
+}
+
+func TestAW10RoutinePausesWhenCreatorIsDemotedToViewer(t *testing.T) {
+	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
+	providerID := env.ensureToolModel(t)
+	account := env.accounts(t).xhs
+	owner := env.me(t)
+	ownerID, workspaceID := uuid.MustParse(owner.UserID), uuid.MustParse(owner.Workspace.ID)
+	memberUsername := "qa26-routine-demotion-" + uuid.NewString()[:8]
+	memberID := uuid.New()
+	if _, err := env.srv.db.Exec(t.Context(), `INSERT INTO app_user (id,username,password_hash)
+		SELECT $1,$2,password_hash FROM app_user WHERE id=$3`, memberID, memberUsername, ownerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.srv.db.Exec(t.Context(), `INSERT INTO workspace_member (workspace_id,user_id,role,status)
+		VALUES ($1,$2,'editor','active')`, workspaceID, memberID); err != nil {
+		t.Fatal(err)
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := &guestClient{
+		parent: env, client: &http.Client{Jar: jar, Timeout: time.Minute}, savedC: env.client, savedX: env.csrf,
+	}
+	t.Cleanup(func() {
+		member.restore(env)
+		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM session WHERE user_id=$1`, memberID)
+		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM app_user WHERE id=$1`, memberID)
+	})
+	status, body := member.do(http.MethodPost, "/api/v1/auth/login", map[string]string{
+		"username": memberUsername, "password": testPassword,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("登录隔离编辑成员失败：status=%d body=%s", status, body)
+	}
+	var registered struct {
+		UserID    uuid.UUID `json:"user_id"`
+		CSRF      string    `json:"csrf_token"`
+		Role      string    `json:"role"`
+		Workspace struct {
+			ID string `json:"id"`
+		} `json:"workspace"`
+	}
+	member.mustJSON(t, http.MethodGet, "/api/v1/auth/me", nil, &registered)
+	member.csrf = registered.CSRF
+	if registered.UserID != memberID || registered.Workspace.ID != owner.Workspace.ID || registered.Role != "editor" {
+		t.Fatalf("隔离编辑成员身份不正确：owner=%+v member=%+v", owner, registered)
+	}
+	var created struct {
+		Routine agentRoutineView `json:"routine"`
+	}
+	member.mustJSON(t, http.MethodPost, "/api/v1/agent/routines", map[string]any{
+		"request_id": uuid.NewString(), "name": "成员降权暂停验收", "prompt": "只读核对",
+		"public_context_refs": []any{}, "account_id": account.ID.String(), "cadence": "daily", "time_of_day": "09:00",
+		"timezone": "Asia/Shanghai", "destination": "new",
+		"model": map[string]any{"provider_id": providerID, "model": "mock-writer"},
+	}, &created)
+	if created.Routine.ID == uuid.Nil || created.Routine.Status != "enabled" {
+		t.Fatalf("编辑者例行任务创建失败：%+v", created)
+	}
+	member.restore(env)
+	env.mustJSON(t, http.MethodPatch, "/api/v1/workspaces/current/members/"+memberID.String(), map[string]string{"role": "viewer"}, nil)
+	var paused struct {
+		Items []agentRoutineView `json:"items"`
+	}
+	member.mustJSON(t, http.MethodGet, "/api/v1/agent/routines", nil, &paused)
+	if len(paused.Items) != 1 || paused.Items[0].ID != created.Routine.ID || paused.Items[0].Status != "paused" || paused.Items[0].ErrorCode != "member_role_revoked" || paused.Items[0].NextDueAt != nil {
+		t.Fatalf("创建者降为观察者后必须持久化暂停例行任务：%+v", paused.Items)
+	}
+	var eventCount int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_event WHERE routine_id=$1 AND type='paused'
+		AND payload->>'reason'='member_role_revoked'`, created.Routine.ID).Scan(&eventCount); err != nil || eventCount != 1 {
+		t.Fatalf("成员权限撤销必须持久化暂停事件：count=%d err=%v", eventCount, err)
+	}
+	var notices struct {
+		Items []Notification `json:"items"`
+	}
+	member.mustJSON(t, http.MethodGet, "/api/v1/notifications", nil, &notices)
+	foundNotice := false
+	for _, item := range notices.Items {
+		if item.Kind == "agent_routine" && item.Title == "例行任务已暂停" && strings.Contains(item.Body, "恢复编辑权限后") {
+			foundNotice = true
+		}
+	}
+	if !foundNotice {
+		t.Fatalf("成员降权后必须向任务创建者发送通知：%+v", notices.Items)
+	}
+	member.restore(env)
+	env.mustJSON(t, http.MethodPatch, "/api/v1/workspaces/current/members/"+memberID.String(), map[string]string{"role": "editor"}, nil)
+	member.mustJSON(t, http.MethodGet, "/api/v1/agent/routines", nil, &paused)
+	if paused.Items[0].Status != "paused" {
+		t.Fatal("恢复编辑权限不得自动重新启用例行任务")
+	}
+	var enabled struct {
+		Routine agentRoutineView `json:"routine"`
+	}
+	member.mustJSON(t, http.MethodPost, "/api/v1/agent/routines/"+created.Routine.ID.String()+"/control", map[string]any{
+		"expected_revision": paused.Items[0].Revision, "request_id": uuid.NewString(), "action": "enable",
+	}, &enabled)
+	if enabled.Routine.Status != "enabled" {
+		t.Fatalf("创建者逐项启用例行任务失败：%+v", enabled.Routine)
 	}
 }
 

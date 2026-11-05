@@ -241,6 +241,63 @@ func (s *Server) patchMember(w http.ResponseWriter, r *http.Request) error {
 				return err
 			}
 		}
+		if role == "viewer" {
+			tx, err := s.db.Begin(r.Context())
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback(r.Context())
+			tag, err := tx.Exec(r.Context(),
+				`UPDATE workspace_member SET role=$3, updated_at=now() WHERE workspace_id=$1 AND user_id=$2`,
+				ws, targetID, role)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return errNotFound
+			}
+			type pausedRoutine struct {
+				id       uuid.UUID
+				revision int64
+			}
+			var paused []pausedRoutine
+			rows, err := tx.Query(r.Context(), `UPDATE agent_routine SET status='paused',next_due_at=NULL,
+				revision=revision+1,error_code='member_role_revoked',updated_at=now()
+				WHERE workspace_id=$1 AND user_id=$2 AND status='enabled' RETURNING id,revision`, ws, targetID)
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				var item pausedRoutine
+				if err := rows.Scan(&item.id, &item.revision); err != nil {
+					rows.Close()
+					return err
+				}
+				paused = append(paused, item)
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			for _, item := range paused {
+				if err := s.agentRoutineEventTx(r.Context(), tx, item.id, "paused", map[string]any{
+					"reason": "member_role_revoked", "revision": item.revision,
+				}); err != nil {
+					return err
+				}
+			}
+			if err := tx.Commit(r.Context()); err != nil {
+				return err
+			}
+			s.audit(r.Context(), "member_update", "user", targetID.String(), "ok", nil)
+			for _, item := range paused {
+				s.notify(r.Context(), ws, targetID, "agent_routine", "例行任务已暂停",
+					"创建者已降为观察者，例行任务权限已撤销；恢复编辑权限后，请手动重新启用此任务。",
+					"/agent?panel=task&item="+item.id.String(),
+					fmt.Sprintf("agent_routine:blocked:%s:%d", item.id, item.revision))
+			}
+			return ok(w, map[string]any{"ok": true})
+		}
 		tag, err := s.db.Exec(r.Context(),
 			`UPDATE workspace_member SET role=$3, updated_at=now() WHERE workspace_id=$1 AND user_id=$2`,
 			ws, targetID, role)

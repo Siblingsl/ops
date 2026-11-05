@@ -147,4 +147,72 @@ test('DEV-QA26 Web停用绑定账号后暂停例行任务并逐项恢复', async
   await routineJourney(page, baseURL!, 'qa26-routine-revoke-web', true)
 })
 
+test('DEV-QA26 Web创建者降为观察者后暂停例行任务并逐项恢复', async ({ page, baseURL, browser }) => {
+  const account = await prepareRoutine(page, baseURL!)
+  const invite = await api(page, 'POST', '/workspaces/current/invites', { role: 'editor', max_uses: 1, days: 1 })
+  const context = await browser.newContext({ baseURL: new URL(page.url()).origin })
+  try {
+    const username = `qa26-routine-role-${Date.now()}`
+    const joined = await context.request.post('/api/v1/auth/register', {
+      data: { username, password: 'local-e2e-password-123', invite_code: invite.code },
+    })
+    expect(joined.ok()).toBeTruthy()
+    const editorMe = await (await context.request.get('/api/v1/auth/me')).json() as { user_id: string; role: string; workspace: { id: string } }
+    expect(editorMe.role).toBe('editor')
+    const ownerMe = await api(page, 'GET', '/auth/me')
+    expect(editorMe.workspace.id).toBe(ownerMe.workspace.id)
+
+    const editor = await context.newPage()
+    await editor.goto(`${baseURL}/agent`)
+    const privacy = editor.getByRole('dialog').filter({ has: editor.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
+    await expect(privacy).toBeVisible()
+    await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
+    await editor.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const dialog = editor.getByRole('dialog').filter({ has: editor.getByRole('heading', { name: '受限例行任务', exact: true }) })
+    await expect(dialog.getByRole('combobox', { name: '运营账号', exact: true })).toHaveValue(account.id)
+    const name = `QA26 降权恢复任务 ${Date.now()}`
+    await dialog.getByLabel('名称', { exact: true }).fill(name)
+    await dialog.getByLabel('任务提示（最多 4000 字）', { exact: true }).fill('只读核对并生成报告。\n#text 创建者降权恢复测试。')
+    const created = editor.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/routines' && response.request().method() === 'POST')
+    await dialog.getByRole('button', { name: '创建并启用', exact: true }).click()
+    expect((await created).status()).toBe(200)
+    const routine = (await api(editor, 'GET', '/agent/routines')).items.find((item: { name: string }) => item.name === name)
+    expect(routine.status).toBe('enabled')
+
+    await page.goto(`${baseURL}/settings/members`)
+    const memberRow = page.locator('li').filter({ hasText: username })
+    await expect(memberRow).toBeVisible()
+    const roleSelect = memberRow.getByRole('combobox')
+    const roleChanged = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith(`/workspaces/current/members/${editorMe.user_id}`) && response.request().method() === 'PATCH')
+    await roleSelect.selectOption('viewer')
+    expect((await roleChanged).status()).toBe(200)
+    await expect.poll(async () => (await api(page, 'GET', '/workspaces/current/members')).find((item: { user_id: string }) => item.user_id === editorMe.user_id)?.role).toBe('viewer')
+    await expect.poll(async () => (await api(editor, 'GET', '/auth/me')).role).toBe('viewer')
+
+    const pausedRoutine = (await api(editor, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)
+    expect(pausedRoutine.status).toBe('paused')
+    expect(pausedRoutine.error_code).toBe('member_role_revoked')
+    expect((await api(editor, 'GET', '/notifications')).items.some((item: { kind: string; title: string }) => item.kind === 'agent_routine' && item.title === '例行任务已暂停')).toBe(true)
+    await editor.goto(`${baseURL}/agent`)
+    await editor.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const pausedTask = editor.locator('article').filter({ hasText: name })
+    await expect(pausedTask.getByText('已暂停', { exact: true })).toBeVisible()
+    await expect(pausedTask.getByText(/恢复编辑权限后，请手动重新启用此任务/)).toBeVisible()
+    await expect(pausedTask.getByRole('button', { name: '立即运行一次', exact: true })).toHaveCount(0)
+    await expect(pausedTask.getByRole('button', { name: '重新启用', exact: true })).toHaveCount(0)
+
+    await roleSelect.selectOption('editor')
+    await expect.poll(async () => (await api(page, 'GET', '/workspaces/current/members')).find((item: { user_id: string }) => item.user_id === editorMe.user_id)?.role).toBe('editor')
+    expect((await api(editor, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('paused')
+    await editor.reload()
+    await editor.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const restoredTask = editor.locator('article').filter({ hasText: name })
+    const enabled = editor.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/routines/${routine.id}/control` && response.request().method() === 'POST')
+    await restoredTask.getByRole('button', { name: '重新启用', exact: true }).click()
+    expect((await enabled).status()).toBe(200)
+    expect((await api(editor, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('enabled')
+  } finally {
+    await context.close()
+  }
+})
 

@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { selectDesktopSetting } from './support'
 
 async function api(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(async ({ method, path, body }) => {
@@ -185,6 +186,93 @@ test('DEV-QA26 Windows Electron停用绑定账号后暂停例行任务并逐项�
     await app?.close()
     if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-qa26-routine-revoke-')) throw new Error('拒绝清理测试目录之外路径')
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('DEV-QA26 Windows Electron创建者降为观察者后暂停例行任务并逐项恢复', async ({ baseURL, browser }) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(240_000)
+  const ownerProfile = await mkdtemp(join(tmpdir(), 'ops-qa26-routine-role-owner-'))
+  let ownerApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  let editorContext: Awaited<ReturnType<typeof browser.newContext>> | undefined
+  try {
+    ownerApp = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${ownerProfile}`, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const ownerPage = await ownerApp.firstWindow()
+    const account = await prepareRoutine(ownerPage, baseURL!)
+    const ownerMe = await api(ownerPage, 'GET', '/auth/me')
+    const invite = await api(ownerPage, 'POST', '/workspaces/current/invites', { role: 'editor', max_uses: 1, days: 1 })
+    const editorUsername = `qa26-routine-role-${Date.now()}`
+
+    editorContext = await browser.newContext({ baseURL: baseURL! })
+    const joined = await editorContext.request.post('/api/v1/auth/register', {
+      data: { username: editorUsername, password: 'local-e2e-password-123', invite_code: invite.code },
+    })
+    expect(joined.ok(), '通过邀请码注册工作区编辑者').toBeTruthy()
+    const editorPage = await editorContext.newPage()
+    await editorPage.goto(`${baseURL}/agent`)
+    await expect.poll(async () => (await api(editorPage, 'GET', '/auth/me')).role).toBe('editor')
+    const editorMe = await api(editorPage, 'GET', '/auth/me')
+    expect(editorMe.workspace.id).toBe(ownerMe.workspace.id)
+    const privacy = editorPage.getByRole('dialog').filter({ has: editorPage.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
+    await expect(privacy).toBeVisible()
+    await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
+    await editorPage.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const dialog = editorPage.getByRole('dialog').filter({ has: editorPage.getByRole('heading', { name: '受限例行任务', exact: true }) })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('combobox', { name: '运营账号', exact: true })).toHaveValue(account.id)
+    const name = `QA26 降权恢复任务 ${Date.now()}`
+    await dialog.getByLabel('名称', { exact: true }).fill(name)
+    await dialog.getByLabel('任务提示（最多 4000 字）', { exact: true }).fill('只读核对并生成报告。\n#text 创建者降权恢复测试。')
+    const created = editorPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/routines' && response.request().method() === 'POST')
+    await dialog.getByRole('button', { name: '创建并启用', exact: true }).click()
+    expect((await created).status()).toBe(200)
+    const before = await api(editorPage, 'GET', '/agent/routines')
+    const routine = before.items.find((item: { name: string }) => item.name === name)
+    expect(routine.status).toBe('enabled')
+
+    await ownerPage.getByRole('button', { name: /^用户菜单：/ }).click()
+    await ownerPage.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(ownerPage, '成员与邀请')
+    const settings = ownerPage.getByTestId('desktop-settings-window')
+    const memberRow = settings.locator('li').filter({ hasText: editorUsername })
+    await expect(memberRow).toBeVisible()
+    const roleSelect = memberRow.getByRole('combobox')
+    const roleChanged = ownerPage.waitForResponse((response) => new URL(response.url()).pathname.endsWith(`/workspaces/current/members/${editorMe.user_id}`) && response.request().method() === 'PATCH')
+    await roleSelect.selectOption('viewer')
+    expect((await roleChanged).status()).toBe(200)
+    await expect.poll(async () => (await api(ownerPage, 'GET', '/workspaces/current/members')).find((item: { username: string }) => item.username === editorUsername)?.role).toBe('viewer')
+    await expect.poll(async () => (await api(editorPage, 'GET', '/auth/me')).role).toBe('viewer')
+
+    const afterDowngrade = await api(editorPage, 'GET', '/agent/routines')
+    expect(afterDowngrade.items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('paused')
+    expect(afterDowngrade.items.find((item: { id: string }) => item.id === routine.id)?.error_code).toBe('member_role_revoked')
+    expect((await api(editorPage, 'GET', '/notifications')).items.some((item: { kind: string; title: string }) => item.kind === 'agent_routine' && item.title === '例行任务已暂停')).toBe(true)
+
+    await editorPage.goto(`${baseURL}/agent`)
+    await editorPage.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const pausedTask = editorPage.locator('article').filter({ hasText: name })
+    await expect(pausedTask.getByText('已暂停', { exact: true })).toBeVisible()
+    await expect(pausedTask.getByText(/恢复编辑权限后，请手动重新启用此任务/)).toBeVisible()
+    await expect(pausedTask.getByRole('button', { name: '立即运行一次', exact: true })).toHaveCount(0)
+
+    await roleSelect.selectOption('editor')
+    await expect.poll(async () => (await api(ownerPage, 'GET', '/workspaces/current/members')).find((item: { username: string }) => item.username === editorUsername)?.role).toBe('editor')
+    await editorPage.reload()
+    await editorPage.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const restoredTask = editorPage.locator('article').filter({ hasText: name })
+    const enableRoutine = editorPage.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/routines/${routine.id}/control` && response.request().method() === 'POST')
+    await restoredTask.getByRole('button', { name: '重新启用', exact: true }).click()
+    expect((await enableRoutine).status()).toBe(200)
+    await expect.poll(async () => (await api(editorPage, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('enabled')
+  } finally {
+    await ownerApp?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await ownerApp?.close()
+    await editorContext?.close()
+    const resolved = resolve(ownerProfile)
+    if (!resolved.startsWith(resolve(tmpdir()) + sep) || !basename(ownerProfile).startsWith('ops-qa26-routine-role-owner-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(ownerProfile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
 

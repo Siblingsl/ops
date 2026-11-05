@@ -63,6 +63,7 @@ const statusLabel: Record<string, string> = {
 const occurrenceStatusLabel: Record<string, string> = { ...statusLabel, completed: '已完成' }
 const routineErrorLabel: Record<string, string> = {
   account_disabled: '绑定账号已停用；重新启用账号后，请手动重新启用此任务。',
+  member_role_revoked: '创建者当前是观察者；恢复编辑权限后，请手动重新启用此任务。',
 }
 
 function modelKey(model?: { provider_id?: string | null; model?: string | null }) {
