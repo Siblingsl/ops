@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { deflateRawSync } from 'node:zlib'
 
 async function api(page: Page, method: string, path: string, body?: unknown) {
   return page.evaluate(async ({ method, path, body }) => {
@@ -42,35 +43,79 @@ function pdfFixture(options: { pages?: number; withText?: boolean; encrypted?: b
   return Buffer.from(text)
 }
 
-function docxFixture(overrides: Record<string, string> = {}) {
-  const files = {
-    'word/document.xml': '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>AW11 DOCX 原始资料</w:t></w:r></w:p></w:body></w:document>',
-    'docProps/app.xml': '<Properties><Pages>1</Pages></Properties>',
-    ...overrides,
-  }
+const crc32Table = Uint32Array.from({ length: 256 }, (_, index) => {
+  let value = index
+  for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0)
+  return value >>> 0
+})
+
+function crc32(data: Buffer) {
+  let value = 0xffffffff
+  for (const byte of data) value = crc32Table[(value ^ byte) & 0xff] ^ (value >>> 8)
+  return (value ^ 0xffffffff) >>> 0
+}
+
+function zipFixture(files: Record<string, string | Buffer>, deflate = false) {
   const local: Buffer[] = [], central: Buffer[] = []
   let offset = 0
-  for (const [filename, text] of Object.entries(files)) {
-    const name = Buffer.from(filename), data = Buffer.from(text)
-    let crc = 0xffffffff
-    for (const byte of data) {
-      crc ^= byte
-      for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0)
-    }
-    crc = (crc ^ 0xffffffff) >>> 0
+  const method = deflate ? 8 : 0
+  for (const [filename, content] of Object.entries(files)) {
+    const name = Buffer.from(filename), data = Buffer.isBuffer(content) ? content : Buffer.from(content)
+    const compressed = deflate ? deflateRawSync(data) : data
+    const checksum = crc32(data)
     const header = Buffer.alloc(30)
-    header.writeUInt32LE(0x04034b50); header.writeUInt16LE(20, 4); header.writeUInt16LE(0x800, 6)
-    header.writeUInt32LE(crc, 14); header.writeUInt32LE(data.length, 18); header.writeUInt32LE(data.length, 22); header.writeUInt16LE(name.length, 26)
-    local.push(header, name, data)
+    header.writeUInt32LE(0x04034b50); header.writeUInt16LE(20, 4); header.writeUInt16LE(0x800, 6); header.writeUInt16LE(method, 8)
+    header.writeUInt32LE(checksum, 14); header.writeUInt32LE(compressed.length, 18); header.writeUInt32LE(data.length, 22); header.writeUInt16LE(name.length, 26)
+    local.push(header, name, compressed)
     const entry = Buffer.alloc(46)
-    entry.writeUInt32LE(0x02014b50); entry.writeUInt16LE(20, 4); entry.writeUInt16LE(20, 6); entry.writeUInt16LE(0x800, 8)
-    entry.writeUInt32LE(crc, 16); entry.writeUInt32LE(data.length, 20); entry.writeUInt32LE(data.length, 24); entry.writeUInt16LE(name.length, 28); entry.writeUInt32LE(offset, 42)
+    entry.writeUInt32LE(0x02014b50); entry.writeUInt16LE(20, 4); entry.writeUInt16LE(20, 6); entry.writeUInt16LE(0x800, 8); entry.writeUInt16LE(method, 10)
+    entry.writeUInt32LE(checksum, 16); entry.writeUInt32LE(compressed.length, 20); entry.writeUInt32LE(data.length, 24); entry.writeUInt16LE(name.length, 28); entry.writeUInt32LE(offset, 42)
     central.push(entry, name)
-    offset += header.length + name.length + data.length
+    offset += header.length + name.length + compressed.length
   }
   const directory = Buffer.concat(central), end = Buffer.alloc(22), entries = Object.keys(files).length
   end.writeUInt32LE(0x06054b50); end.writeUInt16LE(entries, 8); end.writeUInt16LE(entries, 10); end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16)
   return Buffer.concat([...local, directory, end])
+}
+
+function docxFixture(overrides: Record<string, string | Buffer> = {}) {
+  return zipFixture({
+    'word/document.xml': '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>AW11 DOCX 原始资料</w:t></w:r></w:p></w:body></w:document>',
+    'docProps/app.xml': '<Properties><Pages>1</Pages></Properties>',
+    ...overrides,
+  })
+}
+
+function docxPageFixture(pages: number, overrides: Record<string, string> = {}) {
+  const pageBreaks = '<w:lastRenderedPageBreak/>'.repeat(Math.max(0, pages - 1))
+  return docxFixture({
+    'word/document.xml': `<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>分页边界资料</w:t></w:r>${pageBreaks}</w:p></w:body></w:document>`,
+    'docProps/app.xml': `<Properties><Pages>${pages}</Pages></Properties>`,
+    ...overrides,
+  })
+}
+
+function docxEntryCountFixture(totalEntries: number) {
+  const overrides: Record<string, string> = {}
+  for (let index = 2; index < totalEntries; index++) overrides[`customXml/item${index}.xml`] = '<item />'
+  return docxFixture(overrides)
+}
+
+function docxExternalEntityFixture() {
+  return docxFixture({
+    'word/document.xml': '<!DOCTYPE w:document [<!ENTITY ext SYSTEM "file:///OPS-QA26-NO-READ">]><w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>&ext;</w:t></w:r></w:p></w:body></w:document>',
+  })
+}
+
+function docxExpandedFixture(totalExpandedBytes: number) {
+  const files: Record<string, Buffer> = {
+    'word/document.xml': Buffer.from('<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>ZIP 上界资料</w:t></w:r></w:p></w:body></w:document>'),
+    'docProps/app.xml': Buffer.from('<Properties><Pages>1</Pages></Properties>'),
+  }
+  const baseBytes = Object.values(files).reduce((total, data) => total + data.length, 0)
+  if (totalExpandedBytes < baseBytes) throw new Error('DOCX expanded fixture below its XML headers')
+  files['customXml/payload.xml'] = Buffer.alloc(totalExpandedBytes - baseBytes, 0x61)
+  return zipFixture(files, true)
 }
 
 async function prepare(page: Page, baseURL: string) {
@@ -187,8 +232,8 @@ test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({
     { name: 'too-many-pages.pdf', mimeType: 'application/pdf', buffer: pdfFixture({ pages: 101 }) },
     { name: 'scanned.pdf', mimeType: 'application/pdf', buffer: pdfFixture({ withText: false }) },
     { name: 'encrypted.pdf', mimeType: 'application/pdf', buffer: pdfFixture({ encrypted: true }) },
-    { name: 'external.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ 'word/_rels/document.xml.rels': '<Relationships xmlns="urn:r"><Relationship TargetMode="External" Target="https://example.invalid"/></Relationships>' }) },
-    { name: 'macro.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ '[Content_Types].xml': '<Types><Default ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/></Types>' }) },
+    { name: 'external.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxPageFixture(100, { 'word/_rels/document.xml.rels': '<Relationships xmlns="urn:r"><Relationship TargetMode="External" Target="https://example.invalid"/></Relationships>' }) },
+    { name: 'macro.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxPageFixture(100, { '[Content_Types].xml': '<Types><Default ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/></Types>' }) },
   ])
   await expect(page.getByLabel('oversized.pdf failed', { exact: true })).toContainText('文件超过大小限制')
   await expect(page.getByLabel('too-many-pages.pdf failed', { exact: true })).toContainText('超过 100 页')
@@ -222,6 +267,10 @@ test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({
     { name: 'malformed.csv', mimeType: 'text/csv', buffer: Buffer.from('a,b\n"unfinished'), message: 'CSV 为空或格式损坏' },
     { name: 'corrupt.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('not a zip package'), message: 'DOCX 已加密、损坏或解压内容超限' },
     { name: 'embedded.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ 'word/embeddings/oleObject1.bin': 'embedded object' }), message: '宏、嵌入对象或外链资源' },
+    { name: 'malformed-xml.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ 'word/document.xml': '<w:document xmlns:w="urn:w"><w:body><w:p><w:t>不完整 XML</w:p></w:body></w:document>' }), message: 'DOCX 已加密、损坏或解压内容超限' },
+    { name: 'external-entity.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxExternalEntityFixture(), message: 'DOCX 已加密、损坏或解压内容超限' },
+    { name: 'too-many-entries.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxEntryCountFixture(257), message: 'DOCX 已加密、损坏或解压内容超限' },
+    { name: 'too-many-pages.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxPageFixture(101), message: '文档超过 100 页' },
   ]
   for (const item of additionalCases) {
     const nextChooser = page.waitForEvent('filechooser')
@@ -232,24 +281,66 @@ test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({
     await expect.poll(() => failures.length, { timeout: 40_000 }).toBe(expectedFailures)
     await page.getByRole('button', { name: '移除 ' + item.name, exact: true }).click()
   }
+  let expandedDocx = docxExpandedFixture(96 * 1024 * 1024 + 1)
+  const expandedChooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await expandedChooser).setFiles({ name: 'expanded-over-limit.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: expandedDocx })
+  expandedDocx = Buffer.alloc(0)
+  await expect(page.getByLabel('expanded-over-limit.docx failed', { exact: true })).toContainText('DOCX 已加密、损坏或解压内容超限')
+  expectedFailures++
+  await expect.poll(() => failures.length, { timeout: 40_000 }).toBe(expectedFailures)
+  await page.getByRole('button', { name: '移除 expanded-over-limit.docx', exact: true }).click()
   expect(failures).toHaveLength(expectedFailures)
   expect(attachmentDurations).toHaveLength(expectedFailures)
   expect(failures.every((failure) => failure.status === 422 && failure.code === 'agent_attachment_parse_failed')).toBe(true)
+  let expandedAtLimit = docxExpandedFixture(96 * 1024 * 1024)
+  const exactZipChooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await exactZipChooser).setFiles({ name: 'expanded-at-limit.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: expandedAtLimit })
+  expandedAtLimit = Buffer.alloc(0)
+  await expect(page.getByLabel('expanded-at-limit.docx ready', { exact: true })).toBeVisible({ timeout: 40_000 })
+  await expect.poll(() => accepted.length, { timeout: 40_000 }).toBe(1)
+  expect(accepted[0]).toMatchObject({ status: 200, parse_status: 'ready', page_count: 1 })
+  const expandedFile = await page.evaluate(async (id) => {
+    const response = await fetch('/api/v1/agent/attachments/' + id + '/file')
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    return { status: response.status, bytes: bytes.byteLength, signature: new TextDecoder().decode(bytes.slice(0, 4)) }
+  }, accepted[0].id!)
+  expect(expandedFile.status).toBe(200)
+  expect(expandedFile.bytes).toBeGreaterThan(0)
+  expect(expandedFile.signature).toBe('PK\u0003\u0004')
+  await page.getByRole('button', { name: '移除 expanded-at-limit.docx', exact: true }).click()
+  const exactEntriesChooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await exactEntriesChooser).setFiles({ name: 'exactly-256-entries.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxEntryCountFixture(256) })
+  await expect(page.getByLabel('exactly-256-entries.docx ready', { exact: true })).toBeVisible({ timeout: 40_000 })
+  await expect.poll(() => accepted.length, { timeout: 40_000 }).toBe(2)
+  expect(accepted[1]).toMatchObject({ status: 200, parse_status: 'ready', page_count: 1 })
+  await page.getByRole('button', { name: '移除 exactly-256-entries.docx', exact: true }).click()
+  const exactPagesChooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await exactPagesChooser).setFiles({ name: 'exactly-100-pages.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxPageFixture(100) })
+  await expect(page.getByLabel('exactly-100-pages.docx ready', { exact: true })).toBeVisible({ timeout: 40_000 })
+  await expect.poll(() => accepted.length, { timeout: 40_000 }).toBe(3)
+  expect(accepted[2]).toMatchObject({ status: 200, parse_status: 'ready', page_count: 100 })
+  await page.getByRole('button', { name: '移除 exactly-100-pages.docx', exact: true }).click()
   const exactBoundaryChooser = page.waitForEvent('filechooser')
   await page.getByRole('button', { name: '添加附件', exact: true }).click()
   await (await exactBoundaryChooser).setFiles({ name: 'exactly-100-pages.pdf', mimeType: 'application/pdf', buffer: pdfFixture({ pages: 100 }) })
   await expect(page.getByLabel('exactly-100-pages.pdf ready', { exact: true })).toBeVisible({ timeout: 40_000 })
-  await expect.poll(() => accepted.length, { timeout: 40_000 }).toBe(1)
-  expect(accepted[0]).toMatchObject({ status: 200, parse_status: 'ready', page_count: 100 })
+  await expect.poll(() => accepted.length, { timeout: 40_000 }).toBe(4)
+  expect(accepted[3]).toMatchObject({ status: 200, parse_status: 'ready', page_count: 100 })
   const originalFile = await page.evaluate(async (id) => {
     const response = await fetch('/api/v1/agent/attachments/' + id + '/file')
     const bytes = new Uint8Array(await response.arrayBuffer())
     return { status: response.status, bytes: bytes.byteLength, signature: new TextDecoder().decode(bytes.slice(0, 8)) }
-  }, accepted[0].id!)
+  }, accepted[3].id!)
   expect(originalFile.status).toBe(200)
   expect(originalFile.bytes).toBeGreaterThan(0)
   expect(originalFile.signature).toBe('%PDF-1.4')
-  await expect.poll(() => attachmentDurations.length, { timeout: 10_000 }).toBe(expectedFailures + 1)
+  await expect.poll(() => attachmentDurations.length, { timeout: 10_000 }).toBe(expectedFailures + 4)
+  const sortedDurations = [...attachmentDurations].sort((a, b) => a - b)
+  console.log(`DEV-QA26_METRIC_DOCX_BOUNDARY_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and WASI parser', sample_count: attachmentDurations.length, rejected: failures.length, accepted: accepted.length, p50_ms: Number(sortedDurations[10].toFixed(2)), p95_ms: Number(sortedDurations[19].toFixed(2)), unexpected_failures: 0 })}`)
   console.log(`[DEV-QA26] Web exact-100-page upload ms: ${attachmentDurations.at(-1)}`)
   console.log(`[DEV-QA26] Web attachment rejection request ms: ${JSON.stringify(attachmentDurations.slice(0, expectedFailures))}`)
   expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
