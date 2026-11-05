@@ -5,7 +5,7 @@ import { createServer } from 'node:net'
 import { performance } from 'node:perf_hooks'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { api, openDesktopAccountSwitcher, registerAccount, selectDesktopSetting } from './support'
+import { api, createOutline, finishChecks, openDesktopAccountSwitcher, registerAccount, selectDesktopSetting } from './support'
 
 type ElectronApp = Awaited<ReturnType<typeof _electron.launch>>
 
@@ -1223,5 +1223,185 @@ test('DEV-QA26 G2-02 真实 Electron 编辑者只能查看平台账号', async (
   } finally {
     if (editorApp) await closeElectron(editorApp, editorProfile, 'account-role')
     await closeElectron(owner.app, owner.profile, 'account-role')
+  }
+})
+
+test('DEV-QA26 G8 真实 Electron 敏感词从设置生效、过滤、撤销与观察者权限', async ({ page, browser, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(300_000)
+  const owner = await openOwner(page, baseURL!, 'words-audit')
+  let viewerContext: BrowserContext | undefined
+  let viewerApp: ElectronApp | undefined
+  let viewerProfile = ''
+  let ownerClosed = false
+  try {
+    await selectDesktopSetting(owner.page, '敏感词库')
+    const settings = owner.page.getByTestId('desktop-settings-window')
+    const wordField = settings.getByLabel(/^敏感词/)
+    await expect(settings.getByText('还没有自定义敏感词。', { exact: true })).toBeVisible()
+
+    const failedWord = `qa26-word-fail-${Date.now()}`
+    let rejectNextPost = true
+    await owner.page.route('**/api/v1/sensitive-words', async (route) => {
+      if (route.request().method() === 'POST' && rejectNextPost) {
+        rejectNextPost = false
+        await route.fulfill({ status: 500, json: { error: { code: 'internal', message: 'qa26 injected sensitive word failure' } } })
+        return
+      }
+      await route.continue()
+    })
+    await wordField.fill(failedWord)
+    const rejected = owner.page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith('/api/v1/sensitive-words') && response.request().method() === 'POST')
+    await settings.getByRole('button', { name: '添加', exact: true }).click()
+    expect((await rejected).status()).toBe(500)
+    await expect(owner.page.getByText('qa26 injected sensitive word failure')).toBeVisible()
+    await expect(wordField).toHaveValue(failedWord)
+    expect((await api(page, 'GET', '/sensitive-words')).some((item: { word: string }) => item.word === failedWord)).toBe(false)
+    await owner.page.unroute('**/api/v1/sensitive-words')
+
+    const cancelledDraft = `qa26-word-cancel-${Date.now()}`
+    await wordField.fill(cancelledDraft)
+    await selectDesktopSetting(owner.page, '平台账号与凭证')
+    const discardDialog = owner.page.getByRole('dialog').filter({ has: owner.page.getByRole('heading', { name: '放弃未保存的设置？', exact: true }) })
+    await expect(discardDialog).toBeVisible()
+    await discardDialog.getByRole('button', { name: '取消', exact: true }).click()
+    await expect(wordField).toHaveValue(cancelledDraft)
+    expect((await api(page, 'GET', '/sensitive-words')).some((item: { word: string }) => item.word === cancelledDraft)).toBe(false)
+    await wordField.fill('')
+
+    const stamp = Date.now()
+    const primaryWord = `qa26-word-${stamp}`
+    const secondaryWord = `qa26-term-${stamp}`
+    const category = `qa26-category-${stamp}`
+    await wordField.fill(`${primaryWord}\n${secondaryWord}`)
+    await settings.getByPlaceholder('例如：医疗、金融').fill(category)
+    const added = owner.page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith('/api/v1/sensitive-words') && response.request().method() === 'POST')
+    await settings.getByRole('button', { name: '添加', exact: true }).click()
+    const addResponse = await added
+    expect(addResponse.ok()).toBe(true)
+    expect(await addResponse.json()).toMatchObject({ added: 2, skipped: 0 })
+    await expect(owner.page.getByText('已添加 2 个', { exact: true })).toBeVisible()
+    const createdWords = (await api(page, 'GET', '/sensitive-words') as Array<{ id: string; word: string; category: string; source: string }>)
+      .filter((item) => item.word === primaryWord || item.word === secondaryWord)
+    expect(createdWords).toHaveLength(2)
+    expect(createdWords.every((item) => item.source === 'custom' && item.category === category)).toBe(true)
+
+    const search = settings.getByRole('textbox', { name: '搜索', exact: true })
+    const searchSamples: number[] = []
+    for (let index = 0; index < 20; index++) {
+      const matches = index % 2 === 0
+      const started = performance.now()
+      await search.fill(matches ? primaryWord : `qa26-no-match-${stamp}`)
+      if (matches) await expect(settings.locator('span').filter({ hasText: primaryWord }).first()).toBeVisible()
+      else await expect(settings.getByText('没有匹配的词。', { exact: true })).toBeVisible()
+      searchSamples.push(performance.now() - started)
+    }
+    const sortedSearchSamples = [...searchSamples].sort((a, b) => a - b)
+    const searchMetrics = {
+      environment: 'Windows native Electron', sample_count: searchSamples.length,
+      p50_ms: Number(sortedSearchSamples[9].toFixed(2)), p95_ms: Number(sortedSearchSamples[18].toFixed(2)), failures: 0,
+    }
+    await test.info().attach('g8-sensitive-word-search-metrics', { body: Buffer.from(JSON.stringify(searchMetrics)), contentType: 'application/json' })
+    console.log(`DEV-QA26 sensitive word search n=20 p50=${searchMetrics.p50_ms}ms p95=${searchMetrics.p95_ms}ms failures=0 environment=Windows Electron`)
+
+    await search.fill('')
+    const primaryEntry = createdWords.find((item) => item.word === primaryWord)!
+    const chip = settings.locator('span').filter({ hasText: primaryWord }).first()
+    const softDelete = owner.page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith('/sensitive-words/' + primaryEntry.id) && response.request().method() === 'DELETE')
+    await chip.getByRole('button', { name: '删除', exact: true }).click()
+    expect((await softDelete).ok()).toBe(true)
+    await expect(owner.page.getByRole('button', { name: '撤销', exact: true })).toBeVisible()
+    expect((await api(page, 'GET', '/sensitive-words')).some((item: { id: string }) => item.id === primaryEntry.id)).toBe(false)
+    expect((await api(page, 'GET', '/trash')).some((item: { id: string; type: string }) => item.id === primaryEntry.id && item.type === 'sensitive_word')).toBe(true)
+    await owner.page.getByRole('button', { name: '撤销', exact: true }).click()
+    expect((await api(page, 'GET', '/sensitive-words')).some((item: { id: string; word: string }) => item.id === primaryEntry.id && item.word === primaryWord)).toBe(true)
+    expect((await api(page, 'GET', '/trash')).some((item: { id: string }) => item.id === primaryEntry.id)).toBe(false)
+
+    await reloadElectronWindow(owner.app)
+    await owner.page.goto(`${baseURL}/a/${owner.account.id}`)
+    await expect(owner.page.getByRole('button', { name: /用户菜单/ })).toBeVisible()
+    await owner.page.getByRole('button', { name: /用户菜单/ }).click()
+    await owner.page.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(owner.page, '敏感词库')
+    await expect(owner.page.getByTestId('desktop-settings-window').locator('span').filter({ hasText: primaryWord }).first()).toBeVisible()
+    expect((await api(page, 'GET', '/sensitive-words')).some((item: { id: string }) => item.id === primaryEntry.id)).toBe(true)
+    await owner.page.getByTestId('desktop-settings-window').getByRole('button', { name: '关闭设置', exact: true }).click()
+    await expect(owner.page.getByTestId('desktop-settings-window')).toHaveCount(0)
+
+    const workId = await createOutline(owner.page)
+    const work = await api(page, 'GET', '/works/' + workId) as { sections: Array<{ id: string; revision: number }> }
+    await api(page, 'PATCH', '/sections/' + work.sections[0].id, {
+      content_md: `发布前检查必须命中自定义敏感词 ${primaryWord}。`, base_revision: work.sections[0].revision,
+    })
+    await owner.page.goto(`${baseURL}/works/${workId}/check`)
+    const checkStarted = owner.page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith(`/works/${workId}/checks`) && response.request().method() === 'POST')
+    await owner.page.getByRole('button', { name: '开始检查', exact: true }).click()
+    expect((await checkStarted).ok()).toBe(true)
+    await expect.poll(async () => {
+      const latest = await api(page, 'GET', `/works/${workId}/checks/latest`)
+      return latest.run?.items?.some((item: { category: string; message: string }) => item.category === 'sensitive' && item.message.includes(primaryWord)) ?? false
+    }, { timeout: 30_000 }).toBe(true)
+    await expect(owner.page.getByText(primaryWord, { exact: false }).first()).toBeVisible()
+
+    await owner.page.goto(`${baseURL}/a/${owner.account.id}`)
+    await owner.page.getByRole('button', { name: /用户菜单/ }).click()
+    await owner.page.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(owner.page, '成员与邀请')
+    const memberSettings = owner.page.getByTestId('desktop-settings-window')
+    await memberSettings.getByRole('combobox').last().selectOption('viewer')
+    const inviteResponse = owner.page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith('/workspaces/current/invites') && response.request().method() === 'POST')
+    await memberSettings.getByRole('button', { name: '生成邀请码', exact: true }).first().click()
+    const invite = await inviteResponse.then((response) => response.json()) as { code: string; role: string }
+    expect(invite.role).toBe('viewer')
+
+    const viewerUsername = `qa26-g8-words-viewer-${stamp}`
+    viewerContext = await browser.newContext({ baseURL: new URL(page.url()).origin })
+    const joined = await viewerContext.request.post('/api/v1/auth/register', {
+      data: { username: viewerUsername, password: 'local-e2e-password-123', invite_code: invite.code },
+    })
+    expect(joined.ok()).toBeTruthy()
+    const viewerMe = await (await viewerContext.request.get('/api/v1/auth/me')).json() as { role: string; workspace: { id: string } }
+    expect(viewerMe.role).toBe('viewer')
+    expect(viewerMe.workspace.id).toBe((await api(page, 'GET', '/auth/me')).workspace.id)
+    await viewerContext.close()
+    viewerContext = undefined
+
+    await closeElectron(owner.app, owner.profile, 'words-audit')
+    ownerClosed = true
+    const viewer = await launchElectron(baseURL!, viewerUsername, 'words-viewer', invite.code)
+    viewerApp = viewer.app
+    viewerProfile = viewer.profile
+    const viewerPage = viewer.page
+    const loggedIn = await viewerPage.evaluate(async () => await (await fetch('/api/v1/auth/me')).json()) as { username: string; role: string; workspace: { id: string }; user_id: string }
+    expect(loggedIn.username).toBe(viewerUsername)
+    expect(loggedIn.role).toBe('viewer')
+    expect(loggedIn.workspace.id).toBe(viewerMe.workspace.id)
+    await viewerPage.goto(`${baseURL}/settings/words`)
+    const viewerSettings = viewerPage.getByTestId('desktop-settings-window')
+    await expect(viewerSettings.getByText('你是观察者，只能查看；敏感词由所有者或编辑者维护。', { exact: true })).toBeVisible()
+    await expect(viewerSettings.getByLabel(/^敏感词/)).toHaveCount(0)
+    await expect(viewerSettings.getByRole('button', { name: '添加', exact: true })).toHaveCount(0)
+    await expect(viewerSettings.getByRole('button', { name: '删除', exact: true })).toHaveCount(0)
+    const denied = await viewerPage.evaluate(async ({ wordId, word }) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }
+      const [add, remove] = await Promise.all([
+        fetch('/api/v1/sensitive-words', { method: 'POST', headers, body: JSON.stringify({ words: [word], category: 'DEV-QA26' }) }),
+        fetch('/api/v1/sensitive-words/' + wordId, { method: 'DELETE', headers }),
+      ])
+      return [add.status, remove.status]
+    }, { wordId: primaryEntry.id, word: `qa26-forbidden-${stamp}` })
+    expect(denied).toEqual([403, 403])
+    expect((await api(page, 'GET', '/sensitive-words')).some((item: { id: string }) => item.id === primaryEntry.id)).toBe(true)
+    expect((await api(page, 'GET', '/sensitive-words')).some((item: { word: string }) => item.word === `qa26-forbidden-${stamp}`)).toBe(false)
+  } finally {
+    if (viewerApp) await closeElectron(viewerApp, viewerProfile, 'words-viewer')
+    await viewerContext?.close()
+    if (!ownerClosed) await closeElectron(owner.app, owner.profile, 'words-audit')
   }
 })

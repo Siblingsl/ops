@@ -49,7 +49,7 @@ export default function Words() {
             </div>
           } />
           <div className="flex flex-wrap gap-2 p-5">
-            {list.length === 0 && <p className="py-6 text-[13px] text-mist-400">{tab === 'custom' ? '还没有自定义敏感词。' : '没有匹配的词。'}</p>}
+            {list.length === 0 && <p className="py-6 text-[13px] text-mist-400">{q ? '没有匹配的词。' : tab === 'custom' ? '还没有自定义敏感词。' : '没有匹配的词。'}</p>}
             {list.map((w) => (
               <span key={w.id} className="inline-flex items-center gap-1 rounded-md border border-mist-200 bg-white py-1 pl-2.5 pr-1 text-[13px] text-mist-700">
                 {w.word}

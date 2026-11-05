@@ -989,3 +989,55 @@ test('DEV-QA26 G2-13 Web 回收站逐项验收选题素材样本角色参考', a
   await expect(page.getByText('回收站是空的', { exact: true })).toBeVisible()
   expect((await getTrash()).some((entry) => secondPass.some((item) => item.id === entry.id))).toBe(false)
 })
+
+test('DEV-QA26 G8 Web 敏感词搜索有词库但无匹配时显示筛选空态', async ({ page }) => {
+  const account = await registerAccount(page)
+  await page.goto(`/a/${account.id}`)
+  await openAdvancedSetting(page, '敏感词库')
+  await expect(page.getByText('还没有自定义敏感词。', { exact: true })).toBeVisible()
+
+  const failedWord = `qa26-web-word-fail-${Date.now()}`
+  let rejectNextPost = true
+  await page.route('**/api/v1/sensitive-words', async (route) => {
+    if (route.request().method() === 'POST' && rejectNextPost) {
+      rejectNextPost = false
+      await route.fulfill({ status: 500, json: { error: { code: 'internal', message: 'qa26 injected sensitive word failure' } } })
+      return
+    }
+    await route.continue()
+  })
+  const field = page.getByLabel(/^敏感词/)
+  await field.fill(failedWord)
+  const rejected = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith('/api/v1/sensitive-words') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
+  expect((await rejected).status()).toBe(500)
+  await expect(page.getByText('qa26 injected sensitive word failure')).toBeVisible()
+  await expect(field).toHaveValue(failedWord)
+  expect((await api(page, 'GET', '/sensitive-words')).some((item: { word: string }) => item.word === failedWord)).toBe(false)
+  await page.unroute('**/api/v1/sensitive-words')
+
+  const word = `qa26-web-word-search-${Date.now()}`
+  await field.fill(word)
+  const created = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith('/api/v1/sensitive-words') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
+  expect((await created).ok()).toBe(true)
+  await expect(page.getByText(word, { exact: true })).toBeVisible()
+  const search = page.getByRole('textbox', { name: '搜索', exact: true })
+  const samples: number[] = []
+  for (let index = 0; index < 20; index++) {
+    const matches = index % 2 === 0
+    const started = performance.now()
+    await search.fill(matches ? word : `qa26-no-match-${Date.now()}`)
+    if (matches) await expect(page.getByText(word, { exact: true })).toBeVisible()
+    else await expect(page.getByText('没有匹配的词。', { exact: true })).toBeVisible()
+    samples.push(performance.now() - started)
+  }
+  const sortedSamples = [...samples].sort((a, b) => a - b)
+  const metrics = { environment: 'Web Chromium', sample_count: samples.length, p50_ms: Number(sortedSamples[9].toFixed(2)), p95_ms: Number(sortedSamples[18].toFixed(2)), failures: 0 }
+  console.log(`DEV-QA26 sensitive word search n=20 p50=${metrics.p50_ms}ms p95=${metrics.p95_ms}ms failures=0 environment=Web Chromium`)
+  expect((await api(page, 'GET', '/sensitive-words')).some((item: { word: string }) => item.word === word)).toBe(true)
+  await page.reload()
+  await expect(page.getByText(word, { exact: true })).toBeVisible()
+})
