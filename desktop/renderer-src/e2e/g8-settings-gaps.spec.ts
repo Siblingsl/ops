@@ -221,6 +221,98 @@ test('DEV-QA26 G1-05 真实 Electron 修改密码拒绝与会话失效', async (
   }
 })
 
+test('DEV-QA26 G7-09 真实 Electron 本地 mock 用量记录按四组展示', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(240_000)
+  const username = 'qa26-g8-usage-data-' + Date.now()
+  const account = await registerAccount(page, '图文笔记', 'xhs', username)
+  const provider = await api(page, 'POST', '/model-providers', {
+    name: 'DEV-QA26 用量本地 mock', base_url: process.env.OPS_E2E_MOCK_BASE_URL ?? 'http://127.0.0.1:8297/v1',
+    api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+  }) as { id: string }
+  await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
+  await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
+  const owner = await launchElectron(baseURL!, username, 'usage-data')
+  try {
+    await owner.page.evaluate(async (accountId) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      localStorage.setItem('ops.currentAccount.v2:' + (me.user_id ?? me.username) + ':' + me.workspace.id, accountId)
+    }, account.id)
+    await owner.page.goto(baseURL + '/a/' + account.id)
+    await owner.page.getByRole('link', { name: 'AI 对话', exact: true }).click()
+    await expect(owner.page).toHaveURL(/\/agent$/)
+    const privacy = owner.page.getByRole('dialog').filter({ has: owner.page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
+    await expect(privacy).toBeVisible()
+    await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
+    await expect(privacy).toBeHidden()
+    await expect(owner.page.getByRole('textbox', { name: '发送消息' })).toBeEnabled()
+
+    const aiSamples: number[] = []
+    let conversationID = ''
+    for (let index = 1; index <= 20; index += 1) {
+      const reply = `DEV-QA26 用量统计样本 ${String(index).padStart(2, '0')}`
+      await owner.page.locator('textarea').fill('#text ' + reply)
+      const accepted = owner.page.waitForResponse((response) =>
+        new URL(response.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) !== null
+        && response.request().method() === 'POST')
+      const started = performance.now()
+      await owner.page.getByRole('button', { name: '发送', exact: true }).click()
+      expect((await accepted).status()).toBe(202)
+      await expect(owner.page).toHaveURL(/\/agent\/c\/[a-f0-9-]+$/)
+      conversationID = owner.page.url().split('/').pop()!
+      await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).active_run, { timeout: 30_000 }).toBeNull()
+      const detail = await api(page, 'GET', `/agent/conversations/${conversationID}`) as { conversation: { account_id: string | null }; last_run: { status: string }; messages: Array<{ role: string; content: string }> }
+      expect(detail.conversation.account_id).toBe(account.id)
+      expect(detail.last_run.status).toBe('completed')
+      expect(detail.messages.some((message) => message.role === 'assistant' && message.content === reply)).toBe(true)
+      aiSamples.push(performance.now() - started)
+    }
+
+    await owner.page.getByRole('button', { name: /用户菜单/ }).click()
+    await owner.page.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    await selectDesktopSetting(owner.page, '完整用量报表')
+    await expect(owner.page.getByRole('heading', { name: 'AI 用量', exact: true })).toBeVisible()
+    const groups = [
+      { key: 'day', label: '按天' }, { key: 'task', label: '按任务' },
+      { key: 'model', label: '按模型' }, { key: 'account', label: '按账号' },
+    ]
+    const groupKeys = new Map<string, string>()
+    for (const group of groups) {
+      const report = await api(page, 'GET', `/usage?group_by=${group.key}`) as { group_by: string; from: string; to: string; rows: Array<{ key: string; calls: number; prompt_tokens: number; completion_tokens: number }>; total: { calls: number; failed: number } }
+      await expect(owner.page.locator('input[type="date"]').nth(0)).toHaveValue(report.from)
+      await expect(owner.page.locator('input[type="date"]').nth(1)).toHaveValue(report.to)
+      expect(report.group_by).toBe(group.key)
+      expect(report.total).toMatchObject({ calls: 20, failed: 0 })
+      expect(report.rows.length).toBeGreaterThan(0)
+      expect(report.rows.reduce((sum, row) => sum + row.calls, 0)).toBe(20)
+      expect(report.total.calls).toBe(20)
+      expect(report.rows.every((row) => row.prompt_tokens + row.completion_tokens > 0)).toBe(true)
+      const expectedKey = group.key === 'task' ? '智能体对话'
+        : group.key === 'model' ? 'DEV-QA26 用量本地 mock / mock-agent-tested'
+          : group.key === 'account' ? '浏览器验收号' : report.rows[0].key
+      expect(report.rows.some((row) => row.key === expectedKey)).toBe(true)
+      groupKeys.set(group.key, expectedKey)
+    }
+
+    const interactions: number[] = []
+    const table = owner.page.getByRole('table')
+    for (let index = 0; index < 20; index += 1) {
+      const group = groups[index % groups.length]
+      const started = performance.now()
+      await owner.page.getByRole('button', { name: group.label, exact: true }).click()
+      await expect(table.getByText(groupKeys.get(group.key)!, { exact: true })).toBeVisible()
+      interactions.push(performance.now() - started)
+    }
+    const percentile = (values: number[], ratio: number) => {
+      const sorted = [...values].sort((a, b) => a - b)
+      return Number(sorted[Math.ceil(sorted.length * ratio) - 1].toFixed(2))
+    }
+    console.log(`DEV-QA26_USAGE_DATA Electron ${JSON.stringify({ ai_samples: 20, ai_p50_ms: percentile(aiSamples, 0.5), ai_p95_ms: percentile(aiSamples, 0.95), group_clicks: 20, click_p50_ms: percentile(interactions, 0.5), click_p95_ms: percentile(interactions, 0.95), totals: 20, groups: [...groupKeys.keys()], model: 'local mock; no quality claim' })}`)
+  } finally {
+    await closeElectron(owner.app, owner.profile, 'usage-data')
+  }
+})
+
 test('DEV-QA26 G8 真实 Electron 模型删除取消与空态读回', async ({ page, baseURL }) => {
   test.skip(process.platform !== 'win32', '需要 Windows Electron')
   test.setTimeout(150_000)

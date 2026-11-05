@@ -1041,3 +1041,81 @@ test('DEV-QA26 G8 Web 敏感词搜索有词库但无匹配时显示筛选空态'
   await page.reload()
   await expect(page.getByText(word, { exact: true })).toBeVisible()
 })
+
+test('DEV-QA26 G7-09 Web 本地 mock 用量记录按四组展示', async ({ page }) => {
+  test.setTimeout(240_000)
+  const account = await registerAccount(page)
+  const provider = await api(page, 'POST', '/model-providers', {
+    name: 'DEV-QA26 用量本地 mock', base_url: process.env.OPS_E2E_MOCK_BASE_URL ?? 'http://127.0.0.1:8191/v1',
+    api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+  }) as { id: string }
+  await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
+  await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
+  const providers = await api(page, 'GET', '/model-providers') as Array<{ id: string; capabilities: Array<{ model: string; tools_ok: boolean }> }>
+  expect(providers.find((item) => item.id === provider.id)?.capabilities).toEqual(expect.arrayContaining([expect.objectContaining({ model: 'mock-agent-tested', tools_ok: true })]))
+  await page.reload()
+  await page.getByRole('link', { name: 'AI 对话', exact: true }).click()
+  const privacy = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
+  await expect(privacy).toBeVisible()
+  await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
+  await expect(privacy).toBeHidden()
+
+  const aiSamples: number[] = []
+  let conversationID = ''
+  for (let index = 1; index <= 20; index += 1) {
+    const reply = `DEV-QA26 用量统计样本 ${String(index).padStart(2, '0')}`
+    await page.locator('textarea').fill('#text ' + reply)
+    const accepted = page.waitForResponse((response) =>
+      new URL(response.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) !== null
+      && response.request().method() === 'POST')
+    const started = performance.now()
+    await page.getByRole('button', { name: '发送', exact: true }).click()
+    expect((await accepted).status()).toBe(202)
+    await expect(page).toHaveURL(/\/agent\/c\/[a-f0-9-]+$/)
+    conversationID = page.url().split('/').pop()!
+    await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).active_run, { timeout: 30_000 }).toBeNull()
+    const detail = await api(page, 'GET', `/agent/conversations/${conversationID}`) as { conversation: { account_id: string | null }; last_run: { status: string }; messages: Array<{ role: string; content: string }> }
+    expect(detail.conversation.account_id).toBe(account.id)
+    expect(detail.last_run.status).toBe('completed')
+    expect(detail.messages.some((message) => message.role === 'assistant' && message.content === reply)).toBe(true)
+    aiSamples.push(performance.now() - started)
+  }
+
+  await openAdvancedSetting(page, 'AI 用量与成本')
+  await expect(page.getByRole('heading', { name: 'AI 用量', exact: true })).toBeVisible()
+  const groups = [
+    { key: 'day', label: '按天' }, { key: 'task', label: '按任务' },
+    { key: 'model', label: '按模型' }, { key: 'account', label: '按账号' },
+  ]
+  const groupKeys = new Map<string, string>()
+  for (const group of groups) {
+    const report = await api(page, 'GET', `/usage?group_by=${group.key}`) as { group_by: string; from: string; to: string; rows: Array<{ key: string; calls: number; prompt_tokens: number; completion_tokens: number }>; total: { calls: number; failed: number } }
+    await expect(page.locator('input[type="date"]').nth(0)).toHaveValue(report.from)
+    await expect(page.locator('input[type="date"]').nth(1)).toHaveValue(report.to)
+    expect(report.group_by).toBe(group.key)
+    expect(report.total).toMatchObject({ calls: 20, failed: 0 })
+    expect(report.rows.length).toBeGreaterThan(0)
+    expect(report.rows.reduce((sum, row) => sum + row.calls, 0)).toBe(20)
+    expect(report.rows.every((row) => row.prompt_tokens + row.completion_tokens > 0)).toBe(true)
+    const expectedKey = group.key === 'task' ? '智能体对话'
+      : group.key === 'model' ? 'DEV-QA26 用量本地 mock / mock-agent-tested'
+        : group.key === 'account' ? '浏览器验收号' : report.rows[0].key
+    expect(report.rows.some((row) => row.key === expectedKey)).toBe(true)
+    groupKeys.set(group.key, expectedKey)
+  }
+
+  const interactions: number[] = []
+  const table = page.getByRole('table')
+  for (let index = 0; index < 20; index += 1) {
+    const group = groups[index % groups.length]
+    const started = performance.now()
+    await page.getByRole('button', { name: group.label, exact: true }).click()
+    await expect(table.getByText(groupKeys.get(group.key)!, { exact: true })).toBeVisible()
+    interactions.push(performance.now() - started)
+  }
+  const percentile = (values: number[], ratio: number) => {
+    const sorted = [...values].sort((a, b) => a - b)
+    return Number(sorted[Math.ceil(sorted.length * ratio) - 1].toFixed(2))
+  }
+  console.log(`DEV-QA26_USAGE_DATA Web ${JSON.stringify({ ai_samples: 20, ai_p50_ms: percentile(aiSamples, 0.5), ai_p95_ms: percentile(aiSamples, 0.95), group_clicks: 20, click_p50_ms: percentile(interactions, 0.5), click_p95_ms: percentile(interactions, 0.95), totals: 20, groups: [...groupKeys.keys()], model: 'local mock; no quality claim' })}`)
+})

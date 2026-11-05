@@ -20,7 +20,11 @@ interface Row {
 }
 interface UsageResp { group_by: string; from: string; to: string; rows: Row[]; total: Row; today_tokens: number; limit: AILimit }
 
-const day = (d: Date) => d.toISOString().slice(0, 10)
+const day = (d: Date) => {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d)
+  const part = (type: string) => parts.find((item) => item.type === type)!.value
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
 const money = (v: number | null) => (v == null ? '—' : `¥${v < 1 ? v.toFixed(3) : v.toFixed(2)}`)
 const rate = (r: Row) => (r.adoption_rate == null ? '—' : `${Math.round(r.adoption_rate * 100)}%`)
 const taskLabels: Record<string, string> = { agent_chat: '智能体对话', agent_summary: '智能体摘要' }
