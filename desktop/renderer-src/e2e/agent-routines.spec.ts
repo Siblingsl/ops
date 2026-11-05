@@ -318,6 +318,77 @@ test('DEV-QA26 Windows Electron创建者降为观察者与移出后暂停例行�
   }
 })
 
+test('DEV-QA26 Windows Electron关闭工作区智能体后暂停例行任务并逐项恢复', async ({ baseURL }, testInfo) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  const userData = await mkdtemp(join(tmpdir(), 'ops-qa26-routine-agent-disable-'))
+  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  try {
+    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const page = await app.firstWindow()
+    await prepareRoutine(page, baseURL!)
+    await page.goto(`${baseURL}/settings/agent`)
+    const agentSwitch = page.getByRole('switch', { name: '启用智能体', exact: true })
+    const toggleSamples: number[] = []
+    for (let index = 0; index < 20; index++) {
+      const expectedEnabled = index % 2 === 1
+      const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/settings' && response.request().method() === 'PUT')
+      const startedAt = Date.now()
+      await agentSwitch.click()
+      const response = await responsePromise
+      expect(response.status()).toBe(200)
+      await expect(agentSwitch).toHaveAttribute('aria-checked', expectedEnabled ? 'true' : 'false')
+      toggleSamples.push(Date.now() - startedAt)
+    }
+    const sortedToggleSamples = [...toggleSamples].sort((a, b) => a - b)
+    const toggleMetrics = { environment: 'Windows native Electron; local mock API', sample_count: toggleSamples.length, samples: toggleSamples,
+      p50_ms: sortedToggleSamples[9], p95_ms: sortedToggleSamples[18], failed: 0 }
+    console.log(`DEV-QA26_METRIC_AGENT_TOGGLE_ELECTRON ${JSON.stringify(toggleMetrics)}`)
+    await testInfo.attach('agent-toggle-20-samples.json', { body: JSON.stringify(toggleMetrics, null, 2), contentType: 'application/json' })
+    await page.goto(`${baseURL}/agent`)
+    await page.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '受限例行任务', exact: true }) })
+    const name = `QA26 智能体关闭 ${Date.now()}`
+    await dialog.getByLabel('名称', { exact: true }).fill(name)
+    await dialog.getByLabel('任务提示（最多 4000 字）', { exact: true }).fill('按只读权限核对账号表现并生成报告。')
+    const createdResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/routines' && response.request().method() === 'POST')
+    await dialog.getByRole('button', { name: '创建并启用', exact: true }).click()
+    expect((await createdResponse).status()).toBe(200)
+    const routine = (await api(page, 'GET', '/agent/routines')).items.find((item: { name: string }) => item.name === name)
+    expect(routine.status).toBe('enabled')
+
+    await page.goto(`${baseURL}/settings/agent`)
+    const disable = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/settings' && response.request().method() === 'PUT')
+    await page.getByRole('switch', { name: '启用智能体', exact: true }).click()
+    expect((await disable).status()).toBe(200)
+    await expect.poll(async () => (await api(page, 'GET', '/agent/bootstrap')).reason).toBe('disabled')
+
+    const enable = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/settings' && response.request().method() === 'PUT')
+    await page.getByRole('switch', { name: '启用智能体', exact: true }).click()
+    expect((await enable).status()).toBe(200)
+    await expect.poll(async () => (await api(page, 'GET', '/agent/bootstrap')).can_use).toBe(true)
+    const paused = (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)
+    expect(paused.status).toBe('paused')
+    expect(paused.error_code).toBe('agent_disabled')
+    expect(paused.next_due_at).toBeFalsy()
+    expect((await api(page, 'GET', '/notifications')).items.some((item: { kind: string; body: string }) => item.kind === 'agent_routine' && item.body.includes('工作区已关闭智能体'))).toBe(true)
+    await page.goto(`${baseURL}/agent`)
+    await page.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const task = page.locator('article').filter({ hasText: name })
+    await expect(task.getByText('已暂停', { exact: true })).toBeVisible()
+    await expect(task.getByText(/工作区已关闭智能体.*请手动重新启用此任务/)).toBeVisible()
+    await expect(task.getByRole('button', { name: '立即运行一次', exact: true })).toHaveCount(0)
+    await task.getByRole('button', { name: '重新启用', exact: true }).click()
+    await expect.poll(async () => (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)?.status).toBe('enabled')
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-qa26-routine-agent-disable-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
 test('DEV-QA26 Windows Electron停用例行任务模型后应立即暂停', async ({ baseURL }) => {
   test.skip(process.platform !== 'win32', '需要Windows Electron')
   const userData = await mkdtemp(join(tmpdir(), 'ops-qa26-routine-model-'))

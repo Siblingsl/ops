@@ -63,6 +63,7 @@ const statusLabel: Record<string, string> = {
 const occurrenceStatusLabel: Record<string, string> = { ...statusLabel, completed: '已完成' }
 const routineErrorLabel: Record<string, string> = {
   account_disabled: '绑定账号已停用；重新启用账号后，请手动重新启用此任务。',
+  agent_disabled: '工作区已关闭智能体；重新开启后，请手动重新启用此任务。',
   model_unavailable: '任务模型不可用或未通过工具能力自检；恢复模型并完成自检后，请手动重新启用此任务。',
   member_role_revoked: '创建者当前是观察者；恢复编辑权限后，请手动重新启用此任务。',
   member_removed: '创建者已移出此工作区；重新加入并恢复编辑权限后，请手动重新启用此任务。',

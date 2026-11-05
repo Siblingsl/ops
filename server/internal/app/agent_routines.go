@@ -1010,9 +1010,12 @@ func (s *Server) pauseAgentRoutineForRevocation(ctx context.Context, st *agentRu
 		return
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
-	_, err = tx.Exec(context.WithoutCancel(ctx), `UPDATE agent_routine SET status='paused',next_due_at=NULL,
+	paused, err := tx.Exec(context.WithoutCancel(ctx), `UPDATE agent_routine SET status='paused',next_due_at=NULL,
 		revision=revision+1,error_code='authorization_revoked',updated_at=now() WHERE id=$1 AND status='enabled'`, *st.RoutineID)
 	if err != nil {
+		return
+	}
+	if paused.RowsAffected() == 0 {
 		return
 	}
 	if err := s.agentRoutineEventTx(context.WithoutCancel(ctx), tx, *st.RoutineID, "paused", map[string]any{
@@ -1323,6 +1326,7 @@ func (s *Server) finishAgentRoutineTx(ctx context.Context, tx pgx.Tx, st *agentR
 		return nil, err
 	}
 	authorizationRevoked := reason == "routine_authorization_revoked"
+	workspaceDisabled := routine.Status == "paused" && routine.ErrorCode == "agent_disabled"
 	occurrenceStatus, errorCode := "completed", ""
 	if authorizationRevoked {
 		occurrenceStatus, errorCode = "interrupted", "authorization_revoked"
@@ -1348,7 +1352,11 @@ func (s *Server) finishAgentRoutineTx(ctx context.Context, tx pgx.Tx, st *agentR
 	newFailureCount := routine.FailureCount
 	newRoutineStatus := routine.Status
 	newErrorCode := errorCode
-	if authorizationRevoked {
+	if workspaceDisabled {
+		newRoutineStatus = "paused"
+		newFailureCount = routine.FailureCount
+		newErrorCode = "agent_disabled"
+	} else if authorizationRevoked {
 		newRoutineStatus = "paused"
 		newFailureCount = routine.FailureCount
 		newErrorCode = "authorization_revoked"
@@ -1386,6 +1394,8 @@ func (s *Server) finishAgentRoutineTx(ctx context.Context, tx pgx.Tx, st *agentR
 	title, body := "例行任务已完成", "已生成本次只读报告"
 	if occurrenceStatus == "completed" && !reportSaved {
 		body = "本次查询已完成，但报告保存失败；请打开执行对话查看结果"
+	} else if workspaceDisabled {
+		title, body = "例行任务已暂停", "工作区已关闭智能体；所有者重新开启后，请手动重新启用此任务"
 	} else if authorizationRevoked {
 		title, body = "例行任务已暂停", "创建者、工作区设置、账号或服务器模型权限已变化；重新授权后需手动启用"
 	} else if occurrenceStatus == "failed" {
@@ -1468,6 +1478,8 @@ type agentRoutineModelPause struct {
 	revision   int64
 }
 
+type agentRoutinePause = agentRoutineModelPause
+
 func (s *Server) pauseUnavailableAgentRoutinesForProviderTx(ctx context.Context, tx pgx.Tx, workspaceID, providerID uuid.UUID) ([]agentRoutineModelPause, error) {
 	rows, err := tx.Query(ctx, `UPDATE agent_routine AS r SET status='paused',next_due_at=NULL,
 		revision=revision+1,error_code='model_unavailable',updated_at=now()
@@ -1506,13 +1518,93 @@ func (s *Server) pauseUnavailableAgentRoutinesForProviderTx(ctx context.Context,
 	return paused, nil
 }
 
-func (s *Server) notifyAgentRoutineModelPauses(ctx context.Context, workspaceID uuid.UUID, paused []agentRoutineModelPause) {
+func (s *Server) pauseAgentRoutinesForWorkspaceTx(ctx context.Context, tx pgx.Tx, workspaceID uuid.UUID) ([]agentRoutinePause, []uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `UPDATE agent_routine SET status='paused',next_due_at=NULL,revision=revision+1,
+		error_code='agent_disabled',updated_at=now() WHERE workspace_id=$1 AND status='enabled'
+		RETURNING id,user_id,revision`, workspaceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	paused := []agentRoutinePause{}
+	for rows.Next() {
+		var item agentRoutinePause
+		if err := rows.Scan(&item.id, &item.userID, &item.revision); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		paused = append(paused, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	stopRuns := []uuid.UUID{}
+	for _, item := range paused {
+		var runID, occurrenceID, conversationID *uuid.UUID
+		err := tx.QueryRow(ctx, `SELECT o.run_id,o.id,run.conversation_id FROM agent_routine_occurrence o
+			LEFT JOIN agent_run run ON run.id=o.run_id
+			WHERE o.routine_id=$1 AND o.status IN ('leased','running') FOR UPDATE OF o`, item.id).
+			Scan(&runID, &occurrenceID, &conversationID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, err
+		}
+		occurrenceStatus := ""
+		if runID != nil {
+			if _, err := tx.Exec(ctx, `UPDATE agent_run SET stage='stopping' WHERE id=$1 AND status IN ('queued','running')`, *runID); err != nil {
+				return nil, nil, err
+			}
+			if conversationID != nil {
+				if _, err := appendAgentEventTx(ctx, tx, *conversationID, runID, "run.stage", map[string]any{"stage": "stopping"}, nil); err != nil {
+					return nil, nil, err
+				}
+			}
+			stopRuns = append(stopRuns, *runID)
+			occurrenceStatus = "stopping"
+		} else if occurrenceID != nil {
+			if _, err := tx.Exec(ctx, `UPDATE agent_routine_occurrence SET status='interrupted',lease_token=NULL,
+				lease_until=NULL,error_code='agent_disabled',finished_at=now() WHERE id=$1 AND status='leased'`, *occurrenceID); err != nil {
+				return nil, nil, err
+			}
+			occurrenceStatus = "interrupted"
+		}
+		pending, err := tx.Exec(ctx, `UPDATE agent_routine_occurrence SET status='interrupted',lease_token=NULL,
+			lease_until=NULL,error_code='agent_disabled',finished_at=now() WHERE routine_id=$1 AND status='pending'`, item.id)
+		if err != nil {
+			return nil, nil, err
+		}
+		if pending.RowsAffected() > 0 && occurrenceStatus == "" {
+			occurrenceStatus = "interrupted"
+		}
+		if err := s.agentRoutineEventTx(ctx, tx, item.id, "paused", map[string]any{
+			"reason": "agent_disabled", "revision": item.revision, "occurrence_id": occurrenceID,
+			"occurrence_status": occurrenceStatus,
+		}); err != nil {
+			return nil, nil, err
+		}
+	}
+	return paused, stopRuns, nil
+}
+
+func (s *Server) notifyAgentRoutinePauses(ctx context.Context, workspaceID uuid.UUID, paused []agentRoutinePause, reason string) {
+	body := ""
+	switch reason {
+	case "model_unavailable":
+		body = "任务模型不可用：绑定的服务器模型已停用、配置变更或未通过工具能力自检；恢复模型并完成自检后，请手动重新启用此任务。"
+	case "agent_disabled":
+		body = "工作区已关闭智能体；所有者重新开启后，请手动重新启用此任务。"
+	default:
+		return
+	}
 	for _, item := range paused {
 		s.notify(ctx, workspaceID, item.userID, "agent_routine", "例行任务已暂停",
-			"任务模型不可用：绑定的服务器模型已停用、配置变更或未通过工具能力自检；恢复模型并完成自检后，请手动重新启用此任务。",
+			body,
 			"/agent?panel=task&item="+item.id.String(),
 			"agent_routine:blocked:"+item.id.String()+":"+strconv.FormatInt(item.revision, 10))
 	}
+}
+
+func (s *Server) notifyAgentRoutineModelPauses(ctx context.Context, workspaceID uuid.UUID, paused []agentRoutineModelPause) {
+	s.notifyAgentRoutinePauses(ctx, workspaceID, paused, "model_unavailable")
 }
 
 func agentRoutineOccurrenceCursor(raw string) (*time.Time, *uuid.UUID, error) {

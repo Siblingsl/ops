@@ -216,6 +216,80 @@ func TestAW10RoutinePausesWhenModelProviderBecomesUnavailable(t *testing.T) {
 	}
 }
 
+func TestAW10RoutinePausesWhenWorkspaceAgentIsDisabled(t *testing.T) {
+	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
+	providerID := env.ensureToolModel(t)
+	account := env.accounts(t).xhs
+	owner := env.me(t)
+	workspaceID := uuid.MustParse(owner.Workspace.ID)
+	agentSettingsReset(t, workspaceID)
+	t.Cleanup(func() { agentSettingsReset(t, workspaceID) })
+	var created struct {
+		Routine agentRoutineView `json:"routine"`
+	}
+	env.mustJSON(t, http.MethodPost, "/api/v1/agent/routines", map[string]any{
+		"request_id": uuid.NewString(), "name": "关闭工作区智能体暂停验收", "prompt": "只读核对",
+		"public_context_refs": []any{}, "account_id": account.ID.String(), "cadence": "daily", "time_of_day": "09:00",
+		"timezone": "Asia/Shanghai", "destination": "new",
+		"model": map[string]any{"provider_id": providerID, "model": "mock-writer"},
+	}, &created)
+	if created.Routine.ID == uuid.Nil || created.Routine.Status != "enabled" {
+		t.Fatalf("例行任务创建失败：%+v", created)
+	}
+	notificationLink := "/agent?panel=task&item=" + created.Routine.ID.String()
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM notification WHERE link=$1`, notificationLink)
+		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_routine WHERE id=$1`, created.Routine.ID)
+	})
+	env.mustJSON(t, http.MethodPut, "/api/v1/agent/settings", map[string]bool{"enabled": false}, nil)
+	if _, body := env.do(http.MethodGet, "/api/v1/agent/routines", nil); !strings.Contains(string(body), `"code":"agent_disabled"`) {
+		t.Fatalf("工作区关闭智能体后应阻止访问例行任务接口：%s", body)
+	}
+	var status, reason string
+	var noNextDue bool
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT status,error_code,next_due_at IS NULL FROM agent_routine WHERE id=$1`, created.Routine.ID).
+		Scan(&status, &reason, &noNextDue); err != nil {
+		t.Fatal(err)
+	}
+	if status != "paused" || reason != "agent_disabled" || !noNextDue {
+		t.Fatalf("关闭工作区智能体后必须立即持久化暂停：status=%s reason=%s next_due_at_null=%v", status, reason, noNextDue)
+	}
+	var eventCount, notificationCount int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_event WHERE routine_id=$1 AND type='paused'
+		AND payload->>'reason'='agent_disabled'`, created.Routine.ID).Scan(&eventCount); err != nil || eventCount != 1 {
+		t.Fatalf("关闭智能体后必须持久化暂停事件：count=%d err=%v", eventCount, err)
+	}
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM notification WHERE workspace_id=$1 AND user_id=$2
+		AND kind='agent_routine' AND title='例行任务已暂停' AND body LIKE '%工作区已关闭智能体%' AND link=$3`,
+		workspaceID, uuid.MustParse(owner.UserID), notificationLink).Scan(&notificationCount); err != nil || notificationCount != 1 {
+		t.Fatalf("关闭智能体后必须持久化暂停通知：count=%d err=%v", notificationCount, err)
+	}
+	env.mustJSON(t, http.MethodPut, "/api/v1/agent/settings", map[string]bool{"enabled": true}, nil)
+	var paused struct {
+		Items []agentRoutineView `json:"items"`
+	}
+	env.mustJSON(t, http.MethodGet, "/api/v1/agent/routines", nil, &paused)
+	var pausedRoutine *agentRoutineView
+	for index := range paused.Items {
+		if paused.Items[index].ID == created.Routine.ID {
+			pausedRoutine = &paused.Items[index]
+			break
+		}
+	}
+	if pausedRoutine == nil || pausedRoutine.Status != "paused" || pausedRoutine.ErrorCode != "agent_disabled" {
+		t.Fatalf("重新开启智能体不得自动启用例行任务：%+v", paused.Items)
+	}
+	var enabled struct {
+		Routine agentRoutineView `json:"routine"`
+	}
+	env.mustJSON(t, http.MethodPost, "/api/v1/agent/routines/"+created.Routine.ID.String()+"/control", map[string]any{
+		"expected_revision": pausedRoutine.Revision, "request_id": uuid.NewString(), "action": "enable",
+	}, &enabled)
+	if enabled.Routine.Status != "enabled" || enabled.Routine.ErrorCode != "" {
+		t.Fatalf("创建者逐项重新启用任务失败：%+v", enabled.Routine)
+	}
+}
+
 func TestAW10RoutineToolAllowlistCannotReachBusinessWrites(t *testing.T) {
 	allowed := []string{
 		"works__list", "works__get", "works__read_sections", "review__dashboard", "review__top_works",

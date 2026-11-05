@@ -85,10 +85,26 @@ func (s *Server) putAgentSettings(w http.ResponseWriter, r *http.Request) error 
 		return err
 	}
 	b, _ := json.Marshal(cur)
-	if _, err := s.db.Exec(ctx, `INSERT INTO app_setting (workspace_id, key, value) VALUES ($1,$2,$3)
-		ON CONFLICT (workspace_id, key) DO UPDATE SET value=excluded.value`, id.WorkspaceID, agentSettingKey, b); err != nil {
+	var paused []agentRoutinePause
+	var stopRuns []uuid.UUID
+	if err := s.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `INSERT INTO app_setting (workspace_id, key, value) VALUES ($1,$2,$3)
+			ON CONFLICT (workspace_id, key) DO UPDATE SET value=excluded.value`, id.WorkspaceID, agentSettingKey, b); err != nil {
+			return err
+		}
+		if !cur.Enabled {
+			var err error
+			paused, stopRuns, err = s.pauseAgentRoutinesForWorkspaceTx(ctx, tx, id.WorkspaceID)
+			return err
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
+	for _, runID := range stopRuns {
+		s.agentCancelRun(runID)
+	}
+	s.notifyAgentRoutinePauses(ctx, id.WorkspaceID, paused, "agent_disabled")
 	s.audit(ctx, "agent_settings_update", "app_setting", agentSettingKey, "ok", map[string]any{
 		"enabled": cur.Enabled, "viewer_enabled": cur.ViewerEnabled, "allow_model_pick": cur.AllowModelPick})
 	return ok(w, cur)
