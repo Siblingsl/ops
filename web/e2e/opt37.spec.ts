@@ -1,7 +1,9 @@
 import { expect, test } from '@playwright/test'
+import { performance } from 'node:perf_hooks'
 import { api, registerAccount } from './support'
 
-test('OPT37 扫码预览公开展示与当前公众号主题相同的只读排版', async ({ page }) => {
+test('OPT37 扫码预览公开展示与当前公众号主题相同的只读排版', async ({ page, browser }) => {
+  const journeyStarted = performance.now()
   const account = await registerAccount(page, '长图文', 'wechat_mp')
   const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: 'OPT37 手机预览验收' })
   await api(page, 'PATCH', `/works/${work.id}`, { viewpoint: '这是本人输入的核心观点：清楚说明每一步，读者才能重复执行。', base_revision: work.revision })
@@ -28,11 +30,58 @@ test('OPT37 扫码预览公开展示与当前公众号主题相同的只读排�
     template.innerHTML = value
     return template.innerHTML
   }, html)
-  await page.getByRole('button', { name: '生成手机扫码预览' }).click()
-  await expect(page.getByRole('img', { name: '手机扫码预览二维码' })).toBeVisible()
-  await expect(page.getByText(/24 小时后过期/)).toBeVisible()
+  const createButton = page.getByRole('button', { name: '生成手机扫码预览', exact: true })
+  const failMessage = 'QA26 分享服务暂不可用'
+  let injectFailure = true
+  await page.route(`**/api/v1/works/${work.id}/preview-link`, async (route) => {
+    if (route.request().method() === 'POST' && injectFailure) {
+      injectFailure = false
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { code: 'qa26_preview_unavailable', message: failMessage } }),
+      })
+    } else await route.continue()
+  })
+  const failedCreate = page.waitForResponse(response => response.url().endsWith(`/works/${work.id}/preview-link`) && response.request().method() === 'POST')
+  await createButton.click()
+  expect((await failedCreate).status()).toBe(503)
+  await expect(page.getByText(failMessage, { exact: true })).toBeVisible()
+  await expect(page.getByRole('img', { name: '手机扫码预览二维码' })).toHaveCount(0)
+  await page.unroute(`**/api/v1/works/${work.id}/preview-link`)
+
+  const clickLatencies: number[] = []
+  for (let index = 0; index < 20; index += 1) {
+    const started = performance.now()
+    const created = page.waitForResponse(response => response.url().endsWith(`/works/${work.id}/preview-link`) && response.request().method() === 'POST')
+    await createButton.click()
+    expect((await created).status()).toBe(200)
+    await expect(createButton).toBeEnabled()
+    await expect(page.getByRole('img', { name: '手机扫码预览二维码' })).toBeVisible()
+    await expect(page.getByRole('link', { name: '打开手机预览', exact: true })).toBeVisible()
+    await expect(page.getByText(/24 小时后过期/)).toBeVisible()
+    clickLatencies.push(performance.now() - started)
+  }
+  const sortedLatencies = [...clickLatencies].sort((a, b) => a - b)
+  const percentile = (p: number) => sortedLatencies[Math.ceil(p * sortedLatencies.length) - 1]
+  console.log('QA26 G1-04 Web share clicks', JSON.stringify({
+    count: clickLatencies.length,
+    p50_ms: Number(percentile(0.5).toFixed(2)),
+    p95_ms: Number(percentile(0.95).toFixed(2)),
+    failures: 0,
+    samples_ms: clickLatencies.map(value => Number(value.toFixed(2))),
+  }))
   const link = await page.getByRole('link', { name: '打开手机预览' }).getAttribute('href')
   expect(new URL(link!).pathname).toMatch(/^\/preview\/[A-Za-z0-9_.-]+$/)
+
+  const anonymous = await browser.newContext({ baseURL: new URL(page.url()).origin })
+  try {
+    expect((await anonymous.request.get('/api/v1/auth/me')).status()).toBe(401)
+    const anonymousCreate = await anonymous.request.post(`/api/v1/works/${work.id}/preview-link`, { data: {} })
+    expect(anonymousCreate.status()).toBe(401)
+  } finally {
+    await anonymous.close()
+  }
 
   await page.context().clearCookies()
   await page.goto(link!)
@@ -42,4 +91,5 @@ test('OPT37 扫码预览公开展示与当前公众号主题相同的只读排�
   expect(await normalizeHtml(publicHtml)).toBe(await normalizeHtml(sourceHtml))
   expect(await page.getByTestId('wechat-rendered-html').locator('h2').evaluate(el => getComputedStyle(el).borderBottomColor)).toBe('rgb(47, 93, 98)')
   await expect(page.getByRole('button')).toHaveCount(0)
+  console.log('QA26 G1-04 Web journey', JSON.stringify({ duration_ms: Number((performance.now() - journeyStarted).toFixed(2)) }))
 })
