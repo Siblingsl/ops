@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -97,6 +98,64 @@ func TestParseDOCXExtractsTextAndRejectsExternalLinksAndMacros(t *testing.T) {
 	if err == nil || got.ErrorCode != "docx_page_count_unverifiable" {
 		t.Fatalf("DOCX without saved pagination must require PDF conversion: %+v, %v", got, err)
 	}
+}
+
+func TestParseDOCXRejectsHighCompressionExpandedSizeUnderWASI(t *testing.T) {
+	const expandedLimit = 96 << 20
+	compressed, ratio := highCompressionDOCXFixture(t)
+	start := time.Now()
+	result, err := parseInWASI("high-compression.docx", compressed)
+	elapsed := time.Since(start)
+	if err == nil || result.ErrorCode != "docx_expanded_size_limit" {
+		t.Fatalf("high-compression DOCX should fail from its declared expanded size: result %+v, err %v", result, err)
+	}
+	t.Logf("DEV-QA26_METRIC_DOCX_ZIP_BOMB %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"result":"%s"}`, expandedLimit+1, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ErrorCode))
+}
+
+func highCompressionDOCXFixture(t *testing.T) ([]byte, float64) {
+	t.Helper()
+	const expandedLimit = 96 << 20
+	files := map[string][]byte{
+		"word/document.xml": []byte("<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>high compression</w:t></w:r></w:p></w:body></w:document>"),
+		"docProps/app.xml":  []byte("<Properties><Pages>1</Pages></Properties>"),
+	}
+	baseExpanded := 0
+	for _, content := range files {
+		baseExpanded += len(content)
+	}
+
+	var compressed bytes.Buffer
+	archive := zip.NewWriter(&compressed)
+	for name, content := range files {
+		entry, err := archive.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write(content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload, err := archive.Create("customXml/payload.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := bytes.Repeat([]byte("a"), 1<<20)
+	remaining := expandedLimit + 1 - baseExpanded
+	for remaining > 0 {
+		count := min(remaining, len(chunk))
+		if _, err := payload.Write(chunk[:count]); err != nil {
+			t.Fatal(err)
+		}
+		remaining -= count
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ratio := float64(expandedLimit+1) / float64(compressed.Len())
+	if ratio < 100 {
+		t.Fatalf("fixture compression ratio unexpectedly low: %.1f:1 (%d compressed bytes)", ratio, compressed.Len())
+	}
+	return compressed.Bytes(), ratio
 }
 
 func TestParsePDFTextLayerAndScannedFile(t *testing.T) {
