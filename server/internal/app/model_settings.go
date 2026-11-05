@@ -37,9 +37,9 @@ type Provider struct {
 	PricePrompt    *float64   `json:"price_per_1k_prompt"`
 	PriceComplete  *float64   `json:"price_per_1k_completion"`
 	// ContextWindowTokens 由用户按厂商文档显式登记；NULL 表示未登记、不做发送前预算检查。
-	ContextWindowTokens *int        `json:"context_window_tokens"`
-	CircuitState   string     `json:"circuit_state"`
-	RetryAfter     int        `json:"retry_after_seconds"`
+	ContextWindowTokens *int   `json:"context_window_tokens"`
+	CircuitState        string `json:"circuit_state"`
+	RetryAfter          int    `json:"retry_after_seconds"`
 	// Capabilities lists the per-model tool-calling / vision self-test results.
 	Capabilities []Capability `json:"capabilities"`
 }
@@ -310,6 +310,7 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
+	var paused []agentRoutineModelPause
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
 		var n int
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, id, ws).Scan(&n); err != nil || n == 0 {
@@ -376,12 +377,16 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 				return err
 			}
 		}
-		_, err := tx.Exec(ctx, `UPDATE model_provider SET updated_at=now() WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, id, ws)
+		if _, err := tx.Exec(ctx, `UPDATE model_provider SET updated_at=now() WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, id, ws); err != nil {
+			return err
+		}
+		paused, err = s.pauseUnavailableAgentRoutinesForProviderTx(ctx, tx, ws, id)
 		return err
 	})
 	if err != nil {
 		return err
 	}
+	s.notifyAgentRoutineModelPauses(ctx, ws, paused)
 	p, err := s.scanProvider(s.db.QueryRow(ctx, `SELECT `+providerCols+` FROM model_provider WHERE id=$1 AND workspace_id=$2 AND execution_location='server'`, id, ws))
 	if err != nil {
 		return err

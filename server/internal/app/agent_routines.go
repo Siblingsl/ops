@@ -1463,6 +1463,58 @@ func (s *Server) agentRoutineEventTx(ctx context.Context, tx pgx.Tx, routineID u
 	return err
 }
 
+type agentRoutineModelPause struct {
+	id, userID uuid.UUID
+	revision   int64
+}
+
+func (s *Server) pauseUnavailableAgentRoutinesForProviderTx(ctx context.Context, tx pgx.Tx, workspaceID, providerID uuid.UUID) ([]agentRoutineModelPause, error) {
+	rows, err := tx.Query(ctx, `UPDATE agent_routine AS r SET status='paused',next_due_at=NULL,
+		revision=revision+1,error_code='model_unavailable',updated_at=now()
+		FROM model_provider AS p
+		WHERE p.id=r.model_provider_id AND p.workspace_id=$1 AND p.id=$2
+			AND r.workspace_id=$1 AND r.status='enabled'
+			AND (p.status<>'active' OR p.execution_location<>'server' OR NOT EXISTS (
+				SELECT 1 FROM model_capability mc WHERE mc.workspace_id=r.workspace_id
+					AND mc.provider_id=p.id AND mc.model=r.model
+					AND mc.config_revision=p.desktop_config_revision AND mc.tools_ok
+			))
+		RETURNING r.id,r.user_id,r.revision`, workspaceID, providerID)
+	if err != nil {
+		return nil, err
+	}
+	paused := []agentRoutineModelPause{}
+	for rows.Next() {
+		var item agentRoutineModelPause
+		if err := rows.Scan(&item.id, &item.userID, &item.revision); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		paused = append(paused, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, item := range paused {
+		if err := s.agentRoutineEventTx(ctx, tx, item.id, "paused", map[string]any{
+			"reason": "model_unavailable", "revision": item.revision,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return paused, nil
+}
+
+func (s *Server) notifyAgentRoutineModelPauses(ctx context.Context, workspaceID uuid.UUID, paused []agentRoutineModelPause) {
+	for _, item := range paused {
+		s.notify(ctx, workspaceID, item.userID, "agent_routine", "例行任务已暂停",
+			"任务模型不可用：绑定的服务器模型已停用、配置变更或未通过工具能力自检；恢复模型并完成自检后，请手动重新启用此任务。",
+			"/agent?panel=task&item="+item.id.String(),
+			"agent_routine:blocked:"+item.id.String()+":"+strconv.FormatInt(item.revision, 10))
+	}
+}
+
 func agentRoutineOccurrenceCursor(raw string) (*time.Time, *uuid.UUID, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil, nil

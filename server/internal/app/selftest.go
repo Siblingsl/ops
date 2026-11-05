@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"ops/internal/ai"
 )
 
@@ -189,10 +191,6 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 	}
 	allOK := usable > 0 && passed == usable
 	summary := fmt.Sprintf("自检完成：%d/%d 项通过（模型 %s）", passed, usable, model)
-	if _, err := s.db.Exec(ctx, `UPDATE model_provider SET last_test_at=now(), last_test_ok=$2, last_test_result=$3 WHERE id=$1 AND workspace_id=$4`,
-		id, allOK, summary, ws); err != nil {
-		return err
-	}
 	// D-117（16 文档第 7.2 节）：按供应商 + 模型覆盖保存工具调用与看图能力。
 	toolsOK, visionOK := false, false
 	capDetail := map[string]string{}
@@ -207,13 +205,26 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 		}
 	}
 	detailJSON, _ := json.Marshal(capDetail)
-	if _, err := s.db.Exec(ctx, `INSERT INTO model_capability (provider_id, model, workspace_id, tools_ok, vision_ok, detail, tested_at)
-		VALUES ($1,$2,$3,$4,$5,$6,now())
-		ON CONFLICT (provider_id, model) DO UPDATE SET tools_ok=excluded.tools_ok, vision_ok=excluded.vision_ok,
-		detail=excluded.detail, tested_at=excluded.tested_at`,
-		id, model, ws, toolsOK, visionOK, detailJSON); err != nil {
+	var paused []agentRoutineModelPause
+	if err := s.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE model_provider SET last_test_at=now(), last_test_ok=$2, last_test_result=$3 WHERE id=$1 AND workspace_id=$4`,
+			id, allOK, summary, ws); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO model_capability (provider_id, model, workspace_id, tools_ok, vision_ok, detail, tested_at)
+			VALUES ($1,$2,$3,$4,$5,$6,now())
+			ON CONFLICT (provider_id, model) DO UPDATE SET tools_ok=excluded.tools_ok, vision_ok=excluded.vision_ok,
+			detail=excluded.detail, tested_at=excluded.tested_at`,
+			id, model, ws, toolsOK, visionOK, detailJSON); err != nil {
+			return err
+		}
+		var err error
+		paused, err = s.pauseUnavailableAgentRoutinesForProviderTx(ctx, tx, ws, id)
+		return err
+	}); err != nil {
 		return err
 	}
+	s.notifyAgentRoutineModelPauses(ctx, ws, paused)
 	return ok(w, map[string]any{"model": model, "summary": summary, "ok": allOK, "results": results})
 }
 

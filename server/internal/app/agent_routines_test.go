@@ -145,6 +145,77 @@ func TestAW10RoutinePausesWhenCreatorIsDemotedToViewer(t *testing.T) {
 	}
 }
 
+func TestAW10RoutinePausesWhenModelProviderBecomesUnavailable(t *testing.T) {
+	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
+	providerID := env.ensureToolModel(t)
+	account := env.accounts(t).xhs
+	owner := env.me(t)
+	var created struct {
+		Routine agentRoutineView `json:"routine"`
+	}
+	env.mustJSON(t, http.MethodPost, "/api/v1/agent/routines", map[string]any{
+		"request_id": uuid.NewString(), "name": "模型失效暂停验收", "prompt": "只读核对",
+		"public_context_refs": []any{}, "account_id": account.ID.String(), "cadence": "daily", "time_of_day": "09:00",
+		"timezone": "Asia/Shanghai", "destination": "new",
+		"model": map[string]any{"provider_id": providerID, "model": "mock-writer"},
+	}, &created)
+	if created.Routine.ID == uuid.Nil || created.Routine.Status != "enabled" {
+		t.Fatalf("例行任务创建失败：%+v", created)
+	}
+	env.mustJSON(t, http.MethodPatch, "/api/v1/model-providers/"+providerID, map[string]string{"status": "disabled"}, nil)
+	var status, reason string
+	var noNextDue bool
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT status,error_code,next_due_at IS NULL FROM agent_routine WHERE id=$1`, created.Routine.ID).
+		Scan(&status, &reason, &noNextDue); err != nil {
+		t.Fatal(err)
+	}
+	if status != "paused" || reason != "model_unavailable" || !noNextDue {
+		t.Fatalf("模型停用后必须立即持久化暂停：status=%s reason=%s next_due_at_null=%v", status, reason, noNextDue)
+	}
+	var eventCount, notificationCount int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_event WHERE routine_id=$1 AND type='paused'
+		AND payload->>'reason'='model_unavailable'`, created.Routine.ID).Scan(&eventCount); err != nil || eventCount != 1 {
+		t.Fatalf("模型停用后必须持久化暂停事件：count=%d err=%v", eventCount, err)
+	}
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM notification WHERE workspace_id=$1 AND user_id=$2
+		AND kind='agent_routine' AND title='例行任务已暂停' AND body LIKE '%任务模型不可用%'`,
+		uuid.MustParse(owner.Workspace.ID), uuid.MustParse(owner.UserID)).Scan(&notificationCount); err != nil || notificationCount != 1 {
+		t.Fatalf("模型停用后必须持久化暂停通知：count=%d err=%v", notificationCount, err)
+	}
+	var paused struct {
+		Items []agentRoutineView `json:"items"`
+	}
+	env.mustJSON(t, http.MethodGet, "/api/v1/agent/routines", nil, &paused)
+	statusCode, raw := env.do(http.MethodPost, "/api/v1/agent/routines/"+created.Routine.ID.String()+"/control", map[string]any{
+		"expected_revision": paused.Items[0].Revision, "request_id": uuid.NewString(), "action": "enable",
+	})
+	var rejected apiError
+	if err := json.Unmarshal(raw, &rejected); err != nil {
+		t.Fatalf("解析模型不可用时的恢复拒绝响应失败：%v body=%s", err, raw)
+	}
+	if statusCode != http.StatusConflict || rejected.Error.Code != "agent_routine_unavailable" || !strings.Contains(rejected.Error.Message, "服务器模型不可用") {
+		t.Fatalf("模型不可用时必须拒绝恢复任务：status=%d err=%+v", statusCode, rejected)
+	}
+	var occurrenceCount int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_occurrence WHERE routine_id=$1`, created.Routine.ID).Scan(&occurrenceCount); err != nil || occurrenceCount != 0 {
+		t.Fatalf("模型不可用时拒绝恢复不得创建执行记录：count=%d err=%v", occurrenceCount, err)
+	}
+	env.mustJSON(t, http.MethodPatch, "/api/v1/model-providers/"+providerID, map[string]string{"status": "active"}, nil)
+	env.mustJSON(t, http.MethodGet, "/api/v1/agent/routines", nil, &paused)
+	if len(paused.Items) != 1 || paused.Items[0].ID != created.Routine.ID || paused.Items[0].Status != "paused" {
+		t.Fatalf("恢复模型不得自动重新启用例行任务：%+v", paused.Items)
+	}
+	var enabled struct {
+		Routine agentRoutineView `json:"routine"`
+	}
+	env.mustJSON(t, http.MethodPost, "/api/v1/agent/routines/"+created.Routine.ID.String()+"/control", map[string]any{
+		"expected_revision": paused.Items[0].Revision, "request_id": uuid.NewString(), "action": "enable",
+	}, &enabled)
+	if enabled.Routine.Status != "enabled" || enabled.Routine.ErrorCode != "" {
+		t.Fatalf("用户逐项启用模型恢复后的例行任务失败：%+v", enabled.Routine)
+	}
+}
+
 func TestAW10RoutineToolAllowlistCannotReachBusinessWrites(t *testing.T) {
 	allowed := []string{
 		"works__list", "works__get", "works__read_sections", "review__dashboard", "review__top_works",
@@ -183,12 +254,16 @@ func TestAW10RoutinePrincipalRechecksServerModelBeforeEveryTool(t *testing.T) {
 	providerID := env.ensureToolModel(t)
 	account := env.accounts(t).wechat
 	var me struct {
-		UserID string `json:"user_id"`
-		Workspace struct { ID string `json:"id"` } `json:"workspace"`
+		UserID    string `json:"user_id"`
+		Workspace struct {
+			ID string `json:"id"`
+		} `json:"workspace"`
 	}
 	env.mustJSON(t, http.MethodGet, "/api/v1/auth/me", nil, &me)
 	userID, workspaceID := uuid.MustParse(me.UserID), uuid.MustParse(me.Workspace.ID)
-	var created struct { Routine agentRoutineView `json:"routine"` }
+	var created struct {
+		Routine agentRoutineView `json:"routine"`
+	}
 	env.mustJSON(t, http.MethodPost, "/api/v1/agent/routines", map[string]any{
 		"request_id": uuid.NewString(), "name": "模型权限边界", "prompt": "仅生成只读报告",
 		"public_context_refs": []any{}, "account_id": account.ID.String(), "cadence": "daily", "time_of_day": "09:00",
@@ -234,12 +309,16 @@ func TestAW10ExpiredRoutineRunIsMarkedUnknownAndNeverReplayed(t *testing.T) {
 	providerID := env.ensureToolModel(t)
 	account := env.accounts(t).wechat
 	var me struct {
-		UserID string `json:"user_id"`
-		Workspace struct { ID string `json:"id"` } `json:"workspace"`
+		UserID    string `json:"user_id"`
+		Workspace struct {
+			ID string `json:"id"`
+		} `json:"workspace"`
 	}
 	env.mustJSON(t, http.MethodGet, "/api/v1/auth/me", nil, &me)
 	userID, workspaceID := uuid.MustParse(me.UserID), uuid.MustParse(me.Workspace.ID)
-	var created struct { Routine agentRoutineView `json:"routine"` }
+	var created struct {
+		Routine agentRoutineView `json:"routine"`
+	}
 	env.mustJSON(t, http.MethodPost, "/api/v1/agent/routines", map[string]any{
 		"request_id": uuid.NewString(), "name": "未知结果不重跑", "prompt": "只读检查",
 		"public_context_refs": []any{}, "account_id": account.ID.String(), "cadence": "daily", "time_of_day": "09:00",
