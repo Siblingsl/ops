@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -408,6 +409,61 @@ func TestParseDOCXAcceptsStrictWordprocessingMainDocument(t *testing.T) {
 	}
 }
 
+func TestParseDOCXStreamingKeepsUTF8AndNestedTextRules(t *testing.T) {
+	t.Run("invalid encoding", func(t *testing.T) {
+		files := minimalOPCDOCXFiles(false)
+		files["word/document.xml"] = strings.Replace(files["word/document.xml"], "最小 OPC 文档", "bad \xff encoding", 1)
+		parsed, err := parseInWASI("invalid-utf8.docx", docxRawFixture(t, files))
+		if err == nil || parsed.ErrorCode != "docx_encoding_invalid" {
+			t.Fatalf("invalid UTF-8 must keep the encoding error: result=%+v err=%v", parsed, err)
+		}
+	})
+
+	t.Run("corrupt zip checksum", func(t *testing.T) {
+		files := minimalOPCDOCXFiles(false)
+		data := corruptDOCXDocumentCRC(t, docxRawFixture(t, files))
+		parsed, err := parseInWASI("bad-document-crc.docx", data)
+		if err == nil || parsed.ErrorCode != "docx_encoding_invalid" {
+			t.Fatalf("corrupt ZIP CRC must retain the encoding/read error: result=%+v err=%v", parsed, err)
+		}
+	})
+
+	t.Run("nested text element", func(t *testing.T) {
+		files := minimalOPCDOCXFiles(false)
+		files["word/document.xml"] = strings.Replace(files["word/document.xml"], "最小 OPC 文档", "outer<w:inner>nested</w:inner>", 1)
+		parsed, err := parseInWASI("nested-text.docx", docxRawFixture(t, files))
+		if err != nil || !strings.Contains(parsed.Text, "outer") || strings.Contains(parsed.Text, "nested") {
+			t.Fatalf("w:t should collect direct text and ignore nested child text: result=%+v err=%v", parsed, err)
+		}
+	})
+}
+
+func TestParseDOCXStreamingCountsUTF8NearChunkBoundaries(t *testing.T) {
+	const expandedDocumentBytes = 128 << 10
+	prefix := []byte(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>`)
+	suffix := []byte(`</w:t></w:r></w:p></w:body></w:document>`)
+	body := bytes.Repeat([]byte("a"), expandedDocumentBytes-len(prefix)-len(suffix))
+	for boundary := 4096; boundary < expandedDocumentBytes; boundary += 4096 {
+		start := boundary - 1 - len(prefix)
+		if start >= 0 && start+len("你") <= len(body) {
+			copy(body[start:], "你")
+		}
+	}
+	document := make([]byte, 0, expandedDocumentBytes)
+	document = append(document, prefix...)
+	document = append(document, body...)
+	document = append(document, suffix...)
+	files := minimalOPCDOCXFiles(false)
+	files["word/document.xml"] = string(document)
+	parsed, err := parseInWASI("utf8-read-boundaries.docx", docxRawFixture(t, files))
+	if err != nil {
+		t.Fatalf("valid UTF-8 split around stream read boundaries should parse: result=%+v err=%v", parsed, err)
+	}
+	if parsed.ExtractedChars != len([]rune(string(body)))+1 || parsed.InjectedChars != 20000 || parsed.TruncatedFrom == nil || *parsed.TruncatedFrom != 20001 {
+		t.Fatalf("streamed UTF-8 character count or truncation changed: %+v", parsed)
+	}
+}
+
 func TestParseDOCXRejectsHighCompressionExpandedSizeUnderWASI(t *testing.T) {
 	const expandedLimit = 96 << 20
 	compressed, ratio := highCompressionDOCXFixture(t)
@@ -466,6 +522,69 @@ func TestParseFiveMiBDocumentEntryThroughWindowsWorker(t *testing.T) {
 		t.Fatalf("5 MiB DOCX entry should parse with a bounded text receipt: %+v", result)
 	}
 	t.Logf("DEV-QA26_METRIC_DOCX_5MIB_WINDOWS_WORKER %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"extracted_chars":%d,"injected_chars":%d}`, expandedDocumentEntry, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ExtractedChars, result.InjectedChars))
+}
+
+func TestParseSixMiBDocumentEntryThroughWindowsWorker(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires the isolated Windows parser worker")
+	}
+	const expandedDocumentEntry = 6 << 20
+	compressed, ratio := compressedDocumentEntryDOCXFixture(t, expandedDocumentEntry)
+	started := time.Now()
+	result, err := Parse(context.Background(), "large-document-entry-6mib.docx", compressed)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("6 MiB document.xml should parse through the bounded Windows worker in under 30 seconds: %v", err)
+	}
+	if result.Pages == nil || *result.Pages != 1 || result.PageBasis != "docx_saved_pagination" || result.InjectedChars != 20000 || result.TruncatedFrom == nil || *result.TruncatedFrom != 20001 || result.TruncatedTo == nil || *result.TruncatedTo != result.ExtractedChars || result.ExtractedChars <= result.InjectedChars || len([]rune(result.Text)) != result.InjectedChars {
+		t.Fatalf("6 MiB DOCX entry should parse with a bounded text receipt: %+v", result)
+	}
+	t.Logf("DEV-QA26_METRIC_DOCX_6MIB_WINDOWS_WORKER %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"extracted_chars":%d,"injected_chars":%d}`, expandedDocumentEntry, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ExtractedChars, result.InjectedChars))
+}
+
+func TestParseEightMiBDocumentEntryThroughWindowsWorker(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires the isolated Windows parser worker")
+	}
+	const expandedDocumentEntry = 8 << 20
+	compressed, ratio := compressedDocumentEntryDOCXFixture(t, expandedDocumentEntry)
+	started := time.Now()
+	result, err := Parse(context.Background(), "large-document-entry-8mib.docx", compressed)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("8 MiB document.xml should parse through the bounded Windows worker in under 30 seconds: %v", err)
+	}
+	if result.Pages == nil || *result.Pages != 1 || result.PageBasis != "docx_saved_pagination" || result.InjectedChars != 20000 || result.TruncatedFrom == nil || *result.TruncatedFrom != 20001 || result.TruncatedTo == nil || *result.TruncatedTo != result.ExtractedChars || result.ExtractedChars <= result.InjectedChars || len([]rune(result.Text)) != result.InjectedChars {
+		t.Fatalf("8 MiB DOCX entry should parse with a bounded text receipt: %+v", result)
+	}
+	t.Logf("DEV-QA26_METRIC_DOCX_8MIB_WINDOWS_WORKER %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"extracted_chars":%d,"injected_chars":%d}`, expandedDocumentEntry, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ExtractedChars, result.InjectedChars))
+}
+
+func TestParseSixMiBDocumentEntryConcurrentWindowsWorkers(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires isolated Windows parser workers")
+	}
+	compressed, _ := compressedDocumentEntryDOCXFixture(t, 6<<20)
+	results := make(chan error, 2)
+	for worker := range 2 {
+		go func(worker int) {
+			result, err := Parse(context.Background(), fmt.Sprintf("large-document-entry-concurrent-%d.docx", worker), compressed)
+			if err != nil {
+				results <- fmt.Errorf("worker %d parse failed: %w", worker, err)
+				return
+			}
+			if result.Pages == nil || *result.Pages != 1 || result.InjectedChars != 20000 || result.ExtractedChars <= result.InjectedChars {
+				results <- fmt.Errorf("worker %d returned incomplete parse receipt: %+v", worker, result)
+				return
+			}
+			results <- nil
+		}(worker)
+	}
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Error(err)
+		}
+	}
 }
 
 func highCompressionDOCXFixture(t *testing.T) ([]byte, float64) {
@@ -663,6 +782,31 @@ func docxRawFixture(t *testing.T, files map[string]string) []byte {
 		t.Fatal(err)
 	}
 	return out.Bytes()
+}
+
+func corruptDOCXDocumentCRC(t *testing.T, data []byte) []byte {
+	t.Helper()
+	centralSignature := []byte{'P', 'K', 1, 2}
+	for offset := bytes.Index(data, centralSignature); offset >= 0 && offset+46 <= len(data); {
+		nameLength := int(binary.LittleEndian.Uint16(data[offset+28 : offset+30]))
+		extraLength := int(binary.LittleEndian.Uint16(data[offset+30 : offset+32]))
+		commentLength := int(binary.LittleEndian.Uint16(data[offset+32 : offset+34]))
+		end := offset + 46 + nameLength + extraLength + commentLength
+		if end > len(data) {
+			break
+		}
+		if string(data[offset+46:offset+46+nameLength]) == "word/document.xml" {
+			checksum := binary.LittleEndian.Uint32(data[offset+16 : offset+20])
+			binary.LittleEndian.PutUint32(data[offset+16:offset+20], checksum^1)
+			return data
+		}
+		if end+4 > len(data) || !bytes.Equal(data[end:end+4], centralSignature) {
+			break
+		}
+		offset = end
+	}
+	t.Fatal("DOCX main-document central directory entry not found")
+	return nil
 }
 
 func docxCaseCollisionFixture(t *testing.T) []byte {

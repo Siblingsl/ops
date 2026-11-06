@@ -196,7 +196,7 @@ func runWASIContext(ctx context.Context, input []byte) ([]byte, error) {
 	}
 	var output limitedBuffer
 	output.max = maxOutput
-	_, err = runtime.InstantiateModule(ctx, compiled, wazero.NewModuleConfig().WithStdin(bytes.NewReader(input)).WithStdout(&output).WithStderr(io.Discard))
+	_, err = runtime.InstantiateModule(parserWASIModuleContext(ctx), compiled, wazero.NewModuleConfig().WithStdin(bytes.NewReader(input)).WithStdout(&output).WithStderr(io.Discard))
 	if err != nil {
 		return nil, errors.New("parser module failed")
 	}

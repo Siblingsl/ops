@@ -72,6 +72,29 @@ func (e *extractor) add(value string) {
 	}
 }
 
+func (e *extractor) addXMLText(value []byte) {
+	ascii := 0
+	for ascii < len(value) && value[ascii] < utf8.RuneSelf {
+		ascii++
+	}
+	e.chars += ascii
+	if remaining := maxDocumentChars - e.written; remaining > 0 {
+		written := min(ascii, remaining)
+		_, _ = e.text.Write(value[:written])
+		e.written += written
+	}
+	value = value[ascii:]
+	for len(value) > 0 {
+		_, size := utf8.DecodeRune(value)
+		e.chars++
+		if e.written < maxDocumentChars {
+			_, _ = e.text.Write(value[:size])
+			e.written++
+		}
+		value = value[size:]
+	}
+}
+
 func (e *extractor) result() result {
 	out := result{Text: e.text.String(), ExtractedChars: e.chars, InjectedChars: min(e.chars, maxDocumentChars)}
 	if e.chars > maxDocumentChars {
@@ -310,47 +333,96 @@ func parseDOCX(data []byte) (result, error) {
 	if declaredPages > maxDocumentPages {
 		return result{}, invalid("document_page_limit")
 	}
-	content, err := readZipFile(document, 32<<20)
-	if err != nil || !utf8.Valid(content) {
+	if document.UncompressedSize64 > 32<<20 {
 		return result{}, invalid("docx_encoding_invalid")
 	}
-	documentNamespace, err := wordprocessingMainDocumentNamespace(content)
-	if err != nil || documentNamespace == "" {
-		return result{}, invalid("docx_invalid")
+	documentReader, err := document.Open()
+	if err != nil {
+		return result{}, invalid("docx_encoding_invalid")
 	}
+	defer documentReader.Close()
+	validatingReader := &utf8LimitReader{reader: documentReader, maxBytes: 32 << 20}
+	out, parseErr := parseDOCXMainDocument(validatingReader, declaredPages)
+	if err := validatingReader.finish(); err != nil {
+		return result{}, invalid("docx_encoding_invalid")
+	}
+	if parseErr != nil {
+		return result{}, parseErr
+	}
+	return out, nil
+}
+
+func parseDOCXMainDocument(reader io.Reader, declaredPages int) (result, error) {
 	e := &extractor{}
-	decoder := xml.NewDecoder(bytes.NewReader(content))
+	decoder := xml.NewDecoder(reader)
 	pageBreaks := 0
+	depth := 0
+	rootSeen := false
+	documentNamespace := ""
+	bodyCount := 0
+	textDepth := 0
 	for {
 		token, err := decoder.Token()
 		if errors.Is(err, io.EOF) {
+			if !rootSeen || bodyCount != 1 {
+				return result{}, invalid("docx_invalid")
+			}
 			break
 		}
 		if err != nil {
 			return result{}, invalid("docx_invalid")
 		}
-		if item, ok := token.(xml.StartElement); ok && item.Name.Space == documentNamespace {
-			switch item.Name.Local {
-			case "t":
-				var text string
-				if err := decoder.DecodeElement(&text, &item); err != nil {
+		switch item := token.(type) {
+		case xml.StartElement:
+			if textDepth != 0 {
+				depth++
+				continue
+			}
+			if depth == 0 {
+				if item.Name.Local != "document" || (item.Name.Space != wordprocessingMainNamespace && item.Name.Space != strictWordprocessingMainNS) {
 					return result{}, invalid("docx_invalid")
 				}
-				e.add(text)
-			case "tab":
-				e.add("\t")
-			case "br", "cr":
-				e.add("\n")
-				for _, attr := range item.Attr {
-					if attr.Name.Local == "type" && attr.Value == "page" {
-						pageBreaks++
-					}
+				rootSeen = true
+				documentNamespace = item.Name.Space
+			} else if depth == 1 && item.Name.Local == "body" && item.Name.Space == documentNamespace {
+				bodyCount++
+				if bodyCount > 1 {
+					return result{}, invalid("docx_invalid")
 				}
-			case "lastRenderedPageBreak":
-				pageBreaks++
-			case "p":
-				e.add("\n")
 			}
+			if item.Name.Space == documentNamespace {
+				switch item.Name.Local {
+				case "t":
+					textDepth = depth + 1
+				case "tab":
+					e.add("\t")
+				case "br", "cr":
+					e.add("\n")
+					for _, attr := range item.Attr {
+						if attr.Name.Local == "type" && attr.Value == "page" {
+							pageBreaks++
+						}
+					}
+				case "lastRenderedPageBreak":
+					pageBreaks++
+				case "p":
+					e.add("\n")
+				}
+			}
+			depth++
+		case xml.CharData:
+			if textDepth != 0 && depth == textDepth {
+				e.addXMLText([]byte(item))
+			}
+		case xml.EndElement:
+			if textDepth != 0 {
+				if textDepth == depth {
+					textDepth = 0
+				}
+				depth--
+				continue
+			}
+			depth--
 		}
 		if pageBreaks >= maxDocumentPages {
 			return result{}, invalid("document_page_limit")
@@ -366,41 +438,6 @@ func parseDOCX(data []byte) (result, error) {
 	out.Pages = &declaredPages
 	out.PageBasis = "docx_saved_pagination"
 	return out, nil
-}
-
-func wordprocessingMainDocumentNamespace(data []byte) (string, error) {
-	decoder := xml.NewDecoder(bytes.NewReader(data))
-	depth := 0
-	documentNamespace := ""
-	rootSeen := false
-	bodyCount := 0
-	for {
-		token, err := decoder.Token()
-		if errors.Is(err, io.EOF) {
-			if rootSeen && bodyCount == 1 {
-				return documentNamespace, nil
-			}
-			return "", nil
-		}
-		if err != nil {
-			return "", err
-		}
-		switch item := token.(type) {
-		case xml.StartElement:
-			if depth == 0 {
-				if item.Name.Local != "document" || (item.Name.Space != wordprocessingMainNamespace && item.Name.Space != strictWordprocessingMainNS) {
-					return "", nil
-				}
-				rootSeen = true
-				documentNamespace = item.Name.Space
-			} else if depth == 1 && item.Name.Local == "body" && item.Name.Space == documentNamespace {
-				bodyCount++
-			}
-			depth++
-		case xml.EndElement:
-			depth--
-		}
-	}
 }
 
 func hasWordDocumentContentType(data []byte) (bool, error) {
@@ -599,6 +636,100 @@ func readZipFile(file *zip.File, maxBytes int64) ([]byte, error) {
 		return nil, errors.New("zip entry exceeds size cap or is corrupt")
 	}
 	return content, nil
+}
+
+var errUTF8LimitExceeded = errors.New("zip entry exceeds size cap")
+
+type utf8LimitReader struct {
+	reader      io.Reader
+	maxBytes    int64
+	total       int64
+	pending     [utf8.UTFMax]byte
+	pendingSize int
+	invalidUTF8 bool
+	tooLarge    bool
+	readErr     error
+}
+
+func (r *utf8LimitReader) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	if r.readErr != nil {
+		return 0, r.readErr
+	}
+	remaining := r.maxBytes + 1 - r.total
+	if remaining <= 0 {
+		r.tooLarge = true
+		return 0, errUTF8LimitExceeded
+	}
+	if int64(len(buffer)) > remaining {
+		buffer = buffer[:int(remaining)]
+	}
+	read, err := r.reader.Read(buffer)
+	if read > 0 {
+		r.total += int64(read)
+		r.validate(buffer[:read])
+		if r.total > r.maxBytes {
+			r.tooLarge = true
+		}
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.readErr = err
+	}
+	return read, err
+}
+
+func (r *utf8LimitReader) validate(data []byte) {
+	index := 0
+	if r.pendingSize > 0 {
+		var prefix [utf8.UTFMax]byte
+		copy(prefix[:], r.pending[:r.pendingSize])
+		take := min(len(data), utf8.UTFMax-r.pendingSize)
+		copy(prefix[r.pendingSize:], data[:take])
+		length := r.pendingSize + take
+		if !utf8.FullRune(prefix[:length]) {
+			r.pendingSize += copy(r.pending[r.pendingSize:], data[:take])
+			return
+		}
+		_, size := utf8.DecodeRune(prefix[:length])
+		if size == 1 && prefix[0] >= utf8.RuneSelf {
+			r.invalidUTF8 = true
+		}
+		index = max(0, size-r.pendingSize)
+		r.pendingSize = 0
+	}
+	for index < len(data) {
+		if !utf8.FullRune(data[index:]) {
+			r.pendingSize = copy(r.pending[:], data[index:])
+			return
+		}
+		_, size := utf8.DecodeRune(data[index:])
+		if size == 1 && data[index] >= utf8.RuneSelf {
+			r.invalidUTF8 = true
+		}
+		index += size
+	}
+}
+
+func (r *utf8LimitReader) finish() error {
+	var buffer [32 << 10]byte
+	for {
+		_, err := r.Read(buffer[:])
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if r.tooLarge {
+		return errUTF8LimitExceeded
+	}
+	if r.pendingSize != 0 || r.invalidUTF8 {
+		return errors.New("zip entry contains invalid UTF-8")
+	}
+	return r.readErr
 }
 
 func hasExternalRelationship(data []byte) (bool, error) {
