@@ -27,6 +27,12 @@ const (
 	maxCSVRows       = 10000
 	maxCSVColumns    = 100
 	maxZipExpanded   = 96 << 20
+
+	opcContentTypesNamespace       = "http://schemas.openxmlformats.org/package/2006/content-types"
+	opcRelationshipsNamespace      = "http://schemas.openxmlformats.org/package/2006/relationships"
+	wordDocumentContentType        = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+	wordDocumentRelationship       = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+	strictWordDocumentRelationship = "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument"
 )
 
 type request struct {
@@ -227,6 +233,8 @@ func parseDOCX(data []byte) (result, error) {
 	total := uint64(0)
 	var document *zip.File
 	declaredPages := 0
+	hasMainDocumentContentType := false
+	hasMainDocumentRelationship := false
 	partNames := make(map[string]struct{}, len(archive.File))
 	for _, file := range archive.File {
 		if file.FileInfo().IsDir() {
@@ -272,15 +280,25 @@ func parseDOCX(data []byte) (result, error) {
 			if err != nil || external {
 				return result{}, invalid("docx_external_link_unsupported")
 			}
+			if name == "_rels/.rels" {
+				hasMainDocumentRelationship, err = hasPackageMainDocumentRelationship(content)
+				if err != nil {
+					return result{}, invalid("docx_invalid")
+				}
+			}
 		}
 		if name == "[content_types].xml" {
 			content, err := readZipFile(file, 2<<20)
 			if err != nil || bytes.Contains(bytes.ToLower(content), []byte("macroenabled")) {
 				return result{}, invalid("docx_macro_unsupported")
 			}
+			hasMainDocumentContentType, err = hasWordDocumentContentType(content)
+			if err != nil {
+				return result{}, invalid("docx_invalid")
+			}
 		}
 	}
-	if document == nil {
+	if document == nil || !hasMainDocumentContentType || !hasMainDocumentRelationship {
 		return result{}, invalid("docx_invalid")
 	}
 	if declaredPages < 1 {
@@ -341,6 +359,96 @@ func parseDOCX(data []byte) (result, error) {
 	out.Pages = &declaredPages
 	out.PageBasis = "docx_saved_pagination"
 	return out, nil
+}
+
+func hasWordDocumentContentType(data []byte) (bool, error) {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	depth := 0
+	rootSeen := false
+	found := false
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return rootSeen && found, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		switch item := token.(type) {
+		case xml.StartElement:
+			if depth == 0 {
+				if item.Name.Local != "Types" || item.Name.Space != opcContentTypesNamespace {
+					return false, errors.New("invalid OPC content types root")
+				}
+				rootSeen = true
+			} else if depth == 1 && (item.Name.Local == "Default" || item.Name.Local == "Override") {
+				extension, partName, contentType := "", "", ""
+				for _, attr := range item.Attr {
+					switch attr.Name.Local {
+					case "Extension":
+						extension = attr.Value
+					case "PartName":
+						partName = attr.Value
+					case "ContentType":
+						contentType = attr.Value
+					}
+				}
+				if strings.EqualFold(contentType, wordDocumentContentType) &&
+					((item.Name.Local == "Default" && strings.EqualFold(extension, "xml")) ||
+						(item.Name.Local == "Override" && strings.EqualFold(strings.TrimPrefix(partName, "/"), "word/document.xml"))) {
+					found = true
+				}
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+		}
+	}
+}
+
+func hasPackageMainDocumentRelationship(data []byte) (bool, error) {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	depth := 0
+	rootSeen := false
+	matchingRelationships := 0
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return rootSeen && matchingRelationships == 1, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		switch item := token.(type) {
+		case xml.StartElement:
+			if depth == 0 {
+				if item.Name.Local != "Relationships" || item.Name.Space != opcRelationshipsNamespace {
+					return false, errors.New("invalid OPC package relationships root")
+				}
+				rootSeen = true
+			} else if depth == 1 && item.Name.Local == "Relationship" {
+				relationshipType, target, targetMode := "", "", ""
+				for _, attr := range item.Attr {
+					switch attr.Name.Local {
+					case "Type":
+						relationshipType = attr.Value
+					case "Target":
+						target = attr.Value
+					case "TargetMode":
+						targetMode = attr.Value
+					}
+				}
+				if (relationshipType == wordDocumentRelationship || relationshipType == strictWordDocumentRelationship) &&
+					(targetMode == "" || strings.EqualFold(targetMode, "Internal")) &&
+					strings.EqualFold(strings.TrimPrefix(target, "/"), "word/document.xml") {
+					matchingRelationships++
+				}
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+		}
+	}
 }
 
 func asciiLower(value string) string {

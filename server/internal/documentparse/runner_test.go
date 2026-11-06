@@ -92,9 +92,12 @@ func TestParseDOCXExtractsTextAndRejectsExternalLinksAndMacros(t *testing.T) {
 	if err == nil || got.ErrorCode != "docx_macro_unsupported" {
 		t.Fatalf("macro content was not rejected: %+v, %v", got, err)
 	}
-	missingPagination := docxFixture(t, map[string]string{
-		"word/document.xml": "<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>",
-	})
+	missingPaginationFiles := minimalOPCDOCXFiles(false)
+	delete(missingPaginationFiles, "docProps/app.xml")
+	missingPaginationFiles["[Content_Types].xml"] = `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`
+	missingPaginationFiles["_rels/.rels"] = `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`
+	missingPaginationFiles["word/document.xml"] = `<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>`
+	missingPagination := docxRawFixture(t, missingPaginationFiles)
 	got, err = parseInWASI("notes.docx", missingPagination)
 	if err == nil || got.ErrorCode != "docx_page_count_unverifiable" {
 		t.Fatalf("DOCX without saved pagination must require PDF conversion: %+v, %v", got, err)
@@ -136,6 +139,32 @@ func TestParseDOCXMinimalOPCPackageAndRejectsExternalRootRelationship(t *testing
 	parsed, err = parseInWASI("external-root-relationship.docx", docxFixture(t, files))
 	if err == nil || parsed.ErrorCode != "docx_external_link_unsupported" {
 		t.Fatalf("external package-root relationships must be rejected: result=%+v err=%v", parsed, err)
+	}
+}
+
+func TestParseDOCXRejectsIncompleteOPCPackage(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(map[string]string)
+	}{
+		{name: "missing content types", mutate: func(files map[string]string) { delete(files, "[Content_Types].xml") }},
+		{name: "missing root relationships", mutate: func(files map[string]string) { delete(files, "_rels/.rels") }},
+		{name: "missing office document relationship", mutate: func(files map[string]string) {
+			files["_rels/.rels"] = `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>`
+		}},
+		{name: "missing main document content type", mutate: func(files map[string]string) {
+			files["[Content_Types].xml"] = `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>`
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := minimalOPCDOCXFiles(false)
+			tc.mutate(files)
+			parsed, err := parseInWASI("incomplete-opc.docx", docxRawFixture(t, files))
+			if err == nil || parsed.ErrorCode != "docx_invalid" {
+				t.Fatalf("incomplete DOCX package must be rejected: result=%+v err=%v", parsed, err)
+			}
+		})
 	}
 }
 
@@ -203,8 +232,10 @@ func highCompressionDOCXFixture(t *testing.T) ([]byte, float64) {
 	t.Helper()
 	const expandedLimit = 96 << 20
 	files := map[string][]byte{
-		"word/document.xml": []byte("<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>high compression</w:t></w:r></w:p></w:body></w:document>"),
-		"docProps/app.xml":  []byte("<Properties><Pages>1</Pages></Properties>"),
+		"[Content_Types].xml": []byte(minimalOPCDOCXFiles(false)["[Content_Types].xml"]),
+		"_rels/.rels":         []byte(minimalOPCDOCXFiles(false)["_rels/.rels"]),
+		"word/document.xml":   []byte("<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>high compression</w:t></w:r></w:p></w:body></w:document>"),
+		"docProps/app.xml":    []byte("<Properties><Pages>1</Pages></Properties>"),
 	}
 	baseExpanded := 0
 	for _, content := range files {
@@ -251,6 +282,15 @@ func compressedDocumentEntryDOCXFixture(t *testing.T, expandedDocumentEntry int)
 	suffix := []byte(`</w:t></w:r></w:p></w:body></w:document>`)
 	var compressed bytes.Buffer
 	archive := zip.NewWriter(&compressed)
+	for _, name := range []string{"[Content_Types].xml", "_rels/.rels"} {
+		entry, err := archive.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte(minimalOPCDOCXFiles(false)[name])); err != nil {
+			t.Fatal(err)
+		}
+	}
 	document, err := archive.Create("word/document.xml")
 	if err != nil {
 		t.Fatal(err)
@@ -358,6 +398,15 @@ func parseInWASI(name string, data []byte) (Result, error) {
 }
 
 func docxFixture(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	complete := minimalOPCDOCXFiles(false)
+	for name, content := range files {
+		complete[name] = content
+	}
+	return docxRawFixture(t, complete)
+}
+
+func docxRawFixture(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	var out bytes.Buffer
 	w := zip.NewWriter(&out)

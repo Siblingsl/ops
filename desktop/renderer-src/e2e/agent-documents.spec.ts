@@ -85,6 +85,8 @@ function zipFixture(files: Record<string, string | Buffer>, deflate = false) {
 
 function docxFixture(overrides: Record<string, string | Buffer> = {}) {
   return zipFixture({
+    '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>',
+    '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>',
     'word/document.xml': '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>AW11 DOCX 原始资料</w:t></w:r></w:p></w:body></w:document>',
     'docProps/app.xml': '<Properties><Pages>1</Pages></Properties>',
     ...overrides,
@@ -142,16 +144,25 @@ function docxEncryptedEntryFlagFixture() {
   throw new Error('DOCX central directory entry not found')
 }
 
-function minimalOPCDocxFixture(externalRootRelationship = false) {
+function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type') {
   const external = externalRootRelationship
     ? '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid" TargetMode="External"/>'
     : ''
-  return zipFixture({
+  const files: Record<string, string> = {
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>',
     '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/>' + external + '</Relationships>',
     'word/document.xml': '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>最小 OPC 文档</w:t></w:r></w:p><w:sectPr/></w:body></w:document>',
     'docProps/app.xml': '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Microsoft Word</Application><Pages>1</Pages></Properties>',
-  })
+  }
+  if (defect === 'missing-content-types') delete files['[Content_Types].xml']
+  if (defect === 'missing-root-relationships') delete files['_rels/.rels']
+  if (defect === 'missing-office-document-relationship') {
+    files['_rels/.rels'] = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>'
+  }
+  if (defect === 'missing-main-document-content-type') {
+    files['[Content_Types].xml'] = '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>'
+  }
+  return zipFixture(files)
 }
 
 function docxPageFixture(pages: number, overrides: Record<string, string> = {}) {
@@ -165,7 +176,7 @@ function docxPageFixture(pages: number, overrides: Record<string, string> = {}) 
 
 function docxEntryCountFixture(totalEntries: number) {
   const overrides: Record<string, string> = {}
-  for (let index = 2; index < totalEntries; index++) overrides[`customXml/item${index}.xml`] = '<item />'
+  for (let index = 0; index < totalEntries - 4; index++) overrides[`customXml/item${index}.xml`] = '<item />'
   return docxFixture(overrides)
 }
 
@@ -177,6 +188,8 @@ function docxExternalEntityFixture() {
 
 function docxExpandedFixture(totalExpandedBytes: number) {
   const files: Record<string, Buffer> = {
+    '[Content_Types].xml': Buffer.from('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>'),
+    '_rels/.rels': Buffer.from('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>'),
     'word/document.xml': Buffer.from('<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>ZIP 上界资料</w:t></w:r></w:p></w:body></w:document>'),
     'docProps/app.xml': Buffer.from('<Properties><Pages>1</Pages></Properties>'),
   }
@@ -192,6 +205,8 @@ function docxLargeDocumentFixture(expandedDocumentBytes: number) {
   const textBytes = expandedDocumentBytes - prefix.length - suffix.length
   if (textBytes < 1) throw new Error('DOCX document entry must contain text')
   return zipFixture({
+    '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>',
+    '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>',
     'word/document.xml': Buffer.concat([prefix, Buffer.alloc(textBytes, 0x61), suffix]),
     'docProps/app.xml': '<Properties><Pages>1</Pages></Properties>',
   }, true)
@@ -205,10 +220,12 @@ function docxLargePageDocumentFixture(expandedDocumentBytes: number, pages: numb
   const textBytes = expandedDocumentBytes - prefix.length - pageBreaks.length - closeRun.length - closeDocument.length
   if (textBytes < 1) throw new Error('DOCX document entry must contain text')
   const files: Record<string, string | Buffer> = {
+    '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>',
+    '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>',
     'word/document.xml': Buffer.concat([prefix, Buffer.alloc(textBytes, 0x61), closeRun, pageBreaks, closeDocument]),
     'docProps/app.xml': `<Properties><Pages>${pages}</Pages></Properties>`,
   }
-  for (let index = 2; index < totalEntries; index++) files[`customXml/item${index}.xml`] = '<item />'
+  for (let index = 0; index < totalEntries - 4; index++) files[`customXml/item${index}.xml`] = '<item />'
   return zipFixture(files, true)
 }
 
@@ -576,9 +593,32 @@ test('DEV-QA26 G7-03 Windows Electron真实文件选择器验证最小OPC DOCX�
     expect(externalBody.error?.code).toBe('agent_attachment_parse_failed')
     await expect(page.getByLabel('external-root.docx failed', { exact: true })).toContainText('宏、嵌入对象或外链资源')
     await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+
+    const incompleteCases = [
+      { defect: 'missing-content-types', name: 'missing-content-types.docx' },
+      { defect: 'missing-root-relationships', name: 'missing-root-relationships.docx' },
+      { defect: 'missing-office-document-relationship', name: 'missing-office-document-relationship.docx' },
+      { defect: 'missing-main-document-content-type', name: 'missing-main-document-content-type.docx' },
+    ] as const
+    const incompleteUploadMs: number[] = []
+    for (const item of incompleteCases) {
+      const incomplete = minimalOPCDocxFixture(false, item.defect)
+      const chooser = page.waitForEvent('filechooser')
+      const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+      const started = performance.now()
+      await page.getByRole('button', { name: '添加附件', exact: true }).click()
+      await (await chooser).setFiles({ name: item.name, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: incomplete })
+      const response = await upload
+      incompleteUploadMs.push(Number((performance.now() - started).toFixed(2)))
+      const body = await response.json() as { error?: { code?: string } }
+      expect(response.status()).toBe(422)
+      expect(body.error?.code).toBe('agent_attachment_parse_failed')
+      await expect(page.getByLabel(`${item.name} failed`, { exact: true })).toContainText('DOCX 已加密、损坏或解压内容超限')
+      await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    }
     expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
     expect(messagePosts).toBe(0)
-    console.log(`DEV-QA26_METRIC_DOCX_MINIMAL_OPC_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', valid_bytes: valid.byteLength, valid_status: validResponse.status(), valid_upload_ms: Number(validUploadMs.toFixed(2)), original_get_status: original.status, original_bytes: original.bytes, delete_status: 200, deleted_file_status: deletedStatus, external_bytes: external.byteLength, external_status: externalResponse.status(), external_upload_ms: Number(externalUploadMs.toFixed(2)), conversations: 0, message_posts: messagePosts })}`)
+    console.log(`DEV-QA26_METRIC_DOCX_MINIMAL_OPC_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', valid_bytes: valid.byteLength, valid_status: validResponse.status(), valid_upload_ms: Number(validUploadMs.toFixed(2)), original_get_status: original.status, original_bytes: original.bytes, delete_status: 200, deleted_file_status: deletedStatus, external_bytes: external.byteLength, external_status: externalResponse.status(), external_upload_ms: Number(externalUploadMs.toFixed(2)), incomplete_cases: incompleteCases.map((item, index) => ({ defect: item.defect, upload_ms: incompleteUploadMs[index], status: 422 })), conversations: 0, message_posts: messagePosts })}`)
   } finally {
     await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
     await app?.close()
