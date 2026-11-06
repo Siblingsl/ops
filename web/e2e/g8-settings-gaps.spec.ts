@@ -484,6 +484,140 @@ test('DEV-QA26 G2-12 Web 操作日志读取失败显示原因并可重试', asyn
   await expect(page.locator('li').filter({ hasText: providerName })).toHaveCount(1)
 })
 
+test('DEV-QA26 G2-12 Web 操作日志游标分页、viewer工作区范围与超管全站读取', async ({ page, browser }, testInfo) => {
+  test.setTimeout(360_000)
+  const stamp = Date.now()
+  const marker = `DEV-QA26 G2-12 Web 分页 ${stamp}`
+  const ownerAccount = await registerAccount(page, '图文笔记', 'xhs', `qa26-g8-web-audit-owner-${stamp}`)
+  const ownerMe = await api(page, 'GET', '/auth/me') as { workspace: { id: string } }
+  const providerIds: string[] = []
+  const providerNames: string[] = []
+  for (let index = 0; index < 51; index += 1) {
+    const name = `${marker} ${String(index + 1).padStart(2, '0')}`
+    const provider = await api(page, 'POST', '/model-providers', {
+      name,
+      base_url: mockModelBaseUrl(),
+      api_key: 'local-e2e-key',
+      models: ['mock-agent-tested'],
+    }) as { id: string }
+    providerIds.push(provider.id)
+    providerNames.push(name)
+    await page.waitForTimeout(3)
+  }
+
+  await openAdvancedSetting(page, '操作日志')
+  const actionFilter = page.getByRole('combobox')
+  const firstResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url())
+    return url.pathname === '/api/v1/audit-logs' && url.searchParams.get('action') === 'model_' && !url.searchParams.has('before')
+  })
+  await actionFilter.selectOption('model_')
+  const firstPage = await (await firstResponse).json() as Array<{ id: string; action: string; target_id: string; created_at: string }>
+  expect(firstPage).toHaveLength(50)
+  expect(firstPage.every((row) => row.action === 'model_provider_create')).toBe(true)
+  expect(new Set(firstPage.map((row) => row.id)).size).toBe(50)
+  await expect(page.getByRole('button', { name: '加载更多', exact: true })).toBeVisible()
+  await expect(page.locator('li').filter({ hasText: marker })).toHaveCount(50)
+
+  const expectedCursor = firstPage.at(-1)!.created_at
+  let actualCursor = ''
+  const secondResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url())
+    if (url.pathname !== '/api/v1/audit-logs' || url.searchParams.get('action') !== 'model_' || !url.searchParams.has('before')) return false
+    actualCursor = url.searchParams.get('before') ?? ''
+    return response.status() === 200
+  })
+  await page.getByRole('button', { name: '加载更多', exact: true }).click()
+  const secondPage = await (await secondResponse).json() as Array<{ id: string; target_id: string }>
+  expect(actualCursor).toBe(expectedCursor)
+  expect(secondPage).toHaveLength(1)
+  expect(secondPage[0].target_id).toBe(providerIds[0])
+  expect(new Set([...firstPage, ...secondPage].map((row) => row.id)).size).toBe(51)
+  expect(new Set([...firstPage, ...secondPage].map((row) => row.target_id))).toEqual(new Set(providerIds))
+  await expect(page.locator('li').filter({ hasText: marker })).toHaveCount(51)
+  await expect(page.getByRole('button', { name: '加载更多', exact: true })).toHaveCount(0)
+
+  const filterSamples: number[] = []
+  for (let index = 0; index < 20; index += 1) {
+    const nextAction = index % 2 === 0 ? '' : 'model_'
+    const started = performance.now()
+    await actionFilter.selectOption(nextAction)
+    await expect(page.locator('li').filter({ hasText: marker })).toHaveCount(nextAction ? 51 : 50)
+    filterSamples.push(performance.now() - started)
+  }
+  const sortedSamples = [...filterSamples].sort((a, b) => a - b)
+  const filterMetrics = {
+    n: filterSamples.length,
+    p50_ms: Number(sortedSamples[Math.ceil(sortedSamples.length * 0.5) - 1].toFixed(2)),
+    p95_ms: Number(sortedSamples[Math.ceil(sortedSamples.length * 0.95) - 1].toFixed(2)),
+    failures: 0,
+    environment: 'Windows Chromium; isolated ops-e2e PostgreSQL and mock model',
+  }
+  await testInfo.attach('g2-12-web-audit-filter-interaction-metrics.json', { body: JSON.stringify(filterMetrics, null, 2), contentType: 'application/json' })
+  console.log(`DEV-QA26_WEB_AUDIT_FILTER_INTERACTION ${JSON.stringify(filterMetrics)}`)
+
+  const invite = await api(page, 'POST', '/workspaces/current/invites', { role: 'viewer', max_uses: 1, days: 1 }) as { code: string; role: string }
+  expect(invite.role).toBe('viewer')
+  const otherContext = await browser.newContext({ baseURL: new URL(page.url()).origin })
+  const viewerContext = await browser.newContext({ baseURL: new URL(page.url()).origin })
+  const adminContext = await browser.newContext({ baseURL: new URL(page.url()).origin })
+  try {
+    const otherPage = await otherContext.newPage()
+    const otherUsername = `qa26-g8-web-audit-other-${stamp}`
+    await registerAccount(otherPage, '图文笔记', 'xhs', otherUsername)
+    const otherProvider = await api(otherPage, 'POST', '/model-providers', {
+      name: `DEV-QA26 G2-12 Web 跨工作区 ${stamp}`,
+      base_url: mockModelBaseUrl(),
+      api_key: 'local-e2e-key',
+      models: ['mock-agent-tested'],
+    }) as { id: string }
+
+    const viewerUsername = `qa26-g8-web-audit-viewer-${stamp}`
+    const joined = await viewerContext.request.post('/api/v1/auth/register', {
+      data: { username: viewerUsername, password: 'local-e2e-password-123', invite_code: invite.code },
+    })
+    expect(joined.ok()).toBeTruthy()
+    const viewerPage = await viewerContext.newPage()
+    await viewerPage.goto(`/a/${ownerAccount.id}`)
+    const viewerMe = await api(viewerPage, 'GET', '/auth/me') as { role: string; workspace: { id: string } }
+    expect(viewerMe.role).toBe('viewer')
+    expect(viewerMe.workspace.id).toBe(ownerMe.workspace.id)
+    await openAdvancedSetting(viewerPage, '操作日志')
+    await expect(viewerPage.getByRole('heading', { name: '操作日志', exact: true })).toBeVisible()
+    await expect(viewerPage.locator('li').filter({ hasText: providerNames.at(-1)! })).toHaveCount(1)
+    await expect(viewerPage.locator('li').filter({ hasText: `DEV-QA26 G2-12 Web 跨工作区 ${stamp}` })).toHaveCount(0)
+    const viewerLogs = await api(viewerPage, 'GET', '/audit-logs?action=model_&limit=200') as Array<{ target_id: string }>
+    expect(viewerLogs.some((row) => row.target_id === providerIds.at(-1))).toBe(true)
+    expect(viewerLogs.some((row) => row.target_id === otherProvider.id)).toBe(false)
+    const viewerAdminDenied = await viewerPage.evaluate(async () => (await fetch('/api/v1/admin/audit-logs?limit=40')).status)
+    expect(viewerAdminDenied).toBe(403)
+
+    const adminPage = await adminContext.newPage()
+    await adminPage.goto('/login')
+    await adminPage.getByLabel('用户名', { exact: true }).fill('skyeder')
+    await adminPage.getByLabel('密码', { exact: true }).fill('local-e2e-admin-pass-456')
+    const adminLogin = adminPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/auth/login' && response.request().method() === 'POST')
+    await adminPage.getByRole('button', { name: '登录', exact: true }).click()
+    expect((await adminLogin).status()).toBe(200)
+    const adminLogsResponse = adminPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/admin/audit-logs' && response.status() === 200)
+    await adminPage.goto('/settings/admin')
+    const adminLogs = await (await adminLogsResponse).json() as Array<{ action: string; target_id: string; actor: string | null }>
+    expect(adminLogs.some((row) => row.action === 'model_provider_create' && row.target_id === otherProvider.id && row.actor === otherUsername)).toBe(true)
+    await expect(adminPage.getByText('全站操作日志', { exact: true })).toBeVisible()
+    await expect(adminPage.locator('li').filter({ hasText: otherUsername }).first()).toBeVisible()
+    await testInfo.attach('g2-12-web-audit-role-scope.json', {
+      body: JSON.stringify({ viewer_role: viewerMe.role, viewer_workspace_id: viewerMe.workspace.id,
+        owner_workspace_id: ownerMe.workspace.id, viewer_workspace_logs: viewerLogs.length,
+        cross_workspace_rows_visible_to_viewer: viewerLogs.some((row) => row.target_id === otherProvider.id),
+        viewer_admin_endpoint_status: viewerAdminDenied, global_admin_row_count: adminLogs.length,
+        global_admin_actor_seen: adminLogs.some((row) => row.actor === otherUsername) }, null, 2),
+      contentType: 'application/json',
+    })
+  } finally {
+    await Promise.all([otherContext.close(), viewerContext.close(), adminContext.close()])
+  }
+})
+
 test('DEV-QA26 G8 Web 回收站彻底删除取消与确认', async ({ page }) => {
   const account = await registerAccount(page)
   await page.goto('/a/' + account.id)
