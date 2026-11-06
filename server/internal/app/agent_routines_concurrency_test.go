@@ -320,6 +320,113 @@ func TestAW10RoutineRunsOnRunJobsMinuteTicker(t *testing.T) {
 		float64(time.Since(armedAt).Microseconds())/1000, float64(armedAt.Sub(startedAt).Microseconds())/1000, occurrences, runCount, runStatus))
 }
 
+func TestAW10RoutineRunJobsStartupRecoversDueAfterOfflineWindow(t *testing.T) {
+	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
+	routineID := createRoutineSchedulerAuditFixture(t, "服务离线后启动轮恢复")
+	var expectedDue time.Time
+	if err := env.srv.db.QueryRow(t.Context(), `UPDATE agent_routine SET next_due_at=now()-interval '29 minutes' WHERE id=$1 RETURNING next_due_at`, routineID).Scan(&expectedDue); err != nil {
+		t.Fatal(err)
+	}
+	var beforeOccurrences int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_occurrence WHERE routine_id=$1 AND kind='scheduled'`, routineID).Scan(&beforeOccurrences); err != nil {
+		t.Fatal(err)
+	}
+	if beforeOccurrences != 0 {
+		t.Fatalf("服务离线期间不应已有调度 occurrence：%d", beforeOccurrences)
+	}
+	startupMarker := "qa26-runjobs-offline-start:" + uuid.NewString()
+	if env.srv.now().In(env.srv.loc).Hour() >= 3 {
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			_, _ = env.srv.db.Exec(cleanupCtx, `DELETE FROM job_marker WHERE key=$1`, startupMarker)
+		})
+		if _, err := env.srv.db.Exec(t.Context(), `INSERT INTO job_marker(key,created_at) VALUES($1,now()-interval '61 days')`, startupMarker); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	startedAt := time.Now()
+	go func() {
+		env.srv.RunJobs(ctx)
+		close(done)
+	}()
+	stopJobs := func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Error("RunJobs 未在取消后退出")
+		}
+	}
+	t.Cleanup(stopJobs)
+
+	deadline := time.Now().Add(25 * time.Second)
+	var occurrenceID uuid.UUID
+	var occurrenceStatus, runStatus string
+	for time.Now().Before(deadline) {
+		err := env.srv.db.QueryRow(t.Context(), `SELECT o.id,o.status,COALESCE(run.status,'')
+			FROM agent_routine_occurrence o LEFT JOIN agent_run run ON run.routine_occurrence_id=o.id
+			WHERE o.routine_id=$1 AND o.kind='scheduled'`, routineID).
+			Scan(&occurrenceID, &occurrenceStatus, &runStatus)
+		if err == nil && (occurrenceStatus == "completed" || occurrenceStatus == "failed" || occurrenceStatus == "interrupted" || occurrenceStatus == "missed") {
+			break
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if occurrenceStatus != "completed" || runStatus != "completed" {
+		t.Fatalf("重启后的启动轮应在 30 分钟窗口内恢复并完成任务：occurrence=%s run=%s", occurrenceStatus, runStatus)
+	}
+	if env.srv.now().In(env.srv.loc).Hour() >= 3 {
+		markerDeadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(markerDeadline) {
+			var exists bool
+			if err := env.srv.db.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM job_marker WHERE key=$1)`, startupMarker).Scan(&exists); err != nil {
+				t.Fatal(err)
+			}
+			if !exists {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		var markerExists bool
+		if err := env.srv.db.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM job_marker WHERE key=$1)`, startupMarker).Scan(&markerExists); err != nil {
+			t.Fatal(err)
+		}
+		if markerExists {
+			t.Fatal("RunJobs 启动轮未到达完成标记")
+		}
+	}
+	stopJobs()
+
+	var actualDue time.Time
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT due_at FROM agent_routine_occurrence WHERE id=$1`, occurrenceID).Scan(&actualDue); err != nil {
+		t.Fatal(err)
+	}
+	if !actualDue.Equal(expectedDue) {
+		t.Fatalf("恢复必须保留原 due：want=%s got=%s", expectedDue, actualDue)
+	}
+	env.srv.runAgentRoutines(t.Context())
+	var occurrences, distinctDues, runs int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*),count(DISTINCT due_at) FROM agent_routine_occurrence
+		WHERE routine_id=$1 AND kind='scheduled'`, routineID).Scan(&occurrences, &distinctDues); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE routine_occurrence_id=$1`, occurrenceID).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if occurrences != 1 || distinctDues != 1 || runs != 1 {
+		t.Fatalf("重启及重复 scheduler 扫描只能创建一个 occurrence/run：occurrences=%d dues=%d runs=%d", occurrences, distinctDues, runs)
+	}
+	t.Logf("DEV-QA26_METRIC_ROUTINE_OFFLINE_STARTUP %s", fmt.Sprintf(`{"offline_late_minutes":29,"occurrences":%d,"distinct_dues":%d,"runs":%d,"recovery_ms":%.2f,"status":"%s"}`,
+		occurrences, distinctDues, runs, float64(time.Since(startedAt).Microseconds())/1000, runStatus))
+}
+
 func TestAW10RoutineClaimRollsBackAfterProcessKill(t *testing.T) {
 	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
 	routineID := createRoutineSchedulerAuditFixture(t, "领取事务进程崩溃")
