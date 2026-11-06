@@ -529,4 +529,50 @@ test('DEV-QA26 G7 Web filechooser探测6MiB DOCX解析边界', async ({ page, ba
   expect(messagePosts).toBe(0)
 })
 
+test('DEV-QA26 G7 Web filechooser探测5MiB DOCX解析边界', async ({ page, baseURL }) => {
+  test.setTimeout(120_000)
+  await prepare(page, baseURL!)
+  let messagePosts = 0
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+  })
+  const chooser = page.waitForEvent('filechooser')
+  const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST', { timeout: 60_000 })
+  const expandedBytes = 5 * 1024 * 1024
+  const file = docxLargeDocumentFixture(expandedBytes)
+  const started = performance.now()
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await chooser).setFiles({ name: 'web-document-5mib.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: file })
+  const response = await upload
+  const uploadMs = performance.now() - started
+  const result = await response.json() as { id?: string; parse_status?: string; page_count?: number; extracted_chars?: number; injected_chars?: number; truncated_from?: number; truncated_to?: number; error?: { code: string; message: string } }
+  expect([200, 422]).toContain(response.status())
+  if (response.status() === 200) {
+    await expect(page.getByLabel('web-document-5mib.docx ready', { exact: true })).toBeVisible({ timeout: 60_000 })
+    expect(result).toMatchObject({ parse_status: 'ready', page_count: 1, injected_chars: 20_000, truncated_from: 20_001 })
+    expect(result.extracted_chars).toBeGreaterThan(expandedBytes - 100)
+    expect(result.truncated_to).toBe(result.extracted_chars)
+    const original = await page.evaluate(async (id) => {
+      const response = await fetch('/api/v1/agent/attachments/' + id + '/file')
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      return { status: response.status, bytes: bytes.byteLength, signature: new TextDecoder().decode(bytes.slice(0, 4)) }
+    }, result.id!)
+    expect(original).toMatchObject({ status: 200, signature: 'PK\u0003\u0004' })
+    expect(original.bytes).toBeGreaterThan(0)
+    const deletion = page.waitForResponse((item) => new URL(item.url()).pathname === `/api/v1/agent/attachments/${result.id}` && item.request().method() === 'DELETE')
+    await page.getByRole('button', { name: '移除 web-document-5mib.docx', exact: true }).click()
+    expect((await deletion).status()).toBe(200)
+  } else {
+    expect(result.error).toMatchObject({ code: 'agent_attachment_parse_failed' })
+    expect(result.error?.message).toMatch(/30 秒/)
+    await expect(page.getByLabel('web-document-5mib.docx failed', { exact: true })).toBeVisible()
+    await expect(page.getByText(/30 秒/).last()).toBeVisible()
+  }
+  console.log(`DEV-QA26_METRIC_DOCX_5MIB_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and WASI parser', expanded_bytes: expandedBytes, uploaded_bytes: file.byteLength, status: response.status(), outcome: result.parse_status ?? result.error?.code, parse_success: response.status() === 200, error_message: result.error?.message, upload_ms: Number(uploadMs.toFixed(2)) })}`)
+  expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+  await expect(page).toHaveURL(/\/agent\/?$/)
+  expect(messagePosts).toBe(0)
+})
+
 

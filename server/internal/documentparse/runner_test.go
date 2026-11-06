@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +141,24 @@ func TestParseDOCXAcceptsEightMiBDocumentEntryAndTruncatesText(t *testing.T) {
 		t.Fatalf("8 MiB DOCX entry should parse with a bounded text receipt: %+v", result)
 	}
 	t.Logf("DEV-QA26_METRIC_DOCX_8MIB_ENTRY %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"extracted_chars":%d,"injected_chars":%d}`, expandedDocumentEntry, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ExtractedChars, result.InjectedChars))
+}
+
+func TestParseFiveMiBDocumentEntryThroughWindowsWorker(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires the isolated Windows parser worker")
+	}
+	const expandedDocumentEntry = 5 << 20
+	compressed, ratio := compressedDocumentEntryDOCXFixture(t, expandedDocumentEntry)
+	started := time.Now()
+	result, err := Parse(context.Background(), "large-document-entry-5mib.docx", compressed)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("5 MiB document.xml should parse through the bounded Windows worker in under 30 seconds: %v", err)
+	}
+	if result.Pages == nil || *result.Pages != 1 || result.PageBasis != "docx_saved_pagination" || result.InjectedChars != 20000 || result.TruncatedFrom == nil || *result.TruncatedFrom != 20001 || result.TruncatedTo == nil || *result.TruncatedTo != result.ExtractedChars || result.ExtractedChars <= result.InjectedChars || len([]rune(result.Text)) != result.InjectedChars {
+		t.Fatalf("5 MiB DOCX entry should parse with a bounded text receipt: %+v", result)
+	}
+	t.Logf("DEV-QA26_METRIC_DOCX_5MIB_WINDOWS_WORKER %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"extracted_chars":%d,"injected_chars":%d}`, expandedDocumentEntry, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ExtractedChars, result.InjectedChars))
 }
 
 func highCompressionDOCXFixture(t *testing.T) ([]byte, float64) {
