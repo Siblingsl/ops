@@ -125,6 +125,20 @@ func TestParseDOCXRejectsEncryptedZIPEntryFlag(t *testing.T) {
 	}
 }
 
+func TestParseDOCXMinimalOPCPackageAndRejectsExternalRootRelationship(t *testing.T) {
+	files := minimalOPCDOCXFiles(false)
+	parsed, err := parseInWASI("minimal-opc.docx", docxFixture(t, files))
+	if err != nil || !strings.Contains(parsed.Text, "最小 OPC 文档") || parsed.Pages == nil || *parsed.Pages != 1 {
+		t.Fatalf("minimal OPC package should parse its body and saved page count: result=%+v err=%v", parsed, err)
+	}
+
+	files = minimalOPCDOCXFiles(true)
+	parsed, err = parseInWASI("external-root-relationship.docx", docxFixture(t, files))
+	if err == nil || parsed.ErrorCode != "docx_external_link_unsupported" {
+		t.Fatalf("external package-root relationships must be rejected: result=%+v err=%v", parsed, err)
+	}
+}
+
 func TestParseDOCXRejectsHighCompressionExpandedSizeUnderWASI(t *testing.T) {
 	const expandedLimit = 96 << 20
 	compressed, ratio := highCompressionDOCXFixture(t)
@@ -438,6 +452,20 @@ func docxEncryptedEntryFlagFixture(t *testing.T) []byte {
 	}
 	t.Fatal("DOCX central directory entry not found")
 	return nil
+}
+
+func minimalOPCDOCXFiles(externalRootRelationship bool) map[string]string {
+	rootRelationships := `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/>`
+	if externalRootRelationship {
+		rootRelationships += `<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid" TargetMode="External"/>`
+	}
+	rootRelationships += `</Relationships>`
+	return map[string]string{
+		"[Content_Types].xml": `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`,
+		"_rels/.rels":         rootRelationships,
+		"word/document.xml":   `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>最小 OPC 文档</w:t></w:r></w:p><w:sectPr/></w:body></w:document>`,
+		"docProps/app.xml":    `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Microsoft Word</Application><Pages>1</Pages></Properties>`,
+	}
 }
 
 func pdfFixture(t *testing.T, withText bool) []byte {

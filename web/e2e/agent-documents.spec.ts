@@ -141,6 +141,18 @@ function docxEncryptedEntryFlagFixture() {
   throw new Error('DOCX central directory entry not found')
 }
 
+function minimalOPCDocxFixture(externalRootRelationship = false) {
+  const external = externalRootRelationship
+    ? '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid" TargetMode="External"/>'
+    : ''
+  return zipFixture({
+    '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>',
+    '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/>' + external + '</Relationships>',
+    'word/document.xml': '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>最小 OPC 文档</w:t></w:r></w:p><w:sectPr/></w:body></w:document>',
+    'docProps/app.xml': '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Microsoft Word</Application><Pages>1</Pages></Properties>',
+  })
+}
+
 function docxPageFixture(pages: number, overrides: Record<string, string> = {}) {
   const pageBreaks = '<w:lastRenderedPageBreak/>'.repeat(Math.max(0, pages - 1))
   return docxFixture({
@@ -331,6 +343,58 @@ test('DEV-QA26 G7-03 Web文件选择器拒绝带ZIP加密标志的DOCX条目', a
   expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
   expect(messagePosts).toBe(0)
   console.log(`DEV-QA26_METRIC_DOCX_ENCRYPTED_FLAG_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and WASI parser', sample: 'ZIP general-purpose bit flag 0 set; payload is not password-encrypted', uploaded_bytes: document.byteLength, status: response.status(), upload_ms: Number(uploadMs.toFixed(2)), conversations: 0, message_posts: messagePosts })}`)
+})
+
+test('DEV-QA26 G7-03 Web最小OPC DOCX成功读取原件并拒绝根关系外链', async ({ page, baseURL }) => {
+  test.setTimeout(90_000)
+  await prepare(page, baseURL!)
+  let messagePosts = 0
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+  })
+
+  const valid = minimalOPCDocxFixture()
+  const validChooser = page.waitForEvent('filechooser')
+  const validUpload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+  const validStarted = performance.now()
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await validChooser).setFiles({ name: 'minimal-opc.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: valid })
+  const validResponse = await validUpload
+  const validUploadMs = performance.now() - validStarted
+  expect(validResponse.status()).toBe(200)
+  const validBody = await validResponse.json() as { id: string; parse_status: string; page_count: number }
+  expect(validBody).toMatchObject({ parse_status: 'ready', page_count: 1 })
+  await expect(page.getByLabel('minimal-opc.docx ready', { exact: true })).toBeVisible()
+  const original = await page.evaluate(async (id) => {
+    const response = await fetch('/api/v1/agent/attachments/' + id + '/file')
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    return { status: response.status, bytes: bytes.byteLength, signature: new TextDecoder().decode(bytes.slice(0, 4)) }
+  }, validBody.id)
+  expect(original.status).toBe(200)
+  expect(original.bytes).toBe(valid.byteLength)
+  expect(original.signature).toBe('PK\u0003\u0004')
+  const remove = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments/' + validBody.id && response.request().method() === 'DELETE')
+  await page.getByRole('button', { name: '移除 minimal-opc.docx', exact: true }).click()
+  expect((await remove).status()).toBe(200)
+  const deletedStatus = await page.evaluate(async (id) => (await fetch('/api/v1/agent/attachments/' + id + '/file?qa26=' + Date.now(), { cache: 'no-store' })).status, validBody.id)
+  expect(deletedStatus).toBe(404)
+
+  const external = minimalOPCDocxFixture(true)
+  const externalChooser = page.waitForEvent('filechooser')
+  const externalUpload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+  const externalStarted = performance.now()
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await externalChooser).setFiles({ name: 'external-root.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: external })
+  const externalResponse = await externalUpload
+  const externalUploadMs = performance.now() - externalStarted
+  const externalBody = await externalResponse.json() as { error?: { code?: string } }
+  expect(externalResponse.status()).toBe(422)
+  expect(externalBody.error?.code).toBe('agent_attachment_parse_failed')
+  await expect(page.getByLabel('external-root.docx failed', { exact: true })).toContainText('宏、嵌入对象或外链资源')
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+  expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+  expect(messagePosts).toBe(0)
+  console.log(`DEV-QA26_METRIC_DOCX_MINIMAL_OPC_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and WASI parser', valid_bytes: valid.byteLength, valid_status: validResponse.status(), valid_upload_ms: Number(validUploadMs.toFixed(2)), original_get_status: original.status, original_bytes: original.bytes, delete_status: 200, deleted_file_status: deletedStatus, external_bytes: external.byteLength, external_status: externalResponse.status(), external_upload_ms: Number(externalUploadMs.toFixed(2)), conversations: 0, message_posts: messagePosts })}`)
 })
 
 test('DEV-QA26 G7-03 Web文件选择器拒绝DOCX大小写冲突部件', async ({ page, baseURL }) => {
