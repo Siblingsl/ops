@@ -7,7 +7,7 @@ import { api, registerAccount } from './support'
 
 const paragraphs = ['先记录一个可核对的具体观察。', '再把事实、解释与可能的反例分开。', '最后留下下一步可以验证的单变量行动。']
 
-async function seedReviewWork(page: Page, accountId: string) {
+async function seedReviewWork(page: Page, accountId: string, title = '先核对来源，再总结观察') {
   let work = await api(page, 'POST', `/accounts/${accountId}/works`, { content_format: 'micro_post' })
   work = await api(page, 'PATCH', `/works/${work.id}`, { viewpoint: '先核对来源，再写有限结论。', base_revision: work.revision })
   work = await api(page, 'PUT', `/works/${work.id}/outline`, {
@@ -18,7 +18,7 @@ async function seedReviewWork(page: Page, accountId: string) {
     await api(page, 'PATCH', `/sections/${section.id}`, { content_md: paragraphs[index], base_revision: section.revision })
   }
   work = await api(page, 'GET', `/works/${work.id}`)
-  work = await api(page, 'PATCH', `/works/${work.id}`, { title: '先核对来源，再总结观察', topics: ['观察记录'], base_revision: work.revision })
+  work = await api(page, 'PATCH', `/works/${work.id}`, { title, topics: ['观察记录'], base_revision: work.revision })
 
   await page.goto(`/works/${work.id}/check`)
   const initial = await api(page, 'GET', `/works/${work.id}/checks/latest`)
@@ -220,6 +220,98 @@ test('DEV-QA26 G6 Windows Electron 发布回填、多时点手录、看板与建
     const saved = await api(page, 'GET', `/accounts/${account.id}/reviews`)
     expect(saved[0].content.analysis_v2.observations[0].finding).toBe('人工修订后的观察，保留原始指标引用')
     expect(saved[0].adopted).toContain(0)
+  } finally {
+    if (app) {
+      try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }) } catch { /* 只结束本测试创建的 Electron。 */ }
+      await Promise.race([app.close().catch(() => undefined), new Promise((done) => setTimeout(done, 2_000))])
+    }
+    expect(profile.startsWith(profilePrefix)).toBe(true)
+    await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('DEV-QA26 G6 Windows Electron多作品看板按读取与收藏排序显示真实顺序', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '真实 Electron 客户端验收需要 Windows')
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API 与模拟模型')
+  test.setTimeout(180_000)
+  const username = `cx13-sort-ui-${Date.now()}-${test.info().workerIndex}`
+  const account = await registerAccount(page, '微头条', 'toutiao', username)
+  const samples = [
+    { title: '排序样本阅读最高', reads: 9000, favorites: 10 },
+    { title: '排序样本阅读中间', reads: 3000, favorites: 30 },
+    { title: '排序样本阅读最低', reads: 1200, favorites: 20 },
+  ]
+  for (let index = 0; index < samples.length; index++) {
+    const sample = samples[index]
+    const work = await seedReviewWork(page, account.id, sample.title)
+    const current = await api(page, 'GET', `/works/${work.id}`)
+    await api(page, 'POST', `/works/${work.id}/toutiao/pack`, { basis_revision: current.revision })
+    const publishedAt = new Date(Date.now() - 40 * 24 * 60 * 60_000 - index * 10_000)
+    await api(page, 'POST', `/works/${work.id}/published`, { published_at: publishedAt.toISOString() })
+    await api(page, 'POST', `/works/${work.id}/metrics`, {
+      captured_at: new Date(publishedAt.getTime() + 7 * 24 * 60 * 60_000).toISOString(),
+      reads: sample.reads, favorites: sample.favorites, impressions: sample.reads * 2, shares: 3,
+    })
+    expect(await api(page, 'GET', `/works/${work.id}/metrics`)).toMatchObject([
+      { source: 'manual', day_offset: 7, reads: sample.reads, favorites: sample.favorites },
+    ])
+  }
+
+  const profilePrefix = join(tmpdir(), 'ops-cx13-review-sort-')
+  const profile = await mkdtemp(profilePrefix)
+  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  try {
+    app = await _electron.launch({
+      executablePath: resolve('../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${profile}`, resolve('../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL }, timeout: 60_000,
+    })
+    const native = await app.firstWindow()
+    await native.goto(`${baseURL}/login`)
+    await native.getByLabel('用户名', { exact: true }).fill(username)
+    await native.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+    await native.getByRole('button', { name: '登录', exact: true }).click()
+    await expect.poll(() => native.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    await native.evaluate(async (accountId) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountId)
+    }, account.id)
+    await native.goto(`${baseURL}/a/${account.id}/review`)
+    const table = native.getByTestId('desktop-review-table')
+    await expect(table.locator('tbody .desktop-review-work-title')).toHaveCount(3)
+
+    const readDesc = native.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === `/api/v1/accounts/${account.id}/board` && url.searchParams.get('sort') === 'reads' && url.searchParams.get('order') === 'desc'
+    })
+    await native.getByLabel('按指标排序').selectOption('reads')
+    const readDescResponse = await readDesc
+    expect(readDescResponse.ok()).toBeTruthy()
+    const readDescRows = await readDescResponse.json() as Array<{ title: string }>
+    expect(readDescRows.map((row) => row.title)).toEqual(['排序样本阅读最高', '排序样本阅读中间', '排序样本阅读最低'])
+    await expect(table.locator('tbody .desktop-review-work-title')).toHaveText(readDescRows.map((row) => row.title))
+
+    const readAsc = native.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === `/api/v1/accounts/${account.id}/board` && url.searchParams.get('sort') === 'reads' && url.searchParams.get('order') === 'asc'
+    })
+    await native.getByLabel('排序方向').selectOption('asc')
+    const readAscResponse = await readAsc
+    expect(readAscResponse.ok()).toBeTruthy()
+    const readAscRows = await readAscResponse.json() as Array<{ title: string }>
+    expect(readAscRows.map((row) => row.title)).toEqual(['排序样本阅读最低', '排序样本阅读中间', '排序样本阅读最高'])
+    await expect(table.locator('tbody .desktop-review-work-title')).toHaveText(readAscRows.map((row) => row.title))
+
+    const favoritesSort = native.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === `/api/v1/accounts/${account.id}/board` && url.searchParams.get('sort') === 'favorites' && url.searchParams.get('order') === 'asc'
+    })
+    await native.getByLabel('按指标排序').selectOption('favorites')
+    const favoritesResponse = await favoritesSort
+    expect(favoritesResponse.ok()).toBeTruthy()
+    const favoriteRows = await favoritesResponse.json() as Array<{ title: string }>
+    expect(favoriteRows.map((row) => row.title)).toEqual(['排序样本阅读最高', '排序样本阅读最低', '排序样本阅读中间'])
+    await expect(table.locator('tbody .desktop-review-work-title')).toHaveText(favoriteRows.map((row) => row.title))
   } finally {
     if (app) {
       try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }) } catch { /* 只结束本测试创建的 Electron。 */ }
