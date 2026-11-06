@@ -87,6 +87,22 @@ function docxFixture(overrides: Record<string, string | Buffer> = {}) {
   })
 }
 
+function docxCorruptCRCFixture() {
+  const corrupted = docxFixture()
+  const signature = Buffer.from([0x50, 0x4b, 0x01, 0x02])
+  let offset = corrupted.indexOf(signature)
+  while (offset >= 0) {
+    const nameLength = corrupted.readUInt16LE(offset + 28)
+    const name = corrupted.toString('utf8', offset + 46, offset + 46 + nameLength)
+    if (name === 'word/document.xml') {
+      corrupted.writeUInt32LE((corrupted.readUInt32LE(offset + 16) ^ 1) >>> 0, offset + 16)
+      return corrupted
+    }
+    offset = corrupted.indexOf(signature, offset + 4)
+  }
+  throw new Error('DOCX central directory entry not found')
+}
+
 function docxPageFixture(pages: number, overrides: Record<string, string> = {}) {
   const pageBreaks = '<w:lastRenderedPageBreak/>'.repeat(Math.max(0, pages - 1))
   return docxFixture({
@@ -371,6 +387,46 @@ test('DEV-QA26 Windows Electron图片与文本附件进入同一条持久消息'
     await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
     await app?.close()
     if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-attachment-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('DEV-QA26 G7-03 Windows Electron真实文件选择器拒绝DOCX ZIP CRC损坏', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(120_000)
+  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-qa26-doc-crc-'))
+  let app: ElectronApplication | undefined
+  try {
+    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + userData, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const page = await app.firstWindow()
+    await prepare(page, baseURL!)
+    let messagePosts = 0
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+    })
+    const document = docxCorruptCRCFixture()
+    const chooser = page.waitForEvent('filechooser')
+    const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+    const started = performance.now()
+    await page.getByRole('button', { name: '添加附件', exact: true }).click()
+    await (await chooser).setFiles({ name: 'crc-damaged.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: document })
+    const response = await upload
+    const uploadMs = performance.now() - started
+    const body = await response.json() as { error?: { code?: string } }
+    expect(response.status()).toBe(422)
+    expect(body.error?.code).toBe('agent_attachment_parse_failed')
+    const card = page.getByLabel('crc-damaged.docx failed', { exact: true })
+    await expect(card).toContainText('DOCX 已加密、损坏或解压内容超限')
+    await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+    expect(messagePosts).toBe(0)
+    console.log(`DEV-QA26_METRIC_DOCX_CRC_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', uploaded_bytes: document.byteLength, status: response.status(), upload_ms: Number(uploadMs.toFixed(2)), conversations: 0, message_posts: messagePosts })}`)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-doc-crc-')) throw new Error('拒绝清理测试目录之外路径')
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
