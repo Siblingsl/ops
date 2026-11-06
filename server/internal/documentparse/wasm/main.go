@@ -232,8 +232,12 @@ func parseDOCX(data []byte) (result, error) {
 		if file.FileInfo().IsDir() {
 			continue
 		}
-		name := strings.ToLower(path.Clean(file.Name))
-		partName := asciiLower(path.Clean(file.Name))
+		partPath := path.Clean(file.Name)
+		if partPath != file.Name {
+			return result{}, invalid("docx_invalid")
+		}
+		name := strings.ToLower(partPath)
+		partName := asciiLower(partPath)
 		if _, exists := partNames[partName]; exists {
 			return result{}, invalid("docx_invalid")
 		}
