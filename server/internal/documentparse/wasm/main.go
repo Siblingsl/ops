@@ -469,6 +469,7 @@ func hasPackageMainDocumentRelationship(data []byte) (bool, error) {
 	depth := 0
 	rootSeen := false
 	matchingRelationships := 0
+	relationshipIDs := make(map[string]struct{})
 	for {
 		token, err := decoder.Token()
 		if errors.Is(err, io.EOF) {
@@ -485,9 +486,11 @@ func hasPackageMainDocumentRelationship(data []byte) (bool, error) {
 				}
 				rootSeen = true
 			} else if depth == 1 && item.Name.Space == opcRelationshipsNamespace && item.Name.Local == "Relationship" {
-				relationshipType, target, targetMode := "", "", ""
+				relationshipID, relationshipType, target, targetMode := "", "", "", ""
 				for _, attr := range item.Attr {
 					switch attr.Name.Local {
+					case "Id":
+						relationshipID = attr.Value
 					case "Type":
 						relationshipType = attr.Value
 					case "Target":
@@ -496,6 +499,13 @@ func hasPackageMainDocumentRelationship(data []byte) (bool, error) {
 						targetMode = attr.Value
 					}
 				}
+				if relationshipID == "" {
+					return false, errors.New("OPC relationship is missing Id")
+				}
+				if _, exists := relationshipIDs[relationshipID]; exists {
+					return false, errors.New("duplicate OPC relationship Id")
+				}
+				relationshipIDs[relationshipID] = struct{}{}
 				if (relationshipType == wordDocumentRelationship || relationshipType == strictWordDocumentRelationship) &&
 					(targetMode == "" || strings.EqualFold(targetMode, "Internal")) &&
 					strings.EqualFold(strings.TrimPrefix(target, "/"), "word/document.xml") {

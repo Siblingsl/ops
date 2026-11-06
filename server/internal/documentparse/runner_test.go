@@ -198,6 +198,36 @@ func TestParseDOCXRejectsForeignOPCMetadataElements(t *testing.T) {
 	}
 }
 
+func TestParseDOCXRejectsMissingOrDuplicatePackageRelationshipIDs(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(map[string]string)
+	}{
+		{
+			name: "missing main document relationship id",
+			mutate: func(files map[string]string) {
+				files["_rels/.rels"] = strings.Replace(files["_rels/.rels"], ` Id="rId1"`, "", 1)
+			},
+		},
+		{
+			name: "duplicate relationship ids",
+			mutate: func(files map[string]string) {
+				files["_rels/.rels"] = strings.Replace(files["_rels/.rels"], `Id="rId2"`, `Id="rId1"`, 1)
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := minimalOPCDOCXFiles(false)
+			tc.mutate(files)
+			parsed, err := parseInWASI("invalid-package-relationship-id.docx", docxRawFixture(t, files))
+			if err == nil || parsed.ErrorCode != "docx_invalid" {
+				t.Fatalf("package relationship IDs must be present and unique: result=%+v err=%v", parsed, err)
+			}
+		})
+	}
+}
+
 func TestParseDOCXRejectsMainDocumentContentTypeOverrideConflict(t *testing.T) {
 	cases := []struct {
 		name         string

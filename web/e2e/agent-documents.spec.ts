@@ -143,7 +143,7 @@ function docxEncryptedEntryFlagFixture() {
   throw new Error('DOCX central directory entry not found')
 }
 
-function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type' | 'override-main-document-content-type' | 'foreign-main-document-namespace' | 'wrong-main-document-root' | 'missing-main-document-body' | 'foreign-main-document-relationship' | 'foreign-main-document-content-type') {
+function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type' | 'override-main-document-content-type' | 'foreign-main-document-namespace' | 'wrong-main-document-root' | 'missing-main-document-body' | 'foreign-main-document-relationship' | 'foreign-main-document-content-type' | 'missing-main-relationship-id' | 'duplicate-main-relationship-id') {
   const external = externalRootRelationship
     ? '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid" TargetMode="External"/>'
     : ''
@@ -178,6 +178,12 @@ function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missi
   }
   if (defect === 'foreign-main-document-content-type') {
     files['[Content_Types].xml'] = files['[Content_Types].xml'].replace('<Override PartName="/word/document.xml"', '<f:Override xmlns:f="urn:foreign" PartName="/word/document.xml"')
+  }
+  if (defect === 'missing-main-relationship-id') {
+    files['_rels/.rels'] = files['_rels/.rels'].replace(' Id="rId1"', '')
+  }
+  if (defect === 'duplicate-main-relationship-id') {
+    files['_rels/.rels'] = files['_rels/.rels'].replace('Id="rId2"', 'Id="rId1"')
   }
   return zipFixture(files)
 }
@@ -441,6 +447,8 @@ test('DEV-QA26 G7-03 Web最小OPC DOCX成功读取原件并拒绝根关系外链
     { defect: 'missing-main-document-body', name: 'missing-main-document-body.docx' },
     { defect: 'foreign-main-document-relationship', name: 'foreign-main-document-relationship.docx' },
     { defect: 'foreign-main-document-content-type', name: 'foreign-main-document-content-type.docx' },
+    { defect: 'missing-main-relationship-id', name: 'missing-main-relationship-id.docx' },
+    { defect: 'duplicate-main-relationship-id', name: 'duplicate-main-relationship-id.docx' },
   ] as const
   const incompleteUploadMs: number[] = []
   for (const item of incompleteCases) {
