@@ -995,7 +995,7 @@ func (s *Server) releaseAgentRoutineLease(ctx context.Context, routineID, occurr
 	_, dbErr := s.db.Exec(context.WithoutCancel(ctx), `UPDATE agent_routine_occurrence SET status=$4,lease_token=NULL,lease_until=NULL,
 		error_code=$5,finished_at=CASE WHEN $4='pending' THEN NULL ELSE now() END
 		WHERE id=$1 AND routine_id=$2 AND lease_token=$3 AND status='leased'`,
-		routineID, occurrenceID, leaseToken, status, code)
+		occurrenceID, routineID, leaseToken, status, code)
 	if dbErr != nil {
 		slog.ErrorContext(ctx, "释放例行任务租约失败", "occurrence_id", occurrenceID.String(), "err", dbErr)
 	}
