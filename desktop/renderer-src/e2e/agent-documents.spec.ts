@@ -546,6 +546,53 @@ test('DEV-QA26 G7-03 Windows Electron真实文件选择器拒绝DOCX ZIP CRC损�
   }
 })
 
+test('DEV-QA26 G7-03 Windows Electron文件选择器拒绝独立ZIP压缩包', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(120_000)
+  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-qa26-standalone-zip-'))
+  let app: ElectronApplication | undefined
+  try {
+    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + userData, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const page = await app.firstWindow()
+    await prepare(page, baseURL!)
+    let attachmentPosts = 0
+    let messagePosts = 0
+    page.on('request', (request) => {
+      const pathname = new URL(request.url()).pathname
+      if (pathname === '/api/v1/agent/attachments' && request.method() === 'POST') attachmentPosts++
+      if (pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+    })
+    const archive = zipFixture({ 'payload.txt': '独立 ZIP 不属于支持的文档类型' })
+    const selectionSamples: number[] = []
+    const interactions = 20
+    for (let index = 0; index < interactions; index++) {
+      const name = `archive-${index + 1}.zip`
+      const chooser = page.waitForEvent('filechooser')
+      const started = performance.now()
+      await page.getByRole('button', { name: '添加附件', exact: true }).click()
+      await (await chooser).setFiles({ name, mimeType: 'application/zip', buffer: archive })
+      await expect(page.getByLabel(`${name} failed`, { exact: true })).toContainText('文件类型暂不支持')
+      selectionSamples.push(Number((performance.now() - started).toFixed(2)))
+      await page.getByRole('button', { name: `移除 ${name}`, exact: true }).click()
+      await expect(page.getByLabel(`${name} failed`, { exact: true })).toHaveCount(0)
+    }
+    await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    expect(attachmentPosts).toBe(0)
+    expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+    expect(messagePosts).toBe(0)
+    const sorted = [...selectionSamples].sort((left, right) => left - right)
+    const percentile = (rank: number) => sorted[Math.ceil(rank * sorted.length) - 1]
+    console.log(`DEV-QA26_METRIC_STANDALONE_ZIP_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API', uploaded_bytes: archive.byteLength, outcome: 'client_rejected', interactions: selectionSamples.length, failures: 0, p50_ms: percentile(0.50), p95_ms: percentile(0.95), attachment_posts: attachmentPosts, conversations: 0, message_posts: messagePosts })}`)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-standalone-zip-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
 test('DEV-QA26 G7-03 Windows Electron真实文件选择器拒绝带ZIP加密标志的DOCX条目', async ({ baseURL }) => {
   test.skip(process.platform !== 'win32', '需要Windows Electron')
   test.setTimeout(120_000)
