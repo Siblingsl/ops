@@ -195,3 +195,80 @@ test('DEV-QA26 G8 真实 Electron 用户可启用并保留桌面通知选择', a
     await closeElectron(owner.app, owner.profile)
   }
 })
+
+test('DEV-QA26 G8 真实 Electron未启用桌面提示时不派发AI目标系统通知', async ({ page, browser, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地 E2E API')
+  test.setTimeout(120_000)
+
+  const username = `qa26-g8-notification-gate-${Date.now()}`
+  const account = await registerAccount(page, '图文笔记', 'xhs', username)
+  const owner = await loginElectron(baseURL!, username, false)
+  try {
+    await owner.page.evaluate(async (accountId) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountId)
+    }, account.id)
+    await owner.page.goto(`${baseURL}/a/${account.id}`)
+    await expect(owner.page.getByRole('heading', { name: '今天，给灵感一点空间。', exact: true })).toBeVisible()
+
+    let injectGoal = false
+    let notificationFetches = 0
+    await owner.page.route('**/api/v1/notifications*', async (route) => {
+      const request = route.request()
+      const url = new URL(request.url())
+      if (request.method() !== 'GET' || url.pathname !== '/api/v1/notifications') return route.continue()
+      notificationFetches++
+      const items = injectGoal ? [{
+        id: 'qa26-notification-opt-in-gate', kind: 'agent_goal', title: '目标已完成', body: '目标结果需要查看',
+        link: '/agent/c/qa26-notification-gate', read_at: null, created_at: new Date().toISOString(),
+      }] : []
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items, unread: items.length, active_jobs: 0, next_cursor: null }) })
+    })
+
+    const stream = owner.page.waitForRequest((request) => new URL(request.url()).pathname.endsWith('/api/v1/notifications/stream'))
+    await owner.page.reload()
+    await stream
+    await expect.poll(() => owner.page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    const optIn = await owner.page.evaluate(async () => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      return localStorage.getItem(`ops.agent-native-notifications.v1:${me.user_id ?? me.username}:${me.workspace.id}`)
+    })
+    expect(optIn).toBeNull()
+
+    await openNotificationPanel(owner.page)
+    await expect(owner.page.locator('.notification-panel').getByRole('button', { name: '开启桌面提示', exact: true })).toBeVisible()
+    await owner.page.evaluate(() => {
+      const w = window as typeof window & {
+        __opsTestNotifications?: Array<{ title: string; body?: string }>
+      }
+      w.__opsTestNotifications = []
+      class TestNotification {
+        static permission = 'granted'
+        static requestPermission = async () => 'granted'
+        constructor(public title: string, public options?: { body?: string }) {
+          w.__opsTestNotifications?.push({ title, body: options?.body })
+        }
+        close() {}
+      }
+      Object.defineProperty(window, 'Notification', { configurable: true, value: TestNotification })
+    })
+
+    const initialFetches = notificationFetches
+    const emptyRefresh = owner.page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/notifications' && response.request().method() === 'GET')
+    await joinWorkspaceAsViewer(page, browser, baseURL!, `qa26-g8-notification-empty-${Date.now()}`)
+    await emptyRefresh
+    expect(notificationFetches).toBeGreaterThan(initialFetches)
+    await expect.poll(() => owner.page.evaluate(() => (window as any).__opsTestNotifications?.length ?? 0)).toBe(0)
+
+    injectGoal = true
+    const before = notificationFetches
+    const goalRefresh = owner.page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/notifications' && response.request().method() === 'GET')
+    await joinWorkspaceAsViewer(page, browser, baseURL!, `qa26-g8-notification-goal-${Date.now()}`)
+    await goalRefresh
+    expect(notificationFetches).toBeGreaterThan(before)
+    await expect.poll(() => owner.page.evaluate(() => (window as any).__opsTestNotifications?.length ?? 0)).toBe(0)
+  } finally {
+    await closeElectron(owner.app, owner.profile)
+  }
+})
