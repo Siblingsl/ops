@@ -2,9 +2,34 @@ import { expect, test, type Page } from '@playwright/test'
 import { api, registerAccount } from './support'
 
 const paragraphs = ['先记录一个可核对的具体观察。', '再把事实、解释与可能的反例分开。', '最后留下下一步可以验证的单变量行动。']
+const wechatCoverCrops = {
+  '2.35_1': { x1: 0, y1: 0.1, x2: 1, y2: 0.6 },
+  '1_1': { x1: 0.2, y1: 0, x2: 0.8, y2: 1 },
+}
 
-async function seedReviewWork(page: Page, accountId: string, title = '先核对来源，再总结观察') {
-  let work = await api(page, 'POST', `/accounts/${accountId}/works`, { content_format: 'micro_post' })
+async function uploadReviewImage(page: Page, origin: string, workId: string) {
+  return page.evaluate(async ({ origin, workId }) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 1600
+    canvas.height = 1200
+    const context = canvas.getContext('2d')!
+    context.fillStyle = '#3478d4'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob>((resolve) => canvas.toBlob((value) => resolve(value!), 'image/png'))
+    const me = await (await fetch(`${origin}/api/v1/auth/me`)).json()
+    const form = new FormData()
+    form.append('file', new File([blob], 'qa26-review-platform.png', { type: 'image/png' }))
+    const response = await fetch(`${origin}/api/v1/works/${workId}/assets`, {
+      method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': me.csrf_token }, body: form,
+    })
+    const body = await response.text()
+    if (!response.ok) throw new Error(`upload review image: ${response.status} ${body}`)
+    return (JSON.parse(body) as { id: string }).id
+  }, { origin, workId })
+}
+
+async function seedReviewWork(page: Page, accountId: string, title = '先核对来源，再总结观察', contentFormat = 'micro_post', origin?: string) {
+  let work = await api(page, 'POST', `/accounts/${accountId}/works`, { content_format: contentFormat })
   work = await api(page, 'PATCH', `/works/${work.id}`, { viewpoint: '先核对来源，再写有限结论。', base_revision: work.revision })
   work = await api(page, 'PUT', `/works/${work.id}/outline`, {
     items: paragraphs.map((_, index) => ({ heading: `观察步骤${index + 1}`, key_point: `核对依据${index + 1}`, material_ids: [] })),
@@ -16,6 +41,15 @@ async function seedReviewWork(page: Page, accountId: string, title = '先核对�
   work = await api(page, 'GET', `/works/${work.id}`)
   work = await api(page, 'PATCH', `/works/${work.id}`, { title, topics: ['观察记录'], base_revision: work.revision })
 
+  if (contentFormat === 'long_article') {
+    if (!origin) throw new Error('long_article fixture requires the local E2E origin')
+    const coverAssetId = await uploadReviewImage(page, origin, work.id)
+    const current = await api(page, 'GET', `/works/${work.id}`)
+    work = await api(page, 'PATCH', `/works/${work.id}`, {
+      cover_asset_id: coverAssetId, cover_crops: wechatCoverCrops, base_revision: current.revision,
+    })
+  }
+
   await page.goto(`/works/${work.id}/check`)
   const initial = await api(page, 'GET', `/works/${work.id}/checks/latest`)
   if (!initial.run) await page.getByRole('button', { name: '开始检查', exact: true }).click()
@@ -25,7 +59,8 @@ async function seedReviewWork(page: Page, accountId: string, title = '先核对�
   }).toBeTruthy()
   const { run } = await api(page, 'GET', `/works/${work.id}/checks/latest`)
   for (const item of run.items) {
-    if (item.category !== 'format' && !item.resolution) await page.locator(`input[name="${item.id}"]`).first().check()
+    if (item.category === 'format') expect(item.passed, `${item.message}: ${item.detail}`).toBeTruthy()
+    else if (!item.resolution) await page.locator(`input[name="${item.id}"]`).first().check()
   }
   await page.getByRole('button', { name: '确认完成检查', exact: true }).click()
   await expect.poll(async () => (await api(page, 'GET', `/works/${work.id}`)).status).toBe('ready')
@@ -194,6 +229,37 @@ test('DEV-QA26 G6 Web 发布回填、多时点手录、看板与建议采纳', a
   const saved = await api(page, 'GET', `/accounts/${account.id}/reviews`)
   expect(saved[0].content.analysis_v2.observations[0].finding).toBe('人工修订后的观察，保留原始指标引用')
   expect(saved[0].adopted).toContain(0)
+})
+
+test('DEV-QA26 G6 Web公众号草稿写入后可通过发布页回填', async ({ page, baseURL }) => {
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地 E2E API 与模拟微信')
+  test.setTimeout(120_000)
+  const stamp = `${Date.now()}-${test.info().repeatEachIndex}`
+  const username = `qa26-g6-web-wechat-backfill-${stamp}`
+  const account = await registerAccount(page, '长图文', 'wechat_mp', username)
+  const work = await seedReviewWork(page, account.id, `回填 ${stamp}`, 'long_article', baseURL!)
+  await api(page, 'POST', '/auth/reauth', { password: 'local-e2e-password-123' })
+  await api(page, 'PUT', `/accounts/${account.id}/wechat-credential`, { app_id: 'wx1234567890', app_secret: 'local-mock-wechat-secret' })
+  await api(page, 'POST', `/accounts/${account.id}/wechat-credential/test`)
+
+  await page.goto(`${baseURL}/works/${work.id}/push`)
+  const pushed = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/works/${work.id}/wechat/push` && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '写入草稿箱', exact: true }).click()
+  expect((await pushed).ok()).toBeTruthy()
+  await expect(page.getByText('已写入公众号草稿箱', { exact: true })).toBeVisible()
+  expect((await api(page, 'GET', `/works/${work.id}`)).status).toBe('pushed')
+
+  await page.goto(`${baseURL}/works/${work.id}/push#backfill`)
+  const backfill = page.locator('#backfill')
+  await expect(backfill).toBeVisible()
+  const publishedUrl = `https://example.invalid/qa26-g6-web-${stamp}`
+  const publishedAt = new Date(Date.now() - 3 * 24 * 60 * 60_000)
+  await backfill.getByLabel('作品链接（可选）').fill(publishedUrl)
+  await backfill.getByLabel('发布时间', { exact: true }).fill(localDateTimeInput(publishedAt))
+  const marked = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/works/${work.id}/published` && response.request().method() === 'POST')
+  await backfill.getByRole('button', { name: '标记为已发布', exact: true }).click()
+  expect((await marked).ok()).toBeTruthy()
+  expect(await api(page, 'GET', `/works/${work.id}`)).toMatchObject({ status: 'published', published_url: publishedUrl })
 })
 
 test('DEV-QA26 G6 复盘看板全指标排序保留并列顺序并将缺值置末', async ({ page }) => {

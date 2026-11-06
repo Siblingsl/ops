@@ -166,7 +166,7 @@ export default function Push() {
     finally { setSyncingDraft(false) }
   }
 
-  if (!p.can_push && work.status !== 'published' && !result) {
+  if (!p.can_push && work.status !== 'pushed' && work.status !== 'published' && !result) {
     return (
       <>
         <WorkHeaderAction>

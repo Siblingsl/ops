@@ -680,7 +680,7 @@ export default function WorkLayout() {
           </div>
         )}
       </header>
-      <div key={location.pathname} className={cn('min-h-0 flex-1 animate-fade-in', desktopPresentation && ['pack', 'preview'].some((tab) => location.pathname.endsWith('/' + tab)) && 'desktop-work-tab-outlet')}>
+      <div key={location.pathname} className={cn('min-h-0 flex-1 animate-fade-in', desktopPresentation && ['pack', 'preview', 'push'].some((tab) => location.pathname.endsWith('/' + tab)) && 'desktop-work-tab-outlet')}>
         {/* 作品页没有可见 h1（标题在可编辑控件里），补一个只给读屏用的页面标题。 */}
         <h1 className="sr-only">{work.title || '未命名作品'} · {platformLabel[work.platform]} · {platformFormatLabel(work.platform, work.content_format)}</h1>
         <Outlet context={ctx} />
