@@ -101,6 +101,14 @@ func TestParseDOCXExtractsTextAndRejectsExternalLinksAndMacros(t *testing.T) {
 	}
 }
 
+func TestParseDOCXRejectsCaseInsensitiveDuplicatePartNames(t *testing.T) {
+	data := docxCaseCollisionFixture(t)
+	parsed, err := parseInWASI("case-collision.docx", data)
+	if err == nil || parsed.ErrorCode != "docx_invalid" {
+		t.Fatalf("DOCX with part names that collide under OPC ASCII case-insensitive comparison must be rejected: %+v, %v", parsed, err)
+	}
+}
+
 func TestParseDOCXRejectsHighCompressionExpandedSizeUnderWASI(t *testing.T) {
 	const expandedLimit = 96 << 20
 	compressed, ratio := highCompressionDOCXFixture(t)
@@ -329,6 +337,30 @@ func docxFixture(t *testing.T, files map[string]string) []byte {
 			t.Fatal(err)
 		}
 		if _, err := entry.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
+}
+
+func docxCaseCollisionFixture(t *testing.T) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	w := zip.NewWriter(&out)
+	entries := [][2]string{
+		{"word/document.xml", "<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>第一部件</w:t></w:r></w:p></w:body></w:document>"},
+		{"WORD/DOCUMENT.XML", "<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>冲突部件</w:t></w:r></w:p></w:body></w:document>"},
+		{"docProps/app.xml", "<Properties><Pages>1</Pages></Properties>"},
+	}
+	for _, item := range entries {
+		entry, err := w.Create(item[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte(item[1])); err != nil {
 			t.Fatal(err)
 		}
 	}

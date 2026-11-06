@@ -56,11 +56,11 @@ function crc32(data: Buffer) {
   return (value ^ 0xffffffff) >>> 0
 }
 
-function zipFixture(files: Record<string, string | Buffer>, deflate = false) {
+function zipFixtureEntries(entries: Array<[string, string | Buffer]>, deflate = false) {
   const local: Buffer[] = [], central: Buffer[] = []
   let offset = 0
   const method = deflate ? 8 : 0
-  for (const [filename, content] of Object.entries(files)) {
+  for (const [filename, content] of entries) {
     const name = Buffer.from(filename), data = Buffer.isBuffer(content) ? content : Buffer.from(content)
     const compressed = deflate ? deflateRawSync(data) : data
     const checksum = crc32(data)
@@ -74,9 +74,13 @@ function zipFixture(files: Record<string, string | Buffer>, deflate = false) {
     central.push(entry, name)
     offset += header.length + name.length + compressed.length
   }
-  const directory = Buffer.concat(central), end = Buffer.alloc(22), entries = Object.keys(files).length
-  end.writeUInt32LE(0x06054b50); end.writeUInt16LE(entries, 8); end.writeUInt16LE(entries, 10); end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16)
+  const directory = Buffer.concat(central), end = Buffer.alloc(22), entryCount = entries.length
+  end.writeUInt32LE(0x06054b50); end.writeUInt16LE(entryCount, 8); end.writeUInt16LE(entryCount, 10); end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16)
   return Buffer.concat([...local, directory, end])
+}
+
+function zipFixture(files: Record<string, string | Buffer>, deflate = false) {
+  return zipFixtureEntries(Object.entries(files), deflate)
 }
 
 function docxFixture(overrides: Record<string, string | Buffer> = {}) {
@@ -85,6 +89,14 @@ function docxFixture(overrides: Record<string, string | Buffer> = {}) {
     'docProps/app.xml': '<Properties><Pages>1</Pages></Properties>',
     ...overrides,
   })
+}
+
+function docxCaseCollisionFixture() {
+  return zipFixtureEntries([
+    ['word/document.xml', '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>第一部件</w:t></w:r></w:p></w:body></w:document>'],
+    ['WORD/DOCUMENT.XML', '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>冲突部件</w:t></w:r></w:p></w:body></w:document>'],
+    ['docProps/app.xml', '<Properties><Pages>1</Pages></Properties>'],
+  ])
 }
 
 function docxCorruptCRCFixture() {
@@ -427,6 +439,45 @@ test('DEV-QA26 G7-03 Windows Electron真实文件选择器拒绝DOCX ZIP CRC损�
     await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
     await app?.close()
     if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-doc-crc-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('DEV-QA26 G7-03 Windows Electron真实文件选择器拒绝DOCX大小写冲突部件', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(120_000)
+  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-qa26-doc-case-collision-'))
+  let app: ElectronApplication | undefined
+  try {
+    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + userData, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const page = await app.firstWindow()
+    await prepare(page, baseURL!)
+    let messagePosts = 0
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+    })
+    const document = docxCaseCollisionFixture()
+    const chooser = page.waitForEvent('filechooser')
+    const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+    const started = performance.now()
+    await page.getByRole('button', { name: '添加附件', exact: true }).click()
+    await (await chooser).setFiles({ name: 'case-collision.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: document })
+    const response = await upload
+    const uploadMs = performance.now() - started
+    const body = await response.json() as { error?: { code?: string } }
+    expect(response.status()).toBe(422)
+    expect(body.error?.code).toBe('agent_attachment_parse_failed')
+    await expect(page.getByLabel('case-collision.docx failed', { exact: true })).toContainText('DOCX 已加密、损坏或解压内容超限')
+    await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+    expect(messagePosts).toBe(0)
+    console.log(`DEV-QA26_METRIC_DOCX_CASE_COLLISION_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', uploaded_bytes: document.byteLength, status: response.status(), upload_ms: Number(uploadMs.toFixed(2)), conversations: 0, message_posts: messagePosts })}`)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-doc-case-collision-')) throw new Error('拒绝清理测试目录之外路径')
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })

@@ -227,8 +227,17 @@ func parseDOCX(data []byte) (result, error) {
 	total := uint64(0)
 	var document *zip.File
 	declaredPages := 0
+	partNames := make(map[string]struct{}, len(archive.File))
 	for _, file := range archive.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
 		name := strings.ToLower(path.Clean(file.Name))
+		partName := asciiLower(path.Clean(file.Name))
+		if _, exists := partNames[partName]; exists {
+			return result{}, invalid("docx_invalid")
+		}
+		partNames[partName] = struct{}{}
 		if file.Flags&1 != 0 {
 			return result{}, invalid("docx_encrypted")
 		}
@@ -328,6 +337,16 @@ func parseDOCX(data []byte) (result, error) {
 	out.Pages = &declaredPages
 	out.PageBasis = "docx_saved_pagination"
 	return out, nil
+}
+
+func asciiLower(value string) string {
+	bytes := []byte(value)
+	for index, current := range bytes {
+		if current >= 'A' && current <= 'Z' {
+			bytes[index] = current + ('a' - 'A')
+		}
+	}
+	return string(bytes)
 }
 
 func savedDOCXPages(data []byte) int {
