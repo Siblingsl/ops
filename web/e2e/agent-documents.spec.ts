@@ -375,6 +375,43 @@ test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({
   expect(messagePosts).toBe(0)
 })
 
+test('DEV-QA26 Web DOCX解析后疑似密钥隔离且不回显', async ({ page, baseURL }) => {
+  test.setTimeout(90_000)
+  await prepare(page, baseURL!)
+  let messagePosts = 0
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+  })
+  const secret = 'sk-qa26docxsecret0123456789ABCDEF'
+  const document = docxFixture({ 'word/document.xml': `<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>密钥 ${secret}</w:t></w:r></w:p></w:body></w:document>` })
+  const chooser = page.waitForEvent('filechooser')
+  const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST', { timeout: 30_000 })
+  const started = performance.now()
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await chooser).setFiles({ name: 'suspect-key.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: document })
+  const response = await upload
+  const uploadMs = performance.now() - started
+  const receipt = await response.json() as { id: string; kind: string; name: string; url: string; parse_status: string; quarantine_code: string; injected_chars: number }
+  expect(response.status()).toBe(200)
+  expect(receipt).toMatchObject({ kind: 'document', name: 'suspect-key.docx', url: '', parse_status: 'quarantined', quarantine_code: 'suspected_secret', injected_chars: 0 })
+  expect(JSON.stringify(receipt)).not.toContain(secret)
+  const card = page.locator('[aria-label^="suspect-key.docx "]')
+  await expect.poll(() => card.getAttribute('aria-label')).toBe('suspect-key.docx failed')
+  await expect(card).toContainText('已隔离')
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+  const fileRead = await page.evaluate(async (id) => {
+    const response = await fetch('/api/v1/agent/attachments/' + id + '/file')
+    const body = await response.text()
+    return { status: response.status, body }
+  }, receipt.id)
+  expect(fileRead.status).toBe(404)
+  expect(fileRead.body).not.toContain(secret)
+  expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+  expect(messagePosts).toBe(0)
+  console.log(`DEV-QA26_METRIC_DOCX_SECRET_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and WASI parser', outcome: receipt.parse_status, uploaded_bytes: document.byteLength, upload_ms: Number(uploadMs.toFixed(2)), file_read_status: fileRead.status, conversations: 0, message_posts: messagePosts, failures: 0 })}`)
+  await page.getByRole('button', { name: '移除 suspect-key.docx', exact: true }).click()
+})
+
 test('DEV-QA26 G7 Web filechooser上传4MiB DOCX并核对解析回执与原件', async ({ page, baseURL }) => {
   await prepare(page, baseURL!)
   let messagePosts = 0
