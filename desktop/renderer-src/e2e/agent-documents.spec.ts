@@ -144,7 +144,7 @@ function docxEncryptedEntryFlagFixture() {
   throw new Error('DOCX central directory entry not found')
 }
 
-function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type' | 'override-main-document-content-type' | 'foreign-main-document-namespace' | 'wrong-main-document-root' | 'missing-main-document-body' | 'foreign-main-document-relationship' | 'foreign-main-document-content-type' | 'missing-main-relationship-id' | 'duplicate-main-relationship-id') {
+function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type' | 'override-main-document-content-type' | 'foreign-main-document-namespace' | 'wrong-main-document-root' | 'missing-main-document-body' | 'foreign-main-document-relationship' | 'foreign-main-document-content-type' | 'missing-main-relationship-id' | 'duplicate-main-relationship-id' | 'foreign-main-relationship-attributes' | 'foreign-default-content-type-attributes' | 'foreign-override-content-type-attributes') {
   const external = externalRootRelationship
     ? '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid" TargetMode="External"/>'
     : ''
@@ -185,6 +185,20 @@ function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missi
   }
   if (defect === 'duplicate-main-relationship-id') {
     files['_rels/.rels'] = files['_rels/.rels'].replace('Id="rId2"', 'Id="rId1"')
+  }
+  if (defect === 'foreign-main-relationship-attributes') {
+    files['_rels/.rels'] = files['_rels/.rels']
+      .replace('<Relationship Id="rId1"', '<Relationship xmlns:f="urn:foreign" f:Id="rId1"')
+      .replace(' Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"', ' f:Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"')
+      .replace(' Target="word/document.xml"', ' f:Target="word/document.xml"')
+  }
+  if (defect === 'foreign-default-content-type-attributes') {
+    files['[Content_Types].xml'] = files['[Content_Types].xml']
+      .replace('<Default Extension="xml" ContentType="application/xml"/>', '<Default xmlns:f="urn:foreign" f:Extension="xml" f:ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>')
+      .replace('<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>', '')
+  }
+  if (defect === 'foreign-override-content-type-attributes') {
+    files['[Content_Types].xml'] = files['[Content_Types].xml'].replace('<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>', '<Override xmlns:f="urn:foreign" f:PartName="/word/document.xml" f:ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>')
   }
   return zipFixture(files)
 }
@@ -633,6 +647,9 @@ test('DEV-QA26 G7-03 Windows Electron真实文件选择器验证最小OPC DOCX�
       { defect: 'foreign-main-document-content-type', name: 'foreign-main-document-content-type.docx' },
       { defect: 'missing-main-relationship-id', name: 'missing-main-relationship-id.docx' },
       { defect: 'duplicate-main-relationship-id', name: 'duplicate-main-relationship-id.docx' },
+      { defect: 'foreign-main-relationship-attributes', name: 'foreign-main-relationship-attributes.docx' },
+      { defect: 'foreign-default-content-type-attributes', name: 'foreign-default-content-type-attributes.docx' },
+      { defect: 'foreign-override-content-type-attributes', name: 'foreign-override-content-type-attributes.docx' },
     ] as const
     const incompleteUploadMs: number[] = []
     for (const item of incompleteCases) {

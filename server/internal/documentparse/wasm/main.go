@@ -434,6 +434,9 @@ func hasWordDocumentContentType(data []byte) (bool, error) {
 			} else if depth == 1 && item.Name.Space == opcContentTypesNamespace && (item.Name.Local == "Default" || item.Name.Local == "Override") {
 				extension, partName, contentType := "", "", ""
 				for _, attr := range item.Attr {
+					if attr.Name.Space != "" {
+						continue
+					}
 					switch attr.Name.Local {
 					case "Extension":
 						extension = attr.Value
@@ -488,6 +491,9 @@ func hasPackageMainDocumentRelationship(data []byte) (bool, error) {
 			} else if depth == 1 && item.Name.Space == opcRelationshipsNamespace && item.Name.Local == "Relationship" {
 				relationshipID, relationshipType, target, targetMode := "", "", "", ""
 				for _, attr := range item.Attr {
+					if attr.Name.Space != "" {
+						continue
+					}
 					switch attr.Name.Local {
 					case "Id":
 						relationshipID = attr.Value
@@ -575,7 +581,7 @@ func hasExternalRelationship(data []byte) (bool, error) {
 		}
 		if start, ok := token.(xml.StartElement); ok && start.Name.Local == "Relationship" {
 			for _, attr := range start.Attr {
-				if attr.Name.Local == "TargetMode" && strings.EqualFold(attr.Value, "External") {
+				if attr.Name.Space == "" && attr.Name.Local == "TargetMode" && strings.EqualFold(attr.Value, "External") {
 					return true, nil
 				}
 			}

@@ -228,6 +228,77 @@ func TestParseDOCXRejectsMissingOrDuplicatePackageRelationshipIDs(t *testing.T) 
 	}
 }
 
+func TestParseDOCXMatchesOPCAttributesByExpandedName(t *testing.T) {
+	cases := []struct {
+		name      string
+		mutate    func(map[string]string)
+		wantValid bool
+	}{
+		{
+			name: "foreign relationship attributes do not satisfy required attributes",
+			mutate: func(files map[string]string) {
+				relationships := files["_rels/.rels"]
+				relationships = strings.Replace(relationships, `<Relationship Id="rId1"`, `<Relationship xmlns:f="urn:foreign" f:Id="rId1"`, 1)
+				relationships = strings.Replace(relationships, ` Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"`, ` f:Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"`, 1)
+				relationships = strings.Replace(relationships, ` Target="word/document.xml"`, ` f:Target="word/document.xml"`, 1)
+				if relationships == files["_rels/.rels"] {
+					t.Fatal("foreign relationship attributes were not added")
+				}
+				files["_rels/.rels"] = relationships
+			},
+		},
+		{
+			name: "foreign default attributes do not declare the XML content type",
+			mutate: func(files map[string]string) {
+				contentTypes := files["[Content_Types].xml"]
+				contentTypes = strings.Replace(contentTypes, `<Default Extension="xml" ContentType="application/xml"/>`, `<Default xmlns:f="urn:foreign" f:Extension="xml" f:ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>`, 1)
+				contentTypes = strings.Replace(contentTypes, `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>`, "", 1)
+				if contentTypes == files["[Content_Types].xml"] {
+					t.Fatal("foreign default attributes were not added")
+				}
+				files["[Content_Types].xml"] = contentTypes
+			},
+		},
+		{
+			name: "foreign override attributes do not declare the main document content type",
+			mutate: func(files map[string]string) {
+				contentTypes := strings.Replace(files["[Content_Types].xml"], `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>`, `<Override xmlns:f="urn:foreign" f:PartName="/word/document.xml" f:ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>`, 1)
+				if contentTypes == files["[Content_Types].xml"] {
+					t.Fatal("foreign override attributes were not added")
+				}
+				files["[Content_Types].xml"] = contentTypes
+			},
+		},
+		{
+			name: "foreign target mode does not shadow the unqualified target mode",
+			mutate: func(files map[string]string) {
+				relationships := strings.Replace(files["_rels/.rels"], `Target="docProps/app.xml"`, `Target="docProps/app.xml" TargetMode="Internal" xmlns:f="urn:foreign" f:TargetMode="External"`, 1)
+				if relationships == files["_rels/.rels"] {
+					t.Fatal("foreign target mode was not added")
+				}
+				files["_rels/.rels"] = relationships
+			},
+			wantValid: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := minimalOPCDOCXFiles(false)
+			tc.mutate(files)
+			parsed, err := parseInWASI("foreign-opc-attributes.docx", docxRawFixture(t, files))
+			if tc.wantValid {
+				if err != nil || !strings.Contains(parsed.Text, "最小 OPC 文档") || parsed.Pages == nil || *parsed.Pages != 1 {
+					t.Fatalf("foreign attributes must not shadow standard OPC attributes: result=%+v err=%v", parsed, err)
+				}
+				return
+			}
+			if err == nil || parsed.ErrorCode != "docx_invalid" {
+				t.Fatalf("foreign attributes must not satisfy OPC metadata attributes: result=%+v err=%v", parsed, err)
+			}
+		})
+	}
+}
+
 func TestParseDOCXRejectsMainDocumentContentTypeOverrideConflict(t *testing.T) {
 	cases := []struct {
 		name         string
