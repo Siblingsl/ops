@@ -3,7 +3,7 @@ import { api, registerAccount } from './support'
 
 const paragraphs = ['先记录一个可核对的具体观察。', '再把事实、解释与可能的反例分开。', '最后留下下一步可以验证的单变量行动。']
 
-async function seedReviewWork(page: Page, accountId: string) {
+async function seedReviewWork(page: Page, accountId: string, title = '先核对来源，再总结观察') {
   let work = await api(page, 'POST', `/accounts/${accountId}/works`, { content_format: 'micro_post' })
   work = await api(page, 'PATCH', `/works/${work.id}`, { viewpoint: '先核对来源，再写有限结论。', base_revision: work.revision })
   work = await api(page, 'PUT', `/works/${work.id}/outline`, {
@@ -14,7 +14,7 @@ async function seedReviewWork(page: Page, accountId: string) {
     await api(page, 'PATCH', `/sections/${section.id}`, { content_md: paragraphs[index], base_revision: section.revision })
   }
   work = await api(page, 'GET', `/works/${work.id}`)
-  work = await api(page, 'PATCH', `/works/${work.id}`, { title: '先核对来源，再总结观察', topics: ['观察记录'], base_revision: work.revision })
+  work = await api(page, 'PATCH', `/works/${work.id}`, { title, topics: ['观察记录'], base_revision: work.revision })
 
   await page.goto(`/works/${work.id}/check`)
   const initial = await api(page, 'GET', `/works/${work.id}/checks/latest`)
@@ -194,4 +194,70 @@ test('DEV-QA26 G6 Web 发布回填、多时点手录、看板与建议采纳', a
   const saved = await api(page, 'GET', `/accounts/${account.id}/reviews`)
   expect(saved[0].content.analysis_v2.observations[0].finding).toBe('人工修订后的观察，保留原始指标引用')
   expect(saved[0].adopted).toContain(0)
+})
+
+test('DEV-QA26 G6 复盘看板全指标排序保留并列顺序并将缺值置末', async ({ page }) => {
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API')
+  test.setTimeout(180_000)
+  const stamp = Date.now()
+  const username = `cx13-sort-matrix-web-${stamp}`
+  const account = await registerAccount(page, '微头条', 'toutiao', username)
+  const basePublishedAt = Date.now() - 40 * 24 * 60 * 60_000
+  const samples: Array<{ title: string; publishedAt: number; values?: Record<string, number> }> = [
+    { title: `排序低值 ${stamp}`, publishedAt: basePublishedAt - 30_000, values: { impressions: 30, reads: 3, likes: 1, favorites: 1, comments: 1, shares: 1, follows_gained: 1 } },
+    { title: `排序并列较旧 ${stamp}`, publishedAt: basePublishedAt - 20_000, values: { impressions: 60, reads: 30, likes: 2, favorites: 2, comments: 2, shares: 2, follows_gained: 2 } },
+    { title: `排序并列较新 ${stamp}`, publishedAt: basePublishedAt - 10_000, values: { impressions: 60, reads: 30, likes: 2, favorites: 2, comments: 2, shares: 2, follows_gained: 2 } },
+    { title: `排序高值 ${stamp}`, publishedAt: basePublishedAt, values: { impressions: 100, reads: 80, likes: 3, favorites: 3, comments: 3, shares: 3, follows_gained: 3 } },
+    { title: `排序无数据 ${stamp}`, publishedAt: basePublishedAt - 40_000 },
+  ]
+  for (const sample of samples) {
+    const work = await seedReviewWork(page, account.id, sample.title)
+    const current = await api(page, 'GET', `/works/${work.id}`)
+    await api(page, 'POST', `/works/${work.id}/toutiao/pack`, { basis_revision: current.revision })
+    const publishedAt = new Date(sample.publishedAt)
+    await api(page, 'POST', `/works/${work.id}/published`, { published_at: publishedAt.toISOString() })
+    if (sample.values) {
+      await api(page, 'POST', `/works/${work.id}/metrics`, {
+        captured_at: new Date(publishedAt.getTime() + 7 * 24 * 60 * 60_000).toISOString(),
+        ...sample.values,
+      })
+      expect(await api(page, 'GET', `/works/${work.id}/metrics`)).toMatchObject([
+        { source: 'manual', day_offset: 7, ...sample.values },
+      ])
+    }
+  }
+
+  await page.goto(`/a/${account.id}/review`)
+  const table = page.locator('#review-board table')
+  await expect(table.locator('tbody tr')).toHaveCount(samples.length)
+  const ascTitles = [samples[0].title, samples[2].title, samples[1].title, samples[3].title, samples[4].title]
+  const descTitles = [samples[3].title, samples[2].title, samples[1].title, samples[0].title, samples[4].title]
+  const rowTitles = table.locator('tbody tr td:nth-child(2) a')
+  const keys = ['impressions', 'reads', 'likes', 'favorites', 'comments', 'shares', 'follows_gained', 'ctr'] as const
+  let currentOrder: 'asc' | 'desc' = 'desc'
+  for (const key of keys) {
+    const sortResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === `/api/v1/accounts/${account.id}/board` && url.searchParams.get('sort') === key && url.searchParams.get('order') === currentOrder
+    })
+    await page.getByLabel('按指标排序').selectOption(key)
+    const sorted = await sortResponse
+    expect(sorted.ok(), `${key}/${currentOrder} board request`).toBeTruthy()
+    const expected = currentOrder === 'desc' ? descTitles : ascTitles
+    expect((await sorted.json() as Array<{ title: string }>).map((row) => row.title)).toEqual(expected)
+    await expect(rowTitles).toHaveText(expected)
+
+    const nextOrder = currentOrder === 'desc' ? 'asc' : 'desc'
+    const orderResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === `/api/v1/accounts/${account.id}/board` && url.searchParams.get('sort') === key && url.searchParams.get('order') === nextOrder
+    })
+    await page.getByLabel('排序方向').selectOption(nextOrder)
+    const reordered = await orderResponse
+    expect(reordered.ok(), `${key}/${nextOrder} board request`).toBeTruthy()
+    const expectedNext = nextOrder === 'desc' ? descTitles : ascTitles
+    expect((await reordered.json() as Array<{ title: string }>).map((row) => row.title)).toEqual(expectedNext)
+    await expect(rowTitles).toHaveText(expectedNext)
+    currentOrder = nextOrder
+  }
 })

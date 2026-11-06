@@ -321,3 +321,97 @@ test('DEV-QA26 G6 Windows Electron多作品看板按读取与收藏排序显示�
     await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
+
+test('DEV-QA26 G6 复盘看板全指标排序保留并列顺序并将缺值置末', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '真实 Electron 客户端验收需要 Windows')
+  test.skip(process.env.OPS_E2E_PROD === '1', '本场景使用本地模拟 API')
+  test.setTimeout(300_000)
+  const stamp = Date.now()
+  const username = `cx13-sort-matrix-${stamp}`
+  const account = await registerAccount(page, '微头条', 'toutiao', username) as { id: string }
+  const basePublishedAt = Date.now() - 40 * 24 * 60 * 60_000
+  const samples: Array<{ title: string; publishedAt: number; values?: Record<string, number> }> = [
+    { title: `排序低值 ${stamp}`, publishedAt: basePublishedAt - 30_000, values: { impressions: 30, reads: 3, likes: 1, favorites: 1, comments: 1, shares: 1, follows_gained: 1 } },
+    { title: `排序并列较旧 ${stamp}`, publishedAt: basePublishedAt - 20_000, values: { impressions: 60, reads: 30, likes: 2, favorites: 2, comments: 2, shares: 2, follows_gained: 2 } },
+    { title: `排序并列较新 ${stamp}`, publishedAt: basePublishedAt - 10_000, values: { impressions: 60, reads: 30, likes: 2, favorites: 2, comments: 2, shares: 2, follows_gained: 2 } },
+    { title: `排序高值 ${stamp}`, publishedAt: basePublishedAt, values: { impressions: 100, reads: 80, likes: 3, favorites: 3, comments: 3, shares: 3, follows_gained: 3 } },
+    { title: `排序无数据 ${stamp}`, publishedAt: basePublishedAt - 40_000 },
+  ]
+  for (const sample of samples) {
+    const work = await seedReviewWork(page, account.id, sample.title)
+    const current = await api(page, 'GET', `/works/${work.id}`)
+    await api(page, 'POST', `/works/${work.id}/toutiao/pack`, { basis_revision: current.revision })
+    const publishedAt = new Date(sample.publishedAt)
+    await api(page, 'POST', `/works/${work.id}/published`, { published_at: publishedAt.toISOString() })
+    if (sample.values) {
+      await api(page, 'POST', `/works/${work.id}/metrics`, {
+        captured_at: new Date(publishedAt.getTime() + 7 * 24 * 60 * 60_000).toISOString(),
+        ...sample.values,
+      })
+      expect(await api(page, 'GET', `/works/${work.id}/metrics`)).toMatchObject([
+        { source: 'manual', day_offset: 7, ...sample.values },
+      ])
+    }
+  }
+
+  const profilePrefix = join(tmpdir(), 'ops-cx13-review-sort-matrix-')
+  const profile = await mkdtemp(profilePrefix)
+  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  try {
+    app = await _electron.launch({
+      executablePath: resolve('../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${profile}`, resolve('../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL }, timeout: 60_000,
+    })
+    const native = await app.firstWindow()
+    await native.goto(`${baseURL}/login`)
+    await native.getByLabel('用户名', { exact: true }).fill(username)
+    await native.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+    await native.getByRole('button', { name: '登录', exact: true }).click()
+    await expect.poll(() => native.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    await native.evaluate(async (accountId) => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      localStorage.setItem(`ops.currentAccount.v2:${me.user_id ?? me.username}:${me.workspace.id}`, accountId)
+    }, account.id)
+    await native.goto(`${baseURL}/a/${account.id}/review`)
+    const table = native.getByTestId('desktop-review-table')
+    await expect(table.locator('tbody .desktop-review-work-title')).toHaveCount(samples.length)
+
+    const ascTitles = [samples[0].title, samples[2].title, samples[1].title, samples[3].title, samples[4].title]
+    const descTitles = [samples[3].title, samples[2].title, samples[1].title, samples[0].title, samples[4].title]
+    const keys = ['impressions', 'reads', 'likes', 'favorites', 'comments', 'shares', 'follows_gained', 'ctr'] as const
+    let currentOrder: 'asc' | 'desc' = 'desc'
+    for (const key of keys) {
+      const sortResponse = native.waitForResponse((response) => {
+        const url = new URL(response.url())
+        return url.pathname === `/api/v1/accounts/${account.id}/board` && url.searchParams.get('sort') === key && url.searchParams.get('order') === currentOrder
+      })
+      await native.getByLabel('按指标排序').selectOption(key)
+      const sorted = await sortResponse
+      expect(sorted.ok(), `${key}/${currentOrder} board request`).toBeTruthy()
+      const expected = currentOrder === 'desc' ? descTitles : ascTitles
+      expect((await sorted.json() as Array<{ title: string }>).map((row) => row.title)).toEqual(expected)
+      await expect(table.locator('tbody .desktop-review-work-title')).toHaveText(expected)
+
+      const nextOrder = currentOrder === 'desc' ? 'asc' : 'desc'
+      const orderResponse = native.waitForResponse((response) => {
+        const url = new URL(response.url())
+        return url.pathname === `/api/v1/accounts/${account.id}/board` && url.searchParams.get('sort') === key && url.searchParams.get('order') === nextOrder
+      })
+      await native.getByLabel('排序方向').selectOption(nextOrder)
+      const reordered = await orderResponse
+      expect(reordered.ok(), `${key}/${nextOrder} board request`).toBeTruthy()
+      const expectedNext = nextOrder === 'desc' ? descTitles : ascTitles
+      expect((await reordered.json() as Array<{ title: string }>).map((row) => row.title)).toEqual(expectedNext)
+      await expect(table.locator('tbody .desktop-review-work-title')).toHaveText(expectedNext)
+      currentOrder = nextOrder
+    }
+  } finally {
+    if (app) {
+      try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }) } catch { /* 只结束本测试创建的 Electron。 */ }
+      await Promise.race([app.close().catch(() => undefined), new Promise((done) => setTimeout(done, 2_000))])
+    }
+    expect(profile.startsWith(profilePrefix)).toBe(true)
+    await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
