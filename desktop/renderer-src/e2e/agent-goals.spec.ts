@@ -224,3 +224,79 @@ test('DEV-AW09 Windows Electron任务目标与整理入口', async ({ baseURL })
   }
 })
 
+test('DEV-QA26 G7-07 Windows Electron目标预算在整应用重启后保留并继续限流', async ({ baseURL }, testInfo) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  const userData = await mkdtemp(join(tmpdir(), 'ops-qa26-g7-goal-restart-'))
+  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  const started = performance.now()
+  try {
+    const launch = () => _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    app = await launch()
+    const initialPage = await app.firstWindow()
+    const conversationID = await goalJourney(initialPage, baseURL!, `qa26-g7-goal-restart-${testInfo.repeatEachIndex}-${Date.now()}`)
+    const beforeRestart = await initialPage.evaluate(async () => (await fetch('/api/v1/auth/me')).json())
+    const beforeGoal = await api(initialPage, 'GET', `/agent/conversations/${conversationID}`)
+    expect(beforeGoal.goal).toMatchObject({ status: 'budget_limited', run_budget: 2, used_runs: 2 })
+    const lastRunID = beforeGoal.last_run.id
+    const userMessageCount = beforeGoal.messages.filter((message: { role: string }) => message.role === 'user').length
+
+    await app.evaluate(({ app }) => app.exit(0))
+    await app.close()
+    app = undefined
+
+    app = await launch()
+    const page = await app.firstWindow()
+    await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    const afterRestart = await page.evaluate(async () => (await fetch('/api/v1/auth/me')).json())
+    expect(afterRestart.user_id).toBe(beforeRestart.user_id)
+    await page.goto(`${baseURL}/agent/c/${conversationID}`)
+    await expect(page.locator('.desktop-agent-workbench')).toBeVisible()
+    const panelButton = page.getByRole('button', { name: '任务面板', exact: true })
+    if (await panelButton.getAttribute('aria-expanded') !== 'true') await panelButton.click()
+    const panel = page.getByTestId('desktop-agent-side-panel')
+    await expect(panel.getByText('预算已用尽', { exact: true })).toBeVisible()
+
+    let detail = await api(page, 'GET', `/agent/conversations/${conversationID}`)
+    expect(detail.goal).toMatchObject({ status: 'budget_limited', run_budget: 2, used_runs: 2 })
+    expect(detail.last_run.id).toBe(lastRunID)
+    expect(detail.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(userMessageCount)
+
+    const blockedMessage = page.waitForResponse((response) => /\/agent\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+    await page.locator('textarea').last().fill('重启后仍不能突破已用尽的目标预算。')
+    await page.getByRole('button', { name: '发送', exact: true }).click()
+    const blockedResponse = await blockedMessage
+    const blockedBody = await blockedResponse.text()
+    expect(blockedResponse.status(), blockedBody).toBe(429)
+    expect(blockedBody).toContain('agent_goal_budget_reached')
+
+    detail = await api(page, 'GET', `/agent/conversations/${conversationID}`)
+    expect(detail.goal).toMatchObject({ status: 'budget_limited', run_budget: 2, used_runs: 2 })
+    expect(detail.last_run.id).toBe(lastRunID)
+    expect(detail.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(userMessageCount)
+
+    const refusedResume = page.waitForResponse((response) => /\/agent\/goals\/[^/]+\/control$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+    await panel.getByRole('button', { name: '恢复并继续', exact: true }).click()
+    const refusedResumeResponse = await refusedResume
+    const refusedResumeBody = await refusedResumeResponse.text()
+    expect(refusedResumeResponse.status(), refusedResumeBody).toBe(409)
+    expect(refusedResumeBody).toContain('agent_goal_budget_reached')
+    expect((await api(page, 'GET', `/agent/conversations/${conversationID}`)).goal).toMatchObject({ status: 'budget_limited', run_budget: 2, used_runs: 2 })
+
+    await testInfo.attach('qa26-g7-goal-restart.json', { body: Buffer.from(JSON.stringify({
+      conversation_id: conversationID, user_id: beforeRestart.user_id, goal: detail.goal,
+      last_run_id: lastRunID, user_message_count: userMessageCount,
+      blocked_message_status: blockedResponse.status(), blocked_message_code: 'agent_goal_budget_reached',
+      refused_resume_status: refusedResumeResponse.status(), refused_resume_code: 'agent_goal_budget_reached',
+      duration_ms: Math.round(performance.now() - started),
+    }, null, 2)), contentType: 'application/json' })
+    console.log(`[DEV-QA26 G7-07 app-restart] ${JSON.stringify({ duration_ms: Math.round(performance.now() - started), user_id: beforeRestart.user_id, conversation_id: conversationID, persisted_budget: detail.goal.run_budget, used_runs: detail.goal.used_runs, blocked_message_status: blockedResponse.status(), refused_resume_status: refusedResumeResponse.status() })}`)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-qa26-g7-goal-restart-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
