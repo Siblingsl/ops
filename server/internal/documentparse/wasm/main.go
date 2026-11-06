@@ -30,6 +30,7 @@ const (
 
 	opcContentTypesNamespace       = "http://schemas.openxmlformats.org/package/2006/content-types"
 	opcRelationshipsNamespace      = "http://schemas.openxmlformats.org/package/2006/relationships"
+	extendedPropertiesNamespace    = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
 	wordprocessingMainNamespace    = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 	strictWordprocessingMainNS     = "http://purl.oclc.org/ooxml/wordprocessingml/main"
 	wordDocumentContentType        = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
@@ -537,18 +538,49 @@ func asciiLower(value string) string {
 
 func savedDOCXPages(data []byte) int {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
+	depth := 0
+	rootSeen := false
+	pagesCount := 0
+	collectingPages := false
+	var pagesText strings.Builder
 	for {
 		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			if !rootSeen || depth != 0 || pagesCount != 1 || collectingPages {
+				return 0
+			}
+			pages, _ := strconv.Atoi(strings.TrimSpace(pagesText.String()))
+			return pages
+		}
 		if err != nil {
 			return 0
 		}
-		if start, ok := token.(xml.StartElement); ok && start.Name.Local == "Pages" {
-			var value string
-			if decoder.DecodeElement(&value, &start) != nil {
+		switch item := token.(type) {
+		case xml.StartElement:
+			if depth == 0 {
+				if rootSeen || item.Name.Local != "Properties" || item.Name.Space != extendedPropertiesNamespace {
+					return 0
+				}
+				rootSeen = true
+			} else if depth == 1 && item.Name.Local == "Pages" && item.Name.Space == extendedPropertiesNamespace {
+				if pagesCount != 0 {
+					return 0
+				}
+				pagesCount++
+				collectingPages = true
+			} else if collectingPages && depth == 2 {
 				return 0
 			}
-			pages, _ := strconv.Atoi(strings.TrimSpace(value))
-			return pages
+			depth++
+		case xml.CharData:
+			if collectingPages && depth == 2 {
+				pagesText.Write([]byte(item))
+			}
+		case xml.EndElement:
+			if collectingPages && depth == 2 && item.Name.Local == "Pages" && item.Name.Space == extendedPropertiesNamespace {
+				collectingPages = false
+			}
+			depth--
 		}
 	}
 }

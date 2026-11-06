@@ -65,7 +65,7 @@ func TestParseCSVRejectsEncodingAndShapeLimits(t *testing.T) {
 func TestParseDOCXExtractsTextAndRejectsExternalLinksAndMacros(t *testing.T) {
 	data := docxFixture(t, map[string]string{
 		"word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>运营笔记</w:t></w:r></w:p></w:body></w:document>",
-		"docProps/app.xml":  "<Properties><Pages>1</Pages></Properties>",
+		"docProps/app.xml":  "<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\"><Pages>1</Pages></Properties>",
 	})
 	parsed, err := parseInWASI("notes.docx", data)
 	if err != nil {
@@ -101,6 +101,36 @@ func TestParseDOCXExtractsTextAndRejectsExternalLinksAndMacros(t *testing.T) {
 	got, err = parseInWASI("notes.docx", missingPagination)
 	if err == nil || got.ErrorCode != "docx_page_count_unverifiable" {
 		t.Fatalf("DOCX without saved pagination must require PDF conversion: %+v, %v", got, err)
+	}
+}
+
+func TestParseDOCXRequiresDirectExtendedPropertiesPagesDeclaration(t *testing.T) {
+	cases := []struct {
+		name       string
+		properties string
+	}{
+		{
+			name:       "foreign pages element",
+			properties: `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Microsoft Word</Application><f:Pages xmlns:f="urn:foreign">1</f:Pages></Properties>`,
+		},
+		{
+			name:       "nested pages element",
+			properties: `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Microsoft Word</Application><Custom><Pages>1</Pages></Custom></Properties>`,
+		},
+		{
+			name:       "foreign properties root",
+			properties: `<f:Properties xmlns:f="urn:foreign"><f:Pages>1</f:Pages></f:Properties>`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := minimalOPCDOCXFiles(false)
+			files["docProps/app.xml"] = tc.properties
+			parsed, err := parseInWASI("unverifiable-pages.docx", docxRawFixture(t, files))
+			if err == nil || parsed.ErrorCode != "docx_page_count_unverifiable" {
+				t.Fatalf("DOCX requires a direct Pages value in the extended properties namespace: result=%+v err=%v", parsed, err)
+			}
+		})
 	}
 }
 
@@ -445,7 +475,7 @@ func highCompressionDOCXFixture(t *testing.T) ([]byte, float64) {
 		"[Content_Types].xml": []byte(minimalOPCDOCXFiles(false)["[Content_Types].xml"]),
 		"_rels/.rels":         []byte(minimalOPCDOCXFiles(false)["_rels/.rels"]),
 		"word/document.xml":   []byte("<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>high compression</w:t></w:r></w:p></w:body></w:document>"),
-		"docProps/app.xml":    []byte("<Properties><Pages>1</Pages></Properties>"),
+		"docProps/app.xml":    []byte("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\"><Pages>1</Pages></Properties>"),
 	}
 	baseExpanded := 0
 	for _, content := range files {
@@ -524,7 +554,7 @@ func compressedDocumentEntryDOCXFixture(t *testing.T, expandedDocumentEntry int)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.Write([]byte("<Properties><Pages>1</Pages></Properties>")); err != nil {
+	if _, err := app.Write([]byte("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\"><Pages>1</Pages></Properties>")); err != nil {
 		t.Fatal(err)
 	}
 	if err := archive.Close(); err != nil {
@@ -642,7 +672,7 @@ func docxCaseCollisionFixture(t *testing.T) []byte {
 	entries := [][2]string{
 		{"word/document.xml", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>第一部件</w:t></w:r></w:p></w:body></w:document>"},
 		{"WORD/DOCUMENT.XML", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>冲突部件</w:t></w:r></w:p></w:body></w:document>"},
-		{"docProps/app.xml", "<Properties><Pages>1</Pages></Properties>"},
+		{"docProps/app.xml", "<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\"><Pages>1</Pages></Properties>"},
 	}
 	for _, item := range entries {
 		entry, err := w.Create(item[0])
@@ -665,7 +695,7 @@ func docxNonCanonicalPathFixture(t *testing.T) []byte {
 	w := zip.NewWriter(&out)
 	entries := [][2]string{
 		{"word/./document.xml", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>点段路径</w:t></w:r></w:p></w:body></w:document>"},
-		{"docProps/app.xml", "<Properties><Pages>1</Pages></Properties>"},
+		{"docProps/app.xml", "<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\"><Pages>1</Pages></Properties>"},
 	}
 	for _, item := range entries {
 		entry, err := w.Create(item[0])
@@ -686,7 +716,7 @@ func docxEncryptedEntryFlagFixture(t *testing.T) []byte {
 	t.Helper()
 	data := docxFixture(t, map[string]string{
 		"word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>加密条目标志</w:t></w:r></w:p></w:body></w:document>",
-		"docProps/app.xml":  "<Properties><Pages>1</Pages></Properties>",
+		"docProps/app.xml":  "<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\"><Pages>1</Pages></Properties>",
 	})
 	signature := []byte{0x50, 0x4b, 0x01, 0x02}
 	for offset := bytes.Index(data, signature); offset >= 0; {

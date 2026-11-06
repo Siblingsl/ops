@@ -88,7 +88,7 @@ function docxFixture(overrides: Record<string, string | Buffer> = {}) {
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>',
     '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>',
     'word/document.xml': '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>AW11 DOCX 原始资料</w:t></w:r></w:p></w:body></w:document>',
-    'docProps/app.xml': '<Properties><Pages>1</Pages></Properties>',
+    'docProps/app.xml': '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>1</Pages></Properties>',
     ...overrides,
   })
 }
@@ -97,14 +97,14 @@ function docxCaseCollisionFixture() {
   return zipFixtureEntries([
     ['word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>第一部件</w:t></w:r></w:p></w:body></w:document>'],
     ['WORD/DOCUMENT.XML', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>冲突部件</w:t></w:r></w:p></w:body></w:document>'],
-    ['docProps/app.xml', '<Properties><Pages>1</Pages></Properties>'],
+    ['docProps/app.xml', '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>1</Pages></Properties>'],
   ])
 }
 
 function docxNonCanonicalPathFixture() {
   return zipFixtureEntries([
     ['word/./document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>点段路径</w:t></w:r></w:p></w:body></w:document>'],
-    ['docProps/app.xml', '<Properties><Pages>1</Pages></Properties>'],
+    ['docProps/app.xml', '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>1</Pages></Properties>'],
   ])
 }
 
@@ -144,7 +144,7 @@ function docxEncryptedEntryFlagFixture() {
   throw new Error('DOCX central directory entry not found')
 }
 
-function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type' | 'override-main-document-content-type' | 'foreign-main-document-namespace' | 'wrong-main-document-root' | 'missing-main-document-body' | 'foreign-main-document-relationship' | 'foreign-main-document-content-type' | 'missing-main-relationship-id' | 'duplicate-main-relationship-id' | 'foreign-main-relationship-attributes' | 'foreign-default-content-type-attributes' | 'foreign-override-content-type-attributes') {
+function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type' | 'override-main-document-content-type' | 'foreign-main-document-namespace' | 'wrong-main-document-root' | 'missing-main-document-body' | 'foreign-main-document-relationship' | 'foreign-main-document-content-type' | 'missing-main-relationship-id' | 'duplicate-main-relationship-id' | 'foreign-main-relationship-attributes' | 'foreign-default-content-type-attributes' | 'foreign-override-content-type-attributes' | 'foreign-pages' | 'nested-pages' | 'foreign-properties-root') {
   const external = externalRootRelationship
     ? '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid" TargetMode="External"/>'
     : ''
@@ -200,6 +200,15 @@ function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missi
   if (defect === 'foreign-override-content-type-attributes') {
     files['[Content_Types].xml'] = files['[Content_Types].xml'].replace('<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>', '<Override xmlns:f="urn:foreign" f:PartName="/word/document.xml" f:ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>')
   }
+  if (defect === 'foreign-pages') {
+    files['docProps/app.xml'] = files['docProps/app.xml'].replace('<Pages>1</Pages>', '<f:Pages xmlns:f="urn:foreign">1</f:Pages>')
+  }
+  if (defect === 'nested-pages') {
+    files['docProps/app.xml'] = files['docProps/app.xml'].replace('<Pages>1</Pages>', '<Custom><Pages>1</Pages></Custom>')
+  }
+  if (defect === 'foreign-properties-root') {
+    files['docProps/app.xml'] = '<f:Properties xmlns:f="urn:foreign"><f:Pages>1</f:Pages></f:Properties>'
+  }
   return zipFixture(files)
 }
 
@@ -207,7 +216,7 @@ function docxPageFixture(pages: number, overrides: Record<string, string> = {}) 
   const pageBreaks = '<w:lastRenderedPageBreak/>'.repeat(Math.max(0, pages - 1))
   return docxFixture({
     'word/document.xml': `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>分页边界资料</w:t></w:r>${pageBreaks}</w:p></w:body></w:document>`,
-    'docProps/app.xml': `<Properties><Pages>${pages}</Pages></Properties>`,
+    'docProps/app.xml': `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>${pages}</Pages></Properties>`,
     ...overrides,
   })
 }
@@ -229,7 +238,7 @@ function docxExpandedFixture(totalExpandedBytes: number) {
     '[Content_Types].xml': Buffer.from('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>'),
     '_rels/.rels': Buffer.from('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>'),
     'word/document.xml': Buffer.from('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>ZIP 上界资料</w:t></w:r></w:p></w:body></w:document>'),
-    'docProps/app.xml': Buffer.from('<Properties><Pages>1</Pages></Properties>'),
+    'docProps/app.xml': Buffer.from('<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>1</Pages></Properties>'),
   }
   const baseBytes = Object.values(files).reduce((total, data) => total + data.length, 0)
   if (totalExpandedBytes < baseBytes) throw new Error('DOCX expanded fixture below its XML headers')
@@ -246,7 +255,7 @@ function docxLargeDocumentFixture(expandedDocumentBytes: number) {
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>',
     '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>',
     'word/document.xml': Buffer.concat([prefix, Buffer.alloc(textBytes, 0x61), suffix]),
-    'docProps/app.xml': '<Properties><Pages>1</Pages></Properties>',
+    'docProps/app.xml': '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>1</Pages></Properties>',
   }, true)
 }
 
@@ -261,7 +270,7 @@ function docxLargePageDocumentFixture(expandedDocumentBytes: number, pages: numb
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>',
     '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>',
     'word/document.xml': Buffer.concat([prefix, Buffer.alloc(textBytes, 0x61), closeRun, pageBreaks, closeDocument]),
-    'docProps/app.xml': `<Properties><Pages>${pages}</Pages></Properties>`,
+    'docProps/app.xml': `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>${pages}</Pages></Properties>`,
   }
   for (let index = 0; index < totalEntries - 4; index++) files[`customXml/item${index}.xml`] = '<item />'
   return zipFixture(files, true)
@@ -650,6 +659,9 @@ test('DEV-QA26 G7-03 Windows Electron真实文件选择器验证最小OPC DOCX�
       { defect: 'foreign-main-relationship-attributes', name: 'foreign-main-relationship-attributes.docx' },
       { defect: 'foreign-default-content-type-attributes', name: 'foreign-default-content-type-attributes.docx' },
       { defect: 'foreign-override-content-type-attributes', name: 'foreign-override-content-type-attributes.docx' },
+      { defect: 'foreign-pages', name: 'foreign-pages.docx' },
+      { defect: 'nested-pages', name: 'nested-pages.docx' },
+      { defect: 'foreign-properties-root', name: 'foreign-properties-root.docx' },
     ] as const
     const incompleteUploadMs: number[] = []
     for (const item of incompleteCases) {
@@ -665,7 +677,10 @@ test('DEV-QA26 G7-03 Windows Electron真实文件选择器验证最小OPC DOCX�
       if (response.status() === 200 && body.id) await api(page, 'DELETE', '/agent/attachments/' + body.id)
       expect(response.status()).toBe(422)
       expect(body.error?.code).toBe('agent_attachment_parse_failed')
-      await expect(page.getByLabel(`${item.name} failed`, { exact: true })).toContainText('DOCX 已加密、损坏或解压内容超限')
+      const expectedMessage = ['foreign-pages', 'nested-pages', 'foreign-properties-root'].includes(item.defect)
+        ? '无法验证 DOCX 的保存分页信息，请转成 PDF 后上传'
+        : 'DOCX 已加密、损坏或解压内容超限'
+      await expect(page.getByLabel(`${item.name} failed`, { exact: true })).toContainText(expectedMessage)
       await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
       await page.getByRole('button', { name: `移除 ${item.name}`, exact: true }).click()
       await expect(page.getByLabel(`${item.name} failed`, { exact: true })).toHaveCount(0)
