@@ -900,6 +900,235 @@ func TestAW10RoutineProviderCallInterruptedIsUnknownAndNeverReplayed(t *testing.
 		hits, occurrences, runs, unknownEvents, float64(time.Since(killAt).Microseconds())/1000, float64(time.Since(startedAt).Microseconds())/1000))
 }
 
+func TestAW10RoutineProviderSuccessBeforeFinishCommitIsUnknownAndNeverReplayed(t *testing.T) {
+	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
+	providerID := uuid.MustParse(env.ensureToolModel(t))
+	routineID := createRoutineSchedulerAuditFixture(t, "provider成功后提交前中断")
+	var originalURL string
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT base_url FROM model_provider WHERE id=$1`, providerID).Scan(&originalURL); err != nil {
+		t.Fatal(err)
+	}
+	var providerHits int
+	var providerMu sync.Mutex
+	providerStarted := make(chan struct{}, 1)
+	providerResponseReturned := make(chan struct{}, 1)
+	releaseProvider := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseProvider) }) }
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "unexpected provider route", http.StatusNotFound)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "could not read provider request", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		providerMu.Lock()
+		providerHits++
+		providerMu.Unlock()
+		select {
+		case providerStarted <- struct{}{}:
+		default:
+		}
+		select {
+		case <-releaseProvider:
+		case <-r.Context().Done():
+			return
+		}
+		env.llm.Handler().ServeHTTP(w, r)
+		select {
+		case providerResponseReturned <- struct{}{}:
+		default:
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	t.Cleanup(release)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = env.srv.db.Exec(cleanupCtx, `UPDATE model_provider SET base_url=$2 WHERE id=$1`, providerID, originalURL)
+	})
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE model_provider SET base_url=$2 WHERE id=$1`, providerID, upstream.URL+"/v1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE agent_routine SET next_due_at=now()-interval '1 minute' WHERE id=$1`, routineID); err != nil {
+		t.Fatal(err)
+	}
+
+	appName := "qa26-provider-success-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	workerURL, err := url.Parse(env.dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := workerURL.Query()
+	query.Set("application_name", appName)
+	workerURL.RawQuery = query.Encode()
+	ready := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	t.Cleanup(ready.Close)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(executable, routineSchedulerWorkerArg, routineID.String(), ready.URL, workerURL.String(), env.mock.URL)
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	startedAt := time.Now()
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- command.Wait() }()
+	workerStopped := false
+	t.Cleanup(func() {
+		release()
+		if !workerStopped && command.Process != nil {
+			_ = command.Process.Kill()
+			<-waitDone
+		}
+	})
+	select {
+	case <-providerStarted:
+	case workerErr := <-waitDone:
+		workerStopped = true
+		t.Fatalf("scheduler worker exited before the provider request was received: %v\nstdout: %s\nstderr: %s", workerErr, stdout.String(), stderr.String())
+	case <-time.After(20 * time.Second):
+		_ = command.Process.Kill()
+		<-waitDone
+		workerStopped = true
+		t.Fatalf("provider stub did not receive a request within 20s\nstdout: %s\nstderr: %s", stdout.String(), stderr.String())
+	}
+
+	var occurrenceID, runID uuid.UUID
+	var occurrenceStatus, runStatus string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		err := env.srv.db.QueryRow(t.Context(), `SELECT o.id,o.run_id,o.status,run.status FROM agent_routine_occurrence o
+			JOIN agent_run run ON run.id=o.run_id WHERE o.routine_id=$1 AND o.kind='scheduled'`, routineID).
+			Scan(&occurrenceID, &runID, &occurrenceStatus, &runStatus)
+		if err == nil && occurrenceStatus == "running" && runStatus == "running" {
+			break
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal(err)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if occurrenceID == uuid.Nil || runID == uuid.Nil || occurrenceStatus != "running" || runStatus != "running" {
+		t.Fatalf("provider request must belong to a running occurrence/run: occurrence=%s run=%s/%s", occurrenceID, runID, runStatus)
+	}
+
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	functionName := "qa26_block_routine_finish_" + suffix
+	triggerName := "qa26_block_routine_finish_" + suffix
+	if _, err := env.srv.db.Exec(t.Context(), fmt.Sprintf(`CREATE FUNCTION public.%s() RETURNS trigger LANGUAGE plpgsql AS $qa26$
+		BEGIN
+			IF NEW.id = '%s'::uuid AND NEW.status = 'completed' THEN PERFORM pg_sleep(5); END IF;
+			RETURN NEW;
+		END
+		$qa26$`, functionName, runID)); err != nil {
+		t.Fatal(err)
+	}
+	triggerInstalled := false
+	dropFinishBlocker := func(ctx context.Context) error {
+		if triggerInstalled {
+			if _, err := env.srv.db.Exec(ctx, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON public.agent_run`, triggerName)); err != nil {
+				return err
+			}
+			triggerInstalled = false
+		}
+		_, err := env.srv.db.Exec(ctx, fmt.Sprintf(`DROP FUNCTION IF EXISTS public.%s()`, functionName))
+		return err
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := dropFinishBlocker(cleanupCtx); err != nil {
+			t.Errorf("drop test-only completion blocker: %v", err)
+		}
+	})
+	if _, err := env.srv.db.Exec(t.Context(), fmt.Sprintf(`CREATE TRIGGER %s BEFORE UPDATE OF status ON public.agent_run
+		FOR EACH ROW EXECUTE FUNCTION public.%s()`, triggerName, functionName)); err != nil {
+		t.Fatal(err)
+	}
+	triggerInstalled = true
+	release()
+	select {
+	case <-providerResponseReturned:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("provider stub did not return a successful response\nstdout: %s\nstderr: %s", stdout.String(), stderr.String())
+	}
+
+	blockedAtFinish := false
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting bool
+		if err := env.srv.db.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+			WHERE application_name=$1 AND wait_event='PgSleep' AND state='active')`, appName).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			blockedAtFinish = true
+			break
+		}
+		select {
+		case workerErr := <-waitDone:
+			workerStopped = true
+			t.Fatalf("worker exited before the terminal transaction blocker: %v\nstdout: %s\nstderr: %s", workerErr, stdout.String(), stderr.String())
+		default:
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !blockedAtFinish {
+		t.Fatalf("worker did not reach the successful-run terminal transaction blocker\nstdout: %s\nstderr: %s", stdout.String(), stderr.String())
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	workerErr := <-waitDone
+	workerStopped = true
+	if workerErr == nil {
+		t.Fatal("worker killed inside the terminal transaction unexpectedly exited successfully")
+	}
+	if err := dropFinishBlocker(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE agent_routine_occurrence SET lease_until=now()-interval '1 second'
+		WHERE id=$1 AND status='running'`, occurrenceID); err != nil {
+		t.Fatal(err)
+	}
+	env.srv.runAgentRoutines(t.Context())
+	env.srv.runAgentRoutines(t.Context())
+
+	var finalRunStatus, runError, finalOccurrenceStatus, occurrenceError string
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT run.status,run.error_code,o.status,o.error_code FROM agent_routine_occurrence o
+		JOIN agent_run run ON run.id=o.run_id WHERE o.id=$1`, occurrenceID).
+		Scan(&finalRunStatus, &runError, &finalOccurrenceStatus, &occurrenceError); err != nil {
+		t.Fatal(err)
+	}
+	var occurrences, runs, unknownEvents int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_occurrence WHERE routine_id=$1 AND kind='scheduled'`, routineID).Scan(&occurrences); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE routine_occurrence_id=$1`, occurrenceID).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_event WHERE routine_id=$1 AND type='interrupted' AND payload->>'result_unknown'='true'`, routineID).Scan(&unknownEvents); err != nil {
+		t.Fatal(err)
+	}
+	providerMu.Lock()
+	hits := providerHits
+	providerMu.Unlock()
+	if finalRunStatus != "failed" || runError != "interrupted" || finalOccurrenceStatus != "interrupted" || occurrenceError != "interrupted" || occurrences != 1 || runs != 1 || unknownEvents != 1 || hits != 1 {
+		t.Fatalf("successful provider response before rolled-back finish must recover once as unknown: run=%s/%s occurrence=%s/%s occurrences=%d runs=%d unknown_events=%d",
+			finalRunStatus, runError, finalOccurrenceStatus, occurrenceError, occurrences, runs, unknownEvents)
+	}
+	t.Logf("DEV-QA26_METRIC_ROUTINE_PROVIDER_SUCCESS_COMMIT_CRASH %s", fmt.Sprintf(`{"provider_calls":%d,"occurrences":%d,"runs":%d,"unknown_events":%d,"terminal_transaction_blocked":%t,"journey_ms":%.2f}`,
+		hits, occurrences, runs, unknownEvents, blockedAtFinish, float64(time.Since(startedAt).Microseconds())/1000))
+}
+
 func createRoutineSchedulerAuditFixture(t *testing.T, name string) uuid.UUID {
 	t.Helper()
 	providerID := env.ensureToolModel(t)
