@@ -59,7 +59,7 @@ async function startLocalSmtpSink(rejectGreeting = false): Promise<LocalSmtpSink
   }
 }
 
-async function launchElectron(baseURL: string, username: string, tag: string, inviteCode?: string) {
+async function launchElectron(baseURL: string, username: string, tag: string, inviteCode?: string, password = 'local-e2e-password-123') {
   const profile = await mkdtemp(join(tmpdir(), 'ops-qa26-g8-' + tag + '-'))
   let app: ElectronApp | undefined
   try {
@@ -72,7 +72,7 @@ async function launchElectron(baseURL: string, username: string, tag: string, in
     const page = await app.firstWindow()
     await page.goto(baseURL + '/login')
     await page.getByLabel('用户名', { exact: true }).fill(username)
-    await page.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+    await page.getByLabel('密码', { exact: true }).fill(password)
     if (inviteCode) await page.getByLabel('邀请码（可选）').fill(inviteCode)
     await page.getByRole('button', { name: '登录', exact: true }).click()
     await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
@@ -190,6 +190,195 @@ test('DEV-QA26 G2-12 原生 Electron 操作日志筛选、空态与读取错误�
     await expect(owner.page.getByText('没有日志', { exact: true })).toBeVisible()
   } finally {
     await closeElectron(owner.app, owner.profile, 'audit-logs')
+  }
+})
+
+test('DEV-QA26 G2-12 原生 Electron操作日志游标分页、viewer工作区范围与超管全站读取', async ({ page, browser, baseURL }, testInfo) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(360_000)
+  const stamp = Date.now()
+  const marker = `DEV-QA26 G2-12 分页 ${stamp}`
+  const owner = await openOwner(page, baseURL!, 'audit-pagination')
+  let ownerClosed = false
+  let viewer: Awaited<ReturnType<typeof launchElectron>> | undefined
+  let admin: Awaited<ReturnType<typeof launchElectron>> | undefined
+  try {
+    const providerIds: string[] = []
+    const providerNames: string[] = []
+    for (let index = 0; index < 51; index += 1) {
+      const name = `${marker} ${String(index + 1).padStart(2, '0')}`
+      const provider = await api(page, 'POST', '/model-providers', {
+        name,
+        base_url: process.env.OPS_E2E_MOCK_BASE_URL ?? 'http://127.0.0.1:8297/v1',
+        api_key: 'local-e2e-key',
+        models: ['mock-agent-tested'],
+      }) as { id: string }
+      providerIds.push(provider.id)
+      providerNames.push(name)
+      // audit_log.created_at 是分页 cursor；留出时间间隔以确保样本时间戳严格递增。
+      await page.waitForTimeout(3)
+    }
+
+    const otherWorkspace = await browser.newContext({ baseURL: new URL(baseURL!).origin })
+    const otherPage = await otherWorkspace.newPage()
+    const otherUsername = `qa26-g8-audit-other-${stamp}`
+    let otherProvider: { id: string } | undefined
+    try {
+      await registerAccount(otherPage, '图文笔记', 'xhs', otherUsername)
+      otherProvider = await api(otherPage, 'POST', '/model-providers', {
+        name: `DEV-QA26 G2-12 跨工作区 ${stamp}`,
+        base_url: process.env.OPS_E2E_MOCK_BASE_URL ?? 'http://127.0.0.1:8297/v1',
+        api_key: 'local-e2e-key',
+        models: ['mock-agent-tested'],
+      }) as { id: string }
+    } finally {
+      await otherWorkspace.close()
+    }
+
+    await selectDesktopSetting(owner.page, '操作日志')
+    const actionFilter = owner.page.getByRole('combobox')
+    const firstResponse = owner.page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/v1/audit-logs' && url.searchParams.get('action') === 'model_' && !url.searchParams.has('before')
+    })
+    await actionFilter.selectOption('model_')
+    const firstPage = await (await firstResponse).json() as Array<{ id: string; action: string; target_id: string; created_at: string }>
+    expect(firstPage).toHaveLength(50)
+    expect(firstPage.every((row) => row.action === 'model_provider_create')).toBe(true)
+    expect(new Set(firstPage.map((row) => row.id)).size).toBe(50)
+    await expect(owner.page.getByRole('button', { name: '加载更多', exact: true })).toBeVisible()
+    await expect(owner.page.locator('li').filter({ hasText: marker })).toHaveCount(50)
+
+    const lastCursor = firstPage.at(-1)!.created_at
+    let cursorRequest = ''
+    const secondResponse = owner.page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      if (url.pathname !== '/api/v1/audit-logs' || url.searchParams.get('action') !== 'model_' || !url.searchParams.has('before')) return false
+      cursorRequest = url.searchParams.get('before') ?? ''
+      return response.status() === 200
+    })
+    await owner.page.getByRole('button', { name: '加载更多', exact: true }).click()
+    const secondPage = await (await secondResponse).json() as Array<{ id: string; action: string; target_id: string; created_at: string }>
+    expect(cursorRequest).toBe(lastCursor)
+    expect(secondPage).toHaveLength(1)
+    expect(secondPage[0].target_id).toBe(providerIds[0])
+    expect(new Set([...firstPage, ...secondPage].map((row) => row.id)).size).toBe(51)
+    expect(new Set([...firstPage, ...secondPage].map((row) => row.target_id))).toEqual(new Set(providerIds))
+    await expect(owner.page.locator('li').filter({ hasText: marker })).toHaveCount(51)
+    await expect(owner.page.getByRole('button', { name: '加载更多', exact: true })).toHaveCount(0)
+    await testInfo.attach('g2-12-audit-pagination-cursors.json', {
+      body: JSON.stringify({ page1_count: firstPage.length, page2_count: secondPage.length, cursor: cursorRequest,
+        unique_rows: 51, expected_provider_ids: providerIds, returned_provider_ids: [...firstPage, ...secondPage].map((row) => row.target_id) }, null, 2),
+      contentType: 'application/json',
+    })
+
+    const filterSamples: number[] = []
+    for (let index = 0; index < 20; index += 1) {
+      const nextAction = index % 2 === 0 ? '' : 'model_'
+      const started = performance.now()
+      await actionFilter.selectOption(nextAction)
+      const filteredRows = owner.page.locator('li').filter({ hasText: marker })
+      await expect(filteredRows).toHaveCount(nextAction ? 51 : 50)
+      filterSamples.push(performance.now() - started)
+    }
+    const sortedFilterSamples = [...filterSamples].sort((a, b) => a - b)
+    const filterMetrics = {
+      n: filterSamples.length,
+      p50_ms: Number(sortedFilterSamples[Math.ceil(sortedFilterSamples.length * 0.5) - 1].toFixed(2)),
+      p95_ms: Number(sortedFilterSamples[Math.ceil(sortedFilterSamples.length * 0.95) - 1].toFixed(2)),
+      failures: 0,
+      environment: 'Windows native Electron; isolated ops-e2e PostgreSQL and mock model',
+    }
+    await testInfo.attach('g2-12-audit-filter-interaction-metrics.json', { body: JSON.stringify(filterMetrics, null, 2), contentType: 'application/json' })
+    console.log(`DEV-QA26_AUDIT_FILTER_INTERACTION ${JSON.stringify(filterMetrics)}`)
+
+    // 操作日志属于独立工具页；用隔离 API 创建 viewer 邀请，避免离开工具页后打开本机设置窗，
+    // 本场景只需从真实 Electron 查看 viewer 页面与服务端范围，owner 邀请 UI 已由 G8-04 覆盖。
+    const invite = await api(page, 'POST', '/workspaces/current/invites', { role: 'viewer', max_uses: 1, days: 1 }) as { code: string; role: string }
+    expect(invite.role).toBe('viewer')
+    const ownerMe = await owner.page.evaluate(async () => await (await fetch('/api/v1/auth/me')).json()) as { workspace: { id: string } }
+    const ownerWorkspaceId = ownerMe.workspace.id
+    const ownerAccountId = owner.account.id
+    const ownLatestProviderName = providerNames.at(-1)!
+
+    await closeElectron(owner.app, owner.profile, 'audit-pagination')
+    ownerClosed = true
+
+    const viewerUsername = `qa26-g8-audit-viewer-${stamp}`
+    const viewerProfile = await mkdtemp(join(tmpdir(), 'ops-qa26-g8-audit-viewer-'))
+    let viewerApp: ElectronApp | undefined
+    try {
+      viewerApp = await _electron.launch({
+        executablePath: resolve('../node_modules/electron/dist/electron.exe'),
+        args: ['--user-data-dir=' + viewerProfile, resolve('../.build/main.js')],
+        env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! },
+        timeout: 60_000,
+      })
+      const viewerPage = await viewerApp.firstWindow()
+      await viewerPage.goto(baseURL + '/register')
+      await viewerPage.getByLabel('用户名', { exact: true }).fill(viewerUsername)
+      await viewerPage.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
+      await viewerPage.getByLabel('邀请码（可选）').fill(invite.code)
+      await viewerPage.getByRole('button', { name: '创建账号', exact: true }).click()
+      await expect.poll(() => viewerPage.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+      const registeredMe = await viewerPage.evaluate(async () => await (await fetch('/api/v1/auth/me')).json()) as {
+        username: string; role: string; workspace: { id: string }
+      }
+      expect(registeredMe.username).toBe(viewerUsername)
+      expect(registeredMe.role).toBe('viewer')
+      expect(registeredMe.workspace.id).toBe(ownerWorkspaceId)
+      viewer = { app: viewerApp, page: viewerPage, profile: viewerProfile }
+    } catch (error) {
+      await closeElectron(viewerApp, viewerProfile, 'audit-viewer')
+      throw error
+    }
+    await viewer.page.goto(`${baseURL}/a/${ownerAccountId}`)
+    await viewer.page.getByRole('button', { name: /用户菜单/ }).click()
+    await viewer.page.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    const viewerLogsResponse = viewer.page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/audit-logs' && response.status() === 200)
+    await selectDesktopSetting(viewer.page, '操作日志')
+    expect((await viewerLogsResponse).status()).toBe(200)
+    await expect(viewer.page).toHaveURL(/\/settings\/logs$/)
+    await expect(viewer.page.getByRole('heading', { name: '操作日志', exact: true })).toBeVisible()
+    await expect(viewer.page.locator('li').filter({ hasText: ownLatestProviderName })).toHaveCount(1)
+    await expect(viewer.page.locator('li').filter({ hasText: `DEV-QA26 G2-12 跨工作区 ${stamp}` })).toHaveCount(0)
+    const viewerRead = await viewer.page.evaluate(async () => {
+      const me = await (await fetch('/api/v1/auth/me')).json()
+      const response = await fetch('/api/v1/audit-logs?action=model_&limit=200')
+      return { me, status: response.status, logs: await response.json() }
+    }) as { me: { role: string; workspace: { id: string } }; status: number; logs: Array<{ target_id: string }> }
+    expect(viewerRead.me.role).toBe('viewer')
+    expect(viewerRead.me.workspace.id).toBe(ownerWorkspaceId)
+    expect(viewerRead.status).toBe(200)
+    expect(viewerRead.logs.some((row) => row.target_id === providerIds.at(-1))).toBe(true)
+    expect(viewerRead.logs.some((row) => row.target_id === otherProvider!.id)).toBe(false)
+    const adminDenied = await viewer.page.evaluate(async () => (await fetch('/api/v1/admin/audit-logs?limit=40')).status)
+    expect(adminDenied).toBe(403)
+    await closeElectron(viewer.app, viewer.profile, 'audit-viewer')
+    viewer = undefined
+
+    admin = await launchElectron(baseURL!, 'skyeder', 'audit-system-admin', undefined, 'local-e2e-admin-pass-456')
+    const adminLogsResponse = admin.page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/v1/admin/audit-logs' && url.searchParams.get('limit') === '40' && response.status() === 200
+    })
+    await admin.page.goto(`${baseURL}/settings/admin`)
+    const adminRows = await (await adminLogsResponse).json() as Array<{ action: string; target_id: string; actor: string | null }>
+    expect(adminRows.some((row) => row.action === 'model_provider_create' && row.target_id === otherProvider!.id && row.actor === otherUsername)).toBe(true)
+    await expect(admin.page.getByText('全站操作日志', { exact: true })).toBeVisible()
+    await expect(admin.page.locator('li').filter({ hasText: otherUsername }).first()).toBeVisible()
+    await testInfo.attach('g2-12-audit-role-scope.json', {
+      body: JSON.stringify({ viewer_role: viewerRead.me.role, viewer_workspace_id: viewerRead.me.workspace.id,
+        owner_workspace_id: ownerWorkspaceId, viewer_workspace_logs: viewerRead.logs.length,
+        cross_workspace_rows_visible_to_viewer: viewerRead.logs.some((row) => row.target_id === otherProvider!.id),
+        viewer_admin_endpoint_status: adminDenied, global_admin_row_count: adminRows.length,
+        global_admin_actor_seen: adminRows.some((row) => row.actor === otherUsername) }, null, 2),
+      contentType: 'application/json',
+    })
+  } finally {
+    if (!ownerClosed) await closeElectron(owner.app, owner.profile, 'audit-pagination')
+    if (viewer) await closeElectron(viewer.app, viewer.profile, 'audit-viewer')
+    if (admin) await closeElectron(admin.app, admin.profile, 'audit-system-admin')
   }
 })
 
