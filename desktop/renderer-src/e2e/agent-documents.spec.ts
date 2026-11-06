@@ -144,7 +144,7 @@ function docxEncryptedEntryFlagFixture() {
   throw new Error('DOCX central directory entry not found')
 }
 
-function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type' | 'override-main-document-content-type' | 'foreign-main-document-namespace' | 'wrong-main-document-root' | 'missing-main-document-body') {
+function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type' | 'override-main-document-content-type' | 'foreign-main-document-namespace' | 'wrong-main-document-root' | 'missing-main-document-body' | 'foreign-main-document-relationship' | 'foreign-main-document-content-type') {
   const external = externalRootRelationship
     ? '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid" TargetMode="External"/>'
     : ''
@@ -173,6 +173,12 @@ function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missi
   }
   if (defect === 'missing-main-document-body') {
     files['word/document.xml'] = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>缺失正文容器</w:t></w:r></w:p></w:document>'
+  }
+  if (defect === 'foreign-main-document-relationship') {
+    files['_rels/.rels'] = files['_rels/.rels'].replace('<Relationship Id="rId1"', '<f:Relationship xmlns:f="urn:foreign" Id="rId1"')
+  }
+  if (defect === 'foreign-main-document-content-type') {
+    files['[Content_Types].xml'] = files['[Content_Types].xml'].replace('<Override PartName="/word/document.xml"', '<f:Override xmlns:f="urn:foreign" PartName="/word/document.xml"')
   }
   return zipFixture(files)
 }
@@ -617,6 +623,8 @@ test('DEV-QA26 G7-03 Windows Electron真实文件选择器验证最小OPC DOCX�
       { defect: 'foreign-main-document-namespace', name: 'foreign-main-document-namespace.docx' },
       { defect: 'wrong-main-document-root', name: 'wrong-main-document-root.docx' },
       { defect: 'missing-main-document-body', name: 'missing-main-document-body.docx' },
+      { defect: 'foreign-main-document-relationship', name: 'foreign-main-document-relationship.docx' },
+      { defect: 'foreign-main-document-content-type', name: 'foreign-main-document-content-type.docx' },
     ] as const
     const incompleteUploadMs: number[] = []
     for (const item of incompleteCases) {
@@ -628,7 +636,8 @@ test('DEV-QA26 G7-03 Windows Electron真实文件选择器验证最小OPC DOCX�
       await (await chooser).setFiles({ name: item.name, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: incomplete })
       const response = await upload
       incompleteUploadMs.push(Number((performance.now() - started).toFixed(2)))
-      const body = await response.json() as { error?: { code?: string } }
+      const body = await response.json() as { error?: { code?: string }; id?: string }
+      if (response.status() === 200 && body.id) await api(page, 'DELETE', '/agent/attachments/' + body.id)
       expect(response.status()).toBe(422)
       expect(body.error?.code).toBe('agent_attachment_parse_failed')
       await expect(page.getByLabel(`${item.name} failed`, { exact: true })).toContainText('DOCX 已加密、损坏或解压内容超限')

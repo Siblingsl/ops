@@ -431,7 +431,7 @@ func hasWordDocumentContentType(data []byte) (bool, error) {
 					return false, errors.New("invalid OPC content types root")
 				}
 				rootSeen = true
-			} else if depth == 1 && (item.Name.Local == "Default" || item.Name.Local == "Override") {
+			} else if depth == 1 && item.Name.Space == opcContentTypesNamespace && (item.Name.Local == "Default" || item.Name.Local == "Override") {
 				extension, partName, contentType := "", "", ""
 				for _, attr := range item.Attr {
 					switch attr.Name.Local {
@@ -484,7 +484,7 @@ func hasPackageMainDocumentRelationship(data []byte) (bool, error) {
 					return false, errors.New("invalid OPC package relationships root")
 				}
 				rootSeen = true
-			} else if depth == 1 && item.Name.Local == "Relationship" {
+			} else if depth == 1 && item.Name.Space == opcRelationshipsNamespace && item.Name.Local == "Relationship" {
 				relationshipType, target, targetMode := "", "", ""
 				for _, attr := range item.Attr {
 					switch attr.Name.Local {

@@ -168,6 +168,36 @@ func TestParseDOCXRejectsIncompleteOPCPackage(t *testing.T) {
 	}
 }
 
+func TestParseDOCXRejectsForeignOPCMetadataElements(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(map[string]string)
+	}{
+		{
+			name: "foreign relationship element",
+			mutate: func(files map[string]string) {
+				files["_rels/.rels"] = strings.Replace(files["_rels/.rels"], `<Relationship Id="rId1"`, `<f:Relationship xmlns:f="urn:foreign" Id="rId1"`, 1)
+			},
+		},
+		{
+			name: "foreign content type override",
+			mutate: func(files map[string]string) {
+				files["[Content_Types].xml"] = strings.Replace(files["[Content_Types].xml"], `<Override PartName="/word/document.xml"`, `<f:Override xmlns:f="urn:foreign" PartName="/word/document.xml"`, 1)
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := minimalOPCDOCXFiles(false)
+			tc.mutate(files)
+			parsed, err := parseInWASI("foreign-opc-metadata.docx", docxRawFixture(t, files))
+			if err == nil || parsed.ErrorCode != "docx_invalid" {
+				t.Fatalf("OPC metadata elements in foreign namespaces must not satisfy package structure: result=%+v err=%v", parsed, err)
+			}
+		})
+	}
+}
+
 func TestParseDOCXRejectsMainDocumentContentTypeOverrideConflict(t *testing.T) {
 	cases := []struct {
 		name         string
