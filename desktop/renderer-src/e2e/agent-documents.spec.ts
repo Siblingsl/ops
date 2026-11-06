@@ -144,7 +144,7 @@ function docxEncryptedEntryFlagFixture() {
   throw new Error('DOCX central directory entry not found')
 }
 
-function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type') {
+function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type' | 'override-main-document-content-type') {
   const external = externalRootRelationship
     ? '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid" TargetMode="External"/>'
     : ''
@@ -161,6 +161,9 @@ function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missi
   }
   if (defect === 'missing-main-document-content-type') {
     files['[Content_Types].xml'] = '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>'
+  }
+  if (defect === 'override-main-document-content-type') {
+    files['[Content_Types].xml'] = '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/document.xml" ContentType="application/xml"/></Types>'
   }
   return zipFixture(files)
 }
@@ -599,6 +602,7 @@ test('DEV-QA26 G7-03 Windows Electron真实文件选择器验证最小OPC DOCX�
       { defect: 'missing-root-relationships', name: 'missing-root-relationships.docx' },
       { defect: 'missing-office-document-relationship', name: 'missing-office-document-relationship.docx' },
       { defect: 'missing-main-document-content-type', name: 'missing-main-document-content-type.docx' },
+      { defect: 'override-main-document-content-type', name: 'override-main-document-content-type.docx' },
     ] as const
     const incompleteUploadMs: number[] = []
     for (const item of incompleteCases) {

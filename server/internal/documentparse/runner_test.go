@@ -168,6 +168,45 @@ func TestParseDOCXRejectsIncompleteOPCPackage(t *testing.T) {
 	}
 }
 
+func TestParseDOCXRejectsMainDocumentContentTypeOverrideConflict(t *testing.T) {
+	cases := []struct {
+		name         string
+		contentTypes string
+	}{
+		{
+			name:         "specific override takes precedence",
+			contentTypes: `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/document.xml" ContentType="application/xml"/></Types>`,
+		},
+		{
+			name:         "duplicate XML defaults are rejected",
+			contentTypes: `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Default Extension="XML" ContentType="application/xml"/></Types>`,
+		},
+		{
+			name:         "duplicate main document overrides are rejected",
+			contentTypes: `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/xml"/><Override PartName="/WORD/DOCUMENT.XML" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := minimalOPCDOCXFiles(false)
+			files["[Content_Types].xml"] = tc.contentTypes
+			parsed, err := parseInWASI("content-type-override-conflict.docx", docxRawFixture(t, files))
+			if err == nil || parsed.ErrorCode != "docx_invalid" {
+				t.Fatalf("conflicting main document content type mapping must be rejected: result=%+v err=%v", parsed, err)
+			}
+		})
+	}
+}
+
+func TestParseDOCXAcceptsMainDocumentContentTypeDefaultMapping(t *testing.T) {
+	files := minimalOPCDOCXFiles(false)
+	files["[Content_Types].xml"] = `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`
+	parsed, err := parseInWASI("default-main-content-type.docx", docxRawFixture(t, files))
+	if err != nil || !strings.Contains(parsed.Text, "最小 OPC 文档") {
+		t.Fatalf("XML default mapping for a main document without its own override should parse: result=%+v err=%v", parsed, err)
+	}
+}
+
 func TestParseDOCXRejectsHighCompressionExpandedSizeUnderWASI(t *testing.T) {
 	const expandedLimit = 96 << 20
 	compressed, ratio := highCompressionDOCXFixture(t)

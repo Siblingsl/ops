@@ -365,11 +365,20 @@ func hasWordDocumentContentType(data []byte) (bool, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	depth := 0
 	rootSeen := false
-	found := false
+	defaultXMLContentType := ""
+	hasDefaultXMLContentType := false
+	overrideContentType := ""
+	hasOverrideContentType := false
 	for {
 		token, err := decoder.Token()
 		if errors.Is(err, io.EOF) {
-			return rootSeen && found, nil
+			contentType := defaultXMLContentType
+			hasContentType := hasDefaultXMLContentType
+			if hasOverrideContentType {
+				contentType = overrideContentType
+				hasContentType = true
+			}
+			return rootSeen && hasContentType && strings.EqualFold(contentType, wordDocumentContentType), nil
 		}
 		if err != nil {
 			return false, err
@@ -393,10 +402,18 @@ func hasWordDocumentContentType(data []byte) (bool, error) {
 						contentType = attr.Value
 					}
 				}
-				if strings.EqualFold(contentType, wordDocumentContentType) &&
-					((item.Name.Local == "Default" && strings.EqualFold(extension, "xml")) ||
-						(item.Name.Local == "Override" && strings.EqualFold(strings.TrimPrefix(partName, "/"), "word/document.xml"))) {
-					found = true
+				if item.Name.Local == "Default" && strings.EqualFold(extension, "xml") {
+					if hasDefaultXMLContentType {
+						return false, errors.New("duplicate OPC XML default content type")
+					}
+					hasDefaultXMLContentType = true
+					defaultXMLContentType = contentType
+				} else if item.Name.Local == "Override" && strings.EqualFold(strings.TrimPrefix(partName, "/"), "word/document.xml") {
+					if hasOverrideContentType {
+						return false, errors.New("duplicate OPC main document content type override")
+					}
+					hasOverrideContentType = true
+					overrideContentType = contentType
 				}
 			}
 			depth++
