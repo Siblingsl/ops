@@ -130,6 +130,19 @@ function docxLargeDocumentFixture(expandedDocumentBytes: number) {
   }, true)
 }
 
+function docxLargePageDocumentFixture(expandedDocumentBytes: number, pages: number) {
+  const prefix = Buffer.from('<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>')
+  const pageBreaks = Buffer.from('<w:lastRenderedPageBreak/>'.repeat(Math.max(0, pages - 1)))
+  const closeRun = Buffer.from('</w:t></w:r>')
+  const closeDocument = Buffer.from('</w:p></w:body></w:document>')
+  const textBytes = expandedDocumentBytes - prefix.length - pageBreaks.length - closeRun.length - closeDocument.length
+  if (textBytes < 1) throw new Error('DOCX document entry must contain text')
+  return zipFixture({
+    'word/document.xml': Buffer.concat([prefix, Buffer.alloc(textBytes, 0x61), closeRun, pageBreaks, closeDocument]),
+    'docProps/app.xml': `<Properties><Pages>${pages}</Pages></Properties>`,
+  }, true)
+}
+
 async function prepare(page: Page, baseURL: string) {
   await page.goto(baseURL + '/register')
   await page.getByLabel('用户名', { exact: true }).fill('aw11-' + Date.now() + '-' + Math.random().toString(16).slice(2, 7))
@@ -569,6 +582,55 @@ test('DEV-QA26 Windows Electron filechooser上传4MiB DOCX并核对解析回执�
     await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
     await app?.close()
     if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-doc4mib-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('DEV-QA26 Windows Electron filechooser上传4MiB 100页DOCX并核对解析回执', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(120_000)
+  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-qa26-doc4mib100p-'))
+  let app: ElectronApplication | undefined
+  try {
+    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + userData, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const page = await app.firstWindow()
+    await prepare(page, baseURL!)
+    let messagePosts = 0
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+    })
+    const chooser = page.waitForEvent('filechooser')
+    const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST', { timeout: 60_000 })
+    const expandedBytes = 4 * 1024 * 1024
+    const pages = 100
+    const file = docxLargePageDocumentFixture(expandedBytes, pages)
+    await page.getByRole('button', { name: '添加附件', exact: true }).click()
+    await (await chooser).setFiles({ name: 'electron-document-4mib-100p.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: file })
+    const response = await upload
+    expect(response.status()).toBe(200)
+    const receipt = await response.json() as { id: string; parse_status: string; page_count: number; extracted_chars: number; injected_chars: number; truncated_from: number; truncated_to: number }
+    await expect(page.getByLabel('electron-document-4mib-100p.docx ready', { exact: true })).toBeVisible({ timeout: 60_000 })
+    expect(receipt).toMatchObject({ parse_status: 'ready', page_count: pages, injected_chars: 20_000, truncated_from: 20_001 })
+    expect(receipt.extracted_chars).toBeGreaterThan(expandedBytes - 10_000)
+    expect(receipt.truncated_to).toBe(receipt.extracted_chars)
+    const original = await page.evaluate(async (id) => {
+      const response = await fetch('/api/v1/agent/attachments/' + id + '/file')
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      return { status: response.status, bytes: bytes.byteLength, signature: new TextDecoder().decode(bytes.slice(0, 4)) }
+    }, receipt.id)
+    expect(original).toMatchObject({ status: 200, signature: 'PK\u0003\u0004' })
+    expect(original.bytes).toBeGreaterThan(0)
+    const timing = response.request().timing()
+    console.log(`DEV-QA26_METRIC_DOCX_4MIB_100P_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', expanded_document_bytes: expandedBytes, pages, uploaded_bytes: file.byteLength, extracted_chars: receipt.extracted_chars, upload_ms: Number((timing.responseEnd - timing.requestStart).toFixed(2)), failures: 0 })}`)
+    await page.getByRole('button', { name: '移除 electron-document-4mib-100p.docx', exact: true }).click()
+    expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+    expect(messagePosts).toBe(0)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-doc4mib100p-')) throw new Error('拒绝清理测试目录之外路径')
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
