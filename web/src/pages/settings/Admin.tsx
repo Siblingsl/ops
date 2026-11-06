@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Shield } from 'lucide-react'
-import { useState } from 'react'
+import { memo, useRef, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
@@ -43,11 +43,103 @@ interface PlatformBreaker {
   note: string | null
 }
 
+const AdminUserRow = memo(function AdminUserRow({
+  user,
+  busy,
+  currentUserId,
+  systemAdminCount,
+  onResetPassword,
+  onRevokeSessions,
+  onPatchUser,
+}: {
+  user: AdminUser
+  busy: boolean
+  currentUserId: string | undefined
+  systemAdminCount: number
+  onResetPassword: (user: AdminUser) => void
+  onRevokeSessions: (user: AdminUser) => void
+  onPatchUser: (id: string, body: { disabled?: boolean; is_system_admin?: boolean }) => void
+}) {
+  return (
+    <li className="flex flex-wrap items-center gap-3 px-5 py-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-mist-900">{user.username}</span>
+          {user.is_system_admin && <Badge>超级管理员</Badge>}
+          {user.disabled_at && <Badge tone="red">已禁用</Badge>}
+        </div>
+        <div className="mt-0.5 text-xs text-mist-400">
+          工作区 {user.workspace_count} · 会话 {user.session_count}
+          {user.last_login_at ? ` · 最近登录 ${fmtTime(user.last_login_at)}` : ''}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => onResetPassword(user)}>重置密码</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => onRevokeSessions(user)}>踢会话</Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy || user.username === 'skyeder' || (user.is_system_admin && systemAdminCount <= 1)}
+          onClick={() => onPatchUser(user.id, { is_system_admin: !user.is_system_admin })}
+        >
+          {user.username === 'skyeder' ? '永久超管' : user.is_system_admin ? '撤超管' : '授超管'}
+        </Button>
+        <Button
+          size="sm"
+          variant={user.disabled_at ? 'secondary' : 'danger'}
+          disabled={busy || user.id === currentUserId || user.username === 'skyeder'}
+          onClick={() => onPatchUser(user.id, { disabled: !user.disabled_at })}
+        >
+          {user.disabled_at ? '启用' : '禁用'}
+        </Button>
+      </div>
+    </li>
+  )
+}, (previous, next) => {
+  const before = previous.user
+  const after = next.user
+  return previous.busy === next.busy
+    && previous.currentUserId === next.currentUserId
+    && (previous.systemAdminCount === next.systemAdminCount || (!before.is_system_admin && !after.is_system_admin))
+    && before.id === after.id
+    && before.username === after.username
+    && before.is_system_admin === after.is_system_admin
+    && before.disabled_at === after.disabled_at
+    && before.last_login_at === after.last_login_at
+    && before.workspace_count === after.workspace_count
+    && before.session_count === after.session_count
+})
+
+const AdminWorkspaceRow = memo(function AdminWorkspaceRow({
+  workspace,
+  busy,
+  onEnter,
+}: {
+  workspace: AdminWorkspace
+  busy: boolean
+  onEnter: (workspace: AdminWorkspace) => void
+}) {
+  return (
+    <li className="flex flex-wrap items-center gap-3 px-5 py-3">
+      <div className="min-w-0 flex-1">
+        <div className="font-medium text-mist-900">{workspace.name}</div>
+        <div className="mt-0.5 text-xs text-mist-400">
+          创建者 {workspace.created_by ?? '—'} · 成员 {workspace.member_count} · 平台账号 {workspace.account_count} · {fmtTime(workspace.created_at)}
+        </div>
+      </div>
+      <Button size="sm" disabled={busy} onClick={() => onEnter(workspace)}>进入并管理</Button>
+    </li>
+  )
+}, (previous, next) => previous.busy === next.busy && previous.workspace === next.workspace)
+
 export default function SettingsAdmin() {
   const { data: me, isLoading: meLoading } = useMe()
   const inv = useInvalidate()
+  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [busy, setBusy] = useState(false)
+  const [busyUserId, setBusyUserId] = useState<string | null>(null)
+  const userActionBusy = useRef(false)
   const [usageGroup, setUsageGroup] = useState('day')
 
   const users = useQuery({
@@ -80,6 +172,11 @@ export default function SettingsAdmin() {
     queryFn: () => get<{ breakers: PlatformBreaker[] }>('/admin/platform/breakers'),
     enabled: !!me?.is_system_admin,
   })
+  const systemAdminCount = users.data?.filter((user) => user.is_system_admin).length ?? 0
+  const updateUserCache = (id: string, update: Partial<AdminUser>) => {
+    queryClient.setQueryData<AdminUser[]>(['admin-users'], (current) =>
+      current?.map((user) => user.id === id ? { ...user, ...update } : user))
+  }
 
   if (meLoading) return <PageLoading />
   if (!me?.is_system_admin) return <Navigate to="/settings/accounts" replace />
@@ -120,15 +217,27 @@ export default function SettingsAdmin() {
   }
 
   const patchUser = async (id: string, body: { disabled?: boolean; is_system_admin?: boolean }) => {
-    setBusy(true)
+    if (userActionBusy.current) {
+      toast.error('另一项用户操作正在处理，请稍后重试')
+      return
+    }
+    userActionBusy.current = true
+    setBusyUserId(id)
     try {
       await patch(`/admin/users/${id}`, body)
+      const update: Partial<AdminUser> = {}
+      if (body.disabled !== undefined) {
+        update.disabled_at = body.disabled ? new Date().toISOString() : null
+        if (body.disabled) update.session_count = 0
+      }
+      if (body.is_system_admin !== undefined) update.is_system_admin = body.is_system_admin
+      updateUserCache(id, update)
       toast.success('已更新')
-      await inv(['admin-users'])
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
-      setBusy(false)
+      userActionBusy.current = false
+      setBusyUserId(null)
     }
   }
 
@@ -139,30 +248,42 @@ export default function SettingsAdmin() {
       danger: true,
       confirmText: '重置',
     }))) return
-    setBusy(true)
+    if (userActionBusy.current) {
+      toast.error('另一项用户操作正在处理，请稍后重试')
+      return
+    }
+    userActionBusy.current = true
+    setBusyUserId(u.id)
     try {
       const res = await post<{ temporary_password: string }>(`/admin/users/${u.id}/reset-password`, {})
       await navigator.clipboard.writeText(res.temporary_password).catch(() => undefined)
+      updateUserCache(u.id, { session_count: 0 })
       toast.success(`临时密码：${res.temporary_password}（已尝试复制）`)
-      await inv(['admin-users'])
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
-      setBusy(false)
+      userActionBusy.current = false
+      setBusyUserId(null)
     }
   }
 
   const revokeSessions = async (u: AdminUser) => {
     if (!(await confirm({ title: `踢出 ${u.username} 的全部会话？`, confirmText: '踢出' }))) return
-    setBusy(true)
+    if (userActionBusy.current) {
+      toast.error('另一项用户操作正在处理，请稍后重试')
+      return
+    }
+    userActionBusy.current = true
+    setBusyUserId(u.id)
     try {
       await post(`/admin/users/${u.id}/revoke-sessions`, {})
+      updateUserCache(u.id, { session_count: 0 })
       toast.success('已踢出会话')
-      await inv(['admin-users'])
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
-      setBusy(false)
+      userActionBusy.current = false
+      setBusyUserId(null)
     }
   }
 
@@ -371,42 +492,17 @@ export default function SettingsAdmin() {
         <CardHeader title="用户" desc={`共 ${users.data?.length ?? 0} 人`} />
         {!users.data ? <PageLoading /> : users.data.length === 0 ? <Empty icon={<Shield className="size-5" />} title="暂无用户" /> : (
           <ul className="divide-y divide-mist-100">
-            {users.data.map((u) => (
-              <li key={u.id} className="flex flex-wrap items-center gap-3 px-5 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium text-mist-900">{u.username}</span>
-                    {u.is_system_admin && <Badge>超级管理员</Badge>}
-                    {u.disabled_at && <Badge tone="red">已禁用</Badge>}
-                  </div>
-                  <div className="mt-0.5 text-xs text-mist-400">
-                    工作区 {u.workspace_count} · 会话 {u.session_count}
-                    {u.last_login_at ? ` · 最近登录 ${fmtTime(u.last_login_at)}` : ''}
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => resetPassword(u)}>重置密码</Button>
-                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => revokeSessions(u)}>踢会话</Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={busy
-                      || u.username === 'skyeder'
-                      || (u.is_system_admin && (users.data?.filter((x) => x.is_system_admin).length ?? 0) <= 1)}
-                    onClick={() => patchUser(u.id, { is_system_admin: !u.is_system_admin })}
-                  >
-                    {u.username === 'skyeder' ? '永久超管' : u.is_system_admin ? '撤超管' : '授超管'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={u.disabled_at ? 'secondary' : 'danger'}
-                    disabled={busy || u.id === me.user_id || u.username === 'skyeder'}
-                    onClick={() => patchUser(u.id, { disabled: !u.disabled_at })}
-                  >
-                    {u.disabled_at ? '启用' : '禁用'}
-                  </Button>
-                </div>
-              </li>
+            {users.data.map((user) => (
+              <AdminUserRow
+                key={user.id}
+                user={user}
+                busy={busy || busyUserId === user.id}
+                currentUserId={me.user_id}
+                systemAdminCount={systemAdminCount}
+                onResetPassword={resetPassword}
+                onRevokeSessions={revokeSessions}
+                onPatchUser={patchUser}
+              />
             ))}
           </ul>
         )}
@@ -416,16 +512,8 @@ export default function SettingsAdmin() {
         <CardHeader title="工作区" desc={`共 ${workspaces.data?.length ?? 0} 个`} />
         {!workspaces.data ? <PageLoading /> : workspaces.data.length === 0 ? <Empty title="暂无工作区" /> : (
           <ul className="divide-y divide-mist-100">
-            {workspaces.data.map((ws) => (
-              <li key={ws.id} className="flex flex-wrap items-center gap-3 px-5 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium text-mist-900">{ws.name}</div>
-                  <div className="mt-0.5 text-xs text-mist-400">
-                    创建者 {ws.created_by ?? '—'} · 成员 {ws.member_count} · 平台账号 {ws.account_count} · {fmtTime(ws.created_at)}
-                  </div>
-                </div>
-                <Button size="sm" disabled={busy} onClick={() => enterWorkspace(ws)}>进入并管理</Button>
-              </li>
+            {workspaces.data.map((workspace) => (
+              <AdminWorkspaceRow key={workspace.id} workspace={workspace} busy={busy} onEnter={enterWorkspace} />
             ))}
           </ul>
         )}

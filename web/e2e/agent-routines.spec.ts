@@ -623,29 +623,80 @@ test('DEV-QA26 Web系统用户停用后暂停例行任务并逐项恢复', async
     expect(target.session_count).toBe(1)
     const userCard = adminPage.getByRole('heading', { name: '用户', exact: true })
       .locator('..').locator('..').locator('..')
-    const userRow = userCard.getByRole('listitem').filter({ hasText: username })
+    const userRow = userCard.locator('li').filter({ hasText: username })
     await expect(userRow).toBeVisible()
+    const initialRenderedRow = await userRow.innerText()
+    await testInfo.attach('admin-user-row-before-disable.txt', { body: initialRenderedRow, contentType: 'text/plain' })
+    console.log(`DEV-QA26_ADMIN_USER_ROW_BEFORE_DISABLE_WEB ${JSON.stringify(initialRenderedRow)}`)
     await expect(userRow.getByText(/会话 1/)).toBeVisible()
-    const disableButton = userRow.getByRole('button', { name: '禁用', exact: true })
-    const disableResponse = adminPage.waitForResponse((response) =>
-      new URL(response.url()).pathname === `/api/v1/admin/users/${target.id}` && response.request().method() === 'PATCH')
-    await disableButton.click()
-    expect((await disableResponse).status()).toBe(200)
-    await expect(userRow.getByRole('button', { name: '启用', exact: true })).toBeVisible()
-    await expect(userRow.getByText(/会话 0/)).toBeVisible()
+    const scrollStartedAt = Date.now()
+    await userRow.scrollIntoViewIfNeeded()
+    const rowBounds = await userRow.boundingBox()
+    const viewportHeight = await adminPage.evaluate(() => window.innerHeight)
+    expect(rowBounds).not.toBeNull()
+    expect(rowBounds!.y).toBeLessThan(viewportHeight)
+    expect(rowBounds!.y + rowBounds!.height).toBeGreaterThan(0)
+    console.log(`DEV-QA26_ADMIN_USER_ROW_SCROLL_WEB ${JSON.stringify({ duration_ms: Date.now() - scrollStartedAt, row_y: rowBounds!.y, row_height: rowBounds!.height })}`)
+    await adminPage.evaluate(() => {
+      const target = window as Window & { __qa26LongTasks?: number[]; __qa26LongTaskObserver?: PerformanceObserver }
+      target.__qa26LongTasks = []
+      if (!PerformanceObserver.supportedEntryTypes.includes('longtask')) return
+      target.__qa26LongTaskObserver = new PerformanceObserver((list) => {
+        target.__qa26LongTasks?.push(...list.getEntries().map((entry) => Math.round(entry.duration)))
+      })
+      target.__qa26LongTaskObserver.observe({ type: 'longtask', buffered: true })
+    })
+    const statusSamples: number[] = []
+    const toggleUser = async (disable: boolean) => {
+      const button = userRow.locator('button').filter({ hasText: disable ? '禁用' : '启用' })
+      const startedAt = Date.now()
+      const responsePromise = adminPage.waitForResponse((response) =>
+        new URL(response.url()).pathname === `/api/v1/admin/users/${target.id}` && response.request().method() === 'PATCH')
+      await button.click()
+      const response = await responsePromise
+      expect(response.status()).toBe(200)
+      await expect.poll(async () => {
+        const text = await userRow.innerText()
+        return {
+          disabled: text.includes('已禁用'),
+          sessionZero: text.includes('会话 0'),
+          button: text.includes(disable ? '启用' : '禁用'),
+        }
+      }, { timeout: 15000 }).toEqual({ disabled: disable, sessionZero: true, button: true })
+      const durationMs = Date.now() - startedAt
+      statusSamples.push(durationMs)
+      console.log(`DEV-QA26_ADMIN_USER_STATUS_SAMPLE_WEB ${JSON.stringify({ sample: statusSamples.length, disable, duration_ms: durationMs })}`)
+      return { status: response.status(), duration_ms: durationMs }
+    }
+    const disableResult = await toggleUser(true)
     const disabledUser = (await api(adminPage, 'GET', '/admin/users')).find((item: { id: string }) => item.id === target.id)
     expect(disabledUser.disabled_at).toBeTruthy()
     expect(disabledUser.session_count).toBe(0)
     console.log('DEV-QA26_SYSTEM_USER_DISABLE_WEB checkpoint=user-disabled')
     await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(401)
-    const enableButton = userRow.getByRole('button', { name: '启用', exact: true })
-    const enableResponse = adminPage.waitForResponse((response) =>
-      new URL(response.url()).pathname === `/api/v1/admin/users/${target.id}` && response.request().method() === 'PATCH')
-    await enableButton.click()
-    expect((await enableResponse).status()).toBe(200)
-    await expect(userRow.getByRole('button', { name: '禁用', exact: true })).toBeVisible()
+    const enableResult = await toggleUser(false)
     const enabledUser = (await api(adminPage, 'GET', '/admin/users')).find((item: { id: string }) => item.id === target.id)
     expect(enabledUser.disabled_at).toBeFalsy()
+    expect(enabledUser.session_count).toBe(0)
+    expect(disableResult.status).toBe(200)
+    expect(enableResult.status).toBe(200)
+    for (let index = 0; index < 18; index++) await toggleUser(index % 2 === 0)
+    const finalUser = (await api(adminPage, 'GET', '/admin/users')).find((item: { id: string }) => item.id === target.id)
+    expect(finalUser.disabled_at).toBeFalsy()
+    expect(finalUser.session_count).toBe(0)
+    const sortedStatusSamples = [...statusSamples].sort((a, b) => a - b)
+    const statusMetrics = { environment: 'Web Chromium; local mock API', sample_count: statusSamples.length,
+      samples_ms: statusSamples, p50_ms: sortedStatusSamples[9], p95_ms: sortedStatusSamples[18], failed: 0 }
+    await testInfo.attach('admin-user-status-20-samples.json', { body: JSON.stringify(statusMetrics, null, 2), contentType: 'application/json' })
+    console.log(`DEV-QA26_METRIC_ADMIN_USER_STATUS_WEB ${JSON.stringify(statusMetrics)}`)
+    expect(statusSamples).toHaveLength(20)
+    const longTasks = await adminPage.evaluate(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const target = window as Window & { __qa26LongTasks?: number[] }
+      return target.__qa26LongTasks ?? []
+    })
+    await testInfo.attach('admin-list-render-longtasks.json', { body: JSON.stringify({ durations_ms: longTasks, max_ms: Math.max(0, ...longTasks) }, null, 2), contentType: 'application/json' })
+    console.log(`DEV-QA26_ADMIN_LIST_LONGTASKS_WEB ${JSON.stringify({ count: longTasks.length, max_ms: Math.max(0, ...longTasks) })}`)
 
     await page.goto(`${baseURL}/login`)
     await page.getByLabel('用户名', { exact: true }).fill(username)

@@ -802,6 +802,8 @@ test('DEV-QA26 Windows Electron系统用户停用后暂停例行任务并逐项�
   const adminData = await mkdtemp(join(tmpdir(), 'ops-qa26-routine-admin-disable-'))
   let userApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
   let adminApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  let adminPage: Page | undefined
+  let targetUserId: string | undefined
   try {
     const electronPath = resolve(process.cwd(), '../node_modules/electron/dist/electron.exe')
     const mainPath = resolve(process.cwd(), '../.build/main.js')
@@ -810,6 +812,7 @@ test('DEV-QA26 Windows Electron系统用户停用后暂停例行任务并逐项�
     const userPage = await userApp.firstWindow()
     await prepareRoutine(userPage, baseURL!)
     const identity = await api(userPage, 'GET', '/auth/me')
+    targetUserId = identity.user_id as string
     const username = identity.username as string
     const name = `QA26 系统用户停用 ${Date.now()}`
     await userPage.goto(`${baseURL}/agent`)
@@ -830,7 +833,7 @@ test('DEV-QA26 Windows Electron系统用户停用后暂停例行任务并逐项�
 
     adminApp = await _electron.launch({ executablePath: electronPath, args: [`--user-data-dir=${adminData}`, mainPath],
       env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
-    const adminPage = await adminApp.firstWindow()
+    adminPage = await adminApp.firstWindow()
     await adminPage.goto(`${baseURL}/login`)
     await adminPage.getByLabel('用户名', { exact: true }).fill('skyeder')
     await adminPage.getByLabel('密码', { exact: true }).fill('local-e2e-admin-pass-456')
@@ -838,29 +841,130 @@ test('DEV-QA26 Windows Electron系统用户停用后暂停例行任务并逐项�
       new URL(response.url()).pathname === '/api/v1/auth/login' && response.request().method() === 'POST')
     await adminPage.getByRole('button', { name: '登录', exact: true }).click()
     expect((await adminLogin).status()).toBe(200)
+    const initialUsersRead = adminPage.waitForResponse((response) =>
+      new URL(response.url()).pathname === '/api/v1/admin/users' && response.request().method() === 'GET')
     await adminPage.goto(`${baseURL}/settings/admin`)
     await expect(adminPage.getByText('用户', { exact: true })).toBeVisible()
+    const initialUsersResponse = await initialUsersRead
+    const initialUsersBody = await initialUsersResponse.body()
+    const initialUsers = JSON.parse(initialUsersBody.toString('utf8')) as Array<{ id: string; username: string; disabled_at: string | null; session_count: number }>
+    const initialTarget = initialUsers.find((item) => item.id === targetUserId)
+    const initialUsersEvidence = { status: initialUsersResponse.status(), row_count: initialUsers.length, target: initialTarget,
+      response_bytes: initialUsersBody.byteLength }
+    await testInfo.attach('admin-users-before-disable.json', { body: JSON.stringify(initialUsersEvidence, null, 2), contentType: 'application/json' })
+    console.log(`DEV-QA26_ADMIN_USERS_BEFORE_DISABLE ${JSON.stringify({ ...initialUsersEvidence, target: initialTarget?.username })}`)
     const userCard = adminPage.getByRole('heading', { name: '用户', exact: true })
       .locator('..').locator('..').locator('..')
-    const userRow = userCard.getByRole('listitem').filter({ hasText: username })
+    const userRow = userCard.locator('li').filter({ hasText: username })
     await expect(userRow).toBeVisible()
+    const initialRenderedRow = await userRow.innerText()
+    await testInfo.attach('admin-user-row-before-disable.txt', { body: initialRenderedRow, contentType: 'text/plain' })
+    console.log(`DEV-QA26_ADMIN_USER_ROW_BEFORE_DISABLE ${JSON.stringify(initialRenderedRow)}`)
     await expect(userRow.getByText(/会话 1/)).toBeVisible()
-    const disableButton = userRow.getByRole('button', { name: '禁用', exact: true })
-    const disableResponse = adminPage.waitForResponse((response) =>
-      new URL(response.url()).pathname.startsWith('/api/v1/admin/users/') && response.request().method() === 'PATCH')
-    await disableButton.click()
-    expect((await disableResponse).status()).toBe(200)
-    await expect(userRow.getByRole('button', { name: '启用', exact: true })).toBeVisible()
-    await expect(userRow.getByText(/会话 0/)).toBeVisible()
+    const scrollStartedAt = Date.now()
+    await userRow.scrollIntoViewIfNeeded()
+    const rowBounds = await userRow.boundingBox()
+    const viewportHeight = await adminPage.evaluate(() => window.innerHeight)
+    expect(rowBounds).not.toBeNull()
+    expect(rowBounds!.y).toBeLessThan(viewportHeight)
+    expect(rowBounds!.y + rowBounds!.height).toBeGreaterThan(0)
+    console.log(`DEV-QA26_ADMIN_USER_ROW_SCROLL_ELECTRON ${JSON.stringify({ duration_ms: Date.now() - scrollStartedAt, row_y: rowBounds!.y, row_height: rowBounds!.height })}`)
+    await adminPage.evaluate(() => {
+      const target = window as Window & { __qa26LongTasks?: number[]; __qa26LongTaskObserver?: PerformanceObserver }
+      target.__qa26LongTasks = []
+      if (!PerformanceObserver.supportedEntryTypes.includes('longtask')) return
+      target.__qa26LongTaskObserver = new PerformanceObserver((list) => {
+        target.__qa26LongTasks?.push(...list.getEntries().map((entry) => Math.round(entry.duration)))
+      })
+      target.__qa26LongTaskObserver.observe({ type: 'longtask', buffered: true })
+    })
+    const statusSamples: number[] = []
+    const captureStatusFailure = async (disable: boolean) => {
+      const renderedRow = await Promise.race([
+        userRow.innerText().then((text) => ({ status: 'read' as const, text })),
+        new Promise<{ status: 'timeout' }>((resolve) => setTimeout(() => resolve({ status: 'timeout' }), 5000)),
+      ])
+      const longTasks = await Promise.race([
+        adminPage.evaluate(() => (window as Window & { __qa26LongTasks?: number[] }).__qa26LongTasks ?? [])
+          .then((durations) => ({ status: 'read' as const, durations })),
+        new Promise<{ status: 'timeout' }>((resolve) => setTimeout(() => resolve({ status: 'timeout' }), 5000)),
+      ])
+      const readback = await Promise.race([
+        api(adminPage, 'GET', '/admin/users').then((users) => {
+          const user = (users as Array<{ id: string; disabled_at: string | null; session_count: number }>).find((item) => item.id === targetUserId)
+          return { status: 'read' as const, disabled_at: user?.disabled_at, session_count: user?.session_count }
+        }),
+        new Promise<{ status: 'timeout' }>((resolve) => setTimeout(() => resolve({ status: 'timeout' }), 5000)),
+      ])
+      const diagnostic = { sample: statusSamples.length + 1, expected_disabled: disable, rendered_row: renderedRow, long_tasks: longTasks, server_readback: readback }
+      await testInfo.attach('admin-user-status-failure-diagnostics.json', { body: JSON.stringify(diagnostic, null, 2), contentType: 'application/json' })
+      console.log(`DEV-QA26_ADMIN_USER_STATUS_FAILURE ${JSON.stringify(diagnostic)}`)
+    }
+    const toggleUser = async (disable: boolean) => {
+      const button = userRow.locator('button').filter({ hasText: disable ? '禁用' : '启用' })
+      const startedAt = Date.now()
+      const responsePromise = adminPage.waitForResponse((response) =>
+        new URL(response.url()).pathname.startsWith('/api/v1/admin/users/') && response.request().method() === 'PATCH')
+      await button.click()
+      const response = await responsePromise
+      expect(response.status()).toBe(200)
+      try {
+        await expect.poll(async () => {
+          const text = await userRow.innerText()
+          return {
+            disabled: text.includes('已禁用'),
+            sessionZero: text.includes('会话 0'),
+            button: text.includes(disable ? '启用' : '禁用'),
+          }
+        }, { timeout: 15000 }).toEqual({ disabled: disable, sessionZero: true, button: true })
+      } catch (error) {
+        await captureStatusFailure(disable).catch((diagnosticError) => console.log(`DEV-QA26_ADMIN_USER_STATUS_FAILURE_DIAGNOSTIC_ERROR ${String(diagnosticError)}`))
+        throw error
+      }
+      const durationMs = Date.now() - startedAt
+      statusSamples.push(durationMs)
+      console.log(`DEV-QA26_ADMIN_USER_STATUS_SAMPLE_ELECTRON ${JSON.stringify({ sample: statusSamples.length, disable, duration_ms: durationMs })}`)
+      return { status: response.status(), duration_ms: durationMs }
+    }
+    const disableResult = await toggleUser(true)
+    const disabledUsers = await api(adminPage, 'GET', '/admin/users') as Array<{ id: string; disabled_at: string | null; session_count: number }>
+    const disabledUser = disabledUsers.find((item) => item.id === targetUserId)
+    const disableEvidence = { user_id: targetUserId, patch_status: disableResult.status, disabled_at: disabledUser?.disabled_at,
+      session_count: disabledUser?.session_count, row_count: disabledUsers.length, ui_refresh_ms: disableResult.duration_ms }
+    await testInfo.attach('admin-users-after-disable.json', { body: JSON.stringify(disableEvidence, null, 2), contentType: 'application/json' })
+    console.log(`DEV-QA26_ADMIN_USERS_AFTER_DISABLE ${JSON.stringify(disableEvidence)}`)
+    expect(disabledUser?.disabled_at).toBeTruthy()
+    expect(disabledUser?.session_count).toBe(0)
     expect(await userPage.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(401)
 
-    const enableButton = userRow.getByRole('button', { name: '启用', exact: true })
-    const enableResponse = adminPage.waitForResponse((response) =>
-      new URL(response.url()).pathname.startsWith('/api/v1/admin/users/') && response.request().method() === 'PATCH')
-    await enableButton.click()
-    expect((await enableResponse).status()).toBe(200)
-    await expect(userRow.getByRole('button', { name: '禁用', exact: true })).toBeVisible()
-    await expect(userRow.getByText(/会话 0/)).toBeVisible()
+    const enableResult = await toggleUser(false)
+    const enabledUsers = await api(adminPage, 'GET', '/admin/users') as Array<{ id: string; disabled_at: string | null; session_count: number }>
+    const enabledUser = enabledUsers.find((item) => item.id === targetUserId)
+    const enableRefresh = { user_id: targetUserId, disabled_at: enabledUser?.disabled_at, session_count: enabledUser?.session_count,
+      row_count: enabledUsers.length, patch_status: enableResult.status, ui_refresh_ms: enableResult.duration_ms }
+    await testInfo.attach('admin-users-after-enable.json', { body: JSON.stringify(enableRefresh, null, 2), contentType: 'application/json' })
+    console.log(`DEV-QA26_ADMIN_USERS_AFTER_ENABLE ${JSON.stringify(enableRefresh)}`)
+    expect(enabledUser?.disabled_at).toBeNull()
+    expect(enabledUser?.session_count).toBe(0)
+
+    for (let index = 0; index < 18; index++) await toggleUser(index % 2 === 0)
+    const finalUsers = await api(adminPage, 'GET', '/admin/users') as Array<{ id: string; disabled_at: string | null; session_count: number }>
+    const finalUser = finalUsers.find((item) => item.id === targetUserId)
+    expect(finalUser?.disabled_at).toBeNull()
+    expect(finalUser?.session_count).toBe(0)
+    const sortedStatusSamples = [...statusSamples].sort((a, b) => a - b)
+    const statusMetrics = { environment: 'Windows native Electron; local mock API', sample_count: statusSamples.length,
+      samples_ms: statusSamples, p50_ms: sortedStatusSamples[9], p95_ms: sortedStatusSamples[18], failed: 0 }
+    await testInfo.attach('admin-user-status-20-samples.json', { body: JSON.stringify(statusMetrics, null, 2), contentType: 'application/json' })
+    console.log(`DEV-QA26_METRIC_ADMIN_USER_STATUS_ELECTRON ${JSON.stringify(statusMetrics)}`)
+    expect(statusSamples).toHaveLength(20)
+    const longTasks = await adminPage.evaluate(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const target = window as Window & { __qa26LongTasks?: number[] }
+      return target.__qa26LongTasks ?? []
+    })
+    await testInfo.attach('admin-list-render-longtasks.json', { body: JSON.stringify({ durations_ms: longTasks, max_ms: Math.max(0, ...longTasks) }, null, 2), contentType: 'application/json' })
+    console.log(`DEV-QA26_ADMIN_LIST_LONGTASKS ${JSON.stringify({ count: longTasks.length, max_ms: Math.max(0, ...longTasks) })}`)
 
     await userPage.goto(`${baseURL}/login`)
     await userPage.getByLabel('用户名', { exact: true }).fill(username)
@@ -894,6 +998,14 @@ test('DEV-QA26 Windows Electron系统用户停用后暂停例行任务并逐项�
     testInfo.attach('system-user-disable-journey.json', { body: JSON.stringify({ environment: 'Windows native Electron; local mock API', journey_ms: journeyMs, failed: 0 }, null, 2), contentType: 'application/json' })
     console.log(`DEV-QA26_SYSTEM_USER_DISABLE_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local mock API', journey_ms: journeyMs, failed: 0 })}`)
   } finally {
+    if (adminPage && targetUserId) {
+      try {
+        const users = await api(adminPage, 'GET', '/admin/users') as Array<{ id: string; disabled_at: string | null }>
+        if (users.find((item) => item.id === targetUserId)?.disabled_at) {
+          await api(adminPage, 'PATCH', `/admin/users/${targetUserId}`, { disabled: false })
+        }
+      } catch { /* 尽力恢复本测试创建的账号；保留原始测试错误。 */ }
+    }
     await closeQaElectron(adminApp)
     await closeQaElectron(userApp)
     if (!resolve(adminData).startsWith(resolve(tmpdir()) + sep) || !basename(adminData).startsWith('ops-qa26-routine-admin-disable-')) throw new Error('拒绝清理测试目录之外路径')
