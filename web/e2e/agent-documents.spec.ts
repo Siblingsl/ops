@@ -485,6 +485,47 @@ test('DEV-QA26 G7 Web filechooser上传4MiB 100页256条目DOCX并核对解析�
   expect(messagePosts).toBe(0)
 })
 
+test('DEV-QA26 G7 Web filechooser上传5MiB 100页256条目DOCX并核对解析回执', async ({ page, baseURL }) => {
+  test.setTimeout(120_000)
+  await prepare(page, baseURL!)
+  let messagePosts = 0
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+  })
+  const chooser = page.waitForEvent('filechooser')
+  const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST', { timeout: 60_000 })
+  const expandedBytes = 5 * 1024 * 1024
+  const pages = 100
+  const totalEntries = 256
+  const file = docxLargePageDocumentFixture(expandedBytes, pages, totalEntries)
+  const directoryEnd = file.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]))
+  expect(directoryEnd).toBe(file.length - 22)
+  expect(file.readUInt16LE(directoryEnd + 10)).toBe(totalEntries)
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await chooser).setFiles({ name: 'web-document-5mib-100p-256e.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: file })
+  const response = await upload
+  expect(response.status()).toBe(200)
+  const receipt = await response.json() as { id: string; parse_status: string; page_count: number; extracted_chars: number; injected_chars: number; truncated_from: number; truncated_to: number }
+  await expect(page.getByLabel('web-document-5mib-100p-256e.docx ready', { exact: true })).toBeVisible({ timeout: 60_000 })
+  expect(receipt).toMatchObject({ parse_status: 'ready', page_count: pages, injected_chars: 20_000, truncated_from: 20_001 })
+  expect(receipt.extracted_chars).toBeGreaterThan(expandedBytes - 10_000)
+  expect(receipt.truncated_to).toBe(receipt.extracted_chars)
+  const original = await page.evaluate(async (id) => {
+    const response = await fetch('/api/v1/agent/attachments/' + id + '/file')
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    return { status: response.status, bytes: bytes.byteLength, signature: new TextDecoder().decode(bytes.slice(0, 4)) }
+  }, receipt.id)
+  expect(original).toMatchObject({ status: 200, signature: 'PK\u0003\u0004' })
+  expect(original.bytes).toBeGreaterThan(0)
+  const deletion = page.waitForResponse((item) => new URL(item.url()).pathname === `/api/v1/agent/attachments/${receipt.id}` && item.request().method() === 'DELETE')
+  await page.getByRole('button', { name: '移除 web-document-5mib-100p-256e.docx', exact: true }).click()
+  expect((await deletion).status()).toBe(200)
+  const timing = response.request().timing()
+  console.log(`DEV-QA26_METRIC_DOCX_5MIB_100P_256E_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and WASI parser', expanded_document_bytes: expandedBytes, pages, entries: totalEntries, uploaded_bytes: file.byteLength, extracted_chars: receipt.extracted_chars, upload_ms: Number((timing.responseEnd - timing.requestStart).toFixed(2)), unexpected_failures: 0 })}`)
+  expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+  expect(messagePosts).toBe(0)
+})
+
 test('DEV-QA26 G7 Web filechooser探测6MiB DOCX解析边界', async ({ page, baseURL }) => {
   test.setTimeout(120_000)
   await prepare(page, baseURL!)
