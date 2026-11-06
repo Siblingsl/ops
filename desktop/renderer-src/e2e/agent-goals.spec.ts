@@ -300,3 +300,117 @@ test('DEV-QA26 G7-07 Windows Electron目标预算在整应用重启后保留并�
   }
 })
 
+test('DEV-QA26 G7-07 Windows Electron两设备同时竞争最后一份目标预算只接受一个运行', async ({ baseURL }, testInfo) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  const firstUserData = await mkdtemp(join(tmpdir(), 'ops-qa26-g7-goal-race-first-'))
+  const secondUserData = await mkdtemp(join(tmpdir(), 'ops-qa26-g7-goal-race-second-'))
+  let firstApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  let secondApp: Awaited<ReturnType<typeof _electron.launch>> | undefined
+  const started = performance.now()
+  try {
+    const launch = (userData: string) => _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: [`--user-data-dir=${userData}`, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    firstApp = await launch(firstUserData)
+    const firstPage = await firstApp.firstWindow()
+    const conversationID = await goalJourney(firstPage, baseURL!, `qa26-g7-goal-race-${testInfo.repeatEachIndex}-${Date.now()}`)
+    const me = await firstPage.evaluate(async () => (await fetch('/api/v1/auth/me')).json())
+    const beforeRaise = await api(firstPage, 'GET', `/agent/conversations/${conversationID}`)
+    expect(beforeRaise.goal).toMatchObject({ status: 'budget_limited', run_budget: 2, used_runs: 2 })
+    const userMessageCount = beforeRaise.messages.filter((message: { role: string }) => message.role === 'user').length
+    const firstPanelButton = firstPage.getByRole('button', { name: '任务面板', exact: true })
+    if (await firstPanelButton.getAttribute('aria-expanded') !== 'true') await firstPanelButton.click()
+    const firstPanel = firstPage.getByTestId('desktop-agent-side-panel')
+    await firstPanel.getByRole('button', { name: '编辑目标', exact: true }).click()
+    await firstPanel.getByLabel('运行次数').fill('4')
+    const savedGoal = firstPage.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/conversations/${conversationID}/goal` && response.request().method() === 'PATCH')
+    await firstPanel.getByRole('button', { name: '保存新版本', exact: true }).click()
+    expect((await savedGoal).status()).toBe(200)
+    const raisedGoal = await api(firstPage, 'GET', `/agent/conversations/${conversationID}`)
+    expect(raisedGoal.goal).toMatchObject({ status: 'budget_limited', run_budget: 4, used_runs: 2 })
+    const resume = firstPage.waitForResponse((response) => /\/agent\/goals\/[^/]+\/control$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+    await firstPanel.getByRole('button', { name: '恢复并继续', exact: true }).click()
+    const resumed = await resume
+    expect(resumed.status()).toBe(200)
+    await expect.poll(async () => {
+      const goal = (await api(firstPage, 'GET', `/agent/conversations/${conversationID}`)).goal
+      return `${goal?.status}:${goal?.used_runs}`
+    }).toBe('active:3')
+    await expect.poll(async () => (await api(firstPage, 'GET', `/agent/conversations/${conversationID}`)).active_run).toBeNull()
+
+    secondApp = await launch(secondUserData)
+    const secondPage = await secondApp.firstWindow()
+    await secondPage.goto(`${baseURL}/login`)
+    await secondPage.getByLabel('用户名', { exact: true }).fill(me.username)
+    await secondPage.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+    await secondPage.getByRole('button', { name: '登录', exact: true }).click()
+    await expect.poll(() => secondPage.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
+    await secondPage.goto(`${baseURL}/agent`)
+    const privacy = secondPage.getByRole('dialog').filter({ has: secondPage.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
+    if (await privacy.count()) await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
+    await openDesktopAccountSwitcher(secondPage)
+    const picker = secondPage.getByTestId('desktop-context-menu')
+    await picker.getByRole('tab', { name: /小红书/ }).click()
+    await picker.getByRole('button', { name: 'AW09 目标验收号', exact: true }).click()
+    await secondPage.goto(`${baseURL}/agent/c/${conversationID}`)
+    await expect(secondPage.locator('.desktop-agent-workbench')).toBeVisible()
+    const secondPanelButton = secondPage.getByRole('button', { name: '任务面板', exact: true })
+    if (await secondPanelButton.getAttribute('aria-expanded') !== 'true') await secondPanelButton.click()
+    await expect(secondPage.getByTestId('desktop-agent-side-panel').getByText('核对本周运营数据并给出一条可审阅建议', { exact: true })).toBeVisible()
+
+    const firstResponse = firstPage.waitForResponse((response) => /\/agent\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+    const secondResponse = secondPage.waitForResponse((response) => /\/agent\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+    await Promise.all([
+      firstPage.locator('textarea').last().fill('第一台设备竞争最后一份目标预算。'),
+      secondPage.locator('textarea').last().fill('第二台设备竞争最后一份目标预算。'),
+    ])
+    const clickStarted = performance.now()
+    await Promise.all([
+      firstPage.getByRole('button', { name: '发送', exact: true }).click(),
+      secondPage.getByRole('button', { name: '发送', exact: true }).click(),
+    ])
+    const responses = await Promise.all([firstResponse, secondResponse])
+    const statuses = responses.map((response) => response.status()).sort((left, right) => left - right)
+    expect(statuses).toEqual([202, 409])
+    const rejected = responses.find((response) => response.status() === 409)!
+    expect(await rejected.text()).toContain('agent_run_busy')
+    const accepted = responses.find((response) => response.status() === 202)!
+    const acceptedBody = await accepted.json()
+    expect(acceptedBody.run_id).toBeTruthy()
+    const clickDuration = Math.round(performance.now() - clickStarted)
+
+    await expect.poll(async () => (await api(firstPage, 'GET', `/agent/conversations/${conversationID}`)).active_run).toBeNull()
+    const afterRace = await api(firstPage, 'GET', `/agent/conversations/${conversationID}`)
+    expect(afterRace.goal).toMatchObject({ status: 'budget_limited', run_budget: 4, used_runs: 4 })
+    expect(afterRace.last_run.id).toBe(acceptedBody.run_id)
+    expect(afterRace.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(userMessageCount + 1)
+    const afterBudgetMessage = firstPage.waitForResponse((response) => /\/agent\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+    await firstPage.locator('textarea').last().fill('两设备运行结束且目标预算用尽后不应继续创建运行。')
+    await firstPage.getByRole('button', { name: '发送', exact: true }).click()
+    const budgetResponse = await afterBudgetMessage
+    expect(budgetResponse.status()).toBe(429)
+    expect(await budgetResponse.text()).toContain('agent_goal_budget_reached')
+    const finalDetail = await api(firstPage, 'GET', `/agent/conversations/${conversationID}`)
+    expect(finalDetail.goal).toMatchObject({ status: 'budget_limited', run_budget: 4, used_runs: 4 })
+    expect(finalDetail.last_run.id).toBe(acceptedBody.run_id)
+    expect(finalDetail.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(userMessageCount + 1)
+    const evidence = { conversation_id: conversationID, user_id: me.user_id, statuses,
+      conflict_code: 'agent_run_busy', accepted_run_id: acceptedBody.run_id, goal: finalDetail.goal,
+      budget_limited_message_status: budgetResponse.status(), budget_limited_message_code: 'agent_goal_budget_reached',
+      user_messages_before: userMessageCount,
+      user_messages_after: finalDetail.messages.filter((message: { role: string }) => message.role === 'user').length,
+      concurrent_click_to_responses_ms: clickDuration, duration_ms: Math.round(performance.now() - started) }
+    await testInfo.attach('qa26-g7-goal-cross-device-race.json', { body: Buffer.from(JSON.stringify(evidence, null, 2)), contentType: 'application/json' })
+    console.log(`[DEV-QA26 G7-07 cross-device-race] ${JSON.stringify(evidence)}`)
+  } finally {
+    await secondApp?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await secondApp?.close()
+    await firstApp?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await firstApp?.close()
+    for (const userData of [firstUserData, secondUserData]) {
+      if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-qa26-g7-goal-race-')) throw new Error('拒绝清理测试目录之外路径')
+      await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  }
+})
+
