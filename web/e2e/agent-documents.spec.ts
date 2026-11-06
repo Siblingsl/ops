@@ -86,7 +86,7 @@ function docxFixture(overrides: Record<string, string | Buffer> = {}) {
   return zipFixture({
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>',
     '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>',
-    'word/document.xml': '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>AW11 DOCX 原始资料</w:t></w:r></w:p></w:body></w:document>',
+    'word/document.xml': '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>AW11 DOCX 原始资料</w:t></w:r></w:p></w:body></w:document>',
     'docProps/app.xml': '<Properties><Pages>1</Pages></Properties>',
     ...overrides,
   })
@@ -94,15 +94,15 @@ function docxFixture(overrides: Record<string, string | Buffer> = {}) {
 
 function docxCaseCollisionFixture() {
   return zipFixtureEntries([
-    ['word/document.xml', '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>第一部件</w:t></w:r></w:p></w:body></w:document>'],
-    ['WORD/DOCUMENT.XML', '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>冲突部件</w:t></w:r></w:p></w:body></w:document>'],
+    ['word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>第一部件</w:t></w:r></w:p></w:body></w:document>'],
+    ['WORD/DOCUMENT.XML', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>冲突部件</w:t></w:r></w:p></w:body></w:document>'],
     ['docProps/app.xml', '<Properties><Pages>1</Pages></Properties>'],
   ])
 }
 
 function docxNonCanonicalPathFixture() {
   return zipFixtureEntries([
-    ['word/./document.xml', '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>点段路径</w:t></w:r></w:p></w:body></w:document>'],
+    ['word/./document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>点段路径</w:t></w:r></w:p></w:body></w:document>'],
     ['docProps/app.xml', '<Properties><Pages>1</Pages></Properties>'],
   ])
 }
@@ -143,7 +143,7 @@ function docxEncryptedEntryFlagFixture() {
   throw new Error('DOCX central directory entry not found')
 }
 
-function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type' | 'override-main-document-content-type') {
+function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missing-content-types' | 'missing-root-relationships' | 'missing-office-document-relationship' | 'missing-main-document-content-type' | 'override-main-document-content-type' | 'foreign-main-document-namespace' | 'wrong-main-document-root' | 'missing-main-document-body') {
   const external = externalRootRelationship
     ? '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid" TargetMode="External"/>'
     : ''
@@ -164,13 +164,22 @@ function minimalOPCDocxFixture(externalRootRelationship = false, defect?: 'missi
   if (defect === 'override-main-document-content-type') {
     files['[Content_Types].xml'] = '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/document.xml" ContentType="application/xml"/></Types>'
   }
+  if (defect === 'foreign-main-document-namespace') {
+    files['word/document.xml'] = '<w:document xmlns:w="urn:foreign"><w:body><w:p><w:r><w:t>错误命名空间</w:t></w:r></w:p></w:body></w:document>'
+  }
+  if (defect === 'wrong-main-document-root') {
+    files['word/document.xml'] = '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>错误根元素</w:t></w:r></w:p></w:body>'
+  }
+  if (defect === 'missing-main-document-body') {
+    files['word/document.xml'] = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>缺失正文容器</w:t></w:r></w:p></w:document>'
+  }
   return zipFixture(files)
 }
 
 function docxPageFixture(pages: number, overrides: Record<string, string> = {}) {
   const pageBreaks = '<w:lastRenderedPageBreak/>'.repeat(Math.max(0, pages - 1))
   return docxFixture({
-    'word/document.xml': `<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>分页边界资料</w:t></w:r>${pageBreaks}</w:p></w:body></w:document>`,
+    'word/document.xml': `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>分页边界资料</w:t></w:r>${pageBreaks}</w:p></w:body></w:document>`,
     'docProps/app.xml': `<Properties><Pages>${pages}</Pages></Properties>`,
     ...overrides,
   })
@@ -184,7 +193,7 @@ function docxEntryCountFixture(totalEntries: number) {
 
 function docxExternalEntityFixture() {
   return docxFixture({
-    'word/document.xml': '<!DOCTYPE w:document [<!ENTITY ext SYSTEM "file:///OPS-QA26-NO-READ">]><w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>&ext;</w:t></w:r></w:p></w:body></w:document>',
+    'word/document.xml': '<!DOCTYPE w:document [<!ENTITY ext SYSTEM "file:///OPS-QA26-NO-READ">]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>&ext;</w:t></w:r></w:p></w:body></w:document>',
   })
 }
 
@@ -192,7 +201,7 @@ function docxExpandedFixture(totalExpandedBytes: number) {
   const files: Record<string, Buffer> = {
     '[Content_Types].xml': Buffer.from('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>'),
     '_rels/.rels': Buffer.from('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>'),
-    'word/document.xml': Buffer.from('<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>ZIP 上界资料</w:t></w:r></w:p></w:body></w:document>'),
+    'word/document.xml': Buffer.from('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>ZIP 上界资料</w:t></w:r></w:p></w:body></w:document>'),
     'docProps/app.xml': Buffer.from('<Properties><Pages>1</Pages></Properties>'),
   }
   const baseBytes = Object.values(files).reduce((total, data) => total + data.length, 0)
@@ -202,7 +211,7 @@ function docxExpandedFixture(totalExpandedBytes: number) {
 }
 
 function docxLargeDocumentFixture(expandedDocumentBytes: number) {
-  const prefix = Buffer.from('<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>')
+  const prefix = Buffer.from('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>')
   const suffix = Buffer.from('</w:t></w:r></w:p></w:body></w:document>')
   const textBytes = expandedDocumentBytes - prefix.length - suffix.length
   if (textBytes < 1) throw new Error('DOCX document entry must contain text')
@@ -215,7 +224,7 @@ function docxLargeDocumentFixture(expandedDocumentBytes: number) {
 }
 
 function docxLargePageDocumentFixture(expandedDocumentBytes: number, pages: number, totalEntries: number) {
-  const prefix = Buffer.from('<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>')
+  const prefix = Buffer.from('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>')
   const pageBreaks = Buffer.from('<w:lastRenderedPageBreak/>'.repeat(Math.max(0, pages - 1)))
   const closeRun = Buffer.from('</w:t></w:r>')
   const closeDocument = Buffer.from('</w:p></w:body></w:document>')
@@ -412,6 +421,8 @@ test('DEV-QA26 G7-03 Web最小OPC DOCX成功读取原件并拒绝根关系外链
   expect(externalBody.error?.code).toBe('agent_attachment_parse_failed')
   await expect(page.getByLabel('external-root.docx failed', { exact: true })).toContainText('宏、嵌入对象或外链资源')
   await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+  await page.getByRole('button', { name: '移除 external-root.docx', exact: true }).click()
+  await expect(page.getByLabel('external-root.docx failed', { exact: true })).toHaveCount(0)
 
   const incompleteCases = [
     { defect: 'missing-content-types', name: 'missing-content-types.docx' },
@@ -419,6 +430,9 @@ test('DEV-QA26 G7-03 Web最小OPC DOCX成功读取原件并拒绝根关系外链
     { defect: 'missing-office-document-relationship', name: 'missing-office-document-relationship.docx' },
     { defect: 'missing-main-document-content-type', name: 'missing-main-document-content-type.docx' },
     { defect: 'override-main-document-content-type', name: 'override-main-document-content-type.docx' },
+    { defect: 'foreign-main-document-namespace', name: 'foreign-main-document-namespace.docx' },
+    { defect: 'wrong-main-document-root', name: 'wrong-main-document-root.docx' },
+    { defect: 'missing-main-document-body', name: 'missing-main-document-body.docx' },
   ] as const
   const incompleteUploadMs: number[] = []
   for (const item of incompleteCases) {
@@ -435,6 +449,8 @@ test('DEV-QA26 G7-03 Web最小OPC DOCX成功读取原件并拒绝根关系外链
     expect(body.error?.code).toBe('agent_attachment_parse_failed')
     await expect(page.getByLabel(`${item.name} failed`, { exact: true })).toContainText('DOCX 已加密、损坏或解压内容超限')
     await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    await page.getByRole('button', { name: `移除 ${item.name}`, exact: true }).click()
+    await expect(page.getByLabel(`${item.name} failed`, { exact: true })).toHaveCount(0)
   }
   expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
   expect(messagePosts).toBe(0)
@@ -538,7 +554,7 @@ test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({
   for (const [name, parts] of [
     ['missing-pages.docx', { 'docProps/app.xml': '<Properties></Properties>' }],
     ['mismatched-pages.docx', {
-      'word/document.xml': '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>分页不一致</w:t></w:r><w:r><w:br w:type="page"/></w:r></w:p></w:body></w:document>',
+      'word/document.xml': '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>分页不一致</w:t></w:r><w:r><w:br w:type="page"/></w:r></w:p></w:body></w:document>',
     }],
   ] as const) {
     const nextChooser = page.waitForEvent('filechooser')
@@ -557,7 +573,7 @@ test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({
     { name: 'malformed.csv', mimeType: 'text/csv', buffer: Buffer.from('a,b\n"unfinished'), message: 'CSV 为空或格式损坏' },
     { name: 'corrupt.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('not a zip package'), message: 'DOCX 已加密、损坏或解压内容超限' },
     { name: 'embedded.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ 'word/embeddings/oleObject1.bin': 'embedded object' }), message: '宏、嵌入对象或外链资源' },
-    { name: 'malformed-xml.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ 'word/document.xml': '<w:document xmlns:w="urn:w"><w:body><w:p><w:t>不完整 XML</w:p></w:body></w:document>' }), message: 'DOCX 已加密、损坏或解压内容超限' },
+    { name: 'malformed-xml.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ 'word/document.xml': '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:t>不完整 XML</w:p></w:body></w:document>' }), message: 'DOCX 已加密、损坏或解压内容超限' },
     { name: 'external-entity.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxExternalEntityFixture(), message: 'DOCX 已加密、损坏或解压内容超限' },
     { name: 'too-many-entries.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxEntryCountFixture(257), message: 'DOCX 已加密、损坏或解压内容超限' },
     { name: 'too-many-pages.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxPageFixture(101), message: '文档超过 100 页' },
@@ -647,7 +663,7 @@ test('DEV-QA26 Web DOCX解析后疑似密钥隔离且不回显', async ({ page, 
     if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
   })
   const secret = 'sk-qa26docxsecret0123456789ABCDEF'
-  const document = docxFixture({ 'word/document.xml': `<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>密钥 ${secret}</w:t></w:r></w:p></w:body></w:document>` })
+  const document = docxFixture({ 'word/document.xml': `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>密钥 ${secret}</w:t></w:r></w:p></w:body></w:document>` })
   const chooser = page.waitForEvent('filechooser')
   const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST', { timeout: 30_000 })
   const started = performance.now()

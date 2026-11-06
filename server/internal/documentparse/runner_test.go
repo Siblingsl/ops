@@ -64,7 +64,7 @@ func TestParseCSVRejectsEncodingAndShapeLimits(t *testing.T) {
 
 func TestParseDOCXExtractsTextAndRejectsExternalLinksAndMacros(t *testing.T) {
 	data := docxFixture(t, map[string]string{
-		"word/document.xml": "<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>运营笔记</w:t></w:r></w:p></w:body></w:document>",
+		"word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>运营笔记</w:t></w:r></w:p></w:body></w:document>",
 		"docProps/app.xml":  "<Properties><Pages>1</Pages></Properties>",
 	})
 	parsed, err := parseInWASI("notes.docx", data)
@@ -76,7 +76,7 @@ func TestParseDOCXExtractsTextAndRejectsExternalLinksAndMacros(t *testing.T) {
 	}
 
 	external := docxFixture(t, map[string]string{
-		"word/document.xml":            "<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>",
+		"word/document.xml":            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>",
 		"word/_rels/document.xml.rels": "<Relationships><Relationship TargetMode=\"External\" Target=\"https://example.invalid\"/></Relationships>",
 	})
 	got, err := parseInWASI("notes.docx", external)
@@ -85,7 +85,7 @@ func TestParseDOCXExtractsTextAndRejectsExternalLinksAndMacros(t *testing.T) {
 	}
 
 	macro := docxFixture(t, map[string]string{
-		"word/document.xml":   "<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>",
+		"word/document.xml":   "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>",
 		"[Content_Types].xml": "<Types><Default ContentType=\"application/vnd.ms-word.document.macroEnabled.main+xml\"/></Types>",
 	})
 	got, err = parseInWASI("notes.docx", macro)
@@ -96,7 +96,7 @@ func TestParseDOCXExtractsTextAndRejectsExternalLinksAndMacros(t *testing.T) {
 	delete(missingPaginationFiles, "docProps/app.xml")
 	missingPaginationFiles["[Content_Types].xml"] = `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`
 	missingPaginationFiles["_rels/.rels"] = `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`
-	missingPaginationFiles["word/document.xml"] = `<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>`
+	missingPaginationFiles["word/document.xml"] = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>`
 	missingPagination := docxRawFixture(t, missingPaginationFiles)
 	got, err = parseInWASI("notes.docx", missingPagination)
 	if err == nil || got.ErrorCode != "docx_page_count_unverifiable" {
@@ -207,6 +207,46 @@ func TestParseDOCXAcceptsMainDocumentContentTypeDefaultMapping(t *testing.T) {
 	}
 }
 
+func TestParseDOCXRejectsNonWordprocessingMainDocumentStructure(t *testing.T) {
+	cases := []struct {
+		name     string
+		document string
+	}{
+		{
+			name:     "foreign namespace",
+			document: `<w:document xmlns:w="urn:foreign"><w:body><w:p><w:r><w:t>not WordprocessingML</w:t></w:r></w:p></w:body></w:document>`,
+		},
+		{
+			name:     "wrong root element",
+			document: `<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>not a document root</w:t></w:r></w:p></w:body>`,
+		},
+		{
+			name:     "missing main body",
+			document: `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>missing body</w:t></w:r></w:p></w:document>`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := minimalOPCDOCXFiles(false)
+			files["word/document.xml"] = tc.document
+			parsed, err := parseInWASI("invalid-main-document.docx", docxRawFixture(t, files))
+			if err == nil || parsed.ErrorCode != "docx_invalid" {
+				t.Fatalf("non-Wordprocessing main-document structure must be rejected: result=%+v err=%v", parsed, err)
+			}
+		})
+	}
+}
+
+func TestParseDOCXAcceptsStrictWordprocessingMainDocument(t *testing.T) {
+	files := minimalOPCDOCXFiles(false)
+	files["_rels/.rels"] = strings.Replace(files["_rels/.rels"], "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument", "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument", 1)
+	files["word/document.xml"] = strings.Replace(files["word/document.xml"], "http://schemas.openxmlformats.org/wordprocessingml/2006/main", "http://purl.oclc.org/ooxml/wordprocessingml/main", 1)
+	parsed, err := parseInWASI("strict-wordprocessing-main-document.docx", docxRawFixture(t, files))
+	if err != nil || !strings.Contains(parsed.Text, "最小 OPC 文档") {
+		t.Fatalf("strict WordprocessingML main document should parse: result=%+v err=%v", parsed, err)
+	}
+}
+
 func TestParseDOCXRejectsHighCompressionExpandedSizeUnderWASI(t *testing.T) {
 	const expandedLimit = 96 << 20
 	compressed, ratio := highCompressionDOCXFixture(t)
@@ -273,7 +313,7 @@ func highCompressionDOCXFixture(t *testing.T) ([]byte, float64) {
 	files := map[string][]byte{
 		"[Content_Types].xml": []byte(minimalOPCDOCXFiles(false)["[Content_Types].xml"]),
 		"_rels/.rels":         []byte(minimalOPCDOCXFiles(false)["_rels/.rels"]),
-		"word/document.xml":   []byte("<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>high compression</w:t></w:r></w:p></w:body></w:document>"),
+		"word/document.xml":   []byte("<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>high compression</w:t></w:r></w:p></w:body></w:document>"),
 		"docProps/app.xml":    []byte("<Properties><Pages>1</Pages></Properties>"),
 	}
 	baseExpanded := 0
@@ -317,7 +357,7 @@ func highCompressionDOCXFixture(t *testing.T) ([]byte, float64) {
 
 func compressedDocumentEntryDOCXFixture(t *testing.T, expandedDocumentEntry int) ([]byte, float64) {
 	t.Helper()
-	prefix := []byte(`<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>`)
+	prefix := []byte(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>`)
 	suffix := []byte(`</w:t></w:r></w:p></w:body></w:document>`)
 	var compressed bytes.Buffer
 	archive := zip.NewWriter(&compressed)
@@ -469,8 +509,8 @@ func docxCaseCollisionFixture(t *testing.T) []byte {
 	var out bytes.Buffer
 	w := zip.NewWriter(&out)
 	entries := [][2]string{
-		{"word/document.xml", "<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>第一部件</w:t></w:r></w:p></w:body></w:document>"},
-		{"WORD/DOCUMENT.XML", "<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>冲突部件</w:t></w:r></w:p></w:body></w:document>"},
+		{"word/document.xml", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>第一部件</w:t></w:r></w:p></w:body></w:document>"},
+		{"WORD/DOCUMENT.XML", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>冲突部件</w:t></w:r></w:p></w:body></w:document>"},
 		{"docProps/app.xml", "<Properties><Pages>1</Pages></Properties>"},
 	}
 	for _, item := range entries {
@@ -493,7 +533,7 @@ func docxNonCanonicalPathFixture(t *testing.T) []byte {
 	var out bytes.Buffer
 	w := zip.NewWriter(&out)
 	entries := [][2]string{
-		{"word/./document.xml", "<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>点段路径</w:t></w:r></w:p></w:body></w:document>"},
+		{"word/./document.xml", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>点段路径</w:t></w:r></w:p></w:body></w:document>"},
 		{"docProps/app.xml", "<Properties><Pages>1</Pages></Properties>"},
 	}
 	for _, item := range entries {
@@ -514,7 +554,7 @@ func docxNonCanonicalPathFixture(t *testing.T) []byte {
 func docxEncryptedEntryFlagFixture(t *testing.T) []byte {
 	t.Helper()
 	data := docxFixture(t, map[string]string{
-		"word/document.xml": "<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>加密条目标志</w:t></w:r></w:p></w:body></w:document>",
+		"word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>加密条目标志</w:t></w:r></w:p></w:body></w:document>",
 		"docProps/app.xml":  "<Properties><Pages>1</Pages></Properties>",
 	})
 	signature := []byte{0x50, 0x4b, 0x01, 0x02}

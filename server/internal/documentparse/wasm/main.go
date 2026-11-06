@@ -30,6 +30,8 @@ const (
 
 	opcContentTypesNamespace       = "http://schemas.openxmlformats.org/package/2006/content-types"
 	opcRelationshipsNamespace      = "http://schemas.openxmlformats.org/package/2006/relationships"
+	wordprocessingMainNamespace    = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+	strictWordprocessingMainNS     = "http://purl.oclc.org/ooxml/wordprocessingml/main"
 	wordDocumentContentType        = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
 	wordDocumentRelationship       = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
 	strictWordDocumentRelationship = "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument"
@@ -311,6 +313,10 @@ func parseDOCX(data []byte) (result, error) {
 	if err != nil || !utf8.Valid(content) {
 		return result{}, invalid("docx_encoding_invalid")
 	}
+	documentNamespace, err := wordprocessingMainDocumentNamespace(content)
+	if err != nil || documentNamespace == "" {
+		return result{}, invalid("docx_invalid")
+	}
 	e := &extractor{}
 	decoder := xml.NewDecoder(bytes.NewReader(content))
 	pageBreaks := 0
@@ -322,7 +328,7 @@ func parseDOCX(data []byte) (result, error) {
 		if err != nil {
 			return result{}, invalid("docx_invalid")
 		}
-		if item, ok := token.(xml.StartElement); ok {
+		if item, ok := token.(xml.StartElement); ok && item.Name.Space == documentNamespace {
 			switch item.Name.Local {
 			case "t":
 				var text string
@@ -359,6 +365,41 @@ func parseDOCX(data []byte) (result, error) {
 	out.Pages = &declaredPages
 	out.PageBasis = "docx_saved_pagination"
 	return out, nil
+}
+
+func wordprocessingMainDocumentNamespace(data []byte) (string, error) {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	depth := 0
+	documentNamespace := ""
+	rootSeen := false
+	bodyCount := 0
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			if rootSeen && bodyCount == 1 {
+				return documentNamespace, nil
+			}
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		switch item := token.(type) {
+		case xml.StartElement:
+			if depth == 0 {
+				if item.Name.Local != "document" || (item.Name.Space != wordprocessingMainNamespace && item.Name.Space != strictWordprocessingMainNS) {
+					return "", nil
+				}
+				rootSeen = true
+				documentNamespace = item.Name.Space
+			} else if depth == 1 && item.Name.Local == "body" && item.Name.Space == documentNamespace {
+				bodyCount++
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+		}
+	}
 }
 
 func hasWordDocumentContentType(data []byte) (bool, error) {
