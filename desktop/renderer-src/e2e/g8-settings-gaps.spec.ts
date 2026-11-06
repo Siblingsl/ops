@@ -128,6 +128,71 @@ async function openOwner(page: Page, baseURL: string, tag: string, contentType =
   }
 }
 
+test('DEV-QA26 G2-12 原生 Electron 操作日志筛选、空态与读取错误重试', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(180_000)
+  const owner = await openOwner(page, baseURL!, 'audit-logs')
+  try {
+    const providerName = `DEV-QA26 日志审计 ${Date.now()}`
+    const provider = await api(page, 'POST', '/model-providers', {
+      name: providerName,
+      base_url: process.env.OPS_E2E_MOCK_BASE_URL ?? 'http://127.0.0.1:8297/v1',
+      api_key: 'local-e2e-key',
+      models: ['mock-agent-tested'],
+    }) as { id: string }
+    const persisted = await api(page, 'GET', '/audit-logs?action=model_provider_create&limit=50') as Array<{ action: string; target_id: string }>
+    expect(persisted.some((entry) => entry.action === 'model_provider_create' && entry.target_id === provider.id)).toBe(true)
+
+    await selectDesktopSetting(owner.page, '操作日志')
+    await expect(owner.page).toHaveURL(/\/settings\/logs$/)
+    await expect(owner.page.getByRole('heading', { name: '操作日志', exact: true })).toBeVisible()
+    const allLogs = owner.page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/audit-logs' && response.status() === 200)
+    const actionFilter = owner.page.getByRole('combobox')
+    await actionFilter.selectOption('model_')
+    expect((await allLogs).ok()).toBe(true)
+    const providerRow = owner.page.locator('li').filter({ hasText: providerName })
+    await expect(providerRow).toHaveCount(1)
+    await expect(providerRow.getByText('添加模型供应商', { exact: true })).toBeVisible()
+    await expect(providerRow).not.toContainText('local-e2e-key')
+
+    await owner.page.route(/\/api\/v1\/audit-logs\?/, async (route) => {
+      const url = new URL(route.request().url())
+      if (url.searchParams.get('action') === 'wechat_') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+      } else if (url.searchParams.get('action') === 'check_') {
+        await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'unavailable', message: '测试日志服务暂不可用' } }) })
+      } else await route.continue()
+    })
+    const emptyResponse = owner.page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/v1/audit-logs' && url.searchParams.get('action') === 'wechat_'
+    })
+    await actionFilter.selectOption('wechat_')
+    expect((await emptyResponse).status()).toBe(200)
+    await expect(owner.page.getByText('没有日志', { exact: true })).toBeVisible()
+
+    const failedResponse = owner.page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/v1/audit-logs' && url.searchParams.get('action') === 'check_'
+    })
+    await actionFilter.selectOption('check_')
+    expect((await failedResponse).status()).toBe(503)
+    await expect(owner.page.getByRole('alert').getByText('测试日志服务暂不可用', { exact: true })).toBeVisible()
+    await expect(owner.page.getByText('没有日志', { exact: true })).toHaveCount(0)
+
+    await owner.page.unroute(/\/api\/v1\/audit-logs\?/)
+    const retriedResponse = owner.page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/v1/audit-logs' && url.searchParams.get('action') === 'check_' && response.status() === 200
+    })
+    await owner.page.getByRole('button', { name: '重试读取', exact: true }).click()
+    expect((await retriedResponse).ok()).toBe(true)
+    await expect(owner.page.getByText('没有日志', { exact: true })).toBeVisible()
+  } finally {
+    await closeElectron(owner.app, owner.profile, 'audit-logs')
+  }
+})
+
 test('DEV-QA26 G1-05 真实 Electron 修改密码拒绝与会话失效', async ({ page, baseURL }) => {
   test.skip(process.platform !== 'win32', '需要 Windows Electron')
   test.setTimeout(180_000)

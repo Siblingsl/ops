@@ -1,7 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { performance } from 'node:perf_hooks'
 import { createServer } from 'node:net'
-import { api, registerAccount } from './support'
+import { api, mockModelBaseUrl, registerAccount } from './support'
 
 type LocalSmtpSink = { port: number; messages: string[]; close: () => Promise<void> }
 
@@ -452,6 +452,36 @@ test('DEV-QA26 G2-13 Web 回收站读取失败可重试并区分空态', async (
   await expect(page.getByText('回收站是空的', { exact: true })).toBeVisible()
   await expect(page.getByText('删除的内容保留 30 天，到期后自动彻底删除。', { exact: true })).toBeVisible()
   expect(await api(page, 'GET', '/trash')).toEqual([])
+})
+
+test('DEV-QA26 G2-12 Web 操作日志读取失败显示原因并可重试', async ({ page }) => {
+  await registerAccount(page)
+  const providerName = `DEV-QA26 Web 日志审计 ${Date.now()}`
+  const provider = await api(page, 'POST', '/model-providers', {
+    name: providerName,
+    base_url: mockModelBaseUrl(),
+    api_key: 'local-e2e-key',
+    models: ['mock-agent-tested'],
+  }) as { id: string }
+  const persisted = await api(page, 'GET', '/audit-logs?action=model_provider_create&limit=50') as Array<{ action: string; target_id: string }>
+  expect(persisted.some((entry) => entry.action === 'model_provider_create' && entry.target_id === provider.id)).toBe(true)
+
+  await page.route(/\/api\/v1\/audit-logs\?/, (route) => route.fulfill({
+    status: 503,
+    json: { error: { code: 'unavailable', message: '测试日志读取失败' } },
+  }))
+  const failedResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/audit-logs')
+  await page.goto('/settings/logs')
+  expect((await failedResponse).status()).toBe(503)
+  await expect(page.getByRole('alert').getByText('测试日志读取失败', { exact: true })).toBeVisible()
+  await expect(page.getByText('没有日志', { exact: true })).toHaveCount(0)
+
+  await page.unroute(/\/api\/v1\/audit-logs\?/)
+  const retriedResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/audit-logs' && response.status() === 200)
+  await page.getByRole('button', { name: '重试读取', exact: true }).click()
+  expect((await retriedResponse).ok()).toBe(true)
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(page.locator('li').filter({ hasText: providerName })).toHaveCount(1)
 })
 
 test('DEV-QA26 G8 Web 回收站彻底删除取消与确认', async ({ page }) => {

@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge, Button, Card, Empty, PageHeader, PageLoading, Select } from '@/components/ui'
 import { BackToSettings } from '@/components/back-to-settings'
-import { get } from '@/lib/api'
+import { errorMessage, get } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 
 interface Log { id: string; action: string; target_type: string; target_id: string; result: string; detail: unknown; created_at: string; actor: string | null }
@@ -56,7 +56,10 @@ export default function Logs() {
       <PageHeader title="操作日志" desc="登录、凭证、推送、检查确认等关键操作都会记录。日志中不包含密钥和正文。"
         action={<><BackToSettings /><Select value={action} onChange={(e) => setAction(e.target.value)} className="w-40">{filters.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}</Select></>} />
       <Card>
-        {list.length === 0 ? <Empty icon={<ScrollText className="size-5" />} title="没有日志" /> : (
+        {q.isError ? <div role="alert" className="space-y-2 p-5 text-sm text-danger">
+          <p>{errorMessage(q.error)}</p>
+          <Button type="button" size="sm" variant="outline" onClick={() => void q.refetch()}>重试读取</Button>
+        </div> : list.length === 0 ? <Empty icon={<ScrollText className="size-5" />} title="没有日志" /> : (
           <ul className="divide-y divide-mist-100">
             {list.map((l) => (
               <li key={l.id} className="flex items-start gap-4 px-5 py-3">
