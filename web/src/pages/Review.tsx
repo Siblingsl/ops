@@ -68,6 +68,7 @@ const metricDisplay = (metric: Metric | null | undefined, key: MetricKey) => key
   : num(metric?.[key])
 
 const contentFormatName = (format: string) => format === 'micro_post' ? '微头条' : format === 'long_article' ? '文章' : format
+type BoardSortKey = MetricKey | 'ctr'
 
 function ImportMetrics({ accountId, platform, works, onDone }: { accountId: string; platform: Platform; works: BoardRow[]; onDone: () => void }) {
   const inv = useInvalidate()
@@ -429,6 +430,8 @@ export default function Review() {
   const [params, setParams] = useSearchParams()
   const [toutiaoFormat, setToutiaoFormat] = useState('long_article')
   const [selected, setSelected] = useState<string[]>([])
+  const [boardSort, setBoardSort] = useState<BoardSortKey | ''>('')
+  const [boardSortOrder, setBoardSortOrder] = useState<'asc' | 'desc'>('desc')
   const [recent, setRecent] = useState('10')
   const [running, setRunning] = useState(false)
   const [syncing, setSyncing] = useState(false)
@@ -439,7 +442,13 @@ export default function Review() {
     if (acc?.platform === 'toutiao') setToutiaoFormat(acc.content_format)
   }, [acc?.id])
   const boardFormat = acc?.platform === 'toutiao' ? toutiaoFormat : ''
-  const board = useQuery({ queryKey: ['board', acc?.id, boardFormat], queryFn: () => get<BoardRow[]>(`/accounts/${acc!.id}/board${boardFormat ? `?content_format=${boardFormat}` : ''}`), enabled: !!acc })
+  const board = useQuery({ queryKey: ['board', acc?.id, boardFormat, boardSort, boardSortOrder], queryFn: () => {
+    const query = new URLSearchParams()
+    if (boardFormat) query.set('content_format', boardFormat)
+    if (boardSort) { query.set('sort', boardSort); query.set('order', boardSortOrder) }
+    const queryString = query.toString()
+    return get<BoardRow[]>(`/accounts/${acc!.id}/board${queryString ? `?${queryString}` : ''}`)
+  }, enabled: !!acc })
   const reports = useQuery({ queryKey: ['reviews', acc?.id], queryFn: () => get<ReviewReport[]>(`/accounts/${acc!.id}/reviews`), enabled: !!acc })
   const wantDigest = params.get('tab') === 'digest'
   const loaded = !!acc && !board.isLoading
@@ -457,6 +466,15 @@ export default function Review() {
   const openRow = rows.find((r) => r.id === params.get('work'))
   const nextRow = openRow && rows[rows.indexOf(openRow) + 1]
   const fields = metricFields[acc.platform].slice(0, 4)
+  const sortFields: { key: BoardSortKey; label: string }[] = [...metricFields[acc.platform], ...(acc.platform === 'toutiao' ? [{ key: 'ctr' as const, label: 'CTR' }] : [])]
+  const boardSortControls = <div className="flex flex-wrap items-center gap-2" data-testid="review-sort-controls">
+    <Select aria-label="按指标排序" className="w-40" value={boardSort} onChange={(event) => setBoardSort(event.target.value as BoardSortKey | '')}>
+      <option value="">默认（按发布时间）</option>{sortFields.map((field) => <option key={field.key} value={field.key}>{field.label}</option>)}
+    </Select>
+    <Select aria-label="排序方向" className="w-32" value={boardSortOrder} onChange={(event) => setBoardSortOrder(event.target.value as 'asc' | 'desc')}>
+      <option value="desc">从高到低</option><option value="asc">从低到高</option>
+    </Select>
+  </div>
   const runReview = async () => {
     setRunning(true)
     try {
@@ -495,6 +513,7 @@ export default function Review() {
       <PageHeader title="数据复盘" desc="手动录入平台数据，让 AI 帮你找规律。复盘建议需要你逐条采纳。" />
       <Card className="mb-6 overflow-hidden" id="review-board">
         <CardHeader title="作品数据看板" desc="只列出已进入草稿箱、已生成发布包或已发布的作品；数字统一取发布后第 7 天的数据，便于作品之间比较" action={<>
+          {boardSortControls}
           {acc.platform === 'wechat_mp' && acc.datacube_state !== 'no_permission' && (
             <Button size="sm" variant="secondary" icon={<BarChart3 className="size-3.5" />} loading={syncing} onClick={() => void syncWechat()}>同步公众号数据</Button>
           )}

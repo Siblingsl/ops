@@ -344,6 +344,7 @@ func TestDR02DaySevenBasis(t *testing.T) {
 	multi := drWork(t, a, "第 7 天两个来源", "published", &pub)
 	drMetric(t, multi.ID, "manual", 7, 500)
 	drMetric(t, multi.ID, "wechat_api", 7, 600)
+	noMetrics := drWork(t, a, "还没有指标", "published", &pub)
 
 	want := map[uuid.UUID][2]int{old.ID: {700, 7}, early.ID: {300, 3}, multi.ID: {600, 7}}
 	for id, w := range want {
@@ -375,6 +376,27 @@ func TestDR02DaySevenBasis(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("old work missing from board")
+	}
+	for _, tc := range []struct {
+		order string
+		want  []uuid.UUID
+	}{{"desc", []uuid.UUID{old.ID, multi.ID, early.ID, noMetrics.ID}}, {"asc", []uuid.UUID{early.ID, multi.ID, old.ID, noMetrics.ID}}} {
+		var sorted []BoardRow
+		env.mustJSON(t, "GET", "/api/v1/accounts/"+a.ID.String()+"/board?sort=reads&order="+tc.order, nil, &sorted)
+		if len(sorted) != len(tc.want) {
+			t.Fatalf("%s reads sort returned %d rows, want %d: %+v", tc.order, len(sorted), len(tc.want), sorted)
+		}
+		for i, wantID := range tc.want {
+			if sorted[i].ID != wantID {
+				t.Fatalf("%s reads sort row %d = %s, want %s", tc.order, i, sorted[i].ID, wantID)
+			}
+		}
+	}
+	if status, _ := env.do("GET", "/api/v1/accounts/"+a.ID.String()+"/board?sort=unknown", nil); status != 422 {
+		t.Fatalf("unknown board sort key status = %d, want 422", status)
+	}
+	if status, _ := env.do("GET", "/api/v1/accounts/"+a.ID.String()+"/board?sort=reads&order=sideways", nil); status != 422 {
+		t.Fatalf("unknown board sort order status = %d, want 422", status)
 	}
 
 	recent := env.srv.now().AddDate(0, 0, -10)

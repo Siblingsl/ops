@@ -81,6 +81,7 @@ const metricDisplay = (metric: Metric | null | undefined, key: MetricKey) => key
   : num(metric?.[key])
 
 const contentFormatName = (format: string) => format === 'micro_post' ? '微头条' : format === 'long_article' ? '文章' : format
+type BoardSortKey = MetricKey | 'ctr'
 
 // 口径提示（20 文档 §9.1）：单位未知的读数不能与人数/次数相加，界面必须说明而不是当成 0。
 const unitHint = (metric: Metric | null | undefined): string => {
@@ -631,6 +632,8 @@ export default function Review() {
   const [params, setParams] = useSearchParams()
   const [toutiaoFormat, setToutiaoFormat] = useState('long_article')
   const [selected, setSelected] = useState<string[]>([])
+  const [boardSort, setBoardSort] = useState<BoardSortKey | ''>('')
+  const [boardSortOrder, setBoardSortOrder] = useState<'asc' | 'desc'>('desc')
   const [recent, setRecent] = useState('10')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [running, setRunning] = useState(false)
@@ -642,7 +645,13 @@ export default function Review() {
     if (acc?.platform === 'toutiao') setToutiaoFormat(acc.content_format)
   }, [acc?.id])
   const boardFormat = acc?.platform === 'toutiao' ? toutiaoFormat : ''
-  const board = useQuery({ queryKey: ['board', acc?.id, boardFormat], queryFn: () => get<BoardRow[]>(`/accounts/${acc!.id}/board${boardFormat ? `?content_format=${boardFormat}` : ''}`), enabled: !!acc })
+  const board = useQuery({ queryKey: ['board', acc?.id, boardFormat, boardSort, boardSortOrder], queryFn: () => {
+    const query = new URLSearchParams()
+    if (boardFormat) query.set('content_format', boardFormat)
+    if (boardSort) { query.set('sort', boardSort); query.set('order', boardSortOrder) }
+    const queryString = query.toString()
+    return get<BoardRow[]>(`/accounts/${acc!.id}/board${queryString ? `?${queryString}` : ''}`)
+  }, enabled: !!acc })
   const reports = useQuery({ queryKey: ['reviews', acc?.id], queryFn: () => get<ReviewReport[]>(`/accounts/${acc!.id}/reviews`), enabled: !!acc })
   const wantDigest = params.get('tab') === 'digest'
   const weeklyDraft = reports.data?.find((report) => report.origin === 'weekly_draft')
@@ -673,6 +682,15 @@ export default function Review() {
   const openRow = rows.find((r) => r.id === params.get('work'))
   const nextRow = openRow && rows[rows.indexOf(openRow) + 1]
   const fields = metricFields[acc.platform].slice(0, 4)
+  const sortFields: { key: BoardSortKey; label: string }[] = [...metricFields[acc.platform], ...(acc.platform === 'toutiao' ? [{ key: 'ctr' as const, label: 'CTR' }] : [])]
+  const boardSortControls = <div className="flex flex-wrap items-center gap-2" data-testid="review-sort-controls">
+    <Select aria-label="按指标排序" className="w-40" value={boardSort} onChange={(event) => setBoardSort(event.target.value as BoardSortKey | '')}>
+      <option value="">默认（按发布时间）</option>{sortFields.map((field) => <option key={field.key} value={field.key}>{field.label}</option>)}
+    </Select>
+    <Select aria-label="排序方向" className="w-32" value={boardSortOrder} onChange={(event) => setBoardSortOrder(event.target.value as 'asc' | 'desc')}>
+      <option value="desc">从高到低</option><option value="asc">从低到高</option>
+    </Select>
+  </div>
   const desktopStats: [string, MetricKey][] = acc.platform === 'toutiao'
     ? [['近 7 天展现', 'impressions'], ['近 7 天阅读', 'reads'], ['点赞', 'likes'], ['收藏', 'favorites']]
     : [['近 7 天阅读', 'reads'], ['收藏', 'favorites'], ['分享', 'shares'], ['粉丝净增', 'follows_gained']]
@@ -741,10 +759,11 @@ export default function Review() {
       </div>}
       {desktopPresentation && <div className="desktop-review-board-heading">
         <h2>作品数据 · 发布后第 7 天</h2>
-        <div>{boardActions}</div>
+        <div className="flex flex-wrap items-center gap-3">{boardSortControls}{boardActions}</div>
       </div>}
       <Card className="mb-6 overflow-hidden" id="desktop-review-board">
         {!desktopPresentation && <CardHeader title="作品数据看板" desc="只列出已进入草稿箱、已生成发布包或已发布的作品；数字统一取发布后第 7 天的数据，便于作品之间比较" action={<>
+          {boardSortControls}
           {acc.platform === 'wechat_mp' && acc.datacube_state !== 'no_permission' && (
             <Button size="sm" variant="secondary" icon={<BarChart3 className="size-3.5" />} loading={syncing} onClick={() => void syncWechat()}>同步公众号数据</Button>
           )}

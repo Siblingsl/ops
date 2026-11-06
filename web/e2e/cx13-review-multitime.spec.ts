@@ -54,7 +54,7 @@ test('DEV-QA26 G6 Web 发布回填、多时点手录、看板与建议采纳', a
   await page.getByRole('button', { name: '生成当前修订发布包', exact: true }).click()
   expect((await packResponse).ok()).toBeTruthy()
   await expect.poll(async () => (await api(page, 'GET', `/works/${work.id}`)).status).toBe('packed')
-  const publishedAtInput = new Date(Date.now() - 8 * 24 * 60 * 60_000)
+  const publishedAtInput = new Date(Date.now() - 40 * 24 * 60 * 60_000)
   const backfill = page.locator('#backfill')
   const publishedUrl = `https://example.invalid/qa26-g6-full-${work.id}`
   await backfill.getByLabel('作品链接（可选）').fill(publishedUrl)
@@ -68,10 +68,33 @@ test('DEV-QA26 G6 Web 发布回填、多时点手录、看板与建议采纳', a
   await page.goto(`/a/${account.id}/review`)
 
   const table = page.locator('table').first()
+  const descendingBoard = page.waitForResponse((response) => {
+    const url = new URL(response.url())
+    return url.pathname === `/api/v1/accounts/${account.id}/board` && url.searchParams.get('sort') === 'reads' && url.searchParams.get('order') === 'desc'
+  })
+  await page.getByLabel('按指标排序').selectOption('reads')
+  expect((await descendingBoard).ok()).toBeTruthy()
+  const ascendingBoard = page.waitForResponse((response) => {
+    const url = new URL(response.url())
+    return url.pathname === `/api/v1/accounts/${account.id}/board` && url.searchParams.get('sort') === 'reads' && url.searchParams.get('order') === 'asc'
+  })
+  await page.getByLabel('排序方向').selectOption('asc')
+  expect((await ascendingBoard).ok()).toBeTruthy()
+  const sortLatency: number[] = []
+  for (let i = 0; i < 20; i++) {
+    const order = i % 2 === 0 ? 'desc' : 'asc'
+    const startedAt = Date.now()
+    await page.getByLabel('排序方向').selectOption(order)
+    await expect(page.getByLabel('排序方向')).toHaveValue(order)
+    sortLatency.push(Date.now() - startedAt)
+  }
+  const sortedLatency = [...sortLatency].sort((a, b) => a - b)
+  console.log(`DEV-QA26 G6 Web sort-control samples: ${JSON.stringify({ n: sortLatency.length, p50_ms: sortedLatency[Math.ceil(sortedLatency.length * 0.5) - 1], p95_ms: sortedLatency[Math.ceil(sortedLatency.length * 0.95) - 1], failures: 0 })}`)
   const values = [
     { day: 1, impressions: 1200, reads: 800, likes: 15, favorites: 4, comments: 1, shares: 3, follows_gained: 1 },
     { day: 3, impressions: 2400, reads: 1700, likes: 31, favorites: 11, comments: 3, shares: 6, follows_gained: 2 },
     { day: 7, impressions: 3800, reads: 2500, likes: 48, favorites: 25, comments: 7, shares: 11, follows_gained: 4 },
+    { day: 30, impressions: 15000, reads: 10000, likes: 160, favorites: 75, comments: 20, shares: 35, follows_gained: 12 },
   ]
   const workRow = table.getByRole('row').filter({ hasText: work.title })
   await workRow.getByRole('button', { name: /录入/ }).click()
@@ -99,8 +122,10 @@ test('DEV-QA26 G6 Web 发布回填、多时点手录、看板与建议采纳', a
     await expect(recordDrawer.getByRole('button', { name: '录入一次数据', exact: true })).toBeVisible()
   }
   const savedMetrics = await api(page, 'GET', `/works/${work.id}/metrics`)
-  expect(savedMetrics.map((metric: { source: string; day_offset: number }) => [metric.source, metric.day_offset])).toEqual([['manual', 1], ['manual', 3], ['manual', 7]])
+  expect(savedMetrics.map((metric: { source: string; day_offset: number }) => [metric.source, metric.day_offset])).toEqual([['manual', 1], ['manual', 3], ['manual', 7], ['manual', 30]])
   expect(savedMetrics[2]).toMatchObject({ impressions: 3800, reads: 2500, likes: 48, favorites: 25, shares: 11 })
+  const t30Metric = savedMetrics.find((metric: { day_offset: number }) => metric.day_offset === 30)
+  expect(t30Metric).toMatchObject({ source: 'manual', impressions: 15000, reads: 10000, favorites: 75 })
   await recordDrawer.getByRole('button', { name: '关闭', exact: true }).click()
   await expect(recordDrawer).toBeHidden()
   await page.reload()
@@ -111,6 +136,15 @@ test('DEV-QA26 G6 Web 发布回填、多时点手录、看板与建议采纳', a
   await review.getByLabel('查看作品').selectOption(work.id)
   await expect(review.getByRole('cell', { name: work.title })).toBeVisible()
   await expect(review.getByText('发布后约 7 天', { exact: true }).first()).toBeVisible()
+  await expect(review.getByText('发布后约 30 天', { exact: true }).first()).toBeVisible()
+  const windows = await api(page, 'GET', `/works/${work.id}/metrics/windows`)
+  const t30 = windows.windows.find((window: { window: string }) => window.window === 'T30')
+  expect(t30.metric_ref).toMatchObject({ metric_id: t30Metric.id, source: 'manual' })
+  await expect(review.getByText(new RegExp(`快照 ${t30Metric.id} · 修订`))).toBeVisible()
+  const t30Compare = page.waitForResponse((response) => response.url().includes(`/accounts/${account.id}/metrics/compare?window=T30`))
+  await review.getByLabel('时间窗口').selectOption('T30')
+  expect((await t30Compare).ok()).toBeTruthy()
+  await expect(review.getByRole('row').filter({ hasText: work.title })).toBeVisible()
   await expect(review.getByText(/阅读单位：未知/).first()).toBeVisible()
   await expect(review.getByText('阅读单位未知', { exact: true }).first()).toBeVisible()
   await expect(review.getByText('同口径作品比较')).toBeVisible()

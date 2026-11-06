@@ -110,10 +110,42 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) error {
 	if a.Platform != "toutiao" && format != "" && format != a.ContentFormat {
 		return validation("该账号不支持所选数据形态")
 	}
+	sortBy := strings.TrimSpace(r.URL.Query().Get("sort"))
+	sortOrder := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("order")))
+	sortSQL := "coalesce(w.published_at, w.updated_at) DESC"
+	if sortBy != "" {
+		sortColumns := map[string]string{
+			"reads":          "d7.reads",
+			"impressions":    "d7.impressions",
+			"likes":          "d7.likes",
+			"wows":           "d7.wows",
+			"favorites":      "d7.favorites",
+			"comments":       "d7.comments",
+			"shares":         "d7.shares",
+			"follows_gained": "d7.follows_gained",
+			"ctr": `CASE WHEN d7.reads IS NULL OR d7.impressions IS NULL OR d7.impressions <= 0
+				OR (d7.source IN ('wechat_browser', 'xhs_browser') AND d7.read_unit IS DISTINCT FROM 'times')
+				THEN NULL ELSE d7.reads::double precision / d7.impressions END`,
+		}
+		sortColumn, ok := sortColumns[sortBy]
+		if !ok {
+			return validation("看板排序指标无效")
+		}
+		if sortOrder == "" {
+			sortOrder = "desc"
+		}
+		if sortOrder != "asc" && sortOrder != "desc" {
+			return validation("看板排序方向无效")
+		}
+		sortSQL = sortColumn + " " + strings.ToUpper(sortOrder) + " NULLS LAST, coalesce(w.published_at, w.updated_at) DESC"
+	} else if sortOrder != "" {
+		return validation("选择排序指标后才能指定排序方向")
+	}
 	rows, err := s.db.Query(ctx, `SELECT w.id, w.title, w.content_format, w.status, w.published_at, (SELECT count(*) FROM metric_snapshot WHERE work_id=w.id),
 		ARRAY(SELECT DISTINCT metric_node(day_offset) FROM metric_snapshot WHERE work_id=w.id AND metric_node(day_offset) IS NOT NULL ORDER BY 1)
-		FROM work w WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.status IN ('pushed','packed','published') AND ($2='' OR w.content_format=$2)
-		ORDER BY coalesce(w.published_at, w.updated_at) DESC LIMIT 200`, a.ID, format)
+		FROM work w LEFT JOIN work_metric_d7 d7 ON d7.work_id=w.id
+		WHERE w.account_id=$1 AND w.deleted_at IS NULL AND w.status IN ('pushed','packed','published') AND ($2='' OR w.content_format=$2)
+		ORDER BY `+sortSQL+`, w.id LIMIT 200`, a.ID, format)
 	if err != nil {
 		return err
 	}
