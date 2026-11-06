@@ -122,6 +122,26 @@ function docxCorruptCRCFixture() {
   throw new Error('DOCX central directory entry not found')
 }
 
+function docxEncryptedEntryFlagFixture() {
+  const encrypted = docxFixture()
+  const signature = Buffer.from([0x50, 0x4b, 0x01, 0x02])
+  let offset = encrypted.indexOf(signature)
+  while (offset >= 0) {
+    const nameLength = encrypted.readUInt16LE(offset + 28)
+    const name = encrypted.toString('utf8', offset + 46, offset + 46 + nameLength)
+    if (name === 'word/document.xml') {
+      const centralFlags = encrypted.readUInt16LE(offset + 8) | 1
+      const localOffset = encrypted.readUInt32LE(offset + 42)
+      const localFlags = encrypted.readUInt16LE(localOffset + 6) | 1
+      encrypted.writeUInt16LE(centralFlags, offset + 8)
+      encrypted.writeUInt16LE(localFlags, localOffset + 6)
+      return encrypted
+    }
+    offset = encrypted.indexOf(signature, offset + 4)
+  }
+  throw new Error('DOCX central directory entry not found')
+}
+
 function docxPageFixture(pages: number, overrides: Record<string, string> = {}) {
   const pageBreaks = '<w:lastRenderedPageBreak/>'.repeat(Math.max(0, pages - 1))
   return docxFixture({
@@ -446,6 +466,45 @@ test('DEV-QA26 G7-03 Windows Electron真实文件选择器拒绝DOCX ZIP CRC损�
     await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
     await app?.close()
     if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-doc-crc-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('DEV-QA26 G7-03 Windows Electron真实文件选择器拒绝带ZIP加密标志的DOCX条目', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(120_000)
+  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-qa26-doc-encrypted-flag-'))
+  let app: ElectronApplication | undefined
+  try {
+    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + userData, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const page = await app.firstWindow()
+    await prepare(page, baseURL!)
+    let messagePosts = 0
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+    })
+    const document = docxEncryptedEntryFlagFixture()
+    const chooser = page.waitForEvent('filechooser')
+    const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+    const started = performance.now()
+    await page.getByRole('button', { name: '添加附件', exact: true }).click()
+    await (await chooser).setFiles({ name: 'encrypted-entry.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: document })
+    const response = await upload
+    const uploadMs = performance.now() - started
+    const body = await response.json() as { error?: { code?: string } }
+    expect(response.status()).toBe(422)
+    expect(body.error?.code).toBe('agent_attachment_parse_failed')
+    await expect(page.getByLabel('encrypted-entry.docx failed', { exact: true })).toContainText('DOCX 已加密、损坏或解压内容超限')
+    await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+    expect(messagePosts).toBe(0)
+    console.log(`DEV-QA26_METRIC_DOCX_ENCRYPTED_FLAG_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', sample: 'ZIP general-purpose bit flag 0 set; payload is not password-encrypted', uploaded_bytes: document.byteLength, status: response.status(), upload_ms: Number(uploadMs.toFixed(2)), conversations: 0, message_posts: messagePosts })}`)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-doc-encrypted-flag-')) throw new Error('拒绝清理测试目录之外路径')
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })

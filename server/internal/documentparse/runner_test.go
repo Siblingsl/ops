@@ -117,6 +117,14 @@ func TestParseDOCXRejectsNonCanonicalPartPath(t *testing.T) {
 	}
 }
 
+func TestParseDOCXRejectsEncryptedZIPEntryFlag(t *testing.T) {
+	data := docxEncryptedEntryFlagFixture(t)
+	parsed, err := parseInWASI("encrypted-entry.docx", data)
+	if err == nil || parsed.ErrorCode != "docx_encrypted" {
+		t.Fatalf("DOCX entries marked as encrypted must be rejected before decompression: %+v, %v", parsed, err)
+	}
+}
+
 func TestParseDOCXRejectsHighCompressionExpandedSizeUnderWASI(t *testing.T) {
 	const expandedLimit = 96 << 20
 	compressed, ratio := highCompressionDOCXFixture(t)
@@ -399,6 +407,37 @@ func docxNonCanonicalPathFixture(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return out.Bytes()
+}
+
+func docxEncryptedEntryFlagFixture(t *testing.T) []byte {
+	t.Helper()
+	data := docxFixture(t, map[string]string{
+		"word/document.xml": "<w:document xmlns:w=\"urn:w\"><w:body><w:p><w:r><w:t>加密条目标志</w:t></w:r></w:p></w:body></w:document>",
+		"docProps/app.xml":  "<Properties><Pages>1</Pages></Properties>",
+	})
+	signature := []byte{0x50, 0x4b, 0x01, 0x02}
+	for offset := bytes.Index(data, signature); offset >= 0; {
+		if offset != 0 && offset+46 <= len(data) {
+			nameLength := int(data[offset+28]) | int(data[offset+29])<<8
+			if offset+46+nameLength <= len(data) && string(data[offset+46:offset+46+nameLength]) == "word/document.xml" {
+				localOffset := int(data[offset+42]) | int(data[offset+43])<<8 | int(data[offset+44])<<16 | int(data[offset+45])<<24
+				centralFlags := uint16(data[offset+8]) | uint16(data[offset+9])<<8
+				localFlags := uint16(data[localOffset+6]) | uint16(data[localOffset+7])<<8
+				centralFlags |= 1
+				localFlags |= 1
+				data[offset+8], data[offset+9] = byte(centralFlags), byte(centralFlags>>8)
+				data[localOffset+6], data[localOffset+7] = byte(localFlags), byte(localFlags>>8)
+				return data
+			}
+		}
+		next := bytes.Index(data[offset+4:], signature)
+		if next < 0 {
+			break
+		}
+		offset += next + 4
+	}
+	t.Fatal("DOCX central directory entry not found")
+	return nil
 }
 
 func pdfFixture(t *testing.T, withText bool) []byte {
