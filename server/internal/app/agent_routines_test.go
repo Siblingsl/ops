@@ -658,8 +658,8 @@ func TestAW10RoutineSchedulerLateWindowBoundary(t *testing.T) {
 	type scheduledRoutine struct {
 		id uuid.UUID
 	}
-	routines := make([]scheduledRoutine, 0, 2)
-	for _, lateMinute := range []int{29, 31} {
+	routines := make([]scheduledRoutine, 0, 3)
+	for _, lateMinute := range []int{29, 30, 31} {
 		name := fmt.Sprintf("QA26 调度迟到边界 %d 分钟 %s", lateMinute, uuid.NewString()[:8])
 		var created struct {
 			Routine agentRoutineView `json:"routine"`
@@ -673,10 +673,17 @@ func TestAW10RoutineSchedulerLateWindowBoundary(t *testing.T) {
 		if created.Routine.ID == uuid.Nil || created.Routine.Status != "enabled" {
 			t.Fatalf("创建 %d 分钟迟到边界任务失败：%+v", lateMinute, created.Routine)
 		}
-		if _, err := env.srv.db.Exec(t.Context(), `UPDATE agent_routine SET next_due_at=now()-($2 * interval '1 minute') WHERE id=$1`, created.Routine.ID, lateMinute); err != nil {
+		routines = append(routines, scheduledRoutine{id: created.Routine.ID})
+	}
+	fixedNow := env.srv.now().Truncate(time.Microsecond)
+	originalNow := env.srv.now
+	env.srv.now = func() time.Time { return fixedNow }
+	t.Cleanup(func() { env.srv.now = originalNow })
+	for index, lateMinute := range []int{29, 30, 31} {
+		dueAt := fixedNow.Add(-time.Duration(lateMinute) * time.Minute)
+		if _, err := env.srv.db.Exec(t.Context(), `UPDATE agent_routine SET next_due_at=$2 WHERE id=$1`, routines[index].id, dueAt); err != nil {
 			t.Fatal(err)
 		}
-		routines = append(routines, scheduledRoutine{id: created.Routine.ID})
 	}
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -726,7 +733,28 @@ func TestAW10RoutineSchedulerLateWindowBoundary(t *testing.T) {
 
 	var missedStatus, missedError string
 	var missedOccurrence uuid.UUID
-	if err := env.srv.db.QueryRow(t.Context(), `SELECT id,status,error_code FROM agent_routine_occurrence WHERE routine_id=$1 AND kind='scheduled'`, routines[1].id).
+	var exactOccurrence uuid.UUID
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT id FROM agent_routine_occurrence WHERE routine_id=$1 AND kind='scheduled'`, routines[1].id).
+		Scan(&exactOccurrence); err != nil {
+		t.Fatalf("恰好 30 分钟迟到仍在有效窗口内，必须创建计划执行记录：%v", err)
+	}
+	var exactStatus, exactRunStatus string
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		err := env.srv.db.QueryRow(t.Context(), `SELECT o.status,COALESCE(run.status,'') FROM agent_routine_occurrence o
+			LEFT JOIN agent_run run ON run.routine_occurrence_id=o.id WHERE o.id=$1`, exactOccurrence).Scan(&exactStatus, &exactRunStatus)
+		if err == nil && (exactStatus == "completed" || exactStatus == "failed" || exactStatus == "interrupted") {
+			break
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if exactStatus != "completed" || exactRunStatus != "completed" {
+		t.Fatalf("恰好 30 分钟迟到任务仍应执行完成：occurrence=%s run=%s", exactStatus, exactRunStatus)
+	}
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT id,status,error_code FROM agent_routine_occurrence WHERE routine_id=$1 AND kind='scheduled'`, routines[2].id).
 		Scan(&missedOccurrence, &missedStatus, &missedError); err != nil {
 		t.Fatalf("31 分钟迟到必须留下错过记录：%v", err)
 	}
@@ -738,7 +766,7 @@ func TestAW10RoutineSchedulerLateWindowBoundary(t *testing.T) {
 		t.Fatalf("错过窗口不得启动模型 run：runs=%d err=%v", missedRuns, err)
 	}
 	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_event WHERE routine_id=$1 AND type='missed'
-		AND payload->>'reason'='missed_window'`, routines[1].id).Scan(&missedEvents); err != nil || missedEvents != 1 {
+		AND payload->>'reason'='missed_window'`, routines[2].id).Scan(&missedEvents); err != nil || missedEvents != 1 {
 		t.Fatalf("错过窗口需持久化一个事件：events=%d err=%v", missedEvents, err)
 	}
 	var missedNotifications struct {
@@ -747,7 +775,7 @@ func TestAW10RoutineSchedulerLateWindowBoundary(t *testing.T) {
 	env.mustJSON(t, http.MethodGet, "/api/v1/notifications", nil, &missedNotifications)
 	foundNotice := false
 	for _, item := range missedNotifications.Items {
-		if item.Kind == "agent_routine" && item.Title == "例行任务错过计划时间" && item.Link == "/agent?panel=task&item="+routines[1].id.String() {
+		if item.Kind == "agent_routine" && item.Title == "例行任务错过计划时间" && item.Link == "/agent?panel=task&item="+routines[2].id.String() {
 			foundNotice = true
 		}
 	}
@@ -758,16 +786,20 @@ func TestAW10RoutineSchedulerLateWindowBoundary(t *testing.T) {
 	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE routine_occurrence_id=$1`, withinOccurrence).Scan(&withinRuns); err != nil || withinRuns != 1 {
 		t.Fatalf("窗口内 due 应只启动一个 run：runs=%d err=%v", withinRuns, err)
 	}
+	var exactRuns int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE routine_occurrence_id=$1`, exactOccurrence).Scan(&exactRuns); err != nil || exactRuns != 1 {
+		t.Fatalf("恰好 30 分钟的 due 应只启动一个 run：runs=%d err=%v", exactRuns, err)
+	}
 	env.srv.runAgentRoutines(t.Context())
 	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_occurrence
 		WHERE routine_id=$1 AND kind='scheduled' AND due_at=(SELECT due_at FROM agent_routine_occurrence WHERE id=$2)`,
-		routines[1].id, missedOccurrence).Scan(&missedDueOccurrences); err != nil || missedDueOccurrences != 1 {
+		routines[2].id, missedOccurrence).Scan(&missedDueOccurrences); err != nil || missedDueOccurrences != 1 {
 		t.Fatalf("重复 scheduler tick 不得重建同一错过 due：occurrences=%d err=%v", missedDueOccurrences, err)
 	}
 	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE routine_occurrence_id=$1`, missedOccurrence).Scan(&missedRuns); err != nil || missedRuns != 0 {
 		t.Fatalf("重复 scheduler tick 不得重跑错过 occurrence：runs=%d err=%v", missedRuns, err)
 	}
-	t.Logf("DEV-QA26_ROUTINE_LATE_WINDOW_BOUNDARY %s", fmt.Sprintf(`{"environment":"Windows local app integration; PostgreSQL and mock model","within_minutes":29,"within_status":"%s","within_runs":%d,"missed_minutes":31,"missed_status":"%s","missed_error":"%s","missed_runs":%d,"missed_due_occurrences":%d,"missed_events":%d,"missed_notification":%t,"journey_ms":%.2f,"failures":0}`, withinStatus, withinRuns, missedStatus, missedError, missedRuns, missedDueOccurrences, missedEvents, foundNotice, float64(time.Since(journeyStarted).Microseconds())/1000))
+	t.Logf("DEV-QA26_ROUTINE_LATE_WINDOW_BOUNDARY %s", fmt.Sprintf(`{"environment":"Windows local app integration; PostgreSQL and mock model","within_minutes":29,"within_status":"%s","within_runs":%d,"exact_minutes":30,"exact_status":"%s","exact_run_status":"%s","exact_runs":%d,"missed_minutes":31,"missed_status":"%s","missed_error":"%s","missed_runs":%d,"missed_due_occurrences":%d,"missed_events":%d,"missed_notification":%t,"journey_ms":%.2f,"failures":0}`, withinStatus, withinRuns, exactStatus, exactRunStatus, exactRuns, missedStatus, missedError, missedRuns, missedDueOccurrences, missedEvents, foundNotice, float64(time.Since(journeyStarted).Microseconds())/1000))
 }
 
 func TestAW10RoutineSchedulerWaitsForBusyCapacityThenRunsOnce(t *testing.T) {
