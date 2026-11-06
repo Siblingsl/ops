@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { performance } from 'node:perf_hooks'
 import { openDesktopAccountSwitcher } from './support'
 
 async function api(page: Page, method: string, path: string, body?: unknown) {
@@ -14,6 +15,73 @@ async function api(page: Page, method: string, path: string, body?: unknown) {
     if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${text}`)
     return text ? JSON.parse(text) : null
   }, { method, path, body })
+}
+
+async function assertGoalBudgetRecovery(page: Page, panel: ReturnType<Page['getByTestId']>, conversationID: string) {
+  const started = performance.now()
+  const submit = async (text: string) => {
+    const accepted = page.waitForResponse((response) => /\/agent\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+    await page.locator('textarea').last().fill(text)
+    await page.getByRole('button', { name: '发送', exact: true }).click()
+    return accepted
+  }
+
+  let detail = await api(page, 'GET', `/agent/conversations/${conversationID}`)
+  expect(detail.goal.run_budget).toBe(1)
+  expect(detail.goal.used_runs).toBe(0)
+  const firstRun = await submit('按当前目标继续核对一次。')
+  expect((await firstRun).status()).toBe(202)
+  await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).active_run).toBeNull()
+  await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).goal?.status).toBe('budget_limited')
+  detail = await api(page, 'GET', `/agent/conversations/${conversationID}`)
+  expect(detail.goal.used_runs).toBe(1)
+  const limitedRunID = detail.last_run.id
+  const userMessageCount = detail.messages.filter((message: { role: string }) => message.role === 'user').length
+  await expect(panel.getByText('预算已用尽', { exact: true })).toBeVisible()
+
+  const overBudget = await submit('预算用尽后不应再开始目标调用。')
+  const overBudgetResponse = await overBudget
+  const overBudgetBody = await overBudgetResponse.text()
+  if (overBudgetResponse.status() === 202) {
+    await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).active_run).toBeNull()
+  }
+  expect(overBudgetResponse.status(), overBudgetBody).toBe(429)
+  expect(overBudgetBody).toContain('agent_goal_budget_reached')
+  detail = await api(page, 'GET', `/agent/conversations/${conversationID}`)
+  expect(detail.last_run.id).toBe(limitedRunID)
+  expect(detail.goal.used_runs).toBe(1)
+  expect(detail.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(userMessageCount)
+
+  const resumeWithoutBudget = page.waitForResponse((response) => /\/agent\/goals\/[^/]+\/control$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+  await panel.getByRole('button', { name: '恢复并继续', exact: true }).click()
+  const refusedResume = await resumeWithoutBudget
+  expect(refusedResume.status()).toBe(409)
+  expect(await refusedResume.text()).toContain('agent_goal_budget_reached')
+  expect((await api(page, 'GET', `/agent/conversations/${conversationID}`)).goal?.status).toBe('budget_limited')
+
+  await panel.getByRole('button', { name: '编辑目标', exact: true }).click()
+  await panel.getByLabel('运行次数').fill('2')
+  const saved = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/conversations/${conversationID}/goal` && response.request().method() === 'PATCH')
+  await panel.getByRole('button', { name: '保存新版本', exact: true }).click()
+  expect((await saved).status()).toBe(200)
+  detail = await api(page, 'GET', `/agent/conversations/${conversationID}`)
+  expect(detail.goal).toMatchObject({ status: 'budget_limited', run_budget: 2, used_runs: 1 })
+
+  const resumed = page.waitForResponse((response) => /\/agent\/goals\/[^/]+\/control$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
+  await panel.getByRole('button', { name: '恢复并继续', exact: true }).click()
+  const resumeResponse = await resumed
+  expect(resumeResponse.status()).toBe(200)
+  const resumeBody = await resumeResponse.json()
+  expect(resumeBody.run_id).toBeTruthy()
+  await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).active_run).toBeNull()
+  await expect.poll(async () => {
+    const goal = (await api(page, 'GET', `/agent/conversations/${conversationID}`)).goal
+    return `${goal?.status}:${goal?.used_runs}`
+  }).toBe('budget_limited:2')
+  detail = await api(page, 'GET', `/agent/conversations/${conversationID}`)
+  expect(detail.last_run.id).toBe(resumeBody.run_id)
+  await expect(panel.getByText('预算已用尽', { exact: true })).toBeVisible()
+  console.log(`[DEV-QA26 goal-budget] ${JSON.stringify({ duration_ms: Math.round(performance.now() - started) })}`)
 }
 
 async function goalJourney(page: Page, baseURL: string, screenshot: string) {
@@ -61,6 +129,7 @@ async function goalJourney(page: Page, baseURL: string, screenshot: string) {
   await panel.getByRole('button', { name: '设为任务', exact: true }).click()
   await panel.getByLabel('目标（最多 500 字）').fill('核对本周运营数据并给出一条可审阅建议')
   await panel.getByLabel('完成条件 1').fill('指出一个需要关注的运营变化')
+  await panel.getByLabel('运行次数').fill('1')
   await panel.getByRole('button', { name: '保存并启用目标', exact: true }).click()
   await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationID}`)).goal?.status).toBe('active')
   await expect(panel.getByText('核对本周运营数据并给出一条可审阅建议', { exact: true })).toBeVisible()
@@ -70,6 +139,7 @@ async function goalJourney(page: Page, baseURL: string, screenshot: string) {
     await taskFilter.selectOption('task')
     await expect(page.getByText('任务 · 进行中', { exact: true })).toBeVisible()
   }
+  await assertGoalBudgetRecovery(page, panel, conversationID)
   await panel.getByRole('button', { name: '预览整理范围与用量', exact: true }).click()
   await expect(panel.getByText('当前没有需要整理的旧消息。', { exact: true })).toBeVisible()
   mkdirSync(resolve(process.cwd(), '../../.playwright-results'), { recursive: true })

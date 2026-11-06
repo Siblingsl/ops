@@ -459,13 +459,16 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 		var tokenBudget *int
 		err := tx.QueryRow(ctx, `SELECT id,account_id,model_provider_id,model,allow_background,status,run_budget,
 			seconds_budget,token_budget,used_runs,used_seconds,used_tokens FROM agent_goal
-			WHERE conversation_id=$1 AND status IN ('active','waiting_user') FOR UPDATE`, c.ID).Scan(
+			WHERE conversation_id=$1 AND status IN ('active','waiting_user','budget_limited') FOR UPDATE`, c.ID).Scan(
 			&goal.ID, &goal.AccountID, &goal.ModelProviderID, &goal.Model, &goal.AllowBackground, &goal.Status,
 			&goal.RunBudget, &goal.SecondsBudget, &tokenBudget, &goal.UsedRuns, &goal.UsedSeconds, &goal.UsedTokens)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
 		if err == nil {
+			if goal.Status == "budget_limited" {
+				return nil, apiErr(429, "agent_goal_budget_reached", "任务目标预算已用尽，请先提高预算并显式恢复后再继续")
+			}
 			if !agentSameUUID(c.AccountID, goal.AccountID) || !agentSameUUID(&model.ProviderID, goal.ModelProviderID) || model.Model != goal.Model {
 				return nil, apiErr(409, "agent_goal_target_changed", "对话账号或模型与任务目标快照不一致，请先编辑目标")
 			}

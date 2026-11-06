@@ -103,6 +103,109 @@ func TestAW09GoalRunsAccumulateAndBlockAfterTwoUnproductiveRuns(t *testing.T) {
 	}
 }
 
+func TestAW09BudgetLimitedGoalBlocksMessagesUntilRaisedAndResumed(t *testing.T) {
+	t.Setenv(agentWorkbenchFeatureEnv, "goals,event_resume,run_control,plans")
+	providerID := env.ensureToolModel(t)
+	conversation := env.agentRunConversation(t, providerID)
+	defer deleteConversations(t, conversation.ID)
+
+	var created struct {
+		Goal agentGoalView `json:"goal"`
+	}
+	env.mustJSON(t, http.MethodPost, agentRunPath(conversation, "goal"), map[string]any{
+		"request_id": uuid.NewString(), "objective": "核对一项运营变化",
+		"criteria":   []map[string]any{{"text": "记录一个需要关注的变化"}},
+		"account_id": conversation.AccountID.String(), "model": map[string]any{"provider_id": providerID, "model": "mock-writer"},
+		"run_budget": 1, "seconds_budget": 1800,
+	}, &created)
+	if created.Goal.RunBudget != 1 || created.Goal.UsedRuns != 0 {
+		t.Fatalf("created goal budget = runs:%d/%d", created.Goal.UsedRuns, created.Goal.RunBudget)
+	}
+
+	messagePath := agentRunPath(conversation, "messages")
+	status, body := env.do(http.MethodPost, messagePath, map[string]any{
+		"text": "按目标核对一次", "request_id": uuid.NewString(), "protocol_version": 2,
+	})
+	if status != http.StatusAccepted {
+		t.Fatalf("first goal run rejected: %d %s", status, body)
+	}
+	aw06WaitRun(t, body)
+	goal, err := scanAgentGoal(env.srv.db.QueryRow(t.Context(), agentGoalSelect+` WHERE id=$1`, created.Goal.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goal.Status != "budget_limited" || goal.UsedRuns != 1 {
+		t.Fatalf("goal after first run = status:%s used_runs:%d", goal.Status, goal.UsedRuns)
+	}
+
+	env.expectErr(t, http.MethodPost, messagePath, map[string]any{
+		"text": "预算触顶后不应启动新调用", "request_id": uuid.NewString(), "protocol_version": 2,
+	}, "agent_goal_budget_reached")
+	var runs int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE conversation_id=$1`, conversation.ID).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 {
+		t.Fatalf("runs after over-budget message = %d, want 1", runs)
+	}
+
+	var raised struct {
+		Goal agentGoalView `json:"goal"`
+	}
+	criteria := make([]map[string]any, 0, len(goal.Criteria))
+	for _, item := range goal.Criteria {
+		criteria = append(criteria, map[string]any{"text": item.Text, "requires_confirmation": item.RequiresConfirmation})
+	}
+	env.mustJSON(t, http.MethodPatch, agentRunPath(conversation, "goal"), map[string]any{
+		"expected_revision": goal.Revision, "request_id": uuid.NewString(), "objective": goal.Objective,
+		"criteria": criteria, "constraints": goal.Constraints, "account_id": conversation.AccountID.String(),
+		"model": map[string]any{"provider_id": providerID, "model": "mock-writer"}, "allow_background": false,
+		"run_budget": 2, "seconds_budget": goal.SecondsBudget, "token_budget": goal.TokenBudget,
+	}, &raised)
+	if raised.Goal.Status != "budget_limited" || raised.Goal.RunBudget != 2 || raised.Goal.UsedRuns != 1 {
+		t.Fatalf("raised goal = status:%s budget:%d used:%d", raised.Goal.Status, raised.Goal.RunBudget, raised.Goal.UsedRuns)
+	}
+	env.expectErr(t, http.MethodPost, messagePath, map[string]any{
+		"text": "尚未显式恢复，不能继续", "request_id": uuid.NewString(), "protocol_version": 2,
+	}, "agent_goal_budget_reached")
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE conversation_id=$1`, conversation.ID).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 {
+		t.Fatalf("runs after budget increase without resume = %d, want 1", runs)
+	}
+
+	status, body = env.do(http.MethodPost, "/api/v1/agent/goals/"+created.Goal.ID.String()+"/control", map[string]any{
+		"expected_revision": raised.Goal.Revision, "request_id": uuid.NewString(), "action": "resume",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("raised goal resume rejected: %d %s", status, body)
+	}
+	var resumed struct {
+		Goal agentGoalView `json:"goal"`
+	}
+	if err := json.Unmarshal(body, &resumed); err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Goal.Status != "active" || resumed.Goal.UsedRuns != 2 {
+		t.Fatalf("resumed goal = status:%s used_runs:%d", resumed.Goal.Status, resumed.Goal.UsedRuns)
+	}
+	aw06WaitRun(t, body)
+	goal, err = scanAgentGoal(env.srv.db.QueryRow(t.Context(), agentGoalSelect+` WHERE id=$1`, created.Goal.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goal.Status != "budget_limited" || goal.UsedRuns != 2 {
+		t.Fatalf("goal after resumed run = status:%s used_runs:%d", goal.Status, goal.UsedRuns)
+	}
+	status, body = env.do(http.MethodPost, messagePath, map[string]any{
+		"text": "第二次恢复运行已耗尽预算，不应继续调用", "request_id": uuid.NewString(), "protocol_version": 2,
+	})
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("message after resumed run budget was exhausted: %d %s", status, body)
+	}
+}
+
 func TestAW09GoalsStayOwnerPrivateAndViewerCannotControl(t *testing.T) {
 	t.Setenv(agentWorkbenchFeatureEnv, "goals,event_resume,run_control,plans")
 	providerID := env.ensureToolModel(t)
