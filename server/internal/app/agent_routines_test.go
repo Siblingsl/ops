@@ -645,6 +645,121 @@ func TestAW10RoutineSchedulerTickRecoversAbandonedLease(t *testing.T) {
 	t.Logf("DEV-QA26_METRIC_ROUTINE_LEASE_RECOVERY %s", fmt.Sprintf(`{"occurrence":"%s","occurrence_status":"%s","run_status":"%s","runs":%d,"journey_ms":%.2f}`, occurrenceID, occurrenceStatus, runStatus, runs, float64(time.Since(started).Microseconds())/1000))
 }
 
+func TestAW10RoutineSchedulerLateWindowBoundary(t *testing.T) {
+	journeyStarted := time.Now()
+	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
+	providerID := env.ensureToolModel(t)
+	account := env.accounts(t).xhs
+	type scheduledRoutine struct {
+		id uuid.UUID
+	}
+	routines := make([]scheduledRoutine, 0, 2)
+	for _, lateMinute := range []int{29, 31} {
+		name := fmt.Sprintf("QA26 调度迟到边界 %d 分钟 %s", lateMinute, uuid.NewString()[:8])
+		var created struct {
+			Routine agentRoutineView `json:"routine"`
+		}
+		env.mustJSON(t, http.MethodPost, "/api/v1/agent/routines", map[string]any{
+			"request_id": uuid.NewString(), "name": name, "prompt": "#text 只读边界验收报告",
+			"public_context_refs": []any{}, "account_id": account.ID.String(), "cadence": "daily", "time_of_day": "09:00",
+			"timezone": "Asia/Shanghai", "destination": "new",
+			"model": map[string]any{"provider_id": providerID, "model": "mock-writer"},
+		}, &created)
+		if created.Routine.ID == uuid.Nil || created.Routine.Status != "enabled" {
+			t.Fatalf("创建 %d 分钟迟到边界任务失败：%+v", lateMinute, created.Routine)
+		}
+		if _, err := env.srv.db.Exec(t.Context(), `UPDATE agent_routine SET next_due_at=now()-($2 * interval '1 minute') WHERE id=$1`, created.Routine.ID, lateMinute); err != nil {
+			t.Fatal(err)
+		}
+		routines = append(routines, scheduledRoutine{id: created.Routine.ID})
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for _, routine := range routines {
+			_, _ = env.srv.db.Exec(cleanupCtx, `DELETE FROM notification WHERE link=$1`, "/agent?panel=task&item="+routine.id.String())
+			rows, err := env.srv.db.Query(cleanupCtx, `SELECT conversation_id FROM agent_run WHERE routine_occurrence_id IN (
+				SELECT id FROM agent_routine_occurrence WHERE routine_id=$1)`, routine.id)
+			var conversations []uuid.UUID
+			if err == nil {
+				for rows.Next() {
+					var id uuid.UUID
+					if rows.Scan(&id) == nil {
+						conversations = append(conversations, id)
+					}
+				}
+				rows.Close()
+			}
+			_, _ = env.srv.db.Exec(cleanupCtx, `DELETE FROM agent_routine WHERE id=$1`, routine.id)
+			if len(conversations) > 0 {
+				_, _ = env.srv.db.Exec(cleanupCtx, `DELETE FROM agent_conversation WHERE id=ANY($1)`, conversations)
+			}
+		}
+	})
+
+	env.srv.runAgentRoutines(t.Context())
+	var withinOccurrence uuid.UUID
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT id FROM agent_routine_occurrence WHERE routine_id=$1 AND kind='scheduled'`, routines[0].id).Scan(&withinOccurrence); err != nil {
+		t.Fatalf("29 分钟迟到仍在有效窗口内，必须创建计划执行记录：%v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	var withinStatus, withinRunStatus string
+	for time.Now().Before(deadline) {
+		err := env.srv.db.QueryRow(t.Context(), `SELECT o.status,COALESCE(run.status,'') FROM agent_routine_occurrence o
+			LEFT JOIN agent_run run ON run.routine_occurrence_id=o.id WHERE o.id=$1`, withinOccurrence).Scan(&withinStatus, &withinRunStatus)
+		if err == nil && (withinStatus == "completed" || withinStatus == "failed" || withinStatus == "interrupted") {
+			break
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatal(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if withinStatus != "completed" || withinRunStatus != "completed" {
+		t.Fatalf("29 分钟迟到任务必须执行完成：occurrence=%s run=%s", withinStatus, withinRunStatus)
+	}
+
+	var missedStatus, missedError string
+	var missedOccurrence uuid.UUID
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT id,status,error_code FROM agent_routine_occurrence WHERE routine_id=$1 AND kind='scheduled'`, routines[1].id).
+		Scan(&missedOccurrence, &missedStatus, &missedError); err != nil {
+		t.Fatalf("31 分钟迟到必须留下错过记录：%v", err)
+	}
+	if missedStatus != "missed" || missedError != "missed_window" {
+		t.Fatalf("31 分钟后不得补跑历史任务：status=%s error=%s", missedStatus, missedError)
+	}
+	var missedRuns, missedEvents int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE routine_occurrence_id=$1`, missedOccurrence).Scan(&missedRuns); err != nil || missedRuns != 0 {
+		t.Fatalf("错过窗口不得启动模型 run：runs=%d err=%v", missedRuns, err)
+	}
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_event WHERE routine_id=$1 AND type='missed'
+		AND payload->>'reason'='missed_window'`, routines[1].id).Scan(&missedEvents); err != nil || missedEvents != 1 {
+		t.Fatalf("错过窗口需持久化一个事件：events=%d err=%v", missedEvents, err)
+	}
+	var missedNotifications struct {
+		Items []Notification `json:"items"`
+	}
+	env.mustJSON(t, http.MethodGet, "/api/v1/notifications", nil, &missedNotifications)
+	foundNotice := false
+	for _, item := range missedNotifications.Items {
+		if item.Kind == "agent_routine" && item.Title == "例行任务错过计划时间" && item.Link == "/agent?panel=task&item="+routines[1].id.String() {
+			foundNotice = true
+		}
+	}
+	if !foundNotice {
+		t.Fatalf("超过 30 分钟必须向创建者显示错过通知：%+v", missedNotifications.Items)
+	}
+	var withinRuns, missedOccurrences int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE routine_occurrence_id=$1`, withinOccurrence).Scan(&withinRuns); err != nil || withinRuns != 1 {
+		t.Fatalf("窗口内 due 应只启动一个 run：runs=%d err=%v", withinRuns, err)
+	}
+	env.srv.runAgentRoutines(t.Context())
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_occurrence WHERE routine_id=$1 AND kind='scheduled'`, routines[1].id).Scan(&missedOccurrences); err != nil || missedOccurrences != 1 {
+		t.Fatalf("重复 scheduler tick 不得重建错过 occurrence：occurrences=%d err=%v", missedOccurrences, err)
+	}
+	t.Logf("DEV-QA26_ROUTINE_LATE_WINDOW_BOUNDARY %s", fmt.Sprintf(`{"environment":"Windows local app integration; PostgreSQL and mock model","within_minutes":29,"within_status":"%s","within_runs":%d,"missed_minutes":31,"missed_status":"%s","missed_error":"%s","missed_runs":%d,"missed_events":%d,"missed_notification":%t,"journey_ms":%.2f,"failures":0}`, withinStatus, withinRuns, missedStatus, missedError, missedRuns, missedEvents, foundNotice, float64(time.Since(journeyStarted).Microseconds())/1000))
+}
+
 func TestAW10RoutineCreateControlAndReadOnlyRun(t *testing.T) {
 	t.Setenv(agentWorkbenchFeatureEnv, "workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines")
 	providerID := env.ensureToolModel(t)
