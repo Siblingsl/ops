@@ -130,17 +130,19 @@ function docxLargeDocumentFixture(expandedDocumentBytes: number) {
   }, true)
 }
 
-function docxLargePageDocumentFixture(expandedDocumentBytes: number, pages: number) {
+function docxLargePageDocumentFixture(expandedDocumentBytes: number, pages: number, totalEntries: number) {
   const prefix = Buffer.from('<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>')
   const pageBreaks = Buffer.from('<w:lastRenderedPageBreak/>'.repeat(Math.max(0, pages - 1)))
   const closeRun = Buffer.from('</w:t></w:r>')
   const closeDocument = Buffer.from('</w:p></w:body></w:document>')
   const textBytes = expandedDocumentBytes - prefix.length - pageBreaks.length - closeRun.length - closeDocument.length
   if (textBytes < 1) throw new Error('DOCX document entry must contain text')
-  return zipFixture({
+  const files: Record<string, string | Buffer> = {
     'word/document.xml': Buffer.concat([prefix, Buffer.alloc(textBytes, 0x61), closeRun, pageBreaks, closeDocument]),
     'docProps/app.xml': `<Properties><Pages>${pages}</Pages></Properties>`,
-  }, true)
+  }
+  for (let index = 2; index < totalEntries; index++) files[`customXml/item${index}.xml`] = '<item />'
+  return zipFixture(files, true)
 }
 
 async function prepare(page: Page, baseURL: string) {
@@ -586,7 +588,7 @@ test('DEV-QA26 Windows Electron filechooser上传4MiB DOCX并核对解析回执�
   }
 })
 
-test('DEV-QA26 Windows Electron filechooser上传4MiB 100页DOCX并核对解析回执', async ({ baseURL }) => {
+test('DEV-QA26 Windows Electron filechooser上传4MiB 100页256条目DOCX并核对解析回执', async ({ baseURL }) => {
   test.skip(process.platform !== 'win32', '需要Windows Electron')
   test.setTimeout(120_000)
   const userData = await mkdtemp(join(tmpdir(), 'ops-agent-qa26-doc4mib100p-'))
@@ -605,13 +607,17 @@ test('DEV-QA26 Windows Electron filechooser上传4MiB 100页DOCX并核对解析�
     const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST', { timeout: 60_000 })
     const expandedBytes = 4 * 1024 * 1024
     const pages = 100
-    const file = docxLargePageDocumentFixture(expandedBytes, pages)
+    const totalEntries = 256
+    const file = docxLargePageDocumentFixture(expandedBytes, pages, totalEntries)
+    const directoryEnd = file.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]))
+    expect(directoryEnd).toBe(file.length - 22)
+    expect(file.readUInt16LE(directoryEnd + 10)).toBe(totalEntries)
     await page.getByRole('button', { name: '添加附件', exact: true }).click()
-    await (await chooser).setFiles({ name: 'electron-document-4mib-100p.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: file })
+    await (await chooser).setFiles({ name: 'electron-document-4mib-100p-256e.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: file })
     const response = await upload
     expect(response.status()).toBe(200)
     const receipt = await response.json() as { id: string; parse_status: string; page_count: number; extracted_chars: number; injected_chars: number; truncated_from: number; truncated_to: number }
-    await expect(page.getByLabel('electron-document-4mib-100p.docx ready', { exact: true })).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByLabel('electron-document-4mib-100p-256e.docx ready', { exact: true })).toBeVisible({ timeout: 60_000 })
     expect(receipt).toMatchObject({ parse_status: 'ready', page_count: pages, injected_chars: 20_000, truncated_from: 20_001 })
     expect(receipt.extracted_chars).toBeGreaterThan(expandedBytes - 10_000)
     expect(receipt.truncated_to).toBe(receipt.extracted_chars)
@@ -623,8 +629,8 @@ test('DEV-QA26 Windows Electron filechooser上传4MiB 100页DOCX并核对解析�
     expect(original).toMatchObject({ status: 200, signature: 'PK\u0003\u0004' })
     expect(original.bytes).toBeGreaterThan(0)
     const timing = response.request().timing()
-    console.log(`DEV-QA26_METRIC_DOCX_4MIB_100P_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', expanded_document_bytes: expandedBytes, pages, uploaded_bytes: file.byteLength, extracted_chars: receipt.extracted_chars, upload_ms: Number((timing.responseEnd - timing.requestStart).toFixed(2)), failures: 0 })}`)
-    await page.getByRole('button', { name: '移除 electron-document-4mib-100p.docx', exact: true }).click()
+    console.log(`DEV-QA26_METRIC_DOCX_4MIB_100P_256E_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', expanded_document_bytes: expandedBytes, pages, entries: totalEntries, uploaded_bytes: file.byteLength, extracted_chars: receipt.extracted_chars, upload_ms: Number((timing.responseEnd - timing.requestStart).toFixed(2)), failures: 0 })}`)
+    await page.getByRole('button', { name: '移除 electron-document-4mib-100p-256e.docx', exact: true }).click()
     expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
     expect(messagePosts).toBe(0)
   } finally {
