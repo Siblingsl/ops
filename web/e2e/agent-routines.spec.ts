@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { createServer } from 'node:http'
 import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
@@ -18,7 +19,7 @@ async function api(page: Page, method: string, path: string, body?: unknown) {
   }, { method, path, body })
 }
 
-async function prepareRoutine(page: Page, baseURL: string) {
+async function prepareRoutine(page: Page, baseURL: string, modelBaseURL = mockModelBaseUrl()) {
   await page.goto(`${baseURL}/register`)
   await page.getByLabel('用户名', { exact: true }).fill(`aw10-${Date.now()}-${Math.random().toString(16).slice(2, 7)}`)
   await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
@@ -26,7 +27,7 @@ async function prepareRoutine(page: Page, baseURL: string) {
   await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
   const account = await api(page, 'POST', '/accounts', { platform: 'xhs', name: 'AW10 例行任务验收号', content_format: 'image_note', type_note: '' })
   const provider = await api(page, 'POST', '/model-providers', {
-    name: 'AW10 工作台 mock 模型', base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-agent-tested'],
+    name: 'AW10 工作台 mock 模型', base_url: modelBaseURL, api_key: 'local-e2e-key', models: ['mock-agent-tested'],
   })
   await api(page, 'POST', `/model-providers/${provider.id}/selftest`, {})
   await api(page, 'PUT', '/model-routes', [{ task_type: 'agent_chat', provider_id: provider.id, model: 'mock-agent-tested' }])
@@ -37,6 +38,57 @@ async function prepareRoutine(page: Page, baseURL: string) {
   const bootstrap = await api(page, 'GET', '/agent/bootstrap')
   expect(bootstrap.features.routines).toBe(true)
   return account
+}
+
+async function startFailingRoutineModelProxy() {
+  const mockBaseURL = new URL(process.env.OPS_E2E_MOCK_BASE_URL ?? mockModelBaseUrl())
+  let failuresRemaining = 0
+  let injectedFailures = 0
+  const server = createServer((incoming, outgoing) => {
+    const chunks: Buffer[] = []
+    incoming.on('data', (chunk: Buffer | Uint8Array) => chunks.push(Buffer.from(chunk)))
+    incoming.on('end', () => {
+      const body = Buffer.concat(chunks)
+      void (async () => {
+        if (failuresRemaining > 0 && incoming.method === 'POST' && incoming.url === '/v1/chat/completions') {
+          failuresRemaining--
+          injectedFailures++
+          outgoing.writeHead(503, { 'content-type': 'application/json' })
+          outgoing.end('{"error":{"message":"DEV-QA26 local injected upstream failure"}}')
+          return
+        }
+        try {
+          const upstream = await fetch(`${mockBaseURL.origin}${incoming.url ?? '/'}`, {
+            method: incoming.method ?? 'GET',
+            headers: {
+              'content-type': incoming.headers['content-type'] ?? 'application/json',
+              ...(incoming.headers.authorization ? { authorization: incoming.headers.authorization } : {}),
+            },
+            ...(body.length > 0 ? { body } : {}),
+          })
+          outgoing.writeHead(upstream.status, {
+            'content-type': upstream.headers.get('content-type') ?? 'application/json',
+            'cache-control': 'no-cache',
+          })
+          outgoing.end(Buffer.from(await upstream.arrayBuffer()))
+        } catch (error) {
+          if (!outgoing.destroyed) {
+            outgoing.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+            outgoing.end(error instanceof Error ? error.message : String(error))
+          }
+        }
+      })()
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('无法启动本地例行任务故障代理')
+  return {
+    baseURL: `http://127.0.0.1:${address.port}/v1`,
+    get injectedFailures() { return injectedFailures },
+    failNext() { failuresRemaining++ },
+    close() { return new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())) },
+  }
 }
 
 async function routineJourney(page: Page, baseURL: string, screenshotName: string, revokeAccountBeforeRun = false) {
@@ -141,6 +193,68 @@ async function routineJourney(page: Page, baseURL: string, screenshotName: strin
 
 test('DEV-AW10 Web配置受限例行任务、手动运行并查看私有报告', async ({ page, baseURL }) => {
   await routineJourney(page, baseURL!, 'agent-workbench-aw10-web')
+})
+
+test('DEV-QA26 Web例行任务连续失败三次暂停并手动恢复', async ({ page, baseURL }, testInfo) => {
+  test.setTimeout(180_000)
+  const proxy = await startFailingRoutineModelProxy()
+  const failureSamples: number[] = []
+  try {
+    const account = await prepareRoutine(page, baseURL!, proxy.baseURL)
+    await page.getByRole('button', { name: '例行任务', exact: true }).last().click()
+    const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '受限例行任务', exact: true }) })
+    const name = `QA26 连续失败暂停 ${Date.now()}`
+    await dialog.getByLabel('名称', { exact: true }).fill(name)
+    await dialog.getByLabel('任务提示（最多 4000 字）', { exact: true }).fill('只读检查并生成报告。\n#text 本地故障验收')
+    await expect(dialog.getByRole('combobox', { name: '运营账号', exact: true })).toHaveValue(account.id)
+    const created = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/routines' && response.request().method() === 'POST')
+    await dialog.getByRole('button', { name: '创建并启用', exact: true }).click()
+    expect((await created).status()).toBe(200)
+    const routine = (await api(page, 'GET', '/agent/routines')).items.find((item: { name: string }) => item.name === name)
+    expect(routine).toMatchObject({ status: 'enabled', failure_count: 0 })
+    const occurrencePath = `/agent/routines/${routine.id}/occurrences`
+
+    for (let failure = 1; failure <= 3; failure++) {
+      proxy.failNext()
+      const started = performance.now()
+      await dialog.locator('article').filter({ hasText: name }).getByRole('button', { name: '立即运行一次', exact: true }).click()
+      await expect.poll(() => proxy.injectedFailures, { timeout: 30_000 }).toBe(failure)
+      await expect.poll(async () => (await api(page, 'GET', occurrencePath)).items[0]?.status, { timeout: 30_000 }).toBe('failed')
+      failureSamples.push(Number((performance.now() - started).toFixed(2)))
+      const persisted = (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)
+      expect(persisted.failure_count).toBe(failure)
+      expect(persisted.status).toBe(failure === 3 ? 'paused' : 'enabled')
+      if (failure < 3) expect(persisted.error_code).toBeTruthy()
+      else {
+        expect(persisted.error_code).toBe('three_consecutive_failures')
+        expect(persisted.next_due_at).toBeFalsy()
+      }
+      await page.reload()
+      await page.getByRole('button', { name: '例行任务', exact: true }).last().click()
+      const task = page.locator('article').filter({ hasText: name })
+      await expect(task).toContainText(`连续失败 ${failure}/3`)
+      await task.getByRole('button', { name: '执行记录', exact: true }).click()
+      await expect(task).toContainText('手动运行 · 失败')
+      if (failure === 3) {
+        await expect(task.getByText('已暂停', { exact: true })).toBeVisible()
+        await expect(task.getByRole('button', { name: '立即运行一次', exact: true })).toHaveCount(0)
+        await expect(task.getByRole('button', { name: '重新启用', exact: true })).toBeVisible()
+        await task.getByRole('button', { name: '重新启用', exact: true }).click()
+        await expect.poll(async () => {
+          const enabled = (await api(page, 'GET', '/agent/routines')).items.find((item: { id: string }) => item.id === routine.id)
+          return { status: enabled.status, failure_count: enabled.failure_count, error_code: enabled.error_code ?? '' }
+        }).toEqual({ status: 'enabled', failure_count: 0, error_code: '' })
+        await expect(task.getByRole('button', { name: '立即运行一次', exact: true })).toBeVisible()
+      }
+    }
+    const sorted = [...failureSamples].sort((a, b) => a - b)
+    const metrics = { environment: 'Web Chromium; local mock API and injected loopback model 503', samples_ms: failureSamples,
+      p50_ms: sorted[1], p95_ms: sorted[2], failure_count: 3, failed: 0 }
+    await testInfo.attach('qa26-routine-three-failures-web.json', { body: JSON.stringify(metrics, null, 2), contentType: 'application/json' })
+    console.log(`DEV-QA26_ROUTINE_THREE_FAILURES_WEB ${JSON.stringify(metrics)}`)
+  } finally {
+    await proxy.close()
+  }
 })
 
 test('DEV-QA26 Web停用绑定账号后暂停例行任务并逐项恢复', async ({ page, baseURL }) => {
