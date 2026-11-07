@@ -825,6 +825,8 @@ export type AgentWorkbenchFeatureName =
   | 'browser_workspace'
   // DEV-AI27-13：个人跨对话记忆开关。
   | 'personal_memories'
+  // DEV-AI27-14：插件/MCP 开关。
+  | 'plugin_mcp'
 
 export interface SystemSettings {
   registration_open: boolean

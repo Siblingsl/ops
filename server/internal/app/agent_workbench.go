@@ -28,6 +28,8 @@ var agentWorkbenchFeatureNames = []string{
 	"chrome_connect", "browser_workspace",
 	// DEV-AI27-13（W13）：个人跨对话记忆（27 15.3 提案名），默认关闭。
 	"personal_memories",
+	// DEV-AI27-14（W14）：插件/MCP 开关（27 15.3 提案名），默认关闭。
+	"plugin_mcp",
 }
 
 func agentFeaturesFromList(raw string) map[string]bool {

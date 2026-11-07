@@ -1873,6 +1873,13 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/browser/commands/{id}/dispatch", s.h(s.dispatchAgentBrowserCommand))
 		r.Post("/agent/browser/commands/{id}/receipt", s.h(s.receiptAgentBrowserCommand))
 		r.Get("/agent/browser/commands", s.h(s.listAgentBrowserCommands))
+		// DEV-AI27-14（W14）：插件/MCP 连接注册与调用回执（27 §11.2）。
+		r.Get("/agent/plugin-connections", s.h(s.listPluginConnections))
+		r.Post("/agent/plugin-connections", s.h(s.createPluginConnection))
+		r.Post("/agent/plugin-connections/{id}/actions", s.h(s.actionPluginConnection))
+		r.Delete("/agent/plugin-connections/{id}", s.h(s.deletePluginConnection))
+		r.Post("/agent/plugin-calls", s.h(s.createPluginCall))
+		r.Post("/agent/plugin-calls/{id}/receipt", s.h(s.receiptPluginCall))
 	})
 	// 只减权清理路由（27 §13.4）：不挂 agentGate——智能体/浏览器开关关闭后仍可解绑与撤权；
 	// 仍要求登录、CSRF 与真实资源归属（T-AI27-25A）。
