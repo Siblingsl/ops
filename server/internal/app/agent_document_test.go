@@ -1,12 +1,31 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 )
+
+func TestAW11DocumentUploadLimitAppliesToDirectMultipartRequests(t *testing.T) {
+	t.Setenv(agentWorkbenchFeatureEnv, "document_parse")
+	name := "qa26-oversized-" + uuid.NewString() + ".docx"
+	// Deliberately invalid DOCX bytes prove the byte limit is checked before parsing.
+	data := bytes.Repeat([]byte("x"), agentImageBytes+1)
+	code, _, body := agentUploadAttachment(t, name, data, "")
+	if code != 422 || agentErrCodeOf(t, body) != "agent_attachment_invalid" {
+		t.Fatalf("direct oversized document upload must be rejected before parser execution: %d %s", code, body)
+	}
+	var stored int
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM agent_attachment WHERE name=$1`, name).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 0 {
+		t.Fatalf("rejected oversized document must not persist an attachment row: %d", stored)
+	}
+}
 
 func TestAW11DocumentsRequireFeatureAndParseRealCSV(t *testing.T) {
 	t.Setenv(agentWorkbenchFeatureEnv, "")

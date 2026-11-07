@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { createServer, get as httpGet } from 'node:http'
 import { resolve } from 'node:path'
 import { deflateRawSync } from 'node:zlib'
 
@@ -89,6 +90,40 @@ function docxFixture(overrides: Record<string, string | Buffer> = {}) {
     'word/document.xml': '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>AW11 DOCX 原始资料</w:t></w:r></w:p></w:body></w:document>',
     'docProps/app.xml': '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>1</Pages></Properties>',
     ...overrides,
+  })
+}
+
+async function createLoopbackNetworkTrap() {
+  let hits = 0
+  const server = createServer((_request, response) => {
+    hits++
+    response.writeHead(204)
+    response.end()
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  if (!address || typeof address === 'string') {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    throw new Error('无法取得 loopback canary 端口')
+  }
+  return {
+    url: `http://127.0.0.1:${address.port}/external-probe`,
+    hits: () => hits,
+    reset: () => { hits = 0 },
+    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+  }
+}
+
+async function requestLoopbackStatus(url: string) {
+  return new Promise<number>((resolve, reject) => {
+    const request = httpGet(url, (response) => {
+      response.resume()
+      response.once('end', () => resolve(response.statusCode ?? 0))
+    })
+    request.once('error', reject)
   })
 }
 
@@ -537,6 +572,56 @@ test('DEV-QA26 G7-03 Web最小OPC DOCX成功读取原件并拒绝根关系外链
   expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
   expect(messagePosts).toBe(0)
   console.log(`DEV-QA26_METRIC_DOCX_MINIMAL_OPC_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and WASI parser', valid_bytes: valid.byteLength, valid_status: validResponse.status(), valid_upload_ms: Number(validUploadMs.toFixed(2)), original_get_status: original.status, original_bytes: original.bytes, delete_status: 200, deleted_file_status: deletedStatus, external_bytes: external.byteLength, external_status: externalResponse.status(), external_upload_ms: Number(externalUploadMs.toFixed(2)), incomplete_cases: incompleteCases.map((item, index) => ({ defect: item.defect, upload_ms: incompleteUploadMs[index], status: 422 })), conversations: 0, message_posts: messagePosts })}`)
+})
+
+test('DEV-QA26 G7-03 Web文件选择器拒绝DOCX外链且无loopback访问', async ({ page, baseURL }) => {
+  test.setTimeout(90_000)
+  await prepare(page, baseURL!)
+  const trap = await createLoopbackNetworkTrap()
+  try {
+    expect(await requestLoopbackStatus(trap.url)).toBe(204)
+    expect(trap.hits()).toBe(1)
+    trap.reset()
+    let attachmentPosts = 0
+    let messagePosts = 0
+    page.on('request', (request) => {
+      const pathname = new URL(request.url()).pathname
+      if (pathname === '/api/v1/agent/attachments' && request.method() === 'POST') attachmentPosts++
+      if (pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+    })
+    const relationships = `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${trap.url}" TargetMode="External"/></Relationships>`
+    const document = docxFixture({ '_rels/.rels': relationships })
+    const samples: number[] = []
+    const interactions = 20
+    for (let index = 0; index < interactions; index++) {
+      const name = `external-${index + 1}.docx`
+      const chooser = page.waitForEvent('filechooser')
+      const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+      const started = performance.now()
+      await page.getByRole('button', { name: '添加附件', exact: true }).click()
+      await (await chooser).setFiles({ name, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: document })
+      const response = await upload
+      samples.push(Number((performance.now() - started).toFixed(2)))
+      const body = await response.json() as { error?: { code?: string } }
+      expect(response.status()).toBe(422)
+      expect(body.error?.code).toBe('agent_attachment_parse_failed')
+      await expect(page.getByLabel(`${name} failed`, { exact: true })).toContainText('宏、嵌入对象或外链资源')
+      expect(trap.hits()).toBe(0)
+      await page.getByRole('button', { name: `移除 ${name}`, exact: true }).click()
+      await expect(page.getByLabel(`${name} failed`, { exact: true })).toHaveCount(0)
+    }
+    await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    expect(attachmentPosts).toBe(interactions)
+    expect(messagePosts).toBe(0)
+    expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+    await page.waitForTimeout(100)
+    expect(trap.hits()).toBe(0)
+    const sorted = [...samples].sort((left, right) => left - right)
+    const percentile = (rank: number) => sorted[Math.ceil(rank * sorted.length) - 1]
+    console.log(`DEV-QA26_METRIC_EXTERNAL_DOCX_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API/WASI parser', uploaded_bytes: document.byteLength, interactions: samples.length, failures: 0, p50_ms: percentile(0.50), p95_ms: percentile(0.95), external_request_hits: trap.hits(), attachment_posts: attachmentPosts, conversations: 0, message_posts: messagePosts })}`)
+  } finally {
+    await trap.close()
+  }
 })
 
 test('DEV-QA26 G7-03 Web文件选择器拒绝DOCX大小写冲突部件', async ({ page, baseURL }) => {
