@@ -267,8 +267,8 @@ function docxExternalEntityFixture() {
   })
 }
 
-function docxExpandedFixture(totalExpandedBytes: number, macroEnabled = false) {
-  const mainDocumentType = macroEnabled
+function docxExpandedFixture(totalExpandedBytes: number, options: { macroEnabled?: boolean; embeddedObject?: boolean; externalRelationship?: boolean } = {}) {
+  const mainDocumentType = options.macroEnabled
     ? 'application/vnd.ms-word.document.macroEnabled.main+xml'
     : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'
   const files: Record<string, Buffer> = {
@@ -277,6 +277,10 @@ function docxExpandedFixture(totalExpandedBytes: number, macroEnabled = false) {
     'word/document.xml': Buffer.from('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>ZIP 上界资料</w:t></w:r></w:p></w:body></w:document>'),
     'docProps/app.xml': Buffer.from('<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>1</Pages></Properties>'),
   }
+  if (options.externalRelationship) {
+    files['word/_rels/document.xml.rels'] = Buffer.from('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" TargetMode="External" Target="https://example.invalid"/></Relationships>')
+  }
+  if (options.embeddedObject) files['word/embeddings/oleObject1.bin'] = Buffer.from('embedded object fixture')
   const baseBytes = Object.values(files).reduce((total, data) => total + data.length, 0)
   if (totalExpandedBytes < baseBytes) throw new Error('DOCX expanded fixture below its XML headers')
   files['customXml/payload.xml'] = Buffer.alloc(totalExpandedBytes - baseBytes, 0x61)
@@ -1214,7 +1218,7 @@ test('DEV-QA26 G7-03 Web拒绝宏与96MiB+1解压量交叉DOCX', async ({ page, 
     if (pathname === '/api/v1/agent/attachments' && request.method() === 'POST') attachmentPosts++
     if (pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
   })
-  const document = docxExpandedFixture(96 * 1024 * 1024 + 1, true)
+  const document = docxExpandedFixture(96 * 1024 * 1024 + 1, { macroEnabled: true })
   expect(document.byteLength).toBeLessThan(20 * 1024 * 1024)
   const chooser = page.waitForEvent('filechooser')
   const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
@@ -1233,4 +1237,41 @@ test('DEV-QA26 G7-03 Web拒绝宏与96MiB+1解压量交叉DOCX', async ({ page, 
   expect(messagePosts).toBe(0)
   await page.getByRole('button', { name: '移除 macro-expanded.docx', exact: true }).click()
   console.log(`DEV-QA26_METRIC_MACRO_EXPANDED_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and WASI parser', declared_expanded_bytes: 96 * 1024 * 1024 + 1, uploaded_bytes: document.byteLength, status: response.status(), upload_ms: Number(uploadMs.toFixed(2)), attachment_posts: attachmentPosts, conversations: 0, message_posts: messagePosts, failures: 0 })}`)
+})
+
+test('DEV-QA26 G7-03 Web拒绝嵌入对象和外链与96MiB+1解压量交叉DOCX', async ({ page, baseURL }) => {
+  test.setTimeout(180_000)
+  await prepare(page, baseURL!)
+  let attachmentPosts = 0
+  let messagePosts = 0
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname
+    if (pathname === '/api/v1/agent/attachments' && request.method() === 'POST') attachmentPosts++
+    if (pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+  })
+  const samples = [
+    { name: 'embedded-expanded.docx', options: { embeddedObject: true } },
+    { name: 'external-expanded.docx', options: { externalRelationship: true } },
+  ] as const
+  for (const sample of samples) {
+    const document = docxExpandedFixture(96 * 1024 * 1024 + 1, sample.options)
+    expect(document.byteLength).toBeLessThan(20 * 1024 * 1024)
+    const chooser = page.waitForEvent('filechooser')
+    const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+    const started = performance.now()
+    await page.getByRole('button', { name: '添加附件', exact: true }).click()
+    await (await chooser).setFiles({ name: sample.name, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: document })
+    const response = await upload
+    const uploadMs = performance.now() - started
+    const body = await response.json() as { error?: { code?: string } }
+    expect(response.status()).toBe(422)
+    expect(body.error?.code).toBe('agent_attachment_parse_failed')
+    await expect(page.getByLabel(sample.name + ' failed', { exact: true })).toContainText('宏、嵌入对象或外链资源')
+    await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    await page.getByRole('button', { name: '移除 ' + sample.name, exact: true }).click()
+    console.log(`DEV-QA26_METRIC_FORBIDDEN_EXPANDED_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and WASI parser', sample: sample.name, declared_expanded_bytes: 96 * 1024 * 1024 + 1, uploaded_bytes: document.byteLength, status: response.status(), upload_ms: Number(uploadMs.toFixed(2)), failures: 0 })}`)
+  }
+  expect(attachmentPosts).toBe(2)
+  expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+  expect(messagePosts).toBe(0)
 })
