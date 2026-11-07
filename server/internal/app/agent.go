@@ -1851,4 +1851,21 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Get("/agent/attachments/{id}/file", s.h(s.getAgentAttachmentFile))
 		r.Delete("/agent/attachments/{id}", s.h(s.deleteAgentAttachment))
 	})
+	// DEV-AI27-04（W04）：浏览器配对与授权（27 §13.4），受 chrome_connect/browser_workspace
+	// 开关约束（handler 内 requireAgentFeature）。
+	r.Group(func(r chi.Router) {
+		r.Use(s.agentGate)
+		r.Get("/agent/browser/capabilities", s.h(s.agentBrowserCapabilities))
+		r.Get("/agent/browser/bindings", s.h(s.listAgentBrowserBindings))
+		r.Post("/agent/browser/pairings", s.h(s.createAgentBrowserPairing))
+		r.Post("/agent/browser/pairings/{id}/confirm", s.h(s.confirmAgentBrowserPairing))
+		r.Post("/agent/conversations/{id}/browser-grants", s.h(s.createAgentBrowserGrant))
+	})
+	// 只减权清理路由（27 §13.4）：不挂 agentGate——智能体/浏览器开关关闭后仍可解绑与撤权；
+	// 仍要求登录、CSRF 与真实资源归属（T-AI27-25A）。
+	r.Group(func(r chi.Router) {
+		r.Delete("/agent/browser/bindings/{id}", s.h(s.revokeAgentBrowserBinding))
+		r.Delete("/agent/browser/grants/{id}", s.h(s.revokeAgentBrowserGrant))
+		r.Post("/agent/browser/grants/{id}/handoff", s.h(s.handoffAgentBrowserGrant))
+	})
 }

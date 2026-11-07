@@ -110,6 +110,11 @@ func (s *Server) SeedAgentFeaturesFromEnv(ctx context.Context) {
 }
 
 func applyAgentFeatureDeps(features map[string]bool) map[string]bool {
+	// 27 §15.3：browser_workspace（配对/授权/工作区浏览）依赖 chrome_connect；
+	// 浏览器控制（后续 browser_control/租约派发）才依赖 event_resume 与 run_control。
+	if features["browser_workspace"] && !features["chrome_connect"] {
+		features["browser_workspace"] = false
+	}
 	if features["goals"] && (!features["event_resume"] || !features["run_control"] || !features["plans"]) {
 		features["goals"] = false
 	}

@@ -228,6 +228,16 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/attachments",
 		"GET /api/v1/agent/attachments/{id}/file",
 		"DELETE /api/v1/agent/attachments/{id}",
+		// DEV-AI27-04（W04）浏览器配对/绑定/租约：本人工作台与本机桥调用，不进入模型工具目录。
+		"GET /api/v1/agent/browser/capabilities",
+		"GET /api/v1/agent/browser/bindings",
+		"POST /api/v1/agent/browser/pairings",
+		"POST /api/v1/agent/browser/pairings/{id}/confirm",
+		"POST /api/v1/agent/conversations/{id}/browser-grants",
+		// 只减权清理路由（27 §13.4）：不挂 agentGate，智能体关闭后仍可解绑/撤权（T-AI27-25A）。
+		"DELETE /api/v1/agent/browser/bindings/{id}",
+		"DELETE /api/v1/agent/browser/grants/{id}",
+		"POST /api/v1/agent/browser/grants/{id}/handoff",
 		// DEV-AW03 私有会话组织、阅读标记与正文检索由工作台本人页面调用，不进入模型工具目录。
 		"GET /api/v1/agent/conversation-groups",
 		"POST /api/v1/agent/conversation-groups",

@@ -17,7 +17,8 @@ func TestAW01BootstrapFeatureSwitchesDefaultClosed(t *testing.T) {
 		Features map[string]bool `json:"features"`
 	}
 	env.mustJSON(t, http.MethodGet, "/api/v1/agent/bootstrap", nil, &body)
-	want := []string{"workbench_ui", "conversation_organize", "context_refs", "skill_requests", "artifacts", "run_control", "event_resume", "plans", "goals", "routines", "document_parse"}
+	// DEV-AI27-04：chrome_connect/browser_workspace 为 W04 新增的浏览器能力开关，同样默认关闭。
+	want := []string{"workbench_ui", "conversation_organize", "context_refs", "skill_requests", "artifacts", "run_control", "event_resume", "plans", "goals", "routines", "document_parse", "chrome_connect", "browser_workspace"}
 	if len(body.Features) != len(want) {
 		t.Fatalf("bootstrap features = %#v, want all %d documented flags", body.Features, len(want))
 	}
