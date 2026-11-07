@@ -258,4 +258,16 @@ var agentToolsProfile = []AgentTool{
 		SecondConfirm: secondConfirmPlain(),
 		Target:        target("memory", "id"),
 	},
+	// DEV-AI27-13（W13）：个人跨对话记忆候选提案。只写 candidate，不参与注入；
+	// 确认/修改/忽略只能由本人经 PATCH 完成（模型不能自行确认，27 §11.1）。
+	{
+		Name: "memory__propose_candidate", Domain: "memory", Kind: toolG, Method: "POST", Path: "/memories/personal-candidates",
+		Description: "把用户明确表达的长期偏好提炼为一条个人记忆候选，供用户确认后跨对话使用。只接受用户明确说出的稳定偏好，不得推断或把一次性指令写成规则。",
+		Params: []ToolParam{
+			pBody("text", `{"type":"string","maxLength":2000}`, true, "U"),
+			pBody("conversation_id", `{"type":"string"}`, false, ""),
+			pBody("source_revision", `{"type":"integer"}`, false, ""),
+		},
+		MinRole: roleEditor,
+	},
 }

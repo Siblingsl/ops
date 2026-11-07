@@ -26,6 +26,8 @@ var agentWorkbenchFeatureNames = []string{
 	"run_control", "event_resume", "plans", "goals", "routines", "document_parse",
 	// DEV-AI27-04（W04）：浏览器能力开关（27 15.3 提案名），默认关闭。
 	"chrome_connect", "browser_workspace",
+	// DEV-AI27-13（W13）：个人跨对话记忆（27 15.3 提案名），默认关闭。
+	"personal_memories",
 }
 
 func agentFeaturesFromList(raw string) map[string]bool {

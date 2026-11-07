@@ -81,6 +81,11 @@ func (s *Server) agentBuildMessages(ctx context.Context, st *agentRunState, id *
 	if zone, chars := agentSkillLoadedText(agentSkillActive(st.RunID)); chars > 0 {
 		out = append(out, ai.Message{Role: "system", Content: zone})
 	}
+	// DEV-AI27-13（W13）：个人跨对话记忆注入（27 §11.1）。候选不注入；开关/覆盖链在
+	// personalMemorySystemBlock 内判定；命中与省略写入 agent_memory_usage 供上下文页展示。
+	if memoryZone := s.personalMemorySystemBlock(ctx, id.UserID, id.WorkspaceID, st.ConversationID, st.RunID); memoryZone != "" {
+		out = append(out, ai.Message{Role: "system", Content: memoryZone})
+	}
 	if st.ExecutionOrigin != "routine" && strings.TrimSpace(st.Summary) != "" {
 		out = append(out, ai.Message{Role: "system", Content: "对话摘要（更早的历史，仅供参考）：\n" + truncate(st.Summary, agentSummaryChars)})
 	}

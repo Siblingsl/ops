@@ -823,6 +823,8 @@ export type AgentWorkbenchFeatureName =
   // DEV-AI27-04/07：浏览器能力开关（D-160 runtime-gates，默认关闭）。
   | 'chrome_connect'
   | 'browser_workspace'
+  // DEV-AI27-13：个人跨对话记忆开关。
+  | 'personal_memories'
 
 export interface SystemSettings {
   registration_open: boolean

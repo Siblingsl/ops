@@ -1860,6 +1860,14 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/browser/pairings", s.h(s.createAgentBrowserPairing))
 		r.Post("/agent/browser/pairings/{id}/confirm", s.h(s.confirmAgentBrowserPairing))
 		r.Post("/agent/conversations/{id}/browser-grants", s.h(s.createAgentBrowserGrant))
+		// DEV-AI27-13（W13）：个人跨对话记忆（27 §11.1），受 personal_memories 开关约束。
+		r.Get("/agent/personal-memories", s.h(s.listPersonalMemories))
+		r.Post("/agent/personal-memories", s.h(s.createPersonalMemory))
+		r.Patch("/agent/personal-memories/{id}", s.h(s.patchPersonalMemory))
+		r.Delete("/agent/personal-memories/{id}", s.h(s.deletePersonalMemory))
+		r.Get("/agent/memory-settings", s.h(s.getMemorySettings))
+		r.Patch("/agent/memory-settings", s.h(s.patchMemorySettings))
+		r.Post("/memories/personal-candidates", s.h(s.proposePersonalMemoryCandidate))
 	})
 	// 只减权清理路由（27 §13.4）：不挂 agentGate——智能体/浏览器开关关闭后仍可解绑与撤权；
 	// 仍要求登录、CSRF 与真实资源归属（T-AI27-25A）。

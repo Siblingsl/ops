@@ -234,6 +234,14 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/browser/pairings",
 		"POST /api/v1/agent/browser/pairings/{id}/confirm",
 		"POST /api/v1/agent/conversations/{id}/browser-grants",
+		// DEV-AI27-13（W13）个人跨对话记忆：本人设置页与 run 内提案工具共用，不进入模型工具目录以外的执行面。
+		"GET /api/v1/agent/personal-memories",
+		"POST /api/v1/agent/personal-memories",
+		"PATCH /api/v1/agent/personal-memories/{id}",
+		"DELETE /api/v1/agent/personal-memories/{id}",
+		"GET /api/v1/agent/memory-settings",
+		"PATCH /api/v1/agent/memory-settings",
+		"POST /api/v1/memories/personal-candidates",
 		// 只减权清理路由（27 §13.4）：不挂 agentGate，智能体关闭后仍可解绑/撤权（T-AI27-25A）。
 		"DELETE /api/v1/agent/browser/bindings/{id}",
 		"DELETE /api/v1/agent/browser/grants/{id}",
