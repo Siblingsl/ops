@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>OPS 浏览器桥诊断（W02 验证）</title>
+  <style>
+    :root { color-scheme: light; }
+    body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0; padding: 16px; font-size: 13px; color: #1f2937; background: #faf9fc; }
+    h1 { font-size: 16px; margin: 0 0 12px; color: #4c1d95; }
+    h2 { font-size: 13px; margin: 16px 0 6px; color: #6d28d9; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; }
+    .row { display: flex; gap: 8px; align-items: center; margin: 4px 0; flex-wrap: wrap; }
+    .kv { display: flex; gap: 6px; }
+    .k { color: #6b7280; min-width: 88px; }
+    .code { font-size: 28px; font-weight: 700; letter-spacing: 8px; color: #6d28d9; font-variant-numeric: tabular-nums; }
+    button { border: 1px solid #d1d5db; background: #fff; border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+    button.primary { background: #6d28d9; border-color: #6d28d9; color: #fff; }
+    button.danger { background: #dc2626; border-color: #dc2626; color: #fff; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    select, input[type="text"] { border: 1px solid #d1d5db; border-radius: 6px; padding: 5px 8px; font-size: 13px; }
+    textarea { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 6px; padding: 6px 8px; font-family: ui-monospace, monospace; font-size: 12px; min-height: 64px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #f1f0f5; }
+    .st-paired { color: #16a34a; font-weight: 600; }
+    .st-pairing { color: #d97706; font-weight: 600; }
+    .st-unpaired, .st-revoked { color: #6b7280; font-weight: 600; }
+    .led { background: #f8f7fb; max-height: 180px; overflow: auto; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.6; }
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; background: #ede9fe; color: #5b21b6; }
+    .ok { color: #16a34a; } .bad { color: #dc2626; } .warn { color: #d97706; }
+    #ledger td { font-family: ui-monospace, monospace; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <h1>OPS 浏览器桥诊断 <span class="pill">W02 技术验证 · 仅 OPS_DESKTOP_BRIDGE_DIAG=1</span></h1>
+  <div class="grid">
+    <div class="card">
+      <h2>连接与配对</h2>
+      <div class="kv"><span class="k">桥状态</span><b id="state">–</b></div>
+      <div class="kv"><span class="k">generation</span><span id="generation">–</span></div>
+      <div class="kv"><span class="k">宿主</span><span id="host">–</span></div>
+      <div class="row" id="pairing-row" hidden>
+        <span class="k">配对短码</span>
+        <span class="code" id="code">------</span>
+        <span class="warn" id="expires"></span>
+      </div>
+      <div class="row">
+        <button class="primary" id="confirm">确认配对（短码一致后）</button>
+        <button class="danger" id="revoke">停止 / 撤销授权</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>派发登记动作</h2>
+      <div class="row">
+        <select id="action">
+          <option value="tabs_list">tabs_list</option>
+          <option value="observe">observe</option>
+          <option value="navigate">navigate</option>
+          <option value="click">click</option>
+          <option value="type">type</option>
+          <option value="extract">extract</option>
+          <option value="screenshot">screenshot</option>
+        </select>
+        <button class="primary" id="send">派发</button>
+        <label>request_id（可选幂等重放）</label>
+        <input type="text" id="request_id" style="width:220px" placeholder="留空自动生成" />
+      </div>
+      <textarea id="payload">{"tab_id": 1}</textarea>
+      <div id="result" class="led"></div>
+    </div>
+  </div>
+  <h2>命令账本（幂等 / 状态单向 / unknown_outcome 不重放）</h2>
+  <div class="card">
+    <table id="ledger">
+      <thead><tr><th>request_id</th><th>action</th><th>状态</th><th>创建</th><th>派发</th><th>错误码</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <h2>事件</h2>
+  <div class="card led" id="events"></div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+    function render(snap) {
+      if (!snap) return;
+      $('state').textContent = snap.state;
+      $('state').className = snap.state === 'paired' ? 'st-paired' : snap.state === 'pairing' ? 'st-pairing' : 'st-unpaired';
+      $('generation').textContent = snap.generation;
+      $('host').textContent = snap.host ? `${snap.host.host_instance_id.slice(0, 8)}… @ ${new Date(snap.host.connected_at).toLocaleTimeString()}` : '未连接';
+      const row = $('pairing-row');
+      if (snap.pairing && !snap.pairing.expired) {
+        row.hidden = false;
+        $('code').textContent = snap.pairing.code;
+        $('expires').textContent = `有效至 ${new Date(snap.pairing.expires_at).toLocaleTimeString()}`;
+      } else {
+        row.hidden = true;
+      }
+      const tbody = $('ledger').querySelector('tbody');
+      tbody.innerHTML = '';
+      for (const e of [...snap.ledger].reverse()) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${esc(e.request_id.slice(0, 13))}…</td><td>${esc(e.action)}</td><td class="${e.state === 'succeeded' ? 'ok' : e.state === 'unknown_outcome' ? 'warn' : e.state === 'failed' ? 'bad' : ''}">${esc(e.state)}</td><td>${new Date(e.created_at).toLocaleTimeString()}</td><td>${e.dispatched_at ? new Date(e.dispatched_at).toLocaleTimeString() : '–'}</td><td>${esc(e.error_code || '–')}</td>`;
+        tbody.appendChild(tr);
+      }
+      $('events').innerHTML = [...snap.events].reverse().map((e) => `<div>${new Date(e.at).toLocaleTimeString()} [${esc(e.kind)}] ${esc(e.message)}</div>`).join('');
+    }
+
+    $('confirm').onclick = () => window.opsBridgeDiag.confirmPairing();
+    $('revoke').onclick = () => window.opsBridgeDiag.revoke();
+    $('send').onclick = async () => {
+      let payload = {};
+      try { payload = JSON.parse($('payload').value || '{}'); } catch (e) { $('result').textContent = `payload JSON 错误：${e.message}`; return; }
+      const requestId = $('request_id').value.trim() || null;
+      const res = await window.opsBridgeDiag.dispatch($('action').value, payload, requestId);
+      $('result').textContent = `dispatch -> ${JSON.stringify(res, null, 2)}`;
+    };
+
+    window.opsBridgeDiag.onUpdate(render);
+    window.opsBridgeDiag.getState().then(render);
+  </script>
+</body>
+</html>

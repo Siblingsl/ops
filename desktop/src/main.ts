@@ -20,6 +20,7 @@ import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { startBrowserBridgeDiagnostics } from './browser-bridge';
 
 // 补上非 EPIPE 未捕获异常的展示（防护本身已在 import 时装好）。
 installBrokenPipeGuard((error) => {
@@ -275,6 +276,10 @@ function startApplication(): void {
       installDownloadHandling(businessSession);
       await registerLocalProtocol(businessSession);
       await registerLocalProtocol(localSettingsSession);
+      // DEV-AI27-02 W02 技术验证：浏览器桥诊断模式，显式环境开关，默认关闭。
+      if (process.env.OPS_DESKTOP_BRIDGE_DIAG === '1') {
+        await startBrowserBridgeDiagnostics();
+      }
       registerIpcHandlers();
       installApplicationMenu();
       const restoredMode = await desktopClient.restoreAppliedMode();

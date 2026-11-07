@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "OPS Browser Bridge",
+  "version": "0.1.0",
+  "description": "OPS 桌面与本机 Chrome 的受控桥接（DEV-AI27-02 技术验证）。仅执行包内登记动作，不执行任意脚本。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtxTNLJilCbQyozXTnRnn/cp+FHEddhD1kX/jVBUV+zrIUW6+ZcZeH25h8+KcZNgkf+tz7yXnKV3DqOhuPdAVJiXP1eoSDhcw78OFOJ/RXB9+KbJlAlwTZFvDPX1qTs69SK9dszyhrH1wGZbTAbbGw1mEbEM6SLnxjcjGYQVtlFDf0WheJTf2lM8v0a1mkbU5gqxA0Uci+gJZRI9Urzad3T6DYz4K7rdXh7lh8Kl9E3mt0KMTAeEWm7oQcyQmtE8o+Q/BONe50TKZkifRgXKFBO0PI3j/nzztGckEJYv29R8SCqbiH0o7uvdkxHtkQCKNgxzWA5UWeuQoSwie3RrtwwIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "tabs",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "OPS Browser Bridge"
+  }
+}

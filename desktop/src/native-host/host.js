@@ -1,0 +1,327 @@
+'use strict';
+// DEV-AI27-02 W02 技术验证：OPS Native Messaging 宿主（Chrome 原生 stdio 模式）。
+// Chrome(扩展) <-> [4字节小端长度前缀 JSON] <-> 宿主 <-> [回环 NDJSON] <-> OPS 桌面桥。
+// 宿主只做固定信封的转发与校验（版本/类型白名单/HMAC/seq 单调），不执行业务动作；
+// stdout 只走协议帧，诊断日志限量写本地文件。require 时仅导出纯函数，直接执行才启动主循环。
+
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
+
+const OPS_HOST = '127.0.0.1';
+const OPS_PORT = 8765;
+const MAX_FRAME = 4 * 1024 * 1024;
+const MAX_LINE = 4 * 1024 * 1024;
+const PROTOCOL_VERSION = 1;
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 8000;
+const STATE_DIR = path.join(os.homedir(), '.ops-browser-bridge');
+const STATE_PATH = path.join(STATE_DIR, 'host-state.json');
+const LOG_PATH = path.join(STATE_DIR, 'host.log');
+
+// 宿主可信的消息类型（入站双向）：OPS→宿主发 pairing/command/revoke 等；
+// 扩展→宿主发 hello/result/error；pairing_start 在未配对状态也可信。
+const TRUSTED_TYPES = new Set([
+  'hello',
+  'result',
+  'pairing_start',
+  'pairing_confirm',
+  'pairing_confirmed',
+  'command',
+  'revoke',
+  'ping',
+  'pong',
+  'error',
+]);
+
+function encodeFrame(obj) {
+  const body = Buffer.from(JSON.stringify(obj), 'utf8');
+  if (body.length > MAX_FRAME) throw new Error(`frame too large: ${body.length}`);
+  const head = Buffer.alloc(4);
+  head.writeUInt32LE(body.length, 0);
+  return Buffer.concat([head, body]);
+}
+
+function createFrameDecoder(maxFrame = MAX_FRAME) {
+  let buf = Buffer.alloc(0);
+  return {
+    feed(chunk) {
+      buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+      const frames = [];
+      while (buf.length >= 4) {
+        const len = buf.readUInt32LE(0);
+        if (!Number.isSafeInteger(len) || len > maxFrame) throw new Error(`frame length invalid: ${len}`);
+        if (buf.length < 4 + len) break;
+        frames.push(JSON.parse(buf.subarray(4, 4 + len).toString('utf8')));
+        buf = buf.subarray(4 + len);
+      }
+      return frames;
+    },
+  };
+}
+
+function hmacSign(key, seq, type, payload) {
+  return crypto
+    .createHmac('sha256', normalizeKey(key))
+    .update(`${seq}.${type}.${JSON.stringify(payload ?? null)}`)
+    .digest('base64');
+}
+
+// 会话密钥统一为 base64 解码后的原始字节；兼容调用方直接传 Buffer 或 base64 字符串。
+function normalizeKey(key) {
+  if (Buffer.isBuffer(key)) return key;
+  return Buffer.from(String(key), 'base64');
+}
+
+function verifyHmac(key, msg) {
+  if (!key) return false;
+  if (typeof msg.seq !== 'number' || typeof msg.hmac !== 'string') return false;
+  const expect = Buffer.from(hmacSign(key, msg.seq, msg.type, msg.payload));
+  const got = Buffer.from(msg.hmac);
+  if (!(expect.length === got.length && crypto.timingSafeEqual(expect, got))) {
+    // W02 诊断：签名不一致只记类型与摘要前缀，不落载荷内容（日志脱敏）。
+    try {
+      fs.appendFileSync(LOG_PATH, `hmac mismatch type=${msg.type} seq=${msg.seq} expect=${hmacSign(key, msg.seq, msg.type, null).slice(0, 8)} got=${msg.hmac.slice(0, 8)}\n`);
+    } catch {}
+  }
+  return expect.length === got.length && crypto.timingSafeEqual(expect, got);
+}
+
+// 信封校验器：版本、类型白名单、大小上限；配对后追加 HMAC 与 seq 单调（防重放）。
+// hello/pairing_start 是配对起点，永远免签——宿主持旧会话密钥时也能重建配对。
+function createEnvelopeValidator({ getSessionKey }) {
+  let lastSeqIn = 0;
+  return {
+    lastSeqIn() {
+      return lastSeqIn;
+    },
+    check(msg) {
+      if (!msg || typeof msg !== 'object') return 'envelope must be object';
+      if (msg.v !== PROTOCOL_VERSION) return `protocol version mismatch: ${msg.v}`;
+      if (!TRUSTED_TYPES.has(msg.type)) return `type not allowed: ${msg.type}`;
+      if (JSON.stringify(msg).length > MAX_FRAME) return 'envelope too large';
+      const key = getSessionKey();
+      if (key && msg.type !== 'pairing_start' && msg.type !== 'hello') {
+        if (!verifyHmac(key, msg)) return 'hmac verification failed';
+        if (msg.seq <= lastSeqIn) return `replayed or out-of-order seq: ${msg.seq}`;
+        lastSeqIn = msg.seq;
+      }
+      return null;
+    },
+  };
+}
+
+function readState() {
+  try {
+    return JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeState(state) {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  const tmp = `${STATE_PATH}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, STATE_PATH);
+}
+
+function createLogger() {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    return (line) => {
+      try {
+        fs.appendFileSync(LOG_PATH, `${new Date().toISOString()} ${line}\n`);
+      } catch {
+        /* 日志失败不影响协议 */
+      }
+    };
+  } catch {
+    return () => {};
+  }
+}
+
+function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, opsHost = OPS_HOST } = {}) {
+  const decoder = createFrameDecoder();
+  const state = readState();
+  const hostInstanceId = state.host_instance_id || crypto.randomUUID();
+  // 每次启动都刷新 pid：M3 场景依赖 host-state.json 的 pid 精确指向当前宿主进程。
+  if (!state.host_instance_id || state.pid !== process.pid || state.session_key !== (state.session_key || null)) {
+    writeState({ host_instance_id: hostInstanceId, pid: process.pid, session_key: state.session_key || null });
+  }
+
+  let sessionKey = state.session_key || null;
+  // 两条链路各自独立的序列空间：ops（宿主<->OPS 桥）与 ext（宿主<->Chrome 扩展）。
+  // 桥->扩展的 command 由宿主验签后重签（seqOutExt），扩展->桥的 result 反向同理。
+  const opsValidator = createEnvelopeValidator({ getSessionKey: () => sessionKey });
+  const extValidator = createEnvelopeValidator({ getSessionKey: () => sessionKey });
+  let opsSocket = null;
+  let opsBuf = '';
+  let closed = false;
+  let reconnectDelay = RECONNECT_BASE_MS;
+  let reconnectTimer = null;
+  let seqOutOps = 0;
+  let seqOutExt = 0;
+
+  function frameToChrome(obj) {
+    process.stdout.write(encodeFrame(obj));
+  }
+
+  function signOps(msg) {
+    if (sessionKey && msg.type !== 'hello') {
+      seqOutOps += 1;
+      msg.seq = seqOutOps;
+      msg.hmac = hmacSign(sessionKey, msg.seq, msg.type, msg.payload);
+    }
+    return msg;
+  }
+
+  function signExt(msg) {
+    if (sessionKey && msg.type !== 'pairing_start' && msg.type !== 'pairing_confirm') {
+      seqOutExt += 1;
+      msg.seq = seqOutExt;
+      msg.hmac = hmacSign(sessionKey, msg.seq, msg.type, msg.payload);
+    }
+    return msg;
+  }
+
+  function toOps(msg) {
+    if (!opsSocket || opsSocket.destroyed) {
+      log(`drop ${msg.type}: ops not connected`);
+      return;
+    }
+    opsSocket.write(`${JSON.stringify(signOps(msg))}\n`);
+  }
+
+  function handleChrome(msg) {
+    const err = extValidator.check(msg);
+    if (err) {
+      log(`reject chrome->ops: ${err}`);
+      frameToChrome({ v: PROTOCOL_VERSION, type: 'error', payload: { reason: err } });
+      return;
+    }
+    if (msg.type === 'result' || msg.type === 'error' || msg.type === 'hello') {
+      // 转发给 OPS 前按宿主->桥序列空间重签（原始 seq 属于扩展->宿主空间）。
+      delete msg.seq;
+      delete msg.hmac;
+    }
+    toOps(msg);
+  }
+
+  function handleOps(msg) {
+    const err = opsValidator.check(msg);
+    if (err) {
+      log(`reject ops->chrome: ${err}`);
+      return;
+    }
+    // pairing_start 表示桥端要求重新配对：作废旧会话密钥，pairing_confirm 以新密钥到达。
+    if (msg.type === 'pairing_start' && sessionKey) {
+      sessionKey = null;
+      writeState({ host_instance_id: hostInstanceId, pid: process.pid, session_key: null });
+      log('session key cleared for re-pairing');
+    }
+    if (msg.type === 'pairing_confirm' && msg.payload && msg.payload.session_key) {
+      sessionKey = String(msg.payload.session_key);
+      writeState({ host_instance_id: hostInstanceId, pid: process.pid, session_key: sessionKey });
+      log('session key stored');
+    }
+    if (msg.type === 'revoke') {
+      sessionKey = null;
+      writeState({ host_instance_id: hostInstanceId, pid: process.pid, session_key: null });
+      log('session revoked by ops');
+    }
+    if (msg.type === 'command' || msg.type === 'revoke' || msg.type === 'ping' || msg.type === 'pong') {
+      // 转发给扩展前按宿主->扩展序列空间重签（原始 seq 属于桥->宿主空间）。
+      delete msg.seq;
+      delete msg.hmac;
+      signExt(msg);
+    }
+    frameToChrome(msg);
+  }
+
+  function connectOps() {
+    if (closed || (opsSocket && !opsSocket.destroyed)) return;
+    const socket = net.connect(opsPort, opsHost);
+    opsSocket = socket;
+    socket.setNoDelay(true);
+    socket.on('connect', () => {
+      reconnectDelay = RECONNECT_BASE_MS;
+      log(`ops connected ${opsHost}:${opsPort} localPort=${socket.localPort} pid=${process.pid}`);
+      toOps({
+        v: PROTOCOL_VERSION,
+        type: 'hello',
+        payload: { host_instance_id: hostInstanceId, pid: process.pid, protocol_version: PROTOCOL_VERSION, connected_at: Date.now() },
+      });
+    });
+    socket.on('data', (chunk) => {
+      opsBuf += chunk.toString('utf8');
+      let idx;
+      while ((idx = opsBuf.indexOf('\n')) >= 0) {
+        const line = opsBuf.slice(0, idx);
+        opsBuf = opsBuf.slice(idx + 1);
+        if (!line.trim()) continue;
+        if (line.length > MAX_LINE) {
+          log('ops line too large; drop');
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(line);
+          handleOps(parsed);
+        } catch (err) {
+          log(`ops line parse failed: ${err.message}`);
+        }
+      }
+      if (opsBuf.length > MAX_LINE) {
+        log('ops buffer overflow; reset');
+        opsBuf = '';
+      }
+    });
+    socket.on('error', (err) => log(`ops socket error: ${err.message}`));
+    socket.on('close', () => {
+      opsSocket = null;
+      if (!closed) {
+        reconnectTimer = setTimeout(connectOps, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+      }
+    });
+  }
+
+  process.stdin.on('data', (chunk) => {
+    let frames;
+    try {
+      frames = decoder.feed(chunk);
+    } catch (err) {
+      log(`chrome frame error: ${err.message}`);
+      process.exit(1);
+      return;
+    }
+    for (const frame of frames) handleChrome(frame);
+  });
+  process.stdin.on('end', () => {
+    closed = true;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (opsSocket) opsSocket.destroy();
+    process.exit(0);
+  });
+  process.on('disconnect', () => process.exit(0));
+  connectOps();
+  log('host started pid=' + process.pid);
+}
+
+if (require.main === module) {
+  startNativeMessagingStdio();
+}
+
+module.exports = {
+  encodeFrame,
+  createFrameDecoder,
+  hmacSign,
+  verifyHmac,
+  createEnvelopeValidator,
+  PROTOCOL_VERSION,
+  OPS_HOST,
+  OPS_PORT,
+  startNativeMessagingStdio,
+};

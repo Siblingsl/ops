@@ -64,3 +64,8 @@ docs/design/desktop-creative/prototype/*
 d155-verification-20261028/
 # E2E 运行时生成的临时校验目录
 tmpverify/
+
+# DEV-AI27-02 W02 浏览器桥：宿主注册生成物（含本机绝对路径）与验证现场
+desktop/src/native-host/com.ops.desktop.bridge.json
+desktop/src/native-host/run-host.bat
+desktop/.tmp/
