@@ -234,6 +234,11 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/browser/pairings",
 		"POST /api/v1/agent/browser/pairings/{id}/confirm",
 		"POST /api/v1/agent/conversations/{id}/browser-grants",
+		// DEV-AI27-04 第二批：浏览器命令账本（本人工作台与本机桥调用）。
+		"POST /api/v1/agent/browser/commands",
+		"POST /api/v1/agent/browser/commands/{id}/dispatch",
+		"POST /api/v1/agent/browser/commands/{id}/receipt",
+		"GET /api/v1/agent/browser/commands",
 		// DEV-AI27-13（W13）个人跨对话记忆：本人设置页与 run 内提案工具共用，不进入模型工具目录以外的执行面。
 		"GET /api/v1/agent/personal-memories",
 		"POST /api/v1/agent/personal-memories",

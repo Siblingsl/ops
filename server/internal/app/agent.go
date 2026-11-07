@@ -1868,6 +1868,11 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Get("/agent/memory-settings", s.h(s.getMemorySettings))
 		r.Patch("/agent/memory-settings", s.h(s.patchMemorySettings))
 		r.Post("/memories/personal-candidates", s.h(s.proposePersonalMemoryCandidate))
+		// DEV-AI27-04 第二批：命令账本（27 §13.2/§13.3）。
+		r.Post("/agent/browser/commands", s.h(s.createAgentBrowserCommand))
+		r.Post("/agent/browser/commands/{id}/dispatch", s.h(s.dispatchAgentBrowserCommand))
+		r.Post("/agent/browser/commands/{id}/receipt", s.h(s.receiptAgentBrowserCommand))
+		r.Get("/agent/browser/commands", s.h(s.listAgentBrowserCommands))
 	})
 	// 只减权清理路由（27 §13.4）：不挂 agentGate——智能体/浏览器开关关闭后仍可解绑与撤权；
 	// 仍要求登录、CSRF 与真实资源归属（T-AI27-25A）。

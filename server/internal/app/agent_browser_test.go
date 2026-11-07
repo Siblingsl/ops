@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -41,7 +43,7 @@ func TestW04BrowserFeatureGates(t *testing.T) {
 
 func TestW04PairingIdempotencyConfirmCAS(t *testing.T) {
 	clearAgentFeatureSettings(t)
-	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace")
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace,event_resume")
 	requestID := uuid.NewString()
 	var first browserPairingView
 	env.mustJSON(t, "POST", "/api/v1/agent/browser/pairings", map[string]any{"request_id": requestID}, &first)
@@ -90,7 +92,7 @@ func TestW04PairingIdempotencyConfirmCAS(t *testing.T) {
 
 func TestW04BrowserTenantIsolation(t *testing.T) {
 	clearAgentFeatureSettings(t)
-	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace")
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace,event_resume")
 	// owner 建绑定
 	var pairing browserPairingView
 	env.mustJSON(t, "POST", "/api/v1/agent/browser/pairings", map[string]any{"request_id": uuid.NewString()}, &pairing)
@@ -153,7 +155,7 @@ func TestW04BrowserTenantIsolation(t *testing.T) {
 
 func TestW04BrowserGrantLifecycle(t *testing.T) {
 	clearAgentFeatureSettings(t)
-	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace")
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace,event_resume")
 	providerID := env.ensureToolModel(t)
 	conv := env.agentRunConversation(t, providerID)
 	t.Cleanup(func() { deleteConversations(t, conv.ID) })
@@ -204,4 +206,158 @@ func TestW04BrowserGrantLifecycle(t *testing.T) {
 	// 只减权：关闭全部浏览器开关后撤销绑定仍可达（T-AI27-25A）
 	t.Setenv(agentWorkbenchFeatureEnv, "")
 	env.mustJSON(t, "DELETE", "/api/v1/agent/browser/bindings/"+confirmed.BindingID, map[string]any{}, nil)
+}
+
+// DEV-AI27-04 第二批：命令账本（幂等/状态单向/租约联动/事件投影）。
+func TestW04CommandLedgerLifecycle(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace,event_resume")
+	providerID := env.ensureToolModel(t)
+	conv := env.agentRunConversation(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+
+	// 绑定 + 活动 run + 租约
+	var pairing browserPairingView
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/pairings", map[string]any{"request_id": uuid.NewString()}, &pairing)
+	var confirmed struct {
+		BindingID string `json:"binding_id"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/pairings/"+pairing.ID+"/confirm", w04ConfirmBody(t, pairing.Revision), &confirmed)
+	runID := agentInsertRun(t, conv.ID, uuid.MustParse(env.me(t).Workspace.ID), uuid.MustParse(env.me(t).UserID), uuid.MustParse(providerID), "running", "message")
+	var grant browserGrantView
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-grants", map[string]any{
+		"binding_id": confirmed.BindingID, "run_id": runID.String(),
+		"tab_handle": "tab-1", "origins": []string{"https://example.com"},
+	}, &grant)
+
+	cmdBody := func(requestID string) map[string]any {
+		return map[string]any{
+			"grant_id": grant.ID, "run_id": runID.String(), "request_id": requestID,
+			"action": "observe", "payload": map[string]any{"tab_id": 1},
+		}
+	}
+
+	// 未登记动作拒绝
+	rogue := cmdBody(uuid.NewString())
+	rogue["action"] = "execute_js"
+	env.expectErr(t, "POST", "/api/v1/agent/browser/commands", rogue, "browser_action_unsupported")
+
+	// 创建 queued → 幂等重放返回原命令 → 异载荷 409
+	var first browserCommandView
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/commands", cmdBody("11111111-1111-4111-8111-111111111111"), &first)
+	if first.State != "queued" {
+		t.Fatalf("新命令应 queued：%+v", first)
+	}
+	var replay browserCommandView
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/commands", cmdBody("11111111-1111-4111-8111-111111111111"), &replay)
+	if replay.ID != first.ID || replay.State != "queued" {
+		t.Fatalf("同编号同载荷应幂等：%+v vs %+v", first, replay)
+	}
+	conflict := cmdBody("11111111-1111-4111-8111-111111111111")
+	conflict["payload"] = map[string]any{"tab_id": 2}
+	env.expectErr(t, "POST", "/api/v1/agent/browser/commands", conflict, "browser_request_conflict")
+
+	// 非本人 grant 409（不泄露）
+	other := env.registerClient(t, "w04b-other-"+uuid.NewString()[:8], testPassword)
+	var ome meInfo
+	other.mustJSON(t, "GET", "/api/v1/auth/me", nil, &ome)
+	other.csrf = ome.CSRF
+	if st, _ := other.do("POST", "/api/v1/agent/browser/commands", cmdBody("22222222-2222-4222-8222-222222222222")); st != http.StatusConflict {
+		t.Fatalf("他人租约建命令应 409，got %d", st)
+	}
+	other.restore(env)
+
+	// dispatch → 事件投影 → receipt succeeded
+	var dispatched browserCommandView
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/commands/"+first.ID+"/dispatch", map[string]any{}, &dispatched)
+	if dispatched.State != "dispatched" {
+		t.Fatalf("dispatch 后应 dispatched：%+v", dispatched)
+	}
+	var done browserCommandView
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/commands/"+first.ID+"/receipt", map[string]any{
+		"state": "succeeded", "receipt_hash": "abc",
+	}, &done)
+	if done.State != "succeeded" {
+		t.Fatalf("回执后应 succeeded：%+v", done)
+	}
+	// 终态：同结果幂等重放；不同结果 409（先核对不重放）
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/commands/"+first.ID+"/receipt", map[string]any{
+		"state": "succeeded", "receipt_hash": "abc",
+	}, &done)
+	env.expectErr(t, "POST", "/api/v1/agent/browser/commands/"+first.ID+"/receipt", map[string]any{
+		"state": "failed",
+	}, "browser_receipt_conflict")
+
+	// 事件投影：browser.command_started/finished 进入会话事件流（直接查库，SSE 端点另测）。
+	var eventCount int
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT count(*) FROM agent_event WHERE conversation_id=$1`,
+			conv.ID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount < 2 {
+		t.Logf("会话事件总数=%d", eventCount)
+		var types []string
+		rows, err2 := env.srv.db.Query(context.Background(), `SELECT type FROM agent_event WHERE conversation_id=$1 ORDER BY event_seq DESC LIMIT 10`, conv.ID)
+		if err2 == nil {
+			for rows.Next() {
+				var ty string
+				rows.Scan(&ty)
+				types = append(types, ty)
+			}
+			rows.Close()
+		}
+		t.Fatalf("命令事件未投影：count=%d types=%v", eventCount, types)
+	}
+	// 撤销租约 → 新命令 409、在途回执拒绝（迟到结果核对）
+	env.mustJSON(t, "DELETE", "/api/v1/agent/browser/grants/"+grant.ID, map[string]any{}, nil)
+	env.expectErr(t, "POST", "/api/v1/agent/browser/commands", cmdBody("33333333-3333-4333-8333-333333333333"), "browser_lease_conflict")
+}
+
+func TestW04CommandUnknownOutcomeSweep(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace,event_resume")
+	providerID := env.ensureToolModel(t)
+	conv := env.agentRunConversation(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+
+	var pairing browserPairingView
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/pairings", map[string]any{"request_id": uuid.NewString()}, &pairing)
+	var confirmed struct {
+		BindingID string `json:"binding_id"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/pairings/"+pairing.ID+"/confirm", w04ConfirmBody(t, pairing.Revision), &confirmed)
+	runID := agentInsertRun(t, conv.ID, uuid.MustParse(env.me(t).Workspace.ID), uuid.MustParse(env.me(t).UserID), uuid.MustParse(providerID), "running", "message")
+	var grant browserGrantView
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-grants", map[string]any{
+		"binding_id": confirmed.BindingID, "run_id": runID.String(),
+		"tab_handle": "tab-1", "origins": []string{"https://example.com"},
+	}, &grant)
+
+	// 创建命令并 dispatch，deadline 已过 → sweep 转 unknown_outcome → 迟到回执拒绝
+	var cmd browserCommandView
+	past := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/commands", map[string]any{
+		"grant_id": grant.ID, "run_id": runID.String(), "request_id": uuid.NewString(),
+		"action": "click", "payload": map[string]any{"tab_id": 1}, "deadline_at": past,
+	}, &cmd)
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/commands/"+cmd.ID+"/dispatch", map[string]any{}, &cmd)
+	env.srv.sweepAgentBrowserCommands(context.Background())
+	var after struct {
+		Commands []browserCommandView 
+	}
+	env.mustJSON(t, "GET", "/api/v1/agent/browser/commands?run_id="+runID.String(), map[string]any{}, &after)
+	found := false
+	for _, c := range after.Commands {
+		if c.ID == cmd.ID && c.State == "unknown_outcome" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("sweep 后应 unknown_outcome：%+v", after.Commands)
+	}
+	// unknown_outcome 后迟到回执：租约有效 → 拒绝（先核对不重放，状态已终态不可迁移）
+	env.expectErr(t, "POST", "/api/v1/agent/browser/commands/"+cmd.ID+"/receipt", map[string]any{
+		"state": "succeeded",
+	}, "browser_receipt_conflict")
 }
