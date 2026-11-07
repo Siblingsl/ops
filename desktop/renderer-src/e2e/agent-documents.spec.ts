@@ -505,6 +505,62 @@ test('DEV-QA26 G7-03 CSV恰好10000行100列通过Electron文件选择器并显�
   }
 })
 
+test('DEV-QA26 G7-03 真实文件选择器拒绝损坏PDF且不允许发送', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(180_000)
+  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-qa26-corrupt-pdf-'))
+  let app: ElectronApplication | undefined
+  try {
+    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + userData, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const page = await app.firstWindow()
+    await prepare(page, baseURL!)
+    const damaged = Buffer.from(pdfFixture())
+    const rootPagesOffset = damaged.indexOf(Buffer.from('/Pages 2 0 R')) + Buffer.byteLength('/Pages ')
+    expect(rootPagesOffset).toBeGreaterThan(Buffer.byteLength('/Pages ') - 1)
+    damaged[rootPagesOffset] = '9'.charCodeAt(0)
+    expect(damaged.includes(Buffer.from('/Encrypt'))).toBe(false)
+    const uploadTimes: number[] = []
+    let attachmentPosts = 0
+    let messagePosts = 0
+    page.on('request', (request) => {
+      const pathname = new URL(request.url()).pathname
+      if (pathname === '/api/v1/agent/attachments' && request.method() === 'POST') attachmentPosts++
+      if (/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/.test(pathname) && request.method() === 'POST') messagePosts++
+    })
+    for (let index = 0; index < 20; index++) {
+      const name = `damaged-pdf-${index + 1}.pdf`
+      const chooser = page.waitForEvent('filechooser')
+      const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+      const started = performance.now()
+      await page.getByRole('button', { name: '添加附件', exact: true }).click()
+      await (await chooser).setFiles({ name, mimeType: 'application/pdf', buffer: damaged })
+      const response = await upload
+      uploadTimes.push(Number((performance.now() - started).toFixed(2)))
+      const body = await response.json() as { error?: { code?: string } }
+      expect(response.status()).toBe(422)
+      expect(body.error?.code).toBe('agent_attachment_parse_failed')
+      const card = page.getByLabel(`${name} failed`, { exact: true })
+      await expect(card).toContainText('已加密或格式损坏')
+      await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+      await page.getByRole('button', { name: `移除 ${name}`, exact: true }).click()
+      await expect(card).toHaveCount(0)
+    }
+    const sorted = [...uploadTimes].sort((left, right) => left - right)
+    const percentile = (rank: number) => sorted[Math.ceil(rank * sorted.length) - 1]
+    expect(attachmentPosts).toBe(20)
+    expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+    expect(messagePosts).toBe(0)
+    console.log(`DEV-QA26_METRIC_CORRUPT_PDF_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', sample: 'valid PDF fixture with catalog page-tree reference corrupted; no /Encrypt marker', interactions: uploadTimes.length, rejected: 20, failures: 0, p50_ms: percentile(0.50), p95_ms: percentile(0.95), conversations: 0, message_posts: messagePosts })}`)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-corrupt-pdf-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
 test('DEV-QA26 Windows Electron图片与文本附件进入同一条持久消息', async ({ baseURL }) => {
   test.skip(process.platform !== 'win32', '需要Windows Electron')
   test.setTimeout(120_000)
