@@ -829,6 +829,9 @@ export type AgentWorkbenchFeatureName =
   | 'plugin_mcp'
   // DEV-AI27-15：子智能体开关。
   | 'subagents'
+  // DEV-AI27-16：双模式语音开关。
+  | 'voice_dictation'
+  | 'voice_realtime'
 
 export interface SystemSettings {
   registration_open: boolean

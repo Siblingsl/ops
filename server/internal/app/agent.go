@@ -1886,6 +1886,12 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/delegations/{id}/cancel", s.h(s.cancelDelegation))
 		r.Post("/agent/delegations/{id}/result", s.h(s.resultDelegation))
 		r.Post("/agent/delegation-groups/{id}/cancel", s.h(s.cancelDelegationGroup))
+		// DEV-AI27-16（W16）：双模式语音（27 §11.4）。
+		r.Post("/agent/conversations/{id}/voice-sessions", s.h(s.createVoiceSession))
+		r.Post("/agent/voice-sessions/{id}/turns", s.h(s.createVoiceTurn))
+		r.Patch("/agent/voice-sessions/{id}/turns/{turnId}", s.h(s.editVoiceTurn))
+		r.Patch("/agent/voice-sessions/{id}", s.h(s.patchVoiceSession))
+		r.Get("/agent/voice-sessions/{id}", s.h(s.getVoiceSession))
 	})
 	// 只减权清理路由（27 §13.4）：不挂 agentGate——智能体/浏览器开关关闭后仍可解绑与撤权；
 	// 仍要求登录、CSRF 与真实资源归属（T-AI27-25A）。

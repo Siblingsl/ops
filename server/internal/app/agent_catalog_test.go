@@ -252,6 +252,12 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/delegations/{id}/cancel",
 		"POST /api/v1/agent/delegations/{id}/result",
 		"POST /api/v1/agent/delegation-groups/{id}/cancel",
+		// DEV-AI27-16（W16）双模式语音：输入台语音条与实时语音条共用。
+		"POST /api/v1/agent/conversations/{id}/voice-sessions",
+		"POST /api/v1/agent/voice-sessions/{id}/turns",
+		"PATCH /api/v1/agent/voice-sessions/{id}/turns/{turnId}",
+		"PATCH /api/v1/agent/voice-sessions/{id}",
+		"GET /api/v1/agent/voice-sessions/{id}",
 		// DEV-AI27-13（W13）个人跨对话记忆：本人设置页与 run 内提案工具共用，不进入模型工具目录以外的执行面。
 		"GET /api/v1/agent/personal-memories",
 		"POST /api/v1/agent/personal-memories",
