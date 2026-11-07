@@ -1892,6 +1892,11 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Patch("/agent/voice-sessions/{id}/turns/{turnId}", s.h(s.editVoiceTurn))
 		r.Patch("/agent/voice-sessions/{id}", s.h(s.patchVoiceSession))
 		r.Get("/agent/voice-sessions/{id}", s.h(s.getVoiceSession))
+		// DEV-AI27-17（W17）：Windows 电脑控制前台租约（27 §11.5）。
+		r.Post("/agent/conversations/{id}/computer-grants", s.h(s.createComputerGrant))
+		r.Delete("/agent/computer-grants/{id}", s.h(s.revokeComputerGrant))
+		r.Get("/agent/computer-grants", s.h(s.listComputerGrants))
+		r.Post("/agent/computer-grants/{id}/handoff", s.h(s.handoffComputerGrant))
 	})
 	// 只减权清理路由（27 §13.4）：不挂 agentGate——智能体/浏览器开关关闭后仍可解绑与撤权；
 	// 仍要求登录、CSRF 与真实资源归属（T-AI27-25A）。

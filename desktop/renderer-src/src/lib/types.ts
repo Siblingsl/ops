@@ -832,6 +832,8 @@ export type AgentWorkbenchFeatureName =
   // DEV-AI27-16：双模式语音开关。
   | 'voice_dictation'
   | 'voice_realtime'
+  // DEV-AI27-17：Windows 电脑控制开关。
+  | 'computer_use'
 
 export interface SystemSettings {
   registration_open: boolean

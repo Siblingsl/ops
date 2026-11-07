@@ -258,6 +258,11 @@ func agentClassifiedRouteList() map[string]string {
 		"PATCH /api/v1/agent/voice-sessions/{id}/turns/{turnId}",
 		"PATCH /api/v1/agent/voice-sessions/{id}",
 		"GET /api/v1/agent/voice-sessions/{id}",
+		// DEV-AI27-17（W17）Windows 电脑控制：选窗器与任务面板共用。
+		"POST /api/v1/agent/conversations/{id}/computer-grants",
+		"DELETE /api/v1/agent/computer-grants/{id}",
+		"GET /api/v1/agent/computer-grants",
+		"POST /api/v1/agent/computer-grants/{id}/handoff",
 		// DEV-AI27-13（W13）个人跨对话记忆：本人设置页与 run 内提案工具共用，不进入模型工具目录以外的执行面。
 		"GET /api/v1/agent/personal-memories",
 		"POST /api/v1/agent/personal-memories",

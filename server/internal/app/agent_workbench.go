@@ -34,6 +34,8 @@ var agentWorkbenchFeatureNames = []string{
 	"subagents",
 	// DEV-AI27-16（W16）：双模式语音开关（27 15.3 提案名），默认关闭。
 	"voice_dictation", "voice_realtime",
+	// DEV-AI27-17（W17）：Windows 电脑控制开关（27 15.3 提案名），默认关闭。
+	"computer_use",
 }
 
 func agentFeaturesFromList(raw string) map[string]bool {
