@@ -1873,6 +1873,13 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/browser/commands/{id}/dispatch", s.h(s.dispatchAgentBrowserCommand))
 		r.Post("/agent/browser/commands/{id}/receipt", s.h(s.receiptAgentBrowserCommand))
 		r.Get("/agent/browser/commands", s.h(s.listAgentBrowserCommands))
+		// DEV-AI27-06（W06）：工具派发端点（模型工具 dispatch 走非 /agent/ 路径）。
+		r.Post("/tools/browser/commands", s.h(s.createAgentBrowserCommand))
+		r.Get("/tools/mcp/connections", s.h(s.listPluginConnections))
+		r.Post("/tools/subagent/delegation-groups", s.h(s.createDelegationGroup))
+		r.Post("/tools/subagent/delegations/{id}/cancel", s.h(s.cancelDelegation))
+		r.Get("/tools/computer/grants", s.h(s.listComputerGrants))
+		r.Post("/tools/computer/grants/{id}/handoff", s.h(s.handoffComputerGrant))
 		// DEV-AI27-14（W14）：插件/MCP 连接注册与调用回执（27 §11.2）。
 		r.Get("/agent/plugin-connections", s.h(s.listPluginConnections))
 		r.Post("/agent/plugin-connections", s.h(s.createPluginConnection))

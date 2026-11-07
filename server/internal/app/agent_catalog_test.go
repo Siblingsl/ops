@@ -239,6 +239,13 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/browser/commands/{id}/dispatch",
 		"POST /api/v1/agent/browser/commands/{id}/receipt",
 		"GET /api/v1/agent/browser/commands",
+		// DEV-AI27-06（W06）工具派发端点（模型 dispatch 走 /tools/ 路径）。
+		"POST /api/v1/tools/browser/commands",
+		"GET /api/v1/tools/mcp/connections",
+		"POST /api/v1/tools/subagent/delegation-groups",
+		"POST /api/v1/tools/subagent/delegations/{id}/cancel",
+		"GET /api/v1/tools/computer/grants",
+		"POST /api/v1/tools/computer/grants/{id}/handoff",
 		// DEV-AI27-14（W14）插件/MCP：本人管理页与 run 工具调用共用。
 		"GET /api/v1/agent/plugin-connections",
 		"POST /api/v1/agent/plugin-connections",

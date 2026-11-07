@@ -183,6 +183,11 @@ func buildAgentCatalog() []AgentTool {
 	out = append(out, agentToolsSettings...)
 	out = append(out, agentToolsAdmin...)
 	out = append(out, agentMetaTools...)
+	// DEV-AI27-06（W06）：浏览器/MCP/子智能体/电脑控制工具（27 §8.1/§11.2/§11.3/§11.5）。
+	out = append(out, ai27BrowserTools()...)
+	out = append(out, ai27DelegationTools()...)
+	out = append(out, ai27ComputerTools()...)
+	out = append(out, ai27MCPTools()...)
 	return out
 }
 
