@@ -72,7 +72,7 @@ async function artifactVersionAndForkJourney(page: Page, screenshotName: string,
 
   let panel
   if (desktop) {
-    const panelToggle = page.getByRole('button', { name: '任务面板', exact: true })
+    const panelToggle = page.getByRole('button', { name: '工作视图', exact: true })
     if (await panelToggle.getAttribute('aria-expanded') !== 'true') await panelToggle.click()
     panel = page.getByTestId('desktop-agent-side-panel')
     await panel.getByRole('tab', { name: '产物', exact: true }).click()
@@ -155,7 +155,7 @@ async function queuedInputJourney(page: Page, screenshotName: string, baseURL: s
   const inputResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/conversations/${conversationID}/inputs` && response.request().method() === 'POST')
   await page.getByRole('button', { name: '排到下一条', exact: true }).click()
   expect((await inputResponse).status()).toBe(202)
-  await page.getByRole('button', { name: '任务面板', exact: true }).click()
+  await page.getByRole('button', { name: '工作视图', exact: true }).click()
   const taskPanel = page.getByTestId('desktop-agent-side-panel')
   await expect(taskPanel.getByRole('heading', { name: '补充与排队', exact: true })).toBeVisible()
   await expect(taskPanel.getByText(/排队输入已安全接收并处理。/)).toBeVisible()

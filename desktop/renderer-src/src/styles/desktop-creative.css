@@ -521,18 +521,30 @@ html[data-reduced-motion='true'] .desktop-quick-collect { transition: none; }
 .desktop-agent-chat-settings:hover { background: var(--ops-accent-soft); }
 .desktop-agent-chat-settings svg { width: 14px; height: 14px; }
 .desktop-agent-private-tag { flex: 0 0 auto; border-radius: 999px; background: var(--ops-subtle); padding: 3px 7px; color: var(--ops-muted); font-size: 10px; }
-.desktop-agent-chat-stream { padding: 0 !important; background: var(--ops-canvas); }
+.desktop-agent-chat-stream { padding: 0 !important; background: #ffffff; }
 .desktop-agent-message-column { max-width: 800px; gap: 0; padding: 30px 30px 20px; }
 .desktop-agent-day { margin-bottom: 26px; color: var(--ops-muted); font-size: 11px; text-align: center; }
 .desktop-agent-message { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; margin-bottom: 28px; }
+.desktop-agent-message.user { align-items: flex-end; }
+.desktop-agent-run-message { gap: 0; }
+.desktop-agent-run-segment + .desktop-agent-run-segment { margin-top: 7px; }
+.desktop-agent-run-message-item { min-width: 0; }
+.desktop-agent-run-message-item .desktop-agent-message-bubble { width: 100%; max-width: 100% !important; }
+.desktop-agent-run-day { margin-top: 15px; }
+.desktop-agent-run-live { margin: 5px 0 7px 34px; color: var(--ops-text); font-size: 13px; line-height: 1.95; }
+.desktop-agent-run-live-note { margin-top: 7px; border-top: 1px solid var(--ops-border); padding-top: 6px; color: var(--ops-muted); font-size: 11px; line-height: 1.6; }
+.desktop-agent-run-message > [role='status'] { width: fit-content; max-width: none; margin: 7px 0 0 34px; border: 1px solid #e7e7eb; border-radius: 10px; background: #f3f3f5; color: #777782; font-size: 11px; }
+.desktop-agent-run-message > [role='status'] svg { color: #9999a3; }
 .desktop-agent-message-speaker { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--ops-text); font-size: 12px; font-weight: 600; }
+.desktop-agent-message.user .desktop-agent-message-speaker { flex-direction: row-reverse; }
 .desktop-agent-message-speaker small { color: var(--ops-muted); font-size: 10px; font-weight: 400; }
 .desktop-agent-user-avatar, .desktop-agent-bot-avatar { display: grid; flex: 0 0 auto; place-items: center; }
 .desktop-agent-user-avatar { width: 23px; height: 23px; border-radius: 50%; background: var(--ops-peach); color: var(--ops-text); font-size: 10px; }
 .desktop-agent-bot-avatar { width: 26px; height: 26px; border-radius: 9px; background: var(--ops-lavender); color: var(--ops-accent); }
 .desktop-agent-bot-avatar svg { width: 16px; height: 16px; }
 html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .desktop-agent-message-bubble { max-width: 100%; border-radius: 0 !important; padding: 0; background: transparent !important; box-shadow: none !important; color: var(--ops-text); font-size: 13px; line-height: 1.95; }
-html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .desktop-agent-message.user .desktop-agent-message-bubble { margin-left: 32px; border-radius: 0 !important; padding: 0; background: transparent !important; color: var(--ops-text); }
+html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .desktop-agent-message.user .desktop-agent-message-bubble { width: fit-content; max-width: 82%; margin-left: 32px; border-radius: 0 !important; padding: 0; background: transparent !important; color: var(--ops-text); }
+html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .desktop-agent-message.user .desktop-agent-user-content { max-width: 100%; }
 .desktop-agent-user-content { display: block; margin-left: 0; border-radius: 15px 15px 4px 15px; padding: 16px 18px; background: var(--ops-lavender); color: var(--ops-text); font-size: 13px !important; line-height: 1.95 !important; }
 .desktop-agent-message-footer { min-height: 0; margin-top: 6px; }
 .desktop-agent-message-footer time { display: none; }
@@ -551,10 +563,17 @@ html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .d
 .desktop-agent-action-card > :last-child { margin-bottom: 12px; }
 .desktop-agent-compose-area { border-top: 0; padding: 13px 28px 21.5px; background: var(--ops-canvas); }
 .desktop-agent-compose { width: 100%; max-width: 724px; margin-inline: auto; border: 1px solid var(--ops-border); border-radius: 17px; padding: 14px 16px 13.5px; background: var(--ops-surface); box-shadow: var(--shadow-card); }
+.desktop-agent-compose-attachments { margin-bottom: 4px; padding-bottom: 4px; border-bottom: 1px solid var(--ops-border); }
+.desktop-agent-attachment-list { display: flex; max-width: 100%; flex-wrap: nowrap; gap: 6px; overflow-x: auto; overflow-y: hidden; }
+.desktop-agent-attachment-list > * { flex: 0 0 auto; gap: 6px; padding: 4px; font-size: 11px; }
+.desktop-agent-attachment-list img { width: 32px; height: 32px; }
 .desktop-agent-compose:focus-within { border-color: var(--ops-accent); }
 .desktop-agent-compose-input { display: block; width: 100%; height: 55px !important; min-height: 55px !important; max-height: 192px; resize: none; border: 0 !important; padding: 2px !important; background: transparent !important; box-shadow: none !important; font-size: 12px; outline: none; }
 .desktop-agent-compose-input:focus-visible { outline: none; }
 .desktop-agent-compose-toolbar { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.desktop-agent-stop-button { border: 1px solid color-mix(in srgb, var(--ops-accent) 30%, var(--ops-border)) !important; background: color-mix(in srgb, var(--ops-accent) 13%, transparent) !important; color: var(--ops-accent) !important; backdrop-filter: blur(12px) saturate(145%); box-shadow: 0 2px 8px color-mix(in srgb, var(--ops-accent) 12%, transparent); }
+.desktop-agent-stop-button:hover { border-color: color-mix(in srgb, var(--ops-accent) 48%, var(--ops-border)) !important; background: color-mix(in srgb, var(--ops-accent) 21%, transparent) !important; }
+.desktop-agent-stop-button:active { background: color-mix(in srgb, var(--ops-accent) 28%, transparent) !important; }
 .desktop-agent-compose-choice { display: inline-flex; max-width: 190px; align-items: center; gap: 4px; border: 0; border-radius: 7px; padding: 5px 7px; background: transparent; color: var(--ops-muted); cursor: pointer; font: inherit; font-size: 10px; }
 .desktop-agent-compose-choice:hover { background: var(--ops-subtle); color: var(--ops-text); }
 .desktop-agent-compose-choice:disabled { cursor: not-allowed; opacity: .6; }
@@ -568,7 +587,6 @@ html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .d
 .desktop-agent-model-menu button svg { width: 16px; height: 16px; flex: none; }
 .desktop-agent-compose-choice > svg { width: 12px; height: 12px; flex: 0 0 auto; }
 .desktop-agent-compose-spacer { min-width: 0; flex: 1; }
-.desktop-agent-compose-note { margin-top: 9px; color: var(--ops-muted); font-size: 10px; text-align: center; }
 html[data-presentation='ops-creative-desktop'] #root > div > div > main:has(.desktop-agent-workspace) { padding-top: 12px; padding-bottom: 38px; }
 html[data-presentation='ops-creative-desktop'] #root > div > div > main { padding-bottom: 30px; }
 /* 编辑器工作区底部：26px 状态栏 + 8px 外边框空隙。 */
@@ -598,7 +616,7 @@ html[data-presentation='ops-creative-desktop'] #root nav[aria-label='底部导�
 .desktop-agent-workbench .desktop-agent-chat-settings { min-height: 32px; border: 1px solid var(--ops-border); padding-inline: 9px; color: var(--ops-text); font-size: 12px; }
 .desktop-agent-workbench .desktop-agent-chat-settings:hover,
 .desktop-agent-workbench .desktop-agent-chat-settings[aria-expanded='true'] { border-color: var(--ops-accent); background: var(--ops-accent-soft); color: var(--ops-accent); }
-.desktop-agent-workbench .desktop-agent-chat-stream { display: flex; flex-direction: column; background: var(--ops-canvas); padding: 22px 24px 18px !important; }
+.desktop-agent-workbench .desktop-agent-chat-stream { display: flex; flex-direction: column; background: #ffffff; padding: 22px 24px 18px !important; }
 .desktop-agent-workbench .desktop-agent-message-column { width: 100%; max-width: 880px; padding: 12px 0 20px; }
 .desktop-agent-workbench .desktop-agent-message { margin-bottom: 24px; }
 .desktop-agent-workbench .desktop-agent-message-bubble { color: var(--ops-text); font-size: 14px !important; line-height: 24px !important; }
@@ -610,7 +628,6 @@ html[data-presentation='ops-creative-desktop'] #root nav[aria-label='底部导�
 .desktop-agent-workbench .desktop-agent-compose-input::placeholder { color: var(--ops-muted); opacity: 1; }
 .desktop-agent-workbench .desktop-agent-compose-toolbar { min-height: 36px; margin-top: 6px; }
 .desktop-agent-workbench .desktop-agent-compose-choice { min-height: 32px; padding-inline: 9px; color: var(--ops-muted); font-size: 12px; }
-.desktop-agent-workbench .desktop-agent-compose-note { margin-top: 7px; color: var(--ops-muted); font-size: 12px; }
 .desktop-agent-workbench .desktop-agent-workbench-list-button { display: inline-flex; min-width: 32px; min-height: 32px; align-items: center; justify-content: center; }
 .desktop-agent-workbench .desktop-agent-workbench-compose-area [role='status'] { max-width: 880px; border: 1px solid var(--ops-border); background: var(--ops-surface); color: var(--ops-text); }
 .desktop-agent-workbench .desktop-agent-side-panel { display: flex; width: 360px; min-width: 320px; max-width: 480px; flex: 0 0 360px; flex-direction: column; border-left: 1px solid var(--ops-border); background: var(--ops-surface); color: var(--ops-text); }
@@ -644,7 +661,17 @@ html[data-presentation='ops-creative-desktop'] #root nav[aria-label='底部导�
   .desktop-agent-workbench[data-panel-open='true'] .desktop-agent-list { display: none; }
   .desktop-agent-workbench .desktop-agent-side-panel { width: 320px; min-width: 320px; flex-basis: 320px; }
 }
-@container agent-workbench (max-width: 999px) {
+/* DEV-AI27-07（27 §5.6）：宽规格断点。1456 起三栏并存且工作视图 ≥600；
+   1168~1455 收起会话列表保聊天 560 + 工作视图 600；<1168 聊天/工作视图切换；<720 单列。 */
+@container agent-workbench (min-width: 1456px) {
+  .desktop-agent-workbench .desktop-agent-side-panel { width: 600px; min-width: 600px; max-width: 760px; flex: 0 0 600px; }
+}
+@container agent-workbench (min-width: 1168px) and (max-width: 1455px) {
+  .desktop-agent-workbench .desktop-agent-list { display: none; }
+  .desktop-agent-workbench .desktop-agent-workbench-list-button { display: inline-flex; }
+  .desktop-agent-workbench .desktop-agent-side-panel { width: 600px; min-width: 560px; max-width: 680px; flex: 0 0 600px; }
+}
+@container agent-workbench (max-width: 1167px) {
   .desktop-agent-workbench .desktop-agent-list { display: none; }
   .desktop-agent-workbench .desktop-agent-workbench-list-button { display: inline-flex; }
   .desktop-agent-workbench .desktop-agent-side-panel { position: absolute; z-index: 25; inset-block: 0; right: 0; width: min(440px, calc(100cqw - 48px)); min-width: min(320px, calc(100cqw - 24px)); max-width: 440px; box-shadow: var(--ops-soft-shadow); }
@@ -662,6 +689,54 @@ html[data-presentation='ops-creative-desktop'] #root nav[aria-label='底部导�
   .desktop-agent-workbench-welcome .desktop-agent-workbench-prompts { grid-template-columns: 1fr; }
   .desktop-agent-workbench .desktop-agent-side-panel { inset: 0; width: 100%; min-width: 0; max-width: none; }
 }
+/* DEV-AI27-07：统一添加菜单与浏览器状态块（27 §5.10）。 */
+.desktop-agent-add-menu { position: relative; }
+.desktop-agent-add-menu-list {
+  position: absolute;
+  z-index: 40;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 264px;
+  border: 1px solid var(--ops-border);
+  border-radius: 12px;
+  background: var(--ops-surface);
+  box-shadow: var(--ops-soft-shadow);
+  padding: 6px;
+}
+.desktop-agent-add-menu-list button {
+  display: grid;
+  width: 100%;
+  min-height: 40px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: transparent;
+  color: var(--ops-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: left;
+}
+.desktop-agent-add-menu-list button:hover:not(:disabled),
+.desktop-agent-add-menu-list button:focus-visible { background: var(--ops-accent-soft); color: var(--ops-accent); outline: none; }
+.desktop-agent-add-menu-list button:disabled { color: var(--ops-muted); cursor: not-allowed; opacity: 0.72; }
+.desktop-agent-add-menu-icon { display: inline-flex; justify-content: center; color: var(--ops-muted); }
+.desktop-agent-add-menu-text { display: grid; min-width: 0; }
+.desktop-agent-add-menu-text small { color: var(--ops-muted); font-size: 11px; line-height: 16px; }
+.desktop-agent-browser-status { display: grid; gap: 2px; }
+.desktop-agent-browser-status h4 { margin: 0 0 6px; color: var(--ops-text); font-size: 13px; font-weight: 650; }
+.desktop-agent-browser-status p, .desktop-agent-browser-status-note { color: var(--ops-muted); font-size: 12px; line-height: 19px; }
+.desktop-agent-browser-status ol { margin: 8px 0 0; padding-left: 18px; color: var(--ops-text); font-size: 12px; line-height: 20px; }
+.desktop-agent-browser-status ul { margin: 8px 0 0; padding: 0; list-style: none; }
+.desktop-agent-browser-status li { display: grid; gap: 2px; border-bottom: 1px solid var(--ops-border); padding: 8px 0; font-size: 13px; }
+.desktop-agent-browser-status li small { color: var(--ops-muted); font-size: 11px; }
+/* DEV-AI27-07：工作视图分隔条（27 §5.6 可聚焦、方向键 16px）。 */
+.desktop-agent-panel-resizer { flex: 0 0 6px; cursor: col-resize; background: transparent; border-left: 1px solid transparent; }
+.desktop-agent-panel-resizer:hover, .desktop-agent-panel-resizer:focus-visible { background: var(--ops-accent-soft); outline: none; }
+.desktop-agent-panel-resizer:focus-visible { border-left-color: var(--ops-accent); }
 @media (prefers-reduced-motion: reduce) {
   .desktop-agent-workbench *, .desktop-agent-workbench *::before, .desktop-agent-workbench *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }

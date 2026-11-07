@@ -69,7 +69,7 @@ const sharedScenarios = [
   'toutiao-completion.spec.ts',
 ]
 
-const apiFeatures = 'workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines,document_parse'
+const apiFeatures = 'workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines,document_parse,chrome_connect,browser_workspace'
 
 export default defineConfig({
   outputDir: '../../.playwright-results/desktop-renderer',
@@ -96,6 +96,7 @@ export default defineConfig({
     {
       name: 'desktop-windows-electron',
       testMatch: [
+        'agent-workbench-ai27-workview.spec.ts',
         'desktop-window-drag.spec.ts', 'platform-intents-real-electron.local.spec.ts',
         'skills-electron.spec.ts', 'toutiao-electron.spec.ts',
         'cx13-account-analysis.spec.ts', 'cx01-render-check.spec.ts', 'cx01-shared-fixtures.spec.ts',

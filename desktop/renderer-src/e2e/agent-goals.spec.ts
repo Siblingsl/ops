@@ -117,8 +117,8 @@ async function goalJourney(page: Page, baseURL: string, screenshot: string) {
 
   const desktop = page.locator('.desktop-agent-workbench')
   if (await desktop.count() > 0) {
-    // 桌面形态：目标面板常驻「任务面板」侧栏，不再有独立的「任务目标与上下文整理」按钮。
-    const panelButton = page.getByRole('button', { name: '任务面板', exact: true })
+    // 桌面形态：目标面板常驻「工作视图」侧栏，不再有独立的「任务目标与上下文整理」按钮。
+    const panelButton = page.getByRole('button', { name: '工作视图', exact: true })
     if (await panelButton.getAttribute('aria-expanded') !== 'true') await panelButton.click()
   } else {
     await page.getByRole('button', { name: '任务目标与上下文整理' }).last().click()
@@ -253,7 +253,7 @@ test('DEV-QA26 G7-07 Windows Electron目标预算在整应用重启后保留并�
     expect(afterRestart.user_id).toBe(beforeRestart.user_id)
     await page.goto(`${baseURL}/agent/c/${conversationID}`)
     await expect(page.locator('.desktop-agent-workbench')).toBeVisible()
-    const panelButton = page.getByRole('button', { name: '任务面板', exact: true })
+    const panelButton = page.getByRole('button', { name: '工作视图', exact: true })
     if (await panelButton.getAttribute('aria-expanded') !== 'true') await panelButton.click()
     const panel = page.getByTestId('desktop-agent-side-panel')
     await expect(panel.getByText('预算已用尽', { exact: true })).toBeVisible()
@@ -318,7 +318,7 @@ test('DEV-QA26 G7-07 Windows Electron两设备同时竞争最后一份目标预�
     const beforeRaise = await api(firstPage, 'GET', `/agent/conversations/${conversationID}`)
     expect(beforeRaise.goal).toMatchObject({ status: 'budget_limited', run_budget: 2, used_runs: 2 })
     const userMessageCount = beforeRaise.messages.filter((message: { role: string }) => message.role === 'user').length
-    const firstPanelButton = firstPage.getByRole('button', { name: '任务面板', exact: true })
+    const firstPanelButton = firstPage.getByRole('button', { name: '工作视图', exact: true })
     if (await firstPanelButton.getAttribute('aria-expanded') !== 'true') await firstPanelButton.click()
     const firstPanel = firstPage.getByTestId('desktop-agent-side-panel')
     await firstPanel.getByRole('button', { name: '编辑目标', exact: true }).click()
@@ -354,7 +354,7 @@ test('DEV-QA26 G7-07 Windows Electron两设备同时竞争最后一份目标预�
     await picker.getByRole('button', { name: 'AW09 目标验收号', exact: true }).click()
     await secondPage.goto(`${baseURL}/agent/c/${conversationID}`)
     await expect(secondPage.locator('.desktop-agent-workbench')).toBeVisible()
-    const secondPanelButton = secondPage.getByRole('button', { name: '任务面板', exact: true })
+    const secondPanelButton = secondPage.getByRole('button', { name: '工作视图', exact: true })
     if (await secondPanelButton.getAttribute('aria-expanded') !== 'true') await secondPanelButton.click()
     await expect(secondPage.getByTestId('desktop-agent-side-panel').getByText('核对本周运营数据并给出一条可审阅建议', { exact: true })).toBeVisible()
 

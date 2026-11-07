@@ -68,7 +68,7 @@ test('DEV-AW12 Electron 主题、窗口宽度及缩放场景', async ({ baseURL 
         await toggleDesktopTheme(page, scenario.theme === 'dark' ? '深色' : '浅色')
         await expect.poll(() => page.locator('html').getAttribute('data-theme')).toBe(scenario.theme)
       }
-      const panel = page.getByRole('button', { name: '任务面板', exact: true })
+      const panel = page.getByRole('button', { name: '工作视图', exact: true })
       if (await panel.getAttribute('aria-expanded') !== 'true') await panel.click()
       await expect(page.getByTestId('desktop-agent-side-panel')).toBeVisible()
       const input = page.getByRole('textbox', { name: '发送消息', exact: true })

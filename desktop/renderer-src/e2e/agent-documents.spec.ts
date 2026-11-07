@@ -395,7 +395,7 @@ async function journey(page: Page, baseURL: string, desktop?: ElectronApplicatio
   await expect(page.getByText(/已装入请求/).first()).toBeVisible()
   let panel
   if (desktop) {
-    const toggle = page.getByRole('button', { name: '任务面板', exact: true })
+    const toggle = page.getByRole('button', { name: '工作视图', exact: true })
     if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
     panel = page.getByTestId('desktop-agent-side-panel')
     await panel.getByRole('tab', { name: '产物', exact: true }).click()

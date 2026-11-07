@@ -33,7 +33,7 @@ test('DEV-AW02 Electron 工作台布局、响应式、键盘与主题保持输�
   await expect(page).toHaveURL(/\/agent$/)
   await expect(workspace.locator('.desktop-agent-workbench-prompt')).toHaveCount(3)
 
-  await page.getByRole('button', { name: '任务面板', exact: true }).click()
+  await page.getByRole('button', { name: '工作视图', exact: true }).click()
   const panel = page.getByTestId('desktop-agent-side-panel')
   await expect(panel).toBeVisible()
   await expect(panel.getByRole('tab', { name: '任务', exact: true })).toHaveAttribute('aria-selected', 'true')
@@ -354,7 +354,7 @@ test('DEV-AW05 桌面侧栏预览产物并定位到唯一卡片表单', async ({
   test.setTimeout(30_000)
   expect(baseURL).toBe('http://127.0.0.1:5287')
   const { work, action } = await prepareAW05(page, true)
-  await page.getByRole('button', { name: '任务面板', exact: true }).click()
+  await page.getByRole('button', { name: '工作视图', exact: true }).click()
   const panel = page.getByTestId('desktop-agent-side-panel')
   await expect(panel).toBeVisible()
   const card = page.locator(`#agent-action-${action.id}`)

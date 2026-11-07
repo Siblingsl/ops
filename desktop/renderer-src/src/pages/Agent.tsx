@@ -10,6 +10,9 @@ import { toast } from 'sonner'
 import { AIFeedback } from '@/components/refs'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Button, cn, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
+import { AddMenu } from './agent/AddMenu'
+import { BrowserStatusBlock, useBrowserConnectState } from './agent/BrowserStatusBlock'
+import { PanelResizer, PANEL_WIDTH_DEFAULT } from './agent/PanelResizer'
 import { ApiError, del, errorMessage, get, patch, post, stream, uploadFormData } from '@/lib/api'
 import { assetUrl } from '@/lib/api-base'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
@@ -44,6 +47,19 @@ type DraftAttachment = {
   error?: string
 }
 
+type PendingAgentMessage = {
+  conversationID: string
+  requestID: string
+  messageID?: string
+  runID?: string
+  message: AgentMessage
+}
+
+function pendingAgentMessageIsPersisted(pending: PendingAgentMessage, messages: AgentMessage[]) {
+  return messages.some((message) => message.role === 'user'
+    && ((pending.messageID && message.id === pending.messageID) || (pending.runID && message.run_id === pending.runID)))
+}
+
 function attachmentVariantURL(value: string, variant: 'thumb' | 'original') {
   // D-153：附件 URL 由后端返回相对路径，跨源部署（前端在 CF、后端在云服务器）时必须先补上 API 基址。
   const url = new URL(assetUrl(value), window.location.origin)
@@ -68,6 +84,67 @@ function splitDate(value: string) {
 
 function messageTime(value: string) {
   return new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+type AgentDisplayEntry = { kind: 'message'; message: AgentMessage }
+  | { kind: 'assistant-run'; runId: string; messages: AgentMessage[] }
+type AgentRunSegment = { message: AgentMessage; sourceMessages: AgentMessage[] }
+
+function isToolOnlyAssistantMessage(message: AgentMessage) {
+  return message.role === 'assistant' && !!message.run_id && message.tool_calls.length > 0
+    && !message.content.trim() && message.attachments.length === 0
+}
+
+function groupDesktopAgentMessages(messages: AgentMessage[], enabled: boolean): AgentDisplayEntry[] {
+  const displayEntries: AgentDisplayEntry[] = []
+  for (let index = 0; index < messages.length;) {
+    const first = messages[index]
+    if (!enabled || first.role !== 'assistant' || !first.run_id) {
+      displayEntries.push({ kind: 'message', message: first })
+      index++
+      continue
+    }
+    const runMessages = [first]
+    let nextIndex = index + 1
+    while (nextIndex < messages.length) {
+      const next = messages[nextIndex]
+      if (next.role !== 'assistant' || next.run_id !== first.run_id) break
+      runMessages.push(next)
+      nextIndex++
+    }
+    displayEntries.push({ kind: 'assistant-run', runId: first.run_id, messages: runMessages })
+    index = nextIndex
+  }
+  return displayEntries
+}
+
+function groupAssistantRunSegments(messages: AgentMessage[]): AgentRunSegment[] {
+  const segments: AgentRunSegment[] = []
+  for (let index = 0; index < messages.length;) {
+    const first = messages[index]
+    if (!isToolOnlyAssistantMessage(first)) {
+      segments.push({ message: first, sourceMessages: [first] })
+      index++
+      continue
+    }
+    const sourceMessages = [first]
+    let nextIndex = index + 1
+    while (nextIndex < messages.length) {
+      const next = messages[nextIndex]
+      if (!isToolOnlyAssistantMessage(next) || splitDate(next.created_at) !== splitDate(first.created_at)) break
+      sourceMessages.push(next)
+      nextIndex++
+    }
+    const last = sourceMessages[sourceMessages.length - 1]
+    const skillUsage = new Map<string, NonNullable<AgentMessage['skill_usage']>[number]>()
+    for (const source of sourceMessages) for (const usage of source.skill_usage ?? []) skillUsage.set(`${usage.id}:${usage.scope}`, usage)
+    segments.push({
+      message: { ...last, tool_calls: sourceMessages.flatMap((source) => source.tool_calls), skill_usage: [...skillUsage.values()] },
+      sourceMessages,
+    })
+    index = nextIndex
+  }
+  return segments
 }
 
 function AgentConversationList({
@@ -347,17 +424,19 @@ function AgentModeSelect({ value, disabled, readOnly, onChange }: { value: Agent
   </Select></span>
 }
 
-function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerate, onFork, skillRequests = [], desktopPresentation = false }: {
+function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerate, onFork, onForkMessage, forkMessages, skillRequests = [], desktopPresentation = false, inlineAssistant = false, showFeedback = true }: {
   message: AgentMessage; lastAssistant: boolean; canSeeImages: boolean; onEdit?: () => void; onRegenerate?: () => void; onFork?: () => void
-  skillRequests?: AgentMessage['skill_requests']; desktopPresentation?: boolean
+  onForkMessage?: (message: AgentMessage) => void; forkMessages?: AgentMessage[]
+  skillRequests?: AgentMessage['skill_requests']; desktopPresentation?: boolean; inlineAssistant?: boolean; showFeedback?: boolean
 }) {
   const [toolsOpen, setToolsOpen] = useState(false)
   const toolsId = useId()
   const user = message.role === 'user'
   const time = messageTime(message.created_at)
+  const Wrapper = inlineAssistant ? 'div' : 'article'
   return (
-    <article className={`group flex ${user ? 'justify-end' : 'justify-start'} ${desktopPresentation ? `desktop-agent-message ${user ? 'user' : 'assistant'}` : ''}`}>
-      {desktopPresentation && <div className="desktop-agent-message-speaker">
+    <Wrapper className={inlineAssistant ? 'group desktop-agent-run-message-item' : `group flex ${user ? 'justify-end' : 'justify-start'} ${desktopPresentation ? `desktop-agent-message ${user ? 'user' : 'assistant'}` : ''}`}>
+      {desktopPresentation && !inlineAssistant && <div className="desktop-agent-message-speaker">
         {user ? <span className="desktop-agent-user-avatar">林</span> : <span className="desktop-agent-bot-avatar"><Bot /></span>}
         <strong>{user ? '你' : 'OPS'}</strong>
         <small>{user ? time : message.tool_calls?.length ? '工具活动' : time}</small>
@@ -407,17 +486,25 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
         </div>}
         <div className={`mt-1.5 flex items-center gap-1 text-[10.5px] ${desktopPresentation ? 'desktop-agent-message-footer' : ''} ${user ? 'text-white/60' : 'text-mist-400'}`}>
           <time>{time}</time>
-          {user && onEdit && <button type="button" onClick={onEdit} className="ml-2 cursor-pointer opacity-0 underline group-hover:opacity-100 focus:opacity-100">编辑</button>}
-          {user && onFork && <button type="button" title="从这里继续" aria-label={`从第 ${message.seq} 条消息创建分支`} onClick={onFork} className="ml-2 inline-flex cursor-pointer items-center gap-1 opacity-0 underline group-hover:opacity-100 focus:opacity-100"><GitBranch className="size-3.5" />从这里继续</button>}
-          {!user && message.role === 'assistant' && <div className="ml-auto flex items-center gap-1 opacity-70 group-hover:opacity-100">
-            <button type="button" title="复制" onClick={() => void navigator.clipboard.writeText(message.content).then(() => toast.success('已复制')).catch(() => toast.error('复制失败'))} className="cursor-pointer rounded p-1 hover:bg-mist-100"><Clipboard className="size-3.5" /></button>
+          {user && desktopPresentation ? <div className="ml-auto flex items-center gap-1 text-mist-500 opacity-70 group-hover:opacity-100">
+            {onEdit && <button type="button" title="编辑" aria-label={`编辑第 ${message.seq} 条消息`} onClick={onEdit} className="cursor-pointer rounded p-1 hover:bg-mist-100"><Pencil className="size-3.5" /></button>}
             {onFork && <button type="button" title="从这里继续" aria-label={`从第 ${message.seq} 条消息创建分支`} onClick={onFork} className="cursor-pointer rounded p-1 hover:bg-mist-100"><GitBranch className="size-3.5" /></button>}
-            <AIFeedback callId={message.ai_call_id} />
+            {!!message.content.trim() && <button type="button" title="复制" aria-label={`复制第 ${message.seq} 条消息`} onClick={() => void navigator.clipboard.writeText(message.content).then(() => toast.success('已复制')).catch(() => toast.error('复制失败'))} className="cursor-pointer rounded p-1 hover:bg-mist-100"><Clipboard className="size-3.5" /></button>}
+          </div> : <>
+            {user && onEdit && <button type="button" onClick={onEdit} className="ml-2 cursor-pointer opacity-0 underline group-hover:opacity-100 focus:opacity-100">编辑</button>}
+            {user && onFork && <button type="button" title="从这里继续" aria-label={`从第 ${message.seq} 条消息创建分支`} onClick={onFork} className="ml-2 inline-flex cursor-pointer items-center gap-1 opacity-0 underline group-hover:opacity-100 focus:opacity-100"><GitBranch className="size-3.5" />从这里继续</button>}
+          </>}
+          {!user && message.role === 'assistant' && <div className="ml-auto flex items-center gap-1 opacity-70 group-hover:opacity-100">
+            {!!message.content.trim() && <button type="button" title="复制" onClick={() => void navigator.clipboard.writeText(message.content).then(() => toast.success('已复制')).catch(() => toast.error('复制失败'))} className="cursor-pointer rounded p-1 hover:bg-mist-100"><Clipboard className="size-3.5" /></button>}
+            {onFork && (forkMessages?.length
+              ? forkMessages.map((source) => <button key={source.id} type="button" title={`从第 ${source.seq} 条消息继续`} aria-label={`从第 ${source.seq} 条消息创建分支`} onClick={() => onForkMessage?.(source)} className="cursor-pointer rounded p-1 hover:bg-mist-100"><GitBranch className="size-3.5" /></button>)
+              : <button type="button" title="从这里继续" aria-label={`从第 ${message.seq} 条消息创建分支`} onClick={onFork} className="cursor-pointer rounded p-1 hover:bg-mist-100"><GitBranch className="size-3.5" /></button>)}
+            {showFeedback && <AIFeedback callId={message.ai_call_id} />}
             {lastAssistant && onRegenerate && <button type="button" title="重新生成" onClick={onRegenerate} className="cursor-pointer rounded p-1 hover:bg-mist-100"><ChevronLeft className="size-3.5" /></button>}
           </div>}
         </div>
       </div>
-    </article>
+    </Wrapper>
   )
 }
 
@@ -434,11 +521,13 @@ function RunStatus({ activeRun, streamStage, toolName, connection, pendingAction
   return text ? <div role="status" className="mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg bg-ink-50 px-3 py-2 text-[12.5px] text-ink-700">{activeRun || streamStage ? <LoaderCircle className="size-3.5 animate-spin" /> : <span className="size-1.5 rounded-full bg-ink-500" />}{text}</div> : null
 }
 
+export type WorkbenchTab = 'task' | 'context' | 'artifact' | 'browser'
+
 function WorkbenchSidePanel({
-  tab, setTab, close, conversation, activeRun, busy, pendingActions, actionCount, selectedAccountName, selectedModelName, attachmentCount,
+  tab, setTab, close, width, browserWorkspaceEnabled, conversation, activeRun, busy, pendingActions, actionCount, selectedAccountName, selectedModelName, attachmentCount,
   contextRefs, skillRequests, latestSkillUsage, artifactsEnabled, goalsEnabled, compactEnabled, canManageGoals, models, goal, onCompact, actions, inputs, inputQueuePaused, onUpdateInput, onCancelInput, onRestoreInput, onResumeInputs, onQuoteArtifact,
 }: {
-  tab: 'task' | 'context' | 'artifact'; setTab: (tab: 'task' | 'context' | 'artifact') => void; close: () => void
+  tab: WorkbenchTab; setTab: (tab: WorkbenchTab) => void; close: () => void; width?: number; browserWorkspaceEnabled: boolean
   conversation?: AgentConversation; activeRun?: AgentConversationDetail['active_run']; busy: boolean; pendingActions: number; actionCount: number
   selectedAccountName: string; selectedModelName: string; attachmentCount: number
   contextRefs: AgentContextSelection[]; skillRequests: AgentSkillSelection[]; latestSkillUsage: AgentMessage['skill_usage']; artifactsEnabled: boolean
@@ -456,12 +545,15 @@ function WorkbenchSidePanel({
     { id: 'task' as const, label: '任务' },
     { id: 'context' as const, label: '上下文' },
     ...(artifactsEnabled ? [{ id: 'artifact' as const, label: '产物' }] : []),
-  ]
+    // DEV-AI27-07：浏览器页签始终可见，连接状态由 BrowserStatusBlock 如实表达（不伪造已连接）。
+    { id: 'browser' as const, label: '浏览器' },
+  ] as const
+  const browserConnectState = useBrowserConnectState(browserWorkspaceEnabled)
   const taskStatus = busy ? '正在运行' : pendingActions ? `等待你逐张处理 ${pendingActions} 项` : conversation ? '当前没有运行中的任务' : '发送第一条消息后，这里会显示对话任务状态'
-  return <aside className="desktop-agent-side-panel" data-testid="desktop-agent-side-panel" aria-label="辅助面板">
+  return <aside className="desktop-agent-side-panel" style={width ? { width, flexBasis: width } : undefined} data-testid="desktop-agent-side-panel" aria-label="工作视图">
     <header className="desktop-agent-side-panel-heading">
-      <div><h2>辅助面板</h2><IconButton label="关闭任务面板" onClick={close}><X className="size-4" /></IconButton></div>
-      <div role="tablist" aria-label="辅助面板视图" className="desktop-agent-side-tabs">
+      <div><h2>工作视图</h2><IconButton label="关闭工作视图" onClick={close}><X className="size-4" /></IconButton></div>
+      <div role="tablist" aria-label="工作视图切换" className="desktop-agent-side-tabs">
         {tabs.map((item) => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)}>{item.label}</button>)}
       </div>
     </header>
@@ -510,6 +602,7 @@ function WorkbenchSidePanel({
         <p className="desktop-agent-side-note">选择、启用和加载是不同状态。只有 load_skill 成功回执才显示已加载；当前无法从模型调用回执确认是否遵循了技能指令。</p>
       </section>}
       {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading"><h3 id="workbench-artifact-heading">产物</h3><ArtifactPanel conversationID={conversation?.id} compact onQuote={onQuoteArtifact} /></section>}
+      {tab === 'browser' && <section aria-labelledby="workbench-browser-heading"><h3 id="workbench-browser-heading">浏览器</h3><BrowserStatusBlock state={browserConnectState} /></section>}
     </div>
   </aside>
 }
@@ -529,12 +622,15 @@ export default function Agent() {
   const [mobileListOpen, setMobileListOpen] = useState(false)
   const [workbenchListCollapsed, setWorkbenchListCollapsed] = useState(false)
   const [workbenchPanelOpen, setWorkbenchPanelOpen] = useState(false)
-  const [workbenchPanelTab, setWorkbenchPanelTab] = useState<'task' | 'context' | 'artifact'>('task')
+  const [workbenchPanelTab, setWorkbenchPanelTab] = useState<WorkbenchTab>('task')
+  const [workbenchPanelWidth, setWorkbenchPanelWidth] = useState(PANEL_WIDTH_DEFAULT)
   const [goalPanelOpen, setGoalPanelOpen] = useState(false)
   const [routinePanelOpen, setRoutinePanelOpen] = useState(false)
   const [artifactsOpen, setArtifactsOpen] = useState(false)
   const [workbenchLayoutLoadedKey, setWorkbenchLayoutLoadedKey] = useState('')
   const [text, setText] = useState('')
+  const textDraftVersionRef = useRef(0)
+  const [pendingUserMessages, setPendingUserMessages] = useState<PendingAgentMessage[]>([])
   const [files, setFiles] = useState<DraftAttachment[]>([])
   const [restoredAttachments, setRestoredAttachments] = useState<AgentAttachment[]>([])
   const [contextRefs, setContextRefs] = useState<AgentContextSelection[]>([])
@@ -661,7 +757,29 @@ export default function Agent() {
   const baseMessages = detail?.messages ?? []
   const persistedPartial = eventResumeEnabled && detail?.partial_output && !baseMessages.some((message) => message.message_key === detail.partial_output?.message_key) ? detail.partial_output : null
   const recoveryText = eventResumeEnabled ? persistedPartial?.text : recovered?.text
-  const messages = useMemo(() => [...olderMessages, ...baseMessages], [olderMessages, baseMessages])
+  const persistedMessages = useMemo(() => [...olderMessages, ...baseMessages], [olderMessages, baseMessages])
+  const messages = useMemo(() => {
+    const pending = desktopPresentation
+      ? pendingUserMessages.filter((item) => item.conversationID === conversationId && !pendingAgentMessageIsPersisted(item, persistedMessages))
+      : []
+    return [...persistedMessages, ...pending.map((item) => ({
+      ...item.message,
+      id: item.messageID ?? item.message.id,
+      run_id: item.runID ?? item.message.run_id,
+    }))]
+  }, [conversationId, desktopPresentation, pendingUserMessages, persistedMessages])
+  useEffect(() => {
+    if (!desktopPresentation) return
+    setPendingUserMessages((current) => {
+      const next = current.filter((item) => item.conversationID !== conversationId || !pendingAgentMessageIsPersisted(item, persistedMessages))
+      return next.length === current.length ? current : next
+    })
+  }, [conversationId, desktopPresentation, persistedMessages])
+  const displayEntries = useMemo(() => groupDesktopAgentMessages(messages, desktopPresentation), [messages, desktopPresentation])
+  const recoveryRunID = recovered?.runId || persistedPartial?.run_id || detail?.last_run?.id || ''
+  const hasRunActivity = !!(activeRun || streaming || runID || streamText || recoveryText || streamError || completedNotice || pendingActions > 0)
+  const visibleRunID = activeRun?.id || runID || (recoveryText ? recoveryRunID : '')
+    || (hasRunActivity ? detail?.last_run?.id || '__current__' : '')
   const lastUser = [...messages].reverse().find((message) => message.role === 'user')
   const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
   const selectedModelOption = bootstrapData?.models.find((model) => modelKey(model.provider_id, model.model) === selectedModel)
@@ -726,7 +844,7 @@ export default function Agent() {
 
   useEffect(() => {
     if (!workbenchUI || !layoutPreferenceKey || workbenchLayoutLoadedKey !== layoutPreferenceKey) return
-    window.localStorage.setItem(layoutPreferenceKey, JSON.stringify({ listCollapsed: workbenchListCollapsed, panelOpen: workbenchPanelOpen }))
+    window.localStorage.setItem(layoutPreferenceKey, JSON.stringify({ listCollapsed: workbenchListCollapsed, panelOpen: workbenchPanelOpen, panelWidth: workbenchPanelWidth }))
   }, [workbenchUI, layoutPreferenceKey, workbenchLayoutLoadedKey, workbenchListCollapsed, workbenchPanelOpen])
 
   useEffect(() => {
@@ -930,13 +1048,30 @@ export default function Agent() {
     return post<AgentConversation>('/agent/conversations', { ...body, request_id: conversationRequest.current.id })
   }
 
-  const consumeRun = useCallback(async (id: string, endpoint: string, body: Record<string, unknown>) => {
+  const consumeRun = useCallback(async (id: string, endpoint: string, body: Record<string, unknown>, onAccepted?: (accepted?: Pick<AgentRunAcceptance, 'run_id' | 'message_id'>) => void) => {
     const controller = new AbortController()
     runInFlight.current = true
     eventController.current?.abort()
     eventController.current = controller
     eventConversationID.current = id
     let acceptedRequest = false
+    const markAccepted = (accepted?: Pick<AgentRunAcceptance, 'run_id' | 'message_id'>) => {
+      if (acceptedRequest) return
+      acceptedRequest = true
+      onAccepted?.(accepted)
+      if (desktopPresentation) {
+        // 受理事务已将用户消息持久化；在第一条工具/回答事件前刷新，立即同步服务端消息。
+        void qc.cancelQueries({ queryKey: ['agent-conversation', id], exact: true }).then(() =>
+          qc.fetchQuery({
+            queryKey: ['agent-conversation', id],
+            queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${id}`),
+            staleTime: 0,
+          }),
+        ).catch(() => { void qc.invalidateQueries({ queryKey: ['agent-conversation', id], exact: true }) })
+        void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+      }
+      if (accepted?.run_id) setRunID(accepted.run_id)
+    }
     setStreaming(true)
     setStreamText('')
     setStreamStage('thinking')
@@ -948,8 +1083,7 @@ export default function Agent() {
       const result = bootstrapData?.features?.event_resume === true
         ? await (async () => {
           const accepted = await post<AgentRunAcceptance>(endpoint, { ...body, request_id: requestID, protocol_version: 2 }, controller.signal)
-          acceptedRequest = true
-          setRunID(accepted.run_id)
+          markAccepted(accepted)
           lastEventSeqRef.current = accepted.last_event_seq
           streamPartialRef.current = { messageKey: '', chunkIndex: 0 }
           return streamAgentEvents(accepted.events_url, accepted.last_event_seq, {
@@ -964,7 +1098,7 @@ export default function Agent() {
           signal: controller.signal,
           onDelta: (delta) => setStreamText((old) => old + delta),
           onEvent: (name, data) => {
-            if (name === 'run') setRunID(data.run_id ?? '')
+            if (name === 'run') markAccepted({ run_id: data.run_id ?? '' })
             if (name === 'stage') setStreamStage(data.stage === 'tool' ? `tool:${data.label || data.tool_name || '工具'}` : data.stage || 'thinking')
             if (name === 'action' || name === 'message' || name === 'tool') {
               void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
@@ -974,6 +1108,7 @@ export default function Agent() {
             if (name === 'done') setStreamStage(data.reason === 'waiting_confirmation' ? 'waiting_confirmation' : '')
           },
         })
+      markAccepted()
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['agent-conversation', id] }),
         qc.invalidateQueries({ queryKey: ['agent-conversations'] }),
@@ -1009,7 +1144,7 @@ export default function Agent() {
         if (bootstrapData?.features?.event_resume === true) setEventResumeGeneration((generation) => generation + 1)
       }
     }
-  }, [qc, bootstrapData?.features?.event_resume, applyPersistentEvent, resumeEventSnapshot])
+  }, [qc, bootstrapData?.features?.event_resume, applyPersistentEvent, resumeEventSnapshot, desktopPresentation])
 
   const acceptPlan = async (plan: AgentPlan) => {
     if (!conversationId || busy || sendInFlight.current) return
@@ -1112,6 +1247,8 @@ export default function Agent() {
     setSubmitting(true)
     setStreamError('')
     setCompletedNotice('')
+    let optimisticRequestID = ''
+    let messageAccepted = false
     try {
       let conv = conversation
       if (!conv) {
@@ -1145,6 +1282,28 @@ export default function Agent() {
         ? messageRequest.current.id
         : crypto.randomUUID()
       if (requestID) messageRequest.current = { key: messageKey, id: requestID }
+      if (!edit && desktopPresentation) {
+        optimisticRequestID = requestID
+        const latestSeq = messages.reduce((maximum, message) => Math.max(maximum, message.seq), 0)
+        setPendingUserMessages((current) => [...current, {
+          conversationID: conv.id,
+          requestID,
+          message: {
+            id: `pending:${requestID}`,
+            seq: latestSeq + 1,
+            role: 'user',
+            content: value,
+            tool_calls: [],
+            attachments: [...readyFiles.map((file) => file.attachment!), ...restoredAttachments],
+            context_refs: contextRefs.map(({ type, id, revision, reference_scope, anchor, name }) => ({
+              type, id, revision, scope: reference_scope, name, ...(anchor ? { anchor } : {}),
+            })),
+            skill_requests: skillRequests.map(({ skill_id, work_id, name }) => ({ skill_id, ...(work_id ? { work_id } : {}), name })),
+            run_id: null,
+            created_at: new Date().toISOString(),
+          },
+        }])
+      }
       const payload = {
         text: value,
         ...(!edit && bootstrapData?.features.plans ? { mode: selectedMode } : {}),
@@ -1156,14 +1315,24 @@ export default function Agent() {
         ...(requestID ? { request_id: requestID } : {}),
         ...(replacedQuestion ? { supersede_question_id: replacedQuestion.id } : {}),
       }
+      const acceptedDraftVersion = textDraftVersionRef.current
       const accepted = await consumeRun(conv.id, edit
         ? `/agent/conversations/${conv.id}/messages/${edit.id}/edit`
-        : `/agent/conversations/${conv.id}/messages`, payload)
-      if (!accepted || conversationIDRef.current !== conv.id) return
-      // 这一轮跑完才清输入框，而用户在运行期间可能已经接着输入下一条（桌面工作台允许，
-      // 待办问题挂起时也允许）。只清仍然是本次发送内容的那一份，否则会把用户新打字的
-      // 内容一起抹掉——表现为「刚打完字，输入框自己空了」。
-      setText((current) => (current === text ? '' : current))
+        : `/agent/conversations/${conv.id}/messages`, payload, (acceptance) => {
+        messageAccepted = true
+        if (desktopPresentation) {
+          setPendingUserMessages((current) => current.map((item) => item.requestID === requestID
+            ? { ...item, messageID: acceptance?.message_id, runID: acceptance?.run_id }
+            : item))
+        }
+        if (conversationIDRef.current === conv.id) {
+          setText((current) => textDraftVersionRef.current === acceptedDraftVersion && current === text ? '' : current)
+        }
+      })
+      if (!accepted || conversationIDRef.current !== conv.id) {
+        if (!messageAccepted && optimisticRequestID) setPendingUserMessages((current) => current.filter((item) => item.requestID !== optimisticRequestID))
+        return
+      }
       setFiles((current) => (current === files ? [] : current))
       setRestoredAttachments((current) => (current === restoredAttachments ? [] : current))
       sendDestinationConversationID.current = ''
@@ -1173,7 +1342,10 @@ export default function Agent() {
         setSkillRequests((current) => (current === skillRequests ? [] : current))
       }
       setEditMessage(null)
-    } catch (error) { toast.error(errorMessage(error)) }
+    } catch (error) {
+      if (!messageAccepted && optimisticRequestID) setPendingUserMessages((current) => current.filter((item) => item.requestID !== optimisticRequestID))
+      toast.error(errorMessage(error))
+    }
     finally { sendInFlight.current = false; setSubmitting(false) }
   }
 
@@ -1566,6 +1738,58 @@ export default function Agent() {
   const renderTitle = () => desktopPresentation
     ? <span className="text-[13px] font-semibold text-mist-800">AI 对话</span>
     : renderConversationTitle()
+  const renderMessageBlock = (message: AgentMessage, sourceMessages: AgentMessage[], inlineAssistant = false, showFeedback = true) => (
+    <>
+      <MessageView message={message} lastAssistant={message.id === lastAssistant?.id} canSeeImages={selectedModelOption?.vision === true} desktopPresentation={desktopPresentation} inlineAssistant={inlineAssistant}
+        showFeedback={showFeedback}
+        forkMessages={sourceMessages.length > 1 ? sourceMessages : undefined}
+        skillRequests={messages.find((candidate) => candidate.role === 'user' && candidate.run_id === message.run_id)?.skill_requests ?? []}
+        onFork={organizeEnabled && message.role !== 'system' ? () => void forkFromMessage(message) : undefined}
+        onForkMessage={organizeEnabled ? (source) => void forkFromMessage(source) : undefined}
+        onEdit={message.id === lastUser?.id && !busy && !pendingQuestion && canWrite && !message.attachments.length && !message.context_refs?.length && !message.skill_requests?.length ? () => { setEditMessage(message); setText(message.content); clearDraftAttachments(); setContextRefs([]); setSkillRequests([]); inputRef.current?.focus() } : undefined}
+        onRegenerate={message.id === lastAssistant?.id && !busy && canWrite ? regenerate : undefined} />
+      {message.role === 'assistant' && message.run_id && sourceMessages.some((source) => actionMessageByRun[message.run_id!] === source.id) && <div className={desktopPresentation ? 'desktop-agent-action-wrapper' : ''}><AgentActionCards
+        actions={actions.filter((action) => action.run_id === message.run_id)}
+        running={busy || actionExecuting}
+        onRefresh={invalidate}
+        onContinue={continueRun}
+        onExecutingChange={setActionExecuting}
+        desktopPresentation={desktopPresentation}
+      /></div>}
+      {message.role === 'assistant' && message.run_id && plans.filter((plan) => plan.source_run_id === message.run_id).map((plan) => <AgentPlanCard key={plan.id} plan={plan} canWrite={canWrite} busy={busy} blocked={!!pendingQuestion} onAccept={(item) => void acceptPlan(item)} />)}
+      {message.role === 'assistant' && message.run_id && questions.filter((question) => question.run_id === message.run_id).map((question) => <AgentQuestionCard key={question.id} question={question} canWrite={canWrite} busy={busy} onAnswer={(item, answers) => void answerQuestion(item, answers)} />)}
+    </>
+  )
+  const renderAttachmentQueue = (insideComposer = false) => {
+    if (files.length === 0 && restoredAttachments.length === 0) return null
+    return (
+      <div className={insideComposer ? 'desktop-agent-compose-attachments' : 'mx-auto mb-2 max-w-3xl'}>
+        <div
+          className={insideComposer ? 'desktop-agent-attachment-list scrollbar-thin' : 'flex flex-wrap gap-2'}
+          role={insideComposer ? 'region' : undefined}
+          aria-label={insideComposer ? '已添加附件' : undefined}
+          tabIndex={insideComposer ? 0 : undefined}
+        >
+          {files.map((file) => <div key={file.clientID} aria-label={`${file.file.name} ${file.status}`} className={`flex items-center gap-2 rounded-lg border p-1.5 text-xs ${file.status === 'failed' ? 'border-danger/30 bg-danger/5 text-danger' : 'border-mist-200 bg-mist-50 text-mist-600'}`}>
+            {file.attachment?.kind === 'image' ? <img src={attachmentVariantURL(file.attachment.url, 'thumb')} alt={file.file.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
+            <div><span className="block max-w-52 truncate">{file.file.name}</span>{file.attachment && file.status === 'ready' && <AttachmentReceipt attachment={file.attachment} />}{file.status === 'failed' && <p className="mt-1 max-w-72 whitespace-normal">{file.error}</p>}</div>
+            {file.status === 'waiting' && <span role="status">等待上传</span>}
+            {file.status === 'uploading' && <span role="status">上传中{file.progress === undefined ? '' : ' ' + file.progress + '%'}</span>}
+            {file.status === 'processing' && <span role="status">处理中</span>}
+            {file.status === 'ready' && <span>已就绪</span>}
+            {file.status === 'failed' && <><span>上传失败</span>{file.retryable && <Button size="sm" variant="ghost" icon={<RotateCcw className="size-3" />} onClick={() => retryFile(file)}>重试</Button>}</>}
+            <IconButton label={`移除 ${file.file.name}`} className="size-6" onClick={() => void removeFile(file)}><X className="size-3" /></IconButton>
+          </div>)}
+          {restoredAttachments.map((attachment) => <div key={attachment.id} className="flex items-center gap-2 rounded-lg border border-mist-200 bg-mist-50 p-1.5 text-xs text-mist-600">
+            {attachment.kind === 'image' ? <img src={attachmentVariantURL(attachment.url, 'thumb')} alt={attachment.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
+            <div><span className="block max-w-40 truncate">{attachment.name}</span><AttachmentReceipt attachment={attachment} /></div><span>从待复核输入恢复</span>
+            <IconButton label={`移除 ${attachment.name}`} className="size-6" onClick={() => setRestoredAttachments((old) => old.filter((item) => item.id !== attachment.id))}><X className="size-3" /></IconButton>
+          </div>)}
+        </div>
+        {failedFiles.length > 0 && <p className="mt-1 text-xs text-danger" role="alert">有 {failedFiles.length} 个附件未就绪，请处理失败项或移除后再发送。</p>}
+      </div>
+    )
+  }
   return (
     <>
       {sidebarSlot && !desktopPresentation && createPortal(
@@ -1590,8 +1814,8 @@ export default function Agent() {
       </aside>}
       <section className={`flex min-w-0 flex-1 flex-col ${workbenchUI ? 'desktop-agent-workbench-main' : ''}`}>
         <header className={`flex min-h-14 shrink-0 items-center gap-2 border-b border-mist-200 bg-white px-3 sm:px-5 ${desktopPresentation ? 'desktop-agent-chat-header' : 'lg:hidden'}`}>
-          <IconButton label={workbenchUI && !workbenchListCollapsed && (document.querySelector('.desktop-agent-workbench')?.clientWidth ?? 0) >= 1320 ? '收起会话列表' : '打开对话列表'} className={`md:hidden ${workbenchUI ? 'desktop-agent-workbench-list-button' : ''}`} onClick={() => {
-            if (workbenchUI && (document.querySelector('.desktop-agent-workbench')?.clientWidth ?? 0) >= 1320) setWorkbenchListCollapsed((value) => !value)
+          <IconButton label={workbenchUI && !workbenchListCollapsed && (document.querySelector('.desktop-agent-workbench')?.clientWidth ?? 0) >= 1456 ? '收起会话列表' : '打开对话列表'} className={`md:hidden ${workbenchUI ? 'desktop-agent-workbench-list-button' : ''}`} onClick={() => {
+            if (workbenchUI && (document.querySelector('.desktop-agent-workbench')?.clientWidth ?? 0) >= 1456) setWorkbenchListCollapsed((value) => !value)
             else { setWorkbenchPanelOpen(false); setMobileListOpen(true) }
           }}><Menu className="size-4" /></IconButton>
           <div className={`flex min-w-0 items-center gap-2 ${desktopPresentation ? 'desktop-agent-chat-heading' : 'flex-1'}`}>
@@ -1599,7 +1823,7 @@ export default function Agent() {
           </div>
           {desktopPresentation
             ? workbenchUI
-              ? <button type="button" className="desktop-agent-chat-settings desktop-agent-workbench-panel-button" aria-label="任务面板" aria-expanded={workbenchPanelOpen} onClick={() => { setMobileListOpen(false); setWorkbenchPanelOpen((value) => !value) }}>任务面板 <Settings2 /></button>
+              ? <button type="button" className="desktop-agent-chat-settings desktop-agent-workbench-panel-button" aria-label="工作视图" aria-expanded={workbenchPanelOpen} onClick={() => { setMobileListOpen(false); setWorkbenchPanelOpen((value) => !value) }}>工作视图 <Settings2 /></button>
               : null
             : <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>}
         </header>
@@ -1622,31 +1846,70 @@ export default function Agent() {
             {!conversationId && !messages.length && <Welcome onPrompt={(value) => setText(value)} noModel={!bootstrapData.can_use} desktopWorkbench={workbenchUI} />}
             {detail?.has_more && <div className="mx-auto mb-4 max-w-3xl text-center"><Button size="sm" variant="ghost" onClick={() => void loadOlder()}>加载更早的消息</Button></div>}
             <div className={`mx-auto flex max-w-3xl flex-col gap-4 ${desktopPresentation ? 'desktop-agent-message-column' : ''}`}>
-              {messages.map((message, index) => {
-                const previous = messages[index - 1]
-                const startsDay = desktopPresentation && (!previous || splitDate(previous.created_at) !== splitDate(message.created_at))
-                return <div key={message.id} data-message-seq={message.seq}>
-                {startsDay && <div className="desktop-agent-day">{splitDate(message.created_at)} · {messageTime(message.created_at)}</div>}
-                <MessageView message={message} lastAssistant={message.id === lastAssistant?.id} canSeeImages={selectedModelOption?.vision === true} desktopPresentation={desktopPresentation}
-                  skillRequests={messages.find((candidate) => candidate.role === 'user' && candidate.run_id === message.run_id)?.skill_requests ?? []}
-                  onFork={organizeEnabled && message.role !== 'system' ? () => void forkFromMessage(message) : undefined}
-                  onEdit={message.id === lastUser?.id && !busy && !pendingQuestion && canWrite && !message.attachments.length && !message.context_refs?.length && !message.skill_requests?.length ? () => { setEditMessage(message); setText(message.content); clearDraftAttachments(); setContextRefs([]); setSkillRequests([]); inputRef.current?.focus() } : undefined}
-                  onRegenerate={message.id === lastAssistant?.id && !busy && canWrite ? regenerate : undefined} />
-                {message.role === 'assistant' && message.run_id && actionMessageByRun[message.run_id] === message.id && <div className={desktopPresentation ? 'desktop-agent-action-wrapper' : ''}><AgentActionCards
-                  actions={actions.filter((action) => action.run_id === message.run_id)}
-                  running={busy || actionExecuting}
-                  onRefresh={invalidate}
-                  onContinue={continueRun}
-                  onExecutingChange={setActionExecuting}
-                  desktopPresentation={desktopPresentation}
-                /></div>}
-                {message.role === 'assistant' && message.run_id && plans.filter((plan) => plan.source_run_id === message.run_id).map((plan) => <AgentPlanCard key={plan.id} plan={plan} canWrite={canWrite} busy={busy} blocked={!!pendingQuestion} onAccept={(item) => void acceptPlan(item)} />)}
-                {message.role === 'assistant' && message.run_id && questions.filter((question) => question.run_id === message.run_id).map((question) => <AgentQuestionCard key={question.id} question={question} canWrite={canWrite} busy={busy} onAnswer={(item, answers) => void answerQuestion(item, answers)} />)}
-              </div>})}
-              {streamText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card"><AgentMarkdown text={streamText} /><p className="mt-2 text-[12px] text-mist-500">正在生成，内容尚未完成</p></div></div>}
+              {displayEntries.map((entry, index) => {
+                const entryMessages = entry.kind === 'message' ? [entry.message] : entry.messages
+                const firstMessage = entryMessages[0]
+                const previousEntry = displayEntries[index - 1]
+                const previous = previousEntry ? (previousEntry.kind === 'message' ? previousEntry.message : previousEntry.messages.at(-1)) : undefined
+                const startsDay = desktopPresentation && (!previous || splitDate(previous.created_at) !== splitDate(firstMessage.created_at))
+                if (entry.kind === 'message') return <div key={entry.message.id} data-message-seq={entry.message.seq} className="relative">
+                  {startsDay && <div className="desktop-agent-day">{splitDate(firstMessage.created_at)} · {messageTime(firstMessage.created_at)}</div>}
+                  {renderMessageBlock(entry.message, [entry.message])}
+                </div>
+
+                const segments = groupAssistantRunSegments(entry.messages)
+                const feedbackSegment = [...segments].reverse().find(({ message }) => message.content.trim() || message.attachments.length > 0)
+                let previousSegmentMessage: AgentMessage | undefined
+                const showRunActivity = visibleRunID === entry.runId
+                const runningToolName = entry.messages.flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name
+                return <article key={`run:${entry.runId}`} data-run-id={entry.runId} className="desktop-agent-message assistant desktop-agent-run-message">
+                  {startsDay && <div className="desktop-agent-day">{splitDate(firstMessage.created_at)} · {messageTime(firstMessage.created_at)}</div>}
+                  <div className="desktop-agent-message-speaker">
+                    <span className="desktop-agent-bot-avatar"><Bot /></span><strong>OPS</strong>
+                    <small>{activeRun?.id === entry.runId ? (streamStage.startsWith('tool:') ? '处理中' : '运行中') : messageTime(entry.messages.at(-1)!.created_at)}</small>
+                  </div>
+                  {segments.map((segment) => {
+                    const segmentFirst = segment.sourceMessages[0]
+                    const segmentLast = segment.sourceMessages.at(-1)!
+                    const segmentStartsDay = !!previousSegmentMessage && splitDate(previousSegmentMessage.created_at) !== splitDate(segmentFirst.created_at)
+                    previousSegmentMessage = segmentLast
+                    return <div key={segmentFirst.id} data-message-seq={segmentFirst.seq} className="desktop-agent-run-segment relative">
+                      {segment.sourceMessages.slice(1).map((source) => <span key={source.id} data-message-seq={source.seq} className="absolute left-0 top-0 h-px w-px" aria-hidden="true" />)}
+                      {segmentStartsDay && <div className="desktop-agent-day desktop-agent-run-day">{splitDate(segmentFirst.created_at)} · {messageTime(segmentFirst.created_at)}</div>}
+                      {renderMessageBlock(segment.message, segment.sourceMessages, true, segment === feedbackSegment)}
+                    </div>
+                  })}
+                  {showRunActivity && <>
+                    {streamText && <div className="desktop-agent-run-live"><AgentMarkdown text={streamText} /><p className="desktop-agent-run-live-note">正在生成，内容尚未完成</p></div>}
+                    {!streamText && recoveryText && recoveryRunID === entry.runId && <div className="desktop-agent-run-live">
+                      <AgentMarkdown text={recoveryText} />
+                      <div className="desktop-agent-run-live-note" data-testid="agent-partial-note">
+                        {eventResumeEnabled && !activeRun ? '这是服务端保存的未完成内容。你可以发送新消息继续处理。' : busy || activeRun
+                          ? '这是上次离开页面时已生成的部分，服务端仍在继续，完成后会补全这条回复。'
+                          : '这是上次中断时已生成的部分。这一轮没有正常结束，可以点下方「继续」让智能体接着做。'}
+                      </div>
+                    </div>}
+                    <RunStatus activeRun={activeRun?.id === entry.runId ? activeRun : undefined} streamStage={streamStage} toolName={runningToolName} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />
+                  </>}
+                </article>
+              })}
+              {desktopPresentation && hasRunActivity && visibleRunID && !displayEntries.some((entry) => entry.kind === 'assistant-run' && entry.runId === visibleRunID) && <article data-run-id={visibleRunID} className="desktop-agent-message assistant desktop-agent-run-message">
+                <div className="desktop-agent-message-speaker"><span className="desktop-agent-bot-avatar"><Bot /></span><strong>OPS</strong><small>{activeRun || streaming || runID ? '运行中' : '正在恢复'}</small></div>
+                {streamText && <div className="desktop-agent-run-live"><AgentMarkdown text={streamText} /><p className="desktop-agent-run-live-note">正在生成，内容尚未完成</p></div>}
+                {!streamText && recoveryText && <div className="desktop-agent-run-live">
+                  <AgentMarkdown text={recoveryText} />
+                  <div className="desktop-agent-run-live-note" data-testid="agent-partial-note">
+                    {eventResumeEnabled && !activeRun ? '这是服务端保存的未完成内容。你可以发送新消息继续处理。' : busy || activeRun
+                      ? '这是上次离开页面时已生成的部分，服务端仍在继续，完成后会补全这条回复。'
+                      : '这是上次中断时已生成的部分。这一轮没有正常结束，可以点下方「继续」让智能体接着做。'}
+                  </div>
+                </div>}
+                <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === visibleRunID).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />
+              </article>}
+              {!desktopPresentation && streamText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card"><AgentMarkdown text={streamText} /><p className="mt-2 text-[12px] text-mist-500">正在生成，内容尚未完成</p></div></div>}
               {/* AG-04：离开页面时没写完的回复。服务端整轮结束后才落库，这里先把已生成的部分显示出来，
                   并说明「服务端仍在继续」，避免用户以为内容丢了而重新发一遍。 */}
-              {!streamText && recoveryText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card">
+              {!desktopPresentation && !streamText && recoveryText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card">
                 <AgentMarkdown text={recoveryText} />
                 <div className="mt-2 border-t border-mist-200 pt-2 text-[12px] text-mist-500" data-testid="agent-partial-note">
                   {eventResumeEnabled && !activeRun ? '这是服务端保存的未完成内容。你可以发送新消息继续处理。' : busy || activeRun
@@ -1659,8 +1922,8 @@ export default function Agent() {
           </div>
 
           <div className={`shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4 ${desktopPresentation ? 'desktop-agent-compose-area' : ''} ${workbenchUI ? 'desktop-agent-workbench-compose-area' : ''}`}>
-            {(!desktopPresentation || workbenchUI || !!streamError) && <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === activeRun?.id).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
-            {bootstrapData.features.plans && (!desktopPresentation || workbenchUI) && runtimeSummary && <p className="mx-auto mb-3 max-w-3xl px-3 text-xs text-mist-500" data-testid="agent-runtime-config">{runtimeSummary}</p>}
+            {(!desktopPresentation || !visibleRunID && (workbenchUI || !!streamError)) && <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === activeRun?.id).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
+            {!desktopPresentation && bootstrapData.features.plans && runtimeSummary && <p className="mx-auto mb-3 max-w-3xl px-3 text-xs text-mist-500" data-testid="agent-runtime-config">{runtimeSummary}</p>}
             {!bootstrapData.can_use && (bootstrapData.reason === 'no_model' || bootstrapData.reason === 'not_tested') && <Notice tone="gamboge" className="mx-auto mb-2 max-w-3xl">{bootstrapData.reason === 'not_tested' ? '模型已经配置好了，但还没有完成能力自检。完成一次自检后就能开始对话。' : '还没有配置可用于对话的模型，请到模型配置页添加支持工具调用的模型。'}历史对话仍可查看。 <a href="/settings/models" className="underline">去模型配置</a></Notice>}
             {pendingActions > 0 && !desktopPresentation && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">等待你逐张处理 {pendingActions} 项后，智能体会继续。卡片操作入口显示在对应消息下方。</div>}
             {detail?.can_continue && !busy && !actionExecuting && pendingActions === 0 && <div className="mx-auto mb-2 max-w-3xl text-right"><Button size="sm" variant="ghost" onClick={continueRun}>继续</Button></div>}
@@ -1668,26 +1931,7 @@ export default function Agent() {
             {conversation && !activeRun && detail?.actions.some((action) => action.status === 'executing') && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">有操作卡片正在执行，请稍候。</div>}
             {detail?.messages.length === 0 && bootstrapData.default_model_unsupported && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-gamboge-700">默认模型未通过工具调用自检，请先选择其他模型。</div>}
             {editMessage && <div className="mx-auto mb-2 flex max-w-3xl items-center justify-between rounded-lg bg-mist-50 px-3 py-1.5 text-xs text-mist-600"><span>编辑最后一条消息并重新运行</span><button type="button" className="cursor-pointer underline" onClick={() => { setEditMessage(null); setText('') }}>取消</button></div>}
-            {(files.length > 0 || restoredAttachments.length > 0) && <div className="mx-auto mb-2 max-w-3xl">
-              <div className="flex flex-wrap gap-2">
-              {files.map((file) => <div key={file.clientID} aria-label={`${file.file.name} ${file.status}`} className={`flex items-center gap-2 rounded-lg border p-1.5 text-xs ${file.status === 'failed' ? 'border-danger/30 bg-danger/5 text-danger' : 'border-mist-200 bg-mist-50 text-mist-600'}`}>
-                {file.attachment?.kind === 'image' ? <img src={attachmentVariantURL(file.attachment.url, 'thumb')} alt={file.file.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
-                <div><span className="block max-w-52 truncate">{file.file.name}</span>{file.attachment && file.status === 'ready' && <AttachmentReceipt attachment={file.attachment} />}{file.status === 'failed' && <p className="mt-1 max-w-72 whitespace-normal">{file.error}</p>}</div>
-                {file.status === 'waiting' && <span role="status">等待上传</span>}
-                {file.status === 'uploading' && <span role="status">上传中{file.progress === undefined ? '' : ' ' + file.progress + '%'}</span>}
-                {file.status === 'processing' && <span role="status">处理中</span>}
-                {file.status === 'ready' && <span>已就绪</span>}
-                {file.status === 'failed' && <><span>上传失败</span>{file.retryable && <Button size="sm" variant="ghost" icon={<RotateCcw className="size-3" />} onClick={() => retryFile(file)}>重试</Button>}</>}
-                <IconButton label={`移除 ${file.file.name}`} className="size-6" onClick={() => void removeFile(file)}><X className="size-3" /></IconButton>
-              </div>)}
-              {restoredAttachments.map((attachment) => <div key={attachment.id} className="flex items-center gap-2 rounded-lg border border-mist-200 bg-mist-50 p-1.5 text-xs text-mist-600">
-                {attachment.kind === 'image' ? <img src={attachmentVariantURL(attachment.url, 'thumb')} alt={attachment.name} className="size-10 rounded object-cover" /> : <FileText className="ml-1 size-4" />}
-                <div><span className="block max-w-40 truncate">{attachment.name}</span><AttachmentReceipt attachment={attachment} /></div><span>从待复核输入恢复</span>
-                <IconButton label={`移除 ${attachment.name}`} className="size-6" onClick={() => setRestoredAttachments((old) => old.filter((item) => item.id !== attachment.id))}><X className="size-3" /></IconButton>
-              </div>)}
-              </div>
-              {failedFiles.length > 0 && <p className="mt-1 text-xs text-danger" role="alert">有 {failedFiles.length} 个附件未就绪，请处理失败项或移除后再发送。</p>}
-            </div>}
+            {!desktopPresentation && renderAttachmentQueue()}
             {contextRefs.length > 0 && <div className="mx-auto mb-2 flex max-w-3xl flex-wrap gap-2">
               {contextRefs.map((ref) => <div key={`${ref.type}:${ref.id}`} className="flex items-center gap-2 rounded-lg border border-ink-200 bg-ink-50 px-2 py-1.5 text-xs text-ink-700">
                 <AtSign className="size-3.5" /><span className="max-w-48 truncate">{ref.name}</span><span className="text-mist-500">{ref.reference_scope === 'conversation' ? '固定引用' : '本轮引用'}</span>
@@ -1704,14 +1948,23 @@ export default function Agent() {
             <input ref={fileRef} type="file" multiple accept={'image/jpeg,image/png,image/webp,image/gif,.txt,.md' + (bootstrapData.features.document_parse ? ',.pdf,.docx,.csv' : '')} className="hidden" onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = '' }} />
             {desktopPresentation ? <>
               <div className={`desktop-agent-compose ${workbenchUI ? 'desktop-agent-workbench-compose' : ''}`}>
-                <Textarea ref={inputRef} rows={workbenchUI ? 3 : 1} aria-label={workbenchUI ? '发送消息' : undefined} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, workbenchUI ? 176 : 192)}px` }} onKeyDown={onInputKeyDown}
+                {renderAttachmentQueue(true)}
+                <Textarea ref={inputRef} rows={workbenchUI ? 3 : 1} aria-label={workbenchUI ? '发送消息' : undefined} value={text} disabled={inputDisabled} onChange={(event) => { textDraftVersionRef.current++; setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, workbenchUI ? 176 : 192)}px` }} onKeyDown={onInputKeyDown}
                   placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '说说你想写什么，或继续调整上面的方向…'} className="desktop-agent-compose-input" />
                 <div className="desktop-agent-compose-toolbar">
-                  <IconButton label="添加附件" disabled={!canWrite || busy && !runInputsEnabled || uploading || files.length + restoredAttachments.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()}><Paperclip className="size-4" /></IconButton>
-                  {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy && !runInputsEnabled || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)}><AtSign className="size-4" /></IconButton>}
-                  {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy && !runInputsEnabled || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)}><Sparkles className="size-4" /></IconButton>}
-                  {goalsEnabled && conversationId && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel}><Bot className="size-4" /></IconButton>}
-                  {routinesEnabled && <IconButton label="例行任务" onClick={() => setRoutinePanelOpen(true)}><CalendarClock className="size-4" /></IconButton>}
+                  {/* DEV-AI27-07：统一添加菜单收敛全部上下文与能力入口（27 §5.5）；
+                      已选能力仍以筹码形式显示在输入区上方。 */}
+                  <AddMenu
+                    disabled={!canWrite || busy && !runInputsEnabled || uploading}
+                    attachmentsAtLimit={files.length + restoredAttachments.length >= (bootstrapData.limits.attachments_per_message ?? 6)}
+                    onAction={(action) => {
+                      if (action === 'attachment') fileRef.current?.click()
+                      else if (action === 'context_refs') setContextPickerOpen(true)
+                      else if (action === 'skill') setSkillPickerOpen(true)
+                      else if (action === 'goal') openGoalPanel()
+                      else if (action === 'routine') setRoutinePanelOpen(true)
+                    }}
+                  />
                   {bootstrapData.features.plans && workbenchUI && <AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />}
                   <span className="desktop-agent-compose-spacer" />
                   <div className="desktop-agent-model-picker" ref={modelMenuRef}>
@@ -1731,15 +1984,14 @@ export default function Agent() {
                   {composerBusy && runInputsEnabled ? <div className="flex items-center gap-1.5">
                     <Button variant="secondary" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0} onClick={() => void postWorkbenchInput('steer')}>补充当前任务</Button>
                     <Button variant="outline" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0} onClick={() => void postWorkbenchInput('queue')}>排到下一条</Button>
-                    <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
-                  </div> : composerBusy ? <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
+                    <Button variant="ghost" className="desktop-agent-stop-button" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
+                  </div> : composerBusy ? <Button variant="ghost" className="desktop-agent-stop-button" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
                     : <>
                       <Button variant="primary" icon={<Send className="size-4" />} disabled={!canWrite || accountMismatch || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>
-                      {busy && <Button variant="ghost" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>}
+                      {busy && <Button variant="ghost" className="desktop-agent-stop-button" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>}
                     </>}
                 </div>
               </div>
-              <div className="desktop-agent-compose-note">{pendingActions > 0 ? `等待你逐张确认 ${pendingActions} 项 · AI 输出请自行核实` : pendingQuestion ? '用新消息替代待办问题 · 也可先回答上面的问题卡片' : composerBusy && runInputsEnabled ? '运行中按 Enter 补充当前任务 · 也可排到下一条 · Shift+Enter 换行' : composerBusy ? '正在生成，可随时停止' : completedNotice || 'Enter 发送 · Shift+Enter 换行 · AI 输出请自行核实，写入操作需逐张确认'}</div>
             </> : <>
               {bootstrapData.features.plans && <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 text-xs text-mist-500"><AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} /><span>{selectedMode === 'execute' ? '写入仍需逐张卡片确认' : '只读取与形成建议'}</span></div>}
               <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-mist-200 bg-white p-2 shadow-card focus-within:border-ink-300">
@@ -1748,7 +2000,7 @@ export default function Agent() {
                 {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)} className="mb-0.5"><Sparkles className="size-4" /></IconButton>}
                 {goalsEnabled && conversationId && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel} className="mb-0.5"><Bot className="size-4" /></IconButton>}
                 {routinesEnabled && <IconButton label="例行任务" onClick={() => setRoutinePanelOpen(true)} className="mb-0.5"><CalendarClock className="size-4" /></IconButton>}
-                <Textarea ref={inputRef} rows={1} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px` }} onKeyDown={onInputKeyDown}
+                <Textarea ref={inputRef} rows={1} value={text} disabled={inputDisabled} onChange={(event) => { textDraftVersionRef.current++; setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px` }} onKeyDown={onInputKeyDown}
                   placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '发送消息…（Enter 发送，Shift+Enter 换行）'} className="max-h-48 min-h-10 resize-none border-0 bg-transparent px-2 py-2 shadow-none focus:border-transparent focus:ring-0 disabled:bg-transparent" />
                 {busy ? <Button variant="ghost" className="mb-0.5 shrink-0" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
                   : <Button variant="primary" className="mb-0.5 shrink-0" icon={<Send className="size-4" />} disabled={!canWrite || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>}
@@ -1759,10 +2011,13 @@ export default function Agent() {
         </div>
       </section>
 
+      {workbenchUI && workbenchPanelOpen && <PanelResizer width={workbenchPanelWidth} onWidthChange={setWorkbenchPanelWidth} />}
       {workbenchUI && workbenchPanelOpen && <WorkbenchSidePanel
+        width={workbenchPanelWidth}
         tab={workbenchPanelTab}
         setTab={setWorkbenchPanelTab}
         close={() => setWorkbenchPanelOpen(false)}
+        browserWorkspaceEnabled={bootstrapData.features.browser_workspace === true}
         conversation={conversation}
         activeRun={activeRun}
         busy={busy}

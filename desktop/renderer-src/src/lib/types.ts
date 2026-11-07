@@ -820,6 +820,9 @@ export type AgentWorkbenchFeatureName =
   | 'goals'
   | 'routines'
   | 'document_parse'
+  // DEV-AI27-04/07：浏览器能力开关（D-160 runtime-gates，默认关闭）。
+  | 'chrome_connect'
+  | 'browser_workspace'
 
 export interface SystemSettings {
   registration_open: boolean
