@@ -1,0 +1,213 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000"><defs><filter id="menu-shadow" x="-30%" y="-20%" width="160%" height="150%"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#41305E" flood-opacity=".12"/></filter></defs><style>text{font-family:'Segoe UI Variable Text','Microsoft YaHei UI','Microsoft YaHei','Segoe UI',sans-serif;font-kerning:normal}*{box-sizing:border-box}</style>
+<rect x="0" y="0" width="1600" height="1000" rx="0" fill="#F5F3FA" stroke="none" />
+<rect x="0" y="0" width="1600" height="38" rx="0" fill="#F5F3FA" stroke="none" />
+<g transform="translate(18 10) scale(0.75)" fill="none" stroke="#7052BA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3z"/></g>
+<text x="44" y="25" font-size="13" fill="#302B43" font-weight="600" >OPS 灵感空间</text>
+<text x="174" y="25" font-size="12" fill="#6A6078" font-weight="400" >客户端</text>
+<text x="240" y="25" font-size="12" fill="#6A6078" font-weight="400" >编辑</text>
+<text x="292" y="25" font-size="12" fill="#6A6078" font-weight="400" >视图</text>
+<path d="M1466 19H1478" stroke="#6A6078" stroke-width="1"/>
+<rect x="1510" y="13" width="10" height="10" rx="0" fill="none" stroke="#6A6078" />
+<path d="M1559 13l11 11M1570 13l-11 11" stroke="#6A6078" stroke-width="1.2"/>
+<rect x="0" y="38" width="88" height="936" rx="0" fill="#ECE7F5" stroke="none" />
+<rect x="24" y="58" width="40" height="40" rx="12" fill="#7558BE" stroke="none" />
+<text x="44" y="85" font-size="27" fill="white" font-weight="300" text-anchor="middle">＋</text>
+<g transform="translate(33 120) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></g>
+<text x="44" y="162" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">工作台</text>
+<g transform="translate(33 192) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6V3zM14 3v5h5M9 12h6M9 16h6"/></g>
+<text x="44" y="234" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">作品</text>
+<g transform="translate(33 264) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3z"/></g>
+<text x="44" y="306" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">选题</text>
+<g transform="translate(33 336) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v16H4zM8 3v4M16 3v4M4 10h16M8 14h2M14 14h2M8 18h2"/></g>
+<text x="44" y="378" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">日历</text>
+<g transform="translate(33 408) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5h7l2 3h9v12H3V7z"/></g>
+<text x="44" y="450" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">素材</text>
+<g transform="translate(33 480) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18v16H3zM3 17l6-6 4 4 3-3 5 5M16 8h.1"/></g>
+<text x="44" y="522" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">图片</text>
+<g transform="translate(33 552) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5c-3-2-6-2-10-1v15c4-1 7-1 10 1 3-2 6-2 10-1V4c-4-1-7-1-10 1zM12 5v15"/></g>
+<text x="44" y="594" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">运营</text>
+<g transform="translate(33 624) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v18h18M8 16v-4M13 16V8M18 16V5"/></g>
+<text x="44" y="666" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">复盘</text>
+<g transform="translate(33 696) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21v-2a7 7 0 0 1 14 0v2M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10"/></g>
+<text x="44" y="738" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">档案</text>
+<rect x="8" y="761" width="72" height="64" rx="14" fill="#ECE5FC" stroke="none" />
+<rect x="8" y="774" width="3" height="30" rx="2" fill="#7052BA" stroke="none" />
+<g transform="translate(33 768) scale(0.9166666666666666)" fill="none" stroke="#7052BA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4z"/></g>
+<text x="44" y="810" font-size="12" fill="#7052BA" font-weight="600" text-anchor="middle">AI 对话</text>
+<g transform="translate(33 892) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10"/></g>
+<text x="44" y="934" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">设置</text>
+<rect x="88" y="38" width="1512" height="72" rx="0" fill="#FFFFFF" stroke="none" />
+<g transform="translate(112 64) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7M7 12h14"/></g>
+<path d="M152 60L152 90" stroke="#E7E1F0" stroke-width="1"/>
+<text x="176" y="81" font-size="14" fill="#302B43" font-weight="600" >我的工作区</text>
+<g transform="translate(266 67) scale(0.75)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10l5 5 5-5"/></g>
+<text x="304" y="81" font-size="14" fill="#E7E1F0" font-weight="400" >/</text>
+<rect x="328" y="59" width="32" height="32" rx="10" fill="#ECE5FC" stroke="none" />
+<text x="344" y="81" font-size="13" fill="#7052BA" font-weight="600" text-anchor="middle">植</text>
+<text x="372" y="81" font-size="14" fill="#302B43" font-weight="500" >植物所</text>
+<rect x="434" y="61" width="70" height="28" rx="6" fill="#F0EDF7" stroke="none" />
+<text x="444" y="80" font-size="12" fill="#6A6078" font-weight="400" >小红书</text>
+<g transform="translate(520 67) scale(0.75)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10l5 5 5-5"/></g>
+<g transform="translate(1370 64) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20l-4.3-4.3M10.5 18a7.5 7.5 0 1 0 0-15 7.5 7.5 0 0 0 0 15"/></g>
+<rect x="1408" y="58" width="62" height="34" rx="8" fill="#F5F3FA" stroke="none" />
+<text x="1439" y="80" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">Ctrl K</text>
+<g transform="translate(1496 64) scale(0.9166666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5l-2 3zM10 21h4"/></g>
+<rect x="1540" y="58" width="36" height="36" rx="18" fill="#ECE5FC" stroke="none" />
+<text x="1558" y="82" font-size="13" fill="#7052BA" font-weight="500" text-anchor="middle">我</text>
+<rect x="104" y="126" width="248" height="832" rx="16" fill="#FFFFFF" stroke="none" />
+<text x="124" y="158" font-size="16" fill="#302B43" font-weight="600" >AI 对话</text>
+<rect x="300" y="138" width="32" height="32" rx="8" fill="#7558BE" stroke="none" />
+<g transform="translate(307 145) scale(0.75)" fill="none" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></g>
+<rect x="120" y="184" width="216" height="36" rx="8" fill="#F5F3FA" stroke="none" />
+<g transform="translate(132 194) scale(0.7083333333333334)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20l-4.3-4.3M10.5 18a7.5 7.5 0 1 0 0-15 7.5 7.5 0 0 0 0 15"/></g>
+<text x="160" y="208" font-size="13" fill="#6A6078" font-weight="400" >搜索对话</text>
+<rect x="120" y="236" width="56" height="28" rx="6" fill="#ECE5FC" stroke="none" />
+<text x="130" y="255" font-size="12" fill="#7052BA" font-weight="400" >全部</text>
+<text x="192" y="255" font-size="12" fill="#6A6078" font-weight="400" >进行中</text>
+<text x="264" y="255" font-size="12" fill="#6A6078" font-weight="400" >待我处理</text>
+<path d="M120 278H336" stroke="#E7E1F0" stroke-width="1"/>
+<g transform="translate(124 297) scale(0.5833333333333334)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6v5l3 5H6l3-5V3zM12 13v8"/></g>
+<text x="146" y="310" font-size="12" fill="#6A6078" font-weight="500" >置顶</text>
+<rect x="116" y="326" width="224" height="64" rx="10" fill="#ECE5FC" stroke="none" />
+<text x="132" y="351" font-size="13" fill="#7052BA" font-weight="600" >城市阳台 · 竞品分析</text>
+<text x="132" y="374" font-size="12" fill="#6A6078" font-weight="400" >植物所 · 仅本人可见</text>
+<circle cx="315" cy="350" r="1.3" fill="#7052BA"/>
+<circle cx="321" cy="350" r="1.3" fill="#7052BA"/>
+<circle cx="327" cy="350" r="1.3" fill="#7052BA"/>
+<g transform="translate(124 418) scale(0.625)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5h7l2 3h9v12H3V7z"/></g>
+<text x="148" y="431" font-size="12" fill="#6A6078" font-weight="500" >内容研究</text>
+<text x="132" y="466" font-size="13" fill="#302B43" font-weight="400" >本周选题与内容节奏</text>
+<text x="132" y="504" font-size="13" fill="#302B43" font-weight="400" >阳台香草种植资料</text>
+<text x="132" y="542" font-size="13" fill="#302B43" font-weight="400" >三种封面方向</text>
+<path d="M120 570H336" stroke="#E7E1F0" stroke-width="1"/>
+<text x="132" y="600" font-size="12" fill="#6A6078" font-weight="500" >最近</text>
+<text x="132" y="636" font-size="13" fill="#302B43" font-weight="400" >上周内容复盘</text>
+<text x="132" y="674" font-size="13" fill="#302B43" font-weight="400" >新手种植常见问题</text>
+<text x="132" y="712" font-size="13" fill="#302B43" font-weight="400" >账号风格整理</text>
+<path d="M120 850H336" stroke="#E7E1F0" stroke-width="1"/>
+<g transform="translate(128 870) scale(0.75)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h16v13H4zM3 3h18v5H3zM9 12h6"/></g>
+<text x="158" y="885" font-size="13" fill="#6A6078" font-weight="400" >已归档</text>
+<g transform="translate(128 910) scale(0.75)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0M12 6v6l4 2"/></g>
+<text x="158" y="925" font-size="13" fill="#6A6078" font-weight="400" >例行任务</text>
+<rect x="0" y="974" width="1600" height="26" rx="0" fill="#FFFFFF" stroke="none" />
+<path d="M0 974H1600" stroke="#E7E1F0" stroke-width="1"/>
+<circle cx="20" cy="987" r="3" fill="#7052BA"/>
+<text x="30" y="991" font-size="12" fill="#6A6078" font-weight="400" >设计提案 · 示例数据 · 非运行截图</text>
+<text x="1274" y="991" font-size="12" fill="#6A6078" font-weight="400" >仅本人可见</text>
+<text x="1438" y="991" font-size="12" fill="#6A6078" font-weight="400" >Windows · 1600 × 1000</text>
+<rect x="360" y="126" width="560" height="832" rx="16" fill="#FFFFFF" stroke="none" />
+<text x="384" y="162" font-size="18" fill="#302B43" font-weight="600" >城市阳台 · 竞品分析</text>
+<g transform="translate(384 177) scale(0.5416666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5V10zM12 14v3"/></g>
+<text x="404" y="188" font-size="12" fill="#6A6078" font-weight="400" >仅本人可见</text>
+<text x="494" y="188" font-size="12" fill="#6A6078" font-weight="400" >植物所</text>
+<rect x="776" y="142" width="104" height="32" rx="8" fill="#ECE5FC" stroke="none" />
+<g transform="translate(786 150) scale(0.6666666666666666)" fill="none" stroke="#7052BA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18v16H3zM14 4v16"/></g>
+<text x="810" y="163" font-size="13" fill="#7052BA" font-weight="500" >工作视图</text>
+<circle cx="893" cy="158" r="1.3" fill="#6A6078"/>
+<circle cx="899" cy="158" r="1.3" fill="#6A6078"/>
+<circle cx="905" cy="158" r="1.3" fill="#6A6078"/>
+<path d="M376 206H904" stroke="#E7E1F0" stroke-width="1"/>
+<rect x="392" y="236" width="496" height="100" rx="12" fill="#ECE5FC" stroke="none" />
+<text x="412" y="265" font-size="14" fill="#302B43" font-weight="400" >比较这两篇参考内容，提炼适合植物所的选题。</text>
+<text x="412" y="291" font-size="14" fill="#302B43" font-weight="400" >只读研究，遇到登录或发布操作时交给我。</text>
+<rect x="412" y="299" width="174" height="28" rx="6" fill="#F7F3FE" stroke="none" />
+<g transform="translate(420 305) scale(0.6666666666666666)" fill="none" stroke="#7052BA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0M3 12h18M12 3c5 6 5 12 0 18-5-6-5-12 0-18"/></g>
+<text x="442" y="318" font-size="12" fill="#7052BA" font-weight="400" >Chrome · 已选 2 个标签</text>
+<rect x="392" y="368" width="28" height="28" rx="9" fill="#ECE5FC" stroke="none" />
+<g transform="translate(398 374) scale(0.6666666666666666)" fill="none" stroke="#7052BA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3z"/></g>
+<text x="432" y="388" font-size="14" fill="#302B43" font-weight="500" >我会按三个维度比较。</text>
+<rect x="432" y="404" width="28" height="28" rx="8" fill="#F5F3FA" stroke="none" />
+<text x="446" y="423" font-size="12" fill="#6A6078" font-weight="500" text-anchor="middle">01</text>
+<text x="476" y="423" font-size="14" fill="#302B43" font-weight="400" >选题切口与目标读者</text>
+<rect x="432" y="452" width="28" height="28" rx="8" fill="#F5F3FA" stroke="none" />
+<text x="446" y="471" font-size="12" fill="#6A6078" font-weight="500" text-anchor="middle">02</text>
+<text x="476" y="471" font-size="14" fill="#302B43" font-weight="400" >内容结构与证据质量</text>
+<rect x="432" y="500" width="28" height="28" rx="8" fill="#F5F3FA" stroke="none" />
+<text x="446" y="519" font-size="12" fill="#6A6078" font-weight="500" text-anchor="middle">03</text>
+<text x="476" y="519" font-size="14" fill="#302B43" font-weight="400" >互动设计与可借鉴方向</text>
+<path d="M432 566H876" stroke="#E7E1F0" stroke-width="1"/>
+<g transform="translate(432 588) scale(0.6666666666666666)" fill="none" stroke="#37715F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l4 4L19 6"/></g>
+<text x="460" y="602" font-size="13" fill="#6A6078" font-weight="400" >已读取第一篇的标题与内容结构</text>
+<circle cx="440" cy="635" r="3" fill="#7052BA"/>
+<text x="460" y="640" font-size="13" fill="#302B43" font-weight="500" >正在核对第二篇的发布日期</text>
+<text x="460" y="672" font-size="12" fill="#6A6078" font-weight="400" >资料来自网页，不作为新的操作指令。</text>
+<text x="388" y="791" font-size="12" fill="#6A6078" font-weight="400" >正在核对来源日期 · 已读取 2 / 2 个页面</text>
+<rect x="384" y="808" width="512" height="132" rx="16" fill="#FFFFFF" stroke="#E7E1F0" />
+<text x="400" y="844" font-size="14" fill="#6A6078" font-weight="400" >补充研究范围或调整重点…</text>
+<rect x="396" y="896" width="32" height="32" rx="8" fill="#F5F3FA" stroke="none" />
+<g transform="translate(403 903) scale(0.75)" fill="none" stroke="#7052BA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></g>
+<rect x="440" y="896" width="88" height="32" rx="8" fill="#F5F3FA" stroke="none" />
+<g transform="translate(450 904) scale(0.6666666666666666)" fill="none" stroke="#302B43" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0M17 12a5 5 0 1 0-10 0 5 5 0 0 0 10 0M12 12h.1"/></g>
+<text x="474" y="917" font-size="13" fill="#302B43" font-weight="500" >执行</text>
+<g transform="translate(504 905) scale(0.5416666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10l5 5 5-5"/></g>
+<rect x="536" y="896" width="136" height="32" rx="8" fill="#F5F3FA" stroke="none" />
+<g transform="translate(546 904) scale(0.6666666666666666)" fill="none" stroke="#302B43" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3z"/></g>
+<text x="570" y="917" font-size="13" fill="#302B43" font-weight="500" >工具模型</text>
+<g transform="translate(652 905) scale(0.5416666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10l5 5 5-5"/></g>
+<rect x="688" y="896" width="104" height="32" rx="8" fill="#F5F3FA" stroke="none" />
+<g transform="translate(698 904) scale(0.6666666666666666)" fill="none" stroke="#302B43" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0V5zM5 10v3a7 7 0 0 0 14 0v-3M12 20v3M8 23h8"/></g>
+<text x="722" y="917" font-size="13" fill="#302B43" font-weight="500" >语音</text>
+<g transform="translate(768 905) scale(0.5416666666666666)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10l5 5 5-5"/></g>
+<rect x="848" y="896" width="32" height="32" rx="9" fill="#302B43" stroke="none" />
+<g transform="translate(855 903) scale(0.75)" fill="none" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6h12v12H6z"/></g>
+<rect x="928" y="126" width="656" height="832" rx="16" fill="#FFFFFF" stroke="none" />
+<text x="952" y="161" font-size="16" fill="#302B43" font-weight="600" >工作视图</text>
+<g transform="translate(1526 142) scale(0.75)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18v16H3zM14 4v16"/></g>
+<circle cx="1557" cy="150" r="1.3" fill="#6A6078"/>
+<circle cx="1563" cy="150" r="1.3" fill="#6A6078"/>
+<circle cx="1569" cy="150" r="1.3" fill="#6A6078"/>
+<path d="M944 178H1568" stroke="#E7E1F0" stroke-width="1"/>
+<text x="952" y="207" font-size="13" fill="#6A6078" font-weight="400" >任务</text>
+<text x="1016" y="207" font-size="13" fill="#6A6078" font-weight="400" >上下文</text>
+<text x="1096" y="207" font-size="13" fill="#6A6078" font-weight="400" >产物</text>
+<text x="1160" y="207" font-size="13" fill="#7052BA" font-weight="600" >浏览器</text>
+<path d="M1152 221H1208" stroke="#7052BA" stroke-width="2"/>
+<rect x="952" y="238" width="608" height="40" rx="9" fill="#F5F3FA" stroke="none" />
+<rect x="1088" y="242" width="220" height="32" rx="7" fill="#FFFFFF" stroke="#E7E1F0" />
+<text x="1020" y="263" font-size="12" fill="#6A6078" font-weight="400" text-anchor="middle">应用内 · 待验证</text>
+<g transform="translate(1102 249) scale(0.75)" fill="none" stroke="#7052BA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0M3 12h18M12 3c5 6 5 12 0 18-5-6-5-12 0-18"/></g>
+<text x="1130" y="263" font-size="13" fill="#7052BA" font-weight="600" >Google Chrome</text>
+<g transform="translate(952 294) scale(0.8333333333333334)" fill="none" stroke="#7052BA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0M3 12h18M12 3c5 6 5 12 0 18-5-6-5-12 0-18"/></g>
+<text x="982" y="311" font-size="16" fill="#302B43" font-weight="600" >Chrome连接 · 外部标签</text>
+<rect x="1414" y="290" width="146" height="28" rx="6" fill="#F0EDF7" stroke="none" />
+<text x="1424" y="309" font-size="12" fill="#6A6078" font-weight="400" >研究专用 profile</text>
+<text x="952" y="340" font-size="12" fill="#6A6078" font-weight="400" >已选择 2 个标签 · 控制范围仅限这些页面</text>
+<rect x="952" y="356" width="608" height="48" rx="8" fill="#ECE5FC" stroke="none" />
+<g transform="translate(966 369) scale(0.75)" fill="none" stroke="#7052BA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6V3zM14 3v5h5M9 12h6M9 16h6"/></g>
+<text x="996" y="377" font-size="13" fill="#7052BA" font-weight="500" >小空间种植：一平方米的香草园</text>
+<text x="996" y="394" font-size="12" fill="#6A6078" font-weight="400" >urbanbalcony.example / herb-guide</text>
+<g transform="translate(1506 371) scale(0.75)" fill="none" stroke="#7052BA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l4 4L19 6"/></g>
+<rect x="952" y="412" width="608" height="48" rx="8" fill="#FFFFFF" stroke="#E7E1F0" />
+<g transform="translate(966 425) scale(0.75)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6V3zM14 3v5h5M9 12h6M9 16h6"/></g>
+<text x="996" y="433" font-size="13" fill="#302B43" font-weight="400" >从零开始，记录阳台的第一片绿</text>
+<text x="996" y="450" font-size="12" fill="#6A6078" font-weight="400" >grownotes.example / first-balcony</text>
+<g transform="translate(1506 427) scale(0.75)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l4 4L19 6"/></g>
+<g transform="translate(952 481) scale(0.7083333333333334)" fill="none" stroke="#6A6078" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18v16H3zM3 17l6-6 4 4 3-3 5 5M16 8h.1"/></g>
+<text x="978" y="494" font-size="12" fill="#6A6078" font-weight="500" >页面证据快照</text>
+<text x="1536" y="494" font-size="12" fill="#6A6078" font-weight="400" text-anchor="end">5 秒前更新 · 仅用于核对</text>
+<rect x="952" y="508" width="608" height="264" rx="10" fill="#F5F3FA" stroke="#E7E1F0" />
+<rect x="968" y="524" width="576" height="232" rx="7" fill="#FFFFFF" stroke="none" />
+<text x="992" y="552" font-size="12" fill="#6A6078" font-weight="600" letter-spacing="2">URBAN BALCONY</text>
+<text x="992" y="592" font-size="22" fill="#302B43" font-weight="600" >一平方米，也能种一座香草园</text>
+<text x="992" y="620" font-size="12" fill="#6A6078" font-weight="400" >种植笔记 · 示例页面 · 2026 年 11 月 4 日</text>
+<rect x="992" y="642" width="248" height="6" rx="3" fill="#ECE5FC" stroke="none" />
+<rect x="992" y="660" width="358" height="6" rx="3" fill="#F0EDF7" stroke="none" />
+<rect x="992" y="678" width="388" height="6" rx="3" fill="#F0EDF7" stroke="none" />
+<rect x="992" y="696" width="306" height="6" rx="3" fill="#F0EDF7" stroke="none" />
+<text x="992" y="735" font-size="12" fill="#6A6078" font-weight="400" >页面内容为虚构示意，实际操作发生在 Chrome 窗口中。</text>
+<rect x="952" y="788" width="608" height="56" rx="9" fill="#F0EDF7" stroke="none" />
+<circle cx="972" cy="816" r="4" fill="#7052BA"/>
+<text x="986" y="812" font-size="13" fill="#302B43" font-weight="500" >AI 正在操作</text>
+<text x="986" y="832" font-size="12" fill="#6A6078" font-weight="400" >核对正文与来源日期</text>
+<rect x="1194" y="800" width="130" height="32" rx="8" fill="#FFFFFF" stroke="#E7E1F0" />
+<g transform="translate(1204 808) scale(0.6666666666666666)" fill="none" stroke="#302B43" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7M21 3L10 14M11 3H3v18h18v-8"/></g>
+<text x="1228" y="821" font-size="13" fill="#302B43" font-weight="500" >在 Chrome 查看</text>
+<rect x="1334" y="800" width="90" height="32" rx="8" fill="#FFFFFF" stroke="#E7E1F0" />
+<g transform="translate(1344 808) scale(0.6666666666666666)" fill="none" stroke="#302B43" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-7 1-3 7L5 3z"/></g>
+<text x="1368" y="821" font-size="13" fill="#302B43" font-weight="500" >接管</text>
+<rect x="1434" y="800" width="102" height="32" rx="8" fill="#FFFFFF" stroke="#E7E1F0" />
+<g transform="translate(1444 808) scale(0.6666666666666666)" fill="none" stroke="#A43E56" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6h12v12H6z"/></g>
+<text x="1468" y="821" font-size="13" fill="#A43E56" font-weight="500" >停止</text>
+<text x="952" y="882" font-size="12" fill="#6A6078" font-weight="400" >这是 Chrome 连接路径的布局提案。</text>
+<text x="952" y="904" font-size="12" fill="#6A6078" font-weight="400" >“内置完整 Chrome”的技术可行性与原生交互仍须独立验证。</text>
+</svg>
