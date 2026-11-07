@@ -267,7 +267,7 @@ function docxExternalEntityFixture() {
   })
 }
 
-function docxExpandedFixture(totalExpandedBytes: number, options: { macroEnabled?: boolean; embeddedObject?: boolean; externalRelationship?: boolean } = {}) {
+function docxExpandedFixture(totalExpandedBytes: number, options: { macroEnabled?: boolean; embeddedObject?: boolean; externalRelationship?: boolean; payloadEntryCount?: number } = {}) {
   const mainDocumentType = options.macroEnabled
     ? 'application/vnd.ms-word.document.macroEnabled.main+xml'
     : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'
@@ -283,7 +283,17 @@ function docxExpandedFixture(totalExpandedBytes: number, options: { macroEnabled
   if (options.embeddedObject) files['word/embeddings/oleObject1.bin'] = Buffer.from('embedded object fixture')
   const baseBytes = Object.values(files).reduce((total, data) => total + data.length, 0)
   if (totalExpandedBytes < baseBytes) throw new Error('DOCX expanded fixture below its XML headers')
-  files['customXml/payload.xml'] = Buffer.alloc(totalExpandedBytes - baseBytes, 0x61)
+  const payloadEntryCount = options.payloadEntryCount ?? 1
+  if (!Number.isInteger(payloadEntryCount) || payloadEntryCount < 1) throw new Error('DOCX payload entry count must be positive')
+  const payloadBytes = totalExpandedBytes - baseBytes
+  const openTag = Buffer.from('<item>')
+  const closeTag = Buffer.from('</item>')
+  const textBytes = payloadBytes - payloadEntryCount * openTag.length - payloadEntryCount * closeTag.length
+  if (textBytes < payloadEntryCount) throw new Error('DOCX expanded fixture is too small for payload entries')
+  for (let index = 0; index < payloadEntryCount; index++) {
+    const entryTextBytes = Math.floor(textBytes / payloadEntryCount) + (index < textBytes % payloadEntryCount ? 1 : 0)
+    files[`customXml/item${index + 1}.xml`] = Buffer.concat([openTag, Buffer.alloc(entryTextBytes, 0x61), closeTag])
+  }
   return zipFixture(files, true)
 }
 
@@ -1274,4 +1284,42 @@ test('DEV-QA26 G7-03 Web拒绝嵌入对象和外链与96MiB+1解压量交叉DOCX
   expect(attachmentPosts).toBe(2)
   expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
   expect(messagePosts).toBe(0)
+})
+
+test('DEV-QA26 G7-03 Web拒绝跨条目累计解压上限DOCX', async ({ page, baseURL }) => {
+  test.setTimeout(240_000)
+  await prepare(page, baseURL!)
+  const expandedBytes = 96 * 1024 * 1024 + 1
+  const fileName = 'aggregate-expanded.docx'
+  const document = docxExpandedFixture(expandedBytes, { payloadEntryCount: 2 })
+  expect(document.byteLength).toBeLessThan(20 * 1024 * 1024)
+  let attachmentPosts = 0
+  let messagePosts = 0
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname
+    if (pathname === '/api/v1/agent/attachments' && request.method() === 'POST') attachmentPosts++
+    if (pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+  })
+  const uploadSamples: number[] = []
+  for (let index = 0; index < 20; index++) {
+    const chooser = page.waitForEvent('filechooser')
+    const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+    const started = performance.now()
+    await page.getByRole('button', { name: '添加附件', exact: true }).click()
+    await (await chooser).setFiles({ name: fileName, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: document })
+    const response = await upload
+    uploadSamples.push(performance.now() - started)
+    const body = await response.json() as { error?: { code?: string } }
+    expect(response.status()).toBe(422)
+    expect(body.error?.code).toBe('agent_attachment_parse_failed')
+    await expect(page.getByLabel(fileName + ' failed', { exact: true })).toContainText('DOCX 已加密、损坏或解压内容超限')
+    await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    await page.getByRole('button', { name: '移除 ' + fileName, exact: true }).click()
+  }
+  expect(attachmentPosts).toBe(20)
+  expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+  expect(messagePosts).toBe(0)
+  const sorted = [...uploadSamples].sort((a, b) => a - b)
+  const percentile = (ratio: number) => Number(sorted[Math.ceil(sorted.length * ratio) - 1].toFixed(2))
+  console.log(`DEV-QA26_METRIC_DOCX_AGGREGATE_EXPANDED_WEB ${JSON.stringify({ environment: 'Web Chromium; local E2E API and WASI parser', expanded_bytes: expandedBytes, payload_entries: 2, each_payload_below_limit: true, uploaded_bytes: document.byteLength, status: 422, samples: uploadSamples.length, p50_ms: percentile(0.5), p95_ms: percentile(0.95), attachment_posts: attachmentPosts, conversations: 0, message_posts: messagePosts, failures: 0 })}`)
 })

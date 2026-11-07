@@ -476,6 +476,23 @@ func TestParseDOCXRejectsHighCompressionExpandedSizeUnderWASI(t *testing.T) {
 	t.Logf("DEV-QA26_METRIC_DOCX_ZIP_BOMB %s", fmt.Sprintf(`{"expanded_bytes":%d,"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"result":"%s"}`, expandedLimit+1, len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ErrorCode))
 }
 
+func TestParseDOCXRejectsAggregateExpandedSizeAcrossEntriesUnderWASI(t *testing.T) {
+	const expandedLimit = 96 << 20
+	compressed, entrySizes, ratio := highCompressionMultiEntryDOCXFixture(t)
+	for _, size := range entrySizes {
+		if size >= expandedLimit {
+			t.Fatalf("each payload entry must remain below the total limit: %v", entrySizes)
+		}
+	}
+	start := time.Now()
+	result, err := parseInWASI("aggregate-high-compression.docx", compressed)
+	elapsed := time.Since(start)
+	if err == nil || result.ErrorCode != "docx_expanded_size_limit" {
+		t.Fatalf("DOCX whose aggregate entries exceed the limit should fail from its aggregate expanded size: result %+v, err %v", result, err)
+	}
+	t.Logf("DEV-QA26_METRIC_DOCX_AGGREGATE_ZIP_BOMB %s", fmt.Sprintf(`{"expanded_bytes":%d,"entry_bytes":[%d,%d],"compressed_bytes":%d,"ratio":%.1f,"parse_ms":%.2f,"result":"%s"}`, expandedLimit+1, entrySizes[0], entrySizes[1], len(compressed), ratio, float64(elapsed.Microseconds())/1000, result.ErrorCode))
+}
+
 func TestParseDOCXAcceptsLargeDocumentEntryAndTruncatesText(t *testing.T) {
 	const expandedDocumentEntry = 4 << 20
 	compressed, ratio := compressedDocumentEntryDOCXFixture(t, expandedDocumentEntry)
@@ -633,6 +650,65 @@ func highCompressionDOCXFixture(t *testing.T) ([]byte, float64) {
 		t.Fatalf("fixture compression ratio unexpectedly low: %.1f:1 (%d compressed bytes)", ratio, compressed.Len())
 	}
 	return compressed.Bytes(), ratio
+}
+
+func highCompressionMultiEntryDOCXFixture(t *testing.T) ([]byte, []int, float64) {
+	t.Helper()
+	const expandedLimit = 96 << 20
+	files := minimalOPCDOCXFiles(false)
+	baseExpanded := 0
+	for _, content := range files {
+		baseExpanded += len(content)
+	}
+
+	const openTag = "<item>"
+	const closeTag = "</item>"
+	remaining := expandedLimit + 1 - baseExpanded - 2*(len(openTag)+len(closeTag))
+	if remaining < 2 {
+		t.Fatalf("aggregate fixture has insufficient payload bytes: %d", remaining)
+	}
+	textBytes := []int{(remaining + 1) / 2, remaining / 2}
+	entrySizes := []int{textBytes[0] + len(openTag) + len(closeTag), textBytes[1] + len(openTag) + len(closeTag)}
+
+	var compressed bytes.Buffer
+	archive := zip.NewWriter(&compressed)
+	for name, content := range files {
+		entry, err := archive.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chunk := bytes.Repeat([]byte("a"), 1<<20)
+	for index, size := range textBytes {
+		entry, err := archive.Create(fmt.Sprintf("customXml/item%d.xml", index+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte(openTag)); err != nil {
+			t.Fatal(err)
+		}
+		for remaining := size; remaining > 0; {
+			count := min(remaining, len(chunk))
+			if _, err := entry.Write(chunk[:count]); err != nil {
+				t.Fatal(err)
+			}
+			remaining -= count
+		}
+		if _, err := entry.Write([]byte(closeTag)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ratio := float64(expandedLimit+1) / float64(compressed.Len())
+	if ratio < 100 {
+		t.Fatalf("aggregate fixture compression ratio unexpectedly low: %.1f:1 (%d compressed bytes)", ratio, compressed.Len())
+	}
+	return compressed.Bytes(), entrySizes, ratio
 }
 
 func compressedDocumentEntryDOCXFixture(t *testing.T, expandedDocumentEntry int) ([]byte, float64) {
