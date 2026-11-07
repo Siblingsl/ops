@@ -1,5 +1,6 @@
 import { _electron, expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
+import { createServer as createHttpServer } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { performance } from 'node:perf_hooks'
@@ -10,6 +11,30 @@ import { api, createOutline, finishChecks, openDesktopAccountSwitcher, registerA
 type ElectronApp = Awaited<ReturnType<typeof _electron.launch>>
 
 type LocalSmtpSink = { port: number; messages: string[]; close: () => Promise<void> }
+type LocalModelFailureServer = { port: number; calls: number; close: () => Promise<void> }
+
+async function startLocalModelFailureServer(secret: string): Promise<LocalModelFailureServer> {
+  let calls = 0
+  const server = createHttpServer((_request, response) => {
+    calls += 1
+    response.writeHead(401, { 'Content-Type': 'application/json', Connection: 'close' })
+    response.end(JSON.stringify({ error: { message: `Invalid API key: ${secret}` } }))
+  })
+  const port = await new Promise<number>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject)
+      const address = server.address()
+      if (!address || typeof address === 'string') { reject(new Error('模型故障端点未能绑定 TCP 端口')); return }
+      resolve(address.port)
+    })
+  })
+  return {
+    port,
+    get calls() { return calls },
+    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+  }
+}
 
 async function startLocalSmtpSink(rejectGreeting = false): Promise<LocalSmtpSink> {
   const messages: string[] = []
@@ -1749,5 +1774,84 @@ test('DEV-QA26 G8 真实 Electron 敏感词从设置生效、过滤、撤销与�
     if (viewerApp) await closeElectron(viewerApp, viewerProfile, 'words-viewer')
     await viewerContext?.close()
     if (!ownerClosed) await closeElectron(owner.app, owner.profile, 'words-audit')
+  }
+})
+
+test('DEV-QA26 G7-10 真实 Electron 模型连通测试成功失败与重载', async ({ page, baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要 Windows Electron')
+  test.setTimeout(240_000)
+  const owner = await openOwner(page, baseURL!, 'model-connectivity')
+  const secret = `qa26-local-secret-${Date.now()}`
+  let failureServer: LocalModelFailureServer | undefined
+  try {
+    const base = process.env.OPS_E2E_MOCK_BASE_URL ?? 'http://127.0.0.1:8297/v1'
+    const successProvider = await api(page, 'POST', '/model-providers', {
+      name: `DEV-QA26 连通成功 ${Date.now()}`, base_url: base, api_key: 'local-e2e-key', models: ['mock-writer'],
+    }) as { id: string; name: string }
+    failureServer = await startLocalModelFailureServer(secret)
+    const failedProvider = await api(page, 'POST', '/model-providers', {
+      name: `DEV-QA26 连通失败 ${Date.now()}`, base_url: `http://127.0.0.1:${failureServer.port}/v1`, api_key: secret, models: ['mock-failure'],
+    }) as { id: string; name: string }
+
+    await selectDesktopSetting(owner.page, '服务器模型')
+    const settings = owner.page.getByTestId('desktop-settings-window')
+    const successCard = settings.locator('div.group.p-5').filter({ hasText: successProvider.name })
+    await expect(successCard).toBeVisible()
+    const clickSamples: number[] = []
+    for (let index = 0; index < 20; index += 1) {
+      const responsePromise = owner.page.waitForResponse((response) =>
+        response.url().endsWith(`/api/v1/model-providers/${successProvider.id}/test`) && response.request().method() === 'POST')
+      const started = performance.now()
+      await successCard.getByRole('button', { name: '测试', exact: true }).click()
+      const response = await responsePromise
+      expect(response.status()).toBe(200)
+      const result = await response.json() as { ok: boolean; result: string; latency_ms: number }
+      expect(result.ok).toBe(true)
+      expect(result.result).toContain('mock-writer')
+      expect(result.latency_ms).toEqual(expect.any(Number))
+      await expect(owner.page.getByText(result.result, { exact: true }).first()).toBeVisible()
+      clickSamples.push(performance.now() - started)
+    }
+    const successfulProviders = await api(page, 'GET', '/model-providers') as Array<{ id: string; last_test_ok: boolean | null; last_test_at: string | null; last_test_result: string }>
+    const successState = successfulProviders.find((provider) => provider.id === successProvider.id)
+    expect(successState?.last_test_ok).toBe(true)
+    expect(successState?.last_test_at).toBeTruthy()
+    expect(successState?.last_test_result).toContain('连接正常')
+
+    await owner.page.reload()
+    await selectDesktopSetting(owner.page, '服务器模型')
+    const reloadedSettings = owner.page.getByTestId('desktop-settings-window')
+    await expect(reloadedSettings.locator('div.group.p-5').filter({ hasText: successProvider.name }).getByText(/测试通过/)).toBeVisible()
+    const failedCard = reloadedSettings.locator('div.group.p-5').filter({ hasText: failedProvider.name })
+    const failedResponse = owner.page.waitForResponse((response) =>
+      response.url().endsWith(`/api/v1/model-providers/${failedProvider.id}/test`) && response.request().method() === 'POST')
+    await failedCard.getByRole('button', { name: '测试', exact: true }).click()
+    const response = await failedResponse
+    expect(response.status()).toBe(200)
+    const result = await response.json() as { ok: boolean; result: string }
+    expect(result.ok).toBe(false)
+    expect(result.result).not.toContain(secret)
+    expect(result.result).toContain('****')
+    expect(failureServer.calls).toBe(1)
+    await expect(owner.page.getByText(result.result, { exact: true }).first()).toBeVisible()
+    await expect(failedCard.getByText(/Invalid API key/)).toBeVisible()
+    await expect(failedCard).not.toContainText(secret)
+    const persisted = (await api(page, 'GET', '/model-providers') as Array<{ id: string; last_test_ok: boolean | null; last_test_result: string; key_mask: string }>).find((provider) => provider.id === failedProvider.id)
+    expect(persisted?.last_test_ok).toBe(false)
+    expect(persisted?.last_test_result).toContain('****')
+    expect(persisted?.last_test_result).not.toContain(secret)
+    expect(persisted?.key_mask).not.toContain(secret)
+
+    await owner.page.reload()
+    await selectDesktopSetting(owner.page, '服务器模型')
+    const finalFailedCard = owner.page.getByTestId('desktop-settings-window').locator('div.group.p-5').filter({ hasText: failedProvider.name })
+    await expect(finalFailedCard.getByText(/测试失败/)).toBeVisible()
+    await expect(finalFailedCard.getByText(/Invalid API key/)).toBeVisible()
+    await expect(finalFailedCard).not.toContainText(secret)
+    const sorted = [...clickSamples].sort((a, b) => a - b)
+    console.log(`DEV-QA26_MODEL_CONNECTIVITY_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local mock model and local 401 key-echo endpoint', success_clicks: clickSamples.length, p50_ms: Number(sorted[Math.ceil(sorted.length * 0.5) - 1].toFixed(2)), p95_ms: Number(sorted[Math.ceil(sorted.length * 0.95) - 1].toFixed(2)), success_failures: 0, failed_check_calls: failureServer.calls, persisted_after_reload: true, secret_redacted: true })}`)
+  } finally {
+    await failureServer?.close()
+    await closeElectron(owner.app, owner.profile, 'model-connectivity')
   }
 })

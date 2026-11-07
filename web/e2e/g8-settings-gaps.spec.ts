@@ -1,9 +1,34 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { createServer as createHttpServer } from 'node:http'
 import { performance } from 'node:perf_hooks'
 import { createServer } from 'node:net'
 import { api, mockModelBaseUrl, registerAccount } from './support'
 
 type LocalSmtpSink = { port: number; messages: string[]; close: () => Promise<void> }
+type LocalModelFailureServer = { port: number; calls: number; close: () => Promise<void> }
+
+async function startLocalModelFailureServer(secret: string): Promise<LocalModelFailureServer> {
+  let calls = 0
+  const server = createHttpServer((_request, response) => {
+    calls += 1
+    response.writeHead(401, { 'Content-Type': 'application/json', Connection: 'close' })
+    response.end(JSON.stringify({ error: { message: `Invalid API key: ${secret}` } }))
+  })
+  const port = await new Promise<number>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject)
+      const address = server.address()
+      if (!address || typeof address === 'string') { reject(new Error('模型故障端点未能绑定 TCP 端口')); return }
+      resolve(address.port)
+    })
+  })
+  return {
+    port,
+    get calls() { return calls },
+    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+  }
+}
 
 async function startLocalSmtpSink(rejectGreeting = false): Promise<LocalSmtpSink> {
   const messages: string[] = []
@@ -1282,4 +1307,75 @@ test('DEV-QA26 G7-09 Web 本地 mock 用量记录按四组展示', async ({ page
     return Number(sorted[Math.ceil(sorted.length * ratio) - 1].toFixed(2))
   }
   console.log(`DEV-QA26_USAGE_DATA Web ${JSON.stringify({ ai_samples: 20, ai_p50_ms: percentile(aiSamples, 0.5), ai_p95_ms: percentile(aiSamples, 0.95), group_clicks: 20, click_p50_ms: percentile(interactions, 0.5), click_p95_ms: percentile(interactions, 0.95), totals: 20, groups: [...groupKeys.keys()], model: 'local mock; no quality claim' })}`)
+})
+
+test('DEV-QA26 G7-10 Web 模型连通测试成功失败与重载', async ({ page }) => {
+  await registerAccount(page)
+  const secret = `qa26-local-secret-${Date.now()}`
+  let failureServer: LocalModelFailureServer | undefined
+  try {
+    const successProvider = await api(page, 'POST', '/model-providers', {
+      name: `DEV-QA26 Web 连通成功 ${Date.now()}`, base_url: mockModelBaseUrl(), api_key: 'local-e2e-key', models: ['mock-writer'],
+    }) as { id: string; name: string }
+    failureServer = await startLocalModelFailureServer(secret)
+    const failedProvider = await api(page, 'POST', '/model-providers', {
+      name: `DEV-QA26 Web 连通失败 ${Date.now()}`, base_url: `http://127.0.0.1:${failureServer.port}/v1`, api_key: secret, models: ['mock-failure'],
+    }) as { id: string; name: string }
+
+    await openSetting(page, '模型配置')
+    const successCard = page.locator('div.group.p-5').filter({ hasText: successProvider.name })
+    await expect(successCard).toBeVisible()
+    const clickSamples: number[] = []
+    for (let index = 0; index < 20; index += 1) {
+      const responsePromise = page.waitForResponse((response) =>
+        response.url().endsWith(`/api/v1/model-providers/${successProvider.id}/test`) && response.request().method() === 'POST')
+      const started = performance.now()
+      await successCard.getByRole('button', { name: '测试', exact: true }).click()
+      const response = await responsePromise
+      expect(response.status()).toBe(200)
+      const result = await response.json() as { ok: boolean; result: string; latency_ms: number }
+      expect(result.ok).toBe(true)
+      expect(result.result).toContain('mock-writer')
+      expect(result.latency_ms).toEqual(expect.any(Number))
+      await expect(page.getByText(result.result, { exact: true }).first()).toBeVisible()
+      clickSamples.push(performance.now() - started)
+    }
+    const successfulProviders = await api(page, 'GET', '/model-providers') as Array<{ id: string; last_test_ok: boolean | null; last_test_at: string | null; last_test_result: string }>
+    const successState = successfulProviders.find((provider) => provider.id === successProvider.id)
+    expect(successState?.last_test_ok).toBe(true)
+    expect(successState?.last_test_at).toBeTruthy()
+    expect(successState?.last_test_result).toContain('连接正常')
+
+    await page.reload()
+    await expect(page.locator('div.group.p-5').filter({ hasText: successProvider.name }).getByText(/测试通过/)).toBeVisible()
+    const failedCard = page.locator('div.group.p-5').filter({ hasText: failedProvider.name })
+    const failedResponse = page.waitForResponse((response) =>
+      response.url().endsWith(`/api/v1/model-providers/${failedProvider.id}/test`) && response.request().method() === 'POST')
+    await failedCard.getByRole('button', { name: '测试', exact: true }).click()
+    const response = await failedResponse
+    expect(response.status()).toBe(200)
+    const result = await response.json() as { ok: boolean; result: string }
+    expect(result.ok).toBe(false)
+    expect(result.result).not.toContain(secret)
+    expect(result.result).toContain('****')
+    expect(failureServer.calls).toBe(1)
+    await expect(page.getByText(result.result, { exact: true }).first()).toBeVisible()
+    await expect(failedCard.getByText(/Invalid API key/)).toBeVisible()
+    await expect(failedCard).not.toContainText(secret)
+    const persisted = (await api(page, 'GET', '/model-providers') as Array<{ id: string; last_test_ok: boolean | null; last_test_result: string; key_mask: string }>).find((provider) => provider.id === failedProvider.id)
+    expect(persisted?.last_test_ok).toBe(false)
+    expect(persisted?.last_test_result).toContain('****')
+    expect(persisted?.last_test_result).not.toContain(secret)
+    expect(persisted?.key_mask).not.toContain(secret)
+
+    await page.reload()
+    const finalFailedCard = page.locator('div.group.p-5').filter({ hasText: failedProvider.name })
+    await expect(finalFailedCard.getByText(/测试失败/)).toBeVisible()
+    await expect(finalFailedCard.getByText(/Invalid API key/)).toBeVisible()
+    await expect(finalFailedCard).not.toContainText(secret)
+    const sorted = [...clickSamples].sort((a, b) => a - b)
+    console.log(`DEV-QA26_MODEL_CONNECTIVITY_WEB ${JSON.stringify({ environment: 'Web Chromium; local mock model and local 401 key-echo endpoint', success_clicks: clickSamples.length, p50_ms: Number(sorted[Math.ceil(sorted.length * 0.5) - 1].toFixed(2)), p95_ms: Number(sorted[Math.ceil(sorted.length * 0.95) - 1].toFixed(2)), success_failures: 0, failed_check_calls: failureServer.calls, persisted_after_reload: true, secret_redacted: true })}`)
+  } finally {
+    await failureServer?.close()
+  }
 })
