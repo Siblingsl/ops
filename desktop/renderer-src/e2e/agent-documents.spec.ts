@@ -440,6 +440,71 @@ test('DEV-AW11 Windows Electron固定选择文件、文档回执与原生保存�
   }
 })
 
+test('DEV-QA26 G7-03 CSV恰好10000行100列通过Electron文件选择器并显示截断回执', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(240_000)
+  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-qa26-csv-max-'))
+  let app: ElectronApplication | undefined
+  try {
+    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + userData, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const page = await app.firstWindow()
+    await prepare(page, baseURL!)
+    const row = `${Array.from({ length: 100 }, () => 'x').join(',')}\n`
+    const csv = Buffer.from(row.repeat(10_000))
+    expect(csv.byteLength).toBe(2_000_000)
+    const uploadTimes: number[] = []
+    let attachmentPosts = 0
+    let attachmentDeletes = 0
+    let messagePosts = 0
+    page.on('request', (request) => {
+      const pathname = new URL(request.url()).pathname
+      if (pathname === '/api/v1/agent/attachments' && request.method() === 'POST') attachmentPosts++
+      if (/\/api\/v1\/agent\/attachments\/[0-9a-f-]+$/.test(pathname) && request.method() === 'DELETE') attachmentDeletes++
+      if (/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/.test(pathname) && request.method() === 'POST') messagePosts++
+    })
+    for (let index = 0; index < 20; index++) {
+      const name = `exact-csv-10000x100-${index + 1}.csv`
+      const chooser = page.waitForEvent('filechooser')
+      const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST', { timeout: 60_000 })
+      const started = performance.now()
+      await page.getByRole('button', { name: '添加附件', exact: true }).click()
+      await (await chooser).setFiles({ name, mimeType: 'text/csv', buffer: csv })
+      const response = await upload
+      uploadTimes.push(Number((performance.now() - started).toFixed(2)))
+      const receipt = await response.json() as { id?: string; name?: string; parse_status?: string; row_count?: number; extracted_chars?: number; injected_chars?: number; truncated_from?: number; truncated_to?: number }
+      expect(response.status()).toBe(200)
+      expect(receipt).toMatchObject({ name, parse_status: 'ready', row_count: 10_000, extracted_chars: 2_000_000, injected_chars: 20_000, truncated_from: 20_001, truncated_to: 2_000_000 })
+      expect(receipt.id).toBeTruthy()
+      const card = page.getByLabel(`${name} ready`, { exact: true })
+      await expect(card).toBeVisible()
+      const visibleReceipt = card.getByTestId('attachment-receipt')
+      await expect(visibleReceipt).toContainText('10,000 行 · 提取 2,000,000 字 · 准备 20,000 字，尚未装入请求')
+      await expect(visibleReceipt).toContainText('第 20,001～2,000,000 字未装入')
+      const attachmentID = receipt.id!
+      const remove = page.waitForResponse((item) => new URL(item.url()).pathname === `/api/v1/agent/attachments/${attachmentID}` && item.request().method() === 'DELETE')
+      await page.getByRole('button', { name: `移除 ${name}`, exact: true }).click()
+      expect((await remove).status()).toBe(200)
+      expect(await page.evaluate(async (id) => (await fetch(`/api/v1/agent/attachments/${id}/file`)).status, attachmentID)).toBe(404)
+      await expect(card).toHaveCount(0)
+    }
+    const sorted = [...uploadTimes].sort((left, right) => left - right)
+    const percentile = (rank: number) => sorted[Math.ceil(rank * sorted.length) - 1]
+    expect(attachmentPosts).toBe(20)
+    expect(attachmentDeletes).toBe(20)
+    expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+    expect(messagePosts).toBe(0)
+    await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    console.log(`DEV-QA26_METRIC_CSV_MAX_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', rows: 10_000, columns: 100, uploaded_bytes: csv.byteLength, interactions: uploadTimes.length, accepted: 20, deleted: attachmentDeletes, failures: 0, p50_ms: percentile(0.50), p95_ms: percentile(0.95), conversations: 0, message_posts: messagePosts })}`)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-csv-max-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
 test('DEV-QA26 Windows Electron图片与文本附件进入同一条持久消息', async ({ baseURL }) => {
   test.skip(process.platform !== 'win32', '需要Windows Electron')
   test.setTimeout(120_000)
