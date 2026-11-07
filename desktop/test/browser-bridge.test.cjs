@@ -159,7 +159,7 @@ test('bridge e2e: pairing -> dispatch -> result -> idempotent -> unknown -> revo
   await new Promise((r) => setTimeout(r, 80));
   assert.equal(rejectCount(), beforeSigned, '签名 ping 应被接受');
 
-  // dispatch -> 宿主收到 command（含 generation/deadline）-> 回 result
+  // dispatch -> 宿主收到 command（含 generation/deadline/issued_at/nonce/payload_hash）-> 回 result
   const accepted = b.dispatch('tabs_list', {}, 'req-1');
   assert.equal(accepted.accepted, true);
   const command = await next();
@@ -167,10 +167,22 @@ test('bridge e2e: pairing -> dispatch -> result -> idempotent -> unknown -> revo
   assert.equal(command.request_id, 'req-1');
   assert.equal(command.action, 'tabs_list');
   assert.equal(typeof command.deadline_at, 'number');
+  assert.equal(typeof command.issued_at, 'number', 'W05: command 带 issued_at');
+  assert.match(command.nonce || '', /^[0-9a-f]{32}$/, 'W05: command 带 nonce');
+  const crypto = require('node:crypto');
+  const expectHash = crypto.createHash('sha256').update(JSON.stringify(command.payload ?? null)).digest('hex');
+  assert.equal(command.payload_hash, expectHash, 'W05: command payload_hash 与载荷一致');
+  // result 须原样带回 nonce/hash，否则桥拒绝（防错配/防伪造回执）；每次发送递增 seq。
   const resultPayload = { ok: true, payload: { tabs: [] } };
   send({ v: 1, type: 'result', request_id: 'req-1', seq: 2, hmac: host.hmacSign(sessionKey, 2, 'result', resultPayload), payload: resultPayload });
   await new Promise((r) => setTimeout(r, 80));
-  assert.equal(b.ledger.get('req-1').state, 'succeeded');
+  assert.notEqual(b.ledger.get('req-1').state, 'succeeded', 'W05: 无 nonce 回执被拒');
+  send({ v: 1, type: 'result', request_id: 'req-1', nonce: 'f'.repeat(32), seq: 3, hmac: host.hmacSign(sessionKey, 3, 'result', resultPayload), payload: resultPayload });
+  await new Promise((r) => setTimeout(r, 80));
+  assert.notEqual(b.ledger.get('req-1').state, 'succeeded', 'W05: nonce 不匹配回执被拒');
+  send({ v: 1, type: 'result', request_id: 'req-1', nonce: command.nonce, payload_hash: command.payload_hash, seq: 4, hmac: host.hmacSign(sessionKey, 4, 'result', resultPayload), payload: resultPayload });
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(b.ledger.get('req-1').state, 'succeeded', 'W05: nonce/hash 匹配的回执入账');
 
   // 同 id 同载荷幂等重放：返回原状态，不再派发
   const commandsBefore = lines.filter((m) => m.type === 'command').length;
@@ -182,7 +194,30 @@ test('bridge e2e: pairing -> dispatch -> result -> idempotent -> unknown -> revo
   // 同 id 异载荷 409 语义
   const conflict = b.dispatch('observe', { tab_id: 2 }, 'req-1');
   assert.equal(conflict.accepted, false);
-  assert.match(conflict.reason, /conflict/);
+  assert.equal(conflict.error_code, 'browser_request_conflict', 'W05: 冲突返回稳定错误码');
+
+  // W05 桥侧动作白名单：未登记动作前置拒绝（扩展登记表是第二道校验）
+  const rogue = b.dispatch('execute_arbitrary_js', { code: 'return 1' }, 'rogue-1');
+  assert.equal(rogue.accepted, false);
+  assert.equal(rogue.error_code, 'browser_action_unsupported');
+  assert.ok(!lines.some((m) => m.type === 'command' && m.request_id === 'rogue-1'), '白名单外的动作不派发');
+
+  // W05 元数据上限 256KiB：超限拒绝且不派发
+  const bigPayload = { blob: 'x'.repeat(256 * 1024 + 1) };
+  const big = b.dispatch('extract', bigPayload, 'big-1');
+  assert.equal(big.accepted, false);
+  assert.equal(big.error_code, 'browser_payload_limit');
+  assert.ok(!lines.some((m) => m.type === 'command' && m.request_id === 'big-1'), '超限载荷不派发');
+
+  // W05 时钟异常停止派发：wall clock 相对单调时钟漂移超 5s 即拒绝
+  b['startWallMs'] -= 60_000; // 注入 60s 时钟跳变
+  const drifted = b.dispatch('tabs_list', {}, 'drift-1');
+  assert.equal(drifted.accepted, false);
+  assert.equal(drifted.error_code, 'browser_clock_unstable', '时钟异常停止派发');
+  b['startWallMs'] += 60_000; // 恢复
+  const recovered = b.dispatch('tabs_list', {}, 'drift-2');
+  assert.equal(recovered.accepted, true, '时钟恢复后可继续派发');
+  await next();
 
   // 超时无回执 -> unknown_outcome（deadline 500ms + 2s 时钟误差窗），不自动重发
   b.dispatch('click', { tab_id: 1, ref: 'n1', doc_rev: 'r1' }, 'req-2');

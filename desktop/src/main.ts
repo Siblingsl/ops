@@ -276,8 +276,11 @@ function startApplication(): void {
       installDownloadHandling(businessSession);
       await registerLocalProtocol(businessSession);
       await registerLocalProtocol(localSettingsSession);
-      // DEV-AI27-02 W02 技术验证：浏览器桥诊断模式，显式环境开关，默认关闭。
-      if (process.env.OPS_DESKTOP_BRIDGE_DIAG === '1') {
+      // DEV-AI27-02/05 W02/W05 技术验证：浏览器桥诊断模式，显式环境开关，默认关闭。
+      // 27 §12.5：全局无沙箱模式下必须关闭浏览器执行桥，不得为联调打开。
+      if (process.env.OPS_DESKTOP_BRIDGE_DIAG === '1' && process.env.OPS_DESKTOP_NO_SANDBOX === '1') {
+        console.log('[browser-bridge] OPS_DESKTOP_NO_SANDBOX=1：浏览器执行桥已关闭；恢复正常模式后重启以启用。');
+      } else if (process.env.OPS_DESKTOP_BRIDGE_DIAG === '1') {
         await startBrowserBridgeDiagnostics();
       }
       registerIpcHandlers();

@@ -360,6 +360,17 @@ const ACTIONS = {
   screenshot: actionScreenshot,
 };
 
+function bytesToHex(bytes) {
+  let out = '';
+  for (const b of bytes) out += b.toString(16).padStart(2, '0');
+  return out;
+}
+
+// 与桥端 sha256(JSON.stringify(payload)) 完全一致（27 §13.5 payload_hash 完整性）。
+function payloadHashHex(payload) {
+  return bytesToHex(sha256Raw(strToBytes(JSON.stringify(payload ?? null))));
+}
+
 async function handleCommand(msg) {
   const started = Date.now();
   if (typeof msg.request_id !== 'string' || !msg.request_id) {
@@ -374,6 +385,13 @@ async function handleCommand(msg) {
   const gen = await chrome.storage.local.get('generation');
   if (Number(msg.generation) < Number(gen.generation || 0)) {
     return { ok: false, error_code: 'stale_generation' };
+  }
+  if (typeof msg.nonce !== 'string' || !msg.nonce) {
+    return { ok: false, error_code: 'nonce_required' };
+  }
+  if (typeof msg.payload_hash === 'string' && msg.payload_hash !== payloadHashHex(msg.payload)) {
+    // 载荷与派发时不一致：拒绝执行，不猜意图。
+    return { ok: false, error_code: 'payload_hash_mismatch' };
   }
   const fn = ACTIONS[msg.action];
   if (!fn) {
@@ -440,7 +458,8 @@ async function handleHostMessage(msg) {
       sw.paired = true;
       sw.seqOut = 0;
       sw.lastSeqIn = 0;
-      await chrome.storage.local.set({ session_key: sw.sessionKey, paired: true, seq_out: 0, last_seq_in: 0 });
+      // 重新配对=新会话：代数归零（revoke 的代数仅在同一配对会话内递增）。
+      await chrome.storage.local.set({ session_key: sw.sessionKey, paired: true, seq_out: 0, last_seq_in: 0, generation: 0 });
       setUiState({ pairing_code: null, pairing_expires_at: null });
       setBadge('ON', '#16a34a');
     }
@@ -455,10 +474,13 @@ async function handleHostMessage(msg) {
   }
   if (msg.type === 'command') {
     const result = await handleCommand(msg);
+    // 回执原样带回 nonce/payload_hash，桥端据此绑定到同一次派发（27 §13.5）。
     sendToHost({
       v: PROTOCOL_VERSION,
       type: 'result',
       request_id: msg.request_id,
+      nonce: msg.nonce,
+      payload_hash: msg.payload_hash,
       payload: result,
     });
   }

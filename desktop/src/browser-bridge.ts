@@ -36,9 +36,12 @@ export interface BridgeEnvelope {
   type: string;
   request_id?: string;
   generation?: number;
+  issued_at?: number;
   deadline_at?: number;
+  nonce?: string;
   action?: string;
   payload?: unknown;
+  payload_hash?: string;
   seq?: number;
   hmac?: string;
 }
@@ -54,6 +57,21 @@ export interface LedgerEntry {
   result?: unknown;
   error_code?: string;
 }
+
+// 27 §13.5/§15.1：元数据信封建议上限 256KiB，图片/大文本走分块/附件通道（W09），不在命令体内。
+export const MAX_METADATA_BYTES = 256 * 1024;
+// 27 §15.1：登记动作集；桥侧前置白名单，扩展侧登记表为第二道校验。
+export const ALLOWED_ACTIONS = new Set(['tabs_list', 'observe', 'navigate', 'click', 'type', 'extract', 'screenshot']);
+// 27 §13.5：时钟异常停止派发（wall clock 与单调时钟漂移超限即拒绝，直至恢复）。
+const CLOCK_TOLERANCE_MS = 5000;
+
+// 稳定错误码（对齐 27 §13.7 的本机子集）。
+export type BridgeErrorCode =
+  | 'browser_not_paired'
+  | 'browser_action_unsupported'
+  | 'browser_payload_limit'
+  | 'browser_clock_unstable'
+  | 'browser_request_conflict';
 
 function hmacSign(key: Buffer, seq: number, type: string, payload: unknown): string {
   return crypto.createHmac('sha256', key).update(`${seq}.${type}.${JSON.stringify(payload ?? null)}`).digest('base64');
@@ -182,9 +200,21 @@ export class BrowserBridge {
   private events: BridgeEvent[] = [];
   private updateCbs = new Set<() => void>();
   private sweepTimer: NodeJS.Timeout | null = null;
+  // 已派发未回执命令的 nonce/哈希（回执防错配/防伪造）。
+  private pendingNonce = new Map<string, { nonce: string; payload_hash: string }>();
+  // 时钟漂移基线（27 §13.5 时钟异常停止派发）。
+  private readonly startWallMs = Date.now();
+  private readonly startMonoMs = Number(process.hrtime.bigint() / 1_000_000n);
   private readonly actionTimeoutMs: number;
   private readonly autoPair: boolean;
   private readonly log: (line: string) => void;
+
+  /** wall clock 相对单调时钟的漂移毫秒数。 */
+  clockDriftMs(): number {
+    const monoNow = Number(process.hrtime.bigint() / 1_000_000n);
+    const expectedWall = this.startWallMs + (monoNow - this.startMonoMs);
+    return Math.abs(Date.now() - expectedWall);
+  }
 
   constructor(
     readonly ledger: CommandLedger,
@@ -342,22 +372,35 @@ export class BrowserBridge {
       this.sessionKey = null;
       this.lastSeqIn = 0;
       this.seqOut = 0;
+      this.pendingNonce.clear();
       this.send({ v: PROTOCOL_VERSION, type: 'pairing_start', payload: { pairing_id: this.pairing.id, code: this.pairing.code, expires_at: this.pairing.expires_at } });
       this.emit('pairing', `pairing started, code ${this.pairing.code} host=${payload.host_instance_id?.slice(0, 8)} pid=${payload.pid}`);
       if (this.autoPair) setTimeout(() => void this.confirmPairing(), 200);
       return;
-    }    if (msg.type === 'result') {
+    }
+    if (msg.type === 'result') {
       const requestId = String(msg.request_id ?? '');
       const entry = this.ledger.get(requestId);
       if (!entry) {
         this.emit('log', `result for unknown request ${requestId}; drop`);
         return;
       }
-      const payload = (msg.payload ?? {}) as { ok?: boolean; error_code?: string };
-      const hash = inputHash(entry.action, msg.payload);
-      if (hash !== entry.input_hash && payload.ok === false) {
-        // 回执载荷不同不阻断记账（回执非输入）；仅拒绝同 id 异输入的新命令（record 已处理）。
+      // 回执必须对应一次真实派发且 nonce/payload_hash 一致（27 §13.5 防错配/防伪造回执）。
+      const pending = this.pendingNonce.get(requestId);
+      if (!pending) {
+        this.emit('log', `result ${requestId} without pending dispatch; drop`);
+        return;
       }
+      if (typeof msg.nonce !== 'string' || msg.nonce !== pending.nonce) {
+        this.emit('log', `result ${requestId} nonce mismatch; drop`);
+        return;
+      }
+      if (typeof msg.payload_hash !== 'string' || msg.payload_hash !== pending.payload_hash) {
+        this.emit('log', `result ${requestId} payload_hash mismatch; drop`);
+        return;
+      }
+      this.pendingNonce.delete(requestId);
+      const payload = (msg.payload ?? {}) as { ok?: boolean; error_code?: string };
       const to = payload.ok ? 'succeeded' : 'failed';
       const updated = this.ledger.transition(requestId, to, { result: msg.payload, error_code: payload.error_code });
       if (updated) this.emit('result', `${requestId} ${updated.action} -> ${updated.state}${payload.error_code ? ` (${payload.error_code})` : ''}`);
@@ -400,6 +443,7 @@ export class BrowserBridge {
     this.state = 'revoked';
     this.pairing = null;
     this.sessionKey = null;
+    this.pendingNonce.clear();
     for (const entry of this.ledger.list()) {
       if (entry.state === 'queued') this.ledger.transition(entry.request_id, 'cancelled');
     }
@@ -407,36 +451,61 @@ export class BrowserBridge {
   }
 
   /** 派发登记动作。同 id 同载荷幂等返回既有状态；同 id 异载荷拒绝；未配对/已撤销拒绝。 */
-  dispatch(action: string, payload: unknown, requestId?: string): { accepted: boolean; request_id?: string; state?: LedgerState; reason?: string } {
+  dispatch(action: string, payload: unknown, requestId?: string): { accepted: boolean; request_id?: string; state?: LedgerState; error_code?: BridgeErrorCode; reason?: string } {
     if (this.state !== 'paired' || !this.sessionKey) {
-      return { accepted: false, reason: `bridge not paired (state=${this.state})` };
+      return { accepted: false, error_code: 'browser_not_paired', reason: `bridge not paired (state=${this.state})` };
+    }
+    if (!ALLOWED_ACTIONS.has(action)) {
+      // 桥侧前置白名单；扩展侧登记表是第二道校验（27 §12.2 双侧校验）。
+      this.emit('log', `dispatch rejected: action not registered (${action})`);
+      return { accepted: false, error_code: 'browser_action_unsupported', reason: `action not registered: ${action}` };
+    }
+    if (this.clockDriftMs() > CLOCK_TOLERANCE_MS) {
+      // 27 §13.5：时钟异常停止派发。
+      this.emit('log', `dispatch rejected: clock drift ${this.clockDriftMs().toFixed(0)}ms exceeds ${CLOCK_TOLERANCE_MS}ms`);
+      return { accepted: false, error_code: 'browser_clock_unstable', reason: 'wall clock unstable; dispatch paused' };
+    }
+    const bodyBytes = Buffer.byteLength(JSON.stringify(payload ?? null), 'utf8');
+    if (bodyBytes > MAX_METADATA_BYTES) {
+      this.emit('log', `dispatch rejected: payload ${bodyBytes}B > ${MAX_METADATA_BYTES}B`);
+      return { accepted: false, error_code: 'browser_payload_limit', reason: `metadata payload exceeds ${MAX_METADATA_BYTES} bytes` };
     }
     const id = requestId ?? crypto.randomUUID();
     const hash = inputHash(action, payload);
     const rec = this.ledger.record(id, action, hash, Date.now());
-    if ('conflict' in rec) return { accepted: false, request_id: id, reason: 'request_id conflict with different input' };
+    if ('conflict' in rec) {
+      return { accepted: false, request_id: id, error_code: 'browser_request_conflict', reason: 'request_id conflict with different input' };
+    }
     const entry = rec.entry;
     if (entry.state !== 'queued') {
       return { accepted: true, request_id: id, state: entry.state, reason: 'idempotent replay returns original state' };
     }
     const deadline = Date.now() + this.actionTimeoutMs;
+    // 27 §13.5 信封完整化：issued_at/nonce/payload_hash；回执须原样带回以证明对应同一次派发。
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const payloadHash = crypto.createHash('sha256').update(JSON.stringify(payload ?? null)).digest('hex');
+    this.pendingNonce.set(id, { nonce, payload_hash: payloadHash });
     this.send({
       v: PROTOCOL_VERSION,
       type: 'command',
       request_id: id,
       generation: this.generation.n,
+      issued_at: Date.now(),
       deadline_at: deadline,
+      nonce,
       action,
       payload,
+      payload_hash: payloadHash,
     });
     this.ledger.transition(id, 'dispatched', { dispatched_at: Date.now(), deadline_at: deadline });
     this.emit('dispatch', `${id} ${action} generation=${this.generation.n}`);
     return { accepted: true, request_id: id, state: 'dispatched' };
   }
 
-  /** 定期把超时未回执的命令记为 unknown_outcome（先核对、不重放）。 */
+  /** 定期把超时未回执的命令记为 unknown_outcome（先核对、不重放），并清理对应 nonce 待核记录。 */
   sweep(): void {
     for (const entry of this.ledger.sweepUnknown(Date.now())) {
+      this.pendingNonce.delete(entry.request_id);
       this.emit('result', `${entry.request_id} ${entry.action} -> unknown_outcome (no receipt before deadline)`);
     }
   }

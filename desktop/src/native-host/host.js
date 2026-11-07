@@ -97,6 +97,10 @@ function createEnvelopeValidator({ getSessionKey }) {
     lastSeqIn() {
       return lastSeqIn;
     },
+    // 重新配对即新会话：入站序列归零（发送侧序列由调用方同步归零）。
+    reset() {
+      lastSeqIn = 0;
+    },
     check(msg) {
       if (!msg || typeof msg !== 'object') return 'envelope must be object';
       if (msg.v !== PROTOCOL_VERSION) return `protocol version mismatch: ${msg.v}`;
@@ -216,11 +220,15 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
       log(`reject ops->chrome: ${err}`);
       return;
     }
-    // pairing_start 表示桥端要求重新配对：作废旧会话密钥，pairing_confirm 以新密钥到达。
-    if (msg.type === 'pairing_start' && sessionKey) {
+    // pairing_start 表示桥端要求重新配对：作废旧会话密钥与全部序列状态（新会话从零开始）。
+    if (msg.type === 'pairing_start' && (sessionKey || opsValidator.lastSeqIn() > 0 || extValidator.lastSeqIn() > 0 || seqOutOps > 0 || seqOutExt > 0)) {
       sessionKey = null;
+      opsValidator.reset();
+      extValidator.reset();
+      seqOutOps = 0;
+      seqOutExt = 0;
       writeState({ host_instance_id: hostInstanceId, pid: process.pid, session_key: null });
-      log('session key cleared for re-pairing');
+      log('session state cleared for re-pairing');
     }
     if (msg.type === 'pairing_confirm' && msg.payload && msg.payload.session_key) {
       sessionKey = String(msg.payload.session_key);
