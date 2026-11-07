@@ -827,6 +827,8 @@ export type AgentWorkbenchFeatureName =
   | 'personal_memories'
   // DEV-AI27-14：插件/MCP 开关。
   | 'plugin_mcp'
+  // DEV-AI27-15：子智能体开关。
+  | 'subagents'
 
 export interface SystemSettings {
   registration_open: boolean

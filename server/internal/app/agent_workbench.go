@@ -30,6 +30,8 @@ var agentWorkbenchFeatureNames = []string{
 	"personal_memories",
 	// DEV-AI27-14（W14）：插件/MCP 开关（27 15.3 提案名），默认关闭。
 	"plugin_mcp",
+	// DEV-AI27-15（W15）：子智能体开关（27 15.3 提案名），默认关闭。
+	"subagents",
 }
 
 func agentFeaturesFromList(raw string) map[string]bool {

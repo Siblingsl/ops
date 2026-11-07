@@ -1880,6 +1880,12 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Delete("/agent/plugin-connections/{id}", s.h(s.deletePluginConnection))
 		r.Post("/agent/plugin-calls", s.h(s.createPluginCall))
 		r.Post("/agent/plugin-calls/{id}/receipt", s.h(s.receiptPluginCall))
+		// DEV-AI27-15（W15）：子智能体委派（27 §11.3）。
+		r.Post("/agent/conversations/{id}/delegation-groups", s.h(s.createDelegationGroup))
+		r.Get("/agent/runs/{id}/delegations", s.h(s.listRunDelegations))
+		r.Post("/agent/delegations/{id}/cancel", s.h(s.cancelDelegation))
+		r.Post("/agent/delegations/{id}/result", s.h(s.resultDelegation))
+		r.Post("/agent/delegation-groups/{id}/cancel", s.h(s.cancelDelegationGroup))
 	})
 	// 只减权清理路由（27 §13.4）：不挂 agentGate——智能体/浏览器开关关闭后仍可解绑与撤权；
 	// 仍要求登录、CSRF 与真实资源归属（T-AI27-25A）。

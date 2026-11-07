@@ -246,6 +246,12 @@ func agentClassifiedRouteList() map[string]string {
 		"DELETE /api/v1/agent/plugin-connections/{id}",
 		"POST /api/v1/agent/plugin-calls",
 		"POST /api/v1/agent/plugin-calls/{id}/receipt",
+		// DEV-AI27-15（W15）子智能体：父会话与任务面板共用。
+		"POST /api/v1/agent/conversations/{id}/delegation-groups",
+		"GET /api/v1/agent/runs/{id}/delegations",
+		"POST /api/v1/agent/delegations/{id}/cancel",
+		"POST /api/v1/agent/delegations/{id}/result",
+		"POST /api/v1/agent/delegation-groups/{id}/cancel",
 		// DEV-AI27-13（W13）个人跨对话记忆：本人设置页与 run 内提案工具共用，不进入模型工具目录以外的执行面。
 		"GET /api/v1/agent/personal-memories",
 		"POST /api/v1/agent/personal-memories",

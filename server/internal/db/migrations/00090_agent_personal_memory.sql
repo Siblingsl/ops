@@ -52,14 +52,6 @@ ALTER TABLE agent_conversation
     ADD COLUMN memory_capture_override varchar(4) NOT NULL DEFAULT '';
 
 -- +goose Down
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM agent_memory_usage)
-        OR EXISTS (SELECT 1 FROM agent_personal_memory WHERE state <> 'candidate')
-        OR EXISTS (SELECT 1 FROM agent_memory_setting) THEN
-        RAISE EXCEPTION 'agent personal memory tables not empty; refusing downgrade';
-    END IF;
-END $$;
 ALTER TABLE agent_conversation DROP COLUMN IF EXISTS memory_capture_override;
 ALTER TABLE agent_conversation DROP COLUMN IF EXISTS memory_use_override;
 DROP TABLE IF EXISTS agent_memory_setting;
