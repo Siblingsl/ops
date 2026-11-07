@@ -268,9 +268,12 @@ function docxExternalEntityFixture() {
   })
 }
 
-function docxExpandedFixture(totalExpandedBytes: number) {
+function docxExpandedFixture(totalExpandedBytes: number, macroEnabled = false) {
+  const mainDocumentType = macroEnabled
+    ? 'application/vnd.ms-word.document.macroEnabled.main+xml'
+    : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'
   const files: Record<string, Buffer> = {
-    '[Content_Types].xml': Buffer.from('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>'),
+    '[Content_Types].xml': Buffer.from(`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${mainDocumentType}"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`),
     '_rels/.rels': Buffer.from('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/extended-properties" Target="docProps/app.xml"/></Relationships>'),
     'word/document.xml': Buffer.from('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>ZIP 上界资料</w:t></w:r></w:p></w:body></w:document>'),
     'docProps/app.xml': Buffer.from('<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Pages>1</Pages></Properties>'),
@@ -436,6 +439,51 @@ test('DEV-AW11 Windows Electron固定选择文件、文档回执与原生保存�
     await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
     await app?.close()
     if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-aw11-')) throw new Error('拒绝清理测试目录之外路径')
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+})
+
+test('DEV-QA26 G7-03 Windows Electron拒绝宏与96MiB+1解压量交叉DOCX', async ({ baseURL }) => {
+  test.skip(process.platform !== 'win32', '需要Windows Electron')
+  test.setTimeout(120_000)
+  const userData = await mkdtemp(join(tmpdir(), 'ops-agent-qa26-macro-expanded-'))
+  let app: ElectronApplication | undefined
+  try {
+    app = await _electron.launch({ executablePath: resolve(process.cwd(), '../node_modules/electron/dist/electron.exe'),
+      args: ['--user-data-dir=' + userData, resolve(process.cwd(), '../.build/main.js')],
+      env: { ...process.env, OPS_DESKTOP_DEV_URL: baseURL! }, timeout: 60_000 })
+    const page = await app.firstWindow()
+    await prepare(page, baseURL!)
+    let attachmentPosts = 0
+    let messagePosts = 0
+    page.on('request', (request) => {
+      const pathname = new URL(request.url()).pathname
+      if (pathname === '/api/v1/agent/attachments' && request.method() === 'POST') attachmentPosts++
+      if (pathname.match(/\/api\/v1\/agent\/conversations\/[^/]+\/messages$/) && request.method() === 'POST') messagePosts++
+    })
+    const document = docxExpandedFixture(96 * 1024 * 1024 + 1, true)
+    expect(document.byteLength).toBeLessThan(20 * 1024 * 1024)
+    const chooser = page.waitForEvent('filechooser')
+    const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+    const started = performance.now()
+    await page.getByRole('button', { name: '添加附件', exact: true }).click()
+    await (await chooser).setFiles({ name: 'macro-expanded.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: document })
+    const response = await upload
+    const uploadMs = performance.now() - started
+    const body = await response.json() as { error?: { code?: string } }
+    expect(response.status()).toBe(422)
+    expect(body.error?.code).toBe('agent_attachment_parse_failed')
+    await expect(page.getByLabel('macro-expanded.docx failed', { exact: true })).toContainText(/宏、嵌入对象或外链资源|DOCX 已加密、损坏或解压内容超限/)
+    await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+    expect(attachmentPosts).toBe(1)
+    expect((await api(page, 'GET', '/agent/conversations')).items).toHaveLength(0)
+    expect(messagePosts).toBe(0)
+    await page.getByRole('button', { name: '移除 macro-expanded.docx', exact: true }).click()
+    console.log(`DEV-QA26_METRIC_MACRO_EXPANDED_ELECTRON ${JSON.stringify({ environment: 'Windows native Electron; local E2E API and WASI parser', declared_expanded_bytes: 96 * 1024 * 1024 + 1, uploaded_bytes: document.byteLength, status: response.status(), upload_ms: Number(uploadMs.toFixed(2)), attachment_posts: attachmentPosts, conversations: 0, message_posts: messagePosts, failures: 0 })}`)
+  } finally {
+    await app?.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+    await app?.close()
+    if (!resolve(userData).startsWith(resolve(tmpdir()) + sep) || !basename(userData).startsWith('ops-agent-qa26-macro-expanded-')) throw new Error('拒绝清理测试目录之外路径')
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })
