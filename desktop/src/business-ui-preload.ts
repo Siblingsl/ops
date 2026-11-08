@@ -203,7 +203,7 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
   },
   // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道；渲染器无 view 对象）。
   async invokeInBrowse(channel: string, payload?: unknown): Promise<unknown> {
-    const allowed = ['inbrowse:snapshot', 'inbrowse:set-bounds', 'inbrowse:navigate', 'inbrowse:back', 'inbrowse:forward', 'inbrowse:reload', 'inbrowse:stop', 'inbrowse:close'];
+    const allowed = ['inbrowse:snapshot', 'inbrowse:set-bounds', 'inbrowse:navigate', 'inbrowse:back', 'inbrowse:forward', 'inbrowse:reload', 'inbrowse:stop', 'inbrowse:close', 'inbrowse:open-tab', 'inbrowse:switch-tab', 'inbrowse:close-tab'];
     if (!allowed.includes(channel)) throw new Error(`不允许的内置浏览意图：${channel}`);
     return ipcRenderer.invoke(channel, payload);
   },

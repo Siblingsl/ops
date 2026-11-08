@@ -843,7 +843,25 @@ function registerIpcHandlers(): void {
   ipcHandle('inbrowse:forward', (event) => { requireInBrowse(event).goForward(); return null; });
   ipcHandle('inbrowse:reload', (event) => { requireInBrowse(event).reload(); return null; });
   ipcHandle('inbrowse:stop', (event) => { requireInBrowse(event).stopLoading(); return null; });
-  ipcHandle('inbrowse:close', (event) => { requireInBrowse(event).close(); return null; });
+  // DEV-AI27-08d（W08d）：多页签意图。
+  ipcHandle('inbrowse:open-tab', (event) => { const c = requireInBrowse(event); return { id: c.openTab() }; });
+  ipcHandle('inbrowse:switch-tab', (event, raw) => {
+    const tabID = typeof raw === 'string' ? raw : '';
+    if (!requireInBrowse(event).switchTab(tabID)) throw new Error('inbrowse_tab_unknown');
+    return null;
+  });
+  ipcHandle('inbrowse:close-tab', (event, raw) => {
+    const tabID = typeof raw === 'string' ? raw : '';
+    requireInBrowse(event).closeTab(tabID);
+    return null;
+  });
+  ipcHandle('inbrowse:close', (event) => {
+    // 兼容旧通道：关闭活动页签（无活动时等效清理）。
+    const c = requireInBrowse(event);
+    const active = c.snapshot().activeTabId;
+    if (active) c.closeTab(active);
+    return null;
+  });
   ipcHandle('inbrowse:snapshot', (event) => requireInBrowse(event).snapshot());
   ipcHandle('cx-long-image:capture', async (event, raw) => {
     const senderFrame = event.senderFrame;

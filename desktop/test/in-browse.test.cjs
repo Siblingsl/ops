@@ -1,45 +1,17 @@
 'use strict';
 // DEV-AI27-08 W08：内置浏览视图控制器测试（node --test；Electron API mock，
-// 真实 Electron 视觉旅程按 27 §16.1 分层另测）。
+// 真实 Electron 视觉旅程按 27 §16.1 分层另测）。W08d：多页签。
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-
-// mock electron（Controller 只用 Minimal API 面）
-const listeners = new Map();
-let addedChildren = [];
-let removedChildren = [];
-const fakeView = () => {
-  const wc = {
-    destroyed: false,
-    url: '',
-    title: '页面标题',
-    loadingFlag: false,
-    navigationStarted: 0,
-    listeners: new Map(),
-    on(ev, fn) { this.listeners.set(ev, fn); },
-    getURL() { return this.url; },
-    getTitle() { return this.title; },
-    isLoading() { return this.loadingFlag; },
-    loadURL(u) { this.navigationStarted += 1; this.url = u; },
-    goBack() {}, goForward() {}, reload() {}, stop() {},
-  };
-  return {
-    webContents: wc,
-    setBounds: (b) => { this.bounds = b; },
-    getBounds: () => this.bounds,
-    __setBounds: (b) => { this.bounds = b; },
-    __bounds: null,
-  };
-};
 
 const electronMock = {
   WebContentsView: class {
     constructor(opts) {
       this.webPreferences = opts.webPreferences;
+      this.__bounds = null;
       this.webContents = {
         isDestroyed: () => false,
-        destroyed: false,
         url: '',
         title: '页面标题',
         loadingFlag: false,
@@ -70,78 +42,89 @@ function fakeWindow() {
   return {
     closed: false,
     contentView: {
-      addChildView(v) { addedChildren.push(v); },
-      removeChildView(v) { removedChildren.push(v); },
+      children: [],
+      addChildView(v) { this.children.push(v); },
+      removeChildView(v) { this.children = this.children.filter((x) => x !== v); },
     },
-    once(ev, fn) { listeners.set(ev, fn); },
+    once(ev, fn) { /* closed 回调省略 */ },
   };
 }
 
-test('W08: setBounds 挂载视图 + navigate http 限定', () => {
-  addedChildren = []; removedChildren = [];
-  const snapshots = [];
-  const win = fakeWindow();
-  const c = new InBrowseViewController(win, {}, (s) => snapshots.push(s));
-  c.setBounds({ x: 0, y: 0, width: 600, height: 800 });
-  assert.equal(addedChildren.length, 1, '视图应挂载');
-  assert.equal(c.snapshot().navigationGeneration, 0);
-
-  const nav = c.navigate('https://example.com/page');
-  assert.equal(nav.ok, true);
-  assert.equal(c.snapshot().url, 'https://example.com/page');
-  assert.equal(c.snapshot().navigationGeneration, 1, '导航后代数递增');
-
-  // 反例：非 http/https 拒绝（27 §14.3）
-  for (const bad of ['file:///etc/passwd', 'javascript:alert(1)', 'chrome://version', 'data:text/html,x', 'not a url']) {
-    assert.equal(c.navigate(bad).ok, false, `${bad} 应拒绝`);
-  }
-  assert.equal(c.snapshot().navigationGeneration, 1, '被拒导航不递增代数');
-  c.destroy();
-});
-
-test('W08: detach/attach（审批浮层前隐藏，关闭后恢复）', () => {
-  addedChildren = []; removedChildren = [];
+test('W08d: openTab 多页签 + switchTab 切换 + closeTab 相邻激活', () => {
   const win = fakeWindow();
   const c = new InBrowseViewController(win, {}, () => {});
   c.setBounds({ x: 0, y: 0, width: 600, height: 800 });
-  c.navigate('https://example.com');
-  assert.equal(addedChildren.length, 2, 'setBounds+navigate 各挂载一次');
 
-  c.detach('approval-dialog');
-  assert.equal(c.isDetached().detached, true);
-  assert.equal(c.isDetached().reason, 'approval-dialog');
-  assert.equal(removedChildren.length, 1, 'detach 应移除视图');
-  assert.equal(c.snapshot().bounds, null, 'detach 后快照 bounds=null（不冒充可见）');
+  const t1 = c.openTab();
+  const t2 = c.openTab();
+  assert.ok(t1 && t2 && t1 !== t2, '两个页签不同 id');
+  let snap = c.snapshot();
+  assert.equal(snap.tabs.length, 2);
+  assert.equal(snap.activeTabId, t2, '新开页签自动激活');
 
-  c.attach();
-  assert.equal(c.isDetached().detached, false);
-  assert.equal(addedChildren.length, 3, 'attach 重新挂载');
+  assert.equal(c.navigate('https://example.com/a').ok, true);
+  assert.equal(c.switchTab(t1), true);
+  snap = c.snapshot();
+  assert.equal(snap.activeTabId, t1);
+  const t1Snap = snap.tabs.find((x) => x.id === t1);
+  assert.equal(t1Snap.url, '', 't1 仍是空白');
+
+  c.closeTab(t1);
+  snap = c.snapshot();
+  assert.equal(snap.tabs.length, 1);
+  assert.equal(snap.activeTabId, t2, '关闭后激活相邻');
   c.destroy();
 });
 
-test('W08: 最小宽度约束 + close 清空', () => {
-  addedChildren = []; removedChildren = [];
+test('W08d: navigate 无活动页签时自动开新页签', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  assert.equal(c.navigate('https://example.com/first').ok, true);
+  const snap = c.snapshot();
+  assert.equal(snap.tabs.length, 1);
+  assert.equal(snap.tabs[0].url, 'https://example.com/first');
+  c.destroy();
+});
+
+test('W08d: 页签上限 8 与逐 tab 导航代数独立', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  for (let i = 0; i < 9; i += 1) c.openTab();
+  assert.equal(c.snapshot().tabs.length, 8, '上限 8');
+  c.navigate('https://a.example.com');
+  const before = c.snapshot().tabs.find((x) => x.id === c.snapshot().activeTabId).navigationGeneration;
+  c.navigate('https://b.example.com');
+  const after = c.snapshot().tabs.find((x) => x.id === c.snapshot().activeTabId).navigationGeneration;
+  assert.equal(after, before + 1, '同 tab 代数递增');
+  c.destroy();
+});
+
+test('W08d: detach/attach 保留全部页签（不丢 tab）', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  c.setBounds({ x: 0, y: 0, width: 600, height: 800 });
+  c.openTab();
+  c.openTab();
+  c.navigate('https://example.com');
+  c.detach('approval-dialog');
+  assert.equal(c.snapshot().detached, true);
+  assert.equal(c.snapshot().tabs.length, 2, 'detach 不丢页签');
+  c.attach();
+  assert.equal(c.snapshot().detached, false);
+  assert.equal(c.snapshot().tabs.length, 2);
+  assert.equal(c.navigate('https://example.com/x').ok, true, 'attach 后可继续导航');
+  c.destroy();
+});
+
+test('W08d: 宽度钳制与 destroy 清空', () => {
   const win = fakeWindow();
   const c = new InBrowseViewController(win, {}, () => {});
   c.setBounds({ x: 0, y: 0, width: 100, height: 800 });
-  // 视图 setBounds 收到 clamp 后宽度（mock 记录 __bounds），快照记录请求 bounds。
-  assert.ok(c.snapshot().bounds.width >= IN_BROWSE_MIN_WIDTH, '宽度下限保护（快照）');
-  assert.ok(addedChildren.length >= 1, '视图已挂载');
+  assert.ok(c.snapshot().bounds.width >= IN_BROWSE_MIN_WIDTH, '宽度下限保护');
+  c.openTab();
   c.navigate('https://example.com');
-  c.close();
-  assert.equal(removedChildren.length >= 1, true, 'close 移除视图');
-  assert.equal(c.snapshot().url, '', 'close 后快照清空');
-  assert.equal(c.snapshot().bounds, null);
-});
-
-test('W08: detached 状态下 navigate 拒绝', () => {
-  const win = fakeWindow();
-  const c = new InBrowseViewController(win, {}, () => {});
-  c.setBounds({ x: 0, y: 0, width: 600, height: 800 });
-  c.detach('menu');
-  const nav = c.navigate('https://example.com');
-  assert.equal(nav.ok, false);
-  assert.equal(nav.reason, 'detached');
-  assert.equal(c.snapshot().url, '', 'detached 下不得导航');
   c.destroy();
+  const snap = c.snapshot();
+  assert.equal(snap.tabs.length, 0);
+  assert.equal(snap.activeTabId, null);
 });

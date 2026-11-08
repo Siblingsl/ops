@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ArrowLeft, ArrowRight, RotateCw, X, Globe } from 'lucide-react'
 
 // DEV-AI27-08（W08，D-172）：工作视图"应用内"浏览 UI（27 §7.8 功能表第一批）。
@@ -6,15 +6,23 @@ import { ArrowLeft, ArrowRight, RotateCw, X, Globe } from 'lucide-react'
 // 状态来源为主进程快照推送（inbrowse-snapshot），UI 不伪造加载/URL 状态。
 // 导航代数与 detach 状态由主进程维护；detached 时显示"已被浮层遮蔽"如实状态。
 
-interface InBrowseSnapshot {
-  bounds: { x: number; y: number; width: number; height: number } | null
+interface InBrowseTabSnapshot {
+  id: string
   url: string
   title: string
   loading: boolean
   navigationGeneration: number
 }
 
-const EMPTY: InBrowseSnapshot = { bounds: null, url: '', title: '', loading: false, navigationGeneration: 0 }
+interface InBrowseSnapshot {
+  activeTabId: string | null
+  tabs: InBrowseTabSnapshot[]
+  bounds: { x: number; y: number; width: number; height: number } | null
+  detached: boolean
+  detachReason: string | null
+}
+
+const EMPTY: InBrowseSnapshot = { activeTabId: null, tabs: [], bounds: null, detached: false, detachReason: null }
 
 type InvokeFn = (channel: string, payload?: unknown) => Promise<unknown>
 
@@ -29,7 +37,6 @@ export function InBrowsePanel({ visible }: { visible: boolean }) {
   const [snapshot, setSnapshot] = useState<InBrowseSnapshot>(EMPTY)
   const [addressInput, setAddressInput] = useState('')
   const [editingAddress, setEditingAddress] = useState(false)
-  const lastGenRef = useRef(0)
 
   useEffect(() => {
     if (!invoke || !visible) return
@@ -41,10 +48,13 @@ export function InBrowsePanel({ visible }: { visible: boolean }) {
     }
   }, [invoke, visible])
 
-  // URL 变化时同步地址栏（非编辑态）。
+  // 活动 URL 变化时同步地址栏（非编辑态）。
+  const activeTab = snapshot.tabs.find((t) => t.id === snapshot.activeTabId) ?? null
+  const activeUrl = activeTab?.url ?? ''
+  const activeLoading = activeTab?.loading ?? false
   useEffect(() => {
-    if (!editingAddress) setAddressInput(snapshot.url)
-  }, [snapshot.url, editingAddress])
+    if (!editingAddress) setAddressInput(activeUrl)
+  }, [activeUrl, editingAddress])
 
   const refreshSnapshot = useCallback(async () => {
     if (!invoke) return
@@ -57,13 +67,6 @@ export function InBrowsePanel({ visible }: { visible: boolean }) {
   useEffect(() => {
     if (visible && invoke) void refreshSnapshot()
   }, [visible, invoke, refreshSnapshot])
-
-  // 导航代数变化时刷新快照（主进程也会推送，双保险）。
-  useEffect(() => {
-    if (snapshot.navigationGeneration !== lastGenRef.current) {
-      lastGenRef.current = snapshot.navigationGeneration
-    }
-  }, [snapshot.navigationGeneration])
 
   if (!invoke) {
     // Web 端或旧宿主：如实显示无本机能力（T-AI27-22），不伪造。
@@ -85,11 +88,22 @@ export function InBrowsePanel({ visible }: { visible: boolean }) {
   const btn = 'inline-flex size-8 items-center justify-center rounded-md text-mist-500 hover:bg-mist-100 hover:text-mist-800 disabled:opacity-40 disabled:pointer-events-none'
 
   return <div className="flex h-full flex-col" data-testid="inbrowse-panel">
+    {snapshot.tabs.length > 0 && <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-mist-200 bg-mist-50 px-2 py-1" data-testid="inbrowse-tabs">
+      {snapshot.tabs.map((tab) => <button key={tab.id} type="button"
+        data-testid={`inbrowse-tab-${tab.id}`}
+        aria-current={tab.id === snapshot.activeTabId}
+        onClick={() => void invoke('inbrowse:switch-tab', tab.id)}
+        className={`max-w-40 shrink-0 truncate rounded-md px-2 py-1 text-[12px] ${tab.id === snapshot.activeTabId ? 'bg-white text-ink-700 shadow-sm' : 'text-mist-500 hover:bg-white/60'}`}>
+        {tab.title || tab.url || '空白页'}
+      </button>)}
+      <button type="button" className={btn} aria-label="新建页签" data-testid="inbrowse-new-tab"
+        onClick={() => void invoke('inbrowse:open-tab')}>+</button>
+    </div>}
     <div className="flex shrink-0 items-center gap-1.5 border-b border-mist-200 bg-white px-2 py-1.5">
       <button type="button" className={btn} aria-label="后退" onClick={() => void invoke('inbrowse:back')}><ArrowLeft className="size-4" /></button>
       <button type="button" className={btn} aria-label="前进" onClick={() => void invoke('inbrowse:forward')}><ArrowRight className="size-4" /></button>
-      <button type="button" className={btn} aria-label={snapshot.loading ? '停止加载' : '刷新'} onClick={() => void invoke(snapshot.loading ? 'inbrowse:stop' : 'inbrowse:reload')}>
-        {snapshot.loading ? <X className="size-4" /> : <RotateCw className="size-4" />}
+      <button type="button" className={btn} aria-label={activeLoading ? '停止加载' : '刷新'} onClick={() => void invoke(activeLoading ? 'inbrowse:stop' : 'inbrowse:reload')}>
+        {activeLoading ? <X className="size-4" /> : <RotateCw className="size-4" />}
       </button>
       <form className="flex min-w-0 flex-1 items-center" onSubmit={(event) => { event.preventDefault(); void navigateTo(addressInput) }}>
         <div className="flex w-full items-center gap-1.5 rounded-lg border border-mist-200 bg-mist-50 px-2 py-1">
@@ -97,7 +111,7 @@ export function InBrowsePanel({ visible }: { visible: boolean }) {
           <input
             value={addressInput}
             onChange={(event) => { setAddressInput(event.target.value); setEditingAddress(true) }}
-            onBlur={() => { setEditingAddress(false); setAddressInput(snapshot.url) }}
+            onBlur={() => { setEditingAddress(false); setAddressInput(activeUrl) }}
             aria-label="地址栏"
             placeholder="输入网址，回车访问"
             spellCheck={false}
@@ -105,13 +119,13 @@ export function InBrowsePanel({ visible }: { visible: boolean }) {
           />
         </div>
       </form>
-      <button type="button" className={btn} aria-label="关闭页面" onClick={() => void invoke('inbrowse:close')}><X className="size-4" /></button>
+      <button type="button" className={btn} aria-label="关闭页面" data-testid="inbrowse-close" onClick={() => { const active = snapshot.activeTabId; if (active) void invoke('inbrowse:close-tab', active) }}><X className="size-4" /></button>
     </div>
     <div className="flex shrink-0 items-center gap-2 border-b border-mist-100 bg-mist-50 px-3 py-1 text-[12px] text-mist-500">
-      <span data-testid="inbrowse-title">{snapshot.title || '空白页'}</span>
-      {snapshot.loading && <span className="text-mist-400">加载中…</span>}
+      <span data-testid="inbrowse-title">{activeTab?.title || '空白页'}</span>
+      {activeLoading && <span className="text-mist-400">加载中…</span>}
     </div>
     {/* bounds 区域由主进程 WebContentsView 覆盖（原生层）；此处 div 仅占位测量。 */}
-    <div className="min-h-0 flex-1" data-testid="inbrowse-viewport" data-url={snapshot.url} />
+    <div className="min-h-0 flex-1" data-testid="inbrowse-viewport" data-url={activeUrl} />
   </div>
 }
