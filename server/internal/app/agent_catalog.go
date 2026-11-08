@@ -188,6 +188,9 @@ func buildAgentCatalog() []AgentTool {
 	out = append(out, ai27DelegationTools()...)
 	out = append(out, ai27ComputerTools()...)
 	out = append(out, ai27MCPTools()...)
+	// DEV-AI27-14（深化 5/5）：MCP 动态目录骨架（每连接的 mcp__<conn>__<tool> 由
+	// agentMCPDynamicToolsForWorkspace 在 dispatch 时按 enabled 连接填充；骨架项注册
+	// mcp__list_connections 保证模型知道 MCP 可用）。
 	return out
 }
 
