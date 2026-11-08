@@ -242,7 +242,7 @@ func agentClassifiedRouteList() map[string]string {
 		// DEV-AI27-06（W06）工具派发端点（模型 dispatch 走 /tools/ 路径）。
 		"POST /api/v1/tools/browser/commands",
 		"GET /api/v1/tools/mcp/connections",
-		"POST /api/v1/tools/subagent/delegation-groups",
+		"POST /api/v1/tools/subagent/conversations/{conversationId}/delegation-groups",
 		"POST /api/v1/tools/subagent/delegations/{id}/cancel",
 		"GET /api/v1/tools/computer/grants",
 		"POST /api/v1/tools/computer/grants/{id}/handoff",

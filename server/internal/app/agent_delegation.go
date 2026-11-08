@@ -24,6 +24,8 @@ const (
 	delegationMaxConcurrent = 2
 	delegationMaxTotal      = 4
 	delegationMaxDepth      = 1
+	// 共享预算（27 §11.3.3）：每子任务预留的模型轮数，从父任务总池扣减。
+	delegationBudgetPerTask = 10
 )
 
 type delegationView struct {
@@ -162,11 +164,12 @@ func (s *Server) createDelegationGroup(w http.ResponseWriter, r *http.Request) e
 		if !convExists {
 			return errNotFound
 		}
-		// 创建组。
+		// 创建组（预算预留：每子任务预留 delegationBudgetPerTask 轮）。
+		budgetReserved := len(body.Delegations) * delegationBudgetPerTask
 		if _, err := tx.Exec(r.Context(), `INSERT INTO agent_delegation_group
-			(id, workspace_id, user_id, conversation_id, root_run_id, current_parent_run_id, state, budget_scope_id)
-			VALUES ($1,$2,$3,$4,$5,$5,'active',$6)`,
-			groupID, id.WorkspaceID, id.UserID, conversationID, parentRunID, uuid.New()); err != nil {
+			(id, workspace_id, user_id, conversation_id, root_run_id, current_parent_run_id, state, budget_scope_id, budget_reserved)
+			VALUES ($1,$2,$3,$4,$5,$5,'active',$6,$7)`,
+			groupID, id.WorkspaceID, id.UserID, conversationID, parentRunID, uuid.New(), budgetReserved); err != nil {
 			return err
 		}
 		// 逐个创建子 run（agent_run 行）与委派行；子 run 同 identity/session，trigger 继续语义。

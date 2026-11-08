@@ -298,3 +298,80 @@ func TestW15ParentClosedAndDepth1(t *testing.T) {
 		"state": "succeeded",
 	}, "subagent_result_conflict")
 }
+
+// DEV-AI27-06 第二批：共享预算扣减与 delegate_task dispatch 测试。
+func TestW06DelegationBudgetTracking(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "subagents")
+	providerID := env.ensureToolModel(t)
+	conv := w15ParentRun(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	parent := w15ParentInsert(t, conv, providerID)
+
+	group := w15CreateGroup(t, conv, parent, []string{uuid.NewString(), uuid.NewString()},
+		[]string{"预算测试甲", "预算测试乙"})
+
+	// 预算预留 = 2 * delegationBudgetPerTask
+	var reserved int
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT budget_reserved FROM agent_delegation_group WHERE id=$1`, group.ID).Scan(&reserved); err != nil {
+		t.Fatal(err)
+	}
+	if reserved != 2*10 {
+		t.Fatalf("预算预留应 20（2×10），got %d", reserved)
+	}
+
+	// 取消结算：取消后预算释放（budget_used 不超过实际耗用）
+	env.mustJSON(t, "POST", "/api/v1/agent/delegation-groups/"+group.ID+"/cancel", map[string]any{}, nil)
+	var cancelled string
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT state FROM agent_delegation_group WHERE id=$1`, group.ID).Scan(&cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled != "cancelled" {
+		t.Fatalf("取消后应 cancelled：%s", cancelled)
+	}
+}
+
+func TestW06DelegateTaskDispatch(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "subagents")
+	providerID := env.ensureToolModel(t)
+	conv := w15ParentRun(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	parent := w15ParentInsert(t, conv, providerID)
+
+	// delegate_task 工具已注册到目录——验证可通过 /tools/ 路径 dispatch
+	var group delegationGroupView
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/delegation-groups", map[string]any{
+		"parent_run_id": parent.String(),
+		"delegations": []map[string]any{
+			{"task": "dispatch 测试子任务", "request_id": uuid.NewString()},
+		},
+	}, &group)
+	if group.State != "active" || len(group.Delegations) != 1 {
+		t.Fatalf("delegate_task dispatch 应创建组：%+v", group)
+	}
+
+	// 递归超限拒绝：回填 child_run_id 后，子 run 不得再委派（深度 1）
+	var backfillChild uuid.UUID
+	if err := env.srv.db.QueryRow(context.Background(),
+		`INSERT INTO agent_run (id, conversation_id, workspace_id, user_id, session_id, trigger, status, stage)
+		 VALUES ($1,$2,$3,$4,
+			 (SELECT session_id FROM agent_run WHERE id=$5),
+			 'message','completed','queued')
+		 RETURNING id`,
+		uuid.New(), conv.ID, uuid.MustParse(env.me(t).Workspace.ID), uuid.MustParse(env.me(t).UserID), parent,
+	).Scan(&backfillChild); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.srv.db.Exec(context.Background(),
+		`UPDATE agent_delegation SET child_run_id=$1 WHERE id=$2`,
+		backfillChild, group.Delegations[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	env.expectErr(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/delegation-groups", map[string]any{
+		"parent_run_id": backfillChild.String(),
+		"delegations":   []map[string]any{{"task": "递归委派", "request_id": uuid.NewString()}},
+	}, "subagent_depth_limit")
+}

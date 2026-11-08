@@ -13,6 +13,8 @@ CREATE TABLE agent_delegation_group (
     current_parent_run_id uuid NOT NULL REFERENCES agent_run(id) ON DELETE CASCADE,
     state varchar(16) NOT NULL DEFAULT 'active',
     budget_scope_id uuid NOT NULL,
+    budget_used integer NOT NULL DEFAULT 0,
+    budget_reserved integer NOT NULL DEFAULT 0,
     cancel_generation integer NOT NULL DEFAULT 0,
     revision integer NOT NULL DEFAULT 1,
     created_at timestamptz NOT NULL DEFAULT now(),

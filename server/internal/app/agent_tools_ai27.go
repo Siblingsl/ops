@@ -83,7 +83,7 @@ func ai27DelegationTools() []AgentTool {
 	return []AgentTool{
 		{
 			Name: "delegate_task", Domain: "subagent", Kind: toolG, Method: "POST",
-			Path: "/tools/subagent/delegation-groups",
+			Path: "/tools/subagent/conversations/{id}/delegation-groups",
 			Description: "将当前任务拆分为 1~2 个独立的子任务并行研究。子任务只能提案结果，不能执行业务写入。父 run 汇总时保留来源、分歧与失败。",
 			Params: []ToolParam{
 				pPath("conversationId"),
