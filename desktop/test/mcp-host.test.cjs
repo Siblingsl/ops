@@ -147,3 +147,82 @@ test('MCP stdio: stop 后无孤儿进程', { timeout: 30_000 }, async (t) => {
   const out = String(probe.stdout || '');
   assert.ok(!/[0-9]/.test(out.trim().replace(/ProcessId\s*/i, '')), '不应残留 mock server 进程: ' + out);
 });
+
+// ---------------------------------------------------------------------------
+// DEV-AI27-14 W14b：Streamable HTTP 传输（真实 Node HTTP server）
+// ---------------------------------------------------------------------------
+
+const http = require('node:http');
+
+/** 模拟 Streamable HTTP MCP server（同步 JSON 响应 + Mcp-Session-Id）。 */
+function startMockHttpServer() {
+  const tools = [
+    { name: 'http_search', description: 'HTTP 搜索工具', inputSchema: { type: 'object' } },
+  ];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      let msg;
+      try { msg = JSON.parse(body); } catch { res.writeHead(400); res.end(); return; }
+      res.setHeader('Mcp-Session-Id', 'sess-http-1');
+      if (msg.method === 'initialize') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {
+          protocolVersion: '2025-06-18',
+          serverInfo: { name: 'w14-http-mock', version: '0.2.0' },
+        } }));
+      } else if (msg.method === 'notifications/initialized') {
+        res.writeHead(202); res.end();
+      } else if (msg.method === 'tools/list') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tools, nextCursor: null } }));
+      } else if (msg.method === 'tools/call') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {
+          content: [{ type: 'text', text: 'http:' + (msg.params.arguments && msg.params.arguments.text || '') }],
+        } }));
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { message: 'unknown method' } }));
+      }
+    });
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('MCP http: initialize + 目录 + tools/call + session id', { timeout: 30_000 }, async (t) => {
+  const server = await startMockHttpServer();
+  t.after(() => server.close());
+  const address = server.address();
+  const manager = new McpHostManager();
+  t.after(() => manager.stopAll());
+  const catalog = await manager.startHttp('http-1', {
+    url: `http://127.0.0.1:${address.port}/mcp`,
+  });
+  assert.equal(catalog.server_info.name, 'w14-http-mock');
+  assert.equal(catalog.server_info.protocol_version, '2025-06-18');
+  assert.equal(catalog.tools.length, 1);
+  assert.equal(catalog.tools[0].name, 'http_search');
+
+  const connection = manager.get('http-1');
+  assert.ok(connection);
+  const result = await connection.callTool('http_search', { text: '竞品' });
+  assert.equal(result.content[0].text, 'http:竞品');
+  manager.stop('http-1');
+  assert.equal(manager.get('http-1'), undefined);
+});
+
+test('MCP http: 非 200 响应拒绝（server 关闭后连接失败）', { timeout: 30_000 }, async (t) => {
+  const server = await startMockHttpServer();
+  const address = server.address();
+  const manager = new McpHostManager();
+  t.after(() => { manager.stopAll(); server.close(); });
+  // 先关掉 server 再尝试连接 → spawn_failed/连接失败
+  await new Promise((resolve) => server.close(resolve));
+  await assert.rejects(
+    () => manager.startHttp('http-dead', { url: `http://127.0.0.1:${address.port}/mcp` }),
+    /mcp_http_status|fetch failed|ECONNREFUSED/,
+  );
+  assert.equal(manager.get('http-dead'), undefined);
+});

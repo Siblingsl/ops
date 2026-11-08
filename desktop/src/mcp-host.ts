@@ -242,21 +242,161 @@ export class McpStdioConnection extends EventEmitter {
   }
 }
 
+/** HTTP 传输配置（27 §11.2.2：默认 https；本机开发明文由 server 校验拒绝）。 */
+export interface McpHttpConfig {
+  url: string;
+  headers?: Record<string, string>; // 不含秘密值（秘密经 env 注入或 OAuth，另行处理）
+}
+
+/**
+ * Streamable HTTP 连接（27 §11.2.2）：POST JSON-RPC 单次请求；SSE 响应按行解析。
+ * W14b 首版仅实现同步 JSON 响应模式（最常见），SSE 流式按需扩展。
+ */
+export class McpHttpConnection extends EventEmitter {
+  state: McpConnectionState = 'starting';
+  serverInfo: { name: string; version: string; protocol_version: string } | null = null;
+  lastError = '';
+  private sessionID: string | null = null;
+  private nextID = 1;
+
+  constructor(
+    readonly connectionId: string,
+    private readonly config: McpHttpConfig,
+  ) {
+    super();
+  }
+
+  private async post(body: unknown, timeoutMs: number): Promise<{ status: number; json: unknown; sessionID: string | null }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(this.config.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          ...(this.sessionID ? { 'Mcp-Session-Id': this.sessionID } : {}),
+          ...this.config.headers,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const sessionID = response.headers.get('mcp-session-id');
+      if (sessionID) this.sessionID = sessionID;
+      const contentType = response.headers.get('content-type') ?? '';
+      if (!response.ok) {
+        throw new Error(`mcp_http_status: ${response.status}`);
+      }
+      if (contentType.includes('text/event-stream')) {
+        // SSE 响应：取第一个 data: 行的 JSON（W14b 简化；流式多消息按需扩展）。
+        const text = await response.text();
+        for (const line of text.split('\n')) {
+          if (line.startsWith('data:')) {
+            return { status: response.status, json: JSON.parse(line.slice(5).trim()), sessionID };
+          }
+        }
+        throw new Error('mcp_http_sse_empty');
+      }
+      return { status: response.status, json: await response.json(), sessionID };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private call(method: string, params: unknown, timeoutMs = CALL_TIMEOUT_MS): Promise<unknown> {
+    const id = this.nextID++;
+    return this.post({ jsonrpc: '2.0', id, method, params }, timeoutMs).then(({ json }) => {
+      const msg = json as { result?: unknown; error?: { message?: string } };
+      if (msg.error) throw new Error(`mcp_error: ${msg.error.message ?? 'unknown'}`);
+      return msg.result;
+    });
+  }
+
+  async start(): Promise<void> {
+    const init = (await this.call('initialize', {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: 'ops-desktop', version: '0.1.0' },
+    }, START_TIMEOUT_MS)) as { serverInfo?: { name?: string; version?: string }; protocolVersion?: string };
+    this.serverInfo = {
+      name: String(init.serverInfo?.name ?? 'unknown'),
+      version: String(init.serverInfo?.version ?? ''),
+      protocol_version: String(init.protocolVersion ?? MCP_PROTOCOL_VERSION),
+    };
+    await this.post({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }, 5000).catch(() => undefined);
+    this.setState('ready');
+  }
+
+  async catalog(): Promise<McpCatalog> {
+    const tools: McpToolDescriptor[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = (await this.call('tools/list', cursor ? { cursor } : {})) as {
+        tools?: Array<{ name: string; description?: string; inputSchema?: unknown; outputSchema?: unknown }>;
+        nextCursor?: string;
+      };
+      for (const tool of page.tools ?? []) {
+        tools.push({
+          name: String(tool.name),
+          description_hash: describeErrorHash(tool.description ?? ''),
+          input_schema: tool.inputSchema ?? {},
+          output_schema: tool.outputSchema,
+        });
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    if (!this.serverInfo) throw new Error('未完成 initialize');
+    return {
+      tools,
+      server_info: this.serverInfo,
+      catalog_revision: describeErrorHash(JSON.stringify(tools.map((t) => [t.name, t.description_hash, t.input_schema]))),
+    };
+  }
+
+  async callTool(name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
+    return this.call('tools/call', { name, arguments: args }, timeoutMs);
+  }
+
+  stop(): void {
+    this.setState('stopped');
+  }
+
+  private setState(state: McpConnectionState): void {
+    this.state = state;
+    this.emit('state', state);
+  }
+}
+
 /** 连接管理器：只管理自己启动的连接实例。 */
 export class McpHostManager extends EventEmitter {
-  private connections = new Map<string, McpStdioConnection>();
+  private connections = new Map<string, McpStdioConnection | McpHttpConnection>();
 
   list(): Array<{ id: string; state: McpConnectionState; server: McpCatalog['server_info'] | null }> {
     return [...this.connections.values()].map((c) => ({ id: c.connectionId, state: c.state, server: c.serverInfo }));
   }
 
-  get(id: string): McpStdioConnection | undefined {
+  get(id: string): McpStdioConnection | McpHttpConnection | undefined {
     return this.connections.get(id);
   }
 
   async startStdio(connectionId: string, config: McpStdioConfig): Promise<McpCatalog> {
     if (this.connections.has(connectionId)) throw new Error(`连接 ${connectionId} 已存在`);
     const connection = new McpStdioConnection(connectionId, config);
+    this.connections.set(connectionId, connection);
+    connection.on('state', (state) => this.emit('state', { connectionId, state }));
+    try {
+      await connection.start();
+      return await connection.catalog();
+    } catch (err) {
+      connection.stop();
+      this.connections.delete(connectionId);
+      throw err;
+    }
+  }
+
+  async startHttp(connectionId: string, config: McpHttpConfig): Promise<McpCatalog> {
+    if (this.connections.has(connectionId)) throw new Error(`连接 ${connectionId} 已存在`);
+    const connection = new McpHttpConnection(connectionId, config);
     this.connections.set(connectionId, connection);
     connection.on('state', (state) => this.emit('state', { connectionId, state }));
     try {

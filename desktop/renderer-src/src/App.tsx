@@ -41,6 +41,7 @@ const HotSources = lazy(() => import('./pages/settings/Crawl').then((m) => ({ de
 const Quality = lazy(() => import('./pages/settings/Quality'))
 const Preferences = lazy(() => import('./pages/settings/Preferences'))
 const PersonalMemory = lazy(() => import('./pages/settings/PersonalMemory'))
+const Plugins = lazy(() => import('./pages/settings/Plugins'))
 const Skills = lazy(() => import('./pages/settings/Skills'))
 const WorkLayout = lazy(() => import('./pages/work/WorkLayout'))
 const Editor = lazy(() => import('./pages/work/Editor'))
@@ -149,6 +150,7 @@ function Authed() {
           <Route index element={<Navigate to="accounts" replace />} />
           <Route path="preferences" element={<S><Preferences /></S>} />
           <Route path="memory" element={<S><PersonalMemory /></S>} />
+          <Route path="plugins" element={<S><Plugins /></S>} />
           <Route path="accounts" element={<S><SettingsAccounts /></S>} />
           <Route path="members" element={<S><Members /></S>} />
           <Route path="models" element={<S><Models /></S>} />

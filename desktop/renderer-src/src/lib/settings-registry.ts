@@ -1,4 +1,4 @@
-import { Activity, Bot, Cpu, Gauge, KeyRound, ScrollText, Shield, ShieldAlert, SlidersHorizontal, Sparkles, Trash2, Users, type LucideIcon } from 'lucide-react'
+import { Activity, Bot, Cpu, Gauge, KeyRound, Plug, ScrollText, Shield, ShieldAlert, SlidersHorizontal, Sparkles, Trash2, Users, type LucideIcon } from 'lucide-react'
 
 export type SettingsScope = '个人' | '当前账号' | '工作区' | '此电脑' | '系统'
 
@@ -30,6 +30,8 @@ export const settingsEntries: SettingsEntry[] = [
   { path: '/settings/preferences', label: '偏好设置', group: '工作区设置', scope: '个人', icon: SlidersHorizontal, keywords: '写作 快捷键 AI 档位' },
   // DEV-AI27-13（W13）：个人跨对话记忆管理（本人私有）。
   { path: '/settings/memory', label: '个性化 · 记忆', group: '工作区设置', scope: '个人', icon: Sparkles, keywords: '记忆 个性化 候选 确认 偏好' },
+  // DEV-AI27-14（W14b）：插件/MCP 连接管理（本人私有）。
+  { path: '/settings/plugins', label: '插件与工具', group: '工作区设置', scope: '个人', icon: Plug, keywords: '插件 MCP 连接 工具 stdio 启用' },
   { path: '/settings/security', label: '登录与安全', group: '工作区设置', scope: '个人', icon: KeyRound, keywords: '密码 登录' },
   { path: '/settings/accounts', label: '平台账号与凭证', group: '工作区设置', scope: '当前账号', icon: Users, keywords: '公众号 微信公众号 小红书 今日头条 登录 凭证 回填 账号类型' },
   { path: '/settings/members', label: '成员与邀请', group: '工作区设置', scope: '工作区', icon: Users, keywords: '协作 邀请码 工作区名称' },
