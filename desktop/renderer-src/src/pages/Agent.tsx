@@ -14,6 +14,7 @@ import { AddMenu } from './agent/AddMenu'
 import { BrowserStatusBlock, useBrowserConnectState } from './agent/BrowserStatusBlock'
 import { BrowserTabSelector } from './agent/BrowserTabSelector'
 import { InBrowsePanel } from './agent/InBrowsePanel'
+import { VoiceBar } from './agent/VoiceBar'
 import { MemoryCandidateCard } from './agent/MemoryCandidateCard'
 import { PanelResizer, PANEL_WIDTH_DEFAULT } from './agent/PanelResizer'
 import { ApiError, del, errorMessage, get, patch, post, stream, uploadFormData } from '@/lib/api'
@@ -2006,6 +2007,8 @@ export default function Agent() {
             {desktopPresentation ? <>
               <div className={`desktop-agent-compose ${workbenchUI ? 'desktop-agent-workbench-compose' : ''}`}>
                 {renderAttachmentQueue(true)}
+                {/* DEV-AI27-16（W16c）：语音输入完整链路（录音→转写→编辑→插入输入框）。 */}
+                {conversationId && <VoiceBar conversationId={conversationId} voiceDictationEnabled={bootstrapData.features.voice_dictation === true} onInsert={(voiceText) => { setText((old) => old ? `${old}${voiceText}` : voiceText); window.setTimeout(() => inputRef.current?.focus(), 0) }} />}
                 <Textarea ref={inputRef} rows={workbenchUI ? 3 : 1} aria-label={workbenchUI ? '发送消息' : undefined} value={text} disabled={inputDisabled} onChange={(event) => { textDraftVersionRef.current++; setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, workbenchUI ? 176 : 192)}px` }} onKeyDown={onInputKeyDown}
                   placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '说说你想写什么，或继续调整上面的方向…'} className="desktop-agent-compose-input" />
                 <div className="desktop-agent-compose-toolbar">

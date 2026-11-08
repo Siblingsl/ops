@@ -121,6 +121,9 @@ func (s *Server) createPluginConnection(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&body); err != nil {
 		return apiErr(400, "bad_request", "请求体无法解析")
 	}
+	if body.EnvKeys == nil {
+		body.EnvKeys = []string{}
+	}
 	body.Name = strings.TrimSpace(body.Name)
 	if body.Name == "" || len([]rune(body.Name)) > 64 {
 		return apiErr(422, "validation_failed", "连接名需 1～64 字")
