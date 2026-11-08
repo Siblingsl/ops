@@ -39,6 +39,9 @@ docs/*
 !docs/23-技能系统设计.md
 !docs/24-内容生产流水线与运营方法增强设计.md
 !docs/27-AI对话增强分析与Codex桌面端对标设计.md
+# AI27 验收矩阵（27 文档 §16 的状态汇总）
+!docs/acceptance/
+!docs/acceptance/**
 # 桌面端回归测试直接加载的原型夹具；其余设计资料继续忽略。
 !docs/design/
 docs/design/*
