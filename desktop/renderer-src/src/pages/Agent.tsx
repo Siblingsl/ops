@@ -15,6 +15,7 @@ import { BrowserStatusBlock, useBrowserConnectState } from './agent/BrowserStatu
 import { BrowserTabSelector } from './agent/BrowserTabSelector'
 import { InBrowsePanel } from './agent/InBrowsePanel'
 import { VoiceBar } from './agent/VoiceBar'
+import { DelegationPanel } from './agent/DelegationPanel'
 import { MemoryCandidateCard } from './agent/MemoryCandidateCard'
 import { PanelResizer, PANEL_WIDTH_DEFAULT } from './agent/PanelResizer'
 import { ApiError, del, errorMessage, get, patch, post, stream, uploadFormData } from '@/lib/api'
@@ -566,6 +567,8 @@ function WorkbenchSidePanel({
         <h3 id="workbench-task-heading">当前任务</h3>
         <p className="desktop-agent-side-status" role="status">{busy && <LoaderCircle className="size-4 animate-spin" />}{taskStatus}</p>
         {activeRun && <p className="desktop-agent-side-detail">运行状态：{activeRun.status === 'queued' ? '排队中' : '执行中'}</p>}
+        {/* DEV-AI27-15（W15b UI）：协作任务折叠/展开/单项停止（有委派组时才渲染）。 */}
+        {conversation && <DelegationPanel conversationId={conversation.id} />}
         {conversation && <p className="desktop-agent-side-detail">本对话操作卡片：{actionCount} 项</p>}
         <GoalPanel conversationID={conversation?.id} conversation={conversation} goal={goal} models={models} goalsEnabled={goalsEnabled} compactEnabled={compactEnabled} canManage={canManageGoals} busy={busy} onCompact={onCompact} />
         {pendingActions > 0 && <p className="desktop-agent-side-note">请在对应消息下逐张审阅操作卡片。</p>}
