@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -374,4 +375,69 @@ func TestW06DelegateTaskDispatch(t *testing.T) {
 		"parent_run_id": backfillChild.String(),
 		"delegations":   []map[string]any{{"task": "递归委派", "request_id": uuid.NewString()}},
 	}, "subagent_depth_limit")
+}
+
+// DEV-AI27-15 第二批（W15b）：委派派发执行端到端（mock 模型）。
+// 委派组创建 → dispatchDelegationGroup（真实子 run 模型循环）→ 子 run 完成 → 委派 succeeded。
+func TestW15bDispatchExecutesChildRun(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "run_control,event_resume,plans,goals,artifacts,subagents")
+	providerID := env.ensureToolModel(t)
+	conv := w15ParentRun(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	parent := w15ParentInsert(t, conv, providerID)
+
+	// 直接走 API（不走 w15CreateGroup 的占位回填——W15b 验证真实派发）。
+	var group delegationGroupView
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/delegation-groups", map[string]any{
+		"parent_run_id": parent.String(), "delegations": []map[string]any{
+			{"task": "用一句话总结本周运营要点", "request_id": uuid.NewString()},
+		},
+	}, &group)
+	if len(group.Delegations) != 1 {
+		t.Fatalf("委派组应含 1 子：%+v", group)
+	}
+
+	// 真实派发（内部启动子 run 模型循环——mock 模型）。
+	env.srv.dispatchDelegationGroup(context.Background(), uuid.MustParse(group.ID))
+
+	// 轮询委派状态到 succeeded（子 run 模型循环为异步）。
+	var finalState string
+	var childRunID uuid.UUID
+	deadline := 60
+	for i := 0; i < deadline; i++ {
+		if err := env.srv.db.QueryRow(context.Background(),
+			`SELECT state, COALESCE(child_run_id::text,'') FROM agent_delegation WHERE id=$1`,
+			group.Delegations[0].ID).Scan(&finalState, &childRunID); err != nil {
+			t.Fatal(err)
+		}
+		if finalState == "succeeded" || finalState == "failed" {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if finalState != "succeeded" {
+		t.Fatalf("委派应 succeeded（mock 模型循环），got %s", finalState)
+	}
+	if childRunID == uuid.Nil {
+		t.Fatal("child_run_id 应回填")
+	}
+	// 子 run 应有真实的模型输出消息（mock 模型返回）。
+	var msgCount int
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT count(*) FROM agent_message WHERE run_id=$1 AND role='assistant'`, childRunID).Scan(&msgCount); err != nil {
+		t.Fatal(err)
+	}
+	if msgCount == 0 {
+		t.Fatal("子 run 应产生 assistant 消息")
+	}
+	// 组状态应 completed（全部子终态）。
+	var groupState string
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT state FROM agent_delegation_group WHERE id=$1`, group.ID).Scan(&groupState); err != nil {
+		t.Fatal(err)
+	}
+	if groupState != "completed" {
+		t.Fatalf("全部子终态后组应 completed：%s", groupState)
+	}
 }
