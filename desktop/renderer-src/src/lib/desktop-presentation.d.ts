@@ -55,6 +55,9 @@ declare global {
       onPlatformIntentResult(listener: (result: DesktopPlatformIntentResult) => void): () => void
       onClientHealth(listener: (health: DesktopClientHealth) => void): () => void
       captureLongImage(buildId: string): Promise<CXLongImageCaptureResult>
+      // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道）。
+      invokeInBrowse(channel: string, payload?: unknown): Promise<unknown>
+      onInBrowseSnapshot(listener: (snapshot: { bounds: { x: number; y: number; width: number; height: number } | null; url: string; title: string; loading: boolean; navigationGeneration: number }) => void): () => void
     }
   }
 }

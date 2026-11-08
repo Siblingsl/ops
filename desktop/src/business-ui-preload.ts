@@ -200,5 +200,16 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
     if (!isUuid(buildId)) return { ok: false, code: 'invalid_input', message: '长图构建参数无效。' };
     const result = parseCXLongImageCaptureResult(await ipcRenderer.invoke(CX_LONG_IMAGE_CAPTURE_CHANNEL, { buildId }));
     return result ?? { ok: false, code: 'long_image_invalid', message: 'Electron 返回的长图结果无效。' };
+  },
+  // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道；渲染器无 view 对象）。
+  async invokeInBrowse(channel: string, payload?: unknown): Promise<unknown> {
+    const allowed = ['inbrowse:snapshot', 'inbrowse:set-bounds', 'inbrowse:navigate', 'inbrowse:back', 'inbrowse:forward', 'inbrowse:reload', 'inbrowse:stop', 'inbrowse:close'];
+    if (!allowed.includes(channel)) throw new Error(`不允许的内置浏览意图：${channel}`);
+    return ipcRenderer.invoke(channel, payload);
+  },
+  onInBrowseSnapshot(listener: (snapshot: unknown) => void) {
+    const wrapped = (_event: unknown, snapshot: unknown) => listener(snapshot);
+    ipcRenderer.on('desktop-ui:inbrowse-snapshot', wrapped);
+    return () => { ipcRenderer.removeListener('desktop-ui:inbrowse-snapshot', wrapped); };
   }
 });

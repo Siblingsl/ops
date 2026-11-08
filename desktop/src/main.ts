@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { startBrowserBridgeDiagnostics } from './browser-bridge';
+import { bindInBrowseController, type InBrowseViewController } from './in-browse';
 
 // 补上非 EPIPE 未捕获异常的展示（防护本身已在 import 时装好）。
 installBrokenPipeGuard((error) => {
@@ -808,6 +809,42 @@ function rendererContentType(extension: string): string {
 }
 
 function registerIpcHandlers(): void {
+  // DEV-AI27-08（W08，D-172）：内置浏览视图固定意图（27 §7.8/§12.5）。
+  // 仅业务窗口主框架可调用；bounds/导航/浮层隐藏由主进程持有，渲染器无 view 对象。
+  const requireInBrowse = (event: IpcMainInvokeEvent): InBrowseViewController => {
+    const senderFrame = event.senderFrame;
+    if (!businessWindow || businessWindow.isDestroyed() || event.sender !== businessWindow.webContents
+      || !senderFrame || senderFrame !== event.sender.mainFrame || !isBusinessUrl(senderFrame.url)
+      || !isBusinessUrl(event.sender.getURL())) {
+      throw new Error('不允许此窗口调用内置浏览意图。');
+    }
+    return bindInBrowseController(businessWindow, (snapshot) => {
+      if (businessWindow && !businessWindow.isDestroyed()) {
+        businessWindow.webContents.send('desktop-ui:inbrowse-snapshot', snapshot);
+      }
+    });
+  };
+  ipcHandle('inbrowse:set-bounds', (event, raw) => {
+    const controller = requireInBrowse(event);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('bounds 参数无效。');
+    const b = raw as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : 0);
+    controller.setBounds({ x: num(b.x), y: num(b.y), width: num(b.width), height: num(b.height) });
+    return controller.snapshot();
+  });
+  ipcHandle('inbrowse:navigate', (event, raw) => {
+    const controller = requireInBrowse(event);
+    const url = typeof raw === 'string' ? raw : '';
+    const result = controller.navigate(url);
+    if (!result.ok) throw new Error(`inbrowse_navigate_denied: ${result.reason}`);
+    return controller.snapshot();
+  });
+  ipcHandle('inbrowse:back', (event) => { requireInBrowse(event).goBack(); return null; });
+  ipcHandle('inbrowse:forward', (event) => { requireInBrowse(event).goForward(); return null; });
+  ipcHandle('inbrowse:reload', (event) => { requireInBrowse(event).reload(); return null; });
+  ipcHandle('inbrowse:stop', (event) => { requireInBrowse(event).stopLoading(); return null; });
+  ipcHandle('inbrowse:close', (event) => { requireInBrowse(event).close(); return null; });
+  ipcHandle('inbrowse:snapshot', (event) => requireInBrowse(event).snapshot());
   ipcHandle('cx-long-image:capture', async (event, raw) => {
     const senderFrame = event.senderFrame;
     if (!businessWindow || businessWindow.isDestroyed() || event.sender !== businessWindow.webContents

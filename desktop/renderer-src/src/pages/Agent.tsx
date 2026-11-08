@@ -13,6 +13,7 @@ import { Button, cn, IconButton, Input, Notice, Select, Textarea } from '@/compo
 import { AddMenu } from './agent/AddMenu'
 import { BrowserStatusBlock, useBrowserConnectState } from './agent/BrowserStatusBlock'
 import { BrowserTabSelector } from './agent/BrowserTabSelector'
+import { InBrowsePanel } from './agent/InBrowsePanel'
 import { MemoryCandidateCard } from './agent/MemoryCandidateCard'
 import { PanelResizer, PANEL_WIDTH_DEFAULT } from './agent/PanelResizer'
 import { ApiError, del, errorMessage, get, patch, post, stream, uploadFormData } from '@/lib/api'
@@ -604,7 +605,17 @@ function WorkbenchSidePanel({
         <p className="desktop-agent-side-note">选择、启用和加载是不同状态。只有 load_skill 成功回执才显示已加载；当前无法从模型调用回执确认是否遵循了技能指令。</p>
       </section>}
       {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading"><h3 id="workbench-artifact-heading">产物</h3><ArtifactPanel conversationID={conversation?.id} compact onQuote={onQuoteArtifact} /></section>}
-      {tab === 'browser' && <section aria-labelledby="workbench-browser-heading"><h3 id="workbench-browser-heading">浏览器</h3><BrowserStatusBlock state={browserConnectState} />{browserConnectState.kind === 'paired' && <BrowserTabSelector bindings={browserConnectState.bindings} onTabSelected={(selected) => { void selected }} />}</section>}
+      {tab === 'browser' && <section aria-labelledby="workbench-browser-heading" className="flex h-full flex-col">
+        <h3 id="workbench-browser-heading">浏览器</h3>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <BrowserStatusBlock state={browserConnectState} />
+          {browserConnectState.kind === 'paired' && <BrowserTabSelector bindings={browserConnectState.bindings} onTabSelected={(selected) => { void selected }} />}
+        </div>
+        {/* D-172 双路径之二：应用内浏览视图（Codex 同款，WebContentsView 承载）。 */}
+        <div className="h-[60%] shrink-0 border-t border-mist-200">
+          <InBrowsePanel visible={tab === 'browser'} />
+        </div>
+      </section>}
     </div>
   </aside>
 }

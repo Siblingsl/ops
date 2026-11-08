@@ -37,12 +37,15 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   assert.deepEqual(Object.keys(exposed), ['opsDesktopUI']);
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).sort(), [
     'captureLongImage',
+    'invokeInBrowse',
     'onClientHealth',
+    'onInBrowseSnapshot',
     'onLocalSettingsState',
     'onOpenSettings',
     'onPlatformIntentResult'
   ]);
-  assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')), ['captureLongImage']);
+  // DEV-AI27-08（W08）：内置浏览意图白名单桥随 captureLongImage 一并暴露。
+  assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')), ['captureLongImage', 'invokeInBrowse']);
   const buildId = '00000008-1111-4111-8111-111111111111';
   assert.deepEqual(await exposed.opsDesktopUI.captureLongImage(buildId), {
     ok: false, code: 'render_not_ready', message: '页面未就绪。'
