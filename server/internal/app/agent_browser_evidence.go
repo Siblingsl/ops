@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -287,4 +288,17 @@ func (s *Server) listBrowserAnnotations(w http.ResponseWriter, r *http.Request) 
 		annotations = append(annotations, v)
 	}
 	return ok(w, map[string]any{"annotations": annotations})
+}
+
+// CleanupStaleBrowserEvidence 清理未被批注引用且创建超 24h 的浏览器证据（27 §14.6）。
+// 被批注引用的保留（引用计数）；命令账本不动（去重窗 ≥24h 独立保留）。
+// 返回删除行数。
+func (s *Server) CleanupStaleBrowserEvidence(ctx context.Context) (int64, error) {
+	tag, err := s.db.Exec(ctx, `DELETE FROM agent_browser_evidence e
+		WHERE e.created_at < now() - interval '24 hours'
+		  AND NOT EXISTS(SELECT 1 FROM agent_browser_annotation a WHERE a.evidence_id = e.id)`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

@@ -165,3 +165,74 @@ func TestW09AnnotationLifecycle(t *testing.T) {
 		t.Fatalf("批注查询应 2 条：%d", len(list.Annotations))
 	}
 }
+
+// DEV-AI27-09 第三批（W09c）：证据保留策略（27 §14.6）——
+// 未被批注引用且创建超 24h 的证据被调度器删除；被批注引用的保留。
+func TestW09EvidenceRetention(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace,event_resume")
+	providerID := env.ensureToolModel(t)
+	conv := env.agentRunConversation(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+
+	// 创建证据（created_at = now）
+	var evidence browserEvidenceView
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/evidence", map[string]any{
+		"conversation_id": conv.ID.String(),
+		"origin":          "https://example.com/retention",
+		"title":           "保留策略验证",
+		"kind":            "text",
+	}, &evidence)
+
+	// 手动把 created_at 置为 25h 前
+	if _, err := env.srv.db.Exec(context.Background(),
+		`UPDATE agent_browser_evidence SET created_at = now() - interval '25 hours' WHERE id=$1`, evidence.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 无批注引用 → sweep 应删除
+	n, err := env.srv.CleanupStaleBrowserEvidence(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT count(*) FROM agent_browser_evidence WHERE id=$1`, evidence.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("无引用超 24h 证据应被删除")
+	}
+	if n < 1 {
+		t.Fatalf("回收行数应 ≥1：%d", n)
+	}
+
+	// 有批注引用 → sweep 保留
+	var evidence2 browserEvidenceView
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/evidence", map[string]any{
+		"conversation_id": conv.ID.String(),
+		"origin":          "https://example.com/kept",
+		"title":           "有批注引用的证据",
+		"kind":            "text",
+	}, &evidence2)
+	if _, err := env.srv.db.Exec(context.Background(),
+		`UPDATE agent_browser_evidence SET created_at = now() - interval '25 hours' WHERE id=$1`, evidence2.ID); err != nil {
+		t.Fatal(err)
+	}
+	var annotation struct {
+		ID string `json:"id"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/annotations", map[string]any{
+		"conversation_id": conv.ID.String(), "evidence_id": evidence2.ID,
+		"selection_text": "引用选区", "note": "保留理由",
+	}, &annotation)
+	env.srv.CleanupStaleBrowserEvidence(context.Background())
+	var kept int
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT count(*) FROM agent_browser_evidence WHERE id=$1`, evidence2.ID).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 1 {
+		t.Fatal("被批注引用的证据应保留")
+	}
+}

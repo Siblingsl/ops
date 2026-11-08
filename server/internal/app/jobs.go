@@ -40,7 +40,14 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	if n, err := s.PurgeExpiredTrash(ctx); err != nil {
 		slog.Error("清理回收站失败", "err", err)
 	} else if n > 0 {
-		slog.Info("回收站到期清理", "count", n)
+	slog.Info("回收站到期清理", "count", n)
+	}
+	// DEV-AI27-09（W09 第三批，27 §14.6 证据保留策略）：未被批注引用的浏览器证据
+	// 创建超 24h 后删除；被批注引用的保留（引用计数）。命令账本不动（去重窗 ≥24h）。
+	if n, err := s.CleanupStaleBrowserEvidence(ctx); err != nil {
+		slog.Error("清理过期浏览器证据失败", "err", err)
+	} else if n > 0 {
+		slog.Info("过期浏览器证据清理", "count", n)
 	}
 	if n, err := s.cleanupCXBuilds(ctx); err != nil {
 		slog.Error("清理内容构建产物失败", "err", err)
