@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { Button } from '@/components/ui'
+import { post } from '@/lib/api'
 
 // DEV-AI27-07（W07）：工作视图"浏览器"页签的连接状态块（27 §5.3/§5.5）。
 // 状态来源只有两个真实事实：工作区开关（bootstrap.features.browser_workspace）与
@@ -98,14 +100,18 @@ export function BrowserStatusBlock({ state }: { state: BrowserConnectState }) {
     </div>
   }
   if (state.kind === 'unpaired') {
+    // DEV-AI27-04（W04c）：首次连接向导——创建配对事务（服务端短码 5 分钟有效），
+    // 用户在 Chrome 扩展核对同一短码后由本机确认。步骤如实标注，不伪造"已连接"。
     return <div className="desktop-agent-browser-status" data-testid="desktop-agent-browser-status" data-state="unpaired">
       <h4>尚未连接 Google Chrome</h4>
       <p>连接需要在本人日常 Chrome 中安装 OPS 自有扩展并与本机 OPS 桌面端配对（短码核对）。</p>
       <ol>
-        <li>在 OPS 桌面端开启浏览器桥诊断模式；</li>
-        <li>Chrome 开发者模式加载 OPS 扩展；</li>
-        <li>扩展弹窗与 OPS 显示的短码一致后确认配对。</li>
+        <li>运行 <code>node desktop/src/native-host/register.cjs</code> 注册本机宿主；</li>
+        <li>Chrome 开发者模式加载 OPS 扩展（chrome://extensions → 开发者模式 → 加载已解压）；</li>
+        <li>点击下方"开始配对"，核对 Chrome 扩展弹窗短码与 OPS 显示一致；</li>
+        <li>短码一致且扩展显示已配对后，连接完成。</li>
       </ol>
+      <PairingWizard />
       <p className="desktop-agent-browser-status-note">配对完成后，这里会显示已连接实例与可选标签；未获准的标签不会被读取。</p>
     </div>
   }
@@ -118,5 +124,55 @@ export function BrowserStatusBlock({ state }: { state: BrowserConnectState }) {
       </li>)}
     </ul>
     <p className="desktop-agent-browser-status-note">标签选择与逐次授权在任务发送时进行；已连接不等于已授权读取任何标签。</p>
+  </div>
+}
+
+
+function PairingWizard() {
+  const [pairing, setPairing] = useState<{ id: string; code: string; expires_at: string } | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const start = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const result = await post<{ id: string; code: string; expires_at: string }>(
+        '/agent/browser/pairings', { request_id: crypto.randomUUID() })
+      setPairing(result)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (error) {
+    return <div className="mt-2 rounded-lg border border-gamboge-200 bg-gamboge-50 p-2 text-[12px] text-gamboge-700" role="alert">
+      {error}
+      <Button size="sm" variant="ghost" className="ml-2" onClick={() => void start()}>重试</Button>
+    </div>
+  }
+
+  if (!pairing) {
+    return <div className="mt-2">
+      <Button size="sm" variant="primary" aria-label="开始配对" disabled={busy} onClick={() => void start()}>
+        {busy ? '创建中…' : '开始配对'}
+      </Button>
+    </div>
+  }
+
+  const expired = Date.now() > new Date(pairing.expires_at).getTime()
+  return <div className="mt-2 rounded-lg border border-mist-200 bg-white p-3" data-testid="pairing-wizard">
+    {expired
+      ? <p className="text-[12px] text-gamboge-700">配对短码已过期（5 分钟有效）。</p>
+      : <>
+        <p className="text-[12px] text-mist-600">请核对 Chrome 扩展弹窗中显示的短码是否与下方一致：</p>
+        <p className="my-2 text-center text-2xl font-bold tracking-[0.5em] text-primary" data-testid="pairing-code">{pairing.code}</p>
+        <p className="text-[11px] text-mist-500">短码仅用于人工核对，不是认证凭据。扩展确认后本页自动刷新为已连接。</p>
+      </>}
+    <Button size="sm" variant="ghost" className="mt-1" onClick={() => void start()} disabled={busy}>
+      {expired ? '重新生成短码' : '重新生成'}
+    </Button>
   </div>
 }
