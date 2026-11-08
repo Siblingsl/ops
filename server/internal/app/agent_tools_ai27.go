@@ -56,6 +56,14 @@ func ai27BrowserTools() []AgentTool {
 			MinRole: roleEditor,
 		},
 		{
+			Name: "browser_observe_frames", Domain: "browser", Kind: toolR, Method: "POST", Path: "/tools/browser/commands",
+			Description: "跨 frame 观察获准标签：子 frame 只上报 origin 与节点计数，跨域内容默认隔离；需用户授权该 origin 后才返回节点。",
+			Params: []ToolParam{
+				pBody("tab_id", `{"type":"integer"}`, true, "U"),
+			},
+			MinRole: roleEditor,
+		},
+		{
 			Name: "browser_extract", Domain: "browser", Kind: toolR, Method: "POST", Path: "/tools/browser/commands",
 			Description: "从获准标签的指定 CSS 选择器提取文本。需要 doc_rev。",
 			Params: []ToolParam{

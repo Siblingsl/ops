@@ -296,6 +296,57 @@ async function executeOn(tabId, fn, args) {
   return res && res.result;
 }
 
+// 4/9 frame 级观察（27 §14.3）：allFrames 注入，逐 frame 上报 origin 与节点摘要；
+// 跨域 iframe 内容默认不展开（origin_only），由用户授权该 origin 后才返回节点。
+async function actionObserveFrames(payload) {
+  const tabId = Number(payload.tab_id);
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab.url || !/^https?:/.test(tab.url)) return { error: 'tab_not_http' };
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: observeFrameFn,
+    args: [MAX_NODES],
+  });
+  const frames = results.map((r) => {
+    const d = r.result || {};
+    return { frame_id: r.frameId, origin: d.origin || '', doc_rev: d.doc_rev || '', nodes: d.nodes || [], node_total: d.node_total || 0 };
+  });
+  // 顶层 frame 直接返回；子 frame 只报 origin+计数（跨域内容默认隔离，27 §14.3 表格行 2）。
+  return {
+    top: frames[0] || null,
+    sub_frames: frames.slice(1).map((f) => ({ frame_id: f.frame_id, origin: f.origin, node_total: f.node_total, doc_rev: f.doc_rev, nodes: [] })),
+  };
+}
+
+function observeFrameFn(maxNodes) {
+  const selector = 'a,button,input,select,textarea,[role="button"],[role="link"],[role="tab"],[role="checkbox"]';
+  const all = Array.from(document.querySelectorAll(selector));
+  const visible = all.filter((el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  });
+  const w = window;
+  if (!w.__opsRefMap) w.__opsRefMap = new Map();
+  if (!w.__opsRefSeq) w.__opsRefSeq = 0;
+  w.__opsRefMap.clear();
+  const nodes = [];
+  for (const el of visible.slice(0, maxNodes)) {
+    w.__opsRefSeq += 1;
+    const ref = `f${w.__opsRefSeq}`;
+    w.__opsRefMap.set(ref, el);
+    nodes.push({
+      ref,
+      tag: el.tagName.toLowerCase(),
+      type: el.getAttribute('type') || '',
+      name: (el.getAttribute('aria-label') || el.getAttribute('placeholder') || (el.textContent || '').trim().slice(0, 60) || '').slice(0, 80),
+    });
+  }
+  w.__opsDocRev = `r${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  let origin = '';
+  try { origin = `${location.protocol}//${location.host}`; } catch { origin = ''; }
+  return { origin, node_total: visible.length, nodes, doc_rev: w.__opsDocRev };
+}
+
 async function actionObserve(payload) {
   const tabId = Number(payload.tab_id);
   const tab = await chrome.tabs.get(tabId);
@@ -353,6 +404,7 @@ async function actionScreenshot(payload) {
 const ACTIONS = {
   tabs_list: actionTabsList,
   observe: actionObserve,
+  observe_frames: actionObserveFrames,
   navigate: actionNavigate,
   click: actionClick,
   type: actionType,
