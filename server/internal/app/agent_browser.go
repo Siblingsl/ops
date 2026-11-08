@@ -346,6 +346,17 @@ func (s *Server) createAgentBrowserGrant(w http.ResponseWriter, r *http.Request)
 		if !okBinding {
 			return apiErr(404, "browser_binding_not_found", "绑定不存在或已撤销")
 		}
+		// S05 前台互斥（27 §11.5.2）：电脑控制（活动 computer grant）与浏览器操作共用前台——
+		// 有活动电脑租约时浏览器 grant 拒绝。
+		var activeComputer bool
+		if err := tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM agent_computer_grant
+			WHERE user_id=$1 AND workspace_id=$2 AND state='active' AND (expires_at IS NULL OR expires_at > now()))`,
+			id.UserID, id.WorkspaceID).Scan(&activeComputer); err != nil {
+			return err
+		}
+		if activeComputer {
+			return apiErr(409, "browser_lease_conflict", "电脑控制正在操作前台；请先撤销电脑控制租约")
+		}
 		// run 必须属于本人当前工作区的该会话，且处于可派发状态（27 §13.4 发送时序）。
 		var okRun bool
 		if err := tx.QueryRow(r.Context(), `

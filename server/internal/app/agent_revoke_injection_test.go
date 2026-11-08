@@ -182,3 +182,60 @@ func reloginOwner(t *testing.T) {
 	}
 	env.csrf = env.me(t).CSRF
 }
+
+// S05 前台互斥（27 §11.5.2）：浏览器 AI 操作与电脑控制共用全设备前台——双向互斥。
+func TestS05ForegroundMutualExclusion(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace,computer_use")
+	providerID := env.ensureToolModel(t)
+	conv := env.agentRunConversation(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	reloginOwner(t)
+
+	// 1. 先创建活动浏览器 grant → computer grant 409
+	var pairing browserPairingView
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/pairings", map[string]any{"request_id": uuid.NewString()}, &pairing)
+	var confirmed struct {
+		BindingID string `json:"binding_id"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/pairings/"+pairing.ID+"/confirm", w04ConfirmBody(t, pairing.Revision), &confirmed)
+	browserRun := agentInsertRun(t, conv.ID, uuid.MustParse(env.me(t).Workspace.ID), uuid.MustParse(env.me(t).UserID), uuid.MustParse(providerID), "running", "message")
+	var browserGrant browserGrantView
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-grants", map[string]any{
+		"binding_id": confirmed.BindingID, "run_id": browserRun.String(),
+		"tab_handle": "tab-1", "origins": []string{"https://example.com"},
+	}, &browserGrant)
+
+	env.expectErr(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/computer-grants", map[string]any{
+		"target_handle": "hwnd:1", "target_summary": "记事本",
+		"scope": "observe", "request_id": uuid.NewString(),
+	}, "computer_foreground_busy")
+
+	// 2. 撤销浏览器 grant → computer grant 可创建
+	env.mustJSON(t, "DELETE", "/api/v1/agent/browser/grants/"+browserGrant.ID, map[string]any{}, nil)
+	var computerGrant computerGrantView
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/computer-grants", map[string]any{
+		"target_handle": "hwnd:1", "target_summary": "记事本",
+		"scope": "observe", "request_id": uuid.NewString(),
+	}, &computerGrant)
+
+	// 3. 反向：有活动 computer grant → browser grant 409
+	// 撤销 computer grant，重新创建 browser grant → 再创建 computer grant 409
+	env.mustJSON(t, "DELETE", "/api/v1/agent/computer-grants/"+computerGrant.ID, map[string]any{}, nil)
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-grants", map[string]any{
+		"binding_id": confirmed.BindingID, "run_id": browserRun.String(),
+		"tab_handle": "tab-2", "origins": []string{"https://example.com"},
+	}, &browserGrant)
+	env.expectErr(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/computer-grants", map[string]any{
+		"target_handle": "hwnd:2", "target_summary": "计算器",
+		"scope": "observe", "request_id": uuid.NewString(),
+	}, "computer_foreground_busy")
+
+	// 4. 清理浏览器 grant → computer 可创建
+	env.mustJSON(t, "DELETE", "/api/v1/agent/browser/grants/"+browserGrant.ID, map[string]any{}, nil)
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/computer-grants", map[string]any{
+		"target_handle": "hwnd:3", "target_summary": "计算器",
+		"scope": "observe", "request_id": uuid.NewString(),
+	}, &computerGrant)
+	env.mustJSON(t, "DELETE", "/api/v1/agent/computer-grants/"+computerGrant.ID, map[string]any{}, nil)
+}

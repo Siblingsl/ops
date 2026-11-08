@@ -140,6 +140,17 @@ func (s *Server) createComputerGrant(w http.ResponseWriter, r *http.Request) err
 	if err != pgx.ErrNoRows {
 		return err
 	}
+	// S05 前台互斥（27 §11.5.2）：浏览器 AI 操作（活动 browser grant）与电脑控制共用前台——
+	// 有活动浏览器租约时电脑控制拒绝（反之亦然，browser-grants API 同理）。
+	var activeBrowserGrant bool
+	if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM agent_browser_grant
+		WHERE user_id=$1 AND workspace_id=$2 AND state='active' AND expires_at > now())`,
+		id.UserID, id.WorkspaceID).Scan(&activeBrowserGrant); err != nil {
+		return err
+	}
+	if activeBrowserGrant {
+		return apiErr(409, "computer_foreground_busy", "浏览器协作正在操作前台；请先停止浏览器任务再使用电脑控制")
+	}
 	// 单租约互斥（C04）。
 	var activeID uuid.UUID
 	err = s.db.QueryRow(r.Context(), `SELECT id FROM agent_computer_grant
