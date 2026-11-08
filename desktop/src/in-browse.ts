@@ -235,6 +235,82 @@ export class InBrowseViewController {
     return { detached: this.detached, reason: this.detachReason };
   }
 
+  // -------------------------------------------------------------------------
+  // DEV-AI27-06（W06c）：AI 操作内置页面——动作执行器。
+  // 与 Chrome 扩展动作同语义（27 §8.1）：observe/click/type/extract 直接在活动
+  // WebContentsView 上执行；页面脚本为包内登记的函数（executeScript 传函数引用），
+  // 不接收任意 JS；密码/MFA//上传控件拒绝；doc_rev 失效反例拒绝；
+  // 敏感控件与脚本错误不进入日志正文（W05 脱敏原则）。
+  // AI 调用路径：模型工具 browser_* → 服务端 /tools/browser/commands 账本 →
+  // OPS 桥（W06b 链接线）→ 本类方法（本批）；命令账本幂等由服务端保证。
+  // -------------------------------------------------------------------------
+
+  /** 观察活动页签：脱敏可见内容 + 可交互节点（上限 300，与扩展 observeFn 同语义）。 */
+  async observe(tabID?: string): Promise<{ ok: boolean; reason?: string; data?: unknown }> {
+    const tab = tabID ? this.tabs.get(tabID) : this.activeTab();
+    if (!tab) return { ok: false, reason: 'no_active_tab' };
+    const url = tab.view.webContents.getURL();
+    if (!/^https?:/.test(url)) return { ok: false, reason: 'tab_not_http' };
+    try {
+      const result = await tab.view.webContents.executeJavaScript(`(${inBrowseObserveFn.toString()})(300)`, false);
+      return { ok: true, data: result };
+    } catch (err) {
+      return { ok: false, reason: 'observe_failed: ' + String((err as Error).message).slice(0, 120) };
+    }
+  }
+
+  /** 点击活动页签的已观察节点（doc_rev 失效拒绝）。 */
+  async click(tabID: string | undefined, ref: string, docRev: string): Promise<{ ok: boolean; reason?: string; data?: unknown }> {
+    const tab = tabID ? this.tabs.get(tabID) : this.activeTab();
+    if (!tab) return { ok: false, reason: 'no_active_tab' };
+    try {
+      const result = await tab.view.webContents.executeJavaScript(`(${inBrowseClickFn.toString()})(${JSON.stringify(ref)}, ${JSON.stringify(docRev)})`, false);
+      return { ok: true, data: result };
+    } catch (err) {
+      return { ok: false, reason: 'click_failed: ' + String((err as Error).message).slice(0, 120) };
+    }
+  }
+
+  /** 文本输入（拒绝密码/上传控件）。 */
+  async type(tabID: string | undefined, ref: string, text: string, docRev: string): Promise<{ ok: boolean; reason?: string; data?: unknown }> {
+    const tab = tabID ? this.tabs.get(tabID) : this.activeTab();
+    if (!tab) return { ok: false, reason: 'no_active_tab' };
+    if (text.length > 10000) return { ok: false, reason: 'text_too_long' };
+    try {
+      const result = await tab.view.webContents.executeJavaScript(`(${inBrowseTypeFn.toString()})(${JSON.stringify(ref)}, ${JSON.stringify(text)}, ${JSON.stringify(docRev)})`, false);
+      return { ok: true, data: result };
+    } catch (err) {
+      return { ok: false, reason: 'type_failed: ' + String((err as Error).message).slice(0, 120) };
+    }
+  }
+
+  /** 提取指定选择器文本（含输入框 value）。 */
+  async extract(tabID: string | undefined, selector: string, docRev: string): Promise<{ ok: boolean; reason?: string; data?: unknown }> {
+    const tab = tabID ? this.tabs.get(tabID) : this.activeTab();
+    if (!tab) return { ok: false, reason: 'no_active_tab' };
+    try {
+      const result = await tab.view.webContents.executeJavaScript(`(${inBrowseExtractFn.toString()})(${JSON.stringify(selector)}, ${JSON.stringify(docRev)})`, false);
+      return { ok: true, data: result };
+    } catch (err) {
+      return { ok: false, reason: 'extract_failed: ' + String((err as Error).message).slice(0, 120) };
+    }
+  }
+
+  /** 截图（JPEG，≤2MiB，与扩展 captureVisibleTab 同语义——内置视图走 webContents.capturePage）。 */
+  async screenshot(tabID?: string): Promise<{ ok: boolean; reason?: string; data?: { base64: string } }> {
+    const tab = tabID ? this.tabs.get(tabID) : this.activeTab();
+    if (!tab) return { ok: false, reason: 'no_active_tab' };
+    try {
+      const image = await tab.view.webContents.capturePage();
+      const resized = image.resize({ width: Math.min(image.getSize().width, 1920) });
+      const jpeg = resized.toJPEG(70);
+      if (jpeg.length > 2 * 1024 * 1024) return { ok: false, reason: 'screenshot_too_large' };
+      return { ok: true, data: { base64: jpeg.toString('base64') } };
+    } catch (err) {
+      return { ok: false, reason: 'screenshot_failed: ' + String((err as Error).message).slice(0, 120) };
+    }
+  }
+
   destroy(): void {
     for (const [, tab] of this.tabs) {
       try { tab.view.webContents.stop(); } catch { /* 已销毁 */ }
@@ -274,4 +350,86 @@ export function inBrowseDetachForOverlay(window: BrowserWindow, reason: DetachRe
 
 export function inBrowseAttachAfterOverlay(window: BrowserWindow): void {
   controllers.get(window)?.attach();
+}
+
+// ---------------------------------------------------------------------------
+// 页面内登记动作（executeScript 传函数引用的字符串化版本；与扩展 observeFn 同语义）。
+// 密码/MFA//上传控件拒绝；doc_rev 失效拒绝；节点上限 300。
+// ---------------------------------------------------------------------------
+
+function inBrowseObserveFn(maxNodes: number): unknown {
+  const selector = 'a,button,input,select,textarea,[role="button"],[role="link"],[role="tab"],[role="checkbox"]';
+  const all = Array.from(document.querySelectorAll(selector));
+  const visible = all.filter((el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  });
+  const w = window as unknown as { __opsRefMap?: Map<string, Element>; __opsRefSeq?: number; __opsDocRev?: string };
+  if (!w.__opsRefMap) w.__opsRefMap = new Map();
+  if (!w.__opsRefSeq) w.__opsRefSeq = 0;
+  w.__opsRefMap.clear();
+  const nodes: Array<Record<string, string>> = [];
+  for (const el of visible.slice(0, maxNodes)) {
+    w.__opsRefSeq += 1;
+    const ref = `n${w.__opsRefSeq}`;
+    w.__opsRefMap.set(ref, el);
+    const input = el as HTMLInputElement;
+    nodes.push({
+      ref,
+      tag: el.tagName.toLowerCase(),
+      type: input.type || '',
+      name: ((input.placeholder || el.getAttribute('aria-label') || el.textContent || '').trim()).slice(0, 80),
+    });
+  }
+  const prevRev = w.__opsDocRev;
+  w.__opsDocRev = `r${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  void prevRev;
+  return {
+    url: location.href,
+    title: document.title,
+    text_head: (document.body ? document.body.innerText : '').slice(0, 4000),
+    nodes,
+    node_total: visible.length,
+    doc_rev: w.__opsDocRev,
+  };
+}
+
+function inBrowseClickFn(ref: string, docRev: string): unknown {
+  const w = window as unknown as { __opsDocRev?: string; __opsRefMap?: Map<string, Element> };
+  if (w.__opsDocRev !== docRev) return { error: 'doc_rev_changed' };
+  const el = w.__opsRefMap?.get(ref) as HTMLButtonElement | undefined;
+  if (!el) return { error: 'ref_not_found' };
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return { error: 'ref_not_visible' };
+  if (el.matches('input[type="password"]')) return { error: 'sensitive_control' };
+  el.click();
+  return { clicked: true };
+}
+
+function inBrowseTypeFn(ref: string, text: string, docRev: string): unknown {
+  const w = window as unknown as { __opsDocRev?: string; __opsRefMap?: Map<string, Element> };
+  if (w.__opsDocRev !== docRev) return { error: 'doc_rev_changed' };
+  const el = w.__opsRefMap?.get(ref) as HTMLInputElement | undefined;
+  if (!el) return { error: 'ref_not_found' };
+  const tag = el.tagName.toLowerCase();
+  if (tag !== 'input' && tag !== 'textarea') return { error: 'not_text_control' };
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  if (type === 'password' || type === 'file') return { error: 'sensitive_control' };
+  el.focus();
+  el.value = text;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return { typed: text.length };
+}
+
+function inBrowseExtractFn(selector: string, docRev: string): unknown {
+  const w = window as unknown as { __opsDocRev?: string };
+  if (w.__opsDocRev !== docRev) return { error: 'doc_rev_changed' };
+  const el = document.querySelector(selector);
+  if (!el) return { error: 'selector_not_found' };
+  const isValueControl = ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
+  return {
+    text: isValueControl ? String((el as HTMLInputElement).value ?? '').slice(0, 2000) : (el.textContent || '').trim().slice(0, 2000),
+    tag: el.tagName.toLowerCase(),
+  };
 }
