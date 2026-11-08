@@ -536,3 +536,42 @@ if (!sw.started) {
     connectHost();
   });
 }
+
+// ---------------------------------------------------------------------------
+// DEV-AI27-10（W10）：side panel 消息路由（27 §10.2）。
+// sidepanel_input：用户草稿经 OPS 桥转发（真实受理在 OPS 原会话；侧栏无双执行入口）。
+// sidepanel_stop：与主界面停止同语义（收紧当前 run）。
+// sidepanel_open_ops：聚焦 OPS 桌面（深链由 OPS 端处理；扩展不唤起网页脚本）。
+// ---------------------------------------------------------------------------
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg || typeof msg.type !== 'string') return false;
+  if (msg.type === 'sidepanel_input') {
+    // 转发到宿主（OPS 桥）；实际受理结果由 OPS 端返回。W10 简化：草稿入桥，OPS 侧展示。
+    const accepted = Boolean(sw.paired);
+    if (accepted) {
+      sendToHost({ v: PROTOCOL_VERSION, type: 'ping', payload: { sidepanel: 'draft', text: String(msg.text || '').slice(0, 2000) } });
+    }
+    sendResponse({ accepted, reason: accepted ? undefined : 'not_paired' });
+    return false;
+  }
+  if (msg.type === 'sidepanel_stop') {
+    // 停止任务：发 revoke（27 §10.2 与主界面停止同语义；不发独立取消信号）。
+    const accepted = Boolean(sw.paired);
+    if (accepted) {
+      sendToHost({ v: PROTOCOL_VERSION, type: 'ping', payload: { sidepanel: 'stop' } });
+    }
+    sendResponse({ accepted, reason: accepted ? undefined : 'not_paired' });
+    return false;
+  }
+  if (msg.type === 'sidepanel_open_ops') {
+    // OPS 桌面深链：通过 native host 提示 OPS 端聚焦（宿主→OPS 桥已有通道）。
+    const accepted = Boolean(sw.paired);
+    if (accepted) {
+      sendToHost({ v: PROTOCOL_VERSION, type: 'ping', payload: { sidepanel: 'focus_ops' } });
+    }
+    sendResponse({ accepted });
+    return false;
+  }
+  return false;
+});

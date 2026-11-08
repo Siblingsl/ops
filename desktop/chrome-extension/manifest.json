@@ -8,7 +8,8 @@
     "nativeMessaging",
     "tabs",
     "scripting",
-    "storage"
+    "storage",
+    "sidePanel"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -19,5 +20,8 @@
   "action": {
     "default_popup": "popup.html",
     "default_title": "OPS Browser Bridge"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
   }
 }

@@ -253,6 +253,9 @@ func (s *Server) handoffComputerGrant(w http.ResponseWriter, r *http.Request) er
 	if tag.RowsAffected() == 0 {
 		return errNotFound
 	}
+	// W10：接管通知（27 §11.5.1：任务栏与控制条标"AI 正在操作"，接管即撤前台租约）。
+	s.notify(r.Context(), id.WorkspaceID, id.UserID, "agent_computer", "已接管：电脑控制已停止",
+		"前台租约已撤销；如需继续请重新选择应用", "/agent?panel=task", "computer:handoff:" + grantID.String())
 	return ok(w, map[string]any{"state": "revoked", "device_ack_pending": true})
 }
 

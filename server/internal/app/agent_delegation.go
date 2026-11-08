@@ -328,6 +328,9 @@ func (s *Server) cancelDelegation(w http.ResponseWriter, r *http.Request) error 
 	_, _ = s.appendAgentEvent(r.Context(), conversationID, &childRunID, "delegation.cancel_requested", map[string]any{
 		"delegation_id": delegationID.String(),
 	})
+	// W10：待处理通知（27 §9.6：只含状态级摘要；去重键含 generation 防重复打扰）。
+	s.notify(r.Context(), id.WorkspaceID, id.UserID, "agent_delegation", "子任务已请求停止",
+		"协作任务中的子任务停止请求已受理", "/agent?panel=task", "delegation:cancel:"+delegationID.String())
 	view, verr := scanDelegation(s.db.QueryRow(r.Context(),
 		"SELECT "+delegationColumns+" FROM agent_delegation d WHERE d.id=$1", delegationID))
 	if verr != nil {
@@ -369,6 +372,8 @@ func (s *Server) cancelDelegationGroup(w http.ResponseWriter, r *http.Request) e
 	_, _ = s.appendAgentEvent(r.Context(), uuid.MustParse(group.ConversationID), nil, "delegation.cancel_requested", map[string]any{
 		"group_id": groupID.String(), "scope": "tree",
 	})
+	s.notify(r.Context(), id.WorkspaceID, id.UserID, "agent_delegation", "协作任务已全部停止",
+		"该任务的全部子任务停止请求已受理", "/agent?panel=task", "delegation:grouPCancel:"+groupID.String())
 	var refreshed delegationGroupView
 	if err := s.loadDelegationGroup(r.Context(), groupID, &refreshed); err != nil {
 		return err

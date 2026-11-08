@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>OPS 侧边对话</title>
+  <style>
+    body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0; padding: 10px; font-size: 13px; color: #1f2937; }
+    h1 { font-size: 14px; margin: 0 0 8px; color: #4c1d95; }
+    .row { margin: 6px 0; }
+    .label { color: #6b7280; font-size: 12px; }
+    textarea { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 6px; padding: 6px; font-size: 13px; min-height: 64px; }
+    button { border: 1px solid #d1d5db; background: #fff; border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
+    button.primary { background: #6d28d9; border-color: #6d28d9; color: #fff; }
+    button.danger { color: #dc2626; }
+    .msg { border-radius: 8px; padding: 8px; margin: 6px 0; font-size: 12px; line-height: 1.5; }
+    .msg.user { background: #ede9fe; }
+    .msg.assistant { background: #f5f3ff; }
+    .hint { color: #6b7280; font-size: 11px; line-height: 1.5; }
+    #state { font-size: 12px; }
+    .ok { color: #16a34a; } .bad { color: #dc2626; }
+  </style>
+</head>
+<body>
+  <h1>OPS 侧边对话</h1>
+  <div class="row"><span class="label">桥状态</span> <span id="state">检查中…</span></div>
+  <div class="row"><span class="label">当前标签</span> <span id="tab">未选中</span></div>
+  <div id="messages"></div>
+  <div class="row">
+    <textarea id="input" placeholder="向 OPS 发送当前页面相关的问题…（回车发送）"></textarea>
+  </div>
+  <div class="row">
+    <button class="primary" id="send">发送</button>
+    <button id="open-ops">在 OPS 中打开</button>
+    <button class="danger" id="stop">停止任务</button>
+  </div>
+  <p class="hint">侧栏只生成输入草稿与展示状态；业务操作卡片仍在 OPS 主界面逐张执行（无双执行入口）。发送前需在 OPS 桌面端完成配对。</p>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

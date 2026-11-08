@@ -286,6 +286,11 @@ func (s *Server) patchVoiceSession(w http.ResponseWriter, r *http.Request) error
 	if tag.RowsAffected() == 0 {
 		return apiErr(409, "voice_session_state_conflict", "会话状态不支持该操作")
 	}
+	// W10：结束语音的通知（27 §11.4.3：结束语音≠停止任务；只含状态级摘要）。
+	if body.State == "ended" {
+		s.notify(r.Context(), id.WorkspaceID, id.UserID, "agent_voice", "语音会话已结束",
+			"本次语音输入/实时会话已正常结束", "/agent?conversation=" + sessionID.String(), "voice:ended:" + sessionID.String())
+	}
 	return ok(w, map[string]any{"state": body.State})
 }
 
