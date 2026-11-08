@@ -16,6 +16,7 @@ import { BrowserTabSelector } from './agent/BrowserTabSelector'
 import { InBrowsePanel } from './agent/InBrowsePanel'
 import { VoiceBar } from './agent/VoiceBar'
 import { DelegationPanel } from './agent/DelegationPanel'
+import { SourcePanel } from './agent/SourcePanel'
 import { MemoryCandidateCard } from './agent/MemoryCandidateCard'
 import { PanelResizer, PANEL_WIDTH_DEFAULT } from './agent/PanelResizer'
 import { ApiError, del, errorMessage, get, patch, post, stream, uploadFormData } from '@/lib/api'
@@ -608,7 +609,14 @@ function WorkbenchSidePanel({
         {!!latestSkillUsage?.length && <section className="mt-4"><h4 className="text-xs font-semibold text-mist-600">本轮技能状态</h4><ul className="mt-1 space-y-1 text-xs text-mist-600">{latestSkillUsage.map((item) => <li key={item.id}>{item.loaded ? '已加载到模型上下文；实际使用未验证' : '已请求，未加载'} · {item.name}</li>)}</ul></section>}
         <p className="desktop-agent-side-note">选择、启用和加载是不同状态。只有 load_skill 成功回执才显示已加载；当前无法从模型调用回执确认是否遵循了技能指令。</p>
       </section>}
-      {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading"><h3 id="workbench-artifact-heading">产物</h3><ArtifactPanel conversationID={conversation?.id} compact onQuote={onQuoteArtifact} /></section>}
+      {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading" className="flex h-full flex-col">
+        <h3 id="workbench-artifact-heading">产物</h3>
+        <div className="min-h-0 flex-1 overflow-y-auto"><ArtifactPanel conversationID={conversation?.id} compact onQuote={onQuoteArtifact} /></div>
+        {/* DEV-AI27-09（W09b）：来源子页（证据可回查+批注记录）。 */}
+        <div className="max-h-[45%] shrink-0 overflow-y-auto border-t border-mist-200 pt-3">
+          {conversation && <SourcePanel conversationId={conversation.id} />}
+        </div>
+      </section>}
       {tab === 'browser' && <section aria-labelledby="workbench-browser-heading" className="flex h-full flex-col">
         <h3 id="workbench-browser-heading">浏览器</h3>
         <div className="min-h-0 flex-1 overflow-y-auto">
