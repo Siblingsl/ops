@@ -101,3 +101,23 @@ func TestW06AIT27BrowserToolsInDiscussMode(t *testing.T) {
 		}
 	}
 }
+
+// T-AI27-21A（27 §8.6）：goal 来源的浏览器 R 类工具可见性。
+// 讨论/计划模式浏览器 toolR 可用（27 §8.6 表格行讨论/计划）；goal 同样可用（C03）；
+// routine 不允许（表格行"routine 浏览工具一律不进入"——agentRoutineToolAllowed 白名单未含即拒绝）。
+func TestW06GoalOriginBrowserToolsAllowed(t *testing.T) {
+	catalog := agentCatalog()
+	browserRTools := 0
+	for _, tool := range catalog {
+		if tool.Domain == "browser" && tool.Kind == toolR {
+			browserRTools++
+		}
+	}
+	if browserRTools == 0 {
+		t.Fatal("浏览器 R 类工具未在目录中")
+	}
+	// routine 来源由 agentRoutineToolAllowed 白名单控制——浏览器工具不在白名单即自动拒绝（结构断言）。
+	if agentRoutineReadTools["browser_observe"] {
+		t.Fatal("例行任务白名单不应含浏览器工具（27 §8.6 routine 行）")
+	}
+}

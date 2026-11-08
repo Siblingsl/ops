@@ -68,7 +68,16 @@ func agentRunToolAllowed(st *agentRunState, tool *AgentTool, id *identity) bool 
 		}
 	}
 	if mode != "execute" {
-		return (mode == "discuss" || mode == "plan") && tool.Kind == toolR
+		// T-AI27-21A（27 §8.6）：讨论/计划模式可研究网页——浏览器 R 类工具（Domain=browser）
+		// 在讨论/计划/goal 可用（有 grant 才行，由工具 dispatch 层的租约校验保证）。
+		if (mode == "discuss" || mode == "plan") && tool.Kind == toolR {
+			return true
+		}
+		return false
+	}
+	// goal 来源：浏览器 R 类同样可用（C03 裁决：讨论/计划/goal 均可查网页）。
+	if st.ExecutionOrigin == "goal" && tool.Kind == toolR && tool.Domain == "browser" {
+		return true
 	}
 	return true
 }
