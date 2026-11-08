@@ -87,6 +87,15 @@ func (s *Server) listPersonalMemories(w http.ResponseWriter, r *http.Request) er
 	default:
 		return apiErr(422, "validation_failed", "未知状态筛选")
 	}
+	// DEV-AI27-13b：按来源会话过滤（候选卡在消息流中按会话展示）。
+	if srcConv := r.URL.Query().Get("source_conversation_id"); srcConv != "" {
+		srcID, err := uuid.Parse(srcConv)
+		if err != nil {
+			return apiErr(422, "validation_failed", "source_conversation_id 必须是 UUID")
+		}
+		args = append(args, srcID)
+		query += ` AND source_conversation_id=$` + strconv.Itoa(len(args))
+	}
 	query += ` ORDER BY updated_at DESC LIMIT 200`
 	rows, err := s.db.Query(r.Context(), query, args...)
 	if err != nil {

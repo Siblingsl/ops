@@ -13,6 +13,7 @@ import { Button, cn, IconButton, Input, Notice, Select, Textarea } from '@/compo
 import { AddMenu } from './agent/AddMenu'
 import { BrowserStatusBlock, useBrowserConnectState } from './agent/BrowserStatusBlock'
 import { BrowserTabSelector } from './agent/BrowserTabSelector'
+import { MemoryCandidateCard } from './agent/MemoryCandidateCard'
 import { PanelResizer, PANEL_WIDTH_DEFAULT } from './agent/PanelResizer'
 import { ApiError, del, errorMessage, get, patch, post, stream, uploadFormData } from '@/lib/api'
 import { assetUrl } from '@/lib/api-base'
@@ -667,6 +668,7 @@ export default function Agent() {
   const [olderMessages, setOlderMessages] = useState<AgentMessage[]>([])
   const [pendingJump, setPendingJump] = useState<{ conversationID: string; seq: number } | null>(null)
   const [manualUnreadSuppressedID, setManualUnreadSuppressedID] = useState('')
+
   const olderLoadingRef = useRef(false)
   const manualScrollRef = useRef(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -681,6 +683,7 @@ export default function Agent() {
     for (const controller of uploadControllers.current.values()) controller.abort()
     uploadControllers.current.clear()
   }, [])
+
   const messageRequest = useRef<{ key: string; id: string } | null>(null)
   const inputRequest = useRef<{ key: string; id: string } | null>(null)
   const resumeInputRequest = useRef<string | null>(null)
@@ -791,6 +794,45 @@ export default function Agent() {
     return latest
   }, [messages, actionRunIDs])
   const busy = submitting || streaming || !!activeRun
+  // DEV-AI27-13b：消息流候选记忆（run 结束后展示，确认后才注入后续对话）
+  const [memoryCandidates, setMemoryCandidates] = useState<Array<{ id: string; text: string; state: string; revision: number }>>([])
+  useEffect(() => {
+    if (busy || !conversationId || !bootstrapData?.features?.personal_memories) {
+      setMemoryCandidates([])
+      return
+    }
+    const controller = new AbortController()
+    void fetch(`/api/v1/agent/personal-memories?state=candidate&source_conversation_id=${conversationId}`, {
+      credentials: 'same-origin', signal: controller.signal,
+    }).then((res) => res.ok ? res.json() : null).then((data) => {
+      if (data?.memories) setMemoryCandidates(data.memories)
+    }).catch(() => {})
+    return () => controller.abort()
+  }, [busy, conversationId, bootstrapData?.features?.personal_memories])
+  const memoryCandidateHandlers = {
+    busy,
+    onConfirm: (id: string, revision: number) => {
+      void fetch(`/api/v1/agent/personal-memories/${id}`, {
+        method: 'PATCH', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'confirm', expected_revision: revision }),
+      }).then(() => setMemoryCandidates((old) => old.filter((c) => c.id !== id)))
+    },
+    onEdit: (id: string, text: string, revision: number) => {
+      void fetch(`/api/v1/agent/personal-memories/${id}`, {
+        method: 'PATCH', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'edit', text, expected_revision: revision }),
+      }).then(() => setMemoryCandidates((old) => old.filter((c) => c.id !== id)))
+    },
+    onIgnore: (id: string, revision: number) => {
+      void fetch(`/api/v1/agent/personal-memories/${id}`, {
+        method: 'PATCH', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'ignore', expected_revision: revision }),
+      }).then(() => setMemoryCandidates((old) => old.filter((c) => c.id !== id)))
+    },
+  }
   // 有待办澄清问题时，服务端已把这次运行挂起（active_run 为 null），但客户端的事件流可能还没收尾，
   // busy 会一直是真。这种状态下必须允许用户发新消息替代问题，否则只能先回答或先停止。
   // 判据用 active_run + 在途提交，而不是等整轮流收尾：流什么时候关闭取决于服务端挂起策略，
@@ -1921,6 +1963,8 @@ export default function Agent() {
             </div>
             <div ref={bottomRef} className="h-px" />
           </div>
+          {/* DEV-AI27-13b：消息流末尾候选记忆卡片（确认/修改/忽略逐项操作） */}
+          {!busy && memoryCandidates.length > 0 && <MemoryCandidateCard candidates={memoryCandidates} {...memoryCandidateHandlers} />}
 
           <div className={`shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4 ${desktopPresentation ? 'desktop-agent-compose-area' : ''} ${workbenchUI ? 'desktop-agent-workbench-compose-area' : ''}`}>
             {(!desktopPresentation || !visibleRunID && (workbenchUI || !!streamError)) && <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === activeRun?.id).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
