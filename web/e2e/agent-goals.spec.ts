@@ -19,7 +19,9 @@ async function api(page: Page, method: string, path: string, body?: unknown) {
 
 async function assertGoalBudgetRecovery(page: Page, panel: ReturnType<Page['getByRole']>, conversationID: string) {
   const started = performance.now()
-  const desktopLayout = await page.locator('.desktop-agent-workbench').count() > 0
+  // W11：布局探测改用桌面专用的工作视图开合按钮（Web 窄布局不渲染该按钮），
+  // 不再引用桌面 testid（web-e2e-boundary 守卫）。
+  const desktopLayout = await page.getByRole('button', { name: '工作视图', exact: true }).count() > 0
   const openPanel = async () => {
     if (!desktopLayout && await panel.count() === 0) await page.getByRole('button', { name: '任务目标与上下文整理' }).last().click()
   }
