@@ -70,3 +70,80 @@ test('W17 worker: 未知命令拒绝', { timeout: 20_000 }, async (t) => {
   assert.equal(result.ok, false);
   assert.equal(result.error, 'unknown_cmd');
 });
+
+// ---------------------------------------------------------------------------
+// DEV-AI27-17 W17c：UIA 动作执行（真实 Windows 应用旅程——C01/C03/C05 子集）。
+// 依赖本机记事本（notepad）；Windows 11 可能用 Notepad.exe（Store 版）UIA 兼容。
+// 旅程：启动记事本 → UIA 读控件树 → SetValue 输入文本 → 读回验证 → 关闭不保存。
+// ---------------------------------------------------------------------------
+
+const { execFile: execFile2, spawn } = require('node:child_process');
+const { readUIAFromWorker, invokeUIAOnWorker } = (() => {
+  // 用与 worker 相同的 PowerShell UIA 桥（直测桥函数；worker 侧已覆盖命令路由）。
+  // 直接 spawn notepad + UIA 读取。
+  return { readUIAFromWorker: null, invokeUIAOnWorker: null };
+})();
+
+function psScript(script, timeoutMs = 20_000) {
+  return new Promise((resolve, reject) => {
+    execFile2('powershell', ['-NoProfile', '-NonInteractive', '-Command', script],
+      { timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 },
+      (err, stdout) => { if (err) reject(err); else resolve(stdout); });
+  });
+}
+
+test('W17c UIA: 真实记事本读控件树 + SetValue 输入 + 读回验证（C01/C03/C05 子集）', { timeout: 60_000 }, async (t) => {
+  if (process.platform !== 'win32') t.skip('需要 Windows');
+  // ZCode agent 会话（Session 0 隔离）：GUI 应用从此环境启动即退出——用 desktop/scripts/uia-notepad-manual.ps1 人工验证。
+  t.skip('GUI 旅程需用户桌面会话人工执行（脚本 desktop/scripts/uia-notepad-manual.ps1）');
+  // 1. 启动记事本（独立进程）
+  const notepad = spawn('notepad', [], { stdio: 'ignore' });
+  t.after(() => { try { notepad.kill(); } catch {} });
+  // 等 UIA 就绪
+  await new Promise((r) => setTimeout(r, 2500));
+
+  // 2. 找到记事本 PID
+  const pidOut = await psScript(
+    "(Get-Process notepad -ErrorAction SilentlyContinue | Select-Object -First 1).Id");
+  const pid = Number(String(pidOut).trim());
+  if (!Number.isInteger(pid) || pid <= 0) { t.skip('记事本不可用（Windows 11 Store 版路径差异）'); return; }
+
+  // 3. UIA 读控件树：应包含编辑区（Edit 控件）
+  const treeOut = await psScript(`
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$proc = Get-Process -Id ${pid} -ErrorAction Stop
+$root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+$edit = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+  New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Edit))
+if (-not $edit) { Write-Output 'NOEDIT'; exit }
+$vp = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+$vp.SetValue('W17c-UIA-TEST-INPUT')
+Write-Output 'SETVALUE-OK'
+`);
+  const tree = String(treeOut).trim();
+  if (tree === 'NOEDIT') { t.skip('记事本无 Edit 控件（Store 版差异）'); return; }
+  assert.ok(tree.includes('SETVALUE-OK'), `SetValue 应成功：${tree}`);
+
+  // 4. 读回验证（C03 观察变化：SetValue 后 value 真实变化）
+  const readBack = await psScript(`
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$proc = Get-Process -Id ${pid} -ErrorAction Stop
+$root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+$edit = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+  New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Edit))
+$vp = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+Write-Output $vp.Current.Value
+`);
+  assert.ok(String(readBack).includes('W17c-UIA-TEST-INPUT'), `读回应包含写入文本：${readBack}`);
+
+  // 5. 清理：关闭记事本（不保存——记事本无改动保存对话框，kill 即可）
+  notepad.kill();
+});
