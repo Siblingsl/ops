@@ -97,6 +97,7 @@ export default defineConfig({
       name: 'desktop-windows-electron',
       testMatch: [
         'agent-workbench-ai27-workview.spec.ts',
+        'inbrowse-real-electron.spec.ts',
         'desktop-window-drag.spec.ts', 'platform-intents-real-electron.local.spec.ts',
         'skills-electron.spec.ts', 'toutiao-electron.spec.ts',
         'cx13-account-analysis.spec.ts', 'cx01-render-check.spec.ts', 'cx01-shared-fixtures.spec.ts',

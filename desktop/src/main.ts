@@ -21,7 +21,7 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { startBrowserBridgeDiagnostics } from './browser-bridge';
-import { bindInBrowseController, type InBrowseViewController } from './in-browse';
+import { bindInBrowseController, inBrowseAttachAfterOverlay, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
 
 // 补上非 EPIPE 未捕获异常的展示（防护本身已在 import 时装好）。
 installBrokenPipeGuard((error) => {
@@ -3220,6 +3220,8 @@ function applyDesktopUiIntent(window: BrowserWindow, intent: DesktopUiIntent): v
   }
 
   if (intent.type === 'settings-pane') {
+    // DEV-AI27-08（W08c）：原生设置浮层出现前隐藏内置浏览视图（27 §5.6 层级规则）。
+    inBrowseDetachForOverlay(window, 'settings');
     showLocalSettingsView(window, intent.panel);
     return;
   }
@@ -3237,6 +3239,8 @@ function applyDesktopUiIntent(window: BrowserWindow, intent: DesktopUiIntent): v
       pendingPlatformLoginTarget = null;
       void platformLoginFlow.stop();
     }
+    // DEV-AI27-08（W08c）：设置浮层关闭后恢复内置浏览视图并重核目标（27 §5.6）。
+    inBrowseAttachAfterOverlay(window);
     return;
   }
 
