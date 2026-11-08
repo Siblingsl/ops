@@ -100,6 +100,8 @@ function main() {
   console.log(`  注册表         : ${registryKey}`);
   console.log(`  node           : ${nodeExe}`);
   console.log('后续：Chrome → chrome://extensions → 开发者模式 → 加载已解压的扩展程序 → 选择上述扩展目录。');
+console.log('W12 说明：打包安装后，host manifest 路径应指向安装目录内脚本（--packaged 参数将由安装器传入）；'
+  + '当前注册为本机开发路径，卸载用 --unregister。');
 }
 
 main();
