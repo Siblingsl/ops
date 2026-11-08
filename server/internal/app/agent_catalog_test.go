@@ -246,6 +246,11 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/tools/subagent/delegations/{id}/cancel",
 		"GET /api/v1/tools/computer/grants",
 		"POST /api/v1/tools/computer/grants/{id}/handoff",
+		// DEV-AI27-09（W09）浏览器证据与页面批注。
+		"POST /api/v1/agent/browser/evidence",
+		"GET /api/v1/agent/browser/evidence",
+		"POST /api/v1/agent/browser/annotations",
+		"GET /api/v1/agent/browser/annotations",
 		// DEV-AI27-14（W14）插件/MCP：本人管理页与 run 工具调用共用。
 		"GET /api/v1/agent/plugin-connections",
 		"POST /api/v1/agent/plugin-connections",

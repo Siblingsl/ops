@@ -1880,6 +1880,11 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/tools/subagent/delegations/{id}/cancel", s.h(s.cancelDelegation))
 		r.Get("/tools/computer/grants", s.h(s.listComputerGrants))
 		r.Post("/tools/computer/grants/{id}/handoff", s.h(s.handoffComputerGrant))
+		// DEV-AI27-09（W09）：浏览器证据与页面批注（27 §10.1/§13.2）。
+		r.Post("/agent/browser/evidence", s.h(s.createBrowserEvidence))
+		r.Get("/agent/browser/evidence", s.h(s.listBrowserEvidence))
+		r.Post("/agent/browser/annotations", s.h(s.createBrowserAnnotation))
+		r.Get("/agent/browser/annotations", s.h(s.listBrowserAnnotations))
 		// DEV-AI27-14（W14）：插件/MCP 连接注册与调用回执（27 §11.2）。
 		r.Get("/agent/plugin-connections", s.h(s.listPluginConnections))
 		r.Post("/agent/plugin-connections", s.h(s.createPluginConnection))
