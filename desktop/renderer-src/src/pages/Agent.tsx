@@ -12,6 +12,7 @@ import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Button, cn, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
 import { AddMenu } from './agent/AddMenu'
 import { BrowserStatusBlock, useBrowserConnectState } from './agent/BrowserStatusBlock'
+import { BrowserTabSelector } from './agent/BrowserTabSelector'
 import { PanelResizer, PANEL_WIDTH_DEFAULT } from './agent/PanelResizer'
 import { ApiError, del, errorMessage, get, patch, post, stream, uploadFormData } from '@/lib/api'
 import { assetUrl } from '@/lib/api-base'
@@ -602,7 +603,7 @@ function WorkbenchSidePanel({
         <p className="desktop-agent-side-note">选择、启用和加载是不同状态。只有 load_skill 成功回执才显示已加载；当前无法从模型调用回执确认是否遵循了技能指令。</p>
       </section>}
       {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading"><h3 id="workbench-artifact-heading">产物</h3><ArtifactPanel conversationID={conversation?.id} compact onQuote={onQuoteArtifact} /></section>}
-      {tab === 'browser' && <section aria-labelledby="workbench-browser-heading"><h3 id="workbench-browser-heading">浏览器</h3><BrowserStatusBlock state={browserConnectState} /></section>}
+      {tab === 'browser' && <section aria-labelledby="workbench-browser-heading"><h3 id="workbench-browser-heading">浏览器</h3><BrowserStatusBlock state={browserConnectState} />{browserConnectState.kind === 'paired' && <BrowserTabSelector bindings={browserConnectState.bindings} onTabSelected={(selected) => { void selected }} />}</section>}
     </div>
   </aside>
 }
@@ -1945,6 +1946,7 @@ export default function Agent() {
               </div>)}
             </div>}
             {bootstrapData.features.document_parse && <p className="mx-auto mb-1 max-w-3xl text-xs text-mist-500">PDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。</p>}
+            
             <input ref={fileRef} type="file" multiple accept={'image/jpeg,image/png,image/webp,image/gif,.txt,.md' + (bootstrapData.features.document_parse ? ',.pdf,.docx,.csv' : '')} className="hidden" onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = '' }} />
             {desktopPresentation ? <>
               <div className={`desktop-agent-compose ${workbenchUI ? 'desktop-agent-workbench-compose' : ''}`}>
