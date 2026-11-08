@@ -42,7 +42,9 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'onInBrowseSnapshot',
     'onLocalSettingsState',
     'onOpenSettings',
-    'onPlatformIntentResult'
+    'onPlatformIntentResult',
+    'onSidepanelDraft',
+    'onSidepanelStop'
   ]);
   // DEV-AI27-08（W08）：内置浏览意图白名单桥随 captureLongImage 一并暴露。
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')), ['captureLongImage', 'invokeInBrowse']);

@@ -211,5 +211,16 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
     const wrapped = (_event: unknown, snapshot: unknown) => listener(snapshot);
     ipcRenderer.on('desktop-ui:inbrowse-snapshot', wrapped);
     return () => { ipcRenderer.removeListener('desktop-ui:inbrowse-snapshot', wrapped); };
+  },
+  // DEV-AI27-10（W10b）：侧栏草稿/停止事件（主进程桥转发）。
+  onSidepanelDraft(listener: (draft: { text: string }) => void) {
+    const wrapped = (_event: unknown, draft: unknown) => listener(draft as { text: string });
+    ipcRenderer.on('desktop-ui:sidepanel-draft', wrapped);
+    return () => { ipcRenderer.removeListener('desktop-ui:sidepanel-draft', wrapped); };
+  },
+  onSidepanelStop(listener: () => void) {
+    const wrapped = () => listener();
+    ipcRenderer.on('desktop-ui:sidepanel-stop', wrapped);
+    return () => { ipcRenderer.removeListener('desktop-ui:sidepanel-stop', wrapped); };
   }
 });

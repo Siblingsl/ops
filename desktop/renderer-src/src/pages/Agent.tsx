@@ -646,6 +646,28 @@ export default function Agent() {
   const [artifactsOpen, setArtifactsOpen] = useState(false)
   const [workbenchLayoutLoadedKey, setWorkbenchLayoutLoadedKey] = useState('')
   const [text, setText] = useState('')
+  // DEV-AI27-10（W10b）：Chrome 侧栏草稿填入输入台待用户发送；停止与主界面同语义。
+  useEffect(() => {
+    if (!desktopPresentation) return
+    const bridge = (window as unknown as {
+      opsDesktopUI?: {
+        onSidepanelDraft?: (cb: (draft: { text: string }) => void) => () => void
+        onSidepanelStop?: (cb: () => void) => () => void
+      }
+    }).opsDesktopUI
+    if (!bridge?.onSidepanelDraft) return
+    const offDraft = bridge.onSidepanelDraft((draft) => {
+      if (draft.text) setText((old) => (old ? `${old}
+${draft.text}` : draft.text))
+      toast.info('侧栏草稿已填入输入框；确认后发送。')
+      window.setTimeout(() => inputRef.current?.focus(), 0)
+    })
+    const offStop = bridge.onSidepanelStop?.(() => {
+      void stop()
+    }) ?? (() => {})
+    return () => { offDraft(); offStop() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desktopPresentation])
   const textDraftVersionRef = useRef(0)
   const [pendingUserMessages, setPendingUserMessages] = useState<PendingAgentMessage[]>([])
   const [files, setFiles] = useState<DraftAttachment[]>([])

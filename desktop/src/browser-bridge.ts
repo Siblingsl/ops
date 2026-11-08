@@ -414,6 +414,31 @@ export class BrowserBridge {
     }
     if (msg.type === 'error') {
       this.emit('log', `host/extension error: ${JSON.stringify(msg.payload ?? null)}`);
+      return;
+    }
+    // DEV-AI27-10（W10b）：侧栏草稿→原会话（27 §10.2：真实受理在 OPS 业务窗；
+    // 桥只做深链转发到渲染器，由渲染器将草稿填入输入台待用户发送——无双执行入口）。
+    if (msg.type === 'ping' && msg.payload && typeof msg.payload === 'object') {
+      const p = msg.payload as { sidepanel?: string; text?: string };
+      if (p.sidepanel === 'draft' && typeof p.text === 'string' && p.text.trim()) {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed() && win.webContents.getURL().includes(businessUrlHint())) {
+            win.webContents.send('desktop-ui:sidepanel-draft', { text: p.text.slice(0, 2000) });
+            this.emit('log', `sidepanel draft forwarded (${p.text.length} chars)`);
+            break;
+          }
+        }
+      } else if (p.sidepanel === 'stop') {
+        // 停止任务：转发业务窗（渲染器调用既有 run cancel API——与主界面停止同语义）。
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed() && win.webContents.getURL().includes(businessUrlHint())) {
+            win.webContents.send('desktop-ui:sidepanel-stop');
+            this.emit('log', 'sidepanel stop forwarded');
+            break;
+          }
+        }
+      }
+      // 其他 ping（focus_ops 等）忽略。
     }
   }
 
@@ -555,6 +580,11 @@ export class BrowserBridge {
 // ---------------------------------------------------------------------------
 
 let activeBridge: BrowserBridge | null = null;
+
+/** 业务窗 URL 提示串（5173 开发/生产 origin 都覆盖；与 main.ts businessOrigin 对齐）。 */
+function businessUrlHint(): string {
+  return process.env.OPS_DESKTOP_DEV_URL ? 'localhost' : 'ops-desktop';
+}
 
 export function getActiveBridge(): BrowserBridge | null {
   return activeBridge;

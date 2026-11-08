@@ -58,6 +58,9 @@ declare global {
       // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道）。
       invokeInBrowse(channel: string, payload?: unknown): Promise<unknown>
       onInBrowseSnapshot(listener: (snapshot: { bounds: { x: number; y: number; width: number; height: number } | null; url: string; title: string; loading: boolean; navigationGeneration: number }) => void): () => void
+      // DEV-AI27-10（W10b）：侧栏草稿/停止事件（主进程桥转发）。
+      onSidepanelDraft(listener: (draft: { text: string }) => void): () => void
+      onSidepanelStop(listener: () => void): () => void
     }
   }
 }
