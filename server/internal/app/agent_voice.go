@@ -434,7 +434,8 @@ func fmtInt(n int) string {
 }
 
 // PATCH /agent/voice-sessions/{id}：打断（interrupted）或结束（ended）。
-func (s *Server) patchVoiceSession(w http.ResponseWriter, r *http.Request) error {	id := ident(r.Context())
+func (s *Server) patchVoiceSession(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
 	if err := s.voiceGuard(id); err != nil {
 		return err
 	}
