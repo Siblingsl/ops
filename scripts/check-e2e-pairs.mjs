@@ -56,6 +56,10 @@ const ALLOWLIST = new Map([
   ['skills-boundaries.spec.ts', '技能边界：浏览器有编辑弹窗，桌面只有浏览器入口'],
   ['toutiao-completion.spec.ts', '头条完成度：浏览器 vs 桌面内嵌步骤流'],
   ['toutiao-ui.spec.ts', '头条编辑器：浏览器 vs 桌面 presentation'],
+  // 下面两对是依赖升级的回归验收：两端各自跑同一套升级断言，桌面文件头已注明"对应 web/e2e/…"。
+  // 2026-11-09 补登记：两者一直存在且都在 desktop 的 sharedScenarios 里，只是漏进本表，导致 CI 长期红。
+  ['sec-rr7-navigation.spec.ts', 'react-router 6→7 升级回归：浏览器 vs 桌面渲染进程'],
+  ['sec-tiptap3-bubble-menu.spec.ts', '@tiptap 2→3 气泡菜单回归：浏览器 vs 桌面渲染进程'],
 ])
 
 function specNames(dir) {
