@@ -35,6 +35,11 @@ services:
       OPS_DB_MAX_CONNS: ${OPS_DB_MAX_CONNS:-20}
       OPS_DATABASE_URL: postgres://ops:${POSTGRES_PASSWORD}@postgres:5432/ops?sslmode=disable
       OPS_DOCUMENT_PARSER_SOCKETS: /run/ops-parser-a/parser.sock,/run/ops-parser-b/parser.sock
+      # 可信反代网段。生产是 宿主机 Nginx -> 127.0.0.1:44537 -> 容器 8080，
+      # 容器内看到的直连对端是 Docker 网关（默认落在 172.16.0.0/12）。
+      # 只有直连对端在这个网段内才采信 X-Forwarded-For；不配则一律用对端地址，
+      # 审计日志里的 IP 会变成网关地址（安全但不好读）。改端口映射方式后需同步调整。
+      OPS_TRUSTED_PROXIES: ${OPS_TRUSTED_PROXIES:-172.16.0.0/12}
     ports:
       # 宿主机映射端口可改；容器内仍监听 8080
       - "127.0.0.1:44537:8080"

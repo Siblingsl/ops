@@ -134,7 +134,11 @@ func (s *Server) Router() http.Handler {
 
 func (s *Server) buildRouter() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP)
+	// 不要在这里加 middleware.RealIP：它会无条件把 r.RemoteAddr 改写成
+	// X-Forwarded-For 的第一段，而 Nginx 的 `$proxy_add_x_forwarded_for` 是把客户端
+	// 自带的伪造值保留在最前面、真实来源追加在最后。一旦改写发生，
+	// clientIP() 读到的「对端地址」已经是攻击者可控的值，可信代理判断随之失效，
+	// 审计日志与 session.ip 也会被污染。客户端地址统一由 clientIP() 解析。
 	r.Use(middleware.RequestID)
 	// D-153：跨源前端白名单必须在身份与业务中间件之前，预检才能直接应答。
 	r.Use(s.cors)

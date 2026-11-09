@@ -176,16 +176,7 @@ func queryText(r *http.Request, name string) string {
 
 func runeLen(s string) int { return len([]rune(s)) }
 
-func clientIP(r *http.Request) string {
-	if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
-		return strings.TrimSpace(strings.Split(xf, ",")[0])
-	}
-	host := r.RemoteAddr
-	if i := strings.LastIndex(host, ":"); i > 0 {
-		host = host[:i]
-	}
-	return strings.Trim(host, "[]")
-}
+// clientIP 见 client_ip.go：只有直连对端是配置好的可信代理时才采信 X-Forwarded-For。
 
 // SSE writer for AI streaming and push progress.
 type sseWriter struct {
