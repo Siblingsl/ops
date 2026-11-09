@@ -58,7 +58,13 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 		return truncate(strings.ReplaceAll(err.Error(), key, "****"), 300)
 	}
 	run := func(key, label string, fn func(ctx context.Context) (string, error)) {
-		pctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		// 探针超时随 OPS_FIRST_TOKEN_TIMEOUT 放宽（默认 25s 不变）：慢网关（reasoning
+		// 模型首 token 常超 15s）下 25s 会把可用的 chat/tools 误判为不可用（2026-11-10）。
+		probeTimeout := 25 * time.Second
+		if s.firstTokenTimeout > probeTimeout {
+			probeTimeout = s.firstTokenTimeout + 10*time.Second
+		}
+		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 		defer cancel()
 		start := time.Now()
 		detail, perr := fn(pctx)

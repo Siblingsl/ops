@@ -85,6 +85,10 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	firstTokenTimeout, err := serverFirstTokenTimeoutFromEnv()
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
 		cfg:    cfg,
 		db:     pool,
@@ -94,7 +98,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 		loc:    loc,
 		aiHTTP: &http.Client{Timeout: 5 * time.Minute},
 
-		firstTokenTimeout:          15 * time.Second,
+		firstTokenTimeout:          firstTokenTimeout,
 		desktopFirstContentTimeout: desktopFirstContentTimeout,
 		aiQueueTimeout:             time.Minute,
 		providerCircuits:           map[uuid.UUID]*providerCircuit{},

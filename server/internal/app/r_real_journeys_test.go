@@ -92,6 +92,29 @@ func seedRRealProvider(t *testing.T, cfg rRealProviderConfig) string {
 		ws, rRealProviderName, cfg.BaseURL, enc, env.srv.box.Version, []string{cfg.Model}).Scan(&id); err != nil {
 		t.Fatalf("写入真实供应商失败：%v", err)
 	}
+	// 自检（与页面「自检」按钮同路径）：真实模型的 tools_ok 必须先落库，
+	// 否则 resolveAgentModel 422 agent_model_unsupported，旅程必失败（2026-11-10 修复）。
+	// 断言只要求 tools 项通过（R 旅程的硬条件）；image/search 等项不支持时如实记录不阻断——
+	// 供应商能力边界不是旅程缺陷，但会写进证据（runThreeTimes 的 §9.7 校验兜底）。
+	var selftestBody struct {
+		OK      bool `json:"ok"`
+		Results []struct {
+			Key    string `json:"key"`
+			OK     bool   `json:"ok"`
+			Detail string `json:"detail"`
+		} `json:"results"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/model-providers/"+id.String()+"/selftest",
+		map[string]any{"model": cfg.Model}, &selftestBody)
+	toolsOK := false
+	for _, p := range selftestBody.Results {
+		if p.Key == "tools" {
+			toolsOK = p.OK
+		}
+	}
+	if !toolsOK {
+		t.Fatalf("真实模型工具调用自检未通过（R 旅程硬条件）：%+v", selftestBody.Results)
+	}
 	if _, err := env.srv.db.Exec(ctx,
 		`INSERT INTO model_route (workspace_id, task_type, provider_id, model, execution_location)
 		 VALUES ($1,'agent_chat',$2,$3,'server')
