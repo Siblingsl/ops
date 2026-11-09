@@ -69,6 +69,7 @@ const sharedScenarios = [
   'skills-boundaries.spec.ts',
   'toutiao-completion.spec.ts',
   'sec-rr7-navigation.spec.ts',
+  'sec-tiptap3-bubble-menu.spec.ts',
 ]
 
 const apiFeatures = 'workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines,document_parse,chrome_connect,browser_workspace,plugin_mcp'

@@ -1,7 +1,8 @@
 import Image from '@tiptap/extension-image'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
-import { BubbleMenu, EditorContent, useEditor } from '@tiptap/react'
+import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
+import { BubbleMenu } from '@tiptap/react/menus'
 import type { EditorView } from '@tiptap/pm/view'
 import StarterKit from '@tiptap/starter-kit'
 import { Bold, Check, Heading3, ImagePlus, Italic, Link2, List, ListOrdered, Quote, Redo2, RotateCcw, Trash2, Undo2 } from 'lucide-react'
@@ -200,7 +201,7 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({ heading: { levels: [3] }, codeBlock: false, code: false, horizontalRule: false }),
+      StarterKit.configure({ heading: { levels: [3] }, codeBlock: false, code: false, horizontalRule: false, link: false }),
       Link.configure({ openOnClick: false, autolink: true }),
       AssetImage,
       Placeholder.configure({ placeholder: placeholder ?? '' }),
@@ -222,10 +223,25 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
       onSelRef.current?.(from === to ? '' : editor.state.doc.textBetween(from, to, '\n'))
     },
   })
+  // v3 起 useEditor 默认 shouldRerenderOnTransaction: false（该选项已标为 legacy），
+  // 事务不再触发组件重渲染；toolbar 的激活态若继续直接读 editor.isActive()，
+  // 会永远停在初始值。这里改成订阅式读取，只在选中结果变化时重渲染。
+  const marks = useEditorState({
+    editor,
+    selector: ({ editor: e }) => ({
+      bold: e?.isActive('bold') ?? false,
+      italic: e?.isActive('italic') ?? false,
+      heading: e?.isActive('heading') ?? false,
+      blockquote: e?.isActive('blockquote') ?? false,
+      bulletList: e?.isActive('bulletList') ?? false,
+      orderedList: e?.isActive('orderedList') ?? false,
+      link: e?.isActive('link') ?? false,
+    }),
+  })
   useEffect(() => {
     if (editor && !editor.isDestroyed) {
       tokenRef.current += 1
-      editor.commands.setContent(value, false)
+      editor.commands.setContent(value, { emitUpdate: false })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey, editor])
@@ -254,7 +270,7 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
     },
     setMarkdown: (md) => {
       tokenRef.current += 1
-      editor?.commands.setContent(md)
+      editor?.commands.setContent(md, { emitUpdate: false })
       if (editor) onChangeRef.current((editor.storage as any).markdown.getMarkdown())
     },
     insertImage: (url) => editor?.chain().focus().setImage({ src: url }).run(),
@@ -283,24 +299,25 @@ export const RichEditor = React.memo(forwardRef<EditorHandle, Props>(function Ri
   return (
     <div>
       <div className={cn('rich-editor-toolbar mb-2 flex items-center gap-0.5 opacity-60 transition group-focus-within/sec:opacity-100', !editable && 'hidden')}>
-          <ToolBtn label="加粗" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()}><Bold className="size-3.5" /></ToolBtn>
-          <ToolBtn label="斜体" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()}><Italic className="size-3.5" /></ToolBtn>
+          <ToolBtn label="加粗" active={marks?.bold} onClick={() => editor.chain().focus().toggleBold().run()}><Bold className="size-3.5" /></ToolBtn>
+          <ToolBtn label="斜体" active={marks?.italic} onClick={() => editor.chain().focus().toggleItalic().run()}><Italic className="size-3.5" /></ToolBtn>
           <span className="rich-toolbar-divider" />
-          <ToolBtn label="小标题" active={editor.isActive('heading')} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}><Heading3 className="size-3.5" /></ToolBtn>
-          <ToolBtn label="引用" active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()}><Quote className="size-3.5" /></ToolBtn>
-          <ToolBtn label="无序列表" active={editor.isActive('bulletList')} onClick={() => editor.chain().focus().toggleBulletList().run()}><List className="size-3.5" /></ToolBtn>
-          <ToolBtn label="有序列表" active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()}><ListOrdered className="size-3.5" /></ToolBtn>
-          <ToolBtn label="链接" active={editor.isActive('link')} onClick={setLink}><Link2 className="size-3.5" /></ToolBtn>
+          <ToolBtn label="小标题" active={marks?.heading} onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}><Heading3 className="size-3.5" /></ToolBtn>
+          <ToolBtn label="引用" active={marks?.blockquote} onClick={() => editor.chain().focus().toggleBlockquote().run()}><Quote className="size-3.5" /></ToolBtn>
+          <ToolBtn label="无序列表" active={marks?.bulletList} onClick={() => editor.chain().focus().toggleBulletList().run()}><List className="size-3.5" /></ToolBtn>
+          <ToolBtn label="有序列表" active={marks?.orderedList} onClick={() => editor.chain().focus().toggleOrderedList().run()}><ListOrdered className="size-3.5" /></ToolBtn>
+          <ToolBtn label="链接" active={marks?.link} onClick={setLink}><Link2 className="size-3.5" /></ToolBtn>
           {onPickImage && <ToolBtn label="插入图片" onClick={onPickImage}><ImagePlus className="size-3.5" /></ToolBtn>}
           <span className="rich-toolbar-divider" />
           <ToolBtn label="撤销" onClick={() => editor.chain().focus().undo().run()}><Undo2 className="size-3.5" /></ToolBtn>
           <ToolBtn label="重做" onClick={() => editor.chain().focus().redo().run()}><Redo2 className="size-3.5" /></ToolBtn>
       </div>
       <EditorContent editor={editor} />
-      {/* BubbleMenu 的节点会被 tippy 移走，必须包在稳定的容器里，否则 React 增删兄弟节点时会报错。 */}
+      {/* v3 起 BubbleMenu 改用 Floating UI 自行定位，不再由 tippy 把节点移走；
+          这里保留一层稳定容器，避免 React 增删兄弟节点时影响编辑器的父级布局。 */}
       <div>
         {bubble && (
-          <BubbleMenu editor={editor} tippyOptions={{ duration: 120, placement: 'top' }}
+          <BubbleMenu editor={editor} options={{ placement: 'top' }} data-testid="editor-bubble-menu"
             shouldShow={({ editor: e, from, to }) => e.isEditable && from !== to && !e.isActive('image')}>
             <div>{bubble}</div>
           </BubbleMenu>
