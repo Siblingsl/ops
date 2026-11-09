@@ -68,6 +68,8 @@ docs/design/desktop-creative/prototype/*
 d155-verification-20261028/
 # E2E 运行时生成的临时校验目录
 tmpverify/
+# 仓库根目录的临时工作区（调试脚本、Vite 桌面缓存、中间 md）；与 desktop/.tmp/ 同理
+/.tmp/
 
 # DEV-AI27-02 W02 浏览器桥：宿主注册生成物（含本机绝对路径）与验证现场
 desktop/src/native-host/com.ops.desktop.bridge.json
