@@ -445,8 +445,10 @@ func TestAG04CatalogShape(t *testing.T) {
 		}
 	}
 	// 附录 A 共287条，加既有元工具及DEV-AW07/AW08/AW09编排元工具11条。
-	if len(agentCatalog()) != 298 {
-		t.Fatalf("目录条目数 %d，期望 298（附录 A 287 条 + 元工具 11 条）", len(agentCatalog()))
+	// DEV-AI27 系列又加 14 条：browser_* 8、subagent 2、computer 2、mcp__list_connections 1、
+	// memory__propose_candidate 1 —— 287 + 11 + 14 = 312。
+	if len(agentCatalog()) != 312 {
+		t.Fatalf("目录条目数 %d，期望 312（附录 A 287 条 + 元工具 11 条 + DEV-AI27 新增 14 条）", len(agentCatalog()))
 	}
 	for _, d := range agentDomains {
 		if counts[d.Name] == 0 {
