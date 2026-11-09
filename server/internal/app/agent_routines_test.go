@@ -50,10 +50,12 @@ func TestAW10RoutinePausesWhenCreatorIsDemotedToViewer(t *testing.T) {
 	member := &guestClient{
 		parent: env, client: &http.Client{Jar: jar, Timeout: time.Minute}, savedC: env.client, savedX: env.csrf,
 	}
+	// 清理里不能用 t.Context()：它在 Cleanup 执行前就被取消，SQL 会直接返回
+	// context canceled，删除等于没做，后续用例就会撞配额上限。
 	t.Cleanup(func() {
 		member.restore(env)
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM session WHERE user_id=$1`, memberID)
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM app_user WHERE id=$1`, memberID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM session WHERE user_id=$1`, memberID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM app_user WHERE id=$1`, memberID)
 	})
 	status, body := member.do(http.MethodPost, "/api/v1/auth/login", map[string]string{
 		"username": memberUsername, "password": testPassword,
@@ -242,8 +244,8 @@ func TestAW10RoutinePausesWhenWorkspaceAgentIsDisabled(t *testing.T) {
 	}
 	notificationLink := "/agent?panel=task&item=" + created.Routine.ID.String()
 	t.Cleanup(func() {
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM notification WHERE link=$1`, notificationLink)
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_routine WHERE id=$1`, created.Routine.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM notification WHERE link=$1`, notificationLink)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM agent_routine WHERE id=$1`, created.Routine.ID)
 	})
 	env.mustJSON(t, http.MethodPut, "/api/v1/agent/settings", map[string]bool{"enabled": false}, nil)
 	if _, body := env.do(http.MethodGet, "/api/v1/agent/routines", nil); !strings.Contains(string(body), `"code":"agent_disabled"`) {
@@ -324,13 +326,13 @@ func TestAW10RoutinePausesWhenSystemUserIsDisabled(t *testing.T) {
 	t.Cleanup(func() {
 		member.restore(env)
 		if notificationLink != "" {
-			_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM notification WHERE link=$1`, notificationLink)
+			_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM notification WHERE link=$1`, notificationLink)
 		}
 		if created.Routine.ID != uuid.Nil {
-			_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_routine WHERE id=$1`, created.Routine.ID)
+			_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM agent_routine WHERE id=$1`, created.Routine.ID)
 		}
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM session WHERE user_id=$1`, memberID)
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM app_user WHERE id=$1`, memberID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM session WHERE user_id=$1`, memberID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM app_user WHERE id=$1`, memberID)
 		if status, body := env.do(http.MethodPost, "/api/v1/auth/login", map[string]string{"username": "owner", "password": testPassword}); status != http.StatusOK {
 			t.Errorf("恢复 owner 会话失败：%d %s", status, body)
 		}
@@ -490,9 +492,9 @@ func TestAW10RoutinePrincipalRechecksServerModelBeforeEveryTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_conversation WHERE id=$1`, conv.ID)
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_routine WHERE id=$1`, created.Routine.ID)
-		_, _ = env.srv.db.Exec(t.Context(), `UPDATE model_capability SET tools_ok=true WHERE provider_id=$1 AND model='mock-writer'`, providerID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM agent_conversation WHERE id=$1`, conv.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM agent_routine WHERE id=$1`, created.Routine.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `UPDATE model_capability SET tools_ok=true WHERE provider_id=$1 AND model='mock-writer'`, providerID)
 	})
 	principal := &agentPrincipal{UserID: userID, WorkspaceID: workspaceID, ConversationID: conv.ID, RunID: runID,
 		RoutineID: created.Routine.ID, RoutineOccurrenceID: occurrenceID}
@@ -545,8 +547,8 @@ func TestAW10ExpiredRoutineRunIsMarkedUnknownAndNeverReplayed(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_conversation WHERE id=$1`, conv.ID)
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_routine WHERE id=$1`, created.Routine.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM agent_conversation WHERE id=$1`, conv.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM agent_routine WHERE id=$1`, created.Routine.ID)
 	})
 	env.srv.recoverAgentRoutineLeases(t.Context())
 	env.srv.runAgentRoutines(t.Context())
@@ -967,7 +969,7 @@ func TestAW10RoutineCreateControlAndReadOnlyRun(t *testing.T) {
 		t.Fatalf("例行任务模型列表应提供已自检服务器模型，got=%+v", list.ServerModels)
 	}
 	t.Cleanup(func() {
-		rows, err := env.srv.db.Query(t.Context(), `SELECT r.conversation_id FROM agent_run r
+		rows, err := env.srv.db.Query(context.Background(), `SELECT r.conversation_id FROM agent_run r
 			JOIN agent_routine_occurrence o ON o.id=r.routine_occurrence_id WHERE o.routine_id=$1`, routineID)
 		var conversations []uuid.UUID
 		if err == nil {
@@ -979,11 +981,11 @@ func TestAW10RoutineCreateControlAndReadOnlyRun(t *testing.T) {
 			}
 			rows.Close()
 		}
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_routine WHERE id=$1`, routineID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM agent_routine WHERE id=$1`, routineID)
 		if len(conversations) > 0 {
-			_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_conversation WHERE id=ANY($1)`, conversations)
+			_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM agent_conversation WHERE id=ANY($1)`, conversations)
 		}
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM platform_account WHERE id=$1`, account.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM platform_account WHERE id=$1`, account.ID)
 	})
 	control := "/api/v1/agent/routines/" + routineID.String() + "/control"
 	var paused struct {

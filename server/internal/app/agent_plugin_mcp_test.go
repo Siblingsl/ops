@@ -154,10 +154,13 @@ func TestW14PluginCallLedgerAndGuards(t *testing.T) {
 
 	// 跨用户不可见、改不动（404）
 	other := env.registerClient(t, "w14-other-"+uuid.NewString()[:8], testPassword)
+	// 本用例最后仍要用 other 的会话发请求，只能延迟恢复；
+	// 早前先在中间 restore 了一次，末尾的 other.mustJSON 又把 env 切回 other 且不再恢复，
+	// 后续用例全部以跨用户身份运行，AG06 的账号/会话接口因此 404。
+	defer other.restore(env)
 	var ome meInfo
 	other.mustJSON(t, "GET", "/api/v1/auth/me", nil, &ome)
 	other.csrf = ome.CSRF
-	other.restore(env)
 	var olist struct {
 		Connections []pluginConnection `json:"connections"`
 	}
