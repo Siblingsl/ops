@@ -94,26 +94,39 @@ func seedRRealProvider(t *testing.T, cfg rRealProviderConfig) string {
 	}
 	// 自检（与页面「自检」按钮同路径）：真实模型的 tools_ok 必须先落库，
 	// 否则 resolveAgentModel 422 agent_model_unsupported，旅程必失败（2026-11-10 修复）。
-	// 断言只要求 tools 项通过（R 旅程的硬条件）；image/search 等项不支持时如实记录不阻断——
-	// 供应商能力边界不是旅程缺陷，但会写进证据（runThreeTimes 的 §9.7 校验兜底）。
-	var selftestBody struct {
-		OK      bool `json:"ok"`
-		Results []struct {
-			Key    string `json:"key"`
-			OK     bool   `json:"ok"`
-			Detail string `json:"detail"`
-		} `json:"results"`
-	}
-	env.mustJSON(t, "POST", "/api/v1/model-providers/"+id.String()+"/selftest",
-		map[string]any{"model": cfg.Model}, &selftestBody)
-	toolsOK := false
-	for _, p := range selftestBody.Results {
-		if p.Key == "tools" {
-			toolsOK = p.OK
+	// 仅在真实旅程执行（ACCEPTANCE=1）时跑：离线契约测试用假 URL 播种，跑自检必然
+	// 连接失败（TestRRealJourneyContract 复用本函数）。断言只要求 tools 项通过
+	//（R 旅程的硬条件）；image/search 等项不支持时如实记录不阻断——供应商能力边界
+	// 不是旅程缺陷，但会写进证据（runThreeTimes 的 §9.7 校验兜底）。
+	if os.Getenv("OPS_R_REAL_ACCEPTANCE") == "1" {
+		var selftestBody struct {
+			OK      bool `json:"ok"`
+			Results []struct {
+				Key    string `json:"key"`
+				OK     bool   `json:"ok"`
+				Detail string `json:"detail"`
+			} `json:"results"`
 		}
-	}
-	if !toolsOK {
-		t.Fatalf("真实模型工具调用自检未通过（R 旅程硬条件）：%+v", selftestBody.Results)
+		env.mustJSON(t, "POST", "/api/v1/model-providers/"+id.String()+"/selftest",
+			map[string]any{"model": cfg.Model}, &selftestBody)
+		toolsOK := false
+		for _, p := range selftestBody.Results {
+			if p.Key == "tools" {
+				toolsOK = p.OK
+			}
+		}
+		if !toolsOK {
+			t.Fatalf("真实模型工具调用自检未通过（R 旅程硬条件）：%+v", selftestBody.Results)
+		}
+	} else {
+		// 离线路径：直接落 tools_ok（契约测试只验证播种与路由，不做真实调用）。
+		if _, err := env.srv.db.Exec(ctx,
+			`INSERT INTO model_capability (provider_id, model, workspace_id, tools_ok, vision_ok, detail, tested_at)
+			 VALUES ($1,$2,$3,true,true,'{}',now())
+			 ON CONFLICT (provider_id, model) DO UPDATE SET tools_ok=true, tested_at=now()`,
+			id, cfg.Model, ws); err != nil {
+			t.Fatalf("离线播种 capability 失败：%v", err)
+		}
 	}
 	if _, err := env.srv.db.Exec(ctx,
 		`INSERT INTO model_route (workspace_id, task_type, provider_id, model, execution_location)
