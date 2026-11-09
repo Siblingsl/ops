@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { api, mockModelBaseUrl, registerAccount } from './support'
 
 // DEV-CX13-E / FR-CX-22 浏览器旅程：评论台账逐条录入、AI 拟稿、复制回执、转选题幂等与删除清正文。
-// 桌面形态同段旅程见 desktop/renderer-src/e2e/cx13-comment-inbox.spec.ts；两端各自实现。
+// 桌面形态同段旅程见 renderer/e2e/cx13-comment-inbox.spec.ts；两端各自实现。
 test('DEV-CX13-E Web 评论台账：逐条入库、状态机与转选题幂等', async ({ page }) => {
   const account = await registerAccount(page, '图文笔记', 'xhs', `cx13-inbox-web-${Date.now()}`)
   const provider = await api(page, 'POST', '/model-providers', {

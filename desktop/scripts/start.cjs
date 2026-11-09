@@ -4,7 +4,7 @@ const net = require('node:net');
 const { spawn, spawnSync } = require('node:child_process');
 
 const desktopRoot = path.resolve(__dirname, '..');
-const rendererRoot = path.join(desktopRoot, 'renderer-src');
+const rendererRoot = path.resolve(desktopRoot, '..', 'renderer');
 const viteCli = path.join(rendererRoot, 'node_modules', 'vite', 'bin', 'vite.js');
 const forgeStartCli = path.join(desktopRoot, 'node_modules', '@electron-forge', 'cli', 'dist', 'electron-forge-start.js');
 let localOrigin = 'http://localhost:5174';
@@ -90,7 +90,7 @@ process.on('SIGTERM', stop);
 
 async function main() {
   if (!process.env.OPS_DESKTOP_DEV_URL) {
-    if (!fs.existsSync(viteCli)) throw new Error('未找到 desktop/renderer-src/node_modules/vite，请先按项目说明安装前端依赖。');
+    if (!fs.existsSync(viteCli)) throw new Error('未找到 renderer/node_modules/vite，请先按项目说明安装前端依赖。');
 
     const port = await findAvailableVitePort();
     localOrigin = `http://localhost:${port}`;

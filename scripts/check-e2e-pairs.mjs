@@ -1,6 +1,6 @@
 // 两端 E2E 同名用例守卫。
 //
-// Web（web/e2e）与桌面（desktop/renderer-src/e2e）是两套独立套件；当前登记 34 个同名 spec：
+// Web（web/e2e）与桌面（renderer/e2e）是两套独立套件；当前登记 34 个同名 spec：
 // 它们覆盖同一段业务旅程，只是分别在浏览器形态与桌面工作台形态下验收，因此**必须各写一份**，
 // 不能共用文件、也不能靠复制粘贴冒充"两端都测过"。
 //
@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const WEB_E2E = join(repoRoot, 'web', 'e2e')
-const DESKTOP_E2E = join(repoRoot, 'desktop', 'renderer-src', 'e2e')
+const DESKTOP_E2E = join(repoRoot, 'renderer', 'e2e')
 const MIN_DIFF_LINES = 15
 
 // 同名不是疏漏，是"同一旅程两种形态"的显式登记。加新条目请同时写清为什么必须同名。

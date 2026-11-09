@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { api, mockModelBaseUrl, registerAccount } from './support'
 
 // Web 形态的 DEV-CX09 旅程：浏览器编辑页内的小红书组图计划（AI 候选、逐卡确认、只读参数预览与本机栅格预览）。
-// 桌面形态的对应旅程见 desktop/renderer-src/e2e/cx09-visual-plan-desktop.spec.ts（真实 Electron）。
+// 桌面形态的对应旅程见 renderer/e2e/cx09-visual-plan-desktop.spec.ts（真实 Electron）。
 // 本用例只验证本地 mock；不生成文件、不调用 build、不改变作品正文或发布事实。
 test('DEV-CX09 Web 组图计划逐卡确认、候选保护与本机预览', async ({ page }) => {
   test.skip(process.env.OPS_E2E_PROD === '1', '该场景使用本地模拟模型')

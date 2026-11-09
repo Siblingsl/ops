@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { api, registerAccount } from './support'
 
 // DEV-CX13-F / FR-CX-23 浏览器旅程：运营标准版本创建（含未来生效）、at 查询、归档只变可见性。
-// 桌面形态同段旅程见 desktop/renderer-src/e2e/cx13-standards.spec.ts；两端各自实现。
+// 桌面形态同段旅程见 renderer/e2e/cx13-standards.spec.ts；两端各自实现。
 test('DEV-CX13-F Web 回复标准版本与归档语义', async ({ page }) => {
   const account = await registerAccount(page, '图文笔记', 'xhs', `cx13-standards-web-${Date.now()}`)
   await page.goto(`/a/${account.id}/profile?tab=standards`)

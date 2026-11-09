@@ -41,4 +41,4 @@ docker compose -p ops-prod-e2e -f deploy/docker-compose.prod.yml -f deploy/docke
 
 升级/回滚演练可用 `OPS_E2E_IMAGE` 在本地旧测试镜像与 `ops-app:prod-e2e` 间切换。切换前保存数据库与 assets；回滚需配套恢复该镜像对应备份，不用 Down 强行收紧已有新类型约束。测试结束只停止此项目，保留卷供排查；不会删除日常开发数据库或操作线上部署。
 
-桌面 renderer 的 Playwright 用例位于 `desktop/renderer-src/e2e/`，使用独立配置 `desktop/renderer-src/playwright.config.ts`，在 `desktop/` 目录运行 `pnpm test:e2e:renderer`（端口 5287、8287、8297）。本目录只保留 Web 浏览器场景：不出现 Electron 启动器、`Electron/` UA 注入、`ops-creative-desktop` 呈现标记或 5287 端口，也不被桌面配置读取。该边界由 `web/tests/web-e2e-boundary.test.mjs` 随 `pnpm test:unit` 强制。
+桌面 renderer 的 Playwright 用例位于 `renderer/e2e/`，使用独立配置 `renderer/playwright.config.ts`，在 `desktop/` 目录运行 `pnpm test:e2e:renderer`（端口 5287、8287、8297）。本目录只保留 Web 浏览器场景：不出现 Electron 启动器、`Electron/` UA 注入、`ops-creative-desktop` 呈现标记或 5287 端口，也不被桌面配置读取。该边界由 `web/tests/web-e2e-boundary.test.mjs` 随 `pnpm test:unit` 强制。

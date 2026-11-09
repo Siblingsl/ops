@@ -14,6 +14,14 @@ web/node_modules/
 web/dist/
 web/dist-crossorigin/
 desktop/renderer/
+# 桌面渲染包已从 desktop/renderer-src 上移到仓库根 renderer/，忽略规则随之搬过来。
+# 根 .gitignore 没有通用 node_modules/ 规则，这里漏一条就会把几百兆依赖暴露成未跟踪文件。
+renderer/node_modules/
+renderer/dist/
+renderer/.vite/
+renderer/*.tsbuildinfo
+renderer/playwright-report/
+renderer/test-results/
 web/.vite/
 web/*.tsbuildinfo
 web/playwright-report/
@@ -41,6 +49,7 @@ docs/*
 !docs/27-AI对话增强分析与Codex桌面端对标设计.md
 !docs/28-依赖安全整改清单.md
 !docs/29-仓库目录整理方案.md
+!docs/30-渲染包上移方案.md
 # AI27 验收矩阵（27 文档 §16 的状态汇总）
 !docs/acceptance/
 !docs/acceptance/**
@@ -80,13 +89,11 @@ desktop/.tmp/
 # 一次性 QA 现场：依赖本地 tmpverify/ 或固定端口的批次脚本，不具备复现条件
 web/audit-*.mjs
 web/shot-models.mjs
-desktop/renderer-src/qa26-*.playwright.config.ts
-desktop/renderer-src/qa26-agent-feedback-samples.mjs
-desktop/renderer-src/_tmp_*
+# qa26-g103/g104 的 playwright 配置是 docs 里复现命令的入口，属已跟踪资产，不在此忽略。
+renderer/qa26-agent-feedback-samples.mjs
+renderer/_tmp_*
 # 工具会话状态（superpowers skill 的工作目录，非项目产物）
-desktop/renderer-src/.superpowers/
 .superpowers/
-
 # Electron 打包产物（构建生成，不入库）
 desktop/out/
 desktop/out-*/

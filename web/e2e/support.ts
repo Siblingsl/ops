@@ -15,7 +15,7 @@ export function expectedWebBaseUrl() {
 /**
  * Web 端 E2E 辅助（纯浏览器形态）。
  *
- * 桌面形态的辅助在本文件里没有副本，统一放在 `desktop/renderer-src/e2e/support.ts`。
+ * 桌面形态的辅助在本文件里没有副本，统一放在 `renderer/e2e/support.ts`。
  * 本文件不允许出现 Electron 类型、UA 注入、`data-presentation` 判断，
  * 由 `tests/web-boundary.test.mjs` 静态约束。
  */
@@ -62,7 +62,7 @@ export async function registerAccount(page: Page, type = '图文笔记', platfor
 
 /**
  * Web 形态：大纲直接嵌在编辑页步骤流里，没有桌面侧栏步骤导航，也没有大纲对话框。
- * 桌面形态的对应实现见 `desktop/renderer-src/e2e/support.ts`。
+ * 桌面形态的对应实现见 `renderer/e2e/support.ts`。
  */
 export async function createOutline(page: Page) {
   await page.getByRole('button', { name: '新建作品', exact: true }).first().click()

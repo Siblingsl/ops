@@ -44,7 +44,9 @@ test('Web e2e 指向桌面 renderer 私有目录时失败', () => {
   const offenders = []
   for (const file of files(e2eDir)) {
     const text = stripComments(readFileSync(file, 'utf8'))
-    if (/desktop\/renderer-src\/(src|e2e)/.test(text)) offenders.push(relative(root, file))
+    // 桌面渲染包已从 desktop/renderer-src 上移到仓库根 renderer/，
+    // 两种历史写法都要拦：任何 renderer/e2e 或 renderer/src 的跨端引用都不允许。
+    if (/renderer\/(?:src|e2e)/.test(text)) offenders.push(relative(root, file))
   }
   assert.deepEqual(offenders, [])
 })

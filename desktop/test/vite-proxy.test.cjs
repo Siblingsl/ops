@@ -3,7 +3,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { test } = require('node:test');
 
-const rendererRoot = path.resolve(__dirname, '../renderer-src');
+const rendererRoot = path.resolve(__dirname, '../../renderer');
 const viteEntry = path.join(rendererRoot, 'node_modules', 'vite', 'dist', 'node', 'index.js');
 const configFile = path.join(rendererRoot, 'vite.config.ts');
 

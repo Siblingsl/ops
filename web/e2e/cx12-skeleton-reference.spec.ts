@@ -3,7 +3,7 @@ import { api, mockModelBaseUrl, registerAccount } from './support'
 
 // DEV-CX12 / FR-CX-14 浏览器旅程：拆解骨架供大纲引用——
 // 建对标与拆解 → 大纲生成处勾选骨架 → refs/cx_basis.omitted 回执；跨账号骨架不出现。
-// 桌面形态同段旅程见 desktop/renderer-src/e2e/cx12-skeleton-reference.spec.ts。
+// 桌面形态同段旅程见 renderer/e2e/cx12-skeleton-reference.spec.ts。
 test('DEV-CX12 Web 骨架引用供大纲生成', async ({ page }) => {
   const account = await registerAccount(page, '图文笔记', 'xhs', `cx12-skeleton-web-${Date.now()}`)
   const provider = await api(page, 'POST', '/model-providers', {

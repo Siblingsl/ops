@@ -13,7 +13,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { chromium } = require('../renderer-src/node_modules/@playwright/test');
+const { chromium } = require('../../renderer/node_modules/@playwright/test');
 const bridgeMod = require('../.build/browser-bridge.js');
 const hostMod = require('../src/native-host/host.js');
 
