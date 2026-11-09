@@ -50,6 +50,9 @@ CREATE TABLE agent_plugin_call (
 CREATE INDEX idx_agent_plugin_call_conn ON agent_plugin_call(connection_id, created_at);
 
 -- +goose Down
+-- DO 块内含分号，必须用 StatementBegin/End 包住；否则 goose 会按分号切开，
+-- 报 unterminated dollar-quoted string，回滚守卫失效（3 个迁移测试因此变红）。
+-- +goose StatementBegin
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM agent_plugin_call)
@@ -57,5 +60,6 @@ BEGIN
         RAISE EXCEPTION 'agent plugin tables not empty; refusing downgrade';
     END IF;
 END $$;
+-- +goose StatementEnd
 DROP TABLE IF EXISTS agent_plugin_call;
 DROP TABLE IF EXISTS agent_plugin_connection;

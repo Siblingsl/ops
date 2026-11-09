@@ -77,6 +77,9 @@ CREATE TABLE agent_browser_command (
 CREATE INDEX idx_agent_browser_command_run ON agent_browser_command(run_id, created_at);
 
 -- +goose Down
+-- DO 块内含分号，必须用 StatementBegin/End 包住；否则 goose 会按分号切开，
+-- 报 unterminated dollar-quoted string（同 00092）。
+-- +goose StatementBegin
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM agent_browser_command)
@@ -86,6 +89,7 @@ BEGIN
         RAISE EXCEPTION 'agent_browser_* tables not empty; refusing downgrade (D-170 scope)';
     END IF;
 END $$;
+-- +goose StatementEnd
 DROP TABLE IF EXISTS agent_browser_command;
 DROP TABLE IF EXISTS agent_browser_grant;
 DROP TABLE IF EXISTS agent_browser_binding;
