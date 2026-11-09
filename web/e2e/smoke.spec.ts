@@ -534,7 +534,7 @@ test('新类型跨平台派生目标置灰', async ({ page }) => {
   await expect(createPanel).toBeVisible()
   await createPanel.getByRole('button', { name: '开始创作', exact: true }).click()
   await expect(page).toHaveURL(/\/works\/[a-f0-9-]+$/)
-  await page.getByRole('button', { name: '派生', exact: true }).click()
+  await page.getByRole('button', { name: '派生作品', exact: true }).click()
   const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '派生到其他平台', exact: true }) })
   await expect(dialog.getByRole('button', { name: /目标脚本号/ })).toBeDisabled()
   await expect(dialog.getByRole('button', { name: /创建|派生/ }).last()).toBeDisabled()

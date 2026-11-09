@@ -239,7 +239,7 @@ test('Electron 编辑器逐项复核并与原型对照', async ({ page }) => {
   await expect(page.locator('#step-title').getByText('摘要', { exact: true })).toBeVisible()
   await titleProperties.click()
 
-  await page.getByRole('button', { name: '版本', exact: true }).click()
+  await page.getByRole('button', { name: '打开版本历史', exact: true }).click()
   await expect(page.getByRole('heading', { name: '版本历史' })).toBeVisible()
   await page.getByRole('button', { name: '保存当前版本' }).click()
   await expect(page.getByText('手动保存', { exact: true })).toBeVisible()

@@ -41,6 +41,6 @@ test('OPT47 已发布公众号文章提示作者逐篇派生且不自动创建',
   })
   await next.click()
   await expect(page).toHaveURL(new RegExp(`/works/${id}$`))
-  await expect(page.getByRole('button', { name: '派生', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '派生作品', exact: true })).toBeVisible()
   expect(derived).toEqual([])
 })

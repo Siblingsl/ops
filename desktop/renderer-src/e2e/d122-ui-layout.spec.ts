@@ -91,7 +91,7 @@ test('CL-01 Electron 版本恢复预览在桌面窄窗内完整显示', async ({
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`/works/${id}`)
-  await page.getByRole('button', { name: '版本', exact: true }).click()
+  await page.getByRole('button', { name: '打开版本历史', exact: true }).click()
   await expect(page.getByRole('heading', { name: '版本历史', exact: true })).toBeVisible()
   await page.getByRole('button').filter({ hasText: '历史版本标题' }).first().click()
   await expect(page.getByRole('button', { name: '返回列表', exact: true })).toBeVisible()
