@@ -1,6 +1,7 @@
 import { marked } from 'marked'
 import { useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { isInternalPath } from './internal-link'
 
 const allowedTags = new Set([
   'p', 'br', 'strong', 'em', 'del', 'code', 'pre', 'blockquote', 'ul', 'ol', 'li',
@@ -8,7 +9,9 @@ const allowedTags = new Set([
 ])
 
 function safeHref(value: string) {
-  if (value.startsWith('/') && !value.startsWith('//')) return value
+  // 站内链接必须过白名单：仅 "/" 开头不够，反斜杠与编码绕过都会变成站外跳转
+  // （docs/28 §2.2 / CVE-2026-53669）。
+  if (isInternalPath(value)) return value
   try {
     return new URL(value).protocol === 'https:' ? value : ''
   } catch {
@@ -56,7 +59,7 @@ export function AgentMarkdown({ text }: { text: string }) {
     if (!(target instanceof Element)) return
     const link = target.closest<HTMLAnchorElement>('a[href]')
     const href = link?.getAttribute('href')
-    if (!href || !href.startsWith('/') || href.startsWith('//') || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    if (!href || !isInternalPath(href) || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     event.preventDefault()
     navigate(href)
   }, [navigate])
