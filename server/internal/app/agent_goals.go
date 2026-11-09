@@ -652,6 +652,20 @@ func (s *Server) postAgentGoalControl(w http.ResponseWriter, r *http.Request) er
 		if err != nil {
 			return err
 		}
+		// DEV-AI27-21A（T-AI27-21A）：goal 续跑按上一活动 grant 派生新租约（新 token，
+		// 同 binding/tab/origins，时效重新起算）。派生失败不阻断续跑（goal 可不用浏览器），
+		// 原因入事件供任务面板显示。
+		derivation, derr := s.deriveBrowserGrantForRun(ctx, tx, goal.ConversationID, id.WorkspaceID, id.UserID, resumeState.RunID)
+		if derr != nil {
+			return derr
+		}
+		if derivation.Reason != "" {
+			// 派生失败不阻断续跑；原因挂既有 goal.updated 事件（事件类型白名单
+			// 不为本次新增类型开迁移），任务面板按 browser_grant_derivation 字段显示。
+			_, _ = appendAgentEventTx(ctx, tx, goal.ConversationID, &resumeState.RunID, "goal.updated", map[string]any{
+				"goal_id": goalID, "status": "active", "browser_grant_derivation": derivation.Reason,
+			}, nil)
+		}
 	}
 	goal, err = s.agentGoalByID(ctx, tx, goalID)
 	if err != nil {

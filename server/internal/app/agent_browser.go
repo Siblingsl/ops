@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -446,6 +447,78 @@ func (s *Server) browserRoleGuard(id *identity) error {
 	}
 	return nil
 }
+
+// DEV-AI27-21A 第二步（T-AI27-21A，27 §8.6）：goal 续跑浏览器 grant 派生租约。
+// resume 创建新 run 后，按本会话上一活动 run 的 active grant 派生**新租约**（新 token、
+// 同 binding/tab/origins/actions/policy_version，时效重新起算且不超过原上限 30s 口径）。
+// 复用旧 token 等于把已终态 run 的授权递给新 run，违反 27 §13.2 归属派生；派生失败
+// 不阻断 goal 启动（goal 续跑可以不用浏览器），只记事件由任务面板显示原因。
+
+// browserGrantDerivation 是一次派生的结果（成功给 grant_id，失败给 reason）。
+type browserGrantDerivation struct {
+	SourceGrantID uuid.UUID  `json:"source_grant_id"`
+	GrantID       *uuid.UUID `json:"grant_id,omitempty"`
+	Reason        string     `json:"reason,omitempty"`
+}
+
+// deriveBrowserGrantForRun 事务内派生：查同会话最近一个仍 active 且未过期的 grant
+// （必须属于同一 workspace/user，跨用户/跨工作区不派生），按其字段插入新行。
+// 无源租约（源不存在/过期/已撤销/origin 超限）返回带 reason 的结果而不报错。
+func (s *Server) deriveBrowserGrantForRun(ctx context.Context, tx pgx.Tx,
+	conversationID, workspaceID, userID, newRunID uuid.UUID) (browserGrantDerivation, error) {
+	var src struct {
+		ID            uuid.UUID
+		BindingID     uuid.UUID
+		TabHandle     string
+		Origins       []string
+		Actions       []string
+		PolicyVersion string
+	}
+	err := tx.QueryRow(ctx, `
+		SELECT id, binding_id, tab_handle, origins, actions, policy_version
+		FROM agent_browser_grant
+		WHERE conversation_id=$1 AND workspace_id=$2 AND user_id=$3
+		  AND state='active' AND expires_at > now()
+		ORDER BY created_at DESC LIMIT 1`,
+		conversationID, workspaceID, userID).Scan(
+		&src.ID, &src.BindingID, &src.TabHandle, &src.Origins, &src.Actions, &src.PolicyVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return browserGrantDerivation{Reason: "browser_grant_no_source"}, nil
+	}
+	if err != nil {
+		return browserGrantDerivation{}, err
+	}
+	// 派生继承的标签/来源必须不超上限（防旧数据越限放大）。
+	if len(src.Origins) == 0 || len(src.Origins) > browserGrantMaxRun {
+		return browserGrantDerivation{SourceGrantID: src.ID, Reason: "browser_scope_invalid"}, nil
+	}
+	// binding 必须仍 ready（撤销/断开的绑定不再派生）。
+	var okBinding bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM agent_browser_binding
+			WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND state='ready')`,
+		src.BindingID, workspaceID, userID).Scan(&okBinding); err != nil {
+		return browserGrantDerivation{}, err
+	}
+	if !okBinding {
+		return browserGrantDerivation{SourceGrantID: src.ID, Reason: "browser_binding_not_found"}, nil
+	}
+	actions := src.Actions
+	if actions == nil {
+		actions = []string{"observe"}
+	}
+	grantID := uuid.New()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO agent_browser_grant (id, binding_id, workspace_id, user_id, conversation_id, run_id,
+			tab_handle, origins, actions, policy_version, state, expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'active', now()+interval '30 seconds')`,
+		grantID, src.BindingID, workspaceID, userID, conversationID, newRunID,
+		src.TabHandle, src.Origins, actions, src.PolicyVersion); err != nil {
+		return browserGrantDerivation{}, err
+	}
+	return browserGrantDerivation{SourceGrantID: src.ID, GrantID: &grantID}, nil
+}
+
 
 func browserPairingCode() (string, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
