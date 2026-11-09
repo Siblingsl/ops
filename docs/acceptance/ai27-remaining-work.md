@@ -1,7 +1,14 @@
 # AI27 待完成项清单（移交后续单独完成）
 
 生成：2026-11-08 ｜ 前序：35 包提交（e8778035 → b86cfdc5），main 分支未 push
-配套文档：[ai27-acceptance-matrix.md](ai27-acceptance-matrix.md)（全系列状态）｜ [docs/08](../08-开发与测试计划.md)（各批实施记录）｜ [docs/AI_HANDOFF.md](../AI_HANDOFF.md)（交接日志）
+配套文档：[ai27-acceptance-matrix.md](ai27-acceptance-matrix.md)（全系列状态）｜ [docs/08](../08-开发与测试计划.md)（各批实施记录）｜ 当前仓库**没有** `docs/AI_HANDOFF.md`，交接状态以 docs/08 + 验收矩阵 + Git 为准
+
+> **2026-11-09 代码补齐（不改变「需真实环境」的性质）**：
+> 1. R 系列执行器改为**运行时环境变量注入真实供应商**（测试库与页面库隔离问题已修），并把「证据可回查」「§9.7 字段」从只记录升级为硬断言；
+> 2. 双端 `/settings/admin` 补齐 8 个 AI27 工作台开关（此前只能靠 `OPS_AGENT_WORKBENCH_FEATURES` 环境变量）；
+> 3. 语音 ASR 链路实现：`asr` 任务路由 + `/audio/transcriptions` 调用 + `asr_model`/`asr_seconds` 记账 + 失败回合保留。
+>
+> 以上只把阻塞收敛为「需要真实 Key / Chrome 扩展 / 人工操作」，**不等同验收通过**；TTS、realtime 音频桥、MCP OAuth 仍未实现。详见 docs/08 的「DEV-AI27-16 第四批」「DEV-AI27-R 执行器修复」「DEV-AI27 开关面补齐」三条记录。
 
 本清单覆盖 docs/27 v0.2 中**所有未完成项**，按阻塞源分四组。每组列出：验收 ID、缺什么、已就位的部分、执行步骤、涉及文件与命令。完成一项后请在 docs/08 登记并将验收矩阵对应 ID 状态更新为"通过"。
 
@@ -15,16 +22,29 @@
 2. 添加真实供应商（如 OpenAI / Anthropic / DeepSeek），填 base_url + API Key
 3. 添加支持工具调用的模型（如 `gpt-4o`、`claude-sonnet-4-20250514`、`deepseek-chat`）
 4. 点"自检"通过；确认 agent_chat 路由指向它
-5. 本地库验证：`docker exec ops-dev-postgres-1 psql -U ops -d ops -t -c "SELECT p.name FROM model_provider p JOIN model_route r ON r.provider_id=p.id WHERE p.status='active' AND p.execution_location='server' AND p.name NOT LIKE '%模拟%' AND r.task_type='agent_chat'"`——应返回供应商名
+5. 本地库验证：`docker exec ops-dev-postgres-1 psql -U ops -d ops -t -c "SELECT p.name FROM model_provider p JOIN model_route r ON r.provider_id=p.id WHERE p.status='active' AND p.execution_location='server' AND p.name NOT LIKE '%模拟%' AND r.task_type='agent_chat'"`——应返回供应商名。**注意**：这条只验证运行中的 `ops` 库；`go test` 使用每次重建的 `ops_test` 库，看不到页面配置（见下方 R 系列）。
 
 ### R01~R05 运营任务旅程（T-AI27-07/20 + §16.4 R 系列 + §9.7）
 
-**执行命令**：
+**执行命令（2026-11-09 起）**：
+
 ```bash
 cd server
-OPS_R_REAL_ACCEPTANCE=1 OPS_R_REAL_OUTPUT=output/r-journeys \
-  go test ./internal/app -run 'TestR0' -v -count=1 -timeout=60m
+# go test 使用独立的 ops_test 库（每次 TestMain 重建），模型配置页写入的 ops 库对它不可见。
+# 因此真实供应商必须经运行时环境变量注入；密钥只在本机终端设置，不写入代码/日志/证据。
+export OPS_R_REAL_BASE_URL='https://api.example.com/v1'
+export OPS_R_REAL_API_KEY='<本机终端临时设置，不要粘贴到文档、截图或提交信息>'
+export OPS_R_REAL_MODEL='支持工具调用的模型名'
+export OPS_R_REAL_ACCEPTANCE=1
+export OPS_R_REAL_OUTPUT='output/r-journeys'
+go test ./internal/app -run 'TestR0|TestRReal' -v -count=1 -timeout=60m
 ```
+
+- `TestR0` 是五个真实旅程；`TestRReal` 是**不产生费用**的离线契约测试（验证环境解析、密钥加密、证据/字段硬断言本身有效），建议一起跑。
+- 相对路径以 `server/` 为工作目录，证据实际落在 `server/output/r-journeys/r-journeys.jsonl`。
+- R02 仍需额外 `export OPS_R_REAL_BACKDROP=1`。
+- 现在的断言：assistant 非空 + **至少一条可回查证据**（origin / 脱敏 URL / 读取时间，且未被隔离）+ §9.7 字段关键词齐全。缺任一项直接 fail，不再「只记录不判定」。
+- 局限（如实登记）：字段校验仍是文本关键词级，不是结构化报告解析；它能拦住字段缺失的假通过，拦不住「字段齐全但内容编造」——后者靠证据回查与人工审阅。
 
 **覆盖**：
 
@@ -48,8 +68,8 @@ OPS_R_REAL_ACCEPTANCE=1 OPS_R_REAL_OUTPUT=output/r-journeys \
 
 | ID | 内容 | 执行步骤 |
 | --- | --- | --- |
-| V05 | ASR/TTS/realtime 分别自检 | 在模型配置页为语音任务类型添加真实 ASR 供应商并自检；验证 `desktop/src/business-ui-preload.ts` 的 VoiceBar 链路从录音→转写→终稿 |
-| V07 | ASR 时长/TTS 量分别记账 | 参考 V05；验证 `agent_voice_turn` 关联 run 的用量字段 |
+| V05 | ASR/TTS/realtime 分别自检 | **ASR 链路已实现（2026-11-09）**：模型配置页「任务路由」展开后新增「ASR 语音转写」，选供应商 + 转写模型即可；VoiceBar 录音 → 上传 → 服务端调 `/audio/transcriptions` → 可编辑终稿。仍需真实 Key 实测。**TTS / realtime 自检仍无调用点**（未实现）。 |
+| V07 | ASR 时长/TTS 量分别记账 | ASR 回执的 `asr_model` / `asr_seconds` 已写入 `agent_voice_turn`（失败时写 `asr_error_code`）；**TTS 生成量、realtime 音频 token 与任务总预算接入仍未实现**。 |
 | V08 | 真实语音旅程 | 用麦克风跑完整旅程（录音→转写→编辑→发送→AI 理解正确）；覆盖中英文、数字/否定句、噪声误识别、用户纠正（§11.4.4） |
 
 ### P01 OAuth
@@ -135,17 +155,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File desktop/scripts/uia-notepad-
 
 ## 第四组：可选深化（不阻塞，按需立项）
 
-| 项 | 说明 | 涉及文件 |
-| --- | --- | --- |
-| 多页签拖拽排序 | 页签条 `inbrowse-tabs` 加 drag-and-drop | `desktop/renderer-src/src/pages/agent/InBrowsePanel.tsx` |
-| 内置浏览器下载管理 | WebContentsView session 的 will-download 事件→逐文件确认 | `desktop/src/in-browse.ts` |
-| 弹窗处理 | `setWindowOpenHandler` 策略（当前默认拒绝） | 同上 |
-| 浏览数据管理 | 设置中区分"OPS 证据"与"浏览实例数据"清理 | 同上 + renderer 设置页 |
-| 委派结果产物跳转 | 任务面板结果→产物页跳转 | `DelegationPanel.tsx` + `ArtifactPanel.tsx` |
-| `mcp__*` 动态目录进 run 工具链 | 插件连接的 MCP 工具动态注册为模型工具 | `agent_tools_ai27.go` + `agent_dispatch.go` |
-| goal/routine 浏览器 grant 派生租约 | goal 续跑时自动继承/重新签发浏览器租约 | `agent_delegation_dispatch.go` + `agent_browser.go` |
-| 扩展 run 工具链 `mcp__*` | Chrome 扩展侧调用 MCP 工具（远期） | `chrome-extension/background.js` |
-| Chrome 扩展 frame 级 click/type | observe_frames 已做，click/type 的跨 frame 版本待做 | `chrome-extension/background.js` |
+| 项 | 说明 | 涉及文件 | 2026-11-09 状态 |
+| --- | --- | --- | --- |
+| 多页签拖拽排序 | 页签条 `inbrowse-tabs` 加 drag-and-drop | `desktop/renderer-src/src/pages/agent/InBrowsePanel.tsx` | 工作树有未提交改动（`reorderTab` + IPC + DnD），未验收 |
+| 内置浏览器下载管理 | WebContentsView session 的 will-download 事件→逐文件确认 | `desktop/src/in-browse.ts` | 工作树有未提交改动，未验收；其快照推送方式需复核，勿直接提交 |
+| 弹窗处理 | `setWindowOpenHandler` 策略（当前默认拒绝） | 同上 | 未做 |
+| 浏览数据管理 | 设置中区分"OPS 证据"与"浏览实例数据"清理 | 同上 + renderer 设置页 | 未做 |
+| 委派结果产物跳转 | 任务面板结果→产物页跳转 | `DelegationPanel.tsx` + `ArtifactPanel.tsx` | 工作树有未提交改动，未验收 |
+| `mcp__*` 动态目录进 run 工具链 | 插件连接的 MCP 工具动态注册为模型工具 | `agent_tools_ai27.go` + `agent_dispatch.go` | 已提交 `2d0f7a84`（深化 5/5） |
+| goal/routine 浏览器 grant 派生租约 | goal 续跑时自动继承/重新签发浏览器租约 | `agent_delegation_dispatch.go` + `agent_browser.go` | 路由已提交 `77645880`；租约派生未做 |
+| 扩展 run 工具链 `mcp__*` | Chrome 扩展侧调用 MCP 工具（远期） | `chrome-extension/background.js` | 未做 |
+| Chrome 扩展 frame 级 click/type | observe_frames 已做，click/type 的跨 frame 版本待做 | `chrome-extension/background.js` | `observe_frames` 已提交 `cd0a7afa`；click/type 未做 |
 
 ---
 
