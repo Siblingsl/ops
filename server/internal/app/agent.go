@@ -1904,6 +1904,8 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Patch("/agent/voice-sessions/{id}/turns/{turnId}", s.h(s.editVoiceTurn))
 		// DEV-AI27-16 第五批（A1）：TTS 合成（27 §11.4.4 / V07）。
 		r.Post("/agent/voice-sessions/{id}/turns/{turnId}/synthesize", s.h(s.synthesizeVoiceTurn))
+		// DEV-AI27-16 第六批（A2）：realtime 会话凭据（27 §11.4.5 / V08）。
+		r.Post("/agent/voice-sessions/{id}/realtime-token", s.h(s.createVoiceRealtimeToken))
 		r.Patch("/agent/voice-sessions/{id}", s.h(s.patchVoiceSession))
 		r.Get("/agent/voice-sessions/{id}", s.h(s.getVoiceSession))
 		// DEV-AI27-17（W17）：Windows 电脑控制前台租约（27 §11.5）。

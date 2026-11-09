@@ -535,6 +535,8 @@ var taskTypes = []struct{ Type, Label string }{
 	{"asr", "ASR 语音转写"},
 	// DEV-AI27-16 第五批（A1）：TTS 合成路由（27 §11.4.4 / V07）。
 	{"tts", "TTS 语音合成"},
+	// DEV-AI27-16 第六批（A2）：realtime 双向音频路由（27 §11.4.5 / V08）。
+	{"realtime", "实时语音（双向音频）"},
 }
 
 func taskLabel(taskType string) string {

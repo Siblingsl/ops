@@ -22,6 +22,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { startBrowserBridgeDiagnostics } from './browser-bridge';
 import { bindInBrowseController, clearInBrowseData, inBrowseAttachAfterOverlay, inBrowseDataStats, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
+import { RealtimeBridge, type RealtimeBridgeEvent } from './voice-realtime';
+import * as wsRealtime from 'ws';
 
 // 补上非 EPIPE 未捕获异常的展示（防护本身已在 import 时装好）。
 installBrokenPipeGuard((error) => {
@@ -808,7 +810,57 @@ function rendererContentType(extension: string): string {
   } as Record<string, string>)[extension.toLowerCase()] ?? 'application/octet-stream';
 }
 
+// DEV-AI27-16 第六批（A2）：realtime WebSocket 连接工厂（ws 8.x）。
+// token 已由调用方拼进 URL 查询参数；这里只负责把 ws 事件适配成桥依赖接口。
+function connectRealtimeWebSocket(url: string): Promise<{
+  send(raw: string): void;
+  close(): void;
+  onMessage(cb: (raw: string) => void): void;
+  onClose(cb: (code: number, reason: string) => void): void;
+  onError(cb: (err: Error) => void): void;
+}> {
+  return new Promise((resolve, reject) => {
+    const socket = new wsRealtime.WebSocket(url, { handshakeTimeout: 10_000 });
+    let settled = false;
+    socket.on('open', () => {
+      if (settled) return;
+      settled = true;
+      resolve({
+        send: (raw: string) => { if (socket.readyState === wsRealtime.WebSocket.OPEN) socket.send(raw); },
+        close: () => { try { socket.close(1000, 'bridge_stop'); } catch { /* 已断 */ } },
+        onMessage: (cb) => { socket.on('message', (data) => cb(String(data))); },
+        onClose: (cb) => { socket.on('close', (code, reason) => cb(code, String(reason))); },
+        onError: (cb) => { socket.on('error', (err) => cb(err)); },
+      });
+    });
+    socket.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
+  });
+}
+
 function registerIpcHandlers(): void {
+  // DEV-AI27-16 第六批（A2）：realtime 桥单例——事件转发到业务窗口；调用方限业务窗口主框架。
+  const realtimeBridge = new RealtimeBridge({
+    connect: (url) => connectRealtimeWebSocket(url),
+    now: () => Date.now(),
+  });
+  realtimeBridge.on('event', (ev: RealtimeBridgeEvent) => {
+    if (businessWindow && !businessWindow.isDestroyed()) {
+      businessWindow.webContents.send('desktop-ui:realtime-event', ev);
+    }
+  });
+  const requireRealtimeCaller = (event: IpcMainInvokeEvent): void => {
+    const senderFrame = event.senderFrame;
+    if (!businessWindow || businessWindow.isDestroyed() || event.sender !== businessWindow.webContents
+      || !senderFrame || senderFrame !== event.sender.mainFrame || !isBusinessUrl(senderFrame.url)
+      || !isBusinessUrl(event.sender.getURL())) {
+      throw new Error('不允许此窗口调用实时语音意图。');
+    }
+  };
   // DEV-AI27-08（W08，D-172）：内置浏览视图固定意图（27 §7.8/§12.5）。
   // 仅业务窗口主框架可调用；bounds/导航/浮层隐藏由主进程持有，渲染器无 view 对象。
   const requireInBrowse = (event: IpcMainInvokeEvent): InBrowseViewController => {
@@ -876,6 +928,42 @@ function registerIpcHandlers(): void {
     const kind = typeof raw === 'string' ? raw : '';
     if (kind !== 'cache' && kind !== 'cookies' && kind !== 'all') throw new Error('inbrowse_data_kind_invalid');
     return clearInBrowseData(kind);
+  });
+  // DEV-AI27-16 第六批（A2，27 §11.4.5）：realtime 双向音频桥——固定意图，渲染器不接触密钥。
+  // start/append/commit/interrupt/stop 转发 RealtimeBridge；事件经 desktop-ui:realtime-event 推送。
+  ipcHandle('voice:realtime-status', () => realtimeBridge.statusView());
+  ipcHandle('voice:realtime-start', async (event, raw) => {
+    requireRealtimeCaller(event);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('realtime_args_invalid');
+    const b = raw as { session_id?: unknown; token?: unknown; proxy_endpoint?: unknown; model?: unknown; provider?: unknown };
+    const result = await realtimeBridge.start({
+      sessionID: String(b.session_id ?? ''),
+      token: String(b.token ?? ''),
+      proxyEndpoint: String(b.proxy_endpoint ?? ''),
+      model: String(b.model ?? ''),
+      provider: String(b.provider ?? ''),
+    });
+    return result;
+  });
+  ipcHandle('voice:realtime-append', (event, raw) => {
+    requireRealtimeCaller(event);
+    if (!raw || typeof raw !== 'object' || typeof (raw as { dataBase64?: unknown }).dataBase64 !== 'string') {
+      throw new Error('realtime_chunk_invalid');
+    }
+    return realtimeBridge.append({ dataBase64: String((raw as { dataBase64: unknown }).dataBase64) });
+  });
+  ipcHandle('voice:realtime-commit', (event) => {
+    requireRealtimeCaller(event);
+    return realtimeBridge.commit();
+  });
+  ipcHandle('voice:realtime-interrupt', (event) => {
+    requireRealtimeCaller(event);
+    return realtimeBridge.interrupt();
+  });
+  ipcHandle('voice:realtime-stop', (event) => {
+    requireRealtimeCaller(event);
+    realtimeBridge.stop();
+    return null;
   });
   ipcHandle('cx-long-image:capture', async (event, raw) => {
     const senderFrame = event.senderFrame;

@@ -123,6 +123,10 @@ func (s *Server) resolveServerRouteTier(ctx context.Context, taskType, tier stri
 		// A1（27 §11.4.4）：TTS 同理——未配置 tts 路由时 422 voice_capability_unsupported，
 		// 不把 chat 模型当 TTS 用（/audio/speech 会 404 且伪装成供应商故障）。
 		keys = []string{"tts"}
+	case taskType == "realtime":
+		// A2（27 §11.4.5）：realtime 双向音频同口径——未配置 realtime 路由时
+		// 422 voice_capability_unsupported，不把 chat 模型当实时音频模型用。
+		keys = []string{"realtime"}
 	case taskType == "image_alt":
 		keys = []string{"metric_screenshot"}
 	case costTiers[tier] && taskType != "agent_chat":

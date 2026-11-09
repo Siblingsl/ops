@@ -203,7 +203,7 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
   },
   // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道；渲染器无 view 对象）。
   async invokeInBrowse(channel: string, payload?: unknown): Promise<unknown> {
-    const allowed = ['inbrowse:snapshot', 'inbrowse:set-bounds', 'inbrowse:navigate', 'inbrowse:back', 'inbrowse:forward', 'inbrowse:reload', 'inbrowse:stop', 'inbrowse:close', 'inbrowse:open-tab', 'inbrowse:switch-tab', 'inbrowse:close-tab', 'inbrowse:reorder-tab', 'inbrowse:data-stats', 'inbrowse:clear-data'];
+    const allowed = ['inbrowse:snapshot', 'inbrowse:set-bounds', 'inbrowse:navigate', 'inbrowse:back', 'inbrowse:forward', 'inbrowse:reload', 'inbrowse:stop', 'inbrowse:close', 'inbrowse:open-tab', 'inbrowse:switch-tab', 'inbrowse:close-tab', 'inbrowse:reorder-tab', 'inbrowse:data-stats', 'inbrowse:clear-data', 'voice:realtime-status', 'voice:realtime-start', 'voice:realtime-append', 'voice:realtime-commit', 'voice:realtime-interrupt', 'voice:realtime-stop'];
     if (!allowed.includes(channel)) throw new Error(`不允许的内置浏览意图：${channel}`);
     return ipcRenderer.invoke(channel, payload);
   },
@@ -211,6 +211,12 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
     const wrapped = (_event: unknown, snapshot: unknown) => listener(snapshot);
     ipcRenderer.on('desktop-ui:inbrowse-snapshot', wrapped);
     return () => { ipcRenderer.removeListener('desktop-ui:inbrowse-snapshot', wrapped); };
+  },
+  // DEV-AI27-16 第六批（A2）：realtime 桥事件（audio_delta/transcript_delta/error 等信封）。
+  onRealtimeEvent(listener: (event: unknown) => void) {
+    const wrapped = (_event: unknown, ev: unknown) => listener(ev);
+    ipcRenderer.on('desktop-ui:realtime-event', wrapped);
+    return () => { ipcRenderer.removeListener('desktop-ui:realtime-event', wrapped); };
   },
   // DEV-AI27-10（W10b）：侧栏草稿/停止事件（主进程桥转发）。
   onSidepanelDraft(listener: (draft: { text: string }) => void) {

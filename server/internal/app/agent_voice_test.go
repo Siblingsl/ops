@@ -484,3 +484,68 @@ func TestW16V07TTSMissingRouteRejects(t *testing.T) {
 		map[string]any{"voice": "alloy"}, "voice_capability_unsupported")
 	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{"state": "ended"}, nil)
 }
+
+// TestW16V08RealtimeTokenContract：realtime 会话凭据三态（A2，27 §11.4.5）。
+// ①dictation 会话 422（凭据只发给 realtime 会话）；②未配 realtime 路由 422
+// voice_capability_unsupported（不回退 default）；③commit_realtime 回合的
+// realtime_audio_ms/realtime_provider 记账落库（离线，无音频模型——真实验收另记）。
+func TestW16V08RealtimeTokenContract(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "run_control,event_resume,plans,goals,artifacts,voice_dictation,voice_realtime")
+	conv := w16CreateConv(t)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+
+	// ① dictation 会话拒绝凭据
+	dictation := w16CreateSession(t, conv, "dictation")
+	env.expectErr(t, "POST", "/api/v1/agent/voice-sessions/"+dictation.ID+"/realtime-token",
+		map[string]any{}, "validation_failed")
+	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+dictation.ID, map[string]any{"state": "ended"}, nil)
+
+	// ② realtime 会话但未配路由 → 422 voice_capability_unsupported
+	realtime := w16CreateSession(t, conv, "realtime")
+	env.expectErr(t, "POST", "/api/v1/agent/voice-sessions/"+realtime.ID+"/realtime-token",
+		map[string]any{}, "voice_capability_unsupported")
+
+	// ③ commit_realtime 记账：realtime_audio_ms/realtime_provider 落库（无路由不阻塞 commit——
+	// commit 只提交最终转写文本与时长；音频转换在桥端，供应商记账按上游回执另行核对）。
+	var created struct {
+		Turn voiceTurnView `json:"turn"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/voice-sessions/"+realtime.ID+"/turns", map[string]any{
+		"purpose": "commit_realtime", "request_id": uuid.NewString(),
+		"transcription":     "实时会话最终回合",
+		"realtime_provider": "realtime-test-provider",
+		"realtime_audio_ms": 12345,
+	}, &created)
+	if created.Turn.State != "submitted" || created.Turn.RealtimeAudioMS != 12345 || created.Turn.RealtimeProvider != "realtime-test-provider" {
+		t.Fatalf("V08 realtime 记账未落库：%+v", created.Turn)
+	}
+	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+realtime.ID, map[string]any{"state": "ended"}, nil)
+}
+
+// TestW16V08RealtimeTokenIssuedWithRoute：配置 realtime 路由后凭据签发成功，
+// 响应不含供应商密钥（token 是 OPS 短时会话凭据，10 分钟有效期）。
+func TestW16V08RealtimeTokenIssuedWithRoute(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "run_control,event_resume,plans,goals,artifacts,voice_realtime")
+	seedVoiceRoute(t, "realtime", "http://127.0.0.1:1/v1", "realtime-test-model")
+	conv := w16CreateConv(t)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	session := w16CreateSession(t, conv, "realtime")
+
+	var token struct {
+		SessionID string `json:"session_id"`
+		Token     string `json:"token"`
+		ExpiresAt string `json:"expires_at"`
+		Model     string `json:"model"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/voice-sessions/"+session.ID+"/realtime-token", map[string]any{}, &token)
+	if token.SessionID != session.ID || token.Token == "" || token.ExpiresAt == "" {
+		t.Fatalf("realtime 凭据未签发：%+v", token)
+	}
+	if token.Model != "realtime-test-model" {
+		t.Fatalf("凭据 model 错误：%q", token.Model)
+	}
+	// 快照已记录（记账用）；密钥不下发（响应体无 api_key 字段——由 handler 保证）。
+	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{"state": "ended"}, nil)
+}

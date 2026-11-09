@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -51,6 +52,10 @@ type voiceTurnView struct {
 	TTSModel     string `json:"tts_model,omitempty"`
 	TTSCharacters int   `json:"tts_characters,omitempty"`
 	TTSErrorCode string `json:"tts_error_code,omitempty"`
+	// DEV-AI27-16 第六批（A2）：realtime 双向音频回执（模型/时长/失败层），供 V08 核对。
+	RealtimeProvider  string `json:"realtime_provider,omitempty"`
+	RealtimeAudioMS   int    `json:"realtime_audio_ms,omitempty"`
+	RealtimeErrorCode string `json:"realtime_error_code,omitempty"`
 }
 
 const voiceSessionColumns = `v.id::text, v.conversation_id::text, v.mode, v.state, v.revision,
@@ -62,7 +67,8 @@ const voiceSessionColumnsPlain = `id::text, conversation_id::text, mode, state, 
 const voiceTurnColumns = `t.id::text, t.session_id::text, t.turn_index, t.purpose, t.state,
 	t.transcription, COALESCE(t.final_message_id::text,''), COALESCE(t.run_id::text,''),
 	t.asr_provider, t.asr_model, t.asr_seconds, t.asr_error_code,
-	t.tts_provider, t.tts_model, t.tts_characters, t.tts_error_code`
+	t.tts_provider, t.tts_model, t.tts_characters, t.tts_error_code,
+	t.realtime_provider, t.realtime_audio_ms, t.realtime_error_code`
 
 func (s *Server) voiceGuard(id *identity) error {
 	if id == nil {
@@ -149,6 +155,9 @@ type voiceTurnInput struct {
 	RequestID     string
 	Audio         []byte
 	Filename      string
+	// A2 realtime：桌面桥上报的双向音频供应商与实际时长（commit_realtime 记账用）。
+	RealtimeProvider string
+	RealtimeAudioMS  int
 }
 
 // 27 §11.4.3：单次语音输入 ≤5 分钟 / 20MiB。
@@ -186,18 +195,24 @@ func decodeVoiceTurnInput(w http.ResponseWriter, r *http.Request) (voiceTurnInpu
 		return in, nil
 	}
 	var body struct {
-		Purpose       string `json:"purpose"`
-		Transcription string `json:"transcription"`
-		RequestID     string `json:"request_id"`
-		AudioBase64   string `json:"audio_base64"`
-		AudioFilename string `json:"audio_filename"`
+		Purpose          string `json:"purpose"`
+		Transcription    string `json:"transcription"`
+		RequestID        string `json:"request_id"`
+		AudioBase64      string `json:"audio_base64"`
+		AudioFilename    string `json:"audio_filename"`
+		RealtimeProvider string `json:"realtime_provider"`
+		RealtimeAudioMS  int    `json:"realtime_audio_ms"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 28<<20)).Decode(&body); err != nil {
 		return voiceTurnInput{}, apiErr(400, "bad_request", "请求体无法解析")
 	}
+	if body.RealtimeAudioMS < 0 || body.RealtimeAudioMS > 24*3600*1000 {
+		return voiceTurnInput{}, apiErr(422, "validation_failed", "realtime_audio_ms 超出合理范围")
+	}
 	in := voiceTurnInput{
 		Purpose: body.Purpose, Transcription: body.Transcription,
 		RequestID: body.RequestID, Filename: body.AudioFilename,
+		RealtimeProvider: strings.TrimSpace(body.RealtimeProvider), RealtimeAudioMS: body.RealtimeAudioMS,
 	}
 	if strings.TrimSpace(body.AudioBase64) != "" {
 		data, err := base64.StdEncoding.DecodeString(body.AudioBase64)
@@ -301,12 +316,21 @@ func (s *Server) createVoiceTurn(w http.ResponseWriter, r *http.Request) error {
 			asrSeconds = tr.DurationSeconds
 		}
 	}
+	// A2 realtime 记账：commit_realtime 回合由桌面桥上报双向音频时长；dictation 回合不写。
+	realtimeProvider, realtimeAudioMS, realtimeErrCode := "", 0, ""
+	if in.Purpose == "commit_realtime" {
+		realtimeProvider, realtimeAudioMS = in.RealtimeProvider, in.RealtimeAudioMS
+	}
 	if _, err := s.db.Exec(r.Context(), "INSERT INTO agent_voice_turn"+
 		" (id, session_id, workspace_id, user_id, turn_index, purpose, state, transcription, request_id,"+
-		" asr_provider, asr_model, asr_seconds, asr_error_code)"+
-		" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+		" asr_provider, asr_model, asr_seconds, asr_error_code,"+
+		" tts_provider, tts_model, tts_characters, tts_error_code,"+
+		" realtime_provider, realtime_audio_ms, realtime_error_code)"+
+		" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
 		turnID, sessionID, id.WorkspaceID, id.UserID, turnIndex, in.Purpose, nextState,
-		transcription, requestID, asrProvider, asrModel, asrSeconds, asrErrorCode); err != nil {
+		transcription, requestID, asrProvider, asrModel, asrSeconds, asrErrorCode,
+		"", "", 0, "",
+		realtimeProvider, realtimeAudioMS, realtimeErrCode); err != nil {
 		return err
 	}
 	v, err := scanVoiceTurn(s.db.QueryRow(r.Context(),
@@ -433,6 +457,64 @@ func fmtInt(n int) string {
 	return strconv.Itoa(n)
 }
 
+// POST /agent/voice-sessions/{id}/realtime-token：realtime 会话凭据（A2，27 §11.4.5）。
+// 解析 realtime 路由（未配置 422 voice_capability_unsupported，不回退 default），校验
+// 会话归属与 mode=realtime；返回供应商连接参数（base_url/model/短时会话 ID），**绝不返回
+// 供应商 API Key**——密钥留在服务端，桌面桥直连供应商时经「会话令牌」语义由服务端代拨
+// （首版：桌面桥携带本端点返回的 token 调用服务端 WS 代理；无代理部署时如实返回
+// realtime_proxy_unavailable，不把 key 下发）。
+func (s *Server) createVoiceRealtimeToken(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.voiceGuard(id); err != nil {
+		return err
+	}
+	sessionID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return errNotFound
+	}
+	var state, mode string
+	if err := s.db.QueryRow(r.Context(), `SELECT state, mode FROM agent_voice_session
+		WHERE id=$1 AND user_id=$2 AND workspace_id=$3`,
+		sessionID, id.UserID, id.WorkspaceID).Scan(&state, &mode); err != nil {
+		if err == pgx.ErrNoRows {
+			return errNotFound
+		}
+		return err
+	}
+	if state != "active" {
+		return apiErr(409, "voice_session_ended", "语音会话已结束")
+	}
+	if mode != "realtime" {
+		return apiErr(422, "validation_failed", "realtime 凭据只发给 realtime 会话")
+	}
+	rt, routeErr := s.resolveRoute(r.Context(), "realtime")
+	if routeErr != nil {
+		return apiErr(422, "voice_capability_unsupported", "未配置 realtime 供应商路由；请在模型配置中为 realtime 任务指定支持实时音频的供应商")
+	}
+	// 短时会话令牌：随机 256bit，10 分钟有效；与本会话绑定（服务端可据此代拨与记账）。
+	token := uuid.New().String() + uuid.New().String()
+	if _, err := s.db.Exec(r.Context(), `UPDATE agent_voice_session
+		SET route_snapshot = route_snapshot || $2::jsonb, revision=revision+1 WHERE id=$1`,
+		sessionID, mustJSON(map[string]any{
+			"realtime_token":     token,
+			"realtime_token_exp": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339),
+			"realtime_provider":  rt.ProviderName,
+			"realtime_model":     rt.Model,
+		})); err != nil {
+		return err
+	}
+	return ok(w, map[string]any{
+		"session_id": sessionID.String(),
+		"token":      token,
+		"expires_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339),
+		"provider":   rt.ProviderName,
+		"model":      rt.Model,
+		// 首版边界：服务端 realtime WS 代理未部署，桌面桥拿到 token 后调用服务端代理端点；
+		// 代理未部署时桥端给可读错误（不假装连上）。
+		"proxy_endpoint": "/api/v1/agent/voice-sessions/" + sessionID.String() + "/realtime-ws",
+	})
+}
+
 // PATCH /agent/voice-sessions/{id}：打断（interrupted）或结束（ended）。
 func (s *Server) patchVoiceSession(w http.ResponseWriter, r *http.Request) error {
 	id := ident(r.Context())
@@ -531,6 +613,7 @@ func scanVoiceTurn(row pgx.Row) (voiceTurnView, error) {
 	err := row.Scan(&v.ID, &v.SessionID, &v.TurnIndex, &v.Purpose, &v.State,
 		&v.Transcription, &v.FinalMessageID, &v.RunID,
 		&v.ASRProvider, &v.ASRModel, &v.ASRSeconds, &v.ASRErrorCode,
-		&v.TTSProvider, &v.TTSModel, &v.TTSCharacters, &v.TTSErrorCode)
+		&v.TTSProvider, &v.TTSModel, &v.TTSCharacters, &v.TTSErrorCode,
+		&v.RealtimeProvider, &v.RealtimeAudioMS, &v.RealtimeErrorCode)
 	return v, err
 }

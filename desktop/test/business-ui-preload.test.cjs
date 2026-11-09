@@ -43,6 +43,7 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'onLocalSettingsState',
     'onOpenSettings',
     'onPlatformIntentResult',
+    'onRealtimeEvent',
     'onSidepanelDraft',
     'onSidepanelStop'
   ]);
