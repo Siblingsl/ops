@@ -43,7 +43,8 @@ test('W17 worker: ping 响应', { timeout: 30_000 }, async (t) => {
 });
 
 test('W17 worker: 枚举真实窗口（Windows 本机）', { timeout: 40_000 }, async (t) => {
-  if (process.platform !== 'win32') t.skip('需要 Windows');
+  // node:test 的 t.skip() 只标记结果、不中断执行，必须自己 return。
+  if (process.platform !== 'win32') { t.skip('需要 Windows'); return; }
   const worker = withWorker(t);
   const result = await worker.call('list_windows');
   assert.equal(result.ok, true, result.error || '');
@@ -93,9 +94,17 @@ function psScript(script, timeoutMs = 20_000) {
 }
 
 test('W17c UIA: 真实记事本读控件树 + SetValue 输入 + 读回验证（C01/C03/C05 子集）', { timeout: 60_000 }, async (t) => {
-  if (process.platform !== 'win32') t.skip('需要 Windows');
-  // ZCode agent 会话（Session 0 隔离）：GUI 应用从此环境启动即退出——用 desktop/scripts/uia-notepad-manual.ps1 人工验证。
-  t.skip('GUI 旅程需用户桌面会话人工执行（脚本 desktop/scripts/uia-notepad-manual.ps1）');
+  if (process.platform !== 'win32') { t.skip('需要 Windows'); return; }
+  // 注意：node:test 的 t.skip() 只标记结果，**不会中断函数执行**。
+  // 这里曾经少了 return，导致每次跑 pnpm test 都会真的 spawn 一个记事本窗口
+  // （而且因为结果被标记为 skip，报错也被吞掉，没人发现）。
+  // GUI 旅程在 agent 会话（Session 0 隔离）里跑不了，改为显式开关：
+  //   OPS_UIA_MANUAL=1 pnpm test   —— 需在用户桌面会话执行
+  //   或直接跑 desktop/scripts/uia-notepad-manual.ps1
+  if (process.env.OPS_UIA_MANUAL !== '1') {
+    t.skip('GUI 旅程需用户桌面会话人工执行：设 OPS_UIA_MANUAL=1 可开启，或跑 desktop/scripts/uia-notepad-manual.ps1');
+    return;
+  }
   // 1. 启动记事本（独立进程）
   const notepad = spawn('notepad', [], { stdio: 'ignore' });
   t.after(() => { try { notepad.kill(); } catch {} });
