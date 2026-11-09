@@ -202,6 +202,11 @@ test('bridge e2e: pairing -> dispatch -> result -> idempotent -> unknown -> revo
   assert.equal(rogue.error_code, 'browser_action_unsupported');
   assert.ok(!lines.some((m) => m.type === 'command' && m.request_id === 'rogue-1'), '白名单外的动作不派发');
 
+  // A7：observe_frames 是登记动作（cd0a7afa 工具目录有、白名单漏登记的缺口补齐）
+  const framesCmd = b.dispatch('observe_frames', { tab_id: 1 }, 'frames-1');
+  assert.equal(framesCmd.accepted, true, 'observe_frames 应在桥侧白名单内');
+  await next();
+
   // W05 元数据上限 256KiB：超限拒绝且不派发
   const bigPayload = { blob: 'x'.repeat(256 * 1024 + 1) };
   const big = b.dispatch('extract', bigPayload, 'big-1');

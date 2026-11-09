@@ -296,6 +296,18 @@ async function executeOn(tabId, fn, args) {
   return res && res.result;
 }
 
+// frame 级注入（A7，27 §14.3 表格行 2）：observe_frames 上报的 frame_id 定向执行。
+// 跨域 frame 由 Chrome 按 origin 隔离——未经 host_permissions 授权的 origin 注入直接拒绝；
+// frameIds 里的 frame 不存在（导航后失效）时 executeScript 抛错，这里转成显式 error。
+async function executeOnFrame(tabId, frameId, fn, args) {
+  try {
+    const results = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func: fn, args });
+    return (results && results[0] && results[0].result) || { error: 'no_result' };
+  } catch (err) {
+    return { error: 'frame_inject_failed', message: String((err && err.message) || err).slice(0, 120) };
+  }
+}
+
 // 4/9 frame 级观察（27 §14.3）：allFrames 注入，逐 frame 上报 origin 与节点摘要；
 // 跨域 iframe 内容默认不展开（origin_only），由用户授权该 origin 后才返回节点。
 async function actionObserveFrames(payload) {
@@ -384,10 +396,19 @@ async function actionNavigate(payload) {
 }
 
 async function actionClick(payload) {
+  // frame_id 缺省 = 主 frame（旧行为不变）；带 frame_id 时定向注入（A7）。
+  const frameId = Number(payload.frame_id);
+  if (Number.isInteger(frameId) && frameId > 0) {
+    return executeOnFrame(Number(payload.tab_id), frameId, clickFn, [String(payload.ref), String(payload.doc_rev)]);
+  }
   return (await executeOn(Number(payload.tab_id), clickFn, [String(payload.ref), String(payload.doc_rev)])) || { error: 'no_result' };
 }
 
 async function actionType(payload) {
+  const frameId = Number(payload.frame_id);
+  if (Number.isInteger(frameId) && frameId > 0) {
+    return executeOnFrame(Number(payload.tab_id), frameId, typeFn, [String(payload.ref), String(payload.text ?? ''), String(payload.doc_rev)]);
+  }
   return (await executeOn(Number(payload.tab_id), typeFn, [String(payload.ref), String(payload.text ?? ''), String(payload.doc_rev)])) || { error: 'no_result' };
 }
 

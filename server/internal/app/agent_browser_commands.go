@@ -34,7 +34,7 @@ type browserCommandView struct {
 }
 
 var browserCommandActions = map[string]bool{
-	"tabs_list": true, "observe": true, "navigate": true,
+	"tabs_list": true, "observe": true, "observe_frames": true, "navigate": true,
 	"click": true, "type": true, "extract": true, "screenshot": true,
 }
 

@@ -61,7 +61,7 @@ export interface LedgerEntry {
 // 27 §13.5/§15.1：元数据信封建议上限 256KiB，图片/大文本走分块/附件通道（W09），不在命令体内。
 export const MAX_METADATA_BYTES = 256 * 1024;
 // 27 §15.1：登记动作集；桥侧前置白名单，扩展侧登记表为第二道校验。
-export const ALLOWED_ACTIONS = new Set(['tabs_list', 'observe', 'navigate', 'click', 'type', 'extract', 'screenshot']);
+export const ALLOWED_ACTIONS = new Set(['tabs_list', 'observe', 'observe_frames', 'navigate', 'click', 'type', 'extract', 'screenshot']);
 // 27 §13.5：时钟异常停止派发（wall clock 与单调时钟漂移超限即拒绝，直至恢复）。
 const CLOCK_TOLERANCE_MS = 5000;
 

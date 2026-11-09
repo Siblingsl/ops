@@ -242,6 +242,16 @@ func TestW04CommandLedgerLifecycle(t *testing.T) {
 	rogue["action"] = "execute_js"
 	env.expectErr(t, "POST", "/api/v1/agent/browser/commands", rogue, "browser_action_unsupported")
 
+	// A7：observe_frames 在服务端白名单内（工具目录 browser_observe_frames 的动作可达）
+	framesBody := cmdBody("33333333-3333-4333-8333-333333333333")
+	framesBody["action"] = "observe_frames"
+	framesBody["payload"] = map[string]any{"tab_id": 1}
+	var framesCmd browserCommandView
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/commands", framesBody, &framesCmd)
+	if framesCmd.State != "queued" {
+		t.Fatalf("observe_frames 应登记为 queued：%+v", framesCmd)
+	}
+
 	// 创建 queued → 幂等重放返回原命令 → 异载荷 409
 	var first browserCommandView
 	env.mustJSON(t, "POST", "/api/v1/agent/browser/commands", cmdBody("11111111-1111-4111-8111-111111111111"), &first)
