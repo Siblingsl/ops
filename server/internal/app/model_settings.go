@@ -533,6 +533,8 @@ var taskTypes = []struct{ Type, Label string }{
 	{"tier_quality", "质量档（覆盖各任务）"},
 	// DEV-AI27-16（W16c）：真实 ASR 供应商路由（27 §11.4.3 / V05）。
 	{"asr", "ASR 语音转写"},
+	// DEV-AI27-16 第五批（A1）：TTS 合成路由（27 §11.4.4 / V07）。
+	{"tts", "TTS 语音合成"},
 }
 
 func taskLabel(taskType string) string {

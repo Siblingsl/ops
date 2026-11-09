@@ -268,6 +268,8 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/conversations/{id}/voice-sessions",
 		"POST /api/v1/agent/voice-sessions/{id}/turns",
 		"PATCH /api/v1/agent/voice-sessions/{id}/turns/{turnId}",
+		// DEV-AI27-16 第五批（A1）：TTS 合成（27 §11.4.4 / V07）。
+		"POST /api/v1/agent/voice-sessions/{id}/turns/{turnId}/synthesize",
 		"PATCH /api/v1/agent/voice-sessions/{id}",
 		"GET /api/v1/agent/voice-sessions/{id}",
 		// DEV-AI27-17（W17）Windows 电脑控制：选窗器与任务面板共用。

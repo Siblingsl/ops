@@ -11,7 +11,7 @@ var settingsModelTaskTypes = []string{
 	"profile_bootstrap", "account_positioning", "strategy_revise", "strategy_outline", "hot_relevance",
 	"daily_recommend", "reference_analyze", "material_extract", "material_tag", "inbox_triage", "memory_distill",
 	"tag_suggest", "review_attribution", "work_breakdown", "weekly_digest", "metric_screenshot", "layout_suggest",
-	"agent_chat", "agent_summary", "embedding", "tier_economy", "tier_quality", "asr",
+	"agent_chat", "agent_summary", "embedding", "tier_economy", "tier_quality", "asr", "tts",
 }
 
 // settingsEditableTasks 是提示词模板与提示词对比测试接受的任务类型（r4.go 的 editablePromptTasks）。

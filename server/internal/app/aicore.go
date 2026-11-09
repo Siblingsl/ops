@@ -119,6 +119,10 @@ func (s *Server) resolveServerRouteTier(ctx context.Context, taskType, tier stri
 		// ASR 能力与 chat 模型不通用：未显式配置 asr 路由时不得回退到 default，
 		// 否则会把 chat 模型当 ASR 用并报出误导性的 404（27 §11.4.5：准确指出失败层）。
 		keys = []string{"asr"}
+	case taskType == "tts":
+		// A1（27 §11.4.4）：TTS 同理——未配置 tts 路由时 422 voice_capability_unsupported，
+		// 不把 chat 模型当 TTS 用（/audio/speech 会 404 且伪装成供应商故障）。
+		keys = []string{"tts"}
 	case taskType == "image_alt":
 		keys = []string{"metric_screenshot"}
 	case costTiers[tier] && taskType != "agent_chat":

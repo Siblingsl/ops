@@ -3,8 +3,11 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -331,5 +334,153 @@ func TestW16V05ASRMissingRouteRejects(t *testing.T) {
 		"audio_base64":   base64.StdEncoding.EncodeToString([]byte("fake-audio-bytes")),
 		"audio_filename": "clip.webm",
 	}, "voice_capability_unsupported")
+	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{"state": "ended"}, nil)
+}
+
+// seedVoiceRoute 通用化 seedASRRoute：按 taskType 播种路由（asr/tts）。
+func seedVoiceRoute(t *testing.T, taskType, baseURL, model string) {
+	t.Helper()
+	ws := env.me(t).Workspace.ID
+	enc, err := env.srv.box.Encrypt("asr-test-placeholder-not-a-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var providerID uuid.UUID
+	if err := env.srv.db.QueryRow(context.Background(),
+		`INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models, status, execution_location)
+		 VALUES ($1,$2,$3,$4,$5,$6,'active','server') RETURNING id`,
+		ws, taskType+" 测试供应商", baseURL, enc, env.srv.box.Version, []string{model}).Scan(&providerID); err != nil {
+		t.Fatalf("播种 %s 供应商失败：%v", taskType, err)
+	}
+	if _, err := env.srv.db.Exec(context.Background(),
+		`INSERT INTO model_route (workspace_id, task_type, provider_id, model, execution_location)
+		 VALUES ($1,$2,$3,$4,'server')
+		 ON CONFLICT (workspace_id, task_type) DO UPDATE
+		 SET provider_id=EXCLUDED.provider_id, model=EXCLUDED.model`,
+		ws, taskType, providerID, model); err != nil {
+		t.Fatalf("播种 %s 路由失败：%v", taskType, err)
+	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_route WHERE workspace_id=$1 AND task_type=$2`, ws, taskType)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_provider WHERE id=$1`, providerID)
+	})
+}
+
+// TestW16V07TTSSynthesizesTurn：配置 tts 路由后，终稿经 OpenAI 兼容 /audio/speech
+// 合成，回执模型与字符量入库（离线 mock；真实供应商需音频模型，验收另记）。
+func TestW16V07TTSSynthesizesTurn(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "run_control,event_resume,plans,goals,artifacts,voice_dictation")
+
+	var gotModel, gotVoice string
+	var gotBody []byte
+	tts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/audio/speech" {
+			t.Errorf("TTS 路径错误：%s", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		gotBody = body
+		var in struct {
+			Model string `json:"model"`
+			Voice string `json:"voice"`
+		}
+		_ = json.Unmarshal(body, &in)
+		gotModel, gotVoice = in.Model, in.Voice
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write([]byte("ID3FAKE-MP3-BYTES"))
+	}))
+	defer tts.Close()
+	seedVoiceRoute(t, "tts", tts.URL+"/v1", "tts-test-model")
+
+	conv := w16CreateConv(t)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	session := w16CreateSession(t, conv, "dictation")
+	var created struct {
+		Turn voiceTurnView `json:"turn"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/voice-sessions/"+session.ID+"/turns", map[string]any{
+		"purpose": "transcribe", "request_id": uuid.NewString(),
+		"transcription": "这是一段待合成的终稿",
+	}, &created)
+
+	st, body := env.do("POST", "/api/v1/agent/voice-sessions/"+session.ID+"/turns/"+created.Turn.ID+"/synthesize",
+		map[string]any{"voice": "alloy"})
+	if st != http.StatusOK {
+		t.Fatalf("synthesize 应 200：%d %s", st, body)
+	}
+	if string(body) != "ID3FAKE-MP3-BYTES" {
+		t.Fatalf("音频回包不符：%q", string(body))
+	}
+	if gotModel != "tts-test-model" || gotVoice != "alloy" {
+		t.Fatalf("TTS 请求 model/voice 错误：model=%q voice=%q", gotModel, gotVoice)
+	}
+	if !strings.Contains(string(gotBody), "这是一段待合成的终稿") {
+		t.Fatal("合成请求应携带回合终稿文本")
+	}
+	// 记账落库：turn 视图带 tts_model/tts_characters。
+	var detail struct {
+		Turns []voiceTurnView `json:"turns"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{}, &detail)
+	if len(detail.Turns) != 1 || detail.Turns[0].TTSModel != "tts-test-model" || detail.Turns[0].TTSCharacters != len([]rune("这是一段待合成的终稿")) {
+		t.Fatalf("V07 TTS 记账未落库：%+v", detail.Turns)
+	}
+	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{"state": "ended"}, nil)
+}
+
+// TestW16V07TTSFailureKeepsLedger：上游失败 502 且 tts_error_code 落库，不伪装成功。
+func TestW16V07TTSFailureKeepsLedger(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "run_control,event_resume,plans,goals,artifacts,voice_dictation")
+	tts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"tts down"}`))
+	}))
+	defer tts.Close()
+	seedVoiceRoute(t, "tts", tts.URL+"/v1", "tts-test-model")
+
+	conv := w16CreateConv(t)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	session := w16CreateSession(t, conv, "dictation")
+	var created struct {
+		Turn voiceTurnView `json:"turn"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/voice-sessions/"+session.ID+"/turns", map[string]any{
+		"purpose": "transcribe", "request_id": uuid.NewString(),
+		"transcription": "失败用例文本",
+	}, &created)
+
+	env.expectErr(t, "POST", "/api/v1/agent/voice-sessions/"+session.ID+"/turns/"+created.Turn.ID+"/synthesize",
+		map[string]any{"voice": "alloy"}, "voice_provider_unavailable")
+
+	var detail struct {
+		Turns []voiceTurnView `json:"turns"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{}, &detail)
+	if len(detail.Turns) != 1 || detail.Turns[0].TTSErrorCode != "voice_provider_unavailable" {
+		t.Fatalf("TTS 失败记账未落库：%+v", detail.Turns)
+	}
+	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{"state": "ended"}, nil)
+}
+
+// TestW16V07TTSMissingRouteRejects：未配置 tts 路由 422 voice_capability_unsupported
+//（不回退 default，aicore.go 与 asr 同口径）。
+func TestW16V07TTSMissingRouteRejects(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "run_control,event_resume,plans,goals,artifacts,voice_dictation")
+
+	conv := w16CreateConv(t)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	session := w16CreateSession(t, conv, "dictation")
+	var created struct {
+		Turn voiceTurnView `json:"turn"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/voice-sessions/"+session.ID+"/turns", map[string]any{
+		"purpose": "transcribe", "request_id": uuid.NewString(),
+		"transcription": "没有路由的文本",
+	}, &created)
+
+	env.expectErr(t, "POST", "/api/v1/agent/voice-sessions/"+session.ID+"/turns/"+created.Turn.ID+"/synthesize",
+		map[string]any{"voice": "alloy"}, "voice_capability_unsupported")
 	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{"state": "ended"}, nil)
 }

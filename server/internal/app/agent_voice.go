@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -45,6 +46,11 @@ type voiceTurnView struct {
 	ASRModel     string  `json:"asr_model,omitempty"`
 	ASRSeconds   float64 `json:"asr_seconds,omitempty"`
 	ASRErrorCode string  `json:"asr_error_code,omitempty"`
+	// DEV-AI27-16 第五批（A1）：TTS 回执（模型/字符量/失败层），供 V07 核对。
+	TTSProvider  string `json:"tts_provider,omitempty"`
+	TTSModel     string `json:"tts_model,omitempty"`
+	TTSCharacters int   `json:"tts_characters,omitempty"`
+	TTSErrorCode string `json:"tts_error_code,omitempty"`
 }
 
 const voiceSessionColumns = `v.id::text, v.conversation_id::text, v.mode, v.state, v.revision,
@@ -55,7 +61,8 @@ const voiceSessionColumnsPlain = `id::text, conversation_id::text, mode, state, 
 
 const voiceTurnColumns = `t.id::text, t.session_id::text, t.turn_index, t.purpose, t.state,
 	t.transcription, COALESCE(t.final_message_id::text,''), COALESCE(t.run_id::text,''),
-	t.asr_provider, t.asr_model, t.asr_seconds, t.asr_error_code`
+	t.asr_provider, t.asr_model, t.asr_seconds, t.asr_error_code,
+	t.tts_provider, t.tts_model, t.tts_characters, t.tts_error_code`
 
 func (s *Server) voiceGuard(id *identity) error {
 	if id == nil {
@@ -350,9 +357,84 @@ func (s *Server) editVoiceTurn(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, map[string]any{"turn": v})
 }
 
-// PATCH /agent/voice-sessions/{id}：打断（interrupted）或结束（ended）。
-func (s *Server) patchVoiceSession(w http.ResponseWriter, r *http.Request) error {
+// POST /agent/voice-sessions/{id}/turns/{turnId}/synthesize：把回合终稿合成为语音（A1，27 §11.4.4）。
+// 走 tts 路由（未配置 422 voice_capability_unsupported，不回退 default）；返回音频流；
+// tts_* 记账写入回合行（失败也留档）。文本上限 5000 字符（单次合成上限，防滥用）。
+func (s *Server) synthesizeVoiceTurn(w http.ResponseWriter, r *http.Request) error {
 	id := ident(r.Context())
+	if err := s.voiceGuard(id); err != nil {
+		return err
+	}
+	sessionID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return errNotFound
+	}
+	turnID, err := uuid.Parse(chi.URLParam(r, "turnId"))
+	if err != nil {
+		return errNotFound
+	}
+	var body struct {
+		Voice string `json:"voice"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&body); err != nil {
+		return apiErr(400, "bad_request", "请求体无法解析")
+	}
+	if strings.TrimSpace(body.Voice) == "" {
+		return apiErr(422, "validation_failed", "voice 必填（供应商音色名）")
+	}
+	var text, sessionState string
+	if err := s.db.QueryRow(r.Context(), `SELECT t.transcription, s.state FROM agent_voice_turn t
+		JOIN agent_voice_session s ON s.id=t.session_id
+		WHERE t.id=$1 AND t.session_id=$2 AND t.user_id=$3 AND t.workspace_id=$4`,
+		turnID, sessionID, id.UserID, id.WorkspaceID).Scan(&text, &sessionState); err != nil {
+		if err == pgx.ErrNoRows {
+			return errNotFound
+		}
+		return err
+	}
+	if sessionState != "active" {
+		return apiErr(409, "voice_session_ended", "语音会话已结束")
+	}
+	if len([]rune(text)) == 0 {
+		return apiErr(422, "voice_no_text", "回合没有可合成的文本")
+	}
+	if len([]rune(text)) > 5000 {
+		return apiErr(422, "voice_text_too_long", "单次合成上限 5000 字符")
+	}
+	rt, routeErr := s.resolveRoute(r.Context(), "tts")
+	if routeErr != nil {
+		return apiErr(422, "voice_capability_unsupported", "未配置 TTS 供应商路由；请在模型配置中为 tts 任务指定支持合成的供应商")
+	}
+	actx, client := s.aiClientForRoute(r.Context(), rt)
+	audio, mime, speechErr := ai.Speech(actx, client, rt.BaseURL, rt.APIKey, ai.SpeechRequest{
+		Text: text, Model: rt.Model, Voice: body.Voice,
+	})
+	// 记账（失败也落库；同回合多次合成只保留最近一次）。
+	ttsErrCode := ""
+	if speechErr != nil {
+		ttsErrCode = "voice_provider_unavailable"
+	}
+	if _, err := s.db.Exec(r.Context(), `UPDATE agent_voice_turn
+		SET tts_provider=$2, tts_model=$3, tts_characters=$4, tts_error_code=$5 WHERE id=$1`,
+		turnID, rt.ProviderName, rt.Model, len([]rune(text)), ttsErrCode); err != nil {
+		return err
+	}
+	if speechErr != nil {
+		return apiErr(502, ttsErrCode, "TTS 供应商调用失败；已保留失败记账")
+	}
+	w.Header().Set("Content-Type", mime)
+	w.Header().Set("Content-Length", fmtInt(len(audio)))
+	_, _ = w.Write(audio)
+	return nil
+}
+
+// fmtInt 是 Content-Length 的小工具（避免为它引 strconv 到多处）。
+func fmtInt(n int) string {
+	return strconv.Itoa(n)
+}
+
+// PATCH /agent/voice-sessions/{id}：打断（interrupted）或结束（ended）。
+func (s *Server) patchVoiceSession(w http.ResponseWriter, r *http.Request) error {	id := ident(r.Context())
 	if err := s.voiceGuard(id); err != nil {
 		return err
 	}
@@ -447,6 +529,7 @@ func scanVoiceTurn(row pgx.Row) (voiceTurnView, error) {
 	var v voiceTurnView
 	err := row.Scan(&v.ID, &v.SessionID, &v.TurnIndex, &v.Purpose, &v.State,
 		&v.Transcription, &v.FinalMessageID, &v.RunID,
-		&v.ASRProvider, &v.ASRModel, &v.ASRSeconds, &v.ASRErrorCode)
+		&v.ASRProvider, &v.ASRModel, &v.ASRSeconds, &v.ASRErrorCode,
+		&v.TTSProvider, &v.TTSModel, &v.TTSCharacters, &v.TTSErrorCode)
 	return v, err
 }
