@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, RotateCw, X, Globe } from 'lucide-react'
 
 // DEV-AI27-08（W08，D-172）：工作视图"应用内"浏览 UI（27 §7.8 功能表第一批）。
@@ -87,13 +87,34 @@ export function InBrowsePanel({ visible }: { visible: boolean }) {
 
   const btn = 'inline-flex size-8 items-center justify-center rounded-md text-mist-500 hover:bg-mist-100 hover:text-mist-800 disabled:opacity-40 disabled:pointer-events-none'
 
+  // DEV-AI27-08e（深化）：多页签拖拽排序（HTML5 DnD，主进程 reorder-tab 意图）。
+  const [dragOverTabID, setDragOverTabID] = useState<string | null>(null)
+  const draggedTabRef = useRef<string | null>(null)
+
+  const onTabDragStart = (tabId: string) => { draggedTabRef.current = tabId }
+  const onTabDragOver = (event: React.DragEvent, tabId: string) => {
+    event.preventDefault()
+    if (draggedTabRef.current && draggedTabRef.current !== tabId) setDragOverTabID(tabId)
+  }
+  const onTabDrop = (tabId: string) => {
+    const from = draggedTabRef.current
+    setDragOverTabID(null)
+    draggedTabRef.current = null
+    if (from && from !== tabId && invoke) void invoke('inbrowse:reorder-tab', { from, to: tabId })
+  }
+
   return <div className="flex h-full flex-col" data-testid="inbrowse-panel">
     {snapshot.tabs.length > 0 && <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-mist-200 bg-mist-50 px-2 py-1" data-testid="inbrowse-tabs">
       {snapshot.tabs.map((tab) => <button key={tab.id} type="button"
         data-testid={`inbrowse-tab-${tab.id}`}
+        draggable
+        onDragStart={() => onTabDragStart(tab.id)}
+        onDragOver={(e) => onTabDragOver(e, tab.id)}
+        onDragLeave={() => { if (dragOverTabID === tab.id) setDragOverTabID(null) }}
+        onDrop={() => onTabDrop(tab.id)}
         aria-current={tab.id === snapshot.activeTabId}
         onClick={() => void invoke('inbrowse:switch-tab', tab.id)}
-        className={`max-w-40 shrink-0 truncate rounded-md px-2 py-1 text-[12px] ${tab.id === snapshot.activeTabId ? 'bg-white text-ink-700 shadow-sm' : 'text-mist-500 hover:bg-white/60'}`}>
+        className={`max-w-40 shrink-0 truncate rounded-md px-2 py-1 text-[12px] ${tab.id === snapshot.activeTabId ? 'bg-white text-ink-700 shadow-sm' : 'text-mist-500 hover:bg-white/60'} ${dragOverTabID === tab.id ? 'border border-primary' : 'border border-transparent'}`}>
         {tab.title || tab.url || '空白页'}
       </button>)}
       <button type="button" className={btn} aria-label="新建页签" data-testid="inbrowse-new-tab"

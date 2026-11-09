@@ -116,6 +116,31 @@ test('W08d: detach/attach 保留全部页签（不丢 tab）', () => {
   c.destroy();
 });
 
+test('W08d: reorderTab 拖拽排序', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  const t1 = c.openTab();
+  const t2 = c.openTab();
+  const t3 = c.openTab();
+  // 向左拖：把 t3 移到 t1 之前
+  assert.equal(c.reorderTab(t3, t1), true);
+  let snap = c.snapshot();
+  assert.equal(snap.tabs[0].id, t3, 't3 应移到首位');
+  assert.equal(snap.tabs[1].id, t1);
+  assert.equal(snap.tabs[2].id, t2);
+  // 向右拖：把 t3 拖到末位，应真的落到末尾而不是停在 t2 之前
+  assert.equal(c.reorderTab(t3, t2), true);
+  snap = c.snapshot();
+  assert.equal(snap.tabs[0].id, t1);
+  assert.equal(snap.tabs[1].id, t2);
+  assert.equal(snap.tabs[2].id, t3, '向右拖应落在目标之后');
+  // 同 id 排序无效
+  assert.equal(c.reorderTab(t3, t3), false);
+  // 不存在的 id 无效
+  assert.equal(c.reorderTab('nope', t1), false);
+  c.destroy();
+});
+
 test('W08d: 宽度钳制与 destroy 清空', () => {
   const win = fakeWindow();
   const c = new InBrowseViewController(win, {}, () => {});

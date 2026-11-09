@@ -149,6 +149,19 @@ export class InBrowseViewController {
     }
   }
 
+  /** 拖拽排序：把 from 移到 to 的位置（27 §7.8 标签管理 UI 增强）。 */
+  reorderTab(from: string, to: string): boolean {
+    if (!this.tabs.has(from) || !this.tabs.has(to) || from === to) return false;
+    const fromIdx = this.tabOrder.indexOf(from);
+    const toIdx = this.tabOrder.indexOf(to);
+    const [moved] = this.tabOrder.splice(fromIdx, 1);
+    // 向右拖落在目标之后、向左拖落在目标之前，否则「拖到最右」永远到不了末位。
+    const targetIdx = this.tabOrder.indexOf(to);
+    this.tabOrder.splice(fromIdx < toIdx ? targetIdx + 1 : targetIdx, 0, moved);
+    this.emitSnapshot();
+    return true;
+  }
+
   /** 关闭页签（27 §7.8：关闭活动目标先停控；最后一个关闭后视图清空）。 */
   closeTab(tabID: string): void {
     const tab = this.tabs.get(tabID);

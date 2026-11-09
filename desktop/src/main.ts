@@ -850,6 +850,12 @@ function registerIpcHandlers(): void {
     if (!requireInBrowse(event).switchTab(tabID)) throw new Error('inbrowse_tab_unknown');
     return null;
   });
+  ipcHandle('inbrowse:reorder-tab', (event, raw) => {
+    if (!raw || typeof raw !== 'object') throw new Error('reorder 参数无效。');
+    const b = raw as { from?: unknown; to?: unknown };
+    if (!requireInBrowse(event).reorderTab(String(b.from ?? ''), String(b.to ?? ''))) throw new Error('inbrowse_reorder_invalid');
+    return null;
+  });
   ipcHandle('inbrowse:close-tab', (event, raw) => {
     const tabID = typeof raw === 'string' ? raw : '';
     requireInBrowse(event).closeTab(tabID);
