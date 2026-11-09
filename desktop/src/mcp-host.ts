@@ -246,7 +246,12 @@ export class McpStdioConnection extends EventEmitter {
 export interface McpHttpConfig {
   url: string;
   headers?: Record<string, string>; // 不含秘密值（秘密经 env 注入或 OAuth，另行处理）
+  /** OAuth 客户端（P01）：提供时请求自动带 Authorization，401 单次刷新（mcp-oauth.ts）。 */
+  oauth?: McpOAuthClient;
 }
+
+// 延迟 import 环：mcp-oauth.ts 不引用本文件，这里只引类型。
+import { McpOAuthClient } from './mcp-oauth';
 
 /**
  * Streamable HTTP 连接（27 §11.2.2）：POST JSON-RPC 单次请求；SSE 响应按行解析。
@@ -261,26 +266,39 @@ export class McpHttpConnection extends EventEmitter {
 
   constructor(
     readonly connectionId: string,
-    private readonly config: McpHttpConfig,
+    readonly config: McpHttpConfig,
   ) {
     super();
   }
 
-  private async post(body: unknown, timeoutMs: number): Promise<{ status: number; json: unknown; sessionID: string | null }> {
+  private async post(body: unknown, timeoutMs: number, allowAuthRetry = true): Promise<{ status: number; json: unknown; sessionID: string | null }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
+      // P01：OAuth 令牌注入（拿不到时不带 Authorization，匿名请求按服务器策略处理）。
+      let authHeader: string | null = null;
+      if (this.config.oauth) {
+        authHeader = await this.config.oauth.authorizationHeader();
+      }
       const response = await fetch(this.config.url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json, text/event-stream',
+          ...(authHeader ? { Authorization: authHeader } : {}),
           ...(this.sessionID ? { 'Mcp-Session-Id': this.sessionID } : {}),
           ...this.config.headers,
         },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
+      // P01：401 只刷新一次重试（刷新失败转 needs_reauth，错误原样返回，不无限重试）。
+      if (response.status === 401 && this.config.oauth && allowAuthRetry) {
+        const refreshed = await this.config.oauth.refreshOnce();
+        if (refreshed) {
+          return this.post(body, timeoutMs, false);
+        }
+      }
       const sessionID = response.headers.get('mcp-session-id');
       if (sessionID) this.sessionID = sessionID;
       const contentType = response.headers.get('content-type') ?? '';
@@ -414,6 +432,10 @@ export class McpHostManager extends EventEmitter {
     if (!connection) return;
     connection.stop();
     this.connections.delete(connectionId);
+    // P01：连接删除时清 OAuth 令牌文件（令牌零残留）。
+    if (connection instanceof McpHttpConnection) {
+      connection.config.oauth?.cleanup();
+    }
   }
 
   stopAll(): void {
