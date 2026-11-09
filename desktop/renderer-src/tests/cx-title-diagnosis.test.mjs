@@ -5,7 +5,7 @@ import { createServer } from 'vite'
 test('CX11 本地标题规则按 Unicode 码点与固定版本口径精确计分', async () => {
   const server = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, ws: false }, appType: 'custom' })
   try {
-    const { scoreTitleRules } = await server.ssrLoadModule('/src/pages/work/editor-title-diagnosis.ts')
+    const { scoreTitleRules } = await server.ssrLoadModule('/pages/work/editor-title-diagnosis.ts')
     const exact = scoreTitleRules('wechat_mp', '3天内看懂内容', ['内容'])
     assert.equal(exact.ruleScore, 50)
     assert.equal(exact.ruleMax, 60)

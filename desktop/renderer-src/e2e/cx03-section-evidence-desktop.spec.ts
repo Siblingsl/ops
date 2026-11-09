@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 test('桌面构建渲染保留逐段来源和重复图片顺序', async ({ page, baseURL }) => {
   await page.goto(`${baseURL}/login`)
   const rendered = await page.evaluate(async () => {
-    const load = new Function('return import("/src/lib/render.ts")')
+    const load = new Function('return import("/lib/render.ts")')
     const { renderWechatSections, createStableWechatHTML } = await load()
     const assetID = '4f9c5897-1bf9-4812-981f-4d675ef4ad61'
     const build = renderWechatSections([

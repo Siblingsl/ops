@@ -15,7 +15,7 @@ function serverFeatureNames() {
 }
 
 function typeFeatureNames() {
-  const src = read('../src/lib/types.ts')
+  const src = read('../lib/types.ts')
   const start = src.indexOf('export type AgentWorkbenchFeatureName =')
   assert.ok(start >= 0, '未找到 AgentWorkbenchFeatureName 类型')
   const block = src.slice(start).split(/\n\nexport |\n\ntype |\n\ninterface /)[0]
@@ -23,7 +23,7 @@ function typeFeatureNames() {
 }
 
 function adminLabelNames() {
-  const src = read('../src/pages/settings/Admin.tsx')
+  const src = read('../pages/settings/Admin.tsx')
   const start = src.indexOf('const AGENT_FEATURE_LABELS')
   assert.ok(start >= 0, '未找到 AGENT_FEATURE_LABELS')
   const block = src.slice(start).split(/\n\]/)[0]
@@ -49,7 +49,7 @@ test('AI27: 桌面超管页面逐项列出全部工作台特性，无重复无�
 })
 
 test('AI27: 特性开关保持逐项开启，不提供一键全开', () => {
-  const src = read('../src/pages/settings/Admin.tsx')
+  const src = read('../pages/settings/Admin.tsx')
   // 逐项提交的调用点在文件后段（渲染区），需对整份源码检查。
   assert.ok(!/enableAll|enable_all|toggleAll|setAllFeatures|bulkEnable/.test(src), '不得新增批量开启入口（D-117）')
   assert.match(src, /saveAgentFeature\(item\.name, v\)/, '每项开关应逐项提交 name/enabled')

@@ -5,7 +5,7 @@ import { createServer } from 'vite'
 test('CX07 八套内置主题保持历史 ID，所有主题文字对比度达到 4.5:1', async () => {
   const server = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, ws: false }, appType: 'custom' })
   try {
-    const { themes, themeById } = await server.ssrLoadModule('/src/lib/render.ts')
+    const { themes, themeById } = await server.ssrLoadModule('/lib/render.ts')
     const ids = ['simple', 'ink', 'tenghuang', 'mobai', 'olive', 'sage', 'redwhite', 'graphite']
     assert.deepEqual(themes.map(theme => theme.id), ids)
     for (const id of ids) assert.equal(themeById(id).id, id)

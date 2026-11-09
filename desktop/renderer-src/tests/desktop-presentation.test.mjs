@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { initializeDesktopPresentation, setDesktopMotion, setDesktopTheme } from '../src/lib/desktop-presentation.js'
+import { initializeDesktopPresentation, setDesktopMotion, setDesktopTheme } from '../lib/desktop-presentation.js'
 
 function makeRoot() {
   return { documentElement: { dataset: {} } }
@@ -77,7 +77,7 @@ test('手动减少动态效果会应用并持久化，系统偏好也会在无�
 })
 
 test('Electron 初始主题通过被拦截的 UI 意图同步，不导航离开业务页面', () => {
-  const main = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('../main.tsx', import.meta.url), 'utf8')
 
   assert.match(main, /window\.open\(`ops-desktop:\/\/ui\/theme\/\$\{initialDesktopTheme\}`/)
   assert.doesNotMatch(main, /location\.assign\(`ops-desktop:\/\/ui\/theme/)

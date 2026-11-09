@@ -6,7 +6,7 @@ import test from 'node:test'
 
 const require = createRequire(import.meta.url)
 const ts = require('typescript')
-const source = fs.readFileSync(new URL('../src/lib/desktop-platform-intent.ts', import.meta.url), 'utf8')
+const source = fs.readFileSync(new URL('../lib/desktop-platform-intent.ts', import.meta.url), 'utf8')
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
 
 function harness({ bridge = true, openError } = {}) {

@@ -8,7 +8,7 @@ test('CX02 规范 JSON 与 Go 共用附录 E 向量', async () => {
   const vectors = JSON.parse(await readFile('../../testdata/cx02-canonical-vectors.json', 'utf8'))
   const server = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, ws: false }, appType: 'custom' })
   try {
-    const { canonicalJSON } = await server.ssrLoadModule('/src/lib/canonical-json.ts')
+    const { canonicalJSON } = await server.ssrLoadModule('/lib/canonical-json.ts')
     for (const vector of vectors) {
       const canonical = canonicalJSON(JSON.parse(vector.input_json))
       assert.equal(canonical, vector.canonical, vector.name)

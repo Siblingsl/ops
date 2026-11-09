@@ -12,7 +12,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 const rendererRoot = path.resolve(here, '..');
 const repoRoot = path.resolve(rendererRoot, '..', '..');
-const desktopSrc = path.join(rendererRoot, 'src');
+// 界面源码已从 src/ 降到包根，这里直接指向 rendererRoot。
+const desktopSrc = rendererRoot;
 
 async function readSource(relative) {
   return fs.readFile(path.join(desktopSrc, relative), 'utf8');

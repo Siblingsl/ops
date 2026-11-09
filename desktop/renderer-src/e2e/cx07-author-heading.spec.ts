@@ -4,7 +4,7 @@ import { api, registerAccount } from './support'
 test('桌面排版保留正文安全标题的作者样式', async ({ page }) => {
   await page.goto('/login')
   const html = await page.evaluate(async () => {
-    const load = new Function('return import("/src/lib/render.ts")')
+    const load = new Function('return import("/lib/render.ts")')
     const { renderWechat } = await load()
     return renderWechat([{ heading: '段落', content_md: '<h2 style="color:#123456">作者标题</h2>' }], 'ink')
   })
@@ -15,7 +15,7 @@ test('桌面排版保留正文安全标题的作者样式', async ({ page }) => 
 test('桌面八套主题保持相同内容结构及基础标签样式', async ({ page }) => {
   await page.goto('/login')
   const result = await page.evaluate(async () => {
-    const load = new Function('return import("/src/lib/render.ts")')
+    const load = new Function('return import("/lib/render.ts")')
     const { renderWechat, themes } = await load()
     const content = `<h3>标题</h3><p>正文 <strong>强调</strong> <em>斜体</em> <a href="https://example.test">链接</a></p>
 <blockquote>引用</blockquote><ul><li>列表</li></ul><ol><li>列表</li></ol>
@@ -39,7 +39,7 @@ test('桌面八套主题在 390px 宽度下不产生页面级横向溢出', asyn
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/login')
   const rendered = await page.evaluate(async () => {
-    const load = new Function('return import("/src/lib/render.ts")')
+    const load = new Function('return import("/lib/render.ts")')
     const { renderWechat, themes } = await load()
     const content = `## 一段手机宽度的测试标题
 

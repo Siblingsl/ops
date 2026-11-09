@@ -14,8 +14,8 @@ async function enableElectronPresentation(page: Page) {
 }
 
 /**
- * 桌面形态的「添加账号」入口在顶栏账号下拉里（renderer-src/src/layout/Shell.tsx:766-775 的 title="添加账号" 图标按钮），
- * 而 /settings/accounts 的桌面分支只渲染当前账号详情卡片（renderer-src/src/pages/settings/Accounts.tsx:459-512），
+ * 桌面形态的「添加账号」入口在顶栏账号下拉里（renderer-src/layout/Shell.tsx:766-775 的 title="添加账号" 图标按钮），
+ * 而 /settings/accounts 的桌面分支只渲染当前账号详情卡片（renderer-src/pages/settings/Accounts.tsx:459-512），
  * 页面内没有「添加账号」按钮。因此按角色断言这个真实入口，而不是在设置页里找按钮。
  * 注意：设置窗打开时遮罩层（z-index 45）会盖住顶栏，必须先在下拉可点用的页面上调用。
  */
@@ -33,7 +33,7 @@ async function expectDesktopAddAccountEntry(page: Page, allowed: boolean) {
 
 /**
  * 桌面设置窗内的账号详情：只有所有者可以编辑，非所有者看到只读提示。
- * 依据 renderer-src/src/pages/settings/Accounts.tsx:251（CardHeader desc）与 :265-266（账号名称 Input disabled）。
+ * 依据 renderer-src/pages/settings/Accounts.tsx:251（CardHeader desc）与 :265-266（账号名称 Input disabled）。
  */
 async function expectDesktopAccountEditable(page: Page, editable: boolean) {
   const settingsWindow = page.getByTestId('desktop-settings-window')
@@ -197,7 +197,7 @@ test('Electron 专属创作空间的标题栏、主题、动效、工作台与 A
   await expect(firstValueGuide).toBeVisible()
   await expect(firstValueGuide).toHaveJSProperty('open', false)
   await firstValueGuide.locator('summary').click()
-  // 实现文案是 CardHeader 的「从第一篇作品开始」（renderer-src/src/components/first-value-guide.tsx:35）。
+  // 实现文案是 CardHeader 的「从第一篇作品开始」（renderer-src/components/first-value-guide.tsx:35）。
   await expect(firstValueGuide.getByRole('heading', { name: '从第一篇作品开始' })).toBeVisible()
   await expect(firstValueGuide.getByRole('link').first()).toBeVisible()
   await firstValueGuide.locator('summary').click()
@@ -529,7 +529,7 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     await expect(firstValueGuide).toBeVisible()
     await expect(firstValueGuide).toHaveJSProperty('open', false)
     await firstValueGuide.locator('summary').click()
-    // 实现文案是 CardHeader 的「从第一篇作品开始」（renderer-src/src/components/first-value-guide.tsx:35）。
+    // 实现文案是 CardHeader 的「从第一篇作品开始」（renderer-src/components/first-value-guide.tsx:35）。
     await expect(firstValueGuide.getByRole('heading', { name: '从第一篇作品开始' })).toBeVisible()
     await firstValueGuide.locator('summary').click()
     await homeExtras.locator('summary').first().click()
@@ -702,7 +702,7 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     await expect.poll(() => electronLocalSettingsEvaluate<string>(electronApp, `document.querySelector('#current-mode').textContent`)).toContain('当前模式：')
     await expect.poll(() => electronLocalSettingsEvaluate<boolean>(electronApp, `document.querySelector('#apply-mode').disabled`)).toBe(false)
 
-    // 设置窗的遮罩（renderer-src/src/styles/desktop-settings.css 的 .desktop-settings-overlay，z-index 45）
+    // 设置窗的遮罩（renderer-src/styles/desktop-settings.css 的 .desktop-settings-overlay，z-index 45）
     // 盖住业务窗顶栏，指针点不到主题按钮。先关闭设置窗，用真实点击切浅深主题，
     // 再重开设置窗验证本机设置视图跟随客户端主题。
     await settings.getByRole('button', { name: '关闭设置' }).click()
@@ -871,7 +871,7 @@ test('Electron 呈现分支逐页直达功能路由并通过常用屏幕尺寸�
 
   // owner 不具备系统管理员权限时，系统管理路由必须回到账号设置。
   // 桌面形态下 DesktopSettingsHost 会把 /settings/accounts 补成当前账号的深链
-  // （/settings/accounts?id={accountId}，见 renderer-src/src/layout/DesktopSettingsHost.tsx:146-150），
+  // （/settings/accounts?id={accountId}，见 renderer-src/layout/DesktopSettingsHost.tsx:146-150），
   // 因此这里允许可选的 ?id= 查询参数。
   const accountsSettingsURL = /\/settings\/accounts(?:\?id=[^&#]+)?$/
   await page.goto('/settings/admin')
@@ -886,7 +886,7 @@ test('Electron 呈现分支逐页直达功能路由并通过常用屏幕尺寸�
     `/a/${account.id}/materials`, `/a/${account.id}/ops`, `/a/${account.id}/review`, `/a/${account.id}/profile`, `/works/${workId}`, `/works/${workId}/check`,
     '/agent', '/images',
   ]
-  // 设置路由在桌面形态下以设置窗呈现（renderer-src/src/layout/DesktopSettingsHost.tsx:272 用 backdrop 顶替
+  // 设置路由在桌面形态下以设置窗呈现（renderer-src/layout/DesktopSettingsHost.tsx:272 用 backdrop 顶替
   // 背景路由），Shell 与状态栏都不渲染，因此这些路径断言设置窗而不是状态栏。
   const responsiveSettingsRoutes = ['/settings/accounts', '/settings/models']
   const viewports = [

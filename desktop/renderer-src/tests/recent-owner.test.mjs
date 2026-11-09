@@ -9,7 +9,7 @@ globalThis.localStorage = {
 }
 globalThis.window = { dispatchEvent() {} }
 
-const { rememberRecent, recentItems, setRecentOwner } = await import('../src/lib/recent.ts')
+const { rememberRecent, recentItems, setRecentOwner } = await import('../lib/recent.ts')
 
 test('桌面最近打开按用户和工作区隔离，并在切回工作区后恢复', () => {
   setRecentOwner('user-a', 'workspace-1')

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import type { ElectronApplication } from '@playwright/test'
-import { desktopSettingsLabel, settingsEntries, settingsGroupOf } from '../src/lib/settings-registry'
+import { desktopSettingsLabel, settingsEntries, settingsGroupOf } from '../lib/settings-registry'
 
 export async function openDesktopAccountSwitcher(page: Page) {
   await page.getByRole('button', { name: /用户菜单/ }).click()

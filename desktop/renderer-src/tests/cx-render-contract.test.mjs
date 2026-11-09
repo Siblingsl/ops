@@ -8,9 +8,9 @@ test('公众号 renderer contract 与八套内置主题 token 摘要匹配共享
   const fixture = JSON.parse(await readFile('../../testdata/cx02-render-contract.json', 'utf8'))
   const server = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, ws: false }, appType: 'custom' })
   try {
-    const { themes } = await server.ssrLoadModule('/src/lib/render.ts')
-    const { canonicalJSON } = await server.ssrLoadModule('/src/lib/canonical-json.ts')
-    const { builtinThemeResources, wechatHTMLRendererContractVersion } = await server.ssrLoadModule('/src/lib/cx-render-contract.ts')
+    const { themes } = await server.ssrLoadModule('/lib/render.ts')
+    const { canonicalJSON } = await server.ssrLoadModule('/lib/canonical-json.ts')
+    const { builtinThemeResources, wechatHTMLRendererContractVersion } = await server.ssrLoadModule('/lib/cx-render-contract.ts')
     assert.equal(wechatHTMLRendererContractVersion, fixture.renderer_contract_version)
     assert.deepEqual(Object.keys(builtinThemeResources).sort(), fixture.themes.map((theme) => theme.id).sort())
     assert.deepEqual(themes.map((theme) => theme.id).sort(), fixture.themes.map((theme) => theme.id).sort())

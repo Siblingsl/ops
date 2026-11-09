@@ -15,7 +15,7 @@
     "noEmit": true,
     "types": ["vite/client"],
     "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "paths": { "@/*": ["*"] }
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["*.ts", "*.tsx", "components", "layout", "lib", "pages", "styles", "vite.config.ts"]
 }

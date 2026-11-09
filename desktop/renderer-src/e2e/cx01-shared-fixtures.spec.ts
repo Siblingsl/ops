@@ -28,7 +28,7 @@ test('真实 Electron marked DOM 遵循共享夹具并保留安全结构', async
     await page.goto(`${origin}/login`)
     const supported = fixtures.find(fixture => fixture.name === 'supported-and-converted')!
     const html = await page.evaluate(async ({ markdown }) => {
-      const load = new Function('return import("/src/lib/render.ts")')
+      const load = new Function('return import("/lib/render.ts")')
       const { renderWechat } = await load()
       return renderWechat([{ heading: '段落小标题', content_md: markdown }], 'ink')
     }, { markdown: supported.markdown })
@@ -43,7 +43,7 @@ test('真实 Electron marked DOM 遵循共享夹具并保留安全结构', async
 
     const unsafe = fixtures.find(fixture => fixture.name === 'unsafe-and-fallback-html')!
     const unsafeHtml = await page.evaluate(async ({ markdown }) => {
-      const load = new Function('return import("/src/lib/render.ts")')
+      const load = new Function('return import("/lib/render.ts")')
       const { renderWechat } = await load()
       return renderWechat([{ heading: '', content_md: markdown }], 'ink')
     }, { markdown: unsafe.markdown })

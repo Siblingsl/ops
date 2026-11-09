@@ -172,7 +172,7 @@ test('TT53/55 真实Electron头条设置草稿保护、账号工作区缓存隔�
     await expect(trigger).toContainText('头条缓存隔离工作区')
     await expect(native.getByText(secondWork.title, { exact: true })).toHaveCount(0)
     // 桌面形态不再回退到首个 active 账号（1c46e53），切到没有账号的工作区后落在设置窗的
-    // 空态卡片上（renderer-src/src/pages/settings/Accounts.tsx:474-482），不会自动弹「添加平台账号」。
+    // 空态卡片上（renderer-src/pages/settings/Accounts.tsx:474-482），不会自动弹「添加平台账号」。
     const emptySettings = native.getByTestId('desktop-settings-window')
     await expect(emptySettings.getByText('当前工作区还没有平台账号', { exact: true })).toBeVisible()
     await expect(emptySettings.getByRole('button', { name: '打开账号入口', exact: true })).toBeVisible()
