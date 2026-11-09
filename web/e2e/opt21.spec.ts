@@ -44,7 +44,7 @@ test('OPT21 单篇粘贴旧文预览后确认为已发布并可派生到小红�
 
   const importToast = page.locator('[data-sonner-toast]').filter({ hasText: '旧文已导入为已发布作品' })
   await expect(importToast).toBeVisible()
-  const deriveButton = page.getByRole('button', { name: '派生', exact: true })
+  const deriveButton = page.getByRole('button', { name: '派生作品', exact: true })
   const [toastBounds, deriveBounds] = await Promise.all([importToast.boundingBox(), deriveButton.boundingBox()])
   expect(toastBounds).not.toBeNull()
   expect(deriveBounds).not.toBeNull()

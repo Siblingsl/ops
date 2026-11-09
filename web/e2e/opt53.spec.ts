@@ -12,7 +12,7 @@ test('OPT53 漫画派生后和对照页入口都打开漫画编辑器', async ({
   await api(page, 'PUT', `/works/${source.id}/storyboard`, { panels: storyboard.panels, confirm: true })
 
   await page.goto(`/works/${source.id}`)
-  await page.getByRole('button', { name: '派生', exact: true }).click()
+  await page.getByRole('button', { name: '派生作品', exact: true }).click()
   await page.getByRole('button', { name: /OPT53 目标漫画账号/ }).click()
   const deriving = page.waitForResponse(response => response.url().endsWith(`/api/v1/works/${source.id}/derive`) && response.request().method() === 'POST')
   await page.getByRole('button', { name: '开始派生', exact: true }).click()
