@@ -23,6 +23,12 @@ interface InBrowseDownloadRecord {
   sourceUrl: string
 }
 
+interface InBrowseBlockedPopup {
+  url: string
+  reason: 'new_window' | 'protocol_denied' | 'tab_limit' | 'cross_origin'
+  at: number
+}
+
 interface InBrowseSnapshot {
   activeTabId: string | null
   tabs: InBrowseTabSnapshot[]
@@ -31,11 +37,20 @@ interface InBrowseSnapshot {
   detachReason: string | null
   // 主进程按会话推送的下载记录；与页签状态相互独立，缺省视为空。
   downloads?: InBrowseDownloadRecord[]
+  // 最近一次被拒绝的弹窗；缺省/旧宿主视为无提示。
+  lastBlockedPopup?: InBrowseBlockedPopup | null
 }
 
 const EMPTY: InBrowseSnapshot = { activeTabId: null, tabs: [], bounds: null, detached: false, detachReason: null, downloads: [] }
 
 const downloadStateLabel: Record<InBrowseDownloadRecord['state'], string> = { completed: '已完成', interrupted: '已中断', cancelled: '已取消' }
+
+const blockedPopupReasonLabel: Record<NonNullable<InBrowseSnapshot['lastBlockedPopup']>['reason'], string> = {
+  new_window: '不允许弹出独立窗口',
+  protocol_denied: '仅支持 http/https 链接',
+  tab_limit: '页签已达上限（8 个）',
+  cross_origin: '已拦截跨站弹窗',
+}
 
 type InvokeFn = (channel: string, payload?: unknown) => Promise<unknown>
 
@@ -164,6 +179,11 @@ export function InBrowsePanel({ visible }: { visible: boolean }) {
       <span data-testid="inbrowse-download-latest">最近下载：{snapshot.downloads[0].filename} · {downloadStateLabel[snapshot.downloads[0].state]}</span>
       {snapshot.downloads.length > 1 && <span className="ml-1">（共 {snapshot.downloads.length} 条）</span>}
       <span className="ml-1 text-mist-400">不会自动打开或上传</span>
+    </div>}
+    {/* 27 §7.8 弹窗处理：deny 不静默——主进程回执 lastBlockedPopup，这里给可读提示。 */}
+    {snapshot.lastBlockedPopup && <div className="shrink-0 border-b border-mist-100 bg-amber-50 px-3 py-1 text-[11px] text-amber-700" data-testid="inbrowse-blocked-popup">
+      <span data-testid="inbrowse-blocked-popup-reason">{blockedPopupReasonLabel[snapshot.lastBlockedPopup.reason]}</span>
+      <span className="ml-1 text-amber-500/80" title={snapshot.lastBlockedPopup.url}>{snapshot.lastBlockedPopup.url.slice(0, 60)}</span>
     </div>}
     {/* bounds 区域由主进程 WebContentsView 覆盖（原生层）；此处 div 仅占位测量。 */}
     <div className="min-h-0 flex-1" data-testid="inbrowse-viewport" data-url={activeUrl} />

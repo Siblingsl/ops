@@ -17,10 +17,12 @@ const electronMock = {
         loadingFlag: false,
         navigationCount: 0,
         listeners: new Map(),
+        windowOpenHandler: null,
         on(ev, fn) { this.listeners.set(ev, fn); },
         getURL() { return this.url; },
         getTitle() { return this.title; },
         isLoading() { return this.loadingFlag; },
+        setWindowOpenHandler(fn) { this.windowOpenHandler = fn; },
         loadURL(u) {
           this.navigationCount += 1;
           this.url = u;
@@ -179,4 +181,124 @@ test('W08d: 宽度钳制与 destroy 清空', () => {
   const snap = c.snapshot();
   assert.equal(snap.tabs.length, 0);
   assert.equal(snap.activeTabId, null);
+});
+
+// ---------------------------------------------------------------------------
+// DEV-AI27-08f（27 §7.8 弹窗处理）：deny 默认 + 同站进新页签 + 回执 lastBlockedPopup。
+// 覆盖 6 类组合：同站 tab 型放行进页签、跨站拒绝、new-window 拒绝、非 http(s) 拒绝、
+// 页签上限拒绝、will-navigate 非 http(s) 拦截。
+// ---------------------------------------------------------------------------
+
+/** 取控制器当前活动页签的 mock webContents（含 windowOpenHandler / will-navigate 监听）。 */
+function activeMockWebContents(c) {
+  const snap = c.snapshot();
+  const tab = c.tabs.get(snap.activeTabId);
+  return tab.view.webContents;
+}
+
+test('W08f: 同站 tab 型弹窗进新页签并导航', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  c.openTab();
+  const wc = activeMockWebContents(c);
+  wc.loadURL('https://site.example/page');
+  const result = wc.windowOpenHandler({ url: 'https://site.example/target', disposition: 'foreground-tab' });
+  assert.deepEqual(result, { action: 'deny' }, '放行路径也不开原生窗');
+  const snap = c.snapshot();
+  assert.equal(snap.tabs.length, 2, '同站弹窗应进新页签');
+  const newTab = snap.tabs.find((t) => t.id !== snap.tabs[0].id) ?? snap.tabs[1];
+  assert.equal(newTab.url, 'https://site.example/target', '新页签导航到目标');
+  assert.equal(snap.lastBlockedPopup, null, '放行路径无拒绝回执');
+  c.destroy();
+});
+
+test('W08f: 跨站弹窗被拒并回执 cross_origin', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  c.openTab();
+  const wc = activeMockWebContents(c);
+  wc.loadURL('https://site.example/page');
+  wc.windowOpenHandler({ url: 'https://other.example/x', disposition: 'foreground-tab' });
+  const snap = c.snapshot();
+  assert.equal(snap.tabs.length, 1, '跨站不开新页签');
+  assert.equal(snap.lastBlockedPopup.reason, 'cross_origin');
+  assert.equal(snap.lastBlockedPopup.url, 'https://other.example/x');
+  c.destroy();
+});
+
+test('W08f: new-window disposition 拒绝（不弹原生窗）', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  c.openTab();
+  const wc = activeMockWebContents(c);
+  wc.loadURL('https://site.example/page');
+  wc.windowOpenHandler({ url: 'https://site.example/pop', disposition: 'new-window' });
+  const snap = c.snapshot();
+  assert.equal(snap.tabs.length, 1);
+  assert.equal(snap.lastBlockedPopup.reason, 'new_window');
+  c.destroy();
+});
+
+test('W08f: 非 http(s) 协议拒绝（file: / javascript:）', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  c.openTab();
+  const wc = activeMockWebContents(c);
+  wc.loadURL('https://site.example/page');
+  wc.windowOpenHandler({ url: 'file:///C:/etc/passwd', disposition: 'foreground-tab' });
+  assert.equal(c.snapshot().lastBlockedPopup.reason, 'protocol_denied');
+  wc.windowOpenHandler({ url: 'javascript:alert(1)', disposition: 'foreground-tab' });
+  assert.equal(c.snapshot().lastBlockedPopup.reason, 'protocol_denied');
+  assert.equal(c.snapshot().tabs.length, 1, '非 http(s) 不开页签');
+  c.destroy();
+});
+
+test('W08f: 页签上限 8 弹窗被拒并回执 tab_limit', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  c.openTab();
+  const wc = activeMockWebContents(c);
+  wc.loadURL('https://site.example/page');
+  for (let i = 0; i < 7; i += 1) {
+    wc.windowOpenHandler({ url: `https://site.example/p${i}`, disposition: 'background-tab' });
+  }
+  assert.equal(c.snapshot().tabs.length, 8, '上限内正常开页签');
+  wc.windowOpenHandler({ url: 'https://site.example/p9', disposition: 'background-tab' });
+  const snap = c.snapshot();
+  assert.equal(snap.tabs.length, 8, '超限不开');
+  assert.equal(snap.lastBlockedPopup.reason, 'tab_limit');
+  c.destroy();
+});
+
+test('W08f: will-navigate 非 http(s) 拦截（preventDefault + 回执）', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  c.openTab();
+  const wc = activeMockWebContents(c);
+  wc.loadURL('https://site.example/page');
+  const listener = wc.listeners.get('will-navigate');
+  assert.ok(listener, 'will-navigate 监听已挂');
+  let prevented = false;
+  const event = { preventDefault() { prevented = true; } };
+  listener(event, 'javascript:void(0)');
+  assert.equal(prevented, true, '非 http(s) 页内导航被 preventDefault');
+  assert.equal(c.snapshot().lastBlockedPopup.reason, 'protocol_denied');
+  // http(s) 导航不拦截
+  prevented = false;
+  listener(event, 'https://site.example/next');
+  assert.equal(prevented, false, 'http(s) 页内导航放行');
+  assert.equal(c.snapshot().lastBlockedPopup.reason, 'protocol_denied', '放行不改写既有回执');
+  c.destroy();
+});
+
+test('W08f: destroy 清空弹窗回执', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  c.openTab();
+  const wc = activeMockWebContents(c);
+  wc.loadURL('https://site.example/page');
+  wc.windowOpenHandler({ url: 'file:///tmp/x', disposition: 'foreground-tab' });
+  assert.ok(c.snapshot().lastBlockedPopup);
+  c.destroy();
+  assert.equal(c.snapshot().lastBlockedPopup, null, 'destroy 后回执清空');
 });

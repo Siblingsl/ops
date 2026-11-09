@@ -34,6 +34,13 @@ export interface InBrowseDownloadRecord {
   sourceUrl: string;
 }
 
+/** 弹窗策略回执（27 §7.8 弹窗处理）：deny 时不静默，让渲染器给可读提示。 */
+export interface InBrowseBlockedPopup {
+  url: string;
+  reason: 'new_window' | 'protocol_denied' | 'tab_limit' | 'cross_origin';
+  at: number;
+}
+
 export interface InBrowseSnapshot {
   activeTabId: string | null;
   tabs: InBrowseTabSnapshot[];
@@ -42,9 +49,20 @@ export interface InBrowseSnapshot {
   detachReason: string | null;
   /** 最近 20 条下载记录，新的在前；与页签状态互不影响。 */
   downloads: InBrowseDownloadRecord[];
+  /** 最近一次被拒绝的弹窗（null 表示当前没有待提示的拒绝）。 */
+  lastBlockedPopup: InBrowseBlockedPopup | null;
 }
 
 type DetachReason = 'approval-dialog' | 'menu' | 'account-switch' | 'settings' | 'close';
+
+/** http/https 判定（弹窗与页内导航共用；file:/javascript:/自定义协议均拒）。 */
+function isHttpUrl(raw: string): boolean {
+  try {
+    return /^https?:$/.test(new URL(raw).protocol);
+  } catch {
+    return false;
+  }
+}
 
 interface InBrowseTab {
   id: string;
@@ -61,6 +79,7 @@ export class InBrowseViewController {
   private detached = false;
   private detachReason: DetachReason | null = null;
   private downloads: InBrowseDownloadRecord[] = [];
+  private lastBlockedPopup: InBrowseBlockedPopup | null = null;
 
   constructor(
     readonly window: BrowserWindow,
@@ -86,6 +105,7 @@ export class InBrowseViewController {
       detached: this.detached,
       detachReason: this.detachReason,
       downloads: [...this.downloads],
+      lastBlockedPopup: this.lastBlockedPopup,
     };
   }
 
@@ -121,9 +141,63 @@ export class InBrowseViewController {
     });
     view.webContents.on('did-stop-loading', () => this.emitSnapshot());
     view.webContents.on('page-title-updated', () => this.emitSnapshot());
+    // DEV-AI27-08f（27 §7.8 弹窗处理）：deny 默认 + 同站进新页签 + 跨站/非 http(s) 拒绝并回执。
+    // 放行路径也不让 Electron 开原生窗：我们在控制器内开页签并导航，handler 始终 deny。
+    view.webContents.setWindowOpenHandler(({ url, disposition }) => {
+      const reason = this.popupDenyReason(url, disposition);
+      if (reason) {
+        this.blockPopup(url, reason);
+        return { action: 'deny' };
+      }
+      const before = this.tabOrder.length;
+      this.openTab();
+      if (this.tabOrder.length > before) {
+        void this.navigate(url);
+      } else {
+        // 上限 8：页签没开出来，回执 tab_limit 提示而非静默。
+        this.blockPopup(url, 'tab_limit');
+      }
+      return { action: 'deny' };
+    });
+    // 非 http/https 的页内导航一律拦截（下载链接由 will-download 承载，不导航）。
+    view.webContents.on('will-navigate', (event, url) => {
+      if (!isHttpUrl(url)) {
+        event.preventDefault();
+        this.blockPopup(url, 'protocol_denied');
+      }
+    });
     this.tabs.set(tab.id, tab);
     this.tabOrder.push(tab.id);
     return tab;
+  }
+
+  /** 弹窗拒绝原因：null = 允许（同站 http(s) 的 tab 型弹窗）。 */
+  private popupDenyReason(url: string, disposition: string): InBrowseBlockedPopup['reason'] | null {
+    if (disposition === 'new-window' || disposition === 'save-to-disk') return 'new_window';
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return 'protocol_denied';
+    }
+    if (!/^https?:$/.test(parsed.protocol)) return 'protocol_denied';
+    // 跨站拒绝：只允许与当前活动页签同源的目标（源含协议+主机+端口）。
+    const current = this.activeTab();
+    if (current) {
+      try {
+        if (new URL(current.view.webContents.getURL()).origin !== parsed.origin) return 'cross_origin';
+      } catch {
+        // 当前页签 URL 异常时按跨站处理，不扩大放行面。
+        return 'cross_origin';
+      }
+    }
+    return null;
+  }
+
+  /** 记录被拒弹窗并推送快照（不静默——渲染器据 lastBlockedPopup 提示）。 */
+  private blockPopup(url: string, reason: InBrowseBlockedPopup['reason']): void {
+    this.lastBlockedPopup = { url: url.slice(0, 2048), reason, at: Date.now() };
+    this.emitSnapshot();
   }
 
   private activeTab(): InBrowseTab | null {
@@ -359,6 +433,7 @@ export class InBrowseViewController {
     this.tabOrder = [];
     this.activeTabId = null;
     this.bounds = null;
+    this.lastBlockedPopup = null;
     this.emitSnapshot();
   }
 }
