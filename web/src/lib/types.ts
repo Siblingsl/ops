@@ -840,6 +840,20 @@ export type AgentWorkbenchFeatureName =
   | 'goals'
   | 'routines'
   | 'document_parse'
+  // DEV-AI27-04/07：浏览器能力开关（D-160 runtime-gates，默认关闭）。
+  | 'chrome_connect'
+  | 'browser_workspace'
+  // DEV-AI27-13：个人跨对话记忆开关。
+  | 'personal_memories'
+  // DEV-AI27-14：插件/MCP 开关。
+  | 'plugin_mcp'
+  // DEV-AI27-15：子智能体开关。
+  | 'subagents'
+  // DEV-AI27-16：双模式语音开关。
+  | 'voice_dictation'
+  | 'voice_realtime'
+  // DEV-AI27-17：Windows 电脑控制开关。
+  | 'computer_use'
 
 export interface WorkspaceInvite {
   id: string

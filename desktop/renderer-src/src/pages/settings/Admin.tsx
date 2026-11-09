@@ -23,6 +23,15 @@ const AGENT_FEATURE_LABELS: { name: AgentWorkbenchFeatureName; label: string; hi
   { name: 'goals', label: '目标', hint: '需同时具备事件续跑、运行控制与计划' },
   { name: 'routines', label: '例行任务', hint: '需目标与产物等前置特性' },
   { name: 'document_parse', label: '文档解析', hint: '附件文档解析入口' },
+  // DEV-AI27：27 §15.3 登记的本机能力开关，默认全部关闭，逐项开启（不提供一键全开）。
+  { name: 'chrome_connect', label: 'Chrome 连接', hint: '本机 Chrome 扩展配对与连接状态；需先加载 OPS 扩展' },
+  { name: 'browser_workspace', label: '浏览器工作区', hint: '依赖 Chrome 连接；页签最小授权、来源证据与批注' },
+  { name: 'personal_memories', label: '跨对话记忆', hint: '记忆候选需本人逐条确认后才注入上下文' },
+  { name: 'plugin_mcp', label: '插件与 MCP', hint: 'stdio / HTTP 连接、工具目录与逐项调用回执' },
+  { name: 'subagents', label: '子智能体', hint: '并行委派组、共享预算与取消传播' },
+  { name: 'voice_dictation', label: '语音转写', hint: '录音→ASR 转写→可编辑终稿；需在模型设置里配好 asr 路由' },
+  { name: 'voice_realtime', label: '实时语音', hint: '实时双向会话；实时音频桥尚未接入' },
+  { name: 'computer_use', label: '电脑控制', hint: 'Windows 应用选窗授权、UIA 动作与硬禁区' },
 ]
 
 interface UsageRow { key: string; calls: number; prompt_tokens: number; completion_tokens: number; failed: number }
