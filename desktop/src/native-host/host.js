@@ -62,10 +62,12 @@ function createFrameDecoder(maxFrame = MAX_FRAME) {
   };
 }
 
-function hmacSign(key, seq, type, payload) {
+// A14-5（27 §14）：HMAC 材料扩展到 seq.type.nonce.payload_hash.payload——与桥端
+// （browser-bridge.ts）同步升级；nonce/payload_hash 缺省为空串（非 result 信封）。
+function hmacSign(key, seq, type, payload, nonce, payloadHash) {
   return crypto
     .createHmac('sha256', normalizeKey(key))
-    .update(`${seq}.${type}.${JSON.stringify(payload ?? null)}`)
+    .update(`${seq}.${type}.${nonce || ''}.${payloadHash || ''}.${JSON.stringify(payload ?? null)}`)
     .digest('base64');
 }
 
@@ -78,12 +80,12 @@ function normalizeKey(key) {
 function verifyHmac(key, msg) {
   if (!key) return false;
   if (typeof msg.seq !== 'number' || typeof msg.hmac !== 'string') return false;
-  const expect = Buffer.from(hmacSign(key, msg.seq, msg.type, msg.payload));
+  const expect = Buffer.from(hmacSign(key, msg.seq, msg.type, msg.payload, msg.nonce, msg.payload_hash));
   const got = Buffer.from(msg.hmac);
   if (!(expect.length === got.length && crypto.timingSafeEqual(expect, got))) {
     // W02 诊断：签名不一致只记类型与摘要前缀，不落载荷内容（日志脱敏）。
     try {
-      fs.appendFileSync(LOG_PATH, `hmac mismatch type=${msg.type} seq=${msg.seq} expect=${hmacSign(key, msg.seq, msg.type, null).slice(0, 8)} got=${msg.hmac.slice(0, 8)}\n`);
+      fs.appendFileSync(LOG_PATH, `hmac mismatch type=${msg.type} seq=${msg.seq} expect=${hmacSign(key, msg.seq, msg.type, null, '', '').slice(0, 8)} got=${msg.hmac.slice(0, 8)}\n`);
     } catch {}
   }
   return expect.length === got.length && crypto.timingSafeEqual(expect, got);
@@ -132,6 +134,48 @@ function writeState(state) {
   fs.renameSync(tmp, STATE_PATH);
 }
 
+// A14-4（27 §14）：多 Chrome（多 profile）并发连接同一 native host 时互斥——
+// 锁文件记录当前持有者 PID；进程死亡（PID 不存在）自动接管，活锁返回 busy。
+// Chrome 每个扩展实例一个 host 进程：锁阻止第二个 host 抢占同一 OPS 桥端口连接。
+const LOCK_PATH = path.join(STATE_DIR, 'host-instance.lock');
+const LOCK_STALE_MS = 60 * 1000;
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+function acquireInstanceLock(log) {
+  try {
+    let current = null;
+    try { current = JSON.parse(fs.readFileSync(LOCK_PATH, 'utf8')); } catch { /* 无锁 */ }
+    if (current && current.pid && current.pid !== process.pid) {
+      if (processAlive(current.pid) && Date.now() - (current.at || 0) < LOCK_STALE_MS) {
+        return { ok: false, reason: 'bridge_busy' };
+      }
+      log(`stale instance lock from pid=${current.pid}; take over`);
+    }
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(LOCK_PATH, JSON.stringify({ pid: process.pid, at: Date.now() }), { mode: 0o600 });
+    return { ok: true };
+  } catch (err) {
+    // 锁文件系统异常时不阻断主流程（桥端连接唯一性由端口语义兜底），只记日志。
+    try { log(`instance lock unavailable: ${err.message}`); } catch {}
+    return { ok: true };
+  }
+}
+
+function releaseInstanceLock() {
+  try {
+    const current = JSON.parse(fs.readFileSync(LOCK_PATH, 'utf8'));
+    if (current.pid === process.pid) fs.unlinkSync(LOCK_PATH);
+  } catch { /* 无锁或已换主 */ }
+}
+
 function createLogger() {
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -147,7 +191,19 @@ function createLogger() {
   }
 }
 
-function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, opsHost = OPS_HOST } = {}) {
+function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, opsHost = OPS_HOST, requireLock = true } = {}) {
+  // A14-4：单实例锁——第二个 Chrome profile 的 host 拿不到锁时立即退出（Chrome 显示
+  // native host 断开），扩展侧指数退避；不与已持有者抢 OPS 桥连接。
+  if (requireLock) {
+    const lock = acquireInstanceLock(log);
+    if (!lock.ok) {
+      log(`another native host instance is active (bridge_busy); exiting pid=${process.pid}`);
+      // Chrome native messaging：非零退出即断开；输出一个错误帧便于诊断。
+      try { process.stdout.write(encodeFrame({ v: PROTOCOL_VERSION, type: 'error', payload: { code: 'bridge_busy', message: '另一个 OPS 浏览器宿主实例正在运行；请关闭其中一个 Chrome 或重启 OPS。' } })); } catch {}
+      process.exit(0);
+      return;
+    }
+  }
   const decoder = createFrameDecoder();
   const state = readState();
   const hostInstanceId = state.host_instance_id || crypto.randomUUID();
@@ -177,7 +233,7 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
     if (sessionKey && msg.type !== 'hello') {
       seqOutOps += 1;
       msg.seq = seqOutOps;
-      msg.hmac = hmacSign(sessionKey, msg.seq, msg.type, msg.payload);
+      msg.hmac = hmacSign(sessionKey, msg.seq, msg.type, msg.payload, msg.nonce, msg.payload_hash);
     }
     return msg;
   }
@@ -186,7 +242,7 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
     if (sessionKey && msg.type !== 'pairing_start' && msg.type !== 'pairing_confirm') {
       seqOutExt += 1;
       msg.seq = seqOutExt;
-      msg.hmac = hmacSign(sessionKey, msg.seq, msg.type, msg.payload);
+      msg.hmac = hmacSign(sessionKey, msg.seq, msg.type, msg.payload, msg.nonce, msg.payload_hash);
     }
     return msg;
   }
@@ -311,9 +367,13 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
     closed = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (opsSocket) opsSocket.destroy();
+    releaseInstanceLock();
     process.exit(0);
   });
-  process.on('disconnect', () => process.exit(0));
+  process.on('disconnect', () => {
+    releaseInstanceLock();
+    process.exit(0);
+  });
   connectOps();
   log('host started pid=' + process.pid);
 }

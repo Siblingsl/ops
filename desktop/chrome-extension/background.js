@@ -102,12 +102,13 @@ function bytesToBase64(bytes) {
   return btoa(bin);
 }
 
-function hmacSignMessage(seq, type, payload) {
+function hmacSignMessage(seq, type, payload, nonce, payloadHash) {
   // sw.sessionKey 是 base64 字符串；HMAC key 统一为解码后的原始字节（与宿主/桥一致）。
+  // A14-5：签名材料扩展到 seq.type.nonce.payload_hash.payload（与宿主/桥同步）。
   const bin = atob(sw.sessionKey);
   const keyBytes = [];
   for (let i = 0; i < bin.length; i += 1) keyBytes.push(bin.charCodeAt(i));
-  return hmacSha256Base64Bytes(keyBytes, `${seq}.${type}.${JSON.stringify(payload ?? null)}`);
+  return hmacSha256Base64Bytes(keyBytes, `${seq}.${type}.${nonce || ''}.${payloadHash || ''}.${JSON.stringify(payload ?? null)}`);
 }
 
 function hmacSha256Base64Bytes(keyBytes, message) {
@@ -152,7 +153,8 @@ function sign(msg) {
   if (sw.sessionKey && msg.type !== 'hello') {
     sw.seqOut += 1;
     msg.seq = sw.seqOut;
-    msg.hmac = hmacSignMessage(sw.seqOut, msg.type, msg.payload);
+    // A14-5：回执（result）信封带 nonce/payload_hash，纳入签名材料。
+    msg.hmac = hmacSignMessage(sw.seqOut, msg.type, msg.payload, msg.nonce, msg.payload_hash);
   }
   return msg;
 }
@@ -170,7 +172,8 @@ async function validateInbound(msg) {
   }
   if (sw.sessionKey && msg.type !== 'pairing_start' && msg.type !== 'hello') {
     if (typeof msg.seq !== 'number' || typeof msg.hmac !== 'string') return 'missing seq/hmac';
-    const expect = hmacSignMessage(msg.seq, msg.type, msg.payload);
+    // A14-5：command/revoke 信封的 nonce/payload_hash 纳入签名材料（command 带值）。
+    const expect = hmacSignMessage(msg.seq, msg.type, msg.payload, msg.nonce, msg.payload_hash);
     if (!utf8EqualBase64(expect, msg.hmac)) return 'hmac verification failed';
     if (msg.seq <= sw.lastSeqIn) return `replayed or out-of-order seq: ${msg.seq}`;
     sw.lastSeqIn = msg.seq;

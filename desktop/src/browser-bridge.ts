@@ -73,12 +73,18 @@ export type BridgeErrorCode =
   | 'browser_clock_unstable'
   | 'browser_request_conflict';
 
-function hmacSign(key: Buffer, seq: number, type: string, payload: unknown): string {
-  return crypto.createHmac('sha256', key).update(`${seq}.${type}.${JSON.stringify(payload ?? null)}`).digest('base64');
+// A14-5（27 §14）：信封 HMAC 材料扩展到 seq.type.nonce.payload_hash.payload——
+// 只覆盖 seq+type+payload 无法绑定「这次派发」的 nonce 与载荷摘要，重放窗口更宽。
+// 与旧格式不兼容：会话密钥每次配对重新生成（pairing_confirm 新 key），无跨代负担；
+// result 信封带 nonce/payload_hash，其余类型两参为空串。
+function hmacSign(key: Buffer, seq: number, type: string, payload: unknown, nonce = '', payloadHash = ''): string {
+  return crypto.createHmac('sha256', key)
+    .update(`${seq}.${type}.${nonce}.${payloadHash}.${JSON.stringify(payload ?? null)}`)
+    .digest('base64');
 }
 
-function verifyHmac(key: Buffer, seq: number, type: string, payload: unknown, got: string): boolean {
-  const expect = Buffer.from(hmacSign(key, seq, type, payload));
+function verifyHmac(key: Buffer, seq: number, type: string, payload: unknown, got: string, nonce = '', payloadHash = ''): boolean {
+  const expect = Buffer.from(hmacSign(key, seq, type, payload, nonce, payloadHash));
   const actual = Buffer.from(got);
   return expect.length === actual.length && crypto.timingSafeEqual(expect, actual);
 }
@@ -179,6 +185,8 @@ export interface BridgeOptions {
   port?: number;
   controlPort?: number | null;
   ledgerPath?: string | null;
+  /** A14-2：lastSeqIn 持久化文件（null = 不持久化，测试用）。 */
+  seqStatePath?: string | null;
   autoPair?: boolean;
   actionTimeoutMs?: number;
   log?: (line: string) => void;
@@ -207,6 +215,7 @@ export class BrowserBridge {
   private readonly startMonoMs = Number(process.hrtime.bigint() / 1_000_000n);
   private readonly actionTimeoutMs: number;
   private readonly autoPair: boolean;
+  private readonly seqStatePath: string | null;
   private readonly log: (line: string) => void;
 
   /** wall clock 相对单调时钟的漂移毫秒数。 */
@@ -222,6 +231,7 @@ export class BrowserBridge {
   ) {
     this.actionTimeoutMs = opts.actionTimeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS;
     this.autoPair = opts.autoPair ?? false;
+    this.seqStatePath = opts.seqStatePath ?? null;
     this.log = opts.log ?? (() => {});
   }
 
@@ -333,11 +343,41 @@ export class BrowserBridge {
     // hello/pairing_start 是配对起点，永远免签；收到即视为重新配对（下方处理时重置会话）。
     if (this.sessionKey && msg.type !== 'pairing_start' && msg.type !== 'hello') {
       if (typeof msg.seq !== 'number' || typeof msg.hmac !== 'string') return 'missing seq/hmac';
-      if (!verifyHmac(this.sessionKey, msg.seq, msg.type, msg.payload, msg.hmac)) return 'hmac verification failed';
+      // A14-5：签名材料含 nonce/payload_hash（result 信封带值，其余空串）。
+      const nonce = typeof msg.nonce === 'string' ? msg.nonce : '';
+      const payloadHash = typeof msg.payload_hash === 'string' ? msg.payload_hash : '';
+      if (!verifyHmac(this.sessionKey, msg.seq, msg.type, msg.payload, msg.hmac, nonce, payloadHash)) return 'hmac verification failed';
       if (msg.seq <= this.lastSeqIn) return `replayed or out-of-order seq: ${msg.seq}`;
       this.lastSeqIn = msg.seq;
+      this.persistSeqIn();
     }
     return null;
+  }
+
+  // A14-2：lastSeqIn 持久化（原子写；重启后拒绝重放更早 seq）。
+  // 文件按 host 实例分键；写失败不阻断内存校验（重启后窗口重放会被账本幂等兜底）。
+  private persistSeqIn(): void {
+    if (!this.seqStatePath) return;
+    try {
+      fs.mkdirSync(path.dirname(this.seqStatePath), { recursive: true });
+      fs.writeFileSync(`${this.seqStatePath}.tmp`, JSON.stringify({
+        host_instance_id: this.hostInfo?.host_instance_id ?? '',
+        last_seq_in: this.lastSeqIn,
+        at: Date.now(),
+      }));
+      fs.renameSync(`${this.seqStatePath}.tmp`, this.seqStatePath);
+    } catch { /* 持久化失败不阻断 */ }
+  }
+
+  /** 配对确认/启动时恢复持久化的 lastSeqIn（同 host 才生效）。 */
+  private restoreSeqIn(hostInstanceID: string): void {
+    if (!this.seqStatePath) return;
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.seqStatePath, 'utf8')) as { host_instance_id?: string; last_seq_in?: number };
+      if (raw.host_instance_id === hostInstanceID && typeof raw.last_seq_in === 'number') {
+        if (raw.last_seq_in > this.lastSeqIn) this.lastSeqIn = raw.last_seq_in;
+      }
+    } catch { /* 首次无状态 */ }
   }
 
   private send(msg: BridgeEnvelope): void {
@@ -348,7 +388,10 @@ export class BrowserBridge {
     if (this.sessionKey && msg.type !== 'pairing_start') {
       this.seqOut += 1;
       msg.seq = this.seqOut;
-      msg.hmac = hmacSign(this.sessionKey, this.seqOut, msg.type, msg.payload);
+      // A14-5：签名材料含 nonce/payload_hash（command/result 信封带值）。
+      const nonce = typeof msg.nonce === 'string' ? msg.nonce : '';
+      const payloadHash = typeof msg.payload_hash === 'string' ? msg.payload_hash : '';
+      msg.hmac = hmacSign(this.sessionKey, this.seqOut, msg.type, msg.payload, nonce, payloadHash);
     }
     this.emit('log', `-> ${msg.type} seq=${msg.seq ?? '-'} peer=${this.socket.remotePort}`);
     this.socket.write(`${JSON.stringify(msg)}\n`);
@@ -363,6 +406,9 @@ export class BrowserBridge {
     if (msg.type === 'hello') {
       const payload = (msg.payload ?? {}) as { host_instance_id?: string; pid?: number; protocol_version?: number };
       this.hostInfo = { host_instance_id: String(payload.host_instance_id ?? ''), pid: Number(payload.pid ?? 0), connected_at: Date.now() };
+      // A14-2：同一 host 实例重连（桥重启/新会话）恢复已见最大 seq；新实例从 0 起算。
+      this.lastSeqIn = 0;
+      if (this.hostInfo.host_instance_id) this.restoreSeqIn(this.hostInfo.host_instance_id);
       this.state = 'pairing';
       this.pairing = {
         id: crypto.randomUUID(),
@@ -370,7 +416,6 @@ export class BrowserBridge {
         expires_at: Date.now() + PAIRING_TTL_MS,
       };
       this.sessionKey = null;
-      this.lastSeqIn = 0;
       this.seqOut = 0;
       this.pendingNonce.clear();
       this.send({ v: PROTOCOL_VERSION, type: 'pairing_start', payload: { pairing_id: this.pairing.id, code: this.pairing.code, expires_at: this.pairing.expires_at } });
@@ -604,6 +649,8 @@ export async function startBrowserBridgeDiagnostics(): Promise<BrowserBridge> {
   if (activeBridge) return activeBridge;
   const ledgerPath = path.join(process.cwd(), '.tmp', 'browser-bridge-ledger.json');
   const bridge = new BrowserBridge(new CommandLedger(ledgerPath), {
+    // A14-2：lastSeqIn 持久化（重启后拒绝重放更早 seq）。
+    seqStatePath: path.join(process.cwd(), '.tmp', 'browser-bridge-seq.json'),
     port: BRIDGE_PORT,
     controlPort: CONTROL_PORT,
     autoPair: process.env.OPS_DESKTOP_BRIDGE_AUTO_PAIR === '1',
