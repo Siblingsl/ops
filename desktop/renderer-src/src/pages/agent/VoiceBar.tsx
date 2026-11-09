@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Mic, Square } from 'lucide-react'
 import { Button } from '@/components/ui'
-import { post } from '@/lib/api'
+import { ApiError, post } from '@/lib/api'
 
 // DEV-AI27-16 第二批（W16c）：语音输入完整链路（27 §11.4.1 dictation 模式）。
-// MediaRecorder 录音（内存 Blob，不落盘，27 §11.4.3）→ 停止 → POST voice-sessions/turns
-// → reviewable 转写（真实 ASR 供应商待 W16 后续批；当前转写返回空时回退手输）→ 可编辑终稿 → 插入输入框。
-// 红线：临时转写不发送不作为指令；语音不构成确认。
+// MediaRecorder 录音（内存 Blob，不落盘，27 §11.4.3）→ 停止 → turns 上传音频
+// → 服务端调用已配置的 asr 路由 → reviewable 终稿 → 用户编辑后插入输入框。
+// 红线：临时转写不发送不作为指令；语音不构成确认；ASR 失败不伪装成「空转写」。
 
 export type VoiceBarState = 'idle' | 'recording' | 'transcribing' | 'reviewable' | 'error'
 
@@ -15,8 +15,26 @@ interface VoiceTurnResponse {
     id: string
     state: string
     transcription: string
+    asr_provider?: string
+    asr_model?: string
+    asr_seconds?: number
+    asr_error_code?: string
   }
   replayed?: boolean
+}
+
+/** 录音 Blob → 纯 base64（去掉 data URL 前缀）。音频只在此进程内存中短暂存在。 */
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const raw = String(reader.result ?? '')
+      const comma = raw.indexOf(',')
+      resolve(comma >= 0 ? raw.slice(comma + 1) : raw)
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('读取录音失败'))
+    reader.readAsDataURL(blob)
+  })
 }
 
 interface VoiceBarProps {
@@ -60,23 +78,36 @@ export function VoiceBar({ conversationId, voiceDictationEnabled, onInsert }: Vo
       }
       // 27 §11.4.3：单次语音输入 ≤5 分钟 / 20MiB。
       if (blob.size > 20 * 1024 * 1024) throw new Error('录音超过 20MiB 上限')
-      // 真实 ASR 供应商属 W16 后续批；当前 turns(purpose=transcribe) 创建 reviewable 回合，
-      // 转写文本占位为空——用户可直接手输终稿（不伪造 ASR 已完成）。
+      // 音频经 turns 上传，由服务端调用已配置的 asr 路由转写；音频不落盘。
+      const audioBase64 = await blobToBase64(blob)
+      const ext = blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'm4a' : 'webm'
       const result = await post<VoiceTurnResponse>(
         `/agent/voice-sessions/${sessionIdRef.current}/turns`,
-        { purpose: 'transcribe', transcription: '', request_id: crypto.randomUUID() },
+        {
+          purpose: 'transcribe', transcription: '', request_id: crypto.randomUUID(),
+          audio_base64: audioBase64, audio_filename: `voice.${ext}`,
+        },
       )
       const turn = result.turn
       if (turn.state === 'reviewable') {
         setEditable(turn.transcription)
         setState('reviewable')
         if (!turn.transcription) {
-          setError('语音转写路由尚未接入真实 ASR；可在下方直接输入终稿。')
+          setError('服务未返回转写文本；可在下方直接输入终稿。')
         }
       } else {
         throw new Error(`转写状态异常：${turn.state}`)
       }
     } catch (err) {
+      // 能力缺失 / 上游失败：准确报错并允许手输终稿，不伪造转写结果。
+      if (err instanceof ApiError && (err.code === 'voice_capability_unsupported' || err.code === 'voice_provider_unavailable')) {
+        setEditable('')
+        setState('reviewable')
+        setError(err.code === 'voice_capability_unsupported'
+          ? '未配置 ASR 供应商路由；可在模型配置里为「ASR 语音转写」指定供应商，或直接输入终稿。'
+          : 'ASR 供应商调用失败；可直接输入终稿，或检查密钥与网络后重试。')
+        return
+      }
       setError('转写失败：' + (err instanceof Error ? err.message : String(err)))
       setState('error')
     }

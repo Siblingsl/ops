@@ -1,13 +1,17 @@
 package app
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"ops/internal/ai"
 )
 
 // DEV-AI27-16（W16）：双模式语音会话与回合（27 文档 §11.4）。
@@ -36,6 +40,11 @@ type voiceTurnView struct {
 	Transcription  string `json:"transcription,omitempty"`
 	FinalMessageID string `json:"final_message_id,omitempty"`
 	RunID          string `json:"run_id,omitempty"`
+	// DEV-AI27-16（W16c）：真实 ASR 回执（模型/时长/失败层），供 V05/V07 核对。
+	ASRProvider  string  `json:"asr_provider,omitempty"`
+	ASRModel     string  `json:"asr_model,omitempty"`
+	ASRSeconds   float64 `json:"asr_seconds,omitempty"`
+	ASRErrorCode string  `json:"asr_error_code,omitempty"`
 }
 
 const voiceSessionColumns = `v.id::text, v.conversation_id::text, v.mode, v.state, v.revision,
@@ -45,7 +54,8 @@ const voiceSessionColumnsPlain = `id::text, conversation_id::text, mode, state, 
 	to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')`
 
 const voiceTurnColumns = `t.id::text, t.session_id::text, t.turn_index, t.purpose, t.state,
-	t.transcription, COALESCE(t.final_message_id::text,''), COALESCE(t.run_id::text,'')`
+	t.transcription, COALESCE(t.final_message_id::text,''), COALESCE(t.run_id::text,''),
+	t.asr_provider, t.asr_model, t.asr_seconds, t.asr_error_code`
 
 func (s *Server) voiceGuard(id *identity) error {
 	if id == nil {
@@ -123,6 +133,78 @@ func (s *Server) createVoiceSession(w http.ResponseWriter, r *http.Request) erro
 	return ok(w, view)
 }
 
+// voiceTurnInput 是回合提交的统一入参：
+//   - JSON：文本终稿（兼容旧客户端）或 audio_base64（无 FormData 的脚本/测试）；
+//   - multipart/form-data：audio 文件（浏览器推荐，避免 base64 膨胀）。
+type voiceTurnInput struct {
+	Purpose       string
+	Transcription string
+	RequestID     string
+	Audio         []byte
+	Filename      string
+}
+
+// 27 §11.4.3：单次语音输入 ≤5 分钟 / 20MiB。
+const voiceAudioLimit = 20 << 20
+
+func decodeVoiceTurnInput(w http.ResponseWriter, r *http.Request) (voiceTurnInput, error) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if err := r.ParseMultipartForm(voiceAudioLimit + (1 << 20)); err != nil {
+			return voiceTurnInput{}, apiErr(413, "voice_audio_limit", "音频超过 20MiB 上限或表单无法解析")
+		}
+		in := voiceTurnInput{
+			Purpose:       r.FormValue("purpose"),
+			Transcription: r.FormValue("transcription"),
+			RequestID:     r.FormValue("request_id"),
+		}
+		file, header, err := r.FormFile("audio")
+		if err == http.ErrMissingFile {
+			return in, nil
+		}
+		if err != nil {
+			return voiceTurnInput{}, apiErr(400, "bad_request", "音频字段无法读取")
+		}
+		defer file.Close()
+		data, err := io.ReadAll(io.LimitReader(file, voiceAudioLimit+1))
+		if err != nil {
+			return voiceTurnInput{}, apiErr(400, "bad_request", "音频读取失败")
+		}
+		if len(data) > voiceAudioLimit {
+			return voiceTurnInput{}, apiErr(413, "voice_audio_limit", "音频超过 20MiB 上限")
+		}
+		in.Audio = data
+		if header != nil {
+			in.Filename = header.Filename
+		}
+		return in, nil
+	}
+	var body struct {
+		Purpose       string `json:"purpose"`
+		Transcription string `json:"transcription"`
+		RequestID     string `json:"request_id"`
+		AudioBase64   string `json:"audio_base64"`
+		AudioFilename string `json:"audio_filename"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 28<<20)).Decode(&body); err != nil {
+		return voiceTurnInput{}, apiErr(400, "bad_request", "请求体无法解析")
+	}
+	in := voiceTurnInput{
+		Purpose: body.Purpose, Transcription: body.Transcription,
+		RequestID: body.RequestID, Filename: body.AudioFilename,
+	}
+	if strings.TrimSpace(body.AudioBase64) != "" {
+		data, err := base64.StdEncoding.DecodeString(body.AudioBase64)
+		if err != nil {
+			return voiceTurnInput{}, apiErr(422, "validation_failed", "audio_base64 不是合法 base64")
+		}
+		if len(data) > voiceAudioLimit {
+			return voiceTurnInput{}, apiErr(413, "voice_audio_limit", "音频超过 20MiB 上限")
+		}
+		in.Audio = data
+	}
+	return in, nil
+}
+
 // POST /agent/voice-sessions/{id}/turns：提交回合（转写或实时 commit）。
 // purpose=transcribe：只存转写文本（reviewable），不创建消息/run；
 // purpose=commit_realtime：实时最终回合，创建消息+run（复用原消息受理事务）。
@@ -136,18 +218,14 @@ func (s *Server) createVoiceTurn(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return errNotFound
 	}
-	var body struct {
-		Purpose       string `json:"purpose"`
-		Transcription string `json:"transcription"`
-		RequestID     string `json:"request_id"`
+	in, err := decodeVoiceTurnInput(w, r)
+	if err != nil {
+		return err
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&body); err != nil {
-		return apiErr(400, "bad_request", "请求体无法解析")
-	}
-	if body.Purpose != "transcribe" && body.Purpose != "commit_realtime" {
+	if in.Purpose != "transcribe" && in.Purpose != "commit_realtime" {
 		return apiErr(422, "validation_failed", "purpose 只能是 transcribe 或 commit_realtime")
 	}
-	requestID, err := uuid.Parse(body.RequestID)
+	requestID, err := uuid.Parse(in.RequestID)
 	if err != nil {
 		return apiErr(400, "bad_request", "request_id 必须是 UUID")
 	}
@@ -189,20 +267,48 @@ func (s *Server) createVoiceTurn(w http.ResponseWriter, r *http.Request) error {
 	}
 	turnID := uuid.New()
 	nextState := "reviewable"
-	if body.Purpose == "commit_realtime" {
+	if in.Purpose == "commit_realtime" {
 		nextState = "submitted"
 	}
+	transcription := strings.TrimSpace(in.Transcription)
+	asrProvider, asrModel, asrErrorCode := "", "", ""
+	var asrSeconds float64
+	if len(in.Audio) > 0 {
+		if in.Purpose != "transcribe" {
+			return apiErr(422, "validation_failed", "只有 transcribe 回合可以上传音频")
+		}
+		// 真实 ASR：沿用既有供应商路由与密钥存储，不静默换供应商、不把失败伪装成空转写。
+		rt, routeErr := s.resolveRoute(r.Context(), "asr")
+		if routeErr != nil {
+			return apiErr(422, "voice_capability_unsupported", "未配置 ASR 供应商路由；请在模型配置中为 asr 任务指定支持转写的供应商")
+		}
+		actx, client := s.aiClientForRoute(r.Context(), rt)
+		tr, transcribeErr := ai.Transcribe(actx, client, rt.BaseURL, rt.APIKey, rt.Model, in.Filename, in.Audio)
+		asrProvider, asrModel = rt.ProviderName, rt.Model
+		if transcribeErr != nil {
+			// 保留 error 回合：前端能准确显示失败层；同 request_id 重放不会重传旧音频（§11.4.3）。
+			nextState = "error"
+			asrErrorCode = "voice_provider_unavailable"
+		} else {
+			transcription = tr.Text
+			asrSeconds = tr.DurationSeconds
+		}
+	}
 	if _, err := s.db.Exec(r.Context(), "INSERT INTO agent_voice_turn"+
-		" (id, session_id, workspace_id, user_id, turn_index, purpose, state, transcription, request_id)"+
-		" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-		turnID, sessionID, id.WorkspaceID, id.UserID, turnIndex, body.Purpose, nextState,
-		strings.TrimSpace(body.Transcription), requestID); err != nil {
+		" (id, session_id, workspace_id, user_id, turn_index, purpose, state, transcription, request_id,"+
+		" asr_provider, asr_model, asr_seconds, asr_error_code)"+
+		" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+		turnID, sessionID, id.WorkspaceID, id.UserID, turnIndex, in.Purpose, nextState,
+		transcription, requestID, asrProvider, asrModel, asrSeconds, asrErrorCode); err != nil {
 		return err
 	}
 	v, err := scanVoiceTurn(s.db.QueryRow(r.Context(),
 		"SELECT "+voiceTurnColumns+" FROM agent_voice_turn t WHERE t.id=$1", turnID))
 	if err != nil {
 		return err
+	}
+	if asrErrorCode != "" {
+		return apiErr(502, asrErrorCode, "ASR 供应商调用失败；已保留失败回合，未自动重传音频")
 	}
 	return ok(w, map[string]any{"turn": v})
 }
@@ -340,6 +446,7 @@ func scanVoiceSession(row pgx.Row) (voiceSessionView, error) {
 func scanVoiceTurn(row pgx.Row) (voiceTurnView, error) {
 	var v voiceTurnView
 	err := row.Scan(&v.ID, &v.SessionID, &v.TurnIndex, &v.Purpose, &v.State,
-		&v.Transcription, &v.FinalMessageID, &v.RunID)
+		&v.Transcription, &v.FinalMessageID, &v.RunID,
+		&v.ASRProvider, &v.ASRModel, &v.ASRSeconds, &v.ASRErrorCode)
 	return v, err
 }

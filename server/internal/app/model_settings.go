@@ -531,6 +531,8 @@ var taskTypes = []struct{ Type, Label string }{
 	{"embedding", "向量检索（embedding）"},
 	{"tier_economy", "经济档（覆盖各任务）"},
 	{"tier_quality", "质量档（覆盖各任务）"},
+	// DEV-AI27-16（W16c）：真实 ASR 供应商路由（27 §11.4.3 / V05）。
+	{"asr", "ASR 语音转写"},
 }
 
 func taskLabel(taskType string) string {

@@ -114,9 +114,14 @@ func (s *Server) resolveRouteTier(ctx context.Context, taskType, tier string) (*
 func (s *Server) resolveServerRouteTier(ctx context.Context, taskType, tier string) (*route, error) {
 	ws := ident(ctx).WorkspaceID
 	keys := []string{taskType, "default"}
-	if taskType == "image_alt" {
+	switch {
+	case taskType == "asr":
+		// ASR 能力与 chat 模型不通用：未显式配置 asr 路由时不得回退到 default，
+		// 否则会把 chat 模型当 ASR 用并报出误导性的 404（27 §11.4.5：准确指出失败层）。
+		keys = []string{"asr"}
+	case taskType == "image_alt":
 		keys = []string{"metric_screenshot"}
-	} else if costTiers[tier] && taskType != "agent_chat" {
+	case costTiers[tier] && taskType != "agent_chat":
 		// 档位覆盖不作用于 agent_chat，避免把对话切到不支持工具调用的模型（16 文档第 7.3 节第 4 项）。
 		keys = []string{"tier_" + tier, taskType, "default"}
 	}

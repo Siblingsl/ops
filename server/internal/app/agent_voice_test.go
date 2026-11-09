@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
@@ -189,5 +191,145 @@ func TestW16V02RealtimeCommitAndDedup(t *testing.T) {
 	}
 	viewer.restore(env)
 	// 清理：结束活动会话（同用户共享库）
+	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{"state": "ended"}, nil)
+}
+
+// seedASRRoute 在测试库内播种一条 asr 供应商与路由，返回清理函数。
+// 密钥用与生产一致的 box 加密；测试只使用占位值，不是真实凭据。
+func seedASRRoute(t *testing.T, baseURL, model string) {
+	t.Helper()
+	ws := env.me(t).Workspace.ID
+	enc, err := env.srv.box.Encrypt("asr-test-placeholder-not-a-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var providerID uuid.UUID
+	if err := env.srv.db.QueryRow(context.Background(),
+		`INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models, status, execution_location)
+		 VALUES ($1,'ASR 测试供应商',$2,$3,$4,$5,'active','server') RETURNING id`,
+		ws, baseURL, enc, env.srv.box.Version, []string{model}).Scan(&providerID); err != nil {
+		t.Fatalf("播种 ASR 供应商失败：%v", err)
+	}
+	if _, err := env.srv.db.Exec(context.Background(),
+		`INSERT INTO model_route (workspace_id, task_type, provider_id, model, execution_location)
+		 VALUES ($1,'asr',$2,$3,'server')
+		 ON CONFLICT (workspace_id, task_type) DO UPDATE
+		 SET provider_id=EXCLUDED.provider_id, model=EXCLUDED.model`,
+		ws, providerID, model); err != nil {
+		t.Fatalf("播种 asr 路由失败：%v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_route WHERE workspace_id=$1 AND task_type='asr'`, ws)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_provider WHERE id=$1`, providerID)
+	})
+}
+
+// TestW16V05ASRTranscribesWithConfiguredRoute：配置 asr 路由后，音频经真实
+// OpenAI 兼容 /audio/transcriptions 协议转写，回执模型与时长入库（离线 mock，不产生费用）。
+func TestW16V05ASRTranscribesWithConfiguredRoute(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "run_control,event_resume,plans,goals,artifacts,voice_dictation")
+
+	var gotAuth, gotModel string
+	asr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/audio/transcriptions" {
+			t.Errorf("ASR 路径错误：%s", r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("ASR multipart 解析失败：%v", err)
+		}
+		gotModel = r.FormValue("model")
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Errorf("ASR 缺少 file：%v", err)
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"这是真实转写链路产出的终稿","duration":8.25}`))
+	}))
+	defer asr.Close()
+	seedASRRoute(t, asr.URL+"/v1", "asr-test-model")
+
+	conv := w16CreateConv(t)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	session := w16CreateSession(t, conv, "dictation")
+
+	var resp struct {
+		Turn voiceTurnView `json:"turn"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/voice-sessions/"+session.ID+"/turns", map[string]any{
+		"purpose": "transcribe", "request_id": uuid.NewString(),
+		"audio_base64":   base64.StdEncoding.EncodeToString([]byte("fake-audio-bytes")),
+		"audio_filename": "clip.webm",
+	}, &resp)
+
+	turn := resp.Turn
+	if turn.State != "reviewable" {
+		t.Fatalf("转写成功应 reviewable：%+v", turn)
+	}
+	if turn.Transcription != "这是真实转写链路产出的终稿" {
+		t.Fatalf("转写文本未落库：%q", turn.Transcription)
+	}
+	if turn.ASRSeconds != 8.25 || turn.ASRModel != "asr-test-model" || turn.ASRProvider == "" {
+		t.Fatalf("V07 ASR 用量/模型回执未记录：%+v", turn)
+	}
+	if turn.FinalMessageID != "" || turn.RunID != "" {
+		t.Fatal("转写回合不得自动创建消息或 run（V01）")
+	}
+	if gotModel != "asr-test-model" || gotAuth != "Bearer asr-test-placeholder-not-a-secret" {
+		t.Fatalf("ASR 请求头/模型错误：model=%q auth=%q", gotModel, gotAuth)
+	}
+	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{"state": "ended"}, nil)
+}
+
+// TestW16V05ASRFailureKeepsErrorTurn：上游失败时返回明确错误码并保留 error 回合，
+// 不把失败伪装成「空转写」（27 §11.4.5）。
+func TestW16V05ASRFailureKeepsErrorTurn(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "run_control,event_resume,plans,goals,artifacts,voice_dictation")
+
+	asr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid key"}`))
+	}))
+	defer asr.Close()
+	seedASRRoute(t, asr.URL+"/v1", "asr-test-model")
+
+	conv := w16CreateConv(t)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	session := w16CreateSession(t, conv, "dictation")
+
+	env.expectErr(t, "POST", "/api/v1/agent/voice-sessions/"+session.ID+"/turns", map[string]any{
+		"purpose": "transcribe", "request_id": uuid.NewString(),
+		"audio_base64":   base64.StdEncoding.EncodeToString([]byte("fake-audio-bytes")),
+		"audio_filename": "clip.webm",
+	}, "voice_provider_unavailable")
+
+	var detail struct {
+		Turns []voiceTurnView `json:"turns"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{}, &detail)
+	if len(detail.Turns) != 1 || detail.Turns[0].State != "error" || detail.Turns[0].ASRErrorCode != "voice_provider_unavailable" {
+		t.Fatalf("失败回合未保留或错误码缺失：%+v", detail.Turns)
+	}
+	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{"state": "ended"}, nil)
+}
+
+// TestW16V05ASRMissingRouteRejects：未配置 asr 路由时准确报能力缺失，不回退为空转写。
+func TestW16V05ASRMissingRouteRejects(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "run_control,event_resume,plans,goals,artifacts,voice_dictation")
+
+	conv := w16CreateConv(t)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	session := w16CreateSession(t, conv, "dictation")
+
+	env.expectErr(t, "POST", "/api/v1/agent/voice-sessions/"+session.ID+"/turns", map[string]any{
+		"purpose": "transcribe", "request_id": uuid.NewString(),
+		"audio_base64":   base64.StdEncoding.EncodeToString([]byte("fake-audio-bytes")),
+		"audio_filename": "clip.webm",
+	}, "voice_capability_unsupported")
 	env.mustJSON(t, "PATCH", "/api/v1/agent/voice-sessions/"+session.ID, map[string]any{"state": "ended"}, nil)
 }
