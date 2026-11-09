@@ -503,6 +503,60 @@ export function inBrowseAttachAfterOverlay(window: BrowserWindow): void {
 }
 
 // ---------------------------------------------------------------------------
+// DEV-AI27-08g（27 §14.5 浏览数据管理）：受控清理浏览实例数据。
+// 边界：只作用于 persist:ops-inbrowse 浏览分区；业务 session（登录态）与 OPS 证据
+// 目录完全不经过这里——设置页两类数据分区展示，防止"一键清全部"误伤业务登录态。
+// ---------------------------------------------------------------------------
+
+/** 浏览数据类型：cache（HTTP 缓存/存储）、cookies（含 storage 的站点数据）、all（两者）。 */
+export type InBrowseDataKind = 'cache' | 'cookies' | 'all';
+
+export interface InBrowseDataStats {
+  cacheBytes: number | null;
+  cookiesCount: number | null;
+}
+
+let browseDataSession: Session | null = null;
+
+function browseDataTargetSession(): Session {
+  if (!browseDataSession) browseDataSession = session.fromPartition('ops-inbrowse', { cache: true });
+  return browseDataSession;
+}
+
+/** 浏览分区数据体积（读取失败返回 null，不伪造 0）。 */
+export async function inBrowseDataStats(): Promise<InBrowseDataStats> {
+  const s = browseDataTargetSession();
+  let cacheBytes: number | null = null;
+  let cookiesCount: number | null = null;
+  try {
+    cacheBytes = await s.getCacheSize();
+  } catch { /* 部分平台不可用：如实标 null */ }
+  try {
+    cookiesCount = (await s.cookies.get({})).length;
+  } catch { /* 同上 */ }
+  return { cacheBytes, cookiesCount };
+}
+
+/** 清理浏览实例数据（仅 persist:ops-inbrowse）。返回实际执行的清理项。 */
+export async function clearInBrowseData(kind: InBrowseDataKind): Promise<{ cleared: string[] }> {
+  if (kind !== 'cache' && kind !== 'cookies' && kind !== 'all') {
+    throw new Error('inbrowse_data_kind_invalid');
+  }
+  const s = browseDataTargetSession();
+  const cleared: string[] = [];
+  if (kind === 'cache' || kind === 'all') {
+    await s.clearCache();
+    cleared.push('cache');
+  }
+  if (kind === 'cookies' || kind === 'all') {
+    // clearStorageData 不传 origin 清整个分区：cookies + localStorage + indexedDB 等。
+    await s.clearStorageData();
+    cleared.push('cookies', 'storage');
+  }
+  return { cleared };
+}
+
+// ---------------------------------------------------------------------------
 // 页面内登记动作（executeScript 传函数引用的字符串化版本；与扩展 observeFn 同语义）。
 // 密码/MFA//上传控件拒绝；doc_rev 失效拒绝；节点上限 300。
 // ---------------------------------------------------------------------------

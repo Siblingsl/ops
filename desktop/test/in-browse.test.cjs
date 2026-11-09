@@ -34,11 +34,27 @@ const electronMock = {
     }
     setBounds(b) { this.__bounds = b; }
   },
-  session: { fromPartition: () => ({}) },
+  session: {
+    // DEV-AI27-08g：persist:ops-inbrowse 分区 mock——统计/清理全部只落在该分区。
+    fromPartition: (partition) => {
+      if (partition !== 'ops-inbrowse') {
+        // 业务 session 等其他分区：mock 一个"如果被误清会暴露"的对象。
+        return { __partition: partition, clearCacheCalls: 0, clearStorageCalls: 0 };
+      }
+      const cookies = [{ name: 'a' }, { name: 'b' }];
+      return {
+        __partition: partition,
+        getCacheSize: async () => 5 * 1024 * 1024,
+        cookies: { get: async () => cookies },
+        clearCache: async () => { clearedTargets.push('browse-cache'); },
+        clearStorageData: async () => { clearedTargets.push('browse-storage'); },
+      };
+    },
+  },
 };
 require.cache[require.resolve('electron')] = { exports: electronMock };
 
-const { InBrowseViewController, IN_BROWSE_MIN_WIDTH } = require('../.build/in-browse.js');
+const { InBrowseViewController, IN_BROWSE_MIN_WIDTH, clearInBrowseData, inBrowseDataStats } = require('../.build/in-browse.js');
 
 function fakeWindow() {
   return {
@@ -301,4 +317,41 @@ test('W08f: destroy 清空弹窗回执', () => {
   assert.ok(c.snapshot().lastBlockedPopup);
   c.destroy();
   assert.equal(c.snapshot().lastBlockedPopup, null, 'destroy 后回执清空');
+});
+
+// ---------------------------------------------------------------------------
+// DEV-AI27-08g（27 §14.5 浏览数据管理）：clearData 只作用于 persist:ops-inbrowse；
+// 非法 kind 拒绝；统计如实返回。
+// ---------------------------------------------------------------------------
+
+const clearedTargets = [];
+
+test('W08g: 统计返回浏览分区体积与 Cookies 数', async () => {
+  const stats = await inBrowseDataStats();
+  assert.equal(stats.cacheBytes, 5 * 1024 * 1024);
+  assert.equal(stats.cookiesCount, 2);
+});
+
+test('W08g: clearData cache/all 只清浏览分区', async () => {
+  clearedTargets.length = 0;
+  const r1 = await clearInBrowseData('cache');
+  assert.deepEqual(r1.cleared, ['cache']);
+  assert.deepEqual(clearedTargets, ['browse-cache'], '只触碰浏览分区缓存');
+  const r2 = await clearInBrowseData('all');
+  assert.deepEqual(r2.cleared, ['cache', 'cookies', 'storage']);
+  assert.deepEqual(clearedTargets, ['browse-cache', 'browse-cache', 'browse-storage'], 'all 仍只落浏览分区');
+});
+
+test('W08g: clearData cookies 清 Cookies 与站点数据', async () => {
+  clearedTargets.length = 0;
+  const r = await clearInBrowseData('cookies');
+  assert.deepEqual(r.cleared, ['cookies', 'storage']);
+  assert.deepEqual(clearedTargets, ['browse-storage']);
+});
+
+test('W08g: 非法 kind 拒绝（不静默清空）', async () => {
+  clearedTargets.length = 0;
+  await assert.rejects(() => clearInBrowseData('everything'), /inbrowse_data_kind_invalid/);
+  await assert.rejects(() => clearInBrowseData(''), /inbrowse_data_kind_invalid/);
+  assert.deepEqual(clearedTargets, [], '非法 kind 未触发任何清理');
 });

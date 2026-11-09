@@ -1,5 +1,5 @@
 import { Keyboard } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button, Card, CardHeader, cn, PageHeader, Switch } from '@/components/ui'
 import { errorMessage } from '@/lib/api'
@@ -116,6 +116,46 @@ export default function Preferences() {
           <Switch label="匿名记录使用体验事件" checked={prefs.ux_events} onChange={(v) => set({ ux_events: v })} />
         </Row>
       </Card>
+      {desktop && <InBrowseDataCard />}
     </div>
   )
+}
+
+// DEV-AI27-08g（27 §14.5）：浏览实例数据受控清理——只作用于内置浏览分区
+// （persist:ops-inbrowse），不触碰业务登录态；与"OPS 证据"（agent 浏览证据，
+// 由工作台/导出入口管理）分开展示，避免误清两类数据。
+function InBrowseDataCard() {
+  const [stats, setStats] = useState<{ cacheBytes: number | null; cookiesCount: number | null } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const refresh = useCallback(async () => {
+    try {
+      const s = await window.opsDesktopUI?.invokeInBrowse('inbrowse:data-stats')
+      if (s && typeof s === 'object') setStats(s as { cacheBytes: number | null; cookiesCount: number | null })
+    } catch { /* Web 或旧宿主：卡片本就不渲染 */ }
+  }, [])
+  useEffect(() => { void refresh() }, [refresh])
+  const clear = async (kind: 'cache' | 'cookies') => {
+    setBusy(true)
+    try {
+      await window.opsDesktopUI?.invokeInBrowse('inbrowse:clear-data', kind)
+      toast.success(kind === 'cache' ? '已清理浏览缓存' : '已清理浏览 Cookies 与站点数据', { duration: 1600 })
+      await refresh()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '清理失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const fmtBytes = (n: number | null) => n === null ? '未知' : n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`
+  return <Card className="mt-5">
+    <CardHeader title="浏览数据" desc="只清理内置浏览页签的缓存与 Cookies（浏览实例自己的数据）。业务登录态、OPS 浏览证据与作品数据都不在这里，不受影响。要在工作台清理 OPS 浏览证据，请使用对应工作台入口，勿混淆两类数据。" />
+    <div className="divide-y divide-mist-100">
+      <Row title="浏览缓存" desc={`内置浏览页签的 HTTP 缓存，当前 ${stats ? fmtBytes(stats.cacheBytes) : '读取中'}。清理不影响任何登录状态。`}>
+        <Button variant="secondary" disabled={busy} onClick={() => void clear('cache')}>清理缓存</Button>
+      </Row>
+      <Row title="浏览 Cookies 与站点数据" desc={`内置浏览页签各站点留下的 Cookies/本地存储，当前 ${stats ? `${stats.cookiesCount ?? '未知'} 条 Cookies` : '读取中'}。清理后内置浏览里登录过的站点需要重新登录；OPS 本身的登录不受影响。`}>
+        <Button variant="secondary" disabled={busy} onClick={() => void clear('cookies')}>清理站点数据</Button>
+      </Row>
+    </div>
+  </Card>
 }

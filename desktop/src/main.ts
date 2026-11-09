@@ -21,7 +21,7 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { startBrowserBridgeDiagnostics } from './browser-bridge';
-import { bindInBrowseController, inBrowseAttachAfterOverlay, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
+import { bindInBrowseController, clearInBrowseData, inBrowseAttachAfterOverlay, inBrowseDataStats, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
 
 // 补上非 EPIPE 未捕获异常的展示（防护本身已在 import 时装好）。
 installBrokenPipeGuard((error) => {
@@ -869,6 +869,14 @@ function registerIpcHandlers(): void {
     return null;
   });
   ipcHandle('inbrowse:snapshot', (event) => requireInBrowse(event).snapshot());
+  // DEV-AI27-08g（27 §14.5）：浏览数据管理——只读统计与受控清理，仅 persist:ops-inbrowse。
+  ipcHandle('inbrowse:data-stats', () => inBrowseDataStats());
+  ipcHandle('inbrowse:clear-data', (event, raw) => {
+    requireInBrowse(event);
+    const kind = typeof raw === 'string' ? raw : '';
+    if (kind !== 'cache' && kind !== 'cookies' && kind !== 'all') throw new Error('inbrowse_data_kind_invalid');
+    return clearInBrowseData(kind);
+  });
   ipcHandle('cx-long-image:capture', async (event, raw) => {
     const senderFrame = event.senderFrame;
     if (!businessWindow || businessWindow.isDestroyed() || event.sender !== businessWindow.webContents
