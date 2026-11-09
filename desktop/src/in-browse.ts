@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView, session, type Session } from 'electron';
+import { BrowserWindow, WebContentsView, session, type Session, type DownloadItem } from 'electron';
 import * as crypto from 'node:crypto';
 
 // DEV-AI27-08（W08，D-172 裁决）：内置浏览视图——Codex 同款双路径之"应用内"承载。
@@ -24,12 +24,24 @@ export interface InBrowseTabSnapshot {
   navigationGeneration: number;
 }
 
+/** 内置浏览器的下载记录（27 §14.5：逐文件确认，不自动打开/执行/上传）。 */
+export interface InBrowseDownloadRecord {
+  id: string;
+  filename: string;
+  state: 'completed' | 'interrupted' | 'cancelled';
+  receivedBytes: number;
+  totalBytes: number;
+  sourceUrl: string;
+}
+
 export interface InBrowseSnapshot {
   activeTabId: string | null;
   tabs: InBrowseTabSnapshot[];
   bounds: InBrowseBounds | null;
   detached: boolean;
   detachReason: string | null;
+  /** 最近 20 条下载记录，新的在前；与页签状态互不影响。 */
+  downloads: InBrowseDownloadRecord[];
 }
 
 type DetachReason = 'approval-dialog' | 'menu' | 'account-switch' | 'settings' | 'close';
@@ -48,6 +60,7 @@ export class InBrowseViewController {
   private bounds: InBrowseBounds | null = null;
   private detached = false;
   private detachReason: DetachReason | null = null;
+  private downloads: InBrowseDownloadRecord[] = [];
 
   constructor(
     readonly window: BrowserWindow,
@@ -72,7 +85,20 @@ export class InBrowseViewController {
       bounds: this.detached ? null : this.bounds,
       detached: this.detached,
       detachReason: this.detachReason,
+      downloads: [...this.downloads],
     };
+  }
+
+  /**
+   * 记录一次下载结果并推送真实快照。
+   *
+   * 注意：这里必须走 `snapshot()`，不能手写快照对象。下载是会话级事件、
+   * 与页签无关，早前版本在 done 回调里直接推送 `{ tabs: [], activeTabId: null }`，
+   * 一次下载就会把前端的页签列表整体清空。
+   */
+  recordDownload(record: InBrowseDownloadRecord): void {
+    this.downloads = [record, ...this.downloads].slice(0, 20);
+    this.emitSnapshot();
   }
 
   private createTab(): InBrowseTab {
@@ -341,7 +367,9 @@ export class InBrowseViewController {
 // 每业务窗口单例 + 生命周期
 // ---------------------------------------------------------------------------
 
-const controllers = new WeakMap<BrowserWindow, InBrowseViewController>();
+// 用 Map 而不是 WeakMap：下载是会话级事件，需要遍历所有窗口广播记录。
+// 窗口关闭时在 once('closed') 里显式 delete，避免持有已销毁的控制器。
+const controllers = new Map<BrowserWindow, InBrowseViewController>();
 
 export function getInBrowseController(window: BrowserWindow): InBrowseViewController | null {
   return controllers.get(window) ?? null;
@@ -351,10 +379,44 @@ export function bindInBrowseController(window: BrowserWindow, onSnapshot: (s: In
   const existing = controllers.get(window);
   if (existing) return existing;
   const browseSession: Session = session.fromPartition('ops-inbrowse', { cache: true });
+  installDownloadHandling(browseSession);
   const controller = new InBrowseViewController(window, browseSession, onSnapshot);
   controllers.set(window, controller);
-  window.once('closed', () => controller.destroy());
+  window.once('closed', () => {
+    controllers.delete(window);
+    controller.destroy();
+  });
   return controller;
+}
+
+// 同一 partition 的 Session 是共享的，bind 会随窗口多次调用；
+// 不加这层去重，多开窗口时每次下载都会触发多遍回调。
+const downloadHandledSessions = new WeakSet<Session>();
+
+// DEV-AI27-08e（深化 2/5，27 §14.5 下载）：逐文件确认——不自动打开/执行/上传；
+// 保存采用 Electron 原生文件对话框（用户选择位置）；取消即中止，不落盘到隐式目录。
+function installDownloadHandling(browseSession: Session): void {
+  if (downloadHandledSessions.has(browseSession)) return;
+  downloadHandledSessions.add(browseSession);
+  browseSession.on('will-download', (_event, item: DownloadItem) => {
+    // 27 §14.5：下载显示真实来源/名称/类型/大小，由用户逐文件确认保存位置。
+    item.setSaveDialogOptions({
+      title: '保存下载文件',
+      defaultPath: item.getFilename(),
+    });
+    item.on('done', (_event, state) => {
+      const record: InBrowseDownloadRecord = {
+        id: crypto.randomUUID(),
+        filename: item.getFilename(),
+        state,
+        receivedBytes: item.getReceivedBytes(),
+        totalBytes: item.getTotalBytes(),
+        sourceUrl: item.getURL(),
+      };
+      // 下载无法可靠归属到单一窗口（session 共享），广播给当前打开的所有窗口。
+      for (const controller of controllers.values()) controller.recordDownload(record);
+    });
+  });
 }
 
 export function inBrowseDetachForOverlay(window: BrowserWindow, reason: DetachReason): void {

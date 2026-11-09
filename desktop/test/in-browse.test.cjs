@@ -141,6 +141,33 @@ test('W08d: reorderTab 拖拽排序', () => {
   c.destroy();
 });
 
+test('W08e: 下载记录走真实快照，不清空页签', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  const t1 = c.openTab();
+  const t2 = c.openTab();
+  // 早前版本在下载完成时推送 { tabs: [], activeTabId: null }，
+  // 一次下载就会把前端页签列表整个清掉；这里锁住「下载与页签互不影响」。
+  c.recordDownload({ id: 'd1', filename: '报告.pdf', state: 'completed', receivedBytes: 2048, totalBytes: 2048, sourceUrl: 'https://example.com/a.pdf' });
+  const snap = c.snapshot();
+  assert.equal(snap.tabs.length, 2, '下载不得清空页签');
+  assert.equal(snap.tabs[0].id, t1);
+  assert.equal(snap.tabs[1].id, t2);
+  assert.equal(snap.activeTabId, t2, '活动页签不应被下载改写');
+  assert.equal(snap.downloads.length, 1);
+  assert.equal(snap.downloads[0].filename, '报告.pdf');
+  assert.equal(snap.downloads[0].state, 'completed');
+  // 新的在前，且最多保留 20 条
+  for (let i = 0; i < 25; i += 1) {
+    c.recordDownload({ id: `x${i}`, filename: `f${i}.bin`, state: 'completed', receivedBytes: 1, totalBytes: 1, sourceUrl: 'https://example.com/' });
+  }
+  const after = c.snapshot();
+  assert.equal(after.downloads.length, 20, '下载记录上限 20 条');
+  assert.equal(after.downloads[0].filename, 'f24.bin', '最新记录排在最前');
+  assert.equal(after.tabs.length, 2, '批量下载后页签仍在');
+  c.destroy();
+});
+
 test('W08d: 宽度钳制与 destroy 清空', () => {
   const win = fakeWindow();
   const c = new InBrowseViewController(win, {}, () => {});

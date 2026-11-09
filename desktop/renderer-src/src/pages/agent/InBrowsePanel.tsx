@@ -14,15 +14,28 @@ interface InBrowseTabSnapshot {
   navigationGeneration: number
 }
 
+interface InBrowseDownloadRecord {
+  id: string
+  filename: string
+  state: 'completed' | 'interrupted' | 'cancelled'
+  receivedBytes: number
+  totalBytes: number
+  sourceUrl: string
+}
+
 interface InBrowseSnapshot {
   activeTabId: string | null
   tabs: InBrowseTabSnapshot[]
   bounds: { x: number; y: number; width: number; height: number } | null
   detached: boolean
   detachReason: string | null
+  // 主进程按会话推送的下载记录；与页签状态相互独立，缺省视为空。
+  downloads?: InBrowseDownloadRecord[]
 }
 
-const EMPTY: InBrowseSnapshot = { activeTabId: null, tabs: [], bounds: null, detached: false, detachReason: null }
+const EMPTY: InBrowseSnapshot = { activeTabId: null, tabs: [], bounds: null, detached: false, detachReason: null, downloads: [] }
+
+const downloadStateLabel: Record<InBrowseDownloadRecord['state'], string> = { completed: '已完成', interrupted: '已中断', cancelled: '已取消' }
 
 type InvokeFn = (channel: string, payload?: unknown) => Promise<unknown>
 
@@ -146,6 +159,12 @@ export function InBrowsePanel({ visible }: { visible: boolean }) {
       <span data-testid="inbrowse-title">{activeTab?.title || '空白页'}</span>
       {activeLoading && <span className="text-mist-400">加载中…</span>}
     </div>
+    {/* 27 §14.5：下载逐文件确认后才落盘，这里只如实展示结果，不提供自动打开/上传。 */}
+    {!!snapshot.downloads?.length && <div className="shrink-0 border-b border-mist-100 bg-white px-3 py-1 text-[11px] text-mist-500" data-testid="inbrowse-downloads">
+      <span data-testid="inbrowse-download-latest">最近下载：{snapshot.downloads[0].filename} · {downloadStateLabel[snapshot.downloads[0].state]}</span>
+      {snapshot.downloads.length > 1 && <span className="ml-1">（共 {snapshot.downloads.length} 条）</span>}
+      <span className="ml-1 text-mist-400">不会自动打开或上传</span>
+    </div>}
     {/* bounds 区域由主进程 WebContentsView 覆盖（原生层）；此处 div 仅占位测量。 */}
     <div className="min-h-0 flex-1" data-testid="inbrowse-viewport" data-url={activeUrl} />
   </div>
