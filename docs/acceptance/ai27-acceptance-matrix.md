@@ -110,5 +110,9 @@
 | P01 MCP OAuth（A3） | PKCE+回环回调+safeStorage 令牌+issuer/state 校验+401 单次刷新+撤销清令牌；HttpConnection 注入 Authorization | desktop mcp-oauth 9/9（伪造 OAuth 服务器）；desktop 285 例。真实 MCP 服务器旅程仍「未执行」 |
 | V07 TTS 服务端（A1） | `tts` 任务类型（不回退 default）+ `/audio/speech` 适配 + synthesize 端点 + `tts_*` 记账（迁移 00098） | TestW16V07 3/3（模拟端点）；TestHC 绿。真实供应商标「未执行（缺音频模型）」 |
 | R 系列（阶段 1） | 执行器修复：播种后自检（tools 硬条件）+ `OPS_FIRST_TOKEN_TIMEOUT`（15s~5m）+ selftest 探针放宽；本机模型 4 轮 agent_chat 调用真实成功 | TestRRealJourneyContract 4/4；R01 真实执行至「无浏览器证据」硬断言——阻塞于 Chrome 扩展加载（用户操作），不伪装通过 |
+| V08 realtime 桥（A2） | 服务端 `realtime` 路由（不回退 default）+ 短期会话凭据端点（零密钥下发）+ 00099 记账 + desktop WS 桥（信封/采样率契约/重连≤3/打断/IPC 五意图） | desktop voice-realtime 6/6；TestW16V08 2/2（凭据三态+签发无密钥）；desktop 295 例。真实供应商标「未执行（缺音频模型）」 |
+| M 系列增强（A9/A11） | memory-usage API（会话记忆使用可见性）+ 相似提示（`match_mode=literal` 如实标注）+ Web 浏览证据「仅桌面可见」降级占位 | TestW13bMemoryUsageAPI / TestW13bSimilarHint；web 48/48 |
+| W05 强化（A14） | HMAC 材料含 nonce/payload_hash（三方同步）+ lastSeqIn 持久化（重启拒重放）+ native host 单实例锁（bridge_busy）；HKDF 与权限收敛**阻塞拍板** | desktop 桥测 7/7；desktop 295 例。真实 Chrome 回归归扩展加载后 |
+| A19 D-133 | **docs/31 A19 行过时**：00053 已建表、服务端 3500 行/双接口/预算/v2 已实现、AS10~15 入口与 UI 已验收（docs/08 2026-10-23~24）；`go test -run TestPlatform` 绿。改判「代码已实现+自动化验证通过；阻塞于实机验收」 | TestPlatform 全绿；真实账号/正文能力/逐请求预算待实机 |
 
 > 口径不变：以上均为**代码与自动化证据**。模拟供应商通过只证明代码路径正确；真实验收仍需真 Key / 扩展加载 / 人工物理操作，对应条目状态保持「未执行」或「部分」。
