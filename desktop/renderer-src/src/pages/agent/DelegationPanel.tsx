@@ -18,6 +18,7 @@ export interface DelegationItem {
   generation: number
   result_summary?: string
   error_code?: string
+  result_artifact_id?: string
 }
 
 export interface DelegationGroupView {
@@ -50,7 +51,7 @@ const stateTone: Record<string, string> = {
   cancelled: 'text-mist-500',
 }
 
-export function DelegationPanel({ conversationId, onStopped }: { conversationId: string; onStopped?: () => void }) {
+export function DelegationPanel({ conversationId, onStopped, onNavigateArtifact }: { conversationId: string; onStopped?: () => void; onNavigateArtifact?: (artifactId: string) => void }) {
   const [groups, setGroups] = useState<DelegationGroupView[]>([])
   const [expanded, setExpanded] = useState(false)
   const [stopping, setStopping] = useState('')
@@ -125,6 +126,10 @@ export function DelegationPanel({ conversationId, onStopped }: { conversationId:
               {d.state === 'succeeded' && d.result_summary && <span className="ml-1 text-mist-500">· {d.result_summary.slice(0, 80)}</span>}
               {d.error_code && <span className="ml-1 text-danger">· {d.error_code}</span>}
             </p>
+            {/* 深化 4/5：委派结果产物跳转——succeeded 且有产物时显示链接。 */}
+            {d.state === 'succeeded' && d.result_artifact_id && onNavigateArtifact &&
+              <button type="button" className="mt-1 text-xs underline text-primary"
+                onClick={() => onNavigateArtifact(d.result_artifact_id!)}>查看产物 →</button>}
           </div>
           {['queued', 'running', 'waiting_user'].includes(d.state) &&
             <Button size="sm" variant="ghost" disabled={stopping === d.id}

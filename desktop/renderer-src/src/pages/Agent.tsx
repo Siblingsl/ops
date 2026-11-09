@@ -547,6 +547,9 @@ function WorkbenchSidePanel({
   const [editingInputID, setEditingInputID] = useState('')
   const [editingInputText, setEditingInputText] = useState('')
   const [inputBusyID, setInputBusyID] = useState('')
+  // 深化 4/5：委派结果「查看产物」要落到具体产物，而不是只切页签。
+  const [focusArtifactID, setFocusArtifactID] = useState('')
+  useEffect(() => setFocusArtifactID(''), [conversation?.id])
   const tabs = [
     { id: 'task' as const, label: '任务' },
     { id: 'context' as const, label: '上下文' },
@@ -569,7 +572,7 @@ function WorkbenchSidePanel({
         <p className="desktop-agent-side-status" role="status">{busy && <LoaderCircle className="size-4 animate-spin" />}{taskStatus}</p>
         {activeRun && <p className="desktop-agent-side-detail">运行状态：{activeRun.status === 'queued' ? '排队中' : '执行中'}</p>}
         {/* DEV-AI27-15（W15b UI）：协作任务折叠/展开/单项停止（有委派组时才渲染）。 */}
-        {conversation && <DelegationPanel conversationId={conversation.id} />}
+        {conversation && <DelegationPanel conversationId={conversation.id} onNavigateArtifact={(artifactId) => { setFocusArtifactID(artifactId); setTab('artifact') }} />}
         {conversation && <p className="desktop-agent-side-detail">本对话操作卡片：{actionCount} 项</p>}
         <GoalPanel conversationID={conversation?.id} conversation={conversation} goal={goal} models={models} goalsEnabled={goalsEnabled} compactEnabled={compactEnabled} canManage={canManageGoals} busy={busy} onCompact={onCompact} />
         {pendingActions > 0 && <p className="desktop-agent-side-note">请在对应消息下逐张审阅操作卡片。</p>}
@@ -611,7 +614,7 @@ function WorkbenchSidePanel({
       </section>}
       {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading" className="flex h-full flex-col">
         <h3 id="workbench-artifact-heading">产物</h3>
-        <div className="min-h-0 flex-1 overflow-y-auto"><ArtifactPanel conversationID={conversation?.id} compact onQuote={onQuoteArtifact} /></div>
+        <div className="min-h-0 flex-1 overflow-y-auto"><ArtifactPanel conversationID={conversation?.id} compact focusArtifactID={focusArtifactID} onQuote={onQuoteArtifact} /></div>
         {/* DEV-AI27-09（W09b）：来源子页（证据可回查+批注记录）。 */}
         <div className="max-h-[45%] shrink-0 overflow-y-auto border-t border-mist-200 pt-3">
           {conversation && <SourcePanel conversationId={conversation.id} />}

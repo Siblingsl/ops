@@ -122,8 +122,8 @@ function ArtifactPreview({ item, version, onQuote }: { item: AgentArtifactDetail
   </div>
 }
 
-export function ArtifactPanel({ conversationID, compact = false, onQuote }: {
-  conversationID?: string; compact?: boolean; onQuote: (ref: AgentContextSelection, prompt: string) => void
+export function ArtifactPanel({ conversationID, compact = false, focusArtifactID, onQuote }: {
+  conversationID?: string; compact?: boolean; focusArtifactID?: string; onQuote: (ref: AgentContextSelection, prompt: string) => void
 }) {
   const qc = useQueryClient()
   const [selectedID, setSelectedID] = useState('')
@@ -143,6 +143,10 @@ export function ArtifactPanel({ conversationID, compact = false, onQuote }: {
     setOlderVersions([])
     setOlderCursor(null)
   }, [conversationID])
+  // 委派结果跳转：按外部传入的 id 直接选中（可能不在当前已加载分页内，见下方 artifactID 兜底）。
+  useEffect(() => {
+    if (focusArtifactID) setSelectedID(focusArtifactID)
+  }, [focusArtifactID])
   const list = useInfiniteQuery({
     queryKey: ['agent-artifacts', conversationID],
     queryFn: ({ pageParam }) => get<AgentArtifactPage>(`/agent/conversations/${conversationID}/artifacts?limit=30${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`),
@@ -151,7 +155,10 @@ export function ArtifactPanel({ conversationID, compact = false, onQuote }: {
     enabled: !!conversationID,
   })
   const items: AgentArtifactSummary[] = list.data?.pages.flatMap((page) => page.items) ?? []
-  const artifactID = items.some((item) => item.id === selectedID) ? selectedID : items[0]?.id ?? ''
+  const artifactID = items.some((item) => item.id === selectedID)
+    ? selectedID
+    // 委派跳转可能指向尚未进入当前分页的产物，此时按 id 直取详情，不回退到最新一条。
+    : selectedID && selectedID === focusArtifactID ? selectedID : items[0]?.id ?? ''
   const detail = useQuery({
     queryKey: ['agent-artifact', artifactID],
     queryFn: () => get<AgentArtifactDetail>(`/agent/artifacts/${artifactID}`),
