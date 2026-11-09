@@ -32,6 +32,8 @@ web/                   React + TypeScript + Vite 网页端
 desktop/               Electron 桌面端
   src/                 Electron 主进程与本机客户端能力
   renderer-src/        独立 React + TypeScript + Vite 桌面业务界面源码
+    App.tsx main.tsx   渲染入口；界面源码直接放在包根，没有 src/ 一层
+    components/ layout/ lib/ pages/ styles/
     e2e/               桌面形态 Playwright 用例（含 Electron 真实窗口）
     tests/             桌面渲染器单测与边界守卫
   renderer/            桌面安装包使用的构建产物

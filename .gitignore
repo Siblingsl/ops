@@ -85,6 +85,7 @@ desktop/renderer-src/qa26-agent-feedback-samples.mjs
 desktop/renderer-src/_tmp_*
 # 工具会话状态（superpowers skill 的工作目录，非项目产物）
 desktop/renderer-src/.superpowers/
+.superpowers/
 
 # Electron 打包产物（构建生成，不入库）
 desktop/out/
