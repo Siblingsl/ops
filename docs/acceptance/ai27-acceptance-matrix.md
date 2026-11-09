@@ -99,4 +99,16 @@
 | V05 语音转写 | 从「无实现」→服务端路径可用（`asr` 独立路由、20MiB 上限、失败留 `error` 回合） | TestW16V05 3/3（模拟端点）、TestTranscribe 4/4 |
 | R01～05 执行器 | 修掉「测试库与页面库隔离导致必然 fatal」+ 证据硬断言 + 三次一致 | TestRRealJourneyContract 4/4；门控关闭正确 SKIP |
 
+## 2026-11-10 增量（docs/31 A 类代码补齐，不升级任何验收状态）
+
+| 项 | 变化 | 证据 |
+| --- | --- | --- |
+| T-AI27-35 内置浏览弹窗（A4） | `setWindowOpenHandler` deny 默认 + 同站进页签（上限 8）+ 跨站/非 http(s)/new-window 拒绝并 `lastBlockedPopup` 回执；will-navigate 非 http(s) 拦截 | desktop W08f 7/7（六类组合）；desktop 273 例 |
+| T-AI27-35 浏览数据管理（A5） | `clearData` 仅 `persist:ops-inbrowse`（cache/cookies/all），设置页与「OPS 证据」分区、业务登录态反例锁定 | desktop W08g 4/4 |
+| T-AI27-08 frame 级动作（A7） | 扩展 click/type 支持 `frame_id`（executeOnFrame 定向注入）；**补登 observe_frames 双侧白名单缺口**（原 AI 调用 422） | desktop 桥测+1；server W04 白名单断言 |
+| T-AI27-21A grant 派生（A6） | goal resume 按上一活动 grant 派生**新 token** 租约（同 scope、30s 上限）；失败不阻断续跑、原因挂 `goal.updated` | TestW06GrantDerivation 5/5；W04/W06/AW09/HC 回归绿 |
+| P01 MCP OAuth（A3） | PKCE+回环回调+safeStorage 令牌+issuer/state 校验+401 单次刷新+撤销清令牌；HttpConnection 注入 Authorization | desktop mcp-oauth 9/9（伪造 OAuth 服务器）；desktop 285 例。真实 MCP 服务器旅程仍「未执行」 |
+| V07 TTS 服务端（A1） | `tts` 任务类型（不回退 default）+ `/audio/speech` 适配 + synthesize 端点 + `tts_*` 记账（迁移 00098） | TestW16V07 3/3（模拟端点）；TestHC 绿。真实供应商标「未执行（缺音频模型）」 |
+| R 系列（阶段 1） | 执行器修复：播种后自检（tools 硬条件）+ `OPS_FIRST_TOKEN_TIMEOUT`（15s~5m）+ selftest 探针放宽；本机模型 4 轮 agent_chat 调用真实成功 | TestRRealJourneyContract 4/4；R01 真实执行至「无浏览器证据」硬断言——阻塞于 Chrome 扩展加载（用户操作），不伪装通过 |
+
 > 口径不变：以上均为**代码与自动化证据**。模拟供应商通过只证明代码路径正确；真实验收仍需真 Key / 扩展加载 / 人工物理操作，对应条目状态保持「未执行」或「部分」。
