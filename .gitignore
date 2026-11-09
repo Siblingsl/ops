@@ -75,3 +75,12 @@ tmpverify/
 desktop/src/native-host/com.ops.desktop.bridge.json
 desktop/src/native-host/run-host.bat
 desktop/.tmp/
+
+# 一次性 QA 现场：依赖本地 tmpverify/ 或固定端口的批次脚本，不具备复现条件
+web/audit-*.mjs
+web/shot-models.mjs
+desktop/renderer-src/qa26-*.playwright.config.ts
+desktop/renderer-src/qa26-agent-feedback-samples.mjs
+desktop/renderer-src/_tmp_*
+# 工具会话状态（superpowers skill 的工作目录，非项目产物）
+desktop/renderer-src/.superpowers/
