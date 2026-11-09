@@ -286,6 +286,8 @@ func agentClassifiedRouteList() map[string]string {
 		"DELETE /api/v1/agent/personal-memories/{id}",
 		"GET /api/v1/agent/memory-settings",
 		"PATCH /api/v1/agent/memory-settings",
+		// DEV-AI27-W13b（A9）：本会话记忆使用可见性。
+		"GET /api/v1/agent/conversations/{id}/memory-usage",
 		"POST /api/v1/memories/personal-candidates",
 		// 只减权清理路由（27 §13.4）：不挂 agentGate，智能体关闭后仍可解绑/撤权（T-AI27-25A）。
 		"DELETE /api/v1/agent/browser/bindings/{id}",

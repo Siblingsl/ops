@@ -1434,6 +1434,10 @@ export default function Agent() {
 
       {bootstrapData.features.artifacts === true && <Drawer open={artifactsOpen} onClose={() => setArtifactsOpen(false)} title="本对话产物" width="w-[min(92vw,920px)]">
         <ArtifactPanel conversationID={conversation?.id} onQuote={quoteArtifact} />
+        {/* DEV-AI27-11（A11）：Web 端无本机浏览会话，历史浏览器证据不在此展示——如实降级，不伪造内容。 */}
+        <div className="mt-4 rounded-lg border border-dashed border-mist-200 bg-mist-50 px-4 py-3 text-xs text-mist-500" data-testid="web-sources-desktop-only">
+          浏览器来源证据与批注记录仅在 OPS 桌面端展示（Web 端没有本机浏览会话）。桌面端打开同一对话即可查看可回查的来源列表。
+        </div>
       </Drawer>}
 
       <Drawer open={mobileListOpen} onClose={() => setMobileListOpen(false)} title="对话" width="w-[min(88vw,360px)]">

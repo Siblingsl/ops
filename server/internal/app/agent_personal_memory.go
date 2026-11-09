@@ -96,6 +96,19 @@ func (s *Server) listPersonalMemories(w http.ResponseWriter, r *http.Request) er
 		args = append(args, srcID)
 		query += ` AND source_conversation_id=$` + strconv.Itoa(len(args))
 	}
+	// A9 相似提示：similar_to=<文本> 时改走独立查询，返回既有 active 记忆中与其
+	// 共享 8 字前缀或互相包含的条目（保守字面匹配，非语义相似——如实标注；
+	// 服务端无向量检索）。用于候选确认前的"保持原项/替换"并排对比。
+	if similarTo := strings.TrimSpace(r.URL.Query().Get("similar_to")); similarTo != "" {
+		if runeLen(similarTo) > 2000 {
+			return apiErr(422, "validation_failed", "similar_to 过长（上限 2000 字符）")
+		}
+		prefix := similarTo
+		if len([]rune(prefix)) > 8 {
+			prefix = string([]rune(prefix)[:8])
+		}
+		return s.listSimilarPersonalMemories(w, r, id, prefix, similarTo)
+	}
 	query += ` ORDER BY updated_at DESC LIMIT 200`
 	rows, err := s.db.Query(r.Context(), query, args...)
 	if err != nil {
@@ -111,6 +124,37 @@ func (s *Server) listPersonalMemories(w http.ResponseWriter, r *http.Request) er
 		items = append(items, m)
 	}
 	return ok(w, map[string]any{"memories": items})
+}
+
+// listSimilarPersonalMemories 是 A9 相似提示的独立查询（字面匹配，非语义相似）。
+func (s *Server) listSimilarPersonalMemories(w http.ResponseWriter, r *http.Request,
+	id *identity, prefix, full string) error {
+	rows, err := s.db.Query(r.Context(), `
+		SELECT mm.id::text, mm.text, mm.state, COALESCE(mm.source_conversation_id::text,''), mm.revision,
+			to_char(mm.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			to_char(mm.updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			COALESCE(mm.supersedes_id::text,'')
+		FROM agent_personal_memory mm
+		WHERE mm.user_id=$1 AND mm.workspace_id=$2 AND mm.state='active'
+		  AND (left(mm.text, $3::int) = $4
+		       OR (position($5 IN mm.text) > 0 AND length($5) >= 8)
+		       OR (position(mm.text IN $6) > 0 AND length(mm.text) >= 8))
+		ORDER BY mm.updated_at DESC LIMIT 20`,
+		id.UserID, id.WorkspaceID, len([]rune(prefix)), prefix, full, full)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	items := []personalMemory{}
+	for rows.Next() {
+		var m personalMemory
+		if err := rows.Scan(&m.ID, &m.Text, &m.State, &m.SourceRef, &m.Revision, &m.CreatedAt, &m.UpdatedAt, &m.Superseded); err != nil {
+			return err
+		}
+		items = append(items, m)
+	}
+	// 匹配口径如实返回：literal（前缀/包含），不是语义相似度。
+	return ok(w, map[string]any{"memories": items, "match_mode": "literal"})
 }
 
 // POST /agent/personal-memories：本人显式创建（直接 active）。
@@ -504,6 +548,71 @@ func (s *Server) proposePersonalMemoryCandidate(w http.ResponseWriter, r *http.R
 		return err
 	}
 	return ok(w, created)
+}
+
+// GET /agent/conversations/{id}/memory-usage：本会话被注入/省略的记忆（A9，27 §11.1.2）。
+// 只读；按 run 汇总最近记录，上限 50 条（run 内去重取最新 revision）。
+// 返回项：memory id/摘要（文本头 120 字）/来源 run/used/omitted_reason/时间/仍有效。
+func (s *Server) listConversationMemoryUsage(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.personalMemoryGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "personal_memories"); err != nil {
+		return err
+	}
+	conversationID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return errNotFound
+	}
+	// 会话归属（本人+本工作区）。
+	if err := s.db.QueryRow(r.Context(), `SELECT 1 FROM agent_conversation
+		WHERE id=$1 AND workspace_id=$2 AND user_id=$3`, conversationID, id.WorkspaceID, id.UserID).Scan(new(int)); err != nil {
+		if err == pgx.ErrNoRows {
+			return errNotFound
+		}
+		return err
+	}
+	type usageItem struct {
+		MemoryID      string `json:"memory_id"`
+		Summary       string `json:"summary"`
+		RunID         string `json:"run_id"`
+		Used          bool   `json:"used"`
+		OmittedReason string `json:"omitted_reason,omitempty"`
+		StillActive   bool   `json:"still_active"`
+		CreatedAt     string `json:"created_at"`
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT DISTINCT ON (u.run_id, u.memory_id)
+			u.memory_id::text,
+			left(m.text, 120),
+			u.run_id::text,
+			u.used,
+			u.omitted_reason,
+			(m.state = 'active'),
+			to_char(u.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		FROM agent_memory_usage u
+		JOIN agent_personal_memory m ON m.id = u.memory_id
+		WHERE u.run_id IN (SELECT id FROM agent_run WHERE conversation_id=$1)
+		ORDER BY u.run_id, u.memory_id, u.revision DESC, u.created_at DESC
+		LIMIT 50`, conversationID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	items := []usageItem{}
+	for rows.Next() {
+		var it usageItem
+		if err := rows.Scan(&it.MemoryID, &it.Summary, &it.RunID, &it.Used,
+			&it.OmittedReason, &it.StillActive, &it.CreatedAt); err != nil {
+			return err
+		}
+		items = append(items, it)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return ok(w, map[string]any{"usage": items})
 }
 
 // personalMemorySystemBlock：run 组装时调用；返回注入的 system 文本（空=不注入），

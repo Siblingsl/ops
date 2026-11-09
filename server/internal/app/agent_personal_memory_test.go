@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -226,4 +227,119 @@ func TestW13M03DeleteStopsInjectionAndAccountMemoryUntouched(t *testing.T) {
 		t.Fatal("账号记忆创建应保持原契约")
 	}
 	env.mustJSON(t, "PATCH", "/api/v1/memories/"+accountMemory.ID, map[string]any{"status": "disabled"}, nil)
+}
+
+// TestW13bMemoryUsageAPI：本会话记忆使用可见性（A9，27 §11.1.2）。
+// ①注入后 API 返回 used=true 条目（摘要/来源 run/仍有效）；②会话覆盖 off 后省略
+// 语义不产生 usage 行（未注入即无记录）；③跨用户/跨工作区 404 不泄露。
+func TestW13bMemoryUsageAPI(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "personal_memories")
+	providerID := env.ensureToolModel(t)
+	conv := env.agentRunConversation(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+
+	candidate := w13Propose(t, "周报结构：数据先行，结论后置")
+	var confirmed personalMemory
+	env.mustJSON(t, "PATCH", "/api/v1/agent/personal-memories/"+candidate.ID, map[string]any{
+		"action": "confirm", "expected_revision": candidate.Revision,
+	}, &confirmed)
+	// usage 查询按 conversation → agent_run → usage 关联；插一条真实 run 行承接记录。
+	runID := uuid.New()
+	sessionID := agentTestSessionID(t, uuid.MustParse(env.me(t).UserID))
+	if _, err := env.srv.db.Exec(context.Background(), `INSERT INTO agent_run
+		(id, conversation_id, workspace_id, user_id, session_id, trigger, status, stage)
+		VALUES ($1,$2,$3,$4,$5,'message','completed','completed')`,
+		runID, conv.ID, uuid.MustParse(env.me(t).Workspace.ID), uuid.MustParse(env.me(t).UserID), sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if env.srv.personalMemorySystemBlock(context.Background(), uuid.MustParse(env.me(t).UserID), uuid.MustParse(env.me(t).Workspace.ID), conv.ID, runID) == "" {
+		t.Fatal("active 记忆应注入")
+	}
+
+	var out struct {
+		Usage []struct {
+			MemoryID    string `json:"memory_id"`
+			Summary     string `json:"summary"`
+			RunID       string `json:"run_id"`
+			Used        bool   `json:"used"`
+			StillActive bool   `json:"still_active"`
+		} `json:"usage"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/agent/conversations/"+conv.ID.String()+"/memory-usage", nil, &out)
+	if len(out.Usage) == 0 {
+		t.Fatal("usage API 应返回注入记录")
+	}
+	// 共享工作区夹具可能带先前用例的记忆（排序不保证）——按本用例的记忆 ID 查找断言。
+	var found bool
+	for _, it := range out.Usage {
+		if it.MemoryID == candidate.ID {
+			found = true
+			if !it.Used || !it.StillActive || it.RunID != runID.String() {
+				t.Fatalf("usage 记录字段不符：%+v", it)
+			}
+			if !strings.Contains(it.Summary, "周报结构") {
+				t.Fatalf("摘要应含文本头：%q", it.Summary)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("本用例记忆未出现在 usage：%+v", out.Usage)
+	}
+
+	// 跨用户 404（他人工作区同 ID 不泄露）
+	other := env.registerClient(t, "w13b-other-"+uuid.NewString()[:8], testPassword)
+	defer other.restore(env)
+	if st, _ := other.do("GET", "/api/v1/agent/conversations/"+conv.ID.String()+"/memory-usage", nil); st != http.StatusNotFound {
+		t.Fatalf("跨用户应 404，got %d", st)
+	}
+}
+
+// TestW13bSimilarHint：候选确认前的相似提示（A9）。
+// ①8 字前缀重合的 active 记忆返回（match_mode=literal）；②无重合返回空；
+// ③跨用户不返回他人记忆。
+func TestW13bSimilarHint(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "personal_memories")
+	conv := w16CreateConv(t)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	// 直接创建 active 记忆（本人显式创建）。
+	var created personalMemory
+	env.mustJSON(t, "POST", "/api/v1/agent/personal-memories", map[string]any{
+		"text": "周报结构：数据先行，结论后置，附来源",
+	}, &created)
+
+	var out struct {
+		Memories   []personalMemory `json:"memories"`
+		MatchMode  string           `json:"match_mode"`
+	}
+	// 前缀重合（8 字"周报结构：数据先"）。共享工作区夹具可能命中其他用例的记忆——
+	// 断言"本用例记忆在命中列表中"而非唯一。
+	env.mustJSON(t, "GET", "/api/v1/agent/personal-memories?similar_to="+url.QueryEscape("周报结构：数据先行但不要写小标题"), nil, &out)
+	if out.MatchMode != "literal" {
+		t.Fatalf("match_mode 应为 literal：%s", out.MatchMode)
+	}
+	var hit bool
+	for _, m := range out.Memories {
+		if m.ID == created.ID {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		t.Fatalf("前缀相似应命中本用例记忆：%+v", out.Memories)
+	}
+	// 无重合。
+	env.mustJSON(t, "GET", "/api/v1/agent/personal-memories?similar_to="+url.QueryEscape("完全无关的一段话没有任何交集"), nil, &out)
+	if len(out.Memories) != 0 {
+		t.Fatalf("无重合不应命中：%+v", out.Memories)
+	}
+	// 跨用户。
+	other := env.registerClient(t, "w13b-sim-"+uuid.NewString()[:8], testPassword)
+	defer other.restore(env)
+	other.mustJSON(t, "GET", "/api/v1/agent/personal-memories?similar_to="+url.QueryEscape("周报结构：数据先行但不要写小标题"), nil, &out)
+	if len(out.Memories) != 0 {
+		t.Fatalf("跨用户不得返回他人记忆：%+v", out.Memories)
+	}
 }

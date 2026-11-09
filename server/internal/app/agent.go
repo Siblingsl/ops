@@ -1867,6 +1867,8 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Delete("/agent/personal-memories/{id}", s.h(s.deletePersonalMemory))
 		r.Get("/agent/memory-settings", s.h(s.getMemorySettings))
 		r.Patch("/agent/memory-settings", s.h(s.patchMemorySettings))
+		// DEV-AI27-W13b（A9）：本会话记忆使用可见性（只读，上限 50）。
+		r.Get("/agent/conversations/{id}/memory-usage", s.h(s.listConversationMemoryUsage))
 		r.Post("/memories/personal-candidates", s.h(s.proposePersonalMemoryCandidate))
 		// DEV-AI27-04 第二批：命令账本（27 §13.2/§13.3）。
 		r.Post("/agent/browser/commands", s.h(s.createAgentBrowserCommand))
