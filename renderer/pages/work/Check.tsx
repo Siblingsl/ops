@@ -730,7 +730,7 @@ export default function Check() {
               <div className="pointer-events-auto space-y-2">
               {reviewing && run.completed_at && !run.stale && !run.material_basis_stale ? (
                 <>
-                  <Notice tone="gamboge" icon={<UserCheck className="size-4" />}>检查已完成，这篇作品需要审阅。审阅通过前不能写入草稿或生成发布包。</Notice>
+                  <Notice tone="gamboge" icon={<UserCheck className="size-4" />}>检查已完成，这篇作品需要审阅{work.review_round ? `（第 ${work.review_round} 轮）` : ''}。审阅通过前不能写入草稿或生成发布包。</Notice>
                   {canApprove ? (
                     <>
                       <HumanGate code="H-09">请通读正文和上面的检查记录，再在页头点击“审阅通过”；需要作者修改就点“退回修改”并写明原因。</HumanGate>

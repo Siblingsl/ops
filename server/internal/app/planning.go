@@ -75,6 +75,7 @@ func (s *Server) applyWorkPlanning(ctx context.Context, m *workMeta, p workPlann
 	}
 	if review != nil {
 		if _, err := s.db.Exec(ctx, `UPDATE work SET review_required=$2,
+			review_round = review_round + CASE WHEN $2 AND status='ready' AND reviewed_at IS NULL THEN 1 ELSE 0 END,
 			status = CASE WHEN $2 AND status='ready' AND reviewed_at IS NULL THEN 'reviewing' WHEN NOT $2 AND status='reviewing' THEN 'ready' ELSE status END
 			WHERE id=$1`, m.ID, *review); err != nil {
 			return err

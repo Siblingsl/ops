@@ -108,6 +108,7 @@ type Work struct {
 	TemplateID                    *uuid.UUID      `json:"template_id"`
 	ReviewerID                    *uuid.UUID      `json:"reviewer_id"`
 	ReviewRequired                bool            `json:"review_required"`
+	ReviewRound                   int             `json:"review_round"`
 	ReviewedBy                    *uuid.UUID      `json:"reviewed_by"`
 	ReviewedAt                    *time.Time      `json:"reviewed_at"`
 	CreatedAt                     time.Time       `json:"created_at"`
@@ -211,7 +212,7 @@ func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 		w.content_format, w.status, w.title, w.summary, w.viewpoint, w.outline, w.outline_confirmed_at, w.theme, w.cover_asset_id,
 		w.cover_crops, w.wechat_fields, w.topics, w.tags, w.wechat_draft_media_id, w.published_url, w.published_at, w.publish_revision, w.locked, w.revision,
 		coalesce(w.draft_maybe_published,false), coalesce(t.audience,''), coalesce(t.hook,''), to_char(w.planned_date,'YYYY-MM-DD'), w.target_chars,
-		w.post_push_todos, w.title_favorites, w.assignee_id, w.created_by, w.reviewer_id, w.review_required, w.reviewed_by, w.reviewed_at, w.created_at, w.updated_at,
+		w.post_push_todos, w.title_favorites, w.assignee_id, w.created_by, w.reviewer_id, w.review_required, w.review_round, w.reviewed_by, w.reviewed_at, w.created_at, w.updated_at,
 		coalesce((SELECT jsonb_agg(wm.material_id) FROM work_material wm WHERE wm.work_id=w.id), '[]'::jsonb),
 		coalesce((SELECT jsonb_agg(jsonb_build_object('id', d.id, 'title', d.title, 'account_name', da.name, 'platform', da.platform) ORDER BY d.created_at)
 			FROM work d JOIN platform_account da ON da.id=d.account_id WHERE d.source_work_id=w.id AND d.deleted_at IS NULL), '[]'::jsonb),
@@ -226,7 +227,7 @@ func (s *Server) loadWork(ctx context.Context, id uuid.UUID) (*Work, error) {
 		&w.ContentFormat, &w.Status, &w.Title, &w.Summary, &w.Viewpoint, &outline, &w.OutlineConfirmedAt, &w.Theme, &w.CoverAssetID,
 		&w.CoverCrops, &wf, &w.Topics, &w.Tags, &w.WechatDraftMediaID, &w.PublishedURL, &w.PublishedAt, &w.PublishRevision, &w.Locked, &w.Revision,
 		&w.DraftMaybePublished, &w.TopicAudience, &w.TopicHook, &w.PlannedDate, &w.TargetChars,
-		&w.PostPushTodos, &w.TitleFavorites, &w.AssigneeID, &w.CreatedBy, &w.ReviewerID, &w.ReviewRequired, &w.ReviewedBy, &w.ReviewedAt, &w.CreatedAt, &w.UpdatedAt,
+		&w.PostPushTodos, &w.TitleFavorites, &w.AssigneeID, &w.CreatedBy, &w.ReviewerID, &w.ReviewRequired, &w.ReviewRound, &w.ReviewedBy, &w.ReviewedAt, &w.CreatedAt, &w.UpdatedAt,
 		&materialIDs, &derived, &sourceTitle, &sourceAccountName, &sourcePlatform, &sourceCurrentRevision, &sourceDeletedAt,
 		&wechatMsgID, &xhsNoteID, &w.MetricBindingRevision, &w.MetricBindingAt,
 		&w.PlatformBindingSource, &w.PlatformBindingAt, &w.PlatformSourceMirrorID,

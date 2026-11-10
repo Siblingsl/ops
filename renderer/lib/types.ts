@@ -527,6 +527,7 @@ export interface Work {
   assignee_id?: string | null
   reviewer_id?: string | null
   review_required?: boolean
+  review_round?: number
   reviewed_by?: string | null
   reviewed_at?: string | null
   created_at: string

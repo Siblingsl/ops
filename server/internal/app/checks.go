@@ -969,7 +969,9 @@ func (s *Server) completeCheck(w http.ResponseWriter, r *http.Request) error {
 		if _, err := tx.Exec(ctx, `UPDATE check_run SET completed_at=now() WHERE id=$1`, run.ID); err != nil {
 			return err
 		}
-		if err := tx.QueryRow(ctx, `UPDATE work SET status = CASE WHEN review_required AND reviewed_at IS NULL THEN 'reviewing' ELSE 'ready' END, updated_at=now()
+		if err := tx.QueryRow(ctx, `UPDATE work SET status = CASE WHEN review_required AND reviewed_at IS NULL THEN 'reviewing' ELSE 'ready' END,
+			review_round = review_round + CASE WHEN review_required AND reviewed_at IS NULL THEN 1 ELSE 0 END,
+			updated_at=now()
 			WHERE id=$1 AND status IN ('checking','drafting') RETURNING status, reviewer_id`, m.ID).Scan(&status, &reviewer); err != nil && err != pgx.ErrNoRows {
 			return err
 		}

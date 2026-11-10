@@ -146,3 +146,34 @@ func TestCK06_CheckExitMovesToDrafting(t *testing.T) {
 		}
 	})
 }
+
+// TestCK03ReviewRoundCountsEntries：审阅轮次只在「从 ready 进入 reviewing」时 +1，
+// 退回不清零；作者改完重新提交（真实路径是 H-04 检查完成）后进入第 2 轮。
+func TestCK03ReviewRoundCountsEntries(t *testing.T) {
+	f := env.accounts(t)
+	wk := env.readyWork(t, f.wechat, "审阅轮次统计")
+	id := wk.ID.String()
+
+	var first Work
+	env.mustJSON(t, "PATCH", "/api/v1/works/"+id, map[string]any{"review_required": true}, &first)
+	if first.ReviewRound != 1 || first.Status != "reviewing" {
+		t.Fatalf("首次进入审阅应为第 1 轮 reviewing，实际 round=%d status=%s", first.ReviewRound, first.Status)
+	}
+
+	env.mustJSON(t, "POST", "/api/v1/works/"+id+"/review/return", map[string]any{"note": "补充来源后重提"}, nil)
+	var returned Work
+	env.mustJSON(t, "GET", "/api/v1/works/"+id, nil, &returned)
+	if returned.ReviewRound != 1 {
+		t.Fatalf("退回不应改变轮次，实际 %d", returned.ReviewRound)
+	}
+
+	// 直接置回 ready 以模拟「改完重新通过检查」；检查完成后的 SQL 同样只在进入 reviewing 时 +1。
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE work SET status='ready' WHERE id=$1`, wk.ID); err != nil {
+		t.Fatal(err)
+	}
+	var second Work
+	env.mustJSON(t, "PATCH", "/api/v1/works/"+id, map[string]any{"review_required": true}, &second)
+	if second.ReviewRound != 2 || second.Status != "reviewing" {
+		t.Fatalf("再次进入审阅应为第 2 轮，实际 round=%d status=%s", second.ReviewRound, second.Status)
+	}
+}
