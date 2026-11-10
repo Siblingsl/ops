@@ -39,6 +39,10 @@ func ensureStructureRoute(t *testing.T) {
 		"name": "结构拆解模拟模型", "base_url": env.mock.URL + "/v1", "api_key": "opt52-local-mock-key", "models": []string{"mock-writer"},
 	}, &provider)
 	env.mustJSON(t, "PUT", "/api/v1/model-routes", []map[string]any{{"task_type": "cx_structure_extract", "provider_id": provider.ID, "model": "mock-writer"}}, nil)
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_route WHERE task_type='cx_structure_extract' AND provider_id=$1`, provider.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_provider WHERE id=$1`, provider.ID)
+	})
 }
 
 func TestCXStructureExtractSchemaNoCopyAndPersistence(t *testing.T) {

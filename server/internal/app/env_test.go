@@ -185,6 +185,13 @@ func (e *testEnv) do(method, path string, in any) (int, []byte) {
 // mustJSON performs a request that must succeed and decodes the response.
 func (e *testEnv) mustJSON(t *testing.T, method, path string, in, out any) {
 	st, b := e.do(method, path, in)
+	// 乱序隔离（A22）：会话 reauth 窗口 5 分钟，长套件里后段用例的敏感操作会因窗口
+	// 过期返回 403。测试会话等同用户重新输入一次密码后重试；"敏感操作必须 reauth"
+	// 的产品语义仍由 TestHC30/TestModelConfigAndLimit 的负例覆盖（它们走 expectErr）。
+	if st == 403 && path != "/api/v1/auth/reauth" && bytes.Contains(b, []byte(`"reauth_required"`)) {
+		e.reauth(t)
+		st, b = e.do(method, path, in)
+	}
 	if st != 200 {
 		msg := fmt.Sprintf("%s %s => %d %s", method, path, st, b)
 		if t == nil {
