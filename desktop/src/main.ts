@@ -1144,7 +1144,10 @@ function registerIpcHandlers(): void {
     requireComputerCaller(event);
     const input = parseOAuthInput(raw);
     const client = mcpOAuthClientOf(input.connectionId, input.serverUrl, input.clientId, input.scopes);
-    return { ok: true as const, status: client.statusView() };
+    // DT-01（docs/33 §10.2）：返回体必须恰为 preload parseMcpOAuthStatus 白名单的
+    // 顶层三键（state/expires_at/has_refresh）。此前包 {ok,status} 两层 → 白名单
+    // 整批拒绝 → 渲染器恒降级 unauthorized。与 mcp:oauth-start 的顶层形状同风格。
+    return client.statusView();
   });
   ipcHandle('mcp:oauth-revoke', async (event, raw) => {
     requireComputerCaller(event);
