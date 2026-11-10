@@ -43,6 +43,10 @@ func main() {
 		fmt.Println(app.Version)
 	case "check-formats":
 		err = checkFormats()
+	case "verify":
+		err = verifyCommand()
+	case "export":
+		err = exportCommand()
 	case "parse-service":
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -50,7 +54,7 @@ func main() {
 	case "__agent_document_parser":
 		err = documentparse.RunWorker()
 	default:
-		fmt.Fprintf(os.Stderr, "用法：ops [serve|migrate|reset-password <username>|grant-admin <username>|revoke-admin <username>|check-formats|version]\n")
+		fmt.Fprintf(os.Stderr, "用法：ops [serve|migrate|reset-password <username>|grant-admin <username>|revoke-admin <username>|check-formats|verify|export|version]\n")
 		os.Exit(2)
 	}
 	if err != nil {
