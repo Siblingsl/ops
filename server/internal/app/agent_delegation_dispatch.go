@@ -66,16 +66,23 @@ func (s *Server) dispatchDelegationGroup(ctx context.Context, groupID uuid.UUID)
 }
 
 // markDelegationParentEnded 是 markDelegationParentEndedTx 的非事务包装（派发完成后调用）。
+// BE-02（docs/33 §11.5）：Begin/markTx/Commit 三处失败此前全部静默（裸 return /
+// `_ = tx.Commit`），waiting_user 置位丢失不可见；现改为 slog.ErrorContext 记录
+// （含 conversation/run 上下文）。控制流不变：收尾失败不阻断派发主流程。
 func (s *Server) markDelegationParentEnded(ctx context.Context, conversationID, parentRunID uuid.UUID) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
+		slog.ErrorContext(ctx, "派发收尾开事务失败", "conversation_id", conversationID.String(), "run_id", parentRunID.String(), "err", err)
 		return
 	}
 	defer tx.Rollback(ctx)
 	if err := s.markDelegationParentEndedTx(ctx, tx, conversationID, parentRunID); err != nil {
+		slog.ErrorContext(ctx, "派发收尾置位失败", "conversation_id", conversationID.String(), "run_id", parentRunID.String(), "err", err)
 		return
 	}
-	_ = tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		slog.ErrorContext(ctx, "派发收尾提交失败", "conversation_id", conversationID.String(), "run_id", parentRunID.String(), "err", err)
+	}
 }
 
 // dispatchOneDelegation 派发单个委派：创建子 run 行并回填，然后后台启动模型循环。
