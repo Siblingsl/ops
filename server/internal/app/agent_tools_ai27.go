@@ -130,6 +130,12 @@ func ai27ComputerTools() []AgentTool {
 			},
 			MinRole: roleEditor,
 		},
+		{
+			Name: "computer_request_target", Domain: "computer", Kind: toolR, Method: "POST",
+			Path: "/tools/computer/target-requests",
+			Description: "当前没有前台租约时，请用户在本机选择要操作的应用窗口。选定后立即生效；不要替用户猜测目标。",
+			MinRole:    roleEditor,
+		},
 	}
 }
 

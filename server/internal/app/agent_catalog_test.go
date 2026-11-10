@@ -246,6 +246,8 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/tools/subagent/delegations/{id}/cancel",
 		"GET /api/v1/tools/computer/grants",
 		"POST /api/v1/tools/computer/grants/{id}/handoff",
+		// A12：模型请求用户在本机选窗（选定后即时建 30s 租约）。
+		"POST /api/v1/tools/computer/target-requests",
 		// DEV-AI27-09（W09）浏览器证据与页面批注。
 		"POST /api/v1/agent/browser/evidence",
 		"GET /api/v1/agent/browser/evidence",

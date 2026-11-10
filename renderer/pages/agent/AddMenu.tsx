@@ -12,6 +12,7 @@ export type AddMenuAction =
   | 'skill'
   | 'goal'
   | 'routine'
+  | 'computer'
 
 interface AddMenuItem {
   id: AddMenuAction | string
@@ -25,10 +26,12 @@ export function AddMenu({
   disabled,
   onAction,
   attachmentsAtLimit,
+  computerEnabled,
 }: {
   disabled: boolean
   onAction: (action: AddMenuAction) => void
   attachmentsAtLimit: boolean
+  computerEnabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -60,7 +63,7 @@ export function AddMenu({
     { id: 'memory', label: '记忆', hint: '未开放', disabled: true, icon: GoalIcon },
     { id: 'plugins', label: '插件与工具', hint: '未开放', disabled: true, icon: Plug },
     { id: 'subagents', label: '并行协作', hint: '未开放', disabled: true, icon: Users },
-    { id: 'computer', label: '应用选择', hint: '未开放', disabled: true, icon: Cpu },
+    { id: 'computer', label: '应用选择', hint: computerEnabled ? '选择本机窗口' : '未开放', disabled: !computerEnabled, icon: Cpu },
   ]
 
   return <div className="desktop-agent-add-menu" ref={menuRef}>

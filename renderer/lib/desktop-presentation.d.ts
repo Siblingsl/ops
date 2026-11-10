@@ -55,6 +55,8 @@ declare global {
       onPlatformIntentResult(listener: (result: DesktopPlatformIntentResult) => void): () => void
       onClientHealth(listener: (health: DesktopClientHealth) => void): () => void
       captureLongImage(buildId: string): Promise<CXLongImageCaptureResult>
+      // DEV-AI27-17（W17b，A12）：本机选窗器（枚举只在本机，handle 不透明）。
+      listComputerWindows(): Promise<DesktopComputerWindowListResult>
       // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道）。
       invokeInBrowse(channel: string, payload?: unknown): Promise<unknown>
       onInBrowseSnapshot(listener: (snapshot: { bounds: { x: number; y: number; width: number; height: number } | null; url: string; title: string; loading: boolean; navigationGeneration: number }) => void): () => void
@@ -67,8 +69,7 @@ declare global {
   }
 }
 
-export type CXLongImageCaptureResult =
-  | { ok: false; code: string; message: string }
+export type CXLongImageCaptureResult =  | { ok: false; code: string; message: string }
   | {
     ok: true
     buildId: string
@@ -87,3 +88,15 @@ export type CXLongImageCaptureResult =
     capturedAt: string
     fontFamily: string
   }
+
+// DEV-AI27-17（W17b，A12）：本机窗口摘要。handle 不透明，标题仅用于本机选择。
+export type DesktopComputerWindow = {
+  handle: string
+  process: string
+  title: string
+  forbidden: boolean
+}
+
+export type DesktopComputerWindowListResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; windows: DesktopComputerWindow[] }

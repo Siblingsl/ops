@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -161,4 +162,54 @@ func TestW17C02IsolationAndC09Privacy(t *testing.T) {
 	}
 	// target_summary 只含用户选窗时的摘要，不泄漏其他窗口信息
 	_ = context.Background()
+}
+
+// A12（决策 A）：模型请求用户选窗——没有租约时请求，有租约时报现状，不重复打扰。
+func TestA12RequestComputerTarget(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "computer_use")
+	conv := w17CreateConv(t)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+
+	dispatch := func(conversationID uuid.UUID) map[string]any {
+		t.Helper()
+		res := env.agentDispatch(t, "computer_request_target", nil, func(req *agentDispatchRequest) {
+			req.Principal.ConversationID = conversationID
+		})
+		if res.Status != http.StatusOK {
+			t.Fatalf("请求选窗返回 %d：%s", res.Status, res.Raw)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(res.Raw, &out); err != nil {
+			t.Fatalf("响应不是 JSON：%v (%s)", err, res.Raw)
+		}
+		return out
+	}
+
+	// 无活动租约：只产生待选择意图，不签发任何授权。
+	if got := dispatch(conv.ID); got["state"] != "awaiting_selection" {
+		t.Fatalf("无租约时应等待用户选择：%+v", got)
+	}
+	if _, hasGrant := dispatch(conv.ID)["grant"]; hasGrant {
+		t.Fatal("待选择响应不应携带租约")
+	}
+
+	// 已有活动租约：直接回现状，前端不再弹窗。
+	grant := w17CreateGrant(t, conv, "w17:abc123", "记事本 - 无标题", "observe")
+	got := dispatch(conv.ID)
+	if got["state"] != "active" {
+		t.Fatalf("有租约时应返回 active：%+v", got)
+	}
+	view, ok := got["grant"].(map[string]any)
+	if !ok || view["id"] != grant.ID || view["target_summary"] != "记事本 - 无标题" {
+		t.Fatalf("应返回当前租约：%+v", got["grant"])
+	}
+
+	// 无会话归属（非会话内工具调用）拒绝，避免工作台直接调用绕过选窗。
+	res := env.agentDispatch(t, "computer_request_target", nil, func(req *agentDispatchRequest) {
+		req.Principal.ConversationID = uuid.Nil
+	})
+	if res.Status == http.StatusOK {
+		t.Fatalf("无会话归属不应成功：%s", res.Raw)
+	}
 }

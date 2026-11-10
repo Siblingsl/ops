@@ -17,10 +17,11 @@ import {
   type Session
 } from 'electron';
 import fs from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { startBrowserBridgeDiagnostics } from './browser-bridge';
+import { ComputerWorkerHost, type WindowSummary } from './computer-worker-host';
 import { bindInBrowseController, clearInBrowseData, inBrowseAttachAfterOverlay, inBrowseDataStats, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
 import { RealtimeBridge, type RealtimeBridgeEvent } from './voice-realtime';
 import * as wsRealtime from 'ws';
@@ -861,6 +862,9 @@ function connectRealtimeWebSocket(url: string): Promise<{
   });
 }
 
+// DEV-AI27-17（W17b，A12）：电脑控制 worker 宿主单例；退出前必须回收 fork 出的隔离进程。
+let computerWorkerHost: ComputerWorkerHost | null = null;
+
 function registerIpcHandlers(): void {
   // DEV-AI27-16 第六批（A2）：realtime 桥单例——事件转发到业务窗口；调用方限业务窗口主框架。
   const realtimeBridge = new RealtimeBridge({
@@ -947,6 +951,36 @@ function registerIpcHandlers(): void {
     const kind = typeof raw === 'string' ? raw : '';
     if (kind !== 'cache' && kind !== 'cookies' && kind !== 'all') throw new Error('inbrowse_data_kind_invalid');
     return clearInBrowseData(kind);
+  });
+  // DEV-AI27-17（W17b，A12）：本机选窗器。枚举只在本机发生（27 §11.5.1/C09）——
+  // 渲染器只拿不透明 handle 与脱敏摘要，不上传窗口全集、进程路径或截图。
+  // handle = sha256(pid + 标题) 前 32 位：服务端与模型拿不到明文，本机可重算核对。
+  const requireComputerCaller = (event: IpcMainInvokeEvent): void => {
+    const senderFrame = event.senderFrame;
+    if (!businessWindow || businessWindow.isDestroyed() || event.sender !== businessWindow.webContents
+      || !senderFrame || senderFrame !== event.sender.mainFrame || !isBusinessUrl(senderFrame.url)
+      || !isBusinessUrl(event.sender.getURL())) {
+      throw new Error('不允许此窗口调用本机选窗。');
+    }
+  };
+  computerWorkerHost = new ComputerWorkerHost();
+  ipcHandle('computer:list-windows', async (event) => {
+    requireComputerCaller(event);
+    try {
+      const windows = await computerWorkerHost!.listWindows();
+      return {
+        ok: true as const,
+        windows: windows.map((w: WindowSummary) => ({
+          handle: createHash('sha256').update(`${w.pid}\u0000${w.title}`).digest('hex').slice(0, 32),
+          process: w.process.slice(0, 120),
+          title: w.title.slice(0, 256),
+          forbidden: w.forbidden,
+        })),
+      };
+    } catch (error) {
+      const code = error instanceof Error && /worker_(timeout|exit)/.test(error.message) ? error.message : 'computer_worker_unavailable';
+      return { ok: false as const, code, message: '本机窗口枚举不可用；请确认电脑控制组件已随客户端安装。' };
+    }
   });
   // DEV-AI27-16 第六批（A2，27 §11.4.5）：realtime 双向音频桥——固定意图，渲染器不接触密钥。
   // start/append/commit/interrupt/stop 转发 RealtimeBridge；事件经 desktop-ui:realtime-event 推送。
@@ -3629,6 +3663,8 @@ async function confirmApplicationQuit(parent: BrowserWindow | null): Promise<voi
     }
     await platformLoginFlow.stop();
     quitConfirmed = true;
+    computerWorkerHost?.stop();
+    computerWorkerHost = null;
     desktopClient?.disconnect();
     app.quit();
   } finally {

@@ -270,6 +270,46 @@ func (s *Server) handoffComputerGrant(w http.ResponseWriter, r *http.Request) er
 	return ok(w, map[string]any{"state": "revoked", "device_ack_pending": true})
 }
 
+// POST /tools/computer/target-requests：模型请求用户在本机选择前台目标（27 §11.5.1）。
+// 选窗器完全在本机运行，服务端只收到"待选择"意图；30 秒租约由用户选定后即时创建，
+// 因此不做 run 级预授权——那会在模型真正操作前就过期（A12 决策 A）。
+func (s *Server) requestComputerTarget(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.computerGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "computer_use"); err != nil {
+		return err
+	}
+	principal := agentPrincipalOf(r.Context())
+	if principal == nil || principal.ConversationID == uuid.Nil {
+		return apiErr(422, "validation_failed", "该接口只能由会话内的工具调用发起")
+	}
+	var active computerGrantView
+	err := s.db.QueryRow(r.Context(), "SELECT "+computerGrantColumns+
+		" FROM agent_computer_grant g WHERE g.conversation_id=$1 AND g.user_id=$2 AND g.workspace_id=$3"+
+		" AND g.state='active' AND (g.expires_at IS NULL OR g.expires_at > now())"+
+		" ORDER BY g.created_at DESC LIMIT 1",
+		principal.ConversationID, id.UserID, id.WorkspaceID).
+		Scan(&active.ID, &active.ConversationID, &active.RunID, &active.TargetHandle,
+			&active.TargetSummary, &active.Scope, &active.Generation, &active.State,
+			&active.CreatedAt, &active.ExpiresAt)
+	if err == nil {
+		return ok(w, map[string]any{
+			"state": "active", "grant": active,
+			"message": "已有活动前台租约：" + active.TargetSummary + "；直接继续即可",
+		})
+	}
+	if err != pgx.ErrNoRows {
+		return err
+	}
+	return ok(w, map[string]any{
+		"state": "awaiting_selection",
+		"message": "已请用户在本机选择要操作的应用窗口；选定后租约立即生效，" +
+			"请在用户确认后重新观察目标，不要凭猜测操作",
+	})
+}
+
 func scanComputerGrant(row pgx.Row) (computerGrantView, error) {
 	var v computerGrantView
 	err := row.Scan(&v.ID, &v.ConversationID, &v.RunID, &v.TargetHandle,

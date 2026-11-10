@@ -38,6 +38,7 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).sort(), [
     'captureLongImage',
     'invokeInBrowse',
+    'listComputerWindows',
     'onClientHealth',
     'onInBrowseSnapshot',
     'onLocalSettingsState',
@@ -48,7 +49,9 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'onSidepanelStop'
   ]);
   // DEV-AI27-08（W08）：内置浏览意图白名单桥随 captureLongImage 一并暴露。
-  assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')), ['captureLongImage', 'invokeInBrowse']);
+  // DEV-AI27-17（W17b，A12）：本机选窗是独立固定意图，不并入 invokeInBrowse 白名单。
+  assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')),
+    ['captureLongImage', 'listComputerWindows', 'invokeInBrowse']);
   const buildId = '00000008-1111-4111-8111-111111111111';
   assert.deepEqual(await exposed.opsDesktopUI.captureLongImage(buildId), {
     ok: false, code: 'render_not_ready', message: '页面未就绪。'
@@ -58,6 +61,12 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     ok: false, code: 'invalid_input', message: '长图构建参数无效。'
   });
   assert.equal(invokes.length, 1);
+
+  // A12：本机选窗走独立固定意图；Electron 侧失败要原样传到渲染器（不伪造空列表）。
+  assert.deepEqual(await exposed.opsDesktopUI.listComputerWindows(), {
+    ok: false, code: 'render_not_ready', message: '页面未就绪。'
+  });
+  assert.deepEqual(invokes.at(-1), { channel: 'computer:list-windows', payload: undefined });
 
   emit(handlers, 'desktop-ui:open-settings');
   let firstOpen = 0;
@@ -133,4 +142,40 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
 
 function emit(handlers, channel, payload) {
   for (const listener of handlers.get(channel) ?? []) listener({}, payload);
+}
+
+// A12/C09：主进程返回的窗口列表必须逐项符合固定 schema；任何越界都整批拒绝，
+// 不让渲染器拿到未校验的标题/进程信息。
+test('rejects a window list that does not match the fixed schema', async () => {
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke() {
+      return Promise.resolve({
+        ok: true,
+        windows: [{ handle: 'not-a-32-hex', process: 'notepad', title: '文档', forbidden: false }],
+      });
+    },
+  };
+  loadPreload({ contextBridge, ipcRenderer });
+  assert.deepEqual(await exposed.opsDesktopUI.listComputerWindows(), {
+    ok: false, code: 'computer_windows_invalid', message: 'Electron 返回的窗口列表无效。'
+  });
+});
+
+function loadPreload(electron) {
+  const preloadPath = require.resolve('../.build/business-ui-preload.js');
+  const originalLoad = Module._load;
+  try {
+    Module._load = function (request, parent, isMain) {
+      if (request === 'electron') return electron;
+      return originalLoad.call(this, request, parent, isMain);
+    };
+    delete require.cache[preloadPath];
+    require(preloadPath);
+  } finally {
+    Module._load = originalLoad;
+  }
 }

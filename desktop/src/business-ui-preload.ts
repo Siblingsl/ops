@@ -32,6 +32,12 @@ type CXLongImageCaptureResult =
     fontFamily: string;
   };
 
+// DEV-AI27-17（W17b，A12）：本机选窗结果。handle 不透明，标题只在业务窗口内使用。
+type ComputerWindowView = { handle: string; process: string; title: string; forbidden: boolean };
+type ComputerWindowListResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; windows: ComputerWindowView[] };
+
 const OPEN_SETTINGS_CHANNEL = 'desktop-ui:open-settings';
 const LOCAL_SETTINGS_STATE_CHANNEL = 'desktop-ui:local-settings-state';
 const openSettingsListeners = new Set<SettingsOpenListener>();
@@ -93,8 +99,29 @@ function parseCXLongImageCaptureResult(raw: unknown): CXLongImageCaptureResult |
   };
 }
 
-function parsePlatformIntentResult(raw: unknown): PlatformIntentResult | null {
+function parseComputerWindowListResult(raw: unknown): ComputerWindowListResult | null {
   const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 60
+      && typeof value.message === 'string' && value.message.length <= 200
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  if (!Array.isArray(value.windows) || value.windows.length > 200) return null;
+  const windows: ComputerWindowView[] = [];
+  for (const item of value.windows) {
+    const win = asRecord(item);
+    if (!win || typeof win.handle !== 'string' || !/^[0-9a-f]{32}$/.test(win.handle)) return null;
+    if (typeof win.process !== 'string' || win.process.length > 120) return null;
+    if (typeof win.title !== 'string' || win.title.length > 256) return null;
+    if (typeof win.forbidden !== 'boolean') return null;
+    windows.push({ handle: win.handle, process: win.process, title: win.title, forbidden: win.forbidden });
+  }
+  return { ok: true, windows };
+}
+
+function parsePlatformIntentResult(raw: unknown): PlatformIntentResult | null {  const value = asRecord(raw);
   if (!value || !isUuid(value.requestId) || !isUuid(value.accountId)) return null;
   if (!['platform-account-sync', 'platform-metrics-refresh', 'platform-sync-resume'].includes(String(value.kind))) return null;
   if (!['queued', 'existing', 'no_targets', 'failed'].includes(String(value.status))) return null;
@@ -200,6 +227,11 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
     if (!isUuid(buildId)) return { ok: false, code: 'invalid_input', message: '长图构建参数无效。' };
     const result = parseCXLongImageCaptureResult(await ipcRenderer.invoke(CX_LONG_IMAGE_CAPTURE_CHANNEL, { buildId }));
     return result ?? { ok: false, code: 'long_image_invalid', message: 'Electron 返回的长图结果无效。' };
+  },
+  // DEV-AI27-17（W17b，A12）：本机窗口枚举——只在本机执行，渲染器拿到的是不透明 handle。
+  async listComputerWindows(): Promise<ComputerWindowListResult> {
+    const result = parseComputerWindowListResult(await ipcRenderer.invoke('computer:list-windows'));
+    return result ?? { ok: false, code: 'computer_windows_invalid', message: 'Electron 返回的窗口列表无效。' };
   },
   // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道；渲染器无 view 对象）。
   async invokeInBrowse(channel: string, payload?: unknown): Promise<unknown> {

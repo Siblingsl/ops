@@ -29,8 +29,8 @@ func TestW06AIT27ToolCatalogRegistration(t *testing.T) {
 			t.Errorf("委派工具 %s 不在目录中", name)
 		}
 	}
-	// 电脑控制工具 2 个（27 §11.5.3）
-	for _, name := range []string{"computer_observe", "computer_request_handoff"} {
+	// 电脑控制工具 3 个（27 §11.5.3；A12 增补请求选窗）
+	for _, name := range []string{"computer_observe", "computer_request_handoff", "computer_request_target"} {
 		if !toolByName[name] {
 			t.Errorf("电脑控制工具 %s 不在目录中", name)
 		}
@@ -50,6 +50,7 @@ func TestW06AIT27ToolDomainClassification(t *testing.T) {
 		"delegate_task":        "subagent",
 		"stop_delegation":      "subagent",
 		"computer_observe":     "computer",
+		"computer_request_target": "computer",
 		"mcp__list_connections": "mcp",
 	}
 	for _, tool := range catalog {
@@ -76,6 +77,7 @@ func TestW06AIT27ToolKindClassification(t *testing.T) {
 		"stop_delegation":      toolR,
 		"computer_observe":     toolR,
 		"computer_request_handoff": toolR,
+		"computer_request_target": toolR,
 		"mcp__list_connections": toolR,
 	}
 	for _, tool := range catalog {
@@ -119,5 +121,27 @@ func TestW06GoalOriginBrowserToolsAllowed(t *testing.T) {
 	// routine 来源由 agentRoutineToolAllowed 白名单控制——浏览器工具不在白名单即自动拒绝（结构断言）。
 	if agentRoutineReadTools["browser_observe"] {
 		t.Fatal("例行任务白名单不应含浏览器工具（27 §8.6 routine 行）")
+	}
+}
+
+// A12（决策 A）：请求选窗是打断式意图——用户要切到本机挑窗口，讨论/计划不该触发。
+func TestA12ComputerRequestTargetOnlyInExecute(t *testing.T) {
+	tool := agentTool("computer_request_target")
+	if tool == nil {
+		t.Fatal("computer_request_target 不在目录中")
+	}
+	id := &identity{Role: string(roleEditor)}
+	for _, mode := range []string{"discuss", "plan"} {
+		st := &agentRunState{Mode: mode, ExecutionOrigin: "interactive"}
+		if agentRunToolAllowed(st, tool, id) {
+			t.Fatalf("%s 模式不应触发请求选窗", mode)
+		}
+	}
+	if !agentRunToolAllowed(&agentRunState{Mode: "execute", ExecutionOrigin: "interactive"}, tool, id) {
+		t.Fatal("执行模式应可用请求选窗")
+	}
+	// 回归：排除只针对请求选窗，讨论模式的浏览器研究不受影响。
+	if !agentRunToolAllowed(&agentRunState{Mode: "discuss", ExecutionOrigin: "interactive"}, agentTool("browser_observe"), id) {
+		t.Fatal("讨论模式浏览器研究不应被误伤")
 	}
 }

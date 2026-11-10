@@ -89,7 +89,8 @@ func agentRunToolAllowed(st *agentRunState, tool *AgentTool, id *identity) bool 
 	if mode != "execute" {
 		// T-AI27-21A（27 §8.6）：讨论/计划模式可研究网页——浏览器 R 类工具（Domain=browser）
 		// 在讨论/计划/goal 可用（有 grant 才行，由工具 dispatch 层的租约校验保证）。
-		if (mode == "discuss" || mode == "plan") && tool.Kind == toolR {
+		// 电脑控制的请求选窗是打断式意图（用户要切到本机选窗口），讨论/计划不触发。
+		if (mode == "discuss" || mode == "plan") && tool.Kind == toolR && tool.Name != "computer_request_target" {
 			return true
 		}
 		return false

@@ -13,6 +13,7 @@ import { Button, cn, IconButton, Input, Notice, Select, Textarea } from '@/compo
 import { AddMenu } from './agent/AddMenu'
 import { BrowserStatusBlock, useBrowserConnectState } from './agent/BrowserStatusBlock'
 import { BrowserTabSelector } from './agent/BrowserTabSelector'
+import { ComputerWindowPicker } from './agent/ComputerWindowPicker'
 import { InBrowsePanel } from './agent/InBrowsePanel'
 import { VoiceBar } from './agent/VoiceBar'
 import { RealtimeVoiceBar } from './agent/RealtimeVoiceBar'
@@ -689,6 +690,10 @@ ${draft.text}` : draft.text))
   const [skillRequests, setSkillRequests] = useState<AgentSkillSelection[]>([])
   const [contextPickerOpen, setContextPickerOpen] = useState(false)
   const [skillPickerOpen, setSkillPickerOpen] = useState(false)
+  // DEV-AI27-17（W17b，A12）：模型请求前台时弹出本机选窗器；按 tool_call_id 去重，
+  // 避免事件重放（event_resume）把已经处理过的请求反复弹出来。
+  const [computerPickerOpen, setComputerPickerOpen] = useState(false)
+  const handledComputerRequests = useRef<Set<string>>(new Set())
   const [uploading, setUploading] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -1073,6 +1078,14 @@ ${draft.text}` : draft.text))
       }
     } else if (type === 'tool.started' || type === 'tool.ended' || type === 'action.updated' || type === 'message.saved' || type === 'conversation.updated' || type === 'context.updated' || type === 'plan.updated' || type === 'question.created' || type === 'question.resolved' || type.startsWith('input.')) {
       if (type === 'tool.started') setStreamStage(`tool:${data.name || '工具'}`)
+      // A12：模型请求前台目标时弹本机选窗器；同一 tool_call_id 只弹一次（事件重放不重复打扰）。
+      if (type === 'tool.ended' && data.name === 'computer_request_target' && data.status === 'done') {
+        const callID = String(data.tool_call_id ?? '')
+        if (callID && !handledComputerRequests.current.has(callID)) {
+          handledComputerRequests.current.add(callID)
+          setComputerPickerOpen(true)
+        }
+      }
       void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
       void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
     } else if (type === 'artifact.created') {
@@ -2017,6 +2030,17 @@ ${draft.text}` : draft.text))
           {!busy && memoryCandidates.length > 0 && <MemoryCandidateCard candidates={memoryCandidates} {...memoryCandidateHandlers} />}
           {/* A9：本会话实际注入/省略了哪些记忆；只读服务端记录，不推断。 */}
           {conversation && <MemoryUsagePanel conversationId={conversation.id} enabled={bootstrapData.features.personal_memories === true} />}
+          {/* A12：模型请求前台时在本机选窗，选定后即时建 30 秒租约（不做发消息前预授权）。 */}
+          <ComputerWindowPicker
+            open={computerPickerOpen}
+            conversationId={conversationId}
+            runId={runID || undefined}
+            onClose={() => setComputerPickerOpen(false)}
+            onAuthorized={(summary) => {
+              setText((old) => old ? `${old}\n已选择窗口「${summary}」，请继续。` : `已选择窗口「${summary}」，请继续。`)
+              window.setTimeout(() => inputRef.current?.focus(), 0)
+            }}
+          />
           {/* DEV-A13：协作任务（子任务进度、单项停止、汇总结果）；按会话取组，父 run 已结束也能汇总。 */}
           {conversation && bootstrapData.features.subagents && <div className="mx-auto max-w-3xl px-3">
             <DelegationPanel conversationId={conversation.id}
@@ -2063,12 +2087,14 @@ ${draft.text}` : draft.text))
                   <AddMenu
                     disabled={!canWrite || busy && !runInputsEnabled || uploading}
                     attachmentsAtLimit={files.length + restoredAttachments.length >= (bootstrapData.limits.attachments_per_message ?? 6)}
+                    computerEnabled={bootstrapData.features.computer_use === true}
                     onAction={(action) => {
                       if (action === 'attachment') fileRef.current?.click()
                       else if (action === 'context_refs') setContextPickerOpen(true)
                       else if (action === 'skill') setSkillPickerOpen(true)
                       else if (action === 'goal') openGoalPanel()
                       else if (action === 'routine') setRoutinePanelOpen(true)
+                      else if (action === 'computer') setComputerPickerOpen(true)
                     }}
                   />
                   {bootstrapData.features.plans && workbenchUI && <AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />}

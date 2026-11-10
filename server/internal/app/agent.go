@@ -1884,6 +1884,8 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/tools/subagent/delegations/{id}/cancel", s.h(s.cancelDelegation))
 		r.Get("/tools/computer/grants", s.h(s.listComputerGrants))
 		r.Post("/tools/computer/grants/{id}/handoff", s.h(s.handoffComputerGrant))
+		// DEV-AI27-17（W17b）：模型请求用户选窗（A12 决策 A：选定后即时建 30s 租约）。
+		r.Post("/tools/computer/target-requests", s.h(s.requestComputerTarget))
 		// DEV-AI27-09（W09）：浏览器证据与页面批注（27 §10.1/§13.2）。
 		r.Post("/agent/browser/evidence", s.h(s.createBrowserEvidence))
 		r.Get("/agent/browser/evidence", s.h(s.listBrowserEvidence))

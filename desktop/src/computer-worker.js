@@ -6,10 +6,25 @@
 // 本批实现窗口枚举（EnumWindows via PowerShell Get-Process | 窗口标题过滤），
 // 动作执行（focus/type/click）经 UIA 脚本在后续批引入——本批先交付枚举+校验骨架。
 
-// 兼容 utilityProcess（parentPort）与 child_process.fork（process.send）两种宿主。
-const { parentPort } = require('node:worker_threads');
 const { execFile } = require('node:child_process');
-const channel = parentPort ?? process;
+
+// 兼容三种宿主：
+//  - Electron utilityProcess.fork：process.parentPort（生产路径，支持 asar 内文件）
+//  - worker_threads：parentPort
+//  - child_process.fork：process.send（desktop/test/computer-worker.test.cjs）
+const channel = (() => {
+  if (process.parentPort) {
+    return {
+      onMessage(fn) { process.parentPort.on('message', (event) => fn(event.data)); },
+      reply(message) { process.parentPort.postMessage(message); },
+    };
+  }
+  const { parentPort } = require('node:worker_threads');
+  if (parentPort) {
+    return { onMessage(fn) { parentPort.on('message', fn); }, reply(message) { parentPort.postMessage(message); } };
+  }
+  return { onMessage(fn) { process.on('message', fn); }, reply(message) { process.send(message); } };
+})();
 
 // 硬禁区（27 §11.5.2）：与 server/internal/app/agent_computer.go 保持一致。
 const HARD_FORBIDDEN = [
@@ -61,15 +76,15 @@ function listWindows() {
 
 let busy = false;
 
-channel.on('message', (msg) => {
+channel.onMessage((msg) => {
   if (busy) {
-    channel.postMessage ? channel.postMessage({ id: msg && msg.id, ok: false, error: 'worker_busy' }) : channel.send({ id: msg && msg.id, ok: false, error: 'worker_busy' });
+    channel.reply({ id: msg && msg.id, ok: false, error: 'worker_busy' });
     return;
   }
   busy = true;
   const finish = (result) => {
     busy = false;
-    channel.postMessage ? channel.postMessage({ id: msg && msg.id, ...result }) : channel.send({ id: msg && msg.id, ...result });
+    channel.reply({ id: msg && msg.id, ...result });
   };
   if (!msg || typeof msg !== 'object' || typeof msg.id !== 'string') {
     finish({ ok: false, error: 'invalid_message' });

@@ -1,10 +1,12 @@
-import { ChildProcess, fork } from 'node:child_process';
+import { utilityProcess, type UtilityProcess } from 'electron';
 import { EventEmitter } from 'node:events';
 import * as path from 'node:path';
 
 // DEV-AI27-17 第二批（W17b）：电脑控制 worker 宿主（Electron utilityProcess 桥）。
-// 与 ai-worker 同模式：fork 隔离进程，固定消息协议 {id, cmd} → {id, ok, ...}。
-// worker 只回收自己启动的实例；渲染器经固定 IPC（W17 main 接线）间接访问，无直接通道。
+// 与 ai-worker 同模式：独立进程 + 固定消息协议 {id, cmd} → {id, ok, ...}。
+// worker 只回收自己启动的实例；渲染器经固定 IPC（main.ts 接线）间接访问，无直接通道。
+// 用 utilityProcess 而不是 child_process.fork：前者能加载 asar 内的 worker 文件，
+// 且不需要在 worker 里额外处理 ELECTRON_RUN_AS_NODE。
 
 export interface WindowSummary {
   pid: number;
@@ -14,13 +16,14 @@ export interface WindowSummary {
 }
 
 export class ComputerWorkerHost extends EventEmitter {
-  private worker: ChildProcess | null = null;
+  private worker: UtilityProcess | null = null;
   private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private nextID = 1;
 
-  private ensureWorker(): ChildProcess {
+  private ensureWorker(): UtilityProcess {
     if (this.worker) return this.worker;
-    const child = fork(path.join(__dirname, 'computer-worker.js'), [], {
+    const child = utilityProcess.fork(path.join(__dirname, 'computer-worker.js'), [], {
+      serviceName: 'OPS Desktop computer worker',
       stdio: 'ignore',
       env: { OPS_DESKTOP_WORKER: '1' },
     });
@@ -56,7 +59,7 @@ export class ComputerWorkerHost extends EventEmitter {
         reject(new Error('worker_timeout'));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      worker.send({ id, cmd });
+      worker.postMessage({ id, cmd });
     });
   }
 
