@@ -11,6 +11,12 @@ import * as path from 'node:path';
 // 仅在 OPS_DESKTOP_BRIDGE_DIAG=1 时由 main.ts 启动；不启用时不监听任何端口。
 
 export const PROTOCOL_VERSION = 1;
+// A14-6（27 §14）：信封加密版本。v1 = 会话根密钥直接作 HMAC 密钥；v2 = 按配对随机 salt
+// 用 HKDF-SHA256 派生用途限定子密钥。两版共存，按 hello 声明的能力协商，旧扩展仍走 v1。
+export const CRYPTO_VERSION_V1 = 1;
+export const CRYPTO_VERSION_V2 = 2;
+export const SUPPORTED_CRYPTO_VERSIONS = [CRYPTO_VERSION_V1, CRYPTO_VERSION_V2];
+const HKDF_INFO = 'ops-browser-bridge/v2/hmac';
 export const BRIDGE_PORT = 8765;
 export const CONTROL_PORT = 8766;
 export const PAIRING_TTL_MS = 5 * 60 * 1000;
@@ -81,6 +87,12 @@ function hmacSign(key: Buffer, seq: number, type: string, payload: unknown, nonc
   return crypto.createHmac('sha256', key)
     .update(`${seq}.${type}.${nonce}.${payloadHash}.${JSON.stringify(payload ?? null)}`)
     .digest('base64');
+}
+
+// A14-6：v2 的 HMAC 密钥 = HKDF-SHA256(ikm=会话根密钥, salt=本次配对随机盐, info=用途)。
+// 根密钥只参与派生、不再直接进入签名路径；同一配对的 salt 由桥生成并随 pairing_confirm 下发。
+export function deriveMessageKey(sessionKey: Buffer, salt: Buffer): Buffer {
+  return Buffer.from(crypto.hkdfSync('sha256', sessionKey, salt, HKDF_INFO, 32));
 }
 
 function verifyHmac(key: Buffer, seq: number, type: string, payload: unknown, got: string, nonce = '', payloadHash = ''): boolean {
@@ -202,6 +214,10 @@ export class BrowserBridge {
   private controlServer: http.Server | null = null;
   private socket: net.Socket | null = null;
   private sessionKey: Buffer | null = null;
+  // A14-6：v2 协商结果与派生材料；v1 时保持 null（直接使用 sessionKey 签名）。
+  private cryptoVersion: number = CRYPTO_VERSION_V1;
+  private hkdfSalt: Buffer | null = null;
+  private messageKey: Buffer | null = null;
   private seqOut = 0;
   private lastSeqIn = 0;
   private lineBuf = '';
@@ -337,16 +353,22 @@ export class BrowserBridge {
     if (this.lineBuf.length > MAX_LINE) this.lineBuf = '';
   }
 
+  /** A14-6：当前信封签名密钥。v2 用 HKDF 派生的子密钥，v1 直接用会话根密钥。 */
+  private signKey(): Buffer | null {
+    return this.cryptoVersion === CRYPTO_VERSION_V2 ? this.messageKey : this.sessionKey;
+  }
+
   private checkEnvelope(msg: BridgeEnvelope): string | null {
     if (msg.v !== PROTOCOL_VERSION) return `protocol version mismatch: ${msg.v}`;
     if (!TRUSTED_TYPES.has(msg.type)) return `type not allowed: ${msg.type}`;
     // hello/pairing_start 是配对起点，永远免签；收到即视为重新配对（下方处理时重置会话）。
-    if (this.sessionKey && msg.type !== 'pairing_start' && msg.type !== 'hello') {
+    const key = this.signKey();
+    if (key && msg.type !== 'pairing_start' && msg.type !== 'hello') {
       if (typeof msg.seq !== 'number' || typeof msg.hmac !== 'string') return 'missing seq/hmac';
       // A14-5：签名材料含 nonce/payload_hash（result 信封带值，其余空串）。
       const nonce = typeof msg.nonce === 'string' ? msg.nonce : '';
       const payloadHash = typeof msg.payload_hash === 'string' ? msg.payload_hash : '';
-      if (!verifyHmac(this.sessionKey, msg.seq, msg.type, msg.payload, msg.hmac, nonce, payloadHash)) return 'hmac verification failed';
+      if (!verifyHmac(key, msg.seq, msg.type, msg.payload, msg.hmac, nonce, payloadHash)) return 'hmac verification failed';
       if (msg.seq <= this.lastSeqIn) return `replayed or out-of-order seq: ${msg.seq}`;
       this.lastSeqIn = msg.seq;
       this.persistSeqIn();
@@ -385,13 +407,14 @@ export class BrowserBridge {
       this.emit('log', `send drop: socket=${Boolean(this.socket)} destroyed=${this.socket?.destroyed ?? 'n/a'} type=${msg.type}`);
       return;
     }
-    if (this.sessionKey && msg.type !== 'pairing_start') {
+    const key = this.signKey();
+    if (key && msg.type !== 'pairing_start') {
       this.seqOut += 1;
       msg.seq = this.seqOut;
       // A14-5：签名材料含 nonce/payload_hash（command/result 信封带值）。
       const nonce = typeof msg.nonce === 'string' ? msg.nonce : '';
       const payloadHash = typeof msg.payload_hash === 'string' ? msg.payload_hash : '';
-      msg.hmac = hmacSign(this.sessionKey, this.seqOut, msg.type, msg.payload, nonce, payloadHash);
+      msg.hmac = hmacSign(key, this.seqOut, msg.type, msg.payload, nonce, payloadHash);
     }
     this.emit('log', `-> ${msg.type} seq=${msg.seq ?? '-'} peer=${this.socket.remotePort}`);
     this.socket.write(`${JSON.stringify(msg)}\n`);
@@ -418,8 +441,15 @@ export class BrowserBridge {
       this.sessionKey = null;
       this.seqOut = 0;
       this.pendingNonce.clear();
+      // A14-6：按宿主在 hello 里声明的能力协商信封加密版本。未声明（旧宿主）保持 v1。
+      const versions = (payload as { crypto_versions?: unknown }).crypto_versions;
+      this.cryptoVersion = Array.isArray(versions) && versions.includes(CRYPTO_VERSION_V2)
+        ? CRYPTO_VERSION_V2
+        : CRYPTO_VERSION_V1;
+      this.hkdfSalt = null;
+      this.messageKey = null;
       this.send({ v: PROTOCOL_VERSION, type: 'pairing_start', payload: { pairing_id: this.pairing.id, code: this.pairing.code, expires_at: this.pairing.expires_at } });
-      this.emit('pairing', `pairing started, code ${this.pairing.code} host=${payload.host_instance_id?.slice(0, 8)} pid=${payload.pid}`);
+      this.emit('pairing', `pairing started, code ${this.pairing.code} host=${payload.host_instance_id?.slice(0, 8)} pid=${payload.pid} crypto=v${this.cryptoVersion}`);
       if (this.autoPair) setTimeout(() => void this.confirmPairing(), 200);
       return;
     }
@@ -454,6 +484,9 @@ export class BrowserBridge {
     if (msg.type === 'revoke') {
       this.state = 'revoked';
       this.sessionKey = null;
+      this.messageKey = null;
+      this.hkdfSalt = null;
+      this.cryptoVersion = CRYPTO_VERSION_V1;
       this.pairing = null;
       this.emit('revoke', 'host confirmed revoke');
     }
@@ -496,11 +529,21 @@ export class BrowserBridge {
       return { ok: false, reason: 'pairing expired' };
     }
     this.sessionKey = crypto.randomBytes(32);
-    this.send({
-      v: PROTOCOL_VERSION,
-      type: 'pairing_confirm',
-      payload: { pairing_id: this.pairing.id, session_key: this.sessionKey.toString('base64') },
-    });
+    // A14-6：v2 需要本次配对独有的 HKDF salt；根密钥只用于派生，不进入签名路径。
+    const payload: Record<string, unknown> = {
+      pairing_id: this.pairing.id,
+      session_key: this.sessionKey.toString('base64'),
+      crypto_version: this.cryptoVersion,
+    };
+    if (this.cryptoVersion === CRYPTO_VERSION_V2) {
+      this.hkdfSalt = crypto.randomBytes(32);
+      this.messageKey = deriveMessageKey(this.sessionKey, this.hkdfSalt);
+      payload.hkdf_salt = this.hkdfSalt.toString('base64');
+    } else {
+      this.hkdfSalt = null;
+      this.messageKey = null;
+    }
+    this.send({ v: PROTOCOL_VERSION, type: 'pairing_confirm', payload });
     this.state = 'paired';
     this.emit('state', 'paired');
     return { ok: true };
@@ -513,6 +556,9 @@ export class BrowserBridge {
     this.state = 'revoked';
     this.pairing = null;
     this.sessionKey = null;
+    this.messageKey = null;
+    this.hkdfSalt = null;
+    this.cryptoVersion = CRYPTO_VERSION_V1;
     this.pendingNonce.clear();
     for (const entry of this.ledger.list()) {
       if (entry.state === 'queued') this.ledger.transition(entry.request_id, 'cancelled');

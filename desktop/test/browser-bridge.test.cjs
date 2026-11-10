@@ -309,3 +309,88 @@ test('A14: native host 单实例锁——第二实例拒绝并输出 bridge_busy
   assert.equal(typeof host1.encodeFrame, 'function');
   // 行为验证走真实 Chrome E2E（browser-bridge.chrome.e2e.cjs），单元层锁定 API 形状。
 });
+
+// ---------------------------------------------------------------------------
+// A14-6（27 §14）：HKDF 子密钥派生 + 版本协商 + 旧端回退。
+// v1 = 会话根密钥直接作 HMAC 密钥；v2 = HKDF(根密钥, 配对随机 salt) 派生用途限定子密钥。
+// ---------------------------------------------------------------------------
+
+test('A14-6: 三方 HKDF 派生逐字节一致（桥 / 宿主 / 扩展）', () => {
+  const ext = require('../chrome-extension/background.js');
+  const sessionKey = Buffer.from('00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff', 'hex');
+  const salt = Buffer.from('ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100', 'hex');
+  const bridgeKey = bridge.deriveMessageKey(sessionKey, salt);
+  const hostKey = host.hkdfMessageKey(sessionKey, salt.toString('base64'));
+  const extKey = Buffer.from(ext.deriveMessageKeyBytes(sessionKey.toString('base64'), salt.toString('base64')));
+  assert.equal(bridgeKey.length, 32, '派生 key 32 字节');
+  assert.deepEqual(hostKey, bridgeKey, '宿主派生必须与桥一致');
+  assert.deepEqual(extKey, bridgeKey, '扩展派生必须与桥一致（纯 JS HKDF / node hkdfSync）');
+  // v2 的关键性质：根密钥不进入签名路径。
+  assert.notDeepEqual(bridgeKey, sessionKey);
+  // 用途分离：info 不同即不同 key。
+  const other = Buffer.from(crypto.hkdfSync('sha256', sessionKey, salt, 'ops-browser-bridge/v2/other', 32));
+  assert.notDeepEqual(bridgeKey, other, 'info 变化必须换 key');
+  // 每配对 salt 不同：同根密钥不同配对不共享子密钥。
+  const otherSalt = Buffer.from('00'.repeat(32), 'hex');
+  assert.notDeepEqual(bridge.deriveMessageKey(sessionKey, otherSalt), bridgeKey, 'salt 变化必须换 key');
+});
+
+test('A14-6: v2 协商——派生 key 生效，根密钥签名被拒', { timeout: 20_000 }, async (t) => {
+  const { b, next, send } = await startBridgeWithMockHost(t);
+  send({ v: 1, type: 'hello', payload: { host_instance_id: 'mock-host-v2', protocol_version: 1, crypto_versions: [1, 2] } });
+  assert.equal((await next()).type, 'pairing_start');
+
+  assert.equal(b.confirmPairing().ok, true);
+  const confirm = await next();
+  assert.equal(confirm.type, 'pairing_confirm');
+  assert.equal(confirm.payload.crypto_version, 2, '宿主声明 v2 后应协商为 v2');
+  assert.match(String(confirm.payload.hkdf_salt || ''), /^[A-Za-z0-9+/]{43}=$/, 'v2 下发 32 字节 base64 salt');
+
+  const sessionKey = Buffer.from(confirm.payload.session_key, 'base64');
+  const msgKey = bridge.deriveMessageKey(sessionKey, Buffer.from(confirm.payload.hkdf_salt, 'base64'));
+  const rejects = () => b.snapshot().events.filter((e) => e.message.includes('reject')).length;
+
+  const beforeOk = rejects();
+  send({ v: 1, type: 'ping', payload: {}, seq: 1, hmac: host.hmacSign(msgKey, 1, 'ping', {}) });
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(rejects(), beforeOk, '派生 key 签名应被接受');
+
+  const beforeRoot = rejects();
+  send({ v: 1, type: 'ping', payload: {}, seq: 2, hmac: host.hmacSign(sessionKey, 2, 'ping', {}) });
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(rejects(), beforeRoot + 1, 'v2 下根密钥签名必须被拒');
+});
+
+test('A14-6: 宿主分段协商——旧扩展降级 v1，桥段不受影响', () => {
+  const { negotiateCryptoVersion, CRYPTO_VERSION_V1, CRYPTO_VERSION_V2 } = host;
+  // 桥下发 v2，扩展声明支持 v2 → 两段都是 v2
+  assert.equal(negotiateCryptoVersion(2, true), CRYPTO_VERSION_V2);
+  // 桥下发 v2，扩展未声明（旧扩展）→ 扩展段回退 v1；桥段仍由 supportsV2=true 保持 v2
+  assert.equal(negotiateCryptoVersion(2, false), CRYPTO_VERSION_V1);
+  assert.equal(negotiateCryptoVersion(2, true), CRYPTO_VERSION_V2);
+  // 桥下发 v1（旧桥）→ 无论扩展能力都只能 v1
+  assert.equal(negotiateCryptoVersion(1, true), CRYPTO_VERSION_V1);
+  assert.equal(negotiateCryptoVersion(1, false), CRYPTO_VERSION_V1);
+  // 缺字段/非法值 → v1（不猜测）
+  assert.equal(negotiateCryptoVersion(undefined, true), CRYPTO_VERSION_V1);
+  assert.equal(negotiateCryptoVersion('2', true), CRYPTO_VERSION_V2, '数字字符串按数值解析');
+  assert.equal(negotiateCryptoVersion(99, true), CRYPTO_VERSION_V1, '未知版本不启用');
+});
+
+test('A14-6: 旧宿主不声明能力时回退 v1（握手与签名语义不变）', { timeout: 20_000 }, async (t) => {
+  const { b, next, send } = await startBridgeWithMockHost(t);
+  send({ v: 1, type: 'hello', payload: { host_instance_id: 'legacy-host', protocol_version: 1 } });
+  await next();
+
+  assert.equal(b.confirmPairing().ok, true);
+  const confirm = await next();
+  assert.equal(confirm.payload.crypto_version, 1, '未声明能力应回退 v1');
+  assert.equal(confirm.payload.hkdf_salt, undefined, 'v1 不下发 salt');
+
+  const sessionKey = Buffer.from(confirm.payload.session_key, 'base64');
+  const rejects = () => b.snapshot().events.filter((e) => e.message.includes('reject')).length;
+  const before = rejects();
+  send({ v: 1, type: 'ping', payload: {}, seq: 1, hmac: host.hmacSign(sessionKey, 1, 'ping', {}) });
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(rejects(), before, 'v1 仍用根密钥签名');
+});

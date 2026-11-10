@@ -15,6 +15,12 @@ const OPS_PORT = 8765;
 const MAX_FRAME = 4 * 1024 * 1024;
 const MAX_LINE = 4 * 1024 * 1024;
 const PROTOCOL_VERSION = 1;
+// A14-6（27 §14）：信封加密版本，与 browser-bridge.ts / chrome-extension/background.js 同步。
+// v1 = 会话根密钥直接作 HMAC 密钥；v2 = 按配对随机 salt 用 HKDF-SHA256 派生。
+const CRYPTO_VERSION_V1 = 1;
+const CRYPTO_VERSION_V2 = 2;
+const SUPPORTED_CRYPTO_VERSIONS = [CRYPTO_VERSION_V1, CRYPTO_VERSION_V2];
+const HKDF_INFO = 'ops-browser-bridge/v2/hmac';
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 8000;
 const STATE_DIR = path.join(os.homedir(), '.ops-browser-bridge');
@@ -75,6 +81,19 @@ function hmacSign(key, seq, type, payload, nonce, payloadHash) {
 function normalizeKey(key) {
   if (Buffer.isBuffer(key)) return key;
   return Buffer.from(String(key), 'base64');
+}
+
+// A14-6：v2 的 HMAC 密钥 = HKDF-SHA256(ikm=会话根密钥, salt=本次配对随机盐, info=用途)。
+// 派生 key 只用于签名/验签，根密钥不进入签名路径。与桥侧 deriveMessageKey 必须逐字节一致。
+function hkdfMessageKey(sessionKey, salt) {
+  return Buffer.from(crypto.hkdfSync('sha256', normalizeKey(sessionKey), Buffer.from(String(salt), 'base64'), HKDF_INFO, 32));
+}
+
+// A14-6：单段链路的版本决策——桥下发 v2 且该段对端声明支持 v2 才启用，否则回退 v1。
+// 宿主↔桥段把 supportsV2 传 true（桥是 v2 的下发方）；宿主↔扩展段传扩展 hello 的声明。
+function negotiateCryptoVersion(offered, supportsV2) {
+  const want = Number(offered) || CRYPTO_VERSION_V1;
+  return want === CRYPTO_VERSION_V2 && supportsV2 ? CRYPTO_VERSION_V2 : CRYPTO_VERSION_V1;
 }
 
 function verifyHmac(key, msg) {
@@ -213,10 +232,20 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
   }
 
   let sessionKey = state.session_key || null;
+  // A14-6：两段链路各自协商加密版本——桥↔宿主以桥下发的 crypto_version 为准（权威），
+  // 宿主↔扩展取「桥下发版本 ∩ 扩展 hello 声明的能力」，旧扩展自然退回 v1。
+  let opsCryptoVersion = CRYPTO_VERSION_V1;
+  let opsMessageKey = null;
+  let extCryptoVersion = CRYPTO_VERSION_V1;
+  let extMessageKey = null;
+  let hkdfSalt = null;
+  let extSupportsV2 = false;
+  const opsSignKey = () => (opsCryptoVersion === CRYPTO_VERSION_V2 ? opsMessageKey : sessionKey);
+  const extSignKey = () => (extCryptoVersion === CRYPTO_VERSION_V2 ? extMessageKey : sessionKey);
   // 两条链路各自独立的序列空间：ops（宿主<->OPS 桥）与 ext（宿主<->Chrome 扩展）。
   // 桥->扩展的 command 由宿主验签后重签（seqOutExt），扩展->桥的 result 反向同理。
-  const opsValidator = createEnvelopeValidator({ getSessionKey: () => sessionKey });
-  const extValidator = createEnvelopeValidator({ getSessionKey: () => sessionKey });
+  const opsValidator = createEnvelopeValidator({ getSessionKey: opsSignKey });
+  const extValidator = createEnvelopeValidator({ getSessionKey: extSignKey });
   let opsSocket = null;
   let opsBuf = '';
   let closed = false;
@@ -230,19 +259,21 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
   }
 
   function signOps(msg) {
-    if (sessionKey && msg.type !== 'hello') {
+    const key = opsSignKey();
+    if (key && msg.type !== 'hello') {
       seqOutOps += 1;
       msg.seq = seqOutOps;
-      msg.hmac = hmacSign(sessionKey, msg.seq, msg.type, msg.payload, msg.nonce, msg.payload_hash);
+      msg.hmac = hmacSign(key, msg.seq, msg.type, msg.payload, msg.nonce, msg.payload_hash);
     }
     return msg;
   }
 
   function signExt(msg) {
-    if (sessionKey && msg.type !== 'pairing_start' && msg.type !== 'pairing_confirm') {
+    const key = extSignKey();
+    if (key && msg.type !== 'pairing_start' && msg.type !== 'pairing_confirm') {
       seqOutExt += 1;
       msg.seq = seqOutExt;
-      msg.hmac = hmacSign(sessionKey, msg.seq, msg.type, msg.payload, msg.nonce, msg.payload_hash);
+      msg.hmac = hmacSign(key, msg.seq, msg.type, msg.payload, msg.nonce, msg.payload_hash);
     }
     return msg;
   }
@@ -262,6 +293,11 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
       frameToChrome({ v: PROTOCOL_VERSION, type: 'error', payload: { reason: err } });
       return;
     }
+    if (msg.type === 'hello') {
+      // A14-6：扩展 hello 声明能力；扩展段版本在 pairing_confirm 时按交集确定。
+      const p = msg.payload && typeof msg.payload === 'object' ? msg.payload : {};
+      extSupportsV2 = Array.isArray(p.crypto_versions) && p.crypto_versions.includes(CRYPTO_VERSION_V2);
+    }
     if (msg.type === 'result' || msg.type === 'error' || msg.type === 'hello') {
       // 转发给 OPS 前按宿主->桥序列空间重签（原始 seq 属于扩展->宿主空间）。
       delete msg.seq;
@@ -279,6 +315,11 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
     // pairing_start 表示桥端要求重新配对：作废旧会话密钥与全部序列状态（新会话从零开始）。
     if (msg.type === 'pairing_start' && (sessionKey || opsValidator.lastSeqIn() > 0 || extValidator.lastSeqIn() > 0 || seqOutOps > 0 || seqOutExt > 0)) {
       sessionKey = null;
+      opsMessageKey = null;
+      extMessageKey = null;
+      hkdfSalt = null;
+      opsCryptoVersion = CRYPTO_VERSION_V1;
+      extCryptoVersion = CRYPTO_VERSION_V1;
       opsValidator.reset();
       extValidator.reset();
       seqOutOps = 0;
@@ -288,11 +329,23 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
     }
     if (msg.type === 'pairing_confirm' && msg.payload && msg.payload.session_key) {
       sessionKey = String(msg.payload.session_key);
+      hkdfSalt = typeof msg.payload.hkdf_salt === 'string' ? msg.payload.hkdf_salt : null;
+      const want = Number(msg.payload.crypto_version) || CRYPTO_VERSION_V1;
+      opsCryptoVersion = hkdfSalt ? negotiateCryptoVersion(want, true) : CRYPTO_VERSION_V1;
+      opsMessageKey = opsCryptoVersion === CRYPTO_VERSION_V2 ? hkdfMessageKey(sessionKey, hkdfSalt) : null;
+      // 扩展段独立降级：旧扩展不支持 v2 时仍走会话根密钥。
+      extCryptoVersion = hkdfSalt ? negotiateCryptoVersion(want, extSupportsV2) : CRYPTO_VERSION_V1;
+      extMessageKey = extCryptoVersion === CRYPTO_VERSION_V2 ? hkdfMessageKey(sessionKey, hkdfSalt) : null;
       writeState({ host_instance_id: hostInstanceId, pid: process.pid, session_key: sessionKey });
-      log('session key stored');
+      log(`session key stored crypto=ops:v${opsCryptoVersion} ext:v${extCryptoVersion}`);
     }
     if (msg.type === 'revoke') {
       sessionKey = null;
+      opsMessageKey = null;
+      extMessageKey = null;
+      hkdfSalt = null;
+      opsCryptoVersion = CRYPTO_VERSION_V1;
+      extCryptoVersion = CRYPTO_VERSION_V1;
       writeState({ host_instance_id: hostInstanceId, pid: process.pid, session_key: null });
       log('session revoked by ops');
     }
@@ -301,6 +354,13 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
       delete msg.seq;
       delete msg.hmac;
       signExt(msg);
+    }
+    if (msg.type === 'pairing_confirm') {
+      // 扩展段版本可能与桥→宿主段不同（旧扩展）。扩展据此决定是否走 HKDF；
+      // 该信封在扩展侧免验签（pairing_start 已清密钥），改写不破坏校验链。
+      delete msg.seq;
+      delete msg.hmac;
+      if (msg.payload && typeof msg.payload === 'object') msg.payload.crypto_version = extCryptoVersion;
     }
     frameToChrome(msg);
   }
@@ -316,7 +376,14 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
       toOps({
         v: PROTOCOL_VERSION,
         type: 'hello',
-        payload: { host_instance_id: hostInstanceId, pid: process.pid, protocol_version: PROTOCOL_VERSION, connected_at: Date.now() },
+        payload: {
+          host_instance_id: hostInstanceId,
+          pid: process.pid,
+          protocol_version: PROTOCOL_VERSION,
+          // A14-6：声明信封加密能力，桥据此协商；缺省即 v1（旧宿主声明）。
+          crypto_versions: SUPPORTED_CRYPTO_VERSIONS,
+          connected_at: Date.now(),
+        },
       });
     });
     socket.on('data', (chunk) => {
@@ -387,8 +454,14 @@ module.exports = {
   createFrameDecoder,
   hmacSign,
   verifyHmac,
+  hkdfMessageKey,
+  negotiateCryptoVersion,
   createEnvelopeValidator,
   PROTOCOL_VERSION,
+  CRYPTO_VERSION_V1,
+  CRYPTO_VERSION_V2,
+  SUPPORTED_CRYPTO_VERSIONS,
+  HKDF_INFO,
   OPS_HOST,
   OPS_PORT,
   startNativeMessagingStdio,

@@ -5,12 +5,21 @@
 
 const HOST_NAME = 'com.ops.desktop.bridge';
 const PROTOCOL_VERSION = 1;
+// A14-6（27 §14）：信封加密版本，与 desktop/src/browser-bridge.ts、native-host/host.js 同步。
+// v1 = 会话根密钥直接作 HMAC 密钥；v2 = 按配对随机 salt 用 HKDF-SHA256 派生子密钥。
+const CRYPTO_VERSION_V1 = 1;
+const CRYPTO_VERSION_V2 = 2;
+const SUPPORTED_CRYPTO_VERSIONS = [CRYPTO_VERSION_V1, CRYPTO_VERSION_V2];
+const HKDF_INFO = 'ops-browser-bridge/v2/hmac';
 const MAX_NODES = 300;
 const COMMAND_TIMEOUT_MS = 30_000;
 
 const sw = {
   port: null,
   sessionKey: null,
+  cryptoVersion: CRYPTO_VERSION_V1,
+  hkdfSalt: null,
+  messageKey: null,
   seqOut: 0,
   lastSeqIn: 0,
   paired: false,
@@ -103,12 +112,37 @@ function bytesToBase64(bytes) {
 }
 
 function hmacSignMessage(seq, type, payload, nonce, payloadHash) {
-  // sw.sessionKey 是 base64 字符串；HMAC key 统一为解码后的原始字节（与宿主/桥一致）。
+  // v2 用 HKDF 派生 key；v1（含旧配对残留）用会话根密钥。两者都是原始字节。
   // A14-5：签名材料扩展到 seq.type.nonce.payload_hash.payload（与宿主/桥同步）。
-  const bin = atob(sw.sessionKey);
-  const keyBytes = [];
-  for (let i = 0; i < bin.length; i += 1) keyBytes.push(bin.charCodeAt(i));
+  const keyBytes = sw.messageKey || base64ToBytes(sw.sessionKey);
   return hmacSha256Base64Bytes(keyBytes, `${seq}.${type}.${nonce || ''}.${payloadHash || ''}.${JSON.stringify(payload ?? null)}`);
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = [];
+  for (let i = 0; i < bin.length; i += 1) out.push(bin.charCodeAt(i));
+  return out;
+}
+
+// 原始字节 HMAC-SHA256（供 HKDF 使用；现有 base64 版本只在末尾编码不同）。
+function hmacSha256Raw(keyBytes, msgBytes) {
+  const block = 64;
+  let k = keyBytes.slice(0, block);
+  while (k.length < block) k.push(0);
+  const oKey = k.map((b) => b ^ 0x5c);
+  const iKey = k.map((b) => b ^ 0x36);
+  return sha256Raw(oKey.concat(sha256Raw(iKey.concat(msgBytes))));
+}
+
+// A14-6：HKDF-SHA256（RFC 5869）单块 expand，输出 32 字节。
+// 与 node 侧 crypto.hkdfSync('sha256', ikm, salt, info, 32) 必须逐字节一致。
+function deriveMessageKeyBytes(sessionKeyB64, saltB64) {
+  const ikm = base64ToBytes(sessionKeyB64);
+  const salt = base64ToBytes(saltB64);
+  const prk = hmacSha256Raw(salt.length ? salt : new Array(32).fill(0), ikm);
+  const t1 = hmacSha256Raw(prk, strToBytes(HKDF_INFO).concat([0x01]));
+  return t1.slice(0, 32);
 }
 
 function hmacSha256Base64Bytes(keyBytes, message) {
@@ -128,8 +162,14 @@ function utf8EqualBase64(a, b) {
 }
 
 async function loadState() {
-  const d = await chrome.storage.local.get(['session_key', 'seq_out', 'last_seq_in', 'paired', 'pairing_code', 'pairing_expires_at', 'extension_instance_id', 'last_commands']);
+  const d = await chrome.storage.local.get(['session_key', 'seq_out', 'last_seq_in', 'paired', 'pairing_code', 'pairing_expires_at', 'extension_instance_id', 'last_commands', 'crypto_version', 'hkdf_salt']);
   sw.sessionKey = d.session_key || null;
+  sw.cryptoVersion = Number(d.crypto_version) === CRYPTO_VERSION_V2 ? CRYPTO_VERSION_V2 : CRYPTO_VERSION_V1;
+  sw.hkdfSalt = d.hkdf_salt || null;
+  // A14-6：v2 时在 worker 重启后重建派生 key；缺 salt 视为未完成协商，退回 v1。
+  sw.messageKey = sw.cryptoVersion === CRYPTO_VERSION_V2 && sw.sessionKey && sw.hkdfSalt
+    ? deriveMessageKeyBytes(sw.sessionKey, sw.hkdfSalt)
+    : null;
   sw.seqOut = d.seq_out || 0;
   sw.lastSeqIn = d.last_seq_in || 0;
   sw.paired = Boolean(d.paired && d.session_key);
@@ -167,8 +207,11 @@ async function validateInbound(msg) {
   // pairing_start 是重新配对信号：作废旧密钥后免验签（与新密钥的 pairing_confirm 配套）。
   if (msg.type === 'pairing_start' && sw.sessionKey) {
     sw.sessionKey = null;
+    sw.cryptoVersion = CRYPTO_VERSION_V1;
+    sw.hkdfSalt = null;
+    sw.messageKey = null;
     sw.paired = false;
-    await chrome.storage.local.set({ session_key: null, paired: false });
+    await chrome.storage.local.set({ session_key: null, paired: false, crypto_version: CRYPTO_VERSION_V1, hkdf_salt: null });
   }
   if (sw.sessionKey && msg.type !== 'pairing_start' && msg.type !== 'hello') {
     if (typeof msg.seq !== 'number' || typeof msg.hmac !== 'string') return 'missing seq/hmac';
@@ -531,11 +574,24 @@ async function handleHostMessage(msg) {
   if (msg.type === 'pairing_confirm' || msg.type === 'pairing_confirmed') {
     if (msg.payload && msg.payload.session_key) {
       sw.sessionKey = String(msg.payload.session_key);
+      // A14-6：版本由宿主按「桥下发 ∩ 自身能力」改写；缺 salt 时强制退回 v1。
+      const want = Number(msg.payload.crypto_version) === CRYPTO_VERSION_V2 ? CRYPTO_VERSION_V2 : CRYPTO_VERSION_V1;
+      sw.hkdfSalt = typeof msg.payload.hkdf_salt === 'string' ? msg.payload.hkdf_salt : null;
+      sw.cryptoVersion = want === CRYPTO_VERSION_V2 && sw.hkdfSalt ? CRYPTO_VERSION_V2 : CRYPTO_VERSION_V1;
+      sw.messageKey = sw.cryptoVersion === CRYPTO_VERSION_V2 ? deriveMessageKeyBytes(sw.sessionKey, sw.hkdfSalt) : null;
       sw.paired = true;
       sw.seqOut = 0;
       sw.lastSeqIn = 0;
       // 重新配对=新会话：代数归零（revoke 的代数仅在同一配对会话内递增）。
-      await chrome.storage.local.set({ session_key: sw.sessionKey, paired: true, seq_out: 0, last_seq_in: 0, generation: 0 });
+      await chrome.storage.local.set({
+        session_key: sw.sessionKey,
+        paired: true,
+        seq_out: 0,
+        last_seq_in: 0,
+        generation: 0,
+        crypto_version: sw.cryptoVersion,
+        hkdf_salt: sw.hkdfSalt,
+      });
       setUiState({ pairing_code: null, pairing_expires_at: null });
       setBadge('ON', '#16a34a');
     }
@@ -543,8 +599,11 @@ async function handleHostMessage(msg) {
   }
   if (msg.type === 'revoke') {
     sw.sessionKey = null;
+    sw.cryptoVersion = CRYPTO_VERSION_V1;
+    sw.hkdfSalt = null;
+    sw.messageKey = null;
     sw.paired = false;
-    await chrome.storage.local.set({ session_key: null, paired: false, pairing_code: null });
+    await chrome.storage.local.set({ session_key: null, paired: false, pairing_code: null, crypto_version: CRYPTO_VERSION_V1, hkdf_salt: null });
     setBadge('OFF', '#6b7280');
     return;
   }
@@ -594,17 +653,26 @@ function connectHost() {
   sendToHost({
     v: PROTOCOL_VERSION,
     type: 'hello',
-    payload: { extension_instance_id: sw.extensionInstanceId, protocol_version: PROTOCOL_VERSION },
+    payload: {
+      extension_instance_id: sw.extensionInstanceId,
+      protocol_version: PROTOCOL_VERSION,
+      // A14-6：声明信封加密能力；宿主按交集决定扩展段版本。
+      crypto_versions: SUPPORTED_CRYPTO_VERSIONS,
+    },
   });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+// Node 侧交叉校验入口（desktop/test/browser-bridge.test.cjs）：无 chrome 运行时不启动 SW。
+// 仅用于验证加密原语与桥/宿主逐字节一致，不改变扩展在浏览器里的行为。
+const HAS_CHROME = typeof chrome !== 'undefined' && Boolean(chrome && chrome.runtime);
+
+if (HAS_CHROME) chrome.runtime.onInstalled.addListener(() => {
   void loadState().then(() => {
     setBadge(sw.paired ? 'ON' : 'OFF', sw.paired ? '#16a34a' : '#6b7280');
   });
 });
 
-if (!sw.started) {
+if (HAS_CHROME && !sw.started) {
   sw.started = true;
   void loadState().then((d) => {
     sw.extensionInstanceId = d.extension_instance_id;
@@ -620,7 +688,7 @@ if (!sw.started) {
 // sidepanel_open_ops：聚焦 OPS 桌面（深链由 OPS 端处理；扩展不唤起网页脚本）。
 // ---------------------------------------------------------------------------
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+if (HAS_CHROME) chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg.type !== 'string') return false;
   if (msg.type === 'sidepanel_input') {
     // 转发到宿主（OPS 桥）；实际受理结果由 OPS 端返回。W10 简化：草稿入桥，OPS 侧展示。
@@ -651,3 +719,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   return false;
 });
+
+// A14-6：加密原语的交叉校验出口（仅 Node 测试 require 时生效；扩展运行时 module 未定义）。
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    deriveMessageKeyBytes,
+    hkdfInfo: HKDF_INFO,
+    supportedCryptoVersions: SUPPORTED_CRYPTO_VERSIONS,
+    hmacSha256Base64Bytes,
+  };
+}
