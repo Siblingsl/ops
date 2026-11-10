@@ -159,10 +159,12 @@ func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversatio
 			slog.WarnContext(ctx, "W15b dispatch: 子任务文本写入失败", "delegation_id", delegationID.String(), "err", err)
 		}
 	}
-	// 委派状态事件。
-	_, _ = s.appendAgentEvent(ctx, conversationID, &childRunID, "delegation.state_changed", map[string]any{
+	// 委派状态事件。BE-02：失败记 Warn（事件丢失影响时间线还原，需可观测）。
+	if _, err := s.appendAgentEvent(ctx, conversationID, &childRunID, "delegation.state_changed", map[string]any{
 		"delegation_id": delegationID.String(), "state": "running",
-	})
+	}); err != nil {
+		slog.WarnContext(ctx, "W15b dispatch: 委派状态事件写入失败", "delegation_id", delegationID.String(), "err", err)
+	}
 	// 组装 state 并后台启动模型循环。
 	st := &agentRunState{
 		RunID:           childRunID,
@@ -184,9 +186,14 @@ func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversatio
 	}
 	if err := s.startAgentRunBackground(ctx, st); err != nil {
 		slog.WarnContext(ctx, "W15b dispatch: 模型循环启动失败", "child", childRunID.String(), "err", err)
-		// 启动失败：委派行标 failed，子 run 置 stopped。
-		_, _ = s.db.Exec(ctx, `UPDATE agent_delegation SET state='failed', error_code='dispatch_failed', updated_at=now() WHERE id=$1`, delegationID)
-		_, _ = s.db.Exec(ctx, `UPDATE agent_run SET status='failed' WHERE id=$1`, childRunID)
+		// 启动失败：委派行标 failed，子 run 置 stopped。BE-02：补偿更新本身失败必须可观测
+		// （状态停在 running 会卡住对账），不改变「返回原错误」的控制流。
+		if _, err := s.db.Exec(ctx, `UPDATE agent_delegation SET state='failed', error_code='dispatch_failed', updated_at=now() WHERE id=$1`, delegationID); err != nil {
+			slog.ErrorContext(ctx, "W15b dispatch: 启动失败补偿更新委派行失败", "delegation_id", delegationID.String(), "err", err)
+		}
+		if _, err := s.db.Exec(ctx, `UPDATE agent_run SET status='failed' WHERE id=$1`, childRunID); err != nil {
+			slog.ErrorContext(ctx, "W15b dispatch: 启动失败补偿更新子 run 失败", "child", childRunID.String(), "err", err)
+		}
 		return err
 	}
 	// 子 run 结束后自动回执委派结果（挂接 finishAgentRun 的钩子由 run 循环内完成；
@@ -232,8 +239,11 @@ func (s *Server) touchDelegationGroupOnChildDone(ctx context.Context, delegation
 	if unfinished == 0 {
 		// active/waiting_user → completed；completed 只表示"全部子任务终态"，不表示"已汇总"。
 		// 结果是否被承接由 results_consumed_at 单独标记（docs/32 D3）。
-		_, _ = s.db.Exec(ctx, `UPDATE agent_delegation_group SET state='completed', updated_at=now()
-			WHERE id=$1 AND state IN ('active','waiting_user')`, groupID)
+		// BE-02：置位失败记 Warn（组停在 active 会卡住承接语义），控制流不变。
+		if _, err := s.db.Exec(ctx, `UPDATE agent_delegation_group SET state='completed', updated_at=now()
+			WHERE id=$1 AND state IN ('active','waiting_user')`, groupID); err != nil {
+			slog.WarnContext(ctx, "子任务全部终态后组置 completed 失败", "group", groupID.String(), "err", err)
+		}
 	}
 }
 
