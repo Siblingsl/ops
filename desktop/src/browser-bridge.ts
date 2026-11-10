@@ -754,14 +754,71 @@ export function getActiveBridge(): BrowserBridge | null {
   return activeBridge;
 }
 
-function registerIpc(): void {
-  ipcMain.handle('ops-bridge-diag:get-state', () => getActiveBridge()?.snapshot() ?? null);
-  ipcMain.handle('ops-bridge-diag:confirm-pairing', () => getActiveBridge()?.confirmPairing() ?? { ok: false, reason: 'bridge not running' });
-  ipcMain.handle('ops-bridge-diag:revoke', () => {
-    getActiveBridge()?.revoke('diagnostics window');
-    return { ok: true };
+/** 诊断 IPC 来源守卫签名：拒绝时抛错（invoke 直接 reject），与 main.ts 的
+ * requireComputerCaller/requireRealtimeCaller 同构——只放行诊断窗主框架。 */
+export type DiagnosticsCallerGuard = (event: { sender: unknown; senderFrame: { url: string } | null }) => void;
+
+/** DT-02（docs/33 §10.3）：诊断通道注册。修复前 4 个 handler 忽略 event、无来源
+ * 校验，而产品路径无条件注册——业务窗等任何 frame 都能 confirm/revoke/dispatch。
+ * 现在 callerGuard 是必经守卫：未提供时按缺省严格语义一律拒绝，不允许无守卫注册。
+ * revoke 返回值同步修正：桥未运行时如实 {ok:false,reason}，不再无条件 {ok:true}
+ * （confirm-pairing/dispatch 未运行的拒绝语义保持既有口径）。 */
+export function registerDiagnosticsIpc(callerGuard: DiagnosticsCallerGuard | undefined, getBridge: () => BrowserBridge | null = getActiveBridge): void {
+  const guard = (event: unknown): void => {
+    if (!callerGuard) throw new Error('不允许此窗口调用浏览器桥诊断意图。');
+    callerGuard(event as Parameters<DiagnosticsCallerGuard>[0]);
+  };
+  ipcMain.handle('ops-bridge-diag:get-state', (event) => {
+    guard(event);
+    return getBridge()?.snapshot() ?? null;
   });
-  ipcMain.handle('ops-bridge-diag:dispatch', (_e, action: string, payload: unknown) => getActiveBridge()?.dispatch(String(action), payload) ?? { accepted: false, reason: 'bridge not running' });
+  ipcMain.handle('ops-bridge-diag:confirm-pairing', (event) => {
+    guard(event);
+    return getBridge()?.confirmPairing() ?? { ok: false, reason: 'bridge not running' };
+  });
+  ipcMain.handle('ops-bridge-diag:revoke', (event) => {
+    guard(event);
+    const bridge = getBridge();
+    if (!bridge) return { ok: false as const, reason: 'bridge not running' };
+    bridge.revoke('diagnostics window');
+    return { ok: true as const, generation: bridge.generation.n };
+  });
+  ipcMain.handle('ops-bridge-diag:dispatch', (event, action: string, payload: unknown) => {
+    guard(event);
+    return getBridge()?.dispatch(String(action), payload) ?? { accepted: false, reason: 'bridge not running' };
+  });
+}
+
+/** 测试注入点：替换 ipcMain 与桥来源，锁定注册形状与守卫语义。与生产
+ * registerDiagnosticsIpc 保持同一 guard 包装与返回值口径（改一处须同步另一处）。 */
+export function registerDiagnosticsIpcForTest(
+  ipcMainLike: Pick<typeof ipcMain, 'handle'>,
+  callerGuard: DiagnosticsCallerGuard | undefined,
+  getBridge: () => BrowserBridge | null,
+): void {
+  const guard = (event: unknown): void => {
+    if (!callerGuard) throw new Error('不允许此窗口调用浏览器桥诊断意图。');
+    callerGuard(event as Parameters<DiagnosticsCallerGuard>[0]);
+  };
+  ipcMainLike.handle('ops-bridge-diag:get-state', (event: unknown) => {
+    guard(event);
+    return getBridge()?.snapshot() ?? null;
+  });
+  ipcMainLike.handle('ops-bridge-diag:confirm-pairing', (event: unknown) => {
+    guard(event);
+    return getBridge()?.confirmPairing() ?? { ok: false, reason: 'bridge not running' };
+  });
+  ipcMainLike.handle('ops-bridge-diag:revoke', (event: unknown) => {
+    guard(event);
+    const bridge = getBridge();
+    if (!bridge) return { ok: false as const, reason: 'bridge not running' };
+    bridge.revoke('diagnostics window');
+    return { ok: true as const, generation: bridge.generation.n };
+  });
+  ipcMainLike.handle('ops-bridge-diag:dispatch', (event: unknown, action: string, payload: unknown) => {
+    guard(event);
+    return getBridge()?.dispatch(String(action), payload) ?? { accepted: false, reason: 'bridge not running' };
+  });
 }
 
 function createBridge(): BrowserBridge {
@@ -806,10 +863,20 @@ export async function ensureProductBridge(): Promise<boolean> {
     return false;
   }
   activeBridge = bridge;
-  registerIpc();
+  registerDiagnosticsIpc(diagnosticsCallerGuard);
   await wireBridge(bridge);
   return true;
 }
+
+/** 生产诊断来源守卫：只放行 URL 含 diagnostics.html 的窗口主框架。诊断窗由
+ * startBrowserBridgeDiagnostics 创建，其 preload 只暴露固定意图；业务窗与其它
+ * frame 一律拒绝。诊断窗尚未创建时同样拒绝（守卫按 URL 判定，无需窗口引用）。 */
+const diagnosticsCallerGuard: DiagnosticsCallerGuard = (event) => {
+  const url = String(event.senderFrame?.url ?? '');
+  if (!url.includes('diagnostics.html')) {
+    throw new Error('不允许此窗口调用浏览器桥诊断意图。');
+  }
+};
 
 /** A30b：诊断模式。桥已由 ensureProductBridge 常驻启动时复用同一实例，只补开诊断窗；
  * 桥未运行（如端口被占）时仍开窗如实显示"桥未运行"，保留 W02 调试语义。 */
