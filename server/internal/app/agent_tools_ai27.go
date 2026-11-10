@@ -1,7 +1,6 @@
 package app
 
-import (
-)
+import ()
 
 // DEV-AI27-06（W06）：Agent 工具闭环——将 W04/W14/W15/W17 的资源接入 run 工具目录。
 // 工具目录注册+开关联动的可见性过滤。实际派发编排由桌面客户端执行（浏览器桥/MCP 宿主/电脑控制 worker）。
@@ -19,9 +18,11 @@ func ai27BrowserTools() []AgentTool {
 		},
 		{
 			Name: "browser_observe", Domain: "browser", Kind: toolR, Method: "POST", Path: "/tools/browser/commands",
-			Description: "观察获准标签的脱敏可见内容与可交互节点。需要 browser grant。",
+			Description: "观察获准标签的脱敏可见内容与可交互节点。需要 browser grant。跨域子 frame 仅在用户已授权该 origin 时可用 frame_id + frame_origin 读取（A7）。",
 			Params: []ToolParam{
 				pBody("tab_id", `{"type":"integer"}`, true, "U"),
+				pBody("frame_id", `{"type":"integer","minimum":1,"maximum":4096}`, false, "U"),
+				pBody("frame_origin", `{"type":"string","minLength":1,"maxLength":255}`, false, "U"),
 			},
 			MinRole: roleEditor,
 		},
@@ -36,28 +37,32 @@ func ai27BrowserTools() []AgentTool {
 		},
 		{
 			Name: "browser_click", Domain: "browser", Kind: toolR, Method: "POST", Path: "/tools/browser/commands",
-			Description: "点击获准标签中本次观察到的节点。需要 ref 与 doc_rev（来自 observe）。",
+			Description: "点击获准标签中本次观察到的节点。需要 ref 与 doc_rev（来自 observe）。跨域子 frame 需同时提供已授权 origin 的 frame_id + frame_origin（A7）。",
 			Params: []ToolParam{
 				pBody("tab_id", `{"type":"integer"}`, true, "U"),
 				pBody("ref", `{"type":"string"}`, true, "U"),
 				pBody("doc_rev", `{"type":"string"}`, true, "U"),
+				pBody("frame_id", `{"type":"integer","minimum":1,"maximum":4096}`, false, "U"),
+				pBody("frame_origin", `{"type":"string","minLength":1,"maxLength":255}`, false, "U"),
 			},
 			MinRole: roleEditor,
 		},
 		{
 			Name: "browser_type", Domain: "browser", Kind: toolR, Method: "POST", Path: "/tools/browser/commands",
-			Description: "在获准标签的已验证文本控件中输入短文本。拒绝密码/MFA/上传控件。",
+			Description: "在获准标签的已验证文本控件中输入短文本。拒绝密码/MFA/上传控件。跨域子 frame 需同时提供已授权 origin 的 frame_id + frame_origin（A7）。",
 			Params: []ToolParam{
 				pBody("tab_id", `{"type":"integer"}`, true, "U"),
 				pBody("ref", `{"type":"string"}`, true, "U"),
 				pBody("text", `{"type":"string"}`, true, "U"),
 				pBody("doc_rev", `{"type":"string"}`, true, "U"),
+				pBody("frame_id", `{"type":"integer","minimum":1,"maximum":4096}`, false, "U"),
+				pBody("frame_origin", `{"type":"string","minLength":1,"maxLength":255}`, false, "U"),
 			},
 			MinRole: roleEditor,
 		},
 		{
 			Name: "browser_observe_frames", Domain: "browser", Kind: toolR, Method: "POST", Path: "/tools/browser/commands",
-			Description: "跨 frame 观察获准标签：子 frame 只上报 origin 与节点计数，跨域内容默认隔离；需用户授权该 origin 后才返回节点。",
+			Description: "跨 frame 观察获准标签：子 frame 只上报 origin 与节点计数，跨域内容默认隔离；用户授权该 origin 后，用 browser_observe 带 frame_id + frame_origin 读取该 frame 的节点。",
 			Params: []ToolParam{
 				pBody("tab_id", `{"type":"integer"}`, true, "U"),
 			},
@@ -91,7 +96,7 @@ func ai27DelegationTools() []AgentTool {
 	return []AgentTool{
 		{
 			Name: "delegate_task", Domain: "subagent", Kind: toolG, Method: "POST",
-			Path: "/tools/subagent/conversations/{id}/delegation-groups",
+			Path:        "/tools/subagent/conversations/{id}/delegation-groups",
 			Description: "将当前任务拆分为 1~2 个独立的子任务并行研究。子任务只能提案结果，不能执行业务写入。父 run 汇总时保留来源、分歧与失败。",
 			Params: []ToolParam{
 				pPath("conversationId"),
@@ -102,7 +107,7 @@ func ai27DelegationTools() []AgentTool {
 		},
 		{
 			Name: "stop_delegation", Domain: "subagent", Kind: toolR, Method: "POST",
-			Path: "/tools/subagent/delegations/{id}/cancel",
+			Path:        "/tools/subagent/delegations/{id}/cancel",
 			Description: "停止指定的子任务。不影响独立的其他子任务。",
 			Params: []ToolParam{
 				pPath("id"),
@@ -119,11 +124,11 @@ func ai27ComputerTools() []AgentTool {
 		{
 			Name: "computer_observe", Domain: "computer", Kind: toolR, Method: "GET", Path: "/tools/computer/grants",
 			Description: "查看当前活动的前台租约状态。",
-			MinRole:    roleEditor,
+			MinRole:     roleEditor,
 		},
 		{
 			Name: "computer_request_handoff", Domain: "computer", Kind: toolR, Method: "POST",
-			Path: "/tools/computer/grants/{id}/handoff",
+			Path:        "/tools/computer/grants/{id}/handoff",
 			Description: "用户接管前台控制。本机先停控，服务端记录。",
 			Params: []ToolParam{
 				pPath("id"),
@@ -132,9 +137,9 @@ func ai27ComputerTools() []AgentTool {
 		},
 		{
 			Name: "computer_request_target", Domain: "computer", Kind: toolR, Method: "POST",
-			Path: "/tools/computer/target-requests",
+			Path:        "/tools/computer/target-requests",
 			Description: "当前没有前台租约时，请用户在本机选择要操作的应用窗口。选定后立即生效；不要替用户猜测目标。",
-			MinRole:    roleEditor,
+			MinRole:     roleEditor,
 		},
 	}
 }
@@ -145,11 +150,9 @@ func ai27MCPTools() []AgentTool {
 	return []AgentTool{
 		{
 			Name: "mcp__list_connections", Domain: "mcp", Kind: toolR, Method: "GET",
-			Path: "/tools/mcp/connections",
+			Path:        "/tools/mcp/connections",
 			Description: "列出当前工作区已启用的 MCP 连接与其工具/资源/提示模板目录。",
 			MinRole:     roleEditor,
 		},
 	}
 }
-
-

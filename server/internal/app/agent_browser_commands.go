@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -85,6 +88,11 @@ func (s *Server) createAgentBrowserCommand(w http.ResponseWriter, r *http.Reques
 	if !browserCommandActions[body.Action] {
 		return apiErr(422, "browser_action_unsupported", "动作未登记")
 	}
+	// A7（27 §14.3 表格行 2）：frame 级动作只允许 observe/click/type，且必须先声明 frame 的 origin。
+	frameOrigin, frameScoped, err := browserFrameTarget(body.Action, body.Payload)
+	if err != nil {
+		return err
+	}
 	payloadJSON, _ := json.Marshal(body.Payload)
 	inputHash := fmt.Sprintf("%x", sha256.Sum256(append([]byte(body.Action+"."), payloadJSON...)))
 	deadline := time.Now().Add(30 * time.Second)
@@ -96,20 +104,25 @@ func (s *Server) createAgentBrowserCommand(w http.ResponseWriter, r *http.Reques
 	commandID := uuid.New()
 	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
 		// 租约必须 active、属于本人当前工作区、且签给该 run（27 §13.2 归属派生）。
-		var okGrant bool
-		if err := tx.QueryRow(r.Context(), `
-			SELECT EXISTS(SELECT 1 FROM agent_browser_grant
-				WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND run_id=$4
-				  AND state='active' AND expires_at > now())`,
-			grantID, id.WorkspaceID, id.UserID, runID).Scan(&okGrant); err != nil {
+		var grantOrigins []string
+		err := tx.QueryRow(r.Context(), `
+			SELECT origins FROM agent_browser_grant
+			WHERE id=$1 AND workspace_id=$2 AND user_id=$3 AND run_id=$4
+			  AND state='active' AND expires_at > now()`,
+			grantID, id.WorkspaceID, id.UserID, runID).Scan(&grantOrigins)
+		if err == pgx.ErrNoRows {
+			return apiErr(409, "browser_lease_conflict", "租约不存在、已过期或已撤销")
+		}
+		if err != nil {
 			return err
 		}
-		if !okGrant {
-			return apiErr(409, "browser_lease_conflict", "租约不存在、已过期或已撤销")
+		// 逐 frame 核验 origin：未授权的第三方 iframe 不提取、不操作（27 §14.3 表格行 2）。
+		if frameScoped && !browserOriginGranted(frameOrigin, grantOrigins) {
+			return apiErr(422, "browser_origin_not_granted", "该 frame 的 origin 未在租约授权范围内")
 		}
 		var existingID uuid.UUID
 		var existingHash string
-		err := tx.QueryRow(r.Context(), `
+		err = tx.QueryRow(r.Context(), `
 			SELECT id, input_hash FROM agent_browser_command WHERE grant_id=$1 AND request_id=$2`,
 			grantID, requestID).Scan(&existingID, &existingHash)
 		switch {
@@ -280,4 +293,65 @@ func (s *Server) emitBrowserCommandEvent(ctx context.Context, conversationID uui
 		return
 	}
 	_, _ = s.appendAgentEvent(ctx, conversationID, nil, eventType, payload)
+}
+
+// browserFrameTarget 解析并校验 payload 的 frame_id / frame_origin（A7，27 §14.3 表格行 2）。
+// 返回规范化后的 frame origin 与"是否 frame 级"：
+//   - 两者都不出现：顶层动作，保持旧行为（payload 内容不变，input_hash 与旧命令一致）；
+//   - 只给 frame_origin：参数错误（origin 必须依附于 frame）；
+//   - 只给 frame_id：必须补 frame_origin，否则无法核验 origin 授权；
+//   - 动作不在 observe/click/type：拒绝，避免 navigate/extract 等借 frame 参数绕过范围。
+func browserFrameTarget(action string, payload map[string]any) (string, bool, error) {
+	rawFrame, hasFrame := payload["frame_id"]
+	rawOrigin, hasOrigin := payload["frame_origin"]
+	if !hasFrame && !hasOrigin {
+		return "", false, nil
+	}
+	switch action {
+	case "observe", "click", "type":
+	default:
+		return "", false, apiErr(422, "browser_frame_unsupported", "该动作不支持 frame 级目标")
+	}
+	if !hasFrame {
+		return "", false, apiErr(422, "browser_frame_invalid", "frame_origin 必须与 frame_id 同时提供")
+	}
+	f, ok := rawFrame.(float64)
+	if !ok || f != math.Trunc(f) || f < 1 || f > 4096 {
+		return "", false, apiErr(422, "browser_frame_invalid", "frame_id 必须是 1..4096 的整数")
+	}
+	if !hasOrigin {
+		return "", false, apiErr(422, "browser_frame_invalid", "frame 级动作必须提供 frame_origin")
+	}
+	origin, ok := rawOrigin.(string)
+	if !ok {
+		return "", false, apiErr(422, "browser_frame_invalid", "frame_origin 必须是字符串")
+	}
+	norm, ok := normalizeBrowserOrigin(origin)
+	if !ok {
+		return "", false, apiErr(422, "browser_frame_invalid", "frame_origin 必须是 http/https 源")
+	}
+	return norm, true, nil
+}
+
+// normalizeBrowserOrigin 把 frame_origin 收敛成 origin（scheme://host[:port]），丢弃路径与查询；
+// 拒绝带用户信息或非 http/https 的值。
+func normalizeBrowserOrigin(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.User != nil || u.Host == "" {
+		return "", false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", false
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host), true
+}
+
+// browserOriginGranted 判断 origin 是否在租约 origins 内（两侧都按 origin 归一化后比较）。
+func browserOriginGranted(origin string, granted []string) bool {
+	for _, candidate := range granted {
+		if norm, ok := normalizeBrowserOrigin(candidate); ok && norm == origin {
+			return true
+		}
+	}
+	return false
 }

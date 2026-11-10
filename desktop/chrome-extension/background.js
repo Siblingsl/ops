@@ -409,6 +409,12 @@ async function actionObserve(payload) {
   const tabId = Number(payload.tab_id);
   const tab = await chrome.tabs.get(tabId);
   if (!tab.url || !/^https?:/.test(tab.url)) return { error: 'tab_not_http' };
+  // A7：observe_frames 只报子 frame 的 origin 与计数；用户授权该 origin 后，
+  // 由服务器校验 origin ∈ 租约并在调用方带 frame_id，这里定向注入取节点。
+  const frameId = Number(payload.frame_id);
+  if (Number.isInteger(frameId) && frameId > 0) {
+    return executeOnFrame(tabId, frameId, observeFrameFn, [MAX_NODES]);
+  }
   const result = await executeOn(tabId, observeFn, [MAX_NODES]);
   return result || { error: 'no_result' };
 }
