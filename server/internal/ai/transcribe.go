@@ -37,7 +37,10 @@ func Transcribe(ctx context.Context, hc *http.Client, baseURL, apiKey, model, fi
 		return Transcription{}, fmt.Errorf("asr_model_missing")
 	}
 	if hc == nil {
-		hc = http.DefaultClient
+		// BE-04（docs/33 §11.4）：禁用无超时回退（fail-closed）。4.3 实测 DefaultClient
+		// 挂起上游永不返回（goroutine 无限占用）；生产调用方全部经 aiClientForRoute
+		// 注入带 deadline 的 client，nil 一律显式拒绝。
+		return Transcription{}, fmt.Errorf("http_client_nil: transcribe requires an injected http client with timeout")
 	}
 	if filename == "" {
 		filename = "audio.webm"

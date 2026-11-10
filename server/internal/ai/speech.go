@@ -42,7 +42,8 @@ func Speech(ctx context.Context, hc *http.Client, baseURL, apiKey string, req Sp
 		return nil, "", fmt.Errorf("tts_voice_missing")
 	}
 	if hc == nil {
-		hc = http.DefaultClient
+		// BE-04（docs/33 §11.4）：禁用无超时回退（fail-closed），同 Transcribe。
+		return nil, "", fmt.Errorf("http_client_nil: speech requires an injected http client with timeout")
 	}
 	payload := map[string]any{
 		"model": req.Model,
