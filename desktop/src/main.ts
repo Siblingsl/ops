@@ -25,6 +25,7 @@ import { ensureProductBridge, getActiveBridge, startBrowserBridgeDiagnostics, st
 import { BrowserCommandExecutor, scheduleNextMs } from './browser-executor';
 import type { McpHostManager } from './mcp-host';
 import { registerMcpIpcHandlers } from './ipc/mcp';
+import { registerVoiceIpcHandlers, setRealtimeBridge } from './ipc/voice';
 import { ComputerWorkerHost, type WindowSummary } from './computer-worker-host';
 import { bindInBrowseController, clearInBrowseData, inBrowseAttachAfterOverlay, inBrowseDataStats, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
 import { RealtimeBridge, type RealtimeBridgeEvent } from './voice-realtime';
@@ -1136,43 +1137,10 @@ function registerIpcHandlers(): void {
   // ipc/mcp.ts（契约与返回值形状不变，mcpHostManager 单例经 onManagerReady 回传供
   // 退出清理触达）。
   registerMcpIpcHandlers({ ipcHandle, requireComputerCaller, onManagerReady: (manager) => { mcpHostManager = manager; } });
-  // DEV-AI27-16 第六批（A2，27 §11.4.5）：realtime 双向音频桥——固定意图，渲染器不接触密钥。
-  // start/append/commit/interrupt/stop 转发 RealtimeBridge；事件经 desktop-ui:realtime-event 推送。
-  ipcHandle('voice:realtime-status', () => realtimeBridge?.statusView() ?? null);
-  ipcHandle('voice:realtime-start', async (event, raw) => {
-    const bridge = requireRealtimeCaller(event);
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('realtime_args_invalid');
-    const b = raw as { session_id?: unknown; token?: unknown; proxy_endpoint?: unknown; proxy_url?: unknown; model?: unknown; provider?: unknown };
-    const result = await bridge.start({
-      sessionID: String(b.session_id ?? ''),
-      token: String(b.token ?? ''),
-      proxyEndpoint: String(b.proxy_endpoint ?? ''),
-      proxyURL: b.proxy_url === undefined ? undefined : String(b.proxy_url),
-      model: String(b.model ?? ''),
-      provider: String(b.provider ?? ''),
-    });
-    return result;
-  });
-  ipcHandle('voice:realtime-append', (event, raw) => {
-    const bridge = requireRealtimeCaller(event);
-    if (!raw || typeof raw !== 'object' || typeof (raw as { dataBase64?: unknown }).dataBase64 !== 'string') {
-      throw new Error('realtime_chunk_invalid');
-    }
-    return bridge.append({ dataBase64: String((raw as { dataBase64: unknown }).dataBase64) });
-  });
-  ipcHandle('voice:realtime-commit', (event) => {
-    const bridge = requireRealtimeCaller(event);
-    return bridge.commit();
-  });
-  ipcHandle('voice:realtime-interrupt', (event) => {
-    const bridge = requireRealtimeCaller(event);
-    return bridge.interrupt();
-  });
-  ipcHandle('voice:realtime-stop', (event) => {
-    const bridge = requireRealtimeCaller(event);
-    bridge.stop();
-    return null;
-  });
+  // DEV-AI27-16 第六批（A2，27 §11.4.5）：realtime 双向音频桥——DT-08 片 2 拆至
+  // ipc/voice.ts（通道契约不变；桥实例与 requireRealtimeCaller 校验留在 main.ts）。
+  setRealtimeBridge(realtimeBridge);
+  registerVoiceIpcHandlers({ ipcHandle, requireRealtimeCaller });
   ipcHandle('cx-long-image:capture', async (event, raw) => {
     const senderFrame = event.senderFrame;
     if (!businessWindow || businessWindow.isDestroyed() || event.sender !== businessWindow.webContents
