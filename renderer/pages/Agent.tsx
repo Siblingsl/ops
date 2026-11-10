@@ -630,7 +630,7 @@ function WorkbenchSidePanel({
         </div>
         {/* D-172 双路径之二：应用内浏览视图（Codex 同款，WebContentsView 承载）。 */}
         <div className="h-[60%] shrink-0 border-t border-mist-200">
-          <InBrowsePanel visible={tab === 'browser'} />
+          <InBrowsePanel visible={tab === 'browser'} conversationId={conversation?.id} />
         </div>
       </section>}
     </div>

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, RotateCw, X, Globe } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Globe, MessageSquarePlus, RotateCw, X } from 'lucide-react'
+import { toast } from 'sonner'
+
+import { post } from '@/lib/api'
 
 // DEV-AI27-08（W08，D-172）：工作视图"应用内"浏览 UI（27 §7.8 功能表第一批）。
 // 固定意图经 window.opsDesktopUI?.invokeInBrowse（preload 桥），渲染器无 view 对象。
@@ -60,11 +63,16 @@ function useInBrowseInvoke(): InvokeFn | null {
   return bridge?.invokeInBrowse ?? null
 }
 
-export function InBrowsePanel({ visible }: { visible: boolean }) {
+export function InBrowsePanel({ visible, conversationId }: { visible: boolean; conversationId?: string }) {
   const invoke = useInBrowseInvoke()
   const [snapshot, setSnapshot] = useState<InBrowseSnapshot>(EMPTY)
   const [addressInput, setAddressInput] = useState('')
   const [editingAddress, setEditingAddress] = useState(false)
+  // A10（27 §7.7）：浏览工具栏批注入口——批注绑定当前会话，保存后进入来源面板列表。
+  const [annotateOpen, setAnnotateOpen] = useState(false)
+  const [note, setNote] = useState('')
+  const [savingNote, setSavingNote] = useState(false)
+  const [annotateError, setAnnotateError] = useState('')
 
   useEffect(() => {
     if (!invoke || !visible) return
@@ -168,8 +176,35 @@ export function InBrowsePanel({ visible }: { visible: boolean }) {
           />
         </div>
       </form>
+      <button type="button" className={btn} aria-label="批注当前页" data-testid="inbrowse-annotate"
+        disabled={!conversationId || !activeTab} onClick={() => { setAnnotateOpen((value) => !value); setAnnotateError('') }}>
+        <MessageSquarePlus className="size-4" />
+      </button>
       <button type="button" className={btn} aria-label="关闭页面" data-testid="inbrowse-close" onClick={() => { const active = snapshot.activeTabId; if (active) void invoke('inbrowse:close-tab', active) }}><X className="size-4" /></button>
     </div>
+    {annotateOpen && <div className="shrink-0 border-b border-mist-200 bg-white px-3 py-2" data-testid="inbrowse-annotate-form">
+      <p className="mb-1 truncate text-[12px] text-mist-500">批注来源：{activeTab?.title || activeTab?.url || '当前页'}</p>
+      <textarea aria-label="批注备注" value={note} onChange={(event) => setNote(event.target.value)} rows={2}
+        placeholder="写下这页值得记的一点；保存后可在来源面板回查。"
+        className="w-full rounded-lg border border-mist-200 p-2 text-[13px] text-ink-700" />
+      {annotateError && <p className="mt-1 text-[12px] text-danger" role="alert">{annotateError}</p>}
+      <div className="mt-1 flex gap-2">
+        <button type="button" className="rounded-md bg-primary px-2.5 py-1 text-[12px] text-white disabled:opacity-50"
+          disabled={!note.trim() || savingNote}
+          onClick={() => {
+            const origin = (() => { try { return activeTab?.url ? new URL(activeTab.url).origin : '' } catch { return '' } })()
+            if (!conversationId || !note.trim()) return
+            setSavingNote(true)
+            setAnnotateError('')
+            void post('/agent/browser/annotations', { conversation_id: conversationId, origin, note: note.trim() })
+              .then(() => { toast.success('批注已保存到本会话来源面板'); setNote(''); setAnnotateOpen(false) })
+              .catch((err) => setAnnotateError(err instanceof Error ? err.message : String(err)))
+              .finally(() => setSavingNote(false))
+          }}>{savingNote ? '保存中…' : '保存批注'}</button>
+        <button type="button" className="rounded-md border border-mist-200 px-2.5 py-1 text-[12px] text-mist-600"
+          onClick={() => { setAnnotateOpen(false); setAnnotateError('') }}>取消</button>
+      </div>
+    </div>}
     <div className="flex shrink-0 items-center gap-2 border-b border-mist-100 bg-mist-50 px-3 py-1 text-[12px] text-mist-500">
       <span data-testid="inbrowse-title">{activeTab?.title || '空白页'}</span>
       {activeLoading && <span className="text-mist-400">加载中…</span>}
