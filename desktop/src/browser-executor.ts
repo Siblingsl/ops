@@ -27,6 +27,18 @@ export interface BrowserExecutorDeps {
 // 单命令执行等待上限：取 deadline 剩余与 15s 的较小者（服务端预算 30s，回执要留出余量）。
 const MAX_COMMAND_WAIT_MS = 15_000;
 
+/** DT-05（docs/33 §10.5 / 12.2）：下一轮轮询间隔。连续空轮指数退避：首个空轮保持
+ * base（不改变既有单空环节奏），之后 2^n·base 封顶 max；领到任何命令立即回 base。
+ * 纯函数：主进程按返回值滚动排程（setTimeout 链），替代空闲期每 3s 一次的固定轮询。
+ * 同步等待 ≤30s 的命令在退避上限 12s 时仍满足 deadline+sweep 兜底语义（超时兜底由
+ * 服务端保证，不重放）。 */
+export function scheduleNextMs(executedCount: number, idleRounds: number, baseMs: number, maxMs: number): number {
+  if (executedCount > 0) return baseMs;
+  if (idleRounds <= 0) return baseMs;
+  const backoff = baseMs * 2 ** Math.min(idleRounds, 20);
+  return Math.min(backoff, maxMs);
+}
+
 export class BrowserCommandExecutor {
   private running = false;
 

@@ -22,7 +22,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { ensureProductBridge, getActiveBridge, startBrowserBridgeDiagnostics, stopActiveBridge } from './browser-bridge';
-import { BrowserCommandExecutor } from './browser-executor';
+import { BrowserCommandExecutor, scheduleNextMs } from './browser-executor';
 import { McpHostManager, type McpCatalog } from './mcp-host';
 import { McpOAuthClient, SafeStorageTokenStorage } from './mcp-oauth';
 import { ComputerWorkerHost, type WindowSummary } from './computer-worker-host';
@@ -2892,8 +2892,14 @@ function stopPlatformClaimLoop(): void {
 // A30b 片 2（拍板：账本存载荷+同步等待）：AI 浏览器命令执行器——桥配对后定时轮询
 // 服务端 pending 命令并经本机桥执行；未配对跳过本轮（命令由服务端 deadline+sweep
 // 兜底转 unknown_outcome，run 内等待方如实收到，不伪造执行成功）。
+// DT-05（docs/33 §10.5）：接收端自适应退避——连续空轮指数退避（3s→上限 12s），
+// 领到命令立即回 3s；服务端同步等待 ≤30s 命令的最坏延迟仍远小于 deadline，兜底
+// 语义不变。OPS_BROWSER_EXECUTOR_FIXED_INTERVAL_MS 可切回固定间隔（L2 回退，
+// docs/33 12.2；临时开关，docs/90 登记移除评审点）。
 let browserExecutorTimer: NodeJS.Timeout | null = null;
 const BROWSER_EXECUTOR_INTERVAL_MS = 3000;
+const BROWSER_EXECUTOR_IDLE_MAX_MS = 12_000;
+let browserExecutorIdleRounds = 0;
 
 function startBrowserCommandExecutor(): void {
   if (browserExecutorTimer) return;
@@ -2916,14 +2922,33 @@ function startBrowserCommandExecutor(): void {
     },
     log: (line) => console.log(line)
   });
-  browserExecutorTimer = setInterval(() => { void executor.tick(); }, BROWSER_EXECUTOR_INTERVAL_MS);
+  const fixedInterval = Number(process.env.OPS_BROWSER_EXECUTOR_FIXED_INTERVAL_MS || '');
+  if (Number.isInteger(fixedInterval) && fixedInterval > 0) {
+    // L2 回退分支：固定间隔轮询（与改造前行为一致）。
+    browserExecutorTimer = setInterval(() => { void executor.tick(); }, fixedInterval);
+    browserExecutorTimer.unref?.();
+    return;
+  }
+  // 自适应退避：每轮按 tick 结果滚动重排（setTimeout 链）。
+  const runTick = async (): Promise<void> => {
+    const startedAt = Date.now();
+    const executed = await executor.tick().catch(() => 0);
+    const elapsed = Date.now() - startedAt;
+    const next = Math.max(scheduleNextMs(executed, browserExecutorIdleRounds, BROWSER_EXECUTOR_INTERVAL_MS, BROWSER_EXECUTOR_IDLE_MAX_MS) - elapsed, 250);
+    browserExecutorIdleRounds = executed > 0 ? 0 : browserExecutorIdleRounds + 1;
+    browserExecutorTimer = setTimeout(() => { void runTick(); }, next);
+    browserExecutorTimer.unref?.();
+  };
+  browserExecutorTimer = setTimeout(() => { void runTick(); }, BROWSER_EXECUTOR_INTERVAL_MS);
   browserExecutorTimer.unref?.();
 }
 
 function stopBrowserCommandExecutor(): void {
   if (!browserExecutorTimer) return;
+  clearTimeout(browserExecutorTimer);
   clearInterval(browserExecutorTimer);
   browserExecutorTimer = null;
+  browserExecutorIdleRounds = 0;
 }
 
 // writeAccountProfileMeta 写"账号 slot"的 meta.json。
