@@ -52,6 +52,12 @@ func TestA101MemoryEvidencePanel(t *testing.T) {
 	if m1 == nil || m2 == nil || m3 == nil {
 		t.Fatalf("candidates missing: %+v", list)
 	}
+	// 乱序隔离（A22）：本用例在共享 wechat 账号写入 3 条候选，其中 m3 会被确认成
+	// active 并参与后续 title 任务的提示词（use_count 也会被累加）——用例结束删除，
+	// 避免污染其它用例的提示词内容与业务表快照。
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM account_memory WHERE account_id=$1 AND text LIKE 'A101 %来源%'`, f.wechat.ID)
+	})
 	if m1.Evidence == nil || !strings.Contains(string(m1.Evidence), `"count":5`) || !strings.Contains(string(m1.Evidence), "5 次") {
 		t.Fatalf("instruction evidence: %s", m1.Evidence)
 	}

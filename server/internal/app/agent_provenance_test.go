@@ -446,6 +446,12 @@ func TestAG06ExecuteSucceeds(t *testing.T) {
 
 	// memory__create 是纯 W 工具，文字来自用户消息。
 	note := "记住我喜欢在早上写稿"
+	// 乱序隔离（A22）：这张卡片会写入一条 active 账号记忆，注入后续用例的提示词并
+	// 累加 use_count（污染 AG11 的业务表快照）——用例结束删除。
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`DELETE FROM account_memory WHERE account_id=$1 AND text=$2`, acc.wechat.ID, note)
+	})
 	evs := env.sse(t, agentRunPath(c, "messages"), map[string]any{"text": note + "\n" +
 		agentLoadDomain("profile") +
 		"\n#tool memory__create {\"accountId\":\"" + acc.wechat.ID.String() + "\",\"text\":\"" + note + "\"}"})

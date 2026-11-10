@@ -62,6 +62,12 @@ func TestW13M01CandidateNotInjectedThenActiveInjected(t *testing.T) {
 	if confirmed.State != "active" {
 		t.Fatalf("确认后应 active：%+v", confirmed)
 	}
+	// 乱序隔离（A22）：本用例激活的记忆若残留，会占据共享 user+workspace 的注入
+	// 预算并污染后续乱序用例的注入断言——用例结束立即停用（disabled 不参与注入）。
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`UPDATE agent_personal_memory SET state='disabled', revision=revision+1 WHERE id=$1`, candidate.ID)
+	})
 	injected = env.srv.personalMemorySystemBlock(context.Background(), uuid.MustParse(env.me(t).UserID), uuid.MustParse(env.me(t).Workspace.ID), conv.ID, uuid.New())
 	if injected == "" || !strings.Contains(injected, "竞品报告先列证据和日期") {
 		t.Fatalf("确认后应注入：%q", injected)
@@ -78,10 +84,21 @@ func TestW13M01CandidateNotInjectedThenActiveInjected(t *testing.T) {
 	}
 
 	// 全局 use 关闭 → 不注入；会话覆盖 on → 恢复注入（M01 开关与覆盖）
+	// 乱序隔离（A22）：设置是 user+workspace 级共享行，其它用例改过就会推高 revision，
+	// 不能硬编码 expected_revision=1——先读当前 revision 再 CAS。
+	var curSettings map[string]any
+	env.mustJSON(t, "GET", "/api/v1/agent/memory-settings", map[string]any{}, &curSettings)
 	var settings map[string]any
 	env.mustJSON(t, "PATCH", "/api/v1/agent/memory-settings", map[string]any{
-		"use_enabled": false, "expected_revision": 1,
+		"use_enabled": false, "expected_revision": int(curSettings["revision"].(float64)),
 	}, &settings)
+	// 乱序隔离（A22）：本用例把本人级开关改成 use=false，若不还原，后续用例会把
+	// 这个残留当成"默认双开"（TestW13MemoryFeatureGates 断言）。用例结束还原。
+	uid := uuid.MustParse(env.me(t).UserID)
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`UPDATE agent_memory_setting SET use_enabled=true, revision=revision+1 WHERE user_id=$1`, uid)
+	})
 	if settings["use_enabled"] != false {
 		t.Fatalf("全局 use 关闭失败：%v", settings)
 	}
@@ -215,6 +232,12 @@ func TestW13M03DeleteStopsInjectionAndAccountMemoryUntouched(t *testing.T) {
 	if recreated.ID == m.ID || recreated.State != "active" {
 		t.Fatalf("删除后重新创建应为新 active 项：%+v", recreated)
 	}
+	// 乱序隔离（A22）：重新创建的 active 记忆若残留，会注入后续用例（如 M01 的
+	// 「候选不得注入」断言）——用例结束停用。
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`UPDATE agent_personal_memory SET state='disabled', revision=revision+1 WHERE id=$1`, recreated.ID)
+	})
 
 	// 账号业务记忆（HC-20）不受影响：账号记忆 API 与状态机原样可用
 	var accountMemory struct {
@@ -244,6 +267,11 @@ func TestW13bMemoryUsageAPI(t *testing.T) {
 	env.mustJSON(t, "PATCH", "/api/v1/agent/personal-memories/"+candidate.ID, map[string]any{
 		"action": "confirm", "expected_revision": candidate.Revision,
 	}, &confirmed)
+	// 乱序隔离（A22）：用例结束停用本记忆，防污染后续乱序用例的注入预算。
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`UPDATE agent_personal_memory SET state='disabled', revision=revision+1 WHERE id=$1`, candidate.ID)
+	})
 	// usage 查询按 conversation → agent_run → usage 关联；插一条真实 run 行承接记录。
 	runID := uuid.New()
 	sessionID := agentTestSessionID(t, uuid.MustParse(env.me(t).UserID))
@@ -309,6 +337,11 @@ func TestW13bSimilarHint(t *testing.T) {
 	env.mustJSON(t, "POST", "/api/v1/agent/personal-memories", map[string]any{
 		"text": "周报结构：数据先行，结论后置，附来源",
 	}, &created)
+	// 乱序隔离（A22）：用例结束停用本记忆（disabled 不参与注入与相似命中干扰）。
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`UPDATE agent_personal_memory SET state='disabled', revision=revision+1 WHERE id=$1`, created.ID)
+	})
 
 	var out struct {
 		Memories   []personalMemory `json:"memories"`

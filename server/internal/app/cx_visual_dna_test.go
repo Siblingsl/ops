@@ -16,7 +16,16 @@ type cxVisualDNAResponse struct {
 }
 
 func TestCXVisualDNAHistoryCASRollbackAndReadIsReadOnly(t *testing.T) {
-	account := env.accounts(t).xhs
+	// 乱序隔离（A22）：共享 xhs 夹具账号可能已被其它用例写入 visual DNA——
+	// 本用例断言"未设置"起点，必须用独立账号。
+	_ = env.accounts(t)
+	var account Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{
+		"platform": "xhs", "name": "视觉DNA隔离验收号", "content_format": "image_note",
+	}, &account)
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM platform_account WHERE id=$1`, account.ID)
+	})
 	path := "/api/v1/accounts/" + account.ID.String() + "/visual-dna"
 	var initial cxVisualDNAResponse
 	for i := 0; i < 2; i++ {

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // TestMainChain walks the MVP main flow through the HTTP API (08 文档 E2E 主链路的接口层版本).
@@ -280,8 +282,20 @@ func TestMainChain(t *testing.T) {
 	}
 	var trash []map[string]any
 	env.mustJSON(t, "GET", "/api/v1/trash?type=work", nil, &trash)
-	if len(trash) != 1 || trash[0]["days_left"].(float64) != 30 {
-		t.Fatalf("trash: %v", trash)
+	// 乱序隔离（A22）：共享工作区的回收站可能含其它用例删除的作品——
+	// 断言"本作品在回收站且剩余 30 天"，不假设列表唯一。
+	var inTrash bool
+	for _, item := range trash {
+		if item["id"] == id {
+			inTrash = true
+			if item["days_left"].(float64) != 30 {
+				t.Fatalf("trash days_left: %v", item)
+			}
+			break
+		}
+	}
+	if !inTrash {
+		t.Fatalf("本作品不在回收站：%v", trash)
 	}
 	env.mustJSON(t, "POST", "/api/v1/trash/work/"+id+"/restore", nil, nil)
 	env.mustJSON(t, "GET", "/api/v1/works/"+id, nil, &wk)
@@ -292,10 +306,19 @@ func TestMainChain(t *testing.T) {
 }
 
 func TestModelConfigAndLimit(t *testing.T) {
+	// 乱序隔离（A22）：共享库中其他用例可能已建供应商——不假设「恰好 1 个」，
+	// 取共享 mock（本地模拟模型）作为好密钥代表；自身建的坏密钥供应商测试后自删。
 	var list []Provider
 	env.mustJSON(t, "GET", "/api/v1/model-providers", nil, &list)
-	if len(list) != 1 || !strings.Contains(list[0].KeyMask, "*") {
-		t.Fatalf("providers: %+v", list)
+	var shared *Provider
+	for i := range list {
+		if list[i].Name == "本地模拟模型" && len(list[i].Models) > 0 {
+			shared = &list[i]
+			break
+		}
+	}
+	if shared == nil || !strings.Contains(shared.KeyMask, "*") {
+		t.Fatalf("共享 mock 供应商缺失：%+v", list)
 	}
 	// 新增密钥需要再次输入密码
 	env.srv.db.Exec(context.Background(), `UPDATE session SET reauth_until=NULL`)
@@ -304,6 +327,10 @@ func TestModelConfigAndLimit(t *testing.T) {
 	env.reauth(t)
 	var p Provider
 	env.mustJSON(t, "POST", "/api/v1/model-providers", in, &p)
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_route WHERE provider_id=$1`, p.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_provider WHERE id=$1`, p.ID)
+	})
 	var res struct {
 		OK     bool   `json:"ok"`
 		Result string `json:"result"`
@@ -312,22 +339,32 @@ func TestModelConfigAndLimit(t *testing.T) {
 	if res.OK || strings.Contains(res.Result, "bad-key") {
 		t.Fatalf("bad key test: %+v", res)
 	}
-	env.mustJSON(t, "POST", "/api/v1/model-providers/"+list[0].ID.String()+"/test", nil, &res)
+	env.mustJSON(t, "POST", "/api/v1/model-providers/"+shared.ID.String()+"/test", nil, &res)
 	if !res.OK {
 		t.Fatalf("good key test: %+v", res)
 	}
 	// 某个任务路由到坏供应商：调用失败但返回可读错误
 	env.mustJSON(t, "PUT", "/api/v1/model-routes", []map[string]any{{"task_type": "title", "provider_id": p.ID, "model": "m1"}}, nil)
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_route WHERE task_type='title' AND provider_id=$1`, p.ID)
+	})
 	f := env.accounts(t)
 	var wk Work
 	env.mustJSON(t, "POST", "/api/v1/accounts/"+f.wechat.ID.String()+"/works", map[string]string{"title": "路由测试"}, &wk)
 	env.expectErr(t, "POST", "/api/v1/works/"+wk.ID.String()+"/titles", nil, "ai_key_invalid")
 	env.mustJSON(t, "PUT", "/api/v1/model-routes", []map[string]any{{"task_type": "title"}}, nil)
-	env.expectErr(t, "DELETE", "/api/v1/model-providers/"+list[0].ID.String(), nil, "confirm_required")
+	env.expectErr(t, "DELETE", "/api/v1/model-providers/"+shared.ID.String(), nil, "confirm_required")
 	env.mustJSON(t, "DELETE", "/api/v1/model-providers/"+p.ID.String(), nil, nil)
 
-	// 每日用量上限（E-10）
+	// 每日用量上限（E-10）。乱序隔离（A22）：tokensToday 按工作区累计当日 ai_call——
+	// 顺序执行时依赖前置用例攒够 tokens 的隐式前提在乱序下不成立，本用例自造用量。
 	env.mustJSON(t, "PUT", "/api/v1/settings", map[string]any{"ai_limit": map[string]any{"enabled": true, "daily_tokens": 1000}}, nil)
+	if _, err := env.srv.db.Exec(context.Background(), `INSERT INTO ai_call
+		(workspace_id, task_type, provider, model, prompt_tokens, completion_tokens, status, created_at)
+		VALUES ($1, 'topic_suggest', 'mock', 'mock-writer', 1200, 0, 'ok', now())`,
+		uuid.MustParse(env.me(t).Workspace.ID)); err != nil {
+		t.Fatal(err)
+	}
 	env.expectErr(t, "POST", "/api/v1/accounts/"+f.wechat.ID.String()+"/topics/suggest", nil, "ai_quota_exceeded")
 	env.mustJSON(t, "PUT", "/api/v1/settings", map[string]any{"ai_limit": map[string]any{"enabled": false, "daily_tokens": 2000000}}, nil)
 }

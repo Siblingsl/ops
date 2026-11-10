@@ -11,6 +11,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type shotResp struct {
@@ -36,6 +38,30 @@ func uploadShots(t *testing.T, accountID string, n int, workID string) (int, []b
 	return resp.StatusCode, b
 }
 
+// seedMetricScreenshotRoute 确保本工作区有 metric_screenshot 视觉路由（A22 乱序隔离）：
+// 共享 mock LLM 对任意模型名返回截图识别响应；此前该路由依赖 OPT39/UX01 等用例
+// 在乱序中恰好先跑留下的残留——确定性播种 + 用例结束清理。
+func seedMetricScreenshotRoute(t *testing.T) {
+	t.Helper()
+	var providerID uuid.UUID
+	err := env.srv.db.QueryRow(context.Background(),
+		`SELECT p.id FROM model_provider p WHERE p.workspace_id=$1 AND p.name='本地模拟模型' LIMIT 1`,
+		env.me(t).Workspace.ID).Scan(&providerID)
+	if err != nil {
+		t.Fatalf("共享 mock 供应商缺失（SeedDevModel 应已播种）：%v", err)
+	}
+	if _, err := env.srv.db.Exec(context.Background(),
+		`INSERT INTO model_route (workspace_id, task_type, provider_id, model) VALUES ($1,'metric_screenshot',$2,'mock-vision')
+		 ON CONFLICT (workspace_id, task_type) DO UPDATE SET provider_id=EXCLUDED.provider_id, model=EXCLUDED.model`,
+		env.me(t).Workspace.ID, providerID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`DELETE FROM model_route WHERE workspace_id=$1 AND task_type='metric_screenshot'`, env.me(t).Workspace.ID)
+	})
+}
+
 func TestDR05NumberFaithfulness(t *testing.T) {
 	seen := rawNumbers("阅读 1.2w 点赞 1,234 收藏 3万 分享 10万+")
 	for _, c := range []struct {
@@ -52,6 +78,7 @@ func TestDR05NumberFaithfulness(t *testing.T) {
 
 func TestToutiaoScreenshotIntervalRequiresCumulativeConfirmationAndMatchingFormat(t *testing.T) {
 	ctx := context.Background()
+	seedMetricScreenshotRoute(t)
 	account := drAccount(t, "toutiao", "头条区间截图确认号")
 	publishedAt := env.srv.now().AddDate(0, 0, -3)
 	article := drWork(t, account, "累计数据文章", "published", &publishedAt)
@@ -117,6 +144,7 @@ func TestToutiaoScreenshotIntervalRequiresCumulativeConfirmationAndMatchingForma
 // 单位换算由代码完成；逐行确认写入 source=screenshot；截图不带账号档案与记忆；7 天后连文件一起删除。
 func TestDR05MetricScreenshot(t *testing.T) {
 	ctx := context.Background()
+	seedMetricScreenshotRoute(t)
 	a := drAccount(t, "wechat_mp", "截图识别验收号")
 	now := env.srv.now()
 	p1, p2 := now.AddDate(0, 0, -2), now.AddDate(0, 0, -5)

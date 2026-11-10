@@ -292,6 +292,14 @@ func TestHC06_NoPublishOrMassSendAPIs(t *testing.T) {
 
 func TestHC07_OnlyHumanMarksPublished(t *testing.T) {
 	f := env.accounts(t)
+	// 乱序隔离（A22）：共享 wechat 账号的"每日 3 次草稿"计数会被其它用例的推送累加，
+	// 乱序下本用例会先撞 push_limit_reached 而验不到状态机。清空本账号当日的成功推送
+	// 记录（只重置配额前提，不改变本用例任何断言）。
+	if _, err := env.srv.db.Exec(context.Background(),
+		`DELETE FROM push_record WHERE account_id=$1 AND status='ok' AND created_at >= $2`,
+		f.wechat.ID, env.srv.today()); err != nil {
+		t.Fatal(err)
+	}
 	wk := env.readyWork(t, f.wechat, "发布状态只能由人回填")
 	if ev := lastEvent(t, env.push(t, wk, nil)); ev.Name != "done" {
 		t.Fatalf("push: %s %s", ev.Name, ev.Data)
@@ -364,6 +372,23 @@ func TestHC10_DailyPushLimitNeedsConfirmation(t *testing.T) {
 	env.expectErr(t, "PATCH", "/api/v1/accounts/"+id, map[string]any{"daily_push_limit": 0}, "validation_failed")
 	env.mustJSON(t, "PATCH", "/api/v1/accounts/"+id, map[string]any{"daily_push_limit": 1}, nil)
 	defer env.mustJSON(t, "PATCH", "/api/v1/accounts/"+id, map[string]any{"daily_push_limit": 3}, nil)
+	// 乱序隔离（A22）：本用例依赖"今天已推送过 1 次"这个前提，原实现靠其它用例先跑；
+	// 改为显式播种一条占位作品的已成功推送记录（断言与配额规则均不变）。
+	var seedWork uuid.UUID
+	if err := env.srv.db.QueryRow(context.Background(),
+		`INSERT INTO work(account_id, content_format, title) VALUES($1,'long_article','HC10 配额占位') RETURNING id`,
+		f.wechat.ID).Scan(&seedWork); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.srv.db.Exec(context.Background(),
+		`INSERT INTO push_record(work_id, account_id, action, status) VALUES($1,$2,'add','ok')`,
+		seedWork, f.wechat.ID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM push_record WHERE work_id=$1`, seedWork)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM work WHERE id=$1`, seedWork)
+	})
 	// 前面的测试已经推送过，今天的次数已达上限 1。
 	wk := env.readyWork(t, f.wechat, "频繁推送需要确认")
 	ae := env.expectErr(t, "POST", "/api/v1/works/"+wk.ID.String()+"/wechat/push",

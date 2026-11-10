@@ -15,7 +15,21 @@ import (
 
 func TestCL10WechatWriteSucceededLocalPersistenceFailedRemainsReserved(t *testing.T) {
 	ctx := context.Background()
-	a := env.accounts(t).wechat
+	// 乱序隔离（A22）：共享 wechat 夹具账号当日可能已被其它用例的 push 占满每日上限
+	//（push_limit_reached 先于本用例的边界注入触发）——用独立账号并放宽上限。
+	_ = env.accounts(t)
+	var a Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{
+		"platform": "wechat_mp", "name": "CL10 发布边界专用号", "content_format": "long_article",
+	}, &a)
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM platform_account WHERE id=$1`, a.ID)
+	})
+	env.mustJSON(t, "PATCH", "/api/v1/accounts/"+a.ID.String(), map[string]any{"daily_push_limit": 20}, nil)
+	var credRes map[string]any
+	env.mustJSON(t, "PUT", "/api/v1/accounts/"+a.ID.String()+"/wechat-credential", map[string]string{
+		"app_id": "wx1234567890", "app_secret": "s3cret-value-for-test",
+	}, &credRes)
 	wk := env.readyWork(t, a, "先把发布结果不明的边界验证清楚")
 
 	constraint := "cl10_fail_push_" + strings.ReplaceAll(wk.ID.String(), "-", "")

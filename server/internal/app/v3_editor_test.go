@@ -494,6 +494,11 @@ func TestBreakdownOnlyTopWorksAndReviewInsightIgnore(t *testing.T) {
 	if mem.Source != "breakdown" || mem.Status != "active" {
 		t.Fatalf("remembered breakdown rule should be active with source breakdown: %+v", mem)
 	}
+	// 乱序隔离（A22）：这条 active 记忆会进入共享账号后续的起草提示词并累加 use_count，
+	// 污染其它用例的提示词断言与业务表快照——用例结束删除。
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM account_memory WHERE id=$1`, mem.ID)
+	})
 
 	var rep ReviewReport
 	env.mustJSON(t, "POST", "/api/v1/accounts/"+f.wechat.ID.String()+"/reviews", map[string]any{"work_ids": []string{best.ID.String()}}, &rep)

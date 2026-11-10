@@ -20,9 +20,20 @@ func TestA102A103DataPreferences(t *testing.T) {
 	if err := env.srv.db.QueryRow(ctx, `SELECT workspace_id FROM platform_account WHERE id=$1`, f.wechat.ID).Scan(&ws); err != nil {
 		t.Fatal(err)
 	}
+	// 乱序隔离（A22）：归因统计读取共享 wechat 账号的全部已发布作品——其它用例
+	// 在同账号发布的作品会污染样本分母与均值。改用本用例专有的独立账号。
+	var isoAcc Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{
+		"platform": "wechat_mp", "name": "数据偏好隔离验收号", "content_format": "long_article",
+	}, &isoAcc)
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(ctx, `DELETE FROM account_data_preference WHERE account_id=$1`, isoAcc.ID)
+		_, _ = env.srv.db.Exec(ctx, `DELETE FROM work WHERE account_id=$1`, isoAcc.ID)
+		_, _ = env.srv.db.Exec(ctx, `DELETE FROM platform_account WHERE id=$1`, isoAcc.ID)
+	})
 
 	// 12 篇有数据的作品：含数字标题阅读 2000，不含数字阅读 800。
-		for i := 0; i < 12; i++ {
+	for i := 0; i < 12; i++ {
 		title := fmt.Sprintf("运营实战的%d个习惯", i+3)
 		reads := 2000
 		if i >= 6 {
@@ -31,7 +42,7 @@ func TestA102A103DataPreferences(t *testing.T) {
 		}
 		var wid uuid.UUID
 		if err := env.srv.db.QueryRow(ctx, `INSERT INTO work (account_id, title, content_format, status, published_at) VALUES ($1,$2,'long_article','published',now()) RETURNING id`,
-			f.wechat.ID, title).Scan(&wid); err != nil {
+			isoAcc.ID, title).Scan(&wid); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := env.srv.db.Exec(ctx, `INSERT INTO metric_snapshot (work_id, captured_at, reads, likes) VALUES ($1, now(), $2, 10)`, wid, reads); err != nil {
@@ -39,26 +50,24 @@ func TestA102A103DataPreferences(t *testing.T) {
 		}
 	}
 
-	// 共享 fixture 清理：本测试写入的数据不得影响其他用例的上下文断言。
+	// 工作区级清理：feedback / call 仍写共享工作区（不归属账号），需按 ws 清；
+	// 账号级数据已随 isoAcc 的 Cleanup 删除，不再触碰共享账号。
 	t.Cleanup(func() {
-		env.srv.db.Exec(context.Background(), `DELETE FROM account_data_preference WHERE account_id=$1`, f.wechat.ID)
-		env.srv.db.Exec(context.Background(), `DELETE FROM account_memory WHERE account_id=$1 AND (text LIKE '「%」类输出常因%' OR source IN ('edit_diff','rejection'))`, f.wechat.ID)
 		env.srv.db.Exec(context.Background(), `DELETE FROM ai_feedback WHERE workspace_id=$1 AND note IN ('标题太夸张了','删掉了开头设问')`, ws)
 		env.srv.db.Exec(context.Background(), `DELETE FROM ai_call WHERE workspace_id=$1 AND task_type='topic_suggest' AND provider='mock'`, ws)
-		env.srv.db.Exec(context.Background(), `DELETE FROM work WHERE account_id=$1 AND title LIKE '运营实战%'`, f.wechat.ID)
 	})
 
 	var res struct {
 		Enough bool `json:"enough"`
 	}
-	env.mustJSON(t, "POST", "/api/v1/accounts/"+f.wechat.ID.String()+"/reviews/attribution", nil, &res)
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+isoAcc.ID.String()+"/reviews/attribution", nil, &res)
 	if !res.Enough {
 		t.Fatal("attribution should have enough samples")
 	}
 	var feature, conclusion, basis string
 	var sample int
 	if e := env.srv.db.QueryRow(ctx, `SELECT feature, conclusion, basis, sample_size FROM account_data_preference WHERE account_id=$1 AND feature='title_digit'`,
-		f.wechat.ID).Scan(&feature, &conclusion, &basis, &sample); e != nil {
+		isoAcc.ID).Scan(&feature, &conclusion, &basis, &sample); e != nil {
 		t.Fatalf("title_digit preference missing: %v", e)
 	}
 	if sample != 12 || !strings.Contains(conclusion, "含数字") || !strings.Contains(basis, "不含数字") {
@@ -67,7 +76,7 @@ func TestA102A103DataPreferences(t *testing.T) {
 
 	// DEV-A103：title 任务注入偏好，refs 可见；未列任务不注入。
 	jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: ws})
-	a, err := env.srv.account(jctx, f.wechat.ID)
+	a, err := env.srv.account(jctx, isoAcc.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +105,7 @@ func TestA102A103DataPreferences(t *testing.T) {
 	insertFeedback := func(outcome string, ratio float64, tags []string, note string) {
 		var call uuid.UUID
 		if e := env.srv.db.QueryRow(ctx, `INSERT INTO ai_call (workspace_id, account_id, task_type, provider, model, status) VALUES ($1,$2,'topic_suggest','mock','m','ok') RETURNING id`,
-			ws, f.wechat.ID).Scan(&call); e != nil {
+			ws, isoAcc.ID).Scan(&call); e != nil {
 			t.Fatal(e)
 		}
 		if _, e := env.srv.db.Exec(ctx, `INSERT INTO ai_feedback (ai_call_id, workspace_id, task_type, outcome, edit_ratio, reason_tags, note) VALUES ($1,$2,'topic_suggest',$3,$4,$5,$6)`,
@@ -117,7 +126,7 @@ func TestA102A103DataPreferences(t *testing.T) {
 		t.Fatalf("aggregation should add candidates, added %d", added)
 	}
 	var list []Memory
-	env.mustJSON(t, "GET", "/api/v1/accounts/"+f.wechat.ID.String()+"/memories", nil, &list)
+	env.mustJSON(t, "GET", "/api/v1/accounts/"+isoAcc.ID.String()+"/memories", nil, &list)
 	foundTag := false
 	for _, m := range list {
 		if m.Status == "suggested" && strings.Contains(m.Text, "太夸张") && strings.Contains(m.Text, "选题建议") {

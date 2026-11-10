@@ -431,11 +431,19 @@ func TestW15bDispatchExecutesChildRun(t *testing.T) {
 	if msgCount == 0 {
 		t.Fatal("子 run 应产生 assistant 消息")
 	}
-	// 组状态应 completed（全部子终态）。
+	// 组状态应 completed（全部子终态）。子 run 终态与组汇总不在同一事务，且汇总由
+	// 异步回执触发——乱序/负载下会有毫秒级滞后，轮询到截止时间再判定（断言不变）。
 	var groupState string
-	if err := env.srv.db.QueryRow(context.Background(),
-		`SELECT state FROM agent_delegation_group WHERE id=$1`, group.ID).Scan(&groupState); err != nil {
-		t.Fatal(err)
+	groupDeadline := time.Now().Add(10 * time.Second)
+	for {
+		if err := env.srv.db.QueryRow(context.Background(),
+			`SELECT state FROM agent_delegation_group WHERE id=$1`, group.ID).Scan(&groupState); err != nil {
+			t.Fatal(err)
+		}
+		if groupState == "completed" || time.Now().After(groupDeadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 	if groupState != "completed" {
 		t.Fatalf("全部子终态后组应 completed：%s", groupState)

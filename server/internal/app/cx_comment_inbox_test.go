@@ -26,6 +26,9 @@ type commentInboxItem struct {
 
 func ensureCommentReplyRoute(t *testing.T) {
 	t.Helper()
+	// 乱序隔离（A22）：建供应商属敏感操作，会话 reauth 窗口可能已被其它用例用过或清空，
+	// 本用例显式重新确认一次（不依赖执行顺序）。
+	env.reauth(t)
 	var provider struct {
 		ID string `json:"id"`
 	}
@@ -33,6 +36,10 @@ func ensureCommentReplyRoute(t *testing.T) {
 		"name": "评论拟稿模拟模型", "base_url": env.mock.URL + "/v1", "api_key": "opt52-local-mock-key", "models": []string{"mock-writer"},
 	}, &provider)
 	env.mustJSON(t, "PUT", "/api/v1/model-routes", []map[string]any{{"task_type": "cx_comment_reply", "provider_id": provider.ID, "model": "mock-writer"}}, nil)
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_route WHERE task_type='cx_comment_reply' AND provider_id=$1`, provider.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_provider WHERE id=$1`, provider.ID)
+	})
 }
 
 func TestCXCommentInboxSinglePostStateMachinesAndDeletion(t *testing.T) {
