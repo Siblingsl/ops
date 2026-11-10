@@ -58,6 +58,10 @@ type McpValidateResult =
   | { ok: false; code: string; message: string }
   | { ok: true; catalog: { tools: McpToolDescriptorView[]; server_info: { name: string; version: string; protocol_version: string }; catalog_revision: string } };
 
+// DEV-AI27-A3 第二片：OAuth 状态摘要——永不包含令牌明文（state/expires_at/has_refresh）。
+type McpOAuthStatus = { state: 'unauthorized' | 'authorizing' | 'authorized' | 'needs_reauth'; expires_at: string | null; has_refresh: boolean };
+type McpOAuthStartResult = { ok: boolean; state: string; reason: string };
+
 const OPEN_SETTINGS_CHANNEL = 'desktop-ui:open-settings';
 const LOCAL_SETTINGS_STATE_CHANNEL = 'desktop-ui:local-settings-state';
 const openSettingsListeners = new Set<SettingsOpenListener>();
@@ -191,6 +195,24 @@ function parseMcpValidateResult(raw: unknown): McpValidateResult | null {
   return { ok: true, catalog: { tools, server_info: { name: server.name, version: server.version, protocol_version: server.protocol_version }, catalog_revision: catalog.catalog_revision } };
 }
 
+function parseMcpOAuthStatus(raw: unknown): McpOAuthStatus | null {
+  const value = asRecord(raw);
+  if (!value) return null;
+  // 白名单字段：任何多余键（如 access_token/refresh_token）都视为非法——令牌零泄漏断言。
+  if (Object.keys(value).sort().join(',') !== 'expires_at,has_refresh,state') return null;
+  if (!['unauthorized', 'authorizing', 'authorized', 'needs_reauth'].includes(String(value.state))) return null;
+  if (value.expires_at !== null && (typeof value.expires_at !== 'string' || value.expires_at.length > 40 || Number.isNaN(Date.parse(value.expires_at)))) return null;
+  if (typeof value.has_refresh !== 'boolean') return null;
+  return { state: value.state as McpOAuthStatus['state'], expires_at: value.expires_at as string | null, has_refresh: value.has_refresh };
+}
+
+function parseMcpOAuthStartResult(raw: unknown): McpOAuthStartResult | null {
+  const value = asRecord(raw);
+  if (!value || Object.keys(value).sort().join(',') !== 'ok,reason,state') return null;
+  if (typeof value.ok !== 'boolean' || typeof value.state !== 'string' || typeof value.reason !== 'string' || value.reason.length > 200) return null;
+  return { ok: value.ok, state: value.state, reason: value.reason };
+}
+
 function parsePlatformIntentResult(raw: unknown): PlatformIntentResult | null {  const value = asRecord(raw);
   if (!value || !isUuid(value.requestId) || !isUuid(value.accountId)) return null;
   if (!['platform-account-sync', 'platform-metrics-refresh', 'platform-sync-resume'].includes(String(value.kind))) return null;
@@ -312,6 +334,20 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
   async validateMcpConnection(input: McpValidateInput): Promise<McpValidateResult> {
     const result = parseMcpValidateResult(await ipcRenderer.invoke('mcp:validate', input));
     return result ?? { ok: false, code: 'mcp_validate_invalid', message: 'Electron 返回的验证结果无效。' };
+  },
+  // DEV-AI27-A3 第二片：OAuth 授权生命周期——start 走系统浏览器（阻塞至完成/超时），
+  // status/revoke 只返回状态摘要，令牌明文不出 IPC。
+  async startMcpOAuth(input: { connection_id: string; server_url: string; client_id?: string; scopes?: string[] }): Promise<McpOAuthStartResult> {
+    const result = parseMcpOAuthStartResult(await ipcRenderer.invoke('mcp:oauth-start', input));
+    return result ?? { ok: false, state: 'needs_reauth', reason: 'Electron 返回的授权结果无效。' };
+  },
+  async getMcpOAuthStatus(input: { connection_id: string; server_url: string; client_id?: string; scopes?: string[] }): Promise<McpOAuthStatus> {
+    const result = parseMcpOAuthStatus(await ipcRenderer.invoke('mcp:oauth-status', input));
+    return result ?? { state: 'unauthorized', expires_at: null, has_refresh: false };
+  },
+  async revokeMcpOAuth(input: { connection_id: string; server_url: string; client_id?: string; scopes?: string[] }): Promise<{ ok: boolean }> {
+    const value = asRecord(await ipcRenderer.invoke('mcp:oauth-revoke', input));
+    return value && value.ok === true ? { ok: true } : { ok: false };
   },
   // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道；渲染器无 view 对象）。
   async invokeInBrowse(channel: string, payload?: unknown): Promise<unknown> {

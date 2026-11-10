@@ -61,6 +61,10 @@ declare global {
       listBrowserTabs(): Promise<DesktopBrowserTabListResult>
       // DEV-AI27-A3 第一片：MCP 验证（本机真实握手，返回目录；失败原样透出）。
       validateMcpConnection(input: DesktopMcpValidateInput): Promise<DesktopMcpValidateResult>
+      // DEV-AI27-A3 第二片：OAuth 授权生命周期（start 走系统浏览器；返回值永不含令牌明文）。
+      startMcpOAuth(input: DesktopMcpOAuthInput): Promise<DesktopMcpOAuthStartResult>
+      getMcpOAuthStatus(input: DesktopMcpOAuthInput): Promise<DesktopMcpOAuthStatus>
+      revokeMcpOAuth(input: DesktopMcpOAuthInput): Promise<{ ok: boolean }>
       // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道）。
       invokeInBrowse(channel: string, payload?: unknown): Promise<unknown>
       onInBrowseSnapshot(listener: (snapshot: { bounds: { x: number; y: number; width: number; height: number } | null; url: string; title: string; loading: boolean; navigationGeneration: number }) => void): () => void
@@ -137,3 +141,23 @@ export type DesktopMcpCatalog = {
 export type DesktopMcpValidateResult =
   | { ok: false; code: string; message: string }
   | { ok: true; catalog: DesktopMcpCatalog }
+
+// DEV-AI27-A3 第二片：OAuth 输入与状态摘要。本片只支持 public client（PKCE，无 client_secret）。
+export type DesktopMcpOAuthInput = {
+  connection_id: string
+  server_url: string
+  client_id?: string
+  scopes?: string[]
+}
+
+export type DesktopMcpOAuthStatus = {
+  state: 'unauthorized' | 'authorizing' | 'authorized' | 'needs_reauth'
+  expires_at: string | null
+  has_refresh: boolean
+}
+
+export type DesktopMcpOAuthStartResult = {
+  ok: boolean
+  state: string
+  reason: string
+}

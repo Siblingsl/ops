@@ -37,6 +37,7 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   assert.deepEqual(Object.keys(exposed), ['opsDesktopUI']);
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).sort(), [
     'captureLongImage',
+    'getMcpOAuthStatus',
     'invokeInBrowse',
     'listBrowserTabs',
     'listComputerWindows',
@@ -48,14 +49,16 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'onRealtimeEvent',
     'onSidepanelDraft',
     'onSidepanelStop',
+    'revokeMcpOAuth',
+    'startMcpOAuth',
     'validateMcpConnection'
   ]);
   // DEV-AI27-08（W08）：内置浏览意图白名单桥随 captureLongImage 一并暴露。
   // DEV-AI27-17（W17b，A12）：本机选窗是独立固定意图，不并入 invokeInBrowse 白名单。
   // DEV-AI27-A30：本机标签枚举同口径独立暴露。
-  // DEV-AI27-A3 第一片：MCP 验证独立固定意图（握手在本机，秘密不进 IPC）。
+  // DEV-AI27-A3：MCP 验证与 OAuth 生命周期为独立固定意图（握手/授权在本机，秘密不进 IPC）。
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')),
-    ['captureLongImage', 'listComputerWindows', 'listBrowserTabs', 'validateMcpConnection', 'invokeInBrowse']);
+    ['captureLongImage', 'listComputerWindows', 'listBrowserTabs', 'validateMcpConnection', 'startMcpOAuth', 'getMcpOAuthStatus', 'revokeMcpOAuth', 'invokeInBrowse']);
   const buildId = '00000008-1111-4111-8111-111111111111';
   assert.deepEqual(await exposed.opsDesktopUI.captureLongImage(buildId), {
     ok: false, code: 'render_not_ready', message: '页面未就绪。'
@@ -224,6 +227,29 @@ test('rejects an mcp validate result that does not match the fixed schema', asyn
   assert.deepEqual(await exposed.opsDesktopUI.validateMcpConnection({
     connection_id: '00000001-1111-4111-8111-111111111111', transport: 'stdio', command: 'node', args: [],
   }), { ok: false, code: 'mcp_validate_invalid', message: 'Electron 返回的验证结果无效。' });
+});
+
+// A3 第二片：OAuth 状态摘要白名单 schema——任何多余键（access_token/refresh_token 等）
+// 一律整批拒绝，令牌明文不可能经 status IPC 泄漏到渲染器。
+test('rejects an oauth status that carries any field beyond the state summary', async () => {
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke() {
+      return Promise.resolve({
+        state: 'authorized',
+        expires_at: '2026-11-10T12:00:00.000Z',
+        has_refresh: true,
+        access_token: 'SHOULD-NOT-LEAK',
+      });
+    },
+  };
+  loadPreload({ contextBridge, ipcRenderer });
+  assert.deepEqual(await exposed.opsDesktopUI.getMcpOAuthStatus({
+    connection_id: '00000001-1111-4111-8111-111111111111', server_url: 'https://mcp.example.com/v1',
+  }), { state: 'unauthorized', expires_at: null, has_refresh: false });
 });
 
 function loadPreload(electron) {

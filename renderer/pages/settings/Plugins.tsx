@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
+import { KeyRound, Loader2 } from 'lucide-react'
 import { Button, Notice } from '@/components/ui'
 import { api } from '@/lib/api'
+import type { DesktopMcpOAuthInput, DesktopMcpOAuthStatus } from '@/lib/desktop-presentation'
 
 // DEV-AI27-14 第二批（W14b）：插件/MCP 管理页（27 §11.2.1）。
 // 连接列表/添加（stdio/http）/状态机操作（enable/disable/revoke）/目录/最近错误。
 // 状态：draft/ready_disabled/enabled/disabled/revoked——安装与启用分离（红线）。
+// DEV-AI27-A3 第二片：http 连接的 OAuth 三态（无授权/已授权/需重新授权）——授权走
+// 系统浏览器，状态来自主进程 statusView；client_id/scopes 非秘密，本机 localStorage
+// 记忆；client_secret 不支持 UI 录入（public client PKCE 是 MCP 推荐路径，秘密录入
+// 需专门安全设计）。
 
 interface PluginConnection {
   id: string
@@ -31,6 +37,149 @@ const stateLabels: Record<string, string> = {
   disabled: '已停用',
   revoked: '已撤销',
   error: '连接异常',
+}
+
+const oauthStateLabels: Record<string, string> = {
+  unauthorized: '未授权',
+  authorizing: '正在等待浏览器授权…',
+  authorized: '已授权',
+  needs_reauth: '需要重新授权',
+}
+
+/** OAuth 配置本机记忆（client_id/scopes 非秘密；client_secret 不落任何本机存储）。 */
+function readStoredOAuth(connectionId: string): { client_id: string; scopes: string } {
+  try {
+    const raw = localStorage.getItem(`ops-mcp-oauth-${connectionId}`)
+    if (raw) {
+      const parsed = JSON.parse(raw) as { client_id?: unknown; scopes?: unknown }
+      return {
+        client_id: typeof parsed.client_id === 'string' ? parsed.client_id : '',
+        scopes: typeof parsed.scopes === 'string' ? parsed.scopes : '',
+      }
+    }
+  } catch { /* 损坏即视作未配置 */ }
+  return { client_id: '', scopes: '' }
+}
+
+function writeStoredOAuth(connectionId: string, client_id: string, scopes: string): void {
+  try { localStorage.setItem(`ops-mcp-oauth-${connectionId}`, JSON.stringify({ client_id, scopes })) } catch { /* 存不了就不记 */ }
+}
+
+function oauthInput(conn: PluginConnection, client_id: string, scopes: string): DesktopMcpOAuthInput {
+  return {
+    connection_id: conn.id,
+    server_url: conn.url ?? '',
+    ...(client_id ? { client_id } : {}),
+    ...(scopes.trim() ? { scopes: scopes.trim().split(/\s+/) } : {}),
+  }
+}
+
+/** http 连接的 OAuth 三态区块（27 §11.2；状态只来自主进程 statusView，不推断）。 */
+function OAuthSection({ conn, onRevoked }: { conn: PluginConnection; onRevoked: () => void }) {
+  const [status, setStatus] = useState<DesktopMcpOAuthStatus | null>(null)
+  const [stored, setStored] = useState(() => readStoredOAuth(conn.id))
+  const [showForm, setShowForm] = useState(false)
+  const [clientId, setClientId] = useState('')
+  const [scopes, setScopes] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const load = useCallback(async () => {
+    const bridge = window.opsDesktopUI
+    if (!bridge?.getMcpOAuthStatus || !conn.url) return
+    const s = readStoredOAuth(conn.id)
+    setStored(s)
+    setStatus(await bridge.getMcpOAuthStatus(oauthInput(conn, s.client_id, s.scopes)))
+  }, [conn.id, conn.url])
+
+  useEffect(() => {
+    if (conn.transport !== 'http' || !conn.url) return
+    void load()
+  }, [conn.transport, conn.url, load])
+
+  if (conn.transport !== 'http' || !conn.url) return null
+
+  const start = async () => {
+    if (!clientId.trim()) {
+      setMessage('请填写 client_id（该服务器不支持动态注册时需要在服务方后台创建客户端）。')
+      return
+    }
+    setBusy(true)
+    setMessage('')
+    writeStoredOAuth(conn.id, clientId.trim(), scopes.trim())
+    const bridge = window.opsDesktopUI
+    if (!bridge?.startMcpOAuth) {
+      setMessage('需要 OPS Desktop 客户端：授权只在桌面端进行。')
+      setBusy(false)
+      return
+    }
+    const result = await bridge.startMcpOAuth(oauthInput(conn, clientId.trim(), scopes.trim()))
+    setBusy(false)
+    if (result.ok) {
+      setShowForm(false)
+      setMessage('')
+    } else {
+      setMessage(result.reason ? `授权未完成：${result.reason}` : '授权未完成。')
+    }
+    await load()
+  }
+
+  const revoke = async () => {
+    setBusy(true)
+    const bridge = window.opsDesktopUI
+    if (!bridge?.revokeMcpOAuth) {
+      setBusy(false)
+      return
+    }
+    await bridge.revokeMcpOAuth(oauthInput(conn, stored.client_id, stored.scopes))
+    setBusy(false)
+    setMessage('')
+    await load()
+    onRevoked()
+  }
+
+  return <div className="mt-2 rounded-lg border border-mist-100 bg-mist-50/60 p-2.5" data-testid={`plugin-oauth-${conn.id}`}>
+    <div className="flex items-center gap-2 text-xs">
+      <KeyRound className="size-3.5 text-mist-500" />
+      <span className="font-medium text-mist-700">OAuth 授权</span>
+      {status
+        ? <span className={status.state === 'authorized' ? 'text-emerald-700' : status.state === 'needs_reauth' ? 'text-gamboge-700' : 'text-mist-500'}>
+          {oauthStateLabels[status.state] ?? status.state}
+        </span>
+        : <span className="text-mist-500">读取中…</span>}
+      {busy && <Loader2 className="size-3.5 animate-spin text-mist-400" />}
+      <span className="flex-1" />
+      {status?.state === 'authorized' && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void revoke()}>撤销授权</Button>}
+      {(status?.state === 'unauthorized' || status?.state === 'needs_reauth') && !showForm &&
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => { setClientId(stored.client_id); setScopes(stored.scopes); setShowForm(true) }}>
+          {status.state === 'needs_reauth' ? '重新授权' : '开始授权'}
+        </Button>}
+      {status?.state === 'authorized' && status.expires_at &&
+        <span className="text-mist-400">令牌到期 {new Date(status.expires_at).toLocaleString()}</span>}
+    </div>
+    {status?.state === 'needs_reauth' && !showForm &&
+      <p className="mt-1 text-xs leading-relaxed text-gamboge-700">令牌缺失或已失效；重新授权后连接恢复，验证失败原因见上方错误行。</p>}
+    {showForm && <div className="mt-2 space-y-2" data-testid="plugin-oauth-form">
+      <label className="block">
+        <span className="text-xs text-mist-600">client_id（必填；在 MCP 服务方后台创建，非秘密）</span>
+        <input className="mt-1 w-full rounded-md border border-mist-200 px-3 py-2 text-[13px] font-mono" value={clientId}
+          onChange={(e) => setClientId(e.target.value)} placeholder="例如：ops-desktop" />
+      </label>
+      <label className="block">
+        <span className="text-xs text-mist-600">scopes（可选，空格分隔）</span>
+        <input className="mt-1 w-full rounded-md border border-mist-200 px-3 py-2 text-[13px] font-mono" value={scopes}
+          onChange={(e) => setScopes(e.target.value)} placeholder="例如：read:docs" />
+      </label>
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="primary" loading={busy} onClick={() => void start()}>在系统浏览器中授权</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => setShowForm(false)}>取消</Button>
+      </div>
+      <p className="text-xs leading-relaxed text-mist-400">
+        授权在系统浏览器完成，OPS 通过本机回环端口接收结果；令牌经系统加密保存在本机，不会上传。需要 client_secret 的服务器暂不支持（public client 路径）。
+      </p>
+    </div>}
+    {message && <p className="mt-1.5 text-xs leading-relaxed text-gamboge-700" role="alert">{message}</p>}
+  </div>
 }
 
 export default function Plugins() {
@@ -134,6 +283,13 @@ export default function Plugins() {
   const revoke = async (id: string) => {
     setBusy(true)
     try {
+      // A3 第二片：撤销连接前先清本机 OAuth 令牌（连接删除即令牌零残留）。
+      const bridge = window.opsDesktopUI
+      const conn = connections.find((item) => item.id === id)
+      if (bridge?.revokeMcpOAuth && conn?.transport === 'http' && conn.url) {
+        const stored = readStoredOAuth(id)
+        await bridge.revokeMcpOAuth(oauthInput(conn, stored.client_id, stored.scopes))
+      }
       await api('DELETE', `/agent/plugin-connections/${id}`)
       await reload()
     } catch (err) {
@@ -207,6 +363,7 @@ export default function Plugins() {
           服务器：{conn.server_name} v{conn.server_version} · 协议 {conn.protocol_version}
         </p>}
         {conn.last_error && <p className="mt-1 text-xs text-danger" role="alert">{conn.last_error}</p>}
+        {conn.state !== 'revoked' && <OAuthSection conn={conn} onRevoked={() => void reload()} />}
         <div className="mt-2 flex flex-wrap gap-2">
           {(conn.state === 'draft' || conn.state === 'error') &&
             <Button size="sm" variant="secondary" disabled={busy} onClick={() => void validate(conn)}>验证连接</Button>}
