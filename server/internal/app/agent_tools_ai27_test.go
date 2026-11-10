@@ -14,10 +14,11 @@ func TestW06AIT27ToolCatalogRegistration(t *testing.T) {
 		toolByName[tool.Name] = true
 	}
 
-	// 浏览器工具 7 个（27 §8.1）
+	// 浏览器工具 8 个（27 §8.1；A30 增补请求选标签）
 	for _, name := range []string{
 		"browser_get_context", "browser_observe", "browser_navigate",
 		"browser_click", "browser_type", "browser_extract", "browser_screenshot",
+		"browser_request_tab",
 	} {
 		if !toolByName[name] {
 			t.Errorf("浏览器工具 %s 不在目录中", name)
@@ -47,6 +48,7 @@ func TestW06AIT27ToolDomainClassification(t *testing.T) {
 		"browser_get_context":  "browser",
 		"browser_observe":      "browser",
 		"browser_navigate":     "browser",
+		"browser_request_tab":  "browser",
 		"delegate_task":        "subagent",
 		"stop_delegation":      "subagent",
 		"computer_observe":     "computer",
@@ -73,6 +75,7 @@ func TestW06AIT27ToolKindClassification(t *testing.T) {
 		"browser_type":         toolR,
 		"browser_extract":      toolR,
 		"browser_screenshot":   toolR,
+		"browser_request_tab":  toolR,
 		"delegate_task":        toolG,
 		"stop_delegation":      toolR,
 		"computer_observe":     toolR,
@@ -141,6 +144,28 @@ func TestA12ComputerRequestTargetOnlyInExecute(t *testing.T) {
 		t.Fatal("执行模式应可用请求选窗")
 	}
 	// 回归：排除只针对请求选窗，讨论模式的浏览器研究不受影响。
+	if !agentRunToolAllowed(&agentRunState{Mode: "discuss", ExecutionOrigin: "interactive"}, agentTool("browser_observe"), id) {
+		t.Fatal("讨论模式浏览器研究不应被误伤")
+	}
+}
+
+// A30：请求选标签是打断式意图——用户要切到浏览器挑标签页，讨论/计划不该触发。
+func TestA30BrowserRequestTabOnlyInExecute(t *testing.T) {
+	tool := agentTool("browser_request_tab")
+	if tool == nil {
+		t.Fatal("browser_request_tab 不在目录中")
+	}
+	id := &identity{Role: string(roleEditor)}
+	for _, mode := range []string{"discuss", "plan"} {
+		st := &agentRunState{Mode: mode, ExecutionOrigin: "interactive"}
+		if agentRunToolAllowed(st, tool, id) {
+			t.Fatalf("%s 模式不应触发请求选标签", mode)
+		}
+	}
+	if !agentRunToolAllowed(&agentRunState{Mode: "execute", ExecutionOrigin: "interactive"}, tool, id) {
+		t.Fatal("执行模式应可用请求选标签")
+	}
+	// 回归：排除只针对请求选标签，讨论模式的浏览器研究不受影响。
 	if !agentRunToolAllowed(&agentRunState{Mode: "discuss", ExecutionOrigin: "interactive"}, agentTool("browser_observe"), id) {
 		t.Fatal("讨论模式浏览器研究不应被误伤")
 	}

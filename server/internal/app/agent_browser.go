@@ -520,6 +520,50 @@ func (s *Server) deriveBrowserGrantForRun(ctx context.Context, tx pgx.Tx,
 }
 
 
+// POST /tools/browser/tab-requests：模型请求用户在浏览器中选择要操作的标签
+// （A30：浏览器侧镜像 A12 决策 A，27 §13 发送时序）。选标签 UI 完全在渲染端运行，
+// 服务端只收到"待选择"意图；30 秒租约由用户选定后经 browser-grants 即时创建，
+// 不做 run 级预授权——那会在模型真正操作前就过期。
+func (s *Server) requestBrowserTab(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.browserRoleGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "browser_workspace"); err != nil {
+		return err
+	}
+	principal := agentPrincipalOf(r.Context())
+	if principal == nil || principal.ConversationID == uuid.Nil {
+		return apiErr(422, "validation_failed", "该接口只能由会话内的工具调用发起")
+	}
+	var active browserGrantView
+	err := s.db.QueryRow(r.Context(), `
+		SELECT id::text, binding_id::text, COALESCE(run_id::text,''), tab_handle, origins, actions,
+		       COALESCE(policy_version,''), generation, state,
+		       to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		FROM agent_browser_grant
+		WHERE conversation_id=$1 AND user_id=$2 AND workspace_id=$3
+		  AND state='active' AND expires_at > now()
+		ORDER BY created_at DESC LIMIT 1`,
+		principal.ConversationID, id.UserID, id.WorkspaceID).
+		Scan(&active.ID, &active.BindingID, &active.RunID, &active.TabHandle, &active.Origins,
+			&active.Actions, &active.PolicyVersion, &active.Generation, &active.State, &active.ExpiresAt)
+	if err == nil {
+		return ok(w, map[string]any{
+			"state": "active", "grant": active,
+			"message": "已有活动标签租约；直接继续即可，不要重复请求选标签",
+		})
+	}
+	if err != pgx.ErrNoRows {
+		return err
+	}
+	return ok(w, map[string]any{
+		"state": "awaiting_selection",
+		"message": "已请用户在浏览器选择要操作的标签页；选定后租约立即生效，" +
+			"请在用户确认后重新观察页面，不要凭猜测操作",
+	})
+}
+
 func browserPairingCode() (string, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
 	if err != nil {

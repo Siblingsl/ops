@@ -248,6 +248,8 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/tools/computer/grants/{id}/handoff",
 		// A12：模型请求用户在本机选窗（选定后即时建 30s 租约）。
 		"POST /api/v1/tools/computer/target-requests",
+		// A30：模型请求用户在浏览器选标签（选定后即时建 30s 租约）。
+		"POST /api/v1/tools/browser/tab-requests",
 		// DEV-AI27-09（W09）浏览器证据与页面批注。
 		"POST /api/v1/agent/browser/evidence",
 		"GET /api/v1/agent/browser/evidence",
@@ -460,10 +462,11 @@ func TestAG04CatalogShape(t *testing.T) {
 		}
 	}
 	// 附录 A 共287条，加既有元工具及DEV-AW07/AW08/AW09编排元工具11条。
-	// DEV-AI27 系列又加 15 条：browser_* 8、subagent 2、computer 3（含 A12 请求选窗）、
-	// mcp__list_connections 1、memory__propose_candidate 1 —— 287 + 11 + 15 = 313。
-	if len(agentCatalog()) != 313 {
-		t.Fatalf("目录条目数 %d，期望 313（附录 A 287 条 + 元工具 11 条 + DEV-AI27 新增 15 条）", len(agentCatalog()))
+	// DEV-AI27 系列又加 16 条：browser_* 9（含 A30 请求选标签）、subagent 2、computer 3
+	// （含 A12 请求选窗）、mcp__list_connections 1、memory__propose_candidate 1
+	// —— 287 + 11 + 16 = 314。
+	if len(agentCatalog()) != 314 {
+		t.Fatalf("目录条目数 %d，期望 314（附录 A 287 条 + 元工具 11 条 + DEV-AI27 新增 16 条）", len(agentCatalog()))
 	}
 	for _, d := range agentDomains {
 		if counts[d.Name] == 0 {

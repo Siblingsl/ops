@@ -86,6 +86,13 @@ func ai27BrowserTools() []AgentTool {
 			},
 			MinRole: roleEditor,
 		},
+		{
+			// A30：浏览器侧镜像 A12 决策 A——没有租约时请求用户选标签，有租约时报现状。
+			Name: "browser_request_tab", Domain: "browser", Kind: toolR, Method: "POST",
+			Path:        "/tools/browser/tab-requests",
+			Description: "当前没有标签租约时，请用户在浏览器中选择要操作的标签页。选定后租约立即生效；不要替用户猜测标签。",
+			MinRole:     roleEditor,
+		},
 	}
 	return tools
 }

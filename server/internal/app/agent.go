@@ -1886,6 +1886,8 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/tools/computer/grants/{id}/handoff", s.h(s.handoffComputerGrant))
 		// DEV-AI27-17（W17b）：模型请求用户选窗（A12 决策 A：选定后即时建 30s 租约）。
 		r.Post("/tools/computer/target-requests", s.h(s.requestComputerTarget))
+		// DEV-AI27-A30：模型请求用户选标签（浏览器侧镜像 A12 决策 A：选定后即时建 30s 租约）。
+		r.Post("/tools/browser/tab-requests", s.h(s.requestBrowserTab))
 		// DEV-AI27-09（W09）：浏览器证据与页面批注（27 §10.1/§13.2）。
 		r.Post("/agent/browser/evidence", s.h(s.createBrowserEvidence))
 		r.Get("/agent/browser/evidence", s.h(s.listBrowserEvidence))
