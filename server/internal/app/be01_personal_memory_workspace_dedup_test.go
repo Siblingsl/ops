@@ -78,7 +78,7 @@ func TestBE01PersonalMemoryDedupAcrossWorkspaces(t *testing.T) {
 	})
 
 	var createdB personalMemory
-	st, body := env.do("POST", "/api/v1/memories/personal-candidates", map[string]any{"text": be01IgnoredText})
+	st, body := env.do("POST", "/api/v1/memories/personal-candidates", map[string]any{"text": be01MemoryText})
 	if st == http.StatusOK {
 		if err := json.Unmarshal(body, &createdB); err != nil {
 			t.Fatalf("decode: %v (%s)", err, body)
