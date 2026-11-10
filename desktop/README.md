@@ -2,7 +2,8 @@
 
 Windows x64 Electron 客户端。发行版从安装包本地资源加载桌面专用 UI，不加载普通 Web 部署页面；API 与 WebSocket 连接 `https://ops-api.88813888.xyz`。未打包开发版加载本地 Vite 服务并可代理到开发 API。桌面端提供隔离设置窗口、本机模型配置、系统加密存储、独立 WSS 通道、模型能力自检、任务映射草稿与应用、AI 模式切换、设备回收和脱敏诊断导出。未登录时不会建立 WSS 连接或声称 AI 已接通。
 
-- [用户指南](./USER_GUIDE.md)
+- [功能使用手册](./USER_MANUAL.md)
+- [本机 AI 用户指南](./USER_GUIDE.md)
 - [灰度发布与回退操作](./RELEASE_RUNBOOK.md)
 - [桌面 UI 本地打包与 API 迁移步骤](../deploy/desktop-api-migration.md)
 
