@@ -901,6 +901,14 @@ export class DesktopClient {
     this.teardownConnection();
   }
 
+  /** 仅测试/夹具使用（DT-07）：挂起自动重连而不断开连接，模拟「断开后等待手动
+   * 重连」的验证场景。生产路径不调用——自动重连策略（reconnect-policy）是正常
+   * 产品行为；disconnect() 已含同语义抑制。 */
+  suppressReconnectForTest(): void {
+    this.reconnectSuppressed = true;
+    this.clearReconnectTimer();
+  }
+
   private teardownConnection(): void {
     this.connectingAbort?.abort(new Error('桌面通道连接已取消。'));
     this.connectingAbort = null;
@@ -1038,10 +1046,14 @@ export class DesktopClient {
         if (this.socket !== socket) return;
         this.socket = null;
         this.stopWorkerRequests();
-        if (!this.reconnectSuppressed && this.channelState !== 'disconnected') {
+        if (this.channelState !== 'disconnected') {
           this.channelState = 'error';
-          this.channelMessage = '桌面通道已断开，正在尝试自动重连。';
-          this.scheduleReconnect();
+          // DT-07：suppressReconnectForTest（测试挂起自动重连）时如实显示等待手动重连，
+          // 不排自动重连定时器；未抑制时走既有自动重连策略（reconnect-policy）。
+          this.channelMessage = this.reconnectSuppressed
+            ? '桌面通道已断开，等待手动重连。'
+            : '桌面通道已断开，正在尝试自动重连。';
+          if (!this.reconnectSuppressed) this.scheduleReconnect();
         }
       });
     });

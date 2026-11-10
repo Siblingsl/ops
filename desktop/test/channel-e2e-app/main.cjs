@@ -99,6 +99,13 @@ app.whenReady().then(async () => {
     return postMessage(message);
   };
   const initialSocket = client.socket;
+  // DT-07（2026-11-11）：本用例验证「服务器断开后客户端不自动重连、等待手动重连」
+  // 语义（Go 侧断言 generation 不得自动递增，desktop_channel_test.go:322）。客户端
+  // 自带 1/2/4/8s 自动重连策略（reconnect-policy），断开后 1s 即自动重连会让本场景
+  // 失真——夹具在此挂起自动重连，使断开后的状态与手动 connect() 与设计一致。
+  // suppressReconnect 语义与 disconnect() 相同（reconnectSuppressed=true），但不做
+  // teardown：保留 pending 清理与 cancel 观测的真实路径。
+  client.suppressReconnectForTest();
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Test server did not close the initial WSS connection.')), 50_000);
     initialSocket.once('close', () => {

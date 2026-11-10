@@ -1,3 +1,9 @@
+// DT-07（2026-11-11，docs/33 E-15 复核更正）：本文件**不进** pnpm test:e2e 收集是
+// 有意设计（AI_HANDOFF:521）——它由 server/internal/app/desktop_channel_test.go:139
+// 以 `node <本文件绝对路径>` 直接驱动（OPS_DESKTOP_REAL_ELECTRON_E2E=1 门控，
+// 自执行脚本而非 node --test 用例）。后缀 `-e2e.cjs` 与收集规则 `*.e2e.cjs` 的
+// 不匹配正是防止被 node --test 重复执行。改名或扩 glob 都会破坏该调用链。
+// 真实验证承担者：`cd server && OPS_DESKTOP_REAL_ELECTRON_E2E=1 go test ./internal/app -run TestDesktopChannelWithRealElectron`。
 const assert = require('node:assert/strict');
 const { spawn, spawnSync } = require('node:child_process');
 const { once } = require('node:events');
