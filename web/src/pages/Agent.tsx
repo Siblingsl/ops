@@ -30,6 +30,7 @@ import { ContextPickerDialog, SkillPickerDialog, type AgentContextSelection, typ
 import { AgentPlanCard, AgentQuestionCard } from '@/pages/agent/PlansQuestions'
 import { GoalPanel } from '@/pages/agent/GoalPanel'
 import { RoutinePanel } from '@/pages/agent/RoutinePanel'
+import { DelegationPanel } from '@/pages/agent/DelegationPanel'
 import { AttachmentReceipt } from '@/pages/agent/AttachmentReceipt'
 
 const pageSize = 30
@@ -1358,6 +1359,11 @@ export default function Agent() {
             <div ref={bottomRef} className="h-px" />
           </div>
 
+          {/* DEV-A13：协作任务（子任务进度、单项停止、汇总结果）；按会话取组，父 run 已结束也能汇总。 */}
+          {conversation && bootstrapData.features.subagents && <div className="mx-auto max-w-3xl px-3">
+            <DelegationPanel conversationId={conversation.id}
+              onNavigateArtifact={bootstrapData.features.artifacts === true ? () => setArtifactsOpen(true) : undefined} />
+          </div>}
           <div className="shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4">
             <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === activeRun?.id).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />
             {bootstrapData.features.plans && runtimeSummary && <p className="mx-auto mb-3 max-w-3xl px-3 text-xs text-mist-500" data-testid="agent-runtime-config">{runtimeSummary}</p>}

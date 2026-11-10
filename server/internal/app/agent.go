@@ -1902,9 +1902,11 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/delegations/{id}/cancel", s.h(s.cancelDelegation))
 		r.Post("/agent/delegations/{id}/result", s.h(s.resultDelegation))
 		r.Post("/agent/delegation-groups/{id}/cancel", s.h(s.cancelDelegationGroup))
-		// DEV-A13（W06 续接）：组详情与显式"汇总子任务结果"。
+		// DEV-A13（W06 续接）：组详情、显式"汇总子任务结果"、按会话列组、显式提额。
+		r.Get("/agent/conversations/{id}/delegation-groups", s.h(s.listConversationDelegationGroups))
 		r.Get("/agent/delegation-groups/{id}", s.h(s.getDelegationGroup))
 		r.Post("/agent/delegation-groups/{id}/adopt", s.h(s.adoptDelegationGroup))
+		r.Patch("/agent/delegation-groups/{id}/budget", s.h(s.patchDelegationGroupBudget))
 		// DEV-AI27-16（W16）：双模式语音（27 §11.4）。
 		r.Post("/agent/conversations/{id}/voice-sessions", s.h(s.createVoiceSession))
 		r.Post("/agent/voice-sessions/{id}/turns", s.h(s.createVoiceTurn))

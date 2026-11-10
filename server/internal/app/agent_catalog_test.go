@@ -265,8 +265,10 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/delegations/{id}/result",
 		"POST /api/v1/agent/delegation-groups/{id}/cancel",
 		// DEV-A13（W06 续接）：组详情与显式"汇总子任务结果"（任务面板）。
+		"GET /api/v1/agent/conversations/{id}/delegation-groups",
 		"GET /api/v1/agent/delegation-groups/{id}",
 		"POST /api/v1/agent/delegation-groups/{id}/adopt",
+		"PATCH /api/v1/agent/delegation-groups/{id}/budget",
 		// DEV-AI27-16（W16）双模式语音：输入台语音条与实时语音条共用。
 		"POST /api/v1/agent/conversations/{id}/voice-sessions",
 		"POST /api/v1/agent/voice-sessions/{id}/turns",

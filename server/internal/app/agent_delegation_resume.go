@@ -7,6 +7,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -717,6 +718,165 @@ func (s *Server) adoptDelegationGroup(w http.ResponseWriter, r *http.Request) er
 		"run_id": st.RunID, "conversation_id": conversationID, "group_id": groupID,
 		"adopted": st.DelegationAdopted,
 	})
+}
+
+// 提额上限：防止一次确认把任务池放大到不可控规模（docs/32 Q2/D5）。
+const (
+	delegationBudgetRoundsCap  = 200
+	delegationBudgetSecondsCap = 7200
+	delegationBudgetTokensCap  = 200_000_000
+)
+
+// GET /agent/conversations/{id}/delegation-groups：按会话列组（含承接标记与预算），
+// 供 UI 在父 run 已结束、没有 active run 时仍能展示"汇总结果"。最长 20 组。
+func (s *Server) listConversationDelegationGroups(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.subagentGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "subagents"); err != nil {
+		return err
+	}
+	conversationID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return errNotFound
+	}
+	var exists bool
+	if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM agent_conversation
+		WHERE id=$1 AND user_id=$2 AND workspace_id=$3)`,
+		conversationID, id.UserID, id.WorkspaceID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return errNotFound
+	}
+	rows, err := s.db.Query(r.Context(), `SELECT id FROM agent_delegation_group
+		WHERE conversation_id=$1 AND user_id=$2 AND workspace_id=$3
+		ORDER BY updated_at DESC LIMIT 20`, conversationID, id.UserID, id.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	groupIDs := []uuid.UUID{}
+	for rows.Next() {
+		var groupID uuid.UUID
+		if err := rows.Scan(&groupID); err != nil {
+			rows.Close()
+			return err
+		}
+		groupIDs = append(groupIDs, groupID)
+	}
+	rows.Close()
+	groups := []delegationGroupView{}
+	for _, groupID := range groupIDs {
+		var view delegationGroupView
+		if err := s.loadDelegationGroup(r.Context(), groupID, &view); err != nil {
+			return err
+		}
+		groups = append(groups, view)
+	}
+	return ok(w, map[string]any{"groups": groups})
+}
+
+// PATCH /agent/delegation-groups/{id}/budget：显式提额（docs/32 D5）。
+// 只允许提高、必须 confirm=true、受上限约束；提额不重算已用量，也不改变已预留守卫。
+func (s *Server) patchDelegationGroupBudget(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	id := ident(ctx)
+	if err := s.subagentGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(ctx, "subagents"); err != nil {
+		return err
+	}
+	groupID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return errNotFound
+	}
+	var body struct {
+		RoundsLimit  *int `json:"rounds_limit"`
+		SecondsLimit *int `json:"seconds_limit"`
+		TokensLimit  *int `json:"tokens_limit"`
+		Confirm      bool `json:"confirm"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
+		return apiErr(400, "bad_request", "请求体无法解析")
+	}
+	if !body.Confirm {
+		return apiErr(422, "confirmation_required", "提高任务预算需要显式确认（confirm=true）")
+	}
+	if body.RoundsLimit == nil && body.SecondsLimit == nil && body.TokensLimit == nil {
+		return apiErr(422, "validation_failed", "至少提供一项预算上限")
+	}
+	if err := s.withTx(ctx, func(tx pgx.Tx) error {
+		var state string
+		var conversationID, scopeID uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT state, conversation_id, budget_scope_id
+			FROM agent_delegation_group WHERE id=$1 AND user_id=$2 AND workspace_id=$3 FOR UPDATE`,
+			groupID, id.UserID, id.WorkspaceID).Scan(&state, &conversationID, &scopeID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errNotFound
+			}
+			return err
+		}
+		if state == "cancelled" || state == "failed" {
+			return apiErr(409, "delegation_group_closed", "已结束的委派组不能再调整预算")
+		}
+		var roundsLimit, secondsLimit int
+		var tokensLimit *int
+		if err := tx.QueryRow(ctx, `SELECT rounds_limit, seconds_limit, tokens_limit
+			FROM agent_task_budget WHERE budget_scope_id=$1 FOR UPDATE`, scopeID).
+			Scan(&roundsLimit, &secondsLimit, &tokensLimit); err != nil {
+			return err
+		}
+		if body.RoundsLimit != nil {
+			if *body.RoundsLimit <= roundsLimit {
+				return apiErr(422, "budget_limit_decrease_unsupported", "只能提高预算上限")
+			}
+			if *body.RoundsLimit > delegationBudgetRoundsCap {
+				return apiErr(422, "budget_limit_too_large", fmt.Sprintf("轮次上限不能超过 %d", delegationBudgetRoundsCap))
+			}
+			roundsLimit = *body.RoundsLimit
+		}
+		if body.SecondsLimit != nil {
+			if *body.SecondsLimit <= secondsLimit {
+				return apiErr(422, "budget_limit_decrease_unsupported", "只能提高预算上限")
+			}
+			if *body.SecondsLimit > delegationBudgetSecondsCap {
+				return apiErr(422, "budget_limit_too_large", fmt.Sprintf("时长上限不能超过 %d 秒", delegationBudgetSecondsCap))
+			}
+			secondsLimit = *body.SecondsLimit
+		}
+		if body.TokensLimit != nil {
+			// 当前不封顶（tokens_limit IS NULL）时，"设一个上限"属于收紧而非提额，拒绝。
+			if tokensLimit == nil {
+				return apiErr(422, "budget_tokens_limit_unsupported", "当前任务不做 token 封顶，不能设置上限")
+			}
+			if *body.TokensLimit <= *tokensLimit {
+				return apiErr(422, "budget_limit_decrease_unsupported", "只能提高预算上限")
+			}
+			if *body.TokensLimit > delegationBudgetTokensCap {
+				return apiErr(422, "budget_limit_too_large", fmt.Sprintf("token 上限不能超过 %d", delegationBudgetTokensCap))
+			}
+			tokensLimit = body.TokensLimit
+		}
+		if _, err := tx.Exec(ctx, `UPDATE agent_task_budget SET
+			rounds_limit=$2, seconds_limit=$3, tokens_limit=$4, revision=revision+1, updated_at=now()
+			WHERE budget_scope_id=$1`, scopeID, roundsLimit, secondsLimit, tokensLimit); err != nil {
+			return err
+		}
+		_, err := appendAgentEventTx(ctx, tx, conversationID, nil, "delegation.budget_increased", map[string]any{
+			"group_id": groupID.String(), "rounds_limit": roundsLimit,
+			"seconds_limit": secondsLimit, "tokens_limit": tokensLimit,
+		}, nil)
+		return err
+	}); err != nil {
+		return err
+	}
+	var view delegationGroupView
+	if err := s.loadDelegationGroup(ctx, groupID, &view); err != nil {
+		return err
+	}
+	return ok(w, view)
 }
 
 // maxRounds 返回本次运行的轮次上限：子 run 取 4 轮，其余沿用 agentMaxRounds。

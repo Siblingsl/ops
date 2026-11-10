@@ -419,3 +419,56 @@ func TestA13T10ParentFinishDispatchesChildren(t *testing.T) {
 	}
 	a13WaitRun(t, childRunID)
 }
+
+// A13-T11：显式提额——只允许提高、必须 confirm、受上限约束，并留事件。
+func TestA13T11BudgetIncreaseRequiresConfirmation(t *testing.T) {
+	conv, parent, _ := a13Setup(t)
+	group := a13CreateGroup(t, conv, parent, "T11 提额")
+	a13EndParent(t, conv.ID, parent)
+	path := "/api/v1/agent/delegation-groups/" + group.ID + "/budget"
+
+	env.expectErr(t, "PATCH", path, map[string]any{"rounds_limit": 40}, "confirmation_required")
+	env.expectErr(t, "PATCH", path, map[string]any{"confirm": true, "rounds_limit": 10}, "budget_limit_decrease_unsupported")
+	env.expectErr(t, "PATCH", path, map[string]any{"confirm": true, "rounds_limit": delegationBudgetRoundsCap + 1}, "budget_limit_too_large")
+	env.expectErr(t, "PATCH", path, map[string]any{"confirm": true, "tokens_limit": 1000}, "budget_tokens_limit_unsupported")
+
+	var view delegationGroupView
+	env.mustJSON(t, "PATCH", path, map[string]any{"confirm": true, "rounds_limit": 40, "seconds_limit": 1800}, &view)
+	if view.Budget == nil || view.Budget.RoundsLimit != 40 || view.Budget.SecondsLimit != 1800 {
+		t.Fatalf("提额未生效：%+v", view.Budget)
+	}
+	if view.Budget.RoundsRemaining < delegationBudgetParentRounds {
+		t.Fatalf("提额后剩余额度不合理：%+v", view.Budget)
+	}
+	var events int
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM agent_event
+		WHERE type='delegation.budget_increased' AND payload->>'group_id'=$1`, group.ID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("budget_increased 事件应为 1，got %d", events)
+	}
+}
+
+// A13-T12：按会话列组——父 run 已结束时仍能拿到组与承接状态；跨租户与不存在会话 404。
+func TestA13T12ListGroupsByConversation(t *testing.T) {
+	conv, parent, _ := a13Setup(t)
+	group := a13CreateGroup(t, conv, parent, "T12 按会话列组")
+	a13EndParent(t, conv.ID, parent)
+
+	var list struct {
+		Groups []delegationGroupView `json:"groups"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/agent/conversations/"+conv.ID.String()+"/delegation-groups", nil, &list)
+	if len(list.Groups) != 1 || list.Groups[0].ID != group.ID || list.Groups[0].ParentEndedAt == "" {
+		t.Fatalf("按会话应拿到 1 个已等待的组：%+v", list.Groups)
+	}
+
+	other := env.registerClient(t, "a13-list-"+uuid.NewString()[:8], testPassword)
+	var ome meInfo
+	other.mustJSON(t, "GET", "/api/v1/auth/me", nil, &ome)
+	other.csrf = ome.CSRF
+	other.expectErr(t, "GET", "/api/v1/agent/conversations/"+conv.ID.String()+"/delegation-groups", nil, "not_found")
+	other.restore(env)
+	env.expectErr(t, "GET", "/api/v1/agent/conversations/"+uuid.NewString()+"/delegation-groups", nil, "not_found")
+}
