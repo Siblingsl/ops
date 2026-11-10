@@ -88,6 +88,49 @@ export default function Plugins() {
     }
   }
 
+  // DEV-AI27-A3 第一片：验证连接 = 本机真实握手（McpHostManager）→ 目录/错误上报服务端。
+  // 成功：目录字段落库，状态推进 ready_disabled；失败：last_error 如实上报（服务端不推进
+  // 状态——"已验证"必须对应真实握手成功）。桌面端缺失时如实提示，不伪造已验证。
+  const validate = async (conn: PluginConnection) => {
+    setBusy(true)
+    try {
+      const bridge = window.opsDesktopUI
+      if (!bridge?.validateMcpConnection) {
+        setError('需要 OPS Desktop 客户端：MCP 连接只在本机验证（stdio 子进程与远程握手都在桌面端进行）。')
+        return
+      }
+      const result = await bridge.validateMcpConnection({
+        connection_id: conn.id,
+        transport: conn.transport,
+        command: conn.command,
+        args: conn.args,
+        cwd: conn.cwd,
+        url: conn.url,
+      })
+      if (result.ok) {
+        await api('POST', `/agent/plugin-connections/${conn.id}/actions`, {
+          action: 'validate', expected_revision: conn.revision,
+          protocol_version: result.catalog.server_info.protocol_version,
+          server_name: result.catalog.server_info.name,
+          server_version: result.catalog.server_info.version,
+          catalog_revision: result.catalog.catalog_revision,
+          tools_catalog: result.catalog.tools,
+        })
+      } else {
+        await api('POST', `/agent/plugin-connections/${conn.id}/actions`, {
+          action: 'validate', expected_revision: conn.revision,
+          last_error: result.message.slice(0, 200),
+        })
+      }
+      setError('')
+      await reload()
+    } catch (err) {
+      setError(String(err instanceof Error ? err.message : err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const revoke = async (id: string) => {
     setBusy(true)
     try {
@@ -166,7 +209,7 @@ export default function Plugins() {
         {conn.last_error && <p className="mt-1 text-xs text-danger" role="alert">{conn.last_error}</p>}
         <div className="mt-2 flex flex-wrap gap-2">
           {(conn.state === 'draft' || conn.state === 'error') &&
-            <Button size="sm" variant="secondary" disabled={busy} onClick={() => void action(conn.id, 'validate', conn.revision)}>验证连接</Button>}
+            <Button size="sm" variant="secondary" disabled={busy} onClick={() => void validate(conn)}>验证连接</Button>}
           {(conn.state === 'ready_disabled' || conn.state === 'disabled') &&
             <Button size="sm" variant="primary" disabled={busy} onClick={() => void action(conn.id, 'enable', conn.revision)}>启用</Button>}
           {conn.state === 'enabled' &&

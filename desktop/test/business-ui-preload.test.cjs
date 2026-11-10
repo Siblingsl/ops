@@ -47,13 +47,15 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'onPlatformIntentResult',
     'onRealtimeEvent',
     'onSidepanelDraft',
-    'onSidepanelStop'
+    'onSidepanelStop',
+    'validateMcpConnection'
   ]);
   // DEV-AI27-08（W08）：内置浏览意图白名单桥随 captureLongImage 一并暴露。
   // DEV-AI27-17（W17b，A12）：本机选窗是独立固定意图，不并入 invokeInBrowse 白名单。
   // DEV-AI27-A30：本机标签枚举同口径独立暴露。
+  // DEV-AI27-A3 第一片：MCP 验证独立固定意图（握手在本机，秘密不进 IPC）。
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')),
-    ['captureLongImage', 'listComputerWindows', 'listBrowserTabs', 'invokeInBrowse']);
+    ['captureLongImage', 'listComputerWindows', 'listBrowserTabs', 'validateMcpConnection', 'invokeInBrowse']);
   const buildId = '00000008-1111-4111-8111-111111111111';
   assert.deepEqual(await exposed.opsDesktopUI.captureLongImage(buildId), {
     ok: false, code: 'render_not_ready', message: '页面未就绪。'
@@ -75,6 +77,12 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     ok: false, code: 'render_not_ready', message: '页面未就绪。'
   });
   assert.deepEqual(invokes.at(-1), { channel: 'browser:list-tabs', payload: undefined });
+
+  // A3 第一片：MCP 验证失败原样透出（渲染器如实上报 last_error，不伪造已验证）。
+  assert.deepEqual(await exposed.opsDesktopUI.validateMcpConnection({
+    connection_id: '00000001-1111-4111-8111-111111111111', transport: 'http', url: 'https://mcp.example.com/v1',
+  }), { ok: false, code: 'render_not_ready', message: '页面未就绪。' });
+  assert.deepEqual(invokes.at(-1), { channel: 'mcp:validate', payload: { connection_id: '00000001-1111-4111-8111-111111111111', transport: 'http', url: 'https://mcp.example.com/v1' } });
 
   emit(handlers, 'desktop-ui:open-settings');
   let firstOpen = 0;
@@ -191,6 +199,31 @@ test('rejects a browser tab list that does not match the fixed schema', async ()
   assert.deepEqual(await exposed.opsDesktopUI.listBrowserTabs(), {
     ok: false, code: 'browser_tabs_invalid', message: 'Electron 返回的标签列表无效。'
   });
+});
+
+// A3 第一片：MCP 验证结果同样逐项固定 schema——目录只含工具名/哈希/schema，越界整批拒绝；
+// 渲染器拿不到未校验的 catalog，也不会把无效结果当成功上报。
+test('rejects an mcp validate result that does not match the fixed schema', async () => {
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke() {
+      return Promise.resolve({
+        ok: true,
+        catalog: {
+          tools: [{ name: 'search_docs', description_hash: 'not-16-hex', input_schema: {} }],
+          server_info: { name: 'srv', version: '1.0.0', protocol_version: '2025-06-18' },
+          catalog_revision: 'rev-1',
+        },
+      });
+    },
+  };
+  loadPreload({ contextBridge, ipcRenderer });
+  assert.deepEqual(await exposed.opsDesktopUI.validateMcpConnection({
+    connection_id: '00000001-1111-4111-8111-111111111111', transport: 'stdio', command: 'node', args: [],
+  }), { ok: false, code: 'mcp_validate_invalid', message: 'Electron 返回的验证结果无效。' });
 });
 
 function loadPreload(electron) {

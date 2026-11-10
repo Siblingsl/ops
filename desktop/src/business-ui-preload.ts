@@ -44,6 +44,20 @@ type BrowserTabListResult =
   | { ok: false; code: string; message: string }
   | { ok: true; tabs: BrowserTabView[] };
 
+// DEV-AI27-A3 第一片：MCP 验证结果——目录只含工具名/哈希/schema，不含任何秘密。
+type McpValidateInput = {
+  connection_id: string;
+  transport: 'stdio' | 'http';
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  url?: string;
+};
+type McpToolDescriptorView = { name: string; description_hash: string; input_schema: unknown; output_schema?: unknown };
+type McpValidateResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; catalog: { tools: McpToolDescriptorView[]; server_info: { name: string; version: string; protocol_version: string }; catalog_revision: string } };
+
 const OPEN_SETTINGS_CHANNEL = 'desktop-ui:open-settings';
 const LOCAL_SETTINGS_STATE_CHANNEL = 'desktop-ui:local-settings-state';
 const openSettingsListeners = new Set<SettingsOpenListener>();
@@ -148,6 +162,33 @@ function parseBrowserTabListResult(raw: unknown): BrowserTabListResult | null {
     tabs.push({ tab_id: tab.tab_id, title: tab.title, origin: tab.origin, window_id: tab.window_id, active: tab.active });
   }
   return { ok: true, tabs };
+}
+
+function parseMcpValidateResult(raw: unknown): McpValidateResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 40
+      && typeof value.message === 'string' && value.message.length <= 300
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  const catalog = asRecord(value.catalog);
+  if (!catalog) return null;
+  const server = asRecord(catalog.server_info);
+  if (!server || typeof server.name !== 'string' || typeof server.version !== 'string'
+    || typeof server.protocol_version !== 'string') return null;
+  if (!Array.isArray(catalog.tools) || catalog.tools.length > 500) return null;
+  const tools: McpToolDescriptorView[] = [];
+  for (const item of catalog.tools) {
+    const tool = asRecord(item);
+    if (!tool || typeof tool.name !== 'string' || tool.name.length > 200) return null;
+    if (typeof tool.description_hash !== 'string' || !/^[0-9a-f]{16}$/.test(tool.description_hash)) return null;
+    if (typeof tool.input_schema !== 'object' || tool.input_schema === null) return null;
+    tools.push({ name: tool.name, description_hash: tool.description_hash, input_schema: tool.input_schema, ...(tool.output_schema !== undefined ? { output_schema: tool.output_schema } : {}) });
+  }
+  if (typeof catalog.catalog_revision !== 'string' || catalog.catalog_revision.length > 64) return null;
+  return { ok: true, catalog: { tools, server_info: { name: server.name, version: server.version, protocol_version: server.protocol_version }, catalog_revision: catalog.catalog_revision } };
 }
 
 function parsePlatformIntentResult(raw: unknown): PlatformIntentResult | null {  const value = asRecord(raw);
@@ -266,6 +307,11 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
   async listBrowserTabs(): Promise<BrowserTabListResult> {
     const result = parseBrowserTabListResult(await ipcRenderer.invoke('browser:list-tabs'));
     return result ?? { ok: false, code: 'browser_tabs_invalid', message: 'Electron 返回的标签列表无效。' };
+  },
+  // DEV-AI27-A3 第一片：MCP 验证——真实握手后返回目录；失败原样透出（不伪造已验证）。
+  async validateMcpConnection(input: McpValidateInput): Promise<McpValidateResult> {
+    const result = parseMcpValidateResult(await ipcRenderer.invoke('mcp:validate', input));
+    return result ?? { ok: false, code: 'mcp_validate_invalid', message: 'Electron 返回的验证结果无效。' };
   },
   // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道；渲染器无 view 对象）。
   async invokeInBrowse(channel: string, payload?: unknown): Promise<unknown> {

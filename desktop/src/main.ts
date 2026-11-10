@@ -21,6 +21,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { getActiveBridge, startBrowserBridgeDiagnostics } from './browser-bridge';
+import { McpHostManager, type McpCatalog } from './mcp-host';
 import { ComputerWorkerHost, type WindowSummary } from './computer-worker-host';
 import { bindInBrowseController, clearInBrowseData, inBrowseAttachAfterOverlay, inBrowseDataStats, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
 import { RealtimeBridge, type RealtimeBridgeEvent } from './voice-realtime';
@@ -1012,6 +1013,40 @@ function registerIpcHandlers(): void {
       });
     }
     return { ok: true as const, tabs: out };
+  });
+  // DEV-AI27-A3 第一片（27 §11.2，P01 前置）：MCP 宿主最小接线——"验证连接"在本机
+  // 真实握手（McpHostManager：stdio spawn / Streamable HTTP initialize+tools/list），
+  // 目录回传渲染器，由渲染器经既有 actions API 上报服务端状态机（validate 由本机桥
+  // 握手后上报目录/错误）。验证完即停（enable 后的运行中连接属调用执行片，另行接线）。
+  // 失败返回真实错误码，渲染器如实上报 last_error（服务端失败不推进状态）。
+  const mcpHostManager = new McpHostManager();
+  ipcHandle('mcp:validate', async (event, raw) => {
+    requireComputerCaller(event);
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('mcp_validate_args_invalid');
+    const body = raw as { connection_id?: unknown; transport?: unknown; command?: unknown; args?: unknown; cwd?: unknown; url?: unknown };
+    const connectionId = typeof body.connection_id === 'string' && /^[0-9a-fA-F-]{36}$/.test(body.connection_id) ? body.connection_id : '';
+    if (!connectionId) throw new Error('mcp_validate_connection_id_invalid');
+    try {
+      let catalog: McpCatalog;
+      if (body.transport === 'stdio') {
+        const command = typeof body.command === 'string' ? body.command.trim() : '';
+        const args = Array.isArray(body.args) ? body.args.filter((a): a is string => typeof a === 'string').slice(0, 32) : [];
+        const cwd = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : process.cwd();
+        if (!command) throw new Error('stdio 连接必须提供 command');
+        catalog = await mcpHostManager.startStdio(connectionId, { command, args, cwd });
+      } else if (body.transport === 'http') {
+        const url = typeof body.url === 'string' ? body.url.trim() : '';
+        if (!url.startsWith('https://')) throw new Error('http 传输要求 https:// 地址');
+        catalog = await mcpHostManager.startHttp(connectionId, { url });
+      } else {
+        throw new Error('transport 只能是 stdio 或 http');
+      }
+      // 验证即停：stdio 不留常驻进程；目录已拿到，enable 后的运行中连接另行接线。
+      mcpHostManager.stop(connectionId);
+      return { ok: true as const, catalog };
+    } catch (error) {
+      return { ok: false as const, code: 'mcp_validate_failed', message: String(error instanceof Error ? error.message : error).slice(0, 300) };
+    }
   });
   // DEV-AI27-16 第六批（A2，27 §11.4.5）：realtime 双向音频桥——固定意图，渲染器不接触密钥。
   // start/append/commit/interrupt/stop 转发 RealtimeBridge；事件经 desktop-ui:realtime-event 推送。

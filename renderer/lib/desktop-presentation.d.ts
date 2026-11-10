@@ -59,6 +59,8 @@ declare global {
       listComputerWindows(): Promise<DesktopComputerWindowListResult>
       // DEV-AI27-A30：本机标签枚举（选标签授权弹窗；枚举只在本机，桥未配对时如实报错）。
       listBrowserTabs(): Promise<DesktopBrowserTabListResult>
+      // DEV-AI27-A3 第一片：MCP 验证（本机真实握手，返回目录；失败原样透出）。
+      validateMcpConnection(input: DesktopMcpValidateInput): Promise<DesktopMcpValidateResult>
       // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道）。
       invokeInBrowse(channel: string, payload?: unknown): Promise<unknown>
       onInBrowseSnapshot(listener: (snapshot: { bounds: { x: number; y: number; width: number; height: number } | null; url: string; title: string; loading: boolean; navigationGeneration: number }) => void): () => void
@@ -115,3 +117,23 @@ export type DesktopBrowserTab = {
 export type DesktopBrowserTabListResult =
   | { ok: false; code: string; message: string }
   | { ok: true; tabs: DesktopBrowserTab[] }
+
+// DEV-AI27-A3 第一片：MCP 验证输入与结果。目录只含工具名/哈希/schema，不含任何秘密。
+export type DesktopMcpValidateInput = {
+  connection_id: string
+  transport: 'stdio' | 'http'
+  command?: string
+  args?: string[]
+  cwd?: string
+  url?: string
+}
+
+export type DesktopMcpCatalog = {
+  tools: Array<{ name: string; description_hash: string; input_schema: unknown; output_schema?: unknown }>
+  server_info: { name: string; version: string; protocol_version: string }
+  catalog_revision: string
+}
+
+export type DesktopMcpValidateResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; catalog: DesktopMcpCatalog }

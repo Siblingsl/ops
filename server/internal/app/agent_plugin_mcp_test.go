@@ -85,6 +85,53 @@ func TestW14PluginFeatureGatesAndLifecycle(t *testing.T) {
 	}, "not_found")
 }
 
+// A3（宿主接线后 validate 成为真实握手结果的上报口）：
+// 失败（last_error 非空）不推进状态——"已验证"必须对应真实握手成功；
+// 成功清掉上一次失败的残留 last_error（否则旧错误永远挂在卡片上）。
+func TestA3ValidateFailureDoesNotAdvanceState(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "plugin_mcp")
+	conn := w14Create(t)
+	if conn.State != "draft" {
+		t.Fatalf("创建应为 draft：%+v", conn)
+	}
+
+	// 失败上报：state 保持 draft，last_error 如实记录（不伪造"已验证"）。
+	var afterFail pluginConnection
+	env.mustJSON(t, "POST", "/api/v1/agent/plugin-connections/"+conn.ID+"/actions", map[string]any{
+		"action": "validate", "expected_revision": conn.Revision,
+		"last_error": "spawn_failed: ENOENT",
+	}, &afterFail)
+	if afterFail.State != "draft" || afterFail.LastError != "spawn_failed: ENOENT" {
+		t.Fatalf("validate 失败应保持 draft 且记录错误：%+v", afterFail)
+	}
+
+	// 成功上报：draft → ready_disabled，目录字段落库，残留 last_error 清空。
+	var afterOK pluginConnection
+	env.mustJSON(t, "POST", "/api/v1/agent/plugin-connections/"+conn.ID+"/actions", map[string]any{
+		"action": "validate", "expected_revision": afterFail.Revision,
+		"protocol_version": "2025-06-18", "server_name": "a3-server", "server_version": "1.0.0",
+		"catalog_revision": "rev-1", "tools_catalog": []map[string]any{
+			{"name": "search_docs", "description_hash": "aa", "input_schema": map[string]any{}},
+		},
+	}, &afterOK)
+	if afterOK.State != "ready_disabled" || afterOK.ServerName != "a3-server" || afterOK.LastError != "" {
+		t.Fatalf("validate 成功应 ready_disabled 并清空 last_error：%+v", afterOK)
+	}
+
+	// enabled 状态下再次失败：state 保持 enabled（不回退、不伪造）。
+	env.mustJSON(t, "POST", "/api/v1/agent/plugin-connections/"+conn.ID+"/actions", map[string]any{
+		"action": "enable", "expected_revision": afterOK.Revision,
+	}, &afterOK)
+	env.mustJSON(t, "POST", "/api/v1/agent/plugin-connections/"+conn.ID+"/actions", map[string]any{
+		"action": "validate", "expected_revision": afterOK.Revision,
+		"last_error": "mcp_timeout: tools/list 超过 15000ms",
+	}, &afterOK)
+	if afterOK.State != "enabled" || afterOK.LastError != "mcp_timeout: tools/list 超过 15000ms" {
+		t.Fatalf("enabled 下 validate 失败应保持 enabled 且记录错误：%+v", afterOK)
+	}
+}
+
 func TestW14PluginCallLedgerAndGuards(t *testing.T) {
 	clearAgentFeatureSettings(t)
 	t.Setenv(agentWorkbenchFeatureEnv, "plugin_mcp")

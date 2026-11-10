@@ -212,26 +212,34 @@ func (s *Server) actionPluginConnection(w http.ResponseWriter, r *http.Request) 
 			}
 			return err
 		}
-		target, reachable := next[currentState]
-		if !reachable {
-			return apiErr(409, "plugin_state_conflict", "当前状态不支持该操作")
-		}
-		// 原子 CAS：WHERE revision=$3，冲突返回零行（plugin_revision_conflict）。
-		var catalogArg any
-		if len(body.ToolsCatalog) > 0 {
-			catalogArg = string(body.ToolsCatalog)
-		}
-		row := tx.QueryRow(r.Context(), "UPDATE agent_plugin_connection SET state=$2, revision=revision+1, updated_at=now(),"+
-			" protocol_version=CASE WHEN $4<>'' THEN $4 ELSE protocol_version END,"+
-			" server_name=CASE WHEN $5<>'' THEN $5 ELSE server_name END,"+
-			" server_version=CASE WHEN $6<>'' THEN $6 ELSE server_version END,"+
-			" catalog_revision=CASE WHEN $7<>'' THEN $7 ELSE catalog_revision END,"+
-			" tools_catalog=CASE WHEN jsonb_typeof($8::jsonb)='array' THEN $8::jsonb ELSE tools_catalog END,"+
-			" last_error=CASE WHEN $9<>'' THEN $9 ELSE last_error END"+
-			" WHERE id=$1 AND revision=$3 RETURNING "+pluginConnectionColumnsPlain,
-			connectionID, target, body.ExpectedRevision,
-			body.ProtocolVersion, body.ServerName, body.ServerVersion, body.CatalogRevision,
-			catalogArg, body.LastError)
+	target, reachable := next[currentState]
+	if !reachable {
+		return apiErr(409, "plugin_state_conflict", "当前状态不支持该操作")
+	}
+	// A3（宿主接线后 validate 成为真实握手结果的上报口）：失败（last_error 非空）不推进
+	// 状态——"已验证"必须对应真实握手成功；失败只记 last_error，UI 如实展示，不伪造。
+	validateFailure := body.Action == "validate" && strings.TrimSpace(body.LastError) != ""
+	if validateFailure {
+		target = currentState
+	}
+	// 原子 CAS：WHERE revision=$3，冲突返回零行（plugin_revision_conflict）。
+	var catalogArg any
+	if len(body.ToolsCatalog) > 0 {
+		catalogArg = string(body.ToolsCatalog)
+	}
+	// validate 成功时清掉上一次失败的残留 last_error（否则旧错误永远挂在卡片上）。
+	clearLastError := body.Action == "validate" && !validateFailure
+	row := tx.QueryRow(r.Context(), "UPDATE agent_plugin_connection SET state=$2, revision=revision+1, updated_at=now(),"+
+		" protocol_version=CASE WHEN $4<>'' THEN $4 ELSE protocol_version END,"+
+		" server_name=CASE WHEN $5<>'' THEN $5 ELSE server_name END,"+
+		" server_version=CASE WHEN $6<>'' THEN $6 ELSE server_version END,"+
+		" catalog_revision=CASE WHEN $7<>'' THEN $7 ELSE catalog_revision END,"+
+		" tools_catalog=CASE WHEN jsonb_typeof($8::jsonb)='array' THEN $8::jsonb ELSE tools_catalog END,"+
+		" last_error=CASE WHEN $9<>'' THEN $9 WHEN $10 THEN '' ELSE last_error END"+
+		" WHERE id=$1 AND revision=$3 RETURNING "+pluginConnectionColumnsPlain,
+		connectionID, target, body.ExpectedRevision,
+		body.ProtocolVersion, body.ServerName, body.ServerVersion, body.CatalogRevision,
+		catalogArg, body.LastError, clearLastError)
 		var err error
 		updated, err = scanPluginConnection(row)
 		if err == pgx.ErrNoRows {
