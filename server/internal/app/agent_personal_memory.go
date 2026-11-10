@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,20 +29,20 @@ const (
 )
 
 type personalMemory struct {
-	ID          string `json:"id"`
-	Text        string `json:"text"`
-	State       string `json:"state"`
-	SourceRef   string `json:"source_conversation_id,omitempty"`
-	Revision    int64  `json:"revision"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-	Superseded  string `json:"supersedes_id,omitempty"`
+	ID         string `json:"id"`
+	Text       string `json:"text"`
+	State      string `json:"state"`
+	SourceRef  string `json:"source_conversation_id,omitempty"`
+	Revision   int64  `json:"revision"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+	Superseded string `json:"supersedes_id,omitempty"`
 }
 
 type memorySettingsView struct {
-	UseEnabled     bool   `json:"use_enabled"`
-	CaptureEnabled bool   `json:"capture_enabled"`
-	Revision       int64  `json:"revision"`
+	UseEnabled     bool  `json:"use_enabled"`
+	CaptureEnabled bool  `json:"capture_enabled"`
+	Revision       int64 `json:"revision"`
 }
 
 func personalMemoryHash(text string) string {
@@ -482,9 +484,9 @@ func (s *Server) proposePersonalMemoryCandidate(w http.ResponseWriter, r *http.R
 		return err
 	}
 	var body struct {
-		Text              string `json:"text"`
-		ConversationID    string `json:"conversation_id"`
-		ConversationRev   int64  `json:"source_revision"`
+		Text            string `json:"text"`
+		ConversationID  string `json:"conversation_id"`
+		ConversationRev int64  `json:"source_revision"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
 		return apiErr(400, "bad_request", "请求体无法解析")
@@ -651,8 +653,8 @@ func (s *Server) personalMemorySystemBlock(ctx context.Context, userID, workspac
 		return ""
 	}
 	type entry struct {
-		id  uuid.UUID
-		rev int64
+		id   uuid.UUID
+		rev  int64
 		rev_ string
 		text string
 	}
@@ -673,15 +675,42 @@ func (s *Server) personalMemorySystemBlock(ctx context.Context, userID, workspac
 		used = append(used, e)
 	}
 	rows.Close()
-	for _, e := range used {
-		_, _ = s.db.Exec(ctx, `INSERT INTO agent_memory_usage (run_id, memory_id, revision, used) VALUES ($1,$2,$3,true)`, runID, e.id, e.rev)
+	// BE-02（docs/33 §11.5 / BE-02）：记账改为每类一条多值 INSERT；写入失败经 slog
+	// 记录（含 run_id 与条数），不再 `_, _ =` 静默丢弃。记账失败不中断注入主流程——
+	// 与本函数既有「查不到/开关关返回空串」同级降级，但失败本身必须可观测。
+	writeUsage := func(rows []entry, usedFlag bool, reason string) {
+		if len(rows) == 0 {
+			return
+		}
+		var values []string
+		var args []any
+		if usedFlag {
+			for i, e := range rows {
+				values = append(values, fmt.Sprintf("($%d,$%d,$%d,true)", i*3+1, i*3+2, i*3+3))
+				args = append(args, runID, e.id, e.rev)
+			}
+		} else {
+			for i, e := range rows {
+				base := i * 4
+				values = append(values, fmt.Sprintf("($%d,$%d,$%d,false,$%d)", base+1, base+2, base+3, base+4))
+				args = append(args, runID, e.id, e.rev, reason)
+			}
+		}
+		query := `INSERT INTO agent_memory_usage (run_id, memory_id, revision, used) VALUES `
+		if !usedFlag {
+			query = `INSERT INTO agent_memory_usage (run_id, memory_id, revision, used, omitted_reason) VALUES `
+		}
+		if _, err := s.db.Exec(ctx, query+strings.Join(values, ","), args...); err != nil {
+			slog.ErrorContext(ctx, "记忆用量记账失败", "run_id", runID.String(), "used", usedFlag, "rows", len(rows), "err", err)
+		}
 	}
-	for _, e := range omitted {
+	writeUsage(used, true, "")
+	if len(omitted) > 0 {
 		reason := "budget"
 		if len(used) >= personalMemoryInjectMax {
 			reason = "limit"
 		}
-		_, _ = s.db.Exec(ctx, `INSERT INTO agent_memory_usage (run_id, memory_id, revision, used, omitted_reason) VALUES ($1,$2,$3,false,$4)`, runID, e.id, e.rev, reason)
+		writeUsage(omitted, false, reason)
 	}
 	if len(used) == 0 {
 		return ""
@@ -693,4 +722,3 @@ func (s *Server) personalMemorySystemBlock(ctx context.Context, userID, workspac
 	}
 	return b.String()
 }
-
