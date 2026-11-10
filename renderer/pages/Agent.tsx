@@ -12,6 +12,7 @@ import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Button, cn, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
 import { AddMenu } from './agent/AddMenu'
 import { BrowserStatusBlock, useBrowserConnectState } from './agent/BrowserStatusBlock'
+import { BrowserTabAuthorizeDialog } from './agent/BrowserTabAuthorizeDialog'
 import { BrowserTabSelector } from './agent/BrowserTabSelector'
 import { ComputerWindowPicker } from './agent/ComputerWindowPicker'
 import { InBrowsePanel } from './agent/InBrowsePanel'
@@ -694,6 +695,9 @@ ${draft.text}` : draft.text))
   // 避免事件重放（event_resume）把已经处理过的请求反复弹出来。
   const [computerPickerOpen, setComputerPickerOpen] = useState(false)
   const handledComputerRequests = useRef<Set<string>>(new Set())
+  // DEV-AI27-A30：模型请求浏览器标签时弹出授权弹窗；同口径去重。
+  const [browserPickerOpen, setBrowserPickerOpen] = useState(false)
+  const handledBrowserRequests = useRef<Set<string>>(new Set())
   const [uploading, setUploading] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -1084,6 +1088,14 @@ ${draft.text}` : draft.text))
         if (callID && !handledComputerRequests.current.has(callID)) {
           handledComputerRequests.current.add(callID)
           setComputerPickerOpen(true)
+        }
+      }
+      // A30：模型请求浏览器标签时弹授权弹窗（选定后即时建 30 秒标签租约）。
+      if (type === 'tool.ended' && data.name === 'browser_request_tab' && data.status === 'done') {
+        const callID = String(data.tool_call_id ?? '')
+        if (callID && !handledBrowserRequests.current.has(callID)) {
+          handledBrowserRequests.current.add(callID)
+          setBrowserPickerOpen(true)
         }
       }
       void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
@@ -2038,6 +2050,17 @@ ${draft.text}` : draft.text))
             onClose={() => setComputerPickerOpen(false)}
             onAuthorized={(summary) => {
               setText((old) => old ? `${old}\n已选择窗口「${summary}」，请继续。` : `已选择窗口「${summary}」，请继续。`)
+              window.setTimeout(() => inputRef.current?.focus(), 0)
+            }}
+          />
+          {/* A30：模型请求浏览器标签时授权；选定后即时建 30 秒标签租约（origins 只含顶层页面源）。 */}
+          <BrowserTabAuthorizeDialog
+            open={browserPickerOpen}
+            conversationId={conversationId}
+            runId={runID || undefined}
+            onClose={() => setBrowserPickerOpen(false)}
+            onAuthorized={(summary) => {
+              setText((old) => old ? `${old}\n已选择标签「${summary}」，请继续。` : `已选择标签「${summary}」，请继续。`)
               window.setTimeout(() => inputRef.current?.focus(), 0)
             }}
           />

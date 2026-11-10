@@ -57,6 +57,8 @@ declare global {
       captureLongImage(buildId: string): Promise<CXLongImageCaptureResult>
       // DEV-AI27-17（W17b，A12）：本机选窗器（枚举只在本机，handle 不透明）。
       listComputerWindows(): Promise<DesktopComputerWindowListResult>
+      // DEV-AI27-A30：本机标签枚举（选标签授权弹窗；枚举只在本机，桥未配对时如实报错）。
+      listBrowserTabs(): Promise<DesktopBrowserTabListResult>
       // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道）。
       invokeInBrowse(channel: string, payload?: unknown): Promise<unknown>
       onInBrowseSnapshot(listener: (snapshot: { bounds: { x: number; y: number; width: number; height: number } | null; url: string; title: string; loading: boolean; navigationGeneration: number }) => void): () => void
@@ -100,3 +102,16 @@ export type DesktopComputerWindow = {
 export type DesktopComputerWindowListResult =
   | { ok: false; code: string; message: string }
   | { ok: true; windows: DesktopComputerWindow[] }
+
+// DEV-AI27-A30：本机标签摘要。origin 为页面 URL 归一后的源（scheme://host[:port]）。
+export type DesktopBrowserTab = {
+  tab_id: number
+  title: string
+  origin: string
+  window_id: number
+  active: boolean
+}
+
+export type DesktopBrowserTabListResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; tabs: DesktopBrowserTab[] }

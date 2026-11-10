@@ -38,6 +38,12 @@ type ComputerWindowListResult =
   | { ok: false; code: string; message: string }
   | { ok: true; windows: ComputerWindowView[] };
 
+// DEV-AI27-A30：本机标签枚举结果（选标签授权弹窗）。origin 已由扩展按页面 URL 归一。
+type BrowserTabView = { tab_id: number; title: string; origin: string; window_id: number; active: boolean };
+type BrowserTabListResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; tabs: BrowserTabView[] };
+
 const OPEN_SETTINGS_CHANNEL = 'desktop-ui:open-settings';
 const LOCAL_SETTINGS_STATE_CHANNEL = 'desktop-ui:local-settings-state';
 const openSettingsListeners = new Set<SettingsOpenListener>();
@@ -119,6 +125,29 @@ function parseComputerWindowListResult(raw: unknown): ComputerWindowListResult |
     windows.push({ handle: win.handle, process: win.process, title: win.title, forbidden: win.forbidden });
   }
   return { ok: true, windows };
+}
+
+function parseBrowserTabListResult(raw: unknown): BrowserTabListResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 60
+      && typeof value.message === 'string' && value.message.length <= 200
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  if (!Array.isArray(value.tabs) || value.tabs.length > 200) return null;
+  const tabs: BrowserTabView[] = [];
+  for (const item of value.tabs) {
+    const tab = asRecord(item);
+    if (!tab || typeof tab.tab_id !== 'number' || !Number.isSafeInteger(tab.tab_id)) return null;
+    if (typeof tab.title !== 'string' || tab.title.length > 120) return null;
+    if (typeof tab.origin !== 'string' || tab.origin.length > 200) return null;
+    if (typeof tab.window_id !== 'number' || !Number.isSafeInteger(tab.window_id)) return null;
+    if (typeof tab.active !== 'boolean') return null;
+    tabs.push({ tab_id: tab.tab_id, title: tab.title, origin: tab.origin, window_id: tab.window_id, active: tab.active });
+  }
+  return { ok: true, tabs };
 }
 
 function parsePlatformIntentResult(raw: unknown): PlatformIntentResult | null {  const value = asRecord(raw);
@@ -232,6 +261,11 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
   async listComputerWindows(): Promise<ComputerWindowListResult> {
     const result = parseComputerWindowListResult(await ipcRenderer.invoke('computer:list-windows'));
     return result ?? { ok: false, code: 'computer_windows_invalid', message: 'Electron 返回的窗口列表无效。' };
+  },
+  // DEV-AI27-A30：本机标签枚举（选标签授权弹窗）——枚举在本机，桥未启动/未配对时如实报错。
+  async listBrowserTabs(): Promise<BrowserTabListResult> {
+    const result = parseBrowserTabListResult(await ipcRenderer.invoke('browser:list-tabs'));
+    return result ?? { ok: false, code: 'browser_tabs_invalid', message: 'Electron 返回的标签列表无效。' };
   },
   // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道；渲染器无 view 对象）。
   async invokeInBrowse(channel: string, payload?: unknown): Promise<unknown> {

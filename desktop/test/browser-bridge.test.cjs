@@ -244,6 +244,47 @@ test('bridge e2e: pairing -> dispatch -> result -> idempotent -> unknown -> revo
   assert.equal(b.dispatch('tabs_list', {}, 'req-3').accepted, false, '撤销后拒绝新命令');
 });
 
+// A30：dispatchAndWait——本机 UI 枚举（选标签弹窗）用。成功回扩展动作 payload；
+// 未配对立即拒绝；扩展失败回真实 error_code；超时回 browser_dispatch_timeout。
+test('bridge dispatchAndWait: payload on success, real codes on failure, timeout', { timeout: 20_000 }, async (t) => {
+  const { b, next, send } = await startBridgeWithMockHost(t);
+
+  // 未配对：立即拒绝（不等待超时）
+  const unpaired = await b.dispatchAndWait('tabs_list', {}, 2000);
+  assert.equal(unpaired.ok, false);
+  assert.equal(unpaired.code, 'browser_not_paired');
+
+  // 配对
+  send({ v: 1, type: 'hello', payload: { host_instance_id: 'mock-host', protocol_version: 1 } });
+  await next();
+  assert.equal(b.confirmPairing().ok, true);
+  const pairingConfirm = await next();
+  const sessionKey = Buffer.from(pairingConfirm.payload.session_key, 'base64');
+  let seq = 0;
+  const signedResult = (requestId, nonce, payloadHash, payload) => {
+    seq += 1;
+    return { v: 1, type: 'result', request_id: requestId, nonce, payload_hash: payloadHash, seq, hmac: host.hmacSign(sessionKey, seq, 'result', payload, nonce, payloadHash), payload };
+  };
+
+  // 成功路径：回执 {ok:true, payload:{tabs:[...]}} -> dispatchAndWait 解出动作 payload
+  const successPending = b.dispatchAndWait('tabs_list', {}, 8000);
+  const command = await next();
+  assert.equal(command.type, 'command');
+  assert.equal(command.action, 'tabs_list');
+  send(signedResult(command.request_id, command.nonce, command.payload_hash, { ok: true, payload: { tabs: [{ id: 7, title: '示例', origin: 'https://example.com' }] } }));
+  const got = await successPending;
+  assert.equal(got.ok, true);
+  assert.deepEqual(got.result, { tabs: [{ id: 7, title: '示例', origin: 'https://example.com' }] });
+
+  // 失败路径：扩展回 {ok:false, error_code} -> 原样透出真实错误码
+  const failPending = b.dispatchAndWait('observe', { tab_id: 1 }, 8000);
+  const failCommand = await next();
+  send(signedResult(failCommand.request_id, failCommand.nonce, failCommand.payload_hash, { ok: false, error_code: 'tab_not_found' }));
+  const failed = await failPending;
+  assert.equal(failed.ok, false);
+  assert.equal(failed.code, 'tab_not_found');
+});
+
 // ---------------------------------------------------------------------------
 // A14（W05 强化，27 §14）：①HMAC 材料含 nonce/payload_hash；②lastSeqIn 持久化
 // （重启后拒绝重放更早 seq）；③native host 单实例锁。

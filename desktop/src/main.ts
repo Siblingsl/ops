@@ -20,7 +20,7 @@ import fs from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { startBrowserBridgeDiagnostics } from './browser-bridge';
+import { getActiveBridge, startBrowserBridgeDiagnostics } from './browser-bridge';
 import { ComputerWorkerHost, type WindowSummary } from './computer-worker-host';
 import { bindInBrowseController, clearInBrowseData, inBrowseAttachAfterOverlay, inBrowseDataStats, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
 import { RealtimeBridge, type RealtimeBridgeEvent } from './voice-realtime';
@@ -981,6 +981,37 @@ function registerIpcHandlers(): void {
       const code = error instanceof Error && /worker_(timeout|exit)/.test(error.message) ? error.message : 'computer_worker_unavailable';
       return { ok: false as const, code, message: '本机窗口枚举不可用；请确认电脑控制组件已随客户端安装。' };
     }
+  });
+  // DEV-AI27-A30：本机标签枚举（选标签授权弹窗用）。与 computer:list-windows 同构——
+  // 用户主动 UI 动作的本机枚举（27 §13.2/C09 精神）：枚举在本机、服务端只知道选中项，
+  // 不进服务端命令账本（账本只记 AI 动作）。桥未启动/未配对时如实返回真实状态，不伪造列表。
+  ipcHandle('browser:list-tabs', async (event) => {
+    requireComputerCaller(event);
+    const bridge = getActiveBridge();
+    if (!bridge) {
+      return { ok: false as const, code: 'browser_bridge_not_running', message: '浏览器桥未在本会话启动；浏览器协作链路尚未在正式版开启。' };
+    }
+    if (bridge.state !== 'paired') {
+      return { ok: false as const, code: 'browser_not_paired', message: `浏览器桥未配对（当前状态 ${bridge.state}）；请先完成 OPS 与 Chrome 扩展的配对。` };
+    }
+    const result = await bridge.dispatchAndWait('tabs_list', {}, 15000);
+    if (!result.ok) {
+      return { ok: false as const, code: result.code, message: '标签枚举未得到回执；请确认 Chrome 与 OPS 扩展正在运行后重试。' };
+    }
+    const raw = result.result as { tabs?: Array<Record<string, unknown>> } | null;
+    const tabs = Array.isArray(raw?.tabs) ? (raw?.tabs as Array<Record<string, unknown>>) : [];
+    const out: Array<{ tab_id: number; title: string; origin: string; window_id: number; active: boolean }> = [];
+    for (const t of tabs.slice(0, 200)) {
+      if (typeof t.id !== 'number' || !Number.isSafeInteger(t.id)) continue;
+      out.push({
+        tab_id: t.id,
+        title: typeof t.title === 'string' ? t.title.slice(0, 120) : '',
+        origin: typeof t.origin === 'string' ? t.origin.slice(0, 200) : '',
+        window_id: typeof t.window_id === 'number' && Number.isSafeInteger(t.window_id) ? t.window_id : 0,
+        active: t.active === true,
+      });
+    }
+    return { ok: true as const, tabs: out };
   });
   // DEV-AI27-16 第六批（A2，27 §11.4.5）：realtime 双向音频桥——固定意图，渲染器不接触密钥。
   // start/append/commit/interrupt/stop 转发 RealtimeBridge；事件经 desktop-ui:realtime-event 推送。

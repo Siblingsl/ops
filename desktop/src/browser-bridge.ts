@@ -626,6 +626,48 @@ export class BrowserBridge {
     }
   }
 
+  /** A30：派发并等待回执——本机 UI 主动枚举用（选标签弹窗的 tabs_list），不进服务端账本。
+   * 成功返回扩展动作 payload；失败/超时返回真实错误码，调用方如实提示，不伪造列表。 */
+  dispatchAndWait(action: string, payload: unknown, timeoutMs = 15000): Promise<{ ok: true; result: unknown } | { ok: false; code: string; message?: string }> {
+    return new Promise((resolve) => {
+      const id = crypto.randomUUID();
+      const deadline = Date.now() + timeoutMs;
+      let done = false;
+      const finish = (r: { ok: true; result: unknown } | { ok: false; code: string; message?: string }): void => {
+        if (done) return;
+        done = true;
+        clearInterval(timer);
+        resolve(r);
+      };
+      const timer = setInterval(() => {
+        const entry = this.ledger.get(id);
+        if (!entry) {
+          if (Date.now() > deadline) finish({ ok: false, code: 'browser_dispatch_timeout' });
+          return;
+        }
+        if (entry.state === 'succeeded') {
+          const result = (entry.result ?? {}) as { payload?: unknown; error_code?: string };
+          if (result.payload !== undefined) finish({ ok: true, result: result.payload });
+          else finish({ ok: false, code: result.error_code ?? 'browser_action_failed' });
+          return;
+        }
+        if (entry.state === 'failed') {
+          const result = (entry.result ?? {}) as { error_code?: string; message?: string };
+          finish({ ok: false, code: result.error_code ?? 'browser_action_failed', message: result.message });
+          return;
+        }
+        // dispatched 未回执超过截止（含 sweep 容差）即视为 unknown_outcome；其余终态直报。
+        if (entry.state === 'unknown_outcome' || entry.state === 'cancelled' || Date.now() > deadline + 2000) {
+          finish({ ok: false, code: entry.state === 'dispatched' || entry.state === 'queued' ? 'browser_dispatch_timeout' : `browser_${entry.state}` });
+        }
+      }, 100);
+      const dispatched = this.dispatch(action, payload, id);
+      if (!dispatched.accepted) {
+        finish({ ok: false, code: dispatched.error_code ?? 'browser_dispatch_rejected', message: dispatched.reason });
+      }
+    });
+  }
+
   private async onControl(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     const reply = (code: number, body: unknown): void => {

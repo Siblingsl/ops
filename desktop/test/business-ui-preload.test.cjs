@@ -38,6 +38,7 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).sort(), [
     'captureLongImage',
     'invokeInBrowse',
+    'listBrowserTabs',
     'listComputerWindows',
     'onClientHealth',
     'onInBrowseSnapshot',
@@ -50,8 +51,9 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   ]);
   // DEV-AI27-08（W08）：内置浏览意图白名单桥随 captureLongImage 一并暴露。
   // DEV-AI27-17（W17b，A12）：本机选窗是独立固定意图，不并入 invokeInBrowse 白名单。
+  // DEV-AI27-A30：本机标签枚举同口径独立暴露。
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')),
-    ['captureLongImage', 'listComputerWindows', 'invokeInBrowse']);
+    ['captureLongImage', 'listComputerWindows', 'listBrowserTabs', 'invokeInBrowse']);
   const buildId = '00000008-1111-4111-8111-111111111111';
   assert.deepEqual(await exposed.opsDesktopUI.captureLongImage(buildId), {
     ok: false, code: 'render_not_ready', message: '页面未就绪。'
@@ -67,6 +69,12 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     ok: false, code: 'render_not_ready', message: '页面未就绪。'
   });
   assert.deepEqual(invokes.at(-1), { channel: 'computer:list-windows', payload: undefined });
+
+  // A30：本机标签枚举同口径；Electron 侧失败（桥未启动/未配对）原样传到渲染器。
+  assert.deepEqual(await exposed.opsDesktopUI.listBrowserTabs(), {
+    ok: false, code: 'render_not_ready', message: '页面未就绪。'
+  });
+  assert.deepEqual(invokes.at(-1), { channel: 'browser:list-tabs', payload: undefined });
 
   emit(handlers, 'desktop-ui:open-settings');
   let firstOpen = 0;
@@ -162,6 +170,26 @@ test('rejects a window list that does not match the fixed schema', async () => {
   loadPreload({ contextBridge, ipcRenderer });
   assert.deepEqual(await exposed.opsDesktopUI.listComputerWindows(), {
     ok: false, code: 'computer_windows_invalid', message: 'Electron 返回的窗口列表无效。'
+  });
+});
+
+// A30：主进程返回的标签列表同样逐项固定 schema；越界整批拒绝（不伪造列表）。
+test('rejects a browser tab list that does not match the fixed schema', async () => {
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke() {
+      return Promise.resolve({
+        ok: true,
+        tabs: [{ tab_id: 'not-a-number', title: '页面', origin: 'https://example.com', window_id: 1, active: true }],
+      });
+    },
+  };
+  loadPreload({ contextBridge, ipcRenderer });
+  assert.deepEqual(await exposed.opsDesktopUI.listBrowserTabs(), {
+    ok: false, code: 'browser_tabs_invalid', message: 'Electron 返回的标签列表无效。'
   });
 });
 
