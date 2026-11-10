@@ -50,7 +50,7 @@ function resolveSystemApiProxy(target) {
 async function isProjectViteReady() {
   try {
     const response = await fetch(localOrigin, { signal: AbortSignal.timeout(1000) });
-    return response.ok && (await response.text()).includes('/src/main.tsx');
+    return response.ok && (await response.text()).includes('/main.tsx');
   } catch {
     return false;
   }
