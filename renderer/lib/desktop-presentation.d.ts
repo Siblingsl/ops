@@ -57,6 +57,10 @@ declare global {
       captureLongImage(buildId: string): Promise<CXLongImageCaptureResult>
       // DEV-AI27-17（W17b，A12）：本机选窗器（枚举只在本机，handle 不透明）。
       listComputerWindows(): Promise<DesktopComputerWindowListResult>
+      // DT-04（W17c / 27 §11.5.2）：UIA 主链路固定意图——结果按 C09 白名单逐控件校验，
+      // 只含 id/type/name/value 四键，进程路径/窗口全集/截图不进渲染器。
+      readComputerUIA(input: { pid: number; target_summary: string }): Promise<DesktopComputerUiaViewResult>
+      invokeComputerUIA(input: { pid: number; automation_id: string; value?: string | null; target_summary: string }): Promise<DesktopComputerUiaInvokeResult>
       // DEV-AI27-A30：本机标签枚举（选标签授权弹窗；枚举只在本机，桥未配对时如实报错）。
       listBrowserTabs(): Promise<DesktopBrowserTabListResult>
       // DEV-AI27-A30b：配对统一——读桥侧配对快照 / 确认桥侧配对（快照白名单校验，不含会话密钥）。
@@ -111,6 +115,17 @@ export type DesktopComputerWindow = {
 export type DesktopComputerWindowListResult =
   | { ok: false; code: string; message: string }
   | { ok: true; windows: DesktopComputerWindow[] }
+
+// DT-04（W17c / 27 §11.5.2）：UIA 控件树视图（C09 脱敏：无进程路径/句柄/截图）。
+export type DesktopComputerUiaControl = { id: string; type: string; name: string; value: string }
+
+export type DesktopComputerUiaViewResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; window: string; controls: DesktopComputerUiaControl[] }
+
+export type DesktopComputerUiaInvokeResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; action: string }
 
 // DEV-AI27-A30：本机标签摘要。origin 为页面 URL 归一后的源（scheme://host[:port]）。
 export type DesktopBrowserTab = {

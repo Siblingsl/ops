@@ -40,6 +40,7 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'confirmBrowserPairing',
     'getBrowserPairingState',
     'getMcpOAuthStatus',
+    'invokeComputerUIA',
     'invokeInBrowse',
     'listBrowserTabs',
     'listComputerWindows',
@@ -51,6 +52,7 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'onRealtimeEvent',
     'onSidepanelDraft',
     'onSidepanelStop',
+    'readComputerUIA',
     'revokeMcpOAuth',
     'startMcpOAuth',
     'validateMcpConnection'
@@ -60,8 +62,9 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   // DEV-AI27-A30：本机标签枚举同口径独立暴露。
   // DEV-AI27-A30b：桥配对快照/确认同口径独立暴露（快照白名单校验，无会话密钥）。
   // DEV-AI27-A3：MCP 验证与 OAuth 生命周期为独立固定意图（握手/授权在本机，秘密不进 IPC）。
+  // DT-04（W17c）：UIA 读/调用同口径独立固定意图（C09 白名单逐控件校验）。
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')),
-    ['captureLongImage', 'listComputerWindows', 'listBrowserTabs', 'getBrowserPairingState', 'confirmBrowserPairing', 'validateMcpConnection', 'startMcpOAuth', 'getMcpOAuthStatus', 'revokeMcpOAuth', 'invokeInBrowse']);
+    ['captureLongImage', 'listComputerWindows', 'readComputerUIA', 'invokeComputerUIA', 'listBrowserTabs', 'getBrowserPairingState', 'confirmBrowserPairing', 'validateMcpConnection', 'startMcpOAuth', 'getMcpOAuthStatus', 'revokeMcpOAuth', 'invokeInBrowse']);
   const buildId = '00000008-1111-4111-8111-111111111111';
   assert.deepEqual(await exposed.opsDesktopUI.captureLongImage(buildId), {
     ok: false, code: 'render_not_ready', message: '页面未就绪。'

@@ -1038,6 +1038,45 @@ function registerIpcHandlers(): void {
       return { ok: false as const, code, message: '本机窗口枚举不可用；请确认电脑控制组件已随客户端安装。' };
     }
   });
+  // DT-04（W17c / 27 §11.5.2）：UIA 主链路本机通道。worker 的 uia_read/uia_invoke
+  // 已实现（硬禁区二次校验 + 200 项上限 + 15s 超时），此前断在 host→IPC 一段。
+  // 与 computer:list-windows 同构：固定意图、仅业务窗主框架、结果只回本机渲染器
+  // （C09：不外发服务端/模型；服务端 UIA 执行接口属第二批，本轮不新增）。
+  const parseUiaPid = (raw: unknown): number => {
+    const pid = Number((raw as { pid?: unknown } | null)?.pid);
+    if (!Number.isInteger(pid) || pid <= 0) throw new Error('computer_uia_params_invalid');
+    return pid;
+  };
+  const parseUiaSummary = (raw: unknown): string => {
+    const summary = (raw as { target_summary?: unknown } | null)?.target_summary;
+    return typeof summary === 'string' ? summary.slice(0, 256) : '';
+  };
+  ipcHandle('computer:uia-read', async (event, raw) => {
+    requireComputerCaller(event);
+    if (!raw || typeof raw !== 'object') throw new Error('computer_uia_params_invalid');
+    const pid = parseUiaPid(raw);
+    try {
+      return await computerWorkerHost!.readUIA(pid, parseUiaSummary(raw));
+    } catch (error) {
+      const code = error instanceof Error && /worker_(timeout|exit)/.test(error.message) ? error.message : 'computer_worker_unavailable';
+      return { ok: false as const, error: code };
+    }
+  });
+  ipcHandle('computer:uia-invoke', async (event, raw) => {
+    requireComputerCaller(event);
+    if (!raw || typeof raw !== 'object') throw new Error('computer_uia_params_invalid');
+    const pid = parseUiaPid(raw);
+    const body = raw as { automation_id?: unknown; value?: unknown };
+    const automationId = typeof body.automation_id === 'string' && body.automation_id.length > 0 && body.automation_id.length <= 200 ? body.automation_id : '';
+    if (!automationId) throw new Error('computer_uia_params_invalid');
+    const value = body.value === undefined || body.value === null ? null : String(body.value).slice(0, 32768);
+    try {
+      return await computerWorkerHost!.invokeUIA(pid, automationId, value, parseUiaSummary(raw));
+    } catch (error) {
+      const code = error instanceof Error && /worker_(timeout|exit|hard_forbidden)/.test(error.message) ? error.message : 'computer_worker_unavailable';
+      return { ok: false as const, error: code };
+    }
+  });
   // DEV-AI27-A30：本机标签枚举（选标签授权弹窗用）。与 computer:list-windows 同构——
   // 用户主动 UI 动作的本机枚举（27 §13.2/C09 精神）：枚举在本机、服务端只知道选中项，
   // 不进服务端命令账本（账本只记 AI 动作）。桥未启动/未配对时如实返回真实状态，不伪造列表。

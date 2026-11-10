@@ -38,6 +38,17 @@ type ComputerWindowListResult =
   | { ok: false; code: string; message: string }
   | { ok: true; windows: ComputerWindowView[] };
 
+// DT-04（W17c / 27 §11.5.2）：UIA 控件树视图。C09 脱敏口径——逐控件只允许
+// id/type/name/value 四键，任何多余键（如 process_path/hwnd/class_name）整批拒绝；
+// 树上限 200 项与 worker 侧一致。
+type ComputerUiaControl = { id: string; type: string; name: string; value: string };
+type ComputerUiaViewResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; window: string; controls: ComputerUiaControl[] };
+type ComputerUiaInvokeResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; action: string };
+
 // DEV-AI27-A30：本机标签枚举结果（选标签授权弹窗）。origin 已由扩展按页面 URL 归一。
 type BrowserTabView = { tab_id: number; title: string; origin: string; window_id: number; active: boolean };
 type BrowserTabListResult =
@@ -159,6 +170,46 @@ function parseComputerWindowListResult(raw: unknown): ComputerWindowListResult |
     windows.push({ handle: win.handle, process: win.process, title: win.title, forbidden: win.forbidden });
   }
   return { ok: true, windows };
+}
+
+// DT-04：UIA 读取结果白名单。worker 失败时返回 {ok:false,error}，映射为 code 透出。
+function parseComputerUiaViewResult(raw: unknown): ComputerUiaViewResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.error === 'string' && value.error.length <= 60
+      ? { ok: false, code: value.error, message: 'UIA 读取失败。' }
+      : null;
+  }
+  if (typeof value.window !== 'string' || value.window.length > 256) return null;
+  if (!Array.isArray(value.controls) || value.controls.length > 200) return null;
+  const controls: ComputerUiaControl[] = [];
+  for (const item of value.controls) {
+    const c = asRecord(item);
+    if (!c) return null;
+    // C09：逐控件四键白名单——进程路径/句柄/类名等越界字段整批拒绝。
+    if (Object.keys(c).sort().join(',') !== 'id,name,type,value') return null;
+    if (typeof c.id !== 'string' || c.id.length > 200) return null;
+    if (typeof c.type !== 'string' || c.type.length > 60) return null;
+    if (typeof c.name !== 'string' || c.name.length > 500) return null;
+    if (typeof c.value !== 'string' || c.value.length > 4000) return null;
+    controls.push({ id: c.id, type: c.type, name: c.name, value: c.value });
+  }
+  return { ok: true, window: value.window, controls };
+}
+
+// DT-04：UIA 单控件动作结果白名单。
+function parseComputerUiaInvokeResult(raw: unknown): ComputerUiaInvokeResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.error === 'string' && value.error.length <= 60
+      ? { ok: false, code: value.error, message: 'UIA 动作失败。' }
+      : null;
+  }
+  return typeof value.action === 'string' && ['invoke', 'setvalue'].includes(value.action)
+    ? { ok: true, action: value.action }
+    : null;
 }
 
 function parseBrowserTabListResult(raw: unknown): BrowserTabListResult | null {
@@ -394,6 +445,26 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
   async listComputerWindows(): Promise<ComputerWindowListResult> {
     const result = parseComputerWindowListResult(await ipcRenderer.invoke('computer:list-windows'));
     return result ?? { ok: false, code: 'computer_windows_invalid', message: 'Electron 返回的窗口列表无效。' };
+  },
+  // DT-04（W17c）：UIA 主链路固定意图——参数本机校验后转发主进程；结果按
+  // C09 白名单逐项校验，越界字段整批拒绝，进程路径/截图不进渲染器。
+  async readComputerUIA(input: { pid: number; target_summary: string }): Promise<ComputerUiaViewResult> {
+    if (!Number.isInteger(input?.pid) || (input as { pid: number }).pid <= 0
+      || typeof input?.target_summary !== 'string') {
+      return { ok: false, code: 'computer_uia_invalid', message: 'UIA 参数无效。' };
+    }
+    const result = parseComputerUiaViewResult(await ipcRenderer.invoke('computer:uia-read', { pid: input.pid, target_summary: input.target_summary.slice(0, 256) }));
+    return result ?? { ok: false, code: 'computer_uia_invalid', message: 'Electron 返回的 UIA 读取结果无效。' };
+  },
+  async invokeComputerUIA(input: { pid: number; automation_id: string; value?: string | null; target_summary: string }): Promise<ComputerUiaInvokeResult> {
+    if (!Number.isInteger(input?.pid) || (input as { pid: number }).pid <= 0
+      || typeof input?.automation_id !== 'string' || input.automation_id.length === 0 || input.automation_id.length > 200
+      || typeof input?.target_summary !== 'string') {
+      return { ok: false, code: 'computer_uia_invalid', message: 'UIA 参数无效。' };
+    }
+    const value = input.value === undefined || input.value === null ? null : String(input.value).slice(0, 32768);
+    const result = parseComputerUiaInvokeResult(await ipcRenderer.invoke('computer:uia-invoke', { pid: input.pid, automation_id: input.automation_id, value, target_summary: input.target_summary.slice(0, 256) }));
+    return result ?? { ok: false, code: 'computer_uia_invalid', message: 'Electron 返回的 UIA 动作结果无效。' };
   },
   // DEV-AI27-A30：本机标签枚举（选标签授权弹窗）——枚举在本机，桥未启动/未配对时如实报错。
   async listBrowserTabs(): Promise<BrowserTabListResult> {
