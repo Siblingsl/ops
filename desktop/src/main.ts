@@ -28,8 +28,9 @@ import { registerMcpIpcHandlers } from './ipc/mcp';
 import { registerVoiceIpcHandlers, setRealtimeBridge } from './ipc/voice';
 import { registerComputerIpcHandlers, setComputerWorkerHost } from './ipc/computer';
 import { registerCXIpcHandlers } from './ipc/cx';
+import { registerInBrowseIpcHandlers } from './ipc/inbrowse';
 import { ComputerWorkerHost } from './computer-worker-host';
-import { bindInBrowseController, clearInBrowseData, inBrowseAttachAfterOverlay, inBrowseDataStats, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
+import { bindInBrowseController, inBrowseAttachAfterOverlay, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
 import { RealtimeBridge, type RealtimeBridgeEvent } from './voice-realtime';
 import * as wsRealtime from 'ws';
 
@@ -957,59 +958,9 @@ function registerIpcHandlers(): void {
       }
     });
   };
-  ipcHandle('inbrowse:set-bounds', (event, raw) => {
-    const controller = requireInBrowse(event);
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('bounds 参数无效。');
-    const b = raw as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
-    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : 0);
-    controller.setBounds({ x: num(b.x), y: num(b.y), width: num(b.width), height: num(b.height) });
-    return controller.snapshot();
-  });
-  ipcHandle('inbrowse:navigate', (event, raw) => {
-    const controller = requireInBrowse(event);
-    const url = typeof raw === 'string' ? raw : '';
-    const result = controller.navigate(url);
-    if (!result.ok) throw new Error(`inbrowse_navigate_denied: ${result.reason}`);
-    return controller.snapshot();
-  });
-  ipcHandle('inbrowse:back', (event) => { requireInBrowse(event).goBack(); return null; });
-  ipcHandle('inbrowse:forward', (event) => { requireInBrowse(event).goForward(); return null; });
-  ipcHandle('inbrowse:reload', (event) => { requireInBrowse(event).reload(); return null; });
-  ipcHandle('inbrowse:stop', (event) => { requireInBrowse(event).stopLoading(); return null; });
-  // DEV-AI27-08d（W08d）：多页签意图。
-  ipcHandle('inbrowse:open-tab', (event) => { const c = requireInBrowse(event); return { id: c.openTab() }; });
-  ipcHandle('inbrowse:switch-tab', (event, raw) => {
-    const tabID = typeof raw === 'string' ? raw : '';
-    if (!requireInBrowse(event).switchTab(tabID)) throw new Error('inbrowse_tab_unknown');
-    return null;
-  });
-  ipcHandle('inbrowse:reorder-tab', (event, raw) => {
-    if (!raw || typeof raw !== 'object') throw new Error('reorder 参数无效。');
-    const b = raw as { from?: unknown; to?: unknown };
-    if (!requireInBrowse(event).reorderTab(String(b.from ?? ''), String(b.to ?? ''))) throw new Error('inbrowse_reorder_invalid');
-    return null;
-  });
-  ipcHandle('inbrowse:close-tab', (event, raw) => {
-    const tabID = typeof raw === 'string' ? raw : '';
-    requireInBrowse(event).closeTab(tabID);
-    return null;
-  });
-  ipcHandle('inbrowse:close', (event) => {
-    // 兼容旧通道：关闭活动页签（无活动时等效清理）。
-    const c = requireInBrowse(event);
-    const active = c.snapshot().activeTabId;
-    if (active) c.closeTab(active);
-    return null;
-  });
-  ipcHandle('inbrowse:snapshot', (event) => requireInBrowse(event).snapshot());
-  // DEV-AI27-08g（27 §14.5）：浏览数据管理——只读统计与受控清理，仅 persist:ops-inbrowse。
-  ipcHandle('inbrowse:data-stats', () => inBrowseDataStats());
-  ipcHandle('inbrowse:clear-data', (event, raw) => {
-    requireInBrowse(event);
-    const kind = typeof raw === 'string' ? raw : '';
-    if (kind !== 'cache' && kind !== 'cookies' && kind !== 'all') throw new Error('inbrowse_data_kind_invalid');
-    return clearInBrowseData(kind);
-  });
+  // DEV-AI27-08（W08，D-172）：内置浏览视图固定意图——DT-08 片 8 拆至 ipc/inbrowse.ts
+  // （契约与防线语义不变；来源校验与快照推送闭包留 main.ts）。
+  registerInBrowseIpcHandlers({ ipcHandle, requireInBrowse });
   // DEV-AI27-17（W17b，A12）：本机选窗器。枚举只在本机发生（27 §11.5.1/C09）——
   // 渲染器只拿不透明 handle 与脱敏摘要，不上传窗口全集、进程路径或截图。
   // handle = sha256(pid + 标题) 前 32 位：服务端与模型拿不到明文，本机可重算核对。
