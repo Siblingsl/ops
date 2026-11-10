@@ -30,6 +30,32 @@ func opt02Account(t *testing.T) (Account, string) {
 	return a, path
 }
 
+// opt02BenchDataScale 固定基准数据规模（A29）：每个账号预置 30 个作品，
+// 状态按固定比例分布，保证看板聚合与 30 行待办的查询成本和顺序稳定，
+// 不受同一测试库里其它用例遗留数据影响。业务断言不因此放宽。
+const opt02BenchWorks = 30
+
+func opt02SeedDashboardScale(t *testing.T, a Account) {
+	t.Helper()
+	statuses := []string{"drafting", "checking", "ready", "pushed", "packed", "published"}
+	for index := 0; index < opt02BenchWorks; index++ {
+		if _, err := env.srv.db.Exec(context.Background(), `INSERT INTO work
+			(account_id, content_format, status, title, updated_at)
+			VALUES ($1,'note',$2,$3, now() - make_interval(mins => $4))`,
+			a.ID, statuses[index%len(statuses)], fmt.Sprintf("基准作品 %02d", index+1), index); err != nil {
+			t.Fatalf("seed benchmark work %d: %v", index, err)
+		}
+	}
+	var works int
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT count(*) FROM work WHERE account_id=$1 AND deleted_at IS NULL`, a.ID).Scan(&works); err != nil {
+		t.Fatal(err)
+	}
+	if works != opt02BenchWorks {
+		t.Fatalf("benchmark works=%d want=%d", works, opt02BenchWorks)
+	}
+}
+
 func opt02Model(t *testing.T, wait func(http.ResponseWriter, *http.Request)) {
 	t.Helper()
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -211,15 +237,20 @@ func opt02DashboardP95(samples []time.Duration) time.Duration {
 
 func TestOPT02SlowModelDoesNotHoldTransactionOrDelayDashboard(t *testing.T) {
 	a, path := opt02Account(t)
-	ctx, cancel := context.WithTimeout(v4Context(t, a), 70*time.Second)
+	// A29 基准环境：固定数据规模 + 预热 + 交错 B1→D1→B2→D2 口径。
+	// B1 在模型启动前采集；模型等待期间依次采集 D1、B2、D2，baseline=B1∪B2、during=D1∪D2，
+	// 机器随时间的单调漂移会同时落在 B2 上，而不会全部算进 during。
+	opt02SeedDashboardScale(t, a)
+	ctx, cancel := context.WithTimeout(v4Context(t, a), 90*time.Second)
 	defer cancel()
-	opt02DashboardLoad(t, ctx, path, 10)
-	baselineSamples := append(opt02DashboardLoad(t, ctx, path, 200), opt02DashboardLoad(t, ctx, path, 200)...)
-	baseline := opt02DashboardP95(baselineSamples)
+	opt02DashboardLoad(t, ctx, path, 40)
+	baselineBefore := opt02DashboardLoad(t, ctx, path, 200)
 	started := make(chan struct{}, 1)
+	modelDone := make(chan struct{})
 	opt02Model(t, func(w http.ResponseWriter, r *http.Request) {
 		opt02FirstDelta(w)
 		started <- struct{}{}
+		defer close(modelDone)
 		select {
 		case <-time.After(30 * time.Second):
 		case <-r.Context().Done():
@@ -273,8 +304,17 @@ func TestOPT02SlowModelDoesNotHoldTransactionOrDelayDashboard(t *testing.T) {
 		}
 	}()
 	defer func() { close(stop); <-monitorDone }()
-	duringSamples := append(opt02DashboardLoad(t, ctx, path, 200), opt02DashboardLoad(t, ctx, path, 200)...)
-	during := opt02DashboardP95(duringSamples)
+	duringOne := opt02DashboardLoad(t, ctx, path, 200)
+	baselineAfter := opt02DashboardLoad(t, ctx, path, 200)
+	duringTwo := opt02DashboardLoad(t, ctx, path, 200)
+	select {
+	case <-modelDone:
+		// 模型提前返回：后两个块已经落在生成之后，"during" 不成立，报环境问题而不是伪造退化率。
+		t.Fatal("基准环境不成立：dashboard 采样窗口超过 30s 模型等待，during 被生成结束污染")
+	default:
+	}
+	baseline := opt02DashboardP95(append(append([]time.Duration{}, baselineBefore...), baselineAfter...))
+	during := opt02DashboardP95(append(append([]time.Duration{}, duringOne...), duringTwo...))
 	if err := <-result; err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +323,10 @@ func TestOPT02SlowModelDoesNotHoldTransactionOrDelayDashboard(t *testing.T) {
 	if value := idleSnapshot.Load(); value != nil {
 		snapshot = *value
 	}
-	t.Logf("4 workers, 1600 baseline/1600 during requests, 25ms pacing: p95 baseline=%s during=%s degradation=%.2f%%; model wait=%s, idle peak=%d, longest idle transaction=%dms in %d samples, idle snapshot=%s", baseline, during, degradation, time.Since(waitStart), peak.Load(), peakIdleAgeMs.Load(), checks.Load(), snapshot)
+	t.Logf("A29 bench: %d works seeded, 4 workers, 25ms pacing, 1600 baseline(B1∪B2)/1600 during(D1∪D2); p95 B1=%s B2=%s baseline=%s | D1=%s D2=%s during=%s | degradation=%.2f%%; model wait=%s, idle peak=%d, longest idle transaction=%dms in %d samples, idle snapshot=%s",
+		opt02BenchWorks, opt02DashboardP95(baselineBefore), opt02DashboardP95(baselineAfter), baseline,
+		opt02DashboardP95(duringOne), opt02DashboardP95(duringTwo), during, degradation,
+		time.Since(waitStart), peak.Load(), peakIdleAgeMs.Load(), checks.Load(), snapshot)
 	// Daily generation opens its short write transaction only after the model returns.
 	// Ignore sub-second gaps between its SQL statements; a transaction spanning the 30s model wait must exceed this bound.
 	if peak.Load() < 0 || peakIdleAgeMs.Load() >= 1000 || checks.Load() < 29 {
