@@ -25,6 +25,7 @@ import {
 import { AgentMarkdown } from '@/lib/agent-markdown'
 import { AgentActionCards } from '@/pages/agent/ActionCards'
 import { ArtifactPanel } from '@/pages/agent/ArtifactPanel'
+import { browserEvidenceNotice } from '@/pages/agent/browser-evidence'
 import { browserStore, clearPartial, type PartialStream, readPartial, savePartial } from '@/pages/agent/partial-stream'
 import { ContextPickerDialog, SkillPickerDialog, type AgentContextSelection, type AgentSkillSelection } from '@/pages/agent/ContextPickers'
 import { AgentPlanCard, AgentQuestionCard } from '@/pages/agent/PlansQuestions'
@@ -412,6 +413,27 @@ function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerat
         </div>
       </div>
     </article>
+  )
+}
+
+// A11（27 §11/§13）：Web 端不展示浏览器证据正文，只如实标注"仅桌面可见"。
+// 有证据 → 显示条数占位；无证据或请求失败 → 不渲染（不把"没有证据"说成"加载失败"）。
+function BrowserEvidenceNotice({ conversationId }: { conversationId?: string | null }) {
+  const [count, setCount] = useState<number | null>(null)
+  useEffect(() => {
+    if (!conversationId) { setCount(null); return }
+    let cancelled = false
+    void get<{ evidence?: unknown[] }>(`/agent/browser/evidence?conversation_id=${conversationId}`)
+      .then((data) => { if (!cancelled) setCount(Array.isArray(data.evidence) ? data.evidence.length : null) })
+      .catch(() => { if (!cancelled) setCount(null) })
+    return () => { cancelled = true }
+  }, [conversationId])
+  const notice = browserEvidenceNotice(count)
+  if (!notice) return null
+  return (
+    <div className="mx-auto mt-4 max-w-3xl" data-testid="agent-browser-evidence-notice">
+      <p className="rounded-lg border border-mist-200 bg-mist-50 px-3 py-2 text-[12px] text-mist-600">{notice.text}</p>
+    </div>
   )
 }
 
@@ -1356,6 +1378,8 @@ export default function Agent() {
                 </div>
               </div></div>}
             </div>
+            {/* A11：浏览器证据正文仅桌面可见，Web 只显示如实占位（无证据/请求失败不渲染）。 */}
+            <BrowserEvidenceNotice conversationId={conversation?.id} />
             <div ref={bottomRef} className="h-px" />
           </div>
 
