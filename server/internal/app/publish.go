@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -277,15 +278,28 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	// 正文图片：uploadimg 并替换链接，按 sha256 复用缓存（E-04）。
+	// BE-06（docs/33 §4.1 DEV-P03 / §11.3）：对「未命中缓存」的图片做有界并发（上限 4）。
+	// 语义硬约束（docs/33 验收）：失败语义不变（任一图失败→pushFail("upload_images")，
+	// 不创建草稿）；幂等不变（同 sha256 只上传一次，缓存 key 含 account_id，跨工作区不串）；
+	// 进度事件顺序无关（SSE 消费方只看计数）；token 过期重试复用 cachedMedia 内的 call()。
 	matches := imgSrcRe.FindAllStringSubmatch(content, -1)
 	total := len(matches)
 	replaced := map[string]string{}
+	// 第一遍（串行、无网络）：收集去重后需要上传的 src 与对应 asset 行；
+	// 外链/已删除图沿用原失败语义立即返回。
+	type pendingUpload struct {
+		src string
+		ar  *assetRow
+	}
+	var pending []pendingUpload
+	seenSrc := map[string]bool{}
 	for i, mm := range matches {
 		src := mm[2]
 		step("upload_images", "running", i+1, total)
-		if _, done := replaced[src]; done {
+		if seenSrc[src] {
 			continue
 		}
+		seenSrc[src] = true
 		aid, isAsset := assetIDFromURL(src)
 		if !isAsset {
 			fail(pushFail{"upload_images", validation("正文中有外部图片链接，微信会过滤外部图片，请改为上传图片")})
@@ -296,12 +310,80 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 			fail(pushFail{"upload_images", validation("正文引用的图片已被删除")})
 			return nil
 		}
-		url, err := s.cachedMedia(ctx, m.Account.ID, ar, "content_image", call)
-		if err != nil {
-			fail(pushFail{"upload_images", err})
-			return nil
+		pending = append(pending, pendingUpload{src: src, ar: ar})
+	}
+	// 第二遍（有界并发）：只上传未命中缓存的图；命中缓存的直接进 replaced。
+	// 幂等护栏（BE-06 反例 2）：同 sha256 在池内只占一个上传位——先到者上传落缓存，
+	// 其余同哈希等待后查缓存复用，绝不并发重传。
+	const uploadConcurrency = 4
+	var (
+		uploadMu  sync.Mutex
+		uploadErr error
+		wg        sync.WaitGroup
+		sem       = make(chan struct{}, uploadConcurrency)
+		inflight  = map[string][]chan struct{}{} // sha256 → 等待已在上传的同哈希完成
+	)
+	uploadOne := func(p pendingUpload) (string, error) {
+		uploadMu.Lock()
+		if _, waiting := inflight[p.ar.SHA256]; waiting {
+			// 已有同哈希在上传：排队等它完成，然后查缓存复用。
+			ch := make(chan struct{})
+			inflight[p.ar.SHA256] = append(inflight[p.ar.SHA256], ch)
+			uploadMu.Unlock()
+			<-ch
+			url, cached, cerr := s.cachedMediaURL(ctx, m.Account.ID, p.ar, "content_image")
+			if cerr == nil && cached {
+				return url, nil
+			}
+			// 极端：先到者失败未落缓存——按失败传播（同哈希同结果，幂等）。
+			if uploadErr != nil {
+				return "", uploadErr
+			}
+			return "", fmt.Errorf("wechat_error: same-hash upload did not populate cache")
 		}
-		replaced[src] = url
+		inflight[p.ar.SHA256] = nil
+		uploadMu.Unlock()
+		url, err := s.cachedMedia(ctx, m.Account.ID, p.ar, "content_image", call)
+		uploadMu.Lock()
+		waiters := inflight[p.ar.SHA256]
+		delete(inflight, p.ar.SHA256)
+		if err != nil && uploadErr == nil {
+			uploadErr = err
+		}
+		uploadMu.Unlock()
+		for _, ch := range waiters {
+			close(ch)
+		}
+		return url, err
+	}
+	for _, p := range pending {
+		if url, cached, cerr := s.cachedMediaURL(ctx, m.Account.ID, p.ar, "content_image"); cerr == nil && cached {
+			uploadMu.Lock()
+			replaced[p.src] = url
+			uploadMu.Unlock()
+			continue
+		}
+		wg.Add(1)
+		go func(p pendingUpload) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			url, err := uploadOne(p)
+			uploadMu.Lock()
+			defer uploadMu.Unlock()
+			if err != nil {
+				if uploadErr == nil {
+					uploadErr = err
+				}
+				return
+			}
+			replaced[p.src] = url
+		}(p)
+	}
+	wg.Wait()
+	if uploadErr != nil {
+		fail(pushFail{"upload_images", uploadErr})
+		return nil
 	}
 	content = imgSrcRe.ReplaceAllStringFunc(content, func(tag string) string {
 		mm := imgSrcRe.FindStringSubmatch(tag)
@@ -643,6 +725,21 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 	s.audit(ctx, "wechat_push", "work", m.ID.String(), "ok", map[string]any{"action": action, "kind": "newspic", "images": len(imageList)})
 	sse.send("done", map[string]any{"action": action, "draft_media_id": draftID, "backend_url": s.backendURL(), "today_count": count + 1})
 	return nil
+}
+
+// cachedMediaURL 只查缓存不上传：命中返回 (url_or_media_id, true, nil)；
+// 未命中返回 ("", false, nil)；查询出错返回错误（由调用方决定是否回源上传）。
+// BE-06：有界并发先并行查缓存，命中的免上传，未命中的才进并发上传池。
+func (s *Server) cachedMediaURL(ctx context.Context, accountID uuid.UUID, a *assetRow, kind string) (string, bool, error) {
+	var url, mediaID string
+	err := s.db.QueryRow(ctx, `SELECT wechat_url, media_id FROM wechat_media_cache WHERE account_id=$1 AND sha256=$2 AND kind=$3`, accountID, a.SHA256, kind).Scan(&url, &mediaID)
+	if err != nil {
+		return "", false, nil // 未命中（含 ErrNoRows）：交给上传池
+	}
+	if kind == "content_image" {
+		return url, true, nil
+	}
+	return mediaID, true, nil
 }
 
 func (s *Server) cachedMedia(ctx context.Context, accountID uuid.UUID, a *assetRow, kind string, call func(func(string) error) error) (string, error) {
