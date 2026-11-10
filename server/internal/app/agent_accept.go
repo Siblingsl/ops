@@ -181,6 +181,10 @@ func (s *Server) agentPrepareRun(ctx context.Context, original, selected *agentC
 	if !agentSameUUID(c.AccountID, original.AccountID) || !agentSameUUID(c.ModelProviderID, original.ModelProviderID) || c.Model != original.Model || c.Mode != original.Mode {
 		return nil, apiErr(409, "agent_revision_conflict", "对话账号或模型已变化，请刷新后重试")
 	}
+	// DEV-A13：先给"组内仍有子任务在跑"更具体的 409（否则会被笼统的 agent_run_busy 抢先）。
+	if err := s.checkDelegationAdoptionReady(ctx, tx, c.ID, trigger); err != nil {
+		return nil, err
+	}
 	if err := agentCheckRunLimitsWith(ctx, tx, c.ID, owner); err != nil {
 		return nil, err
 	}

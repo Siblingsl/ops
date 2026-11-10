@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -24,8 +25,14 @@ const (
 	delegationMaxConcurrent = 2
 	delegationMaxTotal      = 4
 	delegationMaxDepth      = 1
-	// 共享预算（27 §11.3.3）：每子任务预留的模型轮数，从父任务总池扣减。
-	delegationBudgetPerTask = 10
+	// 共享预算（27 §11.3.3）：每子任务预留 4 轮 / 180 秒，父汇总预留 2 轮 / 120 秒。
+	// 27 原文"每子最多 4 轮、3 分钟"；docs/32 §7 不再沿用旧的 10 轮占位值。
+	delegationBudgetPerTask        = 4
+	delegationBudgetPerTaskSeconds = 180
+	delegationBudgetParentRounds   = 2
+	delegationBudgetParentSeconds  = 120
+	// 任务级时长上限：27 未给任务级数值，取 15 分钟（docs/32 Q2，已批准）。
+	delegationTaskSecondsLimit = 900
 )
 
 type delegationView struct {
@@ -48,6 +55,15 @@ type delegationGroupView struct {
 	CurrentParentRunID  string            `json:"current_parent_run_id"`
 	State               string            `json:"state"`
 	CancelGeneration    int64             `json:"cancel_generation"`
+	Revision            int64             `json:"revision"`
+	ParentEndedAt       string            `json:"parent_ended_at,omitempty"`
+	ParentEndRunID      string            `json:"parent_end_run_id,omitempty"`
+	AdoptedRunID        string            `json:"adopted_run_id,omitempty"`
+	AdoptedAt           string            `json:"adopted_at,omitempty"`
+	AdoptionCount       int               `json:"adoption_count"`
+	ResultsConsumedAt   string            `json:"results_consumed_at,omitempty"`
+	ConsumedByRunID     string            `json:"consumed_by_run_id,omitempty"`
+	Budget              *delegationBudgetView `json:"budget,omitempty"`
 	Delegations         []delegationView  `json:"delegations"`
 }
 
@@ -164,12 +180,57 @@ func (s *Server) createDelegationGroup(w http.ResponseWriter, r *http.Request) e
 		if !convExists {
 			return errNotFound
 		}
-		// 创建组（预算预留：每子任务预留 delegationBudgetPerTask 轮）。
+		// 任务级预算池（docs/32 §7/D5）：同一任务链只建一次，后续批次复用同一预算作用域；
+		// 承接 run 派生的子任务继续挂在原 root 上，避免"每批委派各领一笔额度"。
+		rootRunID := parentRunID
+		var scopeID uuid.UUID
+		reuseBudget := false
+		var parentRoot, parentGroup *uuid.UUID
+		if err := tx.QueryRow(r.Context(), `SELECT root_run_id, delegation_group_id FROM agent_run WHERE id=$1`,
+			parentRunID).Scan(&parentRoot, &parentGroup); err != nil {
+			return err
+		}
+		if parentGroup != nil {
+			if err := tx.QueryRow(r.Context(), `SELECT root_run_id, budget_scope_id FROM agent_delegation_group WHERE id=$1`,
+				*parentGroup).Scan(&rootRunID, &scopeID); err != nil {
+				return err
+			}
+			reuseBudget = true
+		} else {
+			if parentRoot != nil {
+				rootRunID = *parentRoot
+			}
+			err := tx.QueryRow(r.Context(), `SELECT root_run_id, budget_scope_id FROM agent_delegation_group
+				WHERE conversation_id=$1 AND root_run_id=$2 ORDER BY created_at LIMIT 1`,
+				conversationID, rootRunID).Scan(&rootRunID, &scopeID)
+			if err == nil {
+				reuseBudget = true
+			} else if err != pgx.ErrNoRows {
+				return err
+			}
+		}
+		if reuseBudget {
+			if err := reserveTaskBudgetTx(r.Context(), tx, scopeID,
+				len(body.Delegations)*delegationBudgetPerTask,
+				len(body.Delegations)*delegationBudgetPerTaskSeconds); err != nil {
+				return err
+			}
+		} else {
+			// goal 有 token 上限时作为任务池上限继承，否则只记账不封顶。
+			var goalTokenLimit *int
+			_ = tx.QueryRow(r.Context(), `SELECT token_budget FROM agent_goal
+				WHERE conversation_id=$1 AND status IN ('active','waiting_user','budget_limited')`, conversationID).Scan(&goalTokenLimit)
+			var err error
+			scopeID, err = createDelegationTaskBudgetTx(r.Context(), tx, conversationID, rootRunID, len(body.Delegations), goalTokenLimit)
+			if err != nil {
+				return err
+			}
+		}
 		budgetReserved := len(body.Delegations) * delegationBudgetPerTask
 		if _, err := tx.Exec(r.Context(), `INSERT INTO agent_delegation_group
 			(id, workspace_id, user_id, conversation_id, root_run_id, current_parent_run_id, state, budget_scope_id, budget_reserved)
 			VALUES ($1,$2,$3,$4,$5,$5,'active',$6,$7)`,
-			groupID, id.WorkspaceID, id.UserID, conversationID, parentRunID, uuid.New(), budgetReserved); err != nil {
+			groupID, id.WorkspaceID, id.UserID, conversationID, rootRunID, scopeID, budgetReserved); err != nil {
 			return err
 		}
 		// 逐个创建子 run（agent_run 行）与委派行；子 run 同 identity/session，trigger 继续语义。
@@ -220,11 +281,37 @@ func (s *Server) createDelegationGroup(w http.ResponseWriter, r *http.Request) e
 }
 
 func (s *Server) loadDelegationGroup(ctx context.Context, groupID uuid.UUID, view *delegationGroupView) error {
+	var parentEndedAt, adoptedAt, consumedAt *time.Time
+	var budgetScopeID uuid.UUID
 	if err := s.db.QueryRow(ctx, `SELECT id::text, conversation_id::text, root_run_id::text,
-		current_parent_run_id::text, state, cancel_generation
+		current_parent_run_id::text, state, cancel_generation, revision,
+		parent_ended_at, COALESCE(parent_end_run_id::text,''), COALESCE(adopted_run_id::text,''),
+		adopted_at, adoption_count, results_consumed_at, COALESCE(consumed_by_run_id::text,''), budget_scope_id
 		FROM agent_delegation_group WHERE id=$1`, groupID).
-		Scan(&view.ID, &view.ConversationID, &view.RootRunID, &view.CurrentParentRunID, &view.State, &view.CancelGeneration); err != nil {
+		Scan(&view.ID, &view.ConversationID, &view.RootRunID, &view.CurrentParentRunID, &view.State,
+			&view.CancelGeneration, &view.Revision, &parentEndedAt, &view.ParentEndRunID, &view.AdoptedRunID,
+			&adoptedAt, &view.AdoptionCount, &consumedAt, &view.ConsumedByRunID, &budgetScopeID); err != nil {
 		return err
+	}
+	if parentEndedAt != nil {
+		view.ParentEndedAt = parentEndedAt.UTC().Format(time.RFC3339)
+	}
+	if adoptedAt != nil {
+		view.AdoptedAt = adoptedAt.UTC().Format(time.RFC3339)
+	}
+	if consumedAt != nil {
+		view.ResultsConsumedAt = consumedAt.UTC().Format(time.RFC3339)
+	}
+	budget := delegationBudgetView{BudgetScopeID: budgetScopeID.String()}
+	if err := s.db.QueryRow(ctx, `SELECT rounds_limit, rounds_reserved, rounds_used,
+		seconds_limit, seconds_reserved, seconds_used, tokens_limit, tokens_used, revision
+		FROM agent_task_budget WHERE budget_scope_id=$1`, budgetScopeID).
+		Scan(&budget.RoundsLimit, &budget.RoundsReserved, &budget.RoundsUsed,
+			&budget.SecondsLimit, &budget.SecondsReserved, &budget.SecondsUsed,
+			&budget.TokensLimit, &budget.TokensUsed, &budget.Revision); err == nil {
+		budget.RoundsRemaining = budget.RoundsLimit - budget.RoundsUsed - budget.RoundsReserved
+		budget.SecondsRemaining = budget.SecondsLimit - budget.SecondsUsed - budget.SecondsReserved
+		view.Budget = &budget
 	}
 	rows, err := s.db.Query(ctx, "SELECT "+delegationColumns+" FROM agent_delegation d WHERE d.group_id=$1 ORDER BY d.created_at", groupID)
 	if err != nil {
@@ -359,14 +446,20 @@ func (s *Server) cancelDelegationGroup(w http.ResponseWriter, r *http.Request) e
 	if group.State == "cancelled" || group.State == "completed" || group.State == "failed" {
 		return ok(w, map[string]any{"group": group, "already_terminal": true})
 	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE agent_delegation_group
-		SET state='cancelled', cancel_generation=cancel_generation+1, revision=revision+1, updated_at=now()
-		WHERE id=$1`, groupID); err != nil {
+	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+		if err := settleDelegationGroupCancelTx(r.Context(), tx, groupID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(r.Context(), `UPDATE agent_delegation_group
+			SET state='cancelled', cancel_generation=cancel_generation+1, revision=revision+1, updated_at=now()
+			WHERE id=$1`, groupID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(r.Context(), `UPDATE agent_delegation
+			SET state='cancelled', generation=generation+1, updated_at=now()
+			WHERE group_id=$1 AND state IN ('queued','running','waiting_user','cancelling')`, groupID)
 		return err
-	}
-	if _, err := s.db.Exec(r.Context(), `UPDATE agent_delegation
-		SET state='cancelled', generation=generation+1, updated_at=now()
-		WHERE group_id=$1 AND state IN ('queued','running','waiting_user','cancelling')`, groupID); err != nil {
+	}); err != nil {
 		return err
 	}
 	_, _ = s.appendAgentEvent(r.Context(), uuid.MustParse(group.ConversationID), nil, "delegation.cancel_requested", map[string]any{

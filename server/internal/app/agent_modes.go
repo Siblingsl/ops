@@ -50,7 +50,26 @@ func agentRunToolAllowed(st *agentRunState, tool *AgentTool, id *identity) bool 
 		}
 		return agentRoutineToolAllowed(tool, nil)
 	}
-	if st.ExecutionOrigin != "" && st.ExecutionOrigin != "interactive" && st.ExecutionOrigin != "goal" {
+	if st.ExecutionOrigin == "delegation" {
+		// 子 run 只能使用委派显式允许的工具（空列表视为不额外限制）；
+		// 业务写入仍走逐张卡片确认（D-117），不因来源是子任务而放宽。
+		if st.DelegationID == nil {
+			return false
+		}
+		if len(st.AllowedTools) > 0 {
+			allowed := false
+			for _, name := range st.AllowedTools {
+				if name == tool.Name {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return false
+			}
+		}
+	}
+	if st.ExecutionOrigin != "" && st.ExecutionOrigin != "interactive" && st.ExecutionOrigin != "goal" && st.ExecutionOrigin != "delegation" {
 		return false
 	}
 	if st.ExecutionOrigin == "goal" && st.GoalID == nil {

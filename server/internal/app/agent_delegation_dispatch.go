@@ -22,15 +22,16 @@ import (
 func (s *Server) dispatchDelegationGroup(ctx context.Context, groupID uuid.UUID) {
 	var conversationID uuid.UUID
 	var parentRunID uuid.UUID
+	var rootRunID uuid.UUID
 	var userID uuid.UUID
 	var workspaceID uuid.UUID
-	err := s.db.QueryRow(ctx, `SELECT conversation_id, current_parent_run_id, user_id, workspace_id
-		FROM agent_delegation_group WHERE id=$1 AND state='active'`,
-		groupID).Scan(&conversationID, &parentRunID, &userID, &workspaceID)
+	err := s.db.QueryRow(ctx, `SELECT conversation_id, current_parent_run_id, root_run_id, user_id, workspace_id
+		FROM agent_delegation_group WHERE id=$1 AND state IN ('active','waiting_user')`,
+		groupID).Scan(&conversationID, &parentRunID, &rootRunID, &userID, &workspaceID)
 	if err != nil {
 		return
 	}
-	rows, err := s.db.Query(ctx, `SELECT d.id, d.task, d.model
+	rows, err := s.db.Query(ctx, `SELECT d.id, d.task, d.model, d.allowed_tools
 		FROM agent_delegation d WHERE d.group_id=$1 AND d.state='queued' AND d.child_run_id IS NULL
 		ORDER BY d.created_at`, groupID)
 	if err != nil {
@@ -40,11 +41,12 @@ func (s *Server) dispatchDelegationGroup(ctx context.Context, groupID uuid.UUID)
 		delegationID uuid.UUID
 		task         string
 		model        string
+		allowedTools []string
 	}
 	items := []pendingItem{}
 	for rows.Next() {
 		var item pendingItem
-		if err := rows.Scan(&item.delegationID, &item.task, &item.model); err != nil {
+		if err := rows.Scan(&item.delegationID, &item.task, &item.model, &item.allowedTools); err != nil {
 			rows.Close()
 			return
 		}
@@ -53,15 +55,32 @@ func (s *Server) dispatchDelegationGroup(ctx context.Context, groupID uuid.UUID)
 	rows.Close()
 	slog.InfoContext(ctx, "W15b dispatch: 开始派发", "group", groupID.String(), "items", len(items))
 	for _, item := range items {
-		if err := s.dispatchOneDelegation(ctx, groupID, conversationID, parentRunID, userID, workspaceID, item.delegationID, item.task, item.model); err != nil {
+		if err := s.dispatchOneDelegation(ctx, groupID, conversationID, parentRunID, rootRunID, userID, workspaceID,
+			item.delegationID, item.task, item.model, item.allowedTools); err != nil {
 			slog.WarnContext(ctx, "子任务派发失败", "delegation_id", item.delegationID.String(), "err", err)
 		}
 	}
+	// DEV-A13：派发后父 run 通常已进入 awaiting_confirmation；把"仍有未终态子任务"的组
+	// 置为 waiting_user，供下一次用户交互承接（不自动建 run）。
+	s.markDelegationParentEnded(ctx, conversationID, parentRunID)
+}
+
+// markDelegationParentEnded 是 markDelegationParentEndedTx 的非事务包装（派发完成后调用）。
+func (s *Server) markDelegationParentEnded(ctx context.Context, conversationID, parentRunID uuid.UUID) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback(ctx)
+	if err := s.markDelegationParentEndedTx(ctx, tx, conversationID, parentRunID); err != nil {
+		return
+	}
+	_ = tx.Commit(ctx)
 }
 
 // dispatchOneDelegation 派发单个委派：创建子 run 行并回填，然后后台启动模型循环。
-func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversationID, parentRunID, userID, workspaceID uuid.UUID,
-	delegationID uuid.UUID, task, model string) error {
+func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversationID, parentRunID, rootRunID, userID, workspaceID uuid.UUID,
+	delegationID uuid.UUID, task, model string, allowedTools []string) error {
 	// 子 run 以父 run 身份运行：构造带 identity 的 ctx（agentResolveModel 等需要）。
 	var parentUsername string
 	var parentRole string
@@ -95,18 +114,22 @@ func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversatio
 	// 若父仍 running，子 run 以 completed 占位创建后立即由后台循环接管（不与父并发竞争同一约束；
 	// 约束 WHERE status IN ('queued','running')，awaiting_confirmation 不受限）。
 	if _, err := s.db.Exec(ctx, `INSERT INTO agent_run
-		(id, conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model)
-		VALUES ($1,$2,$3,$4,$5,'message','running','running',$6)`,
-		childRunID, conversationID, workspaceID, userID, sessionID, model); err != nil {
+		(id, conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model,
+		 execution_origin, root_run_id, parent_run_id, delegation_group_id, delegation_id)
+		VALUES ($1,$2,$3,$4,$5,'message','running','running',$6,'delegation',$7,$8,$9,$10)`,
+		childRunID, conversationID, workspaceID, userID, sessionID, model,
+		rootRunID, parentRunID, groupID, delegationID); err != nil {
 		// 父 run 占用活动位：把父置 awaiting_confirmation 后重试一次。
 		if _, err2 := s.db.Exec(ctx, `UPDATE agent_run SET status='awaiting_confirmation'
 			WHERE id=$1 AND status='running'`, parentRunID); err2 != nil {
 			return err
 		}
 		if _, err2 := s.db.Exec(ctx, `INSERT INTO agent_run
-			(id, conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model)
-			VALUES ($1,$2,$3,$4,$5,'message','running','running',$6)`,
-			childRunID, conversationID, workspaceID, userID, sessionID, model); err2 != nil {
+			(id, conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model,
+			 execution_origin, root_run_id, parent_run_id, delegation_group_id, delegation_id)
+			VALUES ($1,$2,$3,$4,$5,'message','running','running',$6,'delegation',$7,$8,$9,$10)`,
+			childRunID, conversationID, workspaceID, userID, sessionID, model,
+			rootRunID, parentRunID, groupID, delegationID); err2 != nil {
 			return err2
 		}
 	}
@@ -114,6 +137,20 @@ func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversatio
 	if _, err := s.db.Exec(ctx, `UPDATE agent_delegation
 		SET child_run_id=$2, state='running', updated_at=now() WHERE id=$1`, delegationID, childRunID); err != nil {
 		return err
+	}
+	// DEV-A13：子 run 的输入文本必须落库，否则模型只能看到空会话；
+	// 消息归属子 run，会话列表与父上下文按 execution_origin='delegation' 过滤。
+	if tx, err := s.db.Begin(ctx); err == nil {
+		msgState := &agentRunState{RunID: childRunID, ConversationID: conversationID}
+		_, err = s.agentInsertMessageTx(ctx, tx, msgState, "user", task, nil, "", "", nil, nil)
+		if err == nil {
+			err = tx.Commit(ctx)
+		} else {
+			_ = tx.Rollback(ctx)
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "W15b dispatch: 子任务文本写入失败", "delegation_id", delegationID.String(), "err", err)
+		}
 	}
 	// 委派状态事件。
 	_, _ = s.appendAgentEvent(ctx, conversationID, &childRunID, "delegation.state_changed", map[string]any{
@@ -131,6 +168,12 @@ func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversatio
 		Mode:            "execute",
 		ExecutionOrigin: "delegation",
 		Model:           s.ai27ResolveModelRef(ctx, workspaceID, model),
+		// 子 run 限额：每子 4 轮 / 3 分钟（27 §11.3.3），工具限委派显式允许集合。
+		RoundsLimit:       delegationBudgetPerTask,
+		AllowedTools:      allowedTools,
+		DelegationID:      &delegationID,
+		DelegationGroupID: &groupID,
+		Deadline:          time.Now().Add(delegationBudgetPerTaskSeconds * time.Second),
 	}
 	if err := s.startAgentRunBackground(ctx, st); err != nil {
 		slog.WarnContext(ctx, "W15b dispatch: 模型循环启动失败", "child", childRunID.String(), "err", err)
@@ -145,35 +188,19 @@ func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversatio
 	return nil
 }
 
-// watchDelegationChild 轮询子 run 终态并回写委派结果（27 §11.3.3：子完成≠父完成）。
+// watchDelegationChild 轮询子 run 终态；终态后由 reconcileDelegationTerminal 统一对账
+// （状态迁移 + 预算结算 + 组汇总），避免"watcher 与 sweep 各写一半"。
 func (s *Server) watchDelegationChild(ctx context.Context, delegationID, childRunID uuid.UUID) {
 	for {
 		var status string
-		var stage string
-		err := s.db.QueryRow(ctx, `SELECT status, stage FROM agent_run WHERE id=$1`, childRunID).Scan(&status, &stage)
+		err := s.db.QueryRow(ctx, `SELECT status FROM agent_run WHERE id=$1`, childRunID).Scan(&status)
 		if err != nil {
 			return
 		}
-		switch status {
-		case "completed":
-			// 子 run 的最终文本摘要（脱敏由消息层处理）。
-			var summary string
-			_ = s.db.QueryRow(ctx, `SELECT content FROM agent_message
-				WHERE run_id=$1 AND role='assistant' ORDER BY created_at DESC LIMIT 1`, childRunID).Scan(&summary)
-			truncated := summary
-			if len([]rune(truncated)) > 500 {
-				truncated = string([]rune(truncated)[:500]) + "…"
+		if status == "completed" || status == "failed" || status == "stopped" {
+			if err := s.reconcileDelegationTerminal(ctx, delegationID); err != nil {
+				slog.WarnContext(ctx, "子任务终态对账失败（等待 sweep 重试）", "delegation_id", delegationID.String(), "err", err)
 			}
-			_, _ = s.db.Exec(ctx, `UPDATE agent_delegation
-				SET state='succeeded', result_summary=$2, updated_at=now() WHERE id=$1 AND state='running'`,
-				delegationID, truncated)
-			s.touchDelegationGroupOnChildDone(ctx, delegationID)
-			return
-		case "failed", "stopped":
-			_, _ = s.db.Exec(ctx, `UPDATE agent_delegation
-				SET state='failed', error_code=$2, updated_at=now() WHERE id=$1 AND state='running'`,
-				delegationID, "child_run_"+status)
-			s.touchDelegationGroupOnChildDone(ctx, delegationID)
 			return
 		}
 		select {
@@ -196,7 +223,10 @@ func (s *Server) touchDelegationGroupOnChildDone(ctx context.Context, delegation
 		return
 	}
 	if unfinished == 0 {
-		_, _ = s.db.Exec(ctx, `UPDATE agent_delegation_group SET state='completed', updated_at=now() WHERE id=$1 AND state='active'`, groupID)
+		// active/waiting_user → completed；completed 只表示"全部子任务终态"，不表示"已汇总"。
+		// 结果是否被承接由 results_consumed_at 单独标记（docs/32 D3）。
+		_, _ = s.db.Exec(ctx, `UPDATE agent_delegation_group SET state='completed', updated_at=now()
+			WHERE id=$1 AND state IN ('active','waiting_user')`, groupID)
 	}
 }
 

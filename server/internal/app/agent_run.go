@@ -35,6 +35,15 @@ type agentRunState struct {
 	GoalID              *uuid.UUID
 	RoutineID           *uuid.UUID
 	RoutineOccurrenceID *uuid.UUID
+	// DEV-A13：委派归属与承接标记。子 run 由派发创建时写 DelegationGroupID/DelegationID；
+	// 承接 run 由 agentStartRunTx 写 DelegationGroupID，DelegationAdopted 表示已注入子结果摘要。
+	DelegationGroupID *uuid.UUID
+	DelegationID      *uuid.UUID
+	DelegationAdopted bool
+	// RoundsLimit 为单次 run 的轮次上限（0 表示用 agentMaxRounds）；子 run 取 4 轮（27 §11.3.3）。
+	RoundsLimit int
+	// AllowedTools 是委派显式允许的工具；空表示不额外限制（仍受角色可见性约束）。
+	AllowedTools []string
 	StartedAt           time.Time
 	GoalUsedSeconds     int
 	GoalUsedTokens      int
@@ -476,6 +485,9 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 	if st.ExecutionOrigin == "routine" {
 		runSeconds = 300
 	}
+	if st.ExecutionOrigin == "delegation" {
+		runSeconds = delegationBudgetPerTaskSeconds
+	}
 	st.Deadline = time.Now().Add(time.Duration(runSeconds) * time.Second)
 	if st.GoalID != nil {
 		remaining := st.GoalSecondsBudget - st.GoalUsedSeconds
@@ -498,7 +510,7 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 		return status, reason
 	}
 
-	for st.Rounds < agentMaxRounds {
+	for st.Rounds < st.maxRounds() {
 		// 第 6.1 节第 2.1 项：取消标记、截止时间；第 9.3 节第 2 项：维护模式。
 		if ctx.Err() != nil {
 			status = "stopped"
@@ -1020,6 +1032,10 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 		if txErr == nil && st.ExecutionOrigin != "routine" {
 			txErr = agentMarkRunSteersForReviewTx(finishCtx, tx, st.ConversationID, st.RunID)
 		}
+		// DEV-A13：记录父 run 结束（必要时组转 waiting_user），并结算承接 run 的父汇总预留。
+		if txErr == nil {
+			txErr = s.finishDelegationTx(finishCtx, tx, st)
+		}
 		var goalNotice string
 		if txErr == nil && st.GoalID != nil && st.ExecutionOrigin != "routine" {
 			goalNotice, txErr = s.finishAgentGoalTx(finishCtx, tx, st, status, reason)
@@ -1049,6 +1065,10 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 	}
 	if txErr != nil {
 		slog.ErrorContext(finishCtx, "智能体运行终态或事件保存失败", "run_id", st.RunID.String(), "err", txErr)
+	}
+	if txErr == nil && st.ExecutionOrigin != "delegation" {
+		// DEV-A13：父 run 已交出活动位，派发本 run 创建但尚未派发的子任务。
+		s.dispatchPendingDelegationsOfParent(context.WithoutCancel(ctx), st.RunID)
 	}
 	if len(st.Domains) > 0 {
 		_, _ = s.db.Exec(context.WithoutCancel(ctx), `UPDATE agent_conversation SET loaded_domains=$2, updated_at=now() WHERE id=$1`,

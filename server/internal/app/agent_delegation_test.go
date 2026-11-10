@@ -318,8 +318,9 @@ func TestW06DelegationBudgetTracking(t *testing.T) {
 		`SELECT budget_reserved FROM agent_delegation_group WHERE id=$1`, group.ID).Scan(&reserved); err != nil {
 		t.Fatal(err)
 	}
-	if reserved != 2*10 {
-		t.Fatalf("预算预留应 20（2×10），got %d", reserved)
+	if reserved != 2*delegationBudgetPerTask {
+		t.Fatalf("预算预留应 %d（2×%d，27 §11.3.3 每子 4 轮），got %d",
+			2*delegationBudgetPerTask, delegationBudgetPerTask, reserved)
 	}
 
 	// 取消结算：取消后预算释放（budget_used 不超过实际耗用）
@@ -331,6 +332,16 @@ func TestW06DelegationBudgetTracking(t *testing.T) {
 	}
 	if cancelled != "cancelled" {
 		t.Fatalf("取消后应 cancelled：%s", cancelled)
+	}
+	// DEV-A13：取消要释放任务级预算预留（未用额度不得永久占用）。
+	var roundsLimit, roundsReserved, roundsUsed int
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT b.rounds_limit, b.rounds_reserved, b.rounds_used
+		FROM agent_delegation_group g JOIN agent_task_budget b ON b.budget_scope_id=g.budget_scope_id
+		WHERE g.id=$1`, group.ID).Scan(&roundsLimit, &roundsReserved, &roundsUsed); err != nil {
+		t.Fatal(err)
+	}
+	if roundsReserved != 0 || roundsUsed+roundsReserved > roundsLimit {
+		t.Fatalf("取消后预算应释放：limit=%d reserved=%d used=%d", roundsLimit, roundsReserved, roundsUsed)
 	}
 }
 

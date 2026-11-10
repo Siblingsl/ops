@@ -34,6 +34,8 @@ func (s *Server) RunJobs(ctx context.Context) {
 
 func (s *Server) runJobsOnce(ctx context.Context) {
 	s.runAgentRoutines(ctx)
+	// DEV-A13：委派组恢复 sweep（幂等；不建 run、不重放工具）。
+	s.sweepDelegationGroups(ctx)
 	if _, err := s.db.Exec(ctx, `DELETE FROM session WHERE expires_at < now()`); err != nil {
 		slog.Error("清理过期会话失败", "err", err)
 	}

@@ -502,6 +502,12 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 			}
 		}
 	}
+	// DEV-A13：认领待承接的委派组（同一事务内 FOR UPDATE）。只允许用户触发的 run 与
+	// goal 恢复承接；组内仍有子任务在跑时返回 409 delegation_children_running。
+	adopted, err := s.adoptionCandidateTx(ctx, tx, c.ID, trigger)
+	if err != nil {
+		return nil, err
+	}
 	var requestIDArg any
 	if requestID != uuid.Nil {
 		requestIDArg = requestID
@@ -534,6 +540,12 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 	if messageID != nil {
 		if _, err := tx.Exec(ctx, `UPDATE agent_message SET run_id=$1 WHERE conversation_id=$2 AND id=$3 AND role='user'`,
 			st.RunID, c.ID, *messageID); err != nil {
+			return nil, err
+		}
+	}
+	// DEV-A13：写 run 归属列、组承接标记、父汇总预留与子结果摘要（一次性消费）。
+	if adopted != nil {
+		if err := s.applyAdoptionTx(ctx, tx, st, adopted); err != nil {
 			return nil, err
 		}
 	}

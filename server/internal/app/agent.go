@@ -1282,7 +1282,9 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 func (s *Server) agentMessages(ctx context.Context, tx pgx.Tx, convID uuid.UUID, before int) ([]agentMessageView, bool, error) {
 	args := []any{convID}
 	sql := `SELECT id, seq, message_key, role, content, ai_call_id, tool_calls, tool_call_id, tool_name, attachment_ids, context_refs, skill_requests, run_id, created_at, source_message_id
-		FROM agent_message WHERE conversation_id=$1`
+		FROM agent_message WHERE conversation_id=$1
+		AND (run_id IS NULL OR NOT EXISTS (
+			SELECT 1 FROM agent_run dr WHERE dr.id=agent_message.run_id AND dr.execution_origin='delegation'))`
 	if before > 0 {
 		args = append(args, before)
 		sql += ` AND seq < $2`
@@ -1900,6 +1902,9 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/delegations/{id}/cancel", s.h(s.cancelDelegation))
 		r.Post("/agent/delegations/{id}/result", s.h(s.resultDelegation))
 		r.Post("/agent/delegation-groups/{id}/cancel", s.h(s.cancelDelegationGroup))
+		// DEV-A13（W06 续接）：组详情与显式"汇总子任务结果"。
+		r.Get("/agent/delegation-groups/{id}", s.h(s.getDelegationGroup))
+		r.Post("/agent/delegation-groups/{id}/adopt", s.h(s.adoptDelegationGroup))
 		// DEV-AI27-16（W16）：双模式语音（27 §11.4）。
 		r.Post("/agent/conversations/{id}/voice-sessions", s.h(s.createVoiceSession))
 		r.Post("/agent/voice-sessions/{id}/turns", s.h(s.createVoiceTurn))
