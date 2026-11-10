@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -785,8 +787,14 @@ func TestParsePDFTextLayerAndScannedFile(t *testing.T) {
 }
 
 func TestWASISourceMatchesGeneratedArtifact(t *testing.T) {
+	paths, err := filepath.Glob("wasm/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(paths)
+	paths = append(paths, "../../go.mod", "../../go.sum")
 	var source []byte
-	for _, path := range []string{"wasm/main.go", "../../go.mod", "../../go.sum"} {
+	for _, path := range paths {
 		part, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

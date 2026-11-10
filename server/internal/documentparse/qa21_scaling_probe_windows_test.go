@@ -235,3 +235,69 @@ func storedDocumentEntryDOCXFixture(t *testing.T, expandedDocumentEntry int) []b
 	}
 	return compressed.Bytes()
 }
+
+// TestA21ThirtyTwoMiBWithinSLA 把 32MiB SLA（30s / 256MiB）固化成门禁：
+// 成功解析、文本被截断到 20000 字符、worker Job 峰值不超过 256MiB。
+// 超时由 parser 自身 30s 上限保证（失败会返回 error，测试即红）。
+func TestA21ThirtyTwoMiBWithinSLA(t *testing.T) {
+	const expanded = 32 << 20
+	compressed, _ := compressedDocumentEntryDOCXFixture(t, expanded)
+	payload, err := json.Marshal(Request{Name: "sla-32mib.docx", Data: compressed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(executable, workerArg)
+	cmd.Stdin = bytes.NewReader(payload)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	started := time.Now()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	limit, err := limitParserProcess(cmd.Process)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("assign 256 MiB worker job limit: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	var waitErr error
+	select {
+	case waitErr = <-done:
+	case <-time.After(40 * time.Second):
+		_ = cmd.Process.Kill()
+		waitErr = <-done
+		t.Fatalf("32MiB 解析超过 40s 仍未结束")
+	}
+	elapsed := time.Since(started)
+	var usage windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+	queryErr := windows.QueryInformationJobObject(limit.job, 9, uintptr(unsafe.Pointer(&usage)), uint32(unsafe.Sizeof(usage)), nil)
+	limit.Close()
+	if waitErr != nil {
+		t.Fatalf("32MiB 解析失败：%v stderr=%q", waitErr, stderr.String())
+	}
+	if elapsed >= 30*time.Second {
+		t.Fatalf("32MiB 解析耗时 %s，超过 30s SLA", elapsed)
+	}
+	if queryErr != nil {
+		t.Fatalf("读取 worker 峰值内存失败：%v", queryErr)
+	}
+	if usage.PeakProcessMemoryUsed >= 256<<20 {
+		t.Fatalf("32MiB 解析峰值 %d 字节，超过 256MiB SLA", usage.PeakProcessMemoryUsed)
+	}
+	var result Result
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("解析回执无法解码：%v", err)
+	}
+	if result.ErrorCode != "" || result.InjectedChars != 20000 || result.TruncatedFrom == nil {
+		t.Fatalf("32MiB 回执不符合预期：%+v", result)
+	}
+	t.Logf("DEV-A21_SLA elapsed=%s peak_mib=%.1f injected=%d", elapsed.Round(time.Millisecond),
+		float64(usage.PeakProcessMemoryUsed)/(1<<20), result.InjectedChars)
+}

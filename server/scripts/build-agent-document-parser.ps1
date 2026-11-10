@@ -7,7 +7,8 @@ try {
   go build -trimpath -ldflags '-s -w' -o internal/documentparse/parser.wasm ./internal/documentparse/wasm
   if ($LASTEXITCODE -ne 0) { throw 'document parser WASI build failed' }
   $parserSourceText = ''
-  foreach ($parserSourcePath in @('internal/documentparse/wasm/main.go', 'go.mod', 'go.sum')) {
+  $parserSources = @(Get-ChildItem -Path 'internal/documentparse/wasm/*.go' | Sort-Object Name | ForEach-Object { 'internal/documentparse/wasm/' + $_.Name })
+  foreach ($parserSourcePath in ($parserSources + @('go.mod', 'go.sum'))) {
     $parserSourceText += [System.IO.File]::ReadAllText((Join-Path $PWD $parserSourcePath)).Replace("`r`n","`n")
   }
   $parserSourceHasher = [System.Security.Cryptography.SHA256]::Create()
