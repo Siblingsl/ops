@@ -120,11 +120,23 @@ func TestBE01PersonalMemoryIgnoredDedupAcrossWorkspaces(t *testing.T) {
 	firstWorkspaceID := uuid.MustParse(me["workspace"].(map[string]any)["id"].(string))
 
 	// 工作区 A：生成候选并忽略。
+	// 乱序隔离（A22）：测试库与本人账号跨 -count 运行持久——上次运行留下的 ignored 行
+	// 会让本次 A-propose 返回 409 memory_ignored_duplicate（那是 user 级去重本身）。
+	// 幂等容忍：拿到既有 ignored 行即可，不影响 B 侧判据。
 	var proposedA personalMemory
-	env.mustJSON(t, "POST", "/api/v1/memories/personal-candidates", map[string]any{"text": be01IgnoredText}, &proposedA)
-	env.mustJSON(t, "PATCH", "/api/v1/agent/personal-memories/"+proposedA.ID, map[string]any{
-		"action": "ignore", "expected_revision": proposedA.Revision,
-	}, &proposedA)
+	if stA, bodyA := env.do("POST", "/api/v1/memories/personal-candidates", map[string]any{"text": be01IgnoredText}); stA == http.StatusConflict && strings.Contains(string(bodyA), "memory_ignored_duplicate") {
+		// 既有 ignored 行：ID 未知也不需要——patch 步骤同样幂等跳过。
+		t.Log("A-propose 命中上次运行的 ignored 行（user 级去重），跳过 ignore 步骤")
+	} else if stA == http.StatusOK {
+		if err := json.Unmarshal(bodyA, &proposedA); err != nil {
+			t.Fatalf("decode: %v (%s)", err, bodyA)
+		}
+		env.mustJSON(t, "PATCH", "/api/v1/agent/personal-memories/"+proposedA.ID, map[string]any{
+			"action": "ignore", "expected_revision": proposedA.Revision,
+		}, &proposedA)
+	} else {
+		t.Fatalf("A-propose 意外状态码 %d：%s", stA, bodyA)
+	}
 
 	// 切到工作区 B：同内容 propose。
 	_ = be01CreateAndSwitchWorkspace(t, "BE-01-B-ignored")
