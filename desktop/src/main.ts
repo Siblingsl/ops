@@ -812,6 +812,19 @@ function rendererContentType(extension: string): string {
 
 // DEV-AI27-16 第六批（A2）：realtime WebSocket 连接工厂（ws 8.x）。
 // token 已由调用方拼进 URL 查询参数；这里只负责把 ws 事件适配成桥依赖接口。
+// A2：代理端点走既有登录会话（Cookie 在 Electron session 里，渲染器拿不到 httpOnly）。
+// ws/wss 不参与 Cookie 域匹配，这里按 http/https 等价地址取 Cookie。
+async function realtimeCookieHeader(url: string): Promise<string> {
+  try {
+    const parsed = new URL(url)
+    parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:';
+    const cookies = await session.defaultSession.cookies.get({ url: parsed.origin });
+    return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
+  } catch {
+    return '';
+  }
+}
+
 function connectRealtimeWebSocket(url: string): Promise<{
   send(raw: string): void;
   close(): void;
@@ -820,25 +833,31 @@ function connectRealtimeWebSocket(url: string): Promise<{
   onError(cb: (err: Error) => void): void;
 }> {
   return new Promise((resolve, reject) => {
-    const socket = new wsRealtime.WebSocket(url, { handshakeTimeout: 10_000 });
-    let settled = false;
-    socket.on('open', () => {
-      if (settled) return;
-      settled = true;
-      resolve({
-        send: (raw: string) => { if (socket.readyState === wsRealtime.WebSocket.OPEN) socket.send(raw); },
-        close: () => { try { socket.close(1000, 'bridge_stop'); } catch { /* 已断 */ } },
-        onMessage: (cb) => { socket.on('message', (data) => cb(String(data))); },
-        onClose: (cb) => { socket.on('close', (code, reason) => cb(code, String(reason))); },
-        onError: (cb) => { socket.on('error', (err) => cb(err)); },
+    void (async () => {
+      const cookie = await realtimeCookieHeader(url);
+      const socket = new wsRealtime.WebSocket(url, {
+        handshakeTimeout: 10_000,
+        headers: cookie ? { Cookie: cookie } : undefined,
       });
-    });
-    socket.on('error', (err) => {
-      if (!settled) {
+      let settled = false;
+      socket.on('open', () => {
+        if (settled) return;
         settled = true;
-        reject(err);
-      }
-    });
+        resolve({
+          send: (raw: string) => { if (socket.readyState === wsRealtime.WebSocket.OPEN) socket.send(raw); },
+          close: () => { try { socket.close(1000, 'bridge_stop'); } catch { /* 已断 */ } },
+          onMessage: (cb) => { socket.on('message', (data) => cb(String(data))); },
+          onClose: (cb) => { socket.on('close', (code, reason) => cb(code, String(reason))); },
+          onError: (cb) => { socket.on('error', (err) => cb(err)); },
+        });
+      });
+      socket.on('error', (err) => {
+        if (!settled) {
+          settled = true;
+          reject(err);
+        }
+      });
+    })();
   });
 }
 
