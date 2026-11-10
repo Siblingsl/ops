@@ -50,6 +50,8 @@ docs/*
 !docs/28-依赖安全整改清单.md
 !docs/29-仓库目录整理方案.md
 !docs/30-渲染包上移方案.md
+# A13 W06 父 run 续接设计草案（待批准，需随代码评审留痕）
+!docs/32-W06父run续接设计.md
 # AI27 验收矩阵（27 文档 §16 的状态汇总）
 !docs/acceptance/
 !docs/acceptance/**
