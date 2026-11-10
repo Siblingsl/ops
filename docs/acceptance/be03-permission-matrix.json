@@ -1,0 +1,6240 @@
+{
+  "_meta": {
+    "generator": "scripts/be03-permission-matrix.mjs",
+    "generated_at": "2026-11-10T22:22:26.385Z",
+    "semantics": "workspace_filter/audit 列的 CHECK = 静态扫描未在 handler 体内直接命中标记，需人工复核（可能由被调用方或中间件承担）；不等于越权",
+    "counts": {
+      "routes": 435,
+      "workspace_filter_yes": 145,
+      "audit_yes": 126,
+      "check_needed": 374
+    }
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "line": 155,
+      "group_middleware": [],
+      "handler": "(raw-healthz)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "s.healthz——无鉴权健康检查",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "line": 158,
+      "group_middleware": [],
+      "handler": "(raw-healthz)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "s.healthz——无鉴权健康检查",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/desktop/capabilities",
+      "line": 159,
+      "group_middleware": [],
+      "handler": "desktopCapabilities",
+      "defs": [
+        "desktop_auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/desktop/channel",
+      "line": 161,
+      "group_middleware": [],
+      "handler": "(raw-websocket)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "s.desktopChannel——一次性 ticket 鉴权（auth.go desktopChannel），非 s.h 包装",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/desktop/devices",
+      "line": 164,
+      "group_middleware": [
+        "middleware.RequestID",
+        "s.cors",
+        "requestReadDeadline(r)",
+        "stripNulQuery",
+        "requestLog",
+        "middleware.Recoverer",
+        "middleware.Compress(5, \"text/html\", \"text/css\", \"application/json\", \"application/javascript\", \"text/javascript\", \"image/svg+xml\")"
+      ],
+      "handler": "desktopListDevices",
+      "defs": [
+        "desktop_auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/desktop/devices/{id}",
+      "line": 165,
+      "group_middleware": [
+        "middleware.RequestID",
+        "s.cors",
+        "requestReadDeadline(r)",
+        "stripNulQuery",
+        "requestLog",
+        "middleware.Recoverer",
+        "middleware.Compress(5, \"text/html\", \"text/css\", \"application/json\", \"application/javascript\", \"text/javascript\", \"image/svg+xml\")"
+      ],
+      "handler": "desktopRevokeOwnDevice",
+      "defs": [
+        "desktop_auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/desktop/platform/connections/mine",
+      "line": 167,
+      "group_middleware": [
+        "middleware.RequestID",
+        "s.cors",
+        "requestReadDeadline(r)",
+        "stripNulQuery",
+        "requestLog",
+        "middleware.Recoverer",
+        "middleware.Compress(5, \"text/html\", \"text/css\", \"application/json\", \"application/javascript\", \"text/javascript\", \"image/svg+xml\")"
+      ],
+      "handler": "listMinePlatformConnections",
+      "defs": [
+        "platform_connection.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/desktop/platform/connections/{id}",
+      "line": 168,
+      "group_middleware": [
+        "middleware.RequestID",
+        "s.cors",
+        "requestReadDeadline(r)",
+        "stripNulQuery",
+        "requestLog",
+        "middleware.Recoverer",
+        "middleware.Compress(5, \"text/html\", \"text/css\", \"application/json\", \"application/javascript\", \"text/javascript\", \"image/svg+xml\")"
+      ],
+      "handler": "revokeMinePlatformConnection",
+      "defs": [
+        "platform_connection.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/status",
+      "line": 170,
+      "group_middleware": [],
+      "handler": "authStatus",
+      "defs": [
+        "auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/setup",
+      "line": 171,
+      "group_middleware": [],
+      "handler": "authSetup",
+      "defs": [
+        "auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/register",
+      "line": 172,
+      "group_middleware": [],
+      "handler": "authRegister",
+      "defs": [
+        "auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/login",
+      "line": 173,
+      "group_middleware": [],
+      "handler": "authLogin",
+      "defs": [
+        "auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/public-previews/{token}",
+      "line": 174,
+      "group_middleware": [],
+      "handler": "getPublicPreview",
+      "defs": [
+        "preview_link.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/public-previews/{token}/assets/{assetId}",
+      "line": 175,
+      "group_middleware": [],
+      "handler": "getPublicPreviewAsset",
+      "defs": [
+        "preview_link.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me",
+      "line": 185,
+      "group_middleware": [],
+      "handler": "authMe",
+      "defs": [
+        "auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/logout",
+      "line": 186,
+      "group_middleware": [],
+      "handler": "authLogout",
+      "defs": [
+        "auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/reauth",
+      "line": 187,
+      "group_middleware": [],
+      "handler": "authReauth",
+      "defs": [
+        "auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/renew",
+      "line": 188,
+      "group_middleware": [],
+      "handler": "authRenewSession",
+      "defs": [
+        "auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/auth/password",
+      "line": 189,
+      "group_middleware": [],
+      "handler": "authChangePassword",
+      "defs": [
+        "auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/system/info",
+      "line": 190,
+      "group_middleware": [],
+      "handler": "systemInfo",
+      "defs": [
+        "accounts.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/desktop/policy",
+      "line": 192,
+      "group_middleware": [],
+      "handler": "desktopGetPolicy",
+      "defs": [
+        "desktop_auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/desktop/policy",
+      "line": 193,
+      "group_middleware": [],
+      "handler": "desktopPutPolicy",
+      "defs": [
+        "desktop_auth.go"
+      ],
+      "permission_flags": [
+        "requireOwner",
+        "requireReauth"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/challenges",
+      "line": 194,
+      "group_middleware": [],
+      "handler": "desktopCreateChallenge",
+      "defs": [
+        "desktop_proof.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/devices",
+      "line": 195,
+      "group_middleware": [],
+      "handler": "desktopRegisterDevice",
+      "defs": [
+        "desktop_proof.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/platform/devices",
+      "line": 198,
+      "group_middleware": [],
+      "handler": "desktopPlatformRegisterDevice",
+      "defs": [
+        "desktop_proof.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/platform/connections",
+      "line": 200,
+      "group_middleware": [],
+      "handler": "desktopCreatePlatformConnection",
+      "defs": [
+        "platform_sync_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/platform/connections/{id}/verify",
+      "line": 201,
+      "group_middleware": [],
+      "handler": "desktopVerifyPlatformConnection",
+      "defs": [
+        "platform_sync_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/platform/presence",
+      "line": 202,
+      "group_middleware": [],
+      "handler": "desktopPlatformPresence",
+      "defs": [
+        "platform_sync_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/platform/runs/claim",
+      "line": 203,
+      "group_middleware": [],
+      "handler": "desktopClaimPlatformRun",
+      "defs": [
+        "platform_sync_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/platform/runs/{id}/heartbeat",
+      "line": 204,
+      "group_middleware": [],
+      "handler": "desktopHeartbeatPlatformRun",
+      "defs": [
+        "platform_sync_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/platform/runs/{id}/results",
+      "line": 205,
+      "group_middleware": [],
+      "handler": "desktopSubmitPlatformResults",
+      "defs": [
+        "platform_sync_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/desktop/platform/runs/{id}/receipts/{seq}",
+      "line": 206,
+      "group_middleware": [],
+      "handler": "desktopGetPlatformRunReceipt",
+      "defs": [
+        "platform_sync_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/platform-collection/policy",
+      "line": 207,
+      "group_middleware": [],
+      "handler": "platformGetPolicy",
+      "defs": [
+        "desktop_auth.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/platform-collection/policy",
+      "line": 208,
+      "group_middleware": [],
+      "handler": "platformPutPolicy",
+      "defs": [
+        "desktop_auth.go"
+      ],
+      "permission_flags": [
+        "requireOwner",
+        "requireReauth"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/platform-collection/diagnostics",
+      "line": 210,
+      "group_middleware": [],
+      "handler": "platformDiagnosticsHandler",
+      "defs": [
+        "platform_gray.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/desktop/models",
+      "line": 212,
+      "group_middleware": [],
+      "handler": "desktopListModels",
+      "defs": [
+        "desktop_models.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/models",
+      "line": 213,
+      "group_middleware": [],
+      "handler": "desktopCreateModel",
+      "defs": [
+        "desktop_models.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/desktop/models/{id}",
+      "line": 214,
+      "group_middleware": [],
+      "handler": "desktopUpdateModel",
+      "defs": [
+        "desktop_models.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/desktop/models/{id}",
+      "line": 215,
+      "group_middleware": [],
+      "handler": "desktopDeleteModel",
+      "defs": [
+        "desktop_models.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/models/{id}/test",
+      "line": 216,
+      "group_middleware": [],
+      "handler": "desktopStartModelTest",
+      "defs": [
+        "desktop_model_check.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/desktop/model-tests/{id}",
+      "line": 217,
+      "group_middleware": [],
+      "handler": "desktopGetModelTest",
+      "defs": [
+        "desktop_model_check.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/desktop/routes",
+      "line": 218,
+      "group_middleware": [],
+      "handler": "desktopGetRoutes",
+      "defs": [
+        "desktop_models.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/desktop/routes",
+      "line": 219,
+      "group_middleware": [],
+      "handler": "desktopPutRoutes",
+      "defs": [
+        "desktop_models.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/desktop/connections",
+      "line": 220,
+      "group_middleware": [],
+      "handler": "desktopCreateConnectionTicket",
+      "defs": [
+        "desktop_connection.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/users",
+      "line": 222,
+      "group_middleware": [],
+      "handler": "adminListUsers",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/admin/users/{id}",
+      "line": 223,
+      "group_middleware": [],
+      "handler": "adminPatchUser",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/users/{id}/reset-password",
+      "line": 224,
+      "group_middleware": [],
+      "handler": "adminResetPassword",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/users/{id}/revoke-sessions",
+      "line": 225,
+      "group_middleware": [],
+      "handler": "adminRevokeSessions",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/workspaces",
+      "line": 226,
+      "group_middleware": [],
+      "handler": "adminListWorkspaces",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/workspaces/{id}/enter",
+      "line": 227,
+      "group_middleware": [],
+      "handler": "adminEnterWorkspace",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/workspaces/exit",
+      "line": 228,
+      "group_middleware": [],
+      "handler": "adminExitWorkspace",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/audit-logs",
+      "line": 229,
+      "group_middleware": [],
+      "handler": "adminAuditLogs",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/platform/breakers",
+      "line": 231,
+      "group_middleware": [],
+      "handler": "adminListPlatformBreakers",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/platform/breakers/{id}/resolve",
+      "line": 232,
+      "group_middleware": [],
+      "handler": "adminResolvePlatformBreaker",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/usage",
+      "line": 233,
+      "group_middleware": [],
+      "handler": "adminUsage",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/system-settings",
+      "line": 234,
+      "group_middleware": [],
+      "handler": "adminGetSystemSettings",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/admin/system-settings",
+      "line": 235,
+      "group_middleware": [],
+      "handler": "adminPutSystemSettings",
+      "defs": [
+        "admin.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/crawl",
+      "line": 236,
+      "group_middleware": [],
+      "handler": "adminGetCrawl",
+      "defs": [
+        "crawl_settings.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/admin/crawl",
+      "line": 237,
+      "group_middleware": [],
+      "handler": "adminPutCrawl",
+      "defs": [
+        "crawl_settings.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/admin/crawl/sources/{key}",
+      "line": 238,
+      "group_middleware": [],
+      "handler": "adminPutCrawlSource",
+      "defs": [
+        "crawl_settings.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/crawl/sources/{key}/test",
+      "line": 239,
+      "group_middleware": [],
+      "handler": "adminTestCrawlSource",
+      "defs": [
+        "crawl_settings.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/crawl/runs",
+      "line": 240,
+      "group_middleware": [],
+      "handler": "adminCrawlRuns",
+      "defs": [
+        "crawl_settings.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/crawl/health",
+      "line": 241,
+      "group_middleware": [],
+      "handler": "adminCrawlHealth",
+      "defs": [
+        "crawl_health.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/hot-sources",
+      "line": 242,
+      "group_middleware": [],
+      "handler": "getHotSources",
+      "defs": [
+        "crawl_settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/hot-sources",
+      "line": 243,
+      "group_middleware": [],
+      "handler": "putHotSources",
+      "defs": [
+        "crawl_settings.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/hot-items",
+      "line": 244,
+      "group_middleware": [],
+      "handler": "listHotItems",
+      "defs": [
+        "hot.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/hot",
+      "line": 245,
+      "group_middleware": [],
+      "handler": "getAccountHot",
+      "defs": [
+        "hot.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/hot/refresh",
+      "line": 246,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/hot-matches/{id}/convert",
+      "line": 247,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/hot-matches/{id}/dismiss",
+      "line": 248,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/workspaces",
+      "line": 250,
+      "group_middleware": [],
+      "handler": "listWorkspaces",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/workspaces",
+      "line": 251,
+      "group_middleware": [],
+      "handler": "createWorkspace",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/workspaces/join",
+      "line": 252,
+      "group_middleware": [],
+      "handler": "joinWorkspace",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/workspaces/current/members",
+      "line": 253,
+      "group_middleware": [],
+      "handler": "listMembers",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/workspaces/current/members/{userId}",
+      "line": 254,
+      "group_middleware": [],
+      "handler": "patchMember",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/workspaces/current/transfer",
+      "line": 255,
+      "group_middleware": [],
+      "handler": "transferOwnership",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/workspaces/current/leave",
+      "line": 256,
+      "group_middleware": [],
+      "handler": "leaveWorkspace",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/workspaces/current/invites",
+      "line": 257,
+      "group_middleware": [],
+      "handler": "listInvites",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/workspaces/current/invites",
+      "line": 258,
+      "group_middleware": [],
+      "handler": "createInvite",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/workspaces/current/invites/{id}/send-email",
+      "line": 259,
+      "group_middleware": [],
+      "handler": "sendInviteEmail",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/workspaces/current/invites/{id}/revoke",
+      "line": 260,
+      "group_middleware": [],
+      "handler": "revokeInvite",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/workspaces/{id}",
+      "line": 261,
+      "group_middleware": [],
+      "handler": "patchWorkspace",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/workspaces/{id}/switch",
+      "line": 262,
+      "group_middleware": [],
+      "handler": "switchWorkspace",
+      "defs": [
+        "workspaces.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts",
+      "line": 264,
+      "group_middleware": [],
+      "handler": "listAccounts",
+      "defs": [
+        "accounts.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts",
+      "line": 265,
+      "group_middleware": [],
+      "handler": "createAccount",
+      "defs": [
+        "accounts.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}",
+      "line": 266,
+      "group_middleware": [],
+      "handler": "getAccount",
+      "defs": [
+        "accounts.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/accounts/{accountId}",
+      "line": 267,
+      "group_middleware": [],
+      "handler": "updateAccount",
+      "defs": [
+        "accounts.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/disable",
+      "line": 268,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/enable",
+      "line": 269,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/accounts/{accountId}",
+      "line": 270,
+      "group_middleware": [],
+      "handler": "deleteAccount",
+      "defs": [
+        "accounts.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/accounts/{accountId}/wechat-credential",
+      "line": 271,
+      "group_middleware": [],
+      "handler": "saveWechatCredential",
+      "defs": [
+        "accounts.go"
+      ],
+      "permission_flags": [
+        "requireOwner",
+        "requireReauth"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/wechat-credential/test",
+      "line": 272,
+      "group_middleware": [],
+      "handler": "testWechatCredential",
+      "defs": [
+        "accounts.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/profile",
+      "line": 274,
+      "group_middleware": [],
+      "handler": "getProfile",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/accounts/{accountId}/profile",
+      "line": 275,
+      "group_middleware": [],
+      "handler": "putProfile",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/profile-check",
+      "line": 276,
+      "group_middleware": [],
+      "handler": "getAccountProfileCheck",
+      "defs": [
+        "cx_profile_check.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/profile-check",
+      "line": 277,
+      "group_middleware": [],
+      "handler": "saveAccountProfileCheck",
+      "defs": [
+        "cx_profile_check.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/style-samples",
+      "line": 278,
+      "group_middleware": [],
+      "handler": "listStyleSamples",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/style-samples",
+      "line": 279,
+      "group_middleware": [],
+      "handler": "createStyleSample",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/style-samples/{id}",
+      "line": 280,
+      "group_middleware": [],
+      "handler": "updateStyleSample",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/style-samples/{id}",
+      "line": 281,
+      "group_middleware": [],
+      "handler": "deleteStyleSample",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/style-summary",
+      "line": 282,
+      "group_middleware": [],
+      "handler": "styleSummary",
+      "defs": [
+        "r4.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/characters",
+      "line": 283,
+      "group_middleware": [],
+      "handler": "listCharacters",
+      "defs": [
+        "comic.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/characters",
+      "line": 284,
+      "group_middleware": [],
+      "handler": "createCharacter",
+      "defs": [
+        "comic.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/characters/{id}",
+      "line": 285,
+      "group_middleware": [],
+      "handler": "updateCharacter",
+      "defs": [
+        "comic.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/characters/{id}",
+      "line": 286,
+      "group_middleware": [],
+      "handler": "deleteCharacter",
+      "defs": [
+        "comic.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/characters/{id}/ref",
+      "line": 287,
+      "group_middleware": [],
+      "handler": "uploadCharacterRef",
+      "defs": [
+        "comic.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/characters/{id}/ref",
+      "line": 288,
+      "group_middleware": [],
+      "handler": "deleteCharacterRef",
+      "defs": [
+        "comic.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/materials",
+      "line": 289,
+      "group_middleware": [],
+      "handler": "listMaterials",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/materials/{id}",
+      "line": 290,
+      "group_middleware": [],
+      "handler": "getMaterial",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/materials",
+      "line": 291,
+      "group_middleware": [],
+      "handler": "createMaterial",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/materials/{id}",
+      "line": 292,
+      "group_middleware": [],
+      "handler": "updateMaterial",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/materials/{id}",
+      "line": 293,
+      "group_middleware": [],
+      "handler": "deleteMaterial",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/metrics/import",
+      "line": 294,
+      "group_middleware": [],
+      "handler": "importMetrics",
+      "defs": [
+        "metrics_import.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/metrics/sync-wechat",
+      "line": 295,
+      "group_middleware": [],
+      "handler": "syncWechatMetrics",
+      "defs": [
+        "datacube.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/metrics/unmatched",
+      "line": 296,
+      "group_middleware": [],
+      "handler": "listUnmatchedMetrics",
+      "defs": [
+        "datacube.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/metrics/unmatched/{id}/assign",
+      "line": 297,
+      "group_middleware": [],
+      "handler": "assignUnmatchedMetric",
+      "defs": [
+        "datacube.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/metrics/unmatched/{id}/ignore",
+      "line": 298,
+      "group_middleware": [],
+      "handler": "ignoreUnmatchedMetric",
+      "defs": [
+        "datacube.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/metrics/observations",
+      "line": 300,
+      "group_middleware": [],
+      "handler": "listObservations",
+      "defs": [
+        "metric_projection.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/metrics/observations/{id}/confirm",
+      "line": 301,
+      "group_middleware": [],
+      "handler": "confirmObservationHandler",
+      "defs": [
+        "metric_projection.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/metrics/screenshots",
+      "line": 302,
+      "group_middleware": [],
+      "handler": "recognizeMetricScreenshots",
+      "defs": [
+        "metric_screenshot.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/metrics/screenshots/{id}/rows/{idx}/confirm",
+      "line": 303,
+      "group_middleware": [],
+      "handler": "confirmMetricScreenshotRow",
+      "defs": [
+        "metric_screenshot.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/followers",
+      "line": 304,
+      "group_middleware": [],
+      "handler": "listFollowers",
+      "defs": [
+        "account_metrics.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/followers",
+      "line": 305,
+      "group_middleware": [],
+      "handler": "recordFollowers",
+      "defs": [
+        "account_metrics.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/topics",
+      "line": 307,
+      "group_middleware": [],
+      "handler": "listTopics",
+      "defs": [
+        "topics.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/topics",
+      "line": 308,
+      "group_middleware": [],
+      "handler": "createTopic",
+      "defs": [
+        "topics.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/topics/suggest",
+      "line": 309,
+      "group_middleware": [],
+      "handler": "suggestTopics",
+      "defs": [
+        "topics.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/topics/hot-suggest",
+      "line": 310,
+      "group_middleware": [],
+      "handler": "suggestHotTopics",
+      "defs": [
+        "topics.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/topics/{id}/diagnose",
+      "line": 311,
+      "group_middleware": [],
+      "handler": "diagnoseTopic",
+      "defs": [
+        "cx_topic_diagnosis_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/topics/{id}/diagnoses",
+      "line": 312,
+      "group_middleware": [],
+      "handler": "listTopicDiagnoses",
+      "defs": [
+        "cx_topic_diagnosis_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/topics/{id}",
+      "line": 313,
+      "group_middleware": [],
+      "handler": "updateTopic",
+      "defs": [
+        "topics.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/topics/{id}",
+      "line": 314,
+      "group_middleware": [],
+      "handler": "deleteTopic",
+      "defs": [
+        "topics.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/topics/{id}/works",
+      "line": 315,
+      "group_middleware": [],
+      "handler": "startWorkFromTopic",
+      "defs": [
+        "topics.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/topics/{id}/verify",
+      "line": 316,
+      "group_middleware": [],
+      "handler": "verifyTopicStock",
+      "defs": [
+        "cx_topic_stock.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/topic-stock",
+      "line": 317,
+      "group_middleware": [],
+      "handler": "topicStock",
+      "defs": [
+        "cx_topic_stock.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/wechat/link-check",
+      "line": 319,
+      "group_middleware": [],
+      "handler": "wechatLinkCheck",
+      "defs": [
+        "accounts.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/works",
+      "line": 320,
+      "group_middleware": [],
+      "handler": "listWorks",
+      "defs": [
+        "works.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/works",
+      "line": 321,
+      "group_middleware": [],
+      "handler": "createWork",
+      "defs": [
+        "works.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/works/import",
+      "line": 322,
+      "group_middleware": [],
+      "handler": "importPastedWork",
+      "defs": [
+        "work_import.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}",
+      "line": 323,
+      "group_middleware": [],
+      "handler": "getWork",
+      "defs": [
+        "works.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/render-check",
+      "line": 324,
+      "group_middleware": [],
+      "handler": "renderCheck",
+      "defs": [
+        "cx_render_check.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/builds",
+      "line": 325,
+      "group_middleware": [],
+      "handler": "createCXBuild",
+      "defs": [
+        "cx_builds.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/builds",
+      "line": 326,
+      "group_middleware": [],
+      "handler": "listCXBuilds",
+      "defs": [
+        "cx_builds.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/builds/{id}",
+      "line": 327,
+      "group_middleware": [],
+      "handler": "getCXBuild",
+      "defs": [
+        "cx_builds.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/builds/{id}/artifacts",
+      "line": 328,
+      "group_middleware": [],
+      "handler": "uploadCXBuildArtifact",
+      "defs": [
+        "cx_build_artifacts.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/builds/{id}/artifacts/{artifactID}",
+      "line": 329,
+      "group_middleware": [],
+      "handler": "downloadCXBuildArtifact",
+      "defs": [
+        "cx_build_downloads.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/builds/{id}/manifest.json",
+      "line": 330,
+      "group_middleware": [],
+      "handler": "downloadCXBuildManifest",
+      "defs": [
+        "cx_build_downloads.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/builds/{id}/evidence.csv",
+      "line": 331,
+      "group_middleware": [],
+      "handler": "downloadCXBuildEvidenceCSV",
+      "defs": [
+        "cx_build_downloads.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/builds/{id}/privacy-ack",
+      "line": 332,
+      "group_middleware": [],
+      "handler": "ackCXBuildPrivacy",
+      "defs": [
+        "cx_build_downloads.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/builds/{id}/complete",
+      "line": 333,
+      "group_middleware": [],
+      "handler": "completeCXBuild",
+      "defs": [
+        "cx_builds.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/builds/{id}/cancel",
+      "line": 334,
+      "group_middleware": [],
+      "handler": "cancelCXBuild",
+      "defs": [
+        "cx_builds.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/preview-link",
+      "line": 335,
+      "group_middleware": [],
+      "handler": "createPreviewLink",
+      "defs": [
+        "preview_link.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/works/{id}",
+      "line": 336,
+      "group_middleware": [],
+      "handler": "updateWork",
+      "defs": [
+        "works.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/works/{id}/post-push-todos",
+      "line": 337,
+      "group_middleware": [],
+      "handler": "setPostPushTodos",
+      "defs": [
+        "planning.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/works/{id}/title-favorites",
+      "line": 338,
+      "group_middleware": [],
+      "handler": "setTitleFavorites",
+      "defs": [
+        "planning.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/works/{id}",
+      "line": 339,
+      "group_middleware": [],
+      "handler": "deleteWork",
+      "defs": [
+        "works.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/read-through",
+      "line": 340,
+      "group_middleware": [],
+      "handler": "readThrough",
+      "defs": [
+        "readthrough.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/outline/generate",
+      "line": 341,
+      "group_middleware": [],
+      "handler": "generateOutline",
+      "defs": [
+        "writing.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/works/{id}/outline",
+      "line": 342,
+      "group_middleware": [],
+      "handler": "saveOutline",
+      "defs": [
+        "writing_save.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/storyboard/generate",
+      "line": 343,
+      "group_middleware": [],
+      "handler": "generateStoryboard",
+      "defs": [
+        "comic.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/works/{id}/storyboard",
+      "line": 344,
+      "group_middleware": [],
+      "handler": "saveStoryboard",
+      "defs": [
+        "comic.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/panels/{id}",
+      "line": 345,
+      "group_middleware": [],
+      "handler": "updatePanel",
+      "defs": [
+        "comic.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/panels/{id}/text",
+      "line": 346,
+      "group_middleware": [],
+      "handler": "generatePanelText",
+      "defs": [
+        "comic.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/panels/{id}/generate-image",
+      "line": 347,
+      "group_middleware": [],
+      "handler": "generatePanelImage",
+      "defs": [
+        "imagegen.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/panels/{id}/bubbles",
+      "line": 348,
+      "group_middleware": [],
+      "handler": "putPanelBubbles",
+      "defs": [
+        "imagegen.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/generate-image",
+      "line": 349,
+      "group_middleware": [],
+      "handler": "generateWorkImage",
+      "defs": [
+        "imagegen.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/cards/{sectionId}/generate-image",
+      "line": 350,
+      "group_middleware": [],
+      "handler": "generateCardImage",
+      "defs": [
+        "card.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/sections",
+      "line": 351,
+      "group_middleware": [],
+      "handler": "createSection",
+      "defs": [
+        "writing_save.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/works/{id}/sections/order",
+      "line": 352,
+      "group_middleware": [],
+      "handler": "reorderSections",
+      "defs": [
+        "writing_save.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/sections/{id}",
+      "line": 353,
+      "group_middleware": [],
+      "handler": "updateSection",
+      "defs": [
+        "writing_save.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/sections/{id}",
+      "line": 354,
+      "group_middleware": [],
+      "handler": "deleteSection",
+      "defs": [
+        "writing_save.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/sections/{id}/draft",
+      "line": 355,
+      "group_middleware": [],
+      "handler": "draftSection",
+      "defs": [
+        "writing_save.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/sections/{id}/edit",
+      "line": 356,
+      "group_middleware": [],
+      "handler": "editSection",
+      "defs": [
+        "writing.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/sections/{id}/rewrite",
+      "line": 357,
+      "group_middleware": [],
+      "handler": "rewriteSection",
+      "defs": [
+        "writing_derive.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/sections/{id}/image-suggest",
+      "line": 358,
+      "group_middleware": [],
+      "handler": "suggestImages",
+      "defs": [
+        "r4.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/titles",
+      "line": 359,
+      "group_middleware": [],
+      "handler": "generateTitles",
+      "defs": [
+        "writing.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/summary",
+      "line": 360,
+      "group_middleware": [],
+      "handler": "generateSummary",
+      "defs": [
+        "writing.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/organize-notes",
+      "line": 361,
+      "group_middleware": [],
+      "handler": "organizeNotes",
+      "defs": [
+        "r4.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/organize-notes/apply",
+      "line": 362,
+      "group_middleware": [],
+      "handler": "applyOrganizedNotes",
+      "defs": [
+        "r4.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/xhs/pages",
+      "line": 363,
+      "group_middleware": [],
+      "handler": "suggestXHSPages",
+      "defs": [
+        "r4.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/wechat/sync-draft",
+      "line": 364,
+      "group_middleware": [],
+      "handler": "syncDraftStatus",
+      "defs": [
+        "r4.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/versions",
+      "line": 365,
+      "group_middleware": [],
+      "handler": "listVersions",
+      "defs": [
+        "works.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/versions",
+      "line": 366,
+      "group_middleware": [],
+      "handler": "createManualVersion",
+      "defs": [
+        "works.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/versions/{no}",
+      "line": 367,
+      "group_middleware": [],
+      "handler": "getVersion",
+      "defs": [
+        "works.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/versions/{no}/restore",
+      "line": 368,
+      "group_middleware": [],
+      "handler": "restoreVersion",
+      "defs": [
+        "works.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/derive",
+      "line": 369,
+      "group_middleware": [],
+      "handler": "deriveWork",
+      "defs": [
+        "writing_derive.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/duplicate",
+      "line": 370,
+      "group_middleware": [],
+      "handler": "duplicateWork",
+      "defs": [
+        "work_duplicate.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/unlock",
+      "line": 371,
+      "group_middleware": [],
+      "handler": "unlockWork",
+      "defs": [
+        "works.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/assets",
+      "line": 373,
+      "group_middleware": [],
+      "handler": "uploadAsset",
+      "defs": [
+        "assets.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/assets/{id}",
+      "line": 374,
+      "group_middleware": [],
+      "handler": "updateAsset",
+      "defs": [
+        "assets.go"
+      ],
+      "permission_flags": [
+        "requireWorkAsset"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/assets/{id}/alt-suggestion",
+      "line": 375,
+      "group_middleware": [],
+      "handler": "suggestAssetAlt",
+      "defs": [
+        "assets.go"
+      ],
+      "permission_flags": [
+        "requireWorkAsset"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/assets/{id}/crop",
+      "line": 376,
+      "group_middleware": [],
+      "handler": "cropAsset",
+      "defs": [
+        "assets.go"
+      ],
+      "permission_flags": [
+        "requireWorkAsset"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/assets/{id}",
+      "line": 377,
+      "group_middleware": [],
+      "handler": "deleteAsset",
+      "defs": [
+        "assets.go"
+      ],
+      "permission_flags": [
+        "requireWorkAsset"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/assets/{id}/file",
+      "line": 378,
+      "group_middleware": [],
+      "handler": "assetFile",
+      "defs": [
+        "assets.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/checks",
+      "line": 380,
+      "group_middleware": [],
+      "handler": "startCheck",
+      "defs": [
+        "checks.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/checks/latest",
+      "line": 381,
+      "group_middleware": [],
+      "handler": "latestCheck",
+      "defs": [
+        "checks.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/check-items/{id}",
+      "line": 382,
+      "group_middleware": [],
+      "handler": "resolveCheckItem",
+      "defs": [
+        "checks.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/checks/complete",
+      "line": 383,
+      "group_middleware": [],
+      "handler": "completeCheck",
+      "defs": [
+        "checks.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/wechat/push-preview",
+      "line": 385,
+      "group_middleware": [],
+      "handler": "pushPreview",
+      "defs": [
+        "publish.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/wechat/push",
+      "line": 386,
+      "group_middleware": [],
+      "handler": "pushWechat",
+      "defs": [
+        "publish.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/xhs/pack",
+      "line": 387,
+      "group_middleware": [],
+      "handler": "createPack",
+      "defs": [
+        "publish.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/xhs/pack",
+      "line": 388,
+      "group_middleware": [],
+      "handler": "getPack",
+      "defs": [
+        "publish.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/xhs/pack.zip",
+      "line": 389,
+      "group_middleware": [],
+      "handler": "packZip",
+      "defs": [
+        "publish_xhs_pack.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/toutiao/pack",
+      "line": 390,
+      "group_middleware": [],
+      "handler": "toutiaoPackCreate",
+      "defs": [
+        "publish_toutiao_pack.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/toutiao/pack",
+      "line": 391,
+      "group_middleware": [],
+      "handler": "toutiaoPackGet",
+      "defs": [
+        "publish_toutiao_pack.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/toutiao/pack.zip",
+      "line": 392,
+      "group_middleware": [],
+      "handler": "toutiaoPackZip",
+      "defs": [
+        "publish_toutiao_pack.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/published",
+      "line": 393,
+      "group_middleware": [],
+      "handler": "markPublished",
+      "defs": [
+        "publish.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/publish-state",
+      "line": 394,
+      "group_middleware": [],
+      "handler": "getPublishState",
+      "defs": [
+        "publish_state.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/publish-state/transition",
+      "line": 395,
+      "group_middleware": [],
+      "handler": "transitionPublishState",
+      "defs": [
+        "publish_state.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/works/{id}/platform-binding",
+      "line": 397,
+      "group_middleware": [],
+      "handler": "putPlatformBinding",
+      "defs": [
+        "platform_binding.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/works/{id}/platform-binding",
+      "line": 398,
+      "group_middleware": [],
+      "handler": "deletePlatformBinding",
+      "defs": [
+        "platform_binding.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/board",
+      "line": 400,
+      "group_middleware": [],
+      "handler": "board",
+      "defs": [
+        "review.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/platform-connection",
+      "line": 402,
+      "group_middleware": [],
+      "handler": "getPlatformConnection",
+      "defs": [
+        "platform_connection.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/accounts/{accountId}/platform-connection",
+      "line": 403,
+      "group_middleware": [],
+      "handler": "deletePlatformConnection",
+      "defs": [
+        "platform_connection.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/accounts/{accountId}/platform-connection",
+      "line": 404,
+      "group_middleware": [],
+      "handler": "patchPlatformConnection",
+      "defs": [
+        "platform_connection.go"
+      ],
+      "permission_flags": [
+        "requireReauth"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/platform-sync",
+      "line": 406,
+      "group_middleware": [],
+      "handler": "requestPlatformSync",
+      "defs": [
+        "platform_sync.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/platform-account-sync",
+      "line": 407,
+      "group_middleware": [],
+      "handler": "requestPlatformAccountSync",
+      "defs": [
+        "platform_account_sync.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/platform-metrics-refresh",
+      "line": 408,
+      "group_middleware": [],
+      "handler": "requestPlatformMetricsRefresh",
+      "defs": [
+        "platform_metrics_refresh.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/platform-sync-operations",
+      "line": 409,
+      "group_middleware": [],
+      "handler": "listPlatformSyncOperations",
+      "defs": [
+        "platform_sync_operations_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/platform-sync-operations/{operationId}",
+      "line": 410,
+      "group_middleware": [],
+      "handler": "getPlatformSyncOperation",
+      "defs": [
+        "platform_sync_operations_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/platform-sync-operations/{operationId}/items",
+      "line": 411,
+      "group_middleware": [],
+      "handler": "listPlatformSyncOperationItems",
+      "defs": [
+        "platform_sync_operations_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/platform-sync-operations/{operationId}/actions",
+      "line": 412,
+      "group_middleware": [],
+      "handler": "platformSyncOperationAction",
+      "defs": [
+        "platform_sync_operations_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/platform-profile",
+      "line": 413,
+      "group_middleware": [],
+      "handler": "getPlatformAccountSnapshot",
+      "defs": [
+        "platform_mirrors_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/platform-works",
+      "line": 414,
+      "group_middleware": [],
+      "handler": "listPlatformWorkMirrors",
+      "defs": [
+        "platform_mirrors_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/platform-works/{platformWorkId}",
+      "line": 415,
+      "group_middleware": [],
+      "handler": "getPlatformWorkMirror",
+      "defs": [
+        "platform_mirrors_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/platform-works/{platformWorkId}/draft",
+      "line": 416,
+      "group_middleware": [],
+      "handler": "createDraftFromPlatformMirror",
+      "defs": [
+        "platform_mirror_draft.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/metrics",
+      "line": 417,
+      "group_middleware": [],
+      "handler": "listMetrics",
+      "defs": [
+        "review.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/metrics/windows",
+      "line": 418,
+      "group_middleware": [],
+      "handler": "getCXReviewMetricWindows",
+      "defs": [
+        "cx_review_windows_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/metrics",
+      "line": 419,
+      "group_middleware": [],
+      "handler": "createMetric",
+      "defs": [
+        "review.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/metrics/{id}",
+      "line": 420,
+      "group_middleware": [],
+      "handler": "updateMetric",
+      "defs": [
+        "review.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/metrics/{id}",
+      "line": 421,
+      "group_middleware": [],
+      "handler": "deleteMetric",
+      "defs": [
+        "review.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/reviews",
+      "line": 422,
+      "group_middleware": [],
+      "handler": "createReview",
+      "defs": [
+        "review.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/reviews",
+      "line": 423,
+      "group_middleware": [],
+      "handler": "listReviews",
+      "defs": [
+        "review.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/review-reports/{id}/content",
+      "line": 424,
+      "group_middleware": [],
+      "handler": "editCXReviewReport",
+      "defs": [
+        "cx_review_report_edit.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/metrics/compare",
+      "line": 425,
+      "group_middleware": [],
+      "handler": "listCXReviewMetricCompare",
+      "defs": [
+        "cx_review_windows_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/experiments",
+      "line": 426,
+      "group_middleware": [],
+      "handler": "listCXReviewExperiments",
+      "defs": [
+        "cx_review_experiments.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/experiments",
+      "line": 427,
+      "group_middleware": [],
+      "handler": "createCXReviewExperiment",
+      "defs": [
+        "cx_review_experiments.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/experiments/{id}",
+      "line": 428,
+      "group_middleware": [],
+      "handler": "getCXReviewExperiment",
+      "defs": [
+        "cx_review_experiments.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/experiments/{id}/conclude",
+      "line": 429,
+      "group_middleware": [],
+      "handler": "concludeCXReviewExperiment",
+      "defs": [
+        "cx_review_experiments.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/experiments/{id}/abandon",
+      "line": 430,
+      "group_middleware": [],
+      "handler": "abandonCXReviewExperiment",
+      "defs": [
+        "cx_review_experiments.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/review-reports/{id}/suggestions/{index}/adopt",
+      "line": 431,
+      "group_middleware": [],
+      "handler": "adoptSuggestion",
+      "defs": [
+        "review.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/dashboard",
+      "line": 432,
+      "group_middleware": [],
+      "handler": "dashboard",
+      "defs": [
+        "review.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/model-providers",
+      "line": 434,
+      "group_middleware": [],
+      "handler": "listProviders",
+      "defs": [
+        "model_settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/model-providers",
+      "line": 435,
+      "group_middleware": [],
+      "handler": "createProvider",
+      "defs": [
+        "model_settings.go"
+      ],
+      "permission_flags": [
+        "requireOwner",
+        "requireReauth"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/model-providers/{id}",
+      "line": 436,
+      "group_middleware": [],
+      "handler": "updateProvider",
+      "defs": [
+        "model_settings.go"
+      ],
+      "permission_flags": [
+        "requireOwner",
+        "requireReauth"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/model-providers/{id}",
+      "line": 437,
+      "group_middleware": [],
+      "handler": "deleteProvider",
+      "defs": [
+        "model_settings.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/model-providers/{id}/test",
+      "line": 438,
+      "group_middleware": [],
+      "handler": "testProvider",
+      "defs": [
+        "model_settings.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/model-providers/{id}/selftest",
+      "line": 439,
+      "group_middleware": [],
+      "handler": "selftestProvider",
+      "defs": [
+        "selftest.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/model-providers/models",
+      "line": 441,
+      "group_middleware": [],
+      "handler": "discoverProviderModels",
+      "defs": [
+        "model_discover.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/model-routes",
+      "line": 442,
+      "group_middleware": [],
+      "handler": "getRoutes",
+      "defs": [
+        "model_settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/ai/status",
+      "line": 443,
+      "group_middleware": [],
+      "handler": "aiStatus",
+      "defs": [
+        "model_settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/model-routes",
+      "line": 444,
+      "group_middleware": [],
+      "handler": "putRoutes",
+      "defs": [
+        "model_settings.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/usage",
+      "line": 445,
+      "group_middleware": [],
+      "handler": "usage",
+      "defs": [
+        "settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/settings",
+      "line": 446,
+      "group_middleware": [],
+      "handler": "getSettings",
+      "defs": [
+        "settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/settings",
+      "line": 447,
+      "group_middleware": [],
+      "handler": "putSettings",
+      "defs": [
+        "settings.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/sensitive-words",
+      "line": 448,
+      "group_middleware": [],
+      "handler": "listWords",
+      "defs": [
+        "settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/sensitive-words",
+      "line": 449,
+      "group_middleware": [],
+      "handler": "createWord",
+      "defs": [
+        "settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/sensitive-words/{id}",
+      "line": 450,
+      "group_middleware": [],
+      "handler": "deleteWord",
+      "defs": [
+        "settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/audit-logs",
+      "line": 451,
+      "group_middleware": [],
+      "handler": "auditLogs",
+      "defs": [
+        "settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/trash",
+      "line": 452,
+      "group_middleware": [],
+      "handler": "listTrash",
+      "defs": [
+        "settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/trash/{type}/{id}/restore",
+      "line": 453,
+      "group_middleware": [],
+      "handler": "restoreTrash",
+      "defs": [
+        "settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/trash/{type}/{id}",
+      "line": 454,
+      "group_middleware": [],
+      "handler": "purgeTrash",
+      "defs": [
+        "settings.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/prompt-templates",
+      "line": 455,
+      "group_middleware": [],
+      "handler": "listPromptTemplates",
+      "defs": [
+        "r4.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/prompt-templates/{taskType}",
+      "line": 456,
+      "group_middleware": [],
+      "handler": "putPromptTemplate",
+      "defs": [
+        "r4.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/exports",
+      "line": 457,
+      "group_middleware": [],
+      "handler": "exportData",
+      "defs": [
+        "r4.go"
+      ],
+      "permission_flags": [
+        "requireReauth"
+      ],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/admin/crawl/platforms/{platform}",
+      "line": 463,
+      "group_middleware": [],
+      "handler": "adminPutPlatform",
+      "defs": [
+        "crawl_platform.go"
+      ],
+      "permission_flags": [
+        "requireSystemAdmin"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/ai-calls/{id}/feedback",
+      "line": 476,
+      "group_middleware": [],
+      "handler": "postFeedback",
+      "defs": [
+        "feedback.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/retrieve",
+      "line": 477,
+      "group_middleware": [],
+      "handler": "retrieve",
+      "defs": [
+        "retrieve.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/memories",
+      "line": 478,
+      "group_middleware": [],
+      "handler": "listMemories",
+      "defs": [
+        "aimemory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/memories",
+      "line": 479,
+      "group_middleware": [],
+      "handler": "createMemory",
+      "defs": [
+        "aimemory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/memories/distill",
+      "line": 480,
+      "group_middleware": [],
+      "handler": "startDistill",
+      "defs": [
+        "aimemory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/memories/{id}",
+      "line": 481,
+      "group_middleware": [],
+      "handler": "patchMemory",
+      "defs": [
+        "aimemory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/memories/{id}",
+      "line": 482,
+      "group_middleware": [],
+      "handler": "deleteMemory",
+      "defs": [
+        "aimemory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/ai-jobs",
+      "line": 483,
+      "group_middleware": [],
+      "handler": "listJobs",
+      "defs": [
+        "aijobs.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/ai-jobs/{id}",
+      "line": 484,
+      "group_middleware": [],
+      "handler": "getJob",
+      "defs": [
+        "aijobs.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/ai-jobs/{id}/cancel",
+      "line": 485,
+      "group_middleware": [],
+      "handler": "cancelJob",
+      "defs": [
+        "aijobs.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/notifications",
+      "line": 486,
+      "group_middleware": [],
+      "handler": "listNotifications",
+      "defs": [
+        "notify.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/notifications/stream",
+      "line": 487,
+      "group_middleware": [],
+      "handler": "streamNotifications",
+      "defs": [
+        "notify.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/notifications/read-all",
+      "line": 488,
+      "group_middleware": [],
+      "handler": "readAllNotifications",
+      "defs": [
+        "notify.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/notifications/{id}/read",
+      "line": 489,
+      "group_middleware": [],
+      "handler": "readNotification",
+      "defs": [
+        "notify.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/me/preferences",
+      "line": 490,
+      "group_middleware": [],
+      "handler": "getPrefs",
+      "defs": [
+        "notify.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/me/preferences",
+      "line": 491,
+      "group_middleware": [],
+      "handler": "putPrefs",
+      "defs": [
+        "notify.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/ux-events",
+      "line": 492,
+      "group_middleware": [],
+      "handler": "postUXEvents",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/client-errors",
+      "line": 493,
+      "group_middleware": [],
+      "handler": "postClientError",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/profile/bootstrap",
+      "line": 496,
+      "group_middleware": [],
+      "handler": "profileBootstrap",
+      "defs": [
+        "smart.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/health",
+      "line": 497,
+      "group_middleware": [],
+      "handler": "accountHealth",
+      "defs": [
+        "planning.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/brief",
+      "line": 498,
+      "group_middleware": [],
+      "handler": "getBrief",
+      "defs": [
+        "brief.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/next-actions",
+      "line": 499,
+      "group_middleware": [],
+      "handler": "getNextActions",
+      "defs": [
+        "planning.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/rhythm",
+      "line": 500,
+      "group_middleware": [],
+      "handler": "accountRhythm",
+      "defs": [
+        "planning.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/calendar",
+      "line": 501,
+      "group_middleware": [],
+      "handler": "calendar",
+      "defs": [
+        "planning.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/demo",
+      "line": 502,
+      "group_middleware": [],
+      "handler": "importDemo",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/demo",
+      "line": 503,
+      "group_middleware": [],
+      "handler": "clearDemo",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/topics/score",
+      "line": 506,
+      "group_middleware": [],
+      "handler": "scoreTopics",
+      "defs": [
+        "topics.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/series",
+      "line": 507,
+      "group_middleware": [],
+      "handler": "listSeries",
+      "defs": [
+        "series.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/series",
+      "line": 508,
+      "group_middleware": [],
+      "handler": "createSeries",
+      "defs": [
+        "series.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/series/{id}",
+      "line": 509,
+      "group_middleware": [],
+      "handler": "updateSeries",
+      "defs": [
+        "series.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/series/{id}",
+      "line": 510,
+      "group_middleware": [],
+      "handler": "deleteSeries",
+      "defs": [
+        "series.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/series/{id}/suggest",
+      "line": 511,
+      "group_middleware": [],
+      "handler": "suggestSeriesTopics",
+      "defs": [
+        "series.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/inbox",
+      "line": 512,
+      "group_middleware": [],
+      "handler": "listInbox",
+      "defs": [
+        "smart.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/inbox",
+      "line": 513,
+      "group_middleware": [],
+      "handler": "createInbox",
+      "defs": [
+        "smart.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/inbox/{id}/triage",
+      "line": 514,
+      "group_middleware": [],
+      "handler": "triageInbox",
+      "defs": [
+        "smart.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/inbox/{id}/convert",
+      "line": 515,
+      "group_middleware": [],
+      "handler": "convertInbox",
+      "defs": [
+        "smart.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/inbox/{id}",
+      "line": 516,
+      "group_middleware": [],
+      "handler": "deleteInbox",
+      "defs": [
+        "smart.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/inbox/{id}/restore",
+      "line": 517,
+      "group_middleware": [],
+      "handler": "restoreInbox",
+      "defs": [
+        "smart.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/materials/extract",
+      "line": 520,
+      "group_middleware": [],
+      "handler": "extractMaterials",
+      "defs": [
+        "smart_materials.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/materials/tag-suggest",
+      "line": 521,
+      "group_middleware": [],
+      "handler": "materialTagSuggest",
+      "defs": [
+        "smart.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/materials/duplicates",
+      "line": 522,
+      "group_middleware": [],
+      "handler": "materialDuplicates",
+      "defs": [
+        "smart.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/materials/merge",
+      "line": 523,
+      "group_middleware": [],
+      "handler": "mergeMaterials",
+      "defs": [
+        "smart.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/materials/{id}/usage",
+      "line": 524,
+      "group_middleware": [],
+      "handler": "materialUsage",
+      "defs": [
+        "memory.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/sections/{id}/restore",
+      "line": 527,
+      "group_middleware": [],
+      "handler": "restoreSection",
+      "defs": [
+        "writing_save.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/sections/{id}/materials",
+      "line": 528,
+      "group_middleware": [],
+      "handler": "setSectionMaterials",
+      "defs": [
+        "writing.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/sections/{id}/hooks",
+      "line": 529,
+      "group_middleware": [],
+      "handler": "suggestHooks",
+      "defs": [
+        "editorai.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/sections/{id}/continue",
+      "line": 530,
+      "group_middleware": [],
+      "handler": "continueSection",
+      "defs": [
+        "editorai.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/sections/{id}/revisions",
+      "line": 531,
+      "group_middleware": [],
+      "handler": "listSectionRevisions",
+      "defs": [
+        "editorai.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/sections/{id}/revisions/{rid}/restore",
+      "line": 532,
+      "group_middleware": [],
+      "handler": "restoreSectionRevision",
+      "defs": [
+        "editorai.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/source-diff",
+      "line": 533,
+      "group_middleware": [],
+      "handler": "sourceDiff",
+      "defs": [
+        "writing_derive.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/family",
+      "line": 534,
+      "group_middleware": [],
+      "handler": "workFamily",
+      "defs": [
+        "writing_derive.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/series-context",
+      "line": 535,
+      "group_middleware": [],
+      "handler": "workSeriesContext",
+      "defs": [
+        "series.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/outline-templates",
+      "line": 536,
+      "group_middleware": [],
+      "handler": "listOutlineTemplates",
+      "defs": [
+        "outline.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/outline-templates",
+      "line": 537,
+      "group_middleware": [],
+      "handler": "putOutlineTemplates",
+      "defs": [
+        "outline.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/creation-templates",
+      "line": 539,
+      "group_middleware": [],
+      "handler": "listCreationTemplates",
+      "defs": [
+        "creation_template.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/creation-templates",
+      "line": 540,
+      "group_middleware": [],
+      "handler": "createCreationTemplate",
+      "defs": [
+        "creation_template.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/creation-templates/{id}",
+      "line": 541,
+      "group_middleware": [],
+      "handler": "updateCreationTemplate",
+      "defs": [
+        "creation_template.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/creation-templates/{id}",
+      "line": 542,
+      "group_middleware": [],
+      "handler": "deleteCreationTemplate",
+      "defs": [
+        "creation_template.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/outline/review",
+      "line": 543,
+      "group_middleware": [],
+      "handler": "reviewOutline",
+      "defs": [
+        "outline.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/copilot",
+      "line": 544,
+      "group_middleware": [],
+      "handler": "listCopilot",
+      "defs": [
+        "copilot.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/copilot",
+      "line": 545,
+      "group_middleware": [],
+      "handler": "chatCopilot",
+      "defs": [
+        "copilot.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/works/{id}/copilot",
+      "line": 546,
+      "group_middleware": [],
+      "handler": "clearCopilot",
+      "defs": [
+        "copilot.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/lint",
+      "line": 547,
+      "group_middleware": [],
+      "handler": "lintWork",
+      "defs": [
+        "lint.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/polish-check",
+      "line": 548,
+      "group_middleware": [],
+      "handler": "polishCheck",
+      "defs": [
+        "lint.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/polish-ignore",
+      "line": 549,
+      "group_middleware": [],
+      "handler": "ignorePolish",
+      "defs": [
+        "lint.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/tag-suggest",
+      "line": 550,
+      "group_middleware": [],
+      "handler": "workTagSuggest",
+      "defs": [
+        "smart.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/layout-suggest",
+      "line": 551,
+      "group_middleware": [],
+      "handler": "layoutSuggest",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/golden-sentences",
+      "line": 552,
+      "group_middleware": [],
+      "handler": "saveGoldenSentence",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/check-items/{id}/fix-suggest",
+      "line": 555,
+      "group_middleware": [],
+      "handler": "fixSuggest",
+      "defs": [
+        "checks.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/review/approve",
+      "line": 556,
+      "group_middleware": [],
+      "handler": "approveReview",
+      "defs": [
+        "checks.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/checks/fact-retry",
+      "line": 558,
+      "group_middleware": [],
+      "handler": "retryFactCheck",
+      "defs": [
+        "checks.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/review/return",
+      "line": 560,
+      "group_middleware": [],
+      "handler": "returnReview",
+      "defs": [
+        "checks.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/check/exit",
+      "line": 561,
+      "group_middleware": [],
+      "handler": "exitCheck",
+      "defs": [
+        "checks.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/checks/report",
+      "line": 562,
+      "group_middleware": [],
+      "handler": "checkReport",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/publish-link/parse",
+      "line": 563,
+      "group_middleware": [],
+      "handler": "parsePublishLinkHandler",
+      "defs": [
+        "planning.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/custom-theme",
+      "line": 566,
+      "group_middleware": [],
+      "handler": "getCustomTheme",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/accounts/{accountId}/custom-theme",
+      "line": 567,
+      "group_middleware": [],
+      "handler": "putCustomTheme",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/visual-dna",
+      "line": 568,
+      "group_middleware": [],
+      "handler": "getCXVisualDNA",
+      "defs": [
+        "cx_visual_dna.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/visual-dna/versions",
+      "line": 569,
+      "group_middleware": [],
+      "handler": "listCXVisualDNAVersions",
+      "defs": [
+        "cx_visual_dna.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/visual-dna/versions/{version}",
+      "line": 570,
+      "group_middleware": [],
+      "handler": "getCXVisualDNAVersion",
+      "defs": [
+        "cx_visual_dna.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/accounts/{accountId}/visual-dna",
+      "line": 571,
+      "group_middleware": [],
+      "handler": "putCXVisualDNA",
+      "defs": [
+        "cx_visual_dna.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/visual-dna/rollback",
+      "line": 572,
+      "group_middleware": [],
+      "handler": "rollbackCXVisualDNA",
+      "defs": [
+        "cx_visual_dna.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/benchmarks",
+      "line": 574,
+      "group_middleware": [],
+      "handler": "listBenchmarks",
+      "defs": [
+        "benchmark.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/benchmarks",
+      "line": 575,
+      "group_middleware": [],
+      "handler": "createBenchmark",
+      "defs": [
+        "benchmark.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/benchmarks/{benchmarkId}",
+      "line": 576,
+      "group_middleware": [],
+      "handler": "getBenchmark",
+      "defs": [
+        "benchmark.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/benchmarks/{benchmarkId}",
+      "line": 577,
+      "group_middleware": [],
+      "handler": "updateBenchmark",
+      "defs": [
+        "benchmark.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/benchmarks/{benchmarkId}/notes",
+      "line": 578,
+      "group_middleware": [],
+      "handler": "listBenchmarkNotes",
+      "defs": [
+        "benchmark.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/benchmarks/{benchmarkId}/notes",
+      "line": 579,
+      "group_middleware": [],
+      "handler": "createBenchmarkNote",
+      "defs": [
+        "benchmark.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/benchmark-notes/{noteId}",
+      "line": 580,
+      "group_middleware": [],
+      "handler": "getBenchmarkNote",
+      "defs": [
+        "benchmark.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/structure-extract",
+      "line": 582,
+      "group_middleware": [],
+      "handler": "extractStructure",
+      "defs": [
+        "cx_structure_extract.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/rewrite-check",
+      "line": 584,
+      "group_middleware": [],
+      "handler": "rewriteCheck",
+      "defs": [
+        "rewrite.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/comments",
+      "line": 588,
+      "group_middleware": [],
+      "handler": "listCommentInbox",
+      "defs": [
+        "comment_inbox.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/comments",
+      "line": 589,
+      "group_middleware": [],
+      "handler": "createCommentInbox",
+      "defs": [
+        "comment_inbox.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/comment-inbox/{commentId}",
+      "line": 590,
+      "group_middleware": [],
+      "handler": "getCommentInbox",
+      "defs": [
+        "comment_inbox.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/comment-inbox/{commentId}",
+      "line": 591,
+      "group_middleware": [],
+      "handler": "patchCommentInbox",
+      "defs": [
+        "comment_inbox.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/comment-inbox/{commentId}",
+      "line": 592,
+      "group_middleware": [],
+      "handler": "deleteCommentInbox",
+      "defs": [
+        "comment_inbox.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/comment-inbox/{commentId}/reply-suggest",
+      "line": 593,
+      "group_middleware": [],
+      "handler": "draftCommentReply",
+      "defs": [
+        "comment_inbox.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/comment-inbox/{commentId}/copy-reply",
+      "line": 594,
+      "group_middleware": [],
+      "handler": "copyCommentReply",
+      "defs": [
+        "comment_inbox.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/comment-inbox/{commentId}/confirm-sent",
+      "line": 595,
+      "group_middleware": [],
+      "handler": "confirmSentComment",
+      "defs": [
+        "comment_inbox.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/comment-inbox/{commentId}/topic-preview",
+      "line": 596,
+      "group_middleware": [],
+      "handler": "commentTopicPreview",
+      "defs": [
+        "comment_inbox.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/comment-inbox/{commentId}/convert-topic",
+      "line": 597,
+      "group_middleware": [],
+      "handler": "convertCommentToTopic",
+      "defs": [
+        "comment_inbox.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/standards/effective",
+      "line": 599,
+      "group_middleware": [],
+      "handler": "effectiveStandard",
+      "defs": [
+        "ops_standard.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/standards",
+      "line": 600,
+      "group_middleware": [],
+      "handler": "listStandards",
+      "defs": [
+        "ops_standard.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/skeleton-notes",
+      "line": 602,
+      "group_middleware": [],
+      "handler": "listSkeletonNotes",
+      "defs": [
+        "comment_inbox.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/standards",
+      "line": 603,
+      "group_middleware": [],
+      "handler": "createStandard",
+      "defs": [
+        "ops_standard.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/standards/{version}",
+      "line": 604,
+      "group_middleware": [],
+      "handler": "getStandard",
+      "defs": [
+        "ops_standard.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/standards/{version}/archive",
+      "line": 605,
+      "group_middleware": [],
+      "handler": "archiveStandard",
+      "defs": [
+        "ops_standard.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/benchmark-notes/{noteId}",
+      "line": 606,
+      "group_middleware": [],
+      "handler": "updateBenchmarkNote",
+      "defs": [
+        "benchmark.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/assets/{id}/smart-crop",
+      "line": 607,
+      "group_middleware": [],
+      "handler": "smartCrop",
+      "defs": [
+        "media.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/assets",
+      "line": 608,
+      "group_middleware": [],
+      "handler": "listLibrary",
+      "defs": [
+        "media.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/assets/reuse",
+      "line": 609,
+      "group_middleware": [],
+      "handler": "reuseAsset",
+      "defs": [
+        "media.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/review-reports/{id}/insights/{index}/remember",
+      "line": 612,
+      "group_middleware": [],
+      "handler": "rememberInsight",
+      "defs": [
+        "review.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/review-reports/{id}/insights/{index}/ignore",
+      "line": 613,
+      "group_middleware": [],
+      "handler": "ignoreInsight",
+      "defs": [
+        "review.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/reviews/attribution",
+      "line": 614,
+      "group_middleware": [],
+      "handler": "attribution",
+      "defs": [
+        "insights.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/data-preferences",
+      "line": 615,
+      "group_middleware": [],
+      "handler": "listDataPreferences",
+      "defs": [
+        "dataprefs.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/top-works",
+      "line": 616,
+      "group_middleware": [],
+      "handler": "topWorks",
+      "defs": [
+        "insights.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/breakdown",
+      "line": 617,
+      "group_middleware": [],
+      "handler": "breakdownWork",
+      "defs": [
+        "insights.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/digests",
+      "line": 618,
+      "group_middleware": [],
+      "handler": "listDigests",
+      "defs": [
+        "insights.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/comments",
+      "line": 621,
+      "group_middleware": [],
+      "handler": "listComments",
+      "defs": [
+        "collab.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/comments",
+      "line": 622,
+      "group_middleware": [],
+      "handler": "createComment",
+      "defs": [
+        "collab.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/comments/{id}",
+      "line": 623,
+      "group_middleware": [],
+      "handler": "patchComment",
+      "defs": [
+        "collab.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/presence",
+      "line": 624,
+      "group_middleware": [],
+      "handler": "getPresence",
+      "defs": [
+        "collab.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/presence",
+      "line": 625,
+      "group_middleware": [],
+      "handler": "postPresence",
+      "defs": [
+        "collab.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/activity",
+      "line": 626,
+      "group_middleware": [],
+      "handler": "workActivity",
+      "defs": [
+        "collab.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/search",
+      "line": 629,
+      "group_middleware": [],
+      "handler": "globalSearch",
+      "defs": [
+        "search.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/stars",
+      "line": 630,
+      "group_middleware": [],
+      "handler": "listStars",
+      "defs": [
+        "search.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/stars",
+      "line": 631,
+      "group_middleware": [],
+      "handler": "addStar",
+      "defs": [
+        "search.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/stars/{type}/{id}",
+      "line": 632,
+      "group_middleware": [],
+      "handler": "removeStar",
+      "defs": [
+        "search.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/quality",
+      "line": 635,
+      "group_middleware": [],
+      "handler": "qualityBoard",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/quality/calls",
+      "line": 636,
+      "group_middleware": [],
+      "handler": "qualityCalls",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/prompt-eval/cases",
+      "line": 637,
+      "group_middleware": [],
+      "handler": "listEvalCases",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/prompt-eval/cases",
+      "line": 638,
+      "group_middleware": [],
+      "handler": "createEvalCase",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/prompt-eval/cases/{id}",
+      "line": 639,
+      "group_middleware": [],
+      "handler": "deleteEvalCase",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/prompt-eval/cases/{id}/runs",
+      "line": 640,
+      "group_middleware": [],
+      "handler": "listEvalRuns",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/prompt-eval/runs",
+      "line": 641,
+      "group_middleware": [],
+      "handler": "createEvalRun",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/prompt-eval/replay",
+      "line": 642,
+      "group_middleware": [],
+      "handler": "runPromptEvalReplay",
+      "defs": [
+        "prompt_batch.go"
+      ],
+      "permission_flags": [
+        "requireOwner"
+      ],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/prompt-eval/runs/{id}",
+      "line": 643,
+      "group_middleware": [],
+      "handler": "patchEvalRun",
+      "defs": [
+        "quality.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/hot-sources/search",
+      "line": 648,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/daily/stats",
+      "line": 649,
+      "group_middleware": [],
+      "handler": "getDailyStats",
+      "defs": [
+        "daily_stats.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/hot/trends",
+      "line": 650,
+      "group_middleware": [],
+      "handler": "getHotTrends",
+      "defs": [
+        "hot_trends.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/daily-settings",
+      "line": 651,
+      "group_middleware": [],
+      "handler": "getDailySettings",
+      "defs": [
+        "daily_jobs.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PUT",
+      "path": "/daily-settings",
+      "line": 652,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/daily",
+      "line": 653,
+      "group_middleware": [],
+      "handler": "getDaily",
+      "defs": [
+        "daily.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/daily/regenerate",
+      "line": 654,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/daily/{id}/items/{idx}/{action}",
+      "line": 655,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/references",
+      "line": 656,
+      "group_middleware": [],
+      "handler": "getReferences",
+      "defs": [
+        "references.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/references",
+      "line": 657,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/references/{id}/paste",
+      "line": 658,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "DELETE",
+      "path": "/references/{id}",
+      "line": 659,
+      "group_middleware": [],
+      "handler": "deleteReference",
+      "defs": [
+        "references.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/strategy",
+      "line": 660,
+      "group_middleware": [],
+      "handler": "getStrategy",
+      "defs": [
+        "strategy.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/strategy/options",
+      "line": 661,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/strategy",
+      "line": 662,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/strategy/versions/{v}/restore",
+      "line": 663,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/strategy/revise",
+      "line": 664,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/account-analysis",
+      "line": 665,
+      "group_middleware": [],
+      "handler": "createAccountAnalysis",
+      "defs": [
+        "cx_account_analysis_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/account-analysis/basis",
+      "line": 666,
+      "group_middleware": [],
+      "handler": "previewAccountAnalysisBasis",
+      "defs": [
+        "cx_account_analysis_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/analyses",
+      "line": 667,
+      "group_middleware": [],
+      "handler": "listAccountAnalyses",
+      "defs": [
+        "cx_account_analysis_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/diagnoses/{id}",
+      "line": 668,
+      "group_middleware": [],
+      "handler": "getDiagnosis",
+      "defs": [
+        "cx_title_diagnosis_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/diagnoses",
+      "line": 669,
+      "group_middleware": [],
+      "handler": "listTopicDiagnoses",
+      "defs": [
+        "cx_topic_diagnosis_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/diagnoses/{id}/account-analysis",
+      "line": 670,
+      "group_middleware": [],
+      "handler": "patchAccountAnalysisDiagnosis",
+      "defs": [
+        "cx_account_analysis_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "PATCH",
+      "path": "/diagnoses/{id}/visual-plan",
+      "line": 671,
+      "group_middleware": [],
+      "handler": "patchCXVisualPlanDiagnosis",
+      "defs": [
+        "cx_visual_plan_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/diagnose-title",
+      "line": 672,
+      "group_middleware": [],
+      "handler": "diagnoseTitle",
+      "defs": [
+        "cx_title_diagnosis_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/works/{id}/diagnoses",
+      "line": 673,
+      "group_middleware": [],
+      "handler": "listCXTitleDiagnoses",
+      "defs": [
+        "cx_title_diagnosis_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/cards/suggest",
+      "line": 674,
+      "group_middleware": [],
+      "handler": "suggestCXVisualPlan",
+      "defs": [
+        "cx_visual_plan_http.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "yes",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/works/{id}/cards/preview",
+      "line": 675,
+      "group_middleware": [],
+      "handler": "previewCXCards",
+      "defs": [
+        "cx_cards_preview.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "yes",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts/{accountId}/plan",
+      "line": 676,
+      "group_middleware": [],
+      "handler": "getPlan",
+      "defs": [
+        "plan.go"
+      ],
+      "permission_flags": [],
+      "workspace_filter": "CHECK",
+      "audit": "CHECK",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/{accountId}/plan/suggest",
+      "line": 677,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/plan-slots/{id}/adopt",
+      "line": 678,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/plan-slots/{id}/regenerate",
+      "line": 679,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    },
+    {
+      "method": "POST",
+      "path": "/plan-slots/{id}/clear",
+      "line": 680,
+      "group_middleware": [],
+      "handler": "(unresolved)",
+      "defs": [],
+      "permission_flags": [],
+      "workspace_filter": "N/A",
+      "audit": "N/A",
+      "note": "需人工复核：路由行未匹配 s.h(s.X) 形式",
+      "review": "auto-generated"
+    }
+  ]
+}
