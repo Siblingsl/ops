@@ -18,6 +18,7 @@ import { VoiceBar } from './agent/VoiceBar'
 import { DelegationPanel } from './agent/DelegationPanel'
 import { SourcePanel } from './agent/SourcePanel'
 import { MemoryCandidateCard } from './agent/MemoryCandidateCard'
+import { MemoryUsagePanel } from './agent/MemoryUsagePanel'
 import { PanelResizer, PANEL_WIDTH_DEFAULT } from './agent/PanelResizer'
 import { ApiError, del, errorMessage, get, patch, post, stream, uploadFormData } from '@/lib/api'
 import { assetUrl } from '@/lib/api-base'
@@ -39,7 +40,6 @@ import { ContextPickerDialog, SkillPickerDialog, type AgentContextSelection, typ
 import { AgentPlanCard, AgentQuestionCard } from '@/pages/agent/PlansQuestions'
 import { GoalPanel } from '@/pages/agent/GoalPanel'
 import { RoutinePanel } from '@/pages/agent/RoutinePanel'
-import { DelegationPanel } from '@/pages/agent/DelegationPanel'
 import { AttachmentReceipt } from '@/pages/agent/AttachmentReceipt'
 
 const pageSize = 30
@@ -2014,6 +2014,8 @@ ${draft.text}` : draft.text))
           </div>
           {/* DEV-AI27-13b：消息流末尾候选记忆卡片（确认/修改/忽略逐项操作） */}
           {!busy && memoryCandidates.length > 0 && <MemoryCandidateCard candidates={memoryCandidates} {...memoryCandidateHandlers} />}
+          {/* A9：本会话实际注入/省略了哪些记忆；只读服务端记录，不推断。 */}
+          {conversation && <MemoryUsagePanel conversationId={conversation.id} enabled={bootstrapData.features.personal_memories === true} />}
           {/* DEV-A13：协作任务（子任务进度、单项停止、汇总结果）；按会话取组，父 run 已结束也能汇总。 */}
           {conversation && bootstrapData.features.subagents && <div className="mx-auto max-w-3xl px-3">
             <DelegationPanel conversationId={conversation.id}

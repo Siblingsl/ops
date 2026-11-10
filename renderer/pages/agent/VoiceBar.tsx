@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Mic, Square } from 'lucide-react'
+import { Mic, Square, Volume2, VolumeX } from 'lucide-react'
 import { Button } from '@/components/ui'
-import { ApiError, post } from '@/lib/api'
+import { ApiError, api, post, rawRequest } from '@/lib/api'
 
 // DEV-AI27-16 第二批（W16c）：语音输入完整链路（27 §11.4.1 dictation 模式）。
 // MediaRecorder 录音（内存 Blob，不落盘，27 §11.4.3）→ 停止 → turns 上传音频
@@ -43,15 +43,22 @@ interface VoiceBarProps {
   onInsert: (text: string) => void
 }
 
+/** TTS 默认音色：OpenAI 兼容 /audio/speech 的通用音色；供应商不支持时由服务端返回 502 并如实提示。 */
+const DEFAULT_TTS_VOICE = 'alloy'
+
 export function VoiceBar({ conversationId, voiceDictationEnabled, onInsert }: VoiceBarProps) {
   const [state, setState] = useState<VoiceBarState>('idle')
   const [elapsed, setElapsed] = useState(0)
   const [editable, setEditable] = useState('')
   const [error, setError] = useState('')
+  const [ttsState, setTtsState] = useState<'idle' | 'loading' | 'playing'>('idle')
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const sessionIdRef = useRef<string | null>(null)
+  const turnIdRef = useRef<string | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioUrlRef = useRef<string | null>(null)
 
   const cleanupTimer = useCallback(() => {
     if (timerRef.current) {
@@ -60,12 +67,33 @@ export function VoiceBar({ conversationId, voiceDictationEnabled, onInsert }: Vo
     }
   }, [])
 
+  /** 释放播放器与对象 URL；不触发 setState，供卸载清理复用。 */
+  const releaseAudio = useCallback(() => {
+    const audio = audioRef.current
+    if (audio) {
+      audio.onended = null
+      audio.onerror = null
+      audio.pause()
+      audioRef.current = null
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current)
+      audioUrlRef.current = null
+    }
+  }, [])
+
+  const stopPlayback = useCallback(() => {
+    releaseAudio()
+    setTtsState('idle')
+  }, [releaseAudio])
+
   useEffect(() => () => {
     cleanupTimer()
+    releaseAudio()
     if (recorderRef.current && recorderRef.current.state === 'recording') {
       try { recorderRef.current.stop() } catch { /* 已停止 */ }
     }
-  }, [cleanupTimer])
+  }, [cleanupTimer, releaseAudio])
 
   const submitTranscription = useCallback(async (blob: Blob) => {
     setState('transcribing')
@@ -89,6 +117,7 @@ export function VoiceBar({ conversationId, voiceDictationEnabled, onInsert }: Vo
         },
       )
       const turn = result.turn
+      turnIdRef.current = turn.id
       if (turn.state === 'reviewable') {
         setEditable(turn.transcription)
         setState('reviewable')
@@ -113,8 +142,51 @@ export function VoiceBar({ conversationId, voiceDictationEnabled, onInsert }: Vo
     }
   }, [conversationId])
 
+  // A1（27 §11.4.4）：把终稿合成为语音并播放。合成读取服务端回合文本，所以先把
+  // 编辑后的文本落库，保证「看到的」和「听到的」是同一份；失败不伪装成功。
+  const playSynthesis = useCallback(async () => {
+    if (ttsState === 'playing') {
+      stopPlayback()
+      return
+    }
+    if (!sessionIdRef.current || !turnIdRef.current) return
+    setTtsState('loading')
+    setError('')
+    try {
+      await api('PATCH', `/agent/voice-sessions/${sessionIdRef.current}/turns/${turnIdRef.current}`,
+        { transcription: editable })
+      const res = await rawRequest('POST',
+        `/agent/voice-sessions/${sessionIdRef.current}/turns/${turnIdRef.current}/synthesize`,
+        { voice: DEFAULT_TTS_VOICE })
+      const blob = await res.blob()
+      if (blob.size === 0) throw new Error('服务未返回音频数据')
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      audioRef.current = audio
+      audioUrlRef.current = url
+      audio.onended = () => stopPlayback()
+      audio.onerror = () => {
+        stopPlayback()
+        setError('音频播放失败；请检查系统音频输出设备。')
+      }
+      await audio.play()
+      setTtsState('playing')
+    } catch (err) {
+      stopPlayback()
+      if (err instanceof ApiError && err.code === 'voice_capability_unsupported') {
+        setError('未配置 TTS 供应商路由；可在模型配置里为「TTS 语音合成」指定供应商。')
+      } else if (err instanceof ApiError && err.code === 'voice_provider_unavailable') {
+        setError('TTS 供应商调用失败；请检查密钥、音色名与网络。')
+      } else {
+        setError('语音合成失败：' + (err instanceof Error ? err.message : String(err)))
+      }
+    }
+  }, [editable, stopPlayback, ttsState])
+
   const startRecording = useCallback(async () => {
     setError('')
+    // 打断语义（27 §11.4.1）：用户开口立即停止播放，避免边播边录。
+    stopPlayback()
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       chunksRef.current = []
@@ -137,7 +209,7 @@ export function VoiceBar({ conversationId, voiceDictationEnabled, onInsert }: Vo
         : '录音启动失败：' + (err instanceof Error ? err.message : String(err)))
       setState('error')
     }
-  }, [submitTranscription])
+  }, [stopPlayback, submitTranscription])
 
   const stopRecording = useCallback(() => {
     cleanupTimer()
@@ -147,11 +219,13 @@ export function VoiceBar({ conversationId, voiceDictationEnabled, onInsert }: Vo
   }, [cleanupTimer])
 
   const reset = useCallback(() => {
+    stopPlayback()
     setState('idle')
     setEditable('')
     setError('')
     sessionIdRef.current = null
-  }, [])
+    turnIdRef.current = null
+  }, [stopPlayback])
 
   if (!voiceDictationEnabled) return null
 
@@ -186,8 +260,21 @@ export function VoiceBar({ conversationId, voiceDictationEnabled, onInsert }: Vo
         <Button size="sm" variant="primary" disabled={!editable.trim()} onClick={() => { onInsert(editable); reset() }}>
           插入输入框
         </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label={ttsState === 'playing' ? '停止朗读' : '朗读终稿'}
+          data-testid="voice-play"
+          data-tts-state={ttsState}
+          disabled={!editable.trim() || ttsState === 'loading'}
+          onClick={() => void playSynthesis()}
+        >
+          {ttsState === 'playing' ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
+          {ttsState === 'loading' ? '合成中…' : ttsState === 'playing' ? '停止朗读' : '朗读'}
+        </Button>
         <Button size="sm" variant="ghost" onClick={reset}>放弃</Button>
       </div>
+      {error && <span className="mt-1 block text-[12px] text-danger" role="alert">{error}</span>}
     </>}
     {state === 'error' && <>
       <span className="text-[12px] text-danger" role="alert">{error}</span>
