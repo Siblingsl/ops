@@ -123,7 +123,7 @@ test('连接卡片通过共享封装调用固定平台意图，没有任意 URL 
 
 test('平台作品详情只按明确选中的镜像 ID 请求单篇指标刷新', async () => {
   const source = await readSource('pages/platform-works.tsx');
-  const desktopClient = await fs.readFile(path.join(repoRoot, 'desktop', 'src', 'desktop-client.ts'), 'utf8');
+  const desktopClient = await fs.readFile(path.join(repoRoot, 'desktop', 'src', 'client', 'platform.ts'), 'utf8');
   const intents = await fs.readFile(path.join(repoRoot, 'desktop', 'src', 'ui-intents.ts'), 'utf8');
   assert.match(source, /刷新此篇指标/);
   assert.match(source, /platformWorkId: mirrorID/);
