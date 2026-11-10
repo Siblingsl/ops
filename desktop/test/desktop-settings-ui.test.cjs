@@ -85,11 +85,13 @@ test('D-123/DC12：账号内容类型只在统一的当前账号设置中呈现'
 
 test('D-123：preload 与主进程为内容类型迁移暴露 IPC，且带信任来源校验', () => {
   const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload.ts'), 'utf8');
-  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8').replace(/\r\n/g, '\n');
+  const main = [fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8'),
+    fs.readFileSync(path.join(__dirname, '..', 'src', 'ipc', 'settings.ts'), 'utf8')].join('\n').replace(/\r\n/g, '\n');
   const client = fs.readFileSync(path.join(__dirname, '..', 'src', 'desktop-client.ts'), 'utf8');
-  assert.match(preload, /changeAccountType/);
+  assert.match(main, /deps.assertTrustedLocalSender\(event\);/);
+  assert.match(main, /requireClient\(deps\)/);
+  assert.match(main, /if \(!value \|\| typeof value !== 'object'\) throw new Error\('更换内容类型请求无效。'\);/);
   assert.match(main, /ipcHandle\('settings:change-account-type'/);
-  assert.match(main, /assertTrustedLocalSender\(event\);\n    if \(!desktopClient\) throw new Error\('客户端设置尚未初始化。'\);\n    if \(!value \|\| typeof value !== 'object'\)/);
   assert.match(main, /dialog\.showMessageBox/);
   assert.match(client, /async changeAccountContentFormat/);
   assert.match(client, /async listBusinessAccounts/);

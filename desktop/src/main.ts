@@ -30,6 +30,7 @@ import { registerComputerIpcHandlers, setComputerWorkerHost } from './ipc/comput
 import { registerCXIpcHandlers } from './ipc/cx';
 import { registerInBrowseIpcHandlers } from './ipc/inbrowse';
 import { registerBrowserIpcHandlers } from './ipc/browser';
+import { registerSettingsIpcHandlers } from './ipc/settings';
 import { ComputerWorkerHost } from './computer-worker-host';
 import { bindInBrowseController, inBrowseAttachAfterOverlay, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
 import { RealtimeBridge, type RealtimeBridgeEvent } from './voice-realtime';
@@ -992,404 +993,35 @@ function registerIpcHandlers(): void {
   // DT-08 片 4：cx-long-image:capture 拆至 ipc/cx.ts（占用门与失败语义不变；
   // 在途捕获集合留在 main.ts 供退出统一清理）。
   registerCXIpcHandlers({ ipcHandle, businessWindow: () => businessWindow, isBusinessUrl, activeCXLongImageCaptures });
-
-  ipcMain.on('settings:local-state', (event: IpcMainEvent, raw: unknown) => {
-    if (!localSettingsViewController?.isTrusted(event)) return;
-    if (!raw || typeof raw !== 'object' || Object.keys(raw).sort().join(',') !== 'busy,dirty') return;
-    const state = raw as { dirty: unknown; busy: unknown };
-    if (typeof state.dirty !== 'boolean' || typeof state.busy !== 'boolean') return;
-    const host = localSettingsViewController.currentHost;
-    if (host !== businessWindow || !businessWindow || businessWindow.isDestroyed() || businessWindow.webContents.isDestroyed()) return;
-    if (!isBusinessUrl(businessWindow.webContents.mainFrame.url)
-      || !isBusinessUrl(businessWindow.webContents.getURL())) return;
-    businessWindow.webContents.send('desktop-ui:local-settings-state', { dirty: state.dirty, busy: state.busy });
-  });
-
-  ipcHandle('settings:get-info', async (event) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    const clientState = await desktopClient.getPublicState();
-    const systemInfo = await desktopClient.getPublicSystemInfo().catch(() => null);
-    applyNativeClientStatus(clientState);
-    return {
-      appVersion: app.getVersion(),
-      apiOrigin,
-      connectionState: getConnectionState(),
-      failureReason: businessFailureReason,
-      systemInfo,
-      aiStatus: clientState.mode === 'desktop'
-        ? `已应用此客户端 AI 模式；任务映射版本 ${clientState.routeRevision}。${clientState.channelState === 'ready' ? '本机通道已连接。' : '本机通道当前不可用。'}${clientState.localConfigAvailable ? '' : ' 本机设置文件无法读取，模型与设备设置已停用。'}`
-        : `当前使用服务器 AI 模式；本机模型配置不会影响线上任务。${clientState.localConfigAvailable ? '' : ' 本机设置文件无法读取，模型与设备设置已停用。'}`,
-      clientState
-    };
-  });
-
-  ipcHandle('settings:export-diagnostics', async (event) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    const window = getLocalSettingsWindow(event);
-    if (!window) throw new Error('设置窗口已关闭。');
-    const state = await desktopClient.getPublicState();
-    const report = {
-      generated_at: new Date().toISOString(),
-      app: {
-        version: app.getVersion(),
-        electron: process.versions.electron,
-        node: process.versions.node,
-        platform: os.platform(),
-        architecture: os.arch()
-      },
-      service: apiOrigin,
-      business_connection: getConnectionState(),
-      client: {
-        signed_in: state.signedIn,
-        reauth_required: state.reauthRequired,
-        secure_storage_available: state.storageAvailable,
-        local_config_available: state.localConfigAvailable,
-        device_registered: state.deviceRegistered,
-        model_count: state.modelCount,
-        active_model_requests: state.activeModelRequests,
-        channel_state: state.channelState,
-        mode: state.mode,
-        route_revision: state.routeRevision
-      }
-    };
-    const { canceled, filePath } = await dialog.showSaveDialog(window, {
-      title: '导出脱敏诊断信息',
-      buttonLabel: '保存诊断文件',
-      defaultPath: `ops-desktop-diagnostics-${new Date().toISOString().slice(0, 10)}.json`,
-      filters: [{ name: 'JSON', extensions: ['json'] }]
-    });
-    if (canceled || !filePath) return false;
-    await fs.writeFile(filePath, `${JSON.stringify(report, null, 2)}\n`, { encoding: 'utf8' });
-    return true;
-  });
-
-  ipcHandle('settings:get-models', (event) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    return desktopClient.listModels();
-  });
-
-  ipcHandle('settings:get-policy', (event) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    return desktopClient.getPolicy();
-  });
-
-  ipcHandle('settings:set-policy', (event, value) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    if (!value || typeof value !== 'object') throw new Error('工作区策略输入无效。');
-    const input = value as Record<string, unknown>;
-    if (typeof input.enabled !== 'boolean' || typeof input.allowMemberEndpoints !== 'boolean') {
-      throw new Error('工作区策略字段无效。');
-    }
-    return desktopClient.updatePolicy(input.enabled, input.allowMemberEndpoints);
-  });
-
-  ipcHandle('settings:get-devices', (event) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    return desktopClient.listDevices();
-  });
-
-  ipcHandle('settings:revoke-device', (event, value) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient || !value || typeof value !== 'object') throw new Error('设备回收请求无效。');
-    const input = value as Record<string, unknown>;
-    if (typeof input.deviceId !== 'string' || typeof input.password !== 'string' || input.password.length > 1024) {
-      throw new Error('设备回收字段无效。');
-    }
-    return desktopClient.revokeDevice(input.deviceId, input.password);
-  });
-
-  ipcHandle('settings:get-routes', async (event) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    const [routeTypes, serverModels, desktopRoutes, desktopModels] = await Promise.all([
-      desktopClient.listRouteTypes(),
-      desktopClient.listServerModels(),
-      desktopClient.listDesktopRoutes(),
-      desktopClient.listModels()
-    ]);
-    return { routeTypes, serverModels, desktopRoutes, desktopModels };
-  });
-
-  ipcHandle('settings:save-routes', (event, value) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    if (!value || typeof value !== 'object') throw new Error('任务映射输入无效。');
-    const input = value as Record<string, unknown>;
-    if (typeof input.expectedRevision !== 'number' || !Array.isArray(input.routes)) {
-      throw new Error('任务映射版本或内容无效。');
-    }
-    return desktopClient.saveDesktopRoutes(
-      input.routes.map(parseDesktopRoute), input.expectedRevision
-    );
-  });
-
-  ipcHandle('settings:start-model-test', (event, value) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    if (!value || typeof value !== 'object') throw new Error('自检请求无效。');
-    const input = value as Record<string, unknown>;
-    if (typeof input.providerId !== 'string' || typeof input.model !== 'string') {
-      throw new Error('请选择待自检的模型。');
-    }
-    return desktopClient.startModelTest(input.providerId, input.model);
-  });
-
-  ipcHandle('settings:get-model-test', (event, value) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    if (typeof value !== 'string' || value.length > 80) throw new Error('自检任务标识无效。');
-    return desktopClient.getModelTest(value);
-  });
-
-  ipcHandle('settings:apply-mode', async (event, value) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient || (value !== 'server' && value !== 'desktop')) throw new Error('执行模式无效。');
-    const clientState = await desktopClient.getPublicState();
-    const window = getLocalSettingsWindow(event);
-    if (!window) throw new Error('设置窗口已关闭。');
-    const { response } = await dialog.showMessageBox(window, {
-      type: value === 'desktop' ? 'warning' : 'question',
-      title: value === 'desktop' ? '启用此客户端 AI' : '切换到服务器 AI',
-      message: '请先保存业务页面中的未提交内容。客户端无法检测编辑器是否有尚未保存的修改。',
-      detail: value === 'desktop'
-        ? `后续任务上下文仍经线上后端，并会发送到本机设置的 AI 端点。回环地址不代表数据不会离开本机。当前正在处理的本机模型调用：${clientState.activeModelRequests}。应用后将重新加载业务页面。`
-        : `后续 AI 请求将使用工作区的线上服务器模型。当前正在处理的本机模型调用：${clientState.activeModelRequests}。应用后将重新加载业务页面。`,
-      buttons: ['取消', '确认并重新加载'],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true
-    });
-    if (response !== 1) return false;
-    routingRefreshPending = true;
-    try {
-      await desktopClient.applyMode(value);
-      const currentUrl = businessWindow && !businessWindow.isDestroyed()
-        ? businessWindow.webContents.getURL()
-        : '';
-      if (isBusinessUrl(currentUrl)) await navigateBusiness(currentUrl);
-      else await loadBusinessPage();
-      routingRefreshPending = false;
-      return true;
-    } catch (error) {
-      try {
-        const restored = await desktopClient.restoreAppliedMode();
-        routingRefreshPending = restored === 'incompatible';
-      } catch {
-        routingRefreshPending = true;
-      }
-      throw error;
-    }
-  });
-
-  ipcHandle('settings:reauthenticate', (event, value) => {
-    assertTrustedLocalSender(event);
-    if (typeof value !== 'string' || value.length > 1024) throw new Error('密码输入无效。');
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    return desktopClient.reauthenticate(value);
-  });
-
-  // D-123 / DEV-415：客户端设置页更换业务账号内容类型。确认框用系统原生对话框，
-  // 与删除本机模型、清除账号数据等同级操作保持一致；跨平台一律拒绝（服务端同样拒绝）。
-  ipcHandle('settings:get-accounts', (event) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    return desktopClient.listBusinessAccounts();
-  });
-
-  ipcHandle('settings:change-account-type', async (event, value) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    if (!value || typeof value !== 'object') throw new Error('更换内容类型请求无效。');
-    const input = value as Record<string, unknown>;
-    const accountId = typeof input.accountId === 'string' ? input.accountId : '';
-    const contentFormat = typeof input.contentFormat === 'string' ? input.contentFormat : '';
-    if (!/^[0-9a-f-]{36}$/i.test(accountId) || !/^[a-z_]{1,32}$/.test(contentFormat)) {
-      throw new Error('账号或内容类型无效。');
-    }
-    const accounts = await desktopClient.listBusinessAccounts();
-    const account = accounts.find((item) => item.id === accountId);
-    if (!account) throw new Error('账号不存在或已删除，请刷新设置。');
-    if (account.content_format === contentFormat) throw new Error('账号已经是该内容类型。');
-    const window = getLocalSettingsWindow(event);
-    if (!window) throw new Error('设置窗口已关闭。');
-    const works = await desktopClient.countBusinessWorks(accountId);
-    // 对话框面向用户，显示中文类型名；逻辑校验仍用枚举值。
-    const formatNames: Record<string, string> = {
-      long_article: '长图文', qa_article: '问答体长图文', briefing: '资讯简报',
-      card_post: '图文卡片', script: '口播脚本', comic: '漫画',
-      image_note: '图文笔记', list_note: '清单合集笔记'
-    };
-    const fromLabel = formatNames[account.content_format] ?? account.content_format;
-    const toLabel = formatNames[contentFormat] ?? contentFormat;
-    const { response } = await dialog.showMessageBox(window, {
-      type: 'warning',
-      title: '更换账号内容类型',
-      message: `把账号「${account.name}」的内容类型从「${fromLabel}」换成「${toLabel}」？`,
-      detail: `已有 ${works} 篇作品保持原类型，检查、推送与打包行为完全不变；之后新建的作品将使用新类型。更换平台仍需在业务页面新建账号。`,
-      buttons: ['取消', '确认更换'],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true
-    });
-    if (response !== 1) throw new Error('已取消更换内容类型。');
-    return desktopClient.changeAccountContentFormat({ accountId, contentFormat });
-  });
-
-  ipcHandle('settings:clear-account-data', async (event) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient || !businessSession) throw new Error('客户端设置尚未初始化。');
-    const identity = await desktopClient.getCurrentAccountIdentity();
-    const clientState = await desktopClient.getPublicState();
-    if (!clientState.signedIn) throw new Error('请先登录要清理的 OPS 账号。');
-    if (identity.username !== clientState.username) throw new Error('当前登录账号已变化，请刷新设置后重试。');
-    const window = getLocalSettingsWindow(event);
-    if (!window) throw new Error('设置窗口已关闭。');
-    const { response } = await dialog.showMessageBox(window, {
-      type: 'warning',
-      title: '清除此账号本机数据',
-      message: `确定清除账号“${identity.username}”在此客户端上的数据并退出登录吗？`,
-      detail: `将删除此账号的本机模型密钥、设备私钥、任务映射草稿和客户端模式，并清理当前业务站点的 Cookie、站点存储与缓存。当前未完成的本机模型调用：${clientState.activeModelRequests}；清理会断开 AI 通道并终止这些调用，模型端可能已经计费。此操作不会删除线上作品或账号数据，也不会撤销线上设备；设备撤销需单独操作。`,
-      buttons: ['取消', '清除并退出'],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true
-    });
-    if (response !== 1) return false;
-
-    routingRefreshPending = true;
-    accountDataClearInProgress = true;
-    try {
-      if (routingRefresh) await routingRefresh;
-      routingRefreshPending = true;
-      await desktopClient.clearCurrentAccountData(identity.userId);
-      try {
-        await businessSession.clearStorageData({ origin: apiOrigin });
-        await businessSession.clearStorageData({ origin: businessOrigin });
-        await businessSession.clearCache();
-      } catch {
-        throw new Error('该账号的本机 AI 配置已删除，但线上站点数据或缓存未能全部清理。请重试清理，或重新登录后再操作。');
-      }
-      await navigateBusiness(`${businessOrigin}/login`, true);
-      routingRefreshPending = false;
-      await dialog.showMessageBox(window, {
-        type: 'info',
-        title: '本机数据已清除',
-        message: '此账号的本机配置和业务站点数据已清除。',
-        detail: '重新打开业务页面后需要再次登录。',
-        buttons: ['确定'],
-        noLink: true
-      });
-      return true;
-    } catch (error) {
-      try {
-        const restored = await desktopClient.restoreAppliedMode();
-        routingRefreshPending = restored === 'incompatible';
-      } catch {
-        routingRefreshPending = true;
-      }
-      throw error;
-    } finally {
-      accountDataClearInProgress = false;
-    }
-  });
-
-  ipcHandle('settings:save-model', (event, value) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    return desktopClient.saveModel(parseSaveModelInput(value));
-  });
-
-  ipcHandle('settings:delete-model', async (event, value) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient || !value || typeof value !== 'object') throw new Error('模型删除请求无效。');
-    const input = value as Record<string, unknown>;
-    if (typeof input.providerId !== 'string' || !/^[0-9a-f-]{36}$/i.test(input.providerId)
-      || typeof input.configRevision !== 'number' || !Number.isSafeInteger(input.configRevision)) {
-      throw new Error('模型删除字段无效。');
-    }
-    const window = getLocalSettingsWindow(event);
-    if (!window) throw new Error('设置窗口已关闭。');
-    const { response } = await dialog.showMessageBox(window, {
-      type: 'warning',
-      title: '删除本机模型配置',
-      message: '确定停用并移除此本机模型配置吗？',
-      detail: '服务端会移除此模型的任务映射并断开客户端 AI 通道；历史记录保留。',
-      buttons: ['取消', '停用并移除'],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true
-    });
-    if (response !== 1) return null;
-    return desktopClient.deleteModel(input.providerId, input.configRevision);
-  });
-
-  ipcHandle('settings:connect-ai', (event) => {
-    assertTrustedLocalSender(event);
-    if (!desktopClient) throw new Error('客户端设置尚未初始化。');
-    return desktopClient.connect();
-  });
-
-  ipcHandle('settings:disconnect-ai', (event) => {
-    assertTrustedLocalSender(event);
-    desktopClient?.disconnect();
-  });
-
-  ipcHandle('settings:retry-business-page', (event) => {
-    assertTrustedLocalSender(event);
-    return loadBusinessPage();
-  });
-
-  ipcHandle('settings:open-login-page', (event) => {
-    assertTrustedLocalSender(event);
-    return navigateBusiness(`${businessOrigin}/login`);
-  });
-
-  ipcHandle('settings:open-settings', (event) => {
-    assertTrustedLocalSender(event);
-    openNativeSettings();
-  });
-
-  ipcHandle('settings:take-platform-login-target', (event) => {
-    assertTrustedLocalSender(event);
-    const target = pendingPlatformLoginTarget;
-    pendingPlatformLoginTarget = null;
-    return target ? { accountId: target.accountId, platform: target.platform } : null;
-  });
-
-  ipcHandle('settings:close-local-window', (event) => {
-    assertTrustedLocalSender(event);
-    if (localSettingsViewController?.isTrusted(event)) {
-      if (businessWindow && !businessWindow.isDestroyed() && !businessWindow.webContents.isDestroyed()) {
-        businessWindow.webContents.send('desktop-ui:local-settings-state', { dirty: false, busy: false });
-      }
-      localSettingsViewController.destroy();
-      localSettingsViewController = null;
-      pendingPlatformLoginTarget = null;
-      void platformLoginFlow.stop();
-      return;
-    }
-    const localWindow = BrowserWindow.fromWebContents(event.sender);
-    localWindow?.close();
-  });
-
-  // 平台采集的本机命令（20 文档 §11.4）。主进程代办与 OPS 的认证请求和上传；
-  // 工作进程不接收 OPS Cookie、密码、设备私钥或任意服务器 URL。
-  ipcHandle('settings:platform-command', async (event, raw) => {
-    assertTrustedLocalSender(event);
-    return runPlatformCommand(raw);
-  });
-
-  // 浏览器探测单独一条通道：拉起浏览器比其它本机命令慢，不能共用 5 秒超时。
-  ipcHandle('settings:platform-browser', async (event, raw) => {
-    assertTrustedLocalSender(event);
-    const force = raw !== null && typeof raw === 'object' && (raw as { refresh?: unknown }).refresh === true;
-    return readPlatformBrowserStatus(force);
+  // DT-08 片 10：settings:* 28 通道 + local-state 事件拆至 ipc/settings.ts（确认弹窗
+  // 文案与防线校验逐字节搬移；跨域依赖经 SettingsIpcDeps 注入）。
+  registerSettingsIpcHandlers({
+    ipcHandle,
+    ipcOn: (channel, handler) => ipcMain.on(channel, handler),
+    assertTrustedLocalSender,
+    getLocalSettingsWindow,
+    localSettingsViewController: { get: () => localSettingsViewController, destroy() { localSettingsViewController = null; } },
+    businessWindow: { get: () => businessWindow },
+    businessSession: { get: () => businessSession },
+    desktopClient: { get: () => desktopClient },
+    apiOrigin: { get: () => apiOrigin },
+    businessOrigin: { get: () => businessOrigin },
+    businessFailureReason: { get: () => businessFailureReason },
+    connectionState: getConnectionState,
+    applyNativeClientStatus,
+    routingRefreshPending: { set: (v) => { routingRefreshPending = v; }, get: () => routingRefreshPending },
+    routingRefresh: { get: () => routingRefresh },
+    accountDataClearInProgress: { set: (v) => { accountDataClearInProgress = v; }, get: () => accountDataClearInProgress },
+    pendingPlatformLoginTarget: { take: () => { const t = pendingPlatformLoginTarget; pendingPlatformLoginTarget = null; return t ? { accountId: t.accountId, platform: t.platform } : null; }, clear: () => { pendingPlatformLoginTarget = null; } },
+    parseSaveModelInput,
+    parseDesktopRoute,
+    runPlatformCommand,
+    readPlatformBrowserStatus,
+    isBusinessUrl,
+    navigateBusiness,
+    loadBusinessPage,
+    openNativeSettings,
+    platformLoginFlow,
   });
 }
 
@@ -2814,7 +2446,7 @@ async function resolveCollectProfileDir(platform: string): Promise<string> {
 
 // 浏览器探测结论只在主进程缓存：一次会话里浏览器不会中途换，重复探测只会反复拉起进程。
 // 缓存的是结论而不是候选路径，对外结构里不出现任何本机路径。
-interface PlatformBrowserStatus {
+export interface PlatformBrowserStatus {
   state: 'ready' | 'unsupported' | 'launch_failed'
   family: string | null
   name: string | null
