@@ -21,7 +21,7 @@ import fs from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { ensureProductBridge, getActiveBridge, startBrowserBridgeDiagnostics } from './browser-bridge';
+import { ensureProductBridge, getActiveBridge, startBrowserBridgeDiagnostics, stopActiveBridge } from './browser-bridge';
 import { BrowserCommandExecutor } from './browser-executor';
 import { McpHostManager, type McpCatalog } from './mcp-host';
 import { McpOAuthClient, SafeStorageTokenStorage } from './mcp-oauth';
@@ -336,10 +336,8 @@ function startApplication(): void {
 
   app.on('before-quit', (event) => {
     if (quitConfirmed) {
-      stopPlatformPresence();
-      stopPlatformClaimLoop();
-      stopBrowserCommandExecutor();
-      desktopClient?.disconnect();
+      // DT-03：统一清理（两条退出路径共用，见 disposeApplicationResources）。
+      disposeApplicationResources();
       return;
     }
     event.preventDefault();
@@ -877,10 +875,53 @@ function connectRealtimeWebSocket(url: string): Promise<{
 
 // DEV-AI27-17（W17b，A12）：电脑控制 worker 宿主单例；退出前必须回收 fork 出的隔离进程。
 let computerWorkerHost: ComputerWorkerHost | null = null;
+// DT-03：退出清理需要触达的常驻资源单例。此前是 registerIpcHandlers 的函数局部变量，
+// 两条退出路径都摸不到它们（realtimeBridge 只在 voice:realtime-stop 停、
+// mcpHostManager 只有按连接 stop），属退出清理不完整的根因之一。
+let realtimeBridge: RealtimeBridge | null = null;
+let mcpHostManager: McpHostManager | null = null;
+
+/** DT-03：单个清理步骤的容错包装——记录失败但不阻断退出序列。 */
+function safeDispose(name: string, dispose: () => void | Promise<void>): void {
+  try {
+    const result = dispose();
+    if (result instanceof Promise) {
+      result.catch((error) => console.error(`[dispose] ${name} 异步清理失败`, describeError(error)));
+    }
+  } catch (error) {
+    console.error(`[dispose] ${name} 清理失败`, describeError(error));
+  }
+}
+
+/** DT-03（docs/33 §10.7）：应用退出统一清理。修复前两条退出路径各自只停一部分：
+ * before-quit 只停 presence/claimLoop/executor/desktopClient；confirmApplicationQuit
+ * 只停 loginFlow/worker/desktopClient——realtimeBridge、mcpHostManager、浏览器桥
+ * （8765 常驻监听）与在途长图捕获两边都没有。现在两条路径都只调用本函数；
+ * 顺序按「先停事件源与循环 → 再停本机能力 → 最后断服务端通道」，清理失败记日志
+ * 不影响退出。 */
+function disposeApplicationResources(): void {
+  safeDispose('platform presence', stopPlatformPresence);
+  safeDispose('platform claim loop', stopPlatformClaimLoop);
+  safeDispose('browser command executor', stopBrowserCommandExecutor);
+  safeDispose('platform login flow', () => void platformLoginFlow.stop());
+  safeDispose('realtime bridge', () => realtimeBridge?.stop());
+  safeDispose('mcp host connections', () => mcpHostManager?.stopAll());
+  safeDispose('computer worker host', () => {
+    computerWorkerHost?.stop();
+    computerWorkerHost = null;
+  });
+  safeDispose('browser bridge', stopActiveBridge);
+  safeDispose('long image captures', () => {
+    // 在途捕获的窗口资源由 captureCXLongImageFromBuild 的 finally 自行回收；
+    // 退出时只清空占用标记，让 capture_busy 门不再阻塞新会话启动。
+    activeCXLongImageCaptures.clear();
+  });
+  safeDispose('desktop client', () => desktopClient?.disconnect());
+}
 
 function registerIpcHandlers(): void {
   // DEV-AI27-16 第六批（A2）：realtime 桥单例——事件转发到业务窗口；调用方限业务窗口主框架。
-  const realtimeBridge = new RealtimeBridge({
+  realtimeBridge = new RealtimeBridge({
     connect: (url) => connectRealtimeWebSocket(url),
     now: () => Date.now(),
   });
@@ -889,13 +930,15 @@ function registerIpcHandlers(): void {
       businessWindow.webContents.send('desktop-ui:realtime-event', ev);
     }
   });
-  const requireRealtimeCaller = (event: IpcMainInvokeEvent): void => {
+  const requireRealtimeCaller = (event: IpcMainInvokeEvent): RealtimeBridge => {
     const senderFrame = event.senderFrame;
     if (!businessWindow || businessWindow.isDestroyed() || event.sender !== businessWindow.webContents
       || !senderFrame || senderFrame !== event.sender.mainFrame || !isBusinessUrl(senderFrame.url)
-      || !isBusinessUrl(event.sender.getURL())) {
+      || !isBusinessUrl(event.sender.getURL())
+      || !realtimeBridge) {
       throw new Error('不允许此窗口调用实时语音意图。');
     }
+    return realtimeBridge;
   };
   // DEV-AI27-08（W08，D-172）：内置浏览视图固定意图（27 §7.8/§12.5）。
   // 仅业务窗口主框架可调用；bounds/导航/浮层隐藏由主进程持有，渲染器无 view 对象。
@@ -1055,7 +1098,8 @@ function registerIpcHandlers(): void {
   // 目录回传渲染器，由渲染器经既有 actions API 上报服务端状态机（validate 由本机桥
   // 握手后上报目录/错误）。验证完即停（enable 后的运行中连接属调用执行片，另行接线）。
   // 失败返回真实错误码，渲染器如实上报 last_error（服务端失败不推进状态）。
-  const mcpHostManager = new McpHostManager();
+  mcpHostManager = new McpHostManager();
+  const mcpHosts = mcpHostManager;
   ipcHandle('mcp:validate', async (event, raw) => {
     requireComputerCaller(event);
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('mcp_validate_args_invalid');
@@ -1069,7 +1113,7 @@ function registerIpcHandlers(): void {
         const args = Array.isArray(body.args) ? body.args.filter((a): a is string => typeof a === 'string').slice(0, 32) : [];
         const cwd = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : process.cwd();
         if (!command) throw new Error('stdio 连接必须提供 command');
-        catalog = await mcpHostManager.startStdio(connectionId, { command, args, cwd });
+        catalog = await mcpHosts.startStdio(connectionId, { command, args, cwd });
       } else if (body.transport === 'http') {
         const url = typeof body.url === 'string' ? body.url.trim() : '';
         if (!url.startsWith('https://')) throw new Error('http 传输要求 https:// 地址');
@@ -1080,12 +1124,12 @@ function registerIpcHandlers(): void {
           ? body.oauth_scopes.filter((s): s is string => typeof s === 'string').slice(0, 16)
           : undefined;
         const oauth = oauthClientId ? mcpOAuthClientOf(connectionId, url, oauthClientId, oauthScopes) : undefined;
-        catalog = await mcpHostManager.startHttp(connectionId, { url, ...(oauth ? { oauth } : {}) });
+        catalog = await mcpHosts.startHttp(connectionId, { url, ...(oauth ? { oauth } : {}) });
       } else {
         throw new Error('transport 只能是 stdio 或 http');
       }
       // 验证即停：stdio 不留常驻进程；目录已拿到，enable 后的运行中连接另行接线。
-      mcpHostManager.stop(connectionId);
+      mcpHosts.stop(connectionId);
       return { ok: true as const, catalog };
     } catch (error) {
       return { ok: false as const, code: 'mcp_validate_failed', message: String(error instanceof Error ? error.message : error).slice(0, 300) };
@@ -1159,12 +1203,12 @@ function registerIpcHandlers(): void {
   });
   // DEV-AI27-16 第六批（A2，27 §11.4.5）：realtime 双向音频桥——固定意图，渲染器不接触密钥。
   // start/append/commit/interrupt/stop 转发 RealtimeBridge；事件经 desktop-ui:realtime-event 推送。
-  ipcHandle('voice:realtime-status', () => realtimeBridge.statusView());
+  ipcHandle('voice:realtime-status', () => realtimeBridge?.statusView() ?? null);
   ipcHandle('voice:realtime-start', async (event, raw) => {
-    requireRealtimeCaller(event);
+    const bridge = requireRealtimeCaller(event);
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('realtime_args_invalid');
     const b = raw as { session_id?: unknown; token?: unknown; proxy_endpoint?: unknown; proxy_url?: unknown; model?: unknown; provider?: unknown };
-    const result = await realtimeBridge.start({
+    const result = await bridge.start({
       sessionID: String(b.session_id ?? ''),
       token: String(b.token ?? ''),
       proxyEndpoint: String(b.proxy_endpoint ?? ''),
@@ -1175,23 +1219,23 @@ function registerIpcHandlers(): void {
     return result;
   });
   ipcHandle('voice:realtime-append', (event, raw) => {
-    requireRealtimeCaller(event);
+    const bridge = requireRealtimeCaller(event);
     if (!raw || typeof raw !== 'object' || typeof (raw as { dataBase64?: unknown }).dataBase64 !== 'string') {
       throw new Error('realtime_chunk_invalid');
     }
-    return realtimeBridge.append({ dataBase64: String((raw as { dataBase64: unknown }).dataBase64) });
+    return bridge.append({ dataBase64: String((raw as { dataBase64: unknown }).dataBase64) });
   });
   ipcHandle('voice:realtime-commit', (event) => {
-    requireRealtimeCaller(event);
-    return realtimeBridge.commit();
+    const bridge = requireRealtimeCaller(event);
+    return bridge.commit();
   });
   ipcHandle('voice:realtime-interrupt', (event) => {
-    requireRealtimeCaller(event);
-    return realtimeBridge.interrupt();
+    const bridge = requireRealtimeCaller(event);
+    return bridge.interrupt();
   });
   ipcHandle('voice:realtime-stop', (event) => {
-    requireRealtimeCaller(event);
-    realtimeBridge.stop();
+    const bridge = requireRealtimeCaller(event);
+    bridge.stop();
     return null;
   });
   ipcHandle('cx-long-image:capture', async (event, raw) => {
@@ -3875,9 +3919,8 @@ async function confirmApplicationQuit(parent: BrowserWindow | null): Promise<voi
     }
     await platformLoginFlow.stop();
     quitConfirmed = true;
-    computerWorkerHost?.stop();
-    computerWorkerHost = null;
-    desktopClient?.disconnect();
+    // DT-03：统一清理（与 before-quit 同一清单，补齐 realtime/mcp/桥/长图捕获）。
+    disposeApplicationResources();
     app.quit();
   } finally {
     if (!quitConfirmed) routingRefreshPending = previousRoutingRefreshPending;

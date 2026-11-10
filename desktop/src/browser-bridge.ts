@@ -754,6 +754,14 @@ export function getActiveBridge(): BrowserBridge | null {
   return activeBridge;
 }
 
+/** DT-03（docs/33 §10.7）：应用退出统一清理的桥步骤——停止 8765 桥端口与控制端口
+ * 监听并清空单例。此后浏览器协作 IPC 如实报「桥未运行」。重复调用幂等。 */
+export function stopActiveBridge(): void {
+  if (!activeBridge) return;
+  activeBridge.stop();
+  activeBridge = null;
+}
+
 /** 诊断 IPC 来源守卫签名：拒绝时抛错（invoke 直接 reject），与 main.ts 的
  * requireComputerCaller/requireRealtimeCaller 同构——只放行诊断窗主框架。 */
 export type DiagnosticsCallerGuard = (event: { sender: unknown; senderFrame: { url: string } | null }) => void;
