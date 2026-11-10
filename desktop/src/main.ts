@@ -935,11 +935,12 @@ function registerIpcHandlers(): void {
   ipcHandle('voice:realtime-start', async (event, raw) => {
     requireRealtimeCaller(event);
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('realtime_args_invalid');
-    const b = raw as { session_id?: unknown; token?: unknown; proxy_endpoint?: unknown; model?: unknown; provider?: unknown };
+    const b = raw as { session_id?: unknown; token?: unknown; proxy_endpoint?: unknown; proxy_url?: unknown; model?: unknown; provider?: unknown };
     const result = await realtimeBridge.start({
       sessionID: String(b.session_id ?? ''),
       token: String(b.token ?? ''),
       proxyEndpoint: String(b.proxy_endpoint ?? ''),
+      proxyURL: b.proxy_url === undefined ? undefined : String(b.proxy_url),
       model: String(b.model ?? ''),
       provider: String(b.provider ?? ''),
     });

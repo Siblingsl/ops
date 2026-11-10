@@ -153,3 +153,21 @@ test('A2: start 忙碌拒绝（已有活动会话）', async () => {
   assert.equal(second.error_code, 'realtime_bridge_busy');
   bridge.stop();
 });
+
+test('A2: 优先使用服务端签发的绝对 proxyURL，并补上 token', async () => {
+  const urls = [];
+  const deps = {
+    connect: async (url) => {
+      urls.push(url);
+      return { send() {}, close() {}, onMessage() {}, onClose() {}, onError() {} };
+    },
+    now: () => Date.now(),
+  };
+  const bridge = new RealtimeBridge(deps);
+  const result = await bridge.start({
+    ...CFG,
+    proxyURL: 'wss://ops.example.com/api/v1/agent/voice-sessions/sess-1/realtime-ws',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(urls[0], 'wss://ops.example.com/api/v1/agent/voice-sessions/sess-1/realtime-ws?token=tok-secret-not-a-real-key');
+});

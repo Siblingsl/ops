@@ -1,14 +1,18 @@
 package app
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -460,9 +464,9 @@ func fmtInt(n int) string {
 // POST /agent/voice-sessions/{id}/realtime-token：realtime 会话凭据（A2，27 §11.4.5）。
 // 解析 realtime 路由（未配置 422 voice_capability_unsupported，不回退 default），校验
 // 会话归属与 mode=realtime；返回供应商连接参数（base_url/model/短时会话 ID），**绝不返回
-// 供应商 API Key**——密钥留在服务端，桌面桥直连供应商时经「会话令牌」语义由服务端代拨
-// （首版：桌面桥携带本端点返回的 token 调用服务端 WS 代理；无代理部署时如实返回
-// realtime_proxy_unavailable，不把 key 下发）。
+// 供应商 API Key**——密钥留在服务端，桌面桥携带本端点返回的短期令牌连接服务端 WS 代理
+// （GET .../realtime-ws），由服务端代拨供应商；代理失败返回 realtime_proxy_unavailable，
+// 不把 key 下发。
 func (s *Server) createVoiceRealtimeToken(w http.ResponseWriter, r *http.Request) error {
 	id := ident(r.Context())
 	if err := s.voiceGuard(id); err != nil {
@@ -503,14 +507,20 @@ func (s *Server) createVoiceRealtimeToken(w http.ResponseWriter, r *http.Request
 		})); err != nil {
 		return err
 	}
+	// 绝对代理地址：桌面桥不应硬编码本机端口；反代终结 TLS 时按 X-Forwarded-Proto 纠正。
+	proxyScheme := "ws"
+	if r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+		proxyScheme = "wss"
+	}
+	proxyURL := proxyScheme + "://" + r.Host + "/api/v1/agent/voice-sessions/" + sessionID.String() + "/realtime-ws"
 	return ok(w, map[string]any{
 		"session_id": sessionID.String(),
 		"token":      token,
 		"expires_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339),
 		"provider":   rt.ProviderName,
 		"model":      rt.Model,
-		// 首版边界：服务端 realtime WS 代理未部署，桌面桥拿到 token 后调用服务端代理端点；
-		// 代理未部署时桥端给可读错误（不假装连上）。
+		"proxy_url":  proxyURL,
+		// 相对路径保留给旧调用；桌面桥优先用上面的绝对 proxy_url，避免硬编码本机端口。
 		"proxy_endpoint": "/api/v1/agent/voice-sessions/" + sessionID.String() + "/realtime-ws",
 	})
 }
@@ -616,4 +626,123 @@ func scanVoiceTurn(row pgx.Row) (voiceTurnView, error) {
 		&v.TTSProvider, &v.TTSModel, &v.TTSCharacters, &v.TTSErrorCode,
 		&v.RealtimeProvider, &v.RealtimeAudioMS, &v.RealtimeErrorCode)
 	return v, err
+}
+
+// GET /agent/voice-sessions/{id}/realtime-ws?token=...：A2 服务端 realtime WS 代理。
+// 供应商密钥只在服务端使用；桌面桥只持有 10 分钟会话令牌。代理只做双向转发，
+// 不改写供应商信封（供应商差异由桌面 adapter 收敛）。
+func (s *Server) realtimeVoiceProxy(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.voiceGuard(id); err != nil {
+		return err
+	}
+	sessionID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return errNotFound
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		return apiErr(422, "validation_failed", "token 必填")
+	}
+	var storedToken, expiresAt, state, mode string
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT COALESCE(route_snapshot->>'realtime_token',''),
+		       COALESCE(route_snapshot->>'realtime_token_exp',''), state, mode
+		FROM agent_voice_session WHERE id=$1 AND user_id=$2 AND workspace_id=$3`,
+		sessionID, id.UserID, id.WorkspaceID).Scan(&storedToken, &expiresAt, &state, &mode); err != nil {
+		if err == pgx.ErrNoRows {
+			return errNotFound
+		}
+		return err
+	}
+	if storedToken == "" || token != storedToken {
+		return apiErr(403, "realtime_token_invalid", "实时语音令牌无效")
+	}
+	exp, err := time.Parse(time.RFC3339, expiresAt)
+	if err != nil || time.Now().After(exp) {
+		return apiErr(401, "realtime_token_expired", "实时语音令牌已过期，请重新签发")
+	}
+	if state != "active" {
+		return apiErr(409, "voice_session_ended", "语音会话已结束")
+	}
+	if mode != "realtime" {
+		return apiErr(422, "validation_failed", "只有 realtime 会话可建立代理")
+	}
+	rt, routeErr := s.resolveRoute(r.Context(), "realtime")
+	if routeErr != nil {
+		return apiErr(422, "voice_capability_unsupported", "未配置 realtime 供应商路由")
+	}
+	upstream, err := realtimeUpstreamURL(rt.BaseURL, rt.Model)
+	if err != nil {
+		return apiErr(422, "realtime_proxy_unavailable", "realtime 供应商地址不可用")
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	up, _, err := websocket.Dial(ctx, upstream, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization": []string{"Bearer " + rt.APIKey},
+			"OpenAI-Beta":   []string{"realtime=v1"},
+		},
+	})
+	if err != nil {
+		return apiErr(502, "realtime_proxy_unavailable", "realtime 供应商连接失败；可重试")
+	}
+	// 令牌是 512bit 不可猜值且必须与库内记录逐字相等；Origin 只做同应用校验会误伤
+	// 自定义 scheme 的桌面窗口，故此处不再依赖 Origin，鉴权以令牌 + 会话 cookie 为准。
+	client, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+	if err != nil {
+		_ = up.Close(websocket.StatusInternalError, "client accept failed")
+		return nil
+	}
+	defer func() { _ = client.Close(websocket.StatusNormalClosure, "") }()
+	defer func() { _ = up.Close(websocket.StatusNormalClosure, "") }()
+	done := make(chan struct{}, 2)
+	go func() { copyWebSocket(ctx, up, client); done <- struct{}{} }()
+	go func() { copyWebSocket(ctx, client, up); done <- struct{}{} }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+// copyWebSocket 单向透传；任一方向出错即返回（另一方向由 ctx 取消/连接关闭收敛）。
+func copyWebSocket(ctx context.Context, dst, src *websocket.Conn) {
+	for {
+		typ, data, err := src.Read(ctx)
+		if err != nil {
+			return
+		}
+		if err := dst.Write(ctx, typ, data); err != nil {
+			return
+		}
+	}
+}
+
+// realtimeUpstreamURL 把 OpenAI 兼容 base（如 https://api.openai.com/v1）转成
+// wss://api.openai.com/v1/realtime?model=...；base 已带 /realtime 时不重复拼接。
+func realtimeUpstreamURL(base, model string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("invalid realtime base url")
+	}
+	switch u.Scheme {
+	case "https", "wss":
+		u.Scheme = "wss"
+	case "http", "ws":
+		u.Scheme = "ws"
+	default:
+		return "", fmt.Errorf("unsupported scheme")
+	}
+	path := strings.TrimRight(u.Path, "/")
+	if !strings.HasSuffix(path, "/realtime") {
+		path += "/realtime"
+	}
+	u.Path = path
+	query := u.Query()
+	if model != "" {
+		query.Set("model", model)
+	}
+	u.RawQuery = query.Encode()
+	return u.String(), nil
 }

@@ -277,6 +277,8 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/voice-sessions/{id}/turns/{turnId}/synthesize",
 		// DEV-AI27-16 第六批（A2）：realtime 会话凭据（27 §11.4.5 / V08）。
 		"POST /api/v1/agent/voice-sessions/{id}/realtime-token",
+		// A2 服务端 WS 代理：桌面桥持短期令牌连接，供应商密钥不下发。
+		"GET /api/v1/agent/voice-sessions/{id}/realtime-ws",
 		"PATCH /api/v1/agent/voice-sessions/{id}",
 		"GET /api/v1/agent/voice-sessions/{id}",
 		// DEV-AI27-17（W17）Windows 电脑控制：选窗器与任务面板共用。

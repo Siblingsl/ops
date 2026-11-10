@@ -23,7 +23,8 @@ export type RealtimeBridgeState =
 export interface RealtimeSessionConfig {
   sessionID: string;      // OPS agent_voice_session id
   token: string;          // 服务端签发的短时会话凭据
-  proxyEndpoint: string;  // 服务端 WS 代理路径（本批端点未部署时 connect 如实失败）
+  proxyEndpoint: string;  // 服务端 WS 代理路径（兼容旧调用）
+  proxyURL?: string;      // 服务端签发的绝对 ws(s) 地址；优先于 proxyEndpoint
   model: string;
   provider: string;
 }
@@ -149,9 +150,10 @@ export class RealtimeBridge extends EventEmitter {
   private async connectOnce(nextState: RealtimeBridgeState): Promise<{ ok: boolean; error_code?: string; message?: string }> {
     if (!this.cfg) return { ok: false, error_code: 'realtime_no_session', message: '会话未初始化' };
     this.setState(nextState);
-    const url = this.cfg.proxyEndpoint.startsWith('ws')
-      ? this.cfg.proxyEndpoint
-      : toWSURL(this.cfg.proxyEndpoint, this.cfg.token);
+    const endpoint = this.cfg.proxyURL || this.cfg.proxyEndpoint;
+    const url = endpoint.startsWith('ws')
+      ? (endpoint.includes('token=') ? endpoint : `${endpoint}${endpoint.includes('?') ? '&' : '?'}token=${encodeURIComponent(this.cfg.token)}`)
+      : toWSURL(endpoint, this.cfg.token);
     try {
       this.ws = await this.deps.connect(url);
     } catch (err) {
