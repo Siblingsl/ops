@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"golang.org/x/sync/errgroup"
 	"time"
 
 	"github.com/google/uuid"
@@ -142,9 +144,66 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 				return nil, err
 			}
 		}
-		prof, err := s.loadProfile(ctx, t.Account.ID)
-		if err != nil {
-			return nil, err
+		// BE-05（docs/33 §3.5 / BE-05；≡DEV-P04）：互相独立的读并行化（errgroup）。
+		// 依赖图：targetFormat 仅由 t.Account/t.WorkID 派生（无 DB 依赖）；loadProfile /
+		// activeStrategy / activeMemories / loadDataPreferences / loadTopPerformance 互不依赖、
+		// 均为纯读；styleSlot 依赖 prof.StyleSummary → 仍在 profile 之后串行。
+		// 组装（WriteString/p.add）保持原槽序逐字节不变；任何读失败与串行版一样整体报错。
+		var (
+			prof        *Profile
+			strategy    *Strategy
+			mems        []Memory
+			prefs       []DataPreference
+			samples     []perfTopSample
+			prefTasksOn = dataPrefTasks[t.Type]
+			perfTasksOn = perfTasks[t.Type]
+		)
+		{
+			g, gctx := errgroup.WithContext(ctx)
+			g.Go(func() error {
+				var err error
+				prof, err = s.loadProfile(gctx, t.Account.ID)
+				return err
+			})
+			g.Go(func() error {
+				var err error
+				strategy, err = s.activeStrategy(gctx, t.Account.ID)
+				return err
+			})
+			scope := t.MemoryScope
+			if scope == "" {
+				scope = taskMemoryScope(t.Type)
+			}
+			g.Go(func() error {
+				var err error
+				mems, err = s.activeMemories(gctx, t.Account.ID, scope, t.Type == "fact_flag")
+				return err
+			})
+			if prefTasksOn {
+				g.Go(func() error {
+					var err error
+					if t.Account.Platform == "toutiao" {
+						prefs, err = s.loadDataPreferences(gctx, t.Account.ID, targetFormat)
+					} else {
+						prefs, err = s.loadDataPreferences(gctx, t.Account.ID)
+					}
+					return err
+				})
+			}
+			if perfTasksOn {
+				g.Go(func() error {
+					var err error
+					if t.Account.Platform == "toutiao" {
+						samples, err = s.loadTopPerformance(gctx, t.Account.ID, t.WorkID, perfTopLimit, targetFormat)
+					} else {
+						samples, err = s.loadTopPerformance(gctx, t.Account.ID, t.WorkID, perfTopLimit)
+					}
+					return err
+				})
+			}
+			if err := g.Wait(); err != nil {
+				return nil, err
+			}
 		}
 		pt := s.profileText(ctx, t.Account, prof, t.WorkID)
 		sys.WriteString("\n\n## 账号定位档案\n" + pt)
@@ -165,10 +224,7 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 		}
 		p.add(Slot{Name: "profile", Chars: runeLen(pt), Items: []SlotItem{profileItem}})
 		p.Legacy["profile"] = true
-		strategy, err := s.activeStrategy(ctx, t.Account.ID)
-		if err != nil {
-			return nil, err
-		}
+		// BE-05：strategy/mems/prefs/samples 已在上方 errgroup 并行预取（数据依赖图见彼处注释）。
 		if strategy != nil {
 			brief := strategyBrief(strategy) + "差异化：" + strategy.Differentiation + "\n人设：" + strategy.Persona + "\n屏蔽词：" + strings.Join(strategy.BlockedWords, "、")
 			text := truncateRunes(brief, slotBudgets["strategy"])
@@ -181,14 +237,6 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 			p.add(Slot{Name: "strategy", Chars: runeLen(text), Truncated: runeLen(brief) > runeLen(text), Items: []SlotItem{strategyItem}})
 		}
 
-		scope := t.MemoryScope
-		if scope == "" {
-			scope = taskMemoryScope(t.Type)
-		}
-		mems, err := s.activeMemories(ctx, t.Account.ID, scope, t.Type == "fact_flag")
-		if err != nil {
-			return nil, err
-		}
 		if len(mems) > 0 {
 			sl := Slot{Name: "memory", Budget: slotBudgets["memory"]}
 			var mb strings.Builder
@@ -235,15 +283,6 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 
 		// DEV-A103：读者数据偏好（来自本账号数据归因的规则结论）只注入指定任务。
 		if dataPrefTasks[t.Type] {
-			var prefs []DataPreference
-			if t.Account.Platform == "toutiao" {
-				prefs, err = s.loadDataPreferences(ctx, t.Account.ID, targetFormat)
-			} else {
-				prefs, err = s.loadDataPreferences(ctx, t.Account.ID)
-			}
-			if err != nil {
-				return nil, err
-			}
 			if len(prefs) > 0 {
 				sl := Slot{Name: "data_prefs", Budget: slotBudgets["data_prefs"]}
 				var pb strings.Builder
@@ -273,15 +312,6 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 		// 高表现样本：只给「决定怎么写」的任务；样本不足 perfTopLimit 篇时不注入，
 		// 避免拿一两条数据把模型带偏。统计型结论另走 data_prefs。
 		if perfTasks[t.Type] {
-			var samples []perfTopSample
-			if t.Account.Platform == "toutiao" {
-				samples, err = s.loadTopPerformance(ctx, t.Account.ID, t.WorkID, perfTopLimit, targetFormat)
-			} else {
-				samples, err = s.loadTopPerformance(ctx, t.Account.ID, t.WorkID, perfTopLimit)
-			}
-			if err != nil {
-				return nil, err
-			}
 			if len(samples) >= perfTopLimit {
 				text := truncateRunes(performanceText(samples), perfSlotBudget)
 				sys.WriteString("\n## 本号表现较好的作品（只参考标题和开头的写法，不要复用其中的事实或原句）\n" + text)
