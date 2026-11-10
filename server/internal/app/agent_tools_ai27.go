@@ -24,6 +24,9 @@ func ai27BrowserTools() []AgentTool {
 				pBody("frame_id", `{"type":"integer","minimum":1,"maximum":4096}`, false, "U"),
 				pBody("frame_origin", `{"type":"string","minLength":1,"maxLength":255}`, false, "U"),
 			},
+			// A30b 片 2（拍板：账本存载荷+同步等待）：动作名由目录固定注入——模型参数
+			// 平铺进账本 payload，模型不持租约句柄；服务端按 run 自查租约。
+			Fixed:   map[string]any{"action": "observe"},
 			MinRole: roleEditor,
 		},
 		{
@@ -33,6 +36,7 @@ func ai27BrowserTools() []AgentTool {
 				pBody("tab_id", `{"type":"integer"}`, true, "U"),
 				pBody("url", `{"type":"string"}`, true, "U"),
 			},
+			Fixed:   map[string]any{"action": "navigate"},
 			MinRole: roleEditor,
 		},
 		{
@@ -45,6 +49,7 @@ func ai27BrowserTools() []AgentTool {
 				pBody("frame_id", `{"type":"integer","minimum":1,"maximum":4096}`, false, "U"),
 				pBody("frame_origin", `{"type":"string","minLength":1,"maxLength":255}`, false, "U"),
 			},
+			Fixed:   map[string]any{"action": "click"},
 			MinRole: roleEditor,
 		},
 		{
@@ -58,6 +63,7 @@ func ai27BrowserTools() []AgentTool {
 				pBody("frame_id", `{"type":"integer","minimum":1,"maximum":4096}`, false, "U"),
 				pBody("frame_origin", `{"type":"string","minLength":1,"maxLength":255}`, false, "U"),
 			},
+			Fixed:   map[string]any{"action": "type"},
 			MinRole: roleEditor,
 		},
 		{
@@ -66,6 +72,7 @@ func ai27BrowserTools() []AgentTool {
 			Params: []ToolParam{
 				pBody("tab_id", `{"type":"integer"}`, true, "U"),
 			},
+			Fixed:   map[string]any{"action": "observe_frames"},
 			MinRole: roleEditor,
 		},
 		{
@@ -76,6 +83,7 @@ func ai27BrowserTools() []AgentTool {
 				pBody("selector", `{"type":"string"}`, true, "U"),
 				pBody("doc_rev", `{"type":"string"}`, true, "U"),
 			},
+			Fixed:   map[string]any{"action": "extract"},
 			MinRole: roleEditor,
 		},
 		{
@@ -84,6 +92,7 @@ func ai27BrowserTools() []AgentTool {
 			Params: []ToolParam{
 				pBody("tab_id", `{"type":"integer"}`, true, "U"),
 			},
+			Fixed:   map[string]any{"action": "screenshot"},
 			MinRole: roleEditor,
 		},
 		{

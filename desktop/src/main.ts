@@ -22,6 +22,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { ensureProductBridge, getActiveBridge, startBrowserBridgeDiagnostics } from './browser-bridge';
+import { BrowserCommandExecutor } from './browser-executor';
 import { McpHostManager, type McpCatalog } from './mcp-host';
 import { McpOAuthClient, SafeStorageTokenStorage } from './mcp-oauth';
 import { ComputerWorkerHost, type WindowSummary } from './computer-worker-host';
@@ -306,6 +307,7 @@ function startApplication(): void {
       startPlatformPresence();
       // 后台领取循环：自动生成的任务只有客户端主动 claim 才会执行。
       startPlatformClaimLoop();
+      startBrowserCommandExecutor();
       if (restoredMode === 'incompatible') showFailureWindow();
       else await loadBusinessPage();
     } catch (error) {
@@ -336,6 +338,7 @@ function startApplication(): void {
     if (quitConfirmed) {
       stopPlatformPresence();
       stopPlatformClaimLoop();
+      stopBrowserCommandExecutor();
       desktopClient?.disconnect();
       return;
     }
@@ -2798,6 +2801,43 @@ function stopPlatformClaimLoop(): void {
   if (!claimTimer) return;
   clearInterval(claimTimer);
   claimTimer = null;
+}
+
+// A30b 片 2（拍板：账本存载荷+同步等待）：AI 浏览器命令执行器——桥配对后定时轮询
+// 服务端 pending 命令并经本机桥执行；未配对跳过本轮（命令由服务端 deadline+sweep
+// 兜底转 unknown_outcome，run 内等待方如实收到，不伪造执行成功）。
+let browserExecutorTimer: NodeJS.Timeout | null = null;
+const BROWSER_EXECUTOR_INTERVAL_MS = 3000;
+
+function startBrowserCommandExecutor(): void {
+  if (browserExecutorTimer) return;
+  const executor = new BrowserCommandExecutor({
+    // 未登录（desktopClient 为 null）时领取返回空清单，不制造请求错误噪音。
+    listPending: async () => (desktopClient ? await desktopClient.listPendingBrowserCommands() : { commands: [] }),
+    dispatch: async (id) => {
+      if (!desktopClient) throw new Error('desktop client unavailable');
+      return await desktopClient.dispatchBrowserCommand(id);
+    },
+    receipt: async (id, body) => {
+      if (!desktopClient) throw new Error('desktop client unavailable');
+      return await desktopClient.receiptBrowserCommand(id, body);
+    },
+    bridgeState: () => (getActiveBridge()?.state === 'paired' ? 'paired' : 'other'),
+    dispatchAndWait: (action, payload, timeoutMs) => {
+      const bridge = getActiveBridge();
+      if (!bridge) return Promise.resolve({ ok: false as const, code: 'browser_bridge_not_running' });
+      return bridge.dispatchAndWait(action, payload, timeoutMs);
+    },
+    log: (line) => console.log(line)
+  });
+  browserExecutorTimer = setInterval(() => { void executor.tick(); }, BROWSER_EXECUTOR_INTERVAL_MS);
+  browserExecutorTimer.unref?.();
+}
+
+function stopBrowserCommandExecutor(): void {
+  if (!browserExecutorTimer) return;
+  clearInterval(browserExecutorTimer);
+  browserExecutorTimer = null;
 }
 
 // writeAccountProfileMeta 写"账号 slot"的 meta.json。

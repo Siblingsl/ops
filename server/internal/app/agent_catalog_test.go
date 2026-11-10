@@ -239,6 +239,8 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/browser/commands/{id}/dispatch",
 		"POST /api/v1/agent/browser/commands/{id}/receipt",
 		"GET /api/v1/agent/browser/commands",
+		// A30b 片 2：桌面执行器领取 pending 命令（含载荷；本机桥调用，不进模型目录）。
+		"GET /api/v1/agent/browser/commands/pending",
 		// DEV-AI27-06（W06）工具派发端点（模型 dispatch 走 /tools/ 路径）。
 		"POST /api/v1/tools/browser/commands",
 		"GET /api/v1/tools/mcp/connections",

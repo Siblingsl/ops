@@ -651,6 +651,27 @@ export class DesktopClient {
     return { userId: auth.user_id, username: auth.username };
   }
 
+  // A30b 片 2（拍板：账本存载荷+同步等待）：浏览器命令执行器的服务端三步——
+  // 领取 pending（含载荷）、CAS 派发（claimed=true 才执行）、回执（含 result）。
+  // 类型结构与 browser-executor.ts 的 BrowserCommandRow 同构（分层各自声明）。
+  async listPendingBrowserCommands(): Promise<{ commands: Array<{ id: string; action_kind: string; deadline_at?: string; claimed?: boolean; payload?: unknown; [key: string]: unknown }> }> {
+    return await this.request('/agent/browser/commands/pending');
+  }
+
+  async dispatchBrowserCommand(id: string): Promise<{ id: string; action_kind: string; deadline_at?: string; claimed?: boolean; payload?: unknown; [key: string]: unknown }> {
+    return await this.request(`/agent/browser/commands/${encodeURIComponent(id)}/dispatch`, {
+      method: 'POST',
+      body: '{}'
+    });
+  }
+
+  async receiptBrowserCommand(id: string, body: { state: string; error_code?: string; result?: unknown }): Promise<Record<string, unknown>> {
+    return await this.request(`/agent/browser/commands/${encodeURIComponent(id)}/receipt`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+  }
+
   async clearCurrentAccountData(expectedUserId: string): Promise<void> {
     const auth = await this.getAuthInfo();
     if (auth.user_id !== expectedUserId) throw new Error('当前登录账号已变化，请刷新设置后重试。');

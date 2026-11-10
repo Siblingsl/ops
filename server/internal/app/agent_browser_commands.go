@@ -23,13 +23,18 @@ import (
 // 派发后无回执由 sweep 转入 unknown_outcome，不重放。租约撤销/过期后的回执拒绝（迟到结果只核对）。
 
 type browserCommandView struct {
-	ID           string `json:"id"`
-	GrantID      string `json:"grant_id"`
-	RunID        string `json:"run_id,omitempty"`
-	RequestID    string `json:"request_id"`
-	ActionKind   string `json:"action_kind"`
-	InputHash    string `json:"input_hash"`
-	State        string `json:"state"`
+	ID         string `json:"id"`
+	GrantID    string `json:"grant_id"`
+	RunID      string `json:"run_id,omitempty"`
+	RequestID  string `json:"request_id"`
+	ActionKind string `json:"action_kind"`
+	InputHash  string `json:"input_hash"`
+	State      string `json:"state"`
+	// A30b 片 2（拍板：账本存载荷+同步等待）：payload 只在桌面领取/领取派发响应中出现
+	// （执行必需）；result 只在终态回执后出现（模型同步等待读取）。均 nil 时不出现在 JSON。
+	Payload  json.RawMessage `json:"payload,omitempty"`
+	Result   json.RawMessage `json:"result,omitempty"`
+	Claimed  bool            `json:"claimed,omitempty"`
 	DeadlineAt   string `json:"deadline_at,omitempty"`
 	DispatchedAt string `json:"dispatched_at,omitempty"`
 	ErrorCode    string `json:"error_code,omitempty"`
@@ -133,10 +138,11 @@ func (s *Server) createAgentBrowserCommand(w http.ResponseWriter, r *http.Reques
 			commandID = existingID
 			return nil
 		case err == pgx.ErrNoRows:
+			// A30b 片 2：账本存载荷（拍板）——桌面执行器领取后据此派发，不再无法重建。
 			_, err = tx.Exec(r.Context(), `
-				INSERT INTO agent_browser_command (id, run_id, grant_id, request_id, action_kind, input_hash, state, deadline_at)
-				VALUES ($1,$2,$3,$4,$5,$6,'queued',$7)`,
-				commandID, runID, grantID, requestID, body.Action, inputHash, deadline)
+				INSERT INTO agent_browser_command (id, run_id, grant_id, request_id, action_kind, input_hash, state, deadline_at, payload)
+				VALUES ($1,$2,$3,$4,$5,$6,'queued',$7,$8)`,
+				commandID, runID, grantID, requestID, body.Action, inputHash, deadline, payloadJSON)
 			return err
 		default:
 			return err
@@ -147,7 +153,9 @@ func (s *Server) createAgentBrowserCommand(w http.ResponseWriter, r *http.Reques
 	return s.renderBrowserCommand(r.Context(), w, commandID)
 }
 
-// POST /agent/browser/commands/{id}/dispatch：queued→dispatched（本机派发前登记；幂等）。
+// POST /agent/browser/commands/{id}/dispatch：queued→dispatched（桌面执行器原子领取；幂等）。
+// A30b 片 2：CAS 命中（claimed=true）时随响应下发 payload——多桌面并发领取同一命令时
+// 只有先到的执行者拿到载荷，后者 claimed=false 如实回当前状态，不重复执行。
 func (s *Server) dispatchAgentBrowserCommand(w http.ResponseWriter, r *http.Request) error {
 	commandID, conversationID, err := s.ownBrowserCommand(r)
 	if err != nil {
@@ -159,12 +167,25 @@ func (s *Server) dispatchAgentBrowserCommand(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() > 0 {
+	claimed := tag.RowsAffected() > 0
+	if claimed {
 		s.emitBrowserCommandEvent(r.Context(), conversationID, "browser.command_started", map[string]any{
 			"command_id": commandID.String(),
 		})
 	}
-	return s.renderBrowserCommand(r.Context(), w, commandID)
+	v, err := scanBrowserCommand(s.db.QueryRow(r.Context(), `SELECT `+browserCommandColumns+` FROM agent_browser_command c WHERE c.id=$1`, commandID))
+	if err != nil {
+		return err
+	}
+	if claimed {
+		var payload json.RawMessage
+		if err := s.db.QueryRow(r.Context(), `SELECT COALESCE(payload, 'null'::jsonb) FROM agent_browser_command WHERE id=$1`, commandID).Scan(&payload); err != nil {
+			return err
+		}
+		v.Payload = payload
+		v.Claimed = true
+	}
+	return ok(w, v)
 }
 
 // POST /agent/browser/commands/{id}/receipt：回执。撤销/过期租约上的回执拒绝（迟到结果按 27 §13.6 只核对）。
@@ -174,11 +195,12 @@ func (s *Server) receiptAgentBrowserCommand(w http.ResponseWriter, r *http.Reque
 		return err
 	}
 	var body struct {
-		State       string `json:"state"`
-		ErrorCode   string `json:"error_code"`
-		ReceiptHash string `json:"receipt_hash"`
+		State       string          `json:"state"`
+		ErrorCode   string          `json:"error_code"`
+		ReceiptHash string          `json:"receipt_hash"`
+		Result      json.RawMessage `json:"result"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&body); err != nil {
 		return apiErr(400, "bad_request", "请求体无法解析")
 	}
 	if body.State != "succeeded" && body.State != "failed" && body.State != "unknown_outcome" {
@@ -205,9 +227,10 @@ func (s *Server) receiptAgentBrowserCommand(w http.ResponseWriter, r *http.Reque
 		return apiErr(409, "browser_receipt_conflict", "命令已有不同最终结果，迟到回执仅入账核对")
 	}
 	if _, err := s.db.Exec(r.Context(), `
-		UPDATE agent_browser_command SET state=$2, receipt_hash=COALESCE(NULLIF($3,''), receipt_hash), error_code=NULLIF($4,'')
+		UPDATE agent_browser_command SET state=$2, receipt_hash=COALESCE(NULLIF($3,''), receipt_hash), error_code=NULLIF($4,''),
+			result=$5
 		WHERE id=$1 AND state IN ('queued','dispatched')`,
-		commandID, body.State, body.ReceiptHash, body.ErrorCode); err != nil {
+		commandID, body.State, body.ReceiptHash, body.ErrorCode, nullJSON(body.Result)); err != nil {
 		return err
 	}
 	s.emitBrowserCommandEvent(r.Context(), conversationID, "browser.command_finished", map[string]any{
@@ -354,4 +377,186 @@ func browserOriginGranted(origin string, granted []string) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// A30b 片 2（用户拍板：账本存载荷+同步等待）：run 内模型调用语义与桌面执行器领取。
+// 链路：模型 browser_observe → run 引擎 dispatch（principal 带 RunID）→ POST
+// /tools/browser/commands（runAgentBrowserCommand：查租约→登记 queued 含 payload→
+// 轮询等待）→ 桌面 GET /agent/browser/commands/pending → POST dispatch（CAS 领取
+// 拿 payload）→ bridge.dispatchAndWait → POST receipt（含 result）→ 等待循环返回。
+// ---------------------------------------------------------------------------
+
+// browserCommandWaitBudget：run 内同步等待的硬上限（防 deadline 为 NULL 的旧记录死循环）。
+// 正常退出以命令自身 deadline（登记时 now+30s）+2s sweep 容差为准，与拍板"≤30s"对齐。
+const browserCommandWaitBudget = 35 * time.Second
+
+const browserCommandWaitPoll = 200 * time.Millisecond
+
+// nullJSON：nil RawMessage 转 SQL NULL（result 缺省不覆盖旧值语义由 COALESCE 承担）。
+func nullJSON(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return raw
+}
+
+// runAgentBrowserCommand 是 run 内模型调用入口（/tools/browser/commands）。
+// 与 createAgentBrowserCommand（显式信封，桌面/渲染器直调）并存：模型参数平铺
+// （tab_id/ref/doc_rev...），action 由工具目录 Fixed 注入；grant/run/request_id 全部
+// 服务端自查自生成——模型不持租约句柄，也不可指定归属。
+func (s *Server) runAgentBrowserCommand(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.browserRoleGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "browser_workspace"); err != nil {
+		return err
+	}
+	principal := agentPrincipalOf(r.Context())
+	if principal == nil || principal.RunID == uuid.Nil || principal.ConversationID == uuid.Nil {
+		return apiErr(422, "validation_failed", "该接口只能由会话任务内的工具调用发起")
+	}
+	var body map[string]any
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&body); err != nil {
+		return apiErr(400, "bad_request", "请求体无法解析")
+	}
+	// action：工具目录 Fixed 注入（或显式给 action 的旧信封直调——后者走原 handler）。
+	action, _ := body["action"].(string)
+	if action == "" {
+		return apiErr(422, "validation_failed", "缺少动作 action")
+	}
+	delete(body, "action")
+	payload := body
+	if !browserCommandActions[action] {
+		return apiErr(422, "browser_action_unsupported", "动作未登记")
+	}
+	// 租约：当前 run 的活动租约（27 §13.2 归属派生；无租约让模型先 browser_request_tab）。
+	var grantID uuid.UUID
+	var grantOrigins []string
+	err := s.db.QueryRow(r.Context(), `
+		SELECT id, origins FROM agent_browser_grant
+		WHERE conversation_id=$1 AND workspace_id=$2 AND user_id=$3 AND run_id=$4
+		  AND state='active' AND expires_at > now()
+		ORDER BY created_at DESC LIMIT 1`,
+		principal.ConversationID, id.WorkspaceID, id.UserID, principal.RunID).Scan(&grantID, &grantOrigins)
+	if err == pgx.ErrNoRows {
+		return apiErr(409, "browser_lease_conflict", "当前任务没有活动的标签租约；请先调用 browser_request_tab 请用户选择标签")
+	}
+	if err != nil {
+		return err
+	}
+	// 逐 frame 核验 origin（A7，27 §14.3）：与显式登记路径同一套校验。
+	frameOrigin, frameScoped, err := browserFrameTarget(action, payload)
+	if err != nil {
+		return err
+	}
+	if frameScoped && !browserOriginGranted(frameOrigin, grantOrigins) {
+		return apiErr(422, "browser_origin_not_granted", "该 frame 的 origin 未在租约授权范围内")
+	}
+	payloadJSON, _ := json.Marshal(payload)
+	inputHash := fmt.Sprintf("%x", sha256.Sum256(append([]byte(action+"."), payloadJSON...)))
+	deadline := time.Now().Add(30 * time.Second)
+	commandID := uuid.New()
+	if _, err := s.db.Exec(r.Context(), `
+		INSERT INTO agent_browser_command (id, run_id, grant_id, request_id, action_kind, input_hash, state, deadline_at, payload)
+		VALUES ($1,$2,$3,$4,$5,$6,'queued',$7,$8)`,
+		commandID, principal.RunID, grantID, uuid.New(), action, inputHash, deadline, payloadJSON); err != nil {
+		return err
+	}
+	s.emitBrowserCommandEvent(r.Context(), principal.ConversationID, "browser.command_requested", map[string]any{
+		"command_id": commandID.String(), "action": action,
+	})
+	return s.waitForBrowserCommand(r, w, commandID)
+}
+
+// waitForBrowserCommand：登记后轮询等待终态（拍板：同步等待 ≤30s），返回含 result 的
+// 最终 view。超 deadline+sweep 容差仍无回执时跑一次 sweep 转 unknown_outcome 后如实返回。
+func (s *Server) waitForBrowserCommand(r *http.Request, w http.ResponseWriter, commandID uuid.UUID) error {
+	deadline := time.Now().Add(browserCommandWaitBudget)
+	for {
+		if r.Context().Err() != nil {
+			// run 取消/断开：命令留在账本（queued/dispatched），sweep 兜底转 unknown_outcome。
+			return apiErr(499, "browser_wait_cancelled", "任务已取消，停止等待命令回执")
+		}
+		var state string
+		var result json.RawMessage
+		var errorCode string
+		var cmdDeadline time.Time
+		err := s.db.QueryRow(r.Context(), `
+			SELECT state, COALESCE(result, 'null'::jsonb), COALESCE(error_code,''), COALESCE(deadline_at, now())
+			FROM agent_browser_command WHERE id=$1`, commandID).Scan(&state, &result, &errorCode, &cmdDeadline)
+		if err != nil {
+			return err
+		}
+		if state == "succeeded" || state == "failed" || state == "unknown_outcome" {
+			v, err := scanBrowserCommand(s.db.QueryRow(r.Context(), `SELECT `+browserCommandColumns+` FROM agent_browser_command c WHERE c.id=$1`, commandID))
+			if err != nil {
+				return err
+			}
+			if len(result) > 0 && string(result) != "null" {
+				v.Result = result
+			}
+			return ok(w, v)
+		}
+		// 超 deadline+sweep 容差：dispatched 由 sweep 转 unknown_outcome（不重放）；
+		// queued（无人领取）同样超时即终态——等待者不能无限挂起，也不重放。
+		if time.Now().After(cmdDeadline.Add(2 * time.Second)) {
+			if state == "queued" {
+				if _, err := s.db.Exec(r.Context(), `
+					UPDATE agent_browser_command SET state='unknown_outcome', error_code='browser_wait_timeout'
+					WHERE id=$1 AND state='queued'`, commandID); err != nil {
+					return err
+				}
+				continue
+			}
+			s.sweepAgentBrowserCommands(r.Context())
+		}
+		if time.Now().After(deadline) {
+			// 预算耗尽：如实返回当前非终态（queued=无人领取；dispatched=执行未回执）。
+			v, err := scanBrowserCommand(s.db.QueryRow(r.Context(), `SELECT `+browserCommandColumns+` FROM agent_browser_command c WHERE c.id=$1`, commandID))
+			if err != nil {
+				return err
+			}
+			return ok(w, v)
+		}
+		select {
+		case <-r.Context().Done():
+			return apiErr(499, "browser_wait_cancelled", "任务已取消，停止等待命令回执")
+		case <-time.After(browserCommandWaitPoll):
+		}
+	}
+}
+
+// pendingAgentBrowserCommands：桌面执行器领取清单（GET /agent/browser/commands/pending）。
+// 本人工作区内 queued 且未过期的命令（含 payload），每轮限量 10，先到先执行；
+// 并发领取由 dispatch 的 CAS（claimed）兜底，重复执行不可能发生。
+func (s *Server) pendingAgentBrowserCommands(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.browserRoleGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "browser_workspace"); err != nil {
+		return err
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT `+browserCommandColumns+`, COALESCE(c.payload, 'null'::jsonb)
+		FROM agent_browser_command c JOIN agent_browser_grant g ON g.id=c.grant_id
+		WHERE g.workspace_id=$1 AND g.user_id=$2 AND c.state='queued'
+		  AND (c.deadline_at IS NULL OR c.deadline_at > now())
+		ORDER BY c.created_at ASC LIMIT 10`, id.WorkspaceID, id.UserID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	commands := []browserCommandView{}
+	for rows.Next() {
+		var v browserCommandView
+		if err := rows.Scan(&v.ID, &v.GrantID, &v.RunID, &v.RequestID, &v.ActionKind, &v.InputHash,
+			&v.State, &v.DeadlineAt, &v.DispatchedAt, &v.ErrorCode, &v.CreatedAt, &v.Payload); err != nil {
+			return err
+		}
+		commands = append(commands, v)
+	}
+	return ok(w, map[string]any{"commands": commands})
 }

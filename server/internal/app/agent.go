@@ -1877,8 +1877,11 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/browser/commands/{id}/dispatch", s.h(s.dispatchAgentBrowserCommand))
 		r.Post("/agent/browser/commands/{id}/receipt", s.h(s.receiptAgentBrowserCommand))
 		r.Get("/agent/browser/commands", s.h(s.listAgentBrowserCommands))
+		// A30b 片 2（拍板：账本存载荷+同步等待）：run 内模型调用走新语义 handler
+		// （服务端自查租约、存载荷、同步等待回执）；桌面执行器经 pending 领取。
+		r.Post("/tools/browser/commands", s.h(s.runAgentBrowserCommand))
+		r.Get("/agent/browser/commands/pending", s.h(s.pendingAgentBrowserCommands))
 		// DEV-AI27-06（W06）：工具派发端点（模型工具 dispatch 走非 /agent/ 路径）。
-		r.Post("/tools/browser/commands", s.h(s.createAgentBrowserCommand))
 		r.Get("/tools/mcp/connections", s.h(s.listPluginConnections))
 		r.Post("/tools/subagent/conversations/{id}/delegation-groups", s.h(s.createDelegationGroup))
 		r.Post("/tools/subagent/delegations/{id}/cancel", s.h(s.cancelDelegation))
