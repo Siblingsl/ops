@@ -27,6 +27,7 @@ import type { McpHostManager } from './mcp-host';
 import { registerMcpIpcHandlers } from './ipc/mcp';
 import { registerVoiceIpcHandlers, setRealtimeBridge } from './ipc/voice';
 import { registerComputerIpcHandlers, setComputerWorkerHost } from './ipc/computer';
+import { registerCXIpcHandlers } from './ipc/cx';
 import { ComputerWorkerHost } from './computer-worker-host';
 import { bindInBrowseController, clearInBrowseData, inBrowseAttachAfterOverlay, inBrowseDataStats, inBrowseDetachForOverlay, type InBrowseViewController } from './in-browse';
 import { RealtimeBridge, type RealtimeBridgeEvent } from './voice-realtime';
@@ -113,7 +114,6 @@ import {
   isManagementRequestMarker,
   shouldBlockDesktopApiRequest
 } from './request-context';
-import { captureCXLongImageFromBuild, cxLongImageFailure, CXLongImageError } from './cx-long-image';
 
 const squirrelStartup = require('electron-squirrel-startup') as boolean;
 
@@ -1089,32 +1089,9 @@ function registerIpcHandlers(): void {
   // ipc/voice.ts（通道契约不变；桥实例与 requireRealtimeCaller 校验留在 main.ts）。
   setRealtimeBridge(realtimeBridge);
   registerVoiceIpcHandlers({ ipcHandle, requireRealtimeCaller });
-  ipcHandle('cx-long-image:capture', async (event, raw) => {
-    const senderFrame = event.senderFrame;
-    if (!businessWindow || businessWindow.isDestroyed() || event.sender !== businessWindow.webContents
-      || !senderFrame || senderFrame !== event.sender.mainFrame || !isBusinessUrl(senderFrame.url)
-      || !isBusinessUrl(event.sender.getURL())) {
-      throw new Error('不允许此窗口发起长图构建。');
-    }
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
-      || Object.keys(raw).join(',') !== 'buildId'
-      || typeof (raw as { buildId?: unknown }).buildId !== 'string'
-      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test((raw as { buildId: string }).buildId)) {
-      return cxLongImageFailure(new CXLongImageError('invalid_input', '长图构建参数无效。'));
-    }
-    const buildId = (raw as { buildId: string }).buildId.toLowerCase();
-    if (activeCXLongImageCaptures.size > 0) {
-      return cxLongImageFailure(new CXLongImageError('capture_busy', '当前已有长图正在生成，请稍后重试。'));
-    }
-    activeCXLongImageCaptures.add(buildId);
-    try {
-      return await captureCXLongImageFromBuild(businessWindow, buildId);
-    } catch (error) {
-      return cxLongImageFailure(error);
-    } finally {
-      activeCXLongImageCaptures.delete(buildId);
-    }
-  });
+  // DT-08 片 4：cx-long-image:capture 拆至 ipc/cx.ts（占用门与失败语义不变；
+  // 在途捕获集合留在 main.ts 供退出统一清理）。
+  registerCXIpcHandlers({ ipcHandle, businessWindow: () => businessWindow, isBusinessUrl, activeCXLongImageCaptures });
 
   ipcMain.on('settings:local-state', (event: IpcMainEvent, raw: unknown) => {
     if (!localSettingsViewController?.isTrusted(event)) return;
