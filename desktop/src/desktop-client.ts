@@ -24,6 +24,7 @@ import { channelReconnectDelayMs } from './reconnect-policy';
 import { ChannelMixin } from './client/channel';
 import { ModelsMixin } from './client/models';
 import { PlatformMixin } from './client/platform';
+import { ConfigMixin } from './client/config';
 import { createPinnedDirectHttpsAgent, createPinnedHttpsProxyAgent, normalizeProxyUrl, parseSystemProxyResolution, type ProxyRoute } from './proxy';
 import {
   PlatformCollectionUnsupportedError,
@@ -288,10 +289,7 @@ interface RequestRoutingState {
   requestContext: AppliedDesktopRequestContext;
 }
 
-export class DesktopClient extends PlatformMixin(ModelsMixin(ChannelMixin)) {
-  readonly configPath = path.join(app.getPath('userData'), 'desktop-config.json');
-  configPromise: Promise<ConfigDocument> | null = null;
-  private readonly managementRequests: ManagementRequestRegistry;
+export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(ChannelMixin))) {
   requestRouting: RequestRoutingState = { mode: 'server', requestContext: {} };
   appliedRouteRevision = 0;
 
@@ -301,7 +299,6 @@ export class DesktopClient extends PlatformMixin(ModelsMixin(ChannelMixin)) {
     readonly serviceNamespace: string = apiOrigin
   ) {
     super();
-    this.managementRequests = new ManagementRequestRegistry(apiOrigin);
   }
 
   async getPublicState(): Promise<PublicState> {
@@ -361,9 +358,6 @@ export class DesktopClient extends PlatformMixin(ModelsMixin(ChannelMixin)) {
     return { version: info.version, dev: info.dev, dataBytes: info.data_bytes };
   }
 
-  consumeManagementRequestMarker(marker: string, requestUrl: string, method: string): boolean {
-    return this.managementRequests.consume(marker, requestUrl, method);
-  }
 
   async getPolicy(): Promise<{ globalEnabled: boolean; policy: DesktopPolicy }> {
     const result = await this.request<{ global_enabled: boolean; policy: DesktopPolicy }>('/desktop/policy');
@@ -586,94 +580,6 @@ export class DesktopClient extends PlatformMixin(ModelsMixin(ChannelMixin)) {
     });
   }
 
-  protected async getAuthInfo(signal?: AbortSignal): Promise<AuthInfo> {
-    return this.request<AuthInfo>('/auth/me', signal ? { signal } : {});
-  }
-
-  protected async getWorkspace(auth: AuthInfo): Promise<{
-    account: StoredAccount;
-    workspace: StoredWorkspace;
-    accountKey: string;
-  }> {
-    const config = await this.loadConfig();
-    const accountKey = `${this.serviceNamespace}\n${auth.user_id}`;
-    const account = config.accounts[accountKey] ?? { workspaces: {} };
-    account.workspaces[auth.workspace.id] ??= { models: [] };
-    config.accounts[accountKey] = account;
-    return { account, workspace: account.workspaces[auth.workspace.id], accountKey };
-  }
-
-  private async getAccount(auth: AuthInfo): Promise<StoredAccount> {
-    return (await this.getWorkspace(auth)).account;
-  }
-
-  protected async request<T>(pathName: string, init: RequestInit = {}): Promise<T> {
-    const url = new URL(`${API_PREFIX}${pathName}`, this.apiOrigin).toString();
-    const headers = new Headers(init.headers);
-    let hasDesktopProof = false;
-    headers.forEach((_value, name) => {
-      if (name.toLowerCase().startsWith('x-ops-desktop-')) hasDesktopProof = true;
-    });
-    const marker = hasDesktopProof ? this.managementRequests.issue(url, init.method ?? 'GET') : '';
-    if (marker) headers.set('X-OPS-Desktop-Management-Request', marker);
-    headers.set('Accept', 'application/json');
-    if (init.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-    const timeoutSignal = AbortSignal.timeout(10_000);
-    const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
-    try {
-      const response = await this.businessSession.fetch(url, {
-        ...init,
-        headers,
-        credentials: 'include',
-        redirect: 'error',
-        cache: 'no-store',
-        signal
-      });
-      const payload = await response.json().catch(() => null) as unknown;
-      if (!response.ok) throw new Error(apiErrorMessage(payload, response.status));
-      return payload as T;
-    } finally {
-      if (marker) this.managementRequests.discard(marker);
-    }
-  }
-
-  protected async loadConfig(): Promise<ConfigDocument> {
-    if (!this.configPromise) {
-      this.configPromise = fs.readFile(this.configPath, 'utf8')
-        .then((content) => JSON.parse(content) as ConfigDocument)
-        .catch((error: NodeJS.ErrnoException) => {
-          if (error.code === 'ENOENT') return { version: 1, accounts: {} };
-          throw new Error('本机设置文件无法读取。');
-        });
-    }
-    return this.configPromise;
-  }
-
-  protected async saveConfig(): Promise<void> {
-    const config = await this.loadConfig();
-    const tempPath = `${this.configPath}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify(config), { encoding: 'utf8', mode: 0o600 });
-    await fs.rename(tempPath, this.configPath);
-  }
-
-  protected decrypt(encrypted: string): string {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密存储不可用。');
-    try {
-      return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
-    } catch {
-      throw new Error('本机密钥无法解密；请重新配置该密钥。');
-    }
-  }
-}
-
-
-
-function apiErrorMessage(payload: unknown, status: number): string {
-  if (payload && typeof payload === 'object' && 'error' in payload) {
-    const error = (payload as { error?: { message?: unknown; code?: unknown } }).error;
-    if (error && typeof error.message === 'string') return error.message.slice(0, 300);
-  }
-  return `线上服务请求失败（HTTP ${status}）。`;
 }
 
 function safeError(error: unknown): string {
