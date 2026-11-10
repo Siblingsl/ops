@@ -83,7 +83,7 @@
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
     function render(snap) {
-      if (!snap) return;
+      if (!snap) { $('state').textContent = '桥未运行'; return; }
       $('state').textContent = snap.state;
       $('state').className = snap.state === 'paired' ? 'st-paired' : snap.state === 'pairing' ? 'st-pairing' : 'st-unpaired';
       $('generation').textContent = snap.generation;

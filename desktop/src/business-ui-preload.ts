@@ -44,6 +44,22 @@ type BrowserTabListResult =
   | { ok: false; code: string; message: string }
   | { ok: true; tabs: BrowserTabView[] };
 
+// DEV-AI27-A30b：桥配对快照——短码核对与组装服务端 confirm 所需的最小集合。
+// 快照白名单四键；pairing 白名单三键；任何多余键（如 session_key/hkdf_salt）整份拒绝，
+// 会话密钥零泄漏断言在 preload 层成立（源头 pairingSnapshot 也不含）。
+type BrowserPairingSnapshot = {
+  state: 'unpaired' | 'pairing' | 'paired' | 'revoked';
+  pairing: { code: string; expires_at: number; expired: boolean } | null;
+  extension_instance_id: string | null;
+  host_pid: number | null;
+};
+type BrowserPairingStateResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; snapshot: BrowserPairingSnapshot };
+type BrowserPairingConfirmResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; extension_instance_id: string | null };
+
 // DEV-AI27-A3 第一片：MCP 验证结果——目录只含工具名/哈希/schema，不含任何秘密。
 type McpValidateInput = {
   connection_id: string;
@@ -166,6 +182,60 @@ function parseBrowserTabListResult(raw: unknown): BrowserTabListResult | null {
     tabs.push({ tab_id: tab.tab_id, title: tab.title, origin: tab.origin, window_id: tab.window_id, active: tab.active });
   }
   return { ok: true, tabs };
+}
+
+function parseBrowserPairingStateResult(raw: unknown): BrowserPairingStateResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 60
+      && typeof value.message === 'string' && value.message.length <= 200
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  const snap = asRecord(value.snapshot);
+  if (!snap) return null;
+  // 白名单键集合断言：任何多余键（如 session_key/hkdf_salt/hmac）整份拒绝。
+  if (Object.keys(snap).sort().join(',') !== 'extension_instance_id,host_pid,pairing,state') return null;
+  if (!['unpaired', 'pairing', 'paired', 'revoked'].includes(String(snap.state))) return null;
+  if (snap.extension_instance_id !== null
+    && (typeof snap.extension_instance_id !== 'string' || snap.extension_instance_id.length > 64)) return null;
+  if (snap.host_pid !== null && (typeof snap.host_pid !== 'number' || !Number.isSafeInteger(snap.host_pid))) return null;
+  let pairing: BrowserPairingSnapshot['pairing'] = null;
+  if (snap.pairing !== null) {
+    const p = asRecord(snap.pairing);
+    if (!p) return null;
+    if (Object.keys(p).sort().join(',') !== 'code,expired,expires_at') return null;
+    // 桥生成短码固定 6 位数字（crypto.randomInt + padStart）；形态不符即拒绝。
+    if (typeof p.code !== 'string' || !/^[0-9]{6}$/.test(p.code)) return null;
+    if (typeof p.expires_at !== 'number' || !Number.isSafeInteger(p.expires_at)) return null;
+    if (typeof p.expired !== 'boolean') return null;
+    pairing = { code: p.code, expires_at: p.expires_at, expired: p.expired };
+  }
+  return {
+    ok: true,
+    snapshot: {
+      state: snap.state as BrowserPairingSnapshot['state'],
+      pairing,
+      extension_instance_id: snap.extension_instance_id as string | null,
+      host_pid: snap.host_pid as number | null,
+    },
+  };
+}
+
+function parseBrowserPairingConfirmResult(raw: unknown): BrowserPairingConfirmResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 60
+      && typeof value.message === 'string' && value.message.length <= 200
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  if (Object.keys(value).sort().join(',') !== 'extension_instance_id,ok') return null;
+  if (value.extension_instance_id !== null
+    && (typeof value.extension_instance_id !== 'string' || value.extension_instance_id.length > 64)) return null;
+  return { ok: true, extension_instance_id: value.extension_instance_id as string | null };
 }
 
 function parseMcpValidateResult(raw: unknown): McpValidateResult | null {
@@ -329,6 +399,16 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
   async listBrowserTabs(): Promise<BrowserTabListResult> {
     const result = parseBrowserTabListResult(await ipcRenderer.invoke('browser:list-tabs'));
     return result ?? { ok: false, code: 'browser_tabs_invalid', message: 'Electron 返回的标签列表无效。' };
+  },
+  // DEV-AI27-A30b：配对统一——读桥侧配对快照 / 确认桥侧配对（一次动作两产物的本机一半；
+  // 服务端绑定由渲染器持扩展实例 ID 自行调用服务端 API 完成）。
+  async getBrowserPairingState(): Promise<BrowserPairingStateResult> {
+    const result = parseBrowserPairingStateResult(await ipcRenderer.invoke('browser:pairing-state'));
+    return result ?? { ok: false, code: 'browser_pairing_state_invalid', message: 'Electron 返回的配对状态无效。' };
+  },
+  async confirmBrowserPairing(): Promise<BrowserPairingConfirmResult> {
+    const result = parseBrowserPairingConfirmResult(await ipcRenderer.invoke('browser:confirm-pairing'));
+    return result ?? { ok: false, code: 'browser_pairing_confirm_invalid', message: 'Electron 返回的配对确认结果无效。' };
   },
   // DEV-AI27-A3 第一片：MCP 验证——真实握手后返回目录；失败原样透出（不伪造已验证）。
   async validateMcpConnection(input: McpValidateInput): Promise<McpValidateResult> {

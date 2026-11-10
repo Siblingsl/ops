@@ -8,7 +8,8 @@ import * as path from 'node:path';
 // DEV-AI27-02 W02 技术验证：OPS 桌面浏览器桥。
 // 回环 TCP(8765, NDJSON) <-> native-host <-> Chrome 扩展。
 // 配对（短码人工核对）→ HMAC 会话 → 登记动作派发 → 命令账本（幂等/超时 unknown_outcome）。
-// 仅在 OPS_DESKTOP_BRIDGE_DIAG=1 时由 main.ts 启动；不启用时不监听任何端口。
+// A30b（用户拍板：常驻启动）：产品路径由 main.ts 经 ensureProductBridge 启动并常驻；
+// 端口被占等启动失败时如实降级（不崩溃）。诊断模式（DIAG=1）复用同一实例只补开诊断窗。
 
 export const PROTOCOL_VERSION = 1;
 // A14-6（27 §14）：信封加密版本。v1 = 会话根密钥直接作 HMAC 密钥；v2 = 按配对随机 salt
@@ -209,6 +210,9 @@ export class BrowserBridge {
   state: BridgeState = 'unpaired';
   pairing: { id: string; code: string; expires_at: number } | null = null;
   hostInfo: { host_instance_id: string; pid: number; connected_at: number } | null = null;
+  // A30b：扩展实例 ID（来自扩展 hello 经 native host JSON 透传；配对确认时随
+  // pairingSnapshot 交给渲染器组装服务端 binding）。会话密钥绝不在此暴露。
+  extensionInstanceId: string | null = null;
 
   private server: net.Server | null = null;
   private controlServer: http.Server | null = null;
@@ -271,6 +275,24 @@ export class BrowserBridge {
       host: this.hostInfo,
       ledger: this.ledger.list().slice(-50),
       events: this.events.slice(-50),
+    };
+  }
+
+  /** A30b：配对快照（工作台配对向导用）。只含人工核对与组装服务端 confirm 所需字段；
+   * 绝不含会话密钥/HKDF 盐/签名材料——preload 白名单校验兜底，这里是源头约束。 */
+  pairingSnapshot(): {
+    state: BridgeState;
+    pairing: { code: string; expires_at: number; expired: boolean } | null;
+    extension_instance_id: string | null;
+    host_pid: number | null;
+  } {
+    return {
+      state: this.state,
+      pairing: this.pairing
+        ? { code: this.pairing.code, expires_at: this.pairing.expires_at, expired: Date.now() > this.pairing.expires_at }
+        : null,
+      extension_instance_id: this.extensionInstanceId,
+      host_pid: this.hostInfo?.pid ?? null,
     };
   }
 
@@ -427,8 +449,17 @@ export class BrowserBridge {
       return;
     }
     if (msg.type === 'hello') {
-      const payload = (msg.payload ?? {}) as { host_instance_id?: string; pid?: number; protocol_version?: number };
+      const payload = (msg.payload ?? {}) as { host_instance_id?: string; pid?: number; protocol_version?: number; extension_instance_id?: string };
+      // A30b：两种 hello 走两条路。扩展 hello（native host 透传，无 host_instance_id、
+      // 带 extension_instance_id）只记录实例 ID，不重置配对——MV3 service worker 唤醒
+      // 重连不该打断已建立的 HMAC 会话；配对流程由宿主 hello 驱动（既有语义不变）。
+      if (!payload.host_instance_id && payload.extension_instance_id) {
+        this.extensionInstanceId = String(payload.extension_instance_id).slice(0, 64) || null;
+        this.emit('log', `extension hello: instance=${(this.extensionInstanceId ?? '').slice(0, 8)}`);
+        return;
+      }
       this.hostInfo = { host_instance_id: String(payload.host_instance_id ?? ''), pid: Number(payload.pid ?? 0), connected_at: Date.now() };
+      this.extensionInstanceId = null;
       // A14-2：同一 host 实例重连（桥重启/新会话）恢复已见最大 seq；新实例从 0 起算。
       this.lastSeqIn = 0;
       if (this.hostInfo.host_instance_id) this.restoreSeqIn(this.hostInfo.host_instance_id);
@@ -709,7 +740,7 @@ export class BrowserBridge {
 }
 
 // ---------------------------------------------------------------------------
-// 诊断窗与启动入口（main.ts 仅调用 startBrowserBridgeDiagnostics）
+// 启动入口（A30b：产品路径 ensureProductBridge 常驻启动；诊断模式只补开诊断窗）
 // ---------------------------------------------------------------------------
 
 let activeBridge: BrowserBridge | null = null;
@@ -733,10 +764,9 @@ function registerIpc(): void {
   ipcMain.handle('ops-bridge-diag:dispatch', (_e, action: string, payload: unknown) => getActiveBridge()?.dispatch(String(action), payload) ?? { accepted: false, reason: 'bridge not running' });
 }
 
-export async function startBrowserBridgeDiagnostics(): Promise<BrowserBridge> {
-  if (activeBridge) return activeBridge;
+function createBridge(): BrowserBridge {
   const ledgerPath = path.join(process.cwd(), '.tmp', 'browser-bridge-ledger.json');
-  const bridge = new BrowserBridge(new CommandLedger(ledgerPath), {
+  return new BrowserBridge(new CommandLedger(ledgerPath), {
     // A14-2：lastSeqIn 持久化（重启后拒绝重放更早 seq）。
     seqStatePath: path.join(process.cwd(), '.tmp', 'browser-bridge-seq.json'),
     port: BRIDGE_PORT,
@@ -744,9 +774,10 @@ export async function startBrowserBridgeDiagnostics(): Promise<BrowserBridge> {
     autoPair: process.env.OPS_DESKTOP_BRIDGE_AUTO_PAIR === '1',
     log: (line) => console.log(line),
   });
-  activeBridge = bridge;
-  registerIpc();
-  await bridge.start();
+}
+
+/** 桥就绪后的公共接线：控制端口、诊断窗推送。 */
+async function wireBridge(bridge: BrowserBridge): Promise<void> {
   try {
     await bridge.startControl(CONTROL_PORT);
   } catch (err) {
@@ -759,6 +790,31 @@ export async function startBrowserBridgeDiagnostics(): Promise<BrowserBridge> {
       }
     }
   });
+}
+
+/** A30b（用户拍板：常驻启动）：产品路径启动浏览器桥并常驻监听 127.0.0.1:8765。
+ * 启动失败（典型：端口被占用）时如实降级——不崩溃、不重试轰炸、返回 false，
+ * 调用方记录一条日志即可；浏览器协作相关 IPC 会如实报"桥未运行"。 */
+export async function ensureProductBridge(): Promise<boolean> {
+  if (activeBridge) return true;
+  const bridge = createBridge();
+  try {
+    await bridge.start();
+  } catch (err) {
+    bridge.stop();
+    console.log(`[browser-bridge] 桥启动失败（端口可能被占用）：${(err as Error).message}`);
+    return false;
+  }
+  activeBridge = bridge;
+  registerIpc();
+  await wireBridge(bridge);
+  return true;
+}
+
+/** A30b：诊断模式。桥已由 ensureProductBridge 常驻启动时复用同一实例，只补开诊断窗；
+ * 桥未运行（如端口被占）时仍开窗如实显示"桥未运行"，保留 W02 调试语义。 */
+export async function startBrowserBridgeDiagnostics(): Promise<BrowserBridge | null> {
+  const bridge = getActiveBridge();
   const win = new BrowserWindow({
     width: 860,
     height: 640,

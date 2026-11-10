@@ -21,7 +21,7 @@ import fs from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { getActiveBridge, startBrowserBridgeDiagnostics } from './browser-bridge';
+import { ensureProductBridge, getActiveBridge, startBrowserBridgeDiagnostics } from './browser-bridge';
 import { McpHostManager, type McpCatalog } from './mcp-host';
 import { McpOAuthClient, SafeStorageTokenStorage } from './mcp-oauth';
 import { ComputerWorkerHost, type WindowSummary } from './computer-worker-host';
@@ -283,12 +283,19 @@ function startApplication(): void {
       installDownloadHandling(businessSession);
       await registerLocalProtocol(businessSession);
       await registerLocalProtocol(localSettingsSession);
-      // DEV-AI27-02/05 W02/W05 技术验证：浏览器桥诊断模式，显式环境开关，默认关闭。
-      // 27 §12.5：全局无沙箱模式下必须关闭浏览器执行桥，不得为联调打开。
-      if (process.env.OPS_DESKTOP_BRIDGE_DIAG === '1' && process.env.OPS_DESKTOP_NO_SANDBOX === '1') {
+      // A30b（用户拍板：常驻启动）：产品路径无条件启动浏览器桥，监听 127.0.0.1:8765，
+      // 供 OPS 扩展经 native host 连接；启动失败（端口被占等）如实降级不崩溃。
+      // 27 §12.5 红线保留：全局无沙箱模式下必须关闭浏览器执行桥，不得为联调打开。
+      if (process.env.OPS_DESKTOP_NO_SANDBOX === '1') {
         console.log('[browser-bridge] OPS_DESKTOP_NO_SANDBOX=1：浏览器执行桥已关闭；恢复正常模式后重启以启用。');
-      } else if (process.env.OPS_DESKTOP_BRIDGE_DIAG === '1') {
-        await startBrowserBridgeDiagnostics();
+      } else {
+        const bridgeReady = await ensureProductBridge();
+        if (!bridgeReady) {
+          console.log('[browser-bridge] 桥未能常驻启动；本次会话浏览器协作相关功能将如实报"桥未运行"。');
+        }
+        if (process.env.OPS_DESKTOP_BRIDGE_DIAG === '1') {
+          await startBrowserBridgeDiagnostics();
+        }
       }
       registerIpcHandlers();
       installApplicationMenu();
@@ -1015,6 +1022,30 @@ function registerIpcHandlers(): void {
       });
     }
     return { ok: true as const, tabs: out };
+  });
+  // A30b（用户拍板：一次动作两产物）：配对统一。工作台"浏览器"页签向导读桥侧配对
+  // 快照（短码与 Chrome 扩展弹窗同源）；用户核对后点"确认配对"→ 桥建 HMAC 会话并
+  // 把扩展实例 ID 交给渲染器，由渲染器调服务端 pairings+confirm 落绑定。快照经
+  // pairingSnapshot() 生成，源头就不含会话密钥；preload 白名单校验兜底。
+  ipcHandle('browser:pairing-state', (event) => {
+    requireComputerCaller(event);
+    const bridge = getActiveBridge();
+    if (!bridge) {
+      return { ok: false as const, code: 'browser_bridge_not_running', message: '浏览器桥未在本会话启动。' };
+    }
+    return { ok: true as const, snapshot: bridge.pairingSnapshot() };
+  });
+  ipcHandle('browser:confirm-pairing', (event) => {
+    requireComputerCaller(event);
+    const bridge = getActiveBridge();
+    if (!bridge) {
+      return { ok: false as const, code: 'browser_bridge_not_running', message: '浏览器桥未在本会话启动。' };
+    }
+    const confirmed = bridge.confirmPairing();
+    if (!confirmed.ok) {
+      return { ok: false as const, code: 'browser_pairing_confirm_failed', message: confirmed.reason ?? '配对确认失败' };
+    }
+    return { ok: true as const, extension_instance_id: bridge.pairingSnapshot().extension_instance_id };
   });
   // DEV-AI27-A3 第一片（27 §11.2，P01 前置）：MCP 宿主最小接线——"验证连接"在本机
   // 真实握手（McpHostManager：stdio spawn / Streamable HTTP initialize+tools/list），

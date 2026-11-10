@@ -37,6 +37,8 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   assert.deepEqual(Object.keys(exposed), ['opsDesktopUI']);
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).sort(), [
     'captureLongImage',
+    'confirmBrowserPairing',
+    'getBrowserPairingState',
     'getMcpOAuthStatus',
     'invokeInBrowse',
     'listBrowserTabs',
@@ -56,9 +58,10 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   // DEV-AI27-08（W08）：内置浏览意图白名单桥随 captureLongImage 一并暴露。
   // DEV-AI27-17（W17b，A12）：本机选窗是独立固定意图，不并入 invokeInBrowse 白名单。
   // DEV-AI27-A30：本机标签枚举同口径独立暴露。
+  // DEV-AI27-A30b：桥配对快照/确认同口径独立暴露（快照白名单校验，无会话密钥）。
   // DEV-AI27-A3：MCP 验证与 OAuth 生命周期为独立固定意图（握手/授权在本机，秘密不进 IPC）。
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')),
-    ['captureLongImage', 'listComputerWindows', 'listBrowserTabs', 'validateMcpConnection', 'startMcpOAuth', 'getMcpOAuthStatus', 'revokeMcpOAuth', 'invokeInBrowse']);
+    ['captureLongImage', 'listComputerWindows', 'listBrowserTabs', 'getBrowserPairingState', 'confirmBrowserPairing', 'validateMcpConnection', 'startMcpOAuth', 'getMcpOAuthStatus', 'revokeMcpOAuth', 'invokeInBrowse']);
   const buildId = '00000008-1111-4111-8111-111111111111';
   assert.deepEqual(await exposed.opsDesktopUI.captureLongImage(buildId), {
     ok: false, code: 'render_not_ready', message: '页面未就绪。'
@@ -250,6 +253,92 @@ test('rejects an oauth status that carries any field beyond the state summary', 
   assert.deepEqual(await exposed.opsDesktopUI.getMcpOAuthStatus({
     connection_id: '00000001-1111-4111-8111-111111111111', server_url: 'https://mcp.example.com/v1',
   }), { state: 'unauthorized', expires_at: null, has_refresh: false });
+});
+
+// A30b：桥配对快照白名单 schema——任何多余键（session_key/hkdf_salt 等）整批拒绝，
+// 会话密钥不可能经 pairing-state IPC 泄漏到渲染器；确认结果同样只允许实例 ID。
+test('rejects a browser pairing snapshot that carries any field beyond the whitelist', async () => {
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke() {
+      return Promise.resolve({
+        ok: true,
+        snapshot: {
+          state: 'pairing',
+          pairing: { code: '012345', expires_at: 9999999999999, expired: false },
+          extension_instance_id: 'ext-abc',
+          host_pid: 4321,
+          session_key: 'SHOULD-NOT-LEAK',
+        },
+      });
+    },
+  };
+  loadPreload({ contextBridge, ipcRenderer });
+  assert.deepEqual(await exposed.opsDesktopUI.getBrowserPairingState(), {
+    ok: false, code: 'browser_pairing_state_invalid', message: 'Electron 返回的配对状态无效。',
+  });
+});
+
+test('passes a well-formed browser pairing snapshot through and rejects a malformed code', async () => {
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  let respond = () => Promise.resolve({
+    ok: true,
+    snapshot: {
+      state: 'pairing',
+      pairing: { code: '012345', expires_at: 9999999999999, expired: false },
+      extension_instance_id: 'ext-abc',
+      host_pid: 4321,
+    },
+  });
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke: (...args) => respond(...args),
+  };
+  loadPreload({ contextBridge, ipcRenderer });
+  const result = await exposed.opsDesktopUI.getBrowserPairingState();
+  assert.deepEqual(result, {
+    ok: true,
+    snapshot: {
+      state: 'pairing',
+      pairing: { code: '012345', expires_at: 9999999999999, expired: false },
+      extension_instance_id: 'ext-abc',
+      host_pid: 4321,
+    },
+  });
+  // 短码形态不符（桥固定 6 位数字）→ 整份拒绝。
+  respond = () => Promise.resolve({
+    ok: true,
+    snapshot: {
+      state: 'pairing',
+      pairing: { code: '12ab45', expires_at: 9999999999999, expired: false },
+      extension_instance_id: 'ext-abc',
+      host_pid: 4321,
+    },
+  });
+  assert.deepEqual(await exposed.opsDesktopUI.getBrowserPairingState(), {
+    ok: false, code: 'browser_pairing_state_invalid', message: 'Electron 返回的配对状态无效。',
+  });
+});
+
+test('rejects a browser pairing confirm result that carries fields beyond the instance id', async () => {
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke() {
+      return Promise.resolve({ ok: true, extension_instance_id: 'ext-abc', session_key: 'SHOULD-NOT-LEAK' });
+    },
+  };
+  loadPreload({ contextBridge, ipcRenderer });
+  assert.deepEqual(await exposed.opsDesktopUI.confirmBrowserPairing(), {
+    ok: false, code: 'browser_pairing_confirm_invalid', message: 'Electron 返回的配对确认结果无效。',
+  });
 });
 
 function loadPreload(electron) {

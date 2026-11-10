@@ -435,3 +435,80 @@ test('A14-6: 旧宿主不声明能力时回退 v1（握手与签名语义不变�
   await new Promise((r) => setTimeout(r, 80));
   assert.equal(rejects(), before, 'v1 仍用根密钥签名');
 });
+
+// ---------------------------------------------------------------------------
+// A30b：桥产品化（扩展 hello 识别 + pairingSnapshot 无会话密钥）
+// ---------------------------------------------------------------------------
+
+test('A30b: 扩展 hello 只记录实例 ID，不重置配对会话', { timeout: 20_000 }, async (t) => {
+  const { b, lines, next, send } = await startBridgeWithMockHost(t);
+  const extId = crypto.randomUUID();
+
+  // 宿主 hello -> pairing_start #1
+  send({ v: 1, type: 'hello', payload: { host_instance_id: 'mock-host', protocol_version: 1 } });
+  const first = await next();
+  assert.equal(first.type, 'pairing_start');
+  const code1 = first.payload.code;
+  const lineCountAfterHostHello = lines.length;
+
+  // 扩展 hello（native host 透传，无 host_instance_id、带 extension_instance_id）：
+  // 不产生新 pairing_start，短码与会话状态不变，实例 ID 被记录。
+  send({ v: 1, type: 'hello', payload: { extension_instance_id: extId, protocol_version: 1, crypto_versions: [1, 2] } });
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(lines.length, lineCountAfterHostHello, '扩展 hello 不触发新 pairing_start');
+  assert.equal(b.state, 'pairing');
+  assert.equal(b.pairing?.code, code1, '短码不被扩展 hello 重置');
+  assert.equal(b.extensionInstanceId, extId);
+
+  // 确认配对（会话建立）后扩展再次 hello（模拟扩展侧重连）：会话不被打断。
+  assert.equal(b.confirmPairing().ok, true);
+  await next();
+  const confirmMsg = lines.find((m) => m.type === 'pairing_confirm');
+  const key = Buffer.from(confirmMsg.payload.session_key, 'base64');
+  const rejects = () => b.snapshot().events.filter((e) => e.message.includes('reject')).length;
+  const before = rejects();
+  send({ v: 1, type: 'hello', payload: { extension_instance_id: extId, protocol_version: 1 } });
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(b.state, 'paired', 'paired 态收到扩展 hello 不回退');
+  assert.ok(b.pairing, '桥保留已确认的配对记录（既有语义：confirm 不清空 pairing）');
+  send({ v: 1, type: 'ping', payload: {}, seq: 1, hmac: host.hmacSign(key, 1, 'ping', {}) });
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(rejects(), before, '扩展 hello 后既有 HMAC 会话仍然有效');
+});
+
+test('A30b: pairingSnapshot 白名单字段，绝不含会话密钥', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ops-bridge-snap-'));
+  try {
+    const b = new bridge.BrowserBridge(new bridge.CommandLedger(null), { port: 0, controlPort: null });
+    assert.equal(b.pairingSnapshot().state, 'unpaired');
+    assert.equal(b.pairingSnapshot().pairing, null);
+
+    b.onEnvelope({ v: 1, type: 'hello', payload: { host_instance_id: 'h-1', pid: 4321 } });
+    b.onEnvelope({ v: 1, type: 'hello', payload: { extension_instance_id: 'ext-abc' } });
+    const snap = b.pairingSnapshot();
+    assert.deepEqual(Object.keys(snap).sort(), ['extension_instance_id', 'host_pid', 'pairing', 'state']);
+    assert.deepEqual(Object.keys(snap.pairing).sort(), ['code', 'expired', 'expires_at']);
+    assert.equal(snap.host_pid, 4321);
+    assert.equal(snap.extension_instance_id, 'ext-abc');
+    assert.ok(/^\d{6}$/.test(snap.pairing.code));
+    assert.equal(snap.pairing.expired, false);
+    const raw = JSON.stringify(snap).toLowerCase();
+    assert.ok(!raw.includes('session_key'), '快照不得含会话密钥');
+    assert.ok(!raw.includes('hkdf_salt'), '快照不得含 HKDF 盐');
+    assert.ok(!raw.includes('hmac'), '快照不得含签名材料');
+
+    // 确认配对后（会话密钥已生成）快照键集合不变
+    assert.equal(b.confirmPairing().ok, true);
+    const after = b.pairingSnapshot();
+    assert.deepEqual(Object.keys(after).sort(), ['extension_instance_id', 'host_pid', 'pairing', 'state']);
+    assert.ok(after.pairing, 'confirm 不清空 pairing 记录（既有语义），快照如实反映');
+    assert.equal(after.state, 'paired');
+
+    // 过期短码：expired 标记如实
+    b.onEnvelope({ v: 1, type: 'hello', payload: { host_instance_id: 'h-1', pid: 4321 } });
+    b.pairing.expires_at = Date.now() - 1;
+    assert.equal(b.pairingSnapshot().pairing.expired, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

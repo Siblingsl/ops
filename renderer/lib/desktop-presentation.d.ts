@@ -59,6 +59,9 @@ declare global {
       listComputerWindows(): Promise<DesktopComputerWindowListResult>
       // DEV-AI27-A30：本机标签枚举（选标签授权弹窗；枚举只在本机，桥未配对时如实报错）。
       listBrowserTabs(): Promise<DesktopBrowserTabListResult>
+      // DEV-AI27-A30b：配对统一——读桥侧配对快照 / 确认桥侧配对（快照白名单校验，不含会话密钥）。
+      getBrowserPairingState(): Promise<DesktopBrowserPairingStateResult>
+      confirmBrowserPairing(): Promise<DesktopBrowserPairingConfirmResult>
       // DEV-AI27-A3 第一片：MCP 验证（本机真实握手，返回目录；失败原样透出）。
       validateMcpConnection(input: DesktopMcpValidateInput): Promise<DesktopMcpValidateResult>
       // DEV-AI27-A3 第二片：OAuth 授权生命周期（start 走系统浏览器；返回值永不含令牌明文）。
@@ -121,6 +124,22 @@ export type DesktopBrowserTab = {
 export type DesktopBrowserTabListResult =
   | { ok: false; code: string; message: string }
   | { ok: true; tabs: DesktopBrowserTab[] }
+
+// DEV-AI27-A30b：桥配对快照（短码核对 + 组装服务端 confirm 的最小集合；无会话密钥）。
+export type DesktopBrowserPairingSnapshot = {
+  state: 'unpaired' | 'pairing' | 'paired' | 'revoked'
+  pairing: { code: string; expires_at: number; expired: boolean } | null
+  extension_instance_id: string | null
+  host_pid: number | null
+}
+
+export type DesktopBrowserPairingStateResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; snapshot: DesktopBrowserPairingSnapshot }
+
+export type DesktopBrowserPairingConfirmResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; extension_instance_id: string | null }
 
 // DEV-AI27-A3 第一片：MCP 验证输入与结果。目录只含工具名/哈希/schema，不含任何秘密。
 export type DesktopMcpValidateInput = {
