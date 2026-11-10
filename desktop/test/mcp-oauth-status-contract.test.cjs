@@ -107,11 +107,11 @@ test('DT-01: 旧缺陷形状 {ok,status} 经 preload 仍被整批拒绝并降级
 // 主进程形状契约：handler 返回体必须直接是 statusView()，不得再包 {ok,status}
 // ---------------------------------------------------------------------------
 
-/** 从 main.ts 源码里按大括号配平截取某个 ipcHandle 通道的 handler 块。 */
+/** 从指定源文件里按大括号配平截取某个 ipcHandle 通道的 handler 块。 */
 function extractIpcHandleBlock(source, channel) {
   const marker = `ipcHandle('${channel}'`;
   const start = source.indexOf(marker);
-  assert.ok(start >= 0, `main.ts 应注册 ${channel} 通道`);
+  assert.ok(start >= 0, `源文件应注册 ${channel} 通道`);
   const bodyStart = source.indexOf('{', start);
   let depth = 0;
   for (let i = bodyStart; i < source.length; i += 1) {
@@ -125,8 +125,11 @@ function extractIpcHandleBlock(source, channel) {
 }
 
 test('DT-01: 主进程 mcp:oauth-status 直接返回 statusView()，无 {ok,status} 包装', () => {
+  // DT-08 片 1：MCP 通道已拆至 src/ipc/mcp.ts（契约不变）；main.ts 不得再有该通道注册。
+  const mcpSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'ipc', 'mcp.ts'), 'utf8');
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8');
-  const block = extractIpcHandleBlock(mainSource, 'mcp:oauth-status');
+  const block = extractIpcHandleBlock(mcpSource, 'mcp:oauth-status');
+  assert.ok(!mainSource.includes("ipcHandle('mcp:oauth-status'"), 'main.ts 不应残留 mcp:oauth-status 注册（已拆至 ipc/mcp.ts）');
   assert.ok(block.includes('return client.statusView()'), 'handler 应顶层返回 statusView()');
   assert.ok(!/status\s*:/.test(block), '不得把 statusView 包进 status 键（preload 白名单会整批拒绝）');
   assert.ok(!/ok\s*:\s*true/.test(block), '不得附加 ok 键（返回体必须恰为三键白名单）');
