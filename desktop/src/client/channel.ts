@@ -186,7 +186,7 @@ export abstract class ChannelMixin {
   protected abstract readonly businessSession: Session;
   protected abstract readonly apiOrigin: string;
   protected abstract appliedRouteRevision: number;
-  requestRouting: { mode: DesktopMode; requestContext: unknown } = { mode: 'server', requestContext: {} };
+  requestRouting: { mode: DesktopMode; requestContext: import('../request-context').AppliedDesktopRequestContext } = { mode: 'server', requestContext: {} };
 
   protected abstract decrypt(encrypted: string): string;
   protected abstract request<T>(pathName: string, init?: RequestInit): Promise<T>;
