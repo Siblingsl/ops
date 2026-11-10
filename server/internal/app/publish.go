@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -135,6 +136,15 @@ type pushFail struct {
 func draftHash(content string) string { return secure.SHA256Hex([]byte(strings.TrimSpace(content))) }
 
 // pushWechat writes exactly one work into the draft box (H-05). There is no publish call (H-06).
+// cleanupPushRecord 删除中间态 push_record（need_choice / 重置分支）。
+// BE-02：删除失败记 Warn（残留行会让下一次推送撞唯一约束或显示过期状态），
+// 不改变调用方控制流。
+func (s *Server) cleanupPushRecord(ctx context.Context, recordID uuid.UUID) {
+	if _, err := s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID); err != nil {
+		slog.WarnContext(ctx, "推送中间记录删除失败", "record", recordID.String(), "err", err)
+	}
+}
+
 func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 	m, err := s.workMetaFromPath(r)
 	if err != nil {
@@ -208,8 +218,10 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 		if errors.As(f.err, &ae) {
 			msg = ae.Message
 		}
-		_, _ = s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='failed', action=$2, failed_step=$3, error_code=$4, error_message=$5 WHERE id=$1`,
-			recordID, action, f.step, code, truncate(msg, 500))
+		if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='failed', action=$2, failed_step=$3, error_code=$4, error_message=$5 WHERE id=$1`,
+			recordID, action, f.step, code, truncate(msg, 500)); err != nil {
+			slog.ErrorContext(ctx, "推送失败状态落库失败", "record", recordID.String(), "step", f.step, "err", err)
+		}
 		s.audit(ctx, "wechat_push", "work", m.ID.String(), "failed", map[string]any{"step": f.step, "code": code})
 		sse.send("error", map[string]any{"code": "wechat_error", "message": msg, "detail": map[string]string{"step": f.step, "errcode": code}})
 	}
@@ -248,13 +260,13 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 		})
 		var we *wechat.Error
 		if errors.As(getErr, &we) && we.Code == 40007 {
-			_, _ = s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID)
+			s.cleanupPushRecord(ctx, recordID)
 			sse.send("need_choice", map[string]any{"reason": "missing", "message": "原草稿已不在草稿箱，可能已经发表或被删除。可以回填已发布，或新建一篇草稿（计入当日次数）。"})
 			return nil
 		}
 		changed := getErr != nil || stored == nil || draftHash(item.Content) != *stored
 		if changed && in.OverwriteChoice != "overwrite" {
-			_, _ = s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID)
+			s.cleanupPushRecord(ctx, recordID)
 			sse.send("need_choice", map[string]any{"reason": "modified", "message": "这篇草稿在公众号后台被修改过（或无法确认是否修改过），覆盖会丢失后台的修改。"})
 			return nil
 		}
@@ -349,7 +361,7 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 				return e
 			})
 			if wechatErrorCode(checkErr, 40007) {
-				_, _ = s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID)
+				s.cleanupPushRecord(ctx, recordID)
 				sse.send("need_choice", map[string]any{"reason": "missing", "message": "原草稿已不在草稿箱，可能已经发表或被删除。可以回填已发布，或新建一篇草稿（计入当日次数）。"})
 				return nil
 			}
@@ -387,7 +399,9 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 		sse.fail(err)
 		return nil
 	}
-	_, _ = s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='ok', action=$2, draft_media_id=$3 WHERE id=$1`, recordID, action, draftID)
+	if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='ok', action=$2, draft_media_id=$3 WHERE id=$1`, recordID, action, draftID); err != nil {
+		slog.ErrorContext(ctx, "推送成功状态落库失败", "record", recordID.String(), "err", err)
+	}
 	s.audit(ctx, "wechat_push", "work", m.ID.String(), "ok", map[string]any{"action": action, "over_limit": overLimit})
 	sse.send("done", map[string]any{"action": action, "draft_media_id": draftID, "backend_url": s.backendURL(), "today_count": count + 1})
 	return nil
@@ -472,8 +486,10 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 		if errors.As(f.err, &ae) {
 			msg = ae.Message
 		}
-		_, _ = s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='failed', action=$2, failed_step=$3, error_code=$4, error_message=$5 WHERE id=$1`,
-			recordID, action, f.step, code, truncate(msg, 500))
+		if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='failed', action=$2, failed_step=$3, error_code=$4, error_message=$5 WHERE id=$1`,
+			recordID, action, f.step, code, truncate(msg, 500)); err != nil {
+			slog.ErrorContext(ctx, "推送失败状态落库失败", "record", recordID.String(), "step", f.step, "err", err)
+		}
 		s.audit(ctx, "wechat_push", "work", m.ID.String(), "failed", map[string]any{"step": f.step, "code": code, "kind": "newspic"})
 		sse.send("error", map[string]any{"code": "wechat_error", "message": msg, "detail": map[string]string{"step": f.step, "errcode": code}})
 	}
@@ -511,13 +527,13 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 		})
 		var we *wechat.Error
 		if errors.As(getErr, &we) && we.Code == 40007 {
-			_, _ = s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID)
+			s.cleanupPushRecord(ctx, recordID)
 			sse.send("need_choice", map[string]any{"reason": "missing", "message": "原草稿已不在草稿箱，可能已经发表或被删除。可以回填已发布，或新建一篇草稿（计入当日次数）。"})
 			return nil
 		}
 		changed := getErr != nil || stored == nil || draftHash(item.Content) != *stored
 		if changed && in.OverwriteChoice != "overwrite" {
-			_, _ = s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID)
+			s.cleanupPushRecord(ctx, recordID)
 			sse.send("need_choice", map[string]any{"reason": "modified", "message": "这篇草稿在公众号后台被修改过（或无法确认是否修改过），覆盖会丢失后台的修改。"})
 			return nil
 		}
@@ -580,7 +596,7 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 				return e
 			})
 			if wechatErrorCode(checkErr, 40007) {
-				_, _ = s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID)
+				s.cleanupPushRecord(ctx, recordID)
 				sse.send("need_choice", map[string]any{"reason": "missing", "message": "原草稿已不在草稿箱，可能已经发表或被删除。可以回填已发布，或新建一篇草稿（计入当日次数）。"})
 				return nil
 			}
@@ -621,7 +637,9 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 		sse.fail(err)
 		return nil
 	}
-	_, _ = s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='ok', action=$2, draft_media_id=$3 WHERE id=$1`, recordID, action, draftID)
+	if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='ok', action=$2, draft_media_id=$3 WHERE id=$1`, recordID, action, draftID); err != nil {
+		slog.ErrorContext(ctx, "推送成功状态落库失败", "record", recordID.String(), "err", err)
+	}
 	s.audit(ctx, "wechat_push", "work", m.ID.String(), "ok", map[string]any{"action": action, "kind": "newspic", "images": len(imageList)})
 	sse.send("done", map[string]any{"action": action, "draft_media_id": draftID, "backend_url": s.backendURL(), "today_count": count + 1})
 	return nil
@@ -656,6 +674,8 @@ func (s *Server) cachedMedia(ctx context.Context, accountID uuid.UUID, a *assetR
 	if err != nil {
 		return "", err
 	}
+	// BE-02 C 类（确认可忽略）：缓存写失败只影响下次上传速度，不影响正确性；
+	// 显式注释替代静默。失败走 ON CONFLICT 语义本身幂等。
 	_, _ = s.db.Exec(ctx, `INSERT INTO wechat_media_cache (account_id, sha256, kind, wechat_url, media_id) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
 		accountID, a.SHA256, kind, url, mediaID)
 	if kind == "content_image" {
