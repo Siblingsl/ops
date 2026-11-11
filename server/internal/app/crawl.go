@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode"
@@ -26,7 +27,13 @@ func (s *Server) loadCrawl(ctx context.Context) crawlConfig {
 	for key, target := range map[string]any{"crawl.level": &c.Level, "crawl.limits": &c.Limits, "crawl.summary_fetch": &c.SummaryFetch, "crawl.retention_days": &c.RetentionDays} {
 		var b []byte
 		if s.db.QueryRow(ctx, `SELECT value FROM system_setting WHERE key=$1`, key).Scan(&b) == nil {
-			_ = json.Unmarshal(b, target)
+			// BE-02：坏配置保留默认值，但解析失败必须可观测（不得 `_ = Unmarshal`）。
+			if err := json.Unmarshal(b, target); err != nil {
+				s.observeFailure(ctx, slog.LevelWarn, "爬取配置解析失败", observeFields{
+					ErrorCode: "crawl_setting_unmarshal_failed", Route: "internal/crawl/load",
+					Extras: map[string]any{"key": key, "err": err.Error()},
+				})
+			}
 		}
 	}
 	c.Limits.Enabled = c.Mode == "allow" && c.Level != "off"
@@ -66,9 +73,17 @@ func (st crawlStore) Finish(ctx context.Context, source crawl.Source, now time.T
 		st.s.finishPlatform(ctx, source, now, out)
 		return
 	}
-	_, _ = st.s.db.Exec(ctx, `UPDATE crawl_source SET fail_count=CASE WHEN $3='' THEN 0 ELSE fail_count+1 END,
+	// BE-02：Store.Finish 无 error 返回（crawl.Store 契约），落库失败不得静默——Error 级可观测。
+	started := time.Now()
+	if _, err := st.s.db.Exec(ctx, `UPDATE crawl_source SET fail_count=CASE WHEN $3='' THEN 0 ELSE fail_count+1 END,
   last_ok_at=CASE WHEN $3='' THEN $2 ELSE last_ok_at END,error=$3,robots_checked_at=$2,robots_allow=$4,
-  paused_until=CASE WHEN $5 THEN $2+interval '24 hours' WHEN $3<>'' AND fail_count+1>=$6 THEN $2+make_interval(hours=>$7) ELSE paused_until END WHERE key=$1`, source.Key, now, out.Error, out.RobotsAllow, out.Paused, l.FailLimit, l.PauseHours)
+  paused_until=CASE WHEN $5 THEN $2+interval '24 hours' WHEN $3<>'' AND fail_count+1>=$6 THEN $2+make_interval(hours=>$7) ELSE paused_until END WHERE key=$1`, source.Key, now, out.Error, out.RobotsAllow, out.Paused, l.FailLimit, l.PauseHours); err != nil {
+		st.s.observeFailure(ctx, slog.LevelError, "爬取来源收尾状态落库失败", observeFields{
+			Action: "crawl_source_finish", TargetType: "crawl_source", TargetID: source.Key,
+			ErrorCode: "crawl_source_finish_failed", Route: "internal/crawl/finish",
+			Started: started, Extras: map[string]any{"err": err.Error()},
+		})
+	}
 	if out.Paused {
 		st.s.notifyCrawlAdmins(ctx, source.Key, out.Error)
 	}
@@ -76,6 +91,10 @@ func (st crawlStore) Finish(ctx context.Context, source crawl.Source, now time.T
 func (s *Server) notifyCrawlAdmins(ctx context.Context, key, msg string) {
 	rows, err := s.db.Query(ctx, `SELECT u.id,m.workspace_id FROM app_user u JOIN workspace_member m ON m.user_id=u.id AND m.role='owner' AND m.status='active' WHERE u.is_system_admin AND u.disabled_at IS NULL`)
 	if err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "爬取暂停通知查询管理员失败", observeFields{
+			ErrorCode: "crawl_notify_admins_query_failed", Route: "internal/crawl/notify",
+			Extras: map[string]any{"source_key": key, "err": err.Error()},
+		})
 		return
 	}
 	defer rows.Close()
@@ -125,8 +144,19 @@ func scanCrawlSource(row interface{ Scan(...any) error }) (CrawlSource, error) {
 	var x CrawlSource
 	var b []byte
 	err := row.Scan(&x.Key, &x.Kind, &x.Name, &x.Enabled, &x.IntervalMin, &x.MaxItems, &b, &x.WorkspaceID, &x.FailCount, &x.PausedUntil, &x.LastOKAt, &x.LastAttemptAt, &x.RobotsAllow, &x.Error)
-	_ = json.Unmarshal(b, &x.Config)
-	return x, err
+	if err != nil {
+		return x, err
+	}
+	// BE-02：config 解析失败上抛，避免空 Config 伪装成合法来源。
+	if len(b) > 0 {
+		if err := json.Unmarshal(b, &x.Config); err != nil {
+			return x, err
+		}
+	}
+	if x.Config == nil {
+		x.Config = map[string]string{}
+	}
+	return x, nil
 }
 func normalizeHot(s string) string {
 	return strings.Map(func(r rune) rune {
@@ -232,13 +262,27 @@ func (s *Server) collectHot(ctx context.Context) {
 	list := []CrawlSource{}
 	for rows.Next() {
 		x, e := scanCrawlSource(rows)
-		if e == nil {
-			list = append(list, x)
+		if e != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "爬取来源行解析失败", observeFields{
+				ErrorCode: "crawl_source_scan_failed", Route: "internal/crawl/collect_hot",
+				Extras: map[string]any{"err": e.Error()},
+			})
+			continue
 		}
+		list = append(list, x)
 	}
 	rows.Close()
 	for _, src := range list {
-		_, _ = s.collectSource(ctx, src)
+		// BE-02：批采不因单源失败中断；限流/未启用属预期跳过，其它失败 Warn 可观测。
+		if _, err := s.collectSource(ctx, src); err != nil {
+			if errors.Is(err, crawl.ErrLimited) || errors.Is(err, crawl.ErrDisabled) {
+				continue
+			}
+			s.observeFailure(ctx, slog.LevelWarn, "热点来源采集失败", observeFields{
+				ErrorCode: "crawl_collect_source_failed", Route: "internal/crawl/collect_hot",
+				Extras: map[string]any{"source_key": src.Key, "err": err.Error()},
+			})
+		}
 	}
 	s.purgeHot(ctx)
 	s.indexHotEmbeddings(ctx)
@@ -246,10 +290,35 @@ func (s *Server) collectHot(ctx context.Context) {
 
 func (s *Server) purgeHot(ctx context.Context) {
 	c := s.loadCrawl(ctx)
-	_, _ = s.db.Exec(ctx, `DELETE FROM hot_item WHERE last_seen_at<$1`, s.now().AddDate(0, 0, -c.RetentionDays))
-	_, _ = s.db.Exec(ctx, `DELETE FROM hot_cluster c WHERE NOT EXISTS(SELECT 1 FROM hot_item WHERE cluster_id=c.id)`)
-	_, _ = s.db.Exec(ctx, `DELETE FROM crawl_run WHERE started_at<$1`, s.now().AddDate(0, 0, -30))
-	_, _ = s.db.Exec(ctx, `DELETE FROM crawl_budget WHERE date<$1`, s.today().AddDate(0, 0, -60))
+	started := time.Now()
+	for _, step := range []struct {
+		code string
+		exec func() error
+	}{
+		{"crawl_purge_hot_item_failed", func() error {
+			_, err := s.db.Exec(ctx, `DELETE FROM hot_item WHERE last_seen_at<$1`, s.now().AddDate(0, 0, -c.RetentionDays))
+			return err
+		}},
+		{"crawl_purge_hot_cluster_failed", func() error {
+			_, err := s.db.Exec(ctx, `DELETE FROM hot_cluster c WHERE NOT EXISTS(SELECT 1 FROM hot_item WHERE cluster_id=c.id)`)
+			return err
+		}},
+		{"crawl_purge_crawl_run_failed", func() error {
+			_, err := s.db.Exec(ctx, `DELETE FROM crawl_run WHERE started_at<$1`, s.now().AddDate(0, 0, -30))
+			return err
+		}},
+		{"crawl_purge_crawl_budget_failed", func() error {
+			_, err := s.db.Exec(ctx, `DELETE FROM crawl_budget WHERE date<$1`, s.today().AddDate(0, 0, -60))
+			return err
+		}},
+	} {
+		if err := step.exec(); err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "热点保留清理失败", observeFields{
+				ErrorCode: step.code, Route: "internal/crawl/purge",
+				Started: started, Extras: map[string]any{"err": err.Error()},
+			})
+		}
+	}
 }
 func (s *Server) indexHotEmbeddings(ctx context.Context) {
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT workspace_id FROM model_route WHERE task_type='embedding'`)
@@ -284,7 +353,13 @@ func (s *Server) indexHotEmbeddings(ctx context.Context) {
 		}
 		hr.Close()
 		if len(cands) > 0 {
-			_, _ = s.ensureEmbeddings(jctx, rt, "hot", cands)
+			// BE-02：嵌入索引失败不阻断采集主循环，但必须可观测。
+			if _, err := s.ensureEmbeddings(jctx, rt, "hot", cands); err != nil {
+				s.observeFailure(jctx, slog.LevelWarn, "热点嵌入索引失败", observeFields{
+					ErrorCode: "crawl_hot_embedding_failed", Route: "internal/crawl/index_embeddings",
+					Extras: map[string]any{"workspace_id": ws.String(), "candidates": len(cands), "err": err.Error()},
+				})
+			}
 		}
 	}
 }
