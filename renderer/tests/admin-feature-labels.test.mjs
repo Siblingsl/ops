@@ -15,7 +15,8 @@ function serverFeatureNames() {
 }
 
 function typeFeatureNames() {
-  const src = read('../lib/types.ts')
+  // 6.3 批2：类型定义下沉到仓库根 shared/types.ts，两端 lib/types.ts 仅 re-export。
+  const src = read('../../shared/types.ts')
   const start = src.indexOf('export type AgentWorkbenchFeatureName =')
   assert.ok(start >= 0, '未找到 AgentWorkbenchFeatureName 类型')
   const block = src.slice(start).split(/\n\nexport |\n\ntype |\n\ninterface /)[0]
