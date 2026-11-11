@@ -8,7 +8,7 @@ import {
   normalizeBodyHeadings,
   parseStyle,
   stripMarkdownPlaceholders,
-} from '../src/lib/render-policy.ts'
+} from '../../shared/render-policy.ts'
 
 // ED-07：渲染链路此前零单元测试。这里覆盖渲染策略里不依赖 DOM 的部分，
 // 每条用例对应 docs/22 的一个动线条目，改坏时能直接指出是哪个条目回归。

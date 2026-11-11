@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import vm from 'node:vm'
 
 const require = createRequire(import.meta.url)
 const ts = require('typescript')
-const source = readFileSync(new URL('../src/lib/api-retry.ts', import.meta.url), 'utf8')
+const root = join(dirname(fileURLToPath(import.meta.url)), '../..')
+const source = readFileSync(join(root, 'shared/api-retry.ts'), 'utf8')
 const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText
