@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
+	"net/http"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"net/http"
 )
 
 type DailySettings struct {
@@ -129,26 +131,46 @@ func (s *Server) prepareOps(ctx context.Context, a *Account, trigger string) (*u
 	return &id, true, nil
 }
 func (s *Server) opsOpened(ctx context.Context, a *Account) {
-	_, _ = s.db.Exec(ctx, `INSERT INTO account_ops_activity(account_id,last_opened_at,user_id) VALUES($1,$2,$3) ON CONFLICT(account_id) DO UPDATE SET last_opened_at=excluded.last_opened_at,user_id=excluded.user_id`, a.ID, s.now(), ident(ctx).UserID)
+	// BE-02：运营台打开痕迹 best-effort；写失败 Warn，不阻断打开动线。
+	if _, err := s.db.Exec(ctx, `INSERT INTO account_ops_activity(account_id,last_opened_at,user_id) VALUES($1,$2,$3) ON CONFLICT(account_id) DO UPDATE SET last_opened_at=excluded.last_opened_at,user_id=excluded.user_id`, a.ID, s.now(), ident(ctx).UserID); err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "运营台打开痕迹落库失败", observeFields{
+			ErrorCode: "ops_opened_activity_failed", Route: "internal/daily/ops_opened",
+			Extras: map[string]any{"account_id": a.ID.String(), "err": err.Error()},
+		})
+	}
 }
 func (s *Server) dailyBackground(ctx context.Context) {
+	// BE-02：后台日更候选查询/准备失败必须可观测；单账号失败不中断批循环。
 	rows, e := s.db.Query(ctx, `SELECT a.id,a.workspace_id,x.user_id FROM account_ops_activity x JOIN platform_account a ON a.id=x.account_id JOIN workspace_member m ON m.workspace_id=a.workspace_id AND m.user_id=x.user_id AND m.status='active' WHERE a.status='active' AND x.last_opened_at>$1`, s.now().AddDate(0, 0, -7))
 	if e != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "后台日更候选查询失败", observeFields{
+			ErrorCode: "daily_background_query_failed", Route: "internal/daily/background",
+			Extras: map[string]any{"err": e.Error()},
+		})
 		return
 	}
 	type candidate struct{ a, ws, user uuid.UUID }
 	list := []candidate{}
 	for rows.Next() {
 		var x candidate
-		if rows.Scan(&x.a, &x.ws, &x.user) == nil {
-			list = append(list, x)
+		if err := rows.Scan(&x.a, &x.ws, &x.user); err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "后台日更候选行解析失败", observeFields{
+				ErrorCode: "daily_background_scan_failed", Route: "internal/daily/background",
+				Extras: map[string]any{"err": err.Error()},
+			})
+			continue
 		}
+		list = append(list, x)
 	}
 	rows.Close()
 	for _, x := range list {
 		jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: x.ws, UserID: x.user, Role: "editor"})
 		a, e := s.account(jctx, x.a)
 		if e != nil {
+			s.observeFailure(jctx, slog.LevelWarn, "后台日更加载账号失败", observeFields{
+				ErrorCode: "daily_background_account_load_failed", Route: "internal/daily/background",
+				Extras: map[string]any{"account_id": x.a.String(), "err": e.Error()},
+			})
 			continue
 		}
 		st, e := s.activeStrategy(jctx, a.ID)
@@ -157,7 +179,12 @@ func (s *Server) dailyBackground(ctx context.Context) {
 		}
 		d := s.effectiveDaily(jctx, st)
 		if d.Generate == "background" && s.now().In(s.loc).Hour() >= d.Hour {
-			_, _, _ = s.prepareOps(jctx, a, "background")
+			if _, _, err := s.prepareOps(jctx, a, "background"); err != nil {
+				s.observeFailure(jctx, slog.LevelWarn, "后台日更准备失败", observeFields{
+					ErrorCode: "daily_background_prepare_failed", Route: "internal/daily/background",
+					Extras: map[string]any{"account_id": a.ID.String(), "err": err.Error()},
+				})
+			}
 		}
 	}
 }
