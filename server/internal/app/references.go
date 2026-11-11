@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
+	"log/slog"
 	"net/http"
 	"net/url"
-	"ops/internal/crawl"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"ops/internal/crawl"
 )
 
 type ReferenceAnalysis struct {
@@ -260,12 +263,23 @@ func (s *Server) deleteReference(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, map[string]any{"ok": true})
 }
 func (s *Server) collectReferences(ctx context.Context) {
-	_, _ = s.db.Exec(ctx, `UPDATE reference_item SET body_text='' WHERE body_text<>'' AND fetched_at<$1`, s.now().AddDate(0, 0, -7))
-	if !s.loadCrawl(ctx).Limits.Enabled {
+	// BE-02：正文保留清理 / 候选查询 / 元数据与状态回写失败必须可观测；批循环不中断。
+	if _, err := s.db.Exec(ctx, `UPDATE reference_item SET body_text='' WHERE body_text<>'' AND fetched_at<$1`, s.now().AddDate(0, 0, -7)); err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "对标正文保留清理失败", observeFields{
+			ErrorCode: "references_body_purge_failed", Route: "internal/crawl/references",
+			Extras: map[string]any{"err": err.Error()},
+		})
+	}
+	// 配置读取不跟批采 ctx 绑定：父 ctx 已取消时仍要能判定开关，再如实观测候选查询失败。
+	if !s.loadCrawl(context.WithoutCancel(ctx)).Limits.Enabled {
 		return
 	}
 	rows, e := s.db.Query(ctx, `SELECT r.id,r.account_id,r.workspace_id,r.platform,r.url FROM reference_item r WHERE r.status='queued' AND r.deleted_at IS NULL ORDER BY r.queued_at LIMIT 200`)
 	if e != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "对标采集候选查询失败", observeFields{
+			ErrorCode: "references_candidates_query_failed", Route: "internal/crawl/references",
+			Extras: map[string]any{"err": e.Error()},
+		})
 		return
 	}
 	type item struct {
@@ -275,9 +289,14 @@ func (s *Server) collectReferences(ctx context.Context) {
 	list := []item{}
 	for rows.Next() {
 		var x item
-		if rows.Scan(&x.id, &x.aid, &x.ws, &x.platform, &x.url) == nil {
-			list = append(list, x)
+		if err := rows.Scan(&x.id, &x.aid, &x.ws, &x.platform, &x.url); err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "对标采集候选行解析失败", observeFields{
+				ErrorCode: "references_candidate_scan_failed", Route: "internal/crawl/references",
+				Extras: map[string]any{"err": err.Error()},
+			})
+			continue
 		}
+		list = append(list, x)
 	}
 	rows.Close()
 	for _, x := range list {
@@ -287,7 +306,7 @@ func (s *Server) collectReferences(ctx context.Context) {
 		}
 		endpoint := x.url
 		if s.cfg.Dev {
-			u, _ := url.Parse(x.url)
+			u, _ := url.Parse(x.url) // ponytail: Dev mock 路径；坏 URL 时 Path 空串，FetchPage 自会失败
 			endpoint = "http://" + s.cfg.MockListen + "/mock/page/" + strings.TrimPrefix(u.Path, "/")
 		}
 		page, out, e := (crawl.Adapter{Client: s.crawlClient(), Source: crawl.Source{Key: kind, Kind: kind, URL: endpoint}}).FetchPage(ctx, s.loadCrawl(ctx).Limits)
@@ -307,13 +326,25 @@ func (s *Server) collectReferences(ctx context.Context) {
 				err = s.analyzeReference(jctx, a, x.id, cleanExternalText(page.Body), x.platform)
 			}
 			if err == nil {
-				b, _ := json.Marshal(page.Metrics)
-				_, _ = s.db.Exec(ctx, `UPDATE reference_item SET title=$2,author=$3,published_at=$4,metrics=$5 WHERE id=$1`, x.id, cleanExternalText(page.Title), cleanExternalText(page.Author), page.PublishedAt, b)
+				b, _ := json.Marshal(page.Metrics) // C-class：metrics map 序列化失败面极窄
+				if _, err := s.db.Exec(ctx, `UPDATE reference_item SET title=$2,author=$3,published_at=$4,metrics=$5 WHERE id=$1`, x.id, cleanExternalText(page.Title), cleanExternalText(page.Author), page.PublishedAt, b); err != nil {
+					s.observeFailure(ctx, slog.LevelError, "对标元数据回写失败", observeFields{
+						Action: "references_meta_update", TargetType: "reference_item", TargetID: x.id.String(),
+						ErrorCode: "references_meta_update_failed", Route: "internal/crawl/references",
+						Extras: map[string]any{"err": err.Error()},
+					})
+				}
 				continue
 			}
 			msg = err.Error()
 		}
-		_, _ = s.db.Exec(ctx, `UPDATE reference_item SET status=$2,error=$3 WHERE id=$1 AND deleted_at IS NULL`, x.id, status, msg)
+		if _, err := s.db.Exec(ctx, `UPDATE reference_item SET status=$2,error=$3 WHERE id=$1 AND deleted_at IS NULL`, x.id, status, msg); err != nil {
+			s.observeFailure(ctx, slog.LevelError, "对标状态回写失败", observeFields{
+				Action: "references_status_update", TargetType: "reference_item", TargetID: x.id.String(),
+				ErrorCode: "references_status_update_failed", Route: "internal/crawl/references",
+				Extras: map[string]any{"status": status, "err": err.Error()},
+			})
+		}
 	}
 }
 func (s *Server) referenceMethods(ctx context.Context, account uuid.UUID) (string, []SlotItem) {
