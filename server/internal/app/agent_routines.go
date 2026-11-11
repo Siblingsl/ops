@@ -769,7 +769,10 @@ func (s *Server) postAgentRoutineControl(w http.ResponseWriter, r *http.Request)
 		if enabled >= 5 {
 			return apiErr(429, "agent_routine_unavailable", "每人每工作区最多启用5个例行任务")
 		}
-		loc, _ := time.LoadLocation("Asia/Shanghai")
+		loc, err := time.LoadLocation("Asia/Shanghai")
+		if err != nil {
+			return err
+		}
 		due, err := nextAgentRoutineDue(routine.Cadence, routine.Weekday, routine.TimeOfDay, routine.OnceAt, s.now(), loc)
 		if err != nil {
 			return err
@@ -1074,6 +1077,10 @@ func (s *Server) runAgentRoutines(ctx context.Context) {
 func (s *Server) claimAgentRoutineDue(ctx context.Context, routineID uuid.UUID) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "例行任务到期认领开事务失败", observeFields{
+			ErrorCode: "agent_routine_claim_begin_failed", Route: "internal/agent/routine/claim_due",
+			Extras: map[string]any{"routine_id": routineID.String(), "err": err.Error()},
+		})
 		return
 	}
 	defer tx.Rollback(ctx)
@@ -1088,7 +1095,14 @@ func (s *Server) claimAgentRoutineDue(ctx context.Context, routineID uuid.UUID) 
 	}
 	owner, authErr := s.agentRoutineCurrentIdentity(ctx, routineID, false)
 	if authErr != nil {
-		s.pauseAgentRoutineTx(ctx, tx, routineID, routine.Revision, authErr)
+		if err := s.pauseAgentRoutineTx(ctx, tx, routineID, routine.Revision, authErr); err != nil {
+			s.observeFailure(ctx, slog.LevelError, "暂停失效例行任务写库失败", observeFields{
+				Action: "agent_routine_pause", TargetType: "agent_routine", TargetID: routineID.String(),
+				ErrorCode: "agent_routine_pause_failed", Route: "internal/agent/routine/claim_due",
+				Extras: map[string]any{"err": err.Error()},
+			})
+			return
+		}
 		if err := tx.Commit(ctx); err != nil {
 			slog.ErrorContext(ctx, "暂停失效例行任务失败", "routine_id", routineID.String(), "err", err)
 			return
@@ -1105,9 +1119,28 @@ func (s *Server) claimAgentRoutineDue(ctx context.Context, routineID uuid.UUID) 
 			slog.ErrorContext(ctx, "记录错过的例行任务失败", "routine_id", routineID.String(), "err", err)
 			return
 		}
-		s.advanceAgentRoutineTx(ctx, tx, routine)
-		_ = s.agentRoutineEventTx(ctx, tx, routineID, "missed", map[string]any{"due_at": due, "reason": "missed_window"})
+		if err := s.advanceAgentRoutineTx(ctx, tx, routine); err != nil {
+			s.observeFailure(ctx, slog.LevelError, "错过窗口后推进例行任务失败", observeFields{
+				Action: "agent_routine_advance", TargetType: "agent_routine", TargetID: routineID.String(),
+				ErrorCode: "agent_routine_advance_failed", Route: "internal/agent/routine/claim_due",
+				Extras: map[string]any{"err": err.Error()},
+			})
+			return
+		}
+		if err := s.agentRoutineEventTx(ctx, tx, routineID, "missed", map[string]any{"due_at": due, "reason": "missed_window"}); err != nil {
+			s.observeFailure(ctx, slog.LevelError, "错过窗口事件写入失败", observeFields{
+				Action: "agent_routine_event", TargetType: "agent_routine", TargetID: routineID.String(),
+				ErrorCode: "agent_routine_event_failed", Route: "internal/agent/routine/claim_due",
+				Extras: map[string]any{"event": "missed", "err": err.Error()},
+			})
+			return
+		}
 		if err := tx.Commit(ctx); err != nil {
+			s.observeFailure(ctx, slog.LevelError, "错过窗口提交失败", observeFields{
+				Action: "agent_routine_missed_commit", TargetType: "agent_routine", TargetID: routineID.String(),
+				ErrorCode: "agent_routine_missed_commit_failed", Route: "internal/agent/routine/claim_due",
+				Extras: map[string]any{"err": err.Error()},
+			})
 			return
 		}
 		s.notify(ctx, routineWorkspaceFrom(routine, ctx), routineUserFrom(routine, ctx), "agent_routine", "例行任务错过计划时间", "服务器或对话繁忙，已超过30分钟窗口；不会补跑历史任务", "/agent?panel=task&item="+routineID.String(), "agent_routine:missed:"+routineID.String()+":"+due.UTC().Format(time.RFC3339Nano))
@@ -1122,7 +1155,14 @@ func (s *Server) claimAgentRoutineDue(ctx context.Context, routineID uuid.UUID) 
 		}
 		return
 	}
-	s.advanceAgentRoutineTx(ctx, tx, routine)
+	if err := s.advanceAgentRoutineTx(ctx, tx, routine); err != nil {
+		s.observeFailure(ctx, slog.LevelError, "租赁后推进例行任务失败", observeFields{
+			Action: "agent_routine_advance", TargetType: "agent_routine", TargetID: routineID.String(),
+			ErrorCode: "agent_routine_advance_failed", Route: "internal/agent/routine/claim_due",
+			Extras: map[string]any{"err": err.Error()},
+		})
+		return
+	}
 	if err := s.agentRoutineEventTx(ctx, tx, routineID, "occurrence.leased", map[string]any{"occurrence_id": occurrenceID, "due_at": due}); err != nil {
 		return
 	}
@@ -1134,24 +1174,37 @@ func (s *Server) claimAgentRoutineDue(ctx context.Context, routineID uuid.UUID) 
 	}
 }
 
-func (s *Server) advanceAgentRoutineTx(ctx context.Context, tx pgx.Tx, routine agentRoutineView) {
+// BE-02：推进 next_due_at 失败必须上抛——原先忽略 nextAgentRoutineDue/UPDATE 错误时，
+// 可能把 next_due_at 写成 NULL，等于静默停掉后续调度。
+func (s *Server) advanceAgentRoutineTx(ctx context.Context, tx pgx.Tx, routine agentRoutineView) error {
 	var next *time.Time
 	if routine.Cadence != "once" {
-		loc, _ := time.LoadLocation("Asia/Shanghai")
-		next, _ = nextAgentRoutineDue(routine.Cadence, routine.Weekday, routine.TimeOfDay, nil, *routine.NextDueAt, loc)
+		loc, err := time.LoadLocation("Asia/Shanghai")
+		if err != nil {
+			return err
+		}
+		next, err = nextAgentRoutineDue(routine.Cadence, routine.Weekday, routine.TimeOfDay, nil, *routine.NextDueAt, loc)
+		if err != nil {
+			return err
+		}
 	}
-	_, _ = tx.Exec(ctx, `UPDATE agent_routine SET next_due_at=$2,updated_at=now() WHERE id=$1`, routine.ID, next)
+	if _, err := tx.Exec(ctx, `UPDATE agent_routine SET next_due_at=$2,updated_at=now() WHERE id=$1`, routine.ID, next); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (s *Server) pauseAgentRoutineTx(ctx context.Context, tx pgx.Tx, routineID uuid.UUID, revision int64, cause error) {
+func (s *Server) pauseAgentRoutineTx(ctx context.Context, tx pgx.Tx, routineID uuid.UUID, revision int64, cause error) error {
 	code := "authorization_revoked"
 	var ae *APIError
 	if errors.As(cause, &ae) {
 		code = ae.Code
 	}
-	_, _ = tx.Exec(ctx, `UPDATE agent_routine SET status='paused',next_due_at=NULL,revision=revision+1,error_code=$2,updated_at=now()
-		WHERE id=$1 AND revision=$3 AND status='enabled'`, routineID, truncate(code, 80), revision)
-	_ = s.agentRoutineEventTx(ctx, tx, routineID, "paused", map[string]any{"reason": code})
+	if _, err := tx.Exec(ctx, `UPDATE agent_routine SET status='paused',next_due_at=NULL,revision=revision+1,error_code=$2,updated_at=now()
+		WHERE id=$1 AND revision=$3 AND status='enabled'`, routineID, truncate(code, 80), revision); err != nil {
+		return err
+	}
+	return s.agentRoutineEventTx(ctx, tx, routineID, "paused", map[string]any{"reason": code})
 }
 
 func (s *Server) claimPendingAgentRoutineOccurrences(ctx context.Context) {
@@ -1159,6 +1212,10 @@ func (s *Server) claimPendingAgentRoutineOccurrences(ctx context.Context) {
 		WHERE status='pending' AND due_at<=now() AND due_at>now()-interval '30 minutes'
 		ORDER BY due_at,id LIMIT 50`)
 	if err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "待认领例行 occurrence 查询失败", observeFields{
+			ErrorCode: "agent_routine_pending_query_failed", Route: "internal/agent/routine/claim_pending",
+			Extras: map[string]any{"err": err.Error()},
+		})
 		return
 	}
 	ids := []uuid.UUID{}
@@ -1177,6 +1234,10 @@ func (s *Server) claimPendingAgentRoutineOccurrences(ctx context.Context) {
 func (s *Server) claimPendingAgentRoutineOccurrence(ctx context.Context, occurrenceID uuid.UUID) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "待认领例行 occurrence 开事务失败", observeFields{
+			ErrorCode: "agent_routine_pending_begin_failed", Route: "internal/agent/routine/claim_pending",
+			Extras: map[string]any{"occurrence_id": occurrenceID.String(), "err": err.Error()},
+		})
 		return
 	}
 	defer tx.Rollback(ctx)
@@ -1190,12 +1251,39 @@ func (s *Server) claimPendingAgentRoutineOccurrence(ctx context.Context, occurre
 	}
 	owner, err := s.agentRoutineCurrentIdentity(ctx, routineID, false)
 	if err != nil {
-		_, _ = tx.Exec(ctx, `UPDATE agent_routine_occurrence SET status='interrupted',error_code='authorization_revoked',finished_at=now()
-			WHERE id=$1 AND status='pending'`, occurrenceID)
+		if _, execErr := tx.Exec(ctx, `UPDATE agent_routine_occurrence SET status='interrupted',error_code='authorization_revoked',finished_at=now()
+			WHERE id=$1 AND status='pending'`, occurrenceID); execErr != nil {
+			s.observeFailure(ctx, slog.LevelError, "授权失效 occurrence 中断落库失败", observeFields{
+				Action: "agent_routine_occurrence_interrupt", TargetType: "agent_routine_occurrence", TargetID: occurrenceID.String(),
+				ErrorCode: "agent_routine_occurrence_interrupt_failed", Route: "internal/agent/routine/claim_pending",
+				Extras: map[string]any{"err": execErr.Error()},
+			})
+			return
+		}
 		var revision int64
-		_ = tx.QueryRow(ctx, `SELECT revision FROM agent_routine WHERE id=$1`, routineID).Scan(&revision)
-		s.pauseAgentRoutineTx(ctx, tx, routineID, revision, err)
-		_ = tx.Commit(ctx)
+		if scanErr := tx.QueryRow(ctx, `SELECT revision FROM agent_routine WHERE id=$1`, routineID).Scan(&revision); scanErr != nil {
+			s.observeFailure(ctx, slog.LevelError, "授权失效读取例行 revision 失败", observeFields{
+				Action: "agent_routine_pause", TargetType: "agent_routine", TargetID: routineID.String(),
+				ErrorCode: "agent_routine_revision_read_failed", Route: "internal/agent/routine/claim_pending",
+				Extras: map[string]any{"err": scanErr.Error()},
+			})
+			return
+		}
+		if pauseErr := s.pauseAgentRoutineTx(ctx, tx, routineID, revision, err); pauseErr != nil {
+			s.observeFailure(ctx, slog.LevelError, "授权失效暂停例行任务失败", observeFields{
+				Action: "agent_routine_pause", TargetType: "agent_routine", TargetID: routineID.String(),
+				ErrorCode: "agent_routine_pause_failed", Route: "internal/agent/routine/claim_pending",
+				Extras: map[string]any{"err": pauseErr.Error()},
+			})
+			return
+		}
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			s.observeFailure(ctx, slog.LevelError, "授权失效暂停提交失败", observeFields{
+				Action: "agent_routine_pause_commit", TargetType: "agent_routine", TargetID: routineID.String(),
+				ErrorCode: "agent_routine_pause_commit_failed", Route: "internal/agent/routine/claim_pending",
+				Extras: map[string]any{"err": commitErr.Error()},
+			})
+		}
 		return
 	}
 	token := uuid.New()
@@ -1446,8 +1534,19 @@ func (s *Server) agentEnsureRoutineReportTx(ctx context.Context, tx pgx.Tx, st *
 	artifactID, err := s.agentInsertArtifactTx(ctx, tx, st.ConversationID, "markdown", truncate("例行报告："+name, 200),
 		"chat", content, hex.EncodeToString(hash[:]), &st.RunID, nil, nil)
 	if err != nil {
-		_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT routine_report")
-		_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT routine_report")
+		// BE-02：SAVEPOINT 回滚是尽力清理，失败只 Warn；原始写入错误仍上抛。
+		if _, rbErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT routine_report"); rbErr != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "例行报告 SAVEPOINT 回滚失败", observeFields{
+				ErrorCode: "agent_routine_report_rollback_failed", Route: "internal/agent/routine/report",
+				Extras: map[string]any{"err": rbErr.Error()},
+			})
+		}
+		if _, relErr := tx.Exec(ctx, "RELEASE SAVEPOINT routine_report"); relErr != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "例行报告 SAVEPOINT 释放失败", observeFields{
+				ErrorCode: "agent_routine_report_release_failed", Route: "internal/agent/routine/report",
+				Extras: map[string]any{"err": relErr.Error()},
+			})
+		}
 		return err
 	}
 	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT routine_report"); err != nil {
