@@ -139,7 +139,11 @@ export function NotificationBell() {
       window.removeEventListener('ops:overlay', exclusive)
     }
   }, [])
-  const notificationItems = noti.data?.pages.flatMap((page) => page.items) ?? []
+  // DEV-P10：面板只渲染有限条，避免无限翻页把全部页 flatMap 进 DOM。
+  const NOTIFICATION_RENDER_CAP = 80
+  const allNotificationItems = noti.data?.pages.flatMap((page) => page.items) ?? []
+  const notificationItems = allNotificationItems.slice(0, NOTIFICATION_RENDER_CAP)
+  const notificationsAtCap = allNotificationItems.length >= NOTIFICATION_RENDER_CAP
   const unread = noti.data?.pages[0]?.unread ?? 0
   const active = noti.data?.pages[0]?.active_jobs ?? 0
   const go = async (n: AppNotification) => {
@@ -186,9 +190,9 @@ export function NotificationBell() {
             onNotificationClick={(notification) => void go(notification)}
             onJobClick={(job) => { setOpen(false); nav(job.link) }}
             onCancel={(job) => void cancel(job)}
-            hasNextPage={noti.hasNextPage}
+            hasNextPage={!!noti.hasNextPage && !notificationsAtCap}
             isFetchingNextPage={noti.isFetchingNextPage}
-            onLoadMore={() => { void noti.fetchNextPage() }}
+            onLoadMore={() => { if (!notificationsAtCap) void noti.fetchNextPage() }}
           />
         </Suspense>
       )}

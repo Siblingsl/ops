@@ -150,7 +150,11 @@ export function NotificationBell({ sidebar = false, children }: { sidebar?: bool
       window.removeEventListener('ops:overlay', exclusive)
     }
   }, [])
-  const notificationItems = noti.data?.pages.flatMap((page) => page.items) ?? []
+  // DEV-P10：面板只渲染有限条，避免无限翻页把全部页 flatMap 进 DOM。
+  const NOTIFICATION_RENDER_CAP = 80
+  const allNotificationItems = noti.data?.pages.flatMap((page) => page.items) ?? []
+  const notificationItems = allNotificationItems.slice(0, NOTIFICATION_RENDER_CAP)
+  const notificationsAtCap = allNotificationItems.length >= NOTIFICATION_RENDER_CAP
   const newestNotifications = useMemo(() => noti.data?.pages[0]?.items ?? [], [noti.data?.pages[0]?.items])
   const nativeSeen = useRef<{ key: string; ids: Set<string> } | null>(null)
   useEffect(() => {
@@ -234,9 +238,9 @@ export function NotificationBell({ sidebar = false, children }: { sidebar?: bool
             onNotificationClick={(notification) => void go(notification)}
             onJobClick={(job) => { setOpen(false); nav(job.link) }}
             onCancel={(job) => void cancel(job)}
-            hasNextPage={noti.hasNextPage}
+            hasNextPage={!!noti.hasNextPage && !notificationsAtCap}
             isFetchingNextPage={noti.isFetchingNextPage}
-            onLoadMore={() => { void noti.fetchNextPage() }}
+            onLoadMore={() => { if (!notificationsAtCap) void noti.fetchNextPage() }}
             nativeSupported={nativeSupported}
             nativePermission={nativeSupported ? Notification.permission : 'unsupported'}
             nativeEnabled={nativeEnabled}
