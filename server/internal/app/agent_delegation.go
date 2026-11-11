@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +14,18 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
+
+// appendDelegationEvent：委派时间线事件 best-effort。主状态已提交后事件失败不得回滚 HTTP 成功，但必须 Warn 可观测（BE-02）。
+func (s *Server) appendDelegationEvent(ctx context.Context, conversationID uuid.UUID, runID *uuid.UUID, eventType string, payload map[string]any) {
+	if _, err := s.appendAgentEvent(ctx, conversationID, runID, eventType, payload); err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "委派事件写入失败", observeFields{
+			ErrorCode: "delegation_event_append_failed", Route: "internal/agent/delegation",
+			Extras: map[string]any{
+				"event_type": eventType, "conversation_id": conversationID.String(), "err": err.Error(),
+			},
+		})
+	}
+}
 
 // DEV-AI27-15（W15）：子智能体委派（27 文档 §11.3）。
 // 约束（§11.3.3 首版）：单父 run 并发子 run ≤2、累计委派 ≤4、深度 1；
@@ -271,7 +284,7 @@ func (s *Server) createDelegationGroup(w http.ResponseWriter, r *http.Request) e
 		return err
 	}
 	// 组创建事件（27 §11.3.3）。
-	_, _ = s.appendAgentEvent(r.Context(), conversationID, &parentRunID, "delegation.created", map[string]any{
+	s.appendDelegationEvent(r.Context(), conversationID, &parentRunID, "delegation.created", map[string]any{
 		"group_id": groupID.String(), "count": len(body.Delegations),
 	})
 	if err := s.loadDelegationGroup(r.Context(), groupID, &view); err != nil {
@@ -412,7 +425,7 @@ func (s *Server) cancelDelegation(w http.ResponseWriter, r *http.Request) error 
 	}
 	// 子 run 的实际停止在 W06 派发层执行（child_run_id 派发前可能为 NULL）；
 	// 委派状态机先行置 cancelling，generation 递增使旧授权失效。
-	_, _ = s.appendAgentEvent(r.Context(), conversationID, &childRunID, "delegation.cancel_requested", map[string]any{
+	s.appendDelegationEvent(r.Context(), conversationID, &childRunID, "delegation.cancel_requested", map[string]any{
 		"delegation_id": delegationID.String(),
 	})
 	// W10：待处理通知（27 §9.6：只含状态级摘要；去重键含 generation 防重复打扰）。
@@ -462,7 +475,7 @@ func (s *Server) cancelDelegationGroup(w http.ResponseWriter, r *http.Request) e
 	}); err != nil {
 		return err
 	}
-	_, _ = s.appendAgentEvent(r.Context(), uuid.MustParse(group.ConversationID), nil, "delegation.cancel_requested", map[string]any{
+	s.appendDelegationEvent(r.Context(), uuid.MustParse(group.ConversationID), nil, "delegation.cancel_requested", map[string]any{
 		"group_id": groupID.String(), "scope": "tree",
 	})
 	s.notify(r.Context(), id.WorkspaceID, id.UserID, "agent_delegation", "协作任务已全部停止",
