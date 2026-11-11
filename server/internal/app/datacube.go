@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -56,7 +57,14 @@ func datacubeDenied(err error) bool {
 }
 
 func (s *Server) setDatacubeState(ctx context.Context, accountID uuid.UUID, state string) {
-	_, _ = s.db.Exec(ctx, `UPDATE platform_account SET datacube_state=$2, datacube_checked_at=now() WHERE id=$1`, accountID, state)
+	// BE-02：权限探测结果落库失败必须可观测；调用方仍按返回 state 继续。
+	if _, err := s.db.Exec(ctx, `UPDATE platform_account SET datacube_state=$2, datacube_checked_at=now() WHERE id=$1`, accountID, state); err != nil {
+		s.observeFailure(ctx, slog.LevelError, "公众号数据权限状态落库失败", observeFields{
+			Action: "datacube_state_update", TargetType: "account", TargetID: accountID.String(),
+			ErrorCode: "datacube_state_update_failed", Route: "internal/metrics/datacube",
+			Extras: map[string]any{"state": state, "err": err.Error()},
+		})
+	}
 }
 
 // probeDatacube tries one read-only datacube call after a credential test and records the result.
@@ -281,18 +289,28 @@ func (s *Server) wechatMetricsDaily(ctx context.Context) {
 	if s.now().In(s.loc).Hour() < wechatDailyHour {
 		return
 	}
+	// BE-02：候选查询/行扫描失败必须可观测；单账号失败不中断批循环。
 	rows, err := s.db.Query(ctx, `SELECT a.id, a.workspace_id FROM platform_account a JOIN wechat_credential c ON c.account_id=a.id
 		WHERE a.platform='wechat_mp' AND a.status='active' AND NOT a.is_demo AND a.datacube_state='ok' AND a.metrics_wechat_auto AND c.last_check_ok`)
 	if err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "公众号每日数据同步候选查询失败", observeFields{
+			ErrorCode: "datacube_daily_candidates_query_failed", Route: "internal/metrics/wechat_daily",
+			Extras: map[string]any{"err": err.Error()},
+		})
 		return
 	}
 	type acc struct{ id, ws uuid.UUID }
 	var list []acc
 	for rows.Next() {
 		var x acc
-		if rows.Scan(&x.id, &x.ws) == nil {
-			list = append(list, x)
+		if err := rows.Scan(&x.id, &x.ws); err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "公众号每日数据同步候选行解析失败", observeFields{
+				ErrorCode: "datacube_daily_candidate_scan_failed", Route: "internal/metrics/wechat_daily",
+				Extras: map[string]any{"err": err.Error()},
+			})
+			continue
 		}
+		list = append(list, x)
 	}
 	rows.Close()
 	day := s.today().Format("2006-01-02")
@@ -303,6 +321,10 @@ func (s *Server) wechatMetricsDaily(ctx context.Context) {
 		jctx := context.WithValue(ctx, ctxMember, &identity{WorkspaceID: x.ws})
 		a, err := s.account(jctx, x.id)
 		if err != nil {
+			s.observeFailure(jctx, slog.LevelWarn, "公众号每日数据同步加载账号失败", observeFields{
+				ErrorCode: "datacube_daily_account_load_failed", Route: "internal/metrics/wechat_daily",
+				Extras: map[string]any{"account_id": x.id.String(), "err": err.Error()},
+			})
 			continue
 		}
 		s.wechatMetricsOnce(jctx, a)
@@ -314,7 +336,13 @@ func (s *Server) wechatMetricsOnce(ctx context.Context, a *Account) {
 	link := "/a/" + a.ID.String() + "/review"
 	res, err := s.syncDatacube(ctx, a)
 	if err == nil {
-		_, _ = s.db.Exec(ctx, `UPDATE platform_account SET metrics_wechat_fails=0, metrics_wechat_last_at=$2 WHERE id=$1`, a.ID, s.now())
+		if _, werr := s.db.Exec(ctx, `UPDATE platform_account SET metrics_wechat_fails=0, metrics_wechat_last_at=$2 WHERE id=$1`, a.ID, s.now()); werr != nil {
+			s.observeFailure(ctx, slog.LevelError, "公众号每日同步成功计数回写失败", observeFields{
+				Action: "metrics_wechat_success_reset", TargetType: "account", TargetID: a.ID.String(),
+				ErrorCode: "datacube_daily_success_reset_failed", Route: "internal/metrics/wechat_daily",
+				Extras: map[string]any{"err": werr.Error()},
+			})
+		}
 		s.audit(ctx, "metrics_sync_daily", "account", a.ID.String(), "ok", map[string]any{"articles": res.Articles, "matched": res.Matched, "unmatched": res.Unmatched})
 		if res.Unmatched > 0 {
 			s.notifyWorkspace(ctx, ws, []string{"owner", "editor"}, "metric", fmt.Sprintf("公众号数据已同步，%d 篇文章没对上作品", res.Unmatched), a.Name,
@@ -324,6 +352,10 @@ func (s *Server) wechatMetricsOnce(ctx context.Context, a *Account) {
 	}
 	var fails int
 	if qerr := s.db.QueryRow(ctx, `UPDATE platform_account SET metrics_wechat_fails=metrics_wechat_fails+1 WHERE id=$1 RETURNING metrics_wechat_fails`, a.ID).Scan(&fails); qerr != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "公众号每日同步失败计数落库失败", observeFields{
+			ErrorCode: "datacube_daily_fail_count_failed", Route: "internal/metrics/wechat_daily",
+			Extras: map[string]any{"account_id": a.ID.String(), "err": qerr.Error()},
+		})
 		return
 	}
 	s.audit(ctx, "metrics_sync_daily", "account", a.ID.String(), "failed", map[string]any{"error": truncate(err.Error(), 200), "fails": fails})
@@ -336,7 +368,14 @@ func (s *Server) wechatMetricsOnce(ctx context.Context, a *Account) {
 	default:
 		return
 	}
-	_, _ = s.db.Exec(ctx, `UPDATE platform_account SET metrics_wechat_auto=false, metrics_wechat_note=$2 WHERE id=$1`, a.ID, note)
+	if _, werr := s.db.Exec(ctx, `UPDATE platform_account SET metrics_wechat_auto=false, metrics_wechat_note=$2 WHERE id=$1`, a.ID, note); werr != nil {
+		s.observeFailure(ctx, slog.LevelError, "公众号每日同步自动关闭落库失败", observeFields{
+			Action: "metrics_wechat_auto_off", TargetType: "account", TargetID: a.ID.String(),
+			ErrorCode: "datacube_daily_auto_off_failed", Route: "internal/metrics/wechat_daily",
+			Extras: map[string]any{"err": werr.Error()},
+		})
+		return
+	}
 	s.notifyWorkspace(ctx, ws, []string{"owner", "editor"}, "metric", "公众号数据每日同步已关闭", a.Name+"："+note+"。可在账号设置里重新打开，期间请用截图识别或手动录入。",
 		link, "wechat-auto-off:"+a.ID.String()+":"+s.today().Format("2006-01-02"))
 }
