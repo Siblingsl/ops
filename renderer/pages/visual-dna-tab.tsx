@@ -15,7 +15,7 @@ const newTokens = (): CXVisualDNATokens => ({
   card_template_default: 'editorial', card_ratio_default: '3:4', end_copy: '',
 })
 
-const cloneTokens = (tokens: CXVisualDNATokens): CXVisualDNATokens => JSON.parse(JSON.stringify(tokens)) as CXVisualDNATokens
+const cloneTokens = (tokens: CXVisualDNATokens): CXVisualDNATokens => structuredClone(tokens)
 const fontCss = (font: CXVisualDNATokens['font_stack']) => ({
   'system-sans': 'system-ui, sans-serif',
   'system-serif': 'ui-serif, Georgia, serif',

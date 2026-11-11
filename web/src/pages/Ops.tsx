@@ -58,7 +58,7 @@ const labels = {
   hot_enabled: '账号启用热点',
   daily_settings: '今日推荐设置',
 }
-const cloneFields = (s: StrategyFields): StrategyFields => JSON.parse(JSON.stringify(s))
+const cloneFields = (s: StrategyFields): StrategyFields => structuredClone(s)
 const showValue = (value: unknown): string => (typeof value === 'string' ? value : JSON.stringify(value, null, 2))
 
 function StrategySummary({ strategy, platform }: { strategy: StrategyFields; platform: Account['platform'] }) {

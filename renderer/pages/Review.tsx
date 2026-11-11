@@ -513,7 +513,7 @@ function ReportCard({ report, accountId, canWrite, onAdopted, onUseExperiment }:
           : `覆盖 ${report.work_ids.length} 篇作品`}
         action={canWrite ? editDraft
           ? <div className="flex gap-2"><Button size="sm" variant="ghost" onClick={() => setEditDraft(null)}>取消</Button><Button size="sm" variant="primary" loading={savingEdit} onClick={() => void saveEdit()}>保存修改</Button></div>
-          : <Button size="sm" variant="outline" onClick={() => setEditDraft(JSON.parse(JSON.stringify(report.content)) as ReviewReport['content'])}>编辑报告</Button> : undefined} />
+          : <Button size="sm" variant="outline" onClick={() => setEditDraft(structuredClone(report.content))}>编辑报告</Button> : undefined} />
       <div className="space-y-5 p-5">
         {analysis ? <section className="rounded-lg border border-ink-100 bg-ink-50/40 p-3" data-testid="cx-review-v2-evidence">
           <div className="flex flex-wrap items-center gap-2"><Badge tone="ink">增强复盘 v{basis?.analysis_version ?? 2}</Badge>

@@ -67,7 +67,7 @@ function apiErrorMessage(reason: unknown) {
 }
 
 function TargetEditor({ target, canWrite, onSaved }: { target: BenchmarkTarget; canWrite: boolean; onSaved: (next: BenchmarkTarget) => void }) {
-  const [answers, setAnswers] = useState<BenchmarkAnswers>(() => JSON.parse(JSON.stringify(target.answers)) as BenchmarkAnswers)
+  const [answers, setAnswers] = useState<BenchmarkAnswers>(() => structuredClone(target.answers))
   const [status, setStatus] = useState(target.status)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
