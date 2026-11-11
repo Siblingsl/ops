@@ -109,6 +109,19 @@ func TestCX03EvidenceCSVEndToEndAndManifestBinding(t *testing.T) {
 	if status != 200 || !bytes.Contains(completeBody, []byte(`"status":"built"`)) {
 		t.Fatalf("clean build must complete: status=%d body=%s", status, completeBody)
 	}
+	var completePayload struct {
+		ArtifactFingerprint string         `json:"artifact_fingerprint"`
+		Manifest            map[string]any `json:"manifest"`
+	}
+	if err := json.Unmarshal(completeBody, &completePayload); err != nil {
+		t.Fatalf("decode complete: %v", err)
+	}
+	if len(completePayload.ArtifactFingerprint) != 64 {
+		t.Fatalf("complete must return hex artifact_fingerprint: %q", completePayload.ArtifactFingerprint)
+	}
+	if got, _ := completePayload.Manifest["artifact_fingerprint"].(string); got != completePayload.ArtifactFingerprint {
+		t.Fatalf("manifest fingerprint mismatch: response=%q manifest=%v", completePayload.ArtifactFingerprint, completePayload.Manifest["artifact_fingerprint"])
+	}
 	var detail struct {
 		Validation json.RawMessage `json:"validation"`
 	}

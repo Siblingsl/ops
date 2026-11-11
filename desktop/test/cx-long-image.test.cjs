@@ -8,7 +8,7 @@ const {
   CX_LONG_IMAGE_WIDTH,
   planCXLongImage,
   stitchCXLongImageSegments,
-} = require('../.build/cx-long-image.js');
+} = require('../.build/cx-long-image-pure.js');
 
 function png(width, height, paint) {
   const image = new PNG({ width, height, colorType: 6, inputColorType: 6 });
@@ -51,6 +51,10 @@ test('拼接检查 PNG 尺寸、保留分段颜色次序并检测纯色空白图
   assert.equal(decoded.height, 4);
   assert.deepEqual([...decoded.data.subarray(0, 4)], [255, 255, 255, 255]);
   assert.deepEqual([...decoded.data.subarray(2 * 780 * 4, 2 * 780 * 4 + 4)], [24, 38, 52, 255]);
+
+  // Identical inputs must stay byte-identical after the pure-module extract.
+  const again = stitchCXLongImageSegments([source], plan);
+  assert.equal(Buffer.compare(output, again), 0);
 
   const solidWhite = png(780, 4, () => [255, 255, 255]);
   assert.throws(() => stitchCXLongImageSegments([solidWhite], plan), { code: 'long_image_invalid' });

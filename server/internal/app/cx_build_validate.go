@@ -240,6 +240,7 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 	}
 	validation := map[string]any{"validator_version": cxbuildvalidate.ValidatorVersion, "image_evidence": []any{}, "unused_asset_ids": []string{}}
 	imageEvidence := []cxbuildvalidate.ImageEvidence{}
+	var artifactFingerprint string
 	if cxTargetSelected(targets, "xhs_cards") {
 		zips := cxArtifactsOfKind(artifacts, "zip")
 		if len(zips) != 1 {
@@ -276,6 +277,11 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 		imageEvidence = report.ImageEvidence
 		validation["image_evidence"] = imageEvidence
 		validation["unused_asset_ids"] = report.UnusedAssetIDs
+		fingerprint, fingerprintErr := cxbuildvalidate.ArtifactFingerprint(base.Data, imageEvidence)
+		if fingerprintErr != nil {
+			return cxFailAndCommit(ctx, tx, buildID, apiErr(http.StatusUnprocessableEntity, "html_invalid", "规范化 HTML 指纹无法计算"))
+		}
+		artifactFingerprint = fingerprint
 	}
 	if cxTargetSelected(targets, "stable_html") {
 		workValues, _ := snapshot["work"].(map[string]any)
@@ -326,6 +332,9 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 		"privacy_report":   privacy,
 		"renderer_receipt": rendererReceipt,
 	}
+	if artifactFingerprint != "" {
+		manifest["artifact_fingerprint"] = artifactFingerprint
+	}
 	manifestBytes, err := cxcanonicaljson.Marshal(manifest)
 	if err != nil {
 		return err
@@ -346,7 +355,11 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 		return err
 	}
 	s.audit(ctx, "work_build_complete", "work_build", buildID.String(), "ok", map[string]any{"manifest_sha256": manifestSHA})
-	return ok(w, map[string]any{"status": "built", "manifest": manifest, "manifest_sha256": manifestSHA, "expires_at": expires})
+	response := map[string]any{"status": "built", "manifest": manifest, "manifest_sha256": manifestSHA, "expires_at": expires}
+	if artifactFingerprint != "" {
+		response["artifact_fingerprint"] = artifactFingerprint
+	}
+	return ok(w, response)
 }
 
 func cxValidBuildRendererReceipt(receipt cxBuildRendererReceipt) bool {
