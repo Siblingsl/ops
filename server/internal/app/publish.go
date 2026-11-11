@@ -141,8 +141,12 @@ func draftHash(content string) string { return secure.SHA256Hex([]byte(strings.T
 // BE-02：删除失败记 Warn（残留行会让下一次推送撞唯一约束或显示过期状态），
 // 不改变调用方控制流。
 func (s *Server) cleanupPushRecord(ctx context.Context, recordID uuid.UUID) {
+	started := time.Now()
 	if _, err := s.db.Exec(ctx, `DELETE FROM push_record WHERE id=$1`, recordID); err != nil {
-		slog.WarnContext(ctx, "推送中间记录删除失败", "record", recordID.String(), "err", err)
+		s.observeFailure(ctx, slog.LevelWarn, "推送中间记录删除失败", observeFields{
+			ErrorCode: "push_cleanup_failed", Route: "internal/publish/cleanup",
+			Started: started, Extras: map[string]any{"record": recordID.String(), "err": err.Error()},
+		})
 	}
 }
 
@@ -219,9 +223,14 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 		if errors.As(f.err, &ae) {
 			msg = ae.Message
 		}
+		started := time.Now()
 		if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='failed', action=$2, failed_step=$3, error_code=$4, error_message=$5 WHERE id=$1`,
 			recordID, action, f.step, code, truncate(msg, 500)); err != nil {
-			slog.ErrorContext(ctx, "推送失败状态落库失败", "record", recordID.String(), "step", f.step, "err", err)
+			s.observeFailure(ctx, slog.LevelError, "推送失败状态落库失败", observeFields{
+				Action: "push_status_persist", TargetType: "push_record", TargetID: recordID.String(),
+				ErrorCode: "push_status_write_failed", Route: "internal/publish/push_status",
+				Started: started, Extras: map[string]any{"record": recordID.String(), "step": f.step, "err": err.Error()},
+			})
 		}
 		s.audit(ctx, "wechat_push", "work", m.ID.String(), "failed", map[string]any{"step": f.step, "code": code})
 		sse.send("error", map[string]any{"code": "wechat_error", "message": msg, "detail": map[string]string{"step": f.step, "errcode": code}})
@@ -481,8 +490,13 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 		sse.fail(err)
 		return nil
 	}
+	started := time.Now()
 	if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='ok', action=$2, draft_media_id=$3 WHERE id=$1`, recordID, action, draftID); err != nil {
-		slog.ErrorContext(ctx, "推送成功状态落库失败", "record", recordID.String(), "err", err)
+		s.observeFailure(ctx, slog.LevelError, "推送成功状态落库失败", observeFields{
+			Action: "push_status_persist", TargetType: "push_record", TargetID: recordID.String(),
+			ErrorCode: "push_status_write_failed", Route: "internal/publish/push_status",
+			Started: started, Extras: map[string]any{"record": recordID.String(), "err": err.Error()},
+		})
 	}
 	s.audit(ctx, "wechat_push", "work", m.ID.String(), "ok", map[string]any{"action": action, "over_limit": overLimit})
 	sse.send("done", map[string]any{"action": action, "draft_media_id": draftID, "backend_url": s.backendURL(), "today_count": count + 1})
@@ -568,9 +582,14 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 		if errors.As(f.err, &ae) {
 			msg = ae.Message
 		}
+		started := time.Now()
 		if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='failed', action=$2, failed_step=$3, error_code=$4, error_message=$5 WHERE id=$1`,
 			recordID, action, f.step, code, truncate(msg, 500)); err != nil {
-			slog.ErrorContext(ctx, "推送失败状态落库失败", "record", recordID.String(), "step", f.step, "err", err)
+			s.observeFailure(ctx, slog.LevelError, "推送失败状态落库失败", observeFields{
+				Action: "push_status_persist", TargetType: "push_record", TargetID: recordID.String(),
+				ErrorCode: "push_status_write_failed", Route: "internal/publish/push_status",
+				Started: started, Extras: map[string]any{"record": recordID.String(), "step": f.step, "err": err.Error()},
+			})
 		}
 		s.audit(ctx, "wechat_push", "work", m.ID.String(), "failed", map[string]any{"step": f.step, "code": code, "kind": "newspic"})
 		sse.send("error", map[string]any{"code": "wechat_error", "message": msg, "detail": map[string]string{"step": f.step, "errcode": code}})
@@ -719,8 +738,13 @@ func (s *Server) pushNewspic(w http.ResponseWriter, r *http.Request, m *workMeta
 		sse.fail(err)
 		return nil
 	}
+	started := time.Now()
 	if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE push_record SET status='ok', action=$2, draft_media_id=$3 WHERE id=$1`, recordID, action, draftID); err != nil {
-		slog.ErrorContext(ctx, "推送成功状态落库失败", "record", recordID.String(), "err", err)
+		s.observeFailure(ctx, slog.LevelError, "推送成功状态落库失败", observeFields{
+			Action: "push_status_persist", TargetType: "push_record", TargetID: recordID.String(),
+			ErrorCode: "push_status_write_failed", Route: "internal/publish/push_status",
+			Started: started, Extras: map[string]any{"record": recordID.String(), "err": err.Error()},
+		})
 	}
 	s.audit(ctx, "wechat_push", "work", m.ID.String(), "ok", map[string]any{"action": action, "kind": "newspic", "images": len(imageList)})
 	sse.send("done", map[string]any{"action": action, "draft_media_id": draftID, "backend_url": s.backendURL(), "today_count": count + 1})

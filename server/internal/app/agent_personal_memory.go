@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -700,8 +701,14 @@ func (s *Server) personalMemorySystemBlock(ctx context.Context, userID, workspac
 		if !usedFlag {
 			query = `INSERT INTO agent_memory_usage (run_id, memory_id, revision, used, omitted_reason) VALUES `
 		}
+		started := time.Now()
 		if _, err := s.db.Exec(ctx, query+strings.Join(values, ","), args...); err != nil {
-			slog.ErrorContext(ctx, "记忆用量记账失败", "run_id", runID.String(), "used", usedFlag, "rows", len(rows), "err", err)
+			s.observeFailure(ctx, slog.LevelError, "记忆用量记账失败", observeFields{
+				Action: "memory_usage_write", TargetType: "agent_run", TargetID: runID.String(),
+				ErrorCode: "memory_usage_write_failed", Route: "internal/agent/personal_memory/usage",
+				Started: started,
+				Extras:  map[string]any{"run_id": runID.String(), "used": usedFlag, "rows": len(rows), "err": err.Error()},
+			})
 		}
 	}
 	writeUsage(used, true, "")

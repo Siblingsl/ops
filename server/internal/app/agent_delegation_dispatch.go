@@ -70,18 +70,32 @@ func (s *Server) dispatchDelegationGroup(ctx context.Context, groupID uuid.UUID)
 // `_ = tx.Commit`），waiting_user 置位丢失不可见；现改为 slog.ErrorContext 记录
 // （含 conversation/run 上下文）。控制流不变：收尾失败不阻断派发主流程。
 func (s *Server) markDelegationParentEnded(ctx context.Context, conversationID, parentRunID uuid.UUID) {
+	const route = "internal/agent/delegation/mark_parent_ended"
+	started := time.Now()
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		slog.ErrorContext(ctx, "派发收尾开事务失败", "conversation_id", conversationID.String(), "run_id", parentRunID.String(), "err", err)
+		s.observeFailure(ctx, slog.LevelError, "派发收尾开事务失败", observeFields{
+			Action: "delegation_parent_ended", TargetType: "agent_run", TargetID: parentRunID.String(),
+			ErrorCode: "delegation_parent_ended_begin_failed", Route: route, Started: started,
+			Extras: map[string]any{"conversation_id": conversationID.String(), "run_id": parentRunID.String(), "err": err.Error()},
+		})
 		return
 	}
 	defer tx.Rollback(ctx)
 	if err := s.markDelegationParentEndedTx(ctx, tx, conversationID, parentRunID); err != nil {
-		slog.ErrorContext(ctx, "派发收尾置位失败", "conversation_id", conversationID.String(), "run_id", parentRunID.String(), "err", err)
+		s.observeFailure(ctx, slog.LevelError, "派发收尾置位失败", observeFields{
+			Action: "delegation_parent_ended", TargetType: "agent_run", TargetID: parentRunID.String(),
+			ErrorCode: "delegation_parent_ended_mark_failed", Route: route, Started: started,
+			Extras: map[string]any{"conversation_id": conversationID.String(), "run_id": parentRunID.String(), "err": err.Error()},
+		})
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {
-		slog.ErrorContext(ctx, "派发收尾提交失败", "conversation_id", conversationID.String(), "run_id", parentRunID.String(), "err", err)
+		s.observeFailure(ctx, slog.LevelError, "派发收尾提交失败", observeFields{
+			Action: "delegation_parent_ended", TargetType: "agent_run", TargetID: parentRunID.String(),
+			ErrorCode: "delegation_parent_ended_commit_failed", Route: route, Started: started,
+			Extras: map[string]any{"conversation_id": conversationID.String(), "run_id": parentRunID.String(), "err": err.Error()},
+		})
 	}
 }
 
@@ -188,11 +202,20 @@ func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversatio
 		slog.WarnContext(ctx, "W15b dispatch: 模型循环启动失败", "child", childRunID.String(), "err", err)
 		// 启动失败：委派行标 failed，子 run 置 stopped。BE-02：补偿更新本身失败必须可观测
 		// （状态停在 running 会卡住对账），不改变「返回原错误」的控制流。
+		started := time.Now()
 		if _, err := s.db.Exec(ctx, `UPDATE agent_delegation SET state='failed', error_code='dispatch_failed', updated_at=now() WHERE id=$1`, delegationID); err != nil {
-			slog.ErrorContext(ctx, "W15b dispatch: 启动失败补偿更新委派行失败", "delegation_id", delegationID.String(), "err", err)
+			s.observeFailure(ctx, slog.LevelError, "W15b dispatch: 启动失败补偿更新委派行失败", observeFields{
+				Action: "delegation_dispatch_compensate", TargetType: "agent_delegation", TargetID: delegationID.String(),
+				ErrorCode: "delegation_compensate_row_failed", Route: "internal/agent/delegation/dispatch_compensate",
+				Started: started, Extras: map[string]any{"delegation_id": delegationID.String(), "err": err.Error()},
+			})
 		}
 		if _, err := s.db.Exec(ctx, `UPDATE agent_run SET status='failed' WHERE id=$1`, childRunID); err != nil {
-			slog.ErrorContext(ctx, "W15b dispatch: 启动失败补偿更新子 run 失败", "child", childRunID.String(), "err", err)
+			s.observeFailure(ctx, slog.LevelError, "W15b dispatch: 启动失败补偿更新子 run 失败", observeFields{
+				Action: "delegation_dispatch_compensate", TargetType: "agent_run", TargetID: childRunID.String(),
+				ErrorCode: "delegation_compensate_run_failed", Route: "internal/agent/delegation/dispatch_compensate",
+				Started: started, Extras: map[string]any{"child": childRunID.String(), "err": err.Error()},
+			})
 		}
 		return err
 	}
@@ -240,9 +263,13 @@ func (s *Server) touchDelegationGroupOnChildDone(ctx context.Context, delegation
 		// active/waiting_user → completed；completed 只表示"全部子任务终态"，不表示"已汇总"。
 		// 结果是否被承接由 results_consumed_at 单独标记（docs/32 D3）。
 		// BE-02：置位失败记 Warn（组停在 active 会卡住承接语义），控制流不变。
+		started := time.Now()
 		if _, err := s.db.Exec(ctx, `UPDATE agent_delegation_group SET state='completed', updated_at=now()
 			WHERE id=$1 AND state IN ('active','waiting_user')`, groupID); err != nil {
-			slog.WarnContext(ctx, "子任务全部终态后组置 completed 失败", "group", groupID.String(), "err", err)
+			s.observeFailure(ctx, slog.LevelWarn, "子任务全部终态后组置 completed 失败", observeFields{
+				ErrorCode: "delegation_group_complete_failed", Route: "internal/agent/delegation/group_complete",
+				Started: started, Extras: map[string]any{"group": groupID.String(), "err": err.Error()},
+			})
 		}
 	}
 }
