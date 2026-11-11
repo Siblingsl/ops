@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/google/uuid"
+	"log/slog"
 	"net/http"
 	"net/url"
-	"ops/internal/ai"
-	"ops/internal/crawl"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+
+	"ops/internal/ai"
+	"ops/internal/crawl"
 )
 
 func (s *Server) searchEndpoint(base string) (string, bool) {
@@ -157,9 +160,8 @@ func (s *Server) collectSearch(ctx context.Context, src CrawlSource, lim crawl.L
 	if e != nil {
 		status, msg = "failed", e.Error()
 	}
-	refs, _ := json.Marshal(map[string]any{"source_key": src.Key, "native_search": true, "results": len(items)})
-	_, _ = s.db.Exec(ctx, `INSERT INTO ai_call(workspace_id,task_type,provider,model,context_refs,prompt_tokens,completion_tokens,latency_ms,status,error) VALUES($1,'hot_search',$2,$3,$4,$5,$6,$7,$8,$9)`, src.WorkspaceID, name, src.Config["model"], refs, usage.PromptTokens, usage.CompletionTokens, int(time.Since(started).Milliseconds()), status, msg)
-	_, _ = s.db.Exec(ctx, `INSERT INTO crawl_run(source_key,started_at,finished_at,requests,http_status,items,error) VALUES($1,$2,$3,1,$4,$5,$6)`, src.Key, now, s.now(), out.Status, len(items), msg)
+	refs, _ := json.Marshal(map[string]any{"source_key": src.Key, "native_search": true, "results": len(items)}) // C-class：字面 map
+	s.recordHotSearchTelemetry(ctx, src, name, refs, usage, started, now, out, len(items), status, msg)
 	if e != nil {
 		return nil, e
 	}
@@ -169,4 +171,22 @@ func (s *Server) collectSearch(ctx context.Context, src CrawlSource, lim crawl.L
 		}
 	}
 	return items, nil
+}
+
+// recordHotSearchTelemetry：搜索用量与 crawl_run best-effort 落库；失败 Error 可观测（BE-02）。
+func (s *Server) recordHotSearchTelemetry(ctx context.Context, src CrawlSource, provider string, refs []byte, usage ai.Usage, started, now time.Time, out crawl.Outcome, itemCount int, status, msg string) {
+	if _, err := s.db.Exec(ctx, `INSERT INTO ai_call(workspace_id,task_type,provider,model,context_refs,prompt_tokens,completion_tokens,latency_ms,status,error) VALUES($1,'hot_search',$2,$3,$4,$5,$6,$7,$8,$9)`, src.WorkspaceID, provider, src.Config["model"], refs, usage.PromptTokens, usage.CompletionTokens, int(time.Since(started).Milliseconds()), status, msg); err != nil {
+		s.observeFailure(ctx, slog.LevelError, "热点搜索用量落库失败", observeFields{
+			Action: "hot_search_ai_call", TargetType: "crawl_source", TargetID: src.Key,
+			ErrorCode: "hot_search_ai_call_failed", Route: "internal/crawl/hot_search",
+			Started: started, Extras: map[string]any{"err": err.Error()},
+		})
+	}
+	if _, err := s.db.Exec(ctx, `INSERT INTO crawl_run(source_key,started_at,finished_at,requests,http_status,items,error) VALUES($1,$2,$3,1,$4,$5,$6)`, src.Key, now, s.now(), out.Status, itemCount, msg); err != nil {
+		s.observeFailure(ctx, slog.LevelError, "热点搜索运行记录落库失败", observeFields{
+			Action: "hot_search_run_log", TargetType: "crawl_source", TargetID: src.Key,
+			ErrorCode: "hot_search_run_log_failed", Route: "internal/crawl/hot_search",
+			Started: started, Extras: map[string]any{"err": err.Error()},
+		})
+	}
 }
