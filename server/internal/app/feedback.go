@@ -65,7 +65,14 @@ func (s *Server) recordFeedback(ctx context.Context, callID uuid.UUID, in feedba
 			rating=coalesce($7, ai_feedback.rating), reason_tags=coalesce($8, ai_feedback.reason_tags), note=coalesce($9, ai_feedback.note),
 			user_id=coalesce($10, ai_feedback.user_id), sample_text=coalesce($11, ai_feedback.sample_text), updated_at=now()`,
 		callID, ws, task, in.Outcome, in.ChoiceIndex, in.EditRatio, in.Rating, tags, note, user, sampleText)
-	return err
+	if err != nil {
+		return err
+	}
+	// DEEP-03：采用/编辑旁路打标；拒绝与重生成不抬升权重。
+	if in.Outcome != nil && (*in.Outcome == "accepted" || *in.Outcome == "edited") {
+		s.markSkillOutcomesAdopted(ctx, callID)
+	}
+	return nil
 }
 
 func (s *Server) implicitFeedback(ctx context.Context, callID uuid.UUID, outcome string, choice *int, ratio *float64, samples ...string) {

@@ -16,11 +16,19 @@ export interface SkillDefinition extends SkillDef {
 export interface SkillWarning { code: string; field: string; message: string }
 export type SkillForm = SkillDef & { scope: string; account_id: string | null }
 export interface SkillList { items: SkillDefinition[]; next_cursor: string | null; total: number }
+export interface SkillOutcomeHistory {
+  uses: number
+  adopted: number
+  published: number
+  adopt_rate: number
+  by_task: { task_type: string; uses: number; adopted: number; published: number; adopt_rate: number }[]
+}
 export interface SkillImpact {
   base_revision: number
   affected_bindings: number
   accounts: { id: string; name: string; workspace_name: string; bindings: number }[]
   impact_token: string
+  history?: SkillOutcomeHistory
 }
 export const skillPlatforms = [
   { value: 'wechat_mp', label: '公众号' }, { value: 'xhs', label: '小红书' }, { value: 'toutiao', label: '今日头条' },

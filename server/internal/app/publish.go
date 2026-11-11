@@ -890,6 +890,10 @@ func (s *Server) setWorkPublished(ctx context.Context, tx pgx.Tx, id uuid.UUID, 
 		wechat_msgid=coalesce(nullif($4,''), wechat_msgid) WHERE id=$1`, id, url, at, parseWechatMsgID(url)); err != nil {
 		return err
 	}
+	// DEEP-03：旁路标记关联 skill_outcome；失败不阻断发布。
+	if err := s.markSkillOutcomesPublishedTx(ctx, tx, id); err != nil {
+		slog.Warn("skill_outcome 发布标记失败", "err", err, "work_id", id)
+	}
 	return s.addVersion(ctx, tx, id, "publish")
 }
 

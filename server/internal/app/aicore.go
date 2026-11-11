@@ -497,6 +497,8 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 		if callErr == nil {
 			refs["latency_ms"] = time.Since(start).Milliseconds()
 			refs["tokens"] = usage.PromptTokens + usage.CompletionTokens
+			// DEEP-03：旁路采样公共已用技能；失败只打日志，不阻断主链路。
+			s.recordSkillOutcomesFromSnap(context.WithoutCancel(ctx), callID, t.WorkID, t.Type, snap)
 			s.afterAISuccess(context.WithoutCancel(ctx), t, pack)
 			return &aiResult{Text: text, Usage: usage, CallID: callID, Refs: refs, CXBasis: basis, FallbackUsed: cur != rt}, nil
 		}

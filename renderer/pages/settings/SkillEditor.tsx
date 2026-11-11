@@ -189,6 +189,7 @@ export default function SkillEditor({ def: initialDef, copyFrom, initial, fixedA
         {def && <Field label="状态"><Select value={form.status} onChange={e => set({ status: e.target.value })}><option value="active">启用中</option><option value="disabled">停用（保留配置与绑定）</option></Select></Field>}
       </fieldset>
       {impact && <Notice>保存将影响 {impact.affected_bindings} 条绑定{impact.accounts.length ? `（${impact.accounts.map(a => a.name).join('、')}）` : ''}；已生成的作品不追溯修改。</Notice>}
+      {impact?.history && impact.history.uses > 0 && <Notice>历史表现（只读）：使用 {impact.history.uses} 次，采用 {impact.history.adopted} 次（{(impact.history.adopt_rate * 100).toFixed(0)}%），发布关联 {impact.history.published} 次。不自动改绑定或启用。</Notice>}
       {!def && <div className="space-y-2 text-xs text-mist-500">
         <p>定义额度 {quota.data?.total ?? '…'} / {limit}</p>
         {(quotaFull || bindingsFull) && <Notice tone="gamboge">{quotaFull ? '该范围定义额度已满' : '账号公共绑定额度已满'}。请先单项管理已有技能。<a className="underline" href={bindingsFull ? `/a/${form.account_id}/profile?tab=skills` : '/settings/skills'}>管理已有技能</a></Notice>}

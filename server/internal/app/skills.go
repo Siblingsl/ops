@@ -192,9 +192,15 @@ func (s *Server) resolveSkillSetQ(ctx context.Context, q skillQuerier, in SkillR
 		res.Items = append(res.Items, item)
 	}
 
-	// 排序（6.1 节第 5 项）：层→priority 升序→绑定创建时间→技能 UUID。
-	// 候选集（含被排除项）统一按该键排序，入选集为其中过滤通过、去重后的前 20；
-	// 上下文预览按同一顺序展示候选与排除原因。
+	// 排序（6.1 节第 5 项 + DEEP-03）：层→priority 升序→历史有效性权重降序→绑定创建时间→技能 UUID。
+	// 权重只作同层同 priority 的次级键；入选上限仍为 20（基数不变），不改变过滤集合。
+	weightIDs := make([]uuid.UUID, 0, len(res.Items))
+	for _, it := range res.Items {
+		if it.Def != nil && it.Def.ID != uuid.Nil && it.Def.Scope != "personal" {
+			weightIDs = append(weightIDs, it.Def.ID)
+		}
+	}
+	weights := skillOutcomeWeights(ctx, q, in.WorkspaceID, in.TaskType, weightIDs)
 	items := res.Items
 	sort.SliceStable(items, func(i, j int) bool {
 		a, b := items[i], items[j]
@@ -203,6 +209,10 @@ func (s *Server) resolveSkillSetQ(ctx context.Context, q skillQuerier, in SkillR
 		}
 		if a.Priority != b.Priority {
 			return a.Priority < b.Priority
+		}
+		wa, wb := weights[a.Def.ID], weights[b.Def.ID]
+		if wa != wb {
+			return wa > wb
 		}
 		if !a.CreatedAt.Equal(b.CreatedAt) {
 			return a.CreatedAt.Before(b.CreatedAt)

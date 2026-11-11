@@ -806,9 +806,15 @@ func (s *Server) getSkillImpact(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	// DEEP-03：只读历史表现；个人技能不进 skill_outcome，此处为空统计。
+	history, err := s.loadSkillOutcomeHistory(r.Context(), ident(r.Context()).WorkspaceID, d.ID)
+	if err != nil {
+		return err
+	}
 	return ok(w, map[string]any{
 		"skill_id": d.ID, "base_revision": d.Revision, "action": action,
 		"affected_bindings": len(bindings), "accounts": accounts, "impact_token": token,
+		"history": history,
 	})
 }
 
