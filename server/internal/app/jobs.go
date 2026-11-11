@@ -80,8 +80,23 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 		s.runRetentionCleanup(ctx)
 		s.runAgentCleanup(ctx)
 	}
-	_, _ = s.db.Exec(ctx, `DELETE FROM job_marker WHERE created_at < now() - interval '60 days'`)
-	_, _ = s.db.Exec(ctx, `DELETE FROM ux_event WHERE created_at < now() - interval '180 days'`)
+	s.purgeJobRetention(ctx)
+}
+
+// purgeJobRetention：调度标记与 UX 事件保留清理；失败 Warn 可观测（BE-02）。
+func (s *Server) purgeJobRetention(ctx context.Context) {
+	if _, err := s.db.Exec(ctx, `DELETE FROM job_marker WHERE created_at < now() - interval '60 days'`); err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "调度标记保留清理失败", observeFields{
+			ErrorCode: "jobs_marker_purge_failed", Route: "internal/jobs/run_once",
+			Extras: map[string]any{"err": err.Error()},
+		})
+	}
+	if _, err := s.db.Exec(ctx, `DELETE FROM ux_event WHERE created_at < now() - interval '180 days'`); err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "UX 事件保留清理失败", observeFields{
+			ErrorCode: "jobs_ux_event_purge_failed", Route: "internal/jobs/run_once",
+			Extras: map[string]any{"err": err.Error()},
+		})
+	}
 }
 
 func (s *Server) runDailyHousekeeping(ctx context.Context) {
