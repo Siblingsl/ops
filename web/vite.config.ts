@@ -21,11 +21,16 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: 'dist',
-      chunkSizeWarningLimit: 1500,
+      // DEV-P11：告警阈值回到可观察水平；大 chunk 靠 manualChunks 拆分而非抬阈值。
+      chunkSizeWarningLimit: 700,
       rollupOptions: {
         output: {
           manualChunks(id: string) {
-            if (id.includes('lucide-react/dist/esm/')) return 'lucide-react'
+            if (!id.includes('node_modules')) return
+            if (id.includes('@tiptap') || id.includes('prosemirror') || id.includes('tiptap-markdown')) return 'vendor-tiptap'
+            if (id.includes('@tanstack/react-query')) return 'vendor-query'
+            if (id.includes('lucide-react')) return 'lucide-react'
+            if (id.includes('react-dom') || id.includes('/react/')) return 'vendor-react'
           },
         },
       },
