@@ -1,0 +1,9 @@
+{
+  "name": "deep02-artifact-fingerprint",
+  "title": "跨端产物指纹验收",
+  "viewpoint": "跨端产物指纹一致性验收。",
+  "heading": "指纹段",
+  "key_point": "同一夹具指纹一致",
+  "content_md": "这段正文用于跨端产物指纹一致性验收。",
+  "content_md_changed": "这段正文已改写，用于断言产物指纹随之变化。"
+}

@@ -5,6 +5,14 @@ import { api, registerAccount } from './support'
 
 const fixtures = JSON.parse(readFileSync(resolve(process.cwd(), '../testdata/cx01-syntax-fixtures.json'), 'utf8')) as Array<{ name: string; markdown: string }>
 const unsupportedFixture = fixtures.find(fixture => fixture.name === 'unsupported-markdown-syntax')!
+const fingerprintFixture = JSON.parse(readFileSync(resolve(process.cwd(), '../testdata/deep02-artifact-fingerprint-fixture.json'), 'utf8')) as {
+  title: string
+  viewpoint: string
+  heading: string
+  key_point: string
+  content_md: string
+  content_md_changed: string
+}
 
 test('作者可查看公众号语法报告并定位问题段，检查不写入作品', async ({ page }) => {
   await registerAccount(page)
@@ -36,4 +44,49 @@ test('作者可查看公众号语法报告并定位问题段，检查不写入�
   const after = await api(page, 'GET', `/works/${work.id}`)
   expect(after.revision).toBe(before.revision)
   expect(after.sections[0].content_md).toBe(content)
+})
+
+// DEEP-02：同一共享夹具下 complete 返回的 artifact_fingerprint 稳定；改稿后变化。
+// 段 UUID 运行时生成，不能硬编码绝对摘要；跨端靠同一 testdata 夹具 + 两端各自断言稳定性。
+test('Web 构建 complete 在同一夹具下产物指纹一致，改稿后变化', async ({ page }) => {
+  const account = await registerAccount(page, '长图文', 'wechat_mp')
+  const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: fingerprintFixture.title }) as { id: string; revision: number }
+  const withViewpoint = await api(page, 'PATCH', `/works/${work.id}`, {
+    viewpoint: fingerprintFixture.viewpoint, base_revision: work.revision,
+  }) as { revision: number }
+  const outlined = await api(page, 'PUT', `/works/${work.id}/outline`, {
+    confirm: true,
+    base_revision: withViewpoint.revision,
+    items: [{ heading: fingerprintFixture.heading, key_point: fingerprintFixture.key_point, material_ids: [] }],
+  }) as { sections: Array<{ id: string; revision: number }> }
+  const section = outlined.sections[0]
+  await api(page, 'PATCH', `/sections/${section.id}`, { content_md: fingerprintFixture.content_md, base_revision: section.revision })
+  await page.goto(`/works/${work.id}`)
+
+  const panel = page.getByTestId('work-build-panel')
+  await expect(panel).toBeVisible()
+  const firstComplete = page.waitForResponse(response => response.url().includes('/complete') && response.request().method() === 'POST')
+  await panel.getByRole('button', { name: '生成校验报告', exact: true }).click()
+  const firstBody = await (await firstComplete).json() as { status: string; artifact_fingerprint: string; manifest: { artifact_fingerprint?: string } }
+  expect(firstBody.status).toBe('built')
+  expect(firstBody.artifact_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+  expect(firstBody.manifest.artifact_fingerprint).toBe(firstBody.artifact_fingerprint)
+
+  const secondComplete = page.waitForResponse(response => response.url().includes('/complete') && response.request().method() === 'POST')
+  await panel.getByRole('button', { name: '重新生成', exact: true }).click()
+  const secondBody = await (await secondComplete).json() as { status: string; artifact_fingerprint: string; manifest: { artifact_fingerprint?: string } }
+  expect(secondBody.status).toBe('built')
+  expect(secondBody.artifact_fingerprint).toBe(firstBody.artifact_fingerprint)
+  expect(secondBody.manifest.artifact_fingerprint).toBe(firstBody.artifact_fingerprint)
+
+  const current = await api(page, 'GET', `/works/${work.id}`) as { sections: Array<{ id: string; revision: number }> }
+  await api(page, 'PATCH', `/sections/${section.id}`, {
+    content_md: fingerprintFixture.content_md_changed, base_revision: current.sections[0].revision,
+  })
+  const changedComplete = page.waitForResponse(response => response.url().includes('/complete') && response.request().method() === 'POST')
+  await panel.getByRole('button', { name: '重新生成', exact: true }).click()
+  const changedBody = await (await changedComplete).json() as { status: string; artifact_fingerprint: string }
+  expect(changedBody.status).toBe('built')
+  expect(changedBody.artifact_fingerprint).toMatch(/^[0-9a-f]{64}$/)
+  expect(changedBody.artifact_fingerprint).not.toBe(firstBody.artifact_fingerprint)
 })
