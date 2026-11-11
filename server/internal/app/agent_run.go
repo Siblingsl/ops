@@ -280,11 +280,17 @@ func (s *Server) agentResolveModel(ctx context.Context, st *agentRunState) (*rou
 	// 备用模型取指向当前所选模型的路由行（第 7.4 节第 5 项），且备用模型也必须 tools_ok=true。
 	var fbProvider *uuid.UUID
 	var fbModel string
-	_ = s.db.QueryRow(ctx, `SELECT r.fallback_provider_id, coalesce(r.fallback_model,'') FROM model_route r
+	if err := s.db.QueryRow(ctx, `SELECT r.fallback_provider_id, coalesce(r.fallback_model,'') FROM model_route r
 		JOIN model_provider p ON p.id=r.provider_id
 		WHERE r.workspace_id=$1 AND p.id=$2 AND r.model=$3 AND p.execution_location='server' AND p.status='active'
 		ORDER BY (r.task_type='agent_chat') DESC LIMIT 1`, st.WorkspaceID, st.Model.ProviderID, st.Model.Model).
-		Scan(&fbProvider, &fbModel)
+		Scan(&fbProvider, &fbModel); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		// BE-02：无备用路由属预期（NoRows）；其它查询失败必须可观测，仍继续主模型。
+		s.observeFailure(ctx, slog.LevelWarn, "备用模型路由查询失败", observeFields{
+			ErrorCode: "agent_run_fallback_route_failed", Route: "internal/agent/run/fallback_route",
+			Extras: map[string]any{"run_id": st.RunID.String(), "err": err.Error()},
+		})
+	}
 	if fbProvider != nil && strings.TrimSpace(fbModel) != "" {
 		fb := route{ProviderID: *fbProvider, Model: strings.TrimSpace(fbModel)}
 		var fenc []byte
@@ -608,7 +614,13 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 				return
 			}
 			if strings.TrimSpace(note) != "" {
-				_, _ = s.agentSaveAssistantText(ctx, st, note)
+				// BE-02：说明轮已成功；落库失败不回滚已提出的卡片，但必须可观测。
+				if _, err := s.agentSaveAssistantText(ctx, st, note); err != nil {
+					s.observeFailure(ctx, slog.LevelWarn, "说明轮助手消息落库失败", observeFields{
+						ErrorCode: "agent_run_explanation_save_failed", Route: "internal/agent/run/explanation",
+						Extras: map[string]any{"run_id": st.RunID.String(), "err": err.Error()},
+					})
+				}
 			}
 			status = "awaiting_confirmation"
 			return
@@ -990,8 +1002,14 @@ func (s *Server) agentTagSourceCall(ctx context.Context, st *agentRunState, tool
 	if source == uuid.Nil {
 		return
 	}
-	_, _ = s.db.Exec(ctx, `UPDATE agent_message SET ai_call_id=$1
-		WHERE conversation_id=$2 AND tool_call_id=$3`, source, st.ConversationID, callID)
+	// BE-02：溯源打标失败不阻断已成功的工具结果，但必须可观测。
+	if _, err := s.db.Exec(ctx, `UPDATE agent_message SET ai_call_id=$1
+		WHERE conversation_id=$2 AND tool_call_id=$3`, source, st.ConversationID, callID); err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "工具结果溯源打标失败", observeFields{
+			ErrorCode: "agent_run_tag_source_failed", Route: "internal/agent/run/tag_source",
+			Extras: map[string]any{"run_id": st.RunID.String(), "tool_call_id": callID, "err": err.Error()},
+		})
+	}
 }
 
 // agentToolSummary 取工具结果的一行摘要，用于 tool 事件与折叠行。
@@ -1071,8 +1089,14 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 		s.dispatchPendingDelegationsOfParent(context.WithoutCancel(ctx), st.RunID)
 	}
 	if len(st.Domains) > 0 {
-		_, _ = s.db.Exec(context.WithoutCancel(ctx), `UPDATE agent_conversation SET loaded_domains=$2, updated_at=now() WHERE id=$1`,
-			st.ConversationID, st.Domains)
+		// BE-02：loaded_domains 回写失败不影响终态已提交，但下次加载域会偏旧——Warn 可观测。
+		if _, err := s.db.Exec(context.WithoutCancel(ctx), `UPDATE agent_conversation SET loaded_domains=$2, updated_at=now() WHERE id=$1`,
+			st.ConversationID, st.Domains); err != nil {
+			s.observeFailure(finishCtx, slog.LevelWarn, "运行结束回写 loaded_domains 失败", observeFields{
+				ErrorCode: "agent_run_loaded_domains_failed", Route: "internal/agent/run/finish",
+				Extras: map[string]any{"run_id": st.RunID.String(), "conversation_id": st.ConversationID.String(), "err": err.Error()},
+			})
+		}
 	}
 	s.unregisterAgentRun(st.RunID)
 	agentReleaseSkillState(st.RunID)
@@ -1116,8 +1140,15 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 // agentCountPending 返回对话中未结束卡片数量（第 11.4 节 done.pending_actions）。
 func (s *Server) agentCountPending(ctx context.Context, convID uuid.UUID) int {
 	var n int
-	_ = s.db.QueryRow(ctx, `SELECT count(*) FROM agent_action
-		WHERE conversation_id=$1 AND status IN ('pending','executing','needs_input')`, convID).Scan(&n)
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM agent_action
+		WHERE conversation_id=$1 AND status IN ('pending','executing','needs_input')`, convID).Scan(&n); err != nil {
+		// BE-02：计数失败时 done 事件仍发 0，但必须可观测（避免静默低估待处理卡片）。
+		s.observeFailure(ctx, slog.LevelWarn, "待处理操作卡片计数失败", observeFields{
+			ErrorCode: "agent_run_pending_count_failed", Route: "internal/agent/run/pending_count",
+			Extras: map[string]any{"conversation_id": convID.String(), "err": err.Error()},
+		})
+		return 0
+	}
 	return n
 }
 
