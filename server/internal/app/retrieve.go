@@ -508,17 +508,29 @@ func (s *Server) ensureEmbeddings(ctx context.Context, rt *embedRoute, objectTyp
 		}
 		for i, c := range batch {
 			cached[c.id] = vecs[i]
-			_, _ = s.db.Exec(ctx, `INSERT INTO content_embedding (workspace_id, object_type, object_id, chunk_no, content_hash, model, embedding)
+			// BE-02：向量缓存写失败必须可观测；内存缓存仍可用，不中断同批。
+			if _, err := s.db.Exec(ctx, `INSERT INTO content_embedding (workspace_id, object_type, object_id, chunk_no, content_hash, model, embedding)
 				VALUES ($1,$2,$3,0,$4,$5,$6) ON CONFLICT (object_type, object_id, chunk_no) DO UPDATE SET content_hash=excluded.content_hash,
 				model=excluded.model, embedding=excluded.embedding, updated_at=now()`,
-				ident(ctx).WorkspaceID, objectType, c.id, secure.SHA256Hex([]byte(c.content)), rt.model, vecs[i])
+				ident(ctx).WorkspaceID, objectType, c.id, secure.SHA256Hex([]byte(c.content)), rt.model, vecs[i]); err != nil {
+				s.observeFailure(ctx, slog.LevelWarn, "内容向量缓存落库失败", observeFields{
+					ErrorCode: "retrieve_embedding_cache_failed", Route: "internal/retrieve/embed",
+					Extras: map[string]any{"object_type": objectType, "object_id": c.id.String(), "err": err.Error()},
+				})
+			}
 		}
 	}
 	return cached, nil
 }
 
 func (s *Server) markEmbeddingStale(ctx context.Context, objectType string, id uuid.UUID) {
-	_, _ = s.db.Exec(ctx, `DELETE FROM content_embedding WHERE object_type=$1 AND object_id=$2`, objectType, id)
+	// BE-02：过期向量删除失败必须可观测；调用方仍按内容已变继续。
+	if _, err := s.db.Exec(ctx, `DELETE FROM content_embedding WHERE object_type=$1 AND object_id=$2`, objectType, id); err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "过期向量缓存清理失败", observeFields{
+			ErrorCode: "retrieve_embedding_stale_failed", Route: "internal/retrieve/embed",
+			Extras: map[string]any{"object_type": objectType, "object_id": id.String(), "err": err.Error()},
+		})
+	}
 }
 
 // reindexEmbeddings precomputes material vectors for workspaces that configured an embedding route.
@@ -526,14 +538,23 @@ func (s *Server) reindexEmbeddings(ctx context.Context) {
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT r.workspace_id FROM model_route r JOIN model_provider p ON p.id=r.provider_id
 		WHERE r.task_type='embedding' AND p.execution_location='server' AND p.status='active'`)
 	if err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "后台向量化工作区查询失败", observeFields{
+			ErrorCode: "retrieve_reindex_query_failed", Route: "internal/retrieve/reindex",
+			Extras: map[string]any{"err": err.Error()},
+		})
 		return
 	}
 	var wss []uuid.UUID
 	for rows.Next() {
 		var ws uuid.UUID
-		if rows.Scan(&ws) == nil {
-			wss = append(wss, ws)
+		if err := rows.Scan(&ws); err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "后台向量化工作区行解析失败", observeFields{
+				ErrorCode: "retrieve_reindex_scan_failed", Route: "internal/retrieve/reindex",
+				Extras: map[string]any{"err": err.Error()},
+			})
+			continue
 		}
+		wss = append(wss, ws)
 	}
 	rows.Close()
 	for _, ws := range wss {
@@ -545,6 +566,10 @@ func (s *Server) reindexEmbeddings(ctx context.Context) {
 		mrows, err := s.db.Query(jctx, `SELECT m.id, m.content FROM material m WHERE m.workspace_id=$1 AND m.deleted_at IS NULL
 			AND NOT EXISTS (SELECT 1 FROM content_embedding e WHERE e.object_type='material' AND e.object_id=m.id AND e.model=$2) LIMIT 256`, ws, rt.model)
 		if err != nil {
+			s.observeFailure(jctx, slog.LevelWarn, "后台向量化素材查询失败", observeFields{
+				ErrorCode: "retrieve_reindex_material_query_failed", Route: "internal/retrieve/reindex",
+				Extras: map[string]any{"workspace_id": ws.String(), "err": err.Error()},
+			})
 			continue
 		}
 		var cands []*matCandidate
