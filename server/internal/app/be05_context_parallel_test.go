@@ -22,8 +22,14 @@ func TestBE05BuildContextGoldenBytes(t *testing.T) {
 
 	// 固定夹具：账号档案 + 一条已确认记忆 + 数据偏好无关（无 works 数据时 prefs 为空，
 	// 保持分支覆盖确定性）。
-	f := env.accounts(t)
-	a, err := env.srv.account(context.WithValue(context.Background(), ctxMember, &identity{UserID: userID, WorkspaceID: workspaceID}), f.wechat.ID)
+	// BE-05 修正：用独立账号，不碰共享 fx.wechat——account_memory 与 profile 都是
+	// 跨进程持久（测试库不清理），落在共享账号会污染 MainChain/CX 系列的 CX basis 校验。
+	var golden Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{"platform": "wechat_mp", "name": "BE-05 黄金账号", "content_format": "long_article"}, &golden)
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM platform_account WHERE id=$1`, golden.ID)
+	})
+	a, err := env.srv.account(context.WithValue(context.Background(), ctxMember, &identity{UserID: userID, WorkspaceID: workspaceID}), golden.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
