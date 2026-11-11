@@ -115,11 +115,17 @@ func (s *Server) agentMetaPresentPlan(ctx context.Context, st *agentRunState, ca
 		if planRequestHash != requestHash {
 			return nil, "", apiErr(409, "agent_request_conflict", "计划工具调用编号已用于不同内容")
 		}
+		// BE-02：幂等命中路径必须解析 steps；失败上抛，不得 `_ = Unmarshal` 后空步骤伪装成功。
+		if err := json.Unmarshal(rawSteps, &plan.Steps); err != nil {
+			return nil, "", err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return nil, "", err
 		}
-		_ = json.Unmarshal(rawSteps, &plan.Steps)
-		payload, _ := json.Marshal(map[string]any{"ok": true, "plan_id": plan.ID, "version": plan.Version, "status": plan.Status})
+		payload, err := json.Marshal(map[string]any{"ok": true, "plan_id": plan.ID, "version": plan.Version, "status": plan.Status})
+		if err != nil {
+			return nil, "", err
+		}
 		return payload, "计划第" + agentItoa(plan.Version) + "版", nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -132,7 +138,10 @@ func (s *Server) agentMetaPresentPlan(ctx context.Context, st *agentRunState, ca
 		return nil, "", err
 	}
 	plan.ID, plan.SourceRunID, plan.Summary, plan.Steps, plan.Status = uuid.New(), st.RunID, summary, steps, "current"
-	stepsJSON, _ := json.Marshal(steps)
+	stepsJSON, err := json.Marshal(steps)
+	if err != nil {
+		return nil, "", err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_plan
 		(id,conversation_id,source_run_id,source_tool_call_id,request_hash,version,summary,steps,status)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8,'current')`, plan.ID, st.ConversationID, st.RunID, call.ID,
@@ -152,7 +161,10 @@ func (s *Server) agentMetaPresentPlan(ctx context.Context, st *agentRunState, ca
 	if err := tx.Commit(ctx); err != nil {
 		return nil, "", err
 	}
-	payload, _ := json.Marshal(map[string]any{"ok": true, "plan_id": plan.ID, "version": plan.Version, "status": plan.Status})
+	payload, err := json.Marshal(map[string]any{"ok": true, "plan_id": plan.ID, "version": plan.Version, "status": plan.Status})
+	if err != nil {
+		return nil, "", err
+	}
 	return payload, "已保存计划第" + agentItoa(plan.Version) + "版", nil
 }
 
@@ -175,11 +187,10 @@ func (s *Server) agentMetaUpdatePlanStep(ctx context.Context, st *agentRunState,
 		return nil, "", apiErr(422, "invalid_arguments", "计划步骤状态无效")
 	}
 	var evidence []agentPlanEvidenceRef
-	if raw, exists := args["evidence_refs"]; exists {
+	if _, exists := args["evidence_refs"]; exists {
 		if err := agentDecodeToolArgument(args, "evidence_refs", &evidence); err != nil {
 			return nil, "", err
 		}
-		_ = raw
 	}
 	if len(evidence) > 10 {
 		return nil, "", apiErr(422, "invalid_arguments", "每个计划步骤最多关联10项证据")
@@ -245,8 +256,11 @@ func (s *Server) agentMetaUpdatePlanStep(ctx context.Context, st *agentRunState,
 		if err := tx.Commit(ctx); err != nil {
 			return nil, "", err
 		}
-		payload, _ := json.Marshal(map[string]any{"ok": true, "plan_id": planID, "version": version,
+		payload, err := json.Marshal(map[string]any{"ok": true, "plan_id": planID, "version": version,
 			"step_id": stepID, "status": status, "revision": revision})
+		if err != nil {
+			return nil, "", err
+		}
 		return payload, "计划步骤状态已保存", nil
 	}
 	var reusedCallID bool
@@ -257,7 +271,10 @@ func (s *Server) agentMetaUpdatePlanStep(ctx context.Context, st *agentRunState,
 	if reusedCallID {
 		return nil, "", apiErr(409, "agent_request_conflict", "步骤工具调用编号已用于该计划的其他更新")
 	}
-	evidenceJSON, _ := json.Marshal(evidence)
+	evidenceJSON, err := json.Marshal(evidence)
+	if err != nil {
+		return nil, "", err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE agent_plan_step_state SET status=$3,evidence_refs=$4,revision=revision+1,
 		source_tool_call_id=$5,request_hash=$6,updated_at=now() WHERE plan_id=$1 AND step_id=$2`,
 		planID, stepID, status, evidenceJSON, call.ID, requestHash); err != nil {
@@ -272,8 +289,11 @@ func (s *Server) agentMetaUpdatePlanStep(ctx context.Context, st *agentRunState,
 	if err := tx.Commit(ctx); err != nil {
 		return nil, "", err
 	}
-	payload, _ := json.Marshal(map[string]any{"ok": true, "plan_id": planID, "version": version,
+	payload, err := json.Marshal(map[string]any{"ok": true, "plan_id": planID, "version": version,
 		"step_id": stepID, "status": status, "revision": revision})
+	if err != nil {
+		return nil, "", err
+	}
 	return payload, "计划步骤状态已保存", nil
 }
 
@@ -446,8 +466,11 @@ func (s *Server) postAgentPlanAccept(w http.ResponseWriter, r *http.Request) err
 	if err := json.Unmarshal(stepsRaw, &steps); err != nil {
 		return err
 	}
-	acceptedPlan, _ := json.Marshal(map[string]any{"plan_id": planID, "version": req.ExpectedVersion,
+	acceptedPlan, err := json.Marshal(map[string]any{"plan_id": planID, "version": req.ExpectedVersion,
 		"summary": summary, "steps": steps})
+	if err != nil {
+		return err
+	}
 	text := "请按已接受的计划继续执行。计划接受不等于批准任何业务写入；写入仍须逐张操作卡片确认。\n" +
 		agentDataBlock("已接受计划", string(acceptedPlan))
 	prepared, err := s.agentPrepareRun(r.Context(), conv, &selected, "plan_accept", protocol,
