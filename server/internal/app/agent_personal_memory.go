@@ -184,12 +184,13 @@ func (s *Server) createPersonalMemory(w http.ResponseWriter, r *http.Request) er
 	var created personalMemory
 	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
 		// 同 hash 已有候选/active：幂等返回既有项（不重复入库）。
+		// D-175：去重作用域 user+workspace（旧实现缺 workspace_id → 跨工作区串扰）。
 		existing, err := tx.Query(r.Context(), `
 			SELECT id::text, text, state, COALESCE(source_conversation_id::text,''), revision,
 				to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
 				to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'), ''
-			FROM agent_personal_memory WHERE user_id=$1 AND content_hash=$2 AND state IN ('candidate','active')`,
-			id.UserID, hash)
+			FROM agent_personal_memory WHERE user_id=$1 AND workspace_id=$2 AND content_hash=$3 AND state IN ('candidate','active')`,
+			id.UserID, id.WorkspaceID, hash)
 		if err != nil {
 			return err
 		}
@@ -284,8 +285,8 @@ func (s *Server) patchPersonalMemory(w http.ResponseWriter, r *http.Request) err
 			var dup bool
 			if err := tx.QueryRow(r.Context(), `
 				SELECT EXISTS(SELECT 1 FROM agent_personal_memory
-					WHERE user_id=$1 AND content_hash=$2 AND state IN ('candidate','active') AND id<>$3)`,
-				id.UserID, newHash, memoryID).Scan(&dup); err != nil {
+					WHERE user_id=$1 AND workspace_id=$2 AND content_hash=$3 AND state IN ('candidate','active') AND id<>$4)`,
+				id.UserID, id.WorkspaceID, newHash, memoryID).Scan(&dup); err != nil {
 				return err
 			}
 			if dup {
@@ -519,9 +520,10 @@ func (s *Server) proposePersonalMemoryCandidate(w http.ResponseWriter, r *http.R
 	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
 		var existingState string
 		var existingID uuid.UUID
+		// D-175：ignored/candidate/active 去重均限定当前工作区（A 忽略不阻断 B）。
 		err := tx.QueryRow(r.Context(), `
-			SELECT id, state FROM agent_personal_memory WHERE user_id=$1 AND content_hash=$2 AND state IN ('candidate','active','ignored')`,
-			id.UserID, hash).Scan(&existingID, &existingState)
+			SELECT id, state FROM agent_personal_memory WHERE user_id=$1 AND workspace_id=$2 AND content_hash=$3 AND state IN ('candidate','active','ignored')`,
+			id.UserID, id.WorkspaceID, hash).Scan(&existingID, &existingState)
 		switch {
 		case err == nil:
 			// ignored：同内容不再生成（27 §11.1.2）；candidate/active：幂等返回。
