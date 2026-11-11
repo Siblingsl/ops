@@ -50,11 +50,11 @@ func (r *agentJSONRecorder) Write(b []byte) (int, error) {
 		r.truncated = true
 		return len(b), nil
 	} else if len(b) > room {
-		_, _ = r.buf.Write(b[:room])
+		_, _ = r.buf.Write(b[:room]) // C-class：bytes.Buffer.Write 契约永不为 err
 		r.truncated = true
 		return len(b), nil
 	}
-	_, _ = r.buf.Write(b)
+	_, _ = r.buf.Write(b) // C-class：bytes.Buffer.Write 契约永不为 err
 	return len(b), nil
 }
 
