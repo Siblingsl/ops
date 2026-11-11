@@ -38,7 +38,8 @@ type previewAsset struct {
 
 func (s *Server) previewSigningKey() []byte {
 	mac := hmac.New(sha256.New, s.cfg.MasterKey)
-	_, _ = mac.Write([]byte("ops:public-preview:v1"))
+	// BE-02 C 类：hash.Hash.Write 契约永不返回错误（见 hash.Hash 文档）。
+	mac.Write([]byte("ops:public-preview:v1"))
 	return mac.Sum(nil)
 }
 
@@ -49,7 +50,8 @@ func (s *Server) signPreview(claims previewClaims) (string, error) {
 	}
 	encoded := base64.RawURLEncoding.EncodeToString(payload)
 	mac := hmac.New(sha256.New, s.previewSigningKey())
-	_, _ = mac.Write([]byte(encoded))
+	// BE-02 C 类：hash.Hash.Write 契约永不返回错误。
+	mac.Write([]byte(encoded))
 	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	return encoded + "." + signature, nil
 }
@@ -65,7 +67,8 @@ func (s *Server) verifyPreview(token string) (previewClaims, error) {
 		return claims, errNotFound
 	}
 	mac := hmac.New(sha256.New, s.previewSigningKey())
-	_, _ = mac.Write([]byte(payloadPart))
+	// BE-02 C 类：hash.Hash.Write 契约永不返回错误。
+	mac.Write([]byte(payloadPart))
 	if !hmac.Equal(signature, mac.Sum(nil)) {
 		return claims, errNotFound
 	}
@@ -256,6 +259,7 @@ func (s *Server) getPublicPreviewAsset(w http.ResponseWriter, r *http.Request) e
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	_, _ = w.Write(data)
-	return nil
+	// BE-02：与 preview_toutiao / artifact 下载同口径——写出失败上抛，不得静默成功。
+	_, err = w.Write(data)
+	return err
 }
