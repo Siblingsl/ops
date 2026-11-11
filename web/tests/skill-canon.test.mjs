@@ -13,17 +13,23 @@ const sandbox = { exports: {}, require, console, TextEncoder, TextDecoder, crypt
 vm.runInNewContext(compiled, sandbox)
 const { canonicalJSON, publishDigest } = sandbox.exports
 
+// DEEP-04 / 6.3 批1：与 Go 共用 testdata/skill-canon-vectors.json。
 test('TestSkillCanonicalJSONAndHashMatchGoVector', async () => {
-  const input = { b: '<>&/\n', a: '中😀' }
-  assert.equal(canonicalJSON(input), '{"a":"中😀","b":"<>&/\\u000a"}')
-  assert.equal(await sandbox.exports.canonHash(input), '32ef59ea492c258f2f5ba065bebbccab8aa775accc46aa804dbe55431e270abf')
-  assert.equal(canonicalJSON({ s: 'a"\\<>&/' }), '{"s":"a\\"\\\\<>&/"}')
-})
-
-test('TestSkillCanonicalJSONRecursiveKeyOrderAndIntegerBoundary', () => {
-  assert.equal(canonicalJSON({ Z: 1, a: 2, 中: 3, B: { y: 1, X: 2 } }), '{"B":{"X":2,"y":1},"Z":1,"a":2,"中":3}')
-  assert.equal(canonicalJSON({ '😀': 1, '\ue000': 2 }), '{"":2,"😀":1}')
-  assert.throws(() => canonicalJSON({ f: 1.5 }), /浮点数/)
+  const vectors = JSON.parse(fs.readFileSync(new URL('../../testdata/skill-canon-vectors.json', import.meta.url), 'utf8'))
+  for (const v of vectors) {
+    const input = JSON.parse(v.input_json)
+    if (v.reject) {
+      assert.throws(() => canonicalJSON(input), /浮点数/, v.name)
+      continue
+    }
+    if (v.same_hash) {
+      const other = JSON.parse(v.input_json_b)
+      assert.equal(await sandbox.exports.canonHash(input), await sandbox.exports.canonHash(other), v.name)
+      continue
+    }
+    assert.equal(canonicalJSON(input), v.canonical, v.name)
+    if (v.sha256) assert.equal(await sandbox.exports.canonHash(input), v.sha256, v.name)
+  }
 })
 
 test('TestSkillPublishDigestNormalizesFieldsAndCoversTarget', async () => {

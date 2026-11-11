@@ -1,6 +1,9 @@
 ﻿package skills
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -8,43 +11,59 @@ import (
 	"github.com/google/uuid"
 )
 
-// T-SK-35：C/H 规范向量覆盖键序、中文、emoji、控制转义、HTML 字符、LF。
+type skillCanonVector struct {
+	Name       string `json:"name"`
+	InputJSON  string `json:"input_json"`
+	InputJSONB string `json:"input_json_b,omitempty"`
+	Canonical  string `json:"canonical,omitempty"`
+	SHA256     string `json:"sha256,omitempty"`
+	Reject     bool   `json:"reject,omitempty"`
+	SameHash   bool   `json:"same_hash,omitempty"`
+}
+
+// T-SK-35 / DEEP-04：与 Web/桌面共用 testdata/skill-canon-vectors.json。
 func TestSkillCanonVector(t *testing.T) {
-	c, err := canonJSON(map[string]any{"b": "<>&/\n", "a": "中😀"})
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "skill-canon-vectors.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c != `{"a":"中😀","b":"<>&/\u000a"}` {
-		t.Fatalf("C(v) = %q", c)
-	}
-	if h := mustCanonHash(t, map[string]any{"b": "<>&/\n", "a": "中😀"}); h != "32ef59ea492c258f2f5ba065bebbccab8aa775accc46aa804dbe55431e270abf" {
-		t.Fatalf("H(v) = %s", h)
-	}
-	// 双引号与反斜杠转义；HTML 字符与 / 不转义。
-	c2, err := canonJSON(map[string]any{"s": "a\"\\<>&/"})
-	if err != nil {
+	var vectors []skillCanonVector
+	if err := json.Unmarshal(data, &vectors); err != nil {
 		t.Fatal(err)
 	}
-	if c2 != `{"s":"a\"\\<>&/"}` {
-		t.Fatalf("C2 = %q", c2)
-	}
-	// 键序按 UTF-8 字节序，递归生效。
-	c3, err := canonJSON(map[string]any{"Z": 1, "a": 2, "中": 3, "B": map[string]any{"y": 1, "X": 2}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c3 != `{"B":{"X":2,"y":1},"Z":1,"a":2,"中":3}` {
-		t.Fatalf("C3 = %q", c3)
-	}
-	// 浮点数拒绝。
-	if _, err := canonJSON(map[string]any{"f": 1.5}); err == nil {
-		t.Fatal("float should be rejected")
-	}
-	// 非规范输入（键序不同）不产生不同指纹（T-SK-35）。
-	h1 := mustCanonHash(t, map[string]any{"x": "a", "y": "b"})
-	h2 := mustCanonHash(t, map[string]any{"y": "b", "x": "a"})
-	if h1 != h2 {
-		t.Fatal("key order changed fingerprint")
+	for _, v := range vectors {
+		t.Run(v.Name, func(t *testing.T) {
+			var input any
+			if err := json.Unmarshal([]byte(v.InputJSON), &input); err != nil {
+				t.Fatal(err)
+			}
+			if v.Reject {
+				if _, err := canonJSON(input); err == nil {
+					t.Fatal("expected reject")
+				}
+				return
+			}
+			if v.SameHash {
+				var other any
+				if err := json.Unmarshal([]byte(v.InputJSONB), &other); err != nil {
+					t.Fatal(err)
+				}
+				if mustCanonHash(t, input) != mustCanonHash(t, other) {
+					t.Fatal("key order changed fingerprint")
+				}
+				return
+			}
+			c, err := canonJSON(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c != v.Canonical {
+				t.Fatalf("C(v) = %q, want %q", c, v.Canonical)
+			}
+			if v.SHA256 != "" && mustCanonHash(t, input) != v.SHA256 {
+				t.Fatalf("H(v) = %s, want %s", mustCanonHash(t, input), v.SHA256)
+			}
+		})
 	}
 }
 
