@@ -31,7 +31,8 @@ import { useWork, WorkHeaderAction } from './WorkLayout'
 const kindLabel: Record<MaterialKind, string> = { experience: '经历', opinion: '观点', case: '案例', data: '数据' }
 
 type RenderFinding = { section_id: string; section_heading: string; line: number; column: number; syntax: string; severity: string; excerpt: string; reason: string; suggestion: string }
-type RenderReport = { basis_revision: number; input_hash: string; rules_version: string; issues: RenderFinding[]; converted: RenderFinding[]; warnings: RenderFinding[]; total: number; truncated: boolean }
+type RenderFix = { section_id: string; syntax: string; from: string; to: string; reason: string; line: number; column: number; offset: number; length: number }
+type RenderReport = { basis_revision: number; input_hash: string; rules_version: string; issues: RenderFinding[]; converted: RenderFinding[]; warnings: RenderFinding[]; fix_suggestions?: RenderFix[]; total: number; truncated: boolean }
 
 function isRenderReport(value: unknown): value is RenderReport {
   if (!value || typeof value !== 'object') return false
@@ -42,6 +43,7 @@ function isRenderReport(value: unknown): value is RenderReport {
 }
 
 function RenderSyntaxCheck({ work, setWork, coordinator }: { work: Work; setWork: (work: Work) => void; coordinator: WorkSaveCoordinator }) {
+  const canWrite = useCanWrite()
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const [report, setReport] = useState<RenderReport | null>(null)
@@ -61,7 +63,7 @@ function RenderSyntaxCheck({ work, setWork, coordinator }: { work: Work; setWork
       setReport(result)
     } catch (e) {
       if (e instanceof ApiError && e.code === 'render_unsupported_syntax' && isRenderReport(e.detail)) {
-        setReport(e.detail as RenderReport)
+        setReport(e.detail)
       } else {
         setError(e instanceof ApiError && e.code === 'version_conflict' ? '作品在检查期间已修改，请刷新后重新检查。' : errorMessage(e))
       }
@@ -76,20 +78,56 @@ function RenderSyntaxCheck({ work, setWork, coordinator }: { work: Work; setWork
     scrollToSection(finding.section_id)
     window.setTimeout(() => emitEditor({ type: 'focus', sectionId: finding.section_id }), 250)
   }
+  const applyFix = async (fix: RenderFix) => {
+    if (busyRef.current || !canWrite) return
+    busyRef.current = true
+    setBusy(true)
+    setError('')
+    try {
+      await coordinator.flushAll()
+      const current = await get<Work>(`/works/${work.id}`)
+      setWork(current)
+      const section = current.sections.find(item => item.id === fix.section_id)
+      if (!section) throw new Error('对应段落已不存在，请重新检查。')
+      const { content_md: body } = section
+      if (fix.offset < 0 || fix.length < 0 || fix.offset + fix.length > body.length || body.slice(fix.offset, fix.offset + fix.length) !== fix.from) {
+        throw new Error('原文已变化，请重新检查后再采用。')
+      }
+      await patch(`/sections/${section.id}`, { content_md: body.slice(0, fix.offset) + fix.to + body.slice(fix.offset + fix.length), base_revision: section.revision })
+      const refreshed = await get<Work>(`/works/${work.id}`)
+      setWork(refreshed)
+      try {
+        const result = await post<RenderReport>(`/works/${work.id}/render-check`, { basis_revision: refreshed.revision })
+        if (!isRenderReport(result)) throw new Error('语法报告格式无效，请刷新后重试。')
+        setReport(result)
+      } catch (e) {
+        if (e instanceof ApiError && e.code === 'render_unsupported_syntax' && isRenderReport(e.detail)) setReport(e.detail)
+        else throw e
+      }
+      toast.success('已采用此修复')
+    } catch (e) {
+      setError(errorMessage(e))
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
   const findingList = (items: RenderFinding[], title: string) => items.length > 0 && (
     <div className="space-y-2">
       <h3 className="text-xs font-semibold text-mist-700">{title}（{items.length}）</h3>
       {items.map((finding, index) => {
         const sectionIndex = work.sections.findIndex(section => section.id === finding.section_id)
+        const fix = report?.fix_suggestions?.find(item => item.section_id === finding.section_id && item.syntax === finding.syntax && item.line === finding.line && item.column === finding.column)
         return <div key={`${finding.section_id}:${finding.line}:${finding.column}:${finding.syntax}:${index}`} className="rounded-lg border border-mist-200 bg-white p-3 text-xs">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-mist-800">{finding.section_heading || `第 ${sectionIndex + 1} 段`}</span>
             <span className="text-mist-500">第 {finding.line} 行，第 {finding.column} 列</span>
             {sectionIndex >= 0 && <Button size="sm" variant="ghost" onClick={() => jump(finding)}>定位到第 {sectionIndex + 1} 段</Button>}
+            {fix && canWrite && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void applyFix(fix)}>采用此修复</Button>}
           </div>
           <p className="mt-1 text-mist-600">{finding.reason}</p>
           <p className="mt-1 font-mono text-mist-500">{finding.excerpt}</p>
-          <p className="mt-1 text-mist-500">建议：{finding.suggestion}</p>
+          <p className="mt-1 text-mist-500">建议：{fix?.reason || finding.suggestion}</p>
         </div>
       })}
     </div>

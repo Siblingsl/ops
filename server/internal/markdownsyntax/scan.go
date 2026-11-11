@@ -57,15 +57,16 @@ type Finding struct {
 }
 
 type Report struct {
-	BasisRevision int       `json:"basis_revision"`
-	InputHash     string    `json:"input_hash"`
-	RulesVersion  string    `json:"rules_version"`
-	Issues        []Finding `json:"issues"`
-	Converted     []Finding `json:"converted"`
-	Warnings      []Finding `json:"warnings"`
-	Total         int       `json:"total"`
-	Truncated     bool      `json:"truncated"`
-	HasErrors     bool      `json:"-"`
+	BasisRevision   int             `json:"basis_revision"`
+	InputHash       string          `json:"input_hash"`
+	RulesVersion    string          `json:"rules_version"`
+	Issues          []Finding       `json:"issues"`
+	Converted       []Finding       `json:"converted"`
+	Warnings        []Finding       `json:"warnings"`
+	FixSuggestions  []FixSuggestion `json:"fix_suggestions,omitempty"`
+	Total           int             `json:"total"`
+	Truncated       bool            `json:"truncated"`
+	HasErrors       bool            `json:"-"`
 }
 
 type byteRange struct{ start, end int }
@@ -161,6 +162,8 @@ func Scan(sections []Section, basisRevision int, assetIDs map[string]bool) Repor
 			report.Issues = append(report.Issues, item.finding)
 		}
 	}
+	// DEEP-02：可安全自动修复的子集挂到报告上；不可修的仍只报告。
+	report.FixSuggestions = SuggestFixes(sections)
 	return report
 }
 
