@@ -1,6 +1,7 @@
 import { toast } from 'sonner'
 
 import { apiUrl } from './api-base'
+import { getRetryDelayMs, shouldRetryGet } from './api-retry'
 
 export class ApiError extends Error {
   status: number
@@ -81,7 +82,16 @@ async function fetchResponse(method: string, path: string, payload: BodyInit | u
       requestId = res.headers.get('X-Request-ID') || ''
       if (streaming && res.ok && res.headers.get('Content-Type')?.startsWith('text/event-stream')) return res
       if (res.body) res = new Response(await res.arrayBuffer(), { status: res.status, statusText: res.statusText, headers: res.headers })
-      if (method === 'GET' && attempt === 0 && [502, 503, 504].includes(res.status)) continue
+      // DEV-P09：仅 GET 对网关错误重试；退避 / Retry-After；非 GET 立即失败。
+      if (shouldRetryGet(method, attempt, res.status)) {
+        const delay = getRetryDelayMs(attempt, res.headers.get('Retry-After'))
+        await new Promise<void>((resolve) => {
+          const t = window.setTimeout(() => resolve(), delay)
+          signal.addEventListener('abort', () => { window.clearTimeout(t); resolve() }, { once: true })
+        })
+        if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+        continue
+      }
       if (res.ok) return res
       throw await parseError(res)
     }
