@@ -1,4 +1,4 @@
-package app
+﻿package skills
 
 import (
 	"crypto/sha256"
@@ -261,4 +261,24 @@ func skillPublishDigest(operation string, skillID *uuid.UUID, scope string, acco
 		return "", err
 	}
 	return "sp1:" + h, nil
+}
+
+// ---------- 导出别名（app 薄封装用） ----------
+
+type BindingFinger = skillBindingFinger
+type ImpactBinding = skillImpactBinding
+
+func CanonJSON(v any) (string, error) { return canonJSON(v) }
+func CanonHash(v any) (string, error) { return canonHash(v) }
+func CanonUUID(u *uuid.UUID) any       { return canonUUID(u) }
+func CanonRFC3339(t time.Time) string  { return canonRFC3339(t) }
+func ContentHash(f SkillFields) string { return skillContentHash(f) }
+func PartitionFingerprint(accountID uuid.UUID, audience *uuid.UUID, items []BindingFinger) (string, error) {
+	return skillPartitionFingerprint(accountID, audience, items)
+}
+func ImpactToken(skillID uuid.UUID, revision int64, action string, items []ImpactBinding) (string, error) {
+	return skillImpactToken(skillID, revision, action, items)
+}
+func PublishDigest(operation string, skillID *uuid.UUID, scope string, accountID *uuid.UUID, f SkillFields) (string, error) {
+	return skillPublishDigest(operation, skillID, scope, accountID, f)
 }

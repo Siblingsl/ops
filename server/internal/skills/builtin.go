@@ -1,4 +1,4 @@
-package app
+﻿package skills
 
 import (
 	"fmt"
@@ -13,11 +13,14 @@ import (
 // skillBuiltinNamespace 是第 13.1 节固定的 UUIDv5 命名空间。
 var skillBuiltinNamespace = uuid.MustParse("5ee2a4a9-9633-4a48-b64c-587acbce98d0")
 
-type builtinSkill struct {
+type Builtin struct {
 	Key     string
 	Fields  SkillFields
 	Version int64
 }
+
+// 包内旧名（builtin 表与校验仍用）。
+type builtinSkill = Builtin
 
 // builtinSkills 为第 13.1 节当前已登记的内置；DEV-CX11 增量不改变既有 C0/C1 任务矩阵。
 var builtinSkills = []builtinSkill{
@@ -215,3 +218,13 @@ func checkBuiltinRegistry() error {
 	}
 	return nil
 }
+
+// ---------- 导出别名（app 薄封装用） ----------
+
+// Builtins 是内置注册表只读视图（切片头只读约定；勿原地改 Fields）。
+var Builtins = builtinSkills
+
+func BuiltinByKey(key string) *Def     { return skillBuiltinByKey(key) }
+func BuiltinByID(id uuid.UUID) *Def    { return skillBuiltinByID(id) }
+func BuiltinUUID(key string) uuid.UUID { return skillBuiltinUUID(key) }
+func CheckBuiltinRegistry() error      { return checkBuiltinRegistry() }

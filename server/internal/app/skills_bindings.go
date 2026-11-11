@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"context"
@@ -481,7 +481,7 @@ func (s *Server) getSkillContext(w http.ResponseWriter, r *http.Request) error {
 			}
 			items = append(items, map[string]any{
 				"id": it.Def.ID, "name": it.Def.Fields.Name, "scope": it.Def.Scope,
-				"revision": it.Def.Revision, "content_hash": it.Def.contentHash(),
+				"revision": it.Def.Revision, "content_hash": it.Def.EnsureContentHash(),
 				"selected": selected, "used": false, "reason": reason, "chars": 0,
 			})
 		}
@@ -500,7 +500,7 @@ func (s *Server) getSkillContext(w http.ResponseWriter, r *http.Request) error {
 			sel := reason == nil || tr.Reason == skillReasonBudget
 			items = append(items, map[string]any{
 				"id": tr.Def.ID, "name": tr.Def.Fields.Name, "scope": tr.Def.Scope,
-				"revision": tr.Def.Revision, "content_hash": tr.Def.contentHash(),
+				"revision": tr.Def.Revision, "content_hash": tr.Def.EnsureContentHash(),
 				"selected": sel, "used": tr.Used, "reason": reason, "chars": tr.Chars,
 			})
 			if tr.Used && tr.Def.Scope == "personal" {
@@ -522,7 +522,12 @@ func strDeref(s *string) string {
 	return *s
 }
 
-// skillRoutes 注册技能接口（23 文档第 11 节）。
+// registerSkillsRoutes 注册技能接口（23 文档第 11 节；DEV-S01 命名）。
+func (s *Server) registerSkillsRoutes(r chi.Router) {
+	s.skillRoutes(r)
+}
+
+// skillRoutes 保留旧名，供未改完的调用方过渡。
 func (s *Server) skillRoutes(r chi.Router) {
 	r.Get("/skills", s.h(s.listSkills))
 	r.Post("/skills", s.h(s.createSkill))

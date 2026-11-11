@@ -1,8 +1,8 @@
 # BE-09 `internal/app` 单包拆分评估
 
-> 依据：`docs/33` §11.1 / §11.8 BE-09；≡ DEV-S06。**只评估，不移动任何文件。**
-> 决策登记：`docs/90` **D-176**（待拍板后方可实施）。
-> 实测日期：2026-11-11。口径：排除 `*_test.go` 的生产文件，除非另注。
+> 依据：`docs/33` §11.1 / §11.8 BE-09；≡ DEV-S06。
+> 决策登记：`docs/90` **D-176**（**已批准分阶段实施**；Phase 1 已落地）。
+> 评估实测日期：2026-11-11。口径：排除 `*_test.go` 的生产文件，除非另注。
 
 ## 1. 现状基线【实测】
 
@@ -50,7 +50,7 @@
 | 阶段 | 动作 | 回归清单 | 预估打断面 |
 |---|---|---|---|
 | 0 | 本评估 + D-176 拍板 | 无代码 | — |
-| 1 | 抽 `internal/skills`（已有 querier，耦合最低） | `TestSkill*`、`TestHC28`、`go test ./internal/app -run 'TestSK\|TestSkill'`、L3 全量 | 技能路由 import 路径；HC-28 清单路径字符串不变 |
+| 1 | **已完成**：抽 `internal/skills` 纯领域核 + `platformfmt`；HTTP/resolve 仍在 `app` | `TestSkill*`、`TestHC28`、`go test ./internal/skills` 已过；L3 全量可另跑 | 技能路由路径不变；HC-28 清单路径字符串不变；app 经 `skills_bridge` 兼容旧符号 |
 | 2 | 抽 `internal/cx`（只读/校验面已有小包） | `TestCX*`、`TestHC`、documentparse 联调 | cx HTTP 注册仍在 app |
 | 3 | 抽 `internal/publish` | `TestPublish`、`TestBE06`、主链推送段 | `pushWechat` 与 work 状态交叉 |
 | 4 | 抽 `internal/agent`（最大） | `TestW*`/`TestA13`/`TestBE01`/`TestHC26-31`、HC-28 工具目录 | 工具 Path 与 `agentCatalog` 同源；**最易炸** |
@@ -74,7 +74,9 @@
 | B. 只抽接口、不搬文件 | 继续在 `app` 内用 querier 下传 | 若近期仍有 BE/DT 在途，可作过渡 |
 | C. 一次性大搬迁 | 禁止（与「一次一个任务包」冲突） | 否决 |
 
-**本任务交付**：本评估 + D-176 登记；**零文件移动**。
+**评估阶段交付**：本评估 + D-176 登记（当时零文件移动）。
+
+**Phase 1 交付（D-176 批准后）**：`server/internal/platformfmt`、`server/internal/skills`（fields/def/canon/builtin）、`app/skills_bridge.go`；删除 `app/skills_canon.go`、`app/skills_builtin.go` 与 `skills.go` 内重复核。HTTP / `resolveSkillSet` 仍在 `app`。
 
 ## 7. 复算命令
 

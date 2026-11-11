@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"context"
@@ -225,7 +225,7 @@ func agentSkillCallSnapshot(st *agentRunState) *SkillSnapshot {
 			reason = ""
 			itemChars = runeLen(skillSlotItemText(item.Def.Fields))
 		}
-		snap.addUseItem(SkillUseItem{ID: item.Def.ID, Name: item.Def.Fields.Name, Scope: item.Def.Scope, Revision: item.Def.Revision, ContentHash: item.Def.contentHash(), Selected: true, Used: used, Reason: nilIfEmpty(reason), Chars: itemChars, Seq: seq})
+		snap.addUseItem(SkillUseItem{ID: item.Def.ID, Name: item.Def.Fields.Name, Scope: item.Def.Scope, Revision: item.Def.Revision, ContentHash: item.Def.EnsureContentHash(), Selected: true, Used: used, Reason: nilIfEmpty(reason), Chars: itemChars, Seq: seq})
 	}
 	return snap
 }
@@ -339,7 +339,7 @@ func agentSkillReceipt(c *agentSkillContext, item *agentSkillCatalogItem, status
 	}
 	return map[string]any{
 		"ok": true, "status": status, "skill_id": item.Def.ID, "name": item.Def.Fields.Name,
-		"revision": item.Def.Revision, "content_hash": item.Def.contentHash(),
+		"revision": item.Def.Revision, "content_hash": item.Def.EnsureContentHash(),
 		"catalog_id": c.CatalogID, "work_id": workID, "chars": chars,
 	}
 }
@@ -460,7 +460,7 @@ func (s *Server) agentSkillEffectiveItems(ctx context.Context, st *agentRunState
 		items = append(items, map[string]any{
 			"id": item.Def.ID, "ref": item.Ref, "name": item.Def.Fields.Name,
 			"hint": skillCatalogHint(item.Def.Fields), "scope": item.Def.Scope,
-			"revision": item.Def.Revision, "content_hash": item.Def.contentHash(), "priority": item.Priority,
+			"revision": item.Def.Revision, "content_hash": item.Def.EnsureContentHash(), "priority": item.Priority,
 		})
 	}
 	return c.CatalogID.String(), items, nil

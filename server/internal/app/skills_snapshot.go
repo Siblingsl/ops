@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"context"
@@ -94,7 +94,7 @@ func (s *Server) loadSkillSnapshot(ctx context.Context, in SkillResolveInput) (*
 		}
 		u := SkillUseItem{
 			ID: it.Def.ID, Name: it.Def.Fields.Name, Scope: it.Def.Scope,
-			Revision: it.Def.Revision, ContentHash: it.Def.contentHash(),
+			Revision: it.Def.Revision, ContentHash: it.Def.EnsureContentHash(),
 			Selected: it.Reason == "" || it.Reason == skillReasonBudget,
 			Used:     tr.Used, Chars: tr.Chars,
 			Reason: nilIfEmpty(reason), Seq: seq,

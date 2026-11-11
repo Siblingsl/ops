@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"bytes"
@@ -55,7 +55,7 @@ func skillDTOOf(d *skillDef, createdBy *uuid.UUID, createdAt, updatedAt *time.Ti
 		Platforms:    d.Fields.Platforms, ContentFormats: d.Fields.ContentFormats, TaskTypes: d.Fields.TaskTypes,
 		TaskEnabled: d.Fields.TaskEnabled, AgentEnabled: d.Fields.AgentEnabled, Status: d.Fields.Status,
 		ID: d.ID, Scope: d.Scope, AccountID: d.AccountID, Revision: d.Revision,
-		ContentHash: d.contentHash(), Origin: d.Origin, SourceKey: d.SourceKey,
+		ContentHash: d.EnsureContentHash(), Origin: d.Origin, SourceKey: d.SourceKey,
 		CreatedBy: createdBy, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 }
@@ -475,7 +475,7 @@ func (s *Server) listSkillsEffective(w http.ResponseWriter, r *http.Request, idv
 		items = append(items, map[string]any{
 			"id": it.Def.ID, "ref": nil, "name": it.Def.Fields.Name,
 			"hint": skillCatalogHint(it.Def.Fields), "scope": it.Def.Scope,
-			"revision": it.Def.Revision, "content_hash": it.Def.contentHash(), "priority": it.Priority,
+			"revision": it.Def.Revision, "content_hash": it.Def.EnsureContentHash(), "priority": it.Priority,
 		})
 	}
 	snapshot, err := skillEffectiveSnapshotHash(acc.ID, workID, res.Selected)

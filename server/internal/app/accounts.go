@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"ops/internal/platformfmt"
 	"ops/internal/secure"
 	"ops/internal/wechat"
 )
@@ -52,24 +53,10 @@ type CredState struct {
 	LastResult  string     `json:"last_result,omitempty"`
 }
 
-// formatMatrix 是账号类型（内容形态）的唯一权威清单（D-048 第 9 节，2026-10-10 确认）。
-// 每个类型必须有真实工作流支持：qa_article/briefing/list_note/script 复用文字流＋专属模板，
-// card_post 走逐卡 AI 生图流；类型创建后选定，可经显式确认在同平台内迁移（D-123），
-// 跨平台与矩阵外一律拒绝（updateAccount）。
-var formatMatrix = map[string][]string{
-	"wechat_mp": {"long_article", "qa_article", "briefing", "card_post", "script", "comic"},
-	"xhs":       {"image_note", "list_note", "card_post", "script", "comic"},
-	"toutiao":   {"long_article", "micro_post"},
-}
+// formatMatrix / validFormat：权威清单在 platformfmt（D-176 Phase1，与 skills 共用）。
+var formatMatrix = platformfmt.FormatMatrix
 
-func validFormat(platform, format string) bool {
-	for _, f := range formatMatrix[platform] {
-		if f == format {
-			return true
-		}
-	}
-	return false
-}
+func validFormat(platform, format string) bool { return platformfmt.Valid(platform, format) }
 
 const accountCols = `a.id, a.platform, a.name, a.content_format, a.type_note, a.status, a.daily_push_limit, a.created_at, a.is_demo,
 	c.app_id, c.app_secret_enc, c.last_check_at, c.last_check_ok, c.last_check_result, a.datacube_state,
