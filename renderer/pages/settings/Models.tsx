@@ -11,6 +11,7 @@ import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useInvalidate, useMe } from '@/lib/session'
 import type { AILimit, ModelCapability, ModelRoute, Provider } from '@/lib/types'
 import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
+import { usePageVisible } from '@/lib/visibility'
 
 // DEV-U101（12 文档）：供应商能力自检结果。
 interface SelfTestProbe { key: string; label: string; ok: boolean; skipped: boolean; latency_ms: number; detail: string }
@@ -493,7 +494,14 @@ export default function Models() {
   const isOwner = me?.role === 'owner'
   const desktop = isElectronDesktop(navigator.userAgent)
   const embedded = useEmbeddedSettings()
-  const { data, isLoading, refetch } = useQuery({ queryKey: ['providers'], queryFn: () => get<Provider[]>('/model-providers'), refetchInterval: 5000 })
+  const pageVisible = usePageVisible()
+  // DEV-P08：隐藏页停轮询（沿用 notifications 的 visible 守卫）。
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ['providers'],
+    queryFn: () => get<Provider[]>('/model-providers'),
+    refetchInterval: pageVisible ? 5000 : false,
+    refetchIntervalInBackground: false,
+  })
   const [dialog, setDialog] = useState<{ editing: Provider | null } | null>(null)
   const [quick, setQuick] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, LoaderCircle, Square } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { get, post } from '@/lib/api'
+import { usePageVisible } from '@/lib/visibility'
 
 // DEV-AI27-15 第二批（W15b UI）：工作视图"任务"页协作区（27 §11.3.1）。
 // 折叠态：仅显示"N 项进行中 / M 项完成"；展开态：子任务名称/状态/单项停止。
@@ -93,6 +94,7 @@ export function DelegationPanel({ conversationId, onStopped, onNavigateArtifact,
   const [stopping, setStopping] = useState('')
   const [adopting, setAdopting] = useState('')
   const [error, setError] = useState('')
+  const pageVisible = usePageVisible()
 
   const reload = useCallback(async () => {
     if (!conversationId) return
@@ -105,12 +107,13 @@ export function DelegationPanel({ conversationId, onStopped, onNavigateArtifact,
     }
   }, [conversationId])
 
+  // DEV-P08：隐藏页停 5s 轮询。
   useEffect(() => {
-    if (!conversationId) return
+    if (!conversationId || !pageVisible) return
     void reload()
     const timer = setInterval(() => void reload(), 5000)
     return () => clearInterval(timer)
-  }, [conversationId, reload])
+  }, [conversationId, reload, pageVisible])
 
   const stopOne = useCallback(async (delegationID: string) => {
     setStopping(delegationID)
