@@ -1,40 +1,38 @@
-import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Archive, ArchiveRestore, AtSign, Bot, CalendarClock, ChevronDown, ChevronLeft, Clipboard, FileText, FolderPlus, GitBranch, LoaderCircle, Menu, RotateCcw,
-  MessageSquarePlus, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Search, Send, Settings2, Sparkles, Square, Trash2, X,
+  AtSign, Bot, CalendarClock, FileText, LoaderCircle, Menu, RotateCcw,
+  Paperclip, Send, Settings2, Sparkles, Square, X,
 } from 'lucide-react'
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useParams } from 'react-router-dom' // AG-01: Added useNavigate for navigation to settings pages
 import { toast } from 'sonner'
-import { AIFeedback } from '@/components/refs'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
-import { Button, cn, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
-import { ApiError, del, errorMessage, get, patch, post, stream, uploadFormData } from '@/lib/api'
-import { assetUrl } from '@/lib/api-base'
+import { Button, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
+import { del, errorMessage, get, patch, post, uploadFormData } from '@/lib/api'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useAccounts, useCurrentAccount } from '@/lib/session'
 import { useSavePrefs } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
 import {
-  type AgentAttachment, type AgentBootstrap, type AgentConversation, type AgentConversationDetail, type AgentConversationListItem,
-  type AgentConversationGroup, type AgentConversationPage, type AgentEventEnvelope, type AgentMessage, type AgentRunAcceptance, type AgentMode,
-  type AgentPlan, type AgentQuestion,
-  streamAgentEvents, useAgentBootstrap,
+  type AgentAttachment, type AgentBootstrap, type AgentConversation, type AgentConversationDetail,
+  type AgentMessage, type AgentMode, type AgentQuestion,
+  useAgentBootstrap,
 } from '@/lib/agent'
 import { AgentMarkdown } from '@/lib/agent-markdown'
 import { AgentActionCards } from '@/pages/agent/ActionCards'
-import { ArtifactPanel } from '@/pages/agent/ArtifactPanel'
-import { browserEvidenceNotice } from '@/pages/agent/browser-evidence'
 import { browserStore, clearPartial, type PartialStream, readPartial, savePartial } from '@/pages/agent/partial-stream'
 import { ContextPickerDialog, SkillPickerDialog, type AgentContextSelection, type AgentSkillSelection } from '@/pages/agent/ContextPickers'
 import { AgentPlanCard, AgentQuestionCard } from '@/pages/agent/PlansQuestions'
-import { GoalPanel } from '@/pages/agent/GoalPanel'
-import { RoutinePanel } from '@/pages/agent/RoutinePanel'
 import { DelegationPanel } from '@/pages/agent/DelegationPanel'
 import { AttachmentReceipt } from '@/pages/agent/AttachmentReceipt'
-
-const pageSize = 30
+import { AgentConversationList } from '@/pages/agent/ConversationList'
+import {
+  AgentModeSelect, BrowserEvidenceNotice, MessageView, RunStatus,
+  attachmentVariantURL, modelKey,
+} from '@/pages/agent/MessageChrome'
+import { useAgentRun } from '@/pages/agent/useAgentRun'
+import { AgentWorkbenchPanels } from '@/pages/agent/Workbench'
 
 type DraftAttachment = {
   clientID: string
@@ -44,410 +42,6 @@ type DraftAttachment = {
   retryable?: boolean
   attachment?: AgentAttachment
   error?: string
-}
-
-function attachmentVariantURL(value: string, variant: 'thumb' | 'original') {
-  // D-153：附件 URL 由后端返回相对路径，跨源部署（前端在 CF、后端在云服务器）时必须先补上 API 基址。
-  const url = new URL(assetUrl(value), window.location.origin)
-  url.searchParams.set('variant', variant)
-  return url.href
-}
-
-function modelKey(providerID: string | null | undefined, model: string | null | undefined) {
-  return providerID && model ? `${providerID}::${model}` : ''
-}
-
-function splitDate(value: string) {
-  const date = new Date(value)
-  const today = new Date()
-  const start = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
-  const days = Math.floor((start(today) - start(date)) / 86_400_000)
-  if (days <= 0) return '今天'
-  if (days === 1) return '昨天'
-  if (days < 7) return '7 天内'
-  return '更早'
-}
-
-function messageTime(value: string) {
-  return new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
-}
-
-function AgentConversationList({
-  currentID, search, setSearch, onSelect, onNew, onClose, sidebarTitle, organizeEnabled = false, goalsEnabled = false,
-}: {
-  currentID?: string; search: string; setSearch: (v: string) => void
-  onSelect: (id: string, matchedSeq?: number) => void; onNew: () => void; onClose?: () => void
-  sidebarTitle?: string
-  organizeEnabled?: boolean
-  goalsEnabled?: boolean
-}) {
-  const qc = useQueryClient()
-  const accounts = useAccounts()
-  const [debouncedSearch, setDebouncedSearch] = useState(search)
-  const [archived, setArchived] = useState(false)
-  const [accountID, setAccountID] = useState('')
-  const [groupID, setGroupID] = useState('')
-  const [stateFilter, setStateFilter] = useState('')
-  const [groupDialog, setGroupDialog] = useState<{ id?: string; name: string } | null>(null)
-  const [groupManageOpen, setGroupManageOpen] = useState(false)
-  const [groupBusy, setGroupBusy] = useState(false)
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300)
-    return () => window.clearTimeout(timer)
-  }, [search])
-  const groupQuery = useQuery({
-    queryKey: ['agent-conversation-groups'],
-    queryFn: () => get<AgentConversationGroup[]>('/agent/conversation-groups'),
-    enabled: organizeEnabled,
-  })
-  const queryParams = new URLSearchParams({ limit: String(pageSize) })
-  if (debouncedSearch) queryParams.set('q', debouncedSearch)
-  if (organizeEnabled || goalsEnabled) {
-    if (stateFilter === 'task' && goalsEnabled) queryParams.set('archived', 'all')
-    else if (organizeEnabled && archived) queryParams.set('archived', 'true')
-    if (accountID) queryParams.set('account_id', accountID)
-    if (groupID) queryParams.set('group_id', groupID)
-    if (stateFilter) queryParams.set('state', stateFilter)
-  }
-  const list = useInfiniteQuery({
-    queryKey: ['agent-conversations', debouncedSearch, archived, accountID, groupID, stateFilter, organizeEnabled, goalsEnabled],
-    queryFn: ({ pageParam }) => get<AgentConversationPage>(`/agent/conversations?${queryParams.toString()}${pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : ''}`),
-    initialPageParam: '' as string,
-    getNextPageParam: (page) => page.next_cursor ?? undefined,
-  })
-  const sentinel = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!sentinel.current || !list.hasNextPage || list.isFetchingNextPage) return
-    const node = sentinel.current
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) void list.fetchNextPage()
-    }, { rootMargin: '200px' })
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [list.hasNextPage, list.isFetchingNextPage, list.fetchNextPage])
-
-  const items = list.data?.pages.flatMap((page) => page.items) ?? []
-  const pinned = archived ? [] : items.filter((item) => item.pinned_at)
-  // 归档视图是平铺的恢复列表：pinned_at 不再把会话排除掉，否则“置顶后归档”的会话在 UI 里不可达。
-  const rest = archived ? items : items.filter((item) => !item.pinned_at)
-  const groups = ['今天', '昨天', '7 天内', '更早'].map((label) => ({ label, items: rest.filter((item) => splitDate(item.last_message_at) === label) }))
-  const namedGroups = groupQuery.data ?? []
-  const groupedRows = organizeEnabled && !groupID
-    ? namedGroups.flatMap((group) => {
-      const members = rest.filter((item) => item.group_id === group.id)
-      return members.length ? [{ label: group.name, groupID: group.id, items: members }] : []
-    })
-    : []
-  const ungrouped = organizeEnabled && !groupID ? rest.filter((item) => !item.group_id) : rest
-  const dateGroups = ['今天', '昨天', '7 天内', '更早'].map((label) => ({ label, items: ungrouped.filter((item) => splitDate(item.last_message_at) === label) }))
-  const invalidateOrganize = async () => {
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: ['agent-conversations'] }),
-      qc.invalidateQueries({ queryKey: ['agent-conversation-groups'] }),
-    ])
-  }
-  const saveGroup = async () => {
-    if (!groupDialog || !groupDialog.name.trim() || groupBusy) return
-    setGroupBusy(true)
-    try {
-      if (groupDialog.id) await patch(`/agent/conversation-groups/${groupDialog.id}`, { name: groupDialog.name.trim() })
-      else await post('/agent/conversation-groups', { name: groupDialog.name.trim() })
-      setGroupDialog(null)
-      await invalidateOrganize()
-    } catch (error) { toast.error(errorMessage(error)) }
-    finally { setGroupBusy(false) }
-  }
-  const removeGroup = async (group: AgentConversationGroup) => {
-    if (!(await confirm({ title: `删除分组「${group.name}」？`, desc: '其中的对话会保留，并变为未分组。', confirmText: '删除分组', danger: true }))) return
-    try {
-      await del(`/agent/conversation-groups/${group.id}`)
-      if (groupID === group.id) setGroupID('')
-      await invalidateOrganize()
-    } catch (error) { toast.error(errorMessage(error)) }
-  }
-
-  const row = (item: AgentConversationListItem) => (
-    <ConversationRow key={item.id} item={item} groups={namedGroups} organizeEnabled={organizeEnabled} selected={item.id === currentID} onChanged={invalidateOrganize} onSelect={() => { onSelect(item.id, item.matched_message_seq ?? undefined); onClose?.() }} />
-  )
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {sidebarTitle !== undefined && <div className="mb-1.5 min-w-0 px-6 pt-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400"><div className="truncate" title={sidebarTitle}>{sidebarTitle}</div></div>}
-      <div className={cn('flex items-center gap-2', sidebarTitle !== undefined ? 'px-3 pb-3 pt-0' : 'p-3')}>
-        <Button variant="primary" className="flex-1" icon={<MessageSquarePlus className="size-4" />} onClick={onNew}>新对话</Button>
-        {onClose && <IconButton label="关闭对话列表" onClick={onClose}><X className="size-4" /></IconButton>}
-      </div>
-      <label className="relative mx-3 mb-3 block">
-        <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-mist-400" />
-        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索对话" className="pl-9" aria-label="搜索对话" />
-      </label>
-      {organizeEnabled && <div className="mx-3 mb-3 grid grid-cols-2 gap-1.5">
-        {stateFilter !== 'task' && <Select aria-label="筛选归档状态" value={archived ? 'archived' : 'active'} onChange={(event) => setArchived(event.target.value === 'archived')}>
-          <option value="active">当前对话</option><option value="archived">已归档</option>
-        </Select>}
-        <Select aria-label="筛选对话状态" value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}>
-          <option value="">全部状态</option><option value="active">进行中</option><option value="needs_action">待我处理</option><option value="unread">未读</option>{goalsEnabled && <option value="task">我的任务</option>}
-        </Select>
-        <Select aria-label="按账号筛选" value={accountID} onChange={(event) => setAccountID(event.target.value)}>
-          <option value="">全部账号</option>{(accounts.data ?? []).map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
-        </Select>
-        <Select aria-label="按分组筛选" value={groupID} onChange={(event) => setGroupID(event.target.value)}>
-          <option value="">全部分组</option><option value="none">未分组</option>{namedGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-        </Select>
-        <Button className="col-span-2" variant="ghost" size="sm" icon={<FolderPlus className="size-4" />} disabled={(namedGroups.length >= 20)} onClick={() => setGroupDialog({ name: '' })}>{namedGroups.length >= 20 ? '分组已达 20 个上限' : '新建分组'}</Button>
-        <Button className="col-span-2" variant="ghost" size="sm" onClick={() => setGroupManageOpen(true)}>管理分组（{namedGroups.length}）</Button>
-      </div>}
-      {!organizeEnabled && goalsEnabled && <label className="mx-3 mb-3 block"><Select aria-label="筛选对话状态" value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}><option value="">全部对话</option><option value="task">我的任务（含已归档）</option></Select></label>}
-      {goalsEnabled && stateFilter === 'task' && <p className="mx-4 -mt-2 mb-2 text-[11px] text-mist-400">跨会话显示任务，包含已归档对话。</p>}
-      {organizeEnabled && groupQuery.isError && <p role="alert" className="mx-4 mb-2 text-xs text-danger">分组加载失败。<button type="button" className="ml-1 underline" onClick={() => void groupQuery.refetch()}>重试</button></p>}
-      {list.isLoading ? <div className="px-4 py-3 text-sm text-mist-400">正在加载对话…</div> : list.isError ? (
-        <div className="px-4 py-3 text-sm text-danger">{errorMessage(list.error)} <button type="button" className="ml-1 underline" onClick={() => void list.refetch()}>重试</button></div>
-      ) : (
-        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-          {pinned.length > 0 && <ConversationGroup label="置顶" icon={<Pin className="size-3" />}>{pinned.map(row)}</ConversationGroup>}
-          {groupedRows.map(({ label, groupID: id, items: grouped }) => <ConversationGroup key={id} label={label} actions={<>
-            <IconButton label={`重命名分组 ${label}`} className="size-6" onClick={() => setGroupDialog({ id, name: label })}><Pencil className="size-3" /></IconButton>
-            <IconButton label={`删除分组 ${label}`} className="size-6" onClick={() => { const group = namedGroups.find((item) => item.id === id); if (group) void removeGroup(group) }}><Trash2 className="size-3" /></IconButton>
-          </>}>{grouped.map(row)}</ConversationGroup>)}
-          {(organizeEnabled ? dateGroups : groups).map(({ label, items: grouped }) => grouped.length > 0 && <ConversationGroup key={label} label={label}>{grouped.map(row)}</ConversationGroup>)}
-          {!items.length && <div className="px-3 py-8 text-center text-[13px] text-mist-400">{search ? '没有匹配的对话' : archived ? '没有已归档的对话' : '还没有对话'}</div>}
-          <div ref={sentinel} className="h-1" />
-          {list.isFetchingNextPage && <div className="py-3 text-center text-xs text-mist-400">加载更多…</div>}
-        </div>
-      )}
-      {groupDialog && <Dialog open onClose={() => setGroupDialog(null)} title={groupDialog.id ? '重命名分组' : '新建私有分组'} footer={<><Button variant="ghost" onClick={() => setGroupDialog(null)}>取消</Button><Button variant="primary" onClick={() => void saveGroup()} disabled={!groupDialog.name.trim() || groupBusy}>保存</Button></>}>
-        <Input autoFocus aria-label="分组名称" value={groupDialog.name} maxLength={30} onChange={(event) => setGroupDialog({ ...groupDialog, name: event.target.value })} onKeyDown={(event) => isEnterWithoutComposition(event.nativeEvent) && void saveGroup()} />
-      </Dialog>}
-      {groupManageOpen && <Dialog open onClose={() => setGroupManageOpen(false)} title="管理私有分组" desc="删除分组只会解除会话归类，不会删除对话。">
-        {groupQuery.isLoading ? <p className="py-4 text-sm text-mist-500">正在加载分组…</p> : !namedGroups.length ? <p className="py-4 text-sm text-mist-500">还没有分组。</p> : <ul className="max-h-80 space-y-1 overflow-y-auto">
-          {namedGroups.map((group) => <li key={group.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-mist-700">
-            <span className="min-w-0 flex-1 truncate">{group.name}</span>
-            <IconButton label={`重命名分组 ${group.name}`} onClick={() => { setGroupManageOpen(false); setGroupDialog({ id: group.id, name: group.name }) }}><Pencil className="size-4" /></IconButton>
-            <IconButton label={`删除分组 ${group.name}`} onClick={() => { setGroupManageOpen(false); void removeGroup(group) }}><Trash2 className="size-4" /></IconButton>
-          </li>)}
-        </ul>}
-      </Dialog>}
-    </div>
-  )
-}
-
-function ConversationGroup({ label, icon, actions, children }: { label: string; icon?: React.ReactNode; actions?: React.ReactNode; children: React.ReactNode }) {
-  return <section className="mb-3"><div className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold tracking-wide text-mist-400">{icon}{label}<span className="ml-auto flex items-center">{actions}</span></div><div className="space-y-0.5">{children}</div></section>
-}
-
-function ConversationRow({ item, groups, organizeEnabled, selected, onSelect, onChanged }: {
-  item: AgentConversationListItem; groups: AgentConversationGroup[]; organizeEnabled: boolean; selected: boolean
-  onSelect: () => void; onChanged: () => Promise<void>
-}) {
-  const qc = useQueryClient()
-  const navigate = useNavigate()
-  const [renameOpen, setRenameOpen] = useState(false)
-  const [title, setTitle] = useState(item.title)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [groupOpen, setGroupOpen] = useState(false)
-  const [groupID, setGroupID] = useState(item.group_id ?? '')
-  const refresh = async () => {
-    await onChanged()
-    if (selected) await qc.invalidateQueries({ queryKey: ['agent-conversation', item.id] })
-  }
-  const changePin = async () => {
-    await patch(`/agent/conversations/${item.id}`, { expected_revision: item.revision, pinned: !item.pinned_at })
-    await refresh()
-  }
-  const saveTitle = async () => {
-    try {
-      await patch(`/agent/conversations/${item.id}`, { expected_revision: item.revision, title: title.trim() })
-      setRenameOpen(false)
-      await refresh()
-      if (selected) await qc.invalidateQueries({ queryKey: ['agent-conversation', item.id] })
-    } catch (error) { toast.error(errorMessage(error)) }
-  }
-  const remove = async () => {
-    if (!(await confirm({ title: '删除这段对话？', desc: '对话、消息和附件会一并删除；已完成的业务操作不会回滚。', confirmText: '删除', danger: true }))) return
-    try {
-      await del(`/agent/conversations/${item.id}?confirm=true`)
-      await refresh()
-      await qc.removeQueries({ queryKey: ['agent-conversation', item.id] })
-      if (selected) navigate('/agent')
-    } catch (error) { toast.error(errorMessage(error)) }
-  }
-  const moveToGroup = async () => {
-    try {
-      await patch(`/agent/conversations/${item.id}`, { expected_revision: item.revision, group_id: groupID || null })
-      setGroupOpen(false)
-      await refresh()
-    } catch (error) { toast.error(errorMessage(error)) }
-  }
-  const toggleArchive = async () => {
-    const restoring = !!item.archived_at
-    if (!restoring && item.pending_actions > 0 && !(await confirm({
-      title: '归档这段对话？', desc: `仍有 ${item.pending_actions} 张待处理操作卡片。确认后会保留卡片并按原时限过期。`, confirmText: '确认归档', danger: true,
-    }))) return
-    try {
-      await patch(`/agent/conversations/${item.id}`, {
-        expected_revision: item.revision, archived: restoring ? false : true,
-        ...(!restoring && item.pending_actions > 0 ? { confirm_pending_actions: true } : {}),
-      })
-      await refresh()
-    } catch (error) { toast.error(errorMessage(error)) }
-  }
-  const markUnread = async () => {
-    try {
-      await post(`/agent/conversations/${item.id}/read`, { unread: true })
-      if (selected) window.dispatchEvent(new CustomEvent('ops:agent-manual-unread', { detail: { id: item.id } }))
-      await refresh()
-    } catch (error) { toast.error(errorMessage(error)) }
-  }
-  const pending = item.pending_actions
-  const busy = item.has_active_run
-  return (
-    <div className={`group flex items-center rounded-lg ${selected ? 'bg-ink-50' : 'hover:bg-mist-100/80'}`}>
-      <button type="button" onClick={onSelect} className={`min-w-0 flex-1 cursor-pointer px-2.5 py-2 text-left ${selected ? 'text-ink-800' : 'text-mist-700'}`}>
-        <span className="flex items-center gap-1.5">
-          {busy && <LoaderCircle className="size-3.5 shrink-0 animate-spin text-ink-500" />}
-          {item.has_unread && <span aria-label="未读" title="未读" className="size-2 shrink-0 rounded-full bg-ink-500" />}
-          <span className="truncate text-[13px] font-medium">{item.title || '新对话'}</span>
-          {pending > 0 && <span className="rounded-full bg-gamboge-100 px-1.5 text-[10px] text-gamboge-800">{pending}</span>}
-        </span>
-        <span className="mt-0.5 block truncate text-[11px] text-mist-400">{item.matched_message_snippet || (item.goal ? `任务 · ${{ active: '进行中', paused: '已暂停', waiting_user: '等待处理', completed: '已完成', blocked: '已阻塞', budget_limited: '预算已用尽', cancelled: '已结束' }[item.goal.status] ?? item.goal.status}` : item.archived_at ? '已归档' : item.model || '尚未选择模型')}</span>
-      </button>
-      <div className="relative mr-1">
-        <IconButton label="对话操作" className="size-7 opacity-0 group-hover:opacity-100 focus:opacity-100" onClick={() => setMenuOpen((value) => !value)}><MoreHorizontal className="size-4" /></IconButton>
-        {menuOpen && <>
-          <button type="button" className="fixed inset-0 z-20 cursor-default" aria-label="关闭菜单" onClick={() => setMenuOpen(false)} />
-          <div role="menu" className="absolute right-0 top-8 z-30 min-w-36 rounded-lg border border-mist-200 bg-white p-1 shadow-pop">
-            <MenuButton icon={<Pencil />} label="重命名" onClick={() => { setTitle(item.title); setRenameOpen(true); setMenuOpen(false) }} />
-            <MenuButton icon={item.pinned_at ? <PinOff /> : <Pin />} label={item.pinned_at ? '取消置顶' : '置顶'} onClick={() => { setMenuOpen(false); void changePin().catch((e) => toast.error(errorMessage(e))) }} />
-            {organizeEnabled && <>
-              <MenuButton icon={<FolderPlus />} label="移动到分组" onClick={() => { setGroupID(item.group_id ?? ''); setGroupOpen(true); setMenuOpen(false) }} />
-              {!item.archived_at && <MenuButton icon={<span aria-hidden="true">•</span>} label="标为未读" onClick={() => { setMenuOpen(false); void markUnread() }} />}
-              <MenuButton icon={item.archived_at ? <ArchiveRestore /> : <Archive />} label={item.archived_at ? '恢复归档' : '归档'} onClick={() => { setMenuOpen(false); void toggleArchive() }} />
-            </>}
-            <MenuButton icon={<Trash2 />} label="删除" danger onClick={() => { setMenuOpen(false); void remove() }} />
-          </div>
-        </>}
-      </div>
-      {renameOpen && <Dialog open onClose={() => setRenameOpen(false)} title="重命名对话" footer={<><Button variant="ghost" onClick={() => setRenameOpen(false)}>取消</Button><Button variant="primary" onClick={() => void saveTitle()} disabled={!title.trim()}>保存</Button></>}>
-        <Input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} maxLength={60} onKeyDown={(event) => isEnterWithoutComposition(event.nativeEvent) && void saveTitle()} />
-      </Dialog>}
-      {groupOpen && <Dialog open onClose={() => setGroupOpen(false)} title="移动到分组" footer={<><Button variant="ghost" onClick={() => setGroupOpen(false)}>取消</Button><Button variant="primary" onClick={() => void moveToGroup()}>保存</Button></>}>
-        <Select aria-label="选择分组" value={groupID} onChange={(event) => setGroupID(event.target.value)}><option value="">未分组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</Select>
-      </Dialog>}
-    </div>
-  )
-}
-
-function MenuButton({ icon, label, onClick, danger }: { icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean }) {
-  return <button type="button" role="menuitem" onClick={onClick} className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-mist-50 ${danger ? 'text-danger' : 'text-mist-600'}`}><span className="[&>svg]:size-3.5">{icon}</span>{label}</button>
-}
-
-function AgentModeSelect({ value, disabled, readOnly, onChange }: { value: AgentMode; disabled: boolean; readOnly: boolean; onChange: (mode: AgentMode) => void }) {
-  return <span className="inline-flex w-24 shrink-0"><Select aria-label="对话模式" title={disabled ? '运行或操作执行期间模式锁定' : '执行模式允许提出单张卡片，每张仍需亲自确认'} value={readOnly ? 'discuss' : value} disabled={disabled || readOnly} className="h-8 py-1 text-xs" onChange={(event) => onChange(event.target.value as AgentMode)}>
-    <option value="discuss">讨论</option><option value="plan">计划</option><option value="execute">执行</option>
-  </Select></span>
-}
-
-function MessageView({ message, lastAssistant, canSeeImages, onEdit, onRegenerate, onFork, skillRequests = [] }: {
-  message: AgentMessage; lastAssistant: boolean; canSeeImages: boolean; onEdit?: () => void; onRegenerate?: () => void; onFork?: () => void
-  skillRequests?: AgentMessage['skill_requests']
-}) {
-  const [toolsOpen, setToolsOpen] = useState(false)
-  const toolsId = useId()
-  const user = message.role === 'user'
-  const time = messageTime(message.created_at)
-  return (
-    <article className={`group flex ${user ? 'justify-end' : 'justify-start'}`}>
-      <div className={`min-w-0 max-w-[92%] rounded-2xl px-4 py-3 sm:max-w-[82%] ${user ? 'bg-ink-600 text-white' : message.role === 'system' ? 'border border-gamboge-200 bg-gamboge-50 text-gamboge-900' : 'bg-white shadow-card'}`}>
-        {message.attachments?.length > 0 && <div className="mb-2 flex flex-wrap gap-2">
-          {message.attachments.map((attachment) => attachment.kind === 'image'
-            ? <a key={attachment.id} href={attachmentVariantURL(attachment.url, 'original')} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg"><img src={attachmentVariantURL(attachment.url, 'thumb')} alt={attachment.name} className="size-24 object-cover" /></a>
-            : <div key={attachment.id} className={`rounded-lg px-2 py-1 text-xs ${user ? 'bg-white/15' : 'bg-mist-100 text-mist-600'}`}><span className="inline-flex items-center gap-1"><FileText className="size-3.5" />{attachment.url ? <a href={assetUrl(attachment.url)} download className="underline">{attachment.name}</a> : attachment.name}</span><AttachmentReceipt attachment={attachment} sent /></div>)}
-        </div>}
-        {user && !canSeeImages && message.attachments?.some((attachment) => attachment.kind === 'image') && <Notice tone="gamboge" className="mb-2">当前模型不能看图，图片只能用于保存或数据截图识别。</Notice>}
-        {user && !!message.context_refs?.length && <div className="mb-2 flex flex-wrap gap-1.5">
-          {message.context_refs.map((ref) => <span key={`${ref.type}:${ref.id}`} className={`rounded-md px-2 py-1 text-[11px] ${user ? 'bg-white/15 text-white/90' : 'bg-ink-50 text-ink-700'}`}>{ref.name || (ref.type === 'work' ? '作品' : ref.type === 'material' ? '素材' : ref.type === 'topic' ? '选题' : ref.type === 'image' ? '图片' : ref.type === 'report' ? '报告' : ref.type)} · {ref.scope === 'conversation' ? '固定引用' : '本轮引用'}</span>)}
-        </div>}
-        {user && !!message.skill_requests?.length && <div className="mb-2 flex flex-wrap gap-1.5">
-          {message.skill_requests.map((request) => <span key={`${request.skill_id}:${request.work_id ?? ''}`} className="rounded-md bg-white/15 px-2 py-1 text-[11px] text-white/90">技能已请求 · {request.name || request.skill_id.slice(0, 8)}</span>)}
-        </div>}
-        {user ? <p className="whitespace-pre-wrap break-words text-[14px] leading-relaxed">{message.content}</p>
-          : <AgentMarkdown text={message.content} />}
-        {!user && skillRequests.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">
-          {skillRequests.map((request) => {
-            const usage = message.skill_usage?.find((skill) => skill.id === request.skill_id)
-            const status = usage?.loaded ? '已加载到本次模型上下文；实际使用未验证' : '已请求，未加载'
-            return <span key={request.skill_id} className="rounded-md bg-mist-100 px-2 py-1 text-[11px] text-mist-600">{status} · {usage?.name || request.name || request.skill_id.slice(0, 8)}</span>
-          })}
-        </div>}
-        {message.tool_calls?.length > 0 && <div className={`mt-2 border-t pt-2 ${user ? 'border-white/20' : 'border-mist-100'}`}>
-          <button type="button" aria-expanded={toolsOpen} aria-controls={toolsId} onClick={() => setToolsOpen((value) => !value)} className={`inline-flex cursor-pointer items-center gap-1 text-[12px] ${user ? 'text-white/75' : 'text-mist-500 hover:text-mist-700'}`}>
-            {message.tool_calls.some((call) => call.status === 'running') ? <LoaderCircle className="size-3.5 animate-spin" /> : <ChevronDown className={`size-3.5 transition-transform ${toolsOpen ? '' : '-rotate-90'}`} />}
-            工具活动 {message.tool_calls.length} 项
-          </button>
-          <div id={toolsId} aria-hidden={!toolsOpen} className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${toolsOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
-            <div className="min-h-0 overflow-hidden">
-              <div className={`mt-2 space-y-2 text-xs ${user ? 'text-white/80' : 'text-mist-500'}`}>
-                {message.tool_calls.map((call) => <details key={call.id} className="rounded-lg border border-current/10 px-2.5 py-2">
-                  <summary tabIndex={toolsOpen ? undefined : -1} className="cursor-pointer">
-                    {call.summary || call.name}
-                    {call.status && <span className="ml-2">{call.status === 'running' ? '处理中' : call.status === 'done' ? '已完成' : call.status === 'cancelled' ? '已取消，未执行' : call.status === 'interrupted' ? '结果未确认' : '失败'}</span>}
-                    {call.duration_ms !== undefined && call.status !== 'running' && <span className="ml-2">{(call.duration_ms / 1000).toFixed(1)} 秒</span>}
-                  </summary>
-                  {call.error && <p className="mt-2 text-danger">{call.error.message}（{call.error.code}）{call.error.request_id && ` · ${call.error.request_id}`}</p>}
-                  {call.result_preview && <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-sans">{call.result_preview}</pre>}
-                </details>)}
-              </div>
-            </div>
-          </div>
-        </div>}
-        <div className={`mt-1.5 flex items-center gap-1 text-[10.5px] ${user ? 'text-white/60' : 'text-mist-400'}`}>
-          <time>{time}</time>
-          {user && onEdit && <button type="button" onClick={onEdit} className="ml-2 cursor-pointer opacity-0 underline group-hover:opacity-100 focus:opacity-100">编辑</button>}
-          {user && onFork && <button type="button" title="从这里继续" aria-label={`从第 ${message.seq} 条消息创建分支`} onClick={onFork} className="ml-2 inline-flex cursor-pointer items-center gap-1 opacity-0 underline group-hover:opacity-100 focus:opacity-100"><GitBranch className="size-3.5" />从这里继续</button>}
-          {!user && message.role === 'assistant' && <div className="ml-auto flex items-center gap-1 opacity-70 group-hover:opacity-100">
-            <button type="button" title="复制" onClick={() => void navigator.clipboard.writeText(message.content).then(() => toast.success('已复制')).catch(() => toast.error('复制失败'))} className="cursor-pointer rounded p-1 hover:bg-mist-100"><Clipboard className="size-3.5" /></button>
-            {onFork && <button type="button" title="从这里继续" aria-label={`从第 ${message.seq} 条消息创建分支`} onClick={onFork} className="cursor-pointer rounded p-1 hover:bg-mist-100"><GitBranch className="size-3.5" /></button>}
-            <AIFeedback callId={message.ai_call_id} />
-            {lastAssistant && onRegenerate && <button type="button" title="重新生成" onClick={onRegenerate} className="cursor-pointer rounded p-1 hover:bg-mist-100"><ChevronLeft className="size-3.5" /></button>}
-          </div>}
-        </div>
-      </div>
-    </article>
-  )
-}
-
-// A11（27 §11/§13）：Web 端不展示浏览器证据正文，只如实标注"仅桌面可见"。
-// 有证据 → 显示条数占位；无证据或请求失败 → 不渲染（不把"没有证据"说成"加载失败"）。
-function BrowserEvidenceNotice({ conversationId }: { conversationId?: string | null }) {
-  const [count, setCount] = useState<number | null>(null)
-  useEffect(() => {
-    if (!conversationId) { setCount(null); return }
-    let cancelled = false
-    void get<{ evidence?: unknown[] }>(`/agent/browser/evidence?conversation_id=${conversationId}`)
-      .then((data) => { if (!cancelled) setCount(Array.isArray(data.evidence) ? data.evidence.length : null) })
-      .catch(() => { if (!cancelled) setCount(null) })
-    return () => { cancelled = true }
-  }, [conversationId])
-  const notice = browserEvidenceNotice(count)
-  if (!notice) return null
-  return (
-    <div className="mx-auto mt-4 max-w-3xl" data-testid="agent-browser-evidence-notice">
-      <p className="rounded-lg border border-mist-200 bg-mist-50 px-3 py-2 text-[12px] text-mist-600">{notice.text}</p>
-    </div>
-  )
-}
-
-function RunStatus({ activeRun, streamStage, toolName, connection, pendingActions, error, completedNotice }: { activeRun: AgentConversationDetail['active_run'] | undefined; streamStage: string; toolName?: string; connection: string; pendingActions: number; error: string; completedNotice: string }) {
-  if (error) return <div role="alert" className="mx-auto mb-3 max-w-3xl rounded-lg bg-danger/5 px-3 py-2 text-[12.5px] text-danger">{error}</div>
-  const text = connection === 'reconnecting' ? '连接中断，任务可能仍在运行，正在恢复…'
-    : connection === 'paused' ? '实时连接已暂停，任务可能仍在运行'
-    : streamStage === 'stopping' || activeRun?.stage === 'stopping' ? '正在停止，等待在途工具结束…'
-    : streamStage === 'queued' || activeRun?.status === 'queued' ? '排队中'
-    : streamStage.startsWith('tool:') ? `正在处理工具：${streamStage.slice(5)}`
-    : toolName && activeRun?.stage === 'tool' ? `正在处理工具：${toolName}`
-      : streamStage === 'waiting_confirmation' ? `等待你确认 ${pendingActions} 项`
-        : activeRun || streamStage ? '思考中' : pendingActions ? `等待你确认 ${pendingActions} 项` : completedNotice
-  return text ? <div role="status" className="mx-auto mb-3 flex max-w-3xl items-center gap-2 rounded-lg bg-ink-50 px-3 py-2 text-[12.5px] text-ink-700">{activeRun || streamStage ? <LoaderCircle className="size-3.5 animate-spin" /> : <span className="size-1.5 rounded-full bg-ink-500" />}{text}</div> : null
 }
 
 export default function Agent() {
@@ -472,14 +66,8 @@ export default function Agent() {
   const [contextPickerOpen, setContextPickerOpen] = useState(false)
   const [skillPickerOpen, setSkillPickerOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [streaming, setStreaming] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [selectedMode, setSelectedMode] = useState<AgentMode>('execute')
-  const [streamText, setStreamText] = useState('')
-  const [streamStage, setStreamStage] = useState('')
-  const [streamError, setStreamError] = useState('')
-  const [streamConnection, setStreamConnection] = useState('')
-  const [runID, setRunID] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedAccount, setSelectedAccount] = useState('')
   // AG-03：对话创建时绑定的账号。切换后历史仍属于原账号，必须明确提示，不能默默换上下文。
@@ -511,25 +99,14 @@ export default function Agent() {
   }, [])
   const messageRequest = useRef<{ key: string; id: string } | null>(null)
   const conversationRequest = useRef<{ key: string; id: string } | null>(null)
-  const sendInFlight = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
-  const [completedNotice, setCompletedNotice] = useState('')
   const [actionExecuting, setActionExecuting] = useState(false)
   // AG-04：断流/切页后恢复已生成的部分内容（草稿只放 sessionStorage）。
   const [recovered, setRecovered] = useState<PartialStream | null>(null)
   const partialStore = useRef<Storage | null>(null)
   const partialSavedAt = useRef(0)
-  const eventController = useRef<AbortController | null>(null)
-  // 卡片执行完会自动续跑；续跑若与用户刚发出的消息撞车，会把那条消息的运行控制器 abort 掉，
-  // 表现为消息已点发送却一直没有响应。用这个 ref 判断是否已有运行在受理/流出。
-  const runInFlight = useRef(false)
-  const eventConversationID = useRef('')
-  const streamPartialRef = useRef<{ messageKey: string; chunkIndex: number }>({ messageKey: '', chunkIndex: 0 })
-  const lastEventSeqRef = useRef(0)
-  const resumeAfterSnapshotRef = useRef(false)
-  const [eventResumeGeneration, setEventResumeGeneration] = useState(0)
   const conversationIDRef = useRef(conversationId)
   conversationIDRef.current = conversationId
   const lastConversationIDRef = useRef(conversationId)
@@ -575,6 +152,14 @@ export default function Agent() {
   const pendingQuestion = questions.find((question) => question.status === 'pending' && Date.now() < new Date(question.expires_at).getTime())
   const pendingActions = actions.filter((action) => ['pending', 'needs_input'].includes(action.status)).length
   const baseMessages = detail?.messages ?? []
+  const {
+    streaming, streamText, streamStage, streamError, setStreamError,
+    streamConnection, runID, completedNotice, setCompletedNotice,
+    sendInFlight, consumeRun, continueRun, compactRun,
+    acceptPlan, answerQuestion, regenerate, stop,
+  } = useAgentRun({
+    conversationId, detail, eventResumeEnabled, submitting, setSubmitting, baseMessages,
+  })
   const persistedPartial = eventResumeEnabled && detail?.partial_output && !baseMessages.some((message) => message.message_key === detail.partial_output?.message_key) ? detail.partial_output : null
   const recoveryText = eventResumeEnabled ? persistedPartial?.text : recovered?.text
   const messages = useMemo(() => [...olderMessages, ...baseMessages], [olderMessages, baseMessages])
@@ -669,13 +254,6 @@ export default function Agent() {
   }, [recovered, baseMessages, activeRun])
 
   useEffect(() => {
-    const key = streamPartialRef.current.messageKey
-    if (eventResumeEnabled && key && baseMessages.some((message) => message.message_key === key)) {
-      setStreamText('')
-    }
-  }, [baseMessages, eventResumeEnabled])
-
-  useEffect(() => {
     if (!streaming) return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [streamText, streaming])
@@ -686,74 +264,6 @@ export default function Agent() {
       conversationId ? qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] }) : Promise.resolve(),
     ])
   }, [qc, conversationId])
-
-  const applyPersistentEvent = useCallback((id: string, type: string, event: AgentEventEnvelope, targetRunID = '') => {
-    lastEventSeqRef.current = Math.max(lastEventSeqRef.current, event.event_seq)
-    const data = event.data ?? {}
-    if (type === 'run.started') {
-      setRunID(event.run_id ?? '')
-      setStreaming(true)
-      setStreamStage(data.status === 'queued' ? 'queued' : 'thinking')
-      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
-    } else if (type === 'run.stage') {
-      setStreamStage(data.stage || 'thinking')
-    } else if (type === 'message.delta' || type === 'message.snapshot') {
-      const messageKey = String(data.message_key ?? '')
-      const chunkIndex = Number(data.chunk_index ?? 0)
-      if (!messageKey || chunkIndex <= 0) return
-      if (qc.getQueryData<AgentConversationDetail>(['agent-conversation', id])?.messages.some((message) => message.message_key === messageKey)) return
-      const current = streamPartialRef.current
-      if (type === 'message.snapshot') {
-        if (current.messageKey === messageKey && chunkIndex <= current.chunkIndex) return
-        streamPartialRef.current = { messageKey, chunkIndex }
-        setStreamText(String(data.text ?? ''))
-      } else {
-        if (current.messageKey === messageKey && chunkIndex <= current.chunkIndex) return
-        streamPartialRef.current = { messageKey, chunkIndex }
-        setStreamText((old) => current.messageKey === messageKey ? old + String(data.text ?? '') : String(data.text ?? ''))
-      }
-    } else if (type === 'tool.started' || type === 'tool.ended' || type === 'action.updated' || type === 'message.saved' || type === 'conversation.updated' || type === 'context.updated' || type === 'plan.updated' || type === 'question.created' || type === 'question.resolved' || type.startsWith('input.')) {
-      if (type === 'tool.started') setStreamStage(`tool:${data.name || '工具'}`)
-      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
-      void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
-    } else if (type === 'artifact.created') {
-      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
-      void qc.invalidateQueries({ queryKey: ['agent-artifacts'] })
-      void qc.invalidateQueries({ queryKey: ['agent-artifact'] })
-    } else if (type === 'run.ended') {
-      if (!targetRunID) setStreaming(false)
-      setRunID('')
-      setStreamText('')
-      setStreamStage('')
-      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
-      void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
-    }
-  }, [qc])
-
-  const resumeEventSnapshot = useCallback(async (id: string, runID: string) => {
-    const snapshot = await qc.fetchQuery({ queryKey: ['agent-conversation', id], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${id}`), staleTime: 0 })
-    if (runID && snapshot.last_run?.id !== runID) return { after: lastEventSeqRef.current }
-    const partial = snapshot.partial_output
-    streamPartialRef.current = { messageKey: partial?.message_key ?? '', chunkIndex: partial?.chunk_index ?? 0 }
-    setStreamText(snapshot.active_run ? partial?.text ?? '' : '')
-    lastEventSeqRef.current = snapshot.last_event_seq ?? lastEventSeqRef.current
-    return { after: lastEventSeqRef.current, ...(runID && !snapshot.active_run ? { ended: snapshot.last_run ?? undefined } : {}) }
-  }, [qc])
-
-  useEffect(() => {
-    if (eventController.current && eventConversationID.current === conversationId) return
-    eventController.current?.abort()
-    eventController.current = null
-    lastEventSeqRef.current = 0
-    streamPartialRef.current = { messageKey: '', chunkIndex: 0 }
-    setStreaming(false)
-    setRunID('')
-    setStreamText('')
-    setStreamStage('')
-    setStreamConnection('')
-  }, [conversationId])
-
-  useEffect(() => () => eventController.current?.abort(), [])
 
   const openConversation = (id: string, matchedSeq?: number) => {
     setPendingJump(matchedSeq ? { conversationID: id, seq: matchedSeq } : null)
@@ -781,181 +291,6 @@ export default function Agent() {
     if (conversationRequest.current?.key !== key) conversationRequest.current = { key, id: crypto.randomUUID() }
     return post<AgentConversation>('/agent/conversations', { ...body, request_id: conversationRequest.current.id })
   }
-
-  const consumeRun = useCallback(async (id: string, endpoint: string, body: Record<string, unknown>) => {
-    const controller = new AbortController()
-    runInFlight.current = true
-    eventController.current?.abort()
-    eventController.current = controller
-    eventConversationID.current = id
-    let acceptedRequest = false
-    setStreaming(true)
-    setStreamText('')
-    setStreamStage('thinking')
-    setStreamError('')
-    setRunID('')
-    setStreamConnection('')
-    try {
-      const requestID = typeof body.request_id === 'string' && body.request_id ? body.request_id : crypto.randomUUID()
-      const result = bootstrapData?.features?.event_resume === true
-        ? await (async () => {
-          const accepted = await post<AgentRunAcceptance>(endpoint, { ...body, request_id: requestID, protocol_version: 2 }, controller.signal)
-          acceptedRequest = true
-          setRunID(accepted.run_id)
-          lastEventSeqRef.current = accepted.last_event_seq
-          streamPartialRef.current = { messageKey: '', chunkIndex: 0 }
-          return streamAgentEvents(accepted.events_url, accepted.last_event_seq, {
-            signal: controller.signal,
-            runID: accepted.run_id,
-            onEvent: (type, event) => applyPersistentEvent(id, type, event, accepted.run_id),
-            onConnectionState: setStreamConnection,
-            onResume: () => resumeEventSnapshot(id, accepted.run_id),
-          })
-        })()
-        : await stream<{ status?: string; reason?: string }>(endpoint, body, {
-          signal: controller.signal,
-          onDelta: (delta) => setStreamText((old) => old + delta),
-          onEvent: (name, data) => {
-            if (name === 'run') setRunID(data.run_id ?? '')
-            if (name === 'stage') setStreamStage(data.stage === 'tool' ? `tool:${data.label || data.tool_name || '工具'}` : data.stage || 'thinking')
-            if (name === 'action' || name === 'message' || name === 'tool') {
-              void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
-              void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
-            }
-            if (name === 'error') setStreamError(data.message || '运行失败，请重试')
-            if (name === 'done') setStreamStage(data.reason === 'waiting_confirmation' ? 'waiting_confirmation' : '')
-          },
-        })
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: ['agent-conversation', id] }),
-        qc.invalidateQueries({ queryKey: ['agent-conversations'] }),
-      ])
-      setCompletedNotice(result?.status === 'stopped' ? '已停止'
-        : result?.reason === 'round_limit' || result?.reason === 'deadline' ? '已达到单次运行上限'
-          : result?.status === 'awaiting_confirmation' ? '等待你逐张确认操作卡片' : '')
-      if (result?.status === 'failed') setStreamError('本次运行已中断，请查看已保存的结果后再继续。')
-      return true
-    } catch (error) {
-      if (controller.signal.aborted) return acceptedRequest
-      await qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
-      if (error instanceof ApiError && error.code === 'agent_event_cursor_expired') {
-        resumeAfterSnapshotRef.current = true
-        await qc.fetchQuery({ queryKey: ['agent-conversation', id], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${id}`) })
-      } else {
-        setStreamError(errorMessage(error))
-      }
-      return acceptedRequest
-    } finally {
-      if (eventController.current === controller) {
-        runInFlight.current = false
-        eventController.current = null
-        if (resumeAfterSnapshotRef.current) {
-          resumeAfterSnapshotRef.current = false
-          setEventResumeGeneration((generation) => generation + 1)
-        }
-        setStreaming(false)
-        setRunID('')
-        setStreamText('')
-        setStreamStage('')
-        setStreamConnection('')
-        if (bootstrapData?.features?.event_resume === true) setEventResumeGeneration((generation) => generation + 1)
-      }
-    }
-  }, [qc, bootstrapData?.features?.event_resume, applyPersistentEvent, resumeEventSnapshot])
-
-  const acceptPlan = async (plan: AgentPlan) => {
-    if (!conversationId || busy || sendInFlight.current) return
-    sendInFlight.current = true
-    setSubmitting(true)
-    try {
-      await consumeRun(conversationId, `/agent/plans/${plan.id}/accept`, {
-        expected_version: plan.version, request_id: crypto.randomUUID(),
-      })
-    } finally {
-      sendInFlight.current = false
-      setSubmitting(false)
-    }
-  }
-  const answerQuestion = async (question: AgentQuestion, answers: { question_id: string; choice_id?: string; text?: string; skip?: boolean }[]) => {
-    if (!conversationId || busy || sendInFlight.current) return
-    sendInFlight.current = true
-    setSubmitting(true)
-    try {
-      await consumeRun(conversationId, `/agent/questions/${question.id}/answer`, {
-        expected_revision: question.revision, request_id: crypto.randomUUID(), answers,
-      })
-    } finally {
-      sendInFlight.current = false
-      setSubmitting(false)
-    }
-  }
-
-  useEffect(() => {
-    if (bootstrapData?.features?.event_resume !== true || !conversationId || detail?.conversation.id !== conversationId || eventController.current) return
-    const controller = new AbortController()
-    eventController.current = controller
-    eventConversationID.current = conversationId
-    const lastEventSeq = Math.max(lastEventSeqRef.current, detail?.last_event_seq ?? 0)
-    lastEventSeqRef.current = lastEventSeq
-    const partial = activeRun ? detail?.partial_output : null
-    if (partial?.text) {
-      streamPartialRef.current = { messageKey: partial.message_key, chunkIndex: partial.chunk_index }
-      setStreamText(partial.text)
-    } else {
-      streamPartialRef.current = { messageKey: '', chunkIndex: 0 }
-      setStreamText('')
-    }
-    const targetRunID = activeRun?.id ?? ''
-    setRunID(targetRunID)
-    setStreamStage(activeRun?.stage || '')
-    setStreaming(!!activeRun)
-    void streamAgentEvents(`/api/v1/agent/conversations/${conversationId}/events`, lastEventSeq, {
-      signal: controller.signal,
-      runID: targetRunID,
-      onEvent: (type, event) => applyPersistentEvent(conversationId, type, event, targetRunID),
-      onConnectionState: setStreamConnection,
-      onResume: () => resumeEventSnapshot(conversationId, targetRunID),
-    }).then(async (result) => {
-      await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] })
-      await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
-      if (conversationIDRef.current !== conversationId) return
-      setCompletedNotice(result.status === 'stopped' ? '已停止'
-        : result.reason === 'round_limit' || result.reason === 'deadline' ? '已达到单次运行上限'
-          : result.status === 'awaiting_confirmation' ? '等待你逐张确认操作卡片' : '')
-      if (result.status === 'failed') setStreamError('本次运行已中断，请查看已保存的结果后再继续。')
-    }).catch(async (error) => {
-      if (controller.signal.aborted) return
-      if (error instanceof ApiError && error.code === 'agent_event_cursor_expired') {
-        resumeAfterSnapshotRef.current = true
-        await qc.fetchQuery({ queryKey: ['agent-conversation', conversationId], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${conversationId}`) })
-      } else {
-        setStreamError(errorMessage(error))
-      }
-    }).finally(() => {
-      if (eventController.current !== controller) return
-      eventController.current = null
-      setStreaming(false)
-      setRunID('')
-      setStreamText('')
-      setStreamStage('')
-      setStreamConnection('')
-      if (resumeAfterSnapshotRef.current) {
-        resumeAfterSnapshotRef.current = false
-        setEventResumeGeneration((generation) => generation + 1)
-      }
-    })
-    return () => {
-      if (eventController.current === controller) {
-        controller.abort()
-        eventController.current = null
-        setStreaming(false)
-        setRunID('')
-        setStreamStage('')
-        setStreamConnection('')
-      }
-    }
-  }, [bootstrapData?.features?.event_resume, conversationId, detail?.conversation.id, activeRun?.id, eventResumeGeneration,
-    qc, applyPersistentEvent, resumeEventSnapshot])
 
   const sendMessage = async (edit?: AgentMessage) => {
     const value = text.trim()
@@ -1049,11 +384,6 @@ export default function Agent() {
     window.setTimeout(() => inputRef.current?.focus(), 0)
   }
 
-  // 操作卡片执行成功后的自动续跑：已有运行在受理/流出时让位，避免 abort 掉用户刚发的消息。
-  const continueRun = () => { if (conversationId && !runInFlight.current) void consumeRun(conversationId, `/agent/conversations/${conversationId}/continue`, {}) }
-  const compactRun = () => conversationId
-    ? consumeRun(conversationId, `/agent/conversations/${conversationId}/compact`, { request_id: crypto.randomUUID() })
-    : Promise.resolve(false)
   const openGoalPanel = () => setGoalPanelOpen(true)
   const changeMode = async (mode: AgentMode) => {
     if (busy || bootstrapData?.read_only) return
@@ -1065,17 +395,6 @@ export default function Agent() {
       await invalidate()
     } catch (error) { setSelectedMode(previous); toast.error(errorMessage(error)); void detailQuery.refetch() }
   }
-  const regenerate = () => { if (conversationId) void consumeRun(conversationId, `/agent/conversations/${conversationId}/regenerate`, {}) }
-  const stop = async () => {
-    const id = runID || activeRun?.id
-    if (!id) return
-    try {
-      await post(`/agent/runs/${id}/cancel`, {})
-      setStreamStage('stopping')
-      await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] })
-    } catch (error) { toast.error(errorMessage(error)) }
-  }
-
   const updateSelection = async (kind: 'model' | 'account', value: string) => {
     if (kind === 'model') setSelectedModel(value)
     else {
@@ -1454,21 +773,15 @@ export default function Agent() {
         </div>
       </section>
 
-      <Dialog open={goalPanelOpen} onClose={() => setGoalPanelOpen(false)} title="任务目标与上下文整理" desc="目标推进仍受账号权限、运行预算和逐张操作卡片确认约束。" width="max-w-2xl">
-        <GoalPanel conversationID={conversation?.id} conversation={conversation} goal={detail?.goal} models={bootstrapData.models} goalsEnabled={goalsEnabled} compactEnabled={eventResumeEnabled} canManage={canManageGoals} busy={busy} onCompact={compactRun} />
-      </Dialog>
-
-      {routinesEnabled && <Dialog open={routinePanelOpen} onClose={() => setRoutinePanelOpen(false)} title="受限例行任务" desc="按计划只读查询运营数据，逐次生成私有报告；权限在执行时重新检查。" width="max-w-3xl">
-        <RoutinePanel open={routinePanelOpen} canManage={canManageRoutines} models={bootstrapData.models} conversation={conversation} />
-      </Dialog>}
-
-      {bootstrapData.features.artifacts === true && <Drawer open={artifactsOpen} onClose={() => setArtifactsOpen(false)} title="本对话产物" width="w-[min(92vw,920px)]">
-        <ArtifactPanel conversationID={conversation?.id} onQuote={quoteArtifact} />
-        {/* DEV-AI27-11（A11）：Web 端无本机浏览会话，历史浏览器证据不在此展示——如实降级，不伪造内容。 */}
-        <div className="mt-4 rounded-lg border border-dashed border-mist-200 bg-mist-50 px-4 py-3 text-xs text-mist-500" data-testid="web-sources-desktop-only">
-          浏览器来源证据与批注记录仅在 OPS 桌面端展示（Web 端没有本机浏览会话）。桌面端打开同一对话即可查看可回查的来源列表。
-        </div>
-      </Drawer>}
+      <AgentWorkbenchPanels
+        goalPanelOpen={goalPanelOpen} setGoalPanelOpen={setGoalPanelOpen}
+        routinePanelOpen={routinePanelOpen} setRoutinePanelOpen={setRoutinePanelOpen}
+        artifactsOpen={artifactsOpen} setArtifactsOpen={setArtifactsOpen}
+        conversation={conversation} detail={detail} bootstrapData={bootstrapData}
+        goalsEnabled={goalsEnabled} routinesEnabled={routinesEnabled} eventResumeEnabled={eventResumeEnabled}
+        canManageGoals={canManageGoals} canManageRoutines={canManageRoutines}
+        busy={busy} compactRun={compactRun} quoteArtifact={quoteArtifact}
+      />
 
       <Drawer open={mobileListOpen} onClose={() => setMobileListOpen(false)} title="对话" width="w-[min(88vw,360px)]">
         <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} onClose={() => setMobileListOpen(false)} organizeEnabled={organizeEnabled} goalsEnabled={goalsEnabled} />
@@ -1607,4 +920,3 @@ function Unavailable({ bootstrap, navigate }: { bootstrap: AgentBootstrap; navig
 
   return <div className="flex h-full items-center justify-center p-6"><div className="max-w-md rounded-2xl border border-mist-200 bg-white p-8 text-center shadow-card"><Bot className="mx-auto size-8 text-mist-300" /><h1 className="mt-3 text-lg font-semibold text-mist-800">{title}</h1><p className="mt-2 text-sm text-mist-500">{subtitle}</p>{actionButton}</div></div>
 }
-
