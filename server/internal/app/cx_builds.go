@@ -34,6 +34,8 @@ type cxBuildCreateInput struct {
 	Options                 json.RawMessage `json:"options"`
 	Client                  string          `json:"client"`
 	RendererContractVersion string          `json:"renderer_contract_version"`
+	// Force：跳过可复用命中，强制新建 running（DEEP-01「重新生成」）。
+	Force bool `json:"force"`
 }
 
 type cxBuildCreateResponse struct {
@@ -46,6 +48,8 @@ type cxBuildCreateResponse struct {
 	DeadlineAt     time.Time       `json:"deadline_at"`
 	ExpiresAt      *time.Time      `json:"expires_at"`
 	Reused         bool            `json:"reused"`
+	// ReusedFrom：命中可复用历史时回填来源 build_id（与 build_id 相同；旧客户端可忽略）。
+	ReusedFrom *uuid.UUID `json:"reused_from,omitempty"`
 }
 
 func decodeCXBuildJSON(w http.ResponseWriter, r *http.Request, dst any) error {
@@ -308,46 +312,61 @@ func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	var existing struct {
-		ID         uuid.UUID
-		Status     string
-		SourceJSON []byte
-		DeadlineAt time.Time
-		ExpiresAt  *time.Time
-	}
-	err = tx.QueryRow(ctx, `SELECT id,status,source_snapshot,deadline_at,expires_at
-		FROM work_build WHERE work_id=$1 AND source_hash=$2 AND params_hash=$3 AND reusable AND status IN ('running','built')
-		FOR UPDATE`, workID, sourceHash, paramsHash).Scan(&existing.ID, &existing.Status, &existing.SourceJSON, &existing.DeadlineAt, &existing.ExpiresAt)
-	if err == nil {
-		if existing.Status == "running" && !existing.DeadlineAt.After(s.now()) {
-			if _, err := tx.Exec(ctx, `UPDATE work_build SET status='failed',reusable=false,error_code='build_timeout',finished_at=now()
-				WHERE id=$1 AND status='running'`, existing.ID); err != nil {
-				return err
-			}
-			existing.Status = "failed"
-		} else if existing.Status == "built" && (existing.ExpiresAt == nil || !existing.ExpiresAt.After(s.now()) || !s.cxBuildArtifactFilesExist(ctx, tx, s.cfg.DataDir, existing.ID, workspaceID)) {
-			if _, err := tx.Exec(ctx, `UPDATE work_build SET reusable=false WHERE id=$1`, existing.ID); err != nil {
-				return err
-			}
-			existing.Status = "failed"
+	if !in.Force {
+		var existing struct {
+			ID         uuid.UUID
+			Status     string
+			SourceJSON []byte
+			DeadlineAt time.Time
+			ExpiresAt  *time.Time
 		}
-		if existing.Status == "running" || existing.Status == "built" {
-			if err := tx.Commit(ctx); err != nil {
-				return err
+		// DEEP-01：命中键含 workspace_id，防跨租户误复用。
+		err = tx.QueryRow(ctx, `SELECT id,status,source_snapshot,deadline_at,expires_at
+			FROM work_build WHERE workspace_id=$1 AND work_id=$2 AND source_hash=$3 AND params_hash=$4
+			AND reusable AND status IN ('running','built')
+			FOR UPDATE`, workspaceID, workID, sourceHash, paramsHash).Scan(&existing.ID, &existing.Status, &existing.SourceJSON, &existing.DeadlineAt, &existing.ExpiresAt)
+		if err == nil {
+			if existing.Status == "running" && !existing.DeadlineAt.After(s.now()) {
+				if _, err := tx.Exec(ctx, `UPDATE work_build SET status='failed',reusable=false,error_code='build_timeout',finished_at=now()
+					WHERE id=$1 AND status='running'`, existing.ID); err != nil {
+					return err
+				}
+				existing.Status = "failed"
+			} else if existing.Status == "built" && (existing.ExpiresAt == nil || !existing.ExpiresAt.After(s.now()) || !s.cxBuildArtifactFilesExist(ctx, tx, s.cfg.DataDir, existing.ID, workspaceID)) {
+				if _, err := tx.Exec(ctx, `UPDATE work_build SET reusable=false WHERE id=$1`, existing.ID); err != nil {
+					return err
+				}
+				existing.Status = "failed"
 			}
-			status := http.StatusOK
-			if existing.Status == "running" {
-				status = http.StatusAccepted
+			if existing.Status == "running" || existing.Status == "built" {
+				if err := tx.Commit(ctx); err != nil {
+					return err
+				}
+				status := http.StatusOK
+				if existing.Status == "running" {
+					status = http.StatusAccepted
+				}
+				from := existing.ID
+				s.audit(ctx, "work_build_reuse", "work_build", existing.ID.String(), "ok", map[string]any{
+					"work_id": workID, "status": existing.Status, "client": in.Client,
+				})
+				writeJSON(w, status, cxBuildCreateResponse{
+					BuildID: existing.ID, Status: existing.Status, SourceHash: sourceHash, ParamsHash: paramsHash,
+					BasisRevision: revision, SourceSnapshot: existing.SourceJSON, DeadlineAt: existing.DeadlineAt,
+					ExpiresAt: existing.ExpiresAt, Reused: true, ReusedFrom: &from,
+				})
+				return nil
 			}
-			writeJSON(w, status, cxBuildCreateResponse{
-				BuildID: existing.ID, Status: existing.Status, SourceHash: sourceHash, ParamsHash: paramsHash,
-				BasisRevision: revision, SourceSnapshot: existing.SourceJSON, DeadlineAt: existing.DeadlineAt,
-				ExpiresAt: existing.ExpiresAt, Reused: true,
-			})
-			return nil
+		} else if err != pgx.ErrNoRows {
+			return err
 		}
-	} else if err != pgx.ErrNoRows {
-		return err
+	} else {
+		// force：让同键旧 running/built 让出幂等位，再插入新行。
+		if _, err := tx.Exec(ctx, `UPDATE work_build SET reusable=false
+			WHERE workspace_id=$1 AND work_id=$2 AND source_hash=$3 AND params_hash=$4
+			AND reusable AND status IN ('running','built')`, workspaceID, workID, sourceHash, paramsHash); err != nil {
+			return err
+		}
 	}
 
 	var buildID uuid.UUID
@@ -361,7 +380,9 @@ func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	s.audit(ctx, "work_build_create", "work_build", buildID.String(), "ok", map[string]any{"targets": targets, "client": in.Client})
+	s.audit(ctx, "work_build_create", "work_build", buildID.String(), "ok", map[string]any{
+		"targets": targets, "client": in.Client, "force": in.Force,
+	})
 	writeJSON(w, http.StatusCreated, cxBuildCreateResponse{
 		BuildID: buildID, Status: "running", SourceHash: sourceHash, ParamsHash: paramsHash,
 		BasisRevision: revision, SourceSnapshot: sourceBytes, DeadlineAt: deadlineAt,

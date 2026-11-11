@@ -30,6 +30,7 @@ type BuildCreate = {
   source_snapshot: string | BuildSnapshot
   targets?: BuildTarget[]
   reused: boolean
+  reused_from?: string
 }
 type BuildSnapshot = {
   work: { title: string; revision: number }
@@ -273,7 +274,7 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
     await refreshHistory(buildID)
   }
 
-  const start = async (resumeID?: string) => {
+  const start = async (resumeID?: string, force = false) => {
     if (active.current) return
     active.current = true
     setBusy(true)
@@ -296,12 +297,19 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
         return
       }
       if (targets.length === 0) throw new Error('请至少选择一种构建产物。')
-      created = await post<BuildCreate>(`/works/${work.id}/builds`, { basis_revision: current.revision, targets, options: {}, client: 'desktop', renderer_contract_version: wechatHTMLRendererContractVersion })
+      created = await post<BuildCreate>(`/works/${work.id}/builds`, {
+        basis_revision: current.revision, targets, options: {}, client: 'desktop',
+        renderer_contract_version: wechatHTMLRendererContractVersion, force,
+      })
       if (created.status !== 'running') {
-        setNotice(created.status === 'built' ? '已复用同一冻结版本的历史构建。' : '该构建已进入终态。')
+        const from = created.reused_from || created.build_id
+        setNotice(created.status === 'built'
+          ? `已复用同一冻结版本的历史构建（来源 ${from.slice(0, 8)}…）。`
+          : '该构建已进入终态。')
         await refreshHistory(created.build_id)
         return
       }
+      if (created.reused) setNotice(`复用进行中的构建（来源 ${(created.reused_from || created.build_id).slice(0, 8)}…）。`)
       await renderAndComplete(created.build_id, created, targets)
     } catch (e) {
       setError(e instanceof ApiError && e.code === 'scanner_unverified' ? '产物包含阻断级隐私发现，构建保持阻断。' : errorMessage(e))
@@ -343,6 +351,7 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
     <p className="text-[11px] text-mist-400">长图在本机隔离 Electron 窗口生成，并按固定像素和内存预算分段；下载仍受服务端隐私策略门禁控制。</p>
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="primary" loading={busy} disabled={busy || !canWrite || work.locked || targets.length === 0} onClick={() => void start()}>生成校验报告</Button>
+      <Button size="sm" variant="secondary" loading={busy} disabled={busy || !canWrite || work.locked || targets.length === 0} onClick={() => void start(undefined, true)} title="跳过历史复用，强制新建">重新生成</Button>
       {history.length > 0 && <span className="text-[11px] text-mist-400">保留最近 {history.length} 次构建</span>}
     </div>
     {error && <Notice tone="red">{error}</Notice>}

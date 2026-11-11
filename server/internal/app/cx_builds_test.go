@@ -87,6 +87,9 @@ func TestCX02BuildSnapshotIdempotencyAndCurrentness(t *testing.T) {
 	if status != 202 || reused.BuildID != first.BuildID || !reused.Reused || reused.ParamsHash != first.ParamsHash {
 		t.Fatalf("normalized retry was not idempotent: status=%d first=%+v retry=%+v", status, first, reused)
 	}
+	if reused.ReusedFrom == nil || *reused.ReusedFrom != first.BuildID {
+		t.Fatalf("reused_from missing or mismatched: %+v", reused)
+	}
 	var buildCount int
 	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM work_build WHERE work_id=$1`, work.ID).Scan(&buildCount); err != nil {
 		t.Fatal(err)
@@ -664,4 +667,88 @@ func cxBuildCreateForTest(t *testing.T, workID string, revision int, targets []s
 		t.Fatalf("decode build response: %v; body=%s", err, body)
 	}
 	return status, response
+}
+
+// DEEP-01：复用命中回填 reused_from + 审计；force 跳过复用；跨工作区同哈希行不得命中；停用账号拒绝。
+func TestDEEP01BuildReuseForceReusedFromAndWorkspaceScope(t *testing.T) {
+	account := env.accounts(t).wechat
+	var work Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+account.ID.String()+"/works", map[string]string{"title": "DEEP01 构建复用"}, &work)
+
+	_, first := cxBuildCreateForTest(t, work.ID.String(), work.Revision, []string{"wechat_html"})
+	status, body := env.do("POST", "/api/v1/works/"+work.ID.String()+"/builds", map[string]any{
+		"basis_revision": work.Revision, "targets": []string{"wechat_html"}, "options": map[string]any{}, "client": "web",
+		"renderer_contract_version": cxrendercontract.WechatHTMLV1,
+	})
+	var runningReuse cxBuildCreateResponse
+	if status != 202 || json.Unmarshal(body, &runningReuse) != nil || !runningReuse.Reused || runningReuse.BuildID != first.BuildID {
+		t.Fatalf("running reuse: status=%d body=%s", status, body)
+	}
+	if runningReuse.ReusedFrom == nil || *runningReuse.ReusedFrom != first.BuildID {
+		t.Fatalf("running reuse missing reused_from: %+v", runningReuse)
+	}
+	var reuseAudits int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM audit_log WHERE action='work_build_reuse' AND target_id=$1`, first.BuildID.String()).Scan(&reuseAudits); err != nil || reuseAudits < 1 {
+		t.Fatalf("work_build_reuse audit missing: count=%d err=%v", reuseAudits, err)
+	}
+
+	status, body = env.do("POST", "/api/v1/works/"+work.ID.String()+"/builds", map[string]any{
+		"basis_revision": work.Revision, "targets": []string{"wechat_html"}, "options": map[string]any{}, "client": "web",
+		"renderer_contract_version": cxrendercontract.WechatHTMLV1, "force": true,
+	})
+	var forced cxBuildCreateResponse
+	if status != 201 || json.Unmarshal(body, &forced) != nil || forced.Reused || forced.BuildID == first.BuildID {
+		t.Fatalf("force create: status=%d body=%s", status, body)
+	}
+	var oldReusable bool
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT reusable FROM work_build WHERE id=$1`, first.BuildID).Scan(&oldReusable); err != nil || oldReusable {
+		t.Fatalf("force must clear old reusable: reusable=%v err=%v", oldReusable, err)
+	}
+
+	if status, body := cxBuildUploadForTest(t, forced.BuildID.String(), "html", "deep01.html", []byte("<html><body>deep01</body></html>"), ""); status != 200 {
+		t.Fatalf("upload: status=%d body=%s", status, body)
+	}
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE work_build SET status='built',manifest='{}',manifest_sha256=repeat('a',64),finished_at=now(),expires_at=now()+interval '180 days' WHERE id=$1`, forced.BuildID); err != nil {
+		t.Fatal(err)
+	}
+	status, body = env.do("POST", "/api/v1/works/"+work.ID.String()+"/builds", map[string]any{
+		"basis_revision": work.Revision, "targets": []string{"wechat_html"}, "options": map[string]any{}, "client": "desktop",
+		"renderer_contract_version": cxrendercontract.WechatHTMLV1,
+	})
+	var builtReuse cxBuildCreateResponse
+	if status != 200 || json.Unmarshal(body, &builtReuse) != nil || !builtReuse.Reused || builtReuse.BuildID != forced.BuildID {
+		t.Fatalf("built reuse: status=%d body=%s", status, body)
+	}
+	if builtReuse.ReusedFrom == nil || *builtReuse.ReusedFrom != forced.BuildID {
+		t.Fatalf("built reuse missing reused_from: %+v", builtReuse)
+	}
+
+	var homeWS uuid.UUID
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT workspace_id FROM work_build WHERE id=$1`, forced.BuildID).Scan(&homeWS); err != nil {
+		t.Fatal(err)
+	}
+	var hitHome, hitForeign int
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM work_build WHERE workspace_id=$1 AND work_id=$2 AND source_hash=$3 AND params_hash=$4 AND reusable AND status IN ('running','built')`,
+		homeWS, work.ID, forced.SourceHash, forced.ParamsHash).Scan(&hitHome); err != nil || hitHome != 1 {
+		t.Fatalf("home workspace reuse key: count=%d err=%v", hitHome, err)
+	}
+	foreignWS := opt12Workspace(t)
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM work_build WHERE workspace_id=$1 AND work_id=$2 AND source_hash=$3 AND params_hash=$4 AND reusable AND status IN ('running','built')`,
+		foreignWS, work.ID, forced.SourceHash, forced.ParamsHash).Scan(&hitForeign); err != nil || hitForeign != 0 {
+		t.Fatalf("foreign workspace must not see reuse key: count=%d err=%v", hitForeign, err)
+	}
+
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE platform_account SET status='disabled' WHERE id=$1`, account.ID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(t.Context(), `UPDATE platform_account SET status='active' WHERE id=$1`, account.ID)
+	})
+	status, body = env.do("POST", "/api/v1/works/"+work.ID.String()+"/builds", map[string]any{
+		"basis_revision": work.Revision, "targets": []string{"wechat_html"}, "options": map[string]any{}, "client": "desktop",
+		"renderer_contract_version": cxrendercontract.WechatHTMLV1, "force": true,
+	})
+	if status != 409 || !bytes.Contains(body, []byte(`"account_inactive"`)) {
+		t.Fatalf("disabled account must reject build: status=%d body=%s", status, body)
+	}
 }
