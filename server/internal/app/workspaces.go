@@ -51,6 +51,19 @@ func (s *Server) listWorkspaces(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, list)
 }
 
+func (s *Server) seedWorkspaceBaseWords(ctx context.Context, workspaceID uuid.UUID) {
+	for _, sw := range baseSensitiveWords {
+		if _, err := s.db.Exec(ctx,
+			`INSERT INTO sensitive_word (workspace_id, word, category, source) VALUES ($1,$2,$3,'base') ON CONFLICT DO NOTHING`,
+			workspaceID, sw.word, sw.category); err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "工作区基础敏感词写入失败", observeFields{
+				ErrorCode: "workspace_base_sensitive_seed_failed", Route: "/workspaces",
+				Extras: map[string]any{"workspace_id": workspaceID.String(), "err": err.Error()},
+			})
+		}
+	}
+}
+
 func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) error {
 	var in struct {
 		Name   string `json:"name"`
@@ -79,13 +92,10 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	for _, sw := range baseSensitiveWords {
-		_, _ = s.db.Exec(r.Context(),
-			`INSERT INTO sensitive_word (workspace_id, word, category, source) VALUES ($1,$2,$3,'base') ON CONFLICT DO NOTHING`,
-			wsID, sw.word, sw.category)
-	}
+	// BE-02：工作区已创建后的基础词库是 best-effort；单条失败 Warn 可观测，不回滚工作区。
+	s.seedWorkspaceBaseWords(r.Context(), wsID)
 	if s.cfg.Dev {
-		_ = s.seedDevModelFor(r.Context(), wsID)
+		_ = s.seedDevModelFor(r.Context(), wsID) // ponytail: Dev 种子模型失败不影响建区；正式环境不走此分支
 	}
 	switched := false
 	if in.Switch {
@@ -428,7 +438,13 @@ func (s *Server) leaveWorkspace(w http.ResponseWriter, r *http.Request) error {
 	next, err := s.pickWorkspace(r.Context(), id.UserID)
 	if err != nil {
 		// No workspace left — clear current; client should create/join.
-		_, _ = s.db.Exec(r.Context(), `DELETE FROM session WHERE id=$1`, id.SessionID)
+		if _, derr := s.db.Exec(r.Context(), `DELETE FROM session WHERE id=$1`, id.SessionID); derr != nil {
+			s.observeFailure(r.Context(), slog.LevelError, "退出工作区后会话清理失败", observeFields{
+				Action: "workspace_leave_session_clear", TargetType: "session", TargetID: id.SessionID.String(),
+				ErrorCode: "workspace_leave_session_clear_failed", Route: "/workspaces/current/leave",
+				Extras: map[string]any{"workspace_id": id.WorkspaceID.String(), "err": derr.Error()},
+			})
+		}
 		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
 		s.audit(r.Context(), "workspace_leave", "workspace", id.WorkspaceID.String(), "ok", map[string]any{"orphaned": true})
 		return ok(w, map[string]any{"ok": true, "needs_workspace": true})
@@ -630,9 +646,15 @@ func (s *Server) sendInviteEmail(w http.ResponseWriter, r *http.Request) error {
 		if err := sendSMTP(cfg, to, subject, body); err != nil {
 			status = "failed"
 			errMsg = err.Error()
-			_, _ = s.db.Exec(r.Context(), `
+			if _, werr := s.db.Exec(r.Context(), `
 				INSERT INTO workspace_invite_email (invite_id, workspace_id, to_email, status, error)
-				VALUES ($1,$2,$3,$4,$5)`, invID, id.WorkspaceID, to, status, errMsg)
+				VALUES ($1,$2,$3,$4,$5)`, invID, id.WorkspaceID, to, status, errMsg); werr != nil {
+				s.observeFailure(r.Context(), slog.LevelError, "邀请邮件失败流水落库失败", observeFields{
+					Action: "invite_email_ledger", TargetType: "workspace_invite", TargetID: invID.String(),
+					ErrorCode: "workspace_invite_email_ledger_failed", Route: "/workspaces/invites/{id}/email",
+					Extras: map[string]any{"err": werr.Error()},
+				})
+			}
 			s.audit(r.Context(), "invite_email", "workspace_invite", invID.String(), "failed", map[string]any{"to": to})
 			return apiErr(502, "email_failed", "邮件发送失败："+errMsg)
 		}
