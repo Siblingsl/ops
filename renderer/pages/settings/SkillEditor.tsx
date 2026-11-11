@@ -190,6 +190,12 @@ export default function SkillEditor({ def: initialDef, copyFrom, initial, fixedA
       </fieldset>
       {impact && <Notice>保存将影响 {impact.affected_bindings} 条绑定{impact.accounts.length ? `（${impact.accounts.map(a => a.name).join('、')}）` : ''}；已生成的作品不追溯修改。</Notice>}
       {impact?.history && impact.history.uses > 0 && <Notice>历史表现（只读）：使用 {impact.history.uses} 次，采用 {impact.history.adopted} 次（{(impact.history.adopt_rate * 100).toFixed(0)}%），发布关联 {impact.history.published} 次。不自动改绑定或启用。</Notice>}
+      {!!impact?.combo_warnings?.length && <Notice tone="gamboge">{impact.combo_warnings.map(w => {
+        const excludeTip = w.suggested_exclude_skill_id === w.other_skill_id
+          ? `历史采用率更低的是「${w.other_name}」`
+          : '历史采用率更低的是当前技能'
+        return `${w.account_name || '账号'} 上与「${w.other_name}」${w.reason}（当前采用 ${(w.outcome_self.adopt_rate * 100).toFixed(0)}% / 对方 ${(w.outcome_other.adopt_rate * 100).toFixed(0)}%）。建议逐项确认是否停用其一：${excludeTip}。不会自动改绑定。`
+      }).join(' ')}</Notice>}
       {!def && <div className="space-y-2 text-xs text-mist-500">
         <p>定义额度 {quota.data?.total ?? '…'} / {limit}</p>
         {(quotaFull || bindingsFull) && <Notice tone="gamboge">{quotaFull ? '该范围定义额度已满' : '账号公共绑定额度已满'}。请先单项管理已有技能。<a className="underline" href={bindingsFull ? `/a/${form.account_id}/profile?tab=skills` : '/settings/skills'}>管理已有技能</a></Notice>}

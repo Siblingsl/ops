@@ -807,14 +807,20 @@ func (s *Server) getSkillImpact(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	// DEEP-03：只读历史表现；个人技能不进 skill_outcome，此处为空统计。
-	history, err := s.loadSkillOutcomeHistory(r.Context(), ident(r.Context()).WorkspaceID, d.ID)
+	wsID := ident(r.Context()).WorkspaceID
+	history, err := s.loadSkillOutcomeHistory(r.Context(), wsID, d.ID)
+	if err != nil {
+		return err
+	}
+	// DEEP-03 第二刀：同账号公共技能指令重叠提示 + 只读 A/B 建议；不改绑定。
+	comboWarnings, err := s.loadSkillComboWarnings(r.Context(), wsID, d, bindings)
 	if err != nil {
 		return err
 	}
 	return ok(w, map[string]any{
 		"skill_id": d.ID, "base_revision": d.Revision, "action": action,
 		"affected_bindings": len(bindings), "accounts": accounts, "impact_token": token,
-		"history": history,
+		"history": history, "combo_warnings": comboWarnings,
 	})
 }
 

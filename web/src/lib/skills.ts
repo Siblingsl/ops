@@ -23,12 +23,29 @@ export interface SkillOutcomeHistory {
   adopt_rate: number
   by_task: { task_type: string; uses: number; adopted: number; published: number; adopt_rate: number }[]
 }
+export interface SkillOutcomeBrief {
+  uses: number
+  adopted: number
+  adopt_rate: number
+}
+export interface SkillComboWarning {
+  account_id: string
+  account_name?: string
+  other_skill_id: string
+  other_name: string
+  score: number
+  reason: string
+  outcome_self: SkillOutcomeBrief
+  outcome_other: SkillOutcomeBrief
+  suggested_exclude_skill_id: string
+}
 export interface SkillImpact {
   base_revision: number
   affected_bindings: number
   accounts: { id: string; name: string; workspace_name: string; bindings: number }[]
   impact_token: string
   history?: SkillOutcomeHistory
+  combo_warnings?: SkillComboWarning[]
 }
 export const skillPlatforms = [
   { value: 'wechat_mp', label: '公众号' }, { value: 'xhs', label: '小红书' }, { value: 'toutiao', label: '今日头条' },
