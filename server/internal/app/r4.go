@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -319,11 +320,19 @@ func (s *Server) syncDraftStatus(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if missing {
-		_, _ = s.db.Exec(ctx, `UPDATE work SET draft_maybe_published=true, updated_at=now() WHERE id=$1`, m.ID)
+	// BE-02：草稿状态旗标是本接口的落库结果；写失败必须可观测并上抛，避免口称成功但库未改。
+	flag := missing
+	if _, err := s.db.Exec(ctx, `UPDATE work SET draft_maybe_published=$2, updated_at=now() WHERE id=$1`, m.ID, flag); err != nil {
+		s.observeFailure(ctx, slog.LevelError, "作品草稿状态旗标落库失败", observeFields{
+			Action: "draft_maybe_published_update", TargetType: "work", TargetID: m.ID.String(),
+			ErrorCode: "draft_maybe_published_update_failed", Route: "/works/{id}/wechat/sync-draft",
+			Extras: map[string]any{"maybe_published": flag, "err": err.Error()},
+		})
+		return err
+	}
+	if flag {
 		return ok(w, map[string]any{"maybe_published": true, "message": "草稿已不在草稿箱，可能已经发表或被删除。请确认后回填已发布，系统不会自动改状态。"})
 	}
-	_, _ = s.db.Exec(ctx, `UPDATE work SET draft_maybe_published=false, updated_at=now() WHERE id=$1`, m.ID)
 	return ok(w, map[string]any{"maybe_published": false, "message": "草稿仍在草稿箱中"})
 }
 
@@ -345,10 +354,15 @@ func wechatErrorCode(err error, code int) bool {
 }
 
 func (s *Server) syncDraftsJob(ctx context.Context) {
+	// BE-02：批扫候选/探测/旗标落库失败必须可观测；单条失败不中断批循环。
 	rows, err := s.db.Query(ctx, `SELECT w.id, w.account_id, w.wechat_draft_media_id FROM work w
 		JOIN platform_account a ON a.id=w.account_id
 		WHERE w.status='pushed' AND w.wechat_draft_media_id IS NOT NULL AND w.deleted_at IS NULL AND a.platform='wechat_mp'`)
 	if err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "草稿状态批扫候选查询失败", observeFields{
+			ErrorCode: "draft_sync_job_query_failed", Route: "internal/jobs/sync_drafts",
+			Extras: map[string]any{"err": err.Error()},
+		})
 		return
 	}
 	type row struct {
@@ -359,19 +373,37 @@ func (s *Server) syncDraftsJob(ctx context.Context) {
 	for rows.Next() {
 		var r row
 		var media *string
-		if err := rows.Scan(&r.id, &r.account, &media); err == nil && media != nil {
-			r.media = *media
-			list = append(list, r)
+		if err := rows.Scan(&r.id, &r.account, &media); err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "草稿状态批扫候选行解析失败", observeFields{
+				ErrorCode: "draft_sync_job_scan_failed", Route: "internal/jobs/sync_drafts",
+				Extras: map[string]any{"err": err.Error()},
+			})
+			continue
 		}
+		if media == nil {
+			continue
+		}
+		r.media = *media
+		list = append(list, r)
 	}
 	rows.Close()
 	for _, r := range list {
 		missing, err := s.draftMissing(ctx, r.account, r.media)
 		if err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "草稿状态批扫探测失败", observeFields{
+				ErrorCode: "draft_sync_job_probe_failed", Route: "internal/jobs/sync_drafts",
+				Extras: map[string]any{"work_id": r.id.String(), "account_id": r.account.String(), "err": err.Error()},
+			})
 			continue
 		}
 		if missing {
-			_, _ = s.db.Exec(ctx, `UPDATE work SET draft_maybe_published=true WHERE id=$1`, r.id)
+			if _, err := s.db.Exec(ctx, `UPDATE work SET draft_maybe_published=true WHERE id=$1`, r.id); err != nil {
+				s.observeFailure(ctx, slog.LevelError, "草稿状态批扫旗标落库失败", observeFields{
+					Action: "draft_sync_job_flag", TargetType: "work", TargetID: r.id.String(),
+					ErrorCode: "draft_sync_job_flag_failed", Route: "internal/jobs/sync_drafts",
+					Extras: map[string]any{"err": err.Error()},
+				})
+			}
 		}
 	}
 }
