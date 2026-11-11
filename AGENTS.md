@@ -62,7 +62,7 @@ cd desktop; pnpm test:e2e:renderer  # 桌面：5287 / 8287 / 8297
 
 `server/` 是**刻意共用**的后端，不属于两端任一侧的私有目录：`server/cmd/ops-e2e` 同时为两套 E2E 提供 API 与模拟模型，差异只由 `OPS_AGENT_WORKBENCH_FEATURES` 等环境变量控制。拆前端时不要把它复制成两份。
 
-`web/e2e/` 与 `renderer/e2e/` 存在同名 spec（本文档记录为 14 个，实际数量以当前仓库和检查脚本为准）：它们覆盖同一段旅程的两种形态（浏览器 / 桌面工作台），必须各写一份，不能共用文件。同名清单与"每对至少 15 行差异"由根目录 `scripts/check-e2e-pairs.mjs` 在 CI 的 `e2e` job 中校验；新增同名要显式登记，直接复制一端到另一端会被拦下。
+`web/e2e/` 与 `renderer/e2e/` 存在同名 spec（数量以 `node scripts/check-e2e-pairs.mjs` 守卫输出与 ALLOWLIST 为准，当前 38 对）：它们覆盖同一段旅程的两种形态（浏览器 / 桌面工作台），必须各写一份，不能共用文件。同名清单与"每对至少 15 行差异"由该脚本在 CI 的 `e2e` job 中校验；新增同名要显式登记，直接复制一端到另一端会被拦下。
 
 ## 本地开发
 

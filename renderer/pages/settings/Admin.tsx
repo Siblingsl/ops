@@ -30,7 +30,7 @@ const AGENT_FEATURE_LABELS: { name: AgentWorkbenchFeatureName; label: string; hi
   { name: 'plugin_mcp', label: '插件与 MCP', hint: 'stdio / HTTP 连接、工具目录与逐项调用回执' },
   { name: 'subagents', label: '子智能体', hint: '并行委派组、共享预算与取消传播' },
   { name: 'voice_dictation', label: '语音转写', hint: '录音→ASR 转写→可编辑终稿；需在模型设置里配好 asr 路由' },
-  { name: 'voice_realtime', label: '实时语音', hint: '实时双向会话；实时音频桥尚未接入' },
+  { name: 'voice_realtime', label: '实时语音', hint: '实时双向会话；桥已编码，开关默认关闭，需真实 Key 验收后方可宣称交付' },
   { name: 'computer_use', label: '电脑控制', hint: 'Windows 应用选窗授权、UIA 动作与硬禁区' },
 ]
 

@@ -1,14 +1,16 @@
 # AI27 待完成项清单（移交后续单独完成）
 
 生成：2026-11-08 ｜ 前序：35 包提交（e8778035 → b86cfdc5），main 分支未 push
-配套文档：[ai27-acceptance-matrix.md](ai27-acceptance-matrix.md)（全系列状态）｜ [docs/08](../08-开发与测试计划.md)（各批实施记录）｜ 当前仓库**没有** `docs/AI_HANDOFF.md`，交接状态以 docs/08 + 验收矩阵 + Git 为准
+配套文档：[ai27-acceptance-matrix.md](ai27-acceptance-matrix.md)（全系列状态）｜ [docs/08](../08-开发与测试计划.md)（各批实施记录）｜ `docs/AI_HANDOFF.md` 本机存在（曾被 `docs/*` gitignore；docs/33 E-13 / 6.2 白名单后可纳入版本控制）；交接仍以 docs/08 + 验收矩阵 + Git 为准
+
+> **2026-11-11 续进（docs/33 E-13 / E-14）**：更正头部两条滞后结论——① `docs/AI_HANDOFF.md` **存在**（检索「搜不到」是 gitignore 口径，不是文件缺失）；② TTS、realtime 音频桥、MCP OAuth **代码已实现**（见 docs/08 / docs/33 §1.6 提交记录），剩余为真实 Key / 真实 Chrome 验收；**不得**据此宣称已交付（C 类未做；MCP OAuth 状态查询另有 DT-01 契约缺陷）。
 
 > **2026-11-09 代码补齐（不改变「需真实环境」的性质）**：
 > 1. R 系列执行器改为**运行时环境变量注入真实供应商**（测试库与页面库隔离问题已修），并把「证据可回查」「§9.7 字段」从只记录升级为硬断言；
 > 2. 双端 `/settings/admin` 补齐 8 个 AI27 工作台开关（此前只能靠 `OPS_AGENT_WORKBENCH_FEATURES` 环境变量）；
 > 3. 语音 ASR 链路实现：`asr` 任务路由 + `/audio/transcriptions` 调用 + `asr_model`/`asr_seconds` 记账 + 失败回合保留。
 >
-> 以上只把阻塞收敛为「需要真实 Key / Chrome 扩展 / 人工操作」，**不等同验收通过**；TTS、realtime 音频桥、MCP OAuth 仍未实现。详见 docs/08 的「DEV-AI27-16 第四批」「DEV-AI27-R 执行器修复」「DEV-AI27 开关面补齐」三条记录。
+> 以上只把阻塞收敛为「需要真实 Key / Chrome 扩展 / 人工操作」，**不等同验收通过**。详见 docs/08 的「DEV-AI27-16 第四批」「DEV-AI27-R 执行器修复」「DEV-AI27 开关面补齐」三条记录。
 
 本清单覆盖 docs/27 v0.2 中**所有未完成项**，按阻塞源分四组。每组列出：验收 ID、缺什么、已就位的部分、执行步骤、涉及文件与命令。完成一项后请在 docs/08 登记并将验收矩阵对应 ID 状态更新为"通过"。
 

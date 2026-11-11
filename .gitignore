@@ -54,6 +54,11 @@ docs/*
 !docs/32-W06父run续接设计.md
 # 未完成功能总账与深度优化开发依据：后续开发的事实基线，需纳入版本控制
 !docs/33-未完成功能总账与深度优化开发依据.md
+# docs/33 6.2：仍在维护的盘点/交接（白名单放行；不改「docs/* 默认忽略」总规则）
+!docs/AI_HANDOFF.md
+!docs/31-未完成功能盘点与续作提示词.md
+!docs/31-执行台账.md
+!docs/31-一键执行提示词.md
 # AI27 验收矩阵（27 文档 §16 的状态汇总）
 !docs/acceptance/
 !docs/acceptance/**

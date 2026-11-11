@@ -1795,6 +1795,9 @@ func (s *Server) removeAgentFiles(paths []string) {
 
 // ---------- 路由 ----------
 
+// registerAgentRoutes 是 DEV-S01 命名；agentRoutes 保留旧名。
+func (s *Server) registerAgentRoutes(r chi.Router) { s.agentRoutes(r) }
+
 // agentRoutes registers the D-117 endpoints (16 文档第 11.1 节)。
 func (s *Server) agentRoutes(r chi.Router) {
 	r.Group(func(r chi.Router) {

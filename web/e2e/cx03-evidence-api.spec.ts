@@ -1,11 +1,13 @@
 import { expect, test } from '@playwright/test'
 import { api, registerAccount } from './support'
 
-// DEV-CX03 / T-CX05 Web 侧服务端契约证据：构建 UI 为桌面专属（06 文档"Web 独立构建 UI 未接入"），
-// Web 以 API 旅程验证同一服务端行为——上传产物摘要不一致 422、渲染期间改稿 build_stale、
+// DEV-CX03 / T-CX05 Web 侧服务端契约证据（docs/33 2.1/2.2 / E-01/E-02）：
+// Web 已有独立 BuildPanel（DEV-CX02，08 已记「对称缺口闭合」）；本用例仍以 API 旅程验证
+// 服务端行为——上传产物摘要不一致 422、渲染期间改稿 build_stale、
 // 跨工作区对构建详情/manifest/evidence.csv 一律 404 且不返回内容片段。
 // 完整 evidence.csv 200 下载链路由 Go 集成测试 cx_evidence_exports_test.go 以 built 注入覆盖；
-// Q-CX-03/04 未决时正式下载保持关闭，本用例不开放任何下载。
+// D-165 后隐私门禁已落地（WARN 可 built + 逐项回执），正式下载旅程/双端 E2E 仍未整项关闭，
+// 本用例不冒充下载验收。
 async function seedWechatWork(page: import('@playwright/test').Page, title: string) {
   const account = await registerAccount(page, '长图文', 'wechat_mp', `cx03-web-${Date.now()}`)
   const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title }) as { id: string; revision: number }

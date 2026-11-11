@@ -132,8 +132,9 @@ func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversatio
 	}
 	childRunID := uuid.New()
 	// 同会话唯一活动 run：父 run 派发时通常已进入等待（awaiting_confirmation）——
-	// 若父仍 running，子 run 以 completed 占位创建后立即由后台循环接管（不与父并发竞争同一约束；
-	// 约束 WHERE status IN ('queued','running')，awaiting_confirmation 不受限）。
+	// 若父仍 running，先把父置 awaiting_confirmation，再以 status/stage='running' 创建子 run，
+	// 由后台循环接管（不与父并发竞争同一约束；约束 WHERE status IN ('queued','running')，
+	// awaiting_confirmation 不受限）。（E-04：旧注释误写 completed，与 INSERT 不符）
 	if _, err := s.db.Exec(ctx, `INSERT INTO agent_run
 		(id, conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model,
 		 execution_origin, root_run_id, parent_run_id, delegation_group_id, delegation_id)
