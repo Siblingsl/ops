@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -500,7 +501,7 @@ func (s *Server) adoptSlot(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		_, _ = s.db.Exec(ctx, `UPDATE topic SET deleted_at=now() WHERE id=$1`, topicID)
+		s.rollbackRaceAdoptedTopic(ctx, topicID, sl.ID)
 		return stateInvalid("这个槽位已经采用过了")
 	}
 	if sl.Suggestion != nil && sl.Suggestion.AICallID != nil {
@@ -569,4 +570,15 @@ func (s *Server) clearSlot(w http.ResponseWriter, r *http.Request) error {
 		s.implicitFeedback(ctx, *sl.Suggestion.AICallID, "rejected", nil, nil)
 	}
 	return s.writeSlot(w, r, sl.ID, nil)
+}
+
+// rollbackRaceAdoptedTopic：槽位已被采用时软删竞态插入的选题；失败 Error 可观测（BE-02）。
+func (s *Server) rollbackRaceAdoptedTopic(ctx context.Context, topicID, slotID uuid.UUID) {
+	if _, err := s.db.Exec(ctx, `UPDATE topic SET deleted_at=now() WHERE id=$1`, topicID); err != nil {
+		s.observeFailure(ctx, slog.LevelError, "计划槽位竞态选题回滚失败", observeFields{
+			Action: "plan_slot_topic_rollback", TargetType: "topic", TargetID: topicID.String(),
+			ErrorCode: "plan_slot_topic_rollback_failed", Route: "/plan/slots/{id}/adopt",
+			Extras: map[string]any{"slot_id": slotID.String(), "err": err.Error()},
+		})
+	}
 }
