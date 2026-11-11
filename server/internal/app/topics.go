@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -977,10 +978,20 @@ func (s *Server) startWorkFromTopic(w http.ResponseWriter, r *http.Request) erro
 			}
 		}
 	}
-	for _, mid := range preselected {
-		_, _ = s.db.Exec(ctx, `INSERT INTO work_material (work_id, material_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, workID, mid)
-	}
+	s.linkAdoptedWorkMaterials(ctx, workID, preselected)
 	return s.writeWork(w, r, workID)
+}
+
+// linkAdoptedWorkMaterials：采用选题后的素材预挂 best-effort；单条失败 Warn（BE-02）。
+func (s *Server) linkAdoptedWorkMaterials(ctx context.Context, workID uuid.UUID, materialIDs []uuid.UUID) {
+	for _, mid := range materialIDs {
+		if _, err := s.db.Exec(ctx, `INSERT INTO work_material (work_id, material_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, workID, mid); err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "选题采用素材预挂失败", observeFields{
+				ErrorCode: "topic_adopt_material_link_failed", Route: "/topics/{id}/adopt",
+				Extras: map[string]any{"work_id": workID.String(), "material_id": mid.String(), "err": err.Error()},
+			})
+		}
+	}
 }
 
 // scoreTopics runs topic_score for up to 20 unscored pending topics in the task center (EX-C-02). It never changes status.
