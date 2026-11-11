@@ -273,10 +273,23 @@ func (s *Server) schedulePlatformOperation(ctx context.Context, candidate queued
 }
 
 func (s *Server) cancelPlatformSyncOperation(ctx context.Context, operationID uuid.UUID, reason string, now time.Time) {
-	_, _ = s.db.Exec(ctx, `UPDATE platform_sync_operation SET status='canceled',stage='complete',pause_reason=$2,
-		revision=revision+1,finished_at=$3,updated_at=$3 WHERE id=$1 AND status IN ('queued','running','waiting_budget','waiting_device','waiting_login','paused')`, operationID, reason, now)
-	_, _ = s.db.Exec(ctx, `UPDATE platform_sync_run SET status='canceled',cancel_requested_at=$2,finished_at=$2
-		WHERE operation_id=$1 AND status IN ('queued','leased','running')`, operationID, now)
+	// BE-02：能力变更取消必须可观测；operation / run 两处落库各自记 Error，不中断调用方。
+	if _, err := s.db.Exec(ctx, `UPDATE platform_sync_operation SET status='canceled',stage='complete',pause_reason=$2,
+		revision=revision+1,finished_at=$3,updated_at=$3 WHERE id=$1 AND status IN ('queued','running','waiting_budget','waiting_device','waiting_login','paused')`, operationID, reason, now); err != nil {
+		s.observeFailure(ctx, slog.LevelError, "平台同步操作取消落库失败", observeFields{
+			Action: "platform_sync_operation_cancel", TargetType: "platform_sync_operation", TargetID: operationID.String(),
+			ErrorCode: "platform_sync_operation_cancel_failed", Route: "internal/platform_sync/cancel",
+			Extras: map[string]any{"reason": reason, "err": err.Error()},
+		})
+	}
+	if _, err := s.db.Exec(ctx, `UPDATE platform_sync_run SET status='canceled',cancel_requested_at=$2,finished_at=$2
+		WHERE operation_id=$1 AND status IN ('queued','leased','running')`, operationID, now); err != nil {
+		s.observeFailure(ctx, slog.LevelError, "平台同步运行取消落库失败", observeFields{
+			Action: "platform_sync_run_cancel", TargetType: "platform_sync_operation", TargetID: operationID.String(),
+			ErrorCode: "platform_sync_run_cancel_failed", Route: "internal/platform_sync/cancel",
+			Extras: map[string]any{"reason": reason, "err": err.Error()},
+		})
+	}
 }
 
 func (s *Server) platformOperationRunSnapshot(ctx context.Context, tx pgx.Tx, op queuedPlatformOperation, currentStage string,
