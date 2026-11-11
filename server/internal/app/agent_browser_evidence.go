@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -149,10 +150,15 @@ func (s *Server) createBrowserEvidence(w http.ResponseWriter, r *http.Request) e
 	}); err != nil {
 		return err
 	}
-	// 事件投影（27 §13.6 browser.evidence_created）。
-	_, _ = s.appendAgentEvent(r.Context(), conversationID, runID, "browser.evidence_created", map[string]any{
+	// 事件投影（27 §13.6 browser.evidence_created）。BE-02：失败 Warn，证据主行已提交。
+	if _, err := s.appendAgentEvent(r.Context(), conversationID, runID, "browser.evidence_created", map[string]any{
 		"evidence_id": evidenceID.String(), "origin": body.Origin, "redaction_state": redaction,
-	})
+	}); err != nil {
+		s.observeFailure(r.Context(), slog.LevelWarn, "浏览器证据事件写入失败", observeFields{
+			ErrorCode: "browser_evidence_event_failed", Route: "internal/agent/browser_evidence",
+			Extras: map[string]any{"evidence_id": evidenceID.String(), "err": err.Error()},
+		})
+	}
 	return ok(w, view)
 }
 

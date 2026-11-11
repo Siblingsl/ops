@@ -572,8 +572,8 @@ func (s *Server) getAgentAttachmentFile(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Content-Disposition", mimepkg.FormatMediaType("attachment", map[string]string{"filename": name}))
 	}
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
-	_, _ = w.Write(data)
-	return nil
+	_, err = w.Write(data)
+	return err
 }
 
 // ---------- 删除（第 11.1 节：删除未发送的附件） ----------

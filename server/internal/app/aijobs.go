@@ -171,7 +171,14 @@ func (s *Server) startBackgroundJob(ctx context.Context, spec jobSpec, fn func(c
 			return
 		}
 		defer func() { <-sem }()
-		_, _ = s.db.Exec(context.Background(), `UPDATE ai_job SET status='running', started_at=now() WHERE id=$1 AND status='queued'`, jobID)
+		// BE-02：进入 running 的状态落库失败必须可观测；任务仍继续执行并由 finishJob 收尾。
+		if _, err := s.db.Exec(context.Background(), `UPDATE ai_job SET status='running', started_at=now() WHERE id=$1 AND status='queued'`, jobID); err != nil {
+			s.observeFailure(bg, slog.LevelError, "AI 任务进入运行态落库失败", observeFields{
+				Action: "ai_job_mark_running", TargetType: "ai_job", TargetID: jobID.String(),
+				ErrorCode: "ai_job_mark_running_failed", Route: "internal/aijobs/start",
+				Extras: map[string]any{"err": err.Error()},
+			})
+		}
 		res, err := fn(jctx)
 		switch {
 		case jctx.Err() != nil:

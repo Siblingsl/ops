@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"sort"
@@ -477,7 +478,10 @@ func releaseAccountAnalysisRequestLock(conn *pgxpool.Conn, key string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, key)
+	// BE-02：咨询锁释放失败只影响同 key 后续争用；Warn 可观测（无 Server 句柄，用 slog）。
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, key); err != nil {
+		slog.Warn("账号分析咨询锁释放失败", "error_code", "cx_analysis_advisory_unlock_failed", "key", key, "err", err)
+	}
 	conn.Release()
 }
 

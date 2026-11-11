@@ -993,8 +993,8 @@ func (s *Server) exportSkill(w http.ResponseWriter, r *http.Request) error {
 	// 导出文件名使用通用名称（10.3 节）：不包含私人名称 / ID。
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="skill.md"`)
-	_, _ = w.Write([]byte(md))
-	return nil
+	_, err = w.Write([]byte(md))
+	return err
 }
 
 // ---------- POST /skills ----------

@@ -3,14 +3,17 @@ package app
 import (
 	"context"
 	"fmt"
-	"github.com/google/uuid"
+	"log/slog"
 	"net/http"
 	"net/url"
-	"ops/internal/ai"
-	"ops/internal/crawl"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+
+	"ops/internal/ai"
+	"ops/internal/crawl"
 )
 
 type HotItem struct {
@@ -193,7 +196,13 @@ func (s *Server) matchHot(ctx context.Context, a *Account, force bool) error {
 	succeeded := false
 	defer func() {
 		if !succeeded {
-			_, _ = s.db.Exec(context.WithoutCancel(ctx), `DELETE FROM account_hot_refresh WHERE account_id=$1 AND refreshed_at=$2`, a.ID, claimTime)
+			// BE-02：刷新认领回滚必须可观测（WithoutCancel 保父 ctx 取消后仍能释放认领）。
+			if _, err := s.db.Exec(context.WithoutCancel(ctx), `DELETE FROM account_hot_refresh WHERE account_id=$1 AND refreshed_at=$2`, a.ID, claimTime); err != nil {
+				s.observeFailure(context.WithoutCancel(ctx), slog.LevelWarn, "热点刷新认领回滚失败", observeFields{
+					ErrorCode: "hot_refresh_claim_rollback_failed", Route: "internal/hot/match",
+					Extras: map[string]any{"account_id": a.ID.String(), "err": err.Error()},
+				})
+			}
 		}
 	}()
 	items, err := s.hotCandidates(ctx, a, st)

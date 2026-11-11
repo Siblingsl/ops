@@ -452,8 +452,8 @@ func (s *Server) synthesizeVoiceTurn(w http.ResponseWriter, r *http.Request) err
 	}
 	w.Header().Set("Content-Type", mime)
 	w.Header().Set("Content-Length", fmtInt(len(audio)))
-	_, _ = w.Write(audio)
-	return nil
+	_, err = w.Write(audio)
+	return err
 }
 
 // fmtInt 是 Content-Length 的小工具（避免为它引 strconv 到多处）。

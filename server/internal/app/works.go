@@ -1112,6 +1112,9 @@ func nz(s, def string) string {
 
 func queryIntParam(r *http.Request, name string) int {
 	var n int
-	_, _ = fmt.Sscanf(chiParam(r, name), "%d", &n)
+	// C-class：查询参数解析失败回落 0；调用方以 0 作缺省/校验。
+	if _, err := fmt.Sscanf(chiParam(r, name), "%d", &n); err != nil {
+		return 0
+	}
 	return n
 }

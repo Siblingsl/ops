@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -228,5 +229,11 @@ func (s *Server) restoreSectionRevision(w http.ResponseWriter, r *http.Request) 
 
 // purgeDeletedSections removes sections soft-deleted more than 30 days ago.
 func (s *Server) purgeDeletedSections(ctx context.Context) {
-	_, _ = s.db.Exec(ctx, `DELETE FROM work_section WHERE deleted_at IS NOT NULL AND deleted_at < now() - interval '30 days'`)
+	// BE-02：段落保留清理失败必须可观测；不阻断调度主循环。
+	if _, err := s.db.Exec(ctx, `DELETE FROM work_section WHERE deleted_at IS NOT NULL AND deleted_at < now() - interval '30 days'`); err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "软删段落保留清理失败", observeFields{
+			ErrorCode: "editor_section_purge_failed", Route: "internal/jobs/purge_sections",
+			Extras: map[string]any{"err": err.Error()},
+		})
+	}
 }

@@ -411,8 +411,8 @@ func (s *Server) assetFile(w http.ResponseWriter, r *http.Request) error {
 	}
 	w.Header().Set("Content-Type", mime)
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
-	_, _ = w.Write(data)
-	return nil
+	_, err = w.Write(data)
+	return err
 }
 
 func (s *Server) updateAsset(w http.ResponseWriter, r *http.Request) error {

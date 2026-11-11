@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -541,10 +542,19 @@ func (s *Server) sweepDelegationGroups(ctx context.Context) {
 		if _, err := s.db.Exec(ctx, `UPDATE agent_delegation_group
 			SET adopted_run_id=NULL, adopted_at=NULL, revision=revision+1, updated_at=now()
 			WHERE id=$1 AND adopted_run_id IS NOT NULL AND results_consumed_at IS NULL`, item.groupID); err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "委派采纳释放落库失败", observeFields{
+				ErrorCode: "delegation_adoption_release_failed", Route: "internal/agent/delegation_resume",
+				Extras: map[string]any{"group_id": item.groupID.String(), "err": err.Error()},
+			})
 			continue
 		}
-		_, _ = s.appendAgentEvent(ctx, item.conversationID, nil, "delegation.adoption_released",
-			map[string]any{"group_id": item.groupID})
+		if _, err := s.appendAgentEvent(ctx, item.conversationID, nil, "delegation.adoption_released",
+			map[string]any{"group_id": item.groupID}); err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "委派采纳释放事件写入失败", observeFields{
+				ErrorCode: "delegation_adoption_release_event_failed", Route: "internal/agent/delegation_resume",
+				Extras: map[string]any{"group_id": item.groupID.String(), "err": err.Error()},
+			})
+		}
 	}
 }
 

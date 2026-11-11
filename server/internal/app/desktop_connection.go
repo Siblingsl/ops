@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -227,7 +228,13 @@ func (s *Server) desktopChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	s.desktop.connections[c.id] = c
 	s.desktop.mu.Unlock()
-	_, _ = s.db.Exec(r.Context(), `UPDATE desktop_device SET last_seen_at=now() WHERE id=$1 AND user_id=$2`, c.deviceID, c.userID)
+	// BE-02：桌面设备心跳 best-effort；失败 Warn，不阻断建连。
+	if _, err := s.db.Exec(r.Context(), `UPDATE desktop_device SET last_seen_at=now() WHERE id=$1 AND user_id=$2`, c.deviceID, c.userID); err != nil {
+		s.observeFailure(r.Context(), slog.LevelWarn, "桌面设备心跳落库失败", observeFields{
+			ErrorCode: "desktop_device_last_seen_failed", Route: "internal/desktop/connect",
+			Extras: map[string]any{"device_id": c.deviceID.String(), "err": err.Error()},
+		})
+	}
 	s.desktopRunConnection(c)
 }
 

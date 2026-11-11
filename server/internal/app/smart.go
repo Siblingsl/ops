@@ -619,8 +619,16 @@ func (s *Server) triageInboxItem(ctx context.Context, x *InboxItem) (*inboxSugge
 	if out.As == "material" && !materialKinds[out.Kind] {
 		out.Kind = guessMaterialKind(x.Content)
 	}
-	b, _ := json.Marshal(out)
-	_, _ = s.db.Exec(ctx, `UPDATE inbox_item SET suggestion=$2, updated_at=now() WHERE id=$1`, x.ID, b)
+	b, _ := json.Marshal(out) // C-class：结构化 suggestion 字面字段
+	// BE-02：归类建议落库是本路径的持久化承诺；写失败必须可观测并上抛。
+	if _, err := s.db.Exec(ctx, `UPDATE inbox_item SET suggestion=$2, updated_at=now() WHERE id=$1`, x.ID, b); err != nil {
+		s.observeFailure(ctx, slog.LevelError, "收件箱归类建议落库失败", observeFields{
+			Action: "inbox_triage_suggestion", TargetType: "inbox_item", TargetID: x.ID.String(),
+			ErrorCode: "inbox_triage_suggestion_failed", Route: "/inbox/{id}/triage",
+			Extras: map[string]any{"err": err.Error()},
+		})
+		return nil, err
+	}
 	return &out, nil
 }
 

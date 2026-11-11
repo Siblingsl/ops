@@ -536,7 +536,13 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 
 func (s *Server) afterAISuccess(ctx context.Context, t aiTask, p *ContextPack) {
 	if len(p.MemoryIDs) > 0 {
-		_, _ = s.db.Exec(ctx, `UPDATE account_memory SET use_count=use_count+1, last_used_at=now() WHERE id = ANY($1)`, p.MemoryIDs)
+		// BE-02：记忆用量计数 best-effort；失败 Warn，不回滚已成功的生成。
+		if _, err := s.db.Exec(ctx, `UPDATE account_memory SET use_count=use_count+1, last_used_at=now() WHERE id = ANY($1)`, p.MemoryIDs); err != nil {
+			s.observeFailure(ctx, slog.LevelWarn, "账号记忆用量计数失败", observeFields{
+				ErrorCode: "aicore_memory_use_count_failed", Route: "internal/ai/after_success",
+				Extras: map[string]any{"task": t.Type, "err": err.Error()},
+			})
+		}
 	}
 	if p.Instruction != "" && t.Account != nil {
 		s.learnFromInstruction(ctx, t.Account, p.Instruction)

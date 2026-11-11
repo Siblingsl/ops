@@ -315,7 +315,13 @@ func (s *Server) emitBrowserCommandEvent(ctx context.Context, conversationID uui
 	if conversationID == uuid.Nil {
 		return
 	}
-	_, _ = s.appendAgentEvent(ctx, conversationID, nil, eventType, payload)
+	// BE-02：浏览器命令时间线事件 best-effort；失败 Warn，不回滚命令主状态。
+	if _, err := s.appendAgentEvent(ctx, conversationID, nil, eventType, payload); err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "浏览器命令事件写入失败", observeFields{
+			ErrorCode: "browser_command_event_failed", Route: "internal/agent/browser_command",
+			Extras: map[string]any{"event_type": eventType, "conversation_id": conversationID.String(), "err": err.Error()},
+		})
+	}
 }
 
 // browserFrameTarget 解析并校验 payload 的 frame_id / frame_origin（A7，27 §14.3 表格行 2）。

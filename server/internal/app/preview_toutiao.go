@@ -41,6 +41,7 @@ func (s *Server) getToutiaoPublicPreview(w http.ResponseWriter, r *http.Request,
 	images := []map[string]any{}
 	articleHTML := string(pack.Files["article.html"])
 	if articleHTML != "" {
+		// C-class：strings.Cut 第三返回值是 found bool，不是 error；缺标签时保留原文。
 		_, articleHTML, _ = strings.Cut(articleHTML, "<body>")
 		articleHTML, _, _ = strings.Cut(articleHTML, "</body>")
 	}

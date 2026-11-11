@@ -124,7 +124,10 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "数据库不可用", http.StatusServiceUnavailable)
 		return
 	}
-	_, _ = w.Write([]byte("ok"))
+	if _, err := w.Write([]byte("ok")); err != nil {
+		// BE-02：探针写失败只影响本轮探活；Warn 可观测。
+		slog.Warn("健康检查响应写入失败", "error_code", "healthz_write_failed", "err", err)
+	}
 }
 
 // Router 首次构建路由后缓存到 s.handler（sync.Once），再次调用返回同一实例；

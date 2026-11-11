@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -662,9 +663,15 @@ func (s *Server) postAgentGoalControl(w http.ResponseWriter, r *http.Request) er
 		if derivation.Reason != "" {
 			// 派生失败不阻断续跑；原因挂既有 goal.updated 事件（事件类型白名单
 			// 不为本次新增类型开迁移），任务面板按 browser_grant_derivation 字段显示。
-			_, _ = appendAgentEventTx(ctx, tx, goal.ConversationID, &resumeState.RunID, "goal.updated", map[string]any{
+			// BE-02：事件写入失败 Warn，不回滚续跑事务。
+			if _, err := appendAgentEventTx(ctx, tx, goal.ConversationID, &resumeState.RunID, "goal.updated", map[string]any{
 				"goal_id": goalID, "status": "active", "browser_grant_derivation": derivation.Reason,
-			}, nil)
+			}, nil); err != nil {
+				s.observeFailure(ctx, slog.LevelWarn, "目标续跑派生说明事件写入失败", observeFields{
+					ErrorCode: "agent_goal_derivation_event_failed", Route: "internal/agent/goals",
+					Extras: map[string]any{"goal_id": goalID.String(), "err": err.Error()},
+				})
+			}
 		}
 	}
 	goal, err = s.agentGoalByID(ctx, tx, goalID)

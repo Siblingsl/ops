@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -320,7 +321,13 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			return
 		}
 		if s.now().Sub(id.lastSeen) > time.Minute {
-			_, _ = s.db.Exec(r.Context(), `UPDATE session SET last_seen_at=now() WHERE id=$1`, id.SessionID)
+			// BE-02：会话心跳 best-effort；失败 Warn，不阻断鉴权。
+			if _, err := s.db.Exec(r.Context(), `UPDATE session SET last_seen_at=now() WHERE id=$1`, id.SessionID); err != nil {
+				s.observeFailure(r.Context(), slog.LevelWarn, "会话心跳落库失败", observeFields{
+					ErrorCode: "auth_session_last_seen_failed", Route: "middleware/auth",
+					Extras: map[string]any{"session_id": id.SessionID.String(), "err": err.Error()},
+				})
+			}
 		}
 		if trace, ok := r.Context().Value(requestTraceKey{}).(*requestTrace); ok {
 			trace.WorkspaceID = id.WorkspaceID
