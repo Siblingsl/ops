@@ -3,12 +3,15 @@ package app
 import (
 	"context"
 	"crypto/rand"
-	"github.com/go-chi/chi/v5"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
-	"ops/internal/crawl"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"ops/internal/crawl"
 )
 
 type CrawlPlatform struct {
@@ -122,7 +125,10 @@ func (s *Server) reserveCrawl(ctx context.Context, src crawl.Source, now time.Ti
 		if n >= min(day, 100) {
 			return crawl.ErrLimited
 		}
-		u, _ := url.Parse(src.URL)
+		u, e := url.Parse(src.URL)
+		if e != nil {
+			return e
+		}
 		if u.Path != "/robots.txt" {
 			var exists bool
 			e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM crawl_platform_read WHERE platform=$1 AND url=$2 AND last_read_at>$3::timestamptz-make_interval(hours=>$4))`, src.Kind, src.URL, now, max(repeat, 12)).Scan(&exists)
@@ -137,7 +143,10 @@ func (s *Server) reserveCrawl(ctx context.Context, src crawl.Source, now time.Ti
 				return e
 			}
 		}
-		delay, _ := rand.Int(rand.Reader, big.NewInt(int64(max(0, jitter)*60+1)))
+		delay, e := rand.Int(rand.Reader, big.NewInt(int64(max(0, jitter)*60+1)))
+		if e != nil {
+			return e
+		}
 		_, e = tx.Exec(ctx, `UPDATE crawl_platform_state SET request_date=$2::date,today_requests=$3,last_request_at=$4,next_request_at=$5 WHERE platform=$1`, src.Kind, today, n+1, now, now.Add(time.Duration(max(spacing, 3))*time.Minute+time.Duration(delay.Int64())*time.Second))
 		if e != nil {
 			return e
@@ -157,9 +166,24 @@ func (s *Server) reserveCrawl(ctx context.Context, src crawl.Source, now time.Ti
 	return tx.Commit(ctx)
 }
 func (s *Server) finishPlatform(ctx context.Context, src crawl.Source, now time.Time, out crawl.Outcome) {
+	// BE-02：无 error 返回（由 crawl.Store.Finish 调用），落库失败不得静默——Error 级可观测。
+	started := time.Now()
 	if out.Paused {
-		_, _ = s.db.Exec(ctx, `UPDATE crawl_platform_state SET strikes_7d=CASE WHEN last_strike_at>$2::timestamptz-interval '7 days' THEN strikes_7d+1 ELSE 1 END,enabled=CASE WHEN last_strike_at>$2::timestamptz-interval '7 days' THEN false ELSE enabled END,paused_until=CASE WHEN last_strike_at>$2::timestamptz-interval '7 days' THEN $2::timestamptz+interval '7 days' ELSE $2::timestamptz+interval '24 hours' END,last_strike_at=$2 WHERE platform=$1`, src.Kind, now)
-		s.notifyCrawlAdmins(ctx, src.Kind, out.Error)
+		if _, err := s.db.Exec(ctx, `UPDATE crawl_platform_state SET strikes_7d=CASE WHEN last_strike_at>$2::timestamptz-interval '7 days' THEN strikes_7d+1 ELSE 1 END,enabled=CASE WHEN last_strike_at>$2::timestamptz-interval '7 days' THEN false ELSE enabled END,paused_until=CASE WHEN last_strike_at>$2::timestamptz-interval '7 days' THEN $2::timestamptz+interval '7 days' ELSE $2::timestamptz+interval '24 hours' END,last_strike_at=$2 WHERE platform=$1`, src.Kind, now); err != nil {
+			s.observeFailure(ctx, slog.LevelError, "平台爬取熔断状态落库失败", observeFields{
+				Action: "crawl_platform_finish", TargetType: "crawl_platform", TargetID: src.Kind,
+				ErrorCode: "crawl_platform_strike_failed", Route: "internal/crawl/platform/finish",
+				Started: started, Extras: map[string]any{"err": err.Error()},
+			})
+		} else {
+			s.notifyCrawlAdmins(ctx, src.Kind, out.Error)
+		}
 	}
-	_, _ = s.db.Exec(ctx, `INSERT INTO crawl_run(source_key,started_at,finished_at,requests,http_status,items,error) VALUES($1,$2,$2,$3,$4,$5,$6)`, src.Kind, now, out.Requests, out.Status, map[bool]int{true: 1}[out.Error == ""], out.Error)
+	if _, err := s.db.Exec(ctx, `INSERT INTO crawl_run(source_key,started_at,finished_at,requests,http_status,items,error) VALUES($1,$2,$2,$3,$4,$5,$6)`, src.Kind, now, out.Requests, out.Status, map[bool]int{true: 1}[out.Error == ""], out.Error); err != nil {
+		s.observeFailure(ctx, slog.LevelError, "平台爬取运行记录落库失败", observeFields{
+			Action: "crawl_platform_run_log", TargetType: "crawl_platform", TargetID: src.Kind,
+			ErrorCode: "crawl_platform_run_log_failed", Route: "internal/crawl/platform/finish",
+			Started: started, Extras: map[string]any{"err": err.Error()},
+		})
+	}
 }
