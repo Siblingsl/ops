@@ -526,22 +526,16 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 	if offset < 0 {
 		offset = 0
 	}
+	// DEV-P02：总数与列表分查；列表不再对每行跑 4 个 LATERAL，页内聚合按 id 批查填回。
 	var total int
 	if err := s.db.QueryRow(r.Context(), `SELECT count(*) FROM work w`+where, args...).Scan(&total); err != nil {
 		return err
 	}
 	sql := `SELECT w.id, w.title, w.tags, w.status, w.content_format, w.source_work_id, sw.title,
-		d.derived_count, w.cover_asset_id, first_asset.id,
-		sections.char_count, sections.section_count,
-		w.published_at, w.updated_at, to_char(w.planned_date,'YYYY-MM-DD'), w.assignee_id, w.target_chars,
-		todos.done, todos.total
-		FROM work w LEFT JOIN work sw ON sw.id=w.source_work_id
-		LEFT JOIN LATERAL (SELECT count(*) AS derived_count FROM work d WHERE d.source_work_id=w.id AND d.deleted_at IS NULL) d ON true
-		LEFT JOIN LATERAL (SELECT id FROM asset WHERE work_id=w.id ORDER BY position, created_at LIMIT 1) first_asset ON true
-		LEFT JOIN LATERAL (SELECT coalesce(sum(char_length(content_md)),0) AS char_count, count(*) AS section_count
-			FROM work_section WHERE work_id=w.id AND deleted_at IS NULL) sections ON true
-		LEFT JOIN LATERAL (SELECT count(*) FILTER (WHERE coalesce((e->>'done')::boolean,false)) AS done,
-			jsonb_array_length(w.post_push_todos) AS total FROM jsonb_array_elements(w.post_push_todos) e) todos ON true`
+		w.cover_asset_id, w.published_at, w.updated_at, to_char(w.planned_date,'YYYY-MM-DD'), w.assignee_id, w.target_chars,
+		coalesce((SELECT count(*) FILTER (WHERE coalesce((e->>'done')::boolean,false)) FROM jsonb_array_elements(w.post_push_todos) e),0),
+		coalesce(jsonb_array_length(w.post_push_todos),0)
+		FROM work w LEFT JOIN work sw ON sw.id=w.source_work_id`
 	pageWhere := where
 	pageArgs := append([]any(nil), args...)
 	if cursor != nil {
@@ -564,8 +558,8 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 	list := []WorkListItem{}
 	for rows.Next() {
 		var x WorkListItem
-		if err := rows.Scan(&x.ID, &x.Title, &x.Tags, &x.Status, &x.ContentFormat, &x.SourceWorkID, &x.SourceTitle, &x.DerivedCount,
-			&x.CoverAssetID, &x.FirstAssetID, &x.CharCount, &x.SectionCount, &x.PublishedAt, &x.UpdatedAt, &x.PlannedDate, &x.AssigneeID, &x.TargetChars, &x.TodosDone, &x.TodosTotal); err != nil {
+		if err := rows.Scan(&x.ID, &x.Title, &x.Tags, &x.Status, &x.ContentFormat, &x.SourceWorkID, &x.SourceTitle,
+			&x.CoverAssetID, &x.PublishedAt, &x.UpdatedAt, &x.PlannedDate, &x.AssigneeID, &x.TargetChars, &x.TodosDone, &x.TodosTotal); err != nil {
 			return err
 		}
 		list = append(list, x)
@@ -576,11 +570,88 @@ func (s *Server) listWorks(w http.ResponseWriter, r *http.Request) error {
 		last := list[len(list)-1]
 		w.Header().Set("X-Next-Cursor", encodeListCursor(last.UpdatedAt, last.ID))
 	}
+	if err := s.fillWorkListAggregates(r.Context(), list); err != nil {
+		return err
+	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	w.Header().Set("X-Limit", strconv.Itoa(limit))
 	w.Header().Set("X-Offset", strconv.Itoa(offset))
 	w.Header().Set("X-Has-More", strconv.FormatBool(hasMore))
 	return ok(w, list)
+}
+
+// fillWorkListAggregates 按页内 id 批查衍生数 / 首图 / 字数与段数（DEV-P02）。
+func (s *Server) fillWorkListAggregates(ctx context.Context, list []WorkListItem) error {
+	if len(list) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(list))
+	index := make(map[uuid.UUID]int, len(list))
+	for i := range list {
+		ids[i] = list[i].ID
+		index[list[i].ID] = i
+	}
+	rows, err := s.db.Query(ctx, `SELECT source_work_id, count(*) FROM work
+		WHERE source_work_id = ANY($1) AND deleted_at IS NULL GROUP BY source_work_id`, ids)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			rows.Close()
+			return err
+		}
+		if i, ok := index[id]; ok {
+			list[i].DerivedCount = n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.db.Query(ctx, `SELECT DISTINCT ON (work_id) work_id, id FROM asset
+		WHERE work_id = ANY($1) ORDER BY work_id, position, created_at`, ids)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, assetID uuid.UUID
+		if err := rows.Scan(&id, &assetID); err != nil {
+			rows.Close()
+			return err
+		}
+		if i, ok := index[id]; ok {
+			list[i].FirstAssetID = &assetID
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.db.Query(ctx, `SELECT work_id, coalesce(sum(char_length(content_md)),0), count(*)
+		FROM work_section WHERE work_id = ANY($1) AND deleted_at IS NULL GROUP BY work_id`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var chars, sections int
+		if err := rows.Scan(&id, &chars, &sections); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			list[i].CharCount = chars
+			list[i].SectionCount = sections
+		}
+	}
+	return rows.Err()
 }
 
 func (s *Server) getWork(w http.ResponseWriter, r *http.Request) error {
