@@ -171,7 +171,7 @@ func (s *Server) createComputerGrant(w http.ResponseWriter, r *http.Request) err
 		runID = &parsed
 	}
 	grantID := uuid.New()
-	expires := time.Now().Add(30 * time.Second)
+	expires := s.now().Add(30 * time.Second)
 	var view computerGrantView
 	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
 		row := tx.QueryRow(r.Context(), "INSERT INTO agent_computer_grant"+
