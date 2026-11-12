@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: '部署、开启桌面 AI 或只读访问诊断'
+        description: '部署、开启桌面 AI、只读访问诊断或免构建恢复容器'
         type: choice
-        options: [deploy, diagnose, enable-desktop-ai]
+        options: [deploy, diagnose, enable-desktop-ai, recover]
         default: deploy
 
 concurrency:
@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       (github.event_name == 'workflow_dispatch' &&
-        (inputs.action == 'diagnose' || github.ref == 'refs/heads/main')) ||
+        (inputs.action == 'diagnose' || inputs.action == 'recover' || github.ref == 'refs/heads/main')) ||
       (github.event_name == 'push' && vars.OPS_PRODUCTION_DEPLOY_ENABLED == 'true')
     steps:
       # 生产镜像主要由 server 构建；桌面/Web e2e 仍在 CI 跑，但不挡上线（方案 1）。
@@ -216,6 +216,34 @@ jobs:
               done
               docker compose -f deploy/docker-compose.prod.yml exec -T app sh -ec 'test "${OPS_DESKTOP_AI_ENABLED:-}" = "1"'
               echo "桌面 AI 全局开关已启用；原配置备份于 $BACKUP_FILE。"
+            elif [[ "${{ inputs.action == 'recover' }}" == "true" ]]; then
+              # 免构建恢复：只把现有镜像的容器拉起来，不拉代码、不重建、不备份。
+              # 用于部署在 go build 阶段被 SSH 超时打断后，app/parser 一直停着导致 nginx 502。
+              if [[ ! -f deploy/docker-compose.prod.yml ]]; then
+                echo "缺少 deploy/docker-compose.prod.yml；无法恢复。" >&2
+                exit 1
+              fi
+              echo "=== 现有镜像 ==="
+              docker images --format '{{.Repository}}:{{.Tag}} {{.ID}} {{.CreatedSince}}' | grep -E '^ops-app' || true
+              echo "=== 启动现有镜像（--no-build） ==="
+              docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --no-build --remove-orphans
+              for attempt in $(seq 1 30); do
+                if curl --noproxy '*' --max-time 5 --fail --silent -o /dev/null http://127.0.0.1:44537/healthz; then
+                  echo "容器已恢复，回环健康检查通过（第 $attempt 次）。"
+                  break
+                fi
+                if [[ "$attempt" -eq 30 ]]; then
+                  echo "容器已启动但健康检查未通过，请查看上一步日志。" >&2
+                  docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env ps >&2 || true
+                  docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env logs --tail=80 app >&2 || true
+                  exit 1
+                fi
+                sleep 2
+              done
+              docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env ps
+              for endpoint in http://127.0.0.1:44537/healthz https://ops-api.88813888.xyz/healthz; do
+                curl --noproxy '*' --max-time 10 -sS -o /dev/null -w "$endpoint -> %{http_code}\n" "$endpoint" || true
+              done
             else
               DEPLOY_SHA='${{ github.sha }}'
               if [[ ! -f deploy/.env ]]; then
