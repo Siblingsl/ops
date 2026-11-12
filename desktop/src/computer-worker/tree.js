@@ -167,18 +167,27 @@ function buildObserveTree(raw) {
     });
   }
 
+  // P2-5：target_handle 是与主进程同一公式的 sha256 前 32 位（§P2-5 步骤 2），不是 hwnd；
+  // 采集不到（夹具 / 无窗口）时为空串。title_hash 只在本进程内可见（不可枚举），
+  // 供 RefEntry.window_title_hash 使用，不进入 §4.5 契约输出。
+  const window_identity = {
+    pid: Number(raw && raw.pid) || 0,
+    process_start_time: String((raw && raw.process_start_time) || ''),
+    hwnd: Number(raw && raw.hwnd) || 0,
+    target_handle: String((raw && raw.target_handle) || ''),
+    window_bounds_hash: boundsHash(tree.bounds),
+  };
+  Object.defineProperty(window_identity, 'title_hash', {
+    value: String((raw && raw.title_hash) || ''),
+    enumerable: false, configurable: true, writable: true,
+  });
+
   return {
     tree,
     complete: raw && raw.tree_complete === true,
     nodes_observed: Number.isFinite(Number(raw && raw.nodes_observed)) ? Number(raw.nodes_observed) : nodes.length,
     controls,
-    window_identity: {
-      pid: Number(raw && raw.pid) || 0,
-      process_start_time: String((raw && raw.process_start_time) || ''),
-      hwnd: Number(raw && raw.hwnd) || 0,
-      target_handle: Number(raw && raw.hwnd) || 0, // P3-7 前两者同源；pinned scope 区分留待后续
-      window_bounds_hash: boundsHash(tree.bounds),
-    },
+    window_identity,
   };
 }
 

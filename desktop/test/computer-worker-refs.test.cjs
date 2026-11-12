@@ -102,7 +102,7 @@ test('P2-2: allocateTreeRefs 按 role/动作分配，并回填 RefEntry 字段',
   const snapshotId = 's0abc';
   const { map, count } = allocateTreeRefs(tree, {
     snapshotId, revision: 7, grantId: 'g-1', generation: 3,
-    identity: { pid: 4242, process_start_time: 't0', target_handle: 777, hwnd: 777, window_bounds_hash: 'wh' },
+    identity: { pid: 4242, process_start_time: 't0', target_handle: 'th', hwnd: 777, window_bounds_hash: 'wh' },
   });
 
   assert.equal(count, 3, 'textfield + button + 带 Click 的 custom 共 3 个');
@@ -120,7 +120,7 @@ test('P2-2: allocateTreeRefs 按 role/动作分配，并回填 RefEntry 字段',
   assert.equal(entry.root_ref, '', '根 Window 不可分配 → root_ref 为空，不借用子节点');
   assert.equal(entry.pid, 4242);
   assert.equal(entry.hwnd, 777);
-  assert.equal(entry.target_handle, 777);
+  assert.equal(entry.target_handle, 'th');
   assert.equal(entry.bounds_space, 'screen');
   assert.equal(entry.grant_id, 'g-1');
   assert.equal(entry.generation, 3);

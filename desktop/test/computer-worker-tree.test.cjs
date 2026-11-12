@@ -145,10 +145,13 @@ test('P2-1: window_identity 五字段，且不带进程路径/窗口标题', () 
   assert.deepEqual(Object.keys(window_identity).sort(), ['hwnd', 'pid', 'process_start_time', 'target_handle', 'window_bounds_hash']);
   assert.equal(window_identity.pid, 4242);
   assert.equal(window_identity.hwnd, 777);
-  assert.equal(window_identity.target_handle, 777);
+  // P2-5 起 target_handle 是与主进程同公式的 sha256 前 32 位（不再是 hwnd）；
+  // 夹具没有 MainWindowTitle，采集不到 → 空串。
+  assert.equal(window_identity.target_handle, '');
   const serialized = JSON.stringify(window_identity);
   assert.ok(!serialized.includes('无标题'), 'identity 不应含窗口标题');
   assert.ok(!/process_path|exe_path/i.test(serialized), 'identity 不应含进程路径');
+  assert.ok(!serialized.includes('title_hash'), '标题摘要不进入契约输出（只能进程内读）');
 });
 
 test('P2-1: 失效节点被丢弃，其子节点由上层接回（不断链）', () => {

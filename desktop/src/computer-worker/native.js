@@ -8,7 +8,7 @@
 const { execFile } = require('node:child_process');
 
 const { isHardForbidden } = require('./policy');
-const { buildObserveTree } = require('./tree');
+const { buildObserveTree, boundsHash } = require('./tree');
 const {
   newSnapshotId, nextRevision, allocateTreeRefs, qualifyTreeRefs,
   assertTreeSize, countRefs, refsAreUnique, WorkerError,
@@ -52,6 +52,88 @@ function listWindows() {
 }
 
 // ---------------------------------------------------------------------------
+// DEV-CU P2-5：窗口身份采样与前台复核（§4.9）。
+// 标题只在 PowerShell 内参与 sha256，不出进程；返回只有哈希与数字。
+// ---------------------------------------------------------------------------
+
+/**
+ * 轻量窗口身份采样（不读整棵树）。用于「动作前重算一遍身份」与服务端 handle 核对。
+ * 返回 `{ok, pid, hwnd, process_start_time, title_hash, target_handle, bounds, window_bounds_hash}`。
+ */
+function windowIdentity(pid) {
+  const script = `
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$proc = Get-Process -Id ${pid} -ErrorAction Stop
+$hwnd = $proc.MainWindowHandle
+$start = ''
+try { $start = $proc.StartTime.ToUniversalTime().ToString('o') } catch {}
+${PS_HASH_FN}
+$title = [string]$proc.MainWindowTitle
+$bx = 0.0; $by = 0.0; $bw = 0.0; $bh = 0.0
+$hx = [long]$hwnd
+if ($hx -ne 0) {
+  try {
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    $r = $root.Current.BoundingRectangle
+    if (-not [double]::IsNaN($r.X) -and -not [double]::IsInfinity($r.X)) { $bx = [double]$r.X }
+    if (-not [double]::IsNaN($r.Y) -and -not [double]::IsInfinity($r.Y)) { $by = [double]$r.Y }
+    if (-not [double]::IsNaN($r.Width) -and -not [double]::IsInfinity($r.Width)) { $bw = [double]$r.Width }
+    if (-not [double]::IsNaN($r.Height) -and -not [double]::IsInfinity($r.Height)) { $bh = [double]$r.Height }
+  } catch {}
+}
+@{ ok=$true; pid=${pid}; hwnd=$hx; process_start_time=$start; title_hash=(Hex32 $title).Substring(0,32); target_handle=(Hex32 (('' + ${pid}) + [char]0 + $title)).Substring(0,32); bounds=@{ x=$bx; y=$by; w=$bw; h=$bh } } | ConvertTo-Json -Compress -Depth 4
+`;
+  return runPowerShell(script).then((r) => {
+    if (!r.ok) return r;
+    try {
+      const raw = JSON.parse(r.stdout || '{}');
+      if (raw.ok !== true) return { ok: false, error: raw.error || 'window_identity_failed' };
+      const bounds = raw.bounds || { x: 0, y: 0, w: 0, h: 0 };
+      return {
+        ok: true,
+        pid: Number(raw.pid) || 0,
+        hwnd: Number(raw.hwnd) || 0,
+        process_start_time: String(raw.process_start_time || ''),
+        title_hash: String(raw.title_hash || ''),
+        target_handle: String(raw.target_handle || ''),
+        bounds,
+        // 与 refs.js 的 boundsHash 用同一个算法（四舍五入后拼接再 sha256 前 16 位）
+        window_bounds_hash: boundsHash(bounds),
+      };
+    } catch {
+      return { ok: false, error: 'uia_parse_failed' };
+    }
+  });
+}
+
+/** 前台窗口（hwnd + 所属 pid）。用于动作前复核与「前台已切走」判定。 */
+function foregroundWindow() {
+  const script = `
+$ErrorActionPreference='Stop'
+Add-Type -Namespace OpsScope -Name Native -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, out uint lpdwProcessId);
+'@
+$h = [OpsScope.Native]::GetForegroundWindow()
+$p = 0
+if ($h -ne [System.IntPtr]::Zero) { [void][OpsScope.Native]::GetWindowThreadProcessId($h, [ref]$p) }
+@{ ok=$true; hwnd=[long]$h; pid=[int]$p } | ConvertTo-Json -Compress
+`;
+  return runPowerShell(script).then((r) => {
+    if (!r.ok) return r;
+    try {
+      const raw = JSON.parse(r.stdout || '{}');
+      if (raw.ok !== true) return { ok: false, error: raw.error || 'foreground_failed' };
+      return { ok: true, hwnd: Number(raw.hwnd) || 0, pid: Number(raw.pid) || 0 };
+    } catch {
+      return { ok: false, error: 'uia_parse_failed' };
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // DEV-AI27-17 UIA 桥（W17 第三批）：PowerShell + System.Windows.Automation。
 // ---------------------------------------------------------------------------
 
@@ -75,6 +157,34 @@ function runPowerShell(script) {
   });
 }
 
+/** P2-5：PowerShell 侧的 sha256 十六进制辅助函数（标题只在 PS 内参与哈希，不出进程）。 */
+const PS_HASH_FN = `
+function Hex32([string]$s) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try { $h = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($s)) } finally { $sha.Dispose() }
+  return ([System.BitConverter]::ToString($h) -replace '-','').ToLower()
+}
+`;
+
+/**
+ * P2-5 步骤 3/4：动作前的前台复核，直接嵌进执行动作的那一次 PS 调用，
+ * 避免「先查再动」两次调用之间的窗口切换（TOCTOU）。
+ */
+function psForegroundGuard(pid) {
+  return `
+Add-Type -Namespace OpsScope -Name Native -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, out uint lpdwProcessId);
+'@
+$hwnd = $proc.MainWindowHandle
+$fg = [OpsScope.Native]::GetForegroundWindow()
+$fgPid = 0
+if ($fg -ne [System.IntPtr]::Zero) { [void][OpsScope.Native]::GetWindowThreadProcessId($fg, [ref]$fgPid) }
+if ($fgPid -ne ${pid}) { Write-Output '{"ok":false,"error":"computer_target_changed","detail":{"kind":"target_changed","reason":["foreground_changed"],"retryable":true}}'; exit }
+if ([long]$fg -ne [long]$hwnd) { Write-Output '{"ok":false,"error":"computer_target_changed","detail":{"kind":"target_changed","reason":["hwnd_changed"],"retryable":true}}'; exit }
+`;
+}
+
 /** 读取 PID 主窗口的原始控件树（RawViewWalker 递归，带三重上限）。P2-4 的再解析复用它。 */
 function readRawTree(pid) {
   const script = `
@@ -85,6 +195,11 @@ $proc = Get-Process -Id ${pid} -ErrorAction Stop
 $hwnd = $proc.MainWindowHandle
 $startTime = ''
 try { $startTime = $proc.StartTime.ToUniversalTime().ToString('o') } catch {}
+${PS_HASH_FN}
+# P2-5 步骤 1/2：标题只在 PS 内参与哈希，不落进 JSON；handle 与 ipc/computer.ts:31 同一公式。
+$title = [string]$proc.MainWindowTitle
+$titleHash = (Hex32 $title).Substring(0,32)
+$targetHandle = (Hex32 (('' + ${pid}) + [char]0 + $title)).Substring(0,32)
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
 $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
 # DEV-CU P1-1 步骤 4：四字段强制字符串并裁剪，上限对齐 business-ui-preload.ts:192-195（200/60/500/4000）。
@@ -160,7 +275,7 @@ while ($qi -lt $queue.Count) {
 }
 $winName = ''
 try { $winName = [string]$root.Current.Name } catch {}
-@{ ok=$true; window=$winName; pid=${pid}; hwnd=[long]$hwnd; process_start_time=$startTime; tree_complete=$complete; nodes_observed=$queue.Count; nodes=$emitted } | ConvertTo-Json -Compress -Depth 6
+@{ ok=$true; window=$winName; pid=${pid}; hwnd=[long]$hwnd; process_start_time=$startTime; title_hash=$titleHash; target_handle=$targetHandle; tree_complete=$complete; nodes_observed=$queue.Count; nodes=$emitted } | ConvertTo-Json -Compress -Depth 6
 `;
   return runPowerShell(script).then((r) => {
     if (!r.ok) return r;
@@ -251,6 +366,7 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $proc = Get-Process -Id ${pid} -ErrorAction Stop
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+${psForegroundGuard(pid)}
 $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, ${psQuote(automationId)})
 $el = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
 if (-not $el) { Write-Output '{"ok":false,"error":"control_not_found"}'; exit }
@@ -310,6 +426,7 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $proc = Get-Process -Id ${pid} -ErrorAction Stop
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+${psForegroundGuard(pid)}
 $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
 $el = $root
 $path = @(${chain})
@@ -336,6 +453,7 @@ ${valueBlock}
 }
 
 module.exports = {
-  listWindows, readRawTree, observeOnce, readUIA, invokeUIA, invokeByPath, resolveAndObserve,
+  listWindows, windowIdentity, foregroundWindow,
+  readRawTree, observeOnce, readUIA, invokeUIA, invokeByPath, resolveAndObserve,
   runPowerShell, psQuote, UIA_TIMEOUT_MS,
 };

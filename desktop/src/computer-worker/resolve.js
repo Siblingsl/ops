@@ -10,6 +10,7 @@
 //   ④ 身份不可证的 ref 在进入树比较前就拒绝（规格步骤 7）
 
 const { WorkerError } = require('./refs');
+const { windowChangeReasons, scopeDetail } = require('./scope');
 const {
   MATCH, UNKNOWN, NOMATCH, nonBlank, FullPredicate, hasMeaningfulIdentity,
 } = require('./identity');
@@ -56,24 +57,19 @@ function detailBase(entry, snapshotId, ref, complete) {
 }
 
 /**
- * 严格窗口身份比对（步骤 2）。四个字段任一不一致即 stale，detail.reason 列出差异项。
+ * 严格窗口身份比对（步骤 2）。四要素任一不一致即 stale，`detail.reason` 是
+ * `scope.js` 的封闭枚举（window_gone / pid_reused / hwnd_changed / bounds_changed）。
  * 约定：expected 里为空（'' / 0 / null）表示「当时没采到」，跳过该字段而不是判为不一致。
  */
 function resolveWindowStrict(expected, actual) {
-  const e = expected || {};
-  const a = actual || {};
-  const diffs = [];
-  for (const field of WINDOW_IDENTITY_FIELDS) {
-    const ev = e[field];
-    if (ev === undefined || ev === null || ev === '' || ev === 0) continue;
-    if (String(ev) !== String(a[field] === undefined ? '' : a[field])) diffs.push(field);
-  }
-  if (diffs.length > 0) {
-    throw staleError(`窗口身份已变化（${diffs.join(',')}），请重新观察`, {
+  const reasons = windowChangeReasons(expected, actual);
+  if (reasons.length > 0) {
+    throw staleError(`窗口身份已变化（${reasons.join(',')}），请重新观察`, {
       kind: RESOLVE_KIND.WINDOW,
-      reason: diffs,
+      reason: reasons,
       retryable: true,
       requires_fresh_snapshot: true,
+      ...scopeDetail(expected, actual),
     });
   }
   return true;

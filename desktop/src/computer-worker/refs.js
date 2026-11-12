@@ -187,7 +187,8 @@ function allocateTreeRefs(tree, ctx = {}) {
   const generation = Number(ctx.generation || 0);
   const revision = Number(ctx.revision || 0);
   const root = ctx.compact ? compactTree(tree) : tree;
-  const windowTitleHash = hash16(root ? root.name : '');
+  // P2-5：优先用采集阶段对 MainWindowTitle 算出的 32 位摘要；夹具（无标题）回退到旧算法。
+  const windowTitleHash = String(identity.title_hash || '') || hash16(root ? root.name : '');
   // 未显式传 complete 的调用方（夹具/单测）按「读全了」处理；生产路径 readUIA 一定显式传。
   const captureComplete = (ctx.complete === undefined ? true : ctx.complete === true);
 
@@ -205,7 +206,7 @@ function allocateTreeRefs(tree, ctx = {}) {
         pid: Number(identity.pid) || 0,
         process_start_time: String(identity.process_start_time || ''),
         process_instance: '',
-        target_handle: Number(identity.target_handle) || 0,
+        target_handle: String(identity.target_handle || ''),
         hwnd: Number(identity.hwnd) || 0,
         window_title_hash: windowTitleHash,
         window_bounds_hash: String(identity.window_bounds_hash || ''),

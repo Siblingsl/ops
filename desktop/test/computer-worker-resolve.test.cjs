@@ -92,7 +92,18 @@ test('P2-4 夹具③：窗口 pid 变化 → stale_ref / window_identity_changed
     (e) => {
       assert.equal(e.code, 'computer_stale_ref');
       assert.equal(e.detail.kind, RESOLVE_KIND.WINDOW);
-      assert.deepEqual(e.detail.reason, ['pid']);
+      // P2-5 起 reason 是封闭枚举（原为字段名 'pid'）
+      assert.deepEqual(e.detail.reason, ['window_gone']);
+      assert.equal(e.detail.expected_pid, 4242);
+      assert.equal(e.detail.actual_pid, 9999);
+      return true;
+    },
+  );
+  // 同一 pid 但进程启动时间变了 → PID 被复用
+  assert.throws(
+    () => resolveWindowStrict(IDENTITY, { ...IDENTITY, process_start_time: 't1' }),
+    (e) => {
+      assert.deepEqual(e.detail.reason, ['pid_reused']);
       return true;
     },
   );
