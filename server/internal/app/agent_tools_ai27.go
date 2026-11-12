@@ -161,7 +161,7 @@ func ai27ComputerTools() []AgentTool {
 		},
 		{
 			Name: "computer_view_target", Domain: "computer", Kind: toolR, Method: "POST", Path: "/tools/computer/commands",
-			Description: "观察当前前台窗口的 UIA 控件树（脱敏，最多 200 个节点），得到可操作的 ref 列表。",
+			Description: "观察当前前台窗口的 UIA 控件树（脱敏，最多 200 个节点），得到可操作的 ref 列表。失败后不要自动重试，等待新观察。",
 			Params: []ToolParam{
 				pBody("ref", `{"type":"string","maxLength":64}`, false, "U"),
 			},
@@ -172,7 +172,7 @@ func ai27ComputerTools() []AgentTool {
 		},
 		{
 			Name: "computer_focus_target", Domain: "computer", Kind: toolR, Method: "POST", Path: "/tools/computer/commands",
-			Description: "把键盘焦点移到目标控件。只改变焦点，不产生输入。",
+			Description: "把键盘焦点移到目标控件。只改变焦点，不产生输入。失败后不要自动重试，等待新观察。",
 			Params: []ToolParam{
 				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
 			},
@@ -183,7 +183,7 @@ func ai27ComputerTools() []AgentTool {
 		},
 		{
 			Name: "computer_scroll_target", Domain: "computer", Kind: toolR, Method: "POST", Path: "/tools/computer/commands",
-			Description: "滚动目标控件或其最近可滚动祖先，使更多内容可见。",
+			Description: "滚动目标控件或其最近可滚动祖先，使更多内容可见。失败后不要自动重试，等待新观察。",
 			Params: []ToolParam{
 				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
 			},
@@ -194,7 +194,7 @@ func ai27ComputerTools() []AgentTool {
 		},
 		{
 			Name: "computer_select_target", Domain: "computer", Kind: toolR, Method: "POST", Path: "/tools/computer/commands",
-			Description: "在列表/组合框中选中目标项。只改变选中态，不提交表单。",
+			Description: "在列表/组合框中选中目标项。只改变选中态，不提交表单。失败后不要自动重试，等待新观察。",
 			Params: []ToolParam{
 				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
 			},
@@ -205,7 +205,7 @@ func ai27ComputerTools() []AgentTool {
 		},
 		{
 			Name: "computer_click_target", Domain: "computer", Kind: toolW, Method: "POST", Path: "/tools/computer/commands",
-			Description: "点击目标控件（按钮/链接/菜单项）。写类动作先出预览卡片，用户逐张确认后才执行。",
+			Description: "点击目标控件（按钮/链接/菜单项）。写类动作只提交预览，须用户逐张确认后执行；失败后不要自动重试，等待新观察。",
 			Params: []ToolParam{
 				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
 			},
@@ -216,7 +216,7 @@ func ai27ComputerTools() []AgentTool {
 		},
 		{
 			Name: "computer_type_target", Domain: "computer", Kind: toolW, Method: "POST", Path: "/tools/computer/commands",
-			Description: "在目标文本控件中设置值或输入文本（≤32768 字符）。写类动作先出预览卡片，用户逐张确认后才执行。",
+			Description: "在目标文本控件中设置值或输入文本（≤32768 字符）。写类动作只提交预览，须用户逐张确认后执行；失败后不要自动重试，等待新观察。",
 			Params: []ToolParam{
 				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
 				pBody("text", `{"type":"string","maxLength":32768}`, true, "U"),

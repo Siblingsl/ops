@@ -1,6 +1,11 @@
 package app
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+)
 
 // DEV-CU P4-3（docs/36 §P4-3 步骤 1~3）：动作枚举与 payload 白名单键校验。
 func TestComputerActionValidation(t *testing.T) {
@@ -78,8 +83,8 @@ func TestComputerActionToolCatalogFixed(t *testing.T) {
 		if tool.Domain != "computer" {
 			t.Errorf("%s 域应是 computer", tool.Name)
 		}
-		if got, _ := tool.Fixed["action_kind"].(string); got != action {
-			t.Errorf("%s 的 Fixed.action_kind 应是 %s，实际 %v", tool.Name, action, tool.Fixed["action_kind"])
+		if got, _ := tool.Fixed["action"].(string); got != action {
+			t.Errorf("%s 的 Fixed.action 应是 %s，实际 %v", tool.Name, action, tool.Fixed["action"])
 		}
 		// 模型不能自填动作：Params 里不得有 action_kind / action
 		for _, p := range tool.Params {
@@ -98,6 +103,72 @@ func TestComputerActionToolCatalogFixed(t *testing.T) {
 		case "computer_view_target", "computer_focus_target", "computer_scroll_target", "computer_select_target":
 			if tool.Kind != toolR {
 				t.Errorf("%s 应是读类工具", tool.Name)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DEV-CU P4-9：工具目录接线（模型侧）——白名单键 / 服务端自管字段不可见 / viewer 只读。
+// ---------------------------------------------------------------------------
+
+// ① InputSchema 只含白名单键；定义不含 run_id/grant_id/target_handle（服务端自管）。
+func TestComputerToolInputSchemaWhitelist(t *testing.T) {
+	allowed := map[string][]string{
+		"computer_view_target":   {"ref"},
+		"computer_focus_target":  {"ref"},
+		"computer_scroll_target": {"ref"},
+		"computer_select_target": {"ref"},
+		"computer_click_target":  {"ref"},
+		"computer_type_target":   {"ref", "text"},
+	}
+	serverManaged := []string{"run_id", "grant_id", "target_handle", "request_id", "card_id", "approval_hash", "action_kind", "action"}
+	for _, tool := range agentCatalog() {
+		params, ok := allowed[tool.Name]
+		if !ok {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, p := range tool.Params {
+			seen[p.Name] = true
+			for _, bad := range serverManaged {
+				if p.Name == bad {
+					t.Errorf("工具 %s 的参数含服务端自管字段 %s（模型不可传）", tool.Name, bad)
+				}
+			}
+		}
+		for _, want := range params {
+			if !seen[want] {
+				t.Errorf("工具 %s 缺白名单参数 %s", tool.Name, want)
+			}
+		}
+		if len(seen) != len(params) {
+			t.Errorf("工具 %s 参数集应恰为白名单：%v", tool.Name, seen)
+		}
+		// Description 必须含重试纪律（全部）；写类另含逐张确认文案
+		desc := tool.Description
+		if !strings.Contains(desc, "不要自动重试") {
+			t.Errorf("工具 %s 的 Description 缺「失败后不要自动重试」", tool.Name)
+		}
+		if tool.Kind == toolW && !strings.Contains(desc, "逐张确认") {
+			t.Errorf("写类工具 %s 的 Description 缺「用户逐张确认后执行」", tool.Name)
+		}
+	}
+}
+
+// ② viewer 角色下 computer 写类工具不可见（HC31 扩充）。
+func TestHC31ComputerViewerToolDefinitionsAreReadOnly(t *testing.T) {
+	domains := []string{"computer"}
+	viewer := &identity{Role: "viewer", UserID: uuid.New(), WorkspaceID: uuid.New()}
+	tools := agentToolsFor(&agentRunState{Domains: domains}, viewer)
+	for _, definition := range tools {
+		tool := agentTool(definition.Function.Name)
+		if tool == nil {
+			t.Fatalf("未知工具定义：%s", definition.Function.Name)
+		}
+		if strings.HasPrefix(tool.Name, "computer_") {
+			if tool.Kind != toolR || (tool.Method != "" && tool.Method != "GET") {
+				t.Errorf("viewer 不应看到 computer 写类/POST 工具：%s (%s %s)", tool.Name, tool.Kind, tool.Method)
 			}
 		}
 	}
