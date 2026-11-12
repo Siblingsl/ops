@@ -160,13 +160,16 @@ Add-Type -AssemblyName UIAutomationTypes
 $proc = Get-Process -Id ${pid} -ErrorAction Stop
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
 $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+# DEV-CU P1-1 步骤 4：四字段强制字符串并裁剪，上限对齐 business-ui-preload.ts:192-195（200/60/500/4000）；
+# 原写法在属性缺失时返回 $null，会让 preload 白名单整批拒绝。
+function Clip([string]$s, [int]$n) { if ($null -eq $s) { return '' }; if ($s.Length -gt $n) { return $s.Substring(0,$n) }; return $s }
 $out = @()
 $limit = [Math]::Min(200, $all.Count)
 for ($i=0; $i -lt $limit; $i++) {
   $el = $all.Item($i)
   $v = ''
   try { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern); $v = $vp.Current.Value } catch {}
-  $out += @{ id=$el.CurrentAutomationId; type=$el.CurrentControlType.ProgrammaticName; name=$el.CurrentName; value=$v }
+  $out += @{ id=(Clip ([string]$el.CurrentAutomationId) 200); type=(Clip ([string]$el.CurrentControlType.ProgrammaticName) 60); name=(Clip ([string]$el.CurrentName) 500); value=(Clip ([string]$v) 4000) }
 }
 @{ ok=$true; window=$root.CurrentName; controls=$out } | ConvertTo-Json -Compress -Depth 4
 `;
