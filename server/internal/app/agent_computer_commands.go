@@ -1,13 +1,16 @@
 package app
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -149,24 +152,202 @@ func validateComputerAction(kind string, payload map[string]any) error {
 	return nil
 }
 
-// runComputerCommand 是 run 内模型调用入口（/tools/computer/commands，P4-3 先挂路由）。
-// 完整语义（查租约 → 确认闸门 → 建 queued → 同步等待）属 P4-4/P4-7；
-// 本包只做入参校验并如实返回「尚未开放」，不假装执行，也不静默吞请求。
+// runComputerCommand 是 run 内模型调用入口（/tools/computer/commands）。
+// P4-3 只做入参校验；P4-4 补齐创建语义：computerGuard → 特性开关 → UUID/枚举校验
+// → 确认闸门 → 预算检查 → 事务内（租约 CAS + 硬禁区 + 幂等）→ queued INSERT → 事件。
 func (s *Server) runComputerCommand(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.computerGuard(id); err != nil {
+		return err
+	}
 	if err := s.requireAgentFeature(r.Context(), "computer_use"); err != nil {
 		return err
 	}
 	var body struct {
-		GrantID string         `json:"grant_id"`
-		RunID   string         `json:"run_id"`
-		Action  string         `json:"action"`
-		Payload map[string]any `json:"payload"`
+		GrantID            string         `json:"grant_id"`
+		RunID              string         `json:"run_id"`
+		RequestID          string         `json:"request_id"`
+		ExpectedGeneration int64          `json:"expected_generation"`
+		Action             string         `json:"action"`
+		Payload            map[string]any `json:"payload"`
+		CardID             string         `json:"card_id"`
+		ApprovalHash       string         `json:"approval_hash"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&body); err != nil {
 		return apiErr(400, "bad_request", "请求体无法解析")
 	}
+	grantID, err := uuid.Parse(body.GrantID)
+	if err != nil {
+		return apiErr(400, "bad_request", "grant_id 必须是 UUID")
+	}
+	runID := uuid.Nil
+	if body.RunID != "" {
+		if runID, err = uuid.Parse(body.RunID); err != nil {
+			return apiErr(400, "bad_request", "run_id 必须是 UUID")
+		}
+	}
+	requestID, err := uuid.Parse(body.RequestID)
+	if err != nil {
+		return apiErr(400, "bad_request", "request_id 必须是 UUID")
+	}
 	if err := validateComputerAction(body.Action, body.Payload); err != nil {
 		return err
 	}
-	return apiErr(409, "computer_foreground_busy", "电脑控制命令执行尚未开放（P4-4 实现中）")
+
+	// P4-4 步骤 3：确认闸门。写类（invoke/type）必须带 card_id + approval_hash，
+	// 且卡片处于「已由本人确认」状态；缺失/未确认 → 409 computer_approval_conflict。
+	// 不提供任何绕过参数（§6 红线 2：写类必带卡片确认）。
+	requiresConfirmation := body.Action == "invoke" || body.Action == "type"
+	var cardID uuid.UUID
+	if requiresConfirmation {
+		if body.CardID == "" || body.ApprovalHash == "" {
+			return apiErr(409, "computer_approval_conflict", "写类动作必须带 card_id 与 approval_hash（D-117 逐张确认）")
+		}
+		if cardID, err = uuid.Parse(body.CardID); err != nil {
+			return apiErr(400, "bad_request", "card_id 必须是 UUID")
+		}
+		if !s.computerCardConfirmed(r.Context(), id.UserID, cardID, body.ApprovalHash) {
+			return apiErr(409, "computer_approval_conflict", "卡片不存在、未确认或批准内容不符")
+		}
+	}
+
+	// P4-4 步骤 5：预算检查（60 动作 / 10 分钟，run 维度；docs/27:1081 的共享总池口径
+	// 由 run 内既有工具次数上限承担，这里只锁 computer 命令自身的窗口计数）。
+	var recent int
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT count(*) FROM agent_computer_command
+		WHERE run_id=$1 AND created_at > now() - interval '10 minutes'`,
+		runID).Scan(&recent); err != nil {
+		return err
+	}
+	if recent >= computerCommandBudgetPerWindow {
+		return apiErr(429, "computer_budget_exceeded", "10 分钟窗口内命令数已达上限（60）")
+	}
+
+	payloadJSON, _ := json.Marshal(body.Payload)
+	inputHash := computerInputHash(body.Action, payloadJSON)
+	deadline := s.now().Add(computerCommandDeadline)
+	commandID := uuid.New()
+	var conversationID uuid.UUID
+
+	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+		// 租约 CAS：active + 未过期 + generation 与调用方期望一致（P1-4 的审批版本）。
+		var targetSummary string
+		err := tx.QueryRow(r.Context(), `
+			SELECT g.conversation_id, g.target_summary
+			FROM agent_computer_grant g
+			WHERE g.id=$1 AND g.workspace_id=$2 AND g.user_id=$3
+			  AND g.state='active' AND g.expires_at > now() AND g.generation=$4`,
+			grantID, id.WorkspaceID, id.UserID, body.ExpectedGeneration).
+			Scan(&conversationID, &targetSummary)
+		if err == pgx.ErrNoRows {
+			return apiErr(409, "computer_stale_ref", "租约不存在、已过期、已撤销或 generation 不匹配")
+		}
+		if err != nil {
+			return err
+		}
+		if computerIsHardForbidden(targetSummary) {
+			return apiErr(403, "computer_policy_denied", "目标命中硬禁区，永远拒绝")
+		}
+		// 幂等：同 (grant, request) 同 hash 返回原命令；异 hash 409。
+		var existingID uuid.UUID
+		var existingHash string
+		err = tx.QueryRow(r.Context(), `
+			SELECT id, input_hash FROM agent_computer_command WHERE grant_id=$1 AND request_id=$2`,
+			grantID, requestID).Scan(&existingID, &existingHash)
+		switch {
+		case err == nil:
+			if existingHash != inputHash {
+				return apiErr(409, "computer_approval_conflict", "同编号命令载荷不同")
+			}
+			commandID = existingID
+			return nil
+		case err == pgx.ErrNoRows:
+			_, err = tx.Exec(r.Context(), `
+				INSERT INTO agent_computer_command
+				(id, grant_id, workspace_id, user_id, conversation_id, run_id, request_id, card_id, approval_hash,
+				 action_kind, target_ref, payload, input_hash, state, requires_confirmation, generation, deadline_at)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'queued',$14,$15,$16)`,
+				commandID, grantID, id.WorkspaceID, id.UserID, conversationID,
+				nullUUID(runID), requestID, nullUUID(cardID), emptyAsNull(body.ApprovalHash),
+				body.Action, payloadRef(body.Payload), payloadJSON, inputHash,
+				requiresConfirmation, body.ExpectedGeneration, deadline)
+			return err
+		default:
+			return err
+		}
+	}); err != nil {
+		return err
+	}
+
+	// 步骤 7：best-effort 事件（失败只 Warn，不回滚命令状态）。
+	s.emitComputerCommandEvent(r.Context(), conversationID, "computer.command_requested", map[string]any{
+		"command_id":  commandID.String(),
+		"action_kind": body.Action,
+		"state":       "queued",
+		"grant_id":    grantID.String(),
+		"generation":  body.ExpectedGeneration,
+	})
+	return s.renderComputerCommand(r.Context(), w, commandID)
+}
+
+// computerCommandBudgetPerWindow：§4.10 预算（60 动作 / 10 分钟，docs/27:1081）。
+const computerCommandBudgetPerWindow = 60
+
+// computerCardConfirmed 校验卡片存在且「已由本人确认」、批准内容 hash 一致。
+// D-117 卡片表（agent_card）的确认状态在 computer 域尚未接线，先按保守口径
+// fail-closed：写类命令在卡片机制接入前一律无法通过确认闸门。落点登记在台账。
+func (s *Server) computerCardConfirmed(ctx context.Context, userID uuid.UUID, cardID uuid.UUID, approvalHash string) bool {
+	_ = userID
+	_ = cardID
+	_ = approvalHash
+	return false
+}
+
+// nullUUID 把 Nil UUID 写成 SQL NULL（run_id / card_id 可空）。
+func nullUUID(id uuid.UUID) any {
+	if id == uuid.Nil {
+		return nil
+	}
+	return id
+}
+
+// emptyAsNull 把空串写成 SQL NULL（approval_hash 可空）。
+func emptyAsNull(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// payloadRef 从 payload 里取 target_ref（服务端只存不解析）。
+func payloadRef(payload map[string]any) string {
+	ref, _ := payload["ref"].(string)
+	if len(ref) > 64 {
+		return ref[:64]
+	}
+	return ref
+}
+
+// emitComputerCommandEvent：computer 命令时间线事件 best-effort（对齐 browser 先例）。
+func (s *Server) emitComputerCommandEvent(ctx context.Context, conversationID uuid.UUID, eventType string, payload map[string]any) {
+	if conversationID == uuid.Nil {
+		return
+	}
+	if _, err := s.appendAgentEvent(ctx, conversationID, nil, eventType, payload); err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "电脑命令事件写入失败", observeFields{
+			ErrorCode: "computer_command_event_failed", Route: "internal/agent/computer_command",
+			Extras: map[string]any{"event_type": eventType, "conversation_id": conversationID.String(), "err": err.Error()},
+		})
+	}
+}
+
+// renderComputerCommand 输出命令视图（不夹带 payload/result——领取/终态才出现）。
+func (s *Server) renderComputerCommand(ctx context.Context, w http.ResponseWriter, commandID uuid.UUID) error {
+	v, err := scanComputerCommand(s.db.QueryRow(ctx,
+		"SELECT "+computerCommandColumns+" FROM agent_computer_command c WHERE c.id=$1", commandID))
+	if err != nil {
+		return err
+	}
+	return ok(w, v)
 }
