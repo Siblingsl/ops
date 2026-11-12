@@ -452,8 +452,277 @@ ${valueBlock}
   });
 }
 
+// ===========================================================================
+// DEV-CU P3-2：语义动作链的 UIA pattern 片段（§4.7）
+//
+// 一个 rung = 一次独立的 PowerShell 调用。为什么不做成「一次调用跑完整条链」：
+//   ① 每个 rung 都要重新过一次前台复核（psForegroundGuard），否则两次 rung 之间的
+//      窗口切换就绕过了 TOCTOU 防护；
+//   ② executeChain 的 detail.steps 要逐 rung 记录 outcome，分次调用才对得上。
+//
+// 标签用 §4.7 的英文常量，与 actions.js 的 CHAIN_SPEC 逐字一致（单测两边互比）。
+// `switch` 的分支是**写死的常量**，label 只是选分支的键；不存在「用调用方字符串拼命令名」。
+// ===========================================================================
+
+/** §4.7 出现过的全部 pattern 标签（只读；新增 rung 必须同时改这里与 CHAIN_SPEC）。 */
+const PATTERN_LABELS = Object.freeze([
+  'UIInvokePattern.Invoke',
+  'UILegacyIAccessiblePattern.DoDefaultAction',
+  'UIValuePattern.SetValue',
+  'UIRangeValuePattern.SetValue',
+  'UITogglePattern.Toggle',
+  'UIExpandCollapsePattern.Expand',
+  'UIExpandCollapsePattern.Collapse',
+  'UISelectionItemPattern.Select',
+  'UIScrollPattern.Scroll',
+  'UIScrollItemPattern.ScrollIntoView',
+  'AncestorScrollPattern.Scroll',
+  'UIAutomationElement.SetFocus',
+]);
+
+/** 三个脚本共用的前置：进程 → 主窗口 → 前台复核 → 按路径下钻。 */
+function psPathPrelude(pid, path) {
+  const chain = Array.isArray(path) && path.length ? path.map((n) => Number(n)).join(',') : '';
+  return `
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$proc = Get-Process -Id ${pid} -ErrorAction Stop
+$root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+${psForegroundGuard(pid)}
+$walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+$el = $root
+$path = @(${chain})
+foreach ($i in $path) {
+  $found = $null
+  $next = $null
+  try { $next = $walker.GetFirstChild($el) } catch { $next = $null }
+  $k = 0
+  while ($null -ne $next) {
+    if ($k -eq $i) { $found = $next; break }
+    $k++
+    try { $next = $walker.GetNextSibling($next) } catch { $next = $null }
+  }
+  if ($null -eq $found) { Write-Output '{"ok":false,"error":"control_not_found"}'; exit }
+  $el = $found
+}
+`;
+}
+
+function psJson(script) {
+  return runPowerShell(script).then((r) => {
+    if (!r.ok) return r;
+    try { return JSON.parse(r.stdout || '{"ok":false,"error":"empty"}'); }
+    catch { return { ok: false, error: 'uia_parse_failed' }; }
+  });
+}
+
+/**
+ * 探一次元素能力（对应 §P3-2 步骤 2 的 `InvokeAvailable` / 非空 `LegacyDefaultAction`）。
+ * 返回 `{ok, features}`。这是「先判再动」的那一半：拿到 features 后用 actions.js 的
+ * `chainFor(action, features)` 裁剪掉注定 absent 的 rung，省掉一次必然失败的投递。
+ */
+function probePatternFeatures(pid, path) {
+  const script = `${psPathPrelude(pid, path)}
+$f = @{}
+function Prop([object]$e, [object]$p) {
+  try { return [bool]$e.GetCurrentPropertyValue($p) } catch { return $false }
+}
+$f.invoke_available = Prop $el ([System.Windows.Automation.AutomationElement]::IsInvokePatternAvailableProperty)
+# 注意：AutomationElement 上**没有** IsLegacyIAccessiblePatternAvailableProperty
+# （实测取到 NULL）；而且 .NET 的托管 UIA 包装里**根本没有 LegacyIAccessiblePattern 类型**。
+# 所以这一项在本平台恒为 false，click 的第二级回退会被 chainFor 剪掉。
+# 链定义保留（与上游 COM 实现对齐），等宿主换到能拿到该 pattern 的运行时再评估启用。
+$f.legacy_default_action = $false
+try {
+  $lp = $el.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+  $f.legacy_default_action = -not [string]::IsNullOrEmpty([string]$lp.Current.DefaultAction)
+} catch {}
+$f.value_writable = $false
+try {
+  if (Prop $el ([System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty)) {
+    $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    $f.value_writable = -not [bool]$vp.Current.IsReadOnly
+  }
+} catch {}
+$f.range_numeric = $false
+try {
+  if (Prop $el ([System.Windows.Automation.AutomationElement]::IsRangeValuePatternAvailableProperty)) {
+    $rp = $el.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+    $f.range_numeric = -not [bool]$rp.Current.IsReadOnly
+  }
+} catch {}
+$f.toggle_available = Prop $el ([System.Windows.Automation.AutomationElement]::IsTogglePatternAvailableProperty)
+$f.expand_collapse_available = Prop $el ([System.Windows.Automation.AutomationElement]::IsExpandCollapsePatternAvailableProperty)
+$f.selection_item_available = Prop $el ([System.Windows.Automation.AutomationElement]::IsSelectionItemPatternAvailableProperty)
+$f.scroll_available = Prop $el ([System.Windows.Automation.AutomationElement]::IsScrollPatternAvailableProperty)
+$f.scroll_item_available = Prop $el ([System.Windows.Automation.AutomationElement]::IsScrollItemPatternAvailableProperty)
+# 祖先 scroll ladder 的可用性：向上最多找 12 层，有 ScrollPattern 即算可用
+$f.ancestor_scroll_available = $false
+try {
+  $cur = $el
+  for ($i = 0; $i -lt 12; $i++) {
+    $cur = $walker.GetParent($cur)
+    if ($null -eq $cur) { break }
+    try { $null = $cur.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern); $f.ancestor_scroll_available = $true; break } catch {}
+  }
+} catch {}
+@{ ok = $true; features = $f } | ConvertTo-Json -Compress -Depth 4
+`;
+  return psJson(script).then((r) => (r && r.ok === true && r.features
+    ? { ok: true, features: r.features }
+    : { ok: false, error: (r && r.error) || 'feature_probe_failed' }));
+}
+
+/**
+ * 执行单个 rung。返回
+ *   `{ok:true, label, satisfied:true}`  已满足目标态（AlreadyInState，无副作用）
+ *   `{ok:true, label}`                  已投递（是否生效由 P3-3 的读回确认）
+ *   `{ok:false, label, error, hresult}` 失败 → 由 classifyHresult 归类
+ * `action` 只用于「已满足态」判定（check/uncheck/expand/collapse/select），
+ * 因为同一个 Toggle rung 在 check 与 uncheck 下的目标态是相反的：
+ * 对已勾选的复选框再跑 Toggle 会把它取消——那不是幂等，是错误。
+ */
+function psPatternScript(pid, path, label, action, value) {
+  const text = value === undefined || value === null ? '' : String(value);
+  return `${psPathPrelude(pid, path)}
+$label = ${psQuote(label)}
+$action = ${psQuote(String(action || ''))}
+$text = ${psQuote(text)}
+$want = ''
+$satisfied = $false
+try {
+  switch ($label) {
+    'UIInvokePattern.Invoke' {
+      $p = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+      $p.Invoke()
+    }
+    'UILegacyIAccessiblePattern.DoDefaultAction' {
+      $p = $el.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+      $p.DoDefaultAction()
+    }
+    'UIValuePattern.SetValue' {
+      $p = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+      $p.SetValue($text)
+    }
+    'UIRangeValuePattern.SetValue' {
+      $d = 0.0
+      if (-not [double]::TryParse($text, [ref]$d)) { throw 'value is not numeric' }
+      $p = $el.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+      $p.SetValue($d)
+    }
+    'UITogglePattern.Toggle' {
+      $p = $el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+      $state = $p.Current.ToggleState
+      if ($action -eq 'check' -and $state -eq [System.Windows.Automation.ToggleState]::On) { $satisfied = $true; break }
+      if ($action -eq 'uncheck' -and $state -eq [System.Windows.Automation.ToggleState]::Off) { $satisfied = $true; break }
+      $p.Toggle()
+    }
+    'UIExpandCollapsePattern.Expand' {
+      $p = $el.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+      if ($p.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded) { $satisfied = $true; break }
+      $p.Expand()
+    }
+    'UIExpandCollapsePattern.Collapse' {
+      $p = $el.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+      if ($p.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) { $satisfied = $true; break }
+      $p.Collapse()
+    }
+    'UISelectionItemPattern.Select' {
+      $p = $el.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+      if ([bool]$p.Current.IsSelected) { $satisfied = $true; break }
+      $p.Select()
+    }
+    'UIScrollPattern.Scroll' {
+      $p = $el.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
+      $p.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount, [System.Windows.Automation.ScrollAmount]::LargeIncrement)
+    }
+    'UIScrollItemPattern.ScrollIntoView' {
+      $p = $el.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+      $p.ScrollIntoView()
+    }
+    'AncestorScrollPattern.Scroll' {
+      $p = $null
+      $cur = $el
+      for ($i = 0; $i -lt 12; $i++) {
+        $cur = $walker.GetParent($cur)
+        if ($null -eq $cur) { break }
+        try { $p = $cur.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern); break } catch { $p = $null }
+      }
+      if ($null -eq $p) { throw 'no ancestor with ScrollPattern' }
+      $p.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount, [System.Windows.Automation.ScrollAmount]::LargeIncrement)
+    }
+    'UIAutomationElement.SetFocus' {
+      $el.SetFocus()
+    }
+    default { throw 'unreachable label' }
+  }
+  @{ ok = $true; label = $label; satisfied = $satisfied } | ConvertTo-Json -Compress
+} catch {
+  $hr = 0
+  try { $hr = [int64]$_.Exception.HResult } catch { $hr = 0 }
+  @{ ok = $false; label = $label; error = [string]$_.Exception.Message; hresult = $hr } | ConvertTo-Json -Compress
+}
+`;
+}
+
+function invokePatternByPath(pid, path, label, action, value) {
+  if (PATTERN_LABELS.indexOf(label) < 0) {
+    return Promise.resolve({ ok: false, label, error: 'unknown_pattern_label', hresult: null });
+  }
+  return psJson(psPatternScript(pid, path, label, action, value)).then((r) => {
+    if (r && r.ok === true) {
+      return { ok: true, label: r.label || label, satisfied: r.satisfied === true };
+    }
+    return {
+      ok: false,
+      label,
+      error: (r && r.error) || 'uia_failed',
+      hresult: r && r.hresult !== undefined ? r.hresult : null,
+    };
+  });
+}
+
+/**
+ * 跑一条完整的语义动作链（§P3-2 步骤 8）。
+ * 流程：探能力 → `chainFor(action, features)` 剪枝 → `executeChain` 逐 rung 执行。
+ *
+ * 这里对 actions.js 用**惰性 require**：actions.js 在模块顶层 require 本文件拿 `psQuote`，
+ * 顶层互引会拿到半初始化的 exports（psQuote → undefined）。只有调用期才安全。
+ */
+async function executeActionChain(pid, path, action, value) {
+  const { chainFor, executeChain } = require('./actions');
+  const probed = await probePatternFeatures(pid, path);
+  if (!probed.ok) {
+    return { ok: false, error: probed.error || 'feature_probe_failed' };
+  }
+  const rungs = chainFor(action, probed.features);
+  if (!rungs.length) {
+    return {
+      ok: false,
+      error: 'computer_action_not_supported',
+      message: `该元素不具备 ${action} 所需的任何 pattern`,
+      detail: { features: probed.features },
+    };
+  }
+  try {
+    const result = await executeChain(rungs, {
+      run: (rung) => invokePatternByPath(pid, path, rung.label, action, value),
+    });
+    return { ...result, action, features: probed.features };
+  } catch (e) {
+    return {
+      ok: false,
+      error: (e && e.code) || 'computer_action_failed',
+      message: (e && e.message) || String(e),
+      detail: e && e.detail,
+    };
+  }
+}
+
 module.exports = {
   listWindows, windowIdentity, foregroundWindow,
   readRawTree, observeOnce, readUIA, invokeUIA, invokeByPath, resolveAndObserve,
+  PATTERN_LABELS, probePatternFeatures, psPatternScript, invokePatternByPath, executeActionChain,
   runPowerShell, psQuote, UIA_TIMEOUT_MS,
 };

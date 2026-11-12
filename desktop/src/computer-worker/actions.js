@@ -173,6 +173,242 @@ function legacyTargetAllowed(version = CONTRACT_VERSION) {
   return legacyAutomationIdAllowed(version);
 }
 
+
+// ===========================================================================
+// DEV-CU P3-2：语义动作链（§4.7 pattern 链）
+// 本段只落「链顺序 + 可用性守卫 + 执行器 + HRESULT 分类」，纯声明与纯函数：
+//   - 不执行任何真实动作（`executeChain` 的 run 由调用方注入）
+//   - 不拼 PowerShell 命令名，不引入 SendInput / user32 / 坐标点击（§P3-2 明确不改）
+// 执行路径的接线（native.js 的 pattern 片段 + index.js 的调用点）在 P3-2 完成。
+//
+// 与上游 `crates/linux/src/actions/chain/mod.rs::execute_chain` 一致：
+//   absent   → 记 skipped，试下一 rung
+//   satisfied→ 立即返回 satisfied_without_delivery（AlreadyInState，无副作用）
+//   delivered→ 立即返回（verified 决定 delivered_verified / delivered_unverified）
+//   耗尽     → computer_action_failed + detail.steps
+//   deadline → 立刻停，not_delivered
+
+/** §4.7 的链顺序。label 用表里的英文常量，guard 是可用性守卫。 */
+const CHAIN_SPEC = Object.freeze({
+  observe: Object.freeze([]),
+  click: Object.freeze([
+    { label: 'UIInvokePattern.Invoke', guard: 'invoke' },
+    { label: 'UILegacyIAccessiblePattern.DoDefaultAction', guard: 'legacy' },
+  ]),
+  double_click: Object.freeze([
+    { label: 'UIInvokePattern.Invoke', guard: 'invoke' },
+    { label: 'UILegacyIAccessiblePattern.DoDefaultAction', guard: 'legacy' },
+  ]),
+  right_click: Object.freeze([
+    { label: 'UIInvokePattern.Invoke', guard: 'invoke' },
+    { label: 'UILegacyIAccessiblePattern.DoDefaultAction', guard: 'legacy' },
+  ]),
+  triple_click: Object.freeze([
+    { label: 'UIInvokePattern.Invoke', guard: 'invoke' },
+    { label: 'UILegacyIAccessiblePattern.DoDefaultAction', guard: 'legacy' },
+  ]),
+  set_value: Object.freeze([
+    { label: 'UIValuePattern.SetValue', guard: 'value_writable' },
+    { label: 'UIRangeValuePattern.SetValue', guard: 'range_numeric' },
+  ]),
+  type_text: Object.freeze([
+    { label: 'UIValuePattern.SetValue', guard: 'value_writable' },
+    { label: 'UIRangeValuePattern.SetValue', guard: 'range_numeric' },
+  ]),
+  clear: Object.freeze([
+    { label: 'UIValuePattern.SetValue', guard: 'value_writable' },
+  ]),
+  select: Object.freeze([
+    { label: 'UISelectionItemPattern.Select', guard: 'selection_item' },
+    { label: 'UIExpandCollapsePattern.Expand', guard: 'expand_collapse' },
+  ]),
+  toggle: Object.freeze([
+    { label: 'UITogglePattern.Toggle', guard: 'toggle' },
+    { label: 'UIInvokePattern.Invoke', guard: 'invoke' },
+  ]),
+  check: Object.freeze([
+    { label: 'UITogglePattern.Toggle', guard: 'toggle' },
+    { label: 'UIInvokePattern.Invoke', guard: 'invoke' },
+  ]),
+  uncheck: Object.freeze([
+    { label: 'UITogglePattern.Toggle', guard: 'toggle' },
+    { label: 'UIInvokePattern.Invoke', guard: 'invoke' },
+  ]),
+  expand: Object.freeze([
+    { label: 'UIExpandCollapsePattern.Expand', guard: 'expand_collapse' },
+    { label: 'UIInvokePattern.Invoke', guard: 'invoke' },
+  ]),
+  collapse: Object.freeze([
+    { label: 'UIExpandCollapsePattern.Collapse', guard: 'expand_collapse' },
+    { label: 'UIInvokePattern.Invoke', guard: 'invoke' },
+  ]),
+  scroll: Object.freeze([
+    { label: 'UIScrollPattern.Scroll', guard: 'scroll' },
+    { label: 'UIScrollItemPattern.ScrollIntoView', guard: 'scroll_item' },
+    { label: 'AncestorScrollPattern.Scroll', guard: 'ancestor_scroll' },
+  ]),
+  scroll_to: Object.freeze([
+    { label: 'UIScrollItemPattern.ScrollIntoView', guard: 'scroll_item' },
+    { label: 'UIScrollPattern.Scroll', guard: 'scroll' },
+    { label: 'AncestorScrollPattern.Scroll', guard: 'ancestor_scroll' },
+  ]),
+  set_focus: Object.freeze([
+    { label: 'UIAutomationElement.SetFocus', guard: 'always' },
+  ]),
+  press_key: Object.freeze([
+    { label: 'UIAutomationElement.SetFocus', guard: 'always' },
+  ]),
+});
+
+/** guard → features 里的开关名。`always` 无开关。 */
+const GUARD_FEATURE = Object.freeze({
+  invoke: 'invoke_available',
+  legacy: 'legacy_default_action',
+  value_writable: 'value_writable',
+  range_numeric: 'range_numeric',
+  selection_item: 'selection_item_available',
+  expand_collapse: 'expand_collapse_available',
+  toggle: 'toggle_available',
+  scroll: 'scroll_available',
+  scroll_item: 'scroll_item_available',
+  ancestor_scroll: 'ancestor_scroll_available',
+});
+
+/** 只有显式 false / '' / 0 / null 才算「不可用」；未知一律尝试，由 PS 回 absent。 */
+function guardOpen(guard, features) {
+  if (guard === 'always' || !features) return true;
+  const key = GUARD_FEATURE[guard];
+  if (!key) return true;
+  const v = features[key];
+  return !(v === false || v === '' || v === 0 || v === null);
+}
+
+/**
+ * 生成某个动作的 rung 列表。不给 features 时是「规划视图」（全 rung），
+ * 给了 features 时按守卫过滤（执行视图）。
+ */
+function chainFor(action, features) {
+  const spec = CHAIN_SPEC[action];
+  if (!spec) return [];
+  return spec
+    .filter((rung) => guardOpen(rung.guard, features))
+    .map((rung) => ({ label: rung.label, guard: rung.guard, mechanism: 'semantic_api' }));
+}
+
+/** §4.7 / §P3-2 步骤 10 的 HRESULT 表（值与上游 hresult.rs 一致）。 */
+const HRESULT = Object.freeze({
+  E_ACCESSDENIED: 0x80070005,
+  E_INVALIDARG: 0x80070057,
+  UIA_E_ELEMENTNOTENABLED: 0x80040200,
+  UIA_E_ELEMENTNOTAVAILABLE: 0x80040201,
+  UIA_E_NOTSUPPORTED: 0x80040204,
+  UIA_E_TIMEOUT: 0x80131505,
+  RPC_E_SERVERFAULT: 0x80010105,
+  RPC_E_DISCONNECTED: 0x80010108,
+  RPC_S_SERVER_UNAVAILABLE: 0x800706ba,
+  RPC_S_CALL_FAILED: 0x800706be,
+});
+
+function hresultValue(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return n >>> 0; // 兼容有符号表示（-2147024891 → 0x80070005）
+}
+
+/**
+ * HRESULT → 结论。返回 `{absent:true}` 表示「这个 rung 不支持，继续下一个」，
+ * 其余返回 `{error_code, disposition, retryable}`。
+ */
+function classifyHresult(value) {
+  const h = hresultValue(value);
+  const notDelivered = { delivery: 'not_delivered', retry: 'safe' };
+  const uncertain = { delivery: 'delivery_uncertain', retry: 'unsafe' };
+  if (h === HRESULT.UIA_E_NOTSUPPORTED) return { absent: true };
+  switch (h) {
+    case HRESULT.E_ACCESSDENIED:
+      return { error_code: 'computer_policy_denied', disposition: notDelivered, retryable: false };
+    case HRESULT.UIA_E_ELEMENTNOTAVAILABLE:
+      return { error_code: 'computer_stale_ref', disposition: notDelivered, retryable: true };
+    case HRESULT.E_INVALIDARG:
+      return { error_code: 'computer_invalid_args', disposition: notDelivered, retryable: false };
+    case HRESULT.UIA_E_ELEMENTNOTENABLED:
+      return { error_code: 'computer_action_failed', disposition: notDelivered, retryable: false };
+    case HRESULT.RPC_E_SERVERFAULT:
+    case HRESULT.RPC_E_DISCONNECTED:
+    case HRESULT.RPC_S_SERVER_UNAVAILABLE:
+    case HRESULT.RPC_S_CALL_FAILED:
+      return { error_code: 'computer_app_unresponsive', disposition: uncertain, retryable: true };
+    case HRESULT.UIA_E_TIMEOUT:
+      return { error_code: 'computer_timeout', disposition: uncertain, retryable: true };
+    default:
+      // 未分类：调用方不知道动作有没有落到目标上，只能记 unknown_outcome
+      return { error_code: 'computer_action_failed', disposition: uncertain, retryable: false };
+  }
+}
+
+/**
+ * 执行链（依赖注入，便于单测）。`run(rung)` 返回：
+ *   `{kind:'absent'}`                 rung 不支持 → 下一个
+ *   `{kind:'satisfied'}`              已满足目标态（AlreadyInState）
+ *   `{kind:'delivered', verified}`    已投递
+ *   `{hresult}`                       失败 → 按表分类
+ */
+async function executeChain(rungs, { run, now = () => Date.now(), deadlineAt } = {}) {
+  if (typeof run !== 'function') {
+    throw new WorkerError('computer_invalid_args', 'executeChain 需要 run');
+  }
+  const steps = [];
+  const list = Array.isArray(rungs) ? rungs : [];
+  for (const rung of list) {
+    if (deadlineAt !== undefined && now() >= Number(deadlineAt)) {
+      const err = new WorkerError('computer_timeout', `动作链在 ${rung.label} 前到达 deadline`);
+      err.detail = { steps, rung: rung.label, disposition: { delivery: 'not_delivered', retry: 'safe' } };
+      throw err;
+    }
+    const res = await run(rung);
+    if (res && res.kind === 'absent') {
+      steps.push({ label: rung.label, outcome: 'skipped', cause: 'affordance_absent', mechanism: 'semantic_api' });
+      continue;
+    }
+    if (res && res.kind === 'satisfied') {
+      steps.push({ label: rung.label, outcome: 'satisfied', verified: true, mechanism: 'semantic_api' });
+      return {
+        ok: true, action_satisfied: true, satisfied_without_delivery: true, verified: true, steps,
+      };
+    }
+    if (res && (res.kind === 'delivered' || res.ok === true)) {
+      const verified = res.verified === true;
+      steps.push({
+        label: rung.label, outcome: 'succeeded', verified, mechanism: 'semantic_api',
+      });
+      return {
+        ok: true, action_satisfied: false, satisfied_without_delivery: false, verified, steps,
+      };
+    }
+    const classified = classifyHresult(res && res.hresult);
+    if (classified.absent) {
+      steps.push({ label: rung.label, outcome: 'skipped', cause: 'uia_not_supported', mechanism: 'semantic_api' });
+      continue;
+    }
+    const err = new WorkerError(classified.error_code, `动作链在 ${rung.label} 失败`);
+    err.detail = {
+      steps,
+      rung: rung.label,
+      hresult: hresultValue(res && res.hresult),
+      disposition: classified.disposition,
+      retryable: classified.retryable,
+    };
+    throw err;
+  }
+  const err = new WorkerError('computer_action_failed', '动作链全部耗尽：没有 rung 成功');
+  err.detail = {
+    steps,
+    steps_tried: steps.map((s) => s.label),
+    disposition: { delivery: 'not_delivered', retry: 'safe' },
+  };
+  throw err;
+}
+
 module.exports = {
   WORKER_ACTIONS,
   TEXT_ACTIONS,
@@ -186,4 +422,12 @@ module.exports = {
   normalizeArgs,
   dispatch,
   legacyTargetAllowed,
+  // P3-2（尚未接线，仅单测直调）
+  CHAIN_SPEC,
+  GUARD_FEATURE,
+  HRESULT,
+  guardOpen,
+  chainFor,
+  classifyHresult,
+  executeChain,
 };

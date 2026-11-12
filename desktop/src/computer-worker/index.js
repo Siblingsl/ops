@@ -8,7 +8,7 @@
 // 硬禁区搬到 policy.js，均为原样搬移（协议字节与 PowerShell 脚本内容不变）。
 
 const { isHardForbidden } = require('./policy');
-const { listWindows, readUIA, invokeUIA, resolveAndObserve, invokeByPath } = require('./native');
+const { listWindows, readUIA, invokeUIA, resolveAndObserve, executeActionChain } = require('./native');
 const { RefStore } = require('./ref-store');
 const { resolveRefTarget } = require('./refs');
 const {
@@ -166,7 +166,10 @@ channel.onMessage((msg) => {
             finish({ ok: false, error: res.error, message: res.message, detail: res.detail });
             return;
           }
-          invokeByPath(pid2, res.path, plan.args.value === undefined ? null : plan.args.value).then((act) => finish({
+          // P3-2：走语义动作链（探能力 → 剪枝 → 逐 rung 执行），不再固定单 pattern。
+          // clear 没有 value 入参，语义上就是「清空」→ 传空串；其余非文本动作 value 不参与。
+          const text = plan.args.value === undefined ? '' : plan.args.value;
+          executeActionChain(pid2, res.path, action, text).then((act) => finish({
             ...act,
             action: plan.action,
             command: plan.command,
