@@ -25,7 +25,16 @@ export function ConfigMixin<T extends abstract new (...args: any[]) => ChannelMi
   abstract class ConfigMixin extends Base {
     readonly configPath = path.join(app.getPath('userData'), 'desktop-config.json');
     configPromise: Promise<ConfigDocument> | null = null;
-    readonly managementRequests: ManagementRequestRegistry = new ManagementRequestRegistry('');
+    // apiOrigin 是子类构造参数，字段初始化阶段还没赋值（早于子类构造函数体）。
+    // 因此这里延迟到首次使用时创建；重构前是在 DesktopClient 构造函数里用 apiOrigin 构造的，
+    // 若在字段初始化时写成 new ManagementRequestRegistry('')，issue() 会把所有带桌面证明
+    // 的请求（平台采集全链路）判为“管理请求目标无效”。
+    private managementRequestsInstance: ManagementRequestRegistry | null = null;
+
+    protected get managementRequests(): ManagementRequestRegistry {
+      this.managementRequestsInstance ??= new ManagementRequestRegistry(this.apiOrigin);
+      return this.managementRequestsInstance;
+    }
 
     protected abstract readonly businessSession: import('electron').Session;
     protected abstract readonly apiOrigin: string;
