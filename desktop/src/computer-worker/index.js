@@ -11,7 +11,9 @@ const { isHardForbidden } = require('./policy');
 const { listWindows, readUIA, invokeUIA, resolveAndObserve, invokeByPath } = require('./native');
 const { RefStore } = require('./ref-store');
 const { resolveRefTarget } = require('./refs');
-const { legacyAutomationIdAllowed } = require('./contract');
+const {
+  dispatch, inferAction, normalizeArgs, legacyTargetAllowed,
+} = require('./actions');
 const { createCaptureService, OPEN_ENDED_KEYS } = require('./capture');
 
 // DEV-CU P2-3：进程内快照存储。按 grant_id 分桶，不落盘；进程退出即全部失效。
@@ -89,7 +91,7 @@ channel.onMessage((msg) => {
       return;
     }
     case 'uia_invoke': {
-      // C05/C06：单控件动作（ValuePattern.SetValue 或 InvokePattern.Invoke）。
+      // C05/C06：单控件动作（P3-1 起走 §4.7 的 14 项动作枚举）。
       // 单次批准绑定 action hash 由服务端票据管理；worker 只按授权执行。
       const summary2 = String(msg.target_summary || '');
       if (isHardForbidden(summary2)) { finish({ ok: false, error: 'hard_forbidden' }); return; }
@@ -97,8 +99,30 @@ channel.onMessage((msg) => {
       const value = msg.value === undefined ? null : String(msg.value);
       if (!Number.isInteger(pid2) || pid2 <= 0) { finish({ ok: false, error: 'pid_invalid' }); return; }
 
+      // P3-1：动作必须在 WORKER_ACTIONS 内。旧调用不带 action 时按 value 推断
+      // （value 非 null → set_value，否则 click），保持既有 IPC 语义不变。
+      let action;
+      try {
+        action = inferAction(msg.action, value);
+      } catch (e) {
+        finish({ ok: false, error: e.code || 'computer_action_not_supported', message: e.message });
+        return;
+      }
+
       // P2-4：优先走 ref + 身份谓词的严格再解析（不再用 AutomationId 猜目标）。
       if (msg.ref) {
+        // §P3-1 步骤 4：ref 路径不接受任何外部目标字段。这里显式拒绝而不是「忽略」，
+        // 否则调用方会以为 automation_id / hwnd / 坐标生效了。
+        for (const key of ['automation_id', 'hwnd', 'x', 'y', 'script', 'coordinates', 'rect']) {
+          if (Object.prototype.hasOwnProperty.call(msg, key)) {
+            finish({
+              ok: false,
+              error: 'computer_invalid_args',
+              message: `ref 路径不接受外部传入的 ${key}`,
+            });
+            return;
+          }
+        }
         let target;
         try {
           target = resolveRefTarget(String(msg.ref));
@@ -107,9 +131,10 @@ channel.onMessage((msg) => {
           return;
         }
         const grantId = String(msg.grant_id || '');
+        const generation = Number(msg.generation) || 0;
         let snapshot;
         try {
-          snapshot = refStore.load(target.snapshotId, grantId, Number(msg.generation) || 0);
+          snapshot = refStore.load(target.snapshotId, grantId, generation);
         } catch (e) {
           finish({ ok: false, error: e.code || 'computer_stale_ref', message: e.message });
           return;
@@ -119,6 +144,20 @@ channel.onMessage((msg) => {
           finish({ ok: false, error: 'computer_stale_ref', message: '该 ref 不在这个快照里，请重新观察' });
           return;
         }
+        // 目标只能是本 grant / generation 的快照里的 ref；外部 automation_id / hwnd /
+        // 坐标 / 脚本在 dispatch 里被拒（§P3-1 步骤 4）。
+        let plan;
+        try {
+          plan = dispatch(
+            action,
+            { ref: String(msg.ref), grant_id: grantId, generation },
+            { value },
+            { snapshot_id: target.snapshotId, grant_id: grantId, generation },
+          );
+        } catch (e) {
+          finish({ ok: false, error: e.code || 'computer_invalid_args', message: e.message });
+          return;
+        }
         // window_identity 来自快照元数据（RefMap 条目里不带它）
         const entry = { ...refEntry, window_identity: snapshot.identity || {} };
         resolveAndObserve(pid2, entry, target.snapshotId, String(msg.ref)).then((res) => {
@@ -126,8 +165,10 @@ channel.onMessage((msg) => {
             finish({ ok: false, error: res.error, message: res.message, detail: res.detail });
             return;
           }
-          invokeByPath(pid2, res.path, value).then((act) => finish({
+          invokeByPath(pid2, res.path, plan.args.value === undefined ? null : plan.args.value).then((act) => finish({
             ...act,
+            action: plan.action,
+            command: plan.command,
             snapshot_id: target.snapshotId,
             ref: String(msg.ref),
             resolved_path: res.path,
@@ -137,13 +178,30 @@ channel.onMessage((msg) => {
       }
 
       // 旧 AutomationId 分支：契约版本内保留一个发布周期（§P2-4 回退判据）。
-      if (!legacyAutomationIdAllowed()) {
+      if (!legacyTargetAllowed()) {
         finish({ ok: false, error: 'computer_invalid_args', message: '本契约版本要求使用 ref 定位目标' });
+        return;
+      }
+      // 旧分支只实现了 Invoke / SetValue 两种 pattern，其余动作不在这条链上。
+      if (action !== 'click' && action !== 'set_value') {
+        finish({
+          ok: false,
+          error: 'computer_action_not_supported',
+          message: `旧 automation_id 分支只支持 click / set_value，收到 ${action}`,
+        });
         return;
       }
       const autoId = String(msg.automation_id || '');
       if (!autoId) { finish({ ok: false, error: 'params_invalid' }); return; }
-      invokeUIA(pid2, autoId, value).then(finish);
+      let legacyArgs;
+      try {
+        legacyArgs = normalizeArgs(action, { value });
+      } catch (e) {
+        finish({ ok: false, error: e.code || 'computer_invalid_args', message: e.message });
+        return;
+      }
+      invokeUIA(pid2, autoId, legacyArgs.value === undefined ? null : legacyArgs.value)
+        .then((act) => finish({ ...act, action }));
       return;
     }
     case 'ping':
