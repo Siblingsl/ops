@@ -9,6 +9,10 @@ const { execFile } = require('node:child_process');
 
 const { isHardForbidden } = require('./policy');
 const { buildObserveTree } = require('./tree');
+const {
+  newSnapshotId, nextRevision, allocateTreeRefs, qualifyTreeRefs,
+  assertTreeSize, countRefs, refsAreUnique, WorkerError,
+} = require('./refs');
 
 /** 枚举可见顶层窗口（PowerShell：有主窗口的进程）。返回脱敏摘要（pid/标题/进程名）。 */
 function listWindows() {
@@ -161,11 +165,31 @@ try { $winName = [string]$root.Current.Name } catch {}
       const parsed = JSON.parse(r.stdout || '{}');
       if (parsed.ok !== true) return { ok: false, error: parsed.error || 'uia_failed' };
       const built = buildObserveTree(parsed);
+      // P2-2：一次观察绑定一个 snapshot_id + 单调 revision；ref 在本进程内分配后立即限定。
+      const snapshotId = newSnapshotId();
+      const revision = nextRevision();
+      let allocated;
+      try {
+        allocated = allocateTreeRefs(built.tree, { snapshotId, revision, identity: built.window_identity });
+        qualifyTreeRefs(allocated.tree, snapshotId);
+        assertTreeSize(allocated.tree);
+      } catch (e) {
+        if (e instanceof WorkerError) return { ok: false, error: e.code, message: e.message };
+        throw e;
+      }
+      // 自检：ref_count 必须与树中 ref_id 数量一致、且两两不同（P2-2 完成判据）。
+      if (countRefs(allocated.tree) !== allocated.count || !refsAreUnique(allocated.tree)) {
+        return { ok: false, error: 'computer_internal', message: 'ref 分配自检失败' };
+      }
       return {
         ok: true,
         window: parsed.window,
-        // P2-1 新形状（preload 白名单由 P3-7 才扩展，此处先对本机通道输出）
-        tree: built.tree,
+        // P2-2 新增
+        snapshot_id: snapshotId,
+        revision,
+        ref_count: allocated.count,
+        tree: allocated.tree,
+        // P2-1 字段
         complete: built.complete,
         nodes_observed: built.nodes_observed,
         window_identity: built.window_identity,

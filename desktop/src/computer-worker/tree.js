@@ -101,7 +101,7 @@ function actionsOf(raw) {
  * parent 为「已产出节点」的下标；-1 表示窗口根。
  */
 function normalizeNode(raw) {
-  return {
+  const node = {
     role: roleFor(raw.role_raw),
     name: String(raw.name || ''),
     value: String(raw.value || ''),
@@ -113,6 +113,11 @@ function normalizeNode(raw) {
     children: [],
     children_count: Number.isFinite(Number(raw.children_count)) ? Number(raw.children_count) : 0,
   };
+  // AutomationId 供 P2-2 的 RefEntry.native_id 使用；不可枚举，避免漏进 §4.5 契约输出。
+  Object.defineProperty(node, 'native_id', {
+    value: String(raw.id || ''), enumerable: false, configurable: true, writable: true,
+  });
+  return node;
 }
 
 /**
@@ -191,7 +196,7 @@ function clip(s, n) {
 
 /** 深拷贝（只走 §4.5 字段，避免把内部字段带出去）。 */
 function cloneNode(node) {
-  return {
+  const copy = {
     role: node.role,
     name: node.name,
     value: node.value,
@@ -203,6 +208,10 @@ function cloneNode(node) {
     children: node.children.map(cloneNode),
     children_count: node.children_count,
   };
+  Object.defineProperty(copy, 'native_id', {
+    value: String(node.native_id || ''), enumerable: false, configurable: true, writable: true,
+  });
+  return copy;
 }
 
 /**
