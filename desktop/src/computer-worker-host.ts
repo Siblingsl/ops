@@ -23,6 +23,47 @@ export interface UiaView {
   error?: string;
 }
 
+/** CF-DESK-04：窗口级截图摘要（C09：只含选中目标的必要摘要，绝不含截图原文）。 */
+export interface WindowCaptureView {
+  ok: boolean;
+  schema?: string;
+  capture_id?: string;
+  run_id?: string;
+  window_digest?: string;
+  byte_size?: number;
+  width?: number;
+  height?: number;
+  bounds?: { x: number; y: number; w: number; h: number };
+  captured_at?: string;
+  revision?: number;
+  error?: string;
+}
+
+export interface WindowCaptureRequest {
+  pid: number;
+  target_summary: string;
+  grant_id: string;
+  run_id: string;
+}
+
+/** CF-DESK-05：C09 脱敏证据（固定白名单；不含原图 / 标题 / 进程路径 / 其它窗口清单）。 */
+export interface CaptureRedactionEvidence {
+  ok: boolean;
+  schema?: string;
+  capture_id?: string;
+  run_id?: string;
+  window_digest?: string;
+  image_digest?: string;
+  width?: number;
+  height?: number;
+  byte_size?: number;
+  checks?: string[];
+  coverage?: string;
+  revision?: number;
+  captured_at?: string;
+  error?: string;
+}
+
 export class ComputerWorkerHost extends EventEmitter {
   private worker: UtilityProcess | null = null;
   private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -93,6 +134,29 @@ export class ComputerWorkerHost extends EventEmitter {
    * 服务端批准票据属第二批（agent_computer.go:18）；本层只暴露本机通道。 */
   async invokeUIA(pid: number, automationId: string, value: string | null, targetSummary: string): Promise<{ ok: boolean; action?: string; error?: string }> {
     return await this.call('uia_invoke', { pid, automation_id: automationId, value, target_summary: targetSummary }) as { ok: boolean; action?: string; error?: string };
+  }
+
+  /** CF-DESK-04（A-03 前置）：窗口级截图，固定意图、只回脱敏摘要。
+   * 刻意**不新增** main IPC / preload 白名单 / 服务端出口：原图只在隔离 worker 进程内可达，
+   * 渲染器与模型通道的接线属 DT-04 / 后续立项（27 §11.5.2「Electron 只暴露固定意图」）。 */
+  async captureWindow(input: WindowCaptureRequest): Promise<WindowCaptureView> {
+    return await this.call('capture_window', {
+      pid: input.pid,
+      target_summary: input.target_summary,
+      grant_id: input.grant_id,
+      run_id: input.run_id,
+    }) as WindowCaptureView;
+  }
+
+  /** 失权 / handoff / 锁屏：撤销该 grant 下全部窗口截图（C09 拒绝历史越权读取）。 */
+  async invalidateCaptures(grantId: string): Promise<{ ok: boolean; cleared?: number; error?: string }> {
+    return await this.call('capture_invalidate', { grant_id: grantId }) as { ok: boolean; cleared?: number; error?: string };
+  }
+
+  /** CF-DESK-05（C09 脱敏校验）：取该次截图的脱敏证据。固定意图，只回摘要，不回原文；
+   * 同样不新增 main IPC / preload 白名单 / 服务端出口（DT-04 仍待立项）。 */
+  async captureEvidence(captureId: string, grantId: string): Promise<CaptureRedactionEvidence> {
+    return await this.call('capture_evidence', { capture_id: captureId, grant_id: grantId }) as CaptureRedactionEvidence;
   }
 
   stop(): void {

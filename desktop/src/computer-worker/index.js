@@ -12,10 +12,14 @@ const { listWindows, readUIA, invokeUIA, resolveAndObserve, invokeByPath } = req
 const { RefStore } = require('./ref-store');
 const { resolveRefTarget } = require('./refs');
 const { legacyAutomationIdAllowed } = require('./contract');
+const { createCaptureService, OPEN_ENDED_KEYS } = require('./capture');
 
 // DEV-CU P2-3：进程内快照存储。按 grant_id 分桶，不落盘；进程退出即全部失效。
 const refStore = new RefStore();
-process.on('exit', () => { refStore.clear(); });
+// CF-DESK-04：窗口级截图原文只在隔离 worker 内存里，未接任何 host→IPC→preload
+// 或服务端出口（27 §11.5.2 / §11.5.5）；进程退出即全部失效。
+const captureService = createCaptureService({});
+process.on('exit', () => { refStore.clear(); captureService.clear(); });
 
 /** uia_read 带 grant_id 时把 RefMap 存入 RefStore；未带则只做单次读取（兼容旧调用）。 */
 function persistSnapshot(res, msg) {
@@ -156,6 +160,38 @@ channel.onMessage((msg) => {
     case 'ref_store_stats':
       // 只回计数，不回任何窗口/控件内容（C09）。
       finish({ ok: true, ...refStore.stats() });
+      return;
+    case 'capture_window': {
+      // CF-DESK-04（A-03 前置）：窗口级截图。硬禁区与服务端一样做本机二次校验；
+      // 返回只含选中目标的必要摘要，原文留在本进程（27 §11.5.2 / C09）。
+      const captureSummary = String(msg.target_summary || '');
+      if (isHardForbidden(captureSummary)) { finish({ ok: false, error: 'hard_forbidden' }); return; }
+      captureService.capture(msg)
+        .then(finish, () => finish({ ok: false, error: 'capture_failed' }));
+      return;
+    }
+    case 'capture_invalidate': {
+      // 失权 / handoff / 锁屏：清空该 grant 下全部截图，拒绝历史越权读取（C09）。
+      const captureGrant = String(msg.grant_id || '');
+      if (!captureGrant) { finish({ ok: false, error: 'params_invalid' }); return; }
+      finish({ ok: true, cleared: captureService.invalidate(captureGrant) });
+      return;
+    }
+    case 'capture_evidence': {
+      // CF-DESK-05（C09 脱敏校验 / A-03）：只回固定白名单的脱敏证据，
+      // 凭同一 grant 读取；**不**提供 capture_read / capture_bytes 类原文出口。
+      const captureId = String(msg.capture_id || '');
+      const evidenceGrant = String(msg.grant_id || '');
+      if (!captureId || !evidenceGrant) { finish({ ok: false, error: 'params_invalid' }); return; }
+      if (OPEN_ENDED_KEYS.some((k) => Object.prototype.hasOwnProperty.call(msg, k))) {
+        finish({ ok: false, error: 'params_invalid' }); return;
+      }
+      finish(captureService.evidence(captureId, evidenceGrant));
+      return;
+    }
+    case 'capture_stats':
+      // 只回计数，不回任何截图原文 / 窗口标题 / 其它窗口清单。
+      finish({ ok: true, ...captureService.stats() });
       return;
     default:
       finish({ ok: false, error: 'unknown_cmd' });

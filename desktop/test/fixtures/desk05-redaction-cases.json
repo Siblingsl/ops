@@ -1,0 +1,75 @@
+{
+  "schema": "desk05-redaction-cases-v1",
+  "source": "CF-DESK-05 C09 截图脱敏校验正反例夹具；docs/27 §11.5.4 T-AI27-C09、docs/34 §5、docs/08 DEV-A12 续进",
+  "bounds": { "x": 100, "y": 80, "w": 900, "h": 640 },
+  "screen_bounds": { "x": 0, "y": 0, "w": 1920, "h": 1080 },
+  "positive": [
+    {
+      "id": "clean-window-only",
+      "expect": { "ok": true },
+      "note": "窗口级 PNG，IHDR 与矩形一致，显式布尔齐备，无其它窗口，虚拟屏边界内"
+    }
+  ],
+  "negative": [
+    {
+      "id": "declared-small-window-but-full-screen-image",
+      "override": { "png_width": 1920, "png_height": 1080 },
+      "expect": { "ok": false, "error": "image_mismatch" },
+      "note": "核心 C09 风险：backend 声明 900x640，实传全屏图；T6 只看元数据无法发现"
+    },
+    {
+      "id": "not-a-png",
+      "override": { "bytes_kind": "text" },
+      "expect": { "ok": false, "error": "image_invalid" },
+      "note": "非图像字节（含明文文本）一律拒绝，不落明文敏感"
+    },
+    {
+      "id": "foreign-windows-missing",
+      "override": { "unset": ["foreign_windows"] },
+      "expect": { "ok": false, "error": "redaction_unverifiable" },
+      "note": "T6 对缺失 foreign_windows 默认放行；C09 复核必须判为不可核验"
+    },
+    {
+      "id": "occluded-flag-missing",
+      "override": { "unset": ["occluded"] },
+      "expect": { "ok": false, "error": "redaction_unverifiable" },
+      "note": "backend 漏报遮挡标志不得被当作 false"
+    },
+    {
+      "id": "declared-dimensions-mismatch",
+      "override": { "width": 320 },
+      "expect": { "ok": false, "error": "dimensions_mismatch" },
+      "note": "声明尺寸与窗口矩形矛盾"
+    },
+    {
+      "id": "foreign-window-declared",
+      "override": { "foreign_windows": [{ "x": 500, "y": 200, "w": 200, "h": 100 }] },
+      "expect": { "ok": false, "error": "foreign_window" },
+      "note": "backend 自报夹带其它窗口"
+    },
+    {
+      "id": "target-covers-virtual-screen",
+      "override": { "screen_bounds": { "x": 100, "y": 80, "w": 900, "h": 640 } },
+      "expect": { "ok": false, "error": "full_screen" },
+      "note": "目标矩形覆盖整个虚拟屏，独立几何层拒绝"
+    },
+    {
+      "id": "target-outside-screen",
+      "override": { "screen_bounds": { "x": 0, "y": 0, "w": 800, "h": 600 } },
+      "expect": { "ok": false, "error": "outside_screen" },
+      "note": "目标矩形超出虚拟屏"
+    },
+    {
+      "id": "other-window-intersects",
+      "override": { "other_windows": [{ "x": 700, "y": 300, "w": 400, "h": 300 }] },
+      "expect": { "ok": false, "error": "foreign_window" },
+      "note": "其它窗口矩形与目标相交，独立几何层拒绝"
+    },
+    {
+      "id": "other-windows-not-array",
+      "override": { "other_windows": "unknown" },
+      "expect": { "ok": false, "error": "redaction_unverifiable" },
+      "note": "几何证据格式非法，不静默跳过"
+    }
+  ]
+}
