@@ -250,7 +250,29 @@ jobs:
                 echo "缺少 deploy/.env；拒绝重置服务器仓库。" >&2
                 exit 1
               fi
-              git fetch origin
+              # 服务器到 github.com 的 HTTPS 链路在国内网络下会周期性抖动：
+              # 2026-11-12 两次部署分别以 `curl 28 ... after 135094 ms` 和
+              # `GnuTLS recv error (-110): The TLS connection was non-properly terminated`
+              # 卡在这一步，整次部署被打回（好在还没动容器）。
+              # 这里只拉 main 一个 ref（数据量最小）、强制 HTTP/1.1（大 pack 走 HTTP/2
+              # 更容易被中间设备 reset），并做有限退避重试。
+              fetch_ok=0
+              for attempt in 1 2 3 4 5; do
+                if git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 \
+                     fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'; then
+                  fetch_ok=1
+                  break
+                fi
+                if [[ "$attempt" == 5 ]]; then
+                  break
+                fi
+                echo "git fetch 第 $attempt 次失败，$((attempt * 15))s 后重试…" >&2
+                sleep $((attempt * 15))
+              done
+              if [[ "$fetch_ok" != "1" ]]; then
+                echo "无法从 origin 拉取（github.com 不可达或 TLS 被中断）；本次部署放弃，未改动任何容器。" >&2
+                exit 1
+              fi
               if ! git merge-base --is-ancestor "$DEPLOY_SHA" origin/main; then
                 echo "提交 $DEPLOY_SHA 不是 origin/main 的祖先；拒绝部署。" >&2
                 exit 1
