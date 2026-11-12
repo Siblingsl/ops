@@ -147,28 +147,6 @@ func (s *Server) createComputerGrant(w http.ResponseWriter, r *http.Request) err
 	if err != pgx.ErrNoRows {
 		return err
 	}
-	// S05 前台互斥（27 §11.5.2）：浏览器 AI 操作（活动 browser grant）与电脑控制共用前台——
-	// 有活动浏览器租约时电脑控制拒绝（反之亦然，browser-grants API 同理）。
-	var activeBrowserGrant bool
-	if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM agent_browser_grant
-		WHERE user_id=$1 AND workspace_id=$2 AND state='active' AND expires_at > now())`,
-		id.UserID, id.WorkspaceID).Scan(&activeBrowserGrant); err != nil {
-		return err
-	}
-	if activeBrowserGrant {
-		return apiErr(409, "computer_foreground_busy", "浏览器协作正在操作前台；请先停止浏览器任务再使用电脑控制")
-	}
-	// 单租约互斥（C04）。
-	var activeID uuid.UUID
-	err = s.db.QueryRow(r.Context(), `SELECT id FROM agent_computer_grant
-		WHERE user_id=$1 AND state='active' AND (expires_at IS NULL OR expires_at > now())`,
-		id.UserID).Scan(&activeID)
-	if err == nil {
-		return apiErr(409, "computer_foreground_busy", "已有活动前台租约，请先撤销")
-	}
-	if err != pgx.ErrNoRows {
-		return err
-	}
 	var runID *uuid.UUID
 	if strings.TrimSpace(body.RunID) != "" {
 		parsed, err := uuid.Parse(strings.TrimSpace(body.RunID))
@@ -181,6 +159,31 @@ func (s *Server) createComputerGrant(w http.ResponseWriter, r *http.Request) err
 	expires := s.now().Add(30 * time.Second)
 	var view computerGrantView
 	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+		// P4-12（S05 并发窗口补齐）：互斥检查移入事务内（对齐 browser 侧 :350-360），
+		// 消除「检查在事务外、INSERT 在事务内」的并发窗口。409 码与文案不变。
+		// S05 前台互斥（27 §11.5.2）：浏览器 AI 操作（活动 browser grant）与电脑控制共用前台——
+		// 有活动浏览器租约时电脑控制拒绝（反之亦然，browser-grants API 同理）。
+		var activeBrowserGrant bool
+		if err := tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM agent_browser_grant
+			WHERE user_id=$1 AND workspace_id=$2 AND state='active' AND expires_at > now())`,
+			id.UserID, id.WorkspaceID).Scan(&activeBrowserGrant); err != nil {
+			return err
+		}
+		if activeBrowserGrant {
+			return apiErr(409, "computer_foreground_busy", "浏览器协作正在操作前台；请先停止浏览器任务再使用电脑控制")
+		}
+		// 单租约互斥（C04）。行级锁：activity grant 上 FOR UPDATE 防止两事务同时通过检查。
+		var activeID uuid.UUID
+		if err := tx.QueryRow(r.Context(), `SELECT id FROM agent_computer_grant
+			WHERE user_id=$1 AND state='active' AND (expires_at IS NULL OR expires_at > now())
+			FOR UPDATE`,
+			id.UserID).Scan(&activeID); err != nil {
+			if err != pgx.ErrNoRows {
+				return err
+			}
+		} else {
+			return apiErr(409, "computer_foreground_busy", "已有活动前台租约，请先撤销")
+		}
 		// P1-4：先落 pending，本机确认真实窗口与前台后再由 device-ack 转 active（D-188 / 27 §11.5.5）。
 		// after_event_seq 取会话当前最大事件序号，供设备确认后从该游标续传。
 		row := tx.QueryRow(r.Context(), "INSERT INTO agent_computer_grant"+

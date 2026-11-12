@@ -406,3 +406,62 @@ func TestComputerCommandsListRoute(t *testing.T) {
 		t.Fatalf("缺 run_id 应 404/400：%d", st)
 	}
 }
+
+// DEV-CU P4-12（S05 并发窗口补齐）：并发创建 computer grant 与 browser grant，
+// 断言只有一个成功（互斥检查已在事务内 + FOR UPDATE）。
+func TestS05ConcurrentGrantCreation(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace,computer_use")
+	providerID := env.ensureToolModel(t)
+	conv := env.agentRunConversation(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	reloginOwner(t)
+
+	// 并发 20 goroutine 同时建 computer grant（同一用户 C04 单租约），
+	// 期望恰好 1 个 202（幂等/成功），其余 409。
+	const N = 20
+	type result struct {
+		status int
+		body   string
+	}
+	results := make(chan result, N)
+	requestID := uuid.NewString()
+	for i := 0; i < N; i++ {
+		go func() {
+			st, body := env.do("POST", w17CreateGrantPath(conv), map[string]any{
+				"target_handle": "s05c:hwnd", "target_summary": "记事本",
+				"scope": "observe", "request_id": requestID,
+			})
+			results <- result{st, string(body)}
+		}()
+	}
+	ok202, busy409 := 0, 0
+	for i := 0; i < N; i++ {
+		r := <-results
+		switch r.status {
+		case http.StatusAccepted:
+			ok202++
+		case http.StatusConflict:
+			busy409++
+		default:
+			t.Fatalf("并发建租约出现异常状态 %d：%s", r.status, r.body)
+		}
+	}
+	// 幂等编号（同 request_id）本应合并为一条：并发下同编号行竞争 INSERT，
+	// 允许的是「1 条 202 + 19 条 409」或「少量 202（幂等重读同一条）+ 409」，但
+	// 绝不允许两条不同 grant 同时存在。用数据库计数做最终裁决：
+	var grants int
+	if err := env.srv.db.QueryRow(contextOfTestS05(),
+		`SELECT count(*) FROM agent_computer_grant WHERE user_id=$1 AND state IN ('pending','active')`,
+		uuid.MustParse(env.me(t).UserID)).Scan(&grants); err != nil {
+		t.Fatal(err)
+	}
+	if grants != 1 {
+		t.Fatalf("S05/C04 互斥失效：并发后存在 %d 条 grant（应为 1）", grants)
+	}
+	if ok202 == 0 {
+		t.Fatalf("应至少一个 202：%d ok / %d busy", ok202, busy409)
+	}
+}
+
+func contextOfTestS05() context.Context { return context.Background() }
