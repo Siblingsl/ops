@@ -15,6 +15,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const Module = require('node:module');
+const { fork } = require('node:child_process');
+const path = require('node:path');
 
 const { ComputerWorkerHost } = require('../.build/computer-worker-host.js');
 
@@ -189,4 +191,74 @@ test('DT-04: preload 参数校验（pid 正整数、automation_id 非空且限�
   const okResult = await exposed.opsDesktopUI.invokeComputerUIA({ pid: 1, automation_id: 'a1', value: 'v', target_summary: 'x' });
   assert.equal(okResult.ok, true);
   assert.deepEqual(invokes.at(-1), { channel: 'computer:uia-invoke', payload: { pid: 1, automation_id: 'a1', value: 'v', target_summary: 'x' } });
+});
+
+// ---------------------------------------------------------------------------
+// ③ 集成（P1-3 步骤 3）：worker 真实输出 → preload 白名单必须整批接受
+// ---------------------------------------------------------------------------
+
+/** 直接 fork src 里的 worker（与产品同源，不用 .build 的旧产物）。 */
+function forkWorker(t) {
+  const child = fork(path.resolve(__dirname, '..', 'src', 'computer-worker.js'), [],
+    { stdio: 'ignore', env: { ...process.env, OPS_DESKTOP_WORKER: '1' } });
+  let nextID = 1;
+  const pending = new Map();
+  child.on('message', (msg) => {
+    if (!msg || typeof msg.id !== 'string') return;
+    const call = pending.get(msg.id);
+    if (!call) return;
+    pending.delete(msg.id);
+    call.resolve(msg);
+  });
+  t.after(() => { try { child.kill(); } catch {} });
+  return {
+    call(cmd, timeoutMs = 20_000, extra = {}) {
+      const id = `i${nextID++}`;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { pending.delete(id); reject(new Error('worker_timeout')); }, timeoutMs);
+        pending.set(id, { resolve: (m) => { clearTimeout(timer); resolve(m); } });
+        child.send({ id, cmd, ...extra });
+      });
+    },
+  };
+}
+
+test('DT-04: worker 真实输出能被 preload 白名单接受（P1-3 集成，非 mock）', { timeout: 60_000 }, async (t) => {
+  if (process.platform !== 'win32') { t.skip('需要 Windows'); return; }
+  if (process.env.OPS_UIA_MANUAL !== '1') {
+    t.skip('需真实桌面：设 OPS_UIA_MANUAL=1 开启（本机 2026-11-12 已实测通过）');
+    return;
+  }
+
+  // 不 spawn / 不 kill：只借当前桌面已存在的窗口做只读采样。
+  // 两个 GUI 用例分属不同测试文件、并行跑，谁都不该关别人的窗口。
+  const worker = forkWorker(t);
+  const listed = await worker.call('list_windows');
+  assert.equal(listed.ok, true, `选窗应成功：${JSON.stringify(listed)}`);
+  const candidates = (listed.windows || []).filter((w) => w.pid > 0 && !w.forbidden).slice(0, 3);
+  if (candidates.length === 0) { t.skip('当前桌面没有可用窗口'); return; }
+
+  let real = null;
+  for (const win of candidates) {
+    const got = await worker.call('uia_read', 20_000, { pid: win.pid });
+    if (got.ok && Array.isArray(got.controls) && got.controls.length > 0) { real = got; break; }
+  }
+  if (!real) { t.skip('候选窗口都没有可读控件树'); return; }
+
+  // 把真实输出原样回给 preload：字段名/长度/键集合都必须过白名单。
+  // 断言只打印数量与键集合，不打印窗口标题或控件文本（避免把桌面内容写进日志）。
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  const ipcRenderer = { on() {}, removeListener() {}, invoke: () => Promise.resolve(real) };
+  loadPreload({ contextBridge, ipcRenderer });
+
+  const view = await exposed.opsDesktopUI.readComputerUIA({ pid: candidates[0].pid, target_summary: '集成采样' });
+  assert.equal(view.ok, true,
+    `worker 真实输出应被白名单接受（失败说明字段名或长度越界）：ok=${view.ok} code=${view.code || ''}`);
+  assert.equal(view.controls.length, real.controls.length, '白名单不应丢弃或新增控件项');
+  const keySets = new Set(view.controls.map((c) => Object.keys(c).sort().join(',')));
+  assert.deepEqual([...keySets], ['id,name,type,value'], `白名单应只留四键，实际：${[...keySets].join(' | ')}`);
+  assert.equal(view.controls.filter((c) => c.type === null).length, 0, 'type 不应为 null');
+  assert.equal(view.controls.filter((c) => typeof c.type !== 'string' || c.type.length === 0).length, 0,
+    'type 应为非空字符串');
 });

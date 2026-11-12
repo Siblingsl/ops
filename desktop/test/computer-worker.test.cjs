@@ -128,6 +128,18 @@ test('W17c UIA: 真实记事本读控件树 + SetValue 输入 + 读回验证（C
   assert.ok(named.length > 0,
     `至少一个控件的 name/id 非空（修复前 CurrentName 恒空）：${JSON.stringify(controls.slice(0, 5))}`);
 
+  // P1-3 步骤 1/2：四键齐备、值不为 null，且 type 形如 ControlType.X（修复前这些字段恒为 null/空）。
+  for (const c of controls) {
+    for (const key of ['id', 'type', 'name', 'value']) {
+      assert.ok(Object.prototype.hasOwnProperty.call(c, key), `控件缺少字段 ${key}：${JSON.stringify(c)}`);
+      assert.notEqual(c[key], null, `控件字段 ${key} 不应为 null：${JSON.stringify(c)}`);
+      assert.equal(typeof c[key], 'string', `控件字段 ${key} 应为字符串：${JSON.stringify(c)}`);
+    }
+    assert.ok(c.type.length > 0, `控件 type 不应为空：${JSON.stringify(c)}`);
+  }
+  const typed = controls.filter((c) => /^ControlType\./.test(c.type));
+  assert.ok(typed.length > 0, `至少一个控件 type 形如 ControlType.X：${JSON.stringify(controls.slice(0, 5))}`);
+
   // 4. SetValue：编辑区在新版记事本里是 Document（不是 Edit），两种都要能命中
   const setOut = await psScript(`
 $ErrorActionPreference='Stop'
