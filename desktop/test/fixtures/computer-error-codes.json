@@ -1,0 +1,21 @@
+{
+  "version": "ops-computer/1",
+  "codes": [
+    "computer_action_failed",
+    "computer_action_not_supported",
+    "computer_ambiguous_target",
+    "computer_app_unresponsive",
+    "computer_approval_conflict",
+    "computer_budget_exceeded",
+    "computer_device_offline",
+    "computer_foreground_busy",
+    "computer_internal",
+    "computer_invalid_args",
+    "computer_policy_denied",
+    "computer_scope_denied",
+    "computer_stale_ref",
+    "computer_target_changed",
+    "computer_timeout",
+    "computer_ui_unsupported"
+  ]
+}
