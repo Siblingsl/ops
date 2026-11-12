@@ -484,3 +484,100 @@ func (s *Server) pendingComputerCommands(w http.ResponseWriter, r *http.Request)
 	}
 	return ok(w, map[string]any{"commands": commands})
 }
+
+// ---------------------------------------------------------------------------
+// DEV-CU P4-6：回执、冲突与超时扫描（§4.3 终态收敛；对齐 browser receipt 先例）。
+// 红线：unknown_outcome 与 delivery_uncertain 不自动重试、不重放、不复活输入（C06/C08）。
+// ---------------------------------------------------------------------------
+
+// receiptComputerCommand（POST /agent/computer/commands/{id}/receipt）：
+// 状态白名单 → disposition 双字段一致性 → 迟到回执只核对 → 终态幂等/冲突 → 写终态 + 事件。
+func (s *Server) receiptComputerCommand(w http.ResponseWriter, r *http.Request) error {
+	commandID, conversationID, err := s.ownComputerCommand(r)
+	if err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "computer_use"); err != nil {
+		return err
+	}
+	var body struct {
+		State       string          `json:"state"`
+		ErrorCode   string          `json:"error_code"`
+		ReceiptHash string          `json:"receipt_hash"`
+		Result      json.RawMessage `json:"result"`
+		Disposition json.RawMessage `json:"disposition"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&body); err != nil {
+		return apiErr(400, "bad_request", "请求体无法解析")
+	}
+	// 步骤 1：状态白名单。
+	if body.State != "succeeded" && body.State != "failed" && body.State != "unknown_outcome" {
+		return apiErr(422, "computer_invalid_args", "回执状态只能是 succeeded/failed/unknown_outcome")
+	}
+	// 步骤 2：disposition 双字段一致性（§4.3：delivery 与 retry 必须成对且匹配表）。
+	if len(body.Disposition) > 0 {
+		var disp struct {
+			Delivery string `json:"delivery"`
+			Retry    string `json:"retry"`
+		}
+		if err := json.Unmarshal(body.Disposition, &disp); err != nil {
+			return apiErr(422, "computer_invalid_args", "disposition 无法解析")
+		}
+		expectedRetry := map[string]string{
+			"not_delivered": "safe", "delivery_uncertain": "unsafe", "delivered_unverified": "unsafe",
+			"delivered_verified": "unsafe", "unknown": "unknown",
+		}[disp.Delivery]
+		if expectedRetry == "" || disp.Retry != expectedRetry {
+			// 不一致 → computer_internal，不写库（§P4-6 步骤 2）。
+			return apiErr(500, "computer_internal", "disposition 双字段不一致（delivery="+disp.Delivery+" retry="+disp.Retry+"）")
+		}
+	}
+	// 步骤 3：租约撤销 / 过期 / generation 变化 → 迟到结果只核对（记录但不改变终态）。
+	var revoked bool
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT EXISTS(SELECT 1 FROM agent_computer_command c JOIN agent_computer_grant g ON g.id=c.grant_id
+			WHERE c.id=$1 AND (g.state<>'active' OR (g.expires_at IS NOT NULL AND g.expires_at <= now())
+			  OR g.generation<>c.generation))`, commandID).Scan(&revoked); err != nil {
+		return err
+	}
+	if revoked {
+		return apiErr(409, "computer_foreground_busy", "租约已撤销、过期或审批版本已变化；回执按迟到结果核对，不改变最终状态")
+	}
+	// 步骤 4：终态同结果幂等重放；异结果 409。
+	var currentState string
+	if err := s.db.QueryRow(r.Context(), `SELECT state FROM agent_computer_command WHERE id=$1`, commandID).Scan(&currentState); err != nil {
+		return err
+	}
+	if currentState == "succeeded" || currentState == "failed" || currentState == "unknown_outcome" {
+		if currentState == body.State {
+			return s.renderComputerCommand(r.Context(), w, commandID)
+		}
+		return apiErr(409, "computer_approval_conflict", "命令已有不同最终结果，迟到回执仅入账核对")
+	}
+	// 步骤 5：写终态（只有 queued/dispatched 可收终态）+ 事件。
+	if _, err := s.db.Exec(r.Context(), `
+		UPDATE agent_computer_command SET state=$2, receipt_hash=COALESCE(NULLIF($3,''), receipt_hash), error_code=NULLIF($4,''),
+			result=$5, disposition=$6
+		WHERE id=$1 AND state IN ('queued','dispatched')`,
+		commandID, body.State, body.ReceiptHash, body.ErrorCode, nullJSON(body.Result), nullJSON(body.Disposition)); err != nil {
+		return err
+	}
+	s.emitComputerCommandEvent(r.Context(), conversationID, "computer.command_finished", map[string]any{
+		"command_id": commandID.String(), "state": body.State, "error_code": body.ErrorCode,
+	})
+	return s.renderComputerCommand(r.Context(), w, commandID)
+}
+
+// sweepComputerCommands：把 dispatched 超过 deadline（+2s 时钟误差）的命令转
+// unknown_outcome + computer_timeout。**不重放、不新建命令**（C08）。
+func (s *Server) sweepComputerCommands(ctx context.Context) {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE agent_computer_command SET state='unknown_outcome', error_code='computer_timeout'
+		WHERE state='dispatched' AND deadline_at IS NOT NULL AND deadline_at + interval '2 seconds' < now()`)
+	if err != nil {
+		return
+	}
+	if tag.RowsAffected() > 0 {
+		slog.Info("电脑命令超时转 unknown_outcome", "count", tag.RowsAffected())
+	}
+}

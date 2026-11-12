@@ -1941,6 +1941,8 @@ func (s *Server) agentRoutes(r chi.Router) {
 		// DEV-CU P4-5（docs/36 §4.10）：桌面执行器领取与 CAS 派发（pending 含载荷，仅本机桥调用）。
 		r.Get("/agent/computer/commands/pending", s.h(s.pendingComputerCommands))
 		r.Post("/agent/computer/commands/{id}/dispatch", s.h(s.dispatchComputerCommand))
+		// DEV-CU P4-6：桌面执行器回执（终态收敛；迟到回执只核对）。
+		r.Post("/agent/computer/commands/{id}/receipt", s.h(s.receiptComputerCommand))
 	})
 	// 只减权清理路由（27 §13.4）：不挂 agentGate——智能体/浏览器开关关闭后仍可解绑与撤权；
 	// 仍要求登录、CSRF 与真实资源归属（T-AI27-25A）。

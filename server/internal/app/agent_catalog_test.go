@@ -266,6 +266,8 @@ func agentClassifiedRouteList() map[string]string {
 		// DEV-CU P4-5：桌面执行器领取与 CAS 派发（本机桥调用，不进模型目录）。
 		"GET /api/v1/agent/computer/commands/pending",
 		"POST /api/v1/agent/computer/commands/{id}/dispatch",
+		// DEV-CU P4-6：桌面执行器回执。
+		"POST /api/v1/agent/computer/commands/{id}/receipt",
 		// A12：模型请求用户在本机选窗（选定后即时建 30s 租约）。
 		"POST /api/v1/tools/computer/target-requests",
 		// A30：模型请求用户在浏览器选标签（选定后即时建 30s 租约）。

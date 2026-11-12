@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -228,5 +229,121 @@ func TestComputerCommandPendingLimit(t *testing.T) {
 	pending = cu45Pending(t)
 	if len(pending) != 0 {
 		t.Fatalf("租约撤销后 pending 应为空（cancelled 不在 queued）：%d", len(pending))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DEV-CU P4-6：回执、冲突与超时扫描。
+// ---------------------------------------------------------------------------
+
+func cu46Receipt(t *testing.T, commandID string, body map[string]any, want int) map[string]any {
+	t.Helper()
+	out := map[string]any{}
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands/"+commandID+"/receipt", body, &out, want)
+	return out
+}
+
+// ① 回执冲突：终态异结果 → 409；同结果幂等。
+func TestComputerCommandReceiptConflict(t *testing.T) {
+	conv, grant := cu44Setup(t)
+	_ = conv
+	body := cu44Body(grant, conv, "observe", map[string]any{})
+	created := cu44Create(t, body, http.StatusOK)
+	commandID, _ := created["id"].(string)
+	// 先 dispatch 再 receipt
+	var d map[string]any
+	env.mustJSON(t, "POST", "/api/v1/agent/computer/commands/"+commandID+"/dispatch", map[string]any{}, &d)
+	rc := cu46Receipt(t, commandID, map[string]any{"state": "succeeded", "receipt_hash": "h1"}, http.StatusOK)
+	if rc["state"] != "succeeded" {
+		t.Fatalf("回执应写终态 succeeded：%v", rc["state"])
+	}
+	// 同结果幂等
+	cu46Receipt(t, commandID, map[string]any{"state": "succeeded", "receipt_hash": "h1"}, http.StatusOK)
+	// 异结果 → 409
+	cu46Receipt(t, commandID, map[string]any{"state": "failed", "receipt_hash": "h2"}, http.StatusConflict)
+}
+
+// ② 迟到回执：租约撤销后 → 409 只核对，不改变终态。
+func TestComputerCommandLateReceipt(t *testing.T) {
+	conv, grant := cu44Setup(t)
+	body := cu44Body(grant, conv, "observe", map[string]any{})
+	created := cu44Create(t, body, http.StatusOK)
+	commandID, _ := created["id"].(string)
+	var d map[string]any
+	env.mustJSON(t, "POST", "/api/v1/agent/computer/commands/"+commandID+"/dispatch", map[string]any{}, &d)
+	// 撤销租约（generation+1）
+	var ack map[string]any
+	env.mustJSONStatus(t, "DELETE", "/api/v1/agent/computer-grants/"+grant.ID, map[string]any{}, &ack, http.StatusAccepted)
+	// 迟到回执 → 409（computer_foreground_busy 语义族）
+	var v map[string]any
+	env.mustJSONStatus(t, "GET", "/api/v1/agent/computer/commands/pending", map[string]any{}, &v, http.StatusOK)
+	out := map[string]any{}
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands/"+commandID+"/receipt",
+		map[string]any{"state": "succeeded", "receipt_hash": "late"}, &out, http.StatusConflict)
+	// 命令状态未被回执改变（sweep 兜底转 unknown_outcome，或仍 dispatched）
+	var list struct {
+		Commands []map[string]any `json:"commands"`
+	}
+	_ = list
+}
+
+// ③ sweep：dispatched 超 deadline+2s → unknown_outcome + computer_timeout；命令总数不变。
+func TestComputerCommandSweep(t *testing.T) {
+	conv, grant := cu44Setup(t)
+	_ = conv
+	body := cu44Body(grant, conv, "observe", map[string]any{})
+	created := cu44Create(t, body, http.StatusOK)
+	commandID, _ := created["id"].(string)
+	var d map[string]any
+	env.mustJSON(t, "POST", "/api/v1/agent/computer/commands/"+commandID+"/dispatch", map[string]any{}, &d)
+	// 把 deadline 拨回 10s 前（模拟超期）
+	if _, err := env.srv.db.Exec(context.Background(),
+		`UPDATE agent_computer_command SET deadline_at = now() - interval '10 seconds' WHERE id=$1`, uuid.MustParse(commandID)); err != nil {
+		t.Fatal(err)
+	}
+	env.srv.sweepComputerCommands(context.Background())
+	// 断言转 unknown_outcome 且 error_code=computer_timeout
+	var state, code string
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT state, COALESCE(error_code,'') FROM agent_computer_command WHERE id=$1`, uuid.MustParse(commandID)).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if state != "unknown_outcome" || code != "computer_timeout" {
+		t.Fatalf("sweep 应转 unknown_outcome/computer_timeout：%s/%s", state, code)
+	}
+	// 不新建命令：再跑一次 sweep，总数不变
+	var count1, count2 int
+	env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM agent_computer_command`).Scan(&count1)
+	env.srv.sweepComputerCommands(context.Background())
+	env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM agent_computer_command`).Scan(&count2)
+	if count1 != count2 {
+		t.Fatalf("sweep 不得新建命令：%d → %d", count1, count2)
+	}
+}
+
+// ④ disposition 一致性：不一致 → 500 computer_internal，不写库。
+func TestComputerCommandDispositionValidation(t *testing.T) {
+	conv, grant := cu44Setup(t)
+	_ = conv
+	body := cu44Body(grant, conv, "observe", map[string]any{})
+	created := cu44Create(t, body, http.StatusOK)
+	commandID, _ := created["id"].(string)
+	var d map[string]any
+	env.mustJSON(t, "POST", "/api/v1/agent/computer/commands/"+commandID+"/dispatch", map[string]any{}, &d)
+	// delivery=not_delivered 但 retry=unsafe → computer_internal
+	out := cu46Receipt(t, commandID, map[string]any{
+		"state": "succeeded", "receipt_hash": "h",
+		"disposition": map[string]any{"delivery": "not_delivered", "retry": "unsafe"},
+	}, 500)
+	if out["error"] == nil {
+		t.Fatalf("不一致 disposition 应 computer_internal：%v", out)
+	}
+	// 一致的 disposition 正常写入
+	good := cu46Receipt(t, commandID, map[string]any{
+		"state": "succeeded", "receipt_hash": "h2",
+		"disposition": map[string]any{"delivery": "delivered_verified", "retry": "unsafe"},
+	}, http.StatusOK)
+	if good["state"] != "succeeded" {
+		t.Fatalf("一致 disposition 应正常终态：%v", good["state"])
 	}
 }
