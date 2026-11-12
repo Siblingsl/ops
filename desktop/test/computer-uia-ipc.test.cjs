@@ -199,7 +199,7 @@ test('DT-04: preload 参数校验（pid 正整数、automation_id 非空且限�
 
 /** 直接 fork src 里的 worker（与产品同源，不用 .build 的旧产物）。 */
 function forkWorker(t) {
-  const child = fork(path.resolve(__dirname, '..', 'src', 'computer-worker.js'), [],
+  const child = fork(path.resolve(__dirname, '..', 'src', 'computer-worker', 'index.js'), [],
     { stdio: 'ignore', env: { ...process.env, OPS_DESKTOP_WORKER: '1' } });
   let nextID = 1;
   const pending = new Map();

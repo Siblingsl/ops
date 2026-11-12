@@ -30,7 +30,8 @@ export class ComputerWorkerHost extends EventEmitter {
 
   private ensureWorker(): UtilityProcess {
     if (this.worker) return this.worker;
-    const child = utilityProcess.fork(path.join(__dirname, 'computer-worker.js'), [], {
+    // DEV-CU P2-0：worker 已拆为目录（index/native/policy），入口指向目录内的 index.js。
+    const child = utilityProcess.fork(path.join(__dirname, 'computer-worker', 'index.js'), [], {
       serviceName: 'OPS Desktop computer worker',
       stdio: 'ignore',
       env: { OPS_DESKTOP_WORKER: '1' },

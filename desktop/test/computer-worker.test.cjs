@@ -6,7 +6,7 @@ const { fork } = require('node:child_process');
 const path = require('node:path');
 const test = require('node:test');
 
-const WORKER = path.resolve(__dirname, '..', 'src', 'computer-worker.js');
+const WORKER = path.resolve(__dirname, '..', 'src', 'computer-worker', 'index.js');
 
 function withWorker(t) {
   const child = fork(WORKER, [], { stdio: 'ignore', env: { OPS_DESKTOP_WORKER: '1' } });
