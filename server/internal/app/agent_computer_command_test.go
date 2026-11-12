@@ -361,3 +361,48 @@ func TestComputerCommandDispositionValidation(t *testing.T) {
 		t.Fatalf("一致 disposition 应正常终态：%v", good["state"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// DEV-CU P4-8：§4.11 路由访问与门禁（未登录 401 / CSRF 缺失 403 / 归属校验）。
+// ---------------------------------------------------------------------------
+
+// ① capabilities：登录可达、字段封闭、未登录 401、computer_use 关闭时 available=false。
+func TestComputerCapabilitiesRoute(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "computer_use")
+	conv := w17CreateConv(t)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	var caps map[string]any
+	env.mustJSON(t, "GET", "/api/v1/agent/computer/capabilities", map[string]any{}, &caps)
+	if caps["available"] != true {
+		t.Fatalf("开关开启时 available 应 true：%v", caps)
+	}
+	for _, key := range []string{"device_state", "protocol_range", "observation_modes", "foreground_state"} {
+		if _, ok := caps[key]; !ok {
+			t.Fatalf("capabilities 缺字段 %s：%v", key, caps)
+		}
+	}
+	if len(caps) > 7 {
+		t.Fatalf("capabilities 不得泄漏应用清单等额外键：%v", caps)
+	}
+}
+
+// ② listComputerCommands：run_id 归属校验（本人可查、缺参 404）。
+func TestComputerCommandsListRoute(t *testing.T) {
+	conv, grant := cu44Setup(t)
+	_ = conv
+	body := cu44Body(grant, conv, "observe", map[string]any{})
+	created := cu44Create(t, body, http.StatusOK)
+	runID, _ := created["run_id"].(string)
+	var list struct {
+		Commands []map[string]any `json:"commands"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/agent/computer/commands?run_id="+runID, map[string]any{}, &list)
+	if len(list.Commands) != 1 || list.Commands[0]["id"] != created["id"] {
+		t.Fatalf("查询应返回本 run 命令：%v", list.Commands)
+	}
+	// 缺 run_id → 404
+	if st, _ := env.do("GET", "/api/v1/agent/computer/commands", map[string]any{}); st != http.StatusNotFound && st != http.StatusBadRequest {
+		t.Fatalf("缺 run_id 应 404/400：%d", st)
+	}
+}

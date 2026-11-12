@@ -1945,6 +1945,9 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/computer/commands/{id}/dispatch", s.h(s.dispatchComputerCommand))
 		// DEV-CU P4-6：桌面执行器回执（终态收敛；迟到回执只核对）。
 		r.Post("/agent/computer/commands/{id}/receipt", s.h(s.receiptComputerCommand))
+		// DEV-CU P4-8（docs/36 §4.11）：命令查询（归属校验）与能力快照（不泄漏应用清单）。
+		r.Get("/agent/computer/commands", s.h(s.listComputerCommands))
+		r.Get("/agent/computer/capabilities", s.h(s.computerCapabilities))
 	})
 	// 只减权清理路由（27 §13.4）：不挂 agentGate——智能体/浏览器开关关闭后仍可解绑与撤权；
 	// 仍要求登录、CSRF 与真实资源归属（T-AI27-25A）。

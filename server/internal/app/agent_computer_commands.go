@@ -741,3 +741,75 @@ func computerCommandModelProject(_ int, body []byte) any {
 	}
 	return v
 }
+
+// ---------------------------------------------------------------------------
+// DEV-CU P4-8：§4.11 剩余两路由——命令查询（归属校验）与能力快照。
+// ---------------------------------------------------------------------------
+
+// listComputerCommands（GET /agent/computer/commands?run_id=）：本人账本查询。
+func (s *Server) listComputerCommands(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.computerGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "computer_use"); err != nil {
+		return err
+	}
+	runID, err := uuid.Parse(r.URL.Query().Get("run_id"))
+	if err != nil {
+		return errNotFound
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT `+computerCommandColumns+`
+		FROM agent_computer_command c JOIN agent_computer_grant g ON g.id=c.grant_id
+		WHERE c.run_id=$1 AND g.workspace_id=$2 AND g.user_id=$3
+		ORDER BY c.created_at DESC LIMIT 200`, runID, id.WorkspaceID, id.UserID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	commands := []computerCommandView{}
+	for rows.Next() {
+		v, err := scanComputerCommand(rows)
+		if err != nil {
+			return err
+		}
+		commands = append(commands, v)
+	}
+	return ok(w, map[string]any{"commands": commands})
+}
+
+// computerCapabilitiesView（§4.11）：available/reason/device_state/protocol_range/
+// observation_modes/foreground_state；不泄漏应用清单（C09）。
+type computerCapabilitiesView struct {
+	Available        bool     `json:"available"`
+	Reason           string   `json:"reason,omitempty"`
+	DeviceState      string   `json:"device_state"`
+	ProtocolRange    string   `json:"protocol_range"`
+	ObservationModes []string `json:"observation_modes"`
+	ForegroundState  string   `json:"foreground_state"`
+}
+
+// computerCapabilities（GET /agent/computer/capabilities）：能力快照。
+// device_state 与 foreground_state 依赖桌面端 presence 心跳上报（21 文档），
+// 服务端在无心跳数据时如实报 unknown，不臆造。
+func (s *Server) computerCapabilities(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.computerGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "computer_use"); err != nil {
+		return err
+	}
+	caps := computerCapabilitiesView{
+		DeviceState:      "unknown",
+		ProtocolRange:    ContractVersion,
+		ObservationModes: []string{"uia"},
+		ForegroundState:  "unknown",
+	}
+	caps.Available = s.agentWorkbenchFeatures(r.Context())["computer_use"]
+	if !caps.Available {
+		caps.Reason = "computer_use disabled by runtime gate"
+	}
+	return ok(w, caps)
+}
