@@ -135,6 +135,8 @@ func ai27DelegationTools() []AgentTool {
 
 // ai27ComputerTools 注册电脑控制工具（27 §11.5.3），仅 computer_use 开启时可见。
 // 语义限 observe/focus/scroll/select/invoke/type/request_handoff，效果未知的先确认。
+// P4-3（docs/36 §4.10）：新增 6 个固定动作工具，Path 统一指向 /tools/computer/commands
+// （P4-4 建路由）；动作名由 Fixed 注入，模型不能自填 action_kind。
 func ai27ComputerTools() []AgentTool {
 	return []AgentTool{
 		{
@@ -156,6 +158,61 @@ func ai27ComputerTools() []AgentTool {
 			Path:        "/tools/computer/target-requests",
 			Description: "当前没有前台租约时，请用户在本机选择要操作的应用窗口。选定后立即生效；不要替用户猜测目标。",
 			MinRole:     roleEditor,
+		},
+		{
+			Name: "computer_view_target", Domain: "computer", Kind: toolR, Method: "POST", Path: "/tools/computer/commands",
+			Description: "观察当前前台窗口的 UIA 控件树（脱敏，最多 200 个节点），得到可操作的 ref 列表。",
+			Params: []ToolParam{
+				pBody("ref", `{"type":"string","maxLength":64}`, false, "U"),
+			},
+			Fixed:   map[string]any{"action_kind": "observe"},
+			MinRole: roleEditor,
+		},
+		{
+			Name: "computer_focus_target", Domain: "computer", Kind: toolR, Method: "POST", Path: "/tools/computer/commands",
+			Description: "把键盘焦点移到目标控件。只改变焦点，不产生输入。",
+			Params: []ToolParam{
+				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
+			},
+			Fixed:   map[string]any{"action_kind": "focus"},
+			MinRole: roleEditor,
+		},
+		{
+			Name: "computer_scroll_target", Domain: "computer", Kind: toolR, Method: "POST", Path: "/tools/computer/commands",
+			Description: "滚动目标控件或其最近可滚动祖先，使更多内容可见。",
+			Params: []ToolParam{
+				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
+			},
+			Fixed:   map[string]any{"action_kind": "scroll"},
+			MinRole: roleEditor,
+		},
+		{
+			Name: "computer_select_target", Domain: "computer", Kind: toolR, Method: "POST", Path: "/tools/computer/commands",
+			Description: "在列表/组合框中选中目标项。只改变选中态，不提交表单。",
+			Params: []ToolParam{
+				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
+			},
+			Fixed:   map[string]any{"action_kind": "select"},
+			MinRole: roleEditor,
+		},
+		{
+			Name: "computer_click_target", Domain: "computer", Kind: toolW, Method: "POST", Path: "/tools/computer/commands",
+			Description: "点击目标控件（按钮/链接/菜单项）。写类动作先出预览卡片，用户逐张确认后才执行。",
+			Params: []ToolParam{
+				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
+			},
+			Fixed:   map[string]any{"action_kind": "invoke"},
+			MinRole: roleEditor,
+		},
+		{
+			Name: "computer_type_target", Domain: "computer", Kind: toolW, Method: "POST", Path: "/tools/computer/commands",
+			Description: "在目标文本控件中设置值或输入文本（≤32768 字符）。写类动作先出预览卡片，用户逐张确认后才执行。",
+			Params: []ToolParam{
+				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
+				pBody("text", `{"type":"string","maxLength":32768}`, true, "U"),
+			},
+			Fixed:   map[string]any{"action_kind": "type"},
+			MinRole: roleEditor,
 		},
 	}
 }

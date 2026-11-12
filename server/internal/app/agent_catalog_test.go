@@ -55,6 +55,18 @@ func TestHC28_NoPublishBatchOrBlacklistedPaths(t *testing.T) {
 				t.Errorf("条目 %s 命中路径前缀黑名单 %s", tool.Name, p)
 			}
 		}
+		// DEV-CU P4-3（docs/36 §P4-3 步骤 5）：computer 工具中不得出现批量/脚本类字样——
+		// 名称与描述都扫（描述同样会进模型目录）。
+		if tool.Domain == "computer" {
+			for _, tok := range []string{"batch", "all", "execute_all", "script", "shell"} {
+				if strings.Contains(low, tok) {
+					t.Errorf("computer 条目 %s 名称含禁用字样 %s", tool.Name, tok)
+				}
+				if strings.Contains(strings.ToLower(tool.Description), tok) {
+					t.Errorf("computer 条目 %s 描述含禁用字样 %s", tool.Name, tok)
+				}
+			}
+		}
 	}
 }
 
@@ -249,6 +261,8 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/tools/subagent/delegations/{id}/cancel",
 		"GET /api/v1/tools/computer/grants",
 		"POST /api/v1/tools/computer/grants/{id}/handoff",
+		// DEV-CU P4-3（docs/36 §4.10）：run 内电脑控制命令入口（6 个固定动作共用）。
+		"POST /api/v1/tools/computer/commands",
 		// A12：模型请求用户在本机选窗（选定后即时建 30s 租约）。
 		"POST /api/v1/tools/computer/target-requests",
 		// A30：模型请求用户在浏览器选标签（选定后即时建 30s 租约）。
@@ -470,8 +484,9 @@ func TestAG04CatalogShape(t *testing.T) {
 	// DEV-AI27 系列又加 16 条：browser_* 9（含 A30 请求选标签）、subagent 2、computer 3
 	// （含 A12 请求选窗）、mcp__list_connections 1、memory__propose_candidate 1
 	// —— 287 + 11 + 16 = 314。
-	if len(agentCatalog()) != 314 {
-		t.Fatalf("目录条目数 %d，期望 314（附录 A 287 条 + 元工具 11 条 + DEV-AI27 新增 16 条）", len(agentCatalog()))
+	// DEV-CU P4-3 又加 6 条：computer_view/focus/scroll/select/click/type_target。
+	if len(agentCatalog()) != 320 {
+		t.Fatalf("目录条目数 %d，期望 320（附录 A 287 条 + 元工具 11 条 + DEV-AI27 16 条 + DEV-CU 6 条）", len(agentCatalog()))
 	}
 	for _, d := range agentDomains {
 		if counts[d.Name] == 0 {

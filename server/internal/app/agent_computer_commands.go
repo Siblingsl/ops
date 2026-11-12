@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -94,4 +96,77 @@ const (
 func computerInputHash(action string, payload []byte) string {
 	sum := sha256.Sum256(append([]byte(action+"."), payload...))
 	return fmt.Sprintf("%x", sum)
+}
+
+// ---- P4-3：动作参数校验（§P4-3 步骤 1~3）----
+// 服务端不解析语义、不拼 PS：只把「越界字符串」挡在账本之外。
+
+// computerRefRe 与 worker 侧 refs.js 同口径：@<snapshot_id>:e<N>，
+// snapshot_id 为 3..64 位 [A-Za-z0-9_-]，序号为不以 0 开头的 1..10 位正整数
+// （worker 侧 resolveRefTarget 要求 index ≥ 1，此处正则同步排除 e0 / e01）。
+var computerRefRe = regexp.MustCompile(`^@[A-Za-z0-9_-]{3,64}:e[1-9][0-9]{0,9}$`)
+
+// computerTextRe：允许换行与常规可见字符；拒绝其余 C0/C1 控制符（\t\n\r 除外）。
+// 不做脚本检测——payload 永不被拼进 PowerShell（§P4-3 步骤 3 的明确边界）。
+var computerTextRe = regexp.MustCompile(`^[^\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]*$`)
+
+// computerActionPayloadKeys：每个 kind 的 payload 白名单键（§P4-3 步骤 1）。
+// 六语义都以 ref 为目标；type 额外允许 text。动作的语义参数（如 scroll 的方向）
+// 由 worker 侧 normalizeArgs 兜底，账本只锁「模型不能塞任意键」这条红线。
+var computerActionPayloadKeys = map[string]map[string]bool{
+	"observe": {"ref": true},
+	"focus":   {"ref": true},
+	"scroll":  {"ref": true},
+	"select":  {"ref": true},
+	"invoke":  {"ref": true},
+	"type":    {"ref": true, "text": true},
+}
+
+// validateComputerAction 校验动作枚举与 payload 白名单键；违规 → 422 computer_invalid_args。
+func validateComputerAction(kind string, payload map[string]any) error {
+	if !computerCommandActions[kind] {
+		return apiErr(422, "computer_invalid_args", "动作不在固定枚举内："+kind)
+	}
+	allowed := computerActionPayloadKeys[kind]
+	for key := range payload {
+		if !allowed[key] {
+			return apiErr(422, "computer_invalid_args", "payload 含不允许的键："+key)
+		}
+	}
+	if ref, _ := payload["ref"].(string); ref != "" {
+		if !computerRefRe.MatchString(ref) {
+			return apiErr(422, "computer_invalid_args", "ref 必须形如 @<snapshot_id>:e<N>")
+		}
+	}
+	if text, _ := payload["text"].(string); text != "" {
+		if len(text) > 32768 {
+			return apiErr(422, "computer_invalid_args", "text 超过 32768 上限")
+		}
+		if !computerTextRe.MatchString(text) {
+			return apiErr(422, "computer_invalid_args", "text 含不允许的控制字符")
+		}
+	}
+	return nil
+}
+
+// runComputerCommand 是 run 内模型调用入口（/tools/computer/commands，P4-3 先挂路由）。
+// 完整语义（查租约 → 确认闸门 → 建 queued → 同步等待）属 P4-4/P4-7；
+// 本包只做入参校验并如实返回「尚未开放」，不假装执行，也不静默吞请求。
+func (s *Server) runComputerCommand(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireAgentFeature(r.Context(), "computer_use"); err != nil {
+		return err
+	}
+	var body struct {
+		GrantID string         `json:"grant_id"`
+		RunID   string         `json:"run_id"`
+		Action  string         `json:"action"`
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&body); err != nil {
+		return apiErr(400, "bad_request", "请求体无法解析")
+	}
+	if err := validateComputerAction(body.Action, body.Payload); err != nil {
+		return err
+	}
+	return apiErr(409, "computer_foreground_busy", "电脑控制命令执行尚未开放（P4-4 实现中）")
 }

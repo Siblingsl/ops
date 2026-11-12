@@ -36,6 +36,15 @@ func TestW06AIT27ToolCatalogRegistration(t *testing.T) {
 			t.Errorf("电脑控制工具 %s 不在目录中", name)
 		}
 	}
+	// 电脑控制固定动作工具 6 个（DEV-CU P4-3，docs/36 §P4-3 步骤 4/6）
+	for _, name := range []string{
+		"computer_view_target", "computer_focus_target", "computer_scroll_target",
+		"computer_select_target", "computer_click_target", "computer_type_target",
+	} {
+		if !toolByName[name] {
+			t.Errorf("电脑控制动作工具 %s 不在目录中", name)
+		}
+	}
 	// MCP 连接查询 1 个（27 §11.2）
 	if !toolByName["mcp__list_connections"] {
 		t.Error("MCP 工具 mcp__list_connections 不在目录中")

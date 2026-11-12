@@ -1890,6 +1890,9 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/tools/subagent/delegations/{id}/cancel", s.h(s.cancelDelegation))
 		r.Get("/tools/computer/grants", s.h(s.listComputerGrants))
 		r.Post("/tools/computer/grants/{id}/handoff", s.h(s.handoffComputerGrant))
+		// DEV-CU P4-3（docs/36 §4.10）：run 内电脑控制命令入口。入参校验本包实现；
+		// 创建/确认闸门/同步等待属 P4-4/P4-7，handler 暂如实返回尚未开放。
+		r.Post("/tools/computer/commands", s.h(s.runComputerCommand))
 		// DEV-AI27-17（W17b）：模型请求用户选窗（A12 决策 A：选定后即时建 30s 租约）。
 		r.Post("/tools/computer/target-requests", s.h(s.requestComputerTarget))
 		// DEV-AI27-A30：模型请求用户选标签（浏览器侧镜像 A12 决策 A：选定后即时建 30s 租约）。
