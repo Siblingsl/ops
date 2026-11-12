@@ -93,7 +93,7 @@ function psScript(script, timeoutMs = 20_000) {
   });
 }
 
-test('W17c UIA: 真实记事本读控件树 + SetValue 输入 + 读回验证（C01/C03/C05 子集）', { timeout: 60_000 }, async (t) => {
+test('W17c UIA: 真实记事本读控件树 + SetValue 输入 + 读回验证（C01/C03/C05 子集）', { timeout: 150_000 }, async (t) => {
   if (process.platform !== 'win32') { t.skip('需要 Windows'); return; }
   // node:test 的 t.skip() 只标记结果、不中断函数执行（历史坑：曾因此每次跑都真开一个记事本）。
   // DEV-CU P1-2：GUI 旅程在 OPS_UIA_MANUAL=1 时**真实执行并通过**，不再 skip。
@@ -103,23 +103,41 @@ test('W17c UIA: 真实记事本读控件树 + SetValue 输入 + 读回验证（C
     return;
   }
 
-  // 1. 启动记事本（Win11 为打包版：spawn 返回的是启动器桩进程，随后自行退出）
-  spawn('notepad', [], { stdio: 'ignore' });
-  await new Promise((r) => setTimeout(r, 2500));
+  // 1. 选一个真实记事本窗口当被测对象。
+  // 默认**不自动开窗**（会打断使用者）：只有显式 OPS_UIA_SPAWN=1 才 spawn，
+  // 否则复用已经开着的记事本；没有就 skip，让用例本身不产生副作用。
+  if (process.env.OPS_UIA_SPAWN === '1') {
+    // Win11 为打包版：spawn 返回的是启动器桩进程，随后自行退出
+    spawn('notepad', [], { stdio: 'ignore' });
+    await new Promise((r) => setTimeout(r, 2500));
+  }
 
   // 2. 用 worker 的选窗器找真实窗口（不用桩 PID：桩进程已退出，按 -Id 反查必失败）
   const worker = withWorker(t);
   const listed = await worker.call('list_windows');
   assert.equal(listed.ok, true, `选窗应成功：${JSON.stringify(listed)}`);
   const notepadWin = (listed.windows || []).find((w) => /notepad/i.test(w.process));
-  if (!notepadWin) { t.skip('未枚举到记事本窗口（Store 版路径差异）'); return; }
+  if (!notepadWin) {
+    t.skip('未找到记事本窗口（默认不自动开窗；需要真实旅程时设 OPS_UIA_SPAWN=1）');
+    return;
+  }
   const pid = notepadWin.pid;
   t.after(async () => {
     try { await psScript(`Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`); } catch {}
   });
 
   // 3. worker 读树：窗口名非空，且至少一个控件的 name / id 非空（P1-1 完成判据）
-  const read1 = await worker.call('uia_read', 20_000, { pid });
+  // 新版记事本启动后会**恢复上次会话的标签页**：恢复期间窗口标题为空、Document 还没生成
+  // （实测读到 nodes_observed=6、只有 Pane、window 为空）。固定 2.5s 后单次读树会因此假红，
+  // 改为有界等待「标题非空 + 出现 Document/Edit」，最多 20s；超时仍按原断言判红。
+  let read1 = null;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    read1 = await worker.call('uia_read', 20_000, { pid });
+    const ready = read1 && read1.ok === true && String(read1.window || '').length > 0
+      && (read1.controls || []).some((c) => /^ControlType\.(Document|Edit)$/.test(String(c.type || '')));
+    if (ready) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
   assert.equal(read1.ok, true, `读树应成功：${JSON.stringify(read1)}`);
   assert.ok(String(read1.window || '').length > 0, `窗口名不应为空：${JSON.stringify(read1)}`);
   const controls = read1.controls || [];
