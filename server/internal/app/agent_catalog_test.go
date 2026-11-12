@@ -118,6 +118,7 @@ func agentClassifiedRouteList() map[string]string {
 		"PUT /api/v1/skills/{id}",
 		"DELETE /api/v1/skills/{id}",
 		"GET /api/v1/skills/{id}/impact",
+		"POST /api/v1/skills/{id}/diff",
 		"GET /api/v1/skills/{id}/export",
 		"GET /api/v1/accounts/{accountId}/skill-bindings",
 		"PUT /api/v1/accounts/{accountId}/skill-bindings/{audience}/{skillId}",
@@ -292,6 +293,8 @@ func agentClassifiedRouteList() map[string]string {
 		"DELETE /api/v1/agent/computer-grants/{id}",
 		"GET /api/v1/agent/computer-grants",
 		"POST /api/v1/agent/computer-grants/{id}/handoff",
+		// P1-4：设备确认（pending → active、revoking → revoked），202 只表示受理。
+		"POST /api/v1/agent/computer/grants/{id}/device-ack",
 		// DEV-AI27-13（W13）个人跨对话记忆：本人设置页与 run 内提案工具共用，不进入模型工具目录以外的执行面。
 		"GET /api/v1/agent/personal-memories",
 		"POST /api/v1/agent/personal-memories",

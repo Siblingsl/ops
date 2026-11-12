@@ -184,6 +184,11 @@ func (e *testEnv) do(method, path string, in any) (int, []byte) {
 
 // mustJSON performs a request that must succeed and decodes the response.
 func (e *testEnv) mustJSON(t *testing.T, method, path string, in, out any) {
+	e.mustJSONStatus(t, method, path, in, out, http.StatusOK)
+}
+
+// mustJSONStatus 同 mustJSON，但允许指定成功状态码（202 受理语义：D-188 / docs/06 §13.2）。
+func (e *testEnv) mustJSONStatus(t *testing.T, method, path string, in, out any, want int) {
 	st, b := e.do(method, path, in)
 	// 乱序隔离（A22）：会话 reauth 窗口 5 分钟，长套件里后段用例的敏感操作会因窗口
 	// 过期返回 403。测试会话等同用户重新输入一次密码后重试；"敏感操作必须 reauth"
@@ -192,8 +197,8 @@ func (e *testEnv) mustJSON(t *testing.T, method, path string, in, out any) {
 		e.reauth(t)
 		st, b = e.do(method, path, in)
 	}
-	if st != 200 {
-		msg := fmt.Sprintf("%s %s => %d %s", method, path, st, b)
+	if st != want {
+		msg := fmt.Sprintf("%s %s => %d (want %d) %s", method, path, st, want, b)
 		if t == nil {
 			panic(msg)
 		}

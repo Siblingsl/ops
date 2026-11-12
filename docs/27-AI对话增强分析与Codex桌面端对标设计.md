@@ -1098,7 +1098,7 @@ Windows前台键鼠由全设备单一租约控制，父/子智能体和依赖前
 
 能力GET返回200：`available,reason,device_state,protocol_range,observation_modes,foreground_state`；设备离线是能力快照中的不可用原因，不泄漏所有应用。选窗产生本机授权意向，首次发送通过原消息事务创建run和grant；直接增补接口只接受本次活动run及当前用户显式选窗意图。
 
-`POST /agent/conversations/{id}/computer-grants`请求`run_id,target_handle,scope,request_id,expected_revision`，202返回`grant_id,run_id,generation,state:pending,expires_at,after_event_seq`；本机确认真实窗口和前台后才转active。客户端自报exe/PID/标题不能替代本机核验。撤销DELETE返回202及`state:revoking,generation,device_ack_pending`；本机先停止，服务端记录受理，不能把202当成已经停止。文件/提交的批准继续使用原卡片的版本校验和单次票据。不新增接受任意脚本、坐标、窗口句柄或 PowerShell 的开放式 GUI 执行接口；computer 动作仅通过 §4.7 固定动作枚举与命令账本派发，每个写类动作绑定单次批准票据与内容 hash，不提供批量创建、批量派发或自动重试端点。
+`POST /agent/conversations/{id}/computer-grants`请求`run_id,target_handle,scope,request_id,expected_revision`，202返回`grant_id,run_id,generation,state:pending,expires_at,after_event_seq`；本机确认真实窗口和前台后才转active，确认走`POST /agent/computer/grants/{id}/device-ack`（回传`generation`与窗口摘要：`pending→active`、`revoking→revoked`；`generation`变化或重复确认409`computer_approval_conflict`，摘要不符409`computer_target_changed`）。客户端自报exe/PID/标题不能替代本机核验。撤销DELETE返回202及`state:revoking,generation,device_ack_pending`；本机先停止，服务端记录受理，不能把202当成已经停止。文件/提交的批准继续使用原卡片的版本校验和单次票据。不新增接受任意脚本、坐标、窗口句柄或 PowerShell 的开放式 GUI 执行接口；computer 动作仅通过 §4.7 固定动作枚举与命令账本派发，每个写类动作绑定单次批准票据与内容 hash，不提供批量创建、批量派发或自动重试端点。
 
 | 情况 | 返回/处理 |
 | --- | --- |

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"github.com/google/uuid"
@@ -211,17 +212,31 @@ func TestS05ForegroundMutualExclusion(t *testing.T) {
 		"scope": "observe", "request_id": uuid.NewString(),
 	}, "computer_foreground_busy")
 
-	// 2. 撤销浏览器 grant → computer grant 可创建
+	// 2. 撤销浏览器 grant → computer grant 可创建（202 pending，本机确认后才 active）
 	env.mustJSON(t, "DELETE", "/api/v1/agent/browser/grants/"+browserGrant.ID, map[string]any{}, nil)
-	var computerGrant computerGrantView
-	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/computer-grants", map[string]any{
+	var accepted struct {
+		GrantID    string `json:"grant_id"`
+		Generation int64  `json:"generation"`
+		State      string `json:"state"`
+	}
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/computer-grants", map[string]any{
 		"target_handle": "hwnd:1", "target_summary": "记事本",
 		"scope": "observe", "request_id": uuid.NewString(),
+	}, &accepted, http.StatusAccepted)
+	if accepted.State != "pending" {
+		t.Fatalf("建租约应 202 pending：%+v", accepted)
+	}
+	var computerGrant computerGrantView
+	env.mustJSON(t, "POST", "/api/v1/agent/computer/grants/"+accepted.GrantID+"/device-ack", map[string]any{
+		"generation": accepted.Generation, "target_summary": "记事本",
 	}, &computerGrant)
+	if computerGrant.State != "active" {
+		t.Fatalf("设备确认后应 active：%+v", computerGrant)
+	}
 
 	// 3. 反向：有活动 computer grant → browser grant 409
 	// 撤销 computer grant，重新创建 browser grant → 再创建 computer grant 409
-	env.mustJSON(t, "DELETE", "/api/v1/agent/computer-grants/"+computerGrant.ID, map[string]any{}, nil)
+	env.mustJSONStatus(t, "DELETE", "/api/v1/agent/computer-grants/"+computerGrant.ID, map[string]any{}, nil, http.StatusAccepted)
 	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-grants", map[string]any{
 		"binding_id": confirmed.BindingID, "run_id": browserRun.String(),
 		"tab_handle": "tab-2", "origins": []string{"https://example.com"},
@@ -233,9 +248,9 @@ func TestS05ForegroundMutualExclusion(t *testing.T) {
 
 	// 4. 清理浏览器 grant → computer 可创建
 	env.mustJSON(t, "DELETE", "/api/v1/agent/browser/grants/"+browserGrant.ID, map[string]any{}, nil)
-	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/computer-grants", map[string]any{
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/computer-grants", map[string]any{
 		"target_handle": "hwnd:3", "target_summary": "计算器",
 		"scope": "observe", "request_id": uuid.NewString(),
-	}, &computerGrant)
-	env.mustJSON(t, "DELETE", "/api/v1/agent/computer-grants/"+computerGrant.ID, map[string]any{}, nil)
+	}, &accepted, http.StatusAccepted)
+	env.mustJSONStatus(t, "DELETE", "/api/v1/agent/computer-grants/"+accepted.GrantID, map[string]any{}, nil, http.StatusAccepted)
 }

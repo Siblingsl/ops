@@ -26,29 +26,34 @@ type computerGrantView struct {
 	Scope          string `json:"scope"`
 	Generation     int64  `json:"generation"`
 	State          string `json:"state"`
-	CreatedAt      string `json:"created_at"`
-	ExpiresAt      string `json:"expires_at,omitempty"`
+	// P1-4：pending → active 与 revoking → revoked 需设备确认；after_event_seq 供确认后从该游标续传。
+	DeviceAckPending bool   `json:"device_ack_pending"`
+	AfterEventSeq    int64  `json:"after_event_seq"`
+	CreatedAt        string `json:"created_at"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
 }
 
 const computerGrantColumnsPlain = `id::text, conversation_id::text, COALESCE(run_id::text,''),
-	target_handle, target_summary, scope, generation, state,
+	target_handle, target_summary, scope, generation, state, device_ack_pending,
+	COALESCE(after_event_seq,0),
 	to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
 	COALESCE(to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z\"'),'')`
 
 const computerGrantColumns = `g.id::text, g.conversation_id::text, COALESCE(g.run_id::text,''),
-	g.target_handle, g.target_summary, g.scope, g.generation, g.state,
+	g.target_handle, g.target_summary, g.scope, g.generation, g.state, g.device_ack_pending,
+	COALESCE(g.after_event_seq,0),
 	to_char(g.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
 	COALESCE(to_char(g.expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),'')`
 
 // 硬禁区：这些进程名/窗口标题模式永远拒绝（27 §11.5.2）。
 var computerHardForbiddenPatterns = []string{
-	"winlogon", "csrss", "wininit", "lsass", "smss",      // 系统关键进程
-	"taskmgr", "cmd", "powershell", "pwsh",               // 终端/运行框
-	"regedit", "secpol", "gpedit",                        // 注册表/策略编辑器
-	"credential", "vault",                                // 凭据管理
-	"凭据管理", "密码管理",                             // 中文窗口标题
-	"命令提示符", "powershell", "注册表", "安全中心",  // 中文窗口标题
-	"uac", "consent",                                     // UAC 提升
+	"winlogon", "csrss", "wininit", "lsass", "smss", // 系统关键进程
+	"taskmgr", "cmd", "powershell", "pwsh", // 终端/运行框
+	"regedit", "secpol", "gpedit", // 注册表/策略编辑器
+	"credential", "vault", // 凭据管理
+	"凭据管理", "密码管理", // 中文窗口标题
+	"命令提示符", "powershell", "注册表", "安全中心", // 中文窗口标题
+	"uac", "consent", // UAC 提升
 }
 
 func computerIsHardForbidden(targetSummary string) bool {
@@ -132,10 +137,12 @@ func (s *Server) createComputerGrant(w http.ResponseWriter, r *http.Request) err
 			" FROM agent_computer_grant g WHERE g.id=$1", existingID).
 			Scan(&existing.ID, &existing.ConversationID, &existing.RunID, &existing.TargetHandle,
 				&existing.TargetSummary, &existing.Scope, &existing.Generation, &existing.State,
+				&existing.DeviceAckPending, &existing.AfterEventSeq,
 				&existing.CreatedAt, &existing.ExpiresAt); err != nil {
 			return err
 		}
-		return ok(w, existing)
+		writeJSON(w, http.StatusAccepted, grantAcceptedBody(existing))
+		return nil
 	}
 	if err != pgx.ErrNoRows {
 		return err
@@ -174,9 +181,12 @@ func (s *Server) createComputerGrant(w http.ResponseWriter, r *http.Request) err
 	expires := s.now().Add(30 * time.Second)
 	var view computerGrantView
 	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+		// P1-4：先落 pending，本机确认真实窗口与前台后再由 device-ack 转 active（D-188 / 27 §11.5.5）。
+		// after_event_seq 取会话当前最大事件序号，供设备确认后从该游标续传。
 		row := tx.QueryRow(r.Context(), "INSERT INTO agent_computer_grant"+
-			" (id, workspace_id, user_id, conversation_id, run_id, target_handle, target_summary, scope, state, request_id, expires_at)"+
-			" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$10) RETURNING "+computerGrantColumnsPlain,
+			" (id, workspace_id, user_id, conversation_id, run_id, target_handle, target_summary, scope, state, device_ack_pending, after_event_seq, request_id, expires_at)"+
+			" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',true,"+
+			"(SELECT COALESCE(MAX(e.event_seq),0) FROM agent_event e WHERE e.conversation_id=$4),$9,$10) RETURNING "+computerGrantColumnsPlain,
 			grantID, id.WorkspaceID, id.UserID, conversationID, runID,
 			body.TargetHandle, body.TargetSummary, body.Scope, requestID, expires)
 		var scanErr error
@@ -185,7 +195,8 @@ func (s *Server) createComputerGrant(w http.ResponseWriter, r *http.Request) err
 	}); err != nil {
 		return err
 	}
-	return ok(w, view)
+	writeJSON(w, http.StatusAccepted, grantAcceptedBody(view))
+	return nil
 }
 
 // DELETE /agent/computer-grants/{id}：撤销（generation 递增使旧授权失效）。
@@ -198,17 +209,26 @@ func (s *Server) revokeComputerGrant(w http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return errNotFound
 	}
-	tag, err := s.db.Exec(r.Context(), `UPDATE agent_computer_grant
-		SET state='revoked', revoked_at=now(), generation=generation+1
-		WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND state='active'`,
-		grantID, id.UserID, id.WorkspaceID)
+	// P1-4：撤销先进入 revoking 并置 device_ack_pending，设备确认后才转 revoked；
+	// 不把 202 当成已停止（27 §11.5.5）。
+	var newGeneration int64
+	var newState string
+	err = s.db.QueryRow(r.Context(), `UPDATE agent_computer_grant
+		SET state='revoking', device_ack_pending=true, revoked_at=NULL, generation=generation+1
+		WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND state IN ('pending','active')
+		RETURNING generation, state`,
+		grantID, id.UserID, id.WorkspaceID).Scan(&newGeneration, &newState)
+	if err == pgx.ErrNoRows {
+		return errNotFound
+	}
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return errNotFound
-	}
-	return ok(w, map[string]any{"revoked": true})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"id": grantID.String(), "state": newState,
+		"device_ack_pending": true, "generation": newGeneration,
+	})
+	return nil
 }
 
 // GET /agent/computer-grants?conversation_id=：本人当前租约查询。
@@ -254,20 +274,28 @@ func (s *Server) handoffComputerGrant(w http.ResponseWriter, r *http.Request) er
 	if err != nil {
 		return errNotFound
 	}
-	tag, err := s.db.Exec(r.Context(), `UPDATE agent_computer_grant
-		SET state='revoked', revoked_at=now(), generation=generation+1
-		WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND state='active'`,
-		grantID, id.UserID, id.WorkspaceID)
+	// P1-4：接管同样先进 revoking，等本机确认停止后才转 revoked。
+	var newGeneration int64
+	var newState string
+	err = s.db.QueryRow(r.Context(), `UPDATE agent_computer_grant
+		SET state='revoking', device_ack_pending=true, revoked_at=NULL, generation=generation+1
+		WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND state IN ('pending','active')
+		RETURNING generation, state`,
+		grantID, id.UserID, id.WorkspaceID).Scan(&newGeneration, &newState)
+	if err == pgx.ErrNoRows {
+		return errNotFound
+	}
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return errNotFound
-	}
 	// W10：接管通知（27 §11.5.1：任务栏与控制条标"AI 正在操作"，接管即撤前台租约）。
 	s.notify(r.Context(), id.WorkspaceID, id.UserID, "agent_computer", "已接管：电脑控制已停止",
-		"前台租约已撤销；如需继续请重新选择应用", "/agent?panel=task", "computer:handoff:" + grantID.String())
-	return ok(w, map[string]any{"state": "revoked", "device_ack_pending": true})
+		"前台租约已撤销；如需继续请重新选择应用", "/agent?panel=task", "computer:handoff:"+grantID.String())
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"id": grantID.String(), "state": newState,
+		"device_ack_pending": true, "generation": newGeneration,
+	})
+	return nil
 }
 
 // POST /tools/computer/target-requests：模型请求用户在本机选择前台目标（27 §11.5.1）。
@@ -293,6 +321,7 @@ func (s *Server) requestComputerTarget(w http.ResponseWriter, r *http.Request) e
 		principal.ConversationID, id.UserID, id.WorkspaceID).
 		Scan(&active.ID, &active.ConversationID, &active.RunID, &active.TargetHandle,
 			&active.TargetSummary, &active.Scope, &active.Generation, &active.State,
+			&active.DeviceAckPending, &active.AfterEventSeq,
 			&active.CreatedAt, &active.ExpiresAt)
 	if err == nil {
 		return ok(w, map[string]any{
@@ -313,6 +342,91 @@ func (s *Server) requestComputerTarget(w http.ResponseWriter, r *http.Request) e
 func scanComputerGrant(row pgx.Row) (computerGrantView, error) {
 	var v computerGrantView
 	err := row.Scan(&v.ID, &v.ConversationID, &v.RunID, &v.TargetHandle,
-		&v.TargetSummary, &v.Scope, &v.Generation, &v.State, &v.CreatedAt, &v.ExpiresAt)
+		&v.TargetSummary, &v.Scope, &v.Generation, &v.State,
+		&v.DeviceAckPending, &v.AfterEventSeq, &v.CreatedAt, &v.ExpiresAt)
 	return v, err
+}
+
+// grantAcceptedBody 是 202 回执的固定形状（27 §11.5.5 / docs/06 §13.2）。
+// run_id 为 docs/27:1101 明列的字段（未绑定 run 时为空串），其余五项对齐 docs/36 §5 P1-4 步骤 2。
+func grantAcceptedBody(v computerGrantView) map[string]any {
+	return map[string]any{
+		"grant_id": v.ID, "run_id": v.RunID, "generation": v.Generation, "state": v.State,
+		"expires_at": v.ExpiresAt, "after_event_seq": v.AfterEventSeq,
+	}
+}
+
+// POST /agent/computer/grants/{id}/device-ack：本机确认真实窗口与前台后，pending → active；
+// 撤销/接管确认停止后，revoking → revoked。迟到或 generation 变化一律 409，不静默成功。
+func (s *Server) ackComputerGrantDevice(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.computerGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "computer_use"); err != nil {
+		return err
+	}
+	grantID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return errNotFound
+	}
+	var body struct {
+		Generation    int64  `json:"generation"`
+		TargetSummary string `json:"target_summary"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
+		return apiErr(400, "bad_request", "请求体无法解析")
+	}
+	var state, summary string
+	var generation int64
+	var ackPending bool
+	err = s.db.QueryRow(r.Context(), `SELECT state, generation, device_ack_pending, target_summary
+		FROM agent_computer_grant WHERE id=$1 AND user_id=$2 AND workspace_id=$3`,
+		grantID, id.UserID, id.WorkspaceID).Scan(&state, &generation, &ackPending, &summary)
+	if err == pgx.ErrNoRows {
+		return errNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !ackPending {
+		return apiErr(409, "computer_approval_conflict", "该租约不处于待设备确认状态")
+	}
+	// generation 必须精确匹配（202 回执里就有）：不接受 0 作为「未提供」的退让，
+	// 否则撤销后旧 generation 的迟到确认会被误当成本次确认。
+	if body.Generation != generation {
+		return apiErr(409, "computer_approval_conflict", "generation 已变化，旧授权失效")
+	}
+	if body.TargetSummary != "" && body.TargetSummary != summary {
+		return apiErr(409, "computer_target_changed", "窗口身份摘要与批准时不一致")
+	}
+	next := "active"
+	if state == "revoking" {
+		next = "revoked"
+	}
+	if next == "active" {
+		// pending 不占前台；转 active 时必须再校验一次单租约互斥，避免两个 pending 同时转正。
+		var busy bool
+		if err := s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM agent_computer_grant
+			WHERE user_id=$1 AND workspace_id=$2 AND state='active' AND id<>$3
+			  AND (expires_at IS NULL OR expires_at > now()))`,
+			id.UserID, id.WorkspaceID, grantID).Scan(&busy); err != nil {
+			return err
+		}
+		if busy {
+			return apiErr(409, "computer_foreground_busy", "已有活动前台租约，请先撤销")
+		}
+	}
+	tag, err := s.db.Exec(r.Context(), `UPDATE agent_computer_grant
+		SET state=$4, device_ack_pending=false,
+		    revoked_at=CASE WHEN $7 THEN now() ELSE revoked_at END
+		WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND state=$5 AND generation=$6`,
+		grantID, id.UserID, id.WorkspaceID, next, state, generation, next == "revoked")
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return apiErr(409, "computer_approval_conflict", "状态或 generation 已变化，请重新观察")
+	}
+	return ok(w, map[string]any{"id": grantID.String(), "state": next, "generation": generation})
 }
