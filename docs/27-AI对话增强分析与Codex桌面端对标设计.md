@@ -1098,7 +1098,7 @@ Windows前台键鼠由全设备单一租约控制，父/子智能体和依赖前
 
 能力GET返回200：`available,reason,device_state,protocol_range,observation_modes,foreground_state`；设备离线是能力快照中的不可用原因，不泄漏所有应用。选窗产生本机授权意向，首次发送通过原消息事务创建run和grant；直接增补接口只接受本次活动run及当前用户显式选窗意图。
 
-`POST /agent/conversations/{id}/computer-grants`请求`run_id,target_handle,scope,request_id,expected_revision`，202返回`grant_id,run_id,generation,state:pending,expires_at,after_event_seq`；本机确认真实窗口和前台后才转active。客户端自报exe/PID/标题不能替代本机核验。撤销DELETE返回202及`state:revoking,generation,device_ack_pending`；本机先停止，服务端记录受理，不能把202当成已经停止。文件/提交的批准继续使用原卡片的版本校验和单次票据，不新增任意GUI执行HTTP接口。
+`POST /agent/conversations/{id}/computer-grants`请求`run_id,target_handle,scope,request_id,expected_revision`，202返回`grant_id,run_id,generation,state:pending,expires_at,after_event_seq`；本机确认真实窗口和前台后才转active。客户端自报exe/PID/标题不能替代本机核验。撤销DELETE返回202及`state:revoking,generation,device_ack_pending`；本机先停止，服务端记录受理，不能把202当成已经停止。文件/提交的批准继续使用原卡片的版本校验和单次票据。不新增接受任意脚本、坐标、窗口句柄或 PowerShell 的开放式 GUI 执行接口；computer 动作仅通过 §4.7 固定动作枚举与命令账本派发，每个写类动作绑定单次批准票据与内容 hash，不提供批量创建、批量派发或自动重试端点。
 
 | 情况 | 返回/处理 |
 | --- | --- |
@@ -1106,6 +1106,12 @@ Windows前台键鼠由全设备单一租约控制，父/子智能体和依赖前
 | 目标/文档/批准版本变化、前台被占用、同ID不同请求 | 409 `computer_target_changed/computer_approval_conflict/computer_foreground_busy/request_conflict`，读新观察或显示占用者 |
 | 新控制请求所需本机离线 | 503 `computer_device_offline`，不签发可执行租约；撤销仍可202记录，不能因离线丢弃停控意图 |
 | 无法识别界面/不支持动作、达到动作预算 | 422 `computer_ui_unsupported`、429 `computer_budget_exceeded`；给人工接管及未完成范围 |
+| 快照失效 / 目标多义 / 命中硬禁区（DEV-CU §4.2） | 409 `computer_stale_ref` / `computer_ambiguous_target`、403 `computer_policy_denied`；`requires_fresh_snapshot=true` 时须重取观察并由用户重新确认 |
+| 动作不在枚举 / postcondition 不匹配 / 缺参或长度越界（DEV-CU §4.2） | 422 `computer_action_not_supported` / `computer_action_failed` / `computer_invalid_args`；给人工接管及未完成范围，不降级为坐标点击 |
+| 应用无响应 / 单动作或观察超时（DEV-CU §4.2） | 503 `computer_app_unresponsive`、504 `computer_timeout`；`retry_after_ms=250`，仅 `disposition.retry=safe` 时输出 recovery；`unknown_outcome` 禁止自动重放 |
+| worker 未分类故障（DEV-CU §4.2） | 500 `computer_internal`；结果未知转人工核对卡片，不得当作失败重试 |
+
+> 辨析（DEV-CU P0-2 / D-188）：本修订只把 §11.5.3 的措辞收窄为「禁止接受任意脚本 / 坐标 / 窗口句柄 / PowerShell 的开放式执行接口」，**不放宽**「权限互不借用」「逐项确认」「硬禁区」；不新增批量创建 / 批量派发 / 自动重试端点，不删除 / 跳过 / 放宽 HC-01～HC-31。`browser` 侧 `/tools/browser/commands` 已证明「固定动作 + 命令账本」为可接受先例。§11.5.2 硬禁区与 §11.5.4 验收表不变。上表 16 个 OPS 错误码逐字取自 `docs/36` §4.2，保留既有 403/409/422/503 分组，新增 500 / 504 行仅为完整覆盖；`unknown_outcome` 与 `retry=unsafe` 一律不重放。
 
 清理路由遵守第13.4节“只减权”例外：功能关闭后仍允许已认证本人撤销；未登录时本机停止始终有效。每个返回只含选中目标的必要摘要，不返回其他窗口、进程路径全集或截图原文。
 
