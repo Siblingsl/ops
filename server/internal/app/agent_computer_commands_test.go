@@ -17,16 +17,21 @@ func TestComputerCommandColumnsAndConstants(t *testing.T) {
 		"c.id::text", "c.grant_id::text", "c.request_id::text", "c.action_kind", "c.input_hash",
 		"c.state", "c.requires_confirmation", "c.generation", "c.error_code",
 		"c.created_at AT TIME ZONE", "c.deadline_at AT TIME ZONE", "c.dispatched_at AT TIME ZONE",
-		"c.card_id::text", "c.approval_hash", "c.target_ref", "c.payload::text",
-		"c.result::text", "c.disposition::text", "c.run_id::text",
+		"c.card_id::text", "c.approval_hash", "c.target_ref", "c.run_id::text",
 	} {
 		if !strings.Contains(computerCommandColumns, c) {
 			t.Fatalf("computerCommandColumns 缺列 %s", c)
 		}
 		cols++
 	}
-	if cols != 19 {
-		t.Fatalf("列清单应覆盖 19 项，实际 %d", cols)
+	if cols != 16 {
+		t.Fatalf("列清单应覆盖 16 项，实际 %d", cols)
+	}
+	// payload/result/disposition 不在列清单（A30b 同款：领取/终态单独下发）
+	for _, banned := range []string{"c.payload::text", "c.result::text", "c.disposition::text"} {
+		if strings.Contains(computerCommandColumns, banned) {
+			t.Fatalf("列清单不得含 %s（默认视图不夹带载荷）", banned)
+		}
 	}
 
 	// 常量取 §4.10 总表

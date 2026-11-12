@@ -1938,6 +1938,9 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/computer-grants/{id}/handoff", s.h(s.handoffComputerGrant))
 		// P1-4：设备确认（pending → active、revoking → revoked），路径按 docs/06 §13.2 登记形状。
 		r.Post("/agent/computer/grants/{id}/device-ack", s.h(s.ackComputerGrantDevice))
+		// DEV-CU P4-5（docs/36 §4.10）：桌面执行器领取与 CAS 派发（pending 含载荷，仅本机桥调用）。
+		r.Get("/agent/computer/commands/pending", s.h(s.pendingComputerCommands))
+		r.Post("/agent/computer/commands/{id}/dispatch", s.h(s.dispatchComputerCommand))
 	})
 	// 只减权清理路由（27 §13.4）：不挂 agentGate——智能体/浏览器开关关闭后仍可解绑与撤权；
 	// 仍要求登录、CSRF 与真实资源归属（T-AI27-25A）。

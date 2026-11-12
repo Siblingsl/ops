@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -55,32 +56,32 @@ var computerCommandActions = map[string]bool{
 }
 
 // 列清单与 scanComputerCommand 必须一一对应；时间沿用 browser 先例的 UTC to_char。
+// payload / result / disposition 不在列清单：browser 先例同款——领取（payload）与
+// 终态回执（result/disposition）各自单独查询下发，默认视图不夹带（A30b 拍板语义）。
 const computerCommandColumns = `c.id::text, c.grant_id::text, COALESCE(c.run_id::text,''), c.request_id::text,
 	COALESCE(c.card_id::text,''), COALESCE(c.approval_hash,''), c.action_kind, COALESCE(c.target_ref,''),
-	c.input_hash, c.state, COALESCE(c.payload::text,''), COALESCE(c.result::text,''),
-	COALESCE(c.disposition::text,''), c.requires_confirmation, c.generation,
+	c.input_hash, c.state, c.requires_confirmation, c.generation,
 	COALESCE(to_char(c.deadline_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'), ''),
 	COALESCE(to_char(c.dispatched_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'), ''),
 	COALESCE(c.error_code,''), to_char(c.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')`
 
 func scanComputerCommand(row pgx.Row) (computerCommandView, error) {
 	var v computerCommandView
-	var payload, result, disposition []byte
 	err := row.Scan(&v.ID, &v.GrantID, &v.RunID, &v.RequestID,
 		&v.CardID, &v.ApprovalHash, &v.ActionKind, &v.TargetRef,
-		&v.InputHash, &v.State, &payload, &result, &disposition,
-		&v.RequiresConfirmation, &v.Generation,
+		&v.InputHash, &v.State, &v.RequiresConfirmation, &v.Generation,
 		&v.DeadlineAt, &v.DispatchedAt, &v.ErrorCode, &v.CreatedAt)
-	if len(payload) > 0 {
-		v.Payload = json.RawMessage(payload)
-	}
-	if len(result) > 0 {
-		v.Result = json.RawMessage(result)
-	}
-	if len(disposition) > 0 {
-		v.Disposition = json.RawMessage(disposition)
-	}
 	return v, err
+}
+
+// scanComputerCommandTargets 返回与 computerCommandColumns 一一对应的 Scan 目标
+// （不含 payload/result/disposition 三个 jsonb——调用方按需追加以免覆盖）。
+func scanComputerCommandTargets(v *computerCommandView) []any {
+	return []any{&v.ID, &v.GrantID, &v.RunID, &v.RequestID,
+		&v.CardID, &v.ApprovalHash, &v.ActionKind, &v.TargetRef,
+		&v.InputHash, &v.State,
+		&v.RequiresConfirmation, &v.Generation,
+		&v.DeadlineAt, &v.DispatchedAt, &v.ErrorCode, &v.CreatedAt}
 }
 
 // §4.10 常量总表（全部集中，便于复算；browser 先例同款）：
@@ -350,4 +351,136 @@ func (s *Server) renderComputerCommand(ctx context.Context, w http.ResponseWrite
 		return err
 	}
 	return ok(w, v)
+}
+
+// ownComputerCommand 校验本人归属并返回 (commandID, conversationID)。
+// 跨租户 / 不存在一律 404，不透露资源存在（对齐 browser 先例）。
+func (s *Server) ownComputerCommand(r *http.Request) (uuid.UUID, uuid.UUID, error) {
+	id := ident(r.Context())
+	commandID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return uuid.Nil, uuid.Nil, errNotFound
+	}
+	var conversationID uuid.UUID
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT g.conversation_id FROM agent_computer_command c JOIN agent_computer_grant g ON g.id=c.grant_id
+		WHERE c.id=$1 AND g.workspace_id=$2 AND g.user_id=$3`,
+		commandID, id.WorkspaceID, id.UserID).Scan(&conversationID); err != nil {
+		if err == pgx.ErrNoRows {
+			return uuid.Nil, uuid.Nil, errNotFound
+		}
+		return uuid.Nil, uuid.Nil, err
+	}
+	return commandID, conversationID, nil
+}
+
+// POST /agent/computer/commands/{id}/dispatch：queued→dispatched（桌面执行器原子领取；幂等）。
+// CAS 命中（claimed=true）时随响应下发 payload；claimed=false 如实回当前状态，
+// 不下发 payload、不重复执行。派发前复核租约仍 active 且 generation 未变，
+// 否则命令转 cancelled 并 409（审批版本已失效，不投递）。
+func (s *Server) dispatchComputerCommand(w http.ResponseWriter, r *http.Request) error {
+	commandID, conversationID, err := s.ownComputerCommand(r)
+	if err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "computer_use"); err != nil {
+		return err
+	}
+	var claimed bool
+	var grantGeneration int64
+	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+		// 派发前复核租约：撤销 / 过期 / generation 变化 → 命令转 cancelled + 409。
+		var grantState string
+		err := tx.QueryRow(r.Context(), `
+			SELECT g.state, g.generation, c.generation FROM agent_computer_grant g
+			JOIN agent_computer_command c ON c.grant_id=g.id
+			WHERE g.id=c.grant_id AND c.id=$1
+			  AND g.state='active' AND (g.expires_at IS NULL OR g.expires_at > now())
+			  AND g.generation=c.generation`,
+			commandID).Scan(&grantState, &grantGeneration, &grantGeneration)
+		if err == pgx.ErrNoRows {
+			// 租约失效或 generation 变化：命令转 cancelled（幂等，已是终态则跳过）。
+			if _, err := tx.Exec(r.Context(), `
+				UPDATE agent_computer_command SET state='cancelled'
+				WHERE id=$1 AND state IN ('queued','dispatched')`, commandID); err != nil {
+				return err
+			}
+			return apiErr(409, "computer_approval_conflict", "租约已撤销或审批版本已变化，命令取消")
+		}
+		if err != nil {
+			return err
+		}
+		// CAS 领取：只有 queued 能转 dispatched（并发领取只有一次 RowsAffected>0）。
+		tag, err := tx.Exec(r.Context(), `
+			UPDATE agent_computer_command SET state='dispatched', dispatched_at=now()
+			WHERE id=$1 AND state='queued' AND generation=$2`,
+			commandID, grantGeneration)
+		if err != nil {
+			return err
+		}
+		claimed = tag.RowsAffected() > 0
+		return nil
+	}); err != nil {
+		return err
+	}
+	v, err := scanComputerCommand(s.db.QueryRow(r.Context(),
+		"SELECT "+computerCommandColumns+" FROM agent_computer_command c WHERE c.id=$1", commandID))
+	if err != nil {
+		return err
+	}
+	if claimed {
+		// payload 只在 CAS 命中时下发（A30b 同款）。
+		var payload json.RawMessage
+		if err := s.db.QueryRow(r.Context(), `SELECT COALESCE(payload, 'null'::jsonb) FROM agent_computer_command WHERE id=$1`, commandID).Scan(&payload); err != nil {
+			return err
+		}
+		v.Payload = payload
+		v.Claimed = true
+		_ = grantGeneration
+		s.emitComputerCommandEvent(r.Context(), conversationID, "computer.command_started", map[string]any{
+			"command_id": commandID.String(),
+		})
+	}
+	return ok(w, v)
+}
+
+// GET /agent/computer/commands/pending：桌面执行器领取清单。
+// 本人工作区内 queued 且未过期的命令（含 payload），每轮限量 10，先到先执行；
+// 并发领取由 dispatch 的 CAS 兜底，重复执行不可能发生。
+func (s *Server) pendingComputerCommands(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.computerGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "computer_use"); err != nil {
+		return err
+	}
+	rows, err := s.db.Query(r.Context(), `
+		SELECT `+computerCommandColumns+`, COALESCE(c.payload, 'null'::jsonb)
+		FROM agent_computer_command c JOIN agent_computer_grant g ON g.id=c.grant_id
+		WHERE g.workspace_id=$1 AND g.user_id=$2 AND c.state='queued'
+		  AND g.state='active' AND (g.expires_at IS NULL OR g.expires_at > now())
+		  AND g.generation=c.generation
+		  AND (c.deadline_at IS NULL OR c.deadline_at > now())
+		ORDER BY c.created_at ASC LIMIT 10`, id.WorkspaceID, id.UserID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	commands := []computerCommandView{}
+	for rows.Next() {
+		var v computerCommandView
+		var payload []byte
+		if err := rows.Scan(&v.ID, &v.GrantID, &v.RunID, &v.RequestID,
+			&v.CardID, &v.ApprovalHash, &v.ActionKind, &v.TargetRef,
+			&v.InputHash, &v.State, &v.RequiresConfirmation, &v.Generation,
+			&v.DeadlineAt, &v.DispatchedAt, &v.ErrorCode, &v.CreatedAt, &payload); err != nil {
+			return err
+		}
+		if len(payload) > 0 {
+			v.Payload = json.RawMessage(payload)
+		}
+		commands = append(commands, v)
+	}
+	return ok(w, map[string]any{"commands": commands})
 }

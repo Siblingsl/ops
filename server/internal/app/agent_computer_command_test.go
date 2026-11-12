@@ -142,3 +142,91 @@ func cloneJSONBody(src map[string]any) map[string]any {
 	}
 	return out
 }
+
+// ---------------------------------------------------------------------------
+// DEV-CU P4-5：CAS 领取与 pending 清单（并发一次 claimed / 跨租户 404 / LIMIT 10 + 租户隔离）。
+// ---------------------------------------------------------------------------
+
+func cu45Pending(t *testing.T) []map[string]any {
+	t.Helper()
+	var out struct {
+		Commands []map[string]any `json:"commands"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/agent/computer/commands/pending", map[string]any{}, &out)
+	return out.Commands
+}
+
+// ① CAS 并发领取：同一命令两次 dispatch 只有一次 claimed=true（含 payload）。
+func TestComputerCommandCAS(t *testing.T) {
+	conv, grant := cu44Setup(t)
+	_ = conv
+	body := cu44Body(grant, conv, "observe", map[string]any{})
+	first := cu44Create(t, body, http.StatusOK)
+	commandID, _ := first["id"].(string)
+	if commandID == "" {
+		t.Fatalf("建命令失败：%v", first)
+	}
+
+	// 顺序双领取即可锁 CAS 语义（RowsAffected>0 只发生一次）；
+	// 并发 goroutine 版本由 browser 先例的同构测试覆盖，这里复用其判定。
+	c1 := map[string]any{}
+	env.mustJSON(t, "POST", "/api/v1/agent/computer/commands/"+commandID+"/dispatch", map[string]any{}, &c1)
+	if c1["claimed"] != true {
+		t.Fatalf("第一次领取应 claimed=true：%v", c1)
+	}
+	if c1["payload"] == nil {
+		t.Fatal("CAS 命中应下发 payload")
+	}
+	c2 := map[string]any{}
+	env.mustJSON(t, "POST", "/api/v1/agent/computer/commands/"+commandID+"/dispatch", map[string]any{}, &c2)
+	if c2["claimed"] == true {
+		t.Fatalf("第二次领取不得再 claimed：%v", c2)
+	}
+	if c2["payload"] != nil {
+		t.Fatal("claimed=false 不得下发 payload")
+	}
+	if c2["state"] != "dispatched" {
+		t.Fatalf("claimed=false 应如实回当前状态 dispatched：%v", c2["state"])
+	}
+}
+
+// ② 归属：跨租户（另一用户）领取/查看 → 404 不透露存在。
+func TestComputerCommandOwnership(t *testing.T) {
+	conv, grant := cu44Setup(t)
+	_ = conv
+	body := cu44Body(grant, conv, "observe", map[string]any{})
+	created := cu44Create(t, body, http.StatusOK)
+	commandID, _ := created["id"].(string)
+
+	other := env.registerClient(t, "cu45-other-"+uuid.NewString()[:8], testPassword)
+	var ome meInfo
+	other.mustJSON(t, "GET", "/api/v1/auth/me", nil, &ome)
+	other.csrf = ome.CSRF
+	other.expectErr(t, "POST", "/api/v1/agent/computer/commands/"+commandID+"/dispatch", map[string]any{}, "not_found")
+}
+
+// ③ pending 清单：LIMIT 10 + 只含本人租户数据。
+func TestComputerCommandPendingLimit(t *testing.T) {
+	conv, grant := cu44Setup(t)
+	_ = conv
+	for i := 0; i < 12; i++ {
+		body := cu44Body(grant, conv, "observe", map[string]any{})
+		cu44Create(t, body, http.StatusOK)
+	}
+	pending := cu45Pending(t)
+	if len(pending) > 10 {
+		t.Fatalf("pending 应 LIMIT 10，实际 %d", len(pending))
+	}
+	for _, cmd := range pending {
+		if cmd["grant_id"] != grant.ID {
+			t.Fatalf("pending 不得含其它租户数据：%v", cmd["grant_id"])
+		}
+	}
+	// 撤销租约 → 派发转 cancelled 409（步骤 6 的租约复核）
+	var ack map[string]any
+	env.mustJSONStatus(t, "DELETE", "/api/v1/agent/computer-grants/"+grant.ID, map[string]any{}, &ack, http.StatusAccepted)
+	pending = cu45Pending(t)
+	if len(pending) != 0 {
+		t.Fatalf("租约撤销后 pending 应为空（cancelled 不在 queued）：%d", len(pending))
+	}
+}

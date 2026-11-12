@@ -263,6 +263,9 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/tools/computer/grants/{id}/handoff",
 		// DEV-CU P4-3（docs/36 §4.10）：run 内电脑控制命令入口（6 个固定动作共用）。
 		"POST /api/v1/tools/computer/commands",
+		// DEV-CU P4-5：桌面执行器领取与 CAS 派发（本机桥调用，不进模型目录）。
+		"GET /api/v1/agent/computer/commands/pending",
+		"POST /api/v1/agent/computer/commands/{id}/dispatch",
 		// A12：模型请求用户在本机选窗（选定后即时建 30s 租约）。
 		"POST /api/v1/tools/computer/target-requests",
 		// A30：模型请求用户在浏览器选标签（选定后即时建 30s 租约）。
