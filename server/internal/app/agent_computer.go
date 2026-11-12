@@ -158,6 +158,7 @@ func (s *Server) createComputerGrant(w http.ResponseWriter, r *http.Request) err
 	grantID := uuid.New()
 	expires := s.now().Add(30 * time.Second)
 	var view computerGrantView
+	var inserted bool
 	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
 		// P4-12（S05 并发窗口补齐）：互斥检查移入事务内（对齐 browser 侧 :350-360），
 		// 消除「检查在事务外、INSERT 在事务内」的并发窗口。409 码与文案不变。
@@ -184,19 +185,57 @@ func (s *Server) createComputerGrant(w http.ResponseWriter, r *http.Request) err
 		} else {
 			return apiErr(409, "computer_foreground_busy", "已有活动前台租约，请先撤销")
 		}
-		// P1-4：先落 pending，本机确认真实窗口与前台后再由 device-ack 转 active（D-188 / 27 §11.5.5）。
+		// P4-12 并发补口：并发同 request_id 的事务撞 UNIQUE（23505）时，事务已进入
+		// aborted 状态（25P02）——同事务内任何后续语句都被拒，事务内重读/重插不可行。
+		// INSERT 用 ON CONFLICT DO NOTHING：冲突时本事务不报错、不写行；闭包后按
+		// 「谁真正写入了行」分流——赢家提交本事务，输家用池连接重读赢家已提交的行
+		// 幂等返回（与「同编号返回原租约」一致），不把竞态暴露成 500。
 		// after_event_seq 取会话当前最大事件序号，供设备确认后从该游标续传。
-		row := tx.QueryRow(r.Context(), "INSERT INTO agent_computer_grant"+
+		err = tx.QueryRow(r.Context(), "INSERT INTO agent_computer_grant"+
 			" (id, workspace_id, user_id, conversation_id, run_id, target_handle, target_summary, scope, state, device_ack_pending, after_event_seq, request_id, expires_at)"+
 			" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',true,"+
-			"(SELECT COALESCE(MAX(e.event_seq),0) FROM agent_event e WHERE e.conversation_id=$4),$9,$10) RETURNING "+computerGrantColumnsPlain,
+			"(SELECT COALESCE(MAX(e.event_seq),0) FROM agent_event e WHERE e.conversation_id=$4),$9,$10)"+
+			" ON CONFLICT ON CONSTRAINT uq_agent_computer_grant_request DO NOTHING"+
+			" RETURNING "+computerGrantColumnsPlain,
 			grantID, id.WorkspaceID, id.UserID, conversationID, runID,
-			body.TargetHandle, body.TargetSummary, body.Scope, requestID, expires)
-		var scanErr error
-		view, scanErr = scanComputerGrant(row)
-		return scanErr
+			body.TargetHandle, body.TargetSummary, body.Scope, requestID, expires).
+			Scan(&view.ID, &view.ConversationID, &view.RunID, &view.TargetHandle,
+				&view.TargetSummary, &view.Scope, &view.Generation, &view.State,
+				&view.DeviceAckPending, &view.AfterEventSeq,
+				&view.CreatedAt, &view.ExpiresAt)
+		if err == pgx.ErrNoRows {
+			inserted = false
+		} else if err != nil {
+			return err
+		} else {
+			inserted = true
+		}
+		return nil
 	}); err != nil {
 		return err
+	}
+	if !inserted {
+		// 输家：赢家事务可能尚未提交（本事务提交与赢家提交的交错），
+		// 用池连接重读；赢家已提交 → 幂等返回原行；仍未提交 → 短暂重试。
+		var existing computerGrantView
+		for i := 0; i < 20; i++ {
+			err := s.db.QueryRow(r.Context(), "SELECT "+computerGrantColumns+
+				" FROM agent_computer_grant g WHERE g.conversation_id=$1 AND g.request_id=$2",
+				conversationID, requestID).
+				Scan(&existing.ID, &existing.ConversationID, &existing.RunID, &existing.TargetHandle,
+					&existing.TargetSummary, &existing.Scope, &existing.Generation, &existing.State,
+					&existing.DeviceAckPending, &existing.AfterEventSeq,
+					&existing.CreatedAt, &existing.ExpiresAt)
+			if err == nil {
+				writeJSON(w, http.StatusAccepted, grantAcceptedBody(existing))
+				return nil
+			}
+			if err != pgx.ErrNoRows {
+				return err
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return apiErr(409, "computer_foreground_busy", "并发创建冲突，请稍后重试")
 	}
 	writeJSON(w, http.StatusAccepted, grantAcceptedBody(view))
 	return nil
