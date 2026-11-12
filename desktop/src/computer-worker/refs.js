@@ -6,6 +6,7 @@
 const crypto = require('node:crypto');
 
 const { INTERACTIVE_ROLES } = require('./tree');
+const { FullPredicate, countIdentityMatches } = require('./identity');
 
 /** 快照 ID 校验（§4.4）：`^[A-Za-z0-9_-]{3,64}$`。 */
 const SNAPSHOT_ID_RE = /^[A-Za-z0-9_-]{3,64}$/;
@@ -170,8 +171,14 @@ function compactTree(tree) {
 
 /**
  * 递归分配 ref（步骤 6）。
- * ctx: { snapshotId, identity, grantId?, generation?, compact? }
+ * ctx: { snapshotId, identity, grantId?, generation?, compact?, complete? }
  * 返回 RefMap；节点的 ref_id 先写本地 `@eN`，由调用方再 qualify。
+ *
+ * `unique_at_capture` 不在分配时按「兄弟间 AutomationId 是否唯一」判定（P2-2 早期口径），
+ * 而是在整棵树分配完成后、用**同一个身份谓词**全树复算（P2-4 对齐上游 CaptureProof
+ * `proves_node`：完整整窗观察 + 恰好一个节点匹配 + 该节点就是本节点）。原因：无
+ * AutomationId 的元素（如新版记事本编辑区）只能靠 role+stable_name 证明唯一，按兄弟
+ * 判 id 会把它一律标成不唯一，等于永久禁止按 ref 操作。
  */
 function allocateTreeRefs(tree, ctx = {}) {
   const identity = ctx.identity || {};
@@ -181,12 +188,12 @@ function allocateTreeRefs(tree, ctx = {}) {
   const revision = Number(ctx.revision || 0);
   const root = ctx.compact ? compactTree(tree) : tree;
   const windowTitleHash = hash16(root ? root.name : '');
+  // 未显式传 complete 的调用方（夹具/单测）按「读全了」处理；生产路径 readUIA 一定显式传。
+  const captureComplete = (ctx.complete === undefined ? true : ctx.complete === true);
 
-  const walk = (node, path, siblings) => {
+  const walk = (node, path) => {
     if (!node) return;
     const nativeId = String(node.native_id || '');
-    const uniqueAtCapture = nativeId !== ''
-      && siblings.filter((s) => String(s.native_id || '') === nativeId).length === 1;
     if (isRefAble(node.role, node.available_actions)) {
       node.ref_id = map.allocateValidated({
         role: node.role,
@@ -194,7 +201,7 @@ function allocateTreeRefs(tree, ctx = {}) {
         value: node.value,
         description: '',
         native_id: nativeId,
-        unique_at_capture: uniqueAtCapture,
+        unique_at_capture: false, // 分配完成后按身份谓词全树复算
         pid: Number(identity.pid) || 0,
         process_start_time: String(identity.process_start_time || ''),
         process_instance: '',
@@ -224,8 +231,13 @@ function allocateTreeRefs(tree, ctx = {}) {
   walk(root, [], root ? [root] : []);
 
   // root_ref 指本次观察的根节点 ref（根不可分配时为空串，不借用子节点）。
+  // unique_at_capture 用身份谓词全树复算：恰好一个节点匹配、且本次观察完整。
   const rootRef = (root && root.ref_id) || '';
-  for (const entry of map.inner.values()) entry.root_ref = rootRef;
+  for (const entry of map.inner.values()) {
+    entry.root_ref = rootRef;
+    entry.unique_at_capture = captureComplete
+      && countIdentityMatches(root, FullPredicate.ofEntry(entry)) === 1;
+  }
 
   return { map, tree: root, count: map.size };
 }

@@ -45,6 +45,8 @@ class RefStore {
       refmap: entry.refmap || null,
       generation: Number(entry.generation) || 0,
       tree: entry.tree || null,
+      // P2-4：严格再解析要拿当时的窗口身份做比对（§4.9 四要素）
+      identity: entry.identity || null,
       createdAt: Number.isFinite(Number(entry.createdAt)) ? Number(entry.createdAt) : Date.now(),
       seq: this.seq,
     });

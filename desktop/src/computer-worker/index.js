@@ -8,8 +8,10 @@
 // 硬禁区搬到 policy.js，均为原样搬移（协议字节与 PowerShell 脚本内容不变）。
 
 const { isHardForbidden } = require('./policy');
-const { listWindows, readUIA, invokeUIA } = require('./native');
+const { listWindows, readUIA, invokeUIA, resolveAndObserve, invokeByPath } = require('./native');
 const { RefStore } = require('./ref-store');
+const { resolveRefTarget } = require('./refs');
+const { legacyAutomationIdAllowed } = require('./contract');
 
 // DEV-CU P2-3：进程内快照存储。按 grant_id 分桶，不落盘；进程退出即全部失效。
 const refStore = new RefStore();
@@ -25,6 +27,7 @@ function persistSnapshot(res, msg) {
       refmap: res.refmap,
       generation: Number(msg.generation) || 0,
       tree: res.tree,
+      identity: res.window_identity,
     });
   } catch (e) {
     // 存快照失败不阻断本次读取（ref 仍可用于同一批动作），只把原因带回给调用方。
@@ -83,13 +86,59 @@ channel.onMessage((msg) => {
     }
     case 'uia_invoke': {
       // C05/C06：单控件动作（ValuePattern.SetValue 或 InvokePattern.Invoke）。
-      // 单次批准绑定 action hash 由服务端票据管理；worker 只按授权 PID+AutomationId 执行。
+      // 单次批准绑定 action hash 由服务端票据管理；worker 只按授权执行。
       const summary2 = String(msg.target_summary || '');
       if (isHardForbidden(summary2)) { finish({ ok: false, error: 'hard_forbidden' }); return; }
       const pid2 = Number(msg.pid);
-      const autoId = String(msg.automation_id || '');
       const value = msg.value === undefined ? null : String(msg.value);
-      if (!Number.isInteger(pid2) || pid2 <= 0 || !autoId) { finish({ ok: false, error: 'params_invalid' }); return; }
+      if (!Number.isInteger(pid2) || pid2 <= 0) { finish({ ok: false, error: 'pid_invalid' }); return; }
+
+      // P2-4：优先走 ref + 身份谓词的严格再解析（不再用 AutomationId 猜目标）。
+      if (msg.ref) {
+        let target;
+        try {
+          target = resolveRefTarget(String(msg.ref));
+        } catch (e) {
+          finish({ ok: false, error: e.code || 'computer_invalid_args', message: e.message });
+          return;
+        }
+        const grantId = String(msg.grant_id || '');
+        let snapshot;
+        try {
+          snapshot = refStore.load(target.snapshotId, grantId, Number(msg.generation) || 0);
+        } catch (e) {
+          finish({ ok: false, error: e.code || 'computer_stale_ref', message: e.message });
+          return;
+        }
+        const refEntry = snapshot.refmap && snapshot.refmap.get(`@e${target.index}`);
+        if (!refEntry) {
+          finish({ ok: false, error: 'computer_stale_ref', message: '该 ref 不在这个快照里，请重新观察' });
+          return;
+        }
+        // window_identity 来自快照元数据（RefMap 条目里不带它）
+        const entry = { ...refEntry, window_identity: snapshot.identity || {} };
+        resolveAndObserve(pid2, entry, target.snapshotId, String(msg.ref)).then((res) => {
+          if (!res.ok) {
+            finish({ ok: false, error: res.error, message: res.message, detail: res.detail });
+            return;
+          }
+          invokeByPath(pid2, res.path, value).then((act) => finish({
+            ...act,
+            snapshot_id: target.snapshotId,
+            ref: String(msg.ref),
+            resolved_path: res.path,
+          }));
+        });
+        return;
+      }
+
+      // 旧 AutomationId 分支：契约版本内保留一个发布周期（§P2-4 回退判据）。
+      if (!legacyAutomationIdAllowed()) {
+        finish({ ok: false, error: 'computer_invalid_args', message: '本契约版本要求使用 ref 定位目标' });
+        return;
+      }
+      const autoId = String(msg.automation_id || '');
+      if (!autoId) { finish({ ok: false, error: 'params_invalid' }); return; }
       invokeUIA(pid2, autoId, value).then(finish);
       return;
     }
