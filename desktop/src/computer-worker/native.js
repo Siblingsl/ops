@@ -853,7 +853,7 @@ function normalizeStateRecord(raw) {
  * 这里对 actions.js 用**惰性 require**：actions.js 在模块顶层 require 本文件拿 `psQuote`，
  * 顶层互引会拿到半初始化的 exports（psQuote → undefined）。只有调用期才安全。
  */
-async function executeActionChain(pid, path, action, value) {
+async function executeActionChain(pid, path, action, value, wait) {
   const { chainFor, executeChain } = require('./actions');
   const probed = await probePatternFeatures(pid, path);
   if (!probed.ok) {
@@ -872,6 +872,48 @@ async function executeActionChain(pid, path, action, value) {
     const result = await executeChain(rungs, {
       run: (rung) => invokePatternByPath(pid, path, rung.label, action, value),
     });
+    // P3-5：动作投递后可选等待 UI 稳定（§P3-5）。wait 是纯读轮询，不产生任何动作；
+    // 超时/失败按 wait.js 的错误上抛，由 index.js 的统一出口收敛。
+    const { normalizeWaitInput, pollSelector } = require('./wait');
+    const waitPlan = normalizeWaitInput(wait);
+    if (waitPlan) {
+      const waitResult = await pollSelector({
+        selector: waitPlan.selector,
+        timeoutMs: waitPlan.timeout_ms,
+        // 观察范围固定原窗口（§4.9 pinned scope）：observeOnce 只按 pid 读主窗口树，
+        // 不跟随焦点；命中判定用 role 精确 + name 子串。
+        observe: async (parsed) => {
+          const obs = await observeOnce(pid);
+          if (!obs.ok) {
+            const raw = String((obs && obs.error) || '');
+            // native 的诊断文本 → 分类错误码（与 observe.js treeErrorCode 同口径）
+            const code = /^uia_failed/.test(raw) ? 'computer_app_unresponsive'
+              : (/^uia_parse_failed$/.test(raw) ? 'computer_internal' : 'computer_target_changed');
+            // 窗口/进程不在 → gone 终止；其余按临时/非临时处理
+            if (raw.includes('process') || code === 'computer_target_changed') {
+              return { ok: false, gone: true, process_state: 'exited', error_code: code, retryable: false };
+            }
+            return { ok: false, error_code: code, retryable: code === 'computer_app_unresponsive' };
+          }
+          let hit = null;
+          (function walk(n) {
+            if (hit) return;
+            if (String(n.role || '') === parsed.role
+              && (!parsed.has_text || String(n.name || '').indexOf(parsed.has_text) >= 0)) {
+              hit = n;
+              return;
+            }
+            for (const c of n.children || []) walk(c);
+          })(obs.tree);
+          return hit ? { ok: true, node: hit, complete: obs.complete === true } : { ok: true, complete: obs.complete === true };
+        },
+        diagnose: async () => {
+          const obs = await observeOnce(pid);
+          return obs.ok ? { nodes: obs.nodes_observed, complete: obs.complete === true } : { error: String(obs.error || 'diagnose_failed') };
+        },
+      });
+      return { ...result, action, features: probed.features, wait: waitResult };
+    }
     return { ...result, action, features: probed.features };
   } catch (e) {
     return {

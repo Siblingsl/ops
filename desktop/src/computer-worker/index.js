@@ -193,11 +193,13 @@ channel.onMessage((msg) => {
           // 读回不符 → computer_action_failed + delivered_unverified（retry 恒 unsafe）。
           // 注：链执行器把失败包成返回值，读回流程需要异常才能识别 not_delivered，
           // 故用 throwIfFailed 做一次形状转换（不改错误码 / 不改 detail）。
+          // P3-5：msg.wait 可选（selector 或 {selector, timeout_ms}），动作投递后
+          // 由 native.executeActionChain 轮询等待 UI 稳定；wait 侧错误码原样收敛。
           executeWithReadback({
             action,
             expectedValue: text,
             selection: msg.selection,
-            execute: (effective) => executeActionChain(pid2, res.path, effective, text).then(throwIfFailed),
+            execute: (effective) => executeActionChain(pid2, res.path, effective, text, msg.wait).then(throwIfFailed),
             read: () => readStateByPath(pid2, res.path).then(toObserved),
           }).then((done) => emit({
             ok: true,
@@ -215,6 +217,8 @@ channel.onMessage((msg) => {
             satisfied_without_delivery: Boolean(done.executed && done.executed.satisfied_without_delivery),
             steps: (done.executed && done.executed.steps) || [],
             features: done.executed && done.executed.features,
+            // P3-5：等待结果（{ok, matched, attempts, evidence} 或 gone 证据）；没传 wait 时不出字段。
+            ...(done.executed && done.executed.wait !== undefined ? { wait: done.executed.wait } : {}),
           }), (error) => {
             emit({
               ok: false,
