@@ -16,6 +16,7 @@ const {
 } = require('./actions');
 const { observe } = require('./observe');
 const { executeWithReadback, toObserved, throwIfFailed } = require('./post-action');
+const { DELIVERY, dispositionOf, wireFailure } = require('./response');
 const { createCaptureService, OPEN_ENDED_KEYS } = require('./capture');
 
 // DEV-CU P2-3：进程内快照存储。按 grant_id 分桶，不落盘；进程退出即全部失效。
@@ -63,6 +64,9 @@ const channel = (() => {
 
 let busy = false;
 
+// P3-4：只读命令表（settleUnknownDelivery 用）。worker 侧只列 worker 自己实现的命令。
+const WORKER_READONLY = Object.freeze(['ping', 'list_windows', 'uia_read', 'uia_observe', 'ref_store_stats', 'capture_stats', 'capture_evidence']);
+
 channel.onMessage((msg) => {
   if (busy) {
     channel.reply({ id: msg && msg.id, ok: false, error: 'worker_busy' });
@@ -73,6 +77,21 @@ channel.onMessage((msg) => {
     busy = false;
     channel.reply({ id: msg && msg.id, ...result });
   };
+  // P3-4 统一出口：成功保留 ok:true 并追加 disposition；失败走 wireFailure（error 保持字符串旧码）。
+  const emit = (result) => {
+    const r = result || {};
+    if (r.ok === true) {
+      // 已带 disposition 的原样透传；否则按「只读命令 not_delivered / 写命令 delivered_unverified」补齐。
+      finish({
+        ...r,
+        disposition: r.disposition || (WORKER_READONLY.indexOf(String(msg && msg.cmd)) >= 0
+          ? dispositionOf(DELIVERY.NOT_DELIVERED)
+          : dispositionOf(DELIVERY.UNVERIFIED)),
+      });
+      return;
+    }
+    finish(wireFailure(r));
+  };
   if (!msg || typeof msg !== 'object' || typeof msg.id !== 'string') {
     finish({ ok: false, error: 'invalid_message' });
     return;
@@ -80,26 +99,26 @@ channel.onMessage((msg) => {
   switch (msg.cmd) {
     case 'list_windows':
       // 不上传全部清单到服务端（C09）：枚举在本机完成，OPS 只拿到用户选中项。
-      listWindows().then(finish);
+      listWindows().then(emit);
       return;
     case 'uia_read': {
       // C01/C03：读取目标进程主窗口的 UIA 控件树（ControlType/Name/Value，限 200 项）。
       // 硬禁区在服务端已拒（agent_computer.go），此处再校验一次（纵深防御，27 §11.5.2）。
       const summary = String(msg.target_summary || '');
-      if (isHardForbidden(summary)) { finish({ ok: false, error: 'hard_forbidden' }); return; }
+      if (isHardForbidden(summary)) { emit({ ok: false, error: 'hard_forbidden' }); return; }
       const pid = Number(msg.pid);
-      if (!Number.isInteger(pid) || pid <= 0) { finish({ ok: false, error: 'pid_invalid' }); return; }
-      readUIA(pid).then((res) => { persistSnapshot(res, msg); finish(res); });
+      if (!Number.isInteger(pid) || pid <= 0) { emit({ ok: false, error: 'pid_invalid' }); return; }
+      readUIA(pid).then((res) => { persistSnapshot(res, msg); emit(res); });
       return;
     }
     case 'uia_invoke': {
       // C05/C06：单控件动作（P3-1 起走 §4.7 的 14 项动作枚举）。
       // 单次批准绑定 action hash 由服务端票据管理；worker 只按授权执行。
       const summary2 = String(msg.target_summary || '');
-      if (isHardForbidden(summary2)) { finish({ ok: false, error: 'hard_forbidden' }); return; }
+      if (isHardForbidden(summary2)) { emit({ ok: false, error: 'hard_forbidden' }); return; }
       const pid2 = Number(msg.pid);
       const value = msg.value === undefined ? null : String(msg.value);
-      if (!Number.isInteger(pid2) || pid2 <= 0) { finish({ ok: false, error: 'pid_invalid' }); return; }
+      if (!Number.isInteger(pid2) || pid2 <= 0) { emit({ ok: false, error: 'pid_invalid' }); return; }
 
       // P3-1：动作必须在 WORKER_ACTIONS 内。旧调用不带 action 时按 value 推断
       // （value 非 null → set_value，否则 click），保持既有 IPC 语义不变。
@@ -107,7 +126,7 @@ channel.onMessage((msg) => {
       try {
         action = inferAction(msg.action, value);
       } catch (e) {
-        finish({ ok: false, error: e.code || 'computer_action_not_supported', message: e.message });
+        emit({ ok: false, error: e.code || 'computer_action_not_supported', message: e.message });
         return;
       }
 
@@ -117,7 +136,7 @@ channel.onMessage((msg) => {
         // 否则调用方会以为 automation_id / hwnd / 坐标生效了。
         for (const key of ['automation_id', 'hwnd', 'x', 'y', 'script', 'coordinates', 'rect']) {
           if (Object.prototype.hasOwnProperty.call(msg, key)) {
-            finish({
+            emit({
               ok: false,
               error: 'computer_invalid_args',
               message: `ref 路径不接受外部传入的 ${key}`,
@@ -129,7 +148,7 @@ channel.onMessage((msg) => {
         try {
           target = resolveRefTarget(String(msg.ref));
         } catch (e) {
-          finish({ ok: false, error: e.code || 'computer_invalid_args', message: e.message });
+          emit({ ok: false, error: e.code || 'computer_invalid_args', message: e.message });
           return;
         }
         const grantId = String(msg.grant_id || '');
@@ -138,12 +157,12 @@ channel.onMessage((msg) => {
         try {
           snapshot = refStore.load(target.snapshotId, grantId, generation);
         } catch (e) {
-          finish({ ok: false, error: e.code || 'computer_stale_ref', message: e.message });
+          emit({ ok: false, error: e.code || 'computer_stale_ref', message: e.message });
           return;
         }
         const refEntry = snapshot.refmap && snapshot.refmap.get(`@e${target.index}`);
         if (!refEntry) {
-          finish({ ok: false, error: 'computer_stale_ref', message: '该 ref 不在这个快照里，请重新观察' });
+          emit({ ok: false, error: 'computer_stale_ref', message: '该 ref 不在这个快照里，请重新观察' });
           return;
         }
         // 目标只能是本 grant / generation 的快照里的 ref；外部 automation_id / hwnd /
@@ -157,14 +176,14 @@ channel.onMessage((msg) => {
             { snapshot_id: target.snapshotId, grant_id: grantId, generation },
           );
         } catch (e) {
-          finish({ ok: false, error: e.code || 'computer_invalid_args', message: e.message });
+          emit({ ok: false, error: e.code || 'computer_invalid_args', message: e.message });
           return;
         }
         // window_identity 来自快照元数据（RefMap 条目里不带它）
         const entry = { ...refEntry, window_identity: snapshot.identity || {} };
         resolveAndObserve(pid2, entry, target.snapshotId, String(msg.ref)).then((res) => {
           if (!res.ok) {
-            finish({ ok: false, error: res.error, message: res.message, detail: res.detail });
+            emit({ ok: false, error: res.error, message: res.message, detail: res.detail });
             return;
           }
           // P3-2：走语义动作链（探能力 → 剪枝 → 逐 rung 执行），不再固定单 pattern。
@@ -180,7 +199,7 @@ channel.onMessage((msg) => {
             selection: msg.selection,
             execute: (effective) => executeActionChain(pid2, res.path, effective, text).then(throwIfFailed),
             read: () => readStateByPath(pid2, res.path).then(toObserved),
-          }).then((done) => finish({
+          }).then((done) => emit({
             ok: true,
             action: plan.action,
             command: plan.command,
@@ -188,7 +207,7 @@ channel.onMessage((msg) => {
             ref: String(msg.ref),
             resolved_path: res.path,
             // §4.3：读回已验证 / 证据不足都只能算 unsafe（成功但不可安全重放）。
-            disposition: { delivery: done.delivery, retry: 'unsafe' },
+            disposition: dispositionOf(done.delivery),
             verification_scope: done.verification_scope,
             verification_reason: done.verification_reason,
             post_state: done.post_state,
@@ -197,15 +216,11 @@ channel.onMessage((msg) => {
             steps: (done.executed && done.executed.steps) || [],
             features: done.executed && done.executed.features,
           }), (error) => {
-            const detail = (error && error.detail) || {};
-            finish({
+            emit({
               ok: false,
               error: (error && error.code) || 'computer_action_failed',
               message: (error && error.message) || String(error),
-              detail: {
-                ...detail,
-                disposition: detail.disposition || { delivery: 'delivery_uncertain', retry: 'unsafe' },
-              },
+              detail: error && error.detail,
             });
           });
         });
@@ -214,12 +229,12 @@ channel.onMessage((msg) => {
 
       // 旧 AutomationId 分支：契约版本内保留一个发布周期（§P2-4 回退判据）。
       if (!legacyTargetAllowed()) {
-        finish({ ok: false, error: 'computer_invalid_args', message: '本契约版本要求使用 ref 定位目标' });
+        emit({ ok: false, error: 'computer_invalid_args', message: '本契约版本要求使用 ref 定位目标' });
         return;
       }
       // 旧分支只实现了 Invoke / SetValue 两种 pattern，其余动作不在这条链上。
       if (action !== 'click' && action !== 'set_value') {
-        finish({
+        emit({
           ok: false,
           error: 'computer_action_not_supported',
           message: `旧 automation_id 分支只支持 click / set_value，收到 ${action}`,
@@ -227,20 +242,20 @@ channel.onMessage((msg) => {
         return;
       }
       const autoId = String(msg.automation_id || '');
-      if (!autoId) { finish({ ok: false, error: 'params_invalid' }); return; }
+      if (!autoId) { emit({ ok: false, error: 'params_invalid' }); return; }
       let legacyArgs;
       try {
         legacyArgs = normalizeArgs(action, { value });
       } catch (e) {
-        finish({ ok: false, error: e.code || 'computer_invalid_args', message: e.message });
+        emit({ ok: false, error: e.code || 'computer_invalid_args', message: e.message });
         return;
       }
       invokeUIA(pid2, autoId, legacyArgs.value === undefined ? null : legacyArgs.value)
-        .then((act) => finish({ ...act, action }));
+        .then((act) => emit({ ...act, action }));
       return;
     }
     case 'ping':
-      finish({ ok: true, pong: true });
+      emit({ ok: true, pong: true });
       return;
     case 'uia_observe': {
       // DEV-CU P2-7：把 P2-1～P2-6 串成一条可直接被 IPC 调用的观察命令。
@@ -248,36 +263,36 @@ channel.onMessage((msg) => {
       // → 分配 ref → 存 RefStore → qualifyTreeRefs → 输出。这里只做通道适配与存取。
       observe(msg, { refStore }).then((res) => {
         if (res && res.ok === true) persistSnapshot(res, msg);
-        finish(res);
+        emit(res);
       });
       return;
     }
     case 'uia_invalidate': {
       // P2-3：租约撤销 / handoff / 锁屏时由主进程调用，清空该 grant 的全部快照。
       const gid = String(msg.grant_id || '');
-      if (!gid) { finish({ ok: false, error: 'params_invalid' }); return; }
+      if (!gid) { emit({ ok: false, error: 'params_invalid' }); return; }
       const cleared = refStore.invalidate(gid);
-      finish({ ok: true, cleared });
+      emit({ ok: true, cleared });
       return;
     }
     case 'ref_store_stats':
       // 只回计数，不回任何窗口/控件内容（C09）。
-      finish({ ok: true, ...refStore.stats() });
+      emit({ ok: true, ...refStore.stats() });
       return;
     case 'capture_window': {
       // CF-DESK-04（A-03 前置）：窗口级截图。硬禁区与服务端一样做本机二次校验；
       // 返回只含选中目标的必要摘要，原文留在本进程（27 §11.5.2 / C09）。
       const captureSummary = String(msg.target_summary || '');
-      if (isHardForbidden(captureSummary)) { finish({ ok: false, error: 'hard_forbidden' }); return; }
+      if (isHardForbidden(captureSummary)) { emit({ ok: false, error: 'hard_forbidden' }); return; }
       captureService.capture(msg)
-        .then(finish, () => finish({ ok: false, error: 'capture_failed' }));
+        .then(emit, () => emit({ ok: false, error: 'capture_failed' }));
       return;
     }
     case 'capture_invalidate': {
       // 失权 / handoff / 锁屏：清空该 grant 下全部截图，拒绝历史越权读取（C09）。
       const captureGrant = String(msg.grant_id || '');
-      if (!captureGrant) { finish({ ok: false, error: 'params_invalid' }); return; }
-      finish({ ok: true, cleared: captureService.invalidate(captureGrant) });
+      if (!captureGrant) { emit({ ok: false, error: 'params_invalid' }); return; }
+      emit({ ok: true, cleared: captureService.invalidate(captureGrant) });
       return;
     }
     case 'capture_evidence': {
@@ -285,18 +300,18 @@ channel.onMessage((msg) => {
       // 凭同一 grant 读取；**不**提供 capture_read / capture_bytes 类原文出口。
       const captureId = String(msg.capture_id || '');
       const evidenceGrant = String(msg.grant_id || '');
-      if (!captureId || !evidenceGrant) { finish({ ok: false, error: 'params_invalid' }); return; }
+      if (!captureId || !evidenceGrant) { emit({ ok: false, error: 'params_invalid' }); return; }
       if (OPEN_ENDED_KEYS.some((k) => Object.prototype.hasOwnProperty.call(msg, k))) {
-        finish({ ok: false, error: 'params_invalid' }); return;
+        emit({ ok: false, error: 'params_invalid' }); return;
       }
-      finish(captureService.evidence(captureId, evidenceGrant));
+      emit(captureService.evidence(captureId, evidenceGrant));
       return;
     }
     case 'capture_stats':
       // 只回计数，不回任何截图原文 / 窗口标题 / 其它窗口清单。
-      finish({ ok: true, ...captureService.stats() });
+      emit({ ok: true, ...captureService.stats() });
       return;
     default:
-      finish({ ok: false, error: 'unknown_cmd' });
+      emit({ ok: false, error: 'unknown_cmd' });
   }
 });

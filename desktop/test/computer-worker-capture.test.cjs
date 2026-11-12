@@ -236,8 +236,11 @@ function withWorker(t) {
 test('CF-DESK-04 worker 协议：硬禁区 / 非法参数 / 缺授权在 backend 前即拒绝', { timeout: 40_000 }, async (t) => {
   const w = withWorker(t);
   const base = req();
-  assert.deepEqual(await w.call('capture_window', { ...base, target_summary: '凭据管理器' }),
-    { id: 'c1', ok: false, error: 'hard_forbidden' });
+  // P3-4 起失败回执统一带 detail.disposition（§P3-4 步骤 4/5）与 message；error 仍为字符串旧码。
+  assert.deepEqual(await w.call('capture_window', { ...base, target_summary: '凭据管理器' }), {
+    id: 'c1', ok: false, error: 'hard_forbidden', message: '',
+    detail: { disposition: { delivery: 'not_delivered', retry: 'safe' } },
+  });
   assert.equal((await w.call('capture_window', { ...base, hwnd: 12345 })).error, 'params_invalid',
     'worker 不得接受任意窗口句柄');
   assert.equal((await w.call('capture_window', { ...base, grant_id: '' })).error, 'grant_invalid');
