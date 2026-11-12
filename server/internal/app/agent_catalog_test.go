@@ -268,6 +268,8 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/computer/commands/{id}/dispatch",
 		// DEV-CU P4-6：桌面执行器回执。
 		"POST /api/v1/agent/computer/commands/{id}/receipt",
+		// DEV-CU P4-4/P4-7：显式信封建命令（桌面/渲染器直调）。
+		"POST /api/v1/agent/computer/commands",
 		// A12：模型请求用户在本机选窗（选定后即时建 30s 租约）。
 		"POST /api/v1/tools/computer/target-requests",
 		// A30：模型请求用户在浏览器选标签（选定后即时建 30s 租约）。

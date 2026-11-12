@@ -153,10 +153,10 @@ func validateComputerAction(kind string, payload map[string]any) error {
 	return nil
 }
 
-// runComputerCommand 是 run 内模型调用入口（/tools/computer/commands）。
+// createComputerCommand 是显式信封入口（POST /agent/computer/commands，桌面/渲染器直调）。
 // P4-3 只做入参校验；P4-4 补齐创建语义：computerGuard → 特性开关 → UUID/枚举校验
 // → 确认闸门 → 预算检查 → 事务内（租约 CAS + 硬禁区 + 幂等）→ queued INSERT → 事件。
-func (s *Server) runComputerCommand(w http.ResponseWriter, r *http.Request) error {
+func (s *Server) createComputerCommand(w http.ResponseWriter, r *http.Request) error {
 	id := ident(r.Context())
 	if err := s.computerGuard(id); err != nil {
 		return err
@@ -290,6 +290,153 @@ func (s *Server) runComputerCommand(w http.ResponseWriter, r *http.Request) erro
 		"generation":  body.ExpectedGeneration,
 	})
 	return s.renderComputerCommand(r.Context(), w, commandID)
+}
+
+// runComputerCommand 是 run 内模型调用入口（POST /tools/computer/commands，§4.11）。
+// 与 createComputerCommand 并存：模型参数平铺（ref/text），action 由工具目录 Fixed 注入；
+// grant/run 全部服务端自查——模型不持租约句柄、不可指定归属。
+// 步骤：principal 校验 → 特性开关 → 枚举/白名单键 → 查当前 run 的活动租约（无 → 409 先选窗）
+// → **写类只提交预览（不建命令，命令表零新增）** → 读类自生成 request_id/deadline INSERT queued
+// → emit → waitForComputerCommand 同步等待。
+func (s *Server) runComputerCommand(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.computerGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "computer_use"); err != nil {
+		return err
+	}
+	principal := agentPrincipalOf(r.Context())
+	if principal == nil || principal.RunID == uuid.Nil || principal.ConversationID == uuid.Nil {
+		return apiErr(422, "computer_invalid_args", "该接口只能由会话任务内的工具调用发起")
+	}
+	var body struct {
+		Action  string         `json:"action"`
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&body); err != nil {
+		return apiErr(400, "bad_request", "请求体无法解析")
+	}
+	if err := validateComputerAction(body.Action, body.Payload); err != nil {
+		return err
+	}
+	// 步骤 1：当前 run 的活动租约（含 scope=act 与否不限——观察类只需 observe scope）。
+	var grantID uuid.UUID
+	var generation int64
+	var targetSummary string
+	err := s.db.QueryRow(r.Context(), `
+		SELECT id, generation, target_summary FROM agent_computer_grant
+		WHERE conversation_id=$1 AND workspace_id=$2 AND user_id=$3 AND run_id=$4
+		  AND state='active' AND (expires_at IS NULL OR expires_at > now())
+		ORDER BY created_at DESC LIMIT 1`,
+		principal.ConversationID, id.WorkspaceID, id.UserID, principal.RunID).
+		Scan(&grantID, &generation, &targetSummary)
+	if err == pgx.ErrNoRows {
+		return apiErr(409, "computer_foreground_busy", "当前任务没有活动的前台租约；请先调用 computer_request_target 请用户选择窗口")
+	}
+	if err != nil {
+		return err
+	}
+	if computerIsHardForbidden(targetSummary) {
+		return apiErr(403, "computer_policy_denied", "目标命中硬禁区，永远拒绝")
+	}
+	// 步骤 2：写类只提交预览——不建命令（命令表零新增），由 D-117 卡片确认后走显式入口。
+	if body.Action == "invoke" || body.Action == "type" {
+		payloadJSON, _ := json.Marshal(body.Payload)
+		return ok(w, map[string]any{
+			"state":                 "awaiting_confirmation",
+			"action_kind":           body.Action,
+			"grant_id":              grantID.String(),
+			"generation":            generation,
+			"payload":               json.RawMessage(payloadJSON),
+			"requires_confirmation": true,
+			"note":                  "写类动作需要用户逐张确认卡片后执行（D-117）",
+		})
+	}
+	// 步骤 3：读类登记 queued 并同步等待。
+	payloadJSON, _ := json.Marshal(body.Payload)
+	inputHash := computerInputHash(body.Action, payloadJSON)
+	deadline := s.now().Add(computerCommandDeadline)
+	requestID := uuid.New()
+	commandID := uuid.New()
+	if _, err := s.db.Exec(r.Context(), `
+		INSERT INTO agent_computer_command
+		(id, grant_id, workspace_id, user_id, conversation_id, run_id, request_id,
+		 action_kind, target_ref, payload, input_hash, state, requires_confirmation, generation, deadline_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'queued',false,$12,$13)`,
+		commandID, grantID, id.WorkspaceID, id.UserID, principal.ConversationID, principal.RunID, requestID,
+		body.Action, payloadRef(body.Payload), payloadJSON, inputHash, generation, deadline); err != nil {
+		return err
+	}
+	s.emitComputerCommandEvent(r.Context(), principal.ConversationID, "computer.command_requested", map[string]any{
+		"command_id":  commandID.String(),
+		"action_kind": body.Action,
+		"state":       "queued",
+		"grant_id":    grantID.String(),
+		"generation":  generation,
+	})
+	return s.waitForComputerCommand(r, w, commandID)
+}
+
+// waitForComputerCommand：200ms 轮询等待终态（§P4-7 步骤 4~6）。
+// 超命令 deadline+2s：queued → 直接 unknown_outcome+computer_wait_timeout；dispatched → 触发一次 sweep。
+// 35s 预算耗尽 → 如实返回非终态视图，不假装成功；ctx 取消 → 499 computer_wait_cancelled。
+func (s *Server) waitForComputerCommand(r *http.Request, w http.ResponseWriter, commandID uuid.UUID) error {
+	deadline := s.now().Add(computerCommandWaitBudget)
+	for {
+		if r.Context().Err() != nil {
+			// run 取消/断开：命令留在账本（queued/dispatched），sweep 兜底转 unknown_outcome。
+			return apiErr(499, "computer_wait_cancelled", "任务已取消，停止等待命令回执")
+		}
+		var state string
+		var result json.RawMessage
+		var errorCode string
+		var cmdDeadline time.Time
+		err := s.db.QueryRow(r.Context(), `
+			SELECT state, COALESCE(result, 'null'::jsonb), COALESCE(error_code,''), COALESCE(deadline_at, now())
+			FROM agent_computer_command WHERE id=$1`, commandID).
+			Scan(&state, &result, &errorCode, &cmdDeadline)
+		if err != nil {
+			return err
+		}
+		if state == "succeeded" || state == "failed" || state == "unknown_outcome" {
+			v, err := scanComputerCommand(s.db.QueryRow(r.Context(),
+				"SELECT "+computerCommandColumns+" FROM agent_computer_command c WHERE c.id=$1", commandID))
+			if err != nil {
+				return err
+			}
+			if len(result) > 0 && string(result) != "null" {
+				v.Result = result
+			}
+			return ok(w, v)
+		}
+		// 超命令 deadline + sweep 容差（§P4-7 步骤 5）。
+		if s.now().After(cmdDeadline.Add(computerCommandSweepGrace)) {
+			if state == "queued" {
+				if _, err := s.db.Exec(r.Context(), `
+					UPDATE agent_computer_command SET state='unknown_outcome', error_code='computer_wait_timeout'
+					WHERE id=$1 AND state='queued'`, commandID); err != nil {
+					return err
+				}
+				continue
+			}
+			s.sweepComputerCommands(r.Context())
+		}
+		if s.now().After(deadline) {
+			// 35s 预算耗尽：如实返回当前非终态（queued=无人领取；dispatched=执行未回执）。
+			v, err := scanComputerCommand(s.db.QueryRow(r.Context(),
+				"SELECT "+computerCommandColumns+" FROM agent_computer_command c WHERE c.id=$1", commandID))
+			if err != nil {
+				return err
+			}
+			return ok(w, v)
+		}
+		select {
+		case <-r.Context().Done():
+			return apiErr(499, "computer_wait_cancelled", "任务已取消，停止等待命令回执")
+		case <-time.After(computerCommandWaitPoll):
+		}
+	}
 }
 
 // computerCommandBudgetPerWindow：§4.10 预算（60 动作 / 10 分钟，docs/27:1081）。
@@ -580,4 +727,17 @@ func (s *Server) sweepComputerCommands(ctx context.Context) {
 	if tag.RowsAffected() > 0 {
 		slog.Info("电脑命令超时转 unknown_outcome", "count", tag.RowsAffected())
 	}
+}
+
+// computerCommandModelProject 是 run 内命令响应的模型投影：
+// 剥离 grant_id / card_id / approval_hash / request_id——模型不持租约句柄与审批凭据（C02）。
+func computerCommandModelProject(_ int, body []byte) any {
+	var v map[string]any
+	if err := json.Unmarshal(body, &v); err != nil {
+		return json.RawMessage(body)
+	}
+	for _, key := range []string{"grant_id", "card_id", "approval_hash", "request_id"} {
+		delete(v, key)
+	}
+	return v
 }

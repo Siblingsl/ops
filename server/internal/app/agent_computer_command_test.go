@@ -9,7 +9,7 @@ import (
 )
 
 // DEV-CU P4-4（docs/36 §P4-4）：创建命令的幂等 / 冲突 / 确认闸门 / 预算 / generation CAS。
-// 全部走真实 HTTP（agentGate 内 /tools/computer/commands），租约复用 W17 的
+// 全部走真实 HTTP（agentGate 内 /agent/computer/commands 显式信封），租约复用 W17 的
 // 建租约 + 设备确认 helper。写类确认闸门按 fail-closed 口径（卡片机制未接线）。
 
 func cu44Setup(t *testing.T) (conv agentConversation, grant computerGrantView) {
@@ -30,7 +30,7 @@ func cu44Setup(t *testing.T) (conv agentConversation, grant computerGrantView) {
 func cu44Create(t *testing.T, body map[string]any, wantStatus int) map[string]any {
 	t.Helper()
 	out := map[string]any{}
-	env.mustJSONStatus(t, "POST", "/api/v1/tools/computer/commands", body, &out, wantStatus)
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands", body, &out, wantStatus)
 	return out
 }
 
@@ -39,6 +39,20 @@ func cu44Body(grant computerGrantView, conv agentConversation, action string, pa
 		"grant_id": grant.ID, "run_id": uuid.NewString(), "request_id": uuid.NewString(),
 		"expected_generation": grant.Generation, "action": action, "payload": payload,
 	}
+}
+
+// w17CreatePendingWithRun 建租约（绑定 run_id）+ 202，供 run 内命令测试用。
+func w17CreatePendingWithRun(t *testing.T, conv agentConversation, targetHandle, targetSummary, scope, requestID, runID string) w17Accepted {
+	t.Helper()
+	var accepted w17Accepted
+	env.mustJSONStatus(t, "POST", w17CreateGrantPath(conv), map[string]any{
+		"target_handle": targetHandle, "target_summary": targetSummary,
+		"scope": scope, "request_id": requestID, "run_id": runID,
+	}, &accepted, http.StatusAccepted)
+	if accepted.State != "pending" || accepted.GrantID == "" {
+		t.Fatalf("建租约应 202 pending：%+v", accepted)
+	}
+	return accepted
 }
 
 // ① 幂等：同 (grant, request_id) 同载荷 → 返回原命令（同 id）；异载荷 → 409。
@@ -65,7 +79,7 @@ func TestComputerCommandIdempotent(t *testing.T) {
 		"action": "observe", "payload": map[string]any{"ref": "@sabc123:e2"},
 	}
 	out := map[string]any{}
-	env.mustJSONStatus(t, "POST", "/api/v1/tools/computer/commands", conflict, &out, http.StatusConflict)
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands", conflict, &out, http.StatusConflict)
 }
 
 // ② request_id 冲突：同 grant 同 request 异 input_hash → 409（已并入①，这里锁错误码语义）。
@@ -82,9 +96,9 @@ func TestComputerCommandRequestConflict(t *testing.T) {
 	b["action"], b["payload"] = "type", map[string]any{"ref": "@sabc123:e1", "text": "y"}
 	// 两条写类都先撞确认闸门（409），不落到幂等层——写类的 409 先于账本。
 	outA := map[string]any{}
-	env.mustJSONStatus(t, "POST", "/api/v1/tools/computer/commands", a, &outA, http.StatusConflict)
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands", a, &outA, http.StatusConflict)
 	outB := map[string]any{}
-	env.mustJSONStatus(t, "POST", "/api/v1/tools/computer/commands", b, &outB, http.StatusConflict)
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands", b, &outB, http.StatusConflict)
 }
 
 // ③ 确认闸门：写类缺 card_id/approval_hash → 409；带假 hash（fail-closed）→ 409。
@@ -94,13 +108,13 @@ func TestComputerCommandRequiresCard(t *testing.T) {
 	// 缺卡
 	noCard := cu44Body(grant, conv, "invoke", map[string]any{"ref": "@sabc123:e1"})
 	out := map[string]any{}
-	env.mustJSONStatus(t, "POST", "/api/v1/tools/computer/commands", noCard, &out, http.StatusConflict)
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands", noCard, &out, http.StatusConflict)
 	// 带假卡（fail-closed：卡片机制未接线，一律未确认）
 	fake := cu44Body(grant, conv, "type", map[string]any{"ref": "@sabc123:e1", "text": "hi"})
 	fake["card_id"] = uuid.NewString()
 	fake["approval_hash"] = "deadbeef"
 	out2 := map[string]any{}
-	env.mustJSONStatus(t, "POST", "/api/v1/tools/computer/commands", fake, &out2, http.StatusConflict)
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands", fake, &out2, http.StatusConflict)
 	// 读类不需要卡：observe 正常 queued
 	read := cu44Body(grant, conv, "observe", map[string]any{"ref": "@sabc123:e1"})
 	out3 := cu44Create(t, read, http.StatusOK)
@@ -122,7 +136,7 @@ func TestComputerCommandBudget(t *testing.T) {
 	out := map[string]any{}
 	over := cu44Body(grant, conv, "observe", map[string]any{})
 	over["run_id"] = runID
-	env.mustJSONStatus(t, "POST", "/api/v1/tools/computer/commands", over, &out, http.StatusTooManyRequests)
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands", over, &out, http.StatusTooManyRequests)
 }
 
 // ⑤ generation CAS：expected_generation 不匹配 → 409。
@@ -132,7 +146,7 @@ func TestComputerCommandGenerationCAS(t *testing.T) {
 	body := cu44Body(grant, conv, "observe", map[string]any{})
 	body["expected_generation"] = grant.Generation + 1
 	out := map[string]any{}
-	env.mustJSONStatus(t, "POST", "/api/v1/tools/computer/commands", body, &out, http.StatusConflict)
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands", body, &out, http.StatusConflict)
 }
 
 // cloneJSONBody 浅拷贝 map（测试内派生请求体用）。

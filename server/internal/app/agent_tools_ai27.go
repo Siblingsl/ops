@@ -165,7 +165,9 @@ func ai27ComputerTools() []AgentTool {
 			Params: []ToolParam{
 				pBody("ref", `{"type":"string","maxLength":64}`, false, "U"),
 			},
-			Fixed:   map[string]any{"action_kind": "observe"},
+			Fixed: map[string]any{"action": "observe"},
+			// P4-7：run 内响应剥离归属字段——模型不持租约句柄与审批凭据（C02）。
+			Project: computerCommandModelProject,
 			MinRole: roleEditor,
 		},
 		{
@@ -174,7 +176,9 @@ func ai27ComputerTools() []AgentTool {
 			Params: []ToolParam{
 				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
 			},
-			Fixed:   map[string]any{"action_kind": "focus"},
+			Fixed: map[string]any{"action": "focus"},
+			// P4-7：run 内响应剥离归属字段——模型不持租约句柄与审批凭据（C02）。
+			Project: computerCommandModelProject,
 			MinRole: roleEditor,
 		},
 		{
@@ -183,7 +187,9 @@ func ai27ComputerTools() []AgentTool {
 			Params: []ToolParam{
 				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
 			},
-			Fixed:   map[string]any{"action_kind": "scroll"},
+			Fixed: map[string]any{"action": "scroll"},
+			// P4-7：run 内响应剥离归属字段——模型不持租约句柄与审批凭据（C02）。
+			Project: computerCommandModelProject,
 			MinRole: roleEditor,
 		},
 		{
@@ -192,7 +198,9 @@ func ai27ComputerTools() []AgentTool {
 			Params: []ToolParam{
 				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
 			},
-			Fixed:   map[string]any{"action_kind": "select"},
+			Fixed: map[string]any{"action": "select"},
+			// P4-7：run 内响应剥离归属字段——模型不持租约句柄与审批凭据（C02）。
+			Project: computerCommandModelProject,
 			MinRole: roleEditor,
 		},
 		{
@@ -201,7 +209,9 @@ func ai27ComputerTools() []AgentTool {
 			Params: []ToolParam{
 				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
 			},
-			Fixed:   map[string]any{"action_kind": "invoke"},
+			Fixed: map[string]any{"action": "invoke"},
+			// P4-7：run 内响应剥离归属字段——模型不持租约句柄与审批凭据（C02）。
+			Project: computerCommandModelProject,
 			MinRole: roleEditor,
 		},
 		{
@@ -211,7 +221,9 @@ func ai27ComputerTools() []AgentTool {
 				pBody("ref", `{"type":"string","maxLength":64}`, true, "U"),
 				pBody("text", `{"type":"string","maxLength":32768}`, true, "U"),
 			},
-			Fixed:   map[string]any{"action_kind": "type"},
+			Fixed: map[string]any{"action": "type"},
+			// P4-7：run 内响应剥离归属字段——模型不持租约句柄与审批凭据（C02）。
+			Project: computerCommandModelProject,
 			MinRole: roleEditor,
 		},
 	}
