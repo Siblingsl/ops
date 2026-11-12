@@ -21,7 +21,7 @@ function withWorker(t) {
   });
   t.after(() => child.kill());
   return {
-    call(cmd, timeoutMs = 20_000) {
+    call(cmd, timeoutMs = 20_000, extra = {}) {
       const id = `t${nextID++}`;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -29,7 +29,7 @@ function withWorker(t) {
           reject(new Error('worker_timeout'));
         }, timeoutMs);
         pending.set(id, { resolve, reject: (e) => reject(new Error(e)) , timer });
-        child.send({ id, cmd });
+        child.send({ id, cmd, ...extra });
       });
     },
   };
@@ -95,64 +95,65 @@ function psScript(script, timeoutMs = 20_000) {
 
 test('W17c UIA: 真实记事本读控件树 + SetValue 输入 + 读回验证（C01/C03/C05 子集）', { timeout: 60_000 }, async (t) => {
   if (process.platform !== 'win32') { t.skip('需要 Windows'); return; }
-  // 注意：node:test 的 t.skip() 只标记结果，**不会中断函数执行**。
-  // 这里曾经少了 return，导致每次跑 pnpm test 都会真的 spawn 一个记事本窗口
-  // （而且因为结果被标记为 skip，报错也被吞掉，没人发现）。
-  // GUI 旅程在 agent 会话（Session 0 隔离）里跑不了，改为显式开关：
-  //   OPS_UIA_MANUAL=1 pnpm test   —— 需在用户桌面会话执行
-  //   或直接跑 desktop/scripts/uia-notepad-manual.ps1
+  // node:test 的 t.skip() 只标记结果、不中断函数执行（历史坑：曾因此每次跑都真开一个记事本）。
+  // DEV-CU P1-2：GUI 旅程在 OPS_UIA_MANUAL=1 时**真实执行并通过**，不再 skip。
+  // 走 worker 自己的命令（list_windows → uia_read），即产品实际路径，而不是另写一套 PS。
   if (process.env.OPS_UIA_MANUAL !== '1') {
-    t.skip('GUI 旅程需用户桌面会话人工执行：设 OPS_UIA_MANUAL=1 可开启，或跑 desktop/scripts/uia-notepad-manual.ps1');
+    t.skip('GUI 旅程需真实桌面：设 OPS_UIA_MANUAL=1 开启（本机 2026-11-12 已实测通过）');
     return;
   }
-  // 1. 启动记事本（独立进程）
-  const notepad = spawn('notepad', [], { stdio: 'ignore' });
-  t.after(() => { try { notepad.kill(); } catch {} });
-  // 等 UIA 就绪
+
+  // 1. 启动记事本（Win11 为打包版：spawn 返回的是启动器桩进程，随后自行退出）
+  spawn('notepad', [], { stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 2500));
 
-  // 2. 找到记事本 PID
-  const pidOut = await psScript(
-    "(Get-Process notepad -ErrorAction SilentlyContinue | Select-Object -First 1).Id");
-  const pid = Number(String(pidOut).trim());
-  if (!Number.isInteger(pid) || pid <= 0) { t.skip('记事本不可用（Windows 11 Store 版路径差异）'); return; }
+  // 2. 用 worker 的选窗器找真实窗口（不用桩 PID：桩进程已退出，按 -Id 反查必失败）
+  const worker = withWorker(t);
+  const listed = await worker.call('list_windows');
+  assert.equal(listed.ok, true, `选窗应成功：${JSON.stringify(listed)}`);
+  const notepadWin = (listed.windows || []).find((w) => /notepad/i.test(w.process));
+  if (!notepadWin) { t.skip('未枚举到记事本窗口（Store 版路径差异）'); return; }
+  const pid = notepadWin.pid;
+  t.after(async () => {
+    try { await psScript(`Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`); } catch {}
+  });
 
-  // 3. UIA 读控件树：应包含编辑区（Edit 控件）
-  const treeOut = await psScript(`
+  // 3. worker 读树：窗口名非空，且至少一个控件的 name / id 非空（P1-1 完成判据）
+  const read1 = await worker.call('uia_read', 20_000, { pid });
+  assert.equal(read1.ok, true, `读树应成功：${JSON.stringify(read1)}`);
+  assert.ok(String(read1.window || '').length > 0, `窗口名不应为空：${JSON.stringify(read1)}`);
+  const controls = read1.controls || [];
+  assert.ok(controls.length > 0, '控件树不应为空');
+  const named = controls.filter((c) => String(c.name || c.id || '').length > 0);
+  assert.ok(named.length > 0,
+    `至少一个控件的 name/id 非空（修复前 CurrentName 恒空）：${JSON.stringify(controls.slice(0, 5))}`);
+
+  // 4. SetValue：编辑区在新版记事本里是 Document（不是 Edit），两种都要能命中
+  const setOut = await psScript(`
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $proc = Get-Process -Id ${pid} -ErrorAction Stop
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
-$edit = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-  New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-    [System.Windows.Automation.ControlType]::Edit))
-if (-not $edit) { Write-Output 'NOEDIT'; exit }
-$vp = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-$vp.SetValue('W17c-UIA-TEST-INPUT')
-Write-Output 'SETVALUE-OK'
+$condEdit = New-Object -TypeName System.Windows.Automation.PropertyCondition -ArgumentList ([System.Windows.Automation.AutomationElement]::ControlTypeProperty), ([System.Windows.Automation.ControlType]::Edit)
+$condDoc = New-Object -TypeName System.Windows.Automation.PropertyCondition -ArgumentList ([System.Windows.Automation.AutomationElement]::ControlTypeProperty), ([System.Windows.Automation.ControlType]::Document)
+$target = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condEdit)
+if (-not $target) { $target = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condDoc) }
+if (-not $target) { Write-Output 'NOEDIT'; exit }
+$obj = $null
+if (-not $target.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$obj)) { Write-Output 'NOVALUE'; exit }
+$obj.SetValue('W17c-UIA-TEST-INPUT')
+Start-Sleep -Milliseconds 300
+Write-Output ('SETVALUE-OK:' + $obj.Current.Value)
 `);
-  const tree = String(treeOut).trim();
-  if (tree === 'NOEDIT') { t.skip('记事本无 Edit 控件（Store 版差异）'); return; }
-  assert.ok(tree.includes('SETVALUE-OK'), `SetValue 应成功：${tree}`);
+  const setText = String(setOut).trim();
+  if (setText === 'NOEDIT') { t.skip('记事本无 Edit/Document 编辑区（Store 版差异）'); return; }
+  assert.ok(setText.includes('SETVALUE-OK:W17c-UIA-TEST-INPUT'), `SetValue 应读回匹配：${setText}`);
 
-  // 4. 读回验证（C03 观察变化：SetValue 后 value 真实变化）
-  const readBack = await psScript(`
-$ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-$proc = Get-Process -Id ${pid} -ErrorAction Stop
-$root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
-$edit = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-  New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-    [System.Windows.Automation.ControlType]::Edit))
-$vp = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-Write-Output $vp.Current.Value
-`);
-  assert.ok(String(readBack).includes('W17c-UIA-TEST-INPUT'), `读回应包含写入文本：${readBack}`);
-
-  // 5. 清理：关闭记事本（不保存——记事本无改动保存对话框，kill 即可）
-  notepad.kill();
+  // 5. 再用 worker 读一次，确认 value 字段真的带出写入内容（C03 观察变化）
+  const read2 = await worker.call('uia_read', 20_000, { pid });
+  assert.equal(read2.ok, true, `二次读树应成功：${JSON.stringify(read2)}`);
+  const withValue = (read2.controls || []).filter((c) => String(c.value || '').includes('W17c-UIA-TEST-INPUT'));
+  assert.ok(withValue.length > 0,
+    `读回的 value 应包含写入文本：${JSON.stringify((read2.controls || []).slice(0, 5))}`);
 });
