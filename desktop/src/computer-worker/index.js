@@ -8,13 +8,14 @@
 // 硬禁区搬到 policy.js，均为原样搬移（协议字节与 PowerShell 脚本内容不变）。
 
 const { isHardForbidden } = require('./policy');
-const { listWindows, readUIA, invokeUIA, resolveAndObserve, executeActionChain } = require('./native');
+const { listWindows, readUIA, invokeUIA, resolveAndObserve, executeActionChain, readStateByPath } = require('./native');
 const { RefStore } = require('./ref-store');
 const { resolveRefTarget } = require('./refs');
 const {
   dispatch, inferAction, normalizeArgs, legacyTargetAllowed,
 } = require('./actions');
 const { observe } = require('./observe');
+const { executeWithReadback, toObserved, throwIfFailed } = require('./post-action');
 const { createCaptureService, OPEN_ENDED_KEYS } = require('./capture');
 
 // DEV-CU P2-3：进程内快照存储。按 grant_id 分桶，不落盘；进程退出即全部失效。
@@ -169,14 +170,44 @@ channel.onMessage((msg) => {
           // P3-2：走语义动作链（探能力 → 剪枝 → 逐 rung 执行），不再固定单 pattern。
           // clear 没有 value 入参，语义上就是「清空」→ 传空串；其余非文本动作 value 不参与。
           const text = plan.args.value === undefined ? '' : plan.args.value;
-          executeActionChain(pid2, res.path, action, text).then((act) => finish({
-            ...act,
+          // P3-3：动作落地后按 §4.8 读回验证。读回是纯读，不重放任何动作；
+          // 读回不符 → computer_action_failed + delivered_unverified（retry 恒 unsafe）。
+          // 注：链执行器把失败包成返回值，读回流程需要异常才能识别 not_delivered，
+          // 故用 throwIfFailed 做一次形状转换（不改错误码 / 不改 detail）。
+          executeWithReadback({
+            action,
+            expectedValue: text,
+            selection: msg.selection,
+            execute: (effective) => executeActionChain(pid2, res.path, effective, text).then(throwIfFailed),
+            read: () => readStateByPath(pid2, res.path).then(toObserved),
+          }).then((done) => finish({
+            ok: true,
             action: plan.action,
             command: plan.command,
             snapshot_id: target.snapshotId,
             ref: String(msg.ref),
             resolved_path: res.path,
-          }));
+            // §4.3：读回已验证 / 证据不足都只能算 unsafe（成功但不可安全重放）。
+            disposition: { delivery: done.delivery, retry: 'unsafe' },
+            verification_scope: done.verification_scope,
+            verification_reason: done.verification_reason,
+            post_state: done.post_state,
+            action_satisfied: Boolean(done.executed && done.executed.action_satisfied),
+            satisfied_without_delivery: Boolean(done.executed && done.executed.satisfied_without_delivery),
+            steps: (done.executed && done.executed.steps) || [],
+            features: done.executed && done.executed.features,
+          }), (error) => {
+            const detail = (error && error.detail) || {};
+            finish({
+              ok: false,
+              error: (error && error.code) || 'computer_action_failed',
+              message: (error && error.message) || String(error),
+              detail: {
+                ...detail,
+                disposition: detail.disposition || { delivery: 'delivery_uncertain', retry: 'unsafe' },
+              },
+            });
+          });
         });
         return;
       }

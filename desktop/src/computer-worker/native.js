@@ -8,7 +8,7 @@
 const { execFile } = require('node:child_process');
 
 const { isHardForbidden } = require('./policy');
-const { buildObserveTree, boundsHash } = require('./tree');
+const { buildObserveTree, boundsHash, roleFor } = require('./tree');
 const {
   newSnapshotId, nextRevision, allocateTreeRefs, qualifyTreeRefs,
   assertTreeSize, countRefs, refsAreUnique, WorkerError,
@@ -684,6 +684,169 @@ function invokePatternByPath(pid, path, label, action, value) {
 }
 
 /**
+ * 读单个元素的当前状态（§P3-3 步骤 2/4 的 state 载体，只读、无副作用）。
+ *
+ * 返回 `{ok:true, state, states_complete}`：
+ *   `state`          `{role, states, value, enabled, hidden, offscreen, checked, expanded,
+ *                     secure, focused, selected, value_writable}`
+ *   `states_complete` 本轮全部状态属性都读成功；任一属性抛错 → false
+ *
+ * 与 §4.8 判定侧的三个口径对应：
+ *   ① 读不到 value ≠ value 为空。没有 ValuePattern / RangeValuePattern 时 value 为 `null`，
+ *      判定侧落「证据不足」，绝不能当成 `false`（那会把正常元素判成动作失败）。
+ *   ② checked / expanded 是三态。ToggleState::Indeterminate、ExpandCollapseState::PartiallyExpanded
+ *      与 LeafNode 都保持 `null`；LeafNode 尤其重要：叶子节点上 expand/collapse 的
+ *      postcondition 本来就无从判定。
+ *   ③ states 里只在**读到**时才追加对应项（如 offscreen 读失败时既不记 visible 也不记 offscreen），
+ *      避免用「缺省」冒充「已观测」。
+ */
+function psStateScript(pid, path) {
+  return `${psPathPrelude(pid, path)}
+$complete = $true
+$role = 'unknown'
+try { $role = [string]$el.Current.ControlType.ProgrammaticName } catch { $complete = $false }
+
+$enabled = $null
+try { $enabled = [bool]$el.Current.IsEnabled } catch { $complete = $false }
+
+$offscreen = $null
+try { $offscreen = [bool]$el.Current.IsOffscreen } catch { $complete = $false }
+
+$secure = $false
+try { $secure = [bool]$el.Current.IsPassword } catch { $complete = $false }
+
+$focused = $false
+try { $focused = [bool]$el.Current.HasKeyboardFocus } catch { $complete = $false }
+
+$value = $null
+$valueKnown = $false
+$valueWritable = $false
+try {
+  $vpAvail = [bool]$el.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::IsValuePatternAvailableProperty)
+  if ($vpAvail) {
+    $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    $value = [string]$vp.Current.Value
+    $valueWritable = -not [bool]$vp.Current.IsReadOnly
+    $valueKnown = $true
+  }
+} catch { $complete = $false }
+
+# 只有 RangeValuePattern 的数值控件（部分 slider / spinbox）也要能读出值。
+# 用 InvariantCulture 序列化，避免区域设置把小数点写成逗号。
+if (-not $valueKnown) {
+  try {
+    $rpAvail = [bool]$el.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::IsRangeValuePatternAvailableProperty)
+    if ($rpAvail) {
+      $rp = $el.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+      $value = ([double]$rp.Current.Value).ToString([System.Globalization.CultureInfo]::InvariantCulture)
+      $valueWritable = -not [bool]$rp.Current.IsReadOnly
+      $valueKnown = $true
+    }
+  } catch { $complete = $false }
+}
+
+# 三态：Indeterminate 保持 $null（证据不足），不折成 false。
+$toggleAvail = $false
+$checked = $null
+try {
+  $toggleAvail = [bool]$el.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::IsTogglePatternAvailableProperty)
+  if ($toggleAvail) {
+    $tp = $el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    $ts = $tp.Current.ToggleState
+    if ($ts -eq [System.Windows.Automation.ToggleState]::On) { $checked = $true }
+    elseif ($ts -eq [System.Windows.Automation.ToggleState]::Off) { $checked = $false }
+  }
+} catch { $complete = $false }
+
+# 三态：PartiallyExpanded / LeafNode 保持 $null。
+$expandAvail = $false
+$expanded = $null
+try {
+  $expandAvail = [bool]$el.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::IsExpandCollapsePatternAvailableProperty)
+  if ($expandAvail) {
+    $ep = $el.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    $es = $ep.Current.ExpandCollapseState
+    if ($es -eq [System.Windows.Automation.ExpandCollapseState]::Expanded) { $expanded = $true }
+    elseif ($es -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) { $expanded = $false }
+  }
+} catch { $complete = $false }
+
+$selected = $false
+try {
+  if ([bool]$el.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::IsSelectionItemPatternAvailableProperty)) {
+    $sp = $el.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+    $selected = [bool]$sp.Current.IsSelected
+  }
+} catch { $complete = $false }
+
+$states = @()
+if ($enabled -eq $true) { $states += 'enabled' }
+if ($enabled -eq $false) { $states += 'disabled' }
+if ($offscreen -eq $false) { $states += 'visible' }
+if ($offscreen -eq $true) { $states += 'offscreen' }
+if ($checked -eq $true) { $states += 'checked' }
+if ($checked -eq $false) { $states += 'unchecked' }
+if ($toggleAvail -and $null -eq $checked) { $states += 'indeterminate' }
+if ($expanded -eq $true) { $states += 'expanded' }
+if ($expanded -eq $false) { $states += 'collapsed' }
+if ($secure -eq $true) { $states += 'secure' }
+if ($focused -eq $true) { $states += 'focused' }
+if ($selected -eq $true) { $states += 'selected' }
+
+@{ ok = $true; states_complete = $complete; state = @{
+    role = $role
+    states = $states
+    value = $value
+    enabled = $enabled
+    hidden = $offscreen
+    offscreen = $offscreen
+    checked = $checked
+    expanded = $expanded
+    secure = $secure
+    focused = $focused
+    selected = $selected
+    value_writable = $valueWritable
+  } } | ConvertTo-Json -Compress -Depth 4
+`;
+}
+
+/** `psStateScript` 的执行包装：解析 JSON 并把状态记录归一成判定侧的形状。 */
+function readStateByPath(pid, path) {
+  return psJson(psStateScript(pid, path)).then((r) => {
+    if (!r || r.ok !== true || !r.state) {
+      return { ok: false, error: (r && r.error) || 'state_read_failed' };
+    }
+    return {
+      ok: true,
+      state: normalizeStateRecord(r.state),
+      states_complete: r.states_complete === true,
+    };
+  });
+}
+
+/** ConvertTo-Json 对单元素数组 / null 的类型会漂移，这里统一成判定侧能吃的形状。 */
+function normalizeStateRecord(raw) {
+  const boolOrNull = (v) => (typeof v === 'boolean' ? v : null);
+  let states = [];
+  if (Array.isArray(raw.states)) states = raw.states.map((s) => String(s));
+  else if (raw.states !== undefined && raw.states !== null) states = [String(raw.states)];
+  return {
+    role: roleFor(raw.role),
+    states,
+    value: raw.value === undefined || raw.value === null ? null : String(raw.value),
+    enabled: boolOrNull(raw.enabled),
+    hidden: boolOrNull(raw.hidden),
+    offscreen: boolOrNull(raw.offscreen),
+    checked: boolOrNull(raw.checked),
+    expanded: boolOrNull(raw.expanded),
+    secure: raw.secure === true,
+    focused: raw.focused === true,
+    selected: raw.selected === true,
+    value_writable: raw.value_writable === true,
+  };
+}
+
+/**
  * 跑一条完整的语义动作链（§P3-2 步骤 8）。
  * 流程：探能力 → `chainFor(action, features)` 剪枝 → `executeChain` 逐 rung 执行。
  *
@@ -724,5 +887,6 @@ module.exports = {
   listWindows, windowIdentity, foregroundWindow,
   readRawTree, observeOnce, readUIA, invokeUIA, invokeByPath, resolveAndObserve,
   PATTERN_LABELS, probePatternFeatures, psPatternScript, invokePatternByPath, executeActionChain,
+  readStateByPath, psStateScript, normalizeStateRecord,
   runPowerShell, psQuote, UIA_TIMEOUT_MS,
 };
