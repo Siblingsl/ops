@@ -171,8 +171,12 @@ function compactTree(tree) {
 
 /**
  * 递归分配 ref（步骤 6）。
- * ctx: { snapshotId, identity, grantId?, generation?, compact?, complete? }
+ * ctx: { snapshotId, identity, grantId?, generation?, compact?, complete?, pathIsAbsolute? }
  * 返回 RefMap；节点的 ref_id 先写本地 `@eN`，由调用方再 qualify。
+ *
+ * `pathIsAbsolute` 默认 true。P2-7 的 uia_observe 允许按 root_ref / interactive_only /
+ * compact 做结构投影，这时下标链只相对返回树的根，必须标 false，否则下游会把它当成
+ * 整窗绝对路径去用（上游同名字段就是这个含义）。
  *
  * `unique_at_capture` 不在分配时按「兄弟间 AutomationId 是否唯一」判定（P2-2 早期口径），
  * 而是在整棵树分配完成后、用**同一个身份谓词**全树复算（P2-4 对齐上游 CaptureProof
@@ -191,6 +195,7 @@ function allocateTreeRefs(tree, ctx = {}) {
   const windowTitleHash = String(identity.title_hash || '') || hash16(root ? root.name : '');
   // 未显式传 complete 的调用方（夹具/单测）按「读全了」处理；生产路径 readUIA 一定显式传。
   const captureComplete = (ctx.complete === undefined ? true : ctx.complete === true);
+  const pathIsAbsolute = ctx.pathIsAbsolute === undefined ? true : ctx.pathIsAbsolute !== false;
 
   const walk = (node, path) => {
     if (!node) return;
@@ -218,7 +223,7 @@ function allocateTreeRefs(tree, ctx = {}) {
         available_actions: node.available_actions.slice(),
         root_ref: '', // 分配完成后统一回填根 ref
         path: path.slice(),
-        path_is_absolute: true,
+        path_is_absolute: pathIsAbsolute,
         grant_id: grantId,
         generation,
         snapshot_id: ctx.snapshotId || '',

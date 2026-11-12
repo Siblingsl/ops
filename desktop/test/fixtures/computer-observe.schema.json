@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ops.local/schemas/computer-observe.schema.json",
+  "title": "ops-computer/1 uia_observe 输出（docs/36 §4.5）",
+  "description": "只描述 worker 出去的契约字段。refmap / window_identity 是不可枚举内部字段，序列化后不应出现，因此 additionalProperties 在节点上取 false 用来顺带卡泄漏。",
+  "type": "object",
+  "required": ["ok", "snapshot_id", "revision", "ref_count", "complete", "tree"],
+  "additionalProperties": true,
+  "properties": {
+    "ok": { "type": "boolean", "enum": [true] },
+    "snapshot_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "ref_count": { "type": "integer", "minimum": 0 },
+    "complete": { "type": "boolean" },
+    "nodes_observed": { "type": "integer", "minimum": 0 },
+    "truncated": { "type": "boolean", "enum": [true] },
+    "identity_unproven": { "type": "boolean", "enum": [true] },
+    "tree": { "$ref": "#/definitions/node" }
+  },
+  "definitions": {
+    "node": {
+      "type": "object",
+      "required": [
+        "role", "name", "value", "ref_id", "available_actions",
+        "states", "bounds", "children", "children_count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "role": { "type": "string" },
+        "name": { "type": "string" },
+        "value": { "type": "string" },
+        "ref_id": { "type": "string", "pattern": "^(@[A-Za-z0-9]{1,40}:e[0-9]{1,10})?$" },
+        "available_actions": { "type": "array", "items": { "type": "string" } },
+        "states": { "type": "array", "items": { "type": "string" } },
+        "bounds": {
+          "type": "object",
+          "required": ["x", "y", "w", "h"],
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "w": { "type": "number", "minimum": 0 },
+            "h": { "type": "number", "minimum": 0 }
+          }
+        },
+        "bounds_hash": { "type": "string" },
+        "children": { "type": "array", "items": { "$ref": "#/definitions/node" } },
+        "children_count": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

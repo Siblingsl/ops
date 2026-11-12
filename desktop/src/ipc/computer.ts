@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { IpcMainInvokeEvent } from 'electron';
-import { ComputerWorkerHost, type WindowSummary } from '../computer-worker-host';
+import { ComputerWorkerHost, type WindowSummary, type ObserveRequest } from '../computer-worker-host';
 
 // DT-08 片 3（≡DEV-S02）：computer:* 固定意图拆分。从 main.ts 原样搬出（W17b 选窗器
 // + DT-04 UIA 主链路），返回值形状与调用方校验逐字节不变。computerWorkerHost 单例由
@@ -52,6 +52,36 @@ export function registerComputerIpcHandlers(deps: {
     const summary = (raw as { target_summary?: unknown } | null)?.target_summary;
     return typeof summary === 'string' ? summary.slice(0, 256) : '';
   };
+  // DEV-CU P2-7：observe 的入参与 worker 侧同口径（长度 / 区间 / 布尔都校验一遍）。
+  // 两层校验不是重复劳动：IPC 层拒绝能少起一次 worker 调用，worker 层拒绝才是安全边界
+  // （渲染器不是唯一调用方）。上下限与 computer-worker/observe.js 的 OBSERVE_LIMITS 对齐。
+  const parseObserveParams = (raw: unknown, pid: number): ObserveRequest => {
+    const body = raw as Record<string, unknown>;
+    const summary = typeof body.target_summary === 'string' ? body.target_summary.slice(0, 256) : '';
+    const grantId = typeof body.grant_id === 'string' ? body.grant_id : '';
+    if (!grantId || grantId.length > 64) throw new Error('computer_uia_params_invalid');
+    const generation = body.generation === undefined || body.generation === null ? 0 : Number(body.generation);
+    if (!Number.isInteger(generation) || generation < 0) throw new Error('computer_uia_params_invalid');
+    const out: ObserveRequest = { pid, target_summary: summary, grant_id: grantId, generation };
+    if (body.max_depth !== undefined && body.max_depth !== null) {
+      const depth = Number(body.max_depth);
+      if (!Number.isInteger(depth) || depth < 0 || depth > 50) throw new Error('computer_uia_params_invalid');
+      out.max_depth = depth;
+    }
+    if (body.root_ref !== undefined && body.root_ref !== null && body.root_ref !== '') {
+      if (typeof body.root_ref !== 'string' || body.root_ref.length > 128) throw new Error('computer_uia_params_invalid');
+      out.root_ref = body.root_ref;
+    }
+    if (body.interactive_only !== undefined && body.interactive_only !== null) {
+      if (typeof body.interactive_only !== 'boolean') throw new Error('computer_uia_params_invalid');
+      out.interactive_only = body.interactive_only;
+    }
+    if (body.compact !== undefined && body.compact !== null) {
+      if (typeof body.compact !== 'boolean') throw new Error('computer_uia_params_invalid');
+      out.compact = body.compact;
+    }
+    return out;
+  };
   ipcHandle('computer:uia-read', async (event, raw) => {
     requireComputerCaller(event);
     if (!raw || typeof raw !== 'object') throw new Error('computer_uia_params_invalid');
@@ -60,6 +90,28 @@ export function registerComputerIpcHandlers(deps: {
       return await computerWorkerHostRef!.readUIA(pid, parseUiaSummary(raw));
     } catch (error) {
       const code = error instanceof Error && /worker_(timeout|exit)/.test(error.message) ? error.message : 'computer_worker_unavailable';
+      return { ok: false as const, error: code };
+    }
+  });
+  // DEV-CU P2-7：`uia_observe`（§4.5 观察树）。仅本机通道，不接服务端——
+  // 与 computer:uia-read / uia-invoke 同构；本包**不扩 preload 白名单**（P3-7 统一扩展），
+  // 所以渲染器暂时还够不到这条通道，先用 desktop/test 直接测 host。
+  ipcHandle('computer:uia-observe', async (event, raw) => {
+    requireComputerCaller(event);
+    if (!raw || typeof raw !== 'object') throw new Error('computer_uia_params_invalid');
+    const pid = parseUiaPid(raw);
+    const observeParams = parseObserveParams(raw, pid);
+    try {
+      return await computerWorkerHostRef!.observe(observeParams);
+    } catch (error) {
+      // 既有错误映射：worker 的语义错误码原样回传，其余统一成「组件不可用」。
+      const message = error instanceof Error ? error.message : '';
+      const known = [
+        'hard_forbidden', 'pid_invalid', 'computer_invalid_args', 'computer_stale_ref',
+        'computer_target_changed', 'computer_timeout', 'computer_internal',
+        'worker_timeout', 'worker_exit',
+      ];
+      const code = known.includes(message) ? message : 'computer_worker_unavailable';
       return { ok: false as const, error: code };
     }
   });

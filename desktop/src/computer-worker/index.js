@@ -14,6 +14,7 @@ const { resolveRefTarget } = require('./refs');
 const {
   dispatch, inferAction, normalizeArgs, legacyTargetAllowed,
 } = require('./actions');
+const { observe } = require('./observe');
 const { createCaptureService, OPEN_ENDED_KEYS } = require('./capture');
 
 // DEV-CU P2-3：进程内快照存储。按 grant_id 分桶，不落盘；进程退出即全部失效。
@@ -207,6 +208,16 @@ channel.onMessage((msg) => {
     case 'ping':
       finish({ ok: true, pong: true });
       return;
+    case 'uia_observe': {
+      // DEV-CU P2-7：把 P2-1～P2-6 串成一条可直接被 IPC 调用的观察命令。
+      // 顺序（§P2-7 步骤 2）在 observe.js 里：硬禁区 → pid → 窗口身份 → 抓树 → 裁剪
+      // → 分配 ref → 存 RefStore → qualifyTreeRefs → 输出。这里只做通道适配与存取。
+      observe(msg, { refStore }).then((res) => {
+        if (res && res.ok === true) persistSnapshot(res, msg);
+        finish(res);
+      });
+      return;
+    }
     case 'uia_invalidate': {
       // P2-3：租约撤销 / handoff / 锁屏时由主进程调用，清空该 grant 的全部快照。
       const gid = String(msg.grant_id || '');

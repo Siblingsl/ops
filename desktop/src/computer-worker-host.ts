@@ -23,6 +23,45 @@ export interface UiaView {
   error?: string;
 }
 
+/** DEV-CU P2-7：§4.5 观察树节点。字段集照契约，不含 process_path / class_name / 标题。 */
+export interface ObserveNode {
+  role: string;
+  name: string;
+  value: string;
+  ref_id: string;
+  available_actions: string[];
+  states: string[];
+  bounds: { x: number; y: number; w: number; h: number };
+  bounds_hash?: string;
+  children: ObserveNode[];
+  children_count: number;
+}
+
+/** DEV-CU P2-7：`uia_observe` 输出视图（§4.5）。 */
+export interface ObserveView {
+  ok: boolean;
+  snapshot_id?: string;
+  revision?: number;
+  ref_count?: number;
+  complete?: boolean;
+  nodes_observed?: number;
+  truncated?: boolean;
+  identity_unproven?: boolean;
+  tree?: ObserveNode;
+  error?: string;
+}
+
+export interface ObserveRequest {
+  pid: number;
+  target_summary: string;
+  grant_id: string;
+  generation: number;
+  max_depth?: number;
+  root_ref?: string;
+  interactive_only?: boolean;
+  compact?: boolean;
+}
+
 /** CF-DESK-04：窗口级截图摘要（C09：只含选中目标的必要摘要，绝不含截图原文）。 */
 export interface WindowCaptureView {
   ok: boolean;
@@ -134,6 +173,22 @@ export class ComputerWorkerHost extends EventEmitter {
    * 服务端批准票据属第二批（agent_computer.go:18）；本层只暴露本机通道。 */
   async invokeUIA(pid: number, automationId: string, value: string | null, targetSummary: string): Promise<{ ok: boolean; action?: string; error?: string }> {
     return await this.call('uia_invoke', { pid, automation_id: automationId, value, target_summary: targetSummary }) as { ok: boolean; action?: string; error?: string };
+  }
+
+  /** DEV-CU P2-7（§P2-7 步骤 4）：`uia_observe` 转发。超时按 §4.10 常量表取 3s——
+   * 一次整窗读树 + 裁剪 + 分配 ref 都在这个预算内，超过就当目标应用无响应。
+   * 不做业务判断：入参合法性由调用方（IPC 层）与 worker 各校验一次。 */
+  async observe(input: ObserveRequest): Promise<ObserveView> {
+    return await this.call('uia_observe', {
+      pid: input.pid,
+      target_summary: input.target_summary,
+      grant_id: input.grant_id,
+      generation: input.generation,
+      ...(input.max_depth === undefined ? {} : { max_depth: input.max_depth }),
+      ...(input.root_ref === undefined ? {} : { root_ref: input.root_ref }),
+      ...(input.interactive_only === undefined ? {} : { interactive_only: input.interactive_only }),
+      ...(input.compact === undefined ? {} : { compact: input.compact }),
+    }, 3000) as ObserveView;
   }
 
   /** CF-DESK-04（A-03 前置）：窗口级截图，固定意图、只回脱敏摘要。
