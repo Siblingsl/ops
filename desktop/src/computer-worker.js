@@ -167,9 +167,22 @@ $out = @()
 $limit = [Math]::Min(200, $all.Count)
 for ($i=0; $i -lt $limit; $i++) {
   $el = $all.Item($i)
+  # 快照条目可能在枚举期间失效（目标窗口正在重绘/关闭）：此时 $el 为空，或 $el.Current 抛
+  # ElementNotAvailableException。旧写法对空元素静默取到 $null 并产出 {id:'',type:'',name:'',value:''}
+  # 的空行——既占满 200 项预算，也污染模型对控件的判断；而抛异常时整次读取直接失败。
+  # 这里逐项容错：标识字段读不全或取不到 ControlType 的条目一律跳过（不是可操作控件）。
+  $id = ''; $name = ''; $ct = $null
+  try {
+    $ct = $el.Current.ControlType
+    $id = [string]$el.Current.AutomationId
+    $name = [string]$el.Current.Name
+  } catch { continue }
+  if ($null -eq $ct) { continue }
+  $type = Clip ([string]$ct.ProgrammaticName) 60
+  if ([string]::IsNullOrEmpty($type)) { continue }
   $v = ''
   try { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern); $v = $vp.Current.Value } catch {}
-  $out += @{ id=(Clip ([string]$el.Current.AutomationId) 200); type=(Clip ([string]$el.Current.ControlType.ProgrammaticName) 60); name=(Clip ([string]$el.Current.Name) 500); value=(Clip ([string]$v) 4000) }
+  $out += @{ id=(Clip $id 200); type=$type; name=(Clip $name 500); value=(Clip ([string]$v) 4000) }
 }
 @{ ok=$true; window=$root.Current.Name; controls=$out } | ConvertTo-Json -Compress -Depth 4
 `;
