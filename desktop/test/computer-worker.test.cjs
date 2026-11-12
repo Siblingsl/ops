@@ -141,7 +141,12 @@ test('W17c UIA: 真实记事本读控件树 + SetValue 输入 + 读回验证（C
   assert.ok(typed.length > 0, `至少一个控件 type 形如 ControlType.X：${JSON.stringify(controls.slice(0, 5))}`);
 
   // 4. SetValue：编辑区在新版记事本里是 Document（不是 Edit），两种都要能命中
-  const setOut = await psScript(`
+  // 稳定性：新版记事本会恢复上次会话的标签页，刚启动时 SetValue 可能落在「恢复中的文档」上，
+  // 读回值会带上恢复出来的一小段前缀（实测出现过 deW17c-UIA-TEST-INPUT）。
+  // 语义断言改为「读回值以写入串结尾」——仍要求我们的写入是最终内容，但不把恢复前缀当失败；
+  // 最多重试 3 次以跨过恢复窗口。
+  const marker = 'W17c-UIA-TEST-INPUT';
+  const psSetValue = `
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -154,13 +159,20 @@ if (-not $target) { $target = $root.FindFirst([System.Windows.Automation.TreeSco
 if (-not $target) { Write-Output 'NOEDIT'; exit }
 $obj = $null
 if (-not $target.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$obj)) { Write-Output 'NOVALUE'; exit }
-$obj.SetValue('W17c-UIA-TEST-INPUT')
+$obj.SetValue('${marker}')
 Start-Sleep -Milliseconds 300
 Write-Output ('SETVALUE-OK:' + $obj.Current.Value)
-`);
-  const setText = String(setOut).trim();
-  if (setText === 'NOEDIT') { t.skip('记事本无 Edit/Document 编辑区（Store 版差异）'); return; }
-  assert.ok(setText.includes('SETVALUE-OK:W17c-UIA-TEST-INPUT'), `SetValue 应读回匹配：${setText}`);
+`;
+  let setText = '';
+  let matched = false;
+  for (let attempt = 0; attempt < 3 && !matched; attempt++) {
+    setText = String(await psScript(psSetValue)).trim();
+    if (setText === 'NOEDIT') { t.skip('记事本无 Edit/Document 编辑区（Store 版差异）'); return; }
+    assert.notEqual(setText, 'NOVALUE', '编辑区应支持 ValuePattern');
+    matched = setText.endsWith(marker);
+    if (!matched) await new Promise((r) => setTimeout(r, 400));
+  }
+  assert.ok(matched, `SetValue 应读回以写入串结尾：${setText}`);
 
   // 5. 再用 worker 读一次，确认 value 字段真的带出写入内容（C03 观察变化）
   const read2 = await worker.call('uia_read', 20_000, { pid });

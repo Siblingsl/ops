@@ -9,6 +9,28 @@
 
 const { isHardForbidden } = require('./policy');
 const { listWindows, readUIA, invokeUIA } = require('./native');
+const { RefStore } = require('./ref-store');
+
+// DEV-CU P2-3：进程内快照存储。按 grant_id 分桶，不落盘；进程退出即全部失效。
+const refStore = new RefStore();
+process.on('exit', () => { refStore.clear(); });
+
+/** uia_read 带 grant_id 时把 RefMap 存入 RefStore；未带则只做单次读取（兼容旧调用）。 */
+function persistSnapshot(res, msg) {
+  if (!res || res.ok !== true || !res.snapshot_id) return;
+  const grantId = String((msg && msg.grant_id) || '');
+  if (!grantId) return;
+  try {
+    refStore.save(grantId, res.snapshot_id, {
+      refmap: res.refmap,
+      generation: Number(msg.generation) || 0,
+      tree: res.tree,
+    });
+  } catch (e) {
+    // 存快照失败不阻断本次读取（ref 仍可用于同一批动作），只把原因带回给调用方。
+    res.ref_store_error = String((e && e.code) || 'computer_internal');
+  }
+}
 
 // 兼容三种宿主：
 //  - Electron utilityProcess.fork：process.parentPort（生产路径，支持 asar 内文件）
@@ -56,7 +78,7 @@ channel.onMessage((msg) => {
       if (isHardForbidden(summary)) { finish({ ok: false, error: 'hard_forbidden' }); return; }
       const pid = Number(msg.pid);
       if (!Number.isInteger(pid) || pid <= 0) { finish({ ok: false, error: 'pid_invalid' }); return; }
-      readUIA(pid).then(finish);
+      readUIA(pid).then((res) => { persistSnapshot(res, msg); finish(res); });
       return;
     }
     case 'uia_invoke': {
@@ -73,6 +95,18 @@ channel.onMessage((msg) => {
     }
     case 'ping':
       finish({ ok: true, pong: true });
+      return;
+    case 'uia_invalidate': {
+      // P2-3：租约撤销 / handoff / 锁屏时由主进程调用，清空该 grant 的全部快照。
+      const gid = String(msg.grant_id || '');
+      if (!gid) { finish({ ok: false, error: 'params_invalid' }); return; }
+      const cleared = refStore.invalidate(gid);
+      finish({ ok: true, cleared });
+      return;
+    }
+    case 'ref_store_stats':
+      // 只回计数，不回任何窗口/控件内容（C09）。
+      finish({ ok: true, ...refStore.stats() });
       return;
     default:
       finish({ ok: false, error: 'unknown_cmd' });

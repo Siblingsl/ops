@@ -181,7 +181,7 @@ try { $winName = [string]$root.Current.Name } catch {}
       if (countRefs(allocated.tree) !== allocated.count || !refsAreUnique(allocated.tree)) {
         return { ok: false, error: 'computer_internal', message: 'ref 分配自检失败' };
       }
-      return {
+      const result = {
         ok: true,
         window: parsed.window,
         // P2-2 新增
@@ -196,6 +196,12 @@ try { $winName = [string]$root.Current.Name } catch {}
         // 兼容视图：P1-3 的 preload 集成用例仍按四键平铺校验，P3-7 切树后移除
         controls: built.controls,
       };
+      // P2-3：RefMap 以不可枚举属性挂回，供 index.js 存入 RefStore；
+      // 不可枚举 → 不进入 postMessage/JSON，不会外泄到 preload 或渲染器。
+      Object.defineProperty(result, 'refmap', {
+        value: allocated.map, enumerable: false, configurable: true, writable: true,
+      });
+      return result;
     } catch {
       return { ok: false, error: 'uia_parse_failed' };
     }
