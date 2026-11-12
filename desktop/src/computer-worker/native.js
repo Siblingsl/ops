@@ -8,6 +8,7 @@
 const { execFile } = require('node:child_process');
 
 const { isHardForbidden } = require('./policy');
+const { buildObserveTree } = require('./tree');
 
 /** 枚举可见顶层窗口（PowerShell：有主窗口的进程）。返回脱敏摘要（pid/标题/进程名）。 */
 function listWindows() {
@@ -67,46 +68,110 @@ function runPowerShell(script) {
   });
 }
 
-/** C01/C03：读取 PID 主窗口 UIA 控件树（Name/ControlType/Value/AutomationId，限 200 项）。 */
+/** C01/C03 + P2-1：读取 PID 主窗口 UIA 控件树（RawViewWalker 递归，带三重上限）。 */
 function readUIA(pid) {
   const script = `
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $proc = Get-Process -Id ${pid} -ErrorAction Stop
-$root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
-$all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-# DEV-CU P1-1 步骤 4：四字段强制字符串并裁剪，上限对齐 business-ui-preload.ts:192-195（200/60/500/4000）；
-# 原写法在属性缺失时返回 $null，会让 preload 白名单整批拒绝。
+$hwnd = $proc.MainWindowHandle
+$startTime = ''
+try { $startTime = $proc.StartTime.ToUniversalTime().ToString('o') } catch {}
+$root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+$walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+# DEV-CU P1-1 步骤 4：四字段强制字符串并裁剪，上限对齐 business-ui-preload.ts:192-195（200/60/500/4000）。
 function Clip([string]$s, [int]$n) { if ($null -eq $s) { return '' }; if ($s.Length -gt $n) { return $s.Substring(0,$n) }; return $s }
-$out = @()
-$limit = [Math]::Min(200, $all.Count)
-for ($i=0; $i -lt $limit; $i++) {
-  $el = $all.Item($i)
-  # 快照条目可能在枚举期间失效（目标窗口正在重绘/关闭）：此时 $el 为空，或 $el.Current 抛
-  # ElementNotAvailableException。旧写法对空元素静默取到 $null 并产出 {id:'',type:'',name:'',value:''}
-  # 的空行——既占满 200 项预算，也污染模型对控件的判断；而抛异常时整次读取直接失败。
-  # 这里逐项容错：标识字段读不全或取不到 ControlType 的条目一律跳过（不是可操作控件）。
-  $id = ''; $name = ''; $ct = $null
+# P2-1：UIA 的 BoundingRectangle 在虚拟化/屏外元素上可能返回 NaN 或 Infinity，
+# ConvertTo-Json 会原样写出 Infinity 导致整段 JSON 非法（实测 W17c 报 uia_parse_failed）。
+function SafeNum([double]$v) { if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) { return 0.0 }; return $v }
+$MAX_NODES = 200
+$MAX_DEPTH = 50
+$MAX_SIBLINGS = 10000
+$complete = $true
+# P2-1 步骤 1：RawViewWalker 逐层遍历，记录 depth/parent，不再 FindAll 平铺。
+# 队列元素 parent 指向「已产出节点」的下标；节点自身失效时子节点继承其 parent，避免断链。
+$queue = New-Object System.Collections.ArrayList
+$null = $queue.Add(@{ el=$root; depth=0; parent=-1 })
+$emitted = New-Object System.Collections.ArrayList
+$qi = 0
+while ($qi -lt $queue.Count) {
+  $item = $queue[$qi]
+  $qi++
+  $el = $item.el
+  $roleRaw = ''
+  $name = ''; $id = ''; $value = ''
+  $enabled = $false; $offscreen = $false
+  $bx = 0; $by = 0; $bw = 0; $bh = 0
+  $hasValue = $false; $hasInvoke = $false
+  # 快照条目可能在枚举期间失效：读不到 ControlType 就不产出该节点（同 P1-1 的空行修复）。
   try {
-    $ct = $el.Current.ControlType
-    $id = [string]$el.Current.AutomationId
+    $roleRaw = [string]$el.Current.ControlType.ProgrammaticName
     $name = [string]$el.Current.Name
-  } catch { continue }
-  if ($null -eq $ct) { continue }
-  $type = Clip ([string]$ct.ProgrammaticName) 60
-  if ([string]::IsNullOrEmpty($type)) { continue }
-  $v = ''
-  try { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern); $v = $vp.Current.Value } catch {}
-  $out += @{ id=(Clip $id 200); type=$type; name=(Clip $name 500); value=(Clip ([string]$v) 4000) }
+    $id = [string]$el.Current.AutomationId
+    $enabled = [bool]$el.Current.IsEnabled
+    $offscreen = [bool]$el.Current.IsOffscreen
+    $r = $el.Current.BoundingRectangle
+    $bx = SafeNum ([double]$r.X); $by = SafeNum ([double]$r.Y)
+    $bw = SafeNum ([double]$r.Width); $bh = SafeNum ([double]$r.Height)
+  } catch { $roleRaw = '' }
+  $ownIndex = -1
+  if (-not [string]::IsNullOrEmpty($roleRaw)) {
+    $vpObj = $null
+    try { $hasValue = [bool]$el.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vpObj) } catch { $hasValue = $false }
+    if ($hasValue) { try { $value = [string]$vpObj.Current.Value } catch { $value = '' } }
+    $ipObj = $null
+    try { $hasInvoke = [bool]$el.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$ipObj) } catch { $hasInvoke = $false }
+    $rec = @{
+      parent=$item.parent; depth=$item.depth; role_raw=$roleRaw; name=(Clip $name 500); id=(Clip $id 200);
+      value=(Clip $value 4000); enabled=$enabled; offscreen=$offscreen;
+      bounds=@{ x=$bx; y=$by; w=$bw; h=$bh }; has_value=$hasValue; has_invoke=$hasInvoke;
+      children_count=0; stale=$false
+    }
+    $null = $emitted.Add($rec)
+    $ownIndex = $emitted.Count - 1
+  }
+  $childParent = $item.parent
+  if ($ownIndex -ge 0) { $childParent = $ownIndex }
+  # 深度上限：还有子节点就置 complete=false，不再深入。
+  if ($item.depth -ge $MAX_DEPTH) {
+    try { if ($null -ne $walker.GetFirstChild($el)) { $complete = $false } } catch { }
+    continue
+  }
+  $count = 0
+  $child = $null
+  try { $child = $walker.GetFirstChild($el) } catch { $child = $null }
+  while ($null -ne $child) {
+    $count++
+    if ($count -gt $MAX_SIBLINGS) { $complete = $false; break }
+    if ($queue.Count -lt $MAX_NODES) {
+      $null = $queue.Add(@{ el=$child; depth=$item.depth+1; parent=$childParent })
+    } else { $complete = $false }
+    try { $child = $walker.GetNextSibling($child) } catch { $child = $null }
+  }
+  if ($ownIndex -ge 0) { $emitted[$ownIndex].children_count = $count }
 }
-@{ ok=$true; window=$root.Current.Name; controls=$out } | ConvertTo-Json -Compress -Depth 4
+$winName = ''
+try { $winName = [string]$root.Current.Name } catch {}
+@{ ok=$true; window=$winName; pid=${pid}; hwnd=[long]$hwnd; process_start_time=$startTime; tree_complete=$complete; nodes_observed=$queue.Count; nodes=$emitted } | ConvertTo-Json -Compress -Depth 6
 `;
   return runPowerShell(script).then((r) => {
     if (!r.ok) return r;
     try {
       const parsed = JSON.parse(r.stdout || '{}');
-      return { ok: true, window: parsed.window, controls: parsed.controls || [] };
+      if (parsed.ok !== true) return { ok: false, error: parsed.error || 'uia_failed' };
+      const built = buildObserveTree(parsed);
+      return {
+        ok: true,
+        window: parsed.window,
+        // P2-1 新形状（preload 白名单由 P3-7 才扩展，此处先对本机通道输出）
+        tree: built.tree,
+        complete: built.complete,
+        nodes_observed: built.nodes_observed,
+        window_identity: built.window_identity,
+        // 兼容视图：P1-3 的 preload 集成用例仍按四键平铺校验，P3-7 切树后移除
+        controls: built.controls,
+      };
     } catch {
       return { ok: false, error: 'uia_parse_failed' };
     }
