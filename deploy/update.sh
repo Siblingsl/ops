@@ -51,6 +51,23 @@ fi
 
 # 小内存机器上，并行跑着的 app/parser + docker go build 容易把编译拖进交换区直至 SSH 超时。
 # 先停业务容器腾出内存；构建失败时再尽力用旧镜像拉回服务。
+#
+# 关键：构建阶段被 SSH 超时杀掉时，脚本不会走到下面的 if 分支，容器会一直停着，
+# nginx 对上游持续 502（2026-11-10 DEV-AI27 A30b 片 2 就是这样把线上打挂的）。
+# 因此用 EXIT trap 兜底：只要没标记成功，任何退出路径都尝试用现有镜像拉起容器。
+DEPLOY_DONE=0
+restore_on_exit() {
+  local code=$?
+  if [[ "$DEPLOY_DONE" == "1" ]]; then
+    return
+  fi
+  echo "更新未完成（exit=$code）；用现有镜像恢复 app/parser，避免上游持续 502…" >&2
+  docker compose "${COMPOSE_FILES[@]}" --env-file .env up -d --no-build --remove-orphans || true
+}
+trap restore_on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 143' TERM
+
 echo "构建前停止 app/parser，降低 go build 内存压力…"
 docker compose "${COMPOSE_FILES[@]}" --env-file .env stop app parser_a parser_b || true
 # 上次 SSH 超时可能留下仍在跑的 build 容器 / go 进程
@@ -70,5 +87,6 @@ if ! docker compose "${COMPOSE_FILES[@]}" --env-file .env up -d --build --remove
   docker compose "${COMPOSE_FILES[@]}" --env-file .env up -d --no-build --remove-orphans || true
   exit 1
 fi
+DEPLOY_DONE=1
 docker compose "${COMPOSE_FILES[@]}" --env-file .env ps
 echo "更新完成。健康检查：curl -fsS https://ops-api.88813888.xyz/healthz"
