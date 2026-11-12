@@ -169,9 +169,9 @@ for ($i=0; $i -lt $limit; $i++) {
   $el = $all.Item($i)
   $v = ''
   try { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern); $v = $vp.Current.Value } catch {}
-  $out += @{ id=(Clip ([string]$el.CurrentAutomationId) 200); type=(Clip ([string]$el.CurrentControlType.ProgrammaticName) 60); name=(Clip ([string]$el.CurrentName) 500); value=(Clip ([string]$v) 4000) }
+  $out += @{ id=(Clip ([string]$el.Current.AutomationId) 200); type=(Clip ([string]$el.Current.ControlType.ProgrammaticName) 60); name=(Clip ([string]$el.Current.Name) 500); value=(Clip ([string]$v) 4000) }
 }
-@{ ok=$true; window=$root.CurrentName; controls=$out } | ConvertTo-Json -Compress -Depth 4
+@{ ok=$true; window=$root.Current.Name; controls=$out } | ConvertTo-Json -Compress -Depth 4
 `;
   return runPowerShell(script).then((r) => {
     if (!r.ok) return r;
