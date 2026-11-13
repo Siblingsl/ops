@@ -100,6 +100,25 @@ test('P2-5: detail 不泄漏窗口标题与进程名', () => {
   }
 });
 
+test('P2-5: 动作前置探测保留 target_changed 的 detail.reason（真实窗口，不落动作）', { timeout: 60_000 }, async (t) => {
+  if (process.platform !== 'win32') { t.skip('需要 Windows'); return; }
+  const { executeActionChain, foregroundWindow } = require('../src/computer-worker/native.js');
+  const listed = await listWindows();
+  // 用「真实存在、但不是当前前台」的窗口当目标；路径故意不存在，
+  // 守卫通过时最多 control_not_found，绝不会真的操作到任何控件。
+  const fg = await foregroundWindow();
+  const hit = (listed.windows || []).find((w) => !w.forbidden
+    && positiveInt(w.pid) && (!fg || w.pid !== fg.pid));
+  if (!hit) { t.skip('没有可用的非前台窗口'); return; }
+  const res = await executeActionChain(hit.pid, [999999], 'set_value', '');
+  if (res.error === 'control_not_found') { t.skip('目标窗口当前在前台，无法构造前台拒绝'); return; }
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'computer_target_changed', `应为目标变化拒绝：${JSON.stringify(res)}`);
+  assert.ok(res.detail && Array.isArray(res.detail.reason), `detail.reason 必须存在：${JSON.stringify(res.detail)}`);
+  assert.equal(res.detail.kind, 'target_changed');
+  assert.ok(res.detail.reason.length > 0, 'reason 不应为空数组');
+});
+
 test('P2-5: 期望侧空字段跳过（当时没采到不误判）', () => {
   assert.deepEqual(windowChangeReasons({ pid: 1, hwnd: 0, process_start_time: '' }, { pid: 1, hwnd: 5 }), []);
   assert.equal(assertWindowScope({}, { hwnd: 5 }), true);

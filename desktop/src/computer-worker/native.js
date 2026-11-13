@@ -571,7 +571,15 @@ try {
 `;
   return psJson(script).then((r) => (r && r.ok === true && r.features
     ? { ok: true, features: r.features }
-    : { ok: false, error: (r && r.error) || 'feature_probe_failed' }));
+    // 失败要保留 message/detail：psPathPrelude 里的前台守卫会给出
+    // {error:'computer_target_changed', detail:{kind,reason,retryable}}，
+    // 只传 error 会让上层失去 §4.2 要求的 reason（P2-5 实测 detail 变 undefined）。
+    : {
+      ok: false,
+      error: (r && r.error) || 'feature_probe_failed',
+      message: (r && r.message) || '',
+      detail: r && r.detail,
+    }));
 }
 
 /**
@@ -857,7 +865,13 @@ async function executeActionChain(pid, path, action, value, wait) {
   const { chainFor, executeChain } = require('./actions');
   const probed = await probePatternFeatures(pid, path);
   if (!probed.ok) {
-    return { ok: false, error: probed.error || 'feature_probe_failed' };
+    // 前置探测可能是前台守卫失败：把 detail 原样带回，别在这里丢掉 reason。
+    return {
+      ok: false,
+      error: probed.error || 'feature_probe_failed',
+      message: probed.message || '',
+      detail: probed.detail,
+    };
   }
   const rungs = chainFor(action, probed.features);
   if (!rungs.length) {
