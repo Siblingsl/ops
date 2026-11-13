@@ -741,9 +741,16 @@ func TestDEEP01BuildReuseForceReusedFromAndWorkspaceScope(t *testing.T) {
 	if _, err := env.srv.db.Exec(t.Context(), `UPDATE platform_account SET status='disabled' WHERE id=$1`, account.ID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_, _ = env.srv.db.Exec(t.Context(), `UPDATE platform_account SET status='active' WHERE id=$1`, account.ID)
-	})
+	// 恢复必须用 defer + context.Background()：Go 1.24+ 的 t.Context() 在 Cleanup 运行
+	// 之前就被取消，写在 t.Cleanup 里的恢复语句会直接拿到已取消的 ctx 并静默失败（原实现
+	// 还用 _, _ = 吞掉错误）。account 是共享 fixture fx.wechat，一旦恢复失败就永久停在
+	// disabled，后面所有走 /accounts/{id}/works 的用例连锁 409「账号已停用，不能新建作品」。
+	defer func() {
+		if _, err := env.srv.db.Exec(context.Background(),
+			`UPDATE platform_account SET status='active' WHERE id=$1`, account.ID); err != nil {
+			t.Errorf("恢复共享账号状态失败：%v", err)
+		}
+	}()
 	status, body = env.do("POST", "/api/v1/works/"+work.ID.String()+"/builds", map[string]any{
 		"basis_revision": work.Revision, "targets": []string{"wechat_html"}, "options": map[string]any{}, "client": "desktop",
 		"renderer_contract_version": cxrendercontract.WechatHTMLV1, "force": true,

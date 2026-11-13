@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -115,7 +116,9 @@ func TestAW03GroupLimitAndPrivateScope(t *testing.T) {
 		var group aw03Group
 		env.mustJSON(t, http.MethodPost, "/api/v1/agent/conversation-groups", map[string]any{"name": "分组" + string(rune('A'+i))}, &group)
 		t.Cleanup(func() {
-			_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_conversation_group WHERE id=$1`, group.ID)
+			// t.Context() 在 Cleanup 执行前已被取消，用它做清理会静默失败、把分组行留给
+			// 后续用例（组数上限/可见性断言会连带变红）。清理一律走 Background。
+			_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM agent_conversation_group WHERE id=$1`, group.ID)
 		})
 	}
 	env.expectErr(t, http.MethodPost, "/api/v1/agent/conversation-groups", map[string]any{"name": "第二十一组"}, "agent_group_limit_reached")
@@ -131,7 +134,7 @@ func TestAW03GroupLimitAndPrivateScope(t *testing.T) {
 	var group aw03Group
 	env.mustJSON(t, http.MethodPost, "/api/v1/agent/conversation-groups", map[string]any{"name": "本人私有组"}, &group)
 	t.Cleanup(func() {
-		_, _ = env.srv.db.Exec(t.Context(), `DELETE FROM agent_conversation_group WHERE id=$1`, group.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM agent_conversation_group WHERE id=$1`, group.ID)
 	})
 
 	guest := env.registerClient(t, "aw03-"+uuid.NewString()[:8], testPassword)
