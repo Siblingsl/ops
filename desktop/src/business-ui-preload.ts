@@ -33,7 +33,7 @@ type CXLongImageCaptureResult =
   };
 
 // DEV-AI27-17（W17b，A12）：本机选窗结果。handle 不透明，标题只在业务窗口内使用。
-type ComputerWindowView = { handle: string; process: string; title: string; forbidden: boolean };
+type ComputerWindowView = { pid: number; handle: string; process: string; title: string; forbidden: boolean };
 type ComputerWindowListResult =
   | { ok: false; code: string; message: string }
   | { ok: true; windows: ComputerWindowView[] };
@@ -208,10 +208,14 @@ function parseComputerWindowListResult(raw: unknown): ComputerWindowListResult |
   for (const item of value.windows) {
     const win = asRecord(item);
     if (!win || typeof win.handle !== 'string' || !/^[0-9a-f]{32}$/.test(win.handle)) return null;
+    // DEV-CU P5-2（用户选定方案①）：窗口列表补 pid——观察/动作意图必填 pid，而 handle 是不可逆
+    // 摘要无法反解。pid 只在本机渲染器↔主进程之间流动，不进服务端、不进模型上下文；
+    // C09 仍禁 process_path / hwnd / class_name / 完整标题全集，越界字段不进构造结果。
+    if (!Number.isInteger(win.pid) || (win.pid as number) <= 0) return null;
     if (typeof win.process !== 'string' || win.process.length > 120) return null;
     if (typeof win.title !== 'string' || win.title.length > 256) return null;
     if (typeof win.forbidden !== 'boolean') return null;
-    windows.push({ handle: win.handle, process: win.process, title: win.title, forbidden: win.forbidden });
+    windows.push({ pid: win.pid as number, handle: win.handle, process: win.process, title: win.title, forbidden: win.forbidden });
   }
   return { ok: true, windows };
 }

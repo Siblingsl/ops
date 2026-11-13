@@ -21,6 +21,8 @@ export function registerComputerIpcHandlers(deps: {
   // DEV-AI27-17（W17b，A12）：本机选窗器。枚举只在本机发生（27 §11.5.1/C09）——
   // 渲染器只拿不透明 handle 与脱敏摘要，不上传窗口全集、进程路径或截图。
   // handle = sha256(pid + 标题) 前 32 位：服务端与模型拿不到明文，本机可重算核对。
+  // DEV-CU P5-2（用户选定方案①）：补 pid 供渲染器调用 observe/act（二者必填 pid，handle
+  // 不可逆无法反解）。pid 只在本机 IPC 内使用，不随任何请求上送服务端或模型。
   ipcHandle('computer:list-windows', async (event) => {
     requireComputerCaller(event);
     try {
@@ -28,6 +30,7 @@ export function registerComputerIpcHandlers(deps: {
       return {
         ok: true as const,
         windows: windows.map((w: WindowSummary) => ({
+          pid: w.pid,
           handle: createHash('sha256').update(`${w.pid}\u0000${w.title}`).digest('hex').slice(0, 32),
           process: w.process.slice(0, 120),
           title: w.title.slice(0, 256),

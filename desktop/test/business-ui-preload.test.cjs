@@ -196,6 +196,52 @@ test('rejects a window list that does not match the fixed schema', async () => {
   });
 });
 
+// DEV-CU P5-2（用户选定方案①）：窗口项必须带正整数 pid（observe/act 的必填入参）；
+// 缺失或非法整批拒绝，pid 存在时只透出白名单五键，其它字段不进渲染器。
+test('requires a positive integer pid on every window item', async () => {
+  for (const pid of [undefined, 0, -1, 1.5, '4242']) {
+    const exposed = {};
+    const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+    const ipcRenderer = {
+      on() {},
+      removeListener() {},
+      invoke() {
+        return Promise.resolve({
+          ok: true,
+          windows: [{
+            pid, handle: 'a'.repeat(32), process: 'notepad', title: '文档', forbidden: false,
+          }],
+        });
+      },
+    };
+    loadPreload({ contextBridge, ipcRenderer });
+    assert.deepEqual(await exposed.opsDesktopUI.listComputerWindows(), {
+      ok: false, code: 'computer_windows_invalid', message: 'Electron 返回的窗口列表无效。',
+    }, `pid=${String(pid)} 必须整批拒绝`);
+  }
+
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke() {
+      return Promise.resolve({
+        ok: true,
+        windows: [{
+          pid: 4242, handle: 'a'.repeat(32), process: 'notepad', title: '文档', forbidden: false,
+          process_path: 'C:\\Windows\\notepad.exe', hwnd: 987654,
+        }],
+      });
+    },
+  };
+  loadPreload({ contextBridge, ipcRenderer });
+  assert.deepEqual(await exposed.opsDesktopUI.listComputerWindows(), {
+    ok: true,
+    windows: [{ pid: 4242, handle: 'a'.repeat(32), process: 'notepad', title: '文档', forbidden: false }],
+  });
+});
+
 // A30：主进程返回的标签列表同样逐项固定 schema；越界整批拒绝（不伪造列表）。
 test('rejects a browser tab list that does not match the fixed schema', async () => {
   const exposed = {};

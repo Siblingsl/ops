@@ -117,7 +117,10 @@ export type CXLongImageCaptureResult =  | { ok: false; code: string; message: st
   }
 
 // DEV-AI27-17（W17b，A12）：本机窗口摘要。handle 不透明，标题仅用于本机选择。
+// DEV-CU P5-2（用户选定方案①）：补 pid——observe/act 必填 pid，handle 不可逆无法反解；
+// pid 只在本机渲染器↔主进程间使用，不上送服务端或模型（C09 仍禁进程路径/句柄/窗口全集）。
 export type DesktopComputerWindow = {
+  pid: number
   handle: string
   process: string
   title: string

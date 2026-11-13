@@ -100,6 +100,16 @@ export function computerErrorHint(error: unknown): string {
   return code ? COMPUTER_ERROR_HINTS[code] : errorMessage(error)
 }
 
+/**
+ * 按码值取中文提示（供本机意图的 {ok:false, code, message} 结果用，不经过 ApiError）。
+ * 表外码返回空串，调用方回落到结果自带的 message——同样不吞错。
+ */
+export function computerHintForCode(code: string): string {
+  return (COMPUTER_ERROR_CODES as readonly string[]).includes(code)
+    ? COMPUTER_ERROR_HINTS[code as ComputerErrorCode]
+    : ''
+}
+
 // ---------------------------------------------------------------------------
 // 服务端视图（字段与 Go 侧 json tag 一一对应，§4.10 / §4.11）
 // ---------------------------------------------------------------------------
