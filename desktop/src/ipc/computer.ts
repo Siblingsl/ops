@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { IpcMainInvokeEvent } from 'electron';
 import { ComputerWorkerHost, type WindowSummary, type ObserveRequest } from '../computer-worker-host';
-
+import { forgetComputerAuthorization, recordComputerAuthorization } from '../computer-authorizations';
 // DT-08 片 3（≡DEV-S02）：computer:* 固定意图拆分。从 main.ts 原样搬出（W17b 选窗器
 // + DT-04 UIA 主链路），返回值形状与调用方校验逐字节不变。computerWorkerHost 单例由
 // main.ts 创建后传入（退出清理 disposeApplicationResources 直接持有 main.ts 侧引用）。
@@ -104,6 +104,13 @@ export function registerComputerIpcHandlers(deps: {
     if (!raw || typeof raw !== 'object') throw new Error('computer_uia_params_invalid');
     const pid = parseUiaPid(raw);
     const observeParams = parseObserveParams(raw, pid);
+    // P4-11 收口：executor 只拿得到 grant_id，pid/摘要必须由本机授权时登记。
+    recordComputerAuthorization({
+      grantId: observeParams.grant_id,
+      generation: observeParams.generation,
+      pid,
+      targetSummary: observeParams.target_summary,
+    });
     try {
       return await computerWorkerHostRef!.observe(observeParams);
     } catch (error) {
@@ -151,6 +158,7 @@ export function registerComputerIpcHandlers(deps: {
     const action = typeof body.action === 'string' && body.action.length > 0 && body.action.length <= 32 ? body.action : '';
     if (!action) throw new Error('computer_uia_params_invalid');
     const value = body.value === undefined || body.value === null ? null : String(body.value).slice(0, 32768);
+    recordComputerAuthorization({ grantId, generation, pid, targetSummary: parseUiaSummary(body) });
     try {
       return await computerWorkerHostRef!.act({
         pid, ref, grant_id: grantId, generation, action, value,
@@ -179,6 +187,7 @@ export function registerComputerIpcHandlers(deps: {
       && ((raw as { grant_id?: string }).grant_id as string).length <= 64
       ? (raw as { grant_id: string }).grant_id : '';
     if (!grantId) throw new Error('computer_uia_params_invalid');
+    forgetComputerAuthorization(grantId);
     try {
       return await computerWorkerHostRef!.invalidate(grantId);
     } catch (error) {

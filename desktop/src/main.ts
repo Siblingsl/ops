@@ -23,6 +23,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { ensureProductBridge, getActiveBridge, startBrowserBridgeDiagnostics, stopActiveBridge } from './browser-bridge';
 import { BrowserCommandExecutor, scheduleNextMs } from './browser-executor';
+import { ComputerCommandExecutor } from './computer-command-executor';
+import { clearComputerAuthorizations, computerAuthorizationGeneration, computerAuthorizationOf } from './computer-authorizations';
 import type { McpHostManager } from './mcp-host';
 import { registerMcpIpcHandlers } from './ipc/mcp';
 import { registerVoiceIpcHandlers, setRealtimeBridge } from './ipc/voice';
@@ -313,6 +315,7 @@ function startApplication(): void {
       // 后台领取循环：自动生成的任务只有客户端主动 claim 才会执行。
       startPlatformClaimLoop();
       startBrowserCommandExecutor();
+  startComputerCommandExecutor();
       if (restoredMode === 'incompatible') showFailureWindow();
       else await loadBusinessPage();
     } catch (error) {
@@ -908,6 +911,7 @@ function disposeApplicationResources(): void {
   safeDispose('platform presence', stopPlatformPresence);
   safeDispose('platform claim loop', stopPlatformClaimLoop);
   safeDispose('browser command executor', stopBrowserCommandExecutor);
+  safeDispose('computer command executor', stopComputerCommandExecutor);
   safeDispose('platform login flow', () => void platformLoginFlow.stop());
   safeDispose('realtime bridge', () => realtimeBridge?.stop());
   safeDispose('mcp host connections', () => mcpHostManager?.stopAll());
@@ -2274,6 +2278,111 @@ function stopBrowserCommandExecutor(): void {
   clearInterval(browserExecutorTimer);
   browserExecutorTimer = null;
   browserExecutorIdleRounds = 0;
+}
+
+// DEV-CU P4-11 收口：电脑命令执行器接线。与 browser 同一套调度语义（3s 起、连续空轮
+// 退避到 12s，领到命令立即回 3s）；一次 tick 最多 1 条写类由 executor 本体保证。
+let computerExecutorTimer: NodeJS.Timeout | null = null;
+const COMPUTER_EXECUTOR_INTERVAL_MS = 3000;
+const COMPUTER_EXECUTOR_IDLE_MAX_MS = 12_000;
+let computerExecutorIdleRounds = 0;
+
+const COMPUTER_EXECUTOR_ERRORS = new Set([
+  'hard_forbidden', 'pid_invalid', 'computer_invalid_args', 'computer_stale_ref',
+  'computer_target_changed', 'computer_action_not_supported', 'computer_action_failed',
+  'computer_policy_denied', 'computer_app_unresponsive', 'computer_timeout',
+  'computer_internal', 'worker_timeout', 'worker_exit',
+]);
+
+/** 命令执行：只按本机授权登记表取 pid/摘要；载荷只有 ref/text，命令本身不含归属。 */
+async function executeComputerCommand(
+  actionKind: string,
+  payload: unknown,
+  _timeoutMs: number,
+  grant: { grant_id: string; generation: number },
+): Promise<{ ok: true; result: unknown; disposition?: unknown } | { ok: false; code: string; message?: string }> {
+  const auth = computerAuthorizationOf(grant.grant_id);
+  if (!auth || auth.generation !== grant.generation) {
+    return { ok: false, code: 'computer_stale_ref', message: '本机授权版本已变化' };
+  }
+  if (!computerWorkerHost) return { ok: false, code: 'computer_worker_unavailable' };
+  const body = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+  const ref = typeof body.ref === 'string' ? body.ref : '';
+  if (!ref) return { ok: false, code: 'computer_invalid_args', message: '命令缺少 ref' };
+  try {
+    if (actionKind === 'observe') {
+      const view = await computerWorkerHost.observe({
+        pid: auth.pid,
+        target_summary: auth.targetSummary,
+        grant_id: auth.grantId,
+        generation: auth.generation,
+      });
+      if (!view.ok) return { ok: false, code: view.error || 'computer_action_failed' };
+      return { ok: true, result: view };
+    }
+    const act = await computerWorkerHost.act({
+      pid: auth.pid,
+      ref,
+      grant_id: auth.grantId,
+      generation: auth.generation,
+      action: actionKind,
+      value: typeof body.text === 'string' ? body.text : null,
+      target_summary: auth.targetSummary,
+    }) as { ok?: boolean; error?: string; message?: string; disposition?: unknown };
+    if (act && act.ok === false) {
+      const code = typeof act.error === 'string' ? act.error : 'computer_action_failed';
+      return { ok: false, code, message: act.message };
+    }
+    return { ok: true, result: act, disposition: act?.disposition };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    const code = COMPUTER_EXECUTOR_ERRORS.has(message) ? message : 'computer_internal';
+    return { ok: false, code, message };
+  }
+}
+
+function startComputerCommandExecutor(): void {
+  if (computerExecutorTimer) return;
+  const executor = new ComputerCommandExecutor({
+    listPending: async () => (desktopClient ? await desktopClient.listPendingComputerCommands() : { commands: [] }),
+    dispatch: async (id) => {
+      if (!desktopClient) throw new Error('desktop client unavailable');
+      return await desktopClient.dispatchComputerCommand(id);
+    },
+    receipt: async (id, body) => {
+      if (!desktopClient) throw new Error('desktop client unavailable');
+      return await desktopClient.receiptComputerCommand(id, body);
+    },
+    localGenerationOf: (grantId) => computerAuthorizationGeneration(grantId),
+    execute: executeComputerCommand,
+    ready: () => !!desktopClient && !!computerWorkerHost,
+    invalidate: () => {
+      const ids = clearComputerAuthorizations();
+      for (const id of ids) {
+        try { void computerWorkerHost?.invalidate(id); } catch { /* 清理失败不影响下一轮 */ }
+      }
+    },
+    log: (line) => console.log(line),
+  });
+  const runTick = async (): Promise<void> => {
+    const startedAt = Date.now();
+    const executed = await executor.tick().catch(() => 0);
+    const elapsed = Date.now() - startedAt;
+    const next = Math.max(scheduleNextMs(executed, computerExecutorIdleRounds, COMPUTER_EXECUTOR_INTERVAL_MS, COMPUTER_EXECUTOR_IDLE_MAX_MS) - elapsed, 250);
+    computerExecutorIdleRounds = executed > 0 ? 0 : computerExecutorIdleRounds + 1;
+    computerExecutorTimer = setTimeout(() => { void runTick(); }, next);
+    computerExecutorTimer.unref?.();
+  };
+  computerExecutorTimer = setTimeout(() => { void runTick(); }, COMPUTER_EXECUTOR_INTERVAL_MS);
+  computerExecutorTimer.unref?.();
+}
+
+function stopComputerCommandExecutor(): void {
+  if (!computerExecutorTimer) return;
+  clearTimeout(computerExecutorTimer);
+  clearInterval(computerExecutorTimer);
+  computerExecutorTimer = null;
+  computerExecutorIdleRounds = 0;
 }
 
 // writeAccountProfileMeta 写"账号 slot"的 meta.json。

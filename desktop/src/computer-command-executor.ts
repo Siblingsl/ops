@@ -28,8 +28,9 @@ export interface ComputerExecutorDeps {
   receipt: (id: string, body: { state: string; error_code?: string; result?: unknown; disposition?: unknown }) => Promise<unknown>;
   /** 本机当前授权：grant_id → generation；领取的命令 generation 不一致即拒派发。 */
   localGenerationOf: (grantId: string) => number | null;
-  /** 执行一次命令：observe（只读）或 act（含 ref 的写类）。worker 超时由调用方按 computer_timeout 处理。 */
-  execute: (actionKind: string, payload: unknown, timeoutMs: number) =>
+  /** 执行一次命令：observe（只读）或 act（含 ref 的写类）。worker 超时由调用方按 computer_timeout 处理。
+   * grant 明确传回，供 main 侧从本机授权登记表取 pid/target_summary（命令载荷本身不含归属）。 */
+  execute: (actionKind: string, payload: unknown, timeoutMs: number, grant: { grant_id: string; generation: number }) =>
     Promise<{ ok: true; result: unknown; disposition?: unknown } | { ok: false; code: string; message?: string }>;
   /** 桥是否处于可执行状态（登录且桌面客户端可用）；其他状态跳过本轮并清 RefStore。 */
   ready: () => boolean;
@@ -114,7 +115,10 @@ export class ComputerCommandExecutor {
       ? new Date(String(cmd.deadline_at)).getTime() - Date.now()
       : MAX_COMMAND_WAIT_MS;
     const timeoutMs = Math.max(3_000, Math.min(MAX_COMMAND_WAIT_MS, Number.isFinite(remaining) ? remaining : MAX_COMMAND_WAIT_MS));
-    const result = await this.deps.execute(action, claimed.payload ?? {}, timeoutMs);
+    const result = await this.deps.execute(action, claimed.payload ?? {}, timeoutMs, {
+      grant_id: grantId,
+      generation: expected,
+    });
     try {
       if (result.ok) {
         await this.deps.receipt(id, {

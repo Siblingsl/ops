@@ -477,6 +477,26 @@ export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(Channel
     });
   }
 
+  // DEV-CU P4-11 收口：电脑命令执行器的服务端三步（pending → CAS dispatch → receipt）。
+  // 与 browser 同构；载荷里只有 ref/text，不含归属（grant 由命令行携带）。
+  async listPendingComputerCommands(): Promise<{ commands: Array<{ id: string; action_kind: string; grant_id?: string; generation?: number; deadline_at?: string; claimed?: boolean; payload?: unknown; [key: string]: unknown }> }> {
+    return await this.request('/agent/computer/commands/pending');
+  }
+
+  async dispatchComputerCommand(id: string): Promise<{ id: string; action_kind: string; grant_id?: string; generation?: number; deadline_at?: string; claimed?: boolean; payload?: unknown; [key: string]: unknown }> {
+    return await this.request(`/agent/computer/commands/${encodeURIComponent(id)}/dispatch`, {
+      method: 'POST',
+      body: '{}'
+    });
+  }
+
+  async receiptComputerCommand(id: string, body: { state: string; error_code?: string; result?: unknown; disposition?: unknown }): Promise<Record<string, unknown>> {
+    return await this.request(`/agent/computer/commands/${encodeURIComponent(id)}/receipt`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+  }
+
   async clearCurrentAccountData(expectedUserId: string): Promise<void> {
     const auth = await this.getAuthInfo();
     if (auth.user_id !== expectedUserId) throw new Error('当前登录账号已变化，请刷新设置后重试。');
