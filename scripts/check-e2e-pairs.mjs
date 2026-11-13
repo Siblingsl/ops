@@ -52,6 +52,7 @@ const ALLOWLIST = new Map([
   ['agent-workbench-aw08.spec.ts', 'AW08 工作台布局：浏览器 vs 桌面 presentation'],
   ['agent-workbench-aw12-layout.spec.ts', 'AW12 窄窗布局：浏览器 vs 桌面 presentation'],
   ['agent-workbench.spec.ts', '工作台主链路：浏览器 vs 真实 Electron'],
+  ['computer-command-card.spec.ts', '电脑命令卡片：浏览器能力门关闭 vs 桌面逐张执行'],
   ['d122-ui-layout.spec.ts', 'D122 界面骨架：浏览器 vs 桌面 presentation'],
   ['d123-ui-alignment.spec.ts', 'D123 对齐：浏览器 vs 桌面 presentation'],
   ['skills-boundaries.spec.ts', '技能边界：浏览器有编辑弹窗，桌面只有浏览器入口'],

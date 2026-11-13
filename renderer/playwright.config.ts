@@ -58,6 +58,7 @@ const sharedScenarios = [
   'agent-workbench.spec.ts',
   'agent-workbench-aw08.spec.ts',
   'agent-workbench-aw12-layout.spec.ts',
+  'computer-command-card.spec.ts',
   'agent-documents.spec.ts',
   'agent-events.spec.ts',
   'agent-goals.spec.ts',
