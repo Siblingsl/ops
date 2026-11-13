@@ -207,7 +207,7 @@ func (s *Server) createComputerCommand(w http.ResponseWriter, r *http.Request) e
 		if cardID, err = uuid.Parse(body.CardID); err != nil {
 			return apiErr(400, "bad_request", "card_id 必须是 UUID")
 		}
-		if !s.computerCardConfirmed(r.Context(), id.UserID, cardID, body.ApprovalHash) {
+		if !s.computerCardConfirmed(r.Context(), id.UserID, cardID, grantID, body.ExpectedGeneration, body.Action, payloadJSONForHash(body.Payload), body.ApprovalHash) {
 			return apiErr(409, "computer_approval_conflict", "卡片不存在、未确认或批准内容不符")
 		}
 	}
@@ -281,6 +281,13 @@ func (s *Server) createComputerCommand(w http.ResponseWriter, r *http.Request) e
 		return err
 	}
 
+	// 确认凭证已消费：卡片 pending → executing，同一张卡不能再发起第二条命令。
+	if requiresConfirmation && cardID != uuid.Nil {
+		_, _ = s.agentMutateActions(r.Context(), conversationID, `UPDATE agent_action
+			SET status='executing', executed_at=now(), revision=revision+1
+			WHERE id=$1 AND status='pending'`, cardID)
+	}
+
 	// 步骤 7：best-effort 事件（失败只 Warn，不回滚命令状态）。
 	s.emitComputerCommandEvent(r.Context(), conversationID, "computer.command_requested", map[string]any{
 		"command_id":  commandID.String(),
@@ -313,9 +320,22 @@ func (s *Server) runComputerCommand(w http.ResponseWriter, r *http.Request) erro
 	var body struct {
 		Action  string         `json:"action"`
 		Payload map[string]any `json:"payload"`
+		// 工具目录的电脑动作把语义参数平铺在 body（pBody("ref")/pBody("text")），
+		// 不是嵌套 payload；这里归一成 payload，避免模型链路传空载荷。
+		Ref  string `json:"ref"`
+		Text string `json:"text"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&body); err != nil {
 		return apiErr(400, "bad_request", "请求体无法解析")
+	}
+	if body.Payload == nil {
+		body.Payload = map[string]any{}
+	}
+	if body.Ref != "" {
+		body.Payload["ref"] = body.Ref
+	}
+	if body.Text != "" {
+		body.Payload["text"] = body.Text
 	}
 	if err := validateComputerAction(body.Action, body.Payload); err != nil {
 		return err
@@ -340,9 +360,16 @@ func (s *Server) runComputerCommand(w http.ResponseWriter, r *http.Request) erro
 	if computerIsHardForbidden(targetSummary) {
 		return apiErr(403, "computer_policy_denied", "目标命中硬禁区，永远拒绝")
 	}
-	// 步骤 2：写类只提交预览——不建命令（命令表零新增），由 D-117 卡片确认后走显式入口。
+	// 步骤 2：写类只提交预览——不建命令（命令表零新增），但必须在 D-117 卡片表
+	// 落一张待确认卡片：否则渲染器没有 card_id/approval_hash，确认闸门永远过不去。
 	if body.Action == "invoke" || body.Action == "type" {
 		payloadJSON, _ := json.Marshal(body.Payload)
+		cardID, approvalHash, preview, err := s.createComputerCard(r.Context(),
+			principal.ConversationID, principal.RunID, id.WorkspaceID, id.UserID,
+			grantID, generation, body.Action, body.Payload, targetSummary)
+		if err != nil {
+			return err
+		}
 		return ok(w, map[string]any{
 			"state":                 "awaiting_confirmation",
 			"action_kind":           body.Action,
@@ -350,6 +377,10 @@ func (s *Server) runComputerCommand(w http.ResponseWriter, r *http.Request) erro
 			"generation":            generation,
 			"payload":               json.RawMessage(payloadJSON),
 			"requires_confirmation": true,
+			"card_id":               cardID.String(),
+			"approval_hash":         approvalHash,
+			"preview":               preview,
+			"target_summary":        targetSummary,
 			"note":                  "写类动作需要用户逐张确认卡片后执行（D-117）",
 		})
 	}
@@ -442,14 +473,133 @@ func (s *Server) waitForComputerCommand(r *http.Request, w http.ResponseWriter, 
 // computerCommandBudgetPerWindow：§4.10 预算（60 动作 / 10 分钟，docs/27:1081）。
 const computerCommandBudgetPerWindow = 60
 
-// computerCardConfirmed 校验卡片存在且「已由本人确认」、批准内容 hash 一致。
-// D-117 卡片表（agent_card）的确认状态在 computer 域尚未接线，先按保守口径
-// fail-closed：写类命令在卡片机制接入前一律无法通过确认闸门。落点登记在台账。
-func (s *Server) computerCardConfirmed(ctx context.Context, userID uuid.UUID, cardID uuid.UUID, approvalHash string) bool {
-	_ = userID
-	_ = cardID
-	_ = approvalHash
-	return false
+// computerCardConfirmed 校验卡片存在、属于本人、且仍待确认、批准内容 hash 一致。
+// 卡片由 runComputerCommand 的写类预览创建（tool_name=computer_command），
+// 用户点「执行」后由 createComputerCommand 原子转 executing，二次执行会因状态不符被拒。
+func (s *Server) computerCardConfirmed(ctx context.Context, userID uuid.UUID, cardID uuid.UUID,
+	grantID uuid.UUID, generation int64, action string, payload []byte, approvalHash string) bool {
+	var fingerprint string
+	var params []byte
+	err := s.db.QueryRow(ctx, `
+		SELECT fingerprint, params FROM agent_action
+		WHERE id=$1 AND user_id=$2 AND tool_name='computer_command'
+		  AND status='pending' AND expires_at > now()`,
+		cardID, userID).Scan(&fingerprint, &params)
+	if err != nil {
+		return false
+	}
+	// 客户端提交的 hash、卡片指纹、按本次动作/载荷/generation 重算的 hash 三者必须一致；
+	// 否则「批了 A、执行 B」能绕过确认（§6 红线 2）。
+	if fingerprint != approvalHash || computerApprovalHash(action, payload, generation) != fingerprint {
+		return false
+	}
+	var exec computerCardExecution
+	if err := json.Unmarshal(params, &exec); err != nil {
+		return false
+	}
+	return exec.GrantID == grantID.String() && exec.Generation == generation
+}
+
+// payloadJSONForHash 与建卡时的 json.Marshal(payload) 同路径，保证 hash 可复算。
+func payloadJSONForHash(payload map[string]any) []byte {
+	b, _ := json.Marshal(payload)
+	return b
+}
+
+// computerApprovalHash 绑定「动作 + 载荷 + 审批版本」，卡片确认后换载荷或 generation 都会失配。
+func computerApprovalHash(action string, payload []byte, generation int64) string {
+	base := computerInputHash(action, payload)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s.%d", base, generation)))
+	return fmt.Sprintf("%x", sum)
+}
+
+// computerPreviewText 截断内容预览：rune 级截断，避免中文被切坏。
+func computerPreviewText(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}
+
+// createComputerCard 为写类预览落一张 D-117 卡片（agent_action，kind=W）：
+// params 存执行凭据（grant/generation/payload/hash），preview 存既有卡片视图字段。
+// 同一目标的旧待确认卡片先过期，满足唯一开放卡片索引。
+func (s *Server) createComputerCard(ctx context.Context, convID, runID, wsID, userID uuid.UUID,
+	grantID uuid.UUID, generation int64, action string, payload map[string]any, targetSummary string,
+) (uuid.UUID, string, map[string]any, error) {
+	payloadJSON, _ := json.Marshal(payload)
+	approvalHash := computerApprovalHash(action, payloadJSON, generation)
+	targetRef := payloadRef(payload)
+	if targetRef == "" {
+		targetRef = grantID.String()
+	}
+	exec := computerCardExecution{
+		GrantID: grantID.String(), Generation: generation, ActionKind: action,
+		Payload: payload, TargetRef: targetRef, TargetSummary: targetSummary, ApprovalHash: approvalHash,
+	}
+	paramsJSON, _ := json.Marshal(exec)
+	content := ""
+	if v, ok := payload["text"].(string); ok {
+		content = v
+	} else if v, ok := payload["value"].(string); ok {
+		content = v
+	}
+	preview := map[string]any{
+		"title":       "电脑操作确认",
+		"target_name": computerPreviewText(targetSummary, 80),
+		"changes": []map[string]any{
+			{"field": "target", "label": "目标元素", "before": "", "after": computerPreviewText(targetSummary, 80), "editable": false, "blank": false},
+			{"field": "ref", "label": "元素引用", "before": "", "after": targetRef, "editable": false, "blank": false},
+			{"field": "action", "label": "动作", "before": "", "after": action, "editable": false, "blank": false},
+			{"field": "content", "label": "内容预览", "before": "", "after": computerPreviewText(content, 60), "editable": false, "blank": false},
+			{"field": "approval", "label": "审批指纹", "before": "", "after": approvalHash[:12], "editable": false, "blank": false},
+		},
+		"notices": []string{"执行后可能改变目标应用内容；出现未知结果请人工核对，不要重复操作"},
+		"ai_cost": false,
+	}
+	previewJSON, _ := json.Marshal(preview)
+
+	// 唯一开放卡片按「目标 + 批准内容指纹」隔离：同目标不同载荷各自成卡，
+	// 同目标同载荷的旧待确认卡先过期。
+	targetKey := targetRef + "#" + approvalHash[:12]
+	_, _ = s.agentMutateActions(ctx, convID, `UPDATE agent_action SET status='expired', revision=revision+1
+		WHERE user_id=$1 AND tool_name='computer_command' AND target_key=$2
+		  AND status IN ('pending','needs_input')`, userID, targetKey)
+
+	var cardID uuid.UUID
+	if err := s.withTx(ctx, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO agent_action
+				(conversation_id, run_id, batch_id, workspace_id, user_id, tool_call_id, tool_name, kind,
+				 target_type, target_id, target_key, status, params, preview, fingerprint, expires_at)
+			VALUES ($1,$2,$3,$4,$5,$6,'computer_command','W','computer',$7,$8,'pending',
+				$9::jsonb,$10::jsonb,$11, now() + interval '10 minutes')
+			RETURNING id`,
+			convID, runID, uuid.New(), wsID, userID, "computer:"+uuid.NewString(),
+			grantID.String(), targetKey, paramsJSON, previewJSON, approvalHash).Scan(&cardID); err != nil {
+			return err
+		}
+		// 与其他动作卡同一条事件链，渲染器不必等整会话刷新。
+		return appendAgentActionEventTx(ctx, tx, cardID, false)
+	}); err != nil {
+		return uuid.Nil, "", nil, err
+	}
+	return cardID, approvalHash, preview, nil
+}
+
+// updateComputerCardFromCommand 把命令终态回写到卡片；unknown_outcome 归 failed，
+// 由 disposition/error_code 区分「可能已生效」，卡片不再可执行。
+func (s *Server) updateComputerCardFromCommand(ctx context.Context, convID, commandID uuid.UUID, state string) {
+	status := "failed"
+	if state == "succeeded" {
+		status = "succeeded"
+	}
+	_, _ = s.agentMutateActions(ctx, convID, `UPDATE agent_action a
+		SET status=$2, finished_at=now(), revision=revision+1
+		FROM agent_computer_command c
+		WHERE c.id=$1 AND a.id=c.card_id AND a.tool_name='computer_command'
+		  AND a.status IN ('pending','executing')`, commandID, status)
 }
 
 // nullUUID 把 Nil UUID 写成 SQL NULL（run_id / card_id 可空）。
@@ -709,6 +859,7 @@ func (s *Server) receiptComputerCommand(w http.ResponseWriter, r *http.Request) 
 		commandID, body.State, body.ReceiptHash, body.ErrorCode, nullJSON(body.Result), nullJSON(body.Disposition)); err != nil {
 		return err
 	}
+	s.updateComputerCardFromCommand(r.Context(), conversationID, commandID, body.State)
 	s.emitComputerCommandEvent(r.Context(), conversationID, "computer.command_finished", map[string]any{
 		"command_id": commandID.String(), "state": body.State, "error_code": body.ErrorCode,
 	})
@@ -727,6 +878,12 @@ func (s *Server) sweepComputerCommands(ctx context.Context) {
 	if tag.RowsAffected() > 0 {
 		slog.Info("电脑命令超时转 unknown_outcome", "count", tag.RowsAffected())
 	}
+	// 超时命令对应的确认卡不再可执行；状态收敛为 failed，避免 UI 永远停在 executing。
+	_, _ = s.db.Exec(ctx, `UPDATE agent_action a
+		SET status='failed', finished_at=now(), revision=revision+1
+		FROM agent_computer_command c
+		WHERE c.state='unknown_outcome' AND c.error_code='computer_timeout'
+		  AND a.id=c.card_id AND a.tool_name='computer_command' AND a.status IN ('pending','executing')`)
 }
 
 // computerCommandModelProject 是 run 内命令响应的模型投影：

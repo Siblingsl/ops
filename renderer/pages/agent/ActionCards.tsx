@@ -130,6 +130,28 @@ export function AgentActionCards({ actions, running, onRefresh, onContinue, onEx
     const route = window.location.pathname + window.location.search
     let canContinue = false
     try {
+      // 电脑操作卡片不走 /agent/actions/{id}/execute：那张端点按工具目录执行，
+      // computer_command 不在目录里。这里把确认卡转成一条电脑命令（一次点击一条）。
+      if (action.computer_execution && request) {
+        const exec = action.computer_execution
+        const result = await post<{ state?: string }>('/agent/computer/commands', {
+          grant_id: exec.grant_id,
+          generation: exec.generation,
+          action_kind: exec.action_kind,
+          payload: exec.payload,
+          card_id: action.id,
+          approval_hash: exec.approval_hash,
+          request_id: crypto.randomUUID(),
+        })
+        if (result?.state === 'unknown_outcome') {
+          setError('执行结果未知：命令可能已生效，请人工核对目标应用，不要重复操作。')
+          setUpdated((old) => ({ ...old, [action.id]: { ...action, status: 'failed' } }))
+        } else {
+          setUpdated((old) => ({ ...old, [action.id]: { ...action, status: 'executing' } }))
+        }
+        await onRefresh()
+        return
+      }
       if (request) {
         if (action.tool_name === 'wechat__push' || action.tool_name === 'checks__start') request.client_payload = await agentWechatPayload(action.tool_name, action.target.id)
         if (requestIDsEnabled) {

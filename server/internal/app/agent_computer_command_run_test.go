@@ -134,7 +134,7 @@ func TestComputerCommandRunHappyPath(t *testing.T) {
 	_ = grant
 }
 
-// ② 写类只出预览：命令表零新增。
+// ② 写类只出预览：建确认卡，但命令表零新增。
 func TestComputerCommandRunWritePreviewOnly(t *testing.T) {
 	conv, _, runID := cu47Setup(t)
 	var before, after int
@@ -156,7 +156,57 @@ func TestComputerCommandRunWritePreviewOnly(t *testing.T) {
 	}
 }
 
-// ③ 无租约：409 computer_foreground_busy 并提示先选窗。
+// ③ 写类预览建卡后可确认执行：正确 card_id+hash 放行，一次消费，二次/错 hash 拒绝。
+func TestComputerCommandWriteCardConfirm(t *testing.T) {
+	conv, grant, runID := cu47Setup(t)
+	st, out := cu47WaitResult(t, cu47RunCall(t, conv.ID, uuid.MustParse(runID), "computer_click_target",
+		map[string]any{"ref": "@sabc123:e1"}), 10*time.Second)
+	if st != http.StatusOK {
+		t.Fatalf("写类预览应 200：%d %v", st, out)
+	}
+	// 模型投影按 C02 剥掉 card_id/approval_hash（模型不持审批凭据），
+	// 卡片从会话动作列表读；这里直接查库核对落卡与指纹。
+	var cardUUID uuid.UUID
+	var hash string
+	var status string
+	if err := env.srv.db.QueryRow(context.Background(), `
+		SELECT id, fingerprint, status FROM agent_action
+		WHERE conversation_id=$1 AND tool_name='computer_command'
+		ORDER BY created_at DESC LIMIT 1`, conv.ID).Scan(&cardUUID, &hash, &status); err != nil {
+		t.Fatalf("预览应落 agent_action 卡片：%v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("新卡应为 pending：%s", status)
+	}
+	cardID := cardUUID.String()
+
+	// 错 hash → 409
+	wrong := cu44Body(grant, conv, "invoke", map[string]any{"ref": "@sabc123:e1"})
+	wrong["card_id"] = cardID
+	wrong["approval_hash"] = "deadbeef"
+	cu44Create(t, wrong, http.StatusConflict)
+
+	// 正确凭证 → queued
+	right := cu44Body(grant, conv, "invoke", map[string]any{"ref": "@sabc123:e1"})
+	right["card_id"] = cardID
+	right["approval_hash"] = hash
+	if got := cu44Create(t, right, http.StatusOK); got["state"] != "queued" {
+		t.Fatalf("确认后应 queued：%v", got)
+	}
+	env.srv.db.QueryRow(context.Background(),
+		`SELECT status FROM agent_action WHERE id=$1`, cardUUID).Scan(&status)
+	if status != "executing" {
+		t.Fatalf("命令受理后卡片应 executing：%s", status)
+	}
+
+	// 同一张卡二次执行 → 409（凭证已消费）
+	again := cu44Body(grant, conv, "invoke", map[string]any{"ref": "@sabc123:e1"})
+	again["card_id"] = cardID
+	again["approval_hash"] = hash
+	cu44Create(t, again, http.StatusConflict)
+}
+
+// ④ 无租约：409 computer_foreground_busy 并提示先选窗。
 func TestComputerCommandRunNoGrant(t *testing.T) {
 	conv, grant, runID := cu47Setup(t)
 	_ = grant

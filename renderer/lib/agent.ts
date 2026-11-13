@@ -235,6 +235,16 @@ export interface AgentAction {
   created_at: string
   editable_fields: string[]
   blank_fields: string[]
+  /** 仅 tool_name=computer_command 的写类卡片出现；执行按钮用它换 card_id+approval_hash 走电脑命令入口。 */
+  computer_execution?: {
+    grant_id: string
+    generation: number
+    action_kind: string
+    payload: Record<string, unknown>
+    target_ref: string
+    target_summary: string
+    approval_hash: string
+  }
 }
 
 export interface AgentPlanStep {

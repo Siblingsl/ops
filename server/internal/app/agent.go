@@ -1061,17 +1061,17 @@ type agentSkillUsageView struct {
 }
 
 type agentMessageView struct {
-	ID          uuid.UUID               `json:"id"`
-	Seq         int                     `json:"seq"`
-	MessageKey  string                  `json:"message_key,omitempty"`
-	Role        string                  `json:"role"`
-	Content     string                  `json:"content"`
-	AICallID    *uuid.UUID              `json:"ai_call_id"`
-	ToolCalls   []agentToolCallView     `json:"tool_calls"`
-	Attachments []agentAttachmentView   `json:"attachments"`
-	ContextRefs []agentContextReference `json:"context_refs"`
-	SkillRequests []agentSkillRequest   `json:"skill_requests"`
-	SkillUsage    []agentSkillUsageView `json:"skill_usage"`
+	ID              uuid.UUID               `json:"id"`
+	Seq             int                     `json:"seq"`
+	MessageKey      string                  `json:"message_key,omitempty"`
+	Role            string                  `json:"role"`
+	Content         string                  `json:"content"`
+	AICallID        *uuid.UUID              `json:"ai_call_id"`
+	ToolCalls       []agentToolCallView     `json:"tool_calls"`
+	Attachments     []agentAttachmentView   `json:"attachments"`
+	ContextRefs     []agentContextReference `json:"context_refs"`
+	SkillRequests   []agentSkillRequest     `json:"skill_requests"`
+	SkillUsage      []agentSkillUsageView   `json:"skill_usage"`
 	RunID           *uuid.UUID              `json:"run_id"`
 	SourceMessageID *uuid.UUID              `json:"source_message_id,omitempty"`
 	// tool 消息的调用关联：完整结果在 Content（落库上限 64KB），result_preview 只是 UI 截断预览。
@@ -1130,6 +1130,20 @@ type agentActionView struct {
 	CreatedAt      time.Time       `json:"created_at"`
 	EditableFields []string        `json:"editable_fields"`
 	BlankFields    []string        `json:"blank_fields"`
+	// ComputerExecution 仅 tool_name=computer_command 的卡片出现：渲染器执行按钮
+	// 需要 grant/generation/payload/approval_hash 才能走 /agent/computer/commands。
+	ComputerExecution *computerCardExecution `json:"computer_execution,omitempty"`
+}
+
+// computerCardExecution 是电脑操作卡片创建时写进 agent_action.params 的执行凭据。
+type computerCardExecution struct {
+	GrantID       string         `json:"grant_id"`
+	Generation    int64          `json:"generation"`
+	ActionKind    string         `json:"action_kind"`
+	Payload       map[string]any `json:"payload"`
+	TargetRef     string         `json:"target_ref"`
+	TargetSummary string         `json:"target_summary"`
+	ApprovalHash  string         `json:"approval_hash"`
 }
 
 type agentActiveRun struct {
@@ -1678,7 +1692,7 @@ func (s *Server) agentActions(ctx context.Context, tx pgx.Tx, convID uuid.UUID) 
 }
 
 const agentActionCols = `id, run_id, tool_name, kind, gate, status, target_type, target_id, work_id,
-	preview, editable_fields, blank_fields, need, result, error, last_error, expires_at, batch_id, created_at,revision`
+	preview, editable_fields, blank_fields, need, result, error, last_error, expires_at, batch_id, created_at,revision,params`
 
 // agentActionViewFrom 扫描一行 agent_action 并组装成前端 / SSE 用的卡片视图（第 11.2 节）。
 func agentActionViewFrom(row pgx.Row) (*agentActionView, error) {
@@ -1691,11 +1705,18 @@ func agentActionViewFrom(row pgx.Row) (*agentActionView, error) {
 		lastErr    []byte
 		targetType string
 		targetID   string
+		paramsJSON []byte
 	)
 	if err := row.Scan(&a.ID, &a.RunID, &a.ToolName, &a.Kind, &a.Gate, &a.Status, &targetType, &targetID, &workID,
 		&preview, &a.EditableFields, &a.BlankFields, &need, &res, &errJSON, &lastErr,
-		&a.ExpiresAt, &a.BatchID, &a.CreatedAt, &a.Revision); err != nil {
+		&a.ExpiresAt, &a.BatchID, &a.CreatedAt, &a.Revision, &paramsJSON); err != nil {
 		return nil, err
+	}
+	if a.ToolName == "computer_command" && len(paramsJSON) > 0 {
+		var exec computerCardExecution
+		if err := json.Unmarshal(paramsJSON, &exec); err == nil {
+			a.ComputerExecution = &exec
+		}
 	}
 	var pv agentCardPreview
 	_ = json.Unmarshal(preview, &pv)
