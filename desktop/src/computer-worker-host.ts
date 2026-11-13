@@ -114,7 +114,9 @@ export class ComputerWorkerHost extends EventEmitter {
     const child = utilityProcess.fork(path.join(__dirname, 'computer-worker', 'index.js'), [], {
       serviceName: 'OPS Desktop computer worker',
       stdio: 'ignore',
-      env: { OPS_DESKTOP_WORKER: '1' },
+      // 必须继承主进程环境：worker 内要用 powershell 做 UIA/窗口枚举，
+      // 只传 OPS_DESKTOP_WORKER 会丢掉 PATH/SystemRoot，execFile 直接 ENOENT。
+      env: { ...process.env, OPS_DESKTOP_WORKER: '1' },
     });
     this.worker = child;
     child.on('message', (msg: { id?: string; ok?: boolean; error?: string; [k: string]: unknown }) => {

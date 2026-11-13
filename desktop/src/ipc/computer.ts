@@ -99,6 +99,33 @@ export function registerComputerIpcHandlers(deps: {
   // DEV-CU P2-7：`uia_observe`（§4.5 观察树）。仅本机通道，不接服务端——
   // 与 computer:uia-read / uia-invoke 同构；本包**不扩 preload 白名单**（P3-7 统一扩展），
   // 所以渲染器暂时还够不到这条通道，先用 desktop/test 直接测 host。
+  // 渲染器的 DesktopComputerUiaObserveNode 契约是精确字段集（含 depth、无 bounds_hash）；
+  // worker 树为了本机过期判断保留了 bounds_hash 且没有 depth。这里做一次边界转换，
+  // 既不改 worker 的 RefStore 语义，也不放宽 preload 的字段白名单。
+  type ObserveNodeOut = {
+    role: string; name: string; value: string; ref_id: string;
+    available_actions: string[]; states: string[]; bounds: { x: number; y: number; w: number; h: number };
+    children: ObserveNodeOut[]; children_count: number; depth: number;
+  };
+  const toObserveNodeOut = (node: any, depth = 0): ObserveNodeOut => ({
+    role: String(node?.role ?? ''),
+    name: String(node?.name ?? ''),
+    value: String(node?.value ?? ''),
+    ref_id: String(node?.ref_id ?? ''),
+    available_actions: Array.isArray(node?.available_actions) ? node.available_actions.map(String) : [],
+    states: Array.isArray(node?.states) ? node.states.map(String) : [],
+    bounds: {
+      x: Number(node?.bounds?.x ?? 0), y: Number(node?.bounds?.y ?? 0),
+      w: Number(node?.bounds?.w ?? 0), h: Number(node?.bounds?.h ?? 0),
+    },
+    children: Array.isArray(node?.children) ? node.children.map((child: unknown) => toObserveNodeOut(child, depth + 1)) : [],
+    children_count: Number.isFinite(Number(node?.children_count)) ? Number(node.children_count) : 0,
+    depth,
+  });
+  const toObserveResultOut = (result: any): any => {
+    if (!result || result.ok !== true || !result.tree) return result;
+    return { ...result, tree: toObserveNodeOut(result.tree) };
+  };
   ipcHandle('computer:uia-observe', async (event, raw) => {
     requireComputerCaller(event);
     if (!raw || typeof raw !== 'object') throw new Error('computer_uia_params_invalid');
@@ -112,7 +139,7 @@ export function registerComputerIpcHandlers(deps: {
       targetSummary: observeParams.target_summary,
     });
     try {
-      return await computerWorkerHostRef!.observe(observeParams);
+      return toObserveResultOut(await computerWorkerHostRef!.observe(observeParams));
     } catch (error) {
       // 既有错误映射：worker 的语义错误码原样回传，其余统一成「组件不可用」。
       const message = error instanceof Error ? error.message : '';
@@ -159,9 +186,14 @@ export function registerComputerIpcHandlers(deps: {
     if (!action) throw new Error('computer_uia_params_invalid');
     const value = body.value === undefined || body.value === null ? null : String(body.value).slice(0, 32768);
     recordComputerAuthorization({ grantId, generation, pid, targetSummary: parseUiaSummary(body) });
+    // 渲染器 preload 的公开动作名是 invoke / setvalue（P3-7 白名单），
+    // worker 语义动作链用 click / set_value（actions.js WORKER_ACTIONS）。
+    // 两个词表在 IPC 边界对齐，避免渲染器直传 worker 内部名。
+    const WORKER_ACTION_NAME: Record<string, string> = { invoke: 'click', setvalue: 'set_value' };
+    const workerAction = WORKER_ACTION_NAME[action] || action;
     try {
       return await computerWorkerHostRef!.act({
-        pid, ref, grant_id: grantId, generation, action, value,
+        pid, ref, grant_id: grantId, generation, action: workerAction, value,
         ...(body.selection === undefined ? {} : { selection: body.selection }),
         target_summary: parseUiaSummary(body),
       });

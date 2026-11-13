@@ -117,7 +117,8 @@ channel.onMessage((msg) => {
       const summary2 = String(msg.target_summary || '');
       if (isHardForbidden(summary2)) { emit({ ok: false, error: 'hard_forbidden' }); return; }
       const pid2 = Number(msg.pid);
-      const value = msg.value === undefined ? null : String(msg.value);
+      // null 是「未提供 value」的合法表示；只有字符串才转文本。
+      const value = msg.value === undefined || msg.value === null ? null : String(msg.value);
       if (!Number.isInteger(pid2) || pid2 <= 0) { emit({ ok: false, error: 'pid_invalid' }); return; }
 
       // P3-1：动作必须在 WORKER_ACTIONS 内。旧调用不带 action 时按 value 推断
