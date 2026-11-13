@@ -456,6 +456,16 @@ export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(Channel
     return { userId: auth.user_id, username: auth.username };
   }
 
+  // 命令执行器的写请求由主进程发起，没有页面里的 CSRF 注入；这里按当前会话补一次。
+  private async commandMutationHeaders(): Promise<Record<string, string>> {
+    try {
+      const auth = await this.getAuthInfo();
+      return auth.csrf_token ? { 'X-CSRF-Token': auth.csrf_token } : {};
+    } catch {
+      return {};
+    }
+  }
+
   // A30b 片 2（拍板：账本存载荷+同步等待）：浏览器命令执行器的服务端三步——
   // 领取 pending（含载荷）、CAS 派发（claimed=true 才执行）、回执（含 result）。
   // 类型结构与 browser-executor.ts 的 BrowserCommandRow 同构（分层各自声明）。
@@ -466,6 +476,7 @@ export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(Channel
   async dispatchBrowserCommand(id: string): Promise<{ id: string; action_kind: string; deadline_at?: string; claimed?: boolean; payload?: unknown; [key: string]: unknown }> {
     return await this.request(`/agent/browser/commands/${encodeURIComponent(id)}/dispatch`, {
       method: 'POST',
+      headers: await this.commandMutationHeaders(),
       body: '{}'
     });
   }
@@ -473,6 +484,7 @@ export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(Channel
   async receiptBrowserCommand(id: string, body: { state: string; error_code?: string; result?: unknown }): Promise<Record<string, unknown>> {
     return await this.request(`/agent/browser/commands/${encodeURIComponent(id)}/receipt`, {
       method: 'POST',
+      headers: await this.commandMutationHeaders(),
       body: JSON.stringify(body)
     });
   }
@@ -486,6 +498,7 @@ export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(Channel
   async dispatchComputerCommand(id: string): Promise<{ id: string; action_kind: string; grant_id?: string; generation?: number; deadline_at?: string; claimed?: boolean; payload?: unknown; [key: string]: unknown }> {
     return await this.request(`/agent/computer/commands/${encodeURIComponent(id)}/dispatch`, {
       method: 'POST',
+      headers: await this.commandMutationHeaders(),
       body: '{}'
     });
   }
@@ -493,6 +506,7 @@ export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(Channel
   async receiptComputerCommand(id: string, body: { state: string; error_code?: string; result?: unknown; disposition?: unknown }): Promise<Record<string, unknown>> {
     return await this.request(`/agent/computer/commands/${encodeURIComponent(id)}/receipt`, {
       method: 'POST',
+      headers: await this.commandMutationHeaders(),
       body: JSON.stringify(body)
     });
   }
