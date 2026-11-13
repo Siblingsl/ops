@@ -136,8 +136,8 @@ export function AgentActionCards({ actions, running, onRefresh, onContinue, onEx
         const exec = action.computer_execution
         const result = await post<{ state?: string }>('/agent/computer/commands', {
           grant_id: exec.grant_id,
-          generation: exec.generation,
-          action_kind: exec.action_kind,
+          expected_generation: exec.generation,
+          action: exec.action_kind,
           payload: exec.payload,
           card_id: action.id,
           approval_hash: exec.approval_hash,
