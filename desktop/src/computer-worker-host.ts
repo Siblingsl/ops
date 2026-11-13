@@ -203,6 +203,31 @@ export class ComputerWorkerHost extends EventEmitter {
     }) as WindowCaptureView;
   }
 
+  /** DEV-CU P3-6（§P3-6 步骤 1）：单控件动作转发（ref 路径，§4.7 枚举）。
+   * 走既有 private call()，不开放任意 cmd 透传；动作语义由 worker 侧
+   * dispatch + 读回验证承载，本层只按协议转发。 */
+  async act(input: {
+    pid: number; ref: string; grant_id: string; generation: number;
+    action: string; value: string | null; selection?: unknown; target_summary: string;
+  }): Promise<unknown> {
+    return await this.call('uia_invoke', {
+      pid: input.pid,
+      ref: input.ref,
+      grant_id: input.grant_id,
+      generation: input.generation,
+      action: input.action,
+      value: input.value,
+      target_summary: input.target_summary,
+      ...(input.selection === undefined ? {} : { selection: input.selection }),
+    }, 15000);
+  }
+
+  /** DEV-CU P3-6（§P3-6 步骤 1）：撤销该 grant 下全部快照（C02：授权撤销即失效）。
+   * worker 命令 uia_invalidate 的固定意图转发，不开放任意 cmd 透传。 */
+  async invalidate(grantId: string): Promise<{ ok: boolean; cleared?: number; error?: string }> {
+    return await this.call('uia_invalidate', { grant_id: grantId }) as { ok: boolean; cleared?: number; error?: string };
+  }
+
   /** 失权 / handoff / 锁屏：撤销该 grant 下全部窗口截图（C09 拒绝历史越权读取）。 */
   async invalidateCaptures(grantId: string): Promise<{ ok: boolean; cleared?: number; error?: string }> {
     return await this.call('capture_invalidate', { grant_id: grantId }) as { ok: boolean; cleared?: number; error?: string };

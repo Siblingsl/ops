@@ -912,6 +912,9 @@ function disposeApplicationResources(): void {
   safeDispose('realtime bridge', () => realtimeBridge?.stop());
   safeDispose('mcp host connections', () => mcpHostManager?.stopAll());
   safeDispose('computer worker host', () => {
+    // DEV-CU P3-6：退出清理。快照/截图按 grant 存于 worker 进程内存（C02 不落盘），
+    // host.stop() 结束 worker 进程即全部失效（computer-worker/index.js:26 exit 钩子兜底）；
+    // 运行期失权路径走 computer:uia-invalidate / capture_invalidate 固定意图。
     computerWorkerHost?.stop();
     computerWorkerHost = null;
   });

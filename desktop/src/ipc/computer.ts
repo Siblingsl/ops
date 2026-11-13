@@ -130,4 +130,57 @@ export function registerComputerIpcHandlers(deps: {
       return { ok: false as const, error: code };
     }
   });
+
+  // DEV-CU P3-6（§P3-6 步骤 2）：ref 路径单控件动作通道。参数逐个校验
+  // （pid / grant_id / generation / target_ref 格式 / action 枚举 / value 长度），
+  // 结果与 §4.1 信封对齐；错误映射复用既有 worker_* 分支并补语义码。
+  ipcHandle('computer:uia-act', async (event, raw) => {
+    requireComputerCaller(event);
+    if (!raw || typeof raw !== 'object') throw new Error('computer_uia_params_invalid');
+    const body = raw as Record<string, unknown>;
+    const pid = parseUiaPid(body);
+    const grantId = typeof body.grant_id === 'string' && body.grant_id.length > 0 && body.grant_id.length <= 64 ? body.grant_id : '';
+    if (!grantId) throw new Error('computer_uia_params_invalid');
+    const generation = body.generation === undefined || body.generation === null ? 0 : Number(body.generation);
+    if (!Number.isInteger(generation) || generation < 0) throw new Error('computer_uia_params_invalid');
+    const ref = typeof body.ref === 'string' && /^@[A-Za-z0-9_-]{3,64}:e[1-9][0-9]{0,9}$/.test(body.ref) ? body.ref : '';
+    if (!ref) throw new Error('computer_uia_params_invalid');
+    const action = typeof body.action === 'string' && body.action.length > 0 && body.action.length <= 32 ? body.action : '';
+    if (!action) throw new Error('computer_uia_params_invalid');
+    const value = body.value === undefined || body.value === null ? null : String(body.value).slice(0, 32768);
+    try {
+      return await computerWorkerHostRef!.act({
+        pid, ref, grant_id: grantId, generation, action, value,
+        ...(body.selection === undefined ? {} : { selection: body.selection }),
+        target_summary: parseUiaSummary(body),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      const known = [
+        'hard_forbidden', 'pid_invalid', 'computer_invalid_args', 'computer_stale_ref',
+        'computer_target_changed', 'computer_action_not_supported', 'computer_action_failed',
+        'computer_policy_denied', 'computer_app_unresponsive', 'computer_timeout',
+        'computer_internal', 'worker_timeout', 'worker_exit',
+      ];
+      const code = known.includes(message) ? message : 'computer_worker_unavailable';
+      return { ok: false as const, error: code };
+    }
+  });
+
+  // DEV-CU P3-6（§P3-6 步骤 2）：撤销该 grant 全部快照（C02）。固定意图，无任意透传。
+  ipcHandle('computer:uia-invalidate', async (event, raw) => {
+    requireComputerCaller(event);
+    if (!raw || typeof raw !== 'object') throw new Error('computer_uia_params_invalid');
+    const grantId = typeof (raw as { grant_id?: unknown }).grant_id === 'string'
+      && (raw as { grant_id?: unknown }).grant_id !== ''
+      && ((raw as { grant_id?: string }).grant_id as string).length <= 64
+      ? (raw as { grant_id: string }).grant_id : '';
+    if (!grantId) throw new Error('computer_uia_params_invalid');
+    try {
+      return await computerWorkerHostRef!.invalidate(grantId);
+    } catch (error) {
+      const code = error instanceof Error && /worker_(timeout|exit)/.test(error.message) ? error.message : 'computer_worker_unavailable';
+      return { ok: false as const, error: code };
+    }
+  });
 }
