@@ -5,6 +5,8 @@
 //       另含 native.readStateByPath 载体单测与 psStateScript 的 PS 解析 / UIA 成员求值。
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -467,129 +469,172 @@ test('P3-3: psStateScript 可被 PS parser 解析，且引用的 UIA 成员都�
   assert.equal(Object.keys(found).length, 16, '成员清单不得缩水');
 });
 
-test('P3-3: 真实记事本上的读回验证（OPS_UIA_SPAWN=1 opt-in）', { timeout: 180_000 }, async (t) => {
+test('P3-3: 真实记事本上的读回验证（产品 ref 链路，OPS_UIA_SPAWN=1 opt-in）', { timeout: 180_000 }, async (t) => {
   if (process.platform !== 'win32') { t.skip('需要 Windows'); return; }
   if (process.env.OPS_UIA_SPAWN !== '1') { t.skip('未设 OPS_UIA_SPAWN=1'); return; }
 
-  const { spawn } = require('node:child_process');
+  const { spawn, fork } = require('node:child_process');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const findNotepad = async () => {
-    const listed = await native.listWindows();
-    const hit = (listed.windows || []).find((w) => /^notepad(\.exe)?$/i.test(w.process) && !w.forbidden);
-    return hit ? hit.pid : 0;
-  };
+  const child = fork(path.resolve(__dirname, '..', 'src', 'computer-worker', 'index.js'), [],
+    { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  t.after(() => { try { child.kill(); } catch { /* 已退出 */ } });
+  const call = (cmd, extra = {}, timeoutMs = 25_000) => new Promise((resolve, reject) => {
+    const id = 'p33' + Math.random().toString(36).slice(2, 8);
+    const timer = setTimeout(() => { child.off('message', onMsg); reject(new Error('timeout')); }, timeoutMs);
+    const onMsg = (m) => { if (m && m.id === id) { clearTimeout(timer); child.off('message', onMsg); resolve(m); } };
+    child.on('message', onMsg);
+    child.send({ id, cmd, ...extra });
+  });
 
-  let pid = await findNotepad();
-  let spawned = null;
-  if (!pid) {
-    spawned = spawn('notepad.exe', [], { stdio: 'ignore', windowsHide: false });
-    const boot = Date.now() + 15_000;
-    while (!pid && Date.now() < boot) {
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise((r) => setTimeout(r, 500));
-      // eslint-disable-next-line no-await-in-loop
-      pid = await findNotepad();
-    }
+  // 只测自己开的记事本：桌面已有记事本进程时跳过，绝不碰用户窗口。
+  const listed0 = await call('list_windows');
+  if ((listed0.windows || []).some((w) => /notepad/i.test(w.process))) {
+    t.skip('桌面已有记事本进程（避免写入/关闭用户窗口，先关闭后再跑）');
+    return;
   }
-  t.after(() => { if (spawned) { try { spawned.kill(); } catch { /* 已退出 */ } } });
-  assert.ok(pid > 0, '没有可用的记事本窗口');
 
-  // 与 P3-2 相同：真实动作前必须把目标提到前台，做不到就跳过，不当失败。
-  // activate 脚本与 computer-worker-chain.test.cjs 的已验证版本保持一致。
-  const activate = async (hwnd, targetPid) => {
-    const script = `
+  const seed = `P33-SEED-${process.pid}-${Date.now()}`;
+  const scratch = path.join(os.tmpdir(), `ops-p33-${process.pid}-${Date.now()}.txt`);
+  fs.writeFileSync(scratch, seed, 'utf8');
+  const scratchName = path.basename(scratch);
+  let spawned = null;
+  let pid = 0;
+  let hwnd = 0;
+  t.after(() => { try { fs.unlinkSync(scratch); } catch { /* 可能仍被占用 */ } });
+
+  try {
+    spawned = spawn('notepad', [scratch], { stdio: 'ignore' });
+    const deadline = Date.now() + 60_000;
+    while (!pid && Date.now() < deadline) {
+      await sleep(500);
+      const list = await call('list_windows');
+      if (!list || list.ok !== true) continue;
+      const hit = (list.windows || []).find((w) => /notepad/i.test(w.process)
+        && String(w.title || '').includes(scratchName));
+      if (hit) pid = hit.pid;
+    }
+    if (!pid) { t.skip('未枚举到本次打开的记事本窗口'); return; }
+
+    const read = await call('uia_read', { pid, grant_id: 'g-p33', generation: 1 });
+    assert.equal(read.ok, true, `首次观察应成功：${JSON.stringify(read).slice(0, 200)}`);
+    hwnd = Number(read.window_identity && read.window_identity.hwnd) || 0;
+    assert.ok(hwnd > 0, '应取到窗口句柄');
+    let ref = '';
+    (function walk(n) {
+      if (!ref && n.role === 'textfield' && String(n.value || '').includes(seed)) ref = n.ref_id;
+      for (const c of n.children || []) walk(c);
+    })(read.tree);
+    assert.ok(ref, `应有带种子内容的编辑区 ref（seed=${seed}）`);
+
+    // 动作前把目标提到前台（Alt 解锁 + AttachThreadInput；已由 P3-2 真机验证）。
+    const activate = async (targetHwnd, targetPid) => {
+      const script = `
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName Microsoft.VisualBasic
-Add-Type -Namespace OpsAct -Name N -MemberDefinition @'
+Add-Type -Namespace OpsAct3 -Name N -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, out uint lpdwProcessId);
 [System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool BringWindowToTop(System.IntPtr hWnd);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void SwitchToThisWindow(System.IntPtr hWnd, bool fAltTab);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool IsIconic(System.IntPtr hWnd);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, System.UIntPtr dwExtraInfo);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(uint dwProcessId);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool LockSetForegroundWindow(uint dwLockFlag);
 '@
-$h = [System.IntPtr]${Number(hwnd)}
-$fg = [OpsAct.N]::GetForegroundWindow()
+$h = [System.IntPtr]${Number(targetHwnd)}
+if ([OpsAct3.N]::IsIconic($h)) { [void][OpsAct3.N]::ShowWindow($h, 9) }
+[void][OpsAct3.N]::LockSetForegroundWindow(2)
+[void][OpsAct3.N]::AllowSetForegroundWindow([uint32]::MaxValue)
+$fg = [OpsAct3.N]::GetForegroundWindow()
 $fgPid = 0
-$fgThread = [OpsAct.N]::GetWindowThreadProcessId($fg, [ref]$fgPid)
-$myThread = [OpsAct.N]::GetCurrentThreadId()
-[void][OpsAct.N]::AttachThreadInput($myThread, $fgThread, $true)
-$set = [OpsAct.N]::SetForegroundWindow($h)
-[void][OpsAct.N]::AttachThreadInput($myThread, $fgThread, $false)
+$fgThread = [OpsAct3.N]::GetWindowThreadProcessId($fg, [ref]$fgPid)
+$myThread = [OpsAct3.N]::GetCurrentThreadId()
+[void][OpsAct3.N]::AttachThreadInput($myThread, $fgThread, $true)
+[OpsAct3.N]::keybd_event(0x12, 0, 0, [System.UIntPtr]::Zero)
+[OpsAct3.N]::keybd_event(0x12, 0, 2, [System.UIntPtr]::Zero)
+$set = [OpsAct3.N]::SetForegroundWindow($h)
+[void][OpsAct3.N]::BringWindowToTop($h)
+[void][OpsAct3.N]::AttachThreadInput($myThread, $fgThread, $false)
 Start-Sleep -Milliseconds 200
-$now = [long][OpsAct.N]::GetForegroundWindow()
-if ($now -ne [long]$h) {
-  try { [void][Microsoft.VisualBasic.Interaction]::AppActivate(${Number(targetPid)}) } catch {}
-}
+$now = [long][OpsAct3.N]::GetForegroundWindow()
+if ($now -ne [long]$h) { [OpsAct3.N]::SwitchToThisWindow($h, $true) }
 Start-Sleep -Milliseconds 200
-$now2 = [long][OpsAct.N]::GetForegroundWindow()
-@{ ok = ($now2 -eq [long]$h); set = $set; before = $now; foreground = $now2 } | ConvertTo-Json -Compress
+$now = [long][OpsAct3.N]::GetForegroundWindow()
+if ($now -ne [long]$h) { try { [void][Microsoft.VisualBasic.Interaction]::AppActivate(${Number(targetPid)}) } catch {} }
+Start-Sleep -Milliseconds 200
+$now2 = [long][OpsAct3.N]::GetForegroundWindow()
+@{ ok = ($now2 -eq [long]$h); set = $set; foreground = $now2 } | ConvertTo-Json -Compress
 `;
-    const r = await native.runPowerShell(script);
-    if (!r.ok) return { ok: false };
-    try { return JSON.parse(r.stdout || '{}'); } catch { return { ok: false }; }
-  };
+      const r = await native.runPowerShell(script);
+      if (!r.ok) return { ok: false };
+      try { return JSON.parse(r.stdout || '{}'); } catch { return { ok: false }; }
+    };
 
-  // 读树，找编辑区（role=textfield）
-  let snap = null;
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    // eslint-disable-next-line no-await-in-loop
-    snap = await native.readUIA(pid);
-    if (snap.ok && snap.refmap && [...snap.refmap.inner.values()].some((e) => e.role === 'textfield')) break;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, 500));
+    const act = await activate(hwnd, pid);
+    if (!act.ok) { t.skip(`无法把记事本提到前台（${JSON.stringify(act)}），本机当前会话不可交互`); return; }
+
+    // 两次 PowerShell 之间前台可能被别的窗口抢走，product 会判 target_changed（retryable）。
+    // 每次动作前重激活，最多重试 3 次；其他错误照常抛出。
+    const invoke = async (extra) => {
+      let last = null;
+      for (let i = 0; i < 3; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const a = await activate(hwnd, pid);
+        if (!a.ok) { last = { ok: false, error: 'computer_target_changed' }; continue; }
+        // eslint-disable-next-line no-await-in-loop
+        const r = await call('uia_invoke', extra);
+        if (!(r && r.ok === false && r.error === 'computer_target_changed')) return r;
+        last = r;
+        // eslint-disable-next-line no-await-in-loop
+        await sleep(400);
+      }
+      return last;
+    };
+
+    // 1) set_value + 读回：delivered_verified，post_state 必须含写入串
+    const stamp = `P33-${Date.now()}`;
+    const done = await invoke({
+      pid, ref, grant_id: 'g-p33', generation: 1, action: 'set_value', value: stamp,
+      target_summary: read.window,
+    });
+    assert.equal(done.ok, true, `set_value 应成功：${done.error || ''} ${done.message || ''}`);
+    assert.deepEqual(done.disposition, { delivery: 'delivered_verified', retry: 'unsafe' },
+      `set_value 读回：${JSON.stringify({ disposition: done.disposition, scope: done.verification_scope, post: done.post_state })}`);
+    assert.equal(done.verification_scope, 'element_value');
+    assert.ok(String((done.post_state && done.post_state.value) || '').includes(stamp), '读回应含写入文本');
+
+    // 2) clear + 读回：值清空 → delivered_verified。
+    //    写入后重新观察一次拿新 ref（值变更可能让树节点换位），否则读回会对不上。
+    const read2 = await call('uia_read', { pid, grant_id: 'g-p33', generation: 1 });
+    assert.equal(read2.ok, true, `动作前重新观察应成功：${JSON.stringify(read2).slice(0, 200)}`);
+    let ref2 = '';
+    (function walk(n) {
+      if (!ref2 && n.role === 'textfield' && String(n.value || '').includes(stamp)) ref2 = n.ref_id;
+      for (const c of n.children || []) walk(c);
+    })(read2.tree);
+    assert.ok(ref2, '重新观察后仍应有带写入文本的编辑区 ref');
+    const cleared = await invoke({
+      pid, ref: ref2, grant_id: 'g-p33', generation: 1, action: 'clear', target_summary: read2.window,
+    });
+    assert.equal(cleared.ok, true, `clear 应成功：${cleared.error || ''} ${cleared.message || ''}`);
+    assert.equal(cleared.disposition && cleared.disposition.delivery, 'delivered_verified',
+      `clear 读回：${JSON.stringify({ disposition: cleared.disposition, scope: cleared.verification_scope, post: cleared.post_state })}`);
+    assert.equal(String((cleared.post_state && cleared.post_state.value) || ''), '', '读回值应为空');
+
+    // 3) 读回不符 / 证据不足 / not_delivered 的判定矩阵在纯单测里覆盖（见本文件 P3-3 SetValue 等）。
+  } finally {
+    // 只回收自己 spawn 的进程：标题带本次种子文件名才动。
+    if (spawned) { try { spawned.kill(); } catch { /* 已退出 */ } }
+    if (pid) {
+      try {
+        await native.runPowerShell(`Get-Process | Where-Object { $_.MainWindowTitle -like `
+          + `'*${scratchName.replace(/'/g, "''")}*' } | Stop-Process -Force -ErrorAction SilentlyContinue`);
+      } catch { /* 已退出或不可杀 */ }
+    }
   }
-  assert.ok(snap && snap.ok, '读树应成功');
-  const entry = [...snap.refmap.inner.values()].find((e) => e.role === 'textfield');
-  assert.ok(entry, '记事本应有可编辑区');
-
-  const hwnd = (snap.window_identity && snap.window_identity.hwnd) || 0;
-  assert.ok(hwnd > 0, '应采到窗口 hwnd');
-  const act = await activate(hwnd, pid);
-  if (!act.ok) { t.skip(`无法把记事本提到前台（${JSON.stringify(act)}），本机当前会话不可交互`); return; }
-
-  // C03：激活可能切换多标签记事本的当前标签，读树时拿到的索引路径会失效。
-  // 动作前必须重新观察一次再取编辑区——否则 set_value 打在旧路径上、读回为 null，
-  // 会被误判成 delivered_unverified（本机 2026-11-13 实测：17832 多标签窗口）。
-  const fresh = await native.readUIA(pid);
-  assert.ok(fresh && fresh.ok, '动作前重新读树应成功');
-  const freshEntry = [...fresh.refmap.inner.values()].find((e) => e.role === 'textfield');
-  assert.ok(freshEntry, '动作前应仍有可编辑区');
-
-  const { executeWithReadback, throwIfFailed, toObserved } = require('../src/computer-worker/post-action.js');
-  const stamp = `P33-${Date.now()}`;
-
-  // 1) set_value + 读回：应当 delivered_verified，且读回值含写入串
-  const done = await executeWithReadback({
-    action: 'set_value',
-    expectedValue: stamp,
-    execute: (effective) => native.executeActionChain(pid, freshEntry.path, effective, stamp).then(throwIfFailed),
-    read: () => native.readStateByPath(pid, freshEntry.path).then(toObserved),
-  });
-  assert.equal(done.delivery, 'delivered_verified', `读回应验证通过：${JSON.stringify(done.post_state || {})}`);
-  assert.equal(done.verification_scope, 'element_value');
-  assert.ok(String((done.post_state && done.post_state.value) || '').includes(stamp), '读回应含写入文本');
-  assert.equal(done.action, 'set_value');
-
-  // 2) clear + 读回：值应清空 → delivered_verified
-  const cleared = await executeWithReadback({
-    action: 'clear',
-    execute: (effective) => native.executeActionChain(pid, freshEntry.path, effective, '').then(throwIfFailed),
-    read: () => native.readStateByPath(pid, freshEntry.path).then(toObserved),
-  });
-  assert.equal(cleared.delivery, 'delivered_verified', `clear 读回应验证：${JSON.stringify(cleared.post_state || {})}`);
-  assert.equal(String((cleared.post_state && cleared.post_state.value) || ''), '', '读回值应为空');
-
-  // 3) 读回不符（把 expectedValue 换成没写入的串）→ computer_action_failed + retry unsafe
-  await assert.rejects(() => executeWithReadback({
-    action: 'set_value',
-    expectedValue: `${stamp}-MISMATCH`,
-    execute: (effective) => native.executeActionChain(pid, entry.path, effective, `${stamp}-ACTUAL`).then(throwIfFailed),
-    read: () => native.readStateByPath(pid, entry.path).then(toObserved),
-  }), (e) => {
-    assert.equal(e.code, 'computer_action_failed');
-    assert.deepEqual(e.detail.disposition, { delivery: 'delivered_unverified', retry: 'unsafe' });
-    assert.ok(String((e.detail.post_state && e.detail.post_state.value) || '').includes(`${stamp}-ACTUAL`));
-    return true;
-  });
 });

@@ -200,7 +200,13 @@ channel.onMessage((msg) => {
             expectedValue: text,
             selection: msg.selection,
             execute: (effective) => executeActionChain(pid2, res.path, effective, text, msg.wait).then(throwIfFailed),
-            read: () => readStateByPath(pid2, res.path).then(toObserved),
+            // C03：动作可能让树节点换位（尤其写入文本后）。读回前用**同一身份谓词**重新解析
+            // 一次路径（纯读，不重放动作）；解析失败则按证据不足处理（post_state=null）。
+            read: () => resolveAndObserve(pid2, entry, target.snapshotId, String(msg.ref))
+              .then((again) => (again.ok
+                ? readStateByPath(pid2, again.path)
+                : { ok: false, error: again.error }))
+              .then(toObserved),
           }).then((done) => emit({
             ok: true,
             action: plan.action,

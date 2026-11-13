@@ -10,6 +10,7 @@ const test = require('node:test');
 const {
   CHAIN_SPEC, HRESULT, chainFor, guardOpen, classifyHresult, executeChain,
 } = require('../src/computer-worker/actions.js');
+const native = require('../src/computer-worker/native.js');
 
 const labels = (action, features) => chainFor(action, features).map((r) => r.label);
 
@@ -230,8 +231,6 @@ test('P3-2: 链内失败按 HRESULT 映射成错误码', async () => {
 // P3-2 接线：pattern 片段与标签表
 // ===========================================================================
 
-const native = require('../src/computer-worker/native.js');
-
 test('P3-2: PATTERN_LABELS 与 CHAIN_SPEC 双向一致（改一边必红）', () => {
   const used = new Set();
   for (const key of Object.keys(CHAIN_SPEC)) {
@@ -288,134 +287,203 @@ test('P3-2: executeActionChain 对不存在的目标返回可分类错误（不�
   assert.match(String(res.error), /^(uia_failed|control_not_found|feature_probe_failed)/);
 });
 
-test('P3-2: 真实记事本上的语义链（OPS_UIA_SPAWN=1 opt-in）', { timeout: 180_000 }, async (t) => {
+test('P3-2: 真实记事本上的语义链（产品 ref 链路，OPS_UIA_SPAWN=1 opt-in）', { timeout: 180_000 }, async (t) => {
   if (process.platform !== 'win32') { t.skip('需要 Windows'); return; }
   if (process.env.OPS_UIA_SPAWN !== '1') { t.skip('未设 OPS_UIA_SPAWN=1'); return; }
 
-  const { spawn } = require('node:child_process');
-  const { readUIA, executeActionChain } = native;
+  const { spawn, fork } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const findNotepad = async () => {
-    const listed = await native.listWindows();
-    const hit = (listed.windows || []).find((w) => /^notepad(\.exe)?$/i.test(w.process) && !w.forbidden);
-    return hit ? hit.pid : 0;
-  };
+  const child = fork(path.resolve(__dirname, '..', 'src', 'computer-worker', 'index.js'), [],
+    { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  t.after(() => { try { child.kill(); } catch { /* 已退出 */ } });
+  const call = (cmd, extra = {}, timeoutMs = 25_000) => new Promise((resolve, reject) => {
+    const id = 'p32' + Math.random().toString(36).slice(2, 8);
+    const timer = setTimeout(() => { child.off('message', onMsg); reject(new Error('timeout')); }, timeoutMs);
+    const onMsg = (m) => { if (m && m.id === id) { clearTimeout(timer); child.off('message', onMsg); resolve(m); } };
+    child.on('message', onMsg);
+    child.send({ id, cmd, ...extra });
+  });
 
-  let pid = await findNotepad();
-  let spawned = null;
-  if (!pid) {
-    spawned = spawn('notepad.exe', [], { stdio: 'ignore', windowsHide: false });
-    const boot = Date.now() + 15_000;
-    while (!pid && Date.now() < boot) {
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise((r) => setTimeout(r, 500));
-      // eslint-disable-next-line no-await-in-loop
-      pid = await findNotepad();
-    }
+  // 只测自己开的记事本：桌面已有记事本进程时直接跳过，绝不碰用户窗口。
+  const listed0 = await call('list_windows');
+  if ((listed0.windows || []).some((w) => /notepad/i.test(w.process))) {
+    t.skip('桌面已有记事本进程（避免写入/关闭用户窗口，先关闭后再跑）');
+    return;
   }
-  t.after(() => { if (spawned) { try { spawned.kill(); } catch { /* 已退出 */ } } });
-  assert.ok(pid > 0, '没有可用的记事本窗口');
 
-  // P2-5 的前台复核会让「目标不在前台」直接 computer_target_changed，这是**正确行为**。
-  // 真实动作验证因此必须先把目标提到前台；做不到（锁屏 / 会话不可交互）就跳过，不当失败。
-  const activate = async (hwnd, targetPid) => {
-    const script = `
+  const seed = `P32-SEED-${process.pid}-${Date.now()}`;
+  const scratch = path.join(os.tmpdir(), `ops-p32-${process.pid}-${Date.now()}.txt`);
+  fs.writeFileSync(scratch, seed, 'utf8');
+  const scratchName = path.basename(scratch);
+  let spawned = null;
+  let pid = 0;
+  let hwnd = 0;
+  let soleTab = true;
+  t.after(() => { try { fs.unlinkSync(scratch); } catch { /* 可能仍被占用 */ } });
+
+  try {
+    spawned = spawn('notepad', [scratch], { stdio: 'ignore' });
+    const deadline = Date.now() + 60_000;
+    while (!pid && Date.now() < deadline) {
+      await sleep(500);
+      const list = await call('list_windows');
+      if (!list || list.ok !== true) continue;
+      const hit = (list.windows || []).find((w) => /notepad/i.test(w.process)
+        && String(w.title || '').includes(scratchName));
+      if (hit) pid = hit.pid;
+    }
+    if (!pid) { t.skip('未枚举到本次打开的记事本窗口'); return; }
+
+    const read = await call('uia_read', { pid, grant_id: 'g-p32', generation: 1 });
+    assert.equal(read.ok, true, `首次观察应成功：${JSON.stringify(read).slice(0, 200)}`);
+    hwnd = Number(read.window_identity && read.window_identity.hwnd) || 0;
+    assert.ok(hwnd > 0, '应取到窗口句柄');
+
+    let ref = '';
+    let buttonRef = '';
+    let tabCount = 0;
+    (function walk(n) {
+      if (n.role === 'tab' && String(n.name || '').trim()) tabCount += 1;
+      if (!ref && n.role === 'textfield' && String(n.value || '').includes(seed)) ref = n.ref_id;
+      if (!buttonRef && n.role === 'button' && n.ref_id) buttonRef = n.ref_id;
+      for (const c of n.children || []) walk(c);
+    })(read.tree);
+    const soleTabNow = tabCount <= 1;
+    soleTab = soleTabNow;
+    assert.ok(ref, `应有带种子内容的编辑区 ref（seed=${seed}）`);
+
+    // 动作前必须把目标提到前台；做不到就跳过，不当失败。
+    const activate = async (targetHwnd, targetPid) => {
+      const script = `
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName Microsoft.VisualBasic
-Add-Type -Namespace OpsAct -Name N -MemberDefinition @'
+Add-Type -Namespace OpsAct2 -Name N -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, out uint lpdwProcessId);
 [System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool BringWindowToTop(System.IntPtr hWnd);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void SwitchToThisWindow(System.IntPtr hWnd, bool fAltTab);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool IsIconic(System.IntPtr hWnd);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, System.UIntPtr dwExtraInfo);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(uint dwProcessId);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool LockSetForegroundWindow(uint dwLockFlag);
 '@
-$h = [System.IntPtr]${Number(hwnd)}
-$fg = [OpsAct.N]::GetForegroundWindow()
+$h = [System.IntPtr]${Number(targetHwnd)}
+if ([OpsAct2.N]::IsIconic($h)) { [void][OpsAct2.N]::ShowWindow($h, 9) }
+[void][OpsAct2.N]::LockSetForegroundWindow(2)
+[void][OpsAct2.N]::AllowSetForegroundWindow([uint32]::MaxValue)
+$fg = [OpsAct2.N]::GetForegroundWindow()
 $fgPid = 0
-$fgThread = [OpsAct.N]::GetWindowThreadProcessId($fg, [ref]$fgPid)
-$myThread = [OpsAct.N]::GetCurrentThreadId()
-[void][OpsAct.N]::AttachThreadInput($myThread, $fgThread, $true)
-$set = [OpsAct.N]::SetForegroundWindow($h)
-[void][OpsAct.N]::AttachThreadInput($myThread, $fgThread, $false)
+$fgThread = [OpsAct2.N]::GetWindowThreadProcessId($fg, [ref]$fgPid)
+$myThread = [OpsAct2.N]::GetCurrentThreadId()
+[void][OpsAct2.N]::AttachThreadInput($myThread, $fgThread, $true)
+# Alt 按下/抬起解除前台锁（探针已验证；这里不硬编码返回值）
+[OpsAct2.N]::keybd_event(0x12, 0, 0, [System.UIntPtr]::Zero)
+[OpsAct2.N]::keybd_event(0x12, 0, 2, [System.UIntPtr]::Zero)
+$set = [OpsAct2.N]::SetForegroundWindow($h)
+[void][OpsAct2.N]::BringWindowToTop($h)
+[void][OpsAct2.N]::AttachThreadInput($myThread, $fgThread, $false)
 Start-Sleep -Milliseconds 200
-$now = [long][OpsAct.N]::GetForegroundWindow()
+$now = [long][OpsAct2.N]::GetForegroundWindow()
+if ($now -ne [long]$h) { [OpsAct2.N]::SwitchToThisWindow($h, $true) }
+Start-Sleep -Milliseconds 200
+$now = [long][OpsAct2.N]::GetForegroundWindow()
 if ($now -ne [long]$h) {
-  # 前台锁在部分会话下会直接拒绝 SetForegroundWindow（返回 False 且前台不变）。
-  # AppActivate 走的是另一条激活路径，作为兜底；它只切前台，不对目标做任何输入。
   try { [void][Microsoft.VisualBasic.Interaction]::AppActivate(${Number(targetPid)}) } catch {}
 }
 Start-Sleep -Milliseconds 200
-$now2 = [long][OpsAct.N]::GetForegroundWindow()
-@{ ok = ($now2 -eq [long]$h); set = $set; before = $now; foreground = $now2 } | ConvertTo-Json -Compress
+$now2 = [long][OpsAct2.N]::GetForegroundWindow()
+@{ ok = ($now2 -eq [long]$h); set = $set; foreground = $now2 } | ConvertTo-Json -Compress
 `;
-    const r = await native.runPowerShell(script);
-    if (!r.ok) return { ok: false };
-    try { return JSON.parse(r.stdout || '{}'); } catch { return { ok: false }; }
-  };
+      const r = await native.runPowerShell(script);
+      if (!r.ok) return { ok: false };
+      try { return JSON.parse(r.stdout || '{}'); } catch { return { ok: false }; }
+    };
 
-  // 取一次观察，找编辑区（role=textfield）的 path
-  let snap = null;
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    // eslint-disable-next-line no-await-in-loop
-    snap = await readUIA(pid);
-    if (snap.ok && snap.refmap && [...snap.refmap.inner.values()].some((e) => e.role === 'textfield')) break;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  assert.ok(snap && snap.ok, '读树应成功');
-  const entry = [...snap.refmap.inner.values()].find((e) => e.role === 'textfield');
-  assert.ok(entry, '记事本应有可编辑区');
-  assert.ok(Array.isArray(entry.path) && entry.path.length > 0, '编辑区应有路径');
+    const act = await activate(hwnd, pid);
+    if (!act.ok) { t.skip(`无法把记事本提到前台（${JSON.stringify(act)}），本机当前会话不可交互`); return; }
 
-  // 1) set_value 链：应当成功，且 step 标 semantic_api
-  const hwnd = (snap.window_identity && snap.window_identity.hwnd) || 0;
-  assert.ok(hwnd > 0, '应采到窗口 hwnd');
-  const act = await activate(hwnd, pid);
-  if (!act.ok) { t.skip(`无法把记事本提到前台（${JSON.stringify(act)}），本机当前会话不可交互`); return; }
+    // 两次 PowerShell 之间前台可能被抢走 → product 判 target_changed（retryable）。
+    // 每次动作前重激活，最多 3 次；其他错误原样返回。
+    const invoke = async (extra) => {
+      let last = null;
+      for (let i = 0; i < 6; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const a = await activate(hwnd, pid);
+        if (!a.ok) { last = { ok: false, error: 'computer_target_changed' }; continue; }
+        // eslint-disable-next-line no-await-in-loop
+        const r = await call('uia_invoke', extra);
+        if (!(r && r.ok === false && r.error === 'computer_target_changed')) return r;
+        last = r;
+        // eslint-disable-next-line no-await-in-loop
+        await sleep(800);
+      }
+      return last;
+    };
 
-  const stamp = `P32-${Date.now()}`;
-  const setRes = await executeActionChain(pid, entry.path, 'set_value', stamp);
-  assert.equal(setRes.ok, true, `set_value 应成功：${setRes.error || ''} ${setRes.message || ''}`);
-  assert.equal(setRes.action, 'set_value');
-  assert.ok(setRes.steps.length >= 1);
-  assert.equal(setRes.steps[0].label, 'UIValuePattern.SetValue');
-  assert.equal(setRes.steps[0].outcome, 'succeeded');
-  for (const step of setRes.steps) assert.equal(step.mechanism, 'semantic_api', '不得出现物理投递');
-  assert.equal(setRes.satisfied_without_delivery, false);
+    // 1) set_value：产品链路（ref + 身份谓词），断言语义 API、无物理投递
+    const stamp = `P32-${Date.now()}`;
+    const setRes = await invoke({
+      pid, ref, grant_id: 'g-p32', generation: 1, action: 'set_value', value: stamp,
+      target_summary: read.window,
+    });
+    assert.equal(setRes.ok, true, `set_value 应成功：${setRes.error || ''} ${setRes.message || ''}`);
+    assert.equal(setRes.action, 'set_value');
+    assert.ok(Array.isArray(setRes.steps) && setRes.steps.length >= 1);
+    assert.equal(setRes.steps[0].label, 'UIValuePattern.SetValue');
+    assert.equal(setRes.steps[0].outcome, 'succeeded');
+    for (const step of setRes.steps) assert.equal(step.mechanism, 'semantic_api', '不得出现物理投递');
+    assert.equal(setRes.satisfied_without_delivery, false);
+    // P3-3 的读回也走同一链路：这里顺带确认值真的落到控件上
+    assert.ok(String((setRes.post_state && setRes.post_state.value) || '').includes(stamp),
+      '读回应能看到写入的文本');
 
-  // 读回确认：值真的落到了控件上（P3-3 接读回前的过渡证据）
-  let seen = false;
-  for (let i = 0; i < 10 && !seen; i += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    const again = await readUIA(pid);
-    if (again.ok) {
-      (function walk(n) {
-        if (String(n.value || '').includes(stamp)) seen = true;
-        for (const c of n.children || []) walk(c);
-      })(again.tree);
+    // 2) set_focus：写入后重新观察一次拿新 ref（值变更可能让树节点换位），
+    //    再断单 rung + SetFocus 标签。
+    const read2 = await call('uia_read', { pid, grant_id: 'g-p32', generation: 1 });
+    assert.equal(read2.ok, true, `动作前重新观察应成功：${JSON.stringify(read2).slice(0, 200)}`);
+    let ref2 = '';
+    (function walk(n) {
+      if (!ref2 && n.role === 'textfield' && String(n.value || '').includes(stamp)) ref2 = n.ref_id;
+      for (const c of n.children || []) walk(c);
+    })(read2.tree);
+    assert.ok(ref2, '重新观察后仍应有带写入文本的编辑区 ref');
+    const act2 = await activate(hwnd, pid);
+    if (!act2.ok) { t.skip(`动作前无法保持前台（${JSON.stringify(act2)}）`); return; }
+    const focusRes = await invoke({
+      pid, ref: ref2, grant_id: 'g-p32', generation: 1, action: 'set_focus', target_summary: read2.window,
+    });
+    assert.equal(focusRes.ok, true, `set_focus 应成功：${focusRes.error || ''} ${focusRes.message || ''}`);
+    assert.deepEqual((focusRes.steps || []).map((s) => s.label), ['UIAutomationElement.SetFocus']);
+
+    // 3) 对按钮（无 ValuePattern）做 set_value：剪枝后没有 rung → 明确不支持，而不是乱点
+    if (buttonRef) {
+      const act3 = await activate(hwnd, pid);
+      if (act3.ok) {
+        const bad = await invoke({
+          pid, ref: buttonRef, grant_id: 'g-p32', generation: 1, action: 'set_value',
+          value: 'x', target_summary: read.window,
+        });
+        assert.equal(bad.ok, false);
+        assert.equal(bad.error, 'computer_action_not_supported');
+        assert.ok(!bad.steps || bad.steps.length === 0, '被剪枝时不该有已执行的 step');
+      }
     }
-    if (!seen) {
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise((r) => setTimeout(r, 100));
+  } finally {
+    // 只回收自己 spawn 的进程：标题里带本次种子文件名才动，绝不按进程名误杀。
+    if (spawned) { try { spawned.kill(); } catch { /* 已退出 */ } }
+    if (pid) {
+      try {
+        await native.runPowerShell(`Get-Process | Where-Object { $_.MainWindowTitle -like `
+          + `'*${scratchName.replace(/'/g, "''")}*' } | Stop-Process -Force -ErrorAction SilentlyContinue`);
+      } catch { /* 已退出或不可杀 */ }
     }
-  }
-  assert.equal(seen, true, '读回应能看到写入的文本');
-
-  // 2) 对同一元素 set_focus：单 rung，且带 SetFocus 标签
-  await activate(hwnd, pid);
-  const focusRes = await executeActionChain(pid, entry.path, 'set_focus', '');
-  assert.equal(focusRes.ok, true, `set_focus 应成功：${focusRes.error || ''}`);
-  assert.deepEqual(focusRes.steps.map((s) => s.label), ['UIAutomationElement.SetFocus']);
-
-  // 3) 对按钮（无 ValuePattern）做 set_value：剪枝后没有 rung → 明确的不支持，而不是乱点
-  const button = [...snap.refmap.inner.values()].find((e) => e.role === 'button');
-  if (button && Array.isArray(button.path)) {
-    await activate(hwnd, pid);
-    const bad = await executeActionChain(pid, button.path, 'set_value', 'x');
-    assert.equal(bad.ok, false);
-    assert.equal(bad.error, 'computer_action_not_supported');
-    assert.ok(!bad.steps, '被剪枝时不该有已执行的 step');
   }
 });
 
