@@ -595,11 +595,20 @@ func (s *Server) updateComputerCardFromCommand(ctx context.Context, convID, comm
 	if state == "succeeded" {
 		status = "succeeded"
 	}
-	_, _ = s.agentMutateActions(ctx, convID, `UPDATE agent_action a
+	updated, err := s.agentMutateActions(ctx, convID, `UPDATE agent_action
 		SET status=$2, finished_at=now(), revision=revision+1
-		FROM agent_computer_command c
-		WHERE c.id=$1 AND a.id=c.card_id AND a.tool_name='computer_command'
-		  AND a.status IN ('pending','executing')`, commandID, status)
+		WHERE id=(SELECT c.card_id FROM agent_computer_command c WHERE c.id=$1)
+		  AND tool_name='computer_command' AND status IN ('pending','executing')`, commandID, status)
+	if err != nil {
+		s.observeFailure(ctx, slog.LevelWarn, "电脑命令回写卡片失败", observeFields{
+			ErrorCode: "computer_card_update_failed", Route: "internal/agent/computer_command",
+			Extras: map[string]any{"command_id": commandID.String(), "conversation_id": convID.String(), "err": err.Error()},
+		})
+		return
+	}
+	if len(updated) == 0 {
+		slog.Debug("电脑命令终态无需回写卡片", "command_id", commandID.String(), "state", state)
+	}
 }
 
 // nullUUID 把 Nil UUID 写成 SQL NULL（run_id / card_id 可空）。

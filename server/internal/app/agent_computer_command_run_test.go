@@ -190,13 +190,32 @@ func TestComputerCommandWriteCardConfirm(t *testing.T) {
 	right := cu44Body(grant, conv, "invoke", map[string]any{"ref": "@sabc123:e1"})
 	right["card_id"] = cardID
 	right["approval_hash"] = hash
-	if got := cu44Create(t, right, http.StatusOK); got["state"] != "queued" {
-		t.Fatalf("确认后应 queued：%v", got)
+	created := cu44Create(t, right, http.StatusOK)
+	if created["state"] != "queued" {
+		t.Fatalf("确认后应 queued：%v", created)
+	}
+	commandID, _ := created["id"].(string)
+	if commandID == "" {
+		t.Fatalf("确认后应返回命令 id：%v", created)
 	}
 	env.srv.db.QueryRow(context.Background(),
 		`SELECT status FROM agent_action WHERE id=$1`, cardUUID).Scan(&status)
 	if status != "executing" {
 		t.Fatalf("命令受理后卡片应 executing：%s", status)
+	}
+
+	// 命令失败回执必须把卡片收敛到 failed（防 UPDATE ... FROM 的 RETURNING 歧义回滚）。
+	var dispatched map[string]any
+	env.mustJSON(t, "POST", "/api/v1/agent/computer/commands/"+commandID+"/dispatch", map[string]any{}, &dispatched)
+	if dispatched["claimed"] != true {
+		t.Fatalf("dispatch 应 claimed=true：%v", dispatched)
+	}
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands/"+commandID+"/receipt",
+		map[string]any{"state": "failed", "error_code": "computer_target_changed"}, nil, http.StatusOK)
+	env.srv.db.QueryRow(context.Background(),
+		`SELECT status FROM agent_action WHERE id=$1`, cardUUID).Scan(&status)
+	if status != "failed" {
+		t.Fatalf("失败回执后卡片应 failed：%s", status)
 	}
 
 	// 同一张卡二次执行 → 409（凭证已消费）
