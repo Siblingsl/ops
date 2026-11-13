@@ -170,7 +170,8 @@ function Hex32([string]$s) {
  * P2-5 步骤 3/4：动作前的前台复核，直接嵌进执行动作的那一次 PS 调用，
  * 避免「先查再动」两次调用之间的窗口切换（TOCTOU）。
  */
-function psForegroundGuard(pid) {
+function psForegroundGuard(pid, required = true) {
+  if (!required) return '';
   return `
 Add-Type -Namespace OpsScope -Name Native -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
@@ -481,7 +482,7 @@ const PATTERN_LABELS = Object.freeze([
 ]);
 
 /** 三个脚本共用的前置：进程 → 主窗口 → 前台复核 → 按路径下钻。 */
-function psPathPrelude(pid, path) {
+function psPathPrelude(pid, path, requireForeground = true) {
   const chain = Array.isArray(path) && path.length ? path.map((n) => Number(n)).join(',') : '';
   return `
 $ErrorActionPreference='Stop'
@@ -489,7 +490,7 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $proc = Get-Process -Id ${pid} -ErrorAction Stop
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
-${psForegroundGuard(pid)}
+${psForegroundGuard(pid, requireForeground)}
 $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
 $el = $root
 $path = @(${chain})
@@ -522,8 +523,8 @@ function psJson(script) {
  * 返回 `{ok, features}`。这是「先判再动」的那一半：拿到 features 后用 actions.js 的
  * `chainFor(action, features)` 裁剪掉注定 absent 的 rung，省掉一次必然失败的投递。
  */
-function probePatternFeatures(pid, path) {
-  const script = `${psPathPrelude(pid, path)}
+function probePatternFeatures(pid, path, requireForeground = true) {
+  const script = `${psPathPrelude(pid, path, requireForeground)}
 $f = @{}
 function Prop([object]$e, [object]$p) {
   try { return [bool]$e.GetCurrentPropertyValue($p) } catch { return $false }
@@ -593,7 +594,7 @@ try {
  */
 function psPatternScript(pid, path, label, action, value) {
   const text = value === undefined || value === null ? '' : String(value);
-  return `${psPathPrelude(pid, path)}
+  return `${psPathPrelude(pid, path, String(action || '') !== 'set_focus')}
 $label = ${psQuote(label)}
 $action = ${psQuote(String(action || ''))}
 $text = ${psQuote(text)}
@@ -863,7 +864,7 @@ function normalizeStateRecord(raw) {
  */
 async function executeActionChain(pid, path, action, value, wait) {
   const { chainFor, executeChain } = require('./actions');
-  const probed = await probePatternFeatures(pid, path);
+  const probed = await probePatternFeatures(pid, path, action !== 'set_focus');
   if (!probed.ok) {
     // 前置探测可能是前台守卫失败：把 detail 原样带回，别在这里丢掉 reason。
     return {

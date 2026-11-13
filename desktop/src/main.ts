@@ -2325,7 +2325,9 @@ async function executeComputerCommand(
       ref,
       grant_id: auth.grantId,
       generation: auth.generation,
-      action: actionKind,
+      // 服务端只发六语义（observe/focus/scroll/select/invoke/type，P4-3），
+      // worker 动作链用 click/set_focus/set_value。适配只在这一处做。
+      action: ({ focus: 'set_focus', invoke: 'click', type: 'set_value' } as Record<string, string>)[actionKind] || actionKind,
       value: typeof body.text === 'string' ? body.text : null,
       target_summary: auth.targetSummary,
     }) as { ok?: boolean; error?: string; message?: string; disposition?: unknown };
