@@ -49,6 +49,50 @@ type ComputerUiaInvokeResult =
   | { ok: false; code: string; message: string }
   | { ok: true; action: string };
 
+// DEV-CU P3-7（§4.12 / §P3-7）：observe 输出与 act 结果的白名单类型。
+// 键集合严格按 §4.12 表：新增字段只允许追加；C09 禁止字段（process_path/
+// hwnd/class_name/完整标题/进程路径）一律整批拒绝。
+type ComputerUiaObserveNode = {
+  role: string;
+  name: string;
+  value: string;
+  ref_id: string;
+  available_actions: string[];
+  states: string[];
+  bounds: { x: number; y: number; w: number; h: number };
+  children: ComputerUiaObserveNode[];
+  children_count: number;
+  depth: number;
+};
+type ComputerUiaObserveResult =
+  | { ok: false; code: string; message: string }
+  | {
+    ok: true;
+    snapshot_id: string;
+    revision: number;
+    ref_count: number;
+    complete: boolean;
+    nodes_observed: number;
+    truncated?: boolean;
+    identity_unproven?: boolean;
+    tree: ComputerUiaObserveNode;
+  };
+type ComputerUiaActResult =
+  | { ok: false; code: string; message: string }
+  | {
+    ok: true;
+    action: string;
+    snapshot_id?: string;
+    ref?: string;
+    disposition: { delivery: string; retry: string };
+    verification_scope?: string;
+    verification_reason?: string;
+    steps?: Array<{ label: string; outcome: string; mechanism: string }>;
+  };
+type ComputerUiaInvalidateResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; cleared: number };
+
 // DEV-AI27-A30：本机标签枚举结果（选标签授权弹窗）。origin 已由扩展按页面 URL 归一。
 type BrowserTabView = { tab_id: number; title: string; origin: string; window_id: number; active: boolean };
 type BrowserTabListResult =
@@ -210,6 +254,166 @@ function parseComputerUiaInvokeResult(raw: unknown): ComputerUiaInvokeResult | n
   return typeof value.action === 'string' && ['invoke', 'setvalue'].includes(value.action)
     ? { ok: true, action: value.action }
     : null;
+}
+
+// DEV-CU P3-7（步骤 2/3）：observe 节点递归校验。键集合整批拒绝；
+// 长度上限逐项：name <=500、value <=4000、ref <=64、树深 <=50。
+const COMPUTER_OBSERVE_NODE_KEYS = 'available_actions,bounds,children,children_count,depth,name,ref_id,role,states,value';
+const COMPUTER_OBSERVE_ACTIONS = new Set([
+  'Click', 'DoubleClick', 'RightClick', 'TripleClick', 'Hover', 'Drag', 'SetValue',
+  'TypeText', 'Clear', 'Select', 'Expand', 'Collapse', 'Toggle', 'Check', 'Uncheck',
+  'Scroll', 'ScrollTo', 'SetFocus', 'Observe',
+]);
+const COMPUTER_OBSERVE_STATES = new Set([
+  'enabled', 'disabled', 'visible', 'offscreen', 'checked', 'unchecked',
+  'indeterminate', 'expanded', 'collapsed', 'secure', 'focused', 'selected',
+]);
+
+// §4.12 控件上限 200：树形态下以「节点总数」落点（worker 侧节点上限同为 200）。
+const COMPUTER_OBSERVE_NODE_LIMIT = 200;
+
+type ObserveCounter = { nodes: number };
+
+function parseComputerObserveNode(raw: unknown, depth: number, counter: ObserveCounter): ComputerUiaObserveNode | null {
+  if (depth > 50) return null;
+  counter.nodes += 1;
+  if (counter.nodes > COMPUTER_OBSERVE_NODE_LIMIT) return null;
+  const node = asRecord(raw);
+  if (!node) return null;
+  if (Object.keys(node).sort().join(',') !== COMPUTER_OBSERVE_NODE_KEYS) return null;
+  if (typeof node.role !== 'string' || node.role.length === 0 || node.role.length > 40) return null;
+  if (typeof node.name !== 'string' || node.name.length > 500) return null;
+  if (typeof node.value !== 'string' || node.value.length > 4000) return null;
+  if (typeof node.ref_id !== 'string' || node.ref_id.length > 64) return null;
+  if (!Array.isArray(node.available_actions)) return null;
+  const actions: string[] = [];
+  for (const a of node.available_actions) {
+    if (typeof a !== 'string' || !COMPUTER_OBSERVE_ACTIONS.has(a)) return null;
+    actions.push(a);
+  }
+  if (!Array.isArray(node.states)) return null;
+  const states: string[] = [];
+  for (const st of node.states) {
+    if (typeof st !== 'string' || !COMPUTER_OBSERVE_STATES.has(st)) return null;
+    states.push(st);
+  }
+  const b = asRecord(node.bounds);
+  if (!b) return null;
+  for (const k of ['x', 'y', 'w', 'h']) {
+    if (!Number.isFinite(b[k])) return null;
+  }
+  const childrenCount = node.children_count;
+  const nodeDepth = node.depth;
+  if (typeof childrenCount !== 'number' || !Number.isInteger(childrenCount) || childrenCount < 0) return null;
+  if (typeof nodeDepth !== 'number' || !Number.isInteger(nodeDepth) || nodeDepth < 0) return null;
+  if (!Array.isArray(node.children)) return null;
+  const children: ComputerUiaObserveNode[] = [];
+  for (const child of node.children) {
+    const parsed = parseComputerObserveNode(child, depth + 1, counter);
+    if (!parsed) return null;
+    children.push(parsed);
+  }
+  return {
+    role: node.role, name: node.name, value: node.value, ref_id: node.ref_id,
+    available_actions: actions, states,
+    bounds: { x: Number(b.x), y: Number(b.y), w: Number(b.w), h: Number(b.h) },
+    children, children_count: childrenCount, depth: nodeDepth,
+  };
+}
+
+function parseComputerUiaObserveResult(raw: unknown): ComputerUiaObserveResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.error === 'string' && value.error.length <= 60
+      ? { ok: false, code: value.error, message: 'UIA 观察失败。' }
+      : null;
+  }
+  if (typeof value.snapshot_id !== 'string' || value.snapshot_id.length === 0 || value.snapshot_id.length > 64) return null;
+  const revision = value.revision;
+  const refCount = value.ref_count;
+  const nodesObserved = value.nodes_observed;
+  if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 0) return null;
+  if (typeof refCount !== 'number' || !Number.isInteger(refCount) || refCount < 0) return null;
+  if (typeof value.complete !== 'boolean') return null;
+  if (typeof nodesObserved !== 'number' || !Number.isInteger(nodesObserved) || nodesObserved < 0) return null;
+  if (value.truncated !== undefined && typeof value.truncated !== 'boolean') return null;
+  if (value.identity_unproven !== undefined && typeof value.identity_unproven !== 'boolean') return null;
+  const tree = parseComputerObserveNode(value.tree, 0, { nodes: 0 });
+  if (!tree) return null;
+  const result: ComputerUiaObserveResult = {
+    ok: true, snapshot_id: value.snapshot_id, revision,
+    ref_count: refCount, complete: value.complete, nodes_observed: nodesObserved,
+    tree,
+  };
+  if (value.truncated === true) result.truncated = true;
+  if (value.identity_unproven === true) result.identity_unproven = true;
+  return result;
+}
+
+const COMPUTER_ACT_DELIVERY_RETRY: Record<string, string> = {
+  not_delivered: 'safe', delivery_uncertain: 'unsafe', delivered_unverified: 'unsafe',
+  delivered_verified: 'unsafe', unknown: 'unknown',
+};
+function parseComputerUiaActResult(raw: unknown): ComputerUiaActResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.error === 'string' && value.error.length <= 60
+      ? { ok: false, code: value.error, message: 'UIA 动作失败。' }
+      : null;
+  }
+  if (typeof value.action !== 'string' || value.action.length === 0 || value.action.length > 32) return null;
+  const disp = asRecord(value.disposition);
+  if (!disp) return null;
+  const delivery = typeof disp.delivery === 'string' ? disp.delivery : '';
+  const retry = typeof disp.retry === 'string' ? disp.retry : '';
+  if (!delivery || COMPUTER_ACT_DELIVERY_RETRY[delivery] !== retry) return null;
+  const result: ComputerUiaActResult = {
+    ok: true, action: value.action, disposition: { delivery, retry },
+  };
+  if (value.snapshot_id !== undefined) {
+    if (typeof value.snapshot_id !== 'string' || value.snapshot_id.length > 64) return null;
+    result.snapshot_id = value.snapshot_id;
+  }
+  if (value.ref !== undefined) {
+    if (typeof value.ref !== 'string' || value.ref.length > 64) return null;
+    result.ref = value.ref;
+  }
+  if (value.verification_scope !== undefined) {
+    if (typeof value.verification_scope !== 'string' || value.verification_scope.length > 32) return null;
+    result.verification_scope = value.verification_scope;
+  }
+  if (value.verification_reason !== undefined) {
+    if (typeof value.verification_reason !== 'string' || value.verification_reason.length > 64) return null;
+    result.verification_reason = value.verification_reason;
+  }
+  if (value.steps !== undefined) {
+    if (!Array.isArray(value.steps) || value.steps.length > 20) return null;
+    const steps: Array<{ label: string; outcome: string; mechanism: string }> = [];
+    for (const step of value.steps) {
+      const st = asRecord(step);
+      if (!st || typeof st.label !== 'string' || st.label.length === 0 || st.label.length > 80
+        || typeof st.outcome !== 'string' || st.outcome.length > 24
+        || typeof st.mechanism !== 'string' || st.mechanism !== 'semantic_api') return null;
+      steps.push({ label: st.label, outcome: st.outcome, mechanism: st.mechanism });
+    }
+    result.steps = steps;
+  }
+  return result;
+}
+
+function parseComputerUiaInvalidateResult(raw: unknown): ComputerUiaInvalidateResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.error === 'string' && value.error.length <= 60
+      ? { ok: false, code: value.error, message: '撤销失败。' }
+      : null;
+  }
+  const cleared = value.cleared;
+  if (typeof cleared !== 'number' || !Number.isInteger(cleared) || cleared < 0) return null;
+  return { ok: true, cleared };
 }
 
 function parseBrowserTabListResult(raw: unknown): BrowserTabListResult | null {
@@ -465,6 +669,60 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
     const value = input.value === undefined || input.value === null ? null : String(input.value).slice(0, 32768);
     const result = parseComputerUiaInvokeResult(await ipcRenderer.invoke('computer:uia-invoke', { pid: input.pid, automation_id: input.automation_id, value, target_summary: input.target_summary.slice(0, 256) }));
     return result ?? { ok: false, code: 'computer_uia_invalid', message: 'Electron 返回的 UIA 动作结果无效。' };
+  },
+  // DEV-CU P3-7（步骤 4）：observe/act/invalidate 三个固定意图——参数本机校验后
+  // 转发主进程；observe 结果按 §4.12 白名单递归校验（native_id 等内部字段不可枚举，
+  // 出现即整批拒绝），act 结果校验 disposition 双字段一致性。
+  async observeComputerUIA(input: { pid: number; target_summary: string; grant_id: string; generation: number; max_depth?: number; root_ref?: string; interactive_only?: boolean; compact?: boolean }): Promise<ComputerUiaObserveResult> {
+    if (!Number.isInteger(input?.pid) || (input as { pid: number }).pid <= 0
+      || typeof input?.target_summary !== 'string'
+      || typeof input?.grant_id !== 'string' || input.grant_id.length === 0 || input.grant_id.length > 64
+      || !Number.isInteger(input?.generation) || input.generation < 0) {
+      return { ok: false, code: 'computer_uia_invalid', message: 'UIA 观察参数无效。' };
+    }
+    const payload: Record<string, unknown> = {
+      pid: input.pid, target_summary: input.target_summary.slice(0, 256),
+      grant_id: input.grant_id, generation: input.generation,
+    };
+    if (input.max_depth !== undefined) {
+      if (!Number.isInteger(input.max_depth) || input.max_depth < 0 || input.max_depth > 50) {
+        return { ok: false, code: 'computer_uia_invalid', message: 'UIA 观察参数无效。' };
+      }
+      payload.max_depth = input.max_depth;
+    }
+    if (input.root_ref !== undefined) {
+      if (typeof input.root_ref !== 'string' || input.root_ref.length > 64) {
+        return { ok: false, code: 'computer_uia_invalid', message: 'UIA 观察参数无效。' };
+      }
+      payload.root_ref = input.root_ref;
+    }
+    if (input.interactive_only !== undefined) payload.interactive_only = input.interactive_only === true;
+    if (input.compact !== undefined) payload.compact = input.compact === true;
+    const result = parseComputerUiaObserveResult(await ipcRenderer.invoke('computer:uia-observe', payload));
+    return result ?? { ok: false, code: 'computer_uia_invalid', message: 'Electron 返回的 UIA 观察结果无效。' };
+  },
+  async actComputerUIA(input: { pid: number; ref: string; grant_id: string; generation: number; action: string; value?: string | null; target_summary: string }): Promise<ComputerUiaActResult> {
+    if (!Number.isInteger(input?.pid) || (input as { pid: number }).pid <= 0
+      || typeof input?.ref !== 'string' || !/^@[A-Za-z0-9_-]{3,64}:e[1-9][0-9]{0,9}$/.test(input.ref)
+      || typeof input?.grant_id !== 'string' || input.grant_id.length === 0 || input.grant_id.length > 64
+      || !Number.isInteger(input?.generation) || input.generation < 0
+      || typeof input?.action !== 'string' || input.action.length === 0 || input.action.length > 32
+      || typeof input?.target_summary !== 'string') {
+      return { ok: false, code: 'computer_uia_invalid', message: 'UIA 动作参数无效。' };
+    }
+    const value = input.value === undefined || input.value === null ? null : String(input.value).slice(0, 32768);
+    const result = parseComputerUiaActResult(await ipcRenderer.invoke('computer:uia-act', {
+      pid: input.pid, ref: input.ref, grant_id: input.grant_id, generation: input.generation,
+      action: input.action, value, target_summary: input.target_summary.slice(0, 256),
+    }));
+    return result ?? { ok: false, code: 'computer_uia_invalid', message: 'Electron 返回的 UIA 动作结果无效。' };
+  },
+  async invalidateComputerUIA(grantId: string): Promise<ComputerUiaInvalidateResult> {
+    if (typeof grantId !== 'string' || grantId.length === 0 || grantId.length > 64) {
+      return { ok: false, code: 'computer_uia_invalid', message: '撤销参数无效。' };
+    }
+    const result = parseComputerUiaInvalidateResult(await ipcRenderer.invoke('computer:uia-invalidate', { grant_id: grantId }));
+    return result ?? { ok: false, code: 'computer_uia_invalid', message: 'Electron 返回的撤销结果无效。' };
   },
   // DEV-AI27-A30：本机标签枚举（选标签授权弹窗）——枚举在本机，桥未启动/未配对时如实报错。
   async listBrowserTabs(): Promise<BrowserTabListResult> {

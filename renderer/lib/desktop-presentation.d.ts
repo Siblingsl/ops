@@ -61,6 +61,18 @@ declare global {
       // 只含 id/type/name/value 四键，进程路径/窗口全集/截图不进渲染器。
       readComputerUIA(input: { pid: number; target_summary: string }): Promise<DesktopComputerUiaViewResult>
       invokeComputerUIA(input: { pid: number; automation_id: string; value?: string | null; target_summary: string }): Promise<DesktopComputerUiaInvokeResult>
+      // DEV-CU P3-7（docs/36 §4.12）：observe/act/invalidate 三个固定意图——
+      // observe 结果按 C09 白名单递归校验（native_id 等内部字段不可枚举，出现即整批拒绝）；
+      // act 结果校验 disposition 双字段一致性；invalidate 按 grant 撤销快照。
+      observeComputerUIA(input: {
+        pid: number; target_summary: string; grant_id: string; generation: number
+        max_depth?: number; root_ref?: string; interactive_only?: boolean; compact?: boolean
+      }): Promise<DesktopComputerUiaObserveResult>
+      actComputerUIA(input: {
+        pid: number; ref: string; grant_id: string; generation: number
+        action: string; value?: string | null; target_summary: string
+      }): Promise<DesktopComputerUiaActResult>
+      invalidateComputerUIA(grantId: string): Promise<DesktopComputerUiaInvalidateResult>
       // DEV-AI27-A30：本机标签枚举（选标签授权弹窗；枚举只在本机，桥未配对时如实报错）。
       listBrowserTabs(): Promise<DesktopBrowserTabListResult>
       // DEV-AI27-A30b：配对统一——读桥侧配对快照 / 确认桥侧配对（快照白名单校验，不含会话密钥）。
@@ -126,6 +138,52 @@ export type DesktopComputerUiaViewResult =
 export type DesktopComputerUiaInvokeResult =
   | { ok: false; code: string; message: string }
   | { ok: true; action: string }
+
+// DEV-CU P3-7（docs/36 §4.12）：observe 树节点白名单类型。
+// 键集合整批拒绝：process_path/hwnd/class_name/native_id 等内部字段不可出现。
+export type DesktopComputerUiaObserveNode = {
+  role: string
+  name: string
+  value: string
+  ref_id: string
+  available_actions: string[]
+  states: string[]
+  bounds: { x: number; y: number; w: number; h: number }
+  children: DesktopComputerUiaObserveNode[]
+  children_count: number
+  depth: number
+}
+
+export type DesktopComputerUiaObserveResult =
+  | { ok: false; code: string; message: string }
+  | {
+    ok: true
+    snapshot_id: string
+    revision: number
+    ref_count: number
+    complete: boolean
+    nodes_observed: number
+    truncated?: boolean
+    identity_unproven?: boolean
+    tree: DesktopComputerUiaObserveNode
+  }
+
+export type DesktopComputerUiaActResult =
+  | { ok: false; code: string; message: string }
+  | {
+    ok: true
+    action: string
+    snapshot_id?: string
+    ref?: string
+    disposition: { delivery: string; retry: string }
+    verification_scope?: string
+    verification_reason?: string
+    steps?: Array<{ label: string; outcome: string; mechanism: string }>
+  }
+
+export type DesktopComputerUiaInvalidateResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; cleared: number }
 
 // DEV-AI27-A30：本机标签摘要。origin 为页面 URL 归一后的源（scheme://host[:port]）。
 export type DesktopBrowserTab = {
