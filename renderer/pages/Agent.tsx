@@ -30,6 +30,7 @@ import {
 } from '@/lib/agent'
 import { AgentMarkdown } from '@/lib/agent-markdown'
 import { AgentActionCards } from '@/pages/agent/ActionCards'
+import { ComputerControlBar } from '@/pages/agent/ComputerControlBar'
 import { ArtifactPanel } from '@/pages/agent/ArtifactPanel'
 import { browserStore, clearPartial, type PartialStream, readPartial, savePartial } from '@/pages/agent/partial-stream'
 import { ContextPickerDialog, SkillPickerDialog, type AgentContextSelection, type AgentSkillSelection } from '@/pages/agent/ContextPickers'
@@ -1148,6 +1149,16 @@ ${draft.text}` : draft.text))
           {!busy && memoryCandidates.length > 0 && <MemoryCandidateCard candidates={memoryCandidates} {...memoryCandidateHandlers} />}
           {/* A9：本会话实际注入/省略了哪些记忆；只读服务端记录，不推断。 */}
           {conversation && <MemoryUsagePanel conversationId={conversation.id} enabled={bootstrapData.features.personal_memories === true} />}
+          {/* P5-4：电脑租约存在时常驻控制条；接管/停止/返回聊天三个人工入口。 */}
+          <ComputerControlBar
+            enabled={bootstrapData.features.computer_use === true}
+            conversationId={conversationId}
+            runId={runID || undefined}
+            onReturnChat={() => {
+              setComputerPickerOpen(false)
+              window.setTimeout(() => inputRef.current?.focus(), 0)
+            }}
+          />
           {/* A12：模型请求前台时在本机选窗，选定后即时建 30 秒租约（不做发消息前预授权）。 */}
           <ComputerWindowPicker
             open={computerPickerOpen}
