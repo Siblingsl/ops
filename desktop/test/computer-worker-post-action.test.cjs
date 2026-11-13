@@ -548,6 +548,14 @@ $now2 = [long][OpsAct.N]::GetForegroundWindow()
   const act = await activate(hwnd, pid);
   if (!act.ok) { t.skip(`无法把记事本提到前台（${JSON.stringify(act)}），本机当前会话不可交互`); return; }
 
+  // C03：激活可能切换多标签记事本的当前标签，读树时拿到的索引路径会失效。
+  // 动作前必须重新观察一次再取编辑区——否则 set_value 打在旧路径上、读回为 null，
+  // 会被误判成 delivered_unverified（本机 2026-11-13 实测：17832 多标签窗口）。
+  const fresh = await native.readUIA(pid);
+  assert.ok(fresh && fresh.ok, '动作前重新读树应成功');
+  const freshEntry = [...fresh.refmap.inner.values()].find((e) => e.role === 'textfield');
+  assert.ok(freshEntry, '动作前应仍有可编辑区');
+
   const { executeWithReadback, throwIfFailed, toObserved } = require('../src/computer-worker/post-action.js');
   const stamp = `P33-${Date.now()}`;
 
@@ -555,8 +563,8 @@ $now2 = [long][OpsAct.N]::GetForegroundWindow()
   const done = await executeWithReadback({
     action: 'set_value',
     expectedValue: stamp,
-    execute: (effective) => native.executeActionChain(pid, entry.path, effective, stamp).then(throwIfFailed),
-    read: () => native.readStateByPath(pid, entry.path).then(toObserved),
+    execute: (effective) => native.executeActionChain(pid, freshEntry.path, effective, stamp).then(throwIfFailed),
+    read: () => native.readStateByPath(pid, freshEntry.path).then(toObserved),
   });
   assert.equal(done.delivery, 'delivered_verified', `读回应验证通过：${JSON.stringify(done.post_state || {})}`);
   assert.equal(done.verification_scope, 'element_value');
@@ -566,8 +574,8 @@ $now2 = [long][OpsAct.N]::GetForegroundWindow()
   // 2) clear + 读回：值应清空 → delivered_verified
   const cleared = await executeWithReadback({
     action: 'clear',
-    execute: (effective) => native.executeActionChain(pid, entry.path, effective, '').then(throwIfFailed),
-    read: () => native.readStateByPath(pid, entry.path).then(toObserved),
+    execute: (effective) => native.executeActionChain(pid, freshEntry.path, effective, '').then(throwIfFailed),
+    read: () => native.readStateByPath(pid, freshEntry.path).then(toObserved),
   });
   assert.equal(cleared.delivery, 'delivered_verified', `clear 读回应验证：${JSON.stringify(cleared.post_state || {})}`);
   assert.equal(String((cleared.post_state && cleared.post_state.value) || ''), '', '读回值应为空');
