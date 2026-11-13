@@ -3,6 +3,8 @@
 
 const assert = require('node:assert/strict');
 const { fork } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -106,24 +108,34 @@ test('W17c UIA: 真实记事本读控件树 + SetValue 输入 + 读回验证（C
   // 1. 选一个真实记事本窗口当被测对象。
   // 默认**不自动开窗**（会打断使用者）：只有显式 OPS_UIA_SPAWN=1 才 spawn，
   // 否则复用已经开着的记事本；没有就 skip，让用例本身不产生副作用。
+  // 2026-11-13：改为自带临时文件的记事本，并按文件名精确选窗；清理只回收本用例起的进程。
+  // 旧写法挑「任意记事本」再 Stop-Process -Force，会连带杀掉用户正开着的窗口（已真实发生）。
+  let spawned = null;
+  let scratch = '';
   if (process.env.OPS_UIA_SPAWN === '1') {
-    // Win11 为打包版：spawn 返回的是启动器桩进程，随后自行退出
-    spawn('notepad', [], { stdio: 'ignore' });
+    scratch = path.join(os.tmpdir(), `ops-w17c-${process.pid}-${Date.now()}.txt`);
+    fs.writeFileSync(scratch, 'W17C-SEED', 'utf8');
+    // Win11 为打包版：spawn 返回的是启动器桩进程，随后自行退出；按窗口标题认领更可靠。
+    spawned = spawn('notepad', [scratch], { stdio: 'ignore' });
     await new Promise((r) => setTimeout(r, 2500));
   }
+  const scratchName = scratch ? path.basename(scratch) : '';
 
   // 2. 用 worker 的选窗器找真实窗口（不用桩 PID：桩进程已退出，按 -Id 反查必失败）
   const worker = withWorker(t);
   const listed = await worker.call('list_windows');
   assert.equal(listed.ok, true, `选窗应成功：${JSON.stringify(listed)}`);
-  const notepadWin = (listed.windows || []).find((w) => /notepad/i.test(w.process));
+  const notepadWin = (listed.windows || []).find((w) => /notepad/i.test(w.process)
+    && (!scratchName || String(w.title || '').includes(scratchName)));
   if (!notepadWin) {
-    t.skip('未找到记事本窗口（默认不自动开窗；需要真实旅程时设 OPS_UIA_SPAWN=1）');
+    t.skip('未找到本次打开的记事本窗口（默认不自动开窗；需要真实旅程时设 OPS_UIA_SPAWN=1）');
     return;
   }
   const pid = notepadWin.pid;
   t.after(async () => {
-    try { await psScript(`Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`); } catch {}
+    // 只回收自己 spawn 的进程；复用用户窗口时绝不动它。
+    if (spawned) { try { spawned.kill(); } catch { /* 可能已退出 */ } }
+    if (scratch) { try { fs.unlinkSync(scratch); } catch { /* 可能仍被占用 */ } }
   });
 
   // 3. worker 读树：窗口名非空，且至少一个控件的 name / id 非空（P1-1 完成判据）
