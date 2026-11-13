@@ -28,7 +28,7 @@ func newDesktopCancellationTestState() (*Server, *desktopConnection, *desktopPen
 		control: make(chan desktopFrame, 4), done: make(chan struct{}),
 		pending: map[uuid.UUID]*desktopPending{p.id: p},
 	}
-	return &Server{}, c, p
+	return &Server{now: time.Now}, c, p
 }
 
 func assertDesktopCancelFrame(t *testing.T, c *desktopConnection, wantReason string) {
@@ -169,7 +169,7 @@ func TestDesktopTransportErrorsDoNotRetryAsProviderFailures(t *testing.T) {
 }
 
 func TestDesktopRequestBudgetsMatchExistingBrowserLimits(t *testing.T) {
-	server := &Server{}
+	server := &Server{now: time.Now}
 	newRouter := func(pattern string) chi.Router {
 		router := chi.NewRouter()
 		router.Use(requestReadDeadline(router))
@@ -357,7 +357,7 @@ func TestDesktopUpstreamErrorDoesNotCompletePartialResponse(t *testing.T) {
 	}
 	p.responseQueue <- []byte("partial response")
 	c := &desktopConnection{pending: map[uuid.UUID]*desktopPending{requestID: p}, done: make(chan struct{})}
-	s := &Server{}
+	s := &Server{now: time.Now}
 
 	raw := []byte(`{"type":"upstream.error","request_id":"` + requestID.String() + `","error_code":"credential_echo"}`)
 	if err := s.desktopHandleMessage(c, raw); err != nil {
@@ -390,7 +390,7 @@ func TestDesktopUpstreamErrorRequiresHeadersAndAllowlistedCode(t *testing.T) {
 			p := &desktopPending{id: requestID, responseStarted: tc.started, responseDone: make(chan struct{})}
 			c := &desktopConnection{pending: map[uuid.UUID]*desktopPending{requestID: p}}
 			raw := []byte(`{"type":"upstream.error","request_id":"` + requestID.String() + `","error_code":"` + tc.code + `"}`)
-			if err := (&Server{}).desktopHandleMessage(c, raw); err == nil {
+			if err := (&Server{now: time.Now}).desktopHandleMessage(c, raw); err == nil {
 				t.Fatal("非法 upstream.error 应被拒绝")
 			}
 			select {
@@ -419,15 +419,15 @@ func TestDesktopRetryAfterRejectsUnsafeValues(t *testing.T) {
 
 func TestDesktopControlFramesAreBoundedInBothDirections(t *testing.T) {
 	c := &desktopConnection{control: make(chan desktopFrame, 1), done: make(chan struct{})}
-	if err := (&Server{}).desktopSendJSON(c, desktopWireMessage{Type: "channel.heartbeat"}); err != nil {
+	if err := (&Server{now: time.Now}).desktopSendJSON(c, desktopWireMessage{Type: "channel.heartbeat"}); err != nil {
 		t.Fatalf("合法控制消息应可发送：%v", err)
 	}
-	if err := (&Server{}).desktopSendJSON(c, desktopWireMessage{
+	if err := (&Server{now: time.Now}).desktopSendJSON(c, desktopWireMessage{
 		Type: "request.open", Model: string(make([]byte, desktopMaxControlBytes)),
 	}); err == nil {
 		t.Fatal("超过 16 KiB 的控制消息必须拒绝发送")
 	}
-	if err := (&Server{}).desktopHandleMessage(c, make([]byte, desktopMaxControlBytes+1)); err == nil {
+	if err := (&Server{now: time.Now}).desktopHandleMessage(c, make([]byte, desktopMaxControlBytes+1)); err == nil {
 		t.Fatal("超过 16 KiB 的控制消息必须拒绝接收")
 	}
 }
