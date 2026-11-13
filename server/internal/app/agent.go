@@ -1886,6 +1886,9 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Get("/agent/browser/commands/pending", s.h(s.pendingAgentBrowserCommands))
 		// DEV-AI27-06（W06）：工具派发端点（模型工具 dispatch 走非 /agent/ 路径）。
 		r.Get("/tools/mcp/connections", s.h(s.listPluginConnections))
+		// CF-DESK-03（90 D-186 已批准）：run 内 tools/call 执行入口（契约 §2.1 第 1 点；
+		// GET 保持只读列连接语义不变）。
+		r.Post("/tools/mcp/calls", s.h(s.runPluginMCPCall))
 		r.Post("/tools/subagent/conversations/{id}/delegation-groups", s.h(s.createDelegationGroup))
 		r.Post("/tools/subagent/delegations/{id}/cancel", s.h(s.cancelDelegation))
 		r.Get("/tools/computer/grants", s.h(s.listComputerGrants))

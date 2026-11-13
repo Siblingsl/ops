@@ -10,8 +10,8 @@ import (
 // D-160 运行时闸门：system_setting 为日常真源，env 显式关闭为紧急全关。
 
 const (
-	desktopAIEnabledKey          = "desktop.ai_enabled"
-	desktopPlatformAutoAdoptKey  = "desktop.platform_auto_adopt"
+	desktopAIEnabledKey         = "desktop.ai_enabled"
+	desktopPlatformAutoAdoptKey = "desktop.platform_auto_adopt"
 )
 
 func envExplicitFalse(key string) bool {
@@ -138,7 +138,7 @@ func (s *Server) agentWorkbenchFeatures(ctx context.Context) map[string]bool {
 		return applyAgentFeatureDeps(agentFeaturesFromList(raw))
 	}
 	for _, name := range agentWorkbenchFeatureNames {
-		on, err := s.systemBool(ctx, agentFeatureKey(name), false)
+		on, err := s.systemBool(ctx, agentFeatureKey(name), agentFeatureDefaultOn[name])
 		if err != nil {
 			slog.Error("读取智能体特性失败，按关闭处理", "feature", name, "err", err)
 			continue

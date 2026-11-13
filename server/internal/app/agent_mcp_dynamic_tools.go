@@ -60,15 +60,23 @@ func ai27MCPDynamicTools(ctx context.Context, s *Server, workspaceID, userID uui
 			if len(toolName) > 128 {
 				continue
 			}
+			// CF-DESK-03（90 D-186 P3）：input_schema→Params 只接受基础 JSON Schema 子集；
+			// 不支持的 schema 明确报错并跳过该工具注册，不「看起来相似」就兼容（27 §11.2.2）。
+			params, err := mcpInputSchemaParams(ct.InputSchema)
+			if err != nil {
+				continue
+			}
 			desc := fmt.Sprintf("MCP 工具（连接：%s）。结果供用户确认后采用，不直接写业务数据。", connName)
 			tools = append(tools, AgentTool{
-				Name:    toolName,
-				Domain:  "mcp",
-				Kind:    toolG,
-				Method:  "POST",
-				Path:    "/tools/mcp/connections",
+				Name:        toolName,
+				Domain:      "mcp",
+				Kind:        toolG,
+				Method:      "POST",
+				Path:        "/tools/mcp/calls",
+				Params:      params,
+				Fixed:       map[string]any{"tool_name": toolName},
 				Description: desc,
-				MinRole: roleEditor,
+				MinRole:     roleEditor,
 			})
 		}
 	}
@@ -89,6 +97,57 @@ func sanitizeToolSegment(name string) string {
 		return "conn"
 	}
 	return string(out)
+}
+
+// mcpInputSchemaParams 把 MCP 工具的 input_schema（JSON Schema）映射为 AgentTool.Params。
+// 只接受基础子集：顶层 object，properties 各字段类型为 string/number/boolean/array/object
+// （D-186 P3：不含 $ref 与 union；契约 §2.4 第 1 点）。additionalProperties 缺省按 false 收窄。
+// 不支持的形状返回错误，调用方跳过该工具注册。
+func mcpInputSchemaParams(raw json.RawMessage) ([]ToolParam, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var schema struct {
+		Type       string `json:"type"`
+		Properties map[string]struct {
+			Type  string          `json:"type"`
+			AnyOf json.RawMessage `json:"anyOf"`
+			OneOf json.RawMessage `json:"oneOf"`
+			AllOf json.RawMessage `json:"allOf"`
+			Ref   string          `json:"$ref"`
+		} `json:"properties"`
+		Required             []string `json:"required"`
+		AdditionalProperties *bool    `json:"additionalProperties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		return nil, fmt.Errorf("input_schema 不是合法 JSON 对象: %w", err)
+	}
+	if schema.Type != "" && schema.Type != "object" {
+		return nil, fmt.Errorf("input_schema 顶层类型 %q 不支持（仅 object）", schema.Type)
+	}
+	required := map[string]bool{}
+	for _, name := range schema.Required {
+		required[name] = true
+	}
+	// additionalProperties 显式 true 不收窄也无法按字段校验，视为不支持。
+	if schema.AdditionalProperties != nil && *schema.AdditionalProperties {
+		return nil, fmt.Errorf("additionalProperties:true 不支持（无法按字段校验）")
+	}
+	var params []ToolParam
+	for name, prop := range schema.Properties {
+		if prop.Ref != "" || len(prop.AnyOf) > 0 || len(prop.OneOf) > 0 || len(prop.AllOf) > 0 {
+			return nil, fmt.Errorf("属性 %q 使用 $ref/组合类型，超出基础子集", name)
+		}
+		switch prop.Type {
+		case "string", "number", "boolean", "array", "object":
+		case "":
+			return nil, fmt.Errorf("属性 %q 缺少 type", name)
+		default:
+			return nil, fmt.Errorf("属性 %q 类型 %q 不支持", name, prop.Type)
+		}
+		params = append(params, pBodyF(name, string(prop.Type), required[name]))
+	}
+	return params, nil
 }
 
 // agentMCPDynamicToolsForWorkspace 供 run 内工具分发层调用：

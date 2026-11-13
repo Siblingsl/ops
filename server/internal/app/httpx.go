@@ -85,7 +85,15 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		// PostgreSQL 的 text 不接受 NUL 等编码外字符（例如从别处粘贴进来的 0x00）。
 		// 这是输入问题，不是服务故障，必须回 4xx 而不是 500。
 		ae = validation("内容包含无法保存的字符（如空字符），请删除后重试")
-	} else if !errors.As(err, &ae) {
+	} else if errors.As(err, &ae) {
+		// 显式语义优先：例如 MCP 同步等待的取消必须回 499 mcp_wait_cancelled，
+		// 不能被下面的通用“客户端断开”映射覆盖成 client_closed_request。
+	} else if r.Context().Err() != nil || errors.Is(err, context.Canceled) {
+		// ST-14（22 文档）：客户端在响应前断开（导航取消/页面关闭）会让在途 DB 查询返回
+		// context canceled。这不是服务故障：按 499 语义记 DEBUG 级日志，不冒 500 告警。
+		slog.DebugContext(r.Context(), "请求已被客户端取消", "request_id", middleware.GetReqID(r.Context()), "route", requestRoute(r.Context()), "err", err)
+		ae = apiErr(499, "client_closed_request", "客户端已取消请求")
+	} else {
 		slog.ErrorContext(r.Context(), "请求处理失败", "request_id", middleware.GetReqID(r.Context()), "route", requestRoute(r.Context()), "err", err)
 		ae = apiErr(500, "internal", "服务器内部错误，请稍后重试")
 	}

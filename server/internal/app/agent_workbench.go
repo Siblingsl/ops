@@ -38,10 +38,21 @@ var agentWorkbenchFeatureNames = []string{
 	"computer_use",
 }
 
+// agentFeatureDefaultOn 是 D-187 已批准的 A 档 11 项：未配置 env / DB 时默认开。
+// B 档 5 项与 C 档 3 项保持默认关；依赖前置由 applyAgentFeatureDeps 连带处理。
+var agentFeatureDefaultOn = map[string]bool{
+	"workbench_ui": true, "conversation_organize": true, "context_refs": true,
+	"skill_requests": true, "artifacts": true, "run_control": true,
+	"event_resume": true, "plans": true, "goals": true, "routines": true,
+	"document_parse": true,
+}
+
 func agentFeaturesFromList(raw string) map[string]bool {
 	features := make(map[string]bool, len(agentWorkbenchFeatureNames))
+	// 非空列表沿用既有“只开列出的项”语义（单测与应急隔离都依赖它）；空列表按 D-187 A 档默认开。
+	explicit := strings.TrimSpace(raw) != ""
 	for _, name := range agentWorkbenchFeatureNames {
-		features[name] = false
+		features[name] = !explicit && agentFeatureDefaultOn[name]
 	}
 	for _, name := range strings.Split(raw, ",") {
 		name = strings.TrimSpace(name)

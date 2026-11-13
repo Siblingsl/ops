@@ -45,7 +45,7 @@ func aw03InsertMessage(t *testing.T, conversationID uuid.UUID, seq int, role, co
 }
 
 func TestAW03ConversationGroupCRUDArchiveAndFeatureGate(t *testing.T) {
-	t.Setenv("OPS_AGENT_WORKBENCH_FEATURES", "")
+	t.Setenv("OPS_AGENT_WORKBENCH_FEATURES", "chrome_connect")
 	env.ensureToolModel(t)
 	status, raw := env.do(http.MethodGet, "/api/v1/agent/conversation-groups", nil)
 	var unavailable apiError

@@ -14,7 +14,7 @@ import (
 )
 
 func TestAW06EventResumeFeatureGate(t *testing.T) {
-	t.Setenv(agentWorkbenchFeatureEnv, "")
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect")
 	conversation := env.createConversation(t, map[string]any{})
 	defer deleteConversations(t, conversation.ID)
 	env.expectErr(t, "GET", "/api/v1/agent/conversations/"+conversation.ID.String()+"/events", nil,
@@ -227,7 +227,7 @@ func TestAW06EventBaselineCursorAndPrivateReplay(t *testing.T) {
 }
 
 func TestAW06LegacySSEPublishesPersistentEvents(t *testing.T) {
-	t.Setenv(agentWorkbenchFeatureEnv, "")
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect")
 	providerID := env.ensureToolModel(t)
 	conversation := env.agentRunConversation(t, providerID)
 	defer deleteConversations(t, conversation.ID)

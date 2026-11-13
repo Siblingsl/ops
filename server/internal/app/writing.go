@@ -81,7 +81,7 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 		return humanStep("H-02", "请先写下你自己的核心观点，再生成大纲")
 	}
 	var in struct {
-		Template         string   `json:"template"`
+		Template        string   `json:"template"`
 		SkeletonNoteIDs []string `json:"skeleton_note_ids"`
 	}
 	if err := decodeOptional(r, &in); err != nil {
@@ -145,11 +145,17 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 	}
 	structure := ""
 	refs := map[string]any{}
+	templateName, templateRange := "", ""
+	templateMin, templateMax := 0, 0
 	// DEV-416 / D-140：作品记录模板时优先用模板（结构 + 语气 + 段落区间 + 补充要求）。
 	if m.TemplateID != nil {
 		if tpl, err := s.findCreationTemplate(ctx, *m.TemplateID); err == nil {
 			structure = templatePrompt(tpl)
 			refs["creation_template"] = tpl.Name
+			templateName, templateMin, templateMax = tpl.Name, tpl.SectionMin, tpl.SectionMax
+			if tpl.SectionMin > 0 && tpl.SectionMax > 0 {
+				templateRange = fmt.Sprintf("%d 到 %d 个段落", tpl.SectionMin, tpl.SectionMax)
+			}
 		}
 	}
 	if structure == "" && in.Template != "" {
@@ -166,11 +172,14 @@ func (s *Server) generateOutline(w http.ResponseWriter, r *http.Request) error {
 			refs["format_brief"] = m.ContentFormat
 		}
 	}
-		if skeletonBrief != "" {
+	if skeletonBrief != "" {
 		structure += skeletonBrief
 		refs["benchmark_skeletons"] = in.SkeletonNoteIDs
 	}
-outlineRange := "4 到 8 个段落"
+	outlineRange := "4 到 8 个段落"
+	if templateRange != "" {
+		outlineRange = templateRange
+	}
 	if m.Account.Platform == "toutiao" && m.ContentFormat == "micro_post" {
 		outlineRange = "建议 1 到 3 个短要点；这是起草建议，作者可以按需要调整数量"
 		if structure == "" {
@@ -194,7 +203,7 @@ outlineRange := "4 到 8 个段落"
 	}
 	res, err := s.runAIJSON(ctx, aiTask{Type: "outline", Account: m.Account, WorkID: &m.ID, User: user, Materials: mids, Work: work, Refs: refs,
 		CXUnrepresentedItems: skeletonOmissions,
-		CXBasisEnabled: true, CXExpectedWorkRev: workRevision}, &out, func() error {
+		CXBasisEnabled:       true, CXExpectedWorkRev: workRevision}, &out, func() error {
 		if len(out.Items) < 2 {
 			return fmt.Errorf("大纲项太少")
 		}
@@ -219,10 +228,15 @@ outlineRange := "4 到 8 个段落"
 			out.Items[i].MaterialIDs = []string{}
 		}
 	}
+	templateHint := templateSectionHint(templateName, templateMin, templateMax, len(out.Items))
 	if len(out.Items) > 8 {
 		out.Items = out.Items[:8]
 	}
-	return ok(w, map[string]any{"items": out.Items, "refs": res.Refs, "ai_call_id": res.CallID, "cx_basis": res.CXBasis})
+	resp := map[string]any{"items": out.Items, "refs": res.Refs, "ai_call_id": res.CallID, "cx_basis": res.CXBasis}
+	if templateHint != "" {
+		resp["template_hint"] = templateHint
+	}
+	return ok(w, resp)
 }
 
 // workBrief is the work slot: title, topic fields, viewpoint, confirmed outline and series neighbours.

@@ -488,6 +488,7 @@ export interface Work {
   title: string
   summary: string
   viewpoint: string
+  template_id?: string | null
   outline: OutlineItem[]
   outline_confirmed_at: string | null
   theme: string

@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestAW01BootstrapFeatureSwitchesDefaultClosed(t *testing.T) {
+func TestAW01BootstrapFeatureSwitchesDefaultTiering(t *testing.T) {
 	clearAgentFeatureSettings(t)
 	t.Setenv("OPS_AGENT_WORKBENCH_FEATURES", "")
 	env.ensureToolModel(t)
@@ -17,22 +17,37 @@ func TestAW01BootstrapFeatureSwitchesDefaultClosed(t *testing.T) {
 		Features map[string]bool `json:"features"`
 	}
 	env.mustJSON(t, http.MethodGet, "/api/v1/agent/bootstrap", nil, &body)
-	// 名单以服务端登记为准：本夹具曾按批手抄，W13～W17 陆续新增 8 项时漏更新，
-	// 导致它在 HEAD 上单独跑也是红的（2026-11-09 修正）。下限断言防止名单被悄悄删空。
+	// 名单以服务端登记为准；D-187 A 档 11 项默认开，B/C 档 8 项默认关。
 	want := append([]string(nil), agentWorkbenchFeatureNames...)
 	if len(body.Features) != len(want) || len(want) < 19 {
 		t.Fatalf("bootstrap features = %#v, want all %d documented flags", body.Features, len(want))
 	}
+	onCount := 0
 	for _, name := range want {
-		if enabled, ok := body.Features[name]; !ok || enabled {
-			t.Errorf("feature %q = %v, present=%v; want present and disabled by default", name, enabled, ok)
+		enabled, ok := body.Features[name]
+		if !ok {
+			t.Errorf("feature %q missing", name)
+			continue
 		}
+		if enabled != agentFeatureDefaultOn[name] {
+			t.Errorf("feature %q = %v; want default %v", name, enabled, agentFeatureDefaultOn[name])
+		}
+		if enabled {
+			onCount++
+		}
+	}
+	if onCount != 11 {
+		t.Errorf("default-enabled features = %d, want A 档 11", onCount)
 	}
 
 	t.Setenv("OPS_AGENT_WORKBENCH_FEATURES", "workbench_ui, conversation_organize, unknown_feature")
 	env.mustJSON(t, http.MethodGet, "/api/v1/agent/bootstrap", nil, &body)
-	if len(body.Features) != len(want) || !body.Features["workbench_ui"] || !body.Features["conversation_organize"] || body.Features["context_refs"] {
+	if len(body.Features) != len(want) || !body.Features["workbench_ui"] || !body.Features["conversation_organize"] {
 		t.Fatalf("configured feature switches were not isolated: %#v", body.Features)
+	}
+	// 显式列表仍是“只开列出的项”，未被列出的 A 档项此刻应关（单测与应急隔离依赖此语义）。
+	if body.Features["context_refs"] || body.Features["artifacts"] || body.Features["plans"] {
+		t.Fatalf("explicit list leaked unlisted defaults: %#v", body.Features)
 	}
 }
 

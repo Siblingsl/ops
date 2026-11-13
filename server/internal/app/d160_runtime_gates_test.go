@@ -104,8 +104,11 @@ func TestD160AgentFeaturesDBAndEnvSeedAndEmergency(t *testing.T) {
 	clearAgentFeatureSettings(t)
 	t.Setenv(agentWorkbenchFeatureEnv, "")
 	feats := env.srv.agentWorkbenchFeatures(ctx)
-	if feats["workbench_ui"] {
-		t.Fatal("无 env、无 DB 时应全关")
+	if !feats["workbench_ui"] || !feats["goals"] || !feats["routines"] {
+		t.Fatalf("无 env、无 DB 时 D-187 A 档应默认开：%#v", feats)
+	}
+	if feats["chrome_connect"] || feats["plugin_mcp"] || feats["voice_realtime"] {
+		t.Fatalf("B/C 档应默认关：%#v", feats)
 	}
 
 	if err := env.srv.putSystemBool(ctx, agentFeatureKey("workbench_ui"), true); err != nil {

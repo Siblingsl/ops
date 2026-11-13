@@ -15,16 +15,16 @@ import (
 )
 
 type CreationTemplate struct {
-	ID           uuid.UUID       `json:"id"`
+	ID            uuid.UUID      `json:"id"`
 	ContentFormat string         `json:"content_format"`
-	Name         string          `json:"name"`
-	Builtin      bool            `json:"builtin"`
-	Structure    []TemplateStep  `json:"structure"`
-	PromptAddon  string          `json:"prompt_addon"`
-	SectionMin   int             `json:"section_min"`
-	SectionMax   int             `json:"section_max"`
-	Tone         string          `json:"tone"`
-	UpdatedAt    string          `json:"updated_at,omitempty"`
+	Name          string         `json:"name"`
+	Builtin       bool           `json:"builtin"`
+	Structure     []TemplateStep `json:"structure"`
+	PromptAddon   string         `json:"prompt_addon"`
+	SectionMin    int            `json:"section_min"`
+	SectionMax    int            `json:"section_max"`
+	Tone          string         `json:"tone"`
+	UpdatedAt     string         `json:"updated_at,omitempty"`
 }
 
 // TemplateStep is one outline slot of a template.
@@ -46,19 +46,19 @@ func templateSteps(headings ...string) []TemplateStep {
 func builtinCreationTemplates() []CreationTemplate {
 	return []CreationTemplate{
 		{ContentFormat: "long_article", Name: "观点文", Builtin: true, SectionMin: 3, SectionMax: 6, Tone: "克制、具体",
-			Structure: templateSteps("提出观点", "论据一", "论据二", "回应可能的反对意见", "回到观点"),
+			Structure:   templateSteps("提出观点", "论据一", "论据二", "回应可能的反对意见", "回到观点"),
 			PromptAddon: "论点先行，每个论据给出具体场景或数据；不要写成口号合集。"},
 		{ContentFormat: "long_article", Name: "教程文", Builtin: true, SectionMin: 4, SectionMax: 8, Tone: "清楚、可执行",
-			Structure: templateSteps("要解决什么问题", "准备工作", "步骤一", "步骤二", "常见问题", "小结"),
+			Structure:   templateSteps("要解决什么问题", "准备工作", "步骤一", "步骤二", "常见问题", "小结"),
 			PromptAddon: "每一步都要能被读者照着做；缺少数据时留【待核实】，不要编造。"},
 		{ContentFormat: "qa_article", Name: "单问深答", Builtin: true, SectionMin: 3, SectionMax: 5, Tone: "直接、有依据",
-			Structure: templateSteps("先把问题问清楚", "常见但不对的答案", "真正的原因", "可以怎么做"),
+			Structure:   templateSteps("先把问题问清楚", "常见但不对的答案", "真正的原因", "可以怎么做"),
 			PromptAddon: "只回答一个问题，不扩展到无关话题。"},
 		{ContentFormat: "image_note", Name: "攻略笔记", Builtin: true, SectionMin: 3, SectionMax: 7, Tone: "口语、亲近",
-			Structure: templateSteps("为什么值得看", "具体做法", "踩过的坑", "一句话总结"),
+			Structure:   templateSteps("为什么值得看", "具体做法", "踩过的坑", "一句话总结"),
 			PromptAddon: "每段短，便于配图；不要长段落。"},
 		{ContentFormat: "card_post", Name: "知识卡片", Builtin: true, SectionMin: 3, SectionMax: 6, Tone: "精炼",
-			Structure: templateSteps("一个结论", "为什么", "怎么做", "一句话记住"),
+			Structure:   templateSteps("一个结论", "为什么", "怎么做", "一句话记住"),
 			PromptAddon: "每张卡片一个意思，句子尽量短。"},
 	}
 }
@@ -268,5 +268,17 @@ func templatePrompt(t *CreationTemplate) string {
 	if t.PromptAddon != "" {
 		fmt.Fprintf(&b, "\n补充要求：%s", t.PromptAddon)
 	}
+	fmt.Fprintf(&b, "\n分工：模板负责结构、语气与段落数；本篇的个别补充说明只影响表达，不改结构。")
 	return b.String()
+}
+
+// templateSectionHint 是软提示：段落数超出模板区间时提示用户可增删，不阻断生成/保存。
+func templateSectionHint(name string, min, max, count int) string {
+	if min <= 0 || max <= 0 || (count >= min && count <= max) {
+		return ""
+	}
+	if name == "" {
+		name = "当前模板"
+	}
+	return fmt.Sprintf("模板「%s」建议 %d 到 %d 个段落，本次生成 %d 个；可直接采用，也可增删后再确认，不阻断。", name, min, max, count)
 }

@@ -17,7 +17,7 @@ func TestAW05ArtifactsAreFeatureGatedAndPrivate(t *testing.T) {
 	t.Cleanup(func() { deleteConversations(t, conversation.ID) })
 	path := "/api/v1/agent/conversations/" + conversation.ID.String() + "/artifacts"
 
-	t.Setenv(agentWorkbenchFeatureEnv, "")
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect")
 	if status, body := env.do(http.MethodGet, path, nil); status != http.StatusConflict || agentErrCodeOf(t, body) != "agent_feature_unavailable" {
 		t.Fatalf("feature-off artifact list = %d %s", status, body)
 	}

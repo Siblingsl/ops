@@ -32,7 +32,7 @@ func TestAW04ContextCandidatesRespectAccountScope(t *testing.T) {
 		t.Cleanup(func() { _, _ = env.srv.db.Exec(context.Background(), `DELETE FROM material WHERE id=$1`, id) })
 	}
 
-	t.Setenv("OPS_AGENT_WORKBENCH_FEATURES", "")
+	t.Setenv("OPS_AGENT_WORKBENCH_FEATURES", "chrome_connect")
 	env.expectErr(t, http.MethodGet, "/api/v1/agent/context-candidates?type=material&account_id="+accounts.wechat.ID.String(), nil, "agent_feature_unavailable")
 
 	t.Setenv("OPS_AGENT_WORKBENCH_FEATURES", "context_refs")

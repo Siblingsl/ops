@@ -257,6 +257,8 @@ func agentClassifiedRouteList() map[string]string {
 		// DEV-AI27-06（W06）工具派发端点（模型 dispatch 走 /tools/ 路径）。
 		"POST /api/v1/tools/browser/commands",
 		"GET /api/v1/tools/mcp/connections",
+		// CF-DESK-03（90 D-186）：run 内 tools/call 执行入口（本机桥调用，不进模型目录）。
+		"POST /api/v1/tools/mcp/calls",
 		"POST /api/v1/tools/subagent/conversations/{conversationId}/delegation-groups",
 		"POST /api/v1/tools/subagent/delegations/{id}/cancel",
 		"GET /api/v1/tools/computer/grants",
@@ -495,8 +497,9 @@ func TestAG04CatalogShape(t *testing.T) {
 	// （含 A12 请求选窗）、mcp__list_connections 1、memory__propose_candidate 1
 	// —— 287 + 11 + 16 = 314。
 	// DEV-CU P4-3 又加 6 条：computer_view/focus/scroll/select/click/type_target。
-	if len(agentCatalog()) != 320 {
-		t.Fatalf("目录条目数 %d，期望 320（附录 A 287 条 + 元工具 11 条 + DEV-AI27 16 条 + DEV-CU 6 条）", len(agentCatalog()))
+	// CF-TPL-06 又加 2 条：templates__list / templates__save（18 §3.7）。
+	if len(agentCatalog()) != 322 {
+		t.Fatalf("目录条目数 %d，期望 322（附录 A 287 条 + 元工具 11 条 + DEV-AI27 16 条 + DEV-CU 6 条 + CF-TPL-06 2 条）", len(agentCatalog()))
 	}
 	for _, d := range agentDomains {
 		if counts[d.Name] == 0 {

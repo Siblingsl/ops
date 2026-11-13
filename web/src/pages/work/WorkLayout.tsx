@@ -12,7 +12,7 @@ import { apiBase } from '@/lib/api-base'
 import { fmtTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { currentWorkQueryKey, rememberAccount, useCanWrite, useMe } from '@/lib/session'
-import type { Platform, PlatformWorkMirror, StarItem, Work, WorkspaceMember, WorkStatus } from '@/lib/types'
+import type { CreationTemplate, Platform, PlatformWorkMirror, StarItem, Work, WorkspaceMember, WorkStatus } from '@/lib/types'
 import { rememberRecent, useCustomTheme, usePrefs, useWorkCmd } from '@/lib/v3'
 import { usePageVisible } from '@/lib/visibility'
 import { emitEditor } from './editor-tools'
@@ -137,6 +137,37 @@ function PlanPopover({ work, onSaved }: { work: Work; onSaved: (w: Work) => void
           )}
         </div>
       )}
+    </div>
+  )
+}
+/** TemplateSwitch 只切换后续 AI 生成用的模板，不改已写段落（18 §3.4 / T-101-7）。 */
+function TemplateSwitch({ work, onSaved }: { work: Work; onSaved: (w: Work) => void }) {
+  const canWrite = useCanWrite()
+  const templates = useQuery({
+    queryKey: ['creation-templates', work.content_format],
+    queryFn: () => get<CreationTemplate[]>(`/creation-templates?content_format=${work.content_format}`),
+    staleTime: 60_000,
+  })
+  const list = templates.data ?? []
+  const current = work.template_id ? list.find((t) => t.id === work.template_id) : undefined
+  const pick = async (id: string) => {
+    if (!id || id === work.template_id) return
+    try {
+      onSaved(await patch<Work>(`/works/${work.id}`, { template_id: id }))
+      toast.success('已切换模板，只影响后续生成，不改已写段落')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    }
+  }
+  return (
+    <div className="work-template flex shrink-0 items-center gap-1" title="切换模板只影响后续 AI 生成，不改已写段落">
+      <span className="hidden text-[11.5px] text-mist-500 xl:inline">模板</span>
+      <Select aria-label="切换创作模板" className="h-8 w-[118px] text-[12.5px]" disabled={!canWrite || work.locked}
+        value={work.template_id ?? ''} onChange={(e) => void pick(e.target.value)}>
+        <option value="">通用写法</option>
+        {list.map((t) => <option key={t.id} value={t.id}>{t.name}{t.builtin ? '（内置）' : ''}</option>)}
+        {work.template_id && !current && <option value={work.template_id}>当前模板</option>}
+      </Select>
     </div>
   )
 }
@@ -547,6 +578,7 @@ export default function WorkLayout() {
               <button type="button" disabled={!canWrite || work.locked} onClick={() => { setTitleDraft(work.title); setRenaming(true) }}
                 title={canWrite && !work.locked ? '点击修改标题' : undefined}
                 className={cn('block w-full truncate text-left text-[14.5px] font-semibold text-mist-900', canWrite && !work.locked && 'cursor-pointer rounded px-1 -mx-1 hover:bg-mist-100')}>
+            <TemplateSwitch work={work} onSaved={setWork} />
                 {work.title || <span className="text-mist-400">未命名作品 · 点击命名</span>}
               </button>
             )}

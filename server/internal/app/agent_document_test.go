@@ -28,7 +28,7 @@ func TestAW11DocumentUploadLimitAppliesToDirectMultipartRequests(t *testing.T) {
 }
 
 func TestAW11DocumentsRequireFeatureAndParseRealCSV(t *testing.T) {
-	t.Setenv(agentWorkbenchFeatureEnv, "")
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect")
 	code, _, body := agentUploadAttachment(t, "report.csv", []byte("title,value\nhello,1\n"), "")
 	if code != 409 || agentErrCodeOf(t, body) != "agent_feature_unavailable" {
 		t.Fatalf("document upload must be feature gated: %d %s", code, body)

@@ -688,6 +688,7 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		Topics        []string           `json:"topics"`
 		Tags          []string           `json:"tags"`
 		MaterialIDs   []uuid.UUID        `json:"material_ids"`
+		TemplateID    *uuid.UUID         `json:"template_id"`
 
 		PlannedDate    *string         `json:"planned_date"`
 		TargetChars    *int            `json:"target_chars"`
@@ -706,7 +707,7 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		in.Viewpoint == nil && in.Theme == nil && in.CoverAssetID == nil && !in.ClearCover &&
 		in.CoverCrops == nil && in.WechatFields == nil && in.Topics == nil && in.MaterialIDs == nil &&
 		in.PlannedDate == nil && in.TargetChars == nil && in.ReviewRequired == nil &&
-		in.AssigneeID == nil && in.ReviewerID == nil && len(in.PostPushTodos) == 0
+		in.AssigneeID == nil && in.ReviewerID == nil && len(in.PostPushTodos) == 0 && in.TemplateID == nil
 	if err := m.editable(); err != nil && !tagsOnly {
 		return err
 	}
@@ -745,6 +746,9 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 	if in.MaterialIDs != nil {
 		fields = append(fields, "materials")
 	}
+	if in.TemplateID != nil {
+		fields = append(fields, "template")
+	}
 	if in.PlannedDate != nil {
 		fields = append(fields, "planned_date")
 	}
@@ -768,6 +772,19 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	// DEV-416 / D-140：编辑器切换模板只影响后续 AI 生成，不改已写段落，也不推进 revision。
+	if in.TemplateID != nil {
+		tpl, err := s.findCreationTemplate(ctx, *in.TemplateID)
+		if err != nil {
+			return err
+		}
+		if tpl.ContentFormat != m.ContentFormat {
+			return validationFields("模板类型与作品形态不一致", map[string]string{"template_id": "请选择同形态的模板"})
+		}
+		if _, err := tx.Exec(ctx, `UPDATE work SET template_id=$2 WHERE id=$1`, m.ID, *in.TemplateID); err != nil {
+			return err
+		}
+	}
 	// NW-C5：观点/主题/封面/话题等也算内容，必须和标题一样受 revision 保护，否则会静默覆盖别人的修改。
 	if in.Title != nil || in.Summary != nil || in.MaterialIDs != nil || in.Viewpoint != nil || in.Theme != nil ||
 		in.ClearCover || in.CoverAssetID != nil || in.CoverCrops != nil || in.Topics != nil || in.Tags != nil {

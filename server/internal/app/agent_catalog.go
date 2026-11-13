@@ -35,6 +35,7 @@ var agentDomains = []agentDomain{
 	{"topics", "选题池、系列"},
 	{"ops", "运营方案、内容大纲、热点、每日推荐、对标参考、内容日历"},
 	{"works", "作品列表与属性、版本、协作批注、星标"},
+	{"templates", "创作模板：结构、语气、段落区间与提示词补充"},
 	{"writing", "大纲、分镜、段落、起草与改写、标题摘要等生成"},
 	{"visual", "图片、图片库、作品配图、漫画分格、卡片图"},
 	{"publish", "发布前检查、审阅、公众号草稿、小红书／头条发布包、回填"},
@@ -183,6 +184,7 @@ func buildAgentCatalog() []AgentTool {
 	out = append(out, agentToolsTopics...)
 	out = append(out, agentToolsOps...)
 	out = append(out, agentToolsWorks...)
+	out = append(out, agentToolsTemplates...)
 	out = append(out, agentToolsWriting...)
 	out = append(out, agentToolsVisual...)
 	out = append(out, agentToolsPublish...)

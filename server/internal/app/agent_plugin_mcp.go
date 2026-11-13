@@ -1,12 +1,15 @@
 package app
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -20,24 +23,24 @@ import (
 // 状态机：draft → ready_disabled → enabled ⇄ disabled；revoke → revoked（终态）。
 
 type pluginConnection struct {
-	ID               string          `json:"id"`
-	Name             string          `json:"name"`
-	Transport        string          `json:"transport"`
-	Command          string          `json:"command,omitempty"`
-	Args             []string        `json:"args,omitempty"`
-	Cwd              string          `json:"cwd,omitempty"`
-	EnvKeys          []string        `json:"env_keys,omitempty"`
-	URL              string          `json:"url,omitempty"`
-	ProtocolVersion  string          `json:"protocol_version,omitempty"`
-	ServerName       string          `json:"server_name,omitempty"`
-	ServerVersion    string          `json:"server_version,omitempty"`
-	CatalogRevision  string          `json:"catalog_revision,omitempty"`
-	ToolsCatalog     json.RawMessage `json:"tools_catalog,omitempty"`
-	State            string          `json:"state"`
-	Revision         int64           `json:"revision"`
-	LastError        string          `json:"last_error,omitempty"`
-	CreatedAt        string          `json:"created_at"`
-	UpdatedAt        string          `json:"updated_at"`
+	ID              string          `json:"id"`
+	Name            string          `json:"name"`
+	Transport       string          `json:"transport"`
+	Command         string          `json:"command,omitempty"`
+	Args            []string        `json:"args,omitempty"`
+	Cwd             string          `json:"cwd,omitempty"`
+	EnvKeys         []string        `json:"env_keys,omitempty"`
+	URL             string          `json:"url,omitempty"`
+	ProtocolVersion string          `json:"protocol_version,omitempty"`
+	ServerName      string          `json:"server_name,omitempty"`
+	ServerVersion   string          `json:"server_version,omitempty"`
+	CatalogRevision string          `json:"catalog_revision,omitempty"`
+	ToolsCatalog    json.RawMessage `json:"tools_catalog,omitempty"`
+	State           string          `json:"state"`
+	Revision        int64           `json:"revision"`
+	LastError       string          `json:"last_error,omitempty"`
+	CreatedAt       string          `json:"created_at"`
+	UpdatedAt       string          `json:"updated_at"`
 }
 
 const pluginConnectionColumnsPlain = "id::text, name, transport, command, args, cwd, env_keys, url," +
@@ -212,34 +215,34 @@ func (s *Server) actionPluginConnection(w http.ResponseWriter, r *http.Request) 
 			}
 			return err
 		}
-	target, reachable := next[currentState]
-	if !reachable {
-		return apiErr(409, "plugin_state_conflict", "当前状态不支持该操作")
-	}
-	// A3（宿主接线后 validate 成为真实握手结果的上报口）：失败（last_error 非空）不推进
-	// 状态——"已验证"必须对应真实握手成功；失败只记 last_error，UI 如实展示，不伪造。
-	validateFailure := body.Action == "validate" && strings.TrimSpace(body.LastError) != ""
-	if validateFailure {
-		target = currentState
-	}
-	// 原子 CAS：WHERE revision=$3，冲突返回零行（plugin_revision_conflict）。
-	var catalogArg any
-	if len(body.ToolsCatalog) > 0 {
-		catalogArg = string(body.ToolsCatalog)
-	}
-	// validate 成功时清掉上一次失败的残留 last_error（否则旧错误永远挂在卡片上）。
-	clearLastError := body.Action == "validate" && !validateFailure
-	row := tx.QueryRow(r.Context(), "UPDATE agent_plugin_connection SET state=$2, revision=revision+1, updated_at=now(),"+
-		" protocol_version=CASE WHEN $4<>'' THEN $4 ELSE protocol_version END,"+
-		" server_name=CASE WHEN $5<>'' THEN $5 ELSE server_name END,"+
-		" server_version=CASE WHEN $6<>'' THEN $6 ELSE server_version END,"+
-		" catalog_revision=CASE WHEN $7<>'' THEN $7 ELSE catalog_revision END,"+
-		" tools_catalog=CASE WHEN jsonb_typeof($8::jsonb)='array' THEN $8::jsonb ELSE tools_catalog END,"+
-		" last_error=CASE WHEN $9<>'' THEN $9 WHEN $10 THEN '' ELSE last_error END"+
-		" WHERE id=$1 AND revision=$3 RETURNING "+pluginConnectionColumnsPlain,
-		connectionID, target, body.ExpectedRevision,
-		body.ProtocolVersion, body.ServerName, body.ServerVersion, body.CatalogRevision,
-		catalogArg, body.LastError, clearLastError)
+		target, reachable := next[currentState]
+		if !reachable {
+			return apiErr(409, "plugin_state_conflict", "当前状态不支持该操作")
+		}
+		// A3（宿主接线后 validate 成为真实握手结果的上报口）：失败（last_error 非空）不推进
+		// 状态——"已验证"必须对应真实握手成功；失败只记 last_error，UI 如实展示，不伪造。
+		validateFailure := body.Action == "validate" && strings.TrimSpace(body.LastError) != ""
+		if validateFailure {
+			target = currentState
+		}
+		// 原子 CAS：WHERE revision=$3，冲突返回零行（plugin_revision_conflict）。
+		var catalogArg any
+		if len(body.ToolsCatalog) > 0 {
+			catalogArg = string(body.ToolsCatalog)
+		}
+		// validate 成功时清掉上一次失败的残留 last_error（否则旧错误永远挂在卡片上）。
+		clearLastError := body.Action == "validate" && !validateFailure
+		row := tx.QueryRow(r.Context(), "UPDATE agent_plugin_connection SET state=$2, revision=revision+1, updated_at=now(),"+
+			" protocol_version=CASE WHEN $4<>'' THEN $4 ELSE protocol_version END,"+
+			" server_name=CASE WHEN $5<>'' THEN $5 ELSE server_name END,"+
+			" server_version=CASE WHEN $6<>'' THEN $6 ELSE server_version END,"+
+			" catalog_revision=CASE WHEN $7<>'' THEN $7 ELSE catalog_revision END,"+
+			" tools_catalog=CASE WHEN jsonb_typeof($8::jsonb)='array' THEN $8::jsonb ELSE tools_catalog END,"+
+			" last_error=CASE WHEN $9<>'' THEN $9 WHEN $10 THEN '' ELSE last_error END"+
+			" WHERE id=$1 AND revision=$3 RETURNING "+pluginConnectionColumnsPlain,
+			connectionID, target, body.ExpectedRevision,
+			body.ProtocolVersion, body.ServerName, body.ServerVersion, body.CatalogRevision,
+			catalogArg, body.LastError, clearLastError)
 		var err error
 		updated, err = scanPluginConnection(row)
 		if err == pgx.ErrNoRows {
@@ -307,6 +310,8 @@ func (s *Server) createPluginCall(w http.ResponseWriter, r *http.Request) error 
 		return apiErr(422, "validation_failed", "tool_name 必填")
 	}
 	argsJSON, _ := json.Marshal(body.Args)
+	// 契约 §2.2 第 2 点：账本只存脱敏后的入参快照；input_hash 仍按原始入参计算（幂等语义不变）。
+	storedArgs := redactMCPJSON(argsJSON)
 	hasher := sha256.New()
 	hasher.Write(append([]byte(body.ToolName+"."), argsJSON...))
 	inputHash := hex.EncodeToString(hasher.Sum(nil))
@@ -334,9 +339,9 @@ func (s *Server) createPluginCall(w http.ResponseWriter, r *http.Request) error 
 			return nil
 		case err == pgx.ErrNoRows:
 			_, err = tx.Exec(r.Context(), "INSERT INTO agent_plugin_call"+
-				" (id, connection_id, workspace_id, user_id, run_id, tool_name, request_id, input_hash, state)"+
-				" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'dispatched')",
-				callID, connectionID, id.WorkspaceID, id.UserID, nullUUIDOrNil(body.RunID), body.ToolName, requestID, inputHash)
+				" (id, connection_id, workspace_id, user_id, run_id, tool_name, request_id, input_hash, state, args_json)"+
+				" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'dispatched',$9)",
+				callID, connectionID, id.WorkspaceID, id.UserID, nullUUIDOrNil(body.RunID), body.ToolName, requestID, inputHash, storedArgs)
 			return err
 		default:
 			return err
@@ -355,11 +360,12 @@ func (s *Server) receiptPluginCall(w http.ResponseWriter, r *http.Request) error
 		return errNotFound
 	}
 	var body struct {
-		State      string `json:"state"`
-		ErrorCode  string `json:"error_code"`
-		DurationMs int64  `json:"duration_ms"`
+		State      string          `json:"state"`
+		ErrorCode  string          `json:"error_code"`
+		DurationMs int64           `json:"duration_ms"`
+		Result     json.RawMessage `json:"result,omitempty"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&body); err != nil {
 		return apiErr(400, "bad_request", "请求体无法解析")
 	}
 	if body.State != "succeeded" && body.State != "failed" && body.State != "unknown_outcome" {
@@ -375,8 +381,16 @@ func (s *Server) receiptPluginCall(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 	if currentState == "dispatched" {
-		if _, err := s.db.Exec(r.Context(), "UPDATE agent_plugin_call SET state=$2, error_code=COALESCE(NULLIF($3,''), ''), duration_ms=$4 WHERE id=$1",
-			callID, body.State, body.ErrorCode, body.DurationMs); err != nil {
+		// CF-DESK-03（契约 §2.2/§2.3）：回执带脱敏 result 快照与哈希（27 §11.2.4）。
+		storedResult := redactMCPJSON(body.Result)
+		resultHash := ""
+		if len(storedResult) > 0 && string(storedResult) != "null" {
+			sum := sha256.Sum256(storedResult)
+			resultHash = hex.EncodeToString(sum[:])
+		}
+		if _, err := s.db.Exec(r.Context(), "UPDATE agent_plugin_call SET state=$2, error_code=COALESCE(NULLIF($3,''), ''), duration_ms=$4,"+
+			" result_json=$5, result_hash=$6 WHERE id=$1",
+			callID, body.State, body.ErrorCode, body.DurationMs, nullJSON(storedResult), resultHash); err != nil {
 			return err
 		}
 		return ok(w, map[string]any{"state": body.State})
@@ -397,4 +411,216 @@ func nullUUIDOrNil(raw string) *uuid.UUID {
 		return nil
 	}
 	return &id
+}
+
+// ---- CF-DESK-03（90 D-186 已批准）：run 内 tools/call 执行链路 ----
+// 对齐契约 docs/design/mcp-tools-call-contract.md §2（已批准结论：P1 新端点 /
+// P2 增列 24h / P3 基础子集 / P4 维持 5 态 / P5 等待 35s）。
+
+// pluginCallWaitBudget：run 内同步等待硬上限（对齐浏览器先例 browserCommandWaitBudget；
+// D-186 P5 维持 35s，不采纳 27 的发现 15s / 调用 60s 分段）。
+const pluginCallWaitBudget = 35 * time.Second
+
+const pluginCallWaitPoll = 200 * time.Millisecond
+
+// runPluginMCPCall 是 run 内模型调用入口（POST /tools/mcp/calls）。
+// connection_id 与 tool_name 由服务端按动态目录反查绑定（契约 §2.1 第 2 点：
+// 不接受模型自报连接/任意工具名，防跨连接重名与越权）。
+func (s *Server) runPluginMCPCall(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.pluginGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "plugin_mcp"); err != nil {
+		return err
+	}
+	principal := agentPrincipalOf(r.Context())
+	if principal == nil || principal.RunID == uuid.Nil || principal.ConversationID == uuid.Nil {
+		return apiErr(422, "validation_failed", "该接口只能由会话任务内的工具调用发起")
+	}
+	// 模型参数按 input_schema 平铺在请求体；tool_name 由目录 Fixed 注入
+	//（调用方不持连接/工具句柄）。这里先拆出 tool_name，其余字段即 args。
+	var body map[string]any
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&body); err != nil {
+		return apiErr(400, "bad_request", "请求体无法解析")
+	}
+	toolName, _ := body["tool_name"].(string)
+	delete(body, "tool_name")
+	args := body
+	if !strings.HasPrefix(toolName, "mcp__") {
+		return apiErr(422, "validation_failed", "tool_name 必须是 mcp__ 前缀的动态工具")
+	}
+	// 按动态目录反查：tool_name 必须在当前用户/工作区 enabled 连接的目录里（重查一次）。
+	tool, connID, catalogRevision, protocolVersion, err := s.resolveMCPDynamicTool(r.Context(), id.UserID, id.WorkspaceID, toolName)
+	if err != nil {
+		return err
+	}
+	// 按冻结 input_schema 完整校验 args（契约 §2.4 第 2 点）；失败落 failed，不派发。
+	argsJSON, _ := json.Marshal(args)
+	// 契约 §2.2 第 2 点：入参快照先脱敏再落账本；input_hash 用原始入参保证幂等语义。
+	storedArgs := redactMCPJSON(argsJSON)
+	if err := validateMCPArgsAgainstSchema(tool.InputSchema, argsJSON); err != nil {
+		callID := uuid.New()
+		inputHash := mcpInputHash(toolName, argsJSON)
+		if _, err := s.db.Exec(r.Context(), "INSERT INTO agent_plugin_call"+
+			" (id, connection_id, workspace_id, user_id, run_id, tool_name, request_id, input_hash, state, error_code,"+
+			" args_json, input_schema_hash, catalog_revision, protocol_version)"+
+			" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'failed','mcp_schema_invalid',$9,$10,$11,$12)",
+			callID, connID, id.WorkspaceID, id.UserID, &principal.RunID, toolName, uuid.New(), inputHash,
+			storedArgs, mcpSchemaHash(tool.InputSchema), catalogRevision, protocolVersion); err != nil {
+			return err
+		}
+		return apiErr(422, "mcp_schema_invalid", "参数不符合工具 input_schema："+err.Error())
+	}
+	inputHash := mcpInputHash(toolName, argsJSON)
+	requestID := uuid.New()
+	callID := uuid.New()
+	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+		var state string
+		if err := tx.QueryRow(r.Context(), "SELECT state FROM agent_plugin_connection"+
+			" WHERE id=$1 AND user_id=$2 AND workspace_id=$3",
+			connID, id.UserID, id.WorkspaceID).Scan(&state); err != nil {
+			if err == pgx.ErrNoRows {
+				return errNotFound
+			}
+			return err
+		}
+		if state != "enabled" {
+			return apiErr(409, "plugin_not_enabled", "连接未启用，不允许调用")
+		}
+		_, err = tx.Exec(r.Context(), "INSERT INTO agent_plugin_call"+
+			" (id, connection_id, workspace_id, user_id, run_id, tool_name, request_id, input_hash, state,"+
+			" args_json, input_schema_hash, catalog_revision, protocol_version)"+
+			" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'dispatched',$9,$10,$11,$12)",
+			callID, connID, id.WorkspaceID, id.UserID, &principal.RunID, toolName, requestID, inputHash,
+			storedArgs, mcpSchemaHash(tool.InputSchema), catalogRevision, protocolVersion)
+		return err
+	}); err != nil {
+		return err
+	}
+	s.emitBrowserCommandEvent(r.Context(), principal.ConversationID, "mcp.call_requested", map[string]any{
+		"call_id": callID.String(), "tool_name": toolName,
+	})
+	return s.waitForMCPCall(r, w, callID)
+}
+
+// resolveMCPDynamicTool 在当前 enabled 连接的目录里反查工具（契约 §2.1 第 2 点）。
+func (s *Server) resolveMCPDynamicTool(ctx context.Context, userID, workspaceID uuid.UUID, toolName string) (McpCatalogTool, uuid.UUID, string, string, error) {
+	rows, err := s.db.Query(ctx, `SELECT id::text, name, catalog_revision, protocol_version, tools_catalog FROM agent_plugin_connection
+		WHERE user_id=$1 AND workspace_id=$2 AND state='enabled' AND jsonb_typeof(tools_catalog)='array'`, userID, workspaceID)
+	if err != nil {
+		return McpCatalogTool{}, uuid.Nil, "", "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var connID, connName, catalogRevision, protocolVersion string
+		var catalogJSON json.RawMessage
+		if err := rows.Scan(&connID, &connName, &catalogRevision, &protocolVersion, &catalogJSON); err != nil {
+			continue
+		}
+		var catalogTools []McpCatalogTool
+		if err := json.Unmarshal(catalogJSON, &catalogTools); err != nil {
+			continue
+		}
+		for _, ct := range catalogTools {
+			if ct.Name == "" {
+				continue
+			}
+			if fmt.Sprintf("mcp__%s__%s", sanitizeToolSegment(connName), ct.Name) == toolName {
+				return ct, uuid.MustParse(connID), catalogRevision, protocolVersion, nil
+			}
+		}
+	}
+	return McpCatalogTool{}, uuid.Nil, "", "", apiErr(404, "not_found", "工具不在当前已启用连接的目录中")
+}
+
+// mcpInputHash：保持 00092 语义 sha256(tool_name + "." + args_json)。
+func mcpInputHash(toolName string, argsJSON []byte) string {
+	hasher := sha256.New()
+	hasher.Write(append([]byte(toolName+"."), argsJSON...))
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+// mcpSchemaHash：冻结 input_schema 的哈希（契约 §2.2 第 1 点 input_schema_hash）。
+func mcpSchemaHash(raw json.RawMessage) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// validateMCPArgsAgainstSchema 按 JSON Schema 基础子集完整校验 args（契约 §2.4 第 2 点）。
+func validateMCPArgsAgainstSchema(schemaRaw json.RawMessage, argsJSON []byte) error {
+	if len(schemaRaw) == 0 {
+		return nil
+	}
+	var schema struct {
+		Type       string `json:"type"`
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
+		Required             []string `json:"required"`
+		AdditionalProperties *bool    `json:"additionalProperties"`
+	}
+	if err := json.Unmarshal(schemaRaw, &schema); err != nil {
+		return fmt.Errorf("input_schema 解析失败")
+	}
+	if schema.Type != "" && schema.Type != "object" {
+		return fmt.Errorf("input_schema 顶层类型不支持")
+	}
+	var args map[string]any
+	if len(argsJSON) > 0 {
+		if err := json.Unmarshal(argsJSON, &args); err != nil {
+			return fmt.Errorf("args 不是 JSON 对象")
+		}
+	}
+	additionalAllowed := schema.AdditionalProperties != nil && *schema.AdditionalProperties
+	known := map[string]bool{}
+	for name := range schema.Properties {
+		known[name] = true
+	}
+	for name := range args {
+		if !known[name] && !additionalAllowed {
+			return fmt.Errorf("额外字段 %q 不被工具接受", name)
+		}
+	}
+	for _, name := range schema.Required {
+		if _, ok := args[name]; !ok {
+			return fmt.Errorf("缺少必填参数 %q", name)
+		}
+	}
+	for name, prop := range schema.Properties {
+		value, ok := args[name]
+		if !ok {
+			continue
+		}
+		if err := validateMCPValueAgainstType(prop.Type, value); err != nil {
+			return fmt.Errorf("参数 %q：%w", name, err)
+		}
+	}
+	return nil
+}
+
+func validateMCPValueAgainstType(typ string, value any) error {
+	switch typ {
+	case "string":
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("应为字符串")
+		}
+	case "number":
+		if _, ok := value.(float64); !ok {
+			return fmt.Errorf("应为数字")
+		}
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("应为布尔")
+		}
+	case "array":
+		if _, ok := value.([]any); !ok {
+			return fmt.Errorf("应为数组")
+		}
+	case "object":
+		if _, ok := value.(map[string]any); !ok {
+			return fmt.Errorf("应为对象")
+		}
+	}
+	return nil
 }
