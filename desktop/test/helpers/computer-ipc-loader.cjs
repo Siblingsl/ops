@@ -22,8 +22,9 @@ function load() {
   // 转译产物的相对 import 解析基准是 tmpdir——重写为 src 目录绝对路径，
   // 并递归转译其 TS 依赖（computer-contract 等）。
   let code = out.outputText;
-  code = code.replace(/require\("(\.\/[^"]+)"\)/g, (m, rel) => {
-    const depSrc = path.join(path.dirname(SRC), rel.endsWith('.js') ? rel.slice(0, -3) + '.ts' : rel);
+  code = code.replace(/require\("((?:\.\/|\..\/)[^"]+)"\)/g, (m, rel) => {
+    const base = rel.endsWith('.js') ? rel.slice(0, -3) : rel;
+    const depSrc = path.join(path.dirname(SRC), base.endsWith('.ts') ? base : base + '.ts');
     if (fs.existsSync(depSrc)) {
       return 'require(' + JSON.stringify(transpileDep(depSrc)) + ')';
     }
@@ -43,8 +44,9 @@ function transpileDep(depSrc) {
     fileName: depSrc,
   });
   let code = out.outputText;
-  code = code.replace(/require\("(\.\/[^"]+)"\)/g, (m, rel) => {
-    const depSrc2 = path.join(path.dirname(depSrc), rel.endsWith('.js') ? rel.slice(0, -3) + '.ts' : rel);
+  code = code.replace(/require\("((?:\.\/|\..\/)[^"]+)"\)/g, (m, rel) => {
+    const base = rel.endsWith('.js') ? rel.slice(0, -3) : rel;
+    const depSrc2 = path.join(path.dirname(depSrc), base.endsWith('.ts') ? base : base + '.ts');
     if (fs.existsSync(depSrc2)) {
       return 'require(' + JSON.stringify(transpileDep(depSrc2)) + ')';
     }
