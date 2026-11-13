@@ -1,23 +1,35 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
+  attachNoteBodies,
   collectPostedNotes,
+  commentDedupeId,
   extractShareURL,
   mapNoteStatus,
   mapNoteType,
   noteIDFromURL,
   noteToObservation,
+  parseCommentFacts,
   parseCount,
   parseIdentity,
+  parseNoteBody,
   parsePostedNotesPage,
   probeCapabilities,
+  probeNoteContent,
   probePostedNotesCapabilities,
   probePostedNotesReadable,
+  readCommentFacts,
+  readNoteBody,
   resolveShareLink,
   stripSessionParams,
+  toCommentResult,
   verifyNoteAuthor,
   XHS_ADAPTER_VERSION,
+  XHS_API,
+  XHS_COMMENT_FACT_SCHEMA,
   XhsAdapterError
 } = require('../.build/platforms/xhs.js');
 
@@ -72,6 +84,131 @@ test('PS-T03：主站登录但创作中心未登录时只报告可读范围', ()
   // 单篇曝光首版不承诺。
   assert.equal(caps.noteImpressions, 'unknown');
   assert.equal(caps.adapterVersion, XHS_ADAPTER_VERSION);
+});
+
+// CF-PS-04：xhs 适配器从未上报 noteContent，服务端 content 阶段因此固定
+// content_capability_unverified（21 §十七点六十一 / 3091）。这里锁住「键存在且如实」，
+// 防止有人用硬写 supported 冒充已实现正文采集（21 §2939 的凭空宣称能力红线）。
+test('CF-PS-04 xhs 能力快照显式上报 noteContent 且不冒充已支持', () => {
+  const caps = probeCapabilities({
+    mainSiteLoggedIn: true,
+    identity: { externalAccountKey: 'xhs_user_id:fixture', redId: 'fixture' },
+    postedNotesReadable: true,
+    followerInfoReadable: true,
+    now: '2026-10-20T10:00:00Z'
+  });
+  assert.ok(Object.prototype.hasOwnProperty.call(caps, 'noteContent'), 'noteContent 键不得缺失');
+  assert.equal(caps.noteContent, 'unknown', '正文采集未实现时不得声称 supported');
+
+  // 跨语言键一致性：服务端 platformSyncCapabilityState 对 xhs content 读的必须仍是这个键。
+  const go = fs.readFileSync(path.join(__dirname, '../../server/internal/app/platform_account_sync.go'), 'utf8');
+  assert.match(go, /case "content":[\s\S]{0,240}?key = "noteContent"/,
+    '服务端 content 键映射必须仍是 noteContent，改一处不改另一处等于永远判不可用');
+
+  // 登录核验链路只覆盖身份/列表/指标，不得把未核验的正文能力带成 supported。
+  const runtime = fs.readFileSync(path.join(__dirname, '../src/platform-login-runtime.ts'), 'utf8');
+  assert.match(runtime, /noteContent:\s*'unknown'/, '登录核验链路必须显式钉住 unknown');
+
+  // 适配器本身没有正文事实字段；这条断言防止「报了 supported 但根本没采正文」。
+  const adapter = fs.readFileSync(path.join(__dirname, '../src/platforms/xhs.ts'), 'utf8');
+  assert.ok(!/body_text|bodyText/.test(adapter), '当前适配器未实现正文事实字段，不得声称 supported');
+});
+
+// CF-PS-07：单篇正文采集。详情读取由注入的只读源提供，全部为虚构 fixture，
+// 不访问真实平台。「缺失」必须是 present:false + 原因码，不能落空串。
+const capsInput = {
+  mainSiteLoggedIn: true,
+  identity: { externalAccountKey: 'xhs_user_id:fixture', redId: 'fixture' },
+  postedNotesReadable: true,
+  followerInfoReadable: true,
+  now: '2026-10-20T10:00:00Z'
+};
+const detailSource = (payload) => ({
+  fetchJSON: async () => { throw new Error('详情读取不得回退到列表 GET'); },
+  fetchNoteDetail: async (noteId) => payload(noteId)
+});
+
+test('CF-PS-07 有正文：详情确实读到非空正文才把 noteContent 判为 supported', async () => {
+  const body = '虚构正文：通勤路上的三件小事。';
+  const source = detailSource((noteId) => ({ success: true, data: { note: { id: noteId, desc: body } } }));
+  const fact = await readNoteBody(source, noteA.id);
+  assert.equal(fact.noteId, noteA.id);
+  assert.equal(fact.present, true);
+  assert.equal(fact.text, body);
+  assert.equal(fact.reason, null);
+
+  const probe = await probeNoteContent(source, noteA.id);
+  assert.equal(probe.readable, true);
+  const caps = probeCapabilities({ ...capsInput, noteContent: probe });
+  assert.equal(caps.noteContent, 'supported');
+  assert.equal(caps.noteContentReason, null);
+
+  // 回填逐篇进行：默认只探测第 1 篇，其余保持「尚未读详情」，且不就地改写原数组。
+  const notes = parsePostedNotesPage(page([noteA, noteB])).notes;
+  assert.equal(notes[0].body.present, false);
+  assert.equal(notes[0].body.reason, 'detail_not_read');
+  const attached = await attachNoteBodies(source, notes);
+  assert.equal(attached[0].body.present, true);
+  assert.equal(attached[0].body.text, body);
+  assert.equal(attached[1].body.reason, 'detail_not_read');
+  assert.equal(notes[0].body.present, false, '不得就地改写调用方的事实数组');
+
+  const all = await attachNoteBodies(source, notes, { maxNotes: 2 });
+  assert.equal(all[1].body.present, true, '调用方显式指定篇数时才逐篇读第 2 篇');
+});
+
+test('CF-PS-07 无正文：字段缺失与空串都用 present:false 表示，绝不落空串', async () => {
+  const missing = parseNoteBody(noteA.id, { success: true, data: { note: { id: noteA.id, title: '只有标题' } } });
+  assert.equal(missing.present, false);
+  assert.equal(missing.text, null, '字段缺失不得当成空串正文');
+  assert.equal(missing.reason, 'body_absent');
+
+  const empty = parseNoteBody(noteA.id, { success: true, data: { note: { id: noteA.id, desc: '   ' } } });
+  assert.equal(empty.present, false);
+  assert.equal(empty.text, null);
+  assert.equal(empty.reason, 'empty_body');
+
+  const noSource = await probeNoteContent({ fetchJSON: async () => ({}) }, noteA.id);
+  assert.equal(noSource.readable, false);
+  assert.equal(noSource.reason, 'detail_source_missing');
+  const caps = probeCapabilities({ ...capsInput, noteContent: noSource });
+  assert.equal(caps.noteContent, 'unknown');
+  assert.equal(caps.noteContentReason, 'detail_source_missing');
+});
+
+test('CF-PS-07 权限不足 / 解析失败：noteContent 保持 unknown 并留原因码', async () => {
+  const denied = parseNoteBody(noteA.id, { success: false, code: 403, msg: '无权查看' });
+  assert.equal(denied.present, false);
+  assert.equal(denied.text, null);
+  assert.equal(denied.reason, 'permission_denied');
+
+  const deniedByThrow = await readNoteBody({
+    fetchNoteDetail: async () => { throw new XhsAdapterError('platform_login_required', '未登录'); }
+  }, noteA.id);
+  assert.equal(deniedByThrow.reason, 'permission_denied');
+
+  assert.equal(parseNoteBody(noteA.id, 'not-an-object').reason, 'parse_failed');
+  assert.equal(parseNoteBody(noteA.id, { data: { note: { content: { nested: true } } } }).reason, 'parse_failed');
+
+  const failedProbe = await probeNoteContent({
+    fetchNoteDetail: async () => { throw new Error('network down'); }
+  }, noteA.id);
+  assert.equal(failedProbe.readable, false);
+  assert.equal(failedProbe.reason, 'read_failed');
+  const caps = probeCapabilities({ ...capsInput, noteContent: failedProbe });
+  assert.equal(caps.noteContent, 'unknown');
+  assert.equal(caps.noteContentReason, 'read_failed');
+});
+
+test('CF-PS-07 列表响应不含正文，未做详情探测时能力恒 unknown', () => {
+  // 即使列表行里偶然出现 desc，也不采信：列表字段集合不含正文，必须走详情读取。
+  const parsed = parsePostedNotesPage(page([{ ...noteA, desc: '列表里的 desc 不算正文' }]));
+  assert.equal(parsed.notes[0].body.present, false);
+  assert.equal(parsed.notes[0].body.text, null);
+  assert.equal(parsed.notes[0].body.reason, 'detail_not_read');
+  const caps = probeCapabilities(capsInput);
+  assert.equal(caps.noteContent, 'unknown');
+  assert.equal(caps.noteContentReason, 'detail_not_read');
 });
 
 test('作品列表能力只在签名列表响应结构完整时通过核验', async () => {
@@ -393,3 +530,99 @@ function normalize(raw) {
   assert.equal(parsed.notes.length, 1, '样本应能解析');
   return parsed.notes[0];
 }
+
+// ---------- CF-P2-CXEF-06：评论授权读取的 mock 适配器集成（续 CF-P2-CXEF-02） ----------
+// 全部为虚构样本；共享 fixture 同时驱动 Go 与 Node，两侧各自核对 present 标记与去重键。
+const cxef06Fixture = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'fixtures/cxef06-comment-facts.json'), 'utf8')
+);
+
+test('CF-P2-CXEF-06 共享 fixture：六字段 present 标记与去重键跨语言一致', () => {
+  assert.equal(XHS_COMMENT_FACT_SCHEMA, cxef06Fixture.schema);
+  const parsed = parseCommentFacts(cxef06Fixture.note_id, cxef06Fixture.raw);
+  assert.equal(parsed.reason, null, '正常列表不得带原因码');
+  assert.equal(parsed.facts.length, cxef06Fixture.expected.length);
+
+  cxef06Fixture.expected.forEach((expected, index) => {
+    const { dedupe_id: dedupeId, ...factShape } = expected;
+    assert.deepEqual(parsed.facts[index], factShape, `第 ${index + 1} 条事实必须与共享 fixture 逐字段一致`);
+    assert.equal(
+      commentDedupeId(cxef06Fixture.platform, cxef06Fixture.external_account_key, expected.comment_id),
+      dedupeId,
+      `第 ${index + 1} 条去重键必须与共享 fixture 一致`
+    );
+  });
+
+  // 缺字段不当空串：第 2 条没给作者，第 3 条正文是空白。
+  assert.equal(parsed.facts[1].author, null);
+  assert.equal(parsed.facts[1].present.author, false);
+  assert.equal(parsed.facts[1].present.parent_comment_id, false);
+  assert.equal(parsed.facts[2].body, null);
+  assert.equal(parsed.facts[2].present.body, false);
+  assert.equal(parsed.facts[2].reason, 'empty_body');
+  assert.equal(parsed.facts[2].present.parent_comment_id, true);
+
+  // 单条结果信封与服务端 platformCommentResult 同形；一次只出一条，不打包整批。
+  const result = toCommentResult(cxef06Fixture.platform, cxef06Fixture.external_account_key, parsed.facts);
+  assert.ok(result, '可读事实应产出结果信封');
+  assert.deepEqual(Object.keys(result).sort(), ['external_account_key', 'items', 'platform', 'schema']);
+  assert.equal(result.schema, cxef06Fixture.schema);
+  assert.equal(result.platform, cxef06Fixture.platform);
+  assert.equal(result.external_account_key, cxef06Fixture.external_account_key);
+  assert.equal(result.items.length, 1, '不得批量携带整批评论（D-117）');
+  assert.equal(result.items[0].comment_id, cxef06Fixture.expected[0].comment_id);
+  assert.equal(toCommentResult(cxef06Fixture.platform, cxef06Fixture.external_account_key, parsed.facts, 2), null,
+    'empty_body 事实不得进结果信封');
+  assert.equal(toCommentResult(cxef06Fixture.platform, cxef06Fixture.external_account_key, parsed.facts, 9), null,
+    '越界下标不得凭空造事实');
+  assert.equal(toCommentResult(cxef06Fixture.platform, cxef06Fixture.external_account_key, parsed.facts, 1).items.length, 1,
+    '逐条调用仍恒为单条');
+});
+
+test('CF-P2-CXEF-06 注入式只读源：缺源 / 拒绝 / 读失败 / 空列表 / 结构坏均留原因码', async () => {
+  const noteId = cxef06Fixture.note_id;
+  assert.equal((await readCommentFacts({}, noteId)).reason, 'comment_source_missing',
+    '没有注入源不得冒充已授权读取');
+  assert.equal(parseCommentFacts(noteId, cxef06Fixture.deniedPayload).reason, cxef06Fixture.expectedDeniedReason);
+  assert.equal(parseCommentFacts(noteId, cxef06Fixture.absentPayload).reason, cxef06Fixture.expectedAbsentReason);
+  assert.equal(parseCommentFacts(noteId, cxef06Fixture.malformedPayload).reason, cxef06Fixture.expectedMalformedReason);
+  assert.equal(parseCommentFacts(noteId, null).reason, 'parse_failed');
+  assert.equal(parseCommentFacts('', cxef06Fixture.raw).reason, 'parse_failed');
+
+  let seenNoteId = null;
+  const source = {
+    fetchJSON: async () => { throw new Error('不应调用列表接口'); },
+    fetchComments: async (id) => { seenNoteId = id; return cxef06Fixture.raw; }
+  };
+  const read = await readCommentFacts(source, noteId);
+  assert.equal(read.reason, null);
+  assert.equal(read.facts.length, 3);
+  assert.equal(seenNoteId, noteId, '只读源必须只针对用户所选笔记，不得扩大读取范围');
+
+  const broken = { fetchComments: async () => { throw new Error('mock transport failure'); } };
+  assert.equal((await readCommentFacts(broken, noteId)).reason, 'read_failed');
+  const denied = {
+    fetchComments: async () => { throw new XhsAdapterError('platform_capability_denied', 'mock 权限不足'); }
+  };
+  assert.equal((await readCommentFacts(denied, noteId)).reason, 'permission_denied');
+});
+
+test('CF-P2-CXEF-06 守卫：不臆造 endpoint、不批量、不落真实昵称', () => {
+  // 适配器接口白名单不因本项扩大：评论 endpoint 仍未实测，宿主按注入源提供。
+  assert.equal(Object.prototype.hasOwnProperty.call(XHS_API, 'comments'), false,
+    '不得凭空新增未实测的评论 endpoint');
+  const adapter = fs.readFileSync(path.join(__dirname, '../src/platforms/xhs.ts'), 'utf8');
+  assert.ok(!/body_text|bodyText/.test(adapter), 'CF-PS-04 守卫仍不得被绕过');
+  assert.match(adapter, /fetchComments\?\(noteId: string\)/, '评论源必须是可注入的可选方法');
+
+  // 服务端同形约束：单条、幂等、schema、不落真实昵称。
+  const go = fs.readFileSync(path.join(__dirname, '../../server/internal/app/platform_comment_facts.go'), 'utf8');
+  assert.match(go, /platformCommentFactSchema = "cxef06-comment-facts-v1"/, '两端 schema 必须一致');
+  assert.match(go, /len\(result\.Items\) != 1/, '服务端必须拒绝批量结果');
+  assert.match(go, /ON CONFLICT \(id\) DO NOTHING/, '确定性主键必须幂等');
+  assert.match(go, /不持久化真实昵称/, '隐私边界必须显式登记');
+  assert.match(go, /VALUES \(\$1,\$2,\$3,NULL,'',\$4,\$5,NULL\)/, 'author_alias / work_id / created_by 不得落库');
+  const ddl = fs.readFileSync(
+    path.join(__dirname, '../../server/internal/db/migrations/00082_cx_comment_inbox.sql'), 'utf8');
+  assert.ok(!/author_raw\s+\w/.test(ddl), 'comment_inbox 不得出现真实昵称列');
+});

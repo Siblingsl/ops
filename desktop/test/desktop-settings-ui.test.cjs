@@ -100,7 +100,8 @@ test('D-123：preload 与主进程为内容类型迁移暴露 IPC，且带信任
 });
 
 test('D-123：客户端类型清单与后端 formatMatrix 一致', () => {
-  const matrix = fs.readFileSync(path.join(__dirname, '..', '..', 'server', 'internal', 'app', 'accounts.go'), 'utf8');
+  // D-176 Phase1：formatMatrix 权威清单移到 internal/platformfmt（accounts.go 只引用）。
+  const matrix = fs.readFileSync(path.join(__dirname, '..', '..', 'server', 'internal', 'platformfmt', 'matrix.go'), 'utf8');
   const wechat = matrix.match(/"wechat_mp":\s*\{([^}]*)\}/)[1];
   const xhs = matrix.match(/"xhs":\s*\{([^}]*)\}/)[1];
   for (const value of ['long_article', 'qa_article', 'briefing', 'card_post', 'script', 'comic']) {

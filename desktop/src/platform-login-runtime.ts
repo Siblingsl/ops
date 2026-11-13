@@ -40,6 +40,9 @@ export async function probeXhsLoginIdentity(session: PlatformLoginSession, expec
       // 只有真正在列表响应里读到过计数才声称可读；读不到就保持 unknown，
       // 否则 v2 同步会在 catalog 之后跳过整个 metrics 阶段（metrics_capability_unverified）。
       perNoteMetrics: listReadable && perNoteMetricsReadable ? 'supported' : 'unknown',
+      // CF-PS-04：登录核验只覆盖身份 / 列表 / 指标，不核验单篇正文；
+      // 显式钉住 unknown，避免将来 probeCapabilities 升级时被误带成 supported。
+      noteContent: 'unknown',
       followerTotal: 'unknown',
       browserVersion
     }

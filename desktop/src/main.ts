@@ -91,7 +91,7 @@ import {
 import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace, orphanConnections } from './platform-profile';
 import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, normalizeXhsNoteTime, XHS_API, XhsAdapterError } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation, normalizeWechatSentAt, WECHAT_MP_API, WechatAdapterError } from './platforms/wechat-mp';
-import { buildPlatformCatalogCompletion, PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun, type PlatformV2ResultType } from './platform-client';
+import { buildPlatformCatalogCompletion, platformV1CoverageStopReason, PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun, type PlatformV2ResultType } from './platform-client';
 import {
   isBusinessWindowOnlyIntent,
   parseDesktopUiIntent,
@@ -1538,10 +1538,11 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
       coverage
     }));
     const incomplete = typeof coverage.incomplete_reason === 'string' ? coverage.incomplete_reason : null;
+    const stopReason = platformV1CoverageStopReason(incomplete);
     const receipt = await client.submit({
       final_batch: true,
       run_status: incomplete ? 'partial' : 'succeeded',
-      stop_reason: incomplete,
+      stop_reason: stopReason,
       error_code: null,
       coverage,
       observations: drafts

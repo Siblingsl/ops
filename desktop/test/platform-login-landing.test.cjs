@@ -94,3 +94,21 @@ test('PS-T40：登录落点判定只按域名与路径，不做内容嗅探', ()
   const calls = source.match(/if \(!isLoggedInLanding\(platform, page\.url\)\)/g) ?? [];
   assert.equal(calls.length, 2, 'v1 与 v2 两条采集路径都要判落点');
 });
+
+// CF-PS-03：401 拦截闭环（mock）。真实浏览器时序仍属 21 待办；此处钉住
+// waitForStableURL → isLoggedInLanding 的串联：落到 redirectReason=401 后必须判未登录，
+// 采集路径因此走 login_required 终批，而不是继续翻页。
+test('CF-PS-03：JS 异步跳 login?redirectReason=401 后稳定 URL 必须判未登录', async () => {
+  const waitForStableURL = loadFunction('src/platform-login.ts', 'waitForStableURL', ['delay']);
+  const isLoggedInLanding = loadFunction('src/main.ts', 'isLoggedInLanding');
+  const manager = 'https://creator.xiaohongshu.com/new/note-manager';
+  const login = 'https://creator.xiaohongshu.com/login?source=&redirectReason=401';
+  const session = sessionWithHrefs([manager, manager, login, login, login, login, login, login]);
+  const landed = await waitForStableURL(session, manager, { maxMs: 1_000, pollMs: 20, quietMs: 200 });
+  assert.equal(landed, login);
+  assert.equal(isLoggedInLanding('xhs', landed), false, '401 落点不得继续采集');
+  // 安静窗口内不再变 URL：不会因反复采样而空转重试。
+  const again = await waitForStableURL(sessionWithHrefs([login]), login, { maxMs: 800, pollMs: 20, quietMs: 100 });
+  assert.equal(again, login);
+  assert.equal(isLoggedInLanding('xhs', again), false);
+});

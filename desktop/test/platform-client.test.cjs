@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { buildFailedBatch, buildPlatformCatalogCompletion, PlatformClient, PLATFORM_PROTOCOL_VERSION, PLATFORM_PROTOCOL_V2 } = require('../.build/platform-client.js');
+const { buildFailedBatch, buildPlatformCatalogCompletion, platformV1CoverageStopReason, PlatformClient, PLATFORM_PROTOCOL_VERSION, PLATFORM_PROTOCOL_V2 } = require('../.build/platform-client.js');
 const { PLATFORM_REGISTER_PURPOSE, parsePlatformCollectionCapability } = require('../.build/platform-capability.js');
 
 const capability = parsePlatformCollectionCapability({
@@ -282,6 +282,14 @@ test('v2 目录页预算结束保留检查点，结构或发布时间不明才�
   assert.equal(complete.outcome.status, 'succeeded');
   assert.equal(complete.data.enumeration_complete, true);
   assert.equal(complete.data.total_count, 100);
+});
+
+test('v1 终批：page_budget→budget；page_repeated 等覆盖原因不进 stop_reason', () => {
+  assert.equal(platformV1CoverageStopReason('page_budget'), 'budget');
+  assert.equal(platformV1CoverageStopReason('page_repeated'), null);
+  assert.equal(platformV1CoverageStopReason('cursor_stalled'), null);
+  assert.equal(platformV1CoverageStopReason('catalog_inconsistent'), null);
+  assert.equal(platformV1CoverageStopReason(null), null);
 });
 
 test('v2 已提交但响应丢失时查询同批回执，后续批次继续递增且不重复入库', async () => {

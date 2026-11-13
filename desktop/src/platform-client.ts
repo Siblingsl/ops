@@ -386,6 +386,14 @@ export function buildPlatformCatalogCompletion(input: {
     outcome: { status: 'partial', stopReason: reason } };
 }
 
+// platformV1CoverageStopReason 把适配器 coverage.incomplete_reason 收敛到 v1 终批允许的
+// stop_reason 枚举（20 §11.3：budget/login_required/…）。page_repeated 等覆盖原因只留在
+// coverage，不能再当 stop_reason 上报（服务端虽已兜底折叠，客户端应主动发合法枚举）。
+export function platformV1CoverageStopReason(incompleteReason: string | null): string | null {
+  if (incompleteReason === 'page_budget') return 'budget';
+  return null;
+}
+
 // buildFailedBatch 是失败终批的固定形状：可以带 0 条观测，服务端据此把 run 置终态。
 export function buildFailedBatch(
   leaseGeneration: number,

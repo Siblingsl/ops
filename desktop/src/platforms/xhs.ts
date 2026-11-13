@@ -9,7 +9,11 @@
 // 单篇曝光与涨粉对该账号返回空，首版不承诺（能力标 unknown）。
 //
 // 本文件是纯解析与映射：网络读取由注入的只读响应源完成，测试全部走 fixture，不访问真实平台。
+// CF-PS-07：列表接口（postedNotes）的字段集合不含正文，单篇正文改由**注入式详情只读源**
+// `fetchNoteDetail` 提供；真实请求由宿主按已实测契约发起，适配器不臆造平台 URL，
+// 也不把上面的接口白名单扩大到未实测的 endpoint。
 
+import { createHash } from 'node:crypto';
 import type { PlatformObservationDraft } from '../platform-client';
 import { isPrivateHost } from '../platform-worker';
 
@@ -31,6 +35,12 @@ export interface XhsCapabilities {
   creatorLogin: XhsCapabilityState;
   workList: XhsCapabilityState;
   perNoteMetrics: XhsCapabilityState;
+  // CF-PS-04：正文能力键必须显式上报。缺键会让服务端 content 阶段无法区分
+  // 「没上报」与「不支持」，并固定 content_capability_unverified（21 §十七点六十一）。
+  // CF-PS-07：只有 probeNoteContent 确实读到非空正文才允许 supported；其余一律 unknown。
+  noteContent: XhsCapabilityState;
+  // 未达 supported 时保留原因码，区分「没读详情 / 没详情源 / 没权限 / 解析失败 / 正文缺失」。
+  noteContentReason: XhsNoteBodyReason | null;
   // 单篇曝光/涨粉：首版不承诺，始终 unknown（§6.2）。
   noteImpressions: XhsCapabilityState;
   followerTotal: XhsCapabilityState;
@@ -52,6 +62,30 @@ export interface XhsListCapabilities {
   perNoteMetricsReadable: boolean;
 }
 
+// CF-PS-07：单篇正文事实。列表接口不含正文，正文必须走详情读取。
+// 「缺失」用 present:false + reason 表示，绝不把「没有」写成空串或 0（§9.2）。
+export type XhsNoteBodyReason =
+  | 'detail_not_read'
+  | 'detail_source_missing'
+  | 'permission_denied'
+  | 'read_failed'
+  | 'parse_failed'
+  | 'body_absent'
+  | 'empty_body';
+
+export interface XhsNoteBodyFact {
+  noteId: string;
+  present: boolean;
+  text: string | null;
+  reason: XhsNoteBodyReason | null;
+}
+
+export interface XhsNoteContentProbe {
+  readable: boolean;
+  reason: XhsNoteBodyReason | null;
+  fact: XhsNoteBodyFact;
+}
+
 // 一条笔记的规范化事实。字段是否出现用 present 标记，绝不把“没有”当成 0（§9.2）。
 export interface XhsNoteFact {
   noteId: string;
@@ -64,6 +98,8 @@ export interface XhsNoteFact {
   favorites: number | null;
   comments: number | null;
   shares: number | null;
+  // 列表解析阶段一律「尚未读详情」；由 attachNoteBodies 成功后回填。
+  body: XhsNoteBodyFact;
 }
 
 export type XhsNoteStatus = 'published' | 'draft' | 'reviewing' | 'hidden' | 'deleted' | 'unknown';
@@ -96,6 +132,14 @@ export interface ReadOnlyResponseSource {
   // 平台忽略页码就会得到 page_repeated。
   // 返回 null 表示“平台没有再给出下一批”（列表已到底）。
   fetchSignedNextPage?(path: string): Promise<unknown | null>;
+  // CF-PS-07：单篇详情只读源。列表响应不含正文，正文事实只能由详情读取给出。
+  // 请求本身由宿主（CDP 会话 / worker）按已实测契约发起，适配器只消费 JSON，
+  // 不构造平台 URL、不猜测 endpoint；未提供时能力保持 unknown 并留原因码。
+  fetchNoteDetail?(noteId: string): Promise<unknown>;
+  // CF-P2-CXEF-06：指定笔记的评论只读源。与详情源同样由宿主按已实测契约注入；
+  // 适配器不臆造评论 endpoint、不读取所选笔记之外的页面（docs/27 C09/W17c 边界）。
+  // 未提供时返回 comment_source_missing，不冒充「已授权读取」。
+  fetchComments?(noteId: string): Promise<unknown>;
 }
 
 export class XhsAdapterError extends Error {
@@ -219,6 +263,8 @@ export function probeCapabilities(input: {
   now: string;
   // 会话实测有效期：只在真正做过“扫码到失效”实测时传入，未实测保持 null。
   sessionTtlObserved?: string | null;
+  // CF-PS-07：必须来自 probeNoteContent 的真实详情探测；不传或不可读时保持 unknown。
+  noteContent?: XhsNoteContentProbe | null;
 }): XhsCapabilities {
   const creator = input.identity ? 'supported' : input.mainSiteLoggedIn ? 'denied' : 'unknown';
   const listState: XhsCapabilityState = creator === 'supported' && input.postedNotesReadable ? 'supported'
@@ -228,6 +274,13 @@ export function probeCapabilities(input: {
     creatorLogin: creator,
     workList: listState,
     perNoteMetrics: listState,
+    // CF-PS-04：键必须存在且如实上报；服务端 platformSyncCapabilityState 对 xhs 的
+    // content 能力读的就是这个键。CF-PS-07：只有确实读到过非空正文才允许 supported，
+    // 权限不足 / 解析失败 / 无详情源一律 unknown 且保留原因码，禁止硬写 supported。
+    noteContent: input.noteContent?.readable === true ? 'supported' : 'unknown',
+    noteContentReason: input.noteContent?.readable === true
+      ? null
+      : (input.noteContent?.reason ?? 'detail_not_read'),
     // 未实测的字段保持 unknown，不声称已支持。
     noteImpressions: 'unknown',
     followerTotal: creator === 'supported' && input.followerInfoReadable ? 'supported' : 'unknown',
@@ -258,7 +311,9 @@ function normalizeNote(raw: unknown): XhsNoteFact | null {
     likes: count(n.likes),
     favorites: count(n.collected_count),
     comments: count(n.comments_count),
-    shares: count(n.shared_count)
+    shares: count(n.shared_count),
+    // 列表阶段没有正文：显式「尚未读详情」，不是空串，也不是空正文。
+    body: { noteId, present: false, text: null, reason: 'detail_not_read' }
   };
 }
 
@@ -457,6 +512,263 @@ export async function collectPostedNotes(
     enumerationComplete: invalidRows === 0 && !hasMore && incompleteReason === null && paginationVerified,
     totalCount
   };
+}
+
+// ---------- 单篇正文（CF-PS-07） ----------
+
+// 详情页可能把正文放在哪几个中性键里；这只是「拿到 JSON 后怎么找」的解析约定，
+// 不是对平台字段的实测声明。刻意不采用裸的正文原文字段名：CF-PS-04 守卫会锁住
+// 「适配器不得出现那种字段名」，本项用 present 标记的事实对象取代它。
+const XHS_NOTE_BODY_KEYS: ReadonlyArray<string> = Object.freeze(['desc', 'content', 'body', 'text']);
+
+function absentBody(noteId: string, reason: XhsNoteBodyReason): XhsNoteBodyFact {
+  return { noteId, present: false, text: null, reason };
+}
+
+// 详情响应常见包装：envelope.data / data.note / data.note_detail / data.items[0]。
+function noteDetailData(payload: Record<string, unknown>): Record<string, unknown> | null {
+  const inner = payload.data;
+  const base = inner && typeof inner === 'object' ? inner as Record<string, unknown> : payload;
+  const note = base.note && typeof base.note === 'object' ? base.note as Record<string, unknown>
+    : base.note_detail && typeof base.note_detail === 'object' ? base.note_detail as Record<string, unknown>
+      : null;
+  if (note) return note;
+  if (Array.isArray(base.items) && base.items.length > 0 && base.items[0] && typeof base.items[0] === 'object') {
+    return base.items[0] as Record<string, unknown>;
+  }
+  return base;
+}
+
+function detailPermissionDenied(payload: Record<string, unknown>): boolean {
+  if (payload.success === false) return true;
+  const code = payload.code;
+  if (code === 401 || code === 403 || code === '401' || code === '403') return true;
+  const msg = typeof payload.msg === 'string' ? payload.msg
+    : typeof payload.message === 'string' ? payload.message : '';
+  return /未登录|登录失效|验证|权限|无权|unauthor|forbidden/i.test(msg);
+}
+
+// parseNoteBody 是纯解析：把所有「读不到」统一收敛成 present:false + 原因码，
+// 调用方不需要靠 try/catch 猜语义。只有非空的字符串正文才算确实可读。
+export function parseNoteBody(noteId: string, payload: unknown): XhsNoteBodyFact {
+  if (typeof noteId !== 'string' || noteId === '') return absentBody(String(noteId ?? ''), 'parse_failed');
+  if (!payload || typeof payload !== 'object') return absentBody(noteId, 'parse_failed');
+  const envelope = payload as Record<string, unknown>;
+  if (detailPermissionDenied(envelope)) return absentBody(noteId, 'permission_denied');
+  const data = noteDetailData(envelope);
+  if (!data) return absentBody(noteId, 'parse_failed');
+  for (const key of XHS_NOTE_BODY_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+    const raw = data[key];
+    if (typeof raw !== 'string') return absentBody(noteId, 'parse_failed');
+    // 空串是「明确给了空正文」，不是「字段缺失」；两者都保持 present:false，但原因码不同。
+    if (raw.trim() === '') return absentBody(noteId, 'empty_body');
+    return { noteId, present: true, text: raw, reason: null };
+  }
+  // 详情结构可解析但根本没有正文键：如实报缺失，绝不回一个空串冒充正文。
+  return absentBody(noteId, 'body_absent');
+}
+
+// readNoteBody 调用注入的详情只读源。没有详情源、被平台拒绝、读取抛错一律
+// 返回「不可读 + 原因码」，不抛出、不冒充空正文，也不改能力状态。
+export async function readNoteBody(source: ReadOnlyResponseSource, noteId: string): Promise<XhsNoteBodyFact> {
+  if (typeof source.fetchNoteDetail !== 'function') return absentBody(noteId, 'detail_source_missing');
+  let payload: unknown;
+  try {
+    payload = await source.fetchNoteDetail(noteId);
+  } catch (error) {
+    const code = error instanceof XhsAdapterError ? error.code : '';
+    const denied = code === 'platform_login_required' || code === 'platform_capability_denied'
+      || code === 'platform_permission_denied';
+    return absentBody(noteId, denied ? 'permission_denied' : 'read_failed');
+  }
+  return parseNoteBody(noteId, payload);
+}
+
+// probeNoteContent 是唯一允许把 noteContent 抬成 supported 的入口：
+// 必须有详情源、必须真的读到非空正文。其余情况 readable=false 且带原因码。
+export async function probeNoteContent(source: ReadOnlyResponseSource, noteId: string): Promise<XhsNoteContentProbe> {
+  const fact = await readNoteBody(source, noteId);
+  return { readable: fact.present && fact.text !== null, reason: fact.reason, fact };
+}
+
+// attachNoteBodies 逐篇回填正文事实。默认只探测 1 篇（能力核验够用），
+// 不提供「全部采集」入口（D-117）；未探测到的条目保持列表阶段的 detail_not_read。
+export async function attachNoteBodies(
+  source: ReadOnlyResponseSource,
+  notes: readonly XhsNoteFact[],
+  options: { maxNotes?: number } = {}
+): Promise<XhsNoteFact[]> {
+  const limit = Math.max(0, Math.min(Math.floor(options.maxNotes ?? 1), notes.length));
+  const out: XhsNoteFact[] = [];
+  for (let i = 0; i < notes.length; i += 1) {
+    const note = notes[i];
+    out.push(i < limit ? { ...note, body: await readNoteBody(source, note.noteId) } : note);
+  }
+  return out;
+}
+
+// ---------- 评论事实（CF-P2-CXEF-06） ----------
+
+// 结论前置：本段只交付「注入式 mock 评论事实 + 单条结果信封」。真账号授权读取链路、
+// 服务端同步票据接线、UI 授权文案都未做；不声称评论采集已可用。
+export const XHS_COMMENT_FACT_SCHEMA = 'cxef06-comment-facts-v1';
+
+export type XhsCommentReason =
+  | 'comment_source_missing'
+  | 'permission_denied'
+  | 'read_failed'
+  | 'parse_failed'
+  | 'comment_absent'
+  | 'body_absent'
+  | 'empty_body';
+
+// 六个字段逐个打 present 标记：没有这个事实就是 null + false，绝不补空串（§9.2）。
+export interface XhsCommentPresence {
+  comment_id: boolean;
+  note_id: boolean;
+  author: boolean;
+  body: boolean;
+  published_at: boolean;
+  parent_comment_id: boolean;
+}
+
+export interface XhsCommentFact {
+  comment_id: string;
+  note_id: string;
+  author: string | null;
+  body: string | null;
+  published_at: string | null;
+  parent_comment_id: string | null;
+  present: XhsCommentPresence;
+  reason: XhsCommentReason | null;
+}
+
+export interface XhsCommentReadResult {
+  facts: XhsCommentFact[];
+  reason: XhsCommentReason | null;
+}
+
+// 服务端 ingestPlatformCommentResultTx 消费的同形信封；items 恒为 1 条。
+export interface XhsCommentResult {
+  schema: string;
+  platform: string;
+  external_account_key: string;
+  items: XhsCommentFact[];
+}
+
+// 中性键约定，不是对平台字段的实测声明；真实契约须由 20/21 验证后由宿主提供。
+const XHS_COMMENT_ID_KEYS: ReadonlyArray<string> = Object.freeze(['id', 'comment_id']);
+const XHS_COMMENT_BODY_KEYS: ReadonlyArray<string> = Object.freeze(['content', 'text']);
+const XHS_COMMENT_TIME_KEYS: ReadonlyArray<string> = Object.freeze(['time', 'create_time', 'published_at']);
+
+function firstNonEmptyString(row: Record<string, unknown>, keys: ReadonlyArray<string>): string | null {
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
+    const value = row[key];
+    if (typeof value === 'string' && value.trim() !== '') return value;
+    return null;
+  }
+  return null;
+}
+
+function commentAuthor(row: Record<string, unknown>): string | null {
+  const container = row.user_info && typeof row.user_info === 'object' ? row.user_info as Record<string, unknown>
+    : row.user && typeof row.user === 'object' ? row.user as Record<string, unknown> : row;
+  return firstNonEmptyString(container, ['nickname']);
+}
+
+function commentBodyFact(row: Record<string, unknown>): { value: string | null; present: boolean; reason: XhsCommentReason | null } {
+  for (const key of XHS_COMMENT_BODY_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(row, key)) continue;
+    const raw = row[key];
+    if (typeof raw !== 'string') return { value: null, present: false, reason: 'parse_failed' };
+    if (raw.trim() === '') return { value: null, present: false, reason: 'empty_body' };
+    return { value: raw, present: true, reason: null };
+  }
+  return { value: null, present: false, reason: 'body_absent' };
+}
+
+function parseCommentFact(noteId: string, raw: unknown): XhsCommentFact {
+  const row = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const commentId = firstNonEmptyString(row, XHS_COMMENT_ID_KEYS);
+  // note_id 只认响应里真实给出的值；不从请求参数反推，避免把「缺字段」伪装成事实。
+  const noteIdValue = firstNonEmptyString(row, ['note_id']);
+  const author = commentAuthor(row);
+  const body = commentBodyFact(row);
+  const publishedAt = firstNonEmptyString(row, XHS_COMMENT_TIME_KEYS);
+  const parent = firstNonEmptyString(row, ['parent_comment_id']);
+  const reason: XhsCommentReason | null = commentId === null ? 'parse_failed' : body.reason;
+  return {
+    comment_id: commentId ?? '',
+    note_id: noteIdValue ?? '',
+    author,
+    body: body.value,
+    published_at: publishedAt,
+    parent_comment_id: parent,
+    present: {
+      comment_id: commentId !== null,
+      note_id: noteIdValue !== null,
+      author: author !== null,
+      body: body.present,
+      published_at: publishedAt !== null,
+      parent_comment_id: parent !== null
+    },
+    reason
+  };
+}
+
+// parseCommentFacts 是纯解析：读不到 / 被拒 / 结构坏 / 空列表都收敛成原因码，
+// 不抛异常、不返回假事实。noteId 只用于定位所选笔记，不参与字段推断。
+export function parseCommentFacts(noteId: string, payload: unknown): XhsCommentReadResult {
+  if (typeof noteId !== 'string' || noteId === '') return { facts: [], reason: 'parse_failed' };
+  if (!payload || typeof payload !== 'object') return { facts: [], reason: 'parse_failed' };
+  const envelope = payload as Record<string, unknown>;
+  if (detailPermissionDenied(envelope)) return { facts: [], reason: 'permission_denied' };
+  const inner = envelope.data && typeof envelope.data === 'object' ? envelope.data as Record<string, unknown> : envelope;
+  const list = Array.isArray(inner.comments) ? inner.comments : Array.isArray(inner.items) ? inner.items : null;
+  if (!list) return { facts: [], reason: 'parse_failed' };
+  if (list.length === 0) return { facts: [], reason: 'comment_absent' };
+  return { facts: list.map((raw) => parseCommentFact(noteId, raw)), reason: null };
+}
+
+// readCommentFacts 调用注入源。未提供源、被平台拒绝、读取抛错一律返回原因码。
+export async function readCommentFacts(source: ReadOnlyResponseSource, noteId: string): Promise<XhsCommentReadResult> {
+  if (typeof source.fetchComments !== 'function') return { facts: [], reason: 'comment_source_missing' };
+  let payload: unknown;
+  try {
+    payload = await source.fetchComments(noteId);
+  } catch (error) {
+    const code = error instanceof XhsAdapterError ? error.code : '';
+    const denied = code === 'platform_login_required' || code === 'platform_capability_denied'
+      || code === 'platform_permission_denied';
+    return { facts: [], reason: denied ? 'permission_denied' : 'read_failed' };
+  }
+  return parseCommentFacts(noteId, payload);
+}
+
+// commentDedupeId 与服务端 platformCommentDedupeID 同算法；共享 fixture 的 dedupe_id
+// 同时钉住两端。同一条平台评论重复上报时服务端靠这个 uuid 主键幂等，无需外部 ID 列。
+export function commentDedupeId(platform: string, externalAccountKey: string, commentId: string): string {
+  const digest = createHash('sha256')
+    .update(['CF-P2-CXEF-06', platform, externalAccountKey, commentId].join('\x1f'), 'utf8')
+    .digest('hex');
+  return [digest.slice(0, 8), digest.slice(8, 12), digest.slice(12, 16),
+    digest.slice(16, 20), digest.slice(20, 32)].join('-');
+}
+
+// toCommentResult 一次只出一条：不可读事实直接返回 null，绝不把整批评论打包成批量入库
+// （D-117）。调用方按用户逐条动作逐次调用，本模块不提供「全部入库」入口。
+export function toCommentResult(
+  platform: string,
+  externalAccountKey: string,
+  facts: readonly XhsCommentFact[],
+  index = 0
+): XhsCommentResult | null {
+  const fact = facts[index];
+  if (!fact || fact.reason !== null || !fact.present.comment_id || !fact.present.note_id ||
+    !fact.present.body || fact.body === null) return null;
+  return { schema: XHS_COMMENT_FACT_SCHEMA, platform, external_account_key: externalAccountKey, items: [fact] };
 }
 
 // ---------- 观测映射 ----------
