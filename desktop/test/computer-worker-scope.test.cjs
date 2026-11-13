@@ -1,7 +1,7 @@
 'use strict';
 // DEV-CU P2-5：窗口身份与 pinned scope 的单测 + 真实采样。
-// 六种 reason（window_gone / pid_reused / hwnd_changed / bounds_changed / foreground_changed /
-// generation_changed）各一条；另加「多原因顺序」「detail 不泄漏标题」「空字段跳过」。
+// 七种 reason（window_gone / pid_reused / hwnd_changed / document_changed / bounds_changed /
+// foreground_changed / generation_changed）各一条；另加「多原因顺序」「detail 不泄漏标题」「空字段跳过」。
 // 真实部分：① windowIdentity 与选窗器同公式；② 前台采样驱动闸门；③ opt-in：目标不在前台时动作被拒。
 
 const assert = require('node:assert/strict');
@@ -22,6 +22,7 @@ const {
 
 const IDENTITY = {
   pid: 4242, process_start_time: 't0', hwnd: 777, window_bounds_hash: 'wh', target_handle: 'th',
+  document_hash: 'dh',
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -39,7 +40,7 @@ test('P2-5: target_handle / title_hash 与主进程同一公式', () => {
   assert.match(targetHandle(1, ''), /^[0-9a-f]{32}$/);
 });
 
-test('P2-5: 六种 reason 各一条', () => {
+test('P2-5: 七种 reason 各一条', () => {
   assert.deepEqual(windowChangeReasons(IDENTITY, { ...IDENTITY, hwnd: 0 }), [SCOPE_REASON.WINDOW_GONE]);
   assert.deepEqual(windowChangeReasons(IDENTITY, { ...IDENTITY, pid: 9 }), [SCOPE_REASON.WINDOW_GONE]);
   assert.deepEqual(
@@ -47,6 +48,10 @@ test('P2-5: 六种 reason 各一条', () => {
     [SCOPE_REASON.PID_REUSED],
   );
   assert.deepEqual(windowChangeReasons(IDENTITY, { ...IDENTITY, hwnd: 888 }), [SCOPE_REASON.HWND_CHANGED]);
+  assert.deepEqual(
+    windowChangeReasons(IDENTITY, { ...IDENTITY, document_hash: 'dh2' }),
+    [SCOPE_REASON.DOCUMENT_CHANGED],
+  );
   assert.deepEqual(
     windowChangeReasons(IDENTITY, { ...IDENTITY, window_bounds_hash: 'wh2' }),
     [SCOPE_REASON.BOUNDS_CHANGED],
@@ -60,7 +65,7 @@ test('P2-5: 六种 reason 各一条', () => {
     return true;
   });
   // 枚举封闭且无遗漏
-  assert.equal(Object.keys(SCOPE_REASON).length, 6);
+  assert.equal(Object.keys(SCOPE_REASON).length, 7);
   assert.deepEqual(Object.values(SCOPE_REASON).sort(), REASON_ORDER.slice().sort());
 });
 
@@ -141,6 +146,7 @@ test('P2-5 真实采样：windowIdentity 与选窗器同公式', { timeout: 60_0
   assert.equal(identity.target_handle, targetHandle(win.pid, win.title),
     'target_handle 必须与主进程同公式（服务端才能核对）');
   assert.equal(identity.title_hash, titleHash(win.title));
+  assert.match(identity.document_hash, /^[0-9a-f]{32}$/, '文档身份摘要应为 32 位哈希');
   assert.match(identity.window_bounds_hash, /^[0-9a-f]{16}$/);
   assert.ok(identity.process_start_time.length > 0, '应取到进程启动时间（防 PID 复用）');
   // 标题明文不得出现在采样结果里

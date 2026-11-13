@@ -16,6 +16,7 @@ const {
 const {
   resolveWindowStrict, assertIdentityProof, FullPredicate, classifyTree, decideResolution,
 } = require('./resolve');
+const { scopeDetail } = require('./scope');
 
 /** 枚举可见顶层窗口（PowerShell：有主窗口的进程）。返回脱敏摘要（pid/标题/进程名）。 */
 function listWindows() {
@@ -71,6 +72,9 @@ $start = ''
 try { $start = $proc.StartTime.ToUniversalTime().ToString('o') } catch {}
 ${PS_HASH_FN}
 $title = [string]$proc.MainWindowTitle
+$doc = $title.TrimStart()
+# 文档身份摘要：去掉未保存星号/圆点等前缀，避免 IME 输入把标题变脏就误判换文档。
+while ($doc.Length -gt 0 -and (($doc[0] -eq [char]42) -or ($doc[0] -eq [char]8226) -or ($doc[0] -eq [char]9679) -or ($doc[0] -eq [char]32))) { $doc = $doc.Substring(1) }
 $bx = 0.0; $by = 0.0; $bw = 0.0; $bh = 0.0
 $hx = [long]$hwnd
 if ($hx -ne 0) {
@@ -83,7 +87,7 @@ if ($hx -ne 0) {
     if (-not [double]::IsNaN($r.Height) -and -not [double]::IsInfinity($r.Height)) { $bh = [double]$r.Height }
   } catch {}
 }
-@{ ok=$true; pid=${pid}; hwnd=$hx; process_start_time=$start; title_hash=(Hex32 $title).Substring(0,32); target_handle=(Hex32 (('' + ${pid}) + [char]0 + $title)).Substring(0,32); bounds=@{ x=$bx; y=$by; w=$bw; h=$bh } } | ConvertTo-Json -Compress -Depth 4
+@{ ok=$true; pid=${pid}; hwnd=$hx; process_start_time=$start; title_hash=(Hex32 $title).Substring(0,32); target_handle=(Hex32 (('' + ${pid}) + [char]0 + $title)).Substring(0,32); document_hash=(Hex32 $doc).Substring(0,32); bounds=@{ x=$bx; y=$by; w=$bw; h=$bh } } | ConvertTo-Json -Compress -Depth 4
 `;
   return runPowerShell(script).then((r) => {
     if (!r.ok) return r;
@@ -98,6 +102,7 @@ if ($hx -ne 0) {
         process_start_time: String(raw.process_start_time || ''),
         title_hash: String(raw.title_hash || ''),
         target_handle: String(raw.target_handle || ''),
+        document_hash: String(raw.document_hash || ''),
         bounds,
         // 与 refs.js 的 boundsHash 用同一个算法（四舍五入后拼接再 sha256 前 16 位）
         window_bounds_hash: boundsHash(bounds),
@@ -201,6 +206,9 @@ ${PS_HASH_FN}
 $title = [string]$proc.MainWindowTitle
 $titleHash = (Hex32 $title).Substring(0,32)
 $targetHandle = (Hex32 (('' + ${pid}) + [char]0 + $title)).Substring(0,32)
+$doc = $title.TrimStart()
+while ($doc.Length -gt 0 -and (($doc[0] -eq [char]42) -or ($doc[0] -eq [char]8226) -or ($doc[0] -eq [char]9679) -or ($doc[0] -eq [char]32))) { $doc = $doc.Substring(1) }
+$documentHash = (Hex32 $doc).Substring(0,32)
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
 $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
 # DEV-CU P1-1 步骤 4：四字段强制字符串并裁剪，上限对齐 business-ui-preload.ts:192-195（200/60/500/4000）。
@@ -276,7 +284,7 @@ while ($qi -lt $queue.Count) {
 }
 $winName = ''
 try { $winName = [string]$root.Current.Name } catch {}
-@{ ok=$true; window=$winName; pid=${pid}; hwnd=[long]$hwnd; process_start_time=$startTime; title_hash=$titleHash; target_handle=$targetHandle; tree_complete=$complete; nodes_observed=$queue.Count; nodes=$emitted } | ConvertTo-Json -Compress -Depth 6
+@{ ok=$true; window=$winName; pid=${pid}; hwnd=[long]$hwnd; process_start_time=$startTime; title_hash=$titleHash; target_handle=$targetHandle; document_hash=$documentHash; tree_complete=$complete; nodes_observed=$queue.Count; nodes=$emitted } | ConvertTo-Json -Compress -Depth 6
 `;
   return runPowerShell(script).then((r) => {
     if (!r.ok) return r;
@@ -392,14 +400,34 @@ function resolveAndObserve(pid, entry, snapshotId, ref) {
     message: (e && e.message) || String(e),
     detail: e && e.detail,
   });
+  // C02：目标进程已经退出时，动作前置直接按 stale_ref / window_gone 收敛，
+  // 不让 PowerShell 的 Get-Process 报错冒成 computer_internal。
+  const processAlive = () => {
+    try { process.kill(pid, 0); return true; } catch (e) { return e && e.code === 'EPERM'; }
+  };
+  const windowGoneError = () => {
+    const err = new WorkerError('computer_stale_ref', '目标进程已退出，请重新观察');
+    err.detail = {
+      kind: 'window_identity_changed',
+      reason: ['window_gone'],
+      retryable: true,
+      requires_fresh_snapshot: true,
+      ...scopeDetail((entry && entry.window_identity) || {}, {}),
+    };
+    return err;
+  };
   return Promise.resolve()
     // 步骤 7：身份不可证的 ref 在读树前拒绝（无身份字段 / 无 id 且捕获时不唯一）。
     .then(() => assertIdentityProof(entry, snapshotId, ref))
+    .then(() => { if (!processAlive()) throw windowGoneError(); })
     .then(() => observeOnce(pid))
     .then((obs) => {
-      if (!obs.ok) return { ok: false, error: obs.error || 'uia_failed' };
+      if (!obs || obs.ok !== true) {
+        if (!processAlive()) throw windowGoneError();
+        return { ok: false, error: (obs && obs.error) || 'uia_failed' };
+      }
       try {
-        // 步骤 2：窗口身份四要素严格比对（pid / start_time / hwnd / bounds_hash）
+        // 步骤 2：窗口身份严格比对（pid / start_time / hwnd / 文档摘要 / bounds_hash）
         resolveWindowStrict(entry.window_identity || {}, obs.window_identity);
         // 步骤 4/5：身份谓词 + 零/多/未知判定
         const predicate = FullPredicate.ofEntry(entry);

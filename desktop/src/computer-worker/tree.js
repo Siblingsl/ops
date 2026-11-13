@@ -181,6 +181,10 @@ function buildObserveTree(raw) {
     value: String((raw && raw.title_hash) || ''),
     enumerable: false, configurable: true, writable: true,
   });
+  Object.defineProperty(window_identity, 'document_hash', {
+    value: String((raw && raw.document_hash) || ''),
+    enumerable: false, configurable: true, writable: true,
+  });
 
   return {
     tree,

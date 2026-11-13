@@ -212,6 +212,7 @@ function allocateTreeRefs(tree, ctx = {}) {
         process_start_time: String(identity.process_start_time || ''),
         process_instance: '',
         target_handle: String(identity.target_handle || ''),
+        window_document_hash: String(identity.document_hash || ''),
         hwnd: Number(identity.hwnd) || 0,
         window_title_hash: windowTitleHash,
         window_bounds_hash: String(identity.window_bounds_hash || ''),

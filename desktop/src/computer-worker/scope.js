@@ -18,6 +18,7 @@ const SCOPE_REASON = Object.freeze({
   WINDOW_GONE: 'window_gone',
   PID_REUSED: 'pid_reused',
   HWND_CHANGED: 'hwnd_changed',
+  DOCUMENT_CHANGED: 'document_changed',
   BOUNDS_CHANGED: 'bounds_changed',
   FOREGROUND_CHANGED: 'foreground_changed',
   GENERATION_CHANGED: 'generation_changed',
@@ -28,6 +29,7 @@ const REASON_ORDER = Object.freeze([
   SCOPE_REASON.WINDOW_GONE,
   SCOPE_REASON.PID_REUSED,
   SCOPE_REASON.HWND_CHANGED,
+  SCOPE_REASON.DOCUMENT_CHANGED,
   SCOPE_REASON.BOUNDS_CHANGED,
   SCOPE_REASON.FOREGROUND_CHANGED,
   SCOPE_REASON.GENERATION_CHANGED,
@@ -88,6 +90,12 @@ function windowChangeReasons(expected, actual) {
     else if (eStart && !aStart) return [SCOPE_REASON.WINDOW_GONE];
   }
   if (eHwnd && eHwnd !== aHwnd) reasons.push(SCOPE_REASON.HWND_CHANGED);
+
+  // 跨文档：标题摘要（去掉未保存星号）变了，说明同一窗口换了文档/页面。
+  // 只在双方都采到摘要时比较；夹具/旧 ref 没有摘要时跳过。
+  const eDoc = text(e.document_hash);
+  const aDoc = text(a.document_hash);
+  if (eDoc && aDoc && eDoc !== aDoc) reasons.push(SCOPE_REASON.DOCUMENT_CHANGED);
 
   const eBounds = text(e.window_bounds_hash);
   const aBounds = text(a.window_bounds_hash);

@@ -319,6 +319,10 @@ async function observe(msg, { refStore } = {}) {
       Object.defineProperty(identity, 'title_hash', {
         value: ident.title_hash || '', enumerable: false, configurable: true, writable: true,
       });
+      Object.defineProperty(identity, 'document_hash', {
+        value: ident.document_hash || (obs.window_identity || {}).document_hash || '',
+        enumerable: false, configurable: true, writable: true,
+      });
 
       // 步骤 5a：root_ref → 在新树里按身份谓词唯一再解析，取到子树根
       let rootNode = null;
