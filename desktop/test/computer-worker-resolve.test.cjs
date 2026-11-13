@@ -297,7 +297,9 @@ test('P2-4 真实旅程：用 ref 写入记事本并读回（需 OPS_UIA_MANUAL=
       target_summary: read.window,
     });
     assert.equal(invoked.ok, true, `按 ref 写入应成功：${JSON.stringify(invoked)}`);
-    assert.equal(invoked.action, 'setvalue');
+    // P3-3 起动作名统一为 §4.6 的 snake_case（set_value / type_text / clear）；
+    // 本用例写于 P2-4（旧名 setvalue），真机跑到这里才暴露，按现行契约改。
+    assert.equal(invoked.action, 'set_value');
 
     const after = await call('uia_read', { pid, grant_id: 'g-resolve', generation: 1 });
     const values = [];
