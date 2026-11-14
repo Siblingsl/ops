@@ -131,6 +131,9 @@ test('P3-3 Check / Uncheck: 目标态与证据不足', async () => {
   assert.equal((await run('uncheck', { observed: st({ checked: false }) })).delivery, 'delivered_verified');
   await assert.rejects(() => run('uncheck', { observed: st({ checked: true }) }),
     (e) => e.code === 'computer_action_failed');
+  // uncheck 证据不足：states 不全（与 check 同口径）
+  const unknownUncheck = await run('uncheck', { observed: st({ checked: false, states_complete: false }) });
+  assert.equal(unknownUncheck.verification_reason, 'insufficient_evidence');
 });
 
 test('P3-3 Toggle: before 与 after 必须相反，且改写为 Check/Uncheck', async () => {
@@ -175,6 +178,9 @@ test('P3-3 Expand / Collapse: 要求 states_complete', async () => {
   assert.equal((await run('collapse', { observed: st({ expanded: false }) })).delivery, 'delivered_verified');
   await assert.rejects(() => run('collapse', { observed: st({ expanded: true }) }),
     (e) => e.code === 'computer_action_failed');
+  // collapse 证据不足：states 不全（expand/collapse 合并族内对齐）
+  const unknownCollapse = await run('collapse', { observed: st({ expanded: false, states_complete: false }) });
+  assert.equal(unknownCollapse.verification_reason, 'insufficient_evidence');
 });
 
 test('P3-3: 不需要读回的动作直接执行，不读状态', async () => {
@@ -457,6 +463,14 @@ test('P3-3: psStateScript 可被 PS parser 解析，且引用的 UIA 成员都�
     "try { $checks['IsToggleAvailable'] = [string][System.Windows.Automation.AutomationElement]::IsTogglePatternAvailableProperty } catch { $checks['IsToggleAvailable'] = 'ABSENT' }",
     "try { $checks['IsExpandAvailable'] = [string][System.Windows.Automation.AutomationElement]::IsExpandCollapsePatternAvailableProperty } catch { $checks['IsExpandAvailable'] = 'ABSENT' }",
     "try { $checks['IsSelectionAvailable'] = [string][System.Windows.Automation.AutomationElement]::IsSelectionItemPatternAvailableProperty } catch { $checks['IsSelectionAvailable'] = 'ABSENT' }",
+    "try { $checks['LeafNode'] = [string][System.Windows.Automation.ExpandCollapseState]::LeafNode } catch { $checks['LeafNode'] = 'ABSENT' }",
+    "try { $checks['Info.IsPassword'] = [string][System.Windows.Automation.AutomationElement+AutomationElementInformation].GetMethod('get_IsPassword') } catch { $checks['Info.IsPassword'] = 'ABSENT' }",
+    "try { $checks['Info.IsEnabled'] = [string][System.Windows.Automation.AutomationElement+AutomationElementInformation].GetMethod('get_IsEnabled') } catch { $checks['Info.IsEnabled'] = 'ABSENT' }",
+    "try { $checks['Info.IsOffscreen'] = [string][System.Windows.Automation.AutomationElement+AutomationElementInformation].GetMethod('get_IsOffscreen') } catch { $checks['Info.IsOffscreen'] = 'ABSENT' }",
+    "try { $checks['Info.HasKeyboardFocus'] = [string][System.Windows.Automation.AutomationElement+AutomationElementInformation].GetMethod('get_HasKeyboardFocus') } catch { $checks['Info.HasKeyboardFocus'] = 'ABSENT' }",
+    "try { $checks['Info.ControlType'] = [string][System.Windows.Automation.AutomationElement+AutomationElementInformation].GetMethod('get_ControlType') } catch { $checks['Info.ControlType'] = 'ABSENT' }",
+    // InvariantCulture.Name 在部分宿主上为空串（PS 5.1 行为），改用恒非空的 LCID=127 校验类型存在。
+    "try { $checks['InvariantCulture'] = [string][System.Globalization.CultureInfo]::InvariantCulture.LCID } catch { $checks['InvariantCulture'] = 'ABSENT' }",
     '@{ checks = $checks } | ConvertTo-Json -Compress -Depth 4',
   ].join('\n');
   const refs = await native.runPowerShell(refScript);
@@ -466,7 +480,7 @@ test('P3-3: psStateScript 可被 PS parser 解析，且引用的 UIA 成员都�
     assert.notEqual(value, 'ABSENT', `UIA 成员不存在：${key}`);
     assert.ok(String(value).length > 0, `UIA 成员不存在或为空：${key}`);
   }
-  assert.equal(Object.keys(found).length, 16, '成员清单不得缩水');
+  assert.equal(Object.keys(found).length, 23, '成员清单不得缩水');
 });
 
 test('P3-3: 真实记事本上的读回验证（产品 ref 链路，OPS_UIA_SPAWN=1 opt-in）', { timeout: 180_000 }, async (t) => {
