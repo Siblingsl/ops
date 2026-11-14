@@ -660,3 +660,120 @@ function loadPreload(electron) {
     Module._load = originalLoad;
   }
 }
+
+// ---------------------------------------------------------------------------
+// DEV-CU P3-7（docs/36 §P3-7）：observe/act/invalidate 三固定意图的白名单负例。
+// C09：process_path / hwnd / class_name / native_id 等内部字段出现即整批拒绝；
+// disposition 双字段不一致拒绝；长度上限逐项。
+// ---------------------------------------------------------------------------
+
+test('P3-7: observeComputerUIA 参数本机校验（pid/grant/generation/max_depth/root_ref）', async () => {
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  const invokes = [];
+  const ipcRenderer = { on() {}, removeListener() {}, invoke: async (ch, payload) => { invokes.push({ ch, payload }); return { ok: false, code: 'worker_exit' }; } };
+  loadPreload({ contextBridge, ipcRenderer });
+  const ui = exposed.opsDesktopUI;
+  const base = { pid: 12, target_summary: '记事本', grant_id: 'g-1', generation: 3 };
+  let ipcCount = 0;
+  for (const bad of [
+    {}, { ...base, pid: 0 }, { ...base, grant_id: '' }, { ...base, generation: -1 },
+    { ...base, max_depth: 51 }, { ...base, max_depth: -1 }, { ...base, root_ref: 'e1' },
+  ]) {
+    const out = await ui.observeComputerUIA(bad);
+    assert.equal(out.ok, false, `应拒绝 ${JSON.stringify(bad).slice(0, 60)}`);
+    assert.equal(out.code, 'computer_uia_invalid');
+    assert.equal(invokes.length, ipcCount, '参数无效不得发起 IPC');
+  }
+  // 合法入参发起 IPC 且 payload 含 grant/generation
+  await ui.observeComputerUIA(base);
+  assert.equal(invokes.length, ipcCount + 1);
+  assert.equal(invokes.at(-1).ch, 'computer:uia-observe');
+  assert.equal(invokes.at(-1).payload.grant_id, 'g-1');
+});
+
+test('P3-7: observe 结果白名单——树节点键集合整批拒绝（C09 负例）', async () => {
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  const ipcRenderer = { on() {}, removeListener() {}, invoke: async () => null };
+  loadPreload({ contextBridge, ipcRenderer });
+  const ui = exposed.opsDesktopUI;
+  const node = (over = {}) => ({
+    role: 'button', name: '保存', value: '', ref_id: '@s1:e1',
+    available_actions: ['Click'], states: ['enabled'], bounds: { x: 0, y: 0, w: 10, h: 10 },
+    children: [], children_count: 0, depth: 1, ...over,
+  });
+  const result = (tree) => ({ ok: true, snapshot_id: 's1', revision: 1, ref_count: 1, complete: true, nodes_observed: 1, tree });
+  const base = { pid: 12, target_summary: '记事本', grant_id: 'g-1', generation: 3 };
+
+  const good = node();
+  // negative：C09 禁止字段逐个注入（process_path/hwnd/class_name/native_id/title_hash）
+  for (const [key, val] of [
+    ['process_path', 'C:/Windows/notepad.exe'],
+    ['hwnd', 12345],
+    ['class_name', 'Notepad'],
+    ['native_id', 'abc'],
+    ['title_hash', 'deadbeef'],
+    ['bounds_hash', 'deadbeef'],
+  ]) {
+    const bad = node({ [key]: val });
+    const r = await new Promise((resolve) => {
+      const ui2 = exposed.opsDesktopUI;
+      // 直接用 parseComputerUiaObserveResult 不可达（模块闭包内），走 IPC 注入：
+      const exposed2 = {};
+      const ctx2 = { exposeInMainWorld(name, value) { exposed2[name] = value; } };
+      const ipc2 = { on() {}, removeListener() {}, invoke: async () => result(bad) };
+      loadPreload({ contextBridge: ctx2, ipcRenderer: ipc2 });
+      resolve(exposed2.opsDesktopUI.observeComputerUIA(base));
+    });
+    assert.equal(r.ok, false, `树节点含 ${key} 应整批拒绝`);
+    assert.equal(r.code, 'computer_uia_invalid');
+  }
+});
+
+test('P3-7: act 结果 disposition 双字段一致性与 steps 机制校验', async () => {
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  loadPreload({ contextBridge, ipcRenderer: { on() {}, removeListener() {}, invoke: async () => null } });
+  const ui = exposed.opsDesktopUI;
+  const base = { pid: 12, ref: '@sabc123:e1', grant_id: 'g-1', generation: 3, action: 'click', target_summary: '记事本' };
+  const act = (body) => ({ ok: true, action: 'click', disposition: body });
+  for (const bad of [
+    { delivery: 'not_delivered', retry: 'unsafe' },
+    { delivery: 'delivered_verified', retry: 'safe' },
+    { delivery: 'bogus', retry: 'safe' },
+    { delivery: 'not_delivered' },
+  ]) {
+    const exposed2 = {};
+    loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed2[n] = v; } },
+      ipcRenderer: { on() {}, removeListener() {}, invoke: async () => act(bad) } });
+    const r = await exposed2.opsDesktopUI.actComputerUIA(base);
+    assert.equal(r.ok, false, `disposition ${JSON.stringify(bad)} 应拒`);
+  }
+  // steps 出现时 mechanism 必须是 semantic_api（无物理投递分支）
+  const exposed3 = {};
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed3[n] = v; } },
+    ipcRenderer: { on() {}, removeListener() {}, invoke: async () => ({
+      ok: true, action: 'click', disposition: { delivery: 'delivered_verified', retry: 'unsafe' },
+      steps: [{ label: 'UIInvokePattern.Invoke', outcome: 'succeeded', mechanism: 'physical_synthetic' }],
+    }) } });
+  const r3 = await exposed3.opsDesktopUI.actComputerUIA(base);
+  assert.equal(r3.ok, false, 'mechanism 不得是 physical_synthetic');
+});
+
+test('P3-7: invalidateComputerUIA grant 校验与 cleared 白名单', async () => {
+  const exposed = {};
+  const contextBridge = { exposeInMainWorld(name, value) { exposed[name] = value; } };
+  loadPreload({ contextBridge, ipcRenderer: { on() {}, removeListener() {}, invoke: async () => null } });
+  const ui = exposed.opsDesktopUI;
+  for (const bad of ['', 'x'.repeat(65)]) {
+    const r = await ui.invalidateComputerUIA(bad);
+    assert.equal(r.ok, false);
+  }
+  // cleared 非整数 → 拒
+  const exposed2 = {};
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed2[n] = v; } },
+    ipcRenderer: { on() {}, removeListener() {}, invoke: async () => ({ ok: true, cleared: 1.5 }) } });
+  const r = await exposed2.opsDesktopUI.invalidateComputerUIA('g-1');
+  assert.equal(r.ok, false);
+});

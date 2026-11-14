@@ -695,7 +695,9 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
       payload.max_depth = input.max_depth;
     }
     if (input.root_ref !== undefined) {
-      if (typeof input.root_ref !== 'string' || input.root_ref.length > 64) {
+      // root_ref 与 act.ref 同口径：必须 @<snapshot_id>:e<N>（裸 e1 / 0 序号拒，§4.4）。
+      if (typeof input.root_ref !== 'string'
+        || !/^@[A-Za-z0-9_-]{3,64}:e[1-9][0-9]{0,9}$/.test(input.root_ref)) {
         return { ok: false, code: 'computer_uia_invalid', message: 'UIA 观察参数无效。' };
       }
       payload.root_ref = input.root_ref;
