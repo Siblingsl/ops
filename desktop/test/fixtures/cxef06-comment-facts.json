@@ -1,0 +1,96 @@
+{
+  "schema": "cxef06-comment-facts-v1",
+  "platform": "xhs",
+  "external_account_key": "cxef06-mock-account",
+  "note_id": "cxef06-note-001",
+  "raw": {
+    "data": {
+      "comments": [
+        {
+          "id": "cxef06-comment-001",
+          "note_id": "cxef06-note-001",
+          "user_info": { "nickname": "读者甲" },
+          "content": "这篇的步骤写得很清楚，但第二步的依据是什么？",
+          "time": "2026-11-10T09:30:00+08:00",
+          "parent_comment_id": null
+        },
+        {
+          "id": "cxef06-comment-002",
+          "note_id": "cxef06-note-001",
+          "content": "请问图片模板可以分享吗？",
+          "time": "2026-11-10T10:05:00+08:00"
+        },
+        {
+          "id": "cxef06-comment-003",
+          "note_id": "cxef06-note-001",
+          "user_info": { "nickname": "读者丙" },
+          "content": "   ",
+          "time": "2026-11-10T11:00:00+08:00",
+          "parent_comment_id": "cxef06-comment-001"
+        }
+      ]
+    }
+  },
+  "deniedPayload": { "success": false, "code": 403, "msg": "无权查看评论" },
+  "absentPayload": { "data": { "comments": [] } },
+  "malformedPayload": { "data": { "comments": "not-an-array" } },
+  "expected": [
+    {
+      "comment_id": "cxef06-comment-001",
+      "note_id": "cxef06-note-001",
+      "author": "读者甲",
+      "body": "这篇的步骤写得很清楚，但第二步的依据是什么？",
+      "published_at": "2026-11-10T09:30:00+08:00",
+      "parent_comment_id": null,
+      "present": {
+        "comment_id": true,
+        "note_id": true,
+        "author": true,
+        "body": true,
+        "published_at": true,
+        "parent_comment_id": false
+      },
+      "reason": null,
+      "dedupe_id": "f4a13e54-a444-9618-efe1-28c218ef2351"
+    },
+    {
+      "comment_id": "cxef06-comment-002",
+      "note_id": "cxef06-note-001",
+      "author": null,
+      "body": "请问图片模板可以分享吗？",
+      "published_at": "2026-11-10T10:05:00+08:00",
+      "parent_comment_id": null,
+      "present": {
+        "comment_id": true,
+        "note_id": true,
+        "author": false,
+        "body": true,
+        "published_at": true,
+        "parent_comment_id": false
+      },
+      "reason": null,
+      "dedupe_id": "c6acdcc0-005f-7f73-5d79-9553b7b4e8de"
+    },
+    {
+      "comment_id": "cxef06-comment-003",
+      "note_id": "cxef06-note-001",
+      "author": "读者丙",
+      "body": null,
+      "published_at": "2026-11-10T11:00:00+08:00",
+      "parent_comment_id": "cxef06-comment-001",
+      "present": {
+        "comment_id": true,
+        "note_id": true,
+        "author": true,
+        "body": false,
+        "published_at": true,
+        "parent_comment_id": true
+      },
+      "reason": "empty_body",
+      "dedupe_id": "fac239ce-0c70-e85d-642e-793878d5d9da"
+    }
+  ],
+  "expectedDeniedReason": "permission_denied",
+  "expectedAbsentReason": "comment_absent",
+  "expectedMalformedReason": "parse_failed"
+}
