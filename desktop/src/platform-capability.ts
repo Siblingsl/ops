@@ -18,7 +18,10 @@ export const PLATFORM_OPERATION_PATHS: Readonly<Record<string, { method: string;
   'platform.run.claim': { method: 'POST', path: '/api/v1/desktop/platform/runs/claim' },
   'platform.account.sync.request': { method: 'POST', path: '/api/v1/accounts/{accountId}/platform-account-sync' },
   'platform.metrics.refresh.request': { method: 'POST', path: '/api/v1/accounts/{accountId}/platform-metrics-refresh' },
-  'platform.sync.operation.resume': { method: 'POST', path: '/api/v1/accounts/{accountId}/platform-sync-operations/{operationId}/actions' }
+  'platform.sync.operation.resume': { method: 'POST', path: '/api/v1/accounts/{accountId}/platform-sync-operations/{operationId}/actions' },
+  // P0-4（CF-P2-CXEF-06）：评论单条上报。旧服务端未公布该操作时 resolvePlatformEndpoint
+  // 会如实抛 PlatformCollectionUnsupportedError，调用方据此跳过上报（不静默丢弃）。
+  'platform.comment.ingest': { method: 'POST', path: '/api/v1/desktop/platform/comments' }
 });
 
 export interface PlatformProtocolV2Capability {

@@ -444,6 +444,9 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
             ? '头条稳定身份与数据读取能力尚未验证。登录后不会自动同步作品，作品仍通过发布包手动发布。'
             : '尚未连接。登录平台账号后需要本人核对稳定身份；登录不会自动同步历史作品。'} </p>
           <p className="text-mist-400">服务端不会代你登录，也不会保存平台 Cookie 或密码。</p>
+          {/* P0-4（CF-P2-CXEF-06）：评论授权文案占位——产品文案待拍板（docs/37 §5 拍板项 4），
+              先如实告知现状：评论读取能力已在客户端实现链路，但未开放；文案定稿后替换。 */}
+          <p className="text-[12px] text-mist-500">评论区读取：尚未开放（授权说明文案待定，功能与文案会一并上线）。</p>
           {!isToutiao && canManage && !adminOverride && policyQuery.data && (
             <div className="flex flex-wrap items-center gap-3 border-t border-mist-100 pt-3">
               <Switch label="启用本工作区平台数据读取" checked={policyQuery.data.policy.enabled} disabled={busy !== ''}

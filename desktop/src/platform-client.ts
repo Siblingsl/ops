@@ -158,6 +158,15 @@ export class PlatformClient {
     await this.sign('platform.presence', endpoint.method, endpoint.path, {});
   }
 
+  // P0-4（CF-P2-CXEF-06）：评论单条上报（设备证明操作 platform.comment.ingest）。
+  // 只接受单条结果信封（桌面 toCommentResult 恒 1 条）；逐条调用，不批量。
+  // 服务端按连接归属核对 external_account_key 并单条幂等写入 comment_inbox。
+  async submitComment(result: { schema: string; platform: string; external_account_key: string; items: ReadonlyArray<unknown> }): Promise<{ id: string; inserted: boolean; note?: string }> {
+    // 旧服务端没有该操作时如实拒绝，不静默丢弃。
+    const endpoint = resolvePlatformEndpoint(this.capability, 'platform.comment.ingest');
+    return await this.sign('platform.comment.ingest', endpoint.method, endpoint.path, result) as { id: string; inserted: boolean; note?: string };
+  }
+
   // adopt 接管一条**已经在别处领取**的 run。
   //
   // 后台循环先用一个 client 实例 claim，再把 run 交给采集流程；采集流程内部会新建自己的

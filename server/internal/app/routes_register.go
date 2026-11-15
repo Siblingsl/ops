@@ -18,6 +18,9 @@ func (s *Server) registerDesktopRoutes(r chi.Router) {
 	r.Post("/desktop/platform/connections/{id}/verify", s.h(s.desktopVerifyPlatformConnection))
 	r.Post("/desktop/platform/presence", s.h(s.desktopPlatformPresence))
 	r.Post("/desktop/platform/runs/claim", s.h(s.desktopClaimPlatformRun))
+	// P0-4（CF-P2-CXEF-06）：评论单条上报（设备证明；复用本地 comment 结果类型，
+	// 单条幂等写入 comment_inbox；不扩 v2 白名单——授权文案未拍板）。
+	r.Post("/desktop/platform/comments", s.h(s.desktopIngestPlatformComment))
 	r.Post("/desktop/platform/runs/{id}/heartbeat", s.h(s.desktopHeartbeatPlatformRun))
 	r.Post("/desktop/platform/runs/{id}/results", s.h(s.desktopSubmitPlatformResults))
 	r.Get("/desktop/platform/runs/{id}/receipts/{seq}", s.h(s.desktopGetPlatformRunReceipt))

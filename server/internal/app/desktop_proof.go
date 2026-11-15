@@ -201,6 +201,10 @@ var desktopOperations = map[string]desktopOperation{
 	"platform.account.sync.request":    {Name: "platform.account.sync.request", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/accounts/{uuid}/platform-account-sync", Limit: desktopPlatformRequestBytes},
 	"platform.metrics.refresh.request": {Name: "platform.metrics.refresh.request", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/accounts/{uuid}/platform-metrics-refresh", Limit: desktopPlatformRequestBytes},
 	"platform.sync.operation.resume":   {Name: "platform.sync.operation.resume", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/accounts/{uuid}/platform-sync-operations/{uuid}/actions", Limit: desktopPlatformRequestBytes},
+	// P0-4（CF-P2-CXEF-06 桌面消费接线）：评论单条上报（设备证明 = 连接保管人本机）。
+	// 复用本地 comment 结果类型与 ingestPlatformCommentResultTx 单项幂等写入；
+	// 不扩 v2 结果类型白名单 / 阶段矩阵（产品授权文案未定，docs/37 §5 拍板项 4）。
+	"platform.comment.ingest":          {Name: "platform.comment.ingest", Scope: desktopProofPlatformAccountScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/comments", Limit: desktopPlatformRequestBytes},
 }
 
 func desktopOperationOf(operation string) (desktopOperation, bool) {
@@ -262,6 +266,7 @@ var platformOperations = []string{
 	"platform.account.sync.request",
 	"platform.metrics.refresh.request",
 	"platform.sync.operation.resume",
+	"platform.comment.ingest",
 }
 
 type desktopVerifiedDeviceKey struct{}

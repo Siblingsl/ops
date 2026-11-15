@@ -92,7 +92,7 @@ import {
   type PlatformLoginSession
 } from './platform-login';
 import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace, orphanConnections } from './platform-profile';
-import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, normalizeXhsNoteTime, readNoteBody, XHS_API, XhsAdapterError } from './platforms/xhs';
+import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, normalizeXhsNoteTime, readNoteBody, readCommentFacts, toCommentResult, XHS_API, XhsAdapterError } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation, normalizeWechatSentAt, WECHAT_MP_API, WechatAdapterError } from './platforms/wechat-mp';
 import { buildPlatformCatalogCompletion, platformV1CoverageStopReason, PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun, type PlatformV2ResultType } from './platform-client';
 import {
@@ -1923,6 +1923,7 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
           : undefined
       };
       let failedRows = 0;
+      let commentSourceMissing = false;
       for (let offset = 0; offset < contentTargets.length; offset += 10) {
         const slice = contentTargets.slice(offset, offset + 10);
         const items: Array<Record<string, unknown>> = [];
@@ -1934,6 +1935,26 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
           } catch (error) {
             console.error('[collect-v2] note detail failed', target.externalID, describeError(error));
             body = { noteId: target.externalID, present: false, text: null, reason: 'read_failed' };
+          }
+          // CF-P2-CXEF-06：评论授权读取。宿主评论源未登记契约时如实 comment_source_missing
+          // 并整 run 跳过（不逐篇重复探测）；读到事实时逐条上报（每条一次 HTTP，单条幂等），
+          // 失败只记日志不中断正文采集。不提供批量入库。
+          if (!commentSourceMissing && platform === 'xhs') {
+            const comments = await readCommentFacts(sourceWithDetail, target.externalID);
+            if (comments.reason === 'comment_source_missing') {
+              commentSourceMissing = true;
+            } else if (comments.facts.length > 0) {
+              for (let index = 0; index < comments.facts.length; index += 1) {
+                const result = toCommentResult('xhs', externalAccountKey, comments.facts, index);
+                if (!result) continue; // 不可读事实（reason!=null）跳过，不冒充可读
+                try {
+                  await client.submitComment(result);
+                } catch (error) {
+                  console.error('[collect-v2] comment ingest failed', target.externalID, index, describeError(error));
+                  break; // 上报通道不可用（旧服务端/网络）：停止本篇剩余上报，不重试
+                }
+              }
+            }
           }
           const item = platformV2ContentItem({
             externalID: target.externalID, accountKey: externalAccountKey,
@@ -2441,6 +2462,19 @@ function startBrowserCommandExecutor(): void {
       const bridge = getActiveBridge();
       if (!bridge) return Promise.resolve({ ok: false as const, code: 'browser_bridge_not_running' });
       return bridge.dispatchAndWait(action, payload, timeoutMs);
+    },
+    reportEvidence: async (input) => {
+      if (!desktopClient) throw new Error('desktop client unavailable');
+      await desktopClient.reportBrowserEvidence({
+        conversation_id: input.conversationId,
+        command_id: input.commandId,
+        origin: input.origin,
+        redacted_url: input.redactedUrl,
+        ...(input.title ? { title: input.title } : {}),
+        ...(input.snippet ? { snippet: input.snippet } : {}),
+        ...(input.docRevision ? { doc_revision: input.docRevision } : {}),
+        kind: input.kind
+      });
     },
     log: (line) => console.log(line)
   });

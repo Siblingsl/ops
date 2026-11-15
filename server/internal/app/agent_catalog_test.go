@@ -445,6 +445,8 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/desktop/platform/runs/{id}/heartbeat",
 		"POST /api/v1/desktop/platform/runs/{id}/results",
 		"GET /api/v1/desktop/platform/runs/{id}/receipts/{seq}",
+		// P0-4（CF-P2-CXEF-06）：评论单条上报（设备证明，保管人本机；智能体不提供工具）。
+		"POST /api/v1/desktop/platform/comments",
 		"POST /api/v1/accounts/{accountId}/platform-sync",
 		// DEV-PS08 观测查看与逐条确认：确认只作用于当前一条，智能体不提供批量工具。
 		"GET /api/v1/accounts/{accountId}/metrics/observations",
