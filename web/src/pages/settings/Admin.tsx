@@ -13,7 +13,8 @@ import type { AdminUser, AdminWorkspace, AgentWorkbenchFeatureName, SystemSettin
 interface UsageRow { key: string; calls: number; prompt_tokens: number; completion_tokens: number; failed: number }
 
 // D-160：智能体工作台特性逐项开关，标签与桌面端「系统管理」保持一致。
-const AGENT_FEATURE_LABELS: { name: AgentWorkbenchFeatureName; label: string; hint: string }[] = [
+// CF-GATE-03（D-187 P3）：B 档 5 项默认关，reason 为界面「未启用（原因）」文案；C 档维持禁开不加 reason。
+const AGENT_FEATURE_LABELS: { name: AgentWorkbenchFeatureName; label: string; hint: string; reason?: string }[] = [
   { name: 'workbench_ui', label: '工作台 UI', hint: '智能体对话新工作台界面' },
   { name: 'conversation_organize', label: '对话整理', hint: '分组、归档与整理能力' },
   { name: 'context_refs', label: '上下文引用', hint: '作品/素材等引用' },
@@ -26,15 +27,26 @@ const AGENT_FEATURE_LABELS: { name: AgentWorkbenchFeatureName; label: string; hi
   { name: 'routines', label: '例行任务', hint: '需目标与产物等前置特性' },
   { name: 'document_parse', label: '文档解析', hint: '附件文档解析入口' },
   // DEV-AI27：27 §15.3 登记的本机能力开关，默认全部关闭，逐项开启（不提供一键全开）。
-  { name: 'chrome_connect', label: 'Chrome 连接', hint: '本机 Chrome 扩展配对与连接状态；需先加载 OPS 扩展' },
-  { name: 'browser_workspace', label: '浏览器工作区', hint: '依赖 Chrome 连接；页签最小授权、来源证据与批注' },
-  { name: 'personal_memories', label: '跨对话记忆', hint: '记忆候选需本人逐条确认后才注入上下文' },
-  { name: 'plugin_mcp', label: '插件与 MCP', hint: 'stdio / HTTP 连接、工具目录与逐项调用回执' },
-  { name: 'subagents', label: '子智能体', hint: '并行委派组、共享预算与取消传播' },
-  { name: 'voice_dictation', label: '语音转写', hint: '录音→ASR 转写→可编辑终稿；需在模型设置里配好 asr 路由' },
+  { name: 'chrome_connect', label: 'Chrome 连接', hint: '本机 Chrome 扩展配对与连接状态；需先加载 OPS 扩展', reason: '需先在浏览器加载 OPS 扩展并完成真 Chrome 验收' },
+  { name: 'browser_workspace', label: '浏览器工作区', hint: '依赖 Chrome 连接；页签最小授权、来源证据与批注', reason: '依赖 Chrome 连接（先启用上一项），且需站点授权验收' },
+  { name: 'personal_memories', label: '跨对话记忆', hint: '记忆候选需本人逐条确认后才注入上下文', reason: '上下文注入质量待真实模型验收' },
+  { name: 'plugin_mcp', label: '插件与 MCP', hint: 'stdio / HTTP 连接、工具目录与逐项调用回执', reason: '需真实 MCP 服务器联调验收（连接建立与 tools/call 回执）' },
+  { name: 'subagents', label: '子智能体', hint: '并行委派组、共享预算与取消传播', reason: '委派与取消传播待真实模型旅程验收' },
+  { name: 'voice_dictation', label: '语音转写', hint: '录音→ASR 转写→可编辑终稿；需在模型设置里配好 asr 路由', reason: '需在模型设置配置 asr 路由并提供真实 Key' },
   { name: 'voice_realtime', label: '实时语音', hint: '实时双向会话；桥已编码，开关默认关闭，需真实 Key 验收后方可宣称交付' },
   { name: 'computer_use', label: '电脑控制', hint: 'Windows 应用选窗授权、UIA 动作与硬禁区' },
 ]
+
+// CF-GATE-03（D-187 P3）：B 档「前往设置」跳转目标；未列出的 B 档项留在本页开启即可。
+// P1-1（docs/37）：补齐其余 B 档项跳转——chrome_connect / browser_workspace 的前置是
+// 本机扩展加载（无设置页，留本页开启），plugin_mcp 的连接管理在 /plugins，
+// personal_memories / subagents 的工作区入口在 /agent 会话工作台。
+const AGENT_FEATURE_JUMP: Partial<Record<AgentWorkbenchFeatureName, string>> = {
+  voice_dictation: '/settings/models', // asr 路由在模型设置的「其他任务」区配置
+  plugin_mcp: '/plugins',              // MCP 连接的安装/启用/工具目录在插件页管理
+  personal_memories: '/agent',         // 记忆候选逐条确认在会话工作台的 MemoryUsagePanel
+  subagents: '/agent',                 // 委派组与预算在会话工作台的 DelegationPanel
+}
 
 interface UsageResp { group_by: string; from: string; to: string; rows: UsageRow[]; total: UsageRow }
 interface Log { id: string; action: string; target_type: string; target_id: string; result: string; created_at: string; actor: string | null }
@@ -452,18 +464,31 @@ export default function SettingsAdmin() {
             : '逐项开启；目标/例行任务仍受服务端依赖降级约束。不提供一键全开。'}
         />
         <div className="space-y-3 px-5 pb-5">
-          {!settings.data ? <PageLoading /> : AGENT_FEATURE_LABELS.map((item) => (
-            <Field key={item.name} label={item.label} hint={item.hint}>
-              <div className="flex justify-end">
-                <Switch
-                  label={`${item.label} 开关`}
-                  checked={!!settings.data.agent_features?.[item.name] && !settings.data.agent_features_env_blocked}
-                  disabled={busy || !!settings.data.agent_features_env_blocked}
-                  onChange={(v) => void saveAgentFeature(item.name, v)}
-                />
-              </div>
-            </Field>
-          ))}
+          {!settings.data ? <PageLoading /> : AGENT_FEATURE_LABELS.map((item) => {
+            const enabled = !!settings.data.agent_features?.[item.name] && !settings.data.agent_features_env_blocked
+            // CF-GATE-03（D-187 P3）：B 档默认关，未启用时明示原因；跳转按项指向对应设置页。
+            const jump = item.reason ? AGENT_FEATURE_JUMP[item.name] : undefined
+            return (
+              <Field key={item.name} label={item.label} hint={item.hint} plain={!!jump}>
+                <div className="flex items-center justify-between gap-4">
+                  {enabled || !item.reason ? <div className="flex-1" /> : (
+                    <p className="text-xs text-mist-500" data-testid={`agent-feature-reason-${item.name}`}>
+                      未启用（{item.reason}）
+                      {jump && <Button size="sm" variant="ghost" className="ml-2" onClick={() => navigate(jump)}>前往设置</Button>}
+                    </p>
+                  )}
+                  <div className="flex justify-end">
+                    <Switch
+                      label={`${item.label} 开关`}
+                      checked={enabled}
+                      disabled={busy || !!settings.data.agent_features_env_blocked}
+                      onChange={(v) => void saveAgentFeature(item.name, v)}
+                    />
+                  </div>
+                </div>
+              </Field>
+            )
+          })}
         </div>
       </Card>
 
