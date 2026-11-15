@@ -48,6 +48,16 @@ test('DEV-CX02 Web 稳定版提交冻结产物并覆盖 WARN 知悉放行', asyn
   const detailPanel = page.getByTestId('build-detail')
   await expect(detailPanel.getByRole('button', { name: '下载 manifest.json' })).toBeVisible()
   await expect(detailPanel.getByRole('button', { name: '下载图片证据 CSV' })).toBeVisible()
+  // CF-CX-03：正式 built（非注入）后由 BuildPanel 触发 evidence.csv 下载。
+  // BOM 用 page.request（Node HTTP）断言：浏览器 CDP 的 response.body() 对 text/csv 会剥 UTF-8 BOM。
+  const csvResponsePromise = page.waitForResponse(response =>
+    response.url().includes(`/builds/${cleanBuildID}/evidence.csv`) && response.request().method() === 'GET')
+  await detailPanel.getByRole('button', { name: '下载图片证据 CSV' }).click()
+  const csvResponse = await csvResponsePromise
+  expect(csvResponse.status()).toBe(200)
+  const csvBytes = Buffer.from(await (await page.request.fetch(`/api/v1/builds/${cleanBuildID}/evidence.csv`)).body())
+  expect(csvBytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))).toBe(true)
+  expect(csvBytes.toString('utf8')).toMatch(/index,role,section_id/)
   const unchanged = await api(page, 'GET', `/works/${work.id}`) as { sections: Array<{ content_md: string }> }
   expect(unchanged.sections[0].content_md).toBe('这段正文用于验证浏览器构建。')
 
@@ -183,4 +193,50 @@ test('DEV-CX02 Web 422/stale 呈现与门禁关闭时不渲染下载控件', asy
   expect(crossCSV.status()).toBe(404)
   expect(await crossManifest.text()).not.toContain('source_hash')
   expect(await crossCSV.text()).not.toContain('section_id')
+})
+
+
+// T-CX03（P1-5）：稳定版单文件 HTML 离线自足——下载产物后用 blob 打开，
+// 页面生命周期内不得发出任何外发网络请求（data URI 内嵌、无外链）。
+// 服务端侧同等约束由 cxbuildvalidate「HTML head may not load external resources」承担（validate.go:419）。
+test('DEV-CX05 稳定版 HTML 离线打开无自动外网请求', async ({ page, browser }) => {
+  test.skip(process.env.OPS_E2E_PROD === '1', '该场景使用本地模拟环境')
+  const account = await registerAccount(page, '长图文', 'wechat_mp')
+  const work = await api(page, 'POST', `/accounts/${account.id}/works`, { title: 'CX05 离线稳定版验收' }) as { id: string; revision: number }
+  const withViewpoint = await api(page, 'PATCH', `/works/${work.id}`, {
+    viewpoint: '稳定版单文件离线验收作品的观点。', base_revision: work.revision,
+  }) as { revision: number }
+  const outlined = await api(page, 'PUT', `/works/${work.id}/outline`, {
+    confirm: true,
+    base_revision: withViewpoint.revision,
+    items: [{ heading: '离线章节', key_point: '产物自足', material_ids: [] }],
+  }) as { sections: Array<{ id: string; revision: number }> }
+  const section = outlined.sections[0]
+  await api(page, 'PATCH', `/sections/${section.id}`, { content_md: '离线稳定版正文。', base_revision: section.revision })
+  await page.goto(`/works/${work.id}`)
+  const panel = page.getByTestId('work-build-panel')
+  await expect(panel).toBeVisible()
+  await panel.getByRole('checkbox', { name: '离线稳定版 HTML' }).check()
+  const complete = page.waitForResponse(r => r.url().includes('/complete') && r.request().method() === 'POST')
+  await panel.getByRole('button', { name: '生成校验报告', exact: true }).click()
+  expect((await complete).status()).toBe(200)
+  const list = await api(page, 'GET', `/works/${work.id}/builds?limit=8`) as { items: Array<{ id: string; status: string }> }
+  expect(list.items[0].status).toBe('built')
+  const buildID = list.items[0].id
+  const build = await api(page, 'GET', `/builds/${buildID}`) as { artifacts: Array<{ id: string; kind: string }> }
+  const stable = build.artifacts.find(item => item.kind === 'stable_html')
+  expect(stable, '稳定版产物应存在').toBeTruthy()
+
+  // Node 侧取产物字节（带会话）；用 data: URL 在新离线页面打开。
+  const bytes = await (await page.request.fetch(`/api/v1/builds/${buildID}/artifacts/${stable!.id}`)).body()
+  const offline = await browser.newContext({ offline: true }).then(ctx => ctx.newPage())
+  const external: string[] = []
+  offline.on('request', request => {
+    const url = request.url()
+    if (!url.startsWith('data:') && !url.startsWith('blob:')) external.push(url)
+  })
+  await offline.goto(`data:text/html;charset=utf-8;base64,${bytes.toString('base64')}`)
+  await offline.waitForTimeout(1500)
+  expect(external, `离线页面不得发起外发请求：${external.slice(0, 5).join(', ')}`).toEqual([])
+  await offline.close()
 })
