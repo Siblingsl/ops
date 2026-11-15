@@ -368,6 +368,8 @@ func TestPlatformProofWhitelistRejectsWildcards(t *testing.T) {
 		"platform.account.sync.request":    {http.MethodPost, "/api/v1/accounts/" + runID + "/platform-account-sync"},
 		"platform.metrics.refresh.request": {http.MethodPost, "/api/v1/accounts/" + runID + "/platform-metrics-refresh"},
 		"platform.sync.operation.resume":   {http.MethodPost, "/api/v1/accounts/" + runID + "/platform-sync-operations/" + runID + "/actions"},
+		// P0-4（CF-P2-CXEF-06）：评论单条上报（新增操作必须同步覆盖白名单测试）。
+		"platform.comment.ingest":          {http.MethodPost, "/api/v1/desktop/platform/comments"},
 	}
 	for op, mp := range accepted {
 		if !desktopOperationPathAllowed(op, mp[0], mp[1]) {
