@@ -157,8 +157,9 @@ func (s *Server) applyArticleTotal(ctx context.Context, a *Account, art wechat.A
 	}
 	if workID == nil {
 		details, _ := json.Marshal(art.Details)
-		if _, err := s.db.Exec(ctx, `INSERT INTO metric_unmatched (account_id, external_id, title, ref_date, details, reason)
-			VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (account_id, external_id) DO UPDATE SET
+		// P0-5：source 标注数据来源（00049 已建列）。本链路只来自微信公众号 API。
+		if _, err := s.db.Exec(ctx, `INSERT INTO metric_unmatched (account_id, external_id, title, ref_date, details, reason, source)
+			VALUES ($1,$2,$3,$4,$5,$6,'wechat_api') ON CONFLICT (account_id, external_id) DO UPDATE SET
 			title=EXCLUDED.title, details=EXCLUDED.details, reason=EXCLUDED.reason, updated_at=now() WHERE metric_unmatched.status='pending'`,
 			a.ID, msgid, art.Title, refDate, details, reason); err != nil {
 			return err

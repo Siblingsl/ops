@@ -87,6 +87,61 @@ var metricMappings = []metricMapping{
 	},
 }
 
+// accountMetricMappings 是账号观测（scope=account）的字段注册表（docs/20 §8.2/§9.3）。
+// 账号观测不写 metric_snapshot（无作品节点），投影目标是 account_metric_daily：
+//   - followers_total（当前总数）→ cumulate（保留 as_of_at，不冒充全天最终值）；
+//   - new_follow_users / cancel_follow_users（单日范围）→ new_follow / cancel_follow；
+//   - net_follow_users（平台只给净增时）→ net_follow，不反推 new/cancel。
+// 单位未逐平台确认前统一 users（人数口径），仅 exact 精度可投影。
+var accountMetricMappings = []metricMapping{
+	{
+		Platform: "xhs", AdapterVersion: "xhs-1", MappingVersion: 1, Scope: observationScopeAccount,
+		Fields: map[string]metricFieldRule{
+			"followers_total":    {Key: "followers_total", Unit: metricUnitUsers, Precision: "exact"},
+			"new_follow_users":   {Key: "new_follow_users", Unit: metricUnitUsers, Precision: "exact"},
+			"cancel_follow_users": {Key: "cancel_follow_users", Unit: metricUnitUsers, Precision: "exact"},
+			"net_follow_users":   {Key: "net_follow_users", Unit: metricUnitUsers, Precision: "exact"},
+		},
+	},
+	{
+		Platform: "wechat_mp", AdapterVersion: "wechat-mp-1", MappingVersion: 1, Scope: observationScopeAccount,
+		Fields: map[string]metricFieldRule{
+			"followers_total":    {Key: "followers_total", Unit: metricUnitUsers, Precision: "exact"},
+			"new_follow_users":   {Key: "new_follow_users", Unit: metricUnitUsers, Precision: "exact"},
+			"cancel_follow_users": {Key: "cancel_follow_users", Unit: metricUnitUsers, Precision: "exact"},
+			"net_follow_users":   {Key: "net_follow_users", Unit: metricUnitUsers, Precision: "exact"},
+		},
+	},
+}
+
+// validateAccountObservationMapping 校验账号观测字段是否登记（与作品映射同规则）。
+func validateAccountObservationMapping(platform, adapterVersion string, mappingVersion int, in platformObservationInput) error {
+	mapping, ok := lookupAccountMetricMapping(platform, adapterVersion, mappingVersion)
+	if !ok {
+		return apiErr(422, "platform_mapping_unsupported", "账号观测映射版本不在支持范围内，请升级客户端")
+	}
+	keys := make([]string, 0, len(in.Values))
+	for k := range in.Values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, exists := mapping.Fields[key]; !exists {
+			return validation("账号观测包含未登记的字段 " + key)
+		}
+	}
+	return nil
+}
+
+func lookupAccountMetricMapping(platform, adapterVersion string, mappingVersion int) (metricMapping, bool) {
+	for _, m := range accountMetricMappings {
+		if m.Platform == platform && m.AdapterVersion == adapterVersion && m.MappingVersion == mappingVersion {
+			return m, true
+		}
+	}
+	return metricMapping{}, false
+}
+
 // validMetricPrecision 限定 precision 的合法取值（§9.1）。
 //
 // 只有 `exact` 会写进正式指标；其余三种都只留在观测里供展示：
@@ -507,6 +562,16 @@ func (s *Server) confirmObservation(ctx context.Context, observationID uuid.UUID
 	if err != nil {
 		return Metric{}, err
 	}
+	// 账号观测不写作品快照：确认结果落在 account_metric_daily，这里返回零值 Metric
+	// 而不是把"无快照"当成错误（P0-5 投影分支）。
+	var scope string
+	if err := s.db.QueryRow(ctx, `SELECT scope FROM platform_metric_observation WHERE id=$1`,
+		observationID).Scan(&scope); err != nil {
+		return Metric{}, err
+	}
+	if scope == observationScopeAccount {
+		return Metric{}, nil
+	}
 	var m Metric
 	if err := s.db.QueryRow(ctx, `SELECT `+metricCols+` FROM metric_snapshot WHERE observation_id=$1`,
 		observationID).Scan(metricDest(&m)...); err != nil {
@@ -554,8 +619,11 @@ func (s *Server) confirmObservationTx(ctx context.Context, tx pgx.Tx, observatio
 		_ = runID
 		_ = batchSeq
 		_ = rowNo
-		_ = windowStart
-		_ = windowEnd
+		// P0-5：账号观测投影需要 window 起止（单日区间判定）；作品路径不用它们。
+		if obs.Scope == observationScopeAccount {
+			obs.WindowStart = windowStart
+			obs.WindowEnd = windowEnd
+		}
 		obs.ExternalID = externalID
 		obs.AsOfAt = asOf
 		adapterVersion = obs.AdapterVersion
@@ -572,6 +640,29 @@ func (s *Server) confirmObservationTx(ctx context.Context, tx pgx.Tx, observatio
 		// 已被更新观测替代的旧观测不能再确认：确认它等于把过时读数写回正式指标。
 		if qualityState == observationQualitySuperseded {
 			return apiErr(409, "platform_result_conflict", "该观测已被更新的观测替代，不能确认")
+		}
+		// 账号观测（scope=account）：不参与作品绑定，投影目标是 account_metric_daily
+		// （docs/20 §9.3）；确认后不写 metric_snapshot、不产生 day_offset。
+		if obs.Scope == observationScopeAccount {
+			if err := validateAccountObservationMapping(platform, adapterVersion, mappingVersion, obs); err != nil {
+				return err
+			}
+			if err := projectAccountMetricDaily(ctx, tx, obs, platform, observationID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE platform_metric_observation
+				SET quality_state=$2, match_state='not_applicable' WHERE id=$1`,
+				observationID, observationQualityValid); err != nil {
+				return err
+			}
+			if err := s.auditTx(ctx, tx, "metric_observation_confirm", "platform_metric_observation",
+				observationID.String(), "ok", map[string]any{
+					"scope": "account", "source": obs.Source, "projected_to": "account_metric_daily",
+					"adapter_version": adapterVersion, "mapping_version": mappingVersion,
+				}); err != nil {
+				return err
+			}
+			return nil
 		}
 		if matchState != observationMatchBound {
 			return apiErr(409, "platform_result_conflict", "该观测尚未匹配到已绑定作品")
@@ -651,6 +742,128 @@ func (s *Server) confirmObservationTx(ctx context.Context, tx pgx.Tx, observatio
 		}
 	}
 	return nil
+}
+
+// projectAccountMetricDaily 把一条账号观测投影进 account_metric_daily（docs/20 §9.3）。
+// 规则：
+//   - followers_total → cumulate：temporal_kind=cumulative/current_total（当前总数），
+//     保留 as_of_at，不冒充全天最终值；interval 必须是单日（同一天起止）才接受。
+//   - new_follow_users / cancel_follow_users → new_follow / cancel_follow：只接受
+//     temporal_kind=interval 且 window 起止落在同一自然日（Asia/Shanghai）。
+//   - net_follow_users → net_follow：同样单日；平台只给净增时用，不反推 new/cancel。
+//   - 写入行 source 按观测来源映射（xhs_browser/wechat_browser），observation_id /
+//     as_of_at 落列；冲突按 (account_id, date, source) 覆盖（同源新读数为准）。
+func projectAccountMetricDaily(ctx context.Context, tx pgx.Tx, obs platformObservationInput, platform string, observationID uuid.UUID) error {
+	loc := time.FixedZone("CST", 8*3600)
+	source := "manual"
+	if obs.Source == "xhs_browser" || obs.Source == "wechat_browser" {
+		source = obs.Source
+	}
+	parseValue := func(key string) (*int64, bool, error) {
+		raw, exists := obs.Values[key]
+		if !exists {
+			return nil, false, nil
+		}
+		var probe struct {
+			Value     *int64 `json:"value"`
+			Precision string `json:"precision"`
+			Unit      string `json:"unit"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil || probe.Value == nil {
+			return nil, false, validation("账号观测字段 " + key + " 无法解析")
+		}
+		if probe.Precision != "exact" || probe.Unit == metricUnitUnknown {
+			// 单位/精度不达标：只存观测（已在观测表），不投影。
+			return nil, false, nil
+		}
+		// net_follow_users 允许负数（掉粉）；其余键必须非负。
+		lower := int64(0)
+		if key == "net_follow_users" {
+			lower = int64(-1e9)
+		}
+		if *probe.Value < lower || *probe.Value > int64(1e12) {
+			return nil, false, apiErr(422, "platform_value_out_of_range", "账号观测数值超出允许范围")
+		}
+		return probe.Value, true, nil
+	}
+	dayOf := func(t time.Time) time.Time {
+		loc2 := t.In(loc)
+		return time.Date(loc2.Year(), loc2.Month(), loc2.Day(), 0, 0, 0, 0, loc)
+	}
+	// cumulate：当前总数。cumulative/current_total 用 as_of_at 当日；interval 须单日。
+	var cumulate *int64
+	if v, ok, err := parseValue("followers_total"); err != nil {
+		return err
+	} else if ok {
+		cumulate = v
+	}
+	// 单日日期解析：cumulative 用 as_of；interval 用 window 起止（同日才有效）。
+	var day time.Time
+	switch obs.TemporalKind {
+	case observationTemporalCumulative, observationTemporalCurrentTotal:
+		if obs.AsOfAt == nil {
+			return validation("账号累计观测缺少统计截止时点")
+		}
+		day = dayOf(*obs.AsOfAt)
+	case observationTemporalInterval:
+		if obs.WindowStart == nil || obs.WindowEnd == nil {
+			return validation("账号区间观测缺少起止时间")
+		}
+		startDay, endDay := dayOf(*obs.WindowStart), dayOf(*obs.WindowEnd)
+		if !startDay.Equal(endDay) {
+			// 跨日区间不能投影成某一天的粉丝变化（§8.2：近 7 日净增不拆成 7 条）。
+			return nil
+		}
+		day = startDay
+	default:
+		return validation("账号观测时间语义不受支持")
+	}
+	var newFollow, cancelFollow, netFollow *int64
+	for key, target := range map[string]**int64{
+		"new_follow_users":    &newFollow,
+		"cancel_follow_users": &cancelFollow,
+		"net_follow_users":    &netFollow,
+	} {
+		v, ok, err := parseValue(key)
+		if err != nil {
+			return err
+		}
+		if ok && obs.TemporalKind == observationTemporalInterval {
+			*target = v
+		}
+		// 当前总数语义下的 new/cancel/net 不投影（读取时刻的计数不是当日净变化）。
+	}
+	if cumulate == nil && newFollow == nil && cancelFollow == nil && netFollow == nil {
+		// 没有可投影字段（全部 unknown/rounded 或非单日）：只存观测即可。
+		return nil
+	}
+	var asOf any
+	if obs.AsOfAt != nil {
+		asOf = *obs.AsOfAt
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO account_metric_daily
+		(account_id, date, source, new_follow, cancel_follow, cumulate, net_follow, observation_id, as_of_at, metric_meta)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		ON CONFLICT (account_id, date, source) DO UPDATE SET
+		new_follow=coalesce(EXCLUDED.new_follow, account_metric_daily.new_follow),
+		cancel_follow=coalesce(EXCLUDED.cancel_follow, account_metric_daily.cancel_follow),
+		cumulate=coalesce(EXCLUDED.cumulate, account_metric_daily.cumulate),
+		net_follow=coalesce(EXCLUDED.net_follow, account_metric_daily.net_follow),
+		observation_id=EXCLUDED.observation_id, as_of_at=EXCLUDED.as_of_at,
+		metric_meta=EXCLUDED.metric_meta, updated_at=now()`,
+		obs.AccountID, day, source, derefInt64(newFollow), derefInt64(cancelFollow), derefInt64(cumulate),
+		derefInt64(netFollow), observationID, asOf,
+		mustJSON(map[string]any{"adapter_version": obs.AdapterVersion, "mapping_version": obs.MappingVersion})); err != nil {
+		return err
+	}
+	return nil
+}
+
+func derefInt64(v *int64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
 }
 
 // metricDayOffset 用发布日与统计截止时点算真实日数；发布日未知时返回 nil（不编造节点）。
