@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -153,6 +154,104 @@ func (s *Server) sweepAgentPluginCalls(ctx context.Context) {
 const pluginCallColumns = "c.id::text, c.connection_id::text, c.workspace_id::text, c.user_id::text," +
 	" COALESCE(c.run_id::text,''), c.tool_name, c.request_id::text, c.input_hash, c.state," +
 	" c.error_code, COALESCE(c.duration_ms,0), c.created_at, c.input_schema_hash, c.catalog_revision, c.protocol_version, c.result_hash"
+
+// pendingPluginCallColumns：桌面领取视图在账本列外追加脱敏入参与连接配置。
+// args_json 已是脱敏快照（runPluginMCPCall 落账前 redactMCPJSON），可以直接下发执行。
+const pendingPluginCallColumns = pluginCallColumns + ", COALESCE(c.args_json, 'null'::jsonb)," +
+	" conn.transport, conn.command, conn.args, conn.cwd, conn.url"
+
+type pendingPluginCallView struct {
+	pluginCallView
+	Args      json.RawMessage `json:"args,omitempty"`
+	Transport string          `json:"transport"`
+	Command   string          `json:"command,omitempty"`
+	ConnArgs  []string        `json:"conn_args,omitempty"`
+	Cwd       string          `json:"cwd,omitempty"`
+	URL       string          `json:"url,omitempty"`
+}
+
+// pendingPluginCalls：桌面执行器领取清单（GET /agent/plugin-calls/pending）。
+// 本人工作区内 dispatched 且未超等待预算的调用（含脱敏 args 与连接启动配置），
+// 每轮限量 10；并发领取由 claim 的 CAS（claimed_at）兜底，重复执行不可能发生。
+// 超预算窗口（pluginCallWaitBudget+2s）的 dispatched 调用属于 sweep 兜底范围，
+// 不再派发——先扫再查，保证 pending 清单永远可执行。
+func (s *Server) pendingPluginCalls(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.pluginGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "plugin_mcp"); err != nil {
+		return err
+	}
+	s.sweepAgentPluginCalls(r.Context())
+	rows, err := s.db.Query(r.Context(), `
+		SELECT `+pendingPluginCallColumns+`
+		FROM agent_plugin_call c JOIN agent_plugin_connection conn ON conn.id=c.connection_id
+		WHERE c.workspace_id=$1 AND c.user_id=$2 AND c.state='dispatched'
+		  AND c.claimed_at IS NULL
+		  AND c.created_at > $3
+		ORDER BY c.created_at ASC LIMIT 10`, id.WorkspaceID, id.UserID,
+		s.now().Add(-(pluginCallWaitBudget + 2*time.Second)))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	calls := []pendingPluginCallView{}
+	for rows.Next() {
+		var v pendingPluginCallView
+		var args []byte
+		var connArgs []string
+		if err := rows.Scan(&v.ID, &v.ConnectionID, &v.WorkspaceID, &v.UserID,
+			&v.RunID, &v.ToolName, &v.RequestID, &v.InputHash, &v.State, &v.ErrorCode,
+			&v.DurationMs, &v.CreatedAt, &v.InputSchemaHash, &v.CatalogRevision, &v.ProtocolVersion,
+			&v.ResultHash, &args, &v.Transport, &v.Command, &connArgs, &v.Cwd, &v.URL); err != nil {
+			return err
+		}
+		if len(args) > 0 {
+			v.Args = json.RawMessage(args)
+		}
+		if connArgs != nil {
+			v.ConnArgs = connArgs
+		}
+		calls = append(calls, v)
+	}
+	return ok(w, map[string]any{"calls": calls})
+}
+
+// claimPluginCall（POST /agent/plugin-calls/{id}/claim）：桌面执行器原子领取。
+// CAS：dispatched 且未领取时写 claimed_at；先到的执行者 claimed=true 拿到执行权，
+// 后到者 claimed=false 如实回当前状态。回执幂等仍由 receipt 的终态语义兜底。
+func (s *Server) claimPluginCall(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.pluginGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "plugin_mcp"); err != nil {
+		return err
+	}
+	callID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return errNotFound
+	}
+	tag, err := s.db.Exec(r.Context(), `
+		UPDATE agent_plugin_call SET claimed_at=now()
+		WHERE id=$1 AND user_id=$2 AND workspace_id=$3 AND state='dispatched' AND claimed_at IS NULL`,
+		callID, id.UserID, id.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	claimed := tag.RowsAffected() > 0
+	v, err := scanPluginCall(s.db.QueryRow(r.Context(),
+		`SELECT `+pluginCallColumns+` FROM agent_plugin_call c WHERE c.id=$1 AND c.user_id=$2 AND c.workspace_id=$3`,
+		callID, id.UserID, id.WorkspaceID))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return errNotFound
+		}
+		return err
+	}
+	return ok(w, map[string]any{"call": v, "claimed": claimed})
+}
 
 type pluginCallView struct {
 	ID              string          `json:"id"`

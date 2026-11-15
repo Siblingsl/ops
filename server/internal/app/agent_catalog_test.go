@@ -291,6 +291,9 @@ func agentClassifiedRouteList() map[string]string {
 		"DELETE /api/v1/agent/plugin-connections/{id}",
 		"POST /api/v1/agent/plugin-calls",
 		"POST /api/v1/agent/plugin-calls/{id}/receipt",
+		// P0-3（CF-DESK-03 桌面消费接线）：桌面执行器领取与 CAS 领取。
+		"GET /api/v1/agent/plugin-calls/pending",
+		"POST /api/v1/agent/plugin-calls/{id}/claim",
 		// DEV-AI27-15（W15）子智能体：父会话与任务面板共用。
 		"POST /api/v1/agent/conversations/{id}/delegation-groups",
 		"GET /api/v1/agent/runs/{id}/delegations",

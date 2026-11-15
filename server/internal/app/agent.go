@@ -1935,6 +1935,10 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Delete("/agent/plugin-connections/{id}", s.h(s.deletePluginConnection))
 		r.Post("/agent/plugin-calls", s.h(s.createPluginCall))
 		r.Post("/agent/plugin-calls/{id}/receipt", s.h(s.receiptPluginCall))
+		// P0-3（CF-DESK-03 桌面消费接线）：桌面执行器领取待执行调用（含脱敏 args 与
+		// 连接配置）与 CAS 领取；回执复用既有 receipt。与 browser/computer 三步协议同形。
+		r.Get("/agent/plugin-calls/pending", s.h(s.pendingPluginCalls))
+		r.Post("/agent/plugin-calls/{id}/claim", s.h(s.claimPluginCall))
 		// DEV-AI27-15（W15）：子智能体委派（27 §11.3）。
 		r.Post("/agent/conversations/{id}/delegation-groups", s.h(s.createDelegationGroup))
 		r.Get("/agent/runs/{id}/delegations", s.h(s.listRunDelegations))

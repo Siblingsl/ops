@@ -24,6 +24,7 @@ import path from 'node:path';
 import { ensureProductBridge, getActiveBridge, startBrowserBridgeDiagnostics, stopActiveBridge } from './browser-bridge';
 import { BrowserCommandExecutor, scheduleNextMs } from './browser-executor';
 import { ComputerCommandExecutor } from './computer-command-executor';
+import { McpCallExecutor } from './mcp-call-executor';
 import { clearComputerAuthorizations, computerAuthorizationGeneration, computerAuthorizationOf } from './computer-authorizations';
 import type { McpHostManager } from './mcp-host';
 import { registerMcpIpcHandlers } from './ipc/mcp';
@@ -316,6 +317,7 @@ function startApplication(): void {
       startPlatformClaimLoop();
       startBrowserCommandExecutor();
   startComputerCommandExecutor();
+  startMcpCallExecutor();
       if (restoredMode === 'incompatible') showFailureWindow();
       else await loadBusinessPage();
     } catch (error) {
@@ -912,6 +914,7 @@ function disposeApplicationResources(): void {
   safeDispose('platform claim loop', stopPlatformClaimLoop);
   safeDispose('browser command executor', stopBrowserCommandExecutor);
   safeDispose('computer command executor', stopComputerCommandExecutor);
+  safeDispose('mcp call executor', stopMcpCallExecutor);
   safeDispose('platform login flow', () => void platformLoginFlow.stop());
   safeDispose('realtime bridge', () => realtimeBridge?.stop());
   safeDispose('mcp host connections', () => mcpHostManager?.stopAll());
@@ -2362,6 +2365,63 @@ let browserExecutorTimer: NodeJS.Timeout | null = null;
 const BROWSER_EXECUTOR_INTERVAL_MS = 3000;
 const BROWSER_EXECUTOR_IDLE_MAX_MS = 12_000;
 let browserExecutorIdleRounds = 0;
+
+// P0-3（CF-DESK-03 桌面消费接线）：run 内 MCP 调用执行器轮询。
+// plugin_mcp 特性默认关（D-187 C 档）；服务端按特性拒绝派发，这里轮询拿到的就是
+// 空清单或 403——403 属预期停轮条件之一，记 lastError 不刷屏。连接实例归
+// McpHostManager（ipc/mcp.ts 单例经 onManagerReady 回传）；执行器只做
+// pending → claim → callTool → receipt 四步，失败即 failed 不重试（契约 §2.3）。
+let mcpExecutorTimerStarted = false;
+let mcpCallExecutor: McpCallExecutor | null = null;
+
+function startMcpCallExecutor(): void {
+  if (mcpExecutorTimerStarted) return;
+  mcpExecutorTimerStarted = true;
+  mcpCallExecutor = new McpCallExecutor({
+    listPending: async () => (desktopClient ? await desktopClient.listPendingPluginCalls() : { calls: [] }),
+    claim: async (id) => {
+      if (!desktopClient) throw new Error('desktop client unavailable');
+      return await desktopClient.claimPluginCall(id);
+    },
+    receipt: async (id, body) => {
+      if (!desktopClient) throw new Error('desktop client unavailable');
+      return await desktopClient.receiptPluginCall(id, body);
+    },
+    connections: async () => {
+      if (!desktopClient) return [];
+      const page = await desktopClient.listPluginConnections().catch(() => ({ connections: [] }));
+      return page.connections ?? [];
+    },
+    host: () => mcpHostManager,
+    startConnection: async (input) => {
+      // 连接启动委托 McpHostManager：配置来自服务端账本（env 键值本机 safeStorage
+      // 不在账本里，stdio env 由 spawn 侧按 env_keys 组装为空——秘密值注入走
+      // 设置页 validate 链路，运行中连接的 env 注入待本机 secret 存储接线后补）。
+      if (!mcpHostManager) throw new Error('mcp_host_unavailable');
+      if (input.transport === 'stdio') {
+        return await mcpHostManager.startStdio(input.connectionId, {
+          command: String(input.command ?? ''),
+          args: Array.isArray(input.args) ? input.args.filter((a): a is string => typeof a === 'string') : [],
+          cwd: typeof input.cwd === 'string' && input.cwd.trim() ? input.cwd.trim() : process.cwd(),
+        });
+      }
+      if (input.transport === 'http') {
+        const url = String(input.url ?? '');
+        if (!url.startsWith('https://')) throw new Error('http 传输要求 https:// 地址');
+        return await mcpHostManager.startHttp(input.connectionId, { url });
+      }
+      throw new Error('transport 只能是 stdio 或 http');
+    },
+    log: (line) => console.log(line)
+  });
+  mcpCallExecutor.start(10_000, 60_000);
+}
+
+function stopMcpCallExecutor(): void {
+  mcpCallExecutor?.stop();
+  mcpCallExecutor = null;
+  mcpExecutorTimerStarted = false;
+}
 
 function startBrowserCommandExecutor(): void {
   if (browserExecutorTimer) return;

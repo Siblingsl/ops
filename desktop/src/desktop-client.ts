@@ -489,6 +489,43 @@ export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(Channel
     });
   }
 
+
+
+  // P0-3（CF-DESK-03 桌面消费接线）：MCP 调用执行器的服务端三步。
+  // pending 领取（含脱敏 args 与连接启动配置）→ CAS claim（先到者执行）→
+  // receipt 回执（终态幂等，复用既有接口）。
+  async listPendingPluginCalls(): Promise<{ calls: Array<{
+    id: string; connection_id: string; tool_name: string; args?: unknown;
+    transport: string; command?: string; conn_args?: string[]; cwd?: string; url?: string;
+    input_schema_hash?: string; catalog_revision?: string; protocol_version?: string;
+    [key: string]: unknown;
+  }> }> {
+    return await this.request('/agent/plugin-calls/pending');
+  }
+
+  async claimPluginCall(id: string): Promise<{ call: { id: string; [key: string]: unknown }; claimed: boolean }> {
+    return await this.request(`/agent/plugin-calls/${encodeURIComponent(id)}/claim`, {
+      method: 'POST',
+      headers: await this.commandMutationHeaders(),
+      body: '{}'
+    });
+  }
+
+  async receiptPluginCall(id: string, body: { state: string; error_code?: string; duration_ms?: number; result?: unknown }): Promise<Record<string, unknown>> {
+    return await this.request(`/agent/plugin-calls/${encodeURIComponent(id)}/receipt`, {
+      method: 'POST',
+      headers: await this.commandMutationHeaders(),
+      body: JSON.stringify(body)
+    });
+  }
+
+  async listPluginConnections(): Promise<{ connections: Array<{
+    id: string; name: string; transport: string; command?: string; args?: string[];
+    cwd?: string; env_keys?: string[]; url?: string; state: string; revision: number;
+    [key: string]: unknown;
+  }> }> {
+    return await this.request('/agent/plugin-connections');
+  }
   // DEV-CU P4-11 收口：电脑命令执行器的服务端三步（pending → CAS dispatch → receipt）。
   // 与 browser 同构；载荷里只有 ref/text，不含归属（grant 由命令行携带）。
   async listPendingComputerCommands(): Promise<{ commands: Array<{ id: string; action_kind: string; grant_id?: string; generation?: number; deadline_at?: string; claimed?: boolean; payload?: unknown; [key: string]: unknown }> }> {
