@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
   articleIDFromURL,
@@ -329,4 +331,27 @@ test('PS-T48：解析失败不能退化成按标题匹配', () => {
   const parsed = parsePublishPage(page([{ publish_type: 1, sent_info: { time: '2026-10-19 08:00' } }]));
   assert.equal(parsed.articles.length, 0);
   assert.equal(parsed.invalidRows, 1);
+});
+
+// P0-2：公众号能力键守卫（与 xhs 的 CF-PS-04 对称）。
+// 服务端 platformSyncCapabilityState 对 wechat_mp + content 读的是 articleDetail——
+// 此前它读 articleContent（DEV-OPS01 单侧写入、从未与适配器对齐），公众号详情能力
+// 永远判不可用；2026-11-16 修为 articleDetail。硬写 supported 是凭空宣称能力
+// （单篇详情请求从未在真实账号实测）。这里锁「键存在且如实 unknown + 跨语言映射一致」。
+test('P0-2 公众号能力快照显式上报 articleDetail 且服务端读同键', () => {
+  const caps = probeCapabilities({
+    backendLoggedIn: true, identity: { externalAccountKey: 'wechat_biz:x', originalID, isAdmin: true },
+    listReadable: true, now: '2026-11-16T00:00:00Z'
+  });
+  assert.ok(Object.prototype.hasOwnProperty.call(caps, 'articleDetail'), 'articleDetail 键不得缺失');
+  assert.equal(caps.articleDetail, 'unknown', '单篇详情未实测时不得声称 supported');
+
+  // 跨语言键一致性：服务端 content 键映射必须仍是 articleDetail，改一处不改另一处等于永远判不可用。
+  const go = fs.readFileSync(path.join(__dirname, '../../server/internal/app/platform_account_sync.go'), 'utf8');
+  assert.match(go, /case "content":[\s\S]{0,300}?key = "articleDetail"/,
+    '服务端 wechat_mp content 键映射必须仍是 articleDetail');
+
+  // 适配器无拉文正文字段：这条断言防止「报 supported 但根本没采正文」。
+  const adapter = fs.readFileSync(path.join(__dirname, '../src/platforms/wechat-mp.ts'), 'utf8');
+  assert.ok(!/body_text|bodyText/.test(adapter), '公众号适配器未实现正文事实字段，不得声称 supported');
 });

@@ -462,7 +462,10 @@ func platformSyncCapabilityState(raw []byte, platform, capability string) string
 		if platform == "xhs" {
 			key = "noteContent"
 		} else if platform == "wechat_mp" {
-			key = "articleContent"
+			// P0-2（2026-11-16）：适配器上报键是 `articleDetail`（DEV-PS06 起、
+			// 20 文档 §18.3 实跑记录一致）；此前这里读 `articleContent` 是单侧写入、
+			// 从未与适配器对齐的映射错，公众号详情能力永远判不可用。
+			key = "articleDetail"
 		}
 	}
 	state, _ := values[key].(string)

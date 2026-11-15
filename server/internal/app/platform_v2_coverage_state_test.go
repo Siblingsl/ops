@@ -27,7 +27,10 @@ func TestPlatformSyncCapabilityStateMapsPerPlatformKey(t *testing.T) {
 		{"小红书指标看 perNoteMetrics", `{"perNoteMetrics":"temporarily_unavailable"}`, "xhs", "metrics", "temporarily_unavailable"},
 		{"公众号指标看 perArticleMetrics", `{"perArticleMetrics":"unsupported"}`, "wechat_mp", "metrics", "unsupported"},
 		{"小红书正文看 noteContent", `{"noteContent":"supported"}`, "xhs", "content", "supported"},
-		{"公众号正文看 articleContent", `{"articleContent":"supported"}`, "wechat_mp", "content", "supported"},
+		// P0-2：适配器上报键是 articleDetail（DEV-PS06 起）；此前测试钉住的 articleContent
+		// 是服务端单侧写入的映射错，公众号详情能力永远判不可用。
+		{"公众号正文看 articleDetail", `{"articleDetail":"supported"}`, "wechat_mp", "content", "supported"},
+		{"公众号正文不认 articleContent 旧键", `{"articleContent":"supported"}`, "wechat_mp", "content", "unknown"},
 		// 平台认不出来时不能借用另一个平台的键，否则等于凭空宣称能力。
 		{"未知平台没有对应键", `{"workList":"supported"}`, "toutiao", "catalog", "unknown"},
 		{"未知能力没有对应键", `{"workList":"supported"}`, "xhs", "profile", "unknown"},
