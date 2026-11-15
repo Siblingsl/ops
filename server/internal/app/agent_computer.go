@@ -15,7 +15,10 @@ import (
 // 授权由本机选窗产生（不透明 target_handle），服务端只管租约生命周期与硬禁区校验。
 // 硬禁区（§11.5.2）：UAC/密码/MFA/终端/宏/任意 Shell——永远拒绝，即使被网页诱导或普通授权。
 // 授权不转全桌面；每次选目标；单租约互斥（每设备一个前台操作者）。
-// 本批实现租约 CRUD + 硬禁区 + 隔离；UIA/视觉执行 worker 属第二批。
+// 本批实现租约 CRUD + 硬禁区 + 隔离。UIA/视觉执行已由 DEV-CU P4/P5 批次交付
+// （agent_computer_commands.go：run 内工具入口 + 显式信封 + 三步账本；渲染器
+// ComputerWindowPicker / ComputerControlBar / ActionCards 电脑确认卡），本文件
+// 只保留租约生命周期；执行接口不再"属第二批"。P0-7（2026-11-16）登记。
 
 type computerGrantView struct {
 	ID             string `json:"id"`
