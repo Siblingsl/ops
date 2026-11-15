@@ -92,6 +92,53 @@ function RewriteResolve({ item, disabled, onResolve }: {
   )
 }
 
+// CF-CX-05：检查页挂接最近一次 HTML 构建的产物渲染指纹（及失败码）；不冒充平台视觉一致。
+function BuildIntegrityNotice({ workId }: { workId: string }) {
+  const q = useQuery({
+    queryKey: ['check-build-integrity', workId],
+    queryFn: async () => {
+      const page = await get<{ items: Array<{ id: string; status: string; error_code: string | null }> }>(`/works/${workId}/builds?limit=1`)
+      const latest = page.items[0]
+      if (!latest) return null
+      if (latest.status !== 'built') {
+        return { status: latest.status, error_code: latest.error_code, fingerprint: '', section_id: '', occurrence: 0 }
+      }
+      const detail = await get<{
+        status: string
+        manifest?: Record<string, unknown>
+        validation?: { section_id?: string; occurrence?: number; privacy?: unknown }
+      }>(`/builds/${latest.id}`)
+      const fp = typeof detail.manifest?.artifact_fingerprint === 'string' ? detail.manifest.artifact_fingerprint : ''
+      const section_id = typeof detail.validation?.section_id === 'string' ? detail.validation.section_id : ''
+      const occurrence = typeof detail.validation?.occurrence === 'number' ? detail.validation.occurrence : 0
+      return { status: detail.status, error_code: null as string | null, fingerprint: fp, section_id, occurrence }
+    },
+  })
+  const info = q.data
+  if (!info) return null
+  if (info.fingerprint) {
+    return (
+      <div data-testid="artifact-fingerprint" className="mb-4">
+        <Notice tone="gray">
+          产物渲染指纹：<code className="break-all text-[12px]">{info.fingerprint}</code>
+          <span className="mt-1 block text-[12px] text-mist-400">仅表示规范化正文与图片证据序列一致，不证明平台视觉一致。</span>
+        </Notice>
+      </div>
+    )
+  }
+  if (info.status === 'failed' && info.error_code) {
+    const loc = [info.section_id && `段 ${info.section_id}`, info.occurrence > 0 && `第 ${info.occurrence} 张图`].filter(Boolean).join(' · ')
+    return (
+      <div data-testid="build-integrity-failure" className="mb-4">
+        <Notice tone="gamboge" icon={<AlertTriangle className="size-4" />}>
+          最近构建未通过（{info.error_code}）{loc ? ` · ${loc}` : ''}。排版语法失败可在编辑器「检查排版语法」查看行列定位。
+        </Notice>
+      </div>
+    )
+  }
+  return null
+}
+
 function escapeRe(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -638,6 +685,7 @@ export default function Check() {
         )}
       </div>
 
+      <BuildIntegrityNotice workId={work.id} />
       {!canWrite && <Notice tone="gray" className="mb-4">观察者只读：可查看检查结果，不能重新检查或确认。</Notice>}
       {run?.stale && !starting && editable && (
         <Notice tone="gamboge" className="mb-4">内容在检查后又修改过。<button className="cursor-pointer font-medium underline" onClick={start}>重新检查</button>，已确认且文字没变的项会保持确认。</Notice>
