@@ -23,8 +23,28 @@ func cu44Setup(t *testing.T) (conv agentConversation, grant computerGrantView) {
 		var ack map[string]any
 		env.mustJSONStatus(t, "DELETE", "/api/v1/agent/computer-grants/"+g.ID, map[string]any{}, &ack, http.StatusAccepted)
 	}
-	grant = w17CreateGrant(t, conv, "cu44:hwnd1", "记事本 - 无标题", "observe")
+	// P1-2 run_id 票据绑定：租约冻结固定 run，命令必须声明同一 run。
+	grant = w17CreateGrantWithRun(t, conv, "cu44:hwnd1", "记事本 - 无标题", "observe", cu44RunID)
 	return conv, grant
+}
+
+// cu44RunID 是 cu44 系列夹具统一冻结的 run（票据绑定测试同键）。
+var cu44RunID = uuid.NewString()
+
+// w17CreateGrantWithRun 建 pending + 确认，租约带 run_id。
+func w17CreateGrantWithRun(t *testing.T, conv agentConversation, targetHandle, targetSummary, scope, runID string) computerGrantView {
+	t.Helper()
+	accepted := w17CreatePendingWithRun(t, conv, targetHandle, targetSummary, scope, uuid.NewString(), runID)
+	if ack := w17AckGrant(t, accepted.GrantID, accepted.Generation, targetSummary); ack.State != "active" {
+		t.Fatalf("设备确认后应 active：%+v", ack)
+	}
+	for _, g := range w17ListGrants(t, conv) {
+		if g.ID == accepted.GrantID {
+			return g
+		}
+	}
+	t.Fatalf("确认后应在活动租约列表中：%s", accepted.GrantID)
+	return computerGrantView{}
 }
 
 func cu44Create(t *testing.T, body map[string]any, wantStatus int) map[string]any {
@@ -35,9 +55,12 @@ func cu44Create(t *testing.T, body map[string]any, wantStatus int) map[string]an
 }
 
 func cu44Body(grant computerGrantView, conv agentConversation, action string, payload map[string]any) map[string]any {
+	// P1-2 run_id 票据绑定：显式信封夹具的租约不冻结 run（w17CreateGrant 不带 run_id），
+	// 因此不得声明 run_id；带 run 的场景用 w17CreatePendingWithRun 建租约。
 	return map[string]any{
-		"grant_id": grant.ID, "run_id": uuid.NewString(), "request_id": uuid.NewString(),
+		"grant_id": grant.ID, "request_id": uuid.NewString(),
 		"expected_generation": grant.Generation, "action": action, "payload": payload,
+		"run_id": cu44RunID,
 	}
 }
 
@@ -127,7 +150,7 @@ func TestComputerCommandRequiresCard(t *testing.T) {
 func TestComputerCommandBudget(t *testing.T) {
 	conv, grant := cu44Setup(t)
 	_ = conv
-	runID := uuid.NewString()
+	runID := cu44RunID
 	for i := 0; i < 60; i++ {
 		body := cu44Body(grant, conv, "observe", map[string]any{})
 		body["run_id"] = runID
@@ -465,3 +488,21 @@ func TestS05ConcurrentGrantCreation(t *testing.T) {
 }
 
 func contextOfTestS05() context.Context { return context.Background() }
+
+// P1-2（docs/37；34 CF-DESK-04 风险④）：run_id 票据绑定——命令声明的 run 必须与
+// 租约冻结的 run 一致；冒用他人 run 的预算窗口与账本归属 409。
+func TestComputerCommandRunBinding(t *testing.T) {
+	conv, grant := cu44Setup(t)
+	_ = conv
+	// 声明非冻结 run → 409
+	body := cu44Body(grant, conv, "observe", map[string]any{})
+	body["run_id"] = uuid.NewString()
+	out := map[string]any{}
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/computer/commands", body, &out, http.StatusConflict)
+	// 冻结 run → 200
+	aligned := cu44Body(grant, conv, "observe", map[string]any{})
+	created := cu44Create(t, aligned, http.StatusOK)
+	if created["run_id"] != cu44RunID {
+		t.Fatalf("冻结 run 应原样入账：%v", created["run_id"])
+	}
+}

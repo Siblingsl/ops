@@ -233,19 +233,26 @@ func (s *Server) createComputerCommand(w http.ResponseWriter, r *http.Request) e
 
 	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
 		// 租约 CAS：active + 未过期 + generation 与调用方期望一致（P1-4 的审批版本）。
+		// P1-2（docs/37；34 CF-DESK-04 风险④）：run_id 票据绑定——调用方声明的 run
+		// 必须与租约冻结的 run 一致（租约无 run 时不得冒充 run 内命令），
+		// 防止借他人/旧 run 的预算窗口与账本归属写入命令。
 		var targetSummary string
+		var grantRunID uuid.UUID
 		err := tx.QueryRow(r.Context(), `
-			SELECT g.conversation_id, g.target_summary
+			SELECT g.conversation_id, g.target_summary, COALESCE(g.run_id,'00000000-0000-0000-0000-000000000000'::uuid)
 			FROM agent_computer_grant g
 			WHERE g.id=$1 AND g.workspace_id=$2 AND g.user_id=$3
 			  AND g.state='active' AND g.expires_at > now() AND g.generation=$4`,
 			grantID, id.WorkspaceID, id.UserID, body.ExpectedGeneration).
-			Scan(&conversationID, &targetSummary)
+			Scan(&conversationID, &targetSummary, &grantRunID)
 		if err == pgx.ErrNoRows {
 			return apiErr(409, "computer_stale_ref", "租约不存在、已过期、已撤销或 generation 不匹配")
 		}
 		if err != nil {
 			return err
+		}
+		if runID != uuid.Nil && grantRunID != runID {
+			return apiErr(409, "computer_stale_ref", "run_id 与租约冻结的任务不一致")
 		}
 		if computerIsHardForbidden(targetSummary) {
 			return apiErr(403, "computer_policy_denied", "目标命中硬禁区，永远拒绝")

@@ -180,14 +180,16 @@ func TestComputerCommandWriteCardConfirm(t *testing.T) {
 	}
 	cardID := cardUUID.String()
 
-	// 错 hash → 409
+	// 错 hash → 409（run_id 覆盖为本文件租约冻结的 run）
 	wrong := cu44Body(grant, conv, "invoke", map[string]any{"ref": "@sabc123:e1"})
+	wrong["run_id"] = runID
 	wrong["card_id"] = cardID
 	wrong["approval_hash"] = "deadbeef"
 	cu44Create(t, wrong, http.StatusConflict)
 
 	// 正确凭证 → queued
 	right := cu44Body(grant, conv, "invoke", map[string]any{"ref": "@sabc123:e1"})
+	right["run_id"] = runID
 	right["card_id"] = cardID
 	right["approval_hash"] = hash
 	created := cu44Create(t, right, http.StatusOK)
@@ -220,6 +222,7 @@ func TestComputerCommandWriteCardConfirm(t *testing.T) {
 
 	// 同一张卡二次执行 → 409（凭证已消费）
 	again := cu44Body(grant, conv, "invoke", map[string]any{"ref": "@sabc123:e1"})
+	again["run_id"] = runID
 	again["card_id"] = cardID
 	again["approval_hash"] = hash
 	cu44Create(t, again, http.StatusConflict)
