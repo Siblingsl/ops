@@ -162,3 +162,24 @@ test('PS-T38：滚动续读先注册监听再滚动，滚到底返回“没有�
   assert.equal(await source.fetchSignedNextPage('/cgi-bin/switchacct?action=switch_acct'), null);
   assert.equal(order.length, before, '未登记滚动的接口不应触发任何浏览器调用');
 });
+
+// CF-PS-07：宿主必须注入 fetchNoteDetail/fetchComments，但登记表为空时一律回 null——
+// 详情 endpoint 未经真账号抓包实测前，宿主不构造任何平台 URL（21 §十七点六十七）。
+test('P0-1 宿主注入详情/评论只读源，未登记契约时按缺失处理而不是臆造请求', async () => {
+  const session = {
+    platform: 'xhs',
+    profileDir: 'C:\\profiles\\xhs',
+    browser: { child: {}, send: () => {}, onMessage: () => {}, failure: () => null, close: async () => {} },
+    cdp: {
+      request: async () => { throw new Error('未登记契约不得触发任何浏览器调用'); },
+      collectResponses: async () => { throw new Error('未登记契约不得注册任何监听'); }
+    }
+  };
+  const source = createPageResponseSource(session);
+  assert.equal(typeof source.fetchNoteDetail, 'function', '详情源必须注入（能力判定靠它区分缺失与不支持）');
+  assert.equal(typeof source.fetchComments, 'function', '评论源必须注入');
+  const detail = await source.fetchNoteDetail('6f0000000000000000000001');
+  assert.equal(detail, null, '登记表为空时详情读取必须回 null，让适配器记 detail_source_missing');
+  const comments = await source.fetchComments('6f0000000000000000000001');
+  assert.equal(comments, null, '登记表为空时评论读取必须回 null，不冒充已授权读取');
+});

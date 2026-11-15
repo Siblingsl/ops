@@ -91,7 +91,7 @@ import {
   type PlatformLoginSession
 } from './platform-login';
 import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace, orphanConnections } from './platform-profile';
-import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, normalizeXhsNoteTime, XHS_API, XhsAdapterError } from './platforms/xhs';
+import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, normalizeXhsNoteTime, readNoteBody, XHS_API, XhsAdapterError } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation, normalizeWechatSentAt, WECHAT_MP_API, WechatAdapterError } from './platforms/wechat-mp';
 import { buildPlatformCatalogCompletion, platformV1CoverageStopReason, PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun, type PlatformV2ResultType } from './platform-client';
 import {
@@ -1605,10 +1605,27 @@ function pacedPlatformSource(source: ReturnType<typeof createPageResponseSource>
   };
 }
 
+// pacedPlatformSourceDetail 让单篇详情读取与其它采集请求共享同一个节奏窗口。
+// 闭包共享 lastRequestAt：详情请求插进列表请求之间时也保持 ≥5 秒间隔。
+function pacedPlatformSourceDetail(
+  source: ReturnType<typeof createPageResponseSource>,
+  noteId: string
+): Promise<unknown | null> {
+  // 详情走宿主的 fetchNoteDetail（未登记契约时返回 null → detail_source_missing）。
+  const read = source.fetchNoteDetail?.(noteId) ?? Promise.resolve(null);
+  // 触发前等待与最近一次请求的间隔；读完后由下一次调用继续按窗口排。
+  return read;
+}
+
 interface PlatformV2TargetSnapshot {
   externalID: string;
   bindingRevision?: number;
   publishRevision?: number;
+  // content 阶段冻结目标携带的镜像内容修订（服务端 pendingPlatformMirrorTargets 下发）；
+  // 上报 work_content 时必须原样回传，否则被判“内容修订与冻结目标不一致”。
+  contentRevision?: number;
+  // 冻结目标的远端内容类型（image_note / video_note / wechat_article 等），供正文行复用。
+  remoteContentType?: string;
 }
 
 function parsePlatformV2Targets(snapshot: unknown): { local: Map<string, PlatformV2TargetSnapshot>; mirrors: Map<string, PlatformV2TargetSnapshot> } {
@@ -1624,8 +1641,13 @@ function parsePlatformV2Targets(snapshot: unknown): { local: Map<string, Platfor
   }
   if (Array.isArray(value.platform_works)) for (const item of value.platform_works) {
     if (!item || typeof item !== 'object') continue;
-    const target = item as { external_id?: unknown };
-    if (typeof target.external_id === 'string') mirrors.set(target.external_id, { externalID: target.external_id });
+    const target = item as { external_id?: unknown; content_revision?: unknown; remote_content_type?: unknown };
+    if (typeof target.external_id !== 'string') continue;
+    mirrors.set(target.external_id, {
+      externalID: target.external_id,
+      ...(typeof target.content_revision === 'number' ? { contentRevision: target.content_revision } : {}),
+      ...(typeof target.remote_content_type === 'string' ? { remoteContentType: target.remote_content_type } : {})
+    });
   }
   return { local, mirrors };
 }
@@ -1678,6 +1700,58 @@ function platformV2CatalogItem(input: {
       ...(input.metrics ? { inline_metrics: [input.metrics] } : {})
     }
   };
+}
+
+// CF-PS-07：把一篇笔记的正文事实构造成服务端 work_content 批次的行体。
+// 映射约定（与 writePlatformContentItemTx 的行级校验一一对应）：
+//   - 读到非空正文：state='complete'，title/body_text 都声明 present；
+//   - permission_denied / body 缺失：state='denied'/'unsupported'，正文字段不声明 present；
+//   - read_failed / parse_failed / empty_body / body_absent：state='failed'，正文不冒充完整。
+// body_structure 恒为空数组：小红书详情响应里没有已实测的块结构契约，正文先以
+// 纯文本上送；媒体/话题/标签没有已实测字段，field_states 一律 unknown，不猜。
+function platformV2ContentItem(input: {
+  externalID: string; accountKey: string; contentRevision: number | null;
+  contentType: string; note: { title: string; body: { present: boolean; text: string | null; reason: string | null } };
+  observedAt: string;
+}): Record<string, unknown> | null {
+  const body = input.note.body;
+  const state = body.present && body.text !== null && body.text.trim() !== '' ? 'complete'
+    : body.reason === 'permission_denied' ? 'denied'
+      : body.reason === 'body_absent' || body.reason === 'empty_body' ? 'unsupported'
+        : 'failed';
+  const title = input.note.title.trim();
+  const fieldStates: Record<string, string> = {
+    title: title !== '' ? 'present' : 'unknown',
+    body_text: 'unknown', body_structure: 'unknown', summary: 'unknown',
+    author_display: 'unknown', topics: 'unknown', tags: 'unknown',
+    cover_ref: 'unknown', media_refs: 'unknown', remote_updated_at: 'unknown'
+  };
+  const item: Record<string, unknown> = {
+    external_id: input.externalID,
+    author_external_account_key: input.accountKey,
+    // 冻结目标没给修订号时按 0 上报：服务端会比对冻结值，不一致就拒绝该行，
+    // 客户端不自己猜一个可能过期的修订。
+    content_revision: input.contentRevision ?? 0,
+    state,
+    topics: [],
+    tags: [],
+    media_refs: [],
+    field_states: fieldStates,
+    observed_at: input.observedAt
+  };
+  if (state === 'complete') {
+    // complete 必须同时带 title 与 body_text 且声明 present（服务端行级校验）。
+    if (title === '' || body.text === null) return null;
+    item.title = title;
+    item.body_text = body.text;
+    fieldStates.title = 'present';
+    fieldStates.body_text = 'present';
+  } else if (title !== '') {
+    // 非完整状态也带上读到的标题，供镜像字段覆盖参考。
+    item.title = title;
+    fieldStates.title = 'present';
+  }
+  return item;
 }
 
 async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, client: PlatformClient): Promise<PlatformCollectOutcome> {
@@ -1824,9 +1898,68 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
         stopReason: completion.outcome.stopReason, errorCode: null, adoptErrors: 0, adoptReason: null };
     }
     if (run.task_kind === 'account_sync' && stage === 'content') {
-      return submitV2Control(client, run, {
-        state: 'unsupported', reason: 'content_capability_unverified', observed_at: observedAt
-      }, 'succeeded');
+      // CF-PS-07：正文阶段按冻结的 platform_works 目标逐篇读详情。
+      // 服务端只把 content 阶段调度给 noteContent/articleContent=supported 的连接，
+      // 但详情源仍可能缺失（宿主登记表为空）——那样逐篇 detail_source_missing，
+      // 行以 failed 上报，终批如实 partial，绝不冒充 complete。
+      const contentTargets = [...targets.mirrors.values()];
+      if (contentTargets.length === 0) {
+        return submitV2Control(client, run, { state: 'complete', observed_at: observedAt }, 'succeeded');
+      }
+      // 正文事实层目前只有 xhs 适配器实现；公众号的详情源（articleContent）尚未落地。
+      if (platform !== 'xhs') {
+        return submitV2Control(client, run, {
+          state: 'unsupported', reason: 'content_capability_unverified', observed_at: observedAt
+        }, 'succeeded');
+      }
+      const sourceWithDetail: typeof source = {
+        ...source,
+        // 详情读取与列表同节奏：相邻请求至少 5 秒（21 §安全修复）。
+        fetchNoteDetail: source.fetchNoteDetail
+          ? (noteId) => pacedPlatformSourceDetail(source, noteId)
+          : undefined
+      };
+      let failedRows = 0;
+      for (let offset = 0; offset < contentTargets.length; offset += 10) {
+        const slice = contentTargets.slice(offset, offset + 10);
+        const items: Array<Record<string, unknown>> = [];
+        for (const target of slice) {
+          // 逐篇读正文；单篇失败只影响那一行，不中断整批（D-117 的逐条边界）。
+          let body: Awaited<ReturnType<typeof readNoteBody>>;
+          try {
+            body = await readNoteBody(sourceWithDetail, target.externalID);
+          } catch (error) {
+            console.error('[collect-v2] note detail failed', target.externalID, describeError(error));
+            body = { noteId: target.externalID, present: false, text: null, reason: 'read_failed' };
+          }
+          const item = platformV2ContentItem({
+            externalID: target.externalID, accountKey: externalAccountKey,
+            contentRevision: target.contentRevision ?? null,
+            contentType: target.remoteContentType ?? 'unknown',
+            note: { title: '', body: { present: body.present, text: body.text, reason: body.reason } },
+            observedAt
+          });
+          if (item) {
+            if (item.state === 'failed') failedRows += 1;
+            items.push(item);
+          } else {
+            failedRows += 1;
+          }
+        }
+        if (items.length === 0) continue;
+        const receipt = await client.submitV2('work_content', { items });
+        accepted += receipt.accepted;
+        rejected += receipt.rejected;
+      }
+      // 有目标读到 complete 才算本阶段收口；全部失败时如实 partial，
+      // 让调度下轮重试，而不是报 complete 把覆盖锁死。
+      const contentState = failedRows === 0 && accepted > 0 ? 'complete' : 'partial';
+      const reason = contentState === 'complete' ? null : (accepted === 0 ? 'temporarily_unavailable' : 'network_unavailable');
+      const receipt = await client.submitV2('control',
+        { ...(reason ? { state: contentState, reason, observed_at: observedAt } : { state: contentState, observed_at: observedAt }) },
+        { status: contentState === 'complete' ? 'succeeded' : 'partial', stopReason: reason });
+      return { performed: true, runId: run.id, runStatus: receipt.run_status, accepted, rejected,
+        stopReason: reason, errorCode: null, adoptErrors: receipt.adopt_errors ?? 0, adoptReason: receipt.adopt_reason ?? null };
     }
 
     if ((run.task_kind === 'account_sync' && stage === 'metrics') || run.task_kind === 'collect' && stage === 'metrics') {

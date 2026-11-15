@@ -241,6 +241,11 @@ export function createPageResponseSource(session: PlatformLoginSession): {
   fetchSigned: (path: string) => Promise<unknown>;
   fetchSignedNextPage: (path: string) => Promise<unknown | null>;
   observeResponse: (pathPrefix: string, trigger: () => Promise<void>, timeoutMs?: number) => Promise<unknown>;
+  // CF-PS-07：单篇详情只读源。与列表同构——只监听页面自发请求，不构造平台 URL。
+  // 登记表未收录详情 endpoint 时返回 null，适配器把 noteContent 保持 unknown。
+  fetchNoteDetail?: (noteId: string) => Promise<unknown | null>;
+  // CF-P2-CXEF-06：评论只读源。同样的只读监听路径，未登记返回 null。
+  fetchComments?: (noteId: string) => Promise<unknown | null>;
 } {
   const observe = async (pathPrefix: string, trigger: () => Promise<void>, timeoutMs = 30_000) => {
     assertReadOnlyPath(pathPrefix);
@@ -255,7 +260,7 @@ export function createPageResponseSource(session: PlatformLoginSession): {
     }
     return body;
   };
-  return {
+  const baseSource = {
     fetchJSON: async (path: string) => {
       // 公众号后台的接口必须带页面 URL 里的 token，否则回 invalid csrf token。
       const needsToken = PATH_TOKEN_PLATFORMS.includes(session.platform);
@@ -344,7 +349,46 @@ export function createPageResponseSource(session: PlatformLoginSession): {
       return null;
     }
   };
+  // CF-PS-07 / CF-P2-CXEF-06：单篇详情与评论只读源。
+  // 请求形状由 NOTE_DETAIL_TRIGGERS 登记表给出——只监听页面自己发出的请求，
+  // 不构造平台 URL、不复制签名（与 fetchSigned 同构）。endpoint 只有在真账号
+  // 现场核验并登记后才会生效；未登记时返回 null，适配器按 detail_source_missing
+  // 处理，noteContent 能力保持 unknown，绝不臆造请求冒充可读（21 §十七点六十七）。
+  const readByTrigger = async (noteId: string): Promise<unknown | null> => {
+    const trigger = NOTE_DETAIL_TRIGGERS[session.platform];
+    if (!trigger) return null;
+    const id = noteId.trim();
+    // note_id 只允许平台 ID 的安全字符，拼进监听前缀前先拦掉意外输入。
+    if (id === '' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
+    try {
+      return await observe(trigger.observe, async () => {
+        await trigger.navigate(session.cdp, id);
+      }, trigger.timeoutMs ?? 20_000);
+    } catch (error) {
+      // 触发页面没打开或监听超时：交回 null 让适配器记 read_failed，
+      // 不把偶发导航失败升级成整次采集失败。
+      if (error instanceof PlatformBrowserError && error.code === 'platform_navigation_failed') return null;
+      throw error;
+    }
+  };
+  return {
+    ...baseSource,
+    fetchNoteDetail: readByTrigger,
+    fetchComments: readByTrigger
+  };
 }
+
+// NOTE_DETAIL_TRIGGERS 登记“平台 → 单篇详情/评论的只读监听方式”。
+// navigate 只允许两类动作：导航到登记过的官方页面，或只读 DOM 滚动/点击由页面
+// 自己发起请求；禁止构造带 noteId 的平台 URL（该 endpoint 形态未经真账号抓包
+// 实测，臆造 URL 违反 21 文档「凭空宣称能力」红线）。当前两个平台都还没有
+// 已实测的详情 endpoint，因此整表为空——这就是生产链路 noteContent 恒 unknown
+// 的直接原因，登记真契约后由宿主版本更新补上。
+const NOTE_DETAIL_TRIGGERS: Readonly<Record<string, {
+  observe: string;
+  navigate: (cdp: CDPPageClient, noteId: string) => Promise<void>;
+  timeoutMs?: number;
+}>> = Object.freeze({});
 
 // SCROLL_LIST_TO_END_SCRIPT 把页面里“真正可滚动的那个列表容器”滚到底部。
 // 只读：只改 scrollTop，不发请求、不读数据。
