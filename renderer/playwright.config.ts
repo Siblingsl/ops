@@ -119,6 +119,7 @@ export default defineConfig({
         'cx09-visual-plan.spec.ts',
         'cx09-cards-build.spec.ts',
         'cx16-form-orchestration.spec.ts',
+        'tpl-switch.spec.ts',
         'cx11-paste-image-desktop.spec.ts',
         'g4-image-upload-desktop.spec.ts',
         'g2-image-library-electron.spec.ts',

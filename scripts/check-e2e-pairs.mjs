@@ -27,6 +27,7 @@ const ALLOWLIST = new Map([
   ['cx09-visual-plan.spec.ts', '社交组图 AI/手工计划与本机预览：浏览器 vs 真实 Electron'],
   ['cx09-cards-build.spec.ts', '组图 options.cards 采用与 xhs_cards ZIP 校验：浏览器 vs 真实 Electron'],
   ['cx16-form-orchestration.spec.ts', '一稿多形态编排：产物 vs 派生、无批量入口：浏览器 vs 真实 Electron'],
+  ['tpl-switch.spec.ts', 'G3-15/T5-3 编辑器模板切换：切换不改段落且大纲可用：浏览器 vs 真实 Electron'],
   ['cx18-benchmark.spec.ts', '对标账号库、四问投影与笔记拆解：浏览器 vs 桌面工作台'],
   ['cx11-title-diagnosis.spec.ts', '标题诊断与候选采用：浏览器 vs 真实 Electron'],
   ['cx11-topic-diagnosis.spec.ts', '选题体检历史、部分结果与逐项采用：浏览器 vs 真实 Electron'],
