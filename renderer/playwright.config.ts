@@ -15,6 +15,7 @@ process.env.OPS_E2E_MOCK_BASE_URL = 'http://127.0.0.1:8297/v1'
 const desktopOnly = [
   'cx01-task-list-desktop.spec.ts',
   'cx13-comment-inbox.spec.ts',
+  'cx13-account-timezone-desktop.spec.ts',
   'cx13-standards.spec.ts',
   'cx12-skeleton-reference.spec.ts',
   'cx18-benchmark.spec.ts',
@@ -25,6 +26,9 @@ const desktopOnly = [
   'cx03-section-evidence-desktop.spec.ts',
   'cx02-desktop-build-panel.spec.ts',
   'session-failure.spec.ts',
+  'qa26-b1-endform-desktop.spec.ts',
+  'qa26-b6-profile-positioning-desktop.spec.ts',
+  'gate03-default-tiering-desktop.spec.ts',
   'desktop-images-restoration.spec.ts',
   'desktop-creative-ui.spec.ts',
   'desktop-quick-collect.spec.ts',
@@ -63,6 +67,7 @@ const sharedScenarios = [
   'agent-events.spec.ts',
   'agent-goals.spec.ts',
   'agent-modes.spec.ts',
+  'agent-memory-override.spec.ts',
   'agent-plans-questions.spec.ts',
   'agent-routines.spec.ts',
   'd122-ui-layout.spec.ts',
@@ -73,7 +78,7 @@ const sharedScenarios = [
   'sec-tiptap3-bubble-menu.spec.ts',
 ]
 
-const apiFeatures = 'workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines,document_parse,chrome_connect,browser_workspace,plugin_mcp'
+const apiFeatures = 'workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines,document_parse,chrome_connect,browser_workspace,plugin_mcp,personal_memories'
 
 export default defineConfig({
   outputDir: '../.playwright-results/desktop-renderer',
@@ -101,6 +106,7 @@ export default defineConfig({
       name: 'desktop-windows-electron',
       testMatch: [
         'agent-workbench-ai27-workview.spec.ts',
+        'agent-workbench-aw05-electron.spec.ts',
         'inbrowse-real-electron.spec.ts',
         'plugins-settings.spec.ts',
         'desktop-window-drag.spec.ts', 'platform-intents-real-electron.local.spec.ts',
@@ -110,8 +116,9 @@ export default defineConfig({
         'cx11-title-diagnosis.spec.ts',
         'cx11-topic-diagnosis.spec.ts',
         'cx13-topic-stock-desktop.spec.ts',
-        'cx09-visual-plan-desktop.spec.ts',
-        'cx09-cards-build-desktop.spec.ts',
+        'cx09-visual-plan.spec.ts',
+        'cx09-cards-build.spec.ts',
+        'cx16-form-orchestration.spec.ts',
         'cx11-paste-image-desktop.spec.ts',
         'g4-image-upload-desktop.spec.ts',
         'g2-image-library-electron.spec.ts',
