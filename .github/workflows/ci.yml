@@ -282,6 +282,9 @@ jobs:
       - name: E2E 同名用例守卫
         working-directory: .
         run: node scripts/check-e2e-pairs.mjs
+      - name: BE-03 权限矩阵清单守卫
+        working-directory: .
+        run: node scripts/check-route-permissions.mjs --check
       - name: Install desktop renderer for UI tests
         if: matrix.shard == 1
         run: pnpm --dir ../renderer install --frozen-lockfile
