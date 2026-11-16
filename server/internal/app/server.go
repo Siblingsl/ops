@@ -57,8 +57,10 @@ type Server struct {
 
 	// lastPacks keeps the latest context per workspace/task in memory only, for saving prompt regression cases.
 	lastPacks sync.Map
-	crawlMu   sync.Mutex
-	crawler   *crawl.Client
+	// contextPacks：BE-05 账号依据片段短 TTL 缓存（与 lastPacks 分离）。
+	contextPacks *contextPackCache
+	crawlMu      sync.Mutex
+	crawler      *crawl.Client
 
 	// handler 缓存首次构建的根路由（16 文档第 2.3 节「身份」第 1 项）。
 	handlerOnce sync.Once
@@ -110,6 +112,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 		notifySubs:                 map[uuid.UUID][]chan struct{}{},
 		presence:                   map[uuid.UUID]map[uuid.UUID]presenceEntry{},
 	}
+	s.contextPacks = newContextPackCache(s.now)
 	s.bindRuntimeGates()
 	return s, nil
 }

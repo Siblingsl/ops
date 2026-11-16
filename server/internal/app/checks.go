@@ -1216,11 +1216,20 @@ func (s *Server) standardChangedSinceRun(ctx context.Context, workID uuid.UUID, 
 	}
 	var currentVersion int
 	var currentHash string
+	var tzName string
+	if err := s.db.QueryRow(ctx, `SELECT ap.timezone FROM work w JOIN account_profile ap ON ap.account_id = w.account_id WHERE w.id = $1`, workID).Scan(&tzName); err == nil && strings.TrimSpace(tzName) == "" {
+		tzName = "Asia/Shanghai"
+	} else if err != nil {
+		tzName = "Asia/Shanghai"
+	}
+	if _, err := time.LoadLocation(tzName); err != nil {
+		tzName = "Asia/Shanghai"
+	}
 	err := s.db.QueryRow(ctx, `SELECT os.version, os.content_hash
 		FROM ops_standard os
 		JOIN work w ON w.account_id = os.account_id
-		WHERE w.id = $1 AND os.effective_from <= (now() AT TIME ZONE 'Asia/Shanghai')::date
-		ORDER BY os.effective_from DESC, os.version DESC LIMIT 1`, workID).
+		WHERE w.id = $1 AND os.effective_from <= (now() AT TIME ZONE $2)::date
+		ORDER BY os.effective_from DESC, os.version DESC LIMIT 1`, workID, tzName).
 		Scan(&currentVersion, &currentHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false

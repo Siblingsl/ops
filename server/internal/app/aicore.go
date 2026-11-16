@@ -457,7 +457,7 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 		refs["task_type"] = t.Type
 		refs["model"] = cur.ProviderName + " / " + cur.Model
 		refs["prompt_version"] = tplVersion
-		start := time.Now()
+		start := s.now()
 		text, usage, callErr := s.callModel(ctx, cur, pack, t.JSON, onDelta, &streamed)
 		var basisErr error
 		if callErr == nil && basis != nil {
@@ -485,7 +485,7 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 		if err := s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO ai_call (workspace_id, account_id, work_id, task_type, provider, model, template_version, context_refs,
 			prompt_tokens, completion_tokens, latency_ms, status, error, context_owner_user_id, private_context_refs) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
 			ident(ctx).WorkspaceID, accountID, t.WorkID, t.Type, cur.ProviderName, cur.Model, tplVersion, refsJSON, usage.PromptTokens, usage.CompletionTokens,
-			time.Since(start).Milliseconds(), status, truncate(errText, 500), ownerID, privateJSON).Scan(&callID); err != nil {
+			s.now().Sub(start).Milliseconds(), status, truncate(errText, 500), ownerID, privateJSON).Scan(&callID); err != nil {
 			return nil, err
 		}
 		if basisErr != nil {
@@ -495,7 +495,7 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 			return nil, basisErr
 		}
 		if callErr == nil {
-			refs["latency_ms"] = time.Since(start).Milliseconds()
+			refs["latency_ms"] = s.now().Sub(start).Milliseconds()
 			refs["tokens"] = usage.PromptTokens + usage.CompletionTokens
 			// DEEP-03：旁路采样公共已用技能；失败只打日志，不阻断主链路。
 			s.recordSkillOutcomesFromSnap(context.WithoutCancel(ctx), callID, t.WorkID, t.Type, snap)
@@ -543,6 +543,12 @@ func (s *Server) afterAISuccess(ctx context.Context, t aiTask, p *ContextPack) {
 				Extras: map[string]any{"task": t.Type, "err": err.Error()},
 			})
 		}
+	}
+	// BE-05：账号 AI 成功后一律失效依据缓存。
+	// 仅在 MemoryIDs 非空时失效会漏掉「大纲成功 → 确认大纲 → 分段起草」：
+	// 无记忆计数时 3s TTL 内仍命中旧 pack，cx_basis 的 as_of/revision 与库内不一致 → version_conflict。
+	if t.Account != nil {
+		s.invalidateContextPackCache(ctx, t.Account.ID)
 	}
 	if p.Instruction != "" && t.Account != nil {
 		s.learnFromInstruction(ctx, t.Account, p.Instruction)

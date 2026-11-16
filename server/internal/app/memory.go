@@ -31,6 +31,7 @@ type Profile struct {
 	StyleSummary     string            `json:"style_summary"`
 	DefaultTheme     string            `json:"default_theme"`
 	WechatDefaults   WechatDefaults    `json:"wechat_defaults"`
+	Timezone         string            `json:"timezone"`
 	TopicStockPolicy *TopicStockPolicy `json:"topic_stock_policy,omitempty"`
 	UpdatedAt        time.Time         `json:"-"`
 }
@@ -38,13 +39,17 @@ type Profile struct {
 func (s *Server) loadProfile(ctx context.Context, accountID uuid.UUID) (*Profile, error) {
 	p := Profile{AccountID: accountID}
 	var wd, policy []byte
-	err := s.db.QueryRow(ctx, `SELECT positioning_tags, target_audience, persona_tone, banned_words, style_summary, default_theme, wechat_defaults, topic_stock_policy, updated_at
+	err := s.db.QueryRow(ctx, `SELECT positioning_tags, target_audience, persona_tone, banned_words, style_summary, default_theme, wechat_defaults, topic_stock_policy, timezone, updated_at
 		FROM account_profile WHERE account_id=$1`, accountID).Scan(&p.PositioningTags, &p.TargetAudience, &p.PersonaTone,
-		&p.BannedWords, &p.StyleSummary, &p.DefaultTheme, &wd, &policy, &p.UpdatedAt)
+		&p.BannedWords, &p.StyleSummary, &p.DefaultTheme, &wd, &policy, &p.Timezone, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(wd, &p.WechatDefaults)
+	// CF-P2-CXEF-04：空时区按缺省 Asia/Shanghai 返回（库层存原文，缺省口径不变）。
+	if p.Timezone == "" {
+		p.Timezone = "Asia/Shanghai"
+	}
 	// FR-CX-19：旧档案缺配置时读取补默认但 GET 不写库；缺省由服务端水位计算回退。
 	var stored TopicStockPolicy
 	if err := json.Unmarshal(policy, &stored); err == nil && stored.TargetReady > 0 {
@@ -114,20 +119,28 @@ func (s *Server) putProfile(w http.ResponseWriter, r *http.Request) error {
 			return validation("库存水位需要 1 ≤ 补给警戒 ≤ 目标库存 ≤ 100")
 		}
 	}
+	// CF-P2-CXEF-04：账号级 IANA 时区；空值=缺省 Asia/Shanghai，非法时区 422。
+	in.Timezone = strings.TrimSpace(in.Timezone)
+	if in.Timezone == "" {
+		in.Timezone = "Asia/Shanghai"
+	}
+	if _, err := time.LoadLocation(in.Timezone); err != nil {
+		return validation("账号时区须为有效 IANA 时区名")
+	}
 	wd, _ := json.Marshal(in.WechatDefaults)
 	if in.TopicStockPolicy != nil {
 		pb, _ := json.Marshal(in.TopicStockPolicy)
 		if _, err := s.db.Exec(r.Context(), `UPDATE account_profile SET positioning_tags=$2, target_audience=$3, persona_tone=$4,
-			banned_words=$5, style_summary=$6, default_theme=$7, wechat_defaults=$8, topic_stock_policy=$9::jsonb, updated_at=now() WHERE account_id=$1`,
+			banned_words=$5, style_summary=$6, default_theme=$7, wechat_defaults=$8, topic_stock_policy=$9::jsonb, timezone=$10, updated_at=now() WHERE account_id=$1`,
 			a.ID, cleanList(in.PositioningTags), strings.TrimSpace(in.TargetAudience), strings.TrimSpace(in.PersonaTone),
-			cleanList(in.BannedWords), strings.TrimSpace(in.StyleSummary), in.DefaultTheme, wd, string(pb)); err != nil {
+			cleanList(in.BannedWords), strings.TrimSpace(in.StyleSummary), in.DefaultTheme, wd, string(pb), in.Timezone); err != nil {
 			return err
 		}
 	} else {
 		if _, err := s.db.Exec(r.Context(), `UPDATE account_profile SET positioning_tags=$2, target_audience=$3, persona_tone=$4,
-			banned_words=$5, style_summary=$6, default_theme=$7, wechat_defaults=$8, updated_at=now() WHERE account_id=$1`,
+			banned_words=$5, style_summary=$6, default_theme=$7, wechat_defaults=$8, timezone=$9, updated_at=now() WHERE account_id=$1`,
 			a.ID, cleanList(in.PositioningTags), strings.TrimSpace(in.TargetAudience), strings.TrimSpace(in.PersonaTone),
-			cleanList(in.BannedWords), strings.TrimSpace(in.StyleSummary), in.DefaultTheme, wd); err != nil {
+			cleanList(in.BannedWords), strings.TrimSpace(in.StyleSummary), in.DefaultTheme, wd, in.Timezone); err != nil {
 			return err
 		}
 	}
@@ -135,6 +148,7 @@ func (s *Server) putProfile(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	s.invalidateContextPackCache(r.Context(), a.ID)
 	return ok(w, p)
 }
 

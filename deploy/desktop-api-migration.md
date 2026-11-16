@@ -149,3 +149,17 @@ Access-Control-Allow-Credentials: true
 - CORS 预检不是 `204`：检查容器内 `OPS_CORS_ORIGINS` 是否精确为 `ops-desktop://business`，且无尾斜线或多余空格。
 - Cookie 登录后仍未授权：确认服务端最终值为 `OPS_COOKIE_SECURE=1`、`OPS_COOKIE_SAMESITE=none`，Cloudflare 和源站全程 HTTPS，之后重启 app 并重新登录。
 - Cloudflare 报 525/526：分别检查源站 443、证书主机名、证书有效期和 SSL/TLS 模式；不要切换到 Flexible 绕过 TLS。
+
+## 桌面 AI 与平台采集的默认开关策略（CF-GATE-02，2026-11-12）
+
+生产环境默认值与启用顺序如下；联调与本机开发例外，但**生产默认一律关闭**，未经产品拍板（docs/34 CF-GATE-01）不得改默认：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `OPS_DESKTOP_AI_ENABLED` | **关** | 全局桌面 AI 总闸（服务器启动时读取）。关闭时不建立桌面 AI 通道；灰度顺序与回退见 [RELEASE_RUNBOOK](../desktop/RELEASE_RUNBOOK.md)。开启后仍需工作区所有者在「设置 → 智能体」为该工作区显式开启桌面 AI 策略。 |
+| `OPS_DESKTOP_PLATFORM_ENABLED` | **关** | 桌面自动采集平台总闸（presence 心跳与派单前置；只在进程启动时读取，修改后必须重启 API）。本机联调需显式设为 `1`，见仓库 `AGENTS.md` 本地开发节。 |
+| `OPS_DESKTOP_PLATFORM_AUTO_ADOPT` | **关（禁开）** | 采集结果自动采用闸门。默认关闭且**验收通过前不得打开**（AGENTS.md 红线）；当前不存在打开它的验收依据。 |
+
+- 三者均**只在进程启动时读取**；修改后必须重启 `ops serve`。
+- 工作区级桌面 AI 策略（设置 → 智能体）是全局开关之上的第二层；关闭全局后工作区不能自行越过。
+- 本机开发（`OPS_DEV=1`）默认使用模拟微信与模拟模型，不需要真实密钥，也不依赖上述三个生产开关。

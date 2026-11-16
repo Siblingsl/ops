@@ -330,7 +330,7 @@ func (s *Server) readCXVisualPlanBasis(ctx context.Context, q cxVisualPlanQuerye
 		omitted = append(omitted, cxBasisOmission{Ref: "visual_dna", Reason: "用户选择不使用账号视觉 DNA，按普通模板规划。"})
 	}
 	basis.Receipt = cxBasisReceipt{SchemaVersion: 1, AccountID: basis.AccountID, WorkRevision: &workRevision,
-		DNARef: dnaRef, Sources: sources, Omitted: omitted, Coverage: "selected_work_sections", AssembledAt: time.Now().UTC()}
+		DNARef: dnaRef, Sources: sources, Omitted: omitted, Coverage: "selected_work_sections", AssembledAt: s.now().UTC()}
 	hashInput := struct {
 		WorkID    uuid.UUID                 `json:"work_id"`
 		AccountID uuid.UUID                 `json:"account_id"`

@@ -549,8 +549,9 @@ export default function Materials() {
                     {m.shared && <Badge>共享</Badge>}
                     {m.expired ? <Badge tone="red"><CalendarClock className="size-3" />已过期</Badge> : m.valid_until && <Badge><CalendarClock className="size-3" />有效至 {m.valid_until}</Badge>}
                     <span>{relTime(m.created_at)}</span>
-                    <StarButton type="material" id={m.id} className="ml-auto" />
                   </>}
+                  {/* CF-P2-DESKSTAR-01：桌面双栏列表行也提供收藏星标入口（与 Web 单栏同构，数据通路共用 /stars）。 */}
+                  <StarButton type="material" id={m.id} className="ml-auto" />
                 </div>
                 <button type="button" className="desktop-material-select" aria-pressed={selectedMaterial?.id === m.id} onClick={() => setSelectedMaterialId(m.id)}>
                   <strong>{headline}</strong>
@@ -582,6 +583,8 @@ export default function Materials() {
             <dl><div><dt>素材来源</dt><dd>{selectedMaterial.source || '未记录'}</dd></div><div><dt>标签</dt><dd>{selectedMaterial.tags.length ? selectedMaterial.tags.join('、') : '暂无标签'}</dd></div><div><dt>引用次数</dt><dd><UsagePopover m={selectedMaterial} /></dd></div><div><dt>最近引用</dt><dd>{selectedMaterial.last_used_at ? relTime(selectedMaterial.last_used_at) : '尚未引用'}</dd></div></dl>
             <p className="desktop-material-detail-hint">素材只会作为事实来源；引用前仍请核对来源和有效期。</p>
             <div className="desktop-material-detail-actions">
+              {/* CF-P2-DESKSTAR-01：详情面板同样提供收藏入口（所有角色可用，收藏是个人行为）。 */}
+              <StarButton type="material" id={selectedMaterial.id} />
               {canWrite && <Button size="sm" onClick={() => void read(selectedMaterial.id, true)} disabled={reading}>编辑这条素材</Button>}
               {canWrite && <Button size="sm" variant="ghost" className="hover:text-danger" onClick={() => remove(selectedMaterial)}>删除这条素材</Button>}
             </div>

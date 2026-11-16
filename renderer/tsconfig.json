@@ -15,7 +15,11 @@
     "noEmit": true,
     "types": ["vite/client"],
     "baseUrl": ".",
-    "paths": { "@/*": ["*"] }
+    "paths": {
+      "@/*": ["*"],
+      "sonner": ["./node_modules/sonner"],
+      "marked": ["./node_modules/marked"]
+    }
   },
   "include": ["*.ts", "*.tsx", "components", "layout", "lib", "pages", "styles", "vite.config.ts"]
 }

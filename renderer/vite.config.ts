@@ -5,8 +5,11 @@ import { createRequire } from 'node:module'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+// @ts-ignore plain ESM helper outside package root; used by Vite + SSR tests
+import { sharedNpmAliases } from '../shared/vite-dep-alias.mjs'
 
 const require = createRequire(import.meta.url)
+const { sonner: sonnerPkg, marked: markedPkg } = sharedNpmAliases(import.meta.url)
 
 export default defineConfig(async ({ mode }) => {
   const env = loadEnv(mode, '.', 'OPS_')
@@ -41,7 +44,13 @@ export default defineConfig(async ({ mode }) => {
     plugins: [react(), tailwindcss()],
     // 源码已直接放在包根（不再有 src/ 一层）。这里必须用正则：字符串形式 `'@': '/'`
     // 会把 `@/lib/x` 拼成 `//lib/x`，构建能容忍但 Vite 依赖扫描器会当成 UNC 路径而报错。
-    resolve: { alias: [{ find: /^@\//, replacement: '/' }] },
+    resolve: {
+      alias: [
+        { find: /^@\//, replacement: '/' },
+        { find: 'sonner', replacement: sonnerPkg },
+        { find: 'marked', replacement: markedPkg },
+      ],
+    },
     // Web 默认使用同源路径；桌面发行包单独构建并直连后端 API。
     define: {
       __OPS_API_BASE__: JSON.stringify((env.OPS_API_BASE || (desktopBuild ? 'https://ops-api.88813888.xyz' : '')).replace(/\/+$/, '')),

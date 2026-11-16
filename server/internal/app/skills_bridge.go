@@ -55,6 +55,9 @@ func skillMatchesTarget(f SkillFields, platform, format string) bool {
 }
 func skillLayer(d *skillDef, accountID uuid.UUID) int { return skills.Layer(d, accountID) }
 func skillContentHash(f SkillFields) string           { return skills.ContentHash(f) }
+func skillDiffFields(from, to SkillFields, redactInstructions bool) (skills.FieldsDiff, error) {
+	return skills.DiffFields(from, to, redactInstructions)
+}
 func skillPartitionFingerprint(accountID uuid.UUID, audience *uuid.UUID, items []skillBindingFinger) (string, error) {
 	return skills.PartitionFingerprint(accountID, audience, items)
 }

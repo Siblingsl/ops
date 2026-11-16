@@ -89,7 +89,9 @@ func TestCanceledSessionLookupIsNotAuthenticationFailure(t *testing.T) {
 	env.srv.requireSession(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("canceled session lookup must not grant access")
 	})).ServeHTTP(response, req)
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("canceled lookup returned %d, want 500 instead of a false 401", response.Code)
+	// ST14-01（22 文档）：客户端取消按 499 client_closed_request 记录与响应，
+	// 不冒 500 服务故障，更不是 401 退出登录。
+	if response.Code != 499 {
+		t.Fatalf("canceled lookup returned %d, want 499 client_closed_request instead of a false 401/500", response.Code)
 	}
 }

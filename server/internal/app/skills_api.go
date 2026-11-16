@@ -747,6 +747,54 @@ func scanImpactBindings(rows pgx.Rows) ([]skillImpactBinding, error) {
 	return out, rows.Err()
 }
 
+// postSkillDiff：DEEP-04 保存前字段 diff。
+// docs/23 明确不做用户版本历史，故不能按历史 revision 取旧正文；
+// 对比「当前库内定义（base_revision 必须匹配）」与请求体拟保存 fields。
+func (s *Server) postSkillDiff(w http.ResponseWriter, r *http.Request) error {
+	id, err := pathID(r, "id")
+	if err != nil {
+		return err
+	}
+	var in struct {
+		BaseRevision int64       `json:"base_revision"`
+		Fields       SkillFields `json:"fields"`
+	}
+	if err := decodeStrict(r, &in); err != nil {
+		return err
+	}
+	if in.BaseRevision <= 0 {
+		return validationFields("base_revision 必须为正整数", map[string]string{"base_revision": "invalid"})
+	}
+	sr, err := s.skillVisibleDef(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	d := sr.Def
+	if d.Builtin {
+		return apiErr(422, "immutable_skill", "内置技能没有编辑 diff")
+	}
+	if err := s.skillEditPermission(r.Context(), d); err != nil {
+		return err
+	}
+	if in.BaseRevision != d.Revision {
+		return apiErr(409, "stale", "技能已被其他人修改，请重新读取")
+	}
+	proposed := in.Fields
+	if err := validateSkillFields(&proposed); err != nil {
+		return err
+	}
+	diff, err := skillDiffFields(d.Fields, proposed, d.Scope == "personal")
+	if err != nil {
+		return err
+	}
+	return ok(w, map[string]any{
+		"skill_id": d.ID, "base_revision": d.Revision, "scope": d.Scope,
+		"from_hash": diff.FromHash, "to_hash": diff.ToHash, "unchanged": diff.Unchanged,
+		"changes": diff.Changes, "prompt_affecting": diff.PromptAffecting,
+		"affected_task_types": diff.AffectedTaskTypes,
+	})
+}
+
 func (s *Server) getSkillImpact(w http.ResponseWriter, r *http.Request) error {
 	id, err := pathID(r, "id")
 	if err != nil {

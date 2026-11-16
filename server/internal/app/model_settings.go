@@ -456,10 +456,10 @@ func (s *Server) testProvider(w http.ResponseWriter, r *http.Request) error {
 	}
 	tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	start := time.Now()
+	start := s.now()
 	text, _, _, _, callErr := ai.Stream(tctx, s.aiHTTP, ai.Request{BaseURL: base, APIKey: key, Model: model,
 		Messages: []ai.Message{{Role: "user", Content: "请只回复：连接正常\n\n任务：connectivity_test"}}}, nil)
-	elapsed := time.Since(start).Milliseconds()
+	elapsed := s.now().Sub(start).Milliseconds()
 	okFlag := callErr == nil
 	result := fmt.Sprintf("模型 %s 连接正常，耗时 %d 毫秒", model, elapsed)
 	if !okFlag {

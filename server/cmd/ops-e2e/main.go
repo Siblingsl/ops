@@ -37,6 +37,12 @@ func run() error {
 	// All databases remain fixed test-only names; custom listeners are loopback-only.
 	desktopAIEnabled := os.Getenv("OPS_E2E_DESKTOP_AI_ENABLED") == "1"
 	platformEnabled := os.Getenv("OPS_E2E_PLATFORM_ENABLED") == "1"
+	// QA-B2（G3-07/09）：热点批次需要出站榜单走 mock（Dev=true 已把 crawl_source URL 重定向到
+	// /mock/hot/*）。CrawlMode 默认 off 不发请求；仅当显式传 OPS_E2E_CRAWL_MODE=allow 才开放。
+	crawlMode := os.Getenv("OPS_E2E_CRAWL_MODE")
+	if crawlMode != "allow" {
+		crawlMode = "off"
+	}
 	databaseName := "ops_e2e"
 	if desktopAIEnabled {
 		databaseName += "_desktop_ui"
@@ -81,7 +87,7 @@ func run() error {
 	// 显式配置所有出站服务为本地 mock，避免继承真实凭证或地址。
 	cfg := &config.Config{Dev: true, Listen: listenAddr, DatabaseURL: u.String(),
 		DataDir: filepath.Join(os.TempDir(), databaseName+"-assets"), MockListen: mockListenAddr,
-		WechatBase: "http://" + mockListenAddr, MasterKey: make([]byte, 32), CrawlMode: "off", AIWorkers: 3,
+		WechatBase: "http://" + mockListenAddr, MasterKey: make([]byte, 32), CrawlMode: crawlMode, AIWorkers: 3,
 		DesktopAIEnabled: desktopAIEnabled, DesktopPlatformEnabled: platformEnabled,
 		SystemAdminUser: "skyeder", SystemAdminPassword: "local-e2e-admin-pass-456"}
 	if err := db.Migrate(cfg.DatabaseURL); err != nil {

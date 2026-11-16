@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Badge, Button, cn, Field, Input, MoreMenu, Notice, PageLoading, platformFormatLabel, platformLabel, PlatformMark, Select, StatusBadge, Switch } from '@/components/ui'
+import { FormOrchestrationDialog } from './FormOrchestration'
 import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
 import { apiBase } from '@/lib/api-base'
 import { fmtTime } from '@/lib/format'
@@ -141,6 +142,7 @@ function PlanPopover({ work, onSaved }: { work: Work; onSaved: (w: Work) => void
     </div>
   )
 }
+
 /** TemplateSwitch 只切换后续 AI 生成用的模板，不改已写段落（18 §3.4 / T-101-7）。 */
 function TemplateSwitch({ work, onSaved }: { work: Work; onSaved: (w: Work) => void }) {
   const canWrite = useCanWrite()
@@ -387,6 +389,7 @@ export default function WorkLayout() {
   const refresh = useCallback(() => q.refetch(), [q.refetch])
   const [versions, setVersions] = useState(false)
   const [derive, setDerive] = useState(false)
+  const [forms, setForms] = useState(false)
   const [platformSourceDiffOpen, setPlatformSourceDiffOpen] = useState(false)
   const prefs = usePrefs()
   const [focus, setFocusState] = useState(prefs.focus_default)
@@ -602,7 +605,6 @@ export default function WorkLayout() {
               <button type="button" disabled={!canWrite || work.locked} onClick={() => { setTitleDraft(work.title); setRenaming(true) }}
                 title={work.title ? `${work.title}${canWrite && !work.locked ? '（点击修改标题）' : ''}` : undefined}
                 className={cn('block max-w-full truncate text-left text-[14.5px] font-semibold text-mist-900', canWrite && !work.locked && 'cursor-pointer rounded px-1 hover:bg-mist-100')}>
-            <TemplateSwitch work={work} onSaved={setWork} />
                 {work.title || <span className="text-mist-400">未命名作品 · 点击命名</span>}
               </button>
             )}
@@ -635,14 +637,17 @@ export default function WorkLayout() {
           )}
           <div className={cn('work-header-actions ml-auto flex shrink-0 items-center gap-1', !focus && 'lg:ml-0')}>
             <div id="work-header-action-target" data-testid="work-next-action" className="desktop-work-next mr-1 flex shrink-0 items-center" />
+            <TemplateSwitch work={work} onSaved={setWork} />
             <PlanPopover work={work} onSaved={setWork} />
             <Button className="desktop-work-history" size="sm" variant="ghost" aria-label="打开版本历史" icon={<History className="size-4" />} onClick={() => setVersions(true)}><span className="hidden xl:inline">版本</span></Button>
+            {canWrite && <Button className="desktop-work-forms" size="sm" variant="ghost" aria-label="一稿多形态" data-testid="work-forms" icon={<Layers className="size-4" />} onClick={() => setForms(true)}><span className="hidden xl:inline">多形态</span></Button>}
             {canWrite && <Button className="desktop-work-derive" size="sm" variant="ghost" icon={<GitBranch className="size-4" />} onClick={() => setDerive(true)}><span className="hidden xl:inline">派生</span></Button>}
             {canWrite && <MoreMenu className="desktop-work-more" items={[
               ...(location.pathname === `/works/${work.id}` ? [{ label: '口述 / 要点扩写', icon: <Wand2 />, onClick: () => window.dispatchEvent(new Event('ops:organize-notes')) }] : []),
               ...(location.pathname === `/works/${work.id}` ? [
                 { label: '生成标题候选', icon: <Wand2 />, onClick: () => window.dispatchEvent(new Event('ops:generate-titles')) },
               ] : []),
+              { label: '一稿多形态', icon: <Layers />, onClick: () => setForms(true) },
               { label: '复制为新草稿', icon: <Copy />, loading: copying, onClick: () => void duplicate() },
               ...(location.pathname === `/works/${work.id}` ? [{ label: '导出 Markdown', icon: <Download />, loading: exporting, onClick: () => void exportMarkdown() }] : []),
             ]} />}
@@ -718,6 +723,7 @@ export default function WorkLayout() {
         <Outlet context={ctx} />
       </div>
       <Versions work={work} open={versions} onClose={() => setVersions(false)} onRestored={setWork} />
+      {forms && <FormOrchestrationDialog open onClose={() => setForms(false)} work={work} onDerive={() => setDerive(true)} />}
       {derive && <DeriveDialog open onClose={() => setDerive(false)} workId={work.id} platform={work.platform} format={work.content_format} />}
       {platformSourceDiffOpen && platformSource.data && platformSourceDiff && <Dialog open onClose={() => setPlatformSourceDiffOpen(false)}
         title="平台来源与本地草稿差异" desc={`来源正文修订 ${work.platform_source_content_revision} → ${platformSource.data.content_revision}。以下只展示差异片段，不会自动写入本地作品。`} width="max-w-5xl">

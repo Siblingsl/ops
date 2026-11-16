@@ -254,7 +254,7 @@ func (s *Server) toutiaoPackZip(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="toutiao-`+time.Now().Format("20060102-1504")+`.zip"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="toutiao-`+s.now().Format("20060102-1504")+`.zip"`)
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	w.Header().Set("X-OPS-Basis-Revision", strconv.Itoa(basis))
 	_, err = io.Copy(w, file)
@@ -494,7 +494,7 @@ func assembleToutiaoPack(s *Server, workID uuid.UUID, source *toutiaoPackSource)
 	files["image-map.json"] = append(imageMapJSON, '\n')
 	manifest := toutiaoPackManifest{
 		SchemaVersion: 1, Platform: "toutiao", ContentFormat: source.Format, WorkID: workID, BasisRevision: source.Revision,
-		GeneratedAt: time.Now().In(time.FixedZone("Asia/Shanghai", 8*60*60)), InternalTitle: source.Title,
+		GeneratedAt: s.now().In(time.FixedZone("Asia/Shanghai", 8*60*60)), InternalTitle: source.Title,
 		PublishTitle: view.PublishTitle, BodyFile: "body.txt", TopicsFile: "topics.txt", Images: toutiaoManifestImages(view.Images),
 	}
 	for name, data := range files {

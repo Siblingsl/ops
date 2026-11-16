@@ -146,7 +146,7 @@ func (s *Server) agentMetaRequestInput(ctx context.Context, st *agentRunState, c
 	}
 	itemsJSON, _ := json.Marshal(items)
 	view = agentQuestionView{ID: uuid.New(), RunID: st.RunID, Revision: 1, Items: items, Answers: []agentQuestionAnswer{},
-		Status: "pending", ExpiresAt: time.Now().Add(24 * time.Hour)}
+		Status: "pending", ExpiresAt: s.now().Add(24 * time.Hour)}
 	if err := tx.QueryRow(ctx, `INSERT INTO agent_question
 		(id,conversation_id,source_run_id,source_tool_call_id,request_hash,items,status,expires_at)
 		VALUES($1,$2,$3,$4,$5,$6,'pending',$7) RETURNING created_at`,
@@ -375,7 +375,7 @@ func (s *Server) postAgentQuestionAnswer(w http.ResponseWriter, r *http.Request)
 		writeAgentRunAccepted(w, questionConversationID, runID, messageID, after)
 		return nil
 	}
-	if revision != req.ExpectedRevision || status != "pending" || !time.Now().Before(expiresAt) {
+	if revision != req.ExpectedRevision || status != "pending" || !s.now().Before(expiresAt) {
 		return apiErr(409, "agent_revision_conflict", "澄清问题已变化、过期或已由另一端处理")
 	}
 	conv, err := s.agentConversationFor(r.Context(), questionConversationID)
@@ -396,7 +396,7 @@ func (s *Server) postAgentQuestionAnswer(w http.ResponseWriter, r *http.Request)
 				}
 				return nil, false, err
 			}
-			if currentRevision != req.ExpectedRevision || currentStatus != "pending" || !time.Now().Before(expiresAt) {
+			if currentRevision != req.ExpectedRevision || currentStatus != "pending" || !s.now().Before(expiresAt) {
 				return nil, false, apiErr(409, "agent_revision_conflict", "澄清问题已变化、过期或已由另一端处理")
 			}
 			questionStatus := "answered"

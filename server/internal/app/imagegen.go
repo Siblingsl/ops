@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -86,7 +85,7 @@ func (s *Server) storeProcessedAsset(ctx context.Context, workID, accountID uuid
 	}
 	return Asset{
 		ID: id, WorkID: workID, Mime: mime, Width: width, Height: height, Bytes: len(data),
-		URL: "/api/v1/assets/" + id.String() + "/file", AIGenerated: aiGen, CreatedAt: time.Now(),
+		URL: "/api/v1/assets/" + id.String() + "/file", AIGenerated: aiGen, CreatedAt: s.now(),
 	}, nil
 }
 
@@ -98,7 +97,7 @@ func (s *Server) runImageGen(ctx context.Context, account *Account, workID *uuid
 	if err != nil {
 		return Asset{}, err
 	}
-	start := time.Now()
+	start := s.now()
 	modelCtx, client := s.aiClientForRoute(ctx, rt)
 	var fetchURL func(context.Context, string) (ai.ImageResult, error)
 	if rt.Desktop != nil {
@@ -122,7 +121,7 @@ func (s *Server) runImageGen(ctx context.Context, account *Account, workID *uuid
 	var callID uuid.UUID
 	_ = s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO ai_call (workspace_id, account_id, work_id, task_type, provider, model, context_refs,
 		prompt_tokens, completion_tokens, latency_ms, status, error) VALUES ($1,$2,$3,'image_gen',$4,$5,$6,0,0,$7,$8,$9) RETURNING id`,
-		ident(ctx).WorkspaceID, accountID, workID, rt.ProviderName, rt.Model, refsJSON, time.Since(start).Milliseconds(), status, truncate(errText, 500)).Scan(&callID)
+		ident(ctx).WorkspaceID, accountID, workID, rt.ProviderName, rt.Model, refsJSON, s.now().Sub(start).Milliseconds(), status, truncate(errText, 500)).Scan(&callID)
 	if callErr != nil {
 		return Asset{}, apiErr(502, "ai_upstream_error", "文生图失败："+truncate(callErr.Error(), 300))
 	}

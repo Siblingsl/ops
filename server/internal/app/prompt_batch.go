@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"ops/internal/ai"
@@ -152,9 +151,9 @@ func (s *Server) runPromptBatchJob(ctx context.Context, plan map[string][]batchC
 		totalChars := 0
 		for _, c := range cases {
 			row := caseRow{CaseID: c.ID, Name: c.Name, TaskType: t}
-			start := time.Now()
+			start := s.now()
 			text, err := s.runSnapshot(ctx, t, c.Snap, tpl)
-			row.LatencyMS = time.Since(start).Milliseconds()
+			row.LatencyMS = s.now().Sub(start).Milliseconds()
 			if err != nil {
 				row.Error = errText(err)
 				sum.Failed++

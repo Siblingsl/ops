@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -136,7 +135,7 @@ func (s *Server) packZip(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="xhs-%s.zip"`, time.Now().Format("20060102-1504")))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="xhs-%s.zip"`, s.now().Format("20060102-1504")))
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	w.Header().Set("X-OPS-Basis-Revision", strconv.Itoa(revision))
 	_, err = io.Copy(w, file)

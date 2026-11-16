@@ -75,7 +75,7 @@ func (s *Server) collectSummaries(ctx context.Context) {
 		}
 		src := crawl.Source{Key: x.key, Kind: "summary", URL: endpoint}
 		var meta crawl.Page
-		started := time.Now()
+		started := s.now()
 		fetchStarted := s.now()
 		_, out, e := s.crawlClient().ReadValidated(ctx, src, c.Limits, func(b []byte) error { var err error; meta, err = crawl.ParseMetadata(b); return err })
 		if out.Requests == 0 && (errors.Is(e, crawl.ErrLimited) || errors.Is(e, crawl.ErrDisabled)) {

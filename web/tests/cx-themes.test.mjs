@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createServer } from 'vite'
+import { sharedNpmAliases } from '../../shared/vite-dep-alias.mjs'
 
 test('CX07 八套内置主题保持历史 ID，所有主题文字对比度达到 4.5:1', async () => {
-  const server = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, ws: false }, appType: 'custom' })
+  const server = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, ws: false }, appType: 'custom', resolve: { alias: sharedNpmAliases(import.meta.url) } })
   try {
     const { themes, themeById } = await server.ssrLoadModule('/src/lib/render.ts')
     const ids = ['simple', 'ink', 'tenghuang', 'mobai', 'olive', 'sage', 'redwhite', 'graphite']

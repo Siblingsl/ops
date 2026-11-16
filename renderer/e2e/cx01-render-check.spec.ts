@@ -163,6 +163,14 @@ test('真实 Electron 构建 complete 在同一夹具下产物指纹一致，改
     expect(changedBody.status).toBe('built')
     expect(changedBody.artifact_fingerprint).toMatch(/^[0-9a-f]{64}$/)
     expect(changedBody.artifact_fingerprint).not.toBe(firstBody.artifact_fingerprint)
+
+    // CF-CX-05：真实 Electron 检查页挂接同一指纹；桌面文案另含长图回执边界。
+    await page.goto(`${origin}/works/${work.id}/check`)
+    const checkFp = page.getByTestId('artifact-fingerprint')
+    await expect(checkFp).toBeVisible()
+    await expect(checkFp).toContainText(changedBody.artifact_fingerprint)
+    await expect(checkFp).toContainText('不证明平台视觉一致')
+    await expect(checkFp).toContainText('长图像素以桌面捕获回执为准')
   } finally {
     await disposeElectron(app, userData)
   }

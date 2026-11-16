@@ -474,7 +474,7 @@ func (s *Server) updateBenchmark(w http.ResponseWriter, r *http.Request) error {
 	}
 	var archivedAt *time.Time
 	if archived {
-		now := time.Now()
+		now := s.now()
 		archivedAt = &now
 	}
 	answersJSON, err := json.Marshal(answers)
@@ -806,7 +806,7 @@ func (s *Server) updateBenchmarkNote(w http.ResponseWriter, r *http.Request) err
 	}
 	var archivedAt *time.Time
 	if archived {
-		now := time.Now()
+		now := s.now()
 		archivedAt = &now
 	}
 	updated, err := scanBenchmarkNote(s.db.QueryRow(ctx, `UPDATE benchmark_note SET title=$3,metrics_snapshot=$4::jsonb,takeaways=$5::jsonb,not_borrowable=$6::jsonb,archived_at=$7,

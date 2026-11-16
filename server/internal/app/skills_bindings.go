@@ -537,6 +537,7 @@ func (s *Server) skillRoutes(r chi.Router) {
 	r.Put("/skills/{id}", s.h(s.putSkill))
 	r.Delete("/skills/{id}", s.h(s.deleteSkill))
 	r.Get("/skills/{id}/impact", s.h(s.getSkillImpact))
+	r.Post("/skills/{id}/diff", s.h(s.postSkillDiff))
 	r.Get("/skills/{id}/export", s.h(s.exportSkill))
 	r.Get("/accounts/{accountId}/skill-bindings", s.h(s.getSkillBindings))
 	r.Put("/accounts/{accountId}/skill-bindings/{audience}/{skillId}", s.h(s.putSkillBinding))

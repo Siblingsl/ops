@@ -416,3 +416,73 @@ func TestW1403P08SchemaParamsAndCatalogChanges(t *testing.T) {
 		t.Fatalf("目录变更后旧工具应 404：%d %s", res2.Status, res2.Raw)
 	}
 }
+
+// P0-3（CF-DESK-03 桌面消费接线）：桌面执行器领取协议三步。
+// pending（含脱敏 args 与连接配置）→ claim CAS → receipt（复用既有终态幂等）。
+// 超预算窗口的 dispatched 由 pending 入口先 sweep，清单永远可执行。
+func TestP03DesktopPendingAndClaim(t *testing.T) {
+	conn, sess, ws, user := w14RunSetup(t, "P03DesktopClaim", []map[string]any{
+		{"name": "echo", "description_hash": "aa", "input_schema": map[string]any{
+			"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}, "required": []string{"text"},
+		}},
+	})
+	tool := w14FindTool(t, w14DynamicTools(t, ws, user), "mcp__P03DesktopCl__echo")
+	principal := w14NewPrincipal(t, sess, ws, user)
+	done := w14DispatchAsync(context.Background(), tool, principal, map[string]any{"text": "Bearer sk-abcdefgh12345678"})
+	callID, _ := w14WaitLedgerRow(t, principal.RunID)
+
+	// pending 清单：含脱敏 args 与连接启动配置；token 形状不出现在响应。
+	var pending struct {
+		Calls []pendingPluginCallView `json:"calls"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/agent/plugin-calls/pending", nil, &pending)
+	if len(pending.Calls) != 1 || pending.Calls[0].ID != callID {
+		t.Fatalf("pending 清单异常：%+v", pending.Calls)
+	}
+	first := pending.Calls[0]
+	if first.Transport != "stdio" || first.Command != "node" || len(first.ConnArgs) == 0 {
+		t.Fatalf("pending 应随行连接配置：%+v", first)
+	}
+	if !strings.Contains(string(first.Args), "[REDACTED]") || strings.Contains(string(first.Args), "sk-abcdefgh") {
+		t.Fatalf("pending 的 args 必须是脱敏快照：%s", first.Args)
+	}
+
+	// claim CAS：首次领取成功；并发第二次 claimed=false；pending 清单不再出现已领取项。
+	var claim struct {
+		Call    pluginCallView `json:"call"`
+		Claimed bool           `json:"claimed"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/plugin-calls/"+callID+"/claim", nil, &claim)
+	if !claim.Claimed || claim.Call.ID != callID {
+		t.Fatalf("首次领取应成功：%+v", claim)
+	}
+	var claim2 struct {
+		Claimed bool `json:"claimed"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/plugin-calls/"+callID+"/claim", nil, &claim2)
+	if claim2.Claimed {
+		t.Fatal("重复领取必须 claimed=false")
+	}
+	env.mustJSON(t, "GET", "/api/v1/agent/plugin-calls/pending", nil, &pending)
+	if len(pending.Calls) != 0 {
+		t.Fatalf("已领取的调用不应再出现在 pending：%+v", pending.Calls)
+	}
+
+	// 回执：复用既有终态语义；等待方拿到 succeeded。
+	var receipt map[string]any
+	env.mustJSON(t, "POST", "/api/v1/agent/plugin-calls/"+callID+"/receipt", map[string]any{
+		"state": "succeeded", "duration_ms": 5, "result": map[string]any{"echo": "ok"},
+	}, &receipt)
+	res := w14AwaitOutcome(t, done)
+	var view pluginCallView
+	if err := json.Unmarshal(res.Raw, &view); err != nil {
+		t.Fatalf("等待结果解析：%v (%s)", err, res.Raw)
+	}
+	if view.State != "succeeded" {
+		t.Fatalf("回执后等待方应拿到 succeeded：%d %s", res.Status, res.Raw)
+	}
+
+	// 不存在的调用 404；隔离由 user_id+workspace_id 过滤保证。
+	env.mustJSONStatus(t, "POST", "/api/v1/agent/plugin-calls/"+uuid.NewString()+"/claim", nil, nil, 404)
+	_ = conn
+}

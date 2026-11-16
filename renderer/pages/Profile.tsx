@@ -470,22 +470,30 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
   const [tone, setTone] = useState(profile.persona_tone)
   const [banned, setBanned] = useState(profile.banned_words.join(' '))
   const [summary, setSummary] = useState(profile.style_summary)
+  // CF-P2-CXEF-07：账号时区（IANA）。PUT 是整档案覆盖语义，必须显式回传，避免把已有字段清空。
+  const [timezone, setTimezone] = useState(profile.timezone ?? 'Asia/Shanghai')
+  const [tzError, setTzError] = useState('')
+  useEffect(() => { setTimezone(profile.timezone ?? 'Asia/Shanghai') }, [profile.timezone])
   const [busy, setBusy] = useState(false)
   const [genBusy, setGenBusy] = useState(false)
   const abort = useRef<AbortController | null>(null)
   const save = async () => {
     setBusy(true)
+    setTzError('')
     try {
       const { topic_stock_policy: _stockPolicy, ...profileFields } = profile
       onSaved(await put<Profile>(`/accounts/${account.id}/profile`, {
-        ...profileFields, positioning_tags: splitList(tags), target_audience: audience, persona_tone: tone, banned_words: splitList(banned), style_summary: summary,
+        ...profileFields, timezone: timezone.trim(), positioning_tags: splitList(tags), target_audience: audience, persona_tone: tone, banned_words: splitList(banned), style_summary: summary,
         ...(me?.role === 'owner' && stockEdited ? { topic_stock_policy: { target_ready: targetNumber, warn_ready: warnNumber } } : {}),
       }))
       setStockEdited(false)
       inv(['health', account.id], ['dashboard', account.id], ['topic-stock', account.id])
       toast.success('定位档案已保存，之后的 AI 生成都会使用新档案')
     } catch (e) {
-      toast.error(errorMessage(e))
+      const msg = errorMessage(e)
+      // 时区 422 的中文提示内联到字段（不重复弹 toast）；其它错误仍走既有提示。
+      if (msg.includes('账号时区')) setTzError(msg)
+      else toast.error(msg)
     } finally {
       setBusy(false)
     }
@@ -559,6 +567,12 @@ function PositioningTab({ account, profile, onSaved }: { account: Account; profi
           <Field label="目标库存" hint="可排期选题目标，1–100 条"><Input aria-label="目标库存" type="number" min={1} max={100} step={1} value={stockTarget} onChange={(e) => { setStockTarget(e.target.value); setStockEdited(true) }} invalid={!stockValid} /></Field>
           <Field label="补给警戒" hint="低于该数量时提示补给，不得超过目标库存"><Input aria-label="补给警戒" type="number" min={1} max={100} step={1} value={stockWarn} onChange={(e) => { setStockWarn(e.target.value); setStockEdited(true) }} invalid={!stockValid} /></Field>
         </>}
+        <Field label="账号时区" hint="IANA 时区名，用于运营标准生效日与「今天」的口径；留空按 Asia/Shanghai" error={tzError}>
+          <Input aria-label="账号时区" list="account-timezone-options" value={timezone} onChange={(e) => { setTimezone(e.target.value); setTzError('') }} placeholder="Asia/Shanghai" />
+          <datalist id="account-timezone-options">
+            {['Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Taipei', 'Asia/Tokyo', 'Asia/Singapore', 'Europe/London', 'Europe/Paris', 'America/New_York', 'America/Los_Angeles', 'Pacific/Honolulu', 'UTC'].map((tz) => <option key={tz} value={tz} />)}
+          </datalist>
+        </Field>
         <Field label="定位标签" hint="空格或逗号分隔"><Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="职场 效率 新人成长" /></Field>
         <Field label="目标读者"><Textarea rows={2} value={audience} onChange={(e) => setAudience(e.target.value)} /></Field>
         <Field label="人设与语气"><Textarea rows={2} value={tone} onChange={(e) => setTone(e.target.value)} /></Field>

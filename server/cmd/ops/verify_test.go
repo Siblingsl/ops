@@ -218,3 +218,105 @@ func TestVerifyRemoteChecksArtifactsAndEvidence(t *testing.T) {
 		t.Fatalf("会话无效应报 401，实际 %v", err)
 	}
 }
+
+func TestEnsureExportDirRejectsNonEmptyWithoutOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureExportDir(dir, false); err == nil || !strings.Contains(err.Error(), "--overwrite") {
+		t.Fatalf("非空目录未带 --overwrite 应拒绝，实际 %v", err)
+	}
+	if err := ensureExportDir(dir, true); err != nil {
+		t.Fatalf("--overwrite 应放行：%v", err)
+	}
+	empty := filepath.Join(t.TempDir(), "out")
+	if err := ensureExportDir(empty, false); err != nil {
+		t.Fatalf("空/不存在目录应可创建：%v", err)
+	}
+}
+
+func TestWriteExportFileRespectsOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "article.html")
+	if err := writeExportFile(target, []byte("v1"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeExportFile(target, []byte("v2"), false); err == nil || !strings.Contains(err.Error(), "--overwrite") {
+		t.Fatalf("已存在文件未带 --overwrite 应拒绝，实际 %v", err)
+	}
+	if err := writeExportFile(target, []byte("v2"), true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "v2" {
+		t.Fatalf("覆盖后内容应为 v2，实际 %q / %v", got, err)
+	}
+}
+
+func TestValidateCLIBaseURL(t *testing.T) {
+	cases := []struct {
+		url string
+		ok  bool
+	}{
+		{"https://ops.example.com", true},
+		{"http://127.0.0.1:8080", true},
+		{"http://localhost:8080", true},
+		{"http://evil.example.com", false},
+		{"ftp://127.0.0.1", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		err := validateCLIBaseURL(c.url)
+		if c.ok && err != nil {
+			t.Fatalf("%s 应通过：%v", c.url, err)
+		}
+		if !c.ok && err == nil {
+			t.Fatalf("%s 应拒绝", c.url)
+		}
+	}
+}
+
+func TestVerifyCommandsAreReadOnlySource(t *testing.T) {
+	src, err := os.ReadFile("verify.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	for _, banned := range []string{
+		"http.MethodPost", "http.MethodPut", "http.MethodPatch", "http.MethodDelete",
+		`"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`,
+		"/api/v1/builds\"", // 创建 running build 的集合端点（带尾引号，避免误伤 downloads）
+	} {
+		if strings.Contains(text, banned) {
+			t.Fatalf("verify.go 不得含写入/建 build 痕迹：%q", banned)
+		}
+	}
+	if !strings.Contains(text, "http.MethodGet") {
+		t.Fatal("verify.go 必须只用 GET")
+	}
+	mainSrc, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(mainSrc), `case "build":`) {
+		t.Fatal("main 不得提供会创建 running build 的 ops build 子命令")
+	}
+}
+
+func TestExportSafeNameStripsTraversal(t *testing.T) {
+	cases := map[string]string{
+		`..\..\etc\passwd`:     "passwd",
+		"/tmp/evil/article.html": "article.html",
+		`C:\tmp\a.html`:        "a.html",
+		"../xhs/card-1.png":    "card-1.png",
+		".":                    "unnamed",
+		"..":                   "unnamed",
+		"":                     "unnamed",
+	}
+	for in, want := range cases {
+		if got := exportSafeName(in); got != want {
+			t.Fatalf("exportSafeName(%q)=%q，期望 %q", in, got, want)
+		}
+	}
+}

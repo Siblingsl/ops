@@ -66,9 +66,9 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 		}
 		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 		defer cancel()
-		start := time.Now()
+		start := s.now()
 		detail, perr := fn(pctx)
-		p := probe{Key: key, Label: label, LatencyMS: time.Since(start).Milliseconds()}
+		p := probe{Key: key, Label: label, LatencyMS: s.now().Sub(start).Milliseconds()}
 		if perr != nil {
 			p.Detail = mask(perr)
 		} else {

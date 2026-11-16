@@ -290,7 +290,7 @@ func (s *Server) collectHot(ctx context.Context) {
 
 func (s *Server) purgeHot(ctx context.Context) {
 	c := s.loadCrawl(ctx)
-	started := time.Now()
+	started := s.now()
 	for _, step := range []struct {
 		code string
 		exec func() error

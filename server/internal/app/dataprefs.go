@@ -171,6 +171,9 @@ func (s *Server) persistToutiaoDataPreferences(ctx context.Context, accountID uu
 		applied = true
 		return nil
 	})
+	if applied {
+		s.invalidateContextPackCache(ctx, accountID)
+	}
 	return applied, err
 }
 
@@ -229,6 +232,9 @@ func (s *Server) persistDataPreferences(ctx context.Context, accountID uuid.UUID
 		applied = true
 		return nil
 	})
+	if applied {
+		s.invalidateContextPackCache(ctx, accountID)
+	}
 	return applied, err
 }
 

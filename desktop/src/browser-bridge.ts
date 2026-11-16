@@ -560,6 +560,11 @@ export class BrowserBridge {
       return { ok: false, reason: 'pairing expired' };
     }
     this.sessionKey = crypto.randomBytes(32);
+    // A14-2 补丁（2026-11-16，R 真实旅程接线发现）：新配对即新 seq 纪元——扩展侧
+    // pairing_start 时 seq_out 从 0 重发，桥若沿用上次会话持久化的 lastSeqIn 会把
+    // 新会话全部回执误判为重放（实测 20 条 result 全部 reject）。新密钥建立时同步
+    // 重置接收窗口；同会话重放防护仍由 HMAC+账本幂等兜底，语义不放宽。
+    this.lastSeqIn = 0;
     // A14-6：v2 需要本次配对独有的 HKDF salt；根密钥只用于派生，不进入签名路径。
     const payload: Record<string, unknown> = {
       pairing_id: this.pairing.id,

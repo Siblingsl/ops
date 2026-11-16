@@ -119,3 +119,78 @@ func TestCXBuildManifestDownloadUsesCanonicalBytesAndSharedGate(t *testing.T) {
 		t.Fatal("downloaded manifest does not match its immutable digest")
 	}
 }
+
+// CF-CX-04：漏确认 / 错 report_hash 必须拒绝；逐项齐全后才放行下载（不得批量一键绕过）。
+func TestCXBuildPrivacyAckRejectsIncompleteAndStaleReport(t *testing.T) {
+	account := env.accounts(t).wechat
+	var work Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+account.ID.String()+"/works", map[string]string{"title": "隐私回执负例"}, &work)
+	_, build := cxBuildCreateForTest(t, work.ID.String(), work.Revision, []string{"wechat_html"})
+
+	manifest := map[string]any{"schema": "ops.build-manifest/v1", "source_hash": build.SourceHash, "targets": []any{"wechat_html"}}
+	manifestData, err := cxcanonicaljson.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestHash, err := cxcanonicaljson.Hash(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := cxPrivacyReport{
+		ReportHash: "warn-report-cf-cx-04", ScannerOK: true, PolicyReady: true, Level: "warn",
+		Warnings: 2, Errors: 0,
+		Findings: []cxPrivacyFinding{
+			{ID: "warn-email-1", Severity: "warn", Rule: "email_candidate"},
+			{ID: "warn-phone-1", Severity: "warn", Rule: "mobile_candidate"},
+		},
+	}
+	validation, err := json.Marshal(map[string]any{"privacy": report})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE work_build SET status='built',manifest=$2::jsonb,manifest_sha256=$3,error_detail=jsonb_build_object('validation',$4::jsonb),acknowledgements='[]'::jsonb,finished_at=now(),expires_at=now()+interval '1 hour' WHERE id=$1`,
+		build.BuildID, string(manifestData), manifestHash, string(validation)); err != nil {
+		t.Fatal(err)
+	}
+
+	var gate struct {
+		DownloadGate map[string]any `json:"download_gate"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/builds/"+build.BuildID.String(), nil, &gate)
+	if gate.DownloadGate["reason"] != "privacy_ack_required" {
+		t.Fatalf("warn build must require acknowledgement first: %+v", gate.DownloadGate)
+	}
+
+	status, body := env.do("POST", "/api/v1/builds/"+build.BuildID.String()+"/privacy-ack", map[string]any{
+		"report_hash": report.ReportHash, "finding_ids": []string{"warn-email-1"},
+	})
+	if status != 422 || !bytes.Contains(body, []byte(`"privacy_ack_incomplete"`)) {
+		t.Fatalf("partial WARN ack must be rejected: status=%d body=%s", status, body)
+	}
+
+	status, body = env.do("POST", "/api/v1/builds/"+build.BuildID.String()+"/privacy-ack", map[string]any{
+		"report_hash": "stale-hash", "finding_ids": []string{"warn-email-1", "warn-phone-1"},
+	})
+	if status != 409 || !bytes.Contains(body, []byte(`"privacy_report_stale"`)) {
+		t.Fatalf("wrong report_hash must be rejected: status=%d body=%s", status, body)
+	}
+
+	status, body = env.do("POST", "/api/v1/builds/"+build.BuildID.String()+"/privacy-ack", map[string]any{
+		"report_hash": report.ReportHash, "finding_ids": []string{"warn-phone-1", "warn-email-1"},
+	})
+	if status != 200 || !bytes.Contains(body, []byte(`"acknowledged":true`)) {
+		t.Fatalf("full WARN ack must succeed: status=%d body=%s", status, body)
+	}
+
+	env.mustJSON(t, "GET", "/api/v1/builds/"+build.BuildID.String(), nil, &gate)
+	if gate.DownloadGate["allowed"] != true || gate.DownloadGate["reason"] != "acknowledged" {
+		t.Fatalf("after full ack download must open: %+v", gate.DownloadGate)
+	}
+
+	status, body = env.do("POST", "/api/v1/builds/"+build.BuildID.String()+"/privacy-ack", map[string]any{
+		"report_hash": report.ReportHash, "finding_ids": []string{"warn-email-1", "warn-phone-1"},
+	})
+	if status != 200 || !bytes.Contains(body, []byte(`"reused":true`)) {
+		t.Fatalf("repeat ack should reuse: status=%d body=%s", status, body)
+	}
+}

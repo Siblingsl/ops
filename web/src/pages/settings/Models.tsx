@@ -9,6 +9,7 @@ import { fmtTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useInvalidate, useMe } from '@/lib/session'
 import type { AILimit, ModelCapability, ModelRoute, Provider } from '@/lib/types'
+import { pagePollIntervalMs } from '@/lib/page-poll'
 import { usePageVisible } from '@/lib/visibility'
 
 // DEV-U101（12 文档）：供应商能力自检结果。
@@ -486,11 +487,11 @@ export default function Models() {
   const { data: me } = useMe()
   const isOwner = me?.role === 'owner'
   const pageVisible = usePageVisible()
-  // DEV-P08：隐藏页停轮询（沿用 notifications 的 visible 守卫）。
+  // DEV-P08：隐藏页无请求；可见时按失败次数指数退避。
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['providers'],
     queryFn: () => get<Provider[]>('/model-providers'),
-    refetchInterval: pageVisible ? 5000 : false,
+    refetchInterval: (q) => pagePollIntervalMs(pageVisible, 5000, q.state.fetchFailureCount),
     refetchIntervalInBackground: false,
   })
   const [dialog, setDialog] = useState<{ editing: Provider | null } | null>(null)

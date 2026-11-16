@@ -203,7 +203,7 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 				return nil, false, validation("替代的问题编号无效")
 			}
 		}
-		if questionErr == nil && !time.Now().Before(pendingQuestionExpiresAt) {
+		if questionErr == nil && !s.now().Before(pendingQuestionExpiresAt) {
 			if _, err := tx.Exec(ctx, `UPDATE agent_question SET status='expired',revision=revision+1,resolved_at=now() WHERE id=$1`, pendingQuestion); err != nil {
 				return nil, false, err
 			}
@@ -601,7 +601,7 @@ func (s *Server) agentStreamPreparedRun(w http.ResponseWriter, r *http.Request, 
 	runCtx, cancel := context.WithCancel(runBase)
 	s.registerAgentRun(st.RunID, cancel)
 	var pendingDelta strings.Builder
-	lastDeltaFlush := time.Now()
+	lastDeltaFlush := s.now()
 	flushDelta := func() {
 		if pendingDelta.Len() == 0 {
 			return
@@ -619,7 +619,7 @@ func (s *Server) agentStreamPreparedRun(w http.ResponseWriter, r *http.Request, 
 				sse.send("delta", map[string]string{"text": text})
 			}
 		}
-		lastDeltaFlush = time.Now()
+		lastDeltaFlush = s.now()
 	}
 	send := func(event string, data any) {
 		if event == "delta_flush" {
@@ -634,7 +634,7 @@ func (s *Server) agentStreamPreparedRun(w http.ResponseWriter, r *http.Request, 
 				_ = json.Unmarshal(raw, &delta)
 			}
 			pendingDelta.WriteString(delta.Text)
-			if pendingDelta.Len() >= 2048 || time.Since(lastDeltaFlush) >= 100*time.Millisecond {
+			if pendingDelta.Len() >= 2048 || s.now().Sub(lastDeltaFlush) >= 100*time.Millisecond {
 				flushDelta()
 			}
 			return

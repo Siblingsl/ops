@@ -240,12 +240,19 @@ func (s *Server) effectiveStandard(w http.ResponseWriter, r *http.Request) error
 		WHERE account_id=$1 AND effective_from<=($2::date) ORDER BY effective_from DESC, version DESC LIMIT 1`,
 		account.ID, at))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ok(w, map[string]any{"standard": nil, "timezone": "Asia/Shanghai"})
+		return ok(w, map[string]any{"standard": nil, "timezone": s.accountTimezoneDateName(r.Context(), account.ID)})
 	}
 	if err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"standard": item, "timezone": "Asia/Shanghai"})
+	return ok(w, map[string]any{"standard": item, "timezone": s.accountTimezoneDateName(r.Context(), account.ID)})
+}
+
+
+// accountTimezoneDateName：GET 响应里的时区名（仅名称，不做日期计算）。
+func (s *Server) accountTimezoneDateName(ctx context.Context, accountID uuid.UUID) string {
+	tz, _ := s.accountTimezone(ctx, accountID)
+	return tz
 }
 
 // archiveStandard：owner；只变列表可见性（单项确认由前端二次点击保障），不改内容/生效语义。
@@ -290,12 +297,40 @@ func (s *Server) archiveStandard(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, item)
 }
 
+
+// accountTimezone：账号级 IANA 时区（CF-P2-CXEF-04）。
+// 读 account_profile.timezone；空/未知回落 Asia/Shanghai（既有口径，24 §FR-CX-23 缺省）。
+// 生效日截断（freeze/at 比较）都用该时区。
+func (s *Server) accountTimezone(ctx context.Context, accountID uuid.UUID) (string, string) {
+	var tz string
+	_ = s.db.QueryRow(ctx, `SELECT timezone FROM account_profile WHERE account_id=$1`, accountID).Scan(&tz)
+	tz = strings.TrimSpace(tz)
+	if tz == "" {
+		tz = "Asia/Shanghai"
+	}
+	if _, err := time.LoadLocation(tz); err != nil {
+		return "Asia/Shanghai", tz
+	}
+	return tz, tz
+}
+
+// accountTimezoneDate：当前时刻在账号时区的日期（YYYY-MM-DD）。
+func (s *Server) accountTimezoneDate(ctx context.Context, accountID uuid.UUID, tx pgx.Tx) string {
+	locName, _ := s.accountTimezone(ctx, accountID)
+	loc, err := time.LoadLocation(locName)
+	if err != nil {
+		loc = time.FixedZone("Asia/Shanghai", 8*3600)
+	}
+	return s.now().In(loc).Format("2006-01-02")
+}
+
 // freezeStandardBasis：检查启动时冻结标准快照到 check_run（后来变化不重算历史结论）。
 // 无标准显示未设，不阻断。
 func (s *Server) freezeStandardBasis(ctx context.Context, tx pgx.Tx, accountID uuid.UUID) (json.RawMessage, error) {
+	tzName, _ := s.accountTimezone(ctx, accountID)
 	item, err := scanOpsStandard(tx.QueryRow(ctx, `SELECT `+opsStandardCols+` FROM ops_standard
-		WHERE account_id=$1 AND effective_from<=(now() AT TIME ZONE 'Asia/Shanghai')::date
-		ORDER BY effective_from DESC, version DESC LIMIT 1`, accountID))
+		WHERE account_id=$1 AND effective_from<=(now() AT TIME ZONE $2)::date
+		ORDER BY effective_from DESC, version DESC LIMIT 1`, accountID, tzName))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -304,7 +339,7 @@ func (s *Server) freezeStandardBasis(ctx context.Context, tx pgx.Tx, accountID u
 	}
 	basis, err := json.Marshal(map[string]any{
 		"standard_id": item.ID, "version": item.Version, "content_hash": item.ContentHash,
-		"account_timezone": "Asia/Shanghai", "checked_at": time.Now().Format("2006-01-02"),
+		"account_timezone": tzName, "checked_at": s.accountTimezoneDate(ctx, accountID, tx),
 	})
 	if err != nil {
 		return nil, err

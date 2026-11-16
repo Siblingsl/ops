@@ -131,6 +131,7 @@ func (s *Server) createMemory(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	s.audit(r.Context(), "memory_create", "account_memory", m.ID.String(), "ok", nil)
+	s.invalidateContextPackCache(r.Context(), a.ID)
 	return ok(w, m)
 }
 
@@ -194,6 +195,7 @@ func (s *Server) patchMemory(w http.ResponseWriter, r *http.Request) error {
 	if confirm {
 		s.audit(ctx, "memory_confirm", "account_memory", m.ID.String(), "ok", nil)
 	}
+	s.invalidateContextPackCache(ctx, m.AccountID)
 	return ok(w, out)
 }
 
@@ -205,6 +207,7 @@ func (s *Server) deleteMemory(w http.ResponseWriter, r *http.Request) error {
 	if _, err := s.db.Exec(r.Context(), `DELETE FROM account_memory WHERE id=$1`, m.ID); err != nil {
 		return err
 	}
+	s.invalidateContextPackCache(r.Context(), m.AccountID)
 	return ok(w, map[string]any{"ok": true})
 }
 

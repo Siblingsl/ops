@@ -25,7 +25,11 @@ type rJourneyEnv struct {
 	providerID string
 	model      string
 	conv       agentConversation
-	t          *testing.T
+	// rRealBindingID 是本旅程的浏览器绑定（OPS_R_REAL_TAB_ORIGIN 非空时由
+	// openRealRJourney 建立）；runRJourney 在 run 活跃期间用它按 UI 授权同参数
+	// POST browser-grants（等效桌面「选择标签」弹窗确认；30 秒租约到期自动续签）。
+	rRealBindingID string
+	t              *testing.T
 }
 
 // rRealProviderConfig 是真实供应商的运行时配置。
@@ -254,7 +258,21 @@ func openRealRJourney(t *testing.T) *rJourneyEnv {
 	}
 	conv := env.rJourneyConversation(t, providerID, modelName)
 	t.Cleanup(func() { deleteConversations(t, conv.ID) })
-	return &rJourneyEnv{providerID: providerID, model: modelName, conv: conv, t: t}
+	rj := &rJourneyEnv{providerID: providerID, model: modelName, conv: conv, t: t}
+	// 真实证据链路（27 §16.4「真实旅程仍需实时 Key + Chrome 扩展」）：OPS_R_REAL_TAB_ORIGIN
+	// 非空时由测试完成与桌面「连接浏览器」相同的三步（pairings → confirm 落 binding）；
+	// 运行中的标签租约由 runRJourney 按 run_id 代用户签发（UI 弹窗确认的服务端等效动作）。
+	// 不设置该变量时维持原行为（无浏览器证据链路，证据硬校验会如实失败）。
+	if origin := strings.TrimSpace(os.Getenv("OPS_R_REAL_TAB_ORIGIN")); origin != "" {
+		var pairing browserPairingView
+		env.mustJSON(t, http.MethodPost, "/api/v1/agent/browser/pairings", map[string]any{"request_id": uuid.NewString()}, &pairing)
+		var confirmed struct {
+			BindingID string `json:"binding_id"`
+		}
+		env.mustJSON(t, http.MethodPost, "/api/v1/agent/browser/pairings/"+pairing.ID+"/confirm", w04ConfirmBody(t, pairing.Revision), &confirmed)
+		rj.rRealBindingID = confirmed.BindingID
+	}
+	return rj
 }
 
 // runRJourney 发送任务文本并等待 run 完成，返回 assistant 最终文本与产生的 evidence 引用。
@@ -270,6 +288,7 @@ func (rj *rJourneyEnv) runRJourney(label, task string) (string, []map[string]any
 	}
 	// 轮询 run 终态（真实模型最长 10 分钟）。
 	deadline := time.Now().Add(10 * time.Minute)
+	var lastGrantAt time.Time
 	for time.Now().Before(deadline) {
 		var detail struct {
 			ActiveRun *struct {
@@ -280,6 +299,25 @@ func (rj *rJourneyEnv) runRJourney(label, task string) (string, []map[string]any
 		env.mustJSON(t, "GET", "/api/v1/agent/conversations/"+rj.conv.ID.String(), map[string]any{}, &detail)
 		if detail.ActiveRun == nil {
 			break
+		}
+		// 真实证据链路：run 活跃期间由测试代用户维持标签租约（与桌面授权弹窗同一服务端
+		// 动作：POST browser-grants，origins 为用户当前 Chrome 实际标签 origin）。
+		// 30 秒租约每 6 秒续签一次；binding 未建立（未设 OPS_R_REAL_TAB_ORIGIN）时跳过。
+		if rj.rRealBindingID != "" && time.Since(lastGrantAt) >= 3*time.Second {
+			tabHandle := strings.TrimSpace(os.Getenv("OPS_R_REAL_TAB_HANDLE"))
+			origin := strings.TrimSpace(os.Getenv("OPS_R_REAL_TAB_ORIGIN"))
+			if tabHandle != "" && origin != "" {
+				env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+rj.conv.ID.String()+"/browser-grants", map[string]any{
+					"binding_id": rj.rRealBindingID, "run_id": detail.ActiveRun.ID,
+					"tab_handle": tabHandle, "origins": []string{origin},
+					"actions":        []string{"observe", "navigate", "click", "type", "extract", "screenshot"},
+					"policy_version": "1",
+				}, &struct{}{})
+				lastGrantAt = time.Now()
+			} else {
+				// 只配了 origin 没配 handle：只授权一次，避免盲签（如实等用户补齐环境变量）。
+				lastGrantAt = time.Now()
+			}
 		}
 		time.Sleep(3 * time.Second)
 	}
@@ -371,7 +409,7 @@ func TestR01CompetitorResearchReal(t *testing.T) {
 			"读取其最近 3 篇公开内容，比较主题选择、结构与表达方式、互动线索（第 %d 次迭代，请换一个此前未用过的来源）。"+
 			"输出：①竞品对照（每条附来源 URL 与读取时间）；②可借鉴点与不可照搬项（分开列出）；"+
 			"③每条结论标注来源片段。不要直接写入任何素材库。", i)
-	}, []string{"来源", "http", "借鉴"})
+	}, []string{"来源", "url", "借鉴"})
 }
 
 // R02 本人后台账号分析（§9.7）：授权后台→读取→分析。需要用户已在 Chrome 登录后台并完成扩展授权。
@@ -394,7 +432,7 @@ func TestR03RewriteFromWebReal(t *testing.T) {
 		return fmt.Sprintf("请根据公开网页资料改写一篇短文（第 %d 次迭代，请换一个资料来源）："+
 			"读取一篇真实公开网页，区分其中的事实与观点，产出新版本文稿：①差异对照表；②逐段修改理由；"+
 			"③每处修改附来源回链。不执行任何作品写入。", i)
-	}, []string{"来源", "对照"})
+	}, []string{"来源", "对照", "回链"})
 }
 
 // R04 热门话题与作品分析（§9.7）：检索/榜单→记录排序与时点→明确页面可见样本。

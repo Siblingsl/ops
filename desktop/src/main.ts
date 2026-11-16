@@ -135,6 +135,11 @@ if (process.env.OPS_DESKTOP_DISABLE_GPU === '1') {
   app.commandLine.appendSwitch('disable-gpu-sandbox');
 }
 
+// 测试/验收辅助（仅显式环境变量触发）：开 CDP 远程调试口，供授权的自动化登录注入。
+// 不设该变量时行为与原先完全一致（口不开）。
+if (process.env.OPS_DESKTOP_REMOTE_DEBUGGING_PORT) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.OPS_DESKTOP_REMOTE_DEBUGGING_PORT);
+}
 if (squirrelStartup) {
   app.quit();
 } else {

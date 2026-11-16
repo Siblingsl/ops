@@ -1,3 +1,4 @@
+// 与 web/e2e/cx09-visual-plan.spec.ts 同名成对（CF-CX-08）；本文件为真实 Electron 形态。
 import { _electron, expect, test } from '@playwright/test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

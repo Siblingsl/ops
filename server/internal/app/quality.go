@@ -318,7 +318,7 @@ func (s *Server) runSnapshot(ctx context.Context, task string, snap evalSnapshot
 	}
 	p := &ContextPack{System: snap.System, User: instructionBlock(template) + snap.UserRest, Temperature: snap.Temperature}
 	streamed := false
-	start := time.Now()
+	start := s.now()
 	text, usage, callErr := s.callModel(ctx, rt, p, snap.JSON, nil, &streamed)
 	status, errText := "ok", ""
 	if callErr != nil {
@@ -328,7 +328,7 @@ func (s *Server) runSnapshot(ctx context.Context, task string, snap evalSnapshot
 	// BE-02：评测用量落库失败必须可观测；不改 callErr 上抛语义（WithoutCancel 保取消后仍记账）。
 	if _, err := s.db.Exec(context.WithoutCancel(ctx), `INSERT INTO ai_call (workspace_id, task_type, provider, model, template_version, context_refs,
 		prompt_tokens, completion_tokens, latency_ms, status, error, is_eval) VALUES ($1,$2,$3,$4,0,$5,$6,$7,$8,$9,$10,true)`,
-		ident(ctx).WorkspaceID, task, rt.ProviderName, rt.Model, refs, usage.PromptTokens, usage.CompletionTokens, time.Since(start).Milliseconds(), status, truncate(errText, 500)); err != nil {
+		ident(ctx).WorkspaceID, task, rt.ProviderName, rt.Model, refs, usage.PromptTokens, usage.CompletionTokens, s.now().Sub(start).Milliseconds(), status, truncate(errText, 500)); err != nil {
 		s.observeFailure(context.WithoutCancel(ctx), slog.LevelError, "提示词评测用量落库失败", observeFields{
 			Action: "prompt_eval_ai_call", TargetType: "ai_call", TargetID: task,
 			ErrorCode: "prompt_eval_ai_call_failed", Route: "internal/quality/run_snapshot",
@@ -727,6 +727,7 @@ func (s *Server) putCustomTheme(w http.ResponseWriter, r *http.Request) error {
 	if _, err := s.db.Exec(r.Context(), `UPDATE account_profile SET custom_theme=$2, updated_at=now() WHERE account_id=$1`, a.ID, raw); err != nil {
 		return err
 	}
+	s.invalidateContextPackCache(r.Context(), a.ID)
 	return ok(w, t)
 }
 

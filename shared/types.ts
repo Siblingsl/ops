@@ -235,6 +235,8 @@ export interface Profile {
   style_summary: string
   default_theme: string
   wechat_defaults: WechatDefaults
+  /** CF-P2-CXEF-04：账号级 IANA 时区；空/缺省 Asia/Shanghai（FR-CX-23 effective_from 口径）。 */
+  timezone?: string
   topic_stock_policy?: { target_ready: number; warn_ready: number }
 }
 

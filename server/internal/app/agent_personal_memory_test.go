@@ -376,3 +376,92 @@ func TestW13bSimilarHint(t *testing.T) {
 		t.Fatalf("跨用户不得返回他人记忆：%+v", out.Memories)
 	}
 }
+
+// TestW13cSessionOverrideIsolationAndGates：CF-P2-MEM-02（27 §11.1.1 会话覆盖）。
+// ①会话 A 覆盖 off 不影响会话 B（B 仍注入）；②全局设置 revision CAS 冲突 409；
+// ③viewer 403 不能读/改 memory-settings（含会话覆盖 PATCH）。
+func TestW13cSessionOverrideIsolationAndGates(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "personal_memories")
+	providerID := env.ensureToolModel(t)
+	convA := env.agentRunConversation(t, providerID)
+	convB := env.agentRunConversation(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, convA.ID); deleteConversations(t, convB.ID) })
+
+	me := uuid.MustParse(env.me(t).UserID)
+	ws := uuid.MustParse(env.me(t).Workspace.ID)
+
+	// 一条 active 记忆作为注入对象（无 active 时两会话都返回空串，无法区分覆盖）。
+	active := w13Propose(t, "周报必须先列数据来源与日期")
+	var confirmed personalMemory
+	env.mustJSON(t, "PATCH", "/api/v1/agent/personal-memories/"+active.ID, map[string]any{
+		"action": "confirm", "expected_revision": active.Revision,
+	}, &confirmed)
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`UPDATE agent_personal_memory SET state='disabled', revision=revision+1 WHERE id=$1`, active.ID)
+	})
+
+	// ①会话 A 覆盖 off：A 不注入；会话 B 无覆盖仍注入（仅本会话语义）。
+	var settings map[string]any
+	env.mustJSON(t, "PATCH", "/api/v1/agent/memory-settings", map[string]any{
+		"conversation_id": convA.ID.String(), "memory_use_override": "off",
+	}, &settings)
+	if env.srv.personalMemorySystemBlock(context.Background(), me, ws, convA.ID, uuid.New()) != "" {
+		t.Fatal("会话 A 覆盖 off 后不得注入")
+	}
+	if env.srv.personalMemorySystemBlock(context.Background(), me, ws, convB.ID, uuid.New()) == "" {
+		t.Fatal("会话 B 不应受会话 A 覆盖影响")
+	}
+	// 会话覆盖互不串写：A 的 off 只落在 A 行。
+	var aOverride, bOverride string
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT memory_use_override FROM agent_conversation WHERE id=$1`, convA.ID).Scan(&aOverride); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT memory_use_override FROM agent_conversation WHERE id=$1`, convB.ID).Scan(&bOverride); err != nil {
+		t.Fatal(err)
+	}
+	if aOverride != "off" || bOverride != "" {
+		t.Fatalf("覆盖应仅落会话 A：a=%q b=%q", aOverride, bOverride)
+	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`UPDATE agent_conversation SET memory_use_override='', memory_capture_override='' WHERE id IN ($1,$2)`, convA.ID, convB.ID)
+	})
+
+	// ②全局设置 CAS：revision 不符 409。
+	var current struct {
+		UseEnabled      bool   `json:"use_enabled"`
+		CaptureEnabled  bool   `json:"capture_enabled"`
+		GlobalUse       bool   `json:"global_use_enabled"`
+		GlobalCapture   bool   `json:"global_capture_enabled"`
+		Revision        int64  `json:"revision"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/agent/memory-settings", nil, &current)
+	env.expectErr(t, "PATCH", "/api/v1/agent/memory-settings", map[string]any{
+		"use_enabled": false, "expected_revision": current.Revision + 9,
+	}, "memory_revision_conflict")
+	// 成功路径不改全局：CAS 通过且语义不变（本用例不实际翻转全局，避免污染）。
+
+	// ③viewer 403：GET/PATCH memory-settings 全部拒绝（个人记忆是本人私有功能）。
+	var inv inviteDTO
+	env.mustJSON(t, "POST", "/api/v1/workspaces/current/invites", map[string]any{"role": "viewer", "max_uses": 1, "days": 1}, &inv)
+	viewer := env.registerClient(t, "w13c-viewer-"+uuid.NewString()[:8], testPassword)
+	var vme meInfo
+	viewer.mustJSON(t, "GET", "/api/v1/auth/me", nil, &vme)
+	viewer.csrf = vme.CSRF
+	viewer.mustJSON(t, "POST", "/api/v1/workspaces/join", map[string]any{"code": inv.Code, "switch": true}, nil)
+	viewer.mustJSON(t, "GET", "/api/v1/auth/me", nil, &vme)
+	viewer.csrf = vme.CSRF
+	if st, _ := viewer.do("GET", "/api/v1/agent/memory-settings", nil); st != http.StatusForbidden {
+		t.Fatalf("viewer GET memory-settings 应 403，got %d", st)
+	}
+	if st, _ := viewer.do("PATCH", "/api/v1/agent/memory-settings", map[string]any{
+		"conversation_id": convA.ID.String(), "memory_use_override": "on",
+	}); st != http.StatusForbidden {
+		t.Fatalf("viewer PATCH memory-settings 应 403，got %d", st)
+	}
+	viewer.restore(env)
+}

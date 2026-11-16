@@ -189,7 +189,7 @@ func (s *Server) cxAssembleAccountBasisIn(ctx context.Context, q cxBasisQueryer,
 	if err != nil {
 		return nil, err
 	}
-	receipt := cxBasisReceipt{SchemaVersion: 1, AccountID: accountID, ProfileHash: profileHash, Sources: []cxBasisSource{}, Omitted: []cxBasisOmission{}, AssembledAt: time.Now().UTC()}
+	receipt := cxBasisReceipt{SchemaVersion: 1, AccountID: accountID, ProfileHash: profileHash, Sources: []cxBasisSource{}, Omitted: []cxBasisOmission{}, AssembledAt: s.now().UTC()}
 	receipt.Sources = append(receipt.Sources, cxBasisSource{Ref: "profile:" + accountID.String(), Kind: "profile", ID: accountID.String(), State: "unconfirmed", Purpose: "定位"})
 	if basis.Strategy == nil {
 		receipt.Omitted = append(receipt.Omitted, cxBasisOmission{Ref: "strategy", Reason: "没有启用的运营方案"})

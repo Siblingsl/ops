@@ -6,7 +6,7 @@ import vm from 'node:vm'
 
 const require = createRequire(import.meta.url)
 const ts = require('typescript')
-const source = fs.readFileSync(new URL('../src/lib/skill-canon.ts', import.meta.url), 'utf8')
+const source = fs.readFileSync(new URL('../../shared/skill-canon.ts', import.meta.url), 'utf8')
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText
 
 const sandbox = { exports: {}, require, console, TextEncoder, TextDecoder, crypto: globalThis.crypto }

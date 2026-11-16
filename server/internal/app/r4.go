@@ -469,7 +469,7 @@ func (s *Server) listPromptTemplates(w http.ResponseWriter, r *http.Request) err
 			list = append(list, t)
 			continue
 		}
-		list = append(list, PromptTemplate{TaskType: def.Type, Label: def.Label, Version: 1, Content: def.Default, Active: true, UpdatedAt: time.Now()})
+		list = append(list, PromptTemplate{TaskType: def.Type, Label: def.Label, Version: 1, Content: def.Default, Active: true, UpdatedAt: s.now()})
 	}
 	return ok(w, list)
 }
@@ -511,7 +511,7 @@ func (s *Server) putPromptTemplate(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 	s.audit(r.Context(), "prompt_template_update", "prompt_template", task, "ok", map[string]any{"version": ver})
-	return ok(w, PromptTemplate{TaskType: task, Label: def.Label, Version: ver, Content: in.Content, Active: true, UpdatedAt: time.Now()})
+	return ok(w, PromptTemplate{TaskType: task, Label: def.Label, Version: ver, Content: in.Content, Active: true, UpdatedAt: s.now()})
 }
 
 func (s *Server) exportData(w http.ResponseWriter, r *http.Request) error {

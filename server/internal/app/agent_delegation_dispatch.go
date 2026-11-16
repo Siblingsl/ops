@@ -71,7 +71,7 @@ func (s *Server) dispatchDelegationGroup(ctx context.Context, groupID uuid.UUID)
 // （含 conversation/run 上下文）。控制流不变：收尾失败不阻断派发主流程。
 func (s *Server) markDelegationParentEnded(ctx context.Context, conversationID, parentRunID uuid.UUID) {
 	const route = "internal/agent/delegation/mark_parent_ended"
-	started := time.Now()
+	started := s.now()
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		s.observeFailure(ctx, slog.LevelError, "派发收尾开事务失败", observeFields{
@@ -197,13 +197,13 @@ func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversatio
 		AllowedTools:      allowedTools,
 		DelegationID:      &delegationID,
 		DelegationGroupID: &groupID,
-		Deadline:          time.Now().Add(delegationBudgetPerTaskSeconds * time.Second),
+		Deadline:          s.now().Add(delegationBudgetPerTaskSeconds * time.Second),
 	}
 	if err := s.startAgentRunBackground(ctx, st); err != nil {
 		slog.WarnContext(ctx, "W15b dispatch: 模型循环启动失败", "child", childRunID.String(), "err", err)
 		// 启动失败：委派行标 failed，子 run 置 stopped。BE-02：补偿更新本身失败必须可观测
 		// （状态停在 running 会卡住对账），不改变「返回原错误」的控制流。
-		started := time.Now()
+		started := s.now()
 		if _, err := s.db.Exec(ctx, `UPDATE agent_delegation SET state='failed', error_code='dispatch_failed', updated_at=now() WHERE id=$1`, delegationID); err != nil {
 			s.observeFailure(ctx, slog.LevelError, "W15b dispatch: 启动失败补偿更新委派行失败", observeFields{
 				Action: "delegation_dispatch_compensate", TargetType: "agent_delegation", TargetID: delegationID.String(),
@@ -264,7 +264,7 @@ func (s *Server) touchDelegationGroupOnChildDone(ctx context.Context, delegation
 		// active/waiting_user → completed；completed 只表示"全部子任务终态"，不表示"已汇总"。
 		// 结果是否被承接由 results_consumed_at 单独标记（docs/32 D3）。
 		// BE-02：置位失败记 Warn（组停在 active 会卡住承接语义），控制流不变。
-		started := time.Now()
+		started := s.now()
 		if _, err := s.db.Exec(ctx, `UPDATE agent_delegation_group SET state='completed', updated_at=now()
 			WHERE id=$1 AND state IN ('active','waiting_user')`, groupID); err != nil {
 			s.observeFailure(ctx, slog.LevelWarn, "子任务全部终态后组置 completed 失败", observeFields{

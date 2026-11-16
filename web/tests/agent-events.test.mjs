@@ -6,7 +6,7 @@ import vm from 'node:vm'
 
 const require = createRequire(import.meta.url)
 const ts = require('typescript')
-const source = fs.readFileSync(new URL('../src/lib/agent-events.ts', import.meta.url), 'utf8')
+const source = fs.readFileSync(new URL('../../shared/agent-events.ts', import.meta.url), 'utf8')
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 } }).outputText
 
 class ApiError extends Error {

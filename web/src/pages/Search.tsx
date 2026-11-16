@@ -133,7 +133,7 @@ export default function SearchPage() {
         </Card>
       ) : searchPage.isLoading ? <div className="flex justify-center py-16"><Spinner /></div> : items.length === 0 ? (
         <Empty icon={<SearchIcon className="size-5" />} title="没有找到相关内容" desc={filters ? '换个说法试试，或放宽筛选条件。' : '换个说法试试，或减少关键词。'}
-          action={filters ? <Button onClick={() => { setType('all'); setAccount(''); setStatus(''); setDays('') }}>清除筛选</Button> : <Button onClick={() => setQ('')}>清空关键词</Button>} />
+          action={filters ? <Button onClick={() => update({ type: '', account: '', status: '', days: '' })}>清除筛选</Button> : <Button onClick={() => setQ('')}>清空关键词</Button>} />
       ) : (
         <Card className="divide-y divide-mist-100">
           {items.map((h) => {

@@ -1,6 +1,8 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+// @ts-ignore plain ESM helper outside package root; used by Vite + SSR tests
+import { sharedNpmAliases } from '../shared/vite-dep-alias.mjs'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', 'OPS_')
@@ -10,7 +12,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), tailwindcss()],
-    resolve: { alias: { '@': '/src' } },
+    resolve: { alias: { '@': '/src', ...sharedNpmAliases(import.meta.url) } },
     define: {
       __OPS_API_BASE__: JSON.stringify((env.OPS_API_BASE || '').replace(/\/+$/, '')),
     },

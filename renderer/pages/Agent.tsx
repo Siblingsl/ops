@@ -22,6 +22,7 @@ import { del, errorMessage, get, patch, post, uploadFormData } from '@/lib/api'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useAccounts, useCurrentAccount, useMe } from '@/lib/session'
 import { useSavePrefs } from '@/lib/v3'
+import { pagePollIntervalMs } from '@/lib/page-poll'
 import { usePageVisible } from '@/lib/visibility'
 import {
   type AgentAttachment, type AgentBootstrap, type AgentConversation, type AgentConversationDetail, type AgentInput,
@@ -176,7 +177,10 @@ export default function Agent() {
     queryKey: ['agent-conversation', conversationId],
     queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${conversationId}`),
     enabled: !!conversationId && canRead,
-    refetchInterval: (query) => !eventResumeEnabled && query.state.data?.active_run && pageVisible ? 2000 : false,
+    refetchInterval: (query) => {
+      if (eventResumeEnabled || !query.state.data?.active_run) return false
+      return pagePollIntervalMs(pageVisible, 2000, query.state.fetchFailureCount)
+    },
     refetchIntervalInBackground: false,
   })
   const detail = detailQuery.data
@@ -1316,6 +1320,7 @@ ${draft.text}` : draft.text))
         onRestoreInput={restoreNeedsReviewInput}
         onResumeInputs={resumeInputQueue}
         onQuoteArtifact={quoteArtifact}
+        memoryFeaturesEnabled={bootstrapData.features.personal_memories === true}
       />}
 
       {!workbenchUI && <Dialog open={goalPanelOpen} onClose={() => setGoalPanelOpen(false)} title="任务目标与上下文整理" desc="目标推进仍受账号权限、运行预算和逐张操作卡片确认约束。" width="max-w-2xl">

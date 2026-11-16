@@ -60,13 +60,24 @@ test('DEV-CX02 桌面稳定版提交冻结产物并覆盖 WARN 知悉放行', as
 
   const list = await api(page, 'GET', `/works/${work.id}/builds?limit=8`) as { items: Array<{ id: string; status: string; error_code: string | null }> }
   expect(list.items[0]).toMatchObject({ status: 'built', error_code: null })
-  const build = await api(page, 'GET', `/builds/${list.items[0].id}`) as { artifacts: Array<{ kind: string; downloadable: boolean }>; download_gate: { allowed: boolean; reason: string } }
+  const cleanBuildID = list.items[0].id
+  const build = await api(page, 'GET', `/builds/${cleanBuildID}`) as { artifacts: Array<{ kind: string; downloadable: boolean }>; download_gate: { allowed: boolean; reason: string } }
   expect(build.artifacts.map(item => item.kind).sort()).toEqual(['html', 'png', 'stable_html'])
   expect(build.artifacts.every(item => item.downloadable)).toBe(true)
   expect(build.download_gate).toMatchObject({ allowed: true, reason: 'clear' })
   const detailPanel = page.getByTestId('build-detail')
   await expect(detailPanel.getByRole('button', { name: '下载 manifest.json' })).toBeVisible()
   await expect(detailPanel.getByRole('button', { name: '下载图片证据 CSV' })).toBeVisible()
+  // CF-CX-03：正式 built（非注入）后由 BuildPanel 触发 evidence.csv 下载。
+  // BOM 用 page.request（Node HTTP）断言：浏览器 CDP 的 response.body() 对 text/csv 会剥 UTF-8 BOM。
+  const csvResponsePromise = page.waitForResponse(response =>
+    response.url().includes(`/builds/${cleanBuildID}/evidence.csv`) && response.request().method() === 'GET')
+  await detailPanel.getByRole('button', { name: '下载图片证据 CSV' }).click()
+  const csvResponse = await csvResponsePromise
+  expect(csvResponse.status()).toBe(200)
+  const csvBytes = Buffer.from(await (await page.request.fetch(`/api/v1/builds/${cleanBuildID}/evidence.csv`)).body())
+  expect(csvBytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))).toBe(true)
+  expect(csvBytes.toString('utf8')).toMatch(/index,role,section_id/)
   const unchanged = await api(page, 'GET', `/works/${work.id}`) as { sections: Array<{ content_md: string }> }
   expect(unchanged.sections[0].content_md).toBe('这段正文用于验证桌面构建。')
 

@@ -163,9 +163,9 @@ func (s *Server) runDesktopModelTest(test desktopModelTest) {
 		}
 		ctx = withDesktopExecution(ctx, execution)
 		client := &http.Client{Transport: desktopRoundTripper{server: s, scope: &desktopRequestScope{}}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-		start := time.Now()
+		start := s.now()
 		detail, err := fn(ctx, client)
-		result := desktopModelTestResult{Key: key, Label: label, OK: err == nil, LatencyMS: time.Since(start).Milliseconds()}
+		result := desktopModelTestResult{Key: key, Label: label, OK: err == nil, LatencyMS: s.now().Sub(start).Milliseconds()}
 		if err != nil {
 			result.Detail = truncate(err.Error(), 220)
 		} else {

@@ -423,6 +423,16 @@ func (s *Server) hardDeleteAccount(ctx context.Context, accountID uuid.UUID) err
 			{`UPDATE asset SET account_id=NULL WHERE account_id=$1`, []any{a.ID}},
 			{`UPDATE ai_call SET account_id=NULL WHERE account_id=$1`, []any{a.ID}},
 			{`UPDATE ai_job SET account_id=NULL WHERE account_id=$1`, []any{a.ID}},
+			// CF-P2-CXEF-04 顺带修复既有缺陷：00080/00082/00084/00077/00073/00079 引入的
+			// platform_account 子表未纳入级联清单，删除持其数据的账号 23503。
+			// 只删归属该账号的行；复合外键（diagnosis/experiment）不带 ON DELETE，须先删。
+			{`DELETE FROM ops_standard WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM comment_inbox WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM benchmark_note WHERE (target_id,workspace_id) IN (SELECT id,workspace_id FROM benchmark_target WHERE account_id=$1)`, []any{a.ID}},
+			{`DELETE FROM benchmark_target WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM content_diagnosis WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM review_experiment WHERE account_id=$1`, []any{a.ID}},
+			{`DELETE FROM account_visual_dna WHERE account_id=$1`, []any{a.ID}},
 			{`DELETE FROM platform_account WHERE id=$1`, []any{a.ID}},
 		}
 		for _, step := range steps {
@@ -518,7 +528,7 @@ func (s *Server) wechatLinkCheck(w http.ResponseWriter, r *http.Request) error {
 		}
 		return err
 	}
-	start := time.Now()
+	start := s.now()
 	fail := func(perr error) error {
 		msg := perr.Error()
 		var we *wechat.Error
@@ -528,7 +538,7 @@ func (s *Server) wechatLinkCheck(w http.ResponseWriter, r *http.Request) error {
 				msg += "（需要添加的 IP：" + s.egressHint() + "）"
 			}
 		}
-		return ok(w, map[string]any{"ok": false, "message": msg, "latency_ms": time.Since(start).Milliseconds()})
+		return ok(w, map[string]any{"ok": false, "message": msg, "latency_ms": s.now().Sub(start).Milliseconds()})
 	}
 	secret, err := s.box.Decrypt(enc)
 	if err != nil {
@@ -543,7 +553,7 @@ func (s *Server) wechatLinkCheck(w http.ResponseWriter, r *http.Request) error {
 		return fail(err)
 	}
 	s.audit(ctx, "wechat_link_check", "platform_account", a.ID.String(), "ok", nil)
-	return ok(w, map[string]any{"ok": true, "media_id": mediaID, "latency_ms": time.Since(start).Milliseconds(),
+	return ok(w, map[string]any{"ok": true, "media_id": mediaID, "latency_ms": s.now().Sub(start).Milliseconds(),
 		"message": "链路正常：已获取 access_token 并上传测试素材。没有写入草稿；这张自检图可在公众号后台素材库删除。"})
 }
 

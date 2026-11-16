@@ -23,22 +23,24 @@ import (
 // 派发后无回执由 sweep 转入 unknown_outcome，不重放。租约撤销/过期后的回执拒绝（迟到结果只核对）。
 
 type browserCommandView struct {
-	ID         string `json:"id"`
-	GrantID    string `json:"grant_id"`
-	RunID      string `json:"run_id,omitempty"`
-	RequestID  string `json:"request_id"`
-	ActionKind string `json:"action_kind"`
-	InputHash  string `json:"input_hash"`
-	State      string `json:"state"`
+	ID      string `json:"id"`
+	GrantID string `json:"grant_id"`
+	// ConversationID 只在桌面 pending 领取响应中出现（证据上报的会话归属），不落账本列。
+	ConversationID string `json:"conversation_id,omitempty"`
+	RunID          string `json:"run_id,omitempty"`
+	RequestID      string `json:"request_id"`
+	ActionKind     string `json:"action_kind"`
+	InputHash      string `json:"input_hash"`
+	State          string `json:"state"`
 	// A30b 片 2（拍板：账本存载荷+同步等待）：payload 只在桌面领取/领取派发响应中出现
 	// （执行必需）；result 只在终态回执后出现（模型同步等待读取）。均 nil 时不出现在 JSON。
-	Payload  json.RawMessage `json:"payload,omitempty"`
-	Result   json.RawMessage `json:"result,omitempty"`
-	Claimed  bool            `json:"claimed,omitempty"`
-	DeadlineAt   string `json:"deadline_at,omitempty"`
-	DispatchedAt string `json:"dispatched_at,omitempty"`
-	ErrorCode    string `json:"error_code,omitempty"`
-	CreatedAt    string `json:"created_at"`
+	Payload      json.RawMessage `json:"payload,omitempty"`
+	Result       json.RawMessage `json:"result,omitempty"`
+	Claimed      bool            `json:"claimed,omitempty"`
+	DeadlineAt   string          `json:"deadline_at,omitempty"`
+	DispatchedAt string          `json:"dispatched_at,omitempty"`
+	ErrorCode    string          `json:"error_code,omitempty"`
+	CreatedAt    string          `json:"created_at"`
 }
 
 var browserCommandActions = map[string]bool{
@@ -100,7 +102,7 @@ func (s *Server) createAgentBrowserCommand(w http.ResponseWriter, r *http.Reques
 	}
 	payloadJSON, _ := json.Marshal(body.Payload)
 	inputHash := fmt.Sprintf("%x", sha256.Sum256(append([]byte(body.Action+"."), payloadJSON...)))
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := s.now().Add(30 * time.Second)
 	if body.DeadlineAt != "" {
 		if deadline, err = time.Parse(time.RFC3339, body.DeadlineAt); err != nil {
 			return apiErr(422, "validation_failed", "deadline_at 需 RFC3339")
@@ -177,6 +179,9 @@ func (s *Server) dispatchAgentBrowserCommand(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		return err
 	}
+	// 证据上报（27 §13.6）需要会话归属：claimed 响应随行 conversation_id（桌面执行器
+	// 用 claimed 行执行与上报，pending 与 dispatch 两处都要带，缺一即证据链断）。
+	v.ConversationID = conversationID.String()
 	if claimed {
 		var payload json.RawMessage
 		if err := s.db.QueryRow(r.Context(), `SELECT COALESCE(payload, 'null'::jsonb) FROM agent_browser_command WHERE id=$1`, commandID).Scan(&payload); err != nil {
@@ -462,7 +467,7 @@ func (s *Server) runAgentBrowserCommand(w http.ResponseWriter, r *http.Request) 
 	}
 	payloadJSON, _ := json.Marshal(payload)
 	inputHash := fmt.Sprintf("%x", sha256.Sum256(append([]byte(action+"."), payloadJSON...)))
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := s.now().Add(30 * time.Second)
 	commandID := uuid.New()
 	if _, err := s.db.Exec(r.Context(), `
 		INSERT INTO agent_browser_command (id, run_id, grant_id, request_id, action_kind, input_hash, state, deadline_at, payload)
@@ -479,7 +484,7 @@ func (s *Server) runAgentBrowserCommand(w http.ResponseWriter, r *http.Request) 
 // waitForBrowserCommand：登记后轮询等待终态（拍板：同步等待 ≤30s），返回含 result 的
 // 最终 view。超 deadline+sweep 容差仍无回执时跑一次 sweep 转 unknown_outcome 后如实返回。
 func (s *Server) waitForBrowserCommand(r *http.Request, w http.ResponseWriter, commandID uuid.UUID) error {
-	deadline := time.Now().Add(browserCommandWaitBudget)
+	deadline := s.now().Add(browserCommandWaitBudget)
 	for {
 		if r.Context().Err() != nil {
 			// run 取消/断开：命令留在账本（queued/dispatched），sweep 兜底转 unknown_outcome。
@@ -507,7 +512,7 @@ func (s *Server) waitForBrowserCommand(r *http.Request, w http.ResponseWriter, c
 		}
 		// 超 deadline+sweep 容差：dispatched 由 sweep 转 unknown_outcome（不重放）；
 		// queued（无人领取）同样超时即终态——等待者不能无限挂起，也不重放。
-		if time.Now().After(cmdDeadline.Add(2 * time.Second)) {
+		if s.now().After(cmdDeadline.Add(2 * time.Second)) {
 			if state == "queued" {
 				if _, err := s.db.Exec(r.Context(), `
 					UPDATE agent_browser_command SET state='unknown_outcome', error_code='browser_wait_timeout'
@@ -518,7 +523,7 @@ func (s *Server) waitForBrowserCommand(r *http.Request, w http.ResponseWriter, c
 			}
 			s.sweepAgentBrowserCommands(r.Context())
 		}
-		if time.Now().After(deadline) {
+		if s.now().After(deadline) {
 			// 预算耗尽：如实返回当前非终态（queued=无人领取；dispatched=执行未回执）。
 			v, err := scanBrowserCommand(s.db.QueryRow(r.Context(), `SELECT `+browserCommandColumns+` FROM agent_browser_command c WHERE c.id=$1`, commandID))
 			if err != nil {
@@ -546,7 +551,7 @@ func (s *Server) pendingAgentBrowserCommands(w http.ResponseWriter, r *http.Requ
 		return err
 	}
 	rows, err := s.db.Query(r.Context(), `
-		SELECT `+browserCommandColumns+`, COALESCE(c.payload, 'null'::jsonb)
+		SELECT `+browserCommandColumns+`, COALESCE(c.payload, 'null'::jsonb), g.conversation_id::text
 		FROM agent_browser_command c JOIN agent_browser_grant g ON g.id=c.grant_id
 		WHERE g.workspace_id=$1 AND g.user_id=$2 AND c.state='queued'
 		  AND (c.deadline_at IS NULL OR c.deadline_at > now())
@@ -558,10 +563,14 @@ func (s *Server) pendingAgentBrowserCommands(w http.ResponseWriter, r *http.Requ
 	commands := []browserCommandView{}
 	for rows.Next() {
 		var v browserCommandView
+		var conversationID string
+		// 证据上报（27 §13.6）需要会话归属：pending 响应随行 conversation_id（桌面执行器
+		// 在命令成功后 POST /agent/browser/evidence 时原样带回，服务端再校验归属）。
 		if err := rows.Scan(&v.ID, &v.GrantID, &v.RunID, &v.RequestID, &v.ActionKind, &v.InputHash,
-			&v.State, &v.DeadlineAt, &v.DispatchedAt, &v.ErrorCode, &v.CreatedAt, &v.Payload); err != nil {
+			&v.State, &v.DeadlineAt, &v.DispatchedAt, &v.ErrorCode, &v.CreatedAt, &v.Payload, &conversationID); err != nil {
 			return err
 		}
+		v.ConversationID = conversationID
 		commands = append(commands, v)
 	}
 	return ok(w, map[string]any{"commands": commands})

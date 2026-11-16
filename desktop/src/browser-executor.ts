@@ -9,6 +9,8 @@ export interface BrowserCommandRow {
   action_kind: string;
   deadline_at?: string;
   claimed?: boolean;
+  /** 仅 pending 领取响应携带（证据上报的会话归属）。 */
+  conversation_id?: string;
   payload?: unknown;
   [key: string]: unknown;
 }
@@ -21,6 +23,11 @@ export interface BrowserExecutorDeps {
   bridgeState: () => 'paired' | 'other';
   dispatchAndWait: (action: string, payload: unknown, timeoutMs?: number) =>
     Promise<{ ok: true; result: unknown } | { ok: false; code: string; message?: string }>;
+  /** 证据上报（27 §13.6「真实来源→可回查证据」）：内容读取类命令成功后调用；失败不阻断回执。 */
+  reportEvidence?: (input: {
+    conversationId: string; commandId: string; kind: 'text' | 'screenshot';
+    origin: string; redactedUrl: string; title?: string; snippet?: string; docRevision?: string;
+  }) => Promise<void>;
   log?: (line: string) => void;
 }
 
@@ -37,6 +44,43 @@ export function scheduleNextMs(executedCount: number, idleRounds: number, baseMs
   if (idleRounds <= 0) return baseMs;
   const backoff = baseMs * 2 ** Math.min(idleRounds, 20);
   return Math.min(backoff, maxMs);
+}
+
+/** 从成功回执提取证据字段：只覆盖内容读取类（observe/observe_frames/extract/screenshot）；
+ * origin 取扩展回执的 origin（observe/extract 注入层返回）或 payload.url（navigate 后由
+ * 命令回执 url 字段）；URL 只保留协议+host+路径（去 query/fragment 脱敏）。 */
+const EVIDENCE_ACTIONS = new Set(['observe', 'observe_frames', 'extract', 'screenshot', 'navigate']);
+
+export function evidenceFromCommand(
+  action: string,
+  cmd: BrowserCommandRow,
+  result: unknown,
+): {
+  conversationId: string; commandId: string; kind: 'text' | 'screenshot';
+  origin: string; redactedUrl: string; title?: string; snippet?: string; docRevision?: string;
+} | null {
+  if (!EVIDENCE_ACTIONS.has(action)) return null;
+  const conversationId = String(cmd.conversation_id ?? '');
+  if (!conversationId) return null;
+  const payload = (cmd.payload ?? {}) as Record<string, unknown>;
+  const res = (result ?? {}) as Record<string, unknown>;
+  let origin = String(res.origin ?? '');
+  if (!origin) {
+    const url = String(res.url ?? payload.url ?? '');
+    try { origin = new URL(url).origin; } catch { origin = ''; }
+  }
+  if (!origin || !/^https?:\/\//.test(origin)) return null;
+  let redactedUrl = String(res.url ?? payload.url ?? origin);
+  try {
+    const u = new URL(redactedUrl);
+    redactedUrl = `${u.protocol}//${u.host}${u.pathname}`;
+  } catch { redactedUrl = origin; }
+  const title = typeof res.title === 'string' ? res.title : undefined;
+  const docRevision = typeof res.doc_rev === 'string' ? res.doc_rev : undefined;
+  let snippet: string | undefined;
+  if (action === 'extract' && typeof res.text === 'string') snippet = res.text.slice(0, 300);
+  const kind: 'text' | 'screenshot' = action === 'screenshot' ? 'screenshot' : 'text';
+  return { conversationId, commandId: String(cmd.id ?? ''), kind, origin, redactedUrl, title, snippet, docRevision };
 }
 
 export class BrowserCommandExecutor {
@@ -86,6 +130,18 @@ export class BrowserCommandExecutor {
     try {
       if (result.ok) {
         await this.deps.receipt(id, { state: 'succeeded', result: result.result });
+        // 证据上报（27 §13.6）：内容读取类命令成功即挂真实命令号上报；失败只记日志，
+        // 不改变已成功的回执（证据缺失由等待方的硬校验如实暴露，不伪造）。
+        if (this.deps.reportEvidence) {
+          const ev = evidenceFromCommand(action, claimed, result.result);
+          if (ev) {
+            try {
+              await this.deps.reportEvidence(ev);
+            } catch (err) {
+              this.deps.log?.(`[browser-executor] ${id.slice(0, 8)} 证据上报失败：${err instanceof Error ? err.message : err}`);
+            }
+          }
+        }
       } else {
         await this.deps.receipt(id, {
           state: 'failed',

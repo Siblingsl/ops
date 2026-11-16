@@ -13,6 +13,7 @@ import { del, errorMessage, get, patch, post, uploadFormData } from '@/lib/api'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useAccounts, useCurrentAccount } from '@/lib/session'
 import { useSavePrefs } from '@/lib/v3'
+import { pagePollIntervalMs } from '@/lib/page-poll'
 import { usePageVisible } from '@/lib/visibility'
 import {
   type AgentAttachment, type AgentBootstrap, type AgentConversation, type AgentConversationDetail,
@@ -33,6 +34,7 @@ import {
 } from '@/pages/agent/MessageChrome'
 import { useAgentRun } from '@/pages/agent/useAgentRun'
 import { AgentWorkbenchPanels } from '@/pages/agent/Workbench'
+import { MemoryOverrideSection } from '@/pages/agent/MemoryOverrideSection'
 
 type DraftAttachment = {
   clientID: string
@@ -140,7 +142,10 @@ export default function Agent() {
     queryKey: ['agent-conversation', conversationId],
     queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${conversationId}`),
     enabled: !!conversationId && canRead,
-    refetchInterval: (query) => !eventResumeEnabled && query.state.data?.active_run && pageVisible ? 2000 : false,
+    refetchInterval: (query) => {
+      if (eventResumeEnabled || !query.state.data?.active_run) return false
+      return pagePollIntervalMs(pageVisible, 2000, query.state.fetchFailureCount)
+    },
     refetchIntervalInBackground: false,
   })
   const detail = detailQuery.data
@@ -827,6 +832,8 @@ export default function Agent() {
             新消息将使用「{selectedAccountName}」，当前对话的历史仍属于「{historyAccountName}」。想从干净的上下文开始，请新建对话。
             <div className="mt-2"><Button type="button" size="sm" variant="outline" onClick={() => { setSettingsOpen(false); newConversation() }}>新建对话</Button></div>
           </Notice></div>}
+          {/* CF-P2-MEM-03（27 §11.1.1）：Web 端本会话记忆覆盖；仅本人功能，服务端对 viewer 403。 */}
+          {conversationId && bootstrapData?.features?.personal_memories === true && canWrite && <MemoryOverrideSection conversationId={conversationId} />}
         </div>
       </Dialog>
       <ContextPickerDialog

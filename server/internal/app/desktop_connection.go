@@ -341,7 +341,7 @@ func (s *Server) desktopHandleMessage(c *desktopConnection, raw []byte) error {
 	if len(raw) > desktopMaxControlBytes {
 		return fmt.Errorf("oversized desktop channel control frame")
 	}
-	if !c.allowControlFrame(false, time.Now()) {
+	if !c.allowControlFrame(false, s.now()) {
 		return fmt.Errorf("desktop channel control rate exceeded")
 	}
 	var in desktopWireMessage
@@ -526,7 +526,7 @@ func (s *Server) desktopSendJSON(c *desktopConnection, v any) error {
 	if len(b) > desktopMaxControlBytes {
 		return fmt.Errorf("desktop channel control frame exceeds size limit")
 	}
-	if !c.allowControlFrame(true, time.Now()) {
+	if !c.allowControlFrame(true, s.now()) {
 		return fmt.Errorf("desktop channel control rate exceeded")
 	}
 	select {

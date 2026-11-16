@@ -758,7 +758,9 @@ test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({
     { name: 'corrupt.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('not a zip package'), message: 'DOCX 已加密、损坏或解压内容超限' },
     { name: 'embedded.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ 'word/embeddings/oleObject1.bin': 'embedded object' }), message: '宏、嵌入对象或外链资源' },
     { name: 'malformed-xml.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxFixture({ 'word/document.xml': '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:t>不完整 XML</w:p></w:body></w:document>' }), message: 'DOCX 已加密、损坏或解压内容超限' },
-    { name: 'external-entity.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxExternalEntityFixture(), message: 'DOCX 已加密、损坏或解压内容超限' },
+    // CF-P2-DOC-E2E-01：external-entity.docx 移出拒绝数组——3ba518fd 字节级扫描重构后
+    // bangMarkup 跳过 DOCTYPE、未知实体原样透出（不读取外部目标），不再 422；现取行为改由
+    // 下方独立正向用例断言（实体不展开、解析成功）。
     { name: 'too-many-entries.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxEntryCountFixture(257), message: 'DOCX 已加密、损坏或解压内容超限' },
     { name: 'too-many-pages.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxPageFixture(101), message: '文档超过 100 页' },
   ]
@@ -839,6 +841,23 @@ test('DEV-QA26 G7 Web逐项拒绝文档解析边界且不允许发送', async ({
   expect(messagePosts).toBe(0)
 })
 
+test('DEV-QA26 G7 Web external-entity DOCX 实体不展开原样透出（CF-P2-DOC-E2E-01 现取行为）', async ({ page, baseURL }) => {
+  await prepare(page, baseURL!)
+  const chooser = page.waitForEvent('filechooser')
+  const upload = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/agent/attachments' && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '添加附件', exact: true }).click()
+  await (await chooser).setFiles({ name: 'external-entity.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: docxExternalEntityFixture() })
+  const response = await upload
+  expect(response.status()).toBe(200)
+  const receipt = await response.json() as { id: string; parse_status: string; extracted_chars: number }
+  expect(receipt.parse_status).toBe('ready')
+  // 3ba518fd 字节级扫描：DOCTYPE 被跳过、未知实体 &ext; 原样透出（不读取外部目标）。
+  // extracted_chars = 去除 XML 标签后的文本长度（DOCTYPE 跳过 + 实体 6 字节原样保留 + 段尾换行 +1），
+  // 与 body 文本 `<w:t>&ext;</w:t>` 的 6 字节实体一致；不等于展开后读回外部内容的长度。
+  expect(receipt.extracted_chars).toBe('&ext;'.length + 1)
+  await page.getByRole('button', { name: '移除 external-entity.docx', exact: true }).click()
+})
+
 test('DEV-QA26 Web DOCX解析后疑似密钥隔离且不回显', async ({ page, baseURL }) => {
   test.setTimeout(90_000)
   await prepare(page, baseURL!)
@@ -893,7 +912,11 @@ test('DEV-QA26 G7 Web filechooser上传4MiB DOCX并核对解析回执与原件',
   const receipt = await response.json() as { id: string; parse_status: string; page_count: number; extracted_chars: number; injected_chars: number; truncated_from: number; truncated_to: number }
   await expect(page.getByLabel('web-document-4mib.docx ready', { exact: true })).toBeVisible({ timeout: 60_000 })
   expect(receipt).toMatchObject({ parse_status: 'ready', page_count: 1, injected_chars: 20_000, truncated_from: 20_001 })
-  expect(receipt.extracted_chars).toBeGreaterThan(expandedBytes - 100)
+  // CF-P2-DOC-E2E-01：c71c6702 把 fixture prefix/suffix 加长后 extracted = expanded - 145，
+  // 模糊下界 expandedBytes-100 数学上必红；与 6MiB 例（c3463f10）对齐用精确式。
+  const xmlPrefix4 = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>'
+  const xmlSuffix4 = '</w:t></w:r></w:p></w:body></w:document>'
+  expect(receipt.extracted_chars).toBe(expandedBytes - Buffer.byteLength(xmlPrefix4) - Buffer.byteLength(xmlSuffix4) + 1)
   expect(receipt.truncated_to).toBe(receipt.extracted_chars)
   const originalFile = await page.evaluate(async (id) => {
     const response = await fetch('/api/v1/agent/attachments/' + id + '/file')
@@ -1099,7 +1122,10 @@ test('DEV-QA26 G7 Web filechooser探测5MiB DOCX解析边界', async ({ page, ba
   if (response.status() === 200) {
     await expect(page.getByLabel('web-document-5mib.docx ready', { exact: true })).toBeVisible({ timeout: 60_000 })
     expect(result).toMatchObject({ parse_status: 'ready', page_count: 1, injected_chars: 20_000, truncated_from: 20_001 })
-    expect(result.extracted_chars).toBeGreaterThan(expandedBytes - 100)
+    // CF-P2-DOC-E2E-01：与 4MiB/6MiB 例对齐用精确式（c71c6702 加长 fixture 后旧阈值必红）。
+    const xmlPrefix5 = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>'
+    const xmlSuffix5 = '</w:t></w:r></w:p></w:body></w:document>'
+    expect(result.extracted_chars).toBe(expandedBytes - Buffer.byteLength(xmlPrefix5) - Buffer.byteLength(xmlSuffix5) + 1)
     expect(result.truncated_to).toBe(result.extracted_chars)
     const original = await page.evaluate(async (id) => {
       const response = await fetch('/api/v1/agent/attachments/' + id + '/file')

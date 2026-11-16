@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // DEV-CX13-F / FR-CX-23 / T-CX23：运营标准——
@@ -184,4 +185,60 @@ func TestCXOpsStandardFrozenIntoCheckRun(t *testing.T) {
 	if string(basisAfter) != string(basisRaw) {
 		t.Fatal("archive must not rewrite historical check_run basis")
 	}
+}
+
+// TestCXOpsStandardAccountTimezoneBoundary：CF-P2-CXEF-04（docs/24 FR-CX-23 effective_from 按账号时区）。
+// 账号时区设为 UTC-10（Pacific/Honolulu）：同一 UTC 时刻下，
+// 上海已是「明天」而檀香山仍是「今天」——未来版 v2 的生效日为「今天」时，
+// 上海口径不生效、檀香山口径生效。PATCH profile 写入时区；freeze 与拟稿读取同口径。
+func TestCXOpsStandardAccountTimezoneBoundary(t *testing.T) {
+	var fresh Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{"platform": "xhs", "name": "时区边界验收号", "content_format": "image_note"}, &fresh)
+	account := fresh
+	tzBase := "/api/v1/accounts/" + account.ID.String()
+
+	// PATCH profile 写时区：非法 IANA 名 422；合法值入库并在 GET 回读。
+	env.expectErr(t, "PUT", tzBase+"/profile", map[string]any{"timezone": "Mars/Olympus"}, "validation_failed")
+	var profile map[string]any
+	env.mustJSON(t, "PUT", tzBase+"/profile", map[string]any{"timezone": "Pacific/Honolulu"}, &profile)
+	if profile["timezone"] != "Pacific/Honolulu" {
+		t.Fatalf("timezone must round-trip: %v", profile["timezone"])
+	}
+
+	// 造一条「今天（檀香山）」生效的未来版：上海可能仍是昨天 → 未生效。
+	stdBase := tzBase + "/standards"
+	honolulu, err := time.LoadLocation("Pacific/Honolulu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	todayHNL := env.srv.now().In(honolulu).Format("2006-01-02")
+	var v1 standardItem
+	status, body := env.do("POST", stdBase, map[string]any{
+		"base_version": 0, "positioning": "檀香山今天生效", "effective_from": todayHNL,
+	})
+	if status != 201 || json.Unmarshal(body, &v1) != nil {
+		t.Fatalf("create standard: status=%d body=%s", status, body)
+	}
+
+	// freeze 走账号时区：檀香山口径下今天已生效 → basis 冻结 v1。
+	wk := env.readyWork(t, account, "时区边界验收作品")
+	defer agentDropWork(wk.ID)
+	var run struct {
+		Run CheckRun `json:"run"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/works/"+wk.ID.String()+"/checks", map[string]int{"html_chars": 3000, "html_bytes": 9000}, &run)
+	if run.Run.OpsStandardBasis == nil {
+		t.Fatal("檀香山口径下「今天」生效的标准应冻结进 basis")
+	}
+	var basis struct {
+		Version         int    `json:"version"`
+		AccountTimezone string `json:"account_timezone"`
+	}
+	if json.Unmarshal(run.Run.OpsStandardBasis, &basis) != nil || basis.Version != 1 || basis.AccountTimezone != "Pacific/Honolulu" {
+		t.Fatalf("basis 应为 v1@Pacific/Honolulu：%s", string(run.Run.OpsStandardBasis))
+	}
+
+	// 还原：删除测试账号（既有删除机制），不污染共享 fixture。
+	var del map[string]any
+	env.mustJSON(t, "DELETE", "/api/v1/accounts/"+account.ID.String()+"?confirm=true", nil, &del)
 }

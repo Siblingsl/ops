@@ -501,7 +501,7 @@ func (s *Server) createVoiceRealtimeToken(w http.ResponseWriter, r *http.Request
 		SET route_snapshot = route_snapshot || $2::jsonb, revision=revision+1 WHERE id=$1`,
 		sessionID, mustJSON(map[string]any{
 			"realtime_token":     token,
-			"realtime_token_exp": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339),
+			"realtime_token_exp": s.now().Add(10 * time.Minute).UTC().Format(time.RFC3339),
 			"realtime_provider":  rt.ProviderName,
 			"realtime_model":     rt.Model,
 		})); err != nil {
@@ -516,7 +516,7 @@ func (s *Server) createVoiceRealtimeToken(w http.ResponseWriter, r *http.Request
 	return ok(w, map[string]any{
 		"session_id": sessionID.String(),
 		"token":      token,
-		"expires_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339),
+		"expires_at": s.now().Add(10 * time.Minute).UTC().Format(time.RFC3339),
 		"provider":   rt.ProviderName,
 		"model":      rt.Model,
 		"proxy_url":  proxyURL,
@@ -659,7 +659,7 @@ func (s *Server) realtimeVoiceProxy(w http.ResponseWriter, r *http.Request) erro
 		return apiErr(403, "realtime_token_invalid", "实时语音令牌无效")
 	}
 	exp, err := time.Parse(time.RFC3339, expiresAt)
-	if err != nil || time.Now().After(exp) {
+	if err != nil || s.now().After(exp) {
 		return apiErr(401, "realtime_token_expired", "实时语音令牌已过期，请重新签发")
 	}
 	if state != "active" {

@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { createServer } from 'vite'
+import { sharedNpmAliases } from '../../shared/vite-dep-alias.mjs'
 
 test('公众号 renderer contract 与八套内置主题 token 摘要匹配共享登记', async () => {
   const fixture = JSON.parse(await readFile('../testdata/cx02-render-contract.json', 'utf8'))
-  const server = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, ws: false }, appType: 'custom' })
+  const server = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, ws: false }, appType: 'custom', resolve: { alias: sharedNpmAliases(import.meta.url) } })
   try {
     const { themes } = await server.ssrLoadModule('/lib/render.ts')
     const { canonicalJSON } = await server.ssrLoadModule('/lib/canonical-json.ts')

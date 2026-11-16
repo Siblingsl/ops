@@ -764,7 +764,7 @@ func (s *Server) postAgentGoalConfirmCriterion(w http.ResponseWriter, r *http.Re
 			return apiErr(409, "agent_goal_state_invalid", "此完成条件不需要人工确认或状态已变化")
 		}
 		goal.Criteria[i].Status = "confirmed"
-		now := time.Now().UTC()
+		now := s.now().UTC()
 		goal.Criteria[i].ConfirmedAt = &now
 		found = true
 		break
@@ -1017,7 +1017,7 @@ func (s *Server) agentGoalBoundary(ctx context.Context, st *agentRunState) error
 	if status != "active" {
 		return errAgentGoalPaused
 	}
-	usedSeconds := st.GoalUsedSeconds + int(time.Since(st.StartedAt).Seconds())
+	usedSeconds := st.GoalUsedSeconds + int(s.now().Sub(st.StartedAt).Seconds())
 	if usedSeconds >= secondsBudget || tokenBudget != nil && st.GoalUsedTokens+st.PromptTokens+st.CompletionTokens >= *tokenBudget {
 		return errAgentGoalBudgetReached
 	}
@@ -1036,7 +1036,7 @@ func (s *Server) finishAgentGoalTx(ctx context.Context, tx pgx.Tx, st *agentRunS
 	if err := tx.QueryRow(ctx, `SELECT progress_run_id FROM agent_goal WHERE id=$1`, goal.ID).Scan(&progressRun); err != nil {
 		return "", err
 	}
-	seconds := int(time.Since(st.StartedAt).Seconds())
+	seconds := int(s.now().Sub(st.StartedAt).Seconds())
 	if seconds < 0 {
 		seconds = 0
 	}

@@ -305,3 +305,18 @@ test('GL-05 作品页切账号成功后回到新账号的作品列表', async ({
   await expect(page).toHaveURL(new RegExp(`/a/${other.id}/works$`))
   await expect(page).not.toHaveURL(new RegExp(`/works/${id}`))
 })
+
+/** CF-NW-01 / GL-03：空查询首屏就要有操作与设置，不必先打字。 */
+test('GL-03 命令面板空查询首屏显示操作与设置', async ({ page }) => {
+  await registerAccount(page)
+  await page.keyboard.press('Control+k')
+  const palette = page.getByRole('dialog', { name: '命令面板' })
+  await expect(palette).toBeVisible()
+  await expect(palette.getByPlaceholder(/搜索作品、选题、素材/)).toHaveValue('')
+  await expect(palette.getByText('操作', { exact: true })).toBeVisible()
+  // 新建作品按钮 accessible name 含 hint（如「小红书笔记」），不能 exact。
+  await expect(palette.getByRole('button', { name: /^新建作品/ })).toBeVisible()
+  await expect(palette.getByRole('button', { name: '新建选题', exact: true })).toBeVisible()
+  await expect(palette.getByText('设置', { exact: true })).toBeVisible()
+  await expect(palette.getByRole('button', { name: '偏好设置', exact: true })).toBeVisible()
+})

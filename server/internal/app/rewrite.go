@@ -300,7 +300,7 @@ func (s *Server) rewriteCheck(w http.ResponseWriter, r *http.Request) error {
 	resp := cxRewriteCheckResponse{
 		Result: result, Dimensions: dims, ReferenceHash: referenceHash,
 		ReferenceTextRequired: skeletonRef,
-		AICallID:              aiCallID, Model: modelName, PromptVersion: promptVersion, CreatedAt: time.Now(),
+		AICallID:              aiCallID, Model: modelName, PromptVersion: promptVersion, CreatedAt: s.now(),
 	}
 	if skeletonOnly {
 		resp.PromptVersion = "skeleton_only"

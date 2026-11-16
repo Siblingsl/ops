@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, LoaderCircle, Square } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { get, post } from '@/lib/api'
+import { pagePollIntervalMs } from '@/lib/page-poll'
 import { usePageVisible } from '@/lib/visibility'
 
 // DEV-AI27-15 第二批（W15b UI）：工作视图"任务"页协作区（27 §11.3.1）。
@@ -102,17 +103,32 @@ export function DelegationPanel({ conversationId, onStopped, onNavigateArtifact,
       const result = await get<{ groups: DelegationGroupView[] }>(`/agent/conversations/${conversationId}/delegation-groups`)
       setGroups(result.groups ?? [])
       setError('')
+      return true
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+      return false
     }
   }, [conversationId])
 
-  // DEV-P08：隐藏页停 5s 轮询。
+  // DEV-P08：隐藏页无请求；可见时失败指数退避（setTimeout 链，非固定 5s）。
   useEffect(() => {
     if (!conversationId || !pageVisible) return
-    void reload()
-    const timer = setInterval(() => void reload(), 5000)
-    return () => clearInterval(timer)
+    let cancelled = false
+    let failures = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = async () => {
+      const ok = await reload()
+      if (cancelled) return
+      failures = ok ? 0 : failures + 1
+      const wait = pagePollIntervalMs(true, 5000, failures)
+      if (wait === false) return
+      timer = setTimeout(() => { void tick() }, wait)
+    }
+    void tick()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
   }, [conversationId, reload, pageVisible])
 
   const stopOne = useCallback(async (delegationID: string) => {

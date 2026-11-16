@@ -58,12 +58,12 @@ func (s *Server) purgeRetention(ctx context.Context) (retentionStats, error) {
 	}
 	for _, item := range cutoffs {
 		for {
-			started := time.Now()
+			started := s.now()
 			var count int
 			if err := s.db.QueryRow(ctx, item.query, item.cutoff).Scan(&count); err != nil {
 				return stats, err
 			}
-			elapsed := time.Since(started).Milliseconds()
+			elapsed := s.now().Sub(started).Milliseconds()
 			if count == 0 {
 				break
 			}

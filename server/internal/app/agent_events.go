@@ -52,7 +52,7 @@ func (s *Server) appendAgentEvent(ctx context.Context, conversationID uuid.UUID,
 	defer tx.Rollback(ctx)
 	var expiry *time.Time
 	if eventType == "message.delta" {
-		until := time.Now().Add(agentDeltaRetention)
+		until := s.now().Add(agentDeltaRetention)
 		expiry = &until
 	}
 	seq, err := appendAgentEventTx(ctx, tx, conversationID, runID, eventType, payload, expiry)
@@ -75,11 +75,11 @@ func (s *Server) persistAgentDelta(ctx context.Context, st *agentRunState, text 
 	payload := map[string]any{"message_key": st.MessageKey, "chunk_index": st.PartialChunkIndex, "text": text}
 	if st.DeltaEventCount >= 10000 {
 		eventType = ""
-		if time.Since(st.LastSnapshotAt) >= time.Second {
+		if s.now().Sub(st.LastSnapshotAt) >= time.Second {
 			eventType = "message.snapshot"
 			payload = map[string]any{"message_key": st.MessageKey, "chunk_index": st.PartialChunkIndex,
 				"text": st.PartialOutput}
-			st.LastSnapshotAt = time.Now()
+			st.LastSnapshotAt = s.now()
 		}
 	}
 	tx, err := s.db.Begin(ctx)
@@ -99,7 +99,7 @@ func (s *Server) persistAgentDelta(ctx context.Context, st *agentRunState, text 
 	if eventType != "" {
 		var expiry *time.Time
 		if eventType == "message.delta" {
-			until := time.Now().Add(agentDeltaRetention)
+			until := s.now().Add(agentDeltaRetention)
 			expiry = &until
 		}
 		if _, err := appendAgentEventTx(ctx, tx, st.ConversationID, &st.RunID, eventType, payload, expiry); err != nil {

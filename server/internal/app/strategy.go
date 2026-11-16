@@ -334,6 +334,7 @@ func (s *Server) saveStrategyVersion(ctx context.Context, a *Account, f Strategy
 		return nil, err
 	}
 	s.audit(ctx, "strategy.activate", "account", a.ID.String(), "ok", map[string]any{"version": st.Version})
+	s.invalidateContextPackCache(ctx, a.ID)
 	if err := s.ensureSlots(ctx, a, st, true); err != nil {
 		return nil, err
 	}
@@ -366,6 +367,9 @@ func (s *Server) syncStrategyProfile(ctx context.Context, a *Account, f Strategy
 			return nil, err
 		}
 		synced = append(synced, k)
+	}
+	if len(synced) > 0 {
+		s.invalidateContextPackCache(ctx, a.ID)
 	}
 	return synced, nil
 }

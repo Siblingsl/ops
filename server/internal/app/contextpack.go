@@ -3,10 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/errgroup"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -126,6 +127,9 @@ func (s *Server) profileText(ctx context.Context, a *Account, p *Profile, workID
 
 // buildContext fills the slots in priority order, trimming the trimmable ones to budget.
 func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, error) {
+	started := s.now()
+	var prefetchMs float64
+	cacheHit := false
 	p := &ContextPack{Legacy: map[string]any{}, Images: t.Images}
 	includeCXBasis := t.CXBasisEnabled && cxExistingWritingTasks[t.Type]
 	var sys, usr strings.Builder
@@ -144,11 +148,12 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 				return nil, err
 			}
 		}
-		// BE-05（docs/33 §3.5 / BE-05；≡DEV-P04）：互相独立的读并行化（errgroup）。
+		// BE-05（docs/33 §3.5 / BE-05；≡DEV-P04）：互相独立的读并行化（errgroup）+ 短 TTL 片段缓存。
 		// 依赖图：targetFormat 仅由 t.Account/t.WorkID 派生（无 DB 依赖）；loadProfile /
 		// activeStrategy / activeMemories / loadDataPreferences / loadTopPerformance 互不依赖、
 		// 均为纯读；styleSlot 依赖 prof.StyleSummary → 仍在 profile 之后串行。
 		// 组装（WriteString/p.add）保持原槽序逐字节不变；任何读失败与串行版一样整体报错。
+		// 个人技能不进缓存（技能槽仍只读 skillSnapshotFromCtx）。
 		var (
 			prof        *Profile
 			strategy    *Strategy
@@ -158,7 +163,23 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 			prefTasksOn = dataPrefTasks[t.Type]
 			perfTasksOn = perfTasks[t.Type]
 		)
-		{
+		scope := t.MemoryScope
+		if scope == "" {
+			scope = taskMemoryScope(t.Type)
+		}
+		factsOnly := t.Type == "fact_flag"
+		cacheKey := ""
+		cacheOK := false
+		prefetchStart := s.now()
+		if id := ident(ctx); id != nil && id.WorkspaceID != uuid.Nil {
+			cacheKey = contextPackBasisKey(id.WorkspaceID, t.Account.ID, targetFormat, scope, factsOnly, prefTasksOn, perfTasksOn, t.WorkID)
+			if basis, hit := s.contextPacks.get(cacheKey); hit {
+				prof, strategy, mems, prefs, samples = basis.Prof, basis.Strategy, basis.Mems, basis.Prefs, basis.Samples
+				cacheOK = true
+				cacheHit = true
+			}
+		}
+		if !cacheOK {
 			g, gctx := errgroup.WithContext(ctx)
 			g.Go(func() error {
 				var err error
@@ -170,13 +191,9 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 				strategy, err = s.activeStrategy(gctx, t.Account.ID)
 				return err
 			})
-			scope := t.MemoryScope
-			if scope == "" {
-				scope = taskMemoryScope(t.Type)
-			}
 			g.Go(func() error {
 				var err error
-				mems, err = s.activeMemories(gctx, t.Account.ID, scope, t.Type == "fact_flag")
+				mems, err = s.activeMemories(gctx, t.Account.ID, scope, factsOnly)
 				return err
 			})
 			if prefTasksOn {
@@ -204,7 +221,11 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 			if err := g.Wait(); err != nil {
 				return nil, err
 			}
+			if cacheKey != "" {
+				s.contextPacks.put(cacheKey, contextPackBasis{Prof: prof, Strategy: strategy, Mems: mems, Prefs: prefs, Samples: samples})
+			}
 		}
+		prefetchMs = float64(s.now().Sub(prefetchStart)) / float64(time.Millisecond)
 		pt := s.profileText(ctx, t.Account, prof, t.WorkID)
 		sys.WriteString("\n\n## 账号定位档案\n" + pt)
 		profileItem := SlotItem{ID: t.Account.ID.String(), Label: "定位与表达档案", Chars: runeLen(pt), Used: true}
@@ -454,7 +475,36 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 	p.System, p.User = sys.String(), usr.String()
 	p.UserRest = p.User[restStart:]
 	p.Temperature = s.taskTemperature(ctx, t.Type, t.JSON)
+	s.logContextPackAssemble(ctx, t, started, prefetchMs, cacheHit)
 	return p, nil
+}
+
+// logContextPackAssemble 是 DEEP-05 / BE-05 项 3：组装耗时结构化 Info（无正文、无密钥）。
+// cache_hits/misses/size 取自累计计数器，供定向测与 4.3 度量口径对照。
+func (s *Server) logContextPackAssemble(ctx context.Context, t aiTask, started time.Time, prefetchMs float64, cacheHit bool) {
+	hits, misses, size := 0, 0, 0
+	if s != nil && s.contextPacks != nil {
+		hits, misses, size = s.contextPacks.stats()
+	}
+	workspaceID, accountID := "", ""
+	if id := ident(ctx); id != nil && id.WorkspaceID != uuid.Nil {
+		workspaceID = id.WorkspaceID.String()
+	}
+	if t.Account != nil {
+		accountID = t.Account.ID.String()
+	}
+	slog.InfoContext(ctx, "context pack assemble",
+		"task_type", t.Type,
+		"workspace_id", workspaceID,
+		"account_id", accountID,
+		"duration_ms", float64(s.now().Sub(started))/float64(time.Millisecond),
+		"prefetch_ms", prefetchMs,
+		"cache_hit", cacheHit,
+		"cache_hits", hits,
+		"cache_misses", misses,
+		"cache_size", size,
+		"bare", t.Bare,
+	)
 }
 
 // skillSnapshotFromCtx 读取本次动作的技能快照（若存在）。

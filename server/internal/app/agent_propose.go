@@ -437,7 +437,7 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 		AccountID:       c.AccountID,
 		Model:           model,
 		BatchID:         uuid.New(),
-		Deadline:        time.Now().Add(agentRunSeconds * time.Second),
+		Deadline:        s.now().Add(agentRunSeconds * time.Second),
 	}
 	if trigger == "routine" {
 		execution := agentRoutineExecutionOf(ctx)
@@ -449,7 +449,7 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 		st.ExecutionOrigin = "routine"
 		st.RoutineID = &execution.RoutineID
 		st.RoutineOccurrenceID = &execution.OccurrenceID
-		st.Deadline = time.Now().Add(300 * time.Second)
+		st.Deadline = s.now().Add(300 * time.Second)
 	} else if agentRoutineExecutionOf(ctx) != nil {
 		return nil, apiErr(403, "forbidden", "例行任务身份不能启动交互运行")
 	}

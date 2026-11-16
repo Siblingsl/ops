@@ -288,9 +288,10 @@ func (s *Server) draftCommentReply(w http.ResponseWriter, r *http.Request) error
 	// 与文字规则注入提示；无标准照常拟稿，标准不阻断也不落进评论数据（audit 记版本）。
 	standardHint := ""
 	standardVersion := 0
+	tzName, _ := s.accountTimezone(ctx, item.AccountID)
 	std, stdErr := scanOpsStandard(s.db.QueryRow(ctx, `SELECT `+opsStandardCols+` FROM ops_standard
-		WHERE account_id=$1 AND effective_from<=(now() AT TIME ZONE 'Asia/Shanghai')::date
-		ORDER BY effective_from DESC, version DESC LIMIT 1`, item.AccountID))
+		WHERE account_id=$1 AND effective_from<=(now() AT TIME ZONE $2)::date
+		ORDER BY effective_from DESC, version DESC LIMIT 1`, item.AccountID, tzName))
 	if stdErr == nil {
 		rules := make([]string, 0, len(std.TextRules))
 		for _, rule := range std.TextRules {

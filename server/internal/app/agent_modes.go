@@ -39,7 +39,7 @@ func agentValidateModeRequest(ctx context.Context, mode *string) error {
 }
 
 // 只读模式的建议由agent_chat生成，不调用可能产生业务副作用的G工具。
-// 来源值仅由服务端设置；尚未实现的后台来源一律不可调用。
+// 来源值仅由服务端设置；客户端伪造的/缺 ID 的 goal·routine·delegation 一律不可调用。
 func agentRunToolAllowed(st *agentRunState, tool *AgentTool, id *identity) bool {
 	if !agentToolVisible(tool, id) {
 		return false

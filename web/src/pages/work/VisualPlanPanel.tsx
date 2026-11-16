@@ -269,7 +269,7 @@ export function VisualPlanPanel({ work, canWrite }: { work: Work; canWrite: bool
   const bySection = (id: string) => work.sections.find((section) => section.id === id)
 
   return (
-    <section className="mt-6" data-testid="visual-plan-panel">
+    <section id="visual-plan" className="mt-6" data-testid="visual-plan-panel">
       <Card className="overflow-hidden">
         <div className="flex flex-wrap items-start gap-3 border-b border-mist-100 p-4">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-ink-50 text-ink-700"><Sparkles className="size-4" /></div>

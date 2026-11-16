@@ -13,7 +13,7 @@ globalThis.localStorage = {
 }
 globalThis.window = { dispatchEvent() {} }
 
-const { rememberRecent, recentItems, setRecentOwner } = await import('../src/lib/recent.ts')
+const { rememberRecent, recentItems, setRecentOwner } = await import('../../shared/recent.ts')
 
 test('A-26-1 未确认登录身份时不读也不写最近打开', () => {
   setRecentOwner(undefined, undefined)

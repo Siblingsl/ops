@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -139,10 +140,21 @@ func runWithEnv(m *testing.M) (int, error) {
 	if err := srv.SeedDevModel(ctx); err != nil {
 		return 0, err
 	}
-	hs := httptest.NewServer(srv.Router())
+	var hs *httptest.Server
+	if listen := strings.TrimSpace(os.Getenv("OPS_TEST_API_LISTEN")); listen != "" {
+		l, lerr := net.Listen("tcp", listen)
+		if lerr != nil {
+			return 0, fmt.Errorf("OPS_TEST_API_LISTEN %s 不可用: %w", listen, lerr)
+		}
+		hs = httptest.NewUnstartedServer(srv.Router())
+		hs.Listener = l
+		hs.Start()
+	} else {
+		hs = httptest.NewServer(srv.Router())
+	}
 	defer hs.Close()
 	jar, _ := cookiejar.New(nil)
-	env = &testEnv{srv: srv, http: hs, mockWX: wx, mock: mockSrv, llm: llm, client: &http.Client{Jar: jar, Timeout: time.Minute}, dbURL: dbURL}
+	env = &testEnv{srv: srv, http: hs, mockWX: wx, mock: mockSrv, llm: llm, client: &http.Client{Jar: jar, Timeout: 5 * time.Minute}, dbURL: dbURL}
 	if st, body := env.do("POST", "/api/v1/auth/setup", map[string]string{"username": "owner", "password": testPassword}); st != 200 {
 		return 0, fmt.Errorf("setup: %d %s", st, body)
 	}
@@ -325,7 +337,7 @@ func (e *testEnv) registerClient(t *testing.T, username, password string) *guest
 	jar, _ := cookiejar.New(nil)
 	g := &guestClient{
 		parent: e,
-		client: &http.Client{Jar: jar, Timeout: time.Minute},
+		client: &http.Client{Jar: jar, Timeout: 5 * time.Minute},
 		savedC: e.client,
 		savedX: e.csrf,
 	}

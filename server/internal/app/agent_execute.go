@@ -352,7 +352,7 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 	if act.Status != "pending" && act.Status != "needs_input" {
 		return apiErr(409, "agent_action_state_invalid", "这张卡片已经处理过了")
 	}
-	if !time.Now().Before(act.ExpiresAt) {
+	if !s.now().Before(act.ExpiresAt) {
 		return apiErr(409, "agent_action_state_invalid", "这张卡片已过期，请让智能体重新提出")
 	}
 	// 第 3 项：确认、门槛、二次确认。

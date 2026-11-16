@@ -6,7 +6,7 @@ import { Button, Field, Input, Notice, Select, Switch, Textarea } from '@/compon
 import { api, ApiError, errorMessage, get, post, stream } from '@/lib/api'
 import { runeLen } from '@/lib/format'
 import { normalizeDefinitionFields, publishDigest, serializeSkillMarkdown } from '@/lib/skill-canon'
-import { skillFields, skillFormats, skillPlatforms, skillTasks, type SkillDef, type SkillDefinition, type SkillForm, type SkillImpact, type SkillList, type SkillWarning } from '@/lib/skills'
+import { skillFields, skillFormats, skillPlatforms, skillTasks, type SkillDef, type SkillDefinition, type SkillDiff, type SkillForm, type SkillImpact, type SkillList, type SkillWarning } from '@/lib/skills'
 import { useAccounts, useMe } from '@/lib/session'
 import { useSkillDraftGuard } from './use-skill-draft-guard'
 
@@ -27,6 +27,7 @@ export default function SkillEditor({ def: initialDef, copyFrom, initial, fixedA
   const [warnings, setWarnings] = useState<SkillWarning[]>([])
   const [confirmPublic, setConfirmPublic] = useState(false)
   const [impact, setImpact] = useState<SkillImpact | null>(null)
+  const [fieldDiff, setFieldDiff] = useState<SkillDiff | null>(null)
   const [stale, setStale] = useState(false)
   const [failure, setFailure] = useState('')
   const [readOnly, setReadOnly] = useState(false)
@@ -83,6 +84,16 @@ export default function SkillEditor({ def: initialDef, copyFrom, initial, fixedA
     } catch (e) { if (alive.current && request === impactRequest.current) setFailure(errorMessage(e)) } finally { if (alive.current && request === impactRequest.current) setBusy(false) }
   }
   useEffect(() => { if (def) void fetchImpact(true) }, [def?.id])
+
+  // DEEP-04：有影响预览后对照拟保存字段；个人正文由服务端脱敏。
+  useEffect(() => {
+    if (!def || !impact || stale) { setFieldDiff(null); return }
+    let cancelled = false
+    void post<SkillDiff>(`/skills/${def.id}/diff`, { base_revision: impact.base_revision, fields: skillFields(form) })
+      .then((next) => { if (!cancelled) setFieldDiff(next) })
+      .catch(() => { if (!cancelled) setFieldDiff(null) })
+    return () => { cancelled = true }
+  }, [def?.id, impact?.base_revision, impact?.impact_token, form, stale])
 
   const draft = async () => {
     if (!draftBrief.trim() || drafting || busy) return
@@ -189,6 +200,12 @@ export default function SkillEditor({ def: initialDef, copyFrom, initial, fixedA
         {def && <Field label="状态"><Select value={form.status} onChange={e => set({ status: e.target.value })}><option value="active">启用中</option><option value="disabled">停用（保留配置与绑定）</option></Select></Field>}
       </fieldset>
       {impact && <Notice>保存将影响 {impact.affected_bindings} 条绑定{impact.accounts.length ? `（${impact.accounts.map(a => a.name).join('、')}）` : ''}；已生成的作品不追溯修改。</Notice>}
+      {fieldDiff && !fieldDiff.unchanged && <Notice>
+        字段变更：{fieldDiff.changes.map(c => c.redacted ? `${c.field}（已省略正文）` : c.field).join('、') || '无'}
+        {fieldDiff.prompt_affecting && fieldDiff.affected_task_types.length
+          ? `；将影响任务提示词：${fieldDiff.affected_task_types.slice(0, 8).join('、')}${fieldDiff.affected_task_types.length > 8 ? '…' : ''}`
+          : ''}。已生成的作品不追溯修改。
+      </Notice>}
       {impact?.history && impact.history.uses > 0 && <Notice>历史表现（只读）：使用 {impact.history.uses} 次，采用 {impact.history.adopted} 次（{(impact.history.adopt_rate * 100).toFixed(0)}%），发布关联 {impact.history.published} 次。不自动改绑定或启用。</Notice>}
       {!!impact?.combo_warnings?.length && <Notice tone="gamboge">{impact.combo_warnings.map(w => {
         const excludeTip = w.suggested_exclude_skill_id === w.other_skill_id

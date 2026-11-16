@@ -321,9 +321,10 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 	if input.RendererReceipt.LongImage != nil {
 		rendererReceipt["long_image"] = input.RendererReceipt.LongImage
 	}
+	// 24 §5.1 / CF-CX-02：manifest 最少含 source_hash 与 params_hash，便于离线校验与归档对照。
 	manifest := map[string]any{
 		"schema": "ops.build-manifest/v1", "build_id": buildID.String(), "work_id": workID.String(),
-		"source_hash": sourceHash, "basis_revision": revision, "targets": targets,
+		"source_hash": sourceHash, "params_hash": paramsHash, "basis_revision": revision, "targets": targets,
 		"validator_version": cxbuildvalidate.ValidatorVersion, "privacy_report_hash": privacy["report_hash"],
 		"image_evidence": validation["image_evidence"], "unused_asset_ids": validation["unused_asset_ids"],
 		"artifacts": cxBuildManifestArtifacts(selectedArtifacts), "coverage": privacy["coverage"],

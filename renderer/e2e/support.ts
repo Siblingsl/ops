@@ -103,8 +103,8 @@ export async function selectDesktopSetting(page: Page, name: string) {
   await item.click()
 }
 
-export async function registerAccount(page: Page, type = '图文笔记', platform: 'xhs' | 'wechat_mp' | 'toutiao' = 'xhs', username = `e2e-${Date.now()}-${test.info().workerIndex}`) {
-  await page.goto('/register')
+export async function registerAccount(page: Page, type = '图文笔记', platform: 'xhs' | 'wechat_mp' | 'toutiao' = 'xhs', username = `e2e-${Date.now()}-${test.info().workerIndex}`, origin = '') {
+  await page.goto(`${origin}/register`)
   await page.getByLabel('用户名', { exact: true }).fill(username)
   await page.getByLabel('密码（至少 12 位）').fill('local-e2e-password-123')
   await page.getByRole('button', { name: '创建账号', exact: true }).click()
@@ -116,7 +116,7 @@ export async function registerAccount(page: Page, type = '图文笔记', platfor
   const created = page.waitForResponse(r => r.url().endsWith('/api/v1/accounts') && r.request().method() === 'POST')
   await dialog.getByRole('button', { name: '添加账号', exact: true }).click()
   const account = await (await created).json()
-  await page.goto(`/a/${account.id}`)
+  await page.goto(`${origin}/a/${account.id}`)
   await expect(page.getByRole('heading', { name: /今天写点什么/ })).toBeVisible()
   if (process.env.OPS_E2E_PROD === '1') {
     const provider = await api(page, 'POST', '/model-providers', {

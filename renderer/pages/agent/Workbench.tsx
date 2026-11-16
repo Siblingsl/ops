@@ -13,13 +13,14 @@ import { type AgentContextSelection, type AgentSkillSelection } from '@/pages/ag
 import { DelegationPanel } from '@/pages/agent/DelegationPanel'
 import { GoalPanel } from '@/pages/agent/GoalPanel'
 import { InBrowsePanel } from '@/pages/agent/InBrowsePanel'
+import { MemoryOverrideSwitch } from '@/pages/agent/MemoryOverrideSwitch'
 import { SourcePanel } from '@/pages/agent/SourcePanel'
 
 export type WorkbenchTab = 'task' | 'context' | 'artifact' | 'browser'
 
 export function WorkbenchSidePanel({
   tab, setTab, close, width, browserWorkspaceEnabled, conversation, activeRun, busy, pendingActions, actionCount, selectedAccountName, selectedModelName, attachmentCount,
-  contextRefs, skillRequests, latestSkillUsage, artifactsEnabled, goalsEnabled, compactEnabled, canManageGoals, models, goal, onCompact, actions, inputs, inputQueuePaused, onUpdateInput, onCancelInput, onRestoreInput, onResumeInputs, onQuoteArtifact,
+  contextRefs, skillRequests, latestSkillUsage, artifactsEnabled, goalsEnabled, compactEnabled, canManageGoals, models, goal, onCompact, actions, inputs, inputQueuePaused, onUpdateInput, onCancelInput, onRestoreInput, onResumeInputs, onQuoteArtifact, memoryFeaturesEnabled,
 }: {
   tab: WorkbenchTab; setTab: (tab: WorkbenchTab) => void; close: () => void; width?: number; browserWorkspaceEnabled: boolean
   conversation?: AgentConversation; activeRun?: AgentConversationDetail['active_run']; busy: boolean; pendingActions: number; actionCount: number
@@ -31,6 +32,7 @@ export function WorkbenchSidePanel({
   onUpdateInput: (input: AgentInput, text: string) => Promise<void>; onCancelInput: (input: AgentInput) => Promise<void>
   onRestoreInput: (input: AgentInput) => Promise<void>; onResumeInputs: () => Promise<void>
   onQuoteArtifact: (ref: AgentContextSelection, prompt: string) => void
+  memoryFeaturesEnabled: boolean
 }) {
   const [editingInputID, setEditingInputID] = useState('')
   const [editingInputText, setEditingInputText] = useState('')
@@ -99,6 +101,8 @@ export function WorkbenchSidePanel({
         {skillRequests.length > 0 && <section className="mt-4"><h4 className="text-xs font-semibold text-mist-600">已请求技能</h4><ul className="mt-1 space-y-1 text-xs text-mist-600">{skillRequests.map((item) => <li key={`${item.skill_id}:${item.work_id ?? ''}`}>{item.name} · 尚未加载</li>)}</ul></section>}
         {!!latestSkillUsage?.length && <section className="mt-4"><h4 className="text-xs font-semibold text-mist-600">本轮技能状态</h4><ul className="mt-1 space-y-1 text-xs text-mist-600">{latestSkillUsage.map((item) => <li key={item.id}>{item.loaded ? '已加载到模型上下文；实际使用未验证' : '已请求，未加载'} · {item.name}</li>)}</ul></section>}
         <p className="desktop-agent-side-note">选择、启用和加载是不同状态。只有 load_skill 成功回执才显示已加载；当前无法从模型调用回执确认是否遵循了技能指令。</p>
+        {/* CF-P2-MEM-01（27 §11.1.1）：本会话记忆覆盖开关；全局关不能被会话越过。 */}
+        {conversation && <MemoryOverrideSwitch conversationId={conversation.id} enabled={memoryFeaturesEnabled} />}
       </section>}
       {tab === 'artifact' && <section aria-labelledby="workbench-artifact-heading" className="flex h-full flex-col">
         <h3 id="workbench-artifact-heading">产物</h3>

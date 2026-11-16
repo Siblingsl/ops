@@ -121,7 +121,7 @@ func (s *Server) collectSearch(ctx context.Context, src CrawlSource, lim crawl.L
 	if e = st.Reserve(ctx, source, now, lim.DailyRequests); e != nil {
 		return nil, e
 	}
-	started := time.Now()
+	started := s.now()
 	results, usage, e := ai.Search(jctx, s.aiHTTP, endpoint, key, src.Config["model"], src.Config["query"])
 	out := crawl.Outcome{Requests: 1, RobotsAllow: true, Status: 200}
 	if e != nil {
@@ -175,7 +175,7 @@ func (s *Server) collectSearch(ctx context.Context, src CrawlSource, lim crawl.L
 
 // recordHotSearchTelemetry：搜索用量与 crawl_run best-effort 落库；失败 Error 可观测（BE-02）。
 func (s *Server) recordHotSearchTelemetry(ctx context.Context, src CrawlSource, provider string, refs []byte, usage ai.Usage, started, now time.Time, out crawl.Outcome, itemCount int, status, msg string) {
-	if _, err := s.db.Exec(ctx, `INSERT INTO ai_call(workspace_id,task_type,provider,model,context_refs,prompt_tokens,completion_tokens,latency_ms,status,error) VALUES($1,'hot_search',$2,$3,$4,$5,$6,$7,$8,$9)`, src.WorkspaceID, provider, src.Config["model"], refs, usage.PromptTokens, usage.CompletionTokens, int(time.Since(started).Milliseconds()), status, msg); err != nil {
+	if _, err := s.db.Exec(ctx, `INSERT INTO ai_call(workspace_id,task_type,provider,model,context_refs,prompt_tokens,completion_tokens,latency_ms,status,error) VALUES($1,'hot_search',$2,$3,$4,$5,$6,$7,$8,$9)`, src.WorkspaceID, provider, src.Config["model"], refs, usage.PromptTokens, usage.CompletionTokens, int(s.now().Sub(started).Milliseconds()), status, msg); err != nil {
 		s.observeFailure(ctx, slog.LevelError, "热点搜索用量落库失败", observeFields{
 			Action: "hot_search_ai_call", TargetType: "crawl_source", TargetID: src.Key,
 			ErrorCode: "hot_search_ai_call_failed", Route: "internal/crawl/hot_search",

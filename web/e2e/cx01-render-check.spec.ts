@@ -89,4 +89,11 @@ test('Web 构建 complete 在同一夹具下产物指纹一致，改稿后变化
   expect(changedBody.status).toBe('built')
   expect(changedBody.artifact_fingerprint).toMatch(/^[0-9a-f]{64}$/)
   expect(changedBody.artifact_fingerprint).not.toBe(firstBody.artifact_fingerprint)
+
+  // CF-CX-05：检查页挂接同一指纹，并明示「不证明平台视觉一致」。
+  await page.goto(`/works/${work.id}/check`)
+  const checkFp = page.getByTestId('artifact-fingerprint')
+  await expect(checkFp).toBeVisible()
+  await expect(checkFp).toContainText(changedBody.artifact_fingerprint)
+  await expect(checkFp).toContainText('不证明平台视觉一致')
 })

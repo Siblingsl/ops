@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createServer } from 'vite'
+import { sharedNpmAliases } from '../../shared/vite-dep-alias.mjs'
 
 test('自定义斜体引用的文字在白底上达到 4.5:1', async () => {
-  const server = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, ws: false }, appType: 'custom' })
+  const server = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, ws: false }, appType: 'custom', resolve: { alias: sharedNpmAliases(import.meta.url) } })
   try {
     const { customTheme } = await server.ssrLoadModule('/src/lib/render.ts')
     const { customThemeContrastError } = await server.ssrLoadModule('/src/lib/theme-contrast.ts')

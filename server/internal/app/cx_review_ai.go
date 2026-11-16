@@ -289,7 +289,7 @@ analysis_v2.observations 只写可由引用支持的事实。analysis_v2.hypothe
 	basis.AICallID = &res.CallID
 	basis.Model, _ = res.Refs["model"].(string)
 	basis.PromptTemplateVersion, _ = res.Refs["prompt_version"].(int)
-	basis.AssembledAt = time.Now().UTC()
+	basis.AssembledAt = s.now().UTC()
 	basisJSON, err = json.Marshal(basis)
 	if err != nil {
 		return nil, err
@@ -360,7 +360,7 @@ func (s *Server) cxReviewV2SelectedWorks(ctx context.Context, account *Account, 
 
 func (s *Server) cxReviewBuildAIBasis(ctx context.Context, account *Account, works []cxReviewWorkSnapshot, contentFormat string) (cxReviewAIBasis, map[string]bool, error) {
 	basis := cxReviewAIBasis{SchemaVersion: 1, AnalysisVersion: 2, PromptVersion: cxReviewAnalysisV2PromptVersion,
-		TaskType: "review_analysis", AssembledAt: time.Now().UTC(), Sampling: "retained_snapshots", Platform: account.Platform,
+		TaskType: "review_analysis", AssembledAt: s.now().UTC(), Sampling: "retained_snapshots", Platform: account.Platform,
 		ContentFormat: contentFormat, Selection: map[string]any{"work_scope": "explicit_or_recent_published", "metric_quality": "approved",
 			"metric_source": "metric_source_supported", "window_rule": "nearest_target_then_earlier_then_metric_source_order_then_id",
 			"ratio_precision": "unrounded", "baseline_limit": 10, "baseline_minimum_per_ratio": 5, "content_scope": "title_summary_viewpoint_topics_metadata_only"},

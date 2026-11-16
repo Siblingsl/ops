@@ -196,7 +196,7 @@ func (s *Server) listCXReviewMetricCompare(w http.ResponseWriter, r *http.Reques
 		return err
 	}
 	window := strings.TrimSpace(r.URL.Query().Get("window"))
-	if _, _, _, ok := cxReviewWindowRange(time.Now(), window); !ok {
+	if _, _, _, ok := cxReviewWindowRange(s.now(), window); !ok {
 		return validation("时间窗口必须是 T1、T3、T7 或 T30")
 	}
 	contentFormat := strings.TrimSpace(r.URL.Query().Get("content_format"))

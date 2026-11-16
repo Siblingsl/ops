@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createServer } from 'vite'
+import { sharedNpmAliases } from '../../shared/vite-dep-alias.mjs'
 
 /** DEV-P09 全链路：桌面 renderer 侧与 Web 同口径，经真实 api.ts mock fetch。 */
 
@@ -14,7 +15,12 @@ async function withApiModule(run) {
     server: { middlewareMode: true, ws: false },
     appType: 'custom',
     define: { __OPS_API_BASE__: JSON.stringify('') },
-    resolve: { alias: [{ find: /^@\//, replacement: '/' }] },
+    resolve: {
+      alias: [
+        { find: /^@\//, replacement: '/' },
+        ...Object.entries(sharedNpmAliases(import.meta.url)).map(([find, replacement]) => ({ find, replacement })),
+      ],
+    },
   })
   try {
     const mod = await server.ssrLoadModule('/lib/api.ts')

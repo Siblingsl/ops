@@ -483,7 +483,7 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 	id := ident(ctx)
 	status, reason = "completed", ""
 	defer func() { s.finishAgentRun(ctx, st, status, reason, send) }()
-	st.StartedAt = time.Now()
+	st.StartedAt = s.now()
 	if send != nil {
 		send("run", map[string]any{"run_id": st.RunID, "status": "running"})
 	}
@@ -494,7 +494,7 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 	if st.ExecutionOrigin == "delegation" {
 		runSeconds = delegationBudgetPerTaskSeconds
 	}
-	st.Deadline = time.Now().Add(time.Duration(runSeconds) * time.Second)
+	st.Deadline = s.now().Add(time.Duration(runSeconds) * time.Second)
 	if st.GoalID != nil {
 		remaining := st.GoalSecondsBudget - st.GoalUsedSeconds
 		if remaining <= 0 {
@@ -502,7 +502,7 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 			return
 		}
 		if remaining < agentRunSeconds {
-			st.Deadline = time.Now().Add(time.Duration(remaining) * time.Second)
+			st.Deadline = s.now().Add(time.Duration(remaining) * time.Second)
 		}
 	}
 	if st.Trigger == "compact" {
@@ -536,7 +536,7 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 			status = "stopped"
 			return
 		}
-		if !time.Now().Before(st.Deadline) {
+		if !s.now().Before(st.Deadline) {
 			status, reason = "completed", agentReasonDeadline
 			return
 		}
@@ -821,7 +821,7 @@ func (s *Server) agentToolError(ctx context.Context, st *agentRunState, call ai.
 // agentHandleToolCall 按返回顺序处理一个工具调用。
 func (s *Server) agentHandleToolCall(ctx context.Context, st *agentRunState, id *identity,
 	call ai.ToolCall, send func(string, any)) error {
-	st.ToolStartedAt = time.Now()
+	st.ToolStartedAt = s.now()
 	if err := s.agentToolStarted(context.WithoutCancel(ctx), st, call, send); err != nil {
 		if errors.Is(err, context.Canceled) {
 			st.ToolStartedAt = time.Time{}
@@ -939,7 +939,7 @@ func (s *Server) agentToolDispatch(ctx context.Context, st *agentRunState, t *Ag
 	}
 	ctx = context.WithoutCancel(ctx)
 	secrets := s.agentSecretValues(ctx, st.WorkspaceID)
-	started := time.Now()
+	started := s.now()
 	timeout := agentReadTimeout
 	if t.Kind == toolG {
 		timeout = agentGenerateTimeout
@@ -997,7 +997,7 @@ func (s *Server) agentTagSourceCall(ctx context.Context, st *agentRunState, tool
 		}
 	}
 	if source == uuid.Nil {
-		source = s.agentLinkAICall(ctx, st.WorkspaceID, from, time.Now().Add(time.Second))
+		source = s.agentLinkAICall(ctx, st.WorkspaceID, from, s.now().Add(time.Second))
 	}
 	if source == uuid.Nil {
 		return
@@ -1025,7 +1025,7 @@ func agentToolSummary(model []byte) string {
 
 // finishAgentRun 更新 agent_run 的终态、写回 loaded_domains，并在有客户端时发送 done。
 func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, reason string, send func(string, any)) {
-	finished := time.Now()
+	finished := s.now()
 	finishCtx := context.WithoutCancel(ctx)
 	tx, txErr := s.db.Begin(finishCtx)
 	if txErr == nil {

@@ -300,7 +300,7 @@ func (s *Server) extractStructure(w http.ResponseWriter, r *http.Request) error 
 	structureHash := benchmarkContentHash(structureJSON)
 	resp := cxStructureExtractResponse{
 		Structure: structure, StructureHash: structureHash, SourceURL: sourceURL,
-		AICallID: &aiResult.CallID, PromptVersion: "cx-structure-1", CreatedAt: time.Now(),
+		AICallID: &aiResult.CallID, PromptVersion: "cx-structure-1", CreatedAt: s.now(),
 	}
 	if target != nil {
 		row := s.db.QueryRow(r.Context(), `SELECT model FROM ai_call WHERE id=$1 AND workspace_id=$2`, aiResult.CallID, ident(r.Context()).WorkspaceID)

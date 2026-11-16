@@ -176,35 +176,11 @@ type platformV2WriteContext struct {
 
 func (s *Server) submitPlatformV2ResultBatchTx(ctx context.Context, tx pgx.Tx,
 	batch platformResultBatch, write platformV2WriteContext) (platformReceipt, error) {
-	if batch.ProtocolVersion != 2 || write.OperationID == uuid.Nil || batch.ResultType == "" || len(batch.Data) == 0 {
-		return platformReceipt{}, validation("v2 批次必须包含协议版本、operation 和类型化 data")
+	// DEV-S04：形状校验 → 锁操作/预算 → 按类型写入 → 存进度/终批。
+	if err := validatePlatformV2ResultBatchShape(batch, write); err != nil {
+		return platformReceipt{}, err
 	}
-	if batch.Coverage != nil || len(batch.Observations) != 0 {
-		return platformReceipt{}, validation("v2 结果只能使用 result_type/data，不能混用 v1 observations/coverage")
-	}
-	if err := checkPlatformJSONDepth(batch.Data, 16); err != nil {
-		return platformReceipt{}, validation("v2 结果嵌套超过上限")
-	}
-	maxBatchBytes, maxRows := platformV2BatchLimits(batch.ResultType)
-	if maxBatchBytes == 0 {
-		return platformReceipt{}, validation("result_type 不受支持")
-	}
-	if write.RawBytes > maxBatchBytes {
-		return platformReceipt{}, apiErr(http.StatusRequestEntityTooLarge, "platform_result_too_large", "该类型的批次超过大小上限")
-	}
-	if batch.FinalBatch != (batch.ResultType == "control") {
-		return platformReceipt{}, validation("只有 control 批次可以结束 v2 run")
-	}
-	if !batch.FinalBatch && batch.RunStatus != platformRunStatusSuccess {
-		return platformReceipt{}, validation("非终批的 run_status 必须为 succeeded")
-	}
-	if batch.FinalBatch && batch.RunStatus != platformRunStatusSuccess && batch.RunStatus != platformRunStatusPartial &&
-		batch.RunStatus != platformRunStatusFailed && batch.RunStatus != platformRunStatusCanceled {
-		return platformReceipt{}, validation("终批 run_status 无效")
-	}
-	if batch.ErrorCode != nil && !validPlatformResultError(*batch.ErrorCode) {
-		return platformReceipt{}, validation("error_code 不在固定错误目录中")
-	}
+	_, maxRows := platformV2BatchLimits(batch.ResultType)
 
 	var opKind string
 	if err := tx.QueryRow(ctx, `SELECT kind FROM platform_sync_operation WHERE id=$1 AND workspace_id=$2 AND account_id=$3
@@ -255,234 +231,8 @@ func (s *Server) submitPlatformV2ResultBatchTx(ctx context.Context, tx pgx.Tx,
 	if json.Unmarshal(checkpointRaw, &checkpoint) != nil || checkpoint == nil {
 		checkpoint = map[string]any{}
 	}
-	switch batch.ResultType {
-	case "account_snapshot":
-		var data platformV2AccountSnapshot
-		if err := decodePlatformV2Data(batch.Data, &data); err != nil {
-			return platformReceipt{}, err
-		}
-		if err := s.writePlatformAccountSnapshotTx(ctx, tx, write, data); err != nil {
-			return platformReceipt{}, err
-		}
-		incrementPlatformCounter(counters, "changed", 1)
-		receipt.Accepted = 1
-		receipt.Rows = append(receipt.Rows, map[string]any{"row_no": 0, "state": "accepted"})
-	case "work_catalog":
-		var data platformV2CatalogResult
-		if err := decodePlatformV2Data(batch.Data, &data); err != nil {
-			return platformReceipt{}, err
-		}
-		if len(data.Items) > platformV2AccountBatchRows {
-			return platformReceipt{}, validation("work_catalog 单批最多 25 条")
-		}
-		seenExternalIDs := map[string]bool{}
-		for index, item := range data.Items {
-			if seenExternalIDs[item.ExternalID] {
-				receipt.Duplicate++
-				receipt.Rows = append(receipt.Rows, map[string]any{"row_no": index, "state": "duplicate"})
-				continue
-			}
-			seenExternalIDs[item.ExternalID] = true
-			if _, err := tx.Exec(ctx, `SAVEPOINT platform_v2_row`); err != nil {
-				return platformReceipt{}, err
-			}
-			created, changed, skipped, err := s.writePlatformCatalogItemTx(ctx, tx, write, item)
-			if err != nil {
-				if rollbackErr := rollbackPlatformV2Row(ctx, tx); rollbackErr != nil {
-					return platformReceipt{}, rollbackErr
-				}
-				if isPlatformV2RowValidation(err) {
-					receipt.Rejected++
-					incrementPlatformCounter(counters, "failed", 1)
-					receipt.Rows = append(receipt.Rows, map[string]any{"row_no": index, "state": "rejected", "error_code": "invalid_row"})
-					continue
-				}
-				return platformReceipt{}, err
-			}
-			if _, err := tx.Exec(ctx, `RELEASE SAVEPOINT platform_v2_row`); err != nil {
-				return platformReceipt{}, err
-			}
-			if skipped {
-				incrementPlatformCounter(counters, "skipped", 1)
-				receipt.Rejected++
-				receipt.Rows = append(receipt.Rows, map[string]any{"row_no": index, "state": "skipped", "error_code": "out_of_scope_or_unpublished"})
-				continue
-			}
-			if created {
-				receipt.MirrorsCreated++
-				incrementPlatformCounter(counters, "created", 1)
-				incrementPlatformCounter(counters, "discovered", 1)
-			} else if changed {
-				receipt.MirrorsUpdated++
-				incrementPlatformCounter(counters, "changed", 1)
-				incrementPlatformCounter(counters, "discovered", 1)
-			} else {
-				incrementPlatformCounter(counters, "unchanged", 1)
-				incrementPlatformCounter(counters, "discovered", 1)
-			}
-			receipt.Accepted++
-			receipt.Rows = append(receipt.Rows, map[string]any{"row_no": index, "state": "accepted"})
-			for metricIndex, row := range item.InlineMetrics {
-				if row.Scope != observationScopeWork || row.ExternalID == nil || *row.ExternalID != item.ExternalID ||
-					row.ExternalAccountKey != write.ExternalAccountKey {
-					return platformReceipt{}, apiErr(409, "platform_result_conflict", "目录 inline_metrics 必须归属同一作品和账号")
-				}
-				row.RowNo = len(data.Items) + index*platformV2MetricBatchRows + metricIndex
-				if _, err := tx.Exec(ctx, `SAVEPOINT platform_v2_row`); err != nil {
-					return platformReceipt{}, err
-				}
-				write.AllowCatalogInlineMetric = true
-				added, pending, adopted, err := s.writePlatformV2MetricTx(ctx, tx, write, row, batch.BatchSeq)
-				write.AllowCatalogInlineMetric = false
-				if err != nil {
-					if rollbackErr := rollbackPlatformV2Row(ctx, tx); rollbackErr != nil {
-						return platformReceipt{}, rollbackErr
-					}
-					if isPlatformV2RowValidation(err) {
-						receipt.Rejected++
-						incrementPlatformCounter(counters, "failed", 1)
-						rowNo := len(data.Items) + index*platformV2MetricBatchRows + metricIndex
-						receipt.Rows = append(receipt.Rows, map[string]any{"row_no": rowNo, "state": "rejected", "error_code": "invalid_metric"})
-						continue
-					}
-					return platformReceipt{}, err
-				}
-				if _, err := tx.Exec(ctx, `RELEASE SAVEPOINT platform_v2_row`); err != nil {
-					return platformReceipt{}, err
-				}
-				if added {
-					receipt.MetricsObserved++
-					receipt.Accepted++
-					incrementPlatformCounter(counters, "metrics_observed", 1)
-				}
-				if pending {
-					receipt.Pending++
-					incrementPlatformCounter(counters, "pending_confirmation", 1)
-				}
-				if adopted {
-					receipt.MetricsAdopted++
-					incrementPlatformCounter(counters, "metrics_adopted", 1)
-				}
-				if added && write.AutoAdopt && row.Scope == observationScopeWork && row.BindingRevision != nil && pending && !adopted {
-					receipt.AdoptErrors++
-					receipt.AdoptReason = "projection_failed"
-				}
-				if !added {
-					receipt.Duplicate++
-				}
-			}
-		}
-	case "work_content":
-		var data platformV2ContentResult
-		if err := decodePlatformV2Data(batch.Data, &data); err != nil {
-			return platformReceipt{}, err
-		}
-		if len(data.Items) > platformV2ContentBatchRows {
-			return platformReceipt{}, validation("work_content 单批最多 10 条")
-		}
-		for index, item := range data.Items {
-			if _, err := tx.Exec(ctx, `SAVEPOINT platform_v2_row`); err != nil {
-				return platformReceipt{}, err
-			}
-			received, state, err := s.writePlatformContentItemTx(ctx, tx, write, item)
-			if err != nil {
-				if rollbackErr := rollbackPlatformV2Row(ctx, tx); rollbackErr != nil {
-					return platformReceipt{}, rollbackErr
-				}
-				if isPlatformV2RowValidation(err) {
-					receipt.Rejected++
-					incrementPlatformCounter(counters, "failed", 1)
-					receipt.Rows = append(receipt.Rows, map[string]any{"row_no": index, "state": "rejected", "error_code": "invalid_row"})
-					continue
-				}
-				return platformReceipt{}, err
-			}
-			if _, err := tx.Exec(ctx, `RELEASE SAVEPOINT platform_v2_row`); err != nil {
-				return platformReceipt{}, err
-			}
-			if received {
-				receipt.ContentReceived++
-				incrementPlatformCounter(counters, "content_received", 1)
-			} else if state == "complete" {
-				incrementPlatformCounter(counters, "unchanged", 1)
-			} else if state == "duplicate" {
-				receipt.Duplicate++
-			} else if state == "stale" {
-				receipt.Duplicate++
-			}
-			if state == "failed" || state == "denied" || state == "rejected" {
-				incrementPlatformCounter(counters, "failed", 1)
-			}
-			if state != "rejected" && state != "duplicate" && state != "stale" {
-				receipt.Accepted++
-			}
-			rowReceipt := map[string]any{"row_no": index, "state": state}
-			if state == "failed" {
-				rowReceipt["error_code"] = "content_size_exceeded"
-			}
-			receipt.Rows = append(receipt.Rows, rowReceipt)
-		}
-	case "metrics":
-		var data platformV2MetricsResult
-		if err := decodePlatformV2Data(batch.Data, &data); err != nil {
-			return platformReceipt{}, err
-		}
-		if len(data.Observations) > platformV2MetricBatchRows {
-			return platformReceipt{}, validation("metrics 单批最多 25 条")
-		}
-		for index, row := range data.Observations {
-			row.RowNo = index
-			if _, err := tx.Exec(ctx, `SAVEPOINT platform_v2_row`); err != nil {
-				return platformReceipt{}, err
-			}
-			added, pending, adopted, err := s.writePlatformV2MetricTx(ctx, tx, write, row, batch.BatchSeq)
-			if err != nil {
-				if rollbackErr := rollbackPlatformV2Row(ctx, tx); rollbackErr != nil {
-					return platformReceipt{}, rollbackErr
-				}
-				if isPlatformV2RowValidation(err) {
-					receipt.Rejected++
-					incrementPlatformCounter(counters, "failed", 1)
-					receipt.Rows = append(receipt.Rows, map[string]any{"row_no": index, "state": "rejected", "error_code": "invalid_row"})
-					continue
-				}
-				return platformReceipt{}, err
-			}
-			if _, err := tx.Exec(ctx, `RELEASE SAVEPOINT platform_v2_row`); err != nil {
-				return platformReceipt{}, err
-			}
-			if added {
-				receipt.MetricsObserved++
-				incrementPlatformCounter(counters, "metrics_observed", 1)
-				receipt.Accepted++
-			} else {
-				receipt.Duplicate++
-			}
-			if pending {
-				receipt.Pending++
-				incrementPlatformCounter(counters, "pending_confirmation", 1)
-			}
-			if adopted {
-				receipt.MetricsAdopted++
-				incrementPlatformCounter(counters, "metrics_adopted", 1)
-			}
-			if added && write.AutoAdopt && row.Scope == observationScopeWork && row.BindingRevision != nil && pending && !adopted {
-				receipt.AdoptErrors++
-				receipt.AdoptReason = "projection_failed"
-			}
-			receipt.Rows = append(receipt.Rows, map[string]any{"row_no": index, "state": map[bool]string{true: "accepted", false: "duplicate"}[added]})
-		}
-	case "control":
-		var data platformV2ControlResult
-		if err := decodePlatformV2Data(batch.Data, &data); err != nil {
-			return platformReceipt{}, err
-		}
-		if err := validatePlatformV2Control(data); err != nil {
-			return platformReceipt{}, err
-		}
-		if err := s.finishPlatformV2StageTx(ctx, tx, write, data, counters, coverage, checkpoint, batch, &receipt); err != nil {
-			return platformReceipt{}, err
-		}
+	if err := s.applyPlatformV2ResultDataTx(ctx, tx, batch, write, &receipt, counters, coverage, checkpoint); err != nil {
+		return platformReceipt{}, err
 	}
 
 	if err := s.savePlatformV2ProgressTx(ctx, tx, write.OperationID, counters, coverage, checkpoint); err != nil {
@@ -701,7 +451,7 @@ func (s *Server) writePlatformAccountSnapshotTx(ctx context.Context, tx pgx.Tx, 
 	if data.IdentityExternalAccountKey != write.ExternalAccountKey {
 		return apiErr(409, "platform_identity_mismatch", "平台资料主体与已核验连接不一致")
 	}
-	if data.ObservedAt.IsZero() || data.ObservedAt.After(time.Now().Add(24*time.Hour)) {
+	if data.ObservedAt.IsZero() || data.ObservedAt.After(s.now().Add(24*time.Hour)) {
 		return validation("资料观测时间无效")
 	}
 	if data.SafeFields == nil {
@@ -837,10 +587,10 @@ func (s *Server) writePlatformCatalogItemTx(ctx context.Context, tx pgx.Tx, writ
 		item.CoverRef = nil
 		item.FieldStates["cover_ref"] = "denied"
 	}
-	if item.PublishedAt != nil && item.PublishedAt.After(time.Now().Add(24*time.Hour)) {
+	if item.PublishedAt != nil && item.PublishedAt.After(s.now().Add(24*time.Hour)) {
 		return false, false, false, validation("published_at 不能是未来时间")
 	}
-	if item.RemoteUpdatedAt != nil && item.RemoteUpdatedAt.After(time.Now().Add(24*time.Hour)) {
+	if item.RemoteUpdatedAt != nil && item.RemoteUpdatedAt.After(s.now().Add(24*time.Hour)) {
 		return false, false, false, validation("remote_updated_at 不能是未来时间")
 	}
 	var scopeRaw []byte
@@ -919,7 +669,7 @@ func (s *Server) writePlatformContentItemTx(ctx context.Context, tx pgx.Tx, writ
 		return false, "rejected", apiErr(409, "platform_identity_mismatch", "正文作者与已核验平台账号不一致")
 	}
 	if !validPlatformExternalID(item.ExternalID) || !validPlatformContentState(item.State) || item.ObservedAt.IsZero() ||
-		item.ObservedAt.After(time.Now().Add(24*time.Hour)) || len(item.Topics) > 100 || len(item.Tags) > 100 || len(item.MediaRefs) > 200 {
+		item.ObservedAt.After(s.now().Add(24*time.Hour)) || len(item.Topics) > 100 || len(item.Tags) > 100 || len(item.MediaRefs) > 200 {
 		return false, "rejected", validation("work_content 字段无效或超过上限")
 	}
 	for _, value := range append(append([]string{}, item.Topics...), item.Tags...) {
@@ -991,7 +741,7 @@ func (s *Server) writePlatformContentItemTx(ctx context.Context, tx pgx.Tx, writ
 		item.CoverRef = nil
 		item.FieldStates["cover_ref"] = "denied"
 	}
-	if item.RemoteUpdatedAt != nil && item.RemoteUpdatedAt.After(time.Now().Add(24*time.Hour)) {
+	if item.RemoteUpdatedAt != nil && item.RemoteUpdatedAt.After(s.now().Add(24*time.Hour)) {
 		return false, "rejected", validation("remote_updated_at 不能是未来时间")
 	}
 	itemJSON, _ := json.Marshal(item)
@@ -1265,7 +1015,7 @@ func (s *Server) finishPlatformV2StageTx(ctx context.Context, tx pgx.Tx, write p
 		}
 		if scope["target_scope"] == "due_and_recent" {
 			op := queuedPlatformOperation{ID: write.OperationID, WorkspaceID: write.WorkspaceID, AccountID: write.AccountID}
-			local, mirrors, err := s.dueAndRecentPlatformRunTargets(ctx, tx, op, write.Platform, write.ExternalAccountKey, scope, time.Now())
+			local, mirrors, err := s.dueAndRecentPlatformRunTargets(ctx, tx, op, write.Platform, write.ExternalAccountKey, scope, s.now())
 			if err != nil {
 				return err
 			}
@@ -1342,7 +1092,7 @@ func (s *Server) finishPlatformV2StageTx(ctx context.Context, tx pgx.Tx, write p
 		// 查询数/作品尝试数由 worker 的下一次预算申请给出；页预算则可在日额度内续跑。
 		if data.Reason != "page_budget" {
 			nextStatus = "waiting_budget"
-			nextAllowed = time.Now().Add(5 * time.Minute)
+			nextAllowed = s.now().Add(5 * time.Minute)
 		}
 	}
 	_, err := tx.Exec(ctx, `UPDATE platform_sync_operation SET status=$2,next_allowed_at=$3,pause_reason=CASE WHEN $2='waiting_budget' THEN 'budget' ELSE NULL END,

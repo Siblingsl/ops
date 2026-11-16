@@ -167,7 +167,7 @@ func (s *Server) reserveCrawl(ctx context.Context, src crawl.Source, now time.Ti
 }
 func (s *Server) finishPlatform(ctx context.Context, src crawl.Source, now time.Time, out crawl.Outcome) {
 	// BE-02：无 error 返回（由 crawl.Store.Finish 调用），落库失败不得静默——Error 级可观测。
-	started := time.Now()
+	started := s.now()
 	if out.Paused {
 		if _, err := s.db.Exec(ctx, `UPDATE crawl_platform_state SET strikes_7d=CASE WHEN last_strike_at>$2::timestamptz-interval '7 days' THEN strikes_7d+1 ELSE 1 END,enabled=CASE WHEN last_strike_at>$2::timestamptz-interval '7 days' THEN false ELSE enabled END,paused_until=CASE WHEN last_strike_at>$2::timestamptz-interval '7 days' THEN $2::timestamptz+interval '7 days' ELSE $2::timestamptz+interval '24 hours' END,last_strike_at=$2 WHERE platform=$1`, src.Kind, now); err != nil {
 			s.observeFailure(ctx, slog.LevelError, "平台爬取熔断状态落库失败", observeFields{

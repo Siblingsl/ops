@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -123,6 +124,7 @@ func verifyCommand() error {
 	cookie := fs.String("cookie", "", "现有会话 Cookie 头（也可用 OPS_SESSION_COOKIE）")
 	out := fs.String("out", "", "报告输出路径（默认 stdout）")
 	exportDir := fs.String("export", "", "同时导出清单与产物到该目录（仅 --build）")
+	overwrite := fs.Bool("overwrite", false, "导出到非空目录时允许覆盖（仅 --export）")
 	if err := fs.Parse(os.Args[2:]); err != nil {
 		return err
 	}
@@ -143,7 +145,7 @@ func verifyCommand() error {
 		}
 		report, err = verifyRemote(*baseURL, c, *build)
 		if err == nil && *exportDir != "" {
-			if exportErr := exportBuild(*baseURL, c, *build, *exportDir, report); exportErr != nil {
+			if exportErr := exportBuild(*baseURL, c, *build, *exportDir, report, *overwrite); exportErr != nil {
 				return exportErr
 			}
 		}
@@ -194,15 +196,15 @@ func verifyLocalDir(dir string) (verifyReport, error) {
 		}
 	}
 	verifyManifest(&report, manifest, func(name string) ([]byte, error) {
-		return os.ReadFile(filepath.Join(dir, filepath.FromSlash(path.Base(name))))
+		return os.ReadFile(filepath.Join(dir, exportSafeName(name)))
 	})
 	return report, nil
 }
 
 func verifyRemote(baseURL, cookie, buildID string) (verifyReport, error) {
 	report := newVerifyReport("server_build")
-	if strings.TrimSpace(baseURL) == "" {
-		return report, errors.New("--build 需要 --base-url")
+	if err := validateCLIBaseURL(baseURL); err != nil {
+		return report, err
 	}
 	base := strings.TrimRight(baseURL, "/")
 	client := &http.Client{Timeout: 60 * time.Second}
@@ -374,8 +376,8 @@ func parseManifest(raw []byte) (buildManifest, string, string) {
 	return manifest, sha256Hex(canonical), warn
 }
 
-func httpGet(client *http.Client, url, cookie string) ([]byte, string, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+func httpGet(client *http.Client, rawURL, cookie string) ([]byte, string, error) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -392,9 +394,32 @@ func httpGet(client *http.Client, url, cookie string) ([]byte, string, error) {
 		return nil, "", err
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("%s 返回 %d：%s", url, res.StatusCode, truncate(string(body), 200))
+		return nil, "", fmt.Errorf("%s 返回 %d：%s", rawURL, res.StatusCode, truncate(string(body), 200))
 	}
 	return body, strings.TrimSpace(res.Header.Get("X-Content-SHA256")), nil
+}
+
+// validateCLIBaseURL：FR-CX-24——仅 https，或显式本机回环 http；不跟跨源带认证重定向（本 CLI 未启用 CheckRedirect）。
+func validateCLIBaseURL(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return errors.New("--build 需要 --base-url")
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return errors.New("--base-url 无效")
+	}
+	host := strings.ToLower(u.Hostname())
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			return nil
+		}
+		return errors.New("--base-url 仅允许 https，或本机回环 http")
+	default:
+		return errors.New("--base-url 仅允许 https，或本机回环 http")
+	}
 }
 
 func artifactIDForName(manifest buildManifest, name string) (string, bool) {
@@ -409,8 +434,8 @@ func artifactIDForName(manifest buildManifest, name string) (string, bool) {
 	return "", false
 }
 
-func exportBuild(baseURL, cookie, buildID, dir string, report verifyReport) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+func exportBuild(baseURL, cookie, buildID, dir string, report verifyReport, overwrite bool) error {
+	if err := ensureExportDir(dir, overwrite); err != nil {
 		return err
 	}
 	base := strings.TrimRight(baseURL, "/")
@@ -420,12 +445,12 @@ func exportBuild(baseURL, cookie, buildID, dir string, report verifyReport) erro
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifestRaw, 0o600); err != nil {
+	if err := writeExportFile(filepath.Join(dir, "manifest.json"), manifestRaw, overwrite); err != nil {
 		return err
 	}
 	if report.CanonicalManifestSHA256 != "" {
-		if err := os.WriteFile(filepath.Join(dir, "manifest.sha256"),
-			[]byte(report.CanonicalManifestSHA256+"\n"), 0o600); err != nil {
+		if err := writeExportFile(filepath.Join(dir, "manifest.sha256"),
+			[]byte(report.CanonicalManifestSHA256+"\n"), overwrite); err != nil {
 			return err
 		}
 	}
@@ -435,8 +460,8 @@ func exportBuild(baseURL, cookie, buildID, dir string, report verifyReport) erro
 		if err != nil {
 			return fmt.Errorf("导出产物 %s 失败：%w", artifact.Name, err)
 		}
-		target := filepath.Join(dir, filepath.FromSlash(path.Base(artifact.Name)))
-		if err := os.WriteFile(target, data, 0o600); err != nil {
+		target := filepath.Join(dir, exportSafeName(artifact.Name))
+		if err := writeExportFile(target, data, overwrite); err != nil {
 			return err
 		}
 	}
@@ -445,11 +470,57 @@ func exportBuild(baseURL, cookie, buildID, dir string, report verifyReport) erro
 		if err != nil {
 			return fmt.Errorf("导出 evidence.csv 失败：%w", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(path.Base(manifest.Evidence.Name))), data, 0o600); err != nil {
+		if err := writeExportFile(filepath.Join(dir, exportSafeName(manifest.Evidence.Name)), data, overwrite); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// exportSafeName：只取末段文件名；统一 / 与 \，拒绝 . / .. 落到 --out 外。
+func exportSafeName(name string) string {
+	cleaned := strings.ReplaceAll(strings.TrimSpace(name), `\`, "/")
+	base := path.Base(cleaned)
+	if base == "." || base == ".." || base == "/" || base == "" {
+		return "unnamed"
+	}
+	return base
+}
+
+// ensureExportDir：目标不存在则创建；已有文件且未 --overwrite 则拒绝，避免静默覆盖。
+func ensureExportDir(dir string, overwrite bool) error {
+	info, err := os.Stat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.MkdirAll(dir, 0o700)
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("导出目标不是目录：%s", dir)
+	}
+	if overwrite {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		return errors.New("目标目录非空；如需覆盖请显式传入 --overwrite")
+	}
+	return nil
+}
+
+func writeExportFile(path string, data []byte, overwrite bool) error {
+	if !overwrite {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("文件已存在且未指定 --overwrite：%s", path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 func newVerifyReport(scope string) verifyReport {
@@ -487,6 +558,7 @@ func exportCommand() error {
 	baseURL := fs.String("base-url", "", "服务地址，例如 https://ops.example.com")
 	cookie := fs.String("cookie", "", "现有会话 Cookie 头（也可用 OPS_SESSION_COOKIE）")
 	dir := fs.String("out", "", "导出目录")
+	overwrite := fs.Bool("overwrite", false, "允许覆盖目标目录中已有文件")
 	if err := fs.Parse(os.Args[2:]); err != nil {
 		return err
 	}
@@ -504,14 +576,14 @@ func exportCommand() error {
 	if err != nil {
 		return err
 	}
-	if err := exportBuild(*baseURL, c, *build, *dir, report); err != nil {
+	if err := exportBuild(*baseURL, c, *build, *dir, report, *overwrite); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(*dir, "verify-report.json"), append(data, '\n'), 0o600); err != nil {
+	if err := writeExportFile(filepath.Join(*dir, "verify-report.json"), append(data, '\n'), *overwrite); err != nil {
 		return err
 	}
 	if !report.OK {

@@ -138,6 +138,81 @@ func TestCXAIQualityScenarioSetIsFrozenAndCoversNineStages(t *testing.T) {
 	}
 }
 
+// TestCXAccountAnalysisQualityScenarioSubset：CF-CX-14——12/13 场景中与账号分析/主页自检相关的子集必须可定位；
+// 真实平台字段覆盖另列 CF-PS；real_model_review 保持 not_run。
+func TestCXAccountAnalysisQualityScenarioSubset(t *testing.T) {
+	var set cxAIQualityScenarioSet
+	readCXTestdata(t, "cx-ai-quality-scenarios.json", &set)
+	subset := map[string][]string{
+		"new-account-no-data":    {"TestCXQualityScenarioNewAccountNoDataDoesNotInventFacts"},
+		"owned-profile-complete": {"TestCXAccountAnalysisHTTPPersistsReusesAndMarksHistoryStale", "TestCXProfileCheckPersistsSourcesAndPreservesExistingOnFailure"},
+		"partial-profile":        {"TestCXAccountAnalysisPlatformProfileVersion", "TestCXAccountBasisCoverageStatesAndIntentionalExclusions"},
+		"followers-real-zero":    {"TestCXAccountAnalysisFollowersPreserveZeroAndMissing"},
+		"existing-unbound-notes": {"TestCXAccountAnalysisHTTPPersistsReusesAndMarksHistoryStale", "TestCXAccountAnalysisWorkSelection"},
+		"unbound-work":           {"TestCXQualityScenarioUnboundMirrorDoesNotCreateLocalWork"},
+		"unknown-metric-unit":    {"TestCXAccountBasisUsesOnlyApprovedBoundMetrics"},
+		"long-text-omission":     {"TestCXAccountAnalysisWorkSelection"},
+	}
+	byID := make(map[string]cxAIQualityScenario, len(set.Scenarios))
+	for _, scenario := range set.Scenarios {
+		byID[scenario.ID] = scenario
+	}
+	for id, wantTests := range subset {
+		scenario, ok := byID[id]
+		if !ok {
+			t.Fatalf("账号分析子集缺少场景 %q", id)
+		}
+		if scenario.RealModelReview != "not_run" {
+			t.Fatalf("场景 %s 的 real_model_review 必须保持 not_run，实际 %q", id, scenario.RealModelReview)
+		}
+		have := map[string]bool{}
+		for _, name := range scenario.ContractTests {
+			have[name] = true
+		}
+		for _, name := range wantTests {
+			if !have[name] {
+				t.Fatalf("场景 %s 未挂接契约 %q：%v", id, name, scenario.ContractTests)
+			}
+		}
+	}
+}
+
+// TestCXTitleTopicQualityScenarioSubset：CF-CX-09——12/13 场景中与标题诊断、选题体检相关的子集必须可定位，
+// 且 real_model_review 保持 not_run（真实模型列留给 CF-SKAG）。
+func TestCXTitleTopicQualityScenarioSubset(t *testing.T) {
+	var set cxAIQualityScenarioSet
+	readCXTestdata(t, "cx-ai-quality-scenarios.json", &set)
+	// id → 必须挂接的契约测试（可另有其它测试）
+	subset := map[string][]string{
+		"contradictory-title-body":   {"TestCXQualityScenarioContradictoryTitleBodyRequiresPairedEvidence"},
+		"owned-profile-complete":     {"TestCXTitleDiagnosisPersistsReportWithoutChangingWorkAndReusesSameInput"},
+		"bound-work":                 {"TestCXTitleDiagnosisPersistsReportWithoutChangingWorkAndReusesSameInput"},
+		"untrusted-prompt-injection": {"TestCXTitleAntiEvasionCorpusSeparatesSafeAndUnsafeIntent", "TestCXTopicDiagnosisStoresHistoryReusesInputAndMarksStale"},
+	}
+	byID := make(map[string]cxAIQualityScenario, len(set.Scenarios))
+	for _, scenario := range set.Scenarios {
+		byID[scenario.ID] = scenario
+	}
+	for id, wantTests := range subset {
+		scenario, ok := byID[id]
+		if !ok {
+			t.Fatalf("标题/选题子集缺少场景 %q", id)
+		}
+		if scenario.RealModelReview != "not_run" {
+			t.Fatalf("场景 %s 的 real_model_review 必须保持 not_run，实际 %q", id, scenario.RealModelReview)
+		}
+		have := map[string]bool{}
+		for _, name := range scenario.ContractTests {
+			have[name] = true
+		}
+		for _, name := range wantTests {
+			if !have[name] {
+				t.Fatalf("场景 %s 未挂接契约 %q：%v", id, name, scenario.ContractTests)
+			}
+		}
+	}
+}
+
 func TestCXTitleAntiEvasionCorpusSeparatesSafeAndUnsafeIntent(t *testing.T) {
 	var corpus cxTitleAntiEvasionCorpus
 	readCXTestdata(t, "cx-title-anti-evasion-corpus.json", &corpus)

@@ -295,5 +295,5 @@ func (s *Server) reuseAsset(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return ok(w, Asset{ID: newID, WorkID: m.ID, Mime: src.Mime, Width: width, Height: height, Bytes: len(data),
-		AltText: src.AltText, URL: "/api/v1/assets/" + newID.String() + "/file", AIGenerated: aiGen, CreatedAt: time.Now()})
+		AltText: src.AltText, URL: "/api/v1/assets/" + newID.String() + "/file", AIGenerated: aiGen, CreatedAt: s.now()})
 }

@@ -48,6 +48,43 @@ test('GL-06 显式输入密码续期后横幅消失', async ({ page }) => {
   expect(new Date(me.session_expires_at).getTime()).toBeGreaterThan(Date.now() + 6 * 24 * 60 * 60 * 1000)
 })
 
+// CF-NW-05 / docs/22 GL-06：关闭判定前补「保存并重新登录」点击链（原先仅断言按钮可见）。
+test('GL-06 保存并重新登录先 flush 再注销并带回 next', async ({ page }) => {
+  const username = `e2e-gl06-relogin-${Date.now()}-${test.info().workerIndex}`
+  await registerAccount(page, '图文笔记', 'xhs', username)
+  const workID = await createOutline(page)
+  await page.route('**/api/v1/auth/me', async route => {
+    const response = await route.fetch()
+    const me = await response.json()
+    me.session_expires_at = new Date(Date.now() + 23 * 60 * 60 * 1000).toISOString()
+    await route.fulfill({ response, body: JSON.stringify(me) })
+  })
+  await page.reload()
+  const banner = page.getByRole('status').filter({ hasText: '会话将于' })
+  await expect(banner.getByRole('button', { name: '保存并重新登录' })).toBeVisible()
+  await page.unroute('**/api/v1/auth/me')
+  // 与 GL-04 同口径：标题脏状态一定注册 flusher；断言 flush 早于 logout。
+  const order: string[] = []
+  page.on('request', (request) => {
+    const url = request.url()
+    if (request.method() === 'PATCH' && url.includes(`/api/v1/works/${workID}`)) order.push('flush')
+    if (request.method() === 'POST' && url.endsWith('/api/v1/auth/logout')) order.push('logout')
+  })
+  const title = page.locator('#step-title').getByRole('textbox').first()
+  await expect(title).toBeVisible()
+  await title.fill('保存并重新登录前必须先写入的标题')
+  await title.blur()
+  await banner.getByRole('button', { name: '保存并重新登录' }).click()
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/login')
+  expect(new URL(page.url()).searchParams.get('next')).toContain(`/works/${workID}`)
+  expect(order).toEqual(['flush', 'logout'])
+  await page.getByLabel('用户名', { exact: true }).fill(username)
+  await page.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect.poll(() => new URL(page.url()).pathname).toBe(`/works/${workID}`)
+  await expect.poll(async () => (await api(page, 'GET', `/works/${workID}`)).title).toBe('保存并重新登录前必须先写入的标题')
+})
+
 test('OPT27 闲置八小时重新聚焦后刷新会话并保存成功', async ({ page }) => {
   await registerAccount(page)
   const workID = await createOutline(page)

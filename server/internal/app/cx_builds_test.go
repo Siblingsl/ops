@@ -670,8 +670,38 @@ func cxBuildCreateForTest(t *testing.T, workID string, revision int, targets []s
 }
 
 // DEEP-01：复用命中回填 reused_from + 审计；force 跳过复用；跨工作区同哈希行不得命中；停用账号拒绝。
+// CF-AW-09（A22 续）：本例要给账号打 status='disabled'。原实现直接改共享 fx.wechat 并靠
+// t.Cleanup 恢复：Go 1.24+ 的 t.Context() 在 Cleanup 运行前即被取消，而恢复语句用 _, _ =
+// 吞掉错误，共享账号因此长期停留 disabled，后续用例连锁 409「账号已停用，不能新建作品」。
+// 改为本例专有的独立 workspace（跨区反例）+ 独立 account（落在会话 workspace，API 的
+// a.workspace_id=$2 校验要求）：停用只作用于专有账号，不共享、不依赖任何恢复时点。
 func TestDEEP01BuildReuseForceReusedFromAndWorkspaceScope(t *testing.T) {
-	account := env.accounts(t).wechat
+	ctx := context.Background()
+	// 独立 workspace：只承载「跨工作区同哈希不得命中复用」的反向工作区，按 A22 范式
+	// 用 context.Background() 显式回收，不与其它用例共用固定名工作区。
+	var foreignWS uuid.UUID
+	if err := env.srv.db.QueryRow(ctx, `INSERT INTO workspace(name) VALUES('CF-AW-09 构建复用跨区验收工作区') RETURNING id`).Scan(&foreignWS); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := env.srv.db.Exec(context.Background(), `DELETE FROM workspace WHERE id=$1`, foreignWS); err != nil {
+			t.Error(err)
+		}
+	})
+
+	// 独立 account：本例创建的作品 / 构建 / 审计全部挂在它下面，Cleanup 显式回收；
+	// 停下即删，不再把共享账号的 status 改来改去。
+	var account Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{
+		"platform": "wechat_mp", "name": "CF-AW-09 构建复用隔离账号", "content_format": "long_article",
+	}, &account)
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`DELETE FROM work_build WHERE work_id IN (SELECT id FROM work WHERE account_id=$1)`, account.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM work WHERE account_id=$1`, account.ID)
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM platform_account WHERE id=$1`, account.ID)
+	})
+
 	var work Work
 	env.mustJSON(t, "POST", "/api/v1/accounts/"+account.ID.String()+"/works", map[string]string{"title": "DEEP01 构建复用"}, &work)
 
@@ -732,30 +762,152 @@ func TestDEEP01BuildReuseForceReusedFromAndWorkspaceScope(t *testing.T) {
 		homeWS, work.ID, forced.SourceHash, forced.ParamsHash).Scan(&hitHome); err != nil || hitHome != 1 {
 		t.Fatalf("home workspace reuse key: count=%d err=%v", hitHome, err)
 	}
-	foreignWS := opt12Workspace(t)
 	if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM work_build WHERE workspace_id=$1 AND work_id=$2 AND source_hash=$3 AND params_hash=$4 AND reusable AND status IN ('running','built')`,
 		foreignWS, work.ID, forced.SourceHash, forced.ParamsHash).Scan(&hitForeign); err != nil || hitForeign != 0 {
 		t.Fatalf("foreign workspace must not see reuse key: count=%d err=%v", hitForeign, err)
 	}
 
-	if _, err := env.srv.db.Exec(t.Context(), `UPDATE platform_account SET status='disabled' WHERE id=$1`, account.ID); err != nil {
+	// 只停用本例专有账号：不写共享 fixture，也不再注册「恢复状态」的 Cleanup
+	//（恢复失败曾让共享账号永久 disabled，见函数头 CF-AW-09 说明）。
+	if _, err := env.srv.db.Exec(ctx, `UPDATE platform_account SET status='disabled' WHERE id=$1`, account.ID); err != nil {
 		t.Fatal(err)
 	}
-	// 恢复必须用 defer + context.Background()：Go 1.24+ 的 t.Context() 在 Cleanup 运行
-	// 之前就被取消，写在 t.Cleanup 里的恢复语句会直接拿到已取消的 ctx 并静默失败（原实现
-	// 还用 _, _ = 吞掉错误）。account 是共享 fixture fx.wechat，一旦恢复失败就永久停在
-	// disabled，后面所有走 /accounts/{id}/works 的用例连锁 409「账号已停用，不能新建作品」。
-	defer func() {
-		if _, err := env.srv.db.Exec(context.Background(),
-			`UPDATE platform_account SET status='active' WHERE id=$1`, account.ID); err != nil {
-			t.Errorf("恢复共享账号状态失败：%v", err)
-		}
-	}()
 	status, body = env.do("POST", "/api/v1/works/"+work.ID.String()+"/builds", map[string]any{
 		"basis_revision": work.Revision, "targets": []string{"wechat_html"}, "options": map[string]any{}, "client": "desktop",
 		"renderer_contract_version": cxrendercontract.WechatHTMLV1, "force": true,
 	})
 	if status != 409 || !bytes.Contains(body, []byte(`"account_inactive"`)) {
 		t.Fatalf("disabled account must reject build: status=%d body=%s", status, body)
+	}
+}
+
+// CF-CX-02：complete 正式路径——错 source/params hash、产物集合不匹配须整次失败且全禁下载；
+// 成功路径须 built + canonical manifest + downloadable + download_gate clear。
+func TestCX02CompleteInputMismatchKeepsDownloadsClosedAndSuccessOpensGate(t *testing.T) {
+	account := env.accounts(t).wechat
+	var work Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+account.ID.String()+"/works", map[string]string{"title": "CF-CX-02 complete 闸门"}, &work)
+	env.mustJSON(t, "PATCH", "/api/v1/works/"+work.ID.String(), map[string]any{
+		"viewpoint": "校验 complete 输入一致性与失败全禁下载。", "base_revision": work.Revision,
+	}, &work)
+	var outlined Work
+	env.mustJSON(t, "PUT", "/api/v1/works/"+work.ID.String()+"/outline", map[string]any{
+		"confirm": true, "base_revision": work.Revision,
+		"items": []map[string]any{{"heading": "闸门段落", "key_point": "complete 契约", "material_ids": []string{}}},
+	}, &outlined)
+	section := outlined.Sections[0]
+	env.mustJSON(t, "PATCH", "/api/v1/sections/"+section.ID.String(), map[string]any{
+		"content_md": "用于 complete 输入一致性验收的正文。", "base_revision": section.Revision,
+	}, nil)
+	env.mustJSON(t, "GET", "/api/v1/works/"+work.ID.String(), nil, &work)
+	validHTML := []byte(fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"></head><body><section><div data-section-id="%s"><h2>闸门段落</h2><p>用于 complete 输入一致性验收的正文。</p></div></section></body></html>`, section.ID))
+
+	assertDownloadsClosed := func(t *testing.T, buildID uuid.UUID) {
+		t.Helper()
+		var detail struct {
+			Status       string           `json:"status"`
+			ErrorCode    *string          `json:"error_code"`
+			DownloadGate map[string]any   `json:"download_gate"`
+			Artifacts    []map[string]any `json:"artifacts"`
+			Manifest     json.RawMessage  `json:"manifest"`
+		}
+		env.mustJSON(t, "GET", "/api/v1/builds/"+buildID.String(), nil, &detail)
+		if detail.Status != "failed" {
+			t.Fatalf("mismatch must fail the whole build: status=%s", detail.Status)
+		}
+		if gateAllowed(detail.DownloadGate) {
+			t.Fatalf("failed build must keep download gate closed: %+v", detail.DownloadGate)
+		}
+		for _, artifact := range detail.Artifacts {
+			if artifact["downloadable"] == true {
+				t.Fatalf("failed build must not mark artifacts downloadable: %+v", artifact)
+			}
+		}
+		if len(detail.Manifest) > 0 && string(detail.Manifest) != "null" {
+			t.Fatalf("failed build must not expose a delivery manifest: %s", detail.Manifest)
+		}
+	}
+
+	// 1) 错 source_hash → build_input_mismatch，全禁下载。
+	_, mismatch := cxBuildCreateForTest(t, work.ID.String(), work.Revision, []string{"wechat_html"})
+	if status, body := cxBuildUploadForTest(t, mismatch.BuildID.String(), "html", "article.html", validHTML, ""); status != 200 {
+		t.Fatalf("upload for hash mismatch: status=%d body=%s", status, body)
+	}
+	badHash := cxBuildCompletionForTest(t, mismatch.BuildID.String())
+	badHash["source_hash"] = strings.Repeat("a", 64)
+	status, body := env.do("POST", "/api/v1/builds/"+mismatch.BuildID.String()+"/complete", badHash)
+	if status != 409 || !bytes.Contains(body, []byte(`"build_input_mismatch"`)) {
+		t.Fatalf("wrong source_hash must fail complete: status=%d body=%s", status, body)
+	}
+	assertDownloadsClosed(t, mismatch.BuildID)
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE work_build SET reusable=false WHERE id=$1`, mismatch.BuildID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2) 错 params_hash → 同上。
+	_, badParams := cxBuildCreateForTest(t, work.ID.String(), work.Revision, []string{"wechat_html"})
+	if status, body := cxBuildUploadForTest(t, badParams.BuildID.String(), "html", "article.html", validHTML, ""); status != 200 {
+		t.Fatalf("upload for params mismatch: status=%d body=%s", status, body)
+	}
+	badParamsBody := cxBuildCompletionForTest(t, badParams.BuildID.String())
+	badParamsBody["params_hash"] = strings.Repeat("b", 64)
+	status, body = env.do("POST", "/api/v1/builds/"+badParams.BuildID.String()+"/complete", badParamsBody)
+	if status != 409 || !bytes.Contains(body, []byte(`"build_input_mismatch"`)) {
+		t.Fatalf("wrong params_hash must fail complete: status=%d body=%s", status, body)
+	}
+	assertDownloadsClosed(t, badParams.BuildID)
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE work_build SET reusable=false WHERE id=$1`, badParams.BuildID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3) 产物集合为空 → artifact_set_mismatch，全禁下载。
+	_, badSet := cxBuildCreateForTest(t, work.ID.String(), work.Revision, []string{"wechat_html"})
+	if status, body := cxBuildUploadForTest(t, badSet.BuildID.String(), "html", "article.html", validHTML, ""); status != 200 {
+		t.Fatalf("upload for artifact set mismatch: status=%d body=%s", status, body)
+	}
+	emptySet := cxBuildCompletionForTest(t, badSet.BuildID.String())
+	emptySet["artifacts"] = []map[string]any{}
+	status, body = env.do("POST", "/api/v1/builds/"+badSet.BuildID.String()+"/complete", emptySet)
+	if status != 422 || !bytes.Contains(body, []byte(`"artifact_set_mismatch"`)) {
+		t.Fatalf("empty artifact set must fail complete: status=%d body=%s", status, body)
+	}
+	assertDownloadsClosed(t, badSet.BuildID)
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE work_build SET reusable=false WHERE id=$1`, badSet.BuildID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4) 成功路径：built + manifest 含 source/params hash + downloadable + gate clear。
+	_, clean := cxBuildCreateForTest(t, work.ID.String(), work.Revision, []string{"wechat_html"})
+	if status, body := cxBuildUploadForTest(t, clean.BuildID.String(), "html", "article.html", validHTML, ""); status != 200 {
+		t.Fatalf("upload clean complete: status=%d body=%s", status, body)
+	}
+	status, body = env.do("POST", "/api/v1/builds/"+clean.BuildID.String()+"/complete", cxBuildCompletionForTest(t, clean.BuildID.String()))
+	if status != 200 || !bytes.Contains(body, []byte(`"status":"built"`)) {
+		t.Fatalf("clean complete must build: status=%d body=%s", status, body)
+	}
+	var success struct {
+		Status       string           `json:"status"`
+		SourceHash   string           `json:"source_hash"`
+		ParamsHash   string           `json:"params_hash"`
+		DownloadGate map[string]any   `json:"download_gate"`
+		Artifacts    []map[string]any `json:"artifacts"`
+		Manifest     json.RawMessage  `json:"manifest"`
+		ManifestSHA  string           `json:"manifest_sha256"`
+	}
+	env.mustJSON(t, "GET", "/api/v1/builds/"+clean.BuildID.String(), nil, &success)
+	if success.Status != "built" || success.SourceHash == "" || success.ParamsHash == "" {
+		t.Fatalf("built detail missing hashes: %+v", success)
+	}
+	if !gateAllowed(success.DownloadGate) || success.DownloadGate["reason"] != "clear" {
+		t.Fatalf("clean built must open download gate: %+v", success.DownloadGate)
+	}
+	if len(success.Artifacts) == 0 || success.Artifacts[0]["downloadable"] != true {
+		t.Fatalf("clean built artifacts must be downloadable: %+v", success.Artifacts)
+	}
+	if !bytes.Contains(success.Manifest, []byte(success.SourceHash)) || !bytes.Contains(success.Manifest, []byte(success.ParamsHash)) {
+		t.Fatalf("manifest must embed source/params hash: %s", success.Manifest)
+	}
+	if success.ManifestSHA == "" || !cxBuildManifestHashValid(success.Manifest, success.ManifestSHA) {
+		t.Fatalf("manifest sha must match canonical bytes: sha=%s", success.ManifestSHA)
 	}
 }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createServer } from 'vite'
+import { sharedNpmAliases } from '../../shared/vite-dep-alias.mjs'
 
 /** DEV-P09 全链路：经真实 api.ts → shouldRetryGet/getRetryDelayMs → mock fetch。 */
 
@@ -14,6 +15,7 @@ async function withApiModule(run) {
     server: { middlewareMode: true, ws: false },
     appType: 'custom',
     define: { __OPS_API_BASE__: JSON.stringify('') },
+    resolve: { alias: sharedNpmAliases(import.meta.url) },
   })
   try {
     const mod = await server.ssrLoadModule('/src/lib/api.ts')

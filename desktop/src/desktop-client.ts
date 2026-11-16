@@ -490,6 +490,18 @@ export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(Channel
   }
 
 
+  // 27 §13.6「真实来源→可回查证据」：内容读取类命令成功后由执行器上报（挂真实命令号，
+  // 服务端校验会话归属与命令存在性；失败由执行器记日志不阻断回执）。
+  async reportBrowserEvidence(body: {
+    conversation_id: string; command_id?: string; origin: string; redacted_url: string;
+    title?: string; snippet?: string; doc_revision?: string; kind: string;
+  }): Promise<Record<string, unknown>> {
+    return await this.request('/agent/browser/evidence', {
+      method: 'POST',
+      headers: await this.commandMutationHeaders(),
+      body: JSON.stringify(body)
+    });
+  }
 
   // P0-3（CF-DESK-03 桌面消费接线）：MCP 调用执行器的服务端三步。
   // pending 领取（含脱敏 args 与连接启动配置）→ CAS claim（先到者执行）→
