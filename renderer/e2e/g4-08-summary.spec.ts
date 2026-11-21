@@ -220,7 +220,9 @@ test('DEV-QA26 G4-08 真实 Electron 摘要生成、120字边界、错误与 edi
     await editor.getByRole('button', { name: '标题、摘要与配图', exact: true }).click()
     const editorDetails = editor.locator('details.desktop-title-extras')
     if (await editorDetails.getAttribute('open') === null) await editorDetails.locator('summary').click()
-    await expect(editor.getByRole('button', { name: '生成', exact: true })).toBeVisible()
+    // docs/41 Q-06：编辑器页同时存在发布页三平台的“生成”按钮，笼统定位 strict 冲突；
+    // 收窄到摘要 details 容器内。
+    await expect(editorDetails.getByRole('button', { name: '生成', exact: true })).toBeVisible()
     const editorGeneration = editor.waitForResponse(response => response.url().endsWith('/api/v1/works/' + work.id + '/summary') && response.request().method() === 'POST')
     const editorSave = editor.waitForResponse(response => response.url().endsWith('/api/v1/works/' + work.id) && response.request().method() === 'PATCH')
     await editorDetails.getByRole('button', { name: '生成', exact: true }).click()

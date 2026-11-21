@@ -631,11 +631,14 @@ test('DEV-QA26 G8 真实 Electron 模型删除取消与空态读回', async ({ p
     await expect(emptySettings.getByText('还没有配置模型', { exact: true })).toBeVisible()
     await emptySettings.getByRole('button', { name: '关闭设置', exact: true }).click()
     await owner.page.getByRole('link', { name: 'AI 对话', exact: true }).click()
-    await expect(owner.page.getByText(/还没有配置可用于对话的模型/)).toBeVisible()
+    // docs/41 Q-09：no_model 已从整页 Unavailable 改为工作台 + onboarding 引导横幅
+    // （Agent.tsx:1301 仅 disabled/admin_override 等渲染 Unavailable）。
+    await expect(owner.page.getByText('先配置一个支持工具调用的模型，才能开始对话。')).toBeVisible()
     await expect(owner.page.getByRole('link', { name: '去模型配置', exact: true })).toBeVisible()
     await expect(owner.page.getByPlaceholder('请先配置支持工具调用的模型')).toBeDisabled()
     await expect(owner.page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
-    await expect(owner.page.getByRole('button', { name: '添加附件', exact: true })).toBeDisabled()
+    // 快照实测：输入台附件入口按钮的可访问名是“添加”（含图标），不是“添加附件”。
+    await expect(owner.page.getByRole('button', { name: '添加', exact: true })).toBeDisabled()
     const privacy = owner.page.getByRole('dialog').filter({ has: owner.page.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
     if (await privacy.isVisible().catch(() => false)) await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
     await owner.page.getByRole('link', { name: '工作台', exact: true }).click()
