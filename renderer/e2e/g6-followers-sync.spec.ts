@@ -89,7 +89,10 @@ test('DEV-QA26 G6 真实 Electron 粉丝同步、权限提示与手动回退', a
     const section = native.locator('#desktop-review-followers')
     await native.getByRole('button', { name: '粉丝记录', exact: true }).click()
     await expect(section.getByRole('heading', { name: /账号粉丝变化/ })).toBeVisible()
-    await expect(section.getByText('公众号接口', { exact: true })).toHaveCount(7)
+    // 表格 7 行来源徽标 + 摘要卡 1 个来源徽标（i6-platform-source，同步后=公众号接口）。
+    // docs/41 Q-05：摘要卡来源徽标是 UI 迭代新增，断言按容器收窄而不是笼统 7。
+    await expect(section.getByTestId('i6-followers-days-table').getByText('公众号接口', { exact: true })).toHaveCount(7)
+    await expect(section.getByTestId('i6-platform-list').getByText('公众号接口', { exact: true })).toHaveCount(1)
 
     // 只覆盖界面权限分支；底层 no_permission/403 与部分粉丝失败由 DR03/DR09 Go 集成测试验证。
     await makeNoPermissionPresentation(native, account.id)
@@ -103,15 +106,19 @@ test('DEV-QA26 G6 真实 Electron 粉丝同步、权限提示与手动回退', a
 
     await native.getByRole('button', { name: '粉丝记录', exact: true }).click()
     const restrictedSection = native.locator('#desktop-review-followers')
+    // no_permission 的卡片级文案已随来源优先级迭代改为统一说明（docs/41 Q-05）；
+    // 权限闸门由 Review.tsx 的全局提示（本用例上方已断言）与同步按钮隐藏承担。
+    // 点击后按钮文本切换为“收起”，展开的录入表单直接可填。
     await restrictedSection.getByRole('button', { name: '补录一天', exact: true }).click()
-    await expect(restrictedSection.getByText('当前公众号没有数据统计接口权限，可以从后台抄录每天的关注数据')).toBeVisible()
+    await expect(restrictedSection.getByRole('button', { name: '收起', exact: true })).toBeVisible()
     const enteredDate = new Date()
     enteredDate.setDate(enteredDate.getDate() - 20)
     const manualDate = localDate(enteredDate)
     await restrictedSection.getByLabel('日期').fill(manualDate)
     await restrictedSection.getByLabel('新增关注').fill('3')
     await restrictedSection.getByLabel('取消关注').fill('1')
-    await restrictedSection.getByLabel('粉丝总数').fill('100')
+    // 摘要卡的“近 30 天粉丝总数折线”SVG aria-label 同样含“粉丝总数”，收窄到 spinbutton。
+    await restrictedSection.getByRole('spinbutton', { name: '粉丝总数', exact: true }).fill('100')
     const manualSave = native.waitForResponse((r) => r.url().includes(`${accountPath}/followers`) && r.request().method() === 'POST')
     await restrictedSection.getByRole('button', { name: '保存', exact: true }).click()
     expect((await manualSave).ok()).toBeTruthy()
