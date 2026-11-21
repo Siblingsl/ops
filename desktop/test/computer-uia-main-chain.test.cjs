@@ -340,9 +340,20 @@ test('T7/CF-DESK-08: 四段链路符号齐备（worker / host / IPC / preload / 
   assert.match(main, /isBusinessUrl\(senderFrame\.url\)/);
 });
 
-test('T7/CF-DESK-08: 边界守卫——服务端仍第二批、computer_use 默认关、既有 7 例 UIA 定向未删改', () => {
-  assert.match(readRepo('server/internal/app/agent_computer.go'), /UIA\/视觉执行 worker 属第二批/,
-    '不得擅自新增服务端 UIA 执行接口');
+test('T7/CF-DESK-08: 边界守卫——服务端执行入口钉死、computer_use 默认关、既有 7 例 UIA 定向未删改', () => {
+  // P0-7（2026-11-16，docs/08 登记）核验：UIA/视觉执行已由 DEV-CU P4/P5 交付，
+  // agent_computer.go:18 注释不再"属第二批"。守卫语义保持不变——防擅自新增
+  // 服务端 UIA 执行接口：锚点改为已交付注释 + 执行入口清单钉死（agent.go
+  // 注册的 runComputerCommand / createComputerCommand 之外不得再挂执行路由）。
+  assert.match(readRepo('server/internal/app/agent_computer.go'), /UIA\/视觉执行已由 DEV-CU P4\/P5 批次交付/,
+    'P0-7 交付注释不得回退');
+  const agentRoutes = readRepo('server/internal/app/agent.go');
+  const computerRunEntries = agentRoutes.match(/r\.Post\("\/[^"]*computer[^"]*commands"[^\n]*runComputerCommand/g) ?? [];
+  const computerCreateEntries = agentRoutes.match(/r\.Post\("\/[^"]*computer[^"]*commands"[^\n]*createComputerCommand/g) ?? [];
+  assert.equal(computerRunEntries.length, 1, 'runComputerCommand 执行入口须恰一处（/tools/computer/commands）');
+  assert.equal(computerCreateEntries.length, 1, 'createComputerCommand 执行入口须恰一处（/agent/computer/commands）');
+  assert.equal((agentRoutes.match(/runComputerCommand|createComputerCommand/g) ?? []).length, 2,
+    '不得擅自新增服务端 UIA 执行接口（除既有注册处外不得再引用）');
   const bench = readRepo('server/internal/app/agent_workbench.go');
   assert.match(bench, /"computer_use"/);
   const defaultOn = bench.match(/var agentFeatureDefaultOn = map\[string\]bool\{([\s\S]*?)\}/);
