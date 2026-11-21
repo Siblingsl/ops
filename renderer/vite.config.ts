@@ -58,7 +58,12 @@ export default defineConfig(async ({ mode }) => {
     server: {
       port: 5173,
       host: true,
-      proxy: { '/api': { target: apiTarget, changeOrigin: !localApi, ws: true, ...(apiAgent ? { agent: apiAgent } : {}) } },
+      // /__e2e 仅 ops-e2e 测试服务注册（E2E 种子/夹具）；同源代理让页面内 fetch
+      // 能带会话 cookie 调种子（docs/41 Q-02：种子按 cookie 解析 workspace 归属）。
+      proxy: {
+        '/api': { target: apiTarget, changeOrigin: !localApi, ws: true, ...(apiAgent ? { agent: apiAgent } : {}) },
+        '/__e2e': { target: apiTarget, changeOrigin: !localApi },
+      },
     },
     build: {
       // 桌面发行包构建到 desktop/renderer/（这是打包用的 extraResource）。
