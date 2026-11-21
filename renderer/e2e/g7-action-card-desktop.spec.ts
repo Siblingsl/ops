@@ -41,6 +41,10 @@ async function openAgent(page: Page, baseURL: string, tag: string) {
       timeout: 60_000,
     })
     const native = await app.firstWindow()
+    // docs/41 Q-07：desktop-agent-workbench 容器在 1168~1455px 断点按宽规格设计隐藏会话列表
+    // （desktop-creative.css:673-676），E2E 默认 1440 视口正落入其中，"新对话"按钮不可见。
+    // 加宽视口到 ≥1456（三栏并存断点）以走正常旅程。
+    await native.setViewportSize({ width: 1580, height: 1000 })
     await native.goto(`${baseURL}/login`)
     await native.getByLabel('用户名', { exact: true }).fill(username)
     await native.getByLabel('密码', { exact: true }).fill('local-e2e-password-123')
@@ -56,11 +60,28 @@ async function openAgent(page: Page, baseURL: string, tag: string) {
     await native.getByTestId('desktop-context-menu').getByRole('tab', { name: /小红书/ }).click()
     await native.getByTestId('desktop-context-menu').getByRole('button', { name: '浏览器验收号', exact: true }).click()
     await native.getByRole('link', { name: 'AI 对话', exact: true }).click()
-    const privacy = native.getByRole('dialog').filter({ has: native.getByRole('heading', { name: '智能体隐私说明', exact: true }) })
-    await expect(privacy).toBeVisible()
-    await privacy.getByRole('button', { name: '我知道了', exact: true }).click()
-    await expect(privacy).toBeHidden()
-    await native.getByTestId('desktop-agent-list').getByRole('button', { name: '新对话', exact: true }).click()
+    // docs/41 Q-07：进入智能体页可能同时弹多个'我知道了'引导弹窗（隐私说明等），
+    // 逐个关闭直到无 dialog 残留，避免遮罩拦截后续断言。
+    for (let i = 0; i < 4; i++) {
+      const dlg = native.getByRole('dialog').filter({ has: native.getByRole('button', { name: '我知道了', exact: true }) })
+      if (await dlg.count() === 0) break
+      await dlg.first().getByRole('button', { name: '我知道了', exact: true }).click()
+      await native.waitForTimeout(400)
+    }
+    await expect(native.getByRole('dialog')).toHaveCount(0)
+    // 弹窗可能在断言后异步再弹；点击前再清一轮并对点击做弹窗重试。
+    const newChat = native.getByTestId('desktop-agent-list').getByRole('button', { name: '新对话', exact: true })
+    for (let i = 0; i < 3; i++) {
+      try {
+        await newChat.click({ timeout: 8000 })
+        break
+      } catch {
+        const dlg2 = native.getByRole('dialog').filter({ has: native.getByRole('button', { name: '我知道了', exact: true }) })
+        if (await dlg2.count() > 0) await dlg2.first().getByRole('button', { name: '我知道了', exact: true }).click()
+        await native.waitForTimeout(500)
+        if (i === 2) throw new Error('新对话按钮被弹窗持续遮挡')
+      }
+    }
     return { app, native, profile, account }
   } catch (error) {
     await closeElectron(app, profile, tag)
@@ -95,13 +116,17 @@ test('DEV-QA26 G7 真实 Electron 动作卡逐张执行并验证服务端素材�
     expect(actions).toHaveLength(1)
     expect(actions[0].status).toBe('pending')
 
-    const card = client.native.locator('.desktop-agent-action-card').first()
+    const card = client.native.locator('[id^="agent-action-"]').first()
     await expect(card).toBeAttached()
     await expect(client.native.getByRole('button', { name: /全部执行|全部确认/ })).toHaveCount(0)
+    // FN-04：消息里是只读摘要，执行/拒绝按钮在审阅抽屉内（docs/41 Q-13）。
+    await card.getByRole('button', { name: '查看修改', exact: true }).click()
+    const drawer = client.native.getByRole('dialog', { name: '审阅修改' })
+    await expect(drawer).toBeVisible()
     const execute = client.native.waitForResponse((response) =>
       /\/agent\/actions\/[^/]+\/execute$/.test(new URL(response.url()).pathname)
       && response.request().method() === 'POST')
-    await card.getByRole('button', { name: /执行|入库|保存/ }).first().click()
+    await drawer.getByRole('button', { name: /执行|入库|保存/ }).first().click()
     expect((await execute).ok()).toBeTruthy()
     await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationId}`)).actions[0].status).toBe('succeeded')
 
@@ -123,13 +148,17 @@ test('DEV-QA26 G7 真实 Electron 动作卡拒绝后服务端零写入', async (
     expect(actions).toHaveLength(1)
     expect(actions[0].status).toBe('pending')
 
-    const card = client.native.locator('.desktop-agent-action-card').first()
+    const card = client.native.locator('[id^="agent-action-"]').first()
     await expect(card).toBeAttached()
     await expect(client.native.getByRole('button', { name: /全部执行|全部确认/ })).toHaveCount(0)
+    // FN-04：消息里是只读摘要，执行/拒绝按钮在审阅抽屉内（docs/41 Q-13）。
+    await card.getByRole('button', { name: '查看修改', exact: true }).click()
+    const drawer = client.native.getByRole('dialog', { name: '审阅修改' })
+    await expect(drawer).toBeVisible()
     const reject = client.native.waitForResponse((response) =>
       /\/agent\/actions\/[^/]+\/reject$/.test(new URL(response.url()).pathname)
       && response.request().method() === 'POST')
-    await card.getByRole('button', { name: '拒绝', exact: true }).click()
+    await drawer.getByRole('button', { name: '拒绝', exact: true }).click()
     expect((await reject).ok()).toBeTruthy()
     await expect.poll(async () => (await api(page, 'GET', `/agent/conversations/${conversationId}`)).actions[0].status).toBe('rejected')
 
@@ -167,16 +196,20 @@ test('DEV-QA26 G7 真实 Electron H-02 动作卡逐项确认后保存观点', as
     expect(conversation.actions[0]).toMatchObject({ status: 'pending', gate: 'H-02' })
     expect((await api(page, 'GET', '/works/' + work.id)).viewpoint).toBe('')
 
-    const card = client.native.locator('.desktop-agent-action-card').first()
+    const card = client.native.locator('[id^="agent-action-"]').first()
     await expect(card).toBeAttached()
     await expect(client.native.getByRole('button', { name: /全部执行|全部确认/ })).toHaveCount(0)
-    const gate = card.getByRole('checkbox')
+    // FN-04：消息里是只读摘要，执行/拒绝按钮在审阅抽屉内（docs/41 Q-13）。
+    await card.getByRole('button', { name: '查看修改', exact: true }).click()
+    const drawer = client.native.getByRole('dialog', { name: '审阅修改' })
+    await expect(drawer).toBeVisible()
+    const gate = drawer.getByRole('checkbox')
     await expect(gate).not.toBeChecked()
     await gate.check()
     const execute = client.native.waitForResponse((response) =>
       /\/agent\/actions\/[^/]+\/execute$/.test(new URL(response.url()).pathname)
       && response.request().method() === 'POST')
-    await card.getByRole('button', { name: /保存我的观点/ }).click()
+    await drawer.getByRole('button', { name: /保存我的观点/ }).click()
     expect((await execute).ok()).toBeTruthy()
     await expect.poll(async () => (await api(page, 'GET', '/agent/conversations/' + conversationId)).actions[0].status).toBe('succeeded')
     expect((await api(page, 'GET', '/works/' + work.id)).viewpoint).toBe(viewpoint)
