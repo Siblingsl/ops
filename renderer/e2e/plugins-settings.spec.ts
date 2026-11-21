@@ -60,14 +60,28 @@ test('DEV-AI27-14c 插件管理页：创建/启用/状态机/删除', async ({ b
   expect(cardText).not.toMatch(/sk-|ghp_|token=/i)
 
   // 验证连接（draft → ready_disabled）→ 启用 → 已启用
-  await card.getByRole('button', { name: '验证连接' }).click()
-  await expect(card.getByText('已验证 · 未启用')).toBeVisible({ timeout: 10_000 })
-  await card.getByRole('button', { name: '启用' }).click()
-  await expect(card.getByText('已启用')).toBeVisible({ timeout: 10_000 })
+  // 本页跑在浏览器形态（page 由 Chromium 项目提供，无 Electron preload）；
+  // 真实握手只能由桌面桥完成，无桥时必须正确降级：横幅提示 + 卡片保持"待配置"，
+  // 状态机不推进（docs/41 Q-03）。stdio 真实握手由 desktop mcp-host 定向测试覆盖（8/8）。
+  const hasBridge = await page.evaluate(() => Boolean((window as unknown as { opsDesktopUI?: { validateMcpConnection?: unknown } }).opsDesktopUI?.validateMcpConnection))
+  if (hasBridge) {
+    await card.getByRole('button', { name: '验证连接' }).click()
+    await expect(card.getByText('已验证 · 未启用')).toBeVisible({ timeout: 10_000 })
+    await card.getByRole('button', { name: '启用' }).click()
+    await expect(card.getByText('已启用')).toBeVisible({ timeout: 10_000 })
+  } else {
+    await card.getByRole('button', { name: '验证连接' }).click()
+    await expect(page.getByText('需要 OPS Desktop 客户端：MCP 连接只在本机验证（stdio 子进程与远程握手都在桌面端进行）。')).toBeVisible({ timeout: 10_000 })
+    await expect(card.getByText('待配置')).toBeVisible()
+    await expect.poll(async () => (await api(page, 'GET', '/agent/plugin-connections') as { connections: Array<{ state: string }> }).connections[0].state, { timeout: 10_000 }).toBe('draft')
+  }
 
-  // 停用 → 已停用
-  await card.getByRole('button', { name: '停用' }).click()
-  await expect(card.getByText('已停用')).toBeVisible({ timeout: 10_000 })
+  // 停用路径仅在已启用后才有意义；无桥分支不推进状态机，跳过启停断言。
+  if (hasBridge) {
+    // 停用 → 已停用
+    await card.getByRole('button', { name: '停用' }).click()
+    await expect(card.getByText('已停用')).toBeVisible({ timeout: 10_000 })
+  }
 
   // 撤销 → 列表空
   await card.getByRole('button', { name: '撤销' }).click()
