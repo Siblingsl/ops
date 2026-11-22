@@ -796,7 +796,8 @@ func (s *Server) updateWork(w http.ResponseWriter, r *http.Request) error {
 	if in.Title != nil {
 		t := strings.TrimSpace(*in.Title)
 		if runeLen(t) > 64 {
-			return validation("标题过长")
+			// Q-18（docs/41）：与创建侧文案统一，明确告知上限数字。
+			return validationFields("作品标题最多64字，超出部分请删减", map[string]string{"title": "最多64字"})
 		}
 		if _, err := tx.Exec(ctx, `UPDATE work SET title=$2 WHERE id=$1`, m.ID, t); err != nil {
 			return err
