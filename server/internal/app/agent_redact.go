@@ -30,6 +30,19 @@ var agentRedactKeys = map[string]bool{
 	"secret_mask":        true,
 	"smtp":               true, // 整个对象
 	"code":               true, // 邀请码（错误信封中的 error.code 例外，见 agentKeyRedactedAt）
+	// TL-07（38 文档）：会话凭证与登录态不落工具事件/卡片/证据。
+	// JSON 键常见连字符与驼峰变体，一并覆盖。
+	"cookie":        true,
+	"set_cookie":    true,
+	"set-cookie":    true,
+	"cookies":       true,
+	"session_id":    true,
+	"sessionid":     true,
+	"session-id":    true,
+	"authorization": true,
+	"bearer":        true,
+	"refresh_token": true,
+	"id_token":      true,
 }
 
 // agentKeyRedactedAt 判断某个键在当前路径上是否应当整体脱敏。
@@ -75,14 +88,15 @@ func agentRedactAt(v any, secrets []string, path []string) any {
 	}
 }
 
-// agentRedactText 按值匹配替换本工作区已保存的密钥原文。
+// agentRedactText 按值匹配替换本工作区已保存的密钥原文；手机号与登录态赋值掩码（TL-07）。
 func agentRedactText(s string, secrets []string) string {
 	for _, sec := range secrets {
 		if len(sec) >= 8 && strings.Contains(s, sec) {
 			s = strings.ReplaceAll(s, sec, agentHidden)
 		}
 	}
-	return s
+	s = agentCookieValueRe.ReplaceAllString(s, "$1"+agentHidden)
+	return agentPhoneRe.ReplaceAllString(s, agentHidden)
 }
 
 // agentRedactJSONBytes 脱敏一段 JSON 文本；解析失败时按纯文本处理。
@@ -143,16 +157,29 @@ func agentContainsSecret(text string, secrets []string) bool {
 			return true
 		}
 	}
-	return agentSecretLikePattern(text)
+	// Q-16（docs/41）：登录态赋值短值形态（token:/authorization:/sessionid: 等）不适用
+	// 16 位阈值（TL-07：登录态值长度不定），入站文本闸与出站脱敏共用同一判定。
+	return agentSecretLikePattern(text) || agentCookieValueRe.MatchString(text)
 }
 
 // agentSecretKeywordRe 命中「关键词后 20 个字符内出现长度 ≥ 16 的连续字母数字串」。
+// Q-12（docs/41）：补中文变体「密匙/密碼/口令」与 passcode/pass phrase——与「密钥/密码」
+// 同语义的常见写法不再漏检。
 var agentSecretKeywordRe = regexp.MustCompile(
-	`(?i)(secret|appsecret|apikey|api\s*key|token|password|密码|密钥)[\s\S]{0,20}?[A-Za-z0-9]{16,}`)
+	`(?i)(secret|appsecret|apikey|api\s*key|token|password|pass\s*code|pass\s*phrase|密码|密碼|密钥|密匙|口令)[\s\S]{0,20}?[A-Za-z0-9]{16,}`)
 
 // agentSecretSkRe 命中「sk- 开头、后接 20 个以上字母数字的串」。
 var agentSecretSkRe = regexp.MustCompile(`sk-[A-Za-z0-9]{20,}`)
 
+// agentPhoneRe 命中中国大陆手机号（TL-07：手机号不落工具事件/错误/证据）。
+// RE2 无环视；用「非数字边界 + 手机段 + 非数字边界」的字符组等价表达。
+var agentPhoneRe = regexp.MustCompile(`(?:^|\D)(1[3-9]\d{9})(?:\D|$)`)
+
+// agentCookieValueRe 命中「cookie/bearer/token 等键词后的短赋值」（TL-07：登录态值长度不定，
+// 不适用 16 位阈值）；键词与值之间允许空格/等号/冒号，值最多 64 个非空白字符替换为占位。
+var agentCookieValueRe = regexp.MustCompile(
+	`(?i)((?:set-?cookie|cookie|session-?id|sessionid|authorization|bearer|token)\s*[=: ]\s*)[^\s;,}]{1,64}`)
+
 func agentSecretLikePattern(text string) bool {
-	return agentSecretKeywordRe.MatchString(text) || agentSecretSkRe.MatchString(text)
+	return agentSecretKeywordRe.MatchString(text) || agentSecretSkRe.MatchString(text) || agentPhoneRe.MatchString(text)
 }

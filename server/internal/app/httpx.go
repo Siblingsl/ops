@@ -112,13 +112,97 @@ func ok(w http.ResponseWriter, v any) error {
 }
 
 func decode(r *http.Request, v any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 8<<20))
-	if err := dec.Decode(v); err != nil {
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, 8<<20))
+	if err != nil {
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {
 			return apiErr(408, "request_read_timeout", "请求读取超时，请稍后重试")
 		}
 		return requestFormatError(r.Context(), err)
+	}
+	// Q-11（docs/41）：重复键静默取末值会掩盖客户端拼装错误；与 CX 路由（D-156）同标准拒绝。
+	// 只对「真正的重复键」给专用文案；其余结构/语法问题仍走 requestFormatError。
+	if err := rejectDuplicateJSONKeys(raw); err != nil {
+		if errors.Is(err, errDuplicateJSONKey) {
+			return validation("请求包含重复字段，请检查后重试")
+		}
+		return requestFormatError(r.Context(), err)
+	}
+	if err := json.Unmarshal(raw, v); err != nil {
+		return requestFormatError(r.Context(), err)
+	}
+	return nil
+}
+
+// errDuplicateJSONKey 标记「对象出现重复键」这一种错误；扫描中的其它结构错误
+//（未闭合/嵌套过深/多 JSON 值等）保持普通格式错误语义。
+var errDuplicateJSONKey = errors.New("请求包含重复字段")
+
+// rejectDuplicateJSONKeys 递归扫描 JSON，任一对象出现重复键即拒绝。
+// 与 cxRejectDuplicateJSONKeys 同语义；独立实现以复用通用错误文案（不依赖 CX 域消息）。
+func rejectDuplicateJSONKeys(raw []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := scanDuplicateKeys(dec, 0); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("请求包含多个 JSON 值")
+		}
+		return err
+	}
+	return nil
+}
+
+func scanDuplicateKeys(dec *json.Decoder, depth int) error {
+	if depth > 64 {
+		return errors.New("请求 JSON 嵌套过深")
+	}
+	token, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for dec.More() {
+			keyToken, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("请求包含无效对象键")
+			}
+			if _, exists := seen[key]; exists {
+				return errDuplicateJSONKey
+			}
+			seen[key] = struct{}{}
+			if err := scanDuplicateKeys(dec, depth+1); err != nil {
+				return err
+			}
+		}
+		end, err := dec.Token()
+		if err != nil || end != json.Delim('}') {
+			return errors.New("请求包含未闭合对象")
+		}
+	case '[':
+		for dec.More() {
+			if err := scanDuplicateKeys(dec, depth+1); err != nil {
+				return err
+			}
+		}
+		end, err := dec.Token()
+		if err != nil || end != json.Delim(']') {
+			return errors.New("请求包含未闭合数组")
+		}
+	default:
+		return errors.New("请求包含无效 JSON 分隔符")
 	}
 	return nil
 }
