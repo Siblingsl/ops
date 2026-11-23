@@ -1,5 +1,13 @@
 # OPS 项目交接：桌面客户端从 `web/` 独立迁入 `desktop/`
 
+## 2026-11-22 R14 真实模型验收专项（通道受阻，代码层先行 + 六旅程执行器就位）
+
+**本批范围**：①熔断/NFR-04 降级提示/reasoning_levels（§15.5）/技能 SSE（23 §4.3）四项代码层复核+测试复跑全 PASS；②新增 `server/internal/app/aw13_journeys_real_test.go`——§15.13 六条用户旅程真实模型执行器（×3 迭代、门控 `OPS_AW13_REAL_ACCEPTANCE=1`、复用 `OPS_R_REAL_*` 环境注入、JSONL 证据），vet 0 错、默认 6/6 SKIP。全记录见 `docs/41` R14 轮。
+
+**受阻（如实登记）**：magpie 密钥有效（/models 200，36 模型）但 chat completions 全线 403（WorkBuddy 账号被上游限制，需申诉解封）/429（opencode free 额度耗尽），双请求形态已排除。**六条真实旅程 ×3 与真实 token 费用归因未执行**（mock 不能替代）。续作前提：解封或设置页添加替代供应商；执行命令见 docs/41 R14。
+
+**验证**：TestOPT19 4/4、TestAW07 8/8、TestSkillAgentDraftSSE+DraftCardFlow 2/2、chain（含 E-10 配额）PASS；观察项 O-R14-1（budget 预警无独立回归）、O-R14-2（多分片密钥无专项测试）已登记。无新 Q 条目（未发现代码缺陷）。
+
 ## 2026-11-08 深化五项全部完成（第三类可选深化 1~5/5）
 
 **本批范围**：①多页签拖拽排序（HTML5 DnD + reorder-tab IPC + 单测）；②内置浏览器下载管理（will-download 逐文件确认+原生保存对话框）；③弹窗处理（setWindowOpenHandler deny+当前/新页签内导航）；④委派结果产物跳转（DelegationPanel onNavigateArtifact→产物 tab）；⑤mcp__* 动态目录进 run 工具链（agentMCPDynamicToolsForWorkspace 按 enabled 连接实时生成模型工具项）。
@@ -2249,3 +2257,11 @@ OPS 是公众号与小红书 AI 辅助运营平台。当前主要目录与技术
 - G7-10 真实 Electron 与 Web “测试”按钮各 3/3；每轮成功点击 20 次并测试一次本机 401 key-echo 失败；成功/失败状态服务端持久化、重载恢复，错误与密钥均正确脱敏。完整命令、所有 per-run p50/p95、首轮测试定位器误断言及修复复跑见 docs/26、docs/08 cp129。提交 `bbac9f1 DEV-QA26: 验收模型连通测试双端流程`。
 - 双端 `pnpm typecheck`、E2E 配对守卫（Web123/桌面87/36 对）、Go 专项测试、目标 `--list` 与 `git diff --check` 通过。所有 E2E 串行；QA ports 最终释放，用户 `:5174` PID 19896 保持。overlay 截图附件仍无法读取，进程核查未见 overlay/Playwright runner；无法把旧截图中的约 3小时22分实例与当前 PID 对上，未停止/重启/重复启动它。
 - G6/G7/G8/G2 目标范围仍有 11 项部分验证：G6-03/04/09（真实平台/模型质量与费用）、G7-03（T-AW28 更广矩阵范围待固定、32 MiB 成功 SLA 未批准）、G7-07（受锁和会话唯一约束，授权 API 不可构造直接预算判定竞态）、G7-08/09（真实 provider、生产计费/时钟/网络、模型质量/费用）、G2-04（真实 SMTP/收件箱）、G8-02/08/09（原生 OS 通知权限、物理触控、IME/屏幕阅读器）。当前没有这些范围内可直接执行且已经固定、尚未重复的本地验收项；全局矩阵仍 37 部分/11 未检查。所有改动按任务分开提交，未 push/deploy；HC-01～31/H-01～09 未修改、跳过或放宽。
+
+## 2026-11-23 WT R15（无障碍全量走查）handoff
+
+- R15 无障碍四线完成（编号顺延：R10-R14/Q-19~Q-26 已被并行会话占用）。A 键盘核心旅程（注册→选题→创作→检查→推送闸门）TRAPS=0：注册 autoFocus/Tab 流/提交闸门、添加选题 dialog 焦点+Enter 入库+Esc、新建作品 dialog 焦点、检查页 D-098 定位按钮原生 button 且 20 次 Tab 可达+Enter 定位+radio Space、AI 声明 Space、确认闸门 disabled 语义，全部通过。B aria-live：RunStatus role=status 单容器合并播报、流式正文不在 live 区（D-117 ✓）、D-098 ✓、live 区职责清单在档。D 可达名称严格 WCAG 判定 12 类页面 unnamed=0/dupIds=0，landmark 语义标签齐全；初轮探针 3 处 FAIL 全部定性为探针判定缺陷并如实登记。
+- 产出 1 项 open：Q-27（P3）桌面业务窗 Ctrl+= 200% 文本放大不生效（菜单 role zoomIn 无 before-input-event/globalShortcut/setZoomLevel，WCAG 1.4.4 键盘路径缺失；Web 端不受影响）。修复方向与验证建议见 docs/41。
+- DPI 125%/150% CDP 模拟 dashboard/check/pack/push ×2 档 + 1366×768 叠加全部零横向溢出。物理项未验证如实登记三项：真实 NVDA/JAWS、真机 DPI/混合显示器、物理键盘/触控/IME——建议随 DEV-QA26 G8-08/09 模式的物理设备批次补验。
+- 既有基线回归：agent-p0-ot02-a11y.spec.ts（axe serious=0/键盘走查/对比度）--project=desktop-renderer 1 passed（7.2s）。
+- 脚本：renderer/walkthrough/ui-r10a-keyboard-journey.mjs、ui-r10b-aria-audit.mjs、ui-r10c-zoom-dpi.mjs（走查产物允许保留）；临时 diag 脚本已清理；日志 .playwright-results/r10a-keyboard.log、r10b-a11y.log、r10c-zoom.log。本轮未改产品代码；docs/41 追加 R15 节与 Q-27。走查期间的手动服务（go run ops-e2e 8287/8297、vite 5287）已停；Playwright 自起服务已回收。既有 dirty/untracked 全部保留；HC/H 红线未动；不 push/deploy。
