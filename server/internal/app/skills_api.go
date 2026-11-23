@@ -46,6 +46,13 @@ type skillDTO struct {
 	CreatedBy   *uuid.UUID `json:"created_by"`
 	CreatedAt   *time.Time `json:"created_at"`
 	UpdatedAt   *time.Time `json:"updated_at"`
+
+	// A5（D-211）：结构化流程步骤与蒸馏元数据；procedure 为空数组表示无流程。
+	Procedure         []json.RawMessage `json:"procedure,omitempty"`
+	ProcedureVersion  int               `json:"procedure_version,omitempty"`
+	SourceRunID       *uuid.UUID        `json:"source_run_id,omitempty"`
+	DistillConfidence *float64          `json:"distill_confidence,omitempty"`
+	ReplayPolicy      string            `json:"replay_policy,omitempty"`
 }
 
 func skillDTOOf(d *skillDef, createdBy *uuid.UUID, createdAt, updatedAt *time.Time) skillDTO {
@@ -542,7 +549,39 @@ func (s *Server) getSkill(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return ok(w, skillDTOOf(sr.Def, sr.CreatedBy, sr.CreatedAt, sr.UpdatedAt))
+	dto := skillDTOOf(sr.Def, sr.CreatedBy, sr.CreatedAt, sr.UpdatedAt)
+	// A5（D-211）：单条详情携带 procedure 与蒸馏元数据；builtin 的 procedure 来自
+	// 静态注册表，库内技能来自 skill 表。
+	if sr.Def.Builtin && sr.Def.Procedure != "" {
+		dto.Procedure = skillProcedureRawOf(sr.Def.Procedure)
+	} else if !sr.Def.Builtin {
+		var raw []byte
+		var procVersion int
+		var srcRun *uuid.UUID
+		var conf *float64
+		var replay string
+		if err := s.db.QueryRow(r.Context(), `SELECT procedure, procedure_version, source_run_id, distill_confidence, replay_policy
+			FROM skill WHERE id=$1`, id).Scan(&raw, &procVersion, &srcRun, &conf, &replay); err == nil {
+			dto.Procedure = skillProcedureRawOf(string(raw))
+			dto.ProcedureVersion = procVersion
+			dto.SourceRunID = srcRun
+			dto.DistillConfidence = conf
+			dto.ReplayPolicy = replay
+		}
+	}
+	return ok(w, dto)
+}
+
+// skillProcedureRawOf 把 procedure JSON 数组拆成元素切片（非法 JSON 返回 nil）。
+func skillProcedureRawOf(raw string) []json.RawMessage {
+	if raw == "" {
+		return nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil
+	}
+	return items
 }
 
 type skillUpdateInput struct {

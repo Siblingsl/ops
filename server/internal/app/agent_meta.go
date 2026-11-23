@@ -72,6 +72,9 @@ func (s *Server) agentMetaTool(ctx context.Context, st *agentRunState, t *AgentT
 		}
 	case "make_link":
 		payload, summary, err = s.agentMetaMakeLink(args)
+	case "report_capability_gap":
+		// A3：缺口写入与工具结果同一事务；只回执 recorded=true，不生成卡片。
+		return s.agentMetaReportCapabilityGap(ctx, st, call, args, send)
 	case "present_plan":
 		payload, summary, err = s.agentMetaPresentPlan(ctx, st, call, args)
 	case "update_plan_step":

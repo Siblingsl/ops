@@ -36,8 +36,9 @@ async function plansQuestionsJourney(page: Page, baseURL: string, screenshot: st
   await picker.getByRole('tab', { name: /小红书/ }).click()
   await picker.getByRole('button', { name: '计划问题验收号', exact: true }).click()
   await page.goto(`${baseURL}/agent`)
-  await expect(page.locator('.desktop-agent-workbench-meta')).toContainText('计划问题验收号')
-  await page.getByRole('combobox', { name: '对话模式', exact: true }).selectOption('plan')
+  await expect(page.locator('.desktop-agent-header')).toContainText('计划问题验收号')
+  await page.getByRole('button', { name: /对话模式/ }).click()
+  await page.getByRole('menuitemradio', { name: /计划/ }).click()
 
   const planArgs = { summary: '核对本周内容方向并形成一条可审阅建议', steps: [
     { id: 'read', title: '读取近期内容', target_ref: '当前账号近期作品', acceptance: '引用已保存的读取结果' },
@@ -48,8 +49,8 @@ async function plansQuestionsJourney(page: Page, baseURL: string, screenshot: st
   const initial = `先给出计划并确认目标\n#tool present_plan ${JSON.stringify(planArgs)}\n#tool request_input ${JSON.stringify(questionArgs)}`
   const firstResponse = page.waitForResponse((response) => /\/agent\/conversations\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST')
   await page.locator('textarea').fill(initial)
-  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled()
-  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByRole('button', { name: '生成计划', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: '生成计划', exact: true }).click()
   expect((await firstResponse).status()).toBe(202)
   await page.waitForURL(/\/agent\/c\/[a-f0-9-]+$/)
   const conversationID = page.url().split('/').pop()!

@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Button } from '@/components/ui'
+import type { DesktopBrowserTab } from '@/lib/desktop-presentation'
 
 // DEV-AI27-07 第二批（W07b）：浏览器页签内容——连接实例列表+标签选择器（27 §7.3）。
-// 已连接时显示实例与可选标签（脱敏标题/域名）；选中后生成 Chrome 筹码回调给父组件。
-// 未连接时保持 BrowserStatusBlock 的如实状态展示。
+// BR-01：标签枚举走桌面桥真实 IPC（browser:list-tabs），不再误用只属于 Agent run
+// 的服务端命令账本；桥未就绪/未配对时如实报错，不伪造列表。
+// BR-05：已连接但无标签时给出“刷新标签”出口。
 
 interface BrowserBinding {
   id: string
@@ -11,19 +14,13 @@ interface BrowserBinding {
   state: string
 }
 
-interface BrowserTab {
-  tab_id: number
-  title: string
-  origin: string
-}
-
 interface BrowserTabSelectorProps {
   bindings: BrowserBinding[]
-  onTabSelected: (tab: BrowserTab) => void
+  onTabSelected: (tab: DesktopBrowserTab) => void
 }
 
 export function BrowserTabSelector({ bindings, onTabSelected }: BrowserTabSelectorProps) {
-  const [tabs, setTabs] = useState<BrowserTab[]>([])
+  const [tabs, setTabs] = useState<DesktopBrowserTab[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -31,24 +28,21 @@ export function BrowserTabSelector({ bindings, onTabSelected }: BrowserTabSelect
     setLoading(true)
     setError('')
     try {
-      // 通过服务端账本派发 tabs_list 命令；实际执行由桌面桥完成。
-      // 本 API 是 W04 命令账本的 POST /agent/browser/commands。
-      const response = await fetch('/api/v1/agent/browser/commands', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'tabs_list',
-          payload: {},
-        }),
-      })
-      if (!response.ok) {
-        const body = await response.text()
-        throw new Error(`HTTP ${response.status}: ${body.slice(0, 100)}`)
+      const bridge = window.opsDesktopUI
+      if (!bridge?.listBrowserTabs) {
+        setTabs([])
+        setError('需要 OPS 桌面端才能读取 Chrome 标签；浏览器版不会伪造标签列表。')
+        return
       }
-      const data = await response.json() as { payload?: { tabs?: BrowserTab[] } }
-      setTabs(data.payload?.tabs ?? [])
+      const result = await bridge.listBrowserTabs()
+      if (!result.ok) {
+        setTabs([])
+        setError(result.message || '标签枚举失败；请确认 Chrome 与 OPS 扩展正在运行后重试。')
+        return
+      }
+      setTabs(result.tabs)
     } catch (err) {
+      setTabs([])
       setError(String(err instanceof Error ? err.message : err))
     } finally {
       setLoading(false)
@@ -62,13 +56,16 @@ export function BrowserTabSelector({ bindings, onTabSelected }: BrowserTabSelect
     {bindings.length > 0 && <p className="text-xs text-mist-500">
       已连接 {bindings.length} 个实例：{bindings.map((b) => b.connection_name || '未命名').join('、')}
     </p>}
-    {error && <p className="text-xs text-danger" role="alert">{error}</p>}
+    {error && <p className="text-xs text-danger" role="alert" data-testid="desktop-agent-browser-tabs-error">{error}</p>}
     {loading && <p className="text-xs text-mist-500">正在读取标签列表…</p>}
-    {!loading && tabs.length === 0 && !error && <p className="text-xs text-mist-500">没有可用的浏览器标签。</p>}
+    {!loading && !error && tabs.length === 0 && <p className="text-xs text-mist-500" data-testid="desktop-agent-browser-tabs-empty">
+      已连接，但 Chrome 里没有可读取的标签。打开一个网页后刷新。
+    </p>}
     <ul className="mt-2 space-y-1">
       {tabs.map((tab) => <li key={tab.tab_id}>
         <button
           type="button"
+          data-testid={`desktop-agent-browser-tab-${tab.tab_id}`}
           className="w-full rounded-md border border-mist-200 px-3 py-2 text-left text-[13px] text-ink-700 hover:bg-mist-50 hover:border-ink-300 transition-colors"
           onClick={() => onTabSelected(tab)}
         >
@@ -77,8 +74,9 @@ export function BrowserTabSelector({ bindings, onTabSelected }: BrowserTabSelect
         </button>
       </li>)}
     </ul>
-    <p className="mt-2 text-xs text-mist-500">
-      选择标签后生成引用筹码；未获准的标签不会被读取。标签选择器 p95≤500ms（27 §15.2）。
-    </p>
+    <div className="mt-2 flex items-center justify-between gap-2">
+      <p className="text-xs text-mist-500">未获准的标签不会被读取；选择只用于本次任务授权。</p>
+      <Button type="button" size="sm" variant="ghost" disabled={loading} onClick={() => void loadTabs()}>刷新标签</Button>
+    </div>
   </div>
 }

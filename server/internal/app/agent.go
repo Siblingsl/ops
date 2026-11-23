@@ -183,6 +183,10 @@ type agentModelOption struct {
 	ExecutionLocation string    `json:"execution_location"`
 	Vision            bool      `json:"vision"`
 	IsDefault         bool      `json:"is_default"`
+	Tools             bool      `json:"tools"`
+	SelfTest          string    `json:"self_test"`
+	Available         bool      `json:"available"`
+	Reason            string    `json:"reason,omitempty"`
 }
 
 // agentModels 返回可选模型（tools_ok=true）、默认模型，以及“默认模型未通过工具调用自检”标记（第 7.4 节）。
@@ -200,11 +204,20 @@ func (s *Server) agentModels(ctx context.Context) ([]agentModelOption, *agentMod
 		def := &agentModelRef{ProviderID: rt.ProviderID, Model: rt.Model}
 		if rt.ToolsOK {
 			list = append(list, agentModelOption{ProviderID: rt.ProviderID, ProviderName: rt.ProviderName,
-				Model: rt.Model, ExecutionLocation: agentModelExecutionLocation(rt), Vision: rt.VisionOK, IsDefault: true})
+				Model: rt.Model, ExecutionLocation: agentModelExecutionLocation(rt), Vision: rt.VisionOK, IsDefault: true,
+				Tools: true, SelfTest: "passed", Available: true})
 		}
-		if rt.Fallback != nil && rt.Fallback.ToolsOK {
-			list = append(list, agentModelOption{ProviderID: rt.Fallback.ProviderID, ProviderName: rt.Fallback.ProviderName,
-				Model: rt.Fallback.Model, ExecutionLocation: agentModelExecutionLocation(rt.Fallback), Vision: rt.Fallback.VisionOK})
+		if rt.Fallback != nil {
+			fallback := agentModelOption{ProviderID: rt.Fallback.ProviderID, ProviderName: rt.Fallback.ProviderName,
+				Model: rt.Fallback.Model, ExecutionLocation: agentModelExecutionLocation(rt.Fallback), Vision: rt.Fallback.VisionOK,
+				Tools: rt.Fallback.ToolsOK, Available: rt.Fallback.ToolsOK}
+			if fallback.Tools {
+				fallback.SelfTest = "passed"
+			} else {
+				fallback.SelfTest = "failed"
+				fallback.Reason = "备用模型未通过工具调用自检"
+			}
+			list = append(list, fallback)
 		}
 		if len(list) == 0 {
 			return list, nil, true, nil
@@ -212,9 +225,10 @@ func (s *Server) agentModels(ctx context.Context) ([]agentModelOption, *agentMod
 		return list, def, false, nil
 	}
 	ws := ident(ctx).WorkspaceID
-	rows, err := s.db.Query(ctx, `SELECT p.id, p.name, m.model, coalesce(m.vision_ok,false)
+	rows, err := s.db.Query(ctx, `SELECT p.id, p.name, m.model, coalesce(m.vision_ok,false),
+			coalesce(m.tools_ok,false), (m.tested_at IS NOT NULL)
 		FROM model_capability m JOIN model_provider p ON p.id=m.provider_id
-		WHERE m.workspace_id=$1 AND p.workspace_id=$1 AND p.execution_location='server' AND m.config_revision=p.desktop_config_revision AND p.status='active' AND m.tools_ok
+		WHERE m.workspace_id=$1 AND p.workspace_id=$1 AND p.execution_location='server' AND m.config_revision=p.desktop_config_revision AND p.status='active'
 		ORDER BY p.created_at, m.model`, ws)
 	if err != nil {
 		return nil, nil, false, err
@@ -223,10 +237,22 @@ func (s *Server) agentModels(ctx context.Context) ([]agentModelOption, *agentMod
 	list := []agentModelOption{}
 	for rows.Next() {
 		var m agentModelOption
-		if err := rows.Scan(&m.ProviderID, &m.ProviderName, &m.Model, &m.Vision); err != nil {
+		var tested bool
+		if err := rows.Scan(&m.ProviderID, &m.ProviderName, &m.Model, &m.Vision, &m.Tools, &tested); err != nil {
 			return nil, nil, false, err
 		}
 		m.ExecutionLocation = "server"
+		m.Available = m.Tools
+		switch {
+		case m.Tools:
+			m.SelfTest = "passed"
+		case tested:
+			m.SelfTest = "failed"
+			m.Reason = "模型未通过工具调用自检"
+		default:
+			m.SelfTest = "untested"
+			m.Reason = "模型尚未完成工具能力自检"
+		}
 		list = append(list, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -240,7 +266,7 @@ func (s *Server) agentModels(ctx context.Context) ([]agentModelOption, *agentMod
 	if err == nil {
 		available := false
 		for i := range list {
-			if list[i].ProviderID == rt.ProviderID && list[i].Model == rt.Model {
+			if list[i].ProviderID == rt.ProviderID && list[i].Model == rt.Model && list[i].Available {
 				available = true
 				list[i].IsDefault = true
 			}
@@ -334,11 +360,19 @@ type agentConversation struct {
 	ReasoningEffort    *string    `json:"reasoning_effort,omitempty"`
 	ParentID           *uuid.UUID `json:"parent_id,omitempty"`
 	ForkUptoSeq        *int       `json:"fork_upto_seq,omitempty"`
+	// FN-12（docs/38 §12.4）：main/fork/side；侧栏据此显示“旁问”标签。
+	Kind string `json:"kind"`
+	// SideTokenBudget 是旁问独立预算；SideContext 不下发客户端，只在服务端拼上下文。
+	SideTokenBudget int    `json:"side_token_budget,omitempty"`
+	SideContext     string `json:"-"`
 }
 
 type agentConversationListItem struct {
 	agentConversation
-	PendingActions        int            `json:"pending_actions"`
+	PendingActions int `json:"pending_actions"`
+	// FN-01（docs/38 §7.1）：会话行需要独立的待回答问题数与账号名，列表不再显示模型名。
+	PendingQuestions      int            `json:"pending_questions"`
+	AccountName           string         `json:"account_name"`
 	HasActiveRun          bool           `json:"has_active_run"`
 	HasUnread             bool           `json:"has_unread"`
 	Goal                  *agentGoalView `json:"goal,omitempty"`
@@ -349,13 +383,14 @@ type agentConversationListItem struct {
 
 const agentConversationCols = `c.id, c.title, c.title_source, c.pinned_at, c.model_provider_id, c.model,
 	c.account_id, c.last_message_at, c.created_at, c.updated_at, c.revision,
-	c.archived_at, c.group_id, c.read_upto_message_seq, c.force_unread, c.mode, c.reasoning_effort, c.parent_id, c.fork_upto_seq`
+	c.archived_at, c.group_id, c.read_upto_message_seq, c.force_unread, c.mode, c.reasoning_effort, c.parent_id, c.fork_upto_seq, c.kind, c.side_context, c.side_token_budget`
 
 func scanAgentConversation(row pgx.Row) (*agentConversation, error) {
 	var c agentConversation
 	if err := row.Scan(&c.ID, &c.Title, &c.TitleSource, &c.PinnedAt, &c.ModelProviderID, &c.Model,
 		&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision,
-		&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread, &c.Mode, &c.ReasoningEffort, &c.ParentID, &c.ForkUptoSeq); err != nil {
+		&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread, &c.Mode, &c.ReasoningEffort, &c.ParentID, &c.ForkUptoSeq,
+		&c.Kind, &c.SideContext, &c.SideTokenBudget); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -519,9 +554,12 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 		}
 		switch state {
 		case "active":
-			where += ` AND EXISTS (SELECT 1 FROM agent_run r WHERE r.conversation_id=c.id AND r.status IN ('queued','running'))`
+			where += ` AND (EXISTS (SELECT 1 FROM agent_run r WHERE r.conversation_id=c.id AND r.status IN ('queued','running'))
+				OR EXISTS (SELECT 1 FROM agent_action a WHERE a.conversation_id=c.id AND a.status IN ('pending','needs_input'))
+				OR EXISTS (SELECT 1 FROM agent_question q WHERE q.conversation_id=c.id AND q.status='pending' AND q.expires_at > now()))`
 		case "needs_action":
-			where += ` AND EXISTS (SELECT 1 FROM agent_action a WHERE a.conversation_id=c.id AND a.status IN ('pending','needs_input'))`
+			where += ` AND (EXISTS (SELECT 1 FROM agent_action a WHERE a.conversation_id=c.id AND a.status IN ('pending','needs_input'))
+				OR EXISTS (SELECT 1 FROM agent_question q WHERE q.conversation_id=c.id AND q.status='pending' AND q.expires_at > now()))`
 		case "unread":
 			where += ` AND ` + unreadSQL
 		case "goal":
@@ -551,6 +589,8 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 	args = append(args, limit+1)
 	rows, err := s.db.Query(ctx, `SELECT `+agentConversationCols+`,
 		(SELECT count(*) FROM agent_action a WHERE a.conversation_id=c.id AND a.status IN ('pending','needs_input')),
+		(SELECT count(*) FROM agent_question q WHERE q.conversation_id=c.id AND q.status='pending' AND q.expires_at > now()),
+		COALESCE((SELECT a.name FROM platform_account a WHERE a.id=c.account_id), ''),
 		EXISTS (SELECT 1 FROM agent_run r WHERE r.conversation_id=c.id AND r.status IN ('queued','running')),
 		`+unreadSQL+`,
 		`+matchedIDSQL+`, `+matchedSeqSQL+`, `+matchedSnippetSQL+`
@@ -570,8 +610,8 @@ func (s *Server) listAgentConversations(w http.ResponseWriter, r *http.Request) 
 		if err := rows.Scan(&c.ID, &c.Title, &c.TitleSource, &c.PinnedAt, &c.ModelProviderID, &c.Model,
 			&c.AccountID, &c.LastMessageAt, &c.CreatedAt, &c.UpdatedAt, &c.Revision,
 			&c.ArchivedAt, &c.GroupID, &c.ReadUptoMessageSeq, &c.ForceUnread, &c.Mode, &c.ReasoningEffort,
-			&c.ParentID, &c.ForkUptoSeq,
-			&summary.PendingActions, &summary.HasActiveRun, &summary.HasUnread,
+			&c.ParentID, &c.ForkUptoSeq, &c.Kind, &c.SideContext, &c.SideTokenBudget,
+			&summary.PendingActions, &summary.PendingQuestions, &summary.AccountName, &summary.HasActiveRun, &summary.HasUnread,
 			&matchedID, &matchedSeq, &summary.MatchedMessageSnippet); err != nil {
 			return err
 		}
@@ -623,14 +663,53 @@ func (s *Server) createAgentConversation(w http.ResponseWriter, r *http.Request)
 		AccountID string         `json:"account_id"`
 		Model     *agentModelRef `json:"model"`
 		RequestID string         `json:"request_id"`
+		// FN-12：kind=side 时由 parent_id 创建旁问；普通创建保持缺省 main。
+		Kind     string `json:"kind"`
+		ParentID string `json:"parent_id"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
 	}
+	kind := strings.TrimSpace(in.Kind)
+	if kind == "" {
+		kind = "main"
+	}
+	if kind != "main" && kind != "side" {
+		return validation("对话类型无效")
+	}
+	var sideParent *agentConversation
+	if kind == "side" {
+		if err := requireAgentFeature("side_chat"); err != nil {
+			return err
+		}
+		parentID, err := uuid.Parse(strings.TrimSpace(in.ParentID))
+		if err != nil || strings.TrimSpace(in.ParentID) == "" {
+			return validation("旁问需要有效的主对话")
+		}
+		sideParent, err = s.agentConversationFor(ctx, parentID)
+		if err != nil {
+			return err
+		}
+		if sideParent.Kind == "side" {
+			return apiErr(422, "agent_side_parent_invalid", "旁问不能以另一个旁问为主对话")
+		}
+		if sideParent.ArchivedAt != nil {
+			return apiErr(409, "agent_side_parent_archived", "主对话已归档，请先恢复后再创建旁问")
+		}
+		if strings.TrimSpace(in.AccountID) != "" || in.Model != nil {
+			return apiErr(422, "agent_side_target_inherited", "旁问继承主对话的账号与模型，不能单独指定")
+		}
+	} else if strings.TrimSpace(in.ParentID) != "" {
+		return validation("只有旁问可以指定主对话")
+	}
 	title := strings.TrimSpace(in.Title)
 	source := "auto"
 	if title == "" {
-		title = "新对话"
+		if kind == "side" {
+			title = "旁问 · " + truncateRunes(sideParent.Title, 50)
+		} else {
+			title = "新对话"
+		}
 	} else {
 		if runeLen(title) > 60 {
 			return validation("对话标题最多 60 字")
@@ -638,24 +717,28 @@ func (s *Server) createAgentConversation(w http.ResponseWriter, r *http.Request)
 		source = "user"
 	}
 	var accountID *uuid.UUID
-	if strings.TrimSpace(in.AccountID) != "" {
-		aid, err := uuid.Parse(strings.TrimSpace(in.AccountID))
-		if err != nil {
-			return errNotFound
-		}
-		if err := s.checkAgentAccount(ctx, aid); err != nil {
-			return err
-		}
-		accountID = &aid
-	}
 	var providerID *uuid.UUID
 	model := ""
-	if in.Model != nil {
-		ref, err := s.resolveAgentModel(ctx, *in.Model)
-		if err != nil {
-			return err
+	if kind == "side" {
+		accountID, providerID, model = sideParent.AccountID, sideParent.ModelProviderID, sideParent.Model
+	} else {
+		if strings.TrimSpace(in.AccountID) != "" {
+			aid, err := uuid.Parse(strings.TrimSpace(in.AccountID))
+			if err != nil {
+				return errNotFound
+			}
+			if err := s.checkAgentAccount(ctx, aid); err != nil {
+				return err
+			}
+			accountID = &aid
 		}
-		providerID, model = &ref.ProviderID, ref.Model
+		if in.Model != nil {
+			ref, err := s.resolveAgentModel(ctx, *in.Model)
+			if err != nil {
+				return err
+			}
+			providerID, model = &ref.ProviderID, ref.Model
+		}
 	}
 	var requestID uuid.UUID
 	if strings.TrimSpace(in.RequestID) != "" {
@@ -676,7 +759,12 @@ func (s *Server) createAgentConversation(w http.ResponseWriter, r *http.Request)
 			AccountID  *uuid.UUID
 			ProviderID *uuid.UUID
 			Model      string
-		}{title, accountID, providerID, model}
+			Kind       string
+			ParentID   *uuid.UUID
+		}{title, accountID, providerID, model, kind, nil}
+		if sideParent != nil {
+			payload.ParentID = &sideParent.ID
+		}
 		replayID, err := claimAgentRequest(ctx, tx, id.WorkspaceID, id.UserID, "conversation.create", requestID, payload)
 		if err != nil {
 			return err
@@ -692,16 +780,34 @@ func (s *Server) createAgentConversation(w http.ResponseWriter, r *http.Request)
 			return ok(w, c)
 		}
 	}
+	sideContext := ""
+	sideBudget := 20000
+	if sideParent != nil {
+		sideContext, err = s.agentSideContextSnapshot(ctx, tx, sideParent, id.WorkspaceID, id.UserID)
+		if err != nil {
+			return err
+		}
+	}
+	var parentArg any
+	if sideParent != nil {
+		parentArg = sideParent.ID
+	}
 	c, err := scanAgentConversation(tx.QueryRow(ctx, `INSERT INTO agent_conversation
-		(workspace_id, user_id, title, title_source, account_id, model_provider_id, model)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, title, title_source, pinned_at, model_provider_id, model,
+		(workspace_id, user_id, title, title_source, account_id, model_provider_id, model, parent_id, kind, side_context, side_token_budget)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id, title, title_source, pinned_at, model_provider_id, model,
 		account_id, last_message_at, created_at, updated_at, revision, archived_at, group_id,
-		read_upto_message_seq, force_unread, mode, reasoning_effort, parent_id, fork_upto_seq`,
-		id.WorkspaceID, id.UserID, title, source, accountID, providerID, model))
+		read_upto_message_seq, force_unread, mode, reasoning_effort, parent_id, fork_upto_seq, kind, side_context, side_token_budget`,
+		id.WorkspaceID, id.UserID, title, source, accountID, providerID, model, parentArg, kind, sideContext, sideBudget))
 	if err != nil {
 		return err
 	}
 	c.Mode = agentEffectiveMode(c.Mode, id.Role)
+	if c.Kind == "side" {
+		c.Mode = "discuss"
+		if _, err := tx.Exec(ctx, `UPDATE agent_conversation SET mode='discuss' WHERE id=$1`, c.ID); err != nil {
+			return err
+		}
+	}
 	baselineSeq, err := appendAgentEventTx(ctx, tx, c.ID, nil, "conversation.updated", map[string]any{"snapshot_baseline": true}, nil)
 	if err != nil {
 		return err
@@ -848,6 +954,9 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 		if in.ExpectedRevision != nil && current.Revision != *in.ExpectedRevision {
 			return apiErr(409, "agent_revision_conflict", "对话已被其他操作更新，请刷新后重试")
 		}
+		if current.Kind == "side" && in.Mode != nil && *in.Mode != "discuss" {
+			return apiErr(422, "agent_side_read_only", "旁问是只读会话，不能切到计划或执行模式")
+		}
 		if in.AccountID != nil || in.Model != nil || in.Mode != nil {
 			var active, executing, pending bool
 			if err := tx.QueryRow(ctx, `SELECT
@@ -909,7 +1018,7 @@ func (s *Server) patchAgentConversation(w http.ResponseWriter, r *http.Request) 
 	sql := `UPDATE agent_conversation SET ` + strings.Join(sets, ", ") + where +
 		` RETURNING id, title, title_source, pinned_at, model_provider_id, model, account_id,
 		last_message_at, created_at, updated_at, revision, archived_at, group_id, read_upto_message_seq, force_unread, mode,
-		reasoning_effort, parent_id, fork_upto_seq`
+		reasoning_effort, parent_id, fork_upto_seq, kind, side_context, side_token_budget`
 	query := s.db.QueryRow
 	if tx != nil {
 		query = tx.QueryRow
@@ -1010,7 +1119,7 @@ func (s *Server) resolveAgentModel(ctx context.Context, ref agentModelRef) (agen
 		return ref, err
 	}
 	for _, m := range models {
-		if m.ProviderID == ref.ProviderID && m.Model == ref.Model {
+		if m.ProviderID == ref.ProviderID && m.Model == ref.Model && m.Available {
 			return agentModelRef{ProviderID: m.ProviderID, Model: m.Model}, nil
 		}
 	}
@@ -1042,13 +1151,17 @@ type agentAttachmentView struct {
 }
 
 type agentToolCallView struct {
-	ID            string               `json:"id"`
-	Name          string               `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// FN-03：工具名前缀即业务域，前端据此聚合成业务步骤，不解析工具参数。
+	Domain        string               `json:"domain,omitempty"`
 	Summary       string               `json:"summary"`
 	ResultPreview string               `json:"result_preview"`
 	Status        string               `json:"status,omitempty"`
 	DurationMS    *int64               `json:"duration_ms,omitempty"`
 	Error         *agentToolEventError `json:"error,omitempty"`
+	// TL-02：业务对象链接（最多 3 个），时间线展开行可直接定位对象，不展示参数。
+	ObjectRefs []agentToolObjectRef `json:"object_refs,omitempty"`
 }
 
 type agentSkillUsageView struct {
@@ -1158,6 +1271,15 @@ type agentActiveRun struct {
 	ConfigSnapshot  *agentRunConfigSnapshot `json:"config_snapshot,omitempty"`
 	Reason          string                  `json:"reason,omitempty"`
 	ErrorCode       string                  `json:"error_code,omitempty"`
+	// A8：单 run 的 token 与成本；cost_micros 为 null 表示未配置价格。
+	PromptTokens     int    `json:"prompt_tokens,omitempty"`
+	CompletionTokens int    `json:"completion_tokens,omitempty"`
+	CostMicros       *int64 `json:"cost_micros"`
+	CostCurrency     string `json:"cost_currency,omitempty"`
+	// REF41 A1/A2：可信度结果供双端 Agent 页渲染；运行中为空，结束后由收尾事务落库。
+	Outcome    string `json:"outcome,omitempty"`
+	Demo       bool   `json:"demo,omitempty"`
+	FinalCheck any    `json:"final_check,omitempty"`
 }
 
 func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Request) error {
@@ -1257,6 +1379,10 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 	if err := tx.QueryRow(ctx, `SELECT input_queue_paused FROM agent_conversation WHERE id=$1`, c.ID).Scan(&inputQueuePaused); err != nil {
 		return err
 	}
+	var artifactCount int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM agent_artifact WHERE conversation_id=$1`, c.ID).Scan(&artifactCount); err != nil {
+		return err
+	}
 	var currentPlan *agentPlanView
 	for i := range plans {
 		if plans[i].Status == "current" {
@@ -1284,7 +1410,7 @@ func (s *Server) getAgentConversationDetail(w http.ResponseWriter, r *http.Reque
 		return err
 	}
 	return ok(w, map[string]any{
-		"conversation": c, "messages": messages, "actions": actions, "plans": plans, "current_plan": currentPlan, "questions": questions, "inputs": inputs, "input_queue_paused": inputQueuePaused, "usage": usage, "goal": goal,
+		"conversation": c, "messages": messages, "actions": actions, "plans": plans, "current_plan": currentPlan, "questions": questions, "inputs": inputs, "input_queue_paused": inputQueuePaused, "artifact_count": artifactCount, "usage": usage, "goal": goal,
 		"active_run": active, "last_run": latest, "has_more": hasMore,
 		"can_continue":   s.agentConversationCanContinue(ctx, c),
 		"last_event_seq": lastEventSeq, "read_upto_event_seq": readUptoEventSeq,
@@ -1478,14 +1604,105 @@ func agentToolCallsOf(rawToolCalls []byte, results map[string]string) []agentToo
 	}
 	for _, c := range calls {
 		content := results[c.ID]
+		domain := ""
+		if i := strings.Index(c.Name, "__"); i > 0 {
+			domain = c.Name[:i]
+		}
 		out = append(out, agentToolCallView{
 			ID:            c.ID,
 			Name:          c.Name,
+			Domain:        domain,
 			Summary:       truncateRunes(firstLine(content), 120),
 			ResultPreview: agentJSONSafePreview(agentReceiptsLast(content), 2000),
+			ObjectRefs:    agentToolObjectRefs(content, domain),
 		})
 	}
 	return out
+}
+
+// agentToolObjectRef 是工具事件投影里的业务对象链接：只带 id/名称/域，不带参数与路径（TL-02）。
+type agentToolObjectRef struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Domain string `json:"domain,omitempty"`
+}
+
+// agentToolObjectObjectLabelKeys 是对象名称的候选键，按顺序取第一个非空业务名。
+var agentToolObjectLabelKeys = []string{"title", "name", "label", "text", "topic", "account"}
+
+// agentToolObjectRefs 从工具结果 JSON 顶层提取业务对象引用：单对象（含 id + 名称键）或
+// titles/items/results 列表里前 3 个带 id 的对象。最多 3 个；不读嵌套层，不返回 params/path。
+func agentToolObjectRefs(content, domain string) []agentToolObjectRef {
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "{") {
+		return nil
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return nil
+	}
+	refs := []agentToolObjectRef{}
+	appendRef := func(raw map[string]json.RawMessage) {
+		if len(refs) >= 3 {
+			return
+		}
+		id := ""
+		if v, ok := raw["id"]; ok {
+			var s string
+			if json.Unmarshal(v, &s) == nil {
+				id = strings.TrimSpace(s)
+			}
+		}
+		if id == "" {
+			return
+		}
+		label := ""
+		for _, key := range agentToolObjectLabelKeys {
+			if v, ok := raw[key]; ok {
+				var s string
+				if json.Unmarshal(v, &s) == nil {
+					label = strings.TrimSpace(s)
+					if label != "" {
+						break
+					}
+				}
+			}
+		}
+		if label == "" {
+			return
+		}
+		refs = append(refs, agentToolObjectRef{ID: truncateRunes(id, 64), Label: truncateRunes(label, 64), Domain: domain})
+	}
+	if idRaw, ok := payload["id"]; ok {
+		single := map[string]json.RawMessage{"id": idRaw}
+		for key, v := range payload {
+			single[key] = v
+		}
+		appendRef(single)
+	}
+	for _, listKey := range []string{"titles", "items", "results", "works", "materials", "topics"} {
+		rawList, ok := payload[listKey]
+		if !ok {
+			continue
+		}
+		var list []map[string]json.RawMessage
+		if json.Unmarshal(rawList, &list) != nil {
+			continue
+		}
+		for _, item := range list {
+			appendRef(item)
+			if len(refs) >= 3 {
+				break
+			}
+		}
+		if len(refs) >= 3 {
+			break
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	return refs
 }
 
 // agentReceiptKeys 是工具结果里的调用回执键：对预览而言是噪声，重排到对象尾部，
@@ -1771,11 +1988,14 @@ func jsonOrNil(raw []byte) any {
 
 func (s *Server) agentLatestRunOf(ctx context.Context, tx pgx.Tx, convID uuid.UUID) (*agentActiveRun, error) {
 	var run agentActiveRun
-	var snapshot []byte
-	err := tx.QueryRow(ctx, `SELECT id, status, stage, trigger, model_provider_id, model, started_at,reason,error_code,mode,config_snapshot
+	var snapshot, finalCheck []byte
+	err := tx.QueryRow(ctx, `SELECT id, status, stage, trigger, model_provider_id, model, started_at,reason,error_code,mode,config_snapshot,
+		prompt_tokens, completion_tokens, cost_micros, cost_currency, outcome, demo, final_check
 		FROM agent_run WHERE conversation_id=$1
 		ORDER BY started_at DESC LIMIT 1`, convID).Scan(&run.ID, &run.Status, &run.Stage, &run.Trigger,
-		&run.ModelProviderID, &run.Model, &run.StartedAt, &run.Reason, &run.ErrorCode, &run.Mode, &snapshot)
+		&run.ModelProviderID, &run.Model, &run.StartedAt, &run.Reason, &run.ErrorCode, &run.Mode, &snapshot,
+		&run.PromptTokens, &run.CompletionTokens, &run.CostMicros, &run.CostCurrency,
+		&run.Outcome, &run.Demo, &finalCheck)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -1787,6 +2007,7 @@ func (s *Server) agentLatestRunOf(ctx context.Context, tx pgx.Tx, convID uuid.UU
 			return nil, err
 		}
 	}
+	run.FinalCheck = jsonOrNil(finalCheck)
 	return &run, nil
 }
 
@@ -1824,6 +2045,9 @@ func (s *Server) agentRoutes(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(s.agentGate)
 		r.Get("/agent/bootstrap", s.h(s.agentBootstrap))
+		r.Get("/agent-runs/{id}/cost", s.h(s.getAgentRunCost))
+		// FN-11：唯一只读聚合入口；六块数据由 agent_today_ops.go 统一返回。
+		r.Get("/agent/today-ops", s.h(s.agentTodayOps))
 		r.Get("/agent/conversations", s.h(s.listAgentConversations))
 		r.Post("/agent/conversations", s.h(s.createAgentConversation))
 		r.Get("/agent/conversations/{id}", s.h(s.getAgentConversationDetail))
@@ -1839,17 +2063,23 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Get("/agent/conversations/{id}/artifacts", s.h(s.listAgentArtifacts))
 		r.Get("/agent/artifacts/{id}", s.h(s.getAgentArtifact))
 		r.Get("/agent/artifacts/{id}/file", s.h(s.getAgentArtifactFile))
+		r.Get("/agent/observability", s.h(s.getAgentObservability))
 		r.Post("/agent/artifacts/{id}/versions", s.h(s.postAgentArtifactVersion))
 		r.Get("/agent/conversations/{id}/events", s.h(s.getAgentConversationEvents))
 		r.Get("/agent/context-candidates", s.h(s.getAgentContextCandidates))
 		r.Post("/agent/context-preview", s.h(s.postAgentContextPreview))
 		r.Get("/agent/settings", s.h(s.getAgentSettings))
 		r.Put("/agent/settings", s.h(s.putAgentSettings))
+		// REF41 A3：能力缺口台账仅所有者可读、可改状态；智能体只能通过本地元工具记录。
+		r.Get("/agent-capability-gaps", s.h(s.listAgentCapabilityGaps))
+		r.Patch("/agent-capability-gaps/{id}", s.h(s.patchAgentCapabilityGap))
 		r.Post("/agent/conversations/{id}/messages", s.h(s.postAgentMessages))
 		r.Get("/agent/conversations/{id}/compact-preview", s.h(s.getAgentCompactPreview))
 		r.Post("/agent/conversations/{id}/compact", s.h(s.postAgentCompact))
 		r.Post("/agent/conversations/{id}/goal", s.h(s.postAgentGoal))
 		r.Patch("/agent/conversations/{id}/goal", s.h(s.patchAgentGoal))
+		r.Get("/agent/conversations/{id}/goal-runs", s.h(s.getAgentGoalRuns))
+		r.Get("/agent/capabilities", s.h(s.getAgentCapabilities))
 		r.Post("/agent/goals/{id}/control", s.h(s.postAgentGoalControl))
 		r.Post("/agent/goals/{id}/confirm-criterion", s.h(s.postAgentGoalConfirmCriterion))
 		r.Get("/agent/routines", s.h(s.getAgentRoutineList))
@@ -1886,6 +2116,10 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Post("/agent/browser/pairings", s.h(s.createAgentBrowserPairing))
 		r.Post("/agent/browser/pairings/{id}/confirm", s.h(s.confirmAgentBrowserPairing))
 		r.Post("/agent/conversations/{id}/browser-grants", s.h(s.createAgentBrowserGrant))
+		// BR-09：只读当前活动租约（用户“查看操作”需要知道 Agent 正在哪个标签；不新增写入路径）。
+		r.Get("/agent/conversations/{id}/browser-grants", s.h(s.getAgentBrowserGrant))
+		// BR-08：交回 Agent——按会话最近一次租约重建（UI 不一定持有派生租约句柄）。
+		r.Post("/agent/conversations/{id}/browser-handback", s.h(s.handBackConversationBrowserGrant))
 		// DEV-AI27-13（W13）：个人跨对话记忆（27 §11.1），受 personal_memories 开关约束。
 		r.Get("/agent/personal-memories", s.h(s.listPersonalMemories))
 		r.Post("/agent/personal-memories", s.h(s.createPersonalMemory))
@@ -1910,7 +2144,7 @@ func (s *Server) agentRoutes(r chi.Router) {
 		// CF-DESK-03（90 D-186 已批准）：run 内 tools/call 执行入口（契约 §2.1 第 1 点；
 		// GET 保持只读列连接语义不变）。
 		r.Post("/tools/mcp/calls", s.h(s.runPluginMCPCall))
-		r.Post("/tools/subagent/conversations/{id}/delegation-groups", s.h(s.createDelegationGroup))
+		r.Post("/tools/subagent/conversations/{conversationId}/delegation-groups", s.h(s.createDelegationGroup))
 		r.Post("/tools/subagent/delegations/{id}/cancel", s.h(s.cancelDelegation))
 		r.Get("/tools/computer/grants", s.h(s.listComputerGrants))
 		r.Post("/tools/computer/grants/{id}/handoff", s.h(s.handoffComputerGrant))
@@ -1940,13 +2174,13 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Get("/agent/plugin-calls/pending", s.h(s.pendingPluginCalls))
 		r.Post("/agent/plugin-calls/{id}/claim", s.h(s.claimPluginCall))
 		// DEV-AI27-15（W15）：子智能体委派（27 §11.3）。
-		r.Post("/agent/conversations/{id}/delegation-groups", s.h(s.createDelegationGroup))
+		r.Post("/agent/conversations/{conversationId}/delegation-groups", s.h(s.createDelegationGroup))
 		r.Get("/agent/runs/{id}/delegations", s.h(s.listRunDelegations))
 		r.Post("/agent/delegations/{id}/cancel", s.h(s.cancelDelegation))
 		r.Post("/agent/delegations/{id}/result", s.h(s.resultDelegation))
 		r.Post("/agent/delegation-groups/{id}/cancel", s.h(s.cancelDelegationGroup))
 		// DEV-A13（W06 续接）：组详情、显式"汇总子任务结果"、按会话列组、显式提额。
-		r.Get("/agent/conversations/{id}/delegation-groups", s.h(s.listConversationDelegationGroups))
+		r.Get("/agent/conversations/{conversationId}/delegation-groups", s.h(s.listConversationDelegationGroups))
 		r.Get("/agent/delegation-groups/{id}", s.h(s.getDelegationGroup))
 		r.Post("/agent/delegation-groups/{id}/adopt", s.h(s.adoptDelegationGroup))
 		r.Patch("/agent/delegation-groups/{id}/budget", s.h(s.patchDelegationGroupBudget))
@@ -1983,5 +2217,7 @@ func (s *Server) agentRoutes(r chi.Router) {
 		r.Delete("/agent/browser/bindings/{id}", s.h(s.revokeAgentBrowserBinding))
 		r.Delete("/agent/browser/grants/{id}", s.h(s.revokeAgentBrowserGrant))
 		r.Post("/agent/browser/grants/{id}/handoff", s.h(s.handoffAgentBrowserGrant))
+		// BR-08：按会话收回控制权（派生租约不一定有句柄；只减权，不要求浏览器功能开关）。
+		r.Post("/agent/conversations/{id}/browser-handoff", s.h(s.handOffConversationBrowserGrant))
 	})
 }

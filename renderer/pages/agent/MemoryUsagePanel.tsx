@@ -85,14 +85,14 @@ export function MemoryUsagePanel({ conversationId, enabled }: { conversationId: 
       {state === 'ready' && items.length > 0 && <ul className="space-y-1.5">
         {items.map((item) => <li key={`${item.run_id}:${item.memory_id}`} className="text-[12px] leading-5">
           <span className={item.used ? 'text-ink-700' : 'text-mist-500'}>{item.summary || '（空记忆）'}</span>
-          <span className={`ml-1 rounded px-1 py-0.5 text-[11px] ${item.used ? 'bg-mist-100 text-ink-600' : 'bg-mist-50 text-mist-500'}`}>
+          <span className={`ml-1 rounded px-1 py-0.5 text-[12px] ${item.used ? 'bg-mist-100 text-ink-600' : 'bg-mist-50 text-mist-500'}`}>
             {item.used ? '已注入' : reasonLabel(item.omitted_reason)}
           </span>
-          {!item.still_active && <span className="ml-1 text-[11px] text-gamboge-700">记忆已失效</span>}
-          <span className="ml-1 text-[11px] text-mist-400">run {shortRun(item.run_id)} · {item.created_at.replace('T', ' ').replace('Z', '')}</span>
+          {!item.still_active && <span className="ml-1 text-[12px] text-gamboge-700">记忆已失效</span>}
+          <span className="ml-1 text-[12px] text-mist-400">run {shortRun(item.run_id)} · {item.created_at.replace('T', ' ').replace('Z', '')}</span>
         </li>)}
       </ul>}
-      {state === 'ready' && <p className="mt-2 text-[11px] text-mist-400">按轮次记录，最多显示最近 50 条；同一轮同一记忆取最新版本。</p>}
+      {state === 'ready' && <p className="mt-2 text-[12px] text-mist-400">按轮次记录，最多显示最近 50 条；同一轮同一记忆取最新版本。</p>}
     </div>}
   </section>
 }

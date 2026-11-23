@@ -197,7 +197,7 @@ func TestAW08ChatArtifactsAreVersionedAndCitationsAreRevalidated(t *testing.T) {
 	start := len([]rune("本周阅读增长，"))
 	end := start + len([]rune(quote))
 	hash := sha256.Sum256([]byte(quote))
-	citation := agentContextReference{Type: "artifact_version", ID: versionReceipt.VersionID, Scope: "turn",
+	citation := agentContextReference{Type: "artifact_version", ID: versionReceipt.VersionID, ArtifactID: &artifactID, Scope: "turn",
 		Anchor: &agentArtifactAnchor{Start: start, End: end, QuoteHash: hex.EncodeToString(hash[:]), Quote: quote}}
 	status, body := env.do(http.MethodPost, agentRunPath(conversation, "messages"), map[string]any{
 		"text": "请只围绕所选标题段落继续调整。", "context_refs": []agentContextReference{citation},
@@ -208,10 +208,16 @@ func TestAW08ChatArtifactsAreVersionedAndCitationsAreRevalidated(t *testing.T) {
 	}
 	aw06WaitRun(t, body)
 	var saved []agentContextReference
-	if err := env.srv.db.QueryRow(t.Context(), `SELECT context_refs FROM agent_message WHERE conversation_id=$1 AND role='user' ORDER BY seq DESC LIMIT 1`, conversation.ID).Scan(&saved); err != nil || len(saved) != 1 || saved[0].Type != "artifact_version" || saved[0].Anchor == nil || saved[0].Anchor.Quote != quote {
-		t.Fatalf("artifact version anchor was not persisted with the new message: %+v %v", saved, err)
+	if err := env.srv.db.QueryRow(t.Context(), `SELECT context_refs FROM agent_message WHERE conversation_id=$1 AND role='user' ORDER BY seq DESC LIMIT 1`, conversation.ID).Scan(&saved); err != nil || len(saved) != 1 || saved[0].Type != "artifact_version" || saved[0].ArtifactID == nil || *saved[0].ArtifactID != artifactID || saved[0].Anchor == nil || saved[0].Anchor.Quote != quote {
+		t.Fatalf("artifact version anchor/artifact_id was not persisted with the new message: %+v %v", saved, err)
 	}
+	wrongArtifact := uuid.New()
 	changed := citation
+	changed.ArtifactID = &wrongArtifact
+	env.expectErr(t, http.MethodPost, agentRunPath(conversation, "messages"), map[string]any{
+		"text": "不应接受错误产物归属", "context_refs": []agentContextReference{changed}, "request_id": uuid.NewString(), "protocol_version": 2,
+	}, "agent_context_unavailable")
+	changed = citation
 	changed.Anchor = &agentArtifactAnchor{Start: start, End: end, QuoteHash: hex.EncodeToString(hash[:]), Quote: "已变化的选段"}
 	env.expectErr(t, http.MethodPost, agentRunPath(conversation, "messages"), map[string]any{
 		"text": "不应猜位置", "context_refs": []agentContextReference{changed}, "request_id": uuid.NewString(), "protocol_version": 2,

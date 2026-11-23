@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,8 @@ type agentToolEvent struct {
 	Summary    string               `json:"summary"`
 	DurationMS int64                `json:"duration_ms"`
 	Error      *agentToolEventError `json:"error,omitempty"`
+	// TL-02：业务对象链接（最多 3 个），实时时间线可直接渲染对象名，不读工具参数。
+	ObjectRefs []agentToolObjectRef `json:"object_refs,omitempty"`
 }
 
 func (s *Server) agentToolStarted(ctx context.Context, st *agentRunState, call ai.ToolCall, send func(string, any)) error {
@@ -83,8 +86,13 @@ func (s *Server) agentCommitToolOutcomeTx(ctx context.Context, tx pgx.Tx, st *ag
 	rec agentToolRecord, status string) (agentToolEvent, error) {
 	secrets := s.agentSecretValues(ctx, st.WorkspaceID)
 	rec.Raw = agentRedactJSONBytes(rec.Raw, secrets)
+	domain := ""
+	if i := strings.Index(call.Function.Name, "__"); i > 0 {
+		domain = call.Function.Name[:i]
+	}
 	event := agentToolEvent{CallID: call.ID, Name: truncate(agentRedactText(call.Function.Name, secrets), 100),
-		Status: status, Summary: truncate(agentRedactText(rec.Summary, secrets), 120)}
+		Status: status, Summary: truncate(agentRedactText(rec.Summary, secrets), 120),
+		ObjectRefs: agentToolObjectRefs(string(rec.Raw), domain)}
 	if !st.ToolStartedAt.IsZero() {
 		event.DurationMS = max(0, time.Since(st.ToolStartedAt).Milliseconds())
 	}

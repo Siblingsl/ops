@@ -77,14 +77,14 @@ test('DEV-AW05 真实Electron产物页签预览与定位操作卡片', async ({ 
     const actionId = (await card.getAttribute('id'))!.replace('agent-action-', '')
 
     // 打开工作视图 → 任务页签「定位操作卡片」→ 焦点落到卡片
-    await page.getByRole('button', { name: '工作视图', exact: true }).first().click({ timeout: 15000 })
+    await page.locator('.desktop-agent-panel-button').first().click({ timeout: 15000 })
     const panel = page.getByTestId('desktop-agent-side-panel')
     await expect(panel).toBeVisible()
     await panel.getByRole('button', { name: '定位操作卡片', exact: true }).click()
     await expect(page.locator(`#agent-action-${actionId}`)).toBeFocused()
 
     // 产物页签：标题候选产物与来源作品深链（真实窗口）
-    await panel.getByRole('tab', { name: '产物', exact: true }).click()
+    await panel.getByRole('tab', { name: /^产物/ }).click()
     await expect(panel.getByText('小步持续改进', { exact: true })).toBeVisible({ timeout: 30_000 })
     await expect(panel.getByRole('link', { name: '打开来源作品', exact: true })).toHaveAttribute('href', `/works/${workId}`)
 

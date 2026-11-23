@@ -8,6 +8,8 @@ import { assetUrl } from '@/lib/api-base'
 
 export interface AgentContextCandidate {
   id: string
+  /** FN-08：产物版本引用同时携带产物 ID，服务端校验版本归属。 */
+  artifact_id?: string | null
   type: string
   name: string
   summary: string
@@ -30,6 +32,7 @@ export interface AgentSkillSelection {
   name: string
   hint: string
   scope: string
+  unavailable?: boolean
 }
 
 interface CandidatePage { items: AgentContextCandidate[]; next_cursor: string | null }

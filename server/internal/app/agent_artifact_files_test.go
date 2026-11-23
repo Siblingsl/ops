@@ -60,7 +60,29 @@ func TestAW11ArtifactDownloadsArePrivateVersionedAndCSVSafe(t *testing.T) {
 	status, body := env.do("GET", path+"?version=1&format=txt", nil)
 	other.restore(env)
 	if status != 404 || strings.Contains(string(body), "第一版") {
-		t.Fatalf("private export leaked: %d %s", status, body)
+		t.Fatalf("cross-workspace export leaked: %d %s", status, body)
+	}
+	// 同工作区非本人：显式 403（38 FN-08 的 403/200 口径）。
+	var inv struct {
+		Code string `json:"code"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/workspaces/current/invites", map[string]any{"role": "viewer", "max_uses": 1, "days": 1}, &inv)
+	viewer := env.registerClient(t, "aw11-artifact-viewer", testPassword)
+	viewer.mustJSON(t, "POST", "/api/v1/workspaces/join", map[string]any{"code": inv.Code, "switch": true}, nil)
+	var viewerMe struct {
+		CSRF string `json:"csrf_token"`
+	}
+	viewer.mustJSON(t, "GET", "/api/v1/auth/me", nil, &viewerMe)
+	viewer.csrf = viewerMe.CSRF
+	// 观察者角色在解析参数前统一 403：非法 id 也必须是 403，不能通过 400/403 差异探测产物存在性。
+	status, body = viewer.do("GET", "/api/v1/agent/artifacts/not-a-uuid/file?version=1&format=txt", nil)
+	if status != 403 || strings.Contains(string(body), "not-a-uuid") {
+		t.Fatalf("viewer invalid-id probe must be 403 without resource details: %d %s", status, body)
+	}
+	status, body = viewer.do("GET", path+"?version=1&format=txt", nil)
+	viewer.restore(env)
+	if status != 403 || strings.Contains(string(body), "第一版") {
+		t.Fatalf("same-workspace viewer export must be 403 without content: %d %s", status, body)
 	}
 	tableText := "name,value\n'=literal,ok\n=SUM(A1),+cmd\n<script>alert(1)</script>,https://example.invalid\n"
 	content, err := agentArtifactTextContent("table", tableText)
@@ -73,7 +95,7 @@ func TestAW11ArtifactDownloadsArePrivateVersionedAndCSVSafe(t *testing.T) {
 		t.Fatalf("CSV download: %d %s", status, body)
 	}
 	rows, err := csv.NewReader(strings.NewReader(string(body))).ReadAll()
-	if err != nil || rows[2][0] != "文本：=SUM(A1)" || rows[2][1] != "文本：+cmd" || rows[3][0] != "<script>alert(1)</script>" {
+	if err != nil || rows[2][0] != "'=SUM(A1)" || rows[2][1] != "'+cmd" || rows[3][0] != "<script>alert(1)</script>" {
 		t.Fatalf("CSV cells must be escaped and formulas neutralized: %#v %v", rows, err)
 	}
 	if _, _, err := agentReadArtifactTable("a,b\none\n"); err == nil {
@@ -111,7 +133,7 @@ func TestAW11ArtifactDownloadRechecksSourceAndSecrets(t *testing.T) {
 
 func TestAW11CSVFormulaPrefixesAreNeutralized(t *testing.T) {
 	for _, value := range []string{"=1+1", "+cmd", "-cmd", "@SUM(A1)", "  =1", "\tformula", "\rformula", "\nformula", "＝1", "＋1", "－1", "＠SUM(A1)", "\uFEFF=1", "\u3000=1", "'=1", "''+cmd"} {
-		if got := agentCSVSafeCell(value); got != "文本："+value {
+		if got := agentCSVSafeCell(value); got != "'"+value {
 			t.Errorf("unsafe CSV prefix %q => %q", value, got)
 		}
 	}

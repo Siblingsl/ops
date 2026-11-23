@@ -20,6 +20,7 @@ type agentMessageRequestPayload struct {
 	Model               *agentModelRef
 	Mode                *string `json:",omitempty"`
 	SupersedeQuestionID string  `json:",omitempty"`
+	AllowSubagents      bool    `json:",omitempty"`
 }
 
 func parseAgentAttachmentIDs(ids []string) ([]uuid.UUID, error) {
@@ -87,7 +88,7 @@ func (s *Server) agentMessageReplay(ctx context.Context, conversationID, request
 			}
 		}
 	}
-	payload := agentMessageRequestPayload{strings.TrimSpace(req.Text), attachments, req.ContextRefs, req.SkillRequests, strings.TrimSpace(req.AccountID), req.Model, req.Mode, strings.TrimSpace(req.SupersedeQuestionID)}
+	payload := agentMessageRequestPayload{strings.TrimSpace(req.Text), attachments, req.ContextRefs, req.SkillRequests, strings.TrimSpace(req.AccountID), req.Model, req.Mode, strings.TrimSpace(req.SupersedeQuestionID), req.AllowSubagents}
 	hash, err := agentRequestPayloadHash(payload)
 	if err != nil {
 		return nil, err

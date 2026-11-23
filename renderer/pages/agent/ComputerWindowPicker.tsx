@@ -268,7 +268,7 @@ export function ComputerWindowPicker({
           {observe.identityUnproven && <p className="text-xs text-amber-600">窗口身份未能证明；动作前可能需要重新选窗。</p>}
           {observe.items.length > 0 && <ul className="space-y-1">
             {observe.items.map((item) => <li key={item.ref} className="flex min-w-0 items-center gap-2 text-xs text-mist-600">
-              <span className="shrink-0 rounded bg-mist-100 px-1.5 py-0.5 font-mono text-[11px] text-mist-500">{item.ref}</span>
+              <span className="shrink-0 rounded bg-mist-100 px-1.5 py-0.5 font-mono text-[12px] text-mist-500">{item.ref}</span>
               <span className="shrink-0 text-mist-400">{item.role}</span>
               <span className="truncate">{item.name || '(未命名)'}</span>
               {item.value && <span className="truncate text-mist-400">＝{item.value}</span>}

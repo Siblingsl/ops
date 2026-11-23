@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,45 +49,94 @@ const (
 	delegationTaskSecondsLimit = 900
 )
 
+type delegationUsageView struct {
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+}
+
+// delegationAllowedTools 生成子 run 的只读工具白名单（27 §11.3.2/§11.3.3）：
+// 空 = 默认全部 R 工具（不含 subagent 管理工具），显式列表只能收窄到 R 工具；
+// 写入/人工确认类工具永远不能进入子任务，避免子任务扩大父任务授权。
+func delegationAllowedTools(explicit []string) ([]string, error) {
+	safe := map[string]bool{}
+	for _, t := range agentCatalog() {
+		if t.Kind == toolR && t.Domain != "subagent" {
+			safe[t.Name] = true
+		}
+	}
+	if len(explicit) == 0 {
+		names := make([]string, 0, len(safe))
+		for name := range safe {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return names, nil
+	}
+	seen := map[string]bool{}
+	names := make([]string, 0, len(explicit))
+	for _, raw := range explicit {
+		name := strings.TrimSpace(raw)
+		if !safe[name] {
+			return nil, apiErr(422, "delegation_tool_not_readonly", "子任务只允许只读工具："+name)
+		}
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 type delegationView struct {
-	ID          string          `json:"id"`
-	GroupID     string          `json:"group_id"`
-	ParentRunID string          `json:"parent_run_id"`
-	ChildRunID  string          `json:"child_run_id"`
-	Task        string          `json:"task"`
-	State       string          `json:"state"`
-	Generation  int64           `json:"generation"`
-	ResultArtifactID string     `json:"result_artifact_id,omitempty"`
-	ResultSummary string        `json:"result_summary,omitempty"`
-	ErrorCode   string          `json:"error_code,omitempty"`
+	ID               string              `json:"id"`
+	GroupID          string              `json:"group_id"`
+	ParentRunID      string              `json:"parent_run_id"`
+	ChildRunID       string              `json:"child_run_id"`
+	Task             string              `json:"task"`
+	State            string              `json:"state"`
+	Generation       int64               `json:"generation"`
+	Model            string              `json:"model"`
+	AllowedToolCount int                 `json:"allowed_tool_count"`
+	ContextRefCount  int                 `json:"context_ref_count"`
+	Usage            delegationUsageView `json:"usage"`
+	ResultArtifactID string              `json:"result_artifact_id,omitempty"`
+	ResultSummary    string              `json:"result_summary,omitempty"`
+	ErrorCode        string              `json:"error_code,omitempty"`
 }
 
 type delegationGroupView struct {
-	ID                  string            `json:"id"`
-	ConversationID      string            `json:"conversation_id"`
-	RootRunID           string            `json:"root_run_id"`
-	CurrentParentRunID  string            `json:"current_parent_run_id"`
-	State               string            `json:"state"`
-	CancelGeneration    int64             `json:"cancel_generation"`
-	Revision            int64             `json:"revision"`
-	ParentEndedAt       string            `json:"parent_ended_at,omitempty"`
-	ParentEndRunID      string            `json:"parent_end_run_id,omitempty"`
-	AdoptedRunID        string            `json:"adopted_run_id,omitempty"`
-	AdoptedAt           string            `json:"adopted_at,omitempty"`
-	AdoptionCount       int               `json:"adoption_count"`
-	ResultsConsumedAt   string            `json:"results_consumed_at,omitempty"`
-	ConsumedByRunID     string            `json:"consumed_by_run_id,omitempty"`
-	Budget              *delegationBudgetView `json:"budget,omitempty"`
-	Delegations         []delegationView  `json:"delegations"`
+	ID                 string                `json:"id"`
+	ConversationID     string                `json:"conversation_id"`
+	RootRunID          string                `json:"root_run_id"`
+	CurrentParentRunID string                `json:"current_parent_run_id"`
+	State              string                `json:"state"`
+	CancelGeneration   int64                 `json:"cancel_generation"`
+	Revision           int64                 `json:"revision"`
+	ParentEndedAt      string                `json:"parent_ended_at,omitempty"`
+	ParentEndRunID     string                `json:"parent_end_run_id,omitempty"`
+	AdoptedRunID       string                `json:"adopted_run_id,omitempty"`
+	AdoptedAt          string                `json:"adopted_at,omitempty"`
+	AdoptionCount      int                   `json:"adoption_count"`
+	ResultsConsumedAt  string                `json:"results_consumed_at,omitempty"`
+	ConsumedByRunID    string                `json:"consumed_by_run_id,omitempty"`
+	Budget             *delegationBudgetView `json:"budget,omitempty"`
+	Delegations        []delegationView      `json:"delegations"`
 }
 
 const delegationColumns = `d.id::text, d.group_id::text, d.parent_run_id::text, COALESCE(d.child_run_id::text,''),
-	d.task, d.state, d.generation, COALESCE(d.result_artifact_id::text,''), d.result_summary, d.error_code`
+	d.task, d.state, d.generation, COALESCE(d.result_artifact_id::text,''), d.result_summary, d.error_code,
+	d.model, cardinality(d.allowed_tools), jsonb_array_length(d.context_refs),
+	COALESCE((SELECT r.prompt_tokens FROM agent_run r WHERE r.id=d.child_run_id),0),
+	COALESCE((SELECT r.completion_tokens FROM agent_run r WHERE r.id=d.child_run_id),0)`
 
 func scanDelegation(row pgx.Row) (delegationView, error) {
 	var v delegationView
 	err := row.Scan(&v.ID, &v.GroupID, &v.ParentRunID, &v.ChildRunID, &v.Task,
-		&v.State, &v.Generation, &v.ResultArtifactID, &v.ResultSummary, &v.ErrorCode)
+		&v.State, &v.Generation, &v.ResultArtifactID, &v.ResultSummary, &v.ErrorCode,
+		&v.Model, &v.AllowedToolCount, &v.ContextRefCount, &v.Usage.PromptTokens, &v.Usage.CompletionTokens)
+	v.Usage.TotalTokens = v.Usage.PromptTokens + v.Usage.CompletionTokens
 	return v, err
 }
 
@@ -113,7 +163,7 @@ func (s *Server) createDelegationGroup(w http.ResponseWriter, r *http.Request) e
 	if err := s.requireAgentFeature(r.Context(), "subagents"); err != nil {
 		return err
 	}
-	conversationID, err := uuid.Parse(chi.URLParam(r, "id"))
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
 	if err != nil {
 		return errNotFound
 	}
@@ -261,9 +311,9 @@ func (s *Server) createDelegationGroup(w http.ResponseWriter, r *http.Request) e
 			if len(contextRefs) == 0 {
 				contextRefs = json.RawMessage("[]")
 			}
-			allowedTools := item.AllowedTools
-			if allowedTools == nil {
-				allowedTools = []string{}
+			allowedTools, err := delegationAllowedTools(item.AllowedTools)
+			if err != nil {
+				return err
 			}
 			toolBytes, _ := json.Marshal(allowedTools)
 			hashSum := sha256.Sum256(append([]byte(task+"."), toolBytes...))

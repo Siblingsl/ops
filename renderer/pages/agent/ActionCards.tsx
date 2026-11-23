@@ -5,6 +5,8 @@ import { Dialog } from '@/components/dialog'
 import { Badge, Button, Card, cn, Input, Notice, Textarea } from '@/components/ui'
 import { type AgentAction, useAgentBootstrap } from '@/lib/agent'
 import { invalidateAgentAction, type AgentMutationTarget } from '@/lib/agent-invalidate'
+import { trackAgentEvent } from '@/lib/agent-telemetry-client'
+import { shouldPromptDraftSwitch } from '@/lib/agent-ui'
 import { errorMessage, post, stream } from '@/lib/api'
 import { agentWechatPayload } from '@/lib/wechat-html'
 
@@ -16,7 +18,13 @@ export interface AgentActionCardsProps {
   desktopPresentation?: boolean
   /** 多组卡片按消息插入时，由对话页统一传播执行锁。 */
   onExecutingChange?: (executing: boolean) => void
+  /** FN-04：审阅抽屉由对话页统一持有，消息里只留只读摘要。 */
+  reviewActionID?: string | null
+  onOpenReview?: (actionID: string) => void
+  onCloseReview?: () => void
 }
+
+type ReviewDraft = { edits: Record<string, string>; types: Record<string, 'text' | 'json'> }
 
 interface ActionDone {
   action: AgentAction
@@ -108,7 +116,7 @@ function missingPreview(action: AgentAction) {
   return ''
 }
 
-export function AgentActionCards({ actions, running, onRefresh, onContinue, onExecutingChange, desktopPresentation = false }: AgentActionCardsProps) {
+export function AgentActionCards({ actions, running, onRefresh, onContinue, onExecutingChange, desktopPresentation = false, reviewActionID = null, onOpenReview, onCloseReview }: AgentActionCardsProps) {
   const [busy, setBusy] = useState<string | null>(null)
   const busyRef = useRef(false)
   const executionRequests = useRef<Record<string, { key: string; id: string }>>({})
@@ -175,6 +183,7 @@ export function AgentActionCards({ actions, running, onRefresh, onContinue, onEx
         if (done.secret_once) setSecrets((old) => ({ ...old, [action.id]: done.secret_once! }))
         canContinue = done.can_continue && done.replayed !== true
         if (done.action.status === 'succeeded') {
+          setDrafts((old) => { const next = { ...old }; delete next[action.id]; return next })
           try { await invalidateAgentAction(client, action.tool_name, done.target) }
           catch (e) { setError(errorMessage(e)) }
         }
@@ -201,25 +210,113 @@ export function AgentActionCards({ actions, running, onRefresh, onContinue, onEx
   const [progress, setProgress] = useState<Record<string, string>>({})
   // 一次性值仅保留在当前组件内存，不写入查询缓存、localStorage 或对话消息。
   const [secrets, setSecrets] = useState<Record<string, Record<string, unknown>>>({})
+  // FN-04：草稿按 actionId 存在对话页，关闭抽屉或切换卡片都不丢。
+  const [drafts, setDrafts] = useState<Record<string, ReviewDraft>>({})
+  const [pendingReviewID, setPendingReviewID] = useState<string | null>(null)
   const locked = running || !!busy || actions.some((action) => action.status === 'executing')
+  const resolved = (original: AgentAction) => updated[original.id] ?? original
+  const reviewAction = reviewActionID ? actions.map(resolved).find((action) => action.id === reviewActionID) : undefined
+  const reviewDraft = reviewAction ? drafts[reviewAction.id] ?? { edits: {}, types: {} } : undefined
+  const hasDraft = (actionID: string) => Object.keys(drafts[actionID]?.edits ?? {}).length > 0
+  const requestReview = (actionID: string) => {
+    if (shouldPromptDraftSwitch(reviewActionID, actionID, !!reviewActionID && hasDraft(reviewActionID))) {
+      setPendingReviewID(actionID)
+      return
+    }
+    onOpenReview?.(actionID)
+  }
+  const keepDraft = () => {
+    const target = pendingReviewID
+    setPendingReviewID(null)
+    if (target) onOpenReview?.(target)
+  }
+  const discardDraft = () => {
+    const current = reviewActionID
+    const target = pendingReviewID
+    if (current) setDrafts((old) => { const next = { ...old }; delete next[current!]; return next })
+    setPendingReviewID(null)
+    if (target) onOpenReview?.(target)
+  }
+  useEffect(() => {
+    if (!reviewActionID || pendingReviewID) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onCloseReview?.()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [reviewActionID, pendingReviewID, onCloseReview])
   return <div className="space-y-3">
     {error && <Notice tone="red">{error}</Notice>}
     {actions.map((original) => {
-      const action = updated[original.id] ?? original
+      const action = resolved(original)
+      if (desktopPresentation && onOpenReview) {
+        return <ActionSummaryCard key={action.id} action={action} onReview={() => requestReview(action.id)} />
+      }
       return <ActionCard key={action.id} action={action} locked={locked} running={running} busy={busy === action.id}
         progress={progress[action.id]} secret={secrets[action.id]} onDismissSecret={() => setSecrets((old) => { const next = { ...old }; delete next[action.id]; return next })}
         onExecute={(request) => decide(action, request)} onReject={() => decide(action)} desktopPresentation={desktopPresentation} />
     })}
     {continueReady && <Button type="button" disabled={locked} onClick={() => { setContinueReady(false); void onContinue() }}>继续</Button>}
+    {desktopPresentation && reviewAction && <div className="desktop-agent-review-overlay" role="dialog" aria-modal="true" aria-label="审阅修改">
+      <div className="desktop-agent-review-panel">
+        <header className="desktop-agent-review-head"><strong>审阅修改</strong><button type="button" aria-label="关闭审阅" onClick={onCloseReview}>×</button></header>
+        <div className="desktop-agent-review-body">
+          <ActionCard action={reviewAction} locked={locked} running={running} busy={busy === reviewAction.id}
+            progress={progress[reviewAction.id]} secret={secrets[reviewAction.id]} onDismissSecret={() => setSecrets((old) => { const next = { ...old }; delete next[reviewAction.id]; return next })}
+            onExecute={(request) => decide(reviewAction, request)} onReject={() => decide(reviewAction)} desktopPresentation review
+            reviewDraft={reviewDraft} onReviewDraftChange={(actionID, draft) => setDrafts((old) => ({ ...old, [actionID]: draft }))} />
+        </div>
+      </div>
+    </div>}
+    <Dialog open={!!pendingReviewID} onClose={() => setPendingReviewID(null)} title="当前审阅有未提交的修改"
+      footer={<><Button type="button" size="sm" variant="ghost" onClick={() => setPendingReviewID(null)}>取消</Button><Button type="button" size="sm" variant="outline" onClick={discardDraft}>丢弃草稿</Button><Button type="button" size="sm" onClick={keepDraft}>保留草稿</Button></>}>
+      <p className="text-sm text-mist-700">切换到另一张卡片前，请选择保留当前修改回到原卡片继续，或丢弃后切换。</p>
+    </Dialog>
   </div>
 }
 
-function ActionCard({ action, locked, running, busy, progress, secret, onDismissSecret, onExecute, onReject, desktopPresentation = false }: {
+// FN-04：消息里的卡片只是只读摘要，改变更、门槛勾选和执行按钮都收进审阅抽屉。
+function ActionSummaryCard({ action, onReview }: { action: AgentAction; onReview: () => void }) {
+  return <Card id={`agent-action-${action.id}`} tabIndex={-1} className="desktop-agent-action-summary" data-action-id={action.id}>
+    <div className="desktop-agent-action-summary-head">
+      <h3>{action.title}</h3>
+      <Badge tone={action.kind === 'X' ? 'red' : action.kind === 'H' ? 'gamboge' : 'gray'}>{action.kind === 'X' ? '不可撤销' : action.kind === 'H' ? `人工确认 ${action.gate}` : '普通写入'}</Badge>
+      <span className="desktop-agent-action-summary-status">{statusText[action.status] ?? action.status}</span>
+    </div>
+    <p className="desktop-agent-action-summary-target">{action.target.name ? `目标：${action.target.name}` : `目标：${action.target.type}`}</p>
+    {action.changes.slice(0, 2).map((change) => <div key={change.field} className="desktop-agent-action-summary-change">
+      <span>{change.label}</span>
+      <span className="desktop-agent-action-summary-after">{change.after || '（空）'}</span>
+    </div>)}
+    {action.changes.length > 2 && <p className="desktop-agent-action-summary-more">另有 {action.changes.length - 2} 项变更在审阅抽屉中查看</p>}
+    <div className="desktop-agent-action-summary-foot">
+      <Button type="button" size="sm" variant="outline" onClick={onReview}>查看修改</Button>
+      {'pending' === action.status && <span>执行仍需你在抽屉里逐项确认</span>}
+    </div>
+  </Card>
+}
+
+function ActionCard({ action, locked, running, busy, progress, secret, onDismissSecret, onExecute, onReject, desktopPresentation = false, review = false, reviewDraft, onReviewDraftChange }: {
   action: AgentAction; locked: boolean; running: boolean; busy: boolean; progress?: string; secret?: Record<string, unknown>
-  onDismissSecret: () => void; onExecute: (request: Record<string, unknown>) => Promise<void>; onReject: () => Promise<void>; desktopPresentation?: boolean
+  onDismissSecret: () => void; onExecute: (request: Record<string, unknown>) => Promise<void>; onReject: () => Promise<void>; desktopPresentation?: boolean; review?: boolean
+  reviewDraft?: ReviewDraft; onReviewDraftChange?: (actionID: string, draft: ReviewDraft) => void
 }) {
-  const [edits, setEdits] = useState<Record<string, string>>({})
-  const [editTypes, setEditTypes] = useState<Record<string, 'text' | 'json'>>({})
+  const [localEdits, setLocalEdits] = useState<Record<string, string>>({})
+  const [localEditTypes, setLocalEditTypes] = useState<Record<string, 'text' | 'json'>>({})
+  const edits = reviewDraft?.edits ?? localEdits
+  const editTypes = reviewDraft?.types ?? localEditTypes
+  const setEdits = (updater: (old: Record<string, string>) => Record<string, string>) => {
+    const next = updater(edits)
+    if (reviewDraft && onReviewDraftChange) onReviewDraftChange(action.id, { edits: next, types: editTypes })
+    else setLocalEdits(next)
+  }
+  const setEditTypes = (updater: (old: Record<string, 'text' | 'json'>) => Record<string, 'text' | 'json'>) => {
+    const next = updater(editTypes)
+    if (reviewDraft && onReviewDraftChange) onReviewDraftChange(action.id, { edits, types: next })
+    else setLocalEditTypes(next)
+  }
   const [ack, setAck] = useState(false)
   const [resolution, setResolution] = useState('')
   const [choice, setChoice] = useState('')
@@ -256,6 +353,7 @@ function ActionCard({ action, locked, running, busy, progress, secret, onDismiss
 
   const execute = async () => {
     if (disabled) return
+    trackAgentEvent('agent_review_execute', action.kind)
     setPreparing(true)
     setError('')
     try {
@@ -275,7 +373,7 @@ function ActionCard({ action, locked, running, busy, progress, secret, onDismiss
     finally { setPreparing(false) }
   }
 
-  return <Card id={`agent-action-${action.id}`} tabIndex={-1} className={cn('space-y-4 border p-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink-500', action.kind === 'X' ? 'border-red-300 bg-red-50/30' : action.kind === 'H' ? 'border-gamboge-300 bg-gamboge-50/30' : 'border-mist-200', desktopPresentation && 'desktop-agent-action-card')}>
+  return <Card id={`agent-action-${action.id}`} tabIndex={-1} className={cn('space-y-4 border p-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink-500', action.kind === 'X' ? 'border-red-300 bg-red-50/30' : action.kind === 'H' ? 'border-gamboge-300 bg-gamboge-50/30' : 'border-mist-200', desktopPresentation && 'desktop-agent-action-card', review && 'desktop-agent-action-review-card')}>
     <div className={cn('flex flex-wrap items-center gap-2', desktopPresentation && 'desktop-agent-action-header')}>
       <h3 className="min-w-0 flex-1 font-semibold text-mist-900">{action.title}</h3>
       <Badge tone={action.kind === 'X' ? 'red' : action.kind === 'H' ? 'gamboge' : 'gray'}>{action.kind === 'X' ? '不可撤销' : action.kind === 'H' ? `人工确认 ${action.gate}` : '普通写入'}</Badge>
@@ -317,7 +415,7 @@ function ActionCard({ action, locked, running, busy, progress, secret, onDismiss
     {(message(action.error) || message(action.last_error) || error) && <Notice tone="red">{error || message(action.error) || message(action.last_error)}</Notice>}
     {progress && <p role="status" className="text-sm text-mist-500">{progress}</p>}
     {secret && <Notice tone="gamboge"><p>以下信息仅在本次执行后显示，请立即保存。</p><pre className="mt-2 whitespace-pre-wrap break-all select-all">{JSON.stringify(secret, null, 2)}</pre><Button type="button" size="sm" variant="ghost" onClick={onDismissSecret}>我已保存，关闭</Button></Notice>}
-    {live && <div className="flex flex-wrap items-center gap-2"><Button type="button" variant={action.kind === 'X' ? 'danger' : action.kind === 'H' ? 'human' : 'primary'} loading={busy || preparing} disabled={disabled} onClick={() => { if (secondRequired) { setConfirmText(''); setDialog(true) } else void execute() }}>{executeLabel(action)}</Button><Button type="button" variant="ghost" disabled={locked || preparing} onClick={() => void onReject()}>拒绝</Button>{running && <span className="text-xs text-mist-500">等待智能体说完</span>}</div>}
+    {live && <div className="flex flex-wrap items-center gap-2"><Button type="button" size={review ? 'sm' : 'md'} variant={action.kind === 'X' ? 'danger' : action.kind === 'H' ? 'human' : 'primary'} loading={busy || preparing} disabled={disabled} onClick={() => { if (secondRequired) { setConfirmText(''); setDialog(true) } else void execute() }}>{executeLabel(action)}</Button><Button type="button" size={review ? 'sm' : 'md'} variant="ghost" disabled={locked || preparing} onClick={() => void onReject()}>拒绝</Button>{running && <span className="text-xs text-mist-500">等待智能体说完</span>}</div>}
     <Dialog open={dialog} onClose={() => { if (!preparing) setDialog(false) }} title={need.kind === 'over_limit' ? '超出今日次数，仍要写入？' : action.tool_name === 'wechat__push' ? '写入公众号草稿箱（不会发表）' : '再次确认此操作'}
       footer={<><Button type="button" variant="ghost" onClick={() => setDialog(false)}>取消</Button><Button type="button" variant="danger" loading={preparing} disabled={disabled || (needsName && confirmText !== action.target.name)} onClick={() => void execute()}>确认执行这一项</Button></>}>
       <p className="whitespace-pre-wrap text-sm text-mist-700">{typeof action.second_confirm === 'string' ? action.second_confirm : typeof second.text === 'string' ? second.text : confirmDescriptions[action.tool_name] ?? '此操作会直接修改或删除数据，执行后可能无法恢复。请核对上方完整变更。'}</p>

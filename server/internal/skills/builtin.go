@@ -1,7 +1,9 @@
 ﻿package skills
 
 import (
+	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -17,6 +19,9 @@ type Builtin struct {
 	Key     string
 	Fields  SkillFields
 	Version int64
+	// Procedure 是 D-211（REF41 A5）内置流程步骤的结构化 JSON（仅 builtin:publish_flow 使用）；
+	// 语义与 skill.procedure 列一致：≤12 步，gate ∈ none|confirm。空串表示无流程步骤。
+	Procedure string
 }
 
 // 包内旧名（builtin 表与校验仍用）。
@@ -136,6 +141,20 @@ var builtinSkills = []builtinSkill{
 			TaskTypes:    []string{"read_through", "section_edit"},
 		},
 	},
+	{
+		// D-211（REF41 A5）：内置“发布流程”七步模板（麦田九步裁剪为 OPS 七步），
+		// 不含“自动点发布”；agent_enabled=true、task_enabled=false。
+		Key: "builtin:publish_flow", Version: 1,
+		Fields: SkillFields{
+			Name:    "发布流程",
+			Summary: "从 manifest 到复盘的七步发布流程，全程人工确认",
+			Triggers: "准备发布作品或执行发布流程时",
+			Instructions: "1. 读作品与账号定位，确认平台。\n2. 生成并校验发布 manifest。\n3. 确认封面与文案。\n4. 填入平台后台并回读核对。\n5. 停在待你点发布，不代点。\n6. 用户点完，登记链接与时间。\n7. 到点采集数据并复盘对比。",
+			Platforms: []string{"wechat_mp", "xhs", "toutiao"},
+			TaskEnabled: false, AgentEnabled: true,
+		},
+		Procedure: `[{"seq":1,"title":"确认平台与定位","action":"读作品与账号定位，确认目标平台与内容形态","tool":"","gate":"confirm"},{"seq":2,"title":"生成并校验 manifest","action":"构建发布 manifest 并校验字段完整性","tool":"","gate":"none"},{"seq":3,"title":"确认封面与文案","action":"核对封面素材与发布文案是否齐备","tool":"","gate":"confirm"},{"seq":4,"title":"填入后台并回读","action":"在平台后台填入内容并逐字段回读核对","tool":"","gate":"none"},{"seq":5,"title":"停在待你点发布","action":"回读一致后停在人机确认点，不代替用户点击发布","tool":"","gate":"confirm"},{"seq":6,"title":"登记已发布","action":"用户完成平台发布后登记链接与发布时间","tool":"","gate":"confirm"},{"seq":7,"title":"采集数据并复盘","action":"按节点采集数据并生成同龄对比复盘","tool":"","gate":"none"}]`,
+	},
 }
 
 // skillBuiltinUUID 按第 13.1 节从完整 key 推导确定性 UUID（全实例一致）。
@@ -154,12 +173,20 @@ func skillBuiltinByKey(key string) *skillDef {
 			f.ContentFormats = normalizeEnumArray(f.ContentFormats)
 			f.TaskTypes = normalizeEnumArray(f.TaskTypes)
 			f.Status = "active"
-			f.TaskEnabled = true
-			f.AgentEnabled = true
+			// D-211：builtin:publish_flow 规格 task_enabled=false、agent_enabled=true；
+			// 其余内置维持第 13.1 节默认双开。Go bool 零值为 false，Fields 显式 true 才是双开。
+			if b.Key == "builtin:publish_flow" {
+				f.TaskEnabled = false
+				f.AgentEnabled = true
+			} else {
+				f.TaskEnabled = true
+				f.AgentEnabled = true
+			}
 			id := b.UUID()
 			return &skillDef{
 				ID: id, Builtin: true, BuiltinKey: b.Key, Scope: "builtin",
 				Fields: f, Revision: b.Version, Origin: "builtin", SourceKey: b.Key,
+				Procedure: b.Procedure,
 			}
 		}
 	}
@@ -213,8 +240,20 @@ func checkBuiltinRegistry() error {
 			}
 		}
 	}
-	if len(builtinSkills) > 12 {
-		return fmt.Errorf("D-156 内置技能总数不得超过 12 个")
+	// D-211：REF41 A5 内置“发布流程”技能超出 D-156 十二个上限；上限放宽到 13，
+	// 仅容纳 builtin:publish_flow，其余 12 条正文/字段/版本不动。
+	if len(builtinSkills) > 13 {
+		return fmt.Errorf("D-211 内置技能总数不得超过 13 个")
+	}
+	// Procedure 校验（D-211）：JSON 数组、≤12 步、每步 title/action/gate 合法、
+	// tool 必须存在于工具目录或为空。
+	for _, b := range builtinSkills {
+		if b.Procedure == "" {
+			continue
+		}
+		if err := checkBuiltinProcedure(b.Key, b.Procedure); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -228,3 +267,41 @@ func BuiltinByKey(key string) *Def     { return skillBuiltinByKey(key) }
 func BuiltinByID(id uuid.UUID) *Def    { return skillBuiltinByID(id) }
 func BuiltinUUID(key string) uuid.UUID { return skillBuiltinUUID(key) }
 func CheckBuiltinRegistry() error      { return checkBuiltinRegistry() }
+
+// builtinProcedureStep 是 procedure JSON 每步的结构（与 app 层 skillProcedureStep 对齐）。
+type builtinProcedureStep struct {
+	Seq      int    `json:"seq"`
+	Title    string `json:"title"`
+	Action   string `json:"action"`
+	Tool     string `json:"tool,omitempty"`
+	Gate     string `json:"gate"`
+	Requires []string `json:"requires,omitempty"`
+}
+
+// checkBuiltinProcedure 校验内置 procedure JSON（D-211）。工具目录校验由 app 层
+// 在启动自检（VerifyAgentCatalog）时补充；本函数只做结构与长度约束。
+func checkBuiltinProcedure(key, raw string) error {
+	var steps []builtinProcedureStep
+	if err := json.Unmarshal([]byte(raw), &steps); err != nil {
+		return fmt.Errorf("内置技能 procedure JSON 非法（%s）：%w", key, err)
+	}
+	if len(steps) < 1 || len(steps) > 12 {
+		return fmt.Errorf("内置技能 procedure 需要 1–12 步（%s）", key)
+	}
+	for i := range steps {
+		st := &steps[i]
+		if st.Seq != i+1 {
+			return fmt.Errorf("内置技能 procedure 步序不连续（%s 第 %d 步）", key, i+1)
+		}
+		if st.Title == "" || utf8.RuneCountInString(st.Title) > 80 {
+			return fmt.Errorf("内置技能 procedure title 需要 1–80 字（%s 第 %d 步）", key, st.Seq)
+		}
+		if st.Action == "" || utf8.RuneCountInString(st.Action) > 200 {
+			return fmt.Errorf("内置技能 procedure action 需要 1–200 字（%s 第 %d 步）", key, st.Seq)
+		}
+		if st.Gate != "none" && st.Gate != "confirm" {
+			return fmt.Errorf("内置技能 procedure gate 只允许 none|confirm（%s 第 %d 步）", key, st.Seq)
+		}
+	}
+	return nil
+}

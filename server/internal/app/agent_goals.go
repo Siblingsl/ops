@@ -233,6 +233,9 @@ func (s *Server) postAgentGoal(w http.ResponseWriter, r *http.Request) error {
 	if err := agentCheckConversationWritable(conversation); err != nil {
 		return err
 	}
+	if conversation.Kind == "side" {
+		return apiErr(422, "agent_side_read_only", "旁问是只读会话，不支持创建目标")
+	}
 	var req agentGoalMutationRequest
 	if err := agentDecodeBody(r, &req); err != nil {
 		return err
@@ -1181,4 +1184,55 @@ func (s *Server) agentStartGoalRun(ctx context.Context, conversationID, goalID u
 		return nil, err
 	}
 	return st, nil
+}
+
+// agentGoalRunView 是 FN-05 的按 run 迭代投影：目标关联的每次运行一行，
+// 只含时间/状态/轮次与对象计数，不带 prompt 与工具参数（只读，不新增表）。
+type agentGoalRunView struct {
+	ID        string `json:"id"`
+	StartedAt string `json:"started_at"`
+	Status    string `json:"status"`
+	Trigger   string `json:"trigger,omitempty"`
+	Rounds    int    `json:"rounds"`
+	ReadCalls int    `json:"read_calls"`
+	Proposed  int    `json:"actions_proposed"`
+}
+
+// getAgentGoalRuns 列出本对话目标关联的运行（FN-05 按迭代视图）。
+// 与 detail 的 goal 同一归属校验（本工作区+本人）；无目标返回空列表。
+func (s *Server) getAgentGoalRuns(w http.ResponseWriter, r *http.Request) error {
+	if err := requireAgentFeature("goals"); err != nil {
+		return err
+	}
+	conversationID, err := s.agentConversationPathID(r)
+	if err != nil {
+		return err
+	}
+	if _, err := s.agentConversationFor(r.Context(), conversationID); err != nil {
+		return err
+	}
+	id := ident(r.Context())
+	rows, err := s.db.Query(r.Context(), `SELECT r.id::text,
+		to_char(r.started_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+		r.status, COALESCE(r.trigger,''), r.rounds, r.read_calls, r.actions_proposed
+		FROM agent_run r JOIN agent_goal g ON g.id=r.goal_id
+		WHERE g.conversation_id=$1 AND g.workspace_id=$2 AND g.user_id=$3
+		ORDER BY r.started_at DESC, r.id DESC LIMIT 30`,
+		conversationID, id.WorkspaceID, id.UserID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	out := []agentGoalRunView{}
+	for rows.Next() {
+		var view agentGoalRunView
+		if err := rows.Scan(&view.ID, &view.StartedAt, &view.Status, &view.Trigger, &view.Rounds, &view.ReadCalls, &view.Proposed); err != nil {
+			return err
+		}
+		out = append(out, view)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return ok(w, map[string]any{"runs": out})
 }

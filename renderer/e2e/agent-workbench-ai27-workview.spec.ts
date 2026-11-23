@@ -54,11 +54,11 @@ test('DEV-AI27-07 工作视图、添加菜单与分隔条键盘操作', async ({
 
     // 新建会话，打开工作视图面板
     // 空态即可打开工作视图（面板对空会话同样可达）；右上角入口按钮。
-    await page.getByRole('button', { name: '工作视图', exact: true }).first().click({ timeout: 15000 })
+    await page.locator('.desktop-agent-panel-button').first().click({ timeout: 15000 })
 
-    const panel = page.getByRole('complementary', { name: '工作视图' })
+    const panel = page.getByRole('complementary', { name: '任务面板' })
     await expect(panel).toBeVisible()
-    await expect(panel.getByRole('heading', { name: '工作视图', exact: true })).toBeVisible()
+    await expect(panel.getByRole('heading', { name: '任务面板', exact: true })).toBeVisible()
 
     // 四个页签：任务/上下文/产物/浏览器（产物按开关，浏览器始终可见）
     for (const label of ['任务', '上下文', '浏览器']) {
@@ -72,14 +72,14 @@ test('DEV-AI27-07 工作视图、添加菜单与分隔条键盘操作', async ({
     await expect(browserBlock.locator('.desktop-agent-browser-status-note').first()).toContainText('配对完成后')
     }
 
-    // 统一添加菜单：收敛入口 + 未开放项如实禁用
+    // 统一添加菜单：收敛入口；TL-05 插件入口与 TL-06 并行协作在能力开启时可用，其余未开放项如实禁用
     const addTrigger = page.getByTestId('desktop-agent-add-menu-trigger')
     await expect(addTrigger).toBeVisible()
     const menu = page.getByTestId('desktop-agent-add-menu-list')
     await expect(menu.getByRole('menuitem', { name: /Google Chrome 标签/ })).toBeDisabled()
     await expect(menu.getByRole('menuitem', { name: /^记忆/ })).toBeDisabled()
-    await expect(menu.getByRole('menuitem', { name: /插件与工具/ })).toBeDisabled()
-    await expect(menu.getByRole('menuitem', { name: /并行协作/ })).toBeDisabled()
+    await expect(menu.getByRole('menuitem', { name: /插件与工具/ })).toBeEnabled()
+    await expect(menu.getByRole('menuitem', { name: /并行协作/ })).toBeEnabled()
     await expect(menu.getByRole('menuitem', { name: /应用选择/ })).toBeDisabled()
     // 可用项：引用资料打开既有引用选择器
     // ESC/外点关闭已由组件处理；这里验证菜单关闭后筹码区无残留
@@ -114,7 +114,7 @@ test('DEV-AI27-07 宽窄容器断点下的工作视图形态', async ({ baseURL 
     const page = await app.firstWindow()
     await prepare(page, baseURL!)
     await page.getByRole('button', { name: '新建对话', exact: true }).click().catch(() => {})
-    const panelOpen = page.getByRole('button', { name: /工作视图|辅助面板/ }).first()
+    const panelOpen = page.locator('.desktop-agent-panel-button').first()
     if (await panelOpen.count()) await panelOpen.click()
 
     // 宽窗口：容器 ≥1456 → 工作视图 ≥600

@@ -1,16 +1,17 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AtSign, Bot, CalendarClock, Check, ChevronDown, FileText, LoaderCircle, Menu, RotateCcw,
-  Paperclip, Send, Settings2, Sparkles, Square, X,
+  AtSign, Bot, CalendarClock, Check, ChevronDown, FileText, Library, LoaderCircle, Menu, RotateCcw,
+  Paperclip, Send, Settings2, Sparkles, Square, Users, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate, useParams } from 'react-router-dom' // AG-01: Added useNavigate for navigation to settings pages
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom' // AG-01: Added useNavigate for navigation to settings pages
 import { toast } from 'sonner'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Button, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
 import { AddMenu } from './agent/AddMenu'
-import { BrowserTabAuthorizeDialog } from './agent/BrowserTabAuthorizeDialog'
+import { CapabilityList } from './agent/CapabilityList'
+import { BrowserTabAuthorizeDialog, type BrowserGrantView } from './agent/BrowserTabAuthorizeDialog'
 import { ComputerWindowPicker } from './agent/ComputerWindowPicker'
 import { VoiceBar } from './agent/VoiceBar'
 import { RealtimeVoiceBar } from './agent/RealtimeVoiceBar'
@@ -20,28 +21,40 @@ import { MemoryUsagePanel } from './agent/MemoryUsagePanel'
 import { PanelResizer, PANEL_WIDTH_DEFAULT } from './agent/PanelResizer'
 import { del, errorMessage, get, patch, post, uploadFormData } from '@/lib/api'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
+import { fmtCostMicros } from '@/lib/format'
 import { useAccounts, useCurrentAccount, useMe } from '@/lib/session'
 import { useSavePrefs } from '@/lib/v3'
 import { pagePollIntervalMs } from '@/lib/page-poll'
 import { usePageVisible } from '@/lib/visibility'
 import {
   type AgentAttachment, type AgentBootstrap, type AgentConversation, type AgentConversationDetail, type AgentInput,
-  type AgentMessage, type AgentMode, type AgentQuestion,
+  type AgentMessage, type AgentMode, type AgentQuestion, type AgentRole, type WorkflowTemplate,
   useAgentBootstrap,
 } from '@/lib/agent'
 import { AgentMarkdown } from '@/lib/agent-markdown'
+import { trackAgentEvent } from '@/lib/agent-telemetry-client'
 import { AgentActionCards } from '@/pages/agent/ActionCards'
 import { ComputerControlBar } from '@/pages/agent/ComputerControlBar'
 import { ArtifactPanel } from '@/pages/agent/ArtifactPanel'
 import { browserStore, clearPartial, type PartialStream, readPartial, savePartial } from '@/pages/agent/partial-stream'
 import { ContextPickerDialog, SkillPickerDialog, type AgentContextSelection, type AgentSkillSelection } from '@/pages/agent/ContextPickers'
+import { OperationDirectoryDrawer } from '@/pages/agent/OperationDirectoryDrawer'
+import { TodayOpsPanel, type TodayOpsView } from '@/pages/agent/TodayOpsPanel'
+import { todayOpsWelcomeSummary } from '@/lib/today-ops.js'
 import { AgentPlanCard, AgentQuestionCard } from '@/pages/agent/PlansQuestions'
 import { GoalPanel } from '@/pages/agent/GoalPanel'
+import { WorkflowTemplateDialog } from '@/pages/agent/workflow-dialog'
 import { RoutinePanel } from '@/pages/agent/RoutinePanel'
 import { AttachmentReceipt } from '@/pages/agent/AttachmentReceipt'
 import { AgentConversationList } from '@/pages/agent/ConversationList'
+import { ConversationHeader } from '@/pages/agent/ConversationHeader'
+import { ComposerCandidates } from '@/pages/agent/ComposerCandidates'
+import { AgentRunTimeline } from '@/pages/agent/AgentRunTimeline'
+import { StateBlock } from '@/pages/agent/StateBlock'
+import { addToLimitedList, COMMANDS, contextRefsPayload, deriveHeaderState, detectComposerTrigger, mapAgentError, modeActionLabel, modelRowMeta, onboardingHint, removeComposerTrigger, shouldAutoOpenPanel, skillRequestsPayload, skillStateLabel } from '@/lib/agent-ui.js'
+import type { AgentCommand, ComposerTrigger } from '@/lib/agent-ui.js'
 import {
-  AgentModeSelect, MessageView, RunStatus,
+  AgentModeSelect, MessageView, RunOutcomeNotice, RunStatus,
   attachmentVariantURL, groupAssistantRunSegments, groupDesktopAgentMessages, messageTime, modelKey,
   pendingAgentMessageIsPersisted, splitDate,
   type PendingAgentMessage,
@@ -59,10 +72,32 @@ type DraftAttachment = {
   error?: string
 }
 
+// BR-11：页面元素 + 一句批注的本地文本引用；与 IX-04 共用输入台筹码样式，
+// 发送时拼进消息正文，不新增服务端引用类型，也不自动发送。
+type AgentPageReference = {
+  id: string
+  name: string
+  url: string
+  selector: string
+  text: string
+  note: string
+}
+
+function pageReferenceText(refs: AgentPageReference[]): string {
+  return refs.map((ref) => [
+    `【页面引用】${ref.name}`,
+    ref.url,
+    `选择器：${ref.selector}`,
+    ref.text ? `选段：${ref.text}` : '',
+    `批注：${ref.note}`,
+  ].filter(Boolean).join('\n')).join('\n\n')
+}
+
 export default function Agent() {
   const { conversationId } = useParams()
   const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const qc = useQueryClient()
   const bootstrap = useAgentBootstrap()
   const accounts = useAccounts()
@@ -78,29 +113,52 @@ export default function Agent() {
   const [workbenchPanelWidth, setWorkbenchPanelWidth] = useState(PANEL_WIDTH_DEFAULT)
   const [goalPanelOpen, setGoalPanelOpen] = useState(false)
   const [routinePanelOpen, setRoutinePanelOpen] = useState(false)
+  const [todayOpsOpen, setTodayOpsOpen] = useState(false)
+  const [capabilitiesOpen, setCapabilitiesOpen] = useState(false)
   const [artifactsOpen, setArtifactsOpen] = useState(false)
   const [workbenchLayoutLoadedKey, setWorkbenchLayoutLoadedKey] = useState('')
+  const [subagentsArmed, setSubagentsArmed] = useState(false)
   const [text, setText] = useState('')
   const textDraftVersionRef = useRef(0)
   const [pendingUserMessages, setPendingUserMessages] = useState<PendingAgentMessage[]>([])
   const [files, setFiles] = useState<DraftAttachment[]>([])
   const [restoredAttachments, setRestoredAttachments] = useState<AgentAttachment[]>([])
   const [contextRefs, setContextRefs] = useState<AgentContextSelection[]>([])
+  const [pageRefs, setPageRefs] = useState<AgentPageReference[]>([])
+  const pageRefsRef = useRef<AgentPageReference[]>([])
   const [skillRequests, setSkillRequests] = useState<AgentSkillSelection[]>([])
   const [contextPickerOpen, setContextPickerOpen] = useState(false)
+  const [operationDirectoryOpen, setOperationDirectoryOpen] = useState(false)
   const [skillPickerOpen, setSkillPickerOpen] = useState(false)
+  // BR-08：最近一次授权租约与接管状态；没有租约时接管按钮禁用，不伪造控制权。
+  const [browserGrant, setBrowserGrant] = useState<BrowserGrantView | null>(null)
+  const [browserPaused, setBrowserPaused] = useState(false)
+  const [composerTrigger, setComposerTrigger] = useState<ComposerTrigger | null>(null)
+  const [compactDialogOpen, setCompactDialogOpen] = useState(false)
+  const [reviewActionID, setReviewActionID] = useState<string | null>(null)
+  const composingRef = useRef(false)
   const [uploading, setUploading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [inputSubmitting, setInputSubmitting] = useState(false)
   const [selectedMode, setSelectedMode] = useState<AgentMode>('execute')
   const [selectedModel, setSelectedModel] = useState('')
   const [conversationAccount, setSelectedAccount] = useState('')
+  // REF41 A7：工作流模板选择（启动只建 conversation+run+plan，不执行工具）。
+  const [workflowPickerOpen, setWorkflowPickerOpen] = useState(false)
+  const workflowStarted = (result: { conversation_id: string }, template: WorkflowTemplate) => {
+    toast.success(`工作流「${template.name}」已生成计划（${template.steps.length} 步）；打开新对话逐步确认执行。`)
+    if (result.conversation_id) navigate(`/agent/c/${result.conversation_id}`)
+  }
+  // REF41 A6：角色 bot 选择（空=默认无角色；agent_roles feature 开时显示）。
+  const [selectedRoleID, setSelectedRoleID] = useState('')
   const selectedAccount = desktopPresentation ? currentAccount?.id ?? '' : conversationAccount
   // AG-03：对话创建时绑定的账号。切换后历史仍属于原账号，必须明确提示，不能默默换上下文。
   const [historyAccount, setHistoryAccount] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
   const modelMenuRef = useRef<HTMLDivElement>(null)
+  const [runInputMenuOpen, setRunInputMenuOpen] = useState(false)
+  const runInputMenuRef = useRef<HTMLDivElement>(null)
   const previousDesktopAccount = useRef<string | undefined>(undefined)
   const [privacyOpen, setPrivacyOpen] = useState(false)
   const [localSearchOpen, setLocalSearchOpen] = useState(false)
@@ -115,7 +173,9 @@ export default function Agent() {
 
   const olderLoadingRef = useRef(false)
   const manualScrollRef = useRef(false)
+  const initialConversationRef = useRef(conversationId)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const composerRootRef = useRef<HTMLDivElement>(null)
   const localSearchInputRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const uploadingRef = useRef(false)
@@ -147,13 +207,42 @@ export default function Agent() {
   const sendDestinationConversationID = useRef('')
 
   const bootstrapData = bootstrap.data
+  const rolesQuery = useQuery({
+    queryKey: ['agent-roles'],
+    queryFn: () => get<{ roles: AgentRole[] }>('/agent-roles'),
+    enabled: !!bootstrapData?.features.agent_roles,
+  })
+  const workflowsQuery = useQuery({
+    queryKey: ['workflow-templates'],
+    queryFn: () => get<{ templates: WorkflowTemplate[] }>('/workflows'),
+    enabled: !!bootstrapData?.features.workflow_templates,
+  })
+  // IX-11：不打扰的一行引导——四态按优先级只显示一条；关闭后本次会话（页面生命周期）不再显示。
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false)
+  const onboarding = useMemo(() => bootstrapData ? onboardingHint({ readOnly: bootstrapData.read_only, canUse: bootstrapData.can_use, reason: bootstrapData.reason, hasAccount: !!selectedAccount }) : null, [bootstrapData, selectedAccount])
   const workbenchUI = desktopPresentation && bootstrapData?.features?.workbench_ui === true
   const organizeEnabled = bootstrapData?.features?.conversation_organize === true
   const goalsEnabled = bootstrapData?.features?.goals === true
   const routinesEnabled = bootstrapData?.features?.routines === true
+  const todayOpsEnabled = workbenchUI && bootstrapData?.features?.today_ops === true
+  const todayOpsSummaryQuery = useQuery({
+    queryKey: ['agent-today-ops', selectedAccount],
+    queryFn: () => get<TodayOpsView>(`/agent/today-ops?account_id=${encodeURIComponent(selectedAccount)}`),
+    enabled: todayOpsEnabled && !conversationId && !!selectedAccount,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  })
   const canManageGoals = !!bootstrapData && bootstrapData.role !== 'viewer' && bootstrapData.reason !== 'admin_override'
   const canManageRoutines = canManageGoals
   const eventResumeEnabled = bootstrapData?.features?.event_resume === true
+  // 例行摘要条目的“更多/跳转”复用既有 /agent 路由：?panel=routine 只负责打开现有抽屉，不新增一级导航。
+  useEffect(() => {
+    if (!routinesEnabled || searchParams.get('panel') !== 'routine') return
+    setRoutinePanelOpen(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('panel')
+    setSearchParams(next, { replace: true })
+  }, [routinesEnabled, searchParams, setSearchParams])
   useEffect(() => {
     const onManualUnread = (event: Event) => {
       const id = (event as CustomEvent<{ id: string }>).detail?.id
@@ -196,7 +285,7 @@ export default function Agent() {
   const pendingActions = actions.filter((action) => ['pending', 'needs_input'].includes(action.status)).length
   const baseMessages = detail?.messages ?? []
   const {
-    streaming, streamText, streamStage, streamError, setStreamError,
+    streaming, streamText, streamStage, streamError, streamErrors, setStreamError,
     streamConnection, runID, completedNotice, setCompletedNotice,
     sendInFlight, consumeRun, continueRun, compactRun,
     acceptPlan, answerQuestion, regenerate, stop,
@@ -228,6 +317,41 @@ ${draft.text}` : draft.text))
     return () => { offDraft(); offStop() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktopPresentation])
+  useEffect(() => {
+    if (!composerTrigger) return
+    const onDown = (event: MouseEvent) => {
+      if (!composerRootRef.current?.contains(event.target as Node)) setComposerTrigger(null)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [composerTrigger])
+  useEffect(() => { setReviewActionID(null); setSubagentsArmed(false) }, [conversationId])
+  useEffect(() => { setBrowserGrant(null); setBrowserPaused(false) }, [conversationId])
+  useEffect(() => {
+    if (!workbenchPanelOpen || reviewActionID || composerTrigger) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      const target = event.target as HTMLElement | null
+      if (target?.closest('textarea, [contenteditable="true"], .agent-composer-candidates, [role="dialog"]')) return
+      setWorkbenchPanelOpen(false)
+      window.requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('.desktop-agent-panel-button')?.focus())
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [workbenchPanelOpen, reviewActionID, composerTrigger])
+  useEffect(() => {
+    if (!reviewActionID) return
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setReviewActionID(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [reviewActionID])
+  // OT-04：面板打开/页签切换只记录事件名与页签名，不记录对话正文。
+  useEffect(() => {
+    if (workbenchUI && workbenchPanelOpen) trackAgentEvent('agent_panel_open', 'panel')
+  }, [workbenchUI, workbenchPanelOpen])
+  useEffect(() => {
+    if (workbenchUI && workbenchPanelOpen) trackAgentEvent('agent_panel_tab', workbenchPanelTab)
+  }, [workbenchUI, workbenchPanelOpen, workbenchPanelTab])
   const persistedPartial = eventResumeEnabled && detail?.partial_output && !baseMessages.some((message) => message.message_key === detail.partial_output?.message_key) ? detail.partial_output : null
   const recoveryText = eventResumeEnabled ? persistedPartial?.text : recovered?.text
   const persistedMessages = useMemo(() => [...olderMessages, ...baseMessages], [olderMessages, baseMessages])
@@ -319,7 +443,8 @@ ${draft.text}` : draft.text))
     try {
       const saved = JSON.parse(window.localStorage.getItem(layoutPreferenceKey) || '{}') as { listCollapsed?: boolean; panelOpen?: boolean }
       setWorkbenchListCollapsed(saved.listCollapsed === true)
-      setWorkbenchPanelOpen(saved.panelOpen === true)
+      // UI-02：空对话不恢复“打开任务面板”的偏好，也不据此改写偏好。
+      setWorkbenchPanelOpen(shouldAutoOpenPanel({ savedOpen: saved.panelOpen === true, conversationId: initialConversationRef.current }))
     } catch {
       setWorkbenchListCollapsed(false)
       setWorkbenchPanelOpen(false)
@@ -340,7 +465,9 @@ ${draft.text}` : draft.text))
       }
       if (action === 'search-conversations') {
         setWorkbenchListCollapsed(false)
-        window.setTimeout(() => document.querySelector<HTMLInputElement>('[data-testid="desktop-agent-list"] [aria-label="搜索对话"]')?.focus(), 0)
+        const containerWidth = document.querySelector('.desktop-agent-workbench')?.clientWidth ?? 0
+        if (containerWidth < 1456) setMobileListOpen(true)
+        window.setTimeout(() => document.querySelector<HTMLInputElement>('[aria-label="搜索对话"]')?.focus(), 50)
       }
       if (action === 'find-message') {
         setLocalSearchText('')
@@ -358,6 +485,15 @@ ${draft.text}` : draft.text))
     if (!workbenchUI || !layoutPreferenceKey || workbenchLayoutLoadedKey !== layoutPreferenceKey) return
     window.localStorage.setItem(layoutPreferenceKey, JSON.stringify({ listCollapsed: workbenchListCollapsed, panelOpen: workbenchPanelOpen, panelWidth: workbenchPanelWidth }))
   }, [workbenchUI, layoutPreferenceKey, workbenchLayoutLoadedKey, workbenchListCollapsed, workbenchPanelOpen])
+
+  useEffect(() => {
+    if (!runInputMenuOpen) return
+    const closeOutside = (event: MouseEvent) => { if (!runInputMenuRef.current?.contains(event.target as Node)) setRunInputMenuOpen(false) }
+    const closeEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setRunInputMenuOpen(false) }
+    document.addEventListener('mousedown', closeOutside)
+    document.addEventListener('keydown', closeEscape)
+    return () => { document.removeEventListener('mousedown', closeOutside); document.removeEventListener('keydown', closeEscape) }
+  }, [runInputMenuOpen])
 
   useEffect(() => {
     if (!modelMenuOpen) return
@@ -416,6 +552,7 @@ ${draft.text}` : draft.text))
     setFiles([])
     setRestoredAttachments([])
     setContextRefs([])
+    setPageRefs([])
     setSkillRequests([])
     setEditMessage(null)
   }, [conversationId, files])
@@ -462,12 +599,20 @@ ${draft.text}` : draft.text))
     setPendingJump(matchedSeq ? { conversationID: id, seq: matchedSeq } : null)
     navigate(`/agent/c/${id}`)
   }
-  const newConversation = () => {
+  const newConversation = async () => {
+    if (text.trim() || files.length > 0 || restoredAttachments.length > 0 || contextRefs.length > 0 || pageRefs.length > 0 || skillRequests.length > 0) {
+      const discard = await confirm({
+        title: '当前输入还没有发送', desc: '点“保留草稿”留在当前对话；继续会丢弃输入、引用和待发送附件，并新建对话。',
+        confirmText: '丢弃草稿并新建', cancelText: '保留草稿',
+      })
+      if (!discard) return
+    }
     conversationRequest.current = null
     setSelectedMode(bootstrapData?.read_only ? 'discuss' : 'execute')
     setText('')
     clearDraftAttachments()
     setContextRefs([])
+    setPageRefs([])
     setSkillRequests([])
     setStreamError('')
     setCompletedNotice('')
@@ -475,9 +620,43 @@ ${draft.text}` : draft.text))
     navigate('/agent')
   }
 
+  const createSideChat = async () => {
+    if (!conversation) return
+    if (text.trim() || files.length > 0 || restoredAttachments.length > 0 || contextRefs.length > 0 || pageRefs.length > 0 || skillRequests.length > 0) {
+      const discard = await confirm({
+        title: '当前输入还没有发送', desc: '旁问会在新会话打开；当前输入、引用和待发送附件不会带过去。',
+        confirmText: '清除并打开旁问', cancelText: '留在这里',
+      })
+      if (!discard) return
+    }
+    try {
+      const side = await post<AgentConversation>('/agent/conversations', {
+        kind: 'side',
+        parent_id: conversation.id,
+        request_id: crypto.randomUUID(),
+      })
+      setSelectedMode('discuss')
+      setText('')
+      clearDraftAttachments()
+      setContextRefs([])
+      setPageRefs([])
+      setSkillRequests([])
+      setStreamError('')
+      setCompletedNotice('')
+      setMobileListOpen(false)
+      await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+      navigate(`/agent/c/${side.id}`)
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
   const modelRef = selectedModelOption ? { provider_id: selectedModelOption.provider_id, model: selectedModelOption.model } : undefined
   const actualModel = detail?.last_run?.config_snapshot?.actual_model
   const runtimeSummary = actualModel ? `最近运行：${detail?.last_run?.mode === 'discuss' ? '讨论' : detail?.last_run?.mode === 'plan' ? '计划' : '执行'} · ${actualModel.channel === 'desktop' ? '客户端模型通道' : '服务器模型通道'} · ${actualModel.provider_name ?? ''} / ${actualModel.model}` : ''
+  const runCostSummary = detail?.last_run
+    ? `本轮 token：输入 ${(detail.last_run.prompt_tokens ?? 0).toLocaleString('zh-CN')} · 输出 ${(detail.last_run.completion_tokens ?? 0).toLocaleString('zh-CN')} · ${detail.last_run.cost_micros == null ? '未配置价格' : `费用 ${fmtCostMicros(detail.last_run.cost_micros, detail.last_run.cost_currency)}`}`
+    : ''
   const createConversation = async () => {
     const body = { ...(selectedAccount ? { account_id: selectedAccount } : {}), ...(modelRef ? { model: modelRef } : {}) }
     const key = JSON.stringify(body)
@@ -485,8 +664,28 @@ ${draft.text}` : draft.text))
     return post<AgentConversation>('/agent/conversations', { ...body, request_id: conversationRequest.current.id })
   }
 
+  const validateSkillSelections = async () => {
+    if (skillRequests.length === 0 || !selectedAccount) return true
+    const missing: AgentSkillSelection[] = []
+    try {
+      for (const skill of skillRequests) {
+        const page = await get<{ items: Array<{ id: string }> }>(`/skills?view=effective&account_id=${selectedAccount}&q=${encodeURIComponent(skill.name)}&limit=12`)
+        if (!page.items.some((item) => item.id === skill.skill_id)) missing.push(skill)
+      }
+    } catch (error) {
+      toast.error(errorMessage(error))
+      return false
+    }
+    if (missing.length === 0) return true
+    const missingKeys = new Set(missing.map((skill) => `${skill.skill_id}:${skill.work_id ?? ''}`))
+    setSkillRequests((current) => current.map((skill) => missingKeys.has(`${skill.skill_id}:${skill.work_id ?? ''}`) ? { ...skill, unavailable: true } : skill))
+    toast.error('有技能已被撤权或下架，已标为不可用；请移除后再发送。')
+    return false
+  }
+
   const sendMessage = async (edit?: AgentMessage) => {
-    const value = text.trim()
+    const draft = text.trim()
+    const value = [pageReferenceText(pageRefs), draft].filter(Boolean).join('\n\n')
     if ((!value && readyAttachmentIDs.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || !canWrite || accountMismatch || composerBusy || sendInFlight.current || uploading || failedFiles.length > 0) return
     sendInFlight.current = true
     setSubmitting(true)
@@ -515,13 +714,16 @@ ${draft.text}` : draft.text))
         toast.error('请先回答待办问题，或发送新消息并明确替代它。')
         return
       }
+      if (!edit && !(await validateSkillSelections())) return
       const messageKey = JSON.stringify({
         edit_message_id: edit?.id ?? '',
         mode: bootstrapData?.features.plans ? selectedMode : undefined,
         conversation_id: conv.id, text: value, attachment_ids: edit ? [] : readyAttachmentIDs,
-        context_refs: !edit ? contextRefs.map(({ type, id, revision, reference_scope, anchor }) => ({ type, id, revision, scope: reference_scope, ...(anchor ? { anchor } : {}) })) : [],
-        skill_requests: !edit ? skillRequests.map(({ skill_id, work_id }) => ({ skill_id, ...(work_id ? { work_id } : {}) })) : [],
+        page_refs: edit ? '' : pageReferenceText(pageRefs),
+        context_refs: edit ? [] : contextRefsPayload(contextRefs),
+        skill_requests: edit ? [] : skillRequestsPayload(skillRequests),
         account_id: selectedAccount || '', model: modelRef || null,
+        allow_subagents: edit ? false : subagentsArmed,
       })
       const requestID = messageRequest.current?.key === messageKey
         ? messageRequest.current.id
@@ -540,8 +742,8 @@ ${draft.text}` : draft.text))
             content: value,
             tool_calls: [],
             attachments: [...readyFiles.map((file) => file.attachment!), ...restoredAttachments],
-            context_refs: contextRefs.map(({ type, id, revision, reference_scope, anchor, name }) => ({
-              type, id, revision, scope: reference_scope, name, ...(anchor ? { anchor } : {}),
+            context_refs: contextRefs.map(({ type, id, artifact_id, revision, reference_scope, anchor, name }) => ({
+              type, id, ...(artifact_id ? { artifact_id } : {}), revision, scope: reference_scope, name, ...(anchor ? { anchor } : {}),
             })),
             skill_requests: skillRequests.map(({ skill_id, work_id, name }) => ({ skill_id, ...(work_id ? { work_id } : {}), name })),
             run_id: null,
@@ -559,6 +761,8 @@ ${draft.text}` : draft.text))
         ...(modelRef ? { model: modelRef } : {}),
         ...(requestID ? { request_id: requestID } : {}),
         ...(replacedQuestion ? { supersede_question_id: replacedQuestion.id } : {}),
+        ...(!edit && subagentsArmed ? { allow_subagents: true } : {}),
+        ...(!edit && bootstrapData?.features.agent_roles && selectedRoleID ? { role_id: selectedRoleID } : {}),
       }
       const acceptedDraftVersion = textDraftVersionRef.current
       const accepted = await consumeRun(conv.id, edit
@@ -584,7 +788,9 @@ ${draft.text}` : draft.text))
       messageRequest.current = null
       if (!edit) {
         setContextRefs((current) => (current === contextRefs ? [] : current))
+        setPageRefs((current) => (current === pageRefs ? [] : current))
         setSkillRequests((current) => (current === skillRequests ? [] : current))
+        setSubagentsArmed(false)
       }
       setEditMessage(null)
     } catch (error) {
@@ -596,7 +802,7 @@ ${draft.text}` : draft.text))
 
   const postWorkbenchInput = async (kind: 'steer' | 'queue') => {
     if (!runInputsEnabled || !conversationId || !conversation || !canWrite || inputSubmitting || uploading || failedFiles.length > 0) return
-    const value = text.trim()
+    const value = [pageReferenceText(pageRefs), text.trim()].filter(Boolean).join('\n\n')
     if ((!value && readyAttachmentIDs.length === 0 && contextRefs.length === 0 && skillRequests.length === 0) || Array.from(value).length > bootstrapData.limits.message_chars) return
     const targetRunID = activeRun?.id || runID
     if (kind === 'steer' && !targetRunID) return
@@ -620,6 +826,7 @@ ${draft.text}` : draft.text))
       setFiles([])
       setRestoredAttachments([])
       setContextRefs([])
+      setPageRefs([])
       setSkillRequests([])
       setEditMessage(null)
       inputRequest.current = null
@@ -699,8 +906,36 @@ ${draft.text}` : draft.text))
     } catch (error) { toast.error(errorMessage(error)) }
   }
 
-  const quoteArtifact = (reference: AgentContextSelection, prompt: string) => {
-    setContextRefs((old) => old.some((item) => item.type === reference.type && item.id === reference.id)
+  // BR-08：接管 = 撤销当前会话的活动租约（服务端只记录，本机同步停控）。
+  // 不依赖渲染端是否持有 grant 句柄：派生租约/续签可能没有句柄，但仍必须能接管。
+  const takeOverBrowser = async () => {
+    if (!conversationId) {
+      toast.error('无法接管', { description: '当前没有进行中的会话任务。' })
+      return
+    }
+    try {
+      await post(`/agent/conversations/${conversationId}/browser-handoff`, {})
+      setBrowserPaused(true)
+      toast.success('已接管', { description: 'Agent 已暂停；你完成后点控制条上的“交回 Agent”。' })
+    } catch (error) { toast.error(errorMessage(error)) }
+  }
+  const handBackBrowser = async () => {
+    if (!conversationId) return
+    const activeRunID = browserGrant?.run_id || runID
+    if (!activeRunID) {
+      toast.error('无法交回', { description: '当前任务已结束；重新发送任务后再交回控制权。' })
+      return
+    }
+    try {
+      const grant = await post<BrowserGrantView>(`/agent/conversations/${conversationId}/browser-handback`, {
+        run_id: activeRunID,
+      })
+      setBrowserGrant(grant)
+      setBrowserPaused(false)
+      toast.success('已交回 Agent', { description: '新的 30 秒租约已生效；Agent 下一步操作会重新校验该租约。' })
+    } catch (error) { toast.error(errorMessage(error)) }
+  }
+  const quoteArtifact = (reference: AgentContextSelection, prompt: string) => {    setContextRefs((old) => old.some((item) => item.type === reference.type && item.id === reference.id)
       ? old : old.length < 12 ? [...old, reference] : old)
     setText((old) => old ? `${old}\n${prompt}` : prompt)
     setEditMessage(null)
@@ -717,6 +952,10 @@ ${draft.text}` : draft.text))
   }
   const changeMode = async (mode: AgentMode) => {
     if (busy || bootstrapData?.read_only) return
+    if (conversation?.kind === 'side' && mode !== 'discuss') {
+      toast.error('旁问是只读会话，不能切到计划或执行模式')
+      return
+    }
     const previous = selectedMode
     setSelectedMode(mode)
     if (!conversationId) return
@@ -725,8 +964,118 @@ ${draft.text}` : draft.text))
       await invalidate()
     } catch (error) { setSelectedMode(previous); toast.error(errorMessage(error)); void detailQuery.refetch() }
   }
-  const updateSelection = async (kind: 'model' | 'account', value: string) => {
-    if (kind === 'model') setSelectedModel(value)
+  // IX-01/02/03：输入触发器只负责打开候选；选中后删掉触发词，正文不出现 @/$。
+  const updateComposerTrigger = (value: string, caret: number) => {
+    if (!workbenchUI) return
+    setComposerTrigger(detectComposerTrigger(value, caret, composingRef.current))
+  }
+  const focusComposer = (caret?: number) => window.setTimeout(() => {
+    inputRef.current?.focus()
+    if (typeof caret === 'number') inputRef.current?.setSelectionRange(caret, caret)
+  }, 0)
+  const clearTriggerToken = () => {
+    const next = removeComposerTrigger(text, composerTrigger)
+    setText(next.text)
+    setComposerTrigger(null)
+    focusComposer(next.caret)
+  }
+  const addContextSelection = (item: AgentContextSelection) => {
+    const result = addToLimitedList(contextRefs, item, 12, (ref) => `${ref.type}:${ref.id}`)
+    if (!result.ok) return false
+    setContextRefs(result.list)
+    clearTriggerToken()
+    return true
+  }
+  const addSkillSelection = (item: AgentSkillSelection) => {
+    const result = addToLimitedList(skillRequests, item, 3, (skill) => `${skill.skill_id}:${skill.work_id ?? ''}`)
+    if (!result.ok) return false
+    setSkillRequests(result.list)
+    clearTriggerToken()
+    return true
+  }
+  const runComposerCommand = (command: AgentCommand) => {
+    trackAgentEvent('agent_command_run', command.name)
+    clearTriggerToken()
+    if (command.name === 'new') { newConversation(); return }
+    if (command.name === 'plan' || command.name === 'execute' || command.name === 'discuss') {
+      if (command.name === 'discuss' && bootstrapData?.read_only) return
+      void changeMode(command.name)
+      return
+    }
+    if (command.name === 'model') { setModelMenuOpen(true); return }
+    if (command.name === 'context') { setWorkbenchPanelTab('context'); setWorkbenchPanelOpen(true); return }
+    if (command.name === 'skills') {
+      if (!selectedAccount) { toast.info('先选择运营账号，再请求技能。'); return }
+      setSkillPickerOpen(true); return
+    }
+    if (command.name === 'compact') {
+      if (bootstrapData?.features.compact !== true) { toast.info('当前工作区未开启压缩。'); return }      setCompactDialogOpen(true); return
+    }
+    if (command.name === 'goal') { openGoalPanel(); return }
+    if (command.name === 'archive') {
+      if (!conversation) { toast.info('当前没有可归档的对话。'); return }
+      void (async () => {
+        if (!(await confirm({ title: '归档这段对话？', desc: '消息与卡片仍会保留，可在“已归档”中恢复。', confirmText: '归档' }))) return
+        try {
+          await patch(`/agent/conversations/${conversation.id}`, { expected_revision: conversation.revision, archived: true, ...(pendingActions > 0 ? { confirm_pending_actions: true } : {}) })
+          await invalidate()
+        } catch (error) { toast.error(errorMessage(error)) }
+      })()
+    }
+  }
+  // BR-03：应用内浏览选中元素后，作为文本上下文插入输入框（P1 不新增服务端引用类型）。
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ title?: string; selector?: string; text?: string; tag?: string }>).detail
+      if (!detail?.selector) return
+      const block = `【页面元素】${detail.tag ?? ''} ${detail.title ?? ''}\n${detail.selector}${detail.text ? `\n${detail.text}` : ''}`
+      setText((old) => old ? `${old}\n\n${block}` : block)
+      setEditMessage(null)
+      window.setTimeout(() => inputRef.current?.focus(), 0)
+    }
+    window.addEventListener('ops:agent-page-element', handler)
+    return () => window.removeEventListener('ops:agent-page-element', handler)
+  }, [])
+  // BR-11：页面元素 + 一句批注 → 输入台引用筹码；只入草稿，不自动发送。
+  useEffect(() => { pageRefsRef.current = pageRefs }, [pageRefs])
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ title?: string; url?: string; selector?: string; text?: string; note?: string }>).detail
+      const selector = detail?.selector
+      const note = detail?.note?.trim()
+      if (!selector || !note) return
+      if (pageRefsRef.current.length >= 12) {
+        toast.error('每轮最多引用 12 项页面元素，请先移除一项。')
+        return
+      }
+      const name = `页面元素 · ${(detail.title || selector).slice(0, 80)}`
+      setPageRefs((current) => current.length >= 12 ? current : [...current, {
+        id: crypto.randomUUID(), name, url: detail.url ?? '', selector,
+        text: (detail.text ?? '').slice(0, 2000), note: note.slice(0, 160),
+      }])
+      setEditMessage(null)
+      window.setTimeout(() => inputRef.current?.focus(), 0)
+    }
+    window.addEventListener('ops:agent-page-annotation', handler)
+    return () => window.removeEventListener('ops:agent-page-annotation', handler)
+  }, [])
+  useEffect(() => {
+    const focus = () => inputRef.current?.focus()
+    window.addEventListener('ops:agent-focus-composer', focus)
+    return () => window.removeEventListener('ops:agent-focus-composer', focus)
+  }, [])
+  // IX-09：命令面板本页命令组与 / 命令同源——面板经 agentCmd 事件分发到同一执行器。
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const name = (event as CustomEvent<{ name: string }>).detail?.name
+      if (!name || name === 'new') return
+      const command = COMMANDS.find((item) => item.name === name)
+      if (command) runComposerCommand(command)
+    }
+    window.addEventListener('ops:agent-cmd', handler)
+    return () => window.removeEventListener('ops:agent-cmd', handler)
+  })
+  const updateSelection = async (kind: 'model' | 'account', value: string) => {    if (kind === 'model') setSelectedModel(value)
     else {
       if (value !== selectedAccount && (skillRequests.length > 0 || contextRefs.some((ref) => ref.account_id !== null))) {
         const affected = [
@@ -935,8 +1284,11 @@ ${draft.text}` : draft.text))
   const accountSwitched = !!conversationId && !!historyAccount && selectedAccount !== historyAccount
   const historyAccountName = accountList.find((account) => account.id === historyAccount)?.name || '原账号'
   const attachmentCount = messages.reduce((total, message) => total + message.attachments.length, 0)
-  const workbenchStatus = busy ? '运行中' : pendingActions ? `待处理 ${pendingActions}` : conversation ? '已就绪' : '待开始'
-  const canSendContent = !!text.trim() || readyAttachmentIDs.length > 0 || contextRefs.length > 0 || skillRequests.length > 0
+  const canSendContent = !!text.trim() || pageRefs.length > 0 || readyAttachmentIDs.length > 0 || contextRefs.length > 0 || skillRequests.length > 0
+  const pageContextSelections: AgentContextSelection[] = pageRefs.map((ref) => ({
+    id: ref.id, type: 'page_element', name: ref.name, summary: ref.note, scope: 'turn',
+    account_id: selectedAccount || null, revision: '', updated_at: '', reference_scope: 'turn',
+  }))
   const selectedWorkOptions = contextRefs.filter((ref) => ref.type === 'work').map((ref) => ({ id: ref.id, name: ref.name }))
   const latestSkillUsage = lastAssistant && lastUser && lastAssistant.run_id === lastUser.run_id
     ? (lastUser.skill_requests ?? []).map((request) => lastAssistant.skill_usage?.find((skill) => skill.id === request.skill_id)
@@ -948,9 +1300,37 @@ ${draft.text}` : draft.text))
   // AG-01: Navigate for unavailability page
   if (!bootstrapData.can_use && bootstrapData.reason !== 'no_model' && bootstrapData.reason !== 'not_tested') return <Unavailable bootstrap={bootstrapData} navigate={navigate} />
 
+  // UI-01：会话头只读汇总；状态优先级见 docs/38 §7.1 与 §20.2。
+  const pendingQuestions = questions.filter((question) => question.status === 'pending').length
+  const headerState = deriveHeaderState({
+    title: conversation?.title || 'AI 对话',
+    hasConversation: !!conversationId,
+    accountName: selectedAccountName,
+    mode: conversation?.mode || selectedMode,
+    activeRun,
+    connection: streamConnection,
+    pendingActions,
+    pendingQuestions,
+    goalStatus: detail?.goal?.status,
+    usage: detail?.usage,
+    panelOpen: workbenchPanelOpen,
+    pendingCount: pendingActions + pendingQuestions,
+    readOnly: bootstrapData.read_only,
+    canUse: bootstrapData.can_use,
+    reason: bootstrapData.reason,
+    modelName: selectedModelName,
+  })
+
   const sidebarSlot = document.getElementById('agent-sidebar-slot')
   const titleSlot = document.getElementById('agent-title-slot')
   const toolbarSlot = document.getElementById('agent-toolbar-slot')
+  const renameConversation = async (title: string) => {
+    if (!conversation) return
+    try {
+      await patch(`/agent/conversations/${conversation.id}`, { expected_revision: conversation.revision, title })
+      await invalidate()
+    } catch (error) { toast.error(errorMessage(error)) }
+  }
   const renderConversationTitle = () => (
     <>
       {conversation
@@ -958,10 +1338,10 @@ ${draft.text}` : draft.text))
             style={{ width: `${Math.min(440, Math.max(42, Array.from(conversation.title).length * 12))}px` }}
             onBlur={(event) => {
               const title = event.target.value.trim()
-              if (title && title !== conversation.title) void patch(`/agent/conversations/${conversation.id}`, { expected_revision: conversation.revision, title }).then(() => invalidate()).catch((error) => toast.error(errorMessage(error)))
+              if (title && title !== conversation.title) void renameConversation(title)
             }} className="min-w-0 max-w-[320px] truncate border-0 bg-transparent text-[13px] font-semibold text-mist-800 outline-none" />
         : <span className="text-[13px] font-semibold text-mist-800">AI 对话</span>}
-      {conversation && !desktopPresentation && <span className="hidden text-[10.5px] text-mist-400 xl:inline">本对话 {detail?.usage.prompt_tokens ?? 0} 输入 / {detail?.usage.completion_tokens ?? 0} 输出 token</span>}
+      {conversation && !desktopPresentation && <span className="hidden text-[12px] text-mist-400 xl:inline">本对话 {detail?.usage.prompt_tokens ?? 0} 输入 / {detail?.usage.completion_tokens ?? 0} 输出 token</span>}
     </>
   )
   const renderTitle = () => desktopPresentation
@@ -970,13 +1350,16 @@ ${draft.text}` : draft.text))
   const renderMessageBlock = (message: AgentMessage, sourceMessages: AgentMessage[], inlineAssistant = false, showFeedback = true) => (
     <>
       <MessageView message={message} lastAssistant={message.id === lastAssistant?.id} canSeeImages={selectedModelOption?.vision === true} desktopPresentation={desktopPresentation} inlineAssistant={inlineAssistant}
-        showFeedback={showFeedback}
+        showFeedback={showFeedback} showToolActivity={!workbenchUI}
         forkMessages={sourceMessages.length > 1 ? sourceMessages : undefined}
         skillRequests={messages.find((candidate) => candidate.role === 'user' && candidate.run_id === message.run_id)?.skill_requests ?? []}
         onFork={organizeEnabled && message.role !== 'system' ? () => void forkFromMessage(message) : undefined}
         onForkMessage={organizeEnabled ? (source) => void forkFromMessage(source) : undefined}
-        onEdit={message.id === lastUser?.id && !busy && !pendingQuestion && canWrite && !message.attachments.length && !message.context_refs?.length && !message.skill_requests?.length ? () => { setEditMessage(message); setText(message.content); clearDraftAttachments(); setContextRefs([]); setSkillRequests([]); inputRef.current?.focus() } : undefined}
-        onRegenerate={message.id === lastAssistant?.id && !busy && canWrite ? regenerate : undefined} />
+        onEdit={message.id === lastUser?.id && !busy && !pendingQuestion && canWrite && pageRefs.length === 0 && !message.attachments.length && !message.context_refs?.length && !message.skill_requests?.length ? () => { setEditMessage(message); setText(message.content); clearDraftAttachments(); setContextRefs([]); setPageRefs([]); setSkillRequests([]); inputRef.current?.focus() } : undefined}
+        onRegenerate={message.id === lastAssistant?.id && !busy && canWrite ? regenerate : undefined}
+        onQuoteSelection={canWrite ? (ref) => {
+          addContextSelection({ id: ref.id, type: 'message', name: '引用', summary: '选段引用', scope: 'turn', account_id: selectedAccount || null, revision: '', updated_at: '', reference_scope: 'turn', anchor: ref.anchor })
+        } : undefined} />
       {message.role === 'assistant' && message.run_id && sourceMessages.some((source) => actionMessageByRun[message.run_id!] === source.id) && <div className={desktopPresentation ? 'desktop-agent-action-wrapper' : ''}><AgentActionCards
         actions={actions.filter((action) => action.run_id === message.run_id)}
         running={busy || actionExecuting}
@@ -984,6 +1367,9 @@ ${draft.text}` : draft.text))
         onContinue={continueRun}
         onExecutingChange={setActionExecuting}
         desktopPresentation={desktopPresentation}
+        reviewActionID={reviewActionID}
+        onOpenReview={(id) => { trackAgentEvent('agent_review_open', 'action'); setReviewActionID(id) }}
+        onCloseReview={() => setReviewActionID(null)}
       /></div>}
       {message.role === 'assistant' && message.run_id && plans.filter((plan) => plan.source_run_id === message.run_id).map((plan) => <AgentPlanCard key={plan.id} plan={plan} canWrite={canWrite} busy={busy} blocked={!!pendingQuestion} onAccept={(item) => void acceptPlan(item)} />)}
       {message.role === 'assistant' && message.run_id && questions.filter((question) => question.run_id === message.run_id).map((question) => <AgentQuestionCard key={question.id} question={question} canWrite={canWrite} busy={busy} onAnswer={(item, answers) => void answerQuestion(item, answers)} />)}
@@ -1019,6 +1405,14 @@ ${draft.text}` : draft.text))
       </div>
     )
   }
+  const handleRunErrorAction = (action: string) => {
+    if (action === 'retry') { regenerate(); return }
+    if (action === 'change-model') { setModelMenuOpen(true); return }
+    if (action === 'open-models') { navigate('/settings/models'); return }
+    if (action === 'reselect-context') { setContextPickerOpen(true); return }
+    if (action === 'open-permissions') { navigate('/settings/members'); return }
+    if (action === 'verify') { void detailQuery.refetch() }
+  }
   return (
     <>
       {sidebarSlot && !desktopPresentation && createPortal(
@@ -1037,26 +1431,32 @@ ${draft.text}` : draft.text))
         </>,
         toolbarSlot,
       )}
-      <div className={`relative flex h-full min-h-0 overflow-hidden bg-[#f7f8f6] ${desktopPresentation ? 'desktop-agent-workspace' : ''} ${workbenchUI ? 'desktop-agent-workbench' : ''}`} data-list-collapsed={workbenchListCollapsed} data-panel-open={workbenchPanelOpen}>
+      <div className={`relative flex h-full min-h-0 overflow-hidden bg-[var(--ops-canvas)] ${desktopPresentation ? 'desktop-agent-workspace' : ''} ${workbenchUI ? 'desktop-agent-workbench' : ''}`} data-list-collapsed={workbenchListCollapsed} data-panel-open={workbenchPanelOpen}>
       {desktopPresentation && <aside className="desktop-agent-list" aria-label="AI 对话列表" data-testid="desktop-agent-list">
         <AgentConversationList currentID={conversationId} search={search} setSearch={setSearch} onSelect={openConversation} onNew={newConversation} sidebarTitle="AI 对话" desktopPresentation organizeEnabled={organizeEnabled} goalsEnabled={goalsEnabled} />
       </aside>}
       <section className={`flex min-w-0 flex-1 flex-col ${workbenchUI ? 'desktop-agent-workbench-main' : ''}`}>
-        <header className={`flex min-h-14 shrink-0 items-center gap-2 border-b border-mist-200 bg-white px-3 sm:px-5 ${desktopPresentation ? 'desktop-agent-chat-header' : 'lg:hidden'}`}>
-          <IconButton label={workbenchUI && !workbenchListCollapsed && (document.querySelector('.desktop-agent-workbench')?.clientWidth ?? 0) >= 1456 ? '收起会话列表' : '打开对话列表'} className={`md:hidden ${workbenchUI ? 'desktop-agent-workbench-list-button' : ''}`} onClick={() => {
-            if (workbenchUI && (document.querySelector('.desktop-agent-workbench')?.clientWidth ?? 0) >= 1456) setWorkbenchListCollapsed((value) => !value)
-            else { setWorkbenchPanelOpen(false); setMobileListOpen(true) }
-          }}><Menu className="size-4" /></IconButton>
-          <div className={`flex min-w-0 items-center gap-2 ${desktopPresentation ? 'desktop-agent-chat-heading' : 'flex-1'}`}>
-            {desktopPresentation ? <>{renderConversationTitle()}<span className="desktop-agent-private-tag">仅本人可见</span>{workbenchUI && <span className="desktop-agent-workbench-meta">{selectedAccountName} · {workbenchStatus}</span>}</> : renderTitle()}
-          </div>
-          {desktopPresentation
-            ? workbenchUI
-              ? <button type="button" className="desktop-agent-chat-settings desktop-agent-workbench-panel-button" aria-label="工作视图" aria-expanded={workbenchPanelOpen} onClick={() => { setMobileListOpen(false); setWorkbenchPanelOpen((value) => !value) }}>工作视图 <Settings2 /></button>
-              : null
-            : <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>}
-        </header>
-
+        {workbenchUI
+          ? <ConversationHeader state={headerState} editable={!!conversation && !bootstrapData.read_only} onRename={(title) => void renameConversation(title)}
+            onTogglePanel={() => { setMobileListOpen(false); setWorkbenchPanelOpen((value) => !value) }}
+            onOpenModels={() => navigate('/settings/models')}
+            onPrivacySeen={() => savePrefs.mutate({ agent_privacy_notice_seen: true })}
+            leading={<IconButton label={workbenchListCollapsed ? '打开对话列表' : '收起会话列表'} className="desktop-agent-workbench-list-button md:hidden" onClick={() => {
+              if (workbenchListCollapsed) setWorkbenchListCollapsed(false)
+              else { setWorkbenchPanelOpen(false); setMobileListOpen(true) }
+            }}><Menu className="size-4" /></IconButton>}
+            sideChat={conversation?.kind === 'side'}
+            onOpenMainConversation={conversation?.kind === 'side' && conversation.parent_id ? () => openConversation(conversation.parent_id!) : undefined} />
+          : <header className={`flex min-h-14 shrink-0 items-center gap-2 border-b border-mist-200 bg-white px-3 sm:px-5 ${desktopPresentation ? 'desktop-agent-chat-header' : 'lg:hidden'}`}>
+            <IconButton label="打开对话列表" className="md:hidden" onClick={() => { setWorkbenchPanelOpen(false); setMobileListOpen(true) }}><Menu className="size-4" /></IconButton>
+            <div className={`flex min-w-0 items-center gap-2 ${desktopPresentation ? 'desktop-agent-chat-heading' : 'flex-1'}`}>
+              {desktopPresentation ? <>{renderConversationTitle()}<span className="desktop-agent-private-tag">仅本人可见</span></> : renderTitle()}
+            </div>
+            {desktopPresentation
+              ? null
+              : <IconButton label="对话设置" onClick={() => setSettingsOpen(true)}><Settings2 className="size-4" /></IconButton>}
+          </header>}
+        {workbenchUI && runCostSummary && <div className="border-b border-mist-100 bg-white px-4 py-1 text-center text-xs text-mist-500" data-testid="agent-run-cost">{runCostSummary}</div>}
         {bootstrapData.read_only && <div className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12px] text-gamboge-800">当前为观察者：智能体只能查询，不能修改。</div>}
         {accountMismatch && <div className="border-b border-gamboge-200 bg-gamboge-50 px-4 py-2 text-center text-[12px] text-gamboge-800" data-testid="agent-account-switched">此对话属于「{historyAccountName}」，当前账号为「{selectedAccountName}」。<button type="button" className="ml-2 underline" onClick={newConversation}>为当前账号新建对话</button></div>}
 
@@ -1070,9 +1470,16 @@ ${draft.text}` : draft.text))
               setManualUnreadSuppressedID('')
             }
           }} onDragEnter={(event) => { event.preventDefault(); if (canWrite && (!busy || runInputsEnabled) && !uploading) { dragDepth.current++; setDragging(true) } }} onDragLeave={(event) => { event.preventDefault(); dragDepth.current--; if (dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false) } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); void addFiles(event.dataTransfer.files) }}>
-            {detailQuery.isLoading && conversationId && <div className="mx-auto max-w-3xl py-12 text-center text-sm text-mist-400"><LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />正在加载对话…</div>}
-            {detailQuery.isError && <Notice tone="red" className="mx-auto max-w-3xl">{errorMessage(detailQuery.error)} <button type="button" className="ml-2 underline" onClick={() => void detailQuery.refetch()}>重试</button></Notice>}
-            {!conversationId && !messages.length && <Welcome onPrompt={(value) => setText(value)} noModel={!bootstrapData.can_use} desktopWorkbench={workbenchUI} />}
+            {detailQuery.isLoading && conversationId && <div className="mx-auto max-w-3xl py-6"><StateBlock tone="loading" title="正在加载对话…" desc="消息、卡片与任务状态会一起恢复。" /></div>}
+            {detailQuery.isError && (() => {
+              const mapped = mapAgentError(detailQuery.error)
+              return <div className="mx-auto max-w-3xl"><StateBlock tone="error" title={mapped.title} desc={mapped.reason} requestId={mapped.requestId}
+                action={<div className="flex items-center gap-2"><Button size="sm" variant="outline" onClick={() => void detailQuery.refetch()}>重试</Button>
+                  {mapped.requestId && <Button size="sm" variant="ghost" onClick={() => { void navigator.clipboard.writeText(mapped.requestId); toast('请求 ID 已复制') }}>复制请求 ID</Button>}</div>} /></div>
+            })()}
+            {!conversationId && !messages.length && <Welcome onPrompt={(value) => setText(value)} noModel={!bootstrapData.can_use} desktopWorkbench={workbenchUI}
+              summary={workbenchUI ? (todayOpsEnabled ? (todayOpsSummaryQuery.data ? todayOpsWelcomeSummary(todayOpsSummaryQuery.data) : todayOpsSummaryQuery.isError ? '今日运营需要权限或暂时不可用 · 查看说明' : '正在汇总今日运营…') : `今天 ${pendingActions + pendingQuestions} 项待处理`) : null}
+              onOpenTodayOps={todayOpsEnabled ? () => setTodayOpsOpen(true) : undefined} />}
             {detail?.has_more && <div className="mx-auto mb-4 max-w-3xl text-center"><Button size="sm" variant="ghost" onClick={() => void loadOlder()}>加载更早的消息</Button></div>}
             <div className={`mx-auto flex max-w-3xl flex-col gap-4 ${desktopPresentation ? 'desktop-agent-message-column' : ''}`}>
               {displayEntries.map((entry, index) => {
@@ -1081,7 +1488,7 @@ ${draft.text}` : draft.text))
                 const previousEntry = displayEntries[index - 1]
                 const previous = previousEntry ? (previousEntry.kind === 'message' ? previousEntry.message : previousEntry.messages.at(-1)) : undefined
                 const startsDay = desktopPresentation && (!previous || splitDate(previous.created_at) !== splitDate(firstMessage.created_at))
-                if (entry.kind === 'message') return <div key={entry.message.id} data-message-seq={entry.message.seq} className="relative">
+                if (entry.kind === 'message') return <div key={entry.message.id} data-message-seq={entry.message.seq} data-message-id={entry.message.id} className="relative">
                   {startsDay && <div className="desktop-agent-day">{splitDate(firstMessage.created_at)} · {messageTime(firstMessage.created_at)}</div>}
                   {renderMessageBlock(entry.message, [entry.message])}
                 </div>
@@ -1097,6 +1504,10 @@ ${draft.text}` : draft.text))
                     <span className="desktop-agent-bot-avatar"><Bot /></span><strong>OPS</strong>
                     <small>{activeRun?.id === entry.runId ? (streamStage.startsWith('tool:') ? '处理中' : '运行中') : messageTime(entry.messages.at(-1)!.created_at)}</small>
                   </div>
+                  {workbenchUI && <AgentRunTimeline runId={entry.runId}
+                    toolCalls={entry.messages.flatMap((message) => message.tool_calls ?? [])}
+                    actions={actions.filter((action) => action.run_id === entry.runId)}
+                    plan={plans.find((item) => item.source_run_id === entry.runId) ?? null} />}
                   {segments.map((segment) => {
                     const segmentFirst = segment.sourceMessages[0]
                     const segmentLast = segment.sourceMessages.at(-1)!
@@ -1118,12 +1529,16 @@ ${draft.text}` : draft.text))
                           : '这是上次中断时已生成的部分。这一轮没有正常结束，可以点下方「继续」让智能体接着做。'}
                       </div>
                     </div>}
-                    <RunStatus activeRun={activeRun?.id === entry.runId ? activeRun : undefined} streamStage={streamStage} toolName={runningToolName} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />
+                    <RunStatus activeRun={activeRun?.id === entry.runId ? activeRun : undefined} streamStage={streamStage} toolName={runningToolName} connection={streamConnection} pendingActions={pendingActions} error={streamError} errors={streamErrors} completedNotice={completedNotice} onErrorAction={handleRunErrorAction} />
                   </>}
                 </article>
               })}
+              {plans.filter((plan) => !displayEntries.some((entry) => entry.kind === 'assistant-run' && entry.runId === plan.source_run_id)).map((plan) => <AgentPlanCard key={plan.id} plan={plan} canWrite={canWrite} busy={busy} blocked={!!pendingQuestion} onAccept={(item) => void acceptPlan(item)} />)}
               {desktopPresentation && hasRunActivity && visibleRunID && !displayEntries.some((entry) => entry.kind === 'assistant-run' && entry.runId === visibleRunID) && <article data-run-id={visibleRunID} className="desktop-agent-message assistant desktop-agent-run-message">
                 <div className="desktop-agent-message-speaker"><span className="desktop-agent-bot-avatar"><Bot /></span><strong>OPS</strong><small>{activeRun || streaming || runID ? '运行中' : '正在恢复'}</small></div>
+                {workbenchUI && <AgentRunTimeline runId={visibleRunID}
+                  toolCalls={messages.filter((message) => message.run_id === visibleRunID).flatMap((message) => message.tool_calls ?? [])}
+                  actions={actions.filter((action) => action.run_id === visibleRunID)} />}
                 {streamText && <div className="desktop-agent-run-live"><AgentMarkdown text={streamText} /><p className="desktop-agent-run-live-note">正在生成，内容尚未完成</p></div>}
                 {!streamText && recoveryText && <div className="desktop-agent-run-live">
                   <AgentMarkdown text={recoveryText} />
@@ -1133,7 +1548,7 @@ ${draft.text}` : draft.text))
                       : '这是上次中断时已生成的部分。这一轮没有正常结束，可以点下方「继续」让智能体接着做。'}
                   </div>
                 </div>}
-                <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === visibleRunID).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />
+                <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === visibleRunID).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} errors={streamErrors} completedNotice={completedNotice} onErrorAction={handleRunErrorAction} />
               </article>}
               {!desktopPresentation && streamText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card"><AgentMarkdown text={streamText} /><p className="mt-2 text-[12px] text-mist-500">正在生成，内容尚未完成</p></div></div>}
               {/* AG-04：离开页面时没写完的回复。服务端整轮结束后才落库，这里先把已生成的部分显示出来，
@@ -1180,7 +1595,9 @@ ${draft.text}` : draft.text))
             conversationId={conversationId}
             runId={runID || undefined}
             onClose={() => setBrowserPickerOpen(false)}
-            onAuthorized={(summary) => {
+            onAuthorized={(summary, grant) => {
+              setBrowserGrant(grant)
+              setBrowserPaused(false)
               setText((old) => old ? `${old}\n已选择标签「${summary}」，请继续。` : `已选择标签「${summary}」，请继续。`)
               window.setTimeout(() => inputRef.current?.focus(), 0)
             }}
@@ -1192,9 +1609,17 @@ ${draft.text}` : draft.text))
           </div>}
 
           <div className={`shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4 ${desktopPresentation ? 'desktop-agent-compose-area' : ''} ${workbenchUI ? 'desktop-agent-workbench-compose-area' : ''}`}>
-            {(!desktopPresentation || !visibleRunID && (workbenchUI || !!streamError)) && <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === activeRun?.id).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />}
+            {(!desktopPresentation || !visibleRunID && (workbenchUI || !!streamError)) && <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === activeRun?.id).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} errors={streamErrors} completedNotice={completedNotice} onErrorAction={handleRunErrorAction} />}
+            <RunOutcomeNotice run={detail?.last_run} />
             {!desktopPresentation && bootstrapData.features.plans && runtimeSummary && <p className="mx-auto mb-3 max-w-3xl px-3 text-xs text-mist-500" data-testid="agent-runtime-config">{runtimeSummary}</p>}
-            {!bootstrapData.can_use && (bootstrapData.reason === 'no_model' || bootstrapData.reason === 'not_tested') && <Notice tone="gamboge" className="mx-auto mb-2 max-w-3xl">{bootstrapData.reason === 'not_tested' ? '模型已经配置好了，但还没有完成能力自检。完成一次自检后就能开始对话。' : '还没有配置可用于对话的模型，请到模型配置页添加支持工具调用的模型。'}历史对话仍可查看。 <a href="/settings/models" className="underline">去模型配置</a></Notice>}
+            {!desktopPresentation && runCostSummary && <p className="mx-auto mb-3 max-w-3xl px-3 text-xs text-mist-500" data-testid="agent-run-cost">{runCostSummary}</p>}
+            {onboarding && !onboardingDismissed && <div className="desktop-agent-onboarding mx-auto mb-2 max-w-3xl" role="status" data-testid="agent-onboarding-hint" data-hint={onboarding.id}>
+              <span>{onboarding.text}</span>
+              {onboarding.action === '去模型配置' || onboarding.action === '去自检' ? <a href="/settings/models" className="underline">{onboarding.action}</a>
+                : onboarding.action === '选择账号' ? <button type="button" className="underline" onClick={() => window.dispatchEvent(new Event('ops-desktop-account-switcher-request'))}>{onboarding.action}</button>
+                  : onboarding.action === '查看权限' ? <span className="desktop-agent-onboarding-note">卡片执行按业务权限校验</span> : null}
+              <button type="button" className="desktop-agent-onboarding-close" aria-label="关闭这条提示" onClick={() => setOnboardingDismissed(true)}><X aria-hidden="true" /></button>
+            </div>}
             {pendingActions > 0 && !desktopPresentation && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">等待你逐张处理 {pendingActions} 项后，智能体会继续。卡片操作入口显示在对应消息下方。</div>}
             {detail?.can_continue && !busy && !actionExecuting && pendingActions === 0 && <div className="mx-auto mb-2 max-w-3xl text-right"><Button size="sm" variant="ghost" onClick={continueRun}>继续</Button></div>}
             {activeRun && !desktopPresentation && <div className="mx-auto mb-2 max-w-3xl text-right"><Button size="sm" variant="ghost" icon={<Square className="size-3" />} onClick={() => void stop()}>停止</Button></div>}
@@ -1202,15 +1627,23 @@ ${draft.text}` : draft.text))
             {detail?.messages.length === 0 && bootstrapData.default_model_unsupported && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-gamboge-700">默认模型未通过工具调用自检，请先选择其他模型。</div>}
             {editMessage && <div className="mx-auto mb-2 flex max-w-3xl items-center justify-between rounded-lg bg-mist-50 px-3 py-1.5 text-xs text-mist-600"><span>编辑最后一条消息并重新运行</span><button type="button" className="cursor-pointer underline" onClick={() => { setEditMessage(null); setText('') }}>取消</button></div>}
             {!desktopPresentation && renderAttachmentQueue()}
-            {contextRefs.length > 0 && <div className="mx-auto mb-2 flex max-w-3xl flex-wrap gap-2">
-              {contextRefs.map((ref) => <div key={`${ref.type}:${ref.id}`} className="flex items-center gap-2 rounded-lg border border-ink-200 bg-ink-50 px-2 py-1.5 text-xs text-ink-700">
+            {(contextRefs.length > 0 || pageRefs.length > 0 || subagentsArmed) && <div className="mx-auto mb-2 flex max-w-3xl flex-wrap gap-2">
+              {subagentsArmed && <div data-testid="agent-subagents-chip" className="flex items-center gap-2 rounded-lg border border-ink-200 bg-ink-50 px-2 py-1.5 text-xs text-ink-700">
+                <Users className="size-3.5" /><span>并行协作</span><span className="text-mist-500">本次任务允许拆成 2 个只读子任务</span>
+                <IconButton label="取消并行协作" className="size-6" onClick={() => setSubagentsArmed(false)}><X className="size-3" /></IconButton>
+              </div>}
+              {contextRefs.map((ref) => <div key={`${ref.type}:${ref.id}`} data-testid="agent-context-ref-chip" className="flex items-center gap-2 rounded-lg border border-ink-200 bg-ink-50 px-2 py-1.5 text-xs text-ink-700">
                 <AtSign className="size-3.5" /><span className="max-w-48 truncate">{ref.name}</span><span className="text-mist-500">{ref.reference_scope === 'conversation' ? '固定引用' : '本轮引用'}</span>
                 <IconButton label={`移除引用 ${ref.name}`} className="size-6" onClick={() => setContextRefs((old) => old.filter((item) => item.id !== ref.id || item.type !== ref.type))}><X className="size-3" /></IconButton>
               </div>)}
+              {pageRefs.map((ref) => <div key={ref.id} data-testid="agent-page-reference-chip" className="flex items-center gap-2 rounded-lg border border-ink-200 bg-ink-50 px-2 py-1.5 text-xs text-ink-700">
+                <AtSign className="size-3.5" /><span className="max-w-48 truncate" title={`${ref.selector}\n${ref.note}`}>{ref.name}</span><span className="text-mist-500">本轮引用</span>
+                <IconButton label={`移除页面引用 ${ref.name}`} className="size-6" onClick={() => setPageRefs((old) => old.filter((item) => item.id !== ref.id))}><X className="size-3" /></IconButton>
+              </div>)}
             </div>}
             {skillRequests.length > 0 && <div className="mx-auto mb-2 flex max-w-3xl flex-wrap gap-2">
-              {skillRequests.map((skill) => <div key={`${skill.skill_id}:${skill.work_id ?? ''}`} className="flex items-center gap-2 rounded-lg border border-ink-200 bg-ink-50 px-2 py-1.5 text-xs text-ink-700">
-                <Sparkles className="size-3.5" /><span className="max-w-48 truncate">{skill.name}</span><span className="text-mist-500">已请求</span>
+              {skillRequests.map((skill) => <div key={`${skill.skill_id}:${skill.work_id ?? ''}`} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 text-xs ${skill.unavailable ? 'border-danger/40 bg-danger-50 text-danger' : 'border-ink-200 bg-ink-50 text-ink-700'}`}>
+                <Sparkles className="size-3.5" /><span className="max-w-48 truncate">{skill.name}</span><span className={skill.unavailable ? 'text-danger' : 'text-mist-500'}>{skillStateLabel({ requested: true, unavailable: skill.unavailable })}</span>
                 <IconButton label={`移除技能请求 ${skill.name}`} className="size-6" onClick={() => setSkillRequests((old) => old.filter((item) => item.skill_id !== skill.skill_id || item.work_id !== skill.work_id))}><X className="size-3" /></IconButton>
               </div>)}
             </div>}
@@ -1218,12 +1651,19 @@ ${draft.text}` : draft.text))
             
             <input ref={fileRef} type="file" multiple accept={'image/jpeg,image/png,image/webp,image/gif,.txt,.md' + (bootstrapData.features.document_parse ? ',.pdf,.docx,.csv' : '')} className="hidden" onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = '' }} />
             {desktopPresentation ? <>
-              <div className={`desktop-agent-compose ${workbenchUI ? 'desktop-agent-workbench-compose' : ''}`}>
+              <div className={`desktop-agent-compose ${workbenchUI ? 'desktop-agent-workbench-compose' : ''}`} ref={composerRootRef}>
                 {renderAttachmentQueue(true)}
                 {/* DEV-AI27-16（W16c）：语音输入完整链路（录音→转写→编辑→插入输入框）。 */}
                 {conversationId && <VoiceBar conversationId={conversationId} voiceDictationEnabled={bootstrapData.features.voice_dictation === true} onInsert={(voiceText) => { setText((old) => old ? `${old}${voiceText}` : voiceText); window.setTimeout(() => inputRef.current?.focus(), 0) }} />}
                 {conversationId && <RealtimeVoiceBar conversationId={conversationId} enabled={bootstrapData.features.voice_realtime === true} onInsert={(voiceText) => { setText((old) => old ? `${old}${voiceText}` : voiceText); window.setTimeout(() => inputRef.current?.focus(), 0) }} />}
-                <Textarea ref={inputRef} rows={workbenchUI ? 3 : 1} aria-label={workbenchUI ? '发送消息' : undefined} value={text} disabled={inputDisabled} onChange={(event) => { textDraftVersionRef.current++; setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, workbenchUI ? 176 : 192)}px` }} onKeyDown={onInputKeyDown}
+                {workbenchUI && composerTrigger && !inputDisabled && <ComposerCandidates trigger={composerTrigger} accountID={selectedAccount} contextRefs={contextRefs} skillRequests={skillRequests}
+                  onAddContext={addContextSelection} onAddSkill={addSkillSelection} onCommand={runComposerCommand}
+                  onClose={() => { setComposerTrigger(null); focusComposer() }} />}
+                <Textarea ref={inputRef} rows={workbenchUI ? 3 : 1} aria-label={workbenchUI ? '发送消息' : undefined} value={text} disabled={inputDisabled} onChange={(event) => { textDraftVersionRef.current++; setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, workbenchUI ? 176 : 192)}px`; updateComposerTrigger(event.target.value, event.target.selectionStart ?? 0) }}
+                  onSelect={(event) => updateComposerTrigger(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
+                  onCompositionStart={() => { composingRef.current = true }}
+                  onCompositionEnd={(event) => { composingRef.current = false; updateComposerTrigger(event.currentTarget.value, event.currentTarget.selectionStart ?? 0) }}
+                  onKeyDown={onInputKeyDown}
                   placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '说说你想写什么，或继续调整上面的方向…'} className="desktop-agent-compose-input" />
                 <div className="desktop-agent-compose-toolbar">
                   {/* DEV-AI27-07：统一添加菜单收敛全部上下文与能力入口（27 §5.5）；
@@ -1232,61 +1672,89 @@ ${draft.text}` : draft.text))
                     disabled={!canWrite || busy && !runInputsEnabled || uploading}
                     attachmentsAtLimit={files.length + restoredAttachments.length >= (bootstrapData.limits.attachments_per_message ?? 6)}
                     computerEnabled={bootstrapData.features.computer_use === true}
+                    operationsDirectoryEnabled={bootstrapData.features.operations_directory === true}
+                    todayOpsEnabled={todayOpsEnabled}
+                    sideChatEnabled={bootstrapData.features.side_chat === true && Boolean(conversation)}
+                    pluginsEnabled={bootstrapData.features.plugin_mcp === true}
+                    subagentsEnabled={bootstrapData.features.subagents === true}
+                    workflowTemplatesEnabled={bootstrapData.features.workflow_templates === true}
                     onAction={(action) => {
                       if (action === 'attachment') fileRef.current?.click()
                       else if (action === 'context_refs') setContextPickerOpen(true)
+                      else if (action === 'operations_directory') setOperationDirectoryOpen(true)
+                      else if (action === 'today_ops') setTodayOpsOpen(true)
+                      else if (action === 'side_chat') void createSideChat()
                       else if (action === 'skill') setSkillPickerOpen(true)
                       else if (action === 'goal') openGoalPanel()
                       else if (action === 'routine') setRoutinePanelOpen(true)
+                      else if (action === 'plugins') navigate('/settings/plugins')
+                      else if (action === 'subagents') { setSubagentsArmed(true); setWorkbenchPanelTab('task'); setWorkbenchPanelOpen(true) }
+                      else if (action === 'capabilities') setCapabilitiesOpen(true)
+                      else if (action === 'workflow_templates') setWorkflowPickerOpen(true)
                       else if (action === 'computer') setComputerPickerOpen(true)
                     }}
                   />
-                  {bootstrapData.features.plans && workbenchUI && <AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />}
+                  {bootstrapData.features.plans && workbenchUI && conversation?.kind !== 'side' && <AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />}
                   <span className="desktop-agent-compose-spacer" />
                   <div className="desktop-agent-model-picker" ref={modelMenuRef}>
-                    <button type="button" className="desktop-agent-compose-choice" aria-label="选择模型" aria-haspopup="menu" aria-expanded={modelMenuOpen} disabled={!canWrite || !bootstrapData.allow_model_pick || busy} onClick={() => setModelMenuOpen((value) => !value)}>{selectedModelName} <ChevronDown /></button>
+                    <button type="button" className="desktop-agent-compose-choice" aria-label="选择模型" aria-haspopup="menu" aria-expanded={modelMenuOpen} title={!bootstrapData.allow_model_pick ? '管理员已锁定模型，不能切换' : undefined} disabled={!canWrite || !bootstrapData.allow_model_pick || busy} onClick={() => setModelMenuOpen((value) => !value)}>{selectedModelName} <ChevronDown /></button>
                     {modelMenuOpen && <div className="desktop-agent-model-menu" role="menu" aria-label="选择模型">
                       <div className="desktop-agent-model-menu-title">选择模型</div>
                       {bootstrapData.models.length === 0 && <div className="desktop-agent-model-menu-empty">暂无可用模型，请先完成模型能力自检。</div>}
                       {bootstrapData.models.map((model) => {
                         const key = modelKey(model.provider_id, model.model)
-                        return <button type="button" role="menuitemradio" aria-checked={key === selectedModel} key={key} onClick={() => { setModelMenuOpen(false); void updateSelection('model', key) }}>
-                          <span><span>{model.model}</span><small>{model.provider_name}{model.vision ? ' · 看图' : ''}{model.is_default ? ' · 默认' : ''}</small></span>
+                        const unavailable = model.available === false
+                        return <button type="button" role="menuitemradio" aria-checked={key === selectedModel} key={key} disabled={unavailable}
+                          title={unavailable ? model.reason || '模型当前不可用' : undefined}
+                          onClick={() => { setModelMenuOpen(false); void updateSelection('model', key) }}>
+                          <span><span>{model.model}</span><small>{modelRowMeta(model)}</small>{unavailable && model.reason && <small className="desktop-agent-model-menu-reason">{model.reason}</small>}</span>
                           {key === selectedModel && <Check aria-hidden="true" />}
                         </button>
                       })}
+                      <button type="button" className="desktop-agent-model-menu-settings" onClick={() => { setModelMenuOpen(false); navigate('/settings/models') }}>模型设置</button>
                     </div>}
                   </div>
-                  {composerBusy && runInputsEnabled ? <div className="flex items-center gap-1.5">
-                    <Button variant="secondary" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0} onClick={() => void postWorkbenchInput('steer')}>补充当前任务</Button>
-                    <Button variant="outline" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0} onClick={() => void postWorkbenchInput('queue')}>排到下一条</Button>
+                  {composerBusy && runInputsEnabled ? <div className="desktop-agent-run-input-actions">
+                    <div className="desktop-agent-split-action" ref={runInputMenuRef}>
+                      <Button variant="secondary" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0} onClick={() => void postWorkbenchInput('steer')}>补充当前任务</Button>
+                      <button type="button" className="desktop-agent-split-more" aria-label="更多运行中输入动作" aria-haspopup="menu" aria-expanded={runInputMenuOpen} onClick={() => setRunInputMenuOpen((value) => !value)}><ChevronDown aria-hidden="true" /></button>
+                      {runInputMenuOpen && <div role="menu" aria-label="运行中输入动作" className="desktop-agent-run-input-menu">
+                        <button type="button" role="menuitem" disabled={!canSendContent || inputSubmitting || uploading || failedFiles.length > 0}
+                          title={inputSubmitting ? '正在提交上一条输入' : undefined}
+                          onClick={() => { setRunInputMenuOpen(false); void postWorkbenchInput('queue') }}>
+                          <strong>排到下一条</strong><small>当前任务完成后发送</small>
+                        </button>
+                      </div>}
+                    </div>
                     <Button variant="ghost" className="desktop-agent-stop-button" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
                   </div> : composerBusy ? <Button variant="ghost" className="desktop-agent-stop-button" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
                     : <>
-                      <Button variant="primary" icon={<Send className="size-4" />} disabled={!canWrite || accountMismatch || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>
+                      <Button variant="primary" icon={<Send className="size-4" />} disabled={!canWrite || accountMismatch || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : modeActionLabel(selectedMode)}</Button>
                       {busy && <Button variant="ghost" className="desktop-agent-stop-button" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>}
                     </>}
                 </div>
               </div>
             </> : <>
-              {bootstrapData.features.plans && <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 text-xs text-mist-500"><AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} /><span>{selectedMode === 'execute' ? '写入仍需逐张卡片确认' : '只读取与形成建议'}</span></div>}
+              {bootstrapData.features.plans && conversation?.kind !== 'side' && <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 text-xs text-mist-500"><AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} /><span>{selectedMode === 'execute' ? '写入仍需逐张卡片确认' : '只读取与形成建议'}</span></div>}
               <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-mist-200 bg-white p-2 shadow-card focus-within:border-ink-300">
                 <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length + restoredAttachments.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()} className="mb-0.5"><Paperclip className="size-4" /></IconButton>
                 {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)} className="mb-0.5"><AtSign className="size-4" /></IconButton>}
+                {bootstrapData.features.operations_directory === true && <IconButton label="运营目录" disabled={!canWrite || busy || contextRefs.length >= 12} onClick={() => setOperationDirectoryOpen(true)} className="mb-0.5"><Library className="size-4" /></IconButton>}
                 {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)} className="mb-0.5"><Sparkles className="size-4" /></IconButton>}
                 {goalsEnabled && conversationId && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel} className="mb-0.5"><Bot className="size-4" /></IconButton>}
                 {routinesEnabled && <IconButton label="例行任务" onClick={() => setRoutinePanelOpen(true)} className="mb-0.5"><CalendarClock className="size-4" /></IconButton>}
                 <Textarea ref={inputRef} rows={1} value={text} disabled={inputDisabled} onChange={(event) => { textDraftVersionRef.current++; setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px` }} onKeyDown={onInputKeyDown}
                   placeholder={bootstrapData.read_only ? '观察者可以提问，智能体不会修改工作区数据' : !bootstrapData.can_use ? (bootstrapData.reason === 'not_tested' ? '请先完成模型能力自检' : '请先配置支持工具调用的模型') : '发送消息…（Enter 发送，Shift+Enter 换行）'} className="max-h-48 min-h-10 resize-none border-0 bg-transparent px-2 py-2 shadow-none focus:border-transparent focus:ring-0 disabled:bg-transparent" />
                 {busy ? <Button variant="ghost" className="mb-0.5 shrink-0" icon={<Square className="size-4" />} onClick={() => void stop()}>停止</Button>
-                  : <Button variant="primary" className="mb-0.5 shrink-0" icon={<Send className="size-4" />} disabled={!canWrite || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : '发送'}</Button>}
+                  : <Button variant="primary" className="mb-0.5 shrink-0" icon={<Send className="size-4" />} disabled={!canWrite || !canSendContent || uploading || failedFiles.length > 0 || Array.from(text).length > bootstrapData.limits.message_chars} onClick={() => editMessage ? void sendMessage(editMessage) : void sendMessage()}>{uploading ? '上传中' : modeActionLabel(selectedMode)}</Button>}
               </div>
-              <div className="mx-auto mt-1 flex max-w-3xl justify-between px-2 text-[10.5px] text-mist-400"><span>{readyAttachmentIDs.length ? `已添加 ${readyAttachmentIDs.length} 个附件` : '附件支持图片、txt 与 md'}</span><span>{Array.from(text).length} / {bootstrapData.limits.message_chars}</span></div>
+              <div className="mx-auto mt-1 flex max-w-3xl justify-between px-2 text-[12px] text-mist-400"><span>{readyAttachmentIDs.length ? `已添加 ${readyAttachmentIDs.length} 个附件` : '附件支持图片、txt 与 md'}</span><span>{Array.from(text).length} / {bootstrapData.limits.message_chars}</span></div>
             </>}
           </div>
         </div>
       </section>
 
+      {workbenchUI && workbenchPanelOpen && <div className="desktop-agent-panel-backdrop" aria-hidden="true" onClick={() => setWorkbenchPanelOpen(false)} />}
       {workbenchUI && workbenchPanelOpen && <PanelResizer width={workbenchPanelWidth} onWidthChange={setWorkbenchPanelWidth} />}
       {workbenchUI && workbenchPanelOpen && <WorkbenchSidePanel
         width={workbenchPanelWidth}
@@ -1298,14 +1766,16 @@ ${draft.text}` : draft.text))
         activeRun={activeRun}
         busy={busy}
         pendingActions={pendingActions}
+        pendingQuestions={pendingQuestions}
         actionCount={actions.length}
         selectedAccountName={selectedAccountName}
         selectedModelName={selectedModelName}
         attachmentCount={attachmentCount}
-        contextRefs={contextRefs}
+        contextRefs={[...contextRefs, ...pageContextSelections]}
         skillRequests={skillRequests}
         latestSkillUsage={latestSkillUsage}
         artifactsEnabled={bootstrapData.features.artifacts === true}
+        artifactCount={detail?.artifact_count ?? 0}
         goalsEnabled={goalsEnabled}
         compactEnabled={eventResumeEnabled}
         canManageGoals={canManageGoals}
@@ -1313,6 +1783,7 @@ ${draft.text}` : draft.text))
         goal={detail?.goal}
         onCompact={compactRun}
         actions={actions}
+        questions={questions}
         inputs={inputs}
         inputQueuePaused={inputQueuePaused}
         onUpdateInput={updateQueuedInput}
@@ -1321,12 +1792,48 @@ ${draft.text}` : draft.text))
         onResumeInputs={resumeInputQueue}
         onQuoteArtifact={quoteArtifact}
         memoryFeaturesEnabled={bootstrapData.features.personal_memories === true}
+        messages={detail?.messages ?? []}
+        browserGrant={browserGrant}
+        browserPaused={browserPaused}
+        onBrowserTakeOver={() => void takeOverBrowser()}
+        onBrowserHandBack={() => void handBackBrowser()}
+        onStopRun={() => void stop()}
+        onEmptyGoal={() => { setWorkbenchPanelTab('task'); openGoalPanel() }}
+        onEmptyContext={() => setContextPickerOpen(true)}
+        onOpenEvidence={(ref) => {
+          if (ref.kind === 'artifact_version') { setArtifactsOpen(true); return }
+          if (ref.kind === 'action') {
+            const card = document.getElementById(`agent-action-${ref.id}`)
+            card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            card?.focus({ preventScroll: true })
+            card?.setAttribute('data-highlight', '1.5s')
+            window.setTimeout(() => card?.removeAttribute('data-highlight'), 1_500)
+            return
+          }
+          document.querySelector(`[data-message-id="${ref.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }}
       />}
 
       {!workbenchUI && <Dialog open={goalPanelOpen} onClose={() => setGoalPanelOpen(false)} title="任务目标与上下文整理" desc="目标推进仍受账号权限、运行预算和逐张操作卡片确认约束。" width="max-w-2xl">
-        <GoalPanel conversationID={conversation?.id} conversation={conversation} goal={detail?.goal} models={bootstrapData.models} goalsEnabled={goalsEnabled} compactEnabled={eventResumeEnabled} canManage={canManageGoals} busy={busy} onCompact={compactRun} />
+        <GoalPanel conversationID={conversation?.id} conversation={conversation} goal={detail?.goal} models={bootstrapData.models} goalsEnabled={goalsEnabled} compactEnabled={eventResumeEnabled} canManage={canManageGoals} busy={busy} onCompact={compactRun}
+          onOpenEvidence={(ref) => {
+            if (ref.kind === 'artifact_version') { setArtifactsOpen(true); return }
+            if (ref.kind === 'action') {
+              const card = document.getElementById(`agent-action-${ref.id}`)
+              card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              card?.focus({ preventScroll: true })
+              card?.setAttribute('data-highlight', '1.5s')
+              window.setTimeout(() => card?.removeAttribute('data-highlight'), 1_500)
+              return
+            }
+            // read_result：证据 ID 即 tool 消息 ID；goal 面板可能在 Dialog 内，关掉后定位。
+            document.querySelector(`[data-message-id="${ref.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          }} />
       </Dialog>}
 
+      {capabilitiesOpen && <Dialog open onClose={() => setCapabilitiesOpen(false)} title="智能体能力" desc="按业务域列出这个智能体能做什么、需要什么权限、当前是否可用。" width="max-w-3xl">
+        <CapabilityList />
+      </Dialog>}
       {routinesEnabled && <Dialog open={routinePanelOpen} onClose={() => setRoutinePanelOpen(false)} title="受限例行任务" desc="按计划只读查询运营数据，逐次生成私有报告；权限在执行时重新检查。" width="max-w-3xl">
         <RoutinePanel open={routinePanelOpen} canManage={canManageRoutines} models={bootstrapData.models} conversation={conversation} />
       </Dialog>}
@@ -1350,7 +1857,7 @@ ${draft.text}` : draft.text))
         {!localSearchBusy && !localSearchError && localSearchText.trim() && <p role="status" className="mt-3 text-[12px] text-mist-500">找到 {localSearchResults.length} 条消息</p>}
         <div className="mt-3 max-h-80 space-y-1 overflow-y-auto">
           {localSearchResults.map((message) => <button key={message.id} type="button" className="block w-full rounded-lg border border-mist-200 p-3 text-left hover:border-ink-300 hover:bg-ink-50 focus-visible:outline-2 focus-visible:outline-ink-500" onClick={() => jumpToSearchResult(message)}>
-            <span className="text-[11px] font-medium text-mist-500">{message.role === 'user' ? '你' : '助手'} · 第 {message.seq} 条</span>
+            <span className="text-[12px] font-medium text-mist-500">{message.role === 'user' ? '你' : '助手'} · 第 {message.seq} 条</span>
             <span className="mt-1 block whitespace-pre-wrap break-words text-[13px] leading-5 text-mist-800">{message.content.slice(0, 220)}</span>
           </button>)}
           {!localSearchText.trim() && <p className="py-5 text-center text-[13px] text-mist-500">输入关键词，搜索此对话的完整历史。</p>}
@@ -1374,7 +1881,14 @@ ${draft.text}` : draft.text))
               {accountList.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
             </Select>
           </label>
-          {bootstrapData.features.plans && desktopPresentation && !workbenchUI && <div className="space-y-2"><span className="block text-[13px] font-medium text-mist-700">模式</span><AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />{runtimeSummary && <p className="text-xs text-mist-500" data-testid="agent-runtime-config">{runtimeSummary}</p>}</div>}
+          {bootstrapData.features.agent_roles && <label className="block space-y-1.5 text-[13px] font-medium text-mist-700">执行角色
+            <Select aria-label="选择角色" data-testid="agent-role-select" value={selectedRoleID} disabled={!canWrite || busy || rolesQuery.isLoading} onChange={(event) => setSelectedRoleID(event.target.value)}>
+              <option value="">默认（不限定角色）</option>
+              {(rolesQuery.data?.roles ?? []).filter((role) => role.status === 'active').map((role) => <option key={role.id} value={role.id}>{role.name}{role.builtin_key ? ' · 内置' : ''}</option>)}
+            </Select>
+            <span className="block text-xs font-normal text-mist-500">角色限定工具白名单与轮数预算；写入仍逐张卡片确认。</span>
+          </label>}
+          {bootstrapData.features.plans && desktopPresentation && !workbenchUI && conversation?.kind !== 'side' && <div className="space-y-2"><span className="block text-[13px] font-medium text-mist-700">模式</span><AgentModeSelect value={selectedMode} disabled={!canWrite || busy} readOnly={bootstrapData.read_only} onChange={(mode) => void changeMode(mode)} />{runtimeSummary && <p className="text-xs text-mist-500" data-testid="agent-runtime-config">{runtimeSummary}</p>}{runCostSummary && <p className="text-xs text-mist-500" data-testid="agent-run-cost">{runCostSummary}</p>}</div>}
           {/* AG-03：历史消息按创建时的账号保存，切换账号不会改写已发生的对话。 */}
           {accountSwitched && <div data-testid="agent-account-switched"><Notice tone="gamboge">
             新消息将使用「{selectedAccountName}」，当前对话的历史仍属于「{historyAccountName}」。想从干净的上下文开始，请新建对话。
@@ -1390,6 +1904,21 @@ ${draft.text}` : draft.text))
         selected={contextRefs}
         onAdd={(item) => setContextRefs((old) => old.some((ref) => ref.id === item.id && ref.type === item.type) ? old : [...old, item])}
       />
+      <OperationDirectoryDrawer
+        open={operationDirectoryOpen}
+        onClose={() => setOperationDirectoryOpen(false)}
+        accountID={selectedAccount}
+        selected={contextRefs}
+        onAdd={(item) => setContextRefs((old) => old.some((ref) => ref.id === item.id && ref.type === item.type) ? old : [...old, item])}
+      />
+      <WorkflowTemplateDialog
+        open={workflowPickerOpen}
+        onClose={() => setWorkflowPickerOpen(false)}
+        templates={(workflowsQuery.data?.templates ?? []).filter((template) => template.status === 'active')}
+        accountID={selectedAccount}
+        accounts={accountList.map((account) => ({ id: account.id, name: account.name }))}
+        onStarted={workflowStarted}
+      />
       <SkillPickerDialog
         open={skillPickerOpen}
         onClose={() => setSkillPickerOpen(false)}
@@ -1398,22 +1927,47 @@ ${draft.text}` : draft.text))
         workOptions={selectedWorkOptions}
         onAdd={(item) => setSkillRequests((old) => old.some((skill) => skill.skill_id === item.skill_id && skill.work_id === item.work_id) || old.length >= 3 ? old : [...old, item])}
       />
+      <Dialog open={compactDialogOpen} onClose={() => setCompactDialogOpen(false)} title="压缩这段对话？" desc="压缩只影响下一次运行的上下文，不会删除消息。原始消息仍可查看、检索和导出。"
+        footer={<><Button variant="ghost" onClick={() => setCompactDialogOpen(false)}>取消</Button><Button variant="primary" loading={busy} onClick={() => { setCompactDialogOpen(false); void compactRun() }}>开始压缩</Button></>}>
+        <p className="text-[13px] leading-relaxed text-mist-600">会保留任务目标、约束与已确认结论；未确认的内容不会被当作结论。压缩失败时保留原上下文。</p>
+      </Dialog>
       <Dialog open={privacyOpen} onClose={() => { setPrivacyOpen(false); savePrefs.mutate({ agent_privacy_notice_seen: true }) }} title="智能体隐私说明" desc="对话仅你本人可见。工作区所有者和系统管理员也无法查看你的对话；卡片执行会照常写入操作日志，并标记为来自智能体。" footer={<Button variant="primary" onClick={() => { setPrivacyOpen(false); savePrefs.mutate({ agent_privacy_notice_seen: true }) }}>我知道了</Button>}>
         <p className="text-[13px] leading-relaxed text-mist-600">不要在对话或附件中发送 API 密钥、平台密钥、密码或邀请码。智能体读取的信息会按系统规则传给当前选择的模型供应商。</p>
       </Dialog>
+      {todayOpsEnabled && todayOpsOpen && <TodayOpsPanel accountID={selectedAccount} onClose={() => setTodayOpsOpen(false)} />}
       </div>
     </>
   )
 }
 
-function Welcome({ onPrompt, noModel, desktopWorkbench = false }: { onPrompt: (value: string) => void; noModel: boolean; desktopWorkbench?: boolean }) {
-  const examples = ['这周有哪些作品还没做发布前检查？', '帮我从这段笔记里提炼素材', '给《我的文章》起 5 个标题']
-  return <div className={`mx-auto flex min-h-[50%] max-w-2xl flex-col items-center justify-center py-12 text-center ${desktopWorkbench ? 'desktop-agent-workbench-welcome' : ''}`}>
-    <div className="flex size-14 items-center justify-center rounded-2xl bg-ink-50 text-ink-600"><Bot className="size-7" /></div>
-    <h1 className="mt-4 font-display text-xl font-bold text-mist-900">{desktopWorkbench ? '从一件具体的运营任务开始' : '有什么可以帮你？'}</h1>
-    <p className="mt-2 max-w-lg text-[13px] leading-relaxed text-mist-500">可以读取工作区信息并生成建议。任何写入操作都会先列出单张卡片，由你逐张确认执行。</p>
-    {!noModel && <div className={`mt-6 flex flex-wrap justify-center gap-2 ${desktopWorkbench ? 'desktop-agent-workbench-prompts' : ''}`}>{examples.map((example) => <button key={example} type="button" onClick={() => onPrompt(example)} className={`cursor-pointer rounded-full border border-mist-200 bg-white px-3 py-2 text-[12px] text-mist-600 shadow-card hover:border-ink-300 hover:text-ink-700 ${desktopWorkbench ? 'desktop-agent-workbench-prompt' : ''}`}>{example}</button>)}</div>}
+function Welcome({ onPrompt, noModel, desktopWorkbench = false, summary, onOpenTodayOps }: { onPrompt: (value: string) => void; noModel: boolean; desktopWorkbench?: boolean; summary?: string | null; onOpenTodayOps?: () => void }) {
+  // UI-06：三张运营卡只填入输入框，不发送、不切模式、不带权限；摘要一行。
+  // FN-11：today_ops 开启时摘要可点开只读驾驶舱；关闭时仍是不可点的一行摘要。
+  const cards = [
+    { title: '帮我找选题', desc: '从评论、指标与复盘中找下一批可写的题。', prompt: '帮我找下一批可写的选题，并说明理由。' },
+    { title: '改一篇作品', desc: '按平台规则改标题、摘要和正文，改动先看卡片。', prompt: '帮我改一篇作品，先给我看改动卡片。' },
+    { title: '先定发布计划', desc: '给完成稿排时间表，写清账号、形式与检查项。', prompt: '给已完成的作品排一份发布计划，写清账号、形式与检查项。' },
+  ]
+  return <div className={`mx-auto flex min-h-[50%] max-w-2xl flex-col items-center justify-center py-12 text-center ${desktopWorkbench ? 'desktop-agent-welcome-v2' : ''}`}>
+    <div className="desktop-agent-welcome-icon"><Bot aria-hidden="true" /></div>
+    <h1 className="desktop-agent-welcome-heading">{desktopWorkbench ? '让智能体接手一件运营工作' : '有什么可以帮你？'}</h1>
+    <p className="desktop-agent-welcome-sub">{desktopWorkbench ? '它能读写工作区，但每一次写入都要你逐张卡片确认。' : '可以读取工作区信息并生成建议。任何写入操作都会先列出单张卡片，由你逐张确认执行。'}</p>
+    {!noModel && <div className={desktopWorkbench ? 'desktop-agent-welcome-cards' : 'mt-6 flex flex-wrap justify-center gap-2'}>
+      {cards.map((card) => <button key={card.title} type="button" aria-label={`填入：${card.title}`} onClick={() => onPrompt(card.prompt)}
+        className={desktopWorkbench ? 'desktop-agent-welcome-card' : 'cursor-pointer rounded-full border border-mist-200 bg-white px-3 py-2 text-[12px] text-mist-600 shadow-card hover:border-ink-300 hover:text-ink-700'}>
+        {desktopWorkbench
+          ? <><span className="desktop-agent-welcome-card-icon"><Sparkles aria-hidden="true" /></span><strong>{card.title}</strong><span>{card.desc}</span></>
+          : card.title}
+      </button>)}
+    </div>}
+    {workbenchSummaryLine(summary, onOpenTodayOps)}
   </div>
+}
+
+function workbenchSummaryLine(summary?: string | null, onOpenTodayOps?: () => void) {
+  if (!summary) return null
+  if (onOpenTodayOps) return <button type="button" className="desktop-agent-welcome-summary is-link" data-testid="today-ops-welcome-entry" onClick={onOpenTodayOps}>{summary}</button>
+  return <p className="desktop-agent-welcome-summary">{summary}</p>
 }
 
 function Unavailable({ bootstrap, navigate }: { bootstrap: AgentBootstrap; navigate: ReturnType<typeof useNavigate> }) {

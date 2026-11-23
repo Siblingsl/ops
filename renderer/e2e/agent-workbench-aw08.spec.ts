@@ -1,4 +1,4 @@
-import { _electron, expect, test, type Page } from '@playwright/test'
+import { _electron, expect, request as playwrightRequest, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
@@ -72,10 +72,10 @@ async function artifactVersionAndForkJourney(page: Page, screenshotName: string,
 
   let panel
   if (desktop) {
-    const panelToggle = page.getByRole('button', { name: '工作视图', exact: true })
+    const panelToggle = page.locator('.desktop-agent-panel-button')
     if (await panelToggle.getAttribute('aria-expanded') !== 'true') await panelToggle.click()
     panel = page.getByTestId('desktop-agent-side-panel')
-    await panel.getByRole('tab', { name: '产物', exact: true }).click()
+    await panel.getByRole('tab', { name: /^产物/ }).click()
   } else {
     await page.getByRole('button', { name: '查看产物', exact: true }).click()
     panel = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '本对话产物', exact: true }) })
@@ -101,22 +101,71 @@ async function artifactVersionAndForkJourney(page: Page, screenshotName: string,
 
   const beforeQuote = (await localApi(page, 'GET', `/agent/conversations/${sourceID}`)).messages.length
   const quote = '可精确引用的片段'
-  await panel.getByTestId('artifact-text-content').evaluate((element, phrase) => {
-    const content = element.textContent ?? ''
-    const start = content.indexOf(phrase)
-    const node = element.firstChild
-    if (start < 0 || !node) throw new Error('fixture quote was not found in the selected artifact version')
-    const range = document.createRange()
-    range.setStart(node, start)
-    range.setEnd(node, start + phrase.length)
-    const selection = window.getSelection()
-    selection?.removeAllRanges()
-    selection?.addRange(range)
-  }, quote)
+  const selectQuote = async () => {
+    const artifactTab = panel.getByRole('tab', { name: /产物/ })
+    if ((await artifactTab.getAttribute('aria-selected')) !== 'true') await artifactTab.click()
+    await expect(panel.getByTestId('artifact-text-content')).toBeVisible()
+    await panel.getByTestId('artifact-text-content').evaluate((element, phrase) => {
+      const content = element.textContent ?? ''
+      const start = content.indexOf(phrase)
+      const node = element.firstChild
+      if (start < 0 || !node) throw new Error('fixture quote was not found in the selected artifact version')
+      const range = document.createRange()
+      range.setStart(node, start)
+      range.setEnd(node, start + phrase.length)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+    }, quote)
+  }
+  await selectQuote()
+
+  // FN-08：选段反馈表单 → 生成带 artifact/version/anchor 的用户消息引用；不自动发送。
+  await panel.getByTestId('artifact-feedback-open').click()
+  await expect(panel.getByTestId('artifact-feedback-form')).toBeVisible()
+  await panel.getByRole('combobox', { name: '反馈问题类型' }).selectOption('事实错误')
+  await panel.getByRole('textbox', { name: '反馈说明' }).fill('这段与最新数据不一致，请按二版数据修正。')
+  await page.screenshot({ path: resolve(process.cwd(), '../.playwright-results/agent-p1-fn08-feedback.png') })
+  await panel.getByTestId('artifact-feedback-submit').click()
+  await expect(composer).toHaveValue(/【产物反馈 · 事实错误 · artifact .* · v2】/)
+  await expect(composer).toHaveValue(/请只针对所选片段修改/)
+  await expect(page.getByText(`${artifactTitle} · v2`, { exact: true })).toBeVisible()
+  expect((await localApi(page, 'GET', `/agent/conversations/${sourceID}`)).messages).toHaveLength(beforeQuote)
+
+  // 引用选段追问复用同一 anchor 引用，仍不自动发送。
+  await selectQuote()
   await panel.getByRole('button', { name: '引用选段追问', exact: true }).click()
   await expect(composer).toHaveValue(/请基于引用的产物选段继续分析。/)
   await expect(page.getByText(`${artifactTitle} · v2`, { exact: true })).toBeVisible()
   expect((await localApi(page, 'GET', `/agent/conversations/${sourceID}`)).messages).toHaveLength(beforeQuote)
+
+  // FN-08：只导出当前选中片段，不附整份产物或聊天记录。
+  await selectQuote()
+  await panel.getByTestId('artifact-save-selection').click()
+  await expect(page.getByText('已导出选中片段', { exact: true })).toBeVisible()
+
+  // 下载鉴权：本人当前版本可读；越权由 Go 用例断言不泄露内容。
+  const download = await page.evaluate(async (artifactID) => {
+    const response = await fetch(`/api/v1/agent/artifacts/${artifactID}/file?version=2&format=txt`)
+    return { status: response.status, text: await response.text() }
+  }, artifact.id)
+  expect(download.status).toBe(200)
+  expect(download.text).toContain('二版增补')
+
+  // 同工作区非本人下载显式 403；跨工作区 404 由 Go 用例覆盖。
+  const invite = await localApi(page, 'POST', '/workspaces/current/invites', { role: 'viewer', max_uses: 1, days: 1 })
+  const guestName = `aw08-guest-${Date.now()}-${Math.random().toString(16).slice(2, 7)}`
+  const guestAPI = await playwrightRequest.newContext({ baseURL })
+  try {
+    expect((await guestAPI.post('/api/v1/auth/register', { data: { username: guestName, password: 'local-e2e-password-123' } })).status()).toBe(200)
+    const guestCSRF = (await (await guestAPI.get('/api/v1/auth/me')).json()).csrf_token
+    expect((await guestAPI.post('/api/v1/workspaces/join', { data: { code: invite.code, switch: true }, headers: { 'X-CSRF-Token': guestCSRF } })).status()).toBe(200)
+    const deniedDownload = await guestAPI.get(`/api/v1/agent/artifacts/${artifact.id}/file?version=2&format=txt`)
+    expect(deniedDownload.status()).toBe(403)
+    expect(await deniedDownload.text()).not.toContain('二版增补')
+  } finally {
+    await guestAPI.dispose()
+  }
 
   mkdirSync(resolve(process.cwd(), '../.playwright-results'), { recursive: true })
   await page.screenshot({ path: resolve(process.cwd(), `../.playwright-results/${screenshotName}.png`) })
@@ -150,12 +199,20 @@ async function queuedInputJourney(page: Page, screenshotName: string, baseURL: s
   await page.waitForURL(/\/agent\/c\/[a-f0-9-]+$/)
   const conversationID = page.url().split('/').pop()!
   await expect(page.getByRole('button', { name: '补充当前任务', exact: true })).toBeVisible({ timeout: 10_000 })
+  await expect(composer).toBeEditable()
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible()
   const queuedText = '#text 排队输入已安全接收并处理。'
   await composer.fill(queuedText)
+  await page.getByRole('button', { name: '更多运行中输入动作', exact: true }).click()
+  const runInputMenu = page.getByRole('menu', { name: '运行中输入动作', exact: true })
+  await expect(runInputMenu.getByRole('menuitem')).toHaveCount(1)
+  await expect(runInputMenu).toContainText('当前任务完成后发送')
+  mkdirSync(resolve(process.cwd(), '../.playwright-results'), { recursive: true })
+  await page.screenshot({ path: resolve(process.cwd(), '../.playwright-results/agent-p0-run-input-menu.png') })
   const inputResponse = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/agent/conversations/${conversationID}/inputs` && response.request().method() === 'POST')
-  await page.getByRole('button', { name: '排到下一条', exact: true }).click()
+  await runInputMenu.getByRole('menuitem', { name: /排到下一条/ }).click()
   expect((await inputResponse).status()).toBe(202)
-  await page.getByRole('button', { name: '工作视图', exact: true }).click()
+  await page.locator('.desktop-agent-panel-button').click()
   const taskPanel = page.getByTestId('desktop-agent-side-panel')
   await expect(taskPanel.getByRole('heading', { name: '补充与排队', exact: true })).toBeVisible()
   await expect(taskPanel.getByText(/排队输入已安全接收并处理。/)).toBeVisible()

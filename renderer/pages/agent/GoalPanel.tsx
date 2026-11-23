@@ -1,13 +1,19 @@
 import { useEffect, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { errorMessage, get, patch, post } from '@/lib/api'
 import type { AgentConversation, AgentGoal, AgentGoalCriterion, AgentModel } from '@/lib/agent'
+import { formatTokens } from '@/lib/agent-ui.js'
 import { useAccounts } from '@/lib/session'
 import { Badge, Button, Input, Select, Textarea } from '@/components/ui'
 
 type CriterionDraft = { text: string; requires_confirmation: boolean }
 type CompactPreview = { summary_upto_seq: number; through_seq: number; input_chars: number; summary_chars: number; estimated_tokens: number; can_compact: boolean }
+// FN-05：goal-runs 只读投影行。
+type GoalRunView = { id: string; started_at: string; status: string; trigger?: string; rounds: number; read_calls: number; actions_proposed: number }
+
+// FN-05：证据类型 → 业务标签（38 卡片：不暴露内部名）。
+const evidenceKindLabel: Record<string, string> = { artifact_version: '产物版本', action: '已完成卡片', read_result: '读取记录' }
 
 const goalStatus: Record<string, { label: string; tone: 'gray' | 'ink' | 'green' | 'red' | 'gamboge' }> = {
   active: { label: '进行中', tone: 'ink' }, paused: { label: '已暂停', tone: 'gray' }, waiting_user: { label: '等待你处理', tone: 'gamboge' },
@@ -25,7 +31,7 @@ function modelRef(value: string): { provider_id: string; model: string } | undef
   } catch { return undefined }
 }
 
-export function GoalPanel({ conversationID, conversation, goal, models, goalsEnabled, compactEnabled, canManage, busy, onCompact }: {
+export function GoalPanel({ conversationID, conversation, goal, models, goalsEnabled, compactEnabled, canManage, busy, onCompact, onOpenEvidence }: {
   conversationID?: string
   conversation?: AgentConversation
   goal?: AgentGoal | null
@@ -35,6 +41,8 @@ export function GoalPanel({ conversationID, conversation, goal, models, goalsEna
   canManage: boolean
   busy: boolean
   onCompact: () => Promise<unknown>
+  // FN-05：证据定位回调——artifact_version 打开产物面板，action/read_result 滚动到消息/卡片。
+  onOpenEvidence?: (ref: { kind: string; id: string }) => void
 }) {
   const qc = useQueryClient()
   const accounts = useAccounts()
@@ -51,6 +59,15 @@ export function GoalPanel({ conversationID, conversation, goal, models, goalsEna
   const [tokenBudget, setTokenBudget] = useState('')
   const [preview, setPreview] = useState<CompactPreview | null>(null)
   const [previewBusy, setPreviewBusy] = useState(false)
+  // FN-05：展开的证据条目（criterionId）；按 run 迭代列表。
+  const [evidenceOpenID, setEvidenceOpenID] = useState('')
+  const goalRuns = useQuery({
+    queryKey: ['agent-goal-runs', conversationID, goal?.revision],
+    enabled: Boolean(conversationID && goalsEnabled && goal),
+    queryFn: () => get<{ runs: GoalRunView[] }>(`/agent/conversations/${conversationID}/goal-runs`),
+    staleTime: 15_000,
+    retry: false,
+  })
 
   useEffect(() => {
     if (editing) return
@@ -132,12 +149,34 @@ export function GoalPanel({ conversationID, conversation, goal, models, goalsEna
             <p className="whitespace-pre-wrap break-words text-sm text-mist-700">{goal.objective}</p>
             <ul className="space-y-2">{goal.criteria.map((criterion) => <li key={criterion.id} className="rounded-lg border border-mist-200 p-2.5 text-xs">
               <div className="flex items-start justify-between gap-2"><span className="text-mist-700">{criterion.text}</span><Badge tone={criterion.status === 'verified' || criterion.status === 'confirmed' ? 'green' : criterion.status === 'needs_confirmation' ? 'gamboge' : 'gray'}>{({ verified: '已核验', confirmed: '你已确认', needs_confirmation: '待你确认', unverifiable: '无法验证', unverified: '未完成' } as Record<string, string>)[criterion.status] ?? criterion.status}</Badge></div>
-              {criterion.evidence_refs.length > 0 && <p className="mt-1 text-mist-500">已关联 {criterion.evidence_refs.length} 项证据</p>}
+              {/* FN-05：证据可展开，逐条定位（产物面板/卡片/读取记录）。 */}
+              {criterion.evidence_refs.length > 0 && <div className="mt-1">
+                <button type="button" className="text-mist-500 underline-offset-2 hover:underline" aria-expanded={evidenceOpenID === criterion.id}
+                  onClick={() => setEvidenceOpenID((value) => value === criterion.id ? '' : criterion.id)}>
+                  已关联 {criterion.evidence_refs.length} 项证据
+                </button>
+                {evidenceOpenID === criterion.id && <ul className="mt-1 space-y-1">
+                  {criterion.evidence_refs.map((ref, index) => <li key={`${ref.kind}:${ref.id}:${index}`} className="flex items-center gap-2 text-mist-500">
+                    <span className="rounded border border-mist-200 bg-white px-1.5 py-px">{evidenceKindLabel[ref.kind] ?? ref.kind}</span>
+                    <span className="truncate font-mono">{ref.id.slice(0, 8)}</span>
+                    {onOpenEvidence && <button type="button" className="text-accent-600 hover:underline" onClick={() => onOpenEvidence(ref)}>查看</button>}
+                  </li>)}
+                </ul>}
+              </div>}
               {canManage && criterion.status === 'needs_confirmation' && <Button type="button" className="mt-2" size="sm" disabled={busy || saving} onClick={() => void confirmCriterion(criterion)}>确认此项完成</Button>}
             </li>)}</ul>
             {goal.constraints && <p className="text-xs text-mist-500">约束：{goal.constraints}</p>}
-            <p className="text-xs text-mist-500">预算：{goal.used_runs}/{goal.run_budget} 次 · {goal.used_seconds}/{goal.seconds_budget} 秒 · {goal.token_budget ? `${goal.used_tokens}/${goal.token_budget} tokens` : `已用 ${goal.used_tokens} tokens`}{goal.allow_background ? ' · 允许持续推进' : ' · 仅手动继续'}</p>
-            {goal.blocker && <p className="text-xs text-danger" role="status">卡点：{goal.blocker}</p>}
+            <p className="text-xs text-mist-500">预算：{goal.used_runs}/{goal.run_budget} 次 · {goal.used_seconds}/{goal.seconds_budget} 秒 · {goal.token_budget ? `${formatTokens(goal.used_tokens)}/${formatTokens(goal.token_budget)} tokens` : `已用 ${formatTokens(goal.used_tokens)} tokens`}{goal.allow_background ? ' · 允许持续推进' : ' · 仅手动继续'}</p>
+            {/* FN-05：按 run 迭代——每次绑定目标的运行一行（时间/状态/轮次/对象计数）。 */}
+            {goalRuns.data?.runs?.length ? <div className="rounded-lg border border-mist-200 p-2.5" data-testid="agent-goal-runs">
+              <h4 className="mb-1 text-xs font-semibold text-mist-600">按运行迭代</h4>
+              <ul className="space-y-1">{goalRuns.data.runs.slice(0, 5).map((run) => <li key={run.id} className="flex items-center gap-2 text-xs text-mist-500">
+                <Badge tone={run.status === 'completed' ? 'green' : run.status === 'failed' ? 'red' : 'gray'}>{({ completed: '已完成', failed: '失败', stopped: '已停止', running: '运行中', queued: '排队中', awaiting_confirmation: '待确认' } as Record<string, string>)[run.status] ?? run.status}</Badge>
+                <span>{new Date(run.started_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                <span>{run.rounds} 轮 · 读 {run.read_calls} 项 · 提卡 {run.actions_proposed}</span>
+              </li>)}</ul>
+            </div> : null}
+            {goal.blocker && <p className="text-xs text-danger" role="status">卡点：{goal.blocker}{canManage && <button type="button" className="ml-2 underline underline-offset-2" onClick={() => setEditing(true)}>编辑目标调整方向</button>}</p>}
             {canManage && <div className="flex flex-wrap gap-2">
               {goal.status !== 'completed' && goal.status !== 'cancelled' && <Button type="button" size="sm" variant="outline" disabled={saving || busy && goal.status !== 'active'} onClick={() => setEditing(true)}>编辑目标</Button>}
               {(goal.status === 'active' || goal.status === 'waiting_user') && <Button type="button" size="sm" variant="outline" loading={saving} onClick={() => void control('pause')}>暂停</Button>}

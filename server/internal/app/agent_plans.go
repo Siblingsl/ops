@@ -186,11 +186,15 @@ func (s *Server) agentMetaUpdatePlanStep(ctx context.Context, st *agentRunState,
 	default:
 		return nil, "", apiErr(422, "invalid_arguments", "计划步骤状态无效")
 	}
-	var evidence []agentPlanEvidenceRef
+	var evidence = []agentPlanEvidenceRef{}
 	if _, exists := args["evidence_refs"]; exists {
 		if err := agentDecodeToolArgument(args, "evidence_refs", &evidence); err != nil {
 			return nil, "", err
 		}
+	}
+	if evidence == nil {
+		// json.Marshal(nil slice) produces JSON null, violating jsonb_typeof='array'.
+		evidence = []agentPlanEvidenceRef{}
 	}
 	if len(evidence) > 10 {
 		return nil, "", apiErr(422, "invalid_arguments", "每个计划步骤最多关联10项证据")

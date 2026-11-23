@@ -299,8 +299,8 @@ func (s *Server) postAgentConversationFork(w http.ResponseWriter, r *http.Reques
 	}
 	var branchID uuid.UUID
 	if err := tx.QueryRow(ctx, `INSERT INTO agent_conversation(workspace_id,user_id,account_id,model_provider_id,model,mode,
-		reasoning_effort,title,title_source,parent_id,fork_upto_seq,fixed_context_refs)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`, identity.WorkspaceID, identity.UserID,
+		reasoning_effort,title,title_source,parent_id,fork_upto_seq,fixed_context_refs,kind)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'fork') RETURNING id`, identity.WorkspaceID, identity.UserID,
 		lockedSource.AccountID, lockedSource.ModelProviderID, lockedSource.Model, lockedSource.Mode, lockedSource.ReasoningEffort, title, titleSource, sourceID, cutoff, fixedJSON).Scan(&branchID); err != nil {
 		return err
 	}

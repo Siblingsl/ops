@@ -355,6 +355,12 @@ func (s *Server) postAgentActionExecute(w http.ResponseWriter, r *http.Request) 
 	if !s.now().Before(act.ExpiresAt) {
 		return apiErr(409, "agent_action_state_invalid", "这张卡片已过期，请让智能体重新提出")
 	}
+	// REF41 A2-A2：demo 运行的卡片执行返回 demo_blocked 预览——提案可以看，
+	// 真实执行（外部副作用）不发生。执行入口是唯一副作用闸。
+	var runDemo bool
+	if err := s.db.QueryRow(ctx, `SELECT demo FROM agent_run WHERE id=$1`, act.RunID).Scan(&runDemo); err == nil && runDemo && agentDemoBlocked(act.ToolName) {
+		return apiErr(409, "demo_blocked", agentDemoBlockedResult(act.ToolName))
+	}
 	// 第 3 项：确认、门槛、二次确认。
 	if !req.Confirm {
 		return apiErr(409, "agent_gate_ack_required", "请先确认再执行")

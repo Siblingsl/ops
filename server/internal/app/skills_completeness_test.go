@@ -62,8 +62,17 @@ func TestSkillBuiltinRegistryMatchesDocument(t *testing.T) {
 			t.Fatalf("%s version/UUID differs from v0.3", cols[1])
 		}
 	}
-	if len(names) != 12 || len(seen) != 12 || len(seen) != len(builtinSkills) {
-		t.Fatalf("document/registry count: %d/%d", len(seen), len(builtinSkills))
+	// D-211：docs/23 第 13 节仍固定 12 条正文；注册表多出的 builtin:publish_flow
+	// 由 D-211 显式登记（REF41 A5），其字段在该测试下方单独核对。
+	if len(names) != 12 || len(seen) != 12 {
+		t.Fatalf("document count: %d/%d", len(seen), len(names))
+	}
+	if len(builtinSkills) != 13 {
+		t.Fatalf("registry count: %d, want 13 (D-211)", len(builtinSkills))
+	}
+	pf := skillBuiltinByKey("builtin:publish_flow")
+	if pf == nil || pf.Fields.Name != "发布流程" || pf.Fields.Status != "active" || pf.Fields.TaskEnabled || !pf.Fields.AgentEnabled {
+		t.Fatalf("builtin:publish_flow (D-211) fields invalid: %+v", pf)
 	}
 	for _, key := range []string{"builtin:topic_screening", "builtin:title_diagnosis", "builtin:structure_borrowing", "builtin:cover_copy"} {
 		if !seen[key] {

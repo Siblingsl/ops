@@ -165,6 +165,7 @@ function PairingWizard() {
   const [phase, setPhase] = useState<PairingPhase>('loading')
   const [snapshot, setSnapshot] = useState<DesktopBrowserPairingSnapshot | null>(null)
   const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
   // 确认流程接管状态后停止桥状态轮询（否则 done/bridge-paired 会被 tick 拉回短码态）。
   const pollingStoppedRef = useRef(false)
   // 确认失败回到原状态时重启轮询（短码可能已过期，需要盯扩展重连生成的新短码）。
@@ -179,6 +180,19 @@ function PairingWizard() {
     if (!result.ok) return { kind: 'bridge-down' }
     return { kind: 'ok', snapshot: result.snapshot }
   }, [])
+
+  // BR-05：连接诊断可复制（只含扩展实例/宿主 pid，不含会话密钥）。
+  const copyDiagnostic = async () => {
+    const id = snapshot?.extension_instance_id || (snapshot?.host_pid ? `host:${snapshot.host_pid}` : '')
+    if (!id) return
+    try {
+      await navigator.clipboard.writeText(id)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      setError('复制失败，请手动记录诊断 ID。')
+    }
+  }
 
   // 桥状态轮询：无有效短码时每 2s 重读（扩展连接/唤醒后产生新短码）；有短码时 5s
   // 慢轮询盯过期。确认中/完成后停止。桥未运行同样重试（等待产品路径桥起来）。
@@ -273,6 +287,7 @@ function PairingWizard() {
   if (phase === 'bridge-down') {
     return <div className="mt-2 rounded-lg border border-mist-200 bg-white p-3" data-testid="pairing-wizard">
       <p className="text-[12px] text-gamboge-700">浏览器桥未在本会话运行；OPS 桌面端重启后会自动重试。</p>
+      <Button size="sm" variant="secondary" className="mt-2" onClick={() => setPollEpoch((e) => e + 1)}>重新检测</Button>
     </div>
   }
   if (phase === 'done') {
@@ -282,23 +297,29 @@ function PairingWizard() {
   }
   if (phase === 'waiting-extension') {
     return <div className="mt-2 rounded-lg border border-mist-200 bg-white p-3" data-testid="pairing-wizard">
-      <p className="text-[12px] text-mist-600">等待 Chrome 扩展连接 OPS…请确认 Chrome 已打开、扩展已启用，且本机宿主已注册。</p>
-      {snapshot?.pairing?.expired && <p className="mt-1 text-[11px] text-gamboge-700">上一枚短码已过期（5 分钟有效）；扩展重连后会自动生成新短码。</p>}
+      <p className="text-[12px] text-mist-600" data-testid="pairing-not-installed"><strong>未安装扩展</strong>：未检测到 Chrome 扩展连接。请打开 Chrome、确认 OPS 扩展已安装并启用，且本机宿主已注册。</p>
+      {snapshot?.pairing?.expired && <p className="mt-1 text-[12px] text-gamboge-700">上一枚短码已过期（5 分钟有效）；扩展重连后会自动生成新短码。</p>}
       {error && <p className="mt-1 text-[12px] text-gamboge-700" role="alert">{error}</p>}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="secondary" onClick={() => setPollEpoch((e) => e + 1)}>检测连接</Button>
+        {(snapshot?.extension_instance_id || snapshot?.host_pid) && <Button size="sm" variant="ghost" onClick={() => void copyDiagnostic()}>
+          {copied ? '已复制诊断 ID' : '复制诊断 ID'}
+        </Button>}
+      </div>
     </div>
   }
   const pairing = snapshot?.pairing ?? null
   return <div className="mt-2 rounded-lg border border-mist-200 bg-white p-3" data-testid="pairing-wizard">
     {phase === 'bridge-paired'
-      ? <p className="text-[12px] text-mist-600">本机桥已与扩展配对；点击下方按钮完成服务端绑定登记。</p>
+      ? <p className="text-[12px] text-mist-600" data-testid="pairing-not-connected"><strong>未连接</strong>：本机桥已与 Chrome 扩展配对；点击下方按钮完成服务端绑定登记。</p>
       : <>
-        <p className="text-[12px] text-mist-600">请核对 Chrome 扩展弹窗中显示的短码是否与下方一致：</p>
+        <p className="text-[12px] text-mist-600" data-testid="pairing-not-connected"><strong>未连接</strong>：已检测到 Chrome 扩展，请在扩展弹窗点击连接并核对下方短码。</p>
         <p className="my-2 text-center text-2xl font-bold tracking-[0.5em] text-primary" data-testid="pairing-code">{pairing?.code ?? '------'}</p>
       </>}
     {error && <p className="mb-1 text-[12px] text-gamboge-700" role="alert">{error}</p>}
     <Button size="sm" variant="primary" aria-label={phase === 'bridge-paired' ? '完成服务端绑定' : '确认配对'} disabled={phase === 'confirming'} onClick={() => void confirm()}>
       {phase === 'confirming' ? '确认中…' : phase === 'bridge-paired' ? '完成服务端绑定' : '确认配对'}
     </Button>
-    {phase === 'code' && <p className="mt-1 text-[11px] text-mist-500">短码仅用于人工核对，不是认证凭据。确认后 OPS 与扩展建立本机会话，并在服务端登记绑定。</p>}
+    {phase === 'code' && <p className="mt-1 text-[12px] text-mist-500">短码仅用于人工核对，不是认证凭据。确认后 OPS 与扩展建立本机会话，并在服务端登记绑定。</p>}
   </div>
 }

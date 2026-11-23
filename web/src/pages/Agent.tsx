@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AtSign, Bot, CalendarClock, FileText, LoaderCircle, Menu, RotateCcw,
+  AtSign, Bot, CalendarClock, FileText, ListChecks, LoaderCircle, Menu, RotateCcw,
   Paperclip, Send, Settings2, Sparkles, Square, X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -11,13 +11,14 @@ import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Button, IconButton, Input, Notice, Select, Textarea } from '@/components/ui'
 import { del, errorMessage, get, patch, post, uploadFormData } from '@/lib/api'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
+import { fmtCostMicros } from '@/lib/format'
 import { useAccounts, useCurrentAccount } from '@/lib/session'
 import { useSavePrefs } from '@/lib/v3'
 import { pagePollIntervalMs } from '@/lib/page-poll'
 import { usePageVisible } from '@/lib/visibility'
 import {
   type AgentAttachment, type AgentBootstrap, type AgentConversation, type AgentConversationDetail,
-  type AgentMessage, type AgentMode, type AgentQuestion,
+  type AgentMessage, type AgentMode, type AgentQuestion, type AgentRole, type WorkflowTemplate,
   useAgentBootstrap,
 } from '@/lib/agent'
 import { AgentMarkdown } from '@/lib/agent-markdown'
@@ -29,12 +30,13 @@ import { DelegationPanel } from '@/pages/agent/DelegationPanel'
 import { AttachmentReceipt } from '@/pages/agent/AttachmentReceipt'
 import { AgentConversationList } from '@/pages/agent/ConversationList'
 import {
-  AgentModeSelect, BrowserEvidenceNotice, MessageView, RunStatus,
+  AgentModeSelect, BrowserEvidenceNotice, MessageView, RunOutcomeNotice, RunStatus,
   attachmentVariantURL, modelKey,
 } from '@/pages/agent/MessageChrome'
 import { useAgentRun } from '@/pages/agent/useAgentRun'
 import { AgentWorkbenchPanels } from '@/pages/agent/Workbench'
 import { MemoryOverrideSection } from '@/pages/agent/MemoryOverrideSection'
+import { WorkflowTemplateDialog } from '@/pages/agent/workflow-dialog'
 
 type DraftAttachment = {
   clientID: string
@@ -70,6 +72,10 @@ export default function Agent() {
   const [uploading, setUploading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [selectedMode, setSelectedMode] = useState<AgentMode>('execute')
+  // REF41 A6：角色 bot 选择（空=默认无角色；agent_roles feature 开时显示）。
+  const [selectedRoleID, setSelectedRoleID] = useState('')
+  // REF41 A7：工作流模板选择（启动只建 conversation+run+plan，不执行工具）。
+  const [workflowPickerOpen, setWorkflowPickerOpen] = useState(false)
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedAccount, setSelectedAccount] = useState('')
   // AG-03：对话创建时绑定的账号。切换后历史仍属于原账号，必须明确提示，不能默默换上下文。
@@ -116,6 +122,20 @@ export default function Agent() {
   const sendDestinationConversationID = useRef('')
 
   const bootstrapData = bootstrap.data
+  const rolesQuery = useQuery({
+    queryKey: ['agent-roles'],
+    queryFn: () => get<{ roles: AgentRole[] }>('/agent-roles'),
+    enabled: !!bootstrapData?.features.agent_roles,
+  })
+  const workflowStarted = (result: { conversation_id: string }, template: WorkflowTemplate) => {
+    toast.success(`工作流「${template.name}」已生成计划（${template.steps.length} 步）；打开新对话逐步确认执行。`)
+    if (result.conversation_id) navigate(`/agent/c/${result.conversation_id}`)
+  }
+  const workflowsQuery = useQuery({
+    queryKey: ['workflow-templates'],
+    queryFn: () => get<{ templates: WorkflowTemplate[] }>('/workflows'),
+    enabled: !!bootstrapData?.features.workflow_templates,
+  })
   const organizeEnabled = bootstrapData?.features?.conversation_organize === true
   const goalsEnabled = bootstrapData?.features?.goals === true
   const routinesEnabled = bootstrapData?.features?.routines === true
@@ -290,6 +310,9 @@ export default function Agent() {
   const modelRef = selectedModelOption ? { provider_id: selectedModelOption.provider_id, model: selectedModelOption.model } : undefined
   const actualModel = detail?.last_run?.config_snapshot?.actual_model
   const runtimeSummary = actualModel ? `最近运行：${detail?.last_run?.mode === 'discuss' ? '讨论' : detail?.last_run?.mode === 'plan' ? '计划' : '执行'} · ${actualModel.channel === 'desktop' ? '客户端模型通道' : '服务器模型通道'} · ${actualModel.provider_name ?? ''} / ${actualModel.model}` : ''
+  const runCostSummary = detail?.last_run
+    ? `本轮 token：输入 ${(detail.last_run.prompt_tokens ?? 0).toLocaleString('zh-CN')} · 输出 ${(detail.last_run.completion_tokens ?? 0).toLocaleString('zh-CN')} · ${detail.last_run.cost_micros == null ? '未配置价格' : `费用 ${fmtCostMicros(detail.last_run.cost_micros, detail.last_run.cost_currency)}`}`
+    : ''
   const createConversation = async () => {
     const body = { ...(selectedAccount ? { account_id: selectedAccount } : {}), ...(modelRef ? { model: modelRef } : {}) }
     const key = JSON.stringify(body)
@@ -347,6 +370,7 @@ export default function Agent() {
         ...(modelRef ? { model: modelRef } : {}),
         ...(requestID ? { request_id: requestID } : {}),
         ...(replacedQuestion ? { supersede_question_id: replacedQuestion.id } : {}),
+        ...(!edit && bootstrapData?.features.agent_roles && selectedRoleID ? { role_id: selectedRoleID } : {}),
       }
       const accepted = await consumeRun(conv.id, edit
         ? `/agent/conversations/${conv.id}/messages/${edit.id}/edit`
@@ -690,6 +714,7 @@ export default function Agent() {
                 {message.role === 'assistant' && message.run_id && plans.filter((plan) => plan.source_run_id === message.run_id).map((plan) => <AgentPlanCard key={plan.id} plan={plan} canWrite={canWrite} busy={busy} blocked={!!pendingQuestion} onAccept={(item) => void acceptPlan(item)} />)}
                 {message.role === 'assistant' && message.run_id && questions.filter((question) => question.run_id === message.run_id).map((question) => <AgentQuestionCard key={question.id} question={question} canWrite={canWrite} busy={busy} onAnswer={(item, answers) => void answerQuestion(item, answers)} />)}
               </div>})}
+              {plans.filter((plan) => !messages.some((message) => message.run_id === plan.source_run_id)).map((plan) => <AgentPlanCard key={plan.id} plan={plan} canWrite={canWrite} busy={busy} blocked={!!pendingQuestion} onAccept={(item) => void acceptPlan(item)} />)}
               {streamText && <div className="flex justify-start"><div className="max-w-[82%] rounded-2xl bg-white px-4 py-3 shadow-card"><AgentMarkdown text={streamText} /><p className="mt-2 text-[12px] text-mist-500">正在生成，内容尚未完成</p></div></div>}
               {/* AG-04：离开页面时没写完的回复。服务端整轮结束后才落库，这里先把已生成的部分显示出来，
                   并说明「服务端仍在继续」，避免用户以为内容丢了而重新发一遍。 */}
@@ -714,7 +739,9 @@ export default function Agent() {
           </div>}
           <div className="shrink-0 border-t border-mist-200 bg-white px-3 pb-[calc(env(safe-area-inset-bottom)+4.5rem)] pt-3 md:pb-4">
             <RunStatus activeRun={activeRun} streamStage={streamStage} toolName={messages.filter((message) => message.run_id === activeRun?.id).flatMap((message) => message.tool_calls ?? []).find((call) => call.status === 'running')?.name} connection={streamConnection} pendingActions={pendingActions} error={streamError} completedNotice={completedNotice} />
+            <RunOutcomeNotice run={detail?.last_run} />
             {bootstrapData.features.plans && runtimeSummary && <p className="mx-auto mb-3 max-w-3xl px-3 text-xs text-mist-500" data-testid="agent-runtime-config">{runtimeSummary}</p>}
+            {runCostSummary && <p className="mx-auto mb-3 max-w-3xl px-3 text-xs text-mist-500" data-testid="agent-run-cost">{runCostSummary}</p>}
             {!bootstrapData.can_use && (bootstrapData.reason === 'no_model' || bootstrapData.reason === 'not_tested') && <Notice tone="gamboge" className="mx-auto mb-2 max-w-3xl">{bootstrapData.reason === 'not_tested' ? '模型已经配置好了，但还没有完成能力自检。完成一次自检后就能开始对话。' : '还没有配置可用于对话的模型，请到模型配置页添加支持工具调用的模型。'}历史对话仍可查看。 <a href="/settings/models" className="underline">去模型配置</a></Notice>}
             {pendingActions > 0 && <div className="mx-auto mb-2 max-w-3xl text-[12px] text-mist-500">等待你逐张处理 {pendingActions} 项后，智能体会继续。卡片操作入口显示在对应消息下方。</div>}
             {detail?.can_continue && !busy && !actionExecuting && pendingActions === 0 && <div className="mx-auto mb-2 max-w-3xl text-right"><Button size="sm" variant="ghost" onClick={continueRun}>继续</Button></div>}
@@ -762,6 +789,7 @@ export default function Agent() {
                 <IconButton label="添加附件" disabled={!canWrite || busy || uploading || files.length + restoredAttachments.length >= (bootstrapData.limits.attachments_per_message ?? 6)} onClick={() => fileRef.current?.click()} className="mb-0.5"><Paperclip className="size-4" /></IconButton>
                 {bootstrapData.features.context_refs && <IconButton label="引用资料（@）" disabled={!canWrite || busy || contextRefs.length >= 12} onClick={() => setContextPickerOpen(true)} className="mb-0.5"><AtSign className="size-4" /></IconButton>}
                 {bootstrapData.features.skill_requests && <IconButton label="请求技能（$）" disabled={!canWrite || busy || skillRequests.length >= 3} onClick={() => setSkillPickerOpen(true)} className="mb-0.5"><Sparkles className="size-4" /></IconButton>}
+                {bootstrapData.features.workflow_templates && <IconButton label="工作流模板" disabled={!canWrite || busy} onClick={() => setWorkflowPickerOpen(true)} className="mb-0.5" data-testid="workflow-picker-trigger"><ListChecks className="size-4" /></IconButton>}
                 {goalsEnabled && conversationId && <IconButton label="任务目标与上下文整理" onClick={openGoalPanel} className="mb-0.5"><Bot className="size-4" /></IconButton>}
                 {routinesEnabled && <IconButton label="例行任务" onClick={() => setRoutinePanelOpen(true)} className="mb-0.5"><CalendarClock className="size-4" /></IconButton>}
                 <Textarea ref={inputRef} rows={1} value={text} disabled={inputDisabled} onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px` }} onKeyDown={onInputKeyDown}
@@ -810,6 +838,14 @@ export default function Agent() {
           {!localSearchBusy && !localSearchError && localSearchText.trim() && !localSearchResults.length && <p className="py-5 text-center text-[13px] text-mist-500">没有匹配的消息</p>}
         </div>
       </Dialog>
+      <WorkflowTemplateDialog
+        open={workflowPickerOpen}
+        onClose={() => setWorkflowPickerOpen(false)}
+        templates={(workflowsQuery.data?.templates ?? []).filter((template) => template.status === 'active')}
+        accountID={selectedAccount}
+        accounts={accountList.map((account) => ({ id: account.id, name: account.name }))}
+        onStarted={workflowStarted}
+      />
       <Dialog open={settingsOpen} onClose={() => setSettingsOpen(false)} title="对话设置" desc="选择本对话使用的模型与操作账号。">
         <div className="space-y-4">
           <label className="block space-y-1.5 text-[13px] font-medium text-mist-700">模型
@@ -827,6 +863,13 @@ export default function Agent() {
               {accountList.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
             </Select>
           </label>
+          {bootstrapData.features.agent_roles && <label className="block space-y-1.5 text-[13px] font-medium text-mist-700">执行角色
+            <Select aria-label="选择角色" data-testid="agent-role-select" value={selectedRoleID} disabled={!canWrite || busy || rolesQuery.isLoading} onChange={(event) => setSelectedRoleID(event.target.value)}>
+              <option value="">默认（不限定角色）</option>
+              {(rolesQuery.data?.roles ?? []).filter((role) => role.status === 'active').map((role) => <option key={role.id} value={role.id}>{role.name}{role.builtin_key ? ' · 内置' : ''}</option>)}
+            </Select>
+            <span className="block text-xs font-normal text-mist-500">角色限定工具白名单与轮数预算；写入仍逐张卡片确认。</span>
+          </label>}
           {/* AG-03：历史消息按创建时的账号保存，切换账号不会改写已发生的对话。 */}
           {accountSwitched && <div data-testid="agent-account-switched"><Notice tone="gamboge">
             新消息将使用「{selectedAccountName}」，当前对话的历史仍属于「{historyAccountName}」。想从干净的上下文开始，请新建对话。

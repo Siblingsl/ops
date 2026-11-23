@@ -20,6 +20,10 @@ export interface DelegationItem {
   task: string
   state: string
   generation: number
+  model?: string
+  allowed_tool_count?: number
+  context_ref_count?: number
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
   result_summary?: string
   error_code?: string
   result_artifact_id?: string
@@ -198,6 +202,10 @@ export function DelegationPanel({ conversationId, onStopped, onNavigateArtifact,
                   {d.state === 'running' && <LoaderCircle className="ml-1 inline size-3 animate-spin" aria-hidden="true" />}
                   {d.state === 'succeeded' && d.result_summary && <span className="ml-1 text-mist-500">· {d.result_summary.slice(0, 80)}</span>}
                   {d.error_code && <span className="ml-1 text-danger">· {d.error_code}</span>}
+                </p>
+                <p className="mt-1 text-xs text-mist-500" data-testid={`delegation-meta-${d.id}`}>
+                  范围：{d.context_ref_count ?? 0} 项引用 · {d.allowed_tool_count ?? 0} 个工具 · 模型 {d.model || '继承父模型'}
+                  {(d.usage?.total_tokens ?? 0) > 0 && ` · 耗用 ${d.usage!.total_tokens} tokens`}
                 </p>
                 {/* 深化 4/5：委派结果产物跳转——succeeded 且有产物时显示链接。 */}
                 {d.state === 'succeeded' && d.result_artifact_id && onNavigateArtifact &&

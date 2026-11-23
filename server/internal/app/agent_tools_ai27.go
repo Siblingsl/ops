@@ -112,12 +112,13 @@ func ai27DelegationTools() []AgentTool {
 	return []AgentTool{
 		{
 			Name: "delegate_task", Domain: "subagent", Kind: toolG, Method: "POST",
-			Path:        "/tools/subagent/conversations/{id}/delegation-groups",
+			Path:        "/tools/subagent/conversations/{conversationId}/delegation-groups",
 			Description: "将当前任务拆分为 1~2 个独立的子任务并行研究。子任务只能提案结果，不能执行业务写入。父 run 汇总时保留来源、分歧与失败。",
 			Params: []ToolParam{
-				pPath("conversationId"),
-				pBody("parent_run_id", `{"type":"string"}`, true, "U"),
-				pBody("delegations", `{"type":"array","items":{"type":"object","properties":{"task":{"type":"string"},"request_id":{"type":"string"}}},"minItems":1,"maxItems":2}`, true, "U"),
+				// 会话与父 run 由当前运行注入（agentHandleToolCall），模型无需也无法可靠提供。
+				{Name: "conversationId", In: "path", Schema: js(schemaUUID), Required: false},
+				pBody("parent_run_id", `{"type":"string"}`, false, "U"),
+				pBody("delegations", `{"type":"array","items":{"type":"object","properties":{"task":{"type":"string"},"request_id":{"type":"string"},"allowed_tools":{"type":"array","items":{"type":"string"},"maxItems":20},"context_refs":{"type":"array","items":{"type":"object"}}},"minItems":1,"maxItems":2}`, true, "U"),
 			},
 			MinRole: roleEditor,
 		},

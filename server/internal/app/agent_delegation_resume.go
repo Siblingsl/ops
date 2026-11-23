@@ -747,7 +747,7 @@ func (s *Server) listConversationDelegationGroups(w http.ResponseWriter, r *http
 	if err := s.requireAgentFeature(r.Context(), "subagents"); err != nil {
 		return err
 	}
-	conversationID, err := uuid.Parse(chi.URLParam(r, "id"))
+	conversationID, err := uuid.Parse(chi.URLParam(r, "conversationId"))
 	if err != nil {
 		return errNotFound
 	}
@@ -889,10 +889,14 @@ func (s *Server) patchDelegationGroupBudget(w http.ResponseWriter, r *http.Reque
 	return ok(w, view)
 }
 
-// maxRounds 返回本次运行的轮次上限：子 run 取 4 轮，其余沿用 agentMaxRounds。
+// maxRounds 返回本次运行的轮次上限：子 run 取 4 轮；角色 bot 取角色值与全局值较小者
+//（REF41 A6-A5）；其余沿用 agentMaxRounds。
 func (st *agentRunState) maxRounds() int {
 	if st.RoundsLimit > 0 {
 		return st.RoundsLimit
+	}
+	if st.Role != nil && st.Role.MaxRounds > 0 {
+		return st.Role.MaxRounds
 	}
 	return agentMaxRounds
 }

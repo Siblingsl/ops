@@ -34,6 +34,8 @@ type agentRunRequest struct {
 	Mode                *string                 `json:"mode"`
 	ReasoningEffort     *string                 `json:"reasoning_effort"`
 	SupersedeQuestionID string                  `json:"supersede_question_id"`
+	AllowSubagents      bool                    `json:"allow_subagents"`
+	RoleID              string                  `json:"role_id"`
 }
 
 type agentRunProtocolRequest struct {
@@ -116,6 +118,11 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	if text != "" && agentContainsSecret(text, s.agentSecretValues(ctx, ident(ctx).WorkspaceID)) {
 		return apiErr(422, "validation_failed", "消息中疑似包含密钥或密码，请到设置页填写，不要发给智能体")
 	}
+	if req.AllowSubagents {
+		if err := requireAgentFeature("subagents"); err != nil {
+			return err
+		}
+	}
 	attIDs, err := parseAgentAttachmentIDs(req.AttachmentIDs)
 	if err != nil {
 		return err
@@ -160,7 +167,7 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	if text == "" && len(attIDs) == 0 && len(contextRefs) == 0 && len(req.SkillRequests) == 0 {
 		return validation("请输入内容，或添加要处理的资料")
 	}
-	requestPayload := agentMessageRequestPayload{text, attIDs, contextRefs, req.SkillRequests, strings.TrimSpace(req.AccountID), req.Model, req.Mode, strings.TrimSpace(req.SupersedeQuestionID)}
+	requestPayload := agentMessageRequestPayload{text, attIDs, contextRefs, req.SkillRequests, strings.TrimSpace(req.AccountID), req.Model, req.Mode, strings.TrimSpace(req.SupersedeQuestionID), req.AllowSubagents}
 	protocol, err := parseAgentRunProtocolRequest(req, requestPayload)
 	if err != nil {
 		return err
@@ -254,6 +261,27 @@ func (s *Server) postAgentMessages(w http.ResponseWriter, r *http.Request) error
 	}
 	if prepared.Replayed {
 		return writeAgentPreparedReplay(w, conv.ID, prepared)
+	}
+	if req.AllowSubagents && prepared.State != nil {
+		prepared.State.AllowSubagents = true
+	}
+	// REF41 A6：角色 bot——解析 role_id 并注入 run 状态（禁用/越权角色拒绝）。
+	if roleIDRaw := strings.TrimSpace(req.RoleID); roleIDRaw != "" {
+		roleUUID, err := uuid.Parse(roleIDRaw)
+		if err != nil {
+			return apiErr(http.StatusBadRequest, "invalid_role_id", "角色 ID 不合法")
+		}
+		role, err := s.agentRoleOf(ctx, ident(ctx).WorkspaceID, roleUUID)
+		if err != nil {
+			return err
+		}
+		if role.Status != "active" {
+			return apiErr(http.StatusConflict, "agent_role_disabled", "该角色已停用，请先启用或选择其他角色")
+		}
+		if prepared.State != nil {
+			prepared.State.RoleID = role.ID.String()
+			prepared.State.Role = role
+		}
 	}
 	return s.agentStreamPreparedRun(w, r, conv, protocol, prepared)
 }

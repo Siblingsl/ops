@@ -1,12 +1,19 @@
 import { LoaderCircle, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button, IconButton, Textarea } from '@/components/ui'
 import { errorMessage } from '@/lib/api'
+import { browserModeSummary, latestBrowserActivity, skillStateLabel } from '@/lib/agent-ui.js'
+import { trackAgentEvent } from '@/lib/agent-telemetry-client'
+import { PanelTabs } from '@/pages/agent/PanelTabs'
+import { StatusChip } from '@/pages/agent/StatusChip'
 import {
   type AgentBootstrap, type AgentConversation, type AgentConversationDetail, type AgentInput, type AgentMessage,
 } from '@/lib/agent'
 import { ArtifactPanel } from '@/pages/agent/ArtifactPanel'
+import { type BrowserGrantView } from '@/pages/agent/BrowserTabAuthorizeDialog'
+import { BrowserControlBar } from '@/pages/agent/BrowserControlBar'
+import { PendingList, collectPendingEntries } from '@/pages/agent/PendingList'
 import { BrowserStatusBlock, useBrowserConnectState } from '@/pages/agent/BrowserStatusBlock'
 import { BrowserTabSelector } from '@/pages/agent/BrowserTabSelector'
 import { type AgentContextSelection, type AgentSkillSelection } from '@/pages/agent/ContextPickers'
@@ -19,52 +26,103 @@ import { SourcePanel } from '@/pages/agent/SourcePanel'
 export type WorkbenchTab = 'task' | 'context' | 'artifact' | 'browser'
 
 export function WorkbenchSidePanel({
-  tab, setTab, close, width, browserWorkspaceEnabled, conversation, activeRun, busy, pendingActions, actionCount, selectedAccountName, selectedModelName, attachmentCount,
-  contextRefs, skillRequests, latestSkillUsage, artifactsEnabled, goalsEnabled, compactEnabled, canManageGoals, models, goal, onCompact, actions, inputs, inputQueuePaused, onUpdateInput, onCancelInput, onRestoreInput, onResumeInputs, onQuoteArtifact, memoryFeaturesEnabled,
+  tab, setTab, close, width, browserWorkspaceEnabled, conversation, activeRun, busy, pendingActions, pendingQuestions, actionCount, artifactCount, selectedAccountName, selectedModelName, attachmentCount,
+  contextRefs, skillRequests, latestSkillUsage, artifactsEnabled, goalsEnabled, compactEnabled, canManageGoals, models, goal, onCompact, actions, questions, inputs, inputQueuePaused, onUpdateInput, onCancelInput, onRestoreInput, onResumeInputs, onQuoteArtifact, memoryFeaturesEnabled, onEmptyGoal, onEmptyContext, onOpenEvidence, messages,
+  browserGrant, browserPaused, onBrowserTakeOver, onBrowserHandBack, onStopRun,
 }: {
   tab: WorkbenchTab; setTab: (tab: WorkbenchTab) => void; close: () => void; width?: number; browserWorkspaceEnabled: boolean
-  conversation?: AgentConversation; activeRun?: AgentConversationDetail['active_run']; busy: boolean; pendingActions: number; actionCount: number
+  conversation?: AgentConversation; activeRun?: AgentConversationDetail['active_run']; busy: boolean; pendingActions: number; pendingQuestions: number; actionCount: number
+  artifactCount: number
   selectedAccountName: string; selectedModelName: string; attachmentCount: number
   contextRefs: AgentContextSelection[]; skillRequests: AgentSkillSelection[]; latestSkillUsage: AgentMessage['skill_usage']; artifactsEnabled: boolean
   goalsEnabled: boolean; compactEnabled: boolean; canManageGoals: boolean; models: AgentBootstrap['models']; goal?: AgentConversationDetail['goal']; onCompact: () => Promise<unknown>
   actions: AgentConversationDetail['actions']
+  questions: AgentConversationDetail['questions']
   inputs: AgentInput[]; inputQueuePaused: boolean
   onUpdateInput: (input: AgentInput, text: string) => Promise<void>; onCancelInput: (input: AgentInput) => Promise<void>
   onRestoreInput: (input: AgentInput) => Promise<void>; onResumeInputs: () => Promise<void>
   onQuoteArtifact: (ref: AgentContextSelection, prompt: string) => void
   memoryFeaturesEnabled: boolean
+  onEmptyGoal: () => void
+  onEmptyContext: () => void
+  // FN-05：目标证据定位回调（可选）。
+  onOpenEvidence?: (ref: { kind: string; id: string }) => void
+  messages: AgentMessage[]
+  // BR-08：浏览器控制条（接管/交回依赖真实 30 秒租约句柄）。
+  browserGrant?: BrowserGrantView | null
+  browserPaused?: boolean
+  onBrowserTakeOver?: () => void
+  onBrowserHandBack?: () => void
+  onStopRun?: () => void
 }) {
   const [editingInputID, setEditingInputID] = useState('')
   const [editingInputText, setEditingInputText] = useState('')
   const [inputBusyID, setInputBusyID] = useState('')
+  const [browserMode, setBrowserMode] = useState<'inapp' | 'chrome'>('inapp')
+  const [inappTabs, setInappTabs] = useState(0)
+  // OT-04：浏览器模式只记录 inapp/chrome，不记录地址、页面标题或内容。
+  useEffect(() => { trackAgentEvent('agent_browser_mode', browserMode) }, [browserMode])
+  const browserActivity = latestBrowserActivity(messages)
+  // BR-08：当前这一轮已发生的 browser_* 步数（不跨用户消息累计，不编造总步数）。
+  const browserStep = (() => {
+    let step = 0
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message.role === 'user') break
+      for (const call of message.tool_calls ?? []) {
+        if (typeof call.name === 'string' && call.name.startsWith('browser_') && call.name !== 'browser_request_tab') step += 1
+      }
+    }
+    return step
+  })()
+  const lastBrowserActivityID = useRef('')
+  // BR-01：Agent 开始新的 browser_* 操作时自动切到 Chrome 分段；用户随后手动切回
+  // 应用内不会被立刻抢回，直到下一次操作开始。
+  useEffect(() => {
+    if (!browserActivity || browserActivity.id === lastBrowserActivityID.current) return
+    lastBrowserActivityID.current = browserActivity.id
+    setBrowserMode('chrome')
+  }, [browserActivity])
   // 深化 4/5：委派结果「查看产物」要落到具体产物，而不是只切页签。
   const [focusArtifactID, setFocusArtifactID] = useState('')
   useEffect(() => setFocusArtifactID(''), [conversation?.id])
-  const tabs = [
-    { id: 'task' as const, label: '任务' },
-    { id: 'context' as const, label: '上下文' },
-    ...(artifactsEnabled ? [{ id: 'artifact' as const, label: '产物' }] : []),
-    // DEV-AI27-07：浏览器页签始终可见，连接状态由 BrowserStatusBlock 如实表达（不伪造已连接）。
-    { id: 'browser' as const, label: '浏览器' },
-  ] as const
   const browserConnectState = useBrowserConnectState(browserWorkspaceEnabled)
+  const browserSummary = browserModeSummary(browserMode, {
+    paired: browserConnectState.kind === 'paired' ? browserConnectState.bindings.length : 0,
+    authorizing: false,
+  })
+  const tabs = [
+    { id: 'task' as const, label: '任务', count: pendingActions + pendingQuestions },
+    { id: 'context' as const, label: '上下文', count: contextRefs.length + skillRequests.length },
+    ...(artifactsEnabled ? [{ id: 'artifact' as const, label: '产物', count: artifactCount }] : []),
+    // DEV-AI27-07：浏览器页签始终可见，连接状态由 BrowserStatusBlock 如实表达（不伪造已连接）。
+    { id: 'browser' as const, label: '浏览器', count: browserMode === 'chrome' && browserConnectState.kind === 'paired' ? browserConnectState.bindings.length : inappTabs },
+  ] as const
   const taskStatus = busy ? '正在运行' : pendingActions ? `等待你逐张处理 ${pendingActions} 项` : conversation ? '当前没有运行中的任务' : '发送第一条消息后，这里会显示对话任务状态'
-  return <aside className="desktop-agent-side-panel" style={width ? { width, flexBasis: width } : undefined} data-testid="desktop-agent-side-panel" aria-label="工作视图">
+  return <aside id="agent-workbench-panel" className="desktop-agent-side-panel" style={width ? { width, flexBasis: width } : undefined} data-testid="desktop-agent-side-panel" aria-label="任务面板">
     <header className="desktop-agent-side-panel-heading">
-      <div><h2>工作视图</h2><IconButton label="关闭工作视图" onClick={close}><X className="size-4" /></IconButton></div>
-      <div role="tablist" aria-label="工作视图切换" className="desktop-agent-side-tabs">
-        {tabs.map((item) => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)}>{item.label}</button>)}
-      </div>
+      <div className="desktop-agent-side-heading-row"><h2>任务面板</h2><IconButton label="关闭任务面板" onClick={close}><X className="size-4" /></IconButton></div>
+      <PanelTabs tabs={[...tabs]} tab={tab} setTab={(value) => setTab(value as WorkbenchTab)} />
     </header>
-    <div role="tabpanel" className="desktop-agent-side-content">
+    <div role="tabpanel" id={`agent-panel-${tab}`} aria-labelledby={`agent-panel-tab-${tab}`} className="desktop-agent-side-content">
       {tab === 'task' && <section aria-labelledby="workbench-task-heading">
+        {!conversation && <div className="desktop-agent-panel-empty" role="group" aria-label="任务面板空态">
+          <p>这个对话还没有任务。先定一个目标、引用资料，或查看浏览器说明。</p>
+          <div>
+            <Button type="button" size="sm" variant="secondary" onClick={() => { setTab('task'); onEmptyGoal() }}>设一个目标</Button>
+            <Button type="button" size="sm" variant="secondary" onClick={onEmptyContext}>引用资料</Button>
+            <Button type="button" size="sm" variant="secondary" onClick={() => setTab('browser')}>打开浏览器说明</Button>
+          </div>
+        </div>}
         <h3 id="workbench-task-heading">当前任务</h3>
+        {/* FN-02：待你处理中心——卡片/问题统一列表，可定位到消息；空时不渲染。 */}
+        <PendingList entries={collectPendingEntries(actions, questions ?? [])} />
         <p className="desktop-agent-side-status" role="status">{busy && <LoaderCircle className="size-4 animate-spin" />}{taskStatus}</p>
         {activeRun && <p className="desktop-agent-side-detail">运行状态：{activeRun.status === 'queued' ? '排队中' : '执行中'}</p>}
         {/* DEV-AI27-15（W15b UI）：协作任务折叠/展开/单项停止（有委派组时才渲染）。 */}
         {conversation && <DelegationPanel conversationId={conversation.id} onNavigateArtifact={(artifactId) => { setFocusArtifactID(artifactId); setTab('artifact') }} />}
         {conversation && <p className="desktop-agent-side-detail">本对话操作卡片：{actionCount} 项</p>}
-        <GoalPanel conversationID={conversation?.id} conversation={conversation} goal={goal} models={models} goalsEnabled={goalsEnabled} compactEnabled={compactEnabled} canManage={canManageGoals} busy={busy} onCompact={onCompact} />
+        <GoalPanel conversationID={conversation?.id} conversation={conversation} goal={goal} models={models} goalsEnabled={goalsEnabled} compactEnabled={compactEnabled} canManage={canManageGoals} busy={busy} onCompact={onCompact} onOpenEvidence={onOpenEvidence} />
         {pendingActions > 0 && <p className="desktop-agent-side-note">请在对应消息下逐张审阅操作卡片。</p>}
         {(inputs.some((input) => ['pending', 'needs_review'].includes(input.status)) || inputQueuePaused) && <section className="mt-4 space-y-2" aria-labelledby="workbench-inputs-heading">
           <div className="flex items-center justify-between gap-2"><h4 id="workbench-inputs-heading" className="text-xs font-semibold text-mist-700">补充与排队</h4>{inputQueuePaused && <Button type="button" size="sm" variant="outline" onClick={() => void onResumeInputs()}>恢复队列</Button>}</div>
@@ -98,8 +156,8 @@ export function WorkbenchSidePanel({
           <div><dt>待发送引用</dt><dd>{contextRefs.length} 项</dd></div>
         </dl>
         {contextRefs.length > 0 && <ul className="mt-3 space-y-1 text-xs text-mist-600">{contextRefs.map((item) => <li key={`${item.type}:${item.id}`}>{item.name} · {item.reference_scope === 'conversation' ? '固定到对话' : '本轮引用'}</li>)}</ul>}
-        {skillRequests.length > 0 && <section className="mt-4"><h4 className="text-xs font-semibold text-mist-600">已请求技能</h4><ul className="mt-1 space-y-1 text-xs text-mist-600">{skillRequests.map((item) => <li key={`${item.skill_id}:${item.work_id ?? ''}`}>{item.name} · 尚未加载</li>)}</ul></section>}
-        {!!latestSkillUsage?.length && <section className="mt-4"><h4 className="text-xs font-semibold text-mist-600">本轮技能状态</h4><ul className="mt-1 space-y-1 text-xs text-mist-600">{latestSkillUsage.map((item) => <li key={item.id}>{item.loaded ? '已加载到模型上下文；实际使用未验证' : '已请求，未加载'} · {item.name}</li>)}</ul></section>}
+        {skillRequests.length > 0 && <section className="mt-4"><h4 className="text-xs font-semibold text-mist-600">已请求技能</h4><ul className="mt-1 space-y-1 text-xs text-mist-600">{skillRequests.map((item) => <li key={`${item.skill_id}:${item.work_id ?? ''}`} className={item.unavailable ? 'text-danger' : undefined}>{item.name} · {skillStateLabel({ requested: true, unavailable: item.unavailable })}</li>)}</ul></section>}
+        {!!latestSkillUsage?.length && <section className="mt-4"><h4 className="text-xs font-semibold text-mist-600">本轮技能状态</h4><ul className="mt-1 space-y-1 text-xs text-mist-600">{latestSkillUsage.map((item) => <li key={item.id}>{skillStateLabel({ requested: true, loaded: item.loaded })} · {item.name}</li>)}</ul></section>}
         <p className="desktop-agent-side-note">选择、启用和加载是不同状态。只有 load_skill 成功回执才显示已加载；当前无法从模型调用回执确认是否遵循了技能指令。</p>
         {/* CF-P2-MEM-01（27 §11.1.1）：本会话记忆覆盖开关；全局关不能被会话越过。 */}
         {conversation && <MemoryOverrideSwitch conversationId={conversation.id} enabled={memoryFeaturesEnabled} />}
@@ -112,16 +170,33 @@ export function WorkbenchSidePanel({
           {conversation && <SourcePanel conversationId={conversation.id} />}
         </div>
       </section>}
-      {tab === 'browser' && <section aria-labelledby="workbench-browser-heading" className="flex h-full flex-col">
-        <h3 id="workbench-browser-heading">浏览器</h3>
-        <div className="min-h-0 flex-1 overflow-y-auto">
+      {tab === 'browser' && <section aria-labelledby="workbench-browser-heading" className="desktop-agent-browser-pane">
+        <div className="desktop-agent-browser-head">
+          <div role="group" aria-label="浏览方式" className="desktop-agent-segmented">
+            <button type="button" aria-pressed={browserMode === 'inapp'} onClick={() => setBrowserMode('inapp')}>应用内</button>
+            <button type="button" aria-pressed={browserMode === 'chrome'} onClick={() => setBrowserMode('chrome')}>Chrome 协作</button>
+          </div>
+          <StatusChip tone={browserSummary.tone} label={browserMode === 'inapp' ? `本地标签 ${inappTabs}` : browserSummary.label} />
+        </div>
+        <h3 id="workbench-browser-heading" className="sr-only">浏览器</h3>
+        {browserMode === 'chrome' && browserActivity && <BrowserControlBar
+          activity={browserActivity}
+          step={browserStep}
+          paused={Boolean(browserPaused)}
+          grantReady={Boolean(browserGrant) || Boolean(browserActivity)}
+          busy={Boolean(busy)}
+          conversationId={conversation?.id}
+          onStop={() => onStopRun?.()}
+          onTakeOver={() => onBrowserTakeOver?.()}
+          onHandBack={() => onBrowserHandBack?.()}
+        />}
+        <p className="desktop-agent-browser-note">{browserSummary.note}</p>
+        {browserMode === 'chrome' ? <div className="desktop-agent-browser-body">
           <BrowserStatusBlock state={browserConnectState} />
           {browserConnectState.kind === 'paired' && <BrowserTabSelector bindings={browserConnectState.bindings} onTabSelected={(selected) => { void selected }} />}
-        </div>
-        {/* D-172 双路径之二：应用内浏览视图（Codex 同款，WebContentsView 承载）。 */}
-        <div className="h-[60%] shrink-0 border-t border-mist-200">
-          <InBrowsePanel visible={tab === 'browser'} conversationId={conversation?.id} />
-        </div>
+        </div> : <div className="desktop-agent-browser-body desktop-agent-browser-inapp">
+          <InBrowsePanel visible={tab === 'browser'} conversationId={conversation?.id} onTabsChange={setInappTabs} />
+        </div>}
       </section>}
     </div>
   </aside>

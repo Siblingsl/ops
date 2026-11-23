@@ -210,8 +210,9 @@ func mustSkillTime(t *testing.T, s string) time.Time {
 
 // T-SK-39（SK1 前置）：内置注册表 12 项、key/UUID 唯一、确定性 UUID 全实例一致。
 func TestSkillBuiltinRegistry(t *testing.T) {
-	if len(builtinSkills) != 12 {
-		t.Fatalf("want 12 registered builtins, got %d", len(builtinSkills))
+	// D-211：内置技能 12 + builtin:publish_flow = 13。
+	if len(builtinSkills) != 13 {
+		t.Fatalf("want 13 registered builtins (D-211), got %d", len(builtinSkills))
 	}
 	seen := map[uuid.UUID]bool{}
 	for _, b := range builtinSkills {
@@ -227,7 +228,12 @@ func TestSkillBuiltinRegistry(t *testing.T) {
 		if def == nil || def.Revision != b.Version || def.Origin != "builtin" || def.SourceKey != b.Key {
 			t.Fatalf("registry lookup failed for %s", b.Key)
 		}
-		if def.Fields.Status != "active" || !def.Fields.TaskEnabled || !def.Fields.AgentEnabled {
+		// D-211：builtin:publish_flow task_enabled=false 是规格要求；其余双开。
+		if b.Key == "builtin:publish_flow" {
+			if def.Fields.Status != "active" || def.Fields.TaskEnabled || !def.Fields.AgentEnabled {
+				t.Fatalf("builtin publish_flow defaults: %+v", def.Fields)
+			}
+		} else if def.Fields.Status != "active" || !def.Fields.TaskEnabled || !def.Fields.AgentEnabled {
 			t.Fatalf("builtin %s defaults", b.Key)
 		}
 		if err := validateSkillFields(&def.Fields); err != nil {

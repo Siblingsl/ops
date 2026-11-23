@@ -93,6 +93,7 @@ func (s *Server) agentBuildMessages(ctx context.Context, st *agentRunState, id *
 	if st.ExecutionOrigin != "routine" && strings.TrimSpace(st.Summary) != "" {
 		out = append(out, ai.Message{Role: "system", Content: "对话摘要（更早的历史，仅供参考）：\n" + truncate(st.Summary, agentSummaryChars)})
 	}
+	out = agentAppendSideContext(out, st)
 	fixed := []ai.Message{}
 	fixedChars := 0
 	if st.ExecutionOrigin != "routine" {
@@ -465,4 +466,12 @@ func (s *Server) agentAttachmentDataURL(a *agentAttachmentRow) (string, error) {
 		}
 	}
 	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(raw), nil
+}
+
+// FN-12：旁问的只读快照放在摘要之后、最近消息之前；不进入工具调用或业务写入。
+func agentAppendSideContext(out []ai.Message, st *agentRunState) []ai.Message {
+	if st == nil || st.Kind != "side" || strings.TrimSpace(st.SideContext) == "" {
+		return out
+	}
+	return append(out, agentSideContextMessage(st.SideContext))
 }

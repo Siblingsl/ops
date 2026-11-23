@@ -438,6 +438,12 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 		Model:           model,
 		BatchID:         uuid.New(),
 		Deadline:        s.now().Add(agentRunSeconds * time.Second),
+		Kind:            c.Kind,
+		SideContext:     c.SideContext,
+		SideTokenBudget: c.SideTokenBudget,
+	}
+	if c.Kind == "side" {
+		st.Mode = "discuss"
 	}
 	if trigger == "routine" {
 		execution := agentRoutineExecutionOf(ctx)
@@ -454,6 +460,16 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 		return nil, apiErr(403, "forbidden", "例行任务身份不能启动交互运行")
 	}
 	var goalID any
+	if c.Kind == "side" {
+		var used int
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(prompt_tokens+completion_tokens),0)::int
+			FROM agent_run WHERE conversation_id=$1`, c.ID).Scan(&used); err != nil {
+			return nil, err
+		}
+		if c.SideTokenBudget <= 0 || used >= c.SideTokenBudget {
+			return nil, apiErr(429, "agent_side_budget_reached", "旁问的独立 token 预算已用尽，请新建旁问或回到主对话")
+		}
+	}
 	if trigger != "compact" && trigger != "routine" && agentWorkbenchFeatures()["goals"] {
 		var goal agentGoalView
 		var tokenBudget *int
@@ -530,11 +546,11 @@ func (s *Server) agentStartRunTx(ctx context.Context, tx pgx.Tx, trigger string,
 	}
 	if err := tx.QueryRow(ctx, `INSERT INTO agent_run
 		(conversation_id, workspace_id, user_id, session_id, trigger, status, stage, model_provider_id, model,
-		 protocol_version, request_id, request_hash,mode,execution_origin,config_snapshot,goal_id,routine_occurrence_id)
-		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+		 protocol_version, request_id, request_hash,mode,execution_origin,config_snapshot,goal_id,routine_occurrence_id,role_id)
+		VALUES ($1,$2,$3,$4,$5,'queued','queued',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
 		c.ID, st.WorkspaceID, st.UserID, sessionID, trigger, model.ProviderID, model.Model,
 		protocolVersion, requestIDArg, requestHash, st.Mode, st.ExecutionOrigin, snapshotJSON, goalID,
-		routineOccurrenceID).Scan(&st.RunID); err != nil {
+		routineOccurrenceID, agentRoleIDOrNull(st.RoleID)).Scan(&st.RunID); err != nil {
 		return nil, err
 	}
 	if messageID != nil {

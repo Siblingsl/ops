@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -524,6 +525,11 @@ func TestAG03ConversationCRUD(t *testing.T) {
 	}
 	if list.Items[0].PendingActions != 0 || list.Items[0].HasActiveRun {
 		t.Fatalf("空对话列表汇总应无待处理卡片或运行：%+v", list.Items[0])
+	}
+	// FN-01：列表投影必须带 pending_questions 与 account_name，前端据此算状态优先级。
+	status, body := env.do("GET", "/api/v1/agent/conversations", nil)
+	if status != 200 || !strings.Contains(string(body), `"pending_questions"`) || !strings.Contains(string(body), `"account_name"`) {
+		t.Fatalf("列表投影缺少 pending_questions/account_name：%d %s", status, body)
 	}
 	env.mustJSON(t, "GET", "/api/v1/agent/conversations?q="+url.QueryEscape("第一篇"), nil, &list)
 	if len(list.Items) != 1 || list.Items[0].ID != c1.ID {

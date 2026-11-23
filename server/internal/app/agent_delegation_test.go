@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,9 +57,9 @@ func w15CreateGroup(t *testing.T, conv agentConversation, parentRunID uuid.UUID,
 	for i, requestID := range requests {
 		delegations = append(delegations, map[string]any{
 			"task": tasks[i], "request_id": requestID,
-			"context_refs": []map[string]any{{"type": "work", "id": uuid.NewString()}},
+			"context_refs":  []map[string]any{{"type": "work", "id": uuid.NewString()}},
 			"allowed_tools": []string{},
-			"model": "mock-agent-tested",
+			"model":         "mock-agent-tested",
 		})
 	}
 	var group delegationGroupView
@@ -458,5 +460,146 @@ func TestW15bDispatchExecutesChildRun(t *testing.T) {
 	}
 	if groupState != "completed" {
 		t.Fatalf("全部子终态后组应 completed：%s", groupState)
+	}
+}
+
+// TL-06：并行协作必须由本次任务显式开启；开启后 delegate_task 不要求模型填写
+// conversationId/parent_run_id（由当前 run 权威注入），真实父模型调用→2 个子 run→
+// 组完成，且 API 暴露模型/工具数/引用数/token 耗用供任务面板展示。
+func TestTL06ExplicitSubagentsAndRunContextInjection(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "run_control,event_resume,plans,goals,artifacts,subagents")
+	providerID := env.ensureToolModel(t)
+
+	conv := w15ParentRun(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	reqA, reqB := uuid.NewString(), uuid.NewString()
+	text := "#tool load_tool_domain {\"domain\":\"subagent\"}\n" +
+		"#tool delegate_task {\"delegations\":[" +
+		"{\"task\":\"TL06 子任务 A：整理竞品结构\",\"request_id\":\"" + reqA + "\"}," +
+		"{\"task\":\"TL06 子任务 B：整理选题角度\",\"request_id\":\"" + reqB + "\"}]}\n" +
+		"#text 我会把这项任务拆成两个只读子任务并行整理。"
+	events := env.sse(t, agentRunPath(conv, "messages"), map[string]any{
+		"text": text, "allow_subagents": true,
+	})
+	done := lastEvent(t, events)
+	if done.Name != "done" {
+		t.Fatalf("父 run 应以 done 结束：%s", done.Name)
+	}
+	var donePayload struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(done.Data, &donePayload); err != nil {
+		t.Fatal(err)
+	}
+	if donePayload.Status != "completed" {
+		t.Fatalf("父 run 应 completed：%s", donePayload.Status)
+	}
+
+	// 组由真实 delegate_task 工具创建；轮询到两个子任务完成。
+	var groups struct {
+		Groups []delegationGroupView `json:"groups"`
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		env.mustJSON(t, "GET", agentRunPath(conv, "delegation-groups"), map[string]any{}, &groups)
+		if len(groups.Groups) == 1 && len(groups.Groups[0].Delegations) == 2 &&
+			groups.Groups[0].State == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			for _, ev := range events {
+				if ev.Name == "tool" || ev.Name == "error" {
+					t.Logf("event %s %s", ev.Name, string(ev.Data))
+				}
+			}
+			t.Fatalf("delegate_task 未形成 2 个完成的子任务：%+v", groups.Groups)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	group := groups.Groups[0]
+	for _, d := range group.Delegations {
+		if d.ParentRunID == "" || d.ChildRunID == "" {
+			t.Fatalf("委派应回填父/子 run：%+v", d)
+		}
+		if d.State != "succeeded" {
+			t.Fatalf("子任务应 succeeded：%+v", d)
+		}
+		if d.Usage.TotalTokens <= 0 {
+			t.Fatalf("子任务应暴露真实 token 耗用：%+v", d)
+		}
+		if d.AllowedToolCount < 0 || d.ContextRefCount < 0 {
+			t.Fatalf("范围计数不可为负：%+v", d)
+		}
+	}
+
+	// 未显式开启时模型看不到 delegate_task：同样的指令只会得到 unknown_tool，不建组。
+	conv2 := w15ParentRun(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv2.ID) })
+	events2 := env.sse(t, agentRunPath(conv2, "messages"), map[string]any{
+		"text": "#tool load_tool_domain {\"domain\":\"subagent\"}\n" +
+			"#tool delegate_task {\"delegations\":[{\"task\":\"不应派发\",\"request_id\":\"" + uuid.NewString() + "\"}]}",
+	})
+	sawUnknownTool := false
+	for _, ev := range events2 {
+		if ev.Name == "tool" && strings.Contains(string(ev.Data), "unknown_tool") {
+			sawUnknownTool = true
+			break
+		}
+	}
+	if !sawUnknownTool {
+		t.Fatalf("未开启并行协作时 delegate_task 应不可见并返回 unknown_tool：%+v", events2)
+	}
+	var groups2 struct {
+		Groups []delegationGroupView `json:"groups"`
+	}
+	env.mustJSON(t, "GET", agentRunPath(conv2, "delegation-groups"), map[string]any{}, &groups2)
+	if len(groups2.Groups) != 0 {
+		t.Fatalf("未开启并行协作不得创建委派组：%+v", groups2.Groups)
+	}
+}
+
+// TL-06：子任务工具白名单只能收窄到只读工具；写入/确认工具与 subagent 管理工具
+// 不能进入子 run，避免子任务扩大父任务授权（27 §11.3.2）。
+func TestTL06DelegationToolsReadOnly(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "subagents")
+	providerID := env.ensureToolModel(t)
+	conv := w15ParentRun(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+	parent := w15ParentInsert(t, conv, providerID)
+
+	// 显式写入工具必须 422，不得静默降级成可调用。
+	env.expectErr(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/delegation-groups", map[string]any{
+		"parent_run_id": parent.String(),
+		"delegations": []map[string]any{
+			{"task": "写工具应被拒绝", "request_id": uuid.NewString(), "allowed_tools": []string{"works__create"}},
+		},
+	}, "delegation_tool_not_readonly")
+
+	// 显式只读清单按原样保存并投影为 AllowedToolCount；默认清单也必须是 R 工具。
+	var group delegationGroupView
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/delegation-groups", map[string]any{
+		"parent_run_id": parent.String(),
+		"delegations": []map[string]any{
+			{"task": "只读工具清单", "request_id": uuid.NewString(), "allowed_tools": []string{"works__list", "global_search"}},
+		},
+	}, &group)
+	if len(group.Delegations) != 1 || group.Delegations[0].AllowedToolCount != 2 {
+		t.Fatalf("显式只读工具应原样投影：%+v", group)
+	}
+
+	names, err := delegationAllowedTools(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) == 0 {
+		t.Fatal("子任务默认工具白名单不得为空")
+	}
+	for _, name := range names {
+		tool := agentTool(name)
+		if tool == nil || tool.Kind != toolR || tool.Domain == "subagent" {
+			t.Fatalf("子任务白名单混入非只读工具：%s", name)
+		}
 	}
 }

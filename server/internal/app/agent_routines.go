@@ -913,7 +913,7 @@ func (s *Server) agentRoutineCreateConversationTx(ctx context.Context, tx pgx.Tx
 		(workspace_id,user_id,title,title_source,account_id,model_provider_id,model,mode)
 		VALUES($1,$2,$3,'auto',$4,$5,$6,'discuss')
 		RETURNING id,title,title_source,pinned_at,model_provider_id,model,account_id,last_message_at,created_at,updated_at,
-		revision,archived_at,group_id,read_upto_message_seq,force_unread,mode,reasoning_effort,parent_id,fork_upto_seq`,
+		revision,archived_at,group_id,read_upto_message_seq,force_unread,mode,reasoning_effort,parent_id,fork_upto_seq,kind,side_context,side_token_budget`,
 		id.WorkspaceID, id.UserID, truncate("例行任务："+routine.Name, 60), routine.AccountID,
 		routine.Model.ProviderID, routine.Model.Model))
 	if err != nil {

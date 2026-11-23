@@ -27,6 +27,19 @@ interface BindingSummary {
   state: string
 }
 
+// BR-08：授权时把租约句柄带回页面，“接管/交回”才有真实对象可用。
+export interface BrowserGrantView {
+  id: string
+  binding_id: string
+  run_id: string
+  tab_handle: string
+  origins: string[]
+  actions: string[]
+  policy_version: string
+  state: string
+  expires_at?: string
+}
+
 export function BrowserTabAuthorizeDialog({
   open,
   conversationId,
@@ -38,7 +51,7 @@ export function BrowserTabAuthorizeDialog({
   conversationId?: string
   runId?: string
   onClose: () => void
-  onAuthorized: (summary: string) => void
+  onAuthorized: (summary: string, grant: BrowserGrantView) => void
 }) {
   const [tabs, setTabs] = useState<DesktopBrowserTab[]>([])
   const [bindings, setBindings] = useState<BindingSummary[]>([])
@@ -103,7 +116,7 @@ export function BrowserTabAuthorizeDialog({
     }
     setBusy(true)
     try {
-      await post(`/agent/conversations/${conversationId}/browser-grants`, {
+      const created = await post<BrowserGrantView>(`/agent/conversations/${conversationId}/browser-grants`, {
         binding_id: binding.id,
         run_id: runId,
         tab_handle: String(target.tab_id),
@@ -115,7 +128,7 @@ export function BrowserTabAuthorizeDialog({
       toast.success(`已授权标签：${summary}`, {
         description: '授权 30 秒内有效；期间模型只能观察或操作这一个标签的已授权来源，过期后需要重新选择。',
       })
-      onAuthorized(summary)
+      onAuthorized(summary, created)
       onClose()
     } catch (error) {
       const code = error instanceof ApiError ? error.code : ''

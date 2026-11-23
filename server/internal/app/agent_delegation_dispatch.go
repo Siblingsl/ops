@@ -155,9 +155,9 @@ func (s *Server) dispatchOneDelegation(ctx context.Context, groupID, conversatio
 			return err2
 		}
 	}
-	// 回填委派行：child_run_id + state=running。
+	// 回填委派行：child_run_id + state=running + 实际模型快照（空值已继承父模型）。
 	if _, err := s.db.Exec(ctx, `UPDATE agent_delegation
-		SET child_run_id=$2, state='running', updated_at=now() WHERE id=$1`, delegationID, childRunID); err != nil {
+		SET child_run_id=$2, state='running', model=$3, updated_at=now() WHERE id=$1`, delegationID, childRunID, model); err != nil {
 		return err
 	}
 	// DEV-A13：子 run 的输入文本必须落库，否则模型只能看到空会话；

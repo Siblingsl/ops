@@ -16,6 +16,8 @@ type Def struct {
 	Origin      string
 	SourceKey   string
 	ContentHash string
+	// Procedure 是 D-211（REF41 A5）的结构化步骤 JSON 原文；空串表示无流程步骤。
+	Procedure string
 }
 
 // 兼容未导出旧名（同包 builtin/resolve 使用）。

@@ -84,6 +84,7 @@ type aiResult struct {
 type route struct {
 	ProviderID   uuid.UUID
 	ProviderName string
+	Simulated    bool
 	BaseURL      string
 	APIKey       string
 	Model        string

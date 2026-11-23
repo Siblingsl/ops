@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, CardHeader, Empty, Field, IconButton, Input, Notice, PageHeader, PageLoading, Select, Switch } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post, put } from '@/lib/api'
-import { fmtTime } from '@/lib/format'
+import { currencySymbol, fmtTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useInvalidate, useMe } from '@/lib/session'
 import type { AILimit, ModelCapability, ModelRoute, Provider } from '@/lib/types'
@@ -79,13 +79,27 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
   const [options, setOptions] = useState<string[]>(editing?.models ?? [])
   const [pickerOpen, setPickerOpen] = useState(false)
   const [manual, setManual] = useState('')
-  const [pp, setPp] = useState(editing?.price_per_1k_prompt?.toString() ?? '')
-  const [pc, setPc] = useState(editing?.price_per_1k_completion?.toString() ?? '')
+  const [pp, setPp] = useState(
+    editing?.input_price_micros_per_1k != null
+      ? (editing.input_price_micros_per_1k / 1000000).toString()
+      : editing?.price_per_1k_prompt?.toString() ?? '',
+  )
+  const [pc, setPc] = useState(
+    editing?.output_price_micros_per_1k != null
+      ? (editing.output_price_micros_per_1k / 1000000).toString()
+      : editing?.price_per_1k_completion?.toString() ?? '',
+  )
+  const [currency, setCurrency] = useState(editing?.price_currency ?? 'CNY')
   const [cw, setCw] = useState(editing?.context_window_tokens?.toString() ?? '')
   const [busy, setBusy] = useState(false)
   const [discovering, setDiscovering] = useState(false)
   const inv = useInvalidate()
-  const price = (v: string) => (v.trim() === '' ? -1 : Number(v))
+  // A8：内部按 micros/千 token 落库；页面仍以“元/千 token”输入，避免用户换算。
+  const priceMicros = (v: string) => {
+    if (v.trim() === '') return -1
+    const n = Number(v)
+    return Number.isFinite(n) && n >= 0 ? Math.round(n * 1000000) : -1
+  }
   // 窗口登记为空表示清除；服务端只在登记后才做发送前预算检查。
   const contextWindow = (v: string) => (v.trim() === '' ? -1 : Number(v))
   // 选中顺序即数组顺序：第一个用于连通测试，界面上标「主」。
@@ -121,14 +135,22 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
     const list = models
     try {
       if (editing) {
-        const body: Record<string, unknown> = { name, models: list, price_per_1k_prompt: price(pp), price_per_1k_completion: price(pc), context_window_tokens: contextWindow(cw) }
+        const body: Record<string, unknown> = {
+          name, models: list,
+          input_price_micros_per_1k: priceMicros(pp),
+          output_price_micros_per_1k: priceMicros(pc),
+          price_currency: currency,
+          context_window_tokens: contextWindow(cw),
+        }
         if (base !== editing.base_url) body.base_url = base
         if (key.trim()) body.api_key = key
         await patch(`/model-providers/${editing.id}`, body)
       } else {
         const p = await post<Provider>('/model-providers', {
           name, base_url: base, api_key: key, models: list,
-          price_per_1k_prompt: pp.trim() ? Number(pp) : null, price_per_1k_completion: pc.trim() ? Number(pc) : null,
+          input_price_micros_per_1k: priceMicros(pp),
+          output_price_micros_per_1k: priceMicros(pc),
+          price_currency: currency,
           context_window_tokens: cw.trim() ? Number(cw) : null,
         })
         const t = await post<{ ok: boolean; result: string }>(`/model-providers/${p.id}/test`)
@@ -187,9 +209,15 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
             )}
           </div>
         </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="输入单价（元 / 千 token）" hint="选填，用于估算费用"><Input type="number" min={0} step={0.0001} value={pp} onChange={(e) => setPp(e.target.value)} /></Field>
-          <Field label="输出单价（元 / 千 token）" hint="不填则按输入单价"><Input type="number" min={0} step={0.0001} value={pc} onChange={(e) => setPc(e.target.value)} /></Field>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="币种" hint="费用按币种分开汇总">
+            <Select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+              <option value="CNY">CNY（元）</option>
+              <option value="USD">USD（美元）</option>
+            </Select>
+          </Field>
+          <Field label={`输入单价（${currency === 'USD' ? '美元' : currency === 'CNY' ? '元' : currency} / 千 token）`} hint="选填，用于计算智能体费用"><Input type="number" min={0} step={0.0001} value={pp} onChange={(e) => setPp(e.target.value)} /></Field>
+          <Field label={`输出单价（${currency === 'USD' ? '美元' : currency === 'CNY' ? '元' : currency} / 千 token）`} hint="不填则该 run 不计算费用"><Input type="number" min={0} step={0.0001} value={pc} onChange={(e) => setPc(e.target.value)} /></Field>
         </div>
         <Field label="上下文窗口（token）" hint="选填，按厂商文档登记；登记后服务端在发送前检查输入规模，超限提示缩小范围">
           <Input type="number" min={1024} step={1} value={cw} onChange={(e) => setCw(e.target.value)} />
@@ -597,7 +625,11 @@ export default function Models() {
               </div>
               <div className="mt-3 flex items-center gap-2 border-t border-mist-100 pt-3 text-xs">
                 <span className="font-mono text-mist-400">{p.key_mask}</span>
-                {p.price_per_1k_prompt != null && <span className="text-mist-400">¥{p.price_per_1k_prompt} / 千 token</span>}
+                {(p.input_price_micros_per_1k != null || p.price_per_1k_prompt != null) && (
+                  <span className="text-mist-400">
+                    {currencySymbol(p.price_currency)}{p.input_price_micros_per_1k != null ? p.input_price_micros_per_1k / 1000000 : p.price_per_1k_prompt} / 千 token
+                  </span>
+                )}
                 {p.last_test_at && (p.last_test_ok ? <span className="flex items-center gap-1 text-ink-600"><CheckCircle2 className="size-3.5" />{fmtTime(p.last_test_at)} 测试通过</span>
                   : <span className="flex items-center gap-1 text-danger" title={p.last_test_result}><XCircle className="size-3.5" />测试失败</span>)}
                 {(isOwner || me?.role === 'editor') && (

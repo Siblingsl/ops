@@ -36,6 +36,10 @@ var agentWorkbenchFeatureNames = []string{
 	"voice_dictation", "voice_realtime",
 	// DEV-AI27-17（W17）：Windows 电脑控制开关（27 15.3 提案名），默认关闭。
 	"computer_use",
+	// D-190：38 §16.3 P2 项，默认关闭。
+	"operations_directory", "side_chat", "today_ops",
+	// REF41 A6/A7：角色 bot 与工作流模板（服务端数据面已核验；默认开）。
+	"agent_roles", "workflow_templates",
 }
 
 // agentFeatureDefaultOn 是 D-187 已批准的 A 档 11 项：未配置 env / DB 时默认开。
@@ -44,7 +48,7 @@ var agentFeatureDefaultOn = map[string]bool{
 	"workbench_ui": true, "conversation_organize": true, "context_refs": true,
 	"skill_requests": true, "artifacts": true, "run_control": true,
 	"event_resume": true, "plans": true, "goals": true, "routines": true,
-	"document_parse": true,
+	"document_parse": true, "agent_roles": true, "workflow_templates": true,
 }
 
 func agentFeaturesFromList(raw string) map[string]bool {

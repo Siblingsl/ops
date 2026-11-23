@@ -40,20 +40,23 @@ type agentRunState struct {
 	DelegationGroupID *uuid.UUID
 	DelegationID      *uuid.UUID
 	DelegationAdopted bool
+	// AllowSubagents 表示用户在输入台明确开启本次任务的并行拆分；未开启时模型看不到
+	// delegate_task / stop_delegation，避免默认产生额外子 run 与费用。
+	AllowSubagents bool
 	// RoundsLimit 为单次 run 的轮次上限（0 表示用 agentMaxRounds）；子 run 取 4 轮（27 §11.3.3）。
 	RoundsLimit int
 	// AllowedTools 是委派显式允许的工具；空表示不额外限制（仍受角色可见性约束）。
-	AllowedTools []string
-	StartedAt           time.Time
-	GoalUsedSeconds     int
-	GoalUsedTokens      int
-	GoalSecondsBudget   int
-	GoalTokenBudget     *int
-	RuntimeModel        *agentRuntimeModel
-	AccountID           *uuid.UUID
-	Model               agentModelRef
-	ProviderName        string
-	Vision              bool
+	AllowedTools      []string
+	StartedAt         time.Time
+	GoalUsedSeconds   int
+	GoalUsedTokens    int
+	GoalSecondsBudget int
+	GoalTokenBudget   *int
+	RuntimeModel      *agentRuntimeModel
+	AccountID         *uuid.UUID
+	Model             agentModelRef
+	ProviderName      string
+	Vision            bool
 
 	// 第 6.5 节的运行内计数。
 	Rounds             int
@@ -67,6 +70,16 @@ type agentRunState struct {
 	CardsThisRound     int
 	OrchestrationCalls int
 	AwaitingInput      bool
+	// REF41 A6：角色 bot（白名单/预算）。
+	RoleID string
+	Role   *AgentRole
+	// REF41 A1：反谎报三闸的运行内状态与收尾记录。
+	FabricationNudges int
+	Demo              bool
+	Outcome           string
+	TruthCheckRaw     []byte
+	RawFinalText      string
+	FinalTextOverride *string
 
 	Domains  []string
 	Deadline time.Time
@@ -76,6 +89,10 @@ type agentRunState struct {
 	Summary string
 	// SummaryUptoSeq 是摘要覆盖到的消息序号（第 6.8 节第 3 项）。
 	SummaryUptoSeq int
+	// FN-12：旁问只读上下文（创建时快照）与独立 token 预算。
+	Kind            string
+	SideContext     string
+	SideTokenBudget int
 
 	// ErrCode、ErrMsg 是运行失败时写入 agent_run 的错误（第 11.6 节）。
 	ErrCode string
@@ -182,6 +199,10 @@ func agentToolsFor(st *agentRunState, id *identity) []ai.Tool {
 		if !agentRunToolAllowed(st, t, id) {
 			continue
 		}
+		// REF41 A6-A3：角色白名单过滤（空表无工具；越权工具不进入 schema）。
+		if !agentRoleAllowed(st.Role, t.Name) {
+			continue
+		}
 		out = append(out, ai.Tool{Type: "function", Function: ai.ToolFunction{
 			Name: t.Name, Description: t.Description, Parameters: agentToolSchema(t.Params),
 		}})
@@ -204,7 +225,7 @@ func (st *agentRunState) loadedTool(id *identity, name string) *AgentTool {
 		return nil
 	}
 	for _, d := range st.Domains {
-		if d == t.Domain && agentRunToolAllowed(st, t, id) {
+		if d == t.Domain && agentRunToolAllowed(st, t, id) && agentMetaFeatureAllowed(st, t) {
 			return t
 		}
 	}
@@ -221,6 +242,9 @@ func agentMetaFeatureAllowed(st *agentRunState, t *AgentTool) bool {
 	}
 	if t.Name == "report_goal_progress" {
 		return agentWorkbenchFeatures()["goals"]
+	}
+	if t.Name == "delegate_task" || t.Name == "stop_delegation" {
+		return agentWorkbenchFeatures()["subagents"] && st != nil && st.AllowSubagents
 	}
 	return true
 }
@@ -264,13 +288,25 @@ func (s *Server) agentResolveModel(ctx context.Context, st *agentRunState) (*rou
 	}
 	var enc []byte
 	rt := &route{ProviderID: st.Model.ProviderID, Model: st.Model.Model}
-	if err := s.db.QueryRow(ctx, `SELECT name, base_url, api_key_enc FROM model_provider
+	if err := s.db.QueryRow(ctx, `SELECT name, base_url, api_key_enc, simulated FROM model_provider
 		WHERE id=$1 AND workspace_id=$2 AND execution_location='server' AND status='active'`, st.Model.ProviderID, st.WorkspaceID).
-		Scan(&rt.ProviderName, &rt.BaseURL, &enc); err != nil {
+		Scan(&rt.ProviderName, &rt.BaseURL, &enc, &rt.Simulated); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apiErr(422, "agent_model_unsupported", "所选模型的供应商已删除，请重新选择")
 		}
 		return nil, err
+	}
+	// REF41 A2-A1/A2-A2：simulated 供应商生产拒绝（不自动回退避免静默换模型）；
+	// 开发放行并标记 demo（st.Demo 由收尾与 demo 工具阻断共同消费）。
+	if rt.Simulated {
+		// 生产环境直接拒绝（agentCheckSimulatedProvider 内含 cfg.Dev 判断）。
+		if _, err := s.agentCheckSimulatedProvider(ctx, st.Model.ProviderID.String()); err != nil {
+			return nil, err
+		}
+		st.Demo = true
+	} else if strings.Contains(rt.ProviderName, "模拟") {
+		// 兼容既有开发注册的“本地模拟模型”名称语义（无 simulated 列数据的旧行）。
+		st.Demo = true
 	}
 	if rt.APIKey, err = s.box.Decrypt(enc); err != nil {
 		return nil, err
@@ -597,7 +633,13 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 			return
 		}
 		if len(res.Calls) == 0 {
-			// 第 6.1 节第 2.7 项：没有工具调用，运行完成。
+			// 第 6.1 节第 2.7 项：没有工具调用。A1 三闸在 agentRound 落库前已执行：
+			// 第一次无证据声称本轮以纠正提示返回，继续循环；其余情况文本已按
+			// demo/改写落库，运行完成。
+			if strings.HasPrefix(res.Text, "你声称完成了：") {
+				st.Rounds++
+				continue
+			}
 			return
 		}
 		if st.CardsThisRound > 0 {
@@ -626,7 +668,17 @@ func (s *Server) agentRun(ctx context.Context, st *agentRunState, rt *route, sen
 			return
 		}
 	}
-	// 第 6.1 节第 3 项：轮次用尽。
+	// 第 6.1 节第 3 项：轮次用尽。REF41 A2-A3/A2-A4：不返回“completed”空话，
+	// 生成三段结构化收尾（计划步骤/动作卡片/未答问题，纯模板不调模型），
+	// outcome=partial、reason=round_limit；awaiting_confirmation 已在上方 return 优先。
+	wrapUp := s.agentBuildWrapUp(ctx, st.RunID.String())
+	st.TruthCheckRaw = agentTruthWithWrapUp(st.TruthCheckRaw, wrapUp)
+	if _, err := s.agentSaveAssistantText(ctx, st, agentWrapUpText(wrapUp)); err != nil {
+		s.agentRunError(st, err)
+		status = "failed"
+		return status, reason
+	}
+	st.Outcome = "partial"
 	status, reason = "completed", agentReasonRoundLimit
 	return status, reason
 }
@@ -674,10 +726,41 @@ func (s *Server) agentRound(ctx context.Context, st *agentRunState, rt *route, i
 	}
 	st.PromptTokens += res.Usage.PromptTokens
 	st.CompletionTokens += res.Usage.CompletionTokens
+	// REF41 A1：零工具调用的最终回答先过“声称—证据”三闸（只查最终回答，
+	// 不查中间推理；有证据不误伤；模拟模型 demo 前缀不 nudge）。
+	if len(res.Calls) == 0 {
+		simulated := st.Demo || strings.Contains(st.ProviderName, "模拟")
+		if simulated {
+			st.Demo = true
+		}
+		rewritten, check := s.agentFinalizeTruth(ctx, st, res.Text, simulated)
+		if !simulated && check.Evidence == 0 && len(check.Claims) > 0 && st.FabricationNudges == 0 {
+			// 第一次：注入纠正提示（不落声称原文为最终回答），继续循环。
+			st.FabricationNudges++
+			st.RawFinalText = res.Text
+			st.TruthCheckRaw = agentTruthMarshal(check)
+			if _, err := s.agentSaveAssistantText(ctx, st, rewritten); err != nil {
+				return agentRoundResult{}, err
+			}
+			res.Text = rewritten
+			return res, nil
+		}
+		if rewritten != res.Text {
+			// 第二次拦截或模拟演示：改写后文本落库，原文收尾写 raw_final_text。
+			st.RawFinalText = res.Text
+			if !simulated && len(check.Blocked) > 0 {
+				st.Outcome = "partial"
+			}
+			res.Text = rewritten
+		}
+		st.TruthCheckRaw = agentTruthMarshal(check)
+	}
 	if _, err := s.agentSaveAssistantCall(ctx, st, res); err != nil {
 		return agentRoundResult{}, err
 	}
 	st.CardsThisRound = 0
+	// REF41 A2-A2：demo 阻断在卡片执行入口（agent_execute），提案阶段保留——
+	// 卡片提案本身不是外部副作用，用户确认后的真实执行才被 demo_blocked 拦截。
 	if err := s.agentHandleToolGroup(ctx, st, id, res.Calls, send); err != nil {
 		return agentRoundResult{}, err
 	}
@@ -777,7 +860,12 @@ func (s *Server) agentSaveAssistantCall(ctx context.Context, st *agentRunState, 
 		}
 		toolCalls = arr
 	}
-	return s.agentInsertMessage(ctx, st, "assistant", res.Text, toolCalls, "", "", nil, &res.CallID)
+	content := res.Text
+	// REF41 A1-A5：改写后文本落 agent_message.content，原文由收尾写 raw_final_text。
+	if st.FinalTextOverride != nil && *st.FinalTextOverride != "" {
+		content = *st.FinalTextOverride
+	}
+	return s.agentInsertMessage(ctx, st, "assistant", content, toolCalls, "", "", nil, &res.CallID)
 }
 
 // agentSaveAssistantText 保存一条纯文字助手消息（说明轮或系统提示）。
@@ -833,6 +921,10 @@ func (s *Server) agentHandleToolCall(ctx context.Context, st *agentRunState, id 
 		return s.agentCancelledTool(ctx, st, call, send)
 	}
 	name := call.Function.Name
+	// REF41 A6-A3：角色白名单强制（逐次调用前检查；越权 tool_not_allowed 不执行）。
+	if !agentRoleAllowed(st.Role, name) {
+		return s.agentToolError(ctx, st, call, "tool_not_allowed", "角色白名单不允许调用 "+name, send)
+	}
 	raw := strings.TrimSpace(call.Function.Arguments)
 	if raw == "" {
 		raw = "{}"
@@ -844,6 +936,12 @@ func (s *Server) agentHandleToolCall(ctx context.Context, st *agentRunState, id 
 	t := st.loadedTool(id, name)
 	if t == nil {
 		return s.agentToolError(ctx, st, call, "unknown_tool", "还不知道这个工具；先用 load_tool_domain 加载对应领域", send)
+	}
+	// delegate_task 的会话与父 run 标识由当前运行权威注入：模型无从得知这两个 UUID，
+	// 让模型填写会造成必填参数缺失或伪造。模型参数无法覆盖注入值。
+	if t.Name == "delegate_task" {
+		args["conversationId"] = st.ConversationID.String()
+		args["parent_run_id"] = st.RunID.String()
 	}
 	if err := s.agentGoalBoundary(ctx, st); err != nil {
 		return s.agentToolLimitWithCode(ctx, st, call, "agent_goal_budget_reached", "任务目标预算已达到，本次不再处理工具调用", send)
@@ -1040,12 +1138,39 @@ func (s *Server) finishAgentRun(ctx context.Context, st *agentRunState, status, 
 			st.ErrCode, st.ErrMsg = "", ""
 		}
 		if txErr == nil {
+			// REF41 A1：outcome 默认 completed；partial 由第二次拦截写入；demo 为模拟模型标记。
+			outcome := st.Outcome
+			if outcome == "" {
+				if st.Demo {
+					outcome = "partial"
+				} else {
+					outcome = "completed"
+				}
+			}
+			if status != "completed" {
+				outcome = map[string]string{"failed": "failed", "stopped": "stopped",
+					"awaiting_input": "awaiting_input", "awaiting_confirmation": "awaiting_confirmation"}[status]
+				if outcome == "" {
+					outcome = "completed"
+				}
+			}
+			truthRaw := st.TruthCheckRaw
+			if len(truthRaw) == 0 {
+				truthRaw = []byte("{}")
+			}
+			rawFinal := st.RawFinalText
+			// REF41 A8：成本与 token 在同一收尾事务里落库；计算失败按未定价（NULL）处理，
+			// 不改变 run 状态，也不阻断收尾。
+			costMicros, costCurrency := s.agentRunCostForRunTx(finishCtx, tx, st)
 			txErr = tx.QueryRow(finishCtx, `UPDATE agent_run SET status=$2, stage=$3, reason=$4,
 		rounds=$5, read_calls=$6, generate_calls=$7, actions_proposed=$8, prompt_tokens=$9,
-		completion_tokens=$10, external_read=$11, error_code=$12, error_message=$13, finished_at=$14
+		completion_tokens=$10, external_read=$11, error_code=$12, error_message=$13, finished_at=$14,
+		fabrication_nudges=$15, outcome=$16, demo=$17, final_check=$18, raw_final_text=$19,
+		cost_micros=$20, cost_currency=$21
 		WHERE id=$1 AND status IN ('queued','running') RETURNING finished_at`, st.RunID, status, status, reason,
 				st.Rounds, st.ReadCalls, st.GenerateCalls, st.ActionsProposed, st.PromptTokens, st.CompletionTokens,
-				st.ExternalRead, st.ErrCode, st.ErrMsg, finished).Scan(&finished)
+				st.ExternalRead, st.ErrCode, st.ErrMsg, finished,
+				st.FabricationNudges, outcome, st.Demo, truthRaw, rawFinal, costMicros, costCurrency).Scan(&finished)
 		}
 		if txErr == nil && st.ExecutionOrigin != "routine" {
 			txErr = agentMarkRunSteersForReviewTx(finishCtx, tx, st.ConversationID, st.RunID)

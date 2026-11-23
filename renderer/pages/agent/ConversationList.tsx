@@ -13,6 +13,8 @@ import { isEnterWithoutComposition } from '@/lib/keyboard'
 import {
   type AgentConversationGroup, type AgentConversationListItem,
 } from '@/lib/agent'
+import { conversationRowState } from '@/lib/agent-ui.js'
+import { StateBlock } from '@/pages/agent/StateBlock'
 import { useConversationList } from '@/pages/agent/useConversationList'
 
 function splitDate(value: string) {
@@ -65,9 +67,9 @@ export function AgentConversationList({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {sidebarTitle !== undefined && <div className={cn('mb-1.5 min-w-0 px-6 pt-3 text-[11px] font-semibold tracking-[0.16em] text-mist-400', desktopPresentation && 'desktop-agent-list-title')}><div className="truncate" title={sidebarTitle}>{sidebarTitle}</div></div>}
+      {sidebarTitle !== undefined && <div className={cn('mb-1.5 min-w-0 px-6 pt-3 text-[12px] font-semibold tracking-[0.16em] text-mist-400', desktopPresentation && 'desktop-agent-list-title')}><div className="truncate" title={sidebarTitle}>{sidebarTitle}</div></div>}
       <div className={cn('flex items-center gap-2', desktopPresentation ? 'desktop-agent-list-new' : sidebarTitle !== undefined ? 'px-3 pb-3 pt-0' : 'p-3')}>
-        <Button variant="primary" className="flex-1" icon={<MessageSquarePlus className="size-4" />} onClick={onNew}>新对话</Button>
+        <Button variant={desktopPresentation ? 'secondary' : 'primary'} className="flex-1" icon={<MessageSquarePlus className="size-4" />} onClick={onNew}>新对话</Button>
         {onClose && <IconButton label="关闭对话列表" onClick={onClose}><X className="size-4" /></IconButton>}
       </div>
       <label className={cn('relative mx-3 mb-3 block', desktopPresentation && 'desktop-agent-list-search')}>
@@ -91,10 +93,10 @@ export function AgentConversationList({
         <Button className="col-span-2" variant="ghost" size="sm" onClick={() => setGroupManageOpen(true)}>管理分组（{namedGroups.length}）</Button>
       </div>}
       {!organizeEnabled && goalsEnabled && <label className="mx-3 mb-3 block"><Select aria-label="筛选对话状态" value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}><option value="">全部对话</option><option value="task">我的任务（含已归档）</option></Select></label>}
-      {goalsEnabled && stateFilter === 'task' && <p className="mx-4 -mt-2 mb-2 text-[11px] text-mist-400">跨会话显示任务，包含已归档对话。</p>}
+      {goalsEnabled && stateFilter === 'task' && <p className="mx-4 -mt-2 mb-2 text-[12px] text-mist-400">跨会话显示任务，包含已归档对话。</p>}
       {organizeEnabled && groupQuery.isError && <p role="alert" className="mx-4 mb-2 text-xs text-danger">分组加载失败。<button type="button" className="ml-1 underline" onClick={() => void groupQuery.refetch()}>重试</button></p>}
-      {list.isLoading ? <div className="px-4 py-3 text-sm text-mist-400">正在加载对话…</div> : list.isError ? (
-        <div className="px-4 py-3 text-sm text-danger">{errorMessage(list.error)} <button type="button" className="ml-1 underline" onClick={() => void list.refetch()}>重试</button></div>
+      {list.isLoading ? <StateBlock tone="loading" title="正在加载对话…" /> : list.isError ? (
+        <StateBlock tone="error" title="对话列表读取失败" desc={errorMessage(list.error)} action={<Button size="sm" variant="outline" onClick={() => void list.refetch()}>重试</Button>} />
       ) : (
         <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {pinned.length > 0 && <ConversationGroup label="置顶" icon={<Pin className="size-3" />}>{pinned.map(row)}</ConversationGroup>}
@@ -103,7 +105,7 @@ export function AgentConversationList({
             <IconButton label={`删除分组 ${label}`} className="size-6" onClick={() => { const group = namedGroups.find((item) => item.id === id); if (group) void removeGroup(group) }}><Trash2 className="size-3" /></IconButton>
           </>}>{grouped.map(row)}</ConversationGroup>)}
           {(organizeEnabled ? dateGroups : groups).map(({ label, items: grouped }) => grouped.length > 0 && <ConversationGroup key={label} label={label}>{grouped.map(row)}</ConversationGroup>)}
-          {!items.length && <div className="px-3 py-8 text-center text-[13px] text-mist-400">{search ? '没有匹配的对话' : archived ? '没有已归档的对话' : '还没有对话'}</div>}
+          {!items.length && <StateBlock tone="empty" title={search ? '没有匹配的对话' : archived ? '还没有已归档的对话' : '还没有对话'} desc={search ? '换一个关键词，或清空搜索。' : '新建对话后，消息会按时间出现在这里。'} />}
           <div ref={sentinel} className="h-1" />
           {list.isFetchingNextPage && <div className="py-3 text-center text-xs text-mist-400">加载更多…</div>}
         </div>
@@ -126,7 +128,7 @@ export function AgentConversationList({
 }
 
 function ConversationGroup({ label, icon, actions, children }: { label: string; icon?: ReactNode; actions?: ReactNode; children: ReactNode }) {
-  return <section className="mb-3"><div className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold tracking-wide text-mist-400">{icon}{label}<span className="ml-auto flex items-center">{actions}</span></div><div className="space-y-0.5">{children}</div></section>
+  return <section className="mb-3"><div className="flex items-center gap-1 px-2.5 py-1.5 text-[12px] font-semibold tracking-wide text-mist-400">{icon}{label}<span className="ml-auto flex items-center">{actions}</span></div><div className="space-y-0.5">{children}</div></section>
 }
 
 function ConversationRow({ item, groups, organizeEnabled, selected, onSelect, onChanged, desktopPresentation = false }: {
@@ -193,44 +195,72 @@ function ConversationRow({ item, groups, organizeEnabled, selected, onSelect, on
     } catch (error) { toast.error(errorMessage(error)) }
   }
   const pending = item.pending_actions
-  const busy = item.has_active_run
+  const pendingTotal = (item.pending_actions || 0) + (item.pending_questions || 0)
+  const state = conversationRowState(item)
+  const meta = state.label ? [state.label, splitDate(item.last_message_at)].filter(Boolean).join(' · ') : item.account_name || (item.archived_at ? '已归档' : splitDate(item.last_message_at))
+  const menu = <>
+    {menuOpen && <>
+      <button type="button" className="fixed inset-0 z-20 cursor-default" aria-label="关闭菜单" onClick={() => setMenuOpen(false)} />
+      <div role="menu" className="absolute right-0 top-8 z-30 min-w-36 rounded-lg border border-mist-200 bg-white p-1 shadow-pop">
+        <MenuButton icon={<Pencil />} label="重命名" onClick={() => { setTitle(item.title); setRenameOpen(true); setMenuOpen(false) }} />
+        <MenuButton icon={item.pinned_at ? <PinOff /> : <Pin />} label={item.pinned_at ? '取消置顶' : '置顶'} onClick={() => { setMenuOpen(false); void changePin().catch((e) => toast.error(errorMessage(e))) }} />
+        {organizeEnabled && <>
+          <MenuButton icon={<FolderPlus />} label="移动到分组" onClick={() => { setGroupID(item.group_id ?? ''); setGroupOpen(true); setMenuOpen(false) }} />
+          {!item.archived_at && <MenuButton icon={<span aria-hidden="true">•</span>} label="标为未读" onClick={() => { setMenuOpen(false); void markUnread() }} />}
+          <MenuButton icon={item.archived_at ? <ArchiveRestore /> : <Archive />} label={item.archived_at ? '恢复归档' : '归档'} onClick={() => { setMenuOpen(false); void toggleArchive() }} />
+        </>}
+        <MenuButton icon={<Trash2 />} label="删除" danger onClick={() => { setMenuOpen(false); void remove() }} />
+      </div>
+    </>}
+  </>
+  const desktopRow = <div className={`desktop-agent-conv-row group ${selected ? 'is-selected' : ''}`} data-tone={state.tone} aria-current={selected ? 'page' : undefined}>
+    <button type="button" onClick={onSelect} className="desktop-agent-conv-row-main">
+      <span className="desktop-agent-conv-row-title">
+        <span className={`desktop-agent-row-dot desktop-agent-row-dot-${state.tone}`} aria-hidden="true" />
+        <span className="desktop-agent-conv-row-name">{item.title || '新对话'}</span>
+        {item.kind === 'side' && <span className="desktop-agent-side-tag">旁问</span>}
+      </span>
+      <span className="desktop-agent-conv-row-meta">
+        {meta}
+        {pendingTotal > 0 && <span className="desktop-agent-conv-row-pending">待你处理 {pendingTotal}</span>}
+      </span>
+    </button>
+    <div className="desktop-agent-conv-row-tail">
+      {item.has_unread && <span aria-label="未读" title="未读" className="desktop-agent-conv-unread" />}
+      <div className="relative">
+        <IconButton label="对话操作" className="desktop-agent-conv-more" onClick={() => setMenuOpen((value) => !value)}><MoreHorizontal className="size-4" /></IconButton>
+        {menu}
+      </div>
+    </div>
+  </div>
   return (
-    <div className={`group flex items-center rounded-lg ${selected ? 'bg-ink-50' : 'hover:bg-mist-100/80'}`}>
+    <>
+      {desktopPresentation ? desktopRow : <div className={`group flex items-center rounded-lg ${selected ? 'bg-ink-50' : 'hover:bg-mist-100/80'}`}>
       <button type="button" onClick={onSelect} className={`min-w-0 flex-1 cursor-pointer px-2.5 py-2 text-left ${selected ? 'text-ink-800' : 'text-mist-700'}`}>
         <span className="flex items-center gap-1.5">
-          {busy && <LoaderCircle className="size-3.5 shrink-0 animate-spin text-ink-500" />}
+          {item.has_active_run && <LoaderCircle className="size-3.5 shrink-0 animate-spin text-ink-500" />}
           {item.has_unread && <span aria-label="未读" title="未读" className="size-2 shrink-0 rounded-full bg-ink-500" />}
           <span className="truncate text-[13px] font-medium">{item.title || '新对话'}</span>
-          {pending > 0 && <span className="rounded-full bg-gamboge-100 px-1.5 text-[10px] text-gamboge-800">{pending}</span>}
+          {item.kind === 'side' && <span className="desktop-agent-side-tag">旁问</span>}
+          {pending > 0 && <span className="rounded-full bg-gamboge-100 px-1.5 text-[12px] text-gamboge-800">{pending}</span>}
         </span>
-        <span className="mt-0.5 block truncate text-[11px] text-mist-400" title={desktopPresentation ? item.model || '尚未选择模型' : undefined}>{item.matched_message_snippet || (item.goal ? `任务 · ${{ active: '进行中', paused: '已暂停', waiting_user: '等待处理', completed: '已完成', blocked: '已阻塞', budget_limited: '预算已用尽', cancelled: '已结束' }[item.goal.status] ?? item.goal.status}` : item.archived_at ? '已归档' : desktopPresentation ? pending > 0 ? `${pending} 张待确认卡片` : splitDate(item.last_message_at) : item.model || '尚未选择模型')}</span>
+        <span className="mt-0.5 block truncate text-[12px] text-mist-400" title={desktopPresentation ? item.model || '尚未选择模型' : undefined}>{item.matched_message_snippet || (item.goal ? `任务 · ${{ active: '进行中', paused: '已暂停', waiting_user: '等待处理', completed: '已完成', blocked: '已阻塞', budget_limited: '预算已用尽', cancelled: '已结束' }[item.goal.status] ?? item.goal.status}` : item.archived_at ? '已归档' : desktopPresentation ? pending > 0 ? `${pending} 张待确认卡片` : splitDate(item.last_message_at) : item.model || '尚未选择模型')}</span>
       </button>
       <div className="relative mr-1">
         <IconButton label="对话操作" className="size-7 opacity-0 group-hover:opacity-100 focus:opacity-100" onClick={() => setMenuOpen((value) => !value)}><MoreHorizontal className="size-4" /></IconButton>
-        {menuOpen && <>
-          <button type="button" className="fixed inset-0 z-20 cursor-default" aria-label="关闭菜单" onClick={() => setMenuOpen(false)} />
-          <div role="menu" className="absolute right-0 top-8 z-30 min-w-36 rounded-lg border border-mist-200 bg-white p-1 shadow-pop">
-            <MenuButton icon={<Pencil />} label="重命名" onClick={() => { setTitle(item.title); setRenameOpen(true); setMenuOpen(false) }} />
-            <MenuButton icon={item.pinned_at ? <PinOff /> : <Pin />} label={item.pinned_at ? '取消置顶' : '置顶'} onClick={() => { setMenuOpen(false); void changePin().catch((e) => toast.error(errorMessage(e))) }} />
-            {organizeEnabled && <>
-              <MenuButton icon={<FolderPlus />} label="移动到分组" onClick={() => { setGroupID(item.group_id ?? ''); setGroupOpen(true); setMenuOpen(false) }} />
-              {!item.archived_at && <MenuButton icon={<span aria-hidden="true">•</span>} label="标为未读" onClick={() => { setMenuOpen(false); void markUnread() }} />}
-              <MenuButton icon={item.archived_at ? <ArchiveRestore /> : <Archive />} label={item.archived_at ? '恢复归档' : '归档'} onClick={() => { setMenuOpen(false); void toggleArchive() }} />
-            </>}
-            <MenuButton icon={<Trash2 />} label="删除" danger onClick={() => { setMenuOpen(false); void remove() }} />
-          </div>
-        </>}
+        {menu}
       </div>
+    </div>}
       {renameOpen && <Dialog open onClose={() => setRenameOpen(false)} title="重命名对话" footer={<><Button variant="ghost" onClick={() => setRenameOpen(false)}>取消</Button><Button variant="primary" onClick={() => void saveTitle()} disabled={!title.trim()}>保存</Button></>}>
         <Input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} maxLength={60} onKeyDown={(event) => isEnterWithoutComposition(event.nativeEvent) && void saveTitle()} />
       </Dialog>}
       {groupOpen && <Dialog open onClose={() => setGroupOpen(false)} title="移动到分组" footer={<><Button variant="ghost" onClick={() => setGroupOpen(false)}>取消</Button><Button variant="primary" onClick={() => void moveToGroup()}>保存</Button></>}>
         <Select aria-label="选择分组" value={groupID} onChange={(event) => setGroupID(event.target.value)}><option value="">未分组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</Select>
       </Dialog>}
-    </div>
+    </>
   )
 }
 
 function MenuButton({ icon, label, onClick, danger }: { icon: ReactNode; label: string; onClick: () => void; danger?: boolean }) {
-  return <button type="button" role="menuitem" onClick={onClick} className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-mist-50 ${danger ? 'text-danger' : 'text-mist-600'}`}><span className="[&>svg]:size-3.5">{icon}</span>{label}</button>
+  return <button type="button" role="menuitem" onClick={onClick} className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-mist-50 ${danger ? 'text-danger' : 'text-mist-600'}`}><span className="[&>svg]:size-3.5">{icon}</span>{label}</button>
 }

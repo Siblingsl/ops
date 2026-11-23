@@ -125,6 +125,49 @@ export function BrowserEvidenceNotice({ conversationId }: { conversationId?: str
   )
 }
 
+export function RunOutcomeNotice({ run }: { run: AgentConversationDetail['last_run'] | null | undefined }) {
+  const [open, setOpen] = useState(false)
+  if (!run) return null
+  const blocked = (run.final_check?.blocked ?? []).filter(Boolean)
+  const wrap = run.final_check?.wrap_up
+  const partial = run.outcome === 'partial'
+  if (!run.demo && !partial && blocked.length === 0) return null
+  const claimLabel = (value: string) => ({
+    publish: '发布', write: '写入', send: '发送', execute: '执行', finish: '完成', record: '记录能力缺口',
+  })[value] ?? value
+  const section = (title: string, items: string[] | undefined, empty: string) => (
+    <section>
+      <h4 className="text-[12px] font-medium text-ink-700">{title}</h4>
+      {(items?.length ?? 0) === 0
+        ? <p className="mt-1 text-[12px] text-mist-500">{empty}</p>
+        : <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[12px] text-ink-700">{items!.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}</ul>}
+    </section>
+  )
+  return <div data-testid="agent-run-outcome" className="mx-auto mb-3 max-w-3xl space-y-2">
+    {run.demo && <div data-testid="agent-run-demo-banner" role="status" className="rounded-lg border border-gamboge-200 bg-gamboge-50 px-3 py-2 text-[12.5px] text-gamboge-900">
+      模拟模型演示，结果不代表真实执行
+    </div>}
+    {(partial || blocked.length > 0) && <div className="flex flex-wrap items-center gap-2">
+      {partial && <span data-testid="agent-run-partial-chip" className="inline-flex items-center rounded-full border border-gamboge-300 bg-gamboge-50 px-2.5 py-1 text-[12px] font-medium text-gamboge-900">
+        部分完成{run.reason === 'round_limit' ? '（轮次用尽）' : ''}
+      </span>}
+      {wrap && <button type="button" data-testid="agent-run-wrapup-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-ink-600 hover:bg-ink-50">
+        查看收尾摘要<ChevronDown className={`size-3.5 transition-transform ${open ? '' : '-rotate-90'}`} />
+      </button>}
+    </div>}
+    {blocked.length > 0 && <div data-testid="agent-run-blocked" className="rounded-lg border border-gamboge-200 bg-gamboge-50/70 px-3 py-2 text-[12px] text-gamboge-900">
+      <p>未执行声明：以下动作在本次运行中没有成功证据</p>
+      <ul className="mt-1 list-disc space-y-0.5 pl-4">{blocked.map((item) => <li key={item}>{claimLabel(item)}</li>)}</ul>
+    </div>}
+    {wrap && open && <div data-testid="agent-run-wrapup" className="space-y-3 rounded-lg border border-mist-200 bg-white px-3 py-3 shadow-sm">
+      {section('已完成', wrap.done, '（无已记录的完成项）')}
+      {section('未完成', wrap.pending, '（无未完成步骤）')}
+      {section('待你确认', wrap.need_user, '（无待确认事项）')}
+      {wrap.next_actions && <p className="text-[12px] text-mist-600">建议：{wrap.next_actions}</p>}
+    </div>}
+  </div>
+}
+
 export function RunStatus({ activeRun, streamStage, toolName, connection, pendingActions, error, completedNotice }: { activeRun: AgentConversationDetail['active_run'] | undefined; streamStage: string; toolName?: string; connection: string; pendingActions: number; error: string; completedNotice: string }) {
   if (error) return <div role="alert" className="mx-auto mb-3 max-w-3xl rounded-lg bg-danger/5 px-3 py-2 text-[12.5px] text-danger">{error}</div>
   const text = connection === 'reconnecting' ? '连接中断，任务可能仍在运行，正在恢复…'

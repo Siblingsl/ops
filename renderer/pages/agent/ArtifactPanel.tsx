@@ -25,7 +25,11 @@ function versionText(version: AgentArtifactVersion | null | undefined) {
 function ArtifactPreview({ item, version, onQuote }: { item: AgentArtifactDetail; version: AgentArtifactVersion; onQuote: (ref: AgentContextSelection, prompt: string) => void }) {
   const [downloading, setDownloading] = useState<string | null>(null)
   const [visibleRows, setVisibleRows] = useState(50)
-  useEffect(() => setVisibleRows(50), [version.id])
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [feedbackType, setFeedbackType] = useState('表达不清')
+  const [feedbackText, setFeedbackText] = useState('')
+  const [feedbackRef, setFeedbackRef] = useState<AgentContextSelection | null>(null)
+  useEffect(() => { setVisibleRows(50); setFeedbackOpen(false); setFeedbackText(''); setFeedbackRef(null) }, [version.id])
   if (!version.available) return <Notice tone="gamboge">来源已不可用，保留的产物记录仍可查看。</Notice>
   const content = record(version.content)
   const data = record(content.data)
@@ -63,10 +67,12 @@ function ArtifactPreview({ item, version, onQuote }: { item: AgentArtifactDetail
     try { await navigator.clipboard.writeText(text || candidates.join('\n') || summary); toast.success('已复制产物内容') }
     catch { toast.error('复制失败，请手动选择内容复制') }
   }
-  const quoteSelection = async () => {
+  // FN-08：读取预览中的精确选区，构造带 version_id/anchor/quote 的引用；
+  // 引用追问与“反馈这段”共用同一 anchor/hash 校验，服务端不猜位置。
+  const readSelection = async (): Promise<AgentContextSelection | null> => {
     const root = document.querySelector<HTMLElement>('[data-testid="artifact-text-content"]')
     const selection = window.getSelection()
-    if (!root || !selection || selection.isCollapsed || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return
+    if (!root || !selection || selection.isCollapsed || !root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return null
     const range = selection.getRangeAt(0)
     const before = document.createRange()
     before.selectNodeContents(root)
@@ -77,18 +83,60 @@ function ArtifactPreview({ item, version, onQuote }: { item: AgentArtifactDetail
     const quote = range.toString().normalize('NFC')
     const start = Array.from(before.toString().normalize('NFC')).length
     const end = Array.from(toEnd.toString().normalize('NFC')).length
-    if (!quote || end <= start || Array.from(quote).length !== end - start) return
+    if (!quote || end <= start || Array.from(quote).length !== end - start) return null
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(quote))
+    const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+    return {
+      id: version.id, artifact_id: item.artifact.id, type: 'artifact_version', name: `${item.artifact.title} · v${version.version}`,
+      summary: '对话产物版本选段', scope: 'turn', account_id: null, revision: version.hash,
+      updated_at: version.created_at, reference_scope: 'turn',
+      anchor: { start, end, quote_hash: hash, quote },
+    }
+  }
+  const quoteSelection = async () => {
     try {
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(quote))
-      const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
-      onQuote({
-        id: version.id, type: 'artifact_version', name: `${item.artifact.title} · v${version.version}`,
-        summary: '对话产物版本选段', scope: 'turn', account_id: null, revision: version.hash,
-        updated_at: version.created_at, reference_scope: 'turn',
-        anchor: { start, end, quote_hash: hash, quote },
-      }, '请基于引用的产物选段继续分析。')
+      const ref = await readSelection()
+      if (!ref) { toast.error('先在预览中选中一段文字'); return }
+      onQuote(ref, '请基于引用的产物选段继续分析。')
     } catch {
-      // A secure-context crypto API is required so the server can validate this exact selection.
+      toast.error('无法读取选段；请重试')
+    }
+  }
+  const openFeedback = async () => {
+    try {
+      const ref = await readSelection()
+      if (!ref) { toast.error('先在预览中选中一段文字'); return }
+      setFeedbackRef(ref)
+      setFeedbackText('')
+      setFeedbackOpen(true)
+    } catch {
+      toast.error('无法读取选段；请重试')
+    }
+  }
+  const submitFeedback = () => {
+    if (!feedbackRef || !feedbackText.trim()) return
+    const prompt = `【产物反馈 · ${feedbackType} · artifact ${item.artifact.id} · v${version.version}】${feedbackText.trim()}\n请只针对所选片段修改，不要改动其他内容。`
+    onQuote(feedbackRef, prompt)
+    setFeedbackOpen(false)
+    setFeedbackText('')
+    setFeedbackRef(null)
+    toast.success('已生成反馈引用', { description: '请确认内容后手动发送，不会自动发送。' })
+  }
+  const saveSelection = async () => {
+    try {
+      const ref = await readSelection()
+      if (!ref?.anchor?.quote) { toast.error('先在预览中选中一段文字'); return }
+      const url = URL.createObjectURL(new Blob([ref.anchor.quote], { type: 'text/plain;charset=utf-8' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `ops-artifact-v${version.version}-selection.txt`
+      document.body.append(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      toast.success('已导出选中片段')
+    } catch {
+      toast.error('选段导出失败，请重试')
     }
   }
 
@@ -105,10 +153,10 @@ function ArtifactPreview({ item, version, onQuote }: { item: AgentArtifactDetail
       ? <div className="space-y-2"><div className="max-h-96 overflow-auto rounded-lg border border-mist-200"><table className="min-w-full text-left text-xs"><thead className="bg-mist-50"><tr>{columns.map((cell, index) => <th key={index} className="max-w-64 whitespace-pre-wrap break-all border-b border-mist-200 px-3 py-2 font-medium">{cell}</th>)}</tr></thead><tbody>{rows.slice(0, visibleRows).map((row, index) => <tr key={index}>{row.map((cell, column) => <td key={column} className="max-w-64 whitespace-pre-wrap break-all border-b border-mist-100 px-3 py-2">{cell}</td>)}</tr>)}</tbody></table></div>
         <p className="text-xs text-mist-500">显示 {Math.min(rows.length, visibleRows)} / {rows.length} 行；CSV 导出对公式样式的单元格加“文本：”前缀，原产物不变。</p>
         {rows.length > visibleRows && <Button size="sm" variant="ghost" onClick={() => setVisibleRows((count) => count + 50)}>显示更多行</Button>}
-        <details><summary className="cursor-pointer text-xs text-ink-700">CSV 原文与选段反馈</summary><pre data-testid="artifact-text-content" className="mt-2 max-h-56 select-text overflow-auto whitespace-pre-wrap break-words rounded-lg bg-mist-50 p-3 text-sm">{text}</pre><Button className="mt-2" size="sm" variant="outline" icon={<MessageSquareQuote className="size-3.5" />} onClick={() => void quoteSelection()}>引用选段追问</Button></details>
+        <details><summary className="cursor-pointer text-xs text-ink-700">CSV 原文与选段反馈</summary><pre data-testid="artifact-text-content" className="mt-2 max-h-56 select-text overflow-auto whitespace-pre-wrap break-words rounded-lg bg-mist-50 p-3 text-sm">{text}</pre></details>
       </div>
       : text
-      ? <div><pre data-testid="artifact-text-content" className="max-h-96 select-text overflow-auto whitespace-pre-wrap break-words rounded-lg bg-mist-50 p-3 text-sm leading-6 text-mist-700">{text}</pre><div className="mt-2 flex justify-end"><Button type="button" size="sm" variant="outline" icon={<MessageSquareQuote className="size-3.5" />} onClick={() => void quoteSelection()}>引用选段追问</Button></div></div>
+      ? <div><pre data-testid="artifact-text-content" className="max-h-96 select-text overflow-auto whitespace-pre-wrap break-words rounded-lg bg-mist-50 p-3 text-sm leading-6 text-mist-700">{text}</pre></div>
       : candidates.length > 0
         ? <div><h4 className="mb-2 text-xs font-semibold text-mist-600">标题候选</h4><ol className="space-y-2">{candidates.map((title, index) => <li key={`${index}:${title}`} className="rounded-lg border border-mist-200 bg-white px-3 py-2 text-sm leading-6 text-mist-800">{title}</li>)}</ol></div>
         : summary
@@ -116,6 +164,26 @@ function ArtifactPreview({ item, version, onQuote }: { item: AgentArtifactDetail
           : imageURL
             ? <img src={imageURL} alt={item.artifact.title} className="max-h-96 max-w-full rounded-lg border border-mist-200 object-contain" />
             : <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-mist-50 p-3 text-xs leading-5 text-mist-700">{JSON.stringify(data, null, 2)}</pre>}
+    {text && <div className="mt-2 flex flex-wrap gap-2">
+      <Button type="button" size="sm" variant="outline" icon={<MessageSquareQuote className="size-3.5" />} onClick={() => void quoteSelection()}>引用选段追问</Button>
+      <Button type="button" size="sm" variant="outline" icon={<MessageSquareQuote className="size-3.5" />} data-testid="artifact-feedback-open" onClick={() => void openFeedback()}>反馈这段</Button>
+      <Button type="button" size="sm" variant="ghost" icon={<Download className="size-3.5" />} data-testid="artifact-save-selection" onClick={() => void saveSelection()}>保存选段</Button>
+    </div>}
+    {feedbackOpen && feedbackRef?.anchor && <div className="mt-2 rounded-lg border border-mist-200 bg-mist-50 p-3" data-testid="artifact-feedback-form" role="dialog" aria-label="产物选段反馈">
+      <p className="text-xs text-mist-600">反馈选段：{feedbackRef.anchor.quote.slice(0, 120)}</p>
+      <div className="mt-2 grid gap-2 sm:grid-cols-[160px_minmax(0,1fr)]">
+        <Select aria-label="反馈问题类型" value={feedbackType} onChange={(event) => setFeedbackType(event.target.value)} className="h-8 py-1 text-xs">
+          {['表达不清', '事实错误', '数据问题', '格式问题', '其他'].map((type) => <option key={type} value={type}>{type}</option>)}
+        </Select>
+        <Textarea aria-label="反馈说明" rows={2} maxLength={500} value={feedbackText} placeholder="说明这段的问题，生成引用后由你手动发送"
+          onChange={(event) => setFeedbackText(event.target.value)} />
+      </div>
+      <div className="mt-2 flex justify-end gap-2">
+        <Button type="button" size="sm" variant="ghost" onClick={() => { setFeedbackOpen(false); setFeedbackRef(null) }}>取消</Button>
+        <Button type="button" size="sm" data-testid="artifact-feedback-submit" disabled={!feedbackText.trim()} onClick={submitFeedback}>生成反馈引用</Button>
+      </div>
+    </div>}
+
     {imageURL && candidates.length === 0 && !summary && !text && <p className="flex items-center gap-1.5 text-xs text-mist-500"><Image className="size-3.5" />图片附件预览</p>}
     {openURL && <Link to={openURL} target="_blank" rel="noopener noreferrer" className="inline-flex text-sm text-ink-700 underline">打开来源作品</Link>}
     {version.object_revision && <p className="text-xs text-mist-500">来源当前修订：{version.object_revision}</p>}

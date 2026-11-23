@@ -5,7 +5,7 @@ import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
 import { SkillWebBoundary } from '@/components/skill-web-boundary'
-import { Badge, Button, Card, CardHeader, Empty, Input, PageHeader, PageState, Tabs } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, Empty, Input, Notice, PageHeader, PageState, Tabs } from '@/components/ui'
 import { api, errorMessage, get, rawRequest } from '@/lib/api'
 import { emptySkillForm, skillFields, skillScopeLabel, type SkillDefinition, type SkillForm, type SkillImpact, type SkillList } from '@/lib/skills'
 import { useAccounts, useMe } from '@/lib/session'
@@ -118,10 +118,11 @@ function SkillDefinitionDialog({ id, mode, onClose, onCopy, onSaved }: {
   const def = detail.data
   if (mode !== 'view') return <SkillEditor def={mode === 'edit' ? def : undefined} copyFrom={mode === 'copy' ? def : undefined}
     initial={{ ...skillFields(def), status: mode === 'edit' ? def.status : 'active', scope: mode === 'edit' ? def.scope : 'personal', account_id: mode === 'edit' ? def.account_id : '' }} onClose={onClose} onSaved={onSaved} />
-  return <Dialog open onClose={onClose} title="技能详情" ariaLabel="技能详情" width="max-w-2xl" footer={<Button onClick={onCopy}>另存副本</Button>}>
+  return <Dialog open onClose={onClose} title="技能详情" ariaLabel="技能详情" width="max-w-2xl" footer={<SkillReplayFooter skill={def} onCopy={onCopy} />}>
     <div className="space-y-3 text-sm"><h2 className="font-semibold">{def.name}</h2><p>{skillScopeLabel(def.scope)} · v{def.revision} · {def.status === 'active' ? '启用中' : '已停用'}</p>
       <p>用途：{def.summary}</p><p>触发：{def.triggers}</p><p>平台：{def.platforms.join('、') || '全部'}；形态：{def.content_formats.join('、') || '全部'}；任务：{def.task_types.join('、') || '默认创作集合'}</p>
       <pre className="whitespace-pre-wrap break-words rounded bg-mist-50 p-3 font-sans">{def.instructions}</pre>
+      {(def.procedure?.length ?? 0) > 0 && <SkillProcedureTimeline skill={def} />}
       <p>{def.task_enabled ? '生成入口已开启' : '生成入口已关闭'}；{def.agent_enabled ? '智能体入口已开启' : '智能体入口已关闭'}</p>
     </div>
   </Dialog>
@@ -153,4 +154,73 @@ function DeleteSkillButton({ skill, onDeleted }: { skill: SkillDefinition; onDel
         : <PageState loading={!failure} error={failure || undefined} onRetry={() => void load()} />}
     </Dialog>
   </>
+}
+
+/**
+ * A5（D-211）：procedure 步骤时间线。每步显示序号、标题、动作、门禁与工具；
+ * gate=confirm 标注“需确认”。只展示，不执行。
+ */
+function SkillProcedureTimeline({ skill }: { skill: SkillDefinition }) {
+  return <div data-testid="skill-procedure-timeline" className="rounded border border-mist-200 p-3">
+    <p className="text-[13px] font-medium text-ink-700">流程步骤（v{skill.procedure_version ?? 1}）</p>
+    <ol className="mt-2 space-y-2">
+      {(skill.procedure ?? []).map(step => <li key={step.seq} data-testid={`skill-procedure-step-${step.seq}`} className="flex gap-2 text-[13px]">
+        <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-mist-100 text-[11px] font-medium">{step.seq}</span>
+        <span className="min-w-0">
+          <span className="font-medium">{step.title}</span>
+          {step.gate === 'confirm' && <Badge>需确认</Badge>}
+          <span className="block text-mist-500">{step.action}</span>
+          {step.tool && <span className="block text-[12px] text-mist-400">工具：{step.tool}</span>}
+        </span>
+      </li>)}
+    </ol>
+  </div>
+}
+
+/** A5 回放页脚：active 且 suggest_only 才显示回放入口；回放只建计划。 */
+function SkillReplayFooter({ skill, onCopy }: { skill: SkillDefinition; onCopy: () => void }) {
+  const [open, setOpen] = useState(false)
+  const replayable = skill.status === 'active' && (skill.replay_policy ?? 'suggest_only') === 'suggest_only'
+  return <>
+    {replayable && <Button variant="ghost" data-testid="skill-replay-open" onClick={() => setOpen(true)}>回放此技能</Button>}
+    <Button onClick={onCopy}>另存副本</Button>
+    {open && <SkillReplayDialog skill={skill} onClose={() => setOpen(false)} />}
+  </>
+}
+
+/**
+ * A5 回放预览：提交 goal 后创建计划（agent_plan），不自动执行任何工具；
+ * 每一步仍由用户逐步确认。
+ */
+function SkillReplayDialog({ skill, onClose }: { skill: SkillDefinition; onClose: () => void }) {
+  const [goal, setGoal] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ summary: string; steps: { id: string; title: string; acceptance: string }[] } | null>(null)
+  const [failure, setFailure] = useState('')
+  const submit = async () => {
+    if (!goal.trim() || busy) return
+    setBusy(true); setFailure('')
+    try {
+      const res = await api<{ run_id: string; plan_id: string; summary: string; steps: { id: string; title: string; acceptance: string }[] }>(
+        'POST', `/skills/${skill.id}/replay`, { goal: goal.trim() })
+      setResult({ summary: res.summary, steps: res.steps })
+    } catch (e) { setFailure(errorMessage(e)) } finally { setBusy(false) }
+  }
+  return <Dialog open onClose={onClose} title="回放技能" ariaLabel="回放技能" width="max-w-xl" footer={
+    <Button variant="primary" data-testid="skill-replay-submit" loading={busy} disabled={!goal.trim()} onClick={() => void submit()}>生成回放计划</Button>
+  }>
+    <div className="space-y-3 text-sm">
+      <p>回放只把「{skill.name}」的流程步骤组装成待确认计划，<strong>不会自动执行任何工具</strong>；每一步仍由你逐步确认。</p>
+      <textarea aria-label="回放目标" data-testid="skill-replay-goal" value={goal} onChange={e => setGoal(e.target.value)}
+        placeholder="这次想用这个流程做什么？（1–2000 字）" className="min-h-24 w-full rounded border border-mist-200 p-2 text-[13px]" />
+      {failure && <Notice tone="gamboge">{failure}</Notice>}
+      {result && <div data-testid="skill-replay-result" className="rounded border border-mist-200 p-3">
+        <p className="text-[13px] font-medium">已生成计划（待确认）</p>
+        <p className="mt-1 text-[12px] text-mist-500">{result.summary}</p>
+        <ol className="mt-2 list-decimal space-y-1 pl-5 text-[13px]">
+          {result.steps.map(s => <li key={s.id}>{s.title} · {s.acceptance}</li>)}
+        </ol>
+      </div>}
+    </div>
+  </Dialog>
 }

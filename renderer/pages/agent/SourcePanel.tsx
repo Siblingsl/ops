@@ -72,7 +72,7 @@ export function SourcePanel({ conversationId }: { conversationId: string }) {
         {evidence.map((e) => <li key={e.id} className="rounded-lg border border-mist-100 p-2 text-[12px]" data-testid={`source-${e.id}`}>
           <div className="flex items-center justify-between gap-2">
             <span className="min-w-0 truncate font-medium text-ink-700">{e.title || e.origin}</span>
-            {e.redaction_state === 'quarantined' && <span className="shrink-0 rounded bg-gamboge-100 px-1.5 py-0.5 text-[10px] text-gamboge-700">已隔离</span>}
+            {e.redaction_state === 'quarantined' && <span className="shrink-0 rounded bg-gamboge-100 px-1.5 py-0.5 text-[12px] text-gamboge-700">已隔离</span>}
           </div>
           <p className="mt-0.5 truncate text-mist-500">{e.redacted_url || e.origin}</p>
           <p className="text-mist-400">读取于 {e.created_at}</p>

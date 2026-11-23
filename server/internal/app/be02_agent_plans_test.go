@@ -53,6 +53,55 @@ func TestBE02PresentPlanIdempotentCorruptStepsSurfacesError(t *testing.T) {
 	}
 }
 
+func TestBE02UpdatePlanStepWithoutEvidenceStoresEmptyArray(t *testing.T) {
+	t.Setenv(agentWorkbenchFeatureEnv, "event_resume,plans")
+	ctx, st := aw06ToolRun(t)
+	st.Mode = "plan"
+	st.ExecutionOrigin = "interactive"
+
+	presentArgs := map[string]any{
+		"summary": "推进首步",
+		"steps": []map[string]any{
+			{"id": "read", "title": "读取近期内容", "acceptance": "引用已保存的读取结果"},
+		},
+	}
+	payload, _, err := env.srv.agentMetaPresentPlan(ctx, st, ai.ToolCall{ID: "call-be02-plan-step-present"}, presentArgs)
+	if err != nil {
+		t.Fatalf("present_plan: %v", err)
+	}
+	var plan map[string]any
+	if err := json.Unmarshal(payload, &plan); err != nil {
+		t.Fatal(err)
+	}
+	planID, _ := plan["plan_id"].(string)
+	if planID == "" {
+		t.Fatalf("present_plan 未返回 plan_id: %s", payload)
+	}
+
+	_, _, err = env.srv.agentMetaUpdatePlanStep(ctx, st, ai.ToolCall{ID: "call-be02-plan-step-update"}, map[string]any{
+		"plan_id": planID, "expected_version": int64(1), "step_id": "read", "status": "in_progress",
+	})
+	if err != nil {
+		t.Fatalf("无证据推进步骤必须成功（evidence_refs 应落为空数组）: %v", err)
+	}
+	var status string
+	var refs []byte
+	if err := env.srv.db.QueryRow(ctx, `SELECT status,evidence_refs FROM agent_plan_step_state
+		WHERE plan_id=$1 AND step_id=$2`, planID, "read").Scan(&status, &refs); err != nil {
+		t.Fatal(err)
+	}
+	if status != "in_progress" {
+		t.Fatalf("step status = %s, want in_progress", status)
+	}
+	var decoded []agentPlanEvidenceRef
+	if err := json.Unmarshal(refs, &decoded); err != nil {
+		t.Fatalf("evidence_refs 不是数组：%s (%v)", refs, err)
+	}
+	if len(decoded) != 0 {
+		t.Fatalf("evidence_refs = %v, want []", decoded)
+	}
+}
+
 func TestBE02PresentPlanIdempotentReplayPreservesPlan(t *testing.T) {
 	t.Setenv(agentWorkbenchFeatureEnv, "event_resume,plans")
 	ctx, st := aw06ToolRun(t)

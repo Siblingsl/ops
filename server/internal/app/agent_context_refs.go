@@ -29,12 +29,13 @@ type agentContextCandidate struct {
 }
 
 type agentContextReference struct {
-	Type     string               `json:"type"`
-	ID       uuid.UUID            `json:"id"`
-	Revision string               `json:"revision,omitempty"`
-	Scope    string               `json:"scope"`
-	Name     string               `json:"name,omitempty"`
-	Anchor   *agentArtifactAnchor `json:"anchor,omitempty"`
+	Type       string               `json:"type"`
+	ID         uuid.UUID            `json:"id"`
+	ArtifactID *uuid.UUID           `json:"artifact_id,omitempty"`
+	Revision   string               `json:"revision,omitempty"`
+	Scope      string               `json:"scope"`
+	Name       string               `json:"name,omitempty"`
+	Anchor     *agentArtifactAnchor `json:"anchor,omitempty"`
 }
 
 func agentValidateArtifactAnchor(content string, anchor *agentArtifactAnchor) error {
@@ -277,14 +278,19 @@ func (s *Server) agentResolveContextReferenceInConversation(ctx context.Context,
 			return nil, apiErr(422, "agent_context_unavailable", "产物版本引用必须绑定到当前对话")
 		}
 		var content []byte
-		err = s.db.QueryRow(ctx, `SELECT a.title||' · v'||v.version,'对话产物版本',NULL::uuid,
+		var artifactID uuid.UUID
+		err = s.db.QueryRow(ctx, `SELECT a.title||' · v'||v.version,'对话产物版本',NULL::uuid,a.id,
 			v.hash,v.content_ref
 			FROM agent_artifact_version v JOIN agent_artifact a ON a.id=v.artifact_id
 			JOIN agent_conversation c ON c.id=a.conversation_id
 			WHERE v.id=$1 AND c.id=$2 AND c.workspace_id=$3 AND c.user_id=$4`,
 			ref.ID, *conversationID, ident(ctx).WorkspaceID, ident(ctx).UserID).
-			Scan(&item.Name, &item.Summary, &item.AccountID, &item.Revision, &content)
+			Scan(&item.Name, &item.Summary, &item.AccountID, &artifactID, &item.Revision, &content)
 		if err == nil {
+			// FN-08：反馈引用必须同时带上 artifact_id，拒绝版本属于另一个产物时静默放行。
+			if ref.ArtifactID != nil && *ref.ArtifactID != artifactID {
+				return nil, apiErr(422, "agent_context_unavailable", "产物版本与产物不匹配")
+			}
 			var body struct {
 				Text string `json:"text"`
 			}
@@ -293,6 +299,28 @@ func (s *Server) agentResolveContextReferenceInConversation(ctx context.Context,
 			item.Scope = "turn"
 			if ref.Anchor != nil {
 				if err := agentValidateArtifactAnchor(body.Text, ref.Anchor); err != nil {
+					return nil, err
+				}
+				item.Content = "选段引用：\n" + ref.Anchor.Quote
+			}
+		}
+	case "message":
+		// IX-04（38 文档 §11）：划选引用——assistant 消息的文本范围引用。
+		// 仅本对话、本人、已保存的 assistant 消息；anchor 校验与 artifact_version 同源。
+		if conversationID == nil {
+			return nil, apiErr(422, "agent_context_unavailable", "消息引用必须绑定到当前对话")
+		}
+		var content []byte
+		err = s.db.QueryRow(ctx, `SELECT '引用消息','选段引用',NULL::uuid,m.seq::text,m.content
+			FROM agent_message m JOIN agent_conversation c ON c.id=m.conversation_id
+			WHERE m.id=$1 AND c.id=$2 AND c.workspace_id=$3 AND c.user_id=$4 AND m.role='assistant'`,
+			ref.ID, *conversationID, ident(ctx).WorkspaceID, ident(ctx).UserID).
+			Scan(&item.Name, &item.Summary, &item.AccountID, &item.Revision, &content)
+		if err == nil {
+			item.Content = string(content)
+			item.Scope = "turn"
+			if ref.Anchor != nil {
+				if err := agentValidateArtifactAnchor(item.Content, ref.Anchor); err != nil {
 					return nil, err
 				}
 				item.Content = "选段引用：\n" + ref.Anchor.Quote

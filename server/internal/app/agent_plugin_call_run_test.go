@@ -257,6 +257,13 @@ func TestW1403P06LedgerRedactionAndIdempotency(t *testing.T) {
 	if strings.Contains(mgmtArgs, "abcdefgh") || !strings.Contains(mgmtArgs, "[REDACTED]") {
 		t.Fatalf("管理侧入参未脱敏：%s", mgmtArgs)
 	}
+	// 管理侧直建的 dispatched 行没有 run_id，sweep 只兜底超时行；立即推终态，
+	// 避免 dispatched 残留泄漏进同用户后续用例的 pending 清单（脱敏断言已完成，不放宽）。
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`UPDATE agent_plugin_call SET state='failed', error_code='test_cleanup'
+			 WHERE id=$1 AND state='dispatched'`, first.ID)
+	})
 }
 
 // w14EnabledConnectionFor 返回当前会话已启用连接（供管理侧入口测试复用目录）。
@@ -316,6 +323,13 @@ func TestW1403P07WaitFourPaths(t *testing.T) {
 		`SELECT state FROM agent_plugin_call WHERE run_id=$1`, p2.RunID).Scan(&state); err != nil || state != "dispatched" {
 		t.Fatalf("取消后账本应留 dispatched：%s %v", state, err)
 	}
+	// 取消行由 sweep 兜底转 unknown_outcome；本用例立即用 failed 回执推到终态，
+	// 避免 dispatched 残留泄漏进同用户后续用例的 pending 清单（断言已在上方完成，不放宽）。
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(),
+			`UPDATE agent_plugin_call SET state='failed', error_code='mcp_wait_cancelled'
+			 WHERE run_id=$1 AND state='dispatched'`, p2.RunID)
+	})
 
 	// 超时：created_at 早于预算+2s 的 dispatched 由 sweep 转 unknown_outcome，不重放。
 	conn := w14EnabledConnectionFor(t)

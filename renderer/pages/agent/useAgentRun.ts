@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { toast } from 'sonner'
 import { ApiError, errorMessage, get, post, stream } from '@/lib/api'
+import { mergeAgentErrors } from '@/lib/agent-ui.js'
 import {
   type AgentConversationDetail, type AgentEventEnvelope, type AgentMessage,
   type AgentPlan, type AgentQuestion, type AgentRunAcceptance,
@@ -29,7 +30,15 @@ export function useAgentRun({
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
   const [streamStage, setStreamStage] = useState('')
-  const [streamError, setStreamError] = useState('')
+  const [streamErrors, setStreamErrors] = useState<(string | { code: string; message: string; requestId: string })[]>([])
+  const streamError = streamErrors[0] ?? ''
+  const recordStreamError = useCallback((error: string | { code: string; message: string; requestId: string }) => {
+    setStreamErrors((current) => mergeAgentErrors([...current, error]) as (string | { code: string; message: string; requestId: string })[])
+  }, [])
+  const setStreamError = useCallback((value: string | { code: string; message: string; requestId: string }) => {
+    if (!value) { setStreamErrors([]); return }
+    recordStreamError(value)
+  }, [recordStreamError])
   const [streamConnection, setStreamConnection] = useState('')
   const [runID, setRunID] = useState('')
   const [completedNotice, setCompletedNotice] = useState('')
@@ -171,7 +180,7 @@ export function useAgentRun({
     setStreaming(true)
     setStreamText('')
     setStreamStage('thinking')
-    setStreamError('')
+    setStreamErrors([])
     setRunID('')
     setStreamConnection('')
     try {
@@ -200,7 +209,7 @@ export function useAgentRun({
               void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
               void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
             }
-            if (name === 'error') setStreamError(data.message || '运行失败，请重试')
+            if (name === 'error') recordStreamError({ code: String(data.code || ''), message: String(data.message || '运行失败，请重试'), requestId: String(data.request_id || '') })
             if (name === 'done') setStreamStage(data.reason === 'waiting_confirmation' ? 'waiting_confirmation' : '')
           },
         })
@@ -212,7 +221,7 @@ export function useAgentRun({
       setCompletedNotice(result?.status === 'stopped' ? '已停止'
         : result?.reason === 'round_limit' || result?.reason === 'deadline' ? '已达到单次运行上限'
           : result?.status === 'awaiting_confirmation' ? '等待你逐张确认操作卡片' : '')
-      if (result?.status === 'failed') setStreamError('本次运行已中断，请查看已保存的结果后再继续。')
+      if (result?.status === 'failed') recordStreamError('本次运行已中断，请查看已保存的结果后再继续。')
       return true
     } catch (error) {
       if (controller.signal.aborted) return acceptedRequest
@@ -221,7 +230,7 @@ export function useAgentRun({
         resumeAfterSnapshotRef.current = true
         await qc.fetchQuery({ queryKey: ['agent-conversation', id], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${id}`) })
       } else {
-        setStreamError(errorMessage(error))
+        recordStreamError(error instanceof ApiError ? { code: error.code, message: errorMessage(error), requestId: error.requestId } : errorMessage(error))
       }
       return acceptedRequest
     } finally {
@@ -301,14 +310,14 @@ export function useAgentRun({
       setCompletedNotice(result.status === 'stopped' ? '已停止'
         : result.reason === 'round_limit' || result.reason === 'deadline' ? '已达到单次运行上限'
           : result.status === 'awaiting_confirmation' ? '等待你逐张确认操作卡片' : '')
-      if (result.status === 'failed') setStreamError('本次运行已中断，请查看已保存的结果后再继续。')
+      if (result.status === 'failed') recordStreamError('本次运行已中断，请查看已保存的结果后再继续。')
     }).catch(async (error) => {
       if (controller.signal.aborted) return
       if (error instanceof ApiError && error.code === 'agent_event_cursor_expired') {
         resumeAfterSnapshotRef.current = true
         await qc.fetchQuery({ queryKey: ['agent-conversation', conversationId], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${conversationId}`) })
       } else {
-        setStreamError(errorMessage(error))
+        recordStreamError(error instanceof ApiError ? { code: error.code, message: errorMessage(error), requestId: error.requestId } : errorMessage(error))
       }
     }).finally(() => {
       if (eventController.current !== controller) return
@@ -356,7 +365,7 @@ export function useAgentRun({
     streaming, setStreaming,
     streamText, setStreamText,
     streamStage, setStreamStage,
-    streamError, setStreamError,
+    streamError, streamErrors, setStreamError,
     streamConnection,
     runID, setRunID,
     completedNotice, setCompletedNotice,

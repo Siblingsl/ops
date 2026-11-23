@@ -141,6 +141,8 @@ func agentClassifiedRouteList() map[string]string {
 	}
 	// 附录 B.2 不提供。
 	for _, r := range []string{
+		// OT-04：工作台可观测聚合仅给 owner 诊断，不作为智能体工具。
+		"GET /api/v1/agent/observability",
 		"GET /api/v1/accounts/{accountId}/data-preferences",
 		// DEV-CX08：视觉 DNA 只由账号档案页面调用，不提供智能体工具。
 		"GET /api/v1/accounts/{accountId}/visual-dna",
@@ -161,8 +163,139 @@ func agentClassifiedRouteList() map[string]string {
 		// DEV-CX13-A：发布进度与台账由本人页面读取和人工逐项确认，不对智能体开放。
 		"GET /api/v1/works/{id}/publish-state",
 		"POST /api/v1/works/{id}/publish-state/transition",
+		// REF41 P1/P2：发布清单、任务与批次只由本人发布看板调用；批次只创建/排队/读取，
+		// 不提供批量执行工具（D-117 / D-193）。
+		"GET /api/v1/works/{id}/publish-manifests",
+		"POST /api/v1/works/{id}/publish-manifests",
+		"GET /api/v1/works/{id}/publish-manifests/{platform}",
+		"POST /api/v1/works/{id}/publish-manifests/{platform}",
+		"POST /api/v1/works/{id}/publish-manifests/{platform}/validate",
+		"PATCH /api/v1/works/{id}/publish-manifests/{platform}",
+		"GET /api/v1/works/{id}/publish-tasks",
+		"POST /api/v1/works/{id}/publish-tasks",
+		"GET /api/v1/publish/capabilities",
+		"GET /api/v1/publish/labels",
+		"GET /api/v1/publish-tasks",
+		"GET /api/v1/publish-tasks/{id}/events",
+		"POST /api/v1/publish-tasks/{id}/transition",
+		"POST /api/v1/publish-tasks/{id}/queue",
+		"POST /api/v1/publish-tasks/{id}/stop",
+		"POST /api/v1/publish-tasks/{id}/retry",
+		"POST /api/v1/publish-tasks/{id}/manual",
+		"POST /api/v1/publish-tasks/{id}/skip",
+		"GET /api/v1/publish-batches",
+		"POST /api/v1/publish-batches",
+		"GET /api/v1/publish-batches/{id}",
+		"POST /api/v1/desktop/platform/publish/tasks/claim",
+		"POST /api/v1/desktop/platform/publish/tasks/{id}/heartbeat",
+		"POST /api/v1/desktop/platform/publish/tasks/{id}/results",
+		// REF41 P5：发布通道体检（只读；桌面 proof 链路，不进入智能体工具目录）。
+		"POST /api/v1/accounts/{accountId}/publish-health/check",
+		"GET /api/v1/accounts/{accountId}/publish-health",
+		"POST /api/v1/desktop/platform/publish/health/claim",
+		"POST /api/v1/desktop/platform/publish/health/checks/{checkID}/heartbeat",
+		"POST /api/v1/desktop/platform/publish/health/checks/{checkID}/results",
+		// REF41 A4：记忆确认/停用/恢复/注入预览（单条操作；verify 命名避开 HC-20 批量关键字）。
+		"POST /api/v1/accounts/{accountId}/memories/{memoryId}/verify",
+		"POST /api/v1/accounts/{accountId}/memories/{memoryId}/disable",
+		"POST /api/v1/accounts/{accountId}/memories/{memoryId}/enable",
+		"GET /api/v1/accounts/{accountId}/memories/injection-preview",
+		// REF41 P6：adopt/mark/submit 人工兜底（用户逐张操作入口，不进入智能体工具目录）。
+		"POST /api/v1/publish-tasks/{id}/adopt",
+		"POST /api/v1/publish-tasks/{id}/mark",
+		"POST /api/v1/publish-tasks/{id}/submit-now",
+		// 并发会话已登记路由（browser-grants / today-ops 属授权与只读运营面板）。
+		"GET /api/v1/agent/conversations/{id}/browser-grants",
+		"GET /api/v1/agent/today-ops",
+		// REF41 A6：角色 bot（服务端路由，不进入智能体工具目录）。
+		"GET /api/v1/agent-roles",
+		"POST /api/v1/agent-roles",
+		"PATCH /api/v1/agent-roles/{roleID}",
+		"DELETE /api/v1/agent-roles/{roleID}",
+		// 并发会话 I6/I7/A3/A8/A5 路由（各自证据 YAML 登记）。
+		"POST /api/v1/agent-runs/{id}/distill-skill",
+		"POST /api/v1/conversion-links/{id}/manual-event",
+		"POST /api/v1/public/conversion/{code}",
+		"POST /api/v1/skills/{id}/procedure/validate",
+		"POST /api/v1/skills/{id}/replay",
+		"GET /api/v1/usage/agent-cost",
+		"GET /api/v1/accounts/{accountId}/conversions",
+		"POST /api/v1/accounts/{accountId}/followers/backfill",
+		"GET /api/v1/accounts/{accountId}/followers/coverage",
+		"GET /api/v1/accounts/{accountId}/followers/summary",
+		// REF41 I6：CSV 导入只由粉丝复盘页调用，不进入智能体工具目录。
+		"POST /api/v1/accounts/{accountId}/followers/import",
+		"GET /api/v1/agent-capability-gaps",
+		"PATCH /api/v1/agent-capability-gaps/{id}",
+		"GET /api/v1/agent-runs/{id}/cost",
+		"GET /api/v1/conversion-ingest-tokens",
+		"POST /api/v1/conversion-ingest-tokens",
+		"DELETE /api/v1/conversion-ingest-tokens/{id}",
+		// REF41 A7：工作流模板（启动只建计划预览，不执行；不进入智能体工具目录）。
+		"GET /api/v1/workflows",
+		"POST /api/v1/workflows",
+		"PATCH /api/v1/workflows/{templateID}",
+		"DELETE /api/v1/workflows/{templateID}",
+		"POST /api/v1/workflows/{templateID}/start",
+		// REF41 C2：封面文案规则只由封面构建面板读取，不进入智能体工具目录。
+		"GET /api/v1/cover-presets",
+		// REF41 C1：智囊团（五席并行审稿；采纳/忽略仅记录，不进入智能体工具目录）。
+		"POST /api/v1/works/{id}/panel-review",
+		"GET /api/v1/works/{id}/panel-reviews",
+		"GET /api/v1/works/{id}/panel-reviews/{reviewID}",
+		"POST /api/v1/works/{id}/panel-reviews/{reviewID}/adopt",
+		// REF41 F1：告警规则与健康事件只由系统任务页调用，不进入智能体工具目录。
+		"GET /api/v1/alert-rules",
+		"PUT /api/v1/alert-rules/{key}",
+		"GET /api/v1/alert-events",
+		// REF41 F2：停用影响清单/合并/合并日志只由账号设置页调用，不进入智能体工具目录。
+		"GET /api/v1/accounts/{accountId}/deactivation-preview",
+		"POST /api/v1/accounts/{accountId}/merge",
+		"GET /api/v1/accounts/{accountId}/merge-logs",
+		// REF41 F3：任务台账与手动补跑只由系统任务页调用，不进入智能体工具目录。
+		"GET /api/v1/job-runs",
+		"POST /api/v1/job-runs/run-now",
+		// REF41 E2：MCP 令牌管理与只读工具调用入口；call 由外部 MCP 客户端经 Bearer 使用。
+		"GET /api/v1/mcp/tokens",
+		"POST /api/v1/mcp/tokens",
+		"DELETE /api/v1/mcp/tokens/{tokenID}",
+		"POST /api/v1/mcp/call",
+		// REF41 F5：浏览器任务策略只由安全设置页调用，不进入智能体工具目录。
+		"GET /api/v1/browser-task-policies",
+		"POST /api/v1/browser-task-policies",
+		"PATCH /api/v1/browser-task-policies/{policyID}",
+		"POST /api/v1/browser-task-policies/{policyID}/renew",
+		// REF41 F5：桌面发布 Preflight 策略闸的签名校验端点，仅桌面客户端调用。
+		"POST /api/v1/desktop/platform/browser-policy/check",
+		// 并行会话 F4：采集自学习（诊断页读取 + 桌面 proof 上报），不进入智能体工具目录。
+		"POST /api/v1/desktop/parser-events",
+		"GET /api/v1/parser-events/diagnostics",
+		"POST /api/v1/parser-recipes/{id}/verify",
+		"POST /api/v1/parser-recipes/{id}/activate",
+		// 并行会话 E1：飞书机器人管理（webhook 密文，不进入智能体工具目录）+ 公共入站。
+		"GET /api/v1/feishu-bots",
+		"POST /api/v1/feishu-bots",
+		"PUT /api/v1/feishu-bots/{id}",
+		"DELETE /api/v1/feishu-bots/{id}",
+		"POST /api/v1/feishu-bots/{id}/test",
+		"GET /api/v1/feishu-bots/{id}/bindings",
+		"PUT /api/v1/feishu-bots/{id}/bindings",
+		"POST /api/v1/public/feishu/{bot_id}",
+		// 并行会话 I7：转化链接管理只由作品设置调用，不进入智能体工具目录。
+		"GET /api/v1/works/{id}/conversion-links",
+		"POST /api/v1/works/{id}/conversion-links",
+		"PUT /api/v1/works/{id}/conversion-links/{linkId}",
+		// REF41 I1：竞对监控/观测/趋势/覆盖（只读公开页 + 桌面 proof 链路，不进入智能体工具目录）。
+		"PATCH /api/v1/benchmark/targets/{id}/monitor",
+		"GET /api/v1/benchmark/targets/{id}/observations",
+		"GET /api/v1/benchmark/targets/{id}/trend",
+		"GET /api/v1/benchmark/targets/{id}/coverage",
+		"POST /api/v1/desktop/benchmark/tasks/claim",
+		"POST /api/v1/desktop/benchmark/tasks/{taskID}/heartbeat",
+		"POST /api/v1/desktop/benchmark/tasks/{taskID}/results",
 		// DEV-CX13-B：多时点窗口与同口径对照只由本人复盘页读取，不进入智能体工具目录。
 		"GET /api/v1/works/{id}/metrics/windows",
+		"GET /api/v1/works/{id}/peer-compare",
 		"GET /api/v1/accounts/{accountId}/metrics/compare",
 		"GET /api/v1/accounts/{accountId}/experiments",
 		"POST /api/v1/accounts/{accountId}/experiments",
@@ -172,6 +305,10 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/experiments/{id}/abandon",
 		"POST /api/v1/topics/{id}/diagnose",
 		"GET /api/v1/topics/{id}/diagnoses",
+		// REF41 I4：六维评分只由本人选题页调用，不作为智能体批量执行工具。
+		"POST /api/v1/topics/{id}/score",
+		"GET /api/v1/topics/{id}/score",
+		"POST /api/v1/topics/score-batch",
 		"POST /api/v1/works/{id}/diagnose-title",
 		"GET /api/v1/works/{id}/diagnoses",
 		"POST /api/v1/works/{id}/cards/suggest",
@@ -185,6 +322,11 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/benchmarks/{benchmarkId}/notes",
 		"GET /api/v1/benchmark-notes/{noteId}",
 		"PATCH /api/v1/benchmark-notes/{noteId}",
+		// REF41 I2：竞对拆解只由笔记卡用户操作；批量只创建草稿，不提供批量确认。
+		"POST /api/v1/benchmark/notes/{id}/decompose",
+		"POST /api/v1/benchmark/notes/{id}/decompose/confirm",
+		"POST /api/v1/benchmark/notes/{id}/decompose/discard",
+		"POST /api/v1/benchmark/decompose-batch",
 		// DEV-CX12 / FR-CX-14：结构拆解把用户粘贴的临时正文发给所选模型；不能由智能体自行取文或触发。
 		"POST /api/v1/accounts/{accountId}/structure-extract",
 		// DEV-CX12 / FR-CX-15：改写度检查同样只由检查页用户操作触发。
@@ -200,6 +342,12 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/comment-inbox/{commentId}/confirm-sent",
 		"GET /api/v1/comment-inbox/{commentId}/topic-preview",
 		"POST /api/v1/comment-inbox/{commentId}/convert-topic",
+		// REF41 I3：问题簇与读者关注点只由评论台账页面展示/操作；簇转选题逐簇点击，无批量入口。
+		"GET /api/v1/accounts/{accountId}/comment-clusters",
+		"POST /api/v1/comment-clusters/{clusterId}/convert",
+		"POST /api/v1/comment-clusters/{clusterId}/ignore",
+		"POST /api/v1/comment-clusters/{clusterId}/reopen",
+		"GET /api/v1/accounts/{accountId}/reader-terms",
 		// DEV-CX13-F / FR-CX-23：运营标准是软口径快照，由账号档案页管理，不提供智能体工具。
 		"GET /api/v1/accounts/{accountId}/standards",
 		"POST /api/v1/accounts/{accountId}/standards",
@@ -217,6 +365,7 @@ func agentClassifiedRouteList() map[string]string {
 		"GET /api/v1/works/{id}/builds",
 		"GET /api/v1/builds/{id}",
 		"POST /api/v1/builds/{id}/artifacts",
+		"POST /api/v1/builds/{id}/office-render",
 		"GET /api/v1/builds/{id}/artifacts/{artifactID}",
 		"POST /api/v1/builds/{id}/complete",
 		"POST /api/v1/builds/{id}/cancel",
@@ -247,6 +396,7 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/agent/browser/pairings",
 		"POST /api/v1/agent/browser/pairings/{id}/confirm",
 		"POST /api/v1/agent/conversations/{id}/browser-grants",
+		"POST /api/v1/agent/conversations/{id}/browser-handback",
 		// DEV-AI27-04 第二批：浏览器命令账本（本人工作台与本机桥调用）。
 		"POST /api/v1/agent/browser/commands",
 		"POST /api/v1/agent/browser/commands/{id}/dispatch",
@@ -295,13 +445,13 @@ func agentClassifiedRouteList() map[string]string {
 		"GET /api/v1/agent/plugin-calls/pending",
 		"POST /api/v1/agent/plugin-calls/{id}/claim",
 		// DEV-AI27-15（W15）子智能体：父会话与任务面板共用。
-		"POST /api/v1/agent/conversations/{id}/delegation-groups",
+		"POST /api/v1/agent/conversations/{conversationId}/delegation-groups",
 		"GET /api/v1/agent/runs/{id}/delegations",
 		"POST /api/v1/agent/delegations/{id}/cancel",
 		"POST /api/v1/agent/delegations/{id}/result",
 		"POST /api/v1/agent/delegation-groups/{id}/cancel",
 		// DEV-A13（W06 续接）：组详情与显式"汇总子任务结果"（任务面板）。
-		"GET /api/v1/agent/conversations/{id}/delegation-groups",
+		"GET /api/v1/agent/conversations/{conversationId}/delegation-groups",
 		"GET /api/v1/agent/delegation-groups/{id}",
 		"POST /api/v1/agent/delegation-groups/{id}/adopt",
 		"PATCH /api/v1/agent/delegation-groups/{id}/budget",
@@ -338,6 +488,7 @@ func agentClassifiedRouteList() map[string]string {
 		"DELETE /api/v1/agent/browser/bindings/{id}",
 		"DELETE /api/v1/agent/browser/grants/{id}",
 		"POST /api/v1/agent/browser/grants/{id}/handoff",
+		"POST /api/v1/agent/conversations/{id}/browser-handoff",
 		// DEV-AW03 私有会话组织、阅读标记与正文检索由工作台本人页面调用，不进入模型工具目录。
 		"GET /api/v1/agent/conversation-groups",
 		"POST /api/v1/agent/conversation-groups",
@@ -368,6 +519,9 @@ func agentClassifiedRouteList() map[string]string {
 		"PATCH /api/v1/agent/conversations/{id}/goal",
 		"POST /api/v1/agent/goals/{id}/control",
 		"POST /api/v1/agent/goals/{id}/confirm-criterion",
+		// FN-05 只读迭代投影、FN-06 只读能力清单（38 文档）。
+		"GET /api/v1/agent/conversations/{id}/goal-runs",
+		"GET /api/v1/agent/capabilities",
 		// DEV-AW10 本人受限例行任务管理，不进入模型工具目录。
 		"GET /api/v1/agent/routines",
 		"POST /api/v1/agent/routines",
@@ -503,8 +657,9 @@ func TestAG04CatalogShape(t *testing.T) {
 	// —— 287 + 11 + 16 = 314。
 	// DEV-CU P4-3 又加 6 条：computer_view/focus/scroll/select/click/type_target。
 	// CF-TPL-06 又加 2 条：templates__list / templates__save（18 §3.7）。
-	if len(agentCatalog()) != 322 {
-		t.Fatalf("目录条目数 %d，期望 322（附录 A 287 条 + 元工具 11 条 + DEV-AI27 16 条 + DEV-CU 6 条 + CF-TPL-06 2 条）", len(agentCatalog()))
+	// REF41 A3 又加 1 条：report_capability_gap（能力缺口记录元工具，A3 证据登记）。
+	if len(agentCatalog()) != 323 {
+		t.Fatalf("目录条目数 %d，期望 323（附录 A 287 条 + 元工具 11 条 + DEV-AI27 16 条 + DEV-CU 6 条 + CF-TPL-06 2 条 + REF41-A3 1 条）", len(agentCatalog()))
 	}
 	for _, d := range agentDomains {
 		if counts[d.Name] == 0 {
@@ -755,6 +910,37 @@ func TestAG04Redaction(t *testing.T) {
 	}
 	if !agentContainsSecret("原文是 secretvalue1234567890", []string{"secretvalue1234567890"}) {
 		t.Error("按值匹配的密钥检测未命中")
+	}
+	// Q-16（docs/41）：登录态赋值短值形态不适用 16 位阈值，入站文本闸须与出站脱敏一致。
+	for _, form := range []string{
+		"token: {{SECRET_z5e8kx4q}}",
+		"authorization: Bearer {{SECRET_m7nwf2vd}}",
+		"sessionid={{SECRET_q4hvclp9}}",
+		"set-cookie: sid={{SECRET_t2jbry6w}}",
+		"Cookie: {{SECRET_a9skdg3m}}",
+	} {
+		if !agentContainsSecret(form, nil) {
+			t.Errorf("登录态赋值形态未拦：%s", form)
+		}
+	}
+	// Q-12（docs/41）：中文变体关键词与 passcode 同语义，不得漏检。
+	for _, form := range []string{
+		"密匙abcdef0123456789",
+		"密碼 ghijklmnopqrstuv",
+		"口令是 wxyz0123456789ab",
+		"passcode cdefghijklmnopqr",
+		"pass phrase zqxwvutsrqponmlk",
+	} {
+		if !agentContainsSecret(form, nil) {
+			t.Errorf("中文/passcode 变体未拦：%s", form)
+		}
+	}
+	// 普通句子即使含冒号/等号也不得误判。
+	if agentContainsSecret("配置文件路径是 config: app/settings", nil) {
+		t.Error("普通赋值语句被误判为登录态")
+	}
+	if agentContainsSecret("访问时间 10:30 记录完成", nil) {
+		t.Error("时间冒号被误判为登录态")
 	}
 }
 

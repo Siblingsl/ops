@@ -69,13 +69,18 @@ func agentCSVSafeCell(cell string) string {
 	first, _ := utf8.DecodeRuneInString(cell)
 	prefix, _ := utf8.DecodeRuneInString(probe)
 	if unicode.IsControl(first) || first == '\uFEFF' || strings.ContainsRune("=+-@＝＋－＠", prefix) {
-		return "文本：" + cell
+		// 38 FN-08：公式样式单元格前置单引号，确保 CSV 打开后被当作文本而不是公式。
+		return "'" + cell
 	}
 	return cell
 }
 
 // Downloads are private version reads. They never serialize a conversation or an action result.
 func (s *Server) getAgentArtifactFile(w http.ResponseWriter, r *http.Request) error {
+	// 观察者对所有产物统一 403，且在解析 id/version/format 之前拒绝，避免通过参数错误探测资源存在性。
+	if ident(r.Context()).Role == "viewer" {
+		return apiErr(403, "forbidden", "观察者无权下载产物")
+	}
 	artifactID, err := pathID(r, "id")
 	if err != nil {
 		return err

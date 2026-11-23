@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Card, CardHeader, cn, Empty, Input, PageHeader, PageState, Tabs } from '@/components/ui'
 import { BackToSettings } from '@/components/back-to-settings'
 import { get } from '@/lib/api'
-import { fmtNum } from '@/lib/format'
+import { fmtCostMicros, fmtNum } from '@/lib/format'
 import type { AILimit } from '@/lib/types'
 import { QualityBoard } from './Quality'
 
@@ -20,6 +20,9 @@ interface Row {
   adoption_rate: number | null
 }
 interface UsageResp { group_by: string; from: string; to: string; rows: Row[]; total: Row; today_tokens: number; limit: AILimit }
+interface AgentCostRow { key: string; currency: string; runs: number; prompt_tokens: number; completion_tokens: number; cost_micros: number | null; unpriced_runs: number }
+interface AgentCostCurrency { currency: string; runs: number; prompt_tokens: number; completion_tokens: number; cost_micros: number | null; unpriced_runs: number }
+interface AgentCostResp { group_by: string; from: string; to: string; rows: AgentCostRow[]; runs: number; prompt_tokens: number; completion_tokens: number; cost_micros: number | null; currency: string; unpriced_runs: number; currencies: AgentCostCurrency[] }
 
 const day = (d: Date) => {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d)
@@ -32,12 +35,100 @@ const taskLabels: Record<string, string> = { agent_chat: '智能体对话', agen
 
 /** Usage and cost (P-18 / EX-P-03), with the quality board (EX-P-02) as a second tab. */
 export default function Usage() {
-  const [tab, setTab] = useState<'usage' | 'quality'>('usage')
+  const [tab, setTab] = useState<'usage' | 'quality' | 'agentcost'>('usage')
   return (
     <div className="animate-fade-in space-y-6">
-      <PageHeader title="AI 用量" desc="按 token 统计；在模型配置中填写单价后可以估算费用。采纳率 = 直接采用或小改后采用的次数 / 有反馈的调用次数。"
-        action={<><BackToSettings /><Tabs value={tab} onChange={setTab} items={[{ value: 'usage', label: '用量与费用' }, { value: 'quality', label: '质量' }]} /></>} />
-      {tab === 'usage' ? <UsageStats /> : <QualityBoard />}
+      <PageHeader title="AI 用量" desc="按 token 统计；模型调用按供应商单价估算费用，智能体成本按每次 run 结束时落库。采纳率 = 直接采用或小改后采用的次数 / 有反馈的调用次数。"
+        action={<><BackToSettings /><Tabs value={tab} onChange={setTab} items={[{ value: 'usage', label: '用量与费用' }, { value: 'agentcost', label: '智能体成本' }, { value: 'quality', label: '质量' }]} /></>} />
+      {tab === 'usage' ? <UsageStats /> : tab === 'agentcost' ? <AgentCostStats /> : <QualityBoard />}
+    </div>
+  )
+}
+
+function AgentCostStats() {
+  const [group, setGroup] = useState<'day' | 'model' | 'origin' | 'run'>('day')
+  const [from, setFrom] = useState(day(new Date(Date.now() - 29 * 86400_000)))
+  const [to, setTo] = useState(day(new Date()))
+  const { data, isLoading, error, failureReason, isFetching, refetch } = useQuery({
+    queryKey: ['agent-cost', group, from, to],
+    queryFn: () => get<AgentCostResp>(`/usage/agent-cost?group_by=${group}&from=${from}&to=${to}`),
+  })
+  if (isLoading || !data) return <PageState loading={isLoading} error={error ?? failureReason} retrying={isFetching} onRetry={() => void refetch()} emptyTitle="暂无智能体成本数据" />
+  const costText = data.currencies.length === 0
+    ? '未配置价格'
+    : data.currency === 'MIXED'
+      ? '按币种分列（见下表）'
+      : fmtCostMicros(data.cost_micros, data.currency)
+  return (
+    <div className="space-y-6" data-testid="agent-cost">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Card className="p-5">
+          <div className="text-xs text-mist-500">智能体 run</div>
+          <div className="mt-1 font-display text-[28px] font-bold tabular-nums text-mist-900">{fmtNum(data.runs)}</div>
+          <div className="mt-2 text-xs text-mist-500">区间内完成的运行数（含失败/停止）</div>
+        </Card>
+        <Card className="p-5">
+          <div className="text-xs text-mist-500">区间 token</div>
+          <div className="mt-1 font-display text-[28px] font-bold tabular-nums text-mist-900">{fmtNum(data.prompt_tokens + data.completion_tokens)}</div>
+          <div className="mt-2 text-xs text-mist-500">输入 {fmtNum(data.prompt_tokens)} · 输出 {fmtNum(data.completion_tokens)}</div>
+        </Card>
+        <Card className="p-5">
+          <div className="text-xs text-mist-500">费用</div>
+          <div className="mt-1 font-display text-[28px] font-bold tabular-nums text-mist-900">{costText}</div>
+          <div className="mt-2 text-xs text-mist-400">按 run 结束时的供应商单价计算，不回溯历史价格</div>
+        </Card>
+        <Card className="p-5" data-testid="agent-cost-unpriced">
+          <div className="text-xs text-mist-500">未定价 run</div>
+          <div className="mt-1 font-display text-[28px] font-bold tabular-nums text-mist-900">{fmtNum(data.unpriced_runs)}</div>
+          <div className="mt-2 text-xs text-mist-400">{data.unpriced_runs > 0 ? <>这些 run 没有完整价格，费用不估算 · <Link to="/settings/models" className="text-ink-600 underline">去配置单价</Link></> : '全部 run 都有价格'}</div>
+        </Card>
+      </div>
+      <Card>
+        <CardHeader title={<Tabs value={group} onChange={setGroup} items={[{ value: 'day', label: '按天' }, { value: 'model', label: '按模型' }, { value: 'origin', label: '按来源' }, { value: 'run', label: '按 run' }]} />}
+          action={<div className="flex items-center gap-2 text-[13px] text-mist-500">
+            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-8 w-36 text-[13px]" />至
+            <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-8 w-36 text-[13px]" />
+          </div>} />
+        {data.rows.length === 0 ? <Empty title="这段时间没有智能体运行" /> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[13.5px]">
+              <thead><tr className="border-b border-mist-100 text-left text-xs text-mist-400">
+                <th className="py-2.5 pl-5 font-medium">{{ day: '日期', model: '模型', origin: '来源', run: 'Run' }[group]}</th>
+                <th className="py-2.5 text-right font-medium">run</th>
+                <th className="py-2.5 text-right font-medium">输入</th>
+                <th className="py-2.5 text-right font-medium">输出</th>
+                <th className="py-2.5 text-right font-medium">未定价</th>
+                <th className="py-2.5 pr-5 text-right font-medium">费用</th>
+              </tr></thead>
+              <tbody>
+                {data.rows.map((r) => (
+                  <tr key={`${r.key}-${r.currency}`} className="border-b border-mist-50" data-testid="agent-cost-row">
+                    <td className="py-2.5 pl-5 font-mono text-mist-800">{r.key || '（空）'}</td>
+                    <td className="py-2.5 text-right tabular-nums">{r.runs}</td>
+                    <td className="py-2.5 text-right tabular-nums text-mist-600">{fmtNum(r.prompt_tokens)}</td>
+                    <td className="py-2.5 text-right tabular-nums text-mist-600">{fmtNum(r.completion_tokens)}</td>
+                    <td className="py-2.5 text-right tabular-nums text-gamboge-700">{r.unpriced_runs || '—'}</td>
+                    <td className="py-2.5 pr-5 text-right tabular-nums text-mist-600">{fmtCostMicros(r.cost_micros, r.currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      {data.currencies.length > 1 && (
+        <Card className="p-5">
+          <div className="text-xs text-mist-500">按币种</div>
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            {data.currencies.map((c) => (
+              <div key={c.currency} className="rounded-lg border border-mist-100 p-3 text-sm">
+                <div className="font-medium text-mist-800">{c.currency} · {fmtCostMicros(c.cost_micros, c.currency)}</div>
+                <div className="mt-1 text-xs text-mist-500">{c.runs} 个 run · 未定价 {c.unpriced_runs}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   )
 }

@@ -107,6 +107,19 @@ var agentMetaTools = []AgentTool{
 		Notes: "本地元工具，页面表见 16 文档附录 B.3",
 	},
 	{
+		// REF41 A3：能力缺口只记录、不生成写入卡片；同 workspace+gap_key 累加请求次数。
+		Name: "report_capability_gap", Kind: toolR, MinRole: roleEditor,
+		Description: "当前系统缺少完成用户请求所需的能力时，记录一条能力缺口（场景、期望、替代做法），只记录不执行",
+		Params: []ToolParam{
+			pBodyF("gap_key", strMinMax(3, 80), true),
+			pBodyF("title", strMinMax(1, 120), true),
+			pBodyF("detail", strMax(1000), false),
+			pBodyF("need", strMax(1000), false),
+			pBodyF("workaround", strMax(1000), false),
+		},
+		Notes: "本地元工具；同 gap_key 去重并累加 request_count，不生成 agent_action 卡片；只回执 recorded=true",
+	},
+	{
 		Name: "present_plan", Kind: toolR, MinRole: roleEditor,
 		Description: "保存或修订当前对话计划，不执行计划中的业务操作",
 		Params: []ToolParam{

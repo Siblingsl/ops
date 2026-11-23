@@ -10,7 +10,7 @@ export function AgentPlanCard({ plan, canWrite, busy, blocked, onAccept }: {
   const states = useMemo(() => new Map(plan.step_states.map((state) => [state.step_id, state])), [plan.step_states])
   return <section aria-label={`计划第 ${plan.version} 版`} className="mt-3 rounded-xl border border-ink-200 bg-ink-50/70 p-3 text-left" data-testid={`agent-plan-${plan.id}`}>
     <div className="flex flex-wrap items-start justify-between gap-2">
-      <div><p className="text-[11px] font-semibold text-ink-700">计划 · 第 {plan.version} 版{plan.status === 'superseded' ? ' · 已修订' : plan.accepted_at ? ' · 已接受' : ''}</p>
+      <div><p className="text-[12px] font-semibold text-ink-700">计划 · 第 {plan.version} 版{plan.status === 'superseded' ? ' · 已修订' : plan.accepted_at ? ' · 已接受' : ''}</p>
         <p className="mt-1 text-sm text-ink-900">{plan.summary}</p></div>
       {plan.status === 'current' && !plan.accepted_at && canWrite && <Button size="sm" variant="secondary" disabled={busy || blocked} onClick={() => onAccept(plan)}>按此计划继续</Button>}
     </div>
@@ -20,15 +20,15 @@ export function AgentPlanCard({ plan, canWrite, busy, blocked, onAccept }: {
         const status = state?.status ?? 'pending'
         return <li key={step.id} className="rounded-lg border border-mist-200 bg-white px-3 py-2">
           <div className="flex items-start gap-2"><span className="mt-0.5 text-xs font-semibold text-mist-400">{index + 1}.</span><div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2 text-[13px] font-medium text-mist-800"><span>{step.title}</span><span className="rounded-full bg-mist-100 px-2 py-0.5 text-[10px] font-normal text-mist-600">{planStepStatus(status)}</span></div>
+            <div className="flex flex-wrap items-center gap-2 text-[13px] font-medium text-mist-800"><span>{step.title}</span><span className="rounded-full bg-mist-100 px-2 py-0.5 text-[12px] font-normal text-mist-600">{planStepStatus(status)}</span></div>
             <p className="mt-1 text-xs text-mist-500">验收：{step.acceptance}</p>
             {step.target_ref && <p className="mt-1 text-xs text-mist-500">目标：{step.target_ref}</p>}
-            {!!state?.evidence_refs.length && <p className="mt-1 text-[11px] text-mist-500">已关联 {state.evidence_refs.length} 项证据</p>}
+            {!!state?.evidence_refs.length && <p className="mt-1 text-[12px] text-mist-500">已关联 {state.evidence_refs.length} 项证据</p>}
           </div></div>
         </li>
       })}
     </ol>
-    {plan.status === 'current' && !plan.accepted_at && <div className="mt-2 space-y-1 text-[11px] text-mist-500">
+    {plan.status === 'current' && !plan.accepted_at && <div className="mt-2 space-y-1 text-[12px] text-mist-500">
       {blocked && <p>请先回答或替代待办问题。</p>}
       <p>接受计划只启动新的执行运行；任何业务写入仍须逐张审阅操作卡片。</p>
     </div>}
@@ -59,8 +59,8 @@ export function AgentQuestionCard({ question, canWrite, busy, onAnswer }: {
   const savedAnswers = new Map(question.answers.map((answer) => [answer.question_id, answer]))
   const statusLabel = question.status === 'pending' ? expired ? '已过期' : '等待回答' : ({ answered: '已回答', skipped: '已跳过', superseded: '已被新消息替代', expired: '已过期' } as Record<string, string>)[question.status] ?? question.status
   return <section aria-label="澄清问题" className="mt-3 rounded-xl border border-gamboge-200 bg-gamboge-50/70 p-3 text-left" data-testid={`agent-question-${question.id}`}>
-    <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[11px] font-semibold text-gamboge-800">需要你补充 · {statusLabel}</p>
-      {question.status === 'pending' && !expired && <p className="text-[10px] text-gamboge-800">截止 {new Date(question.expires_at).toLocaleString('zh-CN')}</p>}</div>
+    <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[12px] font-semibold text-gamboge-800">需要你补充 · {statusLabel}</p>
+      {question.status === 'pending' && !expired && <p className="text-[12px] text-gamboge-800">截止 {new Date(question.expires_at).toLocaleString('zh-CN')}</p>}</div>
     <form className="mt-2 space-y-3" onSubmit={(event) => { event.preventDefault(); if (ready && canWrite && !busy && !expired) onAnswer(question, answers) }}>
       {question.items.map((item) => {
         const value = values[item.id] ?? { choiceID: '', text: '', skip: false }

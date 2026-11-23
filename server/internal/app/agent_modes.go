@@ -75,6 +75,10 @@ func agentRunToolAllowed(st *agentRunState, tool *AgentTool, id *identity) bool 
 	if st.ExecutionOrigin == "goal" && st.GoalID == nil {
 		return false
 	}
+	// FN-12：旁问只读，不执行任何 W/H/X 工具，也不触发需要用户切换窗口的打断式动作。
+	if st.Kind == "side" && (tool.Kind != toolR || tool.Name == "computer_request_target" || tool.Name == "browser_request_tab") {
+		return false
+	}
 	mode := agentEffectiveMode(st.Mode, id.Role)
 	switch tool.Name {
 	case "present_plan":

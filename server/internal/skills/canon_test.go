@@ -226,10 +226,11 @@ func mustSkillTime(t *testing.T, s string) time.Time {
 	return tm
 }
 
-// T-SK-39（SK1 前置）：内置注册表 12 项、key/UUID 唯一、确定性 UUID 全实例一致。
+// T-SK-39（SK1 前置）：内置注册表 13 项（D-211：12 + builtin:publish_flow）、
+// key/UUID 唯一、确定性 UUID 全实例一致。
 func TestSkillBuiltinRegistry(t *testing.T) {
-	if len(builtinSkills) != 12 {
-		t.Fatalf("want 12 registered builtins, got %d", len(builtinSkills))
+	if len(builtinSkills) != 13 {
+		t.Fatalf("want 13 registered builtins (D-211), got %d", len(builtinSkills))
 	}
 	seen := map[uuid.UUID]bool{}
 	for _, b := range builtinSkills {
@@ -245,7 +246,13 @@ func TestSkillBuiltinRegistry(t *testing.T) {
 		if def == nil || def.Revision != b.Version || def.Origin != "builtin" || def.SourceKey != b.Key {
 			t.Fatalf("registry lookup failed for %s", b.Key)
 		}
-		if def.Fields.Status != "active" || !def.Fields.TaskEnabled || !def.Fields.AgentEnabled {
+		// builtin:publish_flow（D-211）task_enabled=false 是规格要求的特例；
+		// 其余 12 个仍必须满足默认双开。
+		if b.Key == "builtin:publish_flow" {
+			if def.Fields.Status != "active" || def.Fields.TaskEnabled || !def.Fields.AgentEnabled {
+				t.Fatalf("builtin publish_flow defaults: %+v", def.Fields)
+			}
+		} else if def.Fields.Status != "active" || !def.Fields.TaskEnabled || !def.Fields.AgentEnabled {
 			t.Fatalf("builtin %s defaults", b.Key)
 		}
 		if err := validateSkillFields(&def.Fields); err != nil {

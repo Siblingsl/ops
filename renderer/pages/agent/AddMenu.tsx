@@ -1,18 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
-import { AtSign, Bot, Bot as GoalIcon, CalendarClock, CircleDashed, Cpu, Paperclip, Plug, Plus, Sparkles, Users } from 'lucide-react'
+import { Activity, AtSign, Bot, Bot as GoalIcon, CalendarClock, CircleDashed, Cpu, Library, ListChecks, MessageSquarePlus, Paperclip, Plug, Plus, Sparkles, Users } from 'lucide-react'
 import { IconButton } from '@/components/ui'
 
 // DEV-AI27-07（W07）：统一添加菜单（27 §5.5/§5.10）。
-// 只有一个添加入口；记忆/插件/并行/应用选择等未交付能力在此如实显示"未开放"并禁用，
+// 只有一个添加入口；未交付能力在此如实显示"未开放"并禁用，
 // 不在输入台平铺常驻，也不伪造可用状态（红线：UI 不得伪造状态；语音按钮在 W16 前不展示）。
 
 export type AddMenuAction =
   | 'attachment'
   | 'context_refs'
+  | 'side_chat'
+  | 'operations_directory'
+  | 'today_ops'
   | 'skill'
   | 'goal'
   | 'routine'
+  | 'plugins'
+  | 'subagents'
   | 'computer'
+  | 'capabilities'
+  | 'workflow_templates'
 
 interface AddMenuItem {
   id: AddMenuAction | string
@@ -27,11 +34,23 @@ export function AddMenu({
   onAction,
   attachmentsAtLimit,
   computerEnabled,
+  operationsDirectoryEnabled,
+  todayOpsEnabled,
+  sideChatEnabled,
+  pluginsEnabled,
+  subagentsEnabled,
+  workflowTemplatesEnabled,
 }: {
   disabled: boolean
   onAction: (action: AddMenuAction) => void
   attachmentsAtLimit: boolean
   computerEnabled?: boolean
+  operationsDirectoryEnabled?: boolean
+  todayOpsEnabled?: boolean
+  sideChatEnabled?: boolean
+  pluginsEnabled?: boolean
+  subagentsEnabled?: boolean
+  workflowTemplatesEnabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -55,15 +74,22 @@ export function AddMenu({
   const items: AddMenuItem[] = [
     { id: 'attachment', label: '上传附件', hint: '图片 / 文档资料', disabled: attachmentsAtLimit, icon: Paperclip },
     { id: 'context_refs', label: '引用资料（@）', hint: '作品 / 素材 / 选题', icon: AtSign },
+    ...(sideChatEnabled ? [{ id: 'side_chat' as const, label: '旁问', hint: '独立只读会话，继承当前上下文', icon: MessageSquarePlus }] : []),
+    ...(operationsDirectoryEnabled ? [{ id: 'operations_directory' as const, label: '运营目录', hint: '作品 / 选题 / 素材 / 图片 / 日历', icon: Library }] : []),
+    ...(todayOpsEnabled ? [{ id: 'today_ops' as const, label: '今日运营', hint: '六块只读运营摘要', icon: Activity }] : []),
     { id: 'skill', label: '请求技能（$）', hint: '已确认的技能', icon: Sparkles },
+    // REF41 A7：工作流模板（启动只建计划，逐步确认执行）。
+    ...(workflowTemplatesEnabled ? [{ id: 'workflow_templates' as const, label: '工作流模板', hint: '内置三模板；启动只建计划', icon: ListChecks }] : []),
     { id: 'goal', label: '任务目标与整理', hint: '长任务与预算', icon: Bot },
     { id: 'routine', label: '例行任务', hint: '受限只读定时', icon: CalendarClock },
+    { id: 'plugins', label: '插件与工具', hint: pluginsEnabled ? '外部 MCP 连接与工具' : '未开放', disabled: !pluginsEnabled, icon: Plug },
     // 以下能力按 27 文档 §11 分包交付；入口先如实占位，不显示为可用。
     { id: 'browser', label: 'Google Chrome 标签', hint: '未开放', disabled: true, icon: CircleDashed },
     { id: 'memory', label: '记忆', hint: '未开放', disabled: true, icon: GoalIcon },
-    { id: 'plugins', label: '插件与工具', hint: '未开放', disabled: true, icon: Plug },
-    { id: 'subagents', label: '并行协作', hint: '未开放', disabled: true, icon: Users },
+    { id: 'subagents', label: '并行协作', hint: subagentsEnabled ? '本次任务允许拆成 2 个只读子任务' : '未开放', disabled: !subagentsEnabled, icon: Users },
     { id: 'computer', label: '应用选择', hint: computerEnabled ? '选择本机窗口' : '未开放', disabled: !computerEnabled, icon: Cpu },
+    // FN-06：只读能力清单入口（38 卡片：输入台 + 菜单“能力”；只读，不新增一级导航）。
+    { id: 'capabilities', label: '能力', hint: '这个智能体能做什么', icon: ListChecks },
   ]
 
   return <div className="desktop-agent-add-menu" ref={menuRef}>

@@ -28,13 +28,18 @@ type Memory struct {
 	ConfirmedAt *time.Time      `json:"confirmed_at"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"-"`
+	// REF41 A4：置信度（0–1，注入闸 >=0.6）、最近衰减时间、注入硬闸。
+	Confidence        float64   `json:"confidence"`
+	DecayedAt         *time.Time `json:"decayed_at,omitempty"`
+	InjectionDisabled bool      `json:"injection_disabled"`
 }
 
-const memoryCols = `id, account_id, kind, scope, text, status, source, evidence, use_count, last_used_at, confirmed_at, created_at, updated_at`
+// REF41 A4：confidence/decayed_at/injection_disabled 参与投影与注入闸。
+const memoryCols = `id, account_id, kind, scope, text, status, source, evidence, use_count, last_used_at, confirmed_at, created_at, updated_at, confidence, decayed_at, injection_disabled`
 
 func scanMemory(row interface{ Scan(...any) error }) (Memory, error) {
 	var m Memory
-	err := row.Scan(&m.ID, &m.AccountID, &m.Kind, &m.Scope, &m.Text, &m.Status, &m.Source, &m.Evidence, &m.UseCount, &m.LastUsedAt, &m.ConfirmedAt, &m.CreatedAt, &m.UpdatedAt)
+	err := row.Scan(&m.ID, &m.AccountID, &m.Kind, &m.Scope, &m.Text, &m.Status, &m.Source, &m.Evidence, &m.UseCount, &m.LastUsedAt, &m.ConfirmedAt, &m.CreatedAt, &m.UpdatedAt, &m.Confidence, &m.DecayedAt, &m.InjectionDisabled)
 	return m, err
 }
 
@@ -55,7 +60,10 @@ func taskMemoryScope(taskType string) string {
 }
 
 func (s *Server) activeMemories(ctx context.Context, accountID uuid.UUID, scope string, factsOnly bool) ([]Memory, error) {
+	// REF41 A4-A2/A4-A3：注入只取 active && confidence>=0.6 && !injection_disabled；
+	// 排序保持 avoid 优先 → use_count → created_at；条数/字数硬闸在 memoryGuard 内。
 	rows, err := s.db.Query(ctx, `SELECT `+memoryCols+` FROM account_memory WHERE account_id=$1 AND status='active'
+		AND confidence>=0.6 AND NOT injection_disabled
 		AND (($3 AND kind='fact') OR (NOT $3 AND (scope='all' OR scope=$2))) ORDER BY (kind='avoid') DESC, use_count DESC, created_at`, accountID, scope, factsOnly)
 	if err != nil {
 		return nil, err

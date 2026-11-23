@@ -36,8 +36,8 @@ func TestAW01BootstrapFeatureSwitchesDefaultTiering(t *testing.T) {
 			onCount++
 		}
 	}
-	if onCount != 11 {
-		t.Errorf("default-enabled features = %d, want A 档 11", onCount)
+	if onCount != 13 {
+		t.Errorf("default-enabled features = %d, want A 档 13（REF41 D-209 增 agent_roles/workflow_templates）", onCount)
 	}
 
 	t.Setenv("OPS_AGENT_WORKBENCH_FEATURES", "workbench_ui, conversation_organize, unknown_feature")
@@ -434,5 +434,50 @@ func TestAW04MessageRequestIDIsIdempotent(t *testing.T) {
 	status, body = env.do(http.MethodPost, path, conflict)
 	if status != http.StatusConflict || agentErrCodeOf(t, body) != "agent_request_conflict" {
 		t.Fatalf("same request ID with a different payload = %d %s", status, body)
+	}
+}
+
+// IX-05：未通过工具自检的模型仍然出现在 bootstrap 中，但被标为不可用并给出原因；
+// 已通过自检的模型保持 available=true。这样前端才能禁用该行而不是静默隐藏。
+func TestIX05BootstrapProjectsUnavailableModels(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	providerID := uuid.MustParse(env.ensureToolModel(t))
+	ws := env.wsID(t)
+	ctx := context.Background()
+	if _, err := env.srv.db.Exec(ctx, `INSERT INTO model_capability
+		(provider_id, model, workspace_id, tools_ok, vision_ok, detail, tested_at)
+		VALUES ($1,'mock-unavailable',$2,false,false,'{}',now())
+		ON CONFLICT (provider_id, model) DO UPDATE SET tools_ok=false, tested_at=now()`, providerID, ws); err != nil {
+		t.Fatalf("seed unavailable capability: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = env.srv.db.Exec(context.Background(), `DELETE FROM model_capability WHERE provider_id=$1 AND model='mock-unavailable'`, providerID)
+	})
+	var body struct {
+		Models []struct {
+			Model     string `json:"model"`
+			Tools     bool   `json:"tools"`
+			SelfTest  string `json:"self_test"`
+			Available bool   `json:"available"`
+			Reason    string `json:"reason"`
+		} `json:"models"`
+	}
+	env.mustJSON(t, http.MethodGet, "/api/v1/agent/bootstrap", nil, &body)
+	var unavailable, available bool
+	for _, model := range body.Models {
+		switch model.Model {
+		case "mock-unavailable":
+			unavailable = true
+			if model.Available || model.Tools || model.SelfTest != "failed" || model.Reason == "" {
+				t.Fatalf("unavailable model projection = %+v", model)
+			}
+		case "mock-writer":
+			if model.Available && model.SelfTest == "passed" {
+				available = true
+			}
+		}
+	}
+	if !unavailable || !available {
+		t.Fatalf("bootstrap models missing expected rows: unavailable=%v available=%v body=%+v", unavailable, available, body.Models)
 	}
 }

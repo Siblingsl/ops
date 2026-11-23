@@ -716,18 +716,30 @@ func TestAW10RoutineSchedulerLateWindowBoundary(t *testing.T) {
 	if err := env.srv.db.QueryRow(t.Context(), `SELECT id FROM agent_routine_occurrence WHERE routine_id=$1 AND kind='scheduled'`, routines[0].id).Scan(&withinOccurrence); err != nil {
 		t.Fatalf("29 分钟迟到仍在有效窗口内，必须创建计划执行记录：%v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	// 30s 轮询上限（与 a1WaitRunDone 同口径）：断言不变，仅放宽等待余量。
+	// 组跑时前序用例可能短暂占用 owner 的并发 run 名额（agentMaxRunsPerUser=2），
+	// 认领遇 agent_limit_reached 会把 occurrence 回置 pending；生产调度器按
+	// 每分钟 ticker 重试，这里按 500ms 间隔重调 runAgentRoutines（避免每 50ms
+	// 一次的重调度拖长用例总耗时），否则一次 429 后 occurrence 永远停留在 pending。
+	deadline := time.Now().Add(30 * time.Second)
 	var withinStatus, withinRunStatus string
 	for time.Now().Before(deadline) {
-		err := env.srv.db.QueryRow(t.Context(), `SELECT o.status,COALESCE(run.status,'') FROM agent_routine_occurrence o
-			LEFT JOIN agent_run run ON run.routine_occurrence_id=o.id WHERE o.id=$1`, withinOccurrence).Scan(&withinStatus, &withinRunStatus)
-		if err == nil && (withinStatus == "completed" || withinStatus == "failed" || withinStatus == "interrupted") {
+		env.srv.runAgentRoutines(t.Context())
+		rescheduleDeadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(rescheduleDeadline) {
+			err := env.srv.db.QueryRow(t.Context(), `SELECT o.status,COALESCE(run.status,'') FROM agent_routine_occurrence o
+				LEFT JOIN agent_run run ON run.routine_occurrence_id=o.id WHERE o.id=$1`, withinOccurrence).Scan(&withinStatus, &withinRunStatus)
+			if err == nil && (withinStatus == "completed" || withinStatus == "failed" || withinStatus == "interrupted") {
+				break
+			}
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatal(err)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if withinStatus == "completed" || withinStatus == "failed" || withinStatus == "interrupted" {
 			break
 		}
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			t.Fatal(err)
-		}
-		time.Sleep(50 * time.Millisecond)
 	}
 	if withinStatus != "completed" || withinRunStatus != "completed" {
 		t.Fatalf("29 分钟迟到任务必须执行完成：occurrence=%s run=%s", withinStatus, withinRunStatus)
@@ -741,7 +753,7 @@ func TestAW10RoutineSchedulerLateWindowBoundary(t *testing.T) {
 		t.Fatalf("恰好 30 分钟迟到仍在有效窗口内，必须创建计划执行记录：%v", err)
 	}
 	var exactStatus, exactRunStatus string
-	deadline = time.Now().Add(10 * time.Second)
+	deadline = time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		err := env.srv.db.QueryRow(t.Context(), `SELECT o.status,COALESCE(run.status,'') FROM agent_routine_occurrence o
 			LEFT JOIN agent_run run ON run.routine_occurrence_id=o.id WHERE o.id=$1`, exactOccurrence).Scan(&exactStatus, &exactRunStatus)

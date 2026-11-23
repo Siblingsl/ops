@@ -62,7 +62,7 @@ test('DEV-P2-MEM-01 上下文页会话记忆覆盖开关：开→on、关→off�
     await picker.getByRole('tab', { name: /小红书/ }).click()
     await picker.getByRole('button', { name: '记忆覆盖验收号', exact: true }).click()
     await page.goto(baseURL! + '/agent')
-    await expect(page.locator('.desktop-agent-workbench-meta')).toContainText('记忆覆盖验收号')
+    await expect(page.locator('.desktop-agent-header')).toContainText('记忆覆盖验收号')
     const composer = page.getByRole('textbox', { name: '发送消息' })
     await expect(composer).toBeVisible({ timeout: 15_000 })
     await composer.fill('记忆覆盖验收：这条消息用于建立会话')
@@ -73,10 +73,10 @@ test('DEV-P2-MEM-01 上下文页会话记忆覆盖开关：开→on、关→off�
     await page.waitForURL(/\/agent\/c\/[a-f0-9-]+$/, { timeout: 30_000 })
 
     // 打开工作视图 → 上下文页签
-    await page.getByRole('button', { name: '工作视图', exact: true }).first().click({ timeout: 15000 })
-    const panel = page.getByRole('complementary', { name: '工作视图' })
+    await page.locator('.desktop-agent-panel-button').first().click({ timeout: 15000 })
+    const panel = page.getByRole('complementary', { name: '任务面板' })
     await expect(panel).toBeVisible()
-    await panel.getByRole('tab', { name: '上下文' }).click()
+    await panel.getByRole('tab', { name: /^上下文/ }).click()
 
     const override = panel.getByTestId('memory-override')
     await expect(override).toBeVisible()
