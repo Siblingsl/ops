@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { AccountCreateForm, credTone, CredentialPanel } from '@/components/account-forms'
 import { confirm, Dialog } from '@/components/dialog'
 import { PlatformConnectionCard } from '@/components/platform-connection'
-import { Badge, Button, Card, CardHeader, cn, Empty, Field, Input, Notice, PageHeader, PageLoading, PlatformMark, platformFormatLabel, platformLabel, platformFormats, roleReadOnlyHint, Switch, Textarea } from '@/components/ui'
+import { Badge, Button, Card, CardHeader, cn, Empty, Field, Input, Notice, PageHeader, PageLoading, PlatformMark, platformFormatLabel, platformLabel, platformFormats, roleReadOnlyHint, Select, Switch, Textarea } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
 import { isElectronDesktop } from '@/lib/desktop-presentation.js'
@@ -202,12 +202,21 @@ function AccountDetail({ account, onStatusChange, canManage, desktop = false, co
     setFormError('')
   }
 
+  // REF41 F2-N1：停用前取影响清单（deactivation-preview 只读计数），确认词提示。
+  const [mergeOpen, setMergeOpen] = useState(false)
   const toggle = async () => {
     const disabling = account.status === 'active'
     if (disabling) {
+      let previewText = ''
+      try {
+        const preview = await get<Record<string, number>>(`/accounts/${account.id}/deactivation-preview`)
+        previewText = `影响清单：作品 ${preview.works}、选题 ${preview.topics}、素材 ${preview.materials}、进行中发布任务 ${preview.active_tasks}、连接 ${preview.connections}。`
+      } catch {
+        previewText = '影响清单读取失败；停用不影响数据保留，可随时重新启用。'
+      }
       if (!(await confirm({
       title: `停用「${platformLabel[account.platform]} · ${account.name}」？`,
-        desc: '停用后不会出现在账号列表中，也不能写入草稿。作品、档案和素材会保留，可随时重新启用。若要永久清除请用「删除」。',
+        desc: `${previewText}停用后不会出现在账号列表中，也不能写入草稿。作品、档案和素材会保留，可随时重新启用。若要永久清除请用「删除」。`,
         confirmText: '停用',
         danger: true,
       }))) return
@@ -258,6 +267,9 @@ function AccountDetail({ account, onStatusChange, canManage, desktop = false, co
               <Button size="sm" variant="ghost" icon={<Power className="size-3.5" />} onClick={toggle}>停用</Button>
             )}
             <Button size="sm" variant="danger" icon={<Trash2 className="size-3.5" />} onClick={remove}>删除</Button>
+            {canManage && account.status === 'active' && (
+              <Button size="sm" variant="ghost" data-testid="account-merge-trigger" onClick={() => setMergeOpen(true)}>合并到其他账号</Button>
+            )}
           </div>
         ) : undefined}
       />
@@ -329,6 +341,7 @@ function AccountDetail({ account, onStatusChange, canManage, desktop = false, co
   return (
     <div className={desktop ? 'min-w-0 space-y-4' : 'space-y-5'}>
       {desktop ? <>{basicInformationCard}{platformConnectionCard}</> : <>{platformConnectionCard}{basicInformationCard}</>}
+      {mergeOpen && <AccountMergeDialog account={account} open={mergeOpen} onClose={() => setMergeOpen(false)} onDone={() => inv(['accounts'])} />}
       <ChangeTypeDialog
         account={account}
         open={typeOpen}
@@ -393,6 +406,9 @@ function AccountDetail({ account, onStatusChange, canManage, desktop = false, co
             <p className="text-[12.5px] leading-relaxed text-mist-500">操作对象：{platformLabel[account.platform]} · {account.name}</p>
             {canManage && <div className="flex gap-2">
               <Button size="sm" variant={account.status === 'disabled' ? 'primary' : 'ghost'} icon={<Power className="size-3.5" />} onClick={() => void toggle()}>{account.status === 'disabled' ? '重新启用' : '停用当前账号'}</Button>
+              {account.status === 'active' && (
+                <Button size="sm" variant="ghost" data-testid="account-merge-trigger" onClick={() => setMergeOpen(true)}>合并到其他账号</Button>
+              )}
               <Button size="sm" variant="danger" icon={<Trash2 className="size-3.5" />} onClick={() => void remove()}>删除当前账号</Button>
             </div>}
           </div>
@@ -653,4 +669,70 @@ export default function SettingsAccounts() {
       </Dialog>
     </div>
   )
+}
+
+// REF41 F2-N1：账号合并对话框——选源账号（同平台 active）→ 影响清单 → 输入确认词「合并」→ 执行；
+// moved/conflicts 展示；不跨工作区/跨平台（服务端校验兜底）。
+function AccountMergeDialog({ account, open, onClose, onDone }: {
+  account: Account
+  open: boolean
+  onClose: () => void
+  onDone: () => void
+}) {
+  const candidates = useAccounts()
+  const [sourceID, setSourceID] = useState('')
+  const [confirmWord, setConfirmWord] = useState('')
+  const [preview, setPreview] = useState<Record<string, number> | null>(null)
+  const [result, setResult] = useState<{ moved: Record<string, number>; conflicts: { work_id?: string; reason?: string }[] } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const source = (candidates.data ?? []).find((item) => item.id === sourceID && item.platform === account.platform && item.status === 'active')
+  const loadPreview = async (id: string) => {
+    setPreview(null)
+    try {
+      setPreview(await get<Record<string, number>>(`/accounts/${id}/deactivation-preview`))
+    } catch { /* 清单失败不阻断，提交时服务端兜底 */ }
+  }
+  const submit = async () => {
+    if (!source) return
+    setBusy(true)
+    try {
+      const response = await post<{ moved: Record<string, number>; conflicts: { work_id?: string; reason?: string }[] }>(`/accounts/${account.id}/merge`, { source_account_id: source.id, confirm: confirmWord })
+      setResult({ moved: response.moved, conflicts: response.conflicts })
+      onDone()
+    } catch (error) {
+      toast.error(errorMessage(error) || '合并失败（已整体回滚）')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <Dialog open={open} onClose={onClose} title={`合并账号到「${account.name}」`} desc="源账号的作品/选题/素材等将迁入目标账号，源账号停用（不删除）。同平台才可合并；冲突的发布任务不覆盖，会在结果中列出。">
+    <div className="space-y-4" data-testid="account-merge-dialog">
+      {!result && <>
+        <Field label="源账号（同平台、启用中）">
+          <Select value={sourceID} onChange={(e) => { setSourceID(e.target.value); if (e.target.value) void loadPreview(e.target.value) }}>
+            <option value="">选择源账号</option>
+            {(candidates.data ?? []).filter((item) => item.id !== account.id && item.platform === account.platform && item.status === 'active').map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </Select>
+        </Field>
+        {source && preview && <div className="rounded border border-mist-200 p-3 text-xs text-mist-600" data-testid="account-merge-preview">
+          影响清单：作品 {preview.works}、选题 {preview.topics}、素材 {preview.materials}、发布任务 {preview.publish_tasks}、竞对 {preview.benchmark_targets}、连接 {preview.connections}。
+        </div>}
+        <Field label='输入「合并」确认'>
+          <Input value={confirmWord} onChange={(e) => setConfirmWord(e.target.value)} placeholder="合并" />
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>取消</Button>
+          <Button variant="danger" loading={busy} disabled={!source || confirmWord !== '合并'} onClick={submit}>执行合并</Button>
+        </div>
+      </>}
+      {result && <div className="space-y-2 text-xs" data-testid="account-merge-result">
+        <p className="text-mist-700">合并完成；迁移计数：</p>
+        <ul className="list-disc pl-5 text-mist-600">
+          {Object.entries(result.moved).map(([table, count]) => <li key={table}>{table}：{count}</li>)}
+        </ul>
+        {result.conflicts.length > 0 && <p className="text-gamboge-700">冲突（未覆盖）：{result.conflicts.length} 条。</p>}
+        <Button variant="primary" onClick={onClose}>关闭</Button>
+      </div>}
+    </div>
+  </Dialog>
 }
