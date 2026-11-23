@@ -1,13 +1,16 @@
-import { Activity } from 'lucide-react'
-import { useLocation } from 'react-router-dom'
+import { useConnectionState } from '@/lib/connection-state'
 import { isElectronDesktop } from '@/lib/desktop-presentation.js'
+import { CloudOff, LoaderCircle } from 'lucide-react'
+
+// UI-09（docs/38 §10）：底栏只显示“已连接 / 连接中… / 离线，点击重试”，
+// 不出现“操作状态由当前页面反馈”之类的开发文案；状态由真实连接探测驱动。
+const stateLabels = { online: '已连接', checking: '连接中…', offline: '离线，点击重试' } as const
 
 export default function DesktopStatusBar({ workspaceName, accountName }: { workspaceName?: string; accountName?: string }) {
   const desktop = isElectronDesktop(navigator.userAgent)
-  const location = useLocation()
   if (!desktop) return null
 
-  const editorRoute = /^\/works\/[^/]+$/.test(location.pathname)
+  const { state, retry } = useConnectionState()
 
   return (
     <footer className="desktop-statusbar" aria-label="工作区状态栏" data-testid="desktop-statusbar">
@@ -17,13 +20,15 @@ export default function DesktopStatusBar({ workspaceName, accountName }: { works
         {accountName && <><span className="desktop-statusbar-separator" aria-hidden="true">·</span><span>{accountName}</span></>}
       </span>
       <span className="desktop-statusbar-spacer" />
-      {/* 编辑器里字数和保存状态都在编辑器自己的底部条与左栏，这里再写一遍只是重复。 */}
-      {!editorRoute && (
-        <span className="desktop-statusbar-save" aria-live="polite">
-          <Activity aria-hidden="true" />
-          操作状态由当前页面反馈
-        </span>
-      )}
+      {state === 'offline'
+        ? <button type="button" className="desktop-statusbar-save desktop-statusbar-retry" aria-live="polite" onClick={retry}>
+            <CloudOff aria-hidden="true" />
+            {stateLabels.offline}
+          </button>
+        : <span className="desktop-statusbar-save" aria-live="polite" data-state={state}>
+            {state === 'checking' && <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />}
+            {stateLabels[state]}
+          </span>}
     </footer>
   )
 }

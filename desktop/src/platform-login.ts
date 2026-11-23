@@ -13,6 +13,7 @@
 
 import type { CDPPageClient, PlatformBrowserProcess } from './platform-worker';
 import { isAllowedPlatformUrl, PlatformBrowserError } from './platform-worker';
+import { CHALLENGE_PROBE_SCRIPT, buildChallengeProbe, classifyChallenge, type ChallengeOutcome } from './platforms/challenge-detect';
 
 export type PlatformLoginPlatform = 'xhs' | 'wechat_mp' | 'toutiao';
 
@@ -246,6 +247,9 @@ export function createPageResponseSource(session: PlatformLoginSession): {
   fetchNoteDetail?: (noteId: string) => Promise<unknown | null>;
   // CF-P2-CXEF-06：评论只读源。同样的只读监听路径，未登记返回 null。
   fetchComments?: (noteId: string) => Promise<unknown | null>;
+  // B-03：风控探针。只读页面状态（选择器命中/可见性、iframe/script src、短文本），
+  // 不修改 DOM、不挂全局；分类由适配器侧的纯函数完成。
+  probeChallenge: () => Promise<unknown>;
 } {
   const observe = async (pathPrefix: string, trigger: () => Promise<void>, timeoutMs = 30_000) => {
     assertReadOnlyPath(pathPrefix);
@@ -261,6 +265,15 @@ export function createPageResponseSource(session: PlatformLoginSession): {
     return body;
   };
   const baseSource = {
+    probeChallenge: async () => {
+      const result = await session.cdp.request('Runtime.evaluate', {
+        expression: CHALLENGE_PROBE_SCRIPT,
+        returnByValue: true
+      }, 10_000).catch(() => null);
+      const remote = (result as { result?: { value?: unknown } } | null)?.result;
+      return remote?.value ?? null;
+    },
+
     fetchJSON: async (path: string) => {
       // 公众号后台的接口必须带页面 URL 里的 token，否则回 invalid csrf token。
       const needsToken = PATH_TOKEN_PLATFORMS.includes(session.platform);
@@ -594,18 +607,48 @@ export async function probeIdentity(session: PlatformLoginSession): Promise<Iden
   return parseEvaluateResponse(result);
 }
 
+// probeLoginChallenge 在登录页跑 B-03 的固定只读探针，返回分类结论。
+// 只读页面状态，不点击、不写 DOM；登录流程据此弹原生接管提示。
+export async function probeLoginChallenge(session: PlatformLoginSession): Promise<ChallengeOutcome | null> {
+  const result = await session.cdp.request('Runtime.evaluate', {
+    expression: CHALLENGE_PROBE_SCRIPT,
+    returnByValue: true
+  }, 10_000).catch(() => null);
+  const remote = (result as { result?: { value?: unknown } } | null)?.result;
+  const probe = buildChallengeProbe(remote?.value ?? null);
+  return probe ? classifyChallenge(probe) : null;
+}
+
 // waitForLogin 轮询直到读到身份或超时。超时不关浏览器，用户可重试而不重建会话。
+// B-01.6：每 3 次轮询探一次风控；命中时调用 onChallenge 显示原生接管窗口，
+// 但**不阻塞轮询**——用户点击后由下一次探测确认页面真实身份，点击本身不是登录成功。
 export async function waitForLogin(
   session: PlatformLoginSession,
-  options: { timeoutMs?: number; pollMs?: number; onTick?: (attempt: number) => void } = {}
+  options: {
+    timeoutMs?: number;
+    pollMs?: number;
+    onTick?: (attempt: number) => void;
+    onChallenge?: (outcome: ChallengeOutcome) => void;
+  } = {}
 ): Promise<{ loggedIn: boolean; payload: string | null; attempts: number; timedOut: boolean }> {
   const timeoutMs = options.timeoutMs ?? PLATFORM_LOGIN_TIMEOUT_MS;
   const pollMs = options.pollMs ?? PLATFORM_LOGIN_POLL_MS;
   const deadline = Date.now() + timeoutMs;
   let attempts = 0;
+  let lastChallenge = '';
   for (;;) {
     attempts += 1;
     options.onTick?.(attempts);
+    if (options.onChallenge && attempts % 3 === 0) {
+      const challenge = await probeLoginChallenge(session);
+      if (challenge && challenge.kind !== 'none') {
+        const key = `${challenge.vendor}:${challenge.kind}`;
+        if (key !== lastChallenge) {
+          lastChallenge = key;
+          options.onChallenge(challenge);
+        }
+      }
+    }
     const probe = await probeIdentity(session);
     if (probe.loggedIn && probe.payload) {
       return { loggedIn: true, payload: probe.payload, attempts, timedOut: false };

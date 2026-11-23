@@ -114,7 +114,18 @@ type platformV2MediaRef struct {
 }
 
 type platformV2MetricsResult struct {
-	Observations []platformResultRow `json:"observations"`
+	Observations []platformResultRow  `json:"observations"`
+	Followers    []platformV2Follower `json:"followers,omitempty"`
+}
+
+// platformV2Follower 是账号级粉丝日值；桌面实时采集只上报当前总数，
+// 历史涨粉/掉粉仍由平台接口或用户回填补齐。
+type platformV2Follower struct {
+	Date         string     `json:"date"`
+	Cumulate     *int       `json:"cumulate,omitempty"`
+	NewFollow    *int       `json:"new_follow,omitempty"`
+	CancelFollow *int       `json:"cancel_follow,omitempty"`
+	CollectedAt  *time.Time `json:"collected_at,omitempty"`
 }
 
 type platformV2ControlResult struct {
@@ -311,7 +322,7 @@ func platformV2ResultRowCount(resultType string, raw json.RawMessage) (int, erro
 	case "metrics":
 		var data platformV2MetricsResult
 		err := decodePlatformV2Data(raw, &data)
-		return len(data.Observations), err
+		return len(data.Observations) + len(data.Followers), err
 	case "control":
 		var data platformV2ControlResult
 		return 0, decodePlatformV2Data(raw, &data)
@@ -385,6 +396,7 @@ var platformResultErrorCodes = map[string]bool{
 	"platform_device_revoked":             true,
 	"platform_login_required":             true,
 	"platform_challenge_required":         true,
+	"platform_blocked":                    true,
 	"platform_identity_mismatch":          true,
 	"platform_capability_denied":          true,
 	"platform_schema_changed":             true,
@@ -1478,4 +1490,53 @@ func (s *Server) platformV2AuditTx(ctx context.Context, tx pgx.Tx, write platfor
 	return s.auditTx(ctx, tx, "platform_sync_v2_result", "platform_sync_operation", write.OperationID.String(), "ok",
 		map[string]any{"run_id": write.RunID, "stage": write.Stage, "result_type": resultType, "rows": rows,
 			"adapter_version": write.AdapterVersion, "mapping_version": write.MappingVersion})
+}
+
+// writePlatformV2FollowersTx 写入桌面实时粉丝总数。它只新增/更新 desktop_live 自己的行，
+// 不覆盖 wechat_api/manual/回填行；读取侧按 followerSourcePrioritySQL 选当天最高优先级。
+func (s *Server) writePlatformV2FollowersTx(ctx context.Context, tx pgx.Tx, write platformV2WriteContext,
+	followers []platformV2Follower) (int, error) {
+	evidence, err := json.Marshal(map[string]string{
+		"platform": write.Platform, "adapter_version": write.AdapterVersion, "stage": write.Stage,
+	})
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, f := range followers {
+		day, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(f.Date), s.loc)
+		if err != nil {
+			return n, validation("followers.date 格式应为 2026-10-01")
+		}
+		if day.After(s.today().AddDate(0, 0, 1)) {
+			return n, validation("followers.date 不能是未来日期")
+		}
+		if f.Cumulate == nil && f.NewFollow == nil && f.CancelFollow == nil {
+			return n, validation("followers 至少提供 cumulate、new_follow 或 cancel_follow 之一")
+		}
+		for _, v := range []*int{f.Cumulate, f.NewFollow, f.CancelFollow} {
+			if v != nil && *v < 0 {
+				return n, validation("followers 数值不能为负数")
+			}
+		}
+		collectedAt := s.now()
+		if f.CollectedAt != nil {
+			collectedAt = *f.CollectedAt
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO account_metric_daily
+			(account_id, date, source, new_follow, cancel_follow, cumulate, collected_at, evidence)
+			VALUES ($1,$2,'desktop_live',$3,$4,$5,$6,$7)
+			ON CONFLICT (account_id, date, source) DO UPDATE SET
+			new_follow=coalesce(EXCLUDED.new_follow, account_metric_daily.new_follow),
+			cancel_follow=coalesce(EXCLUDED.cancel_follow, account_metric_daily.cancel_follow),
+			cumulate=coalesce(EXCLUDED.cumulate, account_metric_daily.cumulate),
+			collected_at=GREATEST(account_metric_daily.collected_at, EXCLUDED.collected_at),
+			evidence=EXCLUDED.evidence, updated_at=now()`,
+			write.AccountID, day.Format("2006-01-02"), f.NewFollow, f.CancelFollow, f.Cumulate,
+			collectedAt, evidence); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }

@@ -15,6 +15,7 @@
 
 import type { PlatformObservationDraft } from '../platform-client';
 import { isPrivateHost } from '../platform-worker';
+import { ensureNoChallenge } from './challenge-detect';
 import { parseCount, type ReadOnlyResponseSource } from './xhs';
 
 export const WECHAT_MP_ADAPTER_VERSION = 'wechat-mp-1';
@@ -270,13 +271,42 @@ export function parsePublishPage(payload: unknown): {
     // 早期实现读 `r.sent_info`，永远是 undefined → `sentAt` 恒为 null
     // → `work.published_at` 只能落成绑定时刻 → 节点天数全部算错。
     const sentAt = extractArticleSentAt(r, info as Record<string, unknown> | undefined);
-    const appmsgInfo = (info as Record<string, unknown> | undefined)?.appmsg_info;
-    if (!Array.isArray(appmsgInfo)) {
+    // 实测 2026-11-17：`appmsg_info` 只带 appmsgid/itemidx 等标识，标题/链接/删除态在
+    // 同级的 `appmsgex`；`publish_type=1` 的记录甚至 `appmsg_info` 为空，只靠旧字段
+    // 会把已发表文章全判成 invalidRows。这里先按 appmsgid+itemidx 合并，空列表回退
+    // 到 `appmsgex`；不再假设标题/指标一定在 `appmsg_info` 里。
+    const rawInfo = (info as Record<string, unknown> | undefined) ?? {};
+    const appmsgInfo = Array.isArray(rawInfo.appmsg_info) ? rawInfo.appmsg_info : [];
+    const appmsgex = Array.isArray(rawInfo.appmsgex) ? rawInfo.appmsgex : [];
+    const keyOf = (value: unknown): string => {
+      if (!value || typeof value !== 'object') return '';
+      const v = value as { appmsgid?: unknown; itemidx?: unknown };
+      return `${String(v.appmsgid ?? '')}_${String(v.itemidx ?? '')}`;
+    };
+    const appmsgexByKey = new Map<string, Record<string, unknown>>();
+    for (const item of appmsgex) {
+      if (item && typeof item === 'object') appmsgexByKey.set(keyOf(item), item as Record<string, unknown>);
+    }
+    let items: unknown[] = [];
+    if (appmsgInfo.length > 0) {
+      items = appmsgInfo.map((item) => {
+        const extra = item && typeof item === 'object' ? appmsgexByKey.get(keyOf(item)) : undefined;
+        return extra ? { ...(item as Record<string, unknown>), ...extra } : item;
+      });
+    } else if (appmsgex.length > 0) {
+      items = appmsgex;
+    } else {
       invalidRows += 1;
       continue;
     }
-    for (const item of appmsgInfo) {
-      const article = pickArticle(item, sentAt, publishOnly);
+    for (const item of items) {
+      if (!item || typeof item !== 'object') {
+        invalidRows += 1;
+        continue;
+      }
+      const normalized = item as Record<string, unknown>;
+      // appmsgex 用 `link`，旧 appmsg_info 用 `content_url`；保留两者，统一交给 pickArticle。
+      const article = pickArticle({ ...normalized, content_url: normalized.content_url ?? normalized.link }, sentAt, publishOnly);
       if (article) articles.push(article);
       else invalidRows += 1;
     }
@@ -305,6 +335,8 @@ export async function collectPublishedArticles(
   source: ReadOnlyResponseSource,
   options: { maxPages?: number; startPage?: number; buildPath?: (state: { page: number }) => string } = {}
 ): Promise<WechatDiscoveryResult> {
+  // B-03：collect 入口先跑风控探针（过渡页有限等待；interactive 交人；block 停采）。
+  await ensureNoChallenge(source);
   const maxPages = Math.max(1, Math.min(options.maxPages ?? 3, 3));
   const buildPath = options.buildPath ?? ((s: { page: number }) => `${WECHAT_MP_API.publishedList}?sub=list&begin=${s.page * 10}&count=10&lang=zh_CN&f=json&ajax=1`);
   const seen = new Map<string, WechatArticleFact>();

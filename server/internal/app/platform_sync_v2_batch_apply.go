@@ -217,7 +217,7 @@ func (s *Server) applyPlatformV2ResultDataTx(ctx context.Context, tx pgx.Tx, bat
 		if err := decodePlatformV2Data(batch.Data, &data); err != nil {
 			return err
 		}
-		if len(data.Observations) > platformV2MetricBatchRows {
+		if len(data.Observations) > platformV2MetricBatchRows || len(data.Followers) > platformV2MetricBatchRows {
 			return validation("metrics 单批最多 25 条")
 		}
 		for index, row := range data.Observations {
@@ -261,6 +261,18 @@ func (s *Server) applyPlatformV2ResultDataTx(ctx context.Context, tx pgx.Tx, bat
 				receipt.AdoptReason = "projection_failed"
 			}
 			receipt.Rows = append(receipt.Rows, map[string]any{"row_no": index, "state": map[bool]string{true: "accepted", false: "duplicate"}[added]})
+		}
+		if len(data.Followers) > 0 {
+			n, err := s.writePlatformV2FollowersTx(ctx, tx, write, data.Followers)
+			if err != nil {
+				return err
+			}
+			receipt.FollowersObserved += n
+			receipt.Accepted += n
+			incrementPlatformCounter(counters, "followers_observed", n)
+			for index := range data.Followers {
+				receipt.Rows = append(receipt.Rows, map[string]any{"row_no": len(data.Observations) + index, "state": "accepted"})
+			}
 		}
 	case "control":
 		var data platformV2ControlResult

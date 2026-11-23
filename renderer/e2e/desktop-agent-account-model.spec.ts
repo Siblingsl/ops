@@ -50,7 +50,7 @@ test('桌面对话跟随当前账号，模型在输入台选择，跨账号历�
   await page.getByTestId('desktop-context-menu').getByRole('tab', { name: /小红书/ }).click()
   await page.getByTestId('desktop-context-menu').getByRole('button', { name: '第二个验收账号', exact: true }).click()
   await page.getByRole('link', { name: 'AI 对话', exact: true }).click()
-  await expect(page.locator('.desktop-agent-workbench-meta')).toContainText('第二个验收账号')
+  await expect(page.locator('.desktop-agent-header')).toContainText('第二个验收账号')
   await page.goto(oldConversation)
   await expect(page.getByTestId('agent-account-switched')).toContainText('浏览器验收号')
   await expect(page.getByRole('textbox', { name: '发送消息' })).toBeDisabled()

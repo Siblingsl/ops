@@ -22,6 +22,7 @@ const {
   probePostedNotesCapabilities,
   probePostedNotesReadable,
   readCommentFacts,
+  readFollowerTotal,
   readNoteBody,
   resolveShareLink,
   stripSessionParams,
@@ -625,4 +626,21 @@ test('CF-P2-CXEF-06 守卫：不臆造 endpoint、不批量、不落真实昵称
   const ddl = fs.readFileSync(
     path.join(__dirname, '../../server/internal/db/migrations/00082_cx_comment_inbox.sql'), 'utf8');
   assert.ok(!/author_raw\s+\w/.test(ddl), 'comment_inbox 不得出现真实昵称列');
+});
+
+test('REF41 I6: readFollowerTotal reads fans_count and never fabricates a zero', async () => {
+  const calls = [];
+  const source = {
+    fetchJSON: async () => { throw new Error('fetchJSON must not be used when fetchSigned exists'); },
+    fetchSigned: async (apiPath) => {
+      calls.push(apiPath);
+      return { data: { fans_count: 4321 } };
+    }
+  };
+  assert.equal(await readFollowerTotal(source), 4321);
+  assert.deepEqual(calls, [XHS_API.personalInfo]);
+
+  assert.equal(await readFollowerTotal({ fetchJSON: async () => ({ data: { fansCount: '88' } }) }), 88);
+  assert.equal(await readFollowerTotal({ fetchJSON: async () => ({ data: {} }) }), null);
+  assert.equal(await readFollowerTotal({ fetchJSON: async () => ({ data: { fans_count: -1 } }) }), null);
 });

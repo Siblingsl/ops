@@ -358,6 +358,35 @@ export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(Channel
     return { version: info.version, dev: info.dev, dataBytes: info.data_bytes };
   }
 
+  /**
+   * REF41 P6-A3：桌面真实点击发布后，先把作品里程碑登记为“已交接”，
+   * 再用桌面证明回写 publish_task。服务端 publishTaskResult 的 submitted
+   * 守卫仍要求 work_publish_state=submitted，不能让桌面证明绕过里程碑。
+   * 已 submitted/scheduled/public 时幂等跳过；版本冲突时重读一次再试。
+   */
+  async recordWorkSubmitted(workID: string, handoffNote: string): Promise<void> {
+    const base = `/works/${encodeURIComponent(workID)}/publish-state`;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const current = await this.request<{ state?: string; version?: number }>(base);
+      const state = current.state ?? '';
+      if (state === 'submitted' || state === 'scheduled' || state === 'public') return;
+      try {
+        await this.request(`${base}/transition`, {
+          method: 'POST',
+          body: JSON.stringify({
+            base_version: current.version ?? 0,
+            idempotency_key: randomUUID(),
+            to: 'submitted',
+            submitted_ref: { handoff_note: handoffNote.slice(0, 200) }
+          })
+        });
+        return;
+      } catch (error) {
+        if (attempt === 1) throw error;
+      }
+    }
+  }
+
 
   async getPolicy(): Promise<{ globalEnabled: boolean; policy: DesktopPolicy }> {
     const result = await this.request<{ global_enabled: boolean; policy: DesktopPolicy }>('/desktop/policy');

@@ -13,13 +13,13 @@ import {
   session,
   shell,
   WebContentsView,
-  type WebContents,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
-  type Session
+  type Session,
+  type WebContents
 } from 'electron';
 import fs from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { ensureProductBridge, getActiveBridge, startBrowserBridgeDiagnostics, stopActiveBridge } from './browser-bridge';
@@ -86,16 +86,31 @@ import {
 import {
   createPageResponseSource,
   openLoginPage,
+  probeLoginChallenge,
   waitForLogin,
   PLATFORM_LOGIN_POLL_MS,
   PLATFORM_LOGIN_TIMEOUT_MS,
+  PLATFORM_LOGIN_URLS,
   type PlatformLoginPlatform,
   type PlatformLoginSession
 } from './platform-login';
+import { dismissPlatformLoginHandoff, showPlatformLoginHandoff } from './platform-login-handoff';
+import { appendLoginChallengeEvidence } from './platform-login-evidence';
+import { challengeErrorMessage, type ChallengeOutcome } from './platforms/challenge-detect';
 import { connectionProfileDir, buildProfileMeta, profileMetaPath, removeConnectionNamespace, orphanConnections } from './platform-profile';
-import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, normalizeXhsNoteTime, readNoteBody, readCommentFacts, toCommentResult, XHS_API, XhsAdapterError } from './platforms/xhs';
+import { maybeCapturePlatformBaseline } from './platforms/baseline-capture';
+import { parseIdentity as parseXhsIdentity, probeCapabilities as probeXhsCapabilities, collectPostedNotes, noteToObservation, normalizeXhsNoteTime, readNoteBody, readCommentFacts, toCommentResult, readFollowerTotal, XHS_API, XhsAdapterError } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as probeWechatCapabilities, collectPublishedArticles, articleToObservation, normalizeWechatSentAt, WECHAT_MP_API, WechatAdapterError } from './platforms/wechat-mp';
+import { BenchmarkObserveClient } from './benchmark-observe-client';
+import { readPublicBenchmarkTask } from './benchmark-observe-page';
+import { failedPublicNote } from './benchmark-observe';
 import { buildPlatformCatalogCompletion, platformV1CoverageStopReason, PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun, type PlatformV2ResultType } from './platform-client';
+import { PublishTaskClient } from './publish-task-client';
+import { runDesktopPublishTask } from './publish/executor';
+import { createDefaultDesktopPublishAdapterRegistry } from './publish/registry';
+import type { BrowserPolicyGate } from './publish/types';
+import type { DesktopPublishAdapterRegistry } from './publish/registry';
+import { openDesktopPublishPage } from './publish-page';
 import {
   isBusinessWindowOnlyIntent,
   parseDesktopUiIntent,
@@ -319,8 +334,14 @@ function startApplication(): void {
       // 平台采集 presence 心跳：只在服务端开通且本地已登录时真正上报，
       // 由 tick 内部判断，这里直接启动即可（重复调用幂等）。
       startPlatformPresence();
-      // 后台领取循环：自动生成的任务只有客户端主动 claim 才会执行。
+      // REF41 P2：发布任务优先于采集领取。两个循环共用同一个平台 profile，
+      // 且都以 30 秒为周期；如果采集先注册定时器，它会在每个周期边界先抢到
+      // profile，发布任务可能长期饿死。发布任务由用户动作触发、数量有限，
+      // 因此先注册发布循环，让它在同一周期边界先拿到 claim 机会。
+      startPlatformPublishLoop();
       startPlatformClaimLoop();
+      // REF41 I1-A5：竞对公开页只读观测，与平台采集 profile 隔离。
+      startBenchmarkObserveLoop();
       startBrowserCommandExecutor();
   startComputerCommandExecutor();
   startMcpCallExecutor();
@@ -948,6 +969,8 @@ function safeDispose(name: string, dispose: () => void | Promise<void>): void {
 function disposeApplicationResources(): void {
   safeDispose('platform presence', stopPlatformPresence);
   safeDispose('platform claim loop', stopPlatformClaimLoop);
+  safeDispose('platform publish loop', stopPlatformPublishLoop);
+  safeDispose('benchmark observe loop', stopBenchmarkObserveLoop);
   safeDispose('browser command executor', stopBrowserCommandExecutor);
   safeDispose('computer command executor', stopComputerCommandExecutor);
   safeDispose('mcp call executor', stopMcpCallExecutor);
@@ -1241,6 +1264,28 @@ interface PlatformLoginOutcome {
   attempts: number;
 }
 
+// B-01.6：登录页出现风控时用 Electron 原生窗口提示人工完成，不向登录页注入 DOM。
+// 点击只发 handoff_complete 信号；登录成功仍由 waitForLogin 轮询页面身份确认。
+function showLoginChallengeHandoff(platform: PlatformLoginPlatform, outcome: ChallengeOutcome): void {
+  // 仅当 OPS_PLATFORM_LOGIN_EVIDENCE=1 时落本地 JSONL（URL 去 query）；
+  // 写入失败不影响提示与轮询，默认关闭时是空操作。
+  void appendLoginChallengeEvidence(app.getPath('userData'), { platform, outcome }).catch(() => undefined);
+  const platformLabel = platform === 'xhs' ? '小红书' : platform === 'wechat_mp' ? '公众号' : '头条';
+  let origin = '';
+  try {
+    origin = new URL(PLATFORM_LOGIN_URLS[platform]).origin;
+  } catch {
+    origin = '';
+  }
+  void showPlatformLoginHandoff({
+    platform: platformLabel,
+    vendor: outcome.vendor,
+    kind: outcome.kind,
+    message: challengeErrorMessage(outcome),
+    origin
+  });
+}
+
 async function openPlatformLogin(accountId: string, platform: PlatformLoginPlatform): Promise<PlatformLoginOutcome> {
   // D-131：旧 PS13 单步实现保留作协作期间历史参考，正式 IPC 仅走 platformLoginFlow。
   // 不再从 UI 调用，避免绕过本人身份确认；按用户要求不删除其他工作中的代码。
@@ -1288,7 +1333,9 @@ async function openPlatformLogin(accountId: string, platform: PlatformLoginPlatf
         let capturedIdentity = page.captured.get(WECHAT_IDENTITY_PATH);
         // 还没捕获到说明停在扫码页：继续等用户扫码，监听在后台仍有效。
         if (capturedIdentity === undefined) {
-          capturedIdentity = await waitForWechatIdentity(session);
+          capturedIdentity = await waitForWechatIdentity(session, {
+            onChallenge: (outcome) => showLoginChallengeHandoff(platform, outcome)
+          });
         }
         if (capturedIdentity !== undefined) {
           return finishWechatLogin(accountId, capturedIdentity);
@@ -1296,7 +1343,9 @@ async function openPlatformLogin(accountId: string, platform: PlatformLoginPlatf
         // 仍然没有：明确说明原因，不退回“只有 token 没有身份”的半可信状态。
         throw new PlatformBrowserError('platform_identity_mismatch', '没有取到公众号账号身份，请重新登录后再试');
       }
-      const outcome = await waitForLogin(session);
+      const outcome = await waitForLogin(session, {
+        onChallenge: (challenge) => showLoginChallengeHandoff(platform, challenge)
+      });
       if (!outcome.loggedIn || !outcome.payload) {
         return {
           opened: true,
@@ -1372,6 +1421,7 @@ async function openPlatformLogin(accountId: string, platform: PlatformLoginPlatf
       await cdp.close();
     }
   } finally {
+    dismissPlatformLoginHandoff();
     activeLogin = null;
     session = null;
   }
@@ -1520,6 +1570,11 @@ async function runPlatformCollect(accountId: string, preClaimedRun?: PlatformCla
         console.error('[collect] identity-check skipped', describeError(identityError));
       }
     }
+    // B-05：每个 profile 每天第一次采集前跑一次截图基线巡检；只记 schema_suspect，
+    // 不自行暂停采集。巡检失败不影响本次采集。
+    await maybeCapturePlatformBaseline(session).catch((baselineError) => {
+      console.warn('[collect] baseline check skipped', describeError(baselineError));
+    });
     const observedAt = new Date().toISOString();
     // 服务端按 run 冻结的 binding_snapshot 逐篇比对作品、绑定修订与发布修订；
     // 客户端必须原样回传这两个 revision，否则会被判“绑定或发布信息已变化”。
@@ -1793,6 +1848,38 @@ function platformV2ContentItem(input: {
   return item;
 }
 
+// REF41 F4：把采集阶段的结构化解析失败上报到 parser-events。只带字段名、错误码、
+// 页面指纹与计数；不传 Cookie、账号、原始行内容。上报失败不阻断采集，但会留日志。
+async function reportParserInvalidRows(
+  client: PlatformClient,
+  platform: string,
+  adapterVersion: string,
+  pageURL: string,
+  stage: string,
+  field: string,
+  invalidRows: number,
+  incompleteReason: string | null
+): Promise<void> {
+  if (invalidRows <= 0) return;
+  const pageHash = createHash('sha256')
+    .update(`${platform}|${stage}|${field}|${incompleteReason ?? ''}`)
+    .digest('hex')
+    .slice(0, 64);
+  try {
+    await client.submitParserEvents([{
+      platform,
+      adapter_version: adapterVersion,
+      page_url: pageURL,
+      page_hash: pageHash,
+      field,
+      error_code: 'parse_failed',
+      detail: { invalid_rows: invalidRows, incomplete_reason: incompleteReason, stage }
+    }]);
+  } catch (error) {
+    console.warn('[collect-v2] parser events unavailable', describeError(error));
+  }
+}
+
 async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, client: PlatformClient): Promise<PlatformCollectOutcome> {
   if (!desktopClient) throw new Error('客户端设置尚未初始化。');
   if (run.platform !== 'xhs' && run.platform !== 'wechat_mp') {
@@ -1855,6 +1942,11 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
       return submitV2ControlFailure(client, run, 'platform_identity_mismatch', 'platform_identity_mismatch');
     }
 
+    // B-05：同一 profile 每天首次采集前跑一次基线巡检（只提示，不暂停）。
+    await maybeCapturePlatformBaseline(session).catch((baselineError) => {
+      console.warn('[collect-v2] baseline check skipped', describeError(baselineError));
+    });
+
     const observedAt = new Date().toISOString();
     const stage = run.operation_stage ?? 'metrics';
     const targets = parsePlatformV2Targets(run.binding_snapshot);
@@ -1886,6 +1978,7 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
         pagesRead = discovered.pagesRead;
         hasMore = discovered.hasMore;
         incompleteReason = discovered.coverage.incomplete_reason;
+        await reportParserInvalidRows(client, platform, run.adapter_version, page.url, 'catalog', partition, discovered.invalidRows, incompleteReason);
         for (const note of discovered.notes) {
           if (note.status !== 'published') continue;
           const publishedAt = normalizeXhsNoteTime(note.recordedAt);
@@ -1905,6 +1998,7 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
         pagesRead = discovered.pagesRead;
         hasMore = discovered.hasMore;
         incompleteReason = discovered.coverage.incomplete_reason;
+        await reportParserInvalidRows(client, platform, run.adapter_version, page.url, 'catalog', partition, discovered.invalidRows, incompleteReason);
         for (const article of discovered.articles) {
           if (article.status !== 'published') continue;
           const publishedAt = normalizeWechatSentAt(article.sentAt);
@@ -2023,7 +2117,20 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
     }
 
     if ((run.task_kind === 'account_sync' && stage === 'metrics') || run.task_kind === 'collect' && stage === 'metrics') {
-      if (expectedMetrics.size === 0) {
+      // I6：metrics 阶段同时上报账号级粉丝总数。读不到就保持 null，不伪造 0；
+      // 只有 expectedMetrics 为空且粉丝也没读到时才提前收口。
+      let follower: { date: string; cumulate: number; collected_at: string } | null = null;
+      if (platform === 'xhs') {
+        try {
+          const total = await readFollowerTotal(source);
+          if (total !== null) {
+            follower = { date: shanghaiDay(new Date(observedAt)), cumulate: total, collected_at: observedAt };
+          }
+        } catch (error) {
+          console.warn('[collect-v2] follower total unavailable', describeError(error));
+        }
+      }
+      if (expectedMetrics.size === 0 && follower === null) {
         const receipt = await client.submitV2('control', { state: 'complete', observed_at: observedAt }, { status: 'succeeded' });
         return { performed: true, runId: run.id, runStatus: receipt.run_status, accepted: 0, rejected: 0, stopReason: null, errorCode: null, adoptErrors: 0, adoptReason: null };
       }
@@ -2031,6 +2138,7 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
       const found = new Set<string>();
       if (platform === 'xhs') {
         const discovered = await collectPostedNotes(source, { maxPages: PLATFORM_V2_PAGE_LIMIT, buildPath: ({ page: pageNo }) => `${XHS_API.postedNotes}?page=${pageNo}&page_size=${PLATFORM_V2_PAGE_SIZE}` });
+        await reportParserInvalidRows(client, platform, run.adapter_version, page.url, 'metrics', 'notes', discovered.invalidRows, discovered.coverage.incomplete_reason);
         for (const note of discovered.notes) {
           if (!expectedMetrics.has(note.noteId) || note.status !== 'published') continue;
           found.add(note.noteId);
@@ -2040,6 +2148,7 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
         }
       } else {
         const discovered = await collectPublishedArticles(source, { maxPages: PLATFORM_V2_PAGE_LIMIT });
+        await reportParserInvalidRows(client, platform, run.adapter_version, page.url, 'metrics', 'articles', discovered.invalidRows, discovered.coverage.incomplete_reason);
         for (const article of discovered.articles) {
           if (!expectedMetrics.has(article.externalID) || article.status !== 'published') continue;
           found.add(article.externalID);
@@ -2048,10 +2157,22 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
           if (draft) drafts.push({ ...draft, row_no: drafts.length });
         }
       }
+      let followerSubmitted = false;
       for (let offset = 0; offset < drafts.length; offset += 25) {
-        const receipt = await client.submitV2('metrics', { observations: drafts.slice(offset, offset + 25) });
+        const payload = {
+          observations: drafts.slice(offset, offset + 25),
+          ...(follower !== null && !followerSubmitted ? { followers: [follower] } : {})
+        };
+        const receipt = await client.submitV2('metrics', payload);
         accepted += receipt.accepted;
         rejected += receipt.rejected;
+        if (follower !== null && !followerSubmitted) followerSubmitted = true;
+      }
+      if (follower !== null && !followerSubmitted) {
+        const receipt = await client.submitV2('metrics', { observations: [], followers: [follower] });
+        accepted += receipt.accepted;
+        rejected += receipt.rejected;
+        followerSubmitted = true;
       }
       if (found.size < expectedMetrics.size) {
         await client.submitV2('control', {
@@ -2059,7 +2180,7 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
         }, { status: 'partial', stopReason: 'target_not_in_bounded_window' });
         return { performed: true, runId: run.id, runStatus: 'partial', accepted, rejected, stopReason: 'target_not_in_bounded_window', errorCode: null, adoptErrors: 0, adoptReason: null };
       }
-      if (drafts.length === 0) {
+      if (drafts.length === 0 && follower === null) {
         await client.submitV2('control', { state: 'partial', reason: 'temporarily_unavailable', observed_at: observedAt }, { status: 'partial', stopReason: 'temporarily_unavailable' });
         return { performed: true, runId: run.id, runStatus: 'partial', accepted, rejected, stopReason: 'temporarily_unavailable', errorCode: null, adoptErrors: 0, adoptReason: null };
       }
@@ -2075,6 +2196,15 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
   } finally {
     if (cdp) await cdp.close();
   }
+}
+
+// 粉丝日值与服务端账号时区口径一致，按 Asia/Shanghai 切日；不依赖本机区域设置。
+function shanghaiDay(date: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(date);
+  const pick = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return `${pick('year')}-${pick('month')}-${pick('day')}`;
 }
 
 function platformCollectErrorCode(error: unknown): string {
@@ -2347,12 +2477,14 @@ const PLATFORM_CLAIM_INTERVAL_MS = 30_000;
 
 let claimTimer: NodeJS.Timeout | null = null;
 let collectInFlight = false;
+// 发布任务与采集共用同一个平台 profile，必须互斥；否则两个浏览器会争用 profile 锁。
+let publishInFlight = false;
 
 // startPlatformClaimLoop 启动后台领取循环。重复调用幂等。
 function startPlatformClaimLoop(): void {
   if (claimTimer) return;
   const tick = async () => {
-    if (collectInFlight || !desktopClient) return;
+    if (collectInFlight || publishInFlight || !desktopClient) return;
     if (activeLogin || platformLoginFlow.active) return; // 登录中不抢 profile
     collectInFlight = true;
     try {
@@ -2409,6 +2541,189 @@ function stopPlatformClaimLoop(): void {
   if (!claimTimer) return;
   clearInterval(claimTimer);
   claimTimer = null;
+}
+
+// REF41 P2：发布任务领取循环。与采集分开 schedule，但共用 profile，所以用
+// collectInFlight/publishInFlight 互斥；同一时刻只有一个浏览器能打开该账号目录。
+// 这里只做真实 claim → heartbeat → 页面身份核对 → result，不填内容、不点发布。
+const PUBLISH_CLAIM_INTERVAL_MS = 30_000;
+let publishTimer: NodeJS.Timeout | null = null;
+
+function errorCodeOf(error: unknown): string {
+  const code = (error as { code?: unknown })?.code;
+  if (typeof code === 'string' && code) return code.slice(0, 80);
+  return 'desktop_publish_failed';
+}
+
+function startPlatformPublishLoop(): void {
+  if (publishTimer) return;
+  const tick = async () => {
+    if (publishInFlight || collectInFlight || !desktopClient) return;
+    if (activeLogin || platformLoginFlow.active) return;
+    publishInFlight = true;
+    let pageSession: Awaited<ReturnType<typeof openDesktopPublishPage>> | null = null;
+    let client: PublishTaskClient | null = null;
+    try {
+      const capability = await desktopClient.getPlatformCollectionCapability();
+      if (!capability.enabled) return;
+      client = new PublishTaskClient(capability, async (operation, method, path, body) =>
+        desktopClient!.platformSignedCall(operation, method, path, body));
+      const claimed = await client.claim();
+      if (!claimed) return;
+      client.adopt(claimed);
+      safeConsoleError('[publish-auto] 领到任务', JSON.stringify({
+        platform: claimed.platform,
+        taskId: claimed.taskId,
+        mode: claimed.mode,
+        manifestRevision: claimed.manifestRevision
+      }));
+
+      let registry: DesktopPublishAdapterRegistry;
+      if (claimed.platform === 'xhs' || claimed.platform === 'toutiao') {
+        const auth = await desktopClient.getAuthContext();
+        pageSession = await openDesktopPublishPage({
+          userDataDir: app.getPath('userData'),
+          scope: {
+            origin: serviceNamespace,
+            userId: auth.userId,
+            workspaceId: auth.workspaceId,
+            deviceId: auth.deviceId,
+            accountId: claimed.accountId,
+            platform: claimed.platform
+          },
+          platform: claimed.platform,
+          accountName: claimed.accountName ?? '',
+          externalAccountKey: claimed.externalAccountKey,
+          taskId: claimed.taskId,
+          assets: claimed.assets
+        });
+        const policy: BrowserPolicyGate = {
+          check: (input) => client!.checkBrowserPolicy(input),
+        };
+        registry = createDefaultDesktopPublishAdapterRegistry(pageSession.port, policy);
+      } else {
+        // 没有页面适配器的平台也要如实回执 executor_not_registered，不能把任务卡在 filling。
+        registry = createDefaultDesktopPublishAdapterRegistry({
+          currentAccountName: async () => claimed.accountName ?? '',
+          hasAnchor: async () => false
+        });
+      }
+
+      const result = await runDesktopPublishTask({
+        claim: async () => claimed,
+        heartbeat: async () => {
+          await client!.heartbeat();
+          safeConsoleError('[publish-auto] heartbeat ok', claimed.taskId);
+        },
+        result: async (_taskId, payload) => {
+          // P6-A3：真实点击成功后，服务端仍要求作品里程碑已是 submitted。
+          // 先走官方发布进度接口登记交接，再回写任务；不让桌面证明绕过里程碑。
+          if (claimed.intent === 'submit' && payload.state === 'submitted' && desktopClient) {
+            await desktopClient.recordWorkSubmitted(claimed.workId, '桌面立即提交：已在平台页面点击发布');
+          }
+          await client!.result(payload);
+        },
+        registry
+      });
+      safeConsoleError('[publish-auto] 完成', JSON.stringify({
+        state: result?.state ?? null,
+        errorCode: result?.errorCode ?? null
+      }));
+    } catch (error) {
+      safeConsoleError('[publish-auto] 循环异常', describeError(error));
+      if (client?.claimed()) {
+        await client.result({
+          state: 'failed',
+          errorCode: errorCodeOf(error),
+          errorMessage: (error instanceof Error ? error.message : String(error)).slice(0, 500)
+        }).catch(() => undefined);
+      }
+    } finally {
+      if (pageSession) await pageSession.close().catch(() => undefined);
+      publishInFlight = false;
+    }
+  };
+  publishTimer = setInterval(() => void tick(), PUBLISH_CLAIM_INTERVAL_MS);
+  publishTimer.unref?.();
+}
+
+function stopPlatformPublishLoop(): void {
+  if (!publishTimer) return;
+  clearInterval(publishTimer);
+  publishTimer = null;
+}
+
+// REF41 I1-A5：竞对公开页观测循环。与平台采集 profile 完全隔离：不登录、不带
+// Cookie、不用 persistent partition；claim 到任务后用隐藏窗口只读公开页，解析结果
+// 走 benchmark.observe.result 写回。默认 30 秒一轮，与平台采集的 30 秒互不抢占。
+const BENCHMARK_OBSERVE_INTERVAL_MS = (() => {
+  const raw = Number(process.env.OPS_BENCHMARK_OBSERVE_INTERVAL_MS);
+  return Number.isFinite(raw) && raw >= 1_000 ? raw : 30_000;
+})();
+
+let benchmarkObserveTimer: NodeJS.Timeout | null = null;
+let benchmarkObserveInFlight = false;
+
+function startBenchmarkObserveLoop(): void {
+  if (benchmarkObserveTimer) return;
+  const tick = async () => {
+    if (benchmarkObserveInFlight || !desktopClient) return;
+    if (activeLogin || platformLoginFlow.active) return; // 登录流程独占本机窗口资源
+    benchmarkObserveInFlight = true;
+    try {
+      const capability = await desktopClient.getPlatformCollectionCapability();
+      if (!capability.enabled || !capability.operations.includes('benchmark.observe.claim')) return;
+      const client = new BenchmarkObserveClient(async (operation, method, path, body) =>
+        desktopClient!.platformSignedCall(operation, method, path, body));
+      const task = await client.claim();
+      if (!task) return;
+      safeConsoleError('[benchmark-observe] 领到任务', JSON.stringify({ platform: task.platform, target: task.url }));
+      const heartbeat = setInterval(() => {
+        void client.heartbeat(task).catch((error) => {
+          safeConsoleError('[benchmark-observe] 心跳失败', describeError(error));
+        });
+      }, 15_000);
+      heartbeat.unref?.();
+      try {
+        const note = await readPublicBenchmarkTask(task, {
+          allowLocal: process.env.OPS_BENCHMARK_ALLOW_LOCAL === '1',
+          timeoutMs: 20_000,
+          settleMs: 600
+        });
+        await client.results(task, note);
+        safeConsoleError('[benchmark-observe] 已提交', JSON.stringify({
+          externalId: note.externalId, quality: note.quality, metrics: Object.keys(note.values).length,
+          errorCode: note.errorCode ?? null
+        }));
+      } catch (error) {
+        // 页面读取/提交失败也要落一条 failed 观测，不能让任务留在 leased 等租约过期。
+        const failed = failedPublicNote(task.url, task.platform, `竞对公开页 ${task.platform}`, 'empty_page');
+        try {
+          await client.results(task, failed);
+        } catch (reportError) {
+          safeConsoleError('[benchmark-observe] 失败结果提交失败', describeError(reportError));
+        }
+        safeConsoleError('[benchmark-observe] 采集失败', describeError(error));
+      } finally {
+        clearInterval(heartbeat);
+      }
+    } catch (error) {
+      // 没有未领取任务、旧服务端未公布 benchmark 操作、网络失败都走这里；
+      // 不改变平台采集状态栏，也不伪造成功。
+      safeConsoleError('[benchmark-observe] 循环异常', describeError(error));
+    } finally {
+      benchmarkObserveInFlight = false;
+    }
+  };
+  void tick();
+  benchmarkObserveTimer = setInterval(() => void tick(), BENCHMARK_OBSERVE_INTERVAL_MS);
+  benchmarkObserveTimer.unref?.();
+}
+
+function stopBenchmarkObserveLoop(): void {
+  if (!benchmarkObserveTimer) return;
+  clearInterval(benchmarkObserveTimer);
+  benchmarkObserveTimer = null;
 }
 
 // A30b 片 2（拍板：账本存载荷+同步等待）：AI 浏览器命令执行器——桥配对后定时轮询
@@ -2694,13 +3009,29 @@ const WECHAT_IDENTITY_PATH = '/cgi-bin/switchacct';
 // switchacct 是页面自己发的，且有签名；只能靠“监听已注册 + 页面跳转”触发，
 // 因此这里循环：重新注册监听 → 导航到根 → 看是否捕获到。
 // 已经登录时会立刻触发；停在扫码页时会一直等，直到超时。
-async function waitForWechatIdentity(session: PlatformLoginSession): Promise<unknown> {
+async function waitForWechatIdentity(
+  session: PlatformLoginSession,
+  options: { onChallenge?: (outcome: ChallengeOutcome) => void } = {}
+): Promise<unknown> {
   const deadline = Date.now() + PLATFORM_LOGIN_TIMEOUT_MS;
+  let attempts = 0;
+  let lastChallenge = '';
   while (Date.now() < deadline) {
+    attempts += 1;
     const collected = session.cdp.collectResponses(WECHAT_IDENTITY_PATH, 12_000);
     await session.cdp.request('Page.navigate', { url: 'https://mp.weixin.qq.com/' }, 30_000).catch(() => undefined);
     const captured = await collected;
     if (captured !== null) return captured;
+    if (options.onChallenge && attempts % 2 === 0) {
+      const challenge = await probeLoginChallenge(session);
+      if (challenge && challenge.kind !== 'none') {
+        const key = `${challenge.vendor}:${challenge.kind}`;
+        if (key !== lastChallenge) {
+          lastChallenge = key;
+          options.onChallenge(challenge);
+        }
+      }
+    }
     // 没捕获到：可能还在扫码页，等一会儿再重试。
     await new Promise<void>((resolve) => setTimeout(resolve, PLATFORM_LOGIN_POLL_MS));
   }

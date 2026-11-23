@@ -99,6 +99,11 @@ type BrowserTabListResult =
   | { ok: false; code: string; message: string }
   | { ok: true; tabs: BrowserTabView[] };
 
+// BR-09：用户主动“查看操作”的本机结果；只含标签句柄，不含前台窗口等系统信息。
+type BrowserTabFocusResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; tab_id: number };
+
 // DEV-AI27-A30b：桥配对快照——短码核对与组装服务端 confirm 所需的最小集合。
 // 快照白名单四键；pairing 白名单三键；任何多余键（如 session_key/hkdf_salt）整份拒绝，
 // 会话密钥零泄漏断言在 preload 层成立（源头 pairingSnapshot 也不含）。
@@ -443,6 +448,20 @@ function parseBrowserTabListResult(raw: unknown): BrowserTabListResult | null {
   return { ok: true, tabs };
 }
 
+function parseBrowserTabFocusResult(raw: unknown): BrowserTabFocusResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 60
+      && typeof value.message === 'string' && value.message.length <= 200
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  return typeof value.tab_id === 'number' && Number.isSafeInteger(value.tab_id) && value.tab_id > 0
+    ? { ok: true, tab_id: value.tab_id }
+    : null;
+}
+
 function parseBrowserPairingStateResult(raw: unknown): BrowserPairingStateResult | null {
   const value = asRecord(raw);
   if (!value || typeof value.ok !== 'boolean') return null;
@@ -735,6 +754,11 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
     const result = parseBrowserTabListResult(await ipcRenderer.invoke('browser:list-tabs'));
     return result ?? { ok: false, code: 'browser_tabs_invalid', message: 'Electron 返回的标签列表无效。' };
   },
+  // BR-09：用户主动“查看操作”。只把 Agent 正在操作的标签切到前台；不供 Agent 调用。
+  async focusBrowserTab(tabId: number): Promise<BrowserTabFocusResult> {
+    const result = parseBrowserTabFocusResult(await ipcRenderer.invoke('browser:focus-tab', tabId));
+    return result ?? { ok: false, code: 'browser_tab_focus_invalid', message: 'Electron 返回的标签切换结果无效。' };
+  },
   // DEV-AI27-A30b：配对统一——读桥侧配对快照 / 确认桥侧配对（一次动作两产物的本机一半；
   // 服务端绑定由渲染器持扩展实例 ID 自行调用服务端 API 完成）。
   async getBrowserPairingState(): Promise<BrowserPairingStateResult> {
@@ -766,7 +790,7 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
   },
   // DEV-AI27-08（W08）：内置浏览视图固定意图（白名单通道；渲染器无 view 对象）。
   async invokeInBrowse(channel: string, payload?: unknown): Promise<unknown> {
-    const allowed = ['inbrowse:snapshot', 'inbrowse:set-bounds', 'inbrowse:navigate', 'inbrowse:back', 'inbrowse:forward', 'inbrowse:reload', 'inbrowse:stop', 'inbrowse:close', 'inbrowse:open-tab', 'inbrowse:switch-tab', 'inbrowse:close-tab', 'inbrowse:reorder-tab', 'inbrowse:data-stats', 'inbrowse:clear-data', 'voice:realtime-status', 'voice:realtime-start', 'voice:realtime-append', 'voice:realtime-commit', 'voice:realtime-interrupt', 'voice:realtime-stop'];
+    const allowed = ['inbrowse:snapshot', 'inbrowse:set-bounds', 'inbrowse:navigate', 'inbrowse:back', 'inbrowse:forward', 'inbrowse:reload', 'inbrowse:stop', 'inbrowse:close', 'inbrowse:open-tab', 'inbrowse:switch-tab', 'inbrowse:close-tab', 'inbrowse:reorder-tab', 'inbrowse:visibility', 'inbrowse:screenshot', 'inbrowse:rebuild', 'inbrowse:pick-element', 'inbrowse:pick-cancel', 'inbrowse:pick-clear', 'inbrowse:data-stats', 'inbrowse:clear-data', 'voice:realtime-status', 'voice:realtime-start', 'voice:realtime-append', 'voice:realtime-commit', 'voice:realtime-interrupt', 'voice:realtime-stop'];
     if (!allowed.includes(channel)) throw new Error(`不允许的内置浏览意图：${channel}`);
     return ipcRenderer.invoke(channel, payload);
   },

@@ -21,7 +21,18 @@ export const PLATFORM_OPERATION_PATHS: Readonly<Record<string, { method: string;
   'platform.sync.operation.resume': { method: 'POST', path: '/api/v1/accounts/{accountId}/platform-sync-operations/{operationId}/actions' },
   // P0-4（CF-P2-CXEF-06）：评论单条上报。旧服务端未公布该操作时 resolvePlatformEndpoint
   // 会如实抛 PlatformCollectionUnsupportedError，调用方据此跳过上报（不静默丢弃）。
-  'platform.comment.ingest': { method: 'POST', path: '/api/v1/desktop/platform/comments' }
+  'platform.comment.ingest': { method: 'POST', path: '/api/v1/desktop/platform/comments' },
+  // REF41 F5：桌面发布 Preflight 的三道闸检查。拒绝由服务端写 browser_policy_denied 审计。
+  'browser.policy.check': { method: 'POST', path: '/api/v1/desktop/platform/browser-policy/check' },
+  // REF41 P2：发布任务领取/心跳/结果。服务端 desktop_proof.go 同步登记，
+  // 客户端只认这三个固定路径，不接受服务端下发任意路径。
+  'publish.task.claim': { method: 'POST', path: '/api/v1/desktop/platform/publish/tasks/claim' },
+  'publish.task.heartbeat': { method: 'POST', path: '/api/v1/desktop/platform/publish/tasks/{id}/heartbeat' },
+  'publish.task.result': { method: 'POST', path: '/api/v1/desktop/platform/publish/tasks/{id}/results' },
+  // REF41 I1-A5：竞对公开页观测。仅桌面客户端使用，服务端 desktop_proof.go 同步登记。
+  'benchmark.observe.claim': { method: 'POST', path: '/api/v1/desktop/benchmark/tasks/claim' },
+  'benchmark.observe.heartbeat': { method: 'POST', path: '/api/v1/desktop/benchmark/tasks/{uuid}/heartbeat' },
+  'benchmark.observe.result': { method: 'POST', path: '/api/v1/desktop/benchmark/tasks/{uuid}/results' }
 });
 
 export interface PlatformProtocolV2Capability {

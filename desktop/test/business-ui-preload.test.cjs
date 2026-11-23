@@ -39,6 +39,7 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'actComputerUIA',
     'captureLongImage',
     'confirmBrowserPairing',
+    'focusBrowserTab',
     'getBrowserPairingState',
     'getMcpOAuthStatus',
     'invalidateComputerUIA',
@@ -67,7 +68,7 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   // DEV-AI27-A3：MCP 验证与 OAuth 生命周期为独立固定意图（握手/授权在本机，秘密不进 IPC）。
   // DT-04（W17c）：UIA 读/调用同口径独立固定意图（C09 白名单逐控件校验）。
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')).sort(),
-    ['actComputerUIA', 'captureLongImage', 'confirmBrowserPairing', 'getBrowserPairingState',
+    ['actComputerUIA', 'captureLongImage', 'confirmBrowserPairing', 'focusBrowserTab', 'getBrowserPairingState',
      'getMcpOAuthStatus', 'invalidateComputerUIA', 'invokeComputerUIA', 'invokeInBrowse',
      'listBrowserTabs', 'listComputerWindows', 'observeComputerUIA', 'readComputerUIA',
      'revokeMcpOAuth', 'startMcpOAuth', 'validateMcpConnection']);
@@ -92,6 +93,12 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     ok: false, code: 'render_not_ready', message: '页面未就绪。'
   });
   assert.deepEqual(invokes.at(-1), { channel: 'browser:list-tabs', payload: undefined });
+
+  // BR-09：用户主动“查看操作”走独立固定意图；失败原样透出，不伪造已切换。
+  assert.deepEqual(await exposed.opsDesktopUI.focusBrowserTab(42), {
+    ok: false, code: 'render_not_ready', message: '页面未就绪。'
+  });
+  assert.deepEqual(invokes.at(-1), { channel: 'browser:focus-tab', payload: 42 });
 
   // A3 第一片：MCP 验证失败原样透出（渲染器如实上报 last_error，不伪造已验证）。
   assert.deepEqual(await exposed.opsDesktopUI.validateMcpConnection({

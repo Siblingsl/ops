@@ -16,6 +16,7 @@
 import { createHash } from 'node:crypto';
 import type { PlatformObservationDraft } from '../platform-client';
 import { isPrivateHost } from '../platform-worker';
+import { ensureNoChallenge, type ChallengeOutcome } from './challenge-detect';
 
 export const XHS_ADAPTER_VERSION = 'xhs-1';
 export const XHS_MAPPING_VERSION = 1;
@@ -140,6 +141,10 @@ export interface ReadOnlyResponseSource {
   // 适配器不臆造评论 endpoint、不读取所选笔记之外的页面（docs/27 C09/W17c 边界）。
   // 未提供时返回 comment_source_missing，不冒充「已授权读取」。
   fetchComments?(noteId: string): Promise<unknown>;
+  // B-03：页面风控探针与人工接管入口。由宿主注入（CDP / 扩展）；未注入时放行，
+  // 适配器仍只消费探针结果，不自己读页面、不改 DOM。
+  probeChallenge?(): Promise<unknown>;
+  requestHandoff?(outcome: ChallengeOutcome): Promise<unknown>;
 }
 
 export class XhsAdapterError extends Error {
@@ -405,6 +410,8 @@ export async function collectPostedNotes(
     buildPath?: (state: { page: number; cursor: string | null }) => string;
   } = {}
 ): Promise<XhsDiscoveryResult> {
+  // B-03：collect 入口先跑风控探针。过渡页有上限等待；interactive 交人；block 直接停采。
+  await ensureNoChallenge(source);
   const maxPages = Math.max(1, Math.min(options.maxPages ?? 3, 3));
   const buildPath = options.buildPath ?? ((s: { page: number; cursor: string | null }) =>
     s.cursor ? `${XHS_API.postedNotes}?cursor=${encodeURIComponent(s.cursor)}` : `${XHS_API.postedNotes}?page=${s.page}&page_size=20`);
@@ -937,6 +944,27 @@ export async function resolveShareLink(
     current = parsed;
   }
   throw new XhsAdapterError('platform_historical_unavailable', '无法从分享链接解析出笔记编号，请手工输入 note_id');
+}
+
+// I6：读取创作者主页的粉丝总数。只有 /api/galaxy/creator/home/personal_info
+// 的已实测 fans_count 字段能作为 desktop_live 的总数；读不到时返回 null，
+// 不把缺字段伪装成 0，也不根据点赞/收藏反推。
+export async function readFollowerTotal(source: ReadOnlyResponseSource): Promise<number | null> {
+  const payload = source.fetchSigned
+    ? await source.fetchSigned(XHS_API.personalInfo)
+    : await source.fetchJSON(XHS_API.personalInfo);
+  const root = (payload as { data?: unknown })?.data ?? payload;
+  if (!root || typeof root !== 'object') return null;
+  const data = ((root as Record<string, unknown>).data && typeof (root as Record<string, unknown>).data === 'object')
+    ? (root as Record<string, unknown>).data as Record<string, unknown>
+    : root as Record<string, unknown>;
+  const raw = data.fans_count ?? data.fansCount;
+  if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0) return raw;
+  if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
+    const value = Number(raw.trim());
+    return Number.isSafeInteger(value) ? value : null;
+  }
+  return null;
 }
 
 // verifyNoteAuthor 核对笔记作者是否为连接的账号：编号相同但作者不同不能当作本人作品。

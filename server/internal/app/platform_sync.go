@@ -807,19 +807,20 @@ type platformResultRow struct {
 
 // platformReceipt 是批次回执：逐行给出接收/待确认/拒绝/重复与原因。
 type platformReceipt struct {
-	BatchSeq        int              `json:"batch_seq"`
-	ReceiptID       uuid.UUID        `json:"receipt_id"`
-	Accepted        int              `json:"accepted"`
-	Pending         int              `json:"pending"`
-	Rejected        int              `json:"rejected"`
-	Duplicate       int              `json:"duplicate"`
-	MirrorsCreated  int              `json:"mirrors_created,omitempty"`
-	MirrorsUpdated  int              `json:"mirrors_updated,omitempty"`
-	ContentReceived int              `json:"content_received,omitempty"`
-	MetricsObserved int              `json:"metrics_observed,omitempty"`
-	MetricsAdopted  int              `json:"metrics_adopted,omitempty"`
-	RunStatus       string           `json:"run_status"`
-	Rows            []map[string]any `json:"rows"`
+	BatchSeq          int              `json:"batch_seq"`
+	ReceiptID         uuid.UUID        `json:"receipt_id"`
+	Accepted          int              `json:"accepted"`
+	Pending           int              `json:"pending"`
+	Rejected          int              `json:"rejected"`
+	Duplicate         int              `json:"duplicate"`
+	MirrorsCreated    int              `json:"mirrors_created,omitempty"`
+	MirrorsUpdated    int              `json:"mirrors_updated,omitempty"`
+	ContentReceived   int              `json:"content_received,omitempty"`
+	MetricsObserved   int              `json:"metrics_observed,omitempty"`
+	MetricsAdopted    int              `json:"metrics_adopted,omitempty"`
+	FollowersObserved int              `json:"followers_observed,omitempty"`
+	RunStatus         string           `json:"run_status"`
+	Rows              []map[string]any `json:"rows"`
 	// auto_adopt 开启时，投影失败的行数与此处第一条原因。
 	// 观测本身已入库（accepted 计数仍包含它），但没进正式指标——
 	// 不回传原因的话，用户只看到"采集成功"，以为数据已生效。
@@ -859,7 +860,8 @@ func platformReceiptEntry(receipt platformReceipt, bodyHash string) map[string]a
 		"duplicate": receipt.Duplicate, "mirrors_created": receipt.MirrorsCreated,
 		"mirrors_updated": receipt.MirrorsUpdated, "content_received": receipt.ContentReceived,
 		"metrics_observed": receipt.MetricsObserved, "metrics_adopted": receipt.MetricsAdopted,
-		"adopt_errors": receipt.AdoptErrors, "adopt_reason": receipt.AdoptReason,
+		"followers_observed": receipt.FollowersObserved,
+		"adopt_errors":       receipt.AdoptErrors, "adopt_reason": receipt.AdoptReason,
 		"run_status": receipt.RunStatus, "rows": receipt.Rows,
 	}
 }
@@ -1119,12 +1121,41 @@ func backfillPublishedAt(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, pl
 	return err
 }
 
+// runFailureScope 把采集失败的 error_code 归到固定的处置范围。
+// B-03.6：验证码/拒绝页只按连接与人处理，绝不进入版本级熔断（那会因一次风控
+// 把同一适配器版本的全部连接停掉）；只有真正的结构变化（platform_schema_changed）
+// 才允许打开 adapter breaker。
+type runFailureScope int
+
+const (
+	runFailureNone runFailureScope = iota
+	runFailureAvailability
+	runFailurePause
+	runFailureBlocked
+	runFailureBreaker
+)
+
+func classifyRunFailure(errorCode string) runFailureScope {
+	switch strings.TrimSpace(errorCode) {
+	case "platform_login_required", "platform_challenge_required", "platform_identity_mismatch":
+		return runFailureAvailability
+	case "platform_account_restricted", "platform_consent_required":
+		return runFailurePause
+	case "platform_blocked":
+		return runFailureBlocked
+	case "platform_schema_changed":
+		return runFailureBreaker
+	default:
+		return runFailureNone
+	}
+}
+
 func (s *Server) applyRunFailureAction(ctx context.Context, tx pgx.Tx, connectionID uuid.UUID, errorCode *string) error {
 	if errorCode == nil {
 		return nil
 	}
-	switch strings.TrimSpace(*errorCode) {
-	case "platform_login_required", "platform_challenge_required", "platform_identity_mismatch":
+	switch classifyRunFailure(*errorCode) {
+	case runFailureAvailability:
 		availability := failureAvailability(*errorCode)
 		if _, err := tx.Exec(ctx, `UPDATE platform_connection SET availability=$2, updated_at=now() WHERE id=$1`,
 			connectionID, availability); err != nil {
@@ -1137,11 +1168,19 @@ func (s *Server) applyRunFailureAction(ctx context.Context, tx pgx.Tx, connectio
 			return err
 		}
 		return nil
-	case "platform_account_restricted", "platform_consent_required":
+	case runFailurePause:
 		_, err := tx.Exec(ctx, `UPDATE platform_connection SET state='paused', auto_collect=false,
 			auto_adopt=false, authorization_revision=authorization_revision+1, updated_at=now() WHERE id=$1`, connectionID)
 		return err
-	case "platform_schema_changed":
+	case runFailureBlocked:
+		// B-03：平台明确拒绝访问（Cloudflare/Akamai/Imperva block 页等）。停采并标记
+		// restricted；不自动重试、不轮换代理、不改内核绕过。与 challenge_required 分开：
+		// 验证码类还有人工通过的可能，block 页则是平台拒绝服务。
+		_, err := tx.Exec(ctx, `UPDATE platform_connection SET availability='restricted', state='paused',
+			auto_collect=false, auto_adopt=false, authorization_revision=authorization_revision+1,
+			updated_at=now() WHERE id=$1`, connectionID)
+		return err
+	case runFailureBreaker:
 		// 版本级熔断：先停该连接，再按平台+适配器版本全局打开熔断。
 		// 恢复必须发布新 mapping_version 并重新实测，不能靠时间自动恢复。
 		if _, err := tx.Exec(ctx, `UPDATE platform_connection SET auto_collect=false, availability='degraded',
@@ -1365,6 +1404,8 @@ func failureAvailability(code string) string {
 		return "login_required"
 	case "platform_challenge_required":
 		return "challenge_required"
+	case "platform_blocked":
+		return "restricted"
 	case "platform_identity_mismatch":
 		return "identity_mismatch"
 	default:

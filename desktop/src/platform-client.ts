@@ -167,6 +167,21 @@ export class PlatformClient {
     return await this.sign('platform.comment.ingest', endpoint.method, endpoint.path, result) as { id: string; inserted: boolean; note?: string };
   }
 
+  // REF41 F4：采集解析失败结构化上报（设备证明 operation platform.parser.events）。
+  // 只上报字段/错误码/页面指纹，不传 Cookie、账号或原始正文；服务端仍做字段级脱敏。
+  async submitParserEvents(events: ReadonlyArray<{
+    platform: string;
+    adapter_version: string;
+    page_url: string;
+    page_hash: string;
+    field: string;
+    error_code: string;
+    detail?: unknown;
+  }>): Promise<{ received: number; inserted: number }> {
+    const endpoint = resolvePlatformEndpoint(this.capability, 'platform.parser.events');
+    return await this.sign('platform.parser.events', endpoint.method, endpoint.path, { events }) as { received: number; inserted: number };
+  }
+
   // adopt 接管一条**已经在别处领取**的 run。
   //
   // 后台循环先用一个 client 实例 claim，再把 run 交给采集流程；采集流程内部会新建自己的

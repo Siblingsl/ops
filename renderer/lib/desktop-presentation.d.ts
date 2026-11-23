@@ -75,6 +75,8 @@ declare global {
       invalidateComputerUIA(grantId: string): Promise<DesktopComputerUiaInvalidateResult>
       // DEV-AI27-A30：本机标签枚举（选标签授权弹窗；枚举只在本机，桥未配对时如实报错）。
       listBrowserTabs(): Promise<DesktopBrowserTabListResult>
+      // BR-09：用户主动“查看操作”把 Agent 操作的标签切到前台；Agent 工具目录无此入口。
+      focusBrowserTab(tabId: number): Promise<DesktopBrowserTabFocusResult>
       // DEV-AI27-A30b：配对统一——读桥侧配对快照 / 确认桥侧配对（快照白名单校验，不含会话密钥）。
       getBrowserPairingState(): Promise<DesktopBrowserPairingStateResult>
       confirmBrowserPairing(): Promise<DesktopBrowserPairingConfirmResult>
@@ -200,6 +202,11 @@ export type DesktopBrowserTab = {
 export type DesktopBrowserTabListResult =
   | { ok: false; code: string; message: string }
   | { ok: true; tabs: DesktopBrowserTab[] }
+
+// BR-09：用户主动“查看操作”的结果；只回标签句柄。
+export type DesktopBrowserTabFocusResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; tab_id: number }
 
 // DEV-AI27-A30b：桥配对快照（短码核对 + 组装服务端 confirm 的最小集合；无会话密钥）。
 export type DesktopBrowserPairingSnapshot = {
