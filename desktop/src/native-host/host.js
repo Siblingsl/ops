@@ -11,7 +11,8 @@ const os = require('node:os');
 const path = require('node:path');
 
 const OPS_HOST = '127.0.0.1';
-const OPS_PORT = 8765;
+// 默认端口与产品一致；测试/多实例可由 Chrome 进程环境指定，避免抢用户正在用的桥。
+const OPS_PORT = Number(process.env.OPS_DESKTOP_BRIDGE_PORT) || 8765;
 const MAX_FRAME = 4 * 1024 * 1024;
 const MAX_LINE = 4 * 1024 * 1024;
 const PROTOCOL_VERSION = 1;
@@ -23,7 +24,8 @@ const SUPPORTED_CRYPTO_VERSIONS = [CRYPTO_VERSION_V1, CRYPTO_VERSION_V2];
 const HKDF_INFO = 'ops-browser-bridge/v2/hmac';
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 8000;
-const STATE_DIR = path.join(os.homedir(), '.ops-browser-bridge');
+// 测试可用 OPS_BROWSER_BRIDGE_STATE_DIR 隔离锁/日志/会话状态，避免影响真实安装态。
+const STATE_DIR = process.env.OPS_BROWSER_BRIDGE_STATE_DIR || path.join(os.homedir(), '.ops-browser-bridge');
 const STATE_PATH = path.join(STATE_DIR, 'host-state.json');
 const LOG_PATH = path.join(STATE_DIR, 'host.log');
 
@@ -253,6 +255,13 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
   let reconnectTimer = null;
   let seqOutOps = 0;
   let seqOutExt = 0;
+  // Q-22（docs/41）：Chrome 拉起宿主后扩展 hello 可能先于桥 TCP 连接到达；
+  // 旧实现直接 drop，桥永远拿不到 extension_instance_id（W04 首装确认失败）。
+  // 这里在未连接期间缓冲扩展→桥消息，桥连上后先发宿主 hello、再按序补发。
+  const pendingOps = [];
+  const MAX_PENDING_OPS = 200;
+  // 桥重启/重连后扩展不会再次 hello；缓存最后一帧，让桥端始终能恢复实例 ID。
+  let lastChromeHello = null;
 
   function frameToChrome(obj) {
     process.stdout.write(encodeFrame(obj));
@@ -280,10 +289,24 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
 
   function toOps(msg) {
     if (!opsSocket || opsSocket.destroyed) {
-      log(`drop ${msg.type}: ops not connected`);
+      // 启动期缓冲；上限保护防止极端情况下无界增长。
+      if (pendingOps.length >= MAX_PENDING_OPS) pendingOps.shift();
+      pendingOps.push(msg);
+      log(`buffer ${msg.type}: ops not connected`);
       return;
     }
     opsSocket.write(`${JSON.stringify(signOps(msg))}\n`);
+  }
+
+  function flushOps() {
+    if (!opsSocket || opsSocket.destroyed) return false;
+    let sentHello = false;
+    while (pendingOps.length > 0) {
+      const msg = pendingOps.shift();
+      if (msg.type === 'hello') sentHello = true;
+      opsSocket.write(`${JSON.stringify(signOps(msg))}\n`);
+    }
+    return sentHello;
   }
 
   function handleChrome(msg) {
@@ -297,6 +320,7 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
       // A14-6：扩展 hello 声明能力；扩展段版本在 pairing_confirm 时按交集确定。
       const p = msg.payload && typeof msg.payload === 'object' ? msg.payload : {};
       extSupportsV2 = Array.isArray(p.crypto_versions) && p.crypto_versions.includes(CRYPTO_VERSION_V2);
+      lastChromeHello = msg;
     }
     if (msg.type === 'result' || msg.type === 'error' || msg.type === 'hello') {
       // 转发给 OPS 前按宿主->桥序列空间重签（原始 seq 属于扩展->宿主空间）。
@@ -385,6 +409,13 @@ function startNativeMessagingStdio({ log = createLogger(), opsPort = OPS_PORT, o
           connected_at: Date.now(),
         },
       });
+      // 宿主 hello 之后补发启动期缓冲的扩展消息（顺序即到达顺序）；
+      // 若本桥连接没有收到过扩展 hello（桥重启、扩展未重连），重发缓存的最后一帧，
+      // 保证桥端 pairingSnapshot 的 extension_instance_id 不再变回 null。
+      const sentHello = flushOps();
+      if (!sentHello && lastChromeHello) {
+        opsSocket.write(`${JSON.stringify(signOps(lastChromeHello))}\n`);
+      }
     });
     socket.on('data', (chunk) => {
       opsBuf += chunk.toString('utf8');

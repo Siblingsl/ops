@@ -161,7 +161,18 @@ function utf8EqualBase64(a, b) {
   return a === b;
 }
 
+let loadStateInFlight = null;
+// Q-22（docs/41）：onInstalled 与主入口会在 SW 启动时并发调用 loadState；两次读到的
+// 都是写入前快照，会各自生成不同 UUID（bridge 快照与 storage 不一致，SW 重启后换 ID）。
+// 单飞（in-flight 去重）保证同一时刻只有一个读取+生成流程，后续调用共享同一结果。
 async function loadState() {
+  if (!loadStateInFlight) {
+    loadStateInFlight = loadStateOnce().finally(() => { loadStateInFlight = null; });
+  }
+  return loadStateInFlight;
+}
+
+async function loadStateOnce() {
   const d = await chrome.storage.local.get(['session_key', 'seq_out', 'last_seq_in', 'paired', 'pairing_code', 'pairing_expires_at', 'extension_instance_id', 'last_commands', 'crypto_version', 'hkdf_salt']);
   sw.sessionKey = d.session_key || null;
   sw.cryptoVersion = Number(d.crypto_version) === CRYPTO_VERSION_V2 ? CRYPTO_VERSION_V2 : CRYPTO_VERSION_V1;
@@ -178,7 +189,10 @@ async function loadState() {
     instanceId = crypto.randomUUID();
     await chrome.storage.local.set({ extension_instance_id: instanceId });
   }
-  return d;
+  // Q-22（docs/41）：首装时 d 是写入前的快照，extension_instance_id 为 undefined；
+  // 返回值必须并入生成的 ID，否则调用方 sw.extensionInstanceId 拿到 undefined，
+  // hello 信封缺字段，W04 首次连接向导 confirm 报“实例标识必须是 UUID”。
+  return { ...d, extension_instance_id: instanceId };
 }
 
 async function saveVolatile() {

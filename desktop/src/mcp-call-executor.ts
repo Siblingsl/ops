@@ -58,6 +58,8 @@ export class McpCallExecutor {
   private idleRounds = 0;
   private lastExecuted = 1;
   private lastError = '';
+  // stop 后正在飞行的一轮仍会进 finally；用 stopped 阻止它再排下一轮，否则 stop 失效。
+  private stopped = false;
   // 已在本机启动的连接（connectionId → 配置指纹），供复用判断。
   private started = new Map<string, string>();
 
@@ -69,6 +71,7 @@ export class McpCallExecutor {
 
   start(intervalMs = 10_000, maxIntervalMs = 60_000): void {
     if (this.timer) return;
+    this.stopped = false;
     const tick = async () => {
       if (this.running) return;
       this.running = true;
@@ -79,10 +82,20 @@ export class McpCallExecutor {
         this.lastError = '';
         this.lastExecuted = executed;
       } catch (error) {
-        this.lastError = error instanceof Error ? error.message : String(error);
-        this.deps.log(`[mcp-executor] poll failed: ${this.lastError}`);
+        const message = error instanceof Error ? error.message : String(error);
+        // R11-D2（docs/41）：plugin_mcp 闸门关闭时 pending 恒返回"该工作台功能尚未开放"，
+        // 10s→60s 轮询会把同一条日志刷满。同一错误只记首次；成功后 lastError 已清空，
+        // 后续再出现（或换错误）仍会如实记录。
+        if (message !== this.lastError) {
+          this.deps.log(`[mcp-executor] poll failed: ${message}`);
+        }
+        this.lastError = message;
       } finally {
         this.running = false;
+        if (this.stopped) {
+          this.timer = null;
+          return;
+        }
         const next = scheduleNextMs(this.lastExecuted, this.idleRounds, intervalMs, maxIntervalMs);
         this.timer = setTimeout(tick, next);
       }
@@ -91,6 +104,7 @@ export class McpCallExecutor {
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;

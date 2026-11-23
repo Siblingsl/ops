@@ -156,3 +156,26 @@ test('DT-05: 环境变量可切回固定间隔（L2 回退分支存在）', () =
   assert.ok(mainSource.includes('OPS_BROWSER_EXECUTOR_FIXED_INTERVAL_MS'),
     '应支持环境变量切回固定间隔（回退 L2，docs/33 12.2）');
 });
+
+test('R11-D2: 同一轮询错误连续出现只记一条，恢复后重新告警', async () => {
+  const logs = [];
+  let failing = true;
+  const { deps } = mkDeps({
+    listPending: async () => {
+      if (failing) throw new Error('该工作台功能尚未开放');
+      return { commands: [] };
+    },
+    log: (line) => logs.push(line),
+  });
+  const ex = new executor.BrowserCommandExecutor(deps);
+  await ex.tick();
+  await ex.tick();
+  await ex.tick();
+  assert.equal(logs.length, 1, '连续同样的失败只能记一条日志');
+  assert.match(logs[0], /该工作台功能尚未开放/);
+  failing = false;
+  await ex.tick();
+  failing = true;
+  await ex.tick();
+  assert.equal(logs.length, 2, '恢复后再次失败必须重新记录');
+});

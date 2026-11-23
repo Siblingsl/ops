@@ -192,3 +192,58 @@ func TestA30bRunBrowserCommandTimeoutUnknownOutcome(t *testing.T) {
 		t.Fatalf("错误码应为 browser_wait_timeout：%+v", final)
 	}
 }
+
+// Q-23（docs/41）：无等待方（run 已取消 / 客户端断连 / 桌面执行器不在线）时，
+// dispatched 超 deadline 的命令由 runJobsOnce 定时 sweep 转入 unknown_outcome——
+// 与 sweepComputerCommands 对称（27 §13.3 兜底承诺），不依赖 waitForBrowserCommand 的自有超时。
+func TestA30bNoWaiterCommandSweptByRunJobsOnce(t *testing.T) {
+	_, runID, _ := a30bSetup(t)
+	// a30bSetup 刚为当前 run 建了唯一 grant；从 DB 取回（无全局列表端点，测试惯例直查）。
+	var grantID uuid.UUID
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT id FROM agent_browser_grant WHERE run_id=$1 AND state='active' ORDER BY created_at DESC LIMIT 1`, runID).Scan(&grantID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 直接登记一条 queued 命令（不经 run 内等待），随后 CAS 派发为 dispatched。
+	var created browserCommandView
+	env.mustJSON(t, http.MethodPost, "/api/v1/agent/browser/commands", map[string]any{
+		"grant_id": grantID, "run_id": runID, "action": "observe",
+		"payload": map[string]any{"tab_id": 9}, "request_id": uuid.NewString(),
+	}, &created)
+	if created.State != "queued" {
+		t.Fatalf("新登记命令应为 queued：%+v", created)
+	}
+	var dispatched browserCommandView
+	env.mustJSON(t, http.MethodPost, "/api/v1/agent/browser/commands/"+created.ID+"/dispatch", map[string]any{}, &dispatched)
+	if !dispatched.Claimed {
+		t.Fatalf("首次派发应 claimed=true：%+v", dispatched)
+	}
+	// 把 deadline 拨到过去（模拟桌面执行器不在线、无人回执）。
+	if _, err := env.srv.db.Exec(context.Background(),
+		`UPDATE agent_browser_command SET deadline_at = now() - interval '5 seconds' WHERE id=$1`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	// 定时任务入口 sweep：dispatched 超 deadline+2s → unknown_outcome。
+	env.srv.runJobsOnce(context.Background())
+	var state, code string
+	if err := env.srv.db.QueryRow(context.Background(),
+		`SELECT state, COALESCE(error_code,'') FROM agent_browser_command WHERE id=$1`, created.ID).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if state != "unknown_outcome" {
+		t.Fatalf("runJobsOnce 应把超期 dispatched 转 unknown_outcome，得到 %s/%s", state, code)
+	}
+	// 幂等：再跑一次 sweep 不产生新命令、状态不再变化。
+	var count1, count2 int
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM agent_browser_command`).Scan(&count1); err != nil {
+		t.Fatal(err)
+	}
+	env.srv.runJobsOnce(context.Background())
+	if err := env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM agent_browser_command`).Scan(&count2); err != nil {
+		t.Fatal(err)
+	}
+	if count1 != count2 {
+		t.Fatalf("sweep 不得新建命令：%d → %d", count1, count2)
+	}
+}

@@ -141,10 +141,11 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var in struct {
-		Platform      string `json:"platform"`
-		Name          string `json:"name"`
-		ContentFormat string `json:"content_format"`
-		TypeNote      string `json:"type_note"`
+		Platform       string `json:"platform"`
+		Name           string `json:"name"`
+		ContentFormat  string `json:"content_format"`
+		TypeNote       string `json:"type_note"`
+		DailyPushLimit *int   `json:"daily_push_limit"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -159,6 +160,15 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) error {
 	if !validFormat(in.Platform, in.ContentFormat) {
 		return validationFields("请完善账号信息", map[string]string{"content_format": "该平台不支持这种内容类型（见账号类型说明）"})
 	}
+	// Q-21（docs/41）：创建时即可设置每日推送上限，复用 PATCH 侧 1..20 校验；
+	// 未传时落 DB 默认值，行为不变。
+	dailyPushLimit := 0
+	if in.DailyPushLimit != nil {
+		if *in.DailyPushLimit < 1 || *in.DailyPushLimit > 20 {
+			return validation("每日推送上限需在 1 到 20 之间，不能关闭")
+		}
+		dailyPushLimit = *in.DailyPushLimit
+	}
 	in.TypeNote = truncateRunes(strings.TrimSpace(in.TypeNote), 200)
 	ctx := r.Context()
 	tx, err := s.db.Begin(ctx)
@@ -166,9 +176,15 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	// VALUES 子句不能引用目标表列，未传时走不带该列的 INSERT 落 DB 默认值。
+	insertSQL := `INSERT INTO platform_account (workspace_id, platform, name, content_format, type_note) VALUES ($1,$2,$3,$4,$5) RETURNING id`
+	args := []any{ident(ctx).WorkspaceID, in.Platform, in.Name, in.ContentFormat, in.TypeNote}
+	if dailyPushLimit > 0 {
+		insertSQL = `INSERT INTO platform_account (workspace_id, platform, name, content_format, type_note, daily_push_limit) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`
+		args = append(args, dailyPushLimit)
+	}
 	var id uuid.UUID
-	if err := tx.QueryRow(ctx, `INSERT INTO platform_account (workspace_id, platform, name, content_format, type_note) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-		ident(ctx).WorkspaceID, in.Platform, in.Name, in.ContentFormat, in.TypeNote).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, insertSQL, args...).Scan(&id); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO account_profile (account_id) VALUES ($1)`, id); err != nil {
@@ -572,12 +588,12 @@ func selfCheckPNG() []byte {
 
 func (s *Server) egressHint() string {
 	if s.cfg.PublicIP != "" {
-		return s.cfg.PublicIP
+		return s.cfg.PublicIP + "（以服务器实际网络为准：若配置了 HTTP(S)_PROXY 则为代理出口 IP，否则为服务器 IP）"
 	}
 	if s.cfg.Dev {
 		return "本地开发（使用模拟微信服务器，无需白名单）"
 	}
-	return "未配置（请设置 OPS_PUBLIC_IP）"
+	return "未配置（请设置 OPS_PUBLIC_IP；以服务器实际网络为准，若配置了 HTTP(S)_PROXY 则为代理出口 IP）"
 }
 
 func (s *Server) testWechatCredential(w http.ResponseWriter, r *http.Request) error {

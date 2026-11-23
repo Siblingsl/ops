@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"ops/internal/cxcanonicaljson"
 	"ops/internal/cxrendercontract"
@@ -27,6 +28,20 @@ import (
 )
 
 var cxBuildTargetOrder = []string{"wechat_html", "stable_html", "long_image", "xhs_cards", "cover_images"}
+
+// cxBuildCommit 转译 RepeatableRead 事务 commit 时的 PostgreSQL 40001 序列化失败
+// （如构建首读 work 行后并发 PATCH touchContent 先提交），语义对齐 FR-CX-02
+// “源变化 409”——与同仓 cx_*_http.go 的既有 40001 处理模式一致（docs/41 Q-19）。
+func cxBuildCommit(tx pgx.Tx, ctx context.Context) error {
+	if err := tx.Commit(ctx); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "40001" {
+			return apiErr(http.StatusConflict, "version_conflict", "作品已修改，请刷新后重新创建构建")
+		}
+		return err
+	}
+	return nil
+}
 
 type cxBuildCreateInput struct {
 	BasisRevision           int             `json:"basis_revision"`
@@ -174,7 +189,22 @@ func cxTargetAllowed(platform, contentFormat, target string) bool {
 	}
 }
 
+// createCXBuild 把事务体内任意语句的 PostgreSQL 40001 序列化失败统一转译为
+// 409 version_conflict（FR-CX-02“源变化 409”）。RR 下冲突不止发生在 commit：
+// 快照首读的 FOR UPDATE、INSERT 的外键检查在并发 PATCH（touchContent）先提交时
+// 都会当场抛 40001（docs/41 Q-19，回归 TestCX02BuildVersusConcurrentPatchSerializesAsConflict）。
 func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
+	if err := s.createCXBuildTx(w, r); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "40001" {
+			return apiErr(http.StatusConflict, "version_conflict", "作品已修改，请刷新后重新创建构建")
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Server) createCXBuildTx(w http.ResponseWriter, r *http.Request) error {
 	if err := s.requireEditor(r.Context()); err != nil {
 		return err
 	}
@@ -339,7 +369,7 @@ func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
 				existing.Status = "failed"
 			}
 			if existing.Status == "running" || existing.Status == "built" {
-				if err := tx.Commit(ctx); err != nil {
+				if err := cxBuildCommit(tx, ctx); err != nil {
 					return err
 				}
 				status := http.StatusOK
@@ -377,7 +407,7 @@ func (s *Server) createCXBuild(w http.ResponseWriter, r *http.Request) error {
 		Scan(&buildID, &deadlineAt); err != nil {
 		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := cxBuildCommit(tx, ctx); err != nil {
 		return err
 	}
 	s.audit(ctx, "work_build_create", "work_build", buildID.String(), "ok", map[string]any{
@@ -787,6 +817,12 @@ func (s *Server) cxCurrentBuildSourceHash(ctx context.Context, workspaceID, work
 		return "", 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {
+		// 只读快照事务的 40001：RR 下并发更新同样会中止读取，按同语义转译，
+		// 让调用方按“作品正在变化”处理而不是 500。
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "40001" {
+			return "", 0, apiErr(http.StatusConflict, "version_conflict", "作品正在修改，请稍后重试")
+		}
 		return "", 0, err
 	}
 	return hash, revision, nil
@@ -1067,7 +1103,7 @@ func (s *Server) cancelCXBuild(w http.ResponseWriter, r *http.Request) error {
 		}
 		status = "failed"
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := cxBuildCommit(tx, ctx); err != nil {
 		return err
 	}
 	return ok(w, map[string]string{"status": status, "error_code": errorCode})

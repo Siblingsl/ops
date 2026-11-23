@@ -131,3 +131,27 @@ test('P4-11: scheduleNextMs 退避语义与 browser 同款（复用同一函数�
   assert.equal(scheduleNextMs(0, 1, 3000, 12000), 6000);
   assert.equal(scheduleNextMs(0, 5, 3000, 12000), 12000, '封顶 max');
 });
+
+test('R11-D2: 功能闸门关闭的同一轮询错误连续出现只记一条，恢复后重新告警', async () => {
+  const logs = [];
+  let failing = true;
+  const deps = makeDeps({
+    listPending: async () => {
+      if (failing) throw new Error('该工作台功能尚未开放');
+      return { commands: [] };
+    },
+    log: (line) => logs.push(line),
+  });
+  const executor = new ComputerCommandExecutor(deps);
+  await executor.tick();
+  await executor.tick();
+  await executor.tick();
+  assert.equal(logs.length, 1, '连续同样的失败只能记一条日志');
+  assert.match(logs[0], /该工作台功能尚未开放/);
+
+  failing = false;
+  await executor.tick();
+  failing = true;
+  await executor.tick();
+  assert.equal(logs.length, 2, '恢复后再次失败必须重新记录');
+});

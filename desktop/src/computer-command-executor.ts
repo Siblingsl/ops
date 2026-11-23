@@ -47,6 +47,10 @@ const WRITE_ACTIONS = Object.freeze(['invoke', 'type']);
 
 export class ComputerCommandExecutor {
   private running = false;
+  // R11-D2（docs/41）：功能闸门关闭时 pending 每轮返回 409"该工作台功能尚未开放"，
+  // 3s→12s 的轮询会把同一条失败日志刷满。同一错误只在首次出现时记录；成功后复位，
+  // 功能后续开通仍能在下一次不同错误时如实告警。
+  private lastTickError = '';
 
   constructor(private readonly deps: ComputerExecutorDeps) {}
 
@@ -60,6 +64,8 @@ export class ComputerCommandExecutor {
         return 0;
       }
       const { commands } = await this.deps.listPending();
+      // 本轮领取成功：清掉失败去重状态，后续再失败时重新记一条。
+      this.lastTickError = '';
       let executed = 0;
       let writeExecuted = 0;
       for (const cmd of commands.slice(0, 10)) {
@@ -74,7 +80,11 @@ export class ComputerCommandExecutor {
       }
       return executed;
     } catch (err) {
-      this.deps.log?.(`[computer-executor] tick 失败：${err instanceof Error ? err.message : err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== this.lastTickError) {
+        this.lastTickError = message;
+        this.deps.log?.(`[computer-executor] tick 失败：${message}`);
+      }
       return 0;
     } finally {
       this.running = false;

@@ -38,6 +38,9 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	s.sweepDelegationGroups(ctx)
 	// DEV-CU P4-6：电脑命令超时扫描（dispatched 超 deadline+2s → unknown_outcome；不重放）。
 	s.sweepComputerCommands(ctx)
+	// Q-23（docs/41）：浏览器命令超时 sweep 与电脑命令对称接入——等待方断开或桌面
+	// 执行器不在线时，dispatched 超 deadline 的命令不能永久停留中间态（27 §13.3）。
+	s.sweepAgentBrowserCommands(ctx)
 	if _, err := s.db.Exec(ctx, `DELETE FROM session WHERE expires_at < now()`); err != nil {
 		slog.Error("清理过期会话失败", "err", err)
 	}

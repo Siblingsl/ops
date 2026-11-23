@@ -21,6 +21,13 @@ func (s *Server) reserveWechatPush(ctx context.Context, m *workMeta, wk *Work, i
 		return record, err
 	}
 	defer tx.Rollback(ctx)
+	// 账户级串行化：work 行 FOR UPDATE 只互斥同 work 的并发推送；跨 work 的
+	// 两个推送事务会各自读到对方提交前的旧计数而双双放行，突破 daily_push_limit
+	// 聚合上限（FR-M10-07，docs/41 Q-20）。事务级 advisory lock 让同账户的
+	// “计数-插入”序列化，提交时自动释放。
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('push-limit:'||$1::text,0))`, m.Account.ID); err != nil {
+		return record, err
+	}
 	var status string
 	var revision int
 	var draftID *string
@@ -46,7 +53,10 @@ func (s *Server) reserveWechatPush(ctx context.Context, m *workMeta, wk *Work, i
 	if err := s.checkLatestMaterialBasis(ctx, tx, m.ID); err != nil {
 		return record, err
 	}
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM push_record WHERE account_id=$1 AND status='ok' AND created_at >= $2`, m.Account.ID, s.today()).Scan(&record.Count); err != nil {
+	// 计数含 ok 与 running：running 占位是“本轮已受理的写入”，跨 work 并发窗口里
+	// 第二个事务在第一个 commit（running 落库）后拿锁，若只数 ok 会读到旧计数
+	// 双双放行（docs/41 Q-20）。running 失败转 failed 后不占额度，多拦一次无害。
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM push_record WHERE account_id=$1 AND status IN ('ok','running') AND created_at >= $2`, m.Account.ID, s.today()).Scan(&record.Count); err != nil {
 		return record, err
 	}
 	record.OverLimit = record.Count >= m.Account.DailyPushLimit

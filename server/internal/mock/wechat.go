@@ -223,6 +223,82 @@ func (m *Wechat) Handler() http.Handler {
 		}
 		writeJSON(w, map[string]any{"news_item": []any{d.Article}})
 	})
+	// Q-26（docs/41）：draft/batchget、draft/count、draft/delete 是 docs/02 矩阵内
+	// 个人号可用的能力；这里补 mock 以覆盖适配器单测与后续状态巡检。
+	mux.HandleFunc("/cgi-bin/draft/batchget", func(w http.ResponseWriter, r *http.Request) {
+		if !m.checkToken(w, r) {
+			return
+		}
+		var in struct {
+			Offset    int `json:"offset"`
+			Count     int `json:"count"`
+			NoContent int `json:"no_content"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if in.Offset < 0 {
+			// 官方对非法分页返回 44003；mock 保持同样的错误语义。
+			wxErr(w, 44003, "invalid offset")
+			return
+		}
+		if in.Count <= 0 || in.Count > 20 {
+			wxErr(w, 44003, "invalid count")
+			return
+		}
+		m.mu.Lock()
+		list := make([]*draft, 0, len(m.drafts))
+		for _, d := range m.drafts {
+			list = append(list, d)
+		}
+		sort.Slice(list, func(i, j int) bool { return list[i].UpdatedAt.After(list[j].UpdatedAt) })
+		total := len(list)
+		m.mu.Unlock()
+		start := in.Offset
+		if start > total {
+			start = total
+		}
+		end := start + in.Count
+		if end > total {
+			end = total
+		}
+		items := make([]map[string]any, 0, end-start)
+		for _, d := range list[start:end] {
+			item := map[string]any{"media_id": d.MediaID, "update_time": d.UpdatedAt.Unix()}
+			if in.NoContent == 0 {
+				item["content"] = map[string]any{"news_item": []any{d.Article}}
+			}
+			items = append(items, item)
+		}
+		writeJSON(w, map[string]any{"total_count": total, "item_count": len(items), "item": items})
+	})
+	mux.HandleFunc("/cgi-bin/draft/count", func(w http.ResponseWriter, r *http.Request) {
+		if !m.checkToken(w, r) {
+			return
+		}
+		m.mu.Lock()
+		total := len(m.drafts)
+		m.mu.Unlock()
+		writeJSON(w, map[string]any{"total_count": total})
+	})
+	mux.HandleFunc("/cgi-bin/draft/delete", func(w http.ResponseWriter, r *http.Request) {
+		if !m.checkToken(w, r) {
+			return
+		}
+		var in struct {
+			MediaID string `json:"media_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		m.mu.Lock()
+		_, ok := m.drafts[in.MediaID]
+		if ok {
+			delete(m.drafts, in.MediaID)
+		}
+		m.mu.Unlock()
+		if !ok {
+			wxErr(w, 40007, "invalid media_id")
+			return
+		}
+		writeJSON(w, map[string]any{"errcode": 0, "errmsg": "ok"})
+	})
 	mux.HandleFunc("/datacube/getarticletotal", func(w http.ResponseWriter, r *http.Request) {
 		if !m.checkToken(w, r) {
 			return

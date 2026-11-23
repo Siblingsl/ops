@@ -13,6 +13,7 @@ import {
   session,
   shell,
   WebContentsView,
+  type WebContents,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
   type Session
@@ -360,6 +361,35 @@ function startApplication(): void {
   });
 }
 
+// Q-27（docs/41，16 文档 §15.3 200% 文本放大）：业务窗菜单收纳于自绘标题栏，
+// Windows 下菜单 role 缩放加速键（Ctrl+=/Ctrl+-/Ctrl+0）不经菜单路径触发，
+// 键盘用户没有可用的页面缩放入口。在 webContents 层注册 before-input-event
+// 拦截同一组加速键，映射与菜单 role 一致的 zoomLevel（±0.5/步，0=100%），
+// 上限 clamp 在 ±5（约 200%+，Electron 缩放档位与 Chromium 一致）。
+function installWebContentsZoomShortcuts(contents: WebContents): void {
+  const minLevel = -5;
+  const maxLevel = 5;
+  contents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !input.control || input.alt || input.meta || input.shift) return;
+    let delta: number | null = null;
+    if (input.key === '=' || input.key === '+') {
+      delta = 0.5;
+    } else if (input.key === '-') {
+      delta = -0.5;
+    } else if (input.key === '0') {
+      if (contents.getZoomLevel() === 0) return;
+      event.preventDefault();
+      contents.setZoomLevel(0);
+      return;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    const next = Math.min(maxLevel, Math.max(minLevel, contents.getZoomLevel() + delta));
+    contents.setZoomLevel(next);
+  });
+}
+
 function createBusinessWindow(businessSession: Session): void {
   const dark = desktopTheme === 'dark';
   businessWindow = new BrowserWindow({
@@ -386,6 +416,7 @@ function createBusinessWindow(businessSession: Session): void {
   });
 
   const currentWindow = businessWindow;
+  installWebContentsZoomShortcuts(currentWindow.webContents);
   currentWindow.webContents.on('did-finish-load', () => {
     applyDesktopThemeToWindow(currentWindow, desktopTheme);
     applyDesktopMotionToWindow(currentWindow, desktopReducedMotion);
@@ -3134,6 +3165,8 @@ function createLocalWindow(title: string, url: string): BrowserWindow {
   });
 
   localWindows.add(window.id);
+  // Q-27（docs/41）：本机设置窗同样走自绘标题栏，补齐键盘缩放路径。
+  installWebContentsZoomShortcuts(window.webContents);
   window.webContents.on('did-finish-load', () => {
     applyDesktopThemeToWindow(window, desktopTheme);
     applyDesktopMotionToWindow(window, desktopReducedMotion);

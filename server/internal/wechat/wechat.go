@@ -19,8 +19,14 @@ type Client struct {
 	http *http.Client
 }
 
+// New 构造公众号出站客户端。Transport 显式 Proxy: nil（NFR-02 固定出口 IP 依赖直连，
+// 出站 IP 必须与 OPS_PUBLIC_IP / 公众号 IP 白名单一致；继承 HTTP(S)_PROXY 会让出口
+// 静默漂移到代理地址，见 docs/41 Q-24。与 crawl.Client 的既有约定对齐）。
 func New(base string) *Client {
-	return &Client{base: base, http: &http.Client{Timeout: 60 * time.Second}}
+	return &Client{base: base, http: &http.Client{
+		Timeout:   60 * time.Second,
+		Transport: &http.Transport{Proxy: nil},
+	}}
 }
 
 type Error struct {
@@ -220,6 +226,70 @@ func (c *Client) DraftGet(ctx context.Context, token, mediaID string) (*DraftIte
 		return nil, &Error{Code: 40007, Msg: "draft empty"}
 	}
 	return &out.NewsItem[0], nil
+}
+
+// DraftSummary 是 draft/batchget 的一条草稿摘要（Q-26，docs/41）。
+type DraftSummary struct {
+	MediaID    string `json:"media_id"`
+	UpdateTime int64  `json:"update_time"`
+	Title      string `json:"title"`
+}
+
+// DraftBatchGet 分页列出草稿（Q-26）。offset 从 0 开始，官方单页上限 20；
+// noContent=1 时不返回正文，只回 media_id/update_time/标题，适合“草稿是否仍在”的状态巡检。
+func (c *Client) DraftBatchGet(ctx context.Context, token string, offset, count int, noContent bool) (int, []DraftSummary, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if count <= 0 {
+		count = 1
+	}
+	if count > 20 {
+		count = 20
+	}
+	body := map[string]any{"offset": offset, "count": count, "no_content": 0}
+	if noContent {
+		body["no_content"] = 1
+	}
+	var out struct {
+		TotalCount int `json:"total_count"`
+		Item       []struct {
+			MediaID    string `json:"media_id"`
+			UpdateTime int64  `json:"update_time"`
+			Content    struct {
+				NewsItem []DraftItem `json:"news_item"`
+			} `json:"content"`
+		} `json:"item"`
+	}
+	if err := c.postJSON(ctx, "/cgi-bin/draft/batchget", token, body, &out); err != nil {
+		return 0, nil, err
+	}
+	items := make([]DraftSummary, 0, len(out.Item))
+	for _, item := range out.Item {
+		title := ""
+		if len(item.Content.NewsItem) > 0 {
+			title = item.Content.NewsItem[0].Title
+		}
+		items = append(items, DraftSummary{MediaID: item.MediaID, UpdateTime: item.UpdateTime, Title: title})
+	}
+	return out.TotalCount, items, nil
+}
+
+// DraftCount 返回公众号草稿箱总数（Q-26）。
+func (c *Client) DraftCount(ctx context.Context, token string) (int, error) {
+	var out struct {
+		TotalCount int `json:"total_count"`
+	}
+	if err := c.postJSON(ctx, "/cgi-bin/draft/count", token, map[string]any{}, &out); err != nil {
+		return 0, err
+	}
+	return out.TotalCount, nil
+}
+
+// DraftDelete 删除一条草稿（Q-26）。产品路由未接入；仅按用户逐张确认后的调用方使用，
+// 不得用于批量清理（红线：逐张执行）。
+func (c *Client) DraftDelete(ctx context.Context, token, mediaID string) error {
+	return c.postJSON(ctx, "/cgi-bin/draft/delete", token, map[string]any{"media_id": mediaID}, nil)
 }
 
 // ArticleTotalDetail is one day of cumulative stats for an article (datacube/getarticletotal).

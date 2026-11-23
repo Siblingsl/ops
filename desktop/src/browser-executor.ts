@@ -85,6 +85,9 @@ export function evidenceFromCommand(
 
 export class BrowserCommandExecutor {
   private running = false;
+  // R11-D2（docs/41）：轮询端点的可预期失败（功能闸门未开/网络抖动）只记首条，
+  // 连续同样的失败不重复刷日志；成功领取后复位。
+  private lastTickError = '';
 
   constructor(private readonly deps: BrowserExecutorDeps) {}
 
@@ -95,13 +98,18 @@ export class BrowserCommandExecutor {
     try {
       if (this.deps.bridgeState() !== 'paired') return 0;
       const { commands } = await this.deps.listPending();
+      this.lastTickError = '';
       let executed = 0;
       for (const cmd of commands.slice(0, 10)) {
         if (await this.executeOne(cmd)) executed += 1;
       }
       return executed;
     } catch (err) {
-      this.deps.log?.(`[browser-executor] tick 失败：${err instanceof Error ? err.message : err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== this.lastTickError) {
+        this.lastTickError = message;
+        this.deps.log?.(`[browser-executor] tick 失败：${message}`);
+      }
       return 0;
     } finally {
       this.running = false;

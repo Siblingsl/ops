@@ -90,3 +90,41 @@ test('P0-3 工具名形状：mcp__<conn>__<tool> 取末段，形状不符拒绝�
   const receipt = events.find((e) => e[0] === 'receipt');
   assert.equal(receipt[2], 'failed', '形状不符按 failed 回执，不留 dispatched 挂起');
 });
+
+test('R11-D2: plugin_mcp 闸门关闭时轮询失败日志只记一条，恢复后重新告警', async () => {
+  const logs = [];
+  let failing = true;
+  const executor = new McpCallExecutor({
+    listPending: async () => {
+      if (failing) throw new Error('该工作台功能尚未开放');
+      return { calls: [] };
+    },
+    claim: async () => ({ claimed: false }),
+    receipt: async () => ({}),
+    connections: async () => [],
+    host: () => null,
+    startConnection: async () => ({}),
+    log: (line) => logs.push(line),
+  });
+  const waitFor = async (predicate, ms = 200) => {
+    const started = Date.now();
+    while (Date.now() - started < ms) {
+      if (predicate()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    return predicate();
+  };
+
+  executor.start(5, 5);
+  await waitFor(() => logs.length >= 1);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(logs.length, 1, '连续同样的失败只能记一条日志');
+  assert.match(logs[0], /该工作台功能尚未开放/);
+
+  failing = false;
+  await waitFor(() => executor.lastErrorText() === '');
+  failing = true;
+  await waitFor(() => logs.length >= 2);
+  assert.equal(logs.filter((line) => line.includes('poll failed')).length, 2, '恢复后再次失败必须重新记录');
+  executor.stop();
+});

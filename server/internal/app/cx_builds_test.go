@@ -911,3 +911,70 @@ func TestCX02CompleteInputMismatchKeepsDownloadsClosedAndSuccessOpensGate(t *tes
 		t.Fatalf("manifest sha must match canonical bytes: sha=%s", success.ManifestSHA)
 	}
 }
+
+// Q-19（docs/41）：构建事务（RepeatableRead，首读 work 行）与并发 PATCH
+// touchContent 撞 PostgreSQL 40001 序列化失败时，必须转译为 409 version_conflict
+// 而不是漏出 500 internal。多轮采样防止竞态偶发漏测。
+// goroutine 内不做任何 t.* 断言（非主 goroutine fatal 会跳过 results 发送造成死锁），
+// 全部结果经带缓冲 channel 回主 goroutine 后统一判定。
+func TestCX02BuildVersusConcurrentPatchSerializesAsConflict(t *testing.T) {
+	for round := 0; round < 6; round++ {
+		account := env.accounts(t).wechat
+		var work Work
+		env.mustJSON(t, "POST", "/api/v1/accounts/"+account.ID.String()+"/works", map[string]string{
+			"title": fmt.Sprintf("构建并发回归第%d轮", round+1),
+		}, &work)
+		baseRevision := work.Revision
+
+		type outcome struct {
+			status int
+			body   string
+		}
+		start := make(chan struct{})
+		// 构建与 PATCH 的合法状态集重叠（都可能 409），必须用独立通道区分来源。
+		buildCh := make(chan outcome, 1)
+		patchCh := make(chan outcome, 1)
+		go func() {
+			<-start
+			input := map[string]any{
+				"basis_revision": baseRevision, "targets": []string{"wechat_html"}, "options": map[string]any{}, "client": "desktop",
+				"renderer_contract_version": cxrendercontract.WechatHTMLV1,
+			}
+			status, body := env.do("POST", "/api/v1/works/"+work.ID.String()+"/builds", input)
+			buildCh <- outcome{status, string(body)}
+		}()
+		go func() {
+			<-start
+			status, body := env.do("PATCH", "/api/v1/works/"+work.ID.String(), map[string]any{
+				"title": fmt.Sprintf("并发改名第%d轮", round+1), "base_revision": baseRevision,
+			})
+			patchCh <- outcome{status, string(body)}
+		}()
+		close(start)
+
+		buildOut := <-buildCh
+		patchOut := <-patchCh
+		if patchOut.status != 200 && patchOut.status != 409 {
+			t.Fatalf("round%d: patch status=%d body=%s", round+1, patchOut.status, patchOut.body)
+		}
+		if buildOut.status != 201 && buildOut.status != 409 {
+			t.Fatalf("round%d: 并发构建×PATCH 构建 status=%d body=%s（期望 201 或 409 version_conflict，不得 500）", round+1, buildOut.status, buildOut.body)
+		}
+		if buildOut.status == 409 {
+			if !strings.Contains(buildOut.body, "version_conflict") {
+				t.Fatalf("round%d: 409 应为 version_conflict，body=%s", round+1, buildOut.body)
+			}
+			// 409 后按最新 revision 重试应成功，用户得到明确的“刷新后重建”路径。
+			var latest Work
+			env.mustJSON(t, "GET", "/api/v1/works/"+work.ID.String(), nil, &latest)
+			retryInput := map[string]any{
+				"basis_revision": latest.Revision, "targets": []string{"wechat_html"}, "options": map[string]any{}, "client": "desktop",
+				"renderer_contract_version": cxrendercontract.WechatHTMLV1,
+			}
+			retryStatus, retryBody := env.do("POST", "/api/v1/works/"+work.ID.String()+"/builds", retryInput)
+			if retryStatus != 201 {
+				t.Fatalf("round%d: 409 后按新 revision 重试构建 status=%d body=%s", round+1, retryStatus, retryBody)
+			}
+		}
+	}
+}

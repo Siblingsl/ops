@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -191,10 +192,127 @@ func TestOPT06ReservationExpiryAndHumanChecks(t *testing.T) {
 	checkError(err, "push_limit_reached")
 	in.ConfirmOverLimit = true
 	record, err = env.srv.reserveWechatPush(ctx, m, &wk, in, "newspic")
-	if err != nil || !record.OverLimit || record.Count != a.DailyPushLimit {
+	// Q-20（docs/41）：计数含 ok 与 running。本例 seed 的 expired running（10 分钟前，
+	// 仍在 today 窗口内）按新语义占一格额度：3 条 ok + 1 条 running = 4。
+	if err != nil || !record.OverLimit || record.Count != a.DailyPushLimit+1 {
 		t.Fatalf("explicit over-limit confirmation: %+v %v", record, err)
 	}
 	if _, err := env.srv.db.Exec(ctx, `UPDATE push_record SET status='failed' WHERE id=$1`, record.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Q-20（docs/41）：daily_push_limit 按账号聚合，跨 work 真并发推送必须被
+// 账户级 advisory lock 串行化——恰一发 200，另一发 409 push_limit_reached，
+// mock 草稿箱只多一条草稿。串行复推的既有闸门由 R7-A 覆盖，这里只防并发窗口。
+func TestOPT06ConcurrentCrossWorkPushHonorsAccountDailyLimit(t *testing.T) {
+	ctx := context.Background()
+	// 共享夹具账号可能已被其它用例占满每日上限（A22 乱序隔离），用独立账号。
+	var a Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{
+		"platform": "wechat_mp", "name": "OPT06 跨作品并发专用号", "content_format": "long_article",
+	}, &a)
+	t.Cleanup(func() { _, _ = env.srv.db.Exec(ctx, `DELETE FROM platform_account WHERE id=$1`, a.ID) })
+	env.mustJSON(t, "PATCH", "/api/v1/accounts/"+a.ID.String(), map[string]any{"daily_push_limit": 1}, nil)
+	env.mustJSON(t, "PUT", "/api/v1/accounts/"+a.ID.String()+"/wechat-credential", map[string]string{
+		"app_id": "wx1234567890", "app_secret": "s3cret-value-for-test",
+	}, nil)
+
+	works := make([]Work, 2)
+	for i := range works {
+		works[i] = env.readyWork(t, a, fmt.Sprintf("跨作品并发推送第%d篇的完整观点", i+1))
+	}
+
+	var adds atomic.Int32
+	delegate := env.mockWX.Handler()
+	gate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/cgi-bin/draft/add" {
+			adds.Add(1)
+		}
+		delegate.ServeHTTP(w, r)
+	}))
+	defer gate.Close()
+	oldWX := env.srv.wx
+	env.srv.wx = wechat.New(gate.URL)
+	defer func() { env.srv.wx = oldWX }()
+
+	type response struct {
+		status int
+		body   string
+	}
+	start := make(chan struct{})
+	responses := make(chan response, len(works))
+	for i := range works {
+		// 都不带 confirm_over_limit：Q-20 防的是“确认前的并发批量放行”——
+		// 两个请求各自读到对方提交前的旧计数（0 < 1）双双越过闸门。
+		// confirm 语义（用户显式确认后可超限继续）由 R7-A 顺序路径覆盖，不在这里放宽。
+		input := map[string]any{"revision": works[i].Revision, "fields": works[i].WechatFields, "html": testHTML(works[i])}
+		payload, _ := json.Marshal(input)
+		go func(workID string, payload []byte) {
+			<-start
+			req, _ := http.NewRequest("POST", env.http.URL+"/api/v1/works/"+workID+"/wechat/push", bytes.NewReader(payload))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-CSRF-Token", env.csrf)
+			rsp, err := env.client.Do(req)
+			if err != nil {
+				responses <- response{-1, err.Error()}
+				return
+			}
+			defer rsp.Body.Close()
+			body, _ := io.ReadAll(rsp.Body)
+			responses <- response{rsp.StatusCode, string(body)}
+		}(works[i].ID.String(), payload)
+	}
+	close(start)
+
+	okCount, limited := 0, 0
+	for i := 0; i < len(works); i++ {
+		result := <-responses
+		switch {
+		case result.status == 200 && strings.Contains(result.body, "event: done"):
+			okCount++
+		case result.status == 409 && strings.Contains(result.body, "push_limit_reached"):
+			limited++
+		default:
+			t.Fatalf("并发推送出现第三种结果：status=%d body=%s", result.status, result.body)
+		}
+	}
+	if okCount != 1 || limited != 1 {
+		t.Fatalf("limit=1 跨 work 并发推送：ok=%d limited=%d（期望恰一 200 一 409）", okCount, limited)
+	}
+	var okRecords int
+	if err := env.srv.db.QueryRow(ctx, `SELECT count(*) FROM push_record WHERE account_id=$1 AND status='ok'`, a.ID).Scan(&okRecords); err != nil {
+		t.Fatal(err)
+	}
+	if okRecords != 1 || adds.Load() != 1 {
+		t.Fatalf("push_record ok=%d mock draft/add=%d（期望各 1）", okRecords, adds.Load())
+	}
+}
+
+// Q-21（docs/41）：创建账号时显式传 daily_push_limit 必须生效（此前被静默丢弃，
+// 落 DB 默认 3）；未传时保持 DB 默认。
+func TestOPT21CreateAccountHonorsDailyPushLimit(t *testing.T) {
+	var explicit Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]any{
+		"platform": "wechat_mp", "name": "OPT21 显式限额", "content_format": "long_article", "daily_push_limit": 5,
+	}, &explicit)
+	t.Cleanup(func() { _, _ = env.srv.db.Exec(context.Background(), `DELETE FROM platform_account WHERE id=$1`, explicit.ID) })
+	if explicit.DailyPushLimit != 5 {
+		t.Fatalf("create 传 daily_push_limit=5 回读 %d", explicit.DailyPushLimit)
+	}
+	var fallback Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{
+		"platform": "wechat_mp", "name": "OPT21 默认限额", "content_format": "long_article",
+	}, &fallback)
+	t.Cleanup(func() { _, _ = env.srv.db.Exec(context.Background(), `DELETE FROM platform_account WHERE id=$1`, fallback.ID) })
+	if fallback.DailyPushLimit != 3 {
+		t.Fatalf("未传 daily_push_limit 应回读默认 3，得到 %d", fallback.DailyPushLimit)
+	}
+	var rejected map[string]any
+	status, body := env.do("POST", "/api/v1/accounts", map[string]any{
+		"platform": "wechat_mp", "name": "OPT21 越界限额", "content_format": "long_article", "daily_push_limit": 0,
+	})
+	if status != 422 || !strings.Contains(string(body), "1 到 20") {
+		t.Fatalf("daily_push_limit=0 应 422 校验拒绝：%d %s", status, rejected)
 	}
 }

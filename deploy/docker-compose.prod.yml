@@ -21,6 +21,11 @@ services:
       OPS_DEV: "0"
       OPS_LISTEN: ":8080"
       OPS_DATA_DIR: /data
+      # 微信出站必须走服务器直连出口（NFR-02 固定出口 IP / 公众号 IP 白名单），
+      # 显式置空防止 .env 或宿主环境带入 HTTP_PROXY 类变量后出口静默漂移（docs/41 Q-24）。
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      NO_PROXY: "*"
       OPS_PUBLIC_IP: ${OPS_PUBLIC_IP}
       OPS_MASTER_KEY: ${OPS_MASTER_KEY}
       # 桌面包通过 HTTPS API 访问，Secure Cookie 必须开启
