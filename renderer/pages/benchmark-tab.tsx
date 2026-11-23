@@ -31,6 +31,31 @@ interface BenchmarkTarget {
   revision: number
   migration_source_key?: string
   archived_at: string | null
+  // REF41 I1：监控开关与下次观测（趋势/覆盖面板见 MonitorPanel）。
+  monitor_enabled?: boolean
+  monitor_interval_hours?: number
+  next_observe_at?: string | null
+  last_observed_at?: string | null
+}
+
+// REF41 I1-A3/A4：趋势点（x 轴是观测序号；无 published_at 时 age_days=null 不补 0）。
+interface BenchmarkTrendPoint {
+  seq: number
+  observed_at: string
+  interval_days: number | null
+  published_at: string | null
+  age_days: number | null
+  values: Record<string, unknown>
+  quality_state: 'ok' | 'partial' | 'failed'
+}
+
+interface BenchmarkDecomposeDraft {
+  hook: string
+  structure: string[]
+  rhythm: string
+  takeaways: string[]
+  not_borrowable: string[]
+  confidence: number
 }
 
 interface BenchmarkNote {
@@ -38,13 +63,22 @@ interface BenchmarkNote {
   target_id: string
   url: string
   title: string
+  content_summary: string
   structure: Record<string, unknown>
   structure_hash: string
   metrics_snapshot: Record<string, unknown>
-  takeaways: string[]
-  not_borrowable: string[]
+  takeaways: string[] | null
+  not_borrowable: string[] | null
   captured_at: string | null
   revision: number
+  ai_call_id?: string
+  // REF41 I2：AI 初拆只写 decompose_draft；确认后才写 structure。
+  decompose_state: 'none' | 'ai_draft' | 'confirmed' | 'failed'
+  decompose_revision: number
+  decompose_draft: BenchmarkDecomposeDraft | Record<string, never>
+  decompose_ai_call_id?: string
+  decompose_error: string
+  decompose_confirmed_at?: string | null
   archived_at: string | null
 }
 
@@ -64,6 +98,163 @@ function apiErrorMessage(reason: unknown) {
   }
   if (reason instanceof ApiError && reason.code === 'version_conflict') return '内容已被其他窗口修改，请刷新后重试。'
   return errorMessage(reason)
+}
+
+// REF41 I1-A3/A4：趋势图只连连续的正常观测；failed/partial 不落 0，也不跨点连线。
+function BenchmarkTrendChart({ targetId, points }: { targetId: string; points: BenchmarkTrendPoint[] }) {
+  const key = (() => {
+    const preferred = ['likes', 'views', 'comments', 'favorites', 'shares', 'plays', 'impressions']
+    for (const candidate of preferred) {
+      if (points.some((point) => point.quality_state === 'ok' && typeof point.values[candidate] === 'number')) return candidate
+    }
+    for (const point of points) {
+      if (point.quality_state !== 'ok') continue
+      const found = Object.entries(point.values).find(([, value]) => typeof value === 'number')
+      if (found) return found[0]
+    }
+    return null
+  })()
+  if (!key) return null
+  const width = 320
+  const height = 92
+  const padX = 14
+  const padY = 14
+  const rows = points.map((point, index) => {
+    const numeric = point.quality_state === 'ok' && typeof point.values[key] === 'number'
+      ? Number(point.values[key]) : null
+    return { point, index, numeric }
+  })
+  const values = rows.flatMap((row) => row.numeric == null ? [] : [row.numeric])
+  if (!values.length) return null
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const x = (index: number) => padX + (width - padX * 2) * (rows.length <= 1 ? 0.5 : index / (rows.length - 1))
+  const y = (value: number) => padY + (height - padY * 2) * (1 - (value - min) / (max === min ? 1 : max - min))
+  const segments: string[] = []
+  let current: string[] = []
+  for (const row of rows) {
+    if (row.numeric == null) {
+      if (current.length > 1) segments.push(current.join(' '))
+      current = []
+      continue
+    }
+    current.push(`${x(row.index)},${y(row.numeric)}`)
+  }
+  if (current.length > 1) segments.push(current.join(' '))
+  return (
+    <div className="mt-2 rounded border border-mist-200 bg-white/70 p-1.5" data-testid={`benchmark-trend-chart-${targetId}`}>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="竞对观测趋势：x 轴为观测序号，仅正常观测连线，失败或部分缺失不连线"
+        className="h-24 w-full max-w-[360px]">
+        <line x1={padX} y1={height - padY} x2={width - padX} y2={height - padY} stroke="#e5e7eb" />
+        {segments.map((segment, index) => <polyline key={index} points={segment} fill="none" stroke="#41695b" strokeWidth="2" />)}
+        {rows.map((row) => row.numeric == null
+          ? <circle key={row.point.seq} cx={x(row.index)} cy={padY} r="3" fill="none" stroke="#9ca3af" strokeWidth="1.5" aria-hidden="true" />
+          : <circle key={row.point.seq} cx={x(row.index)} cy={y(row.numeric)} r="2.8" fill="#41695b" aria-hidden="true" />)}
+      </svg>
+      <p className="text-[10.5px] text-mist-400">{key}：实线仅连接相邻正常观测；空心点表示失败/部分缺失，不连线、不计为 0。</p>
+    </div>
+  )
+}
+
+// REF41 I1：目标卡监控开关 + 间隔 + 趋势只读面板。覆盖不足显示提示，不画虚假连续线。
+function MonitorPanel({ target, canWrite }: { target: BenchmarkTarget; canWrite: boolean }) {
+  const qc = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const [interval, setIntervalValue] = useState(target.monitor_interval_hours ?? 24)
+  const enabled = target.monitor_enabled === true
+  const toggle = async (on: boolean) => {
+    setBusy(true)
+    try {
+      await patch(`/benchmark/targets/${target.id}/monitor`, { enabled: on, interval_hours: interval })
+      await qc.invalidateQueries({ queryKey: ['benchmarks'] })
+    } finally {
+      setBusy(false)
+    }
+  }
+  const trendQuery = useQuery({
+    queryKey: ['benchmark-trend', target.id],
+    queryFn: () => get<{ points: BenchmarkTrendPoint[] }>(`/benchmark/targets/${target.id}/trend`),
+    enabled,
+  })
+  const coverageQuery = useQuery({
+    queryKey: ['benchmark-coverage', target.id],
+    queryFn: () => get<{ expected: number; observed: number; failed: number; missing: number }>(`/benchmark/targets/${target.id}/coverage`),
+    enabled,
+  })
+  const points = trendQuery.data?.points ?? []
+  return (
+    <div className="mt-2 rounded-lg border border-mist-200 bg-mist-50/60 p-2.5" data-testid={`benchmark-monitor-${target.id}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[12px] font-semibold text-mist-800">监控</span>
+        {enabled ? <Badge tone="green">开启</Badge> : <Badge tone="gray">关闭</Badge>}
+        <label className="flex items-center gap-1 text-[11.5px] text-mist-600">
+          间隔
+          <input type="number" min={6} max={168} value={interval} disabled={!canWrite || busy}
+            data-testid={`benchmark-monitor-interval-${target.id}`}
+            className="h-7 w-16 rounded border border-mist-200 px-1.5 text-[11.5px]"
+            onChange={(e) => setIntervalValue(Number(e.target.value))} />
+          小时（6–168）
+        </label>
+        {enabled
+          ? <Button size="sm" variant="ghost" disabled={!canWrite || busy} onClick={() => void toggle(false)}>关闭监控</Button>
+          : <Button size="sm" variant="secondary" disabled={!canWrite || busy} data-testid={`benchmark-monitor-enable-${target.id}`} onClick={() => void toggle(true)}>开启监控</Button>}
+        {enabled && target.next_observe_at && <span className="text-[11px] text-mist-400">下次观测 {new Date(target.next_observe_at).toLocaleString('zh-CN')}</span>}
+      </div>
+      {enabled && (
+        <div className="mt-2 space-y-1">
+          {coverageQuery.isError && (
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-rose-600" role="alert"
+              data-testid={`benchmark-coverage-error-${target.id}`}>
+              <span>覆盖数据加载失败：{errorMessage(coverageQuery.error)}</span>
+              <Button size="sm" variant="ghost" onClick={() => void coverageQuery.refetch()}>重试</Button>
+            </div>
+          )}
+          {coverageQuery.data && (coverageQuery.data.observed < 2) && (
+            <p className="text-[11px] text-gamboge-700" data-testid={`benchmark-coverage-hint-${target.id}`}>
+              覆盖不足：仅 {coverageQuery.data.observed} 次观测，趋势仅供参考。
+            </p>
+          )}
+          {trendQuery.isLoading
+            ? <p className="text-[11px] text-mist-400">趋势加载中…</p>
+            : trendQuery.isError
+              ? (
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-rose-600" role="alert"
+                  data-testid={`benchmark-trend-error-${target.id}`}>
+                  <span>趋势加载失败：{errorMessage(trendQuery.error)}</span>
+                  <Button size="sm" variant="ghost" onClick={() => void trendQuery.refetch()}>重试</Button>
+                </div>
+              )
+              : points.length === 0
+                ? <p className="text-[11px] text-mist-400">尚无观测数据；开启后由桌面采集按间隔记录。</p>
+                : (
+                  <>
+                    <BenchmarkTrendChart targetId={target.id} points={points} />
+                    <ul className="space-y-0.5" data-testid={`benchmark-trend-${target.id}`}>
+                      {points.map((point) => (
+                        <li key={point.seq} className="flex flex-wrap items-center gap-x-2 text-[11px]">
+                          <span className="font-medium text-mist-700">第 {point.seq} 次观测</span>
+                          <span className="text-mist-400">{new Date(point.observed_at).toLocaleString('zh-CN')}</span>
+                          {point.interval_days != null && <span className="text-mist-500">间隔 {point.interval_days} 天</span>}
+                          {point.age_days != null
+                            ? <span className="text-mist-500">日龄 {Math.round(point.age_days)} 天</span>
+                            : <span className="text-mist-400">日龄未知</span>}
+                          {point.quality_state !== 'ok' && (
+                            <span className={point.quality_state === 'failed' ? 'text-rose-600' : 'text-gamboge-700'}>
+                              {point.quality_state === 'failed' ? '采集失败（不计入 0）' : '部分字段缺失'}
+                            </span>
+                          )}
+                          <span className="text-mist-600">
+                            {Object.entries(point.values).filter(([, v]) => typeof v === 'number').map(([k, v]) => `${k} ${v}`).join(' · ') || '无数值'}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function TargetEditor({ target, canWrite, onSaved }: { target: BenchmarkTarget; canWrite: boolean; onSaved: (next: BenchmarkTarget) => void }) {
@@ -201,16 +392,150 @@ function ExtractSection({ target, canWrite, onCreated }: { target: BenchmarkTarg
   )
 }
 
+function noteDecomposeLines(items: string[] | undefined) {
+  return (items ?? []).join('\n')
+}
+
+function splitDecomposeLines(value: string) {
+  return value.split('\n').map((item) => item.trim()).filter(Boolean)
+}
+
+function noteHasDecomposeDraft(note: BenchmarkNote) {
+  return note.decompose_state === 'ai_draft' && Boolean((note.decompose_draft as Partial<BenchmarkDecomposeDraft>).hook)
+}
+
+function NoteContentSummary({ note, canWrite, onChanged }: { note: BenchmarkNote; canWrite: boolean; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(note.content_summary ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const save = async () => {
+    if (!canWrite || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await patch(`/benchmark-notes/${note.id}`, { base_revision: note.revision, content_summary: value.trim() })
+      setEditing(false)
+      onChanged()
+    } catch (reason) {
+      setError(apiErrorMessage(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <div className="mt-1 rounded-md bg-mist-50/60 p-1.5" data-testid="benchmark-note-content-summary">
+    {editing ? <>
+      <Field label="原文摘要（最多 4000 字；只保存摘要，不保存全文）">
+        <Textarea aria-label="编辑原文摘要" rows={4} value={value} maxLength={4000} disabled={!canWrite || busy} onChange={(e) => setValue(e.target.value)} />
+      </Field>
+      <div className="mt-1 flex items-center gap-2">
+        <span className="text-[10px] text-mist-400">{Array.from(value).length}/4000</span>
+        <Button size="sm" variant="secondary" loading={busy} disabled={!canWrite || busy} onClick={() => void save()}>保存摘要</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setValue(note.content_summary ?? ''); setEditing(false); setError('') }}>取消</Button>
+      </div>
+      {error && <Notice tone="red">{error}</Notice>}
+    </> : <p className="break-words text-[10px] text-mist-500">
+      原文摘要：{note.content_summary ? note.content_summary.slice(0, 240) + (note.content_summary.length > 240 ? '…' : '') : '未填写（AI 初拆前需补充）'}
+      {canWrite && <button type="button" className="ml-1 font-semibold text-ink-600" disabled={busy} onClick={() => setEditing(true)}>编辑摘要</button>}
+    </p>}
+  </div>
+}
+
+// REF41 I2：草稿编辑面板。草稿只存在 decompose_draft；确认按钮才写 structure。
+function NoteDecomposePanel({ note, canWrite, onChanged }: { note: BenchmarkNote; canWrite: boolean; onChanged: () => void }) {
+  const raw = note.decompose_draft as Partial<BenchmarkDecomposeDraft>
+  const [hook, setHook] = useState(raw.hook ?? '')
+  const [structure, setStructure] = useState(noteDecomposeLines(raw.structure))
+  const [rhythm, setRhythm] = useState(raw.rhythm ?? '')
+  const [takeaways, setTakeaways] = useState(noteDecomposeLines(raw.takeaways))
+  const [notBorrowable, setNotBorrowable] = useState(noteDecomposeLines(raw.not_borrowable))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  if (note.decompose_state === 'confirmed') {
+    return <div className="mt-2 rounded-md border border-emerald-100 bg-emerald-50/40 p-2" data-testid="benchmark-decompose-confirmed">
+      <p className="text-[11px] font-semibold text-emerald-800">已确认入库 · 拆解修订 {note.decompose_revision}</p>
+      {note.decompose_confirmed_at && <p className="text-[10px] text-mist-500">确认时间：{note.decompose_confirmed_at.slice(0, 16).replace('T', ' ')}</p>}
+      {note.decompose_error && <p className="mt-1 text-[10px] text-red-600">上次失败：{note.decompose_error}</p>}
+    </div>
+  }
+  if (!noteHasDecomposeDraft(note)) {
+    return <div className="mt-2 rounded-md border border-mist-100 bg-mist-50/40 p-2 text-[11px]" data-testid="benchmark-decompose-empty">
+      {note.decompose_state === 'failed'
+        ? <p className="text-red-600">上次 AI 初拆失败：{note.decompose_error || '未知原因'}；当前结构未改变，可重试。</p>
+        : <p className="text-mist-500">尚未 AI 初拆。AI 只生成结构草稿，确认前不写当前结构。</p>}
+    </div>
+  }
+
+  const confirm = async () => {
+    if (!canWrite || busy) return
+    setBusy(true); setError('')
+    try {
+      await post(`/benchmark/notes/${note.id}/decompose/confirm`, {
+        draft: {
+          hook: hook.trim(), structure: splitDecomposeLines(structure), rhythm: rhythm.trim(),
+          takeaways: splitDecomposeLines(takeaways), not_borrowable: splitDecomposeLines(notBorrowable),
+          confidence: raw.confidence ?? 0,
+        },
+      })
+      onChanged()
+    } catch (reason) {
+      setError(apiErrorMessage(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const discard = async () => {
+    if (!canWrite || busy) return
+    setBusy(true); setError('')
+    try {
+      await post(`/benchmark/notes/${note.id}/decompose/discard`, {})
+      onChanged()
+    } catch (reason) {
+      setError(apiErrorMessage(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <div className="mt-2 space-y-2 rounded-md border border-amber-100 bg-amber-50/30 p-2" data-testid="benchmark-decompose-draft">
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-[11px] font-semibold text-amber-900">结构草稿（AI 初拆，未入库）</span>
+      <Badge tone="gray">置信度 {Math.round((raw.confidence ?? 0) * 100)}%</Badge>
+      {note.decompose_ai_call_id && <span className="text-[10px] text-mist-400">AI call {note.decompose_ai_call_id.slice(0, 8)}…</span>}
+    </div>
+    <p className="text-[10px] leading-relaxed text-mist-500">当前结构没有被修改。你可以编辑草稿；只有点“确认入库”才写 structure/takeaways/not_borrowable。</p>
+    <p className="text-[10px] leading-relaxed text-mist-500" data-testid="benchmark-decompose-source">原文摘要（用户提供，最多 4000 字；只保存摘要，不保存全文）：{note.content_summary ? note.content_summary.slice(0, 800) + (note.content_summary.length > 800 ? '…' : '') : '（未填写）'}</p>
+    <Field label="hook（开头钩子）"><Input aria-label="拆解 hook" data-testid="benchmark-decompose-hook" value={hook} maxLength={200} disabled={!canWrite || busy} onChange={(e) => setHook(e.target.value)} /></Field>
+    <Field label="structure（每行一项，最多 8 项）"><Textarea aria-label="拆解 structure" data-testid="benchmark-decompose-structure" rows={4} value={structure} disabled={!canWrite || busy} onChange={(e) => setStructure(e.target.value)} /></Field>
+    <Field label="rhythm（节奏）"><Input aria-label="拆解 rhythm" value={rhythm} maxLength={200} disabled={!canWrite || busy} onChange={(e) => setRhythm(e.target.value)} /></Field>
+    <div className="grid gap-2 sm:grid-cols-2">
+      <Field label="takeaways（每行一项）"><Textarea aria-label="拆解 takeaways" rows={3} value={takeaways} disabled={!canWrite || busy} onChange={(e) => setTakeaways(e.target.value)} /></Field>
+      <Field label="not_borrowable（每行一项）"><Textarea aria-label="拆解 not_borrowable" rows={3} value={notBorrowable} disabled={!canWrite || busy} onChange={(e) => setNotBorrowable(e.target.value)} /></Field>
+    </div>
+    {error && <Notice tone="red">{error}</Notice>}
+    <div className="flex flex-wrap gap-2">
+      <Button size="sm" variant="primary" loading={busy} disabled={!canWrite || busy} data-testid="benchmark-decompose-confirm" onClick={() => void confirm()}>确认入库</Button>
+      <Button size="sm" variant="ghost" disabled={!canWrite || busy} data-testid="benchmark-decompose-discard" onClick={() => void discard()}>丢弃草稿</Button>
+    </div>
+  </div>
+}
+
 function NotesSection({ target, canWrite }: { target: BenchmarkTarget; canWrite: boolean }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [url, setUrl] = useState('')
+  const [contentSummary, setContentSummary] = useState('')
   const [takeaway, setTakeaway] = useState('')
   const [notBorrow, setNotBorrow] = useState('')
   const [capturedAt, setCapturedAt] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [batchBusy, setBatchBusy] = useState(false)
+  const [batchError, setBatchError] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
+  const [decomposingId, setDecomposingId] = useState<string | null>(null)
   const page = useQuery({
     queryKey: ['benchmark-notes', target.id],
     queryFn: () => get<NotePage>(`/benchmarks/${target.id}/notes`),
@@ -224,10 +549,10 @@ function NotesSection({ target, canWrite }: { target: BenchmarkTarget; canWrite:
       // structure 须为 JSON 对象；结构化拆解由 DEV-CX14 的 cx_structure_extract 提供，
       // 本期手工登记先用最小占位骨架，钩子/段落细节在笔记学习点中记录。
       await post(`/benchmarks/${target.id}/notes`, {
-        title, url, structure: { manual: true }, captured_at: capturedAt || null,
+        title, url, content_summary: contentSummary.trim(), structure: { manual: true }, captured_at: capturedAt || null,
         takeaways: takeaway.trim() ? [takeaway.trim()] : [], not_borrowable: notBorrow.trim() ? [notBorrow.trim()] : [],
       })
-      setTitle(''); setUrl(''); setTakeaway(''); setNotBorrow(''); setCapturedAt('')
+      setTitle(''); setUrl(''); setContentSummary(''); setTakeaway(''); setNotBorrow(''); setCapturedAt('')
       await qc.invalidateQueries({ queryKey: ['benchmark-notes', target.id] })
     } catch (reason) {
       setError(apiErrorMessage(reason))
@@ -246,6 +571,46 @@ function NotesSection({ target, canWrite }: { target: BenchmarkTarget; canWrite:
     }
   }
 
+  const decompose = async (note: BenchmarkNote) => {
+    if (!canWrite || decomposingId) return
+    setDecomposingId(note.id)
+    setError('')
+    try {
+      await post(`/benchmark/notes/${note.id}/decompose`, {})
+      await qc.invalidateQueries({ queryKey: ['benchmark-notes', target.id] })
+    } catch (reason) {
+      setError(apiErrorMessage(reason))
+      await qc.invalidateQueries({ queryKey: ['benchmark-notes', target.id] })
+    } finally {
+      setDecomposingId(null)
+    }
+  }
+
+  const toggleSelected = (id: string) => {
+    setSelected((current) => {
+      if (current.includes(id)) return current.filter((item) => item !== id)
+      if (current.length >= 5) return current
+      return [...current, id]
+    })
+  }
+
+  const batchDecompose = async () => {
+    if (!canWrite || batchBusy || selected.length < 1 || selected.length > 5) return
+    setBatchBusy(true)
+    setBatchError('')
+    try {
+      const result = await post<{ items: Array<{ note_id: string; error?: string }>; count: number }>('/benchmark/decompose-batch', { note_ids: selected })
+      const failures = result.items?.filter((item) => item.error) ?? []
+      if (failures.length) setBatchError(`有 ${failures.length} 条未生成草稿：${failures.map((item) => item.error).join('；')}`)
+      setSelected([])
+      await qc.invalidateQueries({ queryKey: ['benchmark-notes', target.id] })
+    } catch (reason) {
+      setBatchError(apiErrorMessage(reason))
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
   return (
     <div className="mt-2 border-t border-mist-100 pt-2">
       <button type="button" className="flex items-center gap-1 text-[11px] font-semibold text-mist-600" onClick={() => setOpen((v) => !v)}>
@@ -255,9 +620,21 @@ function NotesSection({ target, canWrite }: { target: BenchmarkTarget; canWrite:
       </button>
       {open && <div className="mt-2 space-y-2">
         {error && <Notice tone="red">{error}</Notice>}
+        {batchError && <Notice tone="red">{batchError}</Notice>}
+        {canWrite && <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-100 bg-amber-50/40 p-2" data-testid="benchmark-decompose-batch">
+          <span className="text-[11px] font-semibold text-amber-900">批量 AI 初拆</span>
+          <span className="text-[10px] text-mist-500">已选 {selected.length}/5 · 只生成草稿，确认仍需逐条</span>
+          <Button size="sm" variant="secondary" className="ml-auto" loading={batchBusy} disabled={batchBusy || selected.length < 1} data-testid="benchmark-decompose-batch-button" onClick={() => void batchDecompose()}>批量初拆</Button>
+        </div>}
         {canWrite && <div className="grid gap-2 rounded-md border border-mist-100 p-2.5 sm:grid-cols-2">
           <Field label="笔记标题"><Input value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} /></Field>
           <Field label="来源 URL（可选）"><Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://" /></Field>
+          <div className="sm:col-span-2">
+            <Field label="原文摘要（最多 4000 字；只保存摘要，不保存全文）">
+              <Textarea aria-label="原文摘要" rows={3} value={contentSummary} maxLength={4000} onChange={(e) => setContentSummary(e.target.value)} placeholder="用自己的话概括原文的开头钩子、段落推进、节奏和结尾；不要粘贴全文" />
+            </Field>
+            <p className="mt-1 text-[10px] text-mist-400">{Array.from(contentSummary).length}/4000 · AI 初拆会使用这段摘要</p>
+          </div>
           <Field label="学到什么（takeaway）"><Input value={takeaway} maxLength={200} onChange={(e) => setTakeaway(e.target.value)} /></Field>
           <Field label="不借鉴什么"><Input value={notBorrow} maxLength={200} onChange={(e) => setNotBorrow(e.target.value)} /></Field>
           <Field label="你看到这篇的时间"><Input type="date" value={capturedAt} onChange={(e) => setCapturedAt(e.target.value)} /></Field>
@@ -266,17 +643,27 @@ function NotesSection({ target, canWrite }: { target: BenchmarkTarget; canWrite:
         {page.data?.items.map((note) => (
           <div key={note.id} className="rounded-md border border-mist-100 p-2 text-[11px]" data-testid="benchmark-note-item">
             <div className="flex items-center gap-2">
+              {canWrite && !note.archived_at && <input type="checkbox" aria-label={`选择拆解 ${note.title || note.id}`} data-testid="benchmark-note-select" checked={selected.includes(note.id)} disabled={!selected.includes(note.id) && selected.length >= 5} onChange={() => toggleSelected(note.id)} />}
               <strong className="text-mist-800">{note.title || '（无标题）'}</strong>
               <span className="text-mist-400">修订 {note.revision}</span>
-              <Button size="sm" variant="ghost" className="ml-auto" icon={note.archived_at ? <ArchiveRestore className="size-3" /> : <Archive className="size-3" />}
+              {note.decompose_state === 'confirmed' && <Badge tone="gray">已拆解 · 修订 {note.decompose_revision}</Badge>}
+              {note.decompose_state === 'ai_draft' && <Badge tone="gray">草稿待确认</Badge>}
+              {note.decompose_state === 'failed' && <Badge tone="gray">拆解失败</Badge>}
+              {canWrite && <Button size="sm" variant="secondary" className="ml-auto" loading={decomposingId === note.id}
+                disabled={!canWrite || Boolean(decomposingId) || Boolean(note.archived_at) || !(note.content_summary ?? '').trim()} title={!(note.content_summary ?? '').trim() ? '请先补充原文摘要' : undefined} data-testid="benchmark-note-decompose"
+                onClick={() => void decompose(note)}>{note.decompose_state === 'ai_draft' ? '查看/重试' : 'AI 初拆'}</Button>}
+              <Button size="sm" variant="ghost" className={canWrite ? '' : 'ml-auto'} icon={note.archived_at ? <ArchiveRestore className="size-3" /> : <Archive className="size-3" />}
                 disabled={!canWrite} onClick={() => void archive(note, !note.archived_at)}>
                 {note.archived_at ? '恢复' : '归档'}
               </Button>
             </div>
             {note.url && <p className="mt-0.5 break-all text-mist-400">{note.url}</p>}
-            {note.takeaways.length > 0 && <p className="mt-1 text-mist-600">学习点：{note.takeaways.join('；')}</p>}
-            {note.not_borrowable.length > 0 && <p className="text-mist-600">不借鉴：{note.not_borrowable.join('；')}</p>}
+            <NoteContentSummary note={note} canWrite={canWrite && !note.archived_at} onChanged={() => void qc.invalidateQueries({ queryKey: ['benchmark-notes', target.id] })} />
+            <p className="mt-1 break-words text-[10px] text-mist-500" data-testid="benchmark-note-current-structure">当前结构：{JSON.stringify(note.structure).slice(0, 180) || '空'}</p>
+            {(note.takeaways ?? []).length > 0 && <p className="mt-1 text-mist-600">学习点：{(note.takeaways ?? []).join('；')}</p>}
+            {(note.not_borrowable ?? []).length > 0 && <p className="text-mist-600">不借鉴：{(note.not_borrowable ?? []).join('；')}</p>}
             {note.captured_at && <p className="text-mist-400">看到时间：{note.captured_at.slice(0, 10)}（你提供的时间，非系统抓取）</p>}
+            {(note.decompose_state === 'ai_draft' || note.decompose_state === 'confirmed' || note.decompose_state === 'failed') && <NoteDecomposePanel key={`${note.id}-${note.decompose_state}-${note.decompose_ai_call_id ?? ''}-${note.decompose_revision}`} note={note} canWrite={canWrite} onChanged={() => void qc.invalidateQueries({ queryKey: ['benchmark-notes', target.id] })} />}
           </div>
         ))}
         {!page.data?.items.length && page.isSuccess && <p className="text-[11px] text-mist-400">还没有笔记；每篇拆解单独登记，不自动抓取链接。</p>}
@@ -381,6 +768,7 @@ export default function BenchmarkTab({ account }: { account: Account }) {
               {target.positioning && <p className="mt-0.5 text-[11px] text-mist-600">{target.positioning}</p>}
               <p className="mt-0.5 text-[11px] text-mist-400">{target.platform} · 粉丝 {target.follower_band === 'unknown' ? '未知' : target.follower_band}{target.entry ? ` · 来源 ${target.entry}` : ''}</p>
               <TargetEditor target={target} canWrite={canWrite} onSaved={() => void qc.invalidateQueries({ queryKey: ['benchmarks', account.id] })} />
+              <MonitorPanel target={target} canWrite={canWrite} />
               <NotesSection target={target} canWrite={canWrite} />
             </Card>
           ))}

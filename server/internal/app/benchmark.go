@@ -38,25 +38,30 @@ type benchmarkAnswer struct {
 type benchmarkAnswers map[string]benchmarkAnswer
 
 type benchmarkTarget struct {
-	ID                 uuid.UUID  `json:"id"`
-	AccountID          uuid.UUID  `json:"account_id"`
-	Platform           string     `json:"platform"`
-	Name               string     `json:"name"`
-	URL                string     `json:"url"`
-	NormalizedURL      string     `json:"normalized_url"`
-	Positioning        string     `json:"positioning"`
-	FollowerBand       string     `json:"follower_band"`
-	Entry              *string    `json:"entry"`
-	Answers            benchmarkAnswers `json:"answers"`
-	FitScore           *int       `json:"fit_score"`
-	AnsweredCount      int        `json:"answered_count"`
-	WeakFit            bool       `json:"weak_fit"`
-	Status             string     `json:"status"`
-	Revision           int        `json:"revision"`
-	MigrationSourceKey *string    `json:"migration_source_key,omitempty"`
-	ArchivedAt         *time.Time `json:"archived_at"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ID            uuid.UUID        `json:"id"`
+	AccountID     uuid.UUID        `json:"account_id"`
+	Platform      string           `json:"platform"`
+	Name          string           `json:"name"`
+	URL           string           `json:"url"`
+	NormalizedURL string           `json:"normalized_url"`
+	Positioning   string           `json:"positioning"`
+	FollowerBand  string           `json:"follower_band"`
+	Entry         *string          `json:"entry"`
+	Answers       benchmarkAnswers `json:"answers"`
+	FitScore      *int             `json:"fit_score"`
+	AnsweredCount int              `json:"answered_count"`
+	WeakFit       bool             `json:"weak_fit"`
+	Status        string           `json:"status"`
+	// REF41 I1：监控开关与调度（trend/coverage 面板读取）。
+	MonitorEnabled       bool       `json:"monitor_enabled"`
+	MonitorIntervalHours int        `json:"monitor_interval_hours"`
+	NextObserveAt        *time.Time `json:"next_observe_at"`
+	LastObservedAt       *time.Time `json:"last_observed_at"`
+	Revision             int        `json:"revision"`
+	MigrationSourceKey   *string    `json:"migration_source_key,omitempty"`
+	ArchivedAt           *time.Time `json:"archived_at"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 type benchmarkNote struct {
@@ -65,6 +70,7 @@ type benchmarkNote struct {
 	URL             string         `json:"url"`
 	NormalizedURL   string         `json:"normalized_url"`
 	Title           string         `json:"title"`
+	ContentSummary  string         `json:"content_summary"`
 	Structure       map[string]any `json:"structure"`
 	StructureHash   string         `json:"structure_hash"`
 	MetricsSnapshot map[string]any `json:"metrics_snapshot"`
@@ -73,9 +79,16 @@ type benchmarkNote struct {
 	CapturedAt      *time.Time     `json:"captured_at"`
 	Revision        int            `json:"revision"`
 	AICallID        *uuid.UUID     `json:"ai_call_id,omitempty"`
-	ArchivedAt      *time.Time     `json:"archived_at"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
+	// REF41 I2：拆解草稿与当前结构分离；decompose_state 只允许 none/ai_draft/confirmed/failed。
+	DecomposeState       string         `json:"decompose_state"`
+	DecomposeRevision    int            `json:"decompose_revision"`
+	DecomposeDraft       map[string]any `json:"decompose_draft"`
+	DecomposeAICallID    *uuid.UUID     `json:"decompose_ai_call_id,omitempty"`
+	DecomposeError       string         `json:"decompose_error"`
+	DecomposeConfirmedAt *time.Time     `json:"decompose_confirmed_at,omitempty"`
+	ArchivedAt           *time.Time     `json:"archived_at"`
+	CreatedAt            time.Time      `json:"created_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
 }
 
 // normalizeBenchmarkURL 按 FR-CX-18：仅去 fragment、标准 scheme/host、去默认端口；
@@ -155,7 +168,7 @@ func benchmarkAnsweredCount(answers benchmarkAnswers) int {
 	return count
 }
 
-const benchmarkTargetCols = `id,account_id,platform,name,url,normalized_url,positioning,follower_band,entry,answers,fit_score,status,revision,migration_source_key,archived_at,created_at,updated_at`
+const benchmarkTargetCols = `id,account_id,platform,name,url,normalized_url,positioning,follower_band,entry,answers,fit_score,status,revision,migration_source_key,archived_at,created_at,updated_at,monitor_enabled,monitor_interval_hours,next_observe_at,last_observed_at`
 
 func scanBenchmarkTarget(row pgx.Row) (benchmarkTarget, error) {
 	var item benchmarkTarget
@@ -164,7 +177,8 @@ func scanBenchmarkTarget(row pgx.Row) (benchmarkTarget, error) {
 	var migrationKey *string
 	if err := row.Scan(&item.ID, &item.AccountID, &item.Platform, &item.Name, &item.URL, &item.NormalizedURL,
 		&item.Positioning, &item.FollowerBand, &entry, &answers, &item.FitScore, &item.Status, &item.Revision,
-		&migrationKey, &item.ArchivedAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		&migrationKey, &item.ArchivedAt, &item.CreatedAt, &item.UpdatedAt,
+		&item.MonitorEnabled, &item.MonitorIntervalHours, &item.NextObserveAt, &item.LastObservedAt); err != nil {
 		return item, err
 	}
 	item.Entry = entry
@@ -321,7 +335,8 @@ func (s *Server) createBenchmark(w http.ResponseWriter, r *http.Request) error {
 		ident(ctx).WorkspaceID, account.ID, item.Platform, item.Name, item.URL, item.NormalizedURL,
 		item.Positioning, item.FollowerBand, item.Entry).Scan(&item.ID, &item.AccountID, &item.Platform, &item.Name,
 		&item.URL, &item.NormalizedURL, &item.Positioning, &item.FollowerBand, &item.Entry, &dummyBytes,
-		&item.FitScore, &item.Status, &item.Revision, &item.MigrationSourceKey, &item.ArchivedAt, &item.CreatedAt, &item.UpdatedAt)
+		&item.FitScore, &item.Status, &item.Revision, &item.MigrationSourceKey, &item.ArchivedAt, &item.CreatedAt, &item.UpdatedAt,
+		&item.MonitorEnabled, &item.MonitorIntervalHours, &item.NextObserveAt, &item.LastObservedAt)
 	if err != nil {
 		return err
 	}
@@ -507,24 +522,32 @@ func (s *Server) updateBenchmark(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, updated)
 }
 
-const benchmarkNoteCols = `id,target_id,url,normalized_url,title,structure,structure_hash,metrics_snapshot,takeaways,not_borrowable,captured_at,revision,ai_call_id,archived_at,created_at,updated_at`
+const benchmarkNoteCols = `id,target_id,url,normalized_url,title,content_summary,structure,structure_hash,metrics_snapshot,takeaways,not_borrowable,captured_at,revision,ai_call_id,decompose_state,decompose_revision,decompose_draft,decompose_ai_call_id,decompose_error,decompose_confirmed_at,archived_at,created_at,updated_at`
 
 func scanBenchmarkNote(row pgx.Row) (benchmarkNote, error) {
 	var item benchmarkNote
-	var structure, metrics, takeaways, notBorrowable []byte
-	if err := row.Scan(&item.ID, &item.TargetID, &item.URL, &item.NormalizedURL, &item.Title, &structure,
+	var structure, metrics, takeaways, notBorrowable, decomposeDraft []byte
+	if err := row.Scan(&item.ID, &item.TargetID, &item.URL, &item.NormalizedURL, &item.Title, &item.ContentSummary, &structure,
 		&item.StructureHash, &metrics, &takeaways, &notBorrowable, &item.CapturedAt, &item.Revision,
-		&item.AICallID, &item.ArchivedAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		&item.AICallID, &item.DecomposeState, &item.DecomposeRevision, &decomposeDraft,
+		&item.DecomposeAICallID, &item.DecomposeError, &item.DecomposeConfirmedAt,
+		&item.ArchivedAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return item, err
 	}
-	for _, pair := range []struct{ raw any; dest *map[string]any }{
-		{structure, &item.Structure}, {metrics, &item.MetricsSnapshot},
+	for _, pair := range []struct {
+		raw  []byte
+		dest *map[string]any
+	}{
+		{structure, &item.Structure}, {metrics, &item.MetricsSnapshot}, {decomposeDraft, &item.DecomposeDraft},
 	} {
-		if len(pair.raw.([]byte)) > 0 {
-			if err := json.Unmarshal(pair.raw.([]byte), pair.dest); err != nil {
+		if len(pair.raw) > 0 {
+			if err := json.Unmarshal(pair.raw, pair.dest); err != nil {
 				return item, err
 			}
 		}
+	}
+	if item.DecomposeDraft == nil {
+		item.DecomposeDraft = map[string]any{}
 	}
 	if len(takeaways) > 0 {
 		if err := json.Unmarshal(takeaways, &item.Takeaways); err != nil {
@@ -598,6 +621,7 @@ func (s *Server) createBenchmarkNote(w http.ResponseWriter, r *http.Request) err
 	var in struct {
 		URL             string         `json:"url"`
 		Title           string         `json:"title"`
+		ContentSummary  string         `json:"content_summary"`
 		Structure       map[string]any `json:"structure"`
 		StructureHash   string         `json:"structure_hash"`
 		MetricsSnapshot map[string]any `json:"metrics_snapshot"`
@@ -618,6 +642,10 @@ func (s *Server) createBenchmarkNote(w http.ResponseWriter, r *http.Request) err
 	title := strings.TrimSpace(in.Title)
 	if len([]rune(title)) > 200 {
 		return validation("标题最多 200 码点")
+	}
+	contentSummary := strings.TrimSpace(in.ContentSummary)
+	if len([]rune(contentSummary)) > 4000 {
+		return validation("原文摘要最多 4000 码点")
 	}
 	rawURL := strings.TrimSpace(in.URL)
 	normalized := normalizeBenchmarkURL(rawURL)
@@ -677,29 +705,13 @@ func (s *Server) createBenchmarkNote(w http.ResponseWriter, r *http.Request) err
 		}
 	}
 	item := benchmarkNote{TargetID: target.ID, URL: rawURL, NormalizedURL: normalized, Title: title,
-		StructureHash: structureHash, Revision: 1}
-	var structureBytes, metricsBytes, takeawaysBytes, notBorrowableBytes []byte
-	err = tx.QueryRow(ctx, `INSERT INTO benchmark_note(workspace_id,target_id,url,normalized_url,title,structure,structure_hash,metrics_snapshot,takeaways,not_borrowable,captured_at,revision)
-		VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11,1)
+		ContentSummary: contentSummary, StructureHash: structureHash, Revision: 1}
+	item, err = scanBenchmarkNote(tx.QueryRow(ctx, `INSERT INTO benchmark_note(workspace_id,target_id,url,normalized_url,title,content_summary,structure,structure_hash,metrics_snapshot,takeaways,not_borrowable,captured_at,revision)
+		VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12,1)
 		RETURNING `+benchmarkNoteCols,
-		ident(ctx).WorkspaceID, target.ID, item.URL, item.NormalizedURL, item.Title, string(structureJSON),
-		structureHash, string(metricsJSON), string(takeawaysJSON), string(notBorrowableJSON), in.CapturedAt).
-		Scan(&item.ID, &item.TargetID, &item.URL, &item.NormalizedURL, &item.Title, &structureBytes,
-			&item.StructureHash, &metricsBytes, &takeawaysBytes, &notBorrowableBytes, &item.CapturedAt, &item.Revision,
-			&item.AICallID, &item.ArchivedAt, &item.CreatedAt, &item.UpdatedAt)
+		ident(ctx).WorkspaceID, target.ID, item.URL, item.NormalizedURL, item.Title, item.ContentSummary, string(structureJSON),
+		structureHash, string(metricsJSON), string(takeawaysJSON), string(notBorrowableJSON), in.CapturedAt))
 	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(structureBytes, &item.Structure); err != nil {
-		return err
-	}
-	if err := json.Unmarshal(metricsBytes, &item.MetricsSnapshot); err != nil {
-		return err
-	}
-	if err := json.Unmarshal(takeawaysBytes, &item.Takeaways); err != nil {
-		return err
-	}
-	if err := json.Unmarshal(notBorrowableBytes, &item.NotBorrowable); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -745,12 +757,13 @@ func (s *Server) updateBenchmarkNote(w http.ResponseWriter, r *http.Request) err
 		return apiErr(409, "benchmark_archived", "已归档笔记只能先恢复再编辑")
 	}
 	var in struct {
-		BaseRevision    int            `json:"base_revision"`
-		Title           *string        `json:"title"`
+		BaseRevision    int             `json:"base_revision"`
+		Title           *string         `json:"title"`
+		ContentSummary  *string         `json:"content_summary"`
 		MetricsSnapshot *map[string]any `json:"metrics_snapshot"`
-		Takeaways       *[]string      `json:"takeaways"`
-		NotBorrowable   *[]string      `json:"not_borrowable"`
-		Archived        *bool          `json:"archived"`
+		Takeaways       *[]string       `json:"takeaways"`
+		NotBorrowable   *[]string       `json:"not_borrowable"`
+		Archived        *bool           `json:"archived"`
 	}
 	if err := decode(r, &in); err != nil {
 		return err
@@ -763,6 +776,13 @@ func (s *Server) updateBenchmarkNote(w http.ResponseWriter, r *http.Request) err
 		title = strings.TrimSpace(*in.Title)
 		if len([]rune(title)) > 200 {
 			return validation("标题最多 200 码点")
+		}
+	}
+	contentSummary := existing.ContentSummary
+	if in.ContentSummary != nil {
+		contentSummary = strings.TrimSpace(*in.ContentSummary)
+		if len([]rune(contentSummary)) > 4000 {
+			return validation("原文摘要最多 4000 码点")
 		}
 	}
 	metrics := existing.MetricsSnapshot
@@ -809,11 +829,11 @@ func (s *Server) updateBenchmarkNote(w http.ResponseWriter, r *http.Request) err
 		now := s.now()
 		archivedAt = &now
 	}
-	updated, err := scanBenchmarkNote(s.db.QueryRow(ctx, `UPDATE benchmark_note SET title=$3,metrics_snapshot=$4::jsonb,takeaways=$5::jsonb,not_borrowable=$6::jsonb,archived_at=$7,
+	updated, err := scanBenchmarkNote(s.db.QueryRow(ctx, `UPDATE benchmark_note SET title=$3,content_summary=$4,metrics_snapshot=$5::jsonb,takeaways=$6::jsonb,not_borrowable=$7::jsonb,archived_at=$8,
 		revision=revision+1,updated_at=now()
-		WHERE id=$1 AND workspace_id=$2 AND revision=$8
+		WHERE id=$1 AND workspace_id=$2 AND revision=$9
 		RETURNING `+benchmarkNoteCols,
-		existing.ID, ident(ctx).WorkspaceID, title, string(metricsJSON), string(takeawaysJSON), string(notBorrowableJSON), archivedAt, in.BaseRevision))
+		existing.ID, ident(ctx).WorkspaceID, title, contentSummary, string(metricsJSON), string(takeawaysJSON), string(notBorrowableJSON), archivedAt, in.BaseRevision))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return apiErr(409, "version_conflict", "笔记已被他人修改，请刷新后重试")
 	}

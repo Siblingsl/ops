@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, Check, ClipboardCopy, Plus, Wand2 } from 'lucide-react'
+import { Archive, Check, ClipboardCopy, MessageSquare, Plus, RotateCcw, Wand2 } from 'lucide-react'
 import { useState } from 'react'
 import { Badge, Button, Card, Field, Input, Notice, Select, Textarea } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
@@ -112,6 +112,96 @@ function CommentCard({ comment, canWrite, onChange }: { comment: InboxComment; c
   )
 }
 
+// REF41 I3：问题簇与本周关注点。样例只显示正文/平台/时间，不显示昵称、头像或评论 ID。
+interface ClusterSample {
+  content: string
+  platform: string
+  captured_at: string
+}
+
+interface QuestionCluster {
+  id: string
+  question_text: string
+  mention_count: number
+  first_seen_at: string | null
+  last_seen_at: string | null
+  status: 'open' | 'converted' | 'ignored'
+  topic_id: string | null
+  topic_title?: string
+  revision: number
+  samples: ClusterSample[]
+}
+
+interface ReaderTerm {
+  term: string
+  doc_freq: number
+  window_start: string
+  window_end: string
+}
+
+const platformLabel: Record<string, string> = {
+  xhs: '小红书', wechat_mp: '公众号', toutiao: '今日头条',
+}
+
+function ClusterCard({ cluster, canWrite, onChange }: { cluster: QuestionCluster; canWrite: boolean; onChange: () => void }) {
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const call = async (fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setError('')
+    try {
+      await fn()
+      onChange()
+    } catch (reason) {
+      setError(apiErrorText(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Card className="p-3" data-testid="comment-cluster-item">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone="gray">问题簇</Badge>
+        <Badge tone={cluster.status === 'converted' ? 'ink' : cluster.status === 'ignored' ? 'gray' : 'gamboge'}>
+          {cluster.status === 'converted' ? '已转选题' : cluster.status === 'ignored' ? '已忽略' : '待处理'}
+        </Badge>
+        <Badge tone="gray">{cluster.mention_count} 条提及</Badge>
+        <span className="text-[11px] text-mist-400">
+          {cluster.first_seen_at?.slice(0, 10) ?? '—'} 至 {cluster.last_seen_at?.slice(0, 10) ?? '—'}
+        </span>
+        {cluster.status === 'converted' && cluster.topic_title && <span className="ml-auto text-[11px] text-mist-500">选题：{cluster.topic_title}</span>}
+      </div>
+      <p className="mt-1.5 text-[12.5px] leading-relaxed text-mist-800">{cluster.question_text}</p>
+      <div className="mt-2 space-y-1" data-testid="comment-cluster-samples">
+        {cluster.samples.map((sample, index) => (
+          <p key={index} className="rounded-md bg-ink-50/50 px-2 py-1 text-[11.5px] text-mist-600">
+            <span className="text-mist-400">{platformLabel[sample.platform] ?? sample.platform} · {sample.captured_at.slice(0, 10)}</span>
+            <span className="ml-1.5">{sample.content}</span>
+          </p>
+        ))}
+      </div>
+      {error && <div className="mt-2"><Notice tone="red">{error}</Notice></div>}
+      {canWrite && cluster.status !== 'converted' && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {cluster.status === 'open' && (
+            <Button size="sm" variant="ghost" icon={<Wand2 className="size-3" />} loading={busy}
+              onClick={() => void call(() => post(`/comment-clusters/${cluster.id}/convert`, {}))}>生成选题</Button>
+          )}
+          {cluster.status === 'open' && (
+            <Button size="sm" variant="ghost" icon={<Archive className="size-3" />} disabled={busy}
+              onClick={() => void call(() => post(`/comment-clusters/${cluster.id}/ignore`, {}))}>忽略</Button>
+          )}
+          {cluster.status === 'ignored' && (
+            <Button size="sm" variant="ghost" icon={<RotateCcw className="size-3" />} disabled={busy}
+              onClick={() => void call(() => post(`/comment-clusters/${cluster.id}/reopen`, {}))}>重新打开</Button>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+
 export default function CommentInboxTab({ account }: { account: Account }) {
   const qc = useQueryClient()
   const canWrite = useCanWrite()
@@ -123,6 +213,14 @@ export default function CommentInboxTab({ account }: { account: Account }) {
   const page = useQuery({
     queryKey: ['comment-inbox', account.id, filter],
     queryFn: () => get<{ items: InboxComment[]; next_cursor: number }>(`/accounts/${account.id}/comments${filter ? `?category=${filter}` : ''}`),
+  })
+  const clusters = useQuery({
+    queryKey: ['comment-clusters', account.id],
+    queryFn: () => get<{ items: QuestionCluster[] }>(`/accounts/${account.id}/comment-clusters`),
+  })
+  const readerTerms = useQuery({
+    queryKey: ['reader-terms', account.id],
+    queryFn: () => get<{ items: ReaderTerm[]; window_start: string; window_end: string }>(`/accounts/${account.id}/reader-terms`),
   })
   const drafts = content.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean)
 
@@ -198,6 +296,49 @@ export default function CommentInboxTab({ account }: { account: Account }) {
             </div>
           ))}
           {page.data && page.data.items.length === 0 && <p className="text-[12px] text-mist-400">还没有评论。粘贴后逐条入库。</p>}
+        </div>
+      </Card>
+
+      <Card className="p-4" data-testid="comment-clusters">
+        <div className="flex flex-wrap items-center gap-2">
+          <MessageSquare className="size-4 text-mist-500" />
+          <h2 className="text-[15px] font-bold text-mist-900">问题簇</h2>
+          <Badge tone="gray">同一问题 ≥2 条评论</Badge>
+        </div>
+        <p className="mt-1 text-[12px] leading-relaxed text-mist-500">
+          每小时归并一次；只统计提问类评论。样例仅显示正文、平台与时间，不显示评论者身份。一次只把一个簇转为选题，不提供批量操作。
+        </p>
+        {clusters.isError && <div className="mt-2"><Notice tone="red">{errorMessage(clusters.error)}</Notice></div>}
+        {clusters.isLoading && <p className="mt-2 text-[12px] text-mist-400">正在读取问题簇…</p>}
+        {clusters.data && clusters.data.items.length === 0 && (
+          <p className="mt-2 text-[12px] text-mist-400">还没有达到 2 条提及的问题簇。继续逐条入库，下一轮归并后出现。</p>
+        )}
+        <div className="mt-3 space-y-2">
+          {clusters.data?.items.map((cluster) => (
+            <ClusterCard key={cluster.id} cluster={cluster} canWrite={canWrite}
+              onChange={() => void qc.invalidateQueries({ queryKey: ['comment-clusters', account.id] })} />
+          ))}
+        </div>
+      </Card>
+
+      <Card className="p-4" data-testid="reader-terms">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-[15px] font-bold text-mist-900">本周读者关注点</h2>
+          <Badge tone="gray">提问与异议 · 2–4 字高频词</Badge>
+          {readerTerms.data && <span className="ml-auto text-[11px] text-mist-400">{readerTerms.data.window_start} 至 {readerTerms.data.window_end}</span>}
+        </div>
+        <p className="mt-1 text-[12px] leading-relaxed text-mist-500">
+          按周统计出现在至少 2 条评论里的高频词，最多显示 50 个；不统计垃圾评论，也不包含评论者身份。
+        </p>
+        {readerTerms.isError && <div className="mt-2"><Notice tone="red">{errorMessage(readerTerms.error)}</Notice></div>}
+        {readerTerms.isLoading && <p className="mt-2 text-[12px] text-mist-400">正在统计本周关注点…</p>}
+        {readerTerms.data && readerTerms.data.items.length === 0 && (
+          <p className="mt-2 text-[12px] text-mist-400">本周还没有重复出现的高频词。入库更多提问或异议后再看。</p>
+        )}
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {readerTerms.data?.items.map((item) => (
+            <Badge key={item.term} tone="gray">{item.term} · {item.doc_freq}</Badge>
+          ))}
         </div>
       </Card>
     </div>

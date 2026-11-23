@@ -26,23 +26,23 @@ const (
 var commentCategories = map[string]bool{"question": true, "objection": true, "praise": true, "negative": true, "spam": true}
 
 type commentInbox struct {
-	ID           uuid.UUID  `json:"id"`
-	AccountID    uuid.UUID  `json:"account_id"`
-	WorkID       *uuid.UUID `json:"work_id"`
-	AuthorAlias  string     `json:"author_alias"`
-	Content      string     `json:"content"`
-	CapturedAt   time.Time  `json:"captured_at"`
-	Category     *string    `json:"category"`
-	ReplyDraft   string     `json:"reply_draft"`
-	ReplyStatus  string     `json:"reply_status"`
-	Revision     int        `json:"revision"`
-	ReplyRevision int       `json:"reply_revision"`
-	AICallID     *uuid.UUID `json:"ai_call_id,omitempty"`
-	CopiedAt     *time.Time `json:"copied_at,omitempty"`
-	SentManualAt *time.Time `json:"sent_manual_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	Deleted      bool       `json:"deleted"`
+	ID            uuid.UUID  `json:"id"`
+	AccountID     uuid.UUID  `json:"account_id"`
+	WorkID        *uuid.UUID `json:"work_id"`
+	AuthorAlias   string     `json:"author_alias"`
+	Content       string     `json:"content"`
+	CapturedAt    time.Time  `json:"captured_at"`
+	Category      *string    `json:"category"`
+	ReplyDraft    string     `json:"reply_draft"`
+	ReplyStatus   string     `json:"reply_status"`
+	Revision      int        `json:"revision"`
+	ReplyRevision int        `json:"reply_revision"`
+	AICallID      *uuid.UUID `json:"ai_call_id,omitempty"`
+	CopiedAt      *time.Time `json:"copied_at,omitempty"`
+	SentManualAt  *time.Time `json:"sent_manual_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	Deleted       bool       `json:"deleted"`
 }
 
 const commentInboxCols = `id,account_id,work_id,author_alias,content,captured_at,category,reply_draft,reply_status,revision,reply_revision,ai_call_id,copied_at,sent_manual_at,created_at,updated_at`
@@ -176,10 +176,11 @@ func (s *Server) createCommentInbox(w http.ResponseWriter, r *http.Request) erro
 		}
 	}
 	item := commentInbox{}
-	err = s.db.QueryRow(r.Context(), `INSERT INTO comment_inbox (workspace_id,account_id,work_id,author_alias,content,captured_at,created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+	err = s.db.QueryRow(r.Context(), `INSERT INTO comment_inbox (workspace_id,account_id,work_id,author_alias,content,captured_at,created_by,canonical_key)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		RETURNING `+commentInboxCols,
-		ident(r.Context()).WorkspaceID, account.ID, in.WorkID, alias, content, capturedAt, ident(r.Context()).UserID).
+		ident(r.Context()).WorkspaceID, account.ID, in.WorkID, alias, content, capturedAt, ident(r.Context()).UserID,
+		commentCanonicalKey(content)).
 		Scan(&item.ID, &item.AccountID, &item.WorkID, &item.AuthorAlias, &item.Content, &item.CapturedAt,
 			&item.Category, &item.ReplyDraft, &item.ReplyStatus, &item.Revision, &item.ReplyRevision, &item.AICallID,
 			&item.CopiedAt, &item.SentManualAt, &item.CreatedAt, &item.UpdatedAt)
@@ -242,10 +243,10 @@ func (s *Server) patchCommentInbox(w http.ResponseWriter, r *http.Request) error
 			return validation("评论正文须为 1..5000 码点")
 		}
 	}
-	updated, err := scanCommentInbox(s.db.QueryRow(ctx, `UPDATE comment_inbox SET category=$3,content=$4,revision=revision+1,updated_at=now()
+	updated, err := scanCommentInbox(s.db.QueryRow(ctx, `UPDATE comment_inbox SET category=$3,content=$4,canonical_key=$6,cluster_id=NULL,revision=revision+1,updated_at=now()
 		WHERE id=$1 AND workspace_id=$2 AND revision=$5 AND deleted_at IS NULL
 		RETURNING `+commentInboxCols,
-		item.ID, ident(ctx).WorkspaceID, category, content, in.BaseRevision))
+		item.ID, ident(ctx).WorkspaceID, category, content, in.BaseRevision, commentCanonicalKey(content)))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return apiErr(409, "version_conflict", "评论已被他人修改，请刷新后重试")
 	}
@@ -558,14 +559,14 @@ func (s *Server) convertCommentToTopic(w http.ResponseWriter, r *http.Request) e
 }
 
 type skeletonNoteRef struct {
-	ID        string `json:"id"`
-	Target    string `json:"target"`
-	Title     string `json:"title"`
-	HookType  string `json:"hook_type"`
-	Roles     []string `json:"roles"`
-	Paragraphs int   `json:"paragraphs"`
-	AvgChars  int    `json:"avg_chars"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         string    `json:"id"`
+	Target     string    `json:"target"`
+	Title      string    `json:"title"`
+	HookType   string    `json:"hook_type"`
+	Roles      []string  `json:"roles"`
+	Paragraphs int       `json:"paragraphs"`
+	AvgChars   int       `json:"avg_chars"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // listSkeletonNotes：当前账号可引用的拆解骨架（大纲生成勾选来源）。

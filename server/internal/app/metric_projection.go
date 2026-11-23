@@ -505,6 +505,58 @@ func (s *Server) metricNodePublic(ctx context.Context, workID uuid.UUID, node *i
 	return out, rows.Err()
 }
 
+// metricTodayWorkRow 是今日运营“今日数据”块的只读存储层结果。
+// 该块需要按作品取当天 approved 的最新一条，而不是按来源拆成多条；
+// 查询留在指标投影层，避免消费端绕过 §8.4 的 metric_node_public 边界。
+type metricTodayWorkRow struct {
+	WorkID     uuid.UUID
+	Title      string
+	CapturedAt time.Time
+	Reads      *int
+	Likes      *int
+	Comments   *int
+	Favorites  *int
+}
+
+// metricTodayWorkRows 返回指定账号当天有 approved 指标的作品去重数与最新快照。
+// 调用方负责展示；这里只做存储/投影层读取，不写入。
+func (s *Server) metricTodayWorkRows(ctx context.Context, workspaceID, accountID uuid.UUID, start, end time.Time) (int, []metricTodayWorkRow, error) {
+	var count int
+	if err := s.db.QueryRow(ctx, `SELECT count(DISTINCT m.work_id)
+		FROM metric_snapshot m JOIN work w ON w.id=m.work_id
+		JOIN platform_account a ON a.id=w.account_id
+		WHERE a.workspace_id=$1 AND w.account_id=$2 AND w.deleted_at IS NULL
+		  AND m.quality_state='approved' AND m.captured_at>=$3 AND m.captured_at<$4`,
+		workspaceID, accountID, start, end).Scan(&count); err != nil {
+		return 0, nil, err
+	}
+	rows, err := s.db.Query(ctx, `
+		WITH latest AS (
+			SELECT DISTINCT ON (m.work_id) m.work_id,m.captured_at,m.reads,m.likes,m.comments,m.favorites
+			FROM metric_snapshot m JOIN work w ON w.id=m.work_id
+			JOIN platform_account a ON a.id=w.account_id
+			WHERE a.workspace_id=$1 AND w.account_id=$2 AND w.deleted_at IS NULL
+			  AND m.quality_state='approved' AND m.captured_at>=$3 AND m.captured_at<$4
+			ORDER BY m.work_id,m.captured_at DESC,m.id DESC
+		)
+		SELECT l.work_id,w.title,l.captured_at,l.reads,l.likes,l.comments,l.favorites
+		FROM latest l JOIN work w ON w.id=l.work_id
+		ORDER BY l.captured_at DESC,l.work_id LIMIT 3`, workspaceID, accountID, start, end)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+	out := []metricTodayWorkRow{}
+	for rows.Next() {
+		var row metricTodayWorkRow
+		if err := rows.Scan(&row.WorkID, &row.Title, &row.CapturedAt, &row.Reads, &row.Likes, &row.Comments, &row.Favorites); err != nil {
+			return 0, nil, err
+		}
+		out = append(out, row)
+	}
+	return count, out, rows.Err()
+}
+
 // cxAccountFormalMetrics uses the approved public metric projection and only
 // links a mirror through a confirmed local binding. It returns a single
 // retained snapshot per selected mirror, not a comparison window or ranking.

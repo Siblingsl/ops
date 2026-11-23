@@ -43,6 +43,17 @@ var metricD7LegacyConsumers = map[string]string{}
 // 新增条目必须在这里写明为什么不能走 metric_node_public。
 var metricReadAllowlist = map[string]string{
 	"publish_state.go": "DEV-CX13-A 登记/失效事务按用户选择的精确 metric ID 与 revision 校验质量和单位；metric_node_public 只返回每来源最新快照且不含 revision，不能验证任意已登记快照的 CAS。",
+	// REF41 I5-A1（已独立核验）：同龄对比按 metric_node(day_offset)=node 精确等值选取，
+	// 同节点精确命中优先、第 6 天记录不得冒充第 7 天节点；metric_node_public 的 WHERE 是
+	// day_offset<=p_node 的 DISTINCT ON 去重（会把第 6 天取进来并标 node_exact=false），
+	// 等值语义无法经该函数表达。
+	"review_peer.go": "I5 metricAtNode/peerWorks 需要 metric_node(day_offset)=node 精确等值与同节点精确优先排序；metric_node_public 为 <= 去重语义，等值与 node_exact 判定无法表达。",
+	// REF41 I7-A1（已独立核验）：转化链接列表展示作品最新一条 approved reads（取最新 captured_at，
+	// 无节点概念）；metric_node_public 按 node 参数取每来源一条，无法表达"无节点取最新"。
+	"conversion.go": "I7 latestWorkReads 取作品最新一条 approved reads（无节点概念）；metric_node_public 只按节点取，语义不匹配。",
+	// REF41 I4-A3（已独立核验）：六维评分 demand 维的"互动指标中位评论数"是账号级 30 天
+	// percentile_cont(0.5) 聚合；metric_node_public 是按作品的逐条读取，账号级聚合无法表达。
+	"cx_topic_score_http.go": "I4 六维评分 demand 维需账号级 30 天评论中位数聚合（percentile_cont）；metric_node_public 为按作品逐条读取，无法表达账号级聚合。",
 }
 
 // TestMetricReadsStayInsideStorageLayer 检查指标底层表只被存储/投影层与已登记旧消费点直查。

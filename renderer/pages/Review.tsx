@@ -14,8 +14,11 @@ import { describeRefs, fmtNum, fmtTime, toLocalInput } from '@/lib/format'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import type { BoardRow, Metric, MetricSource, Platform, ReviewReport } from '@/lib/types'
 import { FollowersCard } from './review-followers'
+import { ConversionCard } from '@/components/conversion-link-card'
 import { AttributionCard, DigestsCard, TopWorksCard } from './review-insights'
 import { metricFields, type MetricKey, ScreenshotImport } from './review-screenshots'
+import { ReviewPeerCompare } from './review-peer'
+import { PanelReviewCard } from './work/panel-review'
 import { ReviewCX21 } from './review-cx21'
 
 const metricSourceLabel: Record<MetricSource, string> = {
@@ -359,6 +362,8 @@ function MetricsDrawer({ row, works, accountId, platform, node, onClose, onNext 
   return (
     <Drawer open onClose={onClose} title={row.title || '未命名'} width="w-[560px]"
       desc={node ? `发布满 ${node} 天 · 快速录入：照着平台数据页填数字，回车跳到下一格` : '照着平台数据页抄录数字；也可以用粘贴回填一次补多篇。'}>
+      <div className="mb-3"><ReviewPeerCompare workId={row.id} /></div>
+      <div className="mb-3"><PanelReviewCard workId={row.id} /></div>
       <div className="mb-3 flex items-center gap-2 rounded-lg bg-mist-50 px-3 py-2 text-[12.5px] text-mist-500">
         <span className="flex-1">不想抄数字？上传这篇的数据页截图，识别后核对一下再导入。</span>
         <ScreenshotImport accountId={accountId} platform={platform} works={works} workId={row.id} label="上传截图识别" onDone={done} />
@@ -862,6 +867,7 @@ export default function Review() {
           <div className="desktop-review-teaser-actions"><Button variant="secondary" onClick={() => revealAdvanced('desktop-review-insights')}>查看趋势</Button></div>
         </Card>
       </div>}
+      <div className="mt-6"><ConversionCard accountId={acc.id} /></div>
       <ReviewCX21 accountId={acc.id} platform={acc.platform} contentFormat={acc.platform === 'toutiao' ? toutiaoFormat : acc.content_format} works={rows}
         proposal={experimentProposal} onProposalUsed={() => setExperimentProposal(null)} />
 
@@ -890,7 +896,7 @@ export default function Review() {
         </div>
       </div>}
       {(!desktopPresentation || showAdvanced) && <div id="desktop-review-followers" className="mt-6 space-y-6 scroll-mt-24">
-        <FollowersCard accountId={acc.id} wechat={acc.platform === 'wechat_mp'} />
+        <FollowersCard accountId={acc.id} platform={acc.platform} canManage={canWrite} />
         <DailyStatsCard accountId={acc.id} contentFormat={acc.platform === 'toutiao' ? toutiaoFormat : undefined} />
         <div id="desktop-review-insights" className="scroll-mt-24"><AttributionCard accountId={acc.id} contentFormat={acc.platform === 'toutiao' ? toutiaoFormat : undefined} /></div>
         <div className="grid gap-6 lg:grid-cols-2">
