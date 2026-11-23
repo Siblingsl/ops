@@ -205,18 +205,97 @@ export interface WechatAuto {
   note?: string
 }
 
+export type FollowerSource = 'wechat_api' | 'wechat_browser' | 'xhs_browser' | 'manual' | 'desktop_live' | 'desktop_backfill' | 'import'
+
 export interface FollowerDay {
   date: string
-  source: 'wechat_api' | 'manual'
+  source: FollowerSource
   new_follow: number | null
   cancel_follow: number | null
   net: number | null
   cumulate: number | null
+  collected_at?: string
 }
 
 export interface FollowerList {
   days: FollowerDay[]
   api: boolean
+}
+
+/** REF41 I6：按平台聚合的粉丝快照；latest 为空表示该平台尚未采集，不补 0。 */
+export interface FollowerPlatformSummary {
+  platform: string
+  account_id: string
+  account_name: string
+  latest: number | null
+  source: FollowerSource | ''
+  collected_at?: string
+  series: FollowerDay[]
+  gaps: string[]
+}
+
+export interface FollowerSummary {
+  days: number
+  platforms: FollowerPlatformSummary[]
+  total: number | null
+  covered_platforms: number
+  total_platforms: number
+  missing_platforms: string[]
+}
+
+export interface FollowerCoverage {
+  from: string
+  to: string
+  missing: string[]
+}
+
+export type ConversionPlatform = 'wechat_mp' | 'site' | 'youtube' | 'bilibili' | 'x' | 'other'
+
+export interface ConversionLink {
+  id: string
+  work_id: string
+  platform: ConversionPlatform
+  target_url: string
+  utm_source: string
+  utm_medium: 'video' | 'article'
+  utm_campaign: string
+  code: string
+  status: 'active' | 'disabled'
+  url: string
+  created_at: string
+}
+
+export interface ConversionWorkSummary {
+  work_id: string
+  work_title: string
+  platform: ConversionPlatform
+  links: number
+  events: number
+  register: number
+  paid: number
+  lead: number
+  download: number
+  other: number
+  amount_cents: number
+  currency: string
+  reads: number | null
+  conversion_rate: number | null
+  connected: boolean
+}
+
+export interface ConversionSummary {
+  account_id: string
+  connected: boolean
+  works: ConversionWorkSummary[]
+}
+
+export interface ConversionIngestToken {
+  id: string
+  name: string
+  status: 'active' | 'revoked'
+  created_at: string
+  last_used_at?: string
+  token?: string
 }
 
 export interface WechatDefaults {
@@ -634,6 +713,51 @@ export interface Metric {
   ctr_unavailable?: string
 }
 
+export interface PeerCompareMetricRow {
+  key: 'reads' | 'impressions' | 'interaction_rate' | 'follows_gained'
+  label: string
+  unit: 'count' | 'percent'
+  current: number | null
+  median: number | null
+  delta: number | null
+  delta_pct: number | null
+  compare_label: string
+  sample_size: number
+  sample_sufficient: boolean
+}
+
+export interface PeerComparePeer {
+  work_id: string
+  title: string
+  published_at: string
+  actual_day: number | null
+  node_exact: boolean
+  values: Record<string, number | null>
+}
+
+export interface PeerCompareCard {
+  work_id: string
+  account_id: string
+  title: string
+  account_name: string
+  platform: Platform
+  node: 1 | 3 | 7 | 30
+  node_exact: boolean
+  published_at: string | null
+  sample_size: number
+  sample_sufficient: boolean
+  metrics: PeerCompareMetricRow[]
+  peers: PeerComparePeer[]
+  notice: string
+  limitations: string[]
+}
+
+export interface PeerCompareAll {
+  work_id: string
+  nodes: PeerCompareCard[]
+}
+
+
 export type MetricUnit = 'users' | 'times' | 'unknown'
 
 export type MetricSource = 'manual' | 'paste' | 'file' | 'wechat_api' | 'screenshot' | 'wechat_browser' | 'xhs_browser'
@@ -746,6 +870,10 @@ export interface Provider {
   last_test_result: string
   price_per_1k_prompt?: number | null
   price_per_1k_completion?: number | null
+  input_price_micros_per_1k?: number | null
+  output_price_micros_per_1k?: number | null
+  price_currency?: string
+  price_updated_at?: string | null
   context_window_tokens?: number | null
   capabilities?: ModelCapability[]
 }
@@ -838,6 +966,13 @@ export type AgentWorkbenchFeatureName =
   | 'voice_realtime'
   // DEV-AI27-17：Windows 电脑控制开关。
   | 'computer_use'
+  // D-190：38 §16.3 P2 项，默认关闭。
+  | 'operations_directory'
+  | 'side_chat'
+  | 'today_ops'
+  // REF41 A6/A7：角色 bot 与工作流模板（默认开）。
+  | 'agent_roles'
+  | 'workflow_templates'
 
 export interface SystemSettings {
   registration_open: boolean

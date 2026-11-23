@@ -25,6 +25,7 @@ const ImagesPage = lazy(() => import('./pages/Images'))
 const Agent = lazy(() => import('./pages/Agent'))
 const SettingsAccounts = lazy(() => import('./pages/settings/Accounts'))
 const AgentSettings = lazy(() => import('./pages/settings/Agent'))
+const CapabilitiesSettings = lazy(() => import('./pages/settings/Capabilities'))
 const Logs = lazy(() => import('./pages/settings/Logs'))
 const Members = lazy(() => import('./pages/settings/Members'))
 const Models = lazy(() => import('./pages/settings/Models'))
@@ -43,6 +44,9 @@ const Preferences = lazy(() => import('./pages/settings/Preferences'))
 const PersonalMemory = lazy(() => import('./pages/settings/PersonalMemory'))
 const Plugins = lazy(() => import('./pages/settings/Plugins'))
 const Skills = lazy(() => import('./pages/settings/Skills'))
+const Feishu = lazy(() => import('./pages/settings/Feishu'))
+const JobRuns = lazy(() => import('./pages/settings/JobRuns'))
+const ParserDiagnostics = lazy(() => import('./pages/settings/ParserDiagnostics'))
 const WorkLayout = lazy(() => import('./pages/work/WorkLayout'))
 const Editor = lazy(() => import('./pages/work/Editor'))
 const Compare = lazy(() => import('./pages/work/Compare'))
@@ -167,7 +171,11 @@ function Authed() {
           <Route path="hot-sources" element={<S><HotSources /></S>} />
  <Route path="daily" element={<S><DailySettings /></S>} />
           <Route path="agent" element={<S><AgentSettings /></S>} />
+          <Route path="capabilities" element={<S><CapabilitiesSettings /></S>} />
           <Route path="skills" element={<S><Skills /></S>} />
+          <Route path="feishu" element={<S><Feishu /></S>} />
+          <Route path="job-runs" element={<S><JobRuns /></S>} />
+          <Route path="parser-diagnostics" element={<S><ParserDiagnostics /></S>} />
           <Route path="desktop-ai" element={<S><DesktopPolicy /></S>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

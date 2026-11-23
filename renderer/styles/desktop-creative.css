@@ -453,7 +453,7 @@ html[data-presentation='ops-creative-desktop'] .agent-markdown h4 { color: var(-
 .desktop-agent-invite { display: grid; grid-template-columns: 34px minmax(0, 1fr) 16px; align-items: center; gap: 4px 10px; padding: 14px; border: 1px solid var(--ops-border); border-radius: 16px; background: var(--ops-surface); color: var(--ops-text); text-decoration: none; box-shadow: var(--shadow-card); }
 .desktop-agent-invite > span { grid-row: 1 / 3; display: grid; width: 34px; height: 34px; place-items: center; border-radius: 10px; background: var(--ops-lavender); color: var(--ops-accent); }
 .desktop-agent-invite > span svg { width: 17px; height: 17px; }
-.desktop-agent-invite strong { font-size: 11px; }
+.desktop-agent-invite strong { font-size: 12px; }
 .desktop-agent-invite small { color: var(--ops-muted); font-size: 9.5px; }
 .desktop-agent-invite > svg { grid-column: 3; grid-row: 1 / 3; width: 14px; height: 14px; color: var(--ops-muted); }
 .desktop-usage-card { display: flex; min-height: 56px; align-items: center; gap: 9px; border: 1px solid var(--ops-border); border-radius: 14px; padding: 11px 13px; background: var(--ops-surface); color: var(--ops-text); text-decoration: none; box-shadow: var(--shadow-card); }
@@ -483,11 +483,11 @@ html[data-presentation='ops-creative-desktop'] .agent-markdown h4 { color: var(-
 .desktop-agent-list { display: flex; width: 220px; min-width: 220px; flex: 0 0 220px; flex-direction: column; overflow: hidden; border-right: 1px solid var(--ops-border); background: var(--ops-surface); }
 .desktop-agent-list-title { margin: 0 20px 15px !important; padding: 20px 0 0 !important; color: var(--ops-text) !important; font-size: 14px !important; line-height: 17px; letter-spacing: 0 !important; }
 .desktop-agent-list-new { margin: 0 13px; padding: 0; }
-.desktop-agent-list-new > button { width: 100%; min-height: 36px; font-size: 11px; }
+.desktop-agent-list-new > button { width: 100%; min-height: 36px; font-size: 12px; }
 .desktop-agent-list-search { margin: 19px 13px 20px !important; }
-.desktop-agent-list-search input { width: 100%; height: 36.5px; background: var(--ops-canvas); font-size: 11px; }
-.desktop-agent-privacy-note { flex: 0 0 auto; margin: 30px 13px 16px; border: 1px solid var(--ops-border); border-radius: 12px; padding: 10px 12px; color: var(--ops-muted); font-size: 10px; line-height: 1.8; }
-.desktop-statusbar { position: fixed; z-index: 35; inset-inline: 0; bottom: 0; display: flex; min-width: 0; height: 26px; align-items: center; gap: 13px; border-top: 1px solid color-mix(in srgb, var(--ops-muted) 24%, transparent); padding-inline: 13px; background: #f7f7f7; color: var(--ops-muted); font-size: 10.5px; }
+.desktop-agent-list-search input { width: 100%; height: 36.5px; background: var(--ops-canvas); font-size: 12px; }
+.desktop-agent-privacy-note { flex: 0 0 auto; margin: 30px 13px 16px; border: 1px solid var(--ops-border); border-radius: 12px; padding: 10px 12px; color: var(--ops-muted); font-size: 12px; line-height: 1.8; }
+.desktop-statusbar { position: fixed; z-index: 35; inset-inline: 0; bottom: 0; display: flex; min-width: 0; height: 26px; align-items: center; gap: 13px; border-top: 1px solid color-mix(in srgb, var(--ops-muted) 24%, transparent); padding-inline: 13px; background: #f7f7f7; color: var(--ops-muted); font-size: 12px; }
 .desktop-statusbar-context, .desktop-statusbar-action, .desktop-statusbar-save { display: inline-flex; min-width: 0; flex: 0 0 auto; align-items: center; gap: 6px; white-space: nowrap; }
 .desktop-statusbar-context { flex: 1 1 0; overflow: hidden; }
 .desktop-statusbar-context > span:not(.desktop-statusbar-dot):not(.desktop-statusbar-separator) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -503,6 +503,10 @@ html[data-presentation='ops-creative-desktop'] .agent-markdown h4 { color: var(-
 .desktop-statusbar-action svg, .desktop-statusbar-save svg { width: 13px; height: 13px; flex: 0 0 auto; }
 .desktop-statusbar-spacer { min-width: 0; flex: 1; }
 .desktop-statusbar-save { overflow: hidden; text-overflow: ellipsis; }
+/* UI-09：离线重试按钮（底栏唯一可点元素，danger 色提示恢复动作）。 */
+.desktop-statusbar-retry { height: 24px; border: 0; border-radius: 7px; padding: 0 7px; background: transparent; color: var(--ops-danger); font: inherit; cursor: pointer; }
+.desktop-statusbar-retry:hover { background: color-mix(in srgb, var(--ops-danger) 10%, transparent); }
+.desktop-statusbar-save[data-state='checking'] { color: var(--ops-muted); }
 .desktop-quick-collect { position: fixed; z-index: 30; right: -22px; display: flex; width: 44px; height: 44px; align-items: center; justify-content: center; border: 1px solid var(--ops-border); border-radius: 50%; background: var(--ops-surface); color: var(--ops-accent); opacity: .55; box-shadow: var(--shadow-card); cursor: pointer; transition: transform .18s ease, opacity .18s ease; }
 .desktop-quick-collect:hover, .desktop-quick-collect:focus-visible, .desktop-quick-collect[data-dragging='true'], .desktop-quick-collect[data-open='true'] { transform: translateX(-22px); opacity: 1; }
 html[data-presentation='ops-creative-desktop'] #root button.desktop-quick-collect[data-dragging='true']:active { transform: translateX(-22px); }
@@ -512,18 +516,18 @@ html[data-presentation='ops-creative-desktop'] #root button.desktop-quick-collec
 .desktop-quick-collect svg { width: 20px; height: 20px; }
 @media (prefers-reduced-motion: reduce) { .desktop-quick-collect { transition: none; } }
 html[data-reduced-motion='true'] .desktop-quick-collect { transition: none; }
-.desktop-agent-workspace { margin-inline: 23px; border: 1px solid var(--ops-border); border-radius: 20px; background: var(--ops-surface); color: var(--ops-text); }
+.desktop-agent-workspace { margin-inline: 23px; border: 1px solid var(--ops-border); border-radius: 20px; background: var(--ops-canvas); color: var(--ops-text); }
 .desktop-agent-chat-header { height: 59px; min-height: 59px; flex: 0 0 59px; justify-content: space-between; border-color: var(--ops-border); padding-inline: 25px; background: var(--ops-surface); }
 .desktop-agent-chat-header > div { flex: 0 1 auto; }
 .desktop-agent-chat-header [aria-label='对话标题'] { max-width: min(440px, 48vw); font-size: 12px; }
 .desktop-agent-chat-heading { gap: 9px; }
-.desktop-agent-chat-settings { display: inline-flex; height: 18.5px; flex: 0 0 auto; align-items: center; gap: 6px; border: 0; border-radius: 7px; padding: 0 5px; background: transparent; color: var(--ops-accent); cursor: pointer; font: inherit; font-size: 11px; line-height: 18.5px; }
+.desktop-agent-chat-settings { display: inline-flex; height: 18.5px; flex: 0 0 auto; align-items: center; gap: 6px; border: 0; border-radius: 7px; padding: 0 5px; background: transparent; color: var(--ops-accent); cursor: pointer; font: inherit; font-size: 12px; line-height: 18.5px; }
 .desktop-agent-chat-settings:hover { background: var(--ops-accent-soft); }
 .desktop-agent-chat-settings svg { width: 14px; height: 14px; }
-.desktop-agent-private-tag { flex: 0 0 auto; border-radius: 999px; background: var(--ops-subtle); padding: 3px 7px; color: var(--ops-muted); font-size: 10px; }
-.desktop-agent-chat-stream { padding: 0 !important; background: #ffffff; }
+.desktop-agent-private-tag { flex: 0 0 auto; border-radius: 999px; background: var(--ops-subtle); padding: 3px 7px; color: var(--ops-muted); font-size: 12px; }
+.desktop-agent-chat-stream { padding: 0 !important; background: var(--ops-canvas); }
 .desktop-agent-message-column { max-width: 800px; gap: 0; padding: 30px 30px 20px; }
-.desktop-agent-day { margin-bottom: 26px; color: var(--ops-muted); font-size: 11px; text-align: center; }
+.desktop-agent-day { margin-bottom: 26px; color: var(--ops-muted); font-size: 12px; text-align: center; }
 .desktop-agent-message { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; margin-bottom: 28px; }
 .desktop-agent-message.user { align-items: flex-end; }
 .desktop-agent-run-message { gap: 0; }
@@ -532,14 +536,14 @@ html[data-reduced-motion='true'] .desktop-quick-collect { transition: none; }
 .desktop-agent-run-message-item .desktop-agent-message-bubble { width: 100%; max-width: 100% !important; }
 .desktop-agent-run-day { margin-top: 15px; }
 .desktop-agent-run-live { margin: 5px 0 7px 34px; color: var(--ops-text); font-size: 13px; line-height: 1.95; }
-.desktop-agent-run-live-note { margin-top: 7px; border-top: 1px solid var(--ops-border); padding-top: 6px; color: var(--ops-muted); font-size: 11px; line-height: 1.6; }
-.desktop-agent-run-message > [role='status'] { width: fit-content; max-width: none; margin: 7px 0 0 34px; border: 1px solid #e7e7eb; border-radius: 10px; background: #f3f3f5; color: #777782; font-size: 11px; }
+.desktop-agent-run-live-note { margin-top: 7px; border-top: 1px solid var(--ops-border); padding-top: 6px; color: var(--ops-muted); font-size: 12px; line-height: 1.6; }
+.desktop-agent-run-message > [role='status'] { width: fit-content; max-width: none; margin: 7px 0 0 34px; border: 1px solid #e7e7eb; border-radius: 10px; background: #f3f3f5; color: #777782; font-size: 12px; }
 .desktop-agent-run-message > [role='status'] svg { color: #9999a3; }
 .desktop-agent-message-speaker { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--ops-text); font-size: 12px; font-weight: 600; }
 .desktop-agent-message.user .desktop-agent-message-speaker { flex-direction: row-reverse; }
-.desktop-agent-message-speaker small { color: var(--ops-muted); font-size: 10px; font-weight: 400; }
+.desktop-agent-message-speaker small { color: var(--ops-muted); font-size: 12px; font-weight: 400; }
 .desktop-agent-user-avatar, .desktop-agent-bot-avatar { display: grid; flex: 0 0 auto; place-items: center; }
-.desktop-agent-user-avatar { width: 23px; height: 23px; border-radius: 50%; background: var(--ops-peach); color: var(--ops-text); font-size: 10px; }
+.desktop-agent-user-avatar { width: 23px; height: 23px; border-radius: 50%; background: var(--ops-peach); color: var(--ops-text); font-size: 12px; }
 .desktop-agent-bot-avatar { width: 26px; height: 26px; border-radius: 9px; background: var(--ops-lavender); color: var(--ops-accent); }
 .desktop-agent-bot-avatar svg { width: 16px; height: 16px; }
 html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .desktop-agent-message-bubble { max-width: 100%; border-radius: 0 !important; padding: 0; background: transparent !important; box-shadow: none !important; color: var(--ops-text); font-size: 13px; line-height: 1.95; }
@@ -551,7 +555,7 @@ html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .d
 .desktop-agent-message-footer button { opacity: 0; }
 .desktop-agent-message:hover .desktop-agent-message-footer button, .desktop-agent-message:focus-within .desktop-agent-message-footer button { opacity: 1; }
 .desktop-agent-message-bubble > .mt-2.border-t { margin-top: 0 !important; border-top: 0 !important; padding-top: 0 !important; }
-.desktop-agent-tool-summary { color: var(--ops-muted) !important; font-size: 11px !important; }
+.desktop-agent-tool-summary { color: var(--ops-muted) !important; font-size: 12px !important; }
 .desktop-agent-tool-summary svg { color: var(--ops-success); }
 .desktop-agent-action-wrapper { margin: 15px 0 28px 31px; }
 .desktop-agent-action-card { overflow: hidden; border-color: var(--ops-border); border-radius: 15px; padding: 0; background: var(--ops-surface); box-shadow: 0 4px 16px #57408304; }
@@ -565,7 +569,7 @@ html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .d
 .desktop-agent-compose { width: 100%; max-width: 724px; margin-inline: auto; border: 1px solid var(--ops-border); border-radius: 17px; padding: 14px 16px 13.5px; background: var(--ops-surface); box-shadow: var(--shadow-card); }
 .desktop-agent-compose-attachments { margin-bottom: 4px; padding-bottom: 4px; border-bottom: 1px solid var(--ops-border); }
 .desktop-agent-attachment-list { display: flex; max-width: 100%; flex-wrap: nowrap; gap: 6px; overflow-x: auto; overflow-y: hidden; }
-.desktop-agent-attachment-list > * { flex: 0 0 auto; gap: 6px; padding: 4px; font-size: 11px; }
+.desktop-agent-attachment-list > * { flex: 0 0 auto; gap: 6px; padding: 4px; font-size: 12px; }
 .desktop-agent-attachment-list img { width: 32px; height: 32px; }
 .desktop-agent-compose:focus-within { border-color: var(--ops-accent); }
 .desktop-agent-compose-input { display: block; width: 100%; height: 55px !important; min-height: 55px !important; max-height: 192px; resize: none; border: 0 !important; padding: 2px !important; background: transparent !important; box-shadow: none !important; font-size: 12px; outline: none; }
@@ -574,7 +578,7 @@ html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .d
 .desktop-agent-stop-button { border: 1px solid color-mix(in srgb, var(--ops-accent) 30%, var(--ops-border)) !important; background: color-mix(in srgb, var(--ops-accent) 13%, transparent) !important; color: var(--ops-accent) !important; backdrop-filter: blur(12px) saturate(145%); box-shadow: 0 2px 8px color-mix(in srgb, var(--ops-accent) 12%, transparent); }
 .desktop-agent-stop-button:hover { border-color: color-mix(in srgb, var(--ops-accent) 48%, var(--ops-border)) !important; background: color-mix(in srgb, var(--ops-accent) 21%, transparent) !important; }
 .desktop-agent-stop-button:active { background: color-mix(in srgb, var(--ops-accent) 28%, transparent) !important; }
-.desktop-agent-compose-choice { display: inline-flex; max-width: 190px; align-items: center; gap: 4px; border: 0; border-radius: 7px; padding: 5px 7px; background: transparent; color: var(--ops-muted); cursor: pointer; font: inherit; font-size: 10px; }
+.desktop-agent-compose-choice { display: inline-flex; max-width: 190px; align-items: center; gap: 4px; border: 0; border-radius: 7px; padding: 5px 7px; background: transparent; color: var(--ops-muted); cursor: pointer; font: inherit; font-size: 12px; }
 .desktop-agent-compose-choice:hover { background: var(--ops-subtle); color: var(--ops-text); }
 .desktop-agent-compose-choice:disabled { cursor: not-allowed; opacity: .6; }
 .desktop-agent-model-picker { position: relative; flex: 0 0 auto; }
@@ -583,7 +587,7 @@ html[data-presentation='ops-creative-desktop'] #root .desktop-agent-workspace .d
 .desktop-agent-model-menu button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; border: 0; border-radius: 9px; padding: 8px 10px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .desktop-agent-model-menu button:hover, .desktop-agent-model-menu button:focus-visible { background: var(--ops-subtle); outline: none; }
 .desktop-agent-model-menu button span span, .desktop-agent-model-menu button small { display: block; }
-.desktop-agent-model-menu button small { margin-top: 2px; color: var(--ops-muted); font-size: 11px; }
+.desktop-agent-model-menu button small { margin-top: 2px; color: var(--ops-muted); font-size: 12px; }
 .desktop-agent-model-menu button svg { width: 16px; height: 16px; flex: none; }
 .desktop-agent-compose-choice > svg { width: 12px; height: 12px; flex: 0 0 auto; }
 .desktop-agent-compose-spacer { min-width: 0; flex: 1; }
@@ -616,7 +620,7 @@ html[data-presentation='ops-creative-desktop'] #root nav[aria-label='底部导�
 .desktop-agent-workbench .desktop-agent-chat-settings { min-height: 32px; border: 1px solid var(--ops-border); padding-inline: 9px; color: var(--ops-text); font-size: 12px; }
 .desktop-agent-workbench .desktop-agent-chat-settings:hover,
 .desktop-agent-workbench .desktop-agent-chat-settings[aria-expanded='true'] { border-color: var(--ops-accent); background: var(--ops-accent-soft); color: var(--ops-accent); }
-.desktop-agent-workbench .desktop-agent-chat-stream { display: flex; flex-direction: column; background: #ffffff; padding: 22px 24px 18px !important; }
+.desktop-agent-workbench .desktop-agent-chat-stream { display: flex; flex-direction: column; background: var(--ops-canvas); padding: 22px 24px 18px !important; }
 .desktop-agent-workbench .desktop-agent-message-column { width: 100%; max-width: 880px; padding: 12px 0 20px; }
 .desktop-agent-workbench .desktop-agent-message { margin-bottom: 24px; }
 .desktop-agent-workbench .desktop-agent-message-bubble { color: var(--ops-text); font-size: 14px !important; line-height: 24px !important; }
@@ -725,14 +729,14 @@ html[data-presentation='ops-creative-desktop'] #root nav[aria-label='底部导�
 .desktop-agent-add-menu-list button:disabled { color: var(--ops-muted); cursor: not-allowed; opacity: 0.72; }
 .desktop-agent-add-menu-icon { display: inline-flex; justify-content: center; color: var(--ops-muted); }
 .desktop-agent-add-menu-text { display: grid; min-width: 0; }
-.desktop-agent-add-menu-text small { color: var(--ops-muted); font-size: 11px; line-height: 16px; }
+.desktop-agent-add-menu-text small { color: var(--ops-muted); font-size: 12px; line-height: 16px; }
 .desktop-agent-browser-status { display: grid; gap: 2px; }
 .desktop-agent-browser-status h4 { margin: 0 0 6px; color: var(--ops-text); font-size: 13px; font-weight: 650; }
 .desktop-agent-browser-status p, .desktop-agent-browser-status-note { color: var(--ops-muted); font-size: 12px; line-height: 19px; }
 .desktop-agent-browser-status ol { margin: 8px 0 0; padding-left: 18px; color: var(--ops-text); font-size: 12px; line-height: 20px; }
 .desktop-agent-browser-status ul { margin: 8px 0 0; padding: 0; list-style: none; }
 .desktop-agent-browser-status li { display: grid; gap: 2px; border-bottom: 1px solid var(--ops-border); padding: 8px 0; font-size: 13px; }
-.desktop-agent-browser-status li small { color: var(--ops-muted); font-size: 11px; }
+.desktop-agent-browser-status li small { color: var(--ops-muted); font-size: 12px; }
 /* DEV-AI27-07：工作视图分隔条（27 §5.6 可聚焦、方向键 16px）。 */
 .desktop-agent-panel-resizer { flex: 0 0 6px; cursor: col-resize; background: transparent; border-left: 1px solid transparent; }
 .desktop-agent-panel-resizer:hover, .desktop-agent-panel-resizer:focus-visible { background: var(--ops-accent-soft); outline: none; }

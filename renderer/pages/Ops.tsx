@@ -27,6 +27,7 @@ import {
 } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { errorMessage, get, post, stream } from '@/lib/api'
+import { PublishTaskBoard } from '@/components/publish-task-board'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import type {
   Account,
@@ -995,6 +996,7 @@ export default function Ops() {
         <Button variant="secondary" onClick={() => { setDesktopTab('strategy'); setDesktopStrategyView('current') }}>起号问卷</Button>
         <Button variant="secondary" onClick={() => { setDesktopTab('strategy'); setDesktopStrategyView('history') }}>版本历史</Button>
       </>} />
+      <PublishTaskBoard account={account} />
       {desktopPresentation ? <>
         <div className="desktop-ops-tabs" role="tablist" aria-label="账号运营功能">
           {desktopTabs.map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={desktopTab === value}

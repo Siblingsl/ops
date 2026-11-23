@@ -105,6 +105,10 @@ func run() error {
 	if err := srv.EnsurePermanentAdmin(ctx); err != nil {
 		return err
 	}
+	// REF41 A6/A7：E2E 服务同样回填内置角色/模板，避免新库空目录。
+	if err := srv.SeedWorkspaceBuiltins(ctx); err != nil {
+		return err
+	}
 	// D-160：OPS_E2E_DESKTOP_AI_ENABLED=1 通过一次性种子写入 desktop.ai_enabled；
 	// 运行时闸门只读 DB，仅传 config 字段不会生效。
 	srv.SeedDesktopAIFromConfig(ctx)
@@ -126,12 +130,23 @@ func run() error {
 	defer mockServer.Close()
 	go mockServer.Serve(listener)
 	httpServer := srv.HTTPServer(cfg.Listen)
+	apiMux := http.NewServeMux()
+	// REF41 I1：E2E 专用夹具，只在本测试服务注册；生产 cmd/ops 无此路由。
+	apiMux.Handle("/__e2e/benchmark/seed", benchmarkSeedHandler(pool))
+	apiMux.Handle("/__e2e/benchmark/queue", benchmarkQueueHandler(pool))
+	apiMux.Handle("/__e2e/benchmark/public/profile", benchmarkPublicProfileHandler())
+	apiMux.Handle("/__e2e/benchmark/public/note/e2e-note-1", benchmarkPublicNoteHandler())
+	// REF41 I3：问题簇归并触发，仅测试服务。
+	apiMux.Handle("/__e2e/comment-clusters/recompute", commentClusterRebuildHandler(srv))
+	// REF41 F3：系统任务台账种子，仅测试服务。
+	apiMux.Handle("/__e2e/job-runs/seed", app.SeedJobRunsHandler(srv))
+	// REF41 F4：采集失败样本种子，仅测试服务。
+	apiMux.Handle("/__e2e/parser-events/seed", app.SeedParserEventsHandler(srv))
 	if platformEnabled {
-		mux := http.NewServeMux()
-		mux.Handle("/__e2e/platform/seed", platformFixtureHandler(pool))
-		mux.Handle("/", httpServer.Handler)
-		httpServer.Handler = mux
+		apiMux.Handle("/__e2e/platform/seed", platformFixtureHandler(pool))
 	}
+	apiMux.Handle("/", httpServer.Handler)
+	httpServer.Handler = apiMux
 	return httpServer.ListenAndServe()
 }
 

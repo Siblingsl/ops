@@ -230,6 +230,23 @@ func TestOPT05SSEIsImmediate(t *testing.T) {
 	env.mustJSON(t, "POST", "/api/v1/model-providers", map[string]any{
 		"name": "逐字验收模拟模型", "base_url": model.URL + "/v1", "api_key": "opt05-local-mock-key", "models": []string{"mock-writer"},
 	}, &provider)
+	// default 路由在本用例结束后必须回到 seed 的本地模拟模型：否则组跑时
+	// 后序用例（如 CX 批量评分回退 default）会连到已 Close 的用例模型 → AI invalid。
+	// Cleanup 直接写库恢复：HTTP PUT 有身份校验，用例切过身份后会 422。
+	t.Cleanup(func() {
+		var seeded uuid.UUID
+		if err := env.srv.db.QueryRow(context.Background(),
+			`SELECT id FROM model_provider WHERE workspace_id=(SELECT workspace_id FROM model_provider WHERE id=$1) AND name='本地模拟模型' LIMIT 1`,
+			provider.ID).Scan(&seeded); err != nil {
+			t.Logf("restore default route: seed provider lookup failed: %v", err)
+			return
+		}
+		if _, err := env.srv.db.Exec(context.Background(), `UPDATE model_route
+			SET provider_id=$1, model='mock-writer', fallback_provider_id=NULL, fallback_model=''
+			WHERE task_type='default' AND provider_id=$2`, seeded, provider.ID); err != nil {
+			t.Logf("restore default route: %v", err)
+		}
+	})
 	env.mustJSON(t, "PUT", "/api/v1/model-routes", []map[string]any{
 		{"task_type": "default", "provider_id": provider.ID, "model": "mock-writer"},
 	}, nil)

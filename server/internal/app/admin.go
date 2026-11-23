@@ -92,6 +92,8 @@ func (s *Server) EnsurePermanentAdmin(ctx context.Context) error {
 		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
+		// A6/A7：永久管理员建区同样补齐内置角色/模板，不依赖 dev 模式。
+		s.seedWorkspaceBuiltins(ctx, wsID)
 		if s.cfg != nil && s.cfg.Dev {
 			_ = s.seedDevModelFor(ctx, wsID)
 		}
@@ -495,11 +497,11 @@ func (s *Server) adminGetSystemSettings(w http.ResponseWriter, r *http.Request) 
 	agentFeatures := s.agentWorkbenchFeatures(ctx)
 	return ok(w, map[string]any{
 		"registration_open": reg, "maintenance_mode": maint,
-		"platform_kill_switch": killed,
-		"platform_features":    features,
-		"desktop_ai_enabled":   desktopAI,
-		"desktop_ai_env_blocked": envExplicitFalse("OPS_DESKTOP_AI_ENABLED"),
-		"desktop_platform_auto_adopt": autoAdopt,
+		"platform_kill_switch":                    killed,
+		"platform_features":                       features,
+		"desktop_ai_enabled":                      desktopAI,
+		"desktop_ai_env_blocked":                  envExplicitFalse("OPS_DESKTOP_AI_ENABLED"),
+		"desktop_platform_auto_adopt":             autoAdopt,
 		"desktop_platform_auto_adopt_env_blocked": envExplicitFalse("OPS_DESKTOP_PLATFORM_AUTO_ADOPT"),
 		"platform_process_env_blocked":            envExplicitFalse("OPS_DESKTOP_PLATFORM_ENABLED"),
 		"agent_features":                          agentFeatures,

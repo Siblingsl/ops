@@ -1,4 +1,18 @@
+import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
+
+// Playwright 在 Windows 上用 `taskkill /T /F` 回收 webServer 进程树。
+// 宿主若裁剪过 PATH（例如 Agent 沙箱），cmd 能找到（ComSpec），taskkill 却找不到，
+// 表现为用例结束后 runner 一直等 webServer 退出。显式补回系统目录。
+function ensureWindowsSystemPath() {
+  if (process.platform !== 'win32') return
+  const root = process.env.SystemRoot || 'C:\\Windows'
+  const required = [path.join(root, 'System32'), path.join(root, 'System32', 'Wbem')]
+  const current = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
+  const missing = required.filter((entry) => !current.some((item) => item.toLowerCase() === entry.toLowerCase()))
+  if (missing.length) process.env.PATH = [...missing, ...current].join(path.delimiter)
+}
+ensureWindowsSystemPath()
 
 // 生产打包验收只允许专用本地 Compose；不连接真实部署或复用日常服务。
 const production = process.env.OPS_E2E_PROD === '1'
@@ -23,7 +37,7 @@ export default defineConfig({
     {
       command: 'go run ./cmd/ops-e2e', cwd: '../server', url: 'http://127.0.0.1:8180/healthz',
       env: {
-        OPS_AGENT_WORKBENCH_FEATURES: 'workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines,document_parse,personal_memories',
+        OPS_AGENT_WORKBENCH_FEATURES: 'workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines,agent_roles,document_parse,personal_memories,workflow_templates',
         OPS_E2E_CRAWL_MODE: 'allow',
         OPS_DOCUMENT_PARSER_SOCKETS: process.env.OPS_DOCUMENT_PARSER_SOCKETS ?? '',
       },

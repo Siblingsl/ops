@@ -457,7 +457,7 @@ export function HumanGate({ code, children, className, action }: { code: string;
   )
 }
 
-export function Notice({ tone = 'gray', icon, children, className }: { tone?: 'gray' | 'ink' | 'red' | 'gamboge'; icon?: React.ReactNode; children: React.ReactNode; className?: string }) {
+export function Notice({ tone = 'gray', icon, children, className, ...rest }: { tone?: 'gray' | 'ink' | 'red' | 'gamboge'; icon?: React.ReactNode; children: React.ReactNode; className?: string } & Omit<React.HTMLAttributes<HTMLDivElement>, 'children'>) {
   const t = {
     gray: 'bg-mist-50 border-mist-200 text-mist-600',
     ink: 'bg-ink-50 border-ink-100 text-ink-800',
@@ -465,7 +465,7 @@ export function Notice({ tone = 'gray', icon, children, className }: { tone?: 'g
     gamboge: 'bg-gamboge-50 border-gamboge-200 text-gamboge-700',
   }[tone]
   return (
-    <div className={cn('flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-[13px] leading-relaxed', t, className)}>
+    <div {...rest} className={cn('flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-[13px] leading-relaxed', t, className)}>
       {icon && <span className="mt-0.5 shrink-0">{icon}</span>}
       <div className="min-w-0 flex-1">{children}</div>
     </div>

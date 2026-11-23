@@ -48,6 +48,38 @@ export interface AgentBootstrap {
 
 export type AgentMode = 'discuss' | 'plan' | 'execute'
 
+// REF41 A7：工作流模板（服务端 workflow_template 表；启动只建计划）。
+export interface WorkflowStep {
+  key: string
+  title: string
+  requires?: string[]
+  outputs?: string[]
+  confirm?: boolean
+  tools?: string[]
+}
+
+// REF41 A7：工作流模板（服务端 workflow_template 表；启动只建计划）。
+export interface WorkflowTemplate {
+  id: string
+  name: string
+  description: string
+  steps: WorkflowStep[]
+  status: 'active' | 'disabled'
+  builtin_key: string
+}
+
+// REF41 A6：角色 bot（服务端 agent_role 表；白名单/预算见 docs/41 C 模块）。
+export interface AgentRole {
+  id: string
+  name: string
+  persona: string
+  tool_allowlist: string[]
+  max_rounds: number
+  max_seconds: number
+  status: 'active' | 'disabled'
+  builtin_key: string
+}
+
 export interface AgentConversation {
   id: string
   title: string
@@ -274,6 +306,20 @@ export interface AgentQuestion {
   created_at: string
 }
 
+export interface AgentRunWrapUp {
+  done?: string[]
+  pending?: string[]
+  need_user?: string[]
+  next_actions?: string
+}
+
+export interface AgentRunFinalCheck {
+  claims?: string[]
+  evidence?: number
+  blocked?: string[]
+  wrap_up?: AgentRunWrapUp
+}
+
 export interface AgentActiveRun {
   id: string
   status: 'queued' | 'running' | string
@@ -284,6 +330,13 @@ export interface AgentActiveRun {
   started_at: string
   mode?: AgentMode
   config_snapshot?: { version: number; mode: AgentMode; selected_model: { provider_id: string; model: string }; actual_model?: { provider_id: string; provider_name?: string; model: string; channel: 'server' | 'desktop' } }
+  prompt_tokens?: number
+  completion_tokens?: number
+  cost_micros?: number | null
+  cost_currency?: string
+  outcome?: 'completed' | 'partial' | 'failed' | 'stopped' | 'awaiting_confirmation' | 'awaiting_input' | string
+  demo?: boolean
+  final_check?: AgentRunFinalCheck
 }
 
 export interface AgentConversationDetail {

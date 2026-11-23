@@ -121,6 +121,10 @@ func serve() error {
 	if err := srv.EnsurePermanentAdmin(ctx); err != nil {
 		return fmt.Errorf("初始化永久超级管理员失败：%w", err)
 	}
+	// REF41 A6/A7：内置角色/模板对所有既有工作区回填；不随 cfg.Dev 关闭。
+	if err := srv.SeedWorkspaceBuiltins(ctx); err != nil {
+		slog.Warn("补齐工作区内置角色/模板失败", "err", err)
+	}
 	// D-160：OPS_AGENT_WORKBENCH_FEATURES 逗号列表仅作缺失键种子，之后以超管 DB 为准。
 	srv.SeedAgentFeaturesFromEnv(ctx)
 	// D-160：OPS_DESKTOP_AI_ENABLED=true 同样只作缺失键种子；之后以超管 DB 为准。
@@ -252,4 +256,5 @@ func setAdmin(grant bool) error {
 	}
 	return nil
 }
+
 // CI trigger smoke check on public repository; runtime behavior unchanged.

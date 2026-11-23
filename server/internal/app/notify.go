@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // 通知中心（10 文档第 4.4 节）与个人偏好（EX-K-02、EX-K-03）。
@@ -29,11 +31,22 @@ func (s *Server) notify(ctx context.Context, ws, userID uuid.UUID, kind, title, 
 	if dedupeKey != "" {
 		key = &dedupeKey
 	}
-	if _, err := s.db.Exec(context.WithoutCancel(ctx), `INSERT INTO notification (workspace_id, user_id, kind, title, body, link, dedupe_key)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, ws, userID, kind, truncate(title, 120), truncate(body, 500), link, key); err != nil {
+	var notifID uuid.UUID
+	err := s.db.QueryRow(context.WithoutCancel(ctx), `INSERT INTO notification (workspace_id, user_id, kind, title, body, link, dedupe_key)
+		VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING RETURNING id`,
+		ws, userID, kind, truncate(title, 120), truncate(body, 500), link, key).Scan(&notifID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// 同一 dedupe_key 已存在：站内也不新增，飞书更不重复发。
+		s.pokeNotifications(userID)
+		return
+	}
+	if err != nil {
 		slog.Error("写通知失败", "err", err)
+		return
 	}
 	s.pokeNotifications(userID)
+	// E1：仅首次插入的通知按 kind 映射事件订阅出站。失败不影响站内通知。
+	go s.notifyFeishu(context.WithoutCancel(ctx), ws, kind, title, body, link, dedupeKey)
 }
 
 // notifyWorkspace sends the same notification to every active member (owners first by role filter when set).

@@ -33,6 +33,15 @@ type LLM struct {
 
 	replyMu    sync.Mutex
 	replyQueue []string // DEV-SK2 测试旋钮：按顺序弹出固定回复，空则走常规推导
+	// scopedQueue 按"请求体包含某子串"路由的固定回复：只有匹配请求才消费。
+	// 组跑时后台 goroutine（如上一用例异步 agent run）会与本用例的模型调用
+	// 交错消费全局队列；依赖精确回复数的用例应改用 PushRepliesFor。
+	scopedQueue []scopedReply
+}
+
+type scopedReply struct {
+	needle  string
+	replies []string
 }
 
 // PushReplies 设置按顺序返回的固定回复（各弹出一个，用完恢复常规行为）。
@@ -40,6 +49,38 @@ func (l *LLM) PushReplies(replies ...string) {
 	l.replyMu.Lock()
 	defer l.replyMu.Unlock()
 	l.replyQueue = append(l.replyQueue, replies...)
+}
+
+// ResetReplies 清空固定回复队列。组跑时前序用例 Push 后未消费完的回复会
+// 挤占后序用例的排队回复（共享进程内队列），依赖精确回复数的用例应在开头重置。
+func (l *LLM) ResetReplies() {
+	l.replyMu.Lock()
+	defer l.replyMu.Unlock()
+	l.replyQueue = nil
+}
+
+// PushRepliesFor 注册"仅当请求体包含 needle 时才依次弹出"的固定回复；
+// 不匹配 needle 的请求跳过本条目继续找下一条，或落到全局队列/常规推导。
+// 用于组跑时隔离后台消费者的错位消费。
+func (l *LLM) PushRepliesFor(needle string, replies ...string) {
+	l.replyMu.Lock()
+	defer l.replyMu.Unlock()
+	l.scopedQueue = append(l.scopedQueue, scopedReply{needle: needle, replies: replies})
+}
+
+// popReplyFor 按 needle 匹配弹出一条固定回复；未命中返回 false。
+func (l *LLM) popReplyFor(body string) (string, bool) {
+	l.replyMu.Lock()
+	defer l.replyMu.Unlock()
+	for i, sc := range l.scopedQueue {
+		if len(sc.replies) == 0 || !strings.Contains(body, sc.needle) {
+			continue
+		}
+		reply := sc.replies[0]
+		l.scopedQueue[i].replies = sc.replies[1:]
+		return reply, true
+	}
+	return "", false
 }
 
 // popReply 弹出一个排队回复；没有排队时返回 false。
@@ -244,7 +285,9 @@ func (l *LLM) Handler() http.Handler {
 
 		var reply string
 		var calls []mockToolCall
-		if queued, ok := l.popReply(); ok {
+		if queued, ok := l.popReplyFor(sys + "\n" + user); ok {
+			reply = queued
+		} else if queued, ok := l.popReply(); ok {
 			reply = queued
 		} else {
 			switch {
@@ -464,6 +507,21 @@ func (l *LLM) agentChat(user, lastRole, lastContent string, toolsSent bool, hist
 	if lastRole == "user" && strings.HasPrefix(lastContent, "以下是用户在操作卡片上的处理结果（系统生成，不是用户的话）") {
 		return "我已核对操作结果，当前批次处理完毕。", nil
 	}
+	// A7-N6：计划接受后模拟模型推进首步，供双端 E2E 验证“确认→执行轮启动→首步进行中”。
+	if lastRole == "user" && toolsSent && strings.Contains(lastContent, "<<<已接受计划 id=已接受计划>>>") {
+		if call, ok := acceptedPlanFirstStepCall(lastContent); ok {
+			return "开始执行计划首步。", []mockToolCall{call}
+		}
+	}
+	// TL-06 真实 Electron 旅程夹具：自然语言触发的两个只读子任务。
+	// 仅当本次 run 的目录已暴露 delegate_task（subagents 显式开启）时生效，
+	// 不改变未开启场景下 unknown_tool 的对照结果。
+	if lastRole == "user" && toolsSent && handledCalls == 0 && strings.Contains(user, "并行整理竞品结构与选题角度") {
+		return "我会把任务拆成两个只读子任务并行整理。", []mockToolCall{
+			{Name: "load_tool_domain", Arguments: `{"domain":"subagent"}`},
+			{Name: "delegate_task", Arguments: `{"delegations":[{"task":"整理竞品结构","request_id":"6f1d7f6e-2b1e-4b8e-9a2f-1c3d4e5f6a01","allowed_tools":["global_search","works__list"]},{"task":"整理选题角度","request_id":"6f1d7f6e-2b1e-4b8e-9a2f-1c3d4e5f6a02","allowed_tools":["global_search","topics__list"]}]}`},
+		}
+	}
 	calls, text := parseAgentInstructions(user, handledCalls)
 	if len(calls) > 0 {
 		if noTools {
@@ -478,6 +536,44 @@ func (l *LLM) agentChat(user, lastRole, lastContent string, toolsSent bool, hist
 		return "已读取：" + short(strings.TrimSpace(lastContent), 60), nil
 	}
 	return "我可以帮你查询和整理系统里的内容；需要写入时会先给出操作卡片，由你逐张确认。", nil
+}
+
+// acceptedPlanFirstStepCall 从计划接受提示的数据块中取首步，模拟模型开始执行首步。
+func acceptedPlanFirstStepCall(content string) (mockToolCall, bool) {
+	const marker = "<<<已接受计划 id=已接受计划>>>"
+	index := strings.Index(content, marker)
+	if index < 0 {
+		return mockToolCall{}, false
+	}
+	rest := content[index+len(marker):]
+	if newline := strings.Index(rest, "\n"); newline >= 0 {
+		rest = rest[newline+1:]
+	}
+	if end := strings.Index(rest, "\n<<<结束>>>"); end >= 0 {
+		rest = rest[:end]
+	}
+	var plan struct {
+		PlanID  string `json:"plan_id"`
+		Version int64  `json:"version"`
+		Steps   []struct {
+			ID  string `json:"id"`
+			Key string `json:"key"`
+		} `json:"steps"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(rest)), &plan) != nil || plan.PlanID == "" || plan.Version < 1 || len(plan.Steps) == 0 {
+		return mockToolCall{}, false
+	}
+	stepID := strings.TrimSpace(plan.Steps[0].ID)
+	if stepID == "" {
+		stepID = strings.TrimSpace(plan.Steps[0].Key)
+	}
+	if stepID == "" {
+		return mockToolCall{}, false
+	}
+	return mockToolCall{Name: "update_plan_step", Arguments: fmt.Sprintf(
+		`{"plan_id":%q,"expected_version":%d,"step_id":%q,"status":"in_progress"}`,
+		plan.PlanID, plan.Version, stepID,
+	)}, true
 }
 
 var taskRe = regexp.MustCompile(`任务：([a-z_]+)`)
@@ -839,6 +935,34 @@ func (l *LLM) respond(prompt string) string {
 		return cxRewriteCompare(prompt)
 	case "cx_structure_extract":
 		return cxStructureExtract(prompt)
+	case "benchmark_decompose":
+		return benchmarkDecompose(prompt)
+	case "panel_review":
+		// C1 智囊团：按席位输出固定结构。席位从提示的「你是「X」席位」行读取；
+		// 同行专家与品牌方给一条相同风险以触发汇总并列；mock 输出固定不编造数据。
+		audience := ""
+		if m := regexp.MustCompile(`你是「([^」]+)」席位`).FindStringSubmatch(prompt); len(m) > 1 {
+			audience = m[1]
+		}
+		risks := []string{"标题缺少具体对象，读者不知道写给谁"}
+		if audience == "同行专家" || audience == "品牌方" {
+			risks = []string{"正文引用的经验缺少来源说明"}
+		}
+		verdict := "内容方向清晰，主题匹配账号定位"
+		if audience == "新手读者" {
+			verdict = "部分术语偏多，新手理解有门槛"
+		}
+		suggestions := []string{"开头补一个具体场景"}
+		if audience == "平台运营" {
+			suggestions = []string{"开头补一个具体场景", "结尾增加互动引导"}
+		}
+		return js(map[string]any{
+			"verdict":     verdict,
+			"strengths":   []string{"主题与账号定位一致"},
+			"risks":       risks,
+			"questions":   []string{"目标读者读完能立即做什么？"},
+			"suggestions": suggestions,
+		})
 	case "cx_profile_simulate":
 		return js(map[string]any{
 			"status":     "pass",
@@ -1268,6 +1392,25 @@ func cxRewriteCompare(prompt string) string {
 	})
 }
 
+// benchmarkDecompose 是 I2 的本地 mock：结构化输出，不读取正文、不编造指标。
+func benchmarkDecompose(prompt string) string {
+	if strings.Contains(prompt, "#invalid-json") {
+		return "这不是 JSON"
+	}
+	confidence := 0.76
+	if strings.Contains(prompt, "指标快照：{}") || strings.Contains(prompt, "指标快照：null") {
+		confidence = 0.42
+	}
+	return js(map[string]any{
+		"hook":           "先用一个具体问题把读者带进场景",
+		"structure":      []string{"开头提出读者正在遇到的问题", "中段拆成三步可执行做法", "结尾用一个可验证的结果收束"},
+		"rhythm":         "短段落推进，先问题后方法，每段只讲一个动作",
+		"takeaways":      []string{"先给判断再给理由", "把抽象方法拆成可执行步骤"},
+		"not_borrowable": []string{"不复制原文的案例细节", "不借用原文的夸张结果承诺"},
+		"confidence":     confidence,
+	})
+}
+
 // cxStructureExtract fakes a structure teardown: roles and short gists derived from the
 // reference headings so the no-copy validator sees paraphrase-shaped output, not source sentences.
 // 正文首行含 #copy-echo 测试指令时直接抄原句，用于驱动服务端反复制 422 的界面旅程。
@@ -1328,11 +1471,11 @@ func cxStructureExtract(prompt string) string {
 		sections = append(sections, map[string]any{"role": "method", "gist": "结构要点：按步骤说明做法"})
 	}
 	return js(map[string]any{
-		"hook_type": "question",
-		"hook_gist": "结构要点：以提问开场引出方法",
-		"sections":  sections,
-		"cta_type":  "follow",
-		"rhythm":    map[string]any{"paragraphs": len(sections) + 1, "avg_chars": 120},
+		"hook_type":      "question",
+		"hook_gist":      "结构要点：以提问开场引出方法",
+		"sections":       sections,
+		"cta_type":       "follow",
+		"rhythm":         map[string]any{"paragraphs": len(sections) + 1, "avg_chars": 120},
 		"borrowable":     []string{"结构要点：先立冲突再给步骤的做法"},
 		"not_borrowable": []string{"结构要点：未验证的数据引用方式"},
 	})

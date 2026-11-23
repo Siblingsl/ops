@@ -27,6 +27,7 @@ import {
 } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { errorMessage, get, post, stream } from '@/lib/api'
+import { PublishTaskBoard } from '@/components/publish-task-board'
 import { useCanWrite, useCurrentAccount, useInvalidate } from '@/lib/session'
 import type {
   Account,
@@ -920,6 +921,7 @@ export default function Ops() {
   return (
     <div className="animate-fade-in space-y-6">
       <PageHeader title="账号运营" desc="让定位、内容节奏与每天的创作连接起来。" />
+      <PublishTaskBoard account={account} />
       <div id="strategy" className="scroll-mt-24"><StrategyPanel key={`strategy-${account.id}`} account={account} /></div>
       <DailyStatsCard key={`warnings-${account.id}`} accountId={account.id} warningsOnly />
       <PlanPanel key={`plan-${account.id}`} account={account} />

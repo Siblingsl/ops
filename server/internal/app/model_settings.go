@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -36,6 +37,11 @@ type Provider struct {
 	LastTestResult string     `json:"last_test_result"`
 	PricePrompt    *float64   `json:"price_per_1k_prompt"`
 	PriceComplete  *float64   `json:"price_per_1k_completion"`
+	// A8：智能体成本使用的微分/千 token 价格。旧字段保留用于兼容既有页面/历史数据。
+	InputPriceMicros  *int64     `json:"input_price_micros_per_1k"`
+	OutputPriceMicros *int64     `json:"output_price_micros_per_1k"`
+	PriceCurrency     string     `json:"price_currency"`
+	PriceUpdatedAt    *time.Time `json:"price_updated_at"`
 	// ContextWindowTokens 由用户按厂商文档显式登记；NULL 表示未登记、不做发送前预算检查。
 	ContextWindowTokens *int   `json:"context_window_tokens"`
 	CircuitState        string `json:"circuit_state"`
@@ -45,13 +51,16 @@ type Provider struct {
 }
 
 const providerCols = `id, name, base_url, api_key_enc, models, status, last_test_at, last_test_ok, last_test_result,
-	price_per_1k_prompt::float8, price_per_1k_completion::float8, context_window_tokens`
+	price_per_1k_prompt::float8, price_per_1k_completion::float8,
+	input_price_micros_per_1k, output_price_micros_per_1k, price_currency, price_updated_at,
+	context_window_tokens`
 
 func (s *Server) scanProvider(row pgx.Row) (*Provider, error) {
 	var p Provider
 	var enc []byte
 	if err := row.Scan(&p.ID, &p.Name, &p.BaseURL, &enc, &p.Models, &p.Status, &p.LastTestAt, &p.LastTestOK, &p.LastTestResult,
-		&p.PricePrompt, &p.PriceComplete, &p.ContextWindowTokens); err != nil {
+		&p.PricePrompt, &p.PriceComplete, &p.InputPriceMicros, &p.OutputPriceMicros, &p.PriceCurrency, &p.PriceUpdatedAt,
+		&p.ContextWindowTokens); err != nil {
 		return nil, err
 	}
 	if key, err := s.box.Decrypt(enc); err == nil {
@@ -127,6 +136,10 @@ type providerInput struct {
 	// Prices are optional; a negative value clears the price.
 	PricePrompt   *float64 `json:"price_per_1k_prompt"`
 	PriceComplete *float64 `json:"price_per_1k_completion"`
+	// A8 价格（微分/千 token）。优先于旧“元/千 token”字段；负值视为清除。
+	InputPriceMicros  *int64  `json:"input_price_micros_per_1k"`
+	OutputPriceMicros *int64  `json:"output_price_micros_per_1k"`
+	PriceCurrency     *string `json:"price_currency"`
 	// ContextWindowTokens 登记模型上下文窗口（token）；未提供则保持原值，不做发送前预算检查。
 	ContextWindowTokens *int `json:"context_window_tokens"`
 	// Assign maps a quick-setup role (route task type) to one of Models; only empty routes are written (DEV-UX01).
@@ -141,6 +154,50 @@ func priceArg(p *float64) any {
 		return nil
 	}
 	return *p
+}
+
+func cleanPriceMicros(p *int64) *int64 {
+	if p == nil || *p < 0 {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func priceMicrosArg(p *int64) any {
+	if v := cleanPriceMicros(p); v != nil {
+		return *v
+	}
+	return nil
+}
+
+// legacyPriceFromMicros 把新价格同步回旧“元/千 token”列：页面兼容旧字段，
+// 也避免旧 /usage 聚合完全失去数据。nil 表示清除。
+func legacyPriceFromMicros(p *int64) any {
+	if p == nil || *p < 0 {
+		return nil
+	}
+	return float64(*p) / 1000000
+}
+
+func microsFromLegacy(p *float64) *int64 {
+	if p == nil || *p < 0 {
+		return nil
+	}
+	v := int64(math.Round(*p * 1000000))
+	return &v
+}
+
+func validPriceCurrency(currency string) bool {
+	if len(currency) != 3 {
+		return false
+	}
+	for _, c := range currency {
+		if c < 'A' || c > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 // contextWindowArg：负值或 0 视为清除登记；有效下限 1024 由列 CHECK 兜底。
@@ -170,6 +227,13 @@ func (in *providerInput) validate(create bool) error {
 	}
 	if in.Status != nil && *in.Status != "active" && *in.Status != "disabled" {
 		return validation("状态不正确")
+	}
+	if in.PriceCurrency != nil {
+		curr := normalizePriceCurrency(*in.PriceCurrency)
+		if !validPriceCurrency(curr) {
+			return validation("币种需要是 3 位大写代码，例如 CNY 或 USD")
+		}
+		*in.PriceCurrency = curr
 	}
 	if len(in.Assign) > 0 && !create {
 		return validation("只能在添加供应商时一并指定用途")
@@ -217,11 +281,39 @@ func (s *Server) createProvider(w http.ResponseWriter, r *http.Request) error {
 	ws := ident(ctx).WorkspaceID
 	var p *Provider
 	assigned, kept := []string{}, []string{}
+	inputMicros := cleanPriceMicros(in.InputPriceMicros)
+	if in.InputPriceMicros == nil {
+		inputMicros = microsFromLegacy(in.PricePrompt)
+	}
+	outputMicros := cleanPriceMicros(in.OutputPriceMicros)
+	if in.OutputPriceMicros == nil {
+		outputMicros = microsFromLegacy(in.PriceComplete)
+	}
+	legacyInput := priceArg(in.PricePrompt)
+	legacyOutput := priceArg(in.PriceComplete)
+	if inputMicros != nil {
+		legacyInput = legacyPriceFromMicros(inputMicros)
+	}
+	if outputMicros != nil {
+		legacyOutput = legacyPriceFromMicros(outputMicros)
+	}
+	currency := "CNY"
+	if in.PriceCurrency != nil {
+		currency = normalizePriceCurrency(*in.PriceCurrency)
+	}
+	var priceUpdatedAt any
+	if inputMicros != nil || outputMicros != nil {
+		priceUpdatedAt = s.now()
+	}
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		p, err = s.scanProvider(tx.QueryRow(ctx, `INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models,
-			price_per_1k_prompt, price_per_1k_completion, context_window_tokens) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING `+providerCols,
-			ws, strings.TrimSpace(*in.Name), *in.BaseURL, enc, s.box.Version, cleanList(in.Models), priceArg(in.PricePrompt), priceArg(in.PriceComplete), contextWindowArg(in.ContextWindowTokens)))
+			price_per_1k_prompt, price_per_1k_completion, input_price_micros_per_1k, output_price_micros_per_1k,
+			price_currency, price_updated_at, context_window_tokens)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING `+providerCols,
+			ws, strings.TrimSpace(*in.Name), *in.BaseURL, enc, s.box.Version, cleanList(in.Models),
+			legacyInput, legacyOutput, priceMicrosArg(inputMicros), priceMicrosArg(outputMicros),
+			currency, priceUpdatedAt, contextWindowArg(in.ContextWindowTokens)))
 		if err != nil {
 			return err
 		}
@@ -362,13 +454,42 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) error {
 				return err
 			}
 		}
-		if in.PricePrompt != nil {
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET price_per_1k_prompt=$2 WHERE id=$1 AND workspace_id=$3 AND execution_location='server'`, id, priceArg(in.PricePrompt), ws); err != nil {
+		if in.PricePrompt != nil || in.InputPriceMicros != nil {
+			inputMicros := cleanPriceMicros(in.InputPriceMicros)
+			if in.InputPriceMicros == nil {
+				inputMicros = microsFromLegacy(in.PricePrompt)
+			}
+			legacyInput := priceArg(in.PricePrompt)
+			if in.InputPriceMicros != nil {
+				legacyInput = legacyPriceFromMicros(inputMicros)
+			}
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET price_per_1k_prompt=$2,
+				input_price_micros_per_1k=$3, price_updated_at=now()
+				WHERE id=$1 AND workspace_id=$4 AND execution_location='server'`,
+				id, legacyInput, priceMicrosArg(inputMicros), ws); err != nil {
 				return err
 			}
 		}
-		if in.PriceComplete != nil {
-			if _, err := tx.Exec(ctx, `UPDATE model_provider SET price_per_1k_completion=$2 WHERE id=$1 AND workspace_id=$3 AND execution_location='server'`, id, priceArg(in.PriceComplete), ws); err != nil {
+		if in.PriceComplete != nil || in.OutputPriceMicros != nil {
+			outputMicros := cleanPriceMicros(in.OutputPriceMicros)
+			if in.OutputPriceMicros == nil {
+				outputMicros = microsFromLegacy(in.PriceComplete)
+			}
+			legacyOutput := priceArg(in.PriceComplete)
+			if in.OutputPriceMicros != nil {
+				legacyOutput = legacyPriceFromMicros(outputMicros)
+			}
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET price_per_1k_completion=$2,
+				output_price_micros_per_1k=$3, price_updated_at=now()
+				WHERE id=$1 AND workspace_id=$4 AND execution_location='server'`,
+				id, legacyOutput, priceMicrosArg(outputMicros), ws); err != nil {
+				return err
+			}
+		}
+		if in.PriceCurrency != nil {
+			if _, err := tx.Exec(ctx, `UPDATE model_provider SET price_currency=$2
+				WHERE id=$1 AND workspace_id=$3 AND execution_location='server'`,
+				id, normalizePriceCurrency(*in.PriceCurrency), ws); err != nil {
 				return err
 			}
 		}
@@ -510,6 +631,7 @@ var taskTypes = []struct{ Type, Label string }{
 	{"cx_visual_plan", "社交组图计划"},
 	{"cx_profile_simulate", "主页三秒印象模拟"},
 	{"cx_structure_extract", "结构拆解"},
+	{"benchmark_decompose", "竞对拆解"},
 	{"cx_rewrite_compare", "改写度比对"},
 	{"cx_comment_reply", "评论回复拟稿"},
 	{"hot_relevance", "热点相关度"},

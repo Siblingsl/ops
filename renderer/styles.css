@@ -174,6 +174,12 @@ mark.hl.hl-active { background: var(--color-gamboge-300); box-shadow: 0 0 0 2px 
 .agent-markdown th, .agent-markdown td { border: 1px solid #e5e9e7; padding: 0.35rem 0.55rem; text-align: left; }
 .agent-markdown th { background: #f5f7f5; font-weight: 600; }
 
+/* 热榜排名图：pathLength=1，入场或新采样点到达时用 dashoffset 从 1 描到 0；减少动效由上方全局规则处理。 */
+.trend-rank-line { stroke-dasharray: 1; stroke-dashoffset: 0; animation: trend-line-draw 900ms cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+@keyframes trend-line-draw { from { stroke-dashoffset: 1; } }
+.trend-rank-dot { transform-box: fill-box; transform-origin: center; animation: trend-dot-in 420ms cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+@keyframes trend-dot-in { from { opacity: 0; transform: scale(0.35); } }
+
 .inbox-panel { container-type: inline-size; }
 @container (min-width: 640px) {
   .inbox-panel-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }

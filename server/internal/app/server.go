@@ -55,12 +55,23 @@ type Server struct {
 	presenceMu sync.Mutex
 	presence   map[uuid.UUID]map[uuid.UUID]presenceEntry
 
+	// I7 回传限流：每个 ingest token 60 次/分钟，进程内足够；多实例部署时由网关再限一次。
+	conversionRateMu sync.Mutex
+	conversionRate   map[uuid.UUID][]time.Time
+
+	// E1 ChatOps 回复限流：每 bot + chat 10 条/分钟，进程内；多实例由网关再限一次。
+	feishuRateMu sync.Mutex
+	feishuRate   map[string][]time.Time
+
 	// lastPacks keeps the latest context per workspace/task in memory only, for saving prompt regression cases.
 	lastPacks sync.Map
 	// contextPacks：BE-05 账号依据片段短 TTL 缓存（与 lastPacks 分离）。
 	contextPacks *contextPackCache
 	crawlMu      sync.Mutex
 	crawler      *crawl.Client
+
+	// REF41 P8：生产 API runner 使用的执行器注册表（默认注册公众号 API）。
+	publishExecutors *PublishExecutorRegistry
 
 	// handler 缓存首次构建的根路由（16 文档第 2.3 节「身份」第 1 项）。
 	handlerOnce sync.Once
@@ -111,8 +122,11 @@ func New(cfg *config.Config, pool *pgxpool.Pool) (*Server, error) {
 		agentRunCancels:            map[uuid.UUID]context.CancelFunc{},
 		notifySubs:                 map[uuid.UUID][]chan struct{}{},
 		presence:                   map[uuid.UUID]map[uuid.UUID]presenceEntry{},
+		conversionRate:             map[uuid.UUID][]time.Time{},
+		feishuRate:                 map[string][]time.Time{},
 	}
 	s.contextPacks = newContextPackCache(s.now)
+	s.publishExecutors = DefaultPublishExecutorRegistry(s.wx)
 	s.bindRuntimeGates()
 	return s, nil
 }
@@ -179,6 +193,8 @@ func (s *Server) buildRouter() http.Handler {
 		r.Post("/auth/login", s.h(s.authLogin))
 		r.Get("/public-previews/{token}", s.h(s.getPublicPreview))
 		r.Get("/public-previews/{token}/assets/{assetId}", s.h(s.getPublicPreviewAsset))
+		r.Post("/public/conversion/{code}", s.h(s.publicConversion))
+		r.Post("/public/feishu/{bot_id}", s.h(s.postFeishuInbound))
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.desktopRequestContext)
@@ -194,6 +210,9 @@ func (s *Server) buildRouter() http.Handler {
 			r.Post("/auth/renew", s.h(s.authRenewSession))
 			r.Put("/auth/password", s.h(s.authChangePassword))
 			r.Get("/system/info", s.h(s.systemInfo))
+			r.Get("/conversion-ingest-tokens", s.h(s.listConversionTokens))
+			r.Post("/conversion-ingest-tokens", s.h(s.createConversionToken))
+			r.Delete("/conversion-ingest-tokens/{id}", s.h(s.revokeConversionToken))
 
 			s.registerDesktopRoutes(r)
 
@@ -280,7 +299,12 @@ func (s *Server) buildRouter() http.Handler {
 			r.Post("/accounts/{accountId}/metrics/screenshots", s.h(s.recognizeMetricScreenshots))
 			r.Post("/metrics/screenshots/{id}/rows/{idx}/confirm", s.h(s.confirmMetricScreenshotRow))
 			r.Get("/accounts/{accountId}/followers", s.h(s.listFollowers))
+			r.Get("/accounts/{accountId}/followers/summary", s.h(s.followerSummary))
+			r.Get("/accounts/{accountId}/followers/coverage", s.h(s.followerCoverage))
 			r.Post("/accounts/{accountId}/followers", s.h(s.recordFollowers))
+			r.Post("/accounts/{accountId}/followers/backfill", s.h(s.backfillFollowers))
+			r.Post("/accounts/{accountId}/followers/import", s.h(s.importFollowers))
+			r.Get("/accounts/{accountId}/conversions", s.h(s.listConversions))
 
 			r.Get("/accounts/{accountId}/topics", s.h(s.listTopics))
 			r.Post("/accounts/{accountId}/topics", s.h(s.createTopic))
@@ -288,6 +312,9 @@ func (s *Server) buildRouter() http.Handler {
 			r.Post("/accounts/{accountId}/topics/hot-suggest", s.h(s.suggestHotTopics))
 			r.Post("/topics/{id}/diagnose", s.h(s.diagnoseTopic))
 			r.Get("/topics/{id}/diagnoses", s.h(s.listTopicDiagnoses))
+			r.Get("/topics/{id}/score", s.h(s.getTopicScore))
+			r.Post("/topics/{id}/score", s.h(s.scoreTopicSix))
+			r.Post("/topics/score-batch", s.h(s.scoreTopicsSixBatch))
 			r.Patch("/topics/{id}", s.h(s.updateTopic))
 			r.Delete("/topics/{id}", s.h(s.deleteTopic))
 			r.Post("/topics/{id}/works", s.h(s.startWorkFromTopic))
@@ -355,6 +382,12 @@ func (s *Server) buildRouter() http.Handler {
 			s.registerPlatformRoutes(r)
 			r.Get("/works/{id}/metrics", s.h(s.listMetrics))
 			r.Get("/works/{id}/metrics/windows", s.h(s.getCXReviewMetricWindows))
+			// REF41 I5：同一账号/平台/形态最近 5 篇的同节点中位数，只读。
+			r.Get("/works/{id}/peer-compare", s.h(s.peerCompare))
+			r.Get("/works/{id}/conversion-links", s.h(s.listConversionLinks))
+			r.Post("/works/{id}/conversion-links", s.h(s.createConversionLink))
+			r.Put("/works/{id}/conversion-links/{linkId}", s.h(s.updateConversionLink))
+			r.Post("/conversion-links/{id}/manual-event", s.h(s.createManualConversionEvent))
 			r.Post("/works/{id}/metrics", s.h(s.createMetric))
 			r.Patch("/metrics/{id}", s.h(s.updateMetric))
 			r.Delete("/metrics/{id}", s.h(s.deleteMetric))
@@ -382,6 +415,7 @@ func (s *Server) buildRouter() http.Handler {
 			r.Get("/ai/status", s.h(s.aiStatus))
 			r.Put("/model-routes", s.h(s.putRoutes))
 			r.Get("/usage", s.h(s.usage))
+			r.Get("/usage/agent-cost", s.h(s.agentCostUsage))
 			r.Get("/settings", s.h(s.getSettings))
 			r.Put("/settings", s.h(s.putSettings))
 			r.Get("/sensitive-words", s.h(s.listWords))
@@ -399,6 +433,12 @@ func (s *Server) buildRouter() http.Handler {
 			s.v4Routes(r)
 			s.registerAgentRoutes(r)
 			s.registerSkillsRoutes(r)
+			s.registerFeishuRoutes(r)
+			r.Get("/parser-events/diagnostics", s.h(s.parserDiagnostics))
+			r.Post("/parser-recipes/{id}/verify", s.h(s.verifyParserRecipe))
+			r.Post("/parser-recipes/{id}/activate", s.h(s.activateParserRecipe))
+			r.Get("/job-runs", s.h(s.listJobRuns))
+			r.Post("/job-runs/run-now", s.h(s.runJobNow))
 			r.Put("/admin/crawl/platforms/{platform}", s.h(s.adminPutPlatform))
 		})
 	})
@@ -417,6 +457,11 @@ func (s *Server) v3Routes(r chi.Router) {
 	r.Get("/accounts/{accountId}/memories", s.h(s.listMemories))
 	r.Post("/accounts/{accountId}/memories", s.h(s.createMemory))
 	r.Post("/accounts/{accountId}/memories/distill", s.h(s.startDistill))
+	// REF41 A4：确认仍有效 / 停用 / 恢复 / 注入预览（硬闸在服务端）。
+	r.Post("/accounts/{accountId}/memories/{memoryId}/verify", s.h(s.memoryVerifyHandler))
+	r.Post("/accounts/{accountId}/memories/{memoryId}/disable", s.h(s.memoryDisableHandler))
+	r.Post("/accounts/{accountId}/memories/{memoryId}/enable", s.h(s.memoryEnableHandler))
+	r.Get("/accounts/{accountId}/memories/injection-preview", s.h(s.memoryInjectionPreviewHandler))
 	r.Patch("/memories/{id}", s.h(s.patchMemory))
 	r.Delete("/memories/{id}", s.h(s.deleteMemory))
 	r.Get("/ai-jobs", s.h(s.listJobs))
@@ -517,6 +562,11 @@ func (s *Server) v3Routes(r chi.Router) {
 	r.Get("/benchmarks/{benchmarkId}/notes", s.h(s.listBenchmarkNotes))
 	r.Post("/benchmarks/{benchmarkId}/notes", s.h(s.createBenchmarkNote))
 	r.Get("/benchmark-notes/{noteId}", s.h(s.getBenchmarkNote))
+	// REF41 I2：竞对作品半自动拆解。AI 只写 decompose_draft；确认才写 structure；批量只创建草稿，不批量确认。
+	r.Post("/benchmark/notes/{id}/decompose", s.h(s.decomposeBenchmarkNote))
+	r.Post("/benchmark/notes/{id}/decompose/confirm", s.h(s.confirmBenchmarkDecompose))
+	r.Post("/benchmark/notes/{id}/decompose/discard", s.h(s.discardBenchmarkDecompose))
+	r.Post("/benchmark/decompose-batch", s.h(s.batchBenchmarkDecompose))
 	// DEV-CX12 / FR-CX-14 结构拆解：临时参考正文只在本请求内存中处理，不落库。
 	r.Post("/accounts/{accountId}/structure-extract", s.h(s.extractStructure))
 	// DEV-CX12 / FR-CX-15 改写度检查：临时参考正文只在本请求内存中处理。
@@ -534,6 +584,12 @@ func (s *Server) v3Routes(r chi.Router) {
 	r.Post("/comment-inbox/{commentId}/confirm-sent", s.h(s.confirmSentComment))
 	r.Get("/comment-inbox/{commentId}/topic-preview", s.h(s.commentTopicPreview))
 	r.Post("/comment-inbox/{commentId}/convert-topic", s.h(s.convertCommentToTopic))
+	// REF41 I3：问题簇与读者关注点。簇转选题一次只处理一个，不提供批量入口。
+	r.Get("/accounts/{accountId}/comment-clusters", s.h(s.listCommentClusters))
+	r.Post("/comment-clusters/{clusterId}/convert", s.h(s.convertCommentCluster))
+	r.Post("/comment-clusters/{clusterId}/ignore", s.h(s.ignoreCommentCluster))
+	r.Post("/comment-clusters/{clusterId}/reopen", s.h(s.reopenCommentCluster))
+	r.Get("/accounts/{accountId}/reader-terms", s.h(s.listReaderTerms))
 	// DEV-CX13-F / FR-CX-23 运营标准：effective 字面路由先于 {version} 变量路由。
 	r.Get("/accounts/{accountId}/standards/effective", s.h(s.effectiveStandard))
 	r.Get("/accounts/{accountId}/standards", s.h(s.listStandards))

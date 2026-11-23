@@ -33,6 +33,13 @@ const AGENT_FEATURE_LABELS: { name: AgentWorkbenchFeatureName; label: string; hi
   { name: 'voice_dictation', label: '语音转写', hint: '录音→ASR 转写→可编辑终稿；需在模型设置里配好 asr 路由', reason: '需在模型设置配置 asr 路由并提供真实 Key' },
   { name: 'voice_realtime', label: '实时语音', hint: '实时双向会话；桥已编码，开关默认关闭，需真实 Key 验收后方可宣称交付' },
   { name: 'computer_use', label: '电脑控制', hint: 'Windows 应用选窗授权、UIA 动作与硬禁区' },
+  // D-190：P2 六项与 G-02 获准开工；三项新能力默认关闭，逐项开启。
+  { name: 'operations_directory', label: '运营目录', hint: '480 宽只读目录；作品/选题/素材/图片/日历插入引用', reason: '依赖工作台 UI 与上下文引用' },
+  { name: 'side_chat', label: '旁问', hint: '不污染主对话的旁支问答；继承只读上下文与独立预算', reason: '依赖工作台 UI 与运行控制' },
+  { name: 'today_ops', label: '今日运营完整版', hint: '6 个只读区块，每块最多 3 条+跳转；不做写操作面板', reason: '依赖工作台 UI；完整版仅作只读聚合' },
+  // REF41 A6/A7：角色 bot 与工作流模板（默认开；服务端数据面已核验）。
+  { name: 'agent_roles', label: '角色 bot', hint: '对话设置里的执行角色选择；白名单与预算取小' },
+  { name: 'workflow_templates', label: '工作流模板', hint: '内置三模板启动只建计划，逐步确认执行' },
 ]
 
 // CF-GATE-03（D-187 P3）：B 档「前往设置」跳转目标；未列出的 B 档项留在本页开启即可。

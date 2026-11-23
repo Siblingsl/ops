@@ -1,0 +1,1977 @@
+{
+  "schema": "g02-structure-baseline@1",
+  "baseline_commit": "3e8be0c1a6f9c5eaaddcc7532dedf7ab935b89fa",
+  "generated_from": "3e8be0c1 与 2026-11-17 最终工作树（FN-11 收口后；00115 为显式外部例外）",
+  "scope": {
+    "routes": "server/internal/app/agent.go 中以 /agent 开头的 method+path",
+    "migrations": "server/internal/db/migrations/*.sql 全量清单",
+    "shell": "renderer/layout/Shell.tsx 的 nav/desktopNavGroups/mobileNav/mobileMoreGroups",
+    "flags": "server/internal/app/agent_workbench.go 的 agentWorkbenchFeatureNames 与 agentFeatureDefaultOn"
+  },
+  "baseline": {
+    "routes": [
+      {
+        "method": "POST",
+        "path": "/agent/actions/{id}/execute"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/actions/{id}/reject"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/artifacts/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/artifacts/{id}/file"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/artifacts/{id}/versions"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/attachments"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/attachments/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/attachments/{id}/file"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/bootstrap"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/annotations"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/annotations"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/bindings"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/browser/bindings/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/capabilities"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/commands"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/commands"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/commands/{id}/dispatch"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/commands/{id}/receipt"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/commands/pending"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/evidence"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/evidence"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/browser/grants/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/grants/{id}/handoff"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/pairings"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/pairings/{id}/confirm"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/computer-grants"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/computer-grants/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/computer-grants/{id}/handoff"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/computer/capabilities"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/computer/commands"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/computer/commands"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/computer/commands/{id}/dispatch"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/computer/commands/{id}/receipt"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/computer/commands/pending"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/computer/grants/{id}/device-ack"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/context-candidates"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/context-preview"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversation-groups"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversation-groups"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/conversation-groups/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/conversation-groups/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/conversations/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/conversations/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/artifacts"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/browser-grants"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/compact"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/compact-preview"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/computer-grants"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/continue"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/delegation-groups"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/delegation-groups"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/events"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/fork"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/conversations/{id}/goal"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/goal"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/inputs"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/inputs/resume"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/memory-usage"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/messages"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/messages/{messageId}/edit"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/read"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/regenerate"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/search"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/voice-sessions"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/delegation-groups/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/delegation-groups/{id}/adopt"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/delegation-groups/{id}/budget"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/delegation-groups/{id}/cancel"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/delegations/{id}/cancel"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/delegations/{id}/result"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/goals/{id}/confirm-criterion"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/goals/{id}/control"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/inputs/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/inputs/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/memory-settings"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/memory-settings"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/personal-memories"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/personal-memories"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/personal-memories/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/personal-memories/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plans/{id}/accept"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plugin-calls"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plugin-calls/{id}/claim"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plugin-calls/{id}/receipt"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/plugin-calls/pending"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/plugin-connections"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plugin-connections"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/plugin-connections/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plugin-connections/{id}/actions"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/questions/{id}/answer"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/routines"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/routines"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/routines/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/routines/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/routines/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/routines/{id}/control"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/routines/{id}/occurrences"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/runs/{id}/cancel"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/runs/{id}/delegations"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/settings"
+      },
+      {
+        "method": "PUT",
+        "path": "/agent/settings"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/voice-sessions/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/voice-sessions/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/voice-sessions/{id}/realtime-token"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/voice-sessions/{id}/realtime-ws"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/voice-sessions/{id}/turns"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/voice-sessions/{id}/turns/{turnId}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/voice-sessions/{id}/turns/{turnId}/synthesize"
+      }
+    ],
+    "migrations": [
+      "00001_init.sql",
+      "00002_multi_tenant.sql",
+      "00003_r4_p1.sql",
+      "00004_v2_collab.sql",
+      "00005_system_admin.sql",
+      "00006_permanent_admin.sql",
+      "00007_v3.sql",
+      "00008_v3_fill.sql",
+      "00009_v3_metrics.sql",
+      "00010_title_favorites.sql",
+      "00011_v4_ops.sql",
+      "00012_v4_hot.sql",
+      "00013_hot_embedding.sql",
+      "00014_v4_platform.sql",
+      "00015_v4_references.sql",
+      "00016_v4_daily.sql",
+      "00017_v4_hot_trends.sql",
+      "00018_v4_hot_summary.sql",
+      "00019_v4_reference_links.sql",
+      "00020_d048_types.sql",
+      "00021_a102_data_prefs.sql",
+      "00022_a106_daily_brief.sql",
+      "00023_a104_copilot_suggestions.sql",
+      "00024_dr01_metric_quality.sql",
+      "00025_dr02_metric_d7.sql",
+      "00026_dr03_datacube.sql",
+      "00027_dr04_metric_node.sql",
+      "00028_dr05_metric_upload.sql",
+      "00029_dr06_wechat_auto.sql",
+      "00030_dr08_review_draft.sql",
+      "00031_dr09_account_metric_daily.sql",
+      "00032_opt12_query_indexes.sql",
+      "00033_opt36_work_tags.sql",
+      "00034_opt39_asset_alt_text.sql",
+      "00035_opt11_retention.sql",
+      "00036_opt48_feedback_samples.sql",
+      "00037_agent_model_capability.sql",
+      "00038_agent.sql",
+      "00039_audit_log_workspace.sql",
+      "00040_desktop_ai.sql",
+      "00041_cl06_material_basis.sql",
+      "00042_cl05_metric_revision.sql",
+      "00043_cl06_preference_input_revision.sql",
+      "00044_cl04_publish_revision.sql",
+      "00045_opt29_derived_work_index.sql",
+      "00046_toutiao_platform.sql",
+      "00047_toutiao_impressions.sql",
+      "00048_platform_collection_policy.sql",
+      "00049_platform_storage.sql",
+      "00050_metric_units_quality.sql",
+      "00051_platform_adapter_breaker.sql",
+      "00052_metric_node_d7_public.sql",
+      "00053_platform_account_sync.sql",
+      "00054_platform_sync_subject_budget.sql",
+      "00055_platform_source_drafts.sql",
+      "00056_work_client_request_id.sql",
+      "00057_work_created_by.sql",
+      "00058_creation_template.sql",
+      "00059_sensitive_word_trash.sql",
+      "00060_skill.sql",
+      "00061_agent_workbench_a.sql",
+      "00062_agent_conversation_organize.sql",
+      "00063_agent_workbench_b.sql",
+      "00064_agent_action_events.sql",
+      "00065_agent_run_config.sql",
+      "00066_agent_plans_questions.sql",
+      "00067_agent_inputs_forks.sql",
+      "00068_agent_message_sources.sql",
+      "00069_agent_goals_compact.sql",
+      "00070_agent_routines.sql",
+      "00071_agent_document_attachments.sql",
+      "00072_agent_document_parser_version.sql",
+      "00073_cx_content_diagnosis.sql",
+      "00074_cx_diagnosis_result_revision.sql",
+      "00075_cx_profile_check.sql",
+      "00076_cx_work_build.sql",
+      "00077_cx_visual_dna.sql",
+      "00078_cx_publish_state.sql",
+      "00079_cx_review_experiments.sql",
+      "00080_cx_benchmark_library.sql",
+      "00081_cx_rewrite_check.sql",
+      "00082_cx_comment_inbox.sql",
+      "00083_cx_comment_topic_link.sql",
+      "00084_cx_ops_standard.sql",
+      "00085_cx_model_context_window.sql",
+      "00086_cx_topic_stock.sql",
+      "00087_cx_topic_stock_changed_at.sql",
+      "00088_cx_topic_stock_policy_rollback_guard.sql",
+      "00089_agent_browser.sql",
+      "00090_agent_personal_memory.sql",
+      "00091_agent_browser_events.sql",
+      "00092_agent_plugin_mcp.sql",
+      "00093_agent_delegation.sql",
+      "00094_agent_voice.sql",
+      "00095_agent_computer_grant.sql",
+      "00096_agent_browser_evidence.sql",
+      "00097_agent_voice_asr.sql",
+      "00098_agent_voice_tts.sql",
+      "00099_agent_voice_realtime.sql",
+      "00100_agent_delegation_resume.sql",
+      "00101_work_review_round.sql",
+      "00102_agent_browser_command_payload.sql",
+      "00103_personal_memory_workspace_dedup.sql",
+      "00104_skill_outcome.sql",
+      "00105_account_timezone.sql",
+      "00106_agent_computer_grant_state.sql",
+      "00107_agent_computer_command.sql",
+      "00108_agent_computer_events.sql",
+      "00109_agent_plugin_call_args.sql",
+      "00110_browser_command_requested_event.sql",
+      "00111_agent_plugin_call_claim.sql"
+    ],
+    "shell": {
+      "nav": [
+        {
+          "path": "",
+          "label": "工作台",
+          "mobile": "工作台",
+          "end": true
+        },
+        {
+          "path": "/topics",
+          "label": "选题池",
+          "mobile": "选题"
+        },
+        {
+          "path": "/ops",
+          "label": "运营"
+        },
+        {
+          "path": "/calendar",
+          "label": "内容日历",
+          "mobile": "日历"
+        },
+        {
+          "path": "/works",
+          "label": "作品",
+          "mobile": "作品"
+        },
+        {
+          "path": "/materials",
+          "label": "素材库",
+          "mobile": "素材"
+        },
+        {
+          "path": "/review",
+          "label": "复盘"
+        },
+        {
+          "path": "/profile",
+          "label": "账号档案"
+        }
+      ],
+      "desktopNavGroups": [
+        {
+          "label": "创作",
+          "items": [
+            {
+              "path": "",
+              "label": "工作台",
+              "mobile": "工作台",
+              "end": true
+            },
+            {
+              "path": "/works",
+              "label": "作品",
+              "mobile": "作品"
+            },
+            {
+              "path": "/topics",
+              "label": "选题池",
+              "mobile": "选题"
+            },
+            {
+              "path": "/calendar",
+              "label": "内容日历",
+              "mobile": "日历"
+            }
+          ]
+        },
+        {
+          "label": "资源",
+          "items": [
+            {
+              "path": "/materials",
+              "label": "素材库",
+              "mobile": "素材"
+            },
+            {
+              "path": "/images",
+              "label": "图片库"
+            }
+          ]
+        },
+        {
+          "label": "运营",
+          "items": [
+            {
+              "path": "/ops",
+              "label": "运营"
+            },
+            {
+              "path": "/review",
+              "label": "复盘"
+            },
+            {
+              "path": "/profile",
+              "label": "账号档案"
+            }
+          ]
+        }
+      ],
+      "mobileNav": [
+        {
+          "path": "",
+          "label": "工作台"
+        },
+        {
+          "path": "/topics?tab=inbox",
+          "label": "收件箱"
+        },
+        {
+          "path": "/works",
+          "label": "作品"
+        },
+        {
+          "path": "/works?status=ready",
+          "label": "待发布"
+        }
+      ],
+      "mobileMoreGroups": [
+        {
+          "label": "创作",
+          "items": [
+            {
+              "path": "/topics",
+              "label": "选题池",
+              "scoped": true
+            },
+            {
+              "path": "/calendar",
+              "label": "内容日历",
+              "scoped": true
+            },
+            {
+              "path": "/agent",
+              "label": "AI 对话"
+            }
+          ]
+        },
+        {
+          "label": "资源",
+          "items": [
+            {
+              "path": "/materials",
+              "label": "素材库",
+              "scoped": true
+            },
+            {
+              "path": "/images",
+              "label": "图片库"
+            },
+            {
+              "path": "/profile",
+              "label": "账号档案",
+              "scoped": true
+            }
+          ]
+        },
+        {
+          "label": "运营",
+          "items": [
+            {
+              "path": "/ops",
+              "label": "运营",
+              "scoped": true
+            },
+            {
+              "path": "/review",
+              "label": "复盘",
+              "scoped": true
+            }
+          ]
+        }
+      ]
+    },
+    "flags": {
+      "names": [
+        "artifacts",
+        "browser_workspace",
+        "chrome_connect",
+        "computer_use",
+        "context_refs",
+        "conversation_organize",
+        "document_parse",
+        "event_resume",
+        "goals",
+        "personal_memories",
+        "plans",
+        "plugin_mcp",
+        "routines",
+        "run_control",
+        "skill_requests",
+        "subagents",
+        "voice_dictation",
+        "voice_realtime",
+        "workbench_ui"
+      ],
+      "default_on": [
+        "artifacts",
+        "context_refs",
+        "conversation_organize",
+        "document_parse",
+        "event_resume",
+        "goals",
+        "plans",
+        "routines",
+        "run_control",
+        "skill_requests",
+        "workbench_ui"
+      ]
+    }
+  },
+  "checkpoint": {
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/agent-capability-gaps"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent-capability-gaps/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent-runs/{id}/cost"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/actions/{id}/execute"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/actions/{id}/reject"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/artifacts/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/artifacts/{id}/file"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/artifacts/{id}/versions"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/attachments"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/attachments/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/attachments/{id}/file"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/bootstrap"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/annotations"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/annotations"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/bindings"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/browser/bindings/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/capabilities"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/commands"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/commands"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/commands/{id}/dispatch"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/commands/{id}/receipt"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/commands/pending"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/browser/evidence"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/evidence"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/browser/grants/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/grants/{id}/handoff"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/pairings"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/browser/pairings/{id}/confirm"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/capabilities"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/computer-grants"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/computer-grants/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/computer-grants/{id}/handoff"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/computer/capabilities"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/computer/commands"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/computer/commands"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/computer/commands/{id}/dispatch"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/computer/commands/{id}/receipt"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/computer/commands/pending"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/computer/grants/{id}/device-ack"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/context-candidates"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/context-preview"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversation-groups"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversation-groups"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/conversation-groups/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/conversation-groups/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/conversations/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/conversations/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/artifacts"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/browser-grants"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/browser-grants"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/browser-handback"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/browser-handoff"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/compact"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/compact-preview"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/computer-grants"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/continue"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/delegation-groups"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/delegation-groups"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/events"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/fork"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/conversations/{id}/goal"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/goal"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/goal-runs"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/inputs"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/inputs/resume"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/memory-usage"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/messages"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/messages/{messageId}/edit"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/read"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/regenerate"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/conversations/{id}/search"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/conversations/{id}/voice-sessions"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/delegation-groups/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/delegation-groups/{id}/adopt"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/delegation-groups/{id}/budget"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/delegation-groups/{id}/cancel"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/delegations/{id}/cancel"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/delegations/{id}/result"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/goals/{id}/confirm-criterion"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/goals/{id}/control"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/inputs/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/inputs/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/memory-settings"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/memory-settings"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/observability"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/personal-memories"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/personal-memories"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/personal-memories/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/personal-memories/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plans/{id}/accept"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plugin-calls"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plugin-calls/{id}/claim"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plugin-calls/{id}/receipt"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/plugin-calls/pending"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/plugin-connections"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plugin-connections"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/plugin-connections/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/plugin-connections/{id}/actions"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/questions/{id}/answer"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/routines"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/routines"
+      },
+      {
+        "method": "DELETE",
+        "path": "/agent/routines/{id}"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/routines/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/routines/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/routines/{id}/control"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/routines/{id}/occurrences"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/runs/{id}/cancel"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/runs/{id}/delegations"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/settings"
+      },
+      {
+        "method": "PUT",
+        "path": "/agent/settings"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/today-ops"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/voice-sessions/{id}"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/voice-sessions/{id}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/voice-sessions/{id}/realtime-token"
+      },
+      {
+        "method": "GET",
+        "path": "/agent/voice-sessions/{id}/realtime-ws"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/voice-sessions/{id}/turns"
+      },
+      {
+        "method": "PATCH",
+        "path": "/agent/voice-sessions/{id}/turns/{turnId}"
+      },
+      {
+        "method": "POST",
+        "path": "/agent/voice-sessions/{id}/turns/{turnId}/synthesize"
+      }
+    ],
+    "migrations": [
+      "00001_init.sql",
+      "00002_multi_tenant.sql",
+      "00003_r4_p1.sql",
+      "00004_v2_collab.sql",
+      "00005_system_admin.sql",
+      "00006_permanent_admin.sql",
+      "00007_v3.sql",
+      "00008_v3_fill.sql",
+      "00009_v3_metrics.sql",
+      "00010_title_favorites.sql",
+      "00011_v4_ops.sql",
+      "00012_v4_hot.sql",
+      "00013_hot_embedding.sql",
+      "00014_v4_platform.sql",
+      "00015_v4_references.sql",
+      "00016_v4_daily.sql",
+      "00017_v4_hot_trends.sql",
+      "00018_v4_hot_summary.sql",
+      "00019_v4_reference_links.sql",
+      "00020_d048_types.sql",
+      "00021_a102_data_prefs.sql",
+      "00022_a106_daily_brief.sql",
+      "00023_a104_copilot_suggestions.sql",
+      "00024_dr01_metric_quality.sql",
+      "00025_dr02_metric_d7.sql",
+      "00026_dr03_datacube.sql",
+      "00027_dr04_metric_node.sql",
+      "00028_dr05_metric_upload.sql",
+      "00029_dr06_wechat_auto.sql",
+      "00030_dr08_review_draft.sql",
+      "00031_dr09_account_metric_daily.sql",
+      "00032_opt12_query_indexes.sql",
+      "00033_opt36_work_tags.sql",
+      "00034_opt39_asset_alt_text.sql",
+      "00035_opt11_retention.sql",
+      "00036_opt48_feedback_samples.sql",
+      "00037_agent_model_capability.sql",
+      "00038_agent.sql",
+      "00039_audit_log_workspace.sql",
+      "00040_desktop_ai.sql",
+      "00041_cl06_material_basis.sql",
+      "00042_cl05_metric_revision.sql",
+      "00043_cl06_preference_input_revision.sql",
+      "00044_cl04_publish_revision.sql",
+      "00045_opt29_derived_work_index.sql",
+      "00046_toutiao_platform.sql",
+      "00047_toutiao_impressions.sql",
+      "00048_platform_collection_policy.sql",
+      "00049_platform_storage.sql",
+      "00050_metric_units_quality.sql",
+      "00051_platform_adapter_breaker.sql",
+      "00052_metric_node_d7_public.sql",
+      "00053_platform_account_sync.sql",
+      "00054_platform_sync_subject_budget.sql",
+      "00055_platform_source_drafts.sql",
+      "00056_work_client_request_id.sql",
+      "00057_work_created_by.sql",
+      "00058_creation_template.sql",
+      "00059_sensitive_word_trash.sql",
+      "00060_skill.sql",
+      "00061_agent_workbench_a.sql",
+      "00062_agent_conversation_organize.sql",
+      "00063_agent_workbench_b.sql",
+      "00064_agent_action_events.sql",
+      "00065_agent_run_config.sql",
+      "00066_agent_plans_questions.sql",
+      "00067_agent_inputs_forks.sql",
+      "00068_agent_message_sources.sql",
+      "00069_agent_goals_compact.sql",
+      "00070_agent_routines.sql",
+      "00071_agent_document_attachments.sql",
+      "00072_agent_document_parser_version.sql",
+      "00073_cx_content_diagnosis.sql",
+      "00074_cx_diagnosis_result_revision.sql",
+      "00075_cx_profile_check.sql",
+      "00076_cx_work_build.sql",
+      "00077_cx_visual_dna.sql",
+      "00078_cx_publish_state.sql",
+      "00079_cx_review_experiments.sql",
+      "00080_cx_benchmark_library.sql",
+      "00081_cx_rewrite_check.sql",
+      "00082_cx_comment_inbox.sql",
+      "00083_cx_comment_topic_link.sql",
+      "00084_cx_ops_standard.sql",
+      "00085_cx_model_context_window.sql",
+      "00086_cx_topic_stock.sql",
+      "00087_cx_topic_stock_changed_at.sql",
+      "00088_cx_topic_stock_policy_rollback_guard.sql",
+      "00089_agent_browser.sql",
+      "00090_agent_personal_memory.sql",
+      "00091_agent_browser_events.sql",
+      "00092_agent_plugin_mcp.sql",
+      "00093_agent_delegation.sql",
+      "00094_agent_voice.sql",
+      "00095_agent_computer_grant.sql",
+      "00096_agent_browser_evidence.sql",
+      "00097_agent_voice_asr.sql",
+      "00098_agent_voice_tts.sql",
+      "00099_agent_voice_realtime.sql",
+      "00100_agent_delegation_resume.sql",
+      "00101_work_review_round.sql",
+      "00102_agent_browser_command_payload.sql",
+      "00103_personal_memory_workspace_dedup.sql",
+      "00104_skill_outcome.sql",
+      "00105_account_timezone.sql",
+      "00106_agent_computer_grant_state.sql",
+      "00107_agent_computer_command.sql",
+      "00108_agent_computer_events.sql",
+      "00109_agent_plugin_call_args.sql",
+      "00110_browser_command_requested_event.sql",
+      "00111_agent_plugin_call_claim.sql",
+      "00112_publish_engine.sql",
+      "00113_agent_side_chat.sql",
+      "00114_agent_delegation_parallel.sql",
+      "00115_topic_score_rule_range.sql",
+      "00116_publish_channel_state.sql",
+      "00117_publish_health_check.sql",
+      "00118_agent_truth.sql",
+      "00119_model_simulated.sql",
+      "00120_memory_confidence.sql",
+      "00121_benchmark_monitor.sql",
+      "00122_comment_cluster.sql",
+      "00123_benchmark_decompose.sql",
+      "00124_benchmark_content_summary.sql",
+      "00125_account_metric_sources.sql",
+      "00126_conversion_attribution.sql",
+      "00127_agent_capability_gap.sql",
+      "00128_agent_cost.sql",
+      "00129_agent_roles.sql",
+      "00130_skill_procedure.sql",
+      "00131_workflow_template.sql",
+      "00132_panel_review.sql",
+      "00133_feishu_bot.sql",
+      "00134_work_build_office.sql",
+      "00135_mcp_token.sql",
+      "00136_alert.sql",
+      "00137_job_run.sql",
+      "00138_account_merge.sql",
+      "00139_parser_learning.sql",
+      "00140_browser_task_policy.sql",
+      "00141_parser_event_asset_fk.sql"
+    ],
+    "shell": {
+      "nav": [
+        {
+          "path": "",
+          "label": "工作台",
+          "mobile": "工作台",
+          "end": true
+        },
+        {
+          "path": "/topics",
+          "label": "选题池",
+          "mobile": "选题"
+        },
+        {
+          "path": "/ops",
+          "label": "运营"
+        },
+        {
+          "path": "/calendar",
+          "label": "内容日历",
+          "mobile": "日历"
+        },
+        {
+          "path": "/works",
+          "label": "作品",
+          "mobile": "作品"
+        },
+        {
+          "path": "/materials",
+          "label": "素材库",
+          "mobile": "素材"
+        },
+        {
+          "path": "/review",
+          "label": "复盘"
+        },
+        {
+          "path": "/profile",
+          "label": "账号档案"
+        }
+      ],
+      "desktopNavGroups": [
+        {
+          "label": "创作",
+          "items": [
+            {
+              "path": "",
+              "label": "工作台",
+              "mobile": "工作台",
+              "end": true
+            },
+            {
+              "path": "/works",
+              "label": "作品",
+              "mobile": "作品"
+            },
+            {
+              "path": "/topics",
+              "label": "选题池",
+              "mobile": "选题"
+            },
+            {
+              "path": "/calendar",
+              "label": "内容日历",
+              "mobile": "日历"
+            }
+          ]
+        },
+        {
+          "label": "资源",
+          "items": [
+            {
+              "path": "/materials",
+              "label": "素材库",
+              "mobile": "素材"
+            },
+            {
+              "path": "/images",
+              "label": "图片库"
+            }
+          ]
+        },
+        {
+          "label": "运营",
+          "items": [
+            {
+              "path": "/ops",
+              "label": "运营"
+            },
+            {
+              "path": "/review",
+              "label": "复盘"
+            },
+            {
+              "path": "/profile",
+              "label": "账号档案"
+            }
+          ]
+        }
+      ],
+      "mobileNav": [
+        {
+          "path": "",
+          "label": "工作台"
+        },
+        {
+          "path": "/topics?tab=inbox",
+          "label": "收件箱"
+        },
+        {
+          "path": "/works",
+          "label": "作品"
+        },
+        {
+          "path": "/works?status=ready",
+          "label": "待发布"
+        }
+      ],
+      "mobileMoreGroups": [
+        {
+          "label": "创作",
+          "items": [
+            {
+              "path": "/topics",
+              "label": "选题池",
+              "scoped": true
+            },
+            {
+              "path": "/calendar",
+              "label": "内容日历",
+              "scoped": true
+            },
+            {
+              "path": "/agent",
+              "label": "AI 对话"
+            }
+          ]
+        },
+        {
+          "label": "资源",
+          "items": [
+            {
+              "path": "/materials",
+              "label": "素材库",
+              "scoped": true
+            },
+            {
+              "path": "/images",
+              "label": "图片库"
+            },
+            {
+              "path": "/profile",
+              "label": "账号档案",
+              "scoped": true
+            }
+          ]
+        },
+        {
+          "label": "运营",
+          "items": [
+            {
+              "path": "/ops",
+              "label": "运营",
+              "scoped": true
+            },
+            {
+              "path": "/review",
+              "label": "复盘",
+              "scoped": true
+            }
+          ]
+        }
+      ]
+    },
+    "flags": {
+      "names": [
+        "agent_roles",
+        "artifacts",
+        "browser_workspace",
+        "chrome_connect",
+        "computer_use",
+        "context_refs",
+        "conversation_organize",
+        "document_parse",
+        "event_resume",
+        "goals",
+        "operations_directory",
+        "personal_memories",
+        "plans",
+        "plugin_mcp",
+        "routines",
+        "run_control",
+        "side_chat",
+        "skill_requests",
+        "subagents",
+        "today_ops",
+        "voice_dictation",
+        "voice_realtime",
+        "workbench_ui",
+        "workflow_templates"
+      ],
+      "default_on": [
+        "agent_roles",
+        "artifacts",
+        "context_refs",
+        "conversation_organize",
+        "document_parse",
+        "event_resume",
+        "goals",
+        "plans",
+        "routines",
+        "run_control",
+        "skill_requests",
+        "workbench_ui",
+        "workflow_templates"
+      ]
+    }
+  },
+  "deltas": [
+    {
+      "category": "flag",
+      "id": "operations_directory",
+      "change": "added",
+      "decision": "D-190",
+      "reason": "FN-10 运营目录默认关"
+    },
+    {
+      "category": "flag",
+      "id": "side_chat",
+      "change": "added",
+      "decision": "D-190",
+      "reason": "FN-12 旁问默认关"
+    },
+    {
+      "category": "flag",
+      "id": "today_ops",
+      "change": "added",
+      "decision": "D-190",
+      "reason": "FN-11 今日运营默认关"
+    },
+    {
+      "category": "migration",
+      "id": "00112_publish_engine.sql",
+      "change": "added",
+      "decision": null,
+      "exception": "parallel-publish-wip",
+      "reason": "并行发布引擎未跟踪 WIP；不属于 docs/38 §3.2 AI 对话页结构面，本任务不修改；显式登记以避免静默漂移"
+    },
+    {
+      "category": "migration",
+      "id": "00113_agent_side_chat.sql",
+      "change": "added",
+      "decision": "D-190",
+      "reason": "FN-12 旁问迁移"
+    },
+    {
+      "category": "migration",
+      "id": "00114_agent_delegation_parallel.sql",
+      "change": "added",
+      "decision": "D-190",
+      "reason": "TL-06 子智能体并行迁移"
+    },
+    {
+      "category": "migration",
+      "id": "00115_topic_score_rule_range.sql",
+      "change": "added",
+      "decision": null,
+      "exception": "parallel-ref41-i4-wip",
+      "reason": "并行 REF41 I4 六维选题评分 WIP（docs/41 实施台账仍 0/6 未开始）；不属于 docs/38 §3.2 AI 对话页结构面，本任务不修改；经 2026-11-17 用户裁决 B 显式登记为第二外部例外"
+    },
+    {
+      "category": "migration",
+      "id": "00116_publish_channel_state.sql",
+      "change": "added",
+      "decision": "D-195",
+      "reason": "REF41 P4 发布四态与平台能力矩阵；docs/41 原计划 00114_publish_channels.sql，因并行会话占用 00114/00115 顺延为 00116"
+    },
+    {
+      "category": "route",
+      "id": "GET /agent/capabilities",
+      "change": "added",
+      "decision": "D-152",
+      "reason": "P1/TL-01 设置内只读能力清单；D-152 设计批准，§17.2 TL-01 A"
+    },
+    {
+      "category": "route",
+      "id": "GET /agent/conversations/{id}/browser-grants",
+      "change": "added",
+      "decision": "D-190",
+      "reason": "BR-09 只读当前活动租约"
+    },
+    {
+      "category": "route",
+      "id": "GET /agent/conversations/{id}/goal-runs",
+      "change": "added",
+      "decision": "D-152",
+      "reason": "FN-05 按运行迭代只读投影"
+    },
+    {
+      "category": "route",
+      "id": "GET /agent/observability",
+      "change": "added",
+      "decision": "D-189",
+      "reason": "只读观测端点"
+    },
+    {
+      "category": "route",
+      "id": "GET /agent/today-ops",
+      "change": "added",
+      "decision": "D-190",
+      "reason": "FN-11 今日运营只读聚合"
+    },
+    {
+      "category": "route",
+      "id": "POST /agent/conversations/{id}/browser-handback",
+      "change": "added",
+      "decision": "D-152",
+      "reason": "BR-08 交回 Agent，D-152 浏览器控制设计"
+    },
+    {
+      "category": "route",
+      "id": "POST /agent/conversations/{id}/browser-handoff",
+      "change": "added",
+      "decision": "D-152",
+      "reason": "BR-08 用户接管，D-152 浏览器控制设计"
+    },
+    {
+      "category": "migration",
+      "id": "00117_publish_health_check.sql",
+      "change": "added",
+      "decision": "D-196",
+      "reason": "REF41 P5 发布通道体检与掉线重试；docs/41 计划 00114（P4/P5 同批），P4 已占 00116，按台账 §1.1 顺延规则取 00117；D-196"
+    },
+    {
+      "category": "migration",
+      "id": "00118_agent_truth.sql",
+      "change": "added",
+      "decision": "D-198",
+      "reason": "REF41 A1 反谎报三闸；docs/41 计划 00119_agent_truth.sql 按台账 §1.1 顺延取实际下一可用号 00118；D-198"
+    },
+    {
+      "category": "migration",
+      "id": "00119_model_simulated.sql",
+      "change": "added",
+      "decision": "D-197",
+      "reason": "REF41 A2 模拟模型标记；docs/41 计划 00120（A2/A8 同批）按台账 §1.1 顺延取 00119（价格字段随 A8 落值，列先建）；D-197"
+    },
+    {
+      "category": "migration",
+      "id": "00120_memory_confidence.sql",
+      "change": "added",
+      "decision": "D-199",
+      "reason": "REF41 A4 记忆置信/衰减/注入闸；docs/41 计划 00121_memory_confidence.sql 按台账 §1.1 顺延取实际下一可用号 00120；D-199"
+    },
+    {
+      "category": "migration",
+      "id": "00121_benchmark_monitor.sql",
+      "change": "added",
+      "decision": "D-200",
+      "reason": "REF41 I1 竞对订阅/观测/趋势；docs/41 计划 00115_benchmark_monitor.sql，00115 已被并行 I4 WIP 占用、00116-00120 已顺延使用，实际取下一可用号 00121；D-200"
+    },
+    {
+      "category": "migration",
+      "id": "00122_comment_cluster.sql",
+      "change": "added",
+      "decision": "D-203",
+      "reason": "REF41 I3 读者提问归并与关注点；docs/41 计划 00116_comment_cluster.sql，00116 已被 P4 占用、00117-00121 已按顺延规则使用，实际取下一可用号 00122；D-203"
+    },
+    {
+      "category": "migration",
+      "id": "00123_benchmark_decompose.sql",
+      "change": "added",
+      "decision": "D-204",
+      "reason": "REF41 I2 竞对作品半自动拆解；docs/41 计划 00115_benchmark_decompose.sql，00115 已被并行 I4 WIP 占用、00116-00122 已顺延使用，实际取下一可用号 00123；D-204"
+    },
+    {
+      "category": "migration",
+      "id": "00124_benchmark_content_summary.sql",
+      "change": "added",
+      "decision": "D-205",
+      "reason": "REF41 I2-D1 补原文摘要输入；00123 已使用，实际取下一可用号 00124；只存摘要不存全文；D-205"
+    },
+    {
+      "category": "migration",
+      "id": "00125_account_metric_sources.sql",
+      "change": "added",
+      "decision": "D-207",
+      "reason": "REF41 I6 粉丝来源、采集时间与证据；00124 已使用，实际取下一可用号 00125；保留 00049 的历史浏览器来源；D-207"
+    },
+    {
+      "category": "migration",
+      "id": "00126_conversion_attribution.sql",
+      "change": "added",
+      "decision": "D-208",
+      "reason": "REF41 I7 UTM 链接、签名回传与转化归因；00125 已被 I6 使用，实际取下一可用号 00126；同作品同平台用 active 部分唯一索引保留 disabled 历史链接；D-208"
+    },
+    {
+      "category": "route",
+      "id": "GET /agent-capability-gaps",
+      "change": "added",
+      "decision": "D-209",
+      "reason": "REF41 A3 能力缺口台账所有者只读列表；D-209"
+    },
+    {
+      "category": "route",
+      "id": "PATCH /agent-capability-gaps/{id}",
+      "change": "added",
+      "decision": "D-209",
+      "reason": "REF41 A3 能力缺口状态标记；D-209"
+    },
+    {
+      "category": "migration",
+      "id": "00127_agent_capability_gap.sql",
+      "change": "added",
+      "decision": "D-209",
+      "reason": "REF41 A3 能力缺口台账表；00126 已用，实际取下一可用号 00127；D-209"
+    },
+    {
+      "category": "route",
+      "id": "GET /agent-runs/{id}/cost",
+      "change": "added",
+      "decision": "D-210",
+      "reason": "REF41 A8 单 run 成本与 token 只读接口；按 workspace 限定，不返回跨工作区数据；D-210"
+    },
+    {
+      "category": "migration",
+      "id": "00128_agent_cost.sql",
+      "change": "added",
+      "decision": "D-210",
+      "reason": "REF41 A8 agent_run.cost_micros/cost_currency、provider 价格非负约束与旧价格回填；00127 已用，实际取下一可用号 00128；D-210"
+    },
+    {
+      "category": "migration",
+      "id": "00130_skill_procedure.sql",
+      "change": "added",
+      "decision": "D-211",
+      "reason": "REF41 A5 skill.procedure/procedure_version/source_run_id/distill_confidence/replay_policy、origin 枚举扩 distilled/builtin、agent_run trigger 扩 skill_replay；docs/41 计划 00122_skill_procedure.sql 已被 I3 占用（D-203），00129 已被并发 A6 agent_roles 占用，实际取 00130；D-211"
+    },
+    {
+      "category": "migration",
+      "id": "00129_agent_roles.sql",
+      "change": "added",
+      "decision": "D-201",
+      "reason": "REF41 A6 角色 bot 与工具白名单；docs/41 计划 00123_agent_roles.sql 按台账 §1.1 顺延取实际下一可用号 00129；D-201"
+    },
+    {
+      "category": "migration",
+      "id": "00131_workflow_template.sql",
+      "change": "added",
+      "decision": "D-202",
+      "reason": "REF41 A7 工作流模板：workflow_template 表（步骤 1–12、builtin 部分唯一索引）；docs/41 计划号 00124 顺延取实际下一可用号 00131"
+    },
+    {
+      "category": "migration",
+      "id": "00132_panel_review.sql",
+      "change": "added",
+      "decision": "D-203",
+      "reason": "REF41 C1 智囊团：panel_review 表（五席受众并行审稿、1–12 席、5 状态、results/summary jsonb）；docs/41 计划号 00124 冲突顺延取实际下一可用号 00132"
+    },
+    {
+      "category": "migration",
+      "id": "00133_feishu_bot.sql",
+      "change": "added",
+      "decision": "D-212",
+      "reason": "REF41 E1 飞书出站与 ChatOps：feishu_bot/feishu_binding 两表，webhook/secret 走 secure.Box 密文；docs/41 计划 00126 已被 I7 占用（D-208），00127–00132 已顺延，实际取 00133；D-212"
+    },
+    {
+      "category": "migration",
+      "id": "00134_work_build_office.sql",
+      "change": "added",
+      "decision": "D-204",
+      "reason": "REF41 C3 PPTX/DOCX 确定性导出：work_build.targets 与 work_build_artifact.kind 扩展 pptx/docx；docs/41 计划号 00125 顺延取实际下一可用号 00134"
+    },
+    {
+      "category": "migration",
+      "id": "00135_mcp_token.sql",
+      "change": "added",
+      "decision": "D-205",
+      "reason": "REF41 E2 MCP Server（只读）：mcp_token（哈希唯一/scopes/status）与 mcp_call_log（仅元数据审计）两表；docs/41 计划号 00127 顺延取实际下一可用号 00135"
+    },
+    {
+      "category": "migration",
+      "id": "00136_alert.sql",
+      "change": "added",
+      "decision": "D-206",
+      "reason": "REF41 F1 日志脱敏与告警：alert_rule（四规则键/阈值/窗口 5–1440/启停）与 alert_event（workspace+dedupe_key 去重、firing/resolved）；docs/41 计划号 00128 顺延取实际下一可用号 00136"
+    },
+    {
+      "category": "migration",
+      "id": "00137_job_run.sql",
+      "change": "added",
+      "decision": "D-213",
+      "reason": "REF41 F3 job_run 统一台账（唯一键抢占/补跑标记）；docs/41 计划 00130 已被 A5 占用（D-211），00131–00136 已顺延，实际取 00137；D-213"
+    },
+    {
+      "category": "migration",
+      "id": "00138_account_merge.sql",
+      "change": "added",
+      "decision": "D-207",
+      "reason": "REF41 F2 账号合并：account_merge_log（preview/running/completed/failed、moved jsonb、conflicts jsonb）；docs/41 计划号 00129 顺延取实际下一可用号 00138"
+    },
+    {
+      "category": "migration",
+      "id": "00140_browser_task_policy.sql",
+      "change": "added",
+      "decision": "D-208",
+      "reason": "REF41 F5 浏览器任务三道闸：browser_task_policy（五目的枚举/URL 白名单 1–20/allowed_actions/expires_at<=created_at+48h CHECK/status 三态）；docs/41 计划号 00132 顺延取实际下一可用号 00140"
+    },
+    {
+      "category": "migration",
+      "id": "00139_parser_learning.sql",
+      "change": "added",
+      "decision": "D-214",
+      "reason": "REF41 F4 parser_event/parser_recipe 两表；docs/41 计划 00131 已被 A7 占用，00132–00138 已顺延，实际取 00139；D-214"
+    },
+    {
+      "category": "migration",
+      "id": "00141_parser_event_asset_fk.sql",
+      "change": "added",
+      "decision": "D-217",
+      "reason": "REF41 F4-N5 收口：parser_event.sample_asset_id 补 asset 外键（ON DELETE SET NULL NOT VALID，历史行不回写）"
+    },
+    {
+      "category": "flag",
+      "id": "agent_roles",
+      "change": "added",
+      "decision": "D-209",
+      "reason": "REF41 A6/A7 角色 bot 与工作流模板开关（默认开，服务端数据面已核验；UI 接线需要）"
+    },
+    {
+      "category": "flag",
+      "id": "workflow_templates",
+      "change": "added",
+      "decision": "D-209",
+      "reason": "REF41 A6/A7 角色 bot 与工作流模板开关（默认开，服务端数据面已核验；UI 接线需要）"
+    },
+    {
+      "category": "flag_default_on",
+      "id": "agent_roles",
+      "change": "added",
+      "decision": "D-209",
+      "reason": "REF41 A6/A7 默认开登记（对应 flag added 的另一半）"
+    },
+    {
+      "category": "flag_default_on",
+      "id": "workflow_templates",
+      "change": "added",
+      "decision": "D-209",
+      "reason": "REF41 A6/A7 默认开登记（对应 flag added 的另一半）"
+    }
+  ],
+  "exceptions": [
+    {
+      "category": "migration",
+      "id": "00112_publish_engine.sql",
+      "owner": "parallel-user-or-process-wip",
+      "reason": "并行发布引擎未跟踪 WIP；不属于 docs/38 §3.2 AI 对话页结构面，本任务不修改；显式登记以避免静默漂移"
+    },
+    {
+      "category": "migration",
+      "id": "00115_topic_score_rule_range.sql",
+      "owner": "parallel-ref41-i4-wip",
+      "reason": "并行 REF41 I4 六维选题评分 WIP（docs/41 实施台账仍 0/6 未开始）；不属于 docs/38 §3.2 AI 对话页结构面，本任务不修改；经 2026-11-17 用户裁决 B 显式登记为第二外部例外"
+    }
+  ]
+}

@@ -1,4 +1,18 @@
+import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
+
+// Playwright 在 Windows 上用 `taskkill /T /F` 回收 webServer 进程树。
+// 宿主若裁剪过 PATH（例如 Agent 沙箱），cmd 能找到（ComSpec），taskkill 却找不到，
+// 表现为用例结束后 runner 一直等 webServer 退出。显式补回系统目录。
+function ensureWindowsSystemPath() {
+  if (process.platform !== 'win32') return
+  const root = process.env.SystemRoot || 'C:\\Windows'
+  const required = [path.join(root, 'System32'), path.join(root, 'System32', 'Wbem')]
+  const current = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
+  const missing = required.filter((entry) => !current.some((item) => item.toLowerCase() === entry.toLowerCase()))
+  if (missing.length) process.env.PATH = [...missing, ...current].join(path.delimiter)
+}
+ensureWindowsSystemPath()
 
 // 本机 HTTP_PROXY 会接管回环健康检查并返回 404，webServer 会一直等到超时。
 // 桌面用例全部走 127.0.0.1，显式放行回环。
@@ -13,8 +27,44 @@ delete process.env.ELECTRON_RUN_AS_NODE
 process.env.OPS_E2E_MOCK_BASE_URL = 'http://127.0.0.1:8297/v1'
 
 const desktopOnly = [
+  'agent-p0-conversation-v2.spec.ts',
+  'agent-fn10-operation-directory.spec.ts',
+  'agent-fn10-directory-error.spec.ts',
+  'agent-fn11-today-ops-states.spec.ts',
+  'agent-p1-fn02-pending.spec.ts',
+  'agent-p1-fn05-goal-evidence.spec.ts',
+  'agent-p1-fn06-capabilities.spec.ts',
+  'agent-p1-ix11-onboarding.spec.ts',
+  'agent-p1-ix09-palette.spec.ts',
+  'agent-p1-ix04-selection.spec.ts',
+  'agent-p1-ui09-statusbar.spec.ts',
+  'agent-p0-ot02-a11y.spec.ts',
+  'agent-p0-ot01-perf.spec.ts',
+  'agent-p0-ix01-context.spec.ts',
+  'agent-p0-ix02-commands.spec.ts',
+  'agent-p0-ix03-skills.spec.ts',
+  'agent-p0-ix10-attachments.spec.ts',
+  'agent-p0-fn03-timeline.spec.ts',
+  'agent-p0-fn04-review.spec.ts',
+  'agent-p0-fn01-list.spec.ts',
+  'agent-p0-br10-settings.spec.ts',
   'cx01-task-list-desktop.spec.ts',
   'cx13-comment-inbox.spec.ts',
+  'i3-comment-clusters.spec.ts',
+  'i5-peer-compare.spec.ts',
+  'i6-followers.spec.ts',
+  'i7-conversion.spec.ts',
+  'a3-capability-gaps.spec.ts',
+  'a6-agent-roles.spec.ts',
+  'ref41-governance-ui.spec.ts',
+  'ref41-c-permissions.spec.ts',
+  'a8-agent-cost.spec.ts',
+  'a1-a2-agent-trust.spec.ts',
+  'a7-workflow.spec.ts',
+  'c1-panel-review.spec.ts',
+  'c2-cover-copy.spec.ts',
+  'c3-office-export.spec.ts',
+  'i2-benchmark-decompose.spec.ts',
   'cx13-account-timezone-desktop.spec.ts',
   'cx13-standards.spec.ts',
   'cx12-skeleton-reference.spec.ts',
@@ -78,7 +128,7 @@ const sharedScenarios = [
   'sec-tiptap3-bubble-menu.spec.ts',
 ]
 
-const apiFeatures = 'workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines,document_parse,chrome_connect,browser_workspace,plugin_mcp,personal_memories'
+const apiFeatures = 'workbench_ui,conversation_organize,context_refs,skill_requests,artifacts,run_control,event_resume,plans,goals,routines,document_parse,chrome_connect,browser_workspace,plugin_mcp,personal_memories,operations_directory,side_chat,subagents,today_ops,agent_roles,workflow_templates'
 
 export default defineConfig({
   outputDir: '../.playwright-results/desktop-renderer',
@@ -107,14 +157,27 @@ export default defineConfig({
       testMatch: [
         'agent-workbench-ai27-workview.spec.ts',
         'agent-workbench-aw05-electron.spec.ts',
+        'agent-ot04-observability.spec.ts',
         'inbrowse-real-electron.spec.ts',
+        'browser-pane-real-electron.spec.ts',
+        'agent-br09-background-tab.spec.ts',
+        'agent-fn12-side-chat.spec.ts',
+        'agent-tl05-external-tools.spec.ts',
+        'agent-tl06-subagents.spec.ts',
+        'agent-fn11-today-ops.spec.ts',
+        'agent-p1-br08-control.spec.ts',
         'plugins-settings.spec.ts',
-        'desktop-window-drag.spec.ts', 'platform-intents-real-electron.local.spec.ts',
+        'desktop-window-drag.spec.ts', 'desktop-window-zoom.spec.ts', 'platform-intents-real-electron.local.spec.ts',
         'skills-electron.spec.ts', 'toutiao-electron.spec.ts',
         'cx13-account-analysis.spec.ts', 'cx01-render-check.spec.ts', 'cx01-shared-fixtures.spec.ts',
         'cx02-rendering-experiment-electron.spec.ts',
         'cx11-title-diagnosis.spec.ts',
         'cx11-topic-diagnosis.spec.ts',
+        'i4-topic-score.spec.ts',
+        'skills-procedure.spec.ts',
+        'feishu-bot.spec.ts',
+        'job-runs.spec.ts',
+        'parser-diagnostics.spec.ts',
         'cx13-topic-stock-desktop.spec.ts',
         'cx09-visual-plan.spec.ts',
         'cx09-cards-build.spec.ts',
@@ -128,6 +191,7 @@ export default defineConfig({
         'g1-public-preview-electron.spec.ts',
         'g7-action-card-desktop.spec.ts',
         'cx10-cover-build-desktop.spec.ts',
+        'c3-office-export-electron.spec.ts',
         'cx13-publish-ledger.spec.ts',
         'cx13-review-multitime.spec.ts',
         'g6-attribution-sample.spec.ts',
@@ -143,6 +207,16 @@ export default defineConfig({
         'opt36-work-tags.spec.ts',
         'opt38.spec.ts',
         'cx18-benchmark-electron.spec.ts',
+        'p1-publish-manifest-desktop.spec.ts',
+        'p2-publish-task-board-desktop.spec.ts',
+        'p3-publish-readback-desktop.spec.ts',
+        'p4-publish-capability-desktop.spec.ts',
+        'p5-publish-health-desktop.spec.ts',
+        'p6-publish-manual-desktop.spec.ts',
+        'p7-publish-patrol-desktop.spec.ts',
+        'i1-benchmark-monitor-desktop.spec.ts',
+        'i1-a5-benchmark-observe-desktop.spec.ts',
+        'ref41-electron-gates.spec.ts',
       ],
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } },
     },
@@ -158,6 +232,8 @@ export default defineConfig({
         OPS_E2E_LISTEN: '127.0.0.1:8287',
         OPS_E2E_MOCK_LISTEN: '127.0.0.1:8297',
         OPS_E2E_DESKTOP_AI_ENABLED: '1',
+        // REF41 I1-A5：桌面 claim/公开页采集需要服务端平台能力开关；仅测试进程。
+        OPS_E2E_PLATFORM_ENABLED: '1',
       },
       reuseExistingServer: false,
       timeout: 120_000,

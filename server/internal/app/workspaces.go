@@ -64,6 +64,31 @@ func (s *Server) seedWorkspaceBaseWords(ctx context.Context, workspaceID uuid.UU
 	}
 }
 
+// seedWorkspaceBuiltins 为一个工作区补齐 A6 内置角色与 A7 内置工作流模板。
+// 两者都是幂等 upsert：已有行（含已停用状态）不会被覆盖。
+func (s *Server) seedWorkspaceBuiltins(ctx context.Context, workspaceID uuid.UUID) {
+	s.seedAgentRoles(ctx, workspaceID)
+	s.seedWorkflowTemplates(ctx, workspaceID)
+}
+
+// SeedWorkspaceBuiltins 为所有既有工作区补齐内置角色/模板（生产启动回填）。
+// 不走 cfg.Dev 分支，避免生产模式或新建工作区出现空目录。
+func (s *Server) SeedWorkspaceBuiltins(ctx context.Context) error {
+	rows, err := s.db.Query(ctx, `SELECT id FROM workspace`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var workspaceID uuid.UUID
+		if err := rows.Scan(&workspaceID); err != nil {
+			return err
+		}
+		s.seedWorkspaceBuiltins(ctx, workspaceID)
+	}
+	return rows.Err()
+}
+
 func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) error {
 	var in struct {
 		Name   string `json:"name"`
@@ -94,6 +119,8 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) error {
 	}
 	// BE-02：工作区已创建后的基础词库是 best-effort；单条失败 Warn 可观测，不回滚工作区。
 	s.seedWorkspaceBaseWords(r.Context(), wsID)
+	// A6/A7：内置角色与工作流模板必须随工作区创建即可见，不能依赖 dev 启动种子。
+	s.seedWorkspaceBuiltins(r.Context(), wsID)
 	if s.cfg.Dev {
 		_ = s.seedDevModelFor(r.Context(), wsID) // ponytail: Dev 种子模型失败不影响建区；正式环境不走此分支
 	}

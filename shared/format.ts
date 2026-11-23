@@ -40,6 +40,23 @@ export function fmtNum(n?: number | null): string {
   return n.toLocaleString('zh-CN')
 }
 
+export function currencySymbol(currency?: string | null): string {
+  const c = (currency || 'CNY').toUpperCase()
+  if (c === 'CNY') return '¥'
+  if (c === 'USD') return '$'
+  if (c === 'EUR') return '€'
+  return `${c} `
+}
+
+// A8：金额以 micros（1 元 = 1,000,000）落库；展示时保留足够小数，
+// 避免小额 run 成本被四舍五入成 0.00。null 明确显示“未定价”。
+export function fmtCostMicros(micros?: number | null, currency = 'CNY'): string {
+  if (micros === null || micros === undefined) return '未配置价格'
+  const value = micros / 1000000
+  const digits = value !== 0 && Math.abs(value) < 1 ? 4 : 2
+  return `${currencySymbol(currency)}${value.toFixed(digits)}`
+}
+
 export function toLocalInput(iso?: string | null): string {
   const d = iso ? new Date(iso) : new Date()
   const pad = (n: number) => String(n).padStart(2, '0')

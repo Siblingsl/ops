@@ -12,6 +12,7 @@ import { isEnterWithoutComposition } from '@/lib/keyboard'
 import { useAccounts, useCanWrite, useCurrentAccount, currentWorkQueryKey, useMe } from '@/lib/session'
 import { commandPaletteSettings, settingsEntries } from '@/lib/settings-registry'
 import type { SearchHit, StarItem, Work } from '@/lib/types'
+import { agentCmd } from '@/lib/agent-ui.js'
 import { fuzzyMatch, recentItems, rememberRecent, setRecentOwner, workCmd } from '@/lib/v3'
 import { useAgentBootstrap } from '@/lib/agent'
 import { Dialog } from './dialog'
@@ -168,6 +169,23 @@ export function CommandPalette({ open, onOpenChange, help, onHelpChange }: {
           nav(`/agent/c/${conversation.id}`)
         } catch (error) { toast.error(errorMessage(error)) }
       } })
+      // IX-09：本页命令组——与输入台 / 命令同源（COMMANDS），仅 AI 对话页在监听时执行。
+      const agentGroup = 'AI 对话'
+      const agentItems: Array<{ name: string; label: string; keywords?: string }> = [
+        { name: 'plan', label: '切到计划模式', keywords: 'plan 计划 模式' },
+        { name: 'discuss', label: '切到讨论模式', keywords: 'discuss 讨论 模式' },
+        { name: 'execute', label: '切到执行模式（逐卡确认）', keywords: 'execute 执行 模式' },
+        { name: 'model', label: '打开模型菜单', keywords: 'model 模型' },
+        { name: 'context', label: '打开上下文页', keywords: 'context 上下文 引用' },
+        { name: 'skills', label: '打开技能选择', keywords: 'skills 技能' },
+        { name: 'goal', label: '打开任务目标面板', keywords: 'goal 目标' },
+        { name: 'compact', label: '打开压缩预览', keywords: 'compact 压缩' },
+        { name: 'archive', label: '归档当前对话', keywords: 'archive 归档' },
+      ]
+      for (const item of agentItems) {
+        list.push({ id: `agent-cmd-${item.name}`, group: agentGroup, label: item.label, icon: Bot, keywords: `agent ${item.name} ${item.keywords ?? ''}`,
+          run: () => { onOpenChange(false); agentCmd(item.name) } })
+      }
     }
     if (work && workId) {
       const g = '本作品'

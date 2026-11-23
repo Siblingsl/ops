@@ -12,6 +12,7 @@ import { StarButton } from '@/components/star-button'
 import { Badge, Button, Card, cn, Empty, Field, platformFormatLabel, HumanGate, IconButton, Input, Notice, PageHeader, PageLoading, PageState, Select, Switch, Tabs, Textarea } from '@/components/ui'
 import { InboxPanel } from '@/components/inbox-panel'
 import { TopicDiagnosisPanel } from './topic-diagnosis'
+import { TopicScoreBars, TopicScorePanel } from './topic-score'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
@@ -845,7 +846,9 @@ export default function Topics() {
               {selectedTopic.series_id && <div><dt>所属系列</dt><dd>{series.data?.find((s) => s.id === selectedTopic.series_id)?.name ?? '系列'}</dd></div>}
             </dl>
             {selectedTopic.status === 'pending' && (selectedTopic.score_fit != null || selectedTopic.score_material != null) && <div className="desktop-topic-detail-scores"><ScoreBar label="契合度" value={selectedTopic.score_fit} tip={selectedTopic.score_reason} /><ScoreBar label="素材充足" value={selectedTopic.score_material} tip="素材库里能支撑这个选题的素材多少" /><ScoreBar label="新颖度" value={selectedTopic.score_novelty} tip="与本账号写过的标题越不像，分越高" /></div>}
+            <TopicScoreBars topicId={selectedTopic.id} />
             <TopicDiagnosisPanel key={selectedTopic.id} topic={selectedTopic} canWrite={canWrite} onAdoptAngle={(angle) => setDiagnosisEdit({ topic: selectedTopic, angle })} />
+            <TopicScorePanel key={`score-${selectedTopic.id}`} topic={selectedTopic} canWrite={canWrite} />
             <p className="desktop-topic-detail-hint">采用不会自动确认观点、大纲或起草正文。</p>
             <div className="desktop-topic-detail-footer">
               {canWrite && selectedTopic.status === 'pending' && <>

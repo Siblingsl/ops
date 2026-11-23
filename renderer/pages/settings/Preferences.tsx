@@ -2,6 +2,7 @@ import { Keyboard } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button, Card, CardHeader, cn, PageHeader, Switch } from '@/components/ui'
+import { confirm } from '@/components/dialog'
 import { errorMessage } from '@/lib/api'
 import type { UserPrefs } from '@/lib/types'
 import { ghostKeys, usePrefs, useSavePrefs } from '@/lib/v3'
@@ -135,6 +136,15 @@ function InBrowseDataCard() {
   }, [])
   useEffect(() => { void refresh() }, [refresh])
   const clear = async (kind: 'cache' | 'cookies') => {
+    const ok = await confirm({
+      title: kind === 'cache' ? '清理浏览缓存？' : '清理浏览 Cookies 与站点数据？',
+      desc: kind === 'cache'
+        ? '只会清理内置浏览页签的 HTTP 缓存，不影响登录状态。'
+        : '会清理内置浏览页签的 Cookies 与站点数据；这些站点需要重新登录。OPS 本身的登录状态不受影响。',
+      confirmText: kind === 'cache' ? '清理缓存' : '清理站点数据',
+      danger: true,
+    })
+    if (!ok) return
     setBusy(true)
     try {
       await window.opsDesktopUI?.invokeInBrowse('inbrowse:clear-data', kind)

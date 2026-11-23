@@ -139,7 +139,17 @@ func TestHC01_SuggestTopicsDoesNotWritePool(t *testing.T) {
 	if after := topicCount(t, id); after != before+1 {
 		t.Fatalf("want exactly one new topic, got %d -> %d", before, after)
 	}
+	// REF41 I4（docs/41 §I4 规格行 1114，已独立核验）：score-batch 是六维评分的
+	// 批量计算入口——逐条返回评分结果并写评分记录，不写选题池、不批量创建/执行
+	// 任何发布动作（D-193 同口径：批量计算 ≠ 批量执行）。按 exact 路由精确豁免，
+	// 其余 topics+batch/bulk/all 名称级禁令不变。
+	hc01ExactAllowed := map[string]bool{
+		"POST /api/v1/topics/score-batch": true,
+	}
 	for _, r := range routes(t) {
+		if hc01ExactAllowed[r] {
+			continue
+		}
 		if strings.Contains(r, "topics") && (strings.Contains(r, "batch") || strings.Contains(r, "bulk") || strings.Contains(r, "all")) {
 			t.Fatalf("batch topic route exists: %s", r)
 		}
@@ -245,14 +255,47 @@ func TestHC04_PushAndPackRequireConfirmedChecks(t *testing.T) {
 	}
 }
 
+// D-193：HC-05 的红线是“不得批量执行发布/写入”。批次创建/读取路由
+// 只建任务与排队，不执行发布，按 exact 路径放行；执行类路由仍禁止。
+var hc05BatchCreateRoutes = map[string]bool{
+	"GET /api/v1/publish-batches":      true,
+	"POST /api/v1/publish-batches":     true,
+	"GET /api/v1/publish-batches/{id}": true,
+	// REF41 I4（docs/41 §I4 规格行 1114，已独立核验）：score-batch 逐条返回评分结果，
+	// 只读+写评分记录，不含任何发布执行动作。
+	"POST /api/v1/topics/score-batch": true,
+	// REF41 I2（docs/90 D-204 第 4 条裁决）：decompose-batch 每次 1–5 条逐条串行创建
+	// 草稿，返回逐条状态；不提供批量确认接口（D-117 不变，确认仍逐条）。
+	"POST /api/v1/benchmark/decompose-batch": true,
+}
+
+func hc05ForbiddenRoute(route string) bool {
+	if hc05BatchCreateRoutes[route] {
+		return false
+	}
+	low := strings.ToLower(route)
+	for _, bad := range []string{"batch", "bulk", "schedule", "cron", "timer", "push-all", "pushall"} {
+		if strings.Contains(low, bad) {
+			return true
+		}
+	}
+	// 只拦发布对象上的执行动作；`agent/actions/{id}/execute` 是单条动作，
+	// 不属于批量发布（HC-05 原语义也未禁止）。
+	if strings.Contains(low, "publish") {
+		for _, exec := range []string{"execute", "submit-all", "publish-all", "run-all", "confirm-all"} {
+			if strings.Contains(low, exec) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestHC05_PushIsSingleWorkOnly(t *testing.T) {
 	var push []string
 	for _, r := range routes(t) {
-		low := strings.ToLower(r)
-		for _, bad := range []string{"batch", "bulk", "schedule", "cron", "timer", "push-all", "pushall"} {
-			if strings.Contains(low, bad) {
-				t.Fatalf("forbidden route: %s", r)
-			}
+		if hc05ForbiddenRoute(r) {
+			t.Fatalf("forbidden route: %s", r)
 		}
 		if strings.Contains(r, "push") && strings.HasPrefix(r, "POST") {
 			push = append(push, r)
@@ -260,6 +303,16 @@ func TestHC05_PushIsSingleWorkOnly(t *testing.T) {
 	}
 	if len(push) != 1 || push[0] != "POST /api/v1/works/{id}/wechat/push" {
 		t.Fatalf("push routes: %v", push)
+	}
+	// D-193 的反向守卫：批次执行路由不能因放行创建/读取路由而漏网。
+	for _, r := range []string{
+		"POST /api/v1/publish-batches/{id}/execute",
+		"POST /api/v1/publish-batches/execute",
+		"POST /api/v1/publish-batches/{id}/submit-all",
+	} {
+		if !hc05ForbiddenRoute(r) {
+			t.Fatalf("batch execution route must stay forbidden: %s", r)
+		}
 	}
 }
 

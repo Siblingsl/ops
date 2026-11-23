@@ -121,6 +121,16 @@ func applyAgentFeatureDeps(features map[string]bool) map[string]bool {
 	if features["routines"] && (!features["event_resume"] || !features["run_control"] || !features["plans"] || !features["goals"] || !features["artifacts"]) {
 		features["routines"] = false
 	}
+	// D-190：P2 项依赖既有工作台/引用/运行开关；关闭前置时不得单独显示可用。
+	if features["operations_directory"] && (!features["workbench_ui"] || !features["context_refs"]) {
+		features["operations_directory"] = false
+	}
+	if features["side_chat"] && (!features["workbench_ui"] || !features["run_control"]) {
+		features["side_chat"] = false
+	}
+	if features["today_ops"] && !features["workbench_ui"] {
+		features["today_ops"] = false
+	}
 	return features
 }
 

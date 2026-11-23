@@ -12,6 +12,7 @@ import { StarButton } from '@/components/star-button'
 import { Badge, Button, Card, cn, Empty, Field, platformFormatLabel, HumanGate, IconButton, Input, Notice, PageHeader, PageLoading, PageState, Select, Switch, Tabs, Textarea } from '@/components/ui'
 import { InboxPanel } from '@/components/inbox-panel'
 import { TopicDiagnosisPanel } from './topic-diagnosis'
+import { TopicScoreBars, TopicScorePanel } from './topic-score'
 import { VoiceButton } from '@/components/voice'
 import { aiError } from '@/lib/ai-error'
 import { del, errorMessage, get, patch, post } from '@/lib/api'
@@ -510,7 +511,9 @@ function TopicCard({ t, accountId, accountFormat, accountPlatform, series, focus
             {t.score_reason && <p className="pt-0.5 text-[11px] leading-snug text-mist-400">{t.score_reason}</p>}
           </div>
         )}
+        <TopicScoreBars topicId={t.id} />
         <TopicDiagnosisPanel topic={t} canWrite={canWrite} onAdoptAngle={(angle) => { setEditAngle(angle); setEdit(true) }} />
+        <TopicScorePanel topic={t} canWrite={canWrite} />
         <div className={cn('mt-3 flex items-center gap-2')}>
           <Badge tone={sourceLabel[t.source]?.tone ?? 'gray'}>{sourceLabel[t.source]?.label ?? t.source}</Badge>
           <span className="text-xs text-mist-400">{relTime(t.created_at)}</span>

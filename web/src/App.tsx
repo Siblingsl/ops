@@ -38,6 +38,9 @@ const HotSources = lazy(() => import('./pages/settings/Crawl').then((m) => ({ de
 const Quality = lazy(() => import('./pages/settings/Quality'))
 const Preferences = lazy(() => import('./pages/settings/Preferences'))
 const Skills = lazy(() => import('./pages/settings/Skills'))
+const Feishu = lazy(() => import('./pages/settings/Feishu'))
+const JobRuns = lazy(() => import('./pages/settings/JobRuns'))
+const ParserDiagnostics = lazy(() => import('./pages/settings/ParserDiagnostics'))
 const WorkLayout = lazy(() => import('./pages/work/WorkLayout'))
 const Editor = lazy(() => import('./pages/work/Editor'))
 const Compare = lazy(() => import('./pages/work/Compare'))
@@ -127,6 +130,9 @@ function Authed() {
           <Route path="daily" element={<S><DailySettings /></S>} />
           <Route path="agent" element={<S><AgentSettings /></S>} />
           <Route path="skills" element={<S><Skills /></S>} />
+          <Route path="feishu" element={<S><Feishu /></S>} />
+          <Route path="job-runs" element={<S><JobRuns /></S>} />
+          <Route path="parser-diagnostics" element={<S><ParserDiagnostics /></S>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

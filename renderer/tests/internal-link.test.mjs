@@ -55,3 +55,11 @@ test('组件确实使用该判定（防止只有函数没接线）', () => {
   assert.match(src, /isInternalPath\(href\)/, '点击拦截应使用白名单判定')
   assert.ok(!/href\.startsWith\('\/\/'\)/.test(src), '不应回退到只挡 "//" 的旧写法')
 })
+
+test('OT-03: HTTPS 外链新窗口必须带 noopener/noreferrer，危险标签被剥离', () => {
+  const src = readFileSync(fileURLToPath(new URL('../lib/agent-markdown.tsx', import.meta.url)), 'utf8')
+  assert.match(src, /el\.setAttribute\('target', '_blank'\)/, 'HTTPS 外链应在新窗口打开')
+  assert.match(src, /el\.setAttribute\('rel', 'noopener noreferrer nofollow'\)/, '新窗口外链必须具备 noopener/noreferrer')
+  assert.match(src, /\['script', 'style', 'iframe', 'object', 'svg', 'math', 'img'\]/, '危险/可执行标签必须剥离')
+  assert.match(src, /el\.removeAttribute\(attr\.name\)/, '渲染前必须清空原始属性，防止事件处理器注入')
+})

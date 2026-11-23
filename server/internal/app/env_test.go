@@ -194,6 +194,56 @@ func (e *testEnv) do(method, path string, in any) (int, []byte) {
 	return resp.StatusCode, b
 }
 
+// doHeader 同 do，但允许附加请求头（P6 幂等键等）；复用 do 的 reauth 语义由调用方处理。
+func (e *testEnv) doHeader(method, path string, in any, headers map[string]string) (int, []byte) {
+	var body io.Reader
+	if in != nil {
+		b, _ := json.Marshal(in)
+		body = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(method, e.http.URL+path, body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", e.csrf)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := e.client.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, b
+}
+
+// mustJSONHeader 同 mustJSON，但带请求头（P6 Idempotency-Key）。
+func (e *testEnv) mustJSONHeader(t *testing.T, method, path string, in, out any, headers map[string]string) {
+	t.Helper()
+	st, b := e.doHeader(method, path, in, headers)
+	if st != http.StatusOK {
+		t.Fatalf("%s %s => %d %s", method, path, st, b)
+	}
+	if out != nil {
+		if err := json.Unmarshal(b, out); err != nil {
+			t.Fatalf("%s %s decode: %v (%s)", method, path, err, b)
+		}
+	}
+}
+
+// mustJSONStatusHeader 同 mustJSONStatus，但带请求头。
+func (e *testEnv) mustJSONStatusHeader(t *testing.T, method, path string, in, out any, want int, headers map[string]string) {
+	t.Helper()
+	st, b := e.doHeader(method, path, in, headers)
+	if st != want {
+		t.Fatalf("%s %s => %d (want %d) %s", method, path, st, want, b)
+	}
+	if out != nil {
+		if err := json.Unmarshal(b, out); err != nil {
+			t.Fatalf("%s %s decode: %v (%s)", method, path, err, b)
+		}
+	}
+}
+
 // mustJSON performs a request that must succeed and decodes the response.
 func (e *testEnv) mustJSON(t *testing.T, method, path string, in, out any) {
 	e.mustJSONStatus(t, method, path, in, out, http.StatusOK)

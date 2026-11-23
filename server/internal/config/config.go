@@ -39,6 +39,10 @@ type Config struct {
 	DesktopPlatformAutoAdopt bool
 	// AIWorkers is the per-workspace concurrency of background and streaming AI jobs (D-054).
 	AIWorkers int
+	// OfficeRenderDir 是 C3 独立 Node Office 渲染器目录（含 render.mjs 与 templates）。
+	// 为空时服务端在常见工作目录中探测；显式配置不存在的目录会让构建明确失败，
+	// 而不是回退到伪文件（C3-A5）。
+	OfficeRenderDir string
 	// Permanent system admin (D-044). Ensured on every serve start.
 	SystemAdminUser     string
 	SystemAdminPassword string
@@ -53,6 +57,7 @@ func Load() (*Config, error) {
 		StaticDir:                os.Getenv("OPS_STATIC_DIR"),
 		MockListen:               env("OPS_MOCK_LISTEN", "127.0.0.1:8091"),
 		PublicIP:                 os.Getenv("OPS_PUBLIC_IP"),
+		OfficeRenderDir:          strings.TrimSpace(os.Getenv("OPS_OFFICE_RENDER_DIR")),
 		SystemAdminUser:          env("OPS_SYSTEM_ADMIN_USER", "skyeder"),
 		SystemAdminPassword:      os.Getenv("OPS_SYSTEM_ADMIN_PASSWORD"),
 		DesktopAIEnabled:         false,

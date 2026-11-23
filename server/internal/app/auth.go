@@ -168,6 +168,8 @@ func (s *Server) createRegisteredUser(ctx context.Context, username, password st
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, uuid.Nil, err
 	}
+	// A6/A7：注册建区后立即补齐内置角色/模板（生产/开发都执行，幂等）。
+	s.seedWorkspaceBuiltins(ctx, wsID)
 	if s.cfg.Dev {
 		_ = s.seedDevModelFor(ctx, wsID)
 	}

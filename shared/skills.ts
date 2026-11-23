@@ -9,6 +9,11 @@ export interface SkillDefinition extends SkillDef {
   content_hash: string
   origin: string
   source_key: string
+  procedure?: SkillProcedureStep[]
+  procedure_version?: number
+  source_run_id?: string | null
+  distill_confidence?: string | null
+  replay_policy?: string
   created_by: string | null
   created_at: string | null
   updated_at: string | null
@@ -103,4 +108,23 @@ export function emptySkillForm(): SkillForm {
     name: '', summary: '', triggers: '', instructions: '', platforms: [], content_formats: [], task_types: [],
     task_enabled: true, agent_enabled: true, status: 'active', scope: 'personal', account_id: '',
   }
+}
+
+// REF41 A5：流程技能 procedure（docs/41 §A5；D-211）。
+export interface SkillProcedureStep {
+  seq: number
+  title: string
+  action: string
+  tool?: string
+  inputs?: Record<string, unknown>
+  outputs?: Record<string, unknown>
+  requires?: string[]
+  gate: 'none' | 'confirm'
+}
+
+export interface SkillProcedureMeta {
+  procedure_version: number
+  source_run_id: string | null
+  distill_confidence: string | null
+  replay_policy: string
 }

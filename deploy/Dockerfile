@@ -21,14 +21,17 @@ RUN if [ -n "$APT_MIRROR" ]; then \
       || sed -i "s|deb.debian.org|$APT_MIRROR|g; s|security.debian.org|$APT_MIRROR|g" /etc/apt/sources.list; \
     fi \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl tzdata \
+    && apt-get install -y --no-install-recommends ca-certificates curl nodejs tzdata \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=server /out/ops /app/ops
+# C3：PPTX/DOCX 由独立 Node 渲染器生成；模板与脚本必须随镜像发布。
+COPY tools/office-render /app/tools/office-render
 RUN mkdir -p /data
 ENV OPS_DEV=0 \
     OPS_LISTEN=:8080 \
     OPS_DATA_DIR=/data \
+    OPS_OFFICE_RENDER_DIR=/app/tools/office-render \
     TZ=Asia/Shanghai
 EXPOSE 8080
 VOLUME ["/data"]

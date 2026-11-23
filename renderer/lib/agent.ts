@@ -11,6 +11,11 @@ export interface AgentModel {
   execution_location?: 'server' | 'desktop' | string
   vision: boolean
   is_default: boolean
+  tools?: boolean
+  self_test?: 'passed' | 'failed' | 'untested'
+  available?: boolean
+  reason?: string
+  reasoning_levels?: string[]
 }
 
 export interface AgentBootstrap {
@@ -48,6 +53,38 @@ export interface AgentBootstrap {
 
 export type AgentMode = 'discuss' | 'plan' | 'execute'
 
+// REF41 A7：工作流模板（服务端 workflow_template 表；启动只建计划）。
+export interface WorkflowStep {
+  key: string
+  title: string
+  requires?: string[]
+  outputs?: string[]
+  confirm?: boolean
+  tools?: string[]
+}
+
+// REF41 A7：工作流模板（服务端 workflow_template 表；启动只建计划）。
+export interface WorkflowTemplate {
+  id: string
+  name: string
+  description: string
+  steps: WorkflowStep[]
+  status: 'active' | 'disabled'
+  builtin_key: string
+}
+
+// REF41 A6：角色 bot（服务端 agent_role 表；白名单/预算见 docs/41 C 模块）。
+export interface AgentRole {
+  id: string
+  name: string
+  persona: string
+  tool_allowlist: string[]
+  max_rounds: number
+  max_seconds: number
+  status: 'active' | 'disabled'
+  builtin_key: string
+}
+
 export interface AgentConversation {
   id: string
   title: string
@@ -65,6 +102,9 @@ export interface AgentConversation {
   group_id?: string | null
   read_upto_message_seq?: number
   force_unread?: boolean
+  kind?: 'main' | 'fork' | 'side' | string
+  parent_id?: string | null
+  side_token_budget?: number
 }
 
 export interface AgentGoalCriterion {
@@ -102,6 +142,9 @@ export interface AgentGoal {
 
 export type AgentConversationListItem = AgentConversation & {
   pending_actions: number
+  /** FN-01：会话行只显示状态词与账号，不显示模型名。 */
+  pending_questions?: number
+  account_name?: string
   has_active_run: boolean
   has_unread?: boolean
   goal?: AgentGoal | null
@@ -146,11 +189,15 @@ export interface AgentAttachment {
 export interface AgentToolCall {
   id: string
   name: string
+  /** FN-03：服务端按工具名前缀回填的业务域，用于把工具活动聚合成业务步骤。 */
+  domain?: string
   summary: string
   result_preview: string
   status?: 'running' | 'done' | 'error' | 'cancelled' | 'interrupted' | string
   duration_ms?: number
   error?: { code: string; message: string; request_id?: string }
+  /** TL-02：业务对象链接（最多 3 个），时间线展开行直接渲染对象名，不解析工具参数。 */
+  object_refs?: { id: string; label: string; domain?: string }[]
 }
 
 export interface AgentContextReference {
@@ -284,6 +331,20 @@ export interface AgentQuestion {
   created_at: string
 }
 
+export interface AgentRunWrapUp {
+  done?: string[]
+  pending?: string[]
+  need_user?: string[]
+  next_actions?: string
+}
+
+export interface AgentRunFinalCheck {
+  claims?: string[]
+  evidence?: number
+  blocked?: string[]
+  wrap_up?: AgentRunWrapUp
+}
+
 export interface AgentActiveRun {
   id: string
   status: 'queued' | 'running' | string
@@ -294,6 +355,13 @@ export interface AgentActiveRun {
   started_at: string
   mode?: AgentMode
   config_snapshot?: { version: number; mode: AgentMode; selected_model: { provider_id: string; model: string }; actual_model?: { provider_id: string; provider_name?: string; model: string; channel: 'server' | 'desktop' } }
+  prompt_tokens?: number
+  completion_tokens?: number
+  cost_micros?: number | null
+  cost_currency?: string
+  outcome?: 'completed' | 'partial' | 'failed' | 'stopped' | 'awaiting_confirmation' | 'awaiting_input' | string
+  demo?: boolean
+  final_check?: AgentRunFinalCheck
 }
 
 export interface AgentConversationDetail {
@@ -307,6 +375,7 @@ export interface AgentConversationDetail {
   questions?: AgentQuestion[]
   inputs?: AgentInput[]
   input_queue_paused?: boolean
+  artifact_count?: number
   active_run: AgentActiveRun | null
   last_run?: (AgentActiveRun & AgentRunEnd) | null
   can_continue: boolean

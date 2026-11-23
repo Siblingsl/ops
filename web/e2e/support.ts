@@ -108,11 +108,21 @@ export async function finishChecks(page: Page, id: string) {
       if (item.category === 'ai_disclosure') {
         const saved = page.waitForResponse(r => r.url().endsWith(`/check-items/${item.id}`) && r.request().method() === 'PATCH')
         const checkbox = page.getByRole('checkbox', { name: '已知悉，发布时会声明' })
-        await checkbox.click()
+        await checkbox.evaluate((el) => {
+          el.scrollIntoView({ block: 'center' })
+          ;(el as HTMLInputElement).click()
+        })
         expect((await saved).ok()).toBeTruthy()
         await expect(checkbox).toBeChecked()
       }
-      else await page.locator(`input[name="${item.id}"]`).first().check()
+      else {
+        const option = page.locator(`input[name="${item.id}"]`).first()
+        await option.evaluate((el) => {
+          el.scrollIntoView({ block: 'center' })
+          ;(el as HTMLInputElement).click()
+        })
+        await expect(option).toBeChecked()
+      }
     }
   }
   await page.getByRole('button', { name: '确认完成检查', exact: true }).click()

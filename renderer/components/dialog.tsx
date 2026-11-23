@@ -113,7 +113,7 @@ export function Dialog({ open, onClose, title, desc, children, footer, width = '
   if (!present) return null
   return createPortal(
     <div className={cn('fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-mist-900/35 p-4 pt-[8vh] backdrop-blur-[2px]', exiting ? 'animate-dialog-backdrop-out' : 'animate-dialog-backdrop-in')} onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div ref={dialogRef} tabIndex={-1} className={cn('desktop-dialog-panel flex max-h-[calc(92vh-16px)] w-full flex-col overflow-hidden rounded-2xl bg-white shadow-pop', exiting ? 'animate-dialog-panel-out' : 'animate-dialog-panel-in', width, className)} role="dialog" aria-modal="true" aria-label={ariaLabel}>
+      <div ref={dialogRef} tabIndex={-1} className={cn('desktop-dialog-panel flex max-h-[calc(92vh-16px)] w-full flex-col overflow-hidden rounded-2xl bg-white shadow-pop', exiting ? 'animate-dialog-panel-out' : 'animate-dialog-panel-in', width, className)} role="dialog" aria-modal="true" aria-label={ariaLabel ?? (typeof title === 'string' ? title : undefined)}>
         {title && (
           <div className="flex items-start justify-between gap-4 px-6 pb-2 pt-5">
             <div>

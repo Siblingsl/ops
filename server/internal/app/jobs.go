@@ -28,6 +28,20 @@ func (s *Server) RunJobs(ctx context.Context) {
 			s.collectReferences(ctx)
 			s.dailyBackground(ctx)
 			s.collectSummaries(ctx)
+			// REF41 P5：未登录任务 20 分钟自动补跑 + 体检过期清理（每分钟幂等）。
+			s.publishRetryJob(ctx)
+			s.publishHealthExpireJob(ctx)
+			// REF41 P7：定时漂移巡检（每分钟触发、游标内 15 分钟一轮；只读，不改平台）。
+			s.publishPatrolJob(ctx)
+			// REF41 P8：生产 API runner（queued + api → Preflight/Fill/Readback → filled；
+			// 不自动 Submit，不绕过用户发布动作）。
+			s.publishAPIRunnerJob(ctx)
+			// REF41 I1：竞对监控调度（每分钟触发、游标 10 分钟一轮；只读公开页）。
+			s.benchmarkMonitorJob(ctx)
+			// REF41 F1：告警评估（每分钟触发、游标 5 分钟一轮；只读聚合 + 通知）。
+			s.alertMonitorJob(ctx)
+			// REF41 F3：定时补跑检查（每分钟触发；只对白名单每日/每周任务，10 分钟幂等由唯一键保证）。
+			s.jobCatchUpJob(ctx)
 		}
 	}
 }
@@ -47,7 +61,7 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 	if n, err := s.PurgeExpiredTrash(ctx); err != nil {
 		slog.Error("清理回收站失败", "err", err)
 	} else if n > 0 {
-	slog.Info("回收站到期清理", "count", n)
+		slog.Info("回收站到期清理", "count", n)
 	}
 	// DEV-AI27-09（W09 第三批，27 §14.6 证据保留策略）：未被批注引用的浏览器证据
 	// 创建超 24h 后删除；被批注引用的保留（引用计数）。命令账本不动（去重窗 ≥24h）。
@@ -85,6 +99,10 @@ func (s *Server) runJobsOnce(ctx context.Context) {
 		s.runRetentionCleanup(ctx)
 		s.runAgentCleanup(ctx)
 	}
+	// REF41 I3：问题簇每小时重算（软删只降计数；已忽略/已转选题不自动改状态）。
+	s.commentClusterJob(ctx)
+	// REF41 I5：9 点后按 1/3/7/30 天节点发一次同龄对比通知（job_marker 与通知 dedupe 双幂等）。
+	s.reviewPeerJob(ctx)
 	s.purgeJobRetention(ctx)
 }
 
@@ -105,6 +123,12 @@ func (s *Server) purgeJobRetention(ctx context.Context) {
 }
 
 func (s *Server) runDailyHousekeeping(ctx context.Context) {
+	// REF41 A4：记忆 90 天衰减（confidence ×0.9 下限 0.5；不自动 disabled）。
+	s.memoryDecayJob(ctx)
+	// REF41 F4：采集失败聚集 → 规则模板配方草稿（7 天 ≥3；draft 不重复生成）。
+	s.parserRecipeJob(ctx)
+	// REF41 I3：读者关注点周统计（当前周 + 上一周）。
+	s.readerTermsJob(ctx)
 	today := s.today()
 	s.runDailyHousekeepingFor(ctx, today.AddDate(0, 0, -1))
 	s.runDailyHousekeepingFor(ctx, today)
@@ -112,6 +136,17 @@ func (s *Server) runDailyHousekeeping(ctx context.Context) {
 
 func (s *Server) runDailyHousekeepingFor(ctx context.Context, day time.Time) {
 	day = time.Date(day.In(s.loc).Year(), day.In(s.loc).Month(), day.In(s.loc).Day(), 0, 0, 0, 0, s.loc)
+	// REF41 F3：每日任务统一走 job_run 台账（scheduled_at=当日 03:00 窗口）。
+	dayWindow := day.Add(3 * time.Hour)
+	if err := s.runJobOnce(ctx, nil, "daily-housekeeping", dayWindow, false, func(c context.Context) error {
+		s.runDailyHousekeepingBody(c, day)
+		return nil
+	}); err != nil {
+		slog.Error("每日任务执行失败", "day", day.Format("2006-01-02"), "err", err)
+	}
+}
+
+func (s *Server) runDailyHousekeepingBody(ctx context.Context, day time.Time) {
 	key := "daily-housekeeping:" + day.Format("2006-01-02")
 	var done bool
 	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM job_marker WHERE key=$1)`, key).Scan(&done); err != nil {
@@ -182,6 +217,7 @@ func (s *Server) refreshTokens(ctx context.Context) {
 }
 
 // SeedDevModel registers the local fake model for every workspace missing one (dev mode).
+// 内置角色/模板由 SeedWorkspaceBuiltins 单独负责，不能混在 dev-only 分支里。
 func (s *Server) SeedDevModel(ctx context.Context) error {
 	if !s.cfg.Dev {
 		return nil
@@ -213,7 +249,7 @@ func (s *Server) seedDevModelFor(ctx context.Context, ws uuid.UUID) error {
 		return err
 	}
 	var id uuid.UUID
-	if err := s.db.QueryRow(ctx, `INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+	if err := s.db.QueryRow(ctx, `INSERT INTO model_provider (workspace_id, name, base_url, api_key_enc, key_version, models, simulated) VALUES ($1,$2,$3,$4,$5,$6,true) RETURNING id`,
 		ws, "本地模拟模型", "http://"+s.cfg.MockListen+"/v1", enc, s.box.Version, []string{"mock-writer", "mock-fast", "mock-embed"}).Scan(&id); err != nil {
 		return err
 	}
