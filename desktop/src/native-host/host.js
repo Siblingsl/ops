@@ -42,6 +42,9 @@ const TRUSTED_TYPES = new Set([
   'ping',
   'pong',
   'error',
+  // B-01：人工接管卡片状态下发与完成上行（固定信封，宿主只转发）。
+  'page_status',
+  'handoff_complete',
 ]);
 
 function encodeFrame(obj) {

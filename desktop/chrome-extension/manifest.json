@@ -9,11 +9,18 @@
     "tabs",
     "scripting",
     "storage",
-    "sidePanel"
+    "sidePanel",
+    "notifications"
+  ],
+  "optional_permissions": [
+    "debugger"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
+  "icons": {
+    "128": "icon-128.png"
+  },
   "background": {
     "service_worker": "background.js"
   },

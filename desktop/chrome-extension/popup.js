@@ -49,3 +49,24 @@ function refresh() {
 
 refresh();
 setInterval(refresh, 1000);
+
+// B-02B：debugger 是可选权限，必须在用户点击（popup 手势）时请求；不能由 SW 静默申请。
+function refreshDebuggerPermission() {
+  const button = document.getElementById('enable-debugger');
+  const state = document.getElementById('debugger-state');
+  if (!button || !chrome.permissions) return;
+  chrome.permissions.contains({ permissions: ['debugger'] }, (granted) => {
+    button.disabled = Boolean(granted);
+    button.textContent = granted ? '可信输入已授权' : '启用可信输入';
+    state.textContent = granted ? '仅 Input 域' : '未授权';
+  });
+}
+
+document.getElementById('enable-debugger')?.addEventListener('click', () => {
+  chrome.permissions.request({ permissions: ['debugger'] }, (granted) => {
+    document.getElementById('debugger-state').textContent = granted ? '已授权（仅 Input 域）' : '用户拒绝';
+    refreshDebuggerPermission();
+  });
+});
+
+refreshDebuggerPermission();

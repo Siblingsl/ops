@@ -1,6 +1,6 @@
 'use strict';
-// DEV-AI27-02 W02 桌面纵切技术验证：真实 Chrome for Testing（156.0.8078.80，Google 官方
-// branded 自动化构建，与安装版同版本线）+ 自有 MV3 扩展 + Native Messaging 宿主 + OPS 桥。
+// DEV-AI27-02 W02 桌面纵切技术验证：真实 Chrome（默认 Chrome for Testing 路径，
+// 可用 OPS_CHROME_PATH 指向安装版）+ 自有 MV3 扩展 + Native Messaging 宿主 + OPS 桥。
 // M1 连接配对 / M2 操作闭环 / M3 掉线恢复与停止。安装版 Chrome 的"开发者模式手工加载"
 // 路径按 27 文档 §15.4 在 W12 安装矩阵人工验证；本文件不冒充安装版验证。
 // 运行：cd desktop && node --test test/browser-bridge.chrome.e2e.cjs
@@ -18,7 +18,7 @@ const bridgeMod = require('../.build/browser-bridge.js');
 const hostMod = require('../src/native-host/host.js');
 
 const EXT_DIR = path.resolve(__dirname, '..', 'chrome-extension');
-const CFT = path.resolve(__dirname, '..', '.tmp', 'cft', 'chrome-win64', 'chrome.exe');
+const CFT = process.env.OPS_CHROME_PATH || path.resolve(__dirname, '..', '.tmp', 'cft', 'chrome-win64', 'chrome.exe');
 const HOST_STATE = path.join(os.homedir(), '.ops-browser-bridge', 'host-state.json');
 const FIXTURE_PORT = 8899;
 const FIXTURE_URL = `http://127.0.0.1:${FIXTURE_PORT}/`;
@@ -97,7 +97,7 @@ test('W02 M1/M2/M3 真实 Chrome 纵切：配对→操作闭环→掉线恢复�
   const context = await chromium.launchPersistentContext(userDataDir, {
     executablePath: CFT,
     headless: false,
-    args: [`--disable-extensions-except=${EXT_DIR}`, `--load-extension=${EXT_DIR}`, '--no-first-run', '--no-default-browser-check'],
+    args: [`--disable-extensions-except=${EXT_DIR}`, `--load-extension=${EXT_DIR}`, '--disable-features=DisableLoadExtensionCommandLineSwitch', '--no-first-run', '--no-default-browser-check'],
   });
   t.after(() => {
     try { context.close(); } catch {}
@@ -222,7 +222,7 @@ test('W02 M1/M2/M3 真实 Chrome 纵切：配对→操作闭环→掉线恢复�
   const context2 = await chromium.launchPersistentContext(userDataDir, {
     executablePath: CFT,
     headless: false,
-    args: [`--disable-extensions-except=${EXT_DIR}`, `--load-extension=${EXT_DIR}`, '--no-first-run', '--no-default-browser-check'],
+    args: [`--disable-extensions-except=${EXT_DIR}`, `--load-extension=${EXT_DIR}`, '--disable-features=DisableLoadExtensionCommandLineSwitch', '--no-first-run', '--no-default-browser-check'],
   });
   t.after(() => {
     try { context2.close(); } catch {}

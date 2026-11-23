@@ -208,7 +208,58 @@ func TestW04BrowserGrantLifecycle(t *testing.T) {
 	env.mustJSON(t, "DELETE", "/api/v1/agent/browser/bindings/"+confirmed.BindingID, map[string]any{}, nil)
 }
 
-// DEV-AI27-04 第二批：命令账本（幂等/状态单向/租约联动/事件投影）。
+// BR-08：按会话接管/交回——渲染端不一定持有租约句柄；用户接管后旧租约撤销，
+// 交回必须为当前活动 run 重建同一 binding/tab/scope 的 30 秒租约，run 结束时拒绝。
+func TestBR08ConversationBrowserHandoffAndHandback(t *testing.T) {
+	clearAgentFeatureSettings(t)
+	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace,event_resume")
+	providerID := env.ensureToolModel(t)
+	conv := env.agentRunConversation(t, providerID)
+	t.Cleanup(func() { deleteConversations(t, conv.ID) })
+
+	var pairing browserPairingView
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/pairings", map[string]any{"request_id": uuid.NewString()}, &pairing)
+	var confirmed struct {
+		BindingID string `json:"binding_id"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/browser/pairings/"+pairing.ID+"/confirm", w04ConfirmBody(t, pairing.Revision), &confirmed)
+
+	runID := agentInsertRun(t, conv.ID, uuid.MustParse(env.me(t).Workspace.ID), uuid.MustParse(env.me(t).UserID), uuid.MustParse(providerID), "running", "message")
+	var grant browserGrantView
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-grants", map[string]any{
+		"binding_id": confirmed.BindingID, "run_id": runID.String(),
+		"tab_handle": "tab-1", "origins": []string{"https://example.com"},
+		"actions": []string{"observe", "navigate"}, "policy_version": "1",
+	}, &grant)
+
+	// 接管只按会话即可撤销活动租约，不要求调用方持有 grant.id。
+	var handoff struct {
+		GrantID          string `json:"grant_id"`
+		State            string `json:"state"`
+		DeviceAckPending bool   `json:"device_ack_pending"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-handoff", map[string]any{}, &handoff)
+	if handoff.State != "revoked" || !handoff.DeviceAckPending || handoff.GrantID != grant.ID {
+		t.Fatalf("会话接管应撤销同一租约：%+v，grant=%s", handoff, grant.ID)
+	}
+	env.expectErr(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-handoff", map[string]any{}, "browser_no_active_grant")
+
+	// 交回：同一标签/来源重建租约，归属当前活动 run。
+	var rebuilt browserGrantView
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-handback",
+		map[string]any{"run_id": runID.String()}, &rebuilt)
+	if rebuilt.State != "active" || rebuilt.TabHandle != "tab-1" || rebuilt.RunID != runID.String() ||
+		len(rebuilt.Origins) != 1 || rebuilt.Origins[0] != "https://example.com" {
+		t.Fatalf("交回租约异常：%+v", rebuilt)
+	}
+
+	// run 已结束时拒绝交回，不签发无用租约。
+	deadRun := agentInsertRun(t, conv.ID, uuid.MustParse(env.me(t).Workspace.ID), uuid.MustParse(env.me(t).UserID), uuid.MustParse(providerID), "completed", "message")
+	env.mustJSON(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-handoff", map[string]any{}, &handoff)
+	env.expectErr(t, "POST", "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-handback",
+		map[string]any{"run_id": deadRun.String()}, "browser_run_not_active")
+}
+
 func TestW04CommandLedgerLifecycle(t *testing.T) {
 	clearAgentFeatureSettings(t)
 	t.Setenv(agentWorkbenchFeatureEnv, "chrome_connect,browser_workspace,event_resume")

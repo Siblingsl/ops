@@ -55,6 +55,35 @@ export function registerInBrowseIpcHandlers(deps: {
     return null;
   });
   ipcHandle('inbrowse:snapshot', (event) => requireInBrowse(event).snapshot());
+  // BR-07：面板可见性切换与截图兜底（WebContentsView 原生层无法被 DOM 截图捕获）。
+  ipcHandle('inbrowse:visibility', (event, raw) => {
+    const controller = requireInBrowse(event);
+    if (raw === true) controller.show();
+    else controller.hide();
+    return null;
+  });
+  ipcHandle('inbrowse:screenshot', (event) => requireInBrowse(event).screenshot());
+  ipcHandle('inbrowse:rebuild', (event) => {
+    const controller = requireInBrowse(event);
+    if (!controller.rebuildActive()) throw new Error('inbrowse_rebuild_no_tab');
+    return controller.snapshot();
+  });
+  // BR-03：用户主动元素选择（开始/取消/清空结果）。只回传单个元素，不扫描整页。
+  ipcHandle('inbrowse:pick-element', (event, raw) => {
+    const controller = requireInBrowse(event);
+    const tabID = typeof raw === 'string' && raw ? raw : undefined;
+    const result = controller.startPicker(tabID);
+    if (!result.ok) throw new Error(`inbrowse_picker_denied: ${result.reason}`);
+    return controller.snapshot();
+  });
+  ipcHandle('inbrowse:pick-cancel', (event) => {
+    requireInBrowse(event).stopPicker();
+    return null;
+  });
+  ipcHandle('inbrowse:pick-clear', (event) => {
+    requireInBrowse(event).clearPickedElement();
+    return null;
+  });
   // DEV-AI27-08g（27 §14.5）：浏览数据管理——只读统计与受控清理，仅 persist:ops-inbrowse。
   ipcHandle('inbrowse:data-stats', () => inBrowseDataStats());
   ipcHandle('inbrowse:clear-data', (event, raw) => {

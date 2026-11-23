@@ -27,6 +27,11 @@
   <div class="row" style="margin-top:8px"><span class="label">实例</span><span id="instance" style="font-size:11px"></span></div>
   <div class="label" style="margin-top:6px">最近命令</div>
   <ul id="cmds"></ul>
+  <div id="debugger-box" style="margin-top:8px; border-top:1px solid #e5e7eb; padding-top:8px">
+    <div class="hint">可信输入（chrome.debugger 的 Input 域）默认关闭；只有在这里手动授权后才可用。</div>
+    <button id="enable-debugger" style="margin-top:6px">启用可信输入</button>
+    <span id="debugger-state" class="hint" style="margin-left:6px"></span>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>

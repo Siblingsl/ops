@@ -66,4 +66,26 @@ export function registerBrowserIpcHandlers(deps: {
     }
     return { ok: true as const, extension_instance_id: bridge.pairingSnapshot().extension_instance_id };
   });
+  // BR-09：用户主动“查看操作”——把 Agent 正在操作的标签切到前台。
+  // 这不是 Agent 动作：不进服务端命令账本，也不存在模型可调用的入口；只有渲染器
+  // 里用户点击“查看操作”才走到这里，经本机桥调用扩展 activate_tab。
+  ipcHandle('browser:focus-tab', async (event, rawTabId) => {
+    requireComputerCaller(event);
+    const tabId = Number(rawTabId);
+    if (!Number.isSafeInteger(tabId) || tabId <= 0) {
+      return { ok: false as const, code: 'browser_tab_invalid', message: '标签句柄无效。' };
+    }
+    const bridge = getActiveBridge();
+    if (!bridge) {
+      return { ok: false as const, code: 'browser_bridge_not_running', message: '浏览器桥未在本会话启动。' };
+    }
+    if (bridge.state !== 'paired') {
+      return { ok: false as const, code: 'browser_not_paired', message: `浏览器桥未配对（当前状态 ${bridge.state}）。` };
+    }
+    const result = await bridge.dispatchAndWait('activate_tab', { tab_id: tabId }, 15000);
+    if (!result.ok) {
+      return { ok: false as const, code: result.code, message: '切换标签未得到回执；请确认 Chrome 与 OPS 扩展正在运行后重试。' };
+    }
+    return { ok: true as const, tab_id: tabId };
+  });
 }

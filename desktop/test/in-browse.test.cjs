@@ -4,13 +4,21 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
+
+let viewIdSeq = 0;
 
 const electronMock = {
+  ipcMain: { on() {} },
   WebContentsView: class {
     constructor(opts) {
       this.webPreferences = opts.webPreferences;
       this.__bounds = null;
+      this.__id = ++viewIdSeq;
       this.webContents = {
+        id: this.__id,
+        sent: [],
         isDestroyed: () => false,
         url: '',
         title: '页面标题',
@@ -19,6 +27,11 @@ const electronMock = {
         listeners: new Map(),
         windowOpenHandler: null,
         on(ev, fn) { this.listeners.set(ev, fn); },
+        emit(ev, ...args) {
+          const fn = this.listeners.get(ev);
+          if (fn) fn(...args);
+        },
+        send(channel, payload) { this.sent.push({ channel, payload }); },
         getURL() { return this.url; },
         getTitle() { return this.title; },
         isLoading() { return this.loadingFlag; },
@@ -54,7 +67,7 @@ const electronMock = {
 };
 require.cache[require.resolve('electron')] = { exports: electronMock };
 
-const { InBrowseViewController, IN_BROWSE_MIN_WIDTH, clearInBrowseData, inBrowseDataStats } = require('../.build/in-browse.js');
+const { InBrowseViewController, IN_BROWSE_MIN_WIDTH, clearInBrowseData, inBrowseDataStats, isHttpUrl, isBlockedDownloadFile } = require('../.build/in-browse.js');
 
 function fakeWindow() {
   return {
@@ -354,4 +367,132 @@ test('W08g: 非法 kind 拒绝（不静默清空）', async () => {
   await assert.rejects(() => clearInBrowseData('everything'), /inbrowse_data_kind_invalid/);
   await assert.rejects(() => clearInBrowseData(''), /inbrowse_data_kind_invalid/);
   assert.deepEqual(clearedTargets, [], '非法 kind 未触发任何清理');
+});
+
+test('BR-10: 协议白名单只放行 http/https', () => {
+  assert.equal(isHttpUrl('http://127.0.0.1:8287/healthz'), true);
+  assert.equal(isHttpUrl('https://mp.weixin.qq.com/'), true);
+  assert.equal(isHttpUrl('file:///C:/Windows/win.ini'), false);
+  assert.equal(isHttpUrl('javascript:alert(1)'), false);
+  assert.equal(isHttpUrl('data:text/html,<p>x</p>'), false);
+  assert.equal(isHttpUrl('ftp://example.com/a'), false);
+  assert.equal(isHttpUrl('not a url'), false);
+});
+
+test('BR-10: 可执行文件下载拒绝（大小写/后缀）', () => {
+  assert.equal(isBlockedDownloadFile('setup.exe'), true);
+  assert.equal(isBlockedDownloadFile('SETUP.EXE'), true);
+  assert.equal(isBlockedDownloadFile('tool.dmg'), true);
+  assert.equal(isBlockedDownloadFile('run.sh'), true);
+  assert.equal(isBlockedDownloadFile('build.bat'), true);
+  assert.equal(isBlockedDownloadFile('installer.msi'), true);
+  assert.equal(isBlockedDownloadFile('report.pdf'), false);
+  assert.equal(isBlockedDownloadFile('image.png'), false);
+  assert.equal(isBlockedDownloadFile(''), false);
+});
+
+test('BR-12: 渲染进程崩溃记 viewError 并移除视图，rebuildActive 重建恢复 URL', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  c.setBounds({ x: 0, y: 0, width: 600, height: 800 });
+  const id = c.openTab();
+  c.navigate('https://example.com/article');
+  const wc = activeMockWebContents(c);
+  // 触发渲染进程崩溃（BR-07 同款路径）。
+  wc.emit('render-process-gone', {}, { reason: 'crashed' });
+  let snap = c.snapshot();
+  assert.equal(snap.viewError?.reason, 'crashed', '崩溃记入 viewError');
+  assert.equal(snap.viewError?.tabId, id);
+
+  // rebuildActive：关闭旧页签、重建并恢复同一 URL。
+  assert.equal(c.rebuildActive(), true);
+  snap = c.snapshot();
+  assert.equal(snap.viewError, null, '重建后错误清除');
+  assert.equal(snap.tabs.length, 1, '重建为新页签');
+  assert.notEqual(snap.activeTabId, id, '活动页签为新 id');
+  const rebuilt = snap.tabs.find((x) => x.id === snap.activeTabId);
+  assert.equal(rebuilt?.url, 'https://example.com/article', '恢复同一 URL');
+  c.destroy();
+});
+
+test('BR-12: 关闭活动页签自动切到相邻（右邻优先，末位取左邻）', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  c.setBounds({ x: 0, y: 0, width: 600, height: 800 });
+  const t1 = c.openTab();
+  const t2 = c.openTab();
+  const t3 = c.openTab();
+  c.switchTab(t2);
+  c.closeTab(t2);
+  assert.equal(c.snapshot().activeTabId, t3, '右邻激活');
+  c.closeTab(t3);
+  assert.equal(c.snapshot().activeTabId, t1, '末位取左邻');
+  c.closeTab(t1);
+  assert.equal(c.snapshot().activeTabId, null, '全部关闭为空');
+  c.destroy();
+});
+
+test('BR-03: 元素选择只走活动页签、schema 截断、密码拒绝、导航失效', () => {
+  const win = fakeWindow();
+  const c = new InBrowseViewController(win, {}, () => {});
+  c.setBounds({ x: 0, y: 0, width: 600, height: 800 });
+  const tabID = c.openTab();
+  c.navigate('https://example.com/article');
+  const tab = c.snapshot().tabs.find((x) => x.id === tabID);
+  const contents = win.contentView.children[0].webContents;
+
+  assert.equal(c.startPicker().ok, true, '活动页签可开始选择');
+  assert.equal(c.snapshot().pickerActive, true);
+  assert.equal(contents.sent.at(-1).channel, 'inbrowse:picker:start', '只向当前页签发 start');
+
+  const wrongSender = contents.id + 999;
+  assert.equal(c.acceptPickerResult(wrongSender, { ok: true, data: { selector: '#x' } }), false, '非本页签结果忽略');
+
+  // 密码框拒绝：preload 回传原因，主进程原样落快照，不伪造元素。
+  assert.equal(c.acceptPickerResult(contents.id, { ok: false, reason: 'sensitive_control' }), true);
+  assert.equal(c.snapshot().pickerError, 'sensitive_control');
+  assert.equal(c.snapshot().pickedElement, null);
+  assert.equal(c.snapshot().pickerActive, false, '拒绝后选择结束');
+
+  // 正常结果：text 截断到 200，rect 取整；selector 为空视为无效。
+  assert.equal(c.startPicker().ok, true);
+  assert.equal(c.acceptPickerResult(contents.id, {
+    ok: true,
+    data: { title: '标题', url: 'https://example.com/article', selector: '#hero-title', text: '甲'.repeat(260), tag: 'h1', rect: { x: 12.4, y: 20.6, width: 120.2, height: 36.9 } },
+  }), true);
+  const picked = c.snapshot().pickedElement;
+  assert.equal(picked.selector, '#hero-title');
+  assert.equal(picked.text.length, 200, '文本最多 200 字');
+  assert.deepEqual(picked.rect, { x: 12, y: 21, width: 120, height: 37 });
+  assert.equal(c.snapshot().pickerError, null);
+
+  // 页面刷新：旧选择失效并给出原因，不保留旧元素。
+  assert.equal(c.startPicker().ok, true);
+  contents.loadURL('https://example.com/next');
+  assert.equal(c.snapshot().pickerActive, false);
+  assert.equal(c.snapshot().pickerError, 'page_reloaded');
+  assert.equal(c.snapshot().pickedElement, null);
+
+  // 取消：只结束当前选择，不产生错误元素。
+  assert.equal(c.startPicker().ok, true);
+  c.stopPicker();
+  assert.equal(c.snapshot().pickerError, 'cancelled');
+  assert.equal(c.snapshot().pickedElement, null);
+  c.destroy();
+});
+
+test('OT-03: 内置浏览强制隔离、关闭 DevTools、不导入 Cookie', () => {
+  const src = readFileSync(join(__dirname, '..', 'src', 'in-browse.ts'), 'utf8');
+  assert.match(src, /nodeIntegration: false/, '内置浏览必须关闭 nodeIntegration');
+  assert.match(src, /contextIsolation: true/, '内置浏览必须开启 contextIsolation');
+  assert.match(src, /sandbox: true/, '内置浏览必须开启 sandbox');
+  assert.match(src, /webSecurity: true/, '内置浏览必须开启 webSecurity');
+  assert.match(src, /webviewTag: false/, '内置浏览必须关闭 webviewTag');
+  assert.match(src, /devTools: false/, '内置浏览必须关闭 DevTools');
+  assert.equal(/cookies\.(set|remove)|setCookie|cookieImport/i.test(src), false, '不得把业务 Cookie 导入浏览分区');
+});
+
+test('OT-03: 生产主窗口关闭 DevTools，仅未打包开发态开启', () => {
+  const src = readFileSync(join(__dirname, '..', 'src', 'main.ts'), 'utf8');
+  assert.match(src, /devTools: !app\.isPackaged/, '生产包必须关闭主窗口 DevTools');
 });

@@ -51,9 +51,11 @@ func scanBrowserEvidence(row pgx.Row) (browserEvidenceView, error) {
 }
 
 // 敏感内容检测（27 §8.4/14.6：命中隔离，禁止进入模型/普通预览）。
+// TL-07：登录态与凭证标记（cookie/authorization）一并隔离。
 func browserEvidenceRedactionState(text string) string {
 	lower := strings.ToLower(text)
-	for _, marker := range []string{"sk-", "ghp_", "bearer ", "authorization:", "password=", "token="} {
+	for _, marker := range []string{"sk-", "ghp_", "bearer ", "authorization:", "password=", "token=",
+		"cookie:", "set-cookie:", "sessionid=", "jsessionid="} {
 		if strings.Contains(lower, marker) {
 			return "quarantined"
 		}

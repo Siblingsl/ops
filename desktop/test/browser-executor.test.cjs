@@ -10,7 +10,7 @@ function mkDeps(overrides = {}) {
   const calls = { listPending: 0, dispatch: [], receipt: [], waits: [] };
   const deps = {
     listPending: async () => { calls.listPending += 1; return { commands: [] }; },
-    dispatch: async (id) => { calls.dispatch.push(id); return { id, claimed: true, payload: {} }; },
+    dispatch: async (id) => { calls.dispatch.push(id); return { id, claimed: true, conversation_id: 'conv-fixture', payload: {} }; },
     receipt: async (id, body) => { calls.receipt.push({ id, body }); return {}; },
     bridgeState: () => 'paired',
     dispatchAndWait: async (action, payload, timeoutMs) => {
@@ -33,7 +33,7 @@ test('bridge not paired: skips the whole tick without touching the server', asyn
 test('executes a pending command end to end: claim -> run -> receipt with result', async () => {
   const { deps, calls } = mkDeps({
     listPending: async () => ({ commands: [{ id: 'cmd-1', action_kind: 'observe', payload: { tab_id: 1 }, deadline_at: new Date(Date.now() + 20_000).toISOString() }] }),
-    dispatch: async (id) => { calls.dispatch.push(id); return { id, claimed: true, payload: { tab_id: 1 } }; },
+    dispatch: async (id) => { calls.dispatch.push(id); return { id, claimed: true, conversation_id: 'conv-fixture', payload: { tab_id: 1 } }; },
   });
   const ex = new executor.BrowserCommandExecutor(deps);
   assert.equal(await ex.tick(), 1);
@@ -157,6 +157,51 @@ test('DT-05: 环境变量可切回固定间隔（L2 回退分支存在）', () =
     '应支持环境变量切回固定间隔（回退 L2，docs/33 12.2）');
 });
 
+test('BR-04: observe 成功自动上报证据（真实命令号/origin/redacted_url/kind）', async () => {
+  const evidence = [];
+  const { deps } = mkDeps({
+    listPending: async () => ({ commands: [{ id: 'cmd-ev-1', action_kind: 'observe', payload: { tab_id: 1, url: 'https://site.example/a?secret=1' }, deadline_at: new Date(Date.now() + 20_000).toISOString() }] }),
+    dispatchAndWait: async () => ({ ok: true, result: { origin: 'https://site.example', url: 'https://site.example/a?secret=1', title: '站点 A', doc_rev: 'rev-9' } }),
+    reportEvidence: async (ev) => { evidence.push(ev); },
+  });
+  const ex = new executor.BrowserCommandExecutor(deps);
+  assert.equal(await ex.tick(), 1);
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0].commandId, 'cmd-ev-1');
+  assert.equal(evidence[0].origin, 'https://site.example');
+  assert.equal(evidence[0].redactedUrl, 'https://site.example/a', 'redacted_url 去查询串');
+  assert.equal(evidence[0].kind, 'text');
+  assert.equal(evidence[0].title, '站点 A');
+  assert.equal(evidence[0].docRevision, 'rev-9');
+});
+
+test('BR-04: 命令失败也生成证据（snippet 记失败原因），不伪造成功', async () => {
+  const evidence = [];
+  const { deps, calls } = mkDeps({
+    listPending: async () => ({ commands: [{ id: 'cmd-ev-2', action_kind: 'observe', payload: { tab_id: 1, url: 'https://site.example/b' }, deadline_at: new Date(Date.now() + 20_000).toISOString() }] }),
+    dispatch: async (id) => ({ id, claimed: true, conversation_id: 'conv-ev-2', payload: { tab_id: 1, url: 'https://site.example/b' } }),
+    dispatchAndWait: async () => ({ ok: false, code: 'bridge_timeout', message: '扩展超时' }),
+    reportEvidence: async (ev) => { evidence.push(ev); },
+  });
+  const ex = new executor.BrowserCommandExecutor(deps);
+  await ex.tick();
+  assert.equal(calls.receipt[0].body.state, 'failed');
+  assert.equal(evidence.length, 1, '失败也上报证据');
+  assert.equal(evidence[0].commandId, 'cmd-ev-2');
+  assert.ok(evidence[0].snippet.includes('bridge_timeout'), 'snippet 记录失败原因');
+});
+
+test('BR-04: 非读取类动作（click）不生成证据', async () => {
+  const evidence = [];
+  const { deps } = mkDeps({
+    listPending: async () => ({ commands: [{ id: 'cmd-ev-3', action_kind: 'click', payload: {} }] }),
+    reportEvidence: async (ev) => { evidence.push(ev); },
+  });
+  const ex = new executor.BrowserCommandExecutor(deps);
+  await ex.tick();
+  assert.equal(evidence.length, 0, 'click 不上报');
+});
+
 test('R11-D2: 同一轮询错误连续出现只记一条，恢复后重新告警', async () => {
   const logs = [];
   let failing = true;
@@ -173,6 +218,7 @@ test('R11-D2: 同一轮询错误连续出现只记一条，恢复后重新告警
   await ex.tick();
   assert.equal(logs.length, 1, '连续同样的失败只能记一条日志');
   assert.match(logs[0], /该工作台功能尚未开放/);
+
   failing = false;
   await ex.tick();
   failing = true;

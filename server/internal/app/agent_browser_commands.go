@@ -45,7 +45,10 @@ type browserCommandView struct {
 
 var browserCommandActions = map[string]bool{
 	"tabs_list": true, "observe": true, "observe_frames": true, "navigate": true,
-	"click": true, "type": true, "extract": true, "screenshot": true,
+	"click": true, "type": true, "scroll": true, "click_at": true, "type_at": true, "scroll_at": true, "extract": true, "screenshot": true,
+	// B-01：人工接管请求（卡片下发到 agent tab；完成走扩展 handoff_complete 上行，
+	// 不落服务端命令账本的完成态——命令本身只表示“已请人接管”）。
+	"handoff_request": true,
 }
 
 const browserCommandColumns = `c.id::text, c.grant_id::text, COALESCE(c.run_id::text,''), c.request_id::text,

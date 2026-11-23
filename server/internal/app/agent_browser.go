@@ -22,10 +22,10 @@ import (
 // 资源归属，但不要求智能体/浏览器功能开关仍开启，保证 agentGate 关闭时仍可清理。
 
 const (
-	browserPairingTTL    = 5 * time.Minute
-	browserGrantTTL      = 30 * time.Second // 27 §15.1：短期租约 30 秒
-	browserGrantMaxRun   = 5                // 27 §15.1：每 run 获准标签上限（本批按 grant 计数收紧点在 W06）
-	browserGrantMaxConc  = 1                // 27 §15.1：每 run 绑定实例 1 个、每标签控制者 1 个的 P0 子集
+	browserPairingTTL   = 5 * time.Minute
+	browserGrantTTL     = 30 * time.Second // 27 §15.1：短期租约 30 秒
+	browserGrantMaxRun  = 5                // 27 §15.1：每 run 获准标签上限（本批按 grant 计数收紧点在 W06）
+	browserGrantMaxConc = 1                // 27 §15.1：每 run 绑定实例 1 个、每标签控制者 1 个的 P0 子集
 )
 
 type browserCapabilities struct {
@@ -106,11 +106,11 @@ func (s *Server) listAgentBrowserBindings(w http.ResponseWriter, r *http.Request
 }
 
 type browserPairingView struct {
-	ID               string `json:"id"`
-	Code             string `json:"code"`
-	State            string `json:"state"`
-	Revision         int64  `json:"revision"`
-	ExpiresAt        string `json:"expires_at"`
+	ID        string `json:"id"`
+	Code      string `json:"code"`
+	State     string `json:"state"`
+	Revision  int64  `json:"revision"`
+	ExpiresAt string `json:"expires_at"`
 }
 
 // POST /agent/browser/pairings：创建配对事务（27 §13.4：短时、限速、request_id 幂等、只绑当前身份）。
@@ -280,16 +280,16 @@ func (s *Server) revokeAgentBrowserBinding(w http.ResponseWriter, r *http.Reques
 }
 
 type browserGrantView struct {
-	ID             string   `json:"id"`
-	BindingID      string   `json:"binding_id"`
-	RunID          string   `json:"run_id,omitempty"`
-	TabHandle      string   `json:"tab_handle"`
-	Origins        []string `json:"origins"`
-	Actions        []string `json:"actions"`
-	PolicyVersion  string   `json:"policy_version"`
-	Generation     int64    `json:"generation"`
-	State          string   `json:"state"`
-	ExpiresAt      string   `json:"expires_at"`
+	ID            string   `json:"id"`
+	BindingID     string   `json:"binding_id"`
+	RunID         string   `json:"run_id,omitempty"`
+	TabHandle     string   `json:"tab_handle"`
+	Origins       []string `json:"origins"`
+	Actions       []string `json:"actions"`
+	PolicyVersion string   `json:"policy_version"`
+	Generation    int64    `json:"generation"`
+	State         string   `json:"state"`
+	ExpiresAt     string   `json:"expires_at"`
 }
 
 // POST /agent/conversations/{id}/browser-grants：为当前活动 run 签发短期标签租约。
@@ -306,12 +306,12 @@ func (s *Server) createAgentBrowserGrant(w http.ResponseWriter, r *http.Request)
 		return errNotFound
 	}
 	var body struct {
-		BindingID      string   `json:"binding_id"`
-		RunID          string   `json:"run_id"`
-		TabHandle      string   `json:"tab_handle"`
-		Origins        []string `json:"origins"`
-		Actions        []string `json:"actions"`
-		PolicyVersion  string   `json:"policy_version"`
+		BindingID     string   `json:"binding_id"`
+		RunID         string   `json:"run_id"`
+		TabHandle     string   `json:"tab_handle"`
+		Origins       []string `json:"origins"`
+		Actions       []string `json:"actions"`
+		PolicyVersion string   `json:"policy_version"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
 		return apiErr(400, "bad_request", "请求体无法解析")
@@ -394,6 +394,42 @@ func (s *Server) createAgentBrowserGrant(w http.ResponseWriter, r *http.Request)
 	return ok(w, view)
 }
 
+// GET /agent/conversations/{id}/browser-grants：只读当前活动租约。
+// BR-09 的“查看操作”需要知道 Agent 正在哪个标签；这是用户自己的租约，不跨会话、
+// 不返回会话密钥，也不改变任何状态。没有活动租约时返回 grant:null。
+func (s *Server) getAgentBrowserGrant(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.browserRoleGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "browser_workspace"); err != nil {
+		return err
+	}
+	conversationID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return errNotFound
+	}
+	var view browserGrantView
+	err = s.db.QueryRow(r.Context(), `
+		SELECT id::text, binding_id::text, COALESCE(run_id::text,''), tab_handle, origins, actions,
+		       COALESCE(policy_version,''), generation, state,
+		       to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		FROM agent_browser_grant
+		WHERE conversation_id=$1 AND workspace_id=$2 AND user_id=$3
+		  AND state='active' AND expires_at > now()
+		ORDER BY created_at DESC LIMIT 1`,
+		conversationID, id.WorkspaceID, id.UserID).
+		Scan(&view.ID, &view.BindingID, &view.RunID, &view.TabHandle, &view.Origins,
+			&view.Actions, &view.PolicyVersion, &view.Generation, &view.State, &view.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ok(w, map[string]any{"grant": nil})
+	}
+	if err != nil {
+		return err
+	}
+	return ok(w, map[string]any{"grant": view})
+}
+
 // DELETE /agent/browser/grants/{id}：只减权撤销（触发本机停控）。
 func (s *Server) revokeAgentBrowserGrant(w http.ResponseWriter, r *http.Request) error {
 	id := ident(r.Context())
@@ -432,6 +468,130 @@ func (s *Server) handoffAgentBrowserGrant(w http.ResponseWriter, r *http.Request
 		return errNotFound
 	}
 	return ok(w, map[string]any{"state": "revoked", "device_ack_pending": true})
+}
+
+// POST /agent/conversations/{id}/browser-handoff：BR-08 按会话收回控制权。
+// 派生租约/服务端续签可能没有渲染端句柄，用户接管只需要知道当前会话；只减权。
+func (s *Server) handOffConversationBrowserGrant(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if id == nil {
+		return errUnauthenticated
+	}
+	conversationID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return errNotFound
+	}
+	var grantID uuid.UUID
+	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+		err := tx.QueryRow(r.Context(), `
+			SELECT id FROM agent_browser_grant
+			WHERE conversation_id=$1 AND workspace_id=$2 AND user_id=$3
+			  AND state='active' AND expires_at > now()
+			ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+			conversationID, id.WorkspaceID, id.UserID).Scan(&grantID)
+		if err == pgx.ErrNoRows {
+			return apiErr(409, "browser_no_active_grant", "当前会话没有活动标签租约")
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(r.Context(), `
+			UPDATE agent_browser_grant SET state='revoked', revoked_at=now(), generation=generation+1
+			WHERE id=$1 AND state='active'`, grantID)
+		return err
+	}); err != nil {
+		return err
+	}
+	return ok(w, map[string]any{
+		"grant_id": grantID.String(), "state": "revoked", "device_ack_pending": true,
+	})
+}
+
+// POST /agent/conversations/{id}/browser-handback：BR-08 交回 Agent。
+// 使用该会话最近一次租约的同一 binding/tab/origins/actions/policy，为当前活动 run 重建 30 秒租约。
+// 不伪造租约：没有历史来源或 run 已结束时 409，由 UI 如实提示。
+func (s *Server) handBackConversationBrowserGrant(w http.ResponseWriter, r *http.Request) error {
+	id := ident(r.Context())
+	if err := s.browserRoleGuard(id); err != nil {
+		return err
+	}
+	if err := s.requireAgentFeature(r.Context(), "browser_workspace"); err != nil {
+		return err
+	}
+	conversationID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return errNotFound
+	}
+	body := struct {
+		RunID string `json:"run_id"`
+	}{}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&body); err != nil {
+		return apiErr(400, "bad_request", "请求体无法解析")
+	}
+	runID, err := uuid.Parse(body.RunID)
+	if err != nil {
+		return apiErr(400, "bad_request", "run_id 必须是 UUID")
+	}
+	var source struct {
+		BindingID     uuid.UUID
+		TabHandle     string
+		Origins       []string
+		Actions       []string
+		PolicyVersion string
+	}
+	newGrantID := uuid.New()
+	if err := s.withTx(r.Context(), func(tx pgx.Tx) error {
+		err := tx.QueryRow(r.Context(), `
+			SELECT binding_id, tab_handle, origins, actions, policy_version
+			FROM agent_browser_grant
+			WHERE conversation_id=$1 AND workspace_id=$2 AND user_id=$3
+			ORDER BY created_at DESC LIMIT 1`,
+			conversationID, id.WorkspaceID, id.UserID).Scan(&source.BindingID, &source.TabHandle,
+			&source.Origins, &source.Actions, &source.PolicyVersion)
+		if err == pgx.ErrNoRows {
+			return apiErr(409, "browser_grant_no_source", "该会话没有可交回的标签租约；请让 Agent 重新请求标签")
+		}
+		if err != nil {
+			return err
+		}
+		var okRun bool
+		if err := tx.QueryRow(r.Context(), `
+			SELECT EXISTS(SELECT 1 FROM agent_run ru
+				WHERE ru.id=$1 AND ru.conversation_id=$2 AND ru.workspace_id=$3 AND ru.user_id=$4
+				  AND ru.status IN ('queued','running','awaiting_confirmation'))`,
+			runID, conversationID, id.WorkspaceID, id.UserID).Scan(&okRun); err != nil {
+			return err
+		}
+		if !okRun {
+			return apiErr(409, "browser_run_not_active", "run 已结束；交回后请重新发送任务")
+		}
+		// 同一会话同一时刻只保留一份活动租约，避免接管后旧租约仍可操作。
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE agent_browser_grant SET state='revoked', revoked_at=now(), generation=generation+1
+			WHERE conversation_id=$1 AND workspace_id=$2 AND user_id=$3 AND state='active'`,
+			conversationID, id.WorkspaceID, id.UserID); err != nil {
+			return err
+		}
+		_, err = tx.Exec(r.Context(), `
+			INSERT INTO agent_browser_grant (id, binding_id, workspace_id, user_id, conversation_id, run_id,
+				tab_handle, origins, actions, policy_version, state, expires_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'active', now()+interval '30 seconds')`,
+			newGrantID, source.BindingID, id.WorkspaceID, id.UserID, conversationID, runID,
+			source.TabHandle, source.Origins, source.Actions, source.PolicyVersion)
+		return err
+	}); err != nil {
+		return err
+	}
+	var view browserGrantView
+	if err := s.db.QueryRow(r.Context(), `
+		SELECT id::text, binding_id::text, COALESCE(run_id::text,''), tab_handle, origins, actions,
+		       policy_version, generation, state, to_char(expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		FROM agent_browser_grant WHERE id=$1`, newGrantID).Scan(&view.ID, &view.BindingID, &view.RunID,
+		&view.TabHandle, &view.Origins, &view.Actions, &view.PolicyVersion, &view.Generation,
+		&view.State, &view.ExpiresAt); err != nil {
+		return err
+	}
+	return ok(w, view)
 }
 
 // browserRoleGuard：viewer 与超管代访问一律拒绝（27 §14.1 P0 边界）。
@@ -518,7 +678,6 @@ func (s *Server) deriveBrowserGrantForRun(ctx context.Context, tx pgx.Tx,
 	}
 	return browserGrantDerivation{SourceGrantID: src.ID, GrantID: &grantID}, nil
 }
-
 
 // POST /tools/browser/tab-requests：模型请求用户在浏览器中选择要操作的标签
 // （A30：浏览器侧镜像 A12 决策 A，27 §13 发送时序）。选标签 UI 完全在渲染端运行，

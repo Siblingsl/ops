@@ -26,6 +26,23 @@ const sw = {
   reconnectDelay: 1000,
   reconnectTimer: null,
   started: false,
+  // B-01：agent 正在使用的 tab（人工接管卡片的注入范围）。持久化到 storage.local，
+  // SW 重启后按 tab 重新注入；tab 关闭/接管结束即移除。
+  agentTabs: new Set(),
+  // tabId -> {state, handoffId, message, origin}；状态只服务卡片显示与完成校验。
+  pageStatus: new Map(),
+  // 当前文档是否已注入 page-status.js（导航 loading/complete 时重置）。
+  pageStatusInjected: new Set(),
+  // 同一 handoffId 只上报一次完成（页面重试/重复点击幂等）。
+  completedHandoffs: new Set(),
+  // B-07：桥下发的访问模式（只读 + 来源白名单）；扩展侧做第二道校验。
+  readOnly: false,
+  allowedOrigins: new Set(),
+  // B-02A：人类化输入（点击轨迹/逐字输入/滚动分帧）；默认关闭，由桥下发。
+  humanInput: false,
+  // B-02B：可信输入（chrome.debugger 的 Input 域）；默认关闭，需可选权限 + 桥下发。
+  debuggerInput: false,
+  debuggerTabs: new Map(),
 };
 
 // MV3 service worker 无 node:crypto；用自实现 HMAC-SHA256（同步、无依赖）。
@@ -173,7 +190,7 @@ async function loadState() {
 }
 
 async function loadStateOnce() {
-  const d = await chrome.storage.local.get(['session_key', 'seq_out', 'last_seq_in', 'paired', 'pairing_code', 'pairing_expires_at', 'extension_instance_id', 'last_commands', 'crypto_version', 'hkdf_salt']);
+  const d = await chrome.storage.local.get(['session_key', 'seq_out', 'last_seq_in', 'paired', 'pairing_code', 'pairing_expires_at', 'extension_instance_id', 'last_commands', 'crypto_version', 'hkdf_salt', 'agent_tabs', 'page_status', 'access_mode']);
   sw.sessionKey = d.session_key || null;
   sw.cryptoVersion = Number(d.crypto_version) === CRYPTO_VERSION_V2 ? CRYPTO_VERSION_V2 : CRYPTO_VERSION_V1;
   sw.hkdfSalt = d.hkdf_salt || null;
@@ -184,6 +201,13 @@ async function loadStateOnce() {
   sw.seqOut = d.seq_out || 0;
   sw.lastSeqIn = d.last_seq_in || 0;
   sw.paired = Boolean(d.paired && d.session_key);
+  const mode = d.access_mode && typeof d.access_mode === 'object' ? d.access_mode : {};
+  sw.readOnly = Boolean(mode.read_only);
+  sw.allowedOrigins = new Set((Array.isArray(mode.allowed_origins) ? mode.allowed_origins : []).map(normalizeOrigin).filter(Boolean));
+  sw.humanInput = Boolean(mode.human_input);
+  sw.debuggerInput = Boolean(mode.debugger_input);
+  sw.agentTabs = new Set((Array.isArray(d.agent_tabs) ? d.agent_tabs : []).map(Number).filter((n) => Number.isInteger(n) && n > 0));
+  sw.pageStatus = new Map((Array.isArray(d.page_status) ? d.page_status : []).filter((e) => Array.isArray(e) && e.length === 2).map((e) => [String(e[0]), e[1]]));
   let instanceId = d.extension_instance_id;
   if (!instanceId) {
     instanceId = crypto.randomUUID();
@@ -216,7 +240,7 @@ function sign(msg) {
 async function validateInbound(msg) {
   if (!msg || typeof msg !== 'object') return 'envelope must be object';
   if (msg.v !== PROTOCOL_VERSION) return `protocol version mismatch: ${msg.v}`;
-  const allowed = ['pairing_start', 'pairing_confirm', 'pairing_confirmed', 'command', 'revoke', 'ping', 'pong', 'error'];
+  const allowed = ['pairing_start', 'pairing_confirm', 'pairing_confirmed', 'command', 'revoke', 'ping', 'pong', 'error', 'page_status'];
   if (!allowed.includes(msg.type)) return `type not allowed: ${msg.type}`;
   // pairing_start 是重新配对信号：作废旧密钥后免验签（与新密钥的 pairing_confirm 配套）。
   if (msg.type === 'pairing_start' && sw.sessionKey) {
@@ -288,18 +312,64 @@ function observeFn(maxNodes) {
   };
 }
 
-function clickFn(ref, docRev) {
+async function clickFn(ref, docRev, humanize) {
   if (window.__opsDocRev !== docRev) return { error: 'doc_rev_changed' };
   const el = window.__opsRefMap && window.__opsRefMap.get(ref);
   if (!el) return { error: 'ref_not_found' };
   const r = el.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) return { error: 'ref_not_visible' };
   if (el.matches('input[type="password"]')) return { error: 'sensitive_control' };
-  el.click();
-  return { clicked: true, tag: el.tagName.toLowerCase(), name: (el.textContent || '').trim().slice(0, 60) };
+  const tag = el.tagName.toLowerCase();
+  const name = (el.textContent || '').trim().slice(0, 60);
+  if (!humanize) {
+    el.click();
+    return { clicked: true, tag, name };
+  }
+
+  // B-02A：人类化点击（ISOLATED world 内合成事件，isTrusted 仍为 false，只改善行为轨迹）。
+  // 常量与 desktop/src/platforms/human-input.ts 一致：时长上限 700ms、每步 8–17ms、
+  // minimum-jerk、c1 20–35%、c2 65–80%、按下前 45–130ms、按住 60–140ms。
+  const U = (min, max) => min + (max - min) * Math.random();
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+  const jerk = (t) => t ** 3 * (10 - 15 * t + 6 * t ** 2);
+  const target = { x: r.left + r.width / 2 + (Math.random() * 4.4 - 2.2), y: r.top + r.height / 2 + (Math.random() * 3.2 - 1.6) };
+  const from = { x: target.x + U(-260, 260), y: target.y + U(-180, 180) };
+  const dist = Math.hypot(target.x - from.x, target.y - from.y);
+  if (dist >= 2) {
+    const duration = Math.min(700, (70 + 90 * Math.log2(dist / 40 + 1)) * U(0.85, 1.2));
+    const bow = U(0.04, 0.18) * (Math.random() < 0.5 ? -1 : 1) * dist;
+    const ux = -(target.y - from.y) / dist;
+    const uy = (target.x - from.x) / dist;
+    const c1r = U(0.2, 0.35);
+    const c2r = U(0.65, 0.8);
+    const c1 = { x: from.x + (target.x - from.x) * c1r + ux * bow, y: from.y + (target.y - from.y) * c1r + uy * bow };
+    const c2 = { x: from.x + (target.x - from.x) * c2r + ux * bow * 0.6, y: from.y + (target.y - from.y) * c2r + uy * bow * 0.6 };
+    const bez = (a, b, c, d, s) => (1 - s) ** 3 * a + 3 * (1 - s) ** 2 * s * b + 3 * (1 - s) * s ** 2 * c + s ** 3 * d;
+    let elapsed = 0;
+    while (elapsed < duration) {
+      const step = U(8, 17);
+      elapsed = Math.min(duration, elapsed + step);
+      const s = jerk(elapsed / duration);
+      const tremor = (1 - s) * 0.9;
+      const x = bez(from.x, c1.x, c2.x, target.x, s) + (Math.random() + Math.random() + Math.random() - 1.5) * tremor;
+      const y = bez(from.y, c1.y, c2.y, target.y, s) + (Math.random() + Math.random() + Math.random() - 1.5) * tremor;
+      const hit = document.elementFromPoint(x, y) || document.body;
+      hit.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
+      await sleep(step);
+    }
+  }
+  // 精确落点 + 按下前停留（减去到达耗时按 0 处理，总延迟仍落在 45–130ms）。
+  el.focus && el.focus();
+  el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window, clientX: target.x, clientY: target.y }));
+  await sleep(U(45, 130));
+  el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: target.x, clientY: target.y, button: 0 }));
+  await sleep(U(60, 140));
+  el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: target.x, clientY: target.y, button: 0 }));
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: target.x, clientY: target.y, button: 0 }));
+  return { clicked: true, humanized: true, tag, name };
 }
 
-function typeFn(ref, text, docRev) {
+async function typeFn(ref, text, docRev, humanize) {
   if (window.__opsDocRev !== docRev) return { error: 'doc_rev_changed' };
   const el = window.__opsRefMap && window.__opsRefMap.get(ref);
   if (!el) return { error: 'ref_not_found' };
@@ -308,10 +378,57 @@ function typeFn(ref, text, docRev) {
   const type = (el.getAttribute('type') || '').toLowerCase();
   if (type === 'password' || type === 'file') return { error: 'sensitive_control' };
   el.focus();
-  el.value = text;
-  el.dispatchEvent(new Event('input', { bubbles: true }));
+  if (!humanize) {
+    el.value = text;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return { typed: text.length, tag };
+  }
+
+  // B-02A：逐字符输入，间隔 U(30,110)ms，每个字符发 keydown/keypress/input/keyup。
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+  const U = (min, max) => min + (max - min) * Math.random();
+  el.value = '';
+  const chars = Array.from(String(text));
+  for (let i = 0; i < chars.length; i += 1) {
+    if (i > 0) await sleep(U(30, 110));
+    const ch = chars[i];
+    const code = ch.charCodeAt(0);
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true, cancelable: true }));
+    el.dispatchEvent(new KeyboardEvent('keypress', { key: ch, charCode: code, keyCode: code, bubbles: true, cancelable: true }));
+    el.value += ch;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true, cancelable: true }));
+  }
   el.dispatchEvent(new Event('change', { bubbles: true }));
-  return { typed: text.length, tag };
+  return { typed: chars.length, humanized: true, tag };
+}
+
+async function scrollFn(deltaY, docRev, humanize) {
+  if (window.__opsDocRev !== docRev) return { error: 'doc_rev_changed' };
+  const total = Number(deltaY) || 0;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+  if (!humanize || Math.abs(total) < 40) {
+    window.scrollBy(0, total);
+    return { scrolled: total, humanized: !!humanize };
+  }
+  // B-02A：easeOutCubic 分摊，帧间隔 15.5–18ms，各帧 delta 严格求和。
+  const U = (min, max) => min + (max - min) * Math.random();
+  const frames = Math.max(1, Math.round((Math.min(140 + 0.45 * Math.abs(total), 650) * U(0.85, 1.15)) / 16.7));
+  let allocated = 0;
+  for (let i = 1; i <= frames; i += 1) {
+    const s = 1 - (1 - i / frames) ** 3;
+    const want = total * s;
+    const delta = i === frames ? total - allocated : Math.round((want - allocated) * 100) / 100;
+    allocated += delta;
+    const x = window.innerWidth / 2;
+    const y = window.innerHeight / 2;
+    const hit = document.elementFromPoint(x, y) || document.body;
+    hit.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, view: window, deltaY: delta, clientX: x, clientY: y }));
+    window.scrollBy(0, delta);
+    await sleep(U(15.5, 18));
+  }
+  return { scrolled: allocated, humanized: true };
 }
 
 function extractFn(selector, docRev) {
@@ -338,8 +455,21 @@ function parseHost(url) {
   }
 }
 
+// B-07：白名单项归一化为 origin；裸 host 按 https，非 http(s) 丢弃。
+function normalizeOrigin(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(raw.includes('://') ? raw : `https://${raw}`);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin.toLowerCase() : '';
+  } catch {
+    return '';
+  }
+}
+
 async function actionTabsList() {
-  const tabs = await chrome.tabs.query({});
+  // 只列出可被 Agent 操作的 http/https 标签；chrome://、about:、扩展页等内部页不进入授权列表。
+  const tabs = (await chrome.tabs.query({})).filter((t) => /^https?:\/\//i.test(t.url || ''));
   return {
     tabs: tabs.map((t) => ({
       id: t.id,
@@ -352,7 +482,9 @@ async function actionTabsList() {
 }
 
 async function executeOn(tabId, fn, args) {
-  const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: fn, args });
+  // B-04：显式 ISOLATED（不是默认省略）。页面主世界脚本永远读不到 __ops* 状态，
+  // 也不要为了取页面变量改成 MAIN。
+  const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: fn, args, world: 'ISOLATED' });
   return res && res.result;
 }
 
@@ -361,7 +493,7 @@ async function executeOn(tabId, fn, args) {
 // frameIds 里的 frame 不存在（导航后失效）时 executeScript 抛错，这里转成显式 error。
 async function executeOnFrame(tabId, frameId, fn, args) {
   try {
-    const results = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func: fn, args });
+    const results = await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func: fn, args, world: 'ISOLATED' });
     return (results && results[0] && results[0].result) || { error: 'no_result' };
   } catch (err) {
     return { error: 'frame_inject_failed', message: String((err && err.message) || err).slice(0, 120) };
@@ -378,6 +510,7 @@ async function actionObserveFrames(payload) {
     target: { tabId, allFrames: true },
     func: observeFrameFn,
     args: [MAX_NODES],
+    world: 'ISOLATED',
   });
   const frames = results.map((r) => {
     const d = r.result || {};
@@ -443,7 +576,13 @@ async function actionNavigate(payload) {
     return { error: 'url_invalid' };
   }
   if (!/^https?:$/.test(parsed.protocol)) return { error: 'url_not_http' };
-  await chrome.tabs.update(tabId, { url: parsed.href });
+  // B-07 第二道：目标 origin 不在会话白名单时拒绝，连 tabs.update 都不调用。
+  if (sw.allowedOrigins.size > 0 && !sw.allowedOrigins.has(parsed.origin.toLowerCase())) {
+    return { error: 'origin_not_allowed' };
+  }
+  // BR-09：显式后台导航（active:false）。Chrome 没有名为 background 的 update 字段，
+  // “不抢前台”的等价语义就是不把 active 置真；只有用户“查看操作”才走 activate_tab。
+  await chrome.tabs.update(tabId, { url: parsed.href, active: false });
   const final = await new Promise((resolve) => {
     const timer = setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
@@ -462,20 +601,29 @@ async function actionNavigate(payload) {
 }
 
 async function actionClick(payload) {
+  const humanize = !!sw.humanInput;
   // frame_id 缺省 = 主 frame（旧行为不变）；带 frame_id 时定向注入（A7）。
   const frameId = Number(payload.frame_id);
   if (Number.isInteger(frameId) && frameId > 0) {
-    return executeOnFrame(Number(payload.tab_id), frameId, clickFn, [String(payload.ref), String(payload.doc_rev)]);
+    return executeOnFrame(Number(payload.tab_id), frameId, clickFn, [String(payload.ref), String(payload.doc_rev), humanize]);
   }
-  return (await executeOn(Number(payload.tab_id), clickFn, [String(payload.ref), String(payload.doc_rev)])) || { error: 'no_result' };
+  return (await executeOn(Number(payload.tab_id), clickFn, [String(payload.ref), String(payload.doc_rev), humanize])) || { error: 'no_result' };
 }
 
 async function actionType(payload) {
+  const humanize = !!sw.humanInput;
   const frameId = Number(payload.frame_id);
   if (Number.isInteger(frameId) && frameId > 0) {
-    return executeOnFrame(Number(payload.tab_id), frameId, typeFn, [String(payload.ref), String(payload.text ?? ''), String(payload.doc_rev)]);
+    return executeOnFrame(Number(payload.tab_id), frameId, typeFn, [String(payload.ref), String(payload.text ?? ''), String(payload.doc_rev), humanize]);
   }
-  return (await executeOn(Number(payload.tab_id), typeFn, [String(payload.ref), String(payload.text ?? ''), String(payload.doc_rev)])) || { error: 'no_result' };
+  return (await executeOn(Number(payload.tab_id), typeFn, [String(payload.ref), String(payload.text ?? ''), String(payload.doc_rev), humanize])) || { error: 'no_result' };
+}
+
+async function actionScroll(payload) {
+  // B-02A：滚动沿页面中心合成 wheel + 实际 scrollBy；人类化时分帧 easeOutCubic。
+  const deltaY = Number(payload.delta_y ?? payload.deltaY ?? 0);
+  if (!Number.isFinite(deltaY) || Math.abs(deltaY) > 20000) return { error: 'delta_out_of_range' };
+  return (await executeOn(Number(payload.tab_id), scrollFn, [deltaY, String(payload.doc_rev), !!sw.humanInput])) || { error: 'no_result' };
 }
 
 async function actionExtract(payload) {
@@ -483,10 +631,365 @@ async function actionExtract(payload) {
 }
 
 async function actionScreenshot(payload) {
-  const tab = await chrome.tabs.get(Number(payload.tab_id));
+  const tabId = Number(payload.tab_id);
+  const tab = await chrome.tabs.get(tabId);
+  // BR-09：captureVisibleTab 只能截“窗口当前活动标签”。目标在后台时如实拒绝，
+  // 不为了截图把用户正在看的标签切走；用户点“查看操作”后由 activate_tab 主动切过去。
+  const [active] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+  if (!active || active.id !== tabId) return { error: 'tab_not_foreground' };
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 60 });
   return { data_url: dataUrl };
 }
+
+// BR-09：唯一的显式前台动作。只允许用户点击“查看操作”经本机桥调用，
+// 服务端 Agent 动作白名单（browserCommandActions）不含 activate_tab。
+async function actionActivateTab(payload) {
+  const tabId = Number(payload.tab_id);
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab.url || !/^https?:/.test(tab.url)) return { error: 'tab_not_http' };
+  await chrome.tabs.update(tabId, { active: true });
+  await chrome.windows.update(tab.windowId, { focused: true });
+  return { activated: true, tab_id: tabId };
+}
+
+// ---------------------------------------------------------------------------
+// B-02B：可信输入通道（chrome.debugger 的 Input 域，固定方法，不接受任意 CDP）
+// 默认关闭：需要可选权限 debugger + 桥下发 access_mode.debugger_input。
+// 只允许 Input.dispatchMouseEvent / Input.insertText；不开启 Runtime/Console/Debugger 域。
+// ---------------------------------------------------------------------------
+
+const DEBUGGER_PROTOCOL_VERSION = '1.3';
+
+async function releaseDebugger(tabId) {
+  if (!sw.debuggerTabs.has(tabId)) return;
+  sw.debuggerTabs.delete(tabId);
+  try {
+    await chrome.debugger.detach({ tabId });
+  } catch {
+    // tab 已关闭或已自行 detach：不把清理失败上报成动作失败。
+  }
+}
+
+async function ensureDebugger(tabId) {
+  if (!sw.debuggerInput) return { error: 'debugger_disabled' };
+  if (!chrome.permissions || !(await chrome.permissions.contains({ permissions: ['debugger'] }))) {
+    return { error: 'debugger_permission_missing' };
+  }
+  if (sw.debuggerTabs.has(tabId)) return { ok: true };
+  try {
+    await chrome.debugger.attach({ tabId }, DEBUGGER_PROTOCOL_VERSION);
+  } catch (err) {
+    const text = String((err && err.message) || err).slice(0, 160);
+    // 没记录在 sw.debuggerTabs 里却报 already attached：是 DevTools 或其他扩展，明确失败不抢。
+    if (/already attached|another debugger|devtools/i.test(text)) return { error: 'debugger_conflict', message: text };
+    return { error: 'debugger_attach_failed', message: text };
+  }
+  sw.debuggerTabs.set(tabId, { attachedAt: Date.now() });
+  return { ok: true };
+}
+
+async function actionClickAt(payload) {
+  const tabId = Number(payload.tab_id);
+  const x = Number(payload.x);
+  const y = Number(payload.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > 10000 || y > 10000) return { error: 'coordinates_invalid' };
+  const button = ['left', 'right', 'middle'].includes(payload.button) ? payload.button : 'left';
+  const clickCount = Number.isInteger(Number(payload.click_count)) ? Math.min(3, Math.max(1, Number(payload.click_count))) : 1;
+  const attached = await ensureDebugger(tabId);
+  if (attached.error) return attached;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+  const target = { x, y };
+  const from = { x: x + (Math.random() * 400 - 200), y: y + (Math.random() * 300 - 150) };
+  const dist = Math.hypot(target.x - from.x, target.y - from.y);
+  const duration = Math.min(700, (70 + 90 * Math.log2(dist / 40 + 1)) * (0.85 + Math.random() * 0.35));
+  let elapsed = 0;
+  while (elapsed < duration) {
+    const step = 8 + Math.random() * 9;
+    elapsed = Math.min(duration, elapsed + step);
+    const s = (elapsed / duration) ** 3 * (10 - 15 * (elapsed / duration) + 6 * (elapsed / duration) ** 2);
+    const px = from.x + (target.x - from.x) * s;
+    const py = from.y + (target.y - from.y) * s;
+    await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: px, y: py, button: 'none' });
+    await sleep(step);
+  }
+  await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' });
+  await sleep(45 + Math.random() * 85);
+  await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount });
+  await sleep(60 + Math.random() * 80);
+  await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount });
+  return { clicked: true, trusted: true, tab_id: tabId, x, y };
+}
+
+async function actionTypeAt(payload) {
+  const tabId = Number(payload.tab_id);
+  const text = String(payload.text ?? '').slice(0, 500);
+  if (!text) return { error: 'text_required' };
+  const attached = await ensureDebugger(tabId);
+  if (attached.error) return attached;
+  await chrome.debugger.sendCommand({ tabId }, 'Input.insertText', { text });
+  return { typed: text.length, trusted: true, tab_id: tabId };
+}
+
+async function actionScrollAt(payload) {
+  const tabId = Number(payload.tab_id);
+  const x = Number(payload.x);
+  const y = Number(payload.y);
+  const deltaY = Number(payload.delta_y ?? 0);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > 10000 || y > 10000) return { error: 'coordinates_invalid' };
+  if (!Number.isFinite(deltaY) || Math.abs(deltaY) > 20000) return { error: 'delta_out_of_range' };
+  const attached = await ensureDebugger(tabId);
+  if (attached.error) return attached;
+  await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
+    type: 'mouseWheel', x, y, deltaX: 0, deltaY, button: 'none',
+  });
+  return { scrolled: deltaY, trusted: true, tab_id: tabId };
+}
+
+// ---------------------------------------------------------------------------
+// B-01：人工接管（page_status 下发 / handoff_complete 上行）
+// 注入范围只限 agent 正在使用的 tab；卡片脚本 page-status.js 自身闭包在 closed
+// shadow root 内，只有 isTrusted 点击能触发完成。
+// ---------------------------------------------------------------------------
+
+const PAGE_STATES = new Set(['attached', 'running', 'waiting', 'recording']);
+// B-07：只读采集会话（扩展侧第二道校验）。activate_tab 仅前台展示，不改页面。
+const READ_ONLY_ACTIONS = new Set(['tabs_list', 'observe', 'observe_frames', 'extract', 'screenshot', 'activate_tab', 'scroll']);
+
+async function persistPageStatus() {
+  await chrome.storage.local.set({
+    agent_tabs: Array.from(sw.agentTabs),
+    page_status: Array.from(sw.pageStatus.entries()),
+  });
+}
+
+function badgeForPageState(state) {
+  if (state === 'waiting') return ['WAIT', '#f59e0b'];
+  if (state === 'running') return ['RUN', '#2563eb'];
+  if (state === 'recording') return ['REC', '#dc2626'];
+  return ['ON', '#16a34a'];
+}
+
+async function injectPageStatus(tabId) {
+  if (sw.pageStatusInjected.has(tabId)) return true;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['page-status.js'],
+      injectImmediately: true,
+      world: 'ISOLATED',
+    });
+    sw.pageStatusInjected.add(tabId);
+    return true;
+  } catch (err) {
+    // about:/chrome://、页面尚未 ready 等注入失败：保留待注入标记，等 tabs.onUpdated complete 重试。
+    await chrome.storage.local.set({ last_error: `${new Date().toISOString()} page_status_inject:${tabId}: ${(err && err.message) || err}` });
+    return false;
+  }
+}
+
+async function sendPageStatus(tabId, state) {
+  const injected = await injectPageStatus(tabId);
+  if (!injected) return false;
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'ops:page-status', state });
+    return true;
+  } catch (err) {
+    // 注入与消息监听之间存在竞态：清掉已注入标记，重注入后再发一次。
+    sw.pageStatusInjected.delete(tabId);
+    if (!(await injectPageStatus(tabId))) return false;
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'ops:page-status', state });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+async function showHandoffNotification(record) {
+  try {
+    await chrome.notifications.create(`ops-handoff-${record.tabId}`, {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icon-128.png'),
+      title: 'OPS 需要你完成一步操作',
+      message: `${record.origin || '当前页面'} ${record.message || '请完成验证后返回'}`.slice(0, 220),
+      priority: 2,
+      requireInteraction: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function handlePageStatusPayload(payload) {
+  if (!payload || typeof payload !== 'object') return { ok: false, error: 'payload_required' };
+  // B-07：访问模式与卡片无关，先处理；mode 信封不要求 tab_id。
+  if (payload.op === 'mode') {
+    sw.readOnly = Boolean(payload.read_only);
+    sw.allowedOrigins = new Set((Array.isArray(payload.allowed_origins) ? payload.allowed_origins : []).map(normalizeOrigin).filter(Boolean));
+    sw.humanInput = Boolean(payload.human_input);
+    sw.debuggerInput = Boolean(payload.debugger_input);
+    await chrome.storage.local.set({
+      access_mode: { read_only: sw.readOnly, allowed_origins: Array.from(sw.allowedOrigins), human_input: sw.humanInput, debugger_input: sw.debuggerInput },
+    });
+    return { ok: true, read_only: sw.readOnly, allowed_origins: Array.from(sw.allowedOrigins), human_input: sw.humanInput, debugger_input: sw.debuggerInput };
+  }
+  const tabId = Number(payload.tab_id);
+  if (!Number.isInteger(tabId) || tabId <= 0) return { ok: false, error: 'tab_id_required' };
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || !/^https?:/i.test(tab.url || '')) return { ok: false, error: 'tab_not_http' };
+  if (payload.op === 'clear') {
+    sw.agentTabs.delete(tabId);
+    sw.pageStatus.delete(String(tabId));
+    await sendPageStatus(tabId, { state: 'clear' });
+    setBadge('ON', '#16a34a');
+    await persistPageStatus();
+    return { ok: true, cleared: true };
+  }
+  const state = payload.state && typeof payload.state === 'object' ? payload.state : payload;
+  const stateName = String(state.state || '');
+  if (!PAGE_STATES.has(stateName)) return { ok: false, error: 'state_not_allowed' };
+  const handoffId = typeof state.handoffId === 'string' ? state.handoffId.slice(0, 64) : '';
+  if (stateName === 'waiting' && !handoffId) return { ok: false, error: 'handoff_id_required' };
+  const record = {
+    state: stateName,
+    handoffId,
+    message: typeof state.message === 'string' ? state.message.slice(0, 200) : '',
+    tabId,
+    origin: parseHost(tab.url || ''),
+    updated_at: Date.now(),
+  };
+  sw.agentTabs.add(tabId);
+  sw.pageStatus.set(String(tabId), record);
+  const badge = badgeForPageState(stateName);
+  setBadge(badge[0], badge[1]);
+  if (stateName === 'recording') {
+    // 录屏 tab 不画卡片：出系统通知并聚焦该 tab；通知失败且有人工接管请求时回退卡片
+    //（“视频里多一张卡片”好过 agent 干等到超时）。
+    const notified = await showHandoffNotification(record);
+    if (notified) {
+      try { await chrome.tabs.sendMessage(tabId, { type: 'ops:page-status', state: { state: 'clear' } }); } catch { /* 无卡片时忽略 */ }
+    } else if (handoffId) {
+      record.state = 'waiting';
+      record.fallback = 'notification_failed';
+      await sendPageStatus(tabId, record);
+    } else {
+      await persistPageStatus();
+      return { ok: false, error: 'notification_failed' };
+    }
+    await persistPageStatus();
+    return { ok: true, state: record.state, tab_id: tabId, handoff_id: handoffId, notified };
+  }
+  await sendPageStatus(tabId, record);
+  await persistPageStatus();
+  return { ok: true, state: stateName, tab_id: tabId, handoff_id: handoffId };
+}
+
+async function actionHandoffRequest(payload) {
+  const tabId = Number(payload.tab_id);
+  if (!Number.isInteger(tabId) || tabId <= 0) return { error: 'tab_id_required' };
+  const handoffId = String(payload.handoff_id || payload.handoffId || '').slice(0, 64) || `h${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const applied = await handlePageStatusPayload({
+    op: 'set',
+    tab_id: tabId,
+    state: {
+      state: 'waiting',
+      handoffId,
+      message: typeof payload.message === 'string' ? payload.message : '',
+    },
+  });
+  if (!applied.ok) return { error: applied.error };
+  return { waiting: true, handoff_id: handoffId, tab_id: tabId };
+}
+
+async function onPageStatusReady(senderTab) {
+  const tabId = senderTab && Number(senderTab.id);
+  if (!Number.isInteger(tabId) || tabId <= 0) return;
+  const record = sw.pageStatus.get(String(tabId));
+  if (!record) return;
+  await sendPageStatus(tabId, record);
+}
+
+async function onHandoffComplete(message, sender) {
+  const tabId = sender && sender.tab ? Number(sender.tab.id) : NaN;
+  const claimedTabId = Number(message.tabId);
+  if (!Number.isInteger(tabId) || tabId <= 0 || claimedTabId !== tabId) return { ok: false, error: 'tab_mismatch' };
+  const handoffId = typeof message.handoffId === 'string' ? message.handoffId.slice(0, 64) : '';
+  const record = sw.pageStatus.get(String(tabId));
+  if (!handoffId || !record || record.state !== 'waiting' || record.handoffId !== handoffId) {
+    return { ok: false, error: 'handoff_not_pending' };
+  }
+  if (sw.completedHandoffs.has(handoffId)) return { ok: true, duplicate: true };
+  sw.completedHandoffs.add(handoffId);
+  if (sw.completedHandoffs.size > 100) sw.completedHandoffs.delete(sw.completedHandoffs.values().next().value);
+  const sent = sendToHost({
+    v: PROTOCOL_VERSION,
+    type: 'handoff_complete',
+    payload: {
+      handoff_id: handoffId,
+      tab_id: tabId,
+      origin: parseHost(sender.tab.url || ''),
+      completed_at: Date.now(),
+    },
+  });
+  if (!sent) {
+    sw.completedHandoffs.delete(handoffId);
+    return { ok: false, error: 'host_not_connected' };
+  }
+  const next = { ...record, state: 'running', handoffId: '', updated_at: Date.now() };
+  sw.pageStatus.set(String(tabId), next);
+  setBadge('RUN', '#2563eb');
+  await sendPageStatus(tabId, next);
+  await persistPageStatus();
+  return { ok: true, accepted: true };
+}
+
+// 扩展启动即注册：page-status.js 首次注入会主动请求当前状态；人工完成点击上行到宿主。
+if (typeof chrome !== 'undefined' && chrome && chrome.runtime) chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || typeof msg.type !== 'string') return false;
+  if (msg.type === 'page_status_ready') {
+    void onPageStatusReady(sender.tab).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+  if (msg.type === 'handoff_complete') {
+    void onHandoffComplete(msg, sender).then((result) => sendResponse(result)).catch((err) => sendResponse({ ok: false, error: String((err && err.message) || err).slice(0, 120) }));
+    return true;
+  }
+  return false;
+});
+
+// 导航 loading/complete 时重新注入（页面 DOM 已被替换，旧卡片自然消失）。
+if (typeof chrome !== 'undefined' && chrome && chrome.tabs) chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!sw.agentTabs.has(tabId)) return;
+  if (changeInfo.status !== 'loading' && changeInfo.status !== 'complete') return;
+  sw.pageStatusInjected.delete(tabId);
+  void injectPageStatus(tabId).then((ok) => {
+    if (!ok) return;
+    const record = sw.pageStatus.get(String(tabId));
+    if (record) void sendPageStatus(tabId, record);
+  });
+});
+
+if (typeof chrome !== 'undefined' && chrome && chrome.tabs) chrome.tabs.onRemoved.addListener((tabId) => {
+  if (!sw.agentTabs.has(tabId) && !sw.pageStatus.has(String(tabId))) return;
+  void releaseDebugger(tabId);
+  sw.agentTabs.delete(tabId);
+  sw.pageStatus.delete(String(tabId));
+  sw.pageStatusInjected.delete(tabId);
+  void persistPageStatus();
+});
+
+// 录屏冲突：通知点击聚焦对应 tab（不代替平台页面完成判定）。
+if (typeof chrome !== 'undefined' && chrome && chrome.notifications) chrome.notifications.onClicked.addListener((notificationId) => {
+  const tabId = Number(String(notificationId).replace('ops-handoff-', ''));
+  if (!Number.isInteger(tabId) || tabId <= 0) return;
+  void chrome.tabs.get(tabId).then((tab) => {
+    if (!tab) return;
+    void chrome.tabs.update(tabId, { active: true });
+    if (Number.isInteger(tab.windowId)) void chrome.windows.update(tab.windowId, { focused: true });
+  }).catch(() => {});
+});
 
 const ACTIONS = {
   tabs_list: actionTabsList,
@@ -495,8 +998,16 @@ const ACTIONS = {
   navigate: actionNavigate,
   click: actionClick,
   type: actionType,
+  scroll: actionScroll,
+  // B-02B：可信输入（仅 Input 域，需可选权限 + 开关）
+  click_at: actionClickAt,
+  type_at: actionTypeAt,
+  scroll_at: actionScrollAt,
   extract: actionExtract,
   screenshot: actionScreenshot,
+  handoff_request: actionHandoffRequest,
+  // BR-09：仅本机用户“查看操作”使用；Agent 服务端动作白名单不登记该动作。
+  activate_tab: actionActivateTab,
 };
 
 function bytesToHex(bytes) {
@@ -531,6 +1042,10 @@ async function handleCommand(msg) {
   if (typeof msg.payload_hash === 'string' && msg.payload_hash !== payloadHashHex(msg.payload)) {
     // 载荷与派发时不一致：拒绝执行，不猜意图。
     return { ok: false, error_code: 'payload_hash_mismatch' };
+  }
+  // B-07：扩展侧第二道只读校验——桥侧拒绝之外，即使信封直接到达也不执行写动作。
+  if (sw.readOnly && !READ_ONLY_ACTIONS.has(msg.action)) {
+    return { ok: false, error_code: 'read_only', message: `read-only session rejects ${msg.action}` };
   }
   const fn = ACTIONS[msg.action];
   if (!fn) {
@@ -623,8 +1138,20 @@ async function handleHostMessage(msg) {
     sw.hkdfSalt = null;
     sw.messageKey = null;
     sw.paired = false;
-    await chrome.storage.local.set({ session_key: null, paired: false, pairing_code: null, crypto_version: CRYPTO_VERSION_V1, hkdf_salt: null });
+    for (const tabId of Array.from(sw.debuggerTabs.keys())) void releaseDebugger(tabId);
+    for (const tabId of sw.agentTabs) void sendPageStatus(tabId, { state: 'clear' });
+    sw.agentTabs.clear();
+    sw.pageStatus.clear();
+    sw.pageStatusInjected.clear();
+    await chrome.storage.local.set({ session_key: null, paired: false, pairing_code: null, crypto_version: CRYPTO_VERSION_V1, hkdf_salt: null, agent_tabs: [], page_status: [] });
     setBadge('OFF', '#6b7280');
+    return;
+  }
+  if (msg.type === 'page_status') {
+    const result = await handlePageStatusPayload(msg.payload || {});
+    if (!result.ok) {
+      await chrome.storage.local.set({ last_error: `${new Date().toISOString()} page_status reject: ${result.error}` });
+    }
     return;
   }
   if (msg.type === 'command') {

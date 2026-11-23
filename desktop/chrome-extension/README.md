@@ -1,6 +1,6 @@
 # OPS Browser Bridge（DEV-AI27-02 W02 技术验证）
 
-自有 MV3 扩展：在本人日常 Chrome 与 OPS 桌面之间建立受控桥接。**仅执行本包 `background.js` 动作登记表内的动作**（tabs_list / observe / navigate / click / type / extract / screenshot），不接收任意 JS、CDP 方法或远程下发的执行逻辑。W02 为技术验证，不随产品分发。
+自有 MV3 扩展：在本人日常 Chrome 与 OPS 桌面之间建立受控桥接。**仅执行本包 `background.js` 动作登记表内的动作**（tabs_list / observe / observe_frames / navigate / click / type / scroll / click_at / type_at / scroll_at / extract / screenshot / handoff_request；`activate_tab` 仅本机用户查看用），不接收任意 JS、CDP 方法或远程下发的执行逻辑。W02 为技术验证，不随产品分发。
 
 ## 文件
 

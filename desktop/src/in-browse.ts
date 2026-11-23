@@ -1,5 +1,6 @@
-import { BrowserWindow, WebContentsView, session, type Session, type DownloadItem } from 'electron';
+import { BrowserWindow, WebContentsView, ipcMain, session, type Session, type DownloadItem } from 'electron';
 import * as crypto from 'node:crypto';
+import { join } from 'node:path';
 
 // DEV-AI27-08（W08，D-172 裁决）：内置浏览视图——Codex 同款双路径之"应用内"承载。
 // Electron WebContentsView 实现右侧工作视图的浏览体验（27 §7.8 功能表）。
@@ -41,6 +42,20 @@ export interface InBrowseBlockedPopup {
   at: number;
 }
 
+/** BR-03：用户主动选择的页面元素（只含单个元素，不上传整页 HTML）。 */
+export interface InBrowsePickedElement {
+  title: string;
+  url: string;
+  selector: string;
+  text: string;
+  tag: string;
+  rect: { x: number; y: number; width: number; height: number };
+}
+
+export type InBrowsePickResult =
+  | { ok: true; data: InBrowsePickedElement }
+  | { ok: false; reason: string };
+
 export interface InBrowseSnapshot {
   activeTabId: string | null;
   tabs: InBrowseTabSnapshot[];
@@ -51,17 +66,34 @@ export interface InBrowseSnapshot {
   downloads: InBrowseDownloadRecord[];
   /** 最近一次被拒绝的弹窗（null 表示当前没有待提示的拒绝）。 */
   lastBlockedPopup: InBrowseBlockedPopup | null;
+  /** BR-10：最近一次被拦截的可执行文件下载。 */
+  lastBlockedDownload: { filename: string; sourceUrl: string; at: number } | null;
+  /** BR-07：视图创建失败/渲染进程退出时的错误（重建后清空）。 */
+  viewError: { tabId: string; reason: string } | null;
+  /** BR-03：元素选择进行中（用户点击前）。 */
+  pickerActive: boolean;
+  /** BR-03：最近一次选中元素；用户取消/导航/关闭后清空。 */
+  pickedElement: InBrowsePickedElement | null;
+  /** BR-03：最近一次选择失败原因（密码框、跨域 iframe、页面刷新等）。 */
+  pickerError: string | null;
 }
 
 type DetachReason = 'approval-dialog' | 'menu' | 'account-switch' | 'settings' | 'close';
 
 /** http/https 判定（弹窗与页内导航共用；file:/javascript:/自定义协议均拒）。 */
-function isHttpUrl(raw: string): boolean {
+export function isHttpUrl(raw: string): boolean {
   try {
     return /^https?:$/.test(new URL(raw).protocol);
   } catch {
     return false;
   }
+}
+
+/** BR-10：可执行文件不允许在内置浏览里直接落盘（拒绝而非强提示之外再执行）。 */
+const BLOCKED_DOWNLOAD_EXTENSIONS = ['.exe', '.dmg', '.sh', '.bat', '.cmd', '.msi', '.pkg', '.appimage'];
+export function isBlockedDownloadFile(filename: string): boolean {
+  const lower = String(filename || '').toLowerCase();
+  return BLOCKED_DOWNLOAD_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
 interface InBrowseTab {
@@ -80,6 +112,12 @@ export class InBrowseViewController {
   private detachReason: DetachReason | null = null;
   private downloads: InBrowseDownloadRecord[] = [];
   private lastBlockedPopup: InBrowseBlockedPopup | null = null;
+  private lastBlockedDownload: { filename: string; sourceUrl: string; at: number } | null = null;
+  private viewError: { tabId: string; reason: string } | null = null;
+  private pickerTabID: string | null = null;
+  private pickedElement: InBrowsePickedElement | null = null;
+  private pickerError: string | null = null;
+  private pickerTimer: NodeJS.Timeout | null = null;
 
   constructor(
     readonly window: BrowserWindow,
@@ -106,6 +144,11 @@ export class InBrowseViewController {
       detachReason: this.detachReason,
       downloads: [...this.downloads],
       lastBlockedPopup: this.lastBlockedPopup,
+      lastBlockedDownload: this.lastBlockedDownload,
+      viewError: this.viewError,
+      pickerActive: this.pickerTabID !== null,
+      pickedElement: this.pickedElement,
+      pickerError: this.pickerError,
     };
   }
 
@@ -121,6 +164,12 @@ export class InBrowseViewController {
     this.emitSnapshot();
   }
 
+  /** BR-10：记录被拒绝的可执行文件下载并推送快照（不静默）。 */
+  recordBlockedDownload(filename: string, sourceUrl: string): void {
+    this.lastBlockedDownload = { filename: filename.slice(0, 160), sourceUrl: sourceUrl.slice(0, 2048), at: Date.now() };
+    this.emitSnapshot();
+  }
+
   private createTab(): InBrowseTab {
     const view = new WebContentsView({
       webPreferences: {
@@ -131,16 +180,30 @@ export class InBrowseViewController {
         webSecurity: true,
         webviewTag: false,
         devTools: false,
+        // BR-03：元素选择覆盖层（独立 preload，只在浏览分区生效；contextIsolation 保持开启）。
+        preload: join(__dirname, 'in-browse-picker-preload.js'),
       },
     });
     const tab: InBrowseTab = { id: crypto.randomUUID(), view, navigationGeneration: 0 };
     // 导航代数递增：SPA 路由与整页导航都算（27 §8.3 旧观察失效语义）。
     view.webContents.on('did-start-navigation', () => {
       tab.navigationGeneration += 1;
+      // BR-03：页面刷新/跳转后旧选择失效（覆盖层随文档销毁）。
+      if (this.pickerTabID === tab.id) {
+        this.clearPickerState();
+        this.pickerError = 'page_reloaded';
+      }
+      this.pickedElement = null;
       this.emitSnapshot();
     });
     view.webContents.on('did-stop-loading', () => this.emitSnapshot());
     view.webContents.on('page-title-updated', () => this.emitSnapshot());
+    // BR-07：渲染进程退出不静默，记录错误并移除原生视图，渲染器显示错误卡与重建入口。
+    view.webContents.on('render-process-gone', (_event, details) => {
+      this.viewError = { tabId: tab.id, reason: String(details.reason || 'crashed') };
+      this.unmountCurrent();
+      this.emitSnapshot();
+    });
     // DEV-AI27-08f（27 §7.8 弹窗处理）：deny 默认 + 同站进新页签 + 跨站/非 http(s) 拒绝并回执。
     // 放行路径也不让 Electron 开原生窗：我们在控制器内开页签并导航，handler 始终 deny。
     view.webContents.setWindowOpenHandler(({ url, disposition }) => {
@@ -225,16 +288,46 @@ export class InBrowseViewController {
       return this.activeTabId ?? '';
     }
     this.unmountCurrent();
-    const tab = this.createTab();
+    let tab: InBrowseTab;
+    try {
+      tab = this.createTab();
+    } catch (err) {
+      this.viewError = { tabId: '', reason: 'create_failed: ' + String((err as Error).message).slice(0, 120) };
+      this.emitSnapshot();
+      return '';
+    }
+    this.viewError = null;
     this.activeTabId = tab.id;
     this.mountActive();
     this.emitSnapshot();
     return tab.id;
   }
 
+  /** BR-07：重建活动页签视图，保留当前 URL。 */
+  rebuildActive(): boolean {
+    const tab = this.activeTab();
+    if (!tab) return false;
+    let url = '';
+    try { url = tab.view.webContents.getURL(); } catch { /* 已崩溃 */ }
+    this.viewError = null;
+    this.closeTab(tab.id);
+    const newTab = this.createTab();
+    this.activeTabId = newTab.id;
+    this.mountActive();
+    if (url) this.navigate(url);
+    this.emitSnapshot();
+    return true;
+  }
+
   /** 切换活动页签。 */
   switchTab(tabID: string): boolean {
     if (!this.tabs.has(tabID) || tabID === this.activeTabId) return false;
+    if (this.pickerTabID && this.pickerTabID !== tabID) {
+      try { this.tabs.get(this.pickerTabID)?.view.webContents.send('inbrowse:picker:stop'); } catch { /* 已销毁 */ }
+      this.clearPickerState();
+      this.pickerError = 'cancelled';
+    }
+    this.pickedElement = null;
     this.unmountCurrent();
     this.activeTabId = tabID;
     this.mountActive();
@@ -266,11 +359,17 @@ export class InBrowseViewController {
   closeTab(tabID: string): void {
     const tab = this.tabs.get(tabID);
     if (!tab) return;
+    if (this.pickerTabID === tabID) {
+      this.clearPickerState();
+      this.pickerError = 'cancelled';
+    }
+    this.pickedElement = null;
     const removedIdx = this.tabOrder.indexOf(tabID);
     try { tab.view.webContents.stop(); } catch { /* 已销毁 */ }
     try { this.window.contentView.removeChildView(tab.view); } catch { /* 未挂载 */ }
     this.tabs.delete(tabID);
     this.tabOrder = this.tabOrder.filter((id) => id !== tabID);
+    if (this.viewError?.tabId === tabID) this.viewError = null;
     if (this.activeTabId === tabID) {
       // 激活相邻页签（同位置右邻，末位则左邻）。idx 必须在 filter 前取。
       this.activeTabId = this.tabOrder[Math.min(removedIdx, this.tabOrder.length - 1)] ?? null;
@@ -281,6 +380,91 @@ export class InBrowseViewController {
 
   private emitSnapshot(): void {
     this.onSnapshot(this.snapshot());
+  }
+
+  // -------------------------------------------------------------------------
+  // BR-03：用户主动元素选择（不做自动扫描；只回传单个元素）。
+  // -------------------------------------------------------------------------
+
+  private clearPickerState(): void {
+    if (this.pickerTimer) { clearTimeout(this.pickerTimer); this.pickerTimer = null; }
+    this.pickerTabID = null;
+  }
+
+  /** 开始一次元素选择；同一时刻只允许一个。 */
+  startPicker(tabID?: string): { ok: boolean; reason?: string } {
+    const tab = tabID ? this.tabs.get(tabID) : this.activeTab();
+    if (!tab) return { ok: false, reason: 'no_active_tab' };
+    if (this.pickerTabID) return { ok: false, reason: 'picker_active' };
+    const url = tab.view.webContents.getURL();
+    if (!/^https?:/.test(url)) return { ok: false, reason: 'tab_not_http' };
+    this.pickerTabID = tab.id;
+    this.pickedElement = null;
+    this.pickerError = null;
+    // 用户在页面里迟迟不点：120 秒后自动取消，避免覆盖层常驻。
+    this.pickerTimer = setTimeout(() => {
+      if (this.pickerTabID !== tab.id) return;
+      this.pickerTabID = null;
+      this.pickerError = 'timeout';
+      this.pickerTimer = null;
+      this.emitSnapshot();
+    }, 120_000);
+    tab.view.webContents.send('inbrowse:picker:start');
+    this.emitSnapshot();
+    return { ok: true };
+  }
+
+  /** 取消选择（Esc / 切页签 / 面板关闭）。 */
+  stopPicker(): void {
+    if (!this.pickerTabID) return;
+    const tab = this.tabs.get(this.pickerTabID);
+    try { tab?.view.webContents.send('inbrowse:picker:stop'); } catch { /* 视图已销毁 */ }
+    this.clearPickerState();
+    this.pickerError = 'cancelled';
+    this.emitSnapshot();
+  }
+
+  /** 清空已选元素（用户关闭结果面板）。 */
+  clearPickedElement(): void {
+    this.pickedElement = null;
+    this.pickerError = null;
+    this.emitSnapshot();
+  }
+
+  /**
+   * 接收 preload 回传结果；只接受当前选择中的那个页签，且严格校验 schema。
+   * 返回 false 表示不是本控制器的请求（交给其它窗口处理）。
+   */
+  acceptPickerResult(senderWebContentsID: number, raw: unknown): boolean {
+    if (!this.pickerTabID) return false;
+    const tab = this.tabs.get(this.pickerTabID);
+    if (!tab || tab.view.webContents.id !== senderWebContentsID) return false;
+    const payload = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null;
+    const data = payload && payload.ok === true ? payload.data as Record<string, unknown> : null;
+    if (data) {
+      const rect = data.rect && typeof data.rect === 'object' ? data.rect as Record<string, unknown> : null;
+      const str = (value: unknown, max: number) => typeof value === 'string' ? value.slice(0, max) : '';
+      const num = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 0;
+      const picked: InBrowsePickedElement = {
+        title: str(data.title, 200),
+        url: str(data.url, 2048),
+        selector: str(data.selector, 500),
+        text: str(data.text, 200),
+        tag: str(data.tag, 40),
+        rect: { x: num(rect?.x), y: num(rect?.y), width: num(rect?.width), height: num(rect?.height) },
+      };
+      if (!picked.selector) {
+        this.pickerError = 'invalid_result';
+      } else {
+        this.pickedElement = picked;
+        this.pickerError = null;
+      }
+    } else {
+      this.pickerError = typeof payload?.reason === 'string' ? payload.reason.slice(0, 80) : 'invalid_result';
+    }
+    this.clearPickerState();
+    this.emitSnapshot();
+    return true;
   }
 
   /** 设置工作视图内的显示区域（渲染器布局同步）。 */
@@ -346,6 +530,17 @@ export class InBrowseViewController {
 
   isDetached(): { detached: boolean; reason: DetachReason | null } {
     return { detached: this.detached, reason: this.detachReason };
+  }
+
+  /** BR-07：工作面板不可见时移除原生视图，避免覆盖其它页签。 */
+  hide(): void {
+    this.unmountCurrent();
+  }
+
+  /** BR-07：工作面板重新可见且已有边界时重挂原生视图。 */
+  show(): void {
+    if (this.detached) return;
+    if (this.activeTab() && this.bounds) this.mountActive();
   }
 
   // -------------------------------------------------------------------------
@@ -425,6 +620,7 @@ export class InBrowseViewController {
   }
 
   destroy(): void {
+    this.clearPickerState();
     for (const [, tab] of this.tabs) {
       try { tab.view.webContents.stop(); } catch { /* 已销毁 */ }
       try { this.window.contentView.removeChildView(tab.view); } catch { /* 未挂载 */ }
@@ -446,6 +642,18 @@ export class InBrowseViewController {
 // 窗口关闭时在 once('closed') 里显式 delete，避免持有已销毁的控制器。
 const controllers = new Map<BrowserWindow, InBrowseViewController>();
 
+let pickerIpcBound = false;
+/** BR-03：preload 结果只路由到对应窗口的控制器（按 sender webContents.id 匹配活动页签）。 */
+function bindPickerIpc(): void {
+  if (pickerIpcBound) return;
+  pickerIpcBound = true;
+  ipcMain.on('inbrowse:picker:result', (event, payload) => {
+    for (const controller of controllers.values()) {
+      if (controller.acceptPickerResult(event.sender.id, payload)) return;
+    }
+  });
+}
+
 export function getInBrowseController(window: BrowserWindow): InBrowseViewController | null {
   return controllers.get(window) ?? null;
 }
@@ -453,6 +661,7 @@ export function getInBrowseController(window: BrowserWindow): InBrowseViewContro
 export function bindInBrowseController(window: BrowserWindow, onSnapshot: (s: InBrowseSnapshot) => void): InBrowseViewController {
   const existing = controllers.get(window);
   if (existing) return existing;
+  bindPickerIpc();
   const browseSession: Session = session.fromPartition('ops-inbrowse', { cache: true });
   installDownloadHandling(browseSession);
   const controller = new InBrowseViewController(window, browseSession, onSnapshot);
@@ -473,11 +682,18 @@ const downloadHandledSessions = new WeakSet<Session>();
 function installDownloadHandling(browseSession: Session): void {
   if (downloadHandledSessions.has(browseSession)) return;
   downloadHandledSessions.add(browseSession);
-  browseSession.on('will-download', (_event, item: DownloadItem) => {
+  browseSession.on('will-download', (event, item: DownloadItem) => {
+    const filename = item.getFilename();
+    // BR-10：可执行文件拒绝落盘，推送明确拦截原因。
+    if (isBlockedDownloadFile(filename)) {
+      event.preventDefault();
+      for (const controller of controllers.values()) controller.recordBlockedDownload(filename, item.getURL());
+      return;
+    }
     // 27 §14.5：下载显示真实来源/名称/类型/大小，由用户逐文件确认保存位置。
     item.setSaveDialogOptions({
       title: '保存下载文件',
-      defaultPath: item.getFilename(),
+      defaultPath: filename,
     });
     item.on('done', (_event, state) => {
       const record: InBrowseDownloadRecord = {

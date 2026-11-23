@@ -156,6 +156,19 @@ export class BrowserCommandExecutor {
           error_code: result.code,
           ...(result.message ? { result: { message: result.message } } : {}),
         });
+        // BR-04（38 文档）：失败操作也生成证据——内容读取类命令失败同样挂真实命令号上报，
+        // snippet 记录失败原因；服务端校验归属与命令存在性，不伪造成功。
+        if (this.deps.reportEvidence) {
+          const payloadObj = (claimed.payload ?? {}) as Record<string, unknown>;
+          const ev = evidenceFromCommand(action, claimed, { origin: String(payloadObj.origin ?? ''), url: String(payloadObj.url ?? ''), failed_message: result.message });
+          if (ev) {
+            try {
+              await this.deps.reportEvidence({ ...ev, snippet: `失败（${result.code}）：${result.message ?? ''}`.slice(0, 300) });
+            } catch (err) {
+              this.deps.log?.(`[browser-executor] ${id.slice(0, 8)} 失败证据上报失败：${err instanceof Error ? err.message : err}`);
+            }
+          }
+        }
       }
     } catch (err) {
       this.deps.log?.(`[browser-executor] ${id.slice(0, 8)} 回执失败：${err instanceof Error ? err.message : err}`);

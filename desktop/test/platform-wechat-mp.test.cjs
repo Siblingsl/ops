@@ -92,6 +92,35 @@ test('嵌套 JSON 字符串：publish_page 与 publish_info 都要二次解析',
   );
 });
 
+test('真实响应：appmsg_info 为空时回退 appmsgex 取标题/链接；两者并存时按 appmsgid+itemidx 合并', () => {
+  const sent = { sent_info: { time: 1783745092 } };
+  const fallback = parsePublishPage(page([{
+    publish_type: 1,
+    publish_info: {
+      ...sent,
+      appmsg_info: [],
+      appmsgex: [{ appmsgid: 2247483721, itemidx: 1, title: '蓝莓真的是护眼神器吗？', link: 'https://mp.weixin.qq.com/s/blueberry', is_deleted: false }]
+    }
+  }]));
+  assert.equal(fallback.articles.length, 1);
+  assert.equal(fallback.articles[0].title, '蓝莓真的是护眼神器吗？');
+  assert.equal(fallback.articles[0].contentURL, 'https://mp.weixin.qq.com/s/blueberry');
+  assert.equal(fallback.articles[0].status, 'published');
+
+  const merged = parsePublishPage(page([{
+    publish_type: 1,
+    publish_info: {
+      ...sent,
+      appmsg_info: [{ appmsgid: 2247483721, itemidx: 1 }],
+      appmsgex: [{ appmsgid: 2247483721, itemidx: 1, title: '合并标题', link: 'https://mp.weixin.qq.com/s/merged', is_deleted: true }]
+    }
+  }]));
+  assert.equal(merged.articles.length, 1);
+  assert.equal(merged.articles[0].title, '合并标题');
+  assert.equal(merged.articles[0].contentURL, 'https://mp.weixin.qq.com/s/merged');
+  assert.equal(merged.articles[0].status, 'deleted');
+});
+
 test('多页按 total_count 收口：收集够总量就停，不因本页非空继续翻页', async () => {
   // 仿真实测：第 1 页 10 条、第 2 页 6 条、total=16。
   // 单看第 2 页会得出“还有更多”，但累计已达 16，必须收口。

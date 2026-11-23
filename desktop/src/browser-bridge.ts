@@ -36,6 +36,8 @@ const TRUSTED_TYPES = new Set([
   'ping',
   'pong',
   'error',
+  // B-01：人工接管完成（扩展上行，固定信封；不进入命令账本）。
+  'handoff_complete',
 ]);
 
 export interface BridgeEnvelope {
@@ -68,7 +70,33 @@ export interface LedgerEntry {
 // 27 §13.5/§15.1：元数据信封建议上限 256KiB，图片/大文本走分块/附件通道（W09），不在命令体内。
 export const MAX_METADATA_BYTES = 256 * 1024;
 // 27 §15.1：登记动作集；桥侧前置白名单，扩展侧登记表为第二道校验。
-export const ALLOWED_ACTIONS = new Set(['tabs_list', 'observe', 'observe_frames', 'navigate', 'click', 'type', 'extract', 'screenshot']);
+// BR-09：activate_tab 只由用户“查看操作”经本机 IPC 派发，服务端 Agent 动作白名单不含它。
+export const ALLOWED_ACTIONS = new Set(['tabs_list', 'observe', 'observe_frames', 'navigate', 'click', 'type', 'scroll', 'click_at', 'type_at', 'scroll_at', 'extract', 'screenshot', 'handoff_request', 'activate_tab']);
+// B-07：只读采集会话的动作集。activate_tab 只是把已有 tab 切到前台供人查看，不改页面。
+export const READ_ONLY_ACTIONS = new Set(['tabs_list', 'observe', 'observe_frames', 'extract', 'screenshot', 'activate_tab', 'scroll']);
+
+// B-08：永不允许的浏览器能力（对齐 browse `guardrails.rs#ALWAYS_BLOCKED` + 额外三类限制）。
+// 桥本身不接受 CDP，这里只做“防未来新增动作时误开”的硬编码清单与审计锚点；
+// 任何一项都不得进入 ALLOWED_ACTIONS，也不得在扩展 ACTIONS / 服务端 browserCommandActions 登记。
+//   clear_cookies / clear_cache / delete_cookies / clear_storage：会把用户所有站点登出或抹掉站点数据；
+//   close_browser：关闭用户浏览器；
+//   grant_permissions / set_permission / reset_permissions：替用户授予/修改/重置站点权限；
+//   webauthn：驱动 WebAuthn 或注入虚拟认证器；
+//   bring_to_front：抢占用户前台（OPS 用显式 activate_tab 且仅本机用户触发，见 BR-09）；
+//   load_network_resource：带用户凭据绕过同源策略读取任意资源。
+export const HARD_FORBIDDEN_BROWSER_CAPABILITIES = [
+  'clear_cookies',
+  'clear_cache',
+  'delete_cookies',
+  'clear_storage',
+  'close_browser',
+  'grant_permissions',
+  'set_permission',
+  'reset_permissions',
+  'webauthn',
+  'bring_to_front',
+  'load_network_resource',
+] as const;
 // 27 §13.5：时钟异常停止派发（wall clock 与单调时钟漂移超限即拒绝，直至恢复）。
 const CLOCK_TOLERANCE_MS = 5000;
 
@@ -78,7 +106,9 @@ export type BridgeErrorCode =
   | 'browser_action_unsupported'
   | 'browser_payload_limit'
   | 'browser_clock_unstable'
-  | 'browser_request_conflict';
+  | 'browser_request_conflict'
+  | 'browser_origin_not_allowed'
+  | 'browser_read_only';
 
 // A14-5（27 §14）：信封 HMAC 材料扩展到 seq.type.nonce.payload_hash.payload——
 // 只覆盖 seq+type+payload 无法绑定「这次派发」的 nonce 与载荷摘要，重放窗口更宽。
@@ -104,6 +134,19 @@ function verifyHmac(key: Buffer, seq: number, type: string, payload: unknown, go
 
 function inputHash(action: string, payload: unknown): string {
   return crypto.createHash('sha256').update(`${action}.${JSON.stringify(payload ?? null)}`).digest('hex');
+}
+
+/** B-07：把白名单项归一化为 origin；裸 host 按 https 处理，非 http(s) 丢弃。 */
+function normalizeOrigin(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw.includes('://') ? raw : `https://${raw}`);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    return url.origin.toLowerCase();
+  } catch {
+    return '';
+  }
 }
 
 /** 命令账本：request_id 幂等、状态单向推进、JSON 文件持久化。 */
@@ -189,9 +232,27 @@ export class CommandLedger {
 }
 
 export interface BridgeEvent {
-  kind: 'state' | 'pairing' | 'dispatch' | 'result' | 'revoke' | 'log';
+  kind: 'state' | 'pairing' | 'dispatch' | 'result' | 'revoke' | 'log' | 'handoff';
   message: string;
   at: number;
+}
+
+// B-01：一次人工接管的等待结果。completed 只是「人点了完成卡片」，不是平台登录成功；
+// 调用方仍须以平台页面真实状态为准（清单 §1.6）。
+export interface HandoffResult {
+  completed: boolean;
+  handoff_id: string;
+  tab_id: number;
+  origin: string;
+  completed_at?: number;
+  timedOut?: boolean;
+}
+
+export interface HandoffCompletePayload {
+  handoff_id: string;
+  tab_id: number;
+  origin: string;
+  completed_at: number;
 }
 
 export interface BridgeOptions {
@@ -202,6 +263,14 @@ export interface BridgeOptions {
   seqStatePath?: string | null;
   autoPair?: boolean;
   actionTimeoutMs?: number;
+  /** B-07：只读会话（采集）只允许读动作；写动作在桥与扩展两道拒绝。 */
+  readOnly?: boolean;
+  /** B-07：允许导航到的 origin 精确集合（空集 = 不限制，保持旧行为）。 */
+  allowedOrigins?: string[];
+  /** B-02A：人类化输入（轨迹/逐字键入/滚动分帧）；默认关闭，保持旧行为。 */
+  humanInput?: boolean;
+  /** B-02B：可信输入（chrome.debugger Input 域）；默认关闭，需扩展可选权限。 */
+  debuggerInput?: boolean;
   log?: (line: string) => void;
 }
 
@@ -230,6 +299,15 @@ export class BrowserBridge {
   private sweepTimer: NodeJS.Timeout | null = null;
   // 已派发未回执命令的 nonce/哈希（回执防错配/防伪造）。
   private pendingNonce = new Map<string, { nonce: string; payload_hash: string }>();
+  // B-01：等待人工点击「我已完成」的接管请求；handoff_complete 不走命令账本。
+  private pendingHandoffs = new Map<string, {
+    tab_id: number;
+    origin: string;
+    startedAt: number;
+    timer: NodeJS.Timeout;
+    resolve: (result: HandoffResult) => void;
+  }>();
+  private handoffCbs = new Set<(result: HandoffResult) => void>();
   // 时钟漂移基线（27 §13.5 时钟异常停止派发）。
   private readonly startWallMs = Date.now();
   private readonly startMonoMs = Number(process.hrtime.bigint() / 1_000_000n);
@@ -237,6 +315,13 @@ export class BrowserBridge {
   private readonly autoPair: boolean;
   private readonly seqStatePath: string | null;
   private readonly log: (line: string) => void;
+  // B-07：来源白名单与只读模式。空集/ false 沿用旧行为；可由 setAccessMode 动态切换。
+  private allowedOrigins = new Set<string>();
+  private readOnly = false;
+  // B-02A：人类化输入，默认关闭。
+  private humanInput = false;
+  // B-02B：可信输入，默认关闭。
+  private debuggerInput = false;
 
   /** wall clock 相对单调时钟的漂移毫秒数。 */
   clockDriftMs(): number {
@@ -253,6 +338,36 @@ export class BrowserBridge {
     this.autoPair = opts.autoPair ?? false;
     this.seqStatePath = opts.seqStatePath ?? null;
     this.log = opts.log ?? (() => {});
+    this.readOnly = opts.readOnly ?? false;
+    this.allowedOrigins = new Set((opts.allowedOrigins ?? []).map(normalizeOrigin).filter(Boolean));
+    this.humanInput = opts.humanInput ?? false;
+    this.debuggerInput = opts.debuggerInput ?? false;
+  }
+
+  /** B-07/B-02A/B-02B：动态设置来源白名单、只读、人类化与可信输入；已配对时立即下发扩展。 */
+  setAccessMode(input: { readOnly?: boolean; allowedOrigins?: string[]; humanInput?: boolean; debuggerInput?: boolean }): { readOnly: boolean; allowedOrigins: string[]; humanInput: boolean; debuggerInput: boolean } {
+    if (typeof input.readOnly === 'boolean') this.readOnly = input.readOnly;
+    if (Array.isArray(input.allowedOrigins)) {
+      this.allowedOrigins = new Set(input.allowedOrigins.map(normalizeOrigin).filter(Boolean));
+    }
+    if (typeof input.humanInput === 'boolean') this.humanInput = input.humanInput;
+    if (typeof input.debuggerInput === 'boolean') this.debuggerInput = input.debuggerInput;
+    this.emit('log', `access mode: readOnly=${this.readOnly} origins=${Array.from(this.allowedOrigins).join(',') || '*'} human=${this.humanInput} debugger=${this.debuggerInput}`);
+    if (this.state === 'paired' && this.sessionKey) this.pushAccessMode();
+    return this.accessMode();
+  }
+
+  accessMode(): { readOnly: boolean; allowedOrigins: string[]; humanInput: boolean; debuggerInput: boolean } {
+    return { readOnly: this.readOnly, allowedOrigins: Array.from(this.allowedOrigins), humanInput: this.humanInput, debuggerInput: this.debuggerInput };
+  }
+
+  private pushAccessMode(): void {
+    if (this.state !== 'paired' || !this.sessionKey) return;
+    this.send({
+      v: PROTOCOL_VERSION,
+      type: 'page_status',
+      payload: { op: 'mode', read_only: this.readOnly, allowed_origins: Array.from(this.allowedOrigins), human_input: this.humanInput, debugger_input: this.debuggerInput },
+    });
   }
 
   onUpdate(cb: () => void): () => void {
@@ -323,6 +438,7 @@ export class BrowserBridge {
   }
 
   stop(): void {
+    this.failAllHandoffs('bridge stopped');
     this.server?.close();
     this.controlServer?.close();
     this.socket?.destroy();
@@ -484,6 +600,36 @@ export class BrowserBridge {
       if (this.autoPair) setTimeout(() => void this.confirmPairing(), 200);
       return;
     }
+    if (msg.type === 'handoff_complete') {
+      // 只有扩展内容脚本在 isTrusted 点击后、由后台签名上行才到这里；页面事件无法伪造。
+      const payload = (msg.payload ?? {}) as Partial<HandoffCompletePayload>;
+      const handoffId = String(payload.handoff_id ?? '');
+      const tabId = Number(payload.tab_id ?? 0);
+      const pending = this.pendingHandoffs.get(handoffId);
+      if (!pending) {
+        this.emit('log', `handoff_complete for unknown handoff ${handoffId.slice(0, 8)}; drop`);
+        return;
+      }
+      if (pending.tab_id !== tabId) {
+        this.emit('log', `handoff_complete tab mismatch ${tabId} != ${pending.tab_id}; drop`);
+        return;
+      }
+      const result: HandoffResult = {
+        completed: true,
+        handoff_id: handoffId,
+        tab_id: tabId,
+        origin: String(payload.origin ?? pending.origin ?? '').slice(0, 200),
+        completed_at: Number(payload.completed_at ?? Date.now()),
+      };
+      this.pendingHandoffs.delete(handoffId);
+      clearTimeout(pending.timer);
+      this.emit('handoff', `completed ${handoffId.slice(0, 8)} tab=${tabId} origin=${result.origin}`);
+      pending.resolve(result);
+      for (const cb of this.handoffCbs) {
+        try { cb(result); } catch { /* 订阅方异常不阻断 */ }
+      }
+      return;
+    }
     if (msg.type === 'result') {
       const requestId = String(msg.request_id ?? '');
       const entry = this.ledger.get(requestId);
@@ -582,12 +728,15 @@ export class BrowserBridge {
     this.send({ v: PROTOCOL_VERSION, type: 'pairing_confirm', payload });
     this.state = 'paired';
     this.emit('state', 'paired');
+    // B-07/B-02A：配置了只读/来源白名单/人类化时，配对建立后立即下发访问模式；默认旧行为不额外发信封。
+    if (this.readOnly || this.allowedOrigins.size > 0 || this.humanInput || this.debuggerInput) this.pushAccessMode();
     return { ok: true };
   }
 
   /** 停止/撤销：generation 递增，旧命令永久失效；不回滚已派发动作。 */
   revoke(reason: string): void {
     this.generation.n += 1;
+    this.failAllHandoffs(`revoked: ${reason}`);
     this.send({ v: PROTOCOL_VERSION, type: 'revoke', payload: { generation: this.generation.n, reason } });
     this.state = 'revoked';
     this.pairing = null;
@@ -602,6 +751,114 @@ export class BrowserBridge {
     this.emit('revoke', `generation=${this.generation.n} ${reason}`);
   }
 
+  /** 订阅人工接管完成事件（B-01）；返回取消订阅函数。 */
+  onHandoff(cb: (result: HandoffResult) => void): () => void {
+    this.handoffCbs.add(cb);
+    return () => this.handoffCbs.delete(cb);
+  }
+
+  /** 下发卡片状态（attached/running/waiting/recording）。未配对时如实返回 false。 */
+  setPageStatus(tabId: number, state: { state: 'attached' | 'running' | 'waiting' | 'recording'; handoffId?: string; message?: string }): boolean {
+    if (this.state !== 'paired' || !this.sessionKey) return false;
+    this.send({
+      v: PROTOCOL_VERSION,
+      type: 'page_status',
+      payload: { op: 'set', tab_id: Number(tabId), state: { ...state, tabId: Number(tabId) } },
+    });
+    return true;
+  }
+
+  /** 清掉卡片与 agent tab 标记。未配对时如实返回 false。 */
+  clearPageStatus(tabId: number): boolean {
+    if (this.state !== 'paired' || !this.sessionKey) return false;
+    this.send({ v: PROTOCOL_VERSION, type: 'page_status', payload: { op: 'clear', tab_id: Number(tabId) } });
+    return true;
+  }
+
+  /** B-01：请求人工接管。卡片注入到指定 agent tab；等待 handoff_complete 或超时。
+   * 完成只代表「人点了卡片」，调用方必须再以平台页面真实状态判定登录成功（清单 §1.6）。 */
+  requestHandoff(input: { tab_id: number; message?: string; timeoutMs?: number }): Promise<HandoffResult & { error?: string }> {
+    const tabId = Number(input.tab_id);
+    const base = { handoff_id: '', tab_id: Number.isInteger(tabId) ? tabId : 0, origin: '' };
+    if (!Number.isInteger(tabId) || tabId <= 0) {
+      return Promise.resolve({ ...base, completed: false, error: 'tab_id_required' });
+    }
+    for (const pending of this.pendingHandoffs.values()) {
+      if (pending.tab_id === tabId) {
+        return Promise.resolve({ ...base, completed: false, error: 'handoff_already_pending' });
+      }
+    }
+    if (this.state !== 'paired' || !this.sessionKey) {
+      return Promise.resolve({ ...base, completed: false, error: 'browser_not_paired' });
+    }
+    const handoffId = crypto.randomUUID();
+    const timeoutMs = Math.min(Math.max(Number(input.timeoutMs) || 180_000, 1_000), 15 * 60_000);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const pending = this.pendingHandoffs.get(handoffId);
+        if (!pending) return;
+        this.pendingHandoffs.delete(handoffId);
+        this.clearPageStatus(tabId);
+        const result: HandoffResult = {
+          completed: false,
+          handoff_id: handoffId,
+          tab_id: tabId,
+          origin: pending.origin,
+          timedOut: true,
+        };
+        this.emit('handoff', `timeout ${handoffId.slice(0, 8)} tab=${tabId} waited=${Date.now() - pending.startedAt}ms`);
+        pending.resolve(result);
+        for (const cb of this.handoffCbs) {
+          try { cb(result); } catch { /* 订阅方异常不阻断 */ }
+        }
+      }, timeoutMs);
+      this.pendingHandoffs.set(handoffId, {
+        tab_id: tabId,
+        origin: '',
+        startedAt: Date.now(),
+        timer,
+        resolve: (result) => resolve({ ...result, error: undefined }),
+      });
+      const dispatched = this.dispatch('handoff_request', {
+        tab_id: tabId,
+        handoff_id: handoffId,
+        message: String(input.message ?? '').slice(0, 200),
+      });
+      if (!dispatched.accepted) {
+        this.pendingHandoffs.delete(handoffId);
+        clearTimeout(timer);
+        const result: HandoffResult = {
+          completed: false,
+          handoff_id: handoffId,
+          tab_id: tabId,
+          origin: '',
+        };
+        this.emit('handoff', `rejected ${handoffId.slice(0, 8)}: ${dispatched.error_code ?? dispatched.reason ?? 'unknown'}`);
+        resolve({ ...result, error: dispatched.error_code ?? dispatched.reason ?? 'handoff_dispatch_rejected' });
+      }
+    });
+  }
+
+  /** 停止/撤销时结束所有等待中的接管：不回滚已发生的用户操作，只如实返回未完成。 */
+  private failAllHandoffs(reason: string): void {
+    for (const [handoffId, pending] of this.pendingHandoffs) {
+      clearTimeout(pending.timer);
+      this.pendingHandoffs.delete(handoffId);
+      const result: HandoffResult = {
+        completed: false,
+        handoff_id: handoffId,
+        tab_id: pending.tab_id,
+        origin: pending.origin,
+      };
+      this.emit('handoff', `cancelled ${handoffId.slice(0, 8)}: ${reason}`);
+      pending.resolve(result);
+      for (const cb of this.handoffCbs) {
+        try { cb(result); } catch { /* 订阅方异常不阻断 */ }
+      }
+    }
+  }
+
+
   /** 派发登记动作。同 id 同载荷幂等返回既有状态；同 id 异载荷拒绝；未配对/已撤销拒绝。 */
   dispatch(action: string, payload: unknown, requestId?: string): { accepted: boolean; request_id?: string; state?: LedgerState; error_code?: BridgeErrorCode; reason?: string } {
     if (this.state !== 'paired' || !this.sessionKey) {
@@ -611,6 +868,18 @@ export class BrowserBridge {
       // 桥侧前置白名单；扩展侧登记表是第二道校验（27 §12.2 双侧校验）。
       this.emit('log', `dispatch rejected: action not registered (${action})`);
       return { accepted: false, error_code: 'browser_action_unsupported', reason: `action not registered: ${action}` };
+    }
+    // B-07：只读会话在桥侧先拒绝写动作；扩展收到 mode 后还有第二道。
+    if (this.readOnly && !READ_ONLY_ACTIONS.has(action)) {
+      this.emit('log', `dispatch rejected: read-only session (${action})`);
+      return { accepted: false, error_code: 'browser_read_only', reason: `read-only session rejects ${action}` };
+    }
+    if (action === 'navigate' && this.allowedOrigins.size > 0) {
+      const target = normalizeOrigin((payload as { url?: unknown } | null)?.url);
+      if (!target || !this.allowedOrigins.has(target)) {
+        this.emit('log', `dispatch rejected: origin ${target || '(invalid)'} not in allowlist`);
+        return { accepted: false, error_code: 'browser_origin_not_allowed', reason: `origin not allowed: ${target || '(invalid)'}` };
+      }
     }
     if (this.clockDriftMs() > CLOCK_TOLERANCE_MS) {
       // 27 §13.5：时钟异常停止派发。
@@ -836,12 +1105,26 @@ export function registerDiagnosticsIpcForTest(
 
 function createBridge(): BrowserBridge {
   const ledgerPath = path.join(process.cwd(), '.tmp', 'browser-bridge-ledger.json');
+  // 默认端口保持不变；测试/多实例可通过环境变量指定，避免抢占用户正在运行的桥。
+  const portOverride = Number(process.env.OPS_DESKTOP_BRIDGE_PORT);
+  const port = Number.isInteger(portOverride) && portOverride > 0 ? portOverride : BRIDGE_PORT;
+  const controlPort = Number.isInteger(portOverride) && portOverride > 0 ? portOverride + 1 : CONTROL_PORT;
   return new BrowserBridge(new CommandLedger(ledgerPath), {
     // A14-2：lastSeqIn 持久化（重启后拒绝重放更早 seq）。
     seqStatePath: path.join(process.cwd(), '.tmp', 'browser-bridge-seq.json'),
-    port: BRIDGE_PORT,
-    controlPort: CONTROL_PORT,
+    port,
+    controlPort,
     autoPair: process.env.OPS_DESKTOP_BRIDGE_AUTO_PAIR === '1',
+    // B-07：采集/只读会话开关（默认关闭，保持旧行为）。白名单逗号分隔 origin。
+    readOnly: process.env.OPS_BROWSER_READ_ONLY === '1',
+    allowedOrigins: String(process.env.OPS_BROWSER_ALLOWED_ORIGINS || '')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean),
+    // B-02A：人类化输入默认关闭；OPS_BROWSER_HUMAN_INPUT=1 显式开启。
+    humanInput: process.env.OPS_BROWSER_HUMAN_INPUT === '1',
+    // B-02B：可信输入默认关闭；OPS_BROWSER_DEBUGGER_INPUT=1 且扩展可选权限已授权才生效。
+    debuggerInput: process.env.OPS_BROWSER_DEBUGGER_INPUT === '1',
     log: (line) => console.log(line),
   });
 }

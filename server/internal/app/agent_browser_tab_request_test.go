@@ -71,6 +71,23 @@ func TestA30RequestBrowserTab(t *testing.T) {
 		t.Fatalf("应返回当前租约：%+v", got["grant"])
 	}
 
+	// BR-09：只读当前活动租约——“查看操作”由用户点击后知道目标标签；
+	// 接口不改状态，未活动时返回 grant:null。
+	var listed struct {
+		Grant *browserGrantView `json:"grant"`
+	}
+	env.mustJSON(t, http.MethodGet, "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-grants", nil, &listed)
+	if listed.Grant == nil || listed.Grant.TabHandle != "tab-1" || listed.Grant.RunID != runID.String() {
+		t.Fatalf("活动租约读取不一致：%+v", listed.Grant)
+	}
+	if _, err := env.srv.db.Exec(t.Context(), `UPDATE agent_browser_grant SET state='revoked', revoked_at=now() WHERE id=$1`, grant.ID); err != nil {
+		t.Fatalf("撤销测试租约失败：%v", err)
+	}
+	env.mustJSON(t, http.MethodGet, "/api/v1/agent/conversations/"+conv.ID.String()+"/browser-grants", nil, &listed)
+	if listed.Grant != nil {
+		t.Fatalf("已撤销租约不应再返回：%+v", listed.Grant)
+	}
+
 	// 无会话归属（非会话内工具调用）拒绝。
 	res := env.agentDispatch(t, "browser_request_tab", nil, func(req *agentDispatchRequest) {
 		req.Principal.ConversationID = uuid.Nil
