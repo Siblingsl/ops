@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
+import { PublishManifestPanel } from '@/components/publish-manifest'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Badge, Button, cn, Field, Input, MoreMenu, Notice, PageLoading, platformFormatLabel, platformLabel, PlatformMark, Select, StatusBadge, Switch } from '@/components/ui'
 import { FormOrchestrationDialog } from './FormOrchestration'
@@ -717,6 +718,12 @@ export default function WorkLayout() {
           </div>
         )}
       </header>
+      {/* REF41 P3：发布分区（含回读面板）放在 sticky header 之外。桌面形态的
+          desktop-work-layout 是固定高度 + overflow: clip，面板留在 header 内会被
+          底部 26px 状态栏裁掉“改为手动/重新填写”按钮（P4 加入能力块后撑高）。 */}
+      {!focus && (desktopPresentation
+        ? <div className="max-h-[38vh] overflow-y-auto px-5 py-2"><PublishManifestPanel work={work} /></div>
+        : <PublishManifestPanel work={work} />)}
       <div key={location.pathname} className={cn('min-h-0 flex-1 animate-fade-in', desktopPresentation && ['pack', 'preview', 'push'].some((tab) => location.pathname.endsWith('/' + tab)) && 'desktop-work-tab-outlet')}>
         {/* 作品页没有可见 h1（标题在可编辑控件里），补一个只给读屏用的页面标题。 */}
         <h1 className="sr-only">{work.title || '未命名作品'} · {platformLabel[work.platform]} · {platformFormatLabel(work.platform, work.content_format)}</h1>

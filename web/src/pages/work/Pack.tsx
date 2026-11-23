@@ -6,6 +6,7 @@ import { BackfillForm, PlatformBinding, PostPushTodos } from '@/components/backf
 import { PublishStatePanel } from '@/components/publish-state'
 import { XhsCardMaker } from '@/components/xhs-cards'
 import { Button, Card, cn, HumanGate, Notice } from '@/components/ui'
+import { ConversionLinkCard } from '@/components/conversion-link-card'
 import { aiError } from '@/lib/ai-error'
 import { ApiError, errorMessage, post, rawRequest } from '@/lib/api'
 import { assetUrl } from '@/lib/api-base'
@@ -304,6 +305,7 @@ export default function Pack() {
               ))}
             </div>
           </Card>
+          <ConversionLinkCard work={work} canManage={canManage} />
         </div>
         <aside className="space-y-4">
           <HumanGate code="H-06">发布由你在小红书里亲自完成。系统不登录小红书，也不代发。</HumanGate>

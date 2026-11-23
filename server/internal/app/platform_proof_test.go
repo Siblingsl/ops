@@ -369,7 +369,22 @@ func TestPlatformProofWhitelistRejectsWildcards(t *testing.T) {
 		"platform.metrics.refresh.request": {http.MethodPost, "/api/v1/accounts/" + runID + "/platform-metrics-refresh"},
 		"platform.sync.operation.resume":   {http.MethodPost, "/api/v1/accounts/" + runID + "/platform-sync-operations/" + runID + "/actions"},
 		// P0-4（CF-P2-CXEF-06）：评论单条上报（新增操作必须同步覆盖白名单测试）。
-		"platform.comment.ingest":          {http.MethodPost, "/api/v1/desktop/platform/comments"},
+		"platform.comment.ingest": {http.MethodPost, "/api/v1/desktop/platform/comments"},
+		"publish.task.claim":      {http.MethodPost, "/api/v1/desktop/platform/publish/tasks/claim"},
+		"publish.task.heartbeat":  {http.MethodPost, "/api/v1/desktop/platform/publish/tasks/" + runID + "/heartbeat"},
+		"publish.task.result":     {http.MethodPost, "/api/v1/desktop/platform/publish/tasks/" + runID + "/results"},
+		// REF41 P5：发布通道体检（新增操作必须同步覆盖白名单测试）。
+		"publish.health.claim":     {http.MethodPost, "/api/v1/desktop/platform/publish/health/claim"},
+		"publish.health.heartbeat": {http.MethodPost, "/api/v1/desktop/platform/publish/health/checks/" + runID + "/heartbeat"},
+		"publish.health.result":    {http.MethodPost, "/api/v1/desktop/platform/publish/health/checks/" + runID + "/results"},
+		// REF41 I1：竞对观测（新增操作必须同步覆盖白名单测试）。
+		"benchmark.observe.claim":     {http.MethodPost, "/api/v1/desktop/benchmark/tasks/claim"},
+		"benchmark.observe.heartbeat": {http.MethodPost, "/api/v1/desktop/benchmark/tasks/" + runID + "/heartbeat"},
+		"benchmark.observe.result":    {http.MethodPost, "/api/v1/desktop/benchmark/tasks/" + runID + "/results"},
+		// REF41 F4：解析器学习样本上报（新增操作必须同步覆盖白名单测试）。
+		"platform.parser.events": {http.MethodPost, "/api/v1/desktop/parser-events"},
+		// REF41 F5：桌面执行器 Preflight 浏览器策略检查。
+		"browser.policy.check": {http.MethodPost, "/api/v1/desktop/platform/browser-policy/check"},
 	}
 	for op, mp := range accepted {
 		if !desktopOperationPathAllowed(op, mp[0], mp[1]) {
@@ -387,7 +402,11 @@ func TestPlatformProofWhitelistRejectsWildcards(t *testing.T) {
 		if !strings.HasPrefix(opDef.Path, "/api/v1/desktop/platform/") &&
 			opDef.Path != "/api/v1/accounts/{uuid}/platform-account-sync" &&
 			opDef.Path != "/api/v1/accounts/{uuid}/platform-metrics-refresh" &&
-			opDef.Path != "/api/v1/accounts/{uuid}/platform-sync-operations/{uuid}/actions" {
+			opDef.Path != "/api/v1/accounts/{uuid}/platform-sync-operations/{uuid}/actions" &&
+			// REF41 I1（已独立核验）：竞对观测 claim/heartbeat/results 走 /desktop/benchmark/tasks 专属面，
+			// 与 /desktop/platform/ 平行；REF41 F4（已独立核验）：解析器样本上报走 /desktop/parser-events。
+			!strings.HasPrefix(opDef.Path, "/api/v1/desktop/benchmark/tasks/") &&
+			opDef.Path != "/api/v1/desktop/parser-events" {
 			t.Errorf("平台操作 %s 的路径 %s 不在 /desktop/platform/ 下", op, opDef.Path)
 		}
 	}

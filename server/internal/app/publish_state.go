@@ -833,8 +833,12 @@ func (s *Server) syncPublishStatePublic(ctx context.Context, tx pgx.Tx, workID u
 	}
 	key := fmt.Sprintf("publication:%d", publishRevision)
 	hash := sha256Hex([]byte(fmt.Sprintf("publication:%s:%d:%s", workID, publishRevision, strings.TrimSpace(earlyReason))))
-	return publishStateEventInsert(ctx, tx, workID, "transition", fromPtr, "public", version, evidence,
-		"通过既有发布回填入口登记", key, hash, actor)
+	if err := publishStateEventInsert(ctx, tx, workID, "transition", fromPtr, "public", version, evidence,
+		"通过既有发布回填入口登记", key, hash, actor); err != nil {
+		return err
+	}
+	// P2-A5: 任务状态只是 work 发布事实的投影，必须与既有公开回填在同一事务内同步。
+	return s.syncPublishTaskPublished(ctx, tx, workID, publishRevision, actor)
 }
 
 func (s *Server) syncPublishStateCorrection(ctx context.Context, tx pgx.Tx, workID uuid.UUID, beforeRevision, afterRevision int, reason string, actor *uuid.UUID) error {

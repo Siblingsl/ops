@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { DeriveDialog } from '@/components/derive'
+import { PublishManifestPanel } from '@/components/publish-manifest'
 import { confirm, Dialog, Drawer } from '@/components/dialog'
 import { Badge, Button, cn, Field, Input, MoreMenu, Notice, PageLoading, platformFormatLabel, platformLabel, PlatformMark, Select, StatusBadge, Switch } from '@/components/ui'
 import { FormOrchestrationDialog } from './FormOrchestration'
@@ -651,6 +652,7 @@ export default function WorkLayout() {
           </nav>
         </div>}
         {!focus && <FamilyStrip work={work} />}
+        {!focus && <PublishManifestPanel work={work} />}
         {!canWrite && (
           <div className="border-t border-mist-100 bg-mist-50 px-5 py-2 text-[13px] text-mist-600">观察者只读：可浏览作品，不能编辑、检查确认、派生或推送。</div>
         )}

@@ -204,7 +204,23 @@ var desktopOperations = map[string]desktopOperation{
 	// P0-4（CF-P2-CXEF-06 桌面消费接线）：评论单条上报（设备证明 = 连接保管人本机）。
 	// 复用本地 comment 结果类型与 ingestPlatformCommentResultTx 单项幂等写入；
 	// 不扩 v2 结果类型白名单 / 阶段矩阵（产品授权文案未定，docs/37 §5 拍板项 4）。
-	"platform.comment.ingest":          {Name: "platform.comment.ingest", Scope: desktopProofPlatformAccountScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/comments", Limit: desktopPlatformRequestBytes},
+	"platform.comment.ingest": {Name: "platform.comment.ingest", Scope: desktopProofPlatformAccountScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/comments", Limit: desktopPlatformRequestBytes},
+	// REF41 F4：采集失败样本结构化上报（设备证明；批量 ≤20；10 分钟窗口去重）。
+	"platform.parser.events": {Name: "platform.parser.events", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/parser-events", Limit: desktopPlatformRequestBytes},
+	// REF41 F5：桌面执行器 Preflight 的浏览器策略检查（设备证明；拒绝写审计）。
+	"browser.policy.check": {Name: "browser.policy.check", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/browser-policy/check", Limit: desktopPlatformRequestBytes},
+	// REF41 P2：发布任务领取/心跳/结果，复用平台采集的设备证明与开关。
+	"publish.task.claim":     {Name: "publish.task.claim", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/publish/tasks/claim", Limit: desktopPlatformRequestBytes},
+	"publish.task.heartbeat": {Name: "publish.task.heartbeat", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/publish/tasks/{uuid}/heartbeat", Limit: desktopPlatformRequestBytes},
+	"publish.task.result":    {Name: "publish.task.result", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/publish/tasks/{uuid}/results", Limit: desktopPlatformResultsBytes},
+	// REF41 P5：发布通道体检领取/心跳/结果；同 P2 复用设备证明，只读体检不点发布。
+	"publish.health.claim":     {Name: "publish.health.claim", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/publish/health/claim", Limit: desktopPlatformRequestBytes},
+	"publish.health.heartbeat": {Name: "publish.health.heartbeat", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/publish/health/checks/{uuid}/heartbeat", Limit: desktopPlatformRequestBytes},
+	"publish.health.result":    {Name: "publish.health.result", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/platform/publish/health/checks/{uuid}/results", Limit: desktopPlatformResultsBytes},
+	// REF41 I1：竞对观测领取/心跳/结果；只读公开主页，不登录竞对账号。
+	"benchmark.observe.claim":     {Name: "benchmark.observe.claim", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/benchmark/tasks/claim", Limit: desktopPlatformRequestBytes},
+	"benchmark.observe.heartbeat": {Name: "benchmark.observe.heartbeat", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/benchmark/tasks/{uuid}/heartbeat", Limit: desktopPlatformRequestBytes},
+	"benchmark.observe.result":    {Name: "benchmark.observe.result", Scope: desktopProofPlatformScope, Method: http.MethodPost, Path: "/api/v1/desktop/benchmark/tasks/{uuid}/results", Limit: desktopPlatformResultsBytes},
 }
 
 func desktopOperationOf(operation string) (desktopOperation, bool) {
@@ -267,6 +283,17 @@ var platformOperations = []string{
 	"platform.metrics.refresh.request",
 	"platform.sync.operation.resume",
 	"platform.comment.ingest",
+	"platform.parser.events",
+	"browser.policy.check",
+	"publish.task.claim",
+	"publish.task.heartbeat",
+	"publish.task.result",
+	"publish.health.claim",
+	"publish.health.heartbeat",
+	"publish.health.result",
+	"benchmark.observe.claim",
+	"benchmark.observe.heartbeat",
+	"benchmark.observe.result",
 }
 
 type desktopVerifiedDeviceKey struct{}

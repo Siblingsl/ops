@@ -9,6 +9,7 @@ import { useMe } from '@/lib/session'
 import { CropPreview } from '@/components/cover-crop'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, Card, cn, Field, HumanGate, Input, Notice, PageState, Switch } from '@/components/ui'
+import { ConversionLinkCard } from '@/components/conversion-link-card'
 import { ApiError, errorMessage, get, post, stream } from '@/lib/api'
 import { assetHtml, assetUrl } from '@/lib/api-base'
 import { runeLen } from '@/lib/format'
@@ -93,6 +94,7 @@ export default function Push() {
               {work.status === 'packed' && <Button variant="secondary" onClick={() => nav(`/a/${work.account_id}/review?work=${work.id}`)}>我已发布，去回填</Button>}
             </div>
           </Card>
+          <div className="mt-6"><ConversionLinkCard work={work} canManage={canWrite} /></div>
         </div>
       </>
     )
@@ -181,6 +183,7 @@ export default function Push() {
             : p.check_revision_stale
               ? <Notice tone="gamboge">作品内容已变化，需重新检查后才能写入草稿。</Notice>
             : <HumanGate code="H-04">发布前检查还没有全部确认，不能写入草稿。</HumanGate>}
+          <div className="mt-6"><ConversionLinkCard work={work} canManage={canWrite} /></div>
         </div>
       </>
     )
@@ -386,6 +389,7 @@ export default function Push() {
           </Card>
         )}
         <Notice tone="gray">写入草稿只是把内容放进公众号后台的草稿箱，正式发表需要你在后台操作。每日写入上限可在「设置 → 平台账号」中调整。</Notice>
+        <ConversionLinkCard work={work} canManage={canWrite} />
       </aside>
 
       <Dialog open={!!choice} onClose={() => setChoice(null)} title={choice?.reason === 'missing' ? '原草稿已不在草稿箱' : '草稿在后台被修改过'} desc={choice?.message}

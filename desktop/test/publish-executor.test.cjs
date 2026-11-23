@@ -1,0 +1,277 @@
+const assert = require('node:assert/strict');
+const test = require('node:test');
+
+const { createXhsPublishAdapter } = require('../.build/publish/xhs.js');
+const { createToutiaoPublishAdapter } = require('../.build/publish/toutiao.js');
+const {
+  DesktopPublishAdapterRegistry,
+  createDefaultDesktopPublishAdapterRegistry
+} = require('../.build/publish/registry.js');
+const { runDesktopPublishTask } = require('../.build/publish/executor.js');
+const { withPublishTimeout } = require('../.build/publish/errors.js');
+
+function request(overrides = {}) {
+  return {
+    taskId: 'task-1',
+    workspaceId: 'workspace-1',
+    accountId: 'account-1',
+    workId: 'work-1',
+    platform: 'xhs',
+    manifest: { title: '测试标题' },
+    mode: 'desktop',
+    accountName: 'OPS测试号',
+    ...overrides
+  };
+}
+
+function page(overrides = {}) {
+  return {
+    currentAccountName: async () => 'OPS测试号',
+    hasAnchor: async () => true,
+    ...overrides
+  };
+}
+
+test('P8 桌面适配器：账号不匹配返回 account_mismatch', async () => {
+  const adapter = createXhsPublishAdapter(page({ currentAccountName: async () => '另一个账号' }));
+  await assert.rejects(
+    () => adapter.preflight(request()),
+    (err) => err.code === 'account_mismatch'
+  );
+});
+
+test('P8 桌面适配器：页面锚点缺失返回 anchor_missing', async () => {
+  const adapter = createXhsPublishAdapter(page({
+    hasAnchor: async (anchor) => anchor !== 'xhs-title'
+  }));
+  await assert.rejects(
+    () => adapter.preflight(request()),
+    (err) => err.code === 'anchor_missing'
+  );
+});
+
+test('P8 桌面适配器：单次动作超时返回 executor_timeout', async () => {
+  const adapter = createXhsPublishAdapter(page({
+    fillFields: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }));
+  await assert.rejects(
+    () => withPublishTimeout(adapter.fill(request()), 10, 'fill'),
+    (err) => err.code === 'executor_timeout'
+  );
+});
+
+test('P8/P6 桌面适配器：API 显式 submit-now 才可提交；desktop 通道必须有匹配页校验', async () => {
+  let submits = 0;
+  const adapter = createXhsPublishAdapter(page({
+    submitNow: async () => { submits += 1; }
+  }));
+  // desktop 通道未实现匹配页校验时不得提交（P6-A3 fail-closed）
+  await assert.rejects(
+    () => adapter.submit(request({ mode: 'desktop', explicitSubmitNow: true })),
+    (err) => err.code === 'submit_not_configured'
+  );
+  await assert.rejects(
+    () => adapter.submit(request({ mode: 'api', explicitSubmitNow: false })),
+    (err) => err.code === 'submit_requires_user_action'
+  );
+  // desktop 即使有 countFilledPages，也必须由用户显式 submit-now 触发
+  const counted = createXhsPublishAdapter(page({
+    submitNow: async () => { submits += 1; },
+    countFilledPages: async () => 1
+  }));
+  await assert.rejects(
+    () => counted.submit(request({ mode: 'desktop' })),
+    (err) => err.code === 'submit_requires_user_action'
+  );
+  const result = await adapter.submit(request({ mode: 'api', explicitSubmitNow: true }));
+  assert.equal(result.state, 'submitted');
+  assert.equal(submits, 1);
+});
+
+test('P6 桌面适配器：submit-now 匹配页必须恰好 1 个（0/2 拒绝，1 个成功一次）', async () => {
+  let submits = 0;
+  const mk = (matches) => createXhsPublishAdapter(page({
+    submitNow: async () => { submits += 1; },
+    countFilledPages: async () => matches,
+  }));
+  // 0 个匹配页 → submit_ambiguous
+  await assert.rejects(
+    () => mk(0).submit(request({ mode: 'desktop', explicitSubmitNow: true })),
+    (err) => err.code === 'submit_ambiguous'
+  );
+  // 2 个匹配页 → submit_ambiguous
+  await assert.rejects(
+    () => mk(2).submit(request({ mode: 'desktop', explicitSubmitNow: true })),
+    (err) => err.code === 'submit_ambiguous'
+  );
+  assert.equal(submits, 0, 'ambiguous 情况不得点击');
+  // 恰好 1 个 → 点击一次
+  const result = await mk(1).submit(request({ mode: 'desktop', explicitSubmitNow: true }));
+  assert.equal(result.state, 'submitted');
+  assert.equal(submits, 1);
+});
+
+test('P8 注册表覆盖 xhs/toutiao 桌面适配器，版本写入结果证据', async () => {
+  const registry = createDefaultDesktopPublishAdapterRegistry(page());
+  const list = registry.list();
+  assert.deepEqual(
+    list.map((item) => [item.platform, item.version]),
+    [['xhs', 'xhs-fill-v1'], ['toutiao', 'toutiao-fill-v1']]
+  );
+  const xhs = registry.get('xhs');
+  const preflight = await xhs.preflight(request());
+  assert.equal(preflight.adapter_version, 'xhs-fill-v1');
+  assert.equal(registry.get('wechat_mp'), undefined);
+});
+
+test('P8 桌面执行器：xhs claim → preflight → fill → awaiting_user，不自动提交', async () => {
+  let submits = 0;
+  const registry = createDefaultDesktopPublishAdapterRegistry(page({
+    submitNow: async () => { submits += 1; }
+  }));
+  const task = {
+    taskId: 'task-xhs',
+    workspaceId: 'workspace-1',
+    accountId: 'account-1',
+    workId: 'work-1',
+    platform: 'xhs',
+    manifest: { title: '测试标题' },
+    mode: 'desktop',
+    accountName: 'OPS测试号'
+  };
+  const observed = [];
+  const result = await runDesktopPublishTask({
+    claim: async () => task,
+    heartbeat: async () => { observed.push('heartbeat'); },
+    result: async (taskId, payload) => { observed.push([taskId, payload]); },
+    registry,
+    explicitSubmitNow: true
+  });
+  assert.equal(result.state, 'awaiting_user');
+  assert.equal(result.evidence.adapter_version, 'xhs-fill-v1');
+  assert.equal(result.evidence.fill, 'manual_handoff');
+  assert.equal(observed[0], 'heartbeat');
+  assert.deepEqual(observed[1], ['task-xhs', result]);
+  assert.equal(submits, 0);
+});
+
+test('P3 桌面执行器：回读 ok=false 时不得提交，返回 readback_mismatch', async () => {
+  let submits = 0;
+  const adapter = {
+    name: 'fake-api',
+    version: 'fake-v1',
+    preflight: async () => ({ ok: true }),
+    fill: async () => ({ state: 'filled' }),
+    readback: async () => ({ state: 'filled', readback: { ok: false } }),
+    submit: async () => { submits += 1; return { state: 'submitted' }; }
+  };
+  const registry = { get: () => adapter };
+  const result = await runDesktopPublishTask({
+    claim: async () => ({
+      taskId: 'task-p3',
+      workspaceId: 'workspace-1',
+      accountId: 'account-1',
+      workId: 'work-1',
+      platform: 'wechat_mp',
+      manifest: { title: '测试标题' },
+      mode: 'api'
+    }),
+    heartbeat: async () => {},
+    result: async () => {},
+    registry,
+    explicitSubmitNow: true
+  });
+  assert.equal(result.state, 'failed');
+  assert.equal(result.errorCode, 'readback_mismatch');
+  assert.equal(submits, 0);
+});
+
+test('P8 桌面执行器：toutiao 同样从 claim 到 awaiting_user', async () => {
+  const registry = createDefaultDesktopPublishAdapterRegistry(page());
+  const task = {
+    taskId: 'task-toutiao',
+    workspaceId: 'workspace-1',
+    accountId: 'account-1',
+    workId: 'work-1',
+    platform: 'toutiao',
+    manifest: { title: '测试标题' },
+    mode: 'desktop',
+    accountName: 'OPS测试号'
+  };
+  const result = await runDesktopPublishTask({
+    claim: async () => task,
+    heartbeat: async () => {},
+    result: async () => {},
+    registry
+  });
+  assert.equal(result.state, 'awaiting_user');
+  assert.equal(result.evidence.adapter_version, 'toutiao-fill-v1');
+});
+
+test('P6 桌面执行器：intent=submit 不走填写心跳，回读通过后只提交一次', async () => {
+  let heartbeats = 0;
+  let submits = 0;
+  const observed = [];
+  const adapter = {
+    name: 'fake-desktop',
+    version: 'fake-v1',
+    preflight: async () => ({ ok: true }),
+    fill: async () => ({ state: 'filled' }),
+    readback: async () => ({ state: 'awaiting_user', readback: { ok: true }, evidence: { readback_ok: true } }),
+    submit: async () => {
+      submits += 1;
+      return { state: 'submitted', evidence: { submit_verified: true, matched_pages: 1 } };
+    },
+  };
+  const result = await runDesktopPublishTask({
+    claim: async () => ({
+      taskId: 'task-submit',
+      workspaceId: 'workspace-1',
+      accountId: 'account-1',
+      workId: 'work-1',
+      platform: 'xhs',
+      manifest: { fields: { title: '测试标题' } },
+      mode: 'desktop',
+      intent: 'submit',
+    }),
+    heartbeat: async () => { heartbeats += 1; },
+    result: async (taskId, payload) => { observed.push([taskId, payload]); },
+    registry: { get: () => adapter },
+  });
+  assert.equal(heartbeats, 0, 'submit intent 不是 filling，不能发填写心跳');
+  assert.equal(submits, 1, '用户显式 submit-now 只点一次');
+  assert.equal(result.state, 'submitted');
+  assert.deepEqual(observed, [['task-submit', result]]);
+});
+
+test('P6 桌面执行器：submit intent 回读不一致时绝不点击', async () => {
+  let submits = 0;
+  const adapter = {
+    name: 'fake-desktop',
+    version: 'fake-v1',
+    preflight: async () => ({ ok: true }),
+    fill: async () => ({ state: 'filled' }),
+    readback: async () => ({ state: 'failed', readback: { ok: false }, errorCode: 'readback_mismatch' }),
+    submit: async () => { submits += 1; return { state: 'submitted' }; },
+  };
+  const result = await runDesktopPublishTask({
+    claim: async () => ({
+      taskId: 'task-submit-bad',
+      workspaceId: 'workspace-1',
+      accountId: 'account-1',
+      workId: 'work-1',
+      platform: 'xhs',
+      manifest: { fields: { title: '测试标题' } },
+      mode: 'desktop',
+      intent: 'submit',
+    }),
+    heartbeat: async () => {},
+    result: async () => {},
+    registry: { get: () => adapter },
+  });
+  assert.equal(submits, 0);
+  assert.equal(result.state, 'failed');
+  assert.equal(result.errorCode, 'readback_mismatch');
+});
