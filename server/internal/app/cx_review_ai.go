@@ -483,7 +483,8 @@ func (s *Server) cxReviewBuildAIBasis(ctx context.Context, account *Account, wor
 func (s *Server) cxReviewLatestFollower(ctx context.Context, accountID uuid.UUID) (*cxReviewFollowerFact, error) {
 	var fact cxReviewFollowerFact
 	err := s.db.QueryRow(ctx, `SELECT date::text,source,cumulate FROM account_metric_daily
-		WHERE account_id=$1 AND cumulate IS NOT NULL ORDER BY date DESC,CASE source WHEN 'wechat_api' THEN 0 ELSE 1 END LIMIT 1`, accountID).
+		WHERE account_id=$1 AND cumulate IS NOT NULL
+		ORDER BY date DESC, `+followerSourcePrioritySQL+` DESC, preferred DESC, updated_at DESC LIMIT 1`, accountID).
 		Scan(&fact.Date, &fact.Source, &fact.Cumulate)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

@@ -278,7 +278,7 @@ func (s *Server) rejectCXBuildArtifact(ctx context.Context, workspaceID, buildID
 
 func cxBuildArtifactKind(kind string) bool {
 	switch kind {
-	case "html", "stable_html", "png", "zip", "json", "csv":
+	case "html", "stable_html", "png", "zip", "json", "csv", "pptx", "docx":
 		return true
 	default:
 		return false
@@ -287,7 +287,8 @@ func cxBuildArtifactKind(kind string) bool {
 
 func cxBuildArtifactMatchesTarget(kind string, targets []string) bool {
 	// 产物形态到目标的映射：zip 同时服务组图与封面交付包。
-	accepted := map[string][]string{"stable_html": {"stable_html"}, "png": {"long_image"}, "zip": {"xhs_cards", "cover_images"}}
+	accepted := map[string][]string{"stable_html": {"stable_html"}, "png": {"long_image"}, "zip": {"xhs_cards", "cover_images"},
+		"pptx": {"pptx"}, "docx": {"docx"}}
 	for _, target := range accepted[kind] {
 		if cxHasCXBuildTarget(targets, target) {
 			return true
@@ -374,6 +375,20 @@ func cxInspectBuildArtifact(kind, name string, data []byte) (string, int, int, e
 			return "", 0, 0, err
 		}
 		return "application/zip", 0, 0, nil
+	}
+	if kind == "pptx" || kind == "docx" {
+		// C3：Office 产物必须是 ZIP 容器（PK 头 + .pptx/.docx 扩展名）；
+		// AIGC 元数据与页脚由 complete 解包复核（cxValidateOfficeArtifact）。
+		if extension != "."+kind || len(data) < 4 || !bytes.Equal(data[:4], []byte("PK")) {
+			return "", 0, 0, apiErr(http.StatusUnprocessableEntity, "artifact_invalid", "Office 产物必须是有效的 ."+kind+" 文件")
+		}
+		if err := cxValidateOfficeZIPSafety(data); err != nil {
+			return "", 0, 0, err
+		}
+		if err := cxValidateOfficeArtifact(kind, data); err != nil {
+			return "", 0, 0, err
+		}
+		return "application/vnd.openxmlformats-officedocument." + map[string]string{"pptx": "presentationml.presentation", "docx": "wordprocessingml.document"}[kind], 0, 0, nil
 	}
 	if kind == "json" {
 		if extension != ".json" || !json.Valid(data) {

@@ -27,7 +27,7 @@ import (
 	"ops/internal/markdownsyntax"
 )
 
-var cxBuildTargetOrder = []string{"wechat_html", "stable_html", "long_image", "xhs_cards", "cover_images"}
+var cxBuildTargetOrder = []string{"wechat_html", "stable_html", "long_image", "xhs_cards", "cover_images", "pptx", "docx"}
 
 // cxBuildCommit 转译 RepeatableRead 事务 commit 时的 PostgreSQL 40001 序列化失败
 // （如构建首读 work 行后并发 PATCH touchContent 先提交），语义对齐 FR-CX-02
@@ -184,6 +184,9 @@ func cxTargetAllowed(platform, contentFormat, target string) bool {
 		return platform == "xhs" && (contentFormat == "image_note" || contentFormat == "list_note" || contentFormat == "card_post")
 	case "cover_images":
 		return (platform == "wechat_mp" || platform == "xhs") && contentFormat != "script" && contentFormat != "micro_post"
+	case "pptx", "docx":
+		// C3：Office 确定性导出——两类平台均可，剧本/微贴除外（与封面同口径）。
+		return (platform == "wechat_mp" || platform == "xhs") && contentFormat != "script" && contentFormat != "micro_post"
 	default:
 		return false
 	}
@@ -234,6 +237,11 @@ func (s *Server) createCXBuildTx(w http.ResponseWriter, r *http.Request) error {
 	} else if cxHasCXBuildTarget(targets, "cover_images") {
 		if in.RendererContractVersion != cxCoverTemplateVersion {
 			return apiErr(http.StatusConflict, "renderer_version_mismatch", "当前服务端未登记此封面契约版本")
+		}
+	} else if cxHasCXBuildTarget(targets, "pptx") || cxHasCXBuildTarget(targets, "docx") {
+		// C3：Office 导出走服务端渲染器（office-render-v1），客户端契约只做一致性登记。
+		if in.RendererContractVersion != cxOfficeTemplateVersion {
+			return apiErr(http.StatusConflict, "renderer_version_mismatch", "当前服务端未登记此 Office 导出模板版本")
 		}
 	} else if !cxrendercontract.SupportsWechatHTML(in.RendererContractVersion) {
 		return apiErr(http.StatusConflict, "renderer_version_mismatch", "当前服务端未登记此排版契约版本")

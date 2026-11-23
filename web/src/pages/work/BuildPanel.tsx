@@ -4,6 +4,7 @@ import { Button, Card, Notice } from '@/components/ui'
 import { ApiError, errorMessage, get, post, rawRequest } from '@/lib/api'
 import { customTheme, renderWechatSections, createStableWechatHTML, themes as renderThemes, type FrozenWechatImage, type Theme } from '@/lib/render'
 import { builtinThemeResources, wechatHTMLRendererContractVersion } from '@/lib/cx-render-contract'
+import { OFFICE_TEMPLATE_VERSION, type OfficeKind } from '@/lib/office-export'
 import type { Section, Work } from '@/lib/types'
 import type { WorkSaveCoordinator } from './work-save'
 
@@ -11,7 +12,7 @@ import type { WorkSaveCoordinator } from './work-save'
 // 差异只在能力边界：长图依赖桌面隔离 Electron 窗口（780px 固定 DPR2 分段捕获），Web 不提供该目标，
 // 也不伪造回执。Q-CX-03/04 已拍板（90 D-165）：ERROR 仍阻断构建；WARN 构建可 built，
 // 下载需本人逐项知悉回执（privacy_ack_required → acknowledged）后开放。
-type BuildTarget = 'wechat_html' | 'stable_html'
+type BuildTarget = 'wechat_html' | 'stable_html' | 'pptx' | 'docx'
 type BuildSummary = {
   id: string
   targets: BuildTarget[]
@@ -60,8 +61,8 @@ type BuildDetail = {
 }
 type UploadedArtifact = { artifact_id: string; kind: string; name: string }
 
-const targetLabels: Record<BuildTarget, string> = { wechat_html: '公众号预览 HTML', stable_html: '离线稳定版 HTML' }
-const artifactForTarget: Record<BuildTarget, string> = { wechat_html: 'html', stable_html: 'stable_html' }
+const targetLabels: Record<BuildTarget, string> = { wechat_html: '公众号预览 HTML', stable_html: '离线稳定版 HTML', pptx: 'PPTX 演示文稿', docx: 'DOCX 文档' }
+const artifactForTarget: Record<BuildTarget, string> = { wechat_html: 'html', stable_html: 'stable_html', pptx: 'pptx', docx: 'docx' }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -144,6 +145,13 @@ async function uploadArtifact(buildID: string, kind: string, filename: string, d
   return { artifact_id: value.artifact_id, kind, name: filename }
 }
 
+// C3：PPTX/DOCX 由服务端独立 Node 渲染器生成，客户端只触发并接收产物索引。
+async function renderOfficeArtifact(buildID: string, kind: OfficeKind): Promise<UploadedArtifact> {
+  const value = await post<{ artifact_id: string; name: string }>(`/builds/${encodeURIComponent(buildID)}/office-render`, { target: kind })
+  if (!value.artifact_id || !value.name) throw new Error('服务端没有返回 Office 产物索引。')
+  return { artifact_id: value.artifact_id, kind, name: value.name }
+}
+
 async function downloadFile(path: string, fallbackName: string) {
   const response = await rawRequest('GET', path)
   const disposition = response.headers.get('Content-Disposition') || ''
@@ -209,7 +217,11 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
       const stableHTML = createStableWechatHTML(rendered.html, snapshot.work.title, snapshot.work.revision, images)
       byKind.set('stable_html', await uploadArtifact(buildID, 'stable_html', `revision-${snapshot.work.revision}-stable.html`, new TextEncoder().encode(stableHTML), 'text/html; charset=utf-8'))
     }
-    const pageInfo = { client: 'web', application_version: '0.1.0', renderer_contract_version: wechatHTMLRendererContractVersion,
+    const officeTargets = requestedTargets.filter((target): target is OfficeKind => target === 'pptx' || target === 'docx')
+    for (const target of officeTargets) {
+      byKind.set(target, await renderOfficeArtifact(buildID, target))
+    }
+    const pageInfo = { client: 'web', application_version: '0.1.0', renderer_contract_version: officeTargets.length > 0 ? OFFICE_TEMPLATE_VERSION : wechatHTMLRendererContractVersion,
       chromium_version: /Chrom(?:e|ium)\/([^ )]+)/.exec(navigator.userAgent)?.[1] || 'web-browser',
       font_family: getComputedStyle(document.body).fontFamily || 'sans-serif', device_scale_factor: window.devicePixelRatio || 1,
       viewport_width: window.innerWidth, viewport_height: window.innerHeight }
@@ -254,9 +266,10 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
         return
       }
       if (targets.length === 0) throw new Error('请至少选择一种构建产物。')
+      const officeSelected = targets.includes('pptx') || targets.includes('docx')
       created = await post<BuildCreate>(`/works/${work.id}/builds`, {
         basis_revision: current.revision, targets, options: {}, client: 'web',
-        renderer_contract_version: wechatHTMLRendererContractVersion, force,
+        renderer_contract_version: officeSelected ? OFFICE_TEMPLATE_VERSION : wechatHTMLRendererContractVersion, force,
       })
       if (created.status !== 'running') {
         const from = created.reused_from || created.build_id
@@ -306,6 +319,10 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
       </label>)}
     </div>
     <p className="text-[11px] text-mist-400">浏览器端只生成本页渲染的 HTML；390px 真实长图依赖桌面客户端的隔离捕获窗口，请在桌面端执行。</p>
+    <div className="space-y-1 text-[11px] text-mist-400">
+      <p data-testid="office-export-template-version">PPTX/DOCX 模板版本：{OFFICE_TEMPLATE_VERSION}</p>
+      <p data-testid="office-export-deterministic-note">确定性导出：固定模板、固定时间戳与固定 ZIP 顺序；同一作品版本和参数生成相同 SHA256。</p>
+    </div>
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="primary" loading={busy} disabled={busy || !canWrite || work.locked || targets.length === 0} onClick={() => void start()}>生成校验报告</Button>
       <Button size="sm" variant="secondary" loading={busy} disabled={busy || !canWrite || work.locked || targets.length === 0} onClick={() => void start(undefined, true)} title="跳过历史复用，强制新建">重新生成</Button>
@@ -344,9 +361,9 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
         {detail.download_gate.reason === 'privacy_ack_required' && <Button size="sm" className="mt-3" disabled={busy || !allWarningsSelected || privacy.truncated} onClick={() => void acknowledgeWarnings()}>提交本人逐项知悉回执</Button>}
       </div>}
       {detail.download_gate.reason && !detail.download_gate.allowed && <Notice tone="gray">下载门禁：{detail.download_gate.reason}</Notice>}
-      {detail.artifacts.filter(item => item.downloadable).map(item => <div key={item.id} className="flex items-center justify-between rounded-md border border-mist-200 p-2 text-xs">
+      {detail.artifacts.filter(item => item.downloadable).map(item => <div key={item.id} data-testid={`build-artifact-${item.kind}`} className="flex items-center justify-between rounded-md border border-mist-200 p-2 text-xs">
         <span>{item.name} · {item.bytes.toLocaleString()} 字节 · SHA256 {item.sha256.slice(0, 12)}</span>
-        <Button size="sm" variant="ghost" icon={<Download className="size-3.5" />} disabled={!detail.download_gate.allowed} onClick={() => void downloadFile(`/builds/${detail.id}/artifacts/${item.id}`, item.name).catch(e => setError(errorMessage(e)))}>下载</Button>
+        <Button data-testid={`download-artifact-${item.kind}`} size="sm" variant="ghost" icon={<Download className="size-3.5" />} disabled={!detail.download_gate.allowed} onClick={() => void downloadFile(`/builds/${detail.id}/artifacts/${item.id}`, item.name).catch(e => setError(errorMessage(e)))}>下载</Button>
       </div>)}
       {detail.download_gate.allowed && <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="secondary" onClick={() => void downloadFile(`/builds/${detail.id}/manifest.json`, 'manifest.json').catch(e => setError(errorMessage(e)))}>下载 manifest.json</Button>

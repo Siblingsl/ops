@@ -8,6 +8,49 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
+func TestCXBuildOfficeMigrationDownUpOnCleanDatabase(t *testing.T) {
+	goose.SetBaseFS(migrations)
+	goose.SetLogger(goose.NopLogger())
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatal(err)
+	}
+	database, _ := newToutiaoMigrationTestDB(t)
+	if err := goose.UpTo(database, "migrations", 134); err != nil {
+		t.Fatal(err)
+	}
+	assertOfficeConstraints := func(stage string, wantOffice bool) {
+		t.Helper()
+		var targets, kinds string
+		if err := database.QueryRow(`SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='work_build_targets_check'`).Scan(&targets); err != nil {
+			t.Fatalf("%s: read targets constraint: %v", stage, err)
+		}
+		if err := database.QueryRow(`SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='work_build_artifact_kind_check'`).Scan(&kinds); err != nil {
+			t.Fatalf("%s: read artifact kind constraint: %v", stage, err)
+		}
+		for _, token := range []string{"pptx", "docx"} {
+			if strings.Contains(targets, token) != wantOffice || strings.Contains(kinds, token) != wantOffice {
+				t.Fatalf("%s: office constraint %s mismatch, targets=%s kinds=%s", stage, token, targets, kinds)
+			}
+		}
+		var officeRows int
+		if err := database.QueryRow(`SELECT count(*) FROM work_build_artifact WHERE kind IN ('pptx','docx')`).Scan(&officeRows); err != nil {
+			t.Fatalf("%s: count office artifacts: %v", stage, err)
+		}
+		if officeRows != 0 {
+			t.Fatalf("%s: clean database must have no office artifacts, got %d", stage, officeRows)
+		}
+	}
+	assertOfficeConstraints("after up 134", true)
+	if err := goose.DownTo(database, "migrations", 133); err != nil {
+		t.Fatalf("down 134 on clean database: %v", err)
+	}
+	assertOfficeConstraints("after down 133", false)
+	if err := goose.UpTo(database, "migrations", 134); err != nil {
+		t.Fatalf("re-up 134 after clean down: %v", err)
+	}
+	assertOfficeConstraints("after re-up 134", true)
+}
+
 func TestCXBuildMigrationIndexesAndRollbackProtection(t *testing.T) {
 	goose.SetBaseFS(migrations)
 	goose.SetLogger(goose.NopLogger())

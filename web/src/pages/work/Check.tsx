@@ -685,6 +685,9 @@ export default function Check() {
         )}
       </div>
 
+      {/* REF41 C1：智囊团（五席受众并行审稿；只读意见不改稿，建议逐条采纳/忽略仅记录）。 */}
+      {canWrite && <PanelReviewCard workId={work.id} />}
+
       <BuildIntegrityNotice workId={work.id} />
       {!canWrite && <Notice tone="gray" className="mb-4">观察者只读：可查看检查结果，不能重新检查或确认。</Notice>}
       {run?.stale && !starting && editable && (
@@ -860,4 +863,87 @@ function Stat({ label, value, ok }: { label: string; value: string; ok: boolean 
       <div className={cn('text-[15px] font-semibold tabular-nums', ok ? 'text-ink-700' : 'text-gamboge-600')}>{value}</div>
     </div>
   )
+}
+
+// REF41 C1：智囊团卡——默认五席并行审稿；冲突并列展示；失败席显示错误不伪造；
+// 建议的采纳/忽略仅写入 summary.decisions，不改稿、不写 review_report。
+type PanelReview = {
+  id: string
+  status: 'queued' | 'running' | 'partial' | 'done' | 'failed'
+  audiences: string[]
+  results: { audience: string; verdict: string; strengths: string[]; risks: string[]; questions: string[]; suggestions: string[]; failed?: boolean; error?: string }[]
+  summary: { consensus?: string[]; conflicts?: { topic: string; views: string[] }[]; top_risks?: string[] }
+}
+
+function PanelReviewCard({ workId }: { workId: string }) {
+  const query = useQuery({
+    queryKey: ['panel-reviews', workId],
+    queryFn: () => get<{ reviews: PanelReview[] }>(`/works/${workId}/panel-reviews`),
+    refetchInterval: (query) => {
+      const latest = query.state.data?.reviews?.[0]
+      return latest && (latest.status === 'queued' || latest.status === 'running') ? 2000 : false
+    },
+  })
+  const [starting, setStarting] = useState(false)
+  const review = query.data?.reviews?.[0]
+  const running = review?.status === 'queued' || review?.status === 'running'
+  const start = async () => {
+    setStarting(true)
+    try {
+      await post(`/works/${workId}/panel-review`, {})
+      void query.refetch()
+    } catch (error) {
+      toast.error(errorMessage(error) || '智囊团发起失败')
+    } finally {
+      setStarting(false)
+    }
+  }
+  const adopt = async (reviewID: string, item: string, action: 'adopt' | 'ignore') => {
+    try {
+      await post(`/works/${workId}/panel-reviews/${reviewID}/adopt`, { item, action })
+      toast.success(action === 'adopt' ? '已记录采纳' : '已记录忽略')
+      void query.refetch()
+    } catch (error) {
+      toast.error(errorMessage(error) || '记录失败')
+    }
+  }
+  const statusLabel = { queued: '排队中', running: '进行中', partial: '部分完成', done: '已完成', failed: '全部失败' }[review?.status ?? 'done'] ?? ''
+  return <Card className="mb-4" data-testid="panel-review-card">
+    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+      <div className="flex items-center gap-2">
+        <h2 className="text-[15px] font-semibold text-mist-900">智囊团</h2>
+        {review && <Badge tone={review.status === 'done' ? 'green' : review.status === 'failed' ? 'red' : 'gamboge'} data-testid="panel-review-status">{statusLabel}{review.status === 'partial' ? `（${review.results.filter((r) => !r.failed).length}/${review.results.length} 席）` : ''}</Badge>}
+      </div>
+      <Button size="sm" variant="outline" icon={<Sparkles className="size-3.5" />} loading={starting} disabled={!!running} onClick={start} data-testid="panel-review-start">
+        {review ? '重新召集' : '召集智囊团'}
+      </Button>
+    </div>
+    <p className="text-xs text-mist-500 mb-2">五位受众（目标读者/同行专家/平台运营/品牌方/新手读者）并行审稿；意见只作参考，不自动改稿。</p>
+    {review && <>
+      {review.summary.conflicts?.length ? <div className="mb-2" data-testid="panel-conflicts">
+        <p className="text-[13px] font-medium text-mist-700 mb-1">分歧（并列展示）</p>
+        {review.summary.conflicts.map((conflict, index) => <div key={index} className="rounded border border-mist-200 px-3 py-2 mb-1 text-xs text-mist-600">
+          <span className="font-medium text-mist-700">{conflict.topic}</span>
+          {conflict.views.map((view, viewIndex) => <div key={viewIndex}>{view}</div>)}
+        </div>)}
+      </div> : null}
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {review.results.map((seat) => <div key={seat.audience} className="rounded border border-mist-200 p-3" data-testid={`panel-seat-${seat.audience}`}>
+          <p className="text-[13px] font-semibold text-mist-800 mb-1">{seat.audience}{seat.failed && <span className="ml-1 text-red-600 text-xs">失败</span>}</p>
+          {seat.failed ? <p className="text-xs text-red-600">{seat.error || '该席位调用失败，未生成意见。'}</p> : <>
+            <p className="text-xs text-mist-700 mb-1">{seat.verdict}</p>
+            {seat.suggestions.length > 0 && <ul className="text-xs text-mist-600 space-y-1">
+              {seat.suggestions.map((suggestion) => <li key={suggestion} className="flex items-start justify-between gap-2">
+                <span>{suggestion}</span>
+                <span className="flex gap-1 shrink-0">
+                  <button type="button" className="underline" onClick={() => void adopt(review.id, suggestion, 'adopt')}>采纳</button>
+                  <button type="button" className="underline" onClick={() => void adopt(review.id, suggestion, 'ignore')}>忽略</button>
+                </span>
+              </li>)}
+            </ul>}
+          </>}
+        </div>)}
+      </div>
+    </>}
+  </Card>
 }

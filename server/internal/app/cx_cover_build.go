@@ -11,6 +11,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -23,27 +24,68 @@ import (
 
 const cxCoverTemplateVersion = "ops.cover-images/v1"
 
+// cxOfficeTemplateVersion 是 C3 PPTX/DOCX 确定性导出的渲染器模板版本。
+const cxOfficeTemplateVersion = "office-render-v1"
+
 const (
 	cxCoverZipMaxEntries    = 8
 	cxCoverZipMaxEntryBytes = 12 << 20
 	cxCoverZipMaxTotalBytes = 48 << 20
 )
 
+// cxCoverCopyRules 是 C2 封面文案规则：主/副标题 rune 上限、语气、必须/禁止元素、
+// 换行建议。首版为代码常量并单测锁定（docs/41 C2-A1）；规则只约束封面文案，
+// 不改正文标题；后续可迁 DB 配置。
+type cxCoverCopyRules struct {
+	TitleMax      int      `json:"title_max"`
+	SubtitleMax   int      `json:"subtitle_max"`
+	Tone          string   `json:"tone"`
+	Required      []string `json:"required"`
+	Forbidden     []string `json:"forbidden"`
+	LineBreakHint string   `json:"line_break_hint"`
+}
+
 // cxCoverPresetSpec 是设计规定的封面预设；尺寸是本期设计像素而非平台硬要求，
 // 两种 1:1 必须以平台前缀区分（wechat_square 383×383 / xhs_square 1080×1080）。
 type cxCoverPresetSpec struct {
-	ID       string
-	Platform string
-	Width    int
-	Height   int
+	ID        string
+	Platform  string
+	Width     int
+	Height    int
+	CopyRules cxCoverCopyRules
 }
 
 var cxCoverPresets = []cxCoverPresetSpec{
-	{ID: "wechat_235", Platform: "wechat_mp", Width: 900, Height: 383},
-	{ID: "wechat_square", Platform: "wechat_mp", Width: 383, Height: 383},
-	{ID: "xhs_34", Platform: "xhs", Width: 1080, Height: 1440},
-	{ID: "xhs_square", Platform: "xhs", Width: 1080, Height: 1080},
-	{ID: "xhs_916", Platform: "xhs", Width: 1080, Height: 1920},
+	{ID: "wechat_235", Platform: "wechat_mp", Width: 900, Height: 383, CopyRules: cxCoverCopyRules{
+		TitleMax: 10, SubtitleMax: 16, Tone: "信息/稳重",
+		Required:  []string{},
+		Forbidden: []string{"！", "？", "震惊", "必看"},
+		LineBreakHint: "主标题一行；副标题可两行，第二行不超过 8 字",
+	}},
+	{ID: "wechat_square", Platform: "wechat_mp", Width: 383, Height: 383, CopyRules: cxCoverCopyRules{
+		TitleMax: 10, SubtitleMax: 16, Tone: "信息/稳重",
+		Required:  []string{},
+		Forbidden: []string{"！", "？", "震惊", "必看"},
+		LineBreakHint: "小图空间有限，主标题尽量 ≤8 字保证缩略可读",
+	}},
+	{ID: "xhs_34", Platform: "xhs", Width: 1080, Height: 1440, CopyRules: cxCoverCopyRules{
+		TitleMax: 12, SubtitleMax: 18, Tone: "具体/口语",
+		Required:  []string{"人群或结果"},
+		Forbidden: []string{"震惊", "必看"},
+		LineBreakHint: "主标题最多两行，每行 ≤6 字；副标题一行",
+	}},
+	{ID: "xhs_square", Platform: "xhs", Width: 1080, Height: 1080, CopyRules: cxCoverCopyRules{
+		TitleMax: 12, SubtitleMax: 18, Tone: "具体/口语",
+		Required:  []string{"人群或结果"},
+		Forbidden: []string{"震惊", "必看"},
+		LineBreakHint: "主标题最多两行，每行 ≤6 字；副标题一行",
+	}},
+	{ID: "xhs_916", Platform: "xhs", Width: 1080, Height: 1920, CopyRules: cxCoverCopyRules{
+		TitleMax: 12, SubtitleMax: 18, Tone: "具体/口语",
+		Required:  []string{"人群或结果"},
+		Forbidden: []string{"震惊", "必看"},
+		LineBreakHint: "主标题最多两行，每行 ≤6 字；副标题一行",
+	}},
 }
 
 func cxCoverPreset(id string) (cxCoverPresetSpec, bool) {
@@ -55,9 +97,12 @@ func cxCoverPreset(id string) (cxCoverPresetSpec, bool) {
 	return cxCoverPresetSpec{}, false
 }
 
-// cxBuildCoverOptions 是 cover_images 唯一已登记的 options schema。
+// cxBuildCoverOptions 是 cover_images 唯一已登记的 options schema；
+// C2 增加文案字段，逐 preset 校验后才进冻结参数。
 type cxBuildCoverOptions struct {
-	Presets []string `json:"presets"`
+	Presets  []string `json:"presets"`
+	Title    string   `json:"title"`
+	Subtitle string   `json:"subtitle"`
 }
 
 func (o *cxBuildCoverOptions) UnmarshalJSON(raw []byte) error {
@@ -103,17 +148,34 @@ func cxCoverPresetsCanonical(ids []string) ([]string, error) {
 	return ordered, nil
 }
 
-// cxCoverBuildOptionValue 规范化为 canonical JSON 可编码值。
+// cxCoverBuildOptionValue 规范化为 canonical JSON 可编码值；C2：逐 preset
+// 校验文案（超长/禁用词/空标题 422），失败不产生冻结参数。
 func cxCoverBuildOptionValue(options cxBuildCoverOptions) (map[string]any, error) {
 	ordered, err := cxCoverPresetsCanonical(options.Presets)
 	if err != nil {
 		return nil, err
 	}
+	// C2-N3：文案校验只作用于新构建提交的文案（title/subtitle 至少一个非空）；
+	// 旧客户端/无文案请求不回溯校验，保持既有构建行为不变。
+	hasCopy := strings.TrimSpace(options.Title) != "" || strings.TrimSpace(options.Subtitle) != ""
 	values := make([]any, 0, len(ordered))
 	for _, id := range ordered {
+		preset, _ := cxCoverPreset(id)
+		if hasCopy {
+			if err := cxValidateCoverCopy(preset, cxCoverCopyInput{Title: options.Title, Subtitle: options.Subtitle}); err != nil {
+				return nil, err
+			}
+		}
 		values = append(values, id)
 	}
-	return map[string]any{"presets": values}, nil
+	value := map[string]any{"presets": values}
+	if t := strings.TrimSpace(options.Title); t != "" {
+		value["title"] = t
+	}
+	if sub := strings.TrimSpace(options.Subtitle); sub != "" {
+		value["subtitle"] = sub
+	}
+	return value, nil
 }
 
 // cxValidateCoverBuildAgainstSnapshot 以冻结来源复核封面构建前提：
@@ -291,4 +353,60 @@ func cxCoverAssetInSnapshot(snapshot map[string]any) bool {
 func snapshotAssets(snapshot map[string]any) []any {
 	assets, _ := snapshot["assets"].([]any)
 	return assets
+}
+
+// cxCoverCopyInput 是封面构建的文案输入：去空白后按 rune 计数（C2-A3）。
+type cxCoverCopyInput struct {
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle"`
+}
+
+// cxValidateCoverCopy 校验单个 preset 的封面文案：
+// 空标题 → cover_copy_required；超长 → cover_copy_too_long；禁用词 → cover_copy_forbidden。
+// 失败返回 422 + {preset, field, max, actual}，生成前调用，不写产物（C2-A2）。
+func cxValidateCoverCopy(preset cxCoverPresetSpec, in cxCoverCopyInput) error {
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		return apiErr(http.StatusUnprocessableEntity, "cover_copy_required", "封面主标题不能为空").With(
+			map[string]any{"preset": preset.ID, "field": "title"})
+	}
+	if n := utf8.RuneCountInString(title); n > preset.CopyRules.TitleMax {
+		return apiErr(http.StatusUnprocessableEntity, "cover_copy_too_long",
+			"主标题超长：上限 "+strconv.Itoa(preset.CopyRules.TitleMax)+" 字").With(
+			map[string]any{"preset": preset.ID, "field": "title", "max": preset.CopyRules.TitleMax, "actual": n})
+	}
+	if n := utf8.RuneCountInString(strings.TrimSpace(in.Subtitle)); n > preset.CopyRules.SubtitleMax {
+		return apiErr(http.StatusUnprocessableEntity, "cover_copy_too_long",
+			"副标题超长：上限 "+strconv.Itoa(preset.CopyRules.SubtitleMax)+" 字").With(
+			map[string]any{"preset": preset.ID, "field": "subtitle", "max": preset.CopyRules.SubtitleMax, "actual": n})
+	}
+	for _, word := range preset.CopyRules.Forbidden {
+		if strings.Contains(title, word) || strings.Contains(in.Subtitle, word) {
+			return apiErr(http.StatusUnprocessableEntity, "cover_copy_forbidden",
+				"封面文案包含禁用词："+word).With(
+				map[string]any{"preset": preset.ID, "field": "title", "forbidden": word})
+		}
+	}
+	return nil
+}
+
+// coverPresetsHandler GET /cover-presets：返回预设与文案规则（C2-A4）。
+func (s *Server) coverPresetsHandler(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireEditor(r.Context()); err != nil {
+		return err
+	}
+	type presetOut struct {
+		Key       string            `json:"key"`
+		Platform  string            `json:"platform"`
+		Width     int               `json:"width"`
+		Height    int               `json:"height"`
+		CopyRules cxCoverCopyRules  `json:"copy_rules"`
+	}
+	list := make([]presetOut, 0, len(cxCoverPresets))
+	for _, preset := range cxCoverPresets {
+		list = append(list, presetOut{Key: preset.ID, Platform: preset.Platform,
+			Width: preset.Width, Height: preset.Height, CopyRules: preset.CopyRules})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"presets": list})
+	return nil
 }

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { LoaderCircle, PackageCheck } from 'lucide-react'
 import { Button, Notice } from '@/components/ui'
 import { ApiError, errorMessage, get, post, rawRequest } from '@/lib/api'
@@ -10,6 +11,34 @@ import { dataURLBytes, zipStore } from '@/lib/zip'
 // 一次只读构建：沿用原图与 cover_crops，不覆盖 asset 字节、不新建派生 asset、不改裁剪；
 // 公众号推送继续传 cover_crops。低分辨率必须用户确认后才允许放大。
 // Q-CX-03/04 已拍板（90 D-165）：纯净封面构建 complete 直接置 built，下载按门禁四态开放。
+
+type CoverCopyRules = {
+  title_max: number
+  subtitle_max: number
+  tone: string
+  required: string[]
+  forbidden: string[]
+  line_break_hint: string
+}
+
+type CoverPresetRule = { key: string; platform: string; width: number; height: number; copy_rules: CoverCopyRules }
+
+const fallbackCopyRules: Record<string, CoverCopyRules> = {
+  wechat_235: { title_max: 10, subtitle_max: 16, tone: '信息/稳重', required: [], forbidden: ['！', '？', '震惊', '必看'], line_break_hint: '主标题一行；副标题可两行，第二行不超过 8 字' },
+  wechat_square: { title_max: 10, subtitle_max: 16, tone: '信息/稳重', required: [], forbidden: ['！', '？', '震惊', '必看'], line_break_hint: '小图空间有限，主标题尽量 ≤8 字保证缩略可读' },
+  xhs_34: { title_max: 12, subtitle_max: 18, tone: '具体/口语', required: ['人群或结果'], forbidden: ['震惊', '必看'], line_break_hint: '主标题最多两行，每行 ≤6 字；副标题一行' },
+  xhs_square: { title_max: 12, subtitle_max: 18, tone: '具体/口语', required: ['人群或结果'], forbidden: ['震惊', '必看'], line_break_hint: '主标题最多两行，每行 ≤6 字；副标题一行' },
+  xhs_916: { title_max: 12, subtitle_max: 18, tone: '具体/口语', required: ['人群或结果'], forbidden: ['震惊', '必看'], line_break_hint: '主标题最多两行，每行 ≤6 字；副标题一行' },
+}
+
+function runeLength(value: string) {
+  return Array.from(value).length
+}
+
+function shortCopy(value: string, max: number) {
+  const chars = Array.from(value.trim())
+  return chars.length > max ? chars.slice(0, max).join('') : chars.join('')
+}
 
 type CoverBuildDetail = {
   id: string
@@ -34,6 +63,37 @@ async function sha256(bytes: Uint8Array): Promise<string> {
 export function CoverBuildPanel({ work, canWrite, client = 'web' }: { work: Work; canWrite: boolean; client?: 'web' | 'desktop' }) {
   const presets = useMemo(() => coverPresetsFor(work.platform), [work.platform])
   const [selected, setSelected] = useState<string[]>(presets.map((preset) => preset.id))
+  const [title, setTitle] = useState('')
+  const [subtitle, setSubtitle] = useState('')
+  const presetRules = useQuery({
+    queryKey: ['cover-presets'],
+    queryFn: () => get<{ presets: CoverPresetRule[] }>('/cover-presets'),
+  })
+  const rulesByKey = useMemo(() => {
+    const map = new Map<string, CoverCopyRules>()
+    for (const preset of presetRules.data?.presets ?? []) map.set(preset.key, preset.copy_rules)
+    return map
+  }, [presetRules.data])
+  const activePreset = presets.find((preset) => selected.includes(preset.id)) ?? presets[0]
+  const copyRules = activePreset ? rulesByKey.get(activePreset.id) ?? fallbackCopyRules[activePreset.id] ?? null : null
+  const titleCount = runeLength(title.trim())
+  const subtitleCount = runeLength(subtitle.trim())
+  const hasCopy = !!(title.trim() || subtitle.trim())
+  const titleTooLong = !!copyRules && titleCount > copyRules.title_max
+  const subtitleTooLong = !!copyRules && subtitleCount > copyRules.subtitle_max
+  const forbiddenHit = copyRules?.forbidden.find((word) => title.includes(word) || subtitle.includes(word)) ?? ''
+  const copyError = !hasCopy ? '' : !title.trim() ? '填写封面文案时主标题不能为空。' : titleTooLong
+    ? `主标题超长：当前 ${titleCount} 字，上限 ${copyRules!.title_max} 字。`
+    : subtitleTooLong ? `副标题超长：当前 ${subtitleCount} 字，上限 ${copyRules!.subtitle_max} 字。`
+      : forbiddenHit ? `文案包含当前预设的禁用词：${forbiddenHit}` : ''
+  const suggestions = useMemo(() => {
+    if (!copyRules) return []
+    const titles = [work.title, work.viewpoint, work.topic_angle]
+      .map((value) => shortCopy(value || '', copyRules.title_max))
+      .filter(Boolean)
+    const subtitleValue = shortCopy(work.summary || '', copyRules.subtitle_max)
+    return [...new Set(titles)].slice(0, 3).map((value) => ({ title: value, subtitle: subtitleValue }))
+  }, [copyRules, work.title, work.viewpoint, work.topic_angle, work.summary])
   const [busy, setBusy] = useState(false)
   const [stage, setStage] = useState('')
   const [error, setError] = useState('')
@@ -42,7 +102,7 @@ export function CoverBuildPanel({ work, canWrite, client = 'web' }: { work: Work
   const [detail, setDetail] = useState<CoverBuildDetail | null>(null)
   const cover = work.assets.find((asset) => asset.id === work.cover_asset_id)
 
-  const blocked = !canWrite || work.locked || busy || selected.length === 0 || !cover
+  const blocked = !canWrite || work.locked || busy || selected.length === 0 || !cover || !!copyError
   // 低分辨率预估：任一所选预设需要放大原图就要求用户明确确认（FR-CX-09）。
   const upscaledPresets = useMemo(() => {
     if (!cover) return []
@@ -74,7 +134,7 @@ export function CoverBuildPanel({ work, canWrite, client = 'web' }: { work: Work
       const created = await post<{ build_id: string; status: string; source_hash: string; params_hash: string; reused: boolean }>(
         `/works/${work.id}/builds`, {
           basis_revision: work.revision, targets: ['cover_images'],
-          options: { presets: chosen.map((preset) => preset.id) },
+          options: hasCopy ? { presets: chosen.map((preset) => preset.id), title: title.trim(), subtitle: subtitle.trim() } : { presets: chosen.map((preset) => preset.id) },
           client, renderer_contract_version: 'ops.cover-images/v1',
         })
       if (created.status !== 'running') {
@@ -133,6 +193,49 @@ export function CoverBuildPanel({ work, canWrite, client = 'web' }: { work: Work
         </label>
       ))}
     </div>
+    {copyRules && <div className="mt-3 rounded-lg border border-mist-200 bg-mist-50/50 p-2.5" data-testid="cover-copy-editor">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-[11.5px] font-medium text-mist-700">封面文案（可选，随本次构建逐预设校验）</p>
+        <span className="text-[10px] text-mist-400">语气：{copyRules.tone}{copyRules.required.length > 0 ? ` · 建议包含：${copyRules.required.join('、')}` : ''}</span>
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <label className="text-[11px] text-mist-600">主标题
+          <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="主标题"
+            className="mt-1 w-full rounded-md border border-mist-200 bg-white px-2 py-1.5 text-[12px] outline-none focus:border-ink-400" data-testid="cover-copy-title" />
+          <span data-testid="cover-copy-title-count" className={titleTooLong ? 'text-danger' : 'text-mist-400'}>{titleCount}/{copyRules.title_max} 字</span>
+        </label>
+        <label className="text-[11px] text-mist-600">副标题
+          <input value={subtitle} onChange={(event) => setSubtitle(event.target.value)} placeholder="副标题（可留空）"
+            className="mt-1 w-full rounded-md border border-mist-200 bg-white px-2 py-1.5 text-[12px] outline-none focus:border-ink-400" data-testid="cover-copy-subtitle" />
+          <span data-testid="cover-copy-subtitle-count" className={subtitleTooLong ? 'text-danger' : 'text-mist-400'}>{subtitleCount}/{copyRules.subtitle_max} 字</span>
+        </label>
+      </div>
+      <p className="mt-1.5 text-[10px] text-mist-400">换行建议：{copyRules.line_break_hint}{copyRules.forbidden.length > 0 ? ` · 禁用：${copyRules.forbidden.join(' ')}` : ''}</p>
+      {copyError && <p role="alert" data-testid="cover-copy-error" className="mt-1.5 text-[11px] font-medium text-danger">{copyError}</p>}
+      <div className="mt-2" data-testid="cover-copy-suggestions">
+        <p className="text-[10px] text-mist-500">文案建议（只建议，点击后才填入）：</p>
+        {suggestions.length > 0 ? (
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {suggestions.map((item, index) => <button key={`${item.title}-${index}`} type="button"
+              onClick={() => { setTitle(item.title); setSubtitle(item.subtitle) }}
+              className="rounded-md border border-mist-200 bg-white px-2 py-1 text-left text-[10.5px] text-mist-600 hover:border-ink-300"
+              data-testid={`cover-copy-suggestion-${index}`}>
+              {item.title}{item.subtitle ? ` · ${item.subtitle}` : ''}
+            </button>)}
+          </div>
+        ) : (
+          <p className="mt-1 text-[10px] text-mist-500" data-testid="cover-copy-suggestions-empty">
+            暂无可生成的文案建议；可直接编辑上方文案，或先补充作品标题/观点/选题角度。
+          </p>
+        )}
+        {suggestions.length === 1 && (
+          <p className="mt-1 text-[10px] text-gamboge-700" data-testid="cover-copy-suggestions-short">
+            可用作品字段不足，当前仅 {suggestions.length} 套建议；补充标题/观点/选题角度可获得更多建议，也可直接编辑文案。
+          </p>
+        )}
+      </div>
+    </div>}
+    {presetRules.isError && <p className="mt-1 text-[10px] text-gamboge-700">文案规则接口加载失败，当前使用内置同版本规则。</p>}
     {upscaledPresets.length > 0 && (
       <div className="mt-2 rounded-md border border-gamboge-200 bg-gamboge-50 p-2 text-[11px] text-gamboge-800">
         <label className="flex cursor-pointer items-start gap-1.5">

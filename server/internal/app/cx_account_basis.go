@@ -416,7 +416,7 @@ func cxReadFollower(ctx context.Context, q cxBasisQueryer, workspaceID, accountI
 	var follower cxAccountFollowerInput
 	err := q.QueryRow(ctx, `SELECT to_char(date,'YYYY-MM-DD'),source,cumulate,updated_at FROM account_metric_daily
 		WHERE account_id=$1 AND date<=$2::date AND cumulate IS NOT NULL
-		ORDER BY date DESC,(source='wechat_api') DESC LIMIT 1`, accountID, through.Format("2006-01-02")).Scan(&follower.Date, &follower.Source, &follower.Cumulate, &follower.UpdatedAt)
+		ORDER BY date DESC, `+followerSourcePrioritySQL+` DESC, preferred DESC, updated_at DESC LIMIT 1`, accountID, through.Format("2006-01-02")).Scan(&follower.Date, &follower.Source, &follower.Cumulate, &follower.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

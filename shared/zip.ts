@@ -33,6 +33,10 @@ export function zipStore(entries: ZipStoreEntry[]): Uint8Array {
     if (seen.has(entry.name)) throw new Error(`ZIP 条目名重复：${entry.name}`)
     seen.add(entry.name)
   }
+  return writeZipStore(entries)
+}
+
+function writeZipStore(entries: ZipStoreEntry[]): Uint8Array {
   const locals: Uint8Array[] = []
   const centrals: Uint8Array[] = []
   let offset = 0

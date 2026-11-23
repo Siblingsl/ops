@@ -522,7 +522,7 @@ func (s *Server) persistCXTopicDiagnosis(ctx context.Context, actor *identity, b
 func (s *Server) findCXTopicDiagnosis(ctx context.Context, workspaceID, topicID, actorID uuid.UUID, inputHash, contextHash string) (cxTopicDiagnosisStored, error) {
 	return scanCXTopicDiagnosis(s.db.QueryRow(ctx, `SELECT id,workspace_id,account_id,topic_id,input_hash,context_hash,result,ai_call_id,
 		model,prompt_version,created_at,result_revision FROM content_diagnosis
-		WHERE workspace_id=$1 AND topic_id=$2 AND created_by=$3 AND kind='topic' AND input_hash=$4 AND context_hash=$5 AND ai_partial=false
+		WHERE workspace_id=$1 AND topic_id=$2 AND created_by=$3 AND kind='topic' AND rules_version='cx-topic-1' AND input_hash=$4 AND context_hash=$5 AND ai_partial=false
 		ORDER BY created_at DESC,id DESC LIMIT 1`, workspaceID, topicID, actorID, inputHash, contextHash))
 }
 
@@ -595,7 +595,7 @@ func (s *Server) listTopicDiagnoses(w http.ResponseWriter, r *http.Request) erro
 	const limit = 20
 	rows, err := s.db.Query(r.Context(), `SELECT id,workspace_id,account_id,topic_id,input_hash,context_hash,result,ai_call_id,
 		model,prompt_version,created_at,result_revision FROM content_diagnosis
-		WHERE workspace_id=$1 AND topic_id=$2 AND kind='topic' AND ($3::timestamptz IS NULL OR (created_at,id)<($3,$4))
+		WHERE workspace_id=$1 AND topic_id=$2 AND kind='topic' AND rules_version='cx-topic-1' AND ($3::timestamptz IS NULL OR (created_at,id)<($3,$4))
 		ORDER BY created_at DESC,id DESC LIMIT $5`, actor.WorkspaceID, topicID, cursorTime(cursor), cursorID(cursor), limit+1)
 	if err != nil {
 		return err

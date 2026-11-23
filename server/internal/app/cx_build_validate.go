@@ -147,6 +147,8 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 		expectedContract = cxCardsTemplateVersion
 	} else if cxHasCXBuildTarget(targets, "cover_images") {
 		expectedContract = cxCoverTemplateVersion
+	} else if cxHasCXBuildTarget(targets, "pptx") || cxHasCXBuildTarget(targets, "docx") {
+		expectedContract = cxOfficeTemplateVersion
 	}
 	if input.SourceHash != sourceHash || input.ParamsHash != paramsHash || input.RendererReceipt.RendererContractVersion != expectedContract {
 		return cxFailAndCommit(ctx, tx, buildID, apiErr(http.StatusConflict, "build_input_mismatch", "完成请求与已冻结的构建输入不一致"))
@@ -269,6 +271,25 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 			"template_version": cxCoverTemplateVersion, "count": len(entries), "entries": entries,
 		}
 	}
+	// C3：Office 产物确定性断言——上传已复核 AIGC；这里把已选产物哈希写进 manifest。
+	// 单目标沿用该产物 SHA256；pptx+docx 双选时用按 pptx→docx 固定顺序拼接的
+	// “kind:sha256”摘要，避免 office_hash 只代表首个 pptx（C3-D5）。
+	officeKinds := []string{}
+	for _, target := range []string{"pptx", "docx"} {
+		if !cxTargetSelected(targets, target) {
+			continue
+		}
+		files := cxArtifactsOfKind(selectedArtifacts, target)
+		if len(files) != 1 {
+			return cxFailAndCommit(ctx, tx, buildID, apiErr(http.StatusUnprocessableEntity, "build_artifacts_missing", "Office 构建缺少唯一的 ."+target+" 交付文件"))
+		}
+		officeKinds = append(officeKinds, target)
+	}
+	officeHash := ""
+	if len(officeKinds) > 0 {
+		officeHash = cxOfficeManifestHash(selectedArtifacts, officeKinds)
+		validation["office"] = map[string]any{"template_version": cxOfficeTemplateVersion, "office_hash": officeHash, "aigc": true}
+	}
 	if needHTML {
 		report, validationErr := cxbuildvalidate.ValidateWechatHTML(base.Data, sections, allAssets, false)
 		if validationErr != nil {
@@ -330,6 +351,7 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 		"artifacts": cxBuildManifestArtifacts(selectedArtifacts), "coverage": privacy["coverage"],
 		"evidence_csv":     map[string]any{"name": "evidence.csv", "mime": csvArtifact.MIME, "bytes": csvArtifact.Bytes, "sha256": csvArtifact.SHA256},
 		"syntax_report":    cxBuildSyntaxReport(snapshot, revision),
+		"office":           validation["office"],
 		"privacy_report":   privacy,
 		"renderer_receipt": rendererReceipt,
 	}
@@ -361,6 +383,28 @@ func (s *Server) completeCXBuildValidated(w http.ResponseWriter, r *http.Request
 		response["artifact_fingerprint"] = artifactFingerprint
 	}
 	return ok(w, response)
+}
+
+func cxOfficeManifestHash(artifacts []cxBuildArtifact, kinds []string) string {
+	if len(kinds) == 1 {
+		for _, artifact := range artifacts {
+			if artifact.Kind == kinds[0] {
+				return artifact.SHA256
+			}
+		}
+		return ""
+	}
+	var builder strings.Builder
+	for _, kind := range kinds {
+		for _, artifact := range artifacts {
+			if artifact.Kind == kind {
+				fmt.Fprintf(&builder, "%s:%s\n", kind, artifact.SHA256)
+				break
+			}
+		}
+	}
+	sum := sha256.Sum256([]byte(builder.String()))
+	return hex.EncodeToString(sum[:])
 }
 
 func cxValidBuildRendererReceipt(receipt cxBuildRendererReceipt) bool {
@@ -412,6 +456,10 @@ func cxSelectBuildOutputs(targets []string, artifacts []cxBuildArtifact, submitt
 			expectedKinds = append(expectedKinds, "zip")
 		case "cover_images":
 			expectedKinds = append(expectedKinds, "zip")
+		case "pptx":
+			expectedKinds = append(expectedKinds, "pptx")
+		case "docx":
+			expectedKinds = append(expectedKinds, "docx")
 		default:
 			return nil, apiErr(http.StatusUnprocessableEntity, "target_not_allowed", "构建目标无效")
 		}
