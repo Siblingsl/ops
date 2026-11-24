@@ -9,10 +9,7 @@ server/bin/
 server/tmp/
 *.exe
 
-# 前端
-web/node_modules/
-web/dist/
-web/dist-crossorigin/
+# 前端（renderer/ 是唯一前端；原独立 web/ 已按 D-224 物理删除，见 docs/43 OPT-W06）
 desktop/renderer/
 # 桌面渲染包已从 desktop/renderer-src 上移到仓库根 renderer/，忽略规则随之搬过来。
 # 根 .gitignore 没有通用 node_modules/ 规则，这里漏一条就会把几百兆依赖暴露成未跟踪文件。
@@ -22,10 +19,6 @@ renderer/.vite/
 renderer/*.tsbuildinfo
 renderer/playwright-report/
 renderer/test-results/
-web/.vite/
-web/*.tsbuildinfo
-web/playwright-report/
-web/test-results/
 .playwright-results/
 
 # 本地数据
@@ -108,9 +101,6 @@ desktop/src/native-host/com.ops.desktop.bridge.json
 desktop/src/native-host/run-host.bat
 desktop/.tmp/
 
-# 一次性 QA 现场：依赖本地 tmpverify/ 或固定端口的批次脚本，不具备复现条件
-web/audit-*.mjs
-web/shot-models.mjs
 # qa26-g103/g104 的 playwright 配置是 docs 里复现命令的入口，属已跟踪资产，不在此忽略。
 renderer/qa26-agent-feedback-samples.mjs
 renderer/_tmp_*

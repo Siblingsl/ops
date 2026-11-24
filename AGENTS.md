@@ -26,50 +26,49 @@
 
 ```
 server/                Go 后端（cmd/ops 为入口；internal/ 为业务模块）
-web/                   React + TypeScript + Vite 网页端
-  e2e/                 Web 浏览器场景 Playwright 用例
-  tests/               Web 单测与源码边界守卫
-renderer/              独立 React + TypeScript + Vite 桌面业务界面（桌面端的前端）
+renderer/              **唯一前端**：React + TypeScript + Vite 桌面业务界面
   App.tsx main.tsx     渲染入口；界面源码直接放在包根，没有 src/ 一层
   components/ layout/ lib/ pages/ styles/
   e2e/                 桌面形态 Playwright 用例（含 Electron 真实窗口）
   tests/               桌面渲染器单测与边界守卫
+shared/                前后端共享源码（types/api/format/skills/AI 错误等）；严禁删除
+  renderer/lib/* 与 tools/office-render 依赖它
 desktop/               Electron 桌面端
   src/                 Electron 主进程与本机客户端能力
   renderer/            桌面安装包使用的构建产物（由 renderer/ 构建生成）
+tools/office-render/   Office 模板渲染工具（依赖 shared/office-templates.json）
 deploy/                Docker Compose 与部署配置
 docs/                  设计文档
 ```
 
-`web/` 与 `renderer/` 是独立的前端项目，分别维护入口、依赖锁文件、构建配置、界面源码与 E2E 用例；共享业务功能需要在两处分别实现。`desktop/renderer/` 是生成目录，不直接编辑。
+`renderer/` 是唯一前端：入口、依赖锁文件、构建配置、界面源码与 E2E 用例全部在这里。原独立的 `web/` 已按 D-224 物理删除，只读存档标签为 `archive/web-before-removal`（可随时回看/恢复），规格见 `docs/43-桌面端主攻与全局优化实施方案.md`。`desktop/renderer/` 是生成目录，不直接编辑。
+
+**严禁删除 `shared/` 目录**：`renderer/lib/*`（`types.ts`、`api.ts`、`format.ts`、`skills.ts` 等数十个文件）全部 `export * from '../../shared/...'`，`tools/office-render/build-templates.mjs` 也依赖 `shared/office-templates.json`。它不是可清理的历史目录。
 
 `renderer/` 位于仓库根、与 `desktop/` 平级，不再嵌在 `desktop/` 内：这样渲染源码的路径深度从 6 层降到 5 层，且依赖与构建产物不再混进 Electron 打包目录。它对 `desktop/` 的引用一律走 `../desktop/...`（主进程产物在 `desktop/.build/`），不反向读取 `desktop/src/` 源码。
 
-两套 E2E 各自独立运行，互不读取对方目录：
+E2E 只有桌面一套，用例在 `renderer/e2e/`：
 
 ```powershell
-cd web; pnpm e2e                    # Web：5179 / 8180 / 8191
-cd desktop; pnpm test:e2e:renderer  # 桌面：5287 / 8287 / 8297
+cd desktop; pnpm test:e2e:renderer  # 5287 / 8287 / 8297
 ```
 
-本机若设置了 `HTTP_PROXY` 而 `NO_PROXY` 未包含回环地址，Playwright 的 webServer 健康检查会被代理接管并一直超时（日志表现为服务已启动但持续 404）。两端配置已显式 `NO_PROXY=127.0.0.1,localhost,::1`；手工启动服务时也需自行排除。
+本机若设置了 `HTTP_PROXY` 而 `NO_PROXY` 未包含回环地址，Playwright 的 webServer 健康检查会被代理接管并一直超时（日志表现为服务已启动但持续 404）。配置已显式 `NO_PROXY=127.0.0.1,localhost,::1`；手工启动服务时也需自行排除。
 
-`web/e2e/` 不允许出现 `_electron`、`Electron/` UA、`ops-creative-desktop`、5287 端口；`renderer/e2e/` 不允许引用 `web/` 或 5179 端口。两条约束由 `web/tests/web-e2e-boundary.test.mjs` 与 `renderer/tests/e2e-boundary.test.mjs` 在 `test:unit` 中强制。
+`renderer/e2e/` 不允许引用已废弃的 `web/` 路径与 Web 端口（5179 / 8180 / 8191），不允许相对路径越出仓库根，也不允许写仓库根 `output/` 根层。这些约束由 `renderer/tests/e2e-boundary.test.mjs` 在 `test:unit` 中强制。
 
-两端截图与报告统一落在仓库根 `.playwright-results/`（CI 按该路径上传）。该目录按端分树，互不覆盖：`web/` 与 `web-report/` 属于 Web，`desktop-renderer/` 与 `desktop-renderer-report/` 属于桌面。桌面 runner 的 `process.cwd()` 是仓库根 `renderer/`，所以桌面用例写产物用 `../.playwright-results/` 和 `../output/`；写 `../../` 会越出仓库根，桌面边界测试会拦截。桌面级依赖（Electron 可执行文件、主进程产物 `desktop/.build/`）必须写 `../desktop/...` 前缀，写成 `../node_modules`、`../.build` 会指向不存在的仓库根路径。
+截图与报告统一落在仓库根 `.playwright-results/`（CI 按该路径上传），桌面产物在 `desktop-renderer/` 与 `desktop-renderer-report/`；`web/`、`web-report/` 是原 Web 端的历史产物，`web/` 删除后不再生成，仅保留用于回看旧证据。桌面 runner 的 `process.cwd()` 是仓库根 `renderer/`，所以桌面用例写产物用 `../.playwright-results/` 和 `../output/`；写 `../../` 会越出仓库根，桌面边界测试会拦截。桌面级依赖（Electron 可执行文件、主进程产物 `desktop/.build/`）必须写 `../desktop/...` 前缀，写成 `../node_modules`、`../.build` 会指向不存在的仓库根路径。
 
-仓库根 `output/` 同样按端分树：根层文件（如 `output/toutiao-*.png`）属于 Web，`output/playwright/` 属于桌面。两端的边界测试会分别拦截"Web 写 `output/playwright/`"和"桌面写 `output/` 根层"，因此两端可以同时跑。
+仓库根 `output/` 现在只由桌面写入，桌面只能写 `output/playwright/`；根层文件（如 `output/toutiao-*.png`）是原 Web 端的历史产物，不再回填。桌面边界测试会拦截"桌面写 `output/` 根层"。
 
-`server/` 是**刻意共用**的后端，不属于两端任一侧的私有目录：`server/cmd/ops-e2e` 同时为两套 E2E 提供 API 与模拟模型，差异只由 `OPS_AGENT_WORKBENCH_FEATURES` 等环境变量控制。拆前端时不要把它复制成两份。
-
-`web/e2e/` 与 `renderer/e2e/` 存在同名 spec（数量以 `node scripts/check-e2e-pairs.mjs` 守卫输出与 ALLOWLIST 为准，当前 38 对）：它们覆盖同一段旅程的两种形态（浏览器 / 桌面工作台），必须各写一份，不能共用文件。同名清单与"每对至少 15 行差异"由该脚本在 CI 的 `e2e` job 中校验；新增同名要显式登记，直接复制一端到另一端会被拦下。
+`server/` 是**唯一后端**：`server/cmd/ops-e2e` 为桌面 E2E 提供 API 与模拟模型，差异只由 `OPS_AGENT_WORKBENCH_FEATURES` 等环境变量控制。不要把它复制成多份，也不要在 `renderer/` 里另起一套服务端逻辑。
 
 ## 本地开发
 
 ```powershell
 docker compose -f deploy/docker-compose.dev.yml up -d   # PostgreSQL，端口 5440
 cd server; go run ./cmd/ops serve                       # API :8080，模拟微信与模拟模型 :8091
-cd web; pnpm install; pnpm dev                          # 前端 :5173，代理 /api 到 :8080
+cd renderer; pnpm install; pnpm dev                     # 唯一前端开发服务器 :5173，代理 /api 到 :8080
 ```
 
 桌面端开发与构建：
@@ -96,6 +95,8 @@ cd server; $env:OPS_DESKTOP_PLATFORM_ENABLED='1'; go run ./cmd/ops serve
 - 不添加"全部起草""全部确认""全部入库"之类的按钮或接口；智能体不添加"全部执行"或批量执行卡片的按钮或接口，写入只能由用户逐张执行（D-117）；
 - 不在代码、日志、测试数据中写入真实密钥；
 - 不删除或跳过 HC-01 至 HC-25 测试（`server/internal/app/hc_test.go`）；DEV-AG 任务加入的 HC-26 至 HC-31 同样适用。
+- **严禁删除 `shared/` 目录**（`renderer/lib/*` 与 `tools/office-render` 依赖它）；同样严禁删除 `docs/42-evidence/` 与 `server/internal/app/wechat_drafts*.go` 等已登记的真实闭环成果。
+- 原独立 `web/` 已按 D-224 物理删除，只读存档在标签 `archive/web-before-removal`；不得重新引入第二套浏览器前端，也不得把存档"恢复一半"混进工作树。
 
 ## 任务识别、事实来源与状态核验
 
@@ -107,8 +108,8 @@ cd server; $env:OPS_DESKTOP_PLATFORM_ENABLED='1'; go run ./cmd/ops serve
 
 ## 修改前的影响分析
 
-- 确认本次变更属于 `server/`、`web/`、`renderer/`、`desktop/src/`、`deploy/` 或跨模块变更；列出实际受影响的 API、类型、数据表、配置、任务状态、页面或测试，不因相邻代码可改就扩大范围。
-- 修改共享 `server/` API、响应字段、鉴权或业务契约时，检查 Web 与桌面两端的调用与兼容性；修改仅属于某一端的 UI 时，不应无理由同步重做另一端。属于两端共有的业务能力时，按既有双端独立实现原则逐端检查。
+- 确认本次变更属于 `server/`、`renderer/`、`shared/`、`desktop/src/`、`deploy/` 或跨模块变更；列出实际受影响的 API、类型、数据表、配置、任务状态、页面或测试，不因相邻代码可改就扩大范围。
+- 修改共享 `server/` API、响应字段、鉴权或业务契约时，检查 `renderer/`（唯一前端）与 `desktop/` 主进程两处的调用与兼容性；修改仅属于渲染进程的 UI 时，不应无理由同步重做 Electron 主进程逻辑。
 - 涉及多租户工作区、邀请码、用户权限或数据查询时，检查身份验证、权限控制、工作区范围隔离与越权访问风险；不能仅依赖前端隐藏按钮作为授权依据。
 - 涉及数据库结构或数据语义时，核对实际迁移机制、旧数据兼容、回填需求及回退影响；未经确认不得执行会丢失数据的操作或直接改写生产数据。
 - 涉及外部平台写入、批量操作、AI 自动执行或状态迁移时，逐项核对既有用户确认闸门、权限及 `docs/04/05/06` 契约；不得通过新增后台任务或接口变相绕过本文件的逐张执行红线。
@@ -118,9 +119,9 @@ cd server; $env:OPS_DESKTOP_PLATFORM_ENABLED='1'; go run ./cmd/ops serve
 
 1. **建立基线**：阅读相关实现与测试，确认当前行为及问题是否可复现。根因尚不清楚时，不用临时绕过校验、吞异常或静默改变状态来制造“已修复”结果。
 2. **最小完整修改**：按已确认需求实现必要变更，保留安全检查、错误处理及兼容性；清理仅因本次修改而失效的代码，不顺手改造无关模块。
-3. **分层验证**：先运行与改动直接相关的测试、类型检查或构建；涉及后端业务与 HC 红线时运行适用的 Go 测试，涉及前端时运行该端单测与边界守卫，涉及用户旅程时运行对应端 E2E。跨端共享契约变更需检查两端；测试脚本先以仓库现存 `package.json`、CI 配置和工具链为准。
+3. **分层验证**：先运行与改动直接相关的测试、类型检查或构建；涉及后端业务与 HC 红线时运行适用的 Go 测试，涉及前端时运行 `renderer/` 单测与边界守卫，涉及用户旅程时运行桌面 E2E。`shared/` 或 `server/` 契约变更需同时检查 `renderer/` 与 `desktop/`；测试脚本先以仓库现存 `package.json`、CI 配置和工具链为准。
 4. **不得假通过**：测试失败时记录失败用例、错误及是否由本次修改引入；不能删除、跳过、放宽测试来获取绿色结果，也不能仅凭 mock 成功宣称真实平台流程已验证。
-5. **核对验收**：对照 `docs/04` 的验收标准及任务在 `docs/08` 的要求，核查正常流程、关键异常、权限边界及必要的 Web/桌面形态差异。未执行的检查说明原因及剩余风险。
+5. **核对验收**：对照 `docs/04` 的验收标准及任务在 `docs/08` 的要求，核查正常流程、关键异常、权限边界及必要的桌面端形态差异。未执行的检查说明原因及剩余风险。
 6. **同步记录**：仅在真实实现与验证结果支持时更新任务状态、验收记录和相关设计文档；不因代码提交而直接标记 `PROJECT_COMPLETE` 或等价状态。
 
 ## 安全、执行边界与交接
