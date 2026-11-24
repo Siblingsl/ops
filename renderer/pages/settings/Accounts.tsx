@@ -555,7 +555,7 @@ export default function SettingsAccounts() {
           />
           <ol className="space-y-2 border-t border-mist-100 bg-mist-50/60 px-6 py-4 text-[13px] text-mist-600">
             <li><span className="font-medium text-mist-800">1. 添加账号</span> — 本页</li>
-            <li><span className="font-medium text-mist-800">2. 平台凭证</span> — 仅公众号需要；小红书和今日头条可手动发布</li>
+            <li><span className="font-medium text-mist-800">2. 平台凭证</span> — 仅公众号需要；小红书可手动发布（当前主推公众号与小红书）</li>
             <li><span className="font-medium text-mist-800">3. 定位档案 / 风格样本</span> — 左侧「账号档案」</li>
             <li><span className="font-medium text-mist-800">4. 模型</span> — 头像菜单 → 模型配置</li>
           </ol>
@@ -651,7 +651,7 @@ export default function SettingsAccounts() {
           <p className="font-medium">第一次使用，整体是这四步：</p>
           <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-[12.5px]">
             <li>添加平台账号 —— 本弹窗</li>
-            <li>填平台凭证 —— 仅公众号需要；小红书与今日头条可手动发布，可跳过</li>
+            <li>填平台凭证 —— 仅公众号需要；小红书可手动发布（当前主推公众号与小红书），可跳过</li>
             <li>写定位档案与风格样本 —— 账号「档案」页，可稍后补</li>
             <li>配置模型 —— 设置 → 模型配置，配好后 AI 按钮才可用</li>
           </ol>

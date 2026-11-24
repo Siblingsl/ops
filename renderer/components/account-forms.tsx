@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleAlert, Copy, Globe2, ShieldCheck } from 'lucide-react'
+import { CheckCircle2, ChevronRight, CircleAlert, Copy, Globe2, ShieldCheck } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge, Button, cn, Field, Input, Notice, PlatformMark, platformLabel, Textarea } from '@/components/ui'
@@ -31,6 +31,10 @@ const matrix: Record<Platform, { value: ContentFormat; label: string; desc: stri
   ],
 }
 
+// OPT-S04：新建账号默认只突出两个核心平台；今日头条降权为「更多实验平台」，暂缓维护。
+// matrix 仍保留 toutiao 完整定义，历史头条账号的类型切换与只读展示不受影响。
+const PRIMARY_PLATFORMS: Platform[] = ['wechat_mp', 'xhs']
+
 export function AccountCreateForm({
   onCreated,
   submitText = '添加账号',
@@ -49,6 +53,7 @@ export function AccountCreateForm({
   onBusyChange?: (busy: boolean) => void
 }) {
   const [platform, setPlatform] = useState<Platform>(defaultPlatform)
+  const [showExperimental, setShowExperimental] = useState(defaultPlatform === 'toutiao')
   const [format, setFormat] = useState<ContentFormat>(matrix[defaultPlatform][0].value)
   const [name, setName] = useState('')
   const [typeNote, setTypeNote] = useState('')
@@ -97,22 +102,55 @@ export function AccountCreateForm({
             <PlatformMark platform={platform} size="lg" />
             <div>
               <div className="text-sm font-semibold text-mist-900">{platformLabel[platform]}</div>
-              <div className="text-xs text-mist-500">账号将添加到当前工作区</div>
+              <div className="text-xs text-mist-500">{platform === 'toutiao' ? '仅支持发布包与手动导入（当前主推微信公众号与小红书，暂缓维护）' : '账号将添加到当前工作区'}</div>
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {(['wechat_mp', 'xhs', 'toutiao'] as Platform[]).map((p) => (
-              <button key={p} type="button" onClick={() => pick(p)}
-                className={cn('flex cursor-pointer items-center gap-3 rounded-xl border p-3.5 text-left transition',
-                  platform === p ? 'border-ink-400 bg-ink-50/60 ring-3 ring-ink-100' : 'border-mist-200 hover:border-mist-300')}>
-                <PlatformMark platform={p} size="lg" />
-                <div>
-                  <div className="text-sm font-semibold text-mist-900">{platformLabel[p]}</div>
-                  <div className="text-xs text-mist-500">{p === 'wechat_mp' ? '官方接口写入草稿箱' : '人工发布，无需接口凭证'}</div>
-                </div>
-              </button>
-            ))}
+          <div className="space-y-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {PRIMARY_PLATFORMS.map((p) => (
+                <button key={p} type="button" onClick={() => pick(p)}
+                  className={cn('flex cursor-pointer items-center gap-3 rounded-xl border p-3.5 text-left transition',
+                    platform === p ? 'border-ink-400 bg-ink-50/60 ring-3 ring-ink-100' : 'border-mist-200 hover:border-mist-300')}>
+                  <PlatformMark platform={p} size="lg" />
+                  <div>
+                    <div className="text-sm font-semibold text-mist-900">{platformLabel[p]}</div>
+                    <div className="text-xs text-mist-500">{p === 'wechat_mp' ? '官方接口写入草稿箱' : '人工发布，无需接口凭证'}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              data-testid="toggle-experimental-platforms"
+              aria-expanded={showExperimental}
+              onClick={() => {
+                if (showExperimental) {
+                  setShowExperimental(false)
+                  if (platform === 'toutiao') pick('wechat_mp')
+                } else {
+                  setShowExperimental(true)
+                }
+              }}
+              className="flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-1 py-1 text-left text-[12px] text-mist-400 transition hover:text-mist-600"
+            >
+              <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', showExperimental && 'rotate-90')} />
+              {showExperimental ? '收起更多实验平台' : '显示更多实验平台（暂缓维护）'}
+            </button>
+            {showExperimental && (
+              <div className="space-y-2 rounded-xl border border-mist-200 bg-mist-50/50 p-3">
+                <p className="text-[12px] leading-relaxed text-mist-500">当前主推微信公众号与小红书；以下实验平台暂缓维护，仅支持发布包与手动导入。</p>
+                <button type="button" onClick={() => pick('toutiao')}
+                  className={cn('flex w-full cursor-pointer items-center gap-3 rounded-xl border p-3.5 text-left transition',
+                    platform === 'toutiao' ? 'border-ink-400 bg-white ring-3 ring-ink-100' : 'border-mist-200 bg-white hover:border-mist-300')}>
+                  <PlatformMark platform="toutiao" size="lg" />
+                  <div>
+                    <div className="text-sm font-semibold text-mist-900">{platformLabel.toutiao}</div>
+                    <div className="text-xs text-mist-500">仅支持发布包与手动导入（暂缓维护）</div>
+                  </div>
+                </button>
+              </div>
+            )}
           </div>
         )}
         {fieldErrors.platform && <p role="alert" className="mt-1.5 text-xs text-danger">{fieldErrors.platform}</p>}

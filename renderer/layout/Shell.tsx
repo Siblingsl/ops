@@ -371,6 +371,8 @@ function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: Me
 }
 
 const PLATFORMS: Platform[] = ['wechat_mp', 'xhs', 'toutiao']
+// OPT-S04：无头条账号的工作区默认只展示两个主推平台；今日头条折叠进「更多实验平台」。
+const PRIMARY_PLATFORMS: Platform[] = ['wechat_mp', 'xhs']
 const PLATFORM_EXPAND_KEY = 'ops.topbar.platforms'
 
 function loadPlatformExpanded(): Record<Platform, boolean> {
@@ -396,6 +398,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(loadPlatformExpanded)
   const [platform, setPlatform] = useState<Platform>('wechat_mp')
+  const [showExperimental, setShowExperimental] = useState(false)
   const [busy, setBusy] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [createPlatform, setCreatePlatform] = useState<Platform | null>(null)
@@ -403,6 +406,9 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   const identityRef = useRef<{ userId: string; workspaceId: string } | null>(null)
   identityRef.current = me?.workspace ? { userId: me.user_id ?? me.username, workspaceId: me.workspace.id } : null
   const desktop = document.documentElement.dataset.presentation === 'ops-creative-desktop'
+  // 含停用账号：历史上创建过头条账号的工作区仍保留完整头条 tab 与停用列表，避免历史号找不回。
+  const hasToutiaoAccount = (accounts ?? []).some((a) => a.platform === 'toutiao')
+  const visiblePlatforms: Platform[] = hasToutiaoAccount ? PLATFORMS : PRIMARY_PLATFORMS
 
   const openAccountCreate = async (target: Platform) => {
     setOpen(false)
@@ -439,7 +445,8 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
   }, [loc.pathname])
   useEffect(() => {
     const openSwitcher = () => {
-      setPlatform(current?.platform ?? 'wechat_mp')
+      const preferred = current?.platform ?? 'wechat_mp'
+      setPlatform(!hasToutiaoAccount && preferred === 'toutiao' ? 'wechat_mp' : preferred)
       setOpen(true)
       requestAnimationFrame(() => ref.current?.querySelector('button')?.focus())
     }
@@ -463,7 +470,11 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
       window.removeEventListener(DESKTOP_ACCOUNT_SWITCHER_REQUEST, openSwitcher)
       window.removeEventListener(DESKTOP_ACCOUNT_CREATE_REQUEST, openCreate)
     }
-  }, [current?.platform, platform, canManage, desktop, me?.user_id, me?.username, me?.workspace.id])
+  }, [current?.platform, platform, canManage, desktop, me?.user_id, me?.username, me?.workspace.id, hasToutiaoAccount])
+  // 无头条账号时，若选中态停在已隐藏的 toutiao tab，回落主推平台，避免提交到看不见的平台。
+  useEffect(() => {
+    if (!hasToutiaoAccount && platform === 'toutiao') setPlatform('wechat_mp')
+  }, [hasToutiaoAccount, platform])
 
   if (!me?.workspace) return null
 
@@ -809,12 +820,12 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
 
           {desktop ? <>
             <div role="tablist" aria-label="账号平台" className="desktop-platform-tabs">
-              {PLATFORMS.map((p) => (
+              {visiblePlatforms.map((p) => (
                 <button key={p} type="button" role="tab" id={`topbar-platform-${p}`} aria-selected={platform === p} aria-controls={`topbar-accounts-${p}`} tabIndex={platform === p ? 0 : -1} onClick={() => setPlatform(p)} onContextMenu={(e) => openMenu(e, platformMenu(p))} onKeyDown={(e) => {
                   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
                   e.preventDefault()
-                  const index = PLATFORMS.indexOf(p)
-                  const next = e.key === 'Home' ? PLATFORMS[0] : e.key === 'End' ? PLATFORMS[PLATFORMS.length - 1] : PLATFORMS[(index + (e.key === 'ArrowRight' ? 1 : -1) + PLATFORMS.length) % PLATFORMS.length]
+                  const index = visiblePlatforms.indexOf(p)
+                  const next = e.key === 'Home' ? visiblePlatforms[0] : e.key === 'End' ? visiblePlatforms[visiblePlatforms.length - 1] : visiblePlatforms[(index + (e.key === 'ArrowRight' ? 1 : -1) + visiblePlatforms.length) % visiblePlatforms.length]
                   setPlatform(next)
                   document.getElementById(`topbar-platform-${next}`)?.focus()
                 }}>
@@ -858,8 +869,35 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
                 </details>
               )}
             </div>
+            {!hasToutiaoAccount && (
+              <div className="mt-1 border-t border-mist-100 pt-1">
+                <button
+                  type="button"
+                  data-testid="desktop-toggle-experimental-platforms"
+                  aria-expanded={showExperimental}
+                  onClick={() => setShowExperimental((v) => !v)}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-mist-500 hover:bg-mist-50 hover:text-mist-700"
+                >
+                  {showExperimental ? <ChevronDown className="size-3.5 shrink-0 text-mist-400" /> : <ChevronRight className="size-3.5 shrink-0 text-mist-400" />}
+                  <span className="min-w-0 flex-1">{showExperimental ? '收起更多实验平台' : '显示更多实验平台（暂缓维护）'}</span>
+                </button>
+                {showExperimental && (
+                  <div className="space-y-1.5 px-2 pb-1">
+                    <p className="text-[11.5px] leading-relaxed text-mist-500">当前主推微信公众号与小红书；今日头条仅支持发布包与手动导入（暂缓维护）。</p>
+                    {canManage && <button
+                      type="button"
+                      onClick={() => { void openAccountCreate('toutiao') }}
+                      className="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-mist-200 px-2 py-1.5 text-left text-[12.5px] text-mist-600 hover:border-mist-300 hover:text-mist-900"
+                    >
+                      <PlatformMark platform="toutiao" size="sm" />
+                      <span className="min-w-0 flex-1">添加今日头条账号</span>
+                    </button>}
+                  </div>
+                )}
+              </div>
+            )}
           </> : <div className="space-y-0.5">
-            {PLATFORMS.map((p) => {
+            {visiblePlatforms.map((p) => {
               const list = (accounts ?? []).filter((a) => a.platform === p && a.status === 'active')
               const platformOpen = expanded[p]
               return (
@@ -912,6 +950,34 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
                 </div>
               )
             })}
+            {!hasToutiaoAccount && (
+              <div className="mt-1 border-t border-mist-100 pt-1">
+                <button
+                  type="button"
+                  data-testid="toggle-experimental-platforms"
+                  aria-expanded={showExperimental}
+                  onClick={() => setShowExperimental((v) => !v)}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-mist-500 hover:bg-mist-50 hover:text-mist-700"
+                >
+                  {showExperimental ? <ChevronDown className="size-3.5 shrink-0 text-mist-400" /> : <ChevronRight className="size-3.5 shrink-0 text-mist-400" />}
+                  <span className="min-w-0 flex-1">{showExperimental ? '收起更多实验平台' : '显示更多实验平台（暂缓维护）'}</span>
+                </button>
+                {showExperimental && (
+                  <div className="ml-2 space-y-0.5 border-l border-mist-100 pl-1.5">
+                    <p className="px-2 pt-1 text-[11.5px] leading-relaxed text-mist-400">当前主推微信公众号与小红书；今日头条仅支持发布包与手动导入（暂缓维护）。</p>
+                    <button
+                      type="button"
+                      onClick={() => { if (canManage) { setOpen(false); navigate('/settings/accounts?new=1&platform=toutiao') } }}
+                      className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] text-mist-500 hover:bg-mist-50 hover:text-mist-800"
+                    >
+                      <PlatformMark platform="toutiao" size="sm" />
+                      <span className="min-w-0 flex-1 truncate">{platformLabel.toutiao}</span>
+                      {canManage && <Plus className="size-3.5 shrink-0 text-mist-400" />}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>}
 
           {otherWorkspaces.length > 0 && (
