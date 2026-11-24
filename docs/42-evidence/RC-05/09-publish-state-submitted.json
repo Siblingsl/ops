@@ -1,0 +1,45 @@
+{
+  "history": [
+    {
+      "id": "d235bbfb-51d4-4c94-b0bf-ea2e3278dd61",
+      "event_kind": "transition",
+      "from_state": null,
+      "to_state": "submitted",
+      "state_version": 1,
+      "evidence": {
+        "submitted_ref": {
+          "kind": "current_pack_handoff",
+          "format": "image_note",
+          "platform": "xhs",
+          "recorded_at": "2026-11-24T12:43:51.144574+08:00",
+          "handoff_note": "小红书笔记已由用户人工发布：https://www.xiaohongshu.com/explore/6b05138a000000002b010011?xsec_token=YBbiRYRr9mS6xx-3pRaIlmR22LFwWX3fhY_qlxYn3-jgA=&xsec_source=pc_creatormng；noteId 6b05138a000000002b010011；平台显示发布时间 2026-11-24 12:33（Asia/Shanghai）；OPS 未点击发布。",
+          "work_revision": 2
+        }
+      },
+      "note": "小红书笔记已由用户人工发布：https://www.xiaohongshu.com/explore/6b05138a000000002b010011?xsec_token=YBbiRYRr9mS6xx-3pRaIlmR22LFwWX3fhY_qlxYn3-jgA=&xsec_source=pc_creatormng；noteId 6b05138a000000002b010011；平台显示发布时间 2026-11-24 12:33（Asia/Shanghai）；OPS 未点击发布。",
+      "at": "2026-11-24T12:43:51.112044+08:00"
+    }
+  ],
+  "publication": {
+    "at": null,
+    "publish_revision": 1,
+    "url": null
+  },
+  "registration": {
+    "metric_id": null,
+    "revision": null,
+    "valid": false
+  },
+  "schedule_evidence": null,
+  "scheduled_at": null,
+  "state": "submitted",
+  "submitted_ref": {
+    "kind": "current_pack_handoff",
+    "format": "image_note",
+    "platform": "xhs",
+    "recorded_at": "2026-11-24T12:43:51.144574+08:00",
+    "handoff_note": "小红书笔记已由用户人工发布：https://www.xiaohongshu.com/explore/6b05138a000000002b010011?xsec_token=YBbiRYRr9mS6xx-3pRaIlmR22LFwWX3fhY_qlxYn3-jgA=&xsec_source=pc_creatormng；noteId 6b05138a000000002b010011；平台显示发布时间 2026-11-24 12:33（Asia/Shanghai）；OPS 未点击发布。",
+    "work_revision": 2
+  },
+  "version": 1
+}

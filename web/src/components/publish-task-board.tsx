@@ -153,6 +153,11 @@ export function PublishTaskBoard({ account }: { account: { id: string } }) {  co
                             </p>
                           </div>
                         )}
+                        {(task.platform === 'xhs' && ['filled', 'awaiting_user'].includes(task.state)) && (
+                          <p className="mt-1 text-[11px] text-mist-600" data-testid={`publish-task-xhs-draft-${task.id}`}>
+                            小红书任务不会由 OPS 点发布；请到小红书草稿箱确认并人工发布。
+                          </p>
+                        )}
                         {(task.state === 'failed' || task.state === 'not_logged_in') && (
                           <div className="mt-2 flex gap-1.5">
                             <Button size="sm" variant="secondary" loading={busy === `${task.id}:retry`} onClick={() => void act(task, 'retry')}>重试</Button>
@@ -172,7 +177,7 @@ export function PublishTaskBoard({ account }: { account: { id: string } }) {  co
                                 if (!note) return
                                 void actAdopt(task, url, note)
                               }}>登记已发布</button>
-                            {task.state === 'filled' && task.mode === 'desktop' && (
+                            {task.state === 'filled' && task.mode === 'desktop' && task.platform !== 'xhs' && (
                               <button type="button" data-testid={`publish-task-submit-now-${task.id}`}
                                 disabled={busy === `${task.id}:submit`}
                                 className="text-[11.5px] font-medium text-rose-600 underline disabled:opacity-50"

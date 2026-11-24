@@ -1,0 +1,65 @@
+{
+  "id": "8b963fa7-b261-4e0a-be32-f81161eb1e4a",
+  "workspace_id": "4e2bd06c-210c-4840-9cfa-db2b36101083",
+  "account_id": "6c320a1b-b6f1-4897-b39f-13b12e854271",
+  "work_id": "3a5ab45b-81b9-4a3a-b2af-2477e4584c04",
+  "platform": "xhs",
+  "state": "failed",
+  "state_version": 7,
+  "mode": "desktop",
+  "attempt": 2,
+  "max_attempts": 2,
+  "last_error_code": "readback_mismatch",
+  "last_error_message": "回读字段与 manifest 不一致，已停止且不提交",
+  "evidence": {
+    "adapter_version": "xhs-fill-v1",
+    "platform": "xhs",
+    "readback": {
+      "adapter_version": "xhs-fill-v1",
+      "checked_at": "2026-11-24T04:00:31.632Z",
+      "fields": {
+        "body": {
+          "actual_hash": "6692f16cd1da9a7694554de5061eb50ed654f34fec0d306246ce5c19290294d5",
+          "actual_len": 96,
+          "expected_hash": "1911fe5c40260abdbcba88cdc6ac8c005e34dda1b709f2814fbaa6cbee0956d3",
+          "expected_len": 81,
+          "ok": false
+        },
+        "cover": {
+          "actual_ratio": "0.75",
+          "expected_present": true,
+          "expected_ratio": "0.75",
+          "ok": true,
+          "present": true
+        },
+        "schedule": {
+          "actual": "",
+          "expected": "",
+          "ok": true
+        },
+        "tags": {
+          "actual_count": 18,
+          "expected_count": 3,
+          "first": "生活美学",
+          "ok": false
+        },
+        "title": {
+          "actual_hash": "9cee34d317a77a1d996343fb9053a0f6cc1fbcc15751896680fc34ffdcf5297a",
+          "expected_hash": "9cee34d317a77a1d996343fb9053a0f6cc1fbcc15751896680fc34ffdcf5297a",
+          "ok": true
+        }
+      },
+      "ok": false,
+      "screenshot_asset_id": "a03366c7-456d-436c-a8b4-bc13fe98321a"
+    },
+    "readback_ok": false,
+    "screenshot_asset_id": "a03366c7-456d-436c-a8b4-bc13fe98321a",
+    "transport": "desktop"
+  },
+  "idempotency_key": "1b715cbc-142c-46ee-89ca-42ef00908064",
+  "created_by": "71a6b917-e23b-471a-bd10-11728bac9108",
+  "created_at": "2026-11-24T11:56:09.569644+08:00",
+  "updated_at": "2026-11-24T12:00:32.72344+08:00",
+  "last_event_kind": "transition",
+  "last_event_at": "2026-11-24T12:00:32.72344+08:00"
+}

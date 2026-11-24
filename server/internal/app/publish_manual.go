@@ -231,6 +231,12 @@ func (s *Server) publishTaskSubmitNow(w http.ResponseWriter, r *http.Request) er
 		}
 		return err
 	}
+	// 小红书风控红线：OPS 只能填写并保存草稿，发布按钮必须由用户在小红书草稿箱点击。
+	// 该判断放在状态/通道判断之前：任何 xhs 任务（含旧任务、非 filled、已 submitted）
+	// 都统一拒绝，绝不写 submit_intent，也不给旧客户端任何提交分支。
+	if task.Platform == "xhs" {
+		return apiErr(http.StatusConflict, "direct_submit_not_supported", "小红书不允许由 OPS 直接点击发布；请在 OPS 填入后到小红书草稿箱人工发布")
+	}
 	if task.State == "submitted" {
 		w.Header().Set("Cache-Control", "no-store")
 		return ok(w, map[string]any{"task": task, "intent": nil, "reason": "already_submitted"})

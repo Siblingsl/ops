@@ -1,0 +1,10 @@
+{
+  "status": 409,
+  "body": {
+    "error": {
+      "code": "direct_submit_not_supported",
+      "message": "小红书不允许由 OPS 直接点击发布；请在 OPS 填入后到小红书草稿箱人工发布",
+      "request_id": "ASUS/Wd8BOXZ2lr-002756"
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "id": "10f475b5-a985-4c63-80c1-52b54aef79c9",
+  "workspace_id": "4e2bd06c-210c-4840-9cfa-db2b36101083",
+  "account_id": "6c320a1b-b6f1-4897-b39f-13b12e854271",
+  "work_id": "b6d99970-6f69-4578-a7ae-649b61bf8e91",
+  "platform": "xhs",
+  "state": "filled",
+  "state_version": 7,
+  "mode": "desktop",
+  "attempt": 2,
+  "max_attempts": 2,
+  "filled_at": "2026-11-24T12:14:26.138946+08:00",
+  "last_error_code": "",
+  "last_error_message": "",
+  "evidence": {
+    "adapter_version": "xhs-fill-v1",
+    "draft_saved": true,
+    "draft_saved_at": "2026-11-24T04:14:24.319Z",
+    "platform": "xhs",
+    "readback": {
+      "adapter_version": "xhs-fill-v1",
+      "checked_at": "2026-11-24T04:14:23.275Z",
+      "fields": {
+        "body": {
+          "actual_hash": "1911fe5c40260abdbcba88cdc6ac8c005e34dda1b709f2814fbaa6cbee0956d3",
+          "actual_len": 81,
+          "expected_hash": "1911fe5c40260abdbcba88cdc6ac8c005e34dda1b709f2814fbaa6cbee0956d3",
+          "expected_len": 81,
+          "ok": true
+        },
+        "cover": {
+          "actual_ratio": "0.75",
+          "expected_present": true,
+          "expected_ratio": "0.75",
+          "ok": true,
+          "present": true
+        },
+        "schedule": {
+          "actual": "",
+          "expected": "",
+          "ok": true
+        },
+        "tags": {
+          "actual_count": 3,
+          "expected_count": 3,
+          "first": "工位日常",
+          "ok": true
+        },
+        "title": {
+          "actual_hash": "9cee34d317a77a1d996343fb9053a0f6cc1fbcc15751896680fc34ffdcf5297a",
+          "expected_hash": "9cee34d317a77a1d996343fb9053a0f6cc1fbcc15751896680fc34ffdcf5297a",
+          "ok": true
+        }
+      },
+      "ok": true,
+      "screenshot_asset_id": "b8440717-9a6b-425a-833d-38fc1be65b5f"
+    },
+    "readback_ok": true,
+    "screenshot_asset_id": "b8440717-9a6b-425a-833d-38fc1be65b5f",
+    "transport": "desktop"
+  },
+  "idempotency_key": "6cb64302-925e-455b-844f-9f6e85fb5241",
+  "created_by": "71a6b917-e23b-471a-bd10-11728bac9108",
+  "created_at": "2026-11-24T12:05:35.938285+08:00",
+  "updated_at": "2026-11-24T12:14:26.169931+08:00",
+  "last_event_kind": "readback",
+  "last_event_at": "2026-11-24T12:14:26.169931+08:00"
+}

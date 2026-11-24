@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,9 +140,10 @@ func TestP6MarkTargetsAndPublishedGuard(t *testing.T) {
 
 func TestP6SubmitNowOnlyFilledDesktop(t *testing.T) {
 	// P6-A3：非 filled → 409；manual/api 通道 → 409；filled+desktop 写 submit_intent。
-	a := drAccount(t, "xhs", "P6提交小红书")
+	// 用头条桌面通道验证通用 submit 意图；小红书已被平台红线禁止（见下方独立用例）。
+	a := drAccount(t, "toutiao", "P6提交桌面通道")
 	wk := publishTestWork(t, a, "P6立即提交作品", 900, 1200, []string{"账号名"})
-	task := p2CreateTask(t, a, wk, "xhs", "desktop")
+	task := p2CreateTask(t, a, wk, "toutiao", "desktop")
 
 	// queued 状态 → 409
 	env.mustJSONStatusHeader(t, "POST", "/api/v1/publish-tasks/"+task.ID.String()+"/submit-now", nil, nil,
@@ -174,11 +176,47 @@ func TestP6SubmitNowOnlyFilledDesktop(t *testing.T) {
 	}
 }
 
+func TestP6SubmitNowRejectsXhsDirectPublish(t *testing.T) {
+	// 小红书风控红线：任何状态的 xhs 任务都不能下发提交意图，页面只能到草稿。
+	a := drAccount(t, "xhs", "P6小红书草稿")
+	wk := publishTestWork(t, a, "P6小红书草稿作品", 900, 1200, []string{"账号名"})
+	task := p2CreateTask(t, a, wk, "xhs", "desktop")
+
+	// 非 filled 也必须优先返回 direct_submit_not_supported，而不是状态错误。
+	st0, body0 := env.doHeader("POST", "/api/v1/publish-tasks/"+task.ID.String()+"/submit-now", nil,
+		map[string]string{"Idempotency-Key": "submit-" + uuid.NewString()})
+	if st0 != http.StatusConflict || !strings.Contains(string(body0), "direct_submit_not_supported") {
+		t.Fatalf("xhs non-filled submit-now => %d %s, want 409 direct_submit_not_supported", st0, body0)
+	}
+
+	p6TaskAt(t, task.ID, "filled", 3, 1, "desktop")
+	st, body := env.doHeader("POST", "/api/v1/publish-tasks/"+task.ID.String()+"/submit-now", nil,
+		map[string]string{"Idempotency-Key": "submit-" + uuid.NewString()})
+	if st != http.StatusConflict {
+		t.Fatalf("xhs submit-now => %d %s, want 409", st, body)
+	}
+	var ae apiError
+	if err := json.Unmarshal(body, &ae); err != nil {
+		t.Fatalf("decode error: %v (%s)", err, body)
+	}
+	if ae.Error.Code != "direct_submit_not_supported" {
+		t.Fatalf("error code = %q, want direct_submit_not_supported (%s)", ae.Error.Code, body)
+	}
+	loaded, err := scanPublishTask(env.srv.db.QueryRow(context.Background(), `SELECT `+publishTaskCols+` FROM publish_task t WHERE t.id=$1`, task.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent, ok := publishTaskSubmitIntent(loaded.Evidence); ok && intent != nil {
+		t.Fatalf("xhs task must not receive submit_intent: %v", intent)
+	}
+}
+
 func TestP6SubmitNowAlreadySubmitted(t *testing.T) {
 	// P6-A4：已 submitted 再 submit-now → already_submitted，不报错。
-	a := drAccount(t, "xhs", "P6已交小红书")
+	// 用头条桌面通道；xhs 在任何状态都返回 direct_submit_not_supported（平台红线优先）。
+	a := drAccount(t, "toutiao", "P6已交头条")
 	wk := publishTestWork(t, a, "P6已提交作品", 900, 1200, []string{"账号名"})
-	task := p2CreateTask(t, a, wk, "xhs", "desktop")
+	task := p2CreateTask(t, a, wk, "toutiao", "desktop")
 	p6TaskAt(t, task.ID, "submitted", 2, 1, "desktop")
 
 	var out map[string]any
@@ -192,9 +230,9 @@ func TestP6SubmitNowAlreadySubmitted(t *testing.T) {
 // TestP6SubmitIntentClaimAndResult 覆盖 P6-A3 的真正断链：submit-now 写出的
 // queued 意图必须能被桌面 claim 领取，且只有领取设备能回写 submitted 证据。
 func TestP6SubmitIntentClaimAndResult(t *testing.T) {
-	a := drAccount(t, "xhs", "P6领取立即提交")
+	a := drAccount(t, "toutiao", "P6领取立即提交")
 	wk := publishTestWork(t, a, "P6立即提交领取作品", 900, 1200, []string{"账号名"})
-	task := p2CreateTask(t, a, wk, "xhs", "desktop")
+	task := p2CreateTask(t, a, wk, "toutiao", "desktop")
 	p6TaskAt(t, task.ID, "filled", 3, 1, "desktop")
 	now := env.srv.now().UTC().Format(time.RFC3339Nano)
 	evidence := map[string]any{

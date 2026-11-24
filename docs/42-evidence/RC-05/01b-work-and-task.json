@@ -1,0 +1,159 @@
+{
+  "at": "2026-11-24T04:05:35.531Z",
+  "source_work": "3a5ab45b-81b9-4a3a-b2af-2477e4584c04",
+  "title": "工位上的松弛感",
+  "tags": [
+    "工位日常",
+    "桌面布置",
+    "生活记录"
+  ],
+  "work_id": "b6d99970-6f69-4578-a7ae-649b61bf8e91",
+  "work_revision_after_duplicate": 1,
+  "work_revision_after_patch": 2,
+  "title_after_patch": "工位上的松弛感",
+  "cover_asset_id": "32aaeea3-3742-4c9a-b116-de3a7f743b13",
+  "manifest_id": "efa51c1d-c103-45ec-8abb-f7a818cc1c4f",
+  "manifest_state": "valid",
+  "manifest_checks": [
+    {
+      "code": "required",
+      "ok": true,
+      "field": "title",
+      "message": "标题不能为空"
+    },
+    {
+      "code": "length",
+      "ok": true,
+      "field": "title",
+      "message": "标题需为 1–20 字，当前 7 字"
+    },
+    {
+      "code": "required",
+      "ok": true,
+      "field": "body_md",
+      "message": "正文不能为空"
+    },
+    {
+      "code": "length",
+      "ok": true,
+      "field": "body_text",
+      "message": "正文不能超过 1000 字，当前 87 字"
+    },
+    {
+      "code": "required",
+      "ok": true,
+      "field": "cover_asset_id",
+      "message": "必须提供封面"
+    },
+    {
+      "code": "cover_ratio",
+      "ok": true,
+      "field": "cover_asset_id",
+      "message": "封面比例需为 3:4"
+    },
+    {
+      "code": "tag_count",
+      "ok": true,
+      "field": "tags",
+      "message": "标签需为 1–10 个，当前 3 个"
+    },
+    {
+      "code": "schedule_past",
+      "ok": true,
+      "field": "schedule_at",
+      "message": "定时发布时间可用"
+    },
+    {
+      "code": "skip_reason_required",
+      "ok": true,
+      "field": "skip_reason",
+      "message": "未跳过或已填写跳过原因"
+    },
+    {
+      "code": "banned_word",
+      "ok": true,
+      "field": "title/body_text",
+      "message": "未命中禁用词"
+    },
+    {
+      "code": "ai_disclosure",
+      "ok": true,
+      "field": "ai_disclosure",
+      "message": "发布时在「笔记内容声明」中勾选「笔记含 AI 合成内容」"
+    }
+  ],
+  "validated_state": "valid",
+  "validated_checks": [
+    {
+      "code": "required",
+      "ok": true,
+      "field": "title",
+      "message": "标题不能为空"
+    },
+    {
+      "code": "length",
+      "ok": true,
+      "field": "title",
+      "message": "标题需为 1–20 字，当前 7 字"
+    },
+    {
+      "code": "required",
+      "ok": true,
+      "field": "body_md",
+      "message": "正文不能为空"
+    },
+    {
+      "code": "length",
+      "ok": true,
+      "field": "body_text",
+      "message": "正文不能超过 1000 字，当前 87 字"
+    },
+    {
+      "code": "required",
+      "ok": true,
+      "field": "cover_asset_id",
+      "message": "必须提供封面"
+    },
+    {
+      "code": "cover_ratio",
+      "ok": true,
+      "field": "cover_asset_id",
+      "message": "封面比例需为 3:4"
+    },
+    {
+      "code": "tag_count",
+      "ok": true,
+      "field": "tags",
+      "message": "标签需为 1–10 个，当前 3 个"
+    },
+    {
+      "code": "schedule_past",
+      "ok": true,
+      "field": "schedule_at",
+      "message": "定时发布时间可用"
+    },
+    {
+      "code": "skip_reason_required",
+      "ok": true,
+      "field": "skip_reason",
+      "message": "未跳过或已填写跳过原因"
+    },
+    {
+      "code": "banned_word",
+      "ok": true,
+      "field": "title/body_text",
+      "message": "未命中禁用词"
+    },
+    {
+      "code": "ai_disclosure",
+      "ok": true,
+      "field": "ai_disclosure",
+      "message": "发布时在「笔记内容声明」中勾选「笔记含 AI 合成内容」"
+    }
+  ],
+  "publish_task_id": "10f475b5-a985-4c63-80c1-52b54aef79c9",
+  "task_state_after_create": "ready",
+  "task_version_after_create": 1,
+  "task_state_after_queue": "queued",
+  "task_version_after_queue": 2
+}

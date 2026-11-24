@@ -1158,6 +1158,7 @@ func (s *Server) findClaimablePublishTask(ctx context.Context, deviceID uuid.UUI
 	rows, err = s.db.Query(ctx, `SELECT `+publishTaskCols+` FROM publish_task t
 		JOIN platform_connection c ON c.account_id=t.account_id AND c.workspace_id=t.workspace_id
 		WHERE t.workspace_id=$1 AND t.state='filled'
+		  AND t.platform <> 'xhs'
 		  AND t.evidence->'submit_intent'->>'state' IN ('queued','claimed')
 		  AND c.device_id=$2 AND c.state='active'
 		  AND c.availability='ready' AND c.last_seen_at > now()-interval '5 minutes'

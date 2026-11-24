@@ -80,6 +80,9 @@ const TAG_INPUT_SELECTORS = [
 ];
 
 const PUBLISH_BUTTON_TEXTS = ['发布笔记', '发布', '预览并发布', '确认发布'];
+// 小红书发布页的草稿保存入口叫“暂存离开”（页面 bundle 的 saveText 默认值）。
+// 只允许精确命中这些文本，且任何一条都不能包含发布字样。
+const DRAFT_SAVE_TEXTS = ['暂存离开', '保存草稿', '存草稿'];
 const XHS_IMAGE_TAB_TEXTS = ['上传图文'];
 const XHS_IMAGE_ACCEPT = /image|jpg|jpeg|png|webp|gif|heic/i;
 const XHS_VIDEO_ACCEPT = /video|mp4|mov|flv|mkv|m4v|mpeg|ts/i;
@@ -413,6 +416,142 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
     await sleep(400);
   }
 
+  async function clickXhsShadowSaveButton(): Promise<{ ok: boolean; label?: string; reason?: string }> {
+    // 小红书真实发布页的底部按钮是 <xhs-publish-btn> 自定义组件，按钮文本渲染在
+    // 闭合 shadow root 里：document.querySelectorAll 看不到“暂存离开”，但组件属性
+    // save-text="暂存离开" / submit-text="发布" 与 CDP 扁平化 DOM 能精确区分两个
+    // 原生 button。这里只点 shadow 内文本恰为草稿保存词的 BUTTON，绝不按坐标盲点。
+    const hostOK = await evaluate<boolean>(cdp, `(() => {
+      const host = document.querySelector('xhs-publish-btn[is-save-draft="true"]');
+      if (!(host instanceof HTMLElement)) return false;
+      const saveText = String(host.getAttribute('save-text') ?? '').replace(/\\s+/g, ' ').trim();
+      const submitText = String(host.getAttribute('submit-text') ?? '');
+      if (!${json(DRAFT_SAVE_TEXTS)}.includes(saveText)) return false;
+      if (!submitText.includes('发布')) return false;
+      if (host.getAttribute('save-disabled') === 'true') return false;
+      const rect = host.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    })()`);
+    if (!hostOK) return { ok: false, reason: 'draft_save_host_missing' };
+
+    await cdp.request('DOM.enable');
+    const flat = await cdp.request('DOM.getFlattenedDocument', { depth: -1, pierce: true }) as {
+      nodes?: Array<{ nodeId: number; parentId?: number; nodeName: string; nodeValue?: string; attributes?: string[] }>;
+    };
+    const nodes = flat.nodes ?? [];
+    const textNode = nodes.find((node) => node.nodeName === '#text'
+      && DRAFT_SAVE_TEXTS.includes(String(node.nodeValue ?? '').replace(/\s+/g, ' ').trim())
+      && node.parentId);
+    if (!textNode || !textNode.parentId) return { ok: false, reason: 'draft_save_button_missing' };
+    const button = nodes.find((node) => node.nodeId === textNode.parentId);
+    if (!button || button.nodeName !== 'BUTTON') return { ok: false, reason: 'draft_save_button_not_button' };
+    const attributes = button.attributes ?? [];
+    const classIndex = attributes.indexOf('class');
+    const className = classIndex >= 0 ? String(attributes[classIndex + 1] ?? '') : '';
+    if (!className.includes('ce-btn')) return { ok: false, reason: 'draft_save_button_not_ce_btn' };
+
+    const box = await cdp.request('DOM.getBoxModel', { nodeId: button.nodeId }) as {
+      model?: { content?: number[] };
+    };
+    const content = box.model?.content ?? [];
+    if (content.length !== 8) return { ok: false, reason: 'draft_save_button_bounds' };
+    const width = Math.abs(content[2] - content[0]);
+    const height = Math.abs(content[5] - content[1]);
+    if (width < 40 || width > 260 || height < 20 || height > 80) {
+      return { ok: false, reason: 'draft_save_button_bounds' };
+    }
+    const x = (content[0] + content[4]) / 2;
+    const y = (content[1] + content[5]) / 2;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+      return { ok: false, reason: 'draft_save_button_bounds' };
+    }
+    await cdp.request('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+    await cdp.request('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+    await sleep(80);
+    await cdp.request('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+    return { ok: true, label: '暂存离开' };
+  }
+
+  async function saveDraft(): Promise<void> {
+    // 小红书红线：这里只点草稿保存，不允许点任何发布按钮。平台浏览器端口必须
+    // 与适配器一样做 fail-closed，避免历史代码或异常调用绕过适配器直接点发布。
+    if (input.platform !== 'xhs') {
+      throw errorWithCode('draft_save_not_supported', `平台 ${input.platform} 不支持桌面保存草稿`);
+    }
+    await verifyIdentity();
+    let clicked = await evaluate<{ ok: boolean; label?: string; reason?: string }>(cdp, `(() => {
+      const wanted = ${json(DRAFT_SAVE_TEXTS)};
+      const forbidden = ${json(PUBLISH_BUTTON_TEXTS)};
+      const text = (el) => String(el.innerText ?? el.textContent ?? '').replace(/\\s+/g, ' ').trim();
+      const visible = (el) => {
+        if (!(el instanceof HTMLElement)) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+      const candidates = Array.from(document.querySelectorAll('button, [role="button"], [class*="btn"], [class*="save"], div, span'))
+        .filter((el) => el instanceof HTMLElement && visible(el));
+      for (const el of candidates) {
+        const label = text(el);
+        if (!wanted.includes(label)) continue;
+        if (forbidden.some((word) => label.includes(word))) continue;
+        if (el.closest('[aria-disabled="true"], [disabled]')) continue;
+        const clickable = el.closest('button, [role="button"], [class*="btn"]') || el;
+        if (clickable.closest('[aria-disabled="true"], [disabled]')) continue;
+        clickable.click();
+        return { ok: true, label };
+      }
+      return { ok: false, reason: 'draft_save_button_missing' };
+    })()`);
+    if (!clicked || !clicked.ok) {
+      clicked = await clickXhsShadowSaveButton();
+    }
+    if (!clicked || !clicked.ok) {
+      throw errorWithCode(clicked?.reason || 'draft_save_button_missing', '未找到可安全点击的草稿保存入口（暂存离开/保存草稿），内容未落草稿箱');
+    }
+
+    // 平台可能在“暂存离开”后弹确认框；只在确认框明确是草稿/离开语义时，
+    // 点“确认/确定/保存/暂存并离开”这类文本，绝不点任何含“发布”的按钮。
+    await sleep(800);
+    await evaluate<boolean>(cdp, `(() => {
+      const dialogs = Array.from(document.querySelectorAll('[role="dialog"], .d-modal, .modal, [class*="dialog"]'))
+        .filter((el) => el instanceof HTMLElement && el.getBoundingClientRect().width > 0);
+      for (const dialog of dialogs) {
+        const body = String(dialog.innerText ?? dialog.textContent ?? '').replace(/\\s+/g, ' ').trim();
+        if (!/草稿|暂存|离开/.test(body) || /发布/.test(body)) continue;
+        const nodes = Array.from(dialog.querySelectorAll('button, [role="button"], [class*="btn"], div, span'))
+          .filter((el) => el instanceof HTMLElement && el.getBoundingClientRect().width > 0);
+        const confirm = nodes.find((el) => {
+          const label = String(el.innerText ?? el.textContent ?? '').replace(/\\s+/g, ' ').trim();
+          if (!['确认', '确定', '保存', '暂存并离开', '保存并离开'].includes(label)) return false;
+          if (/发布/.test(label)) return false;
+          return true;
+        });
+        if (confirm) {
+          const clickable = confirm.closest('button, [role="button"], [class*="btn"]') || confirm;
+          clickable.click();
+          return true;
+        }
+      }
+      return false;
+    })()`).catch(() => false);
+
+    // 成功判定：出现“保存成功”，或页面已经离开发布编辑器（跳草稿箱/笔记管理）。
+    const started = Date.now();
+    let confirmed = false;
+    while (Date.now() - started < 15_000) {
+      confirmed = await evaluate<boolean>(cdp, `(() => {
+        const body = String(document.body.innerText ?? '');
+        if (/保存成功|已保存到草稿箱|已存入草稿箱/.test(body)) return true;
+        return !(location.pathname + location.search).startsWith('/publish/publish');
+      })()`).catch(() => false);
+      if (confirmed) break;
+      await sleep(500);
+    }
+    if (!confirmed) {
+      throw errorWithCode('draft_save_unconfirmed', '点击草稿保存后未出现“保存成功”或离开发布页，按未保存处理');
+    }
+  }
+
   const port: PublishPagePort = {
     async currentAccountName(): Promise<string> {
       await verifyIdentity();
@@ -453,12 +592,16 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
       if (!title) throw errorWithCode('manifest_invalid', 'manifest 缺少标题');
       await setTitle(title);
       let body = bodyText;
-      if (tags.length > 0 && !(await hasTagInput())) {
-        // 没有独立话题输入框时，把标签以 #tag 形式接在正文尾部；回读按 hashtag 统计。
+      // 小红书真实页没有独立的“话题芯片”输入框：底部“话题”只是正文内联
+      // hashtag 的辅助入口，推荐话题还会混进无关 chip。统一把标签以 #tag
+      // 追加在正文尾部，回读再从正文解析并剥离；不要用 Input.insertText 盲打，
+      // 否则文字会落进正文编辑器（真实首跑已发生）。
+      const inlineTags = tags.length > 0 && (input.platform === 'xhs' || !(await hasTagInput()));
+      if (inlineTags) {
         body = `${bodyText}\n\n${tags.map((tag) => `#${tag}`).join(' ')}`;
       }
       await setBody(body);
-      if (tags.length > 0 && (await hasTagInput())) {
+      if (tags.length > 0 && !inlineTags) {
         for (const tag of tags) await addTag(tag);
       }
       await sleep(500);
@@ -473,15 +616,17 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
         const editor = editorSelectors.map((s) => document.querySelector(s)).find(Boolean);
         const title = titleEl ? String(titleEl.value ?? titleEl.textContent ?? '') : '';
         const rawBody = editor ? String(editor.innerText ?? editor.textContent ?? '') : '';
-        const tagSelectors = ${json(spec.tag)};
         const chips = Array.from(document.querySelectorAll('[class*="topic"] span, [class*="tag"] span, [data-tag]'))
           .map((el) => String(el.textContent ?? '').trim())
           .filter((text) => text.startsWith('#'));
         const hashes = Array.from(rawBody.matchAll(/#([^#\\s]{1,30})/g)).map((m) => m[1]).filter(Boolean);
-        const tags = chips.length > 0 ? chips.map((text) => text.replace(/^#/, '')) : hashes;
-        // 没有独立话题输入框时，标签由 fillFields 追加在正文尾部；回读必须把这段
-        // 回退标签从正文剥离，标签本身仍由 tags 字段单独核对。
-        const body = chips.length === 0 && tags.length > 0
+        // 小红书话题就是正文里的 hashtag；页面上的推荐话题 chip 不是已选话题，
+        // 不能拿来当回读事实（真实首跑曾因此读到 18 个无关 chip）。
+        const inlineTags = ${input.platform === 'xhs'};
+        const tags = inlineTags ? hashes : (chips.length > 0 ? chips.map((text) => text.replace(/^#/, '')) : hashes);
+        // 标签由 fillFields 追加在正文尾部时，回读必须把这段回退标签从正文剥离，
+        // 标签本身仍由 tags 字段单独核对。
+        const body = tags.length > 0 && (inlineTags || chips.length === 0)
           ? (${stripTrailingFallbackTags.toString()})(rawBody, tags)
           : rawBody;
         const images = Array.from(document.querySelectorAll('img'))
@@ -505,6 +650,10 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
       return shot.data;
     },
 
+    async saveDraft(): Promise<void> {
+      await saveDraft();
+    },
+
     async countFilledPages(req: PublishFillRequest): Promise<number> {
       await verifyIdentity();
       const fields = (req.manifest.fields && typeof req.manifest.fields === 'object' && !Array.isArray(req.manifest.fields))
@@ -519,6 +668,10 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
     },
 
     async submitNow(): Promise<void> {
+      // 小红书风控红线：即使适配器/执行器出现回归，页面端口本身也绝不点发布。
+      if (input.platform === 'xhs') {
+        throw errorWithCode('direct_submit_not_supported', '小红书不允许由 OPS 直接点击发布；请保存草稿后由用户在小红书草稿箱发布');
+      }
       await verifyIdentity();
       const clicked = await evaluate<boolean>(cdp, `(() => {
         const wanted = ${json(PUBLISH_BUTTON_TEXTS)};

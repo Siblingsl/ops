@@ -1,0 +1,126 @@
+{
+  "id": "b6d99970-6f69-4578-a7ae-649b61bf8e91",
+  "account_id": "6c320a1b-b6f1-4897-b39f-13b12e854271",
+  "platform": "xhs",
+  "account_name": "巡检号",
+  "topic_id": null,
+  "topic_angle": "",
+  "source": null,
+  "source_updated": false,
+  "derived": [],
+  "content_format": "image_note",
+  "status": "published",
+  "title": "工位上的松弛感",
+  "summary": "工位日常记录：把桌面收拾成自己喜欢的样子。",
+  "viewpoint": "把工位收拾成自己喜欢的样子，工作也会更有节奏。",
+  "outline": [
+    {
+      "heading": "正文",
+      "key_point": "桌面、风景壁纸、绿植与工作节奏",
+      "material_ids": [],
+      "section_id": "fefdffa1-71cc-4774-bf74-0ab476d5b674"
+    }
+  ],
+  "outline_confirmed_at": null,
+  "theme": "ink",
+  "cover_asset_id": "32aaeea3-3742-4c9a-b116-de3a7f743b13",
+  "cover_crops": null,
+  "wechat_fields": {
+    "author": "",
+    "open_comment": false,
+    "fans_only_comment": false,
+    "source_url": ""
+  },
+  "topics": [
+    "工位日常",
+    "桌面布置",
+    "生活记录"
+  ],
+  "tags": [
+    "工位日常",
+    "桌面布置",
+    "生活记录"
+  ],
+  "wechat_draft_media_id": null,
+  "published_url": "https://www.xiaohongshu.com/explore/6b05138a000000002b010011?xsec_token=YBbiRYRr9mS6xx-3pRaIlmR22LFwWX3fhY_qlxYn3-jgA=&xsec_source=pc_creatormng",
+  "published_at": "2026-11-24T12:33:00+08:00",
+  "publish_revision": 2,
+  "external_id": null,
+  "metric_binding_revision": 1,
+  "metric_binding_confirmed_at": null,
+  "platform_binding_source": null,
+  "platform_binding_verified_at": null,
+  "platform_source_mirror_id": null,
+  "platform_source_content_revision": null,
+  "platform_source_mirror_revision": null,
+  "locked": true,
+  "revision": 2,
+  "sections": [
+    {
+      "id": "fefdffa1-71cc-4774-bf74-0ab476d5b674",
+      "position": 0,
+      "heading": "正文",
+      "key_point": "桌面、风景壁纸、绿植与工作节奏",
+      "content_md": "把桌面收拾干净，给自己留一块能专注的地方。\n\n显示器换成喜欢的风景，书架上放几本常翻的书，旁边一盆绿植。工作再忙，也想保留一点自己的节奏。\n\n今天也是认真生活的一天。",
+      "origin": "human",
+      "source_section_ids": [],
+      "material_ids": [],
+      "revision": 1,
+      "updated_at": "2026-11-24T12:05:35.717557+08:00",
+      "ai_call_id": null,
+      "source_revisions": {}
+    }
+  ],
+  "panels": [],
+  "cards": null,
+  "material_ids": [],
+  "assets": [
+    {
+      "id": "32aaeea3-3742-4c9a-b116-de3a7f743b13",
+      "work_id": "b6d99970-6f69-4578-a7ae-649b61bf8e91",
+      "mime": "image/jpeg",
+      "width": 940,
+      "height": 1254,
+      "bytes": 227381,
+      "position": 0,
+      "alt_text": "",
+      "url": "/api/v1/assets/32aaeea3-3742-4c9a-b116-de3a7f743b13/file",
+      "ai_generated": false,
+      "created_at": "2026-11-24T12:05:35.717557+08:00"
+    }
+  ],
+  "human_edit_ratio": null,
+  "draft_maybe_published": false,
+  "topic_audience": "",
+  "topic_hook": "",
+  "planned_date": null,
+  "target_chars": null,
+  "post_push_todos": [
+    {
+      "key": "images",
+      "done": false,
+      "label": "按顺序上传图片"
+    },
+    {
+      "key": "ai",
+      "done": false,
+      "label": "在「笔记内容声明」中勾选 AI 合成内容（如适用）"
+    },
+    {
+      "key": "backfill",
+      "done": false,
+      "label": "发布后回到这里回填链接"
+    }
+  ],
+  "title_favorites": [],
+  "assignee_id": "71a6b917-e23b-471a-bd10-11728bac9108",
+  "created_by": "71a6b917-e23b-471a-bd10-11728bac9108",
+  "template_id": null,
+  "reviewer_id": null,
+  "review_required": false,
+  "review_round": 0,
+  "reviewed_by": null,
+  "reviewed_at": null,
+  "created_at": "2026-11-24T12:05:35.717557+08:00",
+  "updated_at": "2026-11-24T12:44:08.819652+08:00"
+}

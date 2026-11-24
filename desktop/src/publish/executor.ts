@@ -62,6 +62,16 @@ export async function runDesktopPublishTask(deps: DesktopPublishDeps): Promise<P
     return result;
   }
   const timeouts = { ...DEFAULT_DESKTOP_PUBLISH_TIMEOUTS, ...(deps.timeouts ?? {}) };
+  // 小红书风控红线：历史/异常 submit 意图也不能进入点击发布分支，直接回执失败。
+  if (task.platform === 'xhs' && task.intent === 'submit') {
+    const blocked: PublishFillResult = {
+      state: 'failed',
+      errorCode: 'direct_submit_not_supported',
+      errorMessage: '小红书不允许由 OPS 直接点击发布；请保存草稿后由用户在小红书草稿箱发布',
+    };
+    await deps.result(task.taskId, blocked);
+    return blocked;
+  }
   if (task.intent === 'submit') {
     const req: PublishFillRequest = {
       taskId: task.taskId,

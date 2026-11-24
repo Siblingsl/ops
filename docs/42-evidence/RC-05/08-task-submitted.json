@@ -1,0 +1,31 @@
+{
+  "marked": true,
+  "task": {
+    "id": "10f475b5-a985-4c63-80c1-52b54aef79c9",
+    "workspace_id": "4e2bd06c-210c-4840-9cfa-db2b36101083",
+    "account_id": "6c320a1b-b6f1-4897-b39f-13b12e854271",
+    "work_id": "b6d99970-6f69-4578-a7ae-649b61bf8e91",
+    "platform": "xhs",
+    "state": "submitted",
+    "state_version": 8,
+    "mode": "desktop",
+    "attempt": 2,
+    "max_attempts": 2,
+    "filled_at": "2026-11-24T12:14:26.138946+08:00",
+    "submitted_at": "2026-11-24T12:44:00.707323+08:00",
+    "last_error_code": "",
+    "last_error_message": "",
+    "evidence": {
+      "idempotency": "rc05-published-task-submitted-6b05138a",
+      "mark_to": "submitted",
+      "marked_at": "2026-11-24T04:44:00.7019479Z",
+      "note": "用户已在小红书草稿箱人工发布，平台回读 noteId 6b05138a000000002b010011，发布时间 2026-11-24 12:33。",
+      "source": "user",
+      "url": "https://www.xiaohongshu.com/explore/6b05138a000000002b010011?xsec_token=YBbiRYRr9mS6xx-3pRaIlmR22LFwWX3fhY_qlxYn3-jgA=&xsec_source=pc_creatormng"
+    },
+    "idempotency_key": "6cb64302-925e-455b-844f-9f6e85fb5241",
+    "created_by": "71a6b917-e23b-471a-bd10-11728bac9108",
+    "created_at": "2026-11-24T12:05:35.938285+08:00",
+    "updated_at": "2026-11-24T12:44:00.71173+08:00"
+  }
+}

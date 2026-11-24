@@ -9,6 +9,8 @@ export interface PublishPagePort {
   hasAnchor(anchor: string): Promise<boolean>;
   fillFields?(manifest: Record<string, unknown>): Promise<void>;
   readbackFields?(): Promise<PublishReadbackActual>;
+  /** 小红书：填写完成并回读通过后，只点“暂存离开/保存草稿”把内容落到草稿箱，绝不点发布。 */
+  saveDraft?(): Promise<void>;
   submitNow?(): Promise<void>;
   /** REF41 F5：当前浏览器会话的页面 target 数；策略闸要求恰好 1。 */
   tabCount?(): Promise<number>;
@@ -22,6 +24,12 @@ export interface PublishAdapterAnchors {
   account: string;
   title: string;
   editor: string;
+  /**
+   * 上传前实际存在的锚点。小红书发布页默认停在“上传视频”，标题/正文编辑器
+   * 只有在“上传图文”并选中图片后才出现；preflight 先查这组锚点，否则真实
+   * 首跑会永远在填写前报 anchor_missing。未配置时保持原来的 title+editor 校验。
+   */
+  prefill?: string[];
 }
 
 export interface DesktopPublishAdapterOptions {
@@ -33,6 +41,8 @@ export interface DesktopPublishAdapterOptions {
   url?: string;
   /** REF41 F5：服务端策略闸；生产必填，非生产单测可省略。 */
   policy?: BrowserPolicyGate;
+  /** 回读通过后只保存草稿（小红书红线：不进入提交分支）。 */
+  saveDraftAfterReadback?: boolean;
 }
 
 function expectedAccountName(req: PublishFillRequest): string {
@@ -50,7 +60,7 @@ function evidenceFor(platform: string, version: string): Record<string, unknown>
 }
 
 export function createDesktopPublishAdapter(options: DesktopPublishAdapterOptions): PublishExecutor {
-  const { platform, version, anchors, page, url, policy } = options;
+  const { platform, version, anchors, page, url, policy, saveDraftAfterReadback } = options;
 
   async function preflight(req: PublishFillRequest): Promise<Record<string, unknown>> {
     // REF41 F5：先过服务端三道闸（策略/账号/单标签），拒绝即 policy_denied，不接触页面。
@@ -79,11 +89,21 @@ export function createDesktopPublishAdapter(options: DesktopPublishAdapterOption
     if (!(await page.hasAnchor(anchors.account))) {
       throw new PublishExecutorError('anchor_missing', `页面缺少账号锚点 ${anchors.account}`);
     }
-    if (!(await page.hasAnchor(anchors.title))) {
-      throw new PublishExecutorError('anchor_missing', `页面缺少标题锚点 ${anchors.title}`);
-    }
-    if (!(await page.hasAnchor(anchors.editor))) {
-      throw new PublishExecutorError('anchor_missing', `页面缺少编辑器锚点 ${anchors.editor}`);
+    if (anchors.prefill && anchors.prefill.length > 0) {
+      // 小红书等“先上传才出现编辑器”的平台：先验证当前阶段真实存在的锚点，
+      // 上传/填写阶段自己等待标题与编辑器出现，不把正常首屏判成 anchor_missing。
+      for (const anchor of anchors.prefill) {
+        if (!(await page.hasAnchor(anchor))) {
+          throw new PublishExecutorError('anchor_missing', `页面缺少填写前锚点 ${anchor}`);
+        }
+      }
+    } else {
+      if (!(await page.hasAnchor(anchors.title))) {
+        throw new PublishExecutorError('anchor_missing', `页面缺少标题锚点 ${anchors.title}`);
+      }
+      if (!(await page.hasAnchor(anchors.editor))) {
+        throw new PublishExecutorError('anchor_missing', `页面缺少编辑器锚点 ${anchors.editor}`);
+      }
     }
     return { platform, adapter_version: version, account_name: actual, anchors_ok: true };
   }
@@ -129,18 +149,53 @@ export function createDesktopPublishAdapter(options: DesktopPublishAdapterOption
       readback_ok: readback.ok,
     };
     if (screenshotBase64) evidence.screenshot_base64 = screenshotBase64;
-    return {
-      state: readback.ok ? 'awaiting_user' : 'failed',
-      readback,
-      evidence,
-      ...(readback.ok ? {} : {
+    if (!readback.ok) {
+      return {
+        state: 'failed',
+        readback,
+        evidence,
         errorCode: screenshotBase64 === '' ? 'readback_screenshot_missing' : 'readback_mismatch',
         errorMessage: screenshotBase64 === '' ? '回读缺少证据截图，不能进入待提交' : '回读字段与 manifest 不一致，已停止且不提交',
-      }),
+      };
+    }
+    if (saveDraftAfterReadback) {
+      // 小红书红线：只保存草稿，不进入任何发布分支。保存失败要如实失败，
+      // 不能把“已填写”冒充成“草稿已保存”。
+      if (!page.saveDraft) {
+        return {
+          state: 'failed',
+          readback,
+          evidence,
+          errorCode: 'draft_save_not_configured',
+          errorMessage: '当前页面端口未实现保存草稿，内容未落草稿箱',
+        };
+      }
+      try {
+        await page.saveDraft();
+      } catch (err) {
+        return {
+          state: 'failed',
+          readback,
+          evidence,
+          errorCode: 'draft_save_failed',
+          errorMessage: err instanceof Error ? err.message : String(err),
+        };
+      }
+      evidence.draft_saved = true;
+      evidence.draft_saved_at = new Date().toISOString();
+    }
+    return {
+      state: 'awaiting_user',
+      readback,
+      evidence,
     };
   }
 
   async function submit(req: PublishFillRequest): Promise<PublishFillResult> {
+    // 小红书风控红线：OPS 不代点发布，最多填写/保存草稿；历史 submit 意图也必须拒绝。
+    if (platform === 'xhs') {
+      throw new PublishExecutorError('direct_submit_not_supported', '小红书不允许由 OPS 直接点击发布；请保存草稿后由用户在小红书草稿箱发布');
+    }
     if (req.mode !== 'api' && req.mode !== 'desktop') {
       throw new PublishExecutorError('submit_requires_user_action', '手动通道不得自动点发布');
     }

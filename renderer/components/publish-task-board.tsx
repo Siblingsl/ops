@@ -158,6 +158,11 @@ export function PublishTaskBoard({ account }: { account: { id: string } }) {
                         </p>
                       </div>
                     )}
+                    {(row.platform === 'xhs' && ['filled', 'awaiting_user'].includes(row.state)) && (
+                      <p className="mt-1 text-[11px] text-mist-600" data-testid={`publish-task-xhs-draft-${row.id}`}>
+                        小红书任务不会由 OPS 点发布；请到小红书草稿箱确认并人工发布。
+                      </p>
+                    )}
                     {(row.state === 'failed' || row.state === 'not_logged_in') && (
                       <div className="mt-2 flex gap-1">
                         <Button size="sm" variant="secondary" loading={pending === row.id + 'retry'} onClick={() => void change(row, 'retry')}>重试</Button>
@@ -191,7 +196,7 @@ export function PublishTaskBoard({ account }: { account: { id: string } }) {
                           <button type="button" data-testid={`publish-task-adopt-${row.id}`}
                             className="text-[11px] text-ink-600 underline"
                             onClick={() => setAdoptOpenId(row.id)}>登记已发布</button>
-                          {row.state === 'filled' && row.mode === 'desktop' && (
+                          {row.state === 'filled' && row.mode === 'desktop' && row.platform !== 'xhs' && (
                             <button type="button" data-testid={`publish-task-submit-now-${row.id}`}
                               disabled={pending === row.id + 'submit'}
                               className="text-[11px] font-medium text-rose-600 underline disabled:opacity-50"

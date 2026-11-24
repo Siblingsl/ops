@@ -1,0 +1,176 @@
+{
+  "at": "2026-11-24T03:55:41.869Z",
+  "title": "工位上的松弛感",
+  "body": "把桌面收拾干净，给自己留一块能专注的地方。\n\n显示器换成喜欢的风景，书架上放几本常翻的书，旁边一盆绿植。工作再忙，也想保留一点自己的节奏。\n\n今天也是认真生活的一天。",
+  "tags": [
+    "工位日常",
+    "桌面布置",
+    "生活记录"
+  ],
+  "work_id": "3a5ab45b-81b9-4a3a-b2af-2477e4584c04",
+  "asset_id": "a6be5a44-045f-4c90-a1db-e807af3906f3",
+  "asset_size": "940x1254",
+  "resumed_from_existing": true,
+  "work_revision_after_patch": 3,
+  "work_revision_after_outline": 4,
+  "section_ids": [
+    {
+      "id": "3efc1425-ca60-4ca3-b172-244089603321",
+      "revision": 1,
+      "heading": "正文"
+    }
+  ],
+  "manifest_id": "a847f2b9-d757-4d16-9077-2e43823f2660",
+  "manifest_state": "valid",
+  "manifest_checks": [
+    {
+      "code": "required",
+      "ok": true,
+      "field": "title",
+      "message": "标题不能为空"
+    },
+    {
+      "code": "length",
+      "ok": true,
+      "field": "title",
+      "message": "标题需为 1–20 字，当前 7 字"
+    },
+    {
+      "code": "required",
+      "ok": true,
+      "field": "body_md",
+      "message": "正文不能为空"
+    },
+    {
+      "code": "length",
+      "ok": true,
+      "field": "body_text",
+      "message": "正文不能超过 1000 字，当前 87 字"
+    },
+    {
+      "code": "required",
+      "ok": true,
+      "field": "cover_asset_id",
+      "message": "必须提供封面"
+    },
+    {
+      "code": "cover_ratio",
+      "ok": true,
+      "field": "cover_asset_id",
+      "message": "封面比例需为 3:4"
+    },
+    {
+      "code": "tag_count",
+      "ok": true,
+      "field": "tags",
+      "message": "标签需为 1–10 个，当前 3 个"
+    },
+    {
+      "code": "schedule_past",
+      "ok": true,
+      "field": "schedule_at",
+      "message": "定时发布时间可用"
+    },
+    {
+      "code": "skip_reason_required",
+      "ok": true,
+      "field": "skip_reason",
+      "message": "未跳过或已填写跳过原因"
+    },
+    {
+      "code": "banned_word",
+      "ok": true,
+      "field": "title/body_text",
+      "message": "未命中禁用词"
+    },
+    {
+      "code": "ai_disclosure",
+      "ok": true,
+      "field": "ai_disclosure",
+      "message": "发布时在「笔记内容声明」中勾选「笔记含 AI 合成内容」"
+    }
+  ],
+  "validated_state": "valid",
+  "validated_checks": [
+    {
+      "code": "required",
+      "ok": true,
+      "field": "title",
+      "message": "标题不能为空"
+    },
+    {
+      "code": "length",
+      "ok": true,
+      "field": "title",
+      "message": "标题需为 1–20 字，当前 7 字"
+    },
+    {
+      "code": "required",
+      "ok": true,
+      "field": "body_md",
+      "message": "正文不能为空"
+    },
+    {
+      "code": "length",
+      "ok": true,
+      "field": "body_text",
+      "message": "正文不能超过 1000 字，当前 87 字"
+    },
+    {
+      "code": "required",
+      "ok": true,
+      "field": "cover_asset_id",
+      "message": "必须提供封面"
+    },
+    {
+      "code": "cover_ratio",
+      "ok": true,
+      "field": "cover_asset_id",
+      "message": "封面比例需为 3:4"
+    },
+    {
+      "code": "tag_count",
+      "ok": true,
+      "field": "tags",
+      "message": "标签需为 1–10 个，当前 3 个"
+    },
+    {
+      "code": "schedule_past",
+      "ok": true,
+      "field": "schedule_at",
+      "message": "定时发布时间可用"
+    },
+    {
+      "code": "skip_reason_required",
+      "ok": true,
+      "field": "skip_reason",
+      "message": "未跳过或已填写跳过原因"
+    },
+    {
+      "code": "banned_word",
+      "ok": true,
+      "field": "title/body_text",
+      "message": "未命中禁用词"
+    },
+    {
+      "code": "ai_disclosure",
+      "ok": true,
+      "field": "ai_disclosure",
+      "message": "发布时在「笔记内容声明」中勾选「笔记含 AI 合成内容」"
+    }
+  ],
+  "final_work": {
+    "title": "工位上的松弛感",
+    "status": "drafting",
+    "revision": 5,
+    "tags": [
+      "工位日常",
+      "桌面布置",
+      "生活记录"
+    ],
+    "body_len": 83,
+    "sections": 1,
+    "assets": 1,
+    "cover_asset_id": "a6be5a44-045f-4c90-a1db-e807af3906f3"
+  }
+}
