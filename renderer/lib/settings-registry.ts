@@ -39,9 +39,8 @@ export const settingsEntries: SettingsEntry[] = [
   { path: '/settings/agent', label: '智能体设置', group: '工作区设置', scope: '工作区', icon: Bot, keywords: 'AI 权限 观察者' },
   // FN-06 / 38 文档：设置内只读能力清单（不新增一级导航）。
   { path: '/settings/capabilities', label: '智能体能力', group: '工作区设置', scope: '工作区', icon: Bot, keywords: '能力 工具 业务域 可用 权限' },
-  // DEV-SK4 / 23 文档第 12 节：桌面首版不提供技能库管理入口（desktopHidden）；
-  // 桌面生成与聊天仍使用服务端同一技能规则，需直接填写 / 导入时打开 Web 对应页面。
-  { path: '/settings/skills', label: '写作技能', group: '工作区设置', scope: '工作区', icon: ScrollText, keywords: '技能 写作方法 指令包 导入 导出 AI 起草', desktopHidden: true },
+  // D-224 / OPT-W02：桌面端已放开技能库管理入口；桌面生成与聊天仍使用服务端同一技能规则。
+  { path: '/settings/skills', label: '写作技能', group: '工作区设置', scope: '工作区', icon: ScrollText, keywords: '技能 写作方法 指令包 导入 导出 AI 起草' },
   { path: '/settings/desktop-ai', label: '桌面 AI 策略', group: '工作区设置', scope: '工作区', icon: Bot, keywords: '本机 AI 客户端 端点 owner 所有者', webHidden: true },
   { path: '/settings/budget', label: 'AI 用量与成本', group: '工作区设置', scope: '工作区', icon: Gauge, keywords: '每日 token 上限 调用 费用', webHidden: true },
   { path: '/settings/usage', label: 'AI 用量与成本', desktopLabel: '完整用量报表', group: '数据与工具', scope: '工作区', icon: Gauge, keywords: 'token 每日 上限 费用', tool: true },

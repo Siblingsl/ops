@@ -1,13 +1,11 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { SkillWebBoundary } from '@/components/skill-web-boundary'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, Empty, Field, Notice, PageState, Select, Switch, platformFormats } from '@/components/ui'
 import { errorMessage, get, getPage, put } from '@/lib/api'
 import { skillFormats, skillReasonText, skillScopeLabel, skillTasks, type SkillList } from '@/lib/skills'
 import { useAccounts, useCanWrite, useMe } from '@/lib/session'
-import { isElectronDesktop } from '@/lib/desktop-presentation.js'
 
 interface BindingItem { binding_id: string; skill_id: string; scope: string; name: string; priority: number; definition_status: string }
 interface Partition { base_revision: string; count: number; limit: number; items: BindingItem[] }
@@ -17,8 +15,9 @@ interface Preview {
   items: { id: string; name: string; scope: string; revision: number; selected: boolean; used: boolean; reason: string | null; chars: number }[]
 }
 
+/** D-224 / OPT-W02：桌面端账号档案的技能页直接渲染绑定管理，不再引导去 Web。 */
 export default function SkillsTab({ accountId }: { accountId: string }) {
-  return isElectronDesktop(navigator.userAgent) ? <SkillWebBoundary accountId={accountId} /> : <AccountSkills accountId={accountId} />
+  return <AccountSkills accountId={accountId} />
 }
 
 function AccountSkills({ accountId }: { accountId: string }) {

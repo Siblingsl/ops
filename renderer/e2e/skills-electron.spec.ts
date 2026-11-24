@@ -53,8 +53,11 @@ test('TestSkillRealElectronGenerationUsesBoundSkillAndPrivateReceipt', async ({ 
     expect(receipt.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: skill.id, scope: 'personal', used: true })]))
     expect(receipt.assembled_chars).toBeGreaterThan(0)
     await page.goto(`${baseURL}/settings/skills`)
-    await expect(page.getByRole('link', { name: '在浏览器中管理技能', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: '新建技能', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '新建技能', exact: true })).toBeVisible()
+    await expect(page.getByText('桌面本人写法', { exact: true })).toBeVisible()
+    await page.goto(`${baseURL}/a/${account.id}/profile?tab=skills`)
+    await expect(page.getByLabel('选择个人技能')).toBeVisible()
+    await expect(page.getByRole('region', { name: '我的个人技能' }).getByRole('link', { name: '管理技能库', exact: true })).toBeVisible()
   } finally {
     if (app) {
       try { execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }) } catch { /* 只结束本测试进程。 */ }

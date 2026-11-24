@@ -17,7 +17,6 @@ import { setCustomTheme } from '@/lib/custom-theme-state'
 import { useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
 import type { Account, CharacterCard, CustomTheme, Memory, Profile, StyleSample } from '@/lib/types'
 import SkillsTab from './ProfileSkills'
-import { isElectronDesktop } from '@/lib/desktop-presentation.js'
 import { memoryKindLabel, memoryScopeLabel, memorySourceLabel, useCustomTheme } from '@/lib/v3'
 import AccountAnalysisTab from './account-analysis-tab'
 import ProfileCheckTab from './profile-check-tab'
@@ -855,7 +854,7 @@ export default function ProfilePage() {
     { value: 'benchmarks' as const, label: '对标库' },
     { value: 'comments' as const, label: '评论台账' },
     { value: 'standards' as const, label: '回复标准' },
-    ...(!isElectronDesktop(navigator.userAgent) ? [{ value: 'skills' as const, label: '写作技能' }] : []),
+    { value: 'skills' as const, label: '写作技能' },
     ...(comic ? [{ value: 'characters' as const, label: '角色卡' }] : []),
     ...(wx ? [{ value: 'layout' as const, label: '排版' }] : []),
   ]

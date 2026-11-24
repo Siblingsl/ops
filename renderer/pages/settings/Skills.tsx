@@ -4,16 +4,15 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
-import { SkillWebBoundary } from '@/components/skill-web-boundary'
 import { Badge, Button, Card, CardHeader, Empty, Input, Notice, PageHeader, PageState, Tabs } from '@/components/ui'
 import { api, errorMessage, get, rawRequest } from '@/lib/api'
 import { emptySkillForm, skillFields, skillScopeLabel, type SkillDefinition, type SkillForm, type SkillImpact, type SkillList } from '@/lib/skills'
 import { useAccounts, useMe } from '@/lib/session'
-import { isElectronDesktop } from '@/lib/desktop-presentation.js'
 import SkillEditor from './SkillEditor'
 
+/** D-224 / OPT-W02：桌面端直接渲染技能库，CRUD、另存副本、导入导出均在同一页面完成。 */
 export default function Skills() {
-  return isElectronDesktop(navigator.userAgent) ? <SkillWebBoundary /> : <SkillsLibrary />
+  return <SkillsLibrary />
 }
 
 /**

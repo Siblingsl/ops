@@ -10,6 +10,7 @@ const Members = lazy(() => import('@/pages/settings/Members'))
 const Models = lazy(() => import('@/pages/settings/Models'))
 const Agent = lazy(() => import('@/pages/settings/Agent'))
 const CapabilitiesSettings = lazy(() => import('@/pages/settings/Capabilities'))
+const Skills = lazy(() => import('@/pages/settings/Skills'))
 const Words = lazy(() => import('@/pages/settings/Words'))
 const Security = lazy(() => import('@/pages/settings/Security'))
 const Export = lazy(() => import('@/pages/settings/Export'))
@@ -26,6 +27,7 @@ export default function DesktopSettingsContent({ location }: { location: Locatio
       <Route path="models" element={<Models />} />
       <Route path="agent" element={<Agent />} />
       <Route path="capabilities" element={<CapabilitiesSettings />} />
+      <Route path="skills" element={<Skills />} />
       <Route path="words" element={<Words />} />
       <Route path="security" element={<Security section="password" />} />
       <Route path="mail" element={<Security section="smtp" />} />

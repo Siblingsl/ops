@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 // REF41 A5（docs/41 §A5；D-211）：桌面形态的流程技能验收。
-// 桌面端既有边界（D-151）：技能库管理页在桌面被 SkillWebBoundary 替换为“请在 Web
-// 管理写作技能”，技能编辑/启停属 Web 形态职责。因此桌面 E2E 验证：
-// 1) 边界提示真实渲染（不假装桌面有管理页）；
+// D-224 / OPT-W02：桌面端已放开技能库管理（原 SkillWebBoundary 已删除），
+// 技能库设置页直接渲染管理界面。因此桌面 E2E 验证：
+// 1) 设置页技能库可直接打开并管理；
 // 2) 回放接口在桌面 UA 会话下行为正确——内置“发布流程”只建计划不执行、disabled 409。
 // 与 web/e2e/skills-procedure.spec.ts 覆盖同一旅程的桌面形态，不共用文件。
 
@@ -36,11 +36,9 @@ test('REF41 A5 桌面技能边界与回放只建计划', async ({ baseURL }) => 
     await expect.poll(() => page.evaluate(async () => (await fetch('/api/v1/auth/me')).status)).toBe(200)
     await expect(page.locator('html')).toHaveAttribute('data-presentation', 'ops-creative-desktop')
 
-    // 1. 桌面技能管理边界：设置页技能页显示“请在 Web 管理写作技能”，不冒充桌面管理页。
+    // 1. 桌面技能管理已放开：设置页技能页直接渲染技能库（D-224/OPT-W02）。
     await page.goto(`${baseURL}/settings/skills`)
-    const ua = await page.evaluate(() => navigator.userAgent)
-    void ua
-    await expect(page.getByText('请在 Web 管理写作技能')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByRole('button', { name: '新建技能', exact: true })).toBeVisible({ timeout: 15_000 })
 
     // 2. 内置“发布流程”存在且七步 procedure 完整（API 断言；详情 UI 属 Web 形态）。
     const skills = await api('GET', '/skills?view=library&scope=builtin')
