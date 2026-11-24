@@ -5,9 +5,11 @@ export { currentAccountSettingsPath } from './settings-registry'
 export type { SettingsEntry, SettingsGroupName, SettingsScope } from './settings-registry'
 export { settingsGroupOf }
 
-/** 桌面设置窗的条目清单 = 同一事实源（GL-02），仅此处按桌面呈现取别名并隐藏 Web 专属页。 */
-export const desktopSettingsEntries = settingsEntries.filter((entry) => !entry.desktopHidden)
+/** 桌面设置窗的条目清单 = 同一事实源（GL-02），仅此处按桌面呈现取别名并隐藏 Web 专属页与 D-224 软冻结项。 */
+export const desktopSettingsEntries = settingsEntries.filter((entry) => !entry.desktopHidden && !entry.frozenHidden)
 
+// D-224 软冻结：desktopSettingsPanel 保持原样，不加 frozenHidden 判断。
+// 冻结项只从导航列表与搜索里消失，紧急排障仍可用深链直达（/settings/desktop-ai、/settings/mail 的路由挂在 DesktopSettingsContent）。
 export function desktopSettingsPanel(pathname: string) {
   const entry = settingsEntryFor(pathname)
   return entry?.tool || entry?.desktopHidden ? undefined : entry

@@ -19,6 +19,8 @@ export interface SettingsEntry {
   webHidden?: boolean
   /** Web 专属，桌面设置窗不显示（23 文档第 12 节的跨端可见性边界）。 */
   desktopHidden?: boolean
+  /** D-224 软冻结项：不在设置菜单/桌面设置窗/命令面板展示，保留路由供紧急排障深链直达。 */
+  frozenHidden?: boolean
 }
 
 /**
@@ -31,7 +33,7 @@ export const settingsEntries: SettingsEntry[] = [
   // DEV-AI27-13（W13）：个人跨对话记忆管理（本人私有）。
   { path: '/settings/memory', label: '个性化 · 记忆', group: '工作区设置', scope: '个人', icon: Sparkles, keywords: '记忆 个性化 候选 确认 偏好' },
   // DEV-AI27-14（W14b）：插件/MCP 连接管理（本人私有）。
-  { path: '/settings/plugins', label: '插件与工具', group: '工作区设置', scope: '个人', icon: Plug, keywords: '插件 MCP 连接 工具 stdio 启用' },
+  { path: '/settings/plugins', label: '插件与工具', group: '工作区设置', scope: '个人', icon: Plug, keywords: '插件 MCP 连接 工具 stdio 启用', frozenHidden: true },
   { path: '/settings/security', label: '登录与安全', group: '工作区设置', scope: '个人', icon: KeyRound, keywords: '密码 登录' },
   { path: '/settings/accounts', label: '平台账号与凭证', group: '工作区设置', scope: '当前账号', icon: Users, keywords: '公众号 微信公众号 小红书 今日头条 登录 凭证 回填 账号类型' },
   { path: '/settings/members', label: '成员与邀请', group: '工作区设置', scope: '工作区', icon: Users, keywords: '协作 邀请码 工作区名称' },
@@ -41,20 +43,20 @@ export const settingsEntries: SettingsEntry[] = [
   { path: '/settings/capabilities', label: '智能体能力', group: '工作区设置', scope: '工作区', icon: Bot, keywords: '能力 工具 业务域 可用 权限' },
   // D-224 / OPT-W02：桌面端已放开技能库管理入口；桌面生成与聊天仍使用服务端同一技能规则。
   { path: '/settings/skills', label: '写作技能', group: '工作区设置', scope: '工作区', icon: ScrollText, keywords: '技能 写作方法 指令包 导入 导出 AI 起草' },
-  { path: '/settings/desktop-ai', label: '桌面 AI 策略', group: '工作区设置', scope: '工作区', icon: Bot, keywords: '本机 AI 客户端 端点 owner 所有者', webHidden: true },
+  { path: '/settings/desktop-ai', label: '桌面 AI 策略', group: '工作区设置', scope: '工作区', icon: Bot, keywords: '本机 AI 客户端 端点 owner 所有者', webHidden: true, frozenHidden: true },
   { path: '/settings/budget', label: 'AI 用量与成本', group: '工作区设置', scope: '工作区', icon: Gauge, keywords: '每日 token 上限 调用 费用', webHidden: true },
   { path: '/settings/usage', label: 'AI 用量与成本', desktopLabel: '完整用量报表', group: '数据与工具', scope: '工作区', icon: Gauge, keywords: 'token 每日 上限 费用', tool: true },
   { path: '/settings/quality', label: 'AI 质量看板', group: '数据与工具', scope: '工作区', icon: Activity, keywords: '独立工具', tool: true },
   { path: '/settings/words', label: '敏感词库', group: '工作区设置', scope: '工作区', icon: ShieldAlert, keywords: '自定义词 通用词' },
   { path: '/settings/hot-sources', label: '热点来源', group: '工作区设置', scope: '工作区', icon: Activity, keywords: 'RSS 联网 搜索 订阅' },
   { path: '/settings/daily', label: '每日推荐设置', group: '工作区设置', scope: '工作区', icon: Activity, keywords: '后台 时间 主推 备选' },
-  { path: '/settings/mail', label: '邀请邮件', group: '工作区设置', scope: '工作区', icon: Users, keywords: 'SMTP 邮箱', webHidden: true },
+  { path: '/settings/mail', label: '邀请邮件', group: '工作区设置', scope: '工作区', icon: Users, keywords: 'SMTP 邮箱', webHidden: true, frozenHidden: true },
   { path: '/settings/export', label: '数据导出', group: '数据与工具', scope: '工作区', icon: Gauge, keywords: 'CSV Markdown 下载' },
   { path: '/settings/prompts', label: '提示词模板', desktopLabel: '提示词模板与测试集', group: '数据与工具', scope: '工作区', icon: ScrollText, keywords: '独立工具', tool: true },
   { path: '/settings/logs', label: '操作日志', group: '数据与工具', scope: '工作区', icon: ScrollText, keywords: '独立工具', tool: true },
   { path: '/settings/trash', label: '回收站', group: '数据与工具', scope: '工作区', icon: Trash2, keywords: '独立工具', tool: true },
   { path: '/settings/admin', label: '系统管理', group: '数据与工具', scope: '系统', icon: Shield, keywords: '独立工具', tool: true, adminOnly: true },
-  { path: '/settings/crawl', label: '热点采集与日志', group: '数据与工具', scope: '系统', icon: Activity, keywords: '独立工具', tool: true, adminOnly: true },
+  { path: '/settings/crawl', label: '热点采集与日志', group: '数据与工具', scope: '系统', icon: Activity, keywords: '独立工具', tool: true, adminOnly: true, frozenHidden: true },
   { path: '/settings/local/connection', label: '客户端连接', group: '本机与系统', scope: '此电脑', icon: Activity, keywords: '本机 服务 模式 WSS', localPanel: 'connection', webHidden: true },
   { path: '/settings/local/ai', label: '本机 AI 配置', group: '本机与系统', scope: '此电脑', icon: Cpu, keywords: '模型 密钥 代理 自检 任务映射', localPanel: 'ai', webHidden: true },
   { path: '/settings/local/account-device', label: '账号与设备', group: '本机与系统', scope: '此电脑', icon: Users, keywords: '登录 重新认证 设备 平台 browser', localPanel: 'account-device', webHidden: true },
@@ -64,8 +66,8 @@ export const settingsEntries: SettingsEntry[] = [
 /** 用户菜单"工作区设置"分组：高频四项；其余进"高级设置"折叠。 */
 export const commonSettingsPaths = new Set(['/settings/accounts', '/settings/models', '/settings/members', '/settings/preferences'])
 
-/** Web 用户菜单 / 命令面板可见的条目（不含桌面专属与管理员专属）。 */
-export const webSettingsEntries = settingsEntries.filter((entry) => !entry.webHidden && !entry.adminOnly)
+/** Web 用户菜单 / 命令面板可见的条目（不含桌面专属、管理员专属与 D-224 软冻结项）。 */
+export const webSettingsEntries = settingsEntries.filter((entry) => !entry.webHidden && !entry.adminOnly && !entry.frozenHidden)
 
 /** 桌面设置窗使用的显示名：有别名用别名，否则用 web 名。 */
 export function desktopSettingsLabel(entry: SettingsEntry) {

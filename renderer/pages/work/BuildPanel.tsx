@@ -59,6 +59,9 @@ type UploadedArtifact = { artifact_id: string; kind: string; name: string }
 
 const targetLabels: Record<BuildTarget, string> = { wechat_html: '公众号预览 HTML', stable_html: '离线稳定版 HTML', long_image: '390px 真实长图（仅桌面）', pptx: 'PPTX 演示文稿', docx: 'DOCX 文档' }
 const artifactForTarget: Record<BuildTarget, string> = { wechat_html: 'html', stable_html: 'stable_html', long_image: 'png', pptx: 'pptx', docx: 'docx' }
+// D-224 软冻结：PPTX/DOCX 是战略冻结的 Office 导出，勾选列表只保留三个核心内容交付目标；
+// targetLabels 仍保留全部目标，历史构建记录里的 pptx/docx 条目照常显示并可回读下载。
+const visibleBuildTargets: BuildTarget[] = ['wechat_html', 'stable_html', 'long_image']
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -357,15 +360,11 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
       <Button size="sm" variant="secondary" disabled={busy} icon={<RefreshCw className="size-3.5" />} onClick={() => void refreshHistory()}>刷新历史</Button>
     </div>
     <div className="flex flex-wrap gap-4">
-      {(Object.keys(targetLabels) as BuildTarget[]).map(target => <label key={target} className="flex cursor-pointer items-center gap-2 text-xs text-mist-700">
+      {visibleBuildTargets.map(target => <label key={target} className="flex cursor-pointer items-center gap-2 text-xs text-mist-700">
         <input type="checkbox" checked={targets.includes(target)} disabled={busy} onChange={() => toggleTarget(target)} />{targetLabels[target]}
       </label>)}
     </div>
     <p className="text-[11px] text-mist-400">长图在本机隔离 Electron 窗口生成，并按固定像素和内存预算分段；下载仍受服务端隐私策略门禁控制。</p>
-    <div className="space-y-1 text-[11px] text-mist-400">
-      <p data-testid="office-export-template-version">PPTX/DOCX 模板版本：{OFFICE_TEMPLATE_VERSION}</p>
-      <p data-testid="office-export-deterministic-note">确定性导出：固定模板、固定时间戳与固定 ZIP 顺序；同一作品版本和参数生成相同 SHA256。</p>
-    </div>
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="primary" loading={busy} disabled={busy || !canWrite || work.locked || targets.length === 0} onClick={() => void start()}>生成校验报告</Button>
       <Button size="sm" variant="secondary" loading={busy} disabled={busy || !canWrite || work.locked || targets.length === 0} onClick={() => void start(undefined, true)} title="跳过历史复用，强制新建">重新生成</Button>

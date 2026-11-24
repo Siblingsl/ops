@@ -82,9 +82,9 @@ const mobileMoreGroups: { label: string; items: MobileMoreItem[] }[] = [
   },
 ]
 
-// GL-02：用户菜单只列 Web 可见项；桌面端点击"设置…"打开设置窗，不走这里的分组。
+// GL-02：用户菜单只列 Web 可见项（D-224 软冻结项同样不列）；桌面端点击"设置…"打开设置窗，不走这里的分组。
 const settingsItems = settingsEntries
-  .filter((entry) => !entry.webHidden)
+  .filter((entry) => !entry.webHidden && !entry.frozenHidden)
   .map((entry) => ({ to: entry.path, icon: <entry.icon />, label: entry.label, adminOnly: entry.adminOnly }))
 const commonSettings = commonSettingsPaths
 
