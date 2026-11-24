@@ -86,14 +86,11 @@ async function finishChecksInElectron(native: Page, page: Page, workID: string, 
     else if (!item.resolution) {
       if (item.category === 'ai_disclosure') {
         const checkbox = native.getByRole('checkbox', { name: '已知悉，发布时会声明' })
-        // 同 Q-04：checkbox 与 radio 同处 sticky 容器深处，统一原生点击。
-        if (!(await checkbox.isChecked())) await checkbox.evaluate((el) => (el as HTMLInputElement).click())
+        // OPT-U02：Q-14 已修复——检查页在桌面形态下有独立滚动出口，复选框能滚入视口真实点击。
+        if (!(await checkbox.isChecked())) await checkbox.check()
       } else {
-        const radio = native.locator(`input[name="${item.id}"]`).first()
-        // 布局事实：短内容下 sticky 容器文档位置≈697、高 888，底部 585px 永在视口外，
-        // 页面又不可滚（docH=1000），任何滚动都无法让容器深处的 radio 进入视口。
-        // Playwright check() 要求可见性；改用原生 click 直接触发 change（元素可命中、可交互）。
-        await radio.evaluate((el) => (el as HTMLInputElement).click())
+        // OPT-U02：Q-14 修复后恢复常规 Playwright 点击，不再用原生 el.click() 绕过可见性校验。
+        await native.locator(`input[name="${item.id}"]`).first().check()
       }
     }
   }

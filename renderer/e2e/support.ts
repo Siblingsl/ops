@@ -110,6 +110,10 @@ export async function registerAccount(page: Page, type = '图文笔记', platfor
   await page.getByRole('button', { name: '创建账号', exact: true }).click()
   const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '添加平台账号', exact: true }) })
   await expect(dialog).toBeVisible()
+  // OPT-S04 之后今日头条折叠进「更多实验平台」，先展开再点平台卡片。
+  if (platform === 'toutiao') {
+    await dialog.getByTestId('toggle-experimental-platforms').click()
+  }
   await dialog.getByRole('button', { name: platform === 'xhs' ? /小红书/ : platform === 'toutiao' ? /今日头条/ : /公众号/ }).click()
   await dialog.getByLabel('账号名称').fill('浏览器验收号')
   await dialog.getByRole('radio', { name: new RegExp('^' + type) }).check()

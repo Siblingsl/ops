@@ -613,10 +613,15 @@ export default function Check() {
   }, [focusItem, run])
 
   if (q.isLoading) return <PageLoading />
+  // OPT-U02：检查项分级——格式问题拆成「未通过（阻断发布）」与「已通过（默认折叠）」；
+  // 人工确认分组仍逐条保留，已确认项留在原位不瞬移，也不提供任何「全部确认」。
   const groups = (['format', 'sensitive', 'fact', 'stale', 'ai_disclosure', 'similarity', 'ad_law', 'rewrite'] as const)
-    .map((c) => ({ c, items: (run?.items ?? []).filter((i) => i.category === c) }))
+    .map((c) => ({ c, items: (run?.items ?? []).filter((i) => i.category === c && (c !== 'format' || !i.passed)) }))
     .filter((g) => g.items.length)
   const formatFailed = run?.items.filter((i) => i.category === 'format' && !i.passed) ?? []
+  const formatPassed = run?.items.filter((i) => i.category === 'format' && i.passed === true) ?? []
+  // OPT-U02：必须处理 = 未通过的格式问题 + 还未逐条确认的人工项（run.total 只统计非格式项）。
+  const mustHandle = formatFailed.length + (run ? run.total - run.confirmed : 0)
   const factPending = run?.fact_status === 'pending'
   const canComplete = !!run && !run.stale && !run.material_basis_stale && !factPending && run.blocking === 0 && run.confirmed === run.total
   // DEV-CX13-F：新标准可用提示——只提示不阻断、不清除人工确认、不自动迁移历史结论。
@@ -635,6 +640,10 @@ export default function Check() {
   const canExitCheck = work.status === 'checking' && editable
   const wx = work.platform === 'wechat_mp'
   const comic = work.content_format === 'comic'
+  // OPT-U02 / Q-14：桌面形态的 .desktop-work-layout 是固定高度 + overflow: clip，
+  // 检查页正文必须自己成为滚动出口（与 pack/preview/push 的 desktop-work-tab-outlet 一致），
+  // 否则整页被裁在 820px，右列深处的勾选项永远不可能进入视口。
+  const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const sectionItems = (sid: string) => (run?.items ?? []).filter((i) => i.location.section_id === sid && (i.category !== 'format' || !i.passed))
   const renderItem = (it: CheckItem) => (
       <div key={it.id} id={`item-${it.id}`}>
@@ -645,7 +654,8 @@ export default function Check() {
   )
 
   return (
-    <div className="mx-auto w-full max-w-[1400px] px-6 py-6 pb-28 md:pb-6 2xl:max-w-[1600px]">
+    <div className={cn('mx-auto w-full max-w-[1400px] px-6 py-6 pb-28 md:pb-6 2xl:max-w-[1600px]',
+      desktopPresentation && 'h-full overflow-y-auto scrollbar-thin')}>
       {(wx || (!run && !starting && editable) || !!run) && <WorkHeaderAction>
         <div className="flex items-center gap-2">
           {wx && <Link to={`/works/${work.id}/preview`} className="check-preview-action inline-flex items-center rounded-lg border border-mist-200 px-3 py-2 text-xs font-medium text-mist-700 hover:bg-mist-50">看排版</Link>}
@@ -723,7 +733,7 @@ export default function Check() {
       {starting && !run && <Card className="flex items-center justify-center gap-2 p-10 text-mist-500"><Loader2 className="size-4 animate-spin" />正在检查…</Card>}
 
       {run && (
-        <div className="grid gap-6 lg:grid-cols-[1fr_420px]">
+        <div className="grid items-start gap-6 lg:grid-cols-[1fr_420px]">
           <Card className="min-w-0 p-6">
             <h2 className="mb-1 font-display text-[22px] font-bold text-mist-900">{work.title || '（未填写标题）'}</h2>
             {work.summary && <p className="mb-4 text-[13px] text-mist-500">摘要：{work.summary}</p>}
@@ -741,7 +751,30 @@ export default function Check() {
             </div>
           </Card>
 
-          <div className="lg:sticky lg:top-20 lg:bottom-4 lg:overflow-y-auto scrollbar-thin space-y-4 pr-1">
+          {/* OPT-U02 / Q-14：桌面形态下检查页自身是滚动出口，右列改为随页面流动（固定 sticky 会在
+              321px 高的出口里把列表下半段永久钉在视口外）；浏览器形态仍保留 sticky + 显式 max-h 内部滚动。 */}
+          <div className={cn('space-y-4 pr-1 pb-4 scrollbar-thin',
+            !desktopPresentation && 'lg:sticky lg:top-20 lg:max-h-[calc(100vh-6.5rem)] lg:overflow-y-auto')}>
+            <div data-testid="check-priority-summary" className={cn('rounded-xl border p-3.5',
+              mustHandle === 0 ? 'border-ink-100 bg-ink-50/50' : 'border-orange-200 bg-orange-50/40')}>
+              {mustHandle === 0 ? (
+                <p className="flex items-center gap-2 text-[13px] font-medium text-ink-800">
+                  <CheckCircle2 className="size-4 text-ink-500" />必检项已全部处理完成
+                </p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <span className="text-[13px] font-semibold text-danger">必须处理</span>
+                    <span className="text-[13px] font-semibold tabular-nums text-mist-900">{mustHandle} 项</span>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-mist-600">
+                    <span>格式问题 <span className="font-medium tabular-nums text-mist-900">{formatFailed.length}</span></span>
+                    <span>待逐条确认 <span className="font-medium tabular-nums text-mist-900">{run.total - run.confirmed}</span></span>
+                  </div>
+                </>
+              )}
+              {formatPassed.length > 0 && <p className="mt-1.5 text-[11.5px] text-mist-400">已通过格式规则 {formatPassed.length} 项（默认折叠）</p>}
+            </div>
             {factPending && (
               <Notice tone="ink" icon={<Loader2 className="size-4 animate-spin" />}>AI 正在区分有素材支撑和待核实的事实句子，完成后会分别显示。</Notice>
             )}
@@ -759,7 +792,7 @@ export default function Check() {
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-mist-500">
                   {catMeta[g.c].label}
                   <span className="font-normal text-mist-400">
-                    {g.c === 'format' ? `${g.items.filter((i) => i.passed).length} / ${g.items.length} 通过` : `${g.items.filter((i) => i.resolution).length} / ${g.items.length} 已处理`}
+                    {g.c === 'format' ? `${g.items.length} 项未通过` : `${g.items.filter((i) => i.resolution).length} / ${g.items.length} 已处理`}
                   </span>
                 </div>
                 <div className="space-y-2">
@@ -777,7 +810,14 @@ export default function Check() {
                 </div>
               </div>
             ))}
-            <div className="pointer-events-none sticky bottom-20 -mx-1 bg-gradient-to-t from-[var(--color-paper,#f7f6f2)] via-[var(--color-paper,#f7f6f2)] to-transparent px-1 pb-1 pt-6 md:bottom-0">
+            {formatPassed.length > 0 && (
+              <details data-testid="check-passed-format-section" className="rounded-xl border border-mist-200 bg-white px-3 py-2">
+                <summary className="cursor-pointer text-[12px] font-medium text-mist-500">已通过的格式规则（{formatPassed.length} 项）</summary>
+                <div className="mt-2 space-y-2">{formatPassed.map(renderItem)}</div>
+              </details>
+            )}
+            {/* OPT-U02：lg 起右列自身可滚动，操作条改为随内容流排在最后，避免遮挡最后一项勾选。 */}
+            <div className="pointer-events-none sticky bottom-20 -mx-1 bg-gradient-to-t from-[var(--color-paper,#f7f6f2)] via-[var(--color-paper,#f7f6f2)] to-transparent px-1 pb-1 pt-6 md:bottom-0 lg:static lg:pt-2">
               <div className="pointer-events-auto space-y-2">
               {reviewing && run.completed_at && !run.stale && !run.material_basis_stale ? (
                 <>

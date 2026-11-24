@@ -486,6 +486,127 @@ function OrganizeNotesCard({ work, setWork, readOnly, desktopPresentation = fals
   )
 }
 
+// ---------- 快写模式 / 结构化深写模式（OPT-U02） ----------
+
+type WritingMode = 'quick' | 'structured'
+
+/** OPT-U02：小红书与短图文（微头条 / 简报）默认快写；公众号长图文默认结构化深写。只影响空稿首屏引导。 */
+function defaultWritingMode(work: Work): WritingMode {
+  if (work.platform === 'xhs') return 'quick'
+  return work.content_format === 'micro_post' || work.content_format === 'briefing' ? 'quick' : 'structured'
+}
+
+/** OPT-U02：快写写入正文后仍没有观点时，用用户要点的首句兜底（清理空白、最多 120 字符）。 */
+function quickViewpointFromNotes(notes: string) {
+  const first = notes.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? ''
+  const cleaned = first.replace(/^[-*·•\d.、\s]+/, '').replace(/\s+/g, ' ').trim()
+  const sentence = (cleaned.split(/[。！？!?；;]/)[0] ?? '').trim()
+  return Array.from(sentence || cleaned).slice(0, 120).join('')
+}
+
+/**
+ * OPT-U02：空稿首屏双模式切换。快写直接复用既有的合法链路
+ * `POST /works/{id}/organize-notes`（流式预览）→ `POST /works/{id}/organize-notes/apply`（一步重建大纲并写入段落），
+ * 不新增任何带 draft/batch 的路由，也不绕过 H-02/H-03 的既有校验。
+ */
+function QuickDraftModeCard({ work, setWork }: { work: Work; setWork: (w: Work) => void }) {
+  const [mode, setMode] = useState<WritingMode>(() => defaultWritingMode(work))
+  const [notes, setNotes] = useState('')
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const abort = useRef<AbortController | null>(null)
+  useEffect(() => () => abort.current?.abort(), [])
+  const run = async () => {
+    if (busy || !notes.trim()) return
+    setBusy(true)
+    setText('')
+    abort.current = new AbortController()
+    try {
+      const done = await stream<{ text: string }>(`/works/${work.id}/organize-notes`, { notes }, {
+        signal: abort.current.signal,
+        onDelta: (d) => setText((t) => t + d),
+      })
+      if (done?.text) setText(done.text)
+    } catch (e) {
+      aiError(e, '快写生成', run)
+    } finally {
+      setBusy(false)
+      abort.current = null
+    }
+  }
+  const apply = async () => {
+    if (!text.trim() || applying) return
+    // 首次空稿直接写入（2 次点击出成稿）；已有段落默认覆盖，仍要用户确认。
+    if (work.sections.length > 0 && !(await confirm({ title: '用整理结果覆盖当前正文？', desc: '会按小标题重建大纲与段落，并写入 AI 初稿。现有段落会被替换。', confirmText: '写入正文' }))) return
+    setApplying(true)
+    try {
+      const applied = await post<Work>(`/works/${work.id}/organize-notes/apply`, { markdown: text })
+      setWork(applied)
+      if (!applied.viewpoint.trim()) {
+        const quickViewpoint = quickViewpointFromNotes(notes)
+        if (quickViewpoint) {
+          try {
+            setWork(await patch<Work>(`/works/${work.id}`, { viewpoint: quickViewpoint, base_revision: applied.revision }))
+          } catch { /* 观点兜底失败静默降级，已写入的正文不受影响 */ }
+        }
+      }
+      toast.success('已生成大纲并写入正文，现在可逐段修改或生成标题')
+      setText('')
+      setNotes('')
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setApplying(false)
+    }
+  }
+  const modeButton = (m: WritingMode) => (
+    <button key={m} type="button" aria-pressed={mode === m}
+      data-testid={m === 'quick' ? 'writing-mode-quick' : 'writing-mode-structured'}
+      onClick={() => setMode(m)}
+      className={cn('cursor-pointer rounded-lg border px-2.5 py-1 text-[12.5px] transition',
+        mode === m ? 'border-ink-400 bg-ink-50 font-medium text-ink-800' : 'border-mist-200 text-mist-500 hover:border-mist-300 hover:text-mist-700')}>
+      {m === 'quick' ? '⚡ 快写模式' : '📐 结构化深写模式'}
+    </button>
+  )
+  return <Card className="p-4" data-testid="editor-writing-mode">
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-[13px] font-medium text-mist-700">这篇怎么开始</span>
+      <div role="group" aria-label="写作模式" className="flex flex-wrap items-center gap-1.5">
+        {modeButton('quick')}
+        {modeButton('structured')}
+      </div>
+      <span className="ml-auto text-[11.5px] text-mist-400">{mode === 'quick' ? '一句话想法，两步出整篇初稿' : '先定观点，再逐段打磨'}</span>
+    </div>
+    {mode === 'quick' ? (
+      <div className="mt-3 space-y-3">
+        <Field label="要点、想法或参考文章" hint="一句话想法、每行一条要点，或直接粘贴参考文章；AI 只整理你给的内容，缺数据处标【待核实】。">
+          <Textarea rows={5} value={notes} onChange={(e) => setNotes(e.target.value)} disabled={busy || applying}
+            placeholder="例如：想把「每天写 300 字」这件事坚持 30 天，最难的其实不是写，而是开始前的那 5 分钟。" />
+        </Field>
+        {(busy || text) && (
+          <div className="scrollbar-thin max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border border-mist-200 bg-mist-50/60 p-3 text-[13.5px] leading-relaxed text-mist-800">
+            {text || <span className="text-mist-400">快写中…</span>}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {busy
+            ? <Button size="sm" variant="ghost" onClick={() => abort.current?.abort()}>停止生成</Button>
+            : text
+              ? <>
+                <Button size="sm" variant="ghost" disabled={applying} onClick={() => { setText(''); void run() }}>重新生成</Button>
+                <Button size="sm" variant="primary" loading={applying} onClick={() => void apply()}>确认并写入正文</Button>
+              </>
+              : <Button size="sm" variant="primary" disabled={!notes.trim()} icon={<Wand2 className="size-3.5" />} onClick={() => void run()}>一键生成完整初稿</Button>}
+          <span className="text-[11.5px] text-mist-400">生成后你还可以逐段修改；写入前不会改动作品。</span>
+        </div>
+      </div>
+    ) : (
+      <p className="mt-2 text-[12.5px] leading-relaxed text-mist-500">先写核心观点 → 生成/手写大纲 → 确认大纲 → 逐段精修。下面的观点与大纲入口保持原样。</p>
+    )}
+  </Card>
+}
+
 // ---------- 页面 ----------
 
 export default function Editor() {
@@ -993,6 +1114,8 @@ function ArticleEditor({ coordinator }: { coordinator: WorkSaveCoordinator }) {
         )}
         {!focus && !desktopPresentation && <OrganizeNotesCard work={work} setWork={setWorkStable} readOnly={readOnly} />}
         {!focus && desktopPresentation && <OrganizeNotesCard work={work} setWork={setWorkStable} readOnly={readOnly} desktopPresentation />}
+        {/* OPT-U02：空稿首屏显式化双模式；观点卡、大纲入口与 H-03 闸门一律保留在下方。 */}
+        {!focus && !readOnly && !work.outline_confirmed_at && work.sections.length === 0 && <QuickDraftModeCard work={work} setWork={setWorkStable} />}
         <article className={desktopPresentation ? 'desktop-editor-paper space-y-5' : 'contents'}>
         {!focus && desktopPresentation && <div className="desktop-editor-document-meta">
           <span>{work.account_name}</span><span>/</span><span>{work.tags[0] ?? '创作正文'}</span>
